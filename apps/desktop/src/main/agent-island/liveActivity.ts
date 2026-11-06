@@ -4,7 +4,7 @@ import path from 'node:path';
 import { createRequire } from 'node:module';
 import { app } from 'electron';
 
-import type { AgentIslandPillSnapshot } from '../../shared/agentIsland.js';
+import type { AgentIslandCompanionSnapshot, AgentIslandPillSnapshot } from '../../shared/agentIsland.js';
 import { createLogger } from '../logger.js';
 
 const log = createLogger('agent-island:live-activity');
@@ -16,6 +16,8 @@ const ADDON_RELATIVE_PATH = 'tools/agent-island/cindy-agent-activity.node';
 const MIN_DARWIN_VERSION: readonly [number, number] = [27, 3];
 const MIN_NATIVE_INTERVAL_MS = 1000;
 const START_RETRY_MS = 15_000;
+/** ActivityKit caps a content update at 4 KB; the island's companion thumbnails stay under 2 KB. */
+const MAX_COMPANION_JPEG_LENGTH = 2048;
 
 /**
  * Content of Cindy's single Live Activity, shown in the macOS Dynamic Island (menu bar
@@ -29,7 +31,17 @@ export interface AgentIslandLiveActivityState {
   detail: string;
   /** The rest of the work, e.g. "2 more tasks running"; empty when the title says it all. */
   summary: string;
+  /** The companion the surfaced task speaks for, while it needs the user or has replied. */
+  companion?: AgentIslandLiveActivityCompanion;
   mascot: string;
+}
+
+/** Mirrors `CindyAgentActivityAttributes.Companion`. */
+export interface AgentIslandLiveActivityCompanion {
+  hue: string;
+  glyph: string;
+  glyphIsInitial: boolean;
+  imageJpeg?: string;
 }
 
 export interface AgentIslandLiveActivityStrings {
@@ -44,8 +56,32 @@ export interface AgentIslandLiveActivityStrings {
 /**
  * Projects the island's pill snapshot onto the Live Activity: what waits on the user
  * first, then running work, then unread results; nothing left means no activity.
+ * `companion` is the identity of the task the pill surfaces (its title already names
+ * the companion); it replaces the mascot once that task needs the user or has replied.
  */
 export function agentIslandLiveActivityStateFromPill(
+  pill: AgentIslandPillSnapshot,
+  mascot: string,
+  strings: AgentIslandLiveActivityStrings,
+  companion?: AgentIslandCompanionSnapshot,
+): AgentIslandLiveActivityState | null {
+  const state = liveActivityStatusFromPill(pill, mascot, strings);
+  if (!state || state.status === 'running' || !companion) return state;
+  const imageJpeg = companion.imageJpeg && companion.imageJpeg.length <= MAX_COMPANION_JPEG_LENGTH
+    ? companion.imageJpeg
+    : undefined;
+  return {
+    ...state,
+    companion: {
+      hue: companion.hue,
+      glyph: companion.glyph,
+      glyphIsInitial: companion.glyphIsInitial,
+      ...(imageJpeg ? { imageJpeg } : {}),
+    },
+  };
+}
+
+function liveActivityStatusFromPill(
   pill: AgentIslandPillSnapshot,
   mascot: string,
   strings: AgentIslandLiveActivityStrings,
@@ -118,6 +154,10 @@ function sameState(a: AgentIslandLiveActivityState | null, b: AgentIslandLiveAct
     && a.title === b.title
     && a.detail === b.detail
     && a.summary === b.summary
+    && a.companion?.hue === b.companion?.hue
+    && a.companion?.glyph === b.companion?.glyph
+    && a.companion?.glyphIsInitial === b.companion?.glyphIsInitial
+    && a.companion?.imageJpeg === b.companion?.imageJpeg
     && a.mascot === b.mascot;
 }
 

@@ -12,7 +12,7 @@ import type { AgentIslandLiveActivityState } from '../liveActivity.js';
 vi.mock('electron', () => ({ app: { isPackaged: false, getAppPath: () => '/nonexistent' } }));
 vi.mock('../../logger.js', () => ({ createLogger: () => ({ info: vi.fn(), warn: vi.fn() }) }));
 
-const { AgentIslandLiveActivity } = await import('../liveActivity.js');
+const { AgentIslandLiveActivity, agentIslandLiveActivityStateFromPill } = await import('../liveActivity.js');
 
 function state(
   runningCount: number,
@@ -127,6 +127,26 @@ describe('AgentIslandLiveActivity', () => {
       undefined, // answered
       'completed',
     ]);
+  });
+
+  it('shows the surfaced companion only once it needs the user or replied, without oversized artwork', () => {
+    const strings = {
+      needsInput: 'Needs input', running: 'Running', completed: 'Replied',
+      runningCount: (n: number) => `${n} running`,
+      alsoRunningCount: (n: number) => `${n} more`,
+      waitingCount: (n: number) => `${n} waiting`,
+    };
+    const pill = (running: number, pending: number) => ({
+      priorityId: 's1', priorityStatus: 'running' as const, priorityMicroTitle: 'Lizi', priorityCompactTitle: 'Lizi',
+      sessionCount: 1, runningSessionCount: running, pendingInteractionCount: pending,
+      unreadCompletedCount: 0, deferredRevealCount: 0, attentionCount: pending,
+    });
+    const companion = { name: 'Lizi', hue: 'pink' as const, glyph: 'L', glyphIsInitial: true, imageJpeg: 'a'.repeat(2049) };
+
+    expect(agentIslandLiveActivityStateFromPill(pill(1, 0), 'cindy', strings, companion)?.companion).toBeUndefined();
+    // A 4 KB content update fails as a whole; the avatar falls back to the glyph instead.
+    expect(agentIslandLiveActivityStateFromPill(pill(0, 1), 'cindy', strings, companion)?.companion)
+      .toEqual({ hue: 'pink', glyph: 'L', glyphIsInitial: true });
   });
 
   it('never loads the addon before macOS 27.3', () => {

@@ -63,6 +63,79 @@ private struct MascotView: View {
   }
 }
 
+/// Dark tints of the companion hue families; mirrors `agentIslandCompanionHueColor`
+/// in macos-agent-island-helper.swift.
+private func companionHueColor(_ hue: String) -> Color {
+  let rgb: (Double, Double, Double)
+  switch hue {
+  case "red": rgb = (0x4a, 0x2e, 0x2a)
+  case "orange": rgb = (0x4a, 0x35, 0x27)
+  case "amber": rgb = (0x47, 0x3a, 0x22)
+  case "green": rgb = (0x26, 0x40, 0x2a)
+  case "teal": rgb = (0x21, 0x40, 0x3e)
+  case "blue": rgb = (0x26, 0x34, 0x49)
+  case "pink": rgb = (0x45, 0x2b, 0x39)
+  case "graphite": rgb = (0x3c, 0x3c, 0x3a)
+  default: rgb = (0x32, 0x2b, 0x48)
+  }
+  return Color(red: rgb.0 / 255, green: rgb.1 / 255, blue: rgb.2 / 255)
+}
+
+/// Companion avatar as the island draws it: artwork, or its emoji / initial on the hue.
+private struct CompanionAvatarView: View {
+  let companion: CindyAgentActivityAttributes.Companion
+  let size: CGFloat
+
+  var body: some View {
+    ZStack {
+      Circle().fill(companionHueColor(companion.hue))
+      if let artwork {
+        artwork.resizable().interpolation(.high).aspectRatio(contentMode: .fill)
+      } else if companion.glyphIsInitial {
+        Text(companion.glyph)
+          .font(.system(size: size * 0.5, weight: .medium))
+          .foregroundStyle(Color.white.opacity(0.92))
+      } else {
+        Text(companion.glyph).font(.system(size: size * 0.58))
+      }
+    }
+    .frame(width: size, height: size)
+    .clipShape(Circle())
+  }
+
+  private var artwork: Image? {
+    companion.imageJpeg
+      .flatMap { Data(base64Encoded: $0) }
+      .flatMap { NSImage(data: $0) }
+      .map { Image(nsImage: $0) }
+  }
+}
+
+/// Who the activity is about: the companion once it needs the user or has replied,
+/// otherwise the mascot in the pose for the status.
+private struct Identity: View {
+  let state: CindyAgentActivityAttributes.ContentState
+  let size: CGFloat
+  var dot: Color? = nil
+
+  var body: some View {
+    if let companion = state.companion, state.status != "running" {
+      CompanionAvatarView(companion: companion, size: size)
+        .overlay(alignment: .bottomTrailing) {
+          if let dot {
+            Circle()
+              .fill(dot)
+              .frame(width: max(5, size * 0.3), height: max(5, size * 0.3))
+              .overlay(Circle().stroke(Color.black, lineWidth: max(1, size * 0.06)))
+              .offset(x: size * 0.06, y: size * 0.06)
+          }
+        }
+    } else {
+      MascotView(skin: state.mascot, status: state.status, size: size, dot: dot)
+    }
+  }
+}
+
 /// `attention · running` counts in Agent Island colors; a check for unread results.
 private struct CountRuns: View {
   let state: CindyAgentActivityAttributes.ContentState
@@ -129,7 +202,7 @@ private struct ActivityBanner: View {
 
   var body: some View {
     HStack(spacing: 12) {
-      MascotView(skin: state.mascot, status: state.status, size: 38, dot: state.tint)
+      Identity(state: state, size: 38, dot: state.tint)
       VStack(alignment: .leading, spacing: 3) {
         Text(state.title.isEmpty ? appName : state.title)
           .font(.system(size: 14, weight: .semibold))
@@ -152,7 +225,7 @@ struct CindyAgentActivityWidget: Widget {
     } dynamicIsland: { context in
       DynamicIsland {
         DynamicIslandExpandedRegion(.leading) {
-          MascotView(skin: context.state.mascot, status: context.state.status, size: 36, dot: context.state.tint)
+          Identity(state: context.state, size: 36, dot: context.state.tint)
             .padding(.leading, 4)
         }
         DynamicIslandExpandedRegion(.trailing) {
@@ -171,11 +244,11 @@ struct CindyAgentActivityWidget: Widget {
             .padding(.horizontal, 4)
         }
       } compactLeading: {
-        MascotView(skin: context.state.mascot, status: context.state.status, size: 20)
+        Identity(state: context.state, size: 20)
       } compactTrailing: {
         CompactStatus(state: context.state)
       } minimal: {
-        MascotView(skin: context.state.mascot, status: context.state.status, size: 20, dot: context.state.tint)
+        Identity(state: context.state, size: 20, dot: context.state.tint)
       }
       .keylineTint(context.state.tint)
     }

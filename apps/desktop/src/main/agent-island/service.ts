@@ -2212,8 +2212,9 @@ export class AgentIslandService {
       )
       : soundDisplayState;
     // The system Live Activity works whether or not our own island is shown.
+    const { pillSnapshot } = chatDisplayState;
     this.deps.liveActivity?.sync(agentIslandLiveActivityStateFromPill(
-      chatDisplayState.pillSnapshot,
+      pillSnapshot,
       this.mascotSkin,
       {
         needsInput: t('agentIsland.native.needsInput'),
@@ -2223,6 +2224,7 @@ export class AgentIslandService {
         alsoRunningCount: (count) => tCount('agentIsland.native.liveActivityAlsoRunning', count),
         waitingCount: (count) => tCount('agentIsland.native.liveActivityWaiting', count),
       },
+      chatDisplayState.sessions.find((session) => session.sessionId === pillSnapshot.priorityId)?.companion,
     ));
     if (!this.enabled) {
       this.mutedCompletionSoundSessionIds.clear();
