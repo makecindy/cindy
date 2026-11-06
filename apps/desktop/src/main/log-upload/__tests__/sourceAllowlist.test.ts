@@ -169,9 +169,14 @@ describe('排除表优先于放行表', () => {
  * **新增的子 scope 默认放行**——方向与 deny-by-default 相反。
  */
 describe('device-link：精确匹配，子 scope 不跟着放行', () => {
-  it('放行的只有明确列出的那两个', () => {
+  it('只放行明确列出的基础设施诊断，不继承到子 scope', () => {
     expect(isAllowedScope('device-link')).toBe(true);
     expect(isAllowedScope('device-link:cross-process-lock')).toBe(true);
+    for (const scope of ['device-link:ipc-diagnostics', 'device-link:execution-diagnostics', 'device-link-transfer']) {
+      expect(isAllowedScope(scope)).toBe(true);
+      expect(isAllowedScope(`${scope}/payload`)).toBe(false);
+      expect(isAllowedScope(`r:${scope}`)).toBe(false);
+    }
   });
 
   it('⚠️ device-link:ipc 不放行（会把镜像缓存清理的 root / remaining 路径写进日志）', () => {
