@@ -147,7 +147,7 @@ describe("Anthropic Batch reference prices vendor-effective 2026-10-22 and adopt
   ["claude-sonnet-4-6", 1.5, 7.5, 0.15, 1.875, 3, undefined],
   ["claude-sonnet-4-5", 1.5, 7.5, undefined, undefined, undefined, 200001],
   ["claude-haiku-4-5", 0.5, 2.5, 0.05, 0.625, 1, 200001],
-  ] as const)("resolves %s Batch on adoption while preserving standard", (id, input, output, read, write, oneHour, maximum) => {
+  ] as const)("resolves %s Batch at its evidence-backed effective date while preserving standard", (id, input, output, read, write, oneHour, maximum) => {
     const options = { at: "2026-11-06", variant: "batch" as const, currency: "USD" as const };
     const direct = resolveModelReferencePrice(registry, "anthropic", id, options)?.price;
     expect(direct).toEqual({
