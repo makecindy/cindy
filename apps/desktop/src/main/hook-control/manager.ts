@@ -859,8 +859,9 @@ export function createHookControlManager(deps: HookControlManagerDeps): HookCont
     normalizePendingPayload: (payload) => {
       // connectUrl 是应用的网页授权页 —— 主机(飞书 / Lark)/path/参数集精确校验;
       // 关联码只在 pending 时透传(协议已校验形状), 其余状态由协议保证为空。
-      // scopeId 由服务端协商下发, 不与授权页的 client_id 互校(与 X 相同)。
+      // 多个组织共用服务；授权页的 client_id 必须属于本次宣告的应用。
       const connectLink = parseFeishuConnectUrl(payload.connectUrl ?? '');
+      if (connectLink.appId !== payload.scopeId) throw new Error('Feishu binding app does not match the negotiated scope');
       return { ...payload, connectUrl: connectLink.url };
     },
     normalizeBindingPayload: (payload) => {

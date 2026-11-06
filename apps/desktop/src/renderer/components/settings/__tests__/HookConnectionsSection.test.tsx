@@ -176,11 +176,14 @@ const BASE_HOOK: SlackHookView = {
 
 // 原名 'HookConnectionsSection Telegram binding actions' —— 本 suite 现在同时覆盖
 // Telegram 绑定动作与 X 的用法告知/确认门, 名字得跟上, 否则失败用例的定位会误导人。
-describe('HookConnectionsSection binding actions (Telegram / X)', () => {
+describe('HookConnectionsSection binding actions (Telegram / X / Feishu)', () => {
   // Unit regression (#8481): resolve each rendered provider switch through the
   // production catalog to its own card, rather than accepting the parent group.
-  it.each(['telegram', 'x'])('binds the %s switch to its provider search target', async (provider) => {
-    ipc.get.mockResolvedValue({ hook: { ...BASE_HOOK, x: { ...BASE_HOOK.x, url: 'wss://x.example.test' } } });
+  it.each(['telegram', 'x', 'feishu'])('binds the %s switch to its provider search target', async (provider) => {
+    ipc.get.mockResolvedValue({ hook: { ...BASE_HOOK,
+      x: { ...BASE_HOOK.x, url: 'wss://x.example.test' },
+      feishu: { ...BASE_HOOK.feishu, url: 'wss://feishu.example.test' },
+    } });
     render(<HookConnectionsSection />);
     const toggle = await screen.findByRole('switch', { name: `settings.remoteControl.hook.${provider}.toggleAria` });
     const entry = resolveSettingsSearchEntry('im-bot', toggle.getAttribute('data-setting-id'));

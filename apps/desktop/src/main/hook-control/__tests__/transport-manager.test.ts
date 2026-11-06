@@ -3460,6 +3460,13 @@ describe('官方飞书 / Lark provider lane', () => {
       { state: 'pending', bindCode: '7KQ4-M2XD', connectUrl: FEISHU_CONNECT_URL, reason: null },
       [FEISHU_CONNECT_URL],
     ],
+    // PR #8947: host allowlisting alone did not prevent another organization's client_id entering the snapshot.
+    [
+      'another app on the allowed host',
+      FEISHU_CONNECT_URL.replace('client_id=cli_app', 'client_id=cli_other_org'),
+      { state: 'failed', bindCode: null, connectUrl: null, reason: 'invalid-connect-url' },
+      [],
+    ],
     [
       'lookalike host',
       FEISHU_CONNECT_URL.replace('accounts.feishu.cn', 'accounts.feishu.cn.evil.example'),

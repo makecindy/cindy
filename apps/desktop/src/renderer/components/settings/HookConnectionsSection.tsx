@@ -1437,7 +1437,7 @@ export function HookConnectionsSection({ companion }: { companion?: { id: string
   };
 
   const renderProviderCard = (provider: NeutralCardProvider) => {
-    const setting = provider === 'telegram' ? imBotSettings.cindyTelegram : imBotSettings.cindyX;
+    const setting = { telegram: imBotSettings.cindyTelegram, x: imBotSettings.cindyX, feishu: imBotSettings.cindyFeishu }[provider];
     const view = hook[provider] as ProviderHookView | undefined;
     if (view === undefined) return null; // 旧 main 快照尚无该 provider 字段时不渲染
     const cs = providerCardState(provider, view);
