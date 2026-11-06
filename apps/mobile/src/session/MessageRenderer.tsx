@@ -2,7 +2,6 @@ import { resolveAttachmentPreviewSource } from './messagePayload';
 import {
   PreviewHeader,
   PreviewFooter,
-  PreviewCollectionContext,
 } from "./PreviewChrome";
 import { RemoteAttachmentPreview } from "./RemoteAttachmentPreview";
 import { segmentTeammateWork, summarizeTeammateWork, teammateWorkSummaryText } from '@cindy/maker-shared/work-activity-projection';
@@ -2978,22 +2977,7 @@ export function MessageRenderer({
           testID={hasNewMessages ? 'message.newMessageButton' : 'message.jumpToLatestButton'}
           dotTestID="message.newMessageDot" />
       ) : null}
-                <PreviewCollectionContext.Provider
-                  value={
-                    attachmentPayloads.length > 1
-                      ? {
-                          index: attachmentIndex,
-                          names: attachmentPayloads.map((entry) => entry.title),
-                          onSelect: (index) => {
-                            if (attachmentPayloads[index]) {
-                              setAttachmentIndex(index);
-                              setPayload(attachmentPayloads[index]);
-                            }
-                          },
-                        }
-                      : undefined
-                  }
-                >
+                <>
                   {imageLightboxOpen && payload?.kind === 'media' && lightboxImages ? (
         // 图片 / 视频走 IM 级全屏查看器(手势缩放/下滑关闭/横滑翻页);其余 payload 走通用查看器。
         <ImageLightbox
@@ -3032,7 +3016,7 @@ export function MessageRenderer({
           payload={historyActive ? payload : null}
         />
       )}
-                </PreviewCollectionContext.Provider>
+                </>
               </View>
     </MessageListRevealContext.Provider>
     </MarkdownRemoteMediaContext.Provider>
@@ -7753,7 +7737,6 @@ export function MessagePayloadModal({
   // mermaid 走沉浸式全屏查看器:图表铺满整个 Modal(标题与源码区都不渲染,
   // 图表最大化优先),仅右上角浮动「复制源码 / 关闭」;源码用复制按钮获取。
   const immersiveMermaid = payload?.kind === 'mermaid';
-  const collection = useContext(PreviewCollectionContext);
   if (
     payload &&
     onResolveRemoteMedia &&
@@ -7784,7 +7767,7 @@ export function MessagePayloadModal({
             styles.payloadModal,
             {
               paddingTop: safeAreaInsets.top + 64,
-              paddingBottom: safeAreaInsets.bottom + (collection ? 56 : 0),
+              paddingBottom: safeAreaInsets.bottom,
             },
           ]} testID="message.payloadModal">
           <MermaidDiagramWebView
@@ -7844,7 +7827,7 @@ export function MessagePayloadModal({
         style={[
           styles.payloadModal,
           {
-            paddingBottom: modalSafeArea.paddingBottom + (collection ? 56 : 0),
+            paddingBottom: modalSafeArea.paddingBottom,
             // Landscape side insets hold the notch or a vertical system bar (Duo).
             paddingLeft: safeAreaInsets.left,
             paddingRight: safeAreaInsets.right,

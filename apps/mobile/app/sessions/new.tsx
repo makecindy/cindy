@@ -6103,7 +6103,6 @@ function NewRemoteSessionContent({ creatingRef }: { creatingRef: { current: bool
         selectedId={composerPreviewAttachmentId}
         annotation={composerAnnotations.trayAnnotation}
         resolveRemoteMedia={resolveComposerMedia}
-        onSelect={setComposerPreviewAttachmentId}
           onClose={() => setComposerPreviewAttachmentId(null)}
         />
       {composerAnnotations.host}

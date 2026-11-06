@@ -2,7 +2,6 @@ import {
   ImageLightbox,
   type ImageLightboxAnnotationConfig,
 } from "./ImageLightbox";
-import { PreviewCollectionContext } from "./PreviewChrome";
 import { RemoteAttachmentPreview } from "./RemoteAttachmentPreview";
 import { isPayloadDirectPreviewableUrl } from "./messagePayload";
 import type { MobileMessageGalleryImage } from "./messageGallery";
@@ -16,7 +15,6 @@ export function ComposerAttachmentPreview({
   selectedId,
   annotation,
   resolveRemoteMedia,
-  onSelect,
   onClose,
 }: {
   attachments: readonly RemoteSerializedAttachment[];
@@ -24,7 +22,6 @@ export function ComposerAttachmentPreview({
   selectedId: string | null;
   annotation: ImageLightboxAnnotationConfig;
   resolveRemoteMedia: ResolveRemoteMediaFn;
-  onSelect(id: string): void;
   onClose(): void;
 }) {
   const index = attachments.findIndex((item) => item.id === selectedId);
@@ -32,16 +29,7 @@ export function ComposerAttachmentPreview({
   if (!attachment) return null;
   const image = images.find((item) => item.key === attachment.id);
   return (
-    <PreviewCollectionContext.Provider
-      value={{
-        index,
-        names: attachments.map((item) => item.name),
-        onSelect: (next) => {
-          const item = attachments[next];
-          if (item) onSelect(item.id);
-        },
-      }}
-    >
+    <>
       {image ? (
         <ImageLightbox
           key={attachment.id}
@@ -74,6 +62,6 @@ export function ComposerAttachmentPreview({
           }}
         />
       )}
-    </PreviewCollectionContext.Provider>
+    </>
   );
 }
