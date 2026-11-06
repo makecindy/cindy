@@ -1,6 +1,9 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { app, protocol, session, type WebContents } from 'electron';
 import { EventEmitter } from 'node:events';
+import { readFileSync } from 'node:fs';
+import { createRequire } from 'node:module';
+import { hostAppSdkAsset } from '../hostSdk.js';
 import type { McpAppsHost } from '../host.js';
 import { setMcpAppsHost } from '../runtime.js';
 vi.mock('electron', async (original) => {
@@ -31,6 +34,7 @@ import {
   assertMcpAppDocumentCaller,
   clearMcpAppDocuments,
   mountRemoteAppDocument,
+  mountNativeUiPageDocument,
   registerMcpAppProtocol,
   isMcpAppFrameNavigationAllowed,
   isMcpAppPermissionRequest,
@@ -54,6 +58,35 @@ const document = {
   prefersBorder: true,
 };
 describe('MCP App local protocol isolation', () => {
+  it('mounts native plugin pages with an isolated bridge and per-view package assets', async () => {
+    let handler!: (request: Request) => Promise<Response> | Response;
+    vi.spyOn(protocol, 'handle').mockImplementation((_scheme, callback) => { handler = callback; });
+    registerMcpAppProtocol();
+    const readAsset = vi.fn(async (relative: string) => new Response(relative));
+    const dispose = vi.fn();
+    const id = mountNativeUiPageDocument({ html: '<!doctype html><html><head><script src="view.js"></script></head></html>',
+      entry: 'ui/view.html' }, 'renderer:1', async () => ({}), readAsset, dispose);
+    const html = await (await handler(new Request(`cindy-mcp-app://${id}-view/resource`))).text();
+    expect(html).toContain(`cindy-mcp-app://${id}-view/__cindy/plugin/ui/`);
+    expect(html).toContain('data-cindy-native-ui');
+    expect(html).not.toContain('@modelcontextprotocol/ext-apps');
+    expect(html.indexOf('<base')).toBeLessThan(html.indexOf('src="view.js"'));
+    const url = `cindy-mcp-app://${id}-view/__cindy/plugin/ui/view.js`;
+    const frame = { url: `cindy-mcp-app://${id}-view/resource` };
+    const details = { url, method: 'GET', webContentsId: 1, frame, requestHeaders: {} };
+    const other = vi.fn();
+    state.beforeHeaders!({ ...details, webContentsId: 2 } as never, other);
+    expect(other).toHaveBeenCalledWith({ cancel: true });
+    const allowed = vi.fn(); state.beforeHeaders!(details as never, allowed);
+    const headers = allowed.mock.calls[0][0].requestHeaders;
+    expect((await handler(new Request(url))).status).toBe(404);
+    expect(await (await handler(new Request(url, { headers }))).text()).toBe('ui/view.js');
+    expect(readAsset).toHaveBeenCalledExactlyOnceWith('ui/view.js');
+    expect((await handler(new Request(`cindy-mcp-app://${id}-view/__cindy/plugin/..%2Fsecret.js`, { headers }))).status).toBe(404);
+    unmountRemoteAppDocument(id, 'renderer:1');
+    expect((await handler(new Request(url, { headers }))).status).toBe(404);
+    expect(dispose).toHaveBeenCalledOnce();
+  });
   it('gives remotely mounted documents the same authenticated bridge and releases their Main binding', async () => {
     let handler!: (request: Request) => Promise<Response> | Response;
     vi.spyOn(protocol, 'handle').mockImplementation((_scheme, callback) => { handler = callback; });
@@ -233,7 +266,8 @@ describe('MCP App local protocol isolation', () => {
     const resource = await handler(new Request('cindy-mcp-app://' + id + '-view/resource'));
     expect(resource.status).toBe(200);
     expect(resource.headers.get('Content-Security-Policy')).toContain("connect-src 'none'");
-    expect(await resource.text()).toBe(document.html);
+    expect(resource.headers.get('Content-Security-Policy')).toContain("form-action 'none'");
+    expect((await resource.text()).replace(/<script data-cindy-runtime>[\s\S]*?<\/script>/, '').replace(/<script type="importmap">[\s\S]*?<\/script>/, '')).toBe(document.html);
     const sandbox = await handler(new Request('cindy-mcp-app://' + id + '/sandbox'));
     expect(sandbox.headers.get('Content-Security-Policy')).toContain(
       'frame-src cindy-mcp-app://' + id + '-view',
@@ -365,4 +399,49 @@ it('serves granted files only to their own real App frame', async () => {
   expect(read).toHaveBeenCalledExactlyOnceWith('untrusted-id', 'token', expect.any(Request));
   clearMcpAppDocuments();
   expect((await handler(new Request(url, { headers: cb.mock.calls[0][0].requestHeaders }))).status).toBe(404);
+});
+
+// Unit: real protocol route, reserved View URL, importmap before authored modules.
+// Old documents omit sdk; revoked Views must stop serving their executor's bytes.
+it('serves the executor SDK and importmap without widening CSP', async () => {
+  let handler!: (request: Request) => Promise<Response> | Response;
+  vi.spyOn(protocol, 'handle').mockImplementation((_scheme, callback) => { handler = callback; });
+  registerMcpAppProtocol();
+  const sdk = hostAppSdkAsset;
+  expect(sdk.source).toBe(readFileSync(createRequire(import.meta.url).resolve('@modelcontextprotocol/ext-apps/app-with-deps'), 'utf8'));
+  const id = mountRemoteAppDocument({ ...document, html: '<!doctype html><html><head><script type="module">import {App} from "@modelcontextprotocol/ext-apps"</script></head></html>', sdk }, 'renderer:1');
+  const request = (path: string) => handler(new Request('cindy-mcp-app://' + id + '-view/' + path));
+  const page = await request('resource');
+  const legacyId = mountRemoteAppDocument(document, 'renderer:1');
+  const legacy = await handler(new Request('cindy-mcp-app://' + legacyId + '-view/resource'));
+  expect(page.headers.get('Content-Security-Policy')).toBe(legacy.headers.get('Content-Security-Policy'));
+  const legacyHtml = await legacy.text();
+  expect(legacyHtml).toContain('data-cindy-runtime');
+  expect(legacyHtml).toContain('cindy-mcp-app://' + legacyId + '-view/__cindy/sdk/ext-apps/app.js');
+  expect((await handler(new Request('cindy-mcp-app://' + legacyId + '-view/__cindy/sdk/ext-apps/app.js'))).status).toBe(404);
+  expect(legacyHtml.replace(/<script data-cindy-runtime>[\s\S]*?<\/script>/, '').replace(/<script type="importmap">[\s\S]*?<\/script>/, '')).toBe(document.html);
+  const html = await page.text();
+  expect(html).toContain('cindy-mcp-app://' + id + '-view/__cindy/sdk/ext-apps/app.js');
+  expect(html.indexOf('type="importmap"')).toBeLessThan(html.indexOf('type="module"'));
+  const asset = await request('__cindy/sdk/ext-apps/app.js');
+  expect(asset.headers.get('Content-Type')).toContain('text/javascript');
+  expect(await asset.text()).toBe(sdk.source);
+  expect((await request('__cindy/sdk/ext-apps/app.js?version=1')).status).toBe(404);
+  expect((await handler(new Request('cindy-mcp-app://' + id + '/__cindy/sdk/ext-apps/app.js'))).status).toBe(404);
+  unmountRemoteAppDocument(id, 'renderer:1');
+  expect((await request('__cindy/sdk/ext-apps/app.js')).status).toBe(404);
+  supplyMcpAppDocument(document);
+  expect((await handler(new Request('cindy-mcp-app://untrusted-id-view/__cindy/sdk/ext-apps/app.js'))).status).toBe(404);
+});
+
+// Lead R7: parse once at publication, never on each resource GET.
+it('prepares each supplied document once for repeated resource requests', async () => {
+  const sdk = await import('@cindy/maker-shared/mcp-app-sdk');
+  const prepare = vi.spyOn(sdk, 'withHostAppSdk');
+  let handler!: (request: Request) => Promise<Response> | Response;
+  vi.spyOn(protocol, 'handle').mockImplementation((_scheme, callback) => { handler = callback; });
+  registerMcpAppProtocol();
+  supplyMcpAppDocument({ ...document, html: '<script type="module">import "@modelcontextprotocol/ext-apps"</script>', sdk: hostAppSdkAsset });
+  for (let i = 0; i < 2; i++) expect((await handler(new Request('cindy-mcp-app://untrusted-id-view/resource'))).status).toBe(200);
+  expect(prepare).toHaveBeenCalledTimes(1);
 });

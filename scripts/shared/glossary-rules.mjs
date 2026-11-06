@@ -296,8 +296,8 @@ export function makeExemptChecker(list) {
  *    **en 同样适用**——不是靠现状数据,而是 DESIGN.md §11 Voice & Content 明文规定
  *    英文也用省略号字符「…」而非三个半角点。原先漏掉 en,等于让门禁替既有违规背书。
  */
-export const HALFWIDTH_PUNCT_LOCALES = new Set(['zh-CN', 'zh-TW']);
-export const ELLIPSIS_LOCALES = new Set(['en', 'zh-CN', 'zh-TW', 'ja', 'ko', 'es', 'fr', 'de', 'pt-PT', 'pt-BR']);
+export const HALFWIDTH_PUNCT_LOCALES = new Set(['zh-CN', 'zh-TW', 'zh-Hant-x-lzh', 'zh-Hans-x-lzh']);
+export const ELLIPSIS_LOCALES = new Set(['en', 'zh-CN', 'zh-TW', 'ja', 'ko', 'es', 'fr', 'de', 'pt-PT', 'pt-BR', 'zh-Hant-x-lzh', 'zh-Hans-x-lzh']);
 
 /**
  * 中文正文里的半角标点。两种形态:

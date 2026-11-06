@@ -34,6 +34,7 @@ import {
   missingRequiredTemplateParamLabel,
   isFollowingSessionSelection,
   needsBoundSessionGenerationRouteResolution,
+  buildPreRunHook,
   resolveScheduleGenerationProviderId,
   resolveScheduleModelEfforts,
   resolveTemplateAgentFields,
@@ -43,6 +44,7 @@ import {
   usesBoundSessionModel,
 } from '../scheduleFormLogic';
 import type { ScheduleFormState } from '../scheduleFormLogic';
+import { formToProjectConfig } from '../projectAutomationConfig';
 import {
   cronExprToIntervalMs,
   intervalMsToCronExpr,
@@ -70,6 +72,30 @@ const tapsvcProvider: ProviderView = {
     }],
   },
 };
+
+// An automation with both a script and a plugin (set by an Agent) opens on the
+// plugin; saving an unrelated edit must keep the script, while choosing the plugin instead of a
+// script must still drop it. Existing cases do not cover the plugin source.
+// Issue 8886 / unit: both desktop save paths must retain, edit and clear the cutoff.
+it('serializes deadline edits through normal and project automation forms', () => {
+  const expireAt = new Date(2027, 3, 5, 10, 30, 15).getTime();
+  const form = makeForm({ deadline: '2027-04-05T10:30', sourceExpireAt: expireAt });
+  expect(buildScheduleInput(form).expireAt).toBe(expireAt);
+  expect(formToProjectConfig(form, 'expiry').expireAt).toBe(expireAt);
+  expect(buildScheduleInput({ ...form, deadline: '' }).expireAt).toBeNull();
+  expect(formToProjectConfig({ ...form, deadline: '' }, 'expiry').expireAt).toBeUndefined();
+  expect(buildScheduleInput({ ...form, deadline: '2027-04-06T11:45' }).expireAt)
+    .toBe(new Date(2027, 3, 6, 11, 45).getTime());
+});
+
+describe('buildPreRunHook with a plugin source', () => {
+  const form = { preRunHookEnabled: true, preRunHookCommand: 'sh check.sh', preRunHookTimeoutSec: '' };
+  it('keeps the saved script only when the task opened with both', () => {
+    expect(buildPreRunHook({ ...form, preRunSource: 'plugin', preRunKeepScript: true })?.command).toBe('sh check.sh');
+    expect(buildPreRunHook({ ...form, preRunSource: 'plugin' })).toBeUndefined();
+    expect(buildPreRunHook({ ...form, preRunSource: 'script' })?.command).toBe('sh check.sh');
+  });
+});
 
 describe('resolveScheduleGenerationProviderId', () => {
   it('materializes the effective custom provider when the stored provider id is empty', () => {
@@ -322,6 +348,9 @@ function makeForm(overrides: Partial<ScheduleFormState> = {}): ScheduleFormState
     manual: false,
     agentKind: 'claude-code',
     model: '',
+    preRunSource: 'script',
+    preRunPluginId: '',
+    preRunPluginOnFailure: 'block',
     providerId: '',
     effort: '',
     fastMode: false,

@@ -270,6 +270,7 @@ export function PluginTaskSettings({
         keyboardAvoidingBehavior={Platform.OS === "ios" ? "padding" : "height"}
         emptyHint={t("plugins.modelsUnavailable")}
         unified={{
+          localOnlyReason: "plugin-task-local-route",
           scope: JSON.stringify([owner.accountKey, deviceId]),
           agents: ["claude-code", "codex", "pi"],
           loadCapabilities: async (kind) => {

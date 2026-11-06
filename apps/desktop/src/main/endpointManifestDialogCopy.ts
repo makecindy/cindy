@@ -236,6 +236,40 @@ export const ENDPOINT_MANIFEST_DIALOG_COPY: Record<
     "offlineButton": "Usar a última configuração",
     "quitButton": "Sair de Cindy"
   },
+  'zh-Hant-x-lzh': {
+    networkTitle: 'Cindy 暫不能連線',
+    configTitle: 'Cindy 暫不能啟',
+    networkBody:
+      '啟動之際，未能連上 Cindy 服務。請察裝置已連網否，而後再啟之。若方用 Proxy 或公司網路，可換網再試。',
+    configBody: 'Cindy 暫不能啟動竟。請稍後再試；若此患不止，請聯絡技術支援。',
+    errorLine: '謬誤：{{error}}',
+    diagnosticsHint: '若需援手，可錄診斷資訊，貼於求援之訊中。',
+    copyDiagnosticsButton: '錄診斷資訊',
+    copiedHint: '診斷資訊已錄。請貼於求援之訊中。',
+    copyFailedHint: '診斷資訊未能錄之，請再試。',
+    noSavedConfigurationHint: '此裝置無可用之舊設，須復連線，方能續啟。',
+    offlineHint: '亦可用上回所得之設離線而啟（所得之時：{{savedAt}}），需網路之功能將不可用。',
+    retryButton: '再啟 Cindy',
+    offlineButton: '用上回之設',
+    quitButton: '退 Cindy',
+  },
+  'zh-Hans-x-lzh': {
+    networkTitle: 'Cindy 暂不能连接',
+    configTitle: 'Cindy 暂不能启',
+    networkBody:
+      '启动之际，未能连上 Cindy 服务。请察设备已连网否，而后再启之。若方用 Proxy 或公司网络，可换网再试。',
+    configBody: 'Cindy 暂不能启动竟。请稍后再试；若此患不止，请联系技术支持。',
+    errorLine: '谬误：{{error}}',
+    diagnosticsHint: '若需援手，可录诊断信息，贴于求援之讯中。',
+    copyDiagnosticsButton: '录诊断信息',
+    copiedHint: '诊断信息已录。请贴于求援之讯中。',
+    copyFailedHint: '诊断信息未能录之，请再试。',
+    noSavedConfigurationHint: '此设备无可用之旧设，须复连接，方能续启。',
+    offlineHint: '亦可用上回所得之设离线而启（所得之时：{{savedAt}}），需网络之功能将不可用。',
+    retryButton: '再启 Cindy',
+    offlineButton: '用上回之设',
+    quitButton: '退 Cindy',
+  },
 };
 
 export interface EndpointManifestDialogInput {

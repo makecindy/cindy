@@ -38,6 +38,7 @@ import {
   isDraftDiscardTokenCurrent,
   saveDraft as saveComposerDraft,
   subscribeDraft as subscribeComposerDraft,
+  subscribeDraftContent,
   type ComposerDraftDiscardToken,
 } from '@/lib/composerDraftStore';
 import { cleanupStagedChatAttachmentFiles } from '@/lib/chatAttachmentStageCleanup';
@@ -187,6 +188,11 @@ export function useAttachments(sessionId?: string, draftKey?: string): UseAttach
   const { t } = useTranslation();
   const [attachments, setAttachments] = useState<AttachedFile[]>([]);
   const attachmentsRef = useRef<AttachedFile[]>(attachments);
+  const mountedRef = useRef(false);
+  useEffect(() => {
+    mountedRef.current = true;
+    return () => { mountedRef.current = false; };
+  }, []);
 
   // The persistence layer is keyed by draftKey when provided, else sessionId.
   const storageKey = draftKey ?? sessionId;
@@ -242,6 +248,7 @@ export function useAttachments(sessionId?: string, draftKey?: string): UseAttach
 
   const isAttachmentOperationScopeCurrent = useCallback(
     (scope: AttachmentOperationScope): boolean =>
+      mountedRef.current &&
       isAttachmentDraftScopeActive(scope) &&
       isSameAttachmentOperationScope(attachmentOperationScopeRef.current, scope),
     [],
@@ -263,7 +270,7 @@ export function useAttachments(sessionId?: string, draftKey?: string): UseAttach
         cleanupStagedChatAttachmentFiles(items);
         return;
       }
-      if (isSameAttachmentOperationScope(attachmentOperationScopeRef.current, scope)) {
+      if (isAttachmentOperationScopeCurrent(scope)) {
         appendAttachments(items);
         return;
       }
@@ -276,17 +283,15 @@ export function useAttachments(sessionId?: string, draftKey?: string): UseAttach
       saveComposerDraft(
         scope.storageKey,
         {
+          ...existing,
           text: existing?.text ?? null,
           attachments: mergeAttachmentsById(existing?.attachments ?? [], items),
-          quotes: existing?.quotes ?? [],
-          browserComments: existing?.browserComments ?? [],
-          ...(existing?.pendingGhostId ? { pendingGhostId: existing.pendingGhostId } : {}),
-          ...(existing?.focusAtEnd ? { focusAtEnd: true } : {}),
         },
-        { silent: true },
+        // Refresh attachment subscribers without replacing unsaved editor text.
+        { silent: true, preserveRemoteOptimisticRecovery: true },
       );
     },
-    [appendAttachments],
+    [appendAttachments, isAttachmentOperationScopeCurrent],
   );
 
   // ── Per-session draft (composer-draft-per-session) ──
@@ -362,18 +367,31 @@ export function useAttachments(sessionId?: string, draftKey?: string): UseAttach
     };
   }, [dataOwner, storageKey]);
 
-  // Same-session external draft writes (rewind/fork prefill) must replace the
-  // parent-held attachment list immediately. Session switches are handled by
-  // the restore effect above; this covers the "storageKey did not change" path.
+  // Observe attachments on every write, including silent late cache results.
+  // ChatInput keeps the separate external-write channel for document replacement;
+  // attachment-only updates must not restore its potentially older saved text.
   useEffect(() => {
     if (storageKey === undefined || !isDataOwnerGenerationCurrent(dataOwner)) return;
-    return subscribeComposerDraft(storageKey, () => {
+    let observed = getComposerDraft(storageKey)?.attachments ?? [];
+    const refresh = (external: boolean) => {
       if (!isDataOwnerGenerationCurrent(dataOwner)) return;
       const draft = getComposerDraft(storageKey);
       const next = draft?.attachments ?? [];
+      // A text-only save can run before React mirrors a locally added file.
+      // Ignore its unchanged stored list instead of overwriting that new file.
+      const unchanged = next.length === observed.length
+        && next.every((file, index) => file === observed[index]);
+      observed = next;
+      if (!external && unchanged) return;
+      if (next === attachmentsRef.current) return;
       attachmentsRef.current = next;
       setAttachments(next);
-    });
+    };
+    // Explicit rewind/discard writes must replace the tray even if the stored
+    // list was already empty while a local attachment was still being mirrored.
+    const unsubscribeExternal = subscribeComposerDraft(storageKey, () => refresh(true));
+    const unsubscribeContent = subscribeDraftContent(storageKey, () => refresh(false));
+    return () => { unsubscribeExternal(); unsubscribeContent(); };
   }, [dataOwner, storageKey]);
 
   // 附件变化实时(silent)镜像进 composerDraftStore,而非只在 unmount 快照。

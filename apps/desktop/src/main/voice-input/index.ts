@@ -37,6 +37,7 @@ import { getEffectiveAuxiliaryModelChainSnapshot } from '../utility-model/resolv
 import { getAppCapabilities } from '../appCapabilities.js';
 import { getProviderSecretStore } from '../secrets/providerSecretStore.js';
 import { assertTrustedAppRendererEvent } from '../security/trustedAppRenderer.js';
+import { publishMicrophonePermissionSnapshot, registerMicrophonePermissionIpc } from './microphonePermissionIpc.js';
 import {
   desktopCodexAuthAdapter,
   readOwnerScopedXdGatewayKey,
@@ -1488,6 +1489,7 @@ function readMicrophonePermissionSnapshot(): VoiceInputMicrophonePermissionCache
 
 function refreshMicrophonePermissionCache(): VoiceInputMicrophonePermissionCache {
   cachedMicrophonePermission = readMicrophonePermissionSnapshot();
+  publishMicrophonePermissionSnapshot(cachedMicrophonePermission);
   return cachedMicrophonePermission;
 }
 
@@ -1894,7 +1896,7 @@ export function registerVoiceInputIpc(): void {
     // Reuse dictation's opt-in setting, local enrollment and strictness. A new
     // microphone run (including unmute) reads current settings; ASR rotation
     // keeps the same gate. No separate companion voiceprint or audio storage.
-    createAudioGate: () => getSpeakerFilterService().createGate(voiceInputDataStore.getSettings()),
+    createAudioGate: (onFiltered) => getSpeakerFilterService().createGate(voiceInputDataStore.getSettings(), onFiltered),
     updateSettings: patch => voiceInputDataStore.updateSettings(patch),
     hasDictation: () => activeByWebContentsId.size > 0 || pendingDictationStarts > 0 || systemAudioMuteGuard.hasPendingOrActiveMute,
     createProvider: async () => {
@@ -1954,9 +1956,7 @@ export function registerVoiceInputIpc(): void {
     },
   );
 
-  ipcMain.on('voice-input:get-microphone-permission-cached', (event) => {
-    event.returnValue = getCachedMicrophonePermission();
-  });
+  registerMicrophonePermissionIpc(getCachedMicrophonePermission);
 
   ipcMain.handle('voice-input:set-renderer-microphone-permission-verified', async (_event, verified: boolean) => {
     rendererVerifiedMicrophonePermission = verified;
@@ -2378,6 +2378,8 @@ export function registerVoiceInputIpc(): void {
           timelineEvent,
           provider.activeProviderKind,
         ));
+      } else if (timelineEvent.type === 'speculative_refine_skipped') {
+        log.info('speculative refinement skipped', summarizeTimelineEventForLog(timelineEvent));
       } else if (timelineEvent.type === 'refine_accepted' || timelineEvent.type === 'refine_rejected') {
         const start = timelineEvents.get(`${timelineEvent.runId}:start_clicked`);
         log.info('refinement latency summary', {
@@ -2392,12 +2394,17 @@ export function registerVoiceInputIpc(): void {
     });
 
     // "Recognize my voice": undefined unless enabled, enrolled and the models are on disk.
-    const audioGate = getSpeakerFilterService().createGate(voiceInputDataStore.getSettings());
+    const audioGate = getSpeakerFilterService().createGate(voiceInputDataStore.getSettings(), () => {
+      if (runId) emit({ type: 'speaker-filtered', runId });
+    });
     const controller = new VoiceInputController({
       asr: provider,
       refiner,
       audioGate,
       pauseRefinementEnabled: true,
+      // Managed refinement is capped per voice-server session; keep one request
+      // for the final text. BYOK refiners have no such cap.
+      refineRequestBudget: voiceContext ? () => voiceContext.refineRequestBudget() : undefined,
       recoveryErrorMessage: voiceContext ? getVoiceInputRateLimitMessage : undefined,
       logger,
       callbacks: {

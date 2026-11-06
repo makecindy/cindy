@@ -38,22 +38,22 @@ export interface BotRemoteMemoryRequest {
 const text = (fallback: string, cn: string, tw: string, ja: string, ko: string, additionalTranslations: Record<string, string> = {}): RemoteLocalizedText =>
   ({ fallback, translations: { 'zh-CN': cn, 'zh-TW': tw, ja, ko, ...additionalTranslations } });
 export const memoryCopy = {
-  memories: text('Saved Memories', '已存记忆', '已存記憶', '保存した記憶', '저장된 기억', {"es":"Recuerdos guardados","fr":"Souvenirs enregistrés","de":"Gespeicherte Erinnerungen","pt-PT":"Memórias guardadas","pt-BR":"Memórias salvas"}),
-  search: text('Search memories', '搜索记忆', '搜尋記憶', '記憶を検索', '기억 검색', {"es":"Buscar recuerdos","fr":"Rechercher des souvenirs","de":"Erinnerungen suchen","pt-PT":"Pesquisar memórias","pt-BR":"Buscar memórias"}),
+  memories: text('Saved Memories', '已存记忆', '已存記憶', '保存した記憶', '저장된 기억', {"es":"Recuerdos guardados","fr":"Souvenirs enregistrés","de":"Gespeicherte Erinnerungen","pt-PT":"Memórias guardadas","pt-BR":"Memórias salvas","zh-Hant-x-lzh":"所存記憶","zh-Hans-x-lzh":"所存记忆"}),
+  search: text('Search memories', '搜索记忆', '搜尋記憶', '記憶を検索', '기억 검색', {"es":"Buscar recuerdos","fr":"Rechercher des souvenirs","de":"Erinnerungen suchen","pt-PT":"Pesquisar memórias","pt-BR":"Buscar memórias","zh-Hant-x-lzh":"尋記憶","zh-Hans-x-lzh":"寻记忆"}),
   types: {
-    user: text('About you', '关于你', '關於你', 'あなたについて', '나에 대해', {"es":"Sobre ti","fr":"À votre sujet","de":"Über dich","pt-PT":"Sobre si","pt-BR":"Sobre você"}),
-    feedback: text('Your preferences', '你的要求', '你的要求', 'あなたの要望', '요청 사항', {"es":"Tus preferencias","fr":"Vos préférences","de":"Deine Vorlieben","pt-PT":"As suas preferências","pt-BR":"Suas preferências"}),
-    project: text('Projects', '项目', '專案', 'プロジェクト', '프로젝트', {"es":"Proyectos","fr":"Projets","de":"Projekte","pt-PT":"Projetos","pt-BR":"Projetos"}),
-    reference: text('References', '参考', '參考', '参考', '참고', {"es":"Referencias","fr":"Références","de":"Referenzen","pt-PT":"Referências","pt-BR":"Referências"}),
+    user: text('About you', '关于你', '關於你', 'あなたについて', '나에 대해', {"es":"Sobre ti","fr":"À votre sujet","de":"Über dich","pt-PT":"Sobre si","pt-BR":"Sobre você","zh-Hant-x-lzh":"關於君","zh-Hans-x-lzh":"关于君"}),
+    feedback: text('Your preferences', '你的要求', '你的要求', 'あなたの要望', '요청 사항', {"es":"Tus preferencias","fr":"Vos préférences","de":"Deine Vorlieben","pt-PT":"As suas preferências","pt-BR":"Suas preferências","zh-Hant-x-lzh":"君之所求","zh-Hans-x-lzh":"君之所求"}),
+    project: text('Projects', '项目', '專案', 'プロジェクト', '프로젝트', {"es":"Proyectos","fr":"Projets","de":"Projekte","pt-PT":"Projetos","pt-BR":"Projetos","zh-Hant-x-lzh":"案","zh-Hans-x-lzh":"案"}),
+    reference: text('References', '参考', '參考', '参考', '참고', {"es":"Referencias","fr":"Références","de":"Referenzen","pt-PT":"Referências","pt-BR":"Referências","zh-Hant-x-lzh":"參考","zh-Hans-x-lzh":"参考"}),
   } satisfies Record<BotMemoryType, RemoteLocalizedText>,
-  edit: text('Edit', '编辑', '編輯', '編集', '편집', {"es":"Editar","fr":"Modifier","de":"Bearbeiten","pt-PT":"Editar","pt-BR":"Editar"}),
-  title: text('Title', '标题', '標題', 'タイトル', '제목', {"es":"Título","fr":"Titre","de":"Titel","pt-PT":"Título","pt-BR":"Título"}),
-  body: text('Content', '内容', '內容', '内容', '내용', {"es":"Contenido","fr":"Contenu","de":"Inhalt","pt-PT":"Conteúdo","pt-BR":"Conteúdo"}),
-  remove: text('Delete Memory', '删除记忆', '刪除記憶', '記憶を削除', '기억 삭제', {"es":"Eliminar recuerdo","fr":"Supprimer le souvenir","de":"Erinnerung löschen","pt-PT":"Eliminar memória","pt-BR":"Excluir memória"}),
-  removeTitle: text('Delete this memory?', '删除这条记忆？', '刪除這條記憶？', 'この記憶を削除しますか？', '이 기억을 삭제할까요?', {"es":"¿Eliminar este recuerdo?","fr":"Supprimer ce souvenir ?","de":"Diese Erinnerung löschen?","pt-PT":"Eliminar esta memória?","pt-BR":"Excluir esta memória?"}),
-  delete: text('Delete', '删除', '刪除', '削除', '삭제', {"es":"Eliminar","fr":"Supprimer","de":"Löschen","pt-PT":"Eliminar","pt-BR":"Excluir"}),
-  saved: text('Memory saved', '记忆已保存', '記憶已儲存', '記憶を保存しました', '기억을 저장했습니다', {"es":"Recuerdo guardado","fr":"Souvenir enregistré","de":"Erinnerung gespeichert","pt-PT":"Memória guardada","pt-BR":"Memória salva"}),
-  deleted: text('Memory deleted', '记忆已删除', '記憶已刪除', '記憶を削除しました', '기억을 삭제했습니다', {"es":"Recuerdo eliminado","fr":"Souvenir supprimé","de":"Erinnerung gelöscht","pt-PT":"Memória eliminada","pt-BR":"Memória excluída"}),
+  edit: text('Edit', '编辑', '編輯', '編集', '편집', {"es":"Editar","fr":"Modifier","de":"Bearbeiten","pt-PT":"Editar","pt-BR":"Editar","zh-Hant-x-lzh":"修","zh-Hans-x-lzh":"修"}),
+  title: text('Title', '标题', '標題', 'タイトル', '제목', {"es":"Título","fr":"Titre","de":"Titel","pt-PT":"Título","pt-BR":"Título","zh-Hant-x-lzh":"標題","zh-Hans-x-lzh":"标题"}),
+  body: text('Content', '内容', '內容', '内容', '내용', {"es":"Contenido","fr":"Contenu","de":"Inhalt","pt-PT":"Conteúdo","pt-BR":"Conteúdo","zh-Hant-x-lzh":"內容","zh-Hans-x-lzh":"内容"}),
+  remove: text('Delete Memory', '删除记忆', '刪除記憶', '記憶を削除', '기억 삭제', {"es":"Eliminar recuerdo","fr":"Supprimer le souvenir","de":"Erinnerung löschen","pt-PT":"Eliminar memória","pt-BR":"Excluir memória","zh-Hant-x-lzh":"刪記憶","zh-Hans-x-lzh":"删记忆"}),
+  removeTitle: text('Delete this memory?', '删除这条记忆？', '刪除這條記憶？', 'この記憶を削除しますか？', '이 기억을 삭제할까요?', {"es":"¿Eliminar este recuerdo?","fr":"Supprimer ce souvenir ?","de":"Diese Erinnerung löschen?","pt-PT":"Eliminar esta memória?","pt-BR":"Excluir esta memória?","zh-Hant-x-lzh":"刪此記憶乎？","zh-Hans-x-lzh":"删此记忆乎？"}),
+  delete: text('Delete', '删除', '刪除', '削除', '삭제', {"es":"Eliminar","fr":"Supprimer","de":"Löschen","pt-PT":"Eliminar","pt-BR":"Excluir","zh-Hant-x-lzh":"刪","zh-Hans-x-lzh":"删"}),
+  saved: text('Memory saved', '记忆已保存', '記憶已儲存', '記憶を保存しました', '기억을 저장했습니다', {"es":"Recuerdo guardado","fr":"Souvenir enregistré","de":"Erinnerung gespeichert","pt-PT":"Memória guardada","pt-BR":"Memória salva","zh-Hant-x-lzh":"記憶已存","zh-Hans-x-lzh":"记忆已存"}),
+  deleted: text('Memory deleted', '记忆已删除', '記憶已刪除', '記憶を削除しました', '기억을 삭제했습니다', {"es":"Recuerdo eliminado","fr":"Souvenir supprimé","de":"Erinnerung gelöscht","pt-PT":"Memória eliminada","pt-BR":"Memória excluída","zh-Hant-x-lzh":"記憶已刪","zh-Hans-x-lzh":"记忆已删"}),
 };
 const removeBody = (name: string, title: string) => text(
   `${name} will no longer refer to “${title}”.`,
@@ -67,6 +67,8 @@ const removeBody = (name: string, title: string) => text(
     de: `${name} wird „${title}“ nicht mehr berücksichtigen.`,
     'pt-PT': `${name} deixará de consultar «${title}».`,
     'pt-BR': `${name} não consultará mais “${title}”.`,
+    'zh-Hant-x-lzh': `${name}此後不復參考「${title}」。`,
+    'zh-Hans-x-lzh': `${name}此后不复参考「${title}」。`,
   },
 );
 

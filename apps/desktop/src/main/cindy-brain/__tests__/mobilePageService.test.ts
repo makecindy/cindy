@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import { MobilePluginPages } from '../mobilePageService.js';
+import { GhostModelPicker } from '../ghostModelPicker.js';
 import type { InstalledGhost } from '../../../shared/ghost.js';
 import { toGhostPluginDetail } from '../../../renderer/features/plugin/lib/ghostPluginViewModel.js';
 import { installedGhostStoragePart } from '../../../shared/pluginIdentity.js';
@@ -7,7 +8,7 @@ import { parseRemoteResourceGetRequest, type PluginPageDocument } from '@cindy/d
 function setup(
   projection: Pick<
     ConstructorParameters<typeof MobilePluginPages>[0],
-    'setupAssessment' | 'runtimeState' | 'listOrder' | 'answerModelPicker'
+    'setupAssessment' | 'runtimeState' | 'listOrder' | 'answerModelPicker' | 'readme'
   > = {},
 ) {
   let owner = 'a',
@@ -114,6 +115,45 @@ function setup(
   };
 }
 describe('mobile plugin pages', () => {
+  // #8460 / unit: old controllers strip agentDeviceId from a remote initial selection.
+  // Existing page tests only forwarded answers; they did not exercise the broker accepting a
+  // local namesake. Real page-open → request → poll → answer must reject before delivery when
+  // source support is absent, while preserving new controllers' explicit return to this computer.
+  it.each([
+    { controller: 'legacy', capable: false, remoteInitial: true, localAnswer: true },
+    { controller: 'source-aware', capable: true, remoteInitial: true, localAnswer: false },
+    { controller: 'source-aware returning home', capable: true, remoteInitial: true, localAnswer: true },
+    { controller: 'legacy local request', capable: false, remoteInitial: false, localAnswer: true },
+  ])('keeps the execution source safe for $controller', async ({ capable, remoteInitial, localAnswer }) => {
+    let picker!: GhostModelPicker;
+    const h = setup({ answerModelPicker: (page, id, route) => picker.resolve(page, id, route) });
+    const { pageId } = (await h.invoke('open:panel', capable ? { modelPickerRemoteSources: true } : {})).result as { pageId: string };
+    // The same provider/model is available at home: availability alone cannot detect a lost source.
+    const available = vi.fn(async () => true);
+    picker = new GhostModelPicker({ getGhost: () => h.ghost, installation: () => 'r1',
+      target: (id, page) => page ? h.service.modelPickerTarget(page, id) : null, available });
+    const local = { agentKind: 'codex' as const, providerId: 'same-provider', model: 'same-model', effort: '', fastMode: false };
+    const remote = { ...local, agentDeviceId: 'share:fixture' };
+    try {
+      const selected = picker.request('practice', { mobilePageId: pageId, allowRemote: true,
+        initial: remoteInitial ? remote : local });
+      const poll = (await h.invoke('poll', { pageId, after: 0 })).result as { modelPickers: Array<{ requestId: string }> };
+      if (poll.modelPickers.length) {
+        await h.invoke('answer-model-picker', { pageId, requestId: poll.modelPickers[0].requestId,
+          route: localAnswer ? local : remote });
+      }
+      if (remoteInitial && !capable) {
+        expect(await selected).toMatchObject({ ok: false, errorCode: 'UNAVAILABLE' });
+        expect(poll.modelPickers).toEqual([]);
+        expect(available).not.toHaveBeenCalled();
+      } else {
+        expect(await selected).toEqual({ ok: true, route: localAnswer ? local : remote });
+      }
+    } finally {
+      picker.cancel();
+      await h.invoke('close', { pageId });
+    }
+  });
   // New Host picker round trip: page/controller ownership and suspend cancellation are
   // not covered by the existing directory picker. Minimal input: one native request. Tier: unit.
   it('delivers model selection only to its source controller and cancels it when the page suspends', async () => {
@@ -150,6 +190,42 @@ describe('mobile plugin pages', () => {
     expect(h.ghost.manifest.agent.tasks).toBe(true);
     await h.invoke('task-settings:get');
     expect(h.taskSettings.read).toHaveBeenCalledWith('practice', 'r1');
+  });
+
+  // Detailed introduction: the detail resource only carries a flag; the phone fetches the
+  // content for its own locale, and one reply stays within the device-link message budget.
+  it('offers the detailed introduction on demand within the reply budget', async () => {
+    const image = (fill: string) => 'data:image/png;base64,' + fill.repeat(1_500_000);
+    const readme = vi.fn(async (_ghost: InstalledGhost, locale: string) => ({
+      path: 'docs/README.md',
+      markdown: '# ' + locale,
+      images: { 'docs/a.png': image('A'), 'docs/b.png': image('B') },
+    }));
+    const h = setup({ readme });
+    const ref = { collectionId: 'plugins', kind: 'plugin', id: 'practice' };
+    const capabilities = async () =>
+      (await h.provider.get!(
+        { controllerDeviceId: 'phone-a' },
+        { ref, client: { protocolVersion: 1, primitives: ['plugin-capabilities'] } },
+      )).blocks?.find((block) => block.id === 'capabilities')?.data as { readme?: boolean };
+    const fetchReadme = () =>
+      h.provider.invoke!(
+        { controllerDeviceId: 'phone-a' },
+        { collectionId: 'plugins', resourceRef: ref, actionId: 'readme:get', client: { protocolVersion: 1, primitives: [], locale: 'zh-TW' } },
+      );
+    expect((await capabilities()).readme).toBeUndefined();
+    await expect(fetchReadme()).rejects.toThrow();
+    expect(readme).not.toHaveBeenCalled();
+
+    h.ghost.manifest.readme = { en: 'docs/README.md' };
+    expect((await capabilities()).readme).toBe(true);
+    const reply = await fetchReadme();
+    expect(readme).toHaveBeenCalledWith(h.ghost, 'zh-TW');
+    expect(reply.result).toEqual({
+      path: 'docs/README.md',
+      markdown: '# zh-TW',
+      images: { 'docs/a.png': image('A') },
+    });
   });
 
   it('adds usage facts to the existing capabilities block and preserves unknown setup on a failed read', async () => {

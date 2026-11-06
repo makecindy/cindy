@@ -273,8 +273,7 @@ async function ensureChildDir(parent: string, name: string): Promise<string> {
 
 async function prepareBlobDestination(hash: string, ext: string, scope: BlobScope = 'blobs'): Promise<{ dir: string; dest: string }> {
   getBlobsRoot(scope); // Validate before using the scope as a directory name.
-  const userData = path.resolve(app.getPath('userData'));
-  await lstatRegularDir(userData);
+  const userData = await resolveUserDataRoot();
   const mediaRoot = await ensureChildDir(userData, 'cindy-media');
   const root = await ensureChildDir(mediaRoot, scope);
   const dir = await ensureChildDir(root, hash.slice(0, 2));
@@ -285,21 +284,37 @@ async function prepareBlobDestination(hash: string, ext: string, scope: BlobScop
   return { dir, dest };
 }
 
-async function assertBlobPathContained(absPath: string, scope: BlobScope = 'blobs'): Promise<void> {
-  const userData = path.resolve(app.getPath('userData'));
-  const root = path.resolve(getBlobsRoot(scope));
-  if (!path.resolve(absPath).startsWith(root + path.sep)) {
+async function resolveUserDataRoot(): Promise<string> {
+  // Only the Host-selected root may redirect (e.g. a Windows Junction).
+  // Never realpath the entire blob path: that would hide links inside the store.
+  const root = await fs.realpath(app.getPath('userData'));
+  await lstatRegularDir(root);
+  return root;
+}
+
+async function assertBlobPathContained(absPath: string, scope: BlobScope = 'blobs'): Promise<string> {
+  const logicalRoot = path.resolve(getBlobsRoot(scope));
+  const userData = await resolveUserDataRoot();
+  const root = path.join(userData, 'cindy-media', scope);
+  // URL resolution returns a logical path; writes already use the physical root.
+  // Keep both on the same physical baseline, including cross-volume Junctions.
+  const candidate = path.resolve(absPath);
+  const resolved = candidate.startsWith(logicalRoot + path.sep)
+    ? path.resolve(root, path.relative(logicalRoot, candidate))
+    : candidate;
+  if (!resolved.startsWith(root + path.sep)) {
     throw new Error('cindy-media: blob path out of bounds');
   }
-  const destStat = await fs.lstat(absPath);
+  const destStat = await fs.lstat(resolved);
   if (destStat.isSymbolicLink()) throw Object.assign(new Error('cindy-media: blob destination is a symlink'), { code: 'ELOOP' });
-  let current = path.resolve(absPath);
+  let current = resolved;
   while (current !== userData) {
     const parent = path.dirname(current);
     if (parent === current) break;
     await lstatRegularDir(parent);
     current = parent;
   }
+  return resolved;
 }
 
 function noFollowReadFlags(): number {
@@ -526,8 +541,8 @@ export async function readClientWallpaperFile(url: string): Promise<{ buffer: Bu
   const parsed = parseClientWallpaperUrl(url);
   if (!parsed) throw new Error('cindy-media: invalid client wallpaper url');
   const { absPath, mimeType } = resolveHashRef(parsed.hash, parsed.ext, 'client-wallpaper');
-  await assertBlobPathContained(absPath, 'client-wallpaper');
-  return { buffer: await fs.readFile(absPath), mimeType };
+  const verifiedPath = await assertBlobPathContained(absPath, 'client-wallpaper');
+  return { buffer: await fs.readFile(verifiedPath), mimeType };
 }
 
 /** Open a verified wallpaper video once; the response stream owns this handle. */
@@ -545,7 +560,7 @@ export async function openBlobFile(url: string) {
 }
 
 async function openVerifiedBlobFile(absPath: string, mimeType: string, scope: BlobScope) {
-  await assertBlobPathContained(absPath, scope);
+  absPath = await assertBlobPathContained(absPath, scope);
   const before = await fs.lstat(absPath);
   if (!before.isFile()) throw new Error('cindy-media: media is not a regular file');
   const file = await fs.open(absPath, noFollowReadFlags() | (fsConstants.O_NONBLOCK ?? 0));
@@ -623,8 +638,8 @@ export async function listBlobFiles(scope: BlobScope = 'blobs'): Promise<BlobDir
         continue;
       }
       try {
-        if (scope !== 'blobs') await assertBlobPathContained(abs, scope);
-        const st = await fs.stat(abs);
+        const verifiedPath = scope !== 'blobs' ? await assertBlobPathContained(abs, scope) : abs;
+        const st = await fs.stat(verifiedPath);
         listing.entries.push({ hash, ext, bytes: st.size, mtimeMs: st.mtimeMs, absPath: abs });
       } catch {
         // 枚举与 stat 之间被删:视为不存在。
@@ -636,9 +651,9 @@ export async function listBlobFiles(scope: BlobScope = 'blobs'): Promise<BlobDir
 
 /** 删除单个 blob 文件(recycler 在账删成功且复查无重录后才调用);不存在视为成功。 */
 export async function deleteBlobFile(hash: string, ext: string, scope: BlobScope = 'blobs'): Promise<void> {
-  const { absPath } = resolveHashRef(hash, ext, scope);
+  let { absPath } = resolveHashRef(hash, ext, scope);
   if (scope !== 'blobs') {
-    try { await assertBlobPathContained(absPath, scope); }
+    try { absPath = await assertBlobPathContained(absPath, scope); }
     catch (error) { if ((error as NodeJS.ErrnoException).code === 'ENOENT') return; throw error; }
   }
   await fs.rm(absPath, { force: true });
@@ -669,8 +684,8 @@ export async function cleanupTmpFiles(maxAgeMs: number, scope: BlobScope = 'blob
   let removed = 0;
   for (const abs of await listStaleTmpFiles(maxAgeMs, scope)) {
     try {
-      if (scope !== 'blobs') await assertBlobPathContained(abs, scope);
-      await fs.rm(abs, { force: true });
+      const verifiedPath = scope !== 'blobs' ? await assertBlobPathContained(abs, scope) : abs;
+      await fs.rm(verifiedPath, { force: true });
       removed++;
     } catch {
       // 被占用:留给下次。

@@ -49,8 +49,7 @@ import {
   removeRefs as removeMediaRefs,
   removeSessionAttachmentRefIfUnreferencedByLiveMessage,
 } from '../../cindy-media/ledger';
-import { importExternalCodexMessagesForSession } from '../../maker-host/codex-local-sessions';
-import { importExternalClaudeCodeMessagesForSession } from '../../maker-host/claude-local-sessions';
+import { adoptLegacySessionBeforeOpen } from '../../session-import/legacy';
 import { getDeviceLinkInvokeContext, isDeviceLinkInvoke } from '../../device-link/invoke-context';
 import { onMessageCreated as onChatMessageCreatedForEmbedding } from '../../embedders/chat-history-embedder';
 import { recomputePrRefsForSession, recordPrRefsForMessage } from '../../git-context/prRefsStore';
@@ -262,6 +261,8 @@ export interface PriorUserRoundCost {
   money: RegionalMoney | null;
   costUsd: number;
   hasEstimatedValue: boolean;
+  /** 本轮是该任务（或 /clear 之后）第一条真实用户请求。 */
+  isFirstUserRound?: boolean;
 }
 
 const VALID_ROLES: ReadonlySet<MessageRole> = new Set([
@@ -828,11 +829,11 @@ export function registerMessageIpc(
 }
 
 /**
- * messages:list 的「按需导入外部 CLI 会话历史」副作用。
+ * messages:list 的副作用：旧版导入的任务（codex- / claude- 前缀）第一次打开时接入新导入器。
  *
- * 普通 Cindy 任务不需要外部 CLI 历史导入；只有带有明确来源前缀的任务才运行对应 importer。
- * 这样可以避免每次切换普通任务都先为两个 importer 各做一次 sessions 查询。device-link 远程读
- * 仍遵循首页/分页语义，但首页也只对 Codex/Claude 来源任务运行对应 importer。
+ * 新导入器在导入时就把完整历史写进 Cindy，打开任务不再读取来源文件（只导入、不同步）。
+ * 这里只处理升级前导入、还没接入的旧任务：同步接入正在打开的这一条（与旧版「打开时导入」
+ * 同等的等待），其余旧任务在后台一次性接入。普通任务直接返回，不做任何查询。
  *
  * 抽成可注入函数仅为单测(规则 14):默认依赖即生产实现,Electron `ipcMain.handle` 只做 adapter。
  */
@@ -840,37 +841,21 @@ export async function runMessagesListImportSideEffects(
   sessionId: string,
   deps: {
     isDeviceLink?: () => boolean;
-    importCodex?: (id: string) => Promise<void>;
-    importClaude?: (id: string) => Promise<void>;
+    adoptLegacy?: (id: string) => Promise<void>;
   } = {},
   opts: { deviceLinkFirstPage?: boolean } = {},
 ): Promise<void> {
   const isDeviceLink = deps.isDeviceLink ?? isDeviceLinkInvoke;
-  // device-link **分页**请求跳过导入(#318 性能语义:每页重跑 importer 会把
-  // 导入延迟串接到查询前,拖慢手机端);**首页**请求照跑(review P2):被控端
-  // 可能从未本机打开该会话,rollout/transcript 从未导入 —— 崩溃前 CLI 已写的
-  // 产出不进 DB,中断行滞留尾部,控制端会看到可「继续」的假中断。首页一次
-  // 导入与本机路径的既有成本同水平。
+  // device-link 分页请求跳过（#318 性能语义）；首页照常接入。
   if (isDeviceLink() && !opts.deviceLinkFirstPage) return;
-  const importCodex = deps.importCodex ?? importExternalCodexMessagesForSession;
-  const importClaude = deps.importClaude ?? importExternalClaudeCodeMessagesForSession;
-  if (sessionId.startsWith('codex-')) {
-    await importCodex(sessionId).catch((err) => {
-      log.warn('external Codex message import failed', {
-        sessionId,
-        err: err instanceof Error ? err.message : String(err),
-      });
+  if (!sessionId.startsWith('codex-') && !sessionId.startsWith('claude-')) return;
+  const adopt = deps.adoptLegacy ?? adoptLegacySessionBeforeOpen;
+  await adopt(sessionId).catch((err) => {
+    log.warn('legacy imported session adoption failed', {
+      sessionId,
+      err: err instanceof Error ? err.message : String(err),
     });
-    return;
-  }
-  if (sessionId.startsWith('claude-')) {
-    await importClaude(sessionId).catch((err) => {
-      log.warn('external Claude Code message import failed', {
-        sessionId,
-        err: err instanceof Error ? err.message : String(err),
-      });
-    });
-  }
+  });
 }
 
 /**
@@ -1149,6 +1134,7 @@ export async function commitMessageDeletion(
       error: cleanup.reason instanceof Error ? cleanup.reason.message : String(cleanup.reason),
     });
   }
+
   void recomputePrRefsForSession(sessionId).catch(() => undefined);
 
   // sessions:patched 的消费者只做 shallow merge，不会主动重拉。删除后同步带出 canonical
@@ -1319,6 +1305,7 @@ export function broadcastMessageDeleted(
 export async function rewindPersistedUserMessageAfterClear(
   sessionId: string,
   clientId: string,
+  options?: { discard?: boolean },
 ): Promise<void> {
   const ownerScope = captureOwnerBroadcastScope();
   if (!isOwnerBroadcastScopeCurrent(ownerScope)) return;
@@ -1344,6 +1331,7 @@ export async function rewindPersistedUserMessageAfterClear(
     sessionId,
     clientId,
     rewoundAt,
+    ...(options?.discard ? { discard: true } : {}),
   });
   if (!isOwnerBroadcastScopeCurrent(ownerScope)) return;
   if (updated.changes === 0) return;
@@ -1381,6 +1369,14 @@ export async function rewindPersistedUserMessageAfterClear(
   void recomputePrRefsForSession(sessionId).catch(() => undefined);
 }
 
+export async function purgeRewoundSchedulerPrompts(
+  limit = 100,
+  cursor = 0,
+): Promise<{ deleted: number; sessionIds: string[]; cursor: number | null }> {
+  const ownerScope = captureOwnerBroadcastScope();
+  if (!isOwnerBroadcastScopeCurrent(ownerScope)) return { deleted: 0, sessionIds: [], cursor: null };
+  return getDbClient().tx('message.purgeRewoundSchedulerPrompts', { limit, cursor });
+}
 export async function dismissErrorMessage(
   sessionId: string,
   clientId: string,
@@ -1664,6 +1660,10 @@ export async function updateMessageContent(
   // The correction already committed: settle its original publication even if
   // clear/owner changed or another deletion removed the row during readback.
   if (original) await reconcileAssistantDerivedState(original, dbClient, isCurrent, ownerScope, false);
+  else if (row && (row.role === 'user' || row.role === 'assistant')) {
+    await pendingPrRefWrites.get(dbClient)?.get(row.id);
+    if (isCurrent()) await recomputePrRefsForSession(sessionId, { dbClient, isCurrent });
+  }
   return row ? messageToCamel(row) : null;
 }
 
@@ -2132,7 +2132,9 @@ export async function patchMessageAgentMetaWithResult(
   // 损坏的 JSON 以 {} 为底重建(补丁字段仍写入,旧字段无法挽救)。
   const previous = parseAgentMetaRecord(rows[0].agentMeta) ?? {};
   const next = { ...previous, ...patch };
-  await updateAgentMeta(sessionId, clientId, JSON.stringify(next));
+  // Keep the read and write on the same owner even if login changes across await.
+  await db.update(messages).set({ agentMeta: JSON.stringify(next) })
+    .where(and(eq(messages.sessionId, sessionId), eq(messages.clientId, clientId)));
   return { previous, next };
 }
 
@@ -2265,8 +2267,13 @@ export async function readPriorUserRoundCost(
       ),
     )
     .orderBy(desc(messages.createdAt), desc(messageRowid));
-  const boundary = userRows.find((row) => !isAutoResumeUserMessage(row.agentMeta));
+  const realUserRows = userRows.filter((row) => !isAutoResumeUserMessage(row.agentMeta));
+  const boundary = realUserRows[0];
   if (!boundary) return { money: null, costUsd: 0, hasEstimatedValue: false };
+  // 运行中插话（delivery: 'steer'）与界面一样归在同一轮，不算新的用户请求。
+  const isFirstUserRound =
+    realUserRows.filter((row) => parseAgentMetaRecord(row.agentMeta)?.delivery !== 'steer')
+      .length === 1;
 
   const afterBoundary = or(
     gt(messages.createdAt, boundary.createdAt),
@@ -2326,6 +2333,7 @@ export async function readPriorUserRoundCost(
     costUsd: money?.currency === 'USD' ? money.amount : 0,
     hasEstimatedValue,
     ...(additionalCosts.length ? { additionalCosts } : {}),
+    ...(isFirstUserRound ? { isFirstUserRound } : {}),
   };
 }
 
@@ -2875,6 +2883,10 @@ export async function listMessagesForAgentHandoff(
       }
       if (agentMeta?.voiceCall) return null;
       if (agentMeta && typeof agentMeta.contextRebuild === 'object' && agentMeta.contextRebuild) {
+        return null;
+      }
+      // 任务导入的时间线标记只用于显示。
+      if (agentMeta && typeof agentMeta.sessionImport === 'object' && agentMeta.sessionImport) {
         return null;
       }
       return {

@@ -29,6 +29,8 @@
  * 错误横幅统一复用 ErrorNotice 的中性表面与操作布局。
  */
 
+import type { OutputLimitDetails } from '@cindy/maker-shared';
+
 import { useMemo, useState } from 'react';
 import { CirclePause, Play } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
@@ -96,6 +98,7 @@ export function InterruptedTurnBanner({
 export const ERROR_TAIL_RETRY_TOKEN = '__xdt_error_tail_continue__';
 
 export function ErrorTailErrorBanner({
+  onChooseComputer,
   errorText,
   onContinue,
   onDismiss,
@@ -115,6 +118,7 @@ export function ErrorTailErrorBanner({
   onDiagnose,
   errorReason,
   toolLoop,
+  outputLimit,
   onSilentStopContinue,
   sessionSource,
   className,
@@ -123,6 +127,7 @@ export function ErrorTailErrorBanner({
   /** 持久化 error 行的 **raw** 文案(只解码 bracket code,不 i18n 化)——
    *  ErrorBanner 的不可重试门控靠对原文的正则命中。 */
   errorText: string;
+  onChooseComputer?: () => void;
   onContinue: () => Promise<void> | void;
   onDismiss: () => void;
   dismissOnEscape?: boolean;
@@ -143,6 +148,7 @@ export function ErrorTailErrorBanner({
   onDiagnose?: (error: ErrorDiagnosisSource) => void;
   errorReason?: string | null;
   toolLoop?: ToolLoopErrorDetails;
+  outputLimit?: OutputLimitDetails;
   onSilentStopContinue?: () => void;
   sessionSource?: string | null;
   className?: string;
@@ -155,9 +161,11 @@ export function ErrorTailErrorBanner({
 
   return (
     <ErrorBanner
+      onChooseComputer={onChooseComputer}
       error={errorText}
       errorReason={errorReason}
       toolLoop={toolLoop}
+      outputLimit={outputLimit}
       retryText={ERROR_TAIL_RETRY_TOKEN}
       onRetry={() => void onContinue()}
       onCancel={onDismiss}

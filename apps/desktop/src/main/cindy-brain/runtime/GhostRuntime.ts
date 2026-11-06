@@ -84,6 +84,7 @@ export class GhostRuntime {
     GhostRuntimeOptions;
 
   private readonly entries = new Map<string, RuntimeEntry>();
+  private readonly readinessObservers = new Map<string, Set<() => void>>();
 
   constructor(options: GhostRuntimeOptions) {
     this.options = { crashWindowMs: 60_000, crashLimit: 3, ...options };
@@ -151,6 +152,51 @@ export class GhostRuntime {
     // (经 stateOf 重读:setState 走方法赋值,TS 的字面量收窄跟不上。)
     if (entry.handle === handle && this.stateOf(id) === 'starting') this.setState(id, entry, 'running');
     return { ok: true, state: this.stateOf(id) };
+  }
+
+  /** Tool calls must not treat an already-starting sandbox as ready to receive IPC.
+   * Bind the wait to this handle, so stop/update cannot deliver an old call to its replacement.
+   * The startup deadline is separate from the tool execution deadline.
+   */
+  async spawnForTool(ghost: InstalledGhost): Promise<{ ok: true } | { ok: false; reason: string }> {
+    const starting = this.spawn(ghost);
+    const id = installedGhostStoragePart(ghost);
+    const entry = this.entries.get(id);
+    const handle = entry?.handle;
+    if (!entry || !handle) {
+      const result = await starting;
+      return result.ok ? { ok: false, reason: '插件未就绪' } : result;
+    }
+    const result = await new Promise<{ ok: true } | { ok: false; reason: string }>((resolve) => {
+      const observers = this.readinessObservers.get(id) ?? new Set<() => void>();
+      this.readinessObservers.set(id, observers);
+      let settled = false;
+      const finish = (result: { ok: true } | { ok: false; reason: string }) => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timer);
+        observers.delete(check);
+        if (observers.size === 0) this.readinessObservers.delete(id);
+        resolve(result);
+      };
+      const check = () => {
+        if (entry.handle !== handle || entry.identity !== sandboxIdentity(ghost) ||
+            (entry.state !== 'starting' && entry.state !== 'running')) {
+          finish({ ok: false, reason: '插件启动已停止或实例已更换' });
+        } else if (entry.state === 'running') finish({ ok: true });
+      };
+      const timer = setTimeout(() => finish({ ok: false, reason: '插件启动等待超时' }), 30_000);
+      observers.add(check);
+      // Consume startup failures even after timeout; never stop another caller's startup.
+      void starting.then(result => result.ok ? check() : finish(result),
+        () => finish({ ok: false, reason: '插件启动失败' }));
+      check();
+    });
+    // A state-change observer may synchronously stop/replace the just-ready handle.
+    if (result.ok && (entry.handle !== handle || entry.state !== 'running')) {
+      return { ok: false, reason: '插件就绪后实例已更换或停止' };
+    }
+    return result;
   }
 
   /** Await this sandbox's actual entry load, including an already-starting instance. */
@@ -238,6 +284,7 @@ export class GhostRuntime {
   private setState(id: string, entry: RuntimeEntry, state: GhostRuntimeState): void {
     if (entry.state === state) return;
     entry.state = state;
+    for (const observer of [...(this.readinessObservers.get(id) ?? [])]) observer();
     this.options.onStateChanged?.(id, state);
   }
 }

@@ -1,3 +1,5 @@
+import { localizeOutputLimit } from './outputLimitI18n';
+import { type OutputLimitDetails } from '@cindy/maker-shared';
 import { isMemberBudgetPaused } from '../../../shared/providerShareBudget';
 /**
  * ErrorMessageCard — 消息流里的静态错误记录卡
@@ -36,6 +38,7 @@ export function ErrorMessageCard({
   reason,
   providerId,
   toolLoop,
+  outputLimit,
   sessionSource,
   kind = 'reply-error',
   onDiagnose,
@@ -48,6 +51,7 @@ export function ErrorMessageCard({
   providerId?: string;
   /** Structured details for a tool-loop terminal error (optional for legacy rows). */
   toolLoop?: ToolLoopErrorDetails;
+  outputLimit?: OutputLimitDetails;
   /** 当前任务来源。个人微信不能建议切到完全访问。 */
   sessionSource?: string | null;
 }) {
@@ -69,11 +73,13 @@ export function ErrorMessageCard({
   });
   const toolLoopI18nKey = reason === 'tool_use_loop_detected' ? getToolLoopI18nKey(toolLoop) : undefined;
   const localizedReasonError =
-    toolLoopI18nKey && toolLoop
-      ? t(toolLoopI18nKey, { count: toolLoop.count })
-      : i18nKey
-        ? t(i18nKey)
-        : undefined;
+    reason === 'output-limit'
+      ? localizeOutputLimit(t, outputLimit)
+      : toolLoopI18nKey && toolLoop
+        ? t(toolLoopI18nKey, { count: toolLoop.count })
+        : i18nKey
+          ? t(i18nKey)
+          : undefined;
   const text = kind === 'blocked-input'
     ? redactSensitiveText(decoded)
     : isResponsesLiteParallelToolCallsError(decoded)
@@ -82,7 +88,8 @@ export function ErrorMessageCard({
         ? t('chat.errorBanner.streamInterruptedNoRetry')
         : isGatewayProxyTokenInvalid
           ? t('chat.errorBanner.gatewayProxyTokenInvalidNoRetry')
-          : localizedReasonError ?? remoteGuidance ?? t('chat.errorBanner.replyFailed');
+          : (parsedRemoteKey?.startsWith('sharedTaskRecovery.') ? remoteGuidance : undefined)
+            ?? localizedReasonError ?? remoteGuidance ?? t('chat.errorBanner.replyFailed');
   const showRawToggle = kind === 'reply-error' && Boolean(decoded);
 
   if (!text) return null;

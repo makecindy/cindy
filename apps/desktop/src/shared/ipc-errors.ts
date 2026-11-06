@@ -83,6 +83,7 @@ export type IpcErrorCode =
   | 'PRECONDITION_FAILED'
   | 'OFFICIAL_PLUGIN_GITHUB_REQUIRED' // 客户端提审限制，不扩展服务端 wire 错误
   | 'VOICE_SPEECH_TIMEOUT' // 本机语音合成等待响应或音频读取超时
+  | 'VOICE_CONVERSATION_BUSY' // 本机已有语音通话、朗读、试听或听写占用麦克风
   | 'PROVIDER_GROUP_CHANGED' // 编辑期间组设置已变化，拒绝覆盖，需重新读取
   | 'SHARE_NOT_CONFIGURED'
   | 'SHARE_UNAVAILABLE'
@@ -166,8 +167,12 @@ export type IpcErrorCode =
   | 'REGION_MISMATCH'
   | 'CREDENTIAL_STORE_UNAVAILABLE'
   | 'AUTH_FLOW_SUPERSEDED'
-  // 智能通讯录: (platform, value) 身份已属于另一个联系人 — message 里带占用者 id
-  | 'IDENTITY_CONFLICT'
+  // 新电脑设置(docs/product-rules/new-device-setup-migration.md):那台电脑版本过旧 / 现在读不到 /
+  // 回包不合法 / 预览已过期(换号、超时或另一次预览)。
+  | 'SETUP_SOURCE_OUTDATED'
+  | 'SETUP_SOURCE_UNAVAILABLE'
+  | 'SETUP_SNAPSHOT_INVALID'
+  | 'SETUP_PLAN_EXPIRED'
   // domain-specific
   | 'STALE_DIFF'
   | 'PUSH_LEASE_EXPIRED'
@@ -354,10 +359,10 @@ const IPC_ERROR_CODES: ReadonlySet<IpcErrorCode> = new Set<IpcErrorCode>([
   'NOT_FOUND',
   'INTERNAL',
   'ALREADY_EXISTS',
-  'IDENTITY_CONFLICT',
   'PRECONDITION_FAILED',
   'OFFICIAL_PLUGIN_GITHUB_REQUIRED',
   'VOICE_SPEECH_TIMEOUT',
+  'VOICE_CONVERSATION_BUSY',
   'PROVIDER_GROUP_CHANGED',
   'SHARE_NOT_CONFIGURED',
   'SHARE_UNAVAILABLE',
@@ -420,6 +425,10 @@ const IPC_ERROR_CODES: ReadonlySet<IpcErrorCode> = new Set<IpcErrorCode>([
   'REGION_MISMATCH',
   'CREDENTIAL_STORE_UNAVAILABLE',
   'AUTH_FLOW_SUPERSEDED',
+  'SETUP_SOURCE_OUTDATED',
+  'SETUP_SOURCE_UNAVAILABLE',
+  'SETUP_SNAPSHOT_INVALID',
+  'SETUP_PLAN_EXPIRED',
   'STALE_DIFF',
   'PUSH_LEASE_EXPIRED',
   'PUSH_NO_REMOTE',

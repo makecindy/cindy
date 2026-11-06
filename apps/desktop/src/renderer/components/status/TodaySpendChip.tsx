@@ -1,4 +1,5 @@
 import { isKimiCodingProviderView, kimiUsageWindowMinutes } from '../../../shared/kimiCodingUsage';
+import { isOpenCodeGoProviderView, opencodeGoUsageWindowMinutes } from '../../../shared/opencodeGoUsage';
 import { useCodexRateLimitReset } from '@/hooks/useCodexRateLimitReset';
 import { CodexResetCredits } from './CodexResetCredits';
 import {
@@ -85,7 +86,6 @@ import {
 } from '@/hooks/useRemoteDeviceUsage';
 import {
   isClaudeSubscriptionAlerting,
-  isClaudeUsageWindowAlerting,
   matchScopedWindowForModel,
   type ClaudeUsageWindow,
 } from '../../../shared/claudeSubscriptionUsage';
@@ -135,6 +135,7 @@ import {
   buildXaiUsageCard,
   buildZhipuUsageCard,
   buildKimiUsageCard,
+  buildOpenCodeGoUsageCard,
   type UsageCardAccount,
 } from './usageCardModel';
 import { useProviderAccountUsage } from '@/hooks/useProviderAccountUsage';
@@ -144,6 +145,14 @@ import {
   isZhipuCodingPlanProviderView,
 } from '@/lib/providerAccountUsageView';
 import { type ProviderAccountUsageSnapshot, type ZhipuCodingPlanQuotaSnapshot } from '../../../shared/providerAccountUsage';
+import {
+  quotaLevelFromRemaining,
+  quotaLevelFromSeverity,
+  quotaLevelFromUsed,
+  strongerQuotaLevel,
+  type QuotaLevel,
+} from '@cindy/maker-shared/quota-level';
+import { QUOTA_TEXT_COLOR_CLASSES } from './QuotaBar';
 
 // XD 网关 / 托管账号之前会跳到内部用量看板(内部域名)—— 开源前移除该硬编码。
 // 登录随凭据只下发 { endpoint, apiKey }(见 main/model-access/credentialsSync.ts),不含
@@ -152,7 +161,8 @@ import { type ProviderAccountUsageSnapshot, type ZhipuCodingPlanQuotaSnapshot } 
 // TODO(后续): 若 model-access-server 在下发凭据时附带看板地址(按个人 / 企业租户区分的
 // usageDashboardUrl / consoleUrl),据此恢复网关账号的跳转 + tooltip 链接行
 // (i18n 文案 todaySpend.openProxyUsage 已保留待复用,勿当死 key 删)。
-const CODEX_USAGE_DASHBOARD_URL = 'https://chatgpt.com/codex/settings/usage';
+// /codex/settings/usage 已随 ChatGPT 前端改版失效(登录后落回首页),与 Codex CLI 一致改用 /settings/usage。
+const CODEX_USAGE_DASHBOARD_URL = 'https://chatgpt.com/settings/usage';
 const XAI_USAGE_DASHBOARD_URL = 'https://grok.com';
 const CLAUDE_USAGE_DASHBOARD_URL = 'https://claude.ai/settings/usage';
 
@@ -298,8 +308,14 @@ interface ChipWindowSegment extends ChipWindowSlot {
    * 而不是僵住的旧百分比, 新快照落地时由重置滚动动画揭晓。
    */
   resetPending: boolean;
-  /** 本窗口自身达到告警条件:chip 只把这一段的剩余百分比染红, 其余段保持常色。 */
-  alerting: boolean;
+  /** 本窗口的额度级别(共用 quota-level 规则):chip 只给这一段的剩余百分比上色, 其余段保持常色。 */
+  level: QuotaLevel;
+}
+
+/** Claude 窗口:剩余比例按共用规则, 服务端 severity 只会把级别往上提。 */
+function claudeWindowLevel(window: { utilization?: number | null; severity?: string | null }): QuotaLevel {
+  const used = typeof window.utilization === 'number' ? quotaLevelFromUsed(clampPercent(window.utilization)) : 'normal';
+  return strongerQuotaLevel(used, quotaLevelFromSeverity(window.severity));
 }
 
 // 悬念期上限常量在 quotaResetRollup.ts(tick 节奏要踩着超时边界调度, 判定与
@@ -375,7 +391,7 @@ function toCodexChipWindow(
     remainingPercent: 100 - clampPercent(window.usedPercent),
     resetsAtMs,
     resetPending: isResetPending(resetsAtMs, nowMs),
-    alerting: false,
+    level: quotaLevelFromUsed(clampPercent(window.usedPercent)),
   };
 }
 
@@ -482,7 +498,7 @@ function getClaudeChipWindows(
       remainingPercent: 100 - clampPercent(fiveHour.utilization),
       resetsAtMs,
       resetPending: isResetPending(resetsAtMs, nowMs),
-      alerting: isClaudeUsageWindowAlerting(fiveHour),
+      level: claudeWindowLevel(fiveHour),
     });
   }
   const weekly = resolveClaudeWeeklyWindow(snapshot, modelId, t);
@@ -512,7 +528,7 @@ function getClaudeChipWindows(
       remainingPercent: 100 - clampPercent(weekly.window.utilization),
       resetsAtMs,
       resetPending: isResetPending(resetsAtMs, nowMs),
-      alerting: isClaudeUsageWindowAlerting(weekly.window),
+      level: claudeWindowLevel(weekly.window),
     });
   }
   return windows.map((window) => ({
@@ -551,7 +567,7 @@ function getZhipuChipWindows(
       remainingPercent,
       resetsAtMs,
       resetPending: isResetPending(resetsAtMs, nowMs),
-      alerting: remainingPercent <= 20,
+      level: quotaLevelFromRemaining(remainingPercent),
     });
   };
   push('zhipu-5h', snapshot.fiveHour, '5h', FIVE_HOUR_WINDOW_MINUTES);
@@ -754,7 +770,7 @@ function getXaiChipWindows(
       remainingPercent: 100 - clampPercent(used),
       resetsAtMs,
       resetPending: isResetPending(resetsAtMs, nowMs),
-      alerting: isXaiSubscriptionAlerting(snapshot, nowMs),
+      level: quotaLevelFromUsed(clampPercent(used)),
     },
   ];
 }
@@ -1009,7 +1025,8 @@ export function TodaySpendChip({
   const usesZhipuCodingPlanForm =
     !isAnyRemoteSession && Boolean(isZhipuCodingPlanProviderView(selectedQuotaProvider));
   const usesKimiCodingForm = !remoteHostId && !accountUnreadable && isKimiCodingProviderView(selectedQuotaProvider);
-  const usesProviderAccountUsageForm = usesDeepSeekAccountForm || usesZhipuCodingPlanForm || usesKimiCodingForm;
+  const usesOpenCodeGoForm = !remoteHostId && !accountUnreadable && isOpenCodeGoProviderView(selectedQuotaProvider);
+  const usesProviderAccountUsageForm = usesDeepSeekAccountForm || usesZhipuCodingPlanForm || usesKimiCodingForm || usesOpenCodeGoForm;
   // 会话所在引擎 → 查询用 runtime：同一供应商各引擎可用不同账户的独立密钥，
   // 余额/配额必须对准当前会话实际路由的账户（vendorKey 缺省 = 默认路由，不传）。
   const providerAccountAgent: AgentKind | undefined =
@@ -1023,7 +1040,7 @@ export function TodaySpendChip({
   const providerAccountUsage = useProviderAccountUsage(
     usesProviderAccountUsageForm && providerAccountAgent ? selectedQuotaProvider : undefined,
     providerAccountAgent,
-    usesKimiCodingForm ? accountDeviceId : null,
+    usesKimiCodingForm || usesOpenCodeGoForm ? accountDeviceId : null,
   );
   const providerAccountSnapshot =
     providerAccountUsage.result?.status === 'ready' ? providerAccountUsage.result.snapshot : null;
@@ -1431,7 +1448,19 @@ export function TodaySpendChip({
         remainingPercent: 100 - w.usedPercent,
         resetsAtMs: w.resetsAt,
         resetPending: isResetPending(w.resetsAt, windowLabelNowMs),
-        alerting: w.usedPercent >= 80,
+        level: quotaLevelFromUsed(w.usedPercent),
+      })) : [])
+    : usesOpenCodeGoForm
+    ? (providerAccountSnapshot?.kind === 'opencode-go-quota' && providerAccountUsage.result?.status === 'ready' && !providerAccountUsage.result.stale
+      ? providerAccountSnapshot.windows.map(w => ({
+        key: w.id,
+        label: w.id === 'monthly'
+          ? t('providerAccountUsage.kimi.limit_month_total')
+          : formatCompactTimeUntilReset(w.resetsAt === null ? null : w.resetsAt / 1000, windowLabelNowMs, t, opencodeGoUsageWindowMinutes(w.id)) ?? t(w.id === 'rolling' ? 'providerAccountUsage.kimi.limit_5h' : 'providerAccountUsage.kimi.limit_7d'),
+        remainingPercent: 100 - w.usedPercent,
+        resetsAtMs: w.resetsAt,
+        resetPending: isResetPending(w.resetsAt, windowLabelNowMs),
+        level: quotaLevelFromUsed(w.usedPercent),
       })) : [])
     : usesCodexQuotaForm
     ? getCodexChipWindows(accountUsage, t, windowLabelNowMs)
@@ -1448,13 +1477,15 @@ export function TodaySpendChip({
               windowLabelNowMs,
             )
           : [];
-  // chip 最多两个窗口段, 固定两个 slot 无条件调 hook(Rules of Hooks)。
+  // OpenCode Go exposes three meters; keep one rollup slot per window segment.
   // 重置滚动: 快照刷新中同窗口剩余百分比大幅回升(典型: 窗口到点重置 0% → 100%)
   // 时, 显示值从 0% 快速滚动到新值。
   const windowSlotA = chipWindows[0] ?? null;
   const windowSlotB = chipWindows[1] ?? null;
+  const windowSlotC = chipWindows[2] ?? null;
   const rollupA = useQuotaResetRollup(windowSlotA);
   const rollupB = useQuotaResetRollup(windowSlotB);
+  const rollupC = useQuotaResetRollup(windowSlotC);
   // 窗口段元素登记表(key → span): 撒花锚点用, 段消失时由 ref 回调置 null。
   const segmentElsRef = React.useRef<Record<string, HTMLSpanElement | null>>({});
   const windowSegments: React.ReactNode[] = chipWindows.map((window, index) => {
@@ -1470,7 +1501,7 @@ export function TodaySpendChip({
         </React.Fragment>
       );
     }
-    const rollup = index === 0 ? rollupA : rollupB;
+    const rollup = index === 0 ? rollupA : index === 1 ? rollupB : rollupC;
     const text = t(
       usesCodexQuotaForm
         ? 'todaySpend.codex.windowSegment'
@@ -1491,7 +1522,7 @@ export function TodaySpendChip({
       >
         {interpolateRemaining(
           text,
-          window.alerting ? <span className="text-[var(--error-fg)]">{remaining}</span> : remaining,
+          window.level !== 'normal' ? <span className={QUOTA_TEXT_COLOR_CLASSES[window.level]}>{remaining}</span> : remaining,
         )}
       </span>
     );
@@ -1630,6 +1661,7 @@ export function TodaySpendChip({
   const deviceLinkRemoteFormResolved =
     !accountUnreadable &&
     (isDeviceLinkRemoteClaudeSubscription ||
+      usesOpenCodeGoForm ||
       (isDeviceLinkRemote &&
         (usesCodexQuotaForm || usesXaiQuotaForm || isDeviceLinkRemoteGateway)));
   let labelNode: React.ReactNode;
@@ -1665,6 +1697,8 @@ export function TodaySpendChip({
     if (!remoteHostId) {
       account = usesKimiCodingForm
         ? buildKimiUsageCard(providerAccountSnapshot?.kind === 'kimi-coding-quota' ? providerAccountSnapshot : null, t)
+        : usesOpenCodeGoForm
+        ? buildOpenCodeGoUsageCard(providerAccountSnapshot?.kind === 'opencode-go-quota' ? providerAccountSnapshot : null, t)
         : usesCodexQuotaForm
         ? buildCodexUsageCard(
             accountUsage,
@@ -1689,7 +1723,7 @@ export function TodaySpendChip({
                   t,
                 )
               : buildClaudeUsageCard(claudeSubscriptionUsage, t);
-      if (usesKimiCodingForm && providerAccountUsage.result?.status === 'ready' && providerAccountUsage.result.stale) account.notices = [{ text: t('providerAccountUsage.kimi.stale'), tone: 'warn' }];
+      if ((usesKimiCodingForm || usesOpenCodeGoForm) && providerAccountUsage.result?.status === 'ready' && providerAccountUsage.result.stale) account.notices = [{ text: t('providerAccountUsage.kimi.stale'), tone: 'warn' }];
       if (usesProviderAccountUsageForm && providerAccountUsage.result?.status === 'unavailable') {
         account.emptyText = t(`providerAccountUsage.${usesKimiCodingForm ? 'kimi.' : ''}error.${providerAccountUsage.result.error}`);
       }
@@ -1811,17 +1845,21 @@ export function TodaySpendChip({
     account.emptyText = t('todaySpend.codex.noUsageDetail');
   }
 
-  // 告警态: 达到条件的窗口只把它自己的剩余百分比染 error 色 (语义豁免色, 跨主题一致),
+  // 告警态: 黄 / 红的窗口只给它自己的剩余百分比上色 (共用 quota-level 规则与额度色),
   // 其它窗口段、分隔线与任务价值保持常色。其它模型的周限吃紧不染红 —— chip 上没有
   // 那一段, 红了也无从解释 (见 isClaudeSubscriptionAlerting 对 allowed_warning 的取舍)。
   // 兜底: 当前会话确实受限 (headers 报 rejected, 或 scoped 周限占位时总周限告警) 但
-  // chip 上没有任何一个窗口达到条件 → 仍整条变红, 不丢受限信号。悬念期的告警窗口也算
+  // chip 上没有任何一个上色的窗口 → 仍整条变红, 不丢受限信号。悬念期的告警窗口也算
   // 「chip 上有」: 它的旧数据已失真, 段上显示「重置中…」不染红, 也不借兜底把整条染红。
-  const hasAlertingChipWindow = chipWindows.some((window) => window.alerting);
+  const hasAlertingChipWindow = chipWindows.some((window) => window.level !== 'normal');
+  // 服务端明确拒绝 (rejected) 是红色信号, 不被只有黄色的窗口挡掉。
+  const claudeRejected =
+    isClaudeSubscription && claudeSubscriptionUsage?.rateLimitStatus?.trim().toLowerCase() === 'rejected';
   const chipAlertingFallback =
-    !hasAlertingChipWindow &&
-    ((isClaudeSubscription && isClaudeSubscriptionAlerting(claudeSubscriptionUsage, modelId)) ||
-      (usesXaiQuotaForm && isXaiSubscriptionAlerting(xaiSubscriptionUsage)));
+    claudeRejected ||
+    (!hasAlertingChipWindow &&
+      ((isClaudeSubscription && isClaudeSubscriptionAlerting(claudeSubscriptionUsage, modelId)) ||
+        (usesXaiQuotaForm && isXaiSubscriptionAlerting(xaiSubscriptionUsage))));
 
   // 与 ContextCapacityRing 视觉对齐 (h-5 = 20px) + reset button UA 默认 padding/border。
   // tabular-nums 让 "$306 / $1.2k" 这类数字段的字符宽度等宽, 段间数字落点对齐。

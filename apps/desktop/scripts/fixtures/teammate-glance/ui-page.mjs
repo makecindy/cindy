@@ -21,7 +21,7 @@ export default {
       partial: `export const useBotProfiles=()=>${data}.case==='new'?[]:[{id:'cindy-default',name:'Cindy',templateId:'cindy',status:'active',sessionId:'chat-1'}];export const useBotUnreadCounts=()=>({});`,
     },
     'src/renderer/features/bots/useRemoteBots': `export const useRemoteCindyIds=()=>new Set(); export const useRemoteBots=()=>${data}.case==='new'?[]:[
-      {id:'cindy-default',name:'Cindy',deviceId:'mini',deviceName:'Mac-mini',online:true,sessionId:'r1',avatar:'',status:'active'},
+      {id:'cindy-default',name:'Cindy',deviceId:'mini',deviceName:'Mac-mini',online:true,sessionId:'r1',avatar:'',status:'active',lastReplyAt:20,readAt:10},
       {id:'cindy-default',name:'Cindy',deviceId:'mbp',deviceName:'Chris-MBP-M5',online:false,sessionId:'r2',avatar:'',status:'active'},
       {id:'cindy-default',name:'Cindy',deviceId:'imac',deviceName:'Office iMac',online:false,sessionId:'r3',avatar:'',status:'active'}];`,
     'src/renderer/features/device-link/useDeviceLinkDeviceList':
@@ -37,13 +37,14 @@ export default {
     menu: { about: 'Right-clicking a todo offers only Delete' },
     new: { about: 'Empty teammate: only Computers; no todo suggestions or outputs' },
     activity: { about: 'No todos, attributed recent tasks, unread result and true PR title' },
+    routines: { about: 'Never-run and paused routines mixed with ordinary tasks; direct timer icons in one list' },
   },
   async ready(page) {
     await page.getByTestId('bot-glance-button').waitFor();
   },
   async check(page, ui) {
     const button = page.getByTestId('bot-glance-button');
-    if (ui.case !== 'new' && ui.case !== 'activity') {
+    if (ui.case !== 'new' && ui.case !== 'activity' && ui.case !== 'routines') {
       await page.waitForFunction(() =>
         document.querySelector('[data-testid="bot-glance-button"] span[aria-hidden]') !== null,
       );
@@ -52,6 +53,19 @@ export default {
     await button.click();
     const popover = page.getByTestId('bot-glance-popover');
     await popover.waitFor();
+    if (ui.case !== 'new') {
+      const unread = page.getByTestId('bot-glance-computer').getByLabel(await ui.t('bots.devicePicker.unread'));
+      assert.equal(await unread.count(), 1, 'remote computer exposes one unread indicator');
+      const colors = await unread.evaluate(node => {
+        const probe = document.createElement('span');
+        probe.style.backgroundColor = 'var(--bot-unread-bg)';
+        node.append(probe);
+        const result = [getComputedStyle(node).backgroundColor, getComputedStyle(probe).backgroundColor];
+        probe.remove();
+        return result;
+      });
+      assert.equal(colors[0], colors[1], 'computer unread retains the production blue');
+    }
     if (ui.case === 'new') {
       assert.equal(await page.getByTestId('bot-glance-todo').count(), 0, 'no todo rows');
       assert.equal(await page.getByTestId('bot-glance-check').count(), 0, 'no check prompt when empty');
@@ -65,6 +79,14 @@ export default {
       assert.equal(await page.getByTestId('bot-glance-task').count(), 2);
       assert.equal(await page.getByTestId('bot-glance-pr').count(), 1);
       assert.equal(await page.getByTestId('bot-glance-check').count(), 0);
+      await ui.capture('open');
+      return;
+    }
+    if (ui.case === 'routines') {
+      await page.getByText('磁盘低空间自动清理', { exact: true }).waitFor();
+      assert.equal(await page.getByTestId('bot-glance-task').count(), 4, 'ordinary and routine tasks share the existing list');
+      assert.equal(await popover.locator('[data-automation-timer-icon]').count(), 2, 'only routines use timer icons');
+      assert.equal(await popover.locator('[data-automation-paused-indicator]').count(), 1, 'paused rule keeps its timer');
       await ui.capture('open');
       return;
     }

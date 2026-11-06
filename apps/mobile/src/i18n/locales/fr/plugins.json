@@ -16,7 +16,24 @@
     "bcc": "Cci",
     "subject": "Objet",
     "choosePlugin": "Choisissez un plugin pour ouvrir cet e-mail.",
-    "personalPlugin": "Plugin personnel"
+    "personalPlugin": "Plugin personnel",
+    "reply": "Répondre",
+    "replyAll": "Répondre à tous",
+    "forward": "Transférer",
+    "quote": {
+      "reply": "Répondre à cet e-mail",
+      "replyAll": "Répondre à tous pour cet e-mail",
+      "forward": "Transférer cet e-mail"
+    },
+    "messageCount_one": "{{count}} e-mail",
+    "messageCount_other": "{{count}} e-mails",
+    "showMessages_one": "Afficher {{count}} e-mail",
+    "showMessages_other": "Afficher {{count}} e-mails",
+    "conversationFailed": "Impossible de charger les autres e-mails de cette conversation.",
+    "expandMessage": "Développer l'e-mail de {{from}}",
+    "collapseMessage": "Réduire l'e-mail de {{from}}",
+    "messageCount_many": "{{count}} e-mails",
+    "showMessages_many": "Afficher {{count}} e-mails"
   },
   "title": "Plugins",
   "all": "Tous",
@@ -115,6 +132,9 @@
   "detail": {
     "useItIn": "Utiliser dans",
     "openPlugin": "Ouvrir le plugin",
+    "readme": "À propos",
+    "readmeLoadFailed": "Impossible de charger la présentation. Réessayez.",
+    "readmeUnavailable": "Aucune présentation disponible.",
     "computerSettings": "Pour configurer ce plugin, ouvrez ses détails dans Cindy → Plugins sur votre ordinateur.",
     "runtimeIssue": "Le plugin s'est arrêté de manière inattendue. Essayez de l'ouvrir à nouveau ou de l'utiliser dans une tâche.",
     "runtimeFused": "Le plugin s'est arrêté après des échecs répétés. Désactivez-le puis réactivez-le pour réessayer.",
@@ -148,8 +168,6 @@
   "demo": {
     "hint": "Données de démonstration · Aucune configuration réelle n'est modifiée"
   },
-  "mailPreview": "Aperçu de l'e-mail",
-  "mailEnlarge": "Agrandir l'aperçu",
   "mailInsertImage": "Insérer dans le message",
   "mailAttach": "Ajouter une pièce jointe",
   "mailUpdated": "Brouillon mis à jour (lecture seule)",
@@ -271,6 +289,8 @@
       "workspaceDetail": "Lorsqu'il le demande, soit vous choisissez le dossier vous-même, soit vous voyez le chemin complet sur une carte de confirmation avant de décider ; pendant qu'il traite un appel que vous avez lancé, les sous-dossiers du répertoire de travail de la session en cours sont utilisés directement, sans demande supplémentaire. Les dossiers qui ont déjà une session sont réutilisés, et ce qui est créé est une session vide : rien ne démarre tout seul.",
       "sessionContext": "Peut savoir dans quel dossier de projet travaille la session en cours",
       "sessionContextDetail": "Ne partage que des informations d'emplacement (ID de session et chemin du dossier de projet) pendant qu'il travaille pour la session en cours : aucun contenu de fichier n'est partagé et aucun accès aux fichiers n'est accordé.",
+      "liveScreen": "Voir et contrôler des écrans d'appareils sur votre téléphone",
+      "liveScreenDetail": "Via le bureau à distance, votre téléphone peut afficher les écrans d'appareils qu'il fournit (comme des simulateurs) et leur envoyer des touchers, des boutons et du texte. La connexion n'a lieu que lorsque vous l'ouvrez depuis votre téléphone et rien d'autre de cet ordinateur n'est affiché.",
       "preview": "Peut ouvrir des pages d'aperçu des sites ci-dessous dans le navigateur de la barre latérale",
       "previewDetail": "Seuls les sites listés ci-dessous peuvent être ouverts ; chaque page ouverte est attribuée à ce plugin.",
       "nodeChildSpawn": "Son programme Node peut demander à l'hôte de lancer des sous-processus déclarés dans son paquet",
@@ -328,5 +348,23 @@
     "purpose": "Vérifier les autorisations des pages interactives",
     "updateHost": "Mettez à jour Cindy sur l'ordinateur d'exécution pour confirmer ici. Les outils de texte restent disponibles.",
     "failed": "Impossible d'activer les pages interactives. Vérifiez la connexion et la version du plugin, puis réessayez."
+  },
+  "openLinkHost": "Ouvrir {{host}}",
+  "prStatus": {
+    "checksFailed": "En échec",
+    "checksPending": "En attente",
+    "checksPassed": "Réussies",
+    "checksSkipped": "Ignorées ou neutres",
+    "threadsOpen": "Fils de revue non résolus : {{count}}",
+    "threadsNone": "Aucun fil de revue ouvert",
+    "mergeReady": "Prête à fusionner",
+    "mergeConflict": "Conflits à résoudre",
+    "mergeBehind": "En retard sur la branche de base",
+    "mergeApproval": "En attente d’approbation",
+    "mergeChanges": "Modifications demandées",
+    "mergeWaiting": "En attente de fusion",
+    "merged": "Fusionnée",
+    "closed": "Fermée",
+    "draft": "Brouillon"
   }
 }

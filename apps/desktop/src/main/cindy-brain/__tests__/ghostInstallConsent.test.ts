@@ -10,6 +10,8 @@ import {
 import {
   abortAllGhostInstallConsentPrompts,
   assertGhostInstallConsent,
+  confirmedControlPoints,
+  confirmedAutoTools,
   confirmedTaskCapability,
   confirmedUiCapability,
   type GhostInstallConsentPrompt,
@@ -55,6 +57,18 @@ const userPrompt = (answer: boolean | Error) =>
   });
 
 const reviewedDigest = 'a'.repeat(64);
+// Contract: the Host grants auto tools only when the exact tool permission was shown.
+// A predeclared auto tool with no receipt grant is the minimal old-Host input (unit).
+it('grants only auto tools included in the install or update confirmation', async () => {
+  const next: GhostManifest = { ...manifest(['api.weather.test']),
+    tools: [{ name: 'read', description: 'Read', approval: 'auto' }] };
+  const old = installed(next);
+  const decision = await obtainGhostInstallConsent({ mode: 'prompt', prompt: userPrompt(true),
+    initiator: 'user', origin: 'market' }, old, next, reviewedDigest);
+  expect(confirmedAutoTools(decision, old, next)).toEqual(['read']);
+  expect(confirmedAutoTools({ mode: 'unprompted' }, old, next)).toEqual([]);
+  expect(confirmedAutoTools({ mode: 'exempt', reason: 'server-default-install' }, null, next)).toEqual(['read']);
+});
 // A change of source needs account-impact consent even without new permissions.
 it('forces a source-change confirmation and pins it to the receiver receipt', async () => {
   const next = manifest(['api.weather.test']), old = installed(next), prompt = userPrompt(true);
@@ -78,6 +92,24 @@ it('records tasks only when that capability was included in explicit install/upd
   const unrelated = await obtainGhostInstallConsent(policy,old,expanded,reviewedDigest);
   assertGhostInstallConsent(unrelated,old,expanded,reviewedDigest);
   expect(confirmedTaskCapability(unrelated,old,expanded)).toBeUndefined();
+});
+// Rule (control points, 2026-10-31): a plugin that declared a point before this Host knew it must
+// not gain it silently on upgrade; the next update re-shows it. Existing cases cover only tasks/ui.
+it('records control points only when shown, and re-shows declared points the user never approved', async () => {
+  const point = 'will-schedule-run' as const;
+  const next = {...manifest(['api.weather.test']),slots:['network','subscribe'],subscribe:{hooks:[point]}} as GhostManifest;
+  const policy = {mode:'prompt' as const,prompt:userPrompt(true),initiator:'user' as const,origin:'market' as const};
+  const fresh = await obtainGhostInstallConsent(policy,null,next,reviewedDigest);
+  expect(confirmedControlPoints(fresh,null,next)).toEqual([point]);
+  expect(confirmedControlPoints({mode:'unprompted'},null,next)).toEqual([]);
+  // Same manifest, installed by an older Host: the point was never shown, so the update prompts for it.
+  const preDeclared = installed(next);
+  const update = await obtainGhostInstallConsent(policy,preDeclared,next,reviewedDigest);
+  expect(update).toMatchObject({mode:'confirmed'});
+  expect(confirmedControlPoints(update,preDeclared,next)).toEqual([point]);
+  // Already approved: nothing new to confirm.
+  const approvedBefore = {...installed(next),approvedControlPoints:[point]};
+  expect(await obtainGhostInstallConsent(policy,approvedBefore,next,reviewedDigest)).toEqual({mode:'unprompted'});
 });
 const replacedDigest = 'b'.repeat(64);
 
@@ -374,4 +406,38 @@ describe('interactive page consent', () => {
     const reduced = structuredClone(base); getPluginToolUi(reduced)!.tools.open.visibility = ['model'];
     await expect(obtainGhostInstallConsent({ mode: 'automatic' }, old, reduced, reviewedDigest)).resolves.toEqual({ mode: 'unprompted' });
   });
+});
+
+it('records observe consent only when that capability was shown', async () => {
+  const previous = { ...manifest(['api.weather.test']), agent: { tasks: true } };
+  const next = { ...previous, agent: { tasks: true, observe: true } };
+  const prompt = userPrompt(true);
+  const policy = { mode: 'prompt' as const, prompt, initiator: 'user' as const, origin: 'market' as const };
+  const before = installed(previous);
+  const decision = await obtainGhostInstallConsent(policy, before, next, reviewedDigest);
+  assertGhostInstallConsent(decision, before, next, reviewedDigest);
+  expect(confirmedTaskCapability(decision, before, next, 'observe')).toBe(true);
+  expect(confirmedTaskCapability(decision, before, next, 'targets')).toBeUndefined();
+  expect(confirmedTaskCapability({ mode: 'unprompted' }, before, next, 'observe')).toBeUndefined();
+});
+
+it('explains that local OIDC declarations do not receive enterprise identity', async () => {
+  const next = manifest(['api.example.test']);
+  next.network!.secrets = [{ key: 'identity', label: 'Organization identity', source: 'oidc-token', inject: { header: 'Authorization', format: 'Bearer {value}', hosts: ['api.example.test'] } }];
+  const prompt = vi.fn(async () => true);
+  await obtainGhostInstallConsent({ mode: 'prompt', prompt, initiator: 'agent', origin: 'forge',
+    target: { namespace: 'local', sourceChanged: false, otherCopies: 1 } }, null, next, reviewedDigest);
+  expect(prompt).toHaveBeenCalledWith(expect.objectContaining({ target: expect.objectContaining({ organizationIdentityUnavailable: true }) }));
+});
+
+it('records companions consent only when that capability was shown', async () => {
+  const previous = { ...manifest(['api.weather.test']), agent: { observe: true } };
+  const next = { ...previous, agent: { observe: true, companions: true } };
+  const policy = { mode: 'prompt' as const, prompt: userPrompt(true), initiator: 'user' as const, origin: 'market' as const };
+  const before = installed(previous);
+  const decision = await obtainGhostInstallConsent(policy, before, next, reviewedDigest);
+  assertGhostInstallConsent(decision, before, next, reviewedDigest);
+  expect(confirmedTaskCapability(decision, before, next, 'companions')).toBe(true);
+  expect(confirmedTaskCapability(decision, before, next, 'observe')).toBeUndefined();
+  expect(confirmedTaskCapability({ mode: 'unprompted' }, before, next, 'companions')).toBeUndefined();
 });

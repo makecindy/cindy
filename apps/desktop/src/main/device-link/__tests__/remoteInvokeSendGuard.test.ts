@@ -1,26 +1,37 @@
 import { readFileSync } from 'node:fs';
 import ts from 'typescript';
 import { expect, it, vi } from 'vitest';
-import { DeviceLinkError, FILE_PEER_CHANNEL, parseProviderSharePeer, type DeviceLinkClient } from '@cindy/device-link';
+import { DeviceLinkError, FILE_PEER_CHANNEL, parseProviderSharePeer, providerShareHostPeer, type DeviceLinkClient } from '@cindy/device-link';
 import { ensureInvokeLinkReady, invokeWithClosedLinkRecovery } from '../linkRecovery';
 
 // Run the production adapter with only its host dependencies injected, without
 // importing Electron startup. The shared-client tests cover actual queue admission.
 const source = ts.createSourceFile('index.ts', readFileSync(new URL('../index.ts', import.meta.url), 'utf8'), ts.ScriptTarget.Latest, true);
-const declaration = source.statements.find((node): node is ts.FunctionDeclaration =>
-  ts.isFunctionDeclaration(node) && node.name?.text === 'remoteInvoke')!;
-const compiled = ts.transpileModule(declaration.getText(source).replace(/^export /, ''), {
+const declarations = source.statements.filter((node): node is ts.FunctionDeclaration =>
+  ts.isFunctionDeclaration(node) && ['remoteInvoke', 'remoteInvokeLive', 'remoteBackgroundInvoke',
+    'backgroundInvokeDevice', 'backgroundInvokeDeviceLive'].includes(node.name?.text ?? ''));
+const compiled = ts.transpileModule(declarations.map(node => node.getText(source).replace(/^export /, '')).join('\n'), {
   compilerOptions: { target: ts.ScriptTarget.ES2022 },
 }).outputText;
 
 type PeerInvoke = (peer: string, channel: string, args: unknown[]) => Promise<unknown>;
 
-function loadRemoteInvoke(overrides: Record<string, unknown>) {
+function loadAdapters(overrides: Record<string, unknown>) {
+  const epochs = overrides.openLinkCloseEpochs as Map<string, number> ?? new Map<string, number>();
   const dependencies = {
     DeviceLinkError, FILE_PEER_CHANNEL, ensureInvokeLinkReady, invokeWithClosedLinkRecovery,
+    parseProviderSharePeer,
+    activeOwnerScopeKey: () => 'owner', isAppSessionBoundaryPending: () => false,
+    getRemoteLinkCloseEpoch: (id: string) => epochs.get(id) ?? 0,
+    invokeProviderMetadataContinuity: (_target: string, _channel: string, _args: unknown[], read: () => unknown) => read(),
+    resolveRemoteAgentTargetWhenReady: async (id: string) => id,
+    assertBackgroundLinkAccepted: () => {}, snapshotSubscriptions: () => [],
+    getReceivedShares: () => [], isCrossRegionProviderShareTarget: () => false,
+    isProviderShareRefusal: () => false, noteProviderShareAccessFailure: vi.fn(),
+    PROVIDER_SHARE_UNAVAILABLE_MESSAGE: 'unavailable',
     assertNotStandby: () => {},
     assertRemoteControlTargetEnabled: () => {},
-    openLinkCloseEpochs: new Map<string, number>(),
+    openLinkCloseEpochs: epochs,
     ensureOnlineForRequest: async () => {},
     isScopedPeer: () => false,
     tryPeerInvoke: async () => null,
@@ -29,30 +40,24 @@ function loadRemoteInvoke(overrides: Record<string, unknown>) {
     closeRemoteLink: vi.fn(),
     responsivenessTracker: null,
     ...overrides,
-    client: { invoke: vi.fn(), needsLinkRecovery: () => false, ...(overrides.client as object) },
+    client: { invoke: vi.fn(), isLinkReady: () => true, needsLinkRecovery: () => false, ...(overrides.client as object) },
   };
-  return new Function(...Object.keys(dependencies), compiled + '; return remoteInvoke;')(...Object.values(dependencies));
+  return new Function(...Object.keys(dependencies), compiled + '; return { remoteInvoke, remoteBackgroundInvoke };')(...Object.values(dependencies));
 }
 
-function loadBackgroundInvoke(overrides: Record<string, unknown>) {
-  const declarations = source.statements.filter((node): node is ts.FunctionDeclaration =>
-    ts.isFunctionDeclaration(node) && ['remoteBackgroundInvoke', 'backgroundInvokeDevice'].includes(node.name?.text ?? ''));
-  const backgroundCode = ts.transpileModule(declarations.map((node) => node.getText(source).replace(/^export /, '')).join(' '), {
-    compilerOptions: { target: ts.ScriptTarget.ES2022 },
-  }).outputText;
-  const dependencies = {
-    parseProviderSharePeer,
-    resolveRemoteAgentTargetWhenReady: async (id: string) => id,
-    client: { isLinkReady: () => true },
-    remoteInvoke: loadRemoteInvoke({}),
-    openRemoteLink: vi.fn(),
-    assertBackgroundLinkAccepted: () => {},
-    snapshotSubscriptions: () => [],
-    closeRemoteLink: vi.fn(),
-    ...overrides,
-  };
-  return new Function(...Object.keys(dependencies), backgroundCode + '; return remoteBackgroundInvoke;')(...Object.values(dependencies));
-}
+const loadRemoteInvoke = (overrides: Record<string, unknown>) => loadAdapters(overrides).remoteInvoke;
+const loadBackgroundInvoke = (overrides: Record<string, unknown>) => loadAdapters(overrides).remoteBackgroundInvoke;
+
+// Unit: compile all production adapters together, not just the former public body.
+// Minimal regression: a live recovery probe must reach RPC exactly once and bypass metadata snapshots.
+it.each(['host', providerShareHostPeer('share', 'host')])('sends a live recovery probe to %s without recursion or cached metadata', async target => {
+  const invoke = vi.fn(async () => ({ ok: true, result: { providers: [] } }));
+  const metadata = vi.fn(() => { throw new Error('live probe used metadata snapshot'); });
+  const { remoteBackgroundInvoke } = loadAdapters({ client: { invoke }, invokeProviderMetadataContinuity: metadata });
+  await expect(remoteBackgroundInvoke(target, 'maker:provider:list', [], { liveProviderMetadata: true }))
+    .resolves.toMatchObject({ ok: true, result: { providers: [] } });
+  expect(invoke).toHaveBeenCalledTimes(1); expect(metadata).not.toHaveBeenCalled();
+});
 
 it.each(['target resolution', 'link opening', 'online wait', 'reliable link recovery'])(
   'does not send an old account’s background request after account changes during %s', async (stage) => {
@@ -65,15 +70,10 @@ it.each(['target resolution', 'link opening', 'online wait', 'reliable link reco
       options?.preSend?.();
       return { ok: true, result: null };
     });
-    const remoteInvoke = loadRemoteInvoke({
-      client: { invoke, needsLinkRecovery: () => stage === 'reliable link recovery' },
+    const remoteBackgroundInvoke = loadBackgroundInvoke({
+      client: { invoke, isLinkReady: () => stage !== 'link opening', needsLinkRecovery: () => stage === 'reliable link recovery' },
       openRemoteLink: pause,
       ensureOnlineForRequest: stage === 'online wait' ? pause : async () => {},
-    });
-    const remoteBackgroundInvoke = loadBackgroundInvoke({
-      remoteInvoke,
-      client: { isLinkReady: () => stage !== 'link opening' },
-      openRemoteLink: pause,
       resolveRemoteAgentTargetWhenReady: async (id: string) => {
         if (stage === 'target resolution') await pause();
         return id;

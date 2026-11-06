@@ -320,6 +320,8 @@ export interface ModelInterfaceSnapshot {
   nativeApis?: import('./modelAccessBean.js').ModelNativeApi[] | null;
 }
 export interface CatalogModel {
+  opaqueModelId?: true;
+  discoveredSource?: import("./modelSource.js").DiscoveredModelSource;
   interfaceUnavailable?: boolean;
   selectedInterface?: ModelInterfaceSnapshot;
   availableInterfaces?: ModelInterfaceSnapshot[];
@@ -331,6 +333,8 @@ export interface CatalogModel {
   currency?: 'USD' | 'CNY';
   costDiscount?: number;
 
+  /** Execution-host derived display identity only; original id remains the request/storage key. */
+  selectionAliasKey?: string;
   supportsToolCalls?: boolean;
   reasoningRequired?: boolean;
   userModelConfig?: ProviderRuntimeModelConfig;
@@ -649,6 +653,10 @@ export interface Provider {
  * 并随用户配置持久化，避免已知长上下文模型被错误降级。
  */
 export interface ProviderRuntimeModelConfig extends ModelMetadata {
+  opaqueModelId?: true;
+  /** Transient discovery receipt; normalization excludes it from persistent configuration. */
+  discoverySnapshotId?: string;
+  discoveredSource?: import("./modelSource.js").DiscoveredModelSource;
   /** User override; absent follows the directory. Never persist derived snapshots. */
   interfaceId?: string;
   interfaceUnavailable?: boolean;

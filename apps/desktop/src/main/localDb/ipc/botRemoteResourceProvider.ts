@@ -4,7 +4,7 @@ import { createHash } from 'node:crypto';
 import { botTodoRemoteProjection } from './botTodoRemoteProjection.js';
 import { todoAccess } from '../../maker-ipc/botTodoAccess.js';
 import { queryTodoItems, type TodoListQuery, type TodoPatch } from '@cindy/maker-shared/teammate-todo';
-import { and, desc, inArray, isNull } from 'drizzle-orm';
+import { and, desc, eq, inArray, isNull } from 'drizzle-orm';
 import { getDbClient } from '../client/current.js';
 import { botSessionLinks } from '../schema.js';
 import type { BotRemoteResourceSource } from './bots.js';
@@ -24,6 +24,7 @@ import {
 import { RemoteResourceRegistryError, remoteResourceRegistry } from '../../device-link/remoteResourceRegistry.js';
 import { routineTools } from '../../routines/service.js';
 import { broadcastBotRemoteResourceChanged } from '../../maker-ipc/botRemoteResourceInvalidation.js';
+import { markBotReadPositions, readBotReadPosition } from '../../maker-ipc/botReadStateStore.js';
 import { getBotRemoteMessageService } from '../../maker-ipc/botRemoteMessageReceiver.js';
 import { isIpcError } from '../../../shared/ipc-errors.js';
 import {
@@ -51,8 +52,11 @@ async function readVisibleBotSource(botId: string): Promise<BotRemoteResourceSou
   }
 }
 
-/** The canonical conversation and live delegations share the local roster priority. */
-async function rosterBotActivities(sources: readonly BotRemoteResourceSource[]) {
+/**
+ * Every live session of each companion — its canonical conversation and live delegations — highest roster
+ * priority first. Plugins' cindy.companions collects pending requests from all of them.
+ */
+export async function rosterBotActivityCandidates(sources: readonly BotRemoteResourceSource[]) {
   const running = getAgentIslandService()?.getSessionActivitySnapshots() ?? [];
   const bySession = new Map(running.map(activity => [activity.sessionId, activity]));
   const delegated = sources.length && running.length ? await getDbClient().drizzle
@@ -68,8 +72,14 @@ async function rosterBotActivities(sources: readonly BotRemoteResourceSource[]) 
       ...delegated.filter(link => link.botId === source.id).map(link => bySession.get(link.sessionId))]
       .filter(activity => !!activity).sort((a, b) =>
         TEAMMATE_STATUS_ORDER.indexOf(resolveTeammateStatus({ activities: [a], unread: true }))
-        - TEAMMATE_STATUS_ORDER.indexOf(resolveTeammateStatus({ activities: [b], unread: true })))[0],
+        - TEAMMATE_STATUS_ORDER.indexOf(resolveTeammateStatus({ activities: [b], unread: true }))),
   ]));
+}
+
+/** The canonical conversation and live delegations share the local roster priority: the one session the roster shows. */
+export async function rosterBotActivities(sources: readonly BotRemoteResourceSource[]) {
+  const candidates = await rosterBotActivityCandidates(sources);
+  return new Map([...candidates].map(([id, activities]) => [id, activities[0]]));
 }
 
 let registered = false;
@@ -125,13 +135,14 @@ export function registerBotRemoteResourceProvider(management?: typeof botRemoteM
         const botId = request.ref.id.slice(6);
         const source = await readVisibleBotSource(botId);
         if (!source || !isDataOwnerBroadcastScopeCurrent(scope)) throw new RemoteResourceRegistryError('NOT_FOUND', 'Teammate unavailable');
-        const all = await (await todoAccess(botId)).list();
+        const access = await todoAccess(botId);
+        const all = await access.list();
         if (!isDataOwnerBroadcastScopeCurrent(scope)) throw new RemoteResourceRegistryError('NOT_FOUND', 'Account changed');
         const page = queryTodoItems(all.items, request.query ? JSON.parse(request.query) as TodoListQuery : {});
         page.items = page.items.map(botTodoRemoteProjection);
         // 近况「每天帮我查一次」的当前状态；旧客户端忽略，新客户端缺这个字段（旧宿主）时不显示开关。
-        // 例行任务读不到（引擎未就绪、伙伴暂停）时不带这个字段，待办照常返回。
-        const dailyCheck = await routineTools.todoCheckEnabled(botId).catch(() => undefined);
+        // 例行任务读不到（引擎未就绪、伙伴暂停）或主人关掉了系统技能「待办」时不带这个字段，待办照常返回。
+        const dailyCheck = access.todoOff ? undefined : await routineTools.todoCheckEnabled(botId).catch(() => undefined);
         if (!isDataOwnerBroadcastScopeCurrent(scope)) throw new RemoteResourceRegistryError('NOT_FOUND', 'Account changed');
         return {ref:request.ref,revision:createHash('sha256').update(JSON.stringify(all.items)).digest('hex'),display:{title:source.name},links:[],
           blocks:[{id:'todos',primitive:'teammate-todos',fallbackMarkdown:page.items.map(t=>t.title+' — '+t.progress).join('\n').slice(0,8000),data:{...page,...(dailyCheck === undefined ? {} : {dailyCheck})}}]};
@@ -139,7 +150,7 @@ export function registerBotRemoteResourceProvider(management?: typeof botRemoteM
 
       if (management && (request.ref.id === 'create' || request.ref.id.startsWith('settings:'))) {
         const resource = await management.getEditor(context, request.ref.id, request.client.locale, { query: request.query, primitives: request.client.primitives });
-        if (request.ref.id === 'create') resource.actions = [...(resource.actions ?? []), { id: 'open-agent-import', label: { fallback: 'Import an Agent', translations: { 'zh-CN': '从其他 Agent 导入', 'zh-TW': '從其他 Agent 匯入', ja: 'Agent からインポート', ko: 'Agent에서 가져오기' , "es":"Importar un Agent","fr":"Importer un Agent","de":"Agent importieren","pt-PT":"Importar um Agent","pt-BR":"Importar um Agent"} } }];
+        if (request.ref.id === 'create') resource.actions = [...(resource.actions ?? []), { id: 'open-agent-import', label: { fallback: 'Import an Agent', translations: { 'zh-CN': '从其他 Agent 导入', 'zh-TW': '從其他 Agent 匯入', ja: 'Agent からインポート', ko: 'Agent에서 가져오기' , "es":"Importar un Agent","fr":"Importer un Agent","de":"Agent importieren","pt-PT":"Importar um Agent","pt-BR":"Importar um Agent","zh-Hant-x-lzh":"自他 Agent 納入","zh-Hans-x-lzh":"自他 Agent 纳入"} } }];
         return resource;
       }
       if (request.ref.id.startsWith('working:')) {
@@ -175,7 +186,7 @@ export function registerBotRemoteResourceProvider(management?: typeof botRemoteM
           entries: [{ id: 'memories', title: editorCopy.memories, resourceId: `settings:${source.id}/memory` }],
         } });
       }
-      resource.links = [...(resource.links ?? []), {rel:'todos',label:{fallback:'Todos',translations:{'zh-CN':'待办','zh-TW':'待辦',ja:'Todo',ko:'할 일', "es":"Tareas pendientes","fr":"Tâches à faire","de":"Aufgaben","pt-PT":"Tarefas","pt-BR":"Tarefas"}},target:{kind:'resource',ref:{collectionId:TEAMMATES_REMOTE_COLLECTION_ID,kind:'bot',id:'todos:'+source.id}}}];
+      resource.links = [...(resource.links ?? []), {rel:'todos',label:{fallback:'Todos',translations:{'zh-CN':'待办','zh-TW':'待辦',ja:'Todo',ko:'할 일', "es":"Tareas pendientes","fr":"Tâches à faire","de":"Aufgaben","pt-PT":"Tarefas","pt-BR":"Tarefas","zh-Hant-x-lzh":"待辦","zh-Hans-x-lzh":"待办"}},target:{kind:'resource',ref:{collectionId:TEAMMATES_REMOTE_COLLECTION_ID,kind:'bot',id:'todos:'+source.id}}}];
       return { ...resource, teammateMessaging: { version: 1, available: source.status === 'active' } };
     },
     async invoke(context, request) {
@@ -204,6 +215,38 @@ export function registerBotRemoteResourceProvider(management?: typeof botRemoteM
         return { effects: [], dailyCheck };
       }
 
+      if (request.actionId === 'read') {
+        // The device showed this conversation up to `at` (host time, the reply it displayed).
+        // With `threadSessionId` it is one of the teammate's private-chat topics, which keep their
+        // own position and never move the main chat's.
+        const scope = captureDataOwnerBroadcastScope();
+        const botId = request.resourceRef?.id;
+        const at = request.input?.at;
+        const threadSessionId = request.input?.threadSessionId;
+        if (request.resourceRef?.collectionId !== TEAMMATES_REMOTE_COLLECTION_ID || request.resourceRef.kind !== BOT_REMOTE_RESOURCE_KIND
+          || typeof botId !== 'string' || !/^[A-Za-z0-9_-]{1,128}$/.test(botId)
+          || typeof at !== 'number' || !Number.isFinite(at) || at <= 0
+          || (threadSessionId !== undefined && (typeof threadSessionId !== 'string' || !/^[A-Za-z0-9_-]{1,128}$/.test(threadSessionId)))) {
+          throw new RemoteResourceRegistryError('INVALID_PARAMS', 'Invalid read position');
+        }
+        const source = await readVisibleBotSource(botId);
+        if (!source || !isDataOwnerBroadcastScopeCurrent(scope)) throw new RemoteResourceRegistryError('NOT_FOUND', 'Teammate unavailable');
+        if (threadSessionId !== undefined) {
+          const [link] = await getDbClient().drizzle.select({ id: botSessionLinks.id }).from(botSessionLinks).where(and(
+            eq(botSessionLinks.botId, botId), eq(botSessionLinks.sessionId, threadSessionId),
+            eq(botSessionLinks.role, 'thread'), isNull(botSessionLinks.archivedAt),
+          )).limit(1);
+          if (!link || !isDataOwnerBroadcastScopeCurrent(scope)) throw new RemoteResourceRegistryError('NOT_FOUND', 'Topic unavailable');
+          // A topic reply's time is not in the roster row: never past this computer's clock.
+          const key = `thread:${threadSessionId}`;
+          markBotReadPositions({ [key]: Math.min(Math.floor(at), Date.now()) });
+          return { effects: [], lastReadAt: readBotReadPosition(key) ?? 0 };
+        }
+        // Never past what exists here: a clock-skewed or future report cannot pre-read replies.
+        const latest = Math.max(source.lastMessageAt ?? 0, source.lastReplyAt ?? 0);
+        if (latest > 0) markBotReadPositions({ [botId]: Math.min(Math.floor(at), latest) });
+        return { effects: [], lastReadAt: readBotReadPosition(botId) ?? 0 };
+      }
       if (management && request.actionId === BOT_SETTINGS_ACTION_ID) return management.settingsHost.invoke(context, request);
       if (management && request.actionId === 'open-agent-import' && request.resourceRef?.id === 'create') return {
         effects: [{ kind: 'navigate', target: { kind: 'resource', ref: { collectionId: 'companion-import', kind: 'import', id: 'sources' } } }],

@@ -8,15 +8,27 @@ import type {
 } from "react-native";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { useComposerDockKeyboardHeight } from "@/session/useComposerDockKeyboardHeight";
+import { __resetDockedKeyboardHeightsForTest } from "@/session/keyboardOverlap";
 
 const native = vi.hoisted(() => ({
   keyboard: { height: { value: 0 }, state: { value: 0 } },
   viewport: { width: 390, height: 844 },
+  platform: { OS: "ios", isPad: false },
   shown: false,
   metrics: undefined as KeyboardMetrics | undefined,
   listeners: new Map<KeyboardEventName, Set<(event: KeyboardEvent) => void>>(),
 }));
+const storage = vi.hoisted(() => new Map<string, string>());
+vi.mock("@react-native-async-storage/async-storage", () => ({
+  default: {
+    getItem: vi.fn(async (key: string) => storage.get(key) ?? null),
+    setItem: vi.fn(async (key: string, value: string) => {
+      storage.set(key, value);
+    }),
+  },
+}));
 vi.mock("react-native", () => ({
+  Platform: native.platform,
   useWindowDimensions: () => native.viewport,
   Keyboard: {
     metrics: () => native.metrics,
@@ -74,6 +86,9 @@ beforeEach(() => {
   native.shown = false;
   native.metrics = undefined;
   native.viewport = { width: 390, height: 844 };
+  native.platform.isPad = false;
+  storage.clear();
+  __resetDockedKeyboardHeightsForTest();
   native.listeners.clear();
   container = document.createElement("div");
   root = createRoot(container);
@@ -140,6 +155,7 @@ it("reconciles a keyboard already open when navigating and recomputes after rota
 });
 
 it("does not lift the page for floating, hidden, or cross-fade frames", () => {
+  native.platform.isPad = true;
   mount();
   native.keyboard.state.value = 2;
   native.keyboard.height.value = 300;
@@ -152,6 +168,30 @@ it("does not lift the page for floating, hidden, or cross-fade frames", () => {
     emit("keyboardDidChangeFrame", metrics);
     expect(result.value).toBe(0);
   }
+});
+
+// 2026-11-03 iPhone Duo：远程桌面返回进入画中画后，新建任务页的浮动输入框仍被键盘盖住。
+// 输入卡片已改用共用判据，这里的 settled 高度却仍把 274×178 这种不可能的坐标算成 0；
+// 两条路径必须对同一坐标给出同一遮挡高度（估算值见 keyboardOverlap.ts）。
+it("lifts the dock for an impossible iPhone keyboard frame instead of settling at zero", () => {
+  native.viewport = { width: 380, height: 900 };
+  mount();
+  native.keyboard.state.value = 2;
+  native.keyboard.height.value = 0;
+  emit("keyboardDidShow", { screenX: 192, screenY: 500, width: 274, height: 178 });
+  expect(result.value).toBe(342);
+});
+
+// PR #8665 review：浮动输入框的 settled 高度也要在本机记录读完后重算。
+it("recomputes a settled impossible frame once the saved height finishes loading", async () => {
+  native.viewport = { width: 380, height: 900 };
+  storage.set("cindy.mobile.keyboard-docked-height.v2", JSON.stringify({ 380: 400 }));
+  mount();
+  native.keyboard.state.value = 2;
+  emit("keyboardDidShow", { screenX: 192, screenY: 500, width: 274, height: 178 });
+  expect(result.value).toBe(342);
+  await act(async () => {});
+  expect(result.value).toBe(400);
 });
 
 it("removes all subscriptions on unmount", () => {

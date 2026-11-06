@@ -1,4 +1,5 @@
 import type { SupportedLocale } from '../../shared/locale.js';
+import { markBotReadPositions, readBotReadPosition } from './botReadStateStore.js';
 import { teammateGroupActivity } from '@cindy/maker-shared/teammate-status';
 /**
  * Bot group chat for controllers (phones) through the Remote Resource protocol
@@ -66,6 +67,8 @@ const COPY = {
   "de": "Gruppenchats",
   "pt-PT": "Conversas de grupo",
   "pt-BR": "Conversas em grupo",
+  "zh-Hant-x-lzh": "群議",
+  "zh-Hans-x-lzh": "群议",
 },
   planning: {
     en: '{name} is splitting the work…',
@@ -79,6 +82,8 @@ const COPY = {
   "de": "{name} teilt die Arbeit auf…",
   "pt-PT": "{name} está a dividir o trabalho…",
   "pt-BR": "{name} está dividindo o trabalho…",
+  "zh-Hant-x-lzh": "{name}方籌劃…",
+  "zh-Hans-x-lzh": "{name}方筹划…",
 },
   proposed: {
     en: '{name}: plan ready, waiting for you',
@@ -92,6 +97,8 @@ const COPY = {
   "de": "{name}: Plan bereit, wartet auf dich",
   "pt-PT": "{name}: plano pronto, à sua espera",
   "pt-BR": "{name}: plano pronto, esperando por você",
+  "zh-Hant-x-lzh": "{name}：籌劃已定，待君啟之",
+  "zh-Hans-x-lzh": "{name}：筹划已定，待君启之",
 },
   running: {
     en: 'Step {step}/{total} · {name} is working',
@@ -105,6 +112,8 @@ const COPY = {
   "de": "Schritt {step}/{total} · {name} arbeitet",
   "pt-PT": "Passo {step}/{total} · {name} está a trabalhar",
   "pt-BR": "Etapa {step}/{total} · {name} está trabalhando",
+  "zh-Hant-x-lzh": "分工 {step}/{total} · {name}方行",
+  "zh-Hans-x-lzh": "分工 {step}/{total} · {name}方行",
 },
   stepDone: {
     en: '{name} is done — continue when ready',
@@ -118,6 +127,8 @@ const COPY = {
   "de": "{name} ist fertig – fahre fort, sobald du bereit bist",
   "pt-PT": "{name} terminou — continue quando quiser",
   "pt-BR": "{name} terminou — continue quando quiser",
+  "zh-Hant-x-lzh": "{name}已畢，待君續之",
+  "zh-Hans-x-lzh": "{name}已毕，待君续之",
 },
   stepFailed: {
     en: "{name} didn't finish",
@@ -131,6 +142,8 @@ const COPY = {
   "de": "{name} hat die Arbeit nicht abgeschlossen",
   "pt-PT": "{name} não terminou",
   "pt-BR": "{name} não terminou",
+  "zh-Hant-x-lzh": "{name}未竟",
+  "zh-Hans-x-lzh": "{name}未竟",
 },
   lastMessage: {
     en: '{name}: {text}',
@@ -144,6 +157,8 @@ const COPY = {
   "de": "{name}: {text}",
   "pt-PT": "{name}: {text}",
   "pt-BR": "{name}: {text}",
+  "zh-Hant-x-lzh": "{name}：{text}",
+  "zh-Hans-x-lzh": "{name}：{text}",
 },
   memberJoined: {
     en: '{name} joined the group',
@@ -157,6 +172,8 @@ const COPY = {
   "de": "{name} ist der Gruppe beigetreten",
   "pt-PT": "{name} juntou-se ao grupo",
   "pt-BR": "{name} se juntou ao grupo",
+  "zh-Hant-x-lzh": "{name}入群議",
+  "zh-Hans-x-lzh": "{name}入群议",
 },
   sharedReplyYou: {
     en: 'You shared a thread reply',
@@ -170,6 +187,8 @@ const COPY = {
   "de": "Du hast eine Antwort aus einem Thema geteilt",
   "pt-PT": "Partilhou uma resposta a um tópico",
   "pt-BR": "Você compartilhou uma resposta a um tópico",
+  "zh-Hant-x-lzh": "君貼回一則話題之覆",
+  "zh-Hans-x-lzh": "君贴回一则话题之覆",
 },
   sharedReply: {
     en: '{name} shared a thread reply',
@@ -183,6 +202,8 @@ const COPY = {
   "de": "{name} hat eine Antwort aus einem Thema geteilt",
   "pt-PT": "{name} partilhou uma resposta a um tópico",
   "pt-BR": "{name} compartilhou uma resposta a um tópico",
+  "zh-Hant-x-lzh": "{name} 貼回一則話題之覆",
+  "zh-Hans-x-lzh": "{name} 贴回一则话题之覆",
 },
 } satisfies Record<string, Copy>;
 
@@ -240,6 +261,8 @@ export function botGroupRemoteItem(group: BotGroupSummary): RemoteCollectionItem
       ...(preview ? { preview } : {}),
       timestamp: botGroupActivityAt(group),
       lastReplyAt: group.lastReplyAt,
+      // Early local groups keep their read position on this computer (server groups on the Chat Server).
+      ...(group.serverBacked ? {} : { lastReadAt: localGroupReadPosition(group.id) }),
       ...(busy ? { generation: { phase: 'processing', startedAt: null } } : {}),
     },
     links: group.members.map((member) => ({
@@ -260,8 +283,13 @@ export function botGroupRemoteItem(group: BotGroupSummary): RemoteCollectionItem
       group.openPlan,
       group.speakingBotIds,
       group.planningBotId,
+      group.serverBacked ? null : localGroupReadPosition(group.id),
     ]),
   };
+}
+
+function localGroupReadPosition(groupId: string): number {
+  try { return readBotReadPosition(`group:${groupId}`) ?? 0; } catch { return 0; }
 }
 
 function withoutPaths(attachments: BotGroupMessageView['attachments']): BotGroupMessageView['attachments'] {
@@ -289,6 +317,7 @@ export function botGroupRemoteChatData(detail: BotGroupDetail): BotGroupRemoteCh
       .map(([id, share]) => [id, shareWithoutPaths(share)])) } : {}),
     supportsAttachments: true,
     supportsReadReceipts: detail.serverBacked === true,
+    ...(detail.serverBacked === true ? {} : { supportsLocalReadSync: true }),
     supportsPersonalMask: detail.serverBacked === true,
     supportsMemberRemoval: detail.serverBacked === true,
     supportsSettingsManagement: detail.serverBacked === true,
@@ -524,8 +553,32 @@ export function registerBotGroupRemoteResourceProvider(service: () => BotGroupCh
           ownerService();
           return { result: receipt, effects: [] };
         }
+        case 'notifications': {
+          if (!visibleGroup.supportsNotificationSettings || !current.chatServer || !['all', 'mentions', 'none'].includes(String(input.mode)))
+            throw new RemoteResourceRegistryError('INVALID_PARAMS', 'INVALID_PARAMS');
+          const receipt = await current.chatServer.manage({ groupId, action: { type: 'notifications', mode: input.mode as 'all' | 'mentions' | 'none' } });
+          if (!receipt.ok) refuse(chatGroupFailure(new Error(receipt.errorCode)));
+          return { effects: [] };
+        }
+        case 'readers': {
+          // Read-only: who has read one message, with the host's names. Hosts without it answer UNSUPPORTED_OPERATION.
+          if (!visibleGroup.serverBacked || !current.chatServer?.readers || typeof input.messageId !== 'string')
+            throw new RemoteResourceRegistryError('INVALID_PARAMS', 'UNSUPPORTED_OPERATION');
+          const receipt = await current.chatServer.readers({ groupId, messageId: input.messageId });
+          if (!receipt.ok) throw new RemoteResourceRegistryError('INVALID_PARAMS', receipt.errorCode);
+          ownerService();
+          return { result: receipt, effects: [] };
+        }
         case 'read': {
-          if (!visibleGroup.serverBacked || !current.chatServer || typeof input.messageId !== 'string')
+          if (!visibleGroup.serverBacked) {
+            // Early local group: the device showed it up to `at` (host time), never past its latest message.
+            const at = input.at;
+            if (typeof at !== 'number' || !Number.isFinite(at) || at <= 0) throw new RemoteResourceRegistryError('INVALID_PARAMS', 'INVALID_PARAMS');
+            const latest = Math.max(visibleGroup.lastReplyAt ?? 0, visibleGroup.lastMessage?.createdAt ?? 0);
+            if (latest > 0) markBotReadPositions({ [`group:${groupId}`]: Math.min(Math.floor(at), latest) });
+            return { effects: [] };
+          }
+          if (!current.chatServer || typeof input.messageId !== 'string')
             throw new RemoteResourceRegistryError('INVALID_PARAMS', 'INVALID_PARAMS');
           const receipt = await current.chatServer.manage({ groupId, action: { type: 'read', messageId: input.messageId } });
           if (!receipt.ok) refuse(chatGroupFailure(new Error(receipt.errorCode)));
@@ -598,7 +651,8 @@ export function registerBotGroupRemoteResourceProvider(service: () => BotGroupCh
           result = await current.retryPlan(planInput);
           break;
         case 'plan-edit':
-          result = await current.editPlanStep({ ...planInput, position: input.position, action: input.action, botId: input.botId });
+          result = await current.editPlanStep({ ...planInput, position: input.position, action: input.action, botId: input.botId,
+            ...(input.action === 'skip' ? { executionId: input.executionId } : {}) });
           break;
         default:
           throw new RemoteResourceRegistryError('INVALID_PARAMS', 'INVALID_PARAMS');

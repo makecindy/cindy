@@ -1,3 +1,5 @@
+import { PluginUiContributionControls } from '@/cindy-brain/PluginUiControls';
+import { PluginUiCommandMenuItems, PluginUiCommandMenuStatus, usePluginUiCommandMenu } from '@/cindy-brain/PluginUiCommandMenu';
 import { deviceDisplayName } from '@/lib/deviceName';
 import { SessionTaskMenu } from './sidebar/SessionTaskMenu';
 import { TaskMigrationStatus } from './TaskMigrationStatus';
@@ -74,6 +76,7 @@ import { VendorIcon, agentKindToVendor } from '@/components/sidebar/VendorIcon';
 import { MENU_ITEM_CLASS } from './sidebar/menuStyles';
 import { SessionProjectMoveSubmenu } from './sidebar/SessionProjectMoveSubmenu';
 import { sessionMoveFailureFeedback } from '../../../shared/worktreeMoveGuardError';
+import { NewProjectFromTaskDialog } from './sidebar/NewProjectFromTaskDialog';
 import type { SessionMoveTarget } from './sidebar/sessionMoveTarget';
 import { SessionShareExportDialog } from './sidebar/SessionShareExportDialog';
 import { useRemoteProjectSessions } from '@/features/device-link/remoteProjectsStore';
@@ -197,6 +200,10 @@ export function SessionContentHeader({
   // 会停留在旧值(Codex review P2)。prop 兜底覆盖 archived 等不在
   // active 桶里的会话。
   const session = routeSessionById.get(sessionProp.id) ?? sessionProp;
+  const pluginMenu = usePluginUiCommandMenu({
+    sessionId: session.id, point: 'session.header.actions',
+    deviceId: session.deviceLinkDeviceId ?? undefined, connected: !remoteSessionUnavailable, readOnly,
+  });
   const sharedGuest = isSharedTaskPeer(session.deviceLinkDeviceId ?? '');
   const { runningSessionIds } = useSessionRunningStatus(session.id);
   // worktree 归属取 store 镜像（与 main 的 worktreeStore 同源）：回收后仍留历史路径、
@@ -375,6 +382,12 @@ export function SessionContentHeader({
    * 与 CCAgentSidebarUpper.handleMoveSession 同款守卫(远程不支持 / 执行中 /
    * 被 IM 接管中拦截)与乐观更新 + 失败回滚;不含 sidebar 的目标项目节点自动
    * 展开(collapse 是 CCAgentSidebarUpper 实例内 state,header 拿不到)。 */
+  // Pin the task when the dialog opens: switching tasks must not retarget a pending creation.
+  const [newProjectSessionId, setNewProjectSessionId] = useState<string | null>(null);
+  const closeNewProjectDialog = useCallback((open: boolean) => {
+    if (!open) setNewProjectSessionId(null);
+  }, []);
+
   const handleMoveSession = useCallback(
     async (target: SessionMoveTarget) => {
       if (session.remoteHostId || session.deviceLinkDeviceId) {
@@ -407,6 +420,11 @@ export function SessionContentHeader({
         }
       } catch {
         // resolveSession 失败时不阻断移动；它只是 IM 接管保护的额外检查。
+      }
+
+      if (target.kind === 'newProject') {
+        setNewProjectSessionId(session.id);
+        return;
       }
 
       let targetWorkingDir = target.kind === 'project' ? target.workingDir : undefined;
@@ -736,6 +754,7 @@ export function SessionContentHeader({
             onDelete={() => void handleDelete()}
             onOpenInNewWindow={handleOpenInNewWindow}
             tags={tagMenu}
+            pluginCommands={<PluginUiCommandMenuItems menu={pluginMenu} />}
             copy={
               <DropdownMenuItem
                 onSelect={() => void handleCopyDeepLink()}
@@ -764,6 +783,7 @@ export function SessionContentHeader({
                     void handleMoveSession({ kind: 'project', workingDir })
                   }
                   onBrowseProject={() => void handleMoveSession({ kind: 'browseProject' })}
+                  onNewProject={() => void handleMoveSession({ kind: 'newProject' })}
                   onMoveToDialogue={() => void handleMoveSession({ kind: 'dialogue' })}
                 />
               )
@@ -775,8 +795,23 @@ export function SessionContentHeader({
       {/* session-git-pr-context:当前分支 + 关联 PR 徽标(项目任务与对话一致;非 git 目录且无 PR 时自动隐藏) */}
       <GitContextBadge session={session} />
       <TaskMigrationStatus session={session} />
+      <div style={WINDOW_NO_DRAG_STYLE}><PluginUiContributionControls sessionId={session.id} deviceId={session.deviceLinkDeviceId ?? undefined}
+        point="session.header.actions" connected={!remoteSessionUnavailable} readOnly={readOnly} />
+        <PluginUiCommandMenuStatus menu={pluginMenu} /></div>
 
       {tagEditorOpen && <TaskTagEditor session={session} onClose={() => setTagEditorOpen(false)} />}
+
+      {newProjectSessionId && (
+        <NewProjectFromTaskDialog
+          sessionId={newProjectSessionId}
+          onOpenChange={closeNewProjectDialog}
+          onCreated={(result) => {
+            patchLocal(newProjectSessionId, { workingDir: result.workingDir, workspaceKind: 'project' });
+            void recentWorkdirsStore.forceRefresh().catch(() => undefined);
+            toast.success(t('ccAgent.sidebar.newProjectDialog.done'));
+          }}
+        />
+      )}
 
       {/* 导出 .cshare 弹窗:仅打开时挂载,与 SessionItem 同款。 */}
       {shareExportOpen && (

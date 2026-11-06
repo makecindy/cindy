@@ -151,5 +151,40 @@
     "working": "Wird verarbeitet…",
     "worked": "{{duration}} gearbeitet",
     "workDetails": "Arbeitsdetails"
+  },
+  "teammateProcess": {
+    "record": "Aktivität",
+    "operations": "Aktivitätsprotokoll",
+    "elapsed": "In Bearbeitung seit {{duration}}",
+    "took": "Dauer: {{duration}}",
+    "processing": "In Bearbeitung",
+    "worked": "Aktivität",
+    "thinking": "Denkt nach",
+    "thought": "Nachgedacht",
+    "failed_one": "{{count}} Aufruf fehlgeschlagen",
+    "failed_other": "{{count}} Aufrufe fehlgeschlagen",
+    "separator": ", ",
+    "actions": {
+      "running": {
+        "read": "Liest Dateien",
+        "edit": "Bearbeitet Dateien",
+        "search": "Sucht",
+        "web": "Durchsucht das Web",
+        "command": "Führt Befehle aus",
+        "tools": "Nutzt Werkzeuge",
+        "delegate": "Delegiert Arbeit",
+        "plan": "Aktualisiert den Plan"
+      },
+      "done": {
+        "read": "Dateien gelesen",
+        "edit": "Dateien bearbeitet",
+        "search": "Gesucht",
+        "web": "Web durchsucht",
+        "command": "Befehle ausgeführt",
+        "tools": "Werkzeuge genutzt",
+        "delegate": "Arbeit delegiert",
+        "plan": "Plan aktualisiert"
+      }
+    }
   }
 }

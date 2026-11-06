@@ -1,5 +1,8 @@
 ## 4.20 一级主视图(mainView 能力)
 
+多个独立命名页签使用开发中的 `ui.tabViews`，从既有原生动作打开并传入定位；见
+[原生界面扩展](plugin-native-ui.md)。它不改变本节 `mainView` 的导航入口与单实例语义。
+
 插件需要一个从 Cindy 左侧导航进入的完整页面时，直接声明 `mainView`：
 
 ```json
@@ -32,6 +35,14 @@
   写入方 / 保存带版本号 / BroadcastChannel 同步)的插件才声明 `"multiple": true` 放开;
 - `mainView` 与 `panel` 是两种独立 UI 贡献项。可以让两者指向同一 HTML，但必须分别
   声明；主视图不接受 position、宽度或 systemButtons；
+- **主题与壁纸画布**：主视图在整页、侧栏和独立窗口中都跟随所在宿主的主题与壁纸状态。
+  壁纸开启时，Host 注入 `html, body { background-color: transparent !important; }`，
+  覆盖普通文档底色，让宿主壁纸透出；关闭时移除该覆盖，恢复主题底色基线。
+  主视图的底色注入只写 `background-color`，保留作者的 `background-image`、尺寸与平铺设置；
+  自绘背景图仍会绘制在宿主壁纸之上。主题 token 不会变透明，输入框、卡片、弹窗等子元素
+  仍使用各自的主题表面色。需要承载不透明内容时，在对应内容容器上使用主题 token，
+  不依赖 `html` / `body` 的普通背景色；避免用全页不透明容器遮住壁纸。
+  该壁纸覆盖仅适用于 `mainView`，不改变独立 `panel` 或插件设置页的底色行为；
 - 插件批准并启用后，入口默认显示。用户可以在插件详情关闭“显示在左侧导航”；这只隐藏
   导航入口，不停用插件，也不关闭 tool、network、panel 或后台能力；
 - 主视图与 panel 共用同一 Ghost WebView 沙箱：零 Node、零通用 preload、每插件专属

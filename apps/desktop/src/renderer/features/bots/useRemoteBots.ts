@@ -1,6 +1,7 @@
 import { useEffect, useSyncExternalStore } from 'react';
 import {
   REMOTE_RESOURCE_CHANGED_CHANNEL,
+  REMOTE_RESOURCE_INVOKE_CHANNEL,
   REMOTE_RESOURCE_LIST_CHANNEL,
   type RemoteCollectionListRequest,
 } from '@cindy/device-link';
@@ -68,6 +69,8 @@ export function useRemoteBotSync(): void {
     if (owner !== nextOwner) {
       owner = nextOwner;
       cindyIds = new Set();
+      unreportedReads.clear();
+      inFlightReads.clear();
       let cached: RemoteBot[] = [];
       try {
         if (!nextOwner) {
@@ -135,9 +138,11 @@ export function useRemoteBotSync(): void {
           ...bot,
           delegatedSessionIds: previous.get(bot.id)?.delegatedSessionIds,
           templateId: previous.get(bot.id)?.templateId,
-          readAt: snapshot.find((old) => old.deviceId === deviceId && old.id === bot.id)?.readAt ?? bot.lastReplyAt ?? 0,
+          // Reading on the phone or the home computer counts here too; newest position wins.
+          readAt: Math.max(snapshot.find((old) => old.deviceId === deviceId && old.id === bot.id)?.readAt ?? bot.lastReplyAt ?? 0, bot.hostReadAt ?? 0),
         }));
         publish([...snapshot.filter((bot) => bot.deviceId !== deviceId), ...bots]);
+        flushUnreportedReads(deviceId, bots);
         // Older released hosts already expose the task-card list, even when their
         // directory has no task links. Read serially per host; never per task row.
         for (const bot of bots) {
@@ -232,8 +237,60 @@ export function useRemoteBotSync(): void {
 
 }
 
+/**
+ * Read positions this window advanced that the home computer has not acknowledged yet, by
+ * `deviceId\nbotId`. Kept apart from the local `readAt`: advancing locally must not decide
+ * whether the computer still needs to hear about it (offline, a failed request, a restart of
+ * the link), so an unacknowledged position is re-sent on the next read and on reconnect.
+ */
+const unreportedReads = new Map<string, number>();
+const inFlightReads = new Map<string, number>();
+const readReportKey = (deviceId: string, botId: string) => `${deviceId}\n${botId}`;
+
+function sendRemoteBotRead(deviceId: string, botId: string, at: number): void {
+  const key = readReportKey(deviceId, botId);
+  if ((inFlightReads.get(key) ?? 0) >= at) return;
+  inFlightReads.set(key, at);
+  void window.electronAPI.deviceLink.invoke(deviceId, REMOTE_RESOURCE_INVOKE_CHANNEL, [{
+    client: { protocolVersion: 1, primitives: [] },
+    collectionId: 'teammates',
+    actionId: 'read',
+    resourceRef: { collectionId: 'teammates', kind: 'bot', id: botId },
+    input: { at: Math.floor(at) },
+  }]).then(() => {
+    if ((unreportedReads.get(key) ?? 0) <= at) unreportedReads.delete(key);
+  }, () => undefined).finally(() => {
+    if (inFlightReads.get(key) === at) inFlightReads.delete(key);
+  });
+}
+
+/**
+ * After a successful roster read: send positions the computer is still missing, and forget the
+ * ones it already has (another device read further) or cannot take (older host, deleted teammate).
+ */
+function flushUnreportedReads(deviceId: string, bots: readonly RemoteBot[]): void {
+  const byId = new Map(bots.map(bot => [bot.id, bot]));
+  for (const [key, at] of [...unreportedReads]) {
+    const [keyDevice, botId] = key.split('\n');
+    if (keyDevice !== deviceId) continue;
+    const bot = byId.get(botId);
+    if (!bot || bot.hostReadAt === undefined || bot.hostReadAt >= at) unreportedReads.delete(key);
+    else sendRemoteBotRead(deviceId, botId, at);
+  }
+}
+
 export function markRemoteBotRead(deviceId: string, botId: string, at: number): void {
-  if (!Number.isFinite(at) || at < 0) return;
-  if (!snapshot.some((bot) => bot.deviceId === deviceId && bot.id === botId && (bot.readAt ?? -1) < at)) return;
-  publish(snapshot.map((bot) => bot.deviceId === deviceId && bot.id === botId ? { ...bot, readAt: Math.max(bot.readAt ?? 0, at) } : bot));
+  if (!Number.isFinite(at) || at <= 0) return;
+  const bot = snapshot.find((bot) => bot.deviceId === deviceId && bot.id === botId);
+  if (!bot) return;
+  if ((bot.readAt ?? -1) < at) {
+    publish(snapshot.map((row) => row.deviceId === deviceId && row.id === botId ? { ...row, readAt: Math.max(row.readAt ?? 0, at) } : row));
+  }
+  // Hosts that publish their read position accept `read`. Every call re-checks what the computer
+  // has, so showing the same reply again after a failed or offline report sends it again.
+  if (bot.hostReadAt !== undefined && bot.hostReadAt >= at) return;
+  const key = readReportKey(deviceId, botId);
+  unreportedReads.set(key, Math.max(unreportedReads.get(key) ?? 0, at));
+  // Without a live list (offline, restored from cache) the position waits for the next refresh.
+  if (bot.hostReadAt !== undefined && bot.online) sendRemoteBotRead(deviceId, botId, at);
 }

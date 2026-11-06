@@ -1,3 +1,5 @@
+import { PREVIEW_PANEL_CLASS, PREVIEW_PANEL_STYLE, PreviewHeader, PreviewButton, PreviewScrim } from './PreviewChrome';
+import { DropdownMenuItem } from '@/components/ui/dropdown-menu';
 import { Button } from '@/components/ui/button';
 /**
  * ToolPayloadLightbox
@@ -44,6 +46,7 @@ import { isRemoteFileOrigin } from '@/lib/sessionFileOrigin';
 import { resolveToolFilePath } from '@/lib/localPathResolver';
 import { downloadRemoteChatEntry } from '@/lib/remoteFileOpen';
 import { useChatSessionFile } from './ChatSessionFileContext';
+import { PluginUiRendererView } from '@/cindy-brain/PluginUiRendererView';
 
 export type ToolDiffSegment =
   | {
@@ -100,6 +103,7 @@ export interface ToolPayloadTextEditConfig {
 
 interface ToolPayloadLightboxProps {
   payload: ToolPayloadMode;
+  renderer?: { sessionId: string; toolUseId: string };
   /** Focus return target — usually the chip / chevron that opened us. */
   triggerRef?: React.RefObject<HTMLElement | null>;
   /** Opt-in editor for text payloads. Diff / JSON and ordinary text stay read-only. */
@@ -109,6 +113,7 @@ interface ToolPayloadLightboxProps {
 
 export function ToolPayloadLightbox({
   payload,
+  renderer,
   triggerRef,
   textEdit,
   onClose,
@@ -285,7 +290,6 @@ export function ToolPayloadLightbox({
         position: 'fixed',
         inset: 0,
         zIndex: 9999,
-        background: 'var(--overlay-lightbox)',
         display: 'flex',
         flexDirection: 'column',
         alignItems: 'center',
@@ -295,127 +299,34 @@ export function ToolPayloadLightbox({
         cursor: 'default',
       }}
     >
-      <button
-        type="button"
-        aria-label={t('chat.lightbox.close')}
-        style={{
-          position: 'absolute',
-          inset: 0,
-          border: 0,
-          padding: 0,
-          background: 'transparent',
-          cursor: 'default',
-        }}
-        onClick={handleClose}
-      />
+      {/* 遮罩在根节点的层叠上下文里,压在预览窗(zIndex 1)之下。 */}
+      <PreviewScrim onClose={handleClose} zIndex={0} />
       <div
         data-tool-payload-lightbox-card
-        className={cn(
-          'cursor-auto flex flex-col overflow-hidden rounded-xl',
-          'border border-[var(--msg-tool-card-border)]',
-          'bg-[var(--msg-tool-card-bg)]',
-        )}
-        style={{
-          width: '80vw',
-          height: '80vh',
-          maxWidth: '1600px',
-          maxHeight: '1200px',
-          position: 'relative',
-          zIndex: 1,
-        }}
+        className={cn('cursor-auto flex flex-col pt-16', PREVIEW_PANEL_CLASS)}
+        style={{ ...PREVIEW_PANEL_STYLE, zIndex: 1 }}
       >
-        {/* Toolbar */}
-        <div
-          className={cn(
-            'flex items-center justify-between',
-            'h-14 shrink-0 px-5',
-            'border-b border-[var(--msg-tool-card-border)]',
-          )}
-        >
-          <Tooltip.Root>
-            <Tooltip.Trigger asChild>
-              <button
-                type="button"
-                onClick={copyTitle}
-                className={cn(
-                  'flex items-center gap-2 min-w-0',
-                  'rounded-full px-1 -mx-1 py-0.5',
-                  CHAT_FOCUS_CLASS,
-                  'hover:bg-[var(--msg-code-inline-bg)] transition-colors',
-                  'text-left cursor-pointer',
-                )}
-              >
-                {singleDiffFile ? (
-                  <FileTypeIcon name={singleDiffFile.filePath} size={16} className="shrink-0 text-[var(--msg-tool-card-chevron)]" />
-                ) : (
-                  <FileText size={16} className="shrink-0 text-[var(--msg-tool-card-chevron)]" />
-                )}
-                <span
-                  className={cn(
-                    'font-semibold text-14',
-                    'text-[var(--msg-tool-card-text)]',
-                    'truncate',
-                  )}
-                >
-                  {displayName}
-                </span>
-              </button>
-            </Tooltip.Trigger>
-            <Tooltip.Content>
+        <PreviewHeader
+          name={displayName}
+          onClose={handleClose}
+          actions={
+            <PreviewButton label={t('chat.lightbox.copyContent')} onClick={copyContent}>
+              <Copy className="h-4 w-4" />
+            </PreviewButton>
+          }
+          menu={
+            <>
+              <DropdownMenuItem onClick={copyTitle}>
               {payload.kind === 'diff'
                 ? t('chat.lightbox.clickToCopyPath')
                 : t('chat.lightbox.clickToCopy')}
-            </Tooltip.Content>
-          </Tooltip.Root>
-
-          <div className="flex items-center gap-1">
-            {payload.kind === 'diff' && singleDiffFile && (
-              <Tooltip.Root>
-                <Tooltip.Trigger asChild>
-                  <button
-                    type="button"
-                    onClick={showInFolder}
-                    className={CHAT_LIGHTBOX_ICON_BUTTON_CLASS}
-                    aria-label={revealLabel}
-                  >
-                    {remoteFile ? (
-                      <Download size={18} className="text-[var(--msg-tool-card-chevron)]" />
-                    ) : (
-                      <Folder size={18} className="text-[var(--msg-tool-card-chevron)]" />
-                    )}
-                  </button>
-                </Tooltip.Trigger>
-                <Tooltip.Content>{revealLabel}</Tooltip.Content>
-              </Tooltip.Root>
-            )}
-            <Tooltip.Root>
-              <Tooltip.Trigger asChild>
-                <button
-                  type="button"
-                  onClick={copyContent}
-                  className={CHAT_LIGHTBOX_ICON_BUTTON_CLASS}
-                  aria-label={t('chat.lightbox.copyContent')}
-                >
-                  <Copy size={18} className="text-[var(--msg-tool-card-chevron)]" />
-                </button>
-              </Tooltip.Trigger>
-              <Tooltip.Content>{t('chat.lightbox.copyContent')}</Tooltip.Content>
-            </Tooltip.Root>
-            <Tooltip.Root>
-              <Tooltip.Trigger asChild>
-                <button
-                  type="button"
-                  onClick={handleClose}
-                  className={CHAT_LIGHTBOX_ICON_BUTTON_CLASS}
-                  aria-label={t('chat.lightbox.close')}
-                >
-                  <X size={20} className="text-[var(--msg-tool-card-chevron)]" />
-                </button>
-              </Tooltip.Trigger>
-              <Tooltip.Content>{t('chat.lightbox.close')}</Tooltip.Content>
-            </Tooltip.Root>
-          </div>
-        </div>
+            </DropdownMenuItem>
+            {payload.kind === 'diff' && singleDiffFile ? (
+                <DropdownMenuItem onClick={showInFolder}>{revealLabel}</DropdownMenuItem>
+              ) : null}
+            </>
+          }
+        />
 
         {/* Body */}
         <div
@@ -425,6 +336,8 @@ export function ToolPayloadLightbox({
             'text-[var(--msg-tool-card-text)]',
           )}
         >
+          <PluginUiRendererView sessionId={renderer?.sessionId ?? ''} point="tool.body"
+            target={{ kind: 'tool', id: renderer?.toolUseId ?? '' }} active={!!renderer && payload.kind !== 'text'}>
           {payload.kind === 'diff' && (
             <div className="flex flex-col gap-3">
               {payload.files.map((file) => (
@@ -542,6 +455,7 @@ export function ToolPayloadLightbox({
               )}
             </div>
           )}
+          </PluginUiRendererView>
         </div>
 
         {isEditingText && textEdit && (
@@ -559,22 +473,6 @@ export function ToolPayloadLightbox({
             </Button>
           </div>
         )}
-      </div>
-
-      <div
-        className="mt-5 flex items-center gap-2 select-none"
-        style={{ position: 'relative', zIndex: 1 }}
-      >
-        <span
-          className={cn(
-            'rounded-[4px] border px-1.5 py-[2px]',
-            'text-11 font-medium',
-            'text-white/60 border-white/40',
-          )}
-        >
-          Esc
-        </span>
-        <span className="text-12 text-white/40">{t('chat.textLightbox.closeHint')}</span>
       </div>
     </div>
   );

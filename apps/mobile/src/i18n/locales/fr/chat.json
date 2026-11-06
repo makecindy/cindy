@@ -161,5 +161,41 @@
     "working": "Travail en cours…",
     "worked": "A travaillé pendant {{duration}}",
     "workDetails": "Détails du travail"
+  },
+  "teammateProcess": {
+    "record": "Activité",
+    "operations": "Journal d’activité",
+    "elapsed": "En cours depuis {{duration}}",
+    "took": "Durée : {{duration}}",
+    "processing": "En cours",
+    "worked": "Activité",
+    "thinking": "Réflexion en cours",
+    "thought": "Réflexion",
+    "failed_one": "{{count}} appel a échoué",
+    "failed_other": "{{count}} appels ont échoué",
+    "separator": ", ",
+    "actions": {
+      "running": {
+        "read": "Lecture des fichiers",
+        "edit": "Modification des fichiers",
+        "search": "Recherche en cours",
+        "web": "Consultation du Web",
+        "command": "Exécution des commandes",
+        "tools": "Utilisation des outils",
+        "delegate": "Délégation du travail",
+        "plan": "Mise à jour du plan"
+      },
+      "done": {
+        "read": "Fichiers lus",
+        "edit": "Fichiers modifiés",
+        "search": "Recherche effectuée",
+        "web": "Web consulté",
+        "command": "Commandes exécutées",
+        "tools": "Outils utilisés",
+        "delegate": "Travail délégué",
+        "plan": "Plan mis à jour"
+      }
+    },
+    "failed_many": "{{count}} appels ont échoué"
   }
 }

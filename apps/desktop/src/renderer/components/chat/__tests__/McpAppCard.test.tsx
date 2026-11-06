@@ -1,7 +1,8 @@
 // @vitest-environment jsdom
 import { act } from 'react';
 import { createRoot } from 'react-dom/client';
-import { afterEach, expect, it, vi } from 'vitest';
+import { webcrypto } from 'node:crypto';
+import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import { sharedTaskHostPeer } from '@cindy/device-link';
 const state = vi.hoisted(() => ({
   deviceId: undefined as string | undefined,
@@ -61,7 +62,21 @@ vi.mock('@cindy/maker-shared/mcp-app-controller', async importOriginal => ({
   },
 }));
 import { McpAppCard } from '../McpAppCard';
-afterEach(() => {
+const digest = webcrypto.subtle.digest.bind(webcrypto.subtle);
+const pendingDigests: Promise<ArrayBuffer>[] = [];
+beforeEach(() => {
+  vi.stubGlobal('crypto', webcrypto);
+  vi.spyOn(webcrypto.subtle, 'digest').mockImplementation((...args) => {
+    const pending = digest(...args);
+    pendingDigests.push(pending);
+    return pending;
+  });
+});
+afterEach(async () => {
+  // CI 41649027355: a prior card's asynchronous failure log can otherwise reach
+  // the next test's electronAPI spy. Drain real hashing before replacing globals.
+  await Promise.all(pendingDigests);
+  pendingDigests.length = 0;
   vi.restoreAllMocks();
   vi.unstubAllGlobals();
   state.controllers = [];
@@ -110,6 +125,8 @@ it.each(['unmount', 'failure-retry', 'disconnected', 'rejected-move', 'no-move-a
       controller.close.mockReturnValue(closed);
       const receive = added.mock.calls.find(([type]) => type === 'message')![1];
       const frame = container.querySelector('iframe')!;
+      // The ancestor sandbox must also allow the inner App's submit event (G5).
+      expect(frame.getAttribute('sandbox')).toBe('allow-scripts allow-same-origin allow-forms');
       if (scenario === 'disconnected') frame.remove();
       if (scenario === 'failure-retry') {
         await act(async () => controller.fail(new Error('MCP_APP_FAILED')));
@@ -435,8 +452,6 @@ it.each([
   ['timeout', 'MCP_APP_INITIALIZATION_TIMEOUT'],
   ['open', 'UNKNOWN'],
 ] as const)('logs a content-free %s failure (%s) through the renderer logger', async (stage, code) => {
-  const { webcrypto } = await import('node:crypto');
-  vi.stubGlobal('crypto', webcrypto);
   vi.stubGlobal('IS_REACT_ACT_ENVIRONMENT', true);
   vi.spyOn(document, 'visibilityState', 'get').mockReturnValue('visible');
   vi.stubGlobal('matchMedia', () => ({ matches: false }));

@@ -5,6 +5,9 @@ import { getDeviceId } from '../authManager.js';
 import { isRemoteProviderInvocationAllowed } from '../maker-host/remote-provider-access-store.js';
 import { checkProviderShareDelegation, providerShareOwnerKey } from './providerShareApi.js';
 import { readDeviceLinkSettings } from './settings-store.js';
+import { groupFastPolicyStore } from '../provider-group/fastPolicyStore.js';
+import { hostSessionIdFor } from '../remote-agent/host/sessionIdentity.js';
+import { notifySubscriptionFastPolicyChanged } from '../maker-host/subscription-fast-policy.js';
 
 const LEASE_MS = 30 * 60_000;
 const MAX_LEASES = 512;
@@ -114,44 +117,72 @@ export async function applyProviderShareDelegation(ownerDeviceId: string, reques
   pending.set(key, { mark, generation: request.generation, ownerDeviceId,
     cleanupEpoch: request.cleanupEpoch ?? 0 });
   let approved: Awaited<ReturnType<typeof check>>;
-  let current = false;
   try {
     approved = await check({ shareId: request.shareId, memberId: request.memberId,
-      guestDeviceId: request.guestDeviceId, executorDeviceId: getDeviceId()! });
+      guestDeviceId: request.guestDeviceId, executorDeviceId: getDeviceId()! }, request.generation);
+  } catch (error) {
+    if (pending.get(key)?.mark === mark) pending.delete(key);
+    throw error;
+  }
+  try {
+    if (pending.get(key)?.mark !== mark || !approved.active || approved.ownerDeviceId !== ownerDeviceId
+      || approved.generation !== request.generation
+      || !approved.expiresAt || approved.expiresAt <= Date.now()
+      || providerShareOwnerKey() !== scope) throw new Error('REMOTE_AGENT_INVALID');
+    // Revalidate after the network round trip; a settings/account change cannot
+    // turn an old response into a fresh local guest permission.
+    const currentSettings = readDeviceLinkSettings();
+    if (!currentSettings.remoteControlEnabled || currentSettings.revokedControllers?.includes(ownerDeviceId)
+      || !isRemoteProviderInvocationAllowed(request.providerId)) throw new Error('REMOTE_AGENT_UNAVAILABLE');
+    const assertCurrent = () => {
+      const settings = readDeviceLinkSettings();
+      if (pending.get(key)?.mark !== mark || providerShareOwnerKey() !== scope
+        || !settings.remoteControlEnabled || settings.revokedControllers?.includes(ownerDeviceId)
+        || !isRemoteProviderInvocationAllowed(request.providerId)
+        || !approved.expiresAt || approved.expiresAt <= Date.now()) throw new Error('REMOTE_AGENT_INVALID');
+    };
+    if (request.fastPolicy) {
+      // The existing delegation check authenticates O once. Do not issue another
+      // cloud check just to synchronize a speed preference during grant/renewal.
+      // Bind the verified task, never any task name supplied by G.
+      try {
+        await groupFastPolicyStore.receive(ownerDeviceId, { ...request.fastPolicy,
+          binding: { sessionId: request.sessionId } }, getDeviceId(), assertCurrent,
+          hostSessionIdFor(peer, request.sessionId));
+      } catch {
+        assertCurrent();
+        groupFastPolicyStore.suppress(hostSessionIdFor(peer, request.sessionId), ownerDeviceId, request.fastPolicy.group);
+      }
+      assertCurrent();
+      void notifySubscriptionFastPolicyChanged().catch(() => undefined);
+    }
+    const next = leases.get(peer) ?? new Map<string, Lease>();
+    if ([...next.values()].some((lease) => lease.ownerDeviceId !== ownerDeviceId)) {
+      throw new Error('REMOTE_AGENT_INVALID');
+    }
+    if (!next.has(request.sessionId) && [...leases.values()].reduce((sum, entries) => sum + entries.size, 0) >= MAX_LEASES) {
+      throw new Error('REMOTE_AGENT_UNAVAILABLE');
+    }
+    const duration = Math.min(LEASE_MS, approved.expiresAt - Date.now());
+    // Only the server-confirmed issuer may supply this delegated task's group
+    // policy. Neither M's local default nor G's self-binding can replace O.
+    groupFastPolicyStore.requireOrigin(hostSessionIdFor(peer, request.sessionId), ownerDeviceId);
+    // A fresh task lease supersedes any accounting-only authority for this task.
+    receiptOnlyAuthorities.delete(key);
+    next.set(request.sessionId, {
+      ownerScope: scope, ownerDeviceId,
+      access: { shareId: request.shareId, memberId: request.memberId, providerId: request.providerId },
+      model: request.model, generation: request.generation,
+      cleanupEpoch: request.cleanupEpoch ?? 0,
+      wallUntil: Date.now() + duration, monoUntil: performance.now() + duration,
+      nonce: randomUUID(),
+    });
+    leases.set(peer, next);
+    blockedPeers.delete(peer);
+    return false;
   } finally {
-    current = pending.get(key)?.mark === mark;
-    if (current) pending.delete(key);
+    if (pending.get(key)?.mark === mark) pending.delete(key);
   }
-  if (!current || !approved.active || approved.ownerDeviceId !== ownerDeviceId
-    || approved.generation !== request.generation
-    || !approved.expiresAt || approved.expiresAt <= Date.now()
-    || providerShareOwnerKey() !== scope) throw new Error('REMOTE_AGENT_INVALID');
-  // Revalidate after the network round trip; a settings/account change cannot
-  // turn an old response into a fresh local guest permission.
-  const currentSettings = readDeviceLinkSettings();
-  if (!currentSettings.remoteControlEnabled || currentSettings.revokedControllers?.includes(ownerDeviceId)
-    || !isRemoteProviderInvocationAllowed(request.providerId)) throw new Error('REMOTE_AGENT_UNAVAILABLE');
-  const next = leases.get(peer) ?? new Map<string, Lease>();
-  if ([...next.values()].some((lease) => lease.ownerDeviceId !== ownerDeviceId)) {
-    throw new Error('REMOTE_AGENT_INVALID');
-  }
-  if (!next.has(request.sessionId) && [...leases.values()].reduce((sum, entries) => sum + entries.size, 0) >= MAX_LEASES) {
-    throw new Error('REMOTE_AGENT_UNAVAILABLE');
-  }
-  const duration = Math.min(LEASE_MS, approved.expiresAt - Date.now());
-  // A fresh task lease supersedes any accounting-only authority for this task.
-  receiptOnlyAuthorities.delete(key);
-  next.set(request.sessionId, {
-    ownerScope: scope, ownerDeviceId,
-    access: { shareId: request.shareId, memberId: request.memberId, providerId: request.providerId },
-    model: request.model, generation: request.generation,
-    cleanupEpoch: request.cleanupEpoch ?? 0,
-    wallUntil: Date.now() + duration, monoUntil: performance.now() + duration,
-    nonce: randomUUID(),
-  });
-  leases.set(peer, next);
-  blockedPeers.delete(peer);
-  return false;
 }
 
 function guestBlocked(peer: string): boolean {

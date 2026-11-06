@@ -1,0 +1,14 @@
+{
+  "schemaVersion": 3,
+  "minCindyVersion": "0.1.125",
+  "id": "model-picker-demo",
+  "name": "模型选择器体验",
+  "description": "在插件面板体验宿主模型选择器，查看完整选择结果。",
+  "whenToUse": "在插件面板体验宿主模型选择器，查看完整选择结果。",
+  "version": "1.0.0",
+  "kind": "chip",
+  "entry": "main.js",
+  "icon": "assets/icon.png",
+  "panel": { "title": "模型选择器体验", "html": "panel.html", "position": "right" },
+  "mainView": { "title": "模型选择器体验", "html": "panel.html" }
+}

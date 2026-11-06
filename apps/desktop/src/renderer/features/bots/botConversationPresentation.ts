@@ -28,6 +28,18 @@ function expandWorkGroups(items: readonly RenderItem[]): RenderItem[] {
     item.type === 'work_group' ? expandWorkGroups(item.children) : [item]);
 }
 
+/** Internal model prose stays in storage, not in the owner's companion chat.
+ * Keep trace cards, errors and the existing expandable work records. */
+function withoutPrivateProse<T extends RenderItem>(items: readonly T[]): T[] {
+  return items.filter(item => !(isProse(item) && item.message.botPrivateReply))
+    .map(item => {
+      if (item.type !== 'work_group') return item;
+      const children = withoutPrivateProse(item.children);
+      return children.length === item.children.length && children.every((child, index) => child === item.children[index])
+        ? item : { ...item, children };
+    });
+}
+
 /** A presentation-only projection. Never mutate messages or infer intent from prose.
  * isFinal from the adapters closes a text block, not a turn (Pi/Claude can call
  * another tool afterwards). Normal task grouping owns progress visibility and
@@ -44,7 +56,7 @@ export function simplifyBotRenderItems(
   const result: RenderItem[] = [];
   let window: RenderItem[] = [];
   let previousEnd: number | null = null;
-  for (const item of items) {
+  for (const item of withoutPrivateProse(items)) {
     const start = renderItemStartMs(item);
     const end = renderItemEndMs(item);
     const userBoundary = item.type === 'message' && item.message.role === 'user';

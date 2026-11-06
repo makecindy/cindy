@@ -3,6 +3,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import type { BotGroupChangedPayload, BotGroupSummary } from '../../../../shared/botGroupChat';
 import { getBotGroupListSnapshot, refreshBotGroups, resetBotGroupStoreForTests, startBotGroupSync, subscribeBotGroups } from '../botGroupStore';
+import { getAllDraftAttachmentUrls, getDraft, saveDraft } from '@/lib/composerDraftStore';
+import { botGroupThreadDraftKey } from '../botGroupAttachments';
 
 const dataOwner = vi.hoisted(() => ({ generation: 1 }));
 vi.mock('@/contexts/dataOwnerGeneration', () => ({
@@ -38,6 +40,22 @@ afterEach(() => {
 });
 
 describe('group list mirror', () => {
+  // #8084: a deletion observed while a different room is open must also release thread media.
+  // Unit: real sync push entry, without mounting the deleted group's chat view.
+  it.each(['deleted', 'hidden'] as const)('discards closed thread drafts on an authoritative %s push', async boundary => {
+    const scope = botGroupThreadDraftKey('g1', 'closed-root');
+    const url = 'cindy-media://blobs/closed-thread.png';
+    saveDraft(scope, { text: null, attachments: [{ id: 'closed-photo', name: 'photo.png', ext: '.png',
+      category: 'image', mimeType: 'image/png', size: 12, path: '', url }] });
+    const stop = startBotGroupSync();
+    await vi.advanceTimersByTimeAsync(0);
+    push(boundary === 'deleted' ? { groupId: 'g1', change: 'deleted' }
+      : { groupId: 'g1', change: 'list', listState: { hidden: true, revision: 1 } });
+    expect(getDraft(scope)).toBeUndefined();
+    expect(getAllDraftAttachmentUrls()).not.toContain(url);
+    stop();
+  });
+
   // Integration tier: disk and server can resolve in either order at cold startup.
   it('shows saved groups during a pending refresh and does not resurrect a fresh deletion', async () => {
     let finish!: (value: unknown) => void;

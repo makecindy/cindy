@@ -161,5 +161,41 @@
     "working": "Processando…",
     "worked": "Trabalhou por {{duration}}",
     "workDetails": "Detalhes do trabalho"
+  },
+  "teammateProcess": {
+    "record": "Atividade",
+    "operations": "Registro de atividades",
+    "elapsed": "Trabalhando há {{duration}}",
+    "took": "Levou {{duration}}",
+    "processing": "Trabalhando",
+    "worked": "Atividade",
+    "thinking": "Pensando",
+    "thought": "Pensou",
+    "failed_one": "{{count}} chamada falhou",
+    "failed_other": "{{count}} chamadas falharam",
+    "separator": ", ",
+    "actions": {
+      "running": {
+        "read": "Lendo arquivos",
+        "edit": "Editando arquivos",
+        "search": "Pesquisando",
+        "web": "Consultando a Web",
+        "command": "Executando comandos",
+        "tools": "Usando ferramentas",
+        "delegate": "Delegando trabalho",
+        "plan": "Atualizando o plano"
+      },
+      "done": {
+        "read": "Arquivos lidos",
+        "edit": "Arquivos editados",
+        "search": "Pesquisa concluída",
+        "web": "Web consultada",
+        "command": "Comandos executados",
+        "tools": "Ferramentas usadas",
+        "delegate": "Trabalho delegado",
+        "plan": "Plano atualizado"
+      }
+    },
+    "failed_many": "{{count}} chamadas falharam"
   }
 }

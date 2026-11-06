@@ -1,4 +1,13 @@
 {
+  "progress": {
+    "stop": "Parar"
+  },
+  "work": {
+    "queued": "Em fila {{count}}",
+    "active": "Em curso {{count}}",
+    "expand": "Expandir atividade dos colegas",
+    "collapse": "Recolher atividade dos colegas"
+  },
   "title": "Conversas de grupo",
   "memberSeparator": ", ",
   "memberCount_one": "{{count}} membro",
@@ -34,8 +43,10 @@
   },
   "mention": {
     "all": "Todos",
-    "allHint": "Todos respondem",
-    "label": "Mencionar um colega"
+    "allHint": "Apenas pessoas",
+    "label": "Mencionar um colega",
+    "allBots": "Todos os colegas",
+    "allBotsHint": "Apenas colegas"
   },
   "composer": {
     "label": "Mensagem da conversa de grupo",
@@ -153,7 +164,12 @@
         "details": "Volte a enviar a mensagem. Se continuar a falhar, verifique os registos e comunique o problema."
       }
     },
-    "runtimeFailureSetupHint": "Para alterar o modelo ou as definições, utilize o computador onde este colega é executado."
+    "runtimeFailureSetupHint": "Para alterar o modelo ou as definições, utilize o computador onde este colega é executado.",
+    "capability": {
+      "GROUP_AUTHORIZATION_REQUIRED": "{{name}} não pôde executar a ferramenta: a autorização do grupo expirou ou não permite esta ação. O proprietário do colega pode repetir o pedido neste grupo.",
+      "GROUP_AUTHORIZATION_UNAVAILABLE": "Não foi possível verificar a autorização de grupo de {{name}}, pelo que a ferramenta não foi executada. Tente novamente quando a ligação for restabelecida.",
+      "ATTACHMENTS_UNAVAILABLE": "Alguns anexos não foram entregues a {{name}} devido a uma falha na transferência ou ao limite de anexos. Reenvie os anexos necessários para este pedido."
+    }
   },
   "plan": {
     "intro_one": "É necessário {{count}} passo. Eis quem o executa:",
@@ -186,9 +202,25 @@
     "progressDone": "Concluídos {{done}} / {{total}}",
     "allDone": "Tudo concluído",
     "intro_many": "São necessários {{count}} passos. Eis quem faz o quê:",
-    "eyebrow_many": "Plano · {{count}} passos"
+    "eyebrow_many": "Plano · {{count}} passos",
+    "stepQueued": "À espera de início",
+    "stepExecuting": "Em execução",
+    "stepSkipped": "Ignorado",
+    "skippingTurn": "A saltar…",
+    "queueWaiting": "À espera que continues",
+    "skipTurnLabel": "Saltar {{name}}",
+    "stepSpoken": "Concluído",
+    "allTurns_one": "O {{count}} colega",
+    "allTurns_other": "Os {{count}} colegas",
+    "foldTurns": "Mostrar menos",
+    "allTurns_many": "Os {{count}} colegas",
+    "talkTitle": "Ouvir todos à vez",
+    "talkPending": "Não iniciado",
+    "skipTurn": "Saltar",
+    "queueEnded": "Ronda terminada"
   },
   "speaking": {
+    "queued": "Em fila",
     "stopping": "A parar…",
     "planning": "A dividir o trabalho…",
     "step": "A tratar do assunto…"
@@ -233,7 +265,7 @@
     "speakingMode": "Ordem de intervenção",
     "speakingModeAuto": "Automática",
     "speakingModeSequential": "Um de cada vez",
-    "speakingModeAutoNote": "Sem menções ou com @Everyone: pensam em simultâneo na primeira passagem e depois respondem um de cada vez. Os colegas mencionados respondem pela ordem das menções.",
+    "speakingModeAutoNote": "Sem menções ou com @Todos os colegas: primeiro pensam em simultâneo, depois respondem à vez. Se houver menções, seguem a ordem das menções.",
     "speakingModeSequentialNote": "Um colega intervém de cada vez e cada um vê as respostas anteriores.",
     "speakingModeSaveFailed": "Não foi possível guardar a ordem de intervenção. Tente novamente.",
     "setOrganizer": "Tornar organizador",
@@ -259,6 +291,19 @@
     "cloudStatus": {
       "loading": "A carregar definições…",
       "unavailable": "Não foi possível carregar as definições do grupo. Tente novamente."
+    },
+    "allowMentionAllBots": "Permitir @todos os colegas",
+    "allowMentionAllBotsHint": "Só o proprietário do grupo pode alterar. Todos os colegas podem responder; cuidado em grupos grandes. Não afeta a IA que responde em seu nome.",
+    "notifications": {
+      "title": "Notificações de mensagens",
+      "all": "Todas as mensagens",
+      "mentions": "Apenas menções",
+      "none": "Desativadas",
+      "allHint": "Receba notificações de mensagens do grupo e de novas respostas nos tópicos que segue.",
+      "mentionsHint": "Receba notificações quando alguém o mencionar, incluindo @todos. As atualizações da divisão do trabalho continuam a ser notificadas.",
+      "noneHint": "Desative todos os alertas do sistema deste grupo. As mensagens não lidas são mantidas.",
+      "saving": "A guardar…",
+      "saveFailed": "Não foi possível guardar as notificações. Tente novamente."
     }
   },
   "errors": {
@@ -283,7 +328,9 @@
     "quoteUnavailable": "A mensagem citada foi eliminada ou já não está visível. A citação foi removida. Envie novamente.",
     "lifecycleUnavailable": "O servidor ou computador atual ainda não suporta esta ação.",
     "groupDissolved": "Este grupo foi dissolvido. Ainda pode ler o histórico disponível.",
-    "lastOwner": "Transfira a propriedade ou dissolva este grupo antes de sair."
+    "lastOwner": "Transfira a propriedade ou dissolva este grupo antes de sair.",
+    "allBotsMentionDisabled": "O proprietário do grupo ainda não ativou @Todos os colegas.",
+    "turnAlreadyStarted": "Este colega já começou e não pode ser ignorado"
   },
   "followUp": {
     "next": "Plano · Próximo passo",
@@ -481,6 +528,7 @@
     "searchMembers": "Pesquisar membros",
     "membersNoMatch": "Nenhum membro corresponde a «{{query}}»",
     "you": "Eu",
+    "companionOf": "Companheiro de {{name}}",
     "teammateTag": "Colega",
     "paused": "Em pausa",
     "accessNone": "Apenas o proprietário",

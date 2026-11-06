@@ -15,7 +15,7 @@ import { toast } from '@/lib/toast';
 import { marketActionErrorMessage } from '../lib/marketErrors';
 import { PlatformTagSelector } from './PlatformTagSelector';
 import type { MarketCategory } from '../../../../shared/skillhubCategory';
-import { type SupportedLocale } from '../../../../shared/locale';
+import { isClassicalLocale, modernLocaleOf, type SupportedLocale } from '../../../../shared/locale';
 
 const DESCRIPTION_LIMIT = 2_000;
 const DISPLAY_NAME_LIMIT = 100;
@@ -127,9 +127,13 @@ export function MarketInfoEditDialog({
           displayName: displayName.trim(),
           summary: description,
           description,
-          contentLocale: (['zh-CN', 'zh-TW', 'en', 'ja', 'ko'] as readonly string[]).includes(i18n.resolvedLanguage ?? '')
-            ? i18n.resolvedLanguage as SupportedLocale
-            : 'en',
+          // The market only stores modern-language content; classical editions write their modern base.
+          contentLocale: (() => {
+            const language = isClassicalLocale(i18n.resolvedLanguage) ? modernLocaleOf(i18n.resolvedLanguage) : i18n.resolvedLanguage;
+            return (['zh-CN', 'zh-TW', 'en', 'ja', 'ko'] as readonly string[]).includes(language ?? '')
+              ? language as SupportedLocale
+              : 'en';
+          })(),
           tags: categorySlugs,
         },
       });

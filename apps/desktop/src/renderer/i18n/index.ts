@@ -19,6 +19,10 @@ import ptPTCommon from './locales/pt-PT/common.json';
 import ptPTAiRename from './locales/pt-PT/aiRename.json';
 import ptBRCommon from './locales/pt-BR/common.json';
 import ptBRAiRename from './locales/pt-BR/aiRename.json';
+import lzhCommon from './locales/zh-Hant-x-lzh/common.json';
+import lzhAiRename from './locales/zh-Hant-x-lzh/aiRename.json';
+import lzhHansCommon from './locales/zh-Hans-x-lzh/common.json';
+import lzhHansAiRename from './locales/zh-Hans-x-lzh/aiRename.json';
 import i18n from 'i18next';
 import { initReactI18next } from 'react-i18next';
 import { BRAND_NAME } from '@cindy/maker-shared/branding';
@@ -53,6 +57,26 @@ const resources = {
   'de': { common: deCommon, aiRename: deAiRename },
   'pt-PT': { common: ptPTCommon, aiRename: ptPTAiRename },
   'pt-BR': { common: ptBRCommon, aiRename: ptBRAiRename },
+  'zh-Hant-x-lzh': {
+    common: {
+      ...lzhCommon,
+      chatgptAuthRecovery: {
+        ...lzhCommon.chatgptAuthRecovery,
+        devWriteBlocked: '開發之境，例以唯讀共用此機之 ChatGPT 登入，不得發起登入，亦不得改寫憑證。欲試 OAuth，唯執行：pnpm restart:desktop:remote -- --isolated-auth --isolated。指令碼驗明獨立沙箱後，自會開放寫入，毋須手設環境變數。',
+      },
+    },
+    aiRename: lzhAiRename,
+  },
+  'zh-Hans-x-lzh': {
+    common: {
+      ...lzhHansCommon,
+      chatgptAuthRecovery: {
+        ...lzhHansCommon.chatgptAuthRecovery,
+        devWriteBlocked: '开发之境，例以只读共用此机之 ChatGPT 登录，不得发起登录，亦不得改写凭证。欲试 OAuth，唯执行：pnpm restart:desktop:remote -- --isolated-auth --isolated。脚本验明独立沙箱后，自会开放写入，毋须手设环境变量。',
+      },
+    },
+    aiRename: lzhHansAiRename,
+  },
   en: {
     common: {
       ...enCommon,
@@ -112,7 +136,12 @@ void i18n.use(initReactI18next).init({
   // 翻译资源热更新会重新执行本模块，不能把用户已选语言重置为默认英文。
   lng: getEffectiveLocale(),
   // 缺 key 回退英文。
-  fallbackLng: { default: [DEFAULT_LOCALE] },
+  // 文言版缺 key 先落其现代底本（繁體 / 简体），再落英文。
+  fallbackLng: {
+    'zh-Hant-x-lzh': ['zh-TW', DEFAULT_LOCALE],
+    'zh-Hans-x-lzh': ['zh-CN', DEFAULT_LOCALE],
+    default: [DEFAULT_LOCALE],
+  },
   defaultNS: 'common',
   ns: ['common', 'aiRename'],
   interpolation: {

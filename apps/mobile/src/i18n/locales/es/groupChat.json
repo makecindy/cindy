@@ -1,4 +1,13 @@
 {
+  "progress": {
+    "stop": "Detener"
+  },
+  "work": {
+    "queued": "En cola {{count}}",
+    "active": "En curso {{count}}",
+    "expand": "Expandir actividad de compañeros",
+    "collapse": "Contraer actividad de compañeros"
+  },
   "title": "Chats grupales",
   "memberSeparator": ", ",
   "memberCount_one": "Miembro de {{count}}",
@@ -34,8 +43,10 @@
   },
   "mention": {
     "all": "todos",
-    "allHint": "Todos responden",
-    "label": "Menciona a un compañero"
+    "allHint": "Solo personas",
+    "label": "Menciona a un compañero",
+    "allBots": "Todos los compañeros",
+    "allBotsHint": "Solo compañeros"
   },
   "composer": {
     "label": "Mensaje de chat grupal",
@@ -153,7 +164,12 @@
         "details": "Envía tu mensaje nuevamente. Si aún falla, verifique los registros e informe el problema."
       }
     },
-    "runtimeFailureSetupHint": "Para cambiar el modelo o la configuración, use la computadora donde se ejecuta este compañero de equipo."
+    "runtimeFailureSetupHint": "Para cambiar el modelo o la configuración, use la computadora donde se ejecuta este compañero de equipo.",
+    "capability": {
+      "GROUP_AUTHORIZATION_REQUIRED": "{{name}} no pudo ejecutar la herramienta: la autorización del grupo ha caducado o no permite esta acción. La persona propietaria del compañero puede volver a solicitarla en este grupo.",
+      "GROUP_AUTHORIZATION_UNAVAILABLE": "No se pudo verificar la autorización de grupo de {{name}}, por lo que la herramienta no se ejecutó. Vuelve a intentarlo cuando se restablezca la conexión.",
+      "ATTACHMENTS_UNAVAILABLE": "Algunos adjuntos no llegaron a {{name}} por un fallo de descarga o por el límite de adjuntos. Vuelve a enviar los archivos necesarios para esta solicitud."
+    }
   },
   "plan": {
     "intro_one": "Esto lleva el paso {{count}}. Aquí está quién lo hace:",
@@ -186,9 +202,25 @@
     "progressDone": "Hecho {{done}} / {{total}}",
     "allDone": "todo hecho",
     "intro_many": "Esto requiere pasos {{count}}. Aquí está quién hace qué:",
-    "eyebrow_many": "Plan · Pasos {{count}}"
+    "eyebrow_many": "Plan · Pasos {{count}}",
+    "stepQueued": "Esperando para empezar",
+    "stepExecuting": "En ejecución",
+    "stepSkipped": "Omitido",
+    "skippingTurn": "Omitiendo…",
+    "queueWaiting": "Esperando que continúes",
+    "skipTurnLabel": "Omitir {{name}}",
+    "stepSpoken": "Listo",
+    "allTurns_one": "El {{count}} compañero",
+    "allTurns_other": "Los {{count}} compañeros",
+    "foldTurns": "Mostrar menos",
+    "allTurns_many": "Los {{count}} compañeros",
+    "talkTitle": "Escuchar a todos por turnos",
+    "talkPending": "Sin iniciar",
+    "skipTurn": "Omitir",
+    "queueEnded": "Ronda terminada"
   },
   "speaking": {
+    "queued": "En cola",
     "stopping": "Parando…",
     "planning": "Dividiendo el trabajo…",
     "step": "Trabajando en ello…"
@@ -233,7 +265,7 @@
     "speakingMode": "orden de habla",
     "speakingModeAuto": "Automático",
     "speakingModeSequential": "De uno en uno",
-    "speakingModeAutoNote": "Sin menciones o @Todos: piense simultáneamente en la primera pasada y luego responda uno por uno. Los compañeros de equipo mencionados responden en orden de mención.",
+    "speakingModeAutoNote": "Sin menciones o con @Todos los compañeros: primero piensan a la vez y luego responden uno a uno. Si mencionas compañeros, siguen el orden de mención.",
     "speakingModeSequentialNote": "Un compañero de equipo habla a la vez y cada uno ve las respuestas que tiene delante.",
     "speakingModeSaveFailed": "No se pudo guardar el orden de habla. Intentar otra vez.",
     "setOrganizer": "Hacer organizador",
@@ -259,6 +291,19 @@
     "cloudStatus": {
       "loading": "Cargando configuración…",
       "unavailable": "No se pudo cargar la configuración del grupo. Intentar otra vez."
+    },
+    "allowMentionAllBots": "Permitir @todos los compañeros",
+    "allowMentionAllBotsHint": "Solo el dueño del grupo puede cambiarlo. Todos los compañeros podrían responder; cuidado en grupos grandes. No afecta a la IA que responde por ti.",
+    "notifications": {
+      "title": "Notificaciones de mensajes",
+      "all": "Todos los mensajes",
+      "mentions": "Solo menciones",
+      "none": "Desactivadas",
+      "allHint": "Recibe avisos de los mensajes del grupo y las nuevas respuestas en los hilos que sigues.",
+      "mentionsHint": "Recibe avisos cuando te mencionen, también con @todos. Las actualizaciones de los repartos de trabajo seguirán generando avisos.",
+      "noneHint": "Desactiva todos los avisos del sistema de este grupo. Los mensajes no leídos se conservan.",
+      "saving": "Guardando…",
+      "saveFailed": "No se pudieron guardar las notificaciones. Inténtalo de nuevo."
     }
   },
   "errors": {
@@ -283,7 +328,9 @@
     "quoteUnavailable": "El mensaje citado fue eliminado o ya no es visible. La cita fue eliminada. Enviar de nuevo.",
     "lifecycleUnavailable": "El servidor o computadora actual aún no admite esta acción.",
     "groupDissolved": "Este grupo ha sido disuelto. Aún puedes leer el historial disponible.",
-    "lastOwner": "Transfiera la propiedad o disuelva este grupo antes de irse."
+    "lastOwner": "Transfiera la propiedad o disuelva este grupo antes de irse.",
+    "allBotsMentionDisabled": "El propietario del grupo aún no ha habilitado @Todos los compañeros.",
+    "turnAlreadyStarted": "Este compañero ya ha empezado y no se puede omitir"
   },
   "followUp": {
     "next": "Planificar · Siguiente paso",
@@ -481,6 +528,7 @@
     "searchMembers": "Buscar miembros",
     "membersNoMatch": "Ningún miembro coincide con “{{query}}”",
     "you": "Tú",
+    "companionOf": "Compañero de {{name}}",
     "teammateTag": "Compañero",
     "paused": "En pausa",
     "accessNone": "Solo su propietario",

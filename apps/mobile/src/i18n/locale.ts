@@ -10,8 +10,23 @@
  */
 
 /** UI 支持的具体语言。 */
-export const SUPPORTED_LOCALES = ["zh-CN", "zh-TW", "en", "ja", "ko", "es", "fr", "de", "pt-PT", "pt-BR"] as const;
+export const SUPPORTED_LOCALES = ["zh-CN", "zh-TW", "en", "ja", "ko", "es", "fr", "de", "pt-PT", "pt-BR", "zh-Hant-x-lzh", "zh-Hans-x-lzh"] as const;
 export type SupportedLocale = (typeof SUPPORTED_LOCALES)[number];
+
+/** 文言等古典版本:只能手动选择;日期格式、服务端 locale 与内容语言按其现代底本(与 desktop 一致)。 */
+export const CLASSICAL_LOCALE_BASE = {
+  "zh-Hant-x-lzh": "zh-TW",
+  "zh-Hans-x-lzh": "zh-CN",
+} as const satisfies Partial<Record<SupportedLocale, SupportedLocale>>;
+export type ClassicalLocale = keyof typeof CLASSICAL_LOCALE_BASE;
+
+export function isClassicalLocale(locale: string | null | undefined): locale is ClassicalLocale {
+  return typeof locale === "string" && Object.prototype.hasOwnProperty.call(CLASSICAL_LOCALE_BASE, locale);
+}
+
+export function modernLocaleOf(locale: SupportedLocale): SupportedLocale {
+  return isClassicalLocale(locale) ? CLASSICAL_LOCALE_BASE[locale] : locale;
+}
 
 /** 用户偏好:'system' = 跟随系统语言,由本模块在运行时解析。 */
 export type LocalePreference = SupportedLocale | "system";
@@ -35,6 +50,11 @@ export function resolveSystemLocale(
   languageTag: string | null | undefined,
 ): SupportedLocale {
   const tag = languageTag?.trim().toLowerCase().replace(/_/g, "-") ?? "";
+  // An app locale passed back through here keeps its identity, so the classical
+  // editions (zh-Hant-x-lzh / zh-Hans-x-lzh) do not fold into zh-TW / zh-CN.
+  // OS language tags never carry these private-use subtags.
+  const exact = SUPPORTED_LOCALES.find((locale) => locale.toLowerCase() === tag);
+  if (exact) return exact;
   const language = tag.split("-")[0];
   if (tag.startsWith("zh")) {
     if (tag.includes("hans")) return "zh-CN";
