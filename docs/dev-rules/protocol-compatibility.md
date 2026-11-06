@@ -38,6 +38,8 @@ Desktop 与 Mobile 明确标注估算和排除项。旧端忽略可选字段，�
 - 客户端端点清单新增 `feishuHookWsUrl`（`wss:`），登记为跨区域端点：服务只在海外部署一套，
   两份区域清单都指向 `cindy.app`。服务部署前正式清单不写该字段，入口不显示。
 
+飞书群上下文由服务端组装进 `task.dispatch.prompt`（含 `<thread_context>`、引用与当前发言人）；`source.threadContext` 同时供来源卡展示，客户端继续保留服务端完整 prompt，不再从展示元数据重复注入。X 的客户端 prompt 组装只作用于 X，不能据此推断其它渠道丢失上下文。
+
 多设备（2026-11-07）：同一应用下，同一飞书账号可同时保留多个设备的 `confirmed` 绑定；新绑定默认成为工作电脑，重连不改变选择。工作电脑通过机器人菜单 `device` / `/device` 选择，绑定成功后机器人私聊说明用法；不新增 wire 字段。服务端内部会话代次、工作目录与偏好按设备绑定隔离，外部 lane 格式仍相同（设备各自存本地任务）。选择仅影响后续消息，运行中任务沿原设备继续；离线 / 繁忙时拒绝，不改派、不补发。`superseded/rebound` 仅表示同一设备的旧账号绑定被替换；其它电脑的绑定不失效。桌面解绑只影响本机。
 
 客户端接线：desktop 的飞书线 hello 只声明 `provider-bind-v1`、`provider-prefs-v1` 与 `provider:feishu`
