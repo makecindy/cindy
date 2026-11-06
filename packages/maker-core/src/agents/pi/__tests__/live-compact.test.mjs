@@ -48,11 +48,13 @@ const FAKE_VENDOR_TOKENS = [
 ];
 // 长载荷 JWT:段长不设上界,载荷接近 4K 也必须整条打码(设上界会整条跳过)。
 const FAKE_LONG_JWT = ['eyJhbGciOiJSUzI1NiJ9', 'BD'.repeat(1945), 'c2lnbmF0dXJlLXNpZ25hdHVyZQ'].join('.');
+// 短载荷 JWT:claims 是 `{}` 时紧凑载荷只有 `e30` 三个字符,载荷下限设高了会整条漏掉。
+const FAKE_SHORT_JWT = ['eyJhbGciOiJub25lIn0', 'e30', 'c2lnbmF0dXJlMTIzNDU2'].join('.');
 const FAKE_BRACKET_PASSWORD = ['abc', '[defghijklmnop'].join('');
 
 const extensionModule = await import('../../../../extensions/live-compact/index.ts');
 const registerLiveCompact = extensionModule.default;
-const { selectNewestChunk, balanceIndexes, buildCard, redactSecrets, attachBackupHint, isToolFailure, rotateShadow, pruneShadowSessions, spineRoot, keptToolRounds, chooseKeptSpan, reservedCutEnd, toolEvidenceLine, pointerFor, captureToolResult, planRawEntry, commitRawEntry, verifiedRaw, resolveEngine, resolveSpineEngine, selectCutIndexes, pointerSpanAllowed, pointerOnlyText, spineEntries, writeOwner, orderedDrainDrafts, withBackupHint, withoutFullBackupClaim, backupHint, discardRawSnapshots, lastCompactionEntry, inCooldown, resolveCooldownMs, providerURLFromPatch, resolveProviderBaseURL, spanHidesCallArgs } = extensionModule;
+const { selectNewestChunk, balanceIndexes, buildCard, redactSecrets, attachBackupHint, isToolFailure, rotateShadow, pruneShadowSessions, spineRoot, keptToolRounds, chooseKeptSpan, reservedCutEnd, toolEvidenceLine, pointerFor, captureToolResult, planRawEntry, commitRawEntry, verifiedRaw, resolveEngine, resolveSpineEngine, selectCutIndexes, pointerSpanAllowed, pointerOnlyText, spineEntries, writeOwner, orderedDrainDrafts, withBackupHint, withoutFullBackupClaim, backupHint, discardRawSnapshots, lastCompactionEntry, inCooldown, resolveCooldownMs, providerURLFromPatch, resolveProviderBaseURL, spanHidesCallArgs, callArgsHidden } = extensionModule;
 
 let seq = 0;
 function entry(role, text, extra = {}) {
@@ -197,6 +199,8 @@ describe('live compact spine selection', () => {
     ];
     // 厂商前缀表（gitleaks 公开前缀）:一张表覆盖完,不用每轮 review 补一个。
     for (const token of FAKE_VENDOR_TOKENS) positives.push([`token: ${token}`, token]);
+    // 短载荷(claims = {})与长载荷 JWT 两头都要覆盖:下限高会漏短的,上限低会漏长的。
+    positives.push([`echo ${FAKE_SHORT_JWT}`, FAKE_SHORT_JWT], [`echo ${FAKE_LONG_JWT}`, FAKE_LONG_JWT]);
     for (const [text, secret] of positives) {
       const out = redactSecrets(text);
       expect(out, text).not.toContain(secret);
@@ -228,18 +232,21 @@ describe('live compact spine selection', () => {
 
   it('stays linear on long runs that look like credential prefixes', () => {
     // 起始边界被删掉的话,128K 连续大写会让这条规则跑 25 秒(实测),而它在同步的
-    // settle 钩子里。阈值给到 2 秒:线性实现 <10ms,只有退化成 O(n²) 才会超。
+    // settle 钩子里。阈值 300ms:全部线性实现实测 <25ms(最慢是 360K 的短 JWT 约 10ms),
+    // 留十倍余量,同时能把 300ms 级的平方退化也抓出来(2 秒阈值抓不到)。
     const cases = [
       'A'.repeat(128000) + ' padding text without any separator',
       // JWT 规则的正文类包含 `-`:起始边界没把 `-` 一起排除时,每个 `eyJ` 都会把剩余全文
       // 吃完再回溯找 `.`(240K 实测 5.7 秒),这条盯的就是它。
       'eyJabcdefghijk-'.repeat(16000),
       'eyJ' + 'A'.repeat(128000),
+      // 无终结符的 PEM 开始标记重复出现:惰性 [\s\S]*? 会从每个起点重扫到文末(140K 实测 300ms)。
+      ('-----' + 'BEGIN PRIVATE KEY' + '-----' + String.fromCharCode(10)).repeat(2000),
     ];
     for (const text of cases) {
       const start = Date.now();
       redactSecrets(text);
-      expect(Date.now() - start, text.slice(0, 24)).toBeLessThan(2000);
+      expect(Date.now() - start, text.slice(0, 24)).toBeLessThan(300);
     }
   });
 
@@ -268,6 +275,11 @@ describe('live compact spine selection', () => {
     // 连接串的主机与用户名要留着,否则模型无法判断是哪套库。
     expect(out).toContain('postgres://cindy:');
     expect(out).toContain('@db.internal');
+    // 输出被截断、只剩开始标记的半块同样是密钥正文:不能因为没等到 END 就整段放过。
+    const cut = [pemEdge('BEGIN RSA'), 'b3BlbnNzaC1rZXk-late'].join(String.fromCharCode(10));
+    const cutOut = redactSecrets(cut);
+    expect(cutOut).not.toContain('b3BlbnNzaC1rZXk-late');
+    expect(cutOut).toContain('[REDACTED PRIVATE KEY]');
   });
 
   it('reports dropped hard lines instead of silently losing them', () => {
@@ -406,10 +418,17 @@ describe('live compact card roles and tool excerpts (1.0.3-1.0.5)', () => {
   it('asks for the backup pointer when a cut span hides its call arguments', () => {
     // 卡片只写 callCommand(命令或工具名):write/edit 这类带路径与正文的调用切走后,
     // 后续轮次看不到写入目标与内容,可能重复执行副作用 —— 这类 span 要给出备份指针。
-    const meta = (name, command) => new Map([['c1', { name, command }]]);
+    const meta = (name, command, hiddenArgs = false) => new Map([['c1', { name, command, hiddenArgs }]]);
     expect(spanHidesCallArgs([{ callMeta: meta('bash', 'npm test') }])).toBe(false);
     expect(spanHidesCallArgs([{ callMeta: meta('write', 'write') }])).toBe(true);
+    // 命令被换行或 80 字截断时,卡片只留前半段;后半段同样没出处。
+    expect(spanHidesCallArgs([{ callMeta: meta('bash', 'npm test', true) }])).toBe(true);
     expect(spanHidesCallArgs([])).toBe(false);
+    // 判定本身:没有 command 参数、或参数被截断都算「参数被隐藏」。
+    expect(callArgsHidden({ command: 'npm test' })).toBe(false);
+    expect(callArgsHidden({ command: 'line one' + String.fromCharCode(10) + 'line two' })).toBe(true);
+    expect(callArgsHidden({ command: 'x'.repeat(120) })).toBe(true);
+    expect(callArgsHidden({ file_path: '/tmp/a' })).toBe(true);
   });
 
   it('counts a hard fact only when it comes from the same source', () => {

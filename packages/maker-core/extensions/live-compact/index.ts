@@ -72,8 +72,9 @@
  *      目录继承 `%APPDATA%` 的 ACL 已是 SYSTEM / Administrators / 当前用户三项,没有
  *      Users / Authenticated Users / Everyone,与上游 `/grant:r <user>:F` + `/inheritance:r`
  *      的落点一致;目录本身还在按账号隔离的 userData 下,备份文件仍按 0600 写。
- *   4) 切范围里的调用参数进不了卡片时(write/edit/read 这类没有 `command` 参数的调用,
- *      卡片只写工具名),本仓会把该 span 的备份指针进卡片;上游只看工具结果被省略才给指针。
+ *   4) 切范围里的调用参数进不了卡片时(没有 `command` 参数、或命令被换行/80 字截断 ——
+ *      卡片只写首行前 80 字,write/edit/read 更是只有工具名),本仓会把该 span 的备份指针
+ *      进卡片;上游只看工具结果被省略才给指针。
  *      理由:切走之后目标文件与写入内容就再没有下文,后续轮次可能重复执行副作用。
  *      代价是这类 span 的卡片多一行指针,其余格式不变。
  *
@@ -393,6 +394,18 @@ function parseToolArguments(raw: any): any {
   } catch {
     return {};
   }
+}
+
+/**
+ * 卡片里的调用证据只有 callCommand(首行、前 80 字)。这个调用的参数到底有没有完整出现在
+ * 卡片里:没有 command 参数(只写了工具名)、或者被换行/80 字截断的,都算没出现 ——
+ * 切走之后这些参数就再没有下文(可能被重复执行的写操作、被截掉的命令后半段)。
+ */
+export function callArgsHidden(raw: any): boolean {
+  const args = parseToolArguments(raw);
+  const command = String(args.command || args.cmd || "");
+  if (!command) return true;
+  return command.trim() !== command.split("\n")[0].trim().slice(0, 80);
 }
 
 export function callCommand(name: any, raw: any): string {
@@ -967,7 +980,7 @@ interface JobRecord {
  */
 export function collectJobs(entries: SpineEntry[]): JobRecord[] {
   const jobs = new Map<string, JobRecord>();
-  const meta = new Map<string, { name: string; command: string; filePath: string; jobId: string }>();
+  const meta = new Map<string, { name: string; command: string; filePath: string; jobId: string; hiddenArgs: boolean }>();
   for (const entry of entries || []) {
     for (const [id, info] of entry.callMeta ?? []) meta.set(id, info);
   }
@@ -1443,7 +1456,7 @@ interface SpineEntry {
   /** Tool call ids answered by this entry (toolResult.toolCallId). */
   results: string[];
   /** 1.0.6: 调用编号 → 调用元数据(工具名/命令/路径/任务号),从 assistant toolCall 块取。 */
-  callMeta: Map<string, { name: string; command: string; filePath: string; jobId: string }>;
+  callMeta: Map<string, { name: string; command: string; filePath: string; jobId: string; hiddenArgs: boolean }>;
   /** 1.0.6: 这个条目属于第几轮(以 user 消息计数)。 */
   turn: number;
   /**
@@ -1500,7 +1513,14 @@ function estimateTokens(message: any): number {
 const REDACT_RULES: Array<[RegExp, string]> = [
   // PEM 私钥整块必须**排在最前**:键名规则会把 `private_key="-----BEGIN` 先换成 `[REDACTED]`,
   // 之后整块规则就认不出开始标记,密钥正文会原样留下。先按块整体吃掉,再让键名规则收尾。
-  [/-----BEGIN [A-Z ]*PRIVATE KEY-----[\s\S]*?-----END [A-Z ]*PRIVATE KEY-----/g, "[REDACTED PRIVATE KEY]"],
+  // 段的长度必须有上界:无终结符的 `-----BEGIN` 重复出现时,惰性 `[\s\S]*?` 会从每个起点
+  // 重扫到文末(140K / 2000 个标记实测 300ms,退化成平方),而这条规则跑在同步的 settle 钩子里。
+  // 真密钥 PEM 最多几 KB(RSA 4096 约 3.2K),8192 足够。正文只走 base64/头行字符,
+  // 这样「BEGIN 后面紧跟另一个 BEGIN」只花一步就放弃,不会每个标记都白扫 8K。
+  [/-----BEGIN [A-Z ]*PRIVATE KEY-----[A-Za-z0-9+/=:,\s]{0,8192}?-----END [A-Z ]*PRIVATE KEY-----/g, "[REDACTED PRIVATE KEY]"],
+  // 只留开始标记(输出被截断)的那半块同样是密钥正文:上一条只吃有终结符的块,这里把没等到
+  // 终结符的半块一并打掉 —— 否则截断得越巧,密钥越完整地留在备份里。长度同样有上界。
+  [/-----BEGIN [A-Z ]*PRIVATE KEY-----[A-Za-z0-9+/=:,\s]{0,8192}/g, "[REDACTED PRIVATE KEY]"],
   // HTTP 认证头要先单独处理:`Authorization: Basic dXNlcjpwYXNz` 的值不是"键名=值"形态,
   // 键名规则只认到方案名(不足 8 字),base64 里的可复用凭证会原样留下。Bearer 仍由下面那条兜。
   // 冒号后可能是引号(JSON `{"Authorization":"Basic …"}`),方案后面也可能是 Digest 那种
@@ -1553,8 +1573,9 @@ const REDACT_RULES: Array<[RegExp, string]> = [
   // JWT:三段都带固定头部形状,宽松的 base64 不会命中。
   // 起始边界必须与正文字符类一致(`-`/`_` 也要排除):类里包含 `-` 时,`eyJabcdefghijk-`
   // 这种重复前缀以前会让每个 `eyJ` 都把剩余全文吃完再回溯找 `.`(240K 实测 5.7 秒,
-  // 卡在同步的 settle 钩子里)。段长**不设上界** —— 上界会让长载荷 JWT 整条漏掉打码。
-  [/(?<![A-Za-z0-9_-])eyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}/g, "[REDACTED]"],
+  // 卡在同步的 settle 钩子里)。段长**不设上界** —— 上界会让长载荷 JWT 整条漏掉打码;
+  // 载荷下限也不能高:`{}` 的紧凑形式是 `e30`,只有 3 个字符。
+  [/(?<![A-Za-z0-9_-])eyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{2,}\.[A-Za-z0-9_-]+/g, "[REDACTED]"],
   // 连接串里内嵌的密码:postgres://user:pass@host → 只打码密码段。
   // 起始边界同样是性能红线:没有它,/i 下连续 [a-z0-9+.-] 类字符段(含大写)会从每个
   // 起点贪吃再逐位回溯,128K 要 17 秒(实测);有它每个 scheme 起点只试一次。
@@ -2030,7 +2051,7 @@ export function spineEntries(contextEntries: any[]): SpineEntry[] {
     let est = 0;
     const calls: string[] = [];
     const results: string[] = [];
-    const callMeta = new Map<string, { name: string; command: string; filePath: string; jobId: string }>();
+    const callMeta = new Map<string, { name: string; command: string; filePath: string; jobId: string; hiddenArgs: boolean }>();
     let role = "";
     let opaque = false;
     for (const message of messages) {
@@ -2054,6 +2075,7 @@ export function spineEntries(contextEntries: any[]): SpineEntry[] {
               command: callCommand(block.name, block.arguments),
               filePath: callFilePath(block.arguments),
               jobId: callJobId(block.arguments),
+              hiddenArgs: callArgsHidden(block.arguments),
             });
           }
         }
@@ -2339,7 +2361,7 @@ export function captureRawEntries(state: SpineState, entries: SpineEntry[]): Map
 /** 只规划不写盘:返回值里 pending=true 的记录由 commitRawEntry 落盘。 */
 export function planRawEntries(state: SpineState, entries: SpineEntry[]): Map<string, RawRecord> {
   const dir = shadowDirectory(state.key);
-  const callIndex = new Map<string, { name: string; command: string; filePath: string; jobId: string }>();
+  const callIndex = new Map<string, { name: string; command: string; filePath: string; jobId: string; hiddenArgs: boolean }>();
   for (const entry of entries) {
     for (const [id, info] of entry.callMeta ?? []) callIndex.set(id, info);
   }
@@ -2370,7 +2392,7 @@ export function planRawEntries(state: SpineState, entries: SpineEntry[]): Map<st
 function rawPlanner(state: SpineState, entries: SpineEntry[]) {
   const dir = shadowDirectory(state.key);
   const cache = new Map<string, RawRecord>();
-  let index: Map<string, { entry: SpineEntry; call?: { name: string; command: string; filePath: string; jobId: string } }> | null = null;
+  let index: Map<string, { entry: SpineEntry; call?: { name: string; command: string; filePath: string; jobId: string; hiddenArgs: boolean } }> | null = null;
   const lookup = (id: string): RawRecord | undefined => {
     const hit = cache.get(id);
     if (hit) return hit;
@@ -2501,7 +2523,7 @@ export function selectNewestChunk(
   }
 
   // 调用元数据在 assistant 条目上,结果条目只有 toolCallId:建一次全量索引。
-  const callIndex = new Map<string, { name: string; command: string; filePath: string; jobId: string }>();
+  const callIndex = new Map<string, { name: string; command: string; filePath: string; jobId: string; hiddenArgs: boolean }>();
   for (const entry of entries) {
     for (const [id, info] of entry.callMeta ?? []) callIndex.set(id, info);
   }
@@ -2739,10 +2761,10 @@ function turnGrowthFor(key: string): { last: number | null; max: number } {
 
 /** 切范围里有调用参数进不了卡片(卡片只写 callCommand:命令或退化成工具名)。 */
 export function spanHidesCallArgs(
-  entries: Array<{ callMeta?: Map<string, { name: string; command: string }> }>,
+  entries: Array<{ callMeta?: Map<string, { hiddenArgs?: boolean; name: string; command: string }> }>,
 ): boolean {
   return (entries || []).some((entry) =>
-    [...(entry?.callMeta?.values() ?? [])].some((meta) => meta.command === meta.name),
+    [...(entry?.callMeta?.values() ?? [])].some((meta) => meta.hiddenArgs === true || meta.command === meta.name),
   );
 }
 
