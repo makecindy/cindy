@@ -9,25 +9,37 @@
  * - 提前那次已经落定:照常重新执行。提前那次可能在任何窗口挂载、订阅登录态推送之前
  *   就结束;它之后的广播(例如冷启动门超时后的迟到登录)没人收到,复用旧结果会让窗口
  *   停在过期状态。重新执行拿的是当下状态(已登录时走进程内快路径,不发网络请求)。
+ *   这种情况下提前那次自己的登录广播同样没人收到,`settledUnobserved()` 让调用方补发。
  * - renderer 先到(没有提前调用):与原来一样直接执行,之后的 `start()` 不再发起。
  */
-export interface StartupInFlightCall<T> {
-  /** 登记实际执行体,返回给 IPC 注册用的处理函数。 */
-  handle(run: () => Promise<T>): () => Promise<T>;
+export interface StartupInFlightCall<T, E> {
+  /**
+   * 登记实际执行体,返回给 IPC 注册用的处理函数。提前发起时执行体收到的 event 为
+   * undefined,renderer 调用时为该次 IPC 的 event。
+   */
+  handle(run: (event?: E) => Promise<T>): (event: E) => Promise<T>;
   /** 主进程提前发起;只生效一次,调用方已先到或执行体未登记时不做事。 */
   start(): boolean;
+  /** 提前那次已落定,且在途期间没有任何调用方接上(它的广播可能没人收到)。 */
+  settledUnobserved(): boolean;
 }
 
-export function createStartupInFlightCall<T>(): StartupInFlightCall<T> {
-  let run: (() => Promise<T>) | null = null;
+export function createStartupInFlightCall<T, E = unknown>(): StartupInFlightCall<T, E> {
+  let run: ((event?: E) => Promise<T>) | null = null;
   let started = false;
   let inFlight: Promise<T> | null = null;
+  let joinedInFlight = false;
+  let unobserved = false;
   return {
     handle(nextRun) {
       run = nextRun;
-      return () => {
+      return (event) => {
         started = true;
-        return inFlight ?? nextRun();
+        if (inFlight) {
+          joinedInFlight = true;
+          return inFlight;
+        }
+        return nextRun(event);
       };
     },
     start() {
@@ -36,11 +48,14 @@ export function createStartupInFlightCall<T>(): StartupInFlightCall<T> {
       const call = run();
       inFlight = call;
       const settle = (): void => {
-        if (inFlight === call) inFlight = null;
+        if (inFlight !== call) return;
+        inFlight = null;
+        unobserved = !joinedInFlight;
       };
       // 同时充当提前调用的 rejection 处理:失败交给接上的调用方或下一次执行去面对。
       call.then(settle, settle);
       return true;
     },
+    settledUnobserved: () => unobserved,
   };
 }
