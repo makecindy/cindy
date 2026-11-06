@@ -601,7 +601,7 @@ export function createContextOverflowRollover(deps: ContextOverflowRolloverDeps)
     /** 产生该终态错误的 turn 身份：区分「同一轮的重复投递」与「重放后的新一轮失败」。 */
     turnIdentity?: { instanceId?: string; generation?: number },
   ): Promise<boolean>;
-  prepareUnhealthySession(sessionId: string): Promise<boolean>;
+  prepareUnhealthySession(sessionId: string, outboundUserClientId?: string): Promise<boolean>;
   prepareNativeSessionRecovery(
     sessionId: string,
     // null is an explicit Bot restart: keep its route, including before the first native handle.
@@ -1083,7 +1083,11 @@ export function createContextOverflowRollover(deps: ContextOverflowRolloverDeps)
     return 'rebuilt';
   };
 
-  const runPrepare = async (sessionId: string, signal: AbortSignal): Promise<boolean> => {
+  const runPrepare = async (
+    sessionId: string,
+    signal: AbortSignal,
+    outboundUserClientId?: string,
+  ): Promise<boolean> => {
     await deps.drainPersistQueue();
     const sessionRow = await deps.getSessionRow(sessionId);
     if (!sessionRow || sessionRow.status === 'deleted') return false;
@@ -1159,11 +1163,13 @@ export function createContextOverflowRollover(deps: ContextOverflowRolloverDeps)
     const rebuildReason: ContextRebuildReason = isPiPromptRpcTimeoutError(lastError)
       ? 'pi-prompt-timeout'
       : 'context-overflow';
-    // 待发出/失败的 user 还会由本次 send 或 Retry 再 wire 一次，交接里不能带。
+    // Pi 字节超限后，排队的新消息可能还没落库。只有本次明确会发送同一条 user，
+    // 才把它从交接中省略，避免跟发的新消息丢掉上一条失败请求。
     // 已完成的最后一轮（后面有非 error）要留在交接里。
     // lastUser 若不在 handoff 窗口里（index < 0），窗口全是其后的 tool/assistant，算已完成。
     const pendingOutbound =
       lastUserIndex >= 0 &&
+      (!piByteRecoveryFailed || lastUser.clientId === outboundUserClientId) &&
       source.slice(lastUserIndex + 1).every((message) => message.role === 'error');
     const handoffMessages = (
       pendingOutbound && lastUserIndex >= 0 ? source.slice(0, lastUserIndex) : source
@@ -1342,12 +1348,14 @@ export function createContextOverflowRollover(deps: ContextOverflowRolloverDeps)
       }
     },
 
-    async prepareUnhealthySession(sessionId: string): Promise<boolean> {
+    async prepareUnhealthySession(sessionId: string, outboundUserClientId?: string): Promise<boolean> {
       if (inFlight.has(sessionId)) return false;
       const controller = new AbortController();
       inFlight.set(sessionId, controller);
       try {
-        return await deps.withCloseSuppressed(sessionId, () => runPrepare(sessionId, controller.signal));
+        return await deps.withCloseSuppressed(
+          sessionId, () => runPrepare(sessionId, controller.signal, outboundUserClientId),
+        );
       } catch (error) {
         deps.log.warn('unhealthy native session prepare failed', {
           sessionId,

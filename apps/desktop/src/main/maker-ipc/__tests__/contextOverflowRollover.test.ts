@@ -1853,6 +1853,21 @@ describe('createContextOverflowRollover', () => {
     expect(deps.replayUserMessage).not.toHaveBeenCalled();
   });
 
+  it.each([false, true])('keeps the failed Pi 413 request for a follow-up (already persisted=%s)', async persisted => {
+    const deps = makeDeps([
+      msg('user', '生成报销报告', 'u1'),
+      msg('error', { message: '413 Request Entity Too Large' }, 'e1'),
+      ...(persisted ? [msg('user', '再附上票据', 'u-follow-up')] : []),
+    ]);
+    const rollover = createContextOverflowRollover(deps);
+
+    await expect(rollover.prepareUnhealthySession('s1', 'u-follow-up')).resolves.toBe(true);
+    const handoff = String(deps.setPendingHandoff.mock.calls[0]?.[1] ?? '');
+    expect(handoff).toContain('生成报销报告');
+    expect(handoff).not.toContain('再附上票据');
+    expect(deps.replayUserMessage).not.toHaveBeenCalled();
+  });
+
   it('leaves a native IM Pi 413 turn to its channel when no desktop binding exists', async () => {
     const sourceUser = {
       ...msg('user', 'IM message', 'u-im'),
@@ -1889,7 +1904,7 @@ describe('createContextOverflowRollover', () => {
     });
     deps.getLiveSession.mockReturnValue(undefined);
     const rollover = createContextOverflowRollover(deps);
-    await expect(rollover.prepareUnhealthySession('s1')).resolves.toBe(true);
+    await expect(rollover.prepareUnhealthySession('s1', 'u2')).resolves.toBe(true);
     expect(deps.commitRebuild).toHaveBeenCalledOnce();
     expect(deps.commitRebuild).toHaveBeenCalledWith(
       's1', expect.stringContaining('已完成'),

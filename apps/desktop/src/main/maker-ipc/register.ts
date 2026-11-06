@@ -5187,8 +5187,8 @@ export async function acquirePendingAgentSwitchForDirectSend(
 }
 
 /** 直发路径在 createSession / 重读 live session 之前关掉不健康原生会话。 */
-export async function prepareUnhealthySessionForSend(sessionId: string): Promise<void> {
-  await contextOverflowRolloverHolder?.prepareUnhealthySession(sessionId);
+export async function prepareUnhealthySessionForSend(sessionId: string, outboundUserClientId?: string): Promise<void> {
+  await contextOverflowRolloverHolder?.prepareUnhealthySession(sessionId, outboundUserClientId);
 }
 
 /** Later successful model/provider picks supersede an earlier cross-engine intent. */
@@ -19016,8 +19016,8 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
         agentInputCoordinatorHolder?.setProviderGroupSendReconnect(sessionId, null);
       });
     },
-    prepareUnhealthySession: (sessionId) =>
-      contextOverflowRolloverHolder?.prepareUnhealthySession(sessionId) ?? Promise.resolve(false),
+    prepareUnhealthySession: (sessionId, outboundUserClientId) =>
+      contextOverflowRolloverHolder?.prepareUnhealthySession(sessionId, outboundUserClientId) ?? Promise.resolve(false),
     workdirDiagnostics: workdirLog,
     log,
   });
