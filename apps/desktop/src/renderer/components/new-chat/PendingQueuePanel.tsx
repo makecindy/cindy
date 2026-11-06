@@ -53,6 +53,7 @@ import {
   deactivatePendingQueueRowFocus,
   deactivatePendingQueueRowHover,
   emptyPendingQueueRowActivityState,
+  isPendingQueueBodyTipOpen,
   isPendingQueueRowActive,
   prunePendingQueueRowActivity,
 } from './pendingQueueRowActivity';
@@ -187,8 +188,13 @@ export function PendingQueuePanel({
   const botProfiles = useBotProfiles();
   const resolvedAriaLabel = ariaLabel ?? t('newChat.pendingQueue.regionAria');
   const [rowActivity, setRowActivity] = useState(emptyPendingQueueRowActivityState);
-  /** 悬停行正文是否真的溢出单行:只有溢出时才挂全文提示,短消息不弹重复内容。 */
-  const [hoverBodyOverflowed, setHoverBodyOverflowed] = useState(false);
+  /**
+   * 正文全文提示的目标行:指针 / 键盘焦点现量到这一行真的被单行截断时记成它的 clientId。
+   * 只记「哪一行溢出」而不记「刚刚量到溢出」,上一次的结果才不会残留到另一行头上。
+   */
+  const [bodyTipClientId, setBodyTipClientId] = useState<string | null>(null);
+  /** 拖动排序进行中:Sortable 指针捕获期间不允许行级浮层留在屏幕上。 */
+  const [dragActive, setDragActive] = useState(false);
   const editingLockOwnerRef = useRef<QueueEditLockOwner | null>(null);
   const onEditLockRef = useRef(onEditLock);
   const interactionLockedRef = useRef(false);
@@ -229,11 +235,18 @@ export function PendingQueuePanel({
       // a turn `done` event must not drain the queue before React commits the
       // local drag state update.
       setInteractionLocked(active);
+      setDragActive(active);
+      // 拖动全程压着一块气泡在行上,松手前不该再弹正文全文。
+      if (active) setBodyTipClientId(null);
     },
     [setInteractionLocked],
   );
 
   useEffect(() => () => setInteractionLocked(false), [setInteractionLocked]);
+
+  // Tip 的关闭请求(窗口失活、Radix 自己的 pointerleave / Esc)必须复位目标行,
+  // 否则受控浮层关不掉:切到别的窗口时浮层就僵在屏幕上。
+  const dismissBodyTip = useCallback(() => setBodyTipClientId(null), []);
 
   const acquireEditLock = useCallback((clientId: string) => {
     editingLockOwnerRef.current = acquireQueueEditLock(
@@ -255,6 +268,9 @@ export function PendingQueuePanel({
     }
     setRowActivity((activity) =>
       prunePendingQueueRowActivity(activity, queue.map(getQueuedMessageId)),
+    );
+    setBodyTipClientId((current) =>
+      current !== null && !queue.some((q) => q.clientId === current) ? null : current,
     );
   }, [editingClientId, queue, releaseEditLock]);
 
@@ -357,13 +373,22 @@ export function PendingQueuePanel({
               : 'w-5';
           const dragDisabled = !onReorder || isPendingEnqueue || isRowEditing || isSteering;
           // 正文提示:被截断时才展开全文;合成指令行按契约只显示标签、不给原文。
-          // text/结构始终稳定,只由 controlledOpen 决定开合:悬停时若把 Tip 从透明分支
-          // 换成 Trigger 分支,正文节点会重建、丢掉当时这次 mouseover,提示就永远不弹。
+          // 目标行由本行正文的实测溢出决定(不是面板级共享标记),上次量到的结果不会
+          // 残留到另一行头上。text/结构始终稳定,只由 controlledOpen 决定开合:悬停时若
+          // 把 Tip 从透明分支换成 Trigger 分支,正文节点会重建、丢掉当时这次 mouseover,
+          // 提示就永远不弹。
           const bodyTipText = rowPresentation.isSyntheticTrigger
             ? null
             : rowPresentation.displayText;
-          const bodyTipOpen =
-            isRowActive && hoverBodyOverflowed && !rowPresentation.isSyntheticTrigger;
+          const bodyTipOpen = isPendingQueueBodyTipOpen(bodyTipClientId, {
+            clientId: entry.clientId,
+            syntheticTrigger: rowPresentation.isSyntheticTrigger,
+            editing: isRowEditing,
+            dragActive,
+          });
+          /** 把「正文要全文提示」指向这一行,或清掉它:溢出判定始终跟着当前这一行。 */
+          const syncBodyTip = (overflowed: boolean) =>
+            setBodyTipClientId(overflowed ? entry.clientId : null);
           const steerTipText = (() => {
             if (isSteering) return t('newChat.pendingQueue.steeringAction');
             const base = t(
@@ -444,10 +469,7 @@ export function PendingQueuePanel({
               tabIndex={canSteerRow && !isPendingEnqueue ? 0 : undefined}
               aria-keyshortcuts={canSteerRow ? 'Meta+Enter Control+Enter' : undefined}
               onKeyDown={handleRowKeyDown}
-              onMouseEnter={(event) => {
-                const body =
-                  event.currentTarget.querySelector<HTMLElement>('[data-queue-row-body]');
-                setHoverBodyOverflowed(Boolean(body && body.scrollWidth > body.clientWidth));
+              onMouseEnter={() => {
                 setRowActivity((activity) =>
                   activatePendingQueueRowHover(activity, entry.clientId, editingClientId),
                 );
@@ -457,9 +479,18 @@ export function PendingQueuePanel({
                   deactivatePendingQueueRowHover(activity, entry.clientId),
                 );
               }}
-              onFocusCapture={() => {
+              onFocusCapture={(event) => {
                 setRowActivity((activity) =>
                   activatePendingQueueRowFocus(activity, entry.clientId),
+                );
+                // 键盘激活也要按当行现量;焦点落在行内动作按钮上时让位给按钮自己的 Tip。
+                syncBodyTip(
+                  !isQueueRowActionTarget(event.target) &&
+                    isQueueRowBodyOverflowed(
+                      event.currentTarget.querySelector<HTMLElement>(
+                        QUEUE_ROW_BODY_SELECTOR,
+                      ),
+                    ),
                 );
               }}
               onBlurCapture={(event) => {
@@ -472,6 +503,7 @@ export function PendingQueuePanel({
                 setRowActivity((activity) =>
                   deactivatePendingQueueRowFocus(activity, entry.clientId),
                 );
+                setBodyTipClientId((current) => (current === entry.clientId ? null : current));
               }}
               aria-selected={isRowActive}
               className={cn(
@@ -567,10 +599,19 @@ export function PendingQueuePanel({
                   <Tip
                     text={bodyTipText}
                     controlledOpen={bodyTipOpen}
+                    onOpenChange={dismissBodyTip}
                     contentClassName={queueBodyTipClassName}
                   >
                     <span
                       data-queue-row-body
+                      onPointerEnter={(event) =>
+                        syncBodyTip(isQueueRowBodyOverflowed(event.currentTarget))
+                      }
+                      onPointerLeave={() =>
+                        setBodyTipClientId((current) =>
+                          current === entry.clientId ? null : current,
+                        )
+                      }
                       className={cn(
                         'min-w-0 flex-1 truncate text-13 leading-[1.25]',
                         isRowActive
@@ -595,10 +636,19 @@ export function PendingQueuePanel({
                 <Tip
                   text={bodyTipText}
                   controlledOpen={bodyTipOpen}
+                  onOpenChange={dismissBodyTip}
                   contentClassName={queueBodyTipClassName}
                 >
                   <p
                     data-queue-row-body
+                    onPointerEnter={(event) =>
+                      syncBodyTip(isQueueRowBodyOverflowed(event.currentTarget))
+                    }
+                    onPointerLeave={() =>
+                      setBodyTipClientId((current) =>
+                        current === entry.clientId ? null : current,
+                      )
+                    }
                     className={cn(
                       // top-px: 在居中基础上把文字再压低 1px, 抵消字体 metrics, 与 drag handle 光学对齐
                       'relative top-px min-w-0 flex-1 truncate text-13 leading-[1.25]',
@@ -624,6 +674,7 @@ export function PendingQueuePanel({
                 <span aria-hidden className="h-5 w-5 shrink-0" />
               ) : showActions ? (
                 <div
+                  data-pending-queue-row-action="true"
                   className={cn('flex shrink-0 items-center justify-end gap-1', actionSlotWidth)}
                 >
                   {canSteerRow && onSteer && (
@@ -745,6 +796,19 @@ export function PendingQueuePanel({
 
 // 正文全文提示:保留原换行;限高是防止超长协调指令把浮层铺满整屏。
 const queueBodyTipClassName = 'max-h-[200px] overflow-hidden whitespace-pre-wrap';
+
+const QUEUE_ROW_BODY_SELECTOR = '[data-queue-row-body]';
+const QUEUE_ROW_ACTION_SELECTOR = '[data-pending-queue-row-action="true"]';
+
+/** 正文被单行截断时才需要全文提示,短消息不重复一遍可见内容。 */
+function isQueueRowBodyOverflowed(node: HTMLElement | null): boolean {
+  return Boolean(node && node.scrollWidth > node.clientWidth);
+}
+
+/** 行内动作按钮(插话 / 编辑 / 删除)各有自己的 Tip,行级浮层必须给它们让位。 */
+function isQueueRowActionTarget(target: EventTarget | null): boolean {
+  return target instanceof Element && target.closest(QUEUE_ROW_ACTION_SELECTOR) !== null;
+}
 
 const iconButtonClassName = cn(
   'flex h-5 w-5 shrink-0 items-center justify-center rounded-full border',
