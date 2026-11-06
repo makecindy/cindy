@@ -319,7 +319,34 @@ async function openDropdown(): Promise<void> {
   });
 }
 
+// Unit: the terminal recovery dialog uses this same picker rather than a
+// second route editor. An open request must expose actual selectable models.
+it('opens the real model picker from a recovery request and waits while disabled', async () => {
+  const props = { remoteAgent: undefined, unifiedPanel: false, modelId: 'claude-opus-4-8', effort: 'high', vendorKey: 'cc' as const,
+    onModelChange: vi.fn(), onEffortChange: vi.fn(), onProviderChange: vi.fn() };
+  const consumed = vi.fn();
+  const h = render(<ModelSelector {...props} disabled openRequest={1} onOpenRequestConsumed={consumed} />);
+  expect(screen.queryByRole('listbox')).toBeNull();
+  await act(async () => h.rerender(<ModelSelector {...props} openRequest={1} onOpenRequestConsumed={consumed} />));
+  expect(consumed).toHaveBeenCalledExactlyOnceWith(1);
+  await waitFor(() => expect(requestProviderModelsAutoRefresh).toHaveBeenCalledOnce());
+  expect(screen.getByRole('listbox')).toBeTruthy();
+});
+
 describe('model selector display identity during switches', () => {
+  it('does not replay a consumed recovery request after the picker unmounts while its parent remains', async () => {
+    function Parent({ visible }: { visible: boolean }) {
+      const [request, setRequest] = React.useState(1);
+      return visible ? <ModelSelector remoteAgent={undefined} unifiedPanel={false} modelId="claude-opus-4-8"
+        effort="high" vendorKey="cc" onModelChange={vi.fn()} onEffortChange={vi.fn()}
+        onProviderChange={vi.fn()} openRequest={request} onOpenRequestConsumed={() => setRequest(0)} /> : null;
+    }
+    const h = render(<Parent visible />);
+    await waitFor(() => expect(screen.getByRole('listbox')).toBeTruthy());
+    h.rerender(<Parent visible={false} />);
+    h.rerender(<Parent visible />);
+    expect(screen.queryByRole('listbox')).toBeNull();
+  });
   const props = {
     unifiedPanel: false,
     modelId: 'chatgpt/gpt-6',

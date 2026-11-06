@@ -1,5 +1,6 @@
 {
   "skin_macii": "Macintosh II",
+  "skin_macbook": "MacBook",
   "skin_powerbook": "PowerBook 170",
   "skin_thinkpad": "ThinkPad 701C",
   "skin_classic": "Classic 84",
@@ -122,6 +123,7 @@
   "deviceMenu": "Menu do dispositivo",
   "orientation": "Orientação",
   "orientationFollow": "Seguir o telemóvel",
+  "posture": "Dobra",
   "picture": "Imagem",
   "pictureFit": "Ajustar",
   "pictureFill": "Preencher",

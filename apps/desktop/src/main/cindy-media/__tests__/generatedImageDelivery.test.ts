@@ -462,18 +462,28 @@ describe('native image delivery', () => {
 
   it('delivers bytes ahead of an unrelated remote path, persists one result and one attachment on duplicate completion', async () => {
     const host = controller();
-    await Promise.all([
-      host.deliver(
+    // Live callers hand `published` to IM / hook listeners before the turn ends.
+    const live = [
+      host.start(
         'task',
         event({
           data: png.toString('base64'),
           path: '/linux/missing.png',
           pathOrigin: 'remote-agent',
         }),
-      ),
-      host.deliver('task', event({ data: png.toString('base64') })),
-    ]);
-    await host.deliver('task', event({ data: png.toString('base64') }));
+      )!,
+      host.start('task', event({ data: png.toString('base64') }))!,
+    ];
+    const [first, second] = await Promise.all(live.map((run) => run.published));
+    await Promise.all(live.map((run) => run.completion));
+    expect(second).toBe(first);
+    expect(first.map((projected) => projected.type)).toEqual(['tool_use', 'tool_result_full', 'tool_result']);
+    const full = first[1].data as { fullText: string };
+    expect(JSON.parse(full.fullText)).toEqual(result());
+    const duplicate = host.start('task', event({ data: png.toString('base64') }))!;
+    await expect(duplicate.published).resolves.toEqual([]);
+    await duplicate.completion;
+    expect(host.publish).toHaveBeenCalledTimes(3);
     expect(result()).toMatchObject({ ok: true, native_image_delivery: { id, state: 'stored' } });
     expect(result().text).toBe('Image delivered');
     expect(await fs.readFile(resolveSafe(result().xdt_image_url).absPath)).toEqual(png);
@@ -550,7 +560,11 @@ describe('native image delivery', () => {
     await fs.writeFile(file, png);
     const readSource = vi.fn(async () => ({ buffer: png, mimeType: 'image/png' }));
     const host = createGeneratedImageDelivery({ invoke: vi.fn(), publish: vi.fn(), readSource });
-    await host.deliver('task', event({ path: file, pathOrigin: 'remote-agent' }));
+    const run = host.start('task', event({ path: file, pathOrigin: 'remote-agent' }))!;
+    const published = await run.published;
+    await run.completion;
+    expect(JSON.parse((published[1].data as { fullText: string }).fullText)).toEqual(result());
+    expect(result()).not.toHaveProperty('xdt_image_url');
     expect(readSource).not.toHaveBeenCalled();
     expect(result()).toMatchObject({
       ok: false,

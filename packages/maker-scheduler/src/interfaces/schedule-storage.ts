@@ -8,7 +8,7 @@ export interface ScheduleStorage {
   /** Numeric lastFinishedAt writes atomically retain the greater completion time.
    * With expected, atomically match the snapshot's timing and scheduling
    * fields (lastFiredAt, nextFireAt, status, recurring, manual, cronExpr,
-   * timezone, intervalMs); return null on mismatch without applying the patch. */
+   * timezone, intervalMs, expireAt); return null on mismatch without applying the patch. */
   update(id: string, patch: Partial<Schedule>, expected?: Schedule): Promise<Schedule | null>;
   delete(id: string): Promise<void>;
 

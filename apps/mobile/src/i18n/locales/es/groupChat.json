@@ -164,7 +164,12 @@
         "details": "Envía tu mensaje nuevamente. Si aún falla, verifique los registros e informe el problema."
       }
     },
-    "runtimeFailureSetupHint": "Para cambiar el modelo o la configuración, use la computadora donde se ejecuta este compañero de equipo."
+    "runtimeFailureSetupHint": "Para cambiar el modelo o la configuración, use la computadora donde se ejecuta este compañero de equipo.",
+    "capability": {
+      "GROUP_AUTHORIZATION_REQUIRED": "{{name}} no pudo ejecutar la herramienta: la autorización del grupo ha caducado o no permite esta acción. La persona propietaria del compañero puede volver a solicitarla en este grupo.",
+      "GROUP_AUTHORIZATION_UNAVAILABLE": "No se pudo verificar la autorización de grupo de {{name}}, por lo que la herramienta no se ejecutó. Vuelve a intentarlo cuando se restablezca la conexión.",
+      "ATTACHMENTS_UNAVAILABLE": "Algunos adjuntos no llegaron a {{name}} por un fallo de descarga o por el límite de adjuntos. Vuelve a enviar los archivos necesarios para esta solicitud."
+    }
   },
   "plan": {
     "intro_one": "Esto lleva el paso {{count}}. Aquí está quién lo hace:",
@@ -197,7 +202,22 @@
     "progressDone": "Hecho {{done}} / {{total}}",
     "allDone": "todo hecho",
     "intro_many": "Esto requiere pasos {{count}}. Aquí está quién hace qué:",
-    "eyebrow_many": "Plan · Pasos {{count}}"
+    "eyebrow_many": "Plan · Pasos {{count}}",
+    "stepQueued": "Esperando para empezar",
+    "stepExecuting": "En ejecución",
+    "stepSkipped": "Omitido",
+    "skippingTurn": "Omitiendo…",
+    "queueWaiting": "Esperando que continúes",
+    "skipTurnLabel": "Omitir {{name}}",
+    "stepSpoken": "Listo",
+    "allTurns_one": "El {{count}} compañero",
+    "allTurns_other": "Los {{count}} compañeros",
+    "foldTurns": "Mostrar menos",
+    "allTurns_many": "Los {{count}} compañeros",
+    "talkTitle": "Escuchar a todos por turnos",
+    "talkPending": "Sin iniciar",
+    "skipTurn": "Omitir",
+    "queueEnded": "Ronda terminada"
   },
   "speaking": {
     "queued": "En cola",
@@ -309,7 +329,8 @@
     "lifecycleUnavailable": "El servidor o computadora actual aún no admite esta acción.",
     "groupDissolved": "Este grupo ha sido disuelto. Aún puedes leer el historial disponible.",
     "lastOwner": "Transfiera la propiedad o disuelva este grupo antes de irse.",
-    "allBotsMentionDisabled": "El propietario del grupo aún no ha habilitado @Todos los compañeros."
+    "allBotsMentionDisabled": "El propietario del grupo aún no ha habilitado @Todos los compañeros.",
+    "turnAlreadyStarted": "Este compañero ya ha empezado y no se puede omitir"
   },
   "followUp": {
     "next": "Planificar · Siguiente paso",
@@ -507,6 +528,7 @@
     "searchMembers": "Buscar miembros",
     "membersNoMatch": "Ningún miembro coincide con “{{query}}”",
     "you": "Tú",
+    "companionOf": "Compañero de {{name}}",
     "teammateTag": "Compañero",
     "paused": "En pausa",
     "accessNone": "Solo su propietario",

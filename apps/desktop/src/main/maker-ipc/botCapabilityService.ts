@@ -1,3 +1,4 @@
+import { assertTaskActionCurrent } from './taskActionAuthorization.js';
 import { inspectAppDefaultModel, changeAppDefaultModel } from './appDefaultModelControl.js';
 import type { BotCapabilityCallbacks, BotControlState } from '@cindy/mcps';
 import { and, eq } from 'drizzle-orm';
@@ -304,10 +305,10 @@ export function createBotCapabilityService(deps: BotCapabilityServiceDeps) {
         return { ok: false as const, errorCode: 'MODEL_SETTINGS_UNAVAILABLE', message: '无法读取当前用户的默认模型和可用型号' };
       }
     },
-    async setDefaultModel(input: { callerSessionId: string; id: string; effort?: string }) {
+    async setDefaultModel(input: { callerSessionId: string; id: string; effort?: string; fastMode?: boolean | 'ultrafast' }) {
       try {
         const ctx = await context(input.callerSessionId);
-        const result = await changeAppDefaultModel(input.id, input.effort, ctx.assertOwner);
+        const result = await changeAppDefaultModel(input.id, input.effort, async () => { await ctx.refresh(); ctx.assertOwner(); await assertTaskActionCurrent(); }, input.fastMode);
         ctx.assertOwner();
         return { ok: true as const, ...result };
       } catch (error) {
@@ -434,4 +435,10 @@ export function createBotCapabilityService(deps: BotCapabilityServiceDeps) {
       }
     },
   };
+}
+
+/** Account-wide settings retain the same owner-only access as default model management. */
+export async function captureBotSettingsAccess(callerSessionId: string) {
+  const ctx = await context(callerSessionId, { readScope: 'owner' });
+  return async () => { await ctx.refresh(); ctx.assertOwner(); };
 }

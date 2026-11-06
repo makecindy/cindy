@@ -34,6 +34,8 @@ describe('mirrorMessageText', () => {
     ['a delegated continuation', user('continue', { agentMeta: JSON.stringify({ autoReviewUserText: { kind: 'delegated-continuation' } }) })],
     ['private coordination replies', reply('internal', { agentMeta: JSON.stringify({ botPrivateReply: true }) })],
     ['progress commentary', reply('checking files', { agentMeta: JSON.stringify({ assistantPhase: 'commentary' }) })],
+    ['unconfirmed sampling output', reply('pending answer', { agentMeta: JSON.stringify({ samplingAttemptPending: true }) })],
+    ['failed sampling output', reply('partial answer', { agentMeta: JSON.stringify({ failedSamplingAttempt: { threadId: 't', turnId: 'u', attempt: 1, itemId: 'i' } }) })],
     ['sub-agent output', reply('sub result', { agentMeta: JSON.stringify({ parentToolUseId: 'toolu_1' }) })],
     ['sub-agent output (snake case)', reply('sub result', { agentMeta: JSON.stringify({ parent_tool_use_id: 'toolu_1' }) })],
     ['Claude sub-agent output (parentUuid)', reply('sub result', { agentMeta: JSON.stringify({ parentUuid: 'toolu_subagent' }) })],
@@ -129,6 +131,79 @@ describe('companion conversation mirror', () => {
     await t.mirror.syncBot('bot', 'actor', 'Mia');
     expect(t.calls.filter(call => call.route === '/conversations')).toHaveLength(1);
     expect(t.imported()[1]!.map(m => m.content[0]!.text)).toEqual(['again']);
+  });
+
+  it('does not mirror failed sampling attempts as replies', async () => {
+    const failed = reply('partial answer', { agentMeta: JSON.stringify({ failedSamplingAttempt: { threadId: 't', turnId: 'u', attempt: 1, itemId: 'i' } }) });
+    const rows = [user('hi'), failed, reply('done')];
+    const t = setup(rows);
+    await t.mirror.syncBot('bot', 'actor', 'Mia');
+    expect(t.imported()[0]!.map(m => m.content[0]!.text)).toEqual(['hi', 'done']);
+    await t.mirror.syncBot('bot', 'actor', 'Mia');
+    expect(t.imported().flat().map(m => m.content[0]!.text)).toEqual(['hi', 'done']);
+  });
+
+  it.each([false, true])('defers only pending sampling text with an existing cursor=%s', async (existing) => {
+    const rows = [user('hi'), reply('previous reply')];
+    const t = setup(rows);
+    if (existing) await t.mirror.syncBot('bot', 'actor', 'Mia');
+    const pending = reply('unconfirmed opening', { agentMeta: JSON.stringify({ samplingAttemptPending: { runtimeId: 'live' } }), samplingRuntimeId: 'live' });
+    rows.push(pending, user('another input'), reply('normal reply from another engine'));
+    await t.mirror.syncBot('bot', 'actor', 'Mia');
+    expect(t.imported().flat().map(message => message.content[0]!.text)).toEqual([
+      'hi', 'previous reply', 'another input', 'normal reply from another engine',
+    ]);
+    expect(t.state.bot('bot')?.mirror?.id).toBe(rows[1]!.id);
+    // A late failure arrives outside the ordinary ten-minute trailing scan.
+    pending.agentMeta = JSON.stringify({ samplingAttemptPending: false,
+      failedSamplingAttempt: { threadId: 't', turnId: 'u', attempt: 1, itemId: 'i' } });
+    rows.push(reply('accepted retry', { createdAt: pending.createdAt + 11 * 60_000 }));
+    await t.mirror.syncBot('bot', 'actor', 'Mia', { drain: true });
+    expect(t.imported().flat().map(message => message.content[0]!.text)).toEqual([
+      'hi', 'previous reply', 'another input', 'normal reply from another engine', 'accepted retry',
+    ]);
+    expect(t.state.bot('bot')?.mirror?.id).toBe(rows.at(-1)!.id);
+  });
+
+  it('revisits an accepted item after the trailing window and prevents an incomplete hand-over', async () => {
+    const pending = reply('accepted later', { agentMeta: JSON.stringify({ samplingAttemptPending: true }) });
+    const rows = [pending, user('still sending input', { createdAt: pending.createdAt + 11 * 60_000 })];
+    const t = setup(rows);
+    await t.mirror.syncBot('bot', 'actor', 'Mia');
+    expect(t.imported().flat().map(message => message.content[0]!.text)).toEqual(['still sending input']);
+    await expect(t.mirror.syncBot('bot', 'actor', 'Mia', { drain: true })).rejects.toThrow('COMPANION_STILL_CHANGING');
+    pending.agentMeta = JSON.stringify({ samplingAttemptPending: false });
+    await t.mirror.syncBot('bot', 'actor', 'Mia', { drain: true });
+    expect(t.imported().flat().map(message => message.content[0]!.text)).toEqual(['still sending input', 'accepted later']);
+    await t.mirror.syncBot('bot', 'actor', 'Mia');
+    expect(t.imported().flat()).toHaveLength(2);
+  });
+
+  it('keeps the history backfill before a pending item that first fell outside the latest 200', async () => {
+    const pending = reply('old pending answer', { agentMeta: JSON.stringify({ samplingAttemptPending: true }) });
+    const rows = [pending, ...Array.from({ length: 260 }, (_, index) => user(`input-${index}`, { createdAt: pending.createdAt + 11 * 60_000 + index }))];
+    const t = setup(rows);
+    await t.mirror.syncBot('bot', 'actor', 'Mia');
+    await t.mirror.syncBot('bot', 'actor', 'Mia');
+    expect(t.state.bot('bot')?.backfill).not.toMatchObject({ done: true });
+    expect(t.imported().flat()).toHaveLength(260);
+    pending.agentMeta = JSON.stringify({ samplingAttemptPending: false });
+    await t.mirror.syncBot('bot', 'actor', 'Mia', { drain: true });
+    expect(t.imported().flat()).toHaveLength(261);
+    expect(t.imported().flat().filter(message => message.content[0]!.text === 'old pending answer')).toHaveLength(1);
+    expect(t.state.bot('bot')?.backfill).toMatchObject({ done: true });
+  });
+
+  it.each([null, 'new-runtime'])('does not promote or block on an orphaned pending item after runtime retirement (%s)', async samplingRuntimeId => {
+    const pending = reply('unconfirmed before shutdown', { agentMeta: JSON.stringify({
+      samplingAttemptPending: samplingRuntimeId === null ? true : { runtimeId: 'old-runtime' },
+    }), samplingRuntimeId });
+    const rows = [pending, user('new input'), reply('new successful reply')];
+    const t = setup(rows);
+    await t.mirror.syncBot('bot', 'actor', 'Mia', { drain: true });
+    expect(t.imported().flat().map(message => message.content[0]!.text)).toEqual(['new input', 'new successful reply']);
+    expect(t.state.bot('bot')?.mirror?.id).toBe(rows[2]!.id);
+    expect(pending.content).toContain('unconfirmed before shutdown');
   });
 
   it('backfills only the latest 200 eligible messages on the first run', async () => {

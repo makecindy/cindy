@@ -89,6 +89,10 @@ vi.mock('../device-link/providerShareCrossRegion.js', () => ({
 }));
 vi.mock('../device-link/providerShareGuest.js', () => ({
   parseProviderShareAgentDeviceId: (device: string) => device.startsWith('share:') ? device.slice(6) : null,
+  findReceivedShare: () => undefined,
+}));
+vi.mock('../clientEndpointsService.js', () => ({
+  getClientEndpoint: () => 'https://device-link.example.invalid',
 }));
 vi.mock('../maker-host/index.js', () => ({
   getMaker: () => ({

@@ -1,4 +1,34 @@
 {
+  "sharedTaskRecovery": {
+    "title": "원래 컴퓨터에서 세션을 재개할 수 없습니다",
+    "description": "다른 컴퓨터나 제공자를 선택하여 컨텍스트를 인계하고 계속할 수 있습니다. 메시지는 보존되지만 원래 컴퓨터의 전체 실행 상태가 이전되지는 않습니다.",
+    "choose": "다른 컴퓨터 선택",
+    "cancel": "여기에 머무르기",
+    "stage": {
+      "owner": "공유 컴퓨터에 연결하는 중 실패했습니다.",
+      "allocation": "원래 실행 컴퓨터에 권한을 할당하는 중 실패했습니다.",
+      "executor": "실행 컴퓨터의 device-link 연결을 확인하는 중 실패했습니다.",
+      "capability": "실행 컴퓨터의 기능을 확인하는 중 실패했습니다.",
+      "authorization": "실행 권한을 설정하는 중 실패했습니다.",
+      "unknown": "실패한 단계가 보고되지 않았습니다."
+    },
+    "reason": {
+      "offline": "이 단계에서 연결하려던 컴퓨터가 오프라인으로 보고되었습니다. 다른 작업은 다른 컴퓨터에서 실행 중일 수 있습니다.",
+      "timeout": "요청 시간이 초과되었습니다. 연결하려던 서비스는 실패 단계를 확인해 주세요. 직접 연결과 릴레이 중 어디에 문제가 있는지는 확인되지 않았습니다.",
+      "relay": "device-link 연결이 준비되지 않았거나 종료되었습니다. 직접 연결만 실패하면 보통 릴레이로 자동 전환됩니다.",
+      "denied": "접근이 거부되었거나 원격 제어가 꺼져 있습니다. 재시도로 이 제한을 우회할 수 없습니다.",
+      "model": "이 세션에서는 공유 제공자 또는 모델이 허용되지 않습니다.",
+      "budget": "제공자가 사용량 한도 또는 할당량 부족을 보고했습니다. 컴퓨터를 바꿔도 같은 할당량을 사용할 수 있습니다.",
+      "capacity": "세션 또는 연결 리소스가 한도에 도달했습니다. 사용하지 않는 세션을 닫거나 다른 컴퓨터를 선택하세요.",
+      "unsupported": "실행 컴퓨터가 필요한 공유 세션 기능을 지원하지 않습니다.",
+      "authorization": "실행 권한을 설정할 수 없습니다. 실행 컴퓨터가 오프라인이라는 뜻은 아닙니다.",
+      "history": "원래 세션 위치를 사용할 수 없습니다. 네이티브 기록을 다른 컴퓨터에서 바로 열 수 없습니다.",
+      "policy": "공유 사용량 규칙은 공유 컴퓨터에서 실시간 확인이 필요하며 직접 실행으로 적용할 수 없습니다. 잔액 소진을 뜻하지는 않습니다.",
+      "unknown": "공유 컴퓨터가 구체적인 원인을 제공하지 않았습니다. 오프라인, 할당량, 직접 연결 및 릴레이 상태는 확인되지 않았습니다.",
+      "rate": "서비스가 요청을 제한하거나 혼잡한 상태입니다. 제한이 해제될 때까지 기다려 주세요. 다른 컴퓨터에도 같은 제한이 적용될 수 있습니다.",
+      "service": "공유 권한 서비스에 연결하지 못했거나 서비스가 실패를 반환했습니다. 실행 컴퓨터의 오프라인 상태는 확인되지 않았습니다."
+    }
+  },
   "providerAccountUsage": {
     "kimi": {
       "refresh": "할당량 새로 고침",
@@ -133,7 +163,7 @@
   "taskActionConfirmation": {
     "title": "세션 작업 확인",
     "once": "아래 대상, 작업과 전체 내용을 확인하세요. 허용은 이번 작업에 한 번만 적용됩니다.",
-    "remove": "자동화를 삭제합니다. 대상을 확인하세요. 허용은 이번 작업에만 적용됩니다.",
+    "remove": "자동화의 수신 주소를 해제합니다. 대상을 확인하세요. 허용은 이번 작업에만 적용됩니다.",
     "permission": "다른 작업의 권한 요청에 사용자를 대신해 답합니다. 내용을 확인하세요. 허용은 이번 작업에만 적용됩니다.",
     "resume": "일시 중지된 실행을 재개합니다. 대상을 확인하세요. 허용은 이번 작업에만 적용됩니다.",
     "command": "에이전트의 도구 승인 없이 컴퓨터에서 명령을 저장하거나 실행합니다. 명령과 작업 폴더를 확인하세요. 승인은 이번 한 번만 적용됩니다.",
@@ -1024,11 +1054,19 @@
       "copied": "복사됨",
       "copyFailed": "복사하지 못했습니다. 다시 시도하거나 파일을 저장하세요.",
       "scrollHint": "선택 영역에서 위아래로 스크롤하거나 자동 스크롤을 선택하세요",
-      "recordHint": "미리 보기에 그린 주석은 녹화에 포함됩니다. 소리는 녹음하지 않습니다.",
+      "recordHint": "미리 보기에 그린 주석은 녹화에 포함됩니다.",
       "format": "형식",
       "videoFormat": "동영상 (WebM)",
-      "prepareHint": "시작을 누르면 3초 후 녹화됩니다. 소리는 녹음하지 않습니다.",
+      "prepareHint": "시작을 누르면 3초 후 녹화됩니다.",
       "countdown": "{{count}}초 후 녹화 시작",
+      "systemAudio": "스피커",
+      "microphone": "마이크",
+      "audioHint": "녹음할 소리를 선택한 후 녹화를 시작하세요.",
+      "preparingAudio": "오디오 준비 중…",
+      "systemAudioFailed": "스피커 소리를 녹음할 수 없습니다. 시스템 권한을 확인하거나 이 소리를 끄세요.",
+      "microphoneFailed": "마이크를 사용할 수 없습니다. 권한과 입력 장치를 확인하거나 마이크를 끄세요.",
+      "audioFailed": "녹음을 시작할 수 없습니다. 장치를 확인하거나 소리를 끄세요.",
+      "audioInterrupted": "오디오가 중단되었습니다. 녹화를 종료하여 녹화된 내용을 저장하세요.",
       "countdownHint": "곧 시작합니다. Esc를 누르면 취소됩니다.",
       "annotate": "주석",
       "finishing": "완료 처리 중…",
@@ -1907,6 +1945,8 @@
       "add": {
         "title": "원격 머신 추가",
         "alias": "별칭",
+        "aliasHint": "영문자, 숫자, . _ @ : - 기호로 1~128자를 입력하세요. 한글 등의 이름은 표시 이름에 입력하세요.",
+        "aliasInvalid": "별칭에 지원하지 않는 문자가 있거나 128자를 초과했습니다. 위 규칙에 맞게 수정하세요.",
         "displayName": "표시 이름",
         "displayNamePlaceholder": "선택 사항, Cindy에서만 표시",
         "hostname": "호스트명",
@@ -2311,6 +2351,9 @@
     "agentIsland": {
       "title": "Agent Island",
       "unsupported": "Agent Island를 사용하려면 macOS 14 이상이 필요합니다.",
+      "subtleRemindersLabel": "은은한 알림",
+      "subtleRemindersHint": "새 메시지, 응답이 필요한 항목, 오류가 있으면 아일랜드 아래로 알림 카드를 띄우지 않고 아이콘의 변화로 알려줍니다. 아일랜드를 클릭하면 전체 작업 목록을 볼 수 있습니다.",
+      "subtleRemindersFailed": "알림 설정을 저장하지 못했습니다. 다시 시도해 주세요.",
       "enableLabel": "Agent Island 표시",
       "enableHint": "실행 중, 응답 필요, 읽지 않은 완료 작업을 화면 상단에 표시합니다. 사용 설정 시 동종의 시스템 알림을 억제해 이중 알림을 방지합니다.",
       "enableAria": "Agent Island 전환",
@@ -3739,7 +3782,12 @@
           "stop": "테스트 중지"
         },
         "fetch": {
-          "button": "모델 목록 가져오기",
+          "selectedCount": "모델 {{count}}개 선택됨",
+          "availableCount": "선택 가능한 모델 {{count}}개를 가져왔습니다",
+          "notFetched": "아직 모델 목록을 가져오지 않았습니다",
+          "failedRetry": "모델 목록을 가져오지 못했습니다. 다시 시도하세요",
+          "retryFailed": "이번에 목록을 가져오지 못했습니다. 다시 시도하세요",
+          "button": "모델 가져오기 및 선택",
           "fetching": "모델 가져오는 중…",
           "needBaseUrl": "먼저 기본 URL을 입력해 주세요",
           "failed": "모델 목록을 가져오지 못했습니다",
@@ -3867,6 +3915,8 @@
         "disabledGroup": "비활성화됨",
         "enableAllModels": "모두 활성화",
         "priceOverride": {
+          "resetShort": "초기화",
+          "referenceDetails": "참고 가격 상세",
           "menu": "API 가격 추정치 편집",
           "title": "{{model}} API 가격 추정치",
           "description": "내 API 또는 구독 경로의 사용량을 추정할 때만 사용되며 제공자의 실제 청구 금액은 변경하지 않습니다.",
@@ -3918,6 +3968,7 @@
             "hint": "{{agent}}의 이미지 연결에 적용됩니다. API가 실제로 지원하는 기능만 지정하세요. 저장 후 Art 상세 페이지를 다시 여세요."
           },
           "capabilityHint": "이 공급업체가 명시한 기능을 우선합니다. 이미지 지원 정보가 없으면 모델 이름으로 추정합니다.",
+          "imageInputDefault": "{{value}} (기본값)",
           "imageInput": "이미지 입력",
           "imageInputMixed": "엔진별로 다름",
           "supported": "지원",
@@ -5031,7 +5082,7 @@
         "ariaLabel": "두 번째 대체 보조 모델 선택"
       },
       "emptySlot": "선택 안 함",
-      "customHint": "선택한 순서대로 시도하며, 내장 모델을 사용할 수 없을 때는 자동 리뷰에도 사용합니다. 선택한 제공자에게 메시지와 참조 콘텐츠, 작업·동작의 상세 정보(차단된 동작 포함), 요청자의 신원과 권한, 파일 경로, 운영 체제를 포함한 리뷰 맥락이 전송됩니다.",
+      "customHint": "선택한 순서대로 시도하며, 내장 모델을 사용할 수 없을 때는 자동 리뷰에도 사용합니다. 선택한 제공자에게 메시지와 참조 콘텐츠, Agent의 공개 텍스트(참고용), 작업·동작의 상세 정보(차단된 동작 포함), 요청자의 신원과 권한, 파일 경로, 운영 체제를 포함한 리뷰 맥락이 전송됩니다.",
       "signInHint": "Cindy에 로그인하면 자동 추천을 사용할 수 있습니다. 로그인하지 않은 상태에서는 「사용자 지정」에서 설정된 다른 제공자의 모델을 선택하세요.",
       "chooseAgent": "Agent 선택",
       "backToAgents": "Agent 선택으로 돌아가기",
@@ -5618,6 +5669,7 @@
           "checking": "업데이트 확인 중…",
           "upToDate": "최신 버전입니다",
           "checkFailed": "업데이트를 확인하지 못했습니다",
+          "rateLimited": "GitHub 요청 한도에 걸렸습니다",
           "lastChecked": "마지막 확인: {{time}}",
           "check": "업데이트 확인",
           "retry": "다시 시도",
@@ -6024,8 +6076,10 @@
       "accessRevokedByPeer": "액세스 권한이 철회되었습니다. 상대방이 설정에서 복원해야 합니다",
       "deviceControlToggleAria": "{{name}} 제어 전환",
       "myDevices": {
-        "controlIt": "이 기기를 제어",
-        "allowInbound": "이 기기가 본 기기를 제어하도록 허용",
+        "iCan": "내가",
+        "itCan": "상대가",
+        "controlIt": "제어하기",
+        "controlThisDevice": "본 기기 제어",
         "allowInboundAria": "{{name}}이(가) 본 기기를 제어하도록 허용할지 전환",
         "peerControlOff": "상대방이 제어를 허용하지 않음",
         "masterOffHint": "먼저 위의 메인 스위치를 켜세요",
@@ -6679,8 +6733,6 @@
             "task": "작업 키",
             "action": "동작 키"
           },
-          "lightingLimit": "펌웨어가 독립적으로 점등할 수 있는 것은 보드 순서상 앞 6개의 작업 키뿐입니다. 그 밖의 작업 키도 작업 전환은 됩니다.",
-          "unlitKey": "앞 6개 이후의 키라서 독립 상태 표시등이 없습니다.",
           "taskHint": "투명 키캡을 권장합니다. 작업 상태는 서로 다른 색의 조명으로 표시됩니다."
         },
         "commandKeys": {
@@ -7554,6 +7606,9 @@
         "agentObserve": "로컬 프로젝트의 세션 목록과 상태를 볼 수 있음",
         "agentObserveDetail": "등록된 로컬 프로젝트에 있는 세션의 제목, Agent 종류, 보관 여부와 상태(실행 중, 확인 필요, 최근 활동 시간)를 확인하고 메인 창에서 세션을 열 수 있습니다. 메시지, 계획, 파일을 읽거나 메시지를 보내거나 세션을 변경할 수는 없습니다.",
         "agentObserveRequest": "세션 보기 권한 확인",
+        "agentCompanions": "동료와 동료의 상태, 최근 대화를 볼 수 있음",
+        "agentCompanionsDetail": "모든 동료(다른 컴퓨터에서 실행 중인 동료 포함)의 이름, 설명, 아바타와 상태(작업 중, 처리 대기, 대기 중, 오프라인), 하고 있는 작업의 종류(생각 중, 도구 실행 중 등), 처리를 기다리는 요청의 내용(질문, 실행할 명령, 계획 — 대화에 보이는 것과 같음), 메인 대화의 최근 내용(내 메시지와 동료의 답장 최대 50개, 도구 실행 과정 제외)을 확인하고 메인 창에서 동료의 대화를 열 수 있습니다. 메시지 전달 권한도 있으면 플러그인에서 입력한 답을 동료에게 전달할 수 있습니다(질문 답변, 요청 거절, 계획 의견). 실행 허용은 Cindy 자체 확인 창에서 직접 눌러야 합니다. 파일, 도구 실행 과정, 생각 내용은 읽을 수 없습니다.",
+        "agentCompanionsRequest": "동료 보기 권한 확인",
         "agentHiddenTasks": "세션 목록에 표시되지 않는 백그라운드 세션을 만들 수 있음",
         "agentHiddenTasksDetail": "이 플러그인이 만든 세션을 세션 목록, 검색, 알림에 표시하지 않을 수 있습니다. 플러그인 상세의 「백그라운드 세션」에서 언제든지 확인하고 열거나 세션 목록에 표시할 수 있으며, 플러그인을 제거하면 다시 표시됩니다.",
         "agentErrand": "작업을 만들고 실행하며 결과를 읽을 수 있습니다",
@@ -7724,6 +7779,7 @@
         "customSlotAsleep": "이 플러그인은 비활성 상태입니다. 활성화하면 여기에 설정 화면이 표시됩니다.",
         "descriptionExpand": "더 보기",
         "descriptionCollapse": "접기",
+        "readmeTitle": "소개",
         "useAction": "Plugin 사용",
         "chatAction": "대화",
         "enabledLabel": "사용 중",
@@ -8314,6 +8370,26 @@
         "title": "\"{{name}}\"을(를) 삭제할까요?",
         "message": "삭제하면 새 세션에서 이 MCP가 더 이상 로드되지 않습니다.",
         "confirm": "삭제"
+      },
+      "duplicates": {
+        "title": "중복이 의심되는 MCP 연결",
+        "description": "Cindy와 Claude Code 사용자 설정에 같거나 비슷한 연결이 있어 도구가 두 번 로드될 수 있습니다. 유지할 연결을 선택하세요. 확실하지 않으면 둘 다 유지할 수 있습니다.",
+        "scope": "이 컴퓨터의 Cindy에서 실행하는 일반 Claude Code 작업에만 다음 에이전트 세션부터 적용됩니다. Claude Code 설정은 변경되지 않습니다. 서로 연관된 중복 연결에는 같은 선택이 적용됩니다.",
+        "unavailable": "일부 설정을 읽지 못했습니다. 연결은 변경되지 않았습니다. 이 페이지를 다시 열면 재확인합니다.",
+        "endpoint": "같은 연결 주소",
+        "similar": "비슷한 연결 주소",
+        "keep": {
+          "both": "이 그룹의 양쪽 모두 유지"
+        },
+        "selected": {
+          "cindy": "Cindy 연결 선택됨",
+          "claude": "Claude Code 연결 선택됨",
+          "both": "이 그룹의 양쪽 연결을 모두 유지합니다"
+        },
+        "reset": "다시 선택",
+        "saveFailed": "저장하지 못했습니다. 연결이 변경되었을 수 있습니다. 현재 목록에서 다시 선택하세요.",
+        "keepThis": "이 연결 유지",
+        "keepThese": "이 연결들 유지"
       }
     },
     "remotePermission": {
@@ -10218,6 +10294,7 @@
       "continueEditing": "계속 편집"
     },
     "profileSaveFailed": "동료 설정을 저장하지 못했습니다. 변경 사항은 적용되지 않았습니다.",
+    "profileSaveOffline": "동료가 있는 컴퓨터에 연결할 수 없습니다. 다시 연결한 후 저장해 주세요.",
     "modelLabel": "모델",
     "modelUnavailable": "{{model}}(현재 사용할 수 없음)",
     "codexAutomaticCompact": "Codex 파트너는 스스로 맥락을 압축하고 /new 를 써도 지금 작업이 유지됩니다. 정말 새로 시작해야 할 때만 새 작업을 여세요.",
@@ -10548,6 +10625,11 @@
           "NETWORK_ERROR": "{{name}}이(가) 답변하지 못했습니다. 네트워크 연결에 실패했습니다.\n네트워크나 프록시를 확인한 뒤 메시지를 다시 보내세요.",
           "RUNTIME_TIMEOUT": "{{name}}의 답변 시간이 초과되었습니다.\n메시지를 다시 보내거나 다른 사용 가능한 모델을 선택하세요.",
           "RUNTIME_ERROR": "{{name}}이(가) 이번에는 답변하지 못했습니다.\n메시지를 다시 보내세요. 계속 실패하면 로그를 확인하고 문제를 신고하세요."
+        },
+        "capability": {
+          "GROUP_AUTHORIZATION_REQUIRED": "{{name}}의 도구가 실행되지 않았습니다. 그룹 권한이 만료되었거나 이 작업을 허용하지 않습니다. 동료 소유자가 이 그룹에서 다시 요청해 주세요.",
+          "GROUP_AUTHORIZATION_UNAVAILABLE": "{{name}}의 그룹 권한을 확인할 수 없어 도구가 실행되지 않았습니다. 연결이 복구되면 다시 시도해 주세요.",
+          "ATTACHMENTS_UNAVAILABLE": "다운로드 실패 또는 첨부 개수 제한으로 일부 첨부 파일이 {{name}}에게 전달되지 않았습니다. 이번 요청에 필요한 파일을 다시 보내 주세요."
         }
       },
       "settings": {
@@ -10617,7 +10699,8 @@
         "lifecycleUnavailable": "현재 서버 또는 컴퓨터에서 아직 이 작업을 지원하지 않습니다.",
         "groupDissolved": "이 그룹은 해산되었습니다. 열람 권한이 있는 기록은 계속 볼 수 있습니다.",
         "lastOwner": "나가기 전에 소유권을 이전하거나 그룹을 해산하세요.",
-        "allBotsMentionDisabled": "그룹 소유자가 모든 동료 멘션을 켜지 않았습니다."
+        "allBotsMentionDisabled": "그룹 소유자가 모든 동료 멘션을 켜지 않았습니다.",
+        "turnAlreadyStarted": "이 동료는 이미 실행을 시작하여 건너뛸 수 없습니다"
       },
       "organizer": "담당자",
       "plan": {
@@ -10648,7 +10731,17 @@
         "stepSpoken": "완료",
         "allTurns_one": "전체 {{count}}명",
         "allTurns_other": "전체 {{count}}명",
-        "foldTurns": "접기"
+        "foldTurns": "접기",
+        "stepQueued": "시작 대기 중",
+        "stepExecuting": "실행 중",
+        "stepSkipped": "건너뜀",
+        "skippingTurn": "건너뛰는 중…",
+        "queueWaiting": "계속 대기 중",
+        "skipTurnLabel": "건너뛰기 {{name}}",
+        "queueEnded": "라운드 종료",
+        "talkTitle": "차례로 의견 듣기",
+        "talkPending": "시작 전",
+        "skipTurn": "건너뛰기"
       },
       "speaking": {
         "planning": "역할을 나누는 중…"
@@ -10990,7 +11083,7 @@
         "items": {
           "tasks": {
             "title": "작업",
-            "body": "언제 백그라운드 작업을 시작할지 판단하고, 직접 시작한 작업을 제어해 결과를 채팅으로 가져옵니다. 다른 컴퓨터에서도 일할 수 있습니다."
+            "body": "제어할 수 있는 작업과 사용 가능한 컴퓨터를 파악하고, 요청에 따라 작업을 배정하고 진행 상황과 결과를 전달합니다. 다른 컴퓨터에서 작업하기 전에 지원 범위를 확인합니다."
           },
           "teammates": {
             "title": "다른 팀원",
@@ -11005,8 +11098,8 @@
             "body": "취향과 배경을 기억하고, 쓰기 전에 확인하며 바뀌면 업데이트합니다."
           },
           "self": {
-            "title": "자기 이해",
-            "body": "자기 기능을 알고 켜고 끄는 일을 돕습니다. Telegram 추가, MCP 설정, 플러그인 같은 Cindy 사용법은 먼저 도움말을 확인합니다."
+            "title": "Cindy 이해 및 설정",
+            "body": "Cindy의 기능과 사용법을 알고, 요청에 따라 설정을 확인하거나 변경합니다. 직접 입력하거나 확인해야 할 때는 작업 안에서 요청합니다."
           }
         }
       },
@@ -12948,9 +13041,9 @@
       "codexUsageLimit": "현재 연결된 Codex 계정이 사용량 한도에 도달했습니다. 한도 재설정을 기다리거나 사용 가능한 다른 계정으로 전환한 후 다시 시도하세요.",
       "gatewayQuotaExhausted": "Cindy AI 잔액이 부족합니다. 충전한 후 계속하세요.",
       "viewBalance": "잔액 보기",
-      "viewBalanceTitle": "「사용량 및 청구」를 열어 잔액을 확인하고 충전",
-      "credentialSwitchBusy": "다른 Codex 작업이 실행 중이어서 이 세션에서 선택한 제공자로 아직 전환할 수 없습니다(공유 Codex 프로세스 재시작 필요). 다른 작업이 끝난 후 ‘재시도’를 눌러 주세요.",
-      "accountBoundaryPending": "Cindy가 계정 상태를 전환하는 중이라 아직 이 작업을 시작할 수 없습니다. 잠시 후 ‘재시도’를 눌러 주세요. 계속 표시되면 Cindy를 다시 시작해 주세요.",
+      "viewBalanceTitle": "「사용량 및 결제」를 열어 잔액을 확인하고 충전",
+      "credentialSwitchBusy": "다른 Codex 작업이 실행 중이어서 이 세션에서 선택한 제공자로 아직 전환할 수 없습니다(공유 Codex 프로세스 재시작 필요). 다른 작업이 끝난 후 ‘다시 시도’를 눌러 주세요.",
+      "accountBoundaryPending": "Cindy가 계정 상태를 전환하는 중이라 아직 이 작업을 시작할 수 없습니다. 잠시 후 ‘다시 시도’를 눌러 주세요. 계속 표시되면 Cindy를 다시 시작해 주세요.",
       "codexThreadStale": "Codex 인증 모드가 변경되었습니다. 이 세션은 계속할 수 없습니다. 새 세션을 시작하세요.",
       "codexResumeNotReady": "Codex에서 현재 이 작업을 재개할 수 없습니다. 잠시 후 다시 시도해 주세요.",
       "claudeGatewayOpusPlanMismatch": "이 Opus 요청은 Claude.ai 구독이 아니라 XD Gateway를 통해 전송되었고, 해당 게이트웨이 경로에서 모델을 거부했습니다. Claude.ai 구독으로 전환해 다시 시도하거나 다른 모델을 선택하세요.",
@@ -12961,7 +13054,7 @@
       "claudeSubscriptionSwitchFailed": "Claude.ai로 전환하거나 이 세션을 다시 시도할 수 없습니다: {{msg}}",
       "codexAppServerRetired": "Codex 서비스가 다시 시작되었거나 교체되었습니다. 현재 요청이 중단되었으므로 다시 실행해 주세요.",
       "codexAuthMissing": "원격 Codex가 아직 로그인되지 않았습니다(401 Unauthorized). 「인증 동기화」를 클릭하여 로컬 Codex 자격 증명을 원격 Cindy Codex home으로 푸시한 후 다시 시도하세요.",
-      "codexAuthMissingLocal": "Codex 자격 증명이 없거나 만료되었습니다(401 Unauthorized). {{appName}} Settings → Codex에서 다시 로그인하거나(로그인 시 app-server가 자동 재시작) 터미널에서 `codex login` 실행 후 Settings에서 인증 모드를 한 번 전환하여 app-server를 재시작한 다음 새 세션을 시작하세요.",
+      "codexAuthMissingLocal": "Codex 자격 증명이 없거나 만료되었습니다(401 Unauthorized). {{appName}} 설정 → Codex에서 다시 로그인하거나(로그인 시 app-server가 자동 재시작) 터미널에서 `codex login` 실행 후 설정에서 인증 모드를 한 번 전환하여 app-server를 재시작한 다음 새 세션을 시작하세요.",
       "codexSessionExpired": "OpenAI 연결을 업데이트해야 합니다. ChatGPT를 다시 연결하면 계속할 수 있습니다. {{appName}}에서 시스템 Codex CLI를 로그아웃하거나 다른 모델 소스의 재연결을 요구하지 않습니다.",
       "codexAuthSynced": "인증이 동기화되었습니다. 「다시 시도」를 클릭하여 다시 보내세요.",
       "syncAuth": "인증 동기화",
@@ -12987,9 +13080,9 @@
       "networkReconnecting": "연결이 끊어졌습니다. 다시 연결하는 중({{attempt}}/{{maxAttempts}})…",
       "overloadRetrying": "모델 서비스가 혼잡합니다. 자동으로 다시 시도하는 중({{attempt}}/{{maxAttempts}})…",
       "rateLimitRetrying": "요청이 속도 제한에 걸렸습니다. 자동으로 다시 시도하는 중({{attempt}}/{{maxAttempts}})…",
-      "overloadBusy": "모델 서비스가 혼잡합니다. 상위 서비스에 여유 용량이 없습니다. \"재시도\"를 누르거나 다른 모델로 바꿔 보세요",
+      "overloadBusy": "모델 서비스가 혼잡합니다. 상위 서비스에 여유 용량이 없습니다. \"다시 시도\"를 누르거나 다른 모델로 바꿔 보세요",
       "overloadBusyNoRetry": "모델 서비스가 혼잡합니다. 상위 서비스에 여유 용량이 없습니다. 잠시 후 다시 시도하거나 다른 모델로 바꿔 보세요",
-      "streamInterrupted": "모델 출력이 중간에 중단되었습니다. 보통은 일시적인 상위 서비스 장애입니다. \"재시도\"를 눌러 주세요",
+      "streamInterrupted": "모델 출력이 중간에 중단되었습니다. 보통은 일시적인 상위 서비스 장애입니다. \"다시 시도\"를 눌러 주세요",
       "streamInterruptedNoRetry": "모델 출력이 중간에 중단되었습니다. 보통은 일시적인 상위 서비스 장애입니다. 잠시 후 다시 시도해 주세요",
       "networkShowRaw": "오류 상세 정보",
       "networkHideRaw": "상세 정보 접기",
@@ -12997,7 +13090,7 @@
       "diagnoseTitle": "새 세션에서 이 오류 진단",
       "diagnosePrompt": "이 오류를 진단해서 원인과 해결 방법을 알려 주세요.\n\n오류가 발생한 세션: {{sessionUrl}}\n오류 메시지: {{message}}\n오류 상세:\n{{details}}\n\nCindy 자체의 문제로 확인되면 알려 주세요. Cindy 팀에 issue를 제출할지는 제가 선택할게요.",
       "diagnosePromptWithoutSession": "이 오류를 진단해서 원인과 해결 방법을 알려 주세요.\n\n오류 메시지: {{message}}\n오류 상세:\n{{details}}\n\nCindy 자체의 문제로 확인되면 알려 주세요. Cindy 팀에 issue를 제출할지는 제가 선택할게요.",
-      "gatewayProxyTokenInvalid": "Cindy AI 자격 증명이 더 이상 유효하지 않습니다. 재시도를 클릭하세요. 반복되면 로그아웃 후 다시 로그인하세요",
+      "gatewayProxyTokenInvalid": "Cindy AI 자격 증명이 더 이상 유효하지 않습니다. 다시 시도를 클릭하세요. 반복되면 로그아웃 후 다시 로그인하세요",
       "gatewayProxyTokenInvalidNoRetry": "Cindy AI 자격 증명이 더 이상 유효하지 않습니다. 반복되면 로그아웃 후 다시 로그인하세요",
       "modelAccessDenied": "연결된 서비스 계정에 이 모델의 접근 권한이 없습니다. 다른 모델로 전환하거나 제공자에게 모델 접근 권한을 확인하세요",
       "silentStopContinue": "계속",
@@ -13047,6 +13140,12 @@
       "text": "실패한 자동 실행이 있습니다.",
       "precheck": "자동 확인이 일시적으로 차단되었습니다.",
       "rateLimited": "요청 한도 초과로 자동 확인이 일시적으로 차단되었습니다.",
+      "pluginMissing": "자동 확인이 차단되었습니다: '{{name}}' 플러그인이 설치되어 있지 않습니다. 설치하면 자동으로 재개됩니다.",
+      "pluginMissingUnnamed": "자동 확인이 차단되었습니다: 필요한 플러그인이 설치되어 있지 않습니다. 설치하면 자동으로 재개됩니다.",
+      "pluginDisabled": "자동 확인이 차단되었습니다: '{{name}}' 플러그인이 비활성화되어 있습니다. 활성화하면 자동으로 재개됩니다.",
+      "pluginDisabledUnnamed": "자동 확인이 차단되었습니다: 필요한 플러그인이 비활성화되어 있습니다. 활성화하면 자동으로 재개됩니다.",
+      "installPlugin": "플러그인 설치",
+      "openPlugin": "플러그인 열기",
       "dismissTitle": "이전 실패 알림 닫기"
     },
     "worktreeRestoreBanner": {
@@ -13395,6 +13494,24 @@
           "autocompactBuffer": "자동 압축 버퍼",
           "compactBuffer": "압축 버퍼",
           "freeSpace": "사용 가능"
+        },
+        "estimate": {
+          "title": "텍스트 추정치",
+          "delivery": "답변 표시",
+          "host": "Cindy 지침",
+          "plugins": "플러그인 목록",
+          "memoryRules": "메모리 지침",
+          "memoryIndex": "메모리 색인",
+          "profile": "팀원 프로필",
+          "user": "사용자 지침",
+          "directories": "추가 디렉터리",
+          "native": "Pi 지침",
+          "skills": "스킬 목록",
+          "project": "프로젝트 지침",
+          "tools": "도구 정의",
+          "messages": "대화 본문",
+          "other": "기타 지침",
+          "note": "현재 텍스트의 대략적인 추정치이며 모델의 토큰화 결과가 아닙니다. 이미지와 공급업체 형식의 추가 사용량은 제외되므로 합계가 Pi 총량과 일치하지 않습니다."
         }
       },
       "compact": {
@@ -13691,7 +13808,7 @@
       "REMOTE_PROVIDER_UPDATING": "이 모델 제공자의 자격 증명을 업데이트하는 중입니다. 잠시 후 다시 시도하세요.",
       "REMOTE_WORKDIR_UNAVAILABLE": "원격 작업 디렉터리를 지금 사용할 수 없습니다. 그 컴퓨터에 폴더가 아직 있는지 확인한 뒤 다시 시도하세요.",
       "REMOTE_OPTIMISTIC_SESSION_STATE_UNAVAILABLE": "컴퓨터에서 이 메시지가 이미 전송됐는지 아직 확인할 수 없습니다. 잠시 후 다시 시도하고, 같은 메시지를 중복으로 보내지 마세요.",
-      "REMOTE_AGENT_UNAVAILABLE": "Agent를 실행하는 컴퓨터에 연결할 수 없습니다. 그 컴퓨터가 온라인이고 원격 제어를 허용하는지 확인한 뒤 다시 시도하세요.",
+      "REMOTE_AGENT_UNAVAILABLE": "Agent를 실행하는 컴퓨터와의 연결이 끊어졌습니다. 다시 시도하세요. 계속 반복되면 그 컴퓨터가 온라인이고 원격 제어를 허용하는지 확인하세요.",
       "REMOTE_AGENT_PEER_TOO_OLD": "상대 컴퓨터의 Cindy 버전이 오래되어 이 작업을 지원하지 않습니다. 먼저 그 컴퓨터에서 Cindy를 업데이트하세요.",
       "REMOTE_AGENT_EXPIRED": "이 세션은 Agent를 실행하는 컴퓨터에서 이미 종료되었습니다. 다시 보내 주세요.",
       "REMOTE_AGENT_NOT_FOUND": "이 세션은 Agent를 실행하는 컴퓨터에서 이미 종료되었습니다. 다시 보내 주세요.",
@@ -13699,15 +13816,15 @@
       "REMOTE_AGENT_UNSUPPORTED": "상대 컴퓨터에서는 이 Agent를 사용할 수 없습니다. 그 컴퓨터에서 설치하거나 로그인한 뒤 다시 시도하거나, 다른 Agent를 선택하세요.",
       "REMOTE_AGENT_INVALID": "Agent를 실행하는 컴퓨터와 통신하는 중 오류가 발생했습니다. 다시 시도하고, 계속되면 두 컴퓨터의 Cindy를 모두 최신 버전으로 업데이트하세요.",
       "REMOTE_AGENT_MEMBER_BUDGET_PAUSED": "이 모델은 공유자가 설정한 모델 사용 비율 한도에 도달했습니다. 다른 사용 가능한 모델로 계속하세요.",
-      "REMOTE_AGENT_PROVIDER_NOT_ALLOWED": "그 컴퓨터에서 이 제공자 또는 선택한 모델의 원격 사용을 허용하지 않았습니다. 제공자에게 원격 및 공유에서 사용 범위를 조정해 달라고 요청하거나 다른 모델을 선택하세요.",
+      "REMOTE_AGENT_PROVIDER_NOT_ALLOWED": "그 컴퓨터에서 이 제공자 또는 선택한 모델의 원격 사용을 허용하지 않았습니다. 소유자에게 원격 및 공유에서 사용 범위를 조정해 달라고 요청하거나 다른 모델을 선택하세요.",
       "REMOTE_AGENT_FORK_FAILED": "Agent를 실행하는 컴퓨터에서 여기서 새 세션을 시작하지 못했습니다. 다시 시도하거나 다른 메시지로 시도해 주세요.",
       "REMOTE_AGENT_SHARE_PAUSED": "공유한 사람이 나에 대한 공유를 일시 중지해서 재개될 때까지 이 모델을 사용할 수 없습니다. 다른 모델로 바꿔 계속할 수 있습니다.",
       "REMOTE_AGENT_SHARE_REMOVED": "이 공유는 더 이상 사용할 수 없습니다(공유한 사람이 삭제했거나 내가 나갔습니다). 다른 모델로 바꿔 계속할 수 있습니다.",
       "REMOTE_AGENT_SHARE_UNAVAILABLE": "공유된 제공자를 일시적으로 사용할 수 없습니다. 공유한 사람의 컴퓨터가 오프라인이거나 공유가 잠시 꺼져 있을 수 있습니다. 나중에 다시 시도하거나 다른 모델로 바꿔 계속할 수 있습니다.",
       "REMOTE_AGENT_GROUP_USAGE_LIMIT": "이 모델을 사용할 수 있는 계정의 사용량이 한도에 도달했습니다. 다른 모델로 전환하거나 한도가 초기화된 후 계속하세요.",
       "REMOTE_AGENT_GROUP_UNAVAILABLE": "제공자 그룹의 컴퓨터가 지금 이 세션을 실행할 수 없습니다. 모두 오프라인이거나, 배정이 일시 중지되었거나, 대기 중이거나, 이 모델이 없을 수 있습니다. 이 제공자의 원격 및 공유 페이지에서 그룹을 확인하세요.",
-      "REMOTE_AGENT_DEVICE_LIMIT": "이 기기의 원격 세션 수가 한도에 도달했습니다. 사용하지 않는 세션을 보관하거나 제공자에게 원격 및 공유에서 한도를 높여 달라고 요청하세요.",
-      "REMOTE_AGENT_TOTAL_LIMIT": "제공자 컴퓨터의 전체 원격 세션 수가 한도에 도달했습니다. 제공자에게 불필요한 세션을 해제하거나 원격 및 공유에서 한도를 높여 달라고 요청하세요.",
+      "REMOTE_AGENT_DEVICE_LIMIT": "이 기기의 원격 세션 수가 한도에 도달했습니다. 사용하지 않는 세션을 보관하거나 원격 컴퓨터의 소유자에게 원격 및 공유에서 한도를 높여 달라고 요청하세요.",
+      "REMOTE_AGENT_TOTAL_LIMIT": "해당 컴퓨터의 전체 원격 세션 수가 한도에 도달했습니다. 해당 컴퓨터의 소유자에게 불필요한 세션을 해제하거나 원격 및 공유에서 한도를 높여 달라고 요청하세요.",
       "REMOTE_AGENT_RESUME_LOST": "상대 컴퓨터의 이전 대화에 다시 연결하지 못해 Agent가 그 맥락 없이 계속합니다.",
       "DEVICE_LINK_MEDIA_ACCESS_DENIED": "Cindy가 원본 첨부 파일을 읽을 수 없어 메시지가 전송되지 않았습니다. 다운로드 등 접근 가능한 폴더에 사본을 저장하고, 원본 첨부 파일을 제거한 뒤 첨부 버튼으로 사본을 추가하여 다시 전송하세요."
     },
@@ -13800,6 +13917,18 @@
       "cancelTitle": "대기를 중단하고 이 메시지를 삭제"
     },
     "ghostCall": {
+      "prStatus": {
+        "threadsNone": "처리할 리뷰 의견 없음",
+        "mergeReady": "병합 가능",
+        "mergeConflict": "충돌 있음",
+        "mergeBehind": "기준 브랜치 동기화 필요",
+        "mergeApproval": "승인 대기 중",
+        "mergeChanges": "수정 요청됨",
+        "mergeWaiting": "병합 대기 중",
+        "merged": "병합됨",
+        "closed": "닫힘",
+        "draft": "초안"
+      },
       "verb": "플러그인 호출",
       "cardRunning": "플러그인이 그리는 중",
       "cardDone": "완료",
@@ -13813,13 +13942,18 @@
       "collapseFields": "접기",
       "formSyncFailed": "카드 변경 사항이 동기화되지 않았습니다. 연결을 확인한 후 편집을 계속하세요. 메시지는 전송되지 않았습니다.",
       "linkOpenFailed": "링크를 열지 못했습니다",
+      "modelSelectFailed": "모델을 바꾸지 못했습니다. 다시 선택하세요.",
       "mailPreview": "메일 미리보기",
       "mailEnlarge": "확대 보기",
       "mailInsertImage": "본문에 삽입",
       "mailAttach": "첨부 파일 추가",
       "mailRemoveAttachment": "{{name}} 삭제",
       "mailUpdated": "업데이트된 초안 (읽기 전용)",
-      "mailLegacy": "초안 기록 (읽기 전용)"
+      "mailLegacy": "초안 기록 (읽기 전용)",
+      "taskAutoArchived": "\"{{title}}\"을(를) 보관했습니다",
+      "taskAutoArchivedUndo": "실행 취소",
+      "taskAutoArchivePending": "나가면 자동 보관",
+      "taskAutoArchiveCancel": "이번에는 보관 안 함"
     },
     "ghostHook": {
       "blockedFallback": "메시지가 플러그인에 의해 차단되어 전송되지 않았습니다",
@@ -14671,7 +14805,7 @@
         "manage": {
           "title": "PR 링크 관리",
           "hint": "상단에 최대 3개 표시하며 고정한 PR이 먼저 표시됩니다",
-          "empty": "GitHub PR 링크를 붙여넣어 추가하세요",
+          "empty": "GitHub PR 또는 GitLab MR 링크를 붙여넣어 추가하세요",
           "removed": "제거됨: {{count}}개",
           "legacy": "미확인 참조: {{count}}",
           "addLabel": "PR 링크 추가",
@@ -14682,18 +14816,29 @@
           "unpin": "고정 해제",
           "pinLimit": "PR은 최대 3개까지 고정할 수 있습니다",
           "reorderHint": "Alt+↑/↓ 키로 고정 또는 고정되지 않은 그룹 안에서 순서를 변경합니다.",
-          "dragHandle": "{{repo}} #{{number}} 끌어서 순서 변경",
+          "dragHandle": "{{repo}} {{numberLabel}} 끌어서 순서 변경",
           "remove": "PR 제거",
           "errors": {
             "duplicate": "이미 연결된 PR입니다. 제거한 링크는 목록에서 복원할 수 있습니다",
             "notFound": "PR을 찾을 수 없거나 접근 권한이 없습니다",
-            "invalidUrl": "유효한 GitHub PR 링크를 입력하세요",
+            "invalidUrl": "유효한 GitHub PR 또는 GitLab MR 링크를 입력하세요",
             "reorderFailed": "순서가 저장되지 않았습니다. 다시 시도하세요.",
-            "verifyFailed": "PR을 확인할 수 없습니다. GitHub 로그인과 접근 권한을 확인하세요",
+            "verifyFailed": "PR을 확인할 수 없습니다. GitHub 또는 GitLab 로그인과 접근 권한을 확인하세요",
             "unsupported": "이 컴퓨터의 버전은 PR 링크 관리를 지원하지 않습니다",
             "failed": "PR 링크를 업데이트할 수 없습니다"
           }
-        }
+        },
+        "gitlab": {
+          "missing": "GitLab CLI(glab)를 찾을 수 없습니다. glab를 설치하고 로그인하면 MR 상태가 표시됩니다.",
+          "notLoggedIn": "이 컴퓨터의 glab가 {{host}}에 로그인되어 있지 않습니다. 터미널에서 glab auth login을 실행해 로그인하면 MR 상태가 표시됩니다.",
+          "unsupported": "이 컴퓨터는 아직 GitLab MR 상태를 지원하지 않습니다",
+          "openAria": "브라우저에서 MR !{{number}} 열기",
+          "summaryAria": "MR !{{number}} 요약",
+          "urlPlaceholder": "GitHub PR 또는 GitLab MR 링크",
+          "notFound": "MR이 없거나 현재 계정으로는 볼 수 없습니다"
+        },
+        "merge": "병합",
+        "conflicts": "충돌 있음"
       }
     },
     "schedule": {
@@ -15087,7 +15232,8 @@
         "resume": "재개",
         "pause": "일시 중지",
         "deleteAutomation": "자동화 삭제"
-      }
+      },
+      "tagWebhook": "Webhook"
     },
     "detail": {
       "manualTrigger": "수동 트리거",
@@ -15162,7 +15308,7 @@
         "titleCreate": "자동화 만들기",
         "titleProjectCreate": "새 프로젝트 자동화",
         "titleProjectEdit": "프로젝트 자동화 편집",
-        "subtitle": "Claude, Codex 또는 Pi로 프롬프트를 일정에 따라 실행합니다.",
+        "subtitle": "AI 작업이나 스크립트의 실행 조건을 선택하세요.",
         "subtitleFromGhost": "\"{{name}}\"에서 자동화 만들기를 요청했습니다. 모델을 고르고 저장하면 적용됩니다.",
         "save": "저장",
         "create": "만들기",
@@ -15210,7 +15356,7 @@
       },
       "fields": {
         "title": "제목",
-        "schedule": "일정",
+        "schedule": "작동 방식",
         "notify": "알림",
         "prompt": "프롬프트",
         "once": "1회",
@@ -15326,7 +15472,87 @@
         "preRunPluginRequired": "사전 검사에 쓸 플러그인을 선택하세요",
         "templateParamRequired": "{{label}}을(를) 입력하세요",
         "templateApplyFailed": "템플릿을 적용할 수 없습니다. 매개변수를 확인한 후 다시 시도하세요."
-      }
+      },
+      "layout": {
+        "content": "실행 내용",
+        "notifications": "알림 및 조용한 실행",
+        "contentTab": "내용 및 작동 방식",
+        "optionsTab": "실행 옵션",
+        "sections": "자동화 설정"
+      },
+      "webhook": {
+        "quotaHint": "Webhook 수신 횟수에는 일일 한도가 있으며 여기서 필터링해도 횟수는 줄지 않습니다. 발신 측(예: GitHub)에서 필요한 이벤트만 선택하세요.",
+        "sourceLabel": "보내는 곳",
+        "sourceCustom": "사용자 지정",
+        "customLabel": "형식(JSON)",
+        "customHint": "서명 방식과 이벤트 이름, 전송 ID의 위치를 JSON으로 설명합니다.",
+        "customInvalid": "사용자 지정 형식이 올바르지 않습니다. JSON을 확인하세요.",
+        "signedLabel": "서명 확인",
+        "signedHint": "시크릿을 가진 보내는 곳의 요청만 받습니다.",
+        "unsignedWarning": "서명을 끄면 주소를 아는 사람은 누구나 이 작업을 실행할 수 있고, 매일의 Webhook 수신 횟수도 소모됩니다. 주소가 유출되면 작업 세부 정보에서 주소를 변경하세요.",
+        "eventPicker": {
+          "label": "응답할 이벤트",
+          "choose": "이벤트 선택",
+          "selected": "{{count}}개 선택됨",
+          "all": "모든 이벤트",
+          "search": "이벤트 검색",
+          "customGroup": "기타 선택한 이벤트",
+          "noResults": "일치하는 이벤트가 없습니다. 고급 옵션에서 추가할 수 있습니다.",
+          "noPresets": "이 소스에는 고정된 이벤트 목록이 없습니다. 모두 수신하거나 고급 옵션에서 이벤트 이름을 추가하세요.",
+          "custom": "사용자 지정 이벤트 (고급)",
+          "customLabel": "이벤트 이름",
+          "invalid": "영문, 숫자 또는 _ . : -를 1~100자로 입력하고 한 번에 하나씩 추가하세요.",
+          "add": "추가",
+          "limit": "최대 32개까지 선택할 수 있습니다.",
+          "chooseOne": "이벤트를 하나 이상 선택하거나 모든 이벤트를 선택하세요.",
+          "cancel": "취소",
+          "apply": "적용",
+          "remove": "{{name}} 제거",
+          "groups": {
+            "issues": "Issue",
+            "pullRequests": "PR",
+            "issueComments": "Issue / PR 댓글",
+            "reviews": "PR 리뷰",
+            "checks": "검사 모음",
+            "workflows": "워크플로 실행",
+            "repository": "저장소",
+            "releases": "릴리스",
+            "mergeRequests": "병합 요청",
+            "comments": "댓글",
+            "pipelines": "파이프라인",
+            "projects": "프로젝트",
+            "payments": "결제",
+            "checkout": "체크아웃",
+            "invoices": "청구서",
+            "subscriptions": "구독"
+          },
+          "actions": {
+            "all": "모든 변경",
+            "created": "생성",
+            "closed": "닫힘",
+            "reopened": "다시 열림",
+            "edited": "편집",
+            "commitsUpdated": "커밋 업데이트",
+            "submitted": "리뷰 제출",
+            "completed": "완료",
+            "pushed": "코드 푸시",
+            "published": "게시",
+            "merged": "병합",
+            "updated": "업데이트",
+            "tagsChanged": "태그 푸시",
+            "declined": "거절",
+            "deleted": "삭제",
+            "succeeded": "성공",
+            "failed": "실패",
+            "paid": "결제됨"
+          }
+        }
+      },
+      "trigger": {
+        "label": "트리거 방식",
+        "timed": "예약 실행"
+      },
+      "runSettings": "실행 설정"
     },
     "chips": {
       "selectProject": "프로젝트 선택",
@@ -15525,6 +15751,91 @@
           "description": "매월 문서를 점검해 오래된 내용과 모순 찾기",
           "prompt": "작업 디렉터리의 문서를 점검하고 업데이트가 필요한 내용을 찾으세요.\n제약 사항:\n- 오래된 정보(지난 날짜, 끊어진 링크, 폐기된 절차나 도구), 모순, 중복 내용을 확인합니다\n- 각 문제의 파일 경로와 구체적인 위치를 표시하고 판단 근거를 설명합니다\n- \"업데이트 권장 / 병합 권장 / 삭제 권장\"으로 분류하고 수정 체크리스트를 작성합니다\n- 점검 보고서만 출력하고 문서 자체는 수정하지 않습니다"
         }
+      }
+    },
+    "deadline": {
+      "label": "종료 날짜 및 시간",
+      "clear": "지우기",
+      "hint": "비워 두면 제한이 없습니다. 시간은 {{timezone}} 기준입니다. 종료 시간 이후에는 자동 실행을 시작하지 않으며, 이미 시작한 실행은 완료됩니다.",
+      "invalid": "올바른 날짜와 시간을 입력하세요",
+      "expired": "만료됨"
+    },
+    "webhook": {
+      "title": "Webhook 트리거",
+      "url": "수신 주소",
+      "secret": "시크릿",
+      "copy": "복사",
+      "copied": "{{label}}을(를) 복사했습니다",
+      "copyFailed": "{{label}}을(를) 복사하지 못했습니다. 선택하여 직접 복사해 주세요.",
+      "urlUnavailable": "수신 주소를 지금 사용할 수 없습니다.",
+      "quotaNotifyTitle": "Webhook 수신 횟수를 모두 사용했습니다",
+      "quotaExhausted": "오늘의 Webhook 수신 횟수 {{limit}}회를 모두 사용했습니다. {{time}}에 다시 시작됩니다. 그때까지 외부 이벤트로 작업이 실행되지 않습니다. 예약 실행과 모델 사용량에는 영향이 없습니다.",
+      "signedOut": "Cindy 계정에 로그인하면 수신이 다시 시작됩니다. 설정은 유지됩니다.",
+      "serviceUnavailable": "이 환경에서는 Webhook 수신을 사용할 수 없습니다.",
+      "suspended": "이 계정의 Webhook이 비활성화되었습니다.",
+      "endpointLimit": "수신 URL 한도에 도달했습니다. 사용하지 않는 URL을 해제해 주세요.",
+      "offline": "이 컴퓨터가 현재 서버에 연결되어 있지 않습니다. 이벤트는 보관되었다가 다시 연결되면 전달됩니다.",
+      "localOnlyHint": "이 주소는 이 컴퓨터에서만 작동합니다. 공개 이벤트는 gh webhook forward 등으로 전달하세요.",
+      "eventsSummary": "이벤트: {{events}}",
+      "lastReceived": "최근 이벤트: {{time}}",
+      "neverReceived": "아직 받은 이벤트가 없습니다",
+      "ignored": "{{count}}개 무시됨",
+      "generateSecret": "시크릿 생성",
+      "rotateSecret": "시크릿 다시 생성",
+      "secretOnce": "지금 이 시크릿을 복사하세요. 다시 표시되지 않습니다.",
+      "secretMissing": "시크릿을 생성하기 전까지 이벤트가 거부됩니다.",
+      "rotateFailed": "시크릿을 생성하지 못했습니다. 시크릿은 이 작업을 실행하는 컴퓨터에서만 관리할 수 있습니다.",
+      "genericSender": "보내는 곳",
+      "secretFillHint": "{{sender}}의 \"{{field}}\"에 입력하세요.",
+      "secretPastePlaceholder": "{{sender}}의 \"{{field}}\" 붙여넣기",
+      "secretSave": "시크릿 저장",
+      "secretSaved": "시크릿을 저장했습니다.",
+      "secretSaveFailed": "시크릿을 저장할 수 없습니다. 시크릿은 이 작업을 실행하는 컴퓨터에서만 관리할 수 있습니다.",
+      "secretInvalid": "시크릿 형식이 올바르지 않습니다. 보내는 곳에서 다시 복사하세요.",
+      "secretPasteMissing": "보내는 곳의 시크릿을 붙여넣기 전까지 이벤트는 거부됩니다.",
+      "unsignedNotice": "서명이 꺼져 있습니다. 주소를 아는 사람은 누구나 이 작업을 실행할 수 있습니다. 주소가 유출되면 변경하세요.",
+      "rotateUrl": "주소 변경",
+      "rotateUrlConfirmTitle": "수신 주소를 변경할까요?",
+      "rotateUrlConfirmBody": "이전 주소는 바로 사용할 수 없게 되므로 새 주소를 보내는 곳에 입력하세요. 설정과 시크릿은 그대로입니다.",
+      "rotateUrlFailed": "주소를 변경할 수 없습니다. 잠시 후 다시 시도하세요.",
+      "addressHint": "{{sender}}의 Webhook 설정에 이 URL을 입력하세요.",
+      "testHint": "{{sender}}에서 필터와 일치하는 이벤트를 발생시키세요. 실행 결과가 아래에 표시됩니다.",
+      "waitingEvent": "이벤트 대기 중",
+      "manageConnection": "연결 설정",
+      "preparing": "수신 URL 준비 중…",
+      "noRunsHint": "필터와 일치하는 Webhook 이벤트가 도착하면 여기에 실행 결과가 표시됩니다.",
+      "account": {
+        "title": "수신 주소",
+        "manage": "관리",
+        "usage": "수신 주소 {{used}} / {{limit}}",
+        "description": "모든 컴퓨터의 수신 주소가 이 계정의 한도를 공유합니다. 이전 컴퓨터가 오프라인이어도 주소를 해제할 수 있습니다.",
+        "remaining": "{{count}}개 사용 가능",
+        "unavailable": "현재 서비스는 계정별 주소 관리를 지원하지 않습니다. 서비스 업데이트를 기다려 주세요.",
+        "loadFailed": "주소 목록을 불러오지 못했습니다. 연결을 확인하고 새로고침해 주세요.",
+        "releaseFailed": "해제 결과를 확인하지 못했습니다. 다시 시도하기 전에 목록을 새로고침해 확인해 주세요.",
+        "retry": "새로고침",
+        "loading": "주소 불러오는 중…",
+        "empty": "사용 중인 수신 주소가 없습니다",
+        "thisDevice": "이 컴퓨터",
+        "unnamed": "자동화 {{id}}",
+        "unnamedDevice": "기기 {{id}}",
+        "suspended": "비활성화됨, 한도에 포함",
+        "lastReceived": "최근 수신: {{time}}",
+        "neverReceived": "수신한 이벤트 없음",
+        "open": "자동화 보기",
+        "release": "해제",
+        "confirm": "{{device}}의 “{{name}}” 수신 주소를 해제할까요?",
+        "confirmHint": "기존 주소, 비밀 키 및 서버에 저장된 이벤트가 무효화됩니다. 이전 컴퓨터가 다시 연결되어도 자동으로 복구되지 않습니다. 자동화와 실행 기록은 유지되며, 이미 시작된 실행에는 영향을 주지 않습니다.",
+        "cancel": "취소",
+        "confirmRelease": "주소 해제",
+        "viewAddress": "주소 보기",
+        "done": "완료",
+        "released": "“{{name}}”의 주소를 해제했습니다.",
+        "releasedHint": "이 주소는 해제되어 더 이상 한도를 차지하지 않습니다. 다시 연결하면 새 주소가 생성되므로 발신 측 설정을 업데이트해 주세요.",
+        "reconnect": "다시 연결",
+        "reconnectConfirm": "Webhook을 다시 연결할까요?",
+        "reconnectConfirmHint": "한 자리의 한도를 사용하여 새 수신 주소를 만듭니다. 발신 측에 새 주소와 비밀 키를 설정해 주세요.",
+        "reconnectFailed": "다시 연결하지 못했습니다. 남은 한도를 확인하고 다시 시도해 주세요."
       }
     }
   },
@@ -15958,7 +16269,17 @@
   },
   "commandPalette": {
     "viewSkillDetails": "스킬 상세 보기",
-    "projectSkillNotLoaded": "현재 Pi 작업에는 이 프로젝트 Skill이 아직 로드되지 않았습니다. 새 작업에서는 자동으로 로드를 시도합니다."
+    "projectSkillNotLoaded": "현재 Pi 작업에는 이 프로젝트 Skill이 아직 로드되지 않았습니다. 새 작업에서는 자동으로 로드를 시도합니다.",
+    "pluginSkillSetup": {
+      "install": "미설치",
+      "enable": "비활성"
+    },
+    "pluginSkills": {
+      "pr": {
+        "install": "PR을 올리고 CI와 리뷰 피드백을 고쳐 병합까지 챙깁니다 · GitHub 플러그인을 설치해야 합니다",
+        "enable": "PR을 올리고 CI와 리뷰 피드백을 고쳐 병합까지 챙깁니다 · GitHub 플러그인을 활성화해야 합니다"
+      }
+    }
   },
   "skillhub": {
     "remote": {
@@ -16722,7 +17043,10 @@
       "registrationFailed": "생성 실패. 잠시 후 다시 시도하세요",
       "silentStopExhausted": "모델이 빈 응답을 반복해서 반환하여 자동 재개가 일시 중지되었습니다. \"계속\"을 클릭하여 작업을 재개하세요.",
       "executionResultUnavailable": "실행 결과를 가져오지 못해 자동 계속 진행을 중단했습니다. 어시스턴트에게 기존 실행 결과를 확인하도록 요청하세요.",
-      "outputLimit": "모델이 출력 한도에 도달하여 이번 응답은 불완전할 수 있습니다. 다음 메시지를 보내 계속할 수 있습니다.",
+      "outputLimit": "모델이 출력 한도에 도달하여 이번 응답은 불완전할 수 있습니다. 새 메시지를 보내 계속할 수 있습니다. 반복되면 추론 강도를 낮추거나 먼저 대화 기록을 압축하세요.",
+      "outputLimitReasoning": "추론이 이번 출력 예산의 대부분을 소비하여 응답은 불완전할 수 있습니다. 추론 강도를 낮추거나 대화 기록을 압축한 후 계속하세요.",
+      "outputLimitUsage": "이번 모델 요청의 출력은 {{outputTokens}} 토큰이며, 그중 {{reasoningTokens}} 토큰이 추론에 사용되었습니다.",
+      "outputLimitOutputUsage": "이번 모델 요청의 출력은 {{outputTokens}} 토큰입니다.",
       "permissionTightenInterruptFailed": "권한을 강화하는 동안 실행 중인 작업을 중지하지 못했습니다. 작업이 끝날 때까지 확인 없이 계속 실행될 수 있습니다. 필요하면 수동으로 중지하세요.",
       "codexAutoReviewUnavailable": "자동 리뷰를 일시적으로 사용할 수 없습니다. 현재 작업을 차단하고 기본 권한으로 전환했습니다. 다시 시도하세요. 필요한 경우 확인을 요청합니다.",
       "hostShellCommandBlocked": "Cindy가 이 셸 명령을 차단했습니다. 명령을 확인하고 사용 가능한 도구나 명령으로 계속하세요.",
@@ -17205,6 +17529,7 @@
     "sidebar": "잔액 및 요금제",
     "settings": {
       "title": "사용량 및 결제",
+      "supportHint": "문제가 있나요? {{email}}로 문의해 도움을 받으세요.",
       "subscriptionCard": {
         "title": "현재 요금제",
         "empty": "활성 구독이 없습니다",
@@ -17279,14 +17604,38 @@
     },
     "orders": {
       "title": "주문 내역",
-      "description": "Cindy에서 시작한 잔액 충전 및 구독 주문만 표시합니다. 결제 대기 중인 주문은 시간이 지나면 자동으로 취소됩니다.",
+      "description": "결제된 충전 주문과 정산된 구독 청구서를 표시합니다.",
+      "history": {
+        "loadFailed": "주문 내역을 불러오지 못했습니다",
+        "retry": "주문 다시 불러오기",
+        "unknownPaidAt": "결제 일시 정보 없음",
+        "unknownAmount": "금액 정보 없음",
+        "refundedAmount": "환불액 {{amount}}",
+        "refunded": "환불됨",
+        "partiallyRefunded": "부분 환불됨",
+        "noPayment": "결제 불필요",
+        "page": "{{page}}페이지",
+        "previous": "이전 페이지",
+        "next": "다음 페이지"
+      },
       "count": "{{count}}건",
-      "incomplete": "주문 내역이 많아 최근 {{count}}건만 표시합니다.",
       "orderId": "NO. {{id}}",
       "copy": {
         "action": "주문 ID {{id}} 복사",
         "success": "주문 ID를 복사했습니다",
         "failed": "주문 ID를 복사하지 못했습니다. 다시 시도해 주세요."
+      },
+      "refund": {
+        "action": "환불 신청",
+        "title": "환불 신청",
+        "description": "환불을 신청하려면 다음 정보를 {{email}}로 보내 주세요.",
+        "emailSubject": "Cindy 환불 신청 - {{orderId}}",
+        "sendAction": "환불 신청 보내기",
+        "gmailFallbackDescription": "환불 신청에는 주문 정보가 포함됩니다. Gmail을 열면 이 정보가 Google에 공유됩니다. 계속하시겠어요?",
+        "emailBody": "안녕하세요. 아래 주문에 대한 환불을 신청하고 싶습니다. 확인 후 도움 부탁드립니다.\n\n주문 ID: {{orderId}}\n결제 거래 ID: {{providerTransactionId}}\n애플리케이션: {{application}}\n결제 수단: {{paymentMethod}}\n결제 금액: {{amount}}\n\n겪으신 문제:\n(어떤 상황이었는지 간단히 알려 주세요)\n\n감사합니다.",
+        "fields": {
+          "amount": "결제 금액"
+        }
       },
       "invoice": {
         "action": "세금계산서 신청",
@@ -17296,7 +17645,7 @@
         "emailSubject": "주문 {{orderId}} 세금계산서 발급 신청",
         "personalInvoicePolicy": "Cindy 개인용 충전 시 기본적으로 <strong>개인 명의의 세금계산서</strong>가 발급됩니다. 발급 명의는 성명 또는 “개인”으로 기재할 수 있습니다. 회사 경비 정산을 위해 기업 명의의 세금계산서가 필요한 경우, <strong>회사 직인이 날인된 경비 정산 설명서</strong>를 제출하고 설명서에 발급 명의를 명시해 주세요.",
         "invoiceTitleHint": "작성 안내: 개인 명의의 경우 성명 또는 “개인”을 기재해 주세요. 회사 경비 정산을 위해 기업 명의로 발급받으려면, 회사 직인이 날인되고 발급 명의가 명시된 경비 정산 설명서를 이메일에 첨부해 주세요.",
-        "emailBody": "안녕하세요.\n\n다음 주문에 대한 세금계산서 발급을 신청합니다.\n\n────────────────────\n주문 ID: {{orderId}}\n애플리케이션: {{application}}\n결제 수단: {{paymentMethod}}\n발행 금액: {{amount}}\n청구서 제목: \n{{invoiceTitleHint}}\n\n담당자: \n전화번호: \n이메일: \n────────────────────\n\n감사합니다.",
+        "emailBody": "안녕하세요.\n\n다음 주문에 대한 세금계산서 발급을 신청합니다.\n\n────────────────────\n주문 ID: {{orderId}}\n결제 거래 ID: {{providerTransactionId}}\n애플리케이션: {{application}}\n결제 수단: {{paymentMethod}}\n발행 금액: {{amount}}\n청구서 제목: \n{{invoiceTitleHint}}\n\n담당자: \n전화번호: \n이메일: \n────────────────────\n\n감사합니다.",
         "sendAction": "세금계산서 신청 보내기",
         "emailCopied": "고객센터 이메일을 복사했습니다",
         "emailCopyFailed": "고객센터 이메일을 복사하지 못했습니다. 다시 시도해 주세요.",
@@ -17307,6 +17656,7 @@
         "notAvailable": "정보 없음",
         "fields": {
           "orderId": "주문 ID",
+          "providerTransactionId": "결제 거래 ID",
           "application": "애플리케이션",
           "paymentMethod": "결제 수단",
           "amount": "발행 금액",
@@ -18662,6 +19012,21 @@
     "autoDetail": "Cindy가 주 작업과 Worker 동작을 자동 심사합니다. 확인이 필요하거나 거부된 동작은 일시 중지됩니다. 전체 접근 권한이 아니며 다른 작업의 전역 권한은 변경하지 않습니다.",
     "autoTaskDetail": "Cindy가 주 작업과 Worker 동작을 자동 심사합니다. 확인이 필요하거나 거부된 동작은 일시 중지됩니다. 전체 접근 권한이 아닙니다. 현재 세션의 권한만 변경하며 플러그인 기본 설정은 변경하지 않습니다."
   },
+  "pluginCompanionAnswer": {
+    "title": "허용 확인",
+    "planMessage": "{{companion}}이(가) 이 계획대로 작업을 시작하게 할까요?",
+    "permissionMessage": {
+      "command": "{{companion}}이(가) 이 명령을 실행하도록 허용할까요?",
+      "file-read": "{{companion}}이(가) 이 파일들을 읽도록 허용할까요?",
+      "file-write": "{{companion}}이(가) 이 파일들을 수정하도록 허용할까요?",
+      "browser": "{{companion}}이(가) 브라우저에서 이 단계를 실행하도록 허용할까요?",
+      "plugin": "{{companion}}이(가) “{{tool}}”을(를) 사용하도록 허용할까요?",
+      "tool": "{{companion}}이(가) {{tool}}을(를) 사용하도록 허용할까요?"
+    },
+    "source": "플러그인 “{{plugin}}”에서 허용을 선택해 {{appName}}이(가) 여기서 한 번 더 확인합니다. 허용하면 동료가 작업을 계속합니다.",
+    "allow": "허용",
+    "cancel": "취소"
+  },
   "groupTools": {
     "authorizationRequired": "그룹 권한이 만료되었거나 이 작업이 허용되지 않습니다. 파트너 소유자가 이 그룹에서 다시 요청해 주세요.",
     "localPeersOnly": "그룹에서는 이 기기의 같은 계정에 있는 파트너에게만 메시지를 보낼 수 있습니다.",
@@ -18739,6 +19104,9 @@
     "pendingApprovals": "승인 대기 {{count}}개"
   },
   "richAnswer": {
+    "invalidImageReference": "이미지 참조가 올바르지 않아 표시할 수 없습니다.",
+    "requestImageAgain": "이미지 다시 표시 요청",
+    "requestImageAgainMessage": "이 기존 이미지({{name}}, 참조: {{source}})를 다시 표시해 주세요. 원래 도구 결과나 파일을 확인하고 실제 주소를 사용해 주세요. 이미지를 새로 생성하지 말고, 어떤 이미지인지 확인할 수 없다면 먼저 저에게 물어봐 주세요.",
     "send": "메시지 보내기",
     "sending": "보내는 중…",
     "sent": "제출됨",
@@ -18747,6 +19115,297 @@
     "openVideoSource": "원본 동영상 열기",
     "calculationUnavailable": "이 값을 계산할 수 없습니다.",
     "incomplete": "일부 내용을 표시하지 못했습니다."
+  },
+  "setupMigration": {
+    "title": "마이그레이션 지원",
+    "back": "← 이전",
+    "cancel": "취소",
+    "listSeparator": ", ",
+    "steps": {
+      "label": "옮기기 단계",
+      "source": "컴퓨터 선택",
+      "review": "내용 선택",
+      "apply": "옮기기"
+    },
+    "source": {
+      "description": "같은 계정으로 로그인한 컴퓨터를 선택하세요. 그 컴퓨터의 플러그인, 스킬, 설정, 연결을 이 컴퓨터에 그대로 설정합니다. 키는 그 컴퓨터에서 허용한 후에만 복사되며, 로그인 상태는 그 컴퓨터를 벗어나지 않습니다.",
+      "loading": "다른 컴퓨터를 찾는 중…",
+      "empty": "이 계정의 다른 컴퓨터를 찾지 못했습니다. 다른 컴퓨터에서 Cindy에 로그인한 뒤 다시 열어 주세요",
+      "loadFailed": "컴퓨터 목록을 불러오지 못했습니다",
+      "reload": "다시 불러오기",
+      "ready": "온라인, 옮길 수 있음",
+      "next": "설정 읽기",
+      "readAgain": "다시 읽기",
+      "unavailable": {
+        "offline": "오프라인입니다. 그 컴퓨터에서 Cindy를 열면 옮길 수 있습니다",
+        "remote-control-off": "먼저 그 컴퓨터에서 ‘동일 계정 기기의 이 컴퓨터 제어 허용’을 켜 주세요",
+        "control-disabled": "이 컴퓨터에서 그 컴퓨터 제어가 꺼져 있습니다. ‘원격 연결’에서 다시 켤 수 있습니다"
+      }
+    },
+    "reading": "‘{{name}}’의 설정을 읽는 중…",
+    "errors": {
+      "SETUP_SOURCE_OUTDATED": "‘{{name}}’의 Cindy가 오래되어 옮기기를 지원하지 않습니다. 그 컴퓨터의 Cindy를 업데이트한 뒤 다시 시도하세요",
+      "SETUP_SOURCE_UNAVAILABLE": "‘{{name}}’의 설정을 읽지 못했습니다. 옮기려면 그 컴퓨터가 온라인이고 ‘동일 계정 기기의 이 컴퓨터 제어 허용’이 켜져 있어야 합니다",
+      "SETUP_SNAPSHOT_INVALID": "‘{{name}}’에서 받은 설정을 인식하지 못했습니다. 두 컴퓨터의 Cindy 버전이 다를 때 생깁니다. 같은 버전으로 업데이트한 뒤 다시 시도하세요",
+      "SETUP_PLAN_EXPIRED": "옮기기 목록이 만료되었습니다. ‘{{name}}’의 설정을 다시 읽어 주세요",
+      "GENERIC": "‘{{name}}’의 설정을 읽지 못했습니다"
+    },
+    "review": {
+      "description": "‘{{name}}’에서 이 컴퓨터로 옮길 내용을 선택하세요. 이 컴퓨터에서 이미 바꾼 설정은 그대로 유지되며 덮어쓰지 않습니다.",
+      "partial": "그 컴퓨터의 일부 내용은 이번에 읽지 못했습니다. 읽은 내용만 아래에 표시합니다.",
+      "groupCount": "{{total}}개 중 {{selected}}개 선택",
+      "present_one": "그 밖의 {{count}}개 항목은 이 컴퓨터와 같아 옮기지 않아도 됩니다",
+      "present_other": "그 밖의 {{count}}개 항목은 이 컴퓨터와 같아 옮기지 않아도 됩니다",
+      "start_one": "{{count}}개 항목 옮기기",
+      "start_other": "{{count}}개 항목 옮기기",
+      "continue": "계속",
+      "version": "버전 {{version}}",
+      "pluginDisabled": "그 컴퓨터에서 꺼져 있으며, 옮긴 뒤에도 꺼진 상태로 유지됩니다",
+      "pluginConsentLater": "플러그인 마켓 ‘{{market}}’에서 가져옵니다. 설치할 때 권한을 따로 확인합니다",
+      "skillTeam": "팀 스킬",
+      "settingsChanges_one": "설정 {{count}}개",
+      "settingsChanges_other": "설정 {{count}}개",
+      "settingsKept_one": "이 컴퓨터의 설정 {{count}}개 유지",
+      "settingsKept_other": "이 컴퓨터의 설정 {{count}}개 유지",
+      "settingsChangesKept_one": "설정 {{count}}개, 이 컴퓨터의 {{kept}}개는 유지",
+      "settingsChangesKept_other": "설정 {{count}}개, 이 컴퓨터의 {{kept}}개는 유지",
+      "kept": "이 컴퓨터의 설정 유지",
+      "rendererPrefs": "화면 환경설정",
+      "rendererPrefsHint": "테마, 언어, 알림, 채팅 표시",
+      "toolOn": "기본 제공 도구 ‘{{name}}’ 켜기",
+      "toolOff": "기본 제공 도구 ‘{{name}}’ 끄기",
+      "mcp": "MCP · {{url}}",
+      "mcpToken": "MCP · {{url}} · 인증 정보는 이 컴퓨터에서 다시 입력해야 합니다",
+      "checklistTitle": "옮긴 뒤 이 컴퓨터에서 할 일",
+      "checklistDescription": "로그인 상태, 키, 시스템 권한은 원래 컴퓨터를 벗어나지 않습니다. 옮긴 뒤 이 목록에 따라 하나씩 완료하세요.",
+      "groups": {
+        "plugins": "플러그인",
+        "skills": "스킬",
+        "settings": "설정",
+        "connections": "제공자 및 MCP",
+        "access": "이 컴퓨터 접근",
+        "secrets": "키",
+        "ssh": "SSH 서버"
+      },
+      "reason": {
+        "not-in-catalog": "이 컴퓨터의 플러그인 마켓에 없습니다",
+        "source-not-added": "이 컴퓨터가 읽을 수 없는 플러그인 마켓에서 왔습니다",
+        "local-only": "그 컴퓨터에만 있어 직접 옮겨야 합니다",
+        "needs-sign-in": "먼저 로그인해야 합니다",
+        "platform": "다른 운영체제 전용입니다",
+        "invalid": "이 컴퓨터에서 인식할 수 없습니다"
+      },
+      "providerAuth": {
+        "apiKey": "API 키를 이 컴퓨터에서 다시 입력해야 합니다",
+        "oauth": "이 컴퓨터에서 다시 로그인해야 합니다",
+        "native": "이 컴퓨터에서 구독 계정에 로그인해야 합니다",
+        "none": "키가 필요 없습니다",
+        "apiKeyCopy": "API 키는 \"키\"와 함께 복사할 수 있습니다"
+      },
+      "access": {
+        "remote-control": "동일 계정 기기의 이 컴퓨터 제어 허용",
+        "remote-controlHint": "‘{{name}}’과 같은 설정입니다. ‘원격 연결’에서 언제든지 끌 수 있습니다",
+        "keep-awake": "컴퓨터를 절전 모드로 전환하지 않기",
+        "keep-awakeHint": "‘{{name}}’과 같은 설정입니다. 이 컴퓨터는 절전 모드로 전환되지 않습니다"
+      },
+      "secrets": {
+        "title_one": "{{count}}개 항목의 키 복사",
+        "title_other": "{{count}}개 항목의 키 복사",
+        "description": "\"{{name}}\"에서 허용을 선택한 후에만 이 요청 전용으로 암호화해 복사합니다. 계정 로그인은 복사하지 않으며, 마이그레이션 후 체크리스트에서 차례로 로그인할 수 있습니다."
+      },
+      "sshDescription": "이 컴퓨터에서 새 SSH 키를 만들고 \"{{name}}\"이(가) 이 서버들에 추가합니다(그 컴퓨터에서도 허용 필요). 이후 서버마다 연결을 확인합니다. 개인 키는 각 컴퓨터를 벗어나지 않습니다.",
+      "sshHost": "{{user}}@{{host}}:{{port}}",
+      "mcpTokenCopy": "MCP · {{url}} · 인증 정보는 \"키\"와 함께 복사할 수 있습니다",
+      "checklistDescriptionWithKeys": "로그인 상태와 시스템 권한은 원래 컴퓨터에 남습니다. 키는 \"{{name}}\"에서 허용한 후에만 복사됩니다. 마이그레이션 후 이 체크리스트로 나머지를 완료하세요."
+    },
+    "permissions": {
+      "title": "플러그인 권한 확인",
+      "description_one": "아래 플러그인 {{count}}개는 설치 후 이 권한을 갖게 됩니다. 확인하면 함께 설치합니다.",
+      "description_other": "아래 플러그인 {{count}}개는 설치 후 이 권한을 갖게 됩니다. 확인하면 함께 설치합니다.",
+      "pluginTitle": "{{name}} · 버전 {{version}}",
+      "confirm_one": "허용하고 플러그인 {{count}}개 설치",
+      "confirm_other": "허용하고 플러그인 {{count}}개 설치"
+    },
+    "running": {
+      "progress": "옮기는 중: {{total}}개 중 {{completed}}개 완료",
+      "label": "옮기는 중…",
+      "confirm": "\"{{name}}\"에서 허용을 선택하세요.",
+      "confirmCode": "두 컴퓨터에 같은 코드가 표시되어야 합니다:"
+    },
+    "done": {
+      "summary_one": "‘{{name}}’에서 {{count}}개 항목을 옮겼습니다",
+      "summary_other": "‘{{name}}’에서 {{count}}개 항목을 옮겼습니다",
+      "applyFailed": "플러그인, 스킬, 설정 옮기기가 완료되지 않았습니다",
+      "failedTitle_one": "{{count}}개 항목을 옮기지 못했습니다",
+      "failedTitle_other": "{{count}}개 항목을 옮기지 못했습니다",
+      "checklistTitle": "이 컴퓨터에서 아직 할 일",
+      "checklistEmpty": "이 컴퓨터에서 더 할 일이 없습니다",
+      "checklistDescription": "이 목록은 나중에 ‘설정 → 일반’에서도 볼 수 있습니다.",
+      "restartHint": "일부 설정은 Cindy를 다시 열면 적용됩니다.",
+      "finish": "완료",
+      "finishReload": "완료하고 화면 새로 고침"
+    },
+    "failure": {
+      "generic": "옮기지 못했습니다({{code}})",
+      "SOURCE_NOT_ADDED": "플러그인 마켓을 추가하지 못했습니다",
+      "MUTATION_CANCELLED": "설치를 취소했습니다",
+      "PRECONDITION_FAILED": "옮기는 동안 플러그인이나 이 컴퓨터의 상태가 바뀌었습니다",
+      "PERMISSION_DENIED": "이 계정으로는 설치할 수 없습니다",
+      "NOT_FOUND": "이 컴퓨터의 플러그인 마켓에서 찾을 수 없습니다",
+      "ALREADY_EXISTS": "이 컴퓨터에 같은 이름의 항목이 이미 있습니다",
+      "SETUP_PLAN_EXPIRED": "옮기기 목록이 만료되었습니다",
+      "SETUP_TRANSFER_DECLINED": "다른 컴퓨터에서 허용하지 않았거나 2분 안에 응답이 없었습니다",
+      "SETUP_TRANSFER_BUSY": "다른 컴퓨터가 다른 마이그레이션 요청을 처리 중입니다. 잠시 후 다시 시도하세요",
+      "SETUP_TRANSFER_INVALID": "다른 컴퓨터의 응답을 읽을 수 없습니다",
+      "SETUP_SOURCE_OUTDATED": "복사하려면 다른 컴퓨터의 Cindy를 업데이트하세요",
+      "SETUP_SOURCE_UNAVAILABLE": "다른 컴퓨터가 응답하지 않습니다",
+      "SSH_AUTHORIZE_FAILED": "다른 컴퓨터가 새 키를 이 서버에 추가하지 못했습니다",
+      "SSH_KEYGEN_FAILED": "이 컴퓨터에서 SSH 키를 만들지 못했습니다(ssh-keygen 필요)",
+      "SSH_HOST_NOT_FOUND": "다른 컴퓨터에 이 서버가 더 이상 없습니다",
+      "SSH_AUTH_FAILED": "키는 추가되었지만 서버가 이 컴퓨터의 연결을 거부했습니다",
+      "SSH_CONNECT_FAILED": "이 컴퓨터에서 서버에 연결할 수 없습니다. 다른 컴퓨터의 네트워크에서만 접근 가능할 수 있습니다",
+      "SSH_KEY_FILE_NOT_FOUND": "이 컴퓨터에서 새 키 파일을 찾을 수 없습니다"
+    },
+    "checklist": {
+      "done": "완료됨",
+      "markDone": "완료로 표시",
+      "needs": "필요: {{items}}",
+      "voiceAsrName": "음성 인식",
+      "plugin-setup": {
+        "title": "‘{{name}}’ 계정 연결",
+        "action": "연결하기"
+      },
+      "plugin-manual": {
+        "title": "플러그인 ‘{{name}}’ 직접 설치",
+        "detail": "그 컴퓨터에서 직접 가져온 플러그인입니다. 그 컴퓨터의 플러그인 세부 정보에서 패키지를 내보낸 뒤 이 컴퓨터에서 가져오세요",
+        "action": "플러그인 열기"
+      },
+      "market-source": {
+        "title": "플러그인 마켓 ‘{{name}}’ 추가",
+        "detail": "이 마켓의 주소는 그 컴퓨터에만 저장되어 있습니다. 추가하면 마켓의 플러그인을 설치할 수 있습니다",
+        "action": "플러그인 열기"
+      },
+      "skill-manual": {
+        "title": "스킬 ‘{{name}}’ 복사",
+        "detail": "SkillHub에서 설치한 스킬이 아니며 그 컴퓨터에만 있습니다",
+        "action": "스킬 열기"
+      },
+      "provider-key": {
+        "title": "‘{{name}}’의 API 키 입력",
+        "action": "입력하기"
+      },
+      "provider-connection": {
+        "title": "‘{{name}}’의 연결 주소 다시 입력",
+        "detail": "원래 주소의 사용자 정보나 쿼리 매개변수에 인증 정보가 있을 수 있어 옮기지 않았습니다",
+        "action": "입력하기"
+      },
+      "provider-sign-in": {
+        "title": "‘{{name}}’에 로그인",
+        "action": "로그인"
+      },
+      "local-model": {
+        "title": "이 컴퓨터에 로컬 모델 ‘{{name}}’ 준비",
+        "detail": "로컬 모델은 원래 컴퓨터에서 실행됩니다. 이 컴퓨터에는 따로 설치해야 합니다",
+        "action": "제공자 열기"
+      },
+      "mcp-token": {
+        "title": "MCP ‘{{name}}’의 인증 정보 입력",
+        "action": "입력하기"
+      },
+      "builtin-key": {
+        "title": "‘{{name}}’의 API 키 입력",
+        "action": "입력하기"
+      },
+      "im-channel": {
+        "title": "‘{{name}}’ 연결",
+        "detail": "봇 하나는 한 번에 한 컴퓨터에서만 메시지를 받습니다. 어느 컴퓨터에서 받을지 정한 뒤 연결하세요",
+        "action": "연결하기"
+      },
+      "computer-use": {
+        "title": "자동 조작 켜기",
+        "detail": "이 컴퓨터에서 손쉬운 사용과 화면 기록 권한을 허용해야 합니다",
+        "action": "켜기"
+      },
+      "remote-desktop": {
+        "title": "원격 데스크톱 켜기",
+        "detail": "이 컴퓨터에서 따로 켜고 화면 기록 권한을 허용해야 합니다",
+        "action": "켜기"
+      },
+      "ssh": {
+        "title_one": "원격 호스트 {{count}}대의 SSH 키와 설정 복사",
+        "title_other": "원격 호스트 {{count}}대의 SSH 키와 설정 복사",
+        "detail": "~/.ssh의 키와 설정은 자동으로 옮겨지지 않으므로 이 컴퓨터로 복사해야 합니다",
+        "action": "원격 연결 열기"
+      },
+      "ssh-host": {
+        "title": "SSH 서버 \"{{name}}\" 설정",
+        "detail": "자동으로 설정하지 못했습니다. SSH 설정에서 키를 선택하고 연결을 확인하세요",
+        "action": "원격 열기"
+      },
+      "startAll_one": "차례로 완료({{count}}개)",
+      "startAll_other": "차례로 완료({{count}}개)"
+    },
+    "settingsGroups": {
+      "appearance": "외관",
+      "windowBehavior": "앱 동작",
+      "menubar": "메뉴 막대 남은 양 표시",
+      "collaboration": "협업",
+      "agentResource": "Agent 리소스 사용량",
+      "gitSafety": "Git 안전",
+      "goal": "목표 모드",
+      "memory": "메모리",
+      "compaction": "컨텍스트 압축",
+      "silentEncryptedRetry": "프로토콜 암호화 콘텐츠를 버리고 재시도",
+      "silentStopAutoResume": "예기치 않게 멈춘 뒤 자동으로 계속",
+      "sessionRuntimeFallback": "작업 모델 자동 대체",
+      "subagentModels": "하위 에이전트",
+      "auxiliaryModels": "보조 모델",
+      "visionBridge": "비전 브리지",
+      "modelVisibility": "모델 표시 및 숨기기",
+      "providerOrder": "제공자 순서",
+      "modelCatalogOverrides": "모델 매개변수 조정",
+      "modelPriceOverrides": "모델 단가",
+      "autoUpdate": "유휴 상태일 때 업데이트 설치",
+      "updateChannel": "베타 채널"
+    },
+    "settings": {
+      "title": "마이그레이션 지원",
+      "description": "새 컴퓨터에서 다른 기존 컴퓨터의 Cindy에 연결된 모든 기능, 플러그인, 설정을 복사해 바로 사용할 수 있게 합니다.",
+      "start": "마이그레이션 지원 열기",
+      "pending_one": "이 컴퓨터에서 아직 할 일이 {{count}}개 있습니다",
+      "pending_other": "이 컴퓨터에서 아직 할 일이 {{count}}개 있습니다",
+      "allDone": "이 컴퓨터에서 할 일을 모두 완료했습니다",
+      "from": "‘{{name}}’에서 옮김",
+      "closeChecklist": "목록 닫기"
+    },
+    "suggestion": {
+      "title": "마이그레이션 지원으로 ‘{{name}}’에서 옮길까요?",
+      "description": "그 컴퓨터의 플러그인, 스킬, 설정, 연결을 이 컴퓨터로 옮길 수 있습니다. 이 컴퓨터에서 다시 로그인하거나 권한을 허용해야 하는 항목은 목록으로 정리해 드립니다. 나중에 ‘설정 → 일반 → 마이그레이션 지원’에서 열 수도 있습니다.",
+      "confirm": "마이그레이션 지원 열기",
+      "later": "나중에"
+    },
+    "walkthrough": {
+      "progress": "마이그레이션 체크리스트 {{current}} / {{total}}",
+      "open": "열기",
+      "skip": "건너뛰기",
+      "next": "완료, 다음",
+      "stop": "종료",
+      "allDone": "체크리스트를 모두 마쳤습니다"
+    },
+    "transfer": {
+      "prompt": {
+        "title": "마이그레이션 지원",
+        "message": "\"{{name}}\"이(가) 이 컴퓨터에서 다음 항목을 복사하려고 합니다",
+        "secrets": "키(그 컴퓨터에만 복사되며 이 컴퓨터의 키는 그대로 유지됩니다):",
+        "ssh": "그 컴퓨터의 새 SSH 공개 키를 다음 서버에 추가:",
+        "sshKey": "공개 키 지문: {{fingerprint}}",
+        "code": "코드: {{code}}. 그 컴퓨터에 표시된 코드와 같을 때만 허용하세요.",
+        "notice": "직접 새 컴퓨터를 설정하는 중이 아니라면 거부하세요.",
+        "more": "외 {{count}}개",
+        "allow": "허용",
+        "deny": "거부"
+      }
+    }
   },
   "forwardedRequest": {
     "sourcePresent": "[출처] 호스트가 사용자 원문을 요청의 배경으로 그대로 보존했습니다. 현재 요청은 Agent 보충에 있습니다.",

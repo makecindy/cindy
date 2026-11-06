@@ -2,8 +2,8 @@
 
 ```json
 "tools": [{
-  "name": "gen_image", // 小写字母开头,1–64 位小写/数字/下划线/连字符;禁用宿主保留键(见 §2.1)
-  "description": "根据文字描述生成一张图片,并把它挂进画廊面板。返回可在聊天中渲染的图片地址。",
+  "name": "prepare_image", // 小写字母开头,1–64 位小写/数字/下划线/连字符;禁用宿主保留键(见 §2.1)
+  "description": "整理图片生成参数，返回提示词与插件保存的模型偏好，供当前 Agent 调用 Cindy Core media 工具。",
   "parameters": {
     "type": "object",
     "properties": {
@@ -13,6 +13,13 @@
   }
 }]
 ```
+
+媒体生成由当前 Agent 执行；插件获取生成结果走通用附件交接，完整流程见 [§4.0.4](plugin-media.md)。
+
+`tools[].parameters` 必须是 JSON Schema 对象，新包校验按 `JSON.stringify(parameters)`
+的 UTF-8 字节数执行 16,384 字节上限（恰好等于上限可接受）。中文等多字节内容不能用
+字符串长度估算。已发布市场 release 的读取、安装／更新及已装快照保留旧 UTF-16 长度上限，
+避免升级后既有插件不可用；此兼容不适用于新包创作、Forge 或自定义来源校验。
 
 措辞套路(实测有效):description 写清"干什么 + 返回什么";参数 description 里直接
 写该工具自己的行为规则(如"用户原话透传,不要扩写"、"仅当用户显式说 X 才传 Y")——

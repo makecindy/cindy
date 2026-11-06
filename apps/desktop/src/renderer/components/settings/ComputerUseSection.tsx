@@ -1,3 +1,4 @@
+import { computerUseSettings } from './ComputerUseSection.settings-search';
 /**
  * ComputerUseSection — Settings →「电脑使用 / Computer Use」面板。
  * ---------------------------------------------------------------------------
@@ -187,7 +188,7 @@ function ConfigurationReadStatus({
       {status !== 'error' ? <Spinner size={12} /> : null}
       <span>{t(`settings.computerUse.configurationRead.${status}`, { section: label })}</span>
       {status === 'error' ? (
-        <Button variant="secondary" size="sm" onClick={retry}>
+        <Button data-settings-search-action="Retry, inspect or install the selected computer-control dependency" variant="secondary" size="sm" onClick={retry}>
           {t('settings.computerUse.configurationRead.retry')}
         </Button>
       ) : null}
@@ -231,6 +232,10 @@ export function ComputerUseSection({ workingDir }: ComputerUseSectionProps) {
   const [driverUpdate, setDriverUpdate] = useState<ComputerDriverUpdateCheck | null>(null);
   const [driverCheckPending, setDriverCheckPending] = useState(false);
   const [driverCheckFailed, setDriverCheckFailed] = useState(false);
+  // GitHub 未鉴权限额打满时 main 会标注原因:这种失败等配额重置就好,和真的要用户
+  // 排查的网络故障分开说。旧版本 main 不下发 checkError,继续按普通失败处理。
+  const driverCheckRateLimited =
+    driverCheckFailed && driverUpdate?.checkError?.kind === 'rate_limited';
   const [driverUpdatePending, setDriverUpdatePending] = useState(false);
   // main 侧采样广播的下载进度;null = 未开始/已结束(显示通用「更新中…」)。
   const [driverUpdateProgress, setDriverUpdateProgress] =
@@ -1517,7 +1522,7 @@ export function ComputerUseSection({ workingDir }: ComputerUseSectionProps) {
     <div className="flex flex-col gap-[14px]">
       <div className="flex flex-col gap-1 min-w-0">
         <h2 className="text-16 font-medium leading-[1.2] text-[var(--settings-section-title)]">
-          {t('settings.computerUse.title')}
+          {t(computerUseSettings.computerUse.sectionKey)}
         </h2>
         <p className="text-13 leading-[1.5] text-[var(--settings-section-desc)]">
           {t('settings.computerUse.description')}
@@ -1544,17 +1549,17 @@ export function ComputerUseSection({ workingDir }: ComputerUseSectionProps) {
             </div>
             <div className="flex min-w-0 flex-col gap-[8px]">
               <p
-                id="settings-search-settings-computerUse-browser-title"
+                id={computerUseSettings.browserTitle.targetId}
                 className="truncate text-14 font-medium leading-none text-[var(--settings-section-title)]"
               >
-                {t('settings.computerUse.browser.title')}
+                {t(computerUseSettings.browserTitle.titleKey)}
               </p>
               <p className="truncate text-12 leading-none text-[var(--settings-section-desc)]">
-                {t('settings.computerUse.browser.description')}
+                {t(computerUseSettings.browserTitle.descriptionKey)}
               </p>
             </div>
           </div>
-          <Switch
+          <Switch data-setting-id={computerUseSettings.browserTitle.id}
             checked={browserEnabled ?? false}
             disabled={browserEnabled === null || togglePending}
             onCheckedChange={handleToggleBrowser}
@@ -1562,7 +1567,7 @@ export function ComputerUseSection({ workingDir }: ComputerUseSectionProps) {
           />
         </div>
         <ConfigurationReadStatus
-          label={t('settings.computerUse.browser.title')}
+          label={t(computerUseSettings.browserTitle.titleKey)}
           status={browserRead.status}
           retry={browserRead.retry}
         />
@@ -1622,7 +1627,7 @@ export function ComputerUseSection({ workingDir }: ComputerUseSectionProps) {
                 : t('settings.computerUse.browser.notDetected')}
             </p>
             {availability.detected ? (
-              <Button
+              <Button data-setting-id={computerUseSettings.browserTitle.id}
                 variant="secondary"
                 size="sm"
                 className="px-3"
@@ -1633,7 +1638,7 @@ export function ComputerUseSection({ workingDir }: ComputerUseSectionProps) {
                 {t('settings.computerUse.browser.openForLogin')}
               </Button>
             ) : (
-              <Button
+              <Button data-setting-id={computerUseSettings.browserTitle.id}
                 variant="secondary"
                 size="sm"
                 className="px-3"
@@ -1679,17 +1684,17 @@ export function ComputerUseSection({ workingDir }: ComputerUseSectionProps) {
             </div>
             <div className="flex min-w-0 flex-col gap-[8px]">
               <p
-                id="settings-search-settings-computerUse-directControl-title"
+                id={computerUseSettings.directControlTitle.targetId}
                 className="truncate text-14 font-medium leading-none text-[var(--settings-section-title)]"
               >
-                {t('settings.computerUse.directControl.title')}
+                {t(computerUseSettings.directControlTitle.titleKey)}
               </p>
               <p className="truncate text-12 leading-none text-[var(--settings-section-desc)]">
-                {t('settings.computerUse.directControl.description')}
+                {t(computerUseSettings.directControlTitle.descriptionKey)}
               </p>
             </div>
           </div>
-          <Switch
+          <Switch data-setting-id={computerUseSettings.directControlTitle.id}
             checked={computerSwitchChecked}
             disabled={computerSwitchDisabled}
             onCheckedChange={handleToggleComputer}
@@ -1697,7 +1702,7 @@ export function ComputerUseSection({ workingDir }: ComputerUseSectionProps) {
           />
         </div>
         <ConfigurationReadStatus
-          label={t('settings.computerUse.directControl.title')}
+          label={t(computerUseSettings.directControlTitle.titleKey)}
           status={computerRead.status}
           retry={computerRead.retry}
         />
@@ -1716,10 +1721,10 @@ export function ComputerUseSection({ workingDir }: ComputerUseSectionProps) {
               <div className="border-t border-[var(--settings-theme-card-border)] px-4 py-4">
                 <div className="flex items-center justify-between gap-3">
                   <p
-                    id="settings-search-settings-computerUse-directControl-permissions-title"
+                    id={computerUseSettings.directControlPermissionsTitle.targetId}
                     className="text-13 font-medium text-[var(--settings-section-title)]"
                   >
-                    {t('settings.computerUse.directControl.permissions.title')}
+                    {t(computerUseSettings.directControlPermissionsTitle.titleKey)}
                   </p>
                   {computerInstallPending || computerPermissionPending ? (
                     <span className="inline-flex items-center gap-1.5 text-12 text-[var(--settings-section-desc)]">
@@ -1729,7 +1734,7 @@ export function ComputerUseSection({ workingDir }: ComputerUseSectionProps) {
                         : t('settings.computerUse.directControl.authorizing')}
                     </span>
                   ) : (
-                    <Button
+                    <Button data-setting-id={computerUseSettings.directControlPermissionsTitle.id}
                       variant="secondary"
                       size="sm"
                       className="px-2.5"
@@ -1745,11 +1750,11 @@ export function ComputerUseSection({ workingDir }: ComputerUseSectionProps) {
                 </div>
 
                 <div
-                  id="settings-search-settings-computerUse-directControl-permissions-accessibilityLabel"
+                  id={computerUseSettings.directControlPermissionsAccessibilityLabel.targetId}
                   className="mt-3 grid gap-2.5 sm:grid-cols-2"
                 >
                   <ComputerPermissionRow
-                    label={t('settings.computerUse.directControl.permissions.accessibilityLabel')}
+                    label={t(computerUseSettings.directControlPermissionsAccessibilityLabel.titleKey)}
                     iconSrc={accessibilityPermissionIcon}
                     granted={computerAccessibilityGranted}
                     pending={computerAccessibilityPending}
@@ -1769,10 +1774,10 @@ export function ComputerUseSection({ workingDir }: ComputerUseSectionProps) {
                         : handleToggleComputer(true))
                     }
                   />
-                  <div id="settings-search-settings-computerUse-directControl-permissions-screenRecordingLabel">
+                  <div id={computerUseSettings.directControlPermissionsScreenRecordingLabel.targetId}>
                     <ComputerPermissionRow
                       label={t(
-                        'settings.computerUse.directControl.permissions.screenRecordingLabel',
+                        computerUseSettings.directControlPermissionsScreenRecordingLabel.titleKey,
                       )}
                       iconSrc={screenRecordingPermissionIcon}
                       granted={computerScreenRecordingGranted}
@@ -1845,11 +1850,13 @@ export function ComputerUseSection({ workingDir }: ComputerUseSectionProps) {
                                 ? driverUpdateProgress?.phase === 'installing'
                                   ? t('settings.computerUse.directControl.update.installing')
                                   : t('settings.computerUse.directControl.update.updating')
-                                : driverCheckFailed
-                                  ? t('settings.computerUse.directControl.update.checkFailed')
-                                  : driverUpdate
-                                    ? t('settings.computerUse.directControl.update.upToDate')
-                                    : t('settings.computerUse.directControl.update.notChecked')}
+                                : driverCheckRateLimited
+                                  ? t('settings.computerUse.directControl.update.rateLimited')
+                                  : driverCheckFailed
+                                    ? t('settings.computerUse.directControl.update.checkFailed')
+                                    : driverUpdate
+                                      ? t('settings.computerUse.directControl.update.upToDate')
+                                      : t('settings.computerUse.directControl.update.notChecked')}
                           </span>
                         </>
                       ) : null}
@@ -1888,7 +1895,7 @@ export function ComputerUseSection({ workingDir }: ComputerUseSectionProps) {
                           },
                         )}
                       </span>
-                      <Button
+                      <Button data-settings-search-action="Retry, inspect or install the selected computer-control dependency"
                         variant="secondary"
                         size="sm"
                         className="px-2.5"
@@ -1902,7 +1909,7 @@ export function ComputerUseSection({ workingDir }: ComputerUseSectionProps) {
                     </>
                   ) : null}
                   {computerStatus.installed ? (
-                    <Button
+                    <Button data-settings-search-action="Retry, inspect or install the selected computer-control dependency"
                       variant="secondary"
                       size="sm"
                       className="px-2.5"
@@ -1918,7 +1925,7 @@ export function ComputerUseSection({ workingDir }: ComputerUseSectionProps) {
                     </Button>
                   ) : null}
                 </div>
-                <button
+                <button data-settings-search-action="Retry, inspect or install the selected computer-control dependency"
                   type="button"
                   onClick={() => setComputerDetailsOpen((open) => !open)}
                   aria-expanded={computerDetailsOpen}
@@ -1975,7 +1982,7 @@ export function ComputerUseSection({ workingDir }: ComputerUseSectionProps) {
                   ) : null}
                 </div>
                 <div>
-                  <Button
+                  <Button data-settings-search-action="Retry, inspect or install the selected computer-control dependency"
                     variant="secondary"
                     size="sm"
                     className="px-3"
@@ -2014,17 +2021,17 @@ export function ComputerUseSection({ workingDir }: ComputerUseSectionProps) {
             </div>
             <div className="flex min-w-0 flex-col gap-[8px]">
               <p
-                id="settings-search-settings-computerUse-android-title"
+                id={computerUseSettings.androidTitle.targetId}
                 className="truncate text-14 font-medium leading-none text-[var(--settings-section-title)]"
               >
-                {t('settings.computerUse.android.title')}
+                {t(computerUseSettings.androidTitle.titleKey)}
               </p>
               <p className="truncate text-12 leading-none text-[var(--settings-section-desc)]">
-                {t('settings.computerUse.android.description')}
+                {t(computerUseSettings.androidTitle.descriptionKey)}
               </p>
             </div>
           </div>
-          <Switch
+          <Switch data-setting-id={computerUseSettings.androidTitle.id}
             checked={androidEnabled ?? false}
             disabled={androidEnabled === null || androidTogglePending}
             onCheckedChange={handleToggleAndroid}
@@ -2043,7 +2050,7 @@ export function ComputerUseSection({ workingDir }: ComputerUseSectionProps) {
           <div className="flex flex-wrap items-center gap-2">
             <DropdownMenu>
               <DropdownMenuTrigger asChild>
-                <button
+                <button data-setting-id={computerUseSettings.androidTitle.id}
                   type="button"
                   disabled={androidDevicePending || !androidStatus}
                   className={cn(ACTION_BUTTON_CLASS, 'max-w-[260px] px-2.5')}
@@ -2127,7 +2134,7 @@ export function ComputerUseSection({ workingDir }: ComputerUseSectionProps) {
                 )}
               </DropdownMenuContent>
             </DropdownMenu>
-            <Button
+            <Button data-settings-search-action="Retry, inspect or install the selected computer-control dependency"
               variant="secondary"
               size="sm"
               className="px-3"
@@ -2175,17 +2182,17 @@ export function ComputerUseSection({ workingDir }: ComputerUseSectionProps) {
         <div className="flex flex-wrap items-center justify-between gap-3 border-t border-[var(--settings-theme-card-border)] px-4 py-[14px]">
           <div className="flex min-w-0 flex-col gap-1">
             <p
-              id="settings-search-settings-computerUse-android-adb-title"
+              id={computerUseSettings.androidAdbTitle.targetId}
               className="text-12 font-medium leading-[1.5] text-[var(--settings-section-title)]"
             >
-              {t('settings.computerUse.android.adb.title')}
+              {t(computerUseSettings.androidAdbTitle.titleKey)}
             </p>
             <p className="min-w-0 break-all text-12 leading-[1.5] text-[var(--settings-section-desc)]">
               {androidAdbSourceText}
             </p>
           </div>
           <div className="flex min-w-[240px] flex-1 flex-wrap items-center justify-end gap-2">
-            <input
+            <input data-setting-id={computerUseSettings.androidAdbTitle.id}
               value={androidAdbPathDraft}
               onChange={(event) => {
                 setAndroidAdbPathDraft(event.target.value);
@@ -2203,7 +2210,7 @@ export function ComputerUseSection({ workingDir }: ComputerUseSectionProps) {
                 'disabled:opacity-50',
               )}
             />
-            <Button
+            <Button data-setting-id={computerUseSettings.androidAdbTitle.id}
               variant="secondary"
               size="sm"
               className="px-3"
@@ -2213,7 +2220,7 @@ export function ComputerUseSection({ workingDir }: ComputerUseSectionProps) {
             >
               {t('settings.computerUse.android.adb.save')}
             </Button>
-            <Button
+            <Button data-setting-id={computerUseSettings.androidAdbTitle.id}
               variant="secondary"
               size="sm"
               className="px-3"

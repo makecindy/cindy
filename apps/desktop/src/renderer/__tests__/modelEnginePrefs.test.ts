@@ -660,3 +660,26 @@ describe('modelEnginePrefs store · 跨 renderer 并发写', () => {
     expect(b.getModelEngineOverride('xd', 'gpt-5.5')).toBeUndefined();
   });
 });
+
+
+describe('alias engine preference batch', () => {
+  it('writes and deletes all raw IDs while retaining other models', async () => {
+    const m = await loadModule();
+    m.setModelEngineOverride('p', 'other', 'pi');
+    expect(m.editModelEngineOverrides('p', [{ modelId: 'old', agent: 'codex' }, { modelId: 'new', agent: 'codex' }])).toBe(true);
+    expect(m.getModelEngineOverride('p', 'old')).toBe('codex');
+    expect(m.getModelEngineOverride('p', 'new')).toBe('codex');
+    expect(m.editModelEngineOverrides('p', [{ modelId: 'old' }, { modelId: 'new' }])).toBe(true);
+    expect(m.getModelEngineOverride('p', 'old')).toBeUndefined();
+    expect(m.getModelEngineOverride('p', 'new')).toBeUndefined();
+    expect(m.getModelEngineOverride('p', 'other')).toBe('pi');
+  });
+  it('does not partly update memory when storage fails', async () => {
+    const m = await loadModule();
+    m.setModelEngineOverride('p', 'old', 'pi');
+    vi.spyOn(memStorage, 'setItem').mockImplementation(() => { throw new Error('quota'); });
+    expect(m.editModelEngineOverrides('p', [{ modelId: 'old', agent: 'codex' }, { modelId: 'new', agent: 'codex' }])).toBe(false);
+    expect(m.getModelEngineOverride('p', 'old')).toBe('pi');
+    expect(m.getModelEngineOverride('p', 'new')).toBeUndefined();
+  });
+});

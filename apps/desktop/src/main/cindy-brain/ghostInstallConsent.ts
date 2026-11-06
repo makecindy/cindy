@@ -19,6 +19,7 @@ import {
   type GhostManifest,
   type InstalledGhost,
 } from '../../shared/ghost.js';
+import type { PluginTaskCapability } from './taskCapability.js';
 import {
   evaluateGhostInstallConsent,
   ghostInstallConsentKey,
@@ -68,7 +69,7 @@ export function confirmedTaskCapability(
   decision: GhostInstallConsentDecision,
   installed: InstalledGhost | null | undefined,
   next: GhostManifest,
-  capability: 'tasks' | 'targets' | 'delegation' | 'observe' = 'tasks',
+  capability: PluginTaskCapability = 'tasks',
 ): true | undefined {
   if (decision.mode !== 'confirmed') return undefined;
   const facts = evaluateGhostInstallConsent(installed, next);

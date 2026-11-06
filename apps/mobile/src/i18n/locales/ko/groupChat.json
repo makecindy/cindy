@@ -155,7 +155,12 @@
         "details": "메시지를 다시 보내세요. 계속 실패하면 로그를 확인하고 문제를 신고하세요."
       }
     },
-    "runtimeFailureSetupHint": "모델이나 설정을 변경하려면 이 동료가 실행되는 컴퓨터에서 변경하세요."
+    "runtimeFailureSetupHint": "모델이나 설정을 변경하려면 이 동료가 실행되는 컴퓨터에서 변경하세요.",
+    "capability": {
+      "GROUP_AUTHORIZATION_REQUIRED": "{{name}}의 도구가 실행되지 않았습니다. 그룹 권한이 만료되었거나 이 작업을 허용하지 않습니다. 동료 소유자가 이 그룹에서 다시 요청해 주세요.",
+      "GROUP_AUTHORIZATION_UNAVAILABLE": "{{name}}의 그룹 권한을 확인할 수 없어 도구가 실행되지 않았습니다. 연결이 복구되면 다시 시도해 주세요.",
+      "ATTACHMENTS_UNAVAILABLE": "다운로드 실패 또는 첨부 개수 제한으로 일부 첨부 파일이 {{name}}에게 전달되지 않았습니다. 이번 요청에 필요한 파일을 다시 보내 주세요."
+    }
   },
   "plan": {
     "intro_one": "이 일은 {{count}}단계로 나눠서 이렇게 분담할게요:",
@@ -186,7 +191,21 @@
     "awaitingStart": "시작 대기",
     "progressRunning": "진행 중 {{current}} / {{total}}",
     "progressDone": "완료 {{done}} / {{total}}",
-    "allDone": "모두 완료"
+    "allDone": "모두 완료",
+    "stepQueued": "시작 대기 중",
+    "stepExecuting": "실행 중",
+    "stepSkipped": "건너뜀",
+    "skippingTurn": "건너뛰는 중…",
+    "queueWaiting": "계속 대기 중",
+    "skipTurnLabel": "건너뛰기 {{name}}",
+    "stepSpoken": "완료",
+    "allTurns_one": "전체 {{count}}명",
+    "allTurns_other": "전체 {{count}}명",
+    "foldTurns": "접기",
+    "talkTitle": "차례로 의견 듣기",
+    "talkPending": "시작 전",
+    "skipTurn": "건너뛰기",
+    "queueEnded": "라운드 종료"
   },
   "speaking": {
     "queued": "대기 중",
@@ -304,7 +323,8 @@
     "lifecycleUnavailable": "현재 서버 또는 컴퓨터에서 아직 이 작업을 지원하지 않습니다.",
     "groupDissolved": "이 그룹은 해산되었습니다. 열람 권한이 있는 기록은 계속 볼 수 있습니다.",
     "lastOwner": "나가기 전에 소유권을 이전하거나 그룹을 해산하세요.",
-    "allBotsMentionDisabled": "그룹 소유자가 모든 동료 멘션을 켜지 않았습니다."
+    "allBotsMentionDisabled": "그룹 소유자가 모든 동료 멘션을 켜지 않았습니다.",
+    "turnAlreadyStarted": "이 동료는 이미 실행을 시작하여 건너뛸 수 없습니다"
   },
   "followUp": {
     "next": "분담 · 다음 단계",
@@ -500,6 +520,7 @@
     "searchMembers": "멤버 검색",
     "membersNoMatch": "‘{{query}}’와 일치하는 멤버가 없어요",
     "you": "나",
+    "companionOf": "{{name}}의 파트너",
     "teammateTag": "동료",
     "paused": "일시 중지됨",
     "accessNone": "소유자만 사용",

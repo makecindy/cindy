@@ -1,4 +1,34 @@
 {
+  "sharedTaskRecovery": {
+    "title": "Cannot resume on the original computer",
+    "description": "Choose another computer or provider to continue with a context handoff. Your messages stay, but switching does not transfer the original computer’s full running state.",
+    "choose": "Choose another computer",
+    "cancel": "Stay here",
+    "stage": {
+      "owner": "Failed while contacting the sharing computer.",
+      "allocation": "Failed while allocating the original executor.",
+      "executor": "Failed while confirming the executor’s device-link connection.",
+      "capability": "Failed while checking the executor’s capabilities.",
+      "authorization": "Failed while installing execution authorization.",
+      "unknown": "The failing stage was not reported."
+    },
+    "reason": {
+      "offline": "The computer contacted at this stage was reported offline. Other tasks may be running on different computers.",
+      "timeout": "The request timed out. The failing stage identifies the service being contacted; neither direct-path nor relay failure has been confirmed.",
+      "relay": "The device-link connection is not ready or was closed. A failed direct path alone normally falls back to the relay.",
+      "denied": "Access was denied or remote control was disabled. Retrying cannot bypass this restriction.",
+      "model": "The shared provider or model is not allowed for this task.",
+      "budget": "The provider reported a usage limit or insufficient quota. Switching computers may still use the same quota.",
+      "capacity": "Task or connection capacity has been reached. Close unused tasks or choose another computer.",
+      "unsupported": "The executor does not support the required shared-task capabilities.",
+      "authorization": "Execution authorization could not be installed. This is not proof that the executor is offline.",
+      "history": "The original task location cannot be used. Its native history cannot be opened on a different computer.",
+      "policy": "Sharing usage rules require live checks through the sharing computer. Direct execution cannot enforce them; this does not mean the balance is empty.",
+      "unknown": "The sharing computer did not provide a precise cause. Offline status, quota and the direct/relay path could not be confirmed.",
+      "rate": "The service is rate-limiting or congested. Wait for its cooldown; another computer may share the same limit.",
+      "service": "The sharing authorization service could not be reached or returned a failure. The executor has not been confirmed offline."
+    }
+  },
   "providerAccountUsage": {
     "kimi": {
       "refresh": "Refresh quota",
@@ -133,7 +163,7 @@
   "taskActionConfirmation": {
     "title": "Confirm session action",
     "once": "Review the target, action and full content below. Allow applies to this action once.",
-    "remove": "This deletes automation. Review the target; approval applies only once.",
+    "remove": "This will release the automation’s receiving address. Check the target; approval applies only to this action.",
     "permission": "This answers a permission request in another task on your behalf. Review the action; approval applies only once.",
     "resume": "This resumes paused execution. Review the target; approval applies only once.",
     "command": "This saves or runs a command on your computer outside the agent’s tool approval. Review the command and working folder; approval applies only once.",
@@ -1036,11 +1066,19 @@
       "copied": "Copied",
       "copyFailed": "Could not copy. Try again or save the file.",
       "scrollHint": "Scroll up or down in the selection, or choose Auto Scroll.",
-      "recordHint": "Draw on the preview to annotate the recording. No audio.",
+      "recordHint": "Draw on the preview to annotate the recording.",
       "format": "Format",
       "videoFormat": "Video (WebM)",
-      "prepareHint": "Starts after a 3-second countdown. No audio.",
+      "prepareHint": "Starts after a 3-second countdown.",
       "countdown": "Recording starts in {{count}}",
+      "systemAudio": "Speaker",
+      "microphone": "Microphone",
+      "audioHint": "Choose sound sources, then start recording.",
+      "preparingAudio": "Preparing audio…",
+      "systemAudioFailed": "Speaker audio unavailable. Check system permissions or turn it off.",
+      "microphoneFailed": "Microphone unavailable. Check permissions and the input device, or turn it off.",
+      "audioFailed": "Audio could not start. Check your devices or turn off audio.",
+      "audioInterrupted": "Audio stopped. Finish recording to save the captured portion.",
       "countdownHint": "Starting shortly. Press Esc to cancel.",
       "annotate": "Annotate",
       "finishing": "Finishing…",
@@ -1937,6 +1975,8 @@
       "add": {
         "title": "Add a remote machine",
         "alias": "Alias",
+        "aliasHint": "Use 1–128 characters: English letters, numbers, or . _ @ : -. For Chinese or other characters, use Display name.",
+        "aliasInvalid": "The alias contains unsupported characters or exceeds 128 characters. Follow the rules above.",
         "displayName": "Display name",
         "displayNamePlaceholder": "Optional name shown in Cindy",
         "hostname": "Hostname",
@@ -2341,6 +2381,9 @@
     "agentIsland": {
       "title": "Agent Island",
       "unsupported": "Agent Island requires macOS 14 or later.",
+      "subtleRemindersLabel": "Subtle reminders",
+      "subtleRemindersHint": "For new messages, requests for input, or errors, show changes in the icon instead of a notification card below the island. Click the island to view the full task list.",
+      "subtleRemindersFailed": "Could not save reminder settings. Please try again.",
       "enableLabel": "Show Agent Island",
       "enableHint": "Shows running, needs-reply, and unread completed tasks at the top of the display. Enabling suppresses the equivalent system notifications to avoid double alerts.",
       "enableAria": "Toggle Agent Island",
@@ -3780,7 +3823,12 @@
           "stop": "Stop test"
         },
         "fetch": {
-          "button": "Fetch model list",
+          "selectedCount": "{{count}} models selected",
+          "availableCount": "{{count}} available models fetched",
+          "notFetched": "Model list not fetched yet",
+          "failedRetry": "Could not fetch the model list. Try again.",
+          "retryFailed": "This fetch failed. Try again.",
+          "button": "Fetch and select models",
           "fetching": "Fetching models…",
           "needBaseUrl": "Fill in the base URL first",
           "failed": "Failed to fetch the model list",
@@ -3909,6 +3957,8 @@
         "disabledGroup": "Disabled",
         "enableAllModels": "Enable All",
         "priceOverride": {
+          "resetShort": "Reset",
+          "referenceDetails": "Reference Details",
           "menu": "Edit API Price Estimate",
           "title": "{{model}} API Price Estimate",
           "description": "Used only to estimate usage on your own API or subscription route. This does not change the provider’s bill.",
@@ -3960,6 +4010,7 @@
             "hint": "Applies to the {{agent}} Images connection. Only declare capabilities the API actually supports. Reopen Art details after saving."
           },
           "capabilityHint": "Uses capabilities declared by this provider. Image support falls back to model naming when undeclared.",
+          "imageInputDefault": "{{value}} (Default)",
           "imageInput": "Image input",
           "imageInputMixed": "Varies by engine",
           "supported": "Supported",
@@ -5074,7 +5125,7 @@
         "ariaLabel": "Choose the second fallback auxiliary model"
       },
       "emptySlot": "Not selected",
-      "customHint": "Models are tried in your chosen order and also back up Auto-review when its built-in models are unavailable. Selected providers receive review context: messages and references, task and action details (including blocked actions), identity and permissions, file paths, and operating system.",
+      "customHint": "Models are tried in your chosen order and also back up Auto-review when its built-in models are unavailable. Selected providers receive review context: messages and references, the agent's public text (reference only), task and action details (including blocked actions), identity and permissions, file paths, and operating system.",
       "signInHint": "Sign in to Cindy to use the automatic recommendations. While signed out, choose a configured model from another provider under Custom.",
       "chooseAgent": "Choose an Agent",
       "backToAgents": "Back to Agent selection",
@@ -5661,6 +5712,7 @@
           "checking": "Checking for updates…",
           "upToDate": "Up to date",
           "checkFailed": "Could not check for updates",
+          "rateLimited": "GitHub is rate-limiting update checks",
           "lastChecked": "Last checked {{time}}",
           "check": "Check for updates",
           "retry": "Retry",
@@ -6067,8 +6119,10 @@
       "accessRevokedByPeer": "Access revoked — the other device must restore it in its settings",
       "deviceControlToggleAria": "Toggle control for {{name}}",
       "myDevices": {
-        "controlIt": "I control it",
-        "allowInbound": "Let it control this device",
+        "iCan": "I can",
+        "itCan": "It can",
+        "controlIt": "Control it",
+        "controlThisDevice": "Control this device",
         "allowInboundAria": "Toggle whether {{name}} can control this device",
         "peerControlOff": "Remote control not enabled on that device",
         "masterOffHint": "Turn on the master switch above first",
@@ -6722,8 +6776,6 @@
             "task": "Task key",
             "action": "Action key"
           },
-          "lightingLimit": "Firmware can independently light the first 6 task keys in board order. Extra task keys still switch tasks.",
-          "unlitKey": "This key is after the first 6, so it has no independent status light.",
           "taskHint": "A clear keycap is recommended so task status can show in different colors."
         },
         "commandKeys": {
@@ -7597,6 +7649,9 @@
         "agentObserve": "Can view task lists and status in local projects",
         "agentObserveDetail": "Can view the titles, agent type, archive state and status (running, needs attention, last activity) of tasks in registered local projects, and open a task in the main window. Cannot read messages, plans or files, send messages, or change tasks.",
         "agentObserveRequest": "Review task viewing permission",
+        "agentCompanions": "Can view your teammates, their status and recent conversation",
+        "agentCompanionsDetail": "Can view all your teammates, including those running on your other computers: name, description, avatar, status (working, waiting for you, idle, offline), what kind of step each is on (such as thinking or running a tool), the requests waiting for you as their cards show them (questions, commands to run, plans), and the recent conversation in each teammate’s main chat (up to 50 of your messages and their replies, without tool steps); and open a teammate’s conversation in the main window. With the message delivery permission as well, it can pass on the answers you give in the plugin: answer questions, decline requests, and give feedback on plans. Allowing a step still takes your click in Cindy’s own confirmation. Cannot read files, tool steps or thinking.",
+        "agentCompanionsRequest": "Review teammate viewing permission",
         "agentHiddenTasks": "Can create background tasks hidden from the task list",
         "agentHiddenTasksDetail": "Tasks this plugin creates can stay out of the task list, search and notifications. You can always view, open or show them in the task list from Background Tasks on this plugin’s page; uninstalling the plugin shows them again.",
         "agentErrand": "Create tasks, perform work, and read results",
@@ -7767,6 +7822,7 @@
         "customSlotAsleep": "This plugin is disabled. Enable it to see its settings UI here.",
         "descriptionExpand": "Show more",
         "descriptionCollapse": "Show less",
+        "readmeTitle": "About",
         "useAction": "Use Plugin",
         "chatAction": "Chat",
         "enabledLabel": "Enabled",
@@ -8357,6 +8413,26 @@
         "title": "Delete \"{{name}}\"?",
         "message": "New sessions will no longer load this MCP.",
         "confirm": "Delete"
+      },
+      "duplicates": {
+        "title": "Possibly duplicate MCP connections",
+        "description": "Cindy and your Claude Code user configuration have matching or similar connections that may load tools twice. Choose which source to keep, or keep both if unsure.",
+        "scope": "Only affects ordinary Claude Code tasks in Cindy on this computer, when the agent next starts. Your Claude Code configuration stays unchanged. Related duplicates share the same choice.",
+        "unavailable": "Some configuration could not be read. Connections are unchanged. Reopening this page checks again.",
+        "endpoint": "Same connection address",
+        "similar": "Similar connection addresses",
+        "keep": {
+          "both": "Keep both sources in this group"
+        },
+        "selected": {
+          "cindy": "Cindy connection selected",
+          "claude": "Claude Code connection selected",
+          "both": "Keeping both sources in this group"
+        },
+        "reset": "Choose again",
+        "saveFailed": "Could not save. The connections may have changed. Choose again from the current list.",
+        "keepThis": "Keep this connection",
+        "keepThese": "Keep these connections"
       }
     },
     "remotePermission": {
@@ -10263,6 +10339,7 @@
       "continueEditing": "Keep Editing"
     },
     "profileSaveFailed": "Teammate settings could not be saved. No changes were applied.",
+    "profileSaveOffline": "Cannot connect to the teammate’s computer. Reconnect, then save again.",
     "modelLabel": "Model",
     "modelUnavailable": "{{model}} (currently unavailable)",
     "codexAutomaticCompact": "Codex teammates compact context on their own, and /new keeps the current task. Only start a new task when you actually need a clean slate.",
@@ -10593,6 +10670,11 @@
           "NETWORK_ERROR": "{{name}} could not reply: the network connection failed.\nCheck your network or proxy, then send your message again.",
           "RUNTIME_TIMEOUT": "{{name}} did not reply before the timeout.\nSend your message again, or choose another available model.",
           "RUNTIME_ERROR": "{{name}} could not reply this time.\nSend your message again. If it still fails, check the logs and report the issue."
+        },
+        "capability": {
+          "GROUP_AUTHORIZATION_REQUIRED": "{{name}} could not run this tool: group authorization has expired or does not allow this action. The teammate’s owner can make the request again in this group.",
+          "GROUP_AUTHORIZATION_UNAVAILABLE": "Group authorization for {{name}} could not be verified, so this tool did not run. Try again after the connection recovers.",
+          "ATTACHMENTS_UNAVAILABLE": "Some attachments were not delivered to {{name}} because of a download failure or attachment limit. Resend the attachments needed for this request."
         }
       },
       "settings": {
@@ -10662,7 +10744,8 @@
         "lifecycleUnavailable": "The current server or computer does not support this action yet.",
         "groupDissolved": "This group has been dissolved. You can still read the available history.",
         "lastOwner": "Transfer ownership or dissolve this group before leaving.",
-        "allBotsMentionDisabled": "The group owner has not enabled @all teammates."
+        "allBotsMentionDisabled": "The group owner has not enabled @all teammates.",
+        "turnAlreadyStarted": "This teammate has already started and cannot be skipped"
       },
       "organizer": "Organizer",
       "plan": {
@@ -10693,7 +10776,17 @@
         "stepSpoken": "Done",
         "allTurns_one": "All {{count}} teammate",
         "allTurns_other": "All {{count}} teammates",
-        "foldTurns": "Show fewer"
+        "foldTurns": "Show fewer",
+        "stepQueued": "Waiting to Start",
+        "stepExecuting": "Running",
+        "stepSkipped": "Skipped",
+        "skippingTurn": "Skipping…",
+        "queueWaiting": "Waiting for you to continue",
+        "skipTurnLabel": "Skip {{name}}",
+        "queueEnded": "Round ended",
+        "talkTitle": "Hear from everyone in turn",
+        "talkPending": "Not started",
+        "skipTurn": "Skip"
       },
       "speaking": {
         "planning": "Splitting the work…"
@@ -11035,7 +11128,7 @@
         "items": {
           "tasks": {
             "title": "Tasks",
-            "body": "Decides when to start a background task, controls the tasks it started and brings the result back to chat, including on your other computers."
+            "body": "Knows which tasks it can control and which computers are available. Arranges and follows up on tasks as you request, brings results back, and checks supported operations before working across computers."
           },
           "teammates": {
             "title": "Other teammates",
@@ -11050,8 +11143,8 @@
             "body": "Remembers your preferences and background, checking before use and updating when things change."
           },
           "self": {
-            "title": "Knowing itself",
-            "body": "Knows what it can do and switches features on or off for you; checks Cindy help first for things like adding Telegram, setting up MCP or plugins."
+            "title": "Knowing and configuring Cindy",
+            "body": "Understands Cindy’s features and usage, and checks or changes settings as you request. Asks you in the task when your input or confirmation is needed."
           }
         }
       },
@@ -13005,7 +13098,7 @@
       "codexUsageLimit": "The connected Codex account has reached its usage limit. Wait for the limit to reset, or switch to another available account before retrying.",
       "gatewayQuotaExhausted": "Your Cindy AI balance is used up. Add funds to continue.",
       "viewBalance": "View balance",
-      "viewBalanceTitle": "Open Usage & Billing to check your balance and add funds",
+      "viewBalanceTitle": "Open Usage and billing to check your balance and add funds",
       "credentialSwitchBusy": "Another Codex task is still running, so the provider for this session can't be applied yet (the shared Codex process needs a restart). Retry after those tasks finish.",
       "accountBoundaryPending": "Cindy is still switching account state, so this task can't start yet. Wait a moment, then press Retry. If this keeps happening, restart Cindy.",
       "codexThreadStale": "Codex auth mode changed — this session can't continue. Start a new session to apply it.",
@@ -13104,6 +13197,12 @@
       "text": "An automatic run failed.",
       "precheck": "Automatic checks are temporarily blocked.",
       "rateLimited": "Automatic checks are temporarily blocked by a request rate limit.",
+      "pluginMissing": "Automatic checks are blocked: the {{name}} plugin is not installed. They resume once it is installed.",
+      "pluginMissingUnnamed": "Automatic checks are blocked: a required plugin is not installed. They resume once it is installed.",
+      "pluginDisabled": "Automatic checks are blocked: the {{name}} plugin is disabled. They resume once it is enabled.",
+      "pluginDisabledUnnamed": "Automatic checks are blocked: a required plugin is disabled. They resume once it is enabled.",
+      "installPlugin": "Install plugin",
+      "openPlugin": "Open plugin",
       "dismissTitle": "Dismiss past failure notice"
     },
     "worktreeRestoreBanner": {
@@ -13394,7 +13493,7 @@
         "empty": "No commands available."
       },
       "cost": {
-        "title": "Session Cost",
+        "title": "Session Usage",
         "tokensUsed": "Tokens Used (This Turn)"
       },
       "pwd": {
@@ -13452,6 +13551,24 @@
           "autocompactBuffer": "Autocompact buffer",
           "compactBuffer": "Compact buffer",
           "freeSpace": "Free space"
+        },
+        "estimate": {
+          "title": "Text estimates",
+          "delivery": "Answer delivery",
+          "host": "Cindy instructions",
+          "plugins": "Plugin catalogue",
+          "memoryRules": "Memory instructions",
+          "memoryIndex": "Memory index",
+          "profile": "Teammate profile",
+          "user": "User instructions",
+          "directories": "Additional directories",
+          "native": "Pi instructions",
+          "skills": "Skill catalogue",
+          "project": "Project instructions",
+          "tools": "Tool definitions",
+          "messages": "Conversation text",
+          "other": "Other instructions",
+          "note": "Estimated from current text, not model tokenization. Excludes images and provider formatting; does not add up to the native total."
         }
       },
       "compact": {
@@ -13748,7 +13865,7 @@
       "REMOTE_PROVIDER_UPDATING": "This model provider’s credentials are updating. Try again in a moment.",
       "REMOTE_WORKDIR_UNAVAILABLE": "The remote working directory is unavailable. Check that the folder still exists on that computer, then try again.",
       "REMOTE_OPTIMISTIC_SESSION_STATE_UNAVAILABLE": "The computer cannot yet confirm whether this message was sent. Wait a moment and try again. Do not send the same message twice.",
-      "REMOTE_AGENT_UNAVAILABLE": "Can't reach the computer running the Agent. Make sure it's online and allows remote control, then try again.",
+      "REMOTE_AGENT_UNAVAILABLE": "The connection to the computer running the Agent dropped. Try again. If it keeps happening, make sure that computer is online and allows remote control.",
       "REMOTE_AGENT_PEER_TOO_OLD": "Cindy on the other computer is too old for this action. Update Cindy there first.",
       "REMOTE_AGENT_EXPIRED": "This session already ended on the computer running the Agent. Send your message again.",
       "REMOTE_AGENT_NOT_FOUND": "This session already ended on the computer running the Agent. Send your message again.",
@@ -13866,6 +13983,18 @@
       "cancelTitle": "Stop waiting and remove this message"
     },
     "ghostCall": {
+      "prStatus": {
+        "threadsNone": "No open review threads",
+        "mergeReady": "Ready to merge",
+        "mergeConflict": "Has conflicts",
+        "mergeBehind": "Behind the base branch",
+        "mergeApproval": "Waiting for approval",
+        "mergeChanges": "Changes requested",
+        "mergeWaiting": "Waiting to merge",
+        "merged": "Merged",
+        "closed": "Closed",
+        "draft": "Draft"
+      },
       "verb": "Used plugin",
       "cardRunning": "Plugin is drawing",
       "cardDone": "Done",
@@ -13879,13 +14008,18 @@
       "collapseFields": "Collapse",
       "formSyncFailed": "Card edits have not synced. Check the connection and continue editing; the message has not been sent.",
       "linkOpenFailed": "Failed to open link",
+      "modelSelectFailed": "The model wasn't changed. Please choose again.",
       "mailPreview": "Email preview",
       "mailEnlarge": "Enlarge preview",
       "mailInsertImage": "Insert into message",
       "mailAttach": "Add attachment",
       "mailRemoveAttachment": "Remove {{name}}",
       "mailUpdated": "Draft updated (read-only)",
-      "mailLegacy": "Draft history (read-only)"
+      "mailLegacy": "Draft history (read-only)",
+      "taskAutoArchived": "Archived \"{{title}}\"",
+      "taskAutoArchivedUndo": "Undo",
+      "taskAutoArchivePending": "Archives when you leave",
+      "taskAutoArchiveCancel": "Keep this time"
     },
     "ghostHook": {
       "blockedFallback": "Message blocked by a plugin; not sent",
@@ -14737,7 +14871,7 @@
         "manage": {
           "title": "Manage PR Links",
           "hint": "Up to 3 in the header; pinned PRs appear first",
-          "empty": "Paste a GitHub PR link to add it",
+          "empty": "Paste a GitHub PR or GitLab MR URL to add it",
           "removed": "Removed: {{count}}",
           "legacy": "Unconfirmed references: {{count}}",
           "addLabel": "Add PR Link",
@@ -14748,18 +14882,29 @@
           "unpin": "Unpin PR",
           "pinLimit": "Pin up to 3 PRs",
           "reorderHint": "Use Alt+↑/↓ to reorder within the pinned or unpinned group.",
-          "dragHandle": "Drag to reorder {{repo}} #{{number}}",
+          "dragHandle": "Drag to reorder {{repo}} {{numberLabel}}",
           "remove": "Remove PR",
           "errors": {
             "duplicate": "This PR is already linked; restore removed links from the list",
             "notFound": "PR not found or access denied",
-            "invalidUrl": "Enter a valid GitHub PR link",
+            "invalidUrl": "Enter a valid GitHub PR or GitLab MR URL",
             "reorderFailed": "The order was not saved. Please try again.",
-            "verifyFailed": "Could not verify the PR; check GitHub sign-in and access",
+            "verifyFailed": "Could not verify the PR; check GitHub or GitLab sign-in and access",
             "unsupported": "This computer’s version does not support managing PR links",
             "failed": "Could not update PR links"
           }
-        }
+        },
+        "gitlab": {
+          "missing": "GitLab CLI (glab) was not found. Install glab and sign in to see MR status.",
+          "notLoggedIn": "Local glab is not signed in to {{host}}. Run glab auth login in a terminal to see MR status.",
+          "unsupported": "This computer does not support GitLab MR status yet",
+          "openAria": "Open MR !{{number}} in browser",
+          "summaryAria": "MR !{{number}} summary",
+          "urlPlaceholder": "GitHub PR or GitLab MR URL",
+          "notFound": "MR not found, or the current account cannot view it"
+        },
+        "merge": "Merge",
+        "conflicts": "Conflicts"
       }
     },
     "schedule": {
@@ -15153,7 +15298,8 @@
         "resume": "Resume",
         "pause": "Pause",
         "deleteAutomation": "Delete Automation"
-      }
+      },
+      "tagWebhook": "Webhook"
     },
     "detail": {
       "manualTrigger": "Manual trigger",
@@ -15228,7 +15374,7 @@
         "titleCreate": "Create Automation",
         "titleProjectCreate": "New project automation",
         "titleProjectEdit": "Edit project automation",
-        "subtitle": "Run a prompt on a schedule with Claude, Codex, or Pi.",
+        "subtitle": "Choose when to run an AI session or a script.",
         "subtitleFromGhost": "\"{{name}}\" is asking you to create an automation. Pick a model and save to enable it.",
         "save": "Save",
         "create": "Create",
@@ -15276,7 +15422,7 @@
       },
       "fields": {
         "title": "Title",
-        "schedule": "Schedule",
+        "schedule": "Trigger",
         "notify": "Notify",
         "prompt": "Prompt",
         "once": "Once",
@@ -15392,7 +15538,87 @@
         "preRunPluginRequired": "Choose a plugin for the pre-run check",
         "templateParamRequired": "Enter {{label}}",
         "templateApplyFailed": "Could not apply the template. Check the parameters and try again."
-      }
+      },
+      "layout": {
+        "content": "What to run",
+        "notifications": "Notifications & quiet runs",
+        "contentTab": "Content & Trigger",
+        "optionsTab": "Run options",
+        "sections": "Automation settings"
+      },
+      "webhook": {
+        "quotaHint": "Webhook deliveries have a daily limit, and filtering here doesn't reduce the count. In the sender, such as GitHub, select only the events you need.",
+        "sourceLabel": "Sender",
+        "sourceCustom": "Custom",
+        "customLabel": "Format (JSON)",
+        "customHint": "Describe in JSON how requests are signed and where the event name and delivery ID are.",
+        "customInvalid": "The custom format isn't valid. Check the JSON.",
+        "signedLabel": "Verify signatures",
+        "signedHint": "Only accept requests from a sender that holds the secret.",
+        "unsignedWarning": "Without signatures, anyone with the address can trigger this task and use up your daily Webhook deliveries. If the address leaks, change it in the task details.",
+        "eventPicker": {
+          "label": "Events to respond to",
+          "choose": "Choose events",
+          "selected": "{{count}} selected",
+          "all": "All events",
+          "search": "Search events",
+          "customGroup": "Other selected events",
+          "noResults": "No matching events. Add one under advanced options.",
+          "noPresets": "This source has no fixed event catalog. Receive all events or add event names under advanced options.",
+          "custom": "Custom event (advanced)",
+          "customLabel": "Event name",
+          "invalid": "Use 1–100 letters, digits or _ . : -; add one event at a time.",
+          "add": "Add",
+          "limit": "Select up to 32 events.",
+          "chooseOne": "Select at least one event, or explicitly choose All events.",
+          "cancel": "Cancel",
+          "apply": "Apply",
+          "remove": "Remove {{name}}",
+          "groups": {
+            "issues": "Issues",
+            "pullRequests": "Pull requests",
+            "issueComments": "Issue / PR comments",
+            "reviews": "PR reviews",
+            "checks": "Check suites",
+            "workflows": "Workflow runs",
+            "repository": "Repository",
+            "releases": "Releases",
+            "mergeRequests": "Merge requests",
+            "comments": "Comments",
+            "pipelines": "Pipelines",
+            "projects": "Projects",
+            "payments": "Payments",
+            "checkout": "Checkout",
+            "invoices": "Invoices",
+            "subscriptions": "Subscriptions"
+          },
+          "actions": {
+            "all": "All changes",
+            "created": "Created",
+            "closed": "Closed",
+            "reopened": "Reopened",
+            "edited": "Edited",
+            "commitsUpdated": "Commits updated",
+            "submitted": "Review submitted",
+            "completed": "Completed",
+            "pushed": "Code pushed",
+            "published": "Published",
+            "merged": "Merged",
+            "updated": "Updated",
+            "tagsChanged": "Tags pushed",
+            "declined": "Declined",
+            "deleted": "Deleted",
+            "succeeded": "Succeeded",
+            "failed": "Failed",
+            "paid": "Paid"
+          }
+        }
+      },
+      "trigger": {
+        "label": "Trigger mode",
+        "timed": "Scheduled"
+      },
+      "runSettings": "Run settings"
     },
     "chips": {
       "selectProject": "Select project",
@@ -15591,6 +15817,91 @@
           "description": "Monthly health check of working-directory docs for outdated or conflicting content",
           "prompt": "Health-check the documents in the working directory and find content that needs updating.\nConstraints:\n- Look for outdated information (stale dates, dead links, deprecated processes or tools), contradictions, and duplication\n- Cite the file path and location for every issue and explain the reasoning\n- Categorize as \"update / merge / delete\" suggestions and produce a revision checklist\n- Only output the report; do not modify the documents"
         }
+      }
+    },
+    "deadline": {
+      "label": "End date and time",
+      "clear": "Clear",
+      "hint": "Leave empty for no limit. Times use {{timezone}}. No new automatic runs start after this time; runs already started can finish.",
+      "invalid": "Enter a valid date and time",
+      "expired": "Expired"
+    },
+    "webhook": {
+      "title": "Webhook trigger",
+      "url": "Receiving address",
+      "secret": "Secret",
+      "copy": "Copy",
+      "copied": "{{label}} copied",
+      "copyFailed": "Could not copy {{label}}. Select it and copy it manually.",
+      "urlUnavailable": "The receiving address is unavailable right now.",
+      "quotaNotifyTitle": "Webhook delivery limit reached",
+      "quotaExhausted": "Today's {{limit}} Webhook deliveries are used up and resume at {{time}}. Until then, outside events won't trigger tasks. Scheduled runs and model usage aren't affected.",
+      "signedOut": "Sign in to your Cindy account to resume receiving. Your settings are kept.",
+      "serviceUnavailable": "Webhook receiving isn't available in this environment.",
+      "suspended": "Webhooks are disabled for this account.",
+      "endpointLimit": "All receiving URL slots are in use. Release an unused URL.",
+      "offline": "This computer isn't connected to the server right now. Events are held and delivered once it reconnects.",
+      "localOnlyHint": "This address only works on this computer. Forward public events to it, for example with gh webhook forward.",
+      "eventsSummary": "Events: {{events}}",
+      "lastReceived": "Last event: {{time}}",
+      "neverReceived": "No events received yet",
+      "ignored": "{{count}} ignored",
+      "generateSecret": "Generate secret",
+      "rotateSecret": "Regenerate secret",
+      "secretOnce": "Copy this secret now. It won't be shown again.",
+      "secretMissing": "Events are rejected until a secret is generated.",
+      "rotateFailed": "Couldn't generate the secret. Secrets can only be managed on the computer running this task.",
+      "genericSender": "the sender",
+      "secretFillHint": "Enter it as \"{{field}}\" in {{sender}}.",
+      "secretPastePlaceholder": "Paste \"{{field}}\" from {{sender}}",
+      "secretSave": "Save secret",
+      "secretSaved": "Secret saved.",
+      "secretSaveFailed": "Couldn't save the secret. Secrets can only be managed on the computer running this task.",
+      "secretInvalid": "This secret isn't in the expected format. Copy it again from the sender.",
+      "secretPasteMissing": "Events are rejected until you paste the secret from the sender.",
+      "unsignedNotice": "Signatures are off: anyone with the address can trigger this task. If the address leaks, change it.",
+      "rotateUrl": "Change address",
+      "rotateUrlConfirmTitle": "Change the receiving address?",
+      "rotateUrlConfirmBody": "The old address stops working right away, so enter the new one in the sender. Settings and the secret stay the same.",
+      "rotateUrlFailed": "Couldn't change the address. Try again later.",
+      "addressHint": "Enter this URL in the Webhook settings of {{sender}}.",
+      "testHint": "Trigger an event in {{sender}} that matches the filters. Run results will appear below.",
+      "waitingEvent": "Waiting for events",
+      "manageConnection": "Connection Settings",
+      "preparing": "Preparing the receiving URL…",
+      "noRunsHint": "Run results will appear here after a matching Webhook event arrives.",
+      "account": {
+        "title": "Receiving addresses",
+        "manage": "Manage",
+        "usage": "Receiving addresses {{used}} / {{limit}}",
+        "description": "Addresses on all your computers share this account’s limit. You can release an address even when its computer is offline.",
+        "remaining": "{{count}} available",
+        "unavailable": "This service does not support account address management yet. Please wait for a service update.",
+        "loadFailed": "Could not load addresses. Check your connection and refresh.",
+        "releaseFailed": "Could not confirm the release. Refresh the list to check before trying again.",
+        "retry": "Refresh",
+        "loading": "Loading addresses…",
+        "empty": "No receiving addresses in use",
+        "thisDevice": "This computer",
+        "unnamed": "Automation {{id}}",
+        "unnamedDevice": "Device {{id}}",
+        "suspended": "Disabled; still uses a slot",
+        "lastReceived": "Last received: {{time}}",
+        "neverReceived": "No events received yet",
+        "open": "View automation",
+        "release": "Release",
+        "confirm": "Release the address for “{{name}}” on {{device}}?",
+        "confirmHint": "The old address, secret and events stored on the server will be invalidated. Reconnecting the old computer will not restore it. The automation and run history are kept; runs already started are unaffected.",
+        "cancel": "Cancel",
+        "confirmRelease": "Release address",
+        "viewAddress": "View address",
+        "done": "Done",
+        "released": "Released the address for “{{name}}”.",
+        "releasedHint": "This address has been released and no longer uses a slot. Reconnect to get a new address, then update the sender’s configuration.",
+        "reconnect": "Reconnect",
+        "reconnectConfirm": "Reconnect Webhook?",
+        "reconnectConfirmHint": "This uses one slot and creates a new receiving address. Update the sender with the new address and secret.",
+        "reconnectFailed": "Could not reconnect. Check the available slots before trying again."
       }
     }
   },
@@ -16025,7 +16336,17 @@
   },
   "commandPalette": {
     "viewSkillDetails": "View skill details",
-    "projectSkillNotLoaded": "This Pi task hasn't loaded this project Skill. New tasks will automatically try to load it."
+    "projectSkillNotLoaded": "This Pi task hasn't loaded this project Skill. New tasks will automatically try to load it.",
+    "pluginSkillSetup": {
+      "install": "Not installed",
+      "enable": "Disabled"
+    },
+    "pluginSkills": {
+      "pr": {
+        "install": "Open a PR, fix CI and review feedback, and follow it to merge · Requires installing the GitHub plugin",
+        "enable": "Open a PR, fix CI and review feedback, and follow it to merge · Requires enabling the GitHub plugin"
+      }
+    }
   },
   "skillhub": {
     "remote": {
@@ -16789,7 +17110,10 @@
       "registrationFailed": "Creation failed, please retry later",
       "silentStopExhausted": "The model returned empty responses repeatedly; auto-resume is paused. Click \"Continue\" to resume the task.",
       "executionResultUnavailable": "Unable to retrieve the execution result. Automatic continuation has stopped. Ask the assistant to check the existing execution result.",
-      "outputLimit": "The model reached its output limit, so this response may be incomplete. Send the next message to continue.",
+      "outputLimit": "The model reached its output limit, so this response may be incomplete. Send a new message to continue; if this repeats, lower the reasoning effort or compact the conversation history first.",
+      "outputLimitReasoning": "Reasoning consumed most of this request’s output budget, so the response may be incomplete. Lower the reasoning effort or compact the conversation history before continuing.",
+      "outputLimitUsage": "This model request used {{outputTokens}} output tokens, including {{reasoningTokens}} reasoning tokens.",
+      "outputLimitOutputUsage": "This model request used {{outputTokens}} output tokens.",
       "permissionTightenInterruptFailed": "Failed to stop the running task while tightening permissions; it may keep running without approval prompts until it finishes. Stop it manually if needed.",
       "codexAutoReviewUnavailable": "Auto-review is temporarily unavailable. The current action was blocked and permissions switched to Default. Retry the request; Cindy will ask when needed.",
       "hostShellCommandBlocked": "Cindy blocked this shell command. Check the command and use an available tool or command to continue.",
@@ -17273,6 +17597,7 @@
     "sidebar": "Balance & Plans",
     "settings": {
       "title": "Usage and billing",
+      "supportHint": "Having trouble? Contact {{email}} for help.",
       "subscriptionCard": {
         "title": "Current plan",
         "empty": "No active subscription",
@@ -17347,14 +17672,38 @@
     },
     "orders": {
       "title": "Order history",
-      "description": "Only top-up and subscription orders started inside Cindy are listed. Orders awaiting payment are canceled automatically once they time out.",
+      "description": "Paid top-ups and settled subscription invoices.",
+      "history": {
+        "loadFailed": "Couldn’t load order history",
+        "retry": "Reload Orders",
+        "unknownPaidAt": "Payment date unavailable",
+        "unknownAmount": "Amount unavailable",
+        "refundedAmount": "Refunded {{amount}}",
+        "refunded": "Refunded",
+        "partiallyRefunded": "Partially Refunded",
+        "noPayment": "No Payment Required",
+        "page": "Page {{page}}",
+        "previous": "Previous Page",
+        "next": "Next Page"
+      },
       "count": "{{count}} orders",
-      "incomplete": "There are many order records. Only the latest {{count}} are shown.",
       "orderId": "NO. {{id}}",
       "copy": {
         "action": "Copy Order ID {{id}}",
         "success": "Order ID copied",
         "failed": "Order ID wasn’t copied — try again"
+      },
+      "refund": {
+        "action": "Request Refund",
+        "title": "Request a Refund",
+        "description": "Email the following information to {{email}} to request a refund.",
+        "emailSubject": "Cindy refund request - {{orderId}}",
+        "sendAction": "Send Refund Request",
+        "gmailFallbackDescription": "Your refund request includes order details. Opening Gmail will share this information with Google. Continue?",
+        "emailBody": "Hello, I would like to request a refund for the following order. Could you help me with this?\n\nOrder ID: {{orderId}}\nProvider transaction ID: {{providerTransactionId}}\nApplication: {{application}}\nPayment method: {{paymentMethod}}\nAmount paid: {{amount}}\n\nIssue encountered:\n(Briefly describe what happened)\n\nThank you.",
+        "fields": {
+          "amount": "Amount paid"
+        }
       },
       "invoice": {
         "action": "Request Invoice",
@@ -17364,7 +17713,7 @@
         "emailSubject": "Invoice request for order {{orderId}}",
         "personalInvoicePolicy": "Invoices for Cindy Personal top-ups are issued in <strong>an individual’s name</strong> by default. You can use your name or “Individual” as the invoice title. If you need an invoice in your company’s name for expense reimbursement, provide <strong>a reimbursement statement bearing the company’s official stamp</strong> and specifying the invoice title.",
         "invoiceTitleHint": "Instructions: For an individual invoice, enter your name or “Individual”. For an invoice in your company’s name for expense reimbursement, attach a reimbursement statement bearing the company’s official stamp and specifying the invoice title.",
-        "emailBody": "Hello,\n\nI would like to request an invoice for the following order:\n\n────────────────────\nOrder ID: {{orderId}}\nApplication: {{application}}\nPayment method: {{paymentMethod}}\nInvoice amount: {{amount}}\nInvoice title: \n{{invoiceTitleHint}}\n\nContact person: \nPhone number: \nEmail: \n────────────────────\n\nThank you.",
+        "emailBody": "Hello,\n\nI would like to request an invoice for the following order:\n\n────────────────────\nOrder ID: {{orderId}}\nProvider transaction ID: {{providerTransactionId}}\nApplication: {{application}}\nPayment method: {{paymentMethod}}\nInvoice amount: {{amount}}\nInvoice title: \n{{invoiceTitleHint}}\n\nContact person: \nPhone number: \nEmail: \n────────────────────\n\nThank you.",
         "sendAction": "Send Invoice Request",
         "emailCopied": "Support email copied",
         "emailCopyFailed": "Support email wasn’t copied — try again",
@@ -17375,6 +17724,7 @@
         "notAvailable": "Not available",
         "fields": {
           "orderId": "Order ID",
+          "providerTransactionId": "Provider transaction ID",
           "application": "Application",
           "paymentMethod": "Payment method",
           "amount": "Invoice amount",
@@ -18734,6 +19084,21 @@
     "allow": "Allow and continue",
     "cancel": "Not now"
   },
+  "pluginCompanionAnswer": {
+    "title": "Confirm allow",
+    "planMessage": "Let {{companion}} start working on this plan?",
+    "permissionMessage": {
+      "command": "Allow {{companion}} to run this command?",
+      "file-read": "Allow {{companion}} to read these files?",
+      "file-write": "Allow {{companion}} to change these files?",
+      "browser": "Allow {{companion}} to take this browser step?",
+      "plugin": "Allow {{companion}} to use “{{tool}}”?",
+      "tool": "Allow {{companion}} to use {{tool}}?"
+    },
+    "source": "You chose Allow in the plugin “{{plugin}}”. {{appName}} asks once more here; after you allow, the teammate continues.",
+    "allow": "Allow",
+    "cancel": "Cancel"
+  },
   "groupTools": {
     "authorizationRequired": "Group authorization has expired or does not allow this action. Ask the teammate owner to make a new request in this group.",
     "localPeersOnly": "Group messages can only target teammates on this device and account.",
@@ -18811,6 +19176,9 @@
     "pendingApprovals": "{{count}} pending approvals"
   },
   "richAnswer": {
+    "invalidImageReference": "This image reference is invalid.",
+    "requestImageAgain": "Ask to show image again",
+    "requestImageAgainMessage": "Please show this existing image again ({{name}}, reference: {{source}}). Check the original tool result or file and use its real address. Do not generate a new image; ask me first if you cannot identify the image.",
     "send": "Send Message",
     "sending": "Sending…",
     "sent": "Submitted",
@@ -18819,6 +19187,297 @@
     "openVideoSource": "Open original video",
     "calculationUnavailable": "Unable to calculate this value.",
     "incomplete": "Some content could not be displayed."
+  },
+  "setupMigration": {
+    "title": "Migration Assistant",
+    "back": "← Back",
+    "cancel": "Cancel",
+    "listSeparator": ", ",
+    "steps": {
+      "label": "Setup steps",
+      "source": "Computer",
+      "review": "Content",
+      "apply": "Move"
+    },
+    "source": {
+      "description": "Pick a computer signed in to this account. Its plugins, skills, settings and connections are set up the same way here; keys are copied only after you allow it there, and sign-ins never leave that computer.",
+      "loading": "Looking for your other computers…",
+      "empty": "No other computers found for this account. Sign in to Cindy on another computer, then open this again",
+      "loadFailed": "Couldn't load your computers",
+      "reload": "Reload Computers",
+      "ready": "Online, ready to move",
+      "next": "Read Settings",
+      "readAgain": "Read Again",
+      "unavailable": {
+        "offline": "Offline. Open Cindy on that computer to move from it",
+        "remote-control-off": "Enable “Allow same-account devices to control this machine” on that computer first",
+        "control-disabled": "Control of that computer is disabled here. Enable it again in Remote Connection"
+      }
+    },
+    "reading": "Reading settings on “{{name}}”…",
+    "errors": {
+      "SETUP_SOURCE_OUTDATED": "Cindy on “{{name}}” is too old to move from. Update Cindy on that computer, then try again",
+      "SETUP_SOURCE_UNAVAILABLE": "Couldn't read settings on “{{name}}”. That computer needs to be online with “Allow same-account devices to control this machine” turned on",
+      "SETUP_SNAPSHOT_INVALID": "Settings from “{{name}}” couldn't be read. This happens when the two computers run different Cindy versions; update both to the same version, then try again",
+      "SETUP_PLAN_EXPIRED": "This list has expired. Read the settings on “{{name}}” again",
+      "GENERIC": "Couldn't read settings on “{{name}}”"
+    },
+    "review": {
+      "description": "Choose what to move from “{{name}}” to this computer. Settings you already changed on this computer are kept.",
+      "partial": "Some content on that computer couldn't be read this time. Only what was read is listed below.",
+      "groupCount": "{{selected}} of {{total}} selected",
+      "present_one": "{{count}} more item is already the same here",
+      "present_other": "{{count}} more items are already the same here",
+      "start_one": "Move {{count}} Item",
+      "start_other": "Move {{count}} Items",
+      "continue": "Continue",
+      "version": "Version {{version}}",
+      "pluginDisabled": "Turned off on that computer; stays off here",
+      "pluginConsentLater": "From the “{{market}}” marketplace; you'll confirm its permissions when it installs",
+      "skillTeam": "Team skill",
+      "settingsChanges_one": "{{count}} setting",
+      "settingsChanges_other": "{{count}} settings",
+      "settingsKept_one": "Keeps {{count}} setting from this computer",
+      "settingsKept_other": "Keeps {{count}} settings from this computer",
+      "settingsChangesKept_one": "{{count}} setting; keeps {{kept}} from this computer",
+      "settingsChangesKept_other": "{{count}} settings; keeps {{kept}} from this computer",
+      "kept": "Keeps this computer's setting",
+      "rendererPrefs": "Interface Preferences",
+      "rendererPrefsHint": "Theme, language, notifications and chat display",
+      "toolOn": "Enable built-in tool “{{name}}”",
+      "toolOff": "Disable built-in tool “{{name}}”",
+      "mcp": "MCP · {{url}}",
+      "mcpToken": "MCP · {{url}} · Enter its access credentials again on this computer",
+      "checklistTitle": "To Finish on This Computer",
+      "checklistDescription": "Sign-ins, keys and system permissions stay on the original computer. After moving, finish them one by one from this list.",
+      "groups": {
+        "plugins": "Plugins",
+        "skills": "Skills",
+        "settings": "Settings",
+        "connections": "Providers and MCP",
+        "access": "Access to This Computer",
+        "secrets": "Keys",
+        "ssh": "SSH Servers"
+      },
+      "reason": {
+        "not-in-catalog": "Not in this computer's plugin marketplace",
+        "source-not-added": "From a marketplace this computer can't read",
+        "local-only": "Only exists on that computer; move it by hand",
+        "needs-sign-in": "Sign in first",
+        "platform": "Only for another operating system",
+        "invalid": "This computer can't read it"
+      },
+      "providerAuth": {
+        "apiKey": "Enter the API key again on this computer",
+        "oauth": "Sign in again on this computer",
+        "native": "Sign in to the subscription on this computer",
+        "none": "No key needed",
+        "apiKeyCopy": "API key can be copied with Keys"
+      },
+      "access": {
+        "remote-control": "Allow same-account devices to control this machine",
+        "remote-controlHint": "Same as on “{{name}}”. You can disable it anytime in Remote Connection",
+        "keep-awake": "Keep computer awake",
+        "keep-awakeHint": "Same as on “{{name}}”. This computer won't go to sleep"
+      },
+      "secrets": {
+        "title_one": "Copy Keys for {{count}} Item",
+        "title_other": "Copy Keys for {{count}} Items",
+        "description": "Copied only after you select Allow on “{{name}}”, encrypted for this request only. Account sign-ins aren't copied; sign in from the list after moving."
+      },
+      "sshDescription": "This computer creates a new SSH key, “{{name}}” adds it to these servers once allowed there, and each server is then tested. Private keys never leave their computer.",
+      "sshHost": "{{user}}@{{host}}:{{port}}",
+      "mcpTokenCopy": "MCP · {{url}} · Credentials can be copied with Keys",
+      "checklistDescriptionWithKeys": "Sign-ins and system permissions stay on the original computer; keys are copied only after “{{name}}” allows it. After moving, finish the rest from this list."
+    },
+    "permissions": {
+      "title": "Confirm Plugin Permissions",
+      "description_one": "Once installed, the {{count}} plugin below gets these permissions. Confirming installs it.",
+      "description_other": "Once installed, the {{count}} plugins below get these permissions. Confirming installs them together.",
+      "pluginTitle": "{{name}} · Version {{version}}",
+      "confirm_one": "Allow and Install {{count}} Plugin",
+      "confirm_other": "Allow and Install {{count}} Plugins"
+    },
+    "running": {
+      "progress": "Moving: {{completed}} of {{total}} done",
+      "label": "Moving…",
+      "confirm": "Select Allow on “{{name}}”.",
+      "confirmCode": "Both computers should show the same code:"
+    },
+    "done": {
+      "summary_one": "Moved {{count}} item from “{{name}}”",
+      "summary_other": "Moved {{count}} items from “{{name}}”",
+      "applyFailed": "Moving plugins, skills and settings didn't finish",
+      "failedTitle_one": "{{count}} item couldn't be moved",
+      "failedTitle_other": "{{count}} items couldn't be moved",
+      "checklistTitle": "Still to Do on This Computer",
+      "checklistEmpty": "Nothing else to do on this computer",
+      "checklistDescription": "You can also find this list later in Settings → General.",
+      "restartHint": "Some settings take effect after you reopen Cindy.",
+      "finish": "Done",
+      "finishReload": "Done and Reload"
+    },
+    "failure": {
+      "generic": "Couldn't move it ({{code}})",
+      "SOURCE_NOT_ADDED": "Couldn't add its plugin marketplace",
+      "MUTATION_CANCELLED": "Installation canceled",
+      "PRECONDITION_FAILED": "The plugin or this computer changed while moving",
+      "PERMISSION_DENIED": "This account can't install it",
+      "NOT_FOUND": "Not found in this computer's plugin marketplace",
+      "ALREADY_EXISTS": "Something with the same name already exists here",
+      "SETUP_PLAN_EXPIRED": "This list has expired",
+      "SETUP_TRANSFER_DECLINED": "Not allowed on the other computer, or no answer within 2 minutes",
+      "SETUP_TRANSFER_BUSY": "The other computer is handling another setup request. Try again shortly",
+      "SETUP_TRANSFER_INVALID": "The other computer sent an unreadable reply",
+      "SETUP_SOURCE_OUTDATED": "Update Cindy on the other computer to copy this",
+      "SETUP_SOURCE_UNAVAILABLE": "The other computer is not answering",
+      "SSH_AUTHORIZE_FAILED": "The other computer could not add the new key to this server",
+      "SSH_KEYGEN_FAILED": "This computer could not create an SSH key (ssh-keygen is required)",
+      "SSH_HOST_NOT_FOUND": "This server is no longer on the other computer",
+      "SSH_AUTH_FAILED": "The key was added, but the server refused this computer",
+      "SSH_CONNECT_FAILED": "This computer can't reach the server; it may only be reachable from the other computer's network",
+      "SSH_KEY_FILE_NOT_FOUND": "The new key file wasn't found on this computer"
+    },
+    "checklist": {
+      "done": "Done",
+      "markDone": "Mark as Done",
+      "needs": "Needs: {{items}}",
+      "voiceAsrName": "Speech recognition",
+      "plugin-setup": {
+        "title": "Connect accounts for “{{name}}”",
+        "action": "Connect"
+      },
+      "plugin-manual": {
+        "title": "Install the “{{name}}” plugin by hand",
+        "detail": "It was imported directly on that computer. Export its package from the plugin details there, then import it here",
+        "action": "Open Plugins"
+      },
+      "market-source": {
+        "title": "Add the “{{name}}” plugin marketplace",
+        "detail": "This marketplace's address is only saved on that computer. Add it to install its plugins",
+        "action": "Open Plugins"
+      },
+      "skill-manual": {
+        "title": "Copy the “{{name}}” skill",
+        "detail": "It wasn't installed from SkillHub and only exists on that computer",
+        "action": "Open Skills"
+      },
+      "provider-key": {
+        "title": "Enter the API key for “{{name}}”",
+        "action": "Enter Key"
+      },
+      "provider-connection": {
+        "title": "Re-enter the connection address for “{{name}}”",
+        "detail": "Sign-in details or query parameters in the original address may contain credentials, so they were not copied",
+        "action": "Enter Address"
+      },
+      "provider-sign-in": {
+        "title": "Sign in to “{{name}}”",
+        "action": "Sign In"
+      },
+      "local-model": {
+        "title": "Set up the local model “{{name}}” on this computer",
+        "detail": "Local models run on the original computer; this computer needs its own install",
+        "action": "Open Providers"
+      },
+      "mcp-token": {
+        "title": "Enter the access credentials for MCP “{{name}}”",
+        "action": "Enter Credentials"
+      },
+      "builtin-key": {
+        "title": "Enter the API key for “{{name}}”",
+        "action": "Enter Key"
+      },
+      "im-channel": {
+        "title": "Connect “{{name}}”",
+        "detail": "A bot receives messages on one computer at a time. Decide which computer should receive them before connecting",
+        "action": "Connect"
+      },
+      "computer-use": {
+        "title": "Enable Automation",
+        "detail": "Grant Accessibility and Screen Recording permissions on this computer",
+        "action": "Enable"
+      },
+      "remote-desktop": {
+        "title": "Enable Remote Desktop",
+        "detail": "Enable it separately on this computer and grant Screen Recording permission",
+        "action": "Enable"
+      },
+      "ssh": {
+        "title_one": "Copy SSH keys and config for {{count}} remote host",
+        "title_other": "Copy SSH keys and config for {{count}} remote hosts",
+        "detail": "Keys and config in ~/.ssh aren't moved automatically; copy them to this computer",
+        "action": "Open Remote Connection"
+      },
+      "ssh-host": {
+        "title": "Set up SSH server “{{name}}”",
+        "detail": "It couldn't be set up automatically. Choose a key for it in SSH settings and test the connection",
+        "action": "Open Remote Connection"
+      },
+      "startAll_one": "Go Through {{count}} Item",
+      "startAll_other": "Go Through {{count}} Items"
+    },
+    "settingsGroups": {
+      "appearance": "Appearance",
+      "windowBehavior": "App Behavior",
+      "menubar": "Menu Bar Usage",
+      "collaboration": "Collaboration",
+      "agentResource": "Agent Resource Usage",
+      "gitSafety": "Git Safety",
+      "goal": "Goal Mode",
+      "memory": "Memory",
+      "compaction": "Context Compaction",
+      "silentEncryptedRetry": "Silently drop protocol-encrypted content and retry",
+      "silentStopAutoResume": "Continue after an unexpected stop",
+      "sessionRuntimeFallback": "Automatic task model fallback",
+      "subagentModels": "Subagents",
+      "auxiliaryModels": "Auxiliary Models",
+      "visionBridge": "Vision Bridge",
+      "modelVisibility": "Shown and Hidden Models",
+      "providerOrder": "Provider Order",
+      "modelCatalogOverrides": "Model Parameter Changes",
+      "modelPriceOverrides": "Model Prices",
+      "autoUpdate": "Install updates while idle",
+      "updateChannel": "Beta channel"
+    },
+    "settings": {
+      "title": "Migration Assistant",
+      "description": "On a new computer, copy over all the features, plugins and settings Cindy is connected to on your other computers, ready to use.",
+      "start": "Open Migration Assistant",
+      "pending_one": "{{count}} item still to do on this computer",
+      "pending_other": "{{count}} items still to do on this computer",
+      "allDone": "Everything to do on this computer is done",
+      "from": "Moved from “{{name}}”",
+      "closeChecklist": "Close List"
+    },
+    "suggestion": {
+      "title": "Use Migration Assistant to move from “{{name}}”?",
+      "description": "You can set up this computer with the plugins, skills, settings and connections from that one. Anything that needs a new sign-in or permission here is listed for you. You can also open it later in Settings → General → Migration Assistant.",
+      "confirm": "Open Migration Assistant",
+      "later": "Not Now"
+    },
+    "walkthrough": {
+      "progress": "Setup checklist {{current}} / {{total}}",
+      "open": "Open",
+      "skip": "Skip",
+      "next": "Done, Next",
+      "stop": "End",
+      "allDone": "Checklist finished"
+    },
+    "transfer": {
+      "prompt": {
+        "title": "Migration Assistant",
+        "message": "“{{name}}” asks to copy the following from this computer",
+        "secrets": "Keys (copied to that computer only; keys here stay as they are):",
+        "ssh": "Add that computer's new SSH public key to these servers:",
+        "sshKey": "Key fingerprint: {{fingerprint}}",
+        "code": "Code: {{code}}. Allow only if it matches the code on that computer.",
+        "notice": "If you aren't setting up a new computer yourself, deny.",
+        "more": "and {{count}} more",
+        "allow": "Allow",
+        "deny": "Deny"
+      }
+    }
   },
   "forwardedRequest": {
     "sourcePresent": "[Source] The host preserved the user’s original words as request background, without changes. The current request is in the Agent supplement.",

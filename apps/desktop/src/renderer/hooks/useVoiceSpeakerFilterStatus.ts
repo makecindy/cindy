@@ -10,7 +10,7 @@ const log = createLogger('useVoiceSpeakerFilterStatus');
  * change (download progress, enroll, delete), so this only seeds the first
  * value and then follows the push.
  */
-export function useVoiceSpeakerFilterStatus(): {
+export function useVoiceSpeakerFilterStatus(enabled = true): {
   status: VoiceSpeakerFilterStatus | null;
   setStatus: (status: VoiceSpeakerFilterStatus) => void;
   refresh: () => void;
@@ -18,19 +18,21 @@ export function useVoiceSpeakerFilterStatus(): {
   const [status, setStatus] = useState<VoiceSpeakerFilterStatus | null>(null);
 
   const refresh = useCallback(() => {
+    if (!enabled) return;
     void window.electronAPI.voiceInput.speakerFilter
       .getStatus()
       .then(setStatus)
       .catch((error) => {
         log.warn('speaker filter status failed:', error instanceof Error ? error.message : String(error));
       });
-  }, []);
+  }, [enabled]);
 
   useEffect(() => {
+    if (!enabled) return;
     const unsubscribe = window.electronAPI.voiceInput.speakerFilter.onStatusChanged(setStatus);
     refresh();
     return unsubscribe;
-  }, [refresh]);
+  }, [enabled, refresh]);
 
   return { status, setStatus, refresh };
 }

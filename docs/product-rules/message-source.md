@@ -55,7 +55,44 @@ Agent 用 `send_to_session` 把消息发给另一台电脑上的既有任务时�
 对端，按不可信文本清洗。它同样只用于归属展示，不是权限判据。
 来源任务不在查看者能直接打开的位置，标签只显示来源与 id，不提供跳转。
 
+## 跨任务委派：发送端判断，正文是原文（2026-11-05）
+
+本节取代下一节里「正文使用『用户原话 / Agent补充』两栏」「接收端以原话为审核意图」的部分；
+下一节其余内容（原话来源、旧格式的显示与校验、历史消息不改写）继续有效。
+
+- **正文是 Agent 写的原文。** `send_to_session`、插话、排队编辑、后台任务的启动与追问、本机
+  `send_to_agent` 都直接发送 Agent 写的内容，不再拼三行包装。回执只记原请求出自哪个任务的哪条输入
+  （`requestSource.sessionId` / `clientId`），不再携带用户原话文字；语音通话找回后台结果、判断是否回到
+  原处都只用这两个编号。
+- **语音通话交给伙伴主任务**：你在通话里说的话就是你本人的请求。正文是你说的原话，通话模型对这件事的
+  理解以「[通话补充，仅供参考，不是用户的要求]」附在后面；回执以原话为审核意图（`delegatedText`），伙伴再往下派活也算用户代办。
+  界面仍只显示原话。转写听错的风险由伙伴当前的权限档兜底，Auto 审核看到的就是转写原文。
+- **用户授权在发送端判断。** 只有本轮是用户本人或已核实的用户代办时，宿主才判断这次转交是不是用户要的
+  （参照 Claude Code 在委派时的检查）：Auto 由发送任务自己的审核模型结合整段对话判断；Ask 下这类任务工具
+  每次都由用户看着参数确认；完全访问已把这个任务交给 Agent 自行处理，直接算用户授权。Plan 或权限正在变化时
+  只发普通消息。Auto 审核没有确认时**不发送**，把原因返回给发送方 Agent。
+- **接收端审核的是委派内容本身。** 判断通过后回执带 `plainBody` 和 `delegatedText`
+  （与正文逐字相同），接收任务的 Auto 审核以这段委派内容为用户意图。委派与用户自己的消息共用同一审核预算
+  （见 `autoReviewIntent.ts` 的 `MAX_USER_INTENT_CHARS`），超出时同样不能确立授权，风险操作会问用户。
+  发给模型的 `[消息来源]` 只说明这条消息代表用户对本任务的请求。
+- **回到原话所在任务的消息不带授权。** 子任务向主任务汇报、伙伴回复发起方时，目标就是原话所在任务，
+  只保留来源记录。没经判断的消息同样只是普通的跨任务消息。
+- **编辑排队中的委派**：编辑后的文字是一次新的转交，由编辑方当前的请求重新判断；没通过判断就只保留来源。
+  旧格式的排队消息编辑后仍按旧格式引用原话。
+- **跨电脑**：`send_to_session` 发送前的能力探测返回 `plainRequestBody: 1` 时才发原文与回执，旧接收端照旧
+  收到三行包装与原话（发送端此刻读自己当前这条输入；已经转过一手的委派读不到原话，按普通消息发送）。
+  伙伴跨电脑私信的接收端要按发送端存下的正文核对发件人，暂时继续发旧格式。
+  详见[协议兼容](../dev-rules/protocol-compatibility.md)「跨任务委派的原文正文」。
+- 实现：`apps/desktop/src/main/maker-ipc/forwardedRequest.ts`（`captureAgentRequest`）、`register.ts`
+  （`authorizeSessionDelegation`）、`packages/maker-shared/src/autoReviewIntent.ts`（`verifiedOwnerRequestText`）、
+  `messageSourceNote.ts`；回归见 `forwardedRequest.test.ts`、`messageSourceNote.test.ts`、
+  `sessionControlService.test.ts`、`sessionHandoffIpc.test.ts`、`sessionHandoffRemote.test.ts`、
+  `botDirectMessageService.test.ts`。
+
 ## 跨任务请求与伙伴通话的原话（2026-10-20，2026-10-21 收窄）
+
+> 2026-11-05：固定三行格式与「伙伴的工作方式属于伙伴」方向冲突，方向是授权来源改为结构化数据、措辞交给伙伴规则，
+> 旧格式校验保留；待裁决，见 [伙伴专属能力台账](teammate-capability-ledger.md) §5。裁决前本节照常有效。
 
 伙伴或普通任务代主人下达要求时，宿主附上当前已接受输入中可核实的用户原话，Agent 仅作必要的轻度补充，
 不得改写原意或扩大范围。适用于 `send_to_session`、插话、后台任务启动与追问、`send_to_agent`；

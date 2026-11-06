@@ -25,7 +25,14 @@ import {
   type UserBrowserPageControl,
 } from '../user-browser-backend';
 
-type Tab = { id: number; url: string; title?: string; active?: boolean; redacted?: boolean };
+type Tab = {
+  id: number;
+  url: string;
+  title?: string;
+  active?: boolean;
+  redacted?: boolean;
+  cindyWindow?: boolean;
+};
 
 function fakeControl(
   options: { clients?: string[]; tabs?: Record<string, Tab[]>; version?: string } = {},
@@ -160,6 +167,26 @@ describe('UserBrowserBackend · 就绪与连接', () => {
 });
 
 describe('UserBrowserBackend · 标签页与寻址', () => {
+  // 2026-11-06: the agent kept working in the user's own ChatGPT tab (snapshot, clicks, two
+  // navigations) because tabs listed it like any page Cindy had opened.
+  it('tabs 标出页签归属:Cindy 窗口里的是 cindy,其余是用户自己的', async () => {
+    const fake = fakeControl({
+      version: '0.4.43',
+      tabs: {
+        'client-aaaaaaaa': [
+          { id: 7, url: 'https://chat.example.test/', title: 'Chat', active: true },
+          { id: 8, url: 'https://chat.example.test/billing', title: 'Billing', cindyWindow: true },
+        ],
+      },
+    });
+    const listed = await call(backend(fake.control), { action: 'tabs' });
+    expect((listed.data as { tabs: Array<Record<string, unknown>> }).tabs).toMatchObject([
+      { url: 'https://chat.example.test/', owner: 'user' },
+      { url: 'https://chat.example.test/billing', owner: 'cindy' },
+    ]);
+    expect((listed.data as { note: string }).note).toContain('owner:"user"');
+  });
+
   it('tabs 映射稳定 targetId 与别名,保留被打码行;open 返回可用 targetId 并记住 label', async () => {
     const fake = fakeControl({
       tabs: {
@@ -182,6 +209,8 @@ describe('UserBrowserBackend · 标签页与寻址', () => {
       active: true,
     });
     expect(tabs[1]).toMatchObject({ targetId: 'client-a:9', redacted: true });
+    // An extension that does not mark Cindy's window gets no guessed owner.
+    expect(tabs[0]).not.toHaveProperty('owner');
     fake.tabs['client-aaaaaaaa'].push({ id: 11, url: 'https://example.test/b', title: 'B' });
     const opened = await call(b, {
       action: 'open',

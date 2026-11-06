@@ -397,6 +397,19 @@ describe('GhostInstallReceiptStore cleanup', () => {
     expect(store.read('hello')).toMatchObject({ state: 'approved', receipt: { observeCapabilityApproved: true, revision: receipt.revision } });
   });
 
+  it('round trips companions approval without inferring it from other grants', async () => {
+    const receipt = createSetupReceipt();
+    receipt.manifest.agent = { tasks: true, observe: true, companions: true };
+    receipt.taskCapabilityApproved = true;
+    receipt.observeCapabilityApproved = true;
+    await store.write(receipt);
+    const old = store.read('hello');
+    if (old.state !== 'approved') throw new Error('fixture not approved');
+    expect(old.receipt).not.toHaveProperty('companionsCapabilityApproved');
+    await store.write({ ...old.receipt, companionsCapabilityApproved: true });
+    expect(store.read('hello')).toMatchObject({ state: 'approved', receipt: { companionsCapabilityApproved: true, revision: receipt.revision } });
+  });
+
   it('writes setup in the author format accepted by the v0.1.48 receipt reader', async () => {
     const receipt = createSetupReceipt();
     await store.write(receipt);

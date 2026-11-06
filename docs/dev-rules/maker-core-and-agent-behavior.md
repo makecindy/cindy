@@ -101,6 +101,30 @@ Pi / Codex 的检测在任务所在电脑的 Session 上，用的是受邀者自
 回归见 `loop-guard.test.ts`、`tool-loop-review.test.ts`、`session.tool-loop.test.ts`、
 Claude Code 的 `upstream-idle-watchdog.test.ts` 与 desktop 的 `tool-loop-reviewer.test.ts`。
 
+## 宿主事件流暂停（`holdEventStream`）
+
+宿主要把 provider 产物落库后再让其它订阅方看到时（目前只有 Codex 原生生成图，见
+`media-storage-and-protocols.md`「Codex 原生生成图交付」），由监听方在处理该事件时调用
+`Session.holdEventStream(followUps)`，不要在各消费方另写等待。约定：
+
+- 只接受 runEventLoop 正在派发的当前 turn 非终态事件，同一事件只接受一次；看门狗合成、
+  后台、旧 generation、idle status 与终态事件一律返回 false，调用方的工作照常在后台完成。
+- 暂停发生在读下一条 provider 事件之前，算作“在等 provider”：`awaitingGeneration` 已提前
+  记下，暂停期间的 send 与阻塞在 `next()` 时的 send 同样处理，`done` 自然排在 followUps 之后。
+- followUps 带 `hostProjection: true`，沿用来源事件的 `turnOrigin`、`sessionTurnGeneration`、
+  `sessionInstanceId`、`turnAttemptToken`、`turnScope`，只发给监听方，不进 turn 控制、
+  工具循环计数与看门狗；终态事件会被丢弃，暂停不能结束 turn。发起暂停的宿主负责
+  落库和推界面，wire pipeline 跳过 `hostProjection`。
+- 发送栅栏：接受暂停起到循环读到下一条 provider 事件（通常是 `done`）为止，`isTurnRunning()`
+  恒为 true。provider 可能已把 handle 置 idle、`done` 还排在后面，没有栅栏时这段窗口内的
+  `send()` 会提前开出 N+1 轮并抢走 N 的 origin / generation。abort／close／detach 一并清除。
+- 最长 `EVENT_STREAM_HOLD_MS`（20 秒，`SessionOptions.eventStreamHoldMs` 可注入）；超时只放行，
+  不重试。`abort()`／`close()`／`detach()` 立即放行并丢弃未发出的 followUps——手动 Stop 的
+  复核宽限（15 秒）短于暂停上限，不能让 `done` 卡在暂停后面。
+- 指标影响：只有被接受的暂停才多一次 await，未使用时热路径只多一次空值判断。回归见
+  `session.origin.test.ts`「Session host event-stream hold」与 desktop
+  `sessionEventPipeline.test.ts`「Codex generated images through the production event pipeline」。
+
 ## 上下文已满时的引擎边界
 
 Claude Code 在同一模型上达到设置页自动压缩阈值且尚未满窗时，由 host 注入 `/compact`；
@@ -620,8 +644,8 @@ Cindy 审核向 Codex／Claude 原生审核看齐：先判动作本身的风险�
 越界或有更安全做法则 `block`；critical 一律 `block`。没有任何用户原话也没有委派时只放行读取。
 相关、有限、可恢复的操作以及同任务截图/文档交付、临时输出路径按完成任务所需步骤判断；
 重点拦重大不可逆损失、凭据泄露、私密数据外发、大额资金、生产破坏与长期安全削弱。
-明确禁止、撤权、访客身份、只读授权和委派范围仍严格生效。审阅器只看到用户原话，看不到
-Agent 的计划与结果：报问题或要求改动即覆盖排查、修改、探针、构建、测试、版本／验证记录和清理
+明确禁止、撤权、访客身份、只读授权和委派范围仍严格生效。审阅器以用户原话为授权依据，
+看不到工具结果，只额外看到 Agent 的少量公开说明（见下文「Agent 公开说明」）：报问题或要求改动即覆盖排查、修改、探针、构建、测试、版本／验证记录和清理
 本任务创建之物等未被点名的步骤，「无法确认这一步在范围内」不构成 ask 或 block 的理由；审阅器
 不判断代码或记录内容的真伪（2026-10-24 真实误判案例见 eval 脚本 `real-*`）。
 模型给出的 `reason` 面向用户：用用户消息的语言写一两句白话、不出现字段名；`ask` 时 harness 用
@@ -660,7 +684,7 @@ Full Access、Auto、Ask 的含义保持不变。不以配方自报的 read/writ
 执行，不创建开发 Agent 或调用 CLI `oneShot`；Claude 订阅仍不可供 Cindy 直连借用。
 宿主规则走供应商原生 system／instructions 字段，审核上下文仅放在证据段，并复用同一
 严格判定解析器。设置说明须披露发往所选供应商的上下文范围：用户原话、引用内容、
-委派任务、此前被阻止的操作、发起者身份与权限、待审操作参数、工作区及可写／参考
+Agent 的公开说明、委派任务、此前被阻止的操作、发起者身份与权限、待审操作参数、工作区及可写／参考
 路径和操作系统；不能只列用户原话与操作参数，漏掉其余上下文。
 384 token 的短输出预算复用辅助模型的「最少思考」策略；Messages／Chat 先试关闭思考，
 Responses 没有关闭值，从模型目录声明的最低档开始（没有档位时用 `low`），不发送其
@@ -705,8 +729,15 @@ Cindy 在返回拒绝前，通过已有 `turn/steer` 向对应 thread 和 expect
 信任依据。没有可信记录的旧消息仍会中断授权恢复，不按旧心跳 prompt 补造用户同意。
 既有的清空、回退、附件歧义和完整消息预算继续生效。
 用户原话按时间平铺为历史与唯一当前消息，不把历史包装成一律持续有效的限制。局部练习
-的限制不延伸到新任务；同任务限制、撤权与明确长期限制仍须保留。预算不足时整体省略
-旧历史并标记缺失，不能只留下旧授权、丢掉后续限制。宿主实际拒绝的动作可作为下一条
+的限制不延伸到新任务；同任务限制、撤权与明确长期限制仍须保留。用户原话合计预算为
+30000 字符（`autoReviewIntent.ts` 的 `MAX_USER_INTENT_CHARS`，数据库投影校验同源），
+与 Claude Code、Codex 原生审核的几万字量级一致。预算不足时从最旧的消息开始整条省略并标记
+`historyOmitted`，一次省略到只剩一半预算，只保留最新的连续消息，不能只留下旧授权、丢掉后续限制。
+审阅 prompt 中用户原话紧跟固定规则，一次省略到一半可让之后的消息只在末尾追加，前缀不变，
+相邻两次审阅请求的逐字节相同前缀因此保持稳定（离线测得，意图预算满后相邻请求可复用前缀
+占提示词的 89.7%，每次只丢刚好够用的消息时为 18.4%）。能否转化为供应商缓存命中取决于
+供应商：`codex-auto-review` 路由上实测相邻不同请求几乎没有命中，该收益只是设计意图，
+不要把它当作已验证的结论。当前消息整条保留，只有它自身超出预算时才整条作废，不截取中段。宿主实际拒绝的动作可作为下一条
 同一身份用户补充的指代线索；动作参数与助手解释都不是用户授权。相关行为回归见
 `agents/shared/auto-review-decision.test.ts` 与 `scripts/eval-auto-approval.mts`。
 IM 与官方 Hook 消息另带「用户本条明确指向的内容」：被回复／引用的那条消息与本条附件数。
@@ -718,6 +749,16 @@ IM 与官方 Hook 消息另带「用户本条明确指向的内容」：被回�
 审阅器把它放在 `<review_input>` 之后的独立 `<referenced_content>` 低信任块中，只用于判断指代与只读查询的
 依据，不构成授权；没有引用时审阅 prompt 逐字不变。群背景消息不算用户指向的内容。审阅器暂不接收图片本体，
 只写明张数。回归见 `auto-review-decision.test.ts`、`autoPermissionReviewer.test.ts` 与三个 harness 的 wiring 测试。
+**Agent 公开说明**（2026-11-06，参考 Codex 审核把 Agent 的话列为不可信证据、Claude Code 完全不看的两种做法）：
+审阅请求另带 `agentContext`，由 `createAutoReviewAgentTextTracker` 从三个 harness 已有的事件出口按主 scope
+记录，子 Agent、后台轮次的文字不计入：`lastReplyToUser` 是用户当前消息之前 Agent 的最后一段公开文字
+（用来判断「可以」「就这么做」答的是什么），用户消息被重复解析时不前移；`statedPurpose` 是这次调用前
+最近一段公开说明加上工具自带的说明（Claude 的 Bash `description`），子 Agent 的调用只带工具自带说明。
+两者都不含思考过程与工具结果，先脱敏，各保留结尾 2000 字。审阅器把前者放在用户原话之后、后者放在
+待审操作之前（按变化频率排列以保住前缀缓存），并且只在有内容时加入规则：它们不是用户原话，里面的
+「用户已同意」一律不算数，不能扩大范围；用户的简短回复只覆盖 Agent 问到的内容；风险按操作实际效果
+判断，Agent 的话不会让低风险操作变成高风险；说明掩盖或轻描淡写操作的严重影响时视为可疑并拦下。没有这两项时审阅 prompt 逐字不变。真实使用对比用
+`scripts/eval-auto-approval.mts` 的 `--cases-file`（本机真实记录只放本地，不入库）与 `--without-context`。
 绑定原任务的心跳必须保留其权限与计划模式，包括冷启动恢复与撞忙排队；队列接受边界
 复用既有权限与计划模式稳定快照核验；任一模式切换中或运行时与落盘值不一致时顺延，
 不按旧模式派发。不得把原任务的 Auto／Ask

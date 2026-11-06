@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import { materializeCompanion } from '../materialize.js';
+import { createCompanionStore, storedValueHash } from '../store.js';
 import { valueHash } from '../uploader.js';
 import { fakeApi, fakeLocal, memoryState } from './fakes.js';
 
@@ -74,6 +75,25 @@ describe('materializeCompanion', () => {
     expect(state.bot('bot_mia')?.prefs['companion.memory.v1:user_never.md']).toMatchObject({ local: true });
     expect(state.bot('bot_mia')?.backedUp).toBeUndefined();
     expect(state.bot('bot_mia')?.prefs['companion.memory.v1:user_same.md']).toMatchObject({ local: true });
+  });
+
+  it('forgets what this computer last uploaded to the preferences when the value now comes from the store', async () => {
+    const big = { slug: 'brew', content: 'x'.repeat(70_000) };
+    // The preference row still holds another computer's small version; the store has the current one.
+    const { api } = fakeApi((route, method) => {
+      if (route === '/preferences' && method === 'GET') return [{ ...profilePref, revision: 1 }, { key: 'companion.skill.v1:brew', value: { slug: 'brew', content: 's2' }, revision: 3 }];
+      if (route.startsWith('/companion-store/changes')) return { entries: [{ key: 'companion.skill.v1:brew', revision: 2, cursor: '2', hash: valueHash(big), size: 70_000, deleted: false, value: big }], cursor: '2', hasMore: false };
+      if (route.startsWith(`/conversations/${ROOM}/messages?`)) return [];
+      throw new Error(`unexpected ${method} ${route}`);
+    });
+    const { state } = memoryState();
+    // This computer had uploaded the small first version before handing the companion away.
+    state.update('bot_mia', 'actor-1', entry => { entry.prefs['companion.skill.v1:brew'] = { hash: valueHash({ slug: 'brew', content: 's1' }), revision: 1, local: true }; });
+    const store = createCompanionStore(api, { enabled: () => true });
+    await materializeCompanion({ api, store, state, host: fakeLocal().host, actor, roomId: async () => ROOM });
+    // Otherwise editing the skill back to s1 would look already uploaded, and the cloud would keep s2.
+    expect(state.bot('bot_mia')?.prefs['companion.skill.v1:brew']).toBeUndefined();
+    expect(state.bot('bot_mia')?.stored?.['companion.skill.v1:brew']).toEqual({ hash: storedValueHash(big, 0), revision: 2, local: true });
   });
 
   it('backs up a local copy that never synced before overwriting it', async () => {

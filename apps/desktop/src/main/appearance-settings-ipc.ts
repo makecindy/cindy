@@ -45,11 +45,7 @@ export function registerAppearanceSettingsIpc(): void {
   // repeatedly applying an already matching scale. Only app-content windows
   // participate; embedded webpages and utility windows keep their own zoom.
   app.on('browser-window-focus', function restoreFocusedWindowZoom(_event, win) {
-    if (!isAppContentWindow(win) || win.webContents.isDestroyed()) return;
-    const settings = readAppearanceSettings();
-    if (Math.abs(win.webContents.getZoomFactor() - settings.windowZoom) > 0.000001) {
-      applyAppearanceToWindow(win, settings);
-    }
+    restoreWindowZoom(win);
   });
 
   // Must be registered before BrowserWindow creation: preload reads this on
@@ -118,19 +114,12 @@ export function registerAppearanceSettingsIpc(): void {
 
   ipcMain.handle('appearance-settings:set-patch', async (event, rawPatch: unknown) => {
     assertTrustedAppRendererEvent(event);
-    const patch = parsePatch(rawPatch);
-    const settings = await writeAppearanceSettingsPatch(patch);
-    applyAppearanceToWindows(settings);
-    broadcast(settings);
-    return settings;
+    return updateAppearanceFromSettings(rawPatch);
   });
 
   ipcMain.handle('appearance-settings:reset', async (event) => {
     assertTrustedAppRendererEvent(event);
-    const settings = await resetAppearanceSettings();
-    applyAppearanceToWindows(settings);
-    broadcast(settings);
-    return settings;
+    return resetAppearanceFromSettings();
   });
 }
 
@@ -146,6 +135,37 @@ export function applyAppearanceToWindows(settings = readAppearanceSettings()): v
   for (const win of BrowserWindow.getAllWindows()) {
     applyAppearanceToWindow(win, settings);
   }
+}
+
+/**
+ * Re-asserts the persisted window zoom only when the live zoom has drifted.
+ *
+ * Chromium persists a zoom level per URL. A window that navigates to a URL with
+ * a stale record silently keeps that record instead of the saved preference
+ * (#7486). Callers invoke this at points where Chromium can override the zoom.
+ */
+export function restoreWindowZoom(win: BrowserWindow): void {
+  if (!isAppContentWindow(win) || win.webContents.isDestroyed()) return;
+  const settings = readAppearanceSettings();
+  if (Math.abs(win.webContents.getZoomFactor() - settings.windowZoom) > 0.000001) {
+    applyAppearanceToWindow(win, settings);
+  }
+}
+
+/**
+ * Keeps the persisted zoom across in-page navigations.
+ *
+ * The renderer routes conversations through the URL hash, so `did-finish-load`
+ * never fires when the user switches pages. Chromium then restores whatever
+ * zoom level it recorded for the new URL, which makes the window shrink or grow
+ * until the next full load. Re-assert the preference on every in-page
+ * navigation so the saved scale wins.
+ */
+export function installWindowZoomRestoration(win: BrowserWindow): void {
+  win.webContents.on('did-navigate-in-page', (_event, _url, isMainFrame) => {
+    if (!isMainFrame || win.isDestroyed() || win.webContents.isDestroyed()) return;
+    restoreWindowZoom(win);
+  });
 }
 
 export function getPersistedWindowZoom(): number {
@@ -315,3 +335,17 @@ function parseNumber(
 }
 
 export const __testing = { parsePatch };
+
+/** UI and Agent edits share validation, persistence, live windows and broadcasts. */
+export async function updateAppearanceFromSettings(rawPatch: unknown) {
+  const settings = await writeAppearanceSettingsPatch(parsePatch(rawPatch));
+  applyAppearanceToWindows(settings);
+  broadcast(settings);
+  return settings;
+}
+export async function resetAppearanceFromSettings() {
+  const settings = await resetAppearanceSettings();
+  applyAppearanceToWindows(settings);
+  broadcast(settings);
+  return settings;
+}

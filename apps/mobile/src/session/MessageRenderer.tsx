@@ -120,7 +120,7 @@ import {
   type OnViewableItemsChangedInfo,
   type LegendListRef,
 } from '@legendapp/list/react-native';
-import { tokenizeCode, type CodeTokenKind } from '@/session/codeHighlight';
+import { HighlightedCodeText } from './HighlightedCodeText';
 import { buildComposerTouchLayout } from '@/session/composerTouchLayout';
 import { useFoldableExpandedState } from '@/session/expandedBlockMemory';
 import {
@@ -167,6 +167,7 @@ import {
   MOBILE_COMPOSER_VOICE_ANCHOR_RIGHT,
 } from '@/session/MobileComposerInputRow';
 import { MAX_FONT_SIZE_MULTIPLIER, Text } from '@/components/AppText';
+import { pluginCardPlainText } from '@/plugins/pluginCardText';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import type {
   NormalizedAttachment,
@@ -3201,10 +3202,18 @@ const RenderItemView = memo(function RenderItemView({
   }
   const groupTimestamp = actions.companion && (item.type === 'message' || item.type === 'pending_send')
     ? actions.companionTimeGroups?.get(item.key) : undefined;
-  // Cards and work groups share the reply text column, leaving the avatar slot empty.
+  // Each outer process group owns a portrait, just like the final reply.
+  // Nested details clear companionAvatar, so expanding them cannot repeat it.
+  const processAvatar = actions.companion && item.type === 'work_group' ? actions.companionAvatar : undefined;
+  // Cards still share the reply text column without repeating the portrait.
   const alignWithReplies = !!actions.companionAvatar && actions.companion
-    && (item.type === 'work_group' || (item.type === 'message' && !!item.message.companion));
-  const aligned = alignWithReplies ? (
+    && item.type === 'message' && !!item.message.companion;
+  const aligned = processAvatar ? (
+    <View style={styles.companionAvatarRow} testID="companion.processRow">
+      <View style={styles.companionAvatarSlot}>{processAvatar}</View>
+      <View style={styles.companionAvatarContent}>{node}</View>
+    </View>
+  ) : alignWithReplies ? (
     <View style={styles.companionAvatarInset}>{node}</View>
   ) : (
     node
@@ -3588,6 +3597,7 @@ function MessageBubble({
   // 不挂。分享态只保留与导出图片一致的消息内容,不显示操作图标、时间或费用。
   // 流式回复不显示操作，但保留最终操作行的占位，收尾时不把正在看的正文推走。
   const showCompletedActionBar = !shareSelectionActive && mobileMessageShowsActionBar({
+    role: item.message.role,
     hasSystemCard: !!item.message.systemCardType,
     isStreamingAssistant,
     isTurnFinalAssistant: item.message.isTurnFinalAssistant === true,
@@ -3621,16 +3631,18 @@ function MessageBubble({
     && item.message.kind === 'user'
     && !isFirstUserMessage
   );
-  // 对齐桌面 edit-last-message:只在最后一条用户消息开放,首条同样可编辑;
-  // 运行中也显示(点了先停止当前回复)。
-  const canEdit = !!(
+  // 对齐桌面 edit-last-message:只在最后一条用户消息开放,首条同样可编辑。
+  // 任务运行中不外显、收进「…」菜单(点编辑不中断任务,发送时才中断);停下后回到操作行。
+  const canEditMessage = !!(
     showCompletedActionBar
     && clientId
     && actions.onEditMessage
     && item.message.kind === 'user'
     && clientId === actions.lastUserMessageClientId
   );
-  const editing = canEdit && clientId === actions.editingMessageClientId;
+  const editInMenu = canEditMessage && actions.isSessionStreaming === true;
+  const canEdit = canEditMessage && !editInMenu;
+  const editing = canEditMessage && clientId === actions.editingMessageClientId;
   // 对齐桌面:任务运行中也保留删除入口,点了由页面提示等回复结束,不让菜单项时有时无。
   const canDelete = !!(
     showCompletedActionBar
@@ -3709,8 +3721,9 @@ function MessageBubble({
     canAddToChat,
     canCopyLink,
     canDelete,
+    canEditInMenu: editInMenu && !editing,
     canRewind,
-  }), [canSideChat, canAddToChat, canCopyLink, canDelete, canRewind, i18nInstance.language]);
+  }), [canSideChat, canAddToChat, canCopyLink, canDelete, editInMenu, editing, canRewind, i18nInstance.language]);
   const actionBar = useMemo(() => buildMessageActionBarPresentation({
     align: isUser ? 'user' : 'agent',
     canCopy,
@@ -3816,6 +3829,7 @@ function MessageBubble({
   const selectMenuAction = useCallback((id: MobileMessageMenuActionId) => {
     if (!clientId) return;
     if (id === 'rewind') return selectControlAction('rewind');
+    if (id === 'edit') return selectControlAction('edit');
     if (id === 'delete') return selectControlAction('delete');
     if (id === 'add-to-chat') return actions.onAddMessageToComposer?.(clientId);
     if (id === 'side-chat') return actions.onSideChatMessage?.(copyText);
@@ -3824,7 +3838,7 @@ function MessageBubble({
   const openMessageActionMenu = useCallback(() => {
     if (usesSystemActionMenu()) {
       const disabled = actionBusy
-        ? new Set<MobileMessageMenuActionId>(['rewind', 'delete'])
+        ? new Set<MobileMessageMenuActionId>(['edit', 'rewind', 'delete'])
         : null;
       void showActionMenu({
         cancelLabel: t('session.common.cancel'),
@@ -4224,7 +4238,7 @@ function MessageBubble({
                   actions={messageMenu.map((item) => ({
                     image: item.image,
                     destructive: item.destructive,
-                    disabled: actionBusy && (item.id === 'rewind' || item.id === 'delete'),
+                    disabled: actionBusy && (item.id === 'edit' || item.id === 'rewind' || item.id === 'delete'),
                     id: item.id,
                     title: item.label,
                   }))}
@@ -4277,7 +4291,7 @@ function MessageBubble({
         </View>
       ) : null}
       <MessageActionSheet
-        disabledActions={actionBusy ? ['rewind', 'delete'] : undefined}
+        disabledActions={actionBusy ? ['edit', 'rewind', 'delete'] : undefined}
         items={messageMenu}
         onAction={selectMenuAction}
         onClose={() => setActionSheetOpen(false)}
@@ -5380,6 +5394,8 @@ function SubagentCard({
   const [expanded, toggleExpanded] = useFoldableExpandedState(item.key, false);
   const deferred = item.deferred;
   useEffect(() => deferred?.setVisible?.(expanded, false), [deferred?.owner, deferred?.key, expanded]);
+  // Subagent work is detail content, not another reply from the main partner.
+  const childActions = useMemo(() => ({ ...actions, companionAvatar: undefined }), [actions]);
   const title = item.header.subagentType
     ? t('message.renderer.subagentTyped', { type: item.header.subagentType })
     : t('message.renderer.subagent');
@@ -5416,7 +5432,7 @@ function SubagentCard({
           ) : null}
           {/* 两级展开(与 WorkGroupCard 同规则):内层子卡保持各自折叠头行,按需下钻。 */}
           {item.childItems.map((child) => (
-            <RenderItemView key={child.key} item={child} actions={actions} />
+            <RenderItemView key={child.key} item={child} actions={childActions} />
           ))}
           {item.summary ? (
             <View style={styles.stackSmall}>
@@ -7040,11 +7056,19 @@ function PluginResultCard({ callId, sessionId, excludedUrls, actions }: {
   const styles = useThemedStyles(makeStyles);
   const { t } = useTranslation();
   if (hidden) return null;
+  // Desktop draws every plugin card in a frame; mail cards already draw their own.
+  const mailCard = blocks?.some((block) => block.primitive === 'plugin-card-actions'
+    && !!((block.data as { mail?: unknown; legacyMail?: unknown } | undefined)?.mail || (block.data as { legacyMail?: unknown } | undefined)?.legacyMail));
+  // With live controls the card's text becomes their title and detail lines (Desktop's layout).
+  const controlsText = !mailCard && actions.remoteDeviceId && blocks?.some((block) => block.primitive === 'plugin-card-actions')
+    ? blocks.find((block) => block.id === 'text' && block.primitive === 'markdown') : undefined;
   return (
-    <View style={styles.toolMediaBlock} testID="message.pluginResultCard">
+    <View style={mailCard ? styles.toolMediaBlock : styles.pluginResultCard} testID="message.pluginResultCard">
     {blocks?.map((block) => {
+      if (block === controlsText) return null;
       if (block.primitive === 'plugin-card-actions') return (
             <PluginCardActions key={block.id} data={block.data} deviceId={actions.remoteDeviceId} sessionId={sessionId} callId={callId}
+        text={controlsText ? pluginCardPlainText(controlsText.fallbackMarkdown) : undefined}
         onOpenAttachment={actions.onOpenPayload ? (url, name) => actions.onOpenPayload!(buildMediaPayload({ kind: 'image', url, previewable: true }, name)) : undefined} />
           );
       const url = (block.data as { url?: unknown } | undefined)?.url;
@@ -7066,8 +7090,7 @@ function PluginResultCard({ callId, sessionId, excludedUrls, actions }: {
           );
         }
         return (
-          <MarkdownBody key={block.id} text={block.fallbackMarkdown} layout={layout} streaming={false} selectable
-        onOpenPayload={actions.onOpenPayload} onOpenSessionLink={actions.onOpenSessionLink} />
+          <Text key={block.id} selectable style={mailCard ? styles.messageText : styles.pluginResultCardText}>{pluginCardPlainText(block.fallbackMarkdown)}</Text>
         );
     })}
     {!blocks && !error ? (
@@ -7580,7 +7603,7 @@ function MessageContentOpenButton({
   );
 }
 
-function MessagePayloadModal({
+export function MessagePayloadModal({
   payload,
   imageAnnotation,
   onClose,
@@ -8972,67 +8995,6 @@ function isOwnerTypedMessage(message: NormalizedRemoteMessage | undefined): mess
   );
 }
 
-/** 语法 kind → 样式。plain 不走这里(直接当字符串塞进父 Text,少一层节点)。 */
-function syntaxStyleFor(
-  styles: ReturnType<typeof makeStyles>,
-  kind: Exclude<CodeTokenKind, 'plain'>,
-): StyleProp<TextStyle> {
-  switch (kind) {
-    case 'keyword': return styles.syntaxKeyword;
-    case 'string': return styles.syntaxString;
-    case 'comment': return styles.syntaxComment;
-    case 'number': return styles.syntaxNumber;
-    case 'function': return styles.syntaxFunction;
-    case 'property': return styles.syntaxProperty;
-  }
-}
-
-/**
- * 代码块正文 —— 按 language 做词法着色(配色对齐桌面的 GitHub hljs 主题)。
- *
- * 抽成组件只为拿 useMemo:renderBlock 每次重渲都会走到,大代码块重复分词不划算。
- * 嵌套 span 只带 color,其余样式继承外层 markdownCodeText。
- *
- * ⚠️ `SpanComponent` 必须由调用方经 `spanFor()` 给出,不能图省事直接用 RN 的
- * `Text`:块可选中且在 iOS 时外层是 UITextView,而它只接受 UITextView 家族的子
- * 节点 —— 传普通 Text 的话那些 span 会被整个丢掉(表现为代码里的属性名、关键字
- * 直接从画面上消失,不报错)。
- */
-function HighlightedCodeText({
-  SpanComponent,
-  allowIosUITextView,
-  language,
-  selectable,
-  styles,
-  text,
-}: {
-  SpanComponent: typeof Text;
-  allowIosUITextView: boolean;
-  language: string | undefined;
-  selectable: boolean;
-  styles: ReturnType<typeof makeStyles>;
-  text: string;
-}) {
-  const tokens = useMemo(() => tokenizeCode(text, language), [language, text]);
-  return (
-    <MarkdownSelectableText
-      allowIosUITextView={allowIosUITextView}
-      selectable={selectable}
-      style={styles.markdownCodeText}
-    >
-      {tokens.map((token, index) =>
-        token.kind === 'plain'
-          ? (
-          token.text
-        ) : (
-            <SpanComponent key={index} style={syntaxStyleFor(styles, token.kind)}>
-              {token.text}
-            </SpanComponent>
-        ))}
-    </MarkdownSelectableText>
-  );
-}
-
 /**
  * markdown 标题的字号档:h1 / h2 / h3+ 三档(见 markdownHeading* 的比例说明)。
  * 两处渲染路径(text_run 合并树与独立 heading 块)共用,避免再次分叉成
@@ -9650,6 +9612,16 @@ const makeStyles = (colors: ThemeColors) => StyleSheet.create({
   },
   // tool 产出媒体独立块:agent 侧左对齐,逐个竖排(图片 attachment 帧自带圆角)。
   toolMediaBlock: { alignItems: 'flex-start', maxWidth: '100%' },
+  pluginResultCard: {
+    alignSelf: 'stretch',
+    gap: spacing.sm,
+    padding: spacing.md,
+    borderRadius: radius.container,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: colors.border,
+    backgroundColor: colors.surfaceElevated,
+  },
+  pluginResultCardText: { color: colors.textPrimary, fontSize: typeScale.body, lineHeight: lineHeight.body },
   imagePreviewWrap: {
     backgroundColor: colors.surfaceChip,
     borderRadius: radius.container,

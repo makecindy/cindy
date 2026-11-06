@@ -1,3 +1,4 @@
+import { prNumberLabel } from '@cindy/maker-shared';
 /**
  * SessionTooltip — sidebar 会话行的统一 hover 浮层。
  *
@@ -23,7 +24,7 @@ import { Tooltip } from '@/components/ui/tooltip';
 import type { PrStatusResult, SessionPrRef } from '@/lib/gitContext.types';
 import { prStatusKey, MAX_STATUS_QUERIES } from '@/lib/prStatus';
 import { usePrStatuses } from '@/contexts/PrRefsContext';
-import { PR_STATUS_COLOR, PR_STATUS_ICON, prFailureCopyKey } from '../gitContextPrVisuals';
+import { prStatusColor, PR_STATUS_ICON, prFailureCopyKey } from '../gitContextPrVisuals';
 import { formatSidebarFutureTime } from '../lib/formatSidebarTime';
 import { useAutomationScheduleSessionInfo } from '../hooks/useAutomationScheduleSessionIndex';
 
@@ -255,17 +256,18 @@ function PrLine({ prRef, status }: { prRef: SessionPrRef; status: PrStatusResult
   const { t } = useTranslation();
   const kind = status?.ok ? status.status : null;
   const Icon = kind ? PR_STATUS_ICON[kind] : GitPullRequest;
-  const color = kind ? PR_STATUS_COLOR[kind] : 'var(--text-tertiary)';
+  const color = prStatusColor(kind, status?.ok ? status.conflicts : null);
   const unresolved = status?.ok && status.unresolvedCount ? status.unresolvedCount : 0;
   // 失败态与顶栏徽标同一句原因(gh 未登录 / 未安装 / 404 …),不再静默。
   // 侧栏行本身不承担引导动作,所以只说原因,不说"点击"。
-  const failureCopyKey = prFailureCopyKey(status);
+  const failureCopyKey = prFailureCopyKey(status, { readOnly: prRef.provider === 'gitlab' });
 
   return (
     <div className="flex min-w-0 max-w-80 items-center gap-1.5">
       <Icon size={12} strokeWidth={1.75} className="shrink-0" style={{ color }} />
       <span className="min-w-0 truncate">
-        {prRef.owner}/{prRef.repo}#{prRef.prNumber}
+        {prRef.owner}/{prRef.repo}
+        {prNumberLabel(prRef)}
       </span>
       {kind && (
         <span className="shrink-0 whitespace-nowrap">

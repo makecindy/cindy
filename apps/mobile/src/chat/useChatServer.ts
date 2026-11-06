@@ -417,9 +417,12 @@ export function useChatServerGroup(groupId: string, enabled: boolean, threadRoot
       if (input?.expectedRevision !== plan.revision) { reload(); throw new Error('REVISION_CONFLICT'); }
       if (planAction.current?.identity === identity && planAction.current.pending) throw new Error('PLAN_OPEN');
       const edit = action === 'plan-edit';
-      if (edit && (input?.action !== 'remove' && input?.action !== 'reassign' || !Number.isInteger(input?.position))) throw new Error('INVALID_PARAMS');
+      if (edit && (!['remove','reassign','skip'].includes(String(input?.action)) || !Number.isInteger(input?.position))) throw new Error('INVALID_PARAMS');
+      if (edit && input?.action === 'skip' && input.executionId !== undefined && typeof input.executionId !== 'string') throw new Error('INVALID_PARAMS');
       const command: import('./chatServerClient').ChatPlanAction = edit
-        ? { action: input!.action as 'remove' | 'reassign', position: input!.position as number, ...(typeof input!.botId === 'string' ? { botId: input!.botId } : {}) }
+        ? input!.action === 'skip'
+          ? { action: 'skip', position: input!.position as number, ...(typeof input!.executionId === 'string' ? { executionId: input!.executionId } : {}) }
+          : { action: input!.action as 'remove' | 'reassign', position: input!.position as number, ...(typeof input!.botId === 'string' ? { botId: input!.botId } : {}) }
         : { action: action.slice(5) as 'start' | 'dismiss' | 'continue' | 'retry' };
       const key = JSON.stringify([plan.id, plan.revision, command]);
       const previous = planAction.current;

@@ -11,9 +11,10 @@ import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vite
 import { captureDraftDiscardToken, clearDraft, getAllDraftAttachmentUrls, getDraft, isDraftDiscardTokenCurrent, saveDraft } from '@/lib/composerDraftStore';
 import { FeatureSidebarSlotProvider, useFeatureContentHeader } from '../../feature-context';
 import { markBotRead, getBotLastReadAt, botGroupReadKey, resetBotReadStateForTests } from '../botReadState';
-import { botGroupAttachmentScope, botGroupThreadDraftKey } from '../botGroupAttachments';
+import { botGroupAttachmentScope, botGroupDraftDoc, botGroupThreadDraftKey } from '../botGroupAttachments';
 import { getBotGroupListSnapshot, refreshBotGroups, resetBotGroupStoreForTests } from '../botGroupStore';
-import { getBotGroupOutbox, getBotGroupOutboxPreviews, resetBotGroupOutboxForTests } from '../botGroupOutbox';
+import { botGroupSendSignature, enqueueBotGroupSend, getBotGroupOutbox, getBotGroupOutboxPreviews, resetBotGroupOutboxForTests } from '../botGroupOutbox';
+import type { BotGroupOutboxCommandRequest, BotGroupOutboxCommandResult, BotGroupOutboxStoredEntry } from '../../../../shared/botGroupOutboxStorage';
 import { resetCompanionCloudStoreForTests } from '../companionCloudStore';
 import { botGroupWorkPreview } from '../BotGroupLivePreview';
 import { BotGroupChatView } from '../BotGroupChatView';
@@ -369,6 +370,144 @@ beforeEach(() => {
 afterEach(() => { cleanup(); vi.unstubAllGlobals(); });
 
 describe('BotGroupChatView', () => {
+  function localResult(request: BotGroupOutboxCommandRequest, entries: BotGroupOutboxStoredEntry[] = []): BotGroupOutboxCommandResult {
+    return { ok: true, owner: request.owner, instanceId: 'main-test', revision: 1, entries };
+  }
+
+  it('keeps text and files after durable enqueue rejection, and retries the same immutable operation', async () => {
+    const attempts: Extract<BotGroupOutboxCommandRequest, { action: 'enqueue' }>[] = [];
+    window.electronAPI.maker.botGroupOutbox = async () => [];
+    window.electronAPI.maker.botGroupOutboxCommand = async request => {
+      if (request.action !== 'enqueue') return localResult(request);
+      attempts.push(request);
+      throw new Error('OUTBOX_SOURCE_CONSUMED');
+    };
+    renderView();
+    const input = await screen.findByRole('textbox') as HTMLTextAreaElement;
+    fireEvent.change(input, { target: { value: '不能丢掉的正文' } });
+    pickFiles([diskFile('kept.png', 'image/png')]);
+    await screen.findByAltText('kept.png');
+    fireEvent.click(screen.getByRole('button', { name: 'bots.send' }));
+    await waitFor(() => expect(mocks.toastError).toHaveBeenCalledWith('bots.groupChat.composer.sendFailed'));
+    expect(input.value).toBe('不能丢掉的正文');
+    expect(screen.getAllByAltText('kept.png')).toHaveLength(1);
+    fireEvent.click(screen.getByRole('button', { name: 'bots.send' }));
+    await waitFor(() => expect(attempts).toHaveLength(2));
+    expect(attempts[1]!.enqueueOperationId).toBe(attempts[0]!.enqueueOperationId);
+    expect(attempts[1]!.entry.input.clientId).toBe(attempts[0]!.entry.input.clientId);
+    expect(attempts[1]!.entry.files).toEqual(attempts[0]!.entry.files);
+    expect(mocks.sendBotGroupMessage).not.toHaveBeenCalled();
+  });
+
+  it.each(['unchanged', 'changed', 'attachment', 'lost-reply', 'late-reply'])('keeps the failed edit source across composer remount (%s)', async mode => {
+    const enqueues: Extract<BotGroupOutboxCommandRequest, { action: 'enqueue' }>[] = [];
+    let stored: BotGroupOutboxStoredEntry[] = [];
+    let revision = 0;
+    let releaseReply!: () => void;
+    window.electronAPI.maker.botGroupOutbox = async () => [];
+    window.electronAPI.maker.botGroupOutboxCommand = async request => {
+      if (request.action === 'enqueue') {
+        enqueues.push(request);
+        if (mode === 'lost-reply' && enqueues.length === 3) {
+          return { ...localResult(request, stored), revision, accepted: true };
+        }
+        const source = request.editSource;
+        if (source) stored = stored.filter(row => row.input.clientId !== source.clientId);
+        stored = [...stored, { ...request.entry, entryRevision: ++revision, queueOrdinal: revision,
+          status: 'failed', retryable: false }];
+        if (mode === 'lost-reply' && enqueues.length === 2) throw new Error('committed reply lost');
+        if (mode === 'late-reply' && enqueues.length === 2) await new Promise<void>(resolve => { releaseReply = resolve; });
+        return { ...localResult(request, stored), revision, accepted: true };
+      }
+      if (request.action === 'edit') {
+        stored = [{ ...stored[0]!, entryRevision: ++revision,
+          editHold: { operationId: request.operationId, revision } }];
+      }
+      return { ...localResult(request, stored), revision };
+    };
+    const input = { groupId: 'g1', clientId: 'edited-original', text: 'original failed draft',
+      mentions: { all: false, botIds: [] } };
+    await enqueueBotGroupSend({ input, signature: botGroupSendSignature(input, '[]'), draft: input.text,
+      tracked: [], files: [], attachmentScope: botGroupAttachmentScope('g1'), enqueueOperationId: 'original-edit' });
+    const first = renderView();
+    await screen.findByRole('textbox');
+    fireEvent.click(screen.getByRole('button', { name: 'bots.groupChat.outbox.edit' }));
+    await waitFor(() => expect((screen.getByRole('textbox') as HTMLTextAreaElement).value).toBe(input.text));
+    const text = mode === 'changed' || mode === 'lost-reply' || mode === 'late-reply' ? 'edited draft after navigation' : input.text;
+    if (text !== input.text) fireEvent.change(screen.getByRole('textbox'), { target: { value: text } });
+    if (mode === 'attachment') {
+      pickFiles([diskFile('edited-note.txt', 'text/plain')]);
+      await waitFor(() => expect(getDraft(botGroupAttachmentScope('g1'))?.attachments).toHaveLength(1));
+    }
+    first.unmount();
+    const second = renderView();
+    const restored = await screen.findByRole('textbox') as HTMLTextAreaElement;
+    expect(restored.value).toBe(text);
+    fireEvent.keyDown(restored, { key: 'Enter' });
+    await waitFor(() => expect(enqueues).toHaveLength(2));
+    expect(enqueues[1]!.editSource).toEqual({ groupId: 'g1', clientId: input.clientId, revision: 2 });
+    expect(enqueues[1]!.entry.input.clientId === input.clientId).toBe(mode === 'unchanged');
+    expect(stored.filter(row => row.editHold)).toHaveLength(0);
+    if (mode === 'late-reply') {
+      second.unmount();
+      renderView();
+      fireEvent.change(await screen.findByRole('textbox'), { target: { value: 'newer draft while saving' } });
+      await waitFor(() => expect(getDraft(botGroupAttachmentScope('g1'))?.text).toEqual(botGroupDraftDoc('newer draft while saving')));
+      releaseReply();
+      await waitFor(() => expect(getDraft(botGroupAttachmentScope('g1'))?.botGroupEdit).toBeUndefined());
+      expect(getDraft(botGroupAttachmentScope('g1'))?.text).toEqual(botGroupDraftDoc('newer draft while saving'));
+      fireEvent.keyDown(screen.getByRole('textbox'), { key: 'Enter' });
+      await waitFor(() => expect(enqueues).toHaveLength(3));
+      expect(enqueues[2]!.editSource).toBeUndefined();
+    }
+    if (mode === 'lost-reply') {
+      await waitFor(() => expect(mocks.toastError).toHaveBeenCalled());
+      second.unmount();
+      renderView();
+      const retry = await screen.findByRole('textbox') as HTMLTextAreaElement;
+      expect(retry.value).toBe(text);
+      fireEvent.keyDown(retry, { key: 'Enter' });
+      await waitFor(() => expect(enqueues).toHaveLength(3));
+      expect(enqueues[2]!.entry.input.clientId).toBe(enqueues[1]!.entry.input.clientId);
+      expect(enqueues[2]!.enqueueOperationId).toBe(enqueues[1]!.enqueueOperationId);
+      expect(enqueues[2]!.editSource).toEqual(enqueues[1]!.editSource);
+    }
+  });
+
+  it('does not overwrite newer input after an edit hold commits asynchronously', async () => {
+    let commit!: () => void;
+    let saving!: () => void;
+    const begun = new Promise<void>(resolve => { saving = resolve; });
+    const gate = new Promise<void>(resolve => { commit = resolve; });
+    let stored: BotGroupOutboxStoredEntry[] = [];
+    window.electronAPI.maker.botGroupOutbox = async () => [];
+    window.electronAPI.maker.botGroupOutboxCommand = async request => {
+      if (request.action === 'enqueue') {
+        stored = [{ ...request.entry, entryRevision: 1, queueOrdinal: 1, status: 'failed', retryable: false }];
+        return { ...localResult(request, stored), accepted: true };
+      }
+      if (request.action === 'edit') {
+        saving(); await gate;
+        stored = [{ ...stored[0]!, entryRevision: 2, editHold: { operationId: request.operationId, revision: 2 } }];
+        return { ...localResult(request, stored), revision: 2 };
+      }
+      return localResult(request, stored);
+    };
+    const input = { groupId: 'g1', clientId: 'original', text: '等待恢复的原文', mentions: { all: false, allBots: false, botIds: [] } };
+    await enqueueBotGroupSend({ input, signature: botGroupSendSignature(input, '[]'), draft: input.text,
+      tracked: [], files: [], attachmentScope: 'bot-group:g1', enqueueOperationId: 'initial' });
+    renderView();
+    const textbox = await screen.findByRole('textbox') as HTMLTextAreaElement;
+    fireEvent.click(screen.getByRole('button', { name: 'bots.groupChat.outbox.edit' }));
+    await begun;
+    fireEvent.change(textbox, { target: { value: '等待期间写的新内容' } });
+    await act(async () => { commit(); await gate; });
+    await waitFor(() => expect(mocks.toastWarning).toHaveBeenCalledWith('bots.groupChat.outbox.editBlocked'));
+    expect(textbox.value).toBe('等待期间写的新内容');
+    expect(getBotGroupOutbox('g1')[0]).toMatchObject({ draft: '等待恢复的原文', editHold: { revision: 2 } });
+    expect(mocks.sendBotGroupMessage).not.toHaveBeenCalled();
+  });
+
   it('offers jump to bottom while scrolling down through read history', async () => {
     mocks.getControlledState.mockResolvedValue({ controlledBy: [{ deviceId: 'studio', name: 'Mac Studio' }] });
     mocks.getBotGroup.mockResolvedValue({ ok: true, group: detail({ threads: ['t1', 't2'].map(rootId => ({
@@ -947,6 +1086,8 @@ describe('BotGroupChatView', () => {
     for (const button of within(header).getAllByRole('button')) {
       await user.click(trigger);
       const panel = screen.getByRole('complementary');
+      // 键盘模态：pointer 交互之后的程序化焦点不再弹提示（见 tooltip.tsx）。
+      fireEvent.keyDown(document.body, { key: 'Tab' });
       button.focus();
       expect(panel.parentElement?.contains(button)).toBe(false);
       // Header icon buttons with a tooltip: its Escape closes the tooltip first.
@@ -986,6 +1127,21 @@ describe('BotGroupChatView', () => {
         await user.click(screen.getByText('Preview note content'));
         expect(preview.contains(document.activeElement)).toBe(true);
       } else expect(preview.contains(document.activeElement)).toBe(true);
+    }
+    // CI regression: FocusScope's programmatic entry focus does not guarantee
+    // an open tooltip after the preview finishes loading. Establish keyboard
+    // focus explicitly; still require tooltip -> preview -> thread Escape order.
+    if (kind === 'text-trigger' || kind === 'text-control') {
+      const focusedControl = document.activeElement;
+      await user.tab();
+      await user.tab({ shift: true });
+      expect(document.activeElement).toBe(focusedControl);
+      await screen.findByRole('tooltip');
+      await user.keyboard('{Escape}');
+      await waitFor(() => expect(screen.queryByRole('tooltip')).toBeNull());
+      expect(document.contains(preview)).toBe(true);
+      expect(screen.getByRole('complementary')).toBe(panel);
+      expect((within(panel).getByRole('textbox') as HTMLTextAreaElement).value).toBe('Unsent thread reply');
     }
     await user.keyboard('{Escape}');
     expect(screen.getByRole('complementary')).toBe(panel);
@@ -2011,7 +2167,7 @@ describe('BotGroupChatView', () => {
       expect(mocks.sendBotGroupMessage).toHaveBeenCalledTimes(1);
 
       fireEvent.click(within(failed).getByRole('button', { name: 'bots.groupChat.outbox.edit' }));
-      expect(mocks.toastWarning).toHaveBeenCalledWith('bots.groupChat.outbox.editBlocked');
+      await waitFor(() => expect(mocks.toastWarning).toHaveBeenCalledWith('bots.groupChat.outbox.editBlocked'));
       expect(input.value).toBe('正在写的');
 
       mocks.sendBotGroupMessage.mockResolvedValueOnce({ ok: false, errorCode: 'INTERNAL', message: '' });
@@ -2787,7 +2943,8 @@ describe('BotGroupChatView', () => {
       const card = await screen.findByTestId('bot-group-arrangement');
       expect(card.closest('article')).toBeNull();
       expect(card.textContent).not.toContain('bots.groupChat.plan.intro');
-      expect(card.textContent).toContain('bots.groupChat.plan.talkTurn');
+      expect(card.textContent).toContain('bots.groupChat.plan.talkTitle');
+      expect(card.textContent).toContain('bots.groupChat.plan.queueWaiting');
       expect(card.querySelectorAll('li')).toHaveLength(shown);
       expect(screen.getByTestId('bot-group-plan-follow-up')).toBeTruthy();
       const fold = screen.queryByTestId('bot-group-plan-fold');
@@ -2798,11 +2955,12 @@ describe('BotGroupChatView', () => {
       }
     });
 
-    // Only the creator, an owner or an admin may change who speaks next in a waiting queue.
-    it.each([[true, 1], [false, 0]] as const)('offers reassigning a waiting queue turn only to a manager (canManage=%s)', async (canManage, menus) => {
+    // A waiting talk queue supports skipping, not reassigning (Plans.action only reassigns proposed plans).
+    // Unit: the real card must send the pending position and enforce the projected management permission.
+    it.each([[true, 1], [false, 0]] as const)('offers skipping a waiting queue turn only to a manager (canManage=%s)', async (canManage, buttons) => {
       const base = plan().steps;
       const queue = plan({
-        status: 'waiting', currentStep: 0, kind: 'talk', canManage,
+        status: 'waiting', currentStep: 0, kind: 'talk', canManage, supportsPendingSkip: true,
         steps: [{ ...base[0]!, task: '', status: 'done' }, { ...base[1]!, task: '', status: 'pending' }],
       });
       mocks.getBotGroup.mockResolvedValue({ ok: true, group: withPlan(queue) });
@@ -2810,7 +2968,15 @@ describe('BotGroupChatView', () => {
       const card = await screen.findByTestId('bot-group-arrangement');
       const pending = within(card).getAllByTestId('bot-group-plan-step')[1]!;
       fireEvent.pointerDown(pending, { button: 0, ctrlKey: false });
-      expect(screen.queryAllByRole('menu')).toHaveLength(menus);
+      expect(screen.queryAllByRole('menu')).toHaveLength(0);
+      const skips = within(pending).queryAllByRole('button', { name: /bots\.groupChat\.plan\.skipTurnLabel/ });
+      expect(skips).toHaveLength(buttons);
+      if (skips[0]) {
+        fireEvent.click(skips[0]);
+        await waitFor(() => expect(mocks.editBotGroupPlanStep).toHaveBeenCalledWith({
+          groupId: 'g1', planId: 'p1', position: 1, action: 'skip', executionId: undefined,
+        }));
+      } else expect(mocks.editBotGroupPlanStep).not.toHaveBeenCalled();
     });
 
     it('offers the next step after a hand-off and opens its files inside the work directory', async () => {

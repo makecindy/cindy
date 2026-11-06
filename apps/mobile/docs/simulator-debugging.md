@@ -68,6 +68,27 @@ explicitly leaves visible-window acceptance to a screenshot/manual check. Withou
 
 ## 截图与当前版本测试
 
+**默认入口：`pnpm mobile:sim:up`（只看界面加 `-- --mock`）。** 它按下面的流程完成第 1–6 步中除目检外的
+部分，并遵守同样的授权范围：不 `--clean`、不卸载、不新建或删除设备，不停止其他任务的 Metro（`--takeover`
+除外）。
+
+| 选择 | 规则 |
+|---|---|
+| 设备 | `--udid` → `--device <名称>` 或个人设置的 `CINDY_MOBILE_SIM_DEVICE` → 连着本 worktree Metro 的已开机 iPhone → 唯一一台候选（装了 App 且没有 Metro 在服务的已开机 iPhone，或装了 App 的关机 iPhone）。候选有多台时不猜，报 `DEVICE_CHOICE_NEEDED` 并列出候选，由用户指定；一台都没有时报 `NO_REUSABLE_DEVICE`，由 `next` 给出新建方法 |
+| Metro | 复用本 worktree 身份一致的 Metro；身份过期就重启自己的；`8081` 属于其他任务时用 `8082`–`8086` 的空闲端口，并把设备指过去 |
+| 原生包 | `native-matched` 就复用，否则运行 `rebuild`（先查缓存）；探测失败报 `NATIVE_PROBE_FAILED`，不当作需要重装 |
+| App | 启动后等 Metro 日志出现这次的 `iOS Bundled`，没等到就重新启动。`bundleVerified: false` 表示这个 Metro 没有日志（例如在日志功能之前启动），无法确认 |
+| 前台 | 读设备日志里 App 最新的运行状态，不在前台就切回前台（开机后系统偶尔会把它挤到后台）。`foreground: null` 表示日志里没有状态，未确认 |
+
+失败时结果 JSON 的 `code` 说明原因，`next` 说明下一步：`UNSUPPORTED_PLATFORM`、`BAD_ARGS`、
+`SIMULATOR_UNAVAILABLE`、`UNKNOWN_DEVICE`、`DEVICE_CHOICE_NEEDED`、`NO_REUSABLE_DEVICE`、`BOOT_FAILED`、`METRO_PROBE_FAILED`、
+`METRO_PORTS_BUSY`、`METRO_START_FAILED`、`NATIVE_PROBE_FAILED`、`IOS_BUILD_TOOLS_UNAVAILABLE`、
+`REBUILD_FAILED`、`LAUNCH_FAILED`、`BUNDLE_FAILED`、`BUNDLE_NOT_SEEN`、`APP_NOT_FOREGROUND`、`IDENTITY_FAILED`。Metro 日志由
+`mobile:sim:start` 写在系统临时目录（结果的 `metroLog`），验证后照常运行 `next` 里给出的 `mobile:sim:logcheck`；
+编译失败时，编译日志的路径在 `next` 里。
+
+只有 `up` 失败、或需要单独控制某一步时，才手动执行下面的流程。
+
 “给我看这次手机改动的截图”与启动当前版本测试共用此流程。本节是 Agent 做手机模拟器测试的
 唯一流程正本，不另设个人 Skill；开发者个人只保留常用机型、模拟器后端等偏好。
 

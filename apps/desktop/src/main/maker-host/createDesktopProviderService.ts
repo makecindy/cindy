@@ -1,3 +1,6 @@
+import { isModelContextLimitCustomized } from './model-context-limit-store.js';
+import { requestCodexApiModelProbe } from './codex-api-model-capabilities.js';
+import { readModelPriceOverrideView } from '../usage/modelPriceOverrideStore.js';
 import { readProviderPresentation } from './provider-presentation-store.js';
 import { projectSubscriptionFastPolicy } from './subscription-fast-policy.js';
 import { filterLegacyGptContextProfiles } from './legacy-context-profiles.js';
@@ -844,10 +847,12 @@ export async function refreshCustomProvidersIntoCatalog(
         return;
       }
       setCustomProviderConfigs(fresh);
+      requestCodexApiModelProbe();
       log.info('custom providers merged into active catalog after cas miss', { count: fresh.length });
       return;
     }
     setCustomProviderConfigs(next);
+    requestCodexApiModelProbe();
     log.info('custom providers merged into active catalog', { count: next.length });
   } catch (err) {
     if (!isCurrent()) {
@@ -1138,6 +1143,9 @@ export function getDesktopProviderService(options: { allowSideEffects?: boolean 
     // 「模型 / 供应商停用」override:main 侧持久化真源,烘焙进 ProviderView 后
     // renderer / IM / Orca / device-link 全部消费同一份准入事实。
     getModelAccess: readModelDisableOverrides,
+    hasModelAliasOverride: (providerId, agent, modelId) =>
+      isModelContextLimitCustomized(agent, providerId, modelId) ||
+      readModelPriceOverrideView({ providerId, agent, modelId }, getActiveCatalog().modelRegistry).override !== null,
   });
   return singleton;
 }

@@ -421,7 +421,6 @@ it('records observe consent only when that capability was shown', async () => {
   expect(confirmedTaskCapability({ mode: 'unprompted' }, before, next, 'observe')).toBeUndefined();
 });
 
-
 it('explains that local OIDC declarations do not receive enterprise identity', async () => {
   const next = manifest(['api.example.test']);
   next.network!.secrets = [{ key: 'identity', label: 'Organization identity', source: 'oidc-token', inject: { header: 'Authorization', format: 'Bearer {value}', hosts: ['api.example.test'] } }];
@@ -429,4 +428,16 @@ it('explains that local OIDC declarations do not receive enterprise identity', a
   await obtainGhostInstallConsent({ mode: 'prompt', prompt, initiator: 'agent', origin: 'forge',
     target: { namespace: 'local', sourceChanged: false, otherCopies: 1 } }, null, next, reviewedDigest);
   expect(prompt).toHaveBeenCalledWith(expect.objectContaining({ target: expect.objectContaining({ organizationIdentityUnavailable: true }) }));
+});
+
+it('records companions consent only when that capability was shown', async () => {
+  const previous = { ...manifest(['api.weather.test']), agent: { observe: true } };
+  const next = { ...previous, agent: { observe: true, companions: true } };
+  const policy = { mode: 'prompt' as const, prompt: userPrompt(true), initiator: 'user' as const, origin: 'market' as const };
+  const before = installed(previous);
+  const decision = await obtainGhostInstallConsent(policy, before, next, reviewedDigest);
+  assertGhostInstallConsent(decision, before, next, reviewedDigest);
+  expect(confirmedTaskCapability(decision, before, next, 'companions')).toBe(true);
+  expect(confirmedTaskCapability(decision, before, next, 'observe')).toBeUndefined();
+  expect(confirmedTaskCapability({ mode: 'unprompted' }, before, next, 'companions')).toBeUndefined();
 });
