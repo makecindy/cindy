@@ -5025,3 +5025,36 @@ it('keeps foreground capacity available while collapsed group histories prefetch
     await act(async () => { release(); await foreground; });
   }
 });
+
+// PR #8979 / unit: the actual history shell must distinguish a failed live
+// subscription from a successful bounded snapshot, regardless of settlement order.
+// With no device reset/push, the user must still be able to retry the missing ACK.
+it.each(['before-read', 'after-read'])('keeps a failed initial history subscription retryable (%s)', async order => {
+  vi.useFakeTimers();
+  const process = { groupId: 'g1', executionId: `initial-sub-${order}`, sessionId: `initial-sub-${order}`, clientId: 'source', deviceId: 'original-mac' };
+  const rows = [{ clientId: 'source', role: 'user', content: 'Request' },
+    { clientId: 'note', role: 'assistant', content: 'Snapshot remains readable', agentMeta: { assistantPhase: 'commentary' } }];
+  let rejectAck!: (error: Error) => void;
+  let releaseRead!: () => void;
+  const gate = new Promise<void>(resolve => { releaseRead = resolve; });
+  const subscribe = vi.fn().mockImplementationOnce(() => new Promise((_resolve, reject) => { rejectAck = reject; })).mockResolvedValue({ ok: true });
+  Object.assign(window.electronAPI.deviceLink, { subscribe });
+  mocks.remoteInvoke.mockImplementation(async () => { await gate; return rows; });
+  const view = render(<Tooltip.Provider><BotGroupProcess process={process} member={{ ...detail().members[0]!, isOwned: true }} /></Tooltip.Provider>);
+  try {
+    if (order === 'before-read') await act(async () => { rejectAck(new Error('BACKPRESSURE')); await vi.advanceTimersByTimeAsync(0); });
+    await act(async () => { releaseRead(); await vi.advanceTimersByTimeAsync(0); });
+    if (order === 'after-read') await act(async () => { rejectAck(new Error('TIMEOUT')); await vi.advanceTimersByTimeAsync(0); });
+    fireEvent.click(view.container.querySelector('[data-teammate-process] > button')!);
+    await act(async () => { await vi.advanceTimersByTimeAsync(16); });
+    expect(view.container.textContent).toContain('Snapshot remains readable');
+    expect(view.container.textContent).toContain('chat.errorBanner.retry');
+    const retry = view.queryByRole('button', { name: 'chat.errorBanner.retry' });
+    expect(retry).not.toBeNull();
+    fireEvent.click(retry!);
+    await act(async () => { await vi.advanceTimersByTimeAsync(0); });
+    expect(subscribe).toHaveBeenCalledTimes(2);
+    expect(view.queryByRole('button', { name: 'chat.errorBanner.retry' })).toBeNull();
+    expect(view.container.textContent).toContain('Snapshot remains readable');
+  } finally { view.unmount(); releaseRead(); vi.useRealTimers(); }
+});

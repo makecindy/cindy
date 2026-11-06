@@ -44,7 +44,7 @@ export async function confirmTrackedSubscription(deps: {
  * new identity even when the final topic names are identical. */
 export class SubscriptionAcknowledgements extends Map<string, Set<Topic>> {
   private revision = 0;
-  private revisions = new Map<string, number>();
+  private revisions = new Map<string, Map<Topic, number>>();
   private invalidations = new Map<string, number>();
   private clearedAt = 0;
   constructor(private readonly changed: () => void) {
@@ -54,7 +54,7 @@ export class SubscriptionAcknowledgements extends Map<string, Set<Topic>> {
   identity(deviceId: string, topics: readonly Topic[]): number | null {
     const held = this.get(deviceId);
     return held && topics.every((topic) => held.has(topic))
-      ? (this.revisions.get(deviceId) ?? null)
+      ? Math.max(0, ...topics.map(topic => this.revisions.get(deviceId)?.get(topic) ?? 0))
       : null;
   }
 
@@ -72,7 +72,12 @@ export class SubscriptionAcknowledgements extends Map<string, Set<Topic>> {
     if (previous?.size === topics.size && [...topics].every((topic) => previous.has(topic)))
       return this;
     super.set(deviceId, topics);
-    this.revisions.set(deviceId, ++this.revision);
+    const revision = ++this.revision;
+    const previousRevisions = this.revisions.get(deviceId);
+    // An unrelated topic's ACK/release must not invalidate still-held topics.
+    this.revisions.set(deviceId, new Map([...topics].map(topic => [topic,
+      previous?.has(topic) ? previousRevisions?.get(topic) ?? revision : revision,
+    ])));
     if (previous && [...previous].some((topic) => !topics.has(topic))) {
       this.invalidations.set(deviceId, this.revision);
     }

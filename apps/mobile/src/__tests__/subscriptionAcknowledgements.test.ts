@@ -161,3 +161,25 @@ it('does not reuse an acquisition released before its first ACK', async () => {
   expect(send).toHaveBeenCalledTimes(2);
   expect(table.identity('host', ['session:lane'])).not.toBeNull();
 });
+
+// PR #8979 / unit: the real ACK table previously gave every topic on a device
+// one revision. Adding/removing an unrelated lane must not invalidate an intact
+// lane or a multi-topic task binding; dropping/re-ACKing the requested lane must.
+it('keeps ACK identities scoped to the requested topics on one host', () => {
+  const table = new SubscriptionAcknowledgements(() => {});
+  markRemoteTopicsSubscribed(table, 'host', ['sessions', 'session:lane']);
+  const lane = table.identity('host', ['session:lane']);
+  const task = table.identity('host', ['sessions', 'session:lane']);
+  markRemoteTopicsSubscribed(table, 'host', ['session:other']);
+  expect(table.identity('host', ['session:lane'])).toBe(lane);
+  expect(table.identity('host', ['sessions', 'session:lane'])).toBe(task);
+  markRemoteTopicsUnsubscribed(table, 'host', ['session:other']);
+  expect(table.identity('host', ['session:lane'])).toBe(lane);
+  expect(table.identity('host', ['sessions', 'session:lane'])).toBe(task);
+  markRemoteTopicsUnsubscribed(table, 'host', ['session:lane']);
+  expect(table.identity('host', ['session:lane'])).toBeNull();
+  expect(table.identity('host', ['sessions', 'session:lane'])).toBeNull();
+  markRemoteTopicsSubscribed(table, 'host', ['session:lane']);
+  expect(table.identity('host', ['session:lane'])).not.toBe(lane);
+  expect(table.identity('host', ['sessions', 'session:lane'])).not.toBe(task);
+});

@@ -27,10 +27,12 @@ function BotGroupProcessHistory({ process, deviceId }: { process: BotGroupProces
   const { t } = useTranslation();
   const [result, setResult] = useState<{ messages: BotGroupProcessMessage[]; failed: boolean }>();
   const [attempt, retry] = useState(0);
+  const [subscriptionFailed, setSubscriptionFailed] = useState(false);
   const [loading, setLoading] = useState(true);
   useEffect(() => {
     let cancelled = false;
     setLoading(true);
+    setSubscriptionFailed(false);
     const owner = getDataOwnerGeneration();
     const current = () => !cancelled && isDataOwnerGenerationCurrent(owner);
     const read = (clientId: string) => deviceId
@@ -41,7 +43,7 @@ function BotGroupProcessHistory({ process, deviceId }: { process: BotGroupProces
     let timer: ReturnType<typeof setTimeout> | undefined;
     const subscription = deviceId ? createRemoteSessionSubscription(deviceId, process.sessionId) : undefined;
     let closed = false;
-    const stopUpdates = () => { if (closed) return; closed = true; clearTimeout(timer); off(); recoveryOffs.forEach(off => off?.()); subscription?.release(); };
+    const stopUpdates = () => { if (closed) return; closed = true; clearTimeout(timer); off(); recoveryOffs.forEach(off => off?.()); subscription?.release(); if (current()) setSubscriptionFailed(false); };
     const refresh = () => {
       if (!current() || closed) return;
       if (reading) { refreshPending = true; return; }
@@ -82,10 +84,11 @@ function BotGroupProcessHistory({ process, deviceId }: { process: BotGroupProces
       // Failed first subscriptions leave Main no topic to replay. Share an
       // existing ACK or reacquire it before recovering the bounded snapshot.
       void subscription?.subscribe({ reuse: true }).then(() => {
+        if (current() && !closed) setSubscriptionFailed(false);
         changed(process.sessionId);
       }).catch(() => {
         if (current() && !closed) {
-          setResult(previous => ({ messages: previous?.messages ?? [], failed: true }));
+          setSubscriptionFailed(true);
           setLoading(false);
         }
       });
@@ -105,7 +108,10 @@ function BotGroupProcessHistory({ process, deviceId }: { process: BotGroupProces
         if (p.status === 'online' || p.directDataDeviceIds?.includes(deviceId)) recover();
       }),
     ] : [];
-    void subscription?.subscribe().catch(() => undefined);
+    // A readable snapshot does not prove that subsequent pushes are subscribed.
+    void subscription?.subscribe().catch(() => {
+      if (current() && !closed) setSubscriptionFailed(true);
+    });
     refresh();
     return () => {
       cancelled = true;
@@ -113,12 +119,13 @@ function BotGroupProcessHistory({ process, deviceId }: { process: BotGroupProces
     };
   }, [process.sessionId, process.clientId, deviceId, attempt]);
   const projection = projectBotGroupProcess(result?.messages ?? [], false);
+  const failed = result?.failed || subscriptionFailed;
   // Resolve availability before advertising a disclosure, just like private chat.
-  if (!result || (!result.failed && !projection.segments.length)) return null;
+  if (!result || (!failed && !projection.segments.length)) return null;
   return <WorkGroupBlock blockId={`group-process:${process.executionId}`} journal durationMs={process.durationMs ?? projection.durationMs}
     childItems={[{ kind: 'rendered', key: process.executionId, prose: false, renderNode: () => <>
       {loading && <Spinner size={14} />}
-      {result.failed && !loading && <Button variant="secondary" tone="quiet" size="sm" onClick={() => retry(v => v + 1)}>{t('chat.errorBanner.retry')}</Button>}
+      {failed && !loading && <Button variant="secondary" tone="quiet" size="sm" onClick={() => retry(v => v + 1)}>{t('chat.errorBanner.retry')}</Button>}
       {result && <BotGroupProcessEntries messages={result.messages} id={`group-process:${process.executionId}`} />}
     </> }]} />;
 }

@@ -485,6 +485,13 @@ it('reconciles a hidden group history after its original execution host re-ACKs'
   acks.set('neighbor-mac', new Set(['session:neighbor']));
   await act(async () => { root.render(tree()); await vi.advanceTimersByTimeAsync(50); });
   expect(history.invoke).toHaveBeenCalledTimes(reads);
+  // Same device, unrelated lane: the current topic has never lost its ACK.
+  for (const topicsOnHost of [new Set<Topic>([...topics, 'session:other']), new Set<Topic>(topics)]) {
+    acks.set('execution-mac', topicsOnHost);
+    await act(async () => { root.render(tree()); await vi.advanceTimersByTimeAsync(0); });
+    await act(async () => { await vi.advanceTimersByTimeAsync(60); });
+    expect(history.invoke).toHaveBeenCalledTimes(reads);
+  }
   acks.delete('execution-mac');
   await act(async () => { root.render(tree()); await vi.advanceTimersByTimeAsync(50); });
   expect(history.invoke).toHaveBeenCalledTimes(reads);
