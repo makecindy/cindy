@@ -3771,6 +3771,65 @@ describe("remote desktop controls", () => {
       expect(host.textContent).toContain("remoteDesktop.hostDisconnected");
     },
   );
+  // Regression: returning to the app after background released the lease kept
+  // the resume flag, so a Mac that locked meanwhile was never auto-unlocked.
+  it.each([
+    ["darwin", 2],
+    ["linux", 1],
+  ])(
+    "auto-unlocks %s on a foreground return after background release",
+    async (platform, unlocks) => {
+      fixture.hostPlatform = platform;
+      await connect();
+      expect(fixture.maybeUnlock).toHaveBeenCalledOnce();
+      await act(async () => {
+        AppState.currentState = "background";
+        fixture.appState!("background");
+      });
+      await act(async () => {
+        AppState.currentState = "active";
+        fixture.appState!("active");
+        await vi.advanceTimersByTimeAsync(1000);
+      });
+      expect(
+        requests()
+          .filter((r) => r.op === "start")
+          .at(-1),
+      ).toMatchObject({ resume: true });
+      expect(fixture.resetUnlockAttempt).toHaveBeenCalled();
+      expect(fixture.maybeUnlock).toHaveBeenCalledTimes(unlocks);
+      // A later network recovery of that lease is automatic again.
+      const original = fixture.invoke.getMockImplementation()!;
+      fixture.invoke.mockImplementation((...args) =>
+        args[2][0].op === "heartbeat"
+          ? Promise.reject(new Error("DESKTOP_LEASE_EXPIRED"))
+          : original(...args),
+      );
+      await act(async () => vi.advanceTimersByTimeAsync(6000));
+      fixture.invoke.mockImplementation(original);
+      await act(async () => vi.advanceTimersByTimeAsync(6000));
+      expect(requests().filter((r) => r.op === "start").length).toBeGreaterThan(
+        2,
+      );
+      expect(fixture.maybeUnlock).toHaveBeenCalledTimes(unlocks);
+    },
+  );
+  it("auto-unlocks darwin when focus returns after leaving released the lease", async () => {
+    fixture.hostPlatform = "darwin";
+    await connect();
+    expect(fixture.maybeUnlock).toHaveBeenCalledOnce();
+    fixture.focused = false;
+    act(() => root.render(<RemoteDesktopScreen />));
+    fixture.focused = true;
+    await act(async () => root.render(<RemoteDesktopScreen />));
+    await act(async () => vi.advanceTimersByTimeAsync(1000));
+    expect(
+      requests()
+        .filter((r) => r.op === "start")
+        .at(-1),
+    ).toMatchObject({ resume: true });
+    expect(fixture.maybeUnlock).toHaveBeenCalledTimes(2);
+  });
   it("reads an explicit never override before starting a protected-capable host", async () => {
     act(() => root.unmount());
     storage.items.set(

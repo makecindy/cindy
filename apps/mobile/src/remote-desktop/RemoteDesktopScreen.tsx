@@ -428,6 +428,9 @@ export function RemoteDesktopSession({
     delay: 1000,
     displayId: undefined as string | undefined,
     resuming: false,
+    // The user returned after this viewer released its lease (foreground or
+    // screen focus). Cleared once a lease starts; network retries never set it.
+    returned: false,
   });
   const generation = useRef(0);
   const timing = useRef<ReturnType<typeof connectionDiagnostics> | null>(null);
@@ -1378,9 +1381,12 @@ export function RemoteDesktopSession({
               setHostCaps({ deviceId, value: result });
               // A window view never unlocks the computer: it shows a window on an unlocked desktop.
               // Automatic recovery must never unlock before the host can reject resume.
-              // A deliberate new connection may still use the saved password.
+              // A deliberate new connection may still use the saved password, and so
+              // may a return after release: macOS waits for the first frame, which
+              // follows the host accepting resume. Linux unlocks before start.
               if (
-                !resuming &&
+                (!resuming ||
+                  (recovery.current.returned && result.platform !== "linux")) &&
                 !handoff &&
                 !screenPlugin &&
                 supportsAutoUnlock(result.platform)
@@ -1422,6 +1428,7 @@ export function RemoteDesktopSession({
           servers: loadIceServers("connect"),
         };
         active.current = next;
+        recovery.current.returned = false;
         receiveWindow.current = {
           since: Date.now(),
           bytes: 0,
@@ -1699,6 +1706,7 @@ export function RemoteDesktopSession({
         !pipPrepared.current
       ) {
         securityRef.current.resetConnectionAttempt();
+        recovery.current.returned = true;
         endBackground();
       } else if (state === "active" && active.current) {
         send({ type: "resume" });
@@ -1904,6 +1912,10 @@ export function RemoteDesktopSession({
     } else if (!focused) {
       leaving.current = true;
       setIsLeaving(true);
+      if (active.current) {
+        securityRef.current.resetConnectionAttempt();
+        recovery.current.returned = true;
+      }
       pause(true);
       navigation.current.onEnded?.();
     } else if (focused) {
