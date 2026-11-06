@@ -8559,11 +8559,11 @@ describe('createModelRoutingTransform —— custom Provider native imagegen pre
       for (const route of routes) {
         const endpoint = host.getCodexCustomContextProxyEndpoint('byok-image-test');
         for (const operation of ['generations', 'edits']) {
-          // Regression: the frozen BYOK route must forward client admission metadata,
-          // but never account identity. The existing HTTP fixture did not send either.
+          // Resumed Codex threads may retain another client's originator. The frozen
+          // BYOK route must replace it with Cindy's identity and strip account metadata.
           const response = await fetch(`${endpoint}/_cindy/custom-provider/${route.routeId}/images/${operation}`, {
             method: 'POST', headers: { 'content-type': 'application/json',
-              originator: 'cindy', 'chatgpt-account-id': 'fake-account' }, body: JSON.stringify(payload),
+              originator: 'codex_cli_rs', 'chatgpt-account-id': 'fake-account' }, body: JSON.stringify(payload),
           });
           expect(response.status).toBe(200);
           await response.text();

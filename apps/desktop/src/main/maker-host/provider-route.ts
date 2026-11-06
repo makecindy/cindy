@@ -198,9 +198,11 @@ const MISSING_PROVIDER_OAUTH_TOKEN = 'xdt-missing-provider-oauth-token';
  * originator 在 API Key 模式下也存在，并不只来自 ChatGPT OAuth spawn。
  * 发往第三方上游默认整组抹掉，避免账号信息泄漏和上游拒绝不认识的头；内置 xai
  * 由目录 headerDelete 声明，自定义供应商由代码兜底。企业下发的 BYOK API Key 路由
- * 仅在转发路径保留 originator，让下发 endpoint 的网关能按 Cindy 客户端放行；其余三项仍删除。
+ * 仅在转发路径固定发送 originator: cindy，让下发 endpoint 的网关能按 Cindy 客户端放行。
+ * 恢复的线程可能保留外部客户端的 originator，不能直接放行原值；其余三项仍删除。
  */
 const CODEX_ACCOUNT_HEADERS = ['chatgpt-account-id', 'openai-beta', 'originator', 'session_id'];
+const CINDY_CODEX_ORIGINATOR = 'cindy';
 /** 无鉴权上游永远不能收到 agent 子进程自带的订阅凭证。 */
 const CLIENT_AUTH_HEADERS = ['authorization', 'x-api-key'];
 /** 缺少自定义供应商 key 时覆盖 CLI 凭证的哑值：目标上游应 401，但绝不收到订阅 token。 */
@@ -485,12 +487,14 @@ function buildRouteDecisionBase(
           headerOverride['x-api-key'] = MISSING_CUSTOM_PROVIDER_API_KEY;
         }
       }
+      const forceCindyOriginator = agent === 'codex' && routing.forceCindyCodexOriginator === true;
+      if (forceCindyOriginator) headerOverride.originator = CINDY_CODEX_ORIGINATOR;
       const decision: RoutingDecision = {};
       if (Object.keys(headerOverride).length > 0) decision.headerOverride = headerOverride;
       if (routing.upstream) decision.upstreamOverride = routing.upstream;
       const headerDelete = new Set(routing.headerDelete ?? []);
       if (agent === 'codex') for (const name of CODEX_ACCOUNT_HEADERS) {
-        if (name === 'originator' && routing.preserveCodexOriginator === true) continue;
+        if (name === 'originator' && forceCindyOriginator) continue;
         headerDelete.add(name);
       }
       if (headerDelete.size > 0) decision.headerDelete = [...headerDelete];
