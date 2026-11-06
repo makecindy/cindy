@@ -8,6 +8,7 @@ import markLightUrl from '@/../../resources/app-icons/mark-light.png?url';
 import wordmarkDarkUrl from '@/../../resources/app-icons/wordmark-dark.png?url';
 import wordmarkLightUrl from '@/../../resources/app-icons/wordmark-light.png?url';
 import { useIsDarkMode } from '@/components/markdown/useIsDarkMode';
+import { Tip } from '@/components/ui/tooltip';
 import { getInitialAppearanceSettings } from '@/hooks/useFontSettings';
 import { cn } from '@/lib/utils';
 import { toast } from '@/lib/toast';
@@ -62,32 +63,34 @@ export function DockIconPicker() {
     <div className="flex gap-2" role="radiogroup" aria-label={t('settings.appearance.appIcon.label')}>
       {APP_ICONS.map((icon) => {
         const isSelected = icon === selected;
+        const label = t(`settings.appearance.appIcon.options.${icon}`);
         return (
-          <button
-            key={icon}
-            type="button"
-            role="radio"
-            aria-checked={isSelected}
-            aria-label={t(`settings.appearance.appIcon.options.${icon}`)}
-            tabIndex={isSelected ? 0 : -1}
-            onClick={() => select(icon)}
-            onKeyDown={handleKeyDown}
-            className={cn(
-              'size-11 shrink-0 rounded-xl transition-[background-color,box-shadow]',
-              // globals.css clears every outline; match the theme cards' box-shadow focus ring.
-              'focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)]',
-              isSelected
-                ? 'shadow-[inset_0_0_0_1.5px_var(--text-secondary)]'
-                : 'hover:bg-[var(--settings-menu-bg-hover)]',
-            )}
-          >
-            <img
-              src={isDark ? PREVIEWS[icon].dark : PREVIEWS[icon].light}
-              alt=""
-              draggable={false}
-              className="size-full"
-            />
-          </button>
+          <Tip key={icon} text={label}>
+            <button
+              type="button"
+              role="radio"
+              aria-checked={isSelected}
+              aria-label={label}
+              tabIndex={isSelected ? 0 : -1}
+              onClick={() => select(icon)}
+              onKeyDown={handleKeyDown}
+              className={cn(
+                'size-11 shrink-0 rounded-xl transition-[background-color,box-shadow]',
+                // globals.css clears every outline; match the theme cards' box-shadow focus ring.
+                'focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)]',
+                isSelected
+                  ? 'shadow-[inset_0_0_0_1.5px_var(--text-secondary)]'
+                  : 'hover:bg-[var(--settings-menu-bg-hover)]',
+              )}
+            >
+              <img
+                src={isDark ? PREVIEWS[icon].dark : PREVIEWS[icon].light}
+                alt=""
+                draggable={false}
+                className="size-full"
+              />
+            </button>
+          </Tip>
         );
       })}
     </div>
