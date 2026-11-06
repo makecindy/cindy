@@ -19,7 +19,8 @@ export default {
     'src/renderer/features/scheduler/components/ScheduleChips': `import React from 'react'; const chip = label => React.createElement('button', {type: 'button', style: {height: 34}}, label); export const ProjectChip = () => chip('对话'); export const ModelEffortChip = () => chip('Codex'); export const ScheduleChip = () => chip('09:00'); export const ScheduleSettingsButton = () => null; export const ThreadPickerInline = () => null;`,
   },
   cases: { default: { about: 'Webhook → 手动 → 定时 → Webhook，弹窗及触发选择器不跳动' },
-    create: { about: '新建表单使用相同的稳定切换布局' } },
+    create: { about: '新建表单使用相同的稳定切换布局' },
+    scrolled: { about: '小窗口滚动后切换触发方式，配置区收起不拉回滚动位置', viewport: { width: 780, height: 620 } } },
   async ready(page) {
     const label = await page.evaluate(() => window.__uiPage.t('scheduler.editor.webhook.eventPicker.choose'));
     await page.getByRole('button', { name: label, exact: true }).waitFor();
@@ -33,6 +34,10 @@ export default {
       ['scheduler.editor.trigger.timed', 'timed'], ['scheduler.cell.tagWebhook', 'webhook']]) {
       const label = await ui.t(key);
       const choice = page.getByRole('radio', { name: label, exact: true });
+      // UI regression: removing Webhook fields used to clamp scrollTop and move
+      // this control by 144px in a short window. Start measuring after the user
+      // has scrolled the control into view, not before Playwright's auto-scroll.
+      await choice.scrollIntoViewIfNeeded();
       await choice.evaluate((element, triggerLabel) => {
         const frames = []; window.__triggerFrames = frames; window.__triggerFramesDone = false;
         const sample = () => {
@@ -61,6 +66,24 @@ export default {
       const minPrompt = Math.min(frames[0].promptY, frames.at(-1).promptY) - 1;
       const maxPrompt = Math.max(frames[0].promptY, frames.at(-1).promptY) + 1;
       assert.ok(frames.every(f => f.promptY >= minPrompt && f.promptY <= maxPrompt), `Trigger switch ${label} bounced prompt content: ${JSON.stringify(frames)}`);
+    }
+    if (ui.case === 'scrolled') {
+      await page.getByRole('radio', { name: await ui.t('scheduler.editor.fields.manually'), exact: true }).click();
+      await page.getByRole('tabpanel').evaluate((panel) => {
+        panel.parentElement.parentElement.scrollTop = 0;
+      });
+      // The scroll anchor must not leave a permanently long, empty form after
+      // the user scrolls back up. Compare actual content bounds, not CSS values.
+      await page.waitForFunction(() => {
+        const panel = document.querySelector('[role="tabpanel"]');
+        const content = panel.parentElement;
+        const viewport = content.parentElement;
+        const naturalBottom = panel.getBoundingClientRect().bottom - viewport.getBoundingClientRect().top
+          + parseFloat(getComputedStyle(content).paddingBottom);
+        return viewport.scrollTop === 0
+          && Math.abs(viewport.scrollHeight - Math.max(viewport.clientHeight, naturalBottom)) <= 1;
+      });
+      await ui.capture('manual-scrolled-back');
     }
   },
 };

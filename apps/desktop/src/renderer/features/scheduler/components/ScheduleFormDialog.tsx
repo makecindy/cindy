@@ -194,6 +194,29 @@ export function ScheduleFormDialog({
   const modelCatalogReady = (!isBound || form.modelAgentDeviceId !== undefined || !!boundSessionReference) && !caps.loading && !providersLoading;
   const hideWorkspaceFields = runMode === 'bound' || isBound;
   const [activeTab, setActiveTab] = useState<'content' | 'options'>('content');
+  const formScrollRef = useRef<HTMLDivElement>(null);
+  const formContentRef = useRef<HTMLDivElement>(null);
+
+  const preserveTriggerScrollPosition = () => {
+    const viewport = formScrollRef.current;
+    const content = formContentRef.current;
+    // Removing the Webhook fields must not clamp scrollTop and pull the control
+    // away from the pointer. Reserve only the currently visible scroll extent.
+    if (viewport && content && viewport.scrollTop > 0) {
+      content.style.minHeight = `${viewport.scrollTop + viewport.clientHeight}px`;
+    }
+  };
+
+  const releaseUnusedScrollSpace = () => {
+    const viewport = formScrollRef.current;
+    const content = formContentRef.current;
+    if (!viewport || !content?.style.minHeight) return;
+    // Returning upwards releases the space without moving the visible content.
+    // The keyed viewport also discards it on tab changes or closing the dialog.
+    content.style.minHeight = viewport.scrollTop > 0
+      ? `${Math.min(parseFloat(content.style.minHeight), viewport.scrollTop + viewport.clientHeight)}px`
+      : '';
+  };
   const tabsId = useId();
   useEffect(() => {
     if (open) setActiveTab('content');
@@ -802,8 +825,9 @@ export function ScheduleFormDialog({
               <TemplateGallery onSelect={applyTemplateToForm} selectedId={selectedTemplate?.id} />
             </div>
           ) : (
-            <div key={activeTab} className="min-h-0 flex-1 overflow-y-auto [scrollbar-gutter:stable] px-6 py-3">
-              <div className="flex flex-col gap-3">
+            <div key={activeTab} ref={formScrollRef} onScroll={releaseUnusedScrollSpace}
+              className="min-h-0 flex-1 overflow-y-auto [scrollbar-gutter:stable]">
+              <div ref={formContentRef} className="flex flex-col gap-3 px-6 py-3">
                 {modelUnavailable && (
                   <ErrorNotice
                     message={t('scheduler.editor.validation.modelUnavailable', {
@@ -1062,6 +1086,7 @@ export function ScheduleFormDialog({
                           height={34}
                           onValueChange={(mode) => {
                             if (mode === triggerMode) return;
+                            preserveTriggerScrollPosition();
                             setField('webhookEnabled', mode === 'webhook');
                             setField('manual', mode !== 'automatic');
                             setField('recurring', mode !== 'manually');
