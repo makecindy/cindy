@@ -13,22 +13,9 @@ import { DEFAULT_APPEARANCE_SETTINGS } from '../../shared/appearanceSettings';
 import {
   readAppearanceSettingsState,
   writeAppearanceSettingsPatch,
-  updateAppearanceSettingsAtomic,
 } from '../appearance-settings-store';
 
 describe('terminal appearance overrides', () => {
-  // C11/configuration §2: new plugin fields share the original override owner;
-  // removing one override must not freeze defaults or erase manual font choices.
-  it('stores content appearance overrides without copying defaults', async () => {
-    const file = path.join(fixture.userData, 'appearance-settings.json');
-    await writeAppearanceSettingsPatch({ uiFamily: 'Inter', reading: { maxWidth: 720 },
-      themeColors: { dark: { text: '#eeeeee' } } });
-    expect(JSON.parse(fs.readFileSync(file, 'utf8'))).toEqual({ uiFamily: 'Inter',
-      reading: { maxWidth: 720 }, themeColors: { dark: { text: '#eeeeee' } } });
-    await updateAppearanceSettingsAtomic(() => ({ reading: undefined }));
-    expect(readAppearanceSettingsState().customizedKeys).not.toContain('reading');
-    expect(readAppearanceSettingsState().value.uiFamily).toBe('Inter');
-  });
   beforeEach(() => {
     fixture.userData = fs.mkdtempSync(path.join(os.tmpdir(), 'cindy-terminal-appearance-'));
   });

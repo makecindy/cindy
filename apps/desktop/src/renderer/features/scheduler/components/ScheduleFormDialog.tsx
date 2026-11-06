@@ -6,6 +6,12 @@ import { CalendarClock, Check, FolderOpen, Info, Play, Sparkles, X } from 'lucid
 import { useTranslation } from 'react-i18next';
 
 import { SegmentedControl } from '@/components/ui/segmented-control';
+import {
+  DEFAULT_SCHEDULE_WEBHOOK_PRESET,
+  resolveScheduleWebhookFormat,
+  scheduleWebhookPreset,
+  type ScheduleWebhookPresetId,
+} from '@cindy/maker-scheduler/webhook-formats';
 import { PreRunPluginFields } from './PreRunPluginFields';
 import { cn } from '@/lib/utils';
 import { toast } from '@/lib/toast';
@@ -14,6 +20,8 @@ import { extractIpcError } from '@/utils/ipcError';
 import { parseAgentErrorCode } from '@cindy/maker-shared/error-redaction';
 import { Tip } from '@/components/ui/tooltip';
 import { Button } from '@/components/ui/button';
+import { FormField } from '@/components/ui/form-field';
+import { Input } from '@/components/ui/input';
 import { useAgentCapabilities } from '@/hooks/useAgentCapabilities';
 import { useAvailableAgents } from '@/hooks/useAvailableAgents';
 import { useModelVisibilityVersion } from '@/state/modelVisibilityPrefs';
@@ -30,10 +38,10 @@ import { useProjectPickerOptions } from '@/hooks/useProjectPickerOptions';
 import { useWecomGroupNotificationSettings } from '@/hooks/useWecomGroupNotificationSettings';
 import type { Schedule, CreateScheduleInput, ScheduleTemplate, UpdateScheduleInput } from '@cindy/maker-scheduler';
 import { applyTemplateParams } from '@cindy/maker-scheduler/template-engine';
-import { FormField } from '@/components/ui/form-field';
-import { Input } from '@/components/ui/input';
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
 import { ScriptCapabilityMultiSelect } from './ScriptCapabilityMultiSelect';
+import { WebhookSourceFields } from './WebhookSourceFields';
+import { WebhookAccountManager } from './WebhookAccountManager';
 
 import {
   getScheduleDefaultRoute,
@@ -144,6 +152,16 @@ export function ScheduleFormDialog({
 }: Props) {
   const { t, i18n } = useTranslation();
   const formApi = useScheduleForm(initial);
+  // 能否接收 Webhook 由任务所在电脑决定：没有 Cindy 账号时不显示开关。
+  const [webhookReceiverReady, setWebhookReceiverReady] = useState(false);
+  useEffect(() => {
+    let current = true;
+    window.electronAPI.maker.schedule.webhookReceiver().then(
+      (receiver) => { if (current) setWebhookReceiverReady(receiver === 'cloud' || receiver === 'local'); },
+      () => { if (current) setWebhookReceiverReady(false); },
+    );
+    return () => { current = false; };
+  }, []);
   const { form, setField, selectModelConfiguration, setDestination, setRunMode, selectBoundSession, applyTemplateAgentFields, reset, toInput, validate } = formApi;
   // "运行会话"三态(fresh / persistent / bound)与心跳形态派生值。
   // hasRealBinding = targetSessionId 为真实会话 id(B 已绑 / C 已选 / MCP 手绑),
@@ -176,6 +194,29 @@ export function ScheduleFormDialog({
   const modelCatalogReady = (!isBound || form.modelAgentDeviceId !== undefined || !!boundSessionReference) && !caps.loading && !providersLoading;
   const hideWorkspaceFields = runMode === 'bound' || isBound;
   const [activeTab, setActiveTab] = useState<'content' | 'options'>('content');
+  const formScrollRef = useRef<HTMLDivElement>(null);
+  const formContentRef = useRef<HTMLDivElement>(null);
+
+  const preserveTriggerScrollPosition = () => {
+    const viewport = formScrollRef.current;
+    const content = formContentRef.current;
+    // Removing the Webhook fields must not clamp scrollTop and pull the control
+    // away from the pointer. Reserve only the currently visible scroll extent.
+    if (viewport && content && viewport.scrollTop > 0) {
+      content.style.minHeight = `${viewport.scrollTop + viewport.clientHeight}px`;
+    }
+  };
+
+  const releaseUnusedScrollSpace = () => {
+    const viewport = formScrollRef.current;
+    const content = formContentRef.current;
+    if (!viewport || !content?.style.minHeight) return;
+    // Returning upwards releases the space without moving the visible content.
+    // The keyed viewport also discards it on tab changes or closing the dialog.
+    content.style.minHeight = viewport.scrollTop > 0
+      ? `${Math.min(parseFloat(content.style.minHeight), viewport.scrollTop + viewport.clientHeight)}px`
+      : '';
+  };
   const tabsId = useId();
   useEffect(() => {
     if (open) setActiveTab('content');
@@ -255,6 +296,9 @@ export function ScheduleFormDialog({
   const submitLabel = isEdit
     ? t('scheduler.editor.promptDialog.save')
     : t('scheduler.editor.promptDialog.create');
+  // UI 三选一；manual 仅表示不启用定时，已有组合配置在未切换触发方式时原样保留。
+  const triggerMode = form.webhookEnabled ? 'webhook' : form.manual ? 'manually' : 'automatic';
+  const webhookSettingsVisible = !isProjectAutomationMode && webhookReceiverReady && form.webhookEnabled;
 
   const initialId = initial?.id;
   useEffect(() => {
@@ -777,12 +821,13 @@ export function ScheduleFormDialog({
           )}
 
           {!isEdit && !isProjectAutomationMode && mode === 'gallery' ? (
-            <div className="h-[546px] min-h-0 overflow-y-auto px-6 pt-[18px] pb-[22px]">
+            <div className="min-h-0 flex-1 overflow-y-auto [scrollbar-gutter:stable] px-6 pt-[18px] pb-[22px]">
               <TemplateGallery onSelect={applyTemplateToForm} selectedId={selectedTemplate?.id} />
             </div>
           ) : (
-            <div key={activeTab} className="min-h-0 flex-1 overflow-y-auto px-6 py-3">
-              <div className="flex flex-col gap-3">
+            <div key={activeTab} ref={formScrollRef} onScroll={releaseUnusedScrollSpace}
+              className="min-h-0 flex-1 overflow-y-auto [scrollbar-gutter:stable]">
+              <div ref={formContentRef} className="flex flex-col gap-3 px-6 py-3">
                 {modelUnavailable && (
                   <ErrorNotice
                     message={t('scheduler.editor.validation.modelUnavailable', {
@@ -1028,32 +1073,34 @@ export function ScheduleFormDialog({
                       )}
                     </section>
                     <section
-                      aria-label={t('scheduler.editor.fields.schedule')}
+                      aria-label={t('scheduler.editor.trigger.label')}
                       className="flex shrink-0 flex-col gap-3 border-t border-[var(--border-default)] pt-4"
                     >
                       <div className="flex flex-wrap items-center gap-2.5">
                         <span className="text-xs leading-[1.33] text-[var(--cmd-palette-item-meta)] dark:text-[var(--settings-section-desc)]">
-                          {t('scheduler.editor.fields.schedule')}
+                          {t('scheduler.editor.trigger.label')}
                         </span>
-                        {/* 自动/手动 pill：把原先"勾一次才出现 Manually"的隐藏路径显式化。
-                  自动 → manual=false,显示 cron chip + Once;手动 → manual=true,cron 保留占位值不参与调度。 */}
                         <SegmentedControl
-                          aria-label={t('scheduler.editor.fields.schedule')}
-                          value={form.manual ? 'manually' : 'automatic'}
+                          aria-label={t('scheduler.editor.trigger.label')}
+                          value={triggerMode}
                           height={34}
                           onValueChange={(mode) => {
-                            const isManual = mode === 'manually';
-                            if (form.manual === isManual) return;
-                            setField('manual', isManual);
-                            setField('recurring', !isManual);
+                            if (mode === triggerMode) return;
+                            preserveTriggerScrollPosition();
+                            setField('webhookEnabled', mode === 'webhook');
+                            setField('manual', mode !== 'automatic');
+                            setField('recurring', mode !== 'manually');
                           }}
-                          options={(['automatic', 'manually'] as const).map((mode) => ({
-                            value: mode,
-                            label: t(`scheduler.editor.fields.${mode}`),
-                          }))}
+                          options={[
+                            { value: 'automatic', label: t('scheduler.editor.trigger.timed') },
+                            { value: 'manually', label: t('scheduler.editor.fields.manually') },
+                            ...(!isProjectAutomationMode && (webhookReceiverReady || form.webhookEnabled)
+                              ? [{ value: 'webhook', label: t('scheduler.cell.tagWebhook'), disabled: !webhookReceiverReady }]
+                              : []),
+                          ]}
                         />
                         {/* 自动模式:cron chip + 一次(recurring 反向)。手动模式:两者全部隐藏——cron 占位值仍在 form 里,提交合法。 */}
-                        {!form.manual && (
+                        {triggerMode === 'automatic' && (
                           <>
                             <ScheduleChip
                               cronExpr={form.cronExpr}
@@ -1063,17 +1110,18 @@ export function ScheduleFormDialog({
                                 setField('intervalMs', value.intervalMs);
                               }}
                             />
-                            <button
-                              type="button"
-                              role="checkbox"
-                              aria-checked={!form.recurring}
-                              onClick={() => setField('recurring', !form.recurring)}
-                              className={cn(
-                                'inline-flex h-[34px] items-center gap-2 rounded-full px-1.5',
-                                'text-13 leading-none text-[var(--settings-btn-secondary-text)]',
-                                'transition-colors hover:bg-[var(--surface-hover)]',
-                                'focus:outline-none',
-                              )}
+                            {!form.webhookEnabled && (
+                              <button
+                                type="button"
+                                role="checkbox"
+                                aria-checked={!form.recurring}
+                                onClick={() => setField('recurring', !form.recurring)}
+                                className={cn(
+                                  'inline-flex h-[34px] items-center gap-2 rounded-full px-1.5',
+                                  'text-13 leading-none text-[var(--settings-btn-secondary-text)]',
+                                  'transition-colors hover:bg-[var(--surface-hover)]',
+                                  'focus:outline-none',
+                                )}
                             >
                               <span
                                 className={cn(
@@ -1098,6 +1146,7 @@ export function ScheduleFormDialog({
                               </span>
                               {t('scheduler.editor.fields.once')}
                             </button>
+                            )}
                           </>
                         )}
                         {(!form.manual || form.deadline) && (
@@ -1156,6 +1205,32 @@ export function ScheduleFormDialog({
                           </Popover>
                         )}
                       </div>
+                      {/* 项目配置不保存接收地址；未登录时保留已配置的触发方式。 */}
+                      {webhookSettingsVisible && <WebhookAccountManager allowOpenSchedule={false} />}
+                      {webhookSettingsVisible && (
+                          <WebhookSourceFields
+                            preset={form.webhookPreset ?? DEFAULT_SCHEDULE_WEBHOOK_PRESET}
+                            signed={form.webhookSigned !== false}
+                            formatText={form.webhookFormat ?? ''}
+                            events={form.webhookEvents ?? ''}
+                            onEventsChange={(value) => setField('webhookEvents', value)}
+                            onPresetChange={(value) => {
+                              // 切到自定义时，用当前预设的格式作为起点，避免从空白开始写。
+                              if (value === 'custom' && !form.webhookFormat?.trim()) {
+                                const current = form.webhookPreset ?? DEFAULT_SCHEDULE_WEBHOOK_PRESET;
+                                const format = resolveScheduleWebhookFormat(
+                                  scheduleWebhookPreset(current)
+                                    ? { preset: current as ScheduleWebhookPresetId, signed: form.webhookSigned !== false }
+                                    : undefined,
+                                );
+                                setField('webhookFormat', JSON.stringify(format, null, 2));
+                              }
+                              setField('webhookPreset', value);
+                            }}
+                            onSignedChange={(value) => setField('webhookSigned', value)}
+                            onFormatChange={(value) => setField('webhookFormat', value)}
+                          />
+                      )}
                     </section>
                   </div>
                 )}

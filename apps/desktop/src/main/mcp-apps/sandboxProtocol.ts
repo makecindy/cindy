@@ -1,5 +1,4 @@
-import { withHostAppSdk, withHostPageRuntime } from '@cindy/maker-shared/mcp-app-sdk';
-import { isSafeGhostRelativePath } from '@cindy/plugin-protocol';
+import { withHostAppSdk } from '@cindy/maker-shared/mcp-app-sdk';
 import { app, protocol, session, type WebContents, type WebFrameMain } from 'electron';
 import { randomUUID } from 'node:crypto';
 import { getCurrentDbClientSnapshot } from '../localDb/client/current.js';
@@ -28,7 +27,6 @@ const documents = new Map<
   {
     html: string; fileKey: string; document: McpAppDocument; owner: object | null; caller?: string;
     dispose?: () => void;
-    nativeAssets?: (relativePath: string) => Promise<Response>;
     bridge?: { key: string; frame?: WebFrameMain; invoke(input: unknown): Promise<unknown> };
   }
 >();
@@ -94,50 +92,6 @@ export function mountRemoteAppDocument(
   supplyMcpAppDocument({ ...document, viewId: id, csp: policy.header, policy: policy.csp }, caller, invoke, dispose);
   return id;
 }
-
-const nativeUiPageBootstrap = `<script data-cindy-native-ui>
-(()=>{
- let next=0;const pending=new Map();
- const call=(op,input)=>new Promise((resolve,reject)=>{
-  if(pending.size>=16){reject(new Error('UI_UNAVAILABLE'));return;}
-  const id=++next,timer=setTimeout(()=>{pending.delete(id);reject(new Error('UI_UNAVAILABLE'));},15000);
-  pending.set(id,{resolve,reject,timer});
-  window.parent.postMessage({jsonrpc:'2.0',id,method:'cindy/ui',params:{op,input}},'*');
- });
- window.addEventListener('message',event=>{
-  if(event.source!==window.parent||event.data?.jsonrpc!=='2.0')return;
-  const item=pending.get(event.data.id);if(!item)return;
-  pending.delete(event.data.id);clearTimeout(item.timer);
-  if(event.data.error)item.reject(new Error('UI_UNAVAILABLE'));else item.resolve(event.data.result);
- });
- const appearance=async(op,input)=>{const result=await call(op,input);if(result?.ok===true)return result.data;
-  throw Object.assign(new Error(result?.error?.message||'Appearance unavailable'),{code:result?.error?.code||'APPEARANCE_UNAVAILABLE'});};
- window.cindy=Object.freeze({ui:Object.freeze({read:()=>call('read'),capabilities:()=>call('capabilities'),
-  invoke:input=>call('invoke',input),appearance:Object.freeze({read:()=>appearance('appearance.read'),
-   set:(patch,options)=>appearance('appearance.set',{patch,ifRevision:options?.ifRevision}),
-   reset:(fields,options)=>appearance('appearance.reset',{fields,ifRevision:options?.ifRevision})}),
-  visibility:Object.freeze({read:()=>appearance('visibility.read'),set:patch=>appearance('visibility.set',{patch})})})});
-})();
-</script>`;
-
-/** Native pages share frame isolation and lifecycle, but do not receive the MCP App SDK. */
-export function mountNativeUiPageDocument(
-  input: { html: string; entry: string }, caller: string, invoke: (input: unknown) => Promise<unknown>,
-  readAsset: (relativePath: string) => Promise<Response>, dispose?: () => void,
-): string {
-  if (!getCurrentDbClientSnapshot()) throw new Error('MCP_APP_OWNER_UNAVAILABLE');
-  if (!input || typeof input.html !== 'string' || Buffer.byteLength(input.html) > MCP_APPS_MAX_BYTES ||
-      !isSafeGhostRelativePath(input.entry) || !/\.html$/i.test(input.entry)) throw new Error('MCP_APP_INVALID_DOCUMENT');
-  if ([...documents.values()].filter(item => item.caller === caller).length >= 16) throw new Error('MCP_APP_VIEW_LIMIT');
-  const id = randomUUID(), policy = appCsp();
-  const directory = input.entry.split('/').slice(0, -1).join('/');
-  const base = `cindy-mcp-app://${id}-view/__cindy/plugin/${directory ? `${directory}/` : ''}`;
-  const document: McpAppDocument = { viewId: id, html: input.html, csp: policy.header, policy: policy.csp, prefersBorder: false };
-  documents.set(id, { html: withHostPageRuntime(input.html, `<base href="${base}">${nativeUiPageBootstrap}`),
-    fileKey: randomUUID(), document, owner: getCurrentDbClientSnapshot(), caller, dispose,
-    bridge: { key: randomUUID(), invoke }, nativeAssets: readAsset });
-  return id;
-}
 export function unmountRemoteAppDocument(id: string, caller: string): void {
   if (documents.get(id)?.caller !== caller) throw new Error('MCP_APP_VIEW_UNAVAILABLE');
   removeMcpAppDocument(id);
@@ -154,11 +108,11 @@ export function registerMcpAppProtocol(): void {
     { urls: ['cindy-mcp-app://*/*'] },
     (details, callback) => {
       const url = new URL(details.url);
-      if (url.hostname.endsWith('-view') && (url.pathname.startsWith('/__cindy/files/') || url.pathname.startsWith('/__cindy/plugin/'))) {
+      if (url.hostname.endsWith('-view') && url.pathname.startsWith('/__cindy/files/')) {
         const entry = documents.get(url.hostname.slice(0, -5));
         const frame = details.frame;
         try {
-          if (!entry || (url.pathname.startsWith('/__cindy/plugin/') && !entry.nativeAssets) || !frame || entry.owner !== getCurrentDbClientSnapshot() ||
+          if (!entry || !frame || entry.owner !== getCurrentDbClientSnapshot() ||
               entry.caller !== `renderer:${details.webContentsId}` ||
               frame.url !== `cindy-mcp-app://${url.hostname}/resource` ||
               !['GET', 'HEAD'].includes(details.method)) { callback({ cancel: true }); return; }
@@ -291,17 +245,6 @@ export function registerMcpAppProtocol(): void {
       if (!fileReader || request.headers.get(frameHeader) !== entry.fileKey || url.search || url.hash)
         return new Response(null, { status: 404 });
       return fileReader(id, url.pathname.slice('/__cindy/files/'.length), request);
-    }
-    if (url.hostname === `${id}-view` && url.pathname.startsWith('/__cindy/plugin/')) {
-      if (!entry.nativeAssets || request.headers.get(frameHeader) !== entry.fileKey ||
-          !['GET', 'HEAD'].includes(request.method)) return new Response(null, { status: 404 });
-      try {
-        const relative = decodeURIComponent(url.pathname.slice('/__cindy/plugin/'.length));
-        if (!isSafeGhostRelativePath(relative)) return new Response(null, { status: 404 });
-        const result = await entry.nativeAssets(relative);
-        return documents.get(id) === entry && entry.owner === getCurrentDbClientSnapshot()
-          ? result : new Response(null, { status: 404 });
-      } catch { return new Response(null, { status: 404 }); }
     }
     if (url.pathname === '/bridge' && url.hostname === id) {
       const bridge = entry.bridge;

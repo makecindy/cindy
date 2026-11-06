@@ -537,7 +537,14 @@ it('discovers 142 grouped Hermes skills and all memory documents, excluding arch
   for (let i = 0; i < 142; i++) {
     await write(`.hermes/skills/group-${i % 13}/skill-${i}/SKILL.md`, `---\nname: skill-${i}\n---\nInstructions ${i}`);
   }
-  for (let i = 0; i < 2100; i++) await write(`.hermes/memories/note-${i}.md`, `Memory ${i}`);
+  const memoryRoot = path.join(home, '.hermes/memories');
+  await fs.mkdir(memoryRoot, { recursive: true });
+  for (let offset = 0; offset < 2100; offset += 32) {
+    await Promise.all(Array.from({ length: Math.min(32, 2100 - offset) }, (_, index) => {
+      const i = offset + index;
+      return fs.writeFile(path.join(memoryRoot, `note-${i}.md`), `Memory ${i}`);
+    }));
+  }
   await write('.hermes/skills/.archive/old/SKILL.md', 'archived');
   await write('.hermes/skills/group-0/skill-0/references/example/SKILL.md', 'example');
   await write('extra-skills/category/extra/SKILL.md', '---\nname: extra\n---\nExtra');

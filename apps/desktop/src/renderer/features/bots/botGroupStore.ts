@@ -11,6 +11,7 @@
  */
 import { useCallback, useSyncExternalStore } from 'react';
 import { seedBotGroupReadState } from './botReadState';
+import { isSecondaryWindow } from '@/lib/secondaryWindow';
 import { discardDraftTree } from '@/lib/composerDraftStore';
 import { botGroupAttachmentScope } from './botGroupAttachments';
 
@@ -120,7 +121,7 @@ function applySnapshot(next: BotGroupListSnapshot): void {
 }
 
 function persistList(): void {
-  if (!owner.dataOwnerId) return;
+  if (!owner.dataOwnerId || isSecondaryWindow()) return;
   void botGroupApi()?.chatDisplayCache?.({ action: 'write', key: 'groups', owner, value: snapshot.groups }).catch(() => undefined);
 }
 

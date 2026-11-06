@@ -1,6 +1,4 @@
 import { getPluginToolUi } from '@cindy/plugin-protocol';
-import { parseGhostNativeUi } from '@cindy/plugin-protocol';
-import { PLUGIN_UI_CAPABILITIES, PLUGIN_APPEARANCE_FIELDS, pluginUiPointAcceptsScope } from '@cindy/maker-shared';
 import { MCP_APPS_MAX_BYTES } from '../mcp-apps/protocol.js';
 import interactiveExampleManifest from '../../../resources/system-skills/cindy-plugin-creator/references/examples/interactive-pages/static/ghost.json?raw';
 import interactiveExampleMain from '../../../resources/system-skills/cindy-plugin-creator/references/examples/interactive-pages/static/main.js?raw';
@@ -175,7 +173,7 @@ function shouldSkip(name: string): boolean {
 }
 
 export type ForgePackResult =
-  | { ok: true; cindyPath: string; manifest: GhostManifest; buf: Buffer; warnings?: string[] }
+  | { ok: true; cindyPath: string; manifest: GhostManifest; buf: Buffer }
   | {
       ok: false;
       errorCode:
@@ -190,24 +188,6 @@ export type ForgePackResult =
         | 'PERMISSION_DENIED';
       message: string;
     };
-
-function nativeUiWarnings(manifest: GhostManifest): string[] {
-  const ui = parseGhostNativeUi(manifest.ui);
-  if (!ui) return [];
-  if (ui.version !== 1) return [`ui.version: unsupported UI version ${ui.version}; original tools remain available`];
-  return [...(ui.appearance?.fields ?? []).flatMap((field, index) =>
-    PLUGIN_APPEARANCE_FIELDS.includes(field as typeof PLUGIN_APPEARANCE_FIELDS[number]) ? [] : [`ui.appearance.fields[${index}]: unsupported field ${field}`]),
-    ...(ui.contributions ?? []).flatMap((c, index) =>
-    !PLUGIN_UI_CAPABILITIES.points.includes(c.point)
-      ? [`ui.contributions[${index}].point (${c.id}): unsupported point ${c.point}`]
-      : !pluginUiPointAcceptsScope(c.point, c.scope)
-        ? [`ui.contributions[${index}].scope (${c.id}): ${c.scope} does not match ${c.point}`] : []),
-    ...(ui.commands ?? []).flatMap((command, index) => (command.points ?? []).flatMap(point =>
-      !['composer.tools', 'session.header.actions', 'message.actions', 'turn.footer'].includes(point)
-        ? [`ui.commands[${index}].points (${command.id}): unsupported point ${point}`]
-        : !pluginUiPointAcceptsScope(point, command.scope)
-          ? [`ui.commands[${index}].scope (${command.id}): ${command.scope} does not match ${point}`] : []))];
-}
 
 /** 对话制作插件时可直接生成的四种安全起步模板。 */
 export const FORGE_SCAFFOLD_TEMPLATES = [
@@ -988,14 +968,8 @@ async function buildGhostPackage(
     }
 
     // 3) 清单声明的入口文件必须真实在场(打包期拦,别等装入后沙箱 404)。
-    const nativeUi = parseGhostNativeUi(manifest.ui);
     const uiFiles = new Set((getPluginToolUi(manifest)?.resources ?? []).map(resource => resource.file));
-    if (nativeUi?.version === 1) for (const view of nativeUi.tabViews ?? []) uiFiles.add(view.page);
-    if (nativeUi?.version === 1) for (const contribution of nativeUi.contributions ?? []) {
-      if (PLUGIN_UI_CAPABILITIES.points.includes(contribution.point) && contribution.page) uiFiles.add(contribution.page);
-    }
     const mustExist: string[] = [...uiFiles];
-    if (nativeUi?.version === 1) for (const resource of nativeUi.appearance?.resources ?? []) mustExist.push(resource.path);
     if (manifest.entry) mustExist.push(manifest.entry);
     if (manifest.node?.entry) {
       mustExist.push(manifest.node.entry, ...(manifest.node.entries ?? []));
@@ -1557,8 +1531,7 @@ export async function packGhostDir(
   }
   // 作者目录里的副本只给人手动拿走。安装链路必须用内存里的 `buf` 直写
   // staging，绝不能从 cindyPath 回读——agent 能在确认前替换那份文件。
-  const warnings = nativeUiWarnings(built.manifest);
-  return { ok: true, cindyPath, manifest: built.manifest, buf: built.buf, ...(warnings.length ? { warnings } : {}) };
+  return { ok: true, cindyPath, manifest: built.manifest, buf: built.buf };
 }
 
 /**
@@ -1611,8 +1584,7 @@ export async function packGhostDirToFile(
       message: `写入打包产物失败:${err instanceof Error ? err.message : String(err)}`,
     };
   }
-  const warnings = nativeUiWarnings(built.manifest);
-  return { ok: true, cindyPath: destPath, manifest: built.manifest, buf: built.buf, ...(warnings.length ? { warnings } : {}) };
+  return { ok: true, cindyPath: destPath, manifest: built.manifest, buf: built.buf };
 }
 
 // Keep the existing tool/test export while the built-in Skill owns the documentation.

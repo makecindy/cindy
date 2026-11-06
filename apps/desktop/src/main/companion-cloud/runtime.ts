@@ -159,9 +159,8 @@ const PROFILE_CACHE_MS = 5 * 60_000;
 /** Home versions that accept a hand-over request from another computer (device-link caps). */
 const REMOTE_HAND_OVER_VERSION = 2;
 /**
- * Targets that also read the companion store when taking over (device-link caps). Until the caps
- * version advertises it, every hand-over keeps refusing values only the store holds; a computer
- * taking a companion over itself (it reads the store) is not affected.
+ * Targets that also read the companion store when taking over (device-link caps). Older targets
+ * still refuse values only the store holds; a computer taking over itself reads the store directly.
  */
 const COMPANION_CLOUD_STORE_READ_VERSION = 3;
 /** How long a move waits for the companion to finish its turn (the device-link budget is larger). */
