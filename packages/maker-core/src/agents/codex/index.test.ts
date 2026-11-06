@@ -5475,6 +5475,39 @@ describe('CodexAgent.listCustomizations', () => {
 });
 
 describe('CodexAgent.refreshLocalModels', () => {
+  it('delivers API capabilities only to the requesting callback and keeps OAuth discovery separate', async () => {
+    const publishOAuth = vi.fn();
+    const publishApi = vi.fn();
+    const agent = new CodexAgent(createDeps({}, { onCodexLocalModelsListed: publishOAuth }));
+    (agent as any).codexHome = '/subscription-history';
+    const host = installFakeHost(agent, method => method === Method.ModelList
+      ? { data: [{ id: 'gpt-6.1-sol', model: 'gpt-6.1-sol' }], nextCursor: null } : undefined,
+    { codexHome: '/api-control-plane' });
+    await expect(agent.refreshLocalModels({ credentialMode: 'provider-oauth', onModelsListed: publishApi }))
+      .resolves.toBe(true);
+    expect((agent as any).getHost).toHaveBeenCalledWith(undefined, 'provider-oauth', {
+      providerId: undefined, keyOverride: 'local-control:provider-oauth:external-auth',
+      localAuthPolicy: 'isolated', hostPurpose: 'control-plane',
+    });
+    expect(publishApi).toHaveBeenCalledExactlyOnceWith([{ id: 'gpt-6.1-sol', model: 'gpt-6.1-sol' }]);
+    expect(publishOAuth).not.toHaveBeenCalled();
+    expect((agent as any).codexHome).toBe('/subscription-history');
+    expect(host.request.mock.calls.every(([method]) => method === Method.ModelList)).toBe(true);
+  });
+
+  it('drops a late API capability callback when its host has been retired', async () => {
+    const publishApi = vi.fn();
+    const agent = new CodexAgent(createDeps());
+    installFakeHost(agent, method => {
+      if (method !== Method.ModelList) return undefined;
+      (agent as any).hosts.clear();
+      return { data: [{ model: 'stale' }], nextCursor: null };
+    });
+    await expect(agent.refreshLocalModels({ credentialMode: 'provider-oauth', onModelsListed: publishApi }))
+      .resolves.toBe(false);
+    expect(publishApi).not.toHaveBeenCalled();
+  });
+
   it('reconnects a model-only SSH host after daemon closure without explicit host retirement', async () => {
     const transports: InstanceType<typeof MockCodexTransport>[] = [];
     const agent = new CodexAgent(createDeps({}, { getRemoteCodexTransport: () => {

@@ -2821,7 +2821,7 @@ assertRouteCurrent();
 
     const key = codexLocalAuthHostIdentity(
       options?.providerId ? `local-account:${options.providerId}:models` : localControlPlaneHostKey(credentialMode),
-      credentialMode === 'gateway-key' ? 'isolated' : 'legacy-shared',
+      credentialMode === 'gateway-key' || credentialMode === 'provider-oauth' ? 'isolated' : 'legacy-shared',
     );
     let timer: ReturnType<typeof setTimeout> | undefined;
     const deadline = new Promise<never>((_, reject) => {
@@ -2856,21 +2856,23 @@ assertRouteCurrent();
     const key = codexLocalAuthHostIdentity(
       options?.providerId ? `local-account:${options.providerId}:models` : credentialMode
         ? localControlPlaneHostKey(credentialMode) : hostKey(),
-      credentialMode === 'gateway-key' ? 'isolated' : 'legacy-shared',
+      credentialMode === 'gateway-key' || credentialMode === 'provider-oauth' ? 'isolated' : 'legacy-shared',
     );
     return this.withHostOperation(async () => ({
       key: credentialMode ? key : hostKey(),
       host: credentialMode
         ? await this.getHost(undefined, credentialMode, {
           providerId: options?.providerId,
-          ...(credentialMode === 'gateway-key' ? { localAuthPolicy: 'isolated' as const } : {}),
+          ...(credentialMode === 'gateway-key' || credentialMode === 'provider-oauth'
+            ? { localAuthPolicy: 'isolated' as const } : {}),
           keyOverride: key,
           hostPurpose: 'control-plane',
         })
         : (await this.getUtilityHost()).host,
     }), async (host) => {
       const init = await host.ensureStarted();
-      if (init.codexHome && !options?.providerId) this.codexHome = init.codexHome;
+      // API capability probes use an isolated control plane, not the shared history home.
+      if (init.codexHome && !options?.providerId && credentialMode !== 'provider-oauth') this.codexHome = init.codexHome;
 
       const models: CodexModelListResponse['data'] = [];
       const seenCursors = new Set<string>();
@@ -2908,8 +2910,10 @@ assertRouteCurrent();
 
       // Auth 切换 / logout 可能在分页请求期间 retire 旧 host。旧账号的迟到响应绝不能
       // 覆盖新账号目录；只有仍登记为当前 local host 的结果才允许交给宿主。
-      if (this.hosts.get(key) !== host || !this.deps.onCodexLocalModelsListed) return false;
-      if (options?.providerId) await this.deps.onCodexLocalModelsListed(models, options.providerId);
+      if (this.hosts.get(key) !== host) return false;
+      if (options?.onModelsListed) await options.onModelsListed(models);
+      else if (!this.deps.onCodexLocalModelsListed) return false;
+      else if (options?.providerId) await this.deps.onCodexLocalModelsListed(models, options.providerId);
       else await this.deps.onCodexLocalModelsListed(models);
       return true;
     });

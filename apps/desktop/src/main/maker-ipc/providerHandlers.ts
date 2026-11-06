@@ -2141,6 +2141,7 @@ export function registerProviderHandlers(
             });
             throwIpcError('INTERNAL', 'failed to persist model context limit');
           }
+          deps.broadcastChanged();
           return readContextTargets(targets);
         }),
       );
@@ -2173,6 +2174,7 @@ export function registerProviderHandlers(
             });
             throwIpcError('INTERNAL', 'failed to reset model context limit');
           }
+          deps.broadcastChanged();
           return readContextTargets(targets);
         }),
       );

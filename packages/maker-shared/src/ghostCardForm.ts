@@ -169,6 +169,16 @@ export function readMailCard(html: string): MailCardData | null {
   try { return parseMailCard(JSON.parse(value.replace(/&quot;/g, '"').replace(/&#39;/g, "'").replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&amp;/g, '&'))); }
   catch { return null; }
 }
+/** Host-owned marker on a plugin card that a newer card of the same plugin in the same task replaced.
+ * The Host prepends it after sanitizing; plugin HTML cannot carry data-cindy-* attributes. */
+const SUPERSEDED_MARKER = /^<div data-cindy-superseded-by="([A-Za-z0-9_:.-]{1,128})" hidden><\/div>/;
+export function markGhostCardSuperseded(html: string, by: string): string {
+  return `<div data-cindy-superseded-by="${by}" hidden></div>${html}`;
+}
+/** The card that replaced this one (a generic plugin card or a mail view); views hide replaced cards. */
+export function readGhostCardSupersededBy(html: string): string | undefined {
+  return SUPERSEDED_MARKER.exec(html)?.[1] ?? readMailCard(html)?.supersededBy;
+}
 export function isLegacyMailCard(html: string): boolean {
   return !readMailCard(html) && !!readGhostCardFormChange(html)?.startsWith('mail:change:');
 }

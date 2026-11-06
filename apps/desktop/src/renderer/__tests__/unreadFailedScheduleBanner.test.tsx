@@ -2,6 +2,7 @@
 
 import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { useEffect, useReducer } from 'react';
+import { MemoryRouter, Route, Routes, useLocation } from 'react-router-dom';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { UnreadFailedScheduleBanner } from '@/components/chat/UnreadFailedScheduleBanner';
 import { useReadFailedScheduleRuns } from '@/features/scheduler/hooks/useReadFailedScheduleRuns';
@@ -9,6 +10,10 @@ import { subscribeScheduleRunReadSync } from '@/features/scheduler/lib/scheduleR
 
 vi.mock('react-i18next', () => ({
   useTranslation: () => ({ t: (key: string) => key }),
+}));
+const installedGhosts: unknown[] = [];
+vi.mock('@/cindy-brain/useInstalledGhosts', () => ({
+  readInstalledGhostsSnapshot: () => installedGhosts,
 }));
 vi.mock('@/lib/logger', () => ({
   createLogger: () => ({ warn: vi.fn() }),
@@ -87,6 +92,37 @@ describe('historical failed schedule notice', () => {
       latestFailedRun={{ runId: 'failed', firedAt: 1, failureKind: 'rate-limit', scheduleId: 'schedule' }} />);
     expect(screen.getByText('chat.unreadFailedScheduleBanner.rateLimited')).toBeTruthy();
     expect(screen.queryByTestId('unread-failed-schedule-banner')).not.toBeNull();
+  });
+  // Uninstalling a plugin removed its check script; the banner must say which plugin and
+  // take the user to install it (previously only "checks blocked" plus an exit code).
+  it('names a missing plugin and opens its market page', () => {
+    const Location = () => <span data-testid="location">{useLocation().pathname + useLocation().search}</span>;
+    render(
+      <MemoryRouter initialEntries={['/session']}>
+        <Routes>
+          <Route path="/session" element={<UnreadFailedScheduleBanner dataOwnerId="owner" sessionId="session"
+            latestFailedRun={{ runId: 'failed', firedAt: 1, failureKind: 'precheck',
+              missingPlugin: { ghostId: 'cindy-github', pluginId: 'p1', name: 'GitHub' } }} />} />
+          <Route path="/plugins" element={<Location />} />
+        </Routes>
+      </MemoryRouter>,
+    );
+    expect(screen.getByText('chat.unreadFailedScheduleBanner.pluginMissing')).toBeTruthy();
+    fireEvent.click(screen.getByText('chat.unreadFailedScheduleBanner.installPlugin'));
+    expect(screen.getByTestId('location').textContent).toBe('/plugins?market=p1');
+  });
+  // Review (#8957): a remote task's check runs on another computer; this computer's plugin
+  // pages would fix the wrong machine, so the message stays but the action is not offered.
+  it('does not offer the plugin action for a remote task', () => {
+    render(
+      <MemoryRouter>
+        <UnreadFailedScheduleBanner dataOwnerId="owner" sessionId="session" remote
+          latestFailedRun={{ runId: 'failed', firedAt: 1, failureKind: 'precheck',
+            missingPlugin: { ghostId: 'cindy-github', pluginId: 'p1', name: 'GitHub' } }} />
+      </MemoryRouter>,
+    );
+    expect(screen.getByText('chat.unreadFailedScheduleBanner.pluginMissing')).toBeTruthy();
+    expect(screen.queryByText('chat.unreadFailedScheduleBanner.installPlugin')).toBeNull();
   });
   it('reads on opening even when running or specific errors replace the generic banner', async () => {
     render(<View runIds={['old']} showBanner={false} />);

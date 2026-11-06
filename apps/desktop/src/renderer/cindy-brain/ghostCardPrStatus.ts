@@ -5,6 +5,12 @@
  * 插件卡片在调用结束后是静态快照,PR 的检查状态却随时在变;交给宿主填写后,卡片和标题栏
  * 永远一致,也不必等 Agent 下一轮回写。插件写在里面的内容是兜底:旧版宿主、手机,或这条
  * PR 不在本任务的 PR 列表里(宿主查不到)时原样显示。
+ *
+ * `data-ghost-pr-open-only="owner/repo#123"` 标的是只在 PR 开着时成立的部分(跟进中、操作按钮):
+ * 同一份状态显示已合并或关闭时宿主把它们藏起来,查不到状态时照原样显示。
+ *
+ * `button[data-ghost-task-archive="owner/repo#123"]` 是归档任务按钮,插件写成 display:none:
+ * 这条 PR 已合并或关闭时宿主把它露出来(查不到状态时按插件的 -state 快照),回到开着时再藏起。
  */
 import { Check, CircleMinus, CircleX, Clock, type LucideIcon } from 'lucide-react';
 import { prStatusItemKeys, type PrStatusItemKey, type PrStatusItemTone } from '@cindy/maker-shared';
@@ -12,7 +18,9 @@ import type { PrStatusResult } from '@/lib/gitContext.types';
 import { appIconMarkup, preloadAppIconMarkup } from './ghostCardIcons';
 
 const SLOT_SELECTOR = 'div[data-ghost-pr-status]';
-const SLOT_ATTR_RE = / data-ghost-pr-status="([^"]+)"/;
+const SLOT_ATTR_RE = / data-ghost-(?:pr-status|pr-open-only|task-archive)="([^"]+)"/;
+const OPEN_ONLY_SELECTOR = '[data-ghost-pr-open-only]';
+const TASK_ARCHIVE_SELECTOR = 'button[data-ghost-task-archive]';
 const SLOT_VALUE_RE = /^([A-Za-z0-9_.-]+)\/([A-Za-z0-9_.-]+)#(\d+)$/;
 
 type Tone = PrStatusItemTone;
@@ -24,7 +32,7 @@ export function prStatusSlotKey(value: string): string | null {
   return m ? `${m[1].toLowerCase()}/${m[2].toLowerCase()}#${Number(m[3])}` : null;
 }
 
-/** 从净化后的卡片 html 里取第一个状态位的 key(订阅用;没有状态位返回 null)。 */
+/** 从净化后的卡片 html 里取第一个状态位或 open-only 标记的 key(订阅用;都没有返回 null)。 */
 export function readPrStatusSlotKey(html: string): string | null {
   const m = SLOT_ATTR_RE.exec(html);
   return m ? prStatusSlotKey(m[1]) : null;
@@ -64,16 +72,93 @@ export function prStatusItems(status: Extract<PrStatusResult, { ok: true }>, t: 
 
 /** 状态位被宿主内容替换前的原始子节点:之后查不到状态时据此恢复插件的兜底内容。 */
 const slotFallbacks = new WeakMap<HTMLElement, Node[]>();
+/** 被藏起来的 open-only 元素原本的内联 display,恢复时还原。 */
+const hiddenDisplays = new WeakMap<HTMLElement, { value: string; priority: string }>();
+
+/** PR 已合并或关闭时藏起 open-only 部分;状态回到开着或查不到时还原。可反复调用。 */
+function applyOpenOnly(doc: Document, lookup: (key: string) => PrStatusResult | undefined): void {
+  for (const el of Array.from(doc.querySelectorAll<HTMLElement>(OPEN_ONLY_SELECTOR))) {
+    const key = prStatusSlotKey(el.getAttribute('data-ghost-pr-open-only') ?? '');
+    const status = key ? lookup(key) : undefined;
+    const ended = status?.ok === true && (status.status === 'merged' || status.status === 'closed');
+    const saved = hiddenDisplays.get(el);
+    if (ended && !saved) {
+      hiddenDisplays.set(el, { value: el.style.getPropertyValue('display'), priority: el.style.getPropertyPriority('display') });
+      el.style.setProperty('display', 'none', 'important');
+    } else if (!ended && saved) {
+      hiddenDisplays.delete(el);
+      if (saved.value) el.style.setProperty('display', saved.value, saved.priority);
+      else el.style.removeProperty('display');
+    }
+  }
+}
+
+/**
+ * 归档任务按钮:PR 已合并或关闭时露出,否则藏起。返回是否有一颗露出的按钮可以在用户看过后
+ * 自动归档——要求插件标了 -auto,且宿主自己查到这条 PR 已合并(快照和「已关闭」都不算)。
+ */
+function applyTaskArchive(doc: Document, lookup: (key: string) => PrStatusResult | undefined): boolean {
+  let autoArchive = false;
+  for (const el of Array.from(doc.querySelectorAll<HTMLElement>(TASK_ARCHIVE_SELECTOR))) {
+    const key = prStatusSlotKey(el.getAttribute('data-ghost-task-archive') ?? '');
+    const status = key ? lookup(key) : undefined;
+    const live = status?.ok === true ? status.status : undefined;
+    const state = live ?? el.getAttribute('data-ghost-task-archive-state');
+    const ended = !!key && (state === 'merged' || state === 'closed');
+    if (ended) el.style.setProperty('display', 'inline-flex', 'important');
+    else el.style.setProperty('display', 'none', 'important');
+    if (ended && live === 'merged' && el.hasAttribute('data-ghost-task-archive-auto')) autoArchive = true;
+  }
+  return autoArchive;
+}
+
+const AUTO_ARCHIVE_HINT_ATTR = 'data-x-auto-archive-hint';
+
+/**
+ * 自动归档待生效时,在露出的归档按钮左边放一行宿主自己的提示:「离开后自动归档 · 本次不归档」。
+ * 文字与行为都归宿主(插件只标了 -auto);不再待生效时去掉。可反复调用。
+ */
+export function fillGhostCardTaskAutoArchiveHint(
+  doc: Document,
+  pending: boolean,
+  labels: { pending: string; cancel: string },
+  onCancel: () => void,
+): void {
+  for (const el of Array.from(doc.querySelectorAll(`[${AUTO_ARCHIVE_HINT_ATTR}]`))) el.remove();
+  if (!pending) return;
+  const button = Array.from(doc.querySelectorAll<HTMLElement>(TASK_ARCHIVE_SELECTOR))
+    .find((el) => el.hasAttribute('data-ghost-task-archive-auto') && el.style.display !== 'none');
+  if (!button?.parentElement) return;
+  const hint = doc.createElement('span');
+  hint.setAttribute(AUTO_ARCHIVE_HINT_ATTR, '');
+  hint.style.cssText = 'display:inline-flex;align-items:center;gap:2px;margin-right:6px;font-size:12px;white-space:nowrap;color:var(--text-secondary)';
+  const label = doc.createElement('span');
+  label.textContent = labels.pending;
+  const cancel = doc.createElement('button');
+  cancel.type = 'button';
+  cancel.textContent = labels.cancel;
+  cancel.style.cssText = 'height:32px;padding:0 8px;border:0;border-radius:9999px;background:transparent;' +
+    'font:inherit;font-weight:500;color:var(--text-primary);cursor:pointer';
+  cancel.addEventListener('click', (e) => {
+    e.stopPropagation();
+    onCancel();
+  });
+  hint.append(label, doc.createTextNode(' · '), cancel);
+  button.parentElement.insertBefore(hint, button);
+}
 
 /**
  * 用宿主的 PR 状态替换卡片文档里的状态位。查不到状态(或状态失败、一项都没有)时保留插件的
  * 兜底内容——已经换成宿主内容的状态位会恢复成它;同一份文档可反复调用(状态刷新时重填)。
+ * 返回卡片上是否有可在看过后自动归档的已合并 PR(见 applyTaskArchive)。
  */
 export function fillGhostCardPrStatus(
   doc: Document,
   lookup: (key: string) => PrStatusResult | undefined,
   t: Label,
-): void {
+): boolean {
+  applyOpenOnly(doc, lookup);
+  const autoArchive = applyTaskArchive(doc, lookup);
   for (const slot of Array.from(doc.querySelectorAll<HTMLElement>(SLOT_SELECTOR))) {
     const key = prStatusSlotKey(slot.getAttribute('data-ghost-pr-status') ?? '');
     const status = key ? lookup(key) : undefined;
@@ -114,4 +199,5 @@ export function fillGhostCardPrStatus(
     }
     slot.replaceChildren(row);
   }
+  return autoArchive;
 }

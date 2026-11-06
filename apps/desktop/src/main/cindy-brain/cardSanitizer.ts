@@ -314,6 +314,10 @@ function sanitizeAttrs(tag: string, attrs: ParsedAttrs, opts: CssOpts): string |
   // 替换其内容(ghostCardPrStatus);插件写在里面的是兜底快照。值不合格只丢属性。
   const prStatus = tag === 'div' ? (attrs['data-ghost-pr-status'] ?? '').trim() : '';
   if (GHOST_CARD_PR_STATUS_RE.test(prStatus)) parts.push(` data-ghost-pr-status="${escapeAttr(prStatus)}"`);
+  // 只在 PR 开着时成立的部分(data-ghost-pr-open-only="owner/repo#123"):挂 div / span / button。
+  // 标题栏同一份状态显示这条 PR 已合并或关闭后,宿主把它藏起来(电脑)或不投影(手机)。
+  const prOpenOnly = tag === 'div' || tag === 'span' || tag === 'button' ? (attrs['data-ghost-pr-open-only'] ?? '').trim() : '';
+  if (GHOST_CARD_PR_STATUS_RE.test(prOpenOnly)) parts.push(` data-ghost-pr-open-only="${escapeAttr(prOpenOnly)}"`);
   // 手机端呈现提示(只挂 button):data-ghost-primary 画成主按钮;data-ghost-toggle="on|off"
   // 画成原生开关。电脑端不读,卡内样式照旧由插件决定。
   if (tag === 'button' && attrs['data-ghost-primary'] !== undefined) parts.push(' data-ghost-primary=""');
@@ -352,6 +356,20 @@ function sanitizeAttrs(tag: string, attrs: ParsedAttrs, opts: CssOpts): string |
     const linkDecl = explicit !== '' || tag !== 'a' ? explicit : (attrs['href'] ?? '').trim();
     if (isGhostCardLinkAllowed(linkDecl)) {
       parts.push(` data-ghost-link="${escapeAttr(linkDecl)}"`);
+    }
+  }
+  // 归档任务按钮(data-ghost-task-archive="owner/repo#123"):只挂没有动作、没有外链的 button。
+  // 点击不回传插件,由宿主走与侧边栏相同的归档流程,只作用于卡片所在的任务;PR 已合并或
+  // 关闭时宿主才把它露出来(插件写 display:none,旧版宿主不认属性就一直藏着)。
+  // -state 是插件读到的 PR 状态快照(宿主查不到状态时用);-auto 表示用户开了「合并后自动
+  // 归档」,宿主自己确认已合并、用户看过并离开后才归档。
+  if (tag === 'button' && !actionValid && !parts.some(p => p.startsWith(' data-ghost-link='))) {
+    const archive = (attrs['data-ghost-task-archive'] ?? '').trim();
+    if (GHOST_CARD_PR_STATUS_RE.test(archive)) {
+      parts.push(` data-ghost-task-archive="${escapeAttr(archive)}"`);
+      const state = (attrs['data-ghost-task-archive-state'] ?? '').trim();
+      if (state === 'merged' || state === 'closed') parts.push(` data-ghost-task-archive-state="${state}"`);
+      if (attrs['data-ghost-task-archive-auto'] !== undefined) parts.push(' data-ghost-task-archive-auto=""');
     }
   }
   if (tag === 'button') {

@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { validateGhostManifest as validateProtocolManifest } from '@cindy/plugin-protocol';
 
 import {
   GHOST_CARD_ACTION_ID_RE,
@@ -5144,5 +5145,26 @@ describe('liveScreen declaration', () => {
     );
     const alone = validateGhostManifest({ ...base, liveScreen: true });
     expect(alone.ok).toBe(false);
+  });
+});
+
+describe('ghost · readme 详细介绍声明', () => {
+  // protocol-compatibility §3:Desktop 运行时 validator 与协议正本对同一 fixture 结论一致;
+  // 两边漂移会让 Forge 能打包、市场或安装却拒收(或反之)。
+  it.each<[string, unknown, boolean]>([
+    ['按语言指向包内 Markdown', { en: 'README.md', 'zh-CN': 'docs/README.zh-CN.md' }, true],
+    ['多个语言共用一份文件', { en: 'README.md', ja: 'README.md' }, true],
+    ['缺少英文回退', { 'zh-CN': 'README.zh-CN.md' }, false],
+    ['宿主不支持的语言', { en: 'README.md', it: 'README.it.md' }, false],
+    ['不是 .md 文件', { en: 'README.txt' }, false],
+    ['越出安装目录', { en: '../README.md' }, false],
+    ['大小写不同的同一路径', { en: 'README.md', ja: 'readme.md' }, false],
+    ['不是对象', 'README.md', false],
+  ])('%s', (_name, readme, ok) => {
+    const raw = { ...goodManifest(), readme };
+    const desktop = validateGhostManifest(raw);
+    expect(desktop.ok).toBe(ok);
+    expect(validateProtocolManifest(raw).ok).toBe(ok);
+    if (desktop.ok) expect(desktop.manifest.readme).toEqual(readme);
   });
 });

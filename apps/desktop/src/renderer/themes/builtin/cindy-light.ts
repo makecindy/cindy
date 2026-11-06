@@ -1,6 +1,7 @@
 import type { Theme } from '../types';
 import cindyLogoLight from '../../assets/cindy-logo-light.png';
 import { CINDY_ACRYLIC_WINDOW_BACKING } from '../../../shared/windowBackdrop';
+import { filledButtonHover, filledButtonPressed } from '../filledButtonStates';
 
 /*
  * CINDY Light — 品牌红 CTA + 暖象牙底(#F2F2ED)+ AA 正文。
@@ -122,7 +123,6 @@ const GENERATED_OVERRIDES = {
   "update-btn-border": "#3C3F43", // E1D 中性底(实心胶囊,与 bg 同色)
   "update-btn-bg": "#3C3F43", // E1D §15.10 反相中性:light 深底,承载浅字
   "update-btn-text": "#FCFCFC", // E1D 中性字(#FCFCFC on #3C3F43 = 10.32:1)
-  "update-btn-hover": "#2E3237", // E1D §15.10 四态 hover(实心,非 alpha 叠加)
   "accent-foreground": "0.0 0.0% 0.0% / 0.88", // 墨水 黑 88%: 正文(2026-10-22 用户裁决,取代实色灰)
   "panel-bg": "#F2F2ED", // 直映: 页底(暖象牙)
   "primary": "214.3 5.5% 24.9%", // E1D C 类裁决 3:反相中性 HSL
@@ -151,8 +151,6 @@ const GENERATED_OVERRIDES = {
   "send-btn-icon": "#FCFCFC", // R4 反相中性字
   "send-btn-disabled-bg": "#444242", // R4 唤醒态禁用灰底(§2.6)
   "send-btn-disabled-icon": "#585555", // R4 禁用灰字(§2.6 send 图标)
-  "send-btn-hover-bg": "#2E3237", // E1D 反相中性 hover(lead 四态)
-  "send-btn-pressed-bg": "#25282C", // E1D 反相中性 pressed(lead 四态)
   "ask-badge-bg": "rgba(0, 0, 0, 0.05)", // 墨水 黑 5%: 悬停/标签底(2026-10-22 用户裁决,取代实色灰)
   "ask-header-chip-bg": "rgba(0, 0, 0, 0.08)", // 墨水 黑 8%: 选中/按下(2026-10-22 用户裁决,取代实色灰)
   "cmd-palette-item-hover": "rgba(0, 0, 0, 0.05)", // 墨水 黑 5%: 悬停/标签底(2026-10-22 用户裁决,取代实色灰)
@@ -202,6 +200,8 @@ export const cindyLight: Theme = {
   colors: {
     ...GENERATED_OVERRIDES,
     "surface-translucent-sidebar": CINDY_ACRYLIC_WINDOW_BACKING.light,
+    "update-btn-hover": filledButtonHover('var(--update-btn-bg)'),
+    "update-btn-pressed": filledButtonPressed('var(--update-btn-bg)'),
   },
   // U5 品牌版横向 logo：黑字+红箭头，浅底可见。
   brand: { logo: { src: cindyLogoLight } },

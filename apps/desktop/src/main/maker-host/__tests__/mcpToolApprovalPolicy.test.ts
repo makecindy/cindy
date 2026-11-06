@@ -10,6 +10,17 @@ import {
 afterEach(() => setGhostToolApprovalResolver(null));
 
 describe('desktop Claude read-only allowlist', () => {
+  // Account release disables another device's receiver; both direct and progressive
+  // routes must pass the normal write review instead of trusted-server read approval.
+  it('reviews Webhook release and restoration while preserving read access', () => {
+    for (const tool of ['schedule_webhook_release', 'schedule_webhook_restore']) {
+      expect(getDesktopMcpToolApprovalPolicy({ serverName: 'cindy_scheduler', toolName: tool })).toBe('prompt-each-time');
+      expect(getDesktopMcpToolApprovalPolicy({ serverName: 'cindy_scheduler', toolName: 'call_tool',
+        toolParams: { name: tool, args: { id: 'whk_old' } } })).toBe('prompt-each-time');
+    }
+    expect(getDesktopMcpToolApprovalPolicy({ serverName: 'cindy_scheduler', toolName: 'call_tool',
+      toolParams: { name: 'schedule_webhook_list', args: {} } })).toBe('auto-approve');
+  });
   it('allows only explicitly reviewed read-only tools', () => {
     const tools = getDesktopClaudeReadOnlyAllowedTools();
 
@@ -90,6 +101,15 @@ describe('desktop Claude read-only allowlist', () => {
 });
 
 describe('desktop MCP approval policy', () => {
+  // Shared-task links grant full task access; both MCP routes must reach normal
+  // per-call task approval rather than inheriting a remembered helper grant.
+  it('keeps native invitations on the task action approval path', () => {
+    for (const call of [
+      { toolName: 'create_shared_task_invitation', toolParams: {} },
+      { toolName: 'call_tool', toolParams: { name: 'create_shared_task_invitation', args: {} } },
+      { toolName: 'call_tool', toolParams: { name: 'create_shared_task_invitation', args: '{}' } },
+    ]) expect(getDesktopMcpToolApprovalPolicy({ serverName: 'cindy_helper', ...call })).toBe('prompt-each-time');
+  });
   // Contract: names never grant approval. Existing Art/contacts cases lacked local and
   // unverified instances; unit test exercises the policy used by all three harnesses.
   it('uses the resolved instance approval and fails closed on ambiguous or unverified names', () => {

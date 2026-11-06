@@ -520,6 +520,7 @@
     "searchMembers": "멤버 검색",
     "membersNoMatch": "‘{{query}}’와 일치하는 멤버가 없어요",
     "you": "나",
+    "companionOf": "{{name}}의 파트너",
     "teammateTag": "동료",
     "paused": "일시 중지됨",
     "accessNone": "소유자만 사용",

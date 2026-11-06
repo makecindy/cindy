@@ -475,6 +475,7 @@ SSH 项目的新任务草稿允许在发送前改选，模型、档位与 Fast �
 每组 `prices` 沿用原价格结构与官方证据：币种、每百万 tokens 单价、缓存读/写及 1h 写入、
 标准/Fast 等变体、输入区间 `[minInputTokens, maxInputTokens)`、生效日期区间。
 缺字段保持未知，明确的 0 才表示零单价；缓存存储每小时费用不能写成缓存写入单价。
+客户端估价时按请求拆分缓存写入：上游报告 1h TTL 写入量（Anthropic `cache_creation.ephemeral_1h_input_tokens`）时这部分按 1h 写入价计；报价没有 1h 写入价（如 Gateway）时沿用缓存写入价。设置里的自定义缓存写入价按参考价的 1h/5m 倍率带动 1h 价。
 
 `resolveBaseModelReferencePrice` 按公共 ID/唯一 alias 读取，不依赖供应商名单。
 多市场/币种必须明确选择到唯一有效价格；无匹配或有歧义返回未知。

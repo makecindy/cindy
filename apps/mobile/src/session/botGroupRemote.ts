@@ -162,6 +162,9 @@ function parseMember(value: unknown): BotGroupMemberView | null {
   return {
     botId,
     name,
+    ...(text(record.displayName, MAX_NAME) ? { displayName: text(record.displayName, MAX_NAME)! } : {}),
+    ...(text(record.nickname, MAX_NAME) ? { nickname: text(record.nickname, MAX_NAME)! } : {}),
+    ...(text(record.ownerName, MAX_NAME) ? { ownerName: text(record.ownerName, MAX_NAME)! } : {}),
     ...(id(record.actorId) ? { actorId: id(record.actorId)! } : {}),
     ...(record.actorKind === 'human' || record.actorKind === 'bot' || record.actorKind === 'integration' ? { actorKind: record.actorKind } : {}),
     ...(typeof record.isOwned === 'boolean' ? { isOwned: record.isOwned } : {}),
@@ -413,6 +416,7 @@ export function parseBotGroupChatData(value: unknown): BotGroupRemoteChatData | 
     supportsMemberRemoval: record.supportsMemberRemoval === true,
     supportsSettingsManagement: record.supportsSettingsManagement === true,
     supportsReadReceipts: record.supportsReadReceipts === true,
+    ...(record.supportsLocalReadSync === true ? { supportsLocalReadSync: true } : {}),
     supportsPersonalMask: record.supportsPersonalMask === true,
     replyMode: record.replyMode === 'mentioned' ? 'mentioned' : 'all',
     speakingMode: record.speakingMode === 'sequential' ? 'sequential' : 'auto',

@@ -1,4 +1,34 @@
 {
+  "sharedTaskRecovery": {
+    "title": "Fortsetzen auf dem ursprünglichen Computer nicht möglich",
+    "description": "Wähle einen anderen Computer oder Anbieter, um mit einer Kontextübergabe fortzufahren. Deine Nachrichten bleiben erhalten, der vollständige Ausführungszustand des ursprünglichen Computers wird jedoch nicht übertragen.",
+    "choose": "Anderen Computer wählen",
+    "cancel": "Hier bleiben",
+    "stage": {
+      "owner": "Fehler beim Kontakt mit dem freigebenden Computer.",
+      "allocation": "Fehler bei der Rechtevergabe für den ursprünglichen Ausführungscomputer.",
+      "executor": "Fehler beim Prüfen der device-link-Verbindung des Ausführungscomputers.",
+      "capability": "Fehler beim Prüfen der Fähigkeiten des Ausführungscomputers.",
+      "authorization": "Fehler beim Einrichten der Ausführungsberechtigung.",
+      "unknown": "Der fehlgeschlagene Schritt wurde nicht gemeldet."
+    },
+    "reason": {
+      "offline": "Der in diesem Schritt kontaktierte Computer wurde als offline gemeldet. Andere Aufgaben können auf anderen Computern laufen.",
+      "timeout": "Die Anfrage hat das Zeitlimit überschritten. Der fehlgeschlagene Schritt zeigt den kontaktierten Dienst; ein Ausfall der Direktverbindung oder des Relays ist nicht bestätigt.",
+      "relay": "Die device-link-Verbindung ist noch nicht bereit oder wurde geschlossen. Bei Ausfall nur der Direktverbindung wird normalerweise automatisch das Relay genutzt.",
+      "denied": "Der Zugriff wurde verweigert oder die Fernsteuerung deaktiviert. Erneutes Versuchen umgeht diese Einschränkung nicht.",
+      "model": "Der freigegebene Anbieter oder das Modell ist für diese Sitzung nicht zugelassen.",
+      "budget": "Der Anbieter hat ein Nutzungslimit oder unzureichende Quota gemeldet. Ein anderer Computer kann dieselbe Quota nutzen.",
+      "capacity": "Die Kapazität für Sitzungen oder Verbindungen ist erreicht. Schließe ungenutzte Sitzungen oder wähle einen anderen Computer.",
+      "unsupported": "Der Ausführungscomputer unterstützt die erforderlichen Funktionen für freigegebene Sitzungen nicht.",
+      "authorization": "Die Ausführungsberechtigung konnte nicht eingerichtet werden. Dies beweist nicht, dass der Computer offline ist.",
+      "history": "Der ursprüngliche Sitzungsort ist nicht nutzbar. Der native Verlauf kann nicht direkt auf einem anderen Computer geöffnet werden.",
+      "policy": "Die Nutzungsregeln der Freigabe erfordern eine Echtzeitprüfung über den freigebenden Computer. Direkte Ausführung kann sie nicht durchsetzen; das bedeutet kein aufgebrauchtes Guthaben.",
+      "unknown": "Der freigebende Computer hat keinen genauen Grund geliefert. Offline-Status, Quota sowie Direkt- oder Relay-Pfad sind unbestätigt.",
+      "rate": "Der Dienst begrenzt Anfragen oder ist überlastet. Warte die Abkühlzeit ab; ein anderer Computer kann dasselbe Limit teilen.",
+      "service": "Der Berechtigungsdienst für die Freigabe ist nicht erreichbar oder hat einen Fehler zurückgegeben. Der Ausführungscomputer ist nicht nachweislich offline."
+    }
+  },
   "providerAccountUsage": {
     "kimi": {
       "refresh": "Kontingent aktualisieren",
@@ -2351,6 +2381,9 @@
     "agentIsland": {
       "title": "Agent Island",
       "unsupported": "Agent Island erfordert macOS 14 oder neuer.",
+      "subtleRemindersLabel": "Dezente Hinweise",
+      "subtleRemindersHint": "Bei neuen Nachrichten, Rückfragen oder Fehlern ändert sich das Symbol, statt eine Benachrichtigungskarte unter der Insel einzublenden. Per Klick auf die Insel öffnet sich die vollständige Aufgabenliste.",
+      "subtleRemindersFailed": "Die Hinweiseinstellungen konnten nicht gespeichert werden. Bitte versuche es erneut.",
       "enableLabel": "Agent Island anzeigen",
       "enableHint": "Zeigt laufende, zu beantwortende und ungelesene erledigte Aufgaben oben im Display an. Durch die Aktivierung werden die entsprechenden Systembenachrichtigungen unterdrückt, um doppelte Warnungen zu vermeiden.",
       "enableAria": "Agent Island ein-/ausschalten",
@@ -3790,7 +3823,12 @@
           "stop": "Test stoppen"
         },
         "fetch": {
-          "button": "Modellliste abrufen",
+          "selectedCount": "{{count}} Modelle ausgewählt",
+          "availableCount": "{{count}} verfügbare Modelle abgerufen",
+          "notFetched": "Modellliste noch nicht abgerufen",
+          "failedRetry": "Modellliste konnte nicht abgerufen werden. Erneut versuchen.",
+          "retryFailed": "Dieser Abruf ist fehlgeschlagen. Erneut versuchen.",
+          "button": "Modelle abrufen und auswählen",
           "fetching": "Modelle werden abgerufen…",
           "needBaseUrl": "Zuerst die Basis-URL eingeben",
           "failed": "Modellliste konnte nicht abgerufen werden",
@@ -3919,6 +3957,8 @@
         "disabledGroup": "Deaktiviert",
         "enableAllModels": "Alle aktivieren",
         "priceOverride": {
+          "resetShort": "Zurücksetzen",
+          "referenceDetails": "Referenzpreisdetails",
           "menu": "API-Preisschätzung bearbeiten",
           "title": "API-Preisschätzung für {{model}}",
           "description": "Dient nur zur Schätzung der Nutzung über deine eigene API oder dein Abonnement. Die Rechnung des Anbieters wird dadurch nicht geändert.",
@@ -3970,6 +4010,7 @@
             "hint": "Gilt für die Images-Verbindung von {{agent}}. Nur Funktionen angeben, die die API tatsächlich unterstützt. Nach dem Speichern die Art-Details erneut öffnen."
           },
           "capabilityHint": "Verwendet von diesem Anbieter deklarierte Funktionen. Die Bildunterstützung greift auf die Modellbenennung zurück, wenn sie nicht deklariert ist.",
+          "imageInputDefault": "{{value}} (Standard)",
           "imageInput": "Bildeingabe",
           "imageInputMixed": "Je nach Engine unterschiedlich",
           "supported": "Unterstützt",
@@ -5671,6 +5712,7 @@
           "checking": "Nach Updates wird gesucht…",
           "upToDate": "Auf dem neuesten Stand",
           "checkFailed": "Suche nach Updates fehlgeschlagen",
+          "rateLimited": "GitHub begrenzt gerade die Update-Abfragen",
           "lastChecked": "Zuletzt geprüft: {{time}}",
           "check": "Nach Updates suchen",
           "retry": "Erneut versuchen",
@@ -6734,8 +6776,6 @@
             "task": "Aufgabentaste",
             "action": "Aktionstaste"
           },
-          "lightingLimit": "Die Firmware kann die ersten 6 Aufgabentasten in der Reihenfolge der Platine unabhängig voneinander beleuchten. Zusätzliche Aufgabentasten wechseln weiterhin Aufgaben.",
-          "unlitKey": "Diese Taste folgt auf die ersten 6 und hat daher keine eigene Statusleuchte.",
           "taskHint": "Eine transparente Tastenkappe wird empfohlen, damit der Aufgabenstatus in verschiedenen Farben angezeigt werden kann."
         },
         "commandKeys": {
@@ -7782,6 +7822,7 @@
         "customSlotAsleep": "Dieses Plugin ist deaktiviert. Aktiviere es, um hier seine Einstellungen zu sehen.",
         "descriptionExpand": "Mehr anzeigen",
         "descriptionCollapse": "Weniger anzeigen",
+        "readmeTitle": "Über",
         "useAction": "Plugin verwenden",
         "chatAction": "Chat",
         "enabledLabel": "Aktiviert",
@@ -8372,6 +8413,26 @@
         "title": "„{{name}}“ löschen?",
         "message": "Neue Sitzungen laden diesen MCP nicht mehr.",
         "confirm": "Löschen"
+      },
+      "duplicates": {
+        "title": "Möglicherweise doppelte MCP-Verbindungen",
+        "description": "Cindy und deine Claude-Code-Benutzerkonfiguration enthalten gleiche oder ähnliche Verbindungen, die Werkzeuge doppelt laden könnten. Wähle die gewünschte Quelle oder behalte im Zweifel beide.",
+        "scope": "Gilt nur für normale Claude-Code-Aufgaben in Cindy auf diesem Computer, ab der nächsten Agent-Sitzung. Deine Claude-Code-Konfiguration bleibt unverändert. Zusammenhängende Duplikate verwenden dieselbe Auswahl.",
+        "unavailable": "Ein Teil der Konfiguration konnte nicht gelesen werden. Die Verbindungen bleiben unverändert. Beim erneuten Öffnen dieser Seite wird nochmals geprüft.",
+        "endpoint": "Gleiche Verbindungsadresse",
+        "similar": "Ähnliche Verbindungsadressen",
+        "keep": {
+          "both": "Beide Quellen dieser Gruppe behalten"
+        },
+        "selected": {
+          "cindy": "Cindy-Verbindung ausgewählt",
+          "claude": "Claude-Code-Verbindung ausgewählt",
+          "both": "Beide Quellen dieser Gruppe werden beibehalten"
+        },
+        "reset": "Erneut wählen",
+        "saveFailed": "Speichern fehlgeschlagen. Die Verbindungen könnten sich geändert haben. Wähle erneut aus der aktuellen Liste.",
+        "keepThis": "Diese Verbindung behalten",
+        "keepThese": "Diese Verbindungen behalten"
       }
     },
     "remotePermission": {
@@ -13002,7 +13063,7 @@
       "codexUsageLimit": "Das verbundene Codex-Konto hat sein Nutzungslimit erreicht. Warte, bis das Limit zurückgesetzt wird, oder wechsle vor dem erneuten Versuch zu einem anderen verfügbaren Konto.",
       "gatewayQuotaExhausted": "Dein Cindy AI-Guthaben ist aufgebraucht. Lade Guthaben auf, um fortzufahren.",
       "viewBalance": "Guthaben anzeigen",
-      "viewBalanceTitle": "Öffne „Nutzung & Abrechnung“, um dein Guthaben zu prüfen und aufzuladen",
+      "viewBalanceTitle": "Öffne „Nutzung und Abrechnung“, um dein Guthaben zu prüfen und aufzuladen",
       "credentialSwitchBusy": "Eine andere Codex-Aufgabe läuft noch. Daher kann der Anbieter für diese Sitzung noch nicht angewendet werden (der gemeinsam genutzte Codex-Prozess muss neu gestartet werden). Versuch es erneut, sobald diese Aufgaben abgeschlossen sind.",
       "accountBoundaryPending": "Cindy stellt den Kontostatus noch um. Daher kann diese Aufgabe noch nicht starten. Warte kurz und klicke dann auf „Erneut versuchen“. Falls das weiterhin passiert, starte Cindy neu.",
       "codexThreadStale": "Der Codex-Authentifizierungsmodus wurde geändert – diese Sitzung kann nicht fortgesetzt werden. Starte eine neue Sitzung, um ihn anzuwenden.",
@@ -13101,6 +13162,12 @@
       "text": "Ein automatischer Durchlauf ist fehlgeschlagen.",
       "precheck": "Automatische Prüfungen sind vorübergehend blockiert.",
       "rateLimited": "Automatische Prüfungen sind wegen eines Anfragelimits vorübergehend blockiert.",
+      "pluginMissing": "Automatische Prüfungen sind blockiert: Das Plugin „{{name}}“ ist nicht installiert. Nach der Installation laufen sie automatisch weiter.",
+      "pluginMissingUnnamed": "Automatische Prüfungen sind blockiert: Ein benötigtes Plugin ist nicht installiert. Nach der Installation laufen sie automatisch weiter.",
+      "pluginDisabled": "Automatische Prüfungen sind blockiert: Das Plugin „{{name}}“ ist deaktiviert. Nach dem Aktivieren laufen sie automatisch weiter.",
+      "pluginDisabledUnnamed": "Automatische Prüfungen sind blockiert: Ein benötigtes Plugin ist deaktiviert. Nach dem Aktivieren laufen sie automatisch weiter.",
+      "installPlugin": "Plugin installieren",
+      "openPlugin": "Plugin öffnen",
       "dismissTitle": "Hinweis auf früheren Fehler schließen"
     },
     "worktreeRestoreBanner": {
@@ -13391,7 +13458,7 @@
         "empty": "Keine Befehle verfügbar."
       },
       "cost": {
-        "title": "Sitzungskosten",
+        "title": "Sitzungsnutzung",
         "tokensUsed": "Verwendete Tokens (dieser Dialogschritt)"
       },
       "pwd": {
@@ -13913,7 +13980,11 @@
       "mailAttach": "Anhang hinzufügen",
       "mailRemoveAttachment": "{{name}} entfernen",
       "mailUpdated": "Entwurf aktualisiert (schreibgeschützt)",
-      "mailLegacy": "Entwurfsverlauf (schreibgeschützt)"
+      "mailLegacy": "Entwurfsverlauf (schreibgeschützt)",
+      "taskAutoArchived": "„{{title}}“ archiviert",
+      "taskAutoArchivedUndo": "Rückgängig",
+      "taskAutoArchivePending": "Wird beim Verlassen archiviert",
+      "taskAutoArchiveCancel": "Diesmal behalten"
     },
     "ghostHook": {
       "blockedFallback": "Nachricht von einem Plugin blockiert; nicht gesendet",
@@ -14690,7 +14761,7 @@
       "branchTooltip": "Aktueller Branch: {{branch}}",
       "pr": {
         "status": {
-          "open": "Öffnen",
+          "open": "Offen",
           "draft": "Entwurf",
           "merged": "Zusammengeführt",
           "closed": "Geschlossen"
@@ -14831,7 +14902,9 @@
           "summaryAria": "Zusammenfassung von MR !{{number}}",
           "urlPlaceholder": "GitHub-PR- oder GitLab-MR-Link",
           "notFound": "MR nicht gefunden oder für das aktuelle Konto nicht sichtbar"
-        }
+        },
+        "merge": "Zusammenführung",
+        "conflicts": "Konflikte"
       }
     },
     "schedule": {
@@ -15225,7 +15298,8 @@
         "resume": "Fortsetzen",
         "pause": "Pausieren",
         "deleteAutomation": "Automatisierung löschen"
-      }
+      },
+      "tagWebhook": "Webhook"
     },
     "detail": {
       "manualTrigger": "Manueller Auslöser",
@@ -15300,7 +15374,7 @@
         "titleCreate": "Automatisierung erstellen",
         "titleProjectCreate": "Neue Projektautomatisierung",
         "titleProjectEdit": "Projektautomatisierung bearbeiten",
-        "subtitle": "Führe einen Prompt nach Zeitplan mit Claude, Codex oder Pi aus.",
+        "subtitle": "Wählen, wann eine KI-Sitzung oder ein Skript ausgeführt wird.",
         "subtitleFromGhost": "\"{{name}}\" bittet dich, eine Automatisierung zu erstellen. Wähle ein Modell und speichere sie, um sie zu aktivieren.",
         "save": "Speichern",
         "create": "Erstellen",
@@ -15348,7 +15422,7 @@
       },
       "fields": {
         "title": "Titel",
-        "schedule": "Zeitplan",
+        "schedule": "Auslöser",
         "notify": "Benachrichtigen",
         "prompt": "Prompt",
         "once": "Einmalig",
@@ -15464,7 +15538,87 @@
         "preRunPluginRequired": "Wähle ein Plugin für die Vorabprüfung",
         "templateParamRequired": "{{label}} eingeben",
         "templateApplyFailed": "Vorlage konnte nicht angewendet werden. Prüfe die Parameter und versuche es erneut."
-      }
+      },
+      "layout": {
+        "content": "Auszuführender Inhalt",
+        "notifications": "Benachrichtigungen und stille Ausführung",
+        "contentTab": "Inhalt und Auslöser",
+        "optionsTab": "Ausführungsoptionen",
+        "sections": "Automatisierungseinstellungen"
+      },
+      "webhook": {
+        "quotaHint": "Webhook-Empfänge sind pro Tag begrenzt, und Filter hier verringern die Anzahl nicht. Wählen Sie beim Absender, etwa GitHub, nur die benötigten Ereignisse aus.",
+        "sourceLabel": "Absender",
+        "sourceCustom": "Benutzerdefiniert",
+        "customLabel": "Format (JSON)",
+        "customHint": "Beschreibe in JSON, wie Anfragen signiert werden und wo Ereignisname und Zustellungs-ID stehen.",
+        "customInvalid": "Das benutzerdefinierte Format ist ungültig. Prüfe das JSON.",
+        "signedLabel": "Signaturen prüfen",
+        "signedHint": "Nur Anfragen von einem Absender annehmen, der das Secret kennt.",
+        "unsignedWarning": "Ohne Signaturen kann jeder mit der Adresse diese Aufgabe auslösen und dein tägliches Webhook-Kontingent verbrauchen. Wenn die Adresse bekannt wird, ändere sie in den Aufgabendetails.",
+        "eventPicker": {
+          "label": "Relevante Ereignisse",
+          "choose": "Ereignisse auswählen",
+          "selected": "{{count}} ausgewählt",
+          "all": "Alle Ereignisse",
+          "search": "Ereignisse suchen",
+          "customGroup": "Weitere ausgewählte Ereignisse",
+          "noResults": "Keine passenden Ereignisse. Unter den erweiterten Optionen hinzufügen.",
+          "noPresets": "Diese Quelle hat keinen festen Ereigniskatalog. Alle Ereignisse empfangen oder Namen unter den erweiterten Optionen hinzufügen.",
+          "custom": "Eigenes Ereignis (erweitert)",
+          "customLabel": "Ereignisname",
+          "invalid": "1–100 Buchstaben, Ziffern oder _ . : - verwenden; jeweils ein Ereignis hinzufügen.",
+          "add": "Hinzufügen",
+          "limit": "Höchstens 32 Ereignisse auswählen.",
+          "chooseOne": "Mindestens ein Ereignis oder ausdrücklich Alle Ereignisse auswählen.",
+          "cancel": "Abbrechen",
+          "apply": "Anwenden",
+          "remove": "{{name}} entfernen",
+          "groups": {
+            "issues": "Issues",
+            "pullRequests": "Pull Requests",
+            "issueComments": "Issue-/PR-Kommentare",
+            "reviews": "PR-Reviews",
+            "checks": "Prüfreihen",
+            "workflows": "Workflow-Ausführungen",
+            "repository": "Repository",
+            "releases": "Releases",
+            "mergeRequests": "Merge Requests",
+            "comments": "Kommentare",
+            "pipelines": "Pipelines",
+            "projects": "Projekte",
+            "payments": "Zahlungen",
+            "checkout": "Checkout",
+            "invoices": "Rechnungen",
+            "subscriptions": "Abonnements"
+          },
+          "actions": {
+            "all": "Alle Änderungen",
+            "created": "Erstellt",
+            "closed": "Geschlossen",
+            "reopened": "Wieder geöffnet",
+            "edited": "Bearbeitet",
+            "commitsUpdated": "Commits aktualisiert",
+            "submitted": "Review eingereicht",
+            "completed": "Abgeschlossen",
+            "pushed": "Code gepusht",
+            "published": "Veröffentlicht",
+            "merged": "Zusammengeführt",
+            "updated": "Aktualisiert",
+            "tagsChanged": "Tags gepusht",
+            "declined": "Abgelehnt",
+            "deleted": "Gelöscht",
+            "succeeded": "Erfolgreich",
+            "failed": "Fehlgeschlagen",
+            "paid": "Bezahlt"
+          }
+        }
+      },
+      "trigger": {
+        "label": "Auslöseart",
+        "timed": "Zeitgesteuert"
+      },
+      "runSettings": "Ausführungseinstellungen"
     },
     "chips": {
       "selectProject": "Projekt auswählen",
@@ -15663,6 +15817,91 @@
           "description": "Monatliche Prüfung der Dokumente im Arbeitsverzeichnis auf veraltete oder widersprüchliche Inhalte",
           "prompt": "Prüfe die Dokumente im Arbeitsverzeichnis und finde Inhalte, die aktualisiert werden müssen.\nVorgaben:\n- Suche nach veralteten Informationen (überholte Datumsangaben, defekte Links, veraltete Abläufe oder Tools), Widersprüchen und Dopplungen\n- Gib für jedes Problem Dateipfad und Fundstelle an und begründe deine Einschätzung\n- Ordne Vorschläge den Kategorien „Aktualisieren / Zusammenführen / Löschen“ zu und erstelle eine Überarbeitungscheckliste\n- Gib nur den Bericht aus; ändere die Dokumente nicht"
         }
+      }
+    },
+    "deadline": {
+      "label": "Enddatum und Uhrzeit",
+      "clear": "Löschen",
+      "hint": "Für unbegrenzte Laufzeit leer lassen. Zeitzone: {{timezone}}. Danach starten keine automatischen Ausführungen mehr; bereits gestartete dürfen enden.",
+      "invalid": "Gültiges Datum und gültige Uhrzeit eingeben",
+      "expired": "Abgelaufen"
+    },
+    "webhook": {
+      "title": "Webhook-Auslöser",
+      "url": "Empfangsadresse",
+      "secret": "Secret",
+      "copy": "Kopieren",
+      "copied": "{{label}} kopiert",
+      "copyFailed": "{{label}} konnte nicht kopiert werden. Manuell auswählen und kopieren.",
+      "urlUnavailable": "Die Empfangsadresse ist derzeit nicht verfügbar.",
+      "quotaNotifyTitle": "Webhook-Empfangslimit erreicht",
+      "quotaExhausted": "Die heutigen {{limit}} Webhook-Empfänge sind aufgebraucht. Fortsetzung um {{time}}. Bis dahin lösen externe Ereignisse keine Aufgaben aus. Geplante Ausführungen und die Modellnutzung sind nicht betroffen.",
+      "signedOut": "Melden Sie sich bei Ihrem Cindy-Konto an, um den Empfang fortzusetzen. Ihre Einstellungen bleiben erhalten.",
+      "serviceUnavailable": "Webhook-Empfang ist in dieser Umgebung nicht verfügbar.",
+      "suspended": "Webhooks sind für dieses Konto deaktiviert.",
+      "endpointLimit": "Alle Empfangs-URL-Plätze sind belegt. Geben Sie eine ungenutzte URL frei.",
+      "offline": "Dieser Computer ist derzeit nicht mit dem Server verbunden. Ereignisse werden zwischengespeichert und nach der Wiederverbindung zugestellt.",
+      "localOnlyHint": "Diese Adresse funktioniert nur auf diesem Computer. Leite öffentliche Ereignisse dorthin weiter, zum Beispiel mit gh webhook forward.",
+      "eventsSummary": "Ereignisse: {{events}}",
+      "lastReceived": "Letztes Ereignis: {{time}}",
+      "neverReceived": "Noch keine Ereignisse empfangen",
+      "ignored": "{{count}} ignoriert",
+      "generateSecret": "Secret erzeugen",
+      "rotateSecret": "Secret neu erzeugen",
+      "secretOnce": "Kopiere dieses Secret jetzt. Es wird nicht erneut angezeigt.",
+      "secretMissing": "Ereignisse werden abgelehnt, bis ein Secret erzeugt wurde.",
+      "rotateFailed": "Das Secret konnte nicht erzeugt werden. Secrets lassen sich nur auf dem Computer verwalten, auf dem diese Aufgabe läuft.",
+      "genericSender": "den Absender",
+      "secretFillHint": "Trage es bei {{sender}} unter „{{field}}“ ein.",
+      "secretPastePlaceholder": "„{{field}}“ aus {{sender}} einfügen",
+      "secretSave": "Secret speichern",
+      "secretSaved": "Secret gespeichert.",
+      "secretSaveFailed": "Das Secret konnte nicht gespeichert werden. Secrets lassen sich nur auf dem Computer verwalten, der diese Aufgabe ausführt.",
+      "secretInvalid": "Dieses Secret hat nicht das erwartete Format. Kopiere es erneut beim Absender.",
+      "secretPasteMissing": "Ereignisse werden abgelehnt, bis du das Secret des Absenders einfügst.",
+      "unsignedNotice": "Signaturen sind aus: Jeder mit der Adresse kann diese Aufgabe auslösen. Wenn die Adresse bekannt wird, ändere sie.",
+      "rotateUrl": "Adresse ändern",
+      "rotateUrlConfirmTitle": "Empfangsadresse ändern?",
+      "rotateUrlConfirmBody": "Die alte Adresse funktioniert sofort nicht mehr. Trage die neue beim Absender ein. Einstellungen und Secret bleiben gleich.",
+      "rotateUrlFailed": "Die Adresse konnte nicht geändert werden. Versuche es später erneut.",
+      "addressHint": "Diese URL in den Webhook-Einstellungen von {{sender}} eintragen.",
+      "testHint": "In {{sender}} ein Ereignis auslösen, das den Filtern entspricht. Die Ausführungsergebnisse erscheinen unten.",
+      "waitingEvent": "Warten auf Ereignisse",
+      "manageConnection": "Verbindungseinstellungen",
+      "preparing": "Empfangs-URL wird vorbereitet…",
+      "noRunsHint": "Nach Eingang eines passenden Webhook-Ereignisses erscheinen hier die Ausführungsergebnisse.",
+      "account": {
+        "title": "Empfangsadressen",
+        "manage": "Verwalten",
+        "usage": "Empfangsadressen {{used}} / {{limit}}",
+        "description": "Adressen auf allen Computern teilen sich das Kontolimit. Adressen lassen sich auch bei ausgeschaltetem Computer freigeben.",
+        "remaining": "{{count}} verfügbar",
+        "unavailable": "Dieser Dienst unterstützt die kontoweite Adressverwaltung noch nicht. Bitte auf eine Aktualisierung warten.",
+        "loadFailed": "Adressen konnten nicht geladen werden. Verbindung prüfen und aktualisieren.",
+        "releaseFailed": "Freigabe konnte nicht bestätigt werden. Vor einem erneuten Versuch die Liste aktualisieren und prüfen.",
+        "retry": "Aktualisieren",
+        "loading": "Adressen werden geladen…",
+        "empty": "Keine Empfangsadressen in Verwendung",
+        "thisDevice": "Dieser Computer",
+        "unnamed": "Automatisierung {{id}}",
+        "unnamedDevice": "Gerät {{id}}",
+        "suspended": "Deaktiviert; belegt weiterhin einen Platz",
+        "lastReceived": "Zuletzt empfangen: {{time}}",
+        "neverReceived": "Noch keine Ereignisse empfangen",
+        "open": "Automatisierung ansehen",
+        "release": "Freigeben",
+        "confirm": "Adresse für „{{name}}“ auf {{device}} freigeben?",
+        "confirmHint": "Die alte Adresse, der geheime Schlüssel und auf dem Server gespeicherte Ereignisse werden ungültig. Eine erneute Verbindung des alten Computers stellt sie nicht wieder her. Automatisierung und Verlauf bleiben erhalten; gestartete Ausführungen sind nicht betroffen.",
+        "cancel": "Abbrechen",
+        "confirmRelease": "Adresse freigeben",
+        "viewAddress": "Adresse ansehen",
+        "done": "Fertig",
+        "released": "Adresse für „{{name}}“ freigegeben.",
+        "releasedHint": "Diese Adresse wurde freigegeben und belegt keinen Platz mehr. Beim erneuten Verbinden entsteht eine neue Adresse. Die Konfiguration des Absenders muss aktualisiert werden.",
+        "reconnect": "Erneut verbinden",
+        "reconnectConfirm": "Webhook erneut verbinden?",
+        "reconnectConfirmHint": "Dies belegt einen Platz und erstellt eine neue Empfangsadresse. Neue Adresse und neuen geheimen Schlüssel beim Absender eintragen.",
+        "reconnectFailed": "Verbindung fehlgeschlagen. Verfügbare Plätze prüfen und erneut versuchen."
       }
     }
   },
@@ -16871,7 +17110,10 @@
       "registrationFailed": "Erstellung fehlgeschlagen, bitte versuche es später erneut",
       "silentStopExhausted": "Das Modell hat wiederholt leere Antworten zurückgegeben; die automatische Fortsetzung ist pausiert. Klicke auf „Fortsetzen“, um die Aufgabe fortzusetzen.",
       "executionResultUnavailable": "Das Ausführungsergebnis konnte nicht abgerufen werden. Die automatische Fortsetzung wurde gestoppt. Bitte den Assistenten, das vorhandene Ausführungsergebnis zu prüfen.",
-      "outputLimit": "Das Modell hat sein Ausgabelimit erreicht. Diese Antwort ist daher möglicherweise unvollständig. Sende die nächste Nachricht, um fortzufahren.",
+      "outputLimit": "Das Modell hat sein Ausgabelimit erreicht. Diese Antwort ist möglicherweise unvollständig. Sende eine neue Nachricht, um fortzufahren. Wenn dies wiederholt auftritt, reduziere den Denkaufwand oder komprimiere zuerst den Gesprächsverlauf.",
+      "outputLimitReasoning": "Das Denken hat den Großteil des Ausgabebudgets dieser Anfrage verbraucht. Die Antwort ist möglicherweise unvollständig. Reduziere den Denkaufwand oder komprimiere den Gesprächsverlauf, bevor du fortfährst.",
+      "outputLimitUsage": "Diese Modellanfrage hat {{outputTokens}} Ausgabetokens verwendet, davon {{reasoningTokens}} Denktokens.",
+      "outputLimitOutputUsage": "Diese Modellanfrage hat {{outputTokens}} Ausgabetokens verwendet.",
       "permissionTightenInterruptFailed": "Die laufende Aufgabe konnte beim Einschränken der Berechtigungen nicht gestoppt werden; sie läuft möglicherweise bis zum Abschluss ohne Genehmigungsabfragen weiter. Stoppe sie bei Bedarf manuell.",
       "codexAutoReviewUnavailable": "Die automatische Prüfung ist vorübergehend nicht verfügbar. Die aktuelle Aktion wurde blockiert und die Berechtigungen auf Standard umgestellt. Versuche die Anfrage erneut; Cindy fragt bei Bedarf nach.",
       "hostShellCommandBlocked": "Cindy hat diesen Shell-Befehl blockiert. Prüfe den Befehl und verwende ein verfügbares Tool oder einen verfügbaren Befehl, um fortzufahren.",
@@ -17355,6 +17597,7 @@
     "sidebar": "Guthaben und Tarife",
     "settings": {
       "title": "Nutzung und Abrechnung",
+      "supportHint": "Gibt es ein Problem? Wende dich für Hilfe an {{email}}.",
       "subscriptionCard": {
         "title": "Aktueller Tarif",
         "empty": "Kein aktives Abo",
@@ -17429,14 +17672,38 @@
     },
     "orders": {
       "title": "Bestellverlauf",
-      "description": "Es werden nur Auflade- und Abobestellungen aufgeführt, die in Cindy gestartet wurden. Bestellungen mit ausstehender Zahlung werden nach Ablauf der Zahlungsfrist automatisch storniert.",
+      "description": "Bezahlte Aufladungen und beglichene Aborechnungen.",
+      "history": {
+        "loadFailed": "Bestellverlauf konnte nicht geladen werden",
+        "retry": "Bestellungen neu laden",
+        "unknownPaidAt": "Zahlungsdatum nicht verfügbar",
+        "unknownAmount": "Betrag nicht verfügbar",
+        "refundedAmount": "Erstattet: {{amount}}",
+        "refunded": "Erstattet",
+        "partiallyRefunded": "Teilweise erstattet",
+        "noPayment": "Keine Zahlung erforderlich",
+        "page": "Seite {{page}}",
+        "previous": "Vorherige Seite",
+        "next": "Nächste Seite"
+      },
       "count": "{{count}} Bestellungen",
-      "incomplete": "Es gibt viele Bestellungen. Nur die neuesten {{count}} werden angezeigt.",
       "orderId": "Nr. {{id}}",
       "copy": {
         "action": "Bestell-ID {{id}} kopieren",
         "success": "Bestell-ID kopiert",
         "failed": "Bestell-ID nicht kopiert – versuch es erneut"
+      },
+      "refund": {
+        "action": "Rückerstattung anfordern",
+        "title": "Rückerstattung anfordern",
+        "description": "Sende die folgenden Angaben an {{email}}, um eine Rückerstattung anzufordern.",
+        "emailSubject": "Cindy Rückerstattungsanfrage - {{orderId}}",
+        "sendAction": "Rückerstattungsanfrage senden",
+        "gmailFallbackDescription": "Deine Rückerstattungsanfrage enthält Bestelldetails. Wenn du Gmail öffnest, werden diese Informationen an Google weitergegeben. Fortfahren?",
+        "emailBody": "Hallo, ich möchte eine Rückerstattung für die folgende Bestellung anfordern. Könnt ihr mir dabei helfen?\n\nBestell-ID: {{orderId}}\nTransaktions-ID des Zahlungsanbieters: {{providerTransactionId}}\nAnwendung: {{application}}\nZahlungsmethode: {{paymentMethod}}\nGezahlter Betrag: {{amount}}\n\nAufgetretenes Problem:\n(Beschreibe kurz, was passiert ist)\n\nVielen Dank.",
+        "fields": {
+          "amount": "Gezahlter Betrag"
+        }
       },
       "invoice": {
         "action": "Rechnung anfordern",
@@ -17446,7 +17713,7 @@
         "emailSubject": "Rechnungsanfrage für Bestellung {{orderId}}",
         "personalInvoicePolicy": "Rechnungen für Cindy Personal-Aufladungen werden standardmäßig auf <strong>den Namen einer Privatperson</strong> ausgestellt. Du kannst deinen Namen oder „Privatperson“ als Rechnungsempfänger angeben. Wenn du für eine Kostenerstattung eine Rechnung auf den Namen deines Unternehmens benötigst, lege <strong>eine Kostenerstattungserklärung mit dem offiziellen Firmenstempel</strong> vor, in der der Rechnungsempfänger angegeben ist.",
         "invoiceTitleHint": "Hinweise: Gib für eine Privatrechnung deinen Namen oder „Privatperson“ ein. Für eine Rechnung auf den Namen deines Unternehmens zur Kostenerstattung füge eine Kostenerstattungserklärung mit dem offiziellen Firmenstempel bei, in der der Rechnungsempfänger angegeben ist.",
-        "emailBody": "Hallo,\n\nich möchte eine Rechnung für die folgende Bestellung anfordern:\n\n────────────────────\nBestell-ID: {{orderId}}\nAnwendung: {{application}}\nZahlungsmethode: {{paymentMethod}}\nRechnungsbetrag: {{amount}}\nRechnungsempfänger: \n{{invoiceTitleHint}}\n\nKontaktperson: \nTelefonnummer: \nE-Mail: \n────────────────────\n\nVielen Dank.",
+        "emailBody": "Hallo,\n\nich möchte eine Rechnung für die folgende Bestellung anfordern:\n\n────────────────────\nBestell-ID: {{orderId}}\nTransaktions-ID des Zahlungsanbieters: {{providerTransactionId}}\nAnwendung: {{application}}\nZahlungsmethode: {{paymentMethod}}\nRechnungsbetrag: {{amount}}\nRechnungsempfänger: \n{{invoiceTitleHint}}\n\nKontaktperson: \nTelefonnummer: \nE-Mail: \n────────────────────\n\nVielen Dank.",
         "sendAction": "Rechnungsanfrage senden",
         "emailCopied": "Support-E-Mail-Adresse kopiert",
         "emailCopyFailed": "Support-E-Mail-Adresse nicht kopiert – versuch es erneut",
@@ -17457,6 +17724,7 @@
         "notAvailable": "Nicht verfügbar",
         "fields": {
           "orderId": "Bestell-ID",
+          "providerTransactionId": "Transaktions-ID des Zahlungsanbieters",
           "application": "Anwendung",
           "paymentMethod": "Zahlungsmethode",
           "amount": "Rechnungsbetrag",
@@ -18908,6 +19176,9 @@
     "pendingApprovals": "{{count}} ausstehende Genehmigungen"
   },
   "richAnswer": {
+    "invalidImageReference": "Dieser Bildverweis ist ungültig.",
+    "requestImageAgain": "Erneute Anzeige anfordern",
+    "requestImageAgainMessage": "Zeige dieses vorhandene Bild erneut an ({{name}}, Verweis: {{source}}). Prüfe das ursprüngliche Werkzeugergebnis oder die Datei und verwende die tatsächliche Adresse. Erzeuge kein neues Bild; frage mich zuerst, falls du das Bild nicht eindeutig zuordnen kannst.",
     "send": "Nachricht senden",
     "sending": "Wird gesendet…",
     "sent": "Eingereicht",

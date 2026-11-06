@@ -8,7 +8,7 @@ import { parseRemoteResourceGetRequest, type PluginPageDocument } from '@cindy/d
 function setup(
   projection: Pick<
     ConstructorParameters<typeof MobilePluginPages>[0],
-    'setupAssessment' | 'runtimeState' | 'listOrder' | 'answerModelPicker'
+    'setupAssessment' | 'runtimeState' | 'listOrder' | 'answerModelPicker' | 'readme'
   > = {},
 ) {
   let owner = 'a',
@@ -190,6 +190,42 @@ describe('mobile plugin pages', () => {
     expect(h.ghost.manifest.agent.tasks).toBe(true);
     await h.invoke('task-settings:get');
     expect(h.taskSettings.read).toHaveBeenCalledWith('practice', 'r1');
+  });
+
+  // Detailed introduction: the detail resource only carries a flag; the phone fetches the
+  // content for its own locale, and one reply stays within the device-link message budget.
+  it('offers the detailed introduction on demand within the reply budget', async () => {
+    const image = (fill: string) => 'data:image/png;base64,' + fill.repeat(1_500_000);
+    const readme = vi.fn(async (_ghost: InstalledGhost, locale: string) => ({
+      path: 'docs/README.md',
+      markdown: '# ' + locale,
+      images: { 'docs/a.png': image('A'), 'docs/b.png': image('B') },
+    }));
+    const h = setup({ readme });
+    const ref = { collectionId: 'plugins', kind: 'plugin', id: 'practice' };
+    const capabilities = async () =>
+      (await h.provider.get!(
+        { controllerDeviceId: 'phone-a' },
+        { ref, client: { protocolVersion: 1, primitives: ['plugin-capabilities'] } },
+      )).blocks?.find((block) => block.id === 'capabilities')?.data as { readme?: boolean };
+    const fetchReadme = () =>
+      h.provider.invoke!(
+        { controllerDeviceId: 'phone-a' },
+        { collectionId: 'plugins', resourceRef: ref, actionId: 'readme:get', client: { protocolVersion: 1, primitives: [], locale: 'zh-TW' } },
+      );
+    expect((await capabilities()).readme).toBeUndefined();
+    await expect(fetchReadme()).rejects.toThrow();
+    expect(readme).not.toHaveBeenCalled();
+
+    h.ghost.manifest.readme = { en: 'docs/README.md' };
+    expect((await capabilities()).readme).toBe(true);
+    const reply = await fetchReadme();
+    expect(readme).toHaveBeenCalledWith(h.ghost, 'zh-TW');
+    expect(reply.result).toEqual({
+      path: 'docs/README.md',
+      markdown: '# zh-TW',
+      images: { 'docs/a.png': image('A') },
+    });
   });
 
   it('adds usage facts to the existing capabilities block and preserves unknown setup on a failed read', async () => {

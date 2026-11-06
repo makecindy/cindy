@@ -142,6 +142,7 @@ import {
   useShareSelectionActive,
 } from '@/components/chat/shareSelectionStore';
 import { ErrorBanner } from '@/components/chat/ErrorBanner';
+import { useSharedTaskRecovery } from '@/hooks/useSharedTaskRecovery';
 import {
   ErrorTailErrorBanner,
   InterruptedTurnBanner,
@@ -314,6 +315,7 @@ import {
   forkCurrentTaskFromKeyboard,
 } from '@/lib/workLouderCodexTaskActions';
 import { useSessionHardwareTaskActions } from './lib/sessionHardwareTaskActions';
+import { useGhostCardTaskArchive } from './hooks/useGhostCardTaskArchive';
 import { isRemoteSessionWriteBlocked } from './lib/remoteSessionWriteGuard';
 import { getModelById, getDefaultModelForVendor } from '@/lib/modelDefinitions';
 import { resolveDisplayContextWindow } from '@/lib/contextWindow';
@@ -1263,6 +1265,9 @@ function CCAgentSessionContent({
     onRemoteWriteBlocked: showRemoteWriteBlockedToast,
     patchLocal: patchLocalSession,
   });
+  // 插件卡片上的归档任务按钮,以及 PR 合并后「看过并离开」的自动归档(只在普通任务页,
+  // Orca 分屏里的成员任务和伙伴会话不自动收走)。
+  useGhostCardTaskArchive({ session, archive, remoteWritesBlocked, autoArchive: !isOrcaMode && !botChatIdentity });
   // 列表级 activity 在重 topic 的 maker status 之前就可用。远程 turn 正在执行 / 等待
   // 交互时,session 行天然是 startedAt > endedAt,不能把这个正常在飞窗口误判成
   // 「应用退出中断」。直接门控首帧,再锁存本次视图,避免 activity 终态与 ended patch
@@ -1868,6 +1873,7 @@ function CCAgentSessionContent({
     continueAfterSilentStop,
     errorReason,
     toolLoop,
+    outputLimit,
     insertSystemCard,
     updateSystemCardData,
     error,
@@ -2544,6 +2550,16 @@ function CCAgentSessionContent({
     if (!errorTailMsg || errorTailKind !== 'error') return '';
     return remoteErrorMessageForBanner(errorTailMsg.content);
   }, [errorTailKind, errorTailMsg]);
+  const sharedTaskRecovery = useSharedTaskRecovery({
+    sessionId: sessionId ?? undefined,
+    agentDeviceId: session?.agentDeviceId,
+    error: error || errorTailText,
+    handledUsageLimit: usageLimitRecovery?.isAccountUsageLimit === true,
+    agentKind: session?.agentKind,
+    active: viewVisible && ownsHardwareTaskActions && !readOnly && !botChatIdentity
+      && !isStreaming && !agentStatus.isRunning && !errorIsRecoverable
+      && !syntheticContinuationPending && !usageLimitWait,
+  });
   // 本地隐藏态:点主按钮后立即隐藏,不等新消息入流(视觉连续性,规则 7)。
   // 「忽略/关闭」走 store 的乐观 errorDismissed 更新,无需本地态。
   // 按错误行 clientId 归属(不是 sessionId,review P2):续跑后同一会话再次以
@@ -5792,10 +5808,12 @@ function CCAgentSessionContent({
                 />
               ) : (
                 <ErrorTailErrorBanner
+                  onChooseComputer={sharedTaskRecovery.askAgain}
                   errorText={errorTailText}
                   dismissOnEscape={viewVisible && ownsHardwareTaskActions}
                   errorReason={errorTailMsg?.errorReason}
                   toolLoop={errorTailMsg?.toolLoop}
+                  outputLimit={errorTailMsg?.outputLimit}
                   onContinue={handleErrorTailContinue}
                   onDismiss={handleErrorTailDismiss}
                   onSilentStopContinue={handleSilentStopContinue}
@@ -5850,6 +5868,7 @@ function CCAgentSessionContent({
                   dataOwnerId={dataOwnerId}
                   sessionId={sessionId}
                   latestFailedRun={scheduleSessionInfo.latestFailedRun}
+                  remote={rightSidebarDeviceLinkDeviceId !== null}
                   onDiagnose={canDiagnoseError ? handleDiagnoseError : undefined}
                   style={{ width: inputWidth }}
                   className="py-1"
@@ -5865,10 +5884,12 @@ function CCAgentSessionContent({
               continuationTurnClientId,
             }) && (
               <ErrorBanner
+                onChooseComputer={sharedTaskRecovery.askAgain}
                 error={error}
                 dismissOnEscape={viewVisible && ownsHardwareTaskActions}
                 errorReason={errorReason}
                 toolLoop={toolLoop}
+                outputLimit={outputLimit}
                 isRecoverable={errorIsRecoverable}
                 retryText={errorRetryText}
                 onRetry={handleRetry}
@@ -6132,6 +6153,8 @@ function CCAgentSessionContent({
                   aria-hidden={voiceModeOpen && voiceSurfaceAvailable ? true : undefined}
                 >
                 <ChatInput
+                  modelPickerRequest={sharedTaskRecovery.modelPickerRequest}
+                  onModelPickerRequestConsumed={sharedTaskRecovery.consumeModelPickerRequest}
                   topSlot={cindyMakeRecoveryId && session ? (
                     <CindyMakeEditingActions
                       key={`${session.id}:${cindyMakeRecoveryId}`}

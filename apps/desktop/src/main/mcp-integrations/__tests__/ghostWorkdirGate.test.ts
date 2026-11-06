@@ -13,6 +13,7 @@
  */
 
 import { describe, it, expect, vi, beforeEach, afterEach, afterAll } from 'vitest';
+import type { MockInstance } from 'vitest';
 import { createHash } from 'node:crypto';
 import { AsyncResource } from 'node:async_hooks';
 import { withPluginPageTicket, consumePluginPageTicket, restorePluginPageSession } from '../../mcp-apps/pluginPageCall.js';
@@ -121,6 +122,11 @@ const cardRegisterMock = vi.hoisted(() => vi.fn());
 const resolvedAttachmentOrigins: Array<'user' | 'tool' | undefined> = [];
 
 vi.mock('electron', () => ({ app: { getPath: () => tmpUserData } }));
+const githubSignIn = vi.hoisted(() => ({ read: vi.fn(), open: vi.fn(() => true) }));
+vi.mock('../../git-context/githubSetupIpc.js', () => ({
+  readGithubConnection: githubSignIn.read,
+  openGithubSignIn: githubSignIn.open,
+}));
 vi.mock('../../appSessionState.js', () => ({
   ownerScopedUserDataPath: (...parts: string[]) => path.join(tmpUserData, ...parts),
   getActiveAppSession: () => ({ mode: 'cloud', dataOwnerId: 'member-1', generation: 7 }),
@@ -1342,6 +1348,30 @@ describe('connect_account ordinary task entry', () => {
     expect(ensureReadyMock).not.toHaveBeenCalled();
     expect(dispatchMock).not.toHaveBeenCalled();
     expect(grantAttachmentsMock).not.toHaveBeenCalled();
+  });
+  // Rule (Dash, 2026-11-06, plan D): when this computer is not signed in to GitHub, connecting the
+  // GitHub plugin from a task should lead to Cindy's own GitHub sign-in instead of "no setup action".
+  // Minimal input: a gh-cli plugin, signed out → signed in → explicit reconnect (unit).
+  it('opens Cindy\'s GitHub sign-in for a gh-cli plugin and reports ready once signed in', async () => {
+    listMock.mockReturnValue([chipGhost('cindy-github', ['tool'], {
+      network: { secrets: [{ key: 'my_token', label: 'GitHub', source: 'gh-cli' }] },
+    })]);
+    githubSignIn.read.mockResolvedValueOnce({ status: 'missing' });
+    expect(await makeDeps().connectAccount!({ kind: 'plugin', id: 'cindy-github' }))
+      .toMatchObject({ ok: false, errorCode: 'GITHUB_SIGN_IN_REQUIRED', signInOpened: true, connection: 'missing' });
+    expect(githubSignIn.open).toHaveBeenCalledTimes(1);
+    // Review (Codex P2 / Greptile P1 on #9022): readiness must use the fallback token this plugin's own
+    // requests read (its instance and declared key), not the GitHub plugin's.
+    expect(githubSignIn.read).toHaveBeenCalledWith({ instanceId: 'cindy-github', key: 'my_token' });
+    githubSignIn.read.mockResolvedValue({ status: 'connected', login: 'octo', source: 'gh-cli' });
+    expect(await makeDeps().connectAccount!({ kind: 'plugin', id: 'cindy-github' }))
+      .toMatchObject({ ok: true, status: 'ready', login: 'octo' });
+    expect(githubSignIn.open).toHaveBeenCalledTimes(1);
+    expect(await makeDeps().connectAccount!({ kind: 'plugin', id: 'cindy-github', reauthorize: true }))
+      .toMatchObject({ ok: false, errorCode: 'GITHUB_SIGN_IN_REQUIRED', signInOpened: true });
+    expect(githubSignIn.open).toHaveBeenCalledTimes(2);
+    expect(ensureReadyMock).not.toHaveBeenCalled();
+    expect(dispatchMock).not.toHaveBeenCalled();
   });
   it('blocks disabled GitHub before offering its existing connection method', async () => {
     listMock.mockReturnValue([chipGhost('cindy-github')]);
@@ -4012,20 +4042,56 @@ describe('对话文件交接(cindy_handoff_files)', async () => {
     expect(await store.list('art')).toEqual([]);
   });
 
-  // A path swapped for a link after classification is not read (no confirmation bypass).
+  // Unit: preserve the post-classification redirect rejection on Windows without symlink
+  // privileges (§3.3). Follow the native-approval attachment fixture above: a real parent
+  // junction redirects a regular file. Keep the file-link variant where privileges allow it.
   it('refuses a classified path that became a link before reading', async () => {
-    const target = csv('outside-target.csv', 'secret');
-    const link = path.join(outsideDir, 'swapped.csv');
-    fs.rmSync(link, { force: true });
-    fs.symlinkSync(target, link);
+    const sourceDir = fs.mkdtempSync(path.join(outsideDir, 'classified-'));
+    const targetDir = fs.mkdtempSync(path.join(outsideDir, 'redirected-'));
+    const source = path.join(sourceDir, 'swapped.csv');
+    const target = path.join(targetDir, 'swapped.csv');
+    fs.writeFileSync(source, 'original');
+    fs.writeFileSync(target, 'secret');
+    let redirected = false;
+    let classifiedPath = '';
     classifyLocalAttachmentPathMock.mockImplementation((...args: Parameters<typeof realClassify>) => {
       const result = realClassify(...args);
-      return result.kind === 'outside-workdir' ? { ...result, kind: 'inside-workdir', absPath: link } : result;
+      if (result.kind !== 'outside-workdir') return result;
+      classifiedPath = result.absPath;
+      fs.unlinkSync(source);
+      try {
+        fs.symlinkSync(target, source);
+      } catch (error) {
+        if (process.platform !== 'win32' || (error as NodeJS.ErrnoException).code !== 'EPERM') throw error;
+        // A parent junction needs no file-symlink privilege and still redirects a regular
+        // file to different bytes. The opened file must fail identity / realpath validation.
+        fs.rmdirSync(sourceDir);
+        fs.symlinkSync(targetDir, sourceDir, 'junction');
+      }
+      expect(fs.realpathSync.native(source)).toBe(fs.realpathSync.native(target));
+      redirected = true;
+      return { ...result, kind: 'inside-workdir' };
     });
-    const result = await makeDeps().callGhostTool({ ghostId: 'art', tool: 'run', args: {}, attachments: [link] });
-    expect(result).toMatchObject({ ok: false, errorCode: 'ATTACHMENT_INVALID' });
-    expect(confirmRequestMock).not.toHaveBeenCalled();
-    expect(await store.list('art')).toEqual([]);
+    const realOpen = fs.promises.open.bind(fs.promises);
+    const reads: MockInstance[] = [];
+    const open = vi.spyOn(fs.promises, 'open').mockImplementation(async (...args) => {
+      const handle = await realOpen(...args);
+      if (args[0] === classifiedPath) reads.push(vi.spyOn(handle, 'read'));
+      return handle;
+    });
+    try {
+      const result = await makeDeps().callGhostTool({ ghostId: 'art', tool: 'run', args: {}, attachments: [source] });
+      expect(redirected).toBe(true);
+      expect(result).toMatchObject({ ok: false, errorCode: 'ATTACHMENT_INVALID', message: '附件读取失败:swapped.csv(文件不可读或已被移动)' });
+      expect(open).toHaveBeenCalledWith(classifiedPath, expect.any(Number));
+      for (const read of reads) expect(read).not.toHaveBeenCalled();
+      expect(dispatchMock).not.toHaveBeenCalled();
+      expect(confirmRequestMock).not.toHaveBeenCalled();
+      expect(await store.list('art')).toEqual([]);
+    } finally {
+      open.mockRestore();
+      for (const read of reads) read.mockRestore();
+    }
   });
 
   // An approval that lapses while the copies are written is re-checked before dispatch.

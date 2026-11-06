@@ -20,6 +20,7 @@ const VALID_MANIFEST = {
   telegramHookWsUrl: 'wss://telegram-hook.example.com',
   xHookWsUrl: 'wss://x-hook.example.com',
   slackHookWsUrl: 'wss://slack-hook.example.com',
+  webhookApiBaseUrl: 'https://webhook.example.com',
   websiteUrl: 'https://www.example.com',
   modelAccessApiBaseUrl: 'https://model-access.example.com',
   voiceApiBaseUrl: 'https://voice.example.com',

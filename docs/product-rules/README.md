@@ -24,6 +24,7 @@
 | 任务模型、来源、推理强度与 Fast | [运行时控制](session-runtime-control.md) |
 | 共享任务、跨账号访客与成员权限 | [共享任务](shared-task-mode.md) |
 | 伙伴身份、生命周期、fallback、工作目录、Skill / MCP 与委派 | [伙伴运行时](cindy-bots-runtime.md) |
+| 伙伴的工作方式属于伙伴：专属工具盘点、通用化方向与待裁决条款 | [伙伴专属能力台账](teammate-capability-ledger.md) |
 | 伙伴每轮代表谁（主人代办／受托／自主）、自主轮范围与转达凭证 | [伙伴授权](teammate-authority.md) |
 | 伙伴跨电脑身份、主力电脑、云端对话与资料 | [云端伙伴](cloud-companions.md) |
 | 伙伴群聊、群专线、分工与手机群聊 | [伙伴群聊](bot-group-chat.md) |

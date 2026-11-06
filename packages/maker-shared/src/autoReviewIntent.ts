@@ -84,11 +84,19 @@ export function createAutoReviewIntentProjection() {
     if (!receipt || typeof receipt !== "object" || !("kind" in receipt) ||
       !["agent-request", "delegated-continuation"].includes(String(receipt.kind)) || !("request" in receipt)) return undefined;
     const source = receipt.request;
-    if (!source || typeof source !== "object" || !("ownerVerified" in source) || source.ownerVerified !== true ||
+    if (!source || typeof source !== "object" ||
       !("sessionId" in source) || typeof source.sessionId !== "string" || !source.sessionId ||
-      !("clientId" in source) || typeof source.clientId !== "string" || !source.clientId ||
-      !("userText" in source) || typeof source.userText !== "string" || !source.userText.trim()) return undefined;
-    return source.userText;
+      !("clientId" in source) || typeof source.clientId !== "string" || !source.clientId) return undefined;
+    // A host-checked hand-off (2026-11-05) is reviewed by the delegated work itself; only the
+    // sending host writes it, and only in a turn that spoke for the owner.
+    if ("plainBody" in source && source.plainBody === true) {
+      return "delegatedText" in source && typeof source.delegatedText === "string" && source.delegatedText.trim()
+        ? source.delegatedText : undefined;
+    }
+    // Older receipts carry the owner's words, marked when the sending host verified them.
+    return "ownerVerified" in source && source.ownerVerified === true &&
+      "userText" in source && typeof source.userText === "string" && source.userText.trim()
+      ? source.userText : undefined;
   }
 
   function compactCurrentUserIntent(

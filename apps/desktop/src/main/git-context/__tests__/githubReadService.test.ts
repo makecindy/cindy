@@ -34,6 +34,7 @@ function setup() {
         ...pr,
         ok: true,
         status: 'open',
+        conflicts: true,
         title: 'Test',
         branch: 'branch',
         htmlUrl: 'https://github.com/o/r/pull/1',
@@ -96,6 +97,7 @@ describe('shared GitHub read protocol', () => {
     expect(await h.service().read('get_pr_status', { pr })).toMatchObject({
       ok: true,
       head_sha: 'abc',
+      conflicts: true,
       checks: { total: 0 },
       partial: false,
     });

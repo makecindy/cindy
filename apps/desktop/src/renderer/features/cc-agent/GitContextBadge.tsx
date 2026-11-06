@@ -51,7 +51,7 @@ import { useSessionGitContext } from '@/hooks/useSessionGitContext';
 import { GithubSetupDialog } from './GithubSetupDialog';
 import { prStatusKey, MAX_STATUS_QUERIES } from '@/lib/prStatus';
 import {
-  PR_STATUS_COLOR,
+  prStatusColor,
   PR_STATUS_ICON,
   pickBranchLabel,
   prFailureCopyKey,
@@ -232,8 +232,10 @@ function PrChip({
   };
 
   const kind: PrStatusKind | null = status?.ok ? status.status : null;
+  const conflicts =
+    status?.ok && status.conflicts === true && (kind === 'open' || kind === 'draft');
   const Icon = kind ? PR_STATUS_ICON[kind] : GitPullRequest;
-  const color = kind ? PR_STATUS_COLOR[kind] : 'var(--text-tertiary)';
+  const color = prStatusColor(kind, status?.ok ? status.conflicts : null);
   const guidance = prGuidanceFor(status, { remoteHostId, deviceLinkDeviceId, readOnly });
   const failureCopyKey = prFailureCopyKey(status, { remoteHostId, deviceLinkDeviceId, readOnly });
 
@@ -304,7 +306,9 @@ function PrChip({
           <button
             ref={triggerRef}
             type="button"
-            aria-label={ariaLabel}
+            aria-label={
+              conflicts ? `${ariaLabel} · ${t('ccAgent.gitContext.pr.conflicts')}` : ariaLabel
+            }
             data-pr-guidance={guidance ?? undefined}
             data-pr-chip=""
             style={WINDOW_NO_DRAG_STYLE}
@@ -511,8 +515,18 @@ function PrChip({
                 )}
               </div>
             )}
-            {((unresolved !== null && unresolved > 0) || checks !== null) && (
+            {(conflicts || (unresolved !== null && unresolved > 0) || checks !== null) && (
               <div className="mt-3 space-y-3 border-t border-[var(--border-default)] pt-3 text-13">
+                {conflicts && (
+                  <div className="flex items-center justify-between gap-3 whitespace-nowrap">
+                    <span className="text-[var(--text-primary)]">
+                      {t('ccAgent.gitContext.pr.merge')}
+                    </span>
+                    <span className="shrink-0 font-medium text-[var(--warning-fg)]">
+                      {t('ccAgent.gitContext.pr.conflicts')}
+                    </span>
+                  </div>
+                )}
                 {unresolved !== null && unresolved > 0 && (
                   <div className="flex items-center justify-between gap-3">
                     <span className="text-[var(--text-primary)]">

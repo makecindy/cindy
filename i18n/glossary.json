@@ -5,6 +5,10 @@
   "sourceLocale": "en",
   "punctuationExempt": ["desktop:settings.help.qnaFeedbackBodyTemplate"],
   "terms": [
+    {"id":"automation-trigger-mode","status":"proposed","en":"Trigger mode","translations":{"zh-CN":"触发方式","zh-TW":"觸發方式","ja":"トリガー方式","ko":"트리거 방식"},"note":"自动化何时运行的选择：定时、手动或 Webhook。独立于执行方式（AI 任务或脚本），用户于 2026-11-04 选择此交互方向。"},
+    {"id": "request-refund", "status": "proposed", "en": "Request Refund", "translations": {"zh-CN": "申请退款", "zh-TW": "申請退款", "ja": "返金を申請", "ko": "환불 신청", "fr": "Demander un remboursement", "es": "Solicitar reembolso", "de": "Rückerstattung anfordern", "pt-PT": "Pedir reembolso", "pt-BR": "Solicitar reembolso", "zh-Hant-x-lzh": "請退款", "zh-Hans-x-lzh": "请退款"}, "note": "订单行的邮件退款申请入口；由用户确认使用客服邮件处理，不代表自动退款。"},
+    {"id": "provider-transaction-id", "status": "proposed", "en": "Provider transaction ID", "translations": {"zh-CN": "渠道交易号", "zh-TW": "渠道交易號", "ja": "決済取引ID", "ko": "결제 거래 ID", "fr": "Identifiant de transaction du prestataire", "es": "ID de transacción del proveedor", "de": "Transaktions-ID des Zahlungsanbieters", "pt-PT": "ID de transação do prestador", "pt-BR": "ID da transação do provedor", "zh-Hant-x-lzh": "渠道交易號", "zh-Hans-x-lzh": "渠道交易号"}, "note": "支付渠道记录的交易号，用于开票弹窗和邮件；支付宝为实际交易号，Stripe 为 PaymentIntent ID 或 Charge ID，不是本地订单号或商户订单号。"},
+    {"id": "island-subtle-reminders", "status": "proposed", "en": "Subtle reminders", "translations": {"zh-CN": "轻提醒", "zh-TW": "輕提醒", "ja": "控えめな通知", "ko": "은은한 알림", "es": "Avisos discretos", "fr": "Alertes discrètes", "de": "Dezente Hinweise", "pt-PT": "Avisos discretos", "pt-BR": "Avisos discretos", "zh-Hant-x-lzh": "輕提醒", "zh-Hans-x-lzh": "轻提醒"}, "checkCase": false, "note": "灵动岛设置：新消息、待回复和错误通过图标变化提示，不向下弹出通知卡片；手动点击展开完整任务列表保持不变。"},
     {"id": "gitlab-merge-request", "status": "proposed", "en": "MR", "translations": {"zh-CN": "MR", "zh-TW": "MR", "ja": "MR", "ko": "MR", "fr": "MR", "es": "MR", "de": "MR", "pt-PT": "MR", "pt-BR": "MR", "zh-Hans-x-lzh": "MR", "zh-Hant-x-lzh": "MR"}, "note": "GitLab Merge Request 的平台名称，界面保留 MR 与 !编号；不同于 GitHub PR。"},
     {"id": "additional-fees", "status": "proposed", "en": "Additional fees", "translations": {"zh-CN": "附加费用", "zh-TW": "附加費用", "ja": "追加費用", "ko": "추가 비용"}, "note": "任务中主对话之外的额外模型费用，按模型和调用渠道汇总；用户于 2026-10-30 选定中文名称。"},
     {"id": "cindy-ai-personal", "status": "proposed", "en": "Cindy AI · Personal", "translations": {"zh-CN": "Cindy AI · 个人", "zh-TW": "Cindy AI · 個人", "ja": "Cindy AI · 個人", "ko": "Cindy AI · 개인"}, "note": "个人身份使用的 Cindy AI 显示名。按模型来源电脑的登录身份生成；不改变供应商 ID、路由或 Auto 模型名。"},
@@ -3469,6 +3473,19 @@
         "ko": "읽음"
       },
       "note": "群聊里「别的成员已经看过这条消息」的状态（消息气泡下的双勾、「N 人已读」）。与「Read」作动词（读取文件）无关；只用于消息读取状态。"
+    },
+    {
+      "id": "merge-conflict",
+      "status": "proposed",
+      "en": "Merge conflict",
+      "translations": {
+        "zh-CN": "合并冲突",
+        "zh-TW": "合併衝突",
+        "ja": "マージコンフリクト",
+        "ko": "병합 충돌"
+      },
+      "checkCase": false,
+      "note": "GitHub PR / GitLab MR 的合并冲突。数据行标签为 Merge / 合并，状态值为 Conflicts / 有冲突；与检查失败及应用崩溃区分。"
     }
   ]
 }

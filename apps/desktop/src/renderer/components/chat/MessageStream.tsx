@@ -3,7 +3,7 @@ import { attachmentPreviewKind, previewSourceName } from '@cindy/maker-shared/at
 import { TeammateProcessStatus } from '@/features/bots/TeammateProcessStatus';
 import { scrollRangeIntoView } from '@/lib/scrollRangeIntoView';
 import { historyAfter } from './historyAfter';
-import { readMailCard } from '@cindy/maker-shared/ghost-card-form';
+import { readGhostCardSupersededBy, readMailCard } from '@cindy/maker-shared/ghost-card-form';
 import { animateFocusScroll } from './animateFocusScroll';
 import { botProcessItems } from '@/features/bots/botConversationPresentation';
 import { isVisibleVoiceCallMessage } from '@/features/bots/voice/voiceCallPresentation';
@@ -1835,9 +1835,10 @@ export function buildRenderItems(
     : [];
   // Mail is a finished document, not plugin progress. Without an exact tool ID,
   // wait for its result rather than attach it to a schema/read call by guesswork.
+  // A card moved to a newer call belongs to an earlier call and must not claim this one.
   const guessableLiveCards = sessionLiveCards.filter((lc) => {
     const entry = ghostCards?.byCallId.get(lc.callId);
-    return !(entry?.status === 'ready' && readMailCard(entry.html));
+    return !(entry?.status === 'ready' && (readMailCard(entry.html) || readGhostCardSupersededBy(entry.html)));
   });
   // Old partial history may omit a tool result. It cannot claim a new card just
   // because the same plugin was used there. Exact IDs still work across turns.
@@ -2167,7 +2168,7 @@ export function buildRenderItems(
           suppressMediaForCard = true;
           hideRowForCard = true;
           if (entry?.status === 'ready') {
-            if (readMailCard(entry.html)?.supersededBy) return;
+            if (readGhostCardSupersededBy(entry.html)) return;
             const cardItem: Extract<RenderItem, { type: 'ghost_card' }> = {
               type: 'ghost_card',
               key: `ghostcard-${msg.clientId}`,
@@ -2212,7 +2213,7 @@ export function buildRenderItems(
         if (liveEntry?.status !== 'ready') return;
         claimedLiveCallIds.add(live.callId);
         hideRowForCard = true;
-        if (readMailCard(liveEntry.html)?.supersededBy) { suppressMediaForCard = true; return; }
+        if (readGhostCardSupersededBy(liveEntry.html)) { suppressMediaForCard = true; return; }
         const liveCardItem: Extract<RenderItem, { type: 'ghost_card' }> = {
           type: 'ghost_card',
           key: `ghostcard-${msg.clientId}`,
@@ -6718,7 +6719,7 @@ export function MessageStream({
                       // 下一次 store 变更自愈。
                       const entry = ghostCardSnapshot.byCallId.get(item.callId);
                       if (!entry || entry.status !== 'ready') return null;
-                      if (readMailCard(entry.html)?.supersededBy) return null;
+                      if (readGhostCardSupersededBy(entry.html)) return null;
                       // 常态包一层 div(结构稳定,回锚媒体到达时卡片 iframe 不重挂);
                       // 回锚媒体(如 mivo 视频)挂卡正下方,与 tool_media 同款间距。
                       return (
@@ -7269,6 +7270,7 @@ const MessageItem = memo(function MessageItem({
           reason={message.errorReason}
           providerId={message.errorProviderId}
           toolLoop={message.toolLoop}
+          outputLimit={message.outputLimit}
           sessionSource={sessionSource}
           onDiagnose={onDiagnoseError}
         />

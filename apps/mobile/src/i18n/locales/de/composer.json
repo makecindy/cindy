@@ -66,7 +66,7 @@
     "pasteTimeout": "Zeitüberschreitung beim Einfügen des Bildes. Versuch es erneut.",
     "clipboardReadFailed": "Das Bild aus der Zwischenablage konnte nicht gelesen werden. Kopiere es erneut und füge es ein.",
     "maxAttachments": "Füge bis zu {{count}} Anhänge hinzu.",
-    "simulatorNoCamera": "Der Simulator hat keine Kamera. Wähle über „Fotos“ ein Bild aus der Mediathek.",
+    "simulatorNoCamera": "Der Simulator hat keine Kamera. Verwende „Fotos und Videos“, um Medien aus der Mediathek auszuwählen.",
     "cameraPermission": "Der Kamerazugriff ist deaktiviert. Erlaube {{appName}} in den Systemeinstellungen den Zugriff auf die Kamera.",
     "photoPermission": "Der Fotozugriff ist deaktiviert. Erlaube {{appName}} in den Systemeinstellungen den Zugriff auf Fotos.",
     "noFileRead": "Keine hochladbare Datei gelesen."

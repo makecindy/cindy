@@ -16,6 +16,16 @@ describe('媒体模型目录来源守卫', () => {
     const openai = BUNDLED_CATALOG.providers.find((p) => p.id === 'openai');
     expect(openai?.imageModels).toEqual([
       expect.objectContaining({
+        id: 'openai/gpt-image-2.6-sunburst',
+        name: 'GPT Image 2.6 Sunburst',
+        modalities: { input: ['text', 'image'], output: ['image'] },
+      }),
+      expect.objectContaining({
+        id: 'openai/gpt-image-2.6-flare',
+        name: 'GPT Image 2.6 Flare',
+        modalities: { input: ['text', 'image'], output: ['image'] },
+      }),
+      expect.objectContaining({
         id: 'openai/gpt-image-2.5-sunburst',
         name: 'GPT Image 2.5 Sunburst',
         modalities: { input: ['text', 'image'], output: ['image'] },

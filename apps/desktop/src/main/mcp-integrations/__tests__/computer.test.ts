@@ -4624,8 +4624,9 @@ describe('computer driver update check', () => {
     expect(fetchImpl).not.toHaveBeenCalled();
   });
 
-  it('silently reports no update when the releases API fails or rate-limits', async () => {
+  it('silently reports no update when the releases API fails', async () => {
     mockDriverSpawn({ stdout: '0.5.8\n' });
+    // 不带配额信息的 403:可能是仓库/权限问题,不能报成「稍后重试就好」。
     const fetchImpl = vi.fn().mockResolvedValue({ ok: false, status: 403 });
 
     await expect(checkComputerDriverUpdate(fetchImpl as unknown as typeof fetch)).resolves.toEqual({
@@ -4634,6 +4635,7 @@ describe('computer driver update check', () => {
       updateAvailable: false,
       updating: false,
       checkStatus: 'error',
+      checkError: { kind: 'network' },
       checkedAt: expect.any(Number),
     });
   });
@@ -4734,6 +4736,28 @@ describe('computer driver update check', () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+
+  it('marks a GitHub rate-limited refresh as retryable instead of a broken check', async () => {
+    mockDriverSpawn({ stdout: 'cua-driver 0.5.8\n' });
+    await checkComputerDriverUpdate(mockRefsThenReleaseFetch() as unknown as typeof fetch);
+
+    // 已知有可安装新版后,后台刷新撞上 403 + 配额见底:要保留安装入口,
+    // 同时把原因报成「限流可重试」,而不是笼统的检查失败。
+    mockDriverSpawn({ stdout: 'cua-driver 0.5.8\n' });
+    const rateLimitedFetch = vi.fn().mockResolvedValue({
+      ok: false,
+      status: 403,
+      headers: { get: (name: string) => (name === 'x-ratelimit-remaining' ? '0' : null) },
+    });
+    await expect(
+      checkComputerDriverUpdate(rateLimitedFetch as unknown as typeof fetch, { force: true }),
+    ).resolves.toMatchObject({
+      latestVersion: '0.7.0',
+      updateAvailable: true,
+      checkStatus: 'error',
+      checkError: { kind: 'rate_limited' },
+    });
   });
 
   it('does not turn an unverified cached tag into an update after a local downgrade and network failure', async () => {

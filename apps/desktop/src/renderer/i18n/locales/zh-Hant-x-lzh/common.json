@@ -1,4 +1,34 @@
 {
+  "sharedTaskRecovery": {
+    "title": "無法在原電腦上恢復任務",
+    "description": "可以選擇其他電腦或供應商，透過上下文交接繼續。原訊息保留，但切換不會移轉原電腦上的完整執行狀態。",
+    "choose": "選擇其他電腦",
+    "cancel": "留在這裡",
+    "stage": {
+      "owner": "失敗環節：聯絡分享所在電腦。",
+      "allocation": "失敗環節：為原執行電腦重新分配授權。",
+      "executor": "失敗環節：確認執行電腦的 device-link 連線。",
+      "capability": "失敗環節：檢查執行電腦的能力。",
+      "authorization": "失敗環節：安裝執行授權。",
+      "unknown": "未收到具體失敗環節。"
+    },
+    "reason": {
+      "offline": "此次聯絡的電腦被回報為離線。其他任務可能執行於不同電腦。",
+      "timeout": "請求逾時；當時正在聯絡哪個服務請見失敗環節。尚無法確定是直連還是中繼出了問題。",
+      "relay": "device-link 連線尚未就緒或已關閉。僅直連失敗時，通常會自動改走中繼。",
+      "denied": "存取遭拒或遠端控制已關閉，重試不能繞過此限制。",
+      "model": "此任務不允許使用該分享供應商或模型。",
+      "budget": "供應商回報用量上限或配額不足。切換電腦後也可能使用同一份配額。",
+      "capacity": "任務或連線資源已達容量上限。可以關閉閒置任務或選擇其他電腦。",
+      "unsupported": "執行電腦不支援此分享任務所需的能力。",
+      "authorization": "無法安裝執行授權。這不能證明執行電腦已離線。",
+      "history": "原任務位置無法使用，不能把原生歷史直接放到另一台電腦開啟。",
+      "policy": "分享用量規則要求經分享所在電腦即時核驗，直連執行無法落實此規則；這不代表餘額耗盡。",
+      "unknown": "分享所在電腦未提供具體原因，尚無法確認離線、配額或直連／中繼的狀態。",
+      "rate": "服務正在限流或壅塞，需要等待冷卻。切換電腦也可能受到同一個限制。",
+      "service": "連線至分享授權服務失敗，或服務回報失敗；尚未確認執行電腦離線。"
+    }
+  },
   "providerAccountUsage": {
     "kimi": {
       "refresh": "重察限額",
@@ -2321,6 +2351,9 @@
     "agentIsland": {
       "title": "靈動島",
       "unsupported": "靈動島須 macOS 14 或更高之版。",
+      "subtleRemindersLabel": "輕提醒",
+      "subtleRemindersHint": "新訊至、待答或有誤時，不向下彈出通知卡片，以圖示變化相告。點靈動島可閱任務全表。",
+      "subtleRemindersFailed": "提醒設定未存，請重試。",
       "enableLabel": "顯靈動島",
       "enableHint": "於螢幕之巔顯方行、待應及未讀已畢之差事。啟之則抑同類系統之告，免重複相擾。",
       "enableAria": "啟閉靈動島",
@@ -3747,7 +3780,12 @@
           "stop": "止試"
         },
         "fetch": {
-          "button": "取模型清單",
+          "selectedCount": "已選 {{count}} 模型",
+          "availableCount": "已得 {{count}} 可選模型",
+          "notFetched": "尚未取模型清單",
+          "failedRetry": "取模型清單未成，請重試",
+          "retryFailed": "此番未成，請重試",
+          "button": "取並選模型",
           "fetching": "方取模型…",
           "needBaseUrl": "請先填基礎 URL",
           "failed": "模型清單取之未成",
@@ -3877,6 +3915,8 @@
         "disabledGroup": "已停",
         "enableAllModels": "盡啟",
         "priceOverride": {
+          "resetShort": "重置",
+          "referenceDetails": "參考價詳目",
           "menu": "修 API 估價",
           "title": "{{model}} API 估價",
           "description": "僅用以估君自有 API 或訂閱通道之耗用，不易供方之實際帳單。",
@@ -3928,6 +3968,7 @@
             "hint": "施於 {{agent}} 之圖連線。唯宣介面實所支援之能，存後重啟 Art 詳情。"
           },
           "capabilityHint": "先用今供方所宣之能；未宣者，圖之能參酌模型之名。",
+          "imageInputDefault": "{{value}}（預設）",
           "imageInput": "圖輸入",
           "imageInputMixed": "諸引擎各異",
           "supported": "可",
@@ -5628,6 +5669,7 @@
           "checking": "方察更新…",
           "upToDate": "已是最新",
           "checkFailed": "察更新未成",
+          "rateLimited": "GitHub 更源已限流，稍遲再察",
           "lastChecked": "前番察於 {{time}}",
           "check": "察更新",
           "retry": "再試",
@@ -6691,8 +6733,6 @@
             "task": "差事鍵",
             "action": "動作鍵"
           },
-          "lightingLimit": "韌體至多令板上次第前 6 顆差事鍵各自亮燈。餘下之差事鍵仍可切換差事。",
-          "unlitKey": "此鍵列於前 6 顆之後，無獨立狀態燈。",
           "taskHint": "宜用透明鍵帽，差事之狀自有異色流光示之。"
         },
         "commandKeys": {
@@ -7725,6 +7765,7 @@
         "customSlotAsleep": "法器未生效；生效後，此處將示其設定介面。",
         "descriptionExpand": "展",
         "descriptionCollapse": "收",
+        "readmeTitle": "介紹",
         "useAction": "用",
         "chatAction": "言談",
         "enabledLabel": "已啟",
@@ -8329,6 +8370,26 @@
         "title": "刪 “{{name}}” 乎？",
         "message": "刪之，則新開或重啟之 Agent 差事不再載此 MCP。",
         "confirm": "刪"
+      },
+      "duplicates": {
+        "title": "疑似重複的 MCP 連線",
+        "description": "Cindy 與 Claude Code 的使用者設定中有相同或相近的連線，可能重複載入工具。請選擇保留的來源；不確定時可以都保留。",
+        "scope": "僅影響這台電腦上 Cindy 的一般 Claude Code 任務，下次 Agent 啟動時生效。不會修改 Claude Code 設定。相互關聯的重複連線共用選擇。",
+        "unavailable": "未能完整讀取設定，暫未變更連線。返回此頁面時會重新檢查。",
+        "endpoint": "連線位址相同",
+        "similar": "連線位址相近",
+        "keep": {
+          "both": "本組皆留"
+        },
+        "selected": {
+          "cindy": "已選擇保留 Cindy 連線",
+          "claude": "已選擇保留 Claude Code 連線",
+          "both": "本組兩側連線皆已保留"
+        },
+        "reset": "重新選擇",
+        "saveFailed": "未能儲存，連線可能已變更。請依目前清單重新選擇。",
+        "keepThis": "保留此連線",
+        "keepThese": "保留這些連線"
       }
     },
     "remotePermission": {
@@ -13070,6 +13131,12 @@
       "text": "前有自運未成。",
       "precheck": "自動查驗暫受阻。",
       "rateLimited": "自動查驗暫受阻：請求限流。",
+      "pluginMissing": "自動查驗暫受阻：「{{name}}」法器未裝，裝畢自復。",
+      "pluginMissingUnnamed": "自動查驗暫受阻：所需法器未裝，裝畢自復。",
+      "pluginDisabled": "自動查驗暫受阻：「{{name}}」法器未啟，啟之自復。",
+      "pluginDisabledUnnamed": "自動查驗暫受阻：所需法器未啟，啟之自復。",
+      "installPlugin": "裝法器",
+      "openPlugin": "觀法器",
       "dismissTitle": "闔往昔未成之示"
     },
     "worktreeRestoreBanner": {
@@ -13873,7 +13940,11 @@
       "mailAttach": "增附件",
       "mailRemoveAttachment": "除 {{name}}",
       "mailUpdated": "草稿已更（唯讀）",
-      "mailLegacy": "舊稿（唯讀）"
+      "mailLegacy": "舊稿（唯讀）",
+      "taskAutoArchived": "「{{title}}」已封存",
+      "taskAutoArchivedUndo": "撤",
+      "taskAutoArchivePending": "去則自封存",
+      "taskAutoArchiveCancel": "此番不封"
     },
     "ghostHook": {
       "blockedFallback": "訊為法器所攔，未遣",
@@ -14765,7 +14836,9 @@
           "summaryAria": "MR !{{number}} 概覽",
           "urlPlaceholder": "GitHub PR 或 GitLab MR 連結",
           "notFound": "MR 不存，或今之名籍無權柄覽之"
-        }
+        },
+        "merge": "合併",
+        "conflicts": "有衝突"
       }
     },
     "schedule": {
@@ -15159,7 +15232,8 @@
         "resume": "復行",
         "pause": "暫止",
         "deleteAutomation": "刪自運"
-      }
+      },
+      "tagWebhook": "Webhook"
     },
     "detail": {
       "manualTrigger": "手觸",
@@ -15234,7 +15308,7 @@
         "titleCreate": "立自運",
         "titleProjectCreate": "立案之自運",
         "titleProjectEdit": "修案之自運",
-        "subtitle": "以 Claude、Codex 或 Pi 依期行 Prompt。",
+        "subtitle": "擇觸發方式，執行 AI 任務或腳本。",
         "subtitleFromGhost": "「{{name}}」請君立一自運。擇定模型而存之，即生效。",
         "save": "存之",
         "create": "立",
@@ -15282,7 +15356,7 @@
       },
       "fields": {
         "title": "題",
-        "schedule": "期程",
+        "schedule": "觸發之式",
         "notify": "告",
         "prompt": "提示詞",
         "once": "一次",
@@ -15398,7 +15472,87 @@
         "tooltip": "每番運行前先詢君所擇之法器：可放行、略此番或止此番運行，不能代君准允須君確認之事。",
         "unavailable": "法器不可用",
         "unavailableHint": "此法器已不可用。未改擇他器前，運行時依「法器有失時」之設處置。"
-      }
+      },
+      "layout": {
+        "content": "所行之事",
+        "notifications": "告知與靜行",
+        "contentTab": "內容與觸發",
+        "optionsTab": "執行之設",
+        "sections": "自動之設"
+      },
+      "webhook": {
+        "quotaHint": "Webhook 受信之數日有其限，此處之篩不減其數。請於發信之方（如 GitHub）唯選所需之事。",
+        "sourceLabel": "發信之方",
+        "sourceCustom": "自定",
+        "customLabel": "格式之述（JSON）",
+        "customHint": "以 JSON 述驗簽之法，及事名、投遞 ID 之所在。",
+        "customInvalid": "自定之格式不合，請察其 JSON。",
+        "signedLabel": "驗其簽名",
+        "signedHint": "唯受持鑰之發信方所請。",
+        "unsignedWarning": "既去簽名，凡得此址者皆可觸此務，且耗每日 Webhook 受信之數。址若外洩，請於務詳中更其址。",
+        "eventPicker": {
+          "label": "所應事件",
+          "choose": "擇事件",
+          "selected": "已擇 {{count}} 項",
+          "all": "全部事件",
+          "search": "尋事件",
+          "customGroup": "其餘已擇事件",
+          "noResults": "未得其事，可於進階處增之。",
+          "noPresets": "此源無定目。可收全部事件，或於進階處增事件名。",
+          "custom": "自訂事件（進階）",
+          "customLabel": "事件名",
+          "invalid": "請用 1–100 個字母、數字或 _ . : -，每次新增一個事件。",
+          "add": "增",
+          "limit": "至多擇 32 項。",
+          "chooseOne": "請至少擇一項，或明擇「全部事件」。",
+          "cancel": "罷",
+          "apply": "用之",
+          "remove": "移除 {{name}}",
+          "groups": {
+            "issues": "Issue",
+            "pullRequests": "PR",
+            "issueComments": "Issue / PR 留言",
+            "reviews": "PR 審查",
+            "checks": "檢查集",
+            "workflows": "流程執行",
+            "repository": "儲庫",
+            "releases": "版本發佈",
+            "mergeRequests": "合併請求",
+            "comments": "留言",
+            "pipelines": "管線",
+            "projects": "案",
+            "payments": "付款",
+            "checkout": "結帳",
+            "invoices": "帳單",
+            "subscriptions": "訂閱"
+          },
+          "actions": {
+            "all": "全部變化",
+            "created": "新立",
+            "closed": "關閉",
+            "reopened": "重開",
+            "edited": "編修",
+            "commitsUpdated": "提交更新",
+            "submitted": "提交審查",
+            "completed": "已畢",
+            "pushed": "程式碼推送",
+            "published": "發佈",
+            "merged": "合併",
+            "updated": "更新",
+            "tagsChanged": "標籤推送",
+            "declined": "拒絕",
+            "deleted": "刪除",
+            "succeeded": "成功",
+            "failed": "失敗",
+            "paid": "已付款"
+          }
+        }
+      },
+      "trigger": {
+        "label": "觸發方式",
+        "timed": "定時"
+      },
+      "runSettings": "運行設置"
     },
     "chips": {
       "selectProject": "擇案",
@@ -15597,6 +15751,91 @@
           "description": "每月體檢工作目錄之文件，尋過時與矛盾之處",
           "prompt": "體檢工作目錄中之文件，尋須更新之處。\n約束：\n- 察過時之資訊（舊日期、失效連結、已廢之流程或工具）、前後矛盾與重複之文\n- 每一患皆註卷之路徑與確切所在，述其所據\n- 依「宜更新 / 宜合併 / 宜刪除」分類，出修訂建議清單\n- 唯出體檢報告，勿徑改文件"
         }
+      }
+    },
+    "deadline": {
+      "label": "截止時刻",
+      "clear": "清除",
+      "hint": "留空則不限。時依 {{timezone}}；屆期不再自動運行，已啟者仍可完成。",
+      "invalid": "請填有效日期與時刻",
+      "expired": "已屆期"
+    },
+    "webhook": {
+      "title": "Webhook 觸發",
+      "url": "受信之址",
+      "secret": "密鑰",
+      "copy": "複製",
+      "copied": "{{label}}已錄",
+      "copyFailed": "未能錄{{label}}，請自選而複製。",
+      "urlUnavailable": "受信之址暫不可用。",
+      "quotaNotifyTitle": "Webhook 受信之數已盡",
+      "quotaExhausted": "今日 Webhook 受信之數 {{limit}} 次已盡，{{time}} 乃復。未復之時，外事不觸任務；定時之行與模型之額皆不受影響。",
+      "signedOut": "登 Cindy 之籍，則復受之，所設皆存。",
+      "serviceUnavailable": "此境暫無 Webhook 受信之服務。",
+      "suspended": "此籍之 Webhook 已停。",
+      "endpointLimit": "接收位址名額已滿，請釋放不再使用的位址。",
+      "offline": "此機暫未連伺服器。事暫存之，復連乃達。",
+      "localOnlyHint": "此址唯於此機有效。公網之事須轉來，如用 gh webhook forward。",
+      "eventsSummary": "諸事：{{events}}",
+      "lastReceived": "近事：{{time}}",
+      "neverReceived": "未有所受",
+      "ignored": "已略 {{count}} 事",
+      "generateSecret": "生成密鑰",
+      "rotateSecret": "更生密鑰",
+      "secretOnce": "請即複製此鑰，後不復示。",
+      "secretMissing": "未生密鑰之前，諸事皆拒。",
+      "rotateFailed": "密鑰未能生成。密鑰唯可於行此務之機管理。",
+      "genericSender": "發信之方",
+      "secretFillHint": "請填於 {{sender}} 之「{{field}}」。",
+      "secretPastePlaceholder": "貼 {{sender}} 之「{{field}}」",
+      "secretSave": "存其密鑰",
+      "secretSaved": "密鑰已存。",
+      "secretSaveFailed": "密鑰未能存。密鑰唯可於行此務之機管理。",
+      "secretInvalid": "密鑰之式不合，請自發信方複取。",
+      "secretPasteMissing": "未貼發信方之鑰以前，諸事皆拒。",
+      "unsignedNotice": "未啟簽名：凡得此址者皆可觸此務。址若外洩，請更其址。",
+      "rotateUrl": "更其址",
+      "rotateUrlConfirmTitle": "更受信之址乎？",
+      "rotateUrlConfirmBody": "舊址即刻失效，須以新址填於發信方。設置與密鑰如故。",
+      "rotateUrlFailed": "未能更址，請稍後再試。",
+      "addressHint": "將此位址填入 {{sender}} 的 Webhook 設定。",
+      "testHint": "於 {{sender}} 觸發符合篩選條件之事件，執行結果列於下方。",
+      "waitingEvent": "候事件",
+      "manageConnection": "連線設定",
+      "preparing": "方備接收位址…",
+      "noRunsHint": "收到符合篩選條件之 Webhook 事件後，執行結果列於此處。",
+      "account": {
+        "title": "接收位址",
+        "manage": "管理",
+        "usage": "接收位址 {{used}} / {{limit}}",
+        "description": "此帳號在所有電腦上的接收位址共用名額。舊電腦不在線上，也可以釋放。",
+        "remaining": "剩餘 {{count}} 個",
+        "unavailable": "目前服務尚不支援帳號位址管理，請等待服務更新。",
+        "loadFailed": "無法取得位址清單，請檢查連線後重新整理。",
+        "releaseFailed": "未能確認釋放結果，請重新整理清單核對後再試。",
+        "retry": "重新整理",
+        "loading": "正在讀取接收位址…",
+        "empty": "尚未使用接收位址",
+        "thisDevice": "本機",
+        "unnamed": "自動化 {{id}}",
+        "unnamedDevice": "裝置 {{id}}",
+        "suspended": "已停用，仍占用名額",
+        "lastReceived": "最近接收：{{time}}",
+        "neverReceived": "尚未接收事件",
+        "open": "查看自動化",
+        "release": "釋放",
+        "confirm": "釋放 {{device}} 上「{{name}}」的接收位址？",
+        "confirmHint": "舊位址、金鑰和伺服器暫存事件將失效，舊電腦重新上線也不會自動恢復。自動化及執行記錄保留，已開始的執行不受影響。",
+        "cancel": "取消",
+        "confirmRelease": "釋放位址",
+        "viewAddress": "查看位址",
+        "done": "完成",
+        "released": "已釋放「{{name}}」的接收位址。",
+        "releasedHint": "此接收位址已釋放，不再占用名額。重新連線會產生新位址，需要重新設定傳送方。",
+        "reconnect": "重新連線",
+        "reconnectConfirm": "重新連線 Webhook？",
+        "reconnectConfirmHint": "將占用一個名額並產生新的接收位址。請將新位址和金鑰更新至傳送方。",
+        "reconnectFailed": "暫時無法重新連線，請檢查剩餘名額後再試。"
       }
     }
   },
@@ -16804,7 +17043,10 @@
       "registrationFailed": "立之未成，請稍後再試",
       "silentStopExhausted": "模型屢返空答，自動續行已暫止。點「繼續」以復差事。",
       "executionResultUnavailable": "未得行之結果，自動接續已止。可請助手察既有之結果。",
-      "outputLimit": "模型已達輸出長度之限，此輪之答或有不全。逕遣下一訊即可續之。",
+      "outputLimit": "模型已達輸出之限，此答或有不全。可遣新訊以續；若屢至此限，宜降推理強度，或先壓縮對話記錄。",
+      "outputLimitReasoning": "思考已耗本次輸出預算之大半，此答或有不全。宜降推理強度，或先壓縮對話記錄，而後續之。",
+      "outputLimitUsage": "本次模型請求已輸出 {{outputTokens}} tokens，其中 {{reasoningTokens}} tokens 用於思考。",
+      "outputLimitOutputUsage": "本次模型請求已輸出 {{outputTokens}} tokens。",
       "permissionTightenInterruptFailed": "收緊權柄時未能止方行之差事，其或將免確認而行至終；如有需要，請手止之。",
       "codexAutoReviewUnavailable": "自動審批暫不可用，此舉已阻，權柄已改為預設。請再試，需時當問於君。",
       "hostShellCommandBlocked": "Cindy 已阻此 Shell 命令。請察其命令，改用可用之工具或命令續之。",
@@ -17287,6 +17529,7 @@
     "sidebar": "餘資與訂閱",
     "settings": {
       "title": "耗用與計費",
+      "supportHint": "若有所困，可致函 {{email}} 求助。",
       "subscriptionCard": {
         "title": "今之套餐",
         "empty": "今無生效之訂閱",
@@ -17361,14 +17604,38 @@
     },
     "orders": {
       "title": "訂單錄",
-      "description": "唯示於 Cindy 內所發之儲值與訂閱訂單。待付之訂單逾時則自罷。",
+      "description": "顯示已付款的儲值訂單與已結清的訂閱帳單。",
+      "history": {
+        "loadFailed": "無法載入訂單記錄",
+        "retry": "重新載入訂單",
+        "unknownPaidAt": "付款時間不明",
+        "unknownAmount": "金額不明",
+        "refundedAmount": "已退 {{amount}}",
+        "refunded": "已退款",
+        "partiallyRefunded": "部分退款",
+        "noPayment": "無需付款",
+        "page": "第 {{page}} 頁",
+        "previous": "上一頁",
+        "next": "下一頁"
+      },
       "count": "{{count}} 筆",
-      "incomplete": "訂單之記甚多，今唯示最近 {{count}} 筆。",
       "orderId": "NO. {{id}}",
       "copy": {
         "action": "錄訂單 ID {{id}}",
         "success": "訂單 ID 已錄",
         "failed": "錄訂單 ID 未成，請再試"
+      },
+      "refund": {
+        "action": "請退款",
+        "title": "請退款",
+        "description": "請將下列資訊寄至客服信箱 {{email}}，以請退款。",
+        "emailSubject": "Cindy 退款之請 - {{orderId}}",
+        "sendAction": "寄退款之請",
+        "gmailFallbackDescription": "退款之請含訂單資訊。開 Gmail 則此資訊將分享予 Google，續乎？",
+        "emailBody": "您好，欲請退還下列訂單款項，煩請協助。\n\n訂單號：{{orderId}}\n渠道交易號：{{providerTransactionId}}\n應用程式：{{application}}\n付款方式：{{paymentMethod}}\n實付金額：{{amount}}\n\n所遇之事：\n（請略述所遇之情）\n\n謹謝。",
+        "fields": {
+          "amount": "實付金額"
+        }
       },
       "invoice": {
         "action": "請開票",
@@ -17378,7 +17645,7 @@
         "emailSubject": "請開訂單 {{orderId}} 之發票",
         "personalInvoicePolicy": "Cindy 個人版儲值，預設開立<strong>個人抬頭發票</strong>，抬頭可書姓名或「個人」。如需企業抬頭發票以供公司報銷，請具<strong>加蓋公司公章之報銷說明</strong>，並於說明中註明開票抬頭。",
         "invoiceTitleHint": "填寫說明：個人抬頭請書姓名或「個人」；如需企業抬頭以供公司報銷，請隨郵件附加蓋公司公章、註明開票抬頭之報銷說明。",
-        "emailBody": "敬啟者：\n\n欲請開立下列訂單之發票：\n\n────────────────────\n訂單號：{{orderId}}\n應用程式：{{application}}\n付款方式：{{paymentMethod}}\n開票金額：{{amount}}\n發票抬頭：\n{{invoiceTitleHint}}\n\n聯絡人：\n聯絡電話：\n信箱：\n────────────────────\n\n謹謝。",
+        "emailBody": "敬啟者：\n\n欲請開立下列訂單之發票：\n\n────────────────────\n訂單號：{{orderId}}\n渠道交易號：{{providerTransactionId}}\n應用程式：{{application}}\n付款方式：{{paymentMethod}}\n開票金額：{{amount}}\n發票抬頭：\n{{invoiceTitleHint}}\n\n聯絡人：\n聯絡電話：\n信箱：\n────────────────────\n\n謹謝。",
         "sendAction": "寄開票之請",
         "emailCopied": "客服信箱已錄",
         "emailCopyFailed": "錄客服信箱未成，請再試",
@@ -17389,6 +17656,7 @@
         "notAvailable": "暫無其資",
         "fields": {
           "orderId": "訂單號",
+          "providerTransactionId": "渠道交易號",
           "application": "應用程式",
           "paymentMethod": "付款方式",
           "amount": "開票金額",
@@ -18836,6 +19104,9 @@
     "pendingApprovals": "{{count}} 項待確"
   },
   "richAnswer": {
+    "invalidImageReference": "圖之引用無效，未能示之。",
+    "requestImageAgain": "請重示此圖",
+    "requestImageAgainMessage": "請重示此既有之圖（{{name}}，引用：{{source}}）。核原工具之果或原檔，以實址示之，勿另生新圖；若未能辨其所指，先問於我。",
     "send": "遣訊",
     "sending": "方遣…",
     "sent": "已呈",
