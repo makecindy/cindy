@@ -263,7 +263,8 @@ export function mountRemoteDesktopViewer(root, postMessage, config) {
   let keyboardFitWidth = null;
   let cursorNeedsEntry = true,
     manualViewMoved = false,
-    followRest = null;
+    followRest = null,
+    shown = null;
   // Insets guide centering and pan limits without clipping the full-screen
   // video surface or adding an opaque strip beside the Dynamic Island.
   // Keep the host's requested insets intact: a skin/posture update can arrive
@@ -635,6 +636,31 @@ export function mountRemoteDesktopViewer(root, postMessage, config) {
       maxY: Math.max(minY, bottom - 8 - (h - hotY)),
     };
   }
+  // A desktop that fits the visible area already shows the whole cursor.
+  const cursorCanHide = (r) =>
+    zoom > 1 ||
+    r.width > viewportWidth() ||
+    r.height > stage.clientHeight - viewportBottom();
+  // Settle inside the pan limits, then move only as far as the cursor needs.
+  function revealCursor() {
+    stopPanAnimation();
+    followRest = null;
+    const r = layout(),
+      b = panBounds(r);
+    let x = bounded(r.x, b.minX, b.maxX),
+      y = bounded(r.y, b.minY, b.maxY);
+    if (cursorCanHide(r)) {
+      const v = cursorViewport(),
+        px = x + cx * r.width,
+        py = y + cy * r.height;
+      x += bounded(px, v.minX, v.maxX) - px;
+      y += bounded(py, v.minY, v.maxY) - py;
+    }
+    place(x, y, r);
+    followRest = { fx, fy, zoom };
+    cursorNeedsEntry = false;
+    manualViewMoved = false;
+  }
   function moveTouchpad(dx, dy) {
     stopPanAnimation();
     const r = layout(),
@@ -652,11 +678,7 @@ export function mountRemoteDesktopViewer(root, postMessage, config) {
     cy = clamp(cy + dy / r.height);
     const x = r.x + cx * r.width,
       y = r.y + cy * r.height;
-    if (
-      zoom > 1 ||
-      r.width > viewportWidth() ||
-      r.height > stage.clientHeight - viewportBottom()
-    ) {
+    if (cursorCanHide(r)) {
       place(
         r.x + bounded(x, v.minX, v.maxX) - x,
         r.y + bounded(y, v.minY, v.maxY) - y,
@@ -694,6 +716,18 @@ export function mountRemoteDesktopViewer(root, postMessage, config) {
   }
   function render() {
     const r = layout();
+    const v = cursorViewport(),
+      shownX = r.x + cx * r.width,
+      shownY = r.y + cy * r.height;
+    shown = {
+      ...r,
+      stageWidth: stage.clientWidth,
+      cursorVisible:
+        shownX >= v.minX - 1 &&
+        shownX <= v.maxX + 1 &&
+        shownY >= v.minY - 1 &&
+        shownY <= v.maxY + 1,
+    };
     if (config.nativeMedia && epoch)
       post({
         type: "nativeViewport",
@@ -1698,11 +1732,29 @@ export function mountRemoteDesktopViewer(root, postMessage, config) {
       height: usableHeight(),
     });
   }
+  // A height-only resize is the keyboard or a panel: hold a visible cursor
+  // where it was on screen, then move only as far as the new size requires.
+  function keepCursorAcrossResize() {
+    const before = shown;
+    if (!before?.cursorVisible) {
+      settlePan();
+      return;
+    }
+    if (before.stageWidth === stage.clientWidth) {
+      const r = layout();
+      place(
+        before.x + cx * (before.width - r.width),
+        before.y + cy * (before.height - r.height),
+        r,
+      );
+    }
+    revealCursor();
+  }
   const observer = new ResizeObserver(() => {
     statusOrigin = null;
     reportViewport();
     release();
-    settlePan();
+    keepCursorAcrossResize();
     render();
   });
   observer.observe(stage);
@@ -2415,9 +2467,21 @@ export function mountRemoteDesktopViewer(root, postMessage, config) {
           const wasOpen = keyboardViewportInset > 0;
           keyboardViewportInset = keyboardInset;
           if (fillHeight && (keyboardInset > 0 || wasOpen)) {
+            // A visible cursor holds still; otherwise move just enough to
+            // show it. Closing first returns to the normal pan limits.
             const r = layout(),
               v = cursorViewport();
-            place(r.x, (v.minY + v.maxY) / 2 - cy * r.height, r);
+            let y = r.y;
+            if (keyboardInset === 0) {
+              followRest = null;
+              const b = panBounds(r);
+              y = bounded(y, b.minY, b.maxY);
+            }
+            if (cursorCanHide(r)) {
+              const py = y + cy * r.height;
+              y += bounded(py, v.minY, v.maxY) - py;
+            }
+            place(r.x, y, r);
             cursorNeedsEntry = false;
             manualViewMoved = false;
           }

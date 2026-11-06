@@ -913,10 +913,14 @@ describe("remote desktop viewport", () => {
       expect(parseFloat(v.elements.image.style.left)).toBeCloseTo(
         parseFloat(originalLeft),
       );
+      const originalTop = parseFloat(v.elements.image.style.top);
       // Header, computer keyboard, phone keyboard, and closing the keyboard.
       for (const bottomInset of [60, 260, 300, 0]) {
         const previousLeft = parseFloat(v.elements.image.style.left);
         const previousCursorX = previousLeft + cursorX * parseFloat(width);
+        const previousCursorY =
+          parseFloat(v.elements.image.style.top) +
+          0.85 * parseFloat(v.elements.image.style.height);
         const rightInset = bottomInset > 0 ? 0 : 80;
         const expectedCursorX = Math.max(
           67,
@@ -940,9 +944,17 @@ describe("remote desktop viewport", () => {
         expect(parseFloat(image.left)).toBeCloseTo(
           previousLeft + expectedCursorX - previousCursorX,
         );
-        expect(
-          parseFloat(image.top) + 0.85 * parseFloat(image.height),
-        ).toBeCloseTo((400 - bottomInset) / 2);
+        // A visible cursor holds still; a covered one moves just into view.
+        const cursorY = parseFloat(image.top) + 0.85 * parseFloat(image.height);
+        if (bottomInset > 0) {
+          expect(cursorY).toBeCloseTo(
+            Math.max(17, Math.min(400 - bottomInset - 17, previousCursorY)),
+          );
+        } else {
+          expect(cursorY).toBeGreaterThanOrEqual(17);
+          expect(cursorY).toBeLessThanOrEqual(400 - 17);
+          if (scale === 1) expect(parseFloat(image.top)).toBeCloseTo(originalTop);
+        }
       }
     },
   );
@@ -1415,6 +1427,46 @@ describe("portrait keyboard positioning", () => {
       expect(parseFloat(v.elements.image.style.top)).toBeCloseTo(originalTop);
     },
   );
+  // The keyboard shrinks the portrait stage; keeping the old viewport center
+  // used to push a zoomed desktop's cursor out of view.
+  it.each([
+    [200, 200],
+    [500, 600 - 300 - 17],
+  ])("keeps a zoomed cursor at %s in view as the keyboard opens", (screenY, expectedY) => {
+    const v = viewer();
+    v.send({ type: "init", epoch: "keyboard", width: 1920, height: 1080 });
+    v.pointer("pointerdown", 1, 190, 300);
+    v.pointer("pointerdown", 2, 210, 300);
+    v.pointer("pointermove", 1, 150, 300);
+    v.pointer("pointermove", 2, 250, 300);
+    v.frame();
+    v.frame(40);
+    v.pointer("pointermove", 1, 50, 300);
+    v.pointer("pointermove", 2, 350, 300);
+    v.frame();
+    v.pointer("pointerup", 1, 50, 300);
+    v.pointer("pointerup", 2, 350, 300);
+    for (let i = 0; i < 30; i++) v.frame(20);
+    const style = () => v.elements.image.style;
+    const top = parseFloat(style().top),
+      left = parseFloat(style().left),
+      width = parseFloat(style().width),
+      height = parseFloat(style().height);
+    expect(width).toBeGreaterThan(400);
+    const x = 0.5,
+      y = (screenY - top) / height;
+    v.send({
+      type: "frame",
+      jpeg: "",
+      cursor: { x, y, width: 18, height: 18, hotX: 9, hotY: 9, visible: true, png: "iVBORw0KGgo=" },
+    });
+    v.elements.stage.clientHeight = 300;
+    v.resize();
+    for (let i = 0; i < 30; i++) v.frame(20);
+    expect(parseFloat(style().width)).toBeCloseTo(width);
+    expect(parseFloat(style().left) + x * width).toBeCloseTo(left + x * width);
+    expect(parseFloat(style().top) + y * height).toBeCloseTo(expectedY);
+  });
   it("limits the offset to available space below the desktop", () => {
     const v = viewer();
     v.elements.stage.clientHeight = 240;
