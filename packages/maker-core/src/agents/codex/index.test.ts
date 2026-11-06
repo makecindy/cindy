@@ -26553,6 +26553,40 @@ describe('CodexAgent turn lifecycle', () => {
     }
   });
 
+  it('lets Codex retry an internal server error with a model code in the details', async () => {
+    const agent = new CodexAgent(createDeps());
+    const host = installFakeHost(agent);
+    const handle = await agent.startSession({
+      sessionId: 'session-retry-internal-server-error', model: 'gpt-6.1-sol', workingDir: '/repo',
+    });
+    try {
+      const handlers = host.getThreadHandlers()!;
+      const iterator = handle.events()[Symbol.asyncIterator]();
+      const threadId = 'start-thread-id';
+      const turnId = 'turn-1';
+      handlers.turnStarted?.({ threadId, turn: { id: turnId } });
+      handlers.error?.({
+        threadId, turnId, willRetry: true,
+        error: {
+          message: 'Reconnecting... 1/5',
+          codexErrorInfo: 'internalServerError',
+          additionalDetails: '{"error":{"code":"model_not_found"}}',
+        },
+      });
+
+      expect(host.request.mock.calls.filter(([method]) => method === Method.TurnInterrupt)).toHaveLength(0);
+      expect(await nextEvent(iterator)).toMatchObject({
+        type: 'error', data: { message: 'Reconnecting... 1/5', isTerminal: false, willRetry: true },
+      });
+      expect(handle.isTurnRunning?.()).toBe(true);
+      handlers.turnCompleted?.({ threadId, turn: { id: turnId, status: 'completed' } });
+      expect(await nextEvent(iterator)).toMatchObject({ type: 'status', data: { isRunning: false } });
+      expect(await nextEvent(iterator)).toMatchObject({ type: 'done' });
+    } finally {
+      await handle.close();
+    }
+  });
+
   it('escalates a persistent willRetry retry-loop to a terminal error (issue #677)', async () => {
     // 远端摸不到 Codex 后端时 daemon 无限发 willRetry=true — 升级逻辑应在阈值处
     // 合成终态错误并复位 turn (isTurnRunning=false + Done status), 消息里带原始

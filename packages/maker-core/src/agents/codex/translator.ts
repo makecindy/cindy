@@ -627,7 +627,8 @@ export function isCodexModelUnavailableError(error: CodexErrorInput | null | und
   const info = error?.codexErrorInfo;
   const tag = codexErrorInfoTag(info);
   if (tag === 'unauthorized' || tag === 'usageLimitExceeded' || tag === 'sessionBudgetExceeded'
-    || tag === 'serverOverloaded' || tag === 'contextWindowExceeded' || tag === 'cyberPolicy') return false;
+    || tag === 'serverOverloaded' || tag === 'internalServerError'
+    || tag === 'contextWindowExceeded' || tag === 'cyberPolicy') return false;
   const httpInfo: { httpStatusCode?: number | null } | undefined =
     info && typeof info === 'object' && (tag === 'httpConnectionFailed' ||
       tag === 'responseStreamConnectionFailed' || tag === 'responseStreamDisconnected' ||
