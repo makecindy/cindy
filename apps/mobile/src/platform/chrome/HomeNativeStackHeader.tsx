@@ -148,8 +148,11 @@ export const HomeNativeStackHeader = memo(function HomeNativeStackHeader({
   const sideHugLeft = menuRight == null ? sideLeft : Math.min(sideLeft, menuRight + spacing.md);
   // Where the name starts, in window points: centered, but never left of the menu and never past
   // the content edge; offset from the item's own leading edge.
-  const sideOffset = sideContent == null ? 0 : Math.max(sideHugLeft,
-    Math.min((insets.left + contentRight - sideContent) / 2, contentRight - sideContent)) - sideLeft;
+  // On a wide window the centered spot can lie left of the item altogether, where nothing takes
+  // taps; keep at least one tap target of the title, chevron included, inside the item.
+  const sideOffset = sideContent == null ? 0 : Math.max(
+    Math.max(sideHugLeft, Math.min((insets.left + contentRight - sideContent) / 2, contentRight - sideContent)),
+    sideLeft + navigationChrome.target - sideContent) - sideLeft;
 
   if (!usesNativeStackHeader()) return null;
 

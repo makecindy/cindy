@@ -163,3 +163,16 @@ it.each([
     expect(Number(hit.getAttribute('data-margin-left'))).toBe(margin);
     expect(Number(hit.getAttribute('data-padding-left'))).toBe(padding);
   });
+
+// A wide landscape window (900pt, trailing item capped at 360pt from x=540) centers a 100pt title at
+// x=350–450, entirely left of the item where nothing takes taps; one tap target (44pt) of it, the
+// chevron included, stays inside: it starts 56pt left of the item.
+it('Duo wide window keeps a tap target of a centered short title inside the trailing item', async () => {
+  h.frameWidth = 900;
+  h.naturalWidth = 92;
+  h.menuFrame = [22, 44];
+  expect(await renderTitleWidth({ remoteDesktop: true, keepMenuTopLeft: true })).toBe(360);
+  const hit = node.querySelector('[data-testid="custom-toolbar-item"] [data-title-hit]')!;
+  expect(Number(hit.getAttribute('data-margin-left'))).toBe(-56);
+  expect(Number(hit.getAttribute('data-padding-left'))).toBe(4);
+});
