@@ -6029,7 +6029,7 @@ const registerIpcHandlers = () => {
         if (!filepath) return false;
         if (!safeStorage.isEncryptionAvailable()) return false;
         const encrypted = safeStorage.encryptString(value);
-        const keyOwnerScope = activeOwnerScopeKey();
+        const keyOwnerScope = key === 'api_key' ? activeOwnerScopeKey() : null;
         const prepareResult = await prepareApiKeyChangeMaybeRestartCodex(key);
         if (!prepareResult.ok) return false;
         const dir = path.dirname(filepath);
