@@ -40,7 +40,7 @@ function view(kind: string): SlackHookView {
               expiresAt: null,
               reason: null,
               remediationUrl: 'https://applink.feishu.cn/client/bot/open?appId=cli_app',
-              actions: ['revoke', 'open_provider'],
+              actions: ['revoke', 'open_provider', 'select_device'],
             },
           }
         : {
@@ -89,6 +89,7 @@ void mountPage({
     hookControl: {
       get: async () => ({ hook: view(String(ctx.data.kind)) }),
       onStatusChanged: subscription('hook-status'),
+      providerBindSelect: async () => ({ hook: view('confirmed') }),
       onPrefsChanged: subscription('hook-prefs'),
       onProviderPrefsChanged: subscription('hook-provider-prefs'),
       onWorkspaceProviderSourcesChanged: subscription('hook-sources'),

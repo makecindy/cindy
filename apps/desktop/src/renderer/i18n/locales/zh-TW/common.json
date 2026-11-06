@@ -6294,7 +6294,7 @@
           }
         },
         "feishu": {
-          "description": "同一飛書 / Lark 帳號可關聯多台電腦，在機器人選單中切換工作電腦，預設使用最新關聯的電腦。私訊 Cindy 或在群組中 @它即可開始。",
+          "description": "從飛書發訊息，交給工作電腦處理。",
           "disabledHint": "開啟開關後，在瀏覽器裡授權飛書帳號，或把關聯碼傳給飛書機器人。",
           "toggleAria": "切換飛書 / Lark 連線",
           "connect": "關聯飛書",
@@ -6304,7 +6304,7 @@
           "openBot": "開啟飛書機器人",
           "unlink": "解綁飛書",
           "unlinkConfirmTitle": "解綁飛書？",
-          "unlinkConfirmDescription": "解除這台電腦與飛書 / Lark 的關聯？其他已關聯電腦、本機專案和其他管道連線不受影響。",
+          "unlinkConfirmDescription": "僅解除這台電腦的關聯。",
           "unavailableHint": "你所在的組織還沒有設定飛書機器人，請聯絡組織管理員。",
           "unavailableHintPersonal": "飛書機器人暫未向個人帳號開放。",
           "status": {
@@ -6328,7 +6328,9 @@
             "copy": "複製關聯碼",
             "copied": "關聯碼已複製",
             "hint": "或者在飛書裡把關聯碼私訊傳給 Cindy 機器人"
-          }
+          },
+          "setWorkingDevice": "設為工作電腦",
+          "workingDeviceSet": "已設為工作電腦"
         }
       },
       "summary": {

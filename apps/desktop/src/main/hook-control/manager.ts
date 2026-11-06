@@ -48,6 +48,8 @@ import {
   makePrefsSet,
   makeProviderBindCancel,
   makeProviderBindRevoke,
+  makeProviderBindSelect,
+  PROVIDER_BIND_SELECT_TIMEOUT_MS,
   makeProviderBindStart,
   makeProviderBehaviorGet,
   makeProviderBehaviorSet,
@@ -308,6 +310,7 @@ export interface HookControlManager {
   providerBindStart(provider: NeutralHookProvider): boolean;
   providerBindCancel(provider: NeutralHookProvider): boolean;
   providerBindRevoke(provider: NeutralHookProvider): boolean;
+  providerBindSelect(provider: NeutralHookProvider): Promise<void>;
   /** 在本机安全打开 provider 的绑定链接 / bot 主页 / 加群链接(main 边界校验)。 */
   openProviderAction(
     provider: NeutralHookProvider,
@@ -571,6 +574,8 @@ interface NeutralProviderLane {
   serverFeatures: string[];
   serverWelcomeReceived: boolean;
   /** 在途的 provider prefs 往返(requestId -> 挂起 promise; replyTo 配对)。 */
+  pendingSelection: { requestId: string; bindingId: string; scopeId: string | null;
+    resolve: () => void; reject: (error: Error) => void; timer: ReturnType<typeof setTimeout> } | null;
   pendingPrefs: Map<
     string,
     {
@@ -902,6 +907,7 @@ export function createHookControlManager(deps: HookControlManagerDeps): HookCont
       serverFeatures: [],
       serverWelcomeReceived: false,
       pendingPrefs: new Map(),
+      pendingSelection: null,
       pendingBehavior: new Map(),
     };
   }
@@ -1089,7 +1095,12 @@ export function createHookControlManager(deps: HookControlManagerDeps): HookCont
   }
 
   /** 单线断线只 fail 本线的 provider prefs 请求, 不波及 Slack 或其它线。 */
-  function drainLanePendingPrefs(lane: NeutralProviderLane): void {
+  function drainLanePendingRequests(lane: NeutralProviderLane): void {
+    if (lane.pendingSelection !== null) {
+      clearTimeout(lane.pendingSelection.timer);
+      lane.pendingSelection.reject(new HookNotConnectedError(lane.config.provider));
+      lane.pendingSelection = null;
+    }
     for (const [, pending] of lane.pendingPrefs) {
       clearTimeout(pending.timer);
       pending.reject(new HookNotConnectedError(lane.config.provider));
@@ -1743,7 +1754,7 @@ export function createHookControlManager(deps: HookControlManagerDeps): HookCont
       // Binding identity is the prefs isolation key. Fail every old request
       // immediately instead of leaving the editor pending until a stale reply
       // or the generic timeout happens to arrive.
-      drainLanePendingPrefs(lane);
+      drainLanePendingRequests(lane);
       drainLanePendingBehavior(lane);
       if (lane.config.provider === 'telegram') {
         resetGroupContextCursorsSafely();
@@ -2193,6 +2204,7 @@ export function createHookControlManager(deps: HookControlManagerDeps): HookCont
     }
     const lane = neutralLaneFor(expectedProvider);
     const neutralOnly =
+      msg.type === 'provider.bind.selection' ||
       msg.type === 'provider.bind.update' ||
       msg.type === 'provider.bind.state' ||
       msg.type === 'provider.prefs.state' ||
@@ -2343,6 +2355,17 @@ export function createHookControlManager(deps: HookControlManagerDeps): HookCont
         return;
       }
       notifyPrefs?.(view);
+      return;
+    }
+    if (msg.type === 'provider.bind.selection') {
+      if (lane === null || msg.payload.provider !== lane.config.provider) return;
+      const pending = lane.pendingSelection;
+      if (pending === null || msg.payload.requestId !== pending.requestId || msg.payload.bindingId !== pending.bindingId) return;
+      lane.pendingSelection = null;
+      clearTimeout(pending.timer);
+      if (msg.payload.ok && lane.binding?.state === 'confirmed' && lane.binding.bindingId === pending.bindingId
+        && lane.binding.scopeId === pending.scopeId) pending.resolve();
+      else pending.reject(new Error('Working computer selection failed'));
       return;
     }
     if (msg.type === 'provider.prefs.state') {
@@ -2800,7 +2823,7 @@ export function createHookControlManager(deps: HookControlManagerDeps): HookCont
     // can let a later enable act on stale rollout information.
     lane.serverFeatures = [];
     lane.serverWelcomeReceived = false;
-    drainLanePendingPrefs(lane);
+    drainLanePendingRequests(lane);
     drainLanePendingBehavior(lane);
     t?.dispose();
   }
@@ -2933,7 +2956,7 @@ export function createHookControlManager(deps: HookControlManagerDeps): HookCont
           lane.openRequestId = null;
           lane.bindRequest = null;
           clearLaneBindWatchdog(lane);
-          drainLanePendingPrefs(lane);
+          drainLanePendingRequests(lane);
           drainLanePendingBehavior(lane);
           dispatcher?.onDisconnected(dispatchId(provider));
           log.warn(
@@ -2954,7 +2977,7 @@ export function createHookControlManager(deps: HookControlManagerDeps): HookCont
         lane.lastError = err;
         if (s !== 'connected' || !laneCapabilityReady(lane)) {
           dispatcher?.onDisconnected(dispatchId(provider));
-          drainLanePendingPrefs(lane);
+          drainLanePendingRequests(lane);
           drainLanePendingBehavior(lane);
         }
         if (s === 'connected' && laneCapabilityReady(lane)) {
@@ -3335,6 +3358,32 @@ export function createHookControlManager(deps: HookControlManagerDeps): HookCont
       );
       if (sent) lane.bindRequest = { kind: 'revoke', requestId, bindingId };
       return sent;
+    },
+    async providerBindSelect(provider) {
+      const lane = laneByProvider.get(provider);
+      const binding = lane?.binding;
+      if (provider !== 'feishu' || !lane || !accountActive || disposed || lane.status !== 'connected'
+        || !lane.config.isEnabled() || !laneCapabilityReady(lane) || lane.awaitingStateSnapshot
+        || lane.transport === null || binding?.state !== 'confirmed' || !binding.bindingId
+        || !binding.actions.includes('select_device')) throw new HookNotConnectedError(provider);
+      if (lane.pendingSelection !== null) throw new Error('Working computer selection is already pending');
+      const requestId = randomUUID();
+      await new Promise<void>((resolve, reject) => {
+        const timer = setTimeout(() => {
+          lane.pendingSelection = null;
+          reject(new Error('Working computer selection timed out'));
+        }, PROVIDER_BIND_SELECT_TIMEOUT_MS);
+        timer.unref?.();
+        lane.pendingSelection = { requestId, bindingId: binding.bindingId!, scopeId: binding.scopeId, resolve, reject, timer };
+        try {
+          if (!lane.transport!.send(makeProviderBindSelect({ requestId, provider, bindingId: binding.bindingId!, expiresAt: Date.now() + PROVIDER_BIND_SELECT_TIMEOUT_MS }))) {
+            drainLanePendingRequests(lane);
+          }
+        } catch (error) {
+          clearTimeout(timer); lane.pendingSelection = null;
+          reject(error);
+        }
+      });
     },
     async openProviderAction(provider, action) {
       const lane = laneByProvider.get(provider);

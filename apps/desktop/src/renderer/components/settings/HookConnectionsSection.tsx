@@ -474,7 +474,7 @@ export function HookConnectionsSection({ companion }: { companion?: { id: string
    * 让授权进度与兜底动作(复制链接 / 安装引导)立即可见。
    */
   const targetCard = (['slack', 'telegram', 'x', 'feishu'] as const).find(
-    (card) => entry?.targetId === 'cindy-im-' + card,
+    (card) => entry?.targetId === 'cindy-im-' + card || entry?.fallbackTargetId === 'cindy-im-' + card,
   ) ?? null;
   const [expandedCard, setExpandedCard] = useState<CindyImCard | null>(companion ? 'x' : targetCard);
   useLayoutEffect(() => {
@@ -606,6 +606,17 @@ export function HookConnectionsSection({ companion }: { companion?: { id: string
   const pendingIssueCount = (hook !== null && hook.pendingBind !== null ? 1 : 0) + displacedCount;
 
   /** (multi-team)绑定动作 IPC 的统一收口(应用快照 + 失败 toast)。 */
+  const [selectingWorkingDevice, setSelectingWorkingDevice] = useState(false);
+  const selectWorkingDevice = async () => {
+    setSelectingWorkingDevice(true);
+    try {
+      await window.electronAPI.hookControl.providerBindSelect('feishu');
+      toast.success(t('settings.remoteControl.hook.feishu.workingDeviceSet'));
+    } catch {
+      toast.error(t('settings.remoteControl.hook.toast.actionFailed'));
+    } finally { setSelectingWorkingDevice(false); }
+  };
+
   const runHookAction = useCallback(
     (
       action: () => Promise<{ hook: SlackHookView }>,
@@ -1583,6 +1594,14 @@ export function HookConnectionsSection({ companion }: { companion?: { id: string
                       onClick={() => handleProviderOpen(provider, 'add-to-group')}
                     >
                       {t(`settings.remoteControl.hook.${provider}.addToGroup`)}
+                    </Button>
+                  ) : null}
+                  {provider === 'feishu' && cs.actions.includes('select_device') ? (
+                    <Button id={imBotSettings.cindyFeishuWorkingDevice.targetId} data-setting-id={imBotSettings.cindyFeishuWorkingDevice.id}
+                      variant="secondary" size="xs" compact type="button"
+                      disabled={selectingWorkingDevice || !view.available || view.status !== 'connected'}
+                      onClick={() => void selectWorkingDevice()}>
+                      {t('settings.remoteControl.hook.feishu.setWorkingDevice')}
                     </Button>
                   ) : null}
                   {cs.actions.includes('revoke') ? (

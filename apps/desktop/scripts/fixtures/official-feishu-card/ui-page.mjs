@@ -39,6 +39,9 @@ export default {
   },
   async check(page, ui) {
     const card = page.locator('#cindy-im-feishu-panel');
+    if (ui.data.kind === 'confirmed') {
+      assert.ok(await card.getByRole('button', { name: await ui.t('settings.remoteControl.hook.feishu.setWorkingDevice'), exact: true }).isVisible());
+    }
     if (ui.data.kind === 'pending') {
       assert.ok(await card.getByText('7KQ4-M2XD', { exact: true }).isVisible());
       assert.ok(

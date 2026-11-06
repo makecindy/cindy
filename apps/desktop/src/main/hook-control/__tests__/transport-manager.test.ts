@@ -36,6 +36,7 @@ import {
   makePing,
   makePrefsState,
   makeProviderBindState,
+  makeProviderBindSelection,
   makeProviderBindUpdate,
   makeProviderBehaviorState,
   makeProviderPrefsState,
@@ -3223,6 +3224,34 @@ function feishuLaneHarness(
 }
 
 describe('官方飞书 / Lark provider lane', () => {
+  it('selects this linked computer only after its matching server acknowledgment, and fails on disconnect', async () => {
+    const { manager, transports, sent } = feishuLaneHarness({}, { feishuEnabled: true });
+    manager.sync();
+    const opts = transports[0]!;
+    opts.onWelcome?.({ serverName: 'feishu-hook', features: FEISHU_FEATURES });
+    opts.onStatus('connected', null);
+    opts.onMessage(makeProviderBindState(FEISHU_CONFIRMED), () => true);
+    // Old servers do not advertise this operation; a cached binding also cannot grant it.
+    await expect(manager.providerBindSelect('feishu')).rejects.toThrow();
+    opts.onMessage(makeProviderBindUpdate({ ...FEISHU_CONFIRMED, actions: ['revoke', 'select_device'] }), () => true);
+    const selecting = manager.providerBindSelect('feishu');
+    const request = sent.findLast((frame) => frame.type === 'provider.bind.select');
+    if (request?.type !== 'provider.bind.select') throw new Error('selection request missing');
+    const settled = vi.fn();
+    void selecting.then(settled);
+    opts.onMessage(makeProviderBindSelection({ ...request.payload, provider: 'x', ok: true }), () => true);
+    opts.onMessage(makeProviderBindSelection({ ...request.payload, bindingId: 'other-device', ok: true }), () => true);
+    await Promise.resolve();
+    expect(settled).not.toHaveBeenCalled();
+    opts.onMessage(makeProviderBindSelection({ ...request.payload, ok: true }), () => true);
+    await selecting;
+    expect(manager.snapshot().feishu.binding?.bindingId).toBe(FEISHU_CONFIRMED.bindingId);
+    const disconnected = manager.providerBindSelect('feishu');
+    const failure = expect(disconnected).rejects.toThrow();
+    opts.onStatus('connecting', null);
+    await failure;
+  });
+
   it('hello 只声明 provider 基础能力; 服务端未宣告 provider:feishu 时显示不可用并拒收派发', () => {
     const dispatcher = stubDispatcher();
     const { manager, transports } = feishuLaneHarness({ dispatcher }, { feishuEnabled: true });

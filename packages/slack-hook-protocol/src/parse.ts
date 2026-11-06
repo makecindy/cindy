@@ -860,6 +860,15 @@ function validateProviderBindRevoke(p: Record<string, unknown>): string | null {
   return null;
 }
 
+function validateProviderBindSelect(p: Record<string, unknown>): string | null {
+  return validateProviderBindRevoke(p)?.replaceAll('provider.bind.revoke', 'provider.bind.select')
+    ?? (isPositiveTimestamp(p.expiresAt) ? null : 'provider.bind.select.expiresAt must be a positive integer timestamp');
+}
+function validateProviderBindSelection(p: Record<string, unknown>): string | null {
+  return validateProviderBindRevoke(p)?.replaceAll('provider.bind.revoke', 'provider.bind.selection')
+    ?? (typeof p.ok === 'boolean' ? null : 'provider.bind.selection.ok must be boolean');
+}
+
 const PROVIDER_BIND_ID_FIELDS = [
   'attemptId',
   'bindingId',
@@ -1662,6 +1671,8 @@ const PAYLOAD_VALIDATORS: Record<HookMessageType, (p: Record<string, unknown>) =
   'provider.bind.start': validateProviderBindStart,
   'provider.bind.cancel': validateProviderBindCancel,
   'provider.bind.revoke': validateProviderBindRevoke,
+  'provider.bind.select': validateProviderBindSelect,
+  'provider.bind.selection': validateProviderBindSelection,
   'provider.bind.update': (p) => validateProviderBindStatus(p, 'provider.bind.update'),
   'provider.bind.state': (p) => validateProviderBindStatus(p, 'provider.bind.state'),
   'query.request': validateQueryRequest,

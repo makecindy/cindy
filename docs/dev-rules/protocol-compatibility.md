@@ -40,7 +40,9 @@ Desktop 与 Mobile 明确标注估算和排除项。旧端忽略可选字段，�
 
 飞书群上下文由服务端组装进 `task.dispatch.prompt`（含 `<thread_context>`、引用与当前发言人）；`source.threadContext` 同时供来源卡展示，客户端继续保留服务端完整 prompt，不再从展示元数据重复注入。X 的客户端 prompt 组装只作用于 X，不能据此推断其它渠道丢失上下文。
 
-多设备（2026-11-07）：同一应用下，同一飞书账号可同时保留多个设备的 `confirmed` 绑定；新绑定默认成为工作电脑，重连不改变选择。工作电脑通过机器人菜单 `device` / `/device` 选择，绑定成功后机器人私聊说明用法；不新增 wire 字段。服务端内部会话代次、工作目录与偏好按设备绑定隔离，外部 lane 格式仍相同（设备各自存本地任务）。选择仅影响后续消息，运行中任务沿原设备继续；离线 / 繁忙时拒绝，不改派、不补发。`superseded/rebound` 仅表示同一设备的旧账号绑定被替换；其它电脑的绑定不失效。桌面解绑只影响本机。
+多设备（2026-11-07）：同一应用下，同一飞书账号可同时保留多个设备的 `confirmed` 绑定；新绑定默认成为工作电脑，重连不改变选择。工作电脑通过机器人菜单 `device` / `/device` 或已绑定电脑的「设为工作电脑」按钮选择，绑定成功后机器人私聊说明用法。服务端内部会话代次、工作目录与偏好按设备绑定隔离，外部 lane 格式仍相同（设备各自存本地任务）。选择仅影响后续消息，运行中任务沿原设备继续；离线 / 繁忙时拒绝，不改派、不补发。`superseded/rebound` 仅表示同一设备的旧账号绑定被替换；其它电脑的绑定不失效。桌面解绑只影响本机。
+
+桌面选择是可选增量：本机 `confirmed` 快照的 `actions` 提供 `select_device` 时，客户端才显示按钮。客户端发 `provider.bind.select { requestId, provider, bindingId, expiresAt }`，服务端按已认证连接的设备核对本机绑定、应用和归属，回 `provider.bind.selection { requestId, provider, bindingId, ok }`；只有匹配的成功回执才能提示「已设为工作电脑」。请求不能创建绑定，不改变其它电脑的绑定状态。断线、解绑、切账号及超时让在途请求失败，不补发。旧服务端不提供动作时隐藏按钮；客户端不缓存可能被其它设备切换而过时的「当前工作电脑」标签。
 
 客户端接线：desktop 的飞书线 hello 只声明 `provider-bind-v1`、`provider-prefs-v1` 与 `provider:feishu`
 （不声明 `msg-op-v1` 及 `telegram-*`），welcome 同样须含这三项才启用。不声明 `session-picker-v1`：飞书服务由多个组织

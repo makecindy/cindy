@@ -872,6 +872,21 @@ export function registerHookControlIpc(): void {
     return { hook: m.snapshot() };
   });
 
+  registerTrustedHookControlHandler(HOOK_CONTROL_INVOKE.PROVIDER_BIND_SELECT, async (_e, payload) => {
+    requireHookControl();
+    const { manager: m } = ensureInstances();
+    const provider = requireNeutralProvider(payload);
+    const assertAccount = captureChannelAccount();
+    try {
+      await m.providerBindSelect(provider);
+    } catch (error) {
+      if (error instanceof HookNotConnectedError) throwIpcError('HOOK_NOT_CONNECTED', hookNotConnectedIpcMessage(provider));
+      throwIpcError('PRECONDITION_FAILED', 'Unable to set working computer');
+    }
+    assertAccount();
+    return { hook: m.snapshot() };
+  });
+
   registerTrustedHookControlHandler(HOOK_CONTROL_INVOKE.PROVIDER_BIND_REVOKE, (_e, payload) => {
     requireHookControl();
     const { manager: m } = ensureInstances();

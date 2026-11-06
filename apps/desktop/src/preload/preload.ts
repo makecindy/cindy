@@ -5622,6 +5622,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
       ipcRenderer.invoke('maker:hook-control:provider-bind-start', { provider }),
     providerBindCancel: (provider: 'telegram' | 'x' | 'feishu'): Promise<{ hook: unknown }> =>
       ipcRenderer.invoke('maker:hook-control:provider-bind-cancel', { provider }),
+    providerBindSelect: (provider: 'telegram' | 'x' | 'feishu'): Promise<{ hook: unknown }> =>
+      ipcRenderer.invoke('maker:hook-control:provider-bind-select', { provider }),
     providerBindRevoke: (provider: 'telegram' | 'x' | 'feishu'): Promise<{ hook: unknown }> =>
       ipcRenderer.invoke('maker:hook-control:provider-bind-revoke', { provider }),
     openProviderAction: (

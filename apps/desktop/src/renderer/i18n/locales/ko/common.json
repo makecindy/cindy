@@ -6294,7 +6294,7 @@
           }
         },
         "feishu": {
-          "description": "같은 Feishu / Lark 계정에 여러 컴퓨터를 연결할 수 있습니다. 봇 메뉴에서 작업 컴퓨터를 전환하며, 가장 최근에 연결한 컴퓨터가 기본으로 선택됩니다. Cindy에게 메시지를 보내거나 그룹에서 멘션하여 시작하세요.",
+          "description": "Feishu 메시지를 작업 컴퓨터에서 처리합니다.",
           "disabledHint": "스위치를 켠 뒤 브라우저에서 Feishu / Lark 계정을 인증하거나 연동 코드를 bot에게 보내세요.",
           "toggleAria": "Feishu / Lark 연결 전환",
           "connect": "Feishu / Lark 연결",
@@ -6304,7 +6304,7 @@
           "openBot": "봇 열기",
           "unlink": "Feishu / Lark 연결 해제",
           "unlinkConfirmTitle": "Feishu / Lark 연결을 해제할까요?",
-          "unlinkConfirmDescription": "이 컴퓨터와 Feishu / Lark의 연결을 해제할까요? 다른 연결된 컴퓨터, 로컬 프로젝트 및 다른 채널에는 영향이 없습니다.",
+          "unlinkConfirmDescription": "이 컴퓨터만 연결 해제합니다.",
           "unavailableHint": "소속 조직에서 아직 Feishu / Lark bot을 설정하지 않았습니다. 조직 관리자에게 문의하세요.",
           "unavailableHintPersonal": "Feishu / Lark bot은 아직 개인 계정에서 사용할 수 없습니다.",
           "status": {
@@ -6328,7 +6328,9 @@
             "copy": "코드 복사",
             "copied": "연동 코드를 복사했습니다",
             "hint": "또는 Feishu / Lark에서 Cindy bot에게 이 코드를 개인 메시지로 보내세요"
-          }
+          },
+          "setWorkingDevice": "작업 컴퓨터로 설정",
+          "workingDeviceSet": "작업 컴퓨터로 설정했습니다"
         }
       },
       "summary": {

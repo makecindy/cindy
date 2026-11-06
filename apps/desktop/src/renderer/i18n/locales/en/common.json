@@ -6337,7 +6337,7 @@
           }
         },
         "feishu": {
-          "description": "Link multiple computers to your Feishu / Lark account. Choose the working computer from the bot menu; the most recently linked computer is selected by default. Send a direct message or mention Cindy in a group to start.",
+          "description": "Send Feishu messages to your working computer.",
           "disabledHint": "Turn on the switch, then authorize your Feishu / Lark account in the browser or send the link code to the bot.",
           "toggleAria": "Toggle Feishu / Lark connection",
           "connect": "Link Feishu / Lark",
@@ -6347,7 +6347,7 @@
           "openBot": "Open bot",
           "unlink": "Unlink Feishu / Lark",
           "unlinkConfirmTitle": "Unlink Feishu / Lark?",
-          "unlinkConfirmDescription": "Unlink this computer from Feishu / Lark? Other linked computers, local projects, and other channels are unaffected.",
+          "unlinkConfirmDescription": "Unlink this computer only.",
           "unavailableHint": "Your organization hasn't set up the Feishu / Lark bot yet. Contact your organization admin.",
           "unavailableHintPersonal": "The Feishu / Lark bot isn't available for personal accounts yet.",
           "status": {
@@ -6371,7 +6371,9 @@
             "copy": "Copy code",
             "copied": "Link code copied",
             "hint": "Or send this code to the Cindy bot in a direct message in Feishu / Lark"
-          }
+          },
+          "setWorkingDevice": "Set as working computer",
+          "workingDeviceSet": "Working computer set"
         }
       },
       "summary": {

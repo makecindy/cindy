@@ -6399,7 +6399,7 @@
           }
         },
         "feishu": {
-          "description": "Associa vários computadores à tua conta Feishu / Lark. Escolhe o computador de trabalho no menu do bot; o último computador associado é selecionado por predefinição. Envia uma mensagem direta à Cindy ou menciona-a num grupo para começar.",
+          "description": "Envia mensagens do Feishu para o teu computador de trabalho.",
           "disabledHint": "Ative o interruptor e autorize a sua conta Feishu / Lark no navegador ou envie o código de associação ao bot.",
           "toggleAria": "Alternar ligação ao Feishu / Lark",
           "connect": "Associar Feishu / Lark",
@@ -6409,7 +6409,7 @@
           "openBot": "Abrir bot",
           "unlink": "Desassociar Feishu / Lark",
           "unlinkConfirmTitle": "Desassociar Feishu / Lark?",
-          "unlinkConfirmDescription": "Desassociar este computador do Feishu / Lark? Os outros computadores associados, os projetos locais e os outros canais não são afetados.",
+          "unlinkConfirmDescription": "Desassociar apenas este computador.",
           "unavailableHint": "A sua organização ainda não configurou o bot Feishu / Lark. Contacte o administrador da sua organização.",
           "unavailableHintPersonal": "O bot Feishu / Lark ainda não está disponível para contas pessoais.",
           "status": {
@@ -6433,7 +6433,9 @@
             "copy": "Copiar código",
             "copied": "Código de associação copiado",
             "hint": "Ou envie este código ao bot Cindy por mensagem direta no Feishu / Lark"
-          }
+          },
+          "setWorkingDevice": "Definir como computador de trabalho",
+          "workingDeviceSet": "Computador de trabalho definido"
         }
       },
       "summary": {

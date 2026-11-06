@@ -14,6 +14,7 @@ const ipc = vi.hoisted(() => ({
   providerBindStart: vi.fn(),
   providerBindCancel: vi.fn(),
   providerBindRevoke: vi.fn(),
+  providerBindSelect: vi.fn(),
   addBinding: vi.fn(),
   rebindTeam: vi.fn(),
   cancelPendingBind: vi.fn(),
@@ -222,6 +223,7 @@ describe('HookConnectionsSection binding actions (Telegram / X / Feishu)', () =>
         providerBindStart: ipc.providerBindStart,
         providerBindCancel: ipc.providerBindCancel,
         providerBindRevoke: ipc.providerBindRevoke,
+        providerBindSelect: ipc.providerBindSelect,
         addBinding: ipc.addBinding,
         rebindTeam: ipc.rebindTeam,
         cancelPendingBind: ipc.cancelPendingBind,
@@ -525,6 +527,40 @@ describe('HookConnectionsSection binding actions (Telegram / X / Feishu)', () =>
 
     expect(screen.queryByRole('button', { name: X_CARD })).toBeNull();
     expect(screen.queryByRole('button', { name: FEISHU_CARD })).toBeNull();
+  });
+
+  it.each(['success', 'failure', 'old-server'] as const)('offers a concise working-computer action with a confirmed result: %s', async (outcome) => {
+    const hook: SlackHookView = { ...BASE_HOOK, feishu: { ...BASE_HOOK.feishu,
+      enabled: true, available: true, status: 'connected', url: 'wss://feishu.example.test',
+      binding: { provider: 'feishu', state: 'confirmed', attemptId: null, bindingId: 'local-feishu',
+        principalId: 'ou_user', principalName: 'Alice', scopeId: 'cli_app', scopeName: 'Cindy',
+        connectUrl: null, bindCode: null, expiresAt: null, reason: null, remediationUrl: null,
+        actions: outcome === 'old-server' ? ['revoke'] : ['revoke', 'select_device'] },
+    } };
+    ipc.get.mockResolvedValue({ hook });
+    let resolve!: (value: { hook: SlackHookView }) => void; let reject!: (error: Error) => void;
+    ipc.providerBindSelect.mockReturnValue(new Promise((yes, no) => { resolve = yes; reject = no; }));
+    const entry = resolveSettingsSearchEntry('im-bot', 'imBot.cindy.feishu.workingDevice');
+    render(<SettingsSearchNavigationContext.Provider value={{ entry, activation: 1 }}>
+      <HookConnectionsSection />
+    </SettingsSearchNavigationContext.Provider>);
+    await screen.findByRole('switch', { name: 'settings.remoteControl.hook.feishu.toggleAria' });
+    const name = 'settings.remoteControl.hook.feishu.setWorkingDevice';
+    if (outcome === 'old-server') { expect(screen.queryByRole('button', { name })).toBeNull(); return; }
+    const button = await screen.findByRole('button', { name });
+    expect(resolveSettingsSearchEntry('im-bot', button.getAttribute('data-setting-id'))?.targetId).toBe(button.id);
+    fireEvent.click(button);
+    expect(ipc.providerBindSelect).toHaveBeenCalledWith('feishu');
+    expect(button.hasAttribute('disabled')).toBe(true);
+    expect(toast.success).not.toHaveBeenCalled();
+    if (outcome === 'success') {
+      resolve({ hook });
+      await waitFor(() => expect(toast.success).toHaveBeenCalledWith('settings.remoteControl.hook.feishu.workingDeviceSet'));
+    } else {
+      reject(new Error('server unavailable'));
+      await waitFor(() => expect(toast.error).toHaveBeenCalledWith('settings.remoteControl.hook.toast.actionFailed'));
+      expect(toast.success).not.toHaveBeenCalled();
+    }
   });
 
   it('shows the Feishu bind code with a copy action next to the authorize-page actions while pending', async () => {

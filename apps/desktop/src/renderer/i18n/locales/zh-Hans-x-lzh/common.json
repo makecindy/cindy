@@ -6294,7 +6294,7 @@
           }
         },
         "feishu": {
-          "description": "同一飞书 / Lark 账号可系多机，于机器人菜单择工作电脑，初取新系之机。私讯 Cindy，或于群中 @之，即可始。",
+          "description": "由飞书发讯，交工作电脑处理。",
           "disabledHint": "开此开关后，或于浏览器中授权飞书名籍，或将关联码遣予飞书机器人。",
           "toggleAria": "启闭飞书 / Lark 连接",
           "connect": "结飞书",
@@ -6304,7 +6304,7 @@
           "openBot": "开飞书机器人",
           "unlink": "解飞书",
           "unlinkConfirmTitle": "解绑飞书乎？",
-          "unlinkConfirmDescription": "解此机与飞书 / Lark 之系乎？他机所系、本机项目及他途连接皆如故。",
+          "unlinkConfirmDescription": "仅解此机之系。",
           "unavailableHint": "君所属之组织尚未设飞书机器人，请洽组织管理员。",
           "unavailableHintPersonal": "飞书机器人尚未向个人账号开放。",
           "status": {
@@ -6328,7 +6328,9 @@
             "copy": "录关联码",
             "copied": "关联码已录",
             "hint": "或于飞书中将关联码私遣予 Cindy 机器人"
-          }
+          },
+          "setWorkingDevice": "设为工作电脑",
+          "workingDeviceSet": "已设为工作电脑"
         }
       },
       "summary": {

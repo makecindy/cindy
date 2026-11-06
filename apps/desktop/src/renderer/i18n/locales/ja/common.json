@@ -6294,7 +6294,7 @@
           }
         },
         "feishu": {
-          "description": "同じ Feishu / Lark アカウントに複数のパソコンを連携できます。ボットのメニューで作業用パソコンを切り替えられ、最後に連携したパソコンが既定で選ばれます。Cindy に直接メッセージを送るか、グループでメンションすると開始できます。",
+          "description": "Feishu のメッセージを作業用パソコンで処理します。",
           "disabledHint": "スイッチをオンにして、ブラウザで Feishu / Lark アカウントを認証するか、連携コードを bot に送信してください。",
           "toggleAria": "Feishu / Lark 接続を切り替え",
           "connect": "Feishu / Lark を連携",
@@ -6304,7 +6304,7 @@
           "openBot": "Bot を開く",
           "unlink": "Feishu / Lark の連携を解除",
           "unlinkConfirmTitle": "Feishu / Lark の連携を解除しますか？",
-          "unlinkConfirmDescription": "このパソコンと Feishu / Lark の連携を解除しますか？ほかの連携済みパソコン、ローカルプロジェクト、ほかのチャネルには影響しません。",
+          "unlinkConfirmDescription": "このパソコンのみ連携を解除します。",
           "unavailableHint": "所属組織で Feishu / Lark bot がまだ設定されていません。組織の管理者にお問い合わせください。",
           "unavailableHintPersonal": "Feishu / Lark bot は個人アカウントではまだご利用いただけません。",
           "status": {
@@ -6328,7 +6328,9 @@
             "copy": "コードをコピー",
             "copied": "連携コードをコピーしました",
             "hint": "または Feishu / Lark で Cindy bot にこのコードをダイレクトメッセージで送信してください"
-          }
+          },
+          "setWorkingDevice": "作業用パソコンに設定",
+          "workingDeviceSet": "作業用パソコンに設定しました"
         }
       },
       "summary": {

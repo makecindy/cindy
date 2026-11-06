@@ -6294,7 +6294,7 @@
           }
         },
         "feishu": {
-          "description": "同一飞书 / Lark 账号可关联多台电脑，在机器人菜单中切换工作电脑，默认使用最新关联的电脑。私聊 Cindy 或在群里 @它即可开始。",
+          "description": "从飞书发消息，交给工作电脑处理。",
           "disabledHint": "打开开关后，在浏览器里授权飞书账号，或把关联码发给飞书机器人。",
           "toggleAria": "切换飞书 / Lark 连接",
           "connect": "关联飞书",
@@ -6304,7 +6304,7 @@
           "openBot": "打开飞书机器人",
           "unlink": "解绑飞书",
           "unlinkConfirmTitle": "解绑飞书？",
-          "unlinkConfirmDescription": "解除这台电脑与飞书 / Lark 的关联？其它已关联电脑、本地项目和其它渠道连接不受影响。",
+          "unlinkConfirmDescription": "仅解绑这台电脑。",
           "unavailableHint": "你所在的组织还没有配置飞书机器人，请联系组织管理员。",
           "unavailableHintPersonal": "飞书机器人暂未向个人账号开放。",
           "status": {
@@ -6328,7 +6328,9 @@
             "copy": "复制关联码",
             "copied": "关联码已复制",
             "hint": "或者在飞书里把关联码私聊发给 Cindy 机器人"
-          }
+          },
+          "setWorkingDevice": "设为工作电脑",
+          "workingDeviceSet": "已设为工作电脑"
         }
       },
       "summary": {

@@ -13,6 +13,8 @@ import {
   makeBindStart,
   makeProviderBindCancel,
   makeProviderBindRevoke,
+  makeProviderBindSelect,
+  makeProviderBindSelection,
   makeProviderBindStart,
   makeProviderBindState,
   makeProviderBindUpdate,
@@ -513,5 +515,18 @@ describe('query.kind=sessions', () => {
       },
       'privacy-minimised session shape',
     );
+  });
+});
+
+// The select_device action is the opt-in capability; selection acknowledgments never imply a binding.
+describe('working computer selection', () => {
+  it('round-trips an exact binding request and boolean result, rejecting incomplete identities', () => {
+    const payload = { requestId: 'select-1', provider: 'feishu' as const, bindingId: 'binding-1', expiresAt: Date.now() + 10_000 };
+    roundTrip(makeProviderBindSelect(payload));
+    expectReject({ ...makeProviderBindSelect(payload), payload: { ...payload, expiresAt: null } }, 'expiresAt');
+    roundTrip(makeProviderBindSelection({ ...payload, ok: true }));
+    roundTrip(makeProviderBindSelection({ ...payload, ok: false }));
+    expectReject({ ...makeProviderBindSelect(payload), payload: { ...payload, bindingId: '' } }, 'bindingId');
+    expectReject({ ...makeProviderBindSelection({ ...payload, ok: true }), payload: { ...payload, ok: 'true' } }, 'ok');
   });
 });

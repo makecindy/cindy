@@ -4601,6 +4601,9 @@ interface ElectronAPI {
     providerBindCancel: (
       provider: 'telegram' | 'x' | 'feishu',
     ) => Promise<{ hook: import('../shared/hookControlIpc').SlackHookView }>;
+    providerBindSelect: (
+      provider: 'telegram' | 'x' | 'feishu',
+    ) => Promise<{ hook: import('../shared/hookControlIpc').SlackHookView }>;
     providerBindRevoke: (
       provider: 'telegram' | 'x' | 'feishu',
     ) => Promise<{ hook: import('../shared/hookControlIpc').SlackHookView }>;

@@ -230,6 +230,8 @@ export const HOOK_MESSAGE_TYPES = [
   'provider.bind.start',
   'provider.bind.cancel',
   'provider.bind.revoke',
+  'provider.bind.select',
+  'provider.bind.selection',
   'provider.bind.update',
   'provider.bind.state',
   'query.request',
@@ -885,6 +887,7 @@ export const PROVIDER_BIND_ACTIONS = [
   'open_connect_url',
   'copy_connect_url',
   'copy_bind_code',
+  'select_device',
   'cancel',
   'retry',
   'revoke',
@@ -915,6 +918,13 @@ export interface ProviderBindRevokePayload {
   provider: HookProvider;
   bindingId: string;
 }
+
+export const PROVIDER_BIND_SELECT_TIMEOUT_MS = 10_000;
+
+/** Select this confirmed binding as the working device; requires the select_device action. */
+export interface ProviderBindSelectPayload extends ProviderBindRevokePayload { expiresAt: number }
+/** Acknowledges only the requested selection; does not change any device’s binding state. */
+export interface ProviderBindSelectionPayload extends ProviderBindRevokePayload { ok: boolean }
 
 /**
  * Shared payload for provider.bind.update and provider.bind.state. update is an
@@ -1986,6 +1996,8 @@ export type HookProviderBindRevokeMessage = HookEnvelope<
   'provider.bind.revoke',
   ProviderBindRevokePayload
 >;
+export type HookProviderBindSelectMessage = HookEnvelope<'provider.bind.select', ProviderBindSelectPayload>;
+export type HookProviderBindSelectionMessage = HookEnvelope<'provider.bind.selection', ProviderBindSelectionPayload>;
 export type HookProviderBindUpdateMessage = HookEnvelope<
   'provider.bind.update',
   ProviderBindUpdatePayload
@@ -2064,6 +2076,8 @@ export type HookMessage =
   | HookProviderBindStartMessage
   | HookProviderBindCancelMessage
   | HookProviderBindRevokeMessage
+  | HookProviderBindSelectMessage
+  | HookProviderBindSelectionMessage
   | HookProviderBindUpdateMessage
   | HookProviderBindStateMessage
   | HookProviderPrefsGetMessage

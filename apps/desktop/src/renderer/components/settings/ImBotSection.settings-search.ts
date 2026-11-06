@@ -55,6 +55,16 @@ export const imBotSettings = defineSettings({
     keywordKeys: ['settings.remoteControl.hook.feishu.bindCode.label', 'settings.remoteControl.hook.feishu.bindCode.hint'],
     aliases: ['Feishu', 'Lark', '飞书', 'Feishu bot', 'Lark bot'],
   },
+  cindyFeishuWorkingDevice: {
+    id: 'imBot.cindy.feishu.workingDevice',
+    isVisible: (identity) => identity.mode === 'cloud' && showCindyGroup(identity),
+    fallbackTargetId: 'cindy-im-feishu',
+    tab: 'im-bot',
+    targetId: 'cindy-im-feishu-working-device',
+    titleKey: 'settings.remoteControl.hook.feishu.setWorkingDevice',
+    sectionKey: 'settings.imBot.groups.cindy',
+    aliases: ['Feishu', 'Lark', '工作电脑'],
+  },
   cindyX: {
     id: 'imBot.cindy.x',
     isVisible: (identity) => identity.mode === 'cloud' && showCindyGroup(identity),

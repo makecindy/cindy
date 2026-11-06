@@ -64,6 +64,7 @@ export const HOOK_CONTROL_INVOKE = {
   PROVIDER_BIND_CANCEL: 'maker:hook-control:provider-bind-cancel',
   /** 解除当前 provider-neutral principal 与本设备的绑定。 */
   PROVIDER_BIND_REVOKE: 'maker:hook-control:provider-bind-revoke',
+  PROVIDER_BIND_SELECT: 'maker:hook-control:provider-bind-select',
   /** 在本机安全打开 provider 的绑定链接 / bot 主页 / 加群链接。 */
   PROVIDER_OPEN_ACTION: 'maker:hook-control:provider-open-action',
   /** 读取 provider-neutral(Telegram / X / 飞书)独立的 workspace 偏好。 */
