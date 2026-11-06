@@ -351,5 +351,44 @@
     "title": "Developer",
     "identity": "Identifiers",
     "updateInfo": "Update info"
+  },
+  "handheld": {
+    "sectionTitle": "Handheld",
+    "label": "Handheld mode",
+    "entryHint": "Use Cindy with the built-in controller of a gaming handheld, and hold the voice key to talk.",
+    "on": "On",
+    "off": "Off",
+    "openAccessibility": "Open handheld mode settings",
+    "title": "Handheld mode",
+    "hint": "Use Cindy with just the controller: the D-pad or left stick moves focus, A selects and B goes back.",
+    "saveFailed": "Couldn't save this setting. It stays in effect until Cindy closes.",
+    "reset": "Reset to default",
+    "voiceKey": {
+      "title": "Voice key",
+      "hint": "Hold this key to talk and release it to stop. Your words stay in the message box. Holding it on the home screen starts a new task. Choosing A, B, L1 or R1 replaces what that button normally does.",
+      "capture": "Press a controller button to set",
+      "capturing": "Press the button you want to use…"
+    },
+    "display": {
+      "title": "Screen",
+      "secondary": "Show on second screen",
+      "hint": "Cindy moves to the second screen, such as the lower screen of a dual-screen handheld. Turning off handheld mode moves it back to the main screen.",
+      "none": "This device has one screen. Cindy adapts to its size.",
+      "current": "Current screen",
+      "single": "Main screen"
+    },
+    "controls": {
+      "title": "Controller",
+      "gamepad": "Controller",
+      "noGamepad": "Not detected",
+      "moveKeys": "D-pad / left stick",
+      "move": "Move focus",
+      "confirm": "Select",
+      "back": "Back",
+      "voice": "Hold to talk",
+      "scrollKeys": "Right stick",
+      "scroll": "Scroll",
+      "page": "Page up / down"
+    }
   }
 }

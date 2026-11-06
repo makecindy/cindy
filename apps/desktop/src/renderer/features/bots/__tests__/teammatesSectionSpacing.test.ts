@@ -8,8 +8,9 @@
  *
  * 数值来自定稿原型 `Cindy-伙伴原型/styles.css` 的行布局:
  *
- *   .row       { display:flex; align-items:center; border-radius:12px }   → rounded-xl,行容器**不带**内边距
- *   .row-open  { flex:1; padding:8px 10px; gap:10px }                     → px-2.5 py-2 gap-2.5(左右对称)
+ *   .row       { display:flex; align-items:center; border-radius:12px }   → rounded-lg(2026-11-06 随任务行改 8px),行容器**不带**内边距
+ *   .row-open  { flex:1; padding:8px 10px; gap:10px }                     → px-2.5 gap-2.5(左右对称;
+ *                                                                           行高见 2026-11-06)
  *   .row-l1    { display:flex; align-items:baseline; gap:8px }            → gap-2
  *   .row-l2    { display:flex; align-items:center; gap:8px; margin-top:2px } → gap-2 + 外层 flex-col gap-0.5
  *   .row-meta  { min-width:40px; align-items:flex-end }                   → min-w-10 items-end
@@ -26,6 +27,11 @@
  * 段头改与置顶 / 全部任务段头同款。
  * 2026-10-29 头像几何按 DESIGN.md「Mobile task home teammate section」统一为
  * 列表 44px；2026-11-04 收起沿用 36px 头像、40px 点击区与 4px 间距。
+ * 2026-11-06 用户要求展开后的伙伴行与任务列表模式的一条任务同高:两边共用
+ * SIDEBAR_LIST_ROW_HEIGHT_CLASS(默认约 59px,随界面字号缩放),头像与文字垂直居中;
+ * 头像外层用 flex,不再落在文字基线上把行撑到 66px。随后选中样式(SIDEBAR_LIST_ROW_ACTIVE_CLASS)
+ * 与行间 2px 也统一为任务行的值,取代 10-29 的淡色选中。
+ * 行高由共用常量固定,py-2 仍保留:时间列 self-start 靠它落在名称同一行(否则时间高于名称约 8px)。
  */
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
@@ -45,8 +51,8 @@ const code = source
 
 /** 可点行本体(头像 + 两行文字)的类名串。 */
 const ROW_BUTTON_CLASS =
-  'flex min-w-0 flex-1 items-center gap-2.5 rounded-xl px-2.5 py-2 text-left';
-const ROW_CONTAINER_CLASS = 'group relative flex w-full items-center rounded-xl transition-colors';
+  'flex min-w-0 flex-1 items-center gap-2.5 rounded-lg px-2.5 py-2 text-left';
+const ROW_CONTAINER_CLASS = 'group relative flex w-full items-center rounded-lg transition-colors';
 
 describe('伙伴行的间距基线', () => {
   it('行容器不带内边距,也不再给行尾留占位列', () => {
@@ -58,17 +64,18 @@ describe('伙伴行的间距基线', () => {
     expect(code).not.toMatch(/<span className="flex shrink-0 items-center gap-1/);
   });
 
-  it('唯一的可点区域用对称的 10px 左右内边距、8px 上下内边距', () => {
+  it('唯一的可点区域用对称的 10px 左右内边距,行高与任务列表模式的一条任务相同', () => {
     expect(source).toContain(ROW_BUTTON_CLASS);
     // px-2.5 = 10px 两侧。出现 px-3 / pl-* / pr-* 都意味着又不对称了。
     expect(ROW_BUTTON_CLASS).toContain('px-2.5');
-    expect(ROW_BUTTON_CLASS).toContain('py-2');
+    expect(source).toContain(`'${ROW_BUTTON_CLASS} outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring', SIDEBAR_LIST_ROW_HEIGHT_CLASS)`);
     expect(ROW_BUTTON_CLASS).not.toMatch(/\bp[lrxse]-(?!2\.5)/);
   });
 
   it('头像与正文之间 10px', () => {
     expect(ROW_BUTTON_CLASS).toContain('gap-2.5');
-    expect(source).toContain('<BotAvatar bot={bot} size="row" />');
+    expect(source).toContain('<span className="relative flex shrink-0"><BotAvatar bot={bot} size="row" /></span>');
+    expect(code).not.toContain('<span className="relative shrink-0"><BotAvatar');
   });
 
   it('两行之间 2px,行内元素之间 8px', () => {
@@ -107,7 +114,7 @@ describe('伙伴行的间距基线', () => {
 
   it('归档行与小节头保持间距，空态复用紧凑创建入口', () => {
     expect(source).toContain(
-      'group flex w-full items-center gap-2.5 rounded-xl px-2.5 py-2 text-left transition-colors',
+      'group flex w-full items-center gap-2.5 rounded-lg px-2.5 py-2 text-left transition-colors',
     );
     // 空态只留创建入口，外层间距固定，不恢复大卡片。
     expect(source).toContain(
@@ -119,6 +126,8 @@ describe('伙伴行的间距基线', () => {
     );
     // 列表容器:左 12px 与 `.side-list` 一致;不再自带滚动,随任务侧栏一起滚。
     expect(source).toContain('<div className="flex flex-col pt-1 pr-0 pl-3">');
+    // 行间距与任务列表一致(2px)。
+    expect(source).toContain('<div className="flex flex-col gap-0.5">\n            {displayedChats.map');
     expect(code).not.toContain('overflow-y-auto');
   });
 
@@ -142,8 +151,10 @@ describe('群聊与伙伴行同一套几何', () => {
     'utf8',
   ).replace(/\r\n/g, '\n');
 
-  it('群行沿用对称的 10px / 8px 内边距、44px 头像位、14/12/11 字号', () => {
-    expect(groupRow).toContain('gap-2.5 rounded-xl px-2.5 py-2 text-left');
+  it('群行沿用对称的 10px 内边距、任务行高度、44px 头像位、14/12/11 字号', () => {
+    expect(groupRow).toContain('gap-2.5 rounded-lg px-2.5 py-2 text-left');
+    expect(groupRow).toContain('SIDEBAR_LIST_ROW_HEIGHT_CLASS,');
+    expect(groupRow).toContain('<span className="relative flex shrink-0"><BotGroupSidebarAvatar');
     expect(groupRow).toContain('<span className="flex min-w-0 flex-1 flex-col gap-0.5">');
     expect(groupRow).toContain('min-w-0 truncate text-14 leading-5');
     expect(groupRow).toContain("'min-w-0 flex-1 truncate text-12 leading-4'");

@@ -32,6 +32,13 @@ override 语义见 [`configuration-and-overrides.md`](configuration-and-override
 | 待补传标记 | `apps/desktop/src/main/log-upload/pendingMarkers.ts` |
 | 崩溃判定 | `apps/desktop/src/main/lifecycle.ts`（`isFatalShutdownReason` / `onFatalShutdown`） |
 
+远程卡顿诊断新增精确来源 `device-link:ipc-diagnostics`、
+`device-link:execution-diagnostics`、`device-link-transfer`，仅含固定操作类别、短请求标识、
+计数、字节数和时长；其子 scope 继续默认拒绝。`device-link diagnostic` 将较大的现场拆成
+低于 2,000 字符的 JSON 记录，用 `instance + event + part` 关联，避免单条截断丢掉队头证据。
+采样省略数由 `suppressed` 明示；总量裁剪仍遵守现有上限，不放宽来源、记录边界或脱敏规则。
+新增诊断须验证默认 INFO → 正式 writer → collectLogs 后的内容，不能只断言 logger 被调用。
+
 ## 1. 三条不变量
 
 这套东西的正确性依赖三条不变量。破坏任一条的后果都不是「功能不好用」，而是隐私事故或崩溃

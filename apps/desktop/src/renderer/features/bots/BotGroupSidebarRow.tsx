@@ -1,4 +1,4 @@
-import { teammateSelectionStyle } from './teammateSelection';
+import { SIDEBAR_LIST_ROW_ACTIVE_CLASS, SIDEBAR_LIST_ROW_HEIGHT_CLASS } from '@/features/cc-agent/sidebar/listRowStyle';
 import { TeammateRowStatus } from './TeammateStatusDot';
 import { groupTeammateStatus } from './teammateRosterStatus';
 /**
@@ -198,20 +198,20 @@ export function BotGroupSidebarRow({
       key={group.id}
       type="button"
       data-bot-group-id={group.id}
-      style={teammateSelectionStyle}
       aria-current={selected ? 'page' : undefined}
       onClick={() => onOpenGroup(group.id)}
       onContextMenu={onContextMenu}
       onKeyDown={onKeyDown}
       aria-haspopup={onContextMenu ? 'menu' : undefined}
       className={cn(
-        'group flex w-full min-w-0 items-center gap-2.5 rounded-xl px-2.5 py-2 text-left outline-none transition-colors focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring',
+        'group flex w-full min-w-0 items-center gap-2.5 rounded-lg px-2.5 py-2 text-left outline-none transition-colors focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring',
+        SIDEBAR_LIST_ROW_HEIGHT_CLASS,
         selected
-          ? 'bg-sidebar-item-active text-sidebar-item-active-foreground'
+          ? SIDEBAR_LIST_ROW_ACTIVE_CLASS
           : 'text-[var(--sidebar-nav-text)] hover:bg-sidebar-item-hover',
       )}
     >
-      <span className="relative shrink-0"><BotGroupSidebarAvatar members={group.members} selected={selected} />
+      <span className="relative flex shrink-0"><BotGroupSidebarAvatar members={group.members} selected={selected} />
       </span>
       <span className="flex min-w-0 flex-1 flex-col gap-0.5">
         <span className="flex min-w-0 items-center gap-1.5">

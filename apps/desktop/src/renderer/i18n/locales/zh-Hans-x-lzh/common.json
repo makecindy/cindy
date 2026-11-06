@@ -3915,6 +3915,8 @@
         "disabledGroup": "已停",
         "enableAllModels": "尽启",
         "priceOverride": {
+          "resetShort": "重置",
+          "referenceDetails": "参考价详目",
           "menu": "修 API 估价",
           "title": "{{model}} API 估价",
           "description": "仅用以估君自有 API 或订阅通道之耗用，不易供方之实际帐单。",
@@ -13938,7 +13940,11 @@
       "mailAttach": "增附件",
       "mailRemoveAttachment": "除 {{name}}",
       "mailUpdated": "草稿已更（唯读）",
-      "mailLegacy": "旧稿（唯读）"
+      "mailLegacy": "旧稿（唯读）",
+      "taskAutoArchived": "「{{title}}」已封存",
+      "taskAutoArchivedUndo": "撤",
+      "taskAutoArchivePending": "去则自封存",
+      "taskAutoArchiveCancel": "此番不封"
     },
     "ghostHook": {
       "blockedFallback": "讯为法器所拦，未遣",
@@ -19098,6 +19104,9 @@
     "pendingApprovals": "{{count}} 项待确"
   },
   "richAnswer": {
+    "invalidImageReference": "图之引用无效，未能示之。",
+    "requestImageAgain": "请重示此图",
+    "requestImageAgainMessage": "请重示此既有之图（{{name}}，引用：{{source}}）。核原工具之果或原档，以实址示之，勿另生新图；若未能辨其所指，先问于我。",
     "send": "遣讯",
     "sending": "方遣…",
     "sent": "已呈",

@@ -3915,6 +3915,8 @@
         "disabledGroup": "已停用",
         "enableAllModels": "全部啟用",
         "priceOverride": {
+          "resetShort": "重設",
+          "referenceDetails": "參考價詳情",
           "menu": "編輯 API 估價",
           "title": "{{model}} API 估價",
           "description": "僅用於估算你自己的 API 或訂閱通道用量，不會改變供應商的實際帳單。",
@@ -13946,7 +13948,11 @@
       "mailAttach": "新增附件",
       "mailRemoveAttachment": "移除 {{name}}",
       "mailUpdated": "草稿已更新（唯讀）",
-      "mailLegacy": "歷史草稿（唯讀）"
+      "mailLegacy": "歷史草稿（唯讀）",
+      "taskAutoArchived": "已歸檔「{{title}}」",
+      "taskAutoArchivedUndo": "撤銷",
+      "taskAutoArchivePending": "離開後自動歸檔",
+      "taskAutoArchiveCancel": "這次不歸檔"
     },
     "ghostHook": {
       "blockedFallback": "訊息被插件攔下，未傳送",
@@ -19098,6 +19104,9 @@
     "pendingApprovals": "{{count}} 個待確認"
   },
   "richAnswer": {
+    "invalidImageReference": "圖片引用無效，無法顯示。",
+    "requestImageAgain": "請助手重新顯示",
+    "requestImageAgainMessage": "請重新顯示這張既有圖片（{{name}}，引用：{{source}}）。請核對原工具結果或原始檔案並使用真實位址，不要重新產生；無法確認是哪張圖片時先問我。",
     "send": "傳送訊息",
     "sending": "正在傳送…",
     "sent": "已提交",

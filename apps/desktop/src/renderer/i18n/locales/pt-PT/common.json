@@ -4008,6 +4008,8 @@
         "disabledGroup": "Desativado",
         "enableAllModels": "Ativar todos",
         "priceOverride": {
+          "resetShort": "Repor",
+          "referenceDetails": "Detalhes do preço de referência",
           "menu": "Editar estimativa de preços da API",
           "title": "Estimativa de preços da API de {{model}}",
           "description": "Usada apenas para estimar a utilização na sua própria API ou via de subscrição. Não altera a faturação do fornecedor.",
@@ -14106,7 +14108,11 @@
       "mailAttach": "Adicionar anexo",
       "mailRemoveAttachment": "Remover {{name}}",
       "mailUpdated": "Rascunho atualizado (só de leitura)",
-      "mailLegacy": "Histórico de rascunhos (só de leitura)"
+      "mailLegacy": "Histórico de rascunhos (só de leitura)",
+      "taskAutoArchived": "\"{{title}}\" arquivada",
+      "taskAutoArchivedUndo": "Desfazer",
+      "taskAutoArchivePending": "Arquiva ao sair",
+      "taskAutoArchiveCancel": "Manter desta vez"
     },
     "ghostHook": {
       "blockedFallback": "Mensagem bloqueada por um plugin; não enviada",
@@ -19341,6 +19347,9 @@
     "pendingApprovals": "{{count}} aprovações pendentes"
   },
   "richAnswer": {
+    "invalidImageReference": "A referência desta imagem é inválida.",
+    "requestImageAgain": "Pedir para mostrar novamente",
+    "requestImageAgainMessage": "Mostra novamente esta imagem existente ({{name}}, referência: {{source}}). Verifica o resultado original da ferramenta ou o ficheiro e usa o endereço real. Não cries uma nova imagem; pergunta-me primeiro se não conseguires identificar a imagem.",
     "send": "Enviar mensagem",
     "sending": "A enviar…",
     "sent": "Enviado",

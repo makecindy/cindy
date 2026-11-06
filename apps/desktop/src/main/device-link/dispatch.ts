@@ -58,7 +58,8 @@ import { compactToolCardResult } from '../../shared/toolResultPersistCap.js';
  * 本地 settings(第二道),server 缓存陈旧 / 被绕过时兜底。
  */
 
-import { RemoteInvokeTiming } from './remoteInvokeTiming.js';
+import { StallDiagnostics, diagnosticChannel, diagnosticRef, diagnosticOperation } from '@cindy/device-link';
+import { RemoteInvokeTiming, observeRemoteInvoke } from './remoteInvokeTiming.js';
 import { delegatedProviderShareGuestAccess } from './providerShareDelegatedAccess.js';
 import { observeRemoteSendPush } from './remoteSendTrace.js';
 import {
@@ -177,6 +178,8 @@ import {
 } from './remote-workdir-guard';
 
 const log = createLogger('device-link-dispatch');
+const executionDiagnosticLog = createLogger('device-link:execution-diagnostics');
+const executionDiagnostics = new StallDiagnostics(message => executionDiagnosticLog.info(message));
 const pushFailures = createPushFailureLog((summary) => log.warn('push delivery failures', summary));
 function reportPushFailure(dst: string, channel: string, error: unknown): void {
   pushFailures.record(shortId(dst), channel, error instanceof DeviceLinkError ? error.code : 'UNKNOWN');
@@ -3240,6 +3243,10 @@ async function handleInvoke(
     : () => undefined;
   const handlerStartedAt = performance.now();
   const timing = new RemoteInvokeTiming();
+  const finishDiagnostic = observeRemoteInvoke(timing, fields => executionDiagnostics.record('execution', {
+    request: diagnosticRef(requestId), src: diagnosticRef(src), channel: diagnosticChannel(payload?.channel ?? 'unknown'),
+    operation: payload ? diagnosticOperation(payload) : 'unknown', ...fields,
+  }));
   const executionPromise = Promise.resolve()
     .then(() => executeInvoke(src, payload, timing))
     .catch((err): InvokeResultPayload => {
@@ -3255,7 +3262,7 @@ async function handleInvoke(
           message,
         },
       };
-    });
+    }).finally(finishDiagnostic);
   const resultPromise = settleRemoteInvokeWithOrphanDeadline(
     executionPromise,
     src,
