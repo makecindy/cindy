@@ -670,7 +670,10 @@ export function ModelAdvancedDrawer({
                         if (model) {
                           // 同一模型在不同引擎下的元数据差异如实标出来 —— 这些值来自目录的
                           // perAgent 覆盖，用户看到「Codex 下 272K / 6 档」才知道差异是真的。
-                          if (!supportsMillionContext && model.contextWindow > 0 && model.contextWindow !== routeWindow) {
+                          // A shared saved budget overrides every engine's working default.
+                          // Unknown route capacity (0) is not an engine-specific difference.
+                          if (!supportsMillionContext && (ctx.limit === null || ctx.mixed) && routeWindow > 0 &&
+                              model.contextWindow > 0 && model.contextWindow !== routeWindow) {
                             notes.push(approxTokens(model.contextWindow));
                           }
                           if (
