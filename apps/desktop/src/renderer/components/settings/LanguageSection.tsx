@@ -199,7 +199,10 @@ export function LanguageSection() {
             </div>
           </div>
         ) : replyStyleOnly ? (
-          <div className="flex flex-row items-center justify-between gap-6 border-t border-[var(--settings-theme-card-border)] py-4">
+          <div
+            id={languageSettings.replyStyle.targetId}
+            className="flex flex-row items-center justify-between gap-6 border-t border-[var(--settings-theme-card-border)] py-4"
+          >
             <p
               className="min-w-0 flex-1 text-13 font-medium text-[var(--settings-section-sublabel)]"
               style={{ letterSpacing: '0.12px' }}
@@ -207,7 +210,7 @@ export function LanguageSection() {
               {t('settings.language.classical.styleAriaLabel')}
             </p>
             <PillSelect<ClassicalReplyStyleId>
-              data-setting-id={languageSettings.classical.id}
+              data-setting-id={languageSettings.replyStyle.id}
               value={classicalStyle}
               options={classicalStyleOptions.map((style) => ({
                 value: style.value,
