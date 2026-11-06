@@ -1151,8 +1151,8 @@ async function requestExplicitProviderText(
         systemPrompt: requestOpts?.systemPrompt,
         onText: requestOpts?.onText,
         responseInstructions: requestOpts?.responseInstructions,
-        beforeDispatch: async (route) => {
-          if (requestOpts?.beforeDispatch && !(await requestOpts.beforeDispatch(route))) return false;
+        beforeDispatch: async () => {
+          if (requestOpts?.beforeDispatch && !(await requestOpts.beforeDispatch({ providerId: provider.id, agentKind, model }))) return false;
           return routeStillCurrent();
         },
         credentialStillCurrent: async () => {
@@ -1165,7 +1165,6 @@ async function requestExplicitProviderText(
           }
           return readCustomProviderKey(provider.id, agentKind) === credential;
         },
-        routeStillCurrent,
       });
     },
   };
