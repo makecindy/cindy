@@ -222,13 +222,21 @@ describe('live compact spine selection', () => {
     expect(redactSecrets(once)).toBe(once);
   });
 
-  it('stays linear on long uppercase runs without a sensitive suffix', () => {
+  it('stays linear on long runs that look like credential prefixes', () => {
     // 起始边界被删掉的话,128K 连续大写会让这条规则跑 25 秒(实测),而它在同步的
-    // settle 钩子里。阈值给到 2 秒:线性实现 <5ms,只有退化成 O(n²) 才会超。
-    const wall = 'A'.repeat(128000) + ' padding text without any separator';
-    const start = Date.now();
-    redactSecrets(wall);
-    expect(Date.now() - start).toBeLessThan(2000);
+    // settle 钩子里。阈值给到 2 秒:线性实现 <10ms,只有退化成 O(n²) 才会超。
+    const cases = [
+      'A'.repeat(128000) + ' padding text without any separator',
+      // JWT 规则的正文类包含 `-`:起始边界没把 `-` 一起排除时,每个 `eyJ` 都会把剩余全文
+      // 吃完再回溯找 `.`(240K 实测 5.7 秒),这条盯的就是它。
+      'eyJabcdefghijk-'.repeat(16000),
+      'eyJ' + 'A'.repeat(128000),
+    ];
+    for (const text of cases) {
+      const start = Date.now();
+      redactSecrets(text);
+      expect(Date.now() - start, text.slice(0, 24)).toBeLessThan(2000);
+    }
   });
 
   it('masks cloud keys, connection-string passwords and PEM blocks', () => {
