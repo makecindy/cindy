@@ -264,6 +264,34 @@ export const HOST_CONTRACT_CHANNELS: readonly HostChannelDef[] = [
     body: () => null,
   },
 
+  // --- Settings ---
+  {
+    desktopChannel: 'appearance-settings:set-patch',
+    webPath: 'appearanceSettings.setPatch',
+    hostPath: '/api/settings/appearance/set',
+    body: ([patch]) => ({ patch: patch ?? {} }),
+  },
+  {
+    desktopChannel: 'appearance-settings:reset',
+    webPath: 'appearanceSettings.reset',
+    hostPath: '/api/settings/appearance/reset',
+    body: () => ({}),
+  },
+  {
+    desktopChannel: 'layout:set',
+    webPath: 'layout.set',
+    hostPath: '/api/settings/layout/set',
+    body: ([layout]) => ({ layout: layout ?? {} }),
+    map: (response) => ({ layout: response, persisted: true }),
+  },
+  {
+    desktopChannel: 'layout:reset',
+    webPath: 'layout.reset',
+    hostPath: '/api/settings/layout/reset',
+    body: () => ({}),
+    map: (response) => ({ layout: response, persisted: true }),
+  },
+
   // --- Plugins / Ghosts ---
   {
     desktopChannel: 'plugin-market:list-installed',

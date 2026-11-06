@@ -313,22 +313,33 @@ export function registerHostDelegatedSync(input: {
  * Relay the host's runtime event stream into every window on the same push
  * channel the embedded runtime uses.
  */
-export function startHostEventBridge(input: {
-  baseUrl: string;
-  token: string;
-  broadcast: (payload: unknown) => void;
-  onError?: (error: unknown) => void;
-}): () => void {
+export interface HostEventBridgeInput {
+  readonly baseUrl: string;
+  readonly token: string;
+  readonly broadcast: (payload: unknown) => void;
+  readonly onSettingsChanged?: (domain: string, value: unknown) => void;
+  readonly onSessionChanged?: (event: unknown) => void;
+  readonly onMessageCreated?: (event: unknown) => void;
+  readonly onProjectAliasesChanged?: () => void;
+  readonly onError?: (error: unknown) => void;
+}
+
+/**
+ * Relay the host's runtime event stream into every window on the same push
+ * channel the embedded runtime uses.
+ */
+export function startHostEventBridge(input: HostEventBridgeInput): () => void {
   let stopped = false;
+  let lastSeq: number | null = null;
   const abort = new AbortController();
 
   void (async () => {
     while (!stopped) {
       try {
-        const response = await fetch(`${input.baseUrl}/events`, {
-          headers: { authorization: `Bearer ${input.token}` },
-          signal: abort.signal,
-        });
+        const url = lastSeq != null ? `${input.baseUrl}/events?since=${lastSeq}` : `${input.baseUrl}/events`;
+        const headers: Record<string, string> = { authorization: `Bearer ${input.token}` };
+        if (lastSeq != null) headers['last-event-id'] = String(lastSeq);
+        const response = await fetch(url, { headers, signal: abort.signal });
         if (!response.ok || !response.body) throw new Error(`events ${response.status}`);
         const reader = response.body.getReader();
         const decoder = new TextDecoder();
@@ -344,7 +355,20 @@ export function startHostEventBridge(input: {
             const line = chunk.split('\n').find((entry) => entry.startsWith('data: '));
             if (!line) continue;
             try {
-              input.broadcast(JSON.parse(line.slice(6)));
+              const payload = JSON.parse(line.slice(6));
+              if (payload && typeof payload.seq === 'number') lastSeq = payload.seq;
+              input.broadcast(payload);
+              if (payload?.type === 'settings_changed') {
+                input.onSettingsChanged?.(payload.domain, payload.value);
+              } else if (payload?.type === 'appearance_changed') {
+                input.onSettingsChanged?.('appearance', payload.appearance);
+              } else if (payload?.type === 'session_changed') {
+                input.onSessionChanged?.(payload);
+              } else if (payload?.type === 'message_created') {
+                input.onMessageCreated?.(payload);
+              } else if (payload?.type === 'project_aliases_changed') {
+                input.onProjectAliasesChanged?.();
+              }
             } catch {
               // Keep the stream alive on a malformed frame.
             }

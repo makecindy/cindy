@@ -403,8 +403,9 @@ async function insertSessionMessage(sessionId: string, input: Record<string, unk
     .where(eq(messageTable.id, id)).limit(1);
   const row = rows[0];
   if (!row) throw new Error('created message is unavailable');
-  eventHub.publish({ type: 'message_created', sessionId, messageId: id });
-  return messageToCamel(row as never);
+  const camel = messageToCamel(row as never);
+  eventHub.publish({ type: 'message_created', sessionId, messageId: id, message: camel });
+  return camel;
 }
 
 const apiToken = readOrCreateApiToken(resolveHostDataDir());

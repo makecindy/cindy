@@ -13,6 +13,7 @@ import {
   installUnsupportedMakerFallbacks,
   registerHostDelegatedIpc,
   resolveHostDelegation,
+  startHostEventBridge,
 } from '../host-delegation';
 
 const roots: string[] = [];
@@ -26,6 +27,7 @@ function profileWithToken(token: string | null): string {
 
 afterEach(() => {
   vi.restoreAllMocks();
+  vi.unstubAllGlobals();
   for (const root of roots.splice(0)) fs.rmSync(root, { recursive: true, force: true });
 });
 
@@ -297,5 +299,83 @@ describe('claimProxiedChannels and unsupported fallbacks', () => {
     ).rejects.toMatchObject({
       code: 'UNSUPPORTED_CAPABILITY',
     });
+  });
+
+  it('covers appearance, layout, and project aliases in PROXIED_CHANNELS', () => {
+    const channelNames = PROXIED_CHANNELS.map((c) => c.channel);
+    expect(channelNames).toContain('appearance-settings:set-patch');
+    expect(channelNames).toContain('appearance-settings:reset');
+    expect(channelNames).toContain('layout:set');
+    expect(channelNames).toContain('layout:reset');
+    expect(channelNames).toContain('local-db:project-aliases:set');
+    expect(channelNames).toContain('local-db:project-aliases:delete');
+  });
+
+  it('relays SSE events through startHostEventBridge and dispatches typed callbacks', async () => {
+    const broadcasts: unknown[] = [];
+    const settingsChanged: Array<{ domain: string; value: unknown }> = [];
+    const sessionEvents: unknown[] = [];
+    const messageEvents: unknown[] = [];
+    let projectAliasesNotified = false;
+    const errors: unknown[] = [];
+
+    const server = http.createServer((req, res) => {
+      try {
+        if (req.url?.startsWith('/events')) {
+          res.writeHead(200, {
+            'content-type': 'text/event-stream',
+            'cache-control': 'no-cache',
+            connection: 'keep-alive',
+          });
+          res.flushHeaders();
+          res.write('data: {"seq":1,"type":"settings_changed","domain":"appearance","value":{"theme":"dark"}}\n\n');
+          res.write('data: {"seq":2,"type":"session_changed","action":"create","sessionId":"s1"}\n\n');
+          res.write('data: {"seq":3,"type":"message_created","sessionId":"s1","messageId":"m1"}\n\n');
+          res.write('data: {"seq":4,"type":"project_aliases_changed"}\n\n');
+        } else {
+          res.writeHead(404);
+          res.end();
+        }
+      } catch (e) {
+        console.error('SERVER HANDLER ERROR:', e);
+        res.writeHead(500);
+        res.end();
+      }
+    });
+
+    await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', () => resolve()));
+    const port = (server.address() as { port: number }).port;
+
+    const stop = startHostEventBridge({
+      baseUrl: `http://127.0.0.1:${port}`,
+      token: 'test-token',
+      broadcast: (payload) => broadcasts.push(payload),
+      onSettingsChanged: (domain, value) => settingsChanged.push({ domain, value }),
+      onSessionChanged: (event) => sessionEvents.push(event),
+      onMessageCreated: (event) => messageEvents.push(event),
+      onProjectAliasesChanged: () => {
+        projectAliasesNotified = true;
+      },
+      onError: (err) => {
+        console.error('SSE bridge error:', err);
+        errors.push(err);
+      },
+    });
+
+    // Wait for the stream events to process
+    for (let i = 0; i < 20; i++) {
+      if (broadcasts.length >= 4) break;
+      await new Promise((resolve) => setTimeout(resolve, 50));
+    }
+
+    stop();
+    await new Promise<void>((resolve) => server.close(() => resolve()));
+
+    expect(errors).toHaveLength(0);
+    expect(broadcasts).toHaveLength(4);
+    expect(settingsChanged).toEqual([{ domain: 'appearance', value: { theme: 'dark' } }]);
+    expect(sessionEvents).toEqual([{ seq: 2, type: 'session_changed', action: 'create', sessionId: 's1' }]);
+    expect(messageEvents).toEqual([{ seq: 3, type: 'message_created', sessionId: 's1', messageId: 'm1' }]);
+    expect(projectAliasesNotified).toBe(true);
   });
 });

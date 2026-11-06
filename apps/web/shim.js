@@ -449,9 +449,9 @@
     'localDb.sessions.update': (args) => rpc('/sessions/update', { sessionId: args?.[0], patch: args?.[1] ?? {} }),
     'localDb.sessions.get': (args) => rpc('/sessions/get', { sessionId: args?.[0] }),
     'localDb.sessions.list': () => rpc('/sessions/list'),
-    // Same table the Desktop groups the sidebar by; read-only on the web for now.
     'localDb.projectAliases.list': () => rpc('/project-aliases/list'),
-    'localDb.projectAliases.onChanged': () => () => {},
+    'localDb.projectAliases.set': (args) => rpc('/project-aliases/set', args?.[0] ?? {}),
+    'localDb.projectAliases.delete': (args) => rpc('/project-aliases/delete', typeof args?.[0] === 'string' ? { projectKey: args[0] } : (args?.[0] ?? {})),
     'localDb.sessions.messages': async (args) => rpc('/sessions/messages', args),
     'localDb.rightSidebarTabs.list': () => STATIC.rightSidebarTabs,
     'localDb.messages.create': (args) => rpc('/messages/create', { sessionId: args?.[0], message: args?.[1] ?? {} }),
@@ -501,13 +501,17 @@
    * subscribers receive them through the same fan-out the preload provides.
    */
   let eventStreamStarted = false;
+  let lastEventSeq = null;
   function ensureEventStream() {
     if (eventStreamStarted) return;
     eventStreamStarted = true;
     void (async () => {
       for (;;) {
         try {
-          const response = await fetch('/events', { credentials: 'same-origin' });
+          const url = lastEventSeq != null ? `/events?since=${lastEventSeq}` : '/events';
+          const headers = {};
+          if (lastEventSeq != null) headers['last-event-id'] = String(lastEventSeq);
+          const response = await fetch(url, { credentials: 'same-origin', headers });
           if (!response.ok || !response.body) throw new Error(`events ${response.status}`);
           const reader = response.body.getReader();
           const decoder = new TextDecoder();
@@ -524,6 +528,7 @@
               if (!line) continue;
               try {
                 const parsed = JSON.parse(line.slice(6));
+                if (parsed && typeof parsed.seq === 'number') lastEventSeq = parsed.seq;
                 (window.__hostEvents ??= []).push(parsed);
                 if (window.__hostEvents.length > 200) window.__hostEvents.shift();
                 // Interaction traffic has its own preload channels; everything
@@ -536,6 +541,45 @@
                     requestId: parsed.requestId,
                     reason: parsed.reason,
                   });
+                } else if (parsed.type === 'settings_changed') {
+                  if (parsed.domain === 'appearance') {
+                    settingsMirror.appearance = parsed.value;
+                    syncSnapshots.delete('appearanceSettings.getSync\u0000undefined');
+                    emit('appearanceSettings.onChanged', parsed.value);
+                  } else if (parsed.domain === 'layout') {
+                    settingsMirror.layout = parsed.value;
+                    syncSnapshots.delete('layout.getStateSync\u0000undefined');
+                    emit('layout.onChanged', { layout: parsed.value });
+                  } else if (parsed.domain === 'shortcuts') {
+                    settingsMirror.appShortcuts = parsed.value;
+                    syncSnapshots.delete('appShortcuts.getState\u0000undefined');
+                    emit('appShortcuts.onChanged', parsed.value);
+                  } else if (parsed.domain === 'sidebar') {
+                    settingsMirror.sidebar = parsed.value;
+                    syncSnapshots.delete('sidebarSettings.loadSnapshot\u0000undefined');
+                    if (Array.isArray(parsed.value?.pinnedOrder)) {
+                      emit('sidebarSettings.onPinnedOrderChanged', parsed.value.pinnedOrder, ownerStamp());
+                    }
+                    if (Array.isArray(parsed.value?.hiddenProjectKeys)) {
+                      emit('sidebarSettings.onHiddenProjectKeysChanged', parsed.value.hiddenProjectKeys, ownerStamp());
+                    }
+                  }
+                } else if (parsed.type === 'appearance_changed') {
+                  settingsMirror.appearance = parsed.appearance;
+                  syncSnapshots.delete('appearanceSettings.getSync\u0000undefined');
+                  emit('appearanceSettings.onChanged', parsed.appearance);
+                } else if (parsed.type === 'session_changed') {
+                  if (parsed.action === 'create') {
+                    emit('localDb.sessions.onCreated', parsed.session);
+                  } else if (parsed.action === 'update') {
+                    emit('localDb.sessions.onPatched', { sessionId: parsed.sessionId, patch: parsed.patch });
+                  } else if (parsed.action === 'discard_provisional') {
+                    emit('localDb.sessions.onPatched', { sessionId: parsed.sessionId, patch: { status: 'deleted' } });
+                  }
+                } else if (parsed.type === 'message_created') {
+                  emit('localDb.messages.onCreated', { sessionId: parsed.sessionId, message: parsed.message });
+                } else if (parsed.type === 'project_aliases_changed') {
+                  emit('localDb.projectAliases.onChanged');
                 } else {
                   emit('maker.onEvent', parsed);
                 }

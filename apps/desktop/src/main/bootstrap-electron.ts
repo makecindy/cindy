@@ -1309,13 +1309,48 @@ function installHostClientMode(): boolean {
     client: hostClient,
     ipcMain,
   });
+  const sendToAllWindows = (channel: string, ...args: unknown[]) => {
+    for (const win of BrowserWindow.getAllWindows()) {
+      if (!win.isDestroyed()) win.webContents.send(channel, ...args);
+    }
+  };
   startHostEventBridge({
     baseUrl: delegation.baseUrl,
     token: delegation.token,
     broadcast: (payload) => {
-      for (const win of BrowserWindow.getAllWindows()) {
-        if (!win.isDestroyed()) win.webContents.send(MAKER_PUSH.EVENT, payload);
+      sendToAllWindows(MAKER_PUSH.EVENT, payload);
+    },
+    onSettingsChanged: (domain, value) => {
+      if (domain === 'appearance') {
+        sendToAllWindows('appearance-settings:changed', value);
+      } else if (domain === 'layout') {
+        sendToAllWindows('layout:changed', { layout: value });
+      } else if (domain === 'shortcuts') {
+        sendToAllWindows('app-shortcuts:changed', value);
+      } else if (domain === 'sidebar') {
+        const val = value as { pinnedProjectKeys?: unknown[]; hiddenProjectKeys?: unknown[] } | undefined;
+        if (Array.isArray(val?.pinnedProjectKeys)) {
+          sendToAllWindows('sidebar-settings:pinned-order-changed', val.pinnedProjectKeys);
+        }
+        if (Array.isArray(val?.hiddenProjectKeys)) {
+          sendToAllWindows('sidebar-settings:hidden-project-keys-changed', val.hiddenProjectKeys);
+        }
       }
+    },
+    onSessionChanged: (event: any) => {
+      if (event?.action === 'create') {
+        sendToAllWindows('local-db:sessions:created', { sessionId: event.sessionId, session: event.session });
+      } else if (event?.action === 'update') {
+        sendToAllWindows('local-db:sessions:patched', { sessionId: event.sessionId, patch: event.patch });
+      } else if (event?.action === 'discard_provisional') {
+        sendToAllWindows('local-db:sessions:patched', { sessionId: event.sessionId, patch: { status: 'deleted' } });
+      }
+    },
+    onMessageCreated: (event: any) => {
+      sendToAllWindows('local-db:messages:created', { sessionId: event?.sessionId, message: event?.message });
+    },
+    onProjectAliasesChanged: () => {
+      sendToAllWindows('local-db:project-aliases:changed', {});
     },
     onError: (error) => {
       console.warn(
