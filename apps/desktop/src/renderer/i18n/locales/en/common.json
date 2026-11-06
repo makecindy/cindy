@@ -1,4 +1,34 @@
 {
+  "sharedTaskRecovery": {
+    "title": "Cannot resume on the original computer",
+    "description": "Choose another computer or provider to continue with a context handoff. Your messages stay, but switching does not transfer the original computer’s full running state.",
+    "choose": "Choose another computer",
+    "cancel": "Stay here",
+    "stage": {
+      "owner": "Failed while contacting the sharing computer.",
+      "allocation": "Failed while allocating the original executor.",
+      "executor": "Failed while confirming the executor’s device-link connection.",
+      "capability": "Failed while checking the executor’s capabilities.",
+      "authorization": "Failed while installing execution authorization.",
+      "unknown": "The failing stage was not reported."
+    },
+    "reason": {
+      "offline": "The computer contacted at this stage was reported offline. Other tasks may be running on different computers.",
+      "timeout": "The request timed out. The failing stage identifies the service being contacted; neither direct-path nor relay failure has been confirmed.",
+      "relay": "The device-link connection is not ready or was closed. A failed direct path alone normally falls back to the relay.",
+      "denied": "Access was denied or remote control was disabled. Retrying cannot bypass this restriction.",
+      "model": "The shared provider or model is not allowed for this task.",
+      "budget": "The provider reported a usage limit or insufficient quota. Switching computers may still use the same quota.",
+      "capacity": "Task or connection capacity has been reached. Close unused tasks or choose another computer.",
+      "unsupported": "The executor does not support the required shared-task capabilities.",
+      "authorization": "Execution authorization could not be installed. This is not proof that the executor is offline.",
+      "history": "The original task location cannot be used. Its native history cannot be opened on a different computer.",
+      "policy": "Sharing usage rules require live checks through the sharing computer. Direct execution cannot enforce them; this does not mean the balance is empty.",
+      "unknown": "The sharing computer did not provide a precise cause. Offline status, quota and the direct/relay path could not be confirmed.",
+      "rate": "The service is rate-limiting or congested. Wait for its cooldown; another computer may share the same limit.",
+      "service": "The sharing authorization service could not be reached or returned a failure. The executor has not been confirmed offline."
+    }
+  },
   "pluginUi": {
     "renderer": "Display",
     "original": "Original",
@@ -3804,7 +3834,12 @@
           "stop": "Stop test"
         },
         "fetch": {
-          "button": "Fetch model list",
+          "selectedCount": "{{count}} models selected",
+          "availableCount": "{{count}} available models fetched",
+          "notFetched": "Model list not fetched yet",
+          "failedRetry": "Could not fetch the model list. Try again.",
+          "retryFailed": "This fetch failed. Try again.",
+          "button": "Fetch and select models",
           "fetching": "Fetching models…",
           "needBaseUrl": "Fill in the base URL first",
           "failed": "Failed to fetch the model list",
@@ -6750,8 +6785,6 @@
             "task": "Task key",
             "action": "Action key"
           },
-          "lightingLimit": "Firmware can independently light the first 6 task keys in board order. Extra task keys still switch tasks.",
-          "unlitKey": "This key is after the first 6, so it has no independent status light.",
           "taskHint": "A clear keycap is recommended so task status can show in different colors."
         },
         "commandKeys": {
@@ -7800,6 +7833,7 @@
         "customSlotAsleep": "This plugin is disabled. Enable it to see its settings UI here.",
         "descriptionExpand": "Show more",
         "descriptionCollapse": "Show less",
+        "readmeTitle": "About",
         "useAction": "Use Plugin",
         "chatAction": "Chat",
         "enabledLabel": "Enabled",
@@ -8390,6 +8424,26 @@
         "title": "Delete \"{{name}}\"?",
         "message": "New sessions will no longer load this MCP.",
         "confirm": "Delete"
+      },
+      "duplicates": {
+        "title": "Possibly duplicate MCP connections",
+        "description": "Cindy and your Claude Code user configuration have matching or similar connections that may load tools twice. Choose which source to keep, or keep both if unsure.",
+        "scope": "Only affects ordinary Claude Code tasks in Cindy on this computer, when the agent next starts. Your Claude Code configuration stays unchanged. Related duplicates share the same choice.",
+        "unavailable": "Some configuration could not be read. Connections are unchanged. Reopening this page checks again.",
+        "endpoint": "Same connection address",
+        "similar": "Similar connection addresses",
+        "keep": {
+          "both": "Keep both sources in this group"
+        },
+        "selected": {
+          "cindy": "Cindy connection selected",
+          "claude": "Claude Code connection selected",
+          "both": "Keeping both sources in this group"
+        },
+        "reset": "Choose again",
+        "saveFailed": "Could not save. The connections may have changed. Choose again from the current list.",
+        "keepThis": "Keep this connection",
+        "keepThese": "Keep these connections"
       }
     },
     "remotePermission": {
@@ -15374,7 +15428,7 @@
       },
       "fields": {
         "title": "Title",
-        "schedule": "Schedule",
+        "schedule": "Trigger",
         "notify": "Notify",
         "prompt": "Prompt",
         "once": "Once",
@@ -15490,6 +15544,13 @@
         "preRunPluginRequired": "Choose a plugin for the pre-run check",
         "templateParamRequired": "Enter {{label}}",
         "templateApplyFailed": "Could not apply the template. Check the parameters and try again."
+      },
+      "layout": {
+        "content": "What to run",
+        "notifications": "Notifications & quiet runs",
+        "contentTab": "Content & Trigger",
+        "optionsTab": "Run options",
+        "sections": "Automation settings"
       }
     },
     "chips": {
@@ -15690,6 +15751,13 @@
           "prompt": "Health-check the documents in the working directory and find content that needs updating.\nConstraints:\n- Look for outdated information (stale dates, dead links, deprecated processes or tools), contradictions, and duplication\n- Cite the file path and location for every issue and explain the reasoning\n- Categorize as \"update / merge / delete\" suggestions and produce a revision checklist\n- Only output the report; do not modify the documents"
         }
       }
+    },
+    "deadline": {
+      "label": "End date and time",
+      "clear": "Clear",
+      "hint": "Leave empty for no limit. Times use {{timezone}}. No new automatic runs start after this time; runs already started can finish.",
+      "invalid": "Enter a valid date and time",
+      "expired": "Expired"
     }
   },
   "issueTracker": {
@@ -16897,7 +16965,10 @@
       "registrationFailed": "Creation failed, please retry later",
       "silentStopExhausted": "The model returned empty responses repeatedly; auto-resume is paused. Click \"Continue\" to resume the task.",
       "executionResultUnavailable": "Unable to retrieve the execution result. Automatic continuation has stopped. Ask the assistant to check the existing execution result.",
-      "outputLimit": "The model reached its output limit, so this response may be incomplete. Send the next message to continue.",
+      "outputLimit": "The model reached its output limit, so this response may be incomplete. Send a new message to continue; if this repeats, lower the reasoning effort or compact the conversation history first.",
+      "outputLimitReasoning": "Reasoning consumed most of this request’s output budget, so the response may be incomplete. Lower the reasoning effort or compact the conversation history before continuing.",
+      "outputLimitUsage": "This model request used {{outputTokens}} output tokens, including {{reasoningTokens}} reasoning tokens.",
+      "outputLimitOutputUsage": "This model request used {{outputTokens}} output tokens.",
       "permissionTightenInterruptFailed": "Failed to stop the running task while tightening permissions; it may keep running without approval prompts until it finishes. Stop it manually if needed.",
       "codexAutoReviewUnavailable": "Auto-review is temporarily unavailable. The current action was blocked and permissions switched to Default. Retry the request; Cindy will ask when needed.",
       "hostShellCommandBlocked": "Cindy blocked this shell command. Check the command and use an available tool or command to continue.",
@@ -17381,6 +17452,7 @@
     "sidebar": "Balance & Plans",
     "settings": {
       "title": "Usage and billing",
+      "supportHint": "Having trouble? Contact {{email}} for help.",
       "subscriptionCard": {
         "title": "Current plan",
         "empty": "No active subscription",
@@ -17455,14 +17527,38 @@
     },
     "orders": {
       "title": "Order history",
-      "description": "Only top-up and subscription orders started inside Cindy are listed. Orders awaiting payment are canceled automatically once they time out.",
+      "description": "Paid top-ups and settled subscription invoices.",
+      "history": {
+        "loadFailed": "Couldn’t load order history",
+        "retry": "Reload Orders",
+        "unknownPaidAt": "Payment date unavailable",
+        "unknownAmount": "Amount unavailable",
+        "refundedAmount": "Refunded {{amount}}",
+        "refunded": "Refunded",
+        "partiallyRefunded": "Partially Refunded",
+        "noPayment": "No Payment Required",
+        "page": "Page {{page}}",
+        "previous": "Previous Page",
+        "next": "Next Page"
+      },
       "count": "{{count}} orders",
-      "incomplete": "There are many order records. Only the latest {{count}} are shown.",
       "orderId": "NO. {{id}}",
       "copy": {
         "action": "Copy Order ID {{id}}",
         "success": "Order ID copied",
         "failed": "Order ID wasn’t copied — try again"
+      },
+      "refund": {
+        "action": "Request Refund",
+        "title": "Request a Refund",
+        "description": "Email the following information to {{email}} to request a refund.",
+        "emailSubject": "Cindy refund request - {{orderId}}",
+        "sendAction": "Send Refund Request",
+        "gmailFallbackDescription": "Your refund request includes order details. Opening Gmail will share this information with Google. Continue?",
+        "emailBody": "Hello, I would like to request a refund for the following order. Could you help me with this?\n\nOrder ID: {{orderId}}\nProvider transaction ID: {{providerTransactionId}}\nApplication: {{application}}\nPayment method: {{paymentMethod}}\nAmount paid: {{amount}}\n\nIssue encountered:\n(Briefly describe what happened)\n\nThank you.",
+        "fields": {
+          "amount": "Amount paid"
+        }
       },
       "invoice": {
         "action": "Request Invoice",
@@ -17472,7 +17568,7 @@
         "emailSubject": "Invoice request for order {{orderId}}",
         "personalInvoicePolicy": "Invoices for Cindy Personal top-ups are issued in <strong>an individual’s name</strong> by default. You can use your name or “Individual” as the invoice title. If you need an invoice in your company’s name for expense reimbursement, provide <strong>a reimbursement statement bearing the company’s official stamp</strong> and specifying the invoice title.",
         "invoiceTitleHint": "Instructions: For an individual invoice, enter your name or “Individual”. For an invoice in your company’s name for expense reimbursement, attach a reimbursement statement bearing the company’s official stamp and specifying the invoice title.",
-        "emailBody": "Hello,\n\nI would like to request an invoice for the following order:\n\n────────────────────\nOrder ID: {{orderId}}\nApplication: {{application}}\nPayment method: {{paymentMethod}}\nInvoice amount: {{amount}}\nInvoice title: \n{{invoiceTitleHint}}\n\nContact person: \nPhone number: \nEmail: \n────────────────────\n\nThank you.",
+        "emailBody": "Hello,\n\nI would like to request an invoice for the following order:\n\n────────────────────\nOrder ID: {{orderId}}\nProvider transaction ID: {{providerTransactionId}}\nApplication: {{application}}\nPayment method: {{paymentMethod}}\nInvoice amount: {{amount}}\nInvoice title: \n{{invoiceTitleHint}}\n\nContact person: \nPhone number: \nEmail: \n────────────────────\n\nThank you.",
         "sendAction": "Send Invoice Request",
         "emailCopied": "Support email copied",
         "emailCopyFailed": "Support email wasn’t copied — try again",
@@ -17483,6 +17579,7 @@
         "notAvailable": "Not available",
         "fields": {
           "orderId": "Order ID",
+          "providerTransactionId": "Provider transaction ID",
           "application": "Application",
           "paymentMethod": "Payment method",
           "amount": "Invoice amount",

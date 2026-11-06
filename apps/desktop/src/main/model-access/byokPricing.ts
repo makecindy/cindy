@@ -18,6 +18,7 @@ export function buildByokPricing(providers: readonly ByokProvider[]): ModelPrici
         false,
         {
           allowFreeModel: true,
+          includeThresholdBaseline: true,
         },
       );
       if (!quote) continue;

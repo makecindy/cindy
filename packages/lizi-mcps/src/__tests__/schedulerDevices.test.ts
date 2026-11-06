@@ -392,13 +392,14 @@ describe("cindy_scheduler cross-device routing", () => {
       device: "mbp",
       name: "renamed",
       intervalMs: null,
+      expireAt: null,
     });
     expect(s.invoke.mock.calls).toEqual([
       ["mbp", "pause", ["r1"]],
       ["mbp", "delete", ["r1"]],
       ["mbp", "resume", ["r1"]],
       ["mbp", "run-now", ["r1"]],
-      ["mbp", "update", ["r1", { name: "renamed", intervalMs: null }]],
+      ["mbp", "update", ["r1", { name: "renamed", intervalMs: null, expireAt: null }]],
     ]);
     for (const method of [
       "pause",

@@ -9,7 +9,7 @@ import { describe, expect, it } from 'vitest';
 
 import { sanitizeGhostCardHtml } from '../cardSanitizer';
 import { GHOST_CARD_HTML_MAX_BYTES, ghostCardDeclaresModelSelect } from '../../../shared/ghost';
-import { readGhostCardForm } from '@cindy/maker-shared/ghost-card-form';
+import { readGhostCardForm, readGhostCardSupersededBy } from '@cindy/maker-shared/ghost-card-form';
 
 const HASH = 'a'.repeat(64);
 const GOOD_IMG = `cindy-media://blobs/${HASH}.png`;
@@ -21,6 +21,11 @@ function ok(html: string): string {
 }
 
 describe('sanitizeGhostCardHtml', () => {
+  it('keeps plugin HTML from posing as a card the Host marked superseded', () => {
+    // Views hide a superseded card, so only the Host may set the marker (cardService, with sourceCallId).
+    expect(readGhostCardSupersededBy(ok('<div data-cindy-superseded-by="victim" hidden></div><p>x</p>'))).toBeUndefined();
+  });
+
   it('permits inert form declarations without enabling native forms, scripts or navigation', () => {
     const fields = [{ name: 'body', label: 'Message', value: '<script>"&', multiline: true }];
     const encoded = JSON.stringify(fields).replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;');
@@ -444,6 +449,14 @@ describe('sanitizeGhostCardHtml · PR 状态位(data-ghost-pr-status)', () => {
     expect(ok('<div data-ghost-pr-status="Octo/repo.js#42">CI</div>')).toBe('<div data-ghost-pr-status="Octo/repo.js#42">CI</div>');
     expect(ok('<div data-ghost-pr-status="octo/repo#0">a</div><div data-ghost-pr-status="octo/repo#1&quot; x=&quot;">b</div><span data-ghost-pr-status="octo/repo#1">c</span>'))
       .toBe('<div>a</div><div>b</div><span>c</span>');
+  });
+
+  // Rule (2026-11-06): a card merged outside it kept saying "following" with live buttons; the host
+  // hides parts marked open-only. Minimal input: each allowed tag, a bad value and a disallowed tag.
+  it('放行 div / span / button 上的 data-ghost-pr-open-only,其它值和标签只丢属性', () => {
+    expect(ok('<div data-ghost-pr-open-only="o/r#9">a</div><span data-ghost-pr-open-only="o/r#9">b</span><button data-ghost-pr-open-only="o/r#9">c</button>'))
+      .toBe('<div data-ghost-pr-open-only="o/r#9">a</div><span data-ghost-pr-open-only="o/r#9">b</span><button data-ghost-pr-open-only="o/r#9" type="button">c</button>');
+    expect(ok('<div data-ghost-pr-open-only="o/r">a</div><p data-ghost-pr-open-only="o/r#9">b</p>')).toBe('<div>a</div><p>b</p>');
   });
 });
 

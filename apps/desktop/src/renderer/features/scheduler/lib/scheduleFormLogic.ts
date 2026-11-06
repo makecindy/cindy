@@ -22,6 +22,7 @@ import {
   type ProviderView,
 } from '@cindy/model-providers';
 import type { SessionReference } from '../../../../shared/sessionReference';
+import { parseScheduleDeadline } from '@cindy/maker-shared/schedule-form';
 
 /** Effort 白名单 — 与 Phase 2 mapper enum 一致;UI 提交前的最后一道关卡。 */
 export const EFFORT_VALUES = ['minimal', 'low', 'medium', 'high', 'xhigh', 'max', 'ultra'] as const;
@@ -121,6 +122,8 @@ export function resolveScheduleModelEfforts(input: {
 }
 
 export interface ScheduleFormState {
+  deadline?: string;
+  sourceExpireAt?: number;
   name: string;
   prompt: string;
   /** agent = run an AI turn; script = host executes scriptConfig without an AI turn. */
@@ -595,6 +598,7 @@ export function buildScheduleInput(form: ScheduleFormState): CreateScheduleInput
     kind: 'cron',
     cronExpr,
     timezone: form.timezone.trim(),
+    expireAt: parseScheduleDeadline(form.deadline ?? '', form.sourceExpireAt),
     recurring: form.recurring,
     manual: form.manual,
     // 恒带 key：编辑 Cron 任务时 undefined 会沿 storage patch 契约清空旧 intervalMs；
@@ -678,6 +682,7 @@ export function scheduleToUserCreateInput(
     kind: schedule.kind,
     cronExpr: schedule.cronExpr,
     timezone: schedule.timezone,
+    expireAt: schedule.expireAt,
     recurring: schedule.recurring,
     manual: schedule.manual,
     intervalMs: schedule.intervalMs,

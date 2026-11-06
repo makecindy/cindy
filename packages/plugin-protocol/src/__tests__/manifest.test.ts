@@ -2116,3 +2116,21 @@ describe('tool approval declaration', () => {
       .toMatchObject({ ok: false });
   });
 });
+
+describe('readme declarations', () => {
+  // 作者契约(FORGE_GUIDE §2「详细介绍」):readme 规范化保留在 manifest 上,与已声明文件冲突时拒绝。
+  it('keeps a valid readme map and rejects paths that collide with other declared files', () => {
+    const readme = { en: 'README.md', 'zh-CN': 'README.zh-CN.md' };
+    expect(validateGhostManifest({ ...validManifest, readme })).toMatchObject({
+      ok: true,
+      manifest: { readme },
+    });
+    expect(
+      validateGhostManifest({
+        ...validManifest,
+        manual: { items: [{ dir: 'docs', name: 'docs', description: 'Docs' }] },
+        readme: { en: 'docs/README.md' },
+      }),
+    ).toMatchObject({ ok: false, reason: expect.stringContaining('readme.en') });
+  });
+});

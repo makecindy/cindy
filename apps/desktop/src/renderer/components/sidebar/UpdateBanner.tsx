@@ -76,8 +76,9 @@ interface UpdateBannerProps {
   onOpenVersionNotice?: (version: string) => void;
 }
 
-const UPDATE_BUTTON_TREATMENT =
-  '[--button-face-bg:var(--update-btn-bg)] [--button-face-border:var(--update-btn-border)] text-[var(--update-btn-text)] enabled:hover:[--button-face-bg:var(--update-btn-hover)] enabled:hover:[--button-face-border:var(--update-btn-border)] enabled:active:[--button-face-bg:var(--update-btn-hover)] enabled:active:[--button-face-border:var(--update-btn-border)]';
+// 状态写法与 Button 的 variant 相同的修饰符才能替换它；只写 enabled:hover 优先级更低，不生效。
+export const UPDATE_BUTTON_TREATMENT =
+  '[--button-face-bg:var(--update-btn-bg)] [--button-face-border:var(--update-btn-border)] text-[var(--update-btn-text)] enabled:[&:not([aria-disabled=true])]:hover:[--button-face-bg:var(--update-btn-hover)] enabled:[&:not([aria-disabled=true])]:hover:[--button-face-border:var(--update-btn-border)] enabled:[&:not([aria-disabled=true])]:active:[--button-face-bg:var(--update-btn-pressed)] enabled:[&:not([aria-disabled=true])]:active:[--button-face-border:var(--update-btn-border)]';
 
 export function UpdateBanner({ isCollapsed, onOpenVersionNotice }: UpdateBannerProps) {
   const { status, version, errorCode } = useUpdateStatus();

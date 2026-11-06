@@ -5,7 +5,7 @@ export default {
   entry: './markdown-preview-find-fixture.tsx',
   viewport: { width: 1040, height: 760 },
   real: 'TextLightbox, MarkdownRenderer, FindInPageBar, FileBodyView, WorkdirBrowseSidebar, ChatInput and AskUserQuestionPrompt keyboard handling, fullscreen video menus and shortcut ownership',
-  notCovered: 'Installed release, native menus/IME, PDF/draw.io, file/search backends, microphone capture and ASR; file/search data, video bytes and voice state are controlled fixtures',
+  notCovered: 'Installed release, native menus/IME, PDF/draw.io, file/search backends, microphone capture and ASR; file/search data, video bytes, voice state and draft UUIDs are controlled fixtures',
   stubs: {
     'src/renderer/voice-input/workletUrl': 'export function getVoiceInputWorkletUrl() { return "/fixture-worklet.js"; }',
     'src/renderer/voice-input/captureSession': `export async function startVoiceInputCaptureSession(options) {
@@ -33,6 +33,8 @@ export default {
   cases: {
     default: { about: 'Document-only matching, visible pointer targets, table navigation and Escape order' },
     'background-editor': { about: 'An existing file-editor search yields shortcuts to the foreground preview' },
+    'source-find': { about: 'Markdown source search owns Find and Escape ahead of global search' },
+    'source-background-editor': { about: 'Source search reopens without stealing or closing a covered editor search' },
     'nested-mermaid': { about: 'A diagram opened from the document owns shortcuts until it closes' },
     'loading-editor': { about: 'The foreground document owns find and Escape before its file read completes' },
     'focus-restore': { about: 'Closing find restores the document toolbar opener for keyboard navigation' },
@@ -48,7 +50,7 @@ export default {
     const findKey = ui.platform === 'darwin' ? 'Meta+f' : 'Control+f';
     // Keep a search open behind the preview to exercise retargeting and the
     // editor capture listener that used to consume the same shortcut first.
-    const editor = ['background-editor', 'loading-editor'].includes(ui.case);
+    const editor = ['background-editor', 'loading-editor', 'source-background-editor'].includes(ui.case);
     const projectSearch = ui.case === 'background-project-search';
     const projectInput = page.locator('input[data-workdir-search-input]');
     if (projectSearch) {
@@ -58,6 +60,10 @@ export default {
       await page.keyboard.press(findKey);
       if (editor) await page.locator('[data-doc-search-bar]').waitFor();
       else await page.getByRole('searchbox').waitFor();
+    }
+    if (ui.case === 'source-background-editor') {
+      await page.locator('[data-doc-search-bar] input').fill('苹果');
+      await page.getByText('1/1', { exact: true }).waitFor();
     }
     if (ui.case === 'background-ask-voice') {
       await page.getByRole('textbox').fill('已有回答');
@@ -113,6 +119,39 @@ export default {
       }
     }
     await card.getByRole('heading', { name: 'Markdown 查找验证', exact: true }).waitFor();
+    // UI regression: source mode used to lose the preview ownership marker,
+    // allowing global/background editor capture handlers to steal Find/Escape.
+    // Use both real search implementations and the real source editor.
+    if (['source-find', 'source-background-editor'].includes(ui.case)) {
+      await card.getByRole('button', { name: await ui.t('attachmentPreview.find'), exact: true }).click();
+      const sourceInput = card.locator('[data-doc-search-bar] input');
+      await sourceInput.fill('苹果');
+      await card.getByText('1/2', { exact: true }).waitFor();
+      await page.keyboard.press('Escape');
+      await sourceInput.waitFor({ state: 'detached' });
+      assert.equal(await card.isVisible(), true);
+      await page.keyboard.press(findKey);
+      await sourceInput.waitFor();
+      assert.equal(await sourceInput.evaluate(el => document.activeElement === el), true);
+      await sourceInput.fill('苹果');
+      await page.keyboard.press('Enter');
+      await card.getByText('2/2', { exact: true }).waitFor();
+      assert.equal(await page.getByRole('searchbox').count(), 0);
+      await ui.capture('source-search');
+      await page.keyboard.press('Escape');
+      await sourceInput.waitFor({ state: 'detached' });
+      await page.keyboard.press('Escape');
+      await card.waitFor({ state: 'detached' });
+      if (editor) {
+        assert.equal(await page.locator('[data-doc-search-bar] input').inputValue(), '苹果');
+        await page.getByText('1/1', { exact: true }).waitFor();
+      } else {
+        await page.keyboard.press(findKey);
+        await page.getByRole('searchbox').fill('苹果');
+        await page.getByText('1/1', { exact: true }).waitFor();
+      }
+      return;
+    }
     const opener = card.getByRole('button', { name: await ui.t('chat.textLightbox.copyAll'), exact: true });
     if (['focus-restore', 'toolbar-tooltip'].includes(ui.case)) await opener.focus();
     await page.keyboard.press(findKey);
@@ -279,16 +318,17 @@ export default {
     await page.keyboard.press('Shift+Enter');
     await card.getByText('1/2', { exact: true }).waitFor();
     if (ui.case === 'outside-focus') {
-      // The production FocusScope now traps Tab inside the preview. Verify the
-      // actual boundary instead of expecting access to the covered page.
-      await input.focus();
-      for (let tab = 0; tab < 20; tab += 1) {
-        await page.keyboard.press('Tab');
-        assert.equal(await page.locator('[data-text-lightbox-overlay]').evaluate(
-          el => el.contains(document.activeElement),
-        ), true);
-      }
-      {
+      // Preview FocusScope now traps keyboard focus. Exercise both tab directions
+      // and an external focus attempt without expecting the removed tab escape.
+      for (const key of ['Tab', 'Shift+Tab']) {
+        await input.focus();
+        for (let tab = 0; tab < 20; tab += 1) {
+          await page.keyboard.press(key);
+          assert.equal(await card.evaluate(el => el.contains(document.activeElement)), true);
+        }
+        await page.getByTestId('open-preview').focus();
+        assert.equal(await card.evaluate(el => el.contains(document.activeElement)), true);
+        await input.focus();
         // The backdrop is intentionally aria-hidden and not focusable. Move into
         // the readable document instead of requiring an inaccessible Tab stop.
         await body.click({ position: { x: 20, y: 120 } });
@@ -336,7 +376,10 @@ export default {
       // deterministically because the held-key check may already have dismissed it.
       await body.click({ position: { x: 20, y: 120 } });
       await opener.focus();
-      const tooltip = page.locator('[role="tooltip"]');
+      // Pointer focus intentionally suppresses Tip; reopen through real keyboard focus.
+      await page.keyboard.press('Shift+Tab');
+      await page.keyboard.press('Tab');
+      const tooltip = page.getByRole('tooltip', { name: await ui.t('chat.textLightbox.copyAll'), exact: true });
       await tooltip.waitFor();
       await page.keyboard.press('Escape');
       await tooltip.waitFor({ state: 'detached' });

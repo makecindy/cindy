@@ -150,6 +150,7 @@ import {
   useShareSelectionActive,
 } from '@/components/chat/shareSelectionStore';
 import { ErrorBanner } from '@/components/chat/ErrorBanner';
+import { useSharedTaskRecovery } from '@/hooks/useSharedTaskRecovery';
 import {
   ErrorTailErrorBanner,
   InterruptedTurnBanner,
@@ -1877,6 +1878,7 @@ function CCAgentSessionContent({
     continueAfterSilentStop,
     errorReason,
     toolLoop,
+    outputLimit,
     insertSystemCard,
     updateSystemCardData,
     error,
@@ -2570,6 +2572,16 @@ function CCAgentSessionContent({
     if (!errorTailMsg || errorTailKind !== 'error') return '';
     return remoteErrorMessageForBanner(errorTailMsg.content);
   }, [errorTailKind, errorTailMsg]);
+  const sharedTaskRecovery = useSharedTaskRecovery({
+    sessionId: sessionId ?? undefined,
+    agentDeviceId: session?.agentDeviceId,
+    error: error || errorTailText,
+    handledUsageLimit: usageLimitRecovery?.isAccountUsageLimit === true,
+    agentKind: session?.agentKind,
+    active: viewVisible && ownsHardwareTaskActions && !readOnly && !botChatIdentity
+      && !isStreaming && !agentStatus.isRunning && !errorIsRecoverable
+      && !syntheticContinuationPending && !usageLimitWait,
+  });
   // 本地隐藏态:点主按钮后立即隐藏,不等新消息入流(视觉连续性,规则 7)。
   // 「忽略/关闭」走 store 的乐观 errorDismissed 更新,无需本地态。
   // 按错误行 clientId 归属(不是 sessionId,review P2):续跑后同一会话再次以
@@ -5819,10 +5831,12 @@ function CCAgentSessionContent({
                 />
               ) : (
                 <ErrorTailErrorBanner
+                  onChooseComputer={sharedTaskRecovery.askAgain}
                   errorText={errorTailText}
                   dismissOnEscape={viewVisible && ownsHardwareTaskActions}
                   errorReason={errorTailMsg?.errorReason}
                   toolLoop={errorTailMsg?.toolLoop}
+                  outputLimit={errorTailMsg?.outputLimit}
                   onContinue={handleErrorTailContinue}
                   onDismiss={handleErrorTailDismiss}
                   onSilentStopContinue={handleSilentStopContinue}
@@ -5893,10 +5907,12 @@ function CCAgentSessionContent({
               continuationTurnClientId,
             }) && (
               <ErrorBanner
+                onChooseComputer={sharedTaskRecovery.askAgain}
                 error={error}
                 dismissOnEscape={viewVisible && ownsHardwareTaskActions}
                 errorReason={errorReason}
                 toolLoop={toolLoop}
+                outputLimit={outputLimit}
                 isRecoverable={errorIsRecoverable}
                 retryText={errorRetryText}
                 onRetry={handleRetry}
@@ -6166,6 +6182,8 @@ function CCAgentSessionContent({
                   aria-hidden={voiceModeOpen && voiceSurfaceAvailable ? true : undefined}
                 >
                 <ChatInput
+                  modelPickerRequest={sharedTaskRecovery.modelPickerRequest}
+                  onModelPickerRequestConsumed={sharedTaskRecovery.consumeModelPickerRequest}
                   middleToolbarSlot={sessionId ? <>
                     <PluginUiContributionControls sessionId={sessionId}
                       point="composer.tools" deviceId={remoteDeviceId}

@@ -223,6 +223,7 @@ export async function requestPluginUiApproval(id: string, sender?: WebContents, 
 
 import { isValidPluginNamespace, supportsCindyVersion, PLUGIN_MEMBER_UPLOAD_MAX_ARCHIVE_BYTES, pluginHasToolUi, parseGhostNativeUi } from '@cindy/plugin-protocol';
 import { buildGhostRecommendationSnapshot } from './ghostRecommendationSnapshot.js';
+import { readGhostReadmeFromDir } from './ghostReadme.js';
 import {
   readGhostRecommendationEntries,
   replaceGhostRecommendations,
@@ -348,9 +349,14 @@ import {
   listRestorableBuiltinGhosts,
   isTrustedBuiltinSeedSource,
   provisionBuiltinGhosts,
+  readBuiltinSeededIds,
+  readBuiltinSeedVersion,
   readBuiltinTombstones,
   recordBuiltinTombstone,
   renameBuiltinTombstone,
+  resolveBuiltinInstalledDir,
+  seedIsNewerThanStore,
+  type BuiltinStoreInstallFact,
   type ProvisionIdentity,
 } from './builtinGhostProvisioner.js';
 import { getAccessToken, getAuthState, onAuthStateChange } from '../authManager.js';
@@ -635,6 +641,7 @@ import {
 } from '../plugin-market/ledger.js';
 import {
   installedMarketManifestIdentity,
+  verifyInstalledMarketManifest,
   type InstalledMarketManifestIdentity,
 } from '../plugin-market/installedManifestIdentity.js';
 import { createOrganizationPrefixStore } from '../plugin-market/organizationPrefixStore.js';
@@ -714,6 +721,7 @@ import { GHOST_COMPOSER_LIST_CHANNEL } from '../../shared/ghostComposer.js';
 import {
   isGhostDisabledForWorkdir,
   listDisabledGhostIdsForWorkdir,
+  normalizeWorkdirKey,
   relocateGhostWorkdirPrefs,
   setGhostDisabledForWorkdir,
 } from './ghostWorkdirPrefs.js';
@@ -1339,7 +1347,29 @@ export async function listInstalledGhostsAsync(): Promise<InstalledGhost[]> {
 }
 
 export async function listAvailableGhostsAsync(): Promise<InstalledGhost[]> {
-  return (await listInstalledGhostsAsync()).filter((ghost) => isGhostAvailableForActiveSession(ghost.manifest.id));
+  const ghosts = await listInstalledGhostsAsync();
+  if (isAppSessionBoundaryPending()) return [];
+  // The scan already supplies each exact instance. Looking up its bare id again
+  // can fall back to N full scans (and confuse same-name namespace instances).
+  const accountServices = getAppCapabilities().canUseCindyAccountServices;
+  return ghosts.filter(ghost => accountServices || !ghostRequiresCindyAccount(ghost.manifest));
+}
+
+/** Notification discovery is indexed; exact live approvals remain the delivery boundary. */
+async function listGhostNotificationCandidates(): Promise<InstalledGhost[]> {
+  const owner = ghostOwnerScope.capture();
+  if (!ghostOwnerScope.isCurrent(owner) || !ghostOwnerScope.isStable(owner)) return [];
+  const ghosts = await getGhostManager().listNotificationCandidatesAsync();
+  if (!ghostOwnerScope.isCurrent(owner) || !ghostOwnerScope.isStable(owner)) return [];
+  const accountServices = getAppCapabilities().canUseCindyAccountServices;
+  return ghosts.filter(ghost => accountServices || !ghostRequiresCindyAccount(ghost.manifest));
+}
+
+function findGhostNotificationTarget(instanceKey: string): InstalledGhost | null {
+  if (isAppSessionBoundaryPending()) return null;
+  const ghost = getGhostManager().findInstalledInstance(instanceKey);
+  if (!ghost || (!getAppCapabilities().canUseCindyAccountServices && ghostRequiresCindyAccount(ghost.manifest))) return null;
+  return ghost;
 }
 
 export function findTrustedXdGhostForScript(id: string): InstalledGhost | null {
@@ -1381,6 +1411,7 @@ export function suspendCindyAccountGhosts(): void {
  * setup writes, and post-dispatch cleanup cannot cross into the next owner.
  */
 export async function interruptGhostCallsForAccountBoundary(): Promise<void> {
+  managerSingleton?.disposeNotificationIndex();
   await revokePluginAppServers();
   pluginDownloads.abortAll();
   cancelActiveGhostOauthFlow();
@@ -1899,6 +1930,7 @@ async function reconcileBuiltinGhostsLocked(
       },
       publishSeed: (id, seedDir, options) =>
         mutation.publishTrustedBundledSeed(id, seedDir, options),
+      storeInstall: builtinSeedStoreInstall,
       onApplyStart: () => {
         tipShown = true;
         broadcastGhostProvisioning(true);
@@ -1956,7 +1988,10 @@ async function reconcileBuiltinGhostsLocked(
           // `.disabled` 镜像的读数只作停用方向的输入:receipt 已钉停用时,镜像被
           // 外部移除不会把插件翻回启用(合并规则见 approveTrustedBundledInstall
           // 头注释;重新启用只有用户显式 setEnabled 一条路)。
-          !hasDisabledMarker(path.join(brainRootDir(), manifest.id)),
+          !hasDisabledMarker(
+            resolveBuiltinInstalledDir(brainRootDir(), manifest.id) ??
+              path.join(brainRootDir(), manifest.id),
+          ),
           { sourceDir: outcome.approvedSourceDirs[manifest.id] },
         )) || approvalChanged;
       // 本会话内被撤销熄灯的常驻实例,批准补回即恢复点火(隔离态下批准必然重写,
@@ -3047,20 +3082,18 @@ export function getGhostSubscriptionGateway(): GhostSubscriptionGateway {
   if (!subscriptionGatewaySingleton) {
     subscriptionGatewaySingleton = new GhostSubscriptionGateway({
       listGhosts: availableGhosts,
-      listGhostsAsync: listAvailableGhostsAsync,
-      findGhostForDelivery: findGhostForInstanceId,
-      isRunning: (id) => {
-        const ghost = findGhostForInstanceId(id);
-        return getGhostRuntime().stateOf(ghost ? installedGhostStoragePart(ghost) : id) === 'running';
-      },
+      listGhostsAsync: listGhostNotificationCandidates,
+      findGhostForDelivery: findGhostNotificationTarget,
+      isRunning: (id) => getGhostRuntime().stateOf(id) === 'running',
       wake: async (ghost) => {
         const r = await getGhostRuntime().spawn(ghost);
         if (!r.ok) throw new Error(r.reason);
       },
       sendToGhost: (ghostId, payload) => {
-        const ghost = findGhostForInstanceId(ghostId);
+        const ghost = findGhostNotificationTarget(ghostId);
         // 适配:底层返回 false 表示投递失败(网关契约是抛错 → 走缓冲/熔断)。
-        if (!sendToGhostLogic(ghost ? installedGhostStoragePart(ghost) : ghostId, payload)) {
+        if (!ghost?.enabled || ('topic' in payload && !ghost.manifest.subscribe?.topics?.includes(payload.topic))
+          || !sendToGhostLogic(installedGhostStoragePart(ghost), payload)) {
           throw new Error('ghost pipe send failed');
         }
       },
@@ -3689,13 +3722,30 @@ export function notifyGhostSessionEvent(
   kind: 'created' | 'archived' | 'switched',
   data: { sessionId: string; workdir?: string },
   shouldPublish: () => boolean | Promise<boolean> = () => true,
-  onRetry: () => void = () => {},
+  onRetry: (resetPrimary?: boolean) => void = () => {},
 ): void {
   void (async () => {
     try {
       const owner = ghostOwnerScope.capture();
-      // The gateway discovers subscribers once after eligibility is resolved.
-      // A preflight scan here used to scan every installation a second time.
+      let publishSessionEvent: Awaited<ReturnType<GhostSubscriptionGateway['preparePublish']>>;
+      try {
+        publishSessionEvent = await getGhostSubscriptionGateway().preparePublish('session');
+      } catch {
+        // Discovery did not establish a delivery target. Release both markers:
+        // the same focus may retry, and returning to the previous focus is new.
+        onRetry(true);
+        return;
+      }
+      if (!publishSessionEvent) {
+        // Even without listeners, advance the focus tracker's deduplication state.
+        // Otherwise disabling at A, visiting B, then enabling and returning to A
+        // suppresses a real switch. The claim retains generation/Lead rechecks;
+        // no eligibility lookup, plugin wake, or notification is needed here.
+        if (ghostOwnerScope.isCurrent(owner) && ghostOwnerScope.isStable(owner)) {
+          await shouldPublish();
+        }
+        return;
+      }
       // created / archived 与 turn 事件同口径；switched 额外允许归一后的 Orca Lead。
       // retry 视为不投，生命周期事件不值得引入重试机制。
       const info = await isGhostEligibleSession(
@@ -3715,8 +3765,7 @@ export function notifyGhostSessionEvent(
       // switched 在异步归一、资格查询完成后再确认一次焦点代次；确认与去重在同一步完成。
       if (!(await shouldPublish())) return;
       if (!ghostOwnerScope.isCurrent(owner) || !ghostOwnerScope.isStable(owner)) return;
-      getGhostSubscriptionGateway().publish(
-        'session',
+      publishSessionEvent(
         kind === 'created'
           ? 'did-session-created'
           : kind === 'archived'
@@ -3864,6 +3913,40 @@ export async function diagnoseScheduleHookPluginForActiveOwner(
       return { pluginId, ...(name ? { name } : {}) };
     },
   });
+}
+
+/**
+ * 内置种子对照的同 id 商店安装(builtinGhostProvisioner 的 storeInstall):只认服务端市场
+ * 已装的根 namespace 记录。账本或该记录损坏时抛错,播种把该种子按本轮失败处理、不动已装字节。
+ */
+function builtinSeedStoreInstall(id: string, installedDir: string): BuiltinStoreInstallFact | null {
+  // 严格查询：账本文件或该插件的记录损坏时不能当成「没有商店来源」（那会让孤儿回收
+  // 把真实的商店安装当种子删掉），抛错让播种跳过本轮。
+  const lookup = getPluginMarketLedger().lookupInstallationForAuthorization({ ghostId: id, namespace: null });
+  if (lookup.kind === 'invalid') {
+    throw new Error('Plugin market ledger is unreadable');
+  }
+  const record = lookup.kind === 'found' ? lookup.record : null;
+  if (
+    !record?.installed ||
+    record.ghostId !== id ||
+    (record.source !== 'market' && record.source !== 'legacy-adopted') ||
+    (hasDeliveryNamespace(record) && record.namespace !== null)
+  ) {
+    return null;
+  }
+  const snapshot = readInstalledGhostManifestSnapshot(installedDir, GHOST_INSTALL_MANIFEST_MAX_BYTES);
+  // ghost.json 相同不代表目录里还是商店包(旧播种器允许同版本种子覆盖,只改代码不改清单)。
+  // 批准回执里的包摘要才是落位那一刻的包身份:商店安装 = Release sha256,播种发布 = 目录摘要。
+  const relId = path.relative(brainRootDir(), installedDir).split(path.sep).join('/');
+  const evidence = getGhostManager().approvedInstallEvidence(relId);
+  return {
+    version: record.version,
+    ownsInstalledBytes:
+      snapshot.ok &&
+      verifyInstalledMarketManifest(record, installedMarketManifestIdentity(snapshot.snapshot)) &&
+      evidence?.packageSha256 === record.sha256,
+  };
 }
 
 /** Reuse the verified install ledger; an official label never establishes distribution identity. */
@@ -8943,6 +9026,20 @@ export function isBuiltinGhostRemovedByUser(id: string): boolean {
 }
 
 /**
+ * 商店 Release 能否把内置播种管理的实例(seeded 台账内)换回商店包:种子已撤,或当前种子
+ * 不比该 Release 新(相同取商店)。不归播种管理、台账读不了时都不放行。
+ */
+export function builtinSeedYieldsToStoreVersion(id: string, storeVersion: string): boolean {
+  try {
+    if (!readBuiltinSeededIds(brainRootDir()).includes(id)) return false;
+  } catch {
+    return false;
+  }
+  const seedVersion = readBuiltinSeedVersion(builtinSeedRootDirs(), id);
+  return seedVersion === null || !seedIsNewerThanStore(seedVersion, storeVersion);
+}
+
+/**
  * launch: 'resident' 或声明 routineEvents 的意识在"唤醒且在场"时保持电子脑常驻——本函数是所有
  * "该在场了"时机的统一入口(应用启动扫描 / 装入即开 / 唤醒 / 更新换代后)。
  * spawn 幂等,重复调用零成本;失败走熔断记账,不抛出(fire-and-forget)。
@@ -10597,17 +10694,17 @@ export function registerGhostIpc(): void {
 
   // ── 目录级禁用(ghostWorkdirPrefs;插件页的项目范围视图)──
   // 读走 sendSync:切换范围时禁用清单要与卡片同帧渲染(规则 7 无跳变),
-  // 文件读取极小且带 mtime 缓存。写走 invoke;写后广播 ghosts:changed
-  // (renderer 复用同一订阅热更,多窗口同步)。
+  // 文件读取极小且带 mtime 缓存。写走 invoke；仅广播目录策略，多窗口同步。
   ipcMain.on('ghosts:workdir-prefs', (event, workdir: unknown) => {
     event.returnValue = {
       disabled: typeof workdir === 'string' ? listDisabledGhostIdsForWorkdir(workdir) : [],
+      workdirKey: typeof workdir === 'string' ? normalizeWorkdirKey(workdir) : '',
     };
   });
   ipcMain.handle('ghosts:workdir-prefs', (event, workdir: unknown) => {
     assertTrustedAppRendererEvent(event);
     if (typeof workdir !== 'string') throwIpcError('INVALID_PARAMS', 'workdir must be a string');
-    return { disabled: listDisabledGhostIdsForWorkdir(workdir) };
+    return { disabled: listDisabledGhostIdsForWorkdir(workdir), workdirKey: normalizeWorkdirKey(workdir) };
   });
   ipcMain.handle(
     'ghosts:workdir-prefs:set',
@@ -11138,6 +11235,17 @@ export function registerGhostIpc(): void {
   /* ── Library(持久作品库)设置面 IPC ─────────────────────────────────
    * 目录选择永远由**宿主**弹(pick 同款),插件无权发起;装入确认与设置页
    * 共用同一裁决链(原生选择器 → 候选校验 → binding/迁移)。 */
+  // 详细介绍:详情页打开时按需读取,不随 ghosts:list 广播;不进 device-link 白名单
+  // (手机端经 mobilePageService 的插件详情资源单独投影)。
+  // locale 由界面语言传入(主进程语言同步可能晚于界面切换);只用来在已声明的介绍文件里选择。
+  ipcMain.handle('ghosts:readme', async (event, id: unknown, locale: unknown) => {
+    assertTrustedAppRendererEvent(event);
+    if (typeof id !== 'string' || !isGhostInstanceId(id)) throwIpcError('INVALID_PARAMS', '非法插件 id');
+    const ghost = findGhostForInstanceId(id);
+    if (!ghost?.manifest.readme) return null;
+    const uiLocale = typeof locale === 'string' && locale.length <= 32 ? locale : getResolvedMainLocale();
+    return readGhostReadmeFromDir(ghost.dir, ghost.manifest, uiLocale);
+  });
   ipcMain.handle('ghosts:library-overview', async (event, id: unknown) => {
     assertTrustedAppRendererEvent(event);
     if (typeof id !== 'string' || !isGhostInstanceId(id)) throwIpcError('INVALID_PARAMS', '非法插件 id');
@@ -11587,12 +11695,18 @@ export function resolveGhostWebviewAttach(
   };
 }
 
-/** Local and remote project controls share persistence, setup wake-up and list invalidation. */
+/** Local and remote project controls share persistence and scoped policy invalidation. */
 function setGhostWorkdirDisabledAndNotify(workdir: string, storedId: string, disabled: boolean): string[] {
   const wasDisabled = isGhostDisabledForWorkdir(storedId, workdir);
   const next = setGhostDisabledForWorkdir(workdir, storedId, disabled);
-  if (wasDisabled !== disabled) getGhostSetupChangeBus().emit(storedId, { source: 'workdir_policy' });
-  broadcastGhostsChanged(getGhostManager().list());
+  if (wasDisabled !== disabled) {
+    getGhostSetupChangeBus().emit(storedId, { source: 'workdir_policy' });
+    broadcastGhostWindowPush('ghosts:workdir-prefs-changed', {
+      workdirKey: normalizeWorkdirKey(workdir), disabled: next,
+    });
+    // Remote clients keep their existing resource invalidation contract.
+    notifyMobilePluginsChanged();
+  }
   return next;
 }
 
@@ -11620,6 +11734,7 @@ function broadcastGhostsChanged(
   },
 ): void {
   if (!opts?.projectionOnly) {
+    managerSingleton?.invalidateNotificationCandidates();
     void getPluginAppearanceService().reconcile().catch(() => log.warn('Plugin appearance reconciliation deferred'));
     const instances = nativeUiInstances(ghosts);
     pluginUiServiceSingleton?.reconcile(instances);
@@ -11767,7 +11882,12 @@ export function refreshGhostLocalization(previousLocale: SupportedLocale): void 
     previousLocale,
     currentLocale: getResolvedMainLocale(),
     list: () => manager.list(),
-    broadcastChanged: (ghosts) => broadcastGhostsChanged(ghosts),
+    broadcastChanged: (ghosts) => {
+      // App configs retain localized titles/tool descriptions used by newly published cards.
+      refreshPluginApps(ghosts, { find: findGhostForInstanceId,
+        evidence: id => manager.approvedInstallEvidence(id), available: () => !isGhostBoundaryPending() });
+      broadcastGhostsChanged(ghosts, false, { projectionOnly: true });
+    },
     sendContextChanged: (ghost, message) => sendToGhostLogic(installedGhostStoragePart(ghost), message),
   });
 }

@@ -1,6 +1,6 @@
 {
   "source": "apps/desktop/src/renderer/themes/colors.ts",
-  "count": 570,
+  "count": 576,
   "colors": [
     {
       "id": "surface",
@@ -514,8 +514,13 @@
     },
     {
       "id": "confirm-btn-primary-hover",
-      "light": "var(--accent-hover)",
-      "dark": "var(--accent-hover)"
+      "light": "oklch(from var(--confirm-btn-primary-bg) calc(sign(max(0, l - 0.25)) * (l - 0.045) + (1 - sign(max(0, l - 0.25))) * 0.27) c h)",
+      "dark": "oklch(from var(--confirm-btn-primary-bg) calc(sign(max(0, l - 0.25)) * (l - 0.045) + (1 - sign(max(0, l - 0.25))) * 0.27) c h)"
+    },
+    {
+      "id": "confirm-btn-primary-pressed",
+      "light": "oklch(from var(--confirm-btn-primary-bg) calc(sign(max(0, l - 0.25)) * (l - 0.085) + (1 - sign(max(0, l - 0.25))) * 0.355) c h)",
+      "dark": "oklch(from var(--confirm-btn-primary-bg) calc(sign(max(0, l - 0.25)) * (l - 0.085) + (1 - sign(max(0, l - 0.25))) * 0.355) c h)"
     },
     {
       "id": "confirm-btn-secondary-text",
@@ -616,6 +621,11 @@
       "id": "update-btn-bg",
       "light": "transparent",
       "dark": "transparent"
+    },
+    {
+      "id": "update-btn-pressed",
+      "light": "var(--update-btn-hover)",
+      "dark": "var(--update-btn-hover)"
     },
     {
       "id": "content-area",
@@ -1174,13 +1184,13 @@
     },
     {
       "id": "send-btn-hover-bg",
-      "light": "var(--send-btn-bg)",
-      "dark": "var(--send-btn-bg)"
+      "light": "oklch(from var(--send-btn-bg) calc(sign(max(0, l - 0.25)) * (l - 0.045) + (1 - sign(max(0, l - 0.25))) * 0.27) c h)",
+      "dark": "oklch(from var(--send-btn-bg) calc(sign(max(0, l - 0.25)) * (l - 0.045) + (1 - sign(max(0, l - 0.25))) * 0.27) c h)"
     },
     {
       "id": "send-btn-pressed-bg",
-      "light": "var(--send-btn-bg)",
-      "dark": "var(--send-btn-bg)"
+      "light": "oklch(from var(--send-btn-bg) calc(sign(max(0, l - 0.25)) * (l - 0.085) + (1 - sign(max(0, l - 0.25))) * 0.355) c h)",
+      "dark": "oklch(from var(--send-btn-bg) calc(sign(max(0, l - 0.25)) * (l - 0.085) + (1 - sign(max(0, l - 0.25))) * 0.355) c h)"
     },
     {
       "id": "perm-code-bg",
@@ -1201,6 +1211,16 @@
       "id": "perm-allow-btn-text",
       "light": "#262626",
       "dark": "#262626"
+    },
+    {
+      "id": "perm-allow-btn-hover",
+      "light": "oklch(from var(--perm-allow-btn-bg) calc(sign(max(0, l - 0.25)) * (l - 0.045) + (1 - sign(max(0, l - 0.25))) * 0.27) c h)",
+      "dark": "oklch(from var(--perm-allow-btn-bg) calc(sign(max(0, l - 0.25)) * (l - 0.045) + (1 - sign(max(0, l - 0.25))) * 0.27) c h)"
+    },
+    {
+      "id": "perm-allow-btn-pressed",
+      "light": "oklch(from var(--perm-allow-btn-bg) calc(sign(max(0, l - 0.25)) * (l - 0.085) + (1 - sign(max(0, l - 0.25))) * 0.355) c h)",
+      "dark": "oklch(from var(--perm-allow-btn-bg) calc(sign(max(0, l - 0.25)) * (l - 0.085) + (1 - sign(max(0, l - 0.25))) * 0.355) c h)"
     },
     {
       "id": "perm-allow-kbd-bg",
@@ -2724,13 +2744,23 @@
     },
     {
       "id": "button-cta-hover",
-      "light": "var(--accent-hover)",
-      "dark": "var(--accent-hover)"
+      "light": "oklch(from var(--accent-cta-bg-pure) calc(sign(max(0, l - 0.25)) * (l - 0.045) + (1 - sign(max(0, l - 0.25))) * 0.27) c h)",
+      "dark": "oklch(from var(--accent-cta-bg-pure) calc(sign(max(0, l - 0.25)) * (l - 0.045) + (1 - sign(max(0, l - 0.25))) * 0.27) c h)"
     },
     {
       "id": "button-cta-pressed",
-      "light": "color-mix(in srgb, var(--button-cta-hover) 90%, var(--accent-pure-cta-fg))",
-      "dark": "color-mix(in srgb, var(--button-cta-hover) 90%, var(--accent-pure-cta-fg))"
+      "light": "oklch(from var(--accent-cta-bg-pure) calc(sign(max(0, l - 0.25)) * (l - 0.085) + (1 - sign(max(0, l - 0.25))) * 0.355) c h)",
+      "dark": "oklch(from var(--accent-cta-bg-pure) calc(sign(max(0, l - 0.25)) * (l - 0.085) + (1 - sign(max(0, l - 0.25))) * 0.355) c h)"
+    },
+    {
+      "id": "button-danger-solid-hover",
+      "light": "oklch(from hsl(var(--destructive)) calc(sign(max(0, l - 0.25)) * (l - 0.045) + (1 - sign(max(0, l - 0.25))) * 0.27) c h)",
+      "dark": "color-mix(in srgb, hsl(var(--destructive)) 90%, var(--text-primary))"
+    },
+    {
+      "id": "button-danger-solid-pressed",
+      "light": "oklch(from hsl(var(--destructive)) calc(sign(max(0, l - 0.25)) * (l - 0.085) + (1 - sign(max(0, l - 0.25))) * 0.355) c h)",
+      "dark": "color-mix(in srgb, hsl(var(--destructive)) 80%, var(--text-primary))"
     },
     {
       "id": "form-field-hint",

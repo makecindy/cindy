@@ -1,5 +1,6 @@
 import { DevSettings } from 'react-native';
 import { clearCachedHomeListSnapshot } from '@/session/mobileHomeListCache';
+import { clearHomeSessionPrCache } from '@/session/homeSessionPrStore';
 import { clearCachedSessionMessages } from '@/session/mobileSessionMessageCache';
 
 /**
@@ -20,6 +21,7 @@ export function registerDevCacheMenu(): void {
       try {
         await clearCachedSessionMessages(); // AsyncStorage 消息缓存
         await clearCachedHomeListSnapshot(); // AsyncStorage 首页设备+会话列表快照
+        await clearHomeSessionPrCache(); // AsyncStorage 首页任务 PR 关联与状态
         DevSettings.reload();
       } catch (error) {
         // 沿用 mobile 本地日志约定(见 DeviceLinkContext 的前缀化 error 日志);dev-only,不留无前缀裸日志。

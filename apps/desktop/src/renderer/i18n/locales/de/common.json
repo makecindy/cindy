@@ -1,4 +1,34 @@
 {
+  "sharedTaskRecovery": {
+    "title": "Fortsetzen auf dem ursprünglichen Computer nicht möglich",
+    "description": "Wähle einen anderen Computer oder Anbieter, um mit einer Kontextübergabe fortzufahren. Deine Nachrichten bleiben erhalten, der vollständige Ausführungszustand des ursprünglichen Computers wird jedoch nicht übertragen.",
+    "choose": "Anderen Computer wählen",
+    "cancel": "Hier bleiben",
+    "stage": {
+      "owner": "Fehler beim Kontakt mit dem freigebenden Computer.",
+      "allocation": "Fehler bei der Rechtevergabe für den ursprünglichen Ausführungscomputer.",
+      "executor": "Fehler beim Prüfen der device-link-Verbindung des Ausführungscomputers.",
+      "capability": "Fehler beim Prüfen der Fähigkeiten des Ausführungscomputers.",
+      "authorization": "Fehler beim Einrichten der Ausführungsberechtigung.",
+      "unknown": "Der fehlgeschlagene Schritt wurde nicht gemeldet."
+    },
+    "reason": {
+      "offline": "Der in diesem Schritt kontaktierte Computer wurde als offline gemeldet. Andere Aufgaben können auf anderen Computern laufen.",
+      "timeout": "Die Anfrage hat das Zeitlimit überschritten. Der fehlgeschlagene Schritt zeigt den kontaktierten Dienst; ein Ausfall der Direktverbindung oder des Relays ist nicht bestätigt.",
+      "relay": "Die device-link-Verbindung ist noch nicht bereit oder wurde geschlossen. Bei Ausfall nur der Direktverbindung wird normalerweise automatisch das Relay genutzt.",
+      "denied": "Der Zugriff wurde verweigert oder die Fernsteuerung deaktiviert. Erneutes Versuchen umgeht diese Einschränkung nicht.",
+      "model": "Der freigegebene Anbieter oder das Modell ist für diese Sitzung nicht zugelassen.",
+      "budget": "Der Anbieter hat ein Nutzungslimit oder unzureichende Quota gemeldet. Ein anderer Computer kann dieselbe Quota nutzen.",
+      "capacity": "Die Kapazität für Sitzungen oder Verbindungen ist erreicht. Schließe ungenutzte Sitzungen oder wähle einen anderen Computer.",
+      "unsupported": "Der Ausführungscomputer unterstützt die erforderlichen Funktionen für freigegebene Sitzungen nicht.",
+      "authorization": "Die Ausführungsberechtigung konnte nicht eingerichtet werden. Dies beweist nicht, dass der Computer offline ist.",
+      "history": "Der ursprüngliche Sitzungsort ist nicht nutzbar. Der native Verlauf kann nicht direkt auf einem anderen Computer geöffnet werden.",
+      "policy": "Die Nutzungsregeln der Freigabe erfordern eine Echtzeitprüfung über den freigebenden Computer. Direkte Ausführung kann sie nicht durchsetzen; das bedeutet kein aufgebrauchtes Guthaben.",
+      "unknown": "Der freigebende Computer hat keinen genauen Grund geliefert. Offline-Status, Quota sowie Direkt- oder Relay-Pfad sind unbestätigt.",
+      "rate": "Der Dienst begrenzt Anfragen oder ist überlastet. Warte die Abkühlzeit ab; ein anderer Computer kann dasselbe Limit teilen.",
+      "service": "Der Berechtigungsdienst für die Freigabe ist nicht erreichbar oder hat einen Fehler zurückgegeben. Der Ausführungscomputer ist nicht nachweislich offline."
+    }
+  },
   "pluginUi": {
     "renderer": "Darstellung",
     "original": "Original",
@@ -3804,7 +3834,12 @@
           "stop": "Test stoppen"
         },
         "fetch": {
-          "button": "Modellliste abrufen",
+          "selectedCount": "{{count}} Modelle ausgewählt",
+          "availableCount": "{{count}} verfügbare Modelle abgerufen",
+          "notFetched": "Modellliste noch nicht abgerufen",
+          "failedRetry": "Modellliste konnte nicht abgerufen werden. Erneut versuchen.",
+          "retryFailed": "Dieser Abruf ist fehlgeschlagen. Erneut versuchen.",
+          "button": "Modelle abrufen und auswählen",
           "fetching": "Modelle werden abgerufen…",
           "needBaseUrl": "Zuerst die Basis-URL eingeben",
           "failed": "Modellliste konnte nicht abgerufen werden",
@@ -6750,8 +6785,6 @@
             "task": "Aufgabentaste",
             "action": "Aktionstaste"
           },
-          "lightingLimit": "Die Firmware kann die ersten 6 Aufgabentasten in der Reihenfolge der Platine unabhängig voneinander beleuchten. Zusätzliche Aufgabentasten wechseln weiterhin Aufgaben.",
-          "unlitKey": "Diese Taste folgt auf die ersten 6 und hat daher keine eigene Statusleuchte.",
           "taskHint": "Eine transparente Tastenkappe wird empfohlen, damit der Aufgabenstatus in verschiedenen Farben angezeigt werden kann."
         },
         "commandKeys": {
@@ -7800,6 +7833,7 @@
         "customSlotAsleep": "Dieses Plugin ist deaktiviert. Aktiviere es, um hier seine Einstellungen zu sehen.",
         "descriptionExpand": "Mehr anzeigen",
         "descriptionCollapse": "Weniger anzeigen",
+        "readmeTitle": "Über",
         "useAction": "Plugin verwenden",
         "chatAction": "Chat",
         "enabledLabel": "Aktiviert",
@@ -8390,6 +8424,26 @@
         "title": "„{{name}}“ löschen?",
         "message": "Neue Sitzungen laden diesen MCP nicht mehr.",
         "confirm": "Löschen"
+      },
+      "duplicates": {
+        "title": "Möglicherweise doppelte MCP-Verbindungen",
+        "description": "Cindy und deine Claude-Code-Benutzerkonfiguration enthalten gleiche oder ähnliche Verbindungen, die Werkzeuge doppelt laden könnten. Wähle die gewünschte Quelle oder behalte im Zweifel beide.",
+        "scope": "Gilt nur für normale Claude-Code-Aufgaben in Cindy auf diesem Computer, ab der nächsten Agent-Sitzung. Deine Claude-Code-Konfiguration bleibt unverändert. Zusammenhängende Duplikate verwenden dieselbe Auswahl.",
+        "unavailable": "Ein Teil der Konfiguration konnte nicht gelesen werden. Die Verbindungen bleiben unverändert. Beim erneuten Öffnen dieser Seite wird nochmals geprüft.",
+        "endpoint": "Gleiche Verbindungsadresse",
+        "similar": "Ähnliche Verbindungsadressen",
+        "keep": {
+          "both": "Beide Quellen dieser Gruppe behalten"
+        },
+        "selected": {
+          "cindy": "Cindy-Verbindung ausgewählt",
+          "claude": "Claude-Code-Verbindung ausgewählt",
+          "both": "Beide Quellen dieser Gruppe werden beibehalten"
+        },
+        "reset": "Erneut wählen",
+        "saveFailed": "Speichern fehlgeschlagen. Die Verbindungen könnten sich geändert haben. Wähle erneut aus der aktuellen Liste.",
+        "keepThis": "Diese Verbindung behalten",
+        "keepThese": "Diese Verbindungen behalten"
       }
     },
     "remotePermission": {
@@ -15374,7 +15428,7 @@
       },
       "fields": {
         "title": "Titel",
-        "schedule": "Zeitplan",
+        "schedule": "Auslöser",
         "notify": "Benachrichtigen",
         "prompt": "Prompt",
         "once": "Einmalig",
@@ -15490,6 +15544,13 @@
         "preRunPluginRequired": "Wähle ein Plugin für die Vorabprüfung",
         "templateParamRequired": "{{label}} eingeben",
         "templateApplyFailed": "Vorlage konnte nicht angewendet werden. Prüfe die Parameter und versuche es erneut."
+      },
+      "layout": {
+        "content": "Auszuführender Inhalt",
+        "notifications": "Benachrichtigungen und stille Ausführung",
+        "contentTab": "Inhalt und Auslöser",
+        "optionsTab": "Ausführungsoptionen",
+        "sections": "Automatisierungseinstellungen"
       }
     },
     "chips": {
@@ -15690,6 +15751,13 @@
           "prompt": "Prüfe die Dokumente im Arbeitsverzeichnis und finde Inhalte, die aktualisiert werden müssen.\nVorgaben:\n- Suche nach veralteten Informationen (überholte Datumsangaben, defekte Links, veraltete Abläufe oder Tools), Widersprüchen und Dopplungen\n- Gib für jedes Problem Dateipfad und Fundstelle an und begründe deine Einschätzung\n- Ordne Vorschläge den Kategorien „Aktualisieren / Zusammenführen / Löschen“ zu und erstelle eine Überarbeitungscheckliste\n- Gib nur den Bericht aus; ändere die Dokumente nicht"
         }
       }
+    },
+    "deadline": {
+      "label": "Enddatum und Uhrzeit",
+      "clear": "Löschen",
+      "hint": "Für unbegrenzte Laufzeit leer lassen. Zeitzone: {{timezone}}. Danach starten keine automatischen Ausführungen mehr; bereits gestartete dürfen enden.",
+      "invalid": "Gültiges Datum und gültige Uhrzeit eingeben",
+      "expired": "Abgelaufen"
     }
   },
   "issueTracker": {
@@ -16897,7 +16965,10 @@
       "registrationFailed": "Erstellung fehlgeschlagen, bitte versuche es später erneut",
       "silentStopExhausted": "Das Modell hat wiederholt leere Antworten zurückgegeben; die automatische Fortsetzung ist pausiert. Klicke auf „Fortsetzen“, um die Aufgabe fortzusetzen.",
       "executionResultUnavailable": "Das Ausführungsergebnis konnte nicht abgerufen werden. Die automatische Fortsetzung wurde gestoppt. Bitte den Assistenten, das vorhandene Ausführungsergebnis zu prüfen.",
-      "outputLimit": "Das Modell hat sein Ausgabelimit erreicht. Diese Antwort ist daher möglicherweise unvollständig. Sende die nächste Nachricht, um fortzufahren.",
+      "outputLimit": "Das Modell hat sein Ausgabelimit erreicht. Diese Antwort ist möglicherweise unvollständig. Sende eine neue Nachricht, um fortzufahren. Wenn dies wiederholt auftritt, reduziere den Denkaufwand oder komprimiere zuerst den Gesprächsverlauf.",
+      "outputLimitReasoning": "Das Denken hat den Großteil des Ausgabebudgets dieser Anfrage verbraucht. Die Antwort ist möglicherweise unvollständig. Reduziere den Denkaufwand oder komprimiere den Gesprächsverlauf, bevor du fortfährst.",
+      "outputLimitUsage": "Diese Modellanfrage hat {{outputTokens}} Ausgabetokens verwendet, davon {{reasoningTokens}} Denktokens.",
+      "outputLimitOutputUsage": "Diese Modellanfrage hat {{outputTokens}} Ausgabetokens verwendet.",
       "permissionTightenInterruptFailed": "Die laufende Aufgabe konnte beim Einschränken der Berechtigungen nicht gestoppt werden; sie läuft möglicherweise bis zum Abschluss ohne Genehmigungsabfragen weiter. Stoppe sie bei Bedarf manuell.",
       "codexAutoReviewUnavailable": "Die automatische Prüfung ist vorübergehend nicht verfügbar. Die aktuelle Aktion wurde blockiert und die Berechtigungen auf Standard umgestellt. Versuche die Anfrage erneut; Cindy fragt bei Bedarf nach.",
       "hostShellCommandBlocked": "Cindy hat diesen Shell-Befehl blockiert. Prüfe den Befehl und verwende ein verfügbares Tool oder einen verfügbaren Befehl, um fortzufahren.",
@@ -17381,6 +17452,7 @@
     "sidebar": "Guthaben und Tarife",
     "settings": {
       "title": "Nutzung und Abrechnung",
+      "supportHint": "Gibt es ein Problem? Wende dich für Hilfe an {{email}}.",
       "subscriptionCard": {
         "title": "Aktueller Tarif",
         "empty": "Kein aktives Abo",
@@ -17455,14 +17527,38 @@
     },
     "orders": {
       "title": "Bestellverlauf",
-      "description": "Es werden nur Auflade- und Abobestellungen aufgeführt, die in Cindy gestartet wurden. Bestellungen mit ausstehender Zahlung werden nach Ablauf der Zahlungsfrist automatisch storniert.",
+      "description": "Bezahlte Aufladungen und beglichene Aborechnungen.",
+      "history": {
+        "loadFailed": "Bestellverlauf konnte nicht geladen werden",
+        "retry": "Bestellungen neu laden",
+        "unknownPaidAt": "Zahlungsdatum nicht verfügbar",
+        "unknownAmount": "Betrag nicht verfügbar",
+        "refundedAmount": "Erstattet: {{amount}}",
+        "refunded": "Erstattet",
+        "partiallyRefunded": "Teilweise erstattet",
+        "noPayment": "Keine Zahlung erforderlich",
+        "page": "Seite {{page}}",
+        "previous": "Vorherige Seite",
+        "next": "Nächste Seite"
+      },
       "count": "{{count}} Bestellungen",
-      "incomplete": "Es gibt viele Bestellungen. Nur die neuesten {{count}} werden angezeigt.",
       "orderId": "Nr. {{id}}",
       "copy": {
         "action": "Bestell-ID {{id}} kopieren",
         "success": "Bestell-ID kopiert",
         "failed": "Bestell-ID nicht kopiert – versuch es erneut"
+      },
+      "refund": {
+        "action": "Rückerstattung anfordern",
+        "title": "Rückerstattung anfordern",
+        "description": "Sende die folgenden Angaben an {{email}}, um eine Rückerstattung anzufordern.",
+        "emailSubject": "Cindy Rückerstattungsanfrage - {{orderId}}",
+        "sendAction": "Rückerstattungsanfrage senden",
+        "gmailFallbackDescription": "Deine Rückerstattungsanfrage enthält Bestelldetails. Wenn du Gmail öffnest, werden diese Informationen an Google weitergegeben. Fortfahren?",
+        "emailBody": "Hallo, ich möchte eine Rückerstattung für die folgende Bestellung anfordern. Könnt ihr mir dabei helfen?\n\nBestell-ID: {{orderId}}\nTransaktions-ID des Zahlungsanbieters: {{providerTransactionId}}\nAnwendung: {{application}}\nZahlungsmethode: {{paymentMethod}}\nGezahlter Betrag: {{amount}}\n\nAufgetretenes Problem:\n(Beschreibe kurz, was passiert ist)\n\nVielen Dank.",
+        "fields": {
+          "amount": "Gezahlter Betrag"
+        }
       },
       "invoice": {
         "action": "Rechnung anfordern",
@@ -17472,7 +17568,7 @@
         "emailSubject": "Rechnungsanfrage für Bestellung {{orderId}}",
         "personalInvoicePolicy": "Rechnungen für Cindy Personal-Aufladungen werden standardmäßig auf <strong>den Namen einer Privatperson</strong> ausgestellt. Du kannst deinen Namen oder „Privatperson“ als Rechnungsempfänger angeben. Wenn du für eine Kostenerstattung eine Rechnung auf den Namen deines Unternehmens benötigst, lege <strong>eine Kostenerstattungserklärung mit dem offiziellen Firmenstempel</strong> vor, in der der Rechnungsempfänger angegeben ist.",
         "invoiceTitleHint": "Hinweise: Gib für eine Privatrechnung deinen Namen oder „Privatperson“ ein. Für eine Rechnung auf den Namen deines Unternehmens zur Kostenerstattung füge eine Kostenerstattungserklärung mit dem offiziellen Firmenstempel bei, in der der Rechnungsempfänger angegeben ist.",
-        "emailBody": "Hallo,\n\nich möchte eine Rechnung für die folgende Bestellung anfordern:\n\n────────────────────\nBestell-ID: {{orderId}}\nAnwendung: {{application}}\nZahlungsmethode: {{paymentMethod}}\nRechnungsbetrag: {{amount}}\nRechnungsempfänger: \n{{invoiceTitleHint}}\n\nKontaktperson: \nTelefonnummer: \nE-Mail: \n────────────────────\n\nVielen Dank.",
+        "emailBody": "Hallo,\n\nich möchte eine Rechnung für die folgende Bestellung anfordern:\n\n────────────────────\nBestell-ID: {{orderId}}\nTransaktions-ID des Zahlungsanbieters: {{providerTransactionId}}\nAnwendung: {{application}}\nZahlungsmethode: {{paymentMethod}}\nRechnungsbetrag: {{amount}}\nRechnungsempfänger: \n{{invoiceTitleHint}}\n\nKontaktperson: \nTelefonnummer: \nE-Mail: \n────────────────────\n\nVielen Dank.",
         "sendAction": "Rechnungsanfrage senden",
         "emailCopied": "Support-E-Mail-Adresse kopiert",
         "emailCopyFailed": "Support-E-Mail-Adresse nicht kopiert – versuch es erneut",
@@ -17483,6 +17579,7 @@
         "notAvailable": "Nicht verfügbar",
         "fields": {
           "orderId": "Bestell-ID",
+          "providerTransactionId": "Transaktions-ID des Zahlungsanbieters",
           "application": "Anwendung",
           "paymentMethod": "Zahlungsmethode",
           "amount": "Rechnungsbetrag",

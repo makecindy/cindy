@@ -1061,6 +1061,12 @@ export async function performSessionAgentSwitch(
   const orcaLeadLeavingRemote = row.orcaRole === 'lead' && currentAgentDeviceId !== null;
 
   return deps.withCloseSuppressed(sessionId, async () => {
+    // The companion may have been disabled or moved while history was read.
+    // Its host guard is asynchronous; a still-current input lease is not enough.
+    if (params.providerGroupRelocation && row.source === 'bot') {
+      await params.beforeMutation?.();
+      params.assertSelectionCurrent?.();
+    }
     throwIfAgentSwitchAborted(signal);
     if (live) {
       try {
@@ -1196,6 +1202,7 @@ export async function performSessionAgentSwitch(
       }
     }
 
+    if (params.providerGroupRelocation && row.source === 'bot') await params.beforeMutation?.();
     if (relocating) assertTransferCurrent();
     // ---- commit point:此后切换生效 ----
     try {

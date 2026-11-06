@@ -2,7 +2,7 @@ import { createRoot } from 'react-dom/client';
 import { MediaScrubber } from '@/components/ui/media-scrubber';
 import { GhostMailHistory } from './GhostMailHistory';
 import { GhostCardForm } from './GhostCardForm';
-import { readGhostCardForm, readMailCard, mailCardStatus, mailSendRemainingFraction, isLegacyMailCard, readGhostCardFormChange, mergeGhostCardFormValues, trackGhostCardFormDelivery, releaseGhostCardFormDelivery, pendingGhostCardFormDelivery, ghostCardLinkOpensDirectly } from '@cindy/maker-shared/ghost-card-form';
+import { readGhostCardForm, readGhostCardSupersededBy, readMailCard, mailCardStatus, mailSendRemainingFraction, isLegacyMailCard, readGhostCardFormChange, mergeGhostCardFormValues, trackGhostCardFormDelivery, releaseGhostCardFormDelivery, pendingGhostCardFormDelivery, ghostCardLinkOpensDirectly } from '@cindy/maker-shared/ghost-card-form';
 import { openMailCard } from '@/features/right-sidebar/lib/mailPreview';
 import sliderCss from '@/components/ui/slider.css?inline';
 /**
@@ -350,7 +350,7 @@ function GhostCardCanvas({
     // scrollHeight is at least the iframe viewport height, so it cannot shrink a footer.
     const h = Math.ceil(formFields ? body.getBoundingClientRect().height : body.scrollHeight);
     if (h <= 0) return;
-    const clamped = Math.min(GHOST_CARD_HEIGHT_MAX, Math.max(formFields ? 1 : GHOST_CARD_HEIGHT_MIN, h));
+    const clamped = Math.min(GHOST_CARD_HEIGHT_MAX, Math.max(GHOST_CARD_HEIGHT_MIN, h));
     const imagesPending = Array.from(doc.images).some((img) => !img.complete);
     if (imagesPending) {
       // 图未到齐只涨不缩(相对当前生效高度,含声明值):文档刚换时只有文字,
@@ -1039,7 +1039,7 @@ export function GhostToolCard({
   const historyFields = mail?.fields ?? readGhostCardForm(html);
   const ariaTitle = t('chat.ghostCall.cardAria', { name, tool: toolName });
 
-  if (mail?.supersededBy) return null;
+  if (readGhostCardSupersededBy(html)) return null;
 
   return (
     <div
