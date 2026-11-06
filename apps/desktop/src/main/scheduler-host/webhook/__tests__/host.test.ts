@@ -5,6 +5,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { Schedule, Scheduler } from '@cindy/maker-scheduler';
+import type { ScheduleWebhookRemoteDeps } from '../remote';
 
 // 测试价值
 // - 生产入口与可观察结果：ScheduleWebhookHost 对本机地址的真实 HTTP 投递；断言状态码、监听生命周期和落盘内容。
@@ -14,6 +15,21 @@ import type { Schedule, Scheduler } from '@cindy/maker-scheduler';
 // - tier：unit，只用回环地址和临时目录。
 
 const dirs = vi.hoisted(() => ({ root: '' }));
+const remoteTransport = vi.hoisted(() => ({ deps: null as ScheduleWebhookRemoteDeps | null }));
+
+// Only replace the network boundary; admission, queue transactions and disk IO
+// below still run through the production Host and ScheduleWebhookQueue.
+vi.mock('../remote.js', () => ({
+  ScheduleWebhookRemote: class {
+    constructor(deps: ScheduleWebhookRemoteDeps) { remoteTransport.deps = deps; }
+    async sync() {}
+    stop() {}
+    pause() {}
+    problem() { return undefined; }
+    canDeliver() { return true; }
+    view() { return { id: 'cloud-endpoint' }; }
+  },
+}));
 
 vi.mock('electron', () => ({
   safeStorage: {
@@ -69,7 +85,63 @@ describe('ScheduleWebhookHost', () => {
 
   afterEach(async () => {
     await host.stop();
+    vi.restoreAllMocks();
+    remoteTransport.deps = null;
     fs.rmSync(dirs.root, { recursive: true, force: true });
+  });
+
+  async function startCloudHost(schedule = withTrigger) {
+    scheduler.schedules = [schedule];
+    host = new ScheduleWebhookHost(scheduler as unknown as Scheduler, {}, { remote: {
+      baseUrl: () => 'https://webhook.example',
+      isSignedIn: () => true,
+      getAccessToken: async () => 'test-token',
+      refreshAccessToken: async () => false,
+      fetch: async () => { throw new Error('unexpected network request'); },
+      socketOptions: async () => ({}),
+      logger: {},
+    } });
+    await host.start();
+    return remoteTransport.deps!.onBatch;
+  }
+
+  // PR #8470 / discussion_r4488736908, unit: scheduler reconciliation can lag
+  // behind a saved filter edit; existing HTTP tests did not exercise cloud admission.
+  it.each([
+    { oldEvents: ['issues'], newEvents: ['pull_request'], event: 'issues', admitted: false },
+    { oldEvents: ['issues'], newEvents: ['pull_request'], event: 'pull_request', admitted: true },
+  ])('applies the latest saved filter before remote admission: $event', async ({ oldEvents, newEvents, event, admitted }) => {
+    const onBatch = await startCloudHost({ ...withTrigger, webhookTrigger: { ...withTrigger.webhookTrigger!, events: oldEvents } });
+    // Deliberately leave byEndpoint stale while the scheduler already has the edit.
+    scheduler.schedules = [{ ...withTrigger, webhookTrigger: { ...withTrigger.webhookTrigger!, events: newEvents } }];
+    await onBatch({ endpointId: 'cloud-endpoint', scheduleId: 's1', events: [{ deliveryId: 'changed-filter', event, receivedAt: Date.now() }], omitted: 0 });
+    const saved = JSON.parse(fs.readFileSync(path.join(dirs.root, 'schedule-webhooks', 'state.json'), 'utf8'));
+    expect(saved.endpoints.s1.pending).toHaveLength(admitted ? 1 : 0);
+    expect(saved.endpoints.s1.received).toBe(admitted ? 1 : 0);
+  });
+
+  // PR #8470 / discussion_r4488736912, unit: fail the write containing omitted
+  // counts, then redeliver twice. Details/receipts alone must not commit first.
+  it('persists remote details and omitted count together across failed save and redelivery', async () => {
+    const onBatch = await startCloudHost();
+    const stateFile = path.join(dirs.root, 'schedule-webhooks', 'state.json');
+    const rename = fs.renameSync;
+    let failCountWrite = true;
+    vi.spyOn(fs, 'renameSync').mockImplementation((from, to) => {
+      if (to === stateFile && failCountWrite && JSON.parse(fs.readFileSync(from, 'utf8')).endpoints.s1?.omitted === 3) {
+        failCountWrite = false;
+        throw new Error('disk full');
+      }
+      return rename(from, to);
+    });
+    const batch = { endpointId: 'cloud-endpoint', scheduleId: 's1', events: [{ deliveryId: 'retry-count', event: 'issues', receivedAt: Date.now() }], omitted: 3 };
+    await expect(onBatch(batch)).rejects.toThrow('disk full');
+    await onBatch(batch);
+    await onBatch(batch);
+    const saved = JSON.parse(fs.readFileSync(stateFile, 'utf8'));
+    expect(saved.endpoints.s1.pending).toHaveLength(1);
+    expect(saved.endpoints.s1.omitted).toBe(3);
+    expect(saved.endpoints.s1.receipts).toHaveProperty('retry-count');
   });
 
   it('listens on loopback only while a schedule has the trigger', async () => {

@@ -217,8 +217,7 @@ describe('ScheduleWebhookQueue', () => {
         return {};
       });
       await h.queue.start();
-      await h.queue.accept('s1', event('old'));
-      await h.queue.addOmitted('s1', 2);
+      await h.queue.acceptBatch('s1', [event('old')], 2);
       await vi.advanceTimersByTimeAsync(LIMITS.debounceMs);
       expect(h.fire).toHaveBeenCalledOnce();
       const active = { id: 's1', status: 'active', webhookTrigger: { endpointId: 'e1' } } as Schedule;
@@ -307,8 +306,7 @@ describe('ScheduleWebhookQueue', () => {
   it('carries the count of events the server already dropped into the next batch, once', async () => {
     const { queue, fire } = setup();
     await queue.start();
-    await queue.accept('s1', event('a'));
-    await queue.addOmitted('s1', 3);
+    await queue.acceptBatch('s1', [event('a')], 3);
     await vi.advanceTimersByTimeAsync(LIMITS.debounceMs);
     expect(fire).toHaveBeenCalledTimes(1);
     expect(fire.mock.calls[0]?.[1].omitted).toBe(3);
@@ -339,6 +337,49 @@ describe('ScheduleWebhookQueue', () => {
     await vi.advanceTimersByTimeAsync(LIMITS.minGapMs);
     expect(second.fire).toHaveBeenCalledTimes(1);
     expect(second.fire.mock.calls[0]![1].events.map((e) => e.deliveryId)).toEqual(['waiting']);
+  });
+
+  // PR #8470 / discussion_r4488736908, unit: cached filters and reads performed
+  // before queued saves finish miss edits. Admit against the current trigger
+  // after earlier writes, and do not move a batch into a replacement route.
+  it.each(['filter', 'route'] as const)('rechecks the %s after an earlier save completes', async (change) => {
+    const h = setup();
+    await h.queue.start();
+    let entered!: () => void;
+    let release!: () => void;
+    const waiting = new Promise<void>((resolve) => { entered = resolve; });
+    const resume = new Promise<void>((resolve) => { release = resolve; });
+    const persist = h.save.getMockImplementation()!;
+    h.save.mockImplementationOnce(async (state) => { entered(); await resume; await persist(state); });
+    const first = h.queue.accept('s1', event('first'));
+    await waiting;
+    const next = h.queue.acceptBatch('s1', [event('later')], 4, 'e1');
+    h.setSchedule({ id: 's1', status: 'active', webhookTrigger: change === 'filter'
+      ? { endpointId: 'e1', events: ['issues'] } : { endpointId: 'e2' } } as Schedule);
+    release();
+    await first;
+    expect(await next).toEqual([change === 'filter' ? 'filtered' : 'ignored']);
+    expect(h.saved().endpoints.s1!.pending.map(e => e.deliveryId)).toEqual(['first']);
+    expect(h.saved().endpoints.s1!.omitted).toBe(0);
+    h.queue.stop();
+  });
+
+  // PR #8470 / discussion_r4488736912, unit: the former count test did not
+  // replay a committed server batch after restart. Receipts must cover its count.
+  it('keeps a remote batch count exactly once across restart and redelivery', async () => {
+    const first = setup();
+    await first.queue.start();
+    const events = [event('a'), event('b')];
+    await first.queue.acceptBatch('s1', events, 3, 'e1');
+    expect(first.save).toHaveBeenCalledTimes(1);
+    first.queue.stop();
+    const second = setup(first.saved());
+    await second.queue.start();
+    expect(await second.queue.acceptBatch('s1', events, 3, 'e1')).toEqual(['duplicate', 'duplicate']);
+    await vi.advanceTimersByTimeAsync(LIMITS.debounceMs);
+    expect(second.fire).toHaveBeenCalledTimes(1);
+    expect(second.fire.mock.calls[0]![1]).toEqual({ events, omitted: 3 });
+    second.queue.stop();
   });
 });
 

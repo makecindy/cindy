@@ -46,7 +46,7 @@ export interface ScheduleWebhookQueueDeps {
   onError?(message: string, detail: Record<string, unknown>): void;
 }
 
-export type ScheduleWebhookAcceptResult = 'queued' | 'duplicate' | 'ignored';
+export type ScheduleWebhookAcceptResult = 'queued' | 'duplicate' | 'ignored' | 'filtered';
 
 const emptyEndpoint = (): ScheduleWebhookEndpointState => ({ pending: [], omitted: 0, received: 0, ignored: 0, receipts: {} });
 
@@ -113,43 +113,46 @@ export class ScheduleWebhookQueue {
   }
 
   async accept(id: string, event: ScheduleWebhookEvent): Promise<ScheduleWebhookAcceptResult> {
+    return (await this.acceptBatch(id, [event]))[0]!;
+  }
+
+  /** Details, receipts and upstream omitted counts form one durable admission. */
+  async acceptBatch(id: string, events: ScheduleWebhookEvent[], omitted = 0, expectedEndpointId?: string): Promise<ScheduleWebhookAcceptResult[]> {
     if (this.stopped) throw new Error('schedule webhook queue is stopped');
-    const now = this.deps.now();
-    const schedule = await this.deps.getSchedule(id);
-    const result = await this.mutate(state => {
-      const endpoint = state.endpoints[id] ??= emptyEndpoint();
+    const results = await this.mutate(async state => {
+      // Read after earlier writes finish, not from the host's asynchronous cache.
+      const schedule = await this.deps.getSchedule(id);
+      const now = this.deps.now();
       const endpointId = schedule?.webhookTrigger?.endpointId;
+      if (expectedEndpointId && endpointId !== expectedEndpointId) return events.map(() => 'ignored' as const);
+      const endpoint = state.endpoints[id] ??= emptyEndpoint();
       if (endpointId && endpoint.endpointId && endpoint.endpointId !== endpointId) {
         this.discardPending(endpoint);
         endpoint.receipts = {};
       }
       if (endpointId) endpoint.endpointId = endpointId;
       endpoint.lastReceivedAt = now;
-      if (endpoint.receipts[event.deliveryId] !== undefined && now - endpoint.receipts[event.deliveryId] < SCHEDULE_WEBHOOK_LIMITS.receiptTtlMs) return 'duplicate';
-      const result: ScheduleWebhookAcceptResult = canReceive(schedule, now) ? 'queued' : 'ignored';
-      if (result === 'queued') {
-        endpoint.received += 1;
-        endpoint.pending.push(event);
-        endpoint.firstPendingAt ??= now;
-        this.capPending(endpoint);
-      } else {
-        endpoint.ignored += 1;
-      }
-      endpoint.receipts[event.deliveryId] = now;
+      const results = events.map((event): ScheduleWebhookAcceptResult => {
+        if (endpoint.receipts[event.deliveryId] !== undefined && now - endpoint.receipts[event.deliveryId] < SCHEDULE_WEBHOOK_LIMITS.receiptTtlMs) return 'duplicate';
+        if (!scheduleWebhookEventMatches(schedule?.webhookTrigger?.events, event)) return 'filtered';
+        const result = canReceive(schedule, now) ? 'queued' : 'ignored';
+        if (result === 'queued') {
+          endpoint.received += 1;
+          endpoint.pending.push(event);
+          endpoint.firstPendingAt ??= now;
+          this.capPending(endpoint);
+        } else {
+          endpoint.ignored += 1;
+        }
+        endpoint.receipts[event.deliveryId] = now;
+        return result;
+      });
+      if (results.includes('queued') && omitted > 0) endpoint.omitted += omitted;
       this.pruneReceipts(endpoint, now);
-      return result;
+      return results;
     });
-    if (result === 'queued') this.arm(id);
-    return result;
-  }
-
-  /** Events merged upstream whose details were already dropped; they count towards the next batch only. */
-  async addOmitted(id: string, count: number): Promise<void> {
-    if (count <= 0 || this.stopped) return;
-    await this.mutate(state => {
-      const endpoint = state.endpoints[id];
-      if (endpoint) endpoint.omitted += count;
-    });
+    if (results.includes('queued')) this.arm(id);
+    return results;
   }
 
   /** Called when a schedule was deleted or its trigger removed. */
@@ -179,7 +182,7 @@ export class ScheduleWebhookQueue {
     endpoint.receipts = Object.fromEntries(kept);
   }
 
-  private mutate<T>(change: (state: ScheduleWebhookQueueState) => T): Promise<T> {
+  private mutate<T>(change: (state: ScheduleWebhookQueueState) => T | Promise<T>): Promise<T> {
     // Serialize read/modify/save, not just writes: failures must leave both the
     // committed state and later arrivals intact, without rollback over a newer event.
     const write = this.writes.catch(() => undefined).then(async () => {
@@ -192,7 +195,7 @@ export class ScheduleWebhookQueue {
         this.restorePreparing(endpoint);
         endpoint.lastStartedAt = batch.previousStartedAt;
       }
-      const result = change(snapshot);
+      const result = await change(snapshot);
       await this.deps.save(snapshot);
       this.state = snapshot;
       for (const [id, batch] of retries) {

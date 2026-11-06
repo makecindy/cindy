@@ -12,7 +12,6 @@ import {
   ScheduleWebhookQueue,
   isValidWebhookSecret,
   resolveScheduleWebhookFormat,
-  scheduleWebhookEventMatches,
   webhookSecretKind,
   type Schedule,
   type ScheduleWebhookQueueState,
@@ -409,16 +408,9 @@ export class ScheduleWebhookHost {
     if (!schedule?.webhookTrigger) return;
     if (this.remote && !this.remote.canDeliver(batch.scheduleId)) throw new Error('Webhook endpoint is not reconciled');
     if (this.remote && this.remote.view(batch.scheduleId)?.id !== batch.endpointId) return;
-    let queued = false;
-    for (const event of batch.events) {
-      if (!scheduleWebhookEventMatches(schedule.webhookTrigger.events, event)) {
-        this.queue.touch(schedule.id);
-        continue;
-      }
-      if ((await this.queue.accept(schedule.id, event)) === 'queued') queued = true;
-    }
-    // 重发的批次全部是重复事件，这时不能再累加计数。
-    if (queued) await this.queue.addOmitted(schedule.id, batch.omitted);
+    // Admission reads the latest filter and commits details, receipts and count
+    // together. A failed save leaves the entire batch available for redelivery.
+    await this.queue.acceptBatch(schedule.id, batch.events, batch.omitted, schedule.webhookTrigger.endpointId);
   }
 
   private async openServer(): Promise<void> {
