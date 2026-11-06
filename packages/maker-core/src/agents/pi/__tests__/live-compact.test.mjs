@@ -127,6 +127,12 @@ describe('live compact spine selection', () => {
     expect(out).not.toContain(FAKE_GOOGLE_KEY);
     expect(out).not.toContain(FAKE_DB_PASSWORD);
     expect(out).not.toContain('b3BlbnNzaC1rZXk');
+    // 键名包着私钥块(`private_key="-----BEGIN ..."`):整块必须整体打码。
+    // 若整块规则排在键名规则后面,`-----BEGIN` 先被换掉,开始标记没了,正文会原样留下。
+    const wrapped = redactSecrets('private_key="' + pem + '"');
+    expect(wrapped).not.toContain('b3BlbnNzaC1rZXk');
+    expect(wrapped).not.toContain('OPENSSH');
+    expect(wrapped).toContain('private_key=');
     // 连接串的主机与用户名要留着,否则模型无法判断是哪套库。
     expect(out).toContain('postgres://cindy:');
     expect(out).toContain('@db.internal');
