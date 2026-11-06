@@ -6219,10 +6219,10 @@ function describeInvalidLinkOpen(payload: unknown): string {
   if (typeof payload.appVersion !== 'string') missing.push('appVersion');
   if (
     Array.isArray(payload.capabilities)
-    && payload.capabilities.length > 0
+    && payload.capabilities.includes(DEVICE_LINK_CAPABILITY_RELIABLE_TRANSPORT)
     && typeof payload.transportStreamId !== 'string'
   ) {
-    missing.push('transportStreamId (required when capabilities are declared)');
+    missing.push('transportStreamId (required when reliable-transport-v1 is declared)');
   }
   return missing.length > 0
     ? `protocol-error (missing or invalid: ${missing.join(', ')})`
@@ -6318,12 +6318,14 @@ function isValidInboundEnvelope(value: Envelope): boolean {
         && typeof payload.protocolVersion === 'number'
         && Number.isFinite(payload.protocolVersion)
         && typeof payload.appVersion === 'string'
-        // 声明了能力集却没给传输身份 = 自相矛盾的帧。能力集本身就是后加字段，
-        // 只有新客户端才会传，所以不存在「新客户端忘了带 streamId」的合法情形；
-        // 旧客户端不传 capabilities，不受这条约束。
+        // 声明了 reliable-transport-v1 却没给传输身份 = 自相矛盾的帧。
+        // 不能只看 capabilities 非空：那是 append-only 能力集，里面还有其他
+        // 无关能力（如 background-link-v1）。一个故意不实现可选可靠传输的
+        // 控制端完全可以带非空 capabilities 而不带 streamId，那是合法的。
+        // 见 packages/device-link/README.md 的「弱网可靠传输（可选）」。
         && !(
           Array.isArray(payload.capabilities)
-          && payload.capabilities.length > 0
+          && payload.capabilities.includes(DEVICE_LINK_CAPABILITY_RELIABLE_TRANSPORT)
           && typeof payload.transportStreamId !== 'string'
         );
     case 'link-accept':

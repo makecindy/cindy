@@ -278,6 +278,12 @@ const DEVICE_LINK_CODE_MAP: Record<string, IpcErrorCode> = {
   INVOKE_TIMEOUT: 'DEVICE_LINK_TIMEOUT',
   DEVICE_UNRESPONSIVE: 'DEVICE_LINK_DEVICE_UNRESPONSIVE',
   VERSION_MISMATCH: 'DEVICE_LINK_VERSION_MISMATCH',
+  // 对端拒绝了我们的 link-open（协议契约不满足，例如声明了
+  // reliable-transport-v1 却未带 transportStreamId）。语义上就是两端的
+  // 实现/版本对不上，复用 VERSION_MISMATCH 而不新增 IpcErrorCode——新增码
+  // 需要同时改 renderer 的文案表与既有消费者，收益不成比例。不映射的话会被
+  // rethrowDeviceLinkError 归到 INTERNAL，renderer 就只剩一个通用内部错误。
+  PROTOCOL_ERROR: 'DEVICE_LINK_VERSION_MISMATCH',
   NOT_CONNECTED: 'DEVICE_LINK_NOT_CONNECTED',
   LINK_NOT_OPEN: 'DEVICE_LINK_NOT_CONNECTED',
   PEER_RESET: 'DEVICE_LINK_NOT_CONNECTED',

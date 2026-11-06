@@ -135,13 +135,16 @@ export interface LinkOpenPayload {
   /**
    * reliable-transport-v1 下，本端发往对端的 stream generation。
    *
-   * **声明了 `capabilities` 就必须提供本字段**。被控端据此判断能否进入可靠
-   * 传输档位；声明了能力集却不给 streamId 是自相矛盾的帧（能力集本身就是
-   * 后加字段，只有新客户端才会传，不存在“新客户端忘了带传输身份”的合法情形）。
+   * **声明了 `reliable-transport-v1` 就必须提供本字段**。被控端据此判断能否
+   * 进入可靠传输档位；声明了该能力却不给 streamId 是自相矛盾的帧。
    *
-   * 缺失时被控端会回 `link-close('protocol-error')` 而不是静默丢弃——后者会让
+   * 注意判据是**这一个能力**，不是 `capabilities` 非空：能力集是 append-only 的，
+   * 里面还有其他与传输无关的能力（如 `background-link-v1`），一个故意不实现
+   * 可靠传输的控制端可以带非空 capabilities 而不带本字段，那是合法的。
+   *
+   * 违反时被控端会回 `link-close('protocol-error')` 而不是静默丢弃——后者会让
    * 控制端只能等满 requestTimeout，无法区分“对端拒绝”与“网络不通”。
-   * 不声明能力集的旧客户端不受此约束，它走 legacy 链路。
+   * 未声明该能力的客户端不受此约束，它走 legacy 链路。
    */
   transportStreamId?: string;
   /** 本端当前仍可能发送的最小 seq；对端重启丢失 ACK 内存时从这里恢复。 */

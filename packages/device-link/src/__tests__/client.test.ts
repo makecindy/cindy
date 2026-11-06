@@ -10,6 +10,7 @@ import { DeviceLinkClient, computeReconnectDelayMs, type WsLike } from '../clien
 import {
   PROTOCOL_VERSION,
   DeviceLinkError,
+  DEVICE_LINK_CAPABILITY_BACKGROUND_LINK_V1,
   sharedTaskHostPeer,
   SHARED_TASK_RELAY_CAPABILITY,
   type Envelope,
@@ -562,6 +563,37 @@ describe('self-hosted relay device signatures', () => {
       expect(rejection).toContain('appVersion');
       expect(rejection).not.toContain('transportStreamId');
       expect(socket.sent.some((env) => env.kind === 'link-close')).toBe(true);
+    } finally { h.client.stop(); }
+  });
+
+  // 对照组的重点分支:capabilities 非空，但声明的是与传输无关的能力。
+  // reliable-transport-v1 是可选的，一个故意不实现它的控制端带非空能力集
+  // 而不带 streamId 完全合法——判据必须是具体能力，不是数组长度。
+  it('accepts link-open declaring capabilities other than reliable-transport-v1', async () => {
+    const h = makeHarness({ timing: { pingIntervalMs: 60_000 } });
+    const accepted: unknown[] = [];
+    h.client.onFrame((env) => {
+      if (env.kind === 'link-open') accepted.push(env.payload);
+    });
+    try {
+      h.client.start(); await tick();
+      const socket = h.current(); socket.ack();
+      socket.push({
+        v: PROTOCOL_VERSION,
+        kind: 'link-open',
+        id: 'other-caps-open-1',
+        src: 'dev-b',
+        payload: {
+          controllerName: 'Phone',
+          protocolVersion: 1,
+          appVersion: '1',
+          // 声明了无关能力，但没声明可靠传输，因此不给 streamId 是合法的
+          capabilities: [DEVICE_LINK_CAPABILITY_BACKGROUND_LINK_V1],
+        },
+      });
+      await tick();
+      expect(accepted).toHaveLength(1);
+      expect(socket.sent.some((env) => env.kind === 'link-close')).toBe(false);
     } finally { h.client.stop(); }
   });
 
