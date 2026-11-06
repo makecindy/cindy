@@ -193,6 +193,8 @@ export function PendingQueuePanel({
    * 只记「哪一行溢出」而不记「刚刚量到溢出」,上一次的结果才不会残留到另一行头上。
    */
   const [bodyTipClientId, setBodyTipClientId] = useState<string | null>(null);
+  /** 已经等满悬停延迟、可以真正浮出的行:受控 Tip 不会自己走 Provider 的 delay。 */
+  const [revealedBodyTipClientId, setRevealedBodyTipClientId] = useState<string | null>(null);
   /** 拖动排序进行中:Sortable 指针捕获期间不允许行级浮层留在屏幕上。 */
   const [dragActive, setDragActive] = useState(false);
   const editingLockOwnerRef = useRef<QueueEditLockOwner | null>(null);
@@ -247,6 +249,20 @@ export function PendingQueuePanel({
   // Tip 的关闭请求(窗口失活、Radix 自己的 pointerleave / Esc)必须复位目标行,
   // 否则受控浮层关不掉:切到别的窗口时浮层就僵在屏幕上。
   const dismissBodyTip = useCallback(() => setBodyTipClientId(null), []);
+
+  // 受控 Tip 绕过 Provider 的 delayDuration,指针只是划过一行截断正文就会铺开一大块
+  // 全文。这里自己补上同一节奏的延迟:目标行停留满 delay 才允许浮出,关闭立即生效。
+  useEffect(() => {
+    if (bodyTipClientId === null) return undefined;
+    const timer = window.setTimeout(
+      () => setRevealedBodyTipClientId(bodyTipClientId),
+      QUEUE_BODY_TIP_HOVER_DELAY_MS,
+    );
+    return () => {
+      window.clearTimeout(timer);
+      setRevealedBodyTipClientId((current) => (current === bodyTipClientId ? null : current));
+    };
+  }, [bodyTipClientId]);
 
   const acquireEditLock = useCallback((clientId: string) => {
     editingLockOwnerRef.current = acquireQueueEditLock(
@@ -380,12 +396,16 @@ export function PendingQueuePanel({
           const bodyTipText = rowPresentation.isSyntheticTrigger
             ? null
             : rowPresentation.displayText;
-          const bodyTipOpen = isPendingQueueBodyTipOpen(bodyTipClientId, {
-            clientId: entry.clientId,
-            syntheticTrigger: rowPresentation.isSyntheticTrigger,
-            editing: isRowEditing,
-            dragActive,
-          });
+          const bodyTipOpen = isPendingQueueBodyTipOpen(
+            bodyTipClientId,
+            revealedBodyTipClientId,
+            {
+              clientId: entry.clientId,
+              syntheticTrigger: rowPresentation.isSyntheticTrigger,
+              editing: isRowEditing,
+              dragActive,
+            },
+          );
           /** 把「正文要全文提示」指向这一行,或清掉它:溢出判定始终跟着当前这一行。 */
           const syncBodyTip = (overflowed: boolean) =>
             setBodyTipClientId(overflowed ? entry.clientId : null);
@@ -799,6 +819,9 @@ const queueBodyTipClassName = 'max-h-[200px] overflow-hidden whitespace-pre-wrap
 
 const QUEUE_ROW_BODY_SELECTOR = '[data-queue-row-body]';
 const QUEUE_ROW_ACTION_SELECTOR = '[data-pending-queue-row-action="true"]';
+
+/** 与 Tip 共享的 delayDuration 对齐:指针划过列表时不该立刻铺开全文浮层。 */
+const QUEUE_BODY_TIP_HOVER_DELAY_MS = 500;
 
 /** 正文被单行截断时才需要全文提示,短消息不重复一遍可见内容。 */
 function isQueueRowBodyOverflowed(node: HTMLElement | null): boolean {

@@ -76,14 +76,21 @@ describe('isPendingQueueBodyTipOpen', () => {
   };
 
   it('only opens for the row whose body was measured as truncated', () => {
-    expect(isPendingQueueBodyTipOpen('row-a', row)).toBe(true);
-    expect(isPendingQueueBodyTipOpen('row-a', { ...row, clientId: 'row-b' })).toBe(false);
-    expect(isPendingQueueBodyTipOpen(null, row)).toBe(false);
+    expect(isPendingQueueBodyTipOpen('row-a', 'row-a', row)).toBe(true);
+    expect(isPendingQueueBodyTipOpen('row-a', 'row-a', { ...row, clientId: 'row-b' })).toBe(false);
+    expect(isPendingQueueBodyTipOpen(null, null, row)).toBe(false);
+  });
+
+  it('waits for the hover delay before the measured row may show', () => {
+    expect(isPendingQueueBodyTipOpen('row-a', null, row)).toBe(false);
+    expect(isPendingQueueBodyTipOpen('row-a', 'row-b', row)).toBe(false);
   });
 
   it('stays shut for synthetic, editing and dragging rows', () => {
-    expect(isPendingQueueBodyTipOpen('row-a', { ...row, syntheticTrigger: true })).toBe(false);
-    expect(isPendingQueueBodyTipOpen('row-a', { ...row, editing: true })).toBe(false);
-    expect(isPendingQueueBodyTipOpen('row-a', { ...row, dragActive: true })).toBe(false);
+    expect(isPendingQueueBodyTipOpen('row-a', 'row-a', { ...row, syntheticTrigger: true })).toBe(
+      false,
+    );
+    expect(isPendingQueueBodyTipOpen('row-a', 'row-a', { ...row, editing: true })).toBe(false);
+    expect(isPendingQueueBodyTipOpen('row-a', 'row-a', { ...row, dragActive: true })).toBe(false);
   });
 });

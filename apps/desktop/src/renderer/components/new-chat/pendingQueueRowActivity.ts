@@ -63,7 +63,8 @@ export function isPendingQueueRowActive(
  * 历史 bug:这条判定曾经是面板级单一布尔,只在行 hover 时按当行量一次、离开不清零,
  * 于是「本行是否被截断」会残留到下一次激活 —— 键盘把焦点移到一条没被截断的短行也照弹
  * 全文,指针悬停 A 行、焦点落在 B 行时还会两行同真。目标行因此必须绑定到具体 clientId,
- * 任何时刻最多只有一个行能开。
+ * 任何时刻最多只有一个行能开。受控浮层也会绕过 Tip 的 hover delay,所以这里还额外
+ * 记一个「已等满延迟的行」:指针划过列表时不立刻铺开全文。
  */
 export type PendingQueueBodyTipTarget = string | null;
 
@@ -78,14 +79,15 @@ export interface PendingQueueBodyTipRow {
 }
 
 /**
- * 正文全文提示只在「就是这一行、且没有别的交互正在占用这块屏幕」时打开。
- * 目标行由指针 / 键盘焦点实测溢出后写入,所以短行永远不会命中。
+ * 正文全文提示只在「就是这一行、且延迟已满、没有别的交互正在占用这块屏幕」时打开。
+ * target 是实测到溢出的行,revealed 是等满悬停延迟后的行 —— 两者都得是本行。
  */
 export function isPendingQueueBodyTipOpen(
   target: PendingQueueBodyTipTarget,
+  revealed: PendingQueueBodyTipTarget,
   row: PendingQueueBodyTipRow,
 ): boolean {
-  if (target === null || target !== row.clientId) return false;
+  if (target === null || target !== revealed || target !== row.clientId) return false;
   return !row.syntheticTrigger && !row.editing && !row.dragActive;
 }
 
