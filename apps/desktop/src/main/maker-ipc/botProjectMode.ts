@@ -27,6 +27,8 @@ import { gitExec } from '../worktree/gitExec.js';
 import { detectCwd } from '../worktree/WorktreeManager.js';
 import { botProfileDir, botProfileMemoryDir, ensureBotWorkspaceDir } from './botProfileFolder.js';
 import { setBotProjectSkillsDir } from './botSkillStore.js';
+import type { ProjectScheduleConfig } from '../scheduler-host/project-automation-loader.js';
+import type { BotModelRoute } from '../../shared/botModelChain.js';
 
 const log = createLogger('maker-ipc:bot-project-mode');
 
@@ -119,6 +121,71 @@ function broadcastProjectRegistered(workingDir: string): void {
       log.warn('teammate project registered but window refresh failed', { error: String(error) });
     }
   }
+}
+
+/** The project's own nightly review: an ordinary project automation, not a host job. */
+export const BOT_PROJECT_MEMORY_REVIEW_ID = 'teammate-memory-review';
+
+export function botProjectMemoryReview(input: {
+  botId: string;
+  displayName: string;
+  route?: BotModelRoute | null;
+  timezone: string;
+  /** Localized "{{name}} · …" title template. */
+  title: string;
+}): ProjectScheduleConfig {
+  const name = input.displayName.trim() || input.botId;
+  const route = input.route && !input.route.agentDeviceId ? input.route : null;
+  return {
+    id: BOT_PROJECT_MEMORY_REVIEW_ID,
+    name: input.title.replace('{{name}}', name),
+    prompt: [
+      `Review ${name}'s main chats with the owner from the last 24 hours and keep what is worth remembering.`,
+      `- Read them with the cindy_helper history tools: list_sessions or search_chat_history with teammate_id=${input.botId}, teammate_main_only=true, time_field=activity, then get_chat_history.`,
+      `- Save durable facts, owner preferences and corrections into this project's memory with cindy_memory. Quote the owner's words as evidence, update an existing record instead of adding a duplicate, and skip one-off progress or temporary state.`,
+      `- When the same way of working came up repeatedly and worked, write or update a skill in .agents/skills/<name>/SKILL.md. Never edit SOUL.md, system_prompt.md or memories/USER.md.`,
+      '- If nothing new is worth keeping, finish quietly.',
+    ].join('\n'),
+    cronExpr: '30 3 * * *',
+    timezone: input.timezone,
+    recurring: true,
+    persistentSession: true,
+    silentWhenIdle: true,
+    ...(route ? {
+      agentKind: route.harness === 'claude' ? 'claude-code' as const : route.harness,
+      model: route.model,
+      ...(route.providerId ? { providerId: route.providerId } : {}),
+      ...(route.effort ? { effort: route.effort } : {}),
+    } : {}),
+  };
+}
+
+/** Adds the review once; an owner's later edit or removal of it in the project is kept. */
+export async function ensureBotProjectAutomations(input: {
+  botId: string;
+  displayName: string;
+  workingDir: string;
+  route?: BotModelRoute | null;
+}): Promise<boolean> {
+  // Loaded on use: the scheduler host is not part of the teammate profile store's import graph.
+  const [{ getProjectAutomationLoader }, { t }] = await Promise.all([
+    import('../scheduler-host/index.js'), import('../i18n.js'),
+  ]);
+  const loader = getProjectAutomationLoader();
+  const existing = await loader.loadProjectSchedules(input.workingDir);
+  if (existing?.some((config) => config.id === BOT_PROJECT_MEMORY_REVIEW_ID)) return false;
+  await loader.upsertSchedule(input.workingDir, botProjectMemoryReview({
+    ...input,
+    timezone: Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC',
+    title: t('bots.homeFolder.projectMode.memoryReviewName'),
+  }));
+  return true;
+}
+
+/** Turning project mode off hands the nightly review back to the host. */
+export async function removeBotProjectAutomations(workingDir: string): Promise<void> {
+  const { getProjectAutomationLoader } = await import('../scheduler-host/index.js');
+  await getProjectAutomationLoader().removeSchedule(workingDir, BOT_PROJECT_MEMORY_REVIEW_ID);
 }
 
 export interface BotProjectPreparation {

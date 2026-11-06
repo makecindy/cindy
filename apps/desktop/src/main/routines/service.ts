@@ -34,6 +34,7 @@ import { getCurrentDbClientSnapshot } from '../localDb/client/current.js';
 import { botProfiles } from '../localDb/schema.js';
 import { isCompanionShadowed } from '../companion-cloud/homes.js';
 import { botSystemSkillsOff, currentFollowUpEvents } from '../bot-autonomy/hub.js';
+import { readBotProjectModeFor } from '../bot-autonomy/hostData.js';
 import {
   BUILTIN_FOLLOW_UP_ROUTINE_PREFIX,
   BUILTIN_NIGHTLY_LEARNING_ROUTINE_PREFIX,
@@ -193,6 +194,11 @@ async function execute(scope: string, routine: Routine, run: RoutineRun, signal:
   if (!canDispatch()) return { deferred: true };
   // 夜间学习在宿主里执行，不派到伙伴主对话；没有新对话时不调用模型，直接记一次跳过。
   if (routine.builtin === 'nightly-learning') {
+    // V2: the project's own memory-review automation does this (botProjectMode.ts).
+    if (await readBotProjectModeFor(routine.botId)) {
+      assertScope(scope);
+      return { skipped: true, resultText: 'Project mode: the project reviews its own memory' };
+    }
     const { runNightlyLearning } = await import('../maker-ipc/botNightlyLearning.js');
     assertScope(scope);
     return runNightlyLearning(routine.botId, { manual: run.triggerIds.includes('manual') });

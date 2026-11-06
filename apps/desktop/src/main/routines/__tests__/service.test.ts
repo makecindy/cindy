@@ -4,6 +4,7 @@ const mock = vi.hoisted(() => ({
   scope: 'owner-a',
   followUpEvents: vi.fn<(botId: string, events: RoutineRun['events']) => RoutineRun['events'] | null>((_id, events) => events),
   skillsOff: [] as string[],
+  projectMode: false,
   boundaryPending: false,
   schedulerReady: true,
   dbReady: true,
@@ -35,6 +36,7 @@ vi.mock('../../bot-autonomy/hub.js', () => ({ currentFollowUpEvents: async (botI
   const events = mock.followUpEvents(botId, input);
   return events === null ? null : { events, canDispatch: () => mock.followUpEvents(botId, input)?.length === events.length };
 }, botSystemSkillsOff: async () => mock.skillsOff }));
+vi.mock('../../bot-autonomy/hostData.js', () => ({ readBotProjectModeFor: async () => mock.projectMode }));
 vi.mock('../../appSessionState.js', () => ({
   activeOwnerScopeKey: () => mock.scope,
   getActiveAppSession: () => ({ dataOwnerId: mock.scope }),
@@ -85,6 +87,7 @@ afterEach(async () => {
   vi.clearAllMocks();
   mock.followUpEvents.mockImplementation((_id, events) => events);
   mock.skillsOff = [];
+  mock.projectMode = false;
   mock.scope = 'owner-a';
   mock.boundaryPending = false;
   mock.schedulerReady = true;

@@ -15,7 +15,7 @@ import {
 import type { BotSystemSkillId } from '../../shared/botSystemSkills.js';
 import { readTaskResponsibilities, responsibleSessionIds } from '../maker-ipc/botTaskResponsibility.js';
 import { isCompanionShadowed } from '../companion-cloud/homes.js';
-import { readAllowSchedulerFollow, readSystemSkillsOff, type FollowerBotState } from './follower.js';
+import { readAllowSchedulerFollow, readProjectMode, readSystemSkillsOff, type FollowerBotState } from './follower.js';
 import type { LocalSessionMeta, OwnershipSnapshot, RemoteDeviceTarget } from './taskWatch.js';
 
 const SESSION_BATCH = 256;
@@ -150,6 +150,15 @@ export async function readBotDirectory(): Promise<Map<string, FollowerBotState>>
 
 /** 某个伙伴当前资料里关掉的系统技能；伙伴不存在时按全开（调用方另有存在性检查）。 */
 export async function readBotSystemSkillsOffFor(botId: string): Promise<BotSystemSkillId[]> {
+  return readSystemSkillsOff(await readCurrentCapabilities(botId));
+}
+
+/** 伙伴是否以项目方式运行（V2）；伙伴不存在时按否。 */
+export async function readBotProjectModeFor(botId: string): Promise<boolean> {
+  return readProjectMode(await readCurrentCapabilities(botId));
+}
+
+async function readCurrentCapabilities(botId: string): Promise<string | undefined> {
   const [row] = await getDbClient().drizzle
     .select({ capabilities: botProfileVersions.capabilitiesJson })
     .from(botProfiles)
@@ -159,7 +168,7 @@ export async function readBotSystemSkillsOffFor(botId: string): Promise<BotSyste
     )
     .where(eq(botProfiles.id, botId))
     .limit(1);
-  return readSystemSkillsOff(row?.capabilities);
+  return row?.capabilities;
 }
 
 /**

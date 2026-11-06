@@ -78,7 +78,7 @@ import { syncBotProfileFromFolder } from '../../maker-ipc/botProfileFolderSync.j
 import { requestBotRuntimeEpochRefresh } from '../../maker-ipc/botRuntimeEpochRefreshSignal.js';
 import { createLogger } from '../../logger.js';
 import { collectTaskResponsibilityScopes } from '../../maker-ipc/botTaskResponsibility.js';
-import { prepareBotProjectWorkspace } from '../../maker-ipc/botProjectMode.js';
+import { ensureBotProjectAutomations, prepareBotProjectWorkspace, removeBotProjectAutomations } from '../../maker-ipc/botProjectMode.js';
 import { setBotProjectSkillsDir } from '../../maker-ipc/botSkillStore.js';
 import { readBotProjectMode } from '../../../shared/botProjectMode.js';
 import {
@@ -2319,14 +2319,28 @@ export async function updateBotProfile(raw: unknown, expectedVersion?: number,
   // Project mode (experimental): turning it on makes the workspace a registered,
   // versioned project before the refreshed chat loads its AGENTS.md.
   if (readBotProjectMode(normalizedNextConfig) && !readBotProjectMode(previous)) {
-    await prepareBotProjectWorkspace({
+    const displayName = patch.displayName ?? current.displayName;
+    const prepared = await prepareBotProjectWorkspace({
       botId: id,
-      displayName: patch.displayName ?? current.displayName,
+      displayName,
       ownerRoot: owner.userDataDir,
       legacyUserDataDir: app.getPath('userData'),
     }).catch((error) => {
       log.warn('teammate project preparation failed', { botId: id, error: String(error) });
+      return null;
     });
+    owner.assertCurrent();
+    // The nightly review becomes the project's own automation.
+    if (prepared) {
+      const [route] = await readEffectiveBotModelChain(normalizedNextConfig).catch(() => []);
+      await ensureBotProjectAutomations({ botId: id, displayName, workingDir: prepared.workingDir, route })
+        .catch((error) => log.warn('teammate project automations failed', { botId: id, error: String(error) }));
+      owner.assertCurrent();
+    }
+  } else if (!readBotProjectMode(normalizedNextConfig) && readBotProjectMode(previous)) {
+    const workingDir = await ensureBotWorkspaceDir(owner.userDataDir, id, app.getPath('userData'));
+    await removeBotProjectAutomations(workingDir)
+      .catch((error) => log.warn('teammate project automations removal failed', { botId: id, error: String(error) }));
     owner.assertCurrent();
   }
   if (profileContentChanged || acceptsSavedModel) {

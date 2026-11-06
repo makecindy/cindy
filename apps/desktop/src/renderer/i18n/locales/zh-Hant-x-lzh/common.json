@@ -10131,7 +10131,8 @@
       "openFailed": "不能啟同僚之卷匣。",
       "projectMode": {
         "title": "以專案行事（試行）",
-        "description": "同僚之工坊化為側欄一專案。其中 AGENTS.md 乃同僚自守之規，可自修之；每一改皆存其版，可復。"
+        "description": "同僚之工坊化為側欄一專案。其中 AGENTS.md 乃同僚自守之規，可自修之；每一改皆存其版，可復。",
+        "memoryReviewName": "{{name}} · 理記"
       }
     },
     "profile": {
