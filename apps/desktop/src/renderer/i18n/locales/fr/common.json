@@ -165,7 +165,7 @@
   "taskActionConfirmation": {
     "title": "Confirmer l'action sur la session",
     "once": "Vérifiez ci-dessous la cible, l'action et le contenu complet. « Autoriser » s'applique à cette action une seule fois.",
-    "remove": "Cette action supprime une automatisation. Vérifiez la cible ; l'approbation ne vaut que pour cette fois.",
+    "remove": "Cette action libère l’adresse de réception de l’automatisation. Vérifiez la cible ; l’autorisation ne vaut que pour cette action.",
     "permission": "Cette action répond à votre place à une demande d'autorisation dans une autre tâche. Vérifiez l'action ; l'approbation ne vaut que pour cette fois.",
     "resume": "Cette action reprend une exécution en pause. Vérifiez la cible ; l'approbation ne vaut que pour cette fois.",
     "command": "Cette action enregistre ou exécute une commande sur votre ordinateur, en dehors de l'approbation des outils de l'Agent. Vérifiez la commande et le dossier de travail ; l'approbation ne vaut que pour cette fois.",
@@ -1126,6 +1126,14 @@
     "detail": "Cela mettra fin au contrôle à distance et rétablira l'écran de cet ordinateur. L'ordinateur se verrouillera si le verrouillage à la sortie est activé.",
     "cancel": "Rester connecté",
     "disconnect": "Déconnecter"
+  },
+  "awayGuard": {
+    "status": "Cindy travaille",
+    "hint": "Appuyez sur une touche pour verrouiller, puis déverrouillez avec Touch ID ou votre mot de passe.",
+    "lockFailed": {
+      "status": "Cindy n'a pas pu verrouiller ce Mac",
+      "hint": "Appuyez sur Contrôle-Commande-Q pour le verrouiller. L'écran se verrouillera aussi de lui-même au bout d'un moment."
+    }
   },
   "appBadge": {
     "attentionCount": "Tâches nécessitant votre attention : {{count}}"
@@ -2411,7 +2419,24 @@
       "swallowActivationClickLabel": "Éviter les clics accidentels au retour",
       "swallowActivationClickHint": "Si activé, un clic gauche sur une fenêtre en arrière-plan la fait seulement passer au premier plan. Si désactivé, il agit aussi sur l'élément cliqué, ce qui peut provoquer des clics accidentels.",
       "swallowActivationClickAria": "Activer ou désactiver la protection contre les clics accidentels au retour dans la fenêtre",
-      "macRestartNote": "Sous macOS, redémarrez l'application pour appliquer les modifications."
+      "macRestartNote": "Sous macOS, redémarrez l'application pour appliquer les modifications.",
+      "awayGuard": {
+        "label": "Continuer à travailler en votre absence",
+        "hint": "Quand c'est activé, ce Mac ne met plus son écran en veille et ne se verrouille plus tout seul, pour que l'IA puisse l'utiliser à tout moment. Après un moment d'absence, un cache noir masque l'écran et l'IA continue derrière. Appuyer sur une touche ou cliquer le verrouille aussitôt ; déverrouillez avec Touch ID ou votre mot de passe.",
+        "permission": "Autorisez Cindy dans Réglages Système > Confidentialité et sécurité > Accessibilité pour qu'il verrouille l'écran dès que quelqu'un touche ce Mac. En attendant, l'écran se met en veille et se verrouille comme d'habitude.",
+        "preview": "Essayer maintenant",
+        "previewStarting": "Lâchez la souris et le clavier. L'écran est masqué dans 3 secondes ; appuyez sur une touche pour le verrouiller, puis déverrouillez-le.",
+        "previewUnavailable": "Impossible de masquer l'écran. Redémarrez Cindy et réessayez.",
+        "delay": {
+          "label": "Masquer l'écran après",
+          "hint": "Durée sans toucher le clavier ni la souris avant que le cache n'apparaisse. Par défaut, la même que la mise en veille de l'écran.",
+          "30": "30 s",
+          "60": "1 min",
+          "120": "2 min",
+          "300": "5 min",
+          "system": "Système"
+        }
+      }
     },
     "agentIsland": {
       "title": "Agent Island",
@@ -5180,7 +5205,7 @@
         "ariaLabel": "Choisir le second modèle auxiliaire de secours"
       },
       "emptySlot": "Non sélectionné",
-      "customHint": "Les modèles sont essayés dans l'ordre choisi et servent aussi de secours à la revue automatique lorsque ses modèles intégrés sont indisponibles. Les fournisseurs sélectionnés reçoivent le contexte de la revue : messages et références, détails des tâches et des actions (y compris les actions bloquées), identité et autorisations, chemins de fichiers et système d'exploitation.",
+      "customHint": "Les modèles sont essayés dans l'ordre choisi et servent aussi de secours à la revue automatique lorsque ses modèles intégrés sont indisponibles. Les fournisseurs sélectionnés reçoivent le contexte de la revue : messages et références, texte public de l'Agent (à titre indicatif), détails des tâches et des actions (y compris les actions bloquées), identité et autorisations, chemins de fichiers et système d'exploitation.",
       "signInHint": "Connectez-vous à Cindy pour utiliser les recommandations automatiques. Sans connexion, choisissez un modèle configuré d'un autre fournisseur sous Personnalisé.",
       "chooseAgent": "Choisir un Agent",
       "backToAgents": "Retour à la sélection de l'Agent",

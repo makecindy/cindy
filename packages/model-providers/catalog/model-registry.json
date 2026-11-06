@@ -1,6 +1,6 @@
 {
   "schemaVersion": 6,
-  "updatedAt": "2026-11-06T13:12:53.075Z",
+  "updatedAt": "2026-11-06T16:51:20.313Z",
   "models": [
     {
       "id": "openai/gpt-6.1-sol",
@@ -8026,7 +8026,23 @@
                 "url": "https://platform.kimi.com/",
                 "verifiedAt": "2026-09-23"
               },
-              "cacheWritePerMtok": 20
+              "cacheWritePerMtok": 20,
+              "effectiveUntil": "2026-11-05"
+            },
+            {
+              "currency": "CNY",
+              "variant": "standard",
+              "inputPerMtok": 20,
+              "outputPerMtok": 100,
+              "cacheReadPerMtok": 2,
+              "effectiveFrom": "2026-11-05",
+              "source": {
+                "kind": "provider-official",
+                "url": "https://platform.kimi.com/docs/guide/context-caching",
+                "verifiedAt": "2026-11-05"
+              },
+              "cacheWritePerMtok": 20,
+              "cacheWrite1hPerMtok": 40
             }
           ]
         },
@@ -8059,7 +8075,23 @@
                 "url": "https://platform.kimi.ai/",
                 "verifiedAt": "2026-09-23"
               },
-              "cacheWritePerMtok": 3
+              "cacheWritePerMtok": 3,
+              "effectiveUntil": "2026-11-05"
+            },
+            {
+              "currency": "USD",
+              "variant": "standard",
+              "inputPerMtok": 3,
+              "outputPerMtok": 15,
+              "cacheReadPerMtok": 0.3,
+              "effectiveFrom": "2026-11-05",
+              "source": {
+                "kind": "provider-official",
+                "url": "https://platform.kimi.ai/docs/guide/context-caching",
+                "verifiedAt": "2026-11-05"
+              },
+              "cacheWritePerMtok": 3,
+              "cacheWrite1hPerMtok": 6
             }
           ]
         }
@@ -8287,7 +8319,23 @@
                 "url": "https://platform.kimi.ai/",
                 "verifiedAt": "2026-09-23"
               },
-              "cacheWritePerMtok": 3
+              "cacheWritePerMtok": 3,
+              "effectiveUntil": "2026-11-05"
+            },
+            {
+              "currency": "USD",
+              "variant": "standard",
+              "inputPerMtok": 3,
+              "outputPerMtok": 15,
+              "cacheReadPerMtok": 0.3,
+              "effectiveFrom": "2026-11-05",
+              "source": {
+                "kind": "provider-official",
+                "url": "https://platform.kimi.ai/docs/guide/context-caching",
+                "verifiedAt": "2026-11-05"
+              },
+              "cacheWritePerMtok": 3,
+              "cacheWrite1hPerMtok": 6
             }
           ]
         }

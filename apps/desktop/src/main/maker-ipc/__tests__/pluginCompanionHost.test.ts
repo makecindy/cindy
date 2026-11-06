@@ -321,6 +321,10 @@ it('lets a plugin allow only what Cindy\'s own dialog can show whole', async () 
   const refs = (await host.list(() => {}))[0]!.interactions.map(i => i.ref);
   const shown = await Promise.all(refs.map(async ref => (await host.interaction('ada', ref, () => {}) as { allowHere?: boolean }).allowHere));
   expect(shown).toEqual([false, false, false, true, false]);
+  // Ordinary MCP calls keep the published tool action, never masquerade as plugins.
+  expect(await host.interaction('ada', refs[3]!, () => {})).toMatchObject({
+    action: 'tool', subject: 'srv', preview: 'run {"script":"ls"}', allowHere: true,
+  });
   for (const [ref, answer] of [[refs[0], { kind: 'permission', decision: 'allow' }], [refs[1], { kind: 'permission', decision: 'allow' }],
     [refs[2], { kind: 'permission', decision: 'allow' }], [refs[4], { kind: 'plan', decision: 'allow' }]] as const) {
     await expect(host.answer('ada', ref!, answer, answering)).rejects.toMatchObject({ code: 'ALLOW_IN_CINDY' });
