@@ -80,6 +80,11 @@
  * 硬行装不下就整刀拒绝,不是截断卡片。dev 实测 30 轮小/中/大读码负载成卡 1.1–5.4K 字符,
  * 预算从未成为约束(A/B 用 SPINE_CARD_BUDGET=8000 复跑,切刀决策一致);而 33.5K 字符的
  * 中文文档只按 8000 会漏 87 条硬行 → 永不切,按放大预算(30,189)则全部装下。
+ * 两处数据安全偏离(语义等价,只是失败路径不再丢原文;上游同版本没有):
+ *   - 容量轮换先 rename 进 `.rotate-<pid>-<ts>` 隔离目录,确认装得下再真删,装不下原路搬回。
+ *     上游边算边删,中途撞上占用会「删了旧备份又放弃这一刀」,已有卡片就指向空文件。
+ *   - 被拒的一刀会撤掉本次刚落盘、无卡片引用的 `raw-*.txt` 与其 meta —— 原文写入不走容量轮换,
+ *     不清理会一轮轮堆积突破单会话上限。
  * Logging: stderr lines prefixed "[pi-live-compact]" (grep "spine cut"), plus an
  * append-only spine.log next to the shadow directory for test verification.
  */
