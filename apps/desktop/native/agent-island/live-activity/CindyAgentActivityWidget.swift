@@ -232,16 +232,17 @@ struct CindyAgentActivityWidget: Widget {
           CountRuns(state: context.state, size: 20)
             .padding(.trailing, 4)
         }
+        // Title and status share the center region so the avatar keeps the leading
+        // column to itself (a bottom region would run under it).
         DynamicIslandExpandedRegion(.center) {
-          Text(context.state.title.isEmpty ? context.attributes.appName : context.state.title)
-            .font(.system(size: 15, weight: .semibold))
-            .foregroundStyle(Palette.islandText)
-            .lineLimit(1)
-        }
-        DynamicIslandExpandedRegion(.bottom) {
-          StatusLine(state: context.state, secondary: Palette.islandSecondary)
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .padding(.horizontal, 4)
+          VStack(alignment: .leading, spacing: 3) {
+            Text(context.state.title.isEmpty ? context.attributes.appName : context.state.title)
+              .font(.system(size: 15, weight: .semibold))
+              .foregroundStyle(Palette.islandText)
+              .lineLimit(1)
+            StatusLine(state: context.state, secondary: Palette.islandSecondary)
+          }
+          .frame(maxWidth: .infinity, alignment: .leading)
         }
       } compactLeading: {
         Identity(state: context.state, size: 20)
