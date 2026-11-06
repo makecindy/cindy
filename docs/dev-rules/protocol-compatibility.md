@@ -235,7 +235,8 @@ WS 纯增 `endpoints-changed` 失效通知，旧客户端忽略。释放必须�
 并发旧恢复不能撤销后一次释放。账号删除同时清理释放记录。
 
 `Schedule` 新增可选字段 `webhookTrigger`，`ScheduleRun` 新增可选字段 `triggerSource`，对应追加列
-`schedules.webhook_trigger` 与 `schedule_runs.trigger_source`（migration 0144）。沿用既有
+`schedules.webhook_trigger` 与 `schedule_runs.trigger_source`（迁移
+[`0148_schedule_webhook_trigger`](../../apps/desktop/drizzle/scripts/0148_schedule_webhook_trigger.ts)）。沿用既有
 `maker:schedule:create/update/get` 通道：缺 key 表示不修改，`null` 清空，旧客户端整表单保存不会清掉配置。
 旧主机只保留已知列，会报告成功却丢掉配置，所以能力新增 `supportsScheduleWebhookTrigger`；Agent 工具的
 跨设备设置／清空先检查此标记，不支持则不发送写入；开启时再通过目标电脑的
