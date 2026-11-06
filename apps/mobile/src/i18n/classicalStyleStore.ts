@@ -35,10 +35,9 @@ export function currentClassicalStyleForLocale(locale: string | null | undefined
 }
 
 export async function readClassicalStyle(): Promise<StoredStyles> {
-  const [classical, modern] = await Promise.all([
-    AsyncStorage.getItem(STORAGE_KEYS.classical),
-    AsyncStorage.getItem(STORAGE_KEYS.modern),
-  ]);
+  // 单个 key 读失败只降级那一档,不拖垮另一档的已存值(Promise.all 需要永不 reject 的入参)。
+  const read = (key: string) => AsyncStorage.getItem(key).catch(() => null);
+  const [classical, modern] = await Promise.all([read(STORAGE_KEYS.classical), read(STORAGE_KEYS.modern)]);
   current.classical = isClassicalReplyStyle(classical) ? classical : null;
   current.modern = isClassicalReplyStyle(modern) ? modern : null;
   return { ...current };
