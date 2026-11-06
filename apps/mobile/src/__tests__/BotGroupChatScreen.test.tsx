@@ -723,10 +723,12 @@ describe('group timeline', () => {
       { botId: 'mimi', name: '咪咪', avatar: '🐱', avatarColor: 'red', status: 'active', isOwned: true },
       { botId: 'abu', name: '阿布', avatar: '🦉', avatarColor: 'blue', status: 'active', isOwned: false },
     ] });
-    data.messages.push(message('t1', 20, { authorBotId: 'abu', authorName: '阿布', content: '',
+    data.messages.push(message('t1', 20, { authorBotId: 'abu', authorName: '阿布', content: '先读伙伴的回复正文',
       task: { meta, state: 'waiting', title: '官网首页', summary: '首页要放几个案例？' } }));
     await render(parseBotGroupChatData(data)!);
     const card = byId('botGroup.task')!;
+    const readingOrder = byId('botGroup.row.t1')!.textContent!;
+    expect(readingOrder.indexOf('先读伙伴的回复正文')).toBeLessThan(readingOrder.indexOf('官网首页'));
     expect(card.textContent).toContain('官网首页');
     expect(card.textContent).toContain('groupChat.task.state.waiting');
     expect(card.textContent).toContain('首页要放几个案例？');
