@@ -195,7 +195,13 @@ describe('mobile session header desktop-first surface', () => {
     // 拖到满屏即返回首页:不播返回动画;iOS 抽屉在本路由内,随页面一起弹出,中间不露出任务;
     // Android 抽屉画在路由之上,仍须先卸载再换页。
     expect(source).toContain("navigation.setOptions({ animation: 'none' });");
-    expect(source).toContain("if (Platform.OS !== 'ios') { queueDrawerNavigation(goBackToHome); return; }");
+    expect(source).toContain("if (Platform.OS !== 'ios') { queueDrawerNavigation(goHomeFromDrawer); return; }");
+    // 回首页按栈里首页的位置弹出,而不是只退一层:从伙伴聊天点进任务时下面还压着伙伴聊天页。
+    expect(source).toContain('const count = homeDismissCount(routes);');
+    expect(source).toContain('else if (count > 0) router.dismiss(count);');
+    // 拉出手势在抽屉首次渲染 open 前就被取消(JS 线程忙时 open 与 cancel 同批提交):
+    // 抽屉从未挂载,没有 onClosed 来释放父级的遮罩/读屏/返回键占用,必须由父级直接释放。
+    expect(source).toContain('if (!sessionListDrawerOpenCommittedRef.current) {');
     // 悬浮模式下右滑任务页拉出任务栏,不再触发系统返回;拉动期间手势保持启用,否则会被取消。
     expect(source).toContain('gestureEnabled: !sessionListDrawerOverlayMounted && !sessionListDrawerFloating');
     expect(source).toContain('<GestureDetector gesture={sessionListDrawerPullGesture}>');

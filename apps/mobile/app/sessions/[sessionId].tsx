@@ -656,6 +656,7 @@ import { markSessionScheduleRunsRead, unreadRunIdFromProjection } from '@/sessio
 import { useRemoteScheduleEventSnapshot } from '@/scheduler/remoteScheduleEvents';
 import { buildSessionNativeShellLayout } from '@/session/mobileNativeShellLayout';
 import { buildWideSessionNavLayout } from '@/session/wideSessionNav';
+import { homeDismissCount } from '@/session/teammateNavigation';
 import { SessionListDrawer, useSessionListDrawerMotion, useSessionListDrawerOpenGesture } from '@/session/SessionListDrawer';
 import { GestureDetector } from '@/platform/gestureHandler';
 import {
@@ -3186,8 +3187,22 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
   // going back; let go too early and it slides back.
   const sessionListDrawerFloating = wideSessionNav.enabled && !paneLayout.persistent;
   const sessionListDrawerMotion = useSessionListDrawerMotion();
+  // Whether the drawer has rendered open since it was last released. A pull
+  // cancelled before that (busy JS thread: open and cancel batched together)
+  // leaves the drawer unmounted, so nothing would ever call onClosed.
+  const sessionListDrawerOpenCommittedRef = useRef(false);
+  useEffect(() => {
+    if (sessionListDrawerOpen) sessionListDrawerOpenCommittedRef.current = true;
+    else if (!sessionListDrawerOverlayMounted) sessionListDrawerOpenCommittedRef.current = false;
+  }, [sessionListDrawerOpen, sessionListDrawerOverlayMounted]);
   const settleSessionListDrawerPull = useCallback(() => {
     if (!sessionListDrawerShownRef.current || sessionListDrawerClosingRef.current) return;
+    if (!sessionListDrawerOpenCommittedRef.current) {
+      sessionListDrawerShownRef.current = false;
+      setSessionListDrawerOpen(false);
+      setSessionListDrawerOverlayMounted(false);
+      return;
+    }
     sessionListDrawerClosingRef.current = true;
     setSessionListDrawerOpen(false);
   }, []);
@@ -9564,6 +9579,14 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
   // Dragging the floating list on to full screen is a way back: the list
   // becomes Home where it is, so this pop skips the slide.
   const [sessionListDrawerDismissingToHome, setSessionListDrawerDismissingToHome] = useState(false);
+  // Home, not one step back: a task opened from a teammate's chat sits above it.
+  const goHomeFromDrawer = useCallback(() => {
+    const state = navigation.getState() as { routes?: { name: string; params?: unknown }[]; index?: number } | undefined;
+    const routes = state?.routes?.slice(0, (state.index ?? 0) + 1) ?? [];
+    const count = homeDismissCount(routes);
+    if (count === null) goBackToHome();
+    else if (count > 0) router.dismiss(count);
+  }, [goBackToHome, navigation, router]);
   const dismissSessionListDrawerToHome = useCallback(() => {
     if (sessionListDrawerClosingRef.current || pendingDrawerNavigationRef.current) return;
     navigation.setOptions({ animation: 'none' });
@@ -9571,16 +9594,16 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
     // list along and Home shows in its place, with no frame of the task between.
     // Android draws it above the routes, so it must unmount before the screen
     // changes, as with every drawer navigation.
-    if (Platform.OS !== 'ios') { queueDrawerNavigation(goBackToHome); return; }
+    if (Platform.OS !== 'ios') { queueDrawerNavigation(goHomeFromDrawer); return; }
     sessionListDrawerClosingRef.current = true;
     setSessionListDrawerDismissingToHome(true);
-  }, [goBackToHome, navigation, queueDrawerNavigation]);
+  }, [goHomeFromDrawer, navigation, queueDrawerNavigation]);
   useEffect(() => {
     if (!sessionListDrawerDismissingToHome) return;
     // One frame after the options commit, so the pop already has no animation.
-    const frame = requestAnimationFrame(goBackToHome);
+    const frame = requestAnimationFrame(goHomeFromDrawer);
     return () => cancelAnimationFrame(frame);
-  }, [goBackToHome, sessionListDrawerDismissingToHome]);
+  }, [goHomeFromDrawer, sessionListDrawerDismissingToHome]);
   const sessionListDrawerResize = useMemo(() => wideSessionNav.resizeBounds ? {
     bounds: wideSessionNav.resizeBounds,
     onResize: sidebarWidthPreference.setWidth,
