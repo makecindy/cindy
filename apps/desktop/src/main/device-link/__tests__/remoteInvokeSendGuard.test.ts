@@ -49,6 +49,7 @@ function loadAdapters(overrides: Record<string, unknown>) {
     openLinkCloseEpochs: epochs,
     foregroundInvokesInFlight: new Map<string, { epoch: number; count: number }>(),
     hasForegroundInvokeInCurrentEpoch: () => false,
+    hasForegroundLinkHoldInCurrentEpoch: () => false,
     ensureOnlineForRequest: async () => {},
     isScopedPeer: () => false,
     tryPeerInvoke: async () => null,
