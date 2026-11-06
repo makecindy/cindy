@@ -1467,16 +1467,6 @@ async function submitInvocation(
     try { validateCustomVideoBody(body, invocation.capability === 'video.image_to_video'); }
     catch (error) { throw new MediaInvocationError('REQUEST_INVALID', (error as Error).message); }
   }
-  if (invocation.capability.startsWith('image.') && /^openai\/gpt-image-[12]/.test(invocation.modelId)) {
-    try {
-      validatedBody = { ...body, ...normalizeImageParameters('openai', invocation.modelId, {
-        size: body.size as string | undefined,
-        quality: body.quality as string | undefined,
-      }) };
-    } catch (error) {
-      throw new MediaInvocationError('REQUEST_INVALID', (error as Error).message);
-    }
-  }
   const requestBody = await prepareRequestBody(validatedBody, invocation.guide);
   assertAuthScope(scope, invocation.owner);
   if (isClientVideoInvocation(invocation)) {
