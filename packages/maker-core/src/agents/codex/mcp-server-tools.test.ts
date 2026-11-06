@@ -59,13 +59,23 @@ describe('Codex thread MCP server tools', () => {
       .toEqual({ state, tools: [] });
   });
 
-  it('does not report a cached catalog as connected after discovery fails', async () => {
+  it.each(['connected', null])('does not expose cached tools after discovery fails with runtime %s', async (runtimeStatus) => {
     const { invoke } = requestFor({ first: { nextCursor: null, data: [
-      { name: 'custom_omc', runtimeStatus: 'connected', toolsError: 'secret endpoint', tools: { search: {} } },
+      { name: 'custom_omc', runtimeStatus, toolsError: 'secret endpoint', tools: { search: {} } },
     ] } });
     expect(await readCodexThreadMcpServerTools(invoke, 't', 'custom_omc'))
       .toEqual({ state: 'failed', tools: [] });
   });
+
+  it.each([{}, { search: { description: 'Cached tool' } }])(
+    'keeps an explicitly unknown runtime pending regardless of its cached tools', async (tools) => {
+      const { invoke } = requestFor({ first: { nextCursor: null, data: [
+        { name: 'custom_omc', runtimeStatus: null, toolsError: null, tools },
+      ] } });
+      expect(await readCodexThreadMcpServerTools(invoke, 't', 'custom_omc'))
+        .toEqual({ state: 'pending', tools: [] });
+    },
+  );
 
   it('reports a connected runtime with an empty catalog as no-tools', async () => {
     const { invoke } = requestFor({ first: { nextCursor: null, data: [

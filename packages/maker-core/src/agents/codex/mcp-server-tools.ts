@@ -48,6 +48,10 @@ export async function readCodexThreadMcpServerTools(
 function reportFromCodexStatus(server: CodexMcpServerStatus): AgentMcpServerToolsReport {
   // A cached catalog is not proof that this thread has a callable connection.
   // Do not forward raw discovery errors: they may contain endpoint credentials.
+  // Explicit null means unknown runtime state; only omission uses the legacy fallback.
+  if (server.runtimeStatus === null) {
+    return { state: server.toolsError ? 'failed' : 'pending', tools: [] };
+  }
   switch (server.runtimeStatus) {
     case 'authenticationRequired': return { state: 'needs-auth', tools: [] };
     case 'disabled': return { state: 'disabled', tools: [] };
