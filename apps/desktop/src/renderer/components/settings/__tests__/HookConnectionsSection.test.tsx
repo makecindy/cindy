@@ -529,7 +529,7 @@ describe('HookConnectionsSection binding actions (Telegram / X / Feishu)', () =>
     expect(screen.queryByRole('button', { name: FEISHU_CARD })).toBeNull();
   });
 
-  it.each(['success', 'failure', 'old-server'] as const)('offers a concise working-computer action with a confirmed result: %s', async (outcome) => {
+  it.each(['success', 'failure', 'old-server', 'unlink'] as const)('offers a concise working-computer action with a confirmed result: %s', async (outcome) => {
     const hook: SlackHookView = { ...BASE_HOOK, feishu: { ...BASE_HOOK.feishu,
       enabled: true, available: true, status: 'connected', url: 'wss://feishu.example.test',
       binding: { provider: 'feishu', state: 'confirmed', attemptId: null, bindingId: 'local-feishu',
@@ -553,7 +553,15 @@ describe('HookConnectionsSection binding actions (Telegram / X / Feishu)', () =>
     expect(ipc.providerBindSelect).toHaveBeenCalledWith('feishu');
     expect(button.hasAttribute('disabled')).toBe(true);
     expect(toast.success).not.toHaveBeenCalled();
-    if (outcome === 'success') {
+    if (outcome === 'unlink') {
+      ipc.providerBindRevoke.mockResolvedValue({ hook });
+      fireEvent.click(screen.getByRole('button', { name: 'settings.remoteControl.hook.feishu.unlink' }));
+      await waitFor(() => expect(ipc.providerBindRevoke).toHaveBeenCalledWith('feishu'));
+      await act(async () => { resolve({ hook }); });
+      expect(button.hasAttribute('disabled')).toBe(false);
+      expect(toast.success).not.toHaveBeenCalled();
+      expect(toast.error).not.toHaveBeenCalled();
+    } else if (outcome === 'success') {
       resolve({ hook });
       await waitFor(() => expect(toast.success).toHaveBeenCalledWith('settings.remoteControl.hook.feishu.workingDeviceSet'));
     } else {

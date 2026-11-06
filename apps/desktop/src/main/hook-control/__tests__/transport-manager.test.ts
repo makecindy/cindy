@@ -3224,7 +3224,7 @@ function feishuLaneHarness(
 }
 
 describe('官方飞书 / Lark provider lane', () => {
-  it('selects this linked computer only after its matching server acknowledgment, and fails on disconnect', async () => {
+  it.each(['disconnect', 'unlink'] as const)('selects this linked computer after acknowledgment, cancelling on %s', async (cancel) => {
     const { manager, transports, sent } = feishuLaneHarness({}, { feishuEnabled: true });
     manager.sync();
     const opts = transports[0]!;
@@ -3248,8 +3248,33 @@ describe('官方飞书 / Lark provider lane', () => {
     expect(manager.snapshot().feishu.binding?.bindingId).toBe(FEISHU_CONFIRMED.bindingId);
     const disconnected = manager.providerBindSelect('feishu');
     const failure = expect(disconnected).rejects.toThrow();
-    opts.onStatus('connecting', null);
+    if (cancel === 'disconnect') opts.onStatus('connecting', null);
+    else {
+      expect(manager.providerBindRevoke('feishu')).toBe(true);
+      expect(manager.snapshot().feishu.binding?.actions).not.toContain('select_device');
+      await expect(manager.providerBindSelect('feishu')).rejects.toThrow();
+      const late = sent.findLast((frame) => frame.type === 'provider.bind.select')!;
+      if (late.type !== 'provider.bind.select') throw new Error('selection missing');
+      opts.onMessage(makeProviderBindSelection({ ...late.payload, ok: true }), () => true);
+    }
     await failure;
+  });
+
+  it('hides a cached selection action until this connection supplies its binding snapshot', async () => {
+    const { manager, transports } = feishuLaneHarness({}, { feishuEnabled: true });
+    manager.sync();
+    const opts = transports[0]!;
+    opts.onWelcome?.({ serverName: 'feishu-hook', features: FEISHU_FEATURES });
+    opts.onStatus('connected', null);
+    opts.onMessage(makeProviderBindState({ ...FEISHU_CONFIRMED, actions: ['revoke', 'select_device'] }), () => true);
+    expect(manager.snapshot().feishu.binding?.actions).toContain('select_device');
+    opts.onStatus('connecting', null);
+    opts.onWelcome?.({ serverName: 'feishu-hook', features: FEISHU_FEATURES });
+    opts.onStatus('connected', null);
+    expect(manager.snapshot().feishu.binding?.actions).not.toContain('select_device');
+    await expect(manager.providerBindSelect('feishu')).rejects.toThrow();
+    opts.onMessage(makeProviderBindState(FEISHU_CONFIRMED), () => true);
+    expect(manager.snapshot().feishu.binding?.actions).not.toContain('select_device');
   });
 
   it('hello 只声明 provider 基础能力; 服务端未宣告 provider:feishu 时显示不可用并拒收派发', () => {

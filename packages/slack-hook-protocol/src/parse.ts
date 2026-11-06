@@ -861,8 +861,7 @@ function validateProviderBindRevoke(p: Record<string, unknown>): string | null {
 }
 
 function validateProviderBindSelect(p: Record<string, unknown>): string | null {
-  return validateProviderBindRevoke(p)?.replaceAll('provider.bind.revoke', 'provider.bind.select')
-    ?? (isPositiveTimestamp(p.expiresAt) ? null : 'provider.bind.select.expiresAt must be a positive integer timestamp');
+  return validateProviderBindRevoke(p)?.replaceAll('provider.bind.revoke', 'provider.bind.select') ?? null;
 }
 function validateProviderBindSelection(p: Record<string, unknown>): string | null {
   return validateProviderBindRevoke(p)?.replaceAll('provider.bind.revoke', 'provider.bind.selection')

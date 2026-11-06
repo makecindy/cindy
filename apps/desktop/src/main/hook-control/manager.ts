@@ -1094,13 +1094,17 @@ export function createHookControlManager(deps: HookControlManagerDeps): HookCont
     pendingPrefs.clear();
   }
 
-  /** 单线断线只 fail 本线的 provider prefs 请求, 不波及 Slack 或其它线。 */
+  function rejectPendingSelection(lane: NeutralProviderLane, error: Error): void {
+    const pending = lane.pendingSelection;
+    if (pending === null) return;
+    lane.pendingSelection = null;
+    clearTimeout(pending.timer);
+    pending.reject(error);
+  }
+
+  /** 单线断线只 fail 本线在途请求, 不波及 Slack 或其它线。 */
   function drainLanePendingRequests(lane: NeutralProviderLane): void {
-    if (lane.pendingSelection !== null) {
-      clearTimeout(lane.pendingSelection.timer);
-      lane.pendingSelection.reject(new HookNotConnectedError(lane.config.provider));
-      lane.pendingSelection = null;
-    }
+    rejectPendingSelection(lane, new HookNotConnectedError(lane.config.provider));
     for (const [, pending] of lane.pendingPrefs) {
       clearTimeout(pending.timer);
       pending.reject(new HookNotConnectedError(lane.config.provider));
@@ -1350,6 +1354,8 @@ export function createHookControlManager(deps: HookControlManagerDeps): HookCont
   function laneView(lane: NeutralProviderLane): ProviderHookView {
     const enabled = lane.config.isEnabled();
     const url = lane.config.getUrl().trim();
+    const selectionReady = accountActive && !disposed && enabled && lane.status === 'connected'
+      && laneCapabilityReady(lane) && !lane.awaitingStateSnapshot && lane.bindRequest?.kind !== 'revoke';
     return {
       enabled,
       url,
@@ -1366,7 +1372,8 @@ export function createHookControlManager(deps: HookControlManagerDeps): HookCont
         lane.config.provider === 'telegram' &&
         lane.serverFeatures.includes(HOOK_FEATURE_PROVIDER_BEHAVIOR),
       binding:
-        lane.binding === null ? null : { ...lane.binding, actions: [...lane.binding.actions] },
+        lane.binding === null ? null : { ...lane.binding, actions: lane.binding.actions.filter(
+          (action) => action !== 'select_device' || selectionReady) },
       // store 侧已保证读出来的别名仍然有效(目录删掉即归零), 这里直投。
       defaultWorkspace: defaultWorkspaceOf(store.get(), lane.config.provider),
       ...(lane.config.provider === 'x' ? { companionBotId: store.get().xCompanionBotId ?? null } : {}),
@@ -3356,14 +3363,18 @@ export function createHookControlManager(deps: HookControlManagerDeps): HookCont
       const sent = lane.transport.send(
         makeProviderBindRevoke({ requestId, provider: lane.config.provider, bindingId }),
       );
-      if (sent) lane.bindRequest = { kind: 'revoke', requestId, bindingId };
+      if (sent) {
+        rejectPendingSelection(lane, new Error('Working computer selection cancelled by unlink'));
+        lane.bindRequest = { kind: 'revoke', requestId, bindingId };
+        notifyStatus(toView());
+      }
       return sent;
     },
     async providerBindSelect(provider) {
       const lane = laneByProvider.get(provider);
       const binding = lane?.binding;
       if (provider !== 'feishu' || !lane || !accountActive || disposed || lane.status !== 'connected'
-        || !lane.config.isEnabled() || !laneCapabilityReady(lane) || lane.awaitingStateSnapshot
+        || !lane.config.isEnabled() || !laneCapabilityReady(lane) || lane.awaitingStateSnapshot || lane.bindRequest?.kind === 'revoke'
         || lane.transport === null || binding?.state !== 'confirmed' || !binding.bindingId
         || !binding.actions.includes('select_device')) throw new HookNotConnectedError(provider);
       if (lane.pendingSelection !== null) throw new Error('Working computer selection is already pending');
@@ -3376,7 +3387,7 @@ export function createHookControlManager(deps: HookControlManagerDeps): HookCont
         timer.unref?.();
         lane.pendingSelection = { requestId, bindingId: binding.bindingId!, scopeId: binding.scopeId, resolve, reject, timer };
         try {
-          if (!lane.transport!.send(makeProviderBindSelect({ requestId, provider, bindingId: binding.bindingId!, expiresAt: Date.now() + PROVIDER_BIND_SELECT_TIMEOUT_MS }))) {
+          if (!lane.transport!.send(makeProviderBindSelect({ requestId, provider, bindingId: binding.bindingId! }))) {
             drainLanePendingRequests(lane);
           }
         } catch (error) {

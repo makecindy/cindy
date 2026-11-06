@@ -607,14 +607,22 @@ export function HookConnectionsSection({ companion }: { companion?: { id: string
 
   /** (multi-team)绑定动作 IPC 的统一收口(应用快照 + 失败 toast)。 */
   const [selectingWorkingDevice, setSelectingWorkingDevice] = useState(false);
+  const workingSelectionSequence = useRef(0);
   const selectWorkingDevice = async () => {
+    const sequence = ++workingSelectionSequence.current;
     setSelectingWorkingDevice(true);
     try {
       await window.electronAPI.hookControl.providerBindSelect('feishu');
-      toast.success(t('settings.remoteControl.hook.feishu.workingDeviceSet'));
+      if (mountedRef.current && workingSelectionSequence.current === sequence) {
+        toast.success(t('settings.remoteControl.hook.feishu.workingDeviceSet'));
+      }
     } catch {
-      toast.error(t('settings.remoteControl.hook.toast.actionFailed'));
-    } finally { setSelectingWorkingDevice(false); }
+      if (mountedRef.current && workingSelectionSequence.current === sequence) {
+        toast.error(t('settings.remoteControl.hook.toast.actionFailed'));
+      }
+    } finally {
+      if (mountedRef.current && workingSelectionSequence.current === sequence) setSelectingWorkingDevice(false);
+    }
   };
 
   const runHookAction = useCallback(
@@ -963,6 +971,10 @@ export function HookConnectionsSection({ companion }: { companion?: { id: string
       currentBinding.bindingId !== targetBindingId
     ) {
       return;
+    }
+    if (provider === 'feishu') {
+      ++workingSelectionSequence.current;
+      setSelectingWorkingDevice(false);
     }
     runHookAction(() => window.electronAPI.hookControl.providerBindRevoke(provider));
   };

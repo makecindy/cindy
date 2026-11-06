@@ -922,7 +922,7 @@ export interface ProviderBindRevokePayload {
 export const PROVIDER_BIND_SELECT_TIMEOUT_MS = 10_000;
 
 /** Select this confirmed binding as the working device; requires the select_device action. */
-export interface ProviderBindSelectPayload extends ProviderBindRevokePayload { expiresAt: number }
+export type ProviderBindSelectPayload = ProviderBindRevokePayload;
 /** Acknowledges only the requested selection; does not change any device’s binding state. */
 export interface ProviderBindSelectionPayload extends ProviderBindRevokePayload { ok: boolean }
 
