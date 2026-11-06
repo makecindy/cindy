@@ -821,6 +821,8 @@ const COMPOSER_CONTROL_HIT_SLOP = { bottom: 8, left: 8, right: 8, top: 8 };
 const COMPANION_NATIVE_HEADER_OPTIONS = { headerShown: false, headerTitle: '' } as const;
 const COMPOSER_INPUT_SINGLE_LINE_CONTENT_HEIGHT = MOBILE_COMPOSER_INPUT_SINGLE_LINE_HEIGHT;
 const COMPOSER_INPUT_MULTILINE_CONTENT_THRESHOLD = 34;
+/** 拉开拖动松手后等焦点到达的兜底时长；聚焦被拒时到点收回单行。 */
+const COMPOSER_DRAG_OPEN_FOCUS_GRACE_MS = 800;
 const COMPOSER_INPUT_LINE_HEIGHT = MOBILE_COMPOSER_INPUT_LINE_HEIGHT;
 const COMPOSER_INPUT_MAX_CONTENT_HEIGHT = MOBILE_COMPOSER_INPUT_MAX_HEIGHT;
 const COMPOSER_VERTICAL_PADDING_HEIGHT = 12;
@@ -12538,6 +12540,32 @@ function SessionComposerInput({
   const composerDock = useComposerDock();
   const [composerFocused, setComposerFocused] = useState(false);
   const composerPillOpen = useComposerPillOpen(composerDock.enabled && canUseComposer, () => composerInputRef.current?.focus());
+  // 收起态往上拖拉开：拖动中保持卡片态让输入区跟手拉高；松手拉够了就聚焦，
+  // 焦点到达（或兜底超时，聚焦被拒）后交还给 composerFocused。
+  const [composerDragOpen, setComposerDragOpen] = useState(false);
+  const composerDragOpenTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const clearComposerDragOpenTimer = useCallback(() => {
+    if (composerDragOpenTimerRef.current) clearTimeout(composerDragOpenTimerRef.current);
+    composerDragOpenTimerRef.current = null;
+  }, []);
+  useEffect(() => clearComposerDragOpenTimer, [clearComposerDragOpenTimer]);
+  const handleComposerDragOpenChange = useCallback((opening: boolean) => {
+    clearComposerDragOpenTimer();
+    setComposerDragOpen(opening);
+  }, [clearComposerDragOpenTimer]);
+  const handleComposerDragOpenCommit = useCallback(() => {
+    clearComposerDragOpenTimer();
+    composerInputRef.current?.focus();
+    composerDragOpenTimerRef.current = setTimeout(() => {
+      composerDragOpenTimerRef.current = null;
+      setComposerDragOpen(false);
+    }, COMPOSER_DRAG_OPEN_FOCUS_GRACE_MS);
+  }, [clearComposerDragOpenTimer, composerInputRef]);
+  useEffect(() => {
+    if (!composerFocused) return;
+    clearComposerDragOpenTimer();
+    setComposerDragOpen(false);
+  }, [clearComposerDragOpenTimer, composerFocused]);
   const [composerInputContentHeight, setComposerInputContentHeight] = useState(COMPOSER_INPUT_SINGLE_LINE_CONTENT_HEIGHT);
   const [composerAttachmentTrayHeight, setComposerAttachmentTrayHeight] = useState(0);
   const [voiceDraftCaretFrame, setVoiceDraftCaretFrame] = useState({ left: 0, top: 0 });
@@ -12640,7 +12668,7 @@ function SessionComposerInput({
     armed: composerVoiceHoldArmed,
     draftText: draft,
   });
-  const composerCardActive = (canUseComposer && (composerFocused || composerPillOpen.opening))
+  const composerCardActive = (canUseComposer && (composerFocused || composerPillOpen.opening || composerDragOpen))
     || modelSheetOpen
     || permissionSheetOpen
     || voiceStartPending
@@ -12702,8 +12730,11 @@ function SessionComposerInput({
     && composerShellHasScrollableContent;
   const composerResize = useComposerResize({
     autoMaxContentHeight: composerInputMaxContentHeight,
-    // 外壳自己要滚（附件 / 候选面板溢出）时卡片上的竖直拖动归外壳，调高只走顶边把手。
-    bodyDragEnabled: composerCardActive && !composerShellScrolls,
+    // 外壳自己要滚（附件 / 候选面板溢出）时卡片上的竖直拖动归外壳，调高只走顶边把手；
+    // 收起态往上拖拉开。
+    bodyDragEnabled: canUseComposer && (composerCardActive ? !composerShellScrolls : !composerLayout.input.disabled),
+    onDragOpenChange: handleComposerDragOpenChange,
+    onDragOpenCommit: handleComposerDragOpenCommit,
     // 简洁态一律收到单行(下拉收起和点别处收键盘的结果一致);
     // auto / manual 记忆保留,重新聚焦后恢复。
     collapsed: !composerCardActive,

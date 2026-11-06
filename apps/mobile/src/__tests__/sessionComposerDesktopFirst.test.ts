@@ -179,7 +179,7 @@ describe('mobile session composer desktop-first surface', () => {
     expect(trailingActionsSource).toContain('<PaperPlaneIcon');
     expect(trailingActionsSource).toContain('color={composerSendDisabled ? colors.textSecondary : colors.ctaText}');
     // 收起胶囊点开到真正聚焦之间的过渡期(composerPillOpen.opening)同样算激活态,仍受 canUseComposer 门控。
-    expect(source).toContain('const composerCardActive = (canUseComposer && (composerFocused || composerPillOpen.opening))');
+    expect(source).toContain('const composerCardActive = (canUseComposer && (composerFocused || composerPillOpen.opening || composerDragOpen))');
     expect(source).toContain('|| permissionSheetOpen');
     // 2026-07-29 用户裁决:权限入口是 composer 左侧图标钮 + 独立浮窗
     // (两端都经 NativePermissionSheet:点选先关浮窗,关闭完成后再生效);

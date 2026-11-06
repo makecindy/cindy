@@ -550,7 +550,9 @@ function ComposerFoldingSection({ progress, onNaturalHeight, children }: {
     <View style={{ flexShrink: 0 }} onLayout={event => {
       // Never feed an animated/constrained measurement back into its own height.
       // Keep the natural expanded size until the gesture has fully reversed.
-      if ((progress?.value ?? 0) === 0) {
+      // Dragging the collapsed pill open mounts this folded: take the first
+      // (unconstrained inner) measurement so the toolbar can unfold with the finger.
+      if ((progress?.value ?? 0) === 0 || measuredHeight.value === 0) {
         measuredHeight.value = event.nativeEvent.layout.height;
         onNaturalHeight?.(event.nativeEvent.layout.height);
       }

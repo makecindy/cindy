@@ -360,6 +360,8 @@ export const COMPOSER_BODY_DRAG_LONG_PRESS_MS = 350;
 export type ComposerBodyDragDecision = 'pending' | 'claim' | 'reject';
 
 export interface ResolveComposerBodyDragInput {
+  /** 输入框处于收起的单行态：只认往上拖（拉开），往下拖不接管。 */
+  collapsed?: boolean;
   /** 起手点在文字区内（而不是工具排、附件或卡片留白）。 */
   inText: boolean;
   /** 编辑器上报的滚动端点；null 时退回 measuredOverflow。 */
@@ -388,8 +390,30 @@ export function resolveComposerBodyDrag(input: ResolveComposerBodyDragInput): Co
   if (input.elapsedMs >= COMPOSER_BODY_DRAG_LONG_PRESS_MS) return 'reject';
   if (ax < COMPOSER_BODY_DRAG_SLOP && ay < COMPOSER_BODY_DRAG_SLOP) return 'pending';
   if (ax >= ay) return 'reject';
+  if (input.collapsed === true) return input.dy < 0 ? 'claim' : 'reject';
   if (!input.inText) return 'claim';
   const edge = input.edge;
   if (edge === null) return input.measuredOverflow ? 'reject' : 'claim';
   return (input.dy > 0 ? edge.atTop : edge.atBottom) ? 'claim' : 'reject';
+}
+
+/**
+ * 从收起态往上拖拉开：与「拖到一行再折叠工具排」对称，先用这段距离展开工具排，
+ * 之后的位移才拉高输入区。返回调高用的位移（向下为正）。
+ */
+export function composerOpenDragTranslation(translationY: number): number {
+  'worklet';
+  return translationY + COMPOSER_RESIZE_DISMISS_PULL_THRESHOLD;
+}
+
+/** 拉开途中工具排的折叠进度：1 为全折叠（刚起手），0 为完全展开。 */
+export function composerOpenCollapseProgress(translationY: number): number {
+  'worklet';
+  return clamp(1 + translationY / COMPOSER_RESIZE_DISMISS_PULL_THRESHOLD, 0, 1);
+}
+
+/** 松手时工具排已完全展开才算拉开；不够就收回单行。 */
+export function shouldCommitComposerOpenDrag(translationY: number): boolean {
+  'worklet';
+  return translationY <= -COMPOSER_RESIZE_DISMISS_PULL_THRESHOLD;
 }

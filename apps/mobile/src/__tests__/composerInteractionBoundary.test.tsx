@@ -512,6 +512,59 @@ describe('composer body drag (press anywhere on the card)', () => {
     expect(harness.result.visibleContentHeight).toBe(110);
   });
 
+  it('drags the collapsed pill open with the finger: toolbar first, then height; short pulls fall back', () => {
+    const input = { ...composerInput(), collapsed: true, bodyDragEnabled: true, onDragOpenChange: vi.fn(), onDragOpenCommit: vi.fn() };
+    const harness = mountComposer(input);
+    const drag = bodyDrag(harness.result.bodyGesture);
+    drag.down(800);
+    drag.move(810);
+    // Downward drags on the pill are not ours.
+    expect(drag.manager.fail).toHaveBeenCalledOnce();
+    const open = bodyDrag(harness.result.bodyGesture);
+    open.down(800);
+    open.move(790);
+    expect(open.manager.activate).toHaveBeenCalledOnce();
+    flushJS();
+    expect(input.onDragOpenChange).toHaveBeenLastCalledWith(true);
+    open.move(778);
+    // 12pt up: half of the toolbar unfold, height still one line.
+    expect(harness.result.collapseProgress.value).toBeCloseTo(0.5);
+    expect(harness.result.contentHeight.value).toBe(20);
+    open.move(706);
+    expect(harness.result.collapseProgress.value).toBe(0);
+    expect(harness.result.contentHeight.value).toBe(80);
+    open.up(706);
+    flushJS();
+    expect(input.onDragOpenCommit).toHaveBeenCalledOnce();
+    input.collapsed = false;
+    harness.rerender();
+    expect(harness.result.mode).toBe('manual');
+    expect(harness.result.visibleContentHeight).toBe(80);
+
+    const shortInput = { ...composerInput(), collapsed: true, bodyDragEnabled: true, onDragOpenChange: vi.fn(), onDragOpenCommit: vi.fn() };
+    const short = mountComposer(shortInput);
+    const pull = bodyDrag(short.result.bodyGesture);
+    pull.down(800);
+    pull.move(790);
+    pull.up(780);
+    flushJS();
+    expect(shortInput.onDragOpenCommit).not.toHaveBeenCalled();
+    expect(shortInput.onDragOpenChange).toHaveBeenLastCalledWith(false);
+    expect(short.result.mode).toBe('auto');
+  });
+
+  it('a grabber drag that ended without a release no longer blocks body drags', () => {
+    const harness = mountComposer({ ...composerInput(), bodyDragEnabled: true });
+    const grabber = gestureOf(harness.result.gesture);
+    // The grabber unmounts with the card when it collapses: no finalize arrives.
+    grabber.begin({ translationY: 0 });
+    harness.result.active.value = false;
+    const drag = bodyDrag(harness.result.bodyGesture);
+    drag.down(440);
+    drag.move(430);
+    expect(drag.manager.activate).toHaveBeenCalledOnce();
+  });
+
   it('a second finger during a body drag still settles it', () => {
     const input = { ...composerInput(), bodyDragEnabled: true };
     const harness = mountComposer(input);
