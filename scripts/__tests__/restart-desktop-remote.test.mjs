@@ -242,6 +242,27 @@ test("restart kill scope only targets the checkout that runs the script", () => 
 	assert.deepEqual(preserved.map((proc) => proc.pid), [2]);
 });
 
+test("restart kill scope ignores a node runtime borrowed from this checkout by another checkout", () => {
+	// 2026-11-06：另一份 checkout 用本 checkout 的 node 启动 dev，本 checkout restart 把它整组杀掉。
+	const ownRoot = path.resolve("/repo/cindy-src");
+	const otherRoot = path.resolve("/repo/cindy-personal");
+	const borrowedNode = path.join(ownRoot, ".tooling/node-v22/bin/node");
+	const borrowedPnpm = path.join(ownRoot, ".tooling/node-v22/bin/pnpm");
+	const processes = [
+		{ pid: 1, command: `${borrowedNode} /home/u/.cache/corepack/pnpm/10/bin/pnpm.cjs dev:desktop:remote` },
+		{ pid: 2, command: `node ${borrowedPnpm} --filter desktop dev:remote` },
+		{ pid: 3, command: `${borrowedNode} ${path.join(otherRoot, "node_modules/@electron-forge/cli/dist/electron-forge-start.js")}` },
+		{ pid: 4, command: `${borrowedNode} ${path.join(ownRoot, "node_modules/@electron-forge/cli/dist/electron-forge-start.js")}` },
+		{ pid: 5, command: `${path.join(ownRoot, "node_modules/electron/dist/Electron.app/Contents/MacOS/Electron")} .` },
+	];
+	const checkoutPaths = [ownRoot, otherRoot];
+	const devProcesses = processes.filter((proc) => isRepositoryDesktopDevProcess(proc, checkoutPaths, 999));
+
+	const { targets } = partitionDesktopDevProcesses(devProcesses, ownRoot, checkoutPaths);
+	assert.deepEqual(targets.map((proc) => proc.pid), [4, 5]);
+	assert.equal(commandBelongsToCheckout(processes[2].command, otherRoot, checkoutPaths), true);
+});
+
 test("restart from the main checkout keeps dev instances of nested managed worktrees", () => {
 	const mainRoot = path.resolve("/repo/cindy-src");
 	const nestedRoot = path.join(mainRoot, ".cindy-worktrees", "fierce-newton");

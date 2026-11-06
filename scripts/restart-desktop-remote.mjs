@@ -118,8 +118,35 @@ function stripTrailingSlashes(value) {
   return value.replace(/\/+$/, '');
 }
 
+const LAUNCHER_TOKEN_RE = /^\s*(?:"([^"]*)"|'([^']*)'|(\S+))/;
+const LAUNCHER_BASENAMES = new Set([
+  'node', 'node.exe',
+  'pnpm', 'pnpm.cjs', 'pnpm.js', 'pnpm.exe', 'pnpm.cmd',
+  'npm', 'npm-cli.js', 'npm.cmd', 'npx', 'npx-cli.js', 'npx.cmd',
+  'corepack', 'corepack.js', 'corepack.cmd',
+]);
+
+/**
+ * 去掉命令行开头的 Node 运行时与包管理器入口（node / pnpm / npm / corepack）。
+ * 解释器装在哪个 checkout 里不代表进程属于它：另一份 checkout 借用本 checkout 自带的 node
+ * 启动 dev 时，命令行开头带着本 checkout 的路径，按路径认归属会被本 checkout 的 restart
+ * 当成自己的实例整组杀掉（2026-11-06 实际发生）。Electron、electron-forge 等指向 checkout
+ * 自身依赖的路径不在此列，仍是归属依据。
+ */
+function stripLauncherPrefix(normalizedCommand) {
+  let rest = normalizedCommand;
+  for (let i = 0; i < 4; i += 1) {
+    const match = rest.match(LAUNCHER_TOKEN_RE);
+    if (!match) break;
+    const token = match[1] ?? match[2] ?? match[3];
+    if (!LAUNCHER_BASENAMES.has(path.posix.basename(token))) break;
+    rest = rest.slice(match[0].length);
+  }
+  return rest;
+}
+
 export function commandContainsPath(command, candidatePath) {
-  const normalizedCommand = normalize(command);
+  const normalizedCommand = stripLauncherPrefix(normalize(command));
   const normalizedPath = stripTrailingSlashes(normalize(candidatePath));
   if (!normalizedPath) return false;
   let index = normalizedCommand.indexOf(normalizedPath);
