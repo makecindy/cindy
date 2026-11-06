@@ -822,8 +822,13 @@ export function PendingQueuePanel({
   );
 }
 
-// 正文全文提示:保留原换行;限高是防止超长协调指令把浮层铺满整屏。
-const queueBodyTipClassName = 'max-h-[200px] overflow-hidden whitespace-pre-wrap';
+// 正文全文提示:保留原换行。限高是防止超长协调指令把浮层铺满整屏,但固定 200px 会
+// 在十几行处把内容裁掉,而这类行没有别的可读表面。改用视口相对上限,常见长指令能
+// 整段读完;再长的尾部仍会被裁 —— 这个浮层不能滚动:仓库统一给 Tip 设了
+// disableHoverableContent=true(见 ui/tooltip.tsx),指针一移到浮层上就关,滚轮没有
+// 落点。要真正做到可滚动得先放开那条全局裁决,不在本 PR 范围。
+const queueBodyTipClassName =
+  'max-h-[min(60vh,480px)] overflow-hidden whitespace-pre-wrap';
 
 const QUEUE_ROW_BODY_SELECTOR = '[data-queue-row-body]';
 /**
