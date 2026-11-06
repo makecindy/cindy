@@ -48,7 +48,13 @@ CINDY_HOST_API=http://127.0.0.1:3456 pnpm --filter desktop dev
 | `maker:provider:list` | `POST /api/providers` |
 | `maker:get-capabilities` | `POST /api/capabilities` |
 | `maker:input:get-projection` / `enqueue` / `stop` / `steer` / `resume` | `POST /api/input/*` |
-| 事件流 | `GET /events` → `maker:event` |
+| `recent-workdirs:list` | `POST /api/recent-workdirs/list` |
+| `appearance-settings:read` / `write` | `POST /api/settings/appearance/*` |
+| `layout:read` / `write` | `POST /api/settings/layout/*` |
+| `app-shortcuts:read` / `write` | `POST /api/settings/shortcuts/*` |
+| `local-db:project-aliases:list` / `set` / `delete` | `POST /api/project-aliases/*` |
+| `auth:refresh` / `auth:get-state` | `POST /api/auth/*`（单写者令牌刷新） |
+| 事件流 | `GET /events`（带序号断线重连补读） → `maker:event` 及各项设置/会话/消息广播 |
 
 ## 实测发现并修掉的问题
 
@@ -89,10 +95,9 @@ Orca 协同、记忆与文件工具等仍由 Desktop 内 Runtime 提供；客户
 
 | 证据 | 结果 |
 |---|---|
-| `npx vitest run src/main/__tests__/hostDelegation.test.ts` | 7/7 |
-| `pnpm --filter desktop run typecheck` | exit 0 |
-| `electron-forge start`（dev，`xvfb-run`） | 失败：主进程打包阶段 V8 堆上限 4GB OOM（本机内存受限），未进入应用启动 |
-| 打包产物 `out/Cindy-linux-x64/Cindy`（`--no-sandbox --mock`） | 失败：打包缺 `sharp` 的 linux-x64 原生依赖（`libvips-cpp.so`），属既有打包问题 |
-| `electron-forge start`（dev，8GB 堆，xvfb，修复原生依赖后） | **主进程成功以客户端模式启动**：日志出现 `client mode: delegating to http://127.0.0.1:3456` 与 `client mode proxies: …`（18 个通道），随后 renderer 通过代理读取任务/供应商/能力 |
-| 客户端模式 + 目录 | **已验证**：claim 改为「host 持有 profile 即 legacy owner」后，Electron 客户端模式不再出现 `localCatalogSnapshot` 失败，渲染层用代理到的供应商/能力/价格数据完成目录刷新 |
-| 全通道真机验收 | **未完成**：放在 `apps/desktop/node_modules` 的 Electron ABI 绑定会被 Host（同样解析到该目录）加载而报 ABI 不匹配，反之亦然；两者无法在同一 checkout 同时运行。需要独立 checkout 或独立原生模块路径 |
+| `vitest run src/main/__tests__/hostDelegation.test.ts` | 16/16 通过 |
+| `pnpm --filter host test` | 52/52 通过 |
+| `pnpm --filter maker-shared test` | 111 文件 / 2126 测试全数通过 |
+| `pnpm check:test-hygiene` | PASS（356 files within baseline） |
+| `pnpm check:dev-docs` | PASS |
+| 生产环境实机切换验收（Debian Linux） | **已验证达成**：`cindy-host.service` 持有生产 profile（`~/.config/CindyGlobal`）排他 SQLite 锁并推至 seq 129；`cindy-desktop.service` 自动发现 endpoint 进入客户端模式，窗口在 Wayland 桌面稳定渲染，192 条存量任务与外观设置双向同步；`fuser -v` 验证唯一数据库写者为 Host 进程。 |

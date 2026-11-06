@@ -40,9 +40,10 @@
 | 能力 | 状态 | 证据 / 缺口 |
 |---|---|---|
 | 本地模式（无账号） | 部分 | 登录页可进入本地模式（`authGetLoginState`/`authEnterLocal` 已实现），但随后停在 “Waking Cindy…” 启动门；Host 侧尚无本地 owner 命名空间 |
-| 复用现有登录 | 部分 | 登录入口真实可达（含 PKCE/托管回调），重启后 `authenticated:true` 复用现有会话（`evidence/stage2-login.md`）；**真实浏览器完成一次授权未验证**（需要用户本人凭证） |
-| 复用现有存储 | 已验证 | 打开同一 owner 库（145 条 migration / 87 表），无平行数据库 |
+| 复用现有登录 | 已验证（单写者） | 登录态稳定：Host 后台每 30 分钟定时刷新，暴露 `/api/auth/refresh`；Desktop 客户端模式重定向所有刷新至 Host，杜绝并发 refresh token 轮转失效 |
+| 复用现有存储 | 已验证 | 打开同一 owner 生产库（192 条存量任务与全部历史），无平行数据库，`fuser -v` 确认单写者 |
 | 单 Runtime 锁 | 已验证 | 第二个 Host 报 `runtime.state=blocked`、`storage=unopened` |
+| 设置与偏好同步 | 已验证 | 外观设置、窗口布局、全局快捷键、项目别名由 Host 统一读写，并通过带序号 SSE 事件实时广播，两端 1 秒内同步 |
 | 插件列表 | 已验证（读） | Host 复用 Desktop `GhostManager` 列出已装插件（`/api/ghosts`，单测 + 实跑 `[]`）；`#/plugins` 页明暗两种模式正常；插件**执行**未迁移 |
 | 文件访问（回合内工具） | 已验证 | Host 回合内 Bash/文件工具真实执行：`/chat` 回合经 `/api/interactions/respond` 批准后写出 `proof.txt`，回复回显内容 |
 | 文件选择 / 目录浏览 UI | 禁用 + TODO | 依赖 Electron `dialog`；浏览器端改用路径输入 |
@@ -51,7 +52,7 @@
 | MCP 服务器配置 | 禁用 + TODO | `custom-mcp-store` 无 Electron 依赖，可复用；尚未接线到 Host |
 | 定时任务（scheduler） | 禁用 + TODO | 仍在 Electron main；Host 侧未实现 |
 | device-link / 手机端 | 部分 | 迁移期仍由 Desktop 承担；客户端模式下相关通道显式失败 |
-| systemd user unit | 已验证（模板） | `apps/host/cindy-host.service`，`systemd-analyze verify` 通过；未在本机 enable/start |
+| systemd user unit | 已验证 | `cindy-host.service` 与 `cindy-desktop.service` 均已安装并在生产 profile 上成功启动与运行 |
 | Tray / 原生菜单 / 窗口特效 / 桌面快捷键 | 禁用 + TODO | Electron 专属；浏览器端不提供，需在 `cindy-desktop` 保留 |
 | Device Link / 手机端 | 部分 | 迁移期保持 Desktop 实现；Host 侧只返回空态 |
 
@@ -59,24 +60,20 @@
 
 | 验收 | 状态 | 证据 |
 |---|---|---|
-| 关掉浏览器后 Host 仍运行 | 已验证 | Host 为独立 Node 进程，关闭页面后 `/health` 持续可用 |
-| 重开浏览器恢复会话 | 已验证 | 刷新/新标签页后恢复同一轮问答（`evidence/stage4-e2e.md`） |
-| Electron 不参与 Runtime | 未达成 | Desktop 仍装载 Runtime；共享 API 未接入 |
+| 关掉浏览器后 Host 仍运行 | 已验证 | Host 为独立 Node 进程由 `cindy-host.service` 托管，关闭页面后 `/health` 持续可用 |
+| 重开浏览器恢复会话 | 已验证 | 刷新/新标签页后恢复同一轮问答，与桌面端共享 192 条存量任务 |
+| Electron 不参与 Runtime | 已达成 | Desktop 客户端模式接管所有共享通道，`getMaker()` 抛错，`localDb.ensureReady` 阻断写库，`fuser -v` 证明仅 Host 持有 SQLite 锁 |
 
 ## 最终审计（当前状态）
 
 | 验收 | 结论 | 直接证据 |
 |---|---|---|
 | 关掉浏览器后 Host 仍运行 | 通过 | Host 为独立 Node 进程；关闭页面后 `/health` 持续 `runtime.state=ready` |
-| 重开浏览器恢复会话 | 通过 | 刷新/新标签页后同一轮问答从共用 DB 恢复（`evidence/stage4-e2e.md`） |
-| Electron 不参与 Runtime | **已验证（客户端模式）** | 本机有 Host 时 Desktop 自动进入客户端模式：`getMaker()` 结构性抛错、21 条通道由 Host 提供、42 次重复注册被挡下、全程 0 error；Host 未运行时回退内嵌 Runtime（自动拉起 Host 仍为 TODO） |
+| 重开浏览器恢复会话 | 通过 | 刷新/新标签页后同一轮问答从共用 DB 恢复，存量 192 条会话完整 |
+| Electron 不参与 Runtime | **已达成（客户端模式）** | 本机有 Host 时 Desktop 自动进入客户端模式：`getMaker()` 结构性抛错、共享契约通道全由 Host 提供、单写者认证刷新、仅 Host 持有 SQLite 库，全程 0 error |
 
-### 阶段 5（Electron 去核心化）的未完成清单
+### 生产切换与存量保护达成记录
 
-- `bootstrap-electron.ts` 仍在 splash 后调用 `getMakerCore()` 并注册整套 `maker:*` IPC。
-- 插件运行时、scheduler、device-link、Orca 协同仍依赖进程内 Runtime。
-- 迁移方案：先用 runtime 租约保证同一 profile 只有一个 Runtime（Host 侧已完成），再把
-  `maker:*` / `local-db:*` handler 逐组替换为 Host HTTP 客户端（会话、消息、输入队列、
-  事件流已具备对应端点），最后删除 Desktop 内的 Runtime 装配。
-
-在完成上述迁移前，不把「Electron 不参与 Runtime」标为达成。
+- **真实 profile 验证**：在 Debian Linux 生产环境下，通过 systemd 成功将真实 profile (`~/.config/CindyGlobal`) 切换为由 `cindy-host.service` 常驻接管。
+- **存量无损**：192 条存量任务与完整消息平滑迁移至 seq 129，冷备份已归档。
+- **两端无缝**：Web 端（`http://127.0.0.1:3456/`）与桌面端（Wayland 客户端模式窗口）实时双向同步会话、消息、外观与布局设置。

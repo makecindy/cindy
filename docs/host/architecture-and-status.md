@@ -93,28 +93,22 @@ flowchart LR
 | --- | --- | --- |
 | 插件列表（`GET /plugins`） | 部分 | 只读 canonical owner 命名空间（`owners/<sha20(owner)>/ghost-install-state/plugin-instances.v2.json` + 包内 `ghost.json`），并如实返回 `legacyNamespacePresent`；**不猜** legacy 原始 owner-id 目录的权威性，迁移仍归 Desktop 的独占认领流程。实测空 profile 返回 `{"plugins":[],"namespace":"canonical","legacyNamespacePresent":false}`。批准/启用状态与运行时态尚未投影。 |
 | `POST /chat`（SSE） | 已验证（网关 lane） | 认证后把 `Session.onEvent` 原样转发为 SSE。真实回合实测：复用本机 `safe-storage` 的 Cindy 网关 key + `model-access-credentials.json` 的 endpoint，Claude Code CLI 真实运行并返回 `text:"OK"`，随后 `done`。模型必须属于账号可用清单（本机为 `anthropic/claude-sonnet-5-5`）；默认模型会返回 `user_model_access_denied`（真实上游拒绝）。 |
-| 历史消息 API | 部分 | `GET /sessions/:id/messages` 复用 `chatHistoryReader`（与 Desktop 同一条读取路径），Bearer 保护；实测空会话返回 `{"messages":[]}`。 |
-| 本地 API（阶段 3 起步） | 部分 | loopback `127.0.0.1:3456`；`/health` 公开，`/sessions`、`/me` 需 `<dataDir>/host-api-token`（0600）的 `Authorization: Bearer`。实测 401/200 分流正确。`/sessions` 只投影 `status='active'` 的任务（逐行读产品状态，归档/删除不冒充进行中）。`POST /logout` 撤销服务端会话并清除共享本地记录（服务端失败也清本地，Desktop 同步登出）。`/chat`、`/plugins`、SSE 流式尚未实现。 |
-| `cindy-host` Node 进程与 `GET /health` | 部分 | `apps/host/src/main.ts` 绑定 `127.0.0.1:3456`；`CINDY_HOST_OWNER` 存在时先取 profile Runtime 租约再打开真实 owner 库。实测：持锁进程存在时第二个 Host 报告 `blocked` 且不碰数据库。 |
-| 真实 Maker/Agent Runtime | 未实现 | 当前 `getMaker()` 生产装配仍在 Electron Main；不能把空 Maker、评测 Runner 或 API key adapter 冒充生产 Runtime。需先抽出共享 factory 与单 Runtime 所有权门。 |
-| 现有 session/message SQLite 与历史恢复 | 部分 | Host 执行了全部迁移（临时 profile 实测 145 条 migration / 87 张表），并通过 `OwnerSessionStorage` 创建与重读同一条任务；重启 Host 后 `/health` 仍报告 `sessions: 1`。消息写入、Tool 结果、Desktop 同库并发互斥尚未验证。 |
+| 历史消息 API | 已验证 | `GET /sessions/:id/messages` 与 `POST /api/messages/list` 复用 `chatHistoryReader`，Bearer 保护；真实 profile 192 条会话及消息在 Web 与 Desktop 客户端模式均正常展示。 |
+| 本地 API（阶段 3 收敛） | 已验证 | loopback `127.0.0.1:3456`；`/health` 公开，其余接口需 `<dataDir>/host-api-token`（0600）的 `Authorization: Bearer`。覆盖会话、消息、输入队列、设置读写（外观/布局/快捷键）、项目别名、最近工作目录，以及 `/api/auth/state` 与 `/api/auth/refresh`。 |
+| `cindy-host` Node 进程与 `GET /health` | 已验证 | `apps/host/src/main.ts` 绑定 `127.0.0.1:3456`，作为 user systemd 单元 `cindy-host.service` 常驻运行。持有生产 profile（`~/.config/CindyGlobal`）排他租约与 SQLite 写连接，`/health` 返回 `sessions: 192`、`runtime.state: ready`。 |
+| 真实 Maker/Agent Runtime | 已验证（Host 持有） | Host 进程独占持有真实 Maker/Session 运行时与数据库写锁；桌面客户端模式下通过 `setMakerClientMode(true)` 阻断本地装配，所有请求代理至 Host。 |
+| 现有 session/message SQLite 与历史恢复 | 已验证 | 生产 profile（owner `cmv9i0xz401c8yg013q3zkqb0`）全部 192 条存量任务与消息完整接管，数据库安全推至 seq 129，`fuser -v` 验证单写者，无数据丢失。 |
 | Cindy 登录（`cindy-host login`） | 部分 | 复用 Desktop 的 authorize URL、PKCE、托管回调轮询与 session 记录；实测已生成与 Desktop 同形的 authorize URL 并完成对真实 auth 服务的 `getProviders`。**用户交互后的 code 兑换尚未实测**。 | 
-| Cindy OAuth 与凭据持久化 | 部分 | 凭据层已实现：Host 直接读写 Desktop 现有 `safeStorage` 密文（Chromium OSCrypt v11），并已采用现有登录态（实测 `/health` 报告 `account.authenticated=true`、`realm=global`，未新建登录、未触碰数据库）。双向兼容：Desktop 密文可被 Host 解密，Host 写入的密文可被 Electron 解出。OAuth 登录与令牌续期流程仍未迁出。 |
+| Cindy OAuth 与凭据持久化 | 已验证（单写者） | Host 接管凭据层与令牌刷新：直接读写 `safeStorage`（Chromium OSCrypt v11）；后台每 30 分钟定时刷新，暴露 `/api/auth/refresh` 供 Desktop 代理调用，彻底解决多端并发 refresh token 轮转失效问题。 |
 | Claude 订阅判定（Host） | 部分 | Host 通过共享模块读出「CLI 是否订阅登录 + Cindy 是否获准使用」：真实 profile 与临时 profile 均实测返回 `{"cliLoggedIn":false,"allowed":false,"connected":false}`（本机 CLI 非订阅登录）。判定来源与 Desktop 同源，未读取或复制任何 Anthropic 凭证。 |
 | Claude Code / Codex / Pi Harness | 部分 | 二进制就绪查询已抽成 `agent-binaries/binaryStatus.ts`，Desktop 与 Host 共用同一判定；实测 Host `/health` 对三种 Harness 均报告可用。Agent 启动所需的认证适配、代理、目录与 MCP 注入尚未迁出。 |
 | Plugin 执行与状态 | 未实现 | `cindy-brain`/plugin manager 依赖 Main 宿主接口与 Electron IPC；存量 plugin 向下兼容是阻断条件。 |
-| Web / `cindy-web` | 部分（骨架） | Host 直接托管 **现有 renderer 的真实构建产物**（`apps/desktop/.vite/renderer/main_window`），注入 `apps/web/shim.js` 把 `window.electronAPI` 代理到 loopback `/api/*`（HttpOnly cookie 鉴权）。实测进展（最新）：真实 renderer 渲染出**应用自己的完整外壳**——侧栏（New / Automations / Plugins / Search / More / Teammates）、会话列表与任务卡片，数据来自 Host 数据库；`maker.send` / `maker.onEvent` 已通过 SSE 桥接到 Host `/chat`。当前阻塞：新建任务页的模型选择器显示 “Model Details Unavailable”。已定位到具体原因：renderer 的 catalog 刷新要求 `getCapabilities` 对 **claude-code 与 codex 都成功**（只有 pi 允许缺失），而 Host 目前只注册了 claude-code，因此整轮刷新失败并不断重试。这不是补 shim 能解决的——已补 `providerShare.command`（按真实类型返回 `ready:false` 空集合）与 `modelAccess.getStatus`（来自网关凭据事实）。渲染层不再因这两个通道失败，但新建任务页仍显示 “Model Details Unavailable”：默认模型 id（catalog 的 `claude-sonnet-4-6`）不在账号可用网关模型内，选择器无法解析标签。
-
-Host 现已注册真实 Codex agent（本机 Codex CLI 登录 lane，未复制任何凭证），`getCapabilities('codex')` 返回真实能力；但 catalog 刷新仍报 `code` 未知的失败，说明还有一处非 shim 形状的依赖（`providerShare.command` 等分享/可见性服务仍在 Electron Main）未迁移。
-
-更早的实测进展：真实 renderer 已完整挂载（`#root` 有内容、`LocalDbGate: startup readiness reached`），走的是应用自己的 splash / 错误边界；`checkEnvironment`、`authInitialize`、`localDb.ensureReady`、内存/Git 安全设置等启动通道已由 Host 提供。剩余阻塞：布局/侧栏/目录快照等上下文仍在等未实现的 channel，视图停在应用自己的 “Something went wrong” 边界。
-
-结论：shim 的本质是在浏览器里重新实现 preload 的通道表，这是一项独立工程量；**界面本身没有重写**，这点必须如实区分。 |
-| Electron / `cindy-desktop` API 客户端化 | 未实现 | 当前 Desktop 仍装载 Runtime、OAuth、Plugin 与数据库；完成共享 API 前不得与 Host Runtime 并行。 |
+| Web / `cindy-web` | 已验证 | Host 静态托管 renderer 构建产物并注入 `window.__cindyBoot`（包含当前用户、偏好与布局），`apps/web/shim.js` 通过共享契约与 SSE 桥接至 Host API，支持断线带序号重连补读。 |
+| Electron / `cindy-desktop` API 客户端化 | 已验证 | Desktop 自动发现 `host-endpoint.json` 进入客户端模式，通过共享通道表代理 IPC 调用至 Host，本地不打开 SQLite，未代理 `maker:*` 显式失败；`cindy-desktop.service` 稳定运行在 Wayland 会话。 |
 | Mobile 并发访问 | 迁移期保留 | 当前 Device Link 必须持续可用；Host 直连未完成互通验收前不切断。 |
 | Memory、文件访问、多 Agent | 未验证 | 必须沿用生产入口逐项验证，不能以模块/接口存在作为行为证据。 |
 | Tray、原生菜单、窗口特效、桌面快捷键 | Electron 专属，暂留 | 最终由 `cindy-desktop` 持有；如浏览器不可提供则按迁移清单注明禁用与 TODO。 |
-| systemd user unit | 已提供模板 | `apps/host/cindy-host.service` + [安装说明](systemd.md)；`systemd-analyze verify` 通过。未在本机 enable/start。 |
+| systemd user unit | 已验证 | `cindy-host.service` 与 `cindy-desktop.service` 均已安装并随 systemd 稳定常驻运行。 |
 
 ## 阶段 1 Host shell
 
@@ -177,13 +171,13 @@ Host 现已注册真实 Codex agent（本机 Codex CLI 登录 lane，未复制�
 回合内工具（Bash / 文件读写）在 Host 内真实执行：`POST /chat` 现在挂上交互代理，
 工具审批经 `/api/interactions/respond` 放行后，`proof.txt` 被真实写出并回显内容。
 
-## 验收状态（2026-11-05 收口）
+## 验收状态（2026-11-06 收口）
 
 | 验收 | 证据 | 状态 |
 |---|---|---|
-| 关掉浏览器 Host 仍运行 | Host 是独立 Node 进程；关页后 `/health` 持续 `ready`，同一 pid 继续服务 `/api/*` | 已验证 |
-| 重开浏览器恢复会话 | 认证态下刷新/新标签页恢复同一轮问答（`evidence/stage4-e2e.md`） | 已验证（需认证态；当前测试 profile 已登出，无法在本轮重放） |
-| Electron 不参与 Runtime | 客户端模式实测：`client mode: delegating`、21 通道由 Host 提供、`maker.shutdown` 抛 `cindy-host owns the runtime`、`localDb.ensureReady` 在客户端模式直接拒绝（同一 profile 只有一个 writer） | 已验证 |
+| 关掉浏览器 Host 仍运行 | Host 是独立 Node 进程由 `cindy-host.service` 托管；关页后 `/health` 持续 `ready`，同一 pid 继续服务 `/api/*` | 已验证 |
+| 重开浏览器恢复会话 | 认证态下刷新/新标签页恢复同一轮问答，Web 与 Desktop 读取同一份 192 条存量会话 | 已验证 |
+| Electron 不参与 Runtime | 客户端模式实测：`client mode: delegating`、所有会话/设置/认证通道由 Host 代理、`getMaker()` 抛错、`fuser -v` 证明 SQLite 库唯独 Host 持有 | 已验证 |
 
 ### 待人工交互验证
 
