@@ -19,7 +19,7 @@ export async function collectModelDiscoveryPages(
       ? page as Record<string, unknown> : null;
     if (body && ((body.error != null && body.error !== '') || body.success === false
       || (body.error_code !== undefined && body.error_code !== 0))) return null;
-    const rows = Array.isArray(page) ? page : body?.data ?? body?.models;
+    const rows = Array.isArray(page) ? page : Array.isArray(body?.data) ? body.data : body?.models;
     // Validate identity with the same parser, without endpoint-specific filtering
     // (for example Vercel's non-language models). Google lists also contain
     // well-formed entries whose generation methods intentionally exclude chat.
@@ -31,7 +31,6 @@ export async function collectModelDiscoveryPages(
         && Array.isArray(row.supportedGenerationMethods)
         && !row.supportedGenerationMethods.includes('generateContent'));
     })) return null;
-    if (Array.isArray(rows) && rows.length > 0 && parsed.length === 0) return null;
     return parsed;
   };
   const append = (parsed: DiscoveredModel[]) => {

@@ -260,7 +260,10 @@ import { recoverRenamedSessionModelBeforeSend } from './renamedSessionModelRecov
 import { recordTurnModelChange, type TurnModelIdentity } from './turnModelChange';
 import { app, BrowserWindow, dialog, ipcMain, shell, type IpcMainInvokeEvent } from 'electron';
 import { accessChatDisplayCache } from './chatDisplayCache.js';
-import { accessBotGroupOutbox } from './botGroupOutboxStorage.js';
+import { accessBotGroupOutbox, commandBotGroupOutbox, sendCoordinatedBotGroupMessage, setBotGroupOutboxPublisher } from './botGroupOutboxStorage.js';
+import { createBotReadStateIpc, createBotWindowAccess } from './botReadStateLocalIpc.js';
+import { isSecondaryAppWindow } from '../secondary-windows.js';
+import { createBotGroupOutboxIpc } from './botGroupOutboxIpc.js';
 import {
   activeOwnerScopeKey,
   onAppSessionInvalidated,
@@ -353,6 +356,7 @@ import {
 import {
   assertTrustedAppRendererEvent,
   isTrustedAppRendererEvent,
+  isTrustedAppRendererWindow,
 } from '../security/trustedAppRenderer.js';
 import {
   initRenameSessionsConfirm,
@@ -7887,6 +7891,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
             getActiveCatalog().providers.find((p) => p.id === provider.id) === provider,
           undefined,
           spec.headers,
+          spec.requireComplete,
         );
       }
       return fetchProviderModels(spec);
@@ -14314,18 +14319,46 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     assertTrustedAppRendererEvent(event);
     return botGroupChatServiceHolder ? botGroupChatServiceHolder.deleteGroup(groupId) : botGroupNotReady;
   });
-  ipcMain.handle(MAKER_INVOKE.BOT_GROUP_SEND, async (event, input: unknown) => {
-    assertTrustedAppRendererEvent(event);
-    return botGroupChatServiceHolder ? botGroupChatServiceHolder.sendMessage(input) : botGroupNotReady;
-  });
   ipcMain.handle(MAKER_INVOKE.CHAT_DISPLAY_CACHE, (event, input: unknown) => {
     assertTrustedAppRendererEvent(event);
     return accessChatDisplayCache(input);
   });
+  const botWindowAccess = createBotWindowAccess({
+    mainWindow: getDeepLinkMainWindow, isSecondary: isSecondaryAppWindow,
+    isTrustedWindow: isTrustedAppRendererWindow, assertTrustedSender: assertTrustedAppRendererEvent,
+    windowFromSender: sender => BrowserWindow.fromWebContents(sender),
+  });
+  // These events stay local: the generic broadcaster also taps Device Link and utility windows.
+  const publishBotWindowState = (channel: string, payload: { owner: { dataOwnerId: string | null; generation: number } }) => {
+    const scope = captureDataOwnerBroadcastScope();
+    const active = getActiveAppSession();
+    if (!isDataOwnerBroadcastScopeCurrent(scope) || active.dataOwnerId !== payload.owner.dataOwnerId
+      || active.generation !== payload.owner.generation) return;
+    for (const win of BrowserWindow.getAllWindows()) {
+      if (!botWindowAccess.accepts(win)) continue;
+      try { win.webContents.send(channel, payload, scope.ownerStamp); }
+      catch { log.warn('Bot window state notification could not be delivered'); }
+    }
+  };
+  ipcMain.handle(MAKER_INVOKE.BOT_READ_STATE, createBotReadStateIpc({
+    assertTrustedSender: botWindowAccess.assertSender,
+    currentOwner: getActiveAppSession,
+    boundaryPending: isAppSessionBoundaryPending,
+    ownerRoot: () => ownerScopedUserDataPath('bot-read-state'),
+    publish: event => publishBotWindowState(MAKER_PUSH.BOT_READ_STATE_CHANGED, event),
+  }));
+  const outboxIpc = createBotGroupOutboxIpc({
+    assertCommandSender: botWindowAccess.assertSender, assertSendSender: assertTrustedAppRendererEvent,
+    command: commandBotGroupOutbox, send: sendCoordinatedBotGroupMessage,
+    service: savedInput => botGroupChatServiceHolder ? botGroupChatServiceHolder.sendMessage(savedInput) : Promise.resolve(botGroupNotReady),
+  });
+  ipcMain.handle(MAKER_INVOKE.BOT_GROUP_SEND, outboxIpc.send);
+  setBotGroupOutboxPublisher(event => publishBotWindowState(MAKER_PUSH.BOT_GROUP_OUTBOX_CHANGED, event));
   ipcMain.handle(MAKER_INVOKE.BOT_GROUP_OUTBOX, async (event, input: unknown) => {
     assertTrustedAppRendererEvent(event);
     return accessBotGroupOutbox(input);
   });
+  ipcMain.handle(MAKER_INVOKE.BOT_GROUP_OUTBOX_COMMAND, outboxIpc.command);
   ipcMain.handle(MAKER_INVOKE.BOT_GROUP_CONTINUE, async (event, groupId: unknown) => {
     assertTrustedAppRendererEvent(event);
     return botGroupChatServiceHolder ? botGroupChatServiceHolder.continueRound(groupId) : botGroupNotReady;

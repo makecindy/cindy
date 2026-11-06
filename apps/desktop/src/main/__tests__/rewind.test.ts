@@ -27,7 +27,7 @@ import { enqueueGitRepoWrite } from '../git-snapshot/gitRepoWriteQueue';
 const attemptJournal = vi.hoisted(() => ({ read: vi.fn<() => Promise<Array<{ id: string; anchor?: string }> | null>>() }));
 vi.mock('../git-snapshot/snapshotAttemptStore', () => ({ SnapshotAttemptStore: class { read = attemptJournal.read; } }));
 
-// ── mock(必须在延迟 import 前 hoist) ─────────────────────────────────────
+// ── mock(在被测模块 import 前 hoist) ─────────────────────────────────────
 
 // Local rewind reuses fork's history helpers, but must not initialize the entire
 // device-link host in this unit fixture (#6563 CI import hook timeout).
@@ -184,12 +184,12 @@ vi.mock('../localDb/client/current', () => ({
   getDbClient: () => ({ drizzle: fakeDb, tx: txMock, queryOne: queryOneMock }),
 }));
 
-let commitRewindAtMessage: typeof import('../maker-orchestration/rewind').commitRewindAtMessage;
-let previewRewindAtMessage: typeof import('../maker-orchestration/rewind').previewRewindAtMessage;
+// Load once after the mock instances exist; cold compilation is not a per-case hook.
+const { commitRewindAtMessage, previewRewindAtMessage } = await import('../maker-orchestration/rewind');
 const originalClaudeConfigDir = process.env.CLAUDE_CONFIG_DIR;
 const tempDirs: string[] = [];
 
-beforeEach(async () => {
+beforeEach(() => {
   attemptJournal.read.mockReset().mockResolvedValue([]);
   if (originalClaudeConfigDir === undefined) delete process.env.CLAUDE_CONFIG_DIR;
   else process.env.CLAUDE_CONFIG_DIR = originalClaudeConfigDir;
@@ -252,11 +252,6 @@ beforeEach(async () => {
   getSessionMetaMock.mockImplementation(async () =>
     fakeSession ? { sdkSessionId: fakeSession.sdkSessionId } : null,
   );
-  if (!commitRewindAtMessage) {
-    const mod = await import('../maker-orchestration/rewind');
-    commitRewindAtMessage = mod.commitRewindAtMessage;
-    previewRewindAtMessage = mod.previewRewindAtMessage;
-  }
 });
 
 afterEach(async () => {

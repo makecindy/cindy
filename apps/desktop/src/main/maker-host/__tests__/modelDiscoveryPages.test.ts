@@ -3,6 +3,11 @@ import { collectModelDiscoveryPages } from '../model-discovery-pages.js';
 
 const endpoint = 'https://models.example/v1/models';
 describe('model list pagination', () => {
+  it.each([{}, 'metadata', 0, null])('validates the models array when data is non-array metadata: %j', async data => {
+    expect(await collectModelDiscoveryPages({ data, models: [{ id: 'kept' }, {}] }, endpoint, vi.fn(), true)).toBeNull();
+    expect((await collectModelDiscoveryPages({ data, models: [{ id: 'kept' }] }, endpoint, vi.fn(), true))?.map(model => model.id)).toEqual(['kept']);
+  });
+
   it.each(['key', 'model_name', 'model_id'])('accepts parser-supported %s identities in complete snapshots', async key => {
     const result = await collectModelDiscoveryPages({ data: [{ [key]: 'team-model' }] }, endpoint, vi.fn(), true);
     expect(result?.map(model => model.id)).toEqual(['team-model']);
@@ -20,6 +25,26 @@ describe('model list pagination', () => {
     expect((await collectModelDiscoveryPages(google, endpoint, vi.fn(), true))?.map(model => model.id)).toEqual(['chat']);
     const vercel = { data: [{ id: 'chat', type: 'language' }, { id: 'image', type: 'image' }] };
     expect((await collectModelDiscoveryPages(vercel, 'https://ai-gateway.vercel.sh/v1/models', vi.fn(), true))?.map(model => model.id)).toEqual(['chat']);
+  });
+
+  // Review #9154: valid pages may contain only intentionally excluded models.
+  // Such pages must not invalidate the snapshot or stop cursor traversal.
+  it.each(['google', 'vercel'] as const)('accepts fully filtered %s pages throughout a complete snapshot', async kind => {
+    const url = kind === 'vercel' ? 'https://ai-gateway.vercel.sh/v1/models' : endpoint;
+    const page = (id: string, filtered = false) => ({ data: [kind === 'google'
+      ? { name: `models/${id}`, supportedGenerationMethods: [filtered ? 'embedContent' : 'generateContent'] }
+      : { id, type: filtered ? 'image' : 'language' }] });
+    for (const position of [0, 1, 2]) {
+      const pages = [page('one'), page('two')];
+      pages.splice(position, 0, page('excluded', true));
+      const paged = pages.map((value, index) => index < pages.length - 1
+        ? { ...value, next: `?page=${index + 2}` } : value);
+      let next = 1;
+      const fetch = vi.fn(async () => paged[next++]);
+      expect((await collectModelDiscoveryPages(paged[0], url, fetch, true))?.map(model => model.id)).toEqual(['one', 'two']);
+      expect(fetch).toHaveBeenCalledTimes(2);
+    }
+    expect(await collectModelDiscoveryPages(page('excluded', true), url, vi.fn(), true)).toEqual([]);
   });
 
   // #9045, unit: snapshot refresh may delete absent models, so partial pages

@@ -2959,6 +2959,7 @@ export function ProvidersSection() {
             modelsUrl: rt.modelsUrl ?? null,
             apiKey,
             savedProviderId: p.id,
+            requireComplete: true,
           });
           if (!r.ok || !r.models) continue;
           if (p.auth.native) {

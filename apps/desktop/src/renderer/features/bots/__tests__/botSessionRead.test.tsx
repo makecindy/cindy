@@ -35,6 +35,7 @@ vi.mock('@/features/cc-agent/CCAgentSessionView', () => ({
 }));
 
 import { BotSessionView } from '../BotSessionView';
+import { setDataOwnerGeneration } from '@/contexts/dataOwnerGeneration';
 import {
   getBotLastReadAt,
   markBotRead,
@@ -80,6 +81,8 @@ beforeEach(() => {
   messageListeners = [];
   window.localStorage.clear();
   resetBotReadStateForTests();
+  // The application AuthContext commits this fence before selecting its read namespace.
+  setDataOwnerGeneration('owner-1', 1);
   setBotReadStateOwner('owner-1');
   mocks.params = { botId: 'bot-1', sessionId: 'session-1' };
   mocks.demoted = [];

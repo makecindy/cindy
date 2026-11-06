@@ -3938,7 +3938,7 @@
         "subscriptionProduct": "{{product}} Subscription",
         "noResults": "No matching models",
         "capabilityNote": "Not configured for {{agent}}",
-        "refreshAria": "Refresh Model List",
+        "refreshAria": "Sync model list with upstream (removes missing models and their settings)",
         "refreshBuiltinAria": "Refresh Model List",
         "refreshingAria": "Refreshing model list…",
         "refreshDone": "Model list refreshed",

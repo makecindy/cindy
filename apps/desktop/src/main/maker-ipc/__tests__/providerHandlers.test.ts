@@ -3973,6 +3973,20 @@ describe('provider:test-connection handler', () => {
 });
 
 describe('provider:models-fetch handler', () => {
+  it('forwards explicit snapshot intent and rejects non-boolean completeness flags', async () => {
+    const harness = new IpcHarness();
+    const fetchModels = vi.fn(async () => ({ ok: true as const, models: [] }));
+    registerProviderHandlers(harness, makeDeps({ fetchModels }));
+    const input = { agent: 'codex', baseUrl: 'https://models.example/v1', authMethod: 'apiKey' };
+    await harness.invoke(MAKER_INVOKE.PROVIDER_MODELS_FETCH, { ...input, requireComplete: true });
+    expect(fetchModels).toHaveBeenLastCalledWith(expect.objectContaining({ requireComplete: true }));
+    await harness.invoke(MAKER_INVOKE.PROVIDER_MODELS_FETCH, { ...input, savedProviderId: 'saved-1' });
+    expect(fetchModels).toHaveBeenLastCalledWith(expect.not.objectContaining({ requireComplete: expect.anything() }));
+    await expect(harness.invoke(MAKER_INVOKE.PROVIDER_MODELS_FETCH, { ...input, requireComplete: 'true' }))
+      .rejects.toThrow(/INVALID_PARAMS/);
+    expect(fetchModels).toHaveBeenCalledTimes(2);
+  });
+
   it('rejects an untrusted sender before issuing a credentialed model request', async () => {
     const harness = new IpcHarness();
     const assertTrustedSender = vi.fn(() => {

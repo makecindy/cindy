@@ -599,6 +599,7 @@ function parseModelsFetchInput(input: unknown): ProviderModelsFetchSpec | null {
   if (!input || typeof input !== 'object') return null;
   const spec = input as Record<string, unknown>;
   if (spec.allowEmpty !== undefined && typeof spec.allowEmpty !== 'boolean') return null;
+  if (spec.requireComplete !== undefined && typeof spec.requireComplete !== 'boolean') return null;
   if (spec.redirect !== undefined && spec.redirect !== 'error') return null;
   if (typeof spec.agent !== 'string' || !VALID_AGENTS.includes(spec.agent)) return null;
   if (typeof spec.authMethod !== 'string' || !VALID_ADHOC_AUTH_METHODS.includes(spec.authMethod))
@@ -647,6 +648,7 @@ function parseModelsFetchInput(input: unknown): ProviderModelsFetchSpec | null {
     authMethod: spec.authMethod as ProviderModelsFetchSpec['authMethod'],
     modelsUrl: (spec.modelsUrl as string | null | undefined) ?? null,
     ...(spec.allowEmpty === true ? { allowEmpty: true } : {}),
+    ...(spec.requireComplete === true ? { requireComplete: true } : {}),
     ...(spec.redirect === 'error' ? { redirect: 'error' as const } : {}),
     apiKey: (spec.apiKey as string | null | undefined) ?? null,
     headers: spec.headers as Record<string, string> | undefined,

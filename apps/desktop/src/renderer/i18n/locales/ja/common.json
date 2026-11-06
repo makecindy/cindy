@@ -3896,7 +3896,7 @@
         "subscriptionProduct": "{{product}} サブスク",
         "noResults": "一致するモデルがありません",
         "capabilityNote": "{{agent}} は未設定",
-        "refreshAria": "モデル一覧を更新",
+        "refreshAria": "プロバイダーのモデル一覧と同期（一覧にないモデルとその設定を削除）",
         "refreshBuiltinAria": "モデル一覧を更新",
         "refreshingAria": "モデル一覧を更新中…",
         "refreshDone": "モデル一覧を再読み込みしました",

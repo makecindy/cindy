@@ -3938,7 +3938,7 @@
         "subscriptionProduct": "{{product}}-Abonnement",
         "noResults": "Keine passenden Modelle",
         "capabilityNote": "Nicht für {{agent}} konfiguriert",
-        "refreshAria": "Modellliste aktualisieren",
+        "refreshAria": "Modellliste mit dem Anbieter abgleichen (entfernt nicht mehr gelistete Modelle und deren Einstellungen)",
         "refreshBuiltinAria": "Modellliste aktualisieren",
         "refreshingAria": "Modellliste wird aktualisiert…",
         "refreshDone": "Modellliste aktualisiert",

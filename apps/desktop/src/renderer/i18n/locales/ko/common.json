@@ -3896,7 +3896,7 @@
         "subscriptionProduct": "{{product}} 구독",
         "noResults": "일치하는 모델 없음",
         "capabilityNote": "{{agent}} 설정되지 않음",
-        "refreshAria": "모델 목록 새로고침",
+        "refreshAria": "제공자의 모델 목록과 동기화(목록에 없는 모델과 해당 설정 삭제)",
         "refreshBuiltinAria": "모델 목록 새로고침",
         "refreshingAria": "모델 목록 새로고침 중…",
         "refreshDone": "모델 목록을 새로고침했습니다",

@@ -3989,7 +3989,7 @@
         "subscriptionProduct": "Abonnement {{product}}",
         "noResults": "Aucun modèle correspondant",
         "capabilityNote": "Non configuré pour {{agent}}",
-        "refreshAria": "Actualiser la liste des modèles",
+        "refreshAria": "Synchroniser la liste avec le fournisseur (supprime les modèles absents et leurs réglages)",
         "refreshBuiltinAria": "Actualiser la liste des modèles",
         "refreshingAria": "Actualisation de la liste des modèles…",
         "refreshDone": "Liste des modèles actualisée",

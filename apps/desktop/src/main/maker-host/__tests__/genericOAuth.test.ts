@@ -218,7 +218,7 @@ describe('manual model refresh for saved OAuth providers', () => {
   it('accepts a complete empty saved OAuth catalog for snapshot refresh', async () => {
     seedBlob('scoped-account', { access_token: 'fake-oauth-access' });
     const result = await fetchSavedOAuthProviderModels(savedProvider('nous'), 'pi', 'scoped-account', () => true,
-      async () => new Response('{"data":[]}'));
+      async () => new Response('{"data":[]}'), undefined, true);
     expect(result).toEqual({ ok: true, models: [] });
   });
 

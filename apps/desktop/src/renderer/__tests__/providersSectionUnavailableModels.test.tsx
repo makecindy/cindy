@@ -589,6 +589,7 @@ describe('ProvidersSection — 双栏管理', () => {
     }
     expect(fetchModels).toHaveBeenCalledWith(expect.objectContaining({
       savedProviderId: id, authMethod: method, baseUrl, modelsUrl: `${baseUrl}/models`,
+      requireComplete: true,
     }));
     if (method === 'oauth') expect(readCustomProviderKey).not.toHaveBeenCalled();
     expect(updateCustomProvider).toHaveBeenCalledWith(expect.objectContaining({ id,

@@ -3989,7 +3989,7 @@
         "subscriptionProduct": "Assinatura {{product}}",
         "noResults": "Nenhum modelo correspondente",
         "capabilityNote": "Não configurado para {{agent}}",
-        "refreshAria": "Atualizar lista de modelos",
+        "refreshAria": "Sincronizar modelos com o provedor (remove modelos ausentes e suas configurações)",
         "refreshBuiltinAria": "Atualizar lista de modelos",
         "refreshingAria": "Atualizando lista de modelos…",
         "refreshDone": "Lista de modelos atualizada",

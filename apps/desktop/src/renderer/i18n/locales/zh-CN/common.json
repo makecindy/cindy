@@ -3896,7 +3896,7 @@
         "subscriptionProduct": "{{product}} 订阅",
         "noResults": "无匹配模型",
         "capabilityNote": "尚未配置 {{agent}}",
-        "refreshAria": "刷新模型列表",
+        "refreshAria": "同步上游模型列表（移除未返回的模型及其设置）",
         "refreshBuiltinAria": "刷新模型列表",
         "refreshingAria": "正在刷新模型列表…",
         "refreshDone": "模型列表已刷新",
