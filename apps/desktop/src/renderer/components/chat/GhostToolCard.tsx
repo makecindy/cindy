@@ -357,6 +357,10 @@ function GhostCardCanvas({
       cancel: t('chat.ghostCall.taskAutoArchiveCancel'),
     }, () => { if (sessionId) cancelGhostCardTaskAutoArchive(sessionId); });
   }, [prSlotKey, sessionId, t]);
+  // 卡片被原地换成不含任何 PR 标记的内容(card-update):这张卡自己不再有自动归档声明,资格随之撤销。
+  useEffect(() => {
+    if (!prSlotKey) setTaskAutoArchive(false);
+  }, [prSlotKey]);
   // 同一任务里可能有好几张卡:只在这张卡变成(或不再是)可自动归档时改登记,卸载不撤销
   // (离开任务会卸载卡片,那正是要归档的时候)。
   const taskAutoArchiveRef = useRef(false);
