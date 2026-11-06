@@ -126,6 +126,18 @@ describe('live compact spine selection', () => {
     const basic = redactSecrets(`Authorization: Basic ${FAKE_BASIC}`);
     expect(basic).not.toContain(FAKE_BASIC);
     expect(basic).toContain('Authorization: Basic [REDACTED]');
+    // JSON 形态:冒号后带引号,方案名前面还隔着 `"`。
+    const quoted = redactSecrets(`{"Authorization":"Basic ${FAKE_BASIC}"}`);
+    expect(quoted).not.toContain(FAKE_BASIC);
+    expect(quoted).toContain('"Basic [REDACTED]');
+    // Digest 是参数串,不能只打码掉 `username=` 就收工。
+    const digest = redactSecrets(`Authorization: Digest username="alice", response="${FAKE_BASIC}", nonce="abc"`);
+    expect(digest).not.toContain('alice');
+    expect(digest).not.toContain(FAKE_BASIC);
+    expect(digest).toContain('Authorization: Digest [REDACTED]');
+    // 认证头之外的内容不能被这条规则吃掉。
+    const plain = redactSecrets('POST /api/v1/items 201 (authorization flow)');
+    expect(plain).toBe('POST /api/v1/items 201 (authorization flow)');
     // AWS 的会话令牌是另一套键名(`_SESSION_TOKEN`),不带 access_key 后缀。
     const sessionToken = redactSecrets(FAKE_AWS_SESSION_TOKEN);
     expect(sessionToken).not.toContain('fixture-session-0123456789abcdef');

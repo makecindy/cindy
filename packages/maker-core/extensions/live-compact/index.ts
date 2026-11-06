@@ -1164,7 +1164,10 @@ const REDACT_RULES: Array<[RegExp, string]> = [
   [/-----BEGIN [A-Z ]*PRIVATE KEY-----[\s\S]*?-----END [A-Z ]*PRIVATE KEY-----/g, "[REDACTED PRIVATE KEY]"],
   // HTTP 认证头要先单独处理:`Authorization: Basic dXNlcjpwYXNz` 的值不是"键名=值"形态,
   // 键名规则只认到方案名(不足 8 字),base64 里的可复用凭证会原样留下。Bearer 仍由下面那条兜。
-  [/((?:proxy-)?authorization["'`]?\s*[=:]\s*(?:basic|digest|negotiate|token)\s+)(?!\[REDACTED)([A-Za-z0-9+/=._~-]{8,})/gi, "$1[REDACTED]"],
+  // 冒号后可能是引号(JSON `{"Authorization":"Basic …"}`),方案后面也可能是 Digest 那种
+  // `username="…", response="…"` 参数串 —— 两种形态各一条规则。
+  [/((?:proxy-)?authorization["'`]?\s*[=:]\s*["'`]?(?:digest|negotiate)\s+)(?!\[REDACTED)[^\r\n]*/gi, "$1[REDACTED]"],
+  [/((?:proxy-)?authorization["'`]?\s*[=:]\s*["'`]?(?:basic|token)\s+)(?!\[REDACTED)[A-Za-z0-9+/=._~-]{8,}/gi, "$1[REDACTED]"],
   // 键名后允许再跟一个引号:JSON 形态 `{"password":"..."}` 的闭引号夹在键与冒号之间。
   // 键名要覆盖带后缀的写法(`SECRET_KEY`、`refresh_token`),否则 `X_SECRET_KEY=...` 整条不匹配。
   // 值里允许 `[`(密码可能含方括号),只豁免「已经是替换标记」的情况,否则会把标记再啃一口。
