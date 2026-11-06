@@ -3,6 +3,7 @@ import { InvokeScheduler } from "../invokeScheduler.js";
 import { DeviceLinkError } from "../protocol.js";
 import { isBackgroundInvoke, bypassInvokeScheduling, isInteractiveInvoke, resolveInvokePriority } from "../invokePolicy.js";
 import { sharedTaskGuestPeer, sharedTaskHostPeer } from "../sharedTaskPeer.js";
+import { StallDiagnostics } from '../stallDiagnostics.js';
 
 function deferred() {
   let resolve!: () => void;
@@ -17,6 +18,36 @@ const flush = async () => {
 afterEach(() => vi.useRealTimers());
 
 describe("invoke admission", () => {
+  // Incident: queue-full was visible but its 12 occupants and 128 waiters were
+  // not. Unit, real admission boundary; no payload is retained by diagnostics.
+  it('reports who occupies a full physical-host queue before rejecting new work', async () => {
+    let now = 0;
+    const emit = vi.fn();
+    const diagnostics = new StallDiagnostics(emit);
+    const scheduler = new InvokeScheduler(() => false,
+      (_peer, reason, fields) => diagnostics.record('admission', { reason, ...fields }), () => now);
+    const active = deferred();
+    const pending = Array.from({ length: 140 }, (_, n) => scheduler.run('host', false, 30_000,
+      () => active.promise, { channel: n < 12 ? 'local-db:sessions:list' : 'maker:session:messages:view',
+        request: `${n.toString(16).padStart(8, '0')}-0000-0000-0000-000000000000`, source: 'renderer' }).catch(e => e));
+    now = 2_000;
+    for (let n = 0; n < 20; n++) await expect(scheduler.run('host', false, 30_000, async () => 1))
+      .rejects.toMatchObject({ code: 'BACKPRESSURE' });
+    // A request flood cannot suppress the independent transport-failure sample.
+    diagnostics.record('path', { reason: 'ack-timeout' });
+    diagnostics.flush();
+    const rows = emit.mock.calls.map(([message]) => JSON.parse(message.slice('device-link diagnostic '.length)));
+    expect(rows[0]).toMatchObject({ stage: 'admission', reason: 'full', active: 12, queued: 128,
+      running: { top: [{ channel: 'local-db:sessions:list', count: 12, oldestMs: 2000, request: '00000000', source: 'renderer' }] },
+      waiting: { top: [{ count: 128, oldestMs: 2000 }] } });
+    expect(rows.filter(r => r.stage === 'admission')).toHaveLength(4);
+    expect(rows).toContainEqual(expect.objectContaining({ stage: 'path', reason: 'ack-timeout' }));
+    expect(rows.at(-1)).toMatchObject({ stage: 'suppressed', counts: { 'admission:full': 16 } });
+    await expect(scheduler.run('other', false, 30_000, async () => 42)).resolves.toBe(42);
+    scheduler.clear(new DeviceLinkError('NOT_CONNECTED', 'stop'));
+    active.resolve(); await Promise.all(pending);
+  });
+
   // A pressured peer previously refilled all four background slots. Exercise
   // production admission with deferred reads: foreground/other peers still run.
   it("reduces pressured background concurrency and recovers after delivery", async () => {
