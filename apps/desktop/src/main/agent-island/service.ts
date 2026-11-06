@@ -101,7 +101,7 @@ import {
   type AgentIslandCompanionIdentity,
 } from './companionIdentity.js';
 import { createLogger } from '../logger.js';
-import { t } from '../i18n.js';
+import { t, tCount } from '../i18n.js';
 import { isAppContentWindow, isFocusedAppContentWindow } from '../windowFocusClassifier.js';
 import {
   acknowledgeAgentIslandSessionRead,
@@ -2219,6 +2219,9 @@ export class AgentIslandService {
         needsInput: t('agentIsland.native.needsInput'),
         running: t('agentIsland.native.running'),
         completed: t('agentIsland.native.completed'),
+        runningCount: (count) => tCount('agentIsland.native.liveActivityRunning', count),
+        alsoRunningCount: (count) => tCount('agentIsland.native.liveActivityAlsoRunning', count),
+        waitingCount: (count) => tCount('agentIsland.native.liveActivityWaiting', count),
       },
     ));
     if (!this.enabled) {

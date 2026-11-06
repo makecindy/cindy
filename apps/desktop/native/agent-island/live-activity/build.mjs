@@ -20,6 +20,8 @@ const DEPLOYMENT_TARGET = 'arm64-apple-macos27.3';
 const MODULE_NAME = 'CindyAgentActivity';
 const EXTENSION_NAME = 'CindyAgentActivity';
 export const AGENT_ACTIVITY_ADDON_RELATIVE_PATH = 'tools/agent-island/cindy-agent-activity.node';
+/** Matches `silentAlertSoundName` in CindyAgentActivityController.swift. */
+const SILENT_ALERT_SOUND = 'cindy-live-activity-silent.caf';
 
 function log(message) {
   console.log(`[agent-activity] ${message}`);
@@ -141,6 +143,39 @@ function compileMascotAssets(resources) {
 }
 
 /**
+ * Alerts that expand the activity for a new request stay silent: Agent Island and
+ * notifications already play Cindy's sounds. ActivityKit only takes a named sound
+ * from the app bundle, so ship 0.1 s of silence.
+ */
+function writeSilentAlertSound(resources) {
+  const work = fs.mkdtempSync(path.join(os.tmpdir(), 'cindy-agent-activity-sound-'));
+  try {
+    const sampleRate = 8000;
+    const samples = sampleRate / 10;
+    const wav = Buffer.alloc(44 + samples * 2);
+    wav.write('RIFF', 0);
+    wav.writeUInt32LE(36 + samples * 2, 4);
+    wav.write('WAVEfmt ', 8);
+    wav.writeUInt32LE(16, 16);
+    wav.writeUInt16LE(1, 20); // PCM
+    wav.writeUInt16LE(1, 22); // mono
+    wav.writeUInt32LE(sampleRate, 24);
+    wav.writeUInt32LE(sampleRate * 2, 28);
+    wav.writeUInt16LE(2, 32);
+    wav.writeUInt16LE(16, 34);
+    wav.write('data', 36);
+    wav.writeUInt32LE(samples * 2, 40);
+    const input = path.join(work, 'silent.wav');
+    fs.writeFileSync(input, wav);
+    execFileSync('afconvert', ['-f', 'caff', '-d', 'LEI16', input, path.join(resources, SILENT_ALERT_SOUND)], {
+      stdio: 'inherit',
+    });
+  } finally {
+    fs.rmSync(work, { recursive: true, force: true });
+  }
+}
+
+/**
  * Installs the widget extension into a packaged `.app` and declares Live Activity
  * support in its Info.plist. Local builds are ad-hoc signed; release signing must
  * sign the `.appex` with `extension.entitlements` (App Sandbox) before the app.
@@ -205,6 +240,7 @@ export function installAgentActivityExtension(appPath, arch = process.arch) {
     ['--force', '--sign', '-', '--entitlements', path.join(source, 'extension.entitlements'), appex],
     { stdio: 'inherit' },
   );
+  writeSilentAlertSound(path.join(appPath, 'Contents/Resources'));
   plistSet(appPlist, 'NSSupportsLiveActivities', 'bool', 'true');
   log(`extension -> ${appex} (${appId}.agent-activity)`);
   return true;

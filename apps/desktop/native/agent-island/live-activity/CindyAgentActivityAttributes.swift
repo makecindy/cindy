@@ -9,11 +9,14 @@ struct CindyAgentActivityAttributes: ActivityAttributes {
     /// `running`, `attention` (blocked on the user) or `completed`.
     var status: String
     var runningCount: Int
+    /// Tasks waiting on the user (question / permission).
     var attentionCount: Int
     /// Title of the task the island would surface first.
     var title: String
     /// Localized status line, prepared by the main process.
     var detail: String
+    /// Localized secondary line ("2 more tasks running"); empty when nothing to add.
+    var summary: String
     /// Agent Island mascot skin id; the extension falls back to `cindy`.
     var mascot: String
   }

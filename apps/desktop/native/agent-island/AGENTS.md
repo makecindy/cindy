@@ -111,6 +111,11 @@ pnpm --filter desktop preview:island-mascots
 - **扩展里的界面**：图片只认编译进 Asset Catalog 的（`build.mjs` 用 `actool` 把 `mascots/` 编成
   `Assets.car`），从文件读的 `NSImage` 会渲染成灰块；灵动岛与菜单栏药丸背景恒为深色，文字用白色而
   不是 `.primary`；菜单栏会省略只有文字的紧凑右侧区域，状态位要带一个图标。
+  颜色与计数格式跟我们的岛一致：运行中橙、等你处理青、未读完成绿，计数写成「等你处理 · 运行中」。
+- **提醒展开**：只有「等你处理的任务变多」或「转为已完成」时带 `AlertConfiguration` 更新，系统会把活动
+  短暂展开（菜单栏里是药丸下方的展开卡片）；计数下降和普通进度更新不提醒，首次发起也不提醒。提醒音用
+  应用 `Resources` 里的静音 `cindy-live-activity-silent.caf`（`build.mjs` 生成），声音仍由我们的岛和通知负责。
+  系统会限制提醒频率，连续提醒时后一次可能延迟出现。
 - **构建条件**：`live-activity/build.mjs` 需要 macOS 27.3 SDK 与 Apple 芯片，否则整段跳过、应用不带
   此功能；`CINDY_LIVE_ACTIVITY=0` 可主动跳过。本地验证：
   `DEVELOPER_DIR=/Applications/Xcode-beta.app/Contents/Developer node build.mjs addon <out.node> arm64`，

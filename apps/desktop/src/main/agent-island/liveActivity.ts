@@ -27,7 +27,18 @@ export interface AgentIslandLiveActivityState {
   attentionCount: number;
   title: string;
   detail: string;
+  /** The rest of the work, e.g. "2 more tasks running"; empty when the title says it all. */
+  summary: string;
   mascot: string;
+}
+
+export interface AgentIslandLiveActivityStrings {
+  needsInput: string;
+  running: string;
+  completed: string;
+  runningCount: (count: number) => string;
+  alsoRunningCount: (count: number) => string;
+  waitingCount: (count: number) => string;
 }
 
 /**
@@ -37,18 +48,36 @@ export interface AgentIslandLiveActivityState {
 export function agentIslandLiveActivityStateFromPill(
   pill: AgentIslandPillSnapshot,
   mascot: string,
-  strings: { needsInput: string; running: string; completed: string },
+  strings: AgentIslandLiveActivityStrings,
 ): AgentIslandLiveActivityState | null {
-  const base = {
-    runningCount: pill.runningSessionCount,
-    attentionCount: pill.pendingInteractionCount,
-    title: pill.priorityCompactTitle,
-    mascot,
-  };
-  if (pill.pendingInteractionCount > 0) return { ...base, status: 'attention', detail: strings.needsInput };
-  if (pill.runningSessionCount > 0) return { ...base, status: 'running', detail: strings.running };
-  if (pill.unreadCompletedCount > 0) return { ...base, status: 'completed', detail: strings.completed };
+  const running = pill.runningSessionCount;
+  const waiting = pill.pendingInteractionCount;
+  const base = { runningCount: running, attentionCount: waiting, title: pill.priorityCompactTitle, mascot };
+  if (waiting > 0) {
+    const summary = running > 0
+      ? strings.alsoRunningCount(running)
+      : waiting > 1 ? strings.waitingCount(waiting) : '';
+    return { ...base, status: 'attention', detail: strings.needsInput, summary };
+  }
+  if (running > 0) {
+    return { ...base, status: 'running', detail: strings.running, summary: running > 1 ? strings.runningCount(running) : '' };
+  }
+  if (pill.unreadCompletedCount > 0) return { ...base, status: 'completed', detail: strings.completed, summary: '' };
   return null;
+}
+
+/**
+ * Briefly expands the activity when something new needs the user: another task asks
+ * for input, or work finished. Count drops and progress updates stay quiet.
+ */
+function alertFor(
+  previous: AgentIslandLiveActivityState | null,
+  next: AgentIslandLiveActivityState,
+): { title: string; body: string } | undefined {
+  const asksMore = next.attentionCount > (previous?.attentionCount ?? 0);
+  const finished = next.status === 'completed' && previous !== null && previous.status !== 'completed';
+  if (!asksMore && !finished) return undefined;
+  return { title: next.title, body: next.summary ? `${next.detail} · ${next.summary}` : next.detail };
 }
 
 interface NativeAgentActivity {
@@ -88,6 +117,7 @@ function sameState(a: AgentIslandLiveActivityState | null, b: AgentIslandLiveAct
     && a.attentionCount === b.attentionCount
     && a.title === b.title
     && a.detail === b.detail
+    && a.summary === b.summary
     && a.mascot === b.mascot;
 }
 
@@ -203,7 +233,9 @@ export class AgentIslandLiveActivity {
       this.applied = null;
       return;
     }
-    const reply = this.call({ action: 'sync', appName: this.deps.appName, state: target });
+    // Only an update can alert; a fresh start already shows up on its own.
+    const alert = this.active ? alertFor(this.applied ?? null, target) : undefined;
+    const reply = this.call({ action: 'sync', appName: this.deps.appName, state: target, alert });
     if (reply?.ok) {
       if (reply.result === 'started') log.info('Live Activity started');
       this.active = true;

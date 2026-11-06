@@ -5,13 +5,23 @@ import Foundation
 /// one activity: started while a window is visible (ActivityKit refuses starts
 /// from a process without one, `visibility`), then only updated, and ended when
 /// no task needs it. Called on the Electron main thread.
+private struct Alert: Decodable {
+  var title: String
+  var body: String
+}
+
 private struct Command: Decodable {
   var action: String
   var appName: String?
   var state: CindyAgentActivityAttributes.ContentState?
+  /// `sync` only: briefly expand the activity (Dynamic Island / menu bar) for a new request.
+  var alert: Alert?
   /// `end` only: block up to a second so quitting does not leave the activity behind.
   var wait: Bool?
 }
+
+/// Silent sound shipped in the app's Resources by build.mjs.
+private let silentAlertSoundName = "cindy-live-activity-silent.caf"
 
 private enum ControllerState {
   static var activity: Activity<CindyAgentActivityAttributes>?
@@ -40,8 +50,16 @@ public func cindyAgentActivityApply(_ input: UnsafePointer<CChar>) -> UnsafeMuta
     }
     let content = ActivityContent(state: state, staleDate: nil)
     if let activity = ControllerState.activity, activity.activityState == .active {
-      Task { await activity.update(content) }
-      return reply(["ok": true, "result": "updated"])
+      let alert = command.alert.map {
+        // Silent: Agent Island and notifications already play Cindy's own sounds.
+        AlertConfiguration(
+          title: LocalizedStringResource(stringLiteral: $0.title),
+          body: LocalizedStringResource(stringLiteral: $0.body),
+          sound: .named(silentAlertSoundName)
+        )
+      }
+      Task { await activity.update(content, alertConfiguration: alert) }
+      return reply(["ok": true, "result": alert == nil ? "updated" : "alerted"])
     }
     ControllerState.activity = nil
     do {

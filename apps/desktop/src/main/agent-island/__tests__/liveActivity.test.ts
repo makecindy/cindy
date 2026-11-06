@@ -2,7 +2,8 @@
 // ActivityKit refuses a start from a process without a visible window (`visibility`,
 // verified on macOS 27.3) and accepts later background updates, so the controller must
 // retry a refused start instead of dropping the feature, clear activities a crashed run
-// left behind, and coalesce island updates to the native layer. Unit tier: a fake addon
+// left behind, and coalesce island updates to the native layer. Alerts expand the system
+// island, so only a new request for the user or finished work may raise one. Unit tier: a fake addon
 // stands in for ActivityKit; fake timers, no real waits.
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
@@ -13,17 +14,22 @@ vi.mock('../../logger.js', () => ({ createLogger: () => ({ info: vi.fn(), warn: 
 
 const { AgentIslandLiveActivity } = await import('../liveActivity.js');
 
-function state(runningCount: number, status: AgentIslandLiveActivityState['status'] = 'running'): AgentIslandLiveActivityState {
-  return { status, runningCount, attentionCount: 0, title: 'Task', detail: 'Running', mascot: 'cindy' };
+function state(
+  runningCount: number,
+  status: AgentIslandLiveActivityState['status'] = 'running',
+  attentionCount = 0,
+): AgentIslandLiveActivityState {
+  return { status, runningCount, attentionCount, title: 'Task', detail: status, summary: '', mascot: 'cindy' };
 }
 
 function fakeAddon(replies: Array<Record<string, unknown>> = []) {
-  const calls: Array<{ action: string; state?: AgentIslandLiveActivityState }> = [];
+  type Call = { action: string; state?: AgentIslandLiveActivityState; alert?: { title: string; body: string } };
+  const calls: Call[] = [];
   return {
     calls,
     addon: {
       apply(command: string) {
-        const parsed = JSON.parse(command) as { action: string; state?: AgentIslandLiveActivityState };
+        const parsed = JSON.parse(command) as Call;
         calls.push(parsed);
         if (parsed.action === 'sync') return JSON.stringify(replies.shift() ?? { ok: true, result: 'updated' });
         return JSON.stringify({ ok: true, result: 'ended' });
@@ -102,6 +108,25 @@ describe('AgentIslandLiveActivity', () => {
     live.sync(state(4));
     await vi.advanceTimersByTimeAsync(1000);
     expect(fake.calls).toHaveLength(5);
+  });
+
+  it('alerts only when a task newly needs the user or work finishes', async () => {
+    const fake = fakeAddon([{ ok: true, result: 'started' }]);
+    const live = controller(fake.addon);
+    live.sync(state(1, 'attention', 1));
+    await vi.advanceTimersByTimeAsync(0);
+    for (const next of [state(2, 'attention', 1), state(1, 'attention', 2), state(1), state(0, 'completed')]) {
+      live.sync(next);
+      await vi.advanceTimersByTimeAsync(1000);
+    }
+
+    expect(fake.calls.filter((call) => call.action === 'sync').map((call) => call.alert?.body)).toEqual([
+      undefined, // a start shows up on its own
+      undefined, // more running work
+      'attention',
+      undefined, // answered
+      'completed',
+    ]);
   });
 
   it('never loads the addon before macOS 27.3', () => {
