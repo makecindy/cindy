@@ -424,3 +424,20 @@ describe('MarkdownRenderer workspace-relative media in local sessions', () => {
     expect(resolvePathBatch).not.toHaveBeenCalled();
   });
 });
+
+// Plugin readme rule (FORGE_GUIDE §2「详细介绍」): only host-provided package images render. The renderer
+// CSP allows remote images, so this allowlist is the only thing keeping author-controlled URLs from loading.
+describe('MarkdownRenderer allowlisted images', () => {
+  it('renders only images the resolver maps and never loads remote or inline data images', () => {
+    const resolved = 'data:image/png;base64,UEtH';
+    const { container } = render(
+      <MarkdownRenderer
+        workingDir=""
+        allowPrivilegedLinks={false}
+        resolveImageSrc={(src) => (src === 'assets/shot.png' ? resolved : null)}
+        content={'![ok](assets/shot.png) ![remote](https://tracker.example/p.png) ![inline](data:image/png;base64,AAAA)'}
+      />,
+    );
+    expect([...container.querySelectorAll('img')].map((img) => img.getAttribute('src'))).toEqual([resolved]);
+  });
+});

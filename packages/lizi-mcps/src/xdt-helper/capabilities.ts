@@ -88,6 +88,7 @@ export const CAPABILITIES: readonly CapabilityEntry[] = [
       '用户本人能对自己的任务、定时任务、项目、伙伴做的操作，Agent 有哪些对应工具、哪些能管到另一台电脑。',
     detail: [
       '【任务链接】已知任务 id 时调用 history/get_task_digest，返回的 sessionUrl 可直接写成 [任务标题](sessionUrl)。list_sessions、search_chat_history、get_chat_history 的任务元数据也附带 sessionUrl，含所属电脑，支持桌面与手机打开。',
+      '【邀请协助当前任务】control 类 create_shared_task_invitation / get_shared_task_state 生成原生共享邀请或查询状态；只针对调用工具的原任务，在任务宿主执行，手机或同账号另一台电脑控制该任务时也适用。访客能读完整历史、附件与工具结果，使用同一 Agent 和既有任务权限；链接可转发，不绑定收件人。工具不发通知、不另建任务，不能指定其他任务。将回执中的 invitationLink 原样交给发送流程；通知插件负责收件人、预览与发送确认。结果未知时先查询状态再决定是否重试，不自动重复。',
       '【机器】cindy_helper 的顶层工具 list_machines（不经 list_tools）：看账号下所有电脑的实时 CPU、可用内存、磁盘、空闲时长和在跑任务，以及这台电脑配置的 SSH 主机；只报事实，放哪台由你决定。',
       '【原则】用户本人能做的操作(含跨电脑)，Agent 也应有对应工具；是否执行由权限档与自动审核决定。数据保存在各自的电脑上：下结论「没有 / 没人在跟」之前，先确认查的是不是只有本机。',
       '【任务】cindy_helper history 类：list_sessions / search_chat_history(device=local|all|<deviceId>)、get_chat_history(deviceId::sessionId)、get_task_digest(一件任务的 ≤2KB 摘要：状态、已持续分钟、最后的要求与回答、待答问题、错误、模型路线与建议换到的下一条、PR、排队数；deviceId::sessionId 只读)、list_history_devices 可跨电脑；list_workdirs、list_session_queue 仅本机。handoff 类 send_to_session：发给既有任务可跨电脑(deviceId::sessionId)，新建任务仅本机。control 类 archive_sessions / unarchive_sessions 可跨电脑(deviceId::sessionId，单次限定一台电脑)；改名、移动、标签、排队消息、插话、停止、运行设置、list_projects 与项目增删改仅本机。',
@@ -352,7 +353,7 @@ export const CAPABILITIES: readonly CapabilityEntry[] = [
     title: '远程连接(手机 / 其他电脑控制,SSH 远端主机)',
     oneLiner: '同账号的手机与其他电脑可远程操控这台桌面上的任务;也可经 SSH 让 agent 在远端主机上运行。',
     detail: [
-      '入口:设置 →「远程连接」。同一 Cindy 账号登录的设备自动出现,无需手动配对;每台设备有「我控制它」与「允许它控制本机」两个独立开关,本机另有允许被控制的总开关。手机 App 只做控制端,任务与数据都在被控电脑上。',
+      '入口:设置 →「远程连接」。同一 Cindy 账号登录的设备自动出现,无需手动配对;每台设备卡上按方向分两行:「我可以:控制它」与「它可以:控制本机」,两项各自独立开关,本机另有允许被控制的总开关。手机 App 只做控制端,任务与数据都在被控电脑上。',
       '控制端可查看与推进被控电脑上的任务(发消息、审批、切模型等),账号密钥与全局设置等不开放给控制端。主列表标题「全部任务 ▾」可切换只看本机或某台远程电脑。',
       'SSH 远端主机:在同一页添加主机(也读取 ~/.ssh/config),可在远端安装 Claude Code / Codex / Pi(未安装时首条消息自动安装)并新建远端任务,agent 进程与文件都在远端。',
       'agent 侧跨电脑能力(查任务、给另一台电脑的任务发消息、管定时任务等)见 self-management。',

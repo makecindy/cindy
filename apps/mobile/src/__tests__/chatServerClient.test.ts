@@ -5,7 +5,7 @@ import { botGroupNewMessageCount } from '@cindy/maker-shared/botGroupPresentatio
 import { createChatHistory, type ChatHistoryState } from '@cindy/maker-shared/chat-history';
 import { chatGroupView, chatRoomRow, chatReadAt, createChatServerClient, type ChatMessage, type ChatPage, type ChatRoom, type ChatSnapshot } from '@/chat/chatServerClient';
 import type { ChatHistory } from '@cindy/maker-shared/chat-history';
-import { botGroupQuoteFromMessage, resolveBotGroupQuote, buildBotGroupQuoteCard, buildBotGroupTaskCard, botGroupProcessCard } from '@cindy/maker-shared/botGroupChat';
+import { buildBotGroupCapabilityNotice, botGroupQuoteFromMessage, resolveBotGroupQuote, buildBotGroupQuoteCard, buildBotGroupTaskCard, botGroupProcessCard } from '@cindy/maker-shared/botGroupChat';
 import { orderedBotGroups } from '@/session/botGroupRemote';
 const id = (n: number) => `00000000-0000-4000-8000-${String(n).padStart(12, '0')}`;
 const room = (n = 1, state = 'joined'): ChatRoom => ({ id: id(n), name: 'Discussion', kind: 'group', state, archived: false,
@@ -111,6 +111,36 @@ describe('direct group plans', () => {
     const next = await client.older(id(1), { ...first, before: '21' });
     expect(request).toHaveBeenCalledWith(`/conversations/${id(1)}/plans?ids=${id(40)},${id(41)}`);
     expect(chatGroupView(next, id(10)).plans[0]).toMatchObject({ id: id(41), status: 'done' });
+  });
+  it('projects future-skip support and sends only a pending position while the current bot runs', async () => {
+    const { client, state, request } = fixture();
+    Object.assign(state.plan, { kind: 'talk', status: 'running', current_step: 0, supportsPendingSkip: true,
+      activeExecution: { id: id(50), status: 'running' } });
+    state.plan.steps[0].status = 'running';
+    state.plan.steps.push({ ...state.plan.steps[0], position: 1, status: 'pending' });
+    const page = await client.load(id(1));
+    expect(chatGroupView(page, id(10)).plans[0].supportsPendingSkip).toBe(true);
+    await client.actPlan(id(1), page.plans![0], { action: 'skip', position: 1 }, 'future-skip');
+    expect(request).toHaveBeenLastCalledWith(`/conversations/${id(1)}/plans/${id(40)}`, 'POST',
+      { action: 'skip', position: 1, expectedRevision: 3, operationId: 'future-skip' }, undefined, undefined);
+    await expect(client.actPlan(id(1), { ...page.plans![0], supportsPendingSkip: undefined },
+      { action: 'skip', position: 1 }, 'old-server')).rejects.toThrow('PLAN_CLOSED');
+  });
+  it('projects the exact queued attempt and sends it with the displayed revision', async () => {
+    const { client, state, request } = fixture();
+    Object.assign(state.plan, { kind: 'talk', status: 'running', current_step: 0,
+      activeExecution: { id: id(50), status: 'queued' } });
+    state.plan.steps[0].status = 'running';
+    const page = await client.load(id(1));
+    expect(chatGroupView(page, id(10)).plans[0].steps[0]).toMatchObject({ executionId: id(50), executionStatus: 'queued' });
+    await client.actPlan(id(1), page.plans![0], { action: 'skip', position: 0, executionId: id(50) }, 'skip');
+    expect(request).toHaveBeenLastCalledWith(`/conversations/${id(1)}/plans/${id(40)}`, 'POST',
+      { action: 'skip', position: 0, executionId: id(50), expectedRevision: 3, operationId: 'skip' }, undefined, undefined);
+    await expect(client.actPlan(id(1), { ...page.plans![0], activeExecution: { id: id(50), status: 'running' } },
+      { action: 'skip', position: 0, executionId: id(50) }, 'claimed')).rejects.toThrow('TURN_ALREADY_STARTED');
+    await expect(client.actPlan(id(1), { ...page.plans![0], kind: 'work' },
+      { action: 'skip', position: 0, executionId: id(50) }, 'work')).rejects.toThrow('PLAN_CLOSED');
+    expect(request.mock.calls.filter(([, method]) => method === 'POST')).toHaveLength(1);
   });
   it('reassigns only eligible work steps and refuses talk-plan edits', async () => {
     const { client, state, request } = fixture();
@@ -715,7 +745,7 @@ it('reads Cindy preset identity without inferring from names and retains known I
   const actors = [1, 2, 3, 4].map(n => ({ id: id(n), externalId: `bot-${n}`, kind: 'bot', name: 'Cindy', avatar: null, homeDeviceId: 'mac' }));
   const ids = await createChatServerClient(request as any).cindyCompanionIds(actors, ['bot-4']);
   expect(ids).toEqual(['bot-1', 'bot-2', 'bot-4']);
-  expect(request.mock.calls.every(call => call[0] === '/preferences' && call[1] === 'GET')).toBe(true);
+  expect(request.mock.calls.every(call => call[0] === '/preferences?key=companion.profile.v1' && call[1] === 'GET')).toBe(true);
 });
 
 // Unit: group and thread projections retain the optional process locator while
@@ -824,14 +854,17 @@ it.each([{ status: 403, code: 'PERMISSION_DENIED' }, { status: 404, code: 'CONVE
 // root summaries, explicit following, or trustworthy thread-share source resolution.
 it('projects authoritative reply counts, distinct responders, unread mentions and resolved shares', () => {
   const root = { ...message(20), replyCount: 17 };
-  const reply = { ...message(21), threadRootId: root.id, mentions: [id(11)] };
-  const share = { ...message(22), content: [{ type: 'card', namespace: 'cindy.thread-share', schemaRevision: 1,
+  const reply = { ...message(21), threadRootId: root.id, mentions: [id(11)], mentionAudience: 'bots' as const };
+  const share = { ...message(22), mentions: [id(10)], content: [{ type: 'card', namespace: 'cindy.thread-share', schemaRevision: 1,
     data: { messageId: reply.id, threadRootId: root.id }, fallback: 'Untrusted old text' }] };
   const s = { ...snapshot(), messages: [share, reply, root], reads: [] };
   const view = chatGroupView({ snapshot: s, messages: [root, share], before: null }, id(11));
   expect(view.messages[0]).toMatchObject({ replyCount: 17, threadUnread: { count: 1, mentioned: true },
     threadPreview: { responders: [{ authorBotId: reply.authorId }], replies: [{ id: reply.id }] } });
-  expect(view.messages[1]).toMatchObject({ content: '', threadShare: { status: 'available', content: '21', sharedByAuthor: true } });
+  // PR #8818: source identity travels with source text; delivery recipients stay intact.
+  expect(view.messages[1]).toMatchObject({ content: '', mentions: { all: false, botIds: [id(10)] },
+    threadShare: { status: 'available', content: '21', sharedByAuthor: true,
+      mentions: { all: false, allBots: true, botIds: [id(11)] } } });
   expect(chatGroupView({ snapshot: { ...s, reads: undefined }, messages: [root], before: null }, id(11)).messages[0].threadUnread).toBeUndefined();
   expect(chatGroupView({ snapshot: s, messages: [share], before: null, threadSources: { [reply.id]: null } }, id(11)).messages[0])
     .toMatchObject({ content: '', threadShare: { status: 'unavailable', content: '', attachments: [] } });
@@ -973,4 +1006,15 @@ describe('personal mask transport', () => {
     const page = { snapshot: snapshot(), messages: [{ ...message(20), maskAttribution: attribution }], before: null };
     expect(chatGroupView(page, id(10)).messages[0]).toMatchObject({ authorKind: 'user', isSelf: true, maskAttribution: attribution });
   });
+});
+
+// Unit: direct mobile reads must match the Desktop projection; human-authored
+// copies remain ordinary messages and the original fallback stays readable.
+it.each(['bot', 'human'] as const)('projects a capability notice only from its companion author (%s)', kind => {
+  const item = { ...message(50), author: { kind, name: 'Writer' }, content: [buildBotGroupCapabilityNotice('ATTACHMENTS_UNAVAILABLE', 'Some attachments were not delivered')] };
+  const page = { snapshot: snapshot(), messages: [item], hasMore: false, executions: [], plans: [] } as unknown as ChatPage;
+  const view = chatGroupView(page, id(11));
+  expect(view.messages[0].kind).toBe(kind === 'bot' ? 'notice' : 'message');
+  expect(view.messages[0].capabilityNoticeCode).toBe(kind === 'bot' ? 'ATTACHMENTS_UNAVAILABLE' : undefined);
+  expect(view.messages[0].content).toBe('Some attachments were not delivered');
 });

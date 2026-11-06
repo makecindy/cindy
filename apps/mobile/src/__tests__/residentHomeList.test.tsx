@@ -5,14 +5,22 @@ import { afterEach, expect, it, vi } from 'vitest';
 Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
 import { homeRowPropsEqual } from '../session/homeRowPropsEqual';
 import { ResidentHomeList, ResidentHomeListProvider, useResidentHomeList, useSessionPaneLayout } from '../session/ResidentHomeList';
+import { SessionRightSpinner } from '../session/SessionRightSpinner';
+import { CompanionPresenceRing } from '../session/CompanionPresenceRing';
+import { AnimationVisibilityProvider } from '../hooks/useLoopingAnimation';
 
 const state = vi.hoisted(() => ({
+  appState: 'active', appListeners: new Set<(value: string) => void>(), loops: new Set<object>(),
   pan: {} as Record<string, (...args: any[]) => any>, divider: null as any,
   deferMeasure: false, measurements: [] as (() => void)[],
-  platform: 'android', reduceMotion: true, segments: ['devices'], width: 1000, anchorWidth: 1000, mounts: 0, unmounts: 0,
+  platform: 'android', reduceMotion: true as boolean | null, segments: ['devices'], width: 1000, anchorWidth: 1000, mounts: 0, unmounts: 0,
 }));
 vi.mock('react-i18next', () => ({ useTranslation: () => ({ t: (key: string) => key }) }));
-vi.mock('@/theme', () => ({ useTheme: () => ({ colors: { textSecondary: 'gray', borderStrong: 'gray' } }) }));
+vi.mock('@/theme', async () => ({
+  ...await import('../theme/tokens'),
+  useTheme: () => ({ colors: { textSecondary: 'gray', textTertiary: 'gray', borderStrong: 'gray', statusAccent: 'orange' } }),
+}));
+vi.mock('lucide-react-native', () => ({ LoaderCircle: () => <i data-spinner /> }));
 vi.mock('expo-router', () => ({ useSegments: () => state.segments }));
 vi.mock('@/hooks/useReduceMotion', () => ({ useReduceMotionEnabled: () => state.reduceMotion }));
 vi.mock('@/platform/AdaptiveWindowContext', () => ({ useAdaptiveWindow: () => ({
@@ -26,6 +34,29 @@ vi.mock('../session/remoteSessionStore', () => ({
 vi.mock('react-native', async () => {
   const React = await import('react');
   return {
+    AppState: {
+      get currentState() { return state.appState; },
+      addEventListener: (_event: string, listener: (value: string) => void) => {
+        state.appListeners.add(listener);
+        return { remove: () => state.appListeners.delete(listener) };
+      },
+    },
+    Easing: { linear: (v: number) => v, ease: (v: number) => v, in: (fn: unknown) => fn, inOut: (fn: unknown) => fn },
+    Animated: {
+      Value: class {
+        constructor(public value: number) {}
+        setValue(value: number) { this.value = value; }
+        stopAnimation() {}
+        interpolate() { return this; }
+      },
+      View: ({ children, testID }: any) => <div data-testid={testID}>{children}</div>,
+      timing: () => ({ start() {}, stop() {} }),
+      sequence: (steps: unknown[]) => steps,
+      loop: () => {
+        const loop = { start: () => state.loops.add(loop), stop: () => state.loops.delete(loop) };
+        return loop;
+      },
+    },
     StyleSheet: { create: (v: any) => v },
     Platform: { get OS() { return state.platform; } },
     PanResponder: { create: (handlers: any) => { state.pan = handlers; return { panHandlers: {} }; } },
@@ -52,6 +83,9 @@ afterEach(() => {
   state.mounts = 0; state.unmounts = 0;
   state.deferMeasure = false; state.measurements = [];
   state.divider = null; state.pan = {};
+  state.appState = 'active';
+  expect(state.loops.size).toBe(0);
+  expect(state.appListeners.size).toBe(0);
 });
 
 // Unit regression: new-task routes must keep the existing sidebar usable. Older
@@ -149,7 +183,8 @@ it('drags both panes together, clamps the bounds and retains width through route
 const ListProbe = memo(function ListProbe({ onSelect }: { onSelect(): void }) {
   const [position, setPosition] = useState(0);
   useEffect(() => { state.mounts++; return () => { state.unmounts++; }; }, []);
-  return <><button data-scroll onClick={() => setPosition(240)}>scroll</button>
+  return <><SessionRightSpinner /><CompanionPresenceRing active />
+    <button data-scroll onClick={() => setPosition(240)}>scroll</button>
     <button data-select onClick={onSelect}>{position}</button></>;
 }, homeRowPropsEqual);
 function Scene({ detail, homeSelect, detailSelect }: any) {
@@ -193,6 +228,71 @@ it('hides the resident list and pauses row subscriptions on other routes without
   expect(host.querySelector('[data-host]')?.getAttribute('data-pointer')).toBe('none');
   expect(host.querySelector('[data-subscriptions]')?.getAttribute('data-subscriptions')).toBe('false');
   expect(state.mounts).toBe(1); expect(state.unmounts).toBe(0);
+});
+
+// Unit regression: the real resident host kept native spinner/ring loops alive
+// behind opacity:0 (Android idle trace: ~480 animation callbacks / 8 seconds).
+// Existing coverage checked subscriptions and identity, never native animation
+// lifetime. Minimal input: a running row, then navigate to a hidden route.
+// Observe native animation scheduling plus retained row/scroll state; also cover
+// foreground restoration and a visible wide sidebar (which must keep animating).
+it('pauses native loops while hidden or backgrounded and resumes the same retained rows', () => {
+  state.reduceMotion = false;
+  const host = document.createElement('div'), root = createRoot(host); roots.push(root);
+  const render = () => act(() => root.render(<Scene detail={false} homeSelect={() => {}} />));
+  const foreground = (value: string) => act(() => {
+    state.appState = value;
+    state.appListeners.forEach(listener => listener(value));
+  });
+  render();
+  expect(state.loops.size).toBe(2);
+  const row = host.querySelector('[data-select]');
+  act(() => (host.querySelector('[data-scroll]') as HTMLButtonElement).click());
+  state.segments = ['settings']; render();
+  expect(state.loops.size).toBe(0);
+  state.segments = ['sessions', '[sessionId]']; render();
+  expect(state.loops.size).toBe(2); // Wide, visible sidebar.
+  state.width = 430; render();
+  expect(state.loops.size).toBe(0);
+  state.segments = ['devices']; render();
+  expect(state.loops.size).toBe(2);
+  foreground('background');
+  expect(state.loops.size).toBe(0);
+  foreground('active');
+  expect(state.loops.size).toBe(2);
+  expect(host.querySelector('[data-select]')).toBe(row);
+  expect(row?.textContent).toBe('240');
+  expect(state.mounts).toBe(1); expect(state.unmounts).toBe(0);
+});
+
+// Same native animation boundary, for inline iOS home / nested surfaces rather
+// than the Android root host. Preserve reduced-motion fallback and remove a
+// finished ring even when its exit animation is paused offscreen. Unit tier.
+it('keeps nested hidden surfaces and reduced-motion states static without retaining a finished ring', () => {
+  state.reduceMotion = false;
+  const host = document.createElement('div'), root = createRoot(host); roots.push(root);
+  const render = (visible: boolean, active = true) => act(() => root.render(
+    <AnimationVisibilityProvider visible={visible}>
+      <AnimationVisibilityProvider visible>
+        <SessionRightSpinner /><CompanionPresenceRing active={active} />
+      </AnimationVisibilityProvider>
+    </AnimationVisibilityProvider>,
+  ));
+  render(true);
+  expect(state.loops.size).toBe(2);
+  for (const preference of [null, true]) {
+    state.reduceMotion = preference; render(true);
+    expect(state.loops.size).toBe(0);
+    expect(host.querySelector('[data-spinner]')).not.toBeNull();
+    expect(host.querySelector('[data-testid="companion.presenceRing"]')).not.toBeNull();
+  }
+  state.reduceMotion = false; render(true);
+  expect(state.loops.size).toBe(2);
+  render(false, false);
+  expect(state.loops.size).toBe(0);
+  expect(host.querySelector('[data-testid="companion.presenceRing"]')).toBeNull();
+  render(true, false);
+  expect(state.loops.size).toBe(1);
 });
 
 // Regression: Duo portrait → landscape briefly removed the task list while its

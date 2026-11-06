@@ -152,6 +152,8 @@ export interface HostedStartInput {
   /** Host-derived path, scoped to controller/relay/application; never from wire. */
   localApplicationStorage?: string;
   groupProviderId?: string;
+  /** Missing/expired group speed policy selects ordinary speed, not an unusable task. */
+  requireGroupFastPolicy?: boolean;
   kind: RemoteAgentKind;
   /** 本机侧的任务 id(由控制端与任务 id 派生，恢复同一任务时不变)。 */
   hostSessionId: string;
@@ -277,6 +279,7 @@ export interface RemoteAgentHostDeps {
    * 组内电脑运行，本机中转。不提供 = 受邀者的任务一律在本机运行(现有接线)。
    */
   groupRelay?: RemoteAgentGroupRelayDeps;
+  groupContinuity?(): boolean;
   /** Group owner chooses an executor; executor accepts a bounded grant from its authenticated owner peer. */
   directGuestExecution?: {
     ownerScope(): string;
@@ -1647,6 +1650,8 @@ export function createRemoteAgentHost(deps: RemoteAgentHostDeps) {
       const handle = await timing.measure('agent-session', () =>
         deps.startHosted({
           ...(run.groupProviderId ? { groupProviderId: run.groupProviderId } : {}),
+          requireGroupFastPolicy: payload.groupAssigned === true || !!payload.relay
+            || !!deps.directGuestExecution?.sessionDelegated(run.controller, payload.sessionId),
           kind: run.kind,
           hostSessionId,
           shadowDir,
@@ -3221,7 +3226,7 @@ export function createRemoteAgentHost(deps: RemoteAgentHostDeps) {
         const managedSkillDigests = await ownManagedSkillDigests(guest);
         const limits = deps.readLimits?.() ?? DEFAULT_REMOTE_AGENT_LIMITS;
         const caps: RemoteAgentCaps = {
-          ...(deps.fastPolicy ? { subscriptionFastPolicy: true as const } : {}),
+          ...(deps.fastPolicy ? { subscriptionFastPolicy: true as const, subscriptionFastPolicyCache: true as const } : {}),
           version: REMOTE_AGENT_VERSION,
           agents: (['claude-code', 'codex', 'pi'] as const).map((kind) => ({
             kind,
@@ -3240,6 +3245,7 @@ export function createRemoteAgentHost(deps: RemoteAgentHostDeps) {
           ...(deps.providerAccess && deps.bindGuestProviderRoute ? { guestRelay: true } : {}),
           ...(deps.directGuestExecution && deps.providerAccess && deps.bindGuestProviderRoute
             ? { directGuestExecution: true } : {}),
+          ...(!guest && deps.groupContinuity?.() ? { groupContinuity: true as const } : {}),
           ...(deps.providerAccess && deps.bindGuestProviderRoute ? { relayModelAccess: true } : {}),
           // 转分享的同意只对受邀者(把这里分享的供应商放进自己组的人)有意义。
           ...(guest && deps.reshare && (deps.reshare.canUse?.(controller) ?? true) ? { reshareConsent: true } : {}),

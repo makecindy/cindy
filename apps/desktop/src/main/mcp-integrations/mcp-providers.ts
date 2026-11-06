@@ -23,6 +23,7 @@ import { getPluginMarketService } from '../plugin-market/service.js';
 import { resolveHelperSurface, resolveHelperSystemSkillsOff } from './helperSurface.js';
 import { createProject } from './createProject.js';
 import { createMoveSession } from './moveSession.js';
+import { createTaskWorktreeHost } from './createTaskWorktree.js';
 import { sessionImportCallbacks } from '../session-import/agentTools.js';
 import { listProjects, renameProject, removeProject, resolveSessionProject, readCurrentSessionProject } from './projectManagement.js';
 import { activeOwnerScopeKey, getActiveAppSession, isAppSessionBoundaryPending, ownerScopedUserDataPath } from '../appSessionState.js';
@@ -85,6 +86,7 @@ import {
   tryGetOrcaCollabService,
   isSessionInTurn,
   getTaskActionInputState,
+  isActiveInputAccountScoped,
   getTaskActionSession,
   confirmTaskAction,
   requestMcpSetupForSession,
@@ -101,6 +103,7 @@ import {
   isDbClientNotReadyError,
   getDbClient,
   tryGetDbClient,
+  getCurrentDbClientSnapshot,
 } from '../localDb/client/current.js';
 import { searchChatHistoryHybrid } from '../localDb/chatHistorySearch.js';
 import { resolveBotHistorySessionIds } from '../localDb/botHistoryScope.js';
@@ -118,6 +121,8 @@ import { createTaskDigestReader } from './taskDigest.js';
 import { createDesktopTaskDigestDeps, createRemoteWorkbenchMessageReader } from './taskDigestHost.js';
 import { createTaskToolCallAuthorizer } from '../maker-ipc/taskToolCallAuthorizer.js';
 import { createDesktopTaskActionAuthorizer } from '../maker-ipc/taskActionHost.js';
+import { authorizeGroupTool } from '../maker-ipc/botGroupToolAuthorization.js';
+import { createSharedTaskTools } from './sharedTaskTools.js';
 import { assertTaskActionCurrent, taskActionScheduleGuard } from '../maker-ipc/taskActionAuthorization.js';
 import {
   getSessionRowSnapshot,
@@ -168,6 +173,7 @@ export interface DesktopMcpProvidersDeps {
     options?: { preSend?: () => void },
   ) => ReturnType<ChatHistoryReaderDeps['invokeRemote']>;
   historyRemote?: import('@cindy/mcps').HistoryRemoteDeps;
+  captureSharedTaskCommand?: (sessionId: string, assertCurrent: () => void) => (command: import('@cindy/device-link').SharedTaskHostCommand) => Promise<unknown>;
   /** list_machines：账号下的电脑从这里读，SSH 主机与本机资源在这个文件里接。 */
   machineDirectory?: Pick<MachineDirectoryDeps, 'listDevices' | 'invokeStatus'>;
   /** 插件文件交接只认活跃 Session 的实时权限；缺失时由 ghost.ts fail closed。 */
@@ -263,7 +269,7 @@ export function createDesktopMcpProviders(deps: DesktopMcpProvidersDeps): LiziMc
 
   const remoteSessionHandoff = deps.historyRemote
     ? createRemoteSessionHandoff({
-        captureRequest: async (id, text) => (await import('../maker-ipc/register.js')).captureSessionAgentRequest(id, text),
+        captureRequest: async (id, text, target) => (await import('../maker-ipc/register.js')).captureSessionAgentRequest(id, text, target),
         captureAccess: deps.historyRemote.captureAccess,
         invoke: deps.invokeRemote,
       })
@@ -874,6 +880,7 @@ export function createDesktopMcpProviders(deps: DesktopMcpProvidersDeps): LiziMc
       },
       createProject,
       moveSession: createMoveSession(isSessionInTurn),
+      createTaskWorktree: createTaskWorktreeHost(),
       projectManagement: { list: listProjects, rename: renameProject, remove: removeProject },
       authorizeSkillLearning: async (request, context) => {
         if (!isCindyLearnSkillEnabled()) {
@@ -1518,6 +1525,31 @@ export function createDesktopMcpProviders(deps: DesktopMcpProvidersDeps): LiziMc
       githubIssue: (req) => submitGithubIssueForSession(req),
       mcpSetup: (context, proposal) => requestMcpSetupForSession(
         context.sessionId!, context.sessionInstanceId!, proposal),
+      ...(deps.captureSharedTaskCommand ? { sharedTask: createSharedTaskTools({
+        caller: context => {
+          const sessionId = context.sessionId ?? '';
+          const session = getTaskActionSession(sessionId);
+          const input = getTaskActionInputState(sessionId);
+          const lane = readChannelToolScope({ sessionId, sessionInstanceId: context.sessionInstanceId });
+          return {
+            key: JSON.stringify([activeOwnerScopeKey(), getCurrentDbClientSnapshot()?.clientEpoch, input.key, input.boundary,
+              lane?.channel, lane?.botId, lane?.chatId, lane?.inputClientId,
+              session?.stablePermissionModeState, session?.stablePlanModeState]),
+            accountScoped: lane ? lane.requesterIsOwner : isActiveInputAccountScoped(sessionId),
+            current: !isAppSessionBoundaryPending() && !!tryGetDbClient() &&
+              !!context.sessionInstanceId && session?.instanceId === context.sessionInstanceId &&
+              input.permission?.isCurrent?.() === true,
+            planMode: input.permission?.planModeEnabled !== false || input.permission?.permissionMode === 'plan',
+          };
+        },
+        captureGroupAccess: async context => {
+          const [link] = await getDbClient().drizzle.select({ botId: botSessionLinks.botId, role: botSessionLinks.role })
+            .from(botSessionLinks).where(eq(botSessionLinks.sessionId, context.sessionId!)).limit(1);
+          return link?.role === 'group' ? authorizeGroupTool(context.sessionId!, link.botId, 'owner-action') : null;
+        },
+        assertActionCurrent: assertTaskActionCurrent,
+        captureCommand: deps.captureSharedTaskCommand,
+      }) } : {}),
     },
     // cindy_orca: 多 worker 协同 team 工具集。创建权限由 Main handler 实时校验。
     orca: {

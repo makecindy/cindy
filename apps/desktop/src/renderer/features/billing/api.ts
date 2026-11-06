@@ -2,6 +2,7 @@ import type {
   BillingCatalog,
   BillingCurrentSubscription,
   BillingOrderList,
+  BillingPaymentHistory,
   BillingPaymentOrder,
   BillingPlanChange,
   BillingSubscriptionPortalResult,
@@ -23,6 +24,9 @@ export const billingApi = {
   },
   listOrders(limit = 20): Promise<BillingOrderList> {
     return window.electronAPI.billing.listOrders({ limit });
+  },
+  listPaymentHistory(limit = 10, cursor?: string): Promise<BillingPaymentHistory> {
+    return window.electronAPI.billing.listPaymentHistory({ limit, ...(cursor ? { cursor } : {}) });
   },
   getOrder(orderId: string): Promise<BillingPaymentOrder> {
     return window.electronAPI.billing.getOrder({ orderId });

@@ -121,17 +121,23 @@ const props = {
 
 // #8232, unit: the real composer Escape listener must not cancel a covered
 // voice draft. Existing voice cases cover sending, not foreground previews.
+// #9056: keep the card mounted when switching from rendered Markdown to source;
+// both modes must preserve the voice draft even without a Markdown search host.
 it.each(['listening', 'submitting', 'refining'] as const)('preserves %s voice input while a Markdown preview owns Escape', async state => {
   h.listening = state === 'listening';
   h.processing = state === 'listening' ? null : state;
   render(<ChatInput {...props} onSend={vi.fn()} />);
   const preview = document.createElement('section');
+  preview.dataset.textLightboxCard = '';
   preview.dataset.textLightboxSearchHost = '';
   const paragraph = document.createElement('p');
   paragraph.textContent = 'Foreground document';
   preview.append(paragraph);
   document.body.append(preview);
   try {
+    fireEvent.keyDown(paragraph, { key: 'Escape' });
+    expect(h.cancel).not.toHaveBeenCalled();
+    delete preview.dataset.textLightboxSearchHost;
     fireEvent.keyDown(paragraph, { key: 'Escape' });
     expect(h.cancel).not.toHaveBeenCalled();
     preview.remove();

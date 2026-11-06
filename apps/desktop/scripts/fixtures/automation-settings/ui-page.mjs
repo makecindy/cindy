@@ -9,6 +9,10 @@ export default {
     'Real IPC, browser discovery and device permissions; timeout and stale response behavior is covered by ComputerUseSection.browserHealth.test.tsx',
   cases: {
     default: { about: 'All settings loaded' },
+    'driver-rate-limited': {
+      about:
+        'cua-driver installed, update check rate-limited by GitHub: the row names the rate limit instead of a generic failure',
+    },
     loading: {
       about:
         'Browser detection and computer configuration remain pending; other controls stay usable',
@@ -52,6 +56,28 @@ export default {
       await page
         .getByRole('button', { name: await ui.t('settings.computerUse.configurationRead.retry') })
         .waitFor();
+    }
+    if (ui.case === 'driver-rate-limited') {
+      await page
+        .getByText(await ui.t('settings.computerUse.directControl.update.rateLimited'), {
+          exact: true,
+        })
+        .waitFor();
+      assert.equal(
+        await page
+          .getByText(await ui.t('settings.computerUse.directControl.update.checkFailed'), {
+            exact: true,
+          })
+          .count(),
+        0,
+      );
+      assert.ok(
+        await page
+          .getByRole('button', {
+            name: await ui.t('settings.computerUse.directControl.update.retry'),
+          })
+          .isVisible(),
+      );
     }
     if (ui.case === 'loading') {
       assert.ok(

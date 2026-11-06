@@ -118,7 +118,7 @@ function Fixture() {
           }}
         />
       </div>
-      <div className="flex flex-wrap gap-4 text-13" data-fixture-controls>
+      <div className="flex flex-wrap gap-4 text-13" data-ui-page-control>
         <button onClick={() => setAttached((value) => !value)} data-testid="attachment">
           Attachment
         </button>

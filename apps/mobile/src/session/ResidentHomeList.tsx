@@ -4,6 +4,7 @@ import Animated from 'react-native-reanimated';
 import { useSegments } from 'expo-router';
 import { useAdaptiveWindow } from '@/platform/AdaptiveWindowContext';
 import { useReduceMotionEnabled } from '@/hooks/useReduceMotion';
+import { AnimationVisibilityProvider } from '@/hooks/useLoopingAnimation';
 import { motionDuration } from '@/theme/tokens';
 import { RemoteSessionStoreSubscriptionGate } from './remoteSessionStore';
 import { sessionPaneLayout } from './sessionPaneLayout';
@@ -87,7 +88,9 @@ export function ResidentHomeListProvider({ children }: { children: ReactNode }) 
           // after release; keep the sidebar's native host above the route.
           transitionDuration: !persistent && reduceMotion === false ? motionDuration.fast : 0,
         }, { opacity: visible ? 1 : 0 }]}>
-        <RemoteSessionStoreSubscriptionGate enabled={visible}>{entry.children}</RemoteSessionStoreSubscriptionGate>
+        <AnimationVisibilityProvider visible={visible}>
+          <RemoteSessionStoreSubscriptionGate enabled={visible}>{entry.children}</RemoteSessionStoreSubscriptionGate>
+        </AnimationVisibilityProvider>
       </Animated.View> : null}
       {visible && !homeRoute && paneLayout.resizeBounds ? <SessionPaneDivider
         width={paneLayout.sidebarWidth} bounds={paneLayout.resizeBounds}

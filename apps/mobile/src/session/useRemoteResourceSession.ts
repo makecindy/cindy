@@ -5,7 +5,7 @@ import { AppState } from 'react-native';
 import { useFocusEffect, useIsFocused, useLocalSearchParams, useRouter } from 'expo-router';
 import { useAuth } from '@/auth/AuthContext';
 import { useDeviceLink } from '@/device-link/DeviceLinkContext';
-import { getRemoteResource } from '@/device-link/remoteResources';
+import { getRemoteResource, invokeRemoteResourceAction } from '@/device-link/remoteResources';
 import { readRemoteCollectionCache } from '@/device-link/remoteResourceAvailability';
 import { createRemoteReadRecovery } from '@/device-link/remoteReadRecovery';
 import { createRemoteSyncCoordinator, retryRemoteSyncRead, type RemoteSyncRun } from '@/device-link/remoteSyncTask';
@@ -55,14 +55,29 @@ export function useRemoteResourceSession(deviceId: string, deviceName: string, s
     && (!stage || stage === 'ready') && (!failure || failure.binding !== binding || isAutoRecoveringRemoteError(failure.message))));
   // `ready` also unlocks queued sends and runtime controls in the session screen.
   const ready = !transcriptEntry && (!threadEntry || (required && verified === binding)) && (!required || (focused && AppState.currentState === 'active' && status === 'online' && verified === binding && metadataVerified));
+  const reportedRead = useRef({ binding, at: 0 });
   const markReadThrough = useCallback((at: number) => {
-    if (!threadEntry && !transcriptEntry && current.current === binding && AppState.currentState === 'active' && ready && canMarkRead && resourceKind === 'bot' && resource && Number.isFinite(at) && at > 0) {
-      // The synchronized, visible message is the read boundary. The independent
-      // resource lookup can predate it; capping at that snapshot leaves a reply
-      // unread even after the user has reached it in the chat.
-      void markRemoteResourceRead(user?.id ?? '', deviceId, resourceId, at);
-    }
-  }, [binding, canMarkRead, deviceId, ready, resource, resourceId, resourceKind, user?.id, transcriptEntry, threadEntry]);
+    if (transcriptEntry || current.current !== binding || AppState.currentState !== 'active' || !ready || !canMarkRead
+      || resourceKind !== 'bot' || !resource || !Number.isFinite(at) || at <= 0) return;
+    // The synchronized, visible message is the read boundary. The independent
+    // resource lookup can predate it; capping at that snapshot leaves a reply
+    // unread even after the user has reached it in the chat.
+    // A topic has its own position on the computer; it never folds into the main chat's, and this
+    // phone shows no topic unread, so only the main chat keeps a local position here.
+    if (!threadEntry) void markRemoteResourceRead(user?.id ?? '', deviceId, resourceId, at);
+    // A computer that publishes its read position keeps one for every device: report the same
+    // boundary so its badge (and other devices') clears too. Once per advance; a failure retries later.
+    const hostRead = resource.display.lastReadAt;
+    if (reportedRead.current.binding !== binding) reportedRead.current = { binding, at: 0 };
+    if (typeof hostRead !== 'number' || at <= reportedRead.current.at || (!threadEntry && at <= hostRead)) return;
+    reportedRead.current = { binding, at };
+    void invokeRemoteResourceAction(invoke, { deviceId, deviceName }, {
+      collectionId, actionId: 'read', resourceRef: { collectionId, kind: resourceKind, id: resourceId },
+      input: { at: Math.floor(at), ...(threadEntry ? { threadSessionId: sessionId } : {}) },
+    }, i18n.language).catch(() => {
+      if (reportedRead.current.binding === binding && reportedRead.current.at === at) reportedRead.current = { binding, at: 0 };
+    });
+  }, [binding, canMarkRead, collectionId, deviceId, deviceName, i18n.language, invoke, ready, resource, resourceId, resourceKind, sessionId, user?.id, transcriptEntry, threadEntry]);
   useFocusEffect(useCallback(() => {
     if (!collectionId || !resourceId || !resourceKind || !deviceId || status !== 'online') return;
     setVerified(null);

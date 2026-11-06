@@ -286,6 +286,35 @@ describe("iLink HTTP boundary", () => {
     });
   });
 
+  // 测试价值
+  // - 生产入口与可观察结果：IlinkApiClient.getUpdates 的长轮询超时必须作为
+  //   retryable TIMEOUT 交给 WechatIM，触发已有重连循环，而不是伪造成功空轮询。
+  // - Bug／规则依据：#8763；TCP 假活时旧实现吞掉 TIMEOUT，轮询游标和连接状态会静默停摆。
+  // - 现有覆盖缺口：已有测试只覆盖正常空响应与主动取消，没有覆盖请求级长轮询超时。
+  // - 最小失败输入：getUpdates 请求在 longPollTimeoutMs 到期时仍未返回；tier：unit。
+  it("propagates long-poll timeouts so the host can reconnect", async () => {
+    vi.useFakeTimers();
+    try {
+      const api = new IlinkApiClient({
+        baseUrl: "https://ilinkai.weixin.qq.com",
+        token: "fake-token",
+        botAgent: "Cindy/1.0.0",
+        longPollTimeoutMs: 5,
+        fetch: async (_input, init) => await new Promise<Response>((_resolve, reject) => {
+          init?.signal?.addEventListener("abort", () => {
+            reject(Object.assign(new Error("aborted"), { name: "AbortError" }));
+          }, { once: true });
+        }),
+      });
+      const pending = api.getUpdates("cursor", signal());
+      const rejected = expect(pending).rejects.toMatchObject({ code: "TIMEOUT", retryable: true });
+      await vi.advanceTimersByTimeAsync(5);
+      await rejected;
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("maps HTTP failures to stable secret-free errors", async () => {
     const api = new IlinkApiClient({
       baseUrl: "https://ilinkai.weixin.qq.com",

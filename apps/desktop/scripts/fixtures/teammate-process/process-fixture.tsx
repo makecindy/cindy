@@ -43,7 +43,10 @@ const artifactMessages: ChatMessage[] = [
     toBotId: null, toBotName: 'Cindy', parentSessionId: null, childSessionId: null, objective: '整理交付记录',
     result: { title: '整理交付记录', runSequence: 1, status: 'completed', text: '已核对清单内容。', artifacts: [] },
   } },
-  { ...text('artifact-answer', '交付清单已经整理好。表格按事项列出说明和完成状态，方便你逐项核对。\n\n同时保留了整理脚本，之后有新增记录时可以继续更新。下方是本次生成的表格和相关文件。', 'final_answer'), turnCompleted: true },
+  { ...text('artifact-answer', '交付清单已经整理好。表格按事项列出说明和完成状态，方便你逐项核对。\n\n同时保留了整理脚本，之后有新增记录时可以继续更新。下方是本次生成的表格和相关文件。', 'final_answer'), turnCompleted: true,
+    // Several saves in one turn join into one long footer row.
+    botLearning: ['按工作流分批与独立推进节奏', '七机 CI 管理基线', '游戏开发与测试电脑', 'CI 优先用自有机器，减少 GitHub 云机器开支', '内部 CI 采用务实方案，避免过度安全设计', '每件事新任务，派活使用用户原话']
+      .map((title, index) => ({ kind: 'memory' as const, key: `memory-${index}`, title, action: 'updated' as const })) },
 ];
 
 let holdArtifactStats = false;
@@ -65,7 +68,7 @@ function ArtifactStream({ artifactCase }: { artifactCase: string }) {
     </ThreadPanel>
   </div>;
   return <div className="flex h-screen w-full min-w-0 flex-col bg-[var(--surface)]" data-ui-page-subject>
-    {artifactCase === 'artifacts-cached' && <div className="flex gap-2">
+    {artifactCase === 'artifacts-cached' && <div className="flex gap-2" data-ui-page-control>
       <Button data-testid="fixture-remount" onClick={() => { holdArtifactStats = true; setGeneration(value => value + 1); }}>Remount</Button>
       <Button data-testid="fixture-confirm" onClick={() => settleArtifactStats(false)}>Confirm</Button>
       <Button data-testid="fixture-remove" onClick={() => settleArtifactStats(true)}>Remove</Button>
@@ -79,9 +82,9 @@ function Subject({ done, retry, artifactCase }: { done: boolean; retry: boolean;
   const rows = retry ? retryMessages : messages;
   if (artifactCase) return <ArtifactStream artifactCase={artifactCase} />;
   return <div className="flex h-screen w-full min-w-0 flex-col bg-[var(--surface)]" data-ui-page-subject>
-    <div className="self-end p-2"><Button onClick={() => setFinished(true)} data-testid="fixture-finish">Finish fixture</Button></div>
+    <div className="self-end p-2" data-ui-page-control><Button onClick={() => setFinished(true)} data-testid="fixture-finish">Finish fixture</Button></div>
     <MessageStream workingDir="" historyLoaded messages={finished ? [...rows, { ...text('final_answer', '任务与 PR 的进展已整理。未处理完的事项和需要你判断的部分，已分别列出。', 'final_answer'), turnCompleted: true }] : rows}
-      assistantAvatar={<BotAvatar bot={{ id: "fixture", name: "Cindy", avatar: "cindy://avatar/preset/cindy" }} size="sm" />} simplifiedBotConversation isSessionStreaming={!finished} contentWidth={720} />
+      assistantAvatar={<span data-testid="fixture-partner-avatar"><BotAvatar bot={{ id: "fixture", name: "Cindy", avatar: "cindy://avatar/preset/cindy" }} size="sm" /></span>} simplifiedBotConversation isSessionStreaming={!finished} contentWidth={720} />
   </div>;
 }
 void mountPage({

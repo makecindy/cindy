@@ -31,6 +31,7 @@ export function CollapsibleSubSection({
   return (
     <section id={id} className="flex flex-col gap-3">
       <button
+        data-settings-search-action="Expand or collapse the remote-control section"
         type="button"
         onClick={onToggle}
         aria-expanded={open}

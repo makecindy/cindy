@@ -394,7 +394,10 @@ import {
   todoReferenceComposerNode,
   slashCommandTextNode,
   textComposerDocument,
+  displayComposerSlashRuntimeAliases,
+  restoreComposerSlashRuntimeAliases,
   type ComposerDocument,
+  type ComposerSlashRuntimeAlias,
   type ComposerVoiceDraftUpdate,
 } from '@/session/composerDocument';
 import { boundAgentReferenceText } from '@cindy/maker-shared/agent-input-projection';
@@ -847,6 +850,8 @@ interface MessageEditingState {
   stashedAttachments: RemoteSerializedAttachment[];
   /** null = 预览尚未返回或失败(不提示、不阻塞发送)。 */
   rollbackHint: MessageEditRollbackHint;
+  /** 编辑时只显示 `/pr`;重发前换回原消息里的线路名(`/cindy-plugin-…:pr`、`/skill:git`)。 */
+  slashRuntimeAliases: ComposerSlashRuntimeAlias[];
 }
 
 /**
@@ -2753,20 +2758,23 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
   const orcaModelSelectionUsesIntent = !!currentSession?.orcaRole && sessionAgentSwitchSupported;
   // 远程 Agent:模型列表在被控电脑自己的供应商之外,另列同账号其他电脑上开放了远程调用的供应商
   // (与桌面同一套,2026-10-07 产品裁决)。选另一台电脑的模型 = 把 Agent 挪过去,先二次确认;
-  // 同一台电脑内换模型直接切。共享任务访客与 Orca 成员不能换电脑，SSH 不支持切换;
+  // 同一台电脑内换模型直接切。共享任务访客与运行设备 Worker 不能换电脑，SSH 不支持切换;
   // 旧被控端不投影 agentDeviceId 字段、也不认换位置参数,这些情况维持原有调用与展示。
+  // Orca Lead / 本机 Worker 要被控电脑声明 supportsOrcaAgentRelocation 才能换电脑(旧版会拒绝)。
+  const orcaAgentLocationLocked = !!currentSession?.orcaRole
+    && capabilities?.supportsOrcaAgentRelocation !== true;
   const agentLocationMovable = sessionAgentSwitchSupported
     && !isSharedTaskPeer(deviceId)
     && !!currentSession
-    && !currentSession.orcaRole
+    && !orcaAgentLocationLocked
     && !currentSession.orcaRemoteLead
     && Object.prototype.hasOwnProperty.call(currentSession, 'agentDeviceId');
   /** Agent 现在所在的电脑(null = 被控电脑)。 */
   const currentAgentDeviceId = sessionAgentRunsOnOtherComputer(currentSession)
     ? currentSession!.agentDeviceId!
     : null;
-  // Orca 只禁换位置；Agent 已在其他电脑时，仍保留那台电脑的目录供原地选模。
-  const orcaRemoteAgentDeviceId = currentSession?.orcaRole ? currentAgentDeviceId : null;
+  // 不能换位置的 Orca 任务：Agent 已在其他电脑时，仍保留那台电脑的目录供原地选模。
+  const orcaRemoteAgentDeviceId = orcaAgentLocationLocked ? currentAgentDeviceId : null;
   /** 下一条消息时 Agent 所在的电脑(挂着换位置的意图就按意图)。 */
   const nextAgentDeviceId = effectiveAgentDeviceId(currentSession, agentSwitchIntent);
   const remoteAgentKeepDeviceIds = useMemo(
@@ -5771,6 +5779,7 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
           connectionProvider: (providerId: string) => voiceContext.createAsrConnection(providerId),
           refinerTargetProvider: (providerId: string, options?: { refreshAccessToken?: boolean }) =>
             voiceContext.createRefinerTarget(providerId, options),
+          refineRequestBudget: () => voiceContext.refineRequestBudget(),
           warmRefiner: (input: { system: string; user: unknown; promptCacheKey: string;
           }) =>
             voiceContext.warmRefiner(input),
@@ -8145,27 +8154,28 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
       setError(t('session.messageEdit.uploadsPending'));
       return;
     }
-    if (remoteSessionStore.isSessionRunning(sessionId)) {
-      void maker.input.stop(sessionId).catch(() => undefined);
-    }
+    // 不在这里中断运行中的任务:中断无法恢复,放弃编辑时任务应照常继续;发送时才中断。
     const previous = messageEditingRef.current;
+    const { document: editDocument, aliases: slashRuntimeAliases } =
+      displayComposerSlashRuntimeAliases(draft.document);
     const next: MessageEditingState = {
       clientId,
       stashedDocument: previous?.stashedDocument ?? composerDocumentRef.current,
       stashedAttachments: previous ? previous.stashedAttachments : [...attachmentsRef.current],
       rollbackHint: null,
+      slashRuntimeAliases,
     };
     messageEditSeqRef.current += 1;
     messageEditingRef.current = next;
     setMessageEditing(next);
     setError(null);
-    applyComposerDocument(draft.document, { persist: false });
+    applyComposerDocument(editDocument, { persist: false });
     const files = buildMessageEditAttachments(draft.attachments, `message-edit:${clientId}`);
     attachmentsRef.current = files;
     setAttachments(files);
     setAttachmentError(null);
-    composerInputRef.current?.applyDocumentAndSetSelectionToEnd(draft.document);
-  }, [applyComposerDocument, canUseComposer, deviceId, getPendingUploadCount, maker, sessionId, t]);
+    composerInputRef.current?.applyDocumentAndSetSelectionToEnd(editDocument);
+  }, [applyComposerDocument, canUseComposer, deviceId, getPendingUploadCount, sessionId, t]);
 
   // 静默预览文件回滚影响(桌面编辑框同款提示);运行中会被拒绝,等停下后再跑一次。
   // 失败只是不提示,不阻塞发送。
@@ -8231,6 +8241,8 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
       }
       if (!stillCurrent()) return;
     }
+    // 重发用线路名文档(`/cindy-plugin-…:pr`):离场草稿、重发失败恢复也都用它,别名表不随草稿保存。
+    const resendDocument = restoreComposerSlashRuntimeAliases(document, editing.slashRuntimeAliases);
     // 空文本 + 无附件的重发会变成「只回退不重发」,那是「回到此处」不是编辑。
     if (!composerDocumentHasContent(document) && attachmentsRef.current.length === 0 && getPendingUploadCount() === 0) {
       return;
@@ -8250,6 +8262,7 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
       try {
         updated = await commitMessageEditRewind({
           rewindCommit: (opts) => maker.rewindCommit(sessionId, editing.clientId, opts),
+          requestStop: () => { void maker.input.stop(sessionId).catch(() => undefined); },
           ...(messageEditingRef.current?.rollbackHint?.kind === 'conversation-only'
             ? { allowFileRestore: false as const }
             : {}),
@@ -8265,7 +8278,7 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
       if (!stillCurrent()) {
         // 旧回合已在被控端软删,用户在提交途中离开了任务:替代消息与暂存草稿都要落到
         // 该任务自己的草稿里(回来时可见),不能因页面不在前台就丢掉。
-        persistMessageEditDraft(sessionId, { stash: editing.stashedDocument, replacement: document });
+        persistMessageEditDraft(sessionId, { stash: editing.stashedDocument, replacement: resendDocument });
         remoteSessionStore.invalidateSessionMessageWindow(sessionId, deviceId);
         return;
       }
@@ -8275,14 +8288,19 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
       setMessageEditing(null);
       // 旧回合已在被控端软删:先让替代消息进入持久发件箱,再刷新消息窗口;
       // 同步只是尽力而为,失败不得打断重发与草稿恢复。
-      const accepted = await send({ documentOverride: document, messageEditResend: true });
+      // send 靠「输入框内容 == 发送文档」判断成功后是否清空,先把输入框换成同一份文档。
+      if (resendDocument !== document) {
+        composerInputRef.current?.applyDocumentAndSetSelectionToEnd(resendDocument);
+        applyComposerDocument(resendDocument, { persist: false });
+      }
+      const accepted = await send({ documentOverride: resendDocument, messageEditResend: true });
       await requestSync({ reason: 'rewind-commit', replaceMessages: true }).catch(() => undefined);
       if (outboxSessionAliveRef.current !== sessionId) {
         // 离开任务后 send 已清空该任务的草稿:把暂存草稿写回它自己的存储。
         // 重发没来得及受理时,编辑内容也一并留在该任务草稿里。
         persistMessageEditDraft(sessionId, {
           stash: editing.stashedDocument,
-          replacement: accepted === true ? null : document,
+          replacement: accepted === true ? null : resendDocument,
         });
         return;
       }
@@ -9044,8 +9062,10 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
     targetAgentKind: MobileSessionAgentKind,
     targetContextWindow: number | undefined,
     hostGuardSupported: boolean,
+    relocates: boolean,
   ): boolean => {
-    if (!orcaModelSelectionUsesIntent || targetAgentKind !== sessionAgentKind) return true;
+    // 换电脑是在新位置重建会话再交接，旧窗口带不过去，不做原地缩窗检查(与桌面同一口径)。
+    if (relocates || !orcaModelSelectionUsesIntent || targetAgentKind !== sessionAgentKind) return true;
     const contextTokens = currentSession?.contextTokens;
     const currentContextWindow = currentSession?.contextWindow;
     const pressuredShrink =
@@ -9142,7 +9162,8 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
       if (!location) return;
       if (orcaModelSelectionUsesIntent || modelSheetAgentKind !== sessionAgentKind || location.agentDeviceId !== undefined) {
         if (!canStageOrcaModelSelection(modelSheetAgentKind, row.model.contextWindow,
-          modelSheetCapabilities?.supportsModelWindowSwitchGuard === true)) return;
+          modelSheetCapabilities?.supportsModelWindowSwitchGuard === true,
+          location.agentDeviceId !== undefined)) return;
         await writeSessionAgentSwitchIntent({
           targetAgentKind: modelSheetAgentKind,
           model: next.model,
@@ -9245,7 +9266,7 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
     if (relocates || orcaModelSelectionUsesIntent) {
       // 同引擎换电脑或 Orca 换模型均走下一条消息生效的切换意图。
       if (!canStageOrcaModelSelection(config.agent, capability.contextWindow,
-        targetCapabilities.supportsModelWindowSwitchGuard === true)) return false;
+        targetCapabilities.supportsModelWindowSwitchGuard === true, relocates)) return false;
       const applied = await writeSessionAgentSwitchIntent({
         targetAgentKind: config.agent,
         model: config.modelId,
@@ -9303,7 +9324,8 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
       if (!location) return;
       if (location.agentDeviceId !== undefined || orcaModelSelectionUsesIntent) {
         if (!canStageOrcaModelSelection(sessionAgentKind, option.contextWindow,
-          modelSheetCapabilities?.supportsModelWindowSwitchGuard === true)) return;
+          modelSheetCapabilities?.supportsModelWindowSwitchGuard === true,
+          location.agentDeviceId !== undefined)) return;
         await writeSessionAgentSwitchIntent({
           targetAgentKind: sessionAgentKind,
           model: option.id,

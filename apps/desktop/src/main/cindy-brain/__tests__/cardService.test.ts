@@ -13,6 +13,8 @@ import {
   withCardToken,
   type GhostCardServiceDeps,
 } from '../cardService';
+import { readGhostCardSupersededBy } from '@cindy/maker-shared/ghost-card-form';
+
 import {
   GHOST_CARD_HEIGHT_DEFAULT,
   GHOST_CARD_HEIGHT_MAX,
@@ -76,6 +78,24 @@ describe('GhostCardService relocation', () => {
     expect(broadcast).toHaveBeenCalledTimes(2);
     svc.finalizeCall('tool');
     expect(svc.reopenForTool('mail', 'old', 'tool', target)).toBe(false);
+  });
+  it('marks an earlier card superseded only by the active call that reopened it', () => {
+    const { svc, advance, broadcast, persist } = makeService();
+    const target = { ghostId: 'gh', sessionId: 's' };
+    svc.registerCall('old', { ...target, toolUseId: null });
+    svc.handleCardUpdate('gh', update('old'));
+    svc.finalizeCall('old');
+    advance(300_000);
+    svc.registerCall('tool', { ...target, toolUseId: null });
+    expect(svc.reopenForTool('gh', 'old', 'tool', target)).toBe(true);
+    // Naming another card, or claiming without the reopening call, is refused and leaves the card as it was.
+    expect(svc.handleCardUpdate('gh', update('old', 'moved', { supersededBy: 'other', sourceCallId: 'tool' })).reason).toBe('bad-superseded-by');
+    expect(svc.handleCardUpdate('gh', update('old', 'moved', { supersededBy: 'tool' })).reason).toBe('bad-superseded-by');
+    expect(svc.handleCardUpdate('gh', update('old', 'moved', { supersededBy: 'tool', sourceCallId: 'tool' })).accepted).toBe(true);
+    const marked = '<div data-cindy-superseded-by="tool" hidden></div>S:moved';
+    expect(persist).toHaveBeenLastCalledWith(expect.objectContaining({ callId: 'old', html: marked }));
+    expect(broadcast).toHaveBeenLastCalledWith(expect.objectContaining({ callId: 'old', html: marked, animatedHtml: null }));
+    expect(readGhostCardSupersededBy(marked)).toBe('tool');
   });
   it('drains every accepted source write even after its call was swept, without waiting for other plugins', async () => {
     const pending = [deferredWrite(), deferredWrite(), deferredWrite()];
@@ -241,7 +261,11 @@ describe('GhostCardService', () => {
       expect.objectContaining({ height: GHOST_CARD_HEIGHT_MAX }),
     );
     advance(1500);
-    svc.handleCardUpdate('g1', update('c1', '<p>x</p>', { height: 1 }));
+    // A one-line card keeps its own height instead of being padded out to a large floor.
+    svc.handleCardUpdate('g1', update('c1', '<p>x</p>', { height: 44 }));
+    expect(broadcast).toHaveBeenLastCalledWith(expect.objectContaining({ height: 44 }));
+    advance(1500);
+    svc.handleCardUpdate('g1', update('c1', '<p>x</p>', { height: 0 }));
     expect(broadcast).toHaveBeenLastCalledWith(
       expect.objectContaining({ height: GHOST_CARD_HEIGHT_MIN }),
     );
@@ -490,7 +514,8 @@ describe('parseCardHeightReport(report-height IPC 校验 + clamp 纯函数)', ()
   });
 
   it('clamp 到同一对常量(过小取 MIN,过大取 MAX)', () => {
-    expect(parseCardHeightReport('c1', 1)).toEqual({
+    expect(parseCardHeightReport('c1', 42)).toEqual({ ok: true, callId: 'c1', height: 42 });
+    expect(parseCardHeightReport('c1', 0)).toEqual({
       ok: true, callId: 'c1', height: GHOST_CARD_HEIGHT_MIN,
     });
     expect(parseCardHeightReport('c1', 99999)).toEqual({

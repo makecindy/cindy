@@ -118,6 +118,7 @@ import { WorktreePool } from '../worktree';
 import type { SchedulerDrizzleDb } from './storage';
 import { backfillSessionMeta } from './runners/_shared';
 import { buildSkipResultText, executePreRunHook, formatPreRunHookFailure } from './pre-run-hook';
+import { withPreRunHookDiagnosis, type DiagnosePreRunHookFailure } from './pre-run-hook-diagnosis';
 import { beginHeadlessGhostSetupTurn } from '../mcp-integrations/ghostSetupInteractionSurface.js';
 import {
   beginUnattendedTurn,
@@ -276,6 +277,8 @@ export interface MakerScheduleRunnerDeps {
   getDb: () => SchedulerDrizzleDb;
   notifier: Notifier;
   logger: Logger;
+  /** 检查脚本失败时识别「所属插件未安装或未启用」。 */
+  diagnosePreRunHookFailure?: DiagnosePreRunHookFailure;
   readAutoReviewHistory?: (sessionId: string) => Promise<AutoReviewHistoryMessage[]>;
   beforeDispatchUserTurn?: (sessionId: string, signal?: AbortSignal) => void | Promise<void>;
   onUndispatchedUserTurn?: (sessionId: string) => void;
@@ -932,7 +935,7 @@ export class MakerScheduleRunner implements ScheduleRunner {
       if (ctx.expectedPreRunWorkingDir !== undefined && hookCwd !== ctx.expectedPreRunWorkingDir) {
         throw new Error('Schedule execution directory changed; refresh before executing the approved action');
       }
-      const hook = await executePreRunHook({
+      const hook = await withPreRunHookDiagnosis(await executePreRunHook({
         command: schedule.preRunHook.command,
         timeoutMs: schedule.preRunHook.timeoutMs,
         cwd: hookCwd,
@@ -947,8 +950,9 @@ export class MakerScheduleRunner implements ScheduleRunner {
           firedAt: ctx.firedAt,
           workingDir: hookCwd,
           lastFinishedAt: schedule.lastFinishedAt,
+          ...(ctx.trigger ? { trigger: ctx.trigger } : {}),
         },
-      });
+      }), schedule.preRunHook.command, this.deps.diagnosePreRunHookFailure);
       await ctx.onPreRunHookCompleted?.(hook);
       if (hook.status === 'aborted' || ctx.signal.aborted) {
         // 本轮已被 pause/delete 中止:不留痕、不继续执行,直接抛回 engine

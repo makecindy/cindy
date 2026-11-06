@@ -90,6 +90,15 @@ describe('desktop Claude read-only allowlist', () => {
 });
 
 describe('desktop MCP approval policy', () => {
+  // Shared-task links grant full task access; both MCP routes must reach normal
+  // per-call task approval rather than inheriting a remembered helper grant.
+  it('keeps native invitations on the task action approval path', () => {
+    for (const call of [
+      { toolName: 'create_shared_task_invitation', toolParams: {} },
+      { toolName: 'call_tool', toolParams: { name: 'create_shared_task_invitation', args: {} } },
+      { toolName: 'call_tool', toolParams: { name: 'create_shared_task_invitation', args: '{}' } },
+    ]) expect(getDesktopMcpToolApprovalPolicy({ serverName: 'cindy_helper', ...call })).toBe('prompt-each-time');
+  });
   // Contract: names never grant approval. Existing Art/contacts cases lacked local and
   // unverified instances; unit test exercises the policy used by all three harnesses.
   it('uses the resolved instance approval and fails closed on ambiguous or unverified names', () => {
@@ -433,6 +442,15 @@ describe('helper task workspace and SkillHub publication authorization', () => {
       'prompt-each-time',
     );
     expect(getDesktopClaudeReadOnlyAllowedTools()).not.toContain('mcp__cindy_helper__call_tool');
+  });
+
+  // Creating a task worktree writes a branch and directory into the repository; it must
+  // take the task's permission flow rather than the trusted helper server's silent pass.
+  it('reviews creating a task worktree like other repository writes', () => {
+    for (const args of [{}, { repo_dir: '/repo' }]) {
+      expect(policy('call_tool', { name: 'create_task_worktree', args })).toBe('prompt-each-time');
+      expect(policy(undefined, { name: 'create_task_worktree', args })).toBe('prompt-each-time');
+    }
   });
 
   it('lets the task permission mode decide moving a teammate to another computer, but not reading its home', () => {

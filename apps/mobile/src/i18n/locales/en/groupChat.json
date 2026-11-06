@@ -155,7 +155,12 @@
         "details": "Send your message again. If it still fails, check the logs and report the issue."
       }
     },
-    "runtimeFailureSetupHint": "To change the model or settings, use the computer where this teammate runs."
+    "runtimeFailureSetupHint": "To change the model or settings, use the computer where this teammate runs.",
+    "capability": {
+      "GROUP_AUTHORIZATION_REQUIRED": "{{name}} could not run this tool: group authorization has expired or does not allow this action. The teammate’s owner can make the request again in this group.",
+      "GROUP_AUTHORIZATION_UNAVAILABLE": "Group authorization for {{name}} could not be verified, so this tool did not run. Try again after the connection recovers.",
+      "ATTACHMENTS_UNAVAILABLE": "Some attachments were not delivered to {{name}} because of a download failure or attachment limit. Resend the attachments needed for this request."
+    }
   },
   "plan": {
     "intro_one": "This takes {{count}} step. Here’s who does it:",
@@ -186,7 +191,21 @@
     "awaitingStart": "Waiting for you",
     "progressRunning": "Working {{current}} / {{total}}",
     "progressDone": "Done {{done}} / {{total}}",
-    "allDone": "All done"
+    "allDone": "All done",
+    "stepQueued": "Waiting to Start",
+    "stepExecuting": "Running",
+    "stepSkipped": "Skipped",
+    "skippingTurn": "Skipping…",
+    "queueWaiting": "Waiting for you to continue",
+    "skipTurnLabel": "Skip {{name}}",
+    "stepSpoken": "Done",
+    "allTurns_one": "All {{count}} teammate",
+    "allTurns_other": "All {{count}} teammates",
+    "foldTurns": "Show fewer",
+    "talkTitle": "Hear from everyone in turn",
+    "talkPending": "Not started",
+    "skipTurn": "Skip",
+    "queueEnded": "Round ended"
   },
   "speaking": {
     "queued": "Queued",
@@ -304,7 +323,8 @@
     "lifecycleUnavailable": "The current server or computer does not support this action yet.",
     "groupDissolved": "This group has been dissolved. You can still read the available history.",
     "lastOwner": "Transfer ownership or dissolve this group before leaving.",
-    "allBotsMentionDisabled": "The group owner has not enabled @all teammates."
+    "allBotsMentionDisabled": "The group owner has not enabled @all teammates.",
+    "turnAlreadyStarted": "This teammate has already started and cannot be skipped"
   },
   "followUp": {
     "next": "Plan · Next step",
@@ -500,6 +520,7 @@
     "searchMembers": "Search members",
     "membersNoMatch": "No members match “{{query}}”",
     "you": "You",
+    "companionOf": "{{name}}’s companion",
     "teammateTag": "Teammate",
     "paused": "Paused",
     "accessNone": "Owner only",

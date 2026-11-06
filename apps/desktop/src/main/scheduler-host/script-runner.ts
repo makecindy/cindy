@@ -16,6 +16,7 @@ import type {
 
 import { sessions } from '../localDb/schema';
 import { buildSkipResultText, executePreRunHook, formatPreRunHookFailure } from './pre-run-hook';
+import { withPreRunHookDiagnosis, type DiagnosePreRunHookFailure } from './pre-run-hook-diagnosis';
 import { capAppend, killProcessTree } from './proc-util';
 import type { SchedulerDrizzleDb } from './storage';
 import { isManagedScheduledTarget, restoreScheduledTarget } from './restore-target';
@@ -104,6 +105,8 @@ export interface ScriptScheduleRunnerDeps {
   notifier?: Notifier;
   scheduler?: Scheduler;
   getDb?: () => SchedulerDrizzleDb;
+  /** 检查脚本失败时识别「所属插件未安装或未启用」。 */
+  diagnosePreRunHookFailure?: DiagnosePreRunHookFailure;
 }
 
 interface CompleteFrame {
@@ -203,8 +206,9 @@ export class ScriptScheduleRunner {
       if (retired) return retired;
     }
 
+    if (ctx.canDispatch?.() === false) return { sessionId: '', deferred: true };
     if (schedule.preRunHook?.command?.trim()) {
-      const hook = await executePreRunHook({
+      const hook = await withPreRunHookDiagnosis(await executePreRunHook({
         command: schedule.preRunHook.command,
         timeoutMs: schedule.preRunHook.timeoutMs,
         cwd: schedule.workingDir,
@@ -217,8 +221,9 @@ export class ScriptScheduleRunner {
           firedAt: ctx.firedAt,
           workingDir: schedule.workingDir,
           lastFinishedAt: schedule.lastFinishedAt,
+          ...(ctx.trigger ? { trigger: ctx.trigger } : {}),
         },
-      });
+      }), schedule.preRunHook.command, this.deps.diagnosePreRunHookFailure);
       await ctx.onPreRunHookCompleted?.(hook);
       if (hook.aborted || ctx.signal.aborted) {
         this.deps.logger.info?.('[script-runner] pre-run hook aborted by pause/delete', {
@@ -261,6 +266,9 @@ export class ScriptScheduleRunner {
       });
     }
 
+    // A hook or owner lookup may outlive the deadline. Once spawned, the script
+    // remains free to finish; this gate only controls starting a new process.
+    if (ctx.canDispatch?.() === false) return { sessionId: '', deferred: true };
     const granted = new Set(config.capabilities);
     const startedAt = Date.now();
     let child: ChildProcess;

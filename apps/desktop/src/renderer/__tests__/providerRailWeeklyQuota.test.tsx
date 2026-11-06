@@ -180,6 +180,12 @@ describe('provider weekly quota identity and windows', () => {
     ).toBe('codex');
     expect(providerWeeklyQuotaSource(provider('anthropic'))).toBe('claude');
     expect(providerWeeklyQuotaSource(provider('xai'))).toBe('xai');
+    expect(providerWeeklyQuotaSource(provider('opencode-go', {
+      source: 'user',
+      auth: { method: 'apiKey' },
+      access: { kind: 'api' },
+      routing: { pi: { upstream: 'https://opencode.ai/zen/go/v1', authStrategy: 'api-key-header' } },
+    }))).toBe('opencode-go');
     for (const p of [
       provider('openai', { connected: false }),
       provider('openai', { suspended: true }),
@@ -739,7 +745,6 @@ describe('shared provider rail weekly quota', () => {
     expect(bar()).not.toBeNull();
     for (const patch of [
       { status: 'paused' as const },
-      { hostOnline: false },
       { hostCapable: false },
     ]) {
       const calls = command.mock.calls.length;
@@ -788,5 +793,16 @@ describe('shared provider rail weekly quota', () => {
     await tick();
     expect(bar()).toBeNull();
     expect(command).toHaveBeenCalledTimes(calls);
+  });
+  it('keeps live permission/quota checks on a signaling-offline share and clears the result when that actual read fails', async () => {
+    sharing.received = [{ ...share, hostOnline: false }];
+    render(<Rail />);
+    await act(async () => {});
+    expect(command).toHaveBeenCalledTimes(1);
+    expect(bar()).not.toBeNull();
+    command.mockRejectedValueOnce(new Error('[DEVICE_LINK_NOT_CONNECTED] no data path'));
+    await tick();
+    expect(command).toHaveBeenCalledTimes(2);
+    expect(bar()).toBeNull();
   });
 });

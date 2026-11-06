@@ -28,6 +28,7 @@ import { fileURLToPath } from 'node:url';
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 
 import { PiAgent } from '../index.js';
+import { ANSWER_DELIVERY_PROMPT, PI_ANSWER_DELIVERY_PROMPT } from '@cindy/maker-shared/rich-answer-guide';
 import { PiRpcProcess } from '../rpc-client.js';
 import * as sessionJsonlScan from '../session-jsonl-scan.js';
 import { providerCatalogForPi, BUNDLED_CATALOG } from '@cindy/model-providers';
@@ -347,7 +348,7 @@ describe.skipIf(!piAvailable)('PiAgent integration (real pi binary + fake gatewa
     body: string;
   }> = [];
   // 权限测试用的脚本化响应队列:非空时按序出队,空了回落默认 pong 文本。
-  const scriptedResponses: string[] = [];
+  const scriptedResponses: Array<string | { status: number }> = [];
 
   beforeAll(async () => {
     agentHome = mkdtempSync(path.join(tmpdir(), 'pi-agent-int-'));
@@ -363,6 +364,12 @@ describe.skipIf(!piAvailable)('PiAgent integration (real pi binary + fake gatewa
           providerId: req.headers['x-cindy-pi-provider-id'] as string | undefined,
           body,
         });
+        const scripted = scriptedResponses.shift();
+        if (scripted && typeof scripted !== 'string') {
+          res.writeHead(scripted.status, { 'content-type': 'application/json' });
+          res.end(JSON.stringify({ error: { type: 'api_error', message: 'fixture temporarily unavailable' } }));
+          return;
+        }
         res.writeHead(200, {
           'content-type': 'text/event-stream',
           'cache-control': 'no-cache',
@@ -373,7 +380,7 @@ describe.skipIf(!piAvailable)('PiAgent integration (real pi binary + fake gatewa
           : url.includes('/chat/completions')
             ? chatCompletionsStreamBody('pong from fake gateway', 'pi-test-model')
             : anthropicStreamBody('pong from fake gateway');
-        res.end(scriptedResponses.shift() ?? fallback);
+        res.end(scripted ?? fallback);
       });
     });
     await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
@@ -433,6 +440,42 @@ describe.skipIf(!piAvailable)('PiAgent integration (real pi binary + fake gatewa
       resolvePiGatewayModelApi: () => 'anthropic-messages',
     };
   }
+
+  // #8887, integration: the real runtime generates the retry lifecycle after
+  // a completed tool request, a real HTTP 502 and successful recovery.
+  it('preserves paid request usage across a real native 502 retry', { timeout: 60_000 }, async () => {
+    const workingDir = mkdtempSync(path.join(tmpdir(), 'pi-usage-retry-'));
+    const fixtureFile = path.join(workingDir, 'fixture.txt');
+    writeFileSync(fixtureFile, 'fixture');
+    const startRequests = seenRequests.length;
+    let handle: AgentSessionHandle | undefined;
+    try {
+      scriptedResponses.push(anthropicToolUseBody('read', { path: fixtureFile }),
+        { status: 502 }, anthropicStreamBody('recovered'));
+      handle = await new PiAgent(buildDeps()).startSession({
+        sessionId: 'usage-native-retry', workingDir, model: 'pi-test-model', permissionMode: 'bypassPermissions',
+      });
+      const events: AgentEvent[] = [];
+      const collected = (async () => {
+        for await (const event of handle!.events()) {
+          events.push(event);
+          if (event.type === 'done') break;
+        }
+      })();
+      await handle.send({ type: 'user', content: 'Read fixture.txt and reply.' });
+      await collected;
+      expect(seenRequests.length - startRequests).toBe(3);
+      const usage = (events.find(e => e.type === 'done')!.data as { usage: { inputTokens: number; settlementId: string } }).usage;
+      expect(usage.inputTokens).toBe(84);
+      const live = events.filter(e => e.type === 'account_usage');
+      expect(live.length).toBeGreaterThanOrEqual(2);
+      expect(live.every(e => (e.data as { usage: { settlementId: string } }).usage.settlementId === usage.settlementId)).toBe(true);
+    } finally {
+      await handle?.close();
+      scriptedResponses.length = 0;
+      rmSync(workingDir, { recursive: true, force: true });
+    }
+  });
 
   it('reads native Fast from host RPC and ignores replayed preference files in Full Access', { timeout: 30_000 }, async () => {
     const deps = buildDeps();
@@ -602,6 +645,52 @@ describe.skipIf(!piAvailable)('PiAgent integration (real pi binary + fake gatewa
     },
   );
 
+  it('reports reasoning exhaustion from the real Pi OpenAI-compatible runtime', { timeout: 60_000 }, async () => {
+    const deps = buildDeps();
+    deps.resolvePiNativeProviders = async () => ({
+      providers: [{ id: 'limit-test', name: 'Limit Test', baseUrl: endpoint,
+        api: 'openai-completions', apiKeyEnvVar: 'CINDY_PI_LIMIT_TEST_KEY',
+        models: [{ id: 'limit-reasoner', name: 'Limit Reasoner', reasoning: true, contextWindow: 1_000_000 }],
+      }],
+      env: { CINDY_PI_LIMIT_TEST_KEY: 'test-only-key' },
+    });
+    const chunks = [
+      { choices: [{ index: 0, delta: { role: 'assistant', reasoning_content: 'still thinking' }, finish_reason: null }] },
+      { choices: [{ index: 0, delta: {}, finish_reason: 'length' }], usage: {
+        prompt_tokens: 657000, completion_tokens: 131072, total_tokens: 788072,
+        completion_tokens_details: { reasoning_tokens: 131064 },
+      } },
+    ].map((chunk) => `data: ${JSON.stringify({ id: 'limit-test', object: 'chat.completion.chunk', created: 1, model: 'limit-reasoner', ...chunk })}\n\n`).join('') + 'data: [DONE]\n\n';
+    scriptedResponses.push(chunks);
+    const workingDir = mkdtempSync(path.join(tmpdir(), 'pi-output-limit-'));
+    let handle: AgentSessionHandle | null = null;
+    try {
+      handle = await new PiAgent(deps).startSession({ sessionId: 'reasoning-limit', workingDir,
+        model: 'limit-reasoner', providerId: 'limit-test', effort: 'high' });
+      const events: AgentEvent[] = [];
+      const collected = (async () => {
+        for await (const event of handle!.events()) {
+          events.push(event);
+          if (event.type === 'done') break;
+        }
+      })();
+      const requestsBefore = seenRequests.length;
+      await handle.send({ type: 'user', content: 'test output exhaustion' });
+      await collected;
+      expect(events.find((event) => event.type === 'error')?.data).toMatchObject({
+        reason: 'output-limit', outputLimit: { outputTokens: 131072, reasoningTokens: 131064 },
+        usage: { outputTokens: 131072, reasoningTokens: 131064 },
+      });
+      expect(events.find((event) => event.type === 'done')?.data).toMatchObject({ status: 'failed' });
+      expect(seenRequests.length - requestsBefore).toBe(1);
+      expect(handle.getUsageSnapshot().tokenUsage).toBe(788072);
+    } finally {
+      await handle?.close();
+      scriptedResponses.length = 0;
+      rmSync(workingDir, { recursive: true, force: true });
+    }
+  });
+
   it(
     'startSession → send → streams text and settles → usage/cost tracked → close',
     { timeout: 60_000 },
@@ -658,6 +747,40 @@ describe.skipIf(!piAvailable)('PiAgent integration (real pi binary + fake gatewa
       }
     },
   );
+
+  // Real Pi request comparison: shortening host instructions must leave native
+  // tools/project rules intact, and getContextUsage must inspect the same runtime.
+  it('keeps native capabilities with on-demand answer instructions and exposes context sources', { timeout: 30_000 }, async () => {
+    const cwd = mkdtempSync(path.join(tmpdir(), 'pi-context-int-'));
+    writeFileSync(path.join(cwd, 'AGENTS.md'), 'Project context verification marker.');
+    const requests: Array<{ system: Array<{ text: string }>; tools: unknown }> = [];
+    try {
+      for (const answerDeliveryPrompt of [ANSWER_DELIVERY_PROMPT, PI_ANSWER_DELIVERY_PROMPT]) {
+        const deps = buildDeps();
+        deps.runtimeConfig = { ...deps.runtimeConfig, answerDeliveryPrompt };
+        const handle = await new PiAgent(deps).startSession({ sessionId: `context-${requests.length}`, workingDir: cwd, model: 'pi-test-model' });
+        try {
+          const settled = (async () => { for await (const event of handle.events()) if (event.type === 'done') break; })();
+          await handle.send({ type: 'user', content: 'ping' });
+          await settled;
+          requests.push(JSON.parse(seenRequests.at(-1)!.body));
+          const usage = await handle.getContextUsage!();
+          expect(usage?.textEstimate?.items).toEqual(expect.arrayContaining([
+            expect.objectContaining({ source: 'delivery', tokens: expect.any(Number) }),
+            expect.objectContaining({ source: 'project', tokens: expect.any(Number) }),
+            expect.objectContaining({ source: 'tools', tokens: expect.any(Number) }),
+          ]));
+          expect(usage?.categories).toEqual([]);
+          expect(usage?.totalTokens).toBeGreaterThan(0);
+        } finally { await handle.close(); }
+      }
+      expect(requests[1].tools).toEqual(requests[0].tools);
+      const systemText = (request: typeof requests[number]) => request.system.map(block => block.text).join('\n');
+      expect(systemText(requests[1])).toContain('Project context verification marker.');
+      expect(systemText(requests[1])).toContain('rich-answers');
+      expect(systemText(requests[0]).length - systemText(requests[1]).length).toBeGreaterThan(5_000);
+    } finally { rmSync(cwd, { recursive: true, force: true }); }
+  });
 
   it(
     'keeps the target runtime after a context-window settings reload',

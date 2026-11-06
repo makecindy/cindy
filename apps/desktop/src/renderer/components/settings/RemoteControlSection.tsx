@@ -1,3 +1,4 @@
+import { remoteControlSettings } from './RemoteControlSection.settings-search';
 /**
  * RemoteControlSection —— 统一的「远程控制」设置页。
  *
@@ -171,16 +172,17 @@ export function RemoteControlSection() {
 
       <div className="mt-4 flex flex-col gap-6">
         {deviceLinkAvailable ? (
-          <div id="settings-search-target-remote-v2" className={SETTINGS_CARD_CLASS}>
+          <div id={remoteControlSettings.v2.targetId} className={SETTINGS_CARD_CLASS}>
             <div className={SETTINGS_ROW_CLASS}>
               <div className="flex min-w-0 flex-col gap-0.5">
-                <span className={SETTINGS_ROW_LABEL_CLASS}>{t('settings.remoteControl.v2.switch.title')}</span>
-                <span className={SETTINGS_ROW_HINT_CLASS}>{t('settings.remoteControl.v2.switch.hint')}</span>
+                <span className={SETTINGS_ROW_LABEL_CLASS}>{t(remoteControlSettings.v2.titleKey)}</span>
+                <span className={SETTINGS_ROW_HINT_CLASS}>{t(remoteControlSettings.v2.descriptionKey)}</span>
               </div>
               <Switch
+                data-setting-id={remoteControlSettings.v2.id}
                 checked={v2.enabled}
                 onCheckedChange={v2.setEnabled}
-                aria-label={t('settings.remoteControl.v2.switch.title')}
+                aria-label={t(remoteControlSettings.v2.titleKey)}
               />
             </div>
           </div>
@@ -193,8 +195,8 @@ export function RemoteControlSection() {
         {deviceLinkAvailable && !v2.enabled ? (
           <>
             <CollapsibleSubSection
-              id="settings-search-target-remote-devices"
-              title={t('settings.remoteControl.sections.myDevices')}
+              id={remoteControlSettings.devices.targetId}
+              title={t(remoteControlSettings.devices.titleKey)}
               summary={devSumText}
               dotColor={null}
               open={deepLink.devicesOpen}
@@ -217,10 +219,10 @@ export function RemoteControlSection() {
               />
             </CollapsibleSubSection>
             {/* 设备之间经哪条线路连接:紧跟在「我的设备」下面直接展示,当前线路一眼可见,不再单独占一个入口。 */}
-            <section id="settings-search-target-remote-relay" className="flex flex-col gap-3">
+            <section id={remoteControlSettings.relay.targetId} className="flex flex-col gap-3">
               <div className="flex flex-col gap-0.5">
                 <h3 className="text-14 font-medium text-[var(--text-primary)]">
-                  {t('settings.remoteControl.relay.route.title')}
+                  {t(remoteControlSettings.relay.titleKey)}
                 </h3>
                 <p className="text-12 leading-[1.5] text-[var(--text-tertiary)]">
                   {t('settings.remoteControl.relay.route.hint')}
@@ -233,8 +235,8 @@ export function RemoteControlSection() {
         ) : null}
 
         <CollapsibleSubSection
-          id="settings-search-target-remote-ssh"
-          title={t('settings.remoteControl.sections.ssh')}
+          id={remoteControlSettings.ssh.targetId}
+          title={t(remoteControlSettings.ssh.titleKey)}
           summary={sshSum?.text ?? null}
           dotColor={sshSum?.dot ?? null}
           open={sshOpen}

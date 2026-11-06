@@ -1,5 +1,6 @@
 import { FILE_PEER_LOCAL, type FilePeerHostApi, type FilePeerCommand } from '../shared/filePeer';
 import { contextBridge, ipcRenderer } from 'electron';
+import { RECORDING_AUDIO, type RecordingAudioApi } from '../shared/recordingAudio';
 import { DIRECT_LINK_LOCAL, type DirectLinkHostApi } from '../shared/directLink';
 import type { DirectRuntimeCommand } from '@cindy/device-link';
 import {
@@ -30,7 +31,14 @@ const api: DesktopCaptureApi = {
   liveScreenFrames: (lease, keyframe) =>
     ipcRenderer.invoke(DESKTOP_LOCAL.LIVE_SCREEN_FRAMES, lease, keyframe),
 };
-if (location.search === '?mode=direct') {
+if (location.search === '?mode=recording') {
+  const recording: RecordingAudioApi = {
+    register: () => ipcRenderer.invoke(RECORDING_AUDIO.REGISTER),
+    data: (bytes) => ipcRenderer.send(RECORDING_AUDIO.DATA, bytes),
+    state: (error) => ipcRenderer.send(RECORDING_AUDIO.STATE, error),
+  };
+  contextBridge.exposeInMainWorld('recordingAudio', recording);
+} else if (location.search === '?mode=direct') {
   const direct: DirectLinkHostApi = {
     register: () => ipcRenderer.invoke(DIRECT_LINK_LOCAL.REGISTER),
     event: (event) => { void ipcRenderer.invoke(DIRECT_LINK_LOCAL.EVENT, event).catch(() => {}); },

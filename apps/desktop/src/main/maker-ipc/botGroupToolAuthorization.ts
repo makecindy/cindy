@@ -10,6 +10,7 @@ export interface GroupToolAuthority {
   mode: 'owner' | 'chat' | 'tools';
   validate(): Promise<void>;
   isCurrent(): boolean;
+  onDenied?(error: GroupToolAuthorizationError): Promise<void>;
 }
 const authorities = new Map<string, GroupToolAuthority>();
 
@@ -28,6 +29,14 @@ export function registerGroupToolAuthority(sessionId: string, authority: GroupTo
 
 export async function authorizeGroupTool(sessionId: string, botId: string, operation: GroupToolOperation) {
   const authority = authorities.get(sessionId);
+  const denied = (temporary = false) => {
+    const error = new GroupToolAuthorizationError(temporary);
+    if (authority && authorities.get(sessionId) === authority && authority.botId === botId && authority.isCurrent()) {
+      // Reporting must not grant the operation or replace its original denial.
+      void Promise.resolve().then(() => authority.onDenied?.(error)).catch(() => undefined);
+    }
+    return error;
+  };
   const assertCurrent = () => {
     if (!authority || authorities.get(sessionId) !== authority || authority.botId !== botId
       || !authority.isCurrent() || authority.mode === 'chat'
@@ -36,10 +45,10 @@ export async function authorizeGroupTool(sessionId: string, botId: string, opera
   assertCurrent();
   try { await authority!.validate(); } catch (error) {
     const revoked = error instanceof GroupToolAuthorizationError && !error.temporary;
-    if (revoked && authorities.get(sessionId) === authority) authorities.delete(sessionId);
+    if (revoked && authorities.get(sessionId) === authority) { denied(); authorities.delete(sessionId); }
     // A transport failure denies this attempt, without permanently revoking a live lease.
     assertCurrent();
-    throw new GroupToolAuthorizationError(!revoked);
+    throw denied(!revoked);
   }
   assertCurrent();
   return { assertCurrent, mode: authority!.mode, sourceGroup: authority!.sourceGroup, refresh: async (): Promise<void> => {

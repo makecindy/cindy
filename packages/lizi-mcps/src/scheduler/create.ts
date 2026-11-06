@@ -182,7 +182,7 @@ export function registerScheduleCreateTool(
         .number()
         .int()
         .optional()
-        .describe('Unix ms 截止时间戳（可选）；超过后 scheduler 不再触发'),
+        .describe('Unix ms 截止时间戳（可选）；到期后不再自动触发，已开始的运行继续完成'),
       device: z
         .string()
         .min(1)

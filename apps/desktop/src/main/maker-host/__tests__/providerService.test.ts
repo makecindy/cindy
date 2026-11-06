@@ -428,3 +428,28 @@ describe('createProviderService', () => {
     expect(connectedProvidersForAgent(providers, 'codex')).toHaveLength(0);
   });
 });
+
+
+describe('alias exact-route overrides in provider snapshots', () => {
+  it('rechecks custom budget/price state on each snapshot and keeps original members', async () => {
+    const provider = buildUserProvider({ id: 'alias-test', name: 'Alias', runtimes: {
+      codex: { baseUrl: 'https://api.deepseek.com', wireProtocol: 'openai-chat', models: [
+        { id: 'deepseek-flash', name: 'Flash' }, { id: 'deepseek-v4-flash', name: 'Legacy' },
+      ] },
+    } });
+    provider.models.codex!.forEach((m) => { m.selectionAliasKey = 'deepseek-flash'; });
+    let customized = false;
+    const check = vi.fn((_pid: string, _agent: string, id: string) => customized && id === 'deepseek-v4-flash');
+    const svc = createProviderService({ getCatalog: () => ({ ...BUNDLED_CATALOG, providers: [provider] }),
+      connection: { xd: () => false, anthropic: () => false, openai: () => false, xai: () => false },
+      customApiKeyConnected: () => true, hasModelAliasOverride: check });
+    expect((await svc.listProviders())[0].models.codex!.every((m) => m.selectionAliasKey)).toBe(true);
+    customized = true;
+    const rows = (await svc.listProviders())[0].models.codex!;
+    expect(rows.map((m) => m.id)).toEqual(['deepseek-flash', 'deepseek-v4-flash']);
+    expect(rows.every((m) => !m.selectionAliasKey)).toBe(true);
+    expect(provider.models.codex!.every((m) => m.selectionAliasKey)).toBe(true);
+    customized = false;
+    expect((await svc.listProviders())[0].models.codex!.every((m) => m.selectionAliasKey)).toBe(true);
+  });
+});

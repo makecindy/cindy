@@ -11,8 +11,22 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import type { McpProvider } from '@cindy/maker-core';
 import type { CustomMcpConfig } from '../../../shared/customMcp.js';
+import { detectMcpDuplicates, resolveMcpDuplicateChoices } from '../../maker-host/mcp-duplicate-detection.js';
+import type { McpDuplicateChoice } from '../../../shared/customMcp.js';
 
 const storeMock = vi.hoisted(() => ({ listCustomMcpServers: vi.fn() }));
+
+// This suite uses isolated SQLite fixtures; OS encryption is covered by the store suite.
+vi.mock('electron', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('electron')>();
+  return { ...actual, safeStorage: {
+    ...actual.safeStorage,
+    isEncryptionAvailable: () => true,
+    getSelectedStorageBackend: () => 'gnome_libsecret',
+    encryptString: (value: string) => Buffer.from(value, 'utf8'),
+    decryptString: (value: Buffer) => value.toString('utf8'),
+  } };
+});
 
 vi.mock('../../maker-host/custom-mcp-store.js', async () => {
   const actual = await vi.importActual<typeof import('../../maker-host/custom-mcp-store.js')>(
@@ -31,6 +45,7 @@ vi.mock('../../secrets/providerSecretStore.js', () => ({
 
 import {
   getBuiltinMcpServerNames,
+  listRegistrableCustomMcpServers,
   refreshCustomMcpProviders,
   registerCustomMcpArrays,
   resetCustomMcpRegistry,
@@ -56,6 +71,49 @@ beforeEach(() => {
 });
 
 describe('refreshCustomMcpProviders', () => {
+  // PR #9055: duplicate diagnostics must use registration's real admission rules.
+  // Unit: one native endpoint and legacy invalid rows; prior registry tests did not
+  // exercise source choices, so they missed disabling the only usable connection.
+  it('only offers registrable persisted connections as duplicate sources', async () => {
+    const arr: McpProvider[] = [builtin('cindy_browser')];
+    registerCustomMcpArrays(arr);
+    const saved = [config('safe_one'), config('__proto__'), config('codex_apps'),
+      config('cindy_browser'), { ...config('bad_header'), headers: { 'X-Test': 'line\nbreak' } }];
+    storeMock.listCustomMcpServers.mockResolvedValue(saved);
+    await refreshCustomMcpProviders();
+    const report = await detectMcpDuplicates({
+      home: '/fixture', listCustom: listRegistrableCustomMcpServers, builtinNames: getBuiltinMcpServerNames,
+      readJson: async () => ({ mcpServers: { native_tools: { type: 'http', url: saved[0]!.url } } }),
+      workspaceSettingsFiles: async () => [], readToken: () => null, readChoices: () => ({}),
+    }, { env: {} });
+    expect(report.connections.map(pair => pair.cindyId)).toEqual(['safe_one']);
+    expect(arr.map(provider => provider.name)).toEqual(['cindy_browser', 'safe_one']);
+    expect(saved).toHaveLength(5);
+  });
+
+  it.each(['cindy', 'claude'] as const)('does not apply the saved %s choice after a custom ID becomes reserved', async choice => {
+    const arr: McpProvider[] = [];
+    registerCustomMcpArrays(arr);
+    storeMock.listCustomMcpServers.mockResolvedValue([config('mytools')]);
+    await refreshCustomMcpProviders();
+    const choices: Record<string, McpDuplicateChoice> = {};
+    const deps = {
+      home: '/fixture', listCustom: listRegistrableCustomMcpServers, builtinNames: getBuiltinMcpServerNames,
+      readJson: async () => ({ mcpServers: { native_tools: { type: 'http', url: config('mytools').url } } }),
+      workspaceSettingsFiles: async () => [], readToken: () => null, readChoices: () => choices,
+    };
+    const original = await detectMcpDuplicates(deps, { env: {} });
+    choices[original.connections[0]!.id] = choice;
+    const selected = resolveMcpDuplicateChoices(await detectMcpDuplicates(deps, { env: {} }));
+    expect(selected).toEqual(choice === 'cindy'
+      ? { skipHostServers: [], denyNativeServers: ['native_tools'] }
+      : { skipHostServers: ['mytools'], denyNativeServers: [] });
+    registerCustomMcpArrays([builtin('mytools')]);
+    await refreshCustomMcpProviders();
+    const changed = await detectMcpDuplicates(deps, { env: {} });
+    expect(changed.connections).toEqual([]);
+    expect(resolveMcpDuplicateChoices(changed)).toEqual({ skipHostServers: [], denyNativeServers: [] });
+  });
   it('appends custom providers that do not collide', async () => {
     const arr: McpProvider[] = [builtin('cindy_browser')];
     registerCustomMcpArrays(arr);

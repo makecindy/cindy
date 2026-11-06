@@ -4,6 +4,7 @@ import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 
 const h = vi.hoisted(() => ({ options: {} as any, dark: false }));
+vi.mock('@/hooks/useReduceMotion', () => ({ useReduceMotionEnabled: () => false }));
 vi.mock('react-native', () => ({
   StyleSheet: { create: (value: unknown) => value }, Image: ({ source, style }: any) => el('i', { 'data-artwork': source, style }),
   View: ({ children, testID }: any) => el('div', { 'data-testid': testID }, children),
