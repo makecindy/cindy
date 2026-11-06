@@ -28,6 +28,7 @@ it.skipIf(process.platform !== 'darwin')(
         'native keyboard flags passed',
         'native window confinement passed',
         'native qr detection passed',
+        'native away input gate passed',
       ]);
     } finally {
       await rm(directory, { recursive: true, force: true });

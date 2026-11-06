@@ -323,6 +323,31 @@ struct PrivacyInputGate {
   }
 }
 
+/// Away guard: which physical input at a covered Mac means "someone is here". Only a
+/// deliberate press counts. Releases, pointer drift, Caps Lock and a stray scroll tick
+/// are swallowed without locking: idle mice, wireless receivers and some keypads emit
+/// these on their own (2026-11-06 previews locked within 0.1 s of covering).
+struct AwayInputGate {
+  static let scrollPoints = 30.0
+  private var scrollSum = 0.0
+  private var scrollStart = -Double.infinity
+  mutating func isPresence(_ type: CGEventType, flags: CGEventFlags, scroll: Double, now: Double) -> Bool {
+    switch type {
+    case .keyDown, .leftMouseDown, .rightMouseDown, .otherMouseDown:
+      return true
+    case .flagsChanged:
+      // A modifier going down; releases and Caps Lock carry none of these.
+      return !flags.intersection([.maskCommand, .maskShift, .maskControl, .maskAlternate]).isEmpty
+    case .scrollWheel:
+      if now - scrollStart > 1 { scrollStart = now; scrollSum = 0 }
+      scrollSum += abs(scroll)
+      return scrollSum >= Self.scrollPoints
+    default:
+      return false
+    }
+  }
+}
+
 // MARK: - Input handoff (代输入)
 // One JSON request on stdin, one JSON reply on stdout. Owner values arrive only
 // on stdin and are never printed. Text fields only report whether they contain
@@ -1049,6 +1074,7 @@ if CommandLine.arguments == [CommandLine.arguments[0], "--privacy-input"] {
 // All state lives on the main queue; only fixed words cross stdout.
 final class AwayGuard {
   var tap: CFMachPort?
+  var gate = AwayInputGate()
   private var ended = false
   private let lockSession: () -> Bool
   init(lockSession: @escaping () -> Bool) { self.lockSession = lockSession }
@@ -1096,13 +1122,13 @@ if CommandLine.arguments == [CommandLine.arguments[0], "--away-guard"] {
       let physical = event.getIntegerValueField(.eventSourceUnixProcessID) == 0
         && event.getIntegerValueField(.eventSourceStateID) == Int64(CGEventSourceStateID.hidSystemState.rawValue)
       if !physical { return Unmanaged.passUnretained(event) }
-      // Pointer movement alone is swallowed but does not lock: idle mice and wireless
-      // receivers report small movements on their own (2026-11-06: every preview locked
-      // within 0.1 s). A key, modifier, click or scroll means someone is at this Mac.
-      let moved = [CGEventType.mouseMoved, .leftMouseDragged, .rightMouseDragged, .otherMouseDragged].contains(type)
-      if !moved {
+      // Physical input never reaches the apps behind the cover; only a deliberate press
+      // turns into the lock (see AwayInputGate).
+      let scroll = Double(abs(event.getIntegerValueField(.scrollWheelEventPointDeltaAxis1))
+        + abs(event.getIntegerValueField(.scrollWheelEventPointDeltaAxis2)))
+      if away.gate.isPresence(type, flags: event.flags, scroll: scroll, now: ProcessInfo.processInfo.systemUptime) {
         let reason = type == .scrollWheel ? "scroll" : type == .flagsChanged ? "modifier"
-          : type == .keyDown || type == .keyUp ? "key" : "click"
+          : type == .keyDown ? "key" : "click"
         away.finish(lock: true, reason: reason)
       }
       return nil
