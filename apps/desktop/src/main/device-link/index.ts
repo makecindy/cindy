@@ -79,6 +79,8 @@ import {
   type OwnershipLock,
 } from './ownership';
 import { DEVICE_LINK_PUSH } from '../../shared/deviceLinkIpc';
+import type { DeviceLinkPeerLinksSnapshot } from '../../shared/deviceLinkIpc';
+import { createPeerLinksPushScheduler } from './peerLinksPush';
 import {
   createTransportTimeoutReopenLoop,
   routeLinkCloseForReopen,
@@ -908,6 +910,8 @@ export function initDeviceLinkService(options: DeviceLinkServiceOptions = {}): v
       handleControllerOffline(change.deviceId, change);
     }
   });
+  // 拓扑页推送:订阅放在 peerLinksPush 里,不改这里被测试逐段提取执行的回调。
+  peerLinksPush.attach(client);
   client.onPeerTransportReset(({ deviceId }) => {
     invalidatePluginOauth(deviceId);
     // Mutual control shares one peer link: a locally exhausted inbound stream
@@ -1482,6 +1486,9 @@ function teardownActiveLink(): void {
   stopNetworkWatch = null;
   if (!client || linkTornDown) return;
   linkTornDown = true;
+  // 拓扑页立刻清空;下一段链路从头比较结构。
+  peerLinksPush.dispose();
+  broadcast(DEVICE_LINK_PUSH.PEER_LINKS_CHANGED, { links: [], relayRttMs: null });
   controllerDisplayNameRefreshGeneration += 1;
   mobileNotifyGeneration += 1;
   if (relayAuthRecoveryRetryTimer !== null) {
@@ -1536,6 +1543,22 @@ function cancelSubscriptionReplay(deviceId: string): void {
 export function getDeviceLinkStatus(): DeviceLinkStatus {
   return client?.getStatus() ?? 'stopped';
 }
+
+/** 远程连接拓扑:本机已协商链路的对端路径 / RTT 快照。链路未起、已拆除或会话边界期间为空。 */
+export function getDeviceLinkPeerLinks(): DeviceLinkPeerLinksSnapshot {
+  if (!client || linkTornDown || isAppSessionBoundaryPending()) return { links: [], relayRttMs: null };
+  return {
+    // 拓扑只画同账号设备;跨账号 peer(共享任务 / 供应商分享)不在这页。
+    links: client.getPeerLinkSnapshots().filter((link) => !isScopedPeer(link.deviceId)),
+    relayRttMs: client.getRelayRttMs(),
+  };
+}
+
+/** 链路拓扑变化的推送合并器:事件只 schedule,250ms 后结构变了才广播全量快照。 */
+const peerLinksPush = createPeerLinksPushScheduler({
+  snapshot: getDeviceLinkPeerLinks,
+  broadcast: (snapshot) => broadcast(DEVICE_LINK_PUSH.PEER_LINKS_CHANGED, snapshot),
+});
 
 export function isSharedTaskAvailable(): boolean {
   const connection = client?.crossAccountConnection();

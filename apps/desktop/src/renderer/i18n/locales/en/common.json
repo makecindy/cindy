@@ -6322,6 +6322,78 @@
         "title": "Revoke access?",
         "description": "Once revoked, this device is disconnected immediately and can no longer control this machine remotely. You will need to restore its access under Settings → Remote Connection before it can reconnect.",
         "confirm": "Revoke access"
+      },
+      "v2": {
+        "switch": {
+          "title": "New connection view",
+          "hint": "Shows how each device connects to this computer in a topology map. Turn it off to go back to the list. Only changes this computer."
+        },
+        "empty": "No other devices yet. Sign in to the same account on another computer or phone and it will appear here.",
+        "stats": {
+          "online": "{{online}} / {{total}} online",
+          "direct": "{{count}} direct",
+          "relay": "{{count}} via relay",
+          "unlinked": "{{count}} not linked",
+          "attention": "{{count}} need attention",
+          "offline": "{{count}} offline"
+        },
+        "node": {
+          "thisComputer": "This computer"
+        },
+        "path": {
+          "direct": "Direct",
+          "relay": "Via {{name}}",
+          "unlinked": "Online, not linked",
+          "offline": "Offline"
+        },
+        "attention": {
+          "unresponsive": "Not responding, retrying",
+          "masterOff": "This computer does not allow remote control",
+          "connectionIssue": "Problem with the relay connection"
+        },
+        "relay": {
+          "official": "Cindy relay"
+        },
+        "ms": "{{value}} ms",
+        "offlineFold": "{{count}} offline",
+        "offlineShow": "Show offline devices",
+        "offlineHide": "Hide offline devices",
+        "group": {
+          "direct": "Direct",
+          "relay": "Via relay",
+          "unlinked": "Not linked",
+          "attention": "Needs attention",
+          "offline": "Offline"
+        },
+        "tabs": {
+          "todo": "Needs attention",
+          "recent": "Recent",
+          "aria": "Below the topology"
+        },
+        "todo": {
+          "empty": "Nothing needs attention",
+          "emptyHint": "Devices with a problem are listed here"
+        },
+        "recent": {
+          "online": "{{name}} came online",
+          "offline": "{{name}} went offline",
+          "empty": "No device has come or gone since this page opened"
+        },
+        "popover": {
+          "status": "Status",
+          "path": "Path",
+          "latency": "Latency",
+          "lastSeen": "Last seen",
+          "controlling": "Controlling this computer",
+          "rttNote": "last measured",
+          "manage": "Manage device…",
+          "linkStatus": "To {{name}}",
+          "version": "Cindy {{version}}",
+          "remoteDesktopFailed": "Could not open Remote Desktop"
+        },
+        "sections": {
+          "devicesList": "Device list"
+        }
       }
     },
     "tina": {

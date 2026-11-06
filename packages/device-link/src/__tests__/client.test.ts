@@ -6187,6 +6187,36 @@ describe('DeviceLinkClient', () => {
     h.client.stop();
   });
 
+  // 远程连接拓扑页展示到 relay 的往返:只有真实 pong 才出样本,重复 pong 不重复采样,断线归零。
+  it('心跳往返只在真实 pong 后出样本,重复 pong 不出第二个,断线清零', async () => {
+    vi.useFakeTimers();
+    try {
+      const h = makeHarness({ timing: { pingIntervalMs: 8, pongMissLimit: 3 } });
+      const internals = h.client as unknown as { monotonicNow(): number };
+      const realNow = internals.monotonicNow.bind(h.client);
+      let offset = 0;
+      internals.monotonicNow = () => realNow() + offset;
+      h.client.start();
+      await vi.advanceTimersByTimeAsync(1);
+      const ws = h.current();
+      ws.ack();
+      expect(h.client.getRelayRttMs()).toBeNull();
+      await vi.advanceTimersByTimeAsync(8);
+      expect(ws.sent.some((e) => e.kind === 'ping')).toBe(true);
+      offset = 37;
+      ws.push({ v: PROTOCOL_VERSION, kind: 'pong' });
+      expect(h.client.getRelayRttMs()).toBe(37);
+      offset = 90;
+      ws.push({ v: PROTOCOL_VERSION, kind: 'pong' });
+      expect(h.client.getRelayRttMs()).toBe(37);
+      ws.emit('close', 1006, 'network lost');
+      expect(h.client.getRelayRttMs()).toBeNull();
+      h.client.stop();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it('非 pong 的有效入站流量也能阻止心跳误判共享连接', async () => {
     // 这条验证的是 heartbeat tick 与入站活动的逻辑顺序，不是宿主定时器精度。
     // Windows 高负载 runner 会把 4ms/8ms 真实 timer 一起推迟，再先执行较早注册的
@@ -11278,6 +11308,35 @@ describe('automatic LAN connection through platform bridges', () => {
 });
 
 describe('直连优先、中继兜底(Device Link direct path)', () => {
+  // 远程连接拓扑页读的快照:建链后出现(relay、未测往返、已就绪),ACK 后有往返,挂上直连后路径变直连,关链后消失。
+  it('链路快照反映路径、就绪与往返,关链后消失', async () => {
+    vi.useFakeTimers();
+    const h = makeHarness({ timing: { pingIntervalMs: 1_000_000, transportRetryIntervalMs: 1_000 } });
+    try {
+      h.client.start(); await vi.advanceTimersByTimeAsync(0); h.current().ack();
+      expect(h.client.getPeerLinkSnapshots()).toEqual([]);
+      const opening = establishInboundReliableLink(h, 'peer-stream');
+      await vi.advanceTimersByTimeAsync(0); await opening;
+      expect(h.client.getPeerLinkSnapshots()).toEqual([{ deviceId: 'dev-b', path: 'relay', rttMs: null, open: true }]);
+      h.client.sendInvokeResult('dev-b', 'r1', { ok: true, result: 1 });
+      await vi.advanceTimersByTimeAsync(0);
+      const ws = h.current();
+      const meta = parseTransportPayload(ws.sent.find((env) => env.kind === 'invoke-result')!.payload)!.meta;
+      ws.push({
+        v: PROTOCOL_VERSION, kind: 'push', src: 'dev-b',
+        payload: { channel: DEVICE_LINK_TRANSPORT_ACK_CHANNEL, payload: { streamId: meta.streamId, ackSeq: meta.seq } },
+      });
+      await vi.advanceTimersByTimeAsync(0);
+      const acked = h.client.getPeerLinkSnapshots()[0];
+      expect(acked.rttMs).not.toBeNull();
+      expect(acked.rttMs).toBeGreaterThanOrEqual(0);
+      h.client.attachDirectPath('dev-b', { send() {}, close() {} });
+      expect(h.client.getPeerLinkSnapshots()[0]).toMatchObject({ deviceId: 'dev-b', path: 'direct', open: true });
+      h.client.closeLink('dev-b', 'user');
+      expect(h.client.getPeerLinkSnapshots()).toEqual([]);
+    } finally { h.client.stop(); vi.useRealTimers(); }
+  });
+
   it('replays a partially written large head while an older relay tail is still in flight', async () => {
     vi.useFakeTimers();
     const h = makeHarness({ timing: { pingIntervalMs: 1_000_000, transportRetryIntervalMs: 1_000 } });

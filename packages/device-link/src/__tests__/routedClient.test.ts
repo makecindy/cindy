@@ -130,6 +130,9 @@ describe('RoutedDeviceLinkClient', () => {
     socket.push({ v: PROTOCOL_VERSION, kind: 'link-accept', id: request.id, src: peer,
       payload: { appVersion: '1', allowlistHash: 'hash', capabilities: ['github-read-v1'] } });
     await opening;
+    // 远程连接拓扑:路由客户端的快照经基类读自建中转那条连接;这里的对端没声明可靠传输,是 legacy 链路,不算拓扑里的链路。
+    expect(h.client.getPeerLinkSnapshots()).toEqual([]);
+    expect(h.client.getRelayRttMs()).toBeNull();
     const result = h.client.invoke(peer, payload);
     await h.tick();
     const invoke = socket.sent.filter(frame => frame.kind === 'invoke').at(-1)!;

@@ -6279,6 +6279,78 @@
         "title": "撤其访问权乎？",
         "description": "撤销之后，该设备即刻断开，且不能再远程连接此机。此后须于「规制 → 远程连接」中恢复其访问权，对方方能重连。",
         "confirm": "撤访问权"
+      },
+      "v2": {
+        "switch": {
+          "title": "新式连接",
+          "hint": "以拓扑之图观诸设备如何连于此机；闭之则复旧之清单。唯改此机所示。"
+        },
+        "empty": "尚无他设备。于他机或手机登同一账号，即现于此。",
+        "stats": {
+          "online": "{{online}} / {{total}} 在线",
+          "direct": "{{count}} 直连",
+          "relay": "{{count}} 经中转",
+          "unlinked": "{{count}} 未建链",
+          "attention": "{{count}} 待理",
+          "offline": "{{count}} 离线"
+        },
+        "node": {
+          "thisComputer": "此机"
+        },
+        "path": {
+          "direct": "直连",
+          "relay": "经「{{name}}」中转",
+          "unlinked": "在线，未建链",
+          "offline": "离线"
+        },
+        "attention": {
+          "unresponsive": "连接无应，方重试",
+          "masterOff": "此机未许他设备操控",
+          "connectionIssue": "与中转之连接有碍"
+        },
+        "relay": {
+          "official": "Cindy 中转"
+        },
+        "ms": "{{value}} ms",
+        "offlineFold": "离线者 {{count}}",
+        "offlineShow": "示离线设备",
+        "offlineHide": "藏离线设备",
+        "group": {
+          "direct": "直连",
+          "relay": "经中转",
+          "unlinked": "未建链",
+          "attention": "待理",
+          "offline": "离线"
+        },
+        "tabs": {
+          "todo": "待理",
+          "recent": "近事",
+          "aria": "拓扑之下"
+        },
+        "todo": {
+          "empty": "无待理者",
+          "emptyHint": "设备有恙，则列于此"
+        },
+        "recent": {
+          "online": "{{name}} 上线",
+          "offline": "{{name}} 下线",
+          "empty": "开此页以来，设备无上下线"
+        },
+        "popover": {
+          "status": "状态",
+          "path": "路径",
+          "latency": "延迟",
+          "lastSeen": "末见",
+          "controlling": "方操控此机",
+          "rttNote": "近测",
+          "manage": "理设备…",
+          "linkStatus": "与「{{name}}」",
+          "version": "Cindy {{version}}",
+          "remoteDesktopFailed": "开远程桌面不成"
+        },
+        "sections": {
+          "devicesList": "设备之清单"
+        }
       }
     },
     "tina": {

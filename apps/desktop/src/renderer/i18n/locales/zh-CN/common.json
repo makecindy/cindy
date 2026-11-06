@@ -6279,6 +6279,78 @@
         "title": "撤销访问权限？",
         "description": "撤销后，该设备会立即断开，并且无法再远程连接本机。之后需在「设置 → 远程连接」中恢复其访问权限，对方才能重新连接。",
         "confirm": "撤销访问权限"
+      },
+      "v2": {
+        "switch": {
+          "title": "新版连接",
+          "hint": "用拓扑图查看每台设备怎么连到这台电脑；关闭后恢复原来的列表。只改这台电脑的显示。"
+        },
+        "empty": "还没有其它设备。在另一台电脑或手机上登录同一账号，它就会出现在这里。",
+        "stats": {
+          "online": "{{online}} / {{total}} 在线",
+          "direct": "{{count}} 直连",
+          "relay": "{{count}} 经中转",
+          "unlinked": "{{count}} 未建链",
+          "attention": "{{count}} 要处理",
+          "offline": "{{count}} 离线"
+        },
+        "node": {
+          "thisComputer": "这台电脑"
+        },
+        "path": {
+          "direct": "直连",
+          "relay": "经「{{name}}」中转",
+          "unlinked": "在线，未建链",
+          "offline": "离线"
+        },
+        "attention": {
+          "unresponsive": "连接无响应，正在重试",
+          "masterOff": "本机未允许其它设备控制",
+          "connectionIssue": "与中转的连接有问题"
+        },
+        "relay": {
+          "official": "Cindy 中转"
+        },
+        "ms": "{{value}} ms",
+        "offlineFold": "{{count}} 台离线",
+        "offlineShow": "显示离线设备",
+        "offlineHide": "收起离线设备",
+        "group": {
+          "direct": "直连",
+          "relay": "经中转",
+          "unlinked": "未建链",
+          "attention": "要处理",
+          "offline": "离线"
+        },
+        "tabs": {
+          "todo": "需要处理",
+          "recent": "最近",
+          "aria": "拓扑下方内容"
+        },
+        "todo": {
+          "empty": "没有需要处理的",
+          "emptyHint": "设备出问题时会列在这里"
+        },
+        "recent": {
+          "online": "{{name}} 上线",
+          "offline": "{{name}} 下线",
+          "empty": "打开这页后还没有设备上下线"
+        },
+        "popover": {
+          "status": "状态",
+          "path": "路径",
+          "latency": "延迟",
+          "lastSeen": "最后在线",
+          "controlling": "正在控制这台电脑",
+          "rttNote": "最近测得",
+          "manage": "管理设备…",
+          "linkStatus": "与「{{name}}」",
+          "version": "Cindy {{version}}",
+          "remoteDesktopFailed": "打开远程桌面失败"
+        },
+        "sections": {
+          "devicesList": "设备列表"
+        }
       }
     },
     "tina": {

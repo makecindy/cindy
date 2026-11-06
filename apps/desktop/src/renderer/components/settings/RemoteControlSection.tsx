@@ -7,6 +7,10 @@
  *   2. SSH:原 RemoteSection 原样嵌入(showTitle=false,标题由本页统一给)
  * (Slack 连接子块已迁至「IM 机器人」页 Cindy 栏, 见 ImBotSection.tsx + HookConnectionsSection.tsx)
  *
+ * 「新版连接」开关(useRemoteConnectionV2,只改这台电脑的显示,默认关):打开后同账号设备部分
+ * 换成拓扑页(features/remote-connection-v2),关闭时与原来完全一致。设备列表的展开态与
+ * 设备深链两种形态共用 useRemoteDevicesDeepLink。
+ *
  * 两个子块都是无上限列表,页面默认全部收起;收起态 header 右侧带状态摘要,
  * 各子块独立展开,状态不持久化(刷新回默认,与 PinnedSection 先例一致)。
  * 「我的设备」的本机卡(被控总开关 + relay 状态)是全页最常用控件,以 pinned
@@ -17,33 +21,30 @@
  * SSH 主机摘要由本组件自取轻量快照(list + onStatusChanged),不侵入 RemoteSection。
  */
 
-import { useCallback, useEffect, useLayoutEffect, useRef, useState, type ReactNode } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useState } from 'react';
 import { useTranslation } from 'react-i18next';
-import { useLocation, useNavigate } from 'react-router-dom';
-import { ChevronDown, ChevronRight } from 'lucide-react';
+import { useLocation } from 'react-router-dom';
 
 import { useDeviceLinkSettings, type DeviceLinkSettings } from '@/hooks/useDeviceLinkSettings';
+import { Switch } from '@/components/ui/switch';
 import { MyDevicesPanel } from './MyDevicesPanel';
 import { RelayServicePanel, useSelfHostedRelayState } from './RelayServicePanel';
 import { RemoteDesktopSetting } from './RemoteDesktopSetting';
 import { RemoteSection } from './RemoteSection';
+import { CollapsibleSubSection } from './CollapsibleSubSection';
+import { useRemoteDevicesDeepLink } from './useRemoteDevicesDeepLink';
+import {
+  SETTINGS_CARD_CLASS,
+  SETTINGS_ROW_CLASS,
+  SETTINGS_ROW_HINT_CLASS,
+  SETTINGS_ROW_LABEL_CLASS,
+} from './settingsRowClasses';
 import { useAuth } from '@/contexts/AuthContext';
 import { useSettingsSearchNavigation } from './SettingsSearchNavigation';
+import { useRemoteConnectionV2 } from '@/features/remote-connection-v2/useRemoteConnectionV2';
+import { RemoteConnectionV2Section } from '@/features/remote-connection-v2/RemoteConnectionV2Section';
 
-const DEVICES_SECTION_PARAMS = ['devices', 'remoteControl.devices'];
-
-function isDevicesSection(search: string): boolean {
-  return DEVICES_SECTION_PARAMS.includes(new URLSearchParams(search).get('section') ?? '');
-}
-
-/**
- * 深链 `?section=devices&device=<id>`:展开「我的设备」并把该设备行滚入视野、短暂高亮
- * (消息气泡上的设备标签由此进入)。只在 devices 段深链下生效;收起列表时随 section 一起清掉。
- */
-function focusDeviceParam(search: string): string | null {
-  if (!isDevicesSection(search)) return null;
-  return new URLSearchParams(search).get('device')?.trim() || null;
-}
+export { CollapsibleSubSection } from './CollapsibleSubSection';
 
 /** SSH 状态 → 摘要状态点的优先级:有已连接给绿,其次进行中给橙,再次失败给红,否则灰。 */
 const SSH_PROGRESS_STATUSES: ReadonlySet<RemoteHostSnapshot['status']> = new Set([
@@ -51,63 +52,6 @@ const SSH_PROGRESS_STATUSES: ReadonlySet<RemoteHostSnapshot['status']> = new Set
   'authenticating',
   'reconnecting',
 ]);
-
-function CollapsibleSubSection({
-  id,
-  title,
-  summary,
-  dotColor,
-  open,
-  onToggle,
-  pinned,
-  children,
-}: {
-  id?: string;
-  title: string;
-  /** 收起态 header 右侧的状态摘要;null = 数据未就绪,整块不显示(避免闪一帧错误状态)。 */
-  summary: string | null;
-  dotColor: string | null;
-  open: boolean;
-  onToggle: () => void;
-  /** 不随折叠隐藏的常驻内容(如「我的设备」的本机卡),渲染在 header 与折叠区之间。 */
-  pinned?: ReactNode;
-  children: ReactNode;
-}) {
-  return (
-    <section id={id} className="flex flex-col gap-3">
-      <button
-        type="button"
-        onClick={onToggle}
-        aria-expanded={open}
-        className="group flex w-full items-center justify-between gap-3 text-left"
-      >
-        <span className="shrink-0 text-14 font-medium text-[var(--text-primary)]">{title}</span>
-        <div className="flex min-w-0 items-center gap-2">
-          {!open && summary ? (
-            <>
-              {dotColor ? (
-                <span
-                  className="h-1.5 w-1.5 shrink-0 rounded-full"
-                  style={{ backgroundColor: dotColor }}
-                  aria-hidden
-                />
-              ) : null}
-              <span className="truncate text-12 text-[var(--text-tertiary)]">{summary}</span>
-            </>
-          ) : null}
-          <span
-            className="shrink-0 text-[var(--text-tertiary)] transition-colors group-hover:text-[var(--text-primary)]"
-            aria-hidden
-          >
-            {open ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
-          </span>
-        </div>
-      </button>
-      {pinned}
-      <div hidden={!open}>{children}</div>
-    </section>
-  );
-}
 
 /**
  * 「我的设备」收起态摘要:其它设备数量。本机卡常驻外层,relay 状态与被控开关
@@ -158,15 +102,12 @@ export function RemoteControlSection() {
   const { entry, activation } = useSettingsSearchNavigation();
   const { t } = useTranslation();
   const { mode } = useAuth();
-  const location = useLocation();
-  const navigate = useNavigate();
   const deviceLinkAvailable = mode === 'cloud';
   const s = useDeviceLinkSettings(deviceLinkAvailable);
-
-  // 深链 ?section=devices 必须在首帧就是展开态:放到 effect 里会先画一帧收起,
-  // 再把下方内容顶开一格。
-  const [devicesOpen, setDevicesOpen] = useState(() => isDevicesSection(location.search));
+  const v2 = useRemoteConnectionV2();
+  const deepLink = useRemoteDevicesDeepLink();
   const relay = useSelfHostedRelayState(deviceLinkAvailable);
+  const location = useLocation();
   const [sshOpen, setSshOpen] = useState(
     () => new URLSearchParams(location.search).get('section') === 'remoteControl.ssh',
   );
@@ -175,50 +116,9 @@ export function RemoteControlSection() {
   // 这里不外提它的状态是有意的(979 行组件不为一行摘要重构)。
   const [hosts, setHosts] = useState<RemoteHostSnapshot[] | null>(null);
 
-  useEffect(() => {
-    if (isDevicesSection(location.search)) setDevicesOpen(true);
-  }, [location.search]);
-
-  // 同一深链再次进入(location.key 变)也要重新聚焦;列表展开后才交给面板,
-  // 否则隐藏的行滚不进视野。
-  const focusDeviceId = devicesOpen ? focusDeviceParam(location.search) : null;
-  const focusRequestKey = focusDeviceId ? `${focusDeviceId}:${location.key}` : null;
-
   useLayoutEffect(() => {
     if (entry?.targetId === 'settings-search-target-remote-ssh') setSshOpen(true);
-    if (entry?.targetId === 'settings-search-target-remote-devices') setDevicesOpen(true);
   }, [entry, activation]);
-
-  const collapseRequestedRef = useRef(false);
-  const toggleDevices = useCallback(() => {
-    setDevicesOpen((previous) => {
-      // 只有用户主动收起才需要清 URL;更新函数里只记录这次意图,幂等、可重入。
-      collapseRequestedRef.current = previous;
-      return !previous;
-    });
-  }, []);
-
-  // 收起后把 ?section=devices 摘掉,否则刷新/返回还会再展开一次。挂 effect 是为了
-  // 让 toggle 保持函数式更新;必须再看 collapseRequestedRef,否则「页面已挂载时才
-  // 导航进深链」那一帧会读到还没提交的 devicesOpen=false,把刚进来的深链清掉。
-  useEffect(() => {
-    if (devicesOpen || !collapseRequestedRef.current) return;
-    collapseRequestedRef.current = false;
-
-    const next = new URLSearchParams(location.search);
-    if (!DEVICES_SECTION_PARAMS.includes(next.get('section') ?? '')) return;
-    next.delete('section');
-    // device 聚焦参数只依附于 devices 段深链,一并摘掉。
-    next.delete('device');
-    const search = next.toString();
-    navigate(
-      {
-        pathname: location.pathname,
-        search: search ? `?${search}` : '',
-      },
-      { replace: true },
-    );
-  }, [devicesOpen, location.pathname, location.search, navigate]);
 
   const refreshHosts = useCallback(async () => {
     try {
@@ -271,29 +171,49 @@ export function RemoteControlSection() {
 
       <div className="mt-4 flex flex-col gap-6">
         {deviceLinkAvailable ? (
+          <div id="settings-search-target-remote-v2" className={SETTINGS_CARD_CLASS}>
+            <div className={SETTINGS_ROW_CLASS}>
+              <div className="flex min-w-0 flex-col gap-0.5">
+                <span className={SETTINGS_ROW_LABEL_CLASS}>{t('settings.remoteControl.v2.switch.title')}</span>
+                <span className={SETTINGS_ROW_HINT_CLASS}>{t('settings.remoteControl.v2.switch.hint')}</span>
+              </div>
+              <Switch
+                checked={v2.enabled}
+                onCheckedChange={v2.setEnabled}
+                aria-label={t('settings.remoteControl.v2.switch.title')}
+              />
+            </div>
+          </div>
+        ) : null}
+
+        {deviceLinkAvailable && v2.enabled ? (
+          <RemoteConnectionV2Section s={s} relay={relay} deepLink={deepLink} selfSettings={<RemoteDesktopSetting />} />
+        ) : null}
+
+        {deviceLinkAvailable && !v2.enabled ? (
           <>
             <CollapsibleSubSection
               id="settings-search-target-remote-devices"
               title={t('settings.remoteControl.sections.myDevices')}
               summary={devSumText}
               dotColor={null}
-              open={devicesOpen}
-              onToggle={toggleDevices}
+              open={deepLink.devicesOpen}
+              onToggle={deepLink.toggleDevices}
               pinned={
                 <MyDevicesPanel
                   s={s}
                   variant="self"
                   selfSettings={<RemoteDesktopSetting />}
-                  focusDeviceId={focusDeviceId}
-                  focusRequestKey={focusRequestKey}
+                  focusDeviceId={deepLink.focusDeviceId}
+                  focusRequestKey={deepLink.focusRequestKey}
                 />
               }
             >
               <MyDevicesPanel
                 s={s}
                 variant="others"
-                focusDeviceId={focusDeviceId}
-                focusRequestKey={focusRequestKey}
+                focusDeviceId={deepLink.focusDeviceId}
+                focusRequestKey={deepLink.focusRequestKey}
               />
             </CollapsibleSubSection>
             {/* 设备之间经哪条线路连接:紧跟在「我的设备」下面直接展示,当前线路一眼可见,不再单独占一个入口。 */}

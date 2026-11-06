@@ -6384,6 +6384,78 @@
         "title": "Revogar acesso?",
         "description": "Após a revogação, este dispositivo é desligado imediatamente e deixa de poder controlar esta máquina remotamente. Terá de restaurar o acesso em Definições → Ligação remota para que possa voltar a ligar-se.",
         "confirm": "Revogar acesso"
+      },
+      "v2": {
+        "switch": {
+          "title": "Nova vista de ligação",
+          "hint": "Mostra numa topologia como cada dispositivo se liga a este computador. Desative para voltar à lista. Altera só este computador."
+        },
+        "empty": "Ainda não há outros dispositivos. Inicie sessão com a mesma conta noutro computador ou telemóvel e ele aparecerá aqui.",
+        "stats": {
+          "online": "{{online}} / {{total}} online",
+          "direct": "{{count}} direto",
+          "relay": "{{count}} via relay",
+          "unlinked": "{{count}} sem ligação",
+          "attention": "{{count}} a verificar",
+          "offline": "{{count}} offline"
+        },
+        "node": {
+          "thisComputer": "Este computador"
+        },
+        "path": {
+          "direct": "Direto",
+          "relay": "Via {{name}}",
+          "unlinked": "Online, sem ligação",
+          "offline": "Offline"
+        },
+        "attention": {
+          "unresponsive": "Sem resposta, a tentar de novo",
+          "masterOff": "Este computador não permite controlo remoto",
+          "connectionIssue": "Problema na ligação ao relay"
+        },
+        "relay": {
+          "official": "Relay da Cindy"
+        },
+        "ms": "{{value}} ms",
+        "offlineFold": "{{count}} offline",
+        "offlineShow": "Mostrar dispositivos offline",
+        "offlineHide": "Ocultar dispositivos offline",
+        "group": {
+          "direct": "Direto",
+          "relay": "Via relay",
+          "unlinked": "Sem ligação",
+          "attention": "A verificar",
+          "offline": "Offline"
+        },
+        "tabs": {
+          "todo": "A verificar",
+          "recent": "Recentes",
+          "aria": "Abaixo da topologia"
+        },
+        "todo": {
+          "empty": "Nada a verificar",
+          "emptyHint": "Dispositivos com problemas aparecem aqui"
+        },
+        "recent": {
+          "online": "{{name}} ficou online",
+          "offline": "{{name}} ficou offline",
+          "empty": "Nenhum dispositivo entrou ou saiu desde que esta página foi aberta"
+        },
+        "popover": {
+          "status": "Estado",
+          "path": "Caminho",
+          "latency": "Latência",
+          "lastSeen": "Visto pela última vez",
+          "controlling": "A controlar este computador",
+          "rttNote": "última medição",
+          "manage": "Gerir dispositivo…",
+          "linkStatus": "Com {{name}}",
+          "version": "Cindy {{version}}",
+          "remoteDesktopFailed": "Não foi possível abrir o Ambiente de Trabalho Remoto"
+        },
+        "sections": {
+          "devicesList": "Lista de dispositivos"
+        }
       }
     },
     "tina": {

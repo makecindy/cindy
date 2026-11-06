@@ -1,5 +1,11 @@
 # 跨端协议兼容
 
+## 远程连接拓扑的本机链路快照（2026-11-06）
+
+Desktop 新增本机 IPC `device-link:get-peer-links`（invoke）与 `device-link:peer-links-changed`（push，结构变化时 250ms 合并后全量广播，往返抖动不广播）。
+它只在同一台电脑的 main 与 renderer 之间传递，不经中转、不进 wire protocol；内容来自客户端已有的对端传输状态（直连 / 中转路径、平滑往返）与心跳 pong 的往返。
+`@cindy/device-link` 的 `DeviceLinkClient` 为此记录心跳发出时刻，协议帧不变，对端与中转无需升级；旧版 renderer 不调用这条 IPC 也不受影响。
+
 ## 群聊代答的工作记录兼容（2026-11-03）
 
 已发布 Desktop 在普通和个人代答的完成请求中附带 `cindy.work-record` revision 1，

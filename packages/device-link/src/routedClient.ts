@@ -17,6 +17,7 @@ import {
   type DeviceLinkStatus,
   type InboundFrameHandler,
 } from './client.js';
+import type { DeviceLinkPeerLinkSnapshot } from './directPath.js';
 import {
   isScopedPeer,
   type InvokePayload,
@@ -187,6 +188,12 @@ export class RoutedDeviceLinkClient extends DeviceLinkClient {
 
   override getReliableSendQueueDepth(dst: string): number {
     return this.routed(dst)?.getReliableSendQueueDepth(dst) ?? super.getReliableSendQueueDepth(dst);
+  }
+
+  /** 两条连接上的链路合在一起；跨账号 peer 只在专用连接上。relay 往返不覆盖：它是主连接的。 */
+  override getPeerLinkSnapshots(): DeviceLinkPeerLinkSnapshot[] {
+    const own = super.getPeerLinkSnapshots();
+    return this.crossAccountRunning && this.crossAccount ? own.concat(this.crossAccount.getPeerLinkSnapshots()) : own;
   }
 
   override openLink(dst: string, payload: unknown, timeoutMs?: number): Promise<LinkAcceptPayload> {

@@ -159,6 +159,21 @@ interface DeviceLinkPresenceSnapshot {
   busy: boolean;
 }
 
+/** 远程连接拓扑:一条已协商可靠链路的本机视角(镜像 shared/deviceLinkIpc 的 DeviceLinkPeerLinkView) */
+interface DeviceLinkPeerLinkView {
+  deviceId: string;
+  path: 'direct' | 'relay';
+  /** 可靠帧 ACK 的平滑往返;首个 ACK 之前为 null,闲置时是最近测得的值 */
+  rttMs: number | null;
+  /** link-open / link-accept 双向都已就绪 */
+  open: boolean;
+}
+interface DeviceLinkPeerLinksSnapshot {
+  links: DeviceLinkPeerLinkView[];
+  /** 本机到主 relay 连接的心跳往返;离线 / 未测得为 null */
+  relayRttMs: number | null;
+}
+
 /** .cshare 导入向导的预览数据(main 侧 SharePreview 的镜像)。 */
 interface SessionSharePreview {
   title: string;
@@ -4211,6 +4226,10 @@ interface ElectronAPI {
       enabled: boolean,
     ) => Promise<{ deviceId: string; enabled: boolean; disabledControlDeviceIds: string[] }>;
     listDevices: () => Promise<{ devices: DeviceLinkDeviceView[] }>;
+    /** 远程连接拓扑:本机已建链对端的路径 / RTT 快照 */
+    getPeerLinks: () => Promise<DeviceLinkPeerLinksSnapshot>;
+    /** 对端链路拓扑变化,payload 为全量快照 */
+    onPeerLinksChanged: (cb: (payload: DeviceLinkPeerLinksSnapshot) => void) => () => void;
     renameDevice: (
       deviceId: string,
       name: string | null,

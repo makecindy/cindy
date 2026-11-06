@@ -31,6 +31,7 @@ vi.mock('../serverApiClient', () => {
 });
 vi.mock('./index', () => ({
   getDeviceLinkStatus: () => 'online',
+  getDeviceLinkPeerLinks: () => ({ links: [], relayRttMs: null }),
   hasOfflineDirectPath: () => false,
   clearDeviceResponsiveness: vi.fn(),
   setRemoteControlEnabled: vi.fn(),
@@ -51,6 +52,7 @@ vi.mock('./index', () => ({
 }));
 vi.mock('../device-link/index', () => ({
   getDeviceLinkStatus: () => 'online',
+  getDeviceLinkPeerLinks: () => ({ links: [], relayRttMs: null }),
   hasOfflineDirectPath: () => false,
   setRemoteControlEnabled: vi.fn(),
   openRemoteLink: vi.fn(),
@@ -143,6 +145,7 @@ function makeDeps(overrides?: Partial<DeviceLinkIpcDeps>): DeviceLinkIpcDeps {
       disabledControlDeviceIds: [],
       unresponsiveDeviceIds: [],
     }),
+    getPeerLinks: vi.fn(() => ({ links: [], relayRttMs: null })),
     setEnabled: vi.fn(),
     setKeepAwake: vi.fn(),
     apiFetch: vi.fn().mockResolvedValue({ devices: [] }),

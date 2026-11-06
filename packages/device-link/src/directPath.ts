@@ -60,6 +60,16 @@ export interface DeviceLinkDirectPathHandle {
 
 export type DeviceLinkPeerPath = 'direct' | 'relay';
 
+/** 一条已协商的可靠链路在本机视角的快照（远程连接拓扑页用；只读，不进 wire）。 */
+export interface DeviceLinkPeerLinkSnapshot {
+  deviceId: string;
+  path: DeviceLinkPeerPath;
+  /** 可靠帧 ACK 的平滑往返；首个 ACK 之前为 null，闲置时是最近测得的值。 */
+  rttMs: number | null;
+  /** link-open / link-accept 双向都已就绪（与 isLinkReady 同一判据）。 */
+  open: boolean;
+}
+
 export interface DeviceLinkPeerPathChanged {
   deviceId: string;
   path: DeviceLinkPeerPath;

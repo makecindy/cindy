@@ -3468,6 +3468,10 @@
         "ko": "읽음"
       },
       "note": "群聊里「别的成员已经看过这条消息」的状态（消息气泡下的双勾、「N 人已读」）。与「Read」作动词（读取文件）无关；只用于消息读取状态。"
-    }
+    },
+    {"id": "connection-path-direct", "status": "proposed", "en": "Direct", "translations": {"zh-CN": "直连", "zh-TW": "直連", "ja": "直接", "ko": "직접"}, "note": "远程连接拓扑里两台设备之间的数据路径不经中转。只用于路径，不用于「电脑直连」（remote-desktop-direct）那种连接方式名。"},
+    {"id": "connection-path-via-relay", "status": "proposed", "en": "Via relay", "translations": {"zh-CN": "经中转", "zh-TW": "經中轉", "ja": "中継経由", "ko": "중계 경유"}, "note": "远程连接拓扑里两台设备之间的数据经中转服务转发。与「中转服务」（self-hosted-relay-service）是同一个「中转」。"},
+    {"id": "connection-latency", "status": "proposed", "en": "Latency", "translations": {"zh-CN": "延迟", "zh-TW": "延遲", "ja": "遅延", "ko": "지연"}, "note": "远程连接拓扑与浮层里的往返时间（ms）。"},
+    {"id": "new-connection-view", "status": "proposed", "en": "New connection view", "translations": {"zh-CN": "新版连接", "zh-TW": "新版連線", "ja": "新しい接続ビュー", "ko": "새 연결 보기"}, "note": "「远程连接」页里切换到拓扑形态的开关名；按设备保存、默认关。"}
   ]
 }

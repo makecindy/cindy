@@ -1,0 +1,28 @@
+/*
+ * 远程连接 V2 拓扑:线框状态图块。
+ * 颜色只来自元素上的 --rcv2-tone(状态语义 token,见 DESIGN.md §2 本页登记),这里只定透明度:
+ * 平时描边 55% / 图标 78% / 底 8%,离线再淡一档,悬停或浮层打开时实色。
+ */
+.rcv2-tile {
+  --rcv2-border: 55%;
+  --rcv2-ink: 78%;
+  border-color: color-mix(in srgb, var(--rcv2-tone) var(--rcv2-border), transparent);
+  color: color-mix(in srgb, var(--rcv2-tone) var(--rcv2-ink), transparent);
+  background-color: color-mix(in srgb, var(--rcv2-tone) 8%, transparent);
+  transition:
+    border-color var(--motion-instant) var(--motion-ease-out),
+    color var(--motion-instant) var(--motion-ease-out);
+}
+.rcv2-tile[data-dim='true'] {
+  --rcv2-border: 45%;
+  --rcv2-ink: 65%;
+}
+.rcv2-tile:hover,
+.rcv2-tile[data-state='open'] {
+  --rcv2-border: 100%;
+  --rcv2-ink: 100%;
+}
+.rcv2-tile:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 2px;
+}

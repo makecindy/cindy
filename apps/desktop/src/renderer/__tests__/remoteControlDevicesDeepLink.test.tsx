@@ -61,6 +61,7 @@ vi.mock('../components/settings/RemoteSection', () => ({
 }));
 
 import { RemoteControlSection } from '@/components/settings/RemoteControlSection';
+import { _resetRemoteConnectionV2ForTests } from '@/features/remote-connection-v2/useRemoteConnectionV2';
 
 // 收起态的 header 无障碍名里还会带上摘要文案,所以用前缀匹配。
 const devicesHeader = () =>
@@ -224,5 +225,59 @@ describe('RemoteControlSection devices deep link', () => {
     expect(currentSearch()).not.toContain('device=');
     expect(currentSearch()).toContain('tab=remote-control');
     expect(screen.getByTestId('my-devices-panel-others').getAttribute('data-focus-device')).toBe('');
+  });
+});
+
+// 「新版连接」打开后设备列表换了标题、搬到了拓扑下面,但消息气泡上的设备标签深链
+// 必须照旧:首帧展开、聚焦参数交给两个面板。
+describe('RemoteControlSection devices deep link with 新版连接 on', () => {
+  const v2Header = () =>
+    screen.getByRole('button', { name: /^settings\.remoteControl\.v2\.sections\.devicesList/ });
+
+  beforeEach(() => {
+    localStorage.setItem('remoteConnection.v2', 'on');
+    _resetRemoteConnectionV2ForTests();
+  });
+
+  afterEach(() => {
+    localStorage.removeItem('remoteConnection.v2');
+    _resetRemoteConnectionV2ForTests();
+  });
+
+  it('expands the list on first paint and hands the device focus param to both panels', () => {
+    render(
+      <MemoryRouter
+        initialEntries={['/settings?tab=remote-control&section=devices&device=phone-1']}
+      >
+        <RemoteControlSection />
+      </MemoryRouter>,
+    );
+
+    expect(
+      screen.getByRole('switch', { name: 'settings.remoteControl.v2.switch.title' }).getAttribute('aria-checked'),
+    ).toBe('true');
+    expect(v2Header().getAttribute('aria-expanded')).toBe('true');
+    for (const variant of ['self', 'others']) {
+      const panel = screen.getByTestId(`my-devices-panel-${variant}`);
+      expect(panel.getAttribute('data-focus-device')).toBe('phone-1');
+      expect(panel.getAttribute('data-focus-key')).toMatch(/^phone-1:/);
+    }
+  });
+
+  it('drops the section and device params once the user collapses the list', async () => {
+    render(
+      <MemoryRouter
+        initialEntries={['/settings?tab=remote-control&section=devices&device=phone-1']}
+      >
+        <LocationProbe />
+        <RemoteControlSection />
+      </MemoryRouter>,
+    );
+
+    fireEvent.click(v2Header());
+
+    await waitFor(() => expect(currentSearch()).not.toContain('section=devices'));
+    expect(currentSearch()).not.toContain('device=');
+    expect(v2Header().getAttribute('aria-expanded')).toBe('false');
   });
 });

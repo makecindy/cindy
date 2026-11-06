@@ -6279,6 +6279,78 @@
         "title": "撤銷訪問權限？",
         "description": "撤銷後，該裝置會立即斷開，並且無法再遠端連線本機。之後需在「設定 → 遠端連線」中恢復其訪問權限，對方才能重新連線。",
         "confirm": "撤銷訪問權限"
+      },
+      "v2": {
+        "switch": {
+          "title": "新版連線",
+          "hint": "用拓樸圖查看每台裝置怎麼連到這台電腦；關閉後恢復原本的清單。只改這台電腦的顯示。"
+        },
+        "empty": "還沒有其它裝置。在另一台電腦或手機登入同一帳號，它就會出現在這裡。",
+        "stats": {
+          "online": "{{online}} / {{total}} 線上",
+          "direct": "{{count}} 直連",
+          "relay": "{{count}} 經中轉",
+          "unlinked": "{{count}} 未建鏈",
+          "attention": "{{count}} 要處理",
+          "offline": "{{count}} 離線"
+        },
+        "node": {
+          "thisComputer": "這台電腦"
+        },
+        "path": {
+          "direct": "直連",
+          "relay": "經「{{name}}」中轉",
+          "unlinked": "線上，未建鏈",
+          "offline": "離線"
+        },
+        "attention": {
+          "unresponsive": "連線無回應，正在重試",
+          "masterOff": "本機未允許其它裝置控制",
+          "connectionIssue": "與中轉的連線有問題"
+        },
+        "relay": {
+          "official": "Cindy 中轉"
+        },
+        "ms": "{{value}} ms",
+        "offlineFold": "{{count}} 台離線",
+        "offlineShow": "顯示離線裝置",
+        "offlineHide": "收起離線裝置",
+        "group": {
+          "direct": "直連",
+          "relay": "經中轉",
+          "unlinked": "未建鏈",
+          "attention": "要處理",
+          "offline": "離線"
+        },
+        "tabs": {
+          "todo": "需要處理",
+          "recent": "最近",
+          "aria": "拓樸下方內容"
+        },
+        "todo": {
+          "empty": "沒有需要處理的",
+          "emptyHint": "裝置出問題時會列在這裡"
+        },
+        "recent": {
+          "online": "{{name}} 上線",
+          "offline": "{{name}} 下線",
+          "empty": "開啟這頁後還沒有裝置上下線"
+        },
+        "popover": {
+          "status": "狀態",
+          "path": "路徑",
+          "latency": "延遲",
+          "lastSeen": "最後線上",
+          "controlling": "正在控制這台電腦",
+          "rttNote": "最近測得",
+          "manage": "管理裝置…",
+          "linkStatus": "與「{{name}}」",
+          "version": "Cindy {{version}}",
+          "remoteDesktopFailed": "開啟遠端桌面失敗"
+        },
+        "sections": {
+          "devicesList": "裝置清單"
+        }
       }
     },
     "tina": {

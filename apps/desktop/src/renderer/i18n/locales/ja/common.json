@@ -6279,6 +6279,78 @@
         "title": "アクセス権を撤回しますか?",
         "description": "撤回すると、このデバイスはただちに切断され、本機をリモート操作できなくなります。再接続するには「設定 → リモート接続」でアクセス権を復元する必要があります。",
         "confirm": "アクセス権を撤回"
+      },
+      "v2": {
+        "switch": {
+          "title": "新しい接続ビュー",
+          "hint": "各デバイスがこのコンピューターにどう接続しているかをトポロジー図で表示します。オフにすると元のリストに戻ります。このコンピューターの表示だけが変わります。"
+        },
+        "empty": "まだ他のデバイスがありません。別のコンピューターやスマートフォンで同じアカウントにサインインすると、ここに表示されます。",
+        "stats": {
+          "online": "{{online}} / {{total}} オンライン",
+          "direct": "{{count}} 直接",
+          "relay": "{{count}} 中継経由",
+          "unlinked": "{{count}} 未接続",
+          "attention": "{{count}} 要対応",
+          "offline": "{{count}} オフライン"
+        },
+        "node": {
+          "thisComputer": "このコンピューター"
+        },
+        "path": {
+          "direct": "直接",
+          "relay": "「{{name}}」経由",
+          "unlinked": "オンライン、未接続",
+          "offline": "オフライン"
+        },
+        "attention": {
+          "unresponsive": "応答なし、再試行中",
+          "masterOff": "このコンピューターはリモート操作を許可していません",
+          "connectionIssue": "中継との接続に問題があります"
+        },
+        "relay": {
+          "official": "Cindy 中継"
+        },
+        "ms": "{{value}} ms",
+        "offlineFold": "オフライン {{count}} 台",
+        "offlineShow": "オフラインのデバイスを表示",
+        "offlineHide": "オフラインのデバイスを隠す",
+        "group": {
+          "direct": "直接",
+          "relay": "中継経由",
+          "unlinked": "未接続",
+          "attention": "要対応",
+          "offline": "オフライン"
+        },
+        "tabs": {
+          "todo": "要対応",
+          "recent": "最近",
+          "aria": "トポロジーの下"
+        },
+        "todo": {
+          "empty": "対応が必要なものはありません",
+          "emptyHint": "問題のあるデバイスはここに表示されます"
+        },
+        "recent": {
+          "online": "{{name}} がオンラインになりました",
+          "offline": "{{name}} がオフラインになりました",
+          "empty": "このページを開いてから、デバイスの出入りはありません"
+        },
+        "popover": {
+          "status": "状態",
+          "path": "経路",
+          "latency": "遅延",
+          "lastSeen": "最終オンライン",
+          "controlling": "このコンピューターを操作中",
+          "rttNote": "直近の計測",
+          "manage": "デバイスを管理…",
+          "linkStatus": "「{{name}}」との接続",
+          "version": "Cindy {{version}}",
+          "remoteDesktopFailed": "リモートデスクトップを開けませんでした"
+        },
+        "sections": {
+          "devicesList": "デバイス一覧"
+        }
       }
     },
     "tina": {

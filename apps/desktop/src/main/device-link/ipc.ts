@@ -50,6 +50,7 @@ import {
   DEVICE_LINK_PUSH,
   type DeviceLinkDeviceView,
   type DeviceLinkState,
+  type DeviceLinkPeerLinksSnapshot,
 } from '../../shared/deviceLinkIpc';
 import {
   getDeviceLinkStatus,
@@ -78,6 +79,7 @@ import {
   isLatestControllerDisplayNameDirectoryRefresh,
   readControllerDisplayNameFreshnessSince,
   waitForNewerControllerDisplayNameDirectoryRefresh,
+  getDeviceLinkPeerLinks,
 } from './index';
 import { getActiveControllers } from './dispatch';
 import { rewriteOutboundMedia, withPeerAttachmentUpload } from './outboundMedia';
@@ -148,6 +150,8 @@ export interface DeviceLinkIpcDeps {
   /** Authenticated, already-established data path retained through signaling loss. */
   hasOfflineDirectPath?(deviceId: string): boolean;
   getState(): DeviceLinkState;
+  /** 远程连接拓扑:本机链路快照(只读) */
+  getPeerLinks(): DeviceLinkPeerLinksSnapshot;
   setEnabled(enabled: boolean): Promise<void>;
   setKeepAwake(enabled: boolean): Promise<void>;
   apiFetch<T>(path: string, opts?: { method?: string; body?: unknown }): Promise<T>;
@@ -211,6 +215,7 @@ export function defaultDeps(): DeviceLinkIpcDeps {
         unresponsiveDeviceIds: getUnresponsiveDeviceIds(),
       };
     },
+    getPeerLinks: getDeviceLinkPeerLinks,
     setEnabled: setRemoteControlEnabled,
     setKeepAwake: setKeepAwakeEnabled,
     // 官方中转或自建中转(凭证与 401 语义不同,见 deviceLinkApi.ts)。
@@ -312,6 +317,11 @@ function rethrowServerError(err: unknown): never {
 }
 
 // ─── handler bodies(纯函数,可注入依赖)──────────────────────────────────────
+
+/** 远程连接拓扑快照:纯转发,门禁在注册处(trusted renderer + 账号能力)。 */
+export function handleGetPeerLinks(deps: DeviceLinkIpcDeps): DeviceLinkPeerLinksSnapshot {
+  return deps.getPeerLinks();
+}
 
 export function handleGetState(deps: DeviceLinkIpcDeps): DeviceLinkState {
   const state = deps.getState();
@@ -1706,6 +1716,11 @@ export function registerDeviceLinkIpc(deps: DeviceLinkIpcDeps = defaultDeps()): 
     DEVICE_LINK_INVOKE.LIST_DEVICES,
     gated(() => handleListDevices(deps)),
   );
+  ipcMain.handle(DEVICE_LINK_INVOKE.GET_PEER_LINKS, (e) => {
+    // 新增的特权只读(本账号设备的链路拓扑):先拒外来 frame,再看账号能力。
+    assertTrustedAppRendererEvent(e);
+    return gated(() => handleGetPeerLinks(deps))();
+  });
   ipcMain.handle(DEVICE_LINK_INVOKE.RENAME_DEVICE, (_e, payload: unknown) => {
     requireDeviceLinkCapability();
     const p = (payload ?? {}) as { deviceId?: unknown; name?: unknown };

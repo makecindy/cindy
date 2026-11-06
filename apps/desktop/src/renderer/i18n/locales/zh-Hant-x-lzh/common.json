@@ -6279,6 +6279,78 @@
         "title": "撤其存取權乎？",
         "description": "撤銷之後，該裝置即刻斷開，且不能再遠端連線此機。此後須於「規制 → 遠端連線」中恢復其存取權，對方方能重連。",
         "confirm": "撤存取權"
+      },
+      "v2": {
+        "switch": {
+          "title": "新式連線",
+          "hint": "以拓撲之圖觀諸裝置如何連於此機；閉之則復舊之清單。唯改此機所示。"
+        },
+        "empty": "尚無他裝置。於他機或手機登同一帳號，即現於此。",
+        "stats": {
+          "online": "{{online}} / {{total}} 在線",
+          "direct": "{{count}} 直連",
+          "relay": "{{count}} 經中轉",
+          "unlinked": "{{count}} 未建鏈",
+          "attention": "{{count}} 待理",
+          "offline": "{{count}} 離線"
+        },
+        "node": {
+          "thisComputer": "此機"
+        },
+        "path": {
+          "direct": "直連",
+          "relay": "經「{{name}}」中轉",
+          "unlinked": "在線，未建鏈",
+          "offline": "離線"
+        },
+        "attention": {
+          "unresponsive": "連線無應，方重試",
+          "masterOff": "此機未許他裝置操控",
+          "connectionIssue": "與中轉之連線有礙"
+        },
+        "relay": {
+          "official": "Cindy 中轉"
+        },
+        "ms": "{{value}} ms",
+        "offlineFold": "離線者 {{count}}",
+        "offlineShow": "示離線裝置",
+        "offlineHide": "藏離線裝置",
+        "group": {
+          "direct": "直連",
+          "relay": "經中轉",
+          "unlinked": "未建鏈",
+          "attention": "待理",
+          "offline": "離線"
+        },
+        "tabs": {
+          "todo": "待理",
+          "recent": "近事",
+          "aria": "拓撲之下"
+        },
+        "todo": {
+          "empty": "無待理者",
+          "emptyHint": "裝置有恙，則列於此"
+        },
+        "recent": {
+          "online": "{{name}} 上線",
+          "offline": "{{name}} 下線",
+          "empty": "開此頁以來，裝置無上下線"
+        },
+        "popover": {
+          "status": "狀態",
+          "path": "路徑",
+          "latency": "延遲",
+          "lastSeen": "末見",
+          "controlling": "方操控此機",
+          "rttNote": "近測",
+          "manage": "理裝置…",
+          "linkStatus": "與「{{name}}」",
+          "version": "Cindy {{version}}",
+          "remoteDesktopFailed": "開遠端桌面不成"
+        },
+        "sections": {
+          "devicesList": "裝置之清單"
+        }
       }
     },
     "tina": {

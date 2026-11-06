@@ -6384,6 +6384,78 @@
         "title": "Révoquer l'accès ?",
         "description": "Une fois l'accès révoqué, cet appareil est immédiatement déconnecté et ne peut plus contrôler cette machine à distance. Vous devrez rétablir son accès dans Paramètres → Connexion à distance avant qu'il puisse se reconnecter.",
         "confirm": "Révoquer l'accès"
+      },
+      "v2": {
+        "switch": {
+          "title": "Nouvelle vue des connexions",
+          "hint": "Affiche dans une topologie comment chaque appareil se connecte à cet ordinateur. Désactivez-la pour revenir à la liste. Ne change que cet ordinateur."
+        },
+        "empty": "Pas encore d’autres appareils. Connectez-vous avec le même compte sur un autre ordinateur ou téléphone et il apparaîtra ici.",
+        "stats": {
+          "online": "{{online}} / {{total}} en ligne",
+          "direct": "{{count}} direct",
+          "relay": "{{count}} via relais",
+          "unlinked": "{{count}} non liés",
+          "attention": "{{count}} à vérifier",
+          "offline": "{{count}} hors ligne"
+        },
+        "node": {
+          "thisComputer": "Cet ordinateur"
+        },
+        "path": {
+          "direct": "Direct",
+          "relay": "Via {{name}}",
+          "unlinked": "En ligne, non lié",
+          "offline": "Hors ligne"
+        },
+        "attention": {
+          "unresponsive": "Ne répond pas, nouvel essai",
+          "masterOff": "Cet ordinateur n’autorise pas le contrôle à distance",
+          "connectionIssue": "Problème de connexion au relais"
+        },
+        "relay": {
+          "official": "Relais Cindy"
+        },
+        "ms": "{{value}} ms",
+        "offlineFold": "{{count}} hors ligne",
+        "offlineShow": "Afficher les appareils hors ligne",
+        "offlineHide": "Masquer les appareils hors ligne",
+        "group": {
+          "direct": "Direct",
+          "relay": "Via relais",
+          "unlinked": "Non lié",
+          "attention": "À vérifier",
+          "offline": "Hors ligne"
+        },
+        "tabs": {
+          "todo": "À vérifier",
+          "recent": "Récents",
+          "aria": "Sous la topologie"
+        },
+        "todo": {
+          "empty": "Rien à vérifier",
+          "emptyHint": "Les appareils en difficulté apparaissent ici"
+        },
+        "recent": {
+          "online": "{{name}} est en ligne",
+          "offline": "{{name}} est hors ligne",
+          "empty": "Aucun appareil n’est arrivé ou parti depuis l’ouverture de cette page"
+        },
+        "popover": {
+          "status": "État",
+          "path": "Chemin",
+          "latency": "Latence",
+          "lastSeen": "Vu pour la dernière fois",
+          "controlling": "Contrôle cet ordinateur",
+          "rttNote": "dernière mesure",
+          "manage": "Gérer l’appareil…",
+          "linkStatus": "Vers {{name}}",
+          "version": "Cindy {{version}}",
+          "remoteDesktopFailed": "Impossible d’ouvrir le bureau à distance"
+        },
+        "sections": {
+          "devicesList": "Liste des appareils"
+        }
       }
     },
     "tina": {
