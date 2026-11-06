@@ -19,6 +19,7 @@ import { AGENT_KIND, EFFORT, EXECUTION_MODE, SCRIPT_CAPABILITY } from './_enums.
 import { assertCronAndTimezoneValid, buildJsonResult, withScheduler } from './_shared.js';
 import { classifySchedulerError } from './errors.js';
 import { isLocalDevice, runOnDevice } from './_devices.js';
+import { assertWebhookReceiverAvailable, webhookSourceSchema } from './_webhook.js';
 import type { LiziMcpSessionContext, SchedulerMcpDeps } from '../types.js';
 import type { SchedulerToolRegistry } from '../cindy_schedulerToolRegistry.js';
 import type { CreateScheduleInput } from '@cindy/maker-scheduler';
@@ -157,6 +158,18 @@ export function registerScheduleCreateTool(
         .nullable()
         .optional()
         .describe('插件前置检查：每次触发先问用户选定的插件要不要运行（插件只能放行、跳过本次或停止，不能替用户批准）。pluginId 用 ghost_list 返回的插件 id；插件必须已启用、声明了「自动化运行前检查」且用户已在安装/更新确认里允许。onFailure = 插件没回应、出错或不可用时：allow 照常运行 / skip 跳过本次 / block 停止并记为失败。可与 preRunHook 并存（先问插件再跑脚本）。'),
+      webhookTrigger: z
+        .strictObject({
+          events: z
+            .array(z.string().min(1).max(100))
+            .max(32)
+            .optional()
+            .describe('只响应这些事件，每项为 event 或 event.action，例 "check_suite"、"pull_request.closed"；省略 = 全部'),
+          source: webhookSourceSchema,
+        })
+        .nullable()
+        .optional()
+        .describe('Webhook 触发：外部事件到达时运行本任务（事件只作门铃，内容以不可信元数据传入）。manual=false 时与定时条件并存，manual=true 时只由事件触发；不能用于定时的一次性任务（recurring=false 且 manual=false）。同一任务两轮至少间隔 5 分钟。创建后用 schedule_get 读 webhookStatus 取接收地址；签名密钥只能由用户在任务详情设置，工具拿不到。支持已登录且有接收服务的目标电脑。'),
       preRunHook: z
         .object({
           command: z
@@ -231,6 +244,7 @@ export function registerScheduleCreateTool(
       }
       return withScheduler(deps, async (scheduler) => {
         let input = rest as CreateScheduleInput;
+        if (input.webhookTrigger) assertWebhookReceiverAvailable(deps);
         if (input.agentDeviceId === LOCAL_SCHEDULE_AGENT_DEVICE) {
           const { agentDeviceId: _local, ...localInput } = input;
           input = localInput;

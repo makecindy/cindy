@@ -3714,7 +3714,7 @@ export function assertNoRecentUserInput(name: ComputerMcpToolName, args: Record<
   const since = msSinceForeignDesktopInput();
   if (since === null || since >= USER_INPUT_ACTIVE_WINDOW_MS) return;
   throw new ComputerDriverError(
-    `Someone is using this computer (keyboard or mouse input ${Math.max(0, Math.round(since / 100) / 10)}s ago). Foreground input was not sent so it cannot land in their window. Wait until they stop, use background delivery or set_value, or ask them before taking the foreground.`,
+    `Someone is using this computer (keyboard or mouse input ${Math.max(0, Math.round(since / 100) / 10)}s ago). Foreground input was not sent so it cannot land in their window. Continue in the background: background delivery, window-local coordinates, double_click, a menu bar item, set_value, or files and command-line tools for the same change. Wait or ask them before taking the foreground only when none of these can do it.`,
     'USER_INPUT_ACTIVE',
   );
 }

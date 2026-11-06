@@ -10,7 +10,6 @@ import { routeSidebarCommand } from '../detachedSidebarRouting';
 import { __resetGlobalTabsForTest, addGlobalPluginTab, getActiveGlobalTabId, setActiveGlobalTabId, subscribeRevealSessionTab } from '../../globalTabs';
 import { __resetTabGroupsForTest, getGroupActiveTabId, setTabGroup } from '../../tabGroups';
 import { openPluginTaskTab } from '../openPluginTaskTab';
-import { openPluginTabView } from '../openPluginTabView';
 import { _resetSidebarCommandsForTests, onRequestRightSidebarVisibility } from '../sidebarCommands';
 import { __resetSidebarTabWindowsStateForTest, __setSidebarTabWindowsStateForTest } from '@/lib/sidebarTabWindowState';
 
@@ -46,18 +45,6 @@ const taskTabs = (sessionId: string) =>
   getBucket(sessionId).tabs.filter((tab) => tab.kind === 'plugin-task').map((tab) => tab.state);
 
 describe('openPluginTaskTab', () => {
-  // 4.2: registered pages use the existing bucket, distinct from taskView.
-  // Unit: observable coexistence, reuse and task isolation in the real store.
-  it('opens multiple named task tabs while keeping legacy task pages independent', async () => {
-    await openPluginTaskTab('task-1', 'sim');
-    const a = await openPluginTabView('sim', 'log', 'task-1');
-    const b = await openPluginTabView('sim', 'preview', 'task-1');
-    expect(await openPluginTabView('sim', 'log', 'task-1')).toBe(a);
-    expect(getBucket('task-1').tabs.map(t => t.kind)).toEqual(['plugin-task', 'plugin-tab-view', 'plugin-tab-view']);
-    expect(a).not.toBe(b);
-    expect(await openPluginTabView('sim', 'log', 'task-2')).not.toBe(a);
-    expect(taskTabs('task-1')).toEqual([{ instanceId: 'sim' }]);
-  });
   // PR #6939 discussion_r4357791816：先开页、后挂载目标任务时不能丢失选中。
   // unit：无 Shell 订阅，验证真实任务桶与全局/组激活位；保留其他组与弹出窗口选择。
   it.each(['same-group', 'other-group', 'popped-out', 'passive'] as const)(

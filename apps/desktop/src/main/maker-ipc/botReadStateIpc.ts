@@ -14,6 +14,7 @@ import { broadcastBotGroupRemoteResourceChanged } from './botGroupRemoteResource
 import { broadcastBotRemoteResourceChanged } from './botRemoteResourceInvalidation.js';
 import {
   loadBotReadState,
+  loadAcknowledgedBotReadState,
   markBotReadPositions,
   onBotReadStateChanged,
   pruneBotReadState,
@@ -42,15 +43,15 @@ function isRequestOwnerCurrent(ownerId: unknown): boolean {
   return typeof ownerId === 'string' && !!current && ownerId === current;
 }
 
-function snapshot(): { ownerId: string | null; positions: BotReadStateMap } {
+function snapshot(): { ownerId: string | null; positions: BotReadStateMap; acknowledgedPositions: BotReadStateMap } {
   const ownerId = getActiveAppSession().dataOwnerId;
-  if (!ownerId || isAppSessionBoundaryPending()) return { ownerId: null, positions: {} };
+  if (!ownerId || isAppSessionBoundaryPending()) return { ownerId: null, positions: {}, acknowledgedPositions: {} };
   try {
-    return { ownerId, positions: loadBotReadState() };
+    return { ownerId, positions: loadBotReadState(), acknowledgedPositions: loadAcknowledgedBotReadState() };
   } catch (error) {
     // A broken ledger costs badges, never the teammate list.
     log.warn('bot read state load failed', { error: error instanceof Error ? error.name : typeof error });
-    return { ownerId, positions: {} };
+    return { ownerId, positions: {}, acknowledgedPositions: {} };
   }
 }
 
