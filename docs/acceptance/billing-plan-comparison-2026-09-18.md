@@ -1,6 +1,8 @@
-# 套餐对比改动与验收
+# 套餐对比改动与验收（2026-09-18）
 
-当前状态：相关单测、类型检查与 ESLint 通过；已复核 macOS 浅色界面截图。截图拍摄后统一了套餐购买与变更弹窗标题区，并补齐 FREE 说明行高度；这两处微调尚未重新截图。真实支付联调和最新深色、窄窗实机验证待完成。
+> 本文是 #4651 合并时的验收快照，之后计费界面仍有改动，不代表现在的界面与行为；现状以代码和测试为准。
+
+合并时状态：相关单测、类型检查与 ESLint 通过；已复核 macOS 浅色界面截图。截图拍摄后统一了套餐购买与变更弹窗标题区，并补齐 FREE 说明行高度；这两处微调尚未重新截图。真实支付联调和最新深色、窄窗实机验证待完成。
 
 ## 交付范围
 
@@ -52,18 +54,18 @@
 
 | 页面 | 截图 |
 | --- | --- |
-| 套餐购买 | [plans-light.png](docs/assets/billing-subscription/plans-light.png) |
-| 支付渠道与价格 | [payment-channels-light.png](docs/assets/billing-subscription/payment-channels-light.png) |
-| 套餐升降级 | [change-plan-light.png](docs/assets/billing-subscription/change-plan-light.png) |
-| 余额用量 | [balance-usage-light.png](docs/assets/billing-subscription/balance-usage-light.png) |
-| 订单状态与开票 | [order-history-light.png](docs/assets/billing-subscription/order-history-light.png) |
+| 套餐购买 | [plans-light.png](../assets/billing-subscription/plans-light.png) |
+| 支付渠道与价格 | [payment-channels-light.png](../assets/billing-subscription/payment-channels-light.png) |
+| 套餐升降级 | [change-plan-light.png](../assets/billing-subscription/change-plan-light.png) |
+| 余额用量 | [balance-usage-light.png](../assets/billing-subscription/balance-usage-light.png) |
+| 订单状态与开票 | [order-history-light.png](../assets/billing-subscription/order-history-light.png) |
 
 套餐购买与升降级截图拍摄后，标题区域统一为左右 24px、上下 16px，正文顶部分隔线保持一致；FREE 说明行补齐与付费套餐相同的最小高度。
 
 ## 历史视觉证据
 
 - 设计依据：已确认的 subscription-v10 套餐对比及后续支付确认页设计。
-- 本地证据目录：`/Users/liugaowei/.codex/visualizations/2026/09/14/01a09efc-7345-7480-bf7d-aa5ed5926d0e/implementation/`。
+- 以下截图只保存在作者本机，未提交到仓库。
 - 套餐：`change-light.png`、`change-dark-current.png`、`subscription-narrow-current.png`。窄窗 640px，套餐滚动容器 542px、内容 880px，无页面级横向溢出。
 - 支付：`checkout-cindy-light.png`、`checkout-cindy-dark.png`、`checkout-github-dark.png`、`checkout-solarized-light.png`、`checkout-cindy-dark-large.png`；`checkout-light-comparison.png` 为设计与实现对照。
 - 上述截图使用实际 React 组件、Tailwind 和主题 token 静态渲染；示例数据未进入产品代码。没有操作用户窗口或执行支付写接口，不等同于 Electron 端到端、任意自定义主题或最新版本验收。

@@ -754,7 +754,7 @@ export function BotGroupComposer({
                 </DropdownMenuContent>
               </DropdownMenu>
               {footerStart?.(sending)}
-              {conversationKind !== 'direct' && <GroupMaskIndicator groupId={groupId} onTakeOver={() => textareaRef.current?.focus()} />}
+              {!thread && conversationKind !== 'direct' && <GroupMaskIndicator groupId={groupId} onTakeOver={() => textareaRef.current?.focus()} />}
               <span className="min-w-0 truncate text-12 text-[var(--text-tertiary)]" aria-live="polite">
                 {hint}
               </span>

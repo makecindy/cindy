@@ -70,6 +70,15 @@ describe('decodeRemoteErrorMessage', () => {
     expect(decodeRemoteErrorMessage(raw)).not.toBe(raw);
   });
 
+  // #8963: first send may reject from the host lazy-create boundary. The
+  // wrapper must retain the known provider code so the live banner can show
+  // the actionable remote-host guidance instead of "reply failed".
+  it('keeps actionable guidance for lazy-create remote provider failures', () => {
+    const raw = 'LAZY_CREATE_FAILED: [REMOTE_COMPAT_MODE_UNSUPPORTED] local provider';
+    expect(remoteErrorMessageForBanner(raw)).toBe(raw);
+    expect(decodeRemoteErrorMessage(raw)).toBe(i18n.t('chat.remoteError.REMOTE_COMPAT_MODE_UNSUPPORTED'));
+  });
+
   it('maps a missing auto-review confirmation to i18n text, not a user rejection', () => {
     expect(
       decodeRemoteErrorMessage(

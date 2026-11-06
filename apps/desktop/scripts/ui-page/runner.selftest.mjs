@@ -3,7 +3,7 @@
 import assert from 'node:assert/strict';
 import { spawn, execFileSync } from 'node:child_process';
 import { existsSync } from 'node:fs';
-import { mkdtemp, readFile, realpath, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, realpath, rm, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { after, before, test } from 'node:test';
@@ -12,6 +12,7 @@ import { runPlan } from './run.mjs';
 import { adhocPage } from './registry.mjs';
 import { parseOptions, variantsFor } from './options.mjs';
 import { scanPage, buildPage, inputsChanged } from './build.mjs';
+import { prShots } from './pr.mjs';
 
 const cli = fileURLToPath(new URL('./cli.mjs', import.meta.url));
 const harness = fileURLToPath(new URL('./harness/index.tsx', import.meta.url));
@@ -326,6 +327,97 @@ test('captures exact viewports and overviews in a hidden Electron window', async
   assert.ok(summary.overviews.length);
   for (const overview of summary.overviews) assert.ok(existsSync(overview));
   assert.equal(summary.cleanup.scratchRemoved, true);
+});
+
+// Scenario-only controls (e.g. "Finish fixture") showed up in PR screenshots. Captures hide
+// `data-ui-page-control` elements while the check can still click them. Electron tier.
+test('captures leave out scenario controls that the check still uses', async () => {
+  const file = await entry(
+    'controls',
+    `mountPage({ cases: ['plain', 'control'], render: (ctx) => <div>Ready{ctx.case === 'control' &&
+      <button data-ui-page-control style={{ position: 'absolute', top: 0, left: 0 }}
+        onClick={(event) => { event.currentTarget.dataset.clicked = '1'; }}>Finish</button>}</div> });`,
+  );
+  const options = parseOptions(['--entry', file, '--case', 'all', '--json']);
+  const definition = adhocPage(file);
+  definition.check = async (page, ui) => {
+    if (ui.case !== 'control') return;
+    await page.getByRole('button', { name: 'Finish' }).click();
+    assert.equal(await page.locator('[data-clicked]').count(), 1);
+  };
+  const summary = await runPlan(
+    { pages: [{ definition, variants: variantsFor(definition, options) }] },
+    options,
+  );
+  assert.equal(summary.status, 'passed', JSON.stringify(summary.variants.map((v) => v.errors)));
+  const [plain, control] = await Promise.all(
+    summary.variants.map((variant) =>
+      readFile(path.join(summary.evidence, variant.screenshots[0])),
+    ),
+  );
+  assert.ok(plain.equals(control));
+});
+
+// The PR body used to embed every overview. It now carries only captures whose before and
+// after differ, as before | after pairs.
+test('PR screenshots keep only changed captures as before/after pairs', async () => {
+  const evidence = await mkdtemp(path.join(dir, 'pr-shots-'));
+  const variants = [];
+  for (const theme of ['light', 'dark'])
+    for (const name of ['a', 'b', 'c']) {
+      const id = `p.${name}.${theme}.zh-CN.720x600`;
+      for (const role of ['before', 'after']) {
+        const shots = [];
+        for (const capture of ['initial', 'final']) {
+          const rel = `${id}/${role === 'before' ? 'before/' : ''}${capture}.png`;
+          await mkdir(path.dirname(path.join(evidence, rel)), { recursive: true });
+          // Case a is unchanged; b and c differ at both captures.
+          await writeFile(path.join(evidence, rel), name === 'a' ? capture : `${role}-${capture}`);
+          shots.push(rel);
+        }
+        variants.push({
+          id,
+          role,
+          page: 'p',
+          case: name,
+          theme,
+          locale: 'zh-CN',
+          viewport: { width: 720, height: 600 },
+          screenshots: shots,
+          focus: [],
+        });
+      }
+    }
+  const summary = { compare: { ref: 'main' }, variants };
+  const rows = await prShots(summary, evidence);
+  // Case a is identical on both sides and drops out; nothing is capped.
+  assert.deepEqual(
+    rows.map((row) => `${row.title} ${row.subtitle.split(' · ')[0]}`),
+    ['light', 'dark'].flatMap((theme) =>
+      ['b', 'c'].flatMap((name) => [`${name} · initial ${theme}`, `${name} · final ${theme}`]),
+    ),
+  );
+  assert.deepEqual(
+    rows[1].columns.map((column) => column.file),
+    ['p.b.light.zh-CN.720x600/before/final.png', 'p.b.light.zh-CN.720x600/final.png'],
+  );
+  // A crop that exists on one side only must not be paired with the other side's full page.
+  const mixed = structuredClone(variants);
+  const lone = mixed.find((v) => v.role === 'after' && v.case === 'b' && v.theme === 'light');
+  lone.focus = [{ capture: 'final', file: 'p.b.light.zh-CN.720x600/final.focus.png' }];
+  await writeFile(path.join(evidence, lone.focus[0].file), 'crop');
+  const final = (await prShots({ ...summary, variants: mixed }, evidence)).find(
+    (row) => row.title === 'b · final' && row.subtitle.startsWith('light'),
+  );
+  assert.deepEqual(
+    final.columns.map((column) => column.file),
+    ['p.b.light.zh-CN.720x600/before/final.png', 'p.b.light.zh-CN.720x600/final.png'],
+  );
+  const plain = await prShots({ variants }, evidence, { cases: ['a'] });
+  assert.deepEqual(
+    plain.map((row) => row.columns.map((column) => column.label)),
+    [['Light', 'Dark']],
+  );
 });
 
 // #7395 extended UI regression: the idle editor installs a 900x400 CDP
