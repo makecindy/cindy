@@ -615,7 +615,7 @@ export function mountRemoteDesktopViewer(root, postMessage, config) {
     fx = (viewportLeft() + viewportWidth() / 2 - x) / r.width;
     fy = (viewportHeight() / 2 + verticalOffset(r.height) - y) / r.height;
   }
-  function cursorViewport() {
+  function cursorViewport(margin = 8) {
     const hotX = remoteCursor?.hotX ?? 9,
       hotY = remoteCursor?.hotY ?? 9;
     const w = remoteCursor?.width ?? 18,
@@ -624,23 +624,39 @@ export function mountRemoteDesktopViewer(root, postMessage, config) {
       right = left + viewportWidth(),
       bottom = Math.max(1, stage.clientHeight - viewportBottom());
     // Keep the entire cursor, including its hotspot offset, clear of chrome.
-    const minX = Math.min(right - 1, left + 8 + hotX),
+    const minX = Math.min(right - 1, left + margin + hotX),
       minY = Math.min(
         bottom - 1,
-        (usesViewportInsets() ? viewportTop() : 0) + 8 + hotY,
+        (usesViewportInsets() ? viewportTop() : 0) + margin + hotY,
       );
     return {
       minX,
-      maxX: Math.max(minX, right - 8 - (w - hotX)),
+      maxX: Math.max(minX, right - margin - (w - hotX)),
       minY,
-      maxY: Math.max(minY, bottom - 8 - (h - hotY)),
+      maxY: Math.max(minY, bottom - margin - (h - hotY)),
     };
   }
-  // A desktop that fits the visible area already shows the whole cursor.
+  // Same test the camera uses: zoom, or a desktop wider/taller than the view.
   const cursorCanHide = (r) =>
     zoom > 1 ||
     r.width > viewportWidth() ||
     r.height > stage.clientHeight - viewportBottom();
+  // Move by the least needed to bring a covered cursor back inside the safe
+  // margin; a cursor that is wholly on screen already stays where it is.
+  const revealedBy = (px, py) => {
+    const seen = cursorViewport(0),
+      safe = cursorViewport();
+    return {
+      dx:
+        px < seen.minX || px > seen.maxX
+          ? bounded(px, safe.minX, safe.maxX) - px
+          : 0,
+      dy:
+        py < seen.minY || py > seen.maxY
+          ? bounded(py, safe.minY, safe.maxY) - py
+          : 0,
+    };
+  };
   // Settle inside the pan limits, then move only as far as the cursor needs.
   function revealCursor() {
     stopPanAnimation();
@@ -649,13 +665,9 @@ export function mountRemoteDesktopViewer(root, postMessage, config) {
       b = panBounds(r);
     let x = bounded(r.x, b.minX, b.maxX),
       y = bounded(r.y, b.minY, b.maxY);
-    if (cursorCanHide(r)) {
-      const v = cursorViewport(),
-        px = x + cx * r.width,
-        py = y + cy * r.height;
-      x += bounded(px, v.minX, v.maxX) - px;
-      y += bounded(py, v.minY, v.maxY) - py;
-    }
+    const by = revealedBy(x + cx * r.width, y + cy * r.height);
+    x += by.dx;
+    y += by.dy;
     place(x, y, r);
     followRest = { fx, fy, zoom };
     cursorNeedsEntry = false;
@@ -716,17 +728,17 @@ export function mountRemoteDesktopViewer(root, postMessage, config) {
   }
   function render() {
     const r = layout();
-    const v = cursorViewport(),
+    const v = cursorViewport(0),
       shownX = r.x + cx * r.width,
       shownY = r.y + cy * r.height;
     shown = {
       ...r,
       stageWidth: stage.clientWidth,
       cursorVisible:
-        shownX >= v.minX - 1 &&
-        shownX <= v.maxX + 1 &&
-        shownY >= v.minY - 1 &&
-        shownY <= v.maxY + 1,
+        shownX >= v.minX &&
+        shownX <= v.maxX &&
+        shownY >= v.minY &&
+        shownY <= v.maxY,
     };
     if (config.nativeMedia && epoch)
       post({
@@ -2469,18 +2481,14 @@ export function mountRemoteDesktopViewer(root, postMessage, config) {
           if (fillHeight && (keyboardInset > 0 || wasOpen)) {
             // A visible cursor holds still; otherwise move just enough to
             // show it. Closing first returns to the normal pan limits.
-            const r = layout(),
-              v = cursorViewport();
+            const r = layout();
             let y = r.y;
             if (keyboardInset === 0) {
               followRest = null;
               const b = panBounds(r);
               y = bounded(y, b.minY, b.maxY);
             }
-            if (cursorCanHide(r)) {
-              const py = y + cy * r.height;
-              y += bounded(py, v.minY, v.maxY) - py;
-            }
+            y += revealedBy(r.x + cx * r.width, y + cy * r.height).dy;
             place(r.x, y, r);
             cursorNeedsEntry = false;
             manualViewMoved = false;

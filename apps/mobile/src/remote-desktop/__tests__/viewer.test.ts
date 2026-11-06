@@ -958,6 +958,25 @@ describe("remote desktop viewport", () => {
       }
     },
   );
+  it("lifts an unzoomed ultrawide cursor out from behind the landscape keyboard", () => {
+    const v = viewer();
+    v.elements.stage.clientWidth = 800;
+    v.elements.stage.clientHeight = 400;
+    v.send({ type: "init", epoch: "wide", width: 2560, height: 1080, fillHeight: true });
+    v.send({ type: "mouseButtons", keyboardOpen: false, bottomInset: 0, leftInset: 50, rightInset: 80 });
+    v.send({
+      type: "frame",
+      jpeg: "",
+      cursor: { x: 0.5, y: 0.95, width: 18, height: 18, hotX: 9, hotY: 9, visible: true, png: "iVBORw0KGgo=" },
+    });
+    for (let i = 0; i < 30; i++) v.frame();
+    const style = () => v.elements.image.style;
+    const cursorY = () => parseFloat(style().top) + 0.95 * parseFloat(style().height);
+    expect(cursorY()).toBeGreaterThan(300);
+    v.send({ type: "mouseButtons", keyboardOpen: true, bottomInset: 100, leftInset: 50, rightInset: 0 });
+    for (let i = 0; i < 30; i++) v.frame();
+    expect(cursorY()).toBeCloseTo(300 - 17);
+  });
   it("does not recenter portrait content for a keyboard overlay message", () => {
     const v = viewer();
     const before = { ...v.elements.image.style };
@@ -1430,9 +1449,10 @@ describe("portrait keyboard positioning", () => {
   // The keyboard shrinks the portrait stage; keeping the old viewport center
   // used to push a zoomed desktop's cursor out of view.
   it.each([
-    [200, 200],
-    [500, 600 - 300 - 17],
-  ])("keeps a zoomed cursor at %s in view as the keyboard opens", (screenY, expectedY) => {
+    [200, 200, 200],
+    [200, 500, 600 - 300 - 17],
+    [10, 500, 600 - 300 - 17],
+  ])("keeps a zoomed cursor at (%s, %s) in view as the keyboard opens", (screenX, screenY, expectedY) => {
     const v = viewer();
     v.send({ type: "init", epoch: "keyboard", width: 1920, height: 1080 });
     v.pointer("pointerdown", 1, 190, 300);
@@ -1453,7 +1473,7 @@ describe("portrait keyboard positioning", () => {
       width = parseFloat(style().width),
       height = parseFloat(style().height);
     expect(width).toBeGreaterThan(400);
-    const x = 0.5,
+    const x = (screenX - left) / width,
       y = (screenY - top) / height;
     v.send({
       type: "frame",
@@ -1464,7 +1484,7 @@ describe("portrait keyboard positioning", () => {
     v.resize();
     for (let i = 0; i < 30; i++) v.frame(20);
     expect(parseFloat(style().width)).toBeCloseTo(width);
-    expect(parseFloat(style().left) + x * width).toBeCloseTo(left + x * width);
+    expect(parseFloat(style().left) + x * width).toBeCloseTo(screenX);
     expect(parseFloat(style().top) + y * height).toBeCloseTo(expectedY);
   });
   it("limits the offset to available space below the desktop", () => {
