@@ -30,7 +30,8 @@ export const COLD_SCHEDULE_LOAD_WAIT_MS = 1500;
 async function readLocalSchedules(strict = false) {
   const cached = schedulesStore.getSnapshot();
   const pending = schedulesStore.pendingRefresh() ?? (cached ? null : schedulesStore.ensure());
-  if (!pending) return cached;
+  // strict:上一次刷新失败时 store 保留着旧缓存(并记下错误),它可能已经过期,不能当作读到了。
+  if (!pending) return strict && schedulesStore.getError() ? null : cached;
   // strict:超时或失败不退回缓存(它可能已过期),而是报告「没读到」。
   const fallback = strict ? null : cached;
   const timeout = new Promise<Schedule[] | null>((resolve) =>

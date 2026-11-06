@@ -113,6 +113,7 @@ describe('useGhostCardTaskArchive', () => {
   it.each([
     ['not seen', { seen: false }],
     ['cancelled on the card', { during: () => cancelGhostCardTaskAutoArchive(session.id) }],
+    ['someone wrote through an official IM hook after it became pending', { during: () => chatChanged([{ role: 'user', clientId: 'u1' }, { role: 'user', clientId: 'h1', automationOrigin: { kind: 'scheduler', scheduleId: 'hook:slack:team' } }]) }],
     ['the user wrote after it became pending', { during: () => chatChanged([{ role: 'user', clientId: 'u1' }, { role: 'user', clientId: 'u2' }]) }],
     ['a view that must not auto-archive', { autoArchive: false }],
   ] as const)('keeps the task when %s', async (_name, options) => {

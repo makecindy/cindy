@@ -12,6 +12,7 @@ import { getRemoteSessionActivity, isRemoteSessionActivityActive } from '@/featu
 import { loadConfirmedActiveBoundScheduleNames } from '@/features/scheduler/lib/archiveScheduleWarning';
 import type { Session } from '@/lib/ccAgent.types';
 import { makerChatStore, type ChatMessage } from '@/lib/makerChatStore';
+import { isHookSchedulerOrigin } from '@/lib/messageAutomationOrigin';
 import { toast } from '@/lib/toast';
 import { resolveWorktreeRemovalPreflight } from '@/lib/worktreeRemovalWarning';
 
@@ -88,11 +89,14 @@ export function useGhostCardTaskArchive({
   }, [sessionId]);
 }
 
-/** 最后一条由人发出的消息(本机、手机、IM、共享成员都算;自动化、其他任务和插件代发的不算)。 */
+/**
+ * 最后一条由人发出的消息(本机、手机、IM、共享成员都算;自动化、其他任务和插件代发的不算)。
+ * 官方 IM Hook 的渠道消息复用 scheduler 形态的 origin,但是真人发的,要算(见 isHookSchedulerOrigin)。
+ */
 function lastUserAuthoredMessage(messages: readonly ChatMessage[]): string | null {
   for (let i = messages.length - 1; i >= 0; i -= 1) {
     const m = messages[i];
-    if (m.role === 'user' && !m.automationOrigin && !m.sourcePlugin) return m.clientId;
+    if (m.role === 'user' && !m.sourcePlugin && (!m.automationOrigin || isHookSchedulerOrigin(m.automationOrigin))) return m.clientId;
   }
   return null;
 }
