@@ -4265,6 +4265,8 @@ export function RemoteDesktopSession({
             {keyboardDeck ? (
               <FoldDesktopKeyboard
                 {...keySurface}
+                skin={foldSkin}
+                onSkinChange={setFoldSkin}
                 onInputMethod={openFoldInputMethod}
                 onOperations={toggleOperations}
                 clipboard={deckClipboard}
