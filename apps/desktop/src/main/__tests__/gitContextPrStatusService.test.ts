@@ -422,6 +422,60 @@ describe('GitLab MR status', () => {
     });
     expect(fetch).toHaveBeenCalledTimes(1);
   });
+  it('skips optional manual jobs but keeps blocking or unknown manual jobs pending', async () => {
+    const value = mr();
+    value.headPipeline.status = 'SUCCESS';
+    const nodes = [
+      { status: 'MANUAL', allowFailure: true },
+      { status: 'MANUAL', allowFailure: false },
+      { status: 'MANUAL' },
+      { status: 'MANUAL', allowFailure: 'true' },
+    ];
+    value.headPipeline.jobs = {
+      count: nodes.length,
+      nodes,
+      pageInfo: { hasNextPage: false },
+    };
+    const fetch = vi.fn(
+      async () => new Response(JSON.stringify({ data: { project: { mergeRequest: value } } })),
+    );
+    expect((await fetchGitlabMr('fake-token', q, fetch)).checks).toEqual({
+      total: 4,
+      passed: 0,
+      failed: 0,
+      pending: 3,
+      skipped: 1,
+    });
+  });
+  it('counts only latest GitLab jobs after a failed attempt is retried successfully', async () => {
+    const attempts = [
+      { status: 'FAILED', retried: true },
+      { status: 'SUCCESS', retried: false },
+      { status: 'SUCCESS', retried: false },
+    ];
+    const fetch = vi.fn(async (_input: unknown, init?: RequestInit) => {
+      const { query } = JSON.parse(String(init?.body));
+      const nodes = /jobs\s*\([^)]*retried\s*:\s*false/.test(query)
+        ? attempts.filter((job) => !job.retried)
+        : attempts;
+      const value = mr();
+      value.headPipeline.status = 'SUCCESS';
+      value.headPipeline.jobs = {
+        count: nodes.length,
+        nodes,
+        pageInfo: { hasNextPage: false },
+      };
+      return new Response(JSON.stringify({ data: { project: { mergeRequest: value } } }));
+    });
+
+    expect((await fetchGitlabMr('fake-token', q, fetch)).checks).toEqual({
+      total: 2,
+      passed: 2,
+      failed: 0,
+      pending: 0,
+      skipped: 0,
+    });
+  });
   it('queries the MR host once, counts discussions and conservatively summarizes complete current-head jobs', async () => {
     const value = mr();
     const fetch = vi
