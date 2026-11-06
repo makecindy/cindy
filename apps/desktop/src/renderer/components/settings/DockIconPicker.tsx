@@ -74,7 +74,8 @@ export function DockIconPicker() {
             onKeyDown={handleKeyDown}
             className={cn(
               'size-11 shrink-0 rounded-xl transition-[background-color,box-shadow]',
-              'focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--focus-ring)]',
+              // globals.css clears every outline; match the theme cards' box-shadow focus ring.
+              'focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)]',
               isSelected
                 ? 'shadow-[inset_0_0_0_1.5px_var(--text-secondary)]'
                 : 'hover:bg-[var(--settings-menu-bg-hover)]',
