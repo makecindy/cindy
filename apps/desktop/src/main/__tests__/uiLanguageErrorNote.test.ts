@@ -45,10 +45,15 @@ describe('ui language error note', () => {
     expect(modernHans).toContain('the manner of Tang poetry (唐詩)');
     expect(buildUiLanguageErrorNote('zh-TW', { classicalStyle: 'song-ci' }))
       .toContain('Classical Chinese (文言) with Traditional characters');
-    // Without a chosen style a modern interface answers ordinarily.
-    expect(buildUiLanguageErrorNote('zh-CN', { classicalStyle: 'plain' })).toBe(buildUiLanguageErrorNote('zh-CN'));
-    // A non-Chinese interface language never carries the style.
+    // Without a chosen style a modern interface answers ordinarily — and says so
+    // explicitly, so an earlier style note in the same context is superseded.
+    const zhPlain = buildUiLanguageErrorNote('zh-CN', { classicalStyle: 'plain' });
+    expect(zhPlain).toBe(buildUiLanguageErrorNote('zh-CN'));
+    expect(zhPlain).toContain('The literary reply style is not active in this note');
+    expect(zhPlain).toContain('treat it as superseded');
+    // A non-Chinese interface language never carries the style or its cancellation.
     expect(buildUiLanguageErrorNote('ja', { classicalStyle: 'tang-poetry' })).not.toContain('Classical Chinese');
+    expect(buildUiLanguageErrorNote('ja')).not.toContain('literary reply style is not active');
     const im = buildUiLanguageErrorNote('zh-Hant-x-lzh', { replyStyle: false, classicalStyle: 'song-ci' });
     expect(im).toContain('write that report in 文言（繁體）');
     expect(im).not.toContain('Song lyrics');
