@@ -839,6 +839,8 @@ export const MAKER_INVOKE = {
   BOT_GROUP_SEND: 'maker:bot-group:send',
   CHAT_DISPLAY_CACHE: 'maker:chat:display-cache',
   BOT_GROUP_OUTBOX: 'maker:bot-group:outbox',
+  BOT_GROUP_OUTBOX_COMMAND: 'maker:bot-group:outbox-command',
+  BOT_READ_STATE: 'maker:bot-read-state',
   BOT_GROUP_CONTINUE: 'maker:bot-group:continue',
   BOT_GROUP_STOP: 'maker:bot-group:stop',
   BOT_GROUP_PLAN_START: 'maker:bot-group:plan-start',
@@ -1021,6 +1023,9 @@ export const MAKER_PUSH = {
   BOT_DIRECT_MESSAGE_CHANGED: 'maker:bot-direct-message:changed',
   /** A Bot group, its members, messages or running round changed. */
   BOT_GROUP_CHANGED: 'maker:bot-group:changed',
+  /** Local complete-app windows only; never forwarded to Device Link. */
+  BOT_GROUP_OUTBOX_CHANGED: 'maker:bot-group:outbox-changed',
+  BOT_READ_STATE_CHANGED: 'maker:bot-read-state:changed',
   /** Companion homes changed; payload is the full CompanionCloudSnapshot. */
   COMPANION_CLOUD_CHANGED: 'maker:companion-cloud:changed',
   /** Bot 档案经主进程创建或更新后变化；renderer 收到后重拉伙伴列表。 */

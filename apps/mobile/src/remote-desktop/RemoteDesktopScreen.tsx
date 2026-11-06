@@ -7,6 +7,9 @@ import { RemoteKeySurface, type SystemKeyAction } from "./RemoteKeySurface";
 import {
   AllWindowsIcon,
   OmarchyMenuIcon,
+  PostureClosedIcon,
+  PostureFlatIcon,
+  PostureOpenIcon,
   ShowDesktopIcon,
   WorkspaceLeftIcon,
   WorkspaceRightIcon,
@@ -52,6 +55,7 @@ import {
   LayoutGrid,
   Monitor,
   Search,
+  type LucideIcon,
 } from "lucide-react-native";
 import { useReduceMotionEnabled } from "@/hooks/useReduceMotion";
 import { motionDuration } from "@/theme/tokens";
@@ -168,6 +172,7 @@ import type { RemoteDesktopDeviceButton } from "./RemoteDesktopChrome";
 import {
   LIVE_SCREEN_ICONS,
   LIVE_SCREEN_NOT_IN_MENU,
+  LIVE_SCREEN_POSTURES,
   LIVE_SCREEN_TOOLBAR_BUTTONS,
   parseLiveScreenParam,
 } from "./liveScreen";
@@ -184,6 +189,12 @@ type ChannelOutcome =
   | { kind: "relay" }
   | { kind: "error"; code: string };
 const KEY_BAR_HEIGHT = 44;
+/** The desktop viewer's posture glyphs, by the plugin's button id. */
+const POSTURE_ICONS: Record<string, LucideIcon> = {
+  "posture-closed": PostureClosedIcon,
+  "posture-open": PostureOpenIcon,
+  "posture-flat": PostureFlatIcon,
+};
 const LABELS: Record<string, string> = {
   Minus: "− _",
   Equal: "= +",
@@ -417,6 +428,9 @@ export function RemoteDesktopSession({
     delay: 1000,
     displayId: undefined as string | undefined,
     resuming: false,
+    // The user returned after this viewer released its lease (foreground or
+    // screen focus). Cleared once a lease starts; network retries never set it.
+    returned: false,
   });
   const generation = useRef(0);
   const timing = useRef<ReturnType<typeof connectionDiagnostics> | null>(null);
@@ -1367,9 +1381,12 @@ export function RemoteDesktopSession({
               setHostCaps({ deviceId, value: result });
               // A window view never unlocks the computer: it shows a window on an unlocked desktop.
               // Automatic recovery must never unlock before the host can reject resume.
-              // A deliberate new connection may still use the saved password.
+              // A deliberate new connection may still use the saved password, and so
+              // may a return after release: macOS waits for the first frame, which
+              // follows the host accepting resume. Linux unlocks before start.
               if (
-                !resuming &&
+                (!resuming ||
+                  (recovery.current.returned && result.platform !== "linux")) &&
                 !handoff &&
                 !screenPlugin &&
                 supportsAutoUnlock(result.platform)
@@ -1411,6 +1428,7 @@ export function RemoteDesktopSession({
           servers: loadIceServers("connect"),
         };
         active.current = next;
+        recovery.current.returned = false;
         receiveWindow.current = {
           since: Date.now(),
           bytes: 0,
@@ -1688,6 +1706,7 @@ export function RemoteDesktopSession({
         !pipPrepared.current
       ) {
         securityRef.current.resetConnectionAttempt();
+        recovery.current.returned = true;
         endBackground();
       } else if (state === "active" && active.current) {
         send({ type: "resume" });
@@ -1893,6 +1912,10 @@ export function RemoteDesktopSession({
     } else if (!focused) {
       leaving.current = true;
       setIsLeaving(true);
+      if (active.current) {
+        securityRef.current.resetConnectionAttempt();
+        recovery.current.returned = true;
+      }
       pause(true);
       navigation.current.onEnded?.();
     } else if (focused) {
@@ -3455,7 +3478,11 @@ export function RemoteDesktopSession({
     hasButton("orientation-portrait") && hasButton("orientation-landscape");
   const rotatable = hasButton("rotate-left") && hasButton("rotate-right");
   const following = turn === null;
-  const deviceLandscape = following ? landscape : turn % 2 === 1;
+  // Following matches the window's own shape. Not `landscape`, which also
+  // means a system side rail: iPhone Duo's cover screen has one upright.
+  const deviceLandscape = following
+    ? orientationSize.width > orientationSize.height
+    : turn % 2 === 1;
   // Follow the device's shape as it turns: the host answers a screenShape
   // request once the shape differs from the one we know (or after a few
   // seconds), so one request is always waiting. Older hosts refuse it; then
@@ -3697,9 +3724,20 @@ export function RemoteDesktopSession({
   const volumeDown = liveScreenAction("volume-down");
   const volumeUp = liveScreenAction("volume-up");
   const liveScreenActions: LiveScreenAction[] = (liveScreen?.buttons ?? [])
-    .filter((b) => shownButton(b.id) && !b.id.startsWith("volume-"))
+    .filter(
+      (b) =>
+        shownButton(b.id) &&
+        !b.id.startsWith("volume-") &&
+        !LIVE_SCREEN_POSTURES.includes(b.id),
+    )
     .map((b) => liveScreenAction(b.id)!)
     .filter(Boolean);
+  // A foldable's postures get a row of their own, in the plugin's order,
+  // with the desktop viewer's glyphs.
+  const postureActions = LIVE_SCREEN_POSTURES.flatMap((id) => {
+    const action = liveScreenAction(id);
+    return action ? [{ ...action, icon: POSTURE_ICONS[id] }] : [];
+  });
   const rotation = (direction: "left" | "right") => {
     const action = rotatable && liveScreenAction(`rotate-${direction}`);
     return action
@@ -4239,6 +4277,8 @@ export function RemoteDesktopSession({
             {keyboardDeck ? (
               <FoldDesktopKeyboard
                 {...keySurface}
+                skin={foldSkin}
+                onSkinChange={setFoldSkin}
                 onInputMethod={openFoldInputMethod}
                 onOperations={toggleOperations}
                 clipboard={deckClipboard}
@@ -4562,6 +4602,7 @@ export function RemoteDesktopSession({
               ? { down: volumeDown, up: volumeUp }
               : undefined
           }
+          posture={postureActions.length ? postureActions : undefined}
           orientation={
             rotateLeft && rotateRight
               ? {
@@ -4598,6 +4639,7 @@ export function RemoteDesktopSession({
             menu: t("remoteDesktop.deviceMenu"),
             orientation: t("remoteDesktop.orientation"),
             follow: t("remoteDesktop.orientationFollow"),
+            posture: t("remoteDesktop.posture"),
             picture: t("remoteDesktop.picture"),
             pictures: {
               fit: t("remoteDesktop.pictureFit"),

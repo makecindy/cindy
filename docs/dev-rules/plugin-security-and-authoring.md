@@ -733,6 +733,15 @@ Library 请求同时绑定迁移代次和安装批准，根解析、排队及开
 
 ## 5. 存量插件兼容：升级必须无感（红线）
 
+`tools[].parameters` 的 16KB 约束：新包入口 `validateGhostManifest` 按 JSON 序列化后的
+UTF-8 字节计量；历史市场 release 入口 `validateStoredGhostManifest` 和已装快照入口
+`validateInstalledGhostManifest` 保留原 UTF-16 长度上限 16,384。市场详情解析与
+`GhostManager` 的 `stored-release` 安装／更新因此可继续读取旧口径合法的多字节 schema，
+无需以服务端历史数据盘点作为客户端兼容的前提。旧口径超限、参数非对象及其它不合法字段仍拒绝；
+市场历史参数兼容独立于已装快照的 agent 声明兼容，不放宽新的能力声明。
+实现同步于协议正本与 Desktop 镜像；回归见协议包 `delivery.test.ts`、Desktop
+`ghost.test.ts` 与 `ghostLocalInstallIdentity.test.ts`（含安装、更新和 receipt 重载）。
+
 **红线**：插件系统的任何改动，都不得让用户本地**已安装、已启用**的插件在 Cindy 升级
 后变得不可用，也不得要求用户重新安装、额外确认、重新配置凭证或重新落一次技能。
 升级后的默认结果只有一个：用户什么都不做，插件照旧能用。
@@ -1131,7 +1140,12 @@ Main 按真实逻辑页或专属协议分区定位物理实例，绑定当前 ow
 远程与分享来源复用普通模型选择器的目录与授权通道。选择确认与新任务路由分别重读精确来源目录，
 不可用时不借用本机同名模型；远程 Agent 不要求插件电脑安装对应 Harness。
 `/agent-models` 无参返回可选 `supportsRemoteRoutes:true`；旧 Host 没有该标志时路由插件保留本机行为，
-不回传远程路由，防止旧解析器丢弃来源后误执行。插件自建后台任务仍使用本机 `PluginTaskRoute`。
+不回传远程路由，防止旧解析器丢弃来源后误执行。
+插件自建任务另以 `tasks.capabilities().remoteRoutes:true` 声明完整远程执行支持；
+create / setModel 接受 `PluginTaskRoute.agentDeviceId`，send/accept 重读精确来源授权目录，
+任务记录与文件仍在插件宿主，结果和取消复用普通 Session/远程 proxy 的归属及轮次校验。
+不新增插件批准、不扩大工具/目录权限、不接管远程电脑上的任意任务；旧 route、批准和回执无迁移。
+实现、错误和来源保存规则见 [插件任务远程模型](plugin-task-api-implementation.md#插件任务使用远程模型2026-11-06未发布)。
 实现见 `ghostModelPicker.ts`、`PluginModelPickerHost.tsx`、`mobilePageService.ts`；
 作者契约见 `cindy-plugin-creator/references/plugin-agent-models.md`，回归见 `ghostModelPicker.test.ts`。
 

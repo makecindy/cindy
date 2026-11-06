@@ -165,7 +165,7 @@
   "taskActionConfirmation": {
     "title": "Confirmar ação da sessão",
     "once": "Reveja o destino, a ação e o conteúdo completo abaixo. A permissão aplica-se apenas a esta ação, uma vez.",
-    "remove": "Esta ação elimina a automatização. Reveja o destino; a aprovação aplica-se apenas uma vez.",
+    "remove": "O endereço de receção da automatização será libertado. Verifica o destino; a autorização aplica-se apenas a esta ação.",
     "permission": "Esta ação responde a um pedido de permissão noutra tarefa em seu nome. Reveja a ação; a aprovação aplica-se apenas uma vez.",
     "resume": "Esta ação retoma a execução em pausa. Reveja o destino; a aprovação aplica-se apenas uma vez.",
     "command": "Esta ação guarda ou executa um comando no seu computador fora da aprovação de ferramentas do Agent. Reveja o comando e a pasta de trabalho; a aprovação aplica-se apenas uma vez.",
@@ -1126,6 +1126,14 @@
     "detail": "Isto terminará o controlo remoto e restaurará o ecrã deste computador. O computador será bloqueado se a opção de bloquear ao sair estiver ativada.",
     "cancel": "Manter ligação",
     "disconnect": "Desligar"
+  },
+  "awayGuard": {
+    "status": "O Cindy está a trabalhar",
+    "hint": "Prima qualquer tecla para bloquear e desbloqueie com Touch ID ou a sua palavra-passe.",
+    "lockFailed": {
+      "status": "O Cindy não conseguiu bloquear este Mac",
+      "hint": "Prima Control-Comando-Q para o bloquear. O ecrã também bloqueia sozinho passado algum tempo."
+    }
   },
   "appBadge": {
     "attentionCount": "Tarefas que precisam de atenção: {{count}}"
@@ -2154,6 +2162,17 @@
     "appearance": {
       "title": "Aspeto",
       "modeLabel": "Modo de aspeto",
+      "appIcon": {
+        "label": "Ícone da Dock",
+        "description": "Escolha o ícone que a app utiliza na Dock",
+        "saveFailed": "Não foi possível guardar o ícone da Dock. Tente novamente.",
+        "options": {
+          "default": "Predefinido",
+          "cat": "Gato preto",
+          "wordmark": "Logótipo da Cindy",
+          "mark": "Símbolo da Cindy"
+        }
+      },
       "sidebarAndPanels": "Barra lateral e painéis",
       "themeLabel": "Tema",
       "themeAriaLabel": "Seleção de tema",
@@ -2411,7 +2430,24 @@
       "swallowActivationClickLabel": "Evitar cliques acidentais ao regressar",
       "swallowActivationClickHint": "Quando ativado, um clique com o botão esquerdo numa janela em segundo plano apenas a traz para primeiro plano. Quando desativado, também atua sobre o item clicado, o que pode causar cliques acidentais.",
       "swallowActivationClickAria": "Ativar ou desativar a proteção contra cliques acidentais ao regressar à janela",
-      "macRestartNote": "No macOS, reinicie a aplicação para aplicar as alterações."
+      "macRestartNote": "No macOS, reinicie a aplicação para aplicar as alterações.",
+      "awayGuard": {
+        "label": "Continuar a trabalhar quando se ausenta",
+        "hint": "Quando ativado, este Mac não desliga o ecrã nem bloqueia sozinho, para que a IA o possa usar a qualquer momento. Depois de algum tempo ausente, uma camada preta tapa o ecrã e a IA continua a trabalhar por trás. Premir uma tecla ou clicar bloqueia-o de imediato; desbloqueie com Touch ID ou a sua palavra-passe.",
+        "permission": "Permita o Cindy em Definições do Sistema > Privacidade e segurança > Acessibilidade para que possa bloquear o ecrã assim que alguém tocar neste Mac. Até lá, o ecrã desliga-se e bloqueia como habitualmente.",
+        "preview": "Experimentar agora",
+        "previewStarting": "Largue o rato e o teclado. O ecrã fica tapado dentro de 3 segundos; prima qualquer tecla para o bloquear e, depois, desbloqueie-o.",
+        "previewUnavailable": "Não foi possível tapar o ecrã. Reinicie o Cindy e tente novamente.",
+        "delay": {
+          "label": "Tapar o ecrã após",
+          "hint": "Tempo sem tocar no teclado nem no rato até a camada aparecer. Por predefinição, igual ao repouso do ecrã.",
+          "30": "30 s",
+          "60": "1 min",
+          "120": "2 min",
+          "300": "5 min",
+          "system": "Sistema"
+        }
+      }
     },
     "agentIsland": {
       "title": "Agent Island",
@@ -4008,6 +4044,8 @@
         "disabledGroup": "Desativado",
         "enableAllModels": "Ativar todos",
         "priceOverride": {
+          "resetShort": "Repor",
+          "referenceDetails": "Detalhes do preço de referência",
           "menu": "Editar estimativa de preços da API",
           "title": "Estimativa de preços da API de {{model}}",
           "description": "Usada apenas para estimar a utilização na sua própria API ou via de subscrição. Não altera a faturação do fornecedor.",
@@ -5178,7 +5216,7 @@
         "ariaLabel": "Escolher o segundo modelo auxiliar alternativo"
       },
       "emptySlot": "Não selecionado",
-      "customHint": "Os modelos são experimentados pela ordem escolhida e também servem de alternativa à revisão automática quando os modelos integrados estão indisponíveis. Os fornecedores selecionados recebem o contexto da revisão: mensagens e referências, detalhes das tarefas e ações (incluindo ações bloqueadas), identidade e permissões, caminhos de ficheiros e sistema operativo.",
+      "customHint": "Os modelos são experimentados pela ordem escolhida e também servem de alternativa à revisão automática quando os modelos integrados estão indisponíveis. Os fornecedores selecionados recebem o contexto da revisão: mensagens e referências, texto público do Agent (apenas referência), detalhes das tarefas e ações (incluindo ações bloqueadas), identidade e permissões, caminhos de ficheiros e sistema operativo.",
       "signInHint": "Inicie sessão na Cindy para utilizar as recomendações automáticas. Sem sessão iniciada, escolha um modelo configurado de outro fornecedor em Personalizado.",
       "chooseAgent": "Escolher um Agent",
       "backToAgents": "Voltar à seleção de Agent",
@@ -6196,7 +6234,7 @@
         "hook": "Bots de mensagens instantâneas da Cindy"
       },
       "hook": {
-        "description": "Ligue o Slack e o Telegram à mesma Cindy. As mensagens são encaminhadas para este dispositivo e partilham a sua lista de projetos e o executor de sessões; cada fornecedor mantém a sua própria conta e preferências.",
+        "description": "Ligue o Slack, o Telegram, o Feishu / Lark e outros canais à mesma Cindy. As mensagens são encaminhadas para este dispositivo e partilham a sua lista de projetos e o executor de sessões; cada fornecedor mantém a sua própria conta e preferências.",
         "slackDescription": "Associe espaços de trabalho do Slack e atribua tarefas à Cindy a partir do Slack.",
         "slackDisabledHint": "Ative o interruptor para iniciar a autorização do Slack; após a associação, pode enviar tarefas a partir do Slack.",
         "slackBoundHint": "Associação concluída. Desativar o interruptor desassocia este dispositivo; voltar a ativá-lo exige nova autorização.",
@@ -6421,6 +6459,45 @@
             "revoked": "Desassociado",
             "superseded": "Associado noutro dispositivo"
           }
+        },
+        "feishu": {
+          "description": "Envia mensagens do Feishu para o teu computador de trabalho.",
+          "disabledHint": "Ative o interruptor e autorize a sua conta Feishu / Lark no navegador ou envie o código de associação ao bot.",
+          "toggleAria": "Alternar ligação ao Feishu / Lark",
+          "connect": "Associar Feishu / Lark",
+          "openApp": "Abrir página de autorização",
+          "cancel": "Cancelar associação",
+          "retry": "Tentar associar novamente",
+          "openBot": "Abrir bot",
+          "unlink": "Desassociar Feishu / Lark",
+          "unlinkConfirmTitle": "Desassociar Feishu / Lark?",
+          "unlinkConfirmDescription": "Desassociar apenas este computador.",
+          "unavailableHint": "A sua organização ainda não configurou o bot Feishu / Lark. Contacte o administrador da sua organização.",
+          "unavailableHintPersonal": "O bot Feishu / Lark ainda não está disponível para contas pessoais.",
+          "status": {
+            "checking": "A verificar o suporte do servidor…",
+            "unavailable": "Não configurado pela sua organização",
+            "unavailablePersonal": "Ainda não disponível",
+            "disabled": "Desativado",
+            "none": "Não associado",
+            "pending": "Autorize no navegador ou envie o código de associação ao bot",
+            "awaiting_confirmation": "Confirma a alteração de conta deste computador no Feishu / Lark",
+            "confirmed": "{{user}} associado ao bot Feishu / Lark",
+            "denied": "Autorização recusada",
+            "expired": "Autorização expirada",
+            "failed": "Falha na associação",
+            "revoked": "Desassociado",
+            "superseded": "Este computador está associado a outra conta Feishu / Lark",
+            "appChanged": "O bot Feishu / Lark foi alterado. Associe novamente."
+          },
+          "bindCode": {
+            "label": "Código de associação",
+            "copy": "Copiar código",
+            "copied": "Código de associação copiado",
+            "hint": "Ou envie este código ao bot Cindy por mensagem direta no Feishu / Lark"
+          },
+          "setWorkingDevice": "Definir como computador de trabalho",
+          "workingDeviceSet": "Computador de trabalho definido"
         }
       },
       "summary": {
@@ -6439,7 +6516,7 @@
     "tina": {
       "chat": {
         "title": "Conversa",
-        "description": "Conversas simples sem qualquer repositório; selecione \"chat\" no Slack, Telegram ou X, com uma sessão por fluxo de conversa."
+        "description": "Conversas simples sem qualquer repositório; selecione \"chat\" no Slack, Telegram, X ou Feishu / Lark, com uma sessão por fluxo de conversa."
       },
       "prefs": {
         "agentLabel": "Agent",
@@ -6449,6 +6526,7 @@
         "providerSlack": "Slack",
         "providerTelegram": "Telegram",
         "providerX": "X",
+        "providerFeishu": "Feishu / Lark",
         "requireConnected": "Editável assim que {{provider}} estiver ligado (ative o respetivo interruptor acima e aguarde a ligação).",
         "offlineLocal": "{{provider}} está offline. As alterações são guardadas neste computador e sincronizadas com o cartão de modelo da conversa quando voltar a ligar-se.",
         "requireBinding": "Conclua primeiro a associação da conta {{provider}}.",
@@ -14106,7 +14184,11 @@
       "mailAttach": "Adicionar anexo",
       "mailRemoveAttachment": "Remover {{name}}",
       "mailUpdated": "Rascunho atualizado (só de leitura)",
-      "mailLegacy": "Histórico de rascunhos (só de leitura)"
+      "mailLegacy": "Histórico de rascunhos (só de leitura)",
+      "taskAutoArchived": "\"{{title}}\" arquivada",
+      "taskAutoArchivedUndo": "Desfazer",
+      "taskAutoArchivePending": "Arquiva ao sair",
+      "taskAutoArchiveCancel": "Manter desta vez"
     },
     "ghostHook": {
       "blockedFallback": "Mensagem bloqueada por um plugin; não enviada",
@@ -14142,6 +14224,8 @@
       "updateHost": "Atualize o computador que executa esta tarefa para abrir uma conversa paralela.",
       "failed": "Não foi possível abrir a conversa paralela. Tente novamente.",
       "mainTaskOnly": "Abra uma conversa paralela a partir da tarefa principal.",
+      "sharedTaskUnavailable": "As conversas paralelas não estão disponíveis em tarefas partilhadas.",
+      "archivedTask": "Desarquive esta tarefa para abrir uma conversa paralela.",
       "closeTitle": "Fechar conversa paralela?",
       "closeDescription": "Este seguimento será interrompido e o respetivo histórico será eliminado. A tarefa principal continua em execução.",
       "closeConfirm": "Fechar e eliminar",
@@ -19341,6 +19425,9 @@
     "pendingApprovals": "{{count}} aprovações pendentes"
   },
   "richAnswer": {
+    "invalidImageReference": "A referência desta imagem é inválida.",
+    "requestImageAgain": "Pedir para mostrar novamente",
+    "requestImageAgainMessage": "Mostra novamente esta imagem existente ({{name}}, referência: {{source}}). Verifica o resultado original da ferramenta ou o ficheiro e usa o endereço real. Não cries uma nova imagem; pergunta-me primeiro se não conseguires identificar a imagem.",
     "send": "Enviar mensagem",
     "sending": "A enviar…",
     "sent": "Enviado",
