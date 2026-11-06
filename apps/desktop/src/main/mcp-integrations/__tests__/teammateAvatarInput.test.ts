@@ -1,3 +1,4 @@
+import { realpathSync } from 'node:fs';
 import { describe, expect, it, vi } from 'vitest';
 
 vi.mock('../../localDb/ipc/botAvatarSelection.js', () => ({
@@ -56,6 +57,32 @@ describe('teammate avatar input', () => {
     const fetchImage = vi.fn().mockResolvedValue({ buffer: Buffer.from('not an image') });
     expect(await resolveTeammateAvatarInput({ ...baseInput, avatar: 'https://example.com/avatar.png' }, deps({ fetchImage })))
       .toMatchObject({ ok: false, errorCode: 'INVALID_ARGS' });
+  });
+
+  it.each([
+    { avatar: String.raw`\\avatar-test.invalid\share\avatar.png` },
+    { avatar: '//avatar-test.invalid/share/avatar.png' },
+    { avatar: String.raw`\\avatar-test.invalid@SSL\DavWWWRoot\avatar.png` },
+    { avatar: String.raw`\\?\UNC\avatar-test.invalid\share\avatar.png` },
+    { avatar: String.raw`\\.\C:\avatar.png` },
+    { avatar: String.raw`\??\C:\avatar.png` },
+    { avatar: 'file://avatar-test.invalid/share/avatar.png' },
+    { avatar: 'file:////avatar-test.invalid/share/av%61tar.png' },
+    { avatar: 'avatar.png', workingDir: '//avatar-test.invalid/share' },
+    { avatar: 'C:\\task\\avatar.png', workingDir: '//avatar-test.invalid/share' },
+  ])('rejects a network or device avatar before filesystem lookup: %o', async input => {
+    const realpath = vi.spyOn(realpathSync, 'native').mockImplementation(() => {
+      throw new Error('filesystem access blocked by this test');
+    });
+    const authorizePath = vi.fn(async () => ({ allowed: false as const, reason: 'not granted' }));
+    try {
+      expect(await resolveTeammateAvatarInput({ ...baseInput, ...input }, deps({ authorizePath })))
+        .toMatchObject({ ok: false, errorCode: 'IMAGE_NOT_FOUND' });
+      expect(realpath).not.toHaveBeenCalled();
+      expect(authorizePath).not.toHaveBeenCalled();
+    } finally {
+      realpath.mockRestore();
+    }
   });
 
   it('checks the live task instance before and after local image reads', async () => {

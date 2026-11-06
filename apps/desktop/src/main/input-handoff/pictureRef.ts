@@ -4,6 +4,7 @@ import { fileURLToPath } from 'node:url';
 import { authorizedSessionPathStillBound, type SessionPathAuthorization } from '@cindy/mcps';
 import * as blobStore from '../cindy-media/blobStore.js';
 import { classifyLocalAttachmentPath } from '../cindy-brain/ghostLocalPathGrant.js';
+import { isNetworkOrDevicePath } from '../filePathPolicy.js';
 import * as imageCacheStore from '../imageCacheStore.js';
 
 /**
@@ -94,11 +95,16 @@ export async function readHandoffPicture(
   options: { allowWebp?: boolean; maxBytes?: number } = {},
 ): Promise<HandoffPictureRead> {
   const trimmed = ref.trim();
+  const managedMedia = trimmed.startsWith('cindy-media://') || trimmed.startsWith('xdt-image://');
+  // Classifying a local file resolves both the image and its task folder.
+  // Reject network/device paths before any lookup, including after file URL decoding.
+  if (isNetworkOrDevicePath(trimmed) || (!managedMedia && workingDir && isNetworkOrDevicePath(workingDir)))
+    return notFound(options.allowWebp);
   const file = localPath(trimmed, workingDir);
-  if (!file) return notFound(options.allowWebp);
+  if (!file || isNetworkOrDevicePath(file)) return notFound(options.allowWebp);
   const maxBytes = Math.min(MAX_BYTES, options.maxBytes ?? MAX_BYTES);
   // Host-managed media of this account; resolveSafe already confined it to the store.
-  if (trimmed.startsWith('cindy-media://') || trimmed.startsWith('xdt-image://')) return readFile(file, maxBytes, options.allowWebp);
+  if (managedMedia) return readFile(file, maxBytes, options.allowWebp);
   const mime = options.allowWebp ? AVATAR_IMAGE_MIME : IMAGE_MIME;
   const source = classifyLocalAttachmentPath(file, workingDir ?? null, { mimeForExt: (ext) => mime[ext] ?? null });
   if (source.kind === 'not-local') return notFound(options.allowWebp);

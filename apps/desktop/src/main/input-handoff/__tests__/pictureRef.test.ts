@@ -1,6 +1,7 @@
 import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { pathToFileURL } from 'node:url';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { readHandoffPicture } from '../pictureRef.js';
 
@@ -25,6 +26,8 @@ describe('代输入 screenshot read', () => {
 
     const inside = await readHandoffPicture('shot.png', task, authorize);
     expect(inside.ok && inside.bytes.toString()).toBe('inside');
+    const localUrl = pathToFileURL(path.join(task, 'shot.png')).href;
+    expect(await readHandoffPicture(localUrl, task, authorize)).toEqual({ ok: true, bytes: Buffer.from('inside') });
     expect(authorize).not.toHaveBeenCalled();
 
     const outside = await readHandoffPicture(path.join(elsewhere, 'shot.png'), task, authorize);
