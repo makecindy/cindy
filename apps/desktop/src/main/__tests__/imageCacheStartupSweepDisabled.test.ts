@@ -105,25 +105,6 @@ describe('fixed cache directory settings', () => {
     );
   });
 
-  it('binds live compact cleanup to the owner captured before the confirm dialog', () => {
-    // 确认框可能开着很久:归属必须弹框前抓住、删除前复核,否则切账号后会删掉新账号的备份。
-    const bootstrap = fs.readFileSync(
-      new URL('../bootstrap-electron.ts', import.meta.url),
-      'utf8',
-    );
-    const start = bootstrap.indexOf("ipcMain.handle('cindy-media:spine-clear'");
-    expect(start).toBeGreaterThan(-1);
-    const block = bootstrap.slice(start, start + 1200);
-    const captured = block.indexOf('captureSpineDir()');
-    const confirmed = block.indexOf('confirmFixedDirectoryClear(event');
-    const recheck = block.indexOf('ownerScope.isCurrentOwner()');
-    const cleared = block.indexOf('clearSpineDir()');
-    expect(captured).toBeGreaterThan(-1);
-    expect(confirmed).toBeGreaterThan(captured);
-    expect(recheck).toBeGreaterThan(confirmed);
-    expect(cleared).toBeGreaterThan(recheck);
-  });
-
   it('opens and clears only the active owner chat attachment directory', () => {
     const bootstrap = fs.readFileSync(
       new URL('../bootstrap-electron.ts', import.meta.url),

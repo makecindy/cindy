@@ -165,6 +165,8 @@ const desktopGuardInclude = [
   'src/renderer/__tests__/voiceInputEnterToSend.test.ts',
   'src/renderer/__tests__/sessionAgentSwitchRemoteRouting.contract.test.ts',
   'src/main/__tests__/deviceLinkVoiceCredentialBootstrap.test.ts',
+  // 「边做边压」清理确认必须绑定发起时的账号(弹框前 capture、删除前 recheck)。
+  'src/main/__tests__/liveCompactCleanupOwnerWiring.contract.test.ts',
   'src/main/__tests__/discordExternalization.test.ts',
   'src/main/__tests__/sessionRuntimeControlWiring.test.ts',
   // Orca queued acceptance must keep using delivery-scoped authority, not the round guard.
