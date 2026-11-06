@@ -276,11 +276,13 @@ export function BotRoutines({
   };
   const saveDraft = async () => {
     try {
-      return await routinesApi.save(
+      const saved = await routinesApi.save(
         botId,
         draftForSave(draft),
         selected === 'new' ? undefined : selected!,
       );
+      if (!saved) throw new Error('routine save returned no record');
+      return saved;
     } catch (error) {
       // Only a rejected save means the persisted enabled state is still authoritative.
       restoreSavedEnabledState();
