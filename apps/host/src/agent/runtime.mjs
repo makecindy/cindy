@@ -148,18 +148,28 @@ export function createHostAgentGraph(options) {
             const providers = [];
             for (const p of catalog.providers ?? []) {
               if (p.id === 'xd' || p.id === 'cindy') continue;
-              const rawModels = Array.isArray(p.models)
-                ? p.models
-                : (p.models?.pi ?? p.models?.['claude-code'] ?? Object.values(p.models ?? {}).flat());
-              const piModels = rawModels.map((m) => ({
-                id: m.id,
-                name: m.name ?? m.id,
-                wireId: m.id,
-                contextWindow: m.contextWindow ?? 1048576,
-                maxOutputTokens: m.maxOutput ?? 128000,
-                efforts: m.efforts ?? [],
-                defaultEffort: m.defaultEffort ?? null,
-              }));
+              const seenModelIds = new Set();
+              const allRawModels = [
+                ...(Array.isArray(p.models) ? p.models : []),
+                ...(p.models?.pi ?? []),
+                ...(p.models?.['claude-code'] ?? []),
+                ...(p.models?.codex ?? []),
+              ];
+              const piModels = [];
+              for (const m of allRawModels) {
+                if (m && m.id && !seenModelIds.has(m.id)) {
+                  seenModelIds.add(m.id);
+                  piModels.push({
+                    id: m.id,
+                    name: m.name ?? m.id,
+                    wireId: m.id,
+                    contextWindow: m.contextWindow ?? 1048576,
+                    maxOutputTokens: m.maxOutput ?? 128000,
+                    efforts: m.efforts ?? [],
+                    defaultEffort: m.defaultEffort ?? null,
+                  });
+                }
+              }
               const baseUrl = p.runtimes?.pi?.baseUrl ?? p.routing?.pi?.upstream ?? p.routing?.['claude-code']?.upstream ?? 'http://127.0.0.1:3425/v1';
               providers.push({
                 id: p.id,

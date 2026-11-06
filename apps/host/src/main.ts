@@ -381,9 +381,10 @@ const readSessionForRun = async (sessionId: string) => {
     .where(eq(sessionTable.id, sessionId)).limit(1);
   const row = rows[0];
   if (!row || row.status !== 'active') throw new Error('session is not active');
+  const agentKind = row.agentKind === 'codex' ? 'codex' : row.agentKind === 'pi' ? 'pi' : 'claude-code';
   return {
     id: row.id,
-    agentKind: row.agentKind,
+    agentKind,
     model: row.model,
     workingDir: row.workingDir,
     providerId: row.providerId,
@@ -427,7 +428,7 @@ async function insertSessionMessage(sessionId: string, input: Record<string, unk
     toolUseId: typeof input.toolUseId === 'string' ? input.toolUseId : null,
     createdAt,
     agentMeta: input.agentMeta ? JSON.stringify(input.agentMeta) : null,
-    agentKind: typeof input.agentKind === 'string' ? input.agentKind : null,
+    agentKind: typeof input.agentKind === 'string' ? (input.agentKind === 'claude-code' ? 'cc' : input.agentKind) : null,
   });
   const rows = await getDbClient().drizzle.select().from(messageTable)
     .where(eq(messageTable.id, id)).limit(1);
@@ -734,7 +735,8 @@ const server = createHostServer({
         .where(eq(sessionTable.id, sessionId)).limit(1);
       const row = rows[0];
       if (!row || row.status !== 'active') throw new Error('session is not active');
-      return { id: row.id, agentKind: row.agentKind, model: row.model, workingDir: row.workingDir, providerId: row.providerId };
+      const agentKind = row.agentKind === 'codex' ? 'codex' : row.agentKind === 'pi' ? 'pi' : 'claude-code';
+      return { id: row.id, agentKind, model: row.model, workingDir: row.workingDir, providerId: row.providerId };
     },
     get maker() {
       if (!agentGraph) throw new Error('agent runtime is not ready');
@@ -772,13 +774,17 @@ const server = createHostServer({
   input: inputQueue,
   interactions: interactionBroker,
   agentCommands: async (input: { agentKind?: string }) => {
-    const agent = agentGraph?.instances?.[String(input.agentKind ?? '')];
-    if (!agent) return { success: false, error: `Agent '${String(input.agentKind ?? '')}' is not registered` };
+    const rawKind = String(input.agentKind ?? '');
+    const kind = rawKind === 'codex' ? 'codex' : rawKind === 'pi' ? 'pi' : 'claude-code';
+    const agent = agentGraph?.instances?.[kind];
+    if (!agent) return { success: false, error: `Agent '${kind}' is not registered` };
     return { success: true, commands: agent.listAgentCommands() };
   },
   agentSkills: async (input: { agentKind?: string; workingDir?: string; sessionId?: string }) => {
-    const agent = agentGraph?.instances?.[String(input.agentKind ?? '')];
-    if (!agent) return { success: false, error: `Agent '${String(input.agentKind ?? '')}' is not registered` };
+    const rawKind = String(input.agentKind ?? '');
+    const kind = rawKind === 'codex' ? 'codex' : rawKind === 'pi' ? 'pi' : 'claude-code';
+    const agent = agentGraph?.instances?.[kind];
+    if (!agent) return { success: false, error: `Agent '${kind}' is not registered` };
     const result = await agent.listAgentSkills({
       workingDir: typeof input.workingDir === 'string' ? input.workingDir : resolveHostDataDir(),
       sessionId: typeof input.sessionId === 'string' ? input.sessionId : undefined,
@@ -786,8 +792,9 @@ const server = createHostServer({
     return { success: true, skills: result.skills ?? [] };
   },
   capabilities: async (agentKind: string) => {
-    const baseCaps = agentGraph?.capabilitiesByAgent?.[agentKind] ?? (
-      agentKind === 'pi'
+    const kind = agentKind === 'codex' ? 'codex' : agentKind === 'pi' ? 'pi' : 'claude-code';
+    const baseCaps = agentGraph?.capabilitiesByAgent?.[kind] ?? (
+      kind === 'pi'
         ? {
             switchModel: { supported: true },
             hasFastMode: true,
@@ -809,9 +816,9 @@ const server = createHostServer({
           }
         : null
     );
-    if (!baseCaps) throw new Error(`Agent '${agentKind}' is not registered`);
+    if (!baseCaps) throw new Error(`Agent '${kind}' is not registered`);
     const providerSnapshot = await listProviders({ gateway: gatewayCredentials, ownerId: runtime.owner });
-    const allModelsForAgent = providerSnapshot.providers.flatMap((provider) => provider.models?.[agentKind] ?? []);
+    const allModelsForAgent = providerSnapshot.providers.flatMap((provider) => provider.models?.[kind] ?? []);
     const seen = new Set<string>();
     const availableModels = [];
     for (const model of allModelsForAgent) {

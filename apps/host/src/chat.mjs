@@ -14,6 +14,12 @@ const MAX_PROMPT_CHARS = 100_000;
 
 class BadRequest extends Error {}
 
+function toMakerAgentKind(kind) {
+  if (kind === 'codex') return 'codex';
+  if (kind === 'pi') return 'pi';
+  return 'claude-code';
+}
+
 function parseChatBody(raw) {
   let body;
   try {
@@ -25,7 +31,7 @@ function parseChatBody(raw) {
   const prompt = body.prompt;
   if (typeof prompt !== 'string' || prompt.trim() === '') throw new BadRequest('prompt is required');
   if (prompt.length > MAX_PROMPT_CHARS) throw new BadRequest('prompt is too long');
-  if (body.agentKind !== undefined && body.agentKind !== 'claude-code' && body.agentKind !== 'codex') {
+  if (body.agentKind !== undefined && body.agentKind !== 'claude-code' && body.agentKind !== 'codex' && body.agentKind !== 'pi' && body.agentKind !== 'cc') {
     throw new BadRequest('unsupported_agent');
   }
   const allowed = new Set(['prompt', 'sessionId', 'workDir', 'model', 'title', 'agentKind']);
@@ -89,8 +95,9 @@ export function createChatHandler(deps) {
     let unsubscribe = () => {};
     try {
       const stored = deps.readSession ? await deps.readSession(sessionId) : null;
+      const rawKind = stored?.agentKind || payload.agentKind || 'claude-code';
       session = deps.maker.getSession(sessionId) ?? await deps.maker.createSession({
-        agentKind: stored?.agentKind || payload.agentKind || 'claude-code',
+        agentKind: toMakerAgentKind(rawKind),
         id: sessionId,
         workingDir: stored?.workingDir || workDir,
         model: stored?.model || (typeof payload.model === 'string' ? payload.model : deps.defaultModel),

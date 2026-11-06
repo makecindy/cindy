@@ -8,6 +8,18 @@
  * the queue in place.
  */
 
+function toMakerAgentKind(kind) {
+  if (kind === 'codex') return 'codex';
+  if (kind === 'pi') return 'pi';
+  return 'claude-code';
+}
+
+function toDbAgentKind(kind) {
+  if (kind === 'codex') return 'codex';
+  if (kind === 'pi') return 'pi';
+  return 'cc';
+}
+
 /**
  * @param {{
  *   getMaker: () => any,
@@ -72,9 +84,11 @@ export function createInputQueue(deps) {
 
     const stored = await deps.readSession(sessionId);
     const maker = deps.getMaker();
+    const makerKind = toMakerAgentKind(next.agentKind || stored.agentKind);
+    const dbKind = toDbAgentKind(next.agentKind || stored.agentKind);
     const session = maker.getSession(sessionId) ?? await maker.createSession({
       id: sessionId,
-      agentKind: stored.agentKind || 'claude-code',
+      agentKind: makerKind,
       workingDir: next.workingDir || stored.workingDir,
       // The composer owns the route for this message; the row only supplies the
       // fallback when the item does not name one.
@@ -105,7 +119,7 @@ export function createInputQueue(deps) {
           clientId: `partial-${Date.now()}`,
           role: 'assistant',
           content: assistantText,
-          agentKind: stored.agentKind,
+          agentKind: dbKind,
         }).catch(() => {});
       }
       // Start the next queued item from a microtask so the terminal event of
@@ -126,7 +140,7 @@ export function createInputQueue(deps) {
               role: 'assistant',
               content: event.data.text,
               agentMeta: event.agentMeta ?? null,
-              agentKind: stored.agentKind,
+              agentKind: dbKind,
             }).catch(() => {});
           }
           assistantText = '';
@@ -159,7 +173,7 @@ export function createInputQueue(deps) {
           role: 'user',
           content: next.persistedContent || next.text,
           createdAt: next.createdAt,
-          agentKind: stored.agentKind,
+          agentKind: dbKind,
         }).catch(() => {});
       }
     } catch (error) {
