@@ -7,7 +7,6 @@ import { parsePluginAppearancePatch } from './pluginAppearance.js';
 describe('plugin appearance input', () => {
   it('accepts bounded role values and owned resource references', () => {
     const patch = { uiFont: { size: 16, resource: 'asset:regular', weight: 500, style: 'normal' },
-      appIcon: { resource: 'asset:client-icon' },
       wallpaper: { resource: 'library:images/wall.webp', visibility: 0.6, blur: 3 },
       theme: { light: { text: '#123456' }, dark: { text: '#eeeeee' } },
       reading: { bodyLineHeight: 1.8, maxWidth: 760 } };

@@ -2218,7 +2218,7 @@ export function ghostPermissionItems(manifest: GhostManifest): GhostPermissionIt
       detail: `${view.title} (${view.scope}); page: ${view.page}` });
   }
   if (nativeUi?.version === 1 && nativeUi.appearance) {
-    const fields = nativeUi.appearance.fields.filter(field => ['wallpaper', 'uiFont', 'codeFont', 'bodyFont', 'theme', 'reading', 'contentStyle', 'visibility', 'appIcon'].includes(field)).sort();
+    const fields = nativeUi.appearance.fields.filter(field => ['wallpaper', 'uiFont', 'codeFont', 'bodyFont', 'theme', 'reading', 'contentStyle', 'visibility'].includes(field)).sort();
     if (fields.length) items.push({ key: 'ui:appearance', kind: 'panel', labelKey: 'nativeUi', detail: `appearance: ${fields.join(', ')}` });
   }
   if (nativeUi?.version === 1) for (const c of nativeUi.contributions ?? []) {

@@ -1,5 +1,5 @@
 /** Author-facing types. No Host view bindings, transport or platform imports. */
-export type PluginAppearanceField = 'wallpaper' | 'uiFont' | 'codeFont' | 'bodyFont' | 'theme' | 'reading' | 'contentStyle' | 'appIcon';
+export type PluginAppearanceField = 'wallpaper' | 'uiFont' | 'codeFont' | 'bodyFont' | 'theme' | 'reading' | 'contentStyle';
 export type PluginAppearanceColor = 'text' | 'secondaryText' | 'surface' | 'border' | 'userBubble' | 'userText' | 'assistantBubble';
 /** asset:<declared id>, library:<owned relative path>, or an owned cindy-media reference. */
 export type PluginAppearanceResource = string;
@@ -11,8 +11,6 @@ export interface PluginAppearanceFont {
   style?: 'normal' | 'italic';
 }
 export interface PluginAppearancePatch {
-  /** Runtime Dock/window icon. Does not change the installed application's icon. */
-  appIcon?: { resource: PluginAppearanceResource };
   uiFont?: PluginAppearanceFont;
   codeFont?: PluginAppearanceFont;
   bodyFont?: PluginAppearanceFont;

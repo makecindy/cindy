@@ -42,7 +42,6 @@ import { PluginUiVisibilityService } from './pluginUiVisibility.js';
 import { createPluginUiVisibilityIpc } from './pluginUiVisibilityIpc.js';
 import { readAppearanceSettings, updateAppearanceSettingsAtomic } from '../appearance-settings-store.js';
 import { publishAppearanceSettings } from '../appearance-settings-ipc.js';
-import { applyRuntimeAppIcon } from '../app-icon.js';
 import { setCustomWallpaperBytes, revokePluginWallpaper } from '../custom-wallpaper.js';
 import { isAppContentWindow } from '../windowFocusClassifier.js';
 import { isSecondaryAppWindow } from '../secondary-windows.js';
@@ -2367,13 +2366,8 @@ function getPluginAppearanceService(): PluginAppearanceService {
     read: readAppearanceSettings, update: updateAppearanceSettingsAtomic,
     saveWallpaper: setCustomWallpaperBytes, revokeWallpaper: revokePluginWallpaper,
     publish: publishAppearanceSettings, apply: settings => pluginAppearanceIpc.apply(settings),
-    applyAppIcon: applyRuntimeAppIcon,
   });
   return pluginAppearanceServiceSingleton;
-}
-
-export function restorePluginAppIcon(): Promise<void> {
-  return getPluginAppearanceService().restoreAppIcon();
 }
 
 function getPluginUiPageHost(): PluginUiPageHost {

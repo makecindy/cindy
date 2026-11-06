@@ -1,6 +1,5 @@
 import fs from 'node:fs/promises';
 import { createHash } from 'node:crypto';
-import sharp from 'sharp';
 import { parseGhostNativeUi } from '@cindy/plugin-protocol';
 import { isPluginAppearanceResource } from '@cindy/maker-shared';
 import { resolveGhostContentPath } from './ghostContentTree.js';
@@ -20,11 +19,11 @@ interface Source {
 
 /** Reuse the package content-tree guard and the Library/media ownership gate. */
 export async function loadPluginAppearanceResource(
-  source: Source, reference: string, expected: LoadedPluginAppearanceResource['kind'] | 'wallpaper' | 'icon',
+  source: Source, reference: string, expected: LoadedPluginAppearanceResource['kind'] | 'wallpaper',
 ): Promise<LoadedPluginAppearanceResource> {
   source.assertCurrent();
   if (!isPluginAppearanceResource(reference)) throw new Error('RESOURCE_UNAVAILABLE');
-  const maxBytes = expected === 'font' ? 10 * 1024 * 1024 : expected === 'image' || expected === 'icon' ? 20 * 1024 * 1024 : 100 * 1024 * 1024;
+  const maxBytes = expected === 'font' ? 10 * 1024 * 1024 : expected === 'image' ? 20 * 1024 * 1024 : 100 * 1024 * 1024;
   let bytes: Buffer | null;
   let declaredKind: string | undefined;
   if (reference.startsWith('asset:')) {
@@ -32,7 +31,7 @@ export async function loadPluginAppearanceResource(
     const resource = ui?.version === 1 && ui.appearance?.resources?.find(r => r.id === reference.slice(6));
     if (!resource) throw new Error('RESOURCE_UNAVAILABLE');
     declaredKind = resource.kind;
-    if (expected === 'wallpaper' ? !['image', 'video'].includes(resource.kind) : resource.kind !== (expected === 'icon' ? 'image' : expected)) throw new Error('RESOURCE_TYPE');
+    if (expected === 'wallpaper' ? !['image', 'video'].includes(resource.kind) : resource.kind !== expected) throw new Error('RESOURCE_TYPE');
     if (!(await fs.lstat(source.ghost.dir)).isDirectory()) throw new Error('RESOURCE_UNAVAILABLE');
     const root = await fs.realpath(source.ghost.dir);
     const file = await resolveGhostContentPath(source.ghost.dir, resource.path, { expect: 'file', label: 'plugin appearance' });
@@ -64,16 +63,9 @@ export async function loadPluginAppearanceResource(
   source.assertCurrent();
   if (!bytes?.length) throw new Error('RESOURCE_UNAVAILABLE');
   let mimeType: string;
-  const kind = expected === 'icon' ? 'image' : expected === 'wallpaper' ? sniffMediaMime(bytes) === 'video/mp4' ? 'video' : 'image' : expected;
+  const kind = expected === 'wallpaper' ? sniffMediaMime(bytes) === 'video/mp4' ? 'video' : 'image' : expected;
   if (declaredKind && declaredKind !== kind) throw new Error('RESOURCE_TYPE');
-  if (expected === 'icon') {
-    if (!['image/png', 'image/jpeg', 'image/webp'].includes(sniffMediaMime(bytes) ?? '')) throw new Error('RESOURCE_TYPE');
-    try {
-      bytes = await sharp(bytes, { limitInputPixels: 16_777_216 }).rotate()
-        .resize({ width: 1024, height: 1024, fit: 'inside', withoutEnlargement: true }).png().toBuffer();
-    } catch { throw new Error('RESOURCE_TYPE'); }
-    mimeType = 'image/png';
-  } else if (kind === 'font') mimeType = validateFont(bytes);
+  if (kind === 'font') mimeType = validateFont(bytes);
   else if (kind === 'video') {
     if (sniffMediaMime(bytes) !== 'video/mp4') throw new Error('RESOURCE_TYPE');
     mimeType = 'video/mp4';
