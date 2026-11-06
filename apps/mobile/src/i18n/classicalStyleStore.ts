@@ -59,3 +59,8 @@ export async function saveClassicalStyle(
   current[context] = style;
   await AsyncStorage.setItem(STORAGE_KEYS[context], style).catch(() => undefined);
 }
+
+// 冷启动即开始读回:模块一被 import 就发起,远早于输入框可用,压缩首条消息
+// 落在水合完成之前、被当成未选而按默认发送的窗口。Provider 挂载后再读一次
+// 幂等无害,仍用于把结果同步进 React 状态。
+void readClassicalStyle();
