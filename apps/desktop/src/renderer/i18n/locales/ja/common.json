@@ -13949,7 +13949,11 @@
       "mailAttach": "添付ファイルを追加",
       "mailRemoveAttachment": "{{name}}を削除",
       "mailUpdated": "更新済みの下書き（読み取り専用）",
-      "mailLegacy": "下書きの履歴（読み取り専用）"
+      "mailLegacy": "下書きの履歴（読み取り専用）",
+      "taskAutoArchived": "「{{title}}」をアーカイブしました",
+      "taskAutoArchivedUndo": "元に戻す",
+      "taskAutoArchivePending": "離れると自動でアーカイブ",
+      "taskAutoArchiveCancel": "今回はしない"
     },
     "ghostHook": {
       "blockedFallback": "メッセージはプラグインによりブロックされました(未送信)",
@@ -19100,6 +19104,9 @@
     "pendingApprovals": "{{count}} 件の確認待ち"
   },
   "richAnswer": {
+    "invalidImageReference": "画像の参照先が無効なため、表示できません。",
+    "requestImageAgain": "画像の再表示を依頼",
+    "requestImageAgainMessage": "この既存の画像（{{name}}、参照先：{{source}}）をもう一度表示してください。元のツール結果またはファイルを確認し、実際のアドレスを使ってください。画像を新たに生成せず、どの画像か特定できない場合は先に私に確認してください。",
     "send": "メッセージを送信",
     "sending": "送信中…",
     "sent": "送信済み",

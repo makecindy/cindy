@@ -14108,7 +14108,11 @@
       "mailAttach": "Ajouter une pièce jointe",
       "mailRemoveAttachment": "Retirer {{name}}",
       "mailUpdated": "Brouillon mis à jour (lecture seule)",
-      "mailLegacy": "Historique du brouillon (lecture seule)"
+      "mailLegacy": "Historique du brouillon (lecture seule)",
+      "taskAutoArchived": "« {{title}} » archivée",
+      "taskAutoArchivedUndo": "Annuler",
+      "taskAutoArchivePending": "Archivée à la sortie",
+      "taskAutoArchiveCancel": "Garder cette fois"
     },
     "ghostHook": {
       "blockedFallback": "Message bloqué par un plugin ; non envoyé",
@@ -19343,6 +19347,9 @@
     "pendingApprovals": "{{count}} demandes en attente d’approbation"
   },
   "richAnswer": {
+    "invalidImageReference": "La référence de cette image est invalide.",
+    "requestImageAgain": "Demander de réafficher l’image",
+    "requestImageAgainMessage": "Réaffiche cette image existante ({{name}}, référence : {{source}}). Vérifie le résultat d’origine de l’outil ou le fichier et utilise son adresse réelle. Ne génère pas de nouvelle image ; demande-moi d’abord si tu ne peux pas identifier l’image.",
     "send": "Envoyer le message",
     "sending": "Envoi…",
     "sent": "Envoyé",

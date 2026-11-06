@@ -13949,7 +13949,11 @@
       "mailAttach": "添加附件",
       "mailRemoveAttachment": "移除 {{name}}",
       "mailUpdated": "草稿已更新（只读）",
-      "mailLegacy": "历史草稿（只读）"
+      "mailLegacy": "历史草稿（只读）",
+      "taskAutoArchived": "已归档「{{title}}」",
+      "taskAutoArchivedUndo": "撤销",
+      "taskAutoArchivePending": "离开后自动归档",
+      "taskAutoArchiveCancel": "本次不归档"
     },
     "ghostHook": {
       "blockedFallback": "消息被插件拦下，未发送",
@@ -19100,6 +19104,9 @@
     "pendingApprovals": "{{count}} 个待确认"
   },
   "richAnswer": {
+    "invalidImageReference": "图片引用无效，无法显示。",
+    "requestImageAgain": "请助手重新显示",
+    "requestImageAgainMessage": "请重新显示这张已有图片（{{name}}，引用：{{source}}）。请核对原工具结果或原文件并使用真实地址，不要重新生成；无法确认是哪张图片时先问我。",
     "send": "发送消息",
     "sending": "正在发送…",
     "sent": "已提交",

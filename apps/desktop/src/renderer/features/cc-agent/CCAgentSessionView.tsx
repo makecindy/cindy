@@ -315,6 +315,7 @@ import {
   forkCurrentTaskFromKeyboard,
 } from '@/lib/workLouderCodexTaskActions';
 import { useSessionHardwareTaskActions } from './lib/sessionHardwareTaskActions';
+import { useGhostCardTaskArchive } from './hooks/useGhostCardTaskArchive';
 import { isRemoteSessionWriteBlocked } from './lib/remoteSessionWriteGuard';
 import { getModelById, getDefaultModelForVendor } from '@/lib/modelDefinitions';
 import { resolveDisplayContextWindow } from '@/lib/contextWindow';
@@ -1264,6 +1265,9 @@ function CCAgentSessionContent({
     onRemoteWriteBlocked: showRemoteWriteBlockedToast,
     patchLocal: patchLocalSession,
   });
+  // 插件卡片上的归档任务按钮,以及 PR 合并后「看过并离开」的自动归档(只在普通任务页,
+  // Orca 分屏里的成员任务和伙伴会话不自动收走)。
+  useGhostCardTaskArchive({ session, archive, remoteWritesBlocked, autoArchive: !isOrcaMode && !botChatIdentity });
   // 列表级 activity 在重 topic 的 maker status 之前就可用。远程 turn 正在执行 / 等待
   // 交互时,session 行天然是 startedAt > endedAt,不能把这个正常在飞窗口误判成
   // 「应用退出中断」。直接门控首帧,再锁存本次视图,避免 activity 终态与 ended patch

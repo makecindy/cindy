@@ -14108,7 +14108,11 @@
       "mailAttach": "Adicionar anexo",
       "mailRemoveAttachment": "Remover {{name}}",
       "mailUpdated": "Rascunho atualizado (somente leitura)",
-      "mailLegacy": "Histórico de rascunhos (somente leitura)"
+      "mailLegacy": "Histórico de rascunhos (somente leitura)",
+      "taskAutoArchived": "\"{{title}}\" arquivada",
+      "taskAutoArchivedUndo": "Desfazer",
+      "taskAutoArchivePending": "Arquiva ao sair",
+      "taskAutoArchiveCancel": "Manter desta vez"
     },
     "ghostHook": {
       "blockedFallback": "Mensagem bloqueada por um plugin; não enviada",
@@ -19343,6 +19347,9 @@
     "pendingApprovals": "{{count}} aprovações pendentes"
   },
   "richAnswer": {
+    "invalidImageReference": "A referência desta imagem é inválida.",
+    "requestImageAgain": "Pedir para mostrar novamente",
+    "requestImageAgainMessage": "Mostre novamente esta imagem existente ({{name}}, referência: {{source}}). Confira o resultado original da ferramenta ou o arquivo e use o endereço real. Não gere outra imagem; pergunte-me antes se não conseguir identificar a imagem.",
     "send": "Enviar mensagem",
     "sending": "Enviando…",
     "sent": "Enviado",

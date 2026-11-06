@@ -6787,7 +6787,10 @@ describe("live screen controls", () => {
   beforeEach(() => {
     shape = null;
   });
-  const open = async () => {
+  const open = async (
+    page = <RemoteDesktopScreen />,
+    buttons = screen.buttons,
+  ) => {
     act(() => root.unmount());
     fixture.liveScreen = `${screen.plugin}|${screen.id}`;
     const original = fixture.invoke.getMockImplementation()!;
@@ -6797,10 +6800,12 @@ describe("live screen controls", () => {
       if (op === "capabilities") return { ...result, liveScreens: true };
       if (op === "heartbeat" && shape) return { controlling: true, shape };
       if (op === "screenShape") return shape ? { shape } : {};
-      return op === "start" ? { ...result, screen } : result;
+      return op === "start"
+        ? { ...result, screen: { ...screen, buttons } }
+        : result;
     });
     root = createRoot(host);
-    act(() => root.render(<RemoteDesktopScreen />));
+    act(() => root.render(page));
     await connect();
     await act(async () => {});
   };
@@ -6928,6 +6933,61 @@ describe("live screen controls", () => {
 
     press("liveScreen.follow");
     expect(presses().at(-1)).toBe("orientation-landscape");
+  });
+
+  it("follows the window's shape on iPhone Duo's cover screen, whose bar is at the side", async () => {
+    // Upright with the system bar on the right: the device stays portrait.
+    fixture.size = { width: 466, height: 678 };
+    const duo = (width: number, height: number): WindowGeometry => ({
+      width,
+      height,
+      insets: { top: 0, left: 0, right: 60, bottom: 20 },
+      regularWidth: false,
+      regularHeight: true,
+      barEdge: "right",
+      regions: [],
+      reservedRegionsSupported: true,
+    });
+    await open(
+      <GeometryContext.Provider value={duo(466, 678)}>
+        <RemoteDesktopScreen />
+      </GeometryContext.Provider>,
+    );
+    const presses = () =>
+      sent()
+        .filter((m) => m.type === "events")
+        .flatMap((m) => m.events)
+        .map((e: any) => e.button);
+    expect(presses()).toEqual(["orientation-portrait"]);
+    fixture.size = { width: 678, height: 466 };
+    act(() =>
+      root.render(
+        <GeometryContext.Provider value={duo(678, 466)}>
+          <RemoteDesktopScreen />
+        </GeometryContext.Provider>,
+      ),
+    );
+    expect(presses()).toEqual([
+      "orientation-portrait",
+      "orientation-landscape",
+    ]);
+  });
+
+  it("gives a foldable's postures their own row", async () => {
+    await open(<RemoteDesktopScreen />, [
+      ...screen.buttons,
+      { id: "posture-closed", icon: "menu", label: "Closed" },
+      { id: "posture-open", icon: "menu", label: "Half Open" },
+      { id: "posture-flat", icon: "menu", label: "Flat" },
+    ]);
+    openPanel();
+    expect(host.textContent).toContain("remoteDesktop.posture");
+    expect(control("liveScreen.action.posture-flat")).toBeNull();
+    act(() => control("liveScreen.posture-flat")!.click());
+    expect(sent().at(-1)).toEqual({
+      type: "events",
+      events: [{ kind: "press", button: "posture-flat" }],
+    });
   });
 
   it("lays the picture out at the shape the device reports", async () => {

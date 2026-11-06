@@ -13940,7 +13940,11 @@
       "mailAttach": "增附件",
       "mailRemoveAttachment": "除 {{name}}",
       "mailUpdated": "草稿已更（唯讀）",
-      "mailLegacy": "舊稿（唯讀）"
+      "mailLegacy": "舊稿（唯讀）",
+      "taskAutoArchived": "「{{title}}」已封存",
+      "taskAutoArchivedUndo": "撤",
+      "taskAutoArchivePending": "去則自封存",
+      "taskAutoArchiveCancel": "此番不封"
     },
     "ghostHook": {
       "blockedFallback": "訊為法器所攔，未遣",
@@ -19100,6 +19104,9 @@
     "pendingApprovals": "{{count}} 項待確"
   },
   "richAnswer": {
+    "invalidImageReference": "圖之引用無效，未能示之。",
+    "requestImageAgain": "請重示此圖",
+    "requestImageAgainMessage": "請重示此既有之圖（{{name}}，引用：{{source}}）。核原工具之果或原檔，以實址示之，勿另生新圖；若未能辨其所指，先問於我。",
     "send": "遣訊",
     "sending": "方遣…",
     "sent": "已呈",

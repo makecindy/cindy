@@ -13980,7 +13980,11 @@
       "mailAttach": "Anhang hinzufügen",
       "mailRemoveAttachment": "{{name}} entfernen",
       "mailUpdated": "Entwurf aktualisiert (schreibgeschützt)",
-      "mailLegacy": "Entwurfsverlauf (schreibgeschützt)"
+      "mailLegacy": "Entwurfsverlauf (schreibgeschützt)",
+      "taskAutoArchived": "„{{title}}“ archiviert",
+      "taskAutoArchivedUndo": "Rückgängig",
+      "taskAutoArchivePending": "Wird beim Verlassen archiviert",
+      "taskAutoArchiveCancel": "Diesmal behalten"
     },
     "ghostHook": {
       "blockedFallback": "Nachricht von einem Plugin blockiert; nicht gesendet",
@@ -19172,6 +19176,9 @@
     "pendingApprovals": "{{count}} ausstehende Genehmigungen"
   },
   "richAnswer": {
+    "invalidImageReference": "Dieser Bildverweis ist ungültig.",
+    "requestImageAgain": "Erneute Anzeige anfordern",
+    "requestImageAgainMessage": "Zeige dieses vorhandene Bild erneut an ({{name}}, Verweis: {{source}}). Prüfe das ursprüngliche Werkzeugergebnis oder die Datei und verwende die tatsächliche Adresse. Erzeuge kein neues Bild; frage mich zuerst, falls du das Bild nicht eindeutig zuordnen kannst.",
     "send": "Nachricht senden",
     "sending": "Wird gesendet…",
     "sent": "Eingereicht",

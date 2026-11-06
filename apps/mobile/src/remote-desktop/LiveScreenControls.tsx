@@ -80,6 +80,8 @@ export interface LiveScreenControlsProps {
    * `follow` (when the device takes an absolute pose) turns it with the
    * phone; turning it by hand stops following.
    */
+  /** A foldable's postures (closed, half open, flat), when the device has a hinge. */
+  posture?: LiveScreenAction[];
   orientation?: {
     following?: boolean;
     onFollow?(): void;
@@ -107,6 +109,7 @@ export interface LiveScreenControlsProps {
     menu: string;
     orientation: string;
     follow: string;
+    posture: string;
     picture: string;
     pictures: Record<LiveScreenPicture, string>;
     zoomHint: string;
@@ -339,6 +342,7 @@ function LiveScreenPanel({
   status,
   actions,
   volume,
+  posture,
   orientation,
   picture,
   inputDisabled,
@@ -528,6 +532,19 @@ function LiveScreenPanel({
                         />
                       ),
                     )}
+                  </View>
+                </Row>
+              )}
+              {posture && (
+                <Row label={labels.posture}>
+                  <View style={styles.volume}>
+                    {posture.map((action) => (
+                      <ChipButton
+                        key={action.key}
+                        action={action}
+                        disabled={inputDisabled}
+                      />
+                    ))}
                   </View>
                 </Row>
               )}
