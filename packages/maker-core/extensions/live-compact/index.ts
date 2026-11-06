@@ -67,8 +67,11 @@
  *      `compaction` 条目,所以按「最近一条 compaction 条目的 id」跳过一次性动作,
  *      时间窗口用条目时间戳(`SPINE_COOLDOWN_MS`,默认 0 = 只用一次性语义)。
  *   3) shadow 的 Windows ACL(`whoami` 取 SID + `icacls /restore` 写 SDDL)没有移植:
- *      本仓规范禁止扩展通过未校验的 shell 管道起子进程,而这套 ACL 只能靠 icacls 落地。
- *      权限边界改由宿主保证(目录本身在按账号隔离的 userData 下),备份文件仍按 0600 写。
+ *      本仓规范禁止扩展通过未校验的 shell 管道起子进程;Node 标准库也没有 DACL 接口
+ *      (`chmod` 在 Windows 只落只读位,`mode: 0o700/0o600` 在那边是空操作)。实测本仓目标
+ *      目录继承 `%APPDATA%` 的 ACL 已是 SYSTEM / Administrators / 当前用户三项,没有
+ *      Users / Authenticated Users / Everyone,与上游 `/grant:r <user>:F` + `/inheritance:r`
+ *      的落点一致;目录本身还在按账号隔离的 userData 下,备份文件仍按 0600 写。
  *
  * Mapping notes (DSH -> pi):
  *   - agent/status idle + turn/end completed  -> pi.on("agent_before_settle", outcome === "completed")
