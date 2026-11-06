@@ -1,4 +1,5 @@
 import type { ReactNode } from "react";
+import { View } from "react-native";
 import { Host } from "@expo/ui";
 import {
   Button,
@@ -6,62 +7,49 @@ import {
   Image,
   Menu,
   ProgressView,
-  Spacer,
   Text as NativeText,
 } from "@expo/ui/swift-ui";
 import {
   accessibilityHint,
   accessibilityLabel,
-  background,
-  buttonBorderShape,
   buttonStyle,
-  contentShape,
-  controlSize,
   disabled,
   font,
   frame,
-  glassEffect,
   labelStyle,
   lineLimit,
+  menuIndicator,
   menuOrder,
+  menuStyle,
   padding,
-  shapes,
 } from "@expo/ui/swift-ui/modifiers";
-import { iconSize, spacing, typeScale, useTheme } from "@/theme";
-import { useLiquidGlassAvailable } from "./useLiquidGlassAvailable";
+import { NativeChromeButton } from "@/platform/chrome/NativeChromeButton.ios";
+import {
+  useNativeGlassButtonStyle,
+  useNativeGlassGroupStyle,
+} from "@/platform/chrome/nativeGlassButtonStyle.ios";
+import { iconSize, navigationChrome, spacing, typeScale, useTheme } from "@/theme";
 import {
   PreviewNativeGroupContext,
   type NativePreviewButtonProps,
   type NativePreviewHeaderProps,
 } from "./PreviewNativeChrome.types";
 
-/** iOS 的预览按钮、玻璃、菜单与载入指示都用 SwiftUI 原生控件(与内置浏览器同一套)。 */
+/**
+ * iOS 的预览外壳用 App 自己的原生玻璃控件(与任务页顶栏、首页、远程画面同一套):
+ * 单个圆钮是 `NativeChromeButton`,成组按钮共用 `useNativeGlassGroupStyle` 的一枚玻璃胶囊,
+ * 组内是 borderless 原生按钮,图标色由 Host 的 seedColor 统一。不另配一套玻璃参数。
+ */
 export const NATIVE_PREVIEW_CHROME = true;
 
-const SIZE = 48;
-
-/**
- * 系统玻璃:不压底色、不另配字色,由系统按背后内容决定玻璃明暗与图标颜色。
- * iOS 26 以前没有 Liquid Glass,退回主题实色圆角底。
- */
-function useGlass() {
-  const glass = useLiquidGlassAvailable();
-  const { colors } = useTheme();
-  return (shape: "capsule" | "circle", interactive: boolean) =>
-    glass
-      ? glassEffect({ glass: { variant: "regular", interactive }, shape })
-      : background(
-          colors.surfaceElevated,
-          shape === "circle" ? shapes.circle() : shapes.capsule(),
-        );
-}
+const SIZE = navigationChrome.target;
 
 function useHostProps() {
-  const { mode } = useTheme();
-  return { colorScheme: mode, matchContents: true } as const;
+  const { colors, mode } = useTheme();
+  return { colorScheme: mode, seedColor: colors.textPrimary, ignoreSafeArea: "all" } as const;
 }
 
-/** 组内一个按钮:系统图标 + 可选文字;禁用、按压效果由系统绘制。 */
+/** 组内一个按钮:与任务页顶栏右侧按钮组的按钮同一套修饰。 */
 export function NativePreviewButton({
   label,
   systemImage,
@@ -73,38 +61,20 @@ export function NativePreviewButton({
 }: NativePreviewButtonProps) {
   return (
     <Button
+      label={title ?? label}
+      systemImage={systemImage}
       onPress={onPress}
       testID={testID}
       modifiers={[
-        buttonStyle("plain"),
+        labelStyle(title ? "titleAndIcon" : "iconOnly"),
+        buttonStyle("borderless"),
+        font({ size: title ? typeScale.footnote : iconSize.action, ...(title ? { weight: "medium" as const } : {}) }),
+        ...(title ? [padding({ horizontal: spacing.md }), frame({ height: SIZE })] : [frame({ width: SIZE, height: SIZE })]),
         disabled(off),
         accessibilityLabel(label),
         ...(hint ? [accessibilityHint(hint)] : []),
       ]}
-    >
-      {title ? (
-        <HStack
-          spacing={spacing.sm}
-          modifiers={[
-            padding({ horizontal: spacing.md }),
-            frame({ height: SIZE }),
-            contentShape(shapes.rectangle()),
-          ]}
-        >
-          <Image systemName={systemImage} size={iconSize.lg} />
-          <NativeText modifiers={[font({ size: typeScale.footnote, weight: "medium" }), lineLimit(1)]}>
-            {title}
-          </NativeText>
-        </HStack>
-      ) : (
-        <Image
-          systemName={systemImage}
-          size={iconSize.lg}
-          // 整个 48pt 方块都可点:plain 按钮默认只有图标笔画本身能点中。
-          modifiers={[frame({ width: SIZE, height: SIZE }), contentShape(shapes.rectangle())]}
-        />
-      )}
-    </Button>
+    />
   );
 }
 
@@ -125,16 +95,16 @@ export function NativePreviewLabel({ text }: { text: string }) {
 }
 
 /**
- * 一组浮动按钮:一枚可交互的系统玻璃胶囊(单个按钮时是圆钮),按下有系统的液态反馈。
+ * 一组浮动按钮:一枚 App 共用的玻璃胶囊(useNativeGlassGroupStyle),组内 borderless 按钮。
  * 组里的子节点必须是原生控件:PreviewIconButton 等在组内会自动改画成原生按钮。
  */
 export function NativePreviewGroup({ children }: { children: ReactNode }) {
-  const glass = useGlass();
   const host = useHostProps();
+  const groupStyle = useNativeGlassGroupStyle();
   return (
     <PreviewNativeGroupContext.Provider value>
-      <Host {...host}>
-        <HStack spacing={0} modifiers={[glass("capsule", true)]}>
+      <Host {...host} matchContents>
+        <HStack spacing={0} modifiers={groupStyle}>
           {children}
         </HStack>
       </Host>
@@ -142,7 +112,7 @@ export function NativePreviewGroup({ children }: { children: ReactNode }) {
   );
 }
 
-/** 载入提示胶囊:系统转圈 + 文字,与工具胶囊同高。 */
+/** 载入提示胶囊:系统转圈 + 文字,与工具胶囊同高、同一材质。 */
 export function NativePreviewLoadingPill({
   label,
   testID,
@@ -150,10 +120,10 @@ export function NativePreviewLoadingPill({
   label: string;
   testID?: string;
 }) {
-  const glass = useGlass();
   const host = useHostProps();
+  const groupStyle = useNativeGlassGroupStyle();
   return (
-    <Host {...host}>
+    <Host {...host} matchContents>
       <HStack
         spacing={spacing.sm}
         testID={testID}
@@ -161,7 +131,7 @@ export function NativePreviewLoadingPill({
           padding({ horizontal: spacing.lg }),
           frame({ height: SIZE }),
           accessibilityLabel(label),
-          glass("capsule", false),
+          ...groupStyle,
         ]}
       >
         <ProgressView />
@@ -174,8 +144,9 @@ export function NativePreviewLoadingPill({
 }
 
 /**
- * 顶栏:系统玻璃圆钮「关闭」、文件名(玻璃和文件名一样宽、居中)、系统菜单「更多」。
- * 外层 RN 容器负责安全区与左右边距,这里只画一行原生控件。
+ * 顶栏:「关闭」是 App 共用的玻璃圆钮(与任务页返回键同一组件),文件名用按钮组同一材质的
+ * 胶囊(与文件名一样宽、居中),「更多」与首页显示菜单同一写法的系统菜单圆钮。
+ * 外层 RN 容器负责安全区与左右边距。
  */
 export function NativePreviewHeader({
   name,
@@ -186,51 +157,42 @@ export function NativePreviewHeader({
   moreLabel,
   actions,
 }: NativePreviewHeaderProps) {
-  const glass = useGlass();
-  const { mode } = useTheme();
-  const icon = (systemName: NativePreviewButtonProps["systemImage"]) => (
-    <Image
-      systemName={systemName}
-      size={iconSize.lg}
-      modifiers={[frame({ width: SIZE, height: SIZE }), contentShape(shapes.circle())]}
-    />
-  );
+  const host = useHostProps();
+  const groupStyle = useNativeGlassGroupStyle();
+  const circleStyle = useNativeGlassButtonStyle({ shape: "circle" });
   return (
-    <Host colorScheme={mode} style={{ flex: 1, height: SIZE }}>
-      <HStack spacing={spacing.sm} modifiers={[frame({ maxWidth: Infinity, height: SIZE })]}>
-        <Button
-          onPress={onClose}
-          testID={closeTestID}
-          systemImage="xmark"
-          label={closeLabel}
-          modifiers={[
-            labelStyle("iconOnly"),
-            buttonStyle("glass"),
-            buttonBorderShape("circle"),
-            controlSize("extraLarge"),
-            disabled(closeDisabled),
-          ]}
-        />
-        <Spacer minLength={0} />
-        <NativeText
-          testID="preview.title"
-          modifiers={[
-            font({ size: typeScale.body, weight: "semibold" }),
-            lineLimit(1),
-            padding({ horizontal: spacing.lg }),
-            frame({ height: SIZE }),
-            glass("capsule", false),
-          ]}
-        >
-          {name}
-        </NativeText>
-        <Spacer minLength={0} />
+    <View pointerEvents="box-none" style={{ flex: 1, flexDirection: "row", alignItems: "center", gap: spacing.sm }}>
+      <NativeChromeButton
+        label={closeLabel}
+        systemImage="xmark"
+        onPress={onClose}
+        disabled={closeDisabled}
+        testID={closeTestID}
+      />
+      <View pointerEvents="box-none" style={{ flex: 1, minWidth: 0, alignItems: "center" }}>
+        <Host {...host} matchContents style={{ maxWidth: "100%" }}>
+          <NativeText
+            testID="preview.title"
+            modifiers={[
+              font({ size: typeScale.body, weight: "semibold" }),
+              lineLimit(1),
+              padding({ horizontal: spacing.lg }),
+              frame({ height: SIZE }),
+              ...groupStyle,
+            ]}
+          >
+            {name}
+          </NativeText>
+        </Host>
+      </View>
+      <Host {...host} style={{ width: SIZE, height: SIZE }}>
         <Menu
-          label={icon("ellipsis")}
           testID="preview.more"
+          label={<Image systemName="ellipsis" size={iconSize.action} />}
           modifiers={[
-            buttonStyle("plain"),
-            glass("circle", true),
+            menuStyle("button"),
+            menuIndicator("hidden"),
+            ...circleStyle,
             menuOrder("fixed"),
             accessibilityLabel(moreLabel),
           ]}
@@ -244,7 +206,7 @@ export function NativePreviewHeader({
             />
           ))}
         </Menu>
-      </HStack>
-    </Host>
+      </Host>
+    </View>
   );
 }
