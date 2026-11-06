@@ -238,7 +238,9 @@ WS 纯增 `endpoints-changed` 失效通知，旧客户端忽略。释放必须�
 `schedules.webhook_trigger` 与 `schedule_runs.trigger_source`（migration 0144）。沿用既有
 `maker:schedule:create/update/get` 通道：缺 key 表示不修改，`null` 清空，旧客户端整表单保存不会清掉配置。
 旧主机只保留已知列，会报告成功却丢掉配置，所以能力新增 `supportsScheduleWebhookTrigger`；Agent 工具的
-跨设备写入一律拒绝。同账号 invoke 新增只读的 `maker:schedule:webhook-status`。
+跨设备设置／清空先检查此标记，不支持则不发送写入；开启时再通过目标电脑的
+`maker:schedule:webhook-receiver` 确认有接收服务。清空不要求接收服务可用，省略字段仍表示不修改。
+同账号 invoke 新增只读的 `maker:schedule:webhook-status`。
 `maker:schedule:webhook-set-secret` 携带密钥明文，`maker:schedule:webhook-rotate-url` 更换接收地址，都不进 Device Link
 白名单。官方及自建中转沿用通用 invoke 转发，没有帧、鉴权或重连协议变化，无需修改中转内核。
 

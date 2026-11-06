@@ -169,7 +169,7 @@ export function registerScheduleCreateTool(
         })
         .nullable()
         .optional()
-        .describe('Webhook 触发：外部事件到达时运行本任务（事件只作门铃，内容以不可信元数据传入）。manual=false 时与定时条件并存，manual=true 时只由事件触发；不能用于定时的一次性任务（recurring=false 且 manual=false）。同一任务两轮至少间隔 5 分钟。创建后用 schedule_get 读 webhookStatus 取接收地址；签名密钥只能由用户在任务详情设置，工具拿不到。只支持本机的定时任务。'),
+        .describe('Webhook 触发：外部事件到达时运行本任务（事件只作门铃，内容以不可信元数据传入）。manual=false 时与定时条件并存，manual=true 时只由事件触发；不能用于定时的一次性任务（recurring=false 且 manual=false）。同一任务两轮至少间隔 5 分钟。创建后用 schedule_get 读 webhookStatus 取接收地址；签名密钥只能由用户在任务详情设置，工具拿不到。支持已登录且有接收服务的目标电脑。'),
       preRunHook: z
         .object({
           command: z
@@ -213,9 +213,6 @@ export function registerScheduleCreateTool(
           throw new Error('invalid request: 在其它电脑上创建不能绑定当前会话');
         }
         let input = rest as CreateScheduleInput;
-        if (input.webhookTrigger) {
-          throw new Error('invalid request: Webhook 触发只能在本机设置（接收地址和密钥都属于任务所在电脑）');
-        }
         if (input.agentDeviceId === LOCAL_SCHEDULE_AGENT_DEVICE) {
           const { agentDeviceId: _local, ...localInput } = input;
           input = localInput;

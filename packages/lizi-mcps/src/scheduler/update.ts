@@ -120,7 +120,7 @@ export function registerScheduleUpdateTool(
         })
         .nullable()
         .optional()
-        .describe('Webhook 触发，语义见 schedule_create 同名字段。传 null = 关闭（接收地址和密钥一并作废）；省略 = 不修改；修改筛选时地址和密钥不变。只支持本机的定时任务。'),
+        .describe('Webhook 触发，语义见 schedule_create 同名字段。传 null = 关闭（接收地址和密钥一并作废）；省略 = 不修改；修改筛选时地址和密钥不变。支持已登录且有接收服务的目标电脑。'),
       preRunHook: z
         .object({
           command: z.string().min(1),
@@ -172,13 +172,11 @@ export function registerScheduleUpdateTool(
             ? '改其它电脑上的 preRunHook 必须显式传 timeoutMs(数值,或 null 表示不限时;先用 schedule_get 读到当前值)'
           : (patch as { preRunPlugin?: unknown }).preRunPlugin !== undefined
             ? '插件前置检查只能在本机设置（插件装在各自的电脑上）'
-          : (patch as { webhookTrigger?: unknown }).webhookTrigger !== undefined
-            ? 'Webhook 触发只能在本机设置（接收地址和密钥都属于任务所在电脑）'
           : (patch as { agentDeviceId?: string | null }).agentDeviceId !== undefined
             ? '其它电脑上的定时任务不能设运行位置 agentDeviceId'
           : Object.entries(patch).some(([key, value]) => value === null
-              && !['intervalMs', 'expireAt', 'modelAgentDeviceId', 'modelAgentKind', 'model', 'providerId', 'effort'].includes(key))
-            ? '其它电脑上的定时任务只支持用 null 清空间隔、截止时间和模型选择字段'
+              && !['intervalMs', 'expireAt', 'webhookTrigger', 'modelAgentDeviceId', 'modelAgentKind', 'model', 'providerId', 'effort'].includes(key))
+            ? '其它电脑上的定时任务只支持用 null 清空间隔、截止时间、Webhook 和模型选择字段'
             : null;
         if (unsupported) {
           return buildJsonResult(

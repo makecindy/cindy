@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 // Unit: account management contract. Real dialog/actions, fake IPC. The existing
 // form tests cannot catch releasing another device, stale quotas, or late owner responses.
-import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import messages from '../../../../i18n/locales/zh-CN/common.json';
@@ -38,7 +38,7 @@ beforeEach(() => {
     webhookReceiver: async () => 'cloud', webhookAccount: read, releaseWebhookEndpoint: release,
   } } } });
 });
-afterEach(cleanup);
+afterEach(() => { cleanup(); vi.useRealTimers(); });
 const element = () => <MemoryRouter><WebhookAccountManager /></MemoryRouter>;
 async function open() {
   fireEvent.click(await screen.findByRole('button', { name: '管理' }));
@@ -102,9 +102,32 @@ function connection(preset = 'github', id = 'fixture') {
   });
   const schedule = { id, name: 'Fixture', status: 'active', updatedAt: 1,
     webhookTrigger: { events: ['issues.opened'], source: { preset } } } as Schedule;
-  return { api, patch: (value: Record<string, unknown>) => { current = { ...current, ...value }; },
+  return { api, schedule, patch: (value: Record<string, unknown>) => { current = { ...current, ...value }; },
     render: () => render(<MemoryRouter><WebhookTriggerPanel schedule={schedule} /></MemoryRouter>) };
 }
+
+// PR #8470, unit/jsdom: a slow status read must not enqueue unbounded IPC calls.
+// Existing panel tests only exercise immediately resolved status requests.
+it('keeps one status read in flight across timer ticks and schedule revisions', async () => {
+  vi.useFakeTimers();
+  const c = connection();
+  let finish!: (value: null) => void;
+  const readStatus = vi.mocked(c.api.webhookStatus);
+  readStatus.mockImplementationOnce(() => new Promise((resolve) => { finish = resolve; }));
+  const view = c.render();
+  await act(() => vi.advanceTimersByTimeAsync(120_000));
+  expect(readStatus).toHaveBeenCalledTimes(1);
+  view.rerender(<MemoryRouter><WebhookTriggerPanel schedule={{ ...c.schedule, updatedAt: 2 }} /></MemoryRouter>);
+  await act(() => vi.advanceTimersByTimeAsync(60_000));
+  expect(readStatus).toHaveBeenCalledTimes(1);
+  await act(async () => { finish(null); });
+  expect(readStatus).toHaveBeenCalledTimes(2);
+  await act(() => vi.advanceTimersByTimeAsync(30_000));
+  expect(readStatus).toHaveBeenCalledTimes(3);
+  view.unmount();
+  await act(() => vi.advanceTimersByTimeAsync(60_000));
+  expect(readStatus).toHaveBeenCalledTimes(3);
+});
 
 it('已配置时只显示摘要，展开后仍可复制地址和管理账号名额', async () => {
   const c = connection(); c.render();

@@ -72,6 +72,10 @@ class FakeServer {
   rejectUpgrades = 0;
   endpointLimit = Infinity;
   suspended = false;
+  unavailable = false;
+  rejectDeletes = false;
+  dropNextUpsertResponse = false;
+  private readonly created = new Map<string, number>();
   validToken = 'token-1';
   private readonly http: Server;
   private readonly wss = new WebSocketServer({ noServer: true });
@@ -118,6 +122,7 @@ class FakeServer {
         res.writeHead(status, { 'content-type': 'application/json' }).end(body === undefined ? undefined : JSON.stringify(body));
       };
       if (req.headers.authorization !== `Bearer ${this.validToken}`) return reply(401, { error: { code: 'UNAUTHORIZED' } });
+      if (this.unavailable) return reply(503);
       if (this.suspended) return reply(403, { error: { code: 'WEBHOOK_ACCOUNT_SUSPENDED' } });
       const upsert = route.match(/^PUT \/api\/v1\/endpoints\/by-schedule\/(.+)$/);
       const secret = route.match(/^PUT \/api\/v1\/endpoints\/(.+)\/secret$/);
@@ -152,9 +157,11 @@ class FakeServer {
         const { events, format } = body() as { events: string[]; format: unknown };
         const existing = this.endpoints.get(scheduleId);
         if (!existing && this.endpoints.size >= this.endpointLimit) return reply(409, { error: { code: 'WEBHOOK_ENDPOINT_LIMIT' } });
+        const serial = this.created.get(scheduleId) ?? 0;
+        const id = `whk-${scheduleId}${serial ? `-${serial}` : ''}`;
         const endpoint = existing ?? {
-          id: `whk-${scheduleId}`,
-          url: `https://webhook.test/hooks/whk-${scheduleId}`,
+          id,
+          url: `https://webhook.test/hooks/${id}`,
           scheduleId,
           events,
           format,
@@ -165,6 +172,12 @@ class FakeServer {
         endpoint.events = events;
         endpoint.format = format;
         this.endpoints.set(scheduleId, endpoint);
+        if (!existing) this.created.set(scheduleId, serial + 1);
+        if (this.dropNextUpsertResponse) {
+          this.dropNextUpsertResponse = false;
+          res.destroy();
+          return;
+        }
         return reply(existing ? 200 : 201, endpoint);
       }
       if (secret?.[1]) {
@@ -182,6 +195,7 @@ class FakeServer {
         return reply(200, endpoint);
       }
       if (remove) {
+        if (this.rejectDeletes) return reply(503);
         for (const [key, row] of this.endpoints) if (row.id === remove[1]) this.endpoints.delete(key);
         return reply(204);
       }
@@ -218,6 +232,7 @@ describe('ScheduleWebhookHost 服务器通道', () => {
   let host: ScheduleWebhookHost;
   let signedIn: boolean;
   let token: string;
+  let serverUrl: string;
   let refresh: ReturnType<typeof vi.fn<() => Promise<boolean>>>;
 
   async function start(
@@ -227,6 +242,7 @@ describe('ScheduleWebhookHost 服务器通道', () => {
   ): Promise<void> {
     scheduler.schedules = schedules;
     const baseUrl = baseUrlOverride ?? (await server.listen());
+    serverUrl = baseUrl;
     host = new ScheduleWebhookHost(scheduler as unknown as Scheduler, {}, {
       ...(onQuotaExhausted ? { onQuotaExhausted } : {}),
       remote: {
@@ -255,6 +271,82 @@ describe('ScheduleWebhookHost 服务器通道', () => {
     await host.stop();
     await server.close();
     fs.rmSync(dirs.root, { recursive: true, force: true });
+  });
+
+  // PR #8470: disabling while disconnected, then enabling with a new trigger
+  // identity must revoke the previous URL/key even across a process restart.
+  // Existing lifecycle tests only disabled while the server was reachable.
+  it.each(['signed-out', 'offline'])('replaces the old address after %s disable/re-enable and restart', async (mode) => {
+    const original = schedule('s1');
+    await start([original]);
+    await host.setSecret(original);
+    const previous = await host.rotateUrl(original);
+    const baseUrl = serverUrl;
+    signedIn = mode !== 'signed-out';
+    server.unavailable = mode === 'offline';
+    await host.stop();
+    await start([], baseUrl);
+    expect(server.endpoints.get('s1')?.url).toBe(previous.url);
+    await host.stop();
+    signedIn = true;
+    server.unavailable = false;
+    const enabled = { ...original, webhookTrigger: { ...original.webhookTrigger!, endpointId: 'new-local-s1' } };
+    await start([enabled], baseUrl);
+    expect(host.status(enabled)).toMatchObject({ hasSecret: false });
+    expect(host.status(enabled)?.url).not.toBe(previous.url);
+    expect(server.requests).toContain('DELETE /api/v1/endpoints/whk-s1-r');
+    const currentUrl = host.status(enabled)?.url;
+    await host.stop();
+    await start([enabled], baseUrl);
+    expect(host.status(enabled)?.url).toBe(currentUrl);
+    expect(server.requests.filter((r) => r === 'DELETE /api/v1/endpoints/whk-s1-r')).toHaveLength(1);
+  });
+
+  // Unit: a successful server mutation with a lost reply must still be revoked
+  // after the next local identity change; normal offline tests never create it.
+  it('remembers an address created by a PUT whose response was lost', async () => {
+    server.dropNextUpsertResponse = true;
+    await start([schedule('s1')]);
+    const oldUrl = server.endpoints.get('s1')?.url;
+    expect(oldUrl).toBeTruthy();
+    expect(host.status(schedule('s1'))?.url).toBeUndefined();
+    await host.stop();
+    const enabled = schedule('s1');
+    enabled.webhookTrigger!.endpointId = 'new-local-s1';
+    await start([enabled], serverUrl);
+    expect(server.requests).toContain('DELETE /api/v1/endpoints/whk-s1');
+    expect(host.status(enabled)?.url).toBeTruthy();
+    expect(host.status(enabled)?.url).not.toBe(oldUrl);
+  });
+
+  // Unit: failed revocation must not expose the old connection or accept its
+  // queued events. Once recovered, only batches for the replacement can queue.
+  it('withholds the old connection until revocation succeeds and ignores its late batches', async () => {
+    const original = schedule('s1');
+    await start([original]);
+    await host.setSecret(original);
+    await vi.waitFor(() => expect(host.status(original)?.connected).toBe(true));
+    server.push({ batchId: 'before-disable', endpointId: 'whk-s1', scheduleId: 's1', events: [event('before-disable')], omitted: 0 });
+    await vi.waitFor(() => expect(server.frames).toContainEqual({ type: 'ack', batchId: 'before-disable' }));
+    await host.stop();
+    server.rejectDeletes = true;
+    const enabled = schedule('s1');
+    enabled.webhookTrigger!.endpointId = 'new-local-s1';
+    await start([enabled], serverUrl);
+    expect(host.status(enabled)?.url).toBeUndefined();
+    await expect(host.setSecret(enabled)).rejects.toThrow('Webhook endpoint is not available');
+    expect(server.endpoints.get('s1')?.hasSecret).toBe(true);
+    expect(server.requests.filter((route) => route.endsWith('/secret'))).toHaveLength(1);
+    server.rejectDeletes = false;
+    await host.refreshStatus();
+    expect(host.status(enabled)).toMatchObject({ hasSecret: false });
+    await vi.waitFor(() => expect(host.status(enabled)?.connected).toBe(true));
+    server.push({ batchId: 'old', endpointId: 'whk-s1', scheduleId: 's1', events: [event('old')], omitted: 0 });
+    server.push({ batchId: 'new', endpointId: server.endpoints.get('s1')!.id, scheduleId: 's1', events: [event('new')], omitted: 0 });
+    await vi.waitFor(() => expect(server.frames).toContainEqual({ type: 'ack', batchId: 'new' }));
+    expect(server.frames).toContainEqual({ type: 'ack', batchId: 'old' });
+    const saved = JSON.parse(fs.readFileSync(path.join(dirs.root, 'schedule-webhooks', 'state.json'), 'utf8'));
+    expect(saved.endpoints.s1.pending.map((row: { deliveryId: string }) => row.deliveryId)).toEqual(['new']);
   });
 
   it('正式模式不开本机端口，地址和密钥来自服务器', async () => {

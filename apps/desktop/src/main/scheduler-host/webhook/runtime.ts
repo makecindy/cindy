@@ -8,6 +8,7 @@ import { deviceName } from '../../device-link/deviceName.js';
 type Logger = ConstructorParameters<typeof ScheduleWebhookHost>[1];
 
 let host: ScheduleWebhookHost | null = null;
+let generation = 0;
 let stopWatchingAuth: (() => void) | null = null;
 /** 持有引用，否则通知对象被回收后点击事件不会触发。 */
 let quotaNotification: Notification | null = null;
@@ -46,6 +47,7 @@ async function notifyQuotaExhausted({ limit, resetAt }: RemoteWebhookQuota): Pro
 
 export async function startScheduleWebhooks(scheduler: Scheduler, logger: Logger): Promise<void> {
   if (host) return;
+  const startingGeneration = generation;
   // 账号模块在加载时就读 Electron 路径；调度器不该因此依赖它们的初始化顺序。
   const [authManager, { getAppCapabilities }, { getClientEndpoint }, { createOutboundHttpAgent, outboundFetch }] =
     await Promise.all([
@@ -54,7 +56,7 @@ export async function startScheduleWebhooks(scheduler: Scheduler, logger: Logger
       import('../../clientEndpointsService.js'),
       import('../../maker-host/outbound-fetch.js'),
     ]);
-  if (host) return;
+  if (host || startingGeneration !== generation) return;
   const isSignedIn = (): boolean => getAppCapabilities().canUseCindyAccountServices;
   const next = new ScheduleWebhookHost(scheduler, logger, {
     local: localIngressEnabled(),
@@ -91,6 +93,7 @@ export async function startScheduleWebhooks(scheduler: Scheduler, logger: Logger
 }
 
 export async function stopScheduleWebhooks(): Promise<void> {
+  generation += 1;
   const current = host;
   host = null;
   stopWatchingAuth?.();

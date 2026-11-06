@@ -238,6 +238,8 @@ Bearer、PUT 票据或受管文件路径。公开写入遵循当前任务 Full A
 
 自动化任务的 Webhook 触发（2026-11-04 更新）：桌面任务表单与 `schedule_create` / `schedule_update` 共用 `webhookTrigger`（含事件筛选和发送方 `source`），`schedule_get` 返回接收地址和状态。设置密钥（生成或粘贴）和更换地址只由用户在任务所在电脑的详情操作，这是凭证规则带来的有意差异：明文不能进入任务记录，工具参数夹带密钥会被拒绝。账号管理与用户能力一致：`schedule_webhook_list` 查看本账号所有电脑的地址及用量，`schedule_webhook_release` 释放离线旧电脑的名额；`schedule_webhook_restore` 明确重新连接，支持 `device` 选择在线目标电脑，恢复后仍须用户配置密钥。第一步 scheduler 类目索引说明账号范围与离线释放。写操作经过现有权限，自主伙伴释放／恢复分别按删除／恢复风险处理。规则见 [schedule-webhook-trigger.md](schedule-webhook-trigger.md)。使用 Webhook 需要 Cindy 账号：未登录或没有接收服务时 Agent 开启报错，表单隐藏入口；可用性由任务所在电脑的 `webhook-receiver` 决定。
 
+Webhook 跨电脑配置（2026-11-06）：`schedule_create` / `schedule_update` 的 `device` 可设置或清空目标电脑的 `webhookTrigger`。沿用同账号远程控制权限，写前检查目标的 `supportsScheduleWebhookTrigger`，开启时再检查其 `webhook-receiver`；旧版本或不可用目标明确报错，清空不要求接收服务可用。未增加密钥工具或跨账号权限。
+
 自动化与例行任务的插件前置检查（2026-10-31）：桌面「前置检查」与 `schedule_create` / `schedule_update` / `routine_save` 共用 `preRunPlugin`（插件实例 id + 出错处理），Agent 与用户能力一致；只能在插件所在的电脑上设置，跨电脑的 `schedule_update` 明确拒绝。
 
 自动化截止时间：桌面创建与编辑表单、项目自动化配置和 `schedule_create` / `schedule_update` 共用 `expireAt`。到期后不再自动启动，已开始的运行允许完成；手动立即运行仍可使用。桌面按编辑设备的本地时区显示，保存绝对时间戳；`schedule_update` 省略表示保留，传 `null` 表示清除，本机与跨电脑一致。手机端没有自动化管理入口。

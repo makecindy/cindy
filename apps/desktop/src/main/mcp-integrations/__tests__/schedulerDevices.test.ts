@@ -27,6 +27,50 @@ function setup(invoke = vi.fn<Invoke>(async () => ({ ok: true, result: [] }))) {
 }
 
 describe('desktop scheduler cross-device transport', () => {
+  // PR #8470, unit: old peers drop webhookTrigger; unavailable receivers cannot
+  // receive. Existing capability tests only cover directory/model selection.
+  it.each([
+    { op: 'create' as const, supported: true, receiver: 'cloud', trigger: {}, ok: true },
+    { op: 'update' as const, supported: true, receiver: 'cloud', trigger: {}, ok: true },
+    { op: 'update' as const, supported: false, receiver: 'cloud', trigger: {}, ok: false },
+    { op: 'update' as const, supported: true, receiver: 'signed-out', trigger: {}, ok: false },
+    { op: 'create' as const, supported: true, receiver: 'unavailable', trigger: {}, ok: false },
+    { op: 'update' as const, supported: true, receiver: 'signed-out', trigger: null, ok: true },
+  ])('negotiates webhook writes on the target: $op/$supported/$receiver/$trigger', async ({ op, supported, receiver, trigger, ok }) => {
+    const s = setup();
+    s.invoke.mockImplementation(async (_device, channel) => ({ ok: true, result:
+      channel === 'maker:get-capabilities' ? { supportsRemoteScheduleDirectoryCheck: true, supportsScheduleWebhookTrigger: supported }
+      : channel === 'maker:schedule:webhook-receiver' ? receiver : { id: 's1' },
+    }));
+    const patch = { webhookTrigger: trigger };
+    const args = op === 'create' ? [patch] : ['s1', patch];
+    expect((await s.remote.invoke('mac', op, args)).ok).toBe(ok);
+    const channels = s.invoke.mock.calls.map(([, channel]) => channel);
+    expect(channels).toEqual(['maker:get-capabilities',
+      ...(supported && trigger ? ['maker:schedule:webhook-receiver'] : []),
+      ...(ok ? [`maker:schedule:${op}`] : []),
+    ]);
+  });
+
+  it('does not write after ownership changes during the webhook receiver check', async () => {
+    const s = setup();
+    s.invoke.mockImplementation(async (_device, channel) => {
+      if (channel === 'maker:get-capabilities') return { ok: true, result: { supportsScheduleWebhookTrigger: true } };
+      s.changeOwner();
+      return { ok: true, result: 'cloud' };
+    });
+    expect(await s.remote.invoke('mac', 'update', ['s1', { webhookTrigger: {} }])).toMatchObject({ ok: false });
+    expect(s.invoke.mock.calls.map(([, channel]) => channel)).toEqual(['maker:get-capabilities', 'maker:schedule:webhook-receiver']);
+  });
+
+  it('reports a lost webhook preflight reply as a read failure without sending the write', async () => {
+    const s = setup();
+    s.invoke.mockResolvedValueOnce({ ok: true, result: { supportsScheduleWebhookTrigger: true } });
+    s.invoke.mockRejectedValueOnce(Object.assign(new DeviceLinkError('NOT_CONNECTED', 'dropped'), { inFlight: true }));
+    expect(await s.remote.invoke('mac', 'update', ['s1', { webhookTrigger: {} }]))
+      .toMatchObject({ ok: false, code: 'REMOTE_UNAVAILABLE' });
+    expect(s.invoke.mock.calls.map(([, channel]) => channel)).toEqual(['maker:get-capabilities', 'maker:schedule:webhook-receiver']);
+  });
   // PR #6830 / discussion_r4385260097, unit: the existing route/null tests omit
   // explicit engine updates with inherited location. An old host silently drops
   // modelAgentKind; the public adapter must reject before issuing that write.

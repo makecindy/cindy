@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useId, useState } from 'react';
+import { useCallback, useEffect, useId, useRef, useState } from 'react';
 import { Check, ChevronDown, Copy } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 import type { Schedule } from '@cindy/maker-scheduler';
@@ -98,6 +98,7 @@ export function WebhookTriggerPanel({ schedule }: { schedule: Schedule }) {
   const [pasted, setPasted] = useState('');
   const [busy, setBusy] = useState(false);
   const [revision, setRevision] = useState(0);
+  const statusRequest = useRef<Promise<void> | null>(null);
   const [settingsOpen, setSettingsOpen] = useState<boolean | null>(() =>
     hasSeenSetup(schedule.id) ? false : null,
   );
@@ -119,8 +120,13 @@ export function WebhookTriggerPanel({ schedule }: { schedule: Schedule }) {
 
   useEffect(() => {
     let current = true;
-    const load = () =>
-      window.electronAPI.maker.schedule.webhookStatus(scheduleId).then(
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const load = async () => {
+      // A new revision waits for the existing read; disposed effects never queue
+      // another IPC request when that read eventually finishes.
+      if (statusRequest.current) await statusRequest.current;
+      if (!current) return;
+      const request = window.electronAPI.maker.schedule.webhookStatus(scheduleId).then(
         (next) => {
           if (current) setStatus(next);
         },
@@ -128,12 +134,15 @@ export function WebhookTriggerPanel({ schedule }: { schedule: Schedule }) {
           if (current) setStatus(null);
         },
       );
+      statusRequest.current = request;
+      await request;
+      if (statusRequest.current === request) statusRequest.current = null;
+      if (current) timer = setTimeout(() => void load(), STATUS_REFRESH_MS);
+    };
     void load();
-    // 连接状态和接收次数不会改变任务本身，靠定时刷新反映到界面。
-    const timer = setInterval(() => void load(), STATUS_REFRESH_MS);
     return () => {
       current = false;
-      clearInterval(timer);
+      clearTimeout(timer);
     };
   }, [scheduleId, scheduleRevision, revision]);
 

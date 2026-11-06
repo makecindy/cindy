@@ -129,6 +129,27 @@ function loadState(): ScheduleWebhookQueueState {
   }
 }
 
+function remoteIdentityStore(): NonNullable<ScheduleWebhookRemoteDeps['identityStore']> {
+  // Capture the owner path before any asynchronous work or account switch.
+  const file = dataPath('remote-identities.json');
+  return {
+    load: () => {
+      try {
+        const value: unknown = JSON.parse(fs.readFileSync(file, 'utf8'));
+        if (!value || typeof value !== 'object' || Array.isArray(value)
+          || Object.values(value).some((identity) => typeof identity !== 'string' || !identity)) {
+          throw new Error('Invalid webhook identity store');
+        }
+        return value as Record<string, string>;
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code === 'ENOENT') return {};
+        throw error;
+      }
+    },
+    save: (identities) => writeAtomically(file, JSON.stringify(identities)),
+  };
+}
+
 export class ScheduleWebhookHost {
   private readonly queue: ScheduleWebhookQueue;
   private readonly secrets = new Map<string, string>();
@@ -153,8 +174,9 @@ export class ScheduleWebhookHost {
     this.remote = options.remote
       ? new ScheduleWebhookRemote({
           ...options.remote,
+          identityStore: remoteIdentityStore(),
           onBatch: (batch) => this.acceptBatch(batch),
-          onReleased: (id) => this.queue.forget(id),
+          onInvalidated: (id) => this.queue.forget(id),
           ...(options.onStatusChanged ? { onChanged: options.onStatusChanged } : {}),
           ...(options.onQuotaExhausted ? { onQuotaExhausted: options.onQuotaExhausted } : {}),
         })
@@ -383,6 +405,8 @@ export class ScheduleWebhookHost {
     if (this.remote?.problem(batch.scheduleId) === 'released') return;
     const schedule = [...this.byEndpoint.values()].find((candidate) => candidate.id === batch.scheduleId);
     if (!schedule?.webhookTrigger) return;
+    if (this.remote && !this.remote.canDeliver(batch.scheduleId)) throw new Error('Webhook endpoint is not reconciled');
+    if (this.remote && this.remote.view(batch.scheduleId)?.id !== batch.endpointId) return;
     let queued = false;
     for (const event of batch.events) {
       if (!scheduleWebhookEventMatches(schedule.webhookTrigger.events, event)) {

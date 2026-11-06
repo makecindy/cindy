@@ -37,6 +37,7 @@ export interface RemoteEndpointView {
 
 /** 本机希望服务器上的地址是什么样。format 为 null 表示本机认不出发送方，保留服务器上的格式。 */
 interface WantedEndpoint {
+  identity: string;
   events: readonly string[];
   format: WebhookFormat | null;
   scheduleName: string;
@@ -74,7 +75,13 @@ export interface ScheduleWebhookRemoteDeps {
   onQuotaExhausted?(quota: RemoteWebhookQuota): void;
   logger: { warn?: (message: string, meta?: Record<string, unknown>) => void };
   deviceName?(): string;
-  onReleased?(scheduleId: string): Promise<void>;
+  /** Discard queued events after release or a local trigger identity change. */
+  onInvalidated?(scheduleId: string): Promise<void>;
+  /** Owner-scoped local trigger identities; never URLs or secrets. */
+  identityStore?: {
+    load(): Record<string, string>;
+    save(identities: Record<string, string>): void;
+  };
 }
 
 class RemoteRequestError extends Error {
@@ -145,8 +152,20 @@ export class ScheduleWebhookRemote {
   private refreshedAfterRejection = false;
   private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
   private retryTimer: ReturnType<typeof setTimeout> | null = null;
+  private identities: Map<string, string>;
 
-  constructor(private readonly deps: ScheduleWebhookRemoteDeps) {}
+  constructor(private readonly deps: ScheduleWebhookRemoteDeps) {
+    this.identities = new Map(Object.entries(deps.identityStore?.load() ?? {}));
+  }
+
+  private rememberIdentity(scheduleId: string, identity: string | undefined): void {
+    if (this.identities.get(scheduleId) === identity) return;
+    const next = new Map(this.identities);
+    if (identity === undefined) next.delete(scheduleId);
+    else next.set(scheduleId, identity);
+    this.deps.identityStore?.save(Object.fromEntries(next));
+    this.identities = next;
+  }
 
   /** 同步“哪些任务需要接收”。登录后调用；未登录时调用也安全。 */
   sync(schedules: readonly Schedule[]): Promise<void> {
@@ -154,6 +173,7 @@ export class ScheduleWebhookRemote {
     for (const schedule of schedules) {
       const trigger = schedule.webhookTrigger;
       if (trigger) wanted.set(schedule.id, {
+        identity: trigger.endpointId,
         events: trigger.events ?? [], format: resolveScheduleWebhookFormat(trigger.source),
         scheduleName: schedule.name.replace(/[\u0000-\u001f\u007f]/g, ' ').slice(0, 200),
         deviceName: this.deps.deviceName?.().replace(/[\u0000-\u001f\u007f]/g, ' ').slice(0, 200),
@@ -190,11 +210,12 @@ export class ScheduleWebhookRemote {
   }
 
   canDeliver(scheduleId: string): boolean {
-    return this.running && this.loaded && this.views.has(scheduleId) && !this.releases.has(scheduleId);
+    return this.running && this.loaded && this.views.has(scheduleId) && !this.releases.has(scheduleId)
+      && this.wanted.has(scheduleId) && this.identities.get(scheduleId) === this.wanted.get(scheduleId)?.identity;
   }
 
   view(scheduleId: string): RemoteEndpointView | undefined {
-    return this.views.get(scheduleId);
+    return this.canDeliver(scheduleId) ? this.views.get(scheduleId) : undefined;
   }
 
   problem(scheduleId: string): RemoteEndpointProblem | undefined {
@@ -271,7 +292,7 @@ export class ScheduleWebhookRemote {
   /** 先把最新配置同步到服务器，避免在旧格式上设置密钥。 */
   private async currentView(scheduleId: string): Promise<RemoteEndpointView> {
     await this.enqueueReconcile();
-    const view = this.views.get(scheduleId);
+    const view = this.view(scheduleId);
     if (!view) throw new Error('Webhook endpoint is not available');
     return view;
   }
@@ -309,7 +330,7 @@ export class ScheduleWebhookRemote {
           if (generation !== this.generation) return;
           this.releases.set(release.scheduleId, release.releaseId);
           this.problems.set(release.scheduleId, 'released');
-          await this.deps.onReleased?.(release.scheduleId);
+          await this.deps.onInvalidated?.(release.scheduleId);
         }
         if (generation !== this.generation) return;
         this.views.clear();
@@ -319,7 +340,22 @@ export class ScheduleWebhookRemote {
       for (const [scheduleId, wanted] of this.wanted) {
         if (generation !== this.generation) return;
         if (this.releases.has(scheduleId)) continue;
-        const view = this.views.get(scheduleId);
+        let view = this.views.get(scheduleId);
+        const previousIdentity = this.identities.get(scheduleId);
+        if (previousIdentity !== undefined && previousIdentity !== wanted.identity) {
+          await this.deps.onInvalidated?.(scheduleId);
+          if (generation !== this.generation) return;
+          // Disable/re-enable changes the local identity even when deletion could
+          // not reach the server. Revoke first; never update an old URL/key in place.
+          if (view) {
+            await this.request('DELETE', `/endpoints/${view.id}`);
+            this.views.delete(scheduleId);
+            view = undefined;
+          }
+        }
+        // Persist before creation: a lost PUT response must not lose the identity
+        // of an endpoint that the server may already have created.
+        this.rememberIdentity(scheduleId, wanted.identity);
         if (view && sameEvents(view.events, wanted.events) && (wanted.format === null || sameFormat(view.format, wanted.format))
           && (view.scheduleName === undefined || view.scheduleName === wanted.scheduleName)
           && (view.deviceName === undefined || view.deviceName === (wanted.deviceName ?? null))) {
@@ -334,9 +370,13 @@ export class ScheduleWebhookRemote {
         this.views.delete(scheduleId);
         this.problems.delete(scheduleId);
       }
+      for (const scheduleId of this.identities.keys()) {
+        if (!this.wanted.has(scheduleId)) this.rememberIdentity(scheduleId, undefined);
+      }
       this.suspended = false;
     } catch (error) {
       if (generation !== this.generation) return;
+      this.loaded = false;
       if (error instanceof RemoteRequestError && error.code === 'WEBHOOK_ACCOUNT_SUSPENDED') this.suspended = true;
       this.deps.logger.warn?.('[schedule-webhook] sync failed', { error: String(error) });
       this.scheduleRetry();
