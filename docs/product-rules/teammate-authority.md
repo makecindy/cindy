@@ -56,9 +56,11 @@
   群授权传输中断、数据库未就绪等校验失败，都不销毁消息，保留为可重试的队首。任务动作守卫只在消息
   落库之前判定（派发前预检，以及紧贴落库的那次复核）：确认撤权则不落库、不留痕地移出队列；落库之后
   不再由它截断，照常派发——此时拒绝只会留下用户行和失败回复，而排队的任务消息无法重试（重试会换新的
-  clientId，守卫绑定的是原 clientId）。实现见
+  clientId，守卫绑定的是原 clientId）。同理，已接受一轮的续跑／重试副本（自动或手动的「继续」、零产出时重发原文）
+  不再重新校验发起方的投递授权，也不继承守卫与「需授权」标记，按接收任务自己的权限执行，来源与主人原话照旧保留；
+  从未落库的队首重试仍走守卫。实现见
   `taskActionHost.ts` 的 `assertDeliveryCurrent`、`taskActionAuthorization.ts` 的 `isTaskActionRevoked`
-  与 `agent-input-coordinator.ts` 的派发前复核；回归见 `taskActionAuthorization.test.ts` 与
+  与 `agent-input-coordinator.ts` 的派发前复核、`acceptTaskActionRecoveryCopy`；回归见 `taskActionAuthorization.test.ts` 与
   `agent-input-coordinator.test.ts`。
 - 来源判定与操作决定分别保留。获准自主操作不会给后续转达生成主人原话凭证。
 
