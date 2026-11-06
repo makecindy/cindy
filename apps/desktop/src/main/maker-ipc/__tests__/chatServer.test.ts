@@ -1,11 +1,23 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
+import fs from 'node:fs/promises';
+import os from 'node:os';
+import path from 'node:path';
 const avatarUpload = vi.hoisted(() => vi.fn());
 vi.mock('../../ossPublicUpload.js', () => ({ uploadPublicAsset: avatarUpload }));
 const fixture = vi.hoisted(() => ({ upload: vi.fn<(...args: Parameters<ReturnType<typeof import('../chatServerMedia.js').createChatMedia>['upload']>) => Promise<unknown[]>>(async () => []), download: vi.fn(), packaged: true, urls: [] as string[], wsUrls: [] as string[], exists: vi.fn(), config: '', handle: vi.fn(), profiles: [] as unknown[], sockets: [] as import('ws').WebSocket[], token: 'isolated-test-token', refresh: vi.fn(async () => true), requests: [] as Array<{ url: string; token: string; actor?: string }> }));
 vi.mock('../../authManager.js', () => ({ getAccessToken: () => fixture.token, refresh: fixture.refresh }));
 vi.mock('../../clientEndpointsService.js', () => ({ getClientEndpoint: () => 'https://chat.cindy.app' }));
-const replyFiles = vi.hoisted(() => ({ prepare: vi.fn(async (text: string) => ({ text, attachments: [] as unknown[] })) }));
-vi.mock('../chatServerReplyFiles.js', () => ({ prepareChatReplyFiles: replyFiles.prepare }));
+const replyFileScope = vi.hoisted(() => ({ snapshot: null as unknown }));
+const replyFiles = vi.hoisted(() => ({
+  actual: null as typeof import('../chatServerReplyFiles.js').prepareChatReplyFiles | null,
+  prepare: vi.fn<(text: string, sessionId?: string, assertExecution?: () => void, fallback?: string | null) =>
+    Promise<{ text: string; attachments: unknown[]; refusal?: 'outside-working-dir' }>>(async text => ({ text, attachments: [] })),
+}));
+vi.mock('../chatServerReplyFiles.js', async importOriginal => {
+  const actual = await importOriginal<typeof import('../chatServerReplyFiles.js')>();
+  replyFiles.actual = actual.prepareChatReplyFiles;
+  return { ...actual, prepareChatReplyFiles: replyFiles.prepare };
+});
 vi.mock('../chatServerMedia.js', () => ({ createChatMedia: () => ({ upload: fixture.upload, download: fixture.download }) }));
 const replyImages = vi.hoisted(() => vi.fn(async (text: string): Promise<{ text: string; attachments: import('../chatServerMedia.js').ChatUploadAttachment[] }> => ({ text, attachments: [] })));
 vi.mock('../chatServerReplyImages.js', () => ({ prepareChatReplyImages: replyImages }));
@@ -46,9 +58,10 @@ vi.mock('node:fs/promises', async (importOriginal) => {
   }) as typeof actual.lstat;
   return { ...actual, default: { ...actual, lstat }, lstat };
 });
-vi.mock('node:fs', () => ({ existsSync: fixture.exists, readFileSync: () => fixture.config || '{"baseUrl":"https://example.com","token":"test"}' }));
+vi.mock('node:fs', async importOriginal => ({ ...await importOriginal<typeof import('node:fs')>(),
+  existsSync: fixture.exists, readFileSync: () => fixture.config || '{"baseUrl":"https://example.com","token":"test"}' }));
 vi.mock('../botGroupChatService.js', () => ({ readPersistedReplyText: vi.fn() }));
-vi.mock('../../localDb/client/current.js', () => ({ getDbClient: () => ({ drizzle: {
+vi.mock('../../localDb/client/current.js', () => ({ getCurrentDbClientSnapshot: () => replyFileScope.snapshot, getDbClient: () => ({ drizzle: {
   select: () => ({ from: () => ({ where: () => Object.assign(Promise.resolve(fixture.profiles), { limit: async () => [{ id: 'existing-local-group' }] }) }) }),
   insert: () => ({ values: () => ({ onConflictDoNothing: async () => undefined }) }),
 } }) }));
@@ -199,6 +212,7 @@ describe('Chat Server result delivery and refresh', () => {
     fixture.upload.mockReset().mockResolvedValue([]);
     replyImages.mockReset().mockImplementation(async text => ({ text, attachments: [] }));
     replyFiles.prepare.mockReset().mockImplementation(async text => ({ text, attachments: [] }));
+    replyFileScope.snapshot = null;
     deps = { ensureLane: vi.fn(async () => ({ ok: true, sessionId: 'lane' })), abortLane: vi.fn(async () => {}),
       dispatch: vi.fn(async (input: Parameters<BotGroupChatServiceDeps['dispatch']>[0]) => { await input.onAccepted?.(); return { ok: true }; }),
       onChanged: vi.fn(),
@@ -1711,7 +1725,117 @@ describe('Chat Server result delivery and refresh', () => {
     expect(fixture.handle.mock.calls.filter(([, , body]) => body?.action === 'fail')).toHaveLength(1);
   });
 
-  it('fails a refused reply file instead of publishing a successful local path', async () => {
+  // #9185 / unit: the original settlement case injected a generic error. Exercise
+  // actual file preparation and settlement together, with only DB/HTTP boundaries
+  // faked, to prove an outside link cannot discard an otherwise deliverable reply.
+  describe('out-of-scope reply fallback', () => {
+    let root: string, work: string;
+    beforeAll(async () => {
+      root = await fs.mkdtemp(path.join(os.tmpdir(), 'chat-reply-fallback-'));
+      work = path.join(root, 'task');
+      await fs.mkdir(work);
+      await fs.writeFile(path.join(root, 'private.md'), 'private bytes must never be read');
+      await fs.writeFile(path.join(work, 'allowed.md'), 'allowed attachment also omitted');
+    });
+    afterAll(async () => { await fs.rm(root, { recursive: true, force: true }); });
+    beforeEach(() => {
+      replyFileScope.snapshot = { client: { drizzle: { select: () => ({ from: () => ({ where: () => ({
+        limit: async () => [{ workingDir: work, remoteHostId: null, status: 'active', clearedAt: null }],
+      }) }) }) } } };
+      replyFiles.prepare.mockImplementation((text, sessionId, assertExecution, fallback) =>
+        replyFiles.actual!(text, sessionId!, assertExecution!, fallback));
+    });
+
+    it.each([false, true])('delivers the body with an omission notice without reading or uploading files (mixed: %s)', async mixed => {
+      await startFileReply();
+      const read = vi.spyOn(fs, 'open');
+      try {
+        await service.settleLaneTurn({ ...terminal, resultText: 'Analysis complete. '
+          + (mixed ? '[Local](./allowed.md) ![Chart](./chart.png) ' : '') + '[Design](../private.md)' });
+        expect(deliveries()).toHaveLength(1);
+        expect(deliveries()[0][2].content).toEqual([
+          { type: 'text', text: `${t('bots.groupChat.files.omitted')}\n\nAnalysis complete. ${mixed ? 'Local Chart ' : ''}Design` }, processRecord,
+        ]);
+        expect(fixture.handle.mock.calls.filter(([, , body]) => body?.action === 'fail')).toHaveLength(0);
+        expect(read).not.toHaveBeenCalled();
+        expect(fixture.upload).not.toHaveBeenCalled();
+        expect(replyImages).not.toHaveBeenCalled();
+        expect(deps.dispatch).toHaveBeenCalledOnce();
+      } finally { read.mockRestore(); }
+    });
+
+    it.each(['revision', 'requester-left', 'lease', 'temporary'])('rechecks %s before sending the body without attachments', async change => {
+      await startFileReply();
+      const original = fixture.handle.getMockImplementation()!;
+      let denied = true;
+      fixture.handle.mockImplementation((route, method, body) => {
+        if (denied && change === 'temporary' && route.endsWith('/members')) return { status: 503, body: { error: { code: 'UNAVAILABLE' } } };
+        if (denied && change === 'lease' && body?.action === 'heartbeat') return { status: 409, body: { error: { code: 'STALE_EXECUTION' } } };
+        const result = original(route, method, body);
+        if (denied && route.endsWith('/members')) {
+          if (change === 'revision') result.body[0].accessRevision = 2;
+          if (change === 'requester-left') result.body[1].state = 'left';
+        }
+        return result;
+      });
+      await service.settleLaneTurn({ ...terminal, resultText: 'Analysis [Design](../private.md)' });
+      expect(deliveries()).toHaveLength(0);
+      denied = false;
+      await vi.advanceTimersByTimeAsync(16000);
+      expect(deliveries()).toHaveLength(change === 'temporary' ? 1 : 0);
+      if (change === 'temporary') expect(deliveries()[0][2].content[0].text).toContain('Analysis Design');
+      expect(replyFiles.prepare).toHaveBeenCalledOnce();
+      expect(replyImages).not.toHaveBeenCalled();
+      expect(fixture.upload).not.toHaveBeenCalled();
+      expect(deps.dispatch).toHaveBeenCalledOnce();
+    });
+
+    it.each(['lost-ack', 'rate-limit'])('retries the same text-only payload after %s without reprocessing the reply', async failure => {
+      let attempts = 0;
+      fixture.handle.mockImplementation((route, _method, body) => {
+        if (body?.action === 'complete' && ++attempts === 1) {
+          if (failure === 'lost-ack') throw new Error('ECONNRESET');
+          return { status: 429, headers: { 'retry-after': '60' }, body: { error: { code: 'RATE_LIMITED' } } };
+        }
+        return response(route);
+      });
+      await startFileReply();
+      await service.settleLaneTurn({ ...terminal, resultText: 'Analysis [Design](../private.md)' });
+      const first = structuredClone(deliveries()[0][2]);
+      await vi.advanceTimersByTimeAsync(failure === 'lost-ack' ? 16000 : 62000);
+      expect(deliveries()).toHaveLength(2);
+      expect(deliveries()[1][2]).toEqual(first);
+      expect(first.content[0].text).toBe(`${t('bots.groupChat.files.omitted')}\n\nAnalysis Design`);
+      expect(replyFiles.prepare).toHaveBeenCalledOnce();
+      expect(replyImages).not.toHaveBeenCalled();
+      expect(fixture.upload).not.toHaveBeenCalled();
+      expect(deps.dispatch).toHaveBeenCalledOnce();
+    });
+
+    it.each(['account', 'stop'])('does not retry a pending fallback after %s cancellation', async cancellation => {
+      let accountCurrent = true;
+      deps.captureOwnerScope = () => ({}) as ReturnType<NonNullable<typeof deps.captureOwnerScope>>;
+      deps.isOwnerScopeCurrent = () => accountCurrent;
+      service.dispose();
+      service = withChatServer({ listGroups: async () => ({ ok: true, groups: [] }), settleLaneTurn: vi.fn(async () => false), dispose: vi.fn() } as unknown as BotGroupChatService, deps);
+      fixture.handle.mockImplementation((route, _method, body) => {
+        if (body?.action === 'complete') throw new Error('ECONNRESET');
+        if (route.endsWith('/executions')) return { body: [execution] };
+        return response(route);
+      });
+      await startFileReply();
+      await service.settleLaneTurn({ ...terminal, resultText: 'Analysis [Design](../private.md)' });
+      expect(deliveries()).toHaveLength(1);
+      if (cancellation === 'account') accountCurrent = false;
+      else await service.stopRound(roomId);
+      await vi.advanceTimersByTimeAsync(46000);
+      expect(deliveries()).toHaveLength(1);
+      expect(fixture.upload).not.toHaveBeenCalled();
+      expect(deps.dispatch).toHaveBeenCalledOnce();
+    });
+  });
+
+  it('fails an unclassified reply file error instead of publishing a successful local path', async () => {
     replyFiles.prepare.mockRejectedValue(new Error('ATTACHMENT_UNAVAILABLE'));
     await startFileReply();
     await service.settleLaneTurn({ ...terminal, resultText: '[Report](./report.pdf)' });
@@ -2896,7 +3020,8 @@ describe('Chat Server result delivery and refresh', () => {
       expect(deliveries()[0][2]).not.toHaveProperty('continueDiscussion');
     });
 
-    it.each(['talk', 'work'] as const)('delivers explicit files for talk replies without changing the work pipeline (%s)', async kind => {
+    it.each((['talk', 'work'] as const).flatMap(kind => [false, true].map(refused => ({ kind, refused }))))
+    ('delivers or omits explicit files for talk replies without changing the work pipeline ($kind, refused: $refused)', async ({ kind, refused }) => {
       const planId = '80000000-0000-4000-8000-000000000001';
       const plan = { id: planId, revision: 1, source_message_id: execution.source_message_id, request_text: 'Report', organizer_id: botId, creator_id: selfId,
         status: 'running', current_step: 0, kind, steps: [{ position: 0, botId, botName: 'Bot', task: 'report', status: 'running' }] };
@@ -2906,13 +3031,17 @@ describe('Chat Server result delivery and refresh', () => {
         if (route.endsWith(`/messages/${execution.source_message_id}`)) return { body: message(execution.source_message_id, 'Report') };
         return undefined;
       });
-      replyFiles.prepare.mockResolvedValue({ text: 'Report', attachments: [{ id: 'pdf', name: 'report.pdf' }] });
+      replyFiles.prepare.mockResolvedValue(refused ? { text: '[Report](../report.pdf)', attachments: [], refusal: 'outside-working-dir' }
+        : { text: 'Report', attachments: [{ id: 'pdf', name: 'report.pdf' }] });
       fixture.upload.mockImplementationOnce(async () => kind === 'talk' ? [{ type: 'media', mediaId: 'pdf', caption: 'report.pdf' }] : []);
       if (kind === 'talk') await startFileReply(); else await start();
       await service.settleLaneTurn({ ...terminal, resultText: '[Report](./report.pdf)' });
       expect(deliveries()[0][2]).not.toHaveProperty('continueDiscussion');
       if (kind === 'talk') {
-        expect(deliveries()[0][2].content).toEqual([{ type: 'text', text: 'Report' }, { type: 'media', mediaId: 'pdf', caption: 'report.pdf' }, processRecord]);
+        expect(deliveries()[0][2].content).toEqual(refused
+          ? [{ type: 'text', text: `${t('bots.groupChat.files.omitted')}\n\nReport` }, processRecord]
+          : [{ type: 'text', text: 'Report' }, { type: 'media', mediaId: 'pdf', caption: 'report.pdf' }, processRecord]);
+        if (refused) expect(fixture.upload).not.toHaveBeenCalled();
       } else {
         expect(replyFiles.prepare).not.toHaveBeenCalled();
         expect(deliveries()[0][2].content).toEqual([{ type: 'text', text: '[Report](./report.pdf)' }, processRecord]);

@@ -10890,6 +10890,7 @@
       },
       "files": {
         "openFailed": "No se pudo abrir el archivo. Es posible que se haya movido o eliminado.",
+        "omitted": "No se pudieron incluir los archivos adjuntos.",
         "untitled": "Adjunto",
         "loading": "Cargando…",
         "unavailable": "No disponible en este momento"

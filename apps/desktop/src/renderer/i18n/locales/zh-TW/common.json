@@ -10759,6 +10759,7 @@
       },
       "files": {
         "openFailed": "檔案沒能開啟，可能已被移動或刪除",
+        "omitted": "附件未能附上。",
         "untitled": "附件",
         "loading": "載入中…",
         "unavailable": "暫時無法載入"
