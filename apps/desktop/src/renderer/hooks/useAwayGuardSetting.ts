@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 
-import type { AwayGuardState } from '../../shared/awayGuard';
+import type { AwayGuardDelaySeconds, AwayGuardState } from '../../shared/awayGuard';
 
 /** macOS "Keep working while away" toggle; re-reads on focus to pick up Accessibility grants. */
 export function useAwayGuardSetting() {
@@ -50,6 +50,20 @@ export function useAwayGuardSetting() {
     [refresh],
   );
 
+  const setDelay = useCallback(
+    async (delaySeconds: AwayGuardDelaySeconds | null) => {
+      const current = ++generation.current;
+      setState((previous) => (previous ? { ...previous, delaySeconds } : previous));
+      try {
+        const next = await window.electronAPI.windowBehavior.setAwayGuardDelay(delaySeconds);
+        if (mounted.current && generation.current === current) setState(next);
+      } catch {
+        if (mounted.current && generation.current === current) void refresh();
+      }
+    },
+    [refresh],
+  );
+
   const [preview, setPreview] = useState<'idle' | 'starting' | 'permission' | 'unavailable'>('idle');
   const startPreview = useCallback(async () => {
     setPreview('starting');
@@ -74,6 +88,7 @@ export function useAwayGuardSetting() {
     state,
     busy,
     setEnabled,
+    setDelay,
     preview,
     startPreview,
   };

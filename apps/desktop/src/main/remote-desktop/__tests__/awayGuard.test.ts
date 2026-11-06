@@ -24,7 +24,6 @@ function setup(overrides: Partial<AwayGuardDeps> = {}) {
   const state = {
     now: 0,
     enabled: true,
-    busy: true,
     remote: false,
     locked: false,
     sinceOwner: 0 as number | null,
@@ -34,7 +33,6 @@ function setup(overrides: Partial<AwayGuardDeps> = {}) {
   };
   const deps: AwayGuardDeps = {
     enabled: () => state.enabled,
-    busy: async () => state.busy,
     remoteDesktopActive: () => state.remote,
     screenLocked: () => state.locked,
     msSinceOwnerInput: () => state.sinceOwner,
@@ -68,7 +66,7 @@ function setup(overrides: Partial<AwayGuardDeps> = {}) {
 }
 
 describe('AwayGuardController', () => {
-  it('keeps the display awake while working and covers only after the system away time', async () => {
+  it('keeps the display awake while on and covers only after the chosen away time', async () => {
     const { state, guard, away } = setup();
     await guard.tick();
     expect(state.awake).toBe(true);
@@ -80,17 +78,24 @@ describe('AwayGuardController', () => {
     expect(state.awake).toBe(true);
   });
 
-  it('locks before removing the masks when the work ends or the setting is turned off', async () => {
-    for (const stop of ['idle', 'disabled'] as const) {
-      const { state, guard, away } = setup();
-      await away(AWAY_MS);
-      if (stop === 'idle') state.busy = false;
-      else state.enabled = false;
-      await guard.tick();
-      expect(state.events).toEqual(['show', 'lock']);
-      expect(state.awake).toBe(false);
-      expect(guard.masked).toBe(false);
-    }
+  it('locks before removing the masks when the setting is turned off', async () => {
+    const { state, guard, away } = setup();
+    await away(AWAY_MS);
+    state.enabled = false;
+    await guard.tick();
+    expect(state.events).toEqual(['show', 'lock']);
+    expect(state.awake).toBe(false);
+    expect(guard.masked).toBe(false);
+  });
+
+  it('stays covered and awake while nothing is running', async () => {
+    // 2026-11-06: tasks sent from a phone later must not find a locked screen.
+    const { state, guard, away } = setup();
+    await away(AWAY_MS);
+    await away(60 * 60_000);
+    expect(state.events).toEqual(['show']);
+    expect(state.awake).toBe(true);
+    expect(guard.masked).toBe(true);
   });
 
   it('falls back to the system lock when the masks cannot start', async () => {
@@ -154,7 +159,6 @@ describe('AwayGuardController', () => {
   it('previews the cover even with the setting off and no work, then uncovers when it runs out', async () => {
     const { state, guard } = setup();
     state.enabled = false;
-    state.busy = false;
     await guard.preview();
     await guard.tick();
     expect(state.events).toEqual(['show']);

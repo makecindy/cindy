@@ -1128,8 +1128,8 @@
     "disconnect": "Déconnecter"
   },
   "awayGuard": {
-    "status": "Cindy travaille sur ce Mac",
-    "hint": "Appuyez sur une touche ou cliquez pour verrouiller l'écran, puis déverrouillez avec Touch ID ou votre mot de passe."
+    "status": "Cindy travaille",
+    "hint": "Appuyez sur une touche pour verrouiller, puis déverrouillez avec Touch ID ou votre mot de passe."
   },
   "appBadge": {
     "attentionCount": "Tâches nécessitant votre attention : {{count}}"
@@ -2418,11 +2418,20 @@
       "macRestartNote": "Sous macOS, redémarrez l'application pour appliquer les modifications.",
       "awayGuard": {
         "label": "Continuer à travailler en votre absence",
-        "hint": "Quand une tâche est en cours, l'écran ne se verrouille pas si vous vous absentez : Cindy le masque et continue de travailler. Toucher le clavier, la souris ou le trackpad le verrouille aussitôt ; déverrouillez avec Touch ID ou votre mot de passe. L'écran se verrouille aussi une fois le travail terminé.",
+        "hint": "Quand c'est activé, ce Mac ne met plus son écran en veille et ne se verrouille plus tout seul, pour que l'IA puisse l'utiliser à tout moment. Après un moment d'absence, un cache noir masque l'écran et l'IA continue derrière. Appuyer sur une touche ou cliquer le verrouille aussitôt ; déverrouillez avec Touch ID ou votre mot de passe.",
         "permission": "Autorisez Cindy dans Réglages Système > Confidentialité et sécurité > Accessibilité pour qu'il verrouille l'écran dès que quelqu'un touche ce Mac. En attendant, l'écran se met en veille et se verrouille comme d'habitude.",
         "preview": "Essayer maintenant",
         "previewStarting": "Lâchez la souris et le clavier. L'écran est masqué dans 3 secondes ; appuyez sur une touche pour le verrouiller, puis déverrouillez-le.",
-        "previewUnavailable": "Impossible de masquer l'écran. Redémarrez Cindy et réessayez."
+        "previewUnavailable": "Impossible de masquer l'écran. Redémarrez Cindy et réessayez.",
+        "delay": {
+          "label": "Masquer l'écran après",
+          "hint": "Durée sans toucher le clavier ni la souris avant que le cache n'apparaisse. Par défaut, la même que la mise en veille de l'écran.",
+          "30": "30 s",
+          "60": "1 min",
+          "120": "2 min",
+          "300": "5 min",
+          "system": "Système"
+        }
       }
     },
     "agentIsland": {

@@ -34,8 +34,8 @@ export class PrivacyScreen {
     private readonly suspendInput: () => Promise<() => Promise<void>>,
     private readonly watchInput: PrivacyInputWatcher = watchPrivacyInput,
     private readonly options: {
-      /** Text on the masks; the away guard explains its own unlock path. */
-      copy?: () => { status: string; hint: string };
+      /** Page shown on the masks; the away guard uses its own black cover. */
+      html?: () => string;
       /**
        * macOS non-activating panels that join full-screen Spaces without Electron's
        * dock hide. The away guard needs this: the owner keeps using Cindy afterwards,
@@ -140,10 +140,8 @@ export class PrivacyScreen {
       this.partitionConfigured = true;
     }
     const displays = screen.getAllDisplays();
-    const copy = this.options.copy?.() ?? {
-      status: t('privacyExit.status'),
-      hint: t('privacyExit.hint'),
-    };
+    const html =
+      this.options.html?.() ?? privacyScreenHtml(t('privacyExit.status'), t('privacyExit.hint'));
     const nonActivating = this.options.nonActivating === true && process.platform === 'darwin';
     try {
       for (const display of displays) {
@@ -206,7 +204,7 @@ export class PrivacyScreen {
         });
         window.setMenuBarVisibility(false);
         await window.loadURL(
-          `data:text/html;charset=utf-8,${encodeURIComponent(privacyScreenHtml(copy.status, copy.hint))}`,
+          `data:text/html;charset=utf-8,${encodeURIComponent(html)}`,
         );
         window.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
         window.webContents.on('will-navigate', (event) => event.preventDefault());

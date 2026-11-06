@@ -1128,8 +1128,8 @@
     "disconnect": "Desligar"
   },
   "awayGuard": {
-    "status": "O Cindy está a trabalhar neste Mac",
-    "hint": "Prima qualquer tecla ou clique para bloquear o ecrã e, depois, desbloqueie com Touch ID ou a sua palavra-passe."
+    "status": "O Cindy está a trabalhar",
+    "hint": "Prima qualquer tecla para bloquear e desbloqueie com Touch ID ou a sua palavra-passe."
   },
   "appBadge": {
     "attentionCount": "Tarefas que precisam de atenção: {{count}}"
@@ -2418,11 +2418,20 @@
       "macRestartNote": "No macOS, reinicie a aplicação para aplicar as alterações.",
       "awayGuard": {
         "label": "Continuar a trabalhar quando se ausenta",
-        "hint": "Enquanto uma tarefa está em curso, o ecrã não bloqueia quando se ausenta: o Cindy tapa o ecrã e continua a trabalhar. Tocar no teclado, no rato ou no trackpad bloqueia-o de imediato; desbloqueie com Touch ID ou a sua palavra-passe. O ecrã também bloqueia quando o trabalho termina.",
+        "hint": "Quando ativado, este Mac não desliga o ecrã nem bloqueia sozinho, para que a IA o possa usar a qualquer momento. Depois de algum tempo ausente, uma camada preta tapa o ecrã e a IA continua a trabalhar por trás. Premir uma tecla ou clicar bloqueia-o de imediato; desbloqueie com Touch ID ou a sua palavra-passe.",
         "permission": "Permita o Cindy em Definições do Sistema > Privacidade e segurança > Acessibilidade para que possa bloquear o ecrã assim que alguém tocar neste Mac. Até lá, o ecrã desliga-se e bloqueia como habitualmente.",
         "preview": "Experimentar agora",
         "previewStarting": "Largue o rato e o teclado. O ecrã fica tapado dentro de 3 segundos; prima qualquer tecla para o bloquear e, depois, desbloqueie-o.",
-        "previewUnavailable": "Não foi possível tapar o ecrã. Reinicie o Cindy e tente novamente."
+        "previewUnavailable": "Não foi possível tapar o ecrã. Reinicie o Cindy e tente novamente.",
+        "delay": {
+          "label": "Tapar o ecrã após",
+          "hint": "Tempo sem tocar no teclado nem no rato até a camada aparecer. Por predefinição, igual ao repouso do ecrã.",
+          "30": "30 s",
+          "60": "1 min",
+          "120": "2 min",
+          "300": "5 min",
+          "system": "Sistema"
+        }
       }
     },
     "agentIsland": {

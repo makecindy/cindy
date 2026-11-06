@@ -1,13 +1,14 @@
 /**
  * Away guard (Settings → App behavior → Keep working while away, macOS, default off).
  *
- * While an Agent is working, the display does not idle-sleep into the lock screen.
- * Once the owner has been away for the system's own display-sleep time, every
- * display is covered by the remote desktop privacy masks and Agents keep working
- * behind them. Physical input at this Mac turns into the real system lock (the
+ * While it is on, this Mac never idle-sleeps its display into the lock screen, so an
+ * Agent can start or keep working at any time, including tasks sent from a phone
+ * later. Once the owner has been away for the chosen time (the system's own
+ * display-sleep time by default), every display gets a black cover and Agents keep
+ * working behind it. Physical input at this Mac turns into the real system lock (the
  * native helper does this itself), so the owner unlocks with Touch ID or password.
- * Work ending, the setting being turned off, a new display, or the masks failing
- * also end in the real lock. Nothing here ever unlocks the screen.
+ * Turning the setting off, a new display, or the masks failing also end in the real
+ * lock. Nothing here ever unlocks the screen.
  *
  * Fail-safe direction: whenever the guard cannot prove masks are up (missing
  * permission, mask failure, unknown input state), it releases the display
@@ -16,8 +17,6 @@
 
 export interface AwayGuardDeps {
   enabled(): boolean;
-  /** Any Agent turn, background job or scheduled run in progress. */
-  busy(): Promise<boolean>;
   remoteDesktopActive(): boolean;
   screenLocked(): boolean;
   /**
@@ -25,7 +24,7 @@ export interface AwayGuardDeps {
    * newest input was the Agent's own; null when the system cannot tell.
    */
   msSinceOwnerInput(): number | null;
-  /** Owner absence that the system itself would answer with display sleep. */
+  /** Owner absence after which the cover goes up. */
   awayAfterMs(): number;
   keepDisplayAwake(awake: boolean): void;
   /** Rejects when masks or the native input guard cannot start. */
@@ -128,9 +127,6 @@ export class AwayGuardController {
       if (this.mask === 'shown') return this.end(false, 'preview ended');
     }
     if (!deps.enabled()) return this.standDown(true, 'disabled');
-    // An unreadable activity source keeps an existing cover; it never starts one.
-    const busy = await deps.busy().catch(() => this.mask === 'shown');
-    if (!busy) return this.standDown(true, 'idle');
     if (this.mask !== 'none') {
       deps.keepDisplayAwake(this.mask !== 'ending');
       return;

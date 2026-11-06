@@ -1128,8 +1128,8 @@
     "disconnect": "Desconectar"
   },
   "awayGuard": {
-    "status": "Cindy está trabajando en esta Mac",
-    "hint": "Pulsa cualquier tecla o haz clic para bloquear la pantalla y, después, desbloquéala con Touch ID o tu contraseña."
+    "status": "Cindy está trabajando",
+    "hint": "Pulsa cualquier tecla para bloquear y desbloquea con Touch ID o tu contraseña."
   },
   "appBadge": {
     "attentionCount": "Tareas que requieren atención: {{count}}"
@@ -2418,11 +2418,20 @@
       "macRestartNote": "En macOS, reinicie la aplicación para que los cambios surtan efecto.",
       "awayGuard": {
         "label": "Seguir trabajando mientras no estás",
-        "hint": "Mientras haya una tarea en curso, la pantalla no se bloqueará cuando te alejes: Cindy la cubre y sigue trabajando. Al tocar el teclado, el mouse o el trackpad se bloquea al instante; desbloquéala con Touch ID o tu contraseña. También se bloquea cuando termina el trabajo.",
+        "hint": "Cuando está activado, esta Mac no apaga la pantalla ni se bloquea por sí sola, así la IA puede usarla en cualquier momento. Cuando llevas un rato fuera, una capa negra cubre la pantalla y la IA sigue trabajando detrás. Al pulsar una tecla o hacer clic se bloquea al instante; desbloquéala con Touch ID o tu contraseña.",
         "permission": "Permite a Cindy en Ajustes del Sistema > Privacidad y seguridad > Accesibilidad para que pueda bloquear la pantalla en cuanto alguien toque esta Mac. Hasta entonces, la pantalla se apaga y se bloquea como siempre.",
         "preview": "Probar ahora",
         "previewStarting": "Suelta el mouse y el teclado. La pantalla se cubrirá en 3 segundos; pulsa cualquier tecla para bloquearla y luego desbloquéala.",
-        "previewUnavailable": "No se pudo cubrir la pantalla. Reinicia Cindy e inténtalo de nuevo."
+        "previewUnavailable": "No se pudo cubrir la pantalla. Reinicia Cindy e inténtalo de nuevo.",
+        "delay": {
+          "label": "Cubrir la pantalla tras",
+          "hint": "Tiempo sin tocar el teclado ni el mouse antes de que aparezca la capa. Por omisión, el mismo que el reposo de la pantalla.",
+          "30": "30 s",
+          "60": "1 min",
+          "120": "2 min",
+          "300": "5 min",
+          "system": "Sistema"
+        }
       }
     },
     "agentIsland": {

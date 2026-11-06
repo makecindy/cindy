@@ -1099,8 +1099,8 @@
     "disconnect": "断连"
   },
   "awayGuard": {
-    "status": "Cindy 正用此机",
-    "hint": "按任一键或点按即锁屏，后以 Touch ID 或密码解之。"
+    "status": "Cindy 正劳作",
+    "hint": "按任一键即锁屏，以 Touch ID 或密码解之"
   },
   "appBadge": {
     "attentionCount": "待察之差事：{{count}}"
@@ -2353,11 +2353,20 @@
       "macRestartNote": "macOS 上须重启应用方生效。",
       "awayGuard": {
         "label": "离席续作",
-        "hint": "有差事在行，君离座而屏不锁，Cindy 覆屏续作。有人触键盘、鼠标或触控板，即锁屏，以 Touch ID 或密码解之。事毕亦自锁。",
+        "hint": "开之，此机无人操作亦不熄屏、不自锁，AI 可随时用之。君离座稍久，玄幕覆屏，AI 于其后续作；有人按键或点按即锁屏，以 Touch ID 或密码解之。",
         "permission": "须于「系统设置 → 隐私与安全性 → 辅助功能」许 Cindy，方能于有人触机时即锁屏。未许之前，屏照常熄而锁。",
         "preview": "即试之",
         "previewStarting": "请释鼠标与键盘，三秒后屏将覆；按任一键即锁屏，再解之以试。",
-        "previewUnavailable": "未能覆屏，请重启 Cindy 再试。"
+        "previewUnavailable": "未能覆屏，请重启 Cindy 再试。",
+        "delay": {
+          "label": "离座几时而覆屏",
+          "hint": "键盘鼠标无人触及逾此时，即覆以玄幕。默认同系统熄屏之时。",
+          "30": "三十秒",
+          "60": "一分",
+          "120": "二分",
+          "300": "五分",
+          "system": "从系统"
+        }
       }
     },
     "agentIsland": {

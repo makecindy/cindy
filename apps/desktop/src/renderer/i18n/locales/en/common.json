@@ -1111,8 +1111,8 @@
     "disconnect": "Disconnect"
   },
   "awayGuard": {
-    "status": "Cindy is working on this Mac",
-    "hint": "Press any key or click to lock the screen, then unlock with Touch ID or your password."
+    "status": "Cindy is working",
+    "hint": "Press any key to lock, then unlock with Touch ID or your password."
   },
   "appBadge": {
     "attentionCount": "Tasks needing attention: {{count}}"
@@ -2383,11 +2383,20 @@
       "macRestartNote": "On macOS, restart the app for changes to take effect.",
       "awayGuard": {
         "label": "Keep working while you're away",
-        "hint": "While a task is running, the screen won't lock when you step away. Cindy covers the screen and keeps working instead. Touching the keyboard, mouse or trackpad locks it right away; unlock with Touch ID or your password. The screen also locks when the work is done.",
+        "hint": "When on, this Mac won't sleep its display or lock on its own, so AI can use it at any time. After you've been away for a while, a black cover hides the screen and AI keeps working behind it. Pressing a key or clicking locks it right away; unlock with Touch ID or your password.",
         "permission": "Allow Cindy in System Settings > Privacy & Security > Accessibility so it can lock the screen as soon as someone touches this Mac. Until then, the screen sleeps and locks as usual.",
         "preview": "Try it now",
         "previewStarting": "Take your hands off the mouse and keyboard. The screen is covered in 3 seconds; press any key to lock it, then unlock.",
-        "previewUnavailable": "Couldn't cover the screen. Restart Cindy and try again."
+        "previewUnavailable": "Couldn't cover the screen. Restart Cindy and try again.",
+        "delay": {
+          "label": "Cover the screen after",
+          "hint": "How long the keyboard and mouse stay untouched before the cover goes up. By default, the same as your display sleep time.",
+          "30": "30 sec",
+          "60": "1 min",
+          "120": "2 min",
+          "300": "5 min",
+          "system": "System"
+        }
       }
     },
     "agentIsland": {

@@ -33,12 +33,16 @@ Only this desktop lease ends: other Device Link tasks and channels remain intact
 ## Keep working while away (macOS, 2026-11-06)
 
 Settings → App behavior → **Keep working while away** (macOS 14+, default off) reuses
-the privacy masks without a remote viewer. While any Agent turn, background job or
-scheduled run is in progress, Main holds `prevent-display-sleep`, so the display does
-not idle-sleep into the lock screen. When the owner has been away for the system's own
-display-sleep time (`pmset` `displaysleep`, or an earlier screen saver; 10 minutes when
-both are Never), every display
-gets a mask and Agents keep working behind it: masks ignore mouse events and the
+the privacy masks without a remote viewer. While it is on, Main holds
+`prevent-display-sleep` whether or not anything is running (the way a playing video
+does), so the display never idle-sleeps into the lock screen and a task sent later from
+a phone still finds a usable desktop. Real display sleep is not offered: macOS stops
+compositing windows for screenshots while the display is off, which would blind the
+Agent. When the owner has been away for the chosen time (30 s, 1, 2 or 5 minutes), or
+by default the system's own display-sleep time (`pmset` `displaysleep`, or an earlier
+screen saver; 10 minutes when both are Never), every display
+gets a black mask whose status line fades out after six seconds, so the screen reads as
+off; Agents keep working behind it: masks ignore mouse events and the
 `--away-guard` helper passes injected input. Owner absence is the HID idle time minus
 `cindy_computer`'s own dispatch, so Agent clicks never count as the owner.
 
@@ -57,8 +61,8 @@ read stale screenshots even though its clicks landed. Settings → "Try it" cove
 displays three seconds after the click; touching locks as usual, and an untouched
 preview uncovers after two minutes without locking (the owner was just using the Mac). It also locks on
 stdin EOF, a missed heartbeat or a dead parent, so a crashed Cindy leaves a locked
-screen rather than an uncovered desktop. Main locks before removing masks when work
-ends, the setting is turned off, a display is added, or a mask window fails. Remote
+screen rather than an uncovered desktop. Main locks before removing masks when the
+setting is turned off, a display is added, or a mask window fails. Remote
 desktop takes over without a lock (its own privacy screen and lock-on-exit apply);
 an already-locked screen just drops the masks.
 
@@ -66,9 +70,9 @@ Fail-safe direction: missing Accessibility for the input helper, masks that cann
 start, or an unreadable idle time release the display assertion, so macOS sleeps and
 locks exactly as it would without Cindy; mask setup is not retried for 60 seconds.
 After the owner unlocks, absence is measured from the unlock, so the screen is never
-covered again immediately while work continues (Codex Locked use regression). Nothing
+covered again immediately after an unlock (Codex Locked use regression). Nothing
 in this path unlocks the screen, edits authorization rules or stores a password; a
-screen that was already locked when work started stays locked. Logic lives in
+screen that was already locked when the setting was turned on stays locked. Logic lives in
 `apps/desktop/src/main/remote-desktop/awayGuard.ts` (unit-tested state machine) and
 `awayGuardService.ts`; shared-userData passive instances do not run it.
 

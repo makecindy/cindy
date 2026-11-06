@@ -1072,6 +1072,7 @@ import {
   readWindowBehaviorSettings,
   writeLinuxCloseBehavior,
   writeAwayGuard,
+  writeAwayGuardDelay,
   writeSwallowActivationClick,
   writeWindowsCloseBehavior,
 } from './window-behavior-settings-store.js';
@@ -2594,8 +2595,12 @@ registerAccessibilitySupportIpc();
 registerLoginItemIpc();
 registerMenubarIpc();
 registerAwayGuardIpc({
-  read: () => readWindowBehaviorSettings().awayGuard,
-  write: writeAwayGuard,
+  read: () => {
+    const settings = readWindowBehaviorSettings();
+    return { enabled: settings.awayGuard, delaySeconds: settings.awayGuardDelaySeconds };
+  },
+  writeEnabled: writeAwayGuard,
+  writeDelay: writeAwayGuardDelay,
 });
 
 // ── 资源用量面板 IPC ─────────────────────────────────────────────────
@@ -4719,12 +4724,12 @@ const registerIpcHandlers = () => {
     },
   });
   app.once('will-quit', stopMenubarService);
-  // macOS「离开时继续工作」(默认关):Agent 工作中不因空闲熄屏锁屏;主人离开后盖防窥遮罩,
-  // 本机一有输入即转系统真锁屏。共享 userData 的被动实例不接管本机屏幕。
+  // macOS「离开时继续工作」(默认关):开着时本机不因空闲熄屏锁屏;主人离开后盖黑色遮罩,
+  // 本机有人按键/点击即转系统真锁屏。共享 userData 的被动实例不接管本机屏幕。
   if (!authManager.isPassiveSharedUserDataInstance()) {
     startAwayGuard({
       enabled: () => readWindowBehaviorSettings().awayGuard,
-      busy: async () => (await evaluateRelaunchBusyActivity(readRelaunchActivitySources())).busy,
+      delaySeconds: () => readWindowBehaviorSettings().awayGuardDelaySeconds,
       remoteDesktopActive: () => remoteDesktop.state !== null,
       screenLocked: isDesktopScreenLocked,
       msSinceOwnerInput: () => msSinceForeignDesktopInput(),

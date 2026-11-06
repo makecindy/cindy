@@ -1111,8 +1111,8 @@
     "disconnect": "Trennen"
   },
   "awayGuard": {
-    "status": "Cindy arbeitet auf diesem Mac",
-    "hint": "Drücke eine Taste oder klicke, um den Bildschirm zu sperren, und entsperre ihn dann mit Touch ID oder deinem Passwort."
+    "status": "Cindy arbeitet",
+    "hint": "Drücke eine Taste zum Sperren und entsperre dann mit Touch ID oder deinem Passwort."
   },
   "appBadge": {
     "attentionCount": "Aufgaben, die Aufmerksamkeit benötigen: {{count}}"
@@ -2383,11 +2383,20 @@
       "macRestartNote": "Starte unter macOS die App neu, damit die Änderungen wirksam werden.",
       "awayGuard": {
         "label": "Weiterarbeiten, während du weg bist",
-        "hint": "Während eine Aufgabe läuft, wird der Bildschirm nicht gesperrt, wenn du weggehst. Stattdessen verdeckt Cindy den Bildschirm und arbeitet weiter. Eine Berührung von Tastatur, Maus oder Trackpad sperrt ihn sofort; entsperre ihn mit Touch ID oder deinem Passwort. Nach Abschluss der Arbeit wird er ebenfalls gesperrt.",
+        "hint": "Wenn aktiviert, schaltet dieser Mac den Bildschirm nicht mehr von selbst aus und sperrt sich nicht, damit die KI ihn jederzeit nutzen kann. Bist du eine Weile weg, verdeckt eine schwarze Abdeckung den Bildschirm und die KI arbeitet dahinter weiter. Ein Tastendruck oder Klick sperrt ihn sofort; entsperre ihn mit Touch ID oder deinem Passwort.",
         "permission": "Erlaube Cindy unter Systemeinstellungen > Datenschutz & Sicherheit > Bedienungshilfen, damit der Bildschirm sofort gesperrt wird, wenn jemand diesen Mac berührt. Bis dahin geht der Bildschirm wie gewohnt in den Ruhezustand und wird gesperrt.",
         "preview": "Jetzt ausprobieren",
         "previewStarting": "Nimm die Hände von Maus und Tastatur. In 3 Sekunden wird der Bildschirm verdeckt; drücke eine Taste, um ihn zu sperren, und entsperre ihn dann.",
-        "previewUnavailable": "Der Bildschirm konnte nicht verdeckt werden. Starte Cindy neu und versuche es erneut."
+        "previewUnavailable": "Der Bildschirm konnte nicht verdeckt werden. Starte Cindy neu und versuche es erneut.",
+        "delay": {
+          "label": "Bildschirm verdecken nach",
+          "hint": "So lange bleiben Tastatur und Maus unberührt, bevor die Abdeckung erscheint. Standardmäßig wie der Ruhezustand des Displays.",
+          "30": "30 s",
+          "60": "1 Min.",
+          "120": "2 Min.",
+          "300": "5 Min.",
+          "system": "System"
+        }
       }
     },
     "agentIsland": {

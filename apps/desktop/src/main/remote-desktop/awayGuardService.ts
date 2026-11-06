@@ -5,7 +5,7 @@ import { createLogger } from '../logger';
 import { t } from '../i18n';
 import { onQuit } from '../lifecycle';
 import { assertTrustedAppRendererEvent } from '../security/trustedAppRenderer';
-import { requireBoolean } from '../utils/ipcValidate';
+import { requireBoolean, throwIpcError } from '../utils/ipcValidate';
 import { AwayGuardController } from './awayGuard';
 import {
   lockDesktopScreen,
@@ -14,11 +14,15 @@ import {
 } from './inputHost';
 import { watchAwayGuardInput, type AwayGuardInputMonitor } from './privacyInput';
 import { PrivacyScreen } from './privacyScreen';
+import { awayScreenHtml } from './privacyScreenHtml';
 import {
   AWAY_GUARD_GET_STATE_CHANNEL,
   AWAY_GUARD_PREVIEW_CHANNEL,
   AWAY_GUARD_PREVIEW_DELAY_MS,
+  AWAY_GUARD_SET_DELAY_CHANNEL,
   AWAY_GUARD_SET_ENABLED_CHANNEL,
+  isAwayGuardDelaySeconds,
+  type AwayGuardDelaySeconds,
   type AwayGuardPreviewResult,
   type AwayGuardState,
 } from '../../shared/awayGuard';
@@ -32,7 +36,8 @@ const DISPLAY_SLEEP_REFRESH_MS = 60_000;
 
 export interface AwayGuardServiceDeps {
   enabled(): boolean;
-  busy(): Promise<boolean>;
+  /** Chosen absence before the cover; null follows the system display-sleep time. */
+  delaySeconds(): AwayGuardDelaySeconds | null;
   remoteDesktopActive(): boolean;
   screenLocked(): boolean;
   msSinceOwnerInput(): number | null;
@@ -78,7 +83,8 @@ export function startAwayGuard(deps: AwayGuardServiceDeps): void {
   const refreshDisplaySleep = () => {
     if (Date.now() - displaySleepReadAt < DISPLAY_SLEEP_REFRESH_MS) return;
     displaySleepReadAt = Date.now();
-    // Cover no later than the system would have: display sleep, or an earlier screen saver.
+    // By default cover when the system would have locked: display sleep, or an earlier
+    // screen saver. Read while the guard keeps the display awake, so it never sleeps.
     void Promise.all([
       exec('/usr/bin/pmset', ['-g'], { timeout: 5000, maxBuffer: 64 * 1024 })
         .then(({ stdout }) => Number(/^\s*displaysleep\s+(\d+)/m.exec(stdout)?.[1]) * 60_000)
@@ -126,18 +132,19 @@ export function startAwayGuard(deps: AwayGuardServiceDeps): void {
       return watched;
     },
     {
-      copy: () => ({ status: t('awayGuard.status'), hint: t('awayGuard.hint') }),
+      html: () => awayScreenHtml(t('awayGuard.status'), t('awayGuard.hint')),
       nonActivating: true,
     },
   );
 
   controller = new AwayGuardController({
     enabled: deps.enabled,
-    busy: deps.busy,
     remoteDesktopActive: deps.remoteDesktopActive,
     screenLocked: deps.screenLocked,
     msSinceOwnerInput: deps.msSinceOwnerInput,
     awayAfterMs: () => {
+      const chosen = deps.delaySeconds();
+      if (chosen !== null) return chosen * 1000;
       refreshDisplaySleep();
       return awayAfterMs;
     },
@@ -184,12 +191,19 @@ export function startAwayGuard(deps: AwayGuardServiceDeps): void {
   });
 }
 
-export async function readAwayGuardState(enabled: boolean): Promise<AwayGuardState> {
-  if (!supportsAwayGuard()) return { available: false, enabled: false, permission: 'unknown' };
+interface AwayGuardSettings {
+  enabled: boolean;
+  delaySeconds: AwayGuardDelaySeconds | null;
+}
+
+export async function readAwayGuardState(settings: AwayGuardSettings): Promise<AwayGuardState> {
+  if (!supportsAwayGuard())
+    return { available: false, enabled: false, delaySeconds: null, permission: 'unknown' };
   const status = await readDesktopInputPermission();
   return {
     available: true,
-    enabled,
+    enabled: settings.enabled,
+    delaySeconds: settings.delaySeconds,
     permission: status === 'granted' ? 'granted' : status === 'missing' ? 'missing' : 'unknown',
   };
 }
@@ -204,8 +218,9 @@ export async function prepareAwayGuardPermission(): Promise<void> {
 
 /** Settings → App behavior toggle. Local app renderer only; not a device-link capability. */
 export function registerAwayGuardIpc(settings: {
-  read(): boolean;
-  write(enabled: boolean): void;
+  read(): AwayGuardSettings;
+  writeEnabled(enabled: boolean): void;
+  writeDelay(delaySeconds: AwayGuardDelaySeconds | null): void;
 }): void {
   ipcMain.handle(AWAY_GUARD_GET_STATE_CHANNEL, (event) => {
     assertTrustedAppRendererEvent(event);
@@ -214,12 +229,19 @@ export function registerAwayGuardIpc(settings: {
   ipcMain.handle(AWAY_GUARD_SET_ENABLED_CHANNEL, async (event, enabled: unknown) => {
     assertTrustedAppRendererEvent(event);
     const next = requireBoolean(enabled, 'enabled');
-    if (!supportsAwayGuard()) return readAwayGuardState(false);
+    if (!supportsAwayGuard()) return readAwayGuardState(settings.read());
     if (next) await prepareAwayGuardPermission();
-    settings.write(next);
+    settings.writeEnabled(next);
     // Apply now: turning it off while covered locks before the masks go.
     void controller?.tick();
-    return readAwayGuardState(next);
+    return readAwayGuardState(settings.read());
+  });
+  ipcMain.handle(AWAY_GUARD_SET_DELAY_CHANNEL, async (event, delaySeconds: unknown) => {
+    assertTrustedAppRendererEvent(event);
+    if (delaySeconds !== null && !isAwayGuardDelaySeconds(delaySeconds))
+      throwIpcError('INVALID_PARAMS', 'delaySeconds must be one of the offered choices or null');
+    settings.writeDelay(delaySeconds);
+    return readAwayGuardState(settings.read());
   });
   ipcMain.handle(AWAY_GUARD_PREVIEW_CHANNEL, async (event): Promise<AwayGuardPreviewResult> => {
     assertTrustedAppRendererEvent(event);

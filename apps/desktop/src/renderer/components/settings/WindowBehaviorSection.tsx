@@ -38,6 +38,7 @@ import { useKeepAwakeSetting } from '@/hooks/useKeepAwakeSetting';
 import { useAwayGuardSetting } from '@/hooks/useAwayGuardSetting';
 import { useLoginItemSetting } from '@/hooks/useLoginItemSetting';
 import { useMenubarSetting } from '@/hooks/useMenubarSetting';
+import { isAwayGuardDelaySeconds } from '../../../shared/awayGuard';
 import {
   isLinuxCloseBehavior,
   isWindowsCloseBehavior,
@@ -206,6 +207,40 @@ export function WindowBehaviorSection() {
             </div>
           }
         />
+      ),
+    });
+  }
+
+  if (awayGuard.available && awayGuard.state?.enabled) {
+    rows.push({
+      key: 'away-guard-delay',
+      node: (
+        <div className="cindy-segmented-row px-4 py-4">
+          <div className="flex min-w-0 flex-col gap-1">
+            <p id={windowBehaviorSettings.awayGuardDelay.targetId}
+              className={SETTINGS_ROW_LABEL_CLASS}
+              style={{ letterSpacing: '0.12px' }}
+            >
+              {t(windowBehaviorSettings.awayGuardDelay.titleKey)}
+            </p>
+            <p className={SETTINGS_ROW_HINT_CLASS}>
+              {t(windowBehaviorSettings.awayGuardDelay.descriptionKey)}
+            </p>
+          </div>
+
+          <SegmentedControl data-setting-id={windowBehaviorSettings.awayGuardDelay.id}
+            aria-label={t(windowBehaviorSettings.awayGuardDelay.titleKey)}
+            value={String(awayGuard.state.delaySeconds ?? 'system')}
+            onValueChange={(value) => {
+              const seconds = Number(value);
+              void awayGuard.setDelay(isAwayGuardDelaySeconds(seconds) ? seconds : null);
+            }}
+            options={windowBehaviorSettings.awayGuardDelay.options.map((option) => ({
+              value: option.value,
+              label: t(option.labelKey),
+            }))}
+          />
+        </div>
       ),
     });
   }
