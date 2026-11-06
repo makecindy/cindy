@@ -1203,6 +1203,68 @@ describe('Scheduler', () => {
     await h.scheduler.stop();
   });
 
+  it('does not publish a next fire while an automatic claim is still running', async () => {
+    let finishRunner!: () => void;
+    const runnerHeld = new Promise<void>((resolve) => { finishRunner = resolve; });
+    const local = makeHarness({ runnerImpl: async () => {
+      await runnerHeld;
+      return { sessionId: 'sess-claimed' };
+    } });
+    const sch = await local.scheduler.create({
+      ...baseInput, expireAt: Date.UTC(2026, 0, 1, 0, 1, 30),
+    });
+    local.clock.setTo(Date.UTC(2026, 0, 1, 0, 1, 5));
+    const tick = local.scheduler.tick();
+    await vi.waitFor(() => expect(local.runner.fire).toHaveBeenCalledTimes(1));
+
+    const extended = await local.scheduler.update(sch.id, {
+      expireAt: Date.UTC(2026, 0, 1, 0, 3, 0),
+    });
+    expect(extended.nextFireAt).toBeUndefined();
+
+    finishRunner();
+    await tick;
+    expect(await local.storage.get(sch.id)).toMatchObject({
+      status: 'active', expireAt: Date.UTC(2026, 0, 1, 0, 3, 0),
+      nextFireAt: Date.UTC(2026, 0, 1, 0, 2, 0),
+    });
+  });
+
+  it('retries an expireAt extension that races an automatic expiry write', async () => {
+    const sch = await h.scheduler.create({
+      ...baseInput, expireAt: Date.UTC(2026, 0, 1, 0, 0, 40),
+    });
+    const oldSnapshot = await h.storage.get(sch.id);
+    if (!oldSnapshot) throw new Error('missing schedule');
+    h.clock.setTo(Date.UTC(2026, 0, 1, 0, 1, 5));
+    const originalUpdate = h.storage.update.bind(h.storage);
+    const futureExpiry = Date.UTC(2026, 0, 1, 0, 3, 0);
+    let releaseExtension!: () => void;
+    let extensionEntered!: () => void;
+    const extensionHeld = new Promise<void>((resolve) => { releaseExtension = resolve; });
+    const extensionReady = new Promise<void>((resolve) => { extensionEntered = resolve; });
+    let blockExtension = true;
+    vi.spyOn(h.storage, 'update').mockImplementation(async (id, patch, expected) => {
+      if (blockExtension && patch.expireAt === futureExpiry && expected) {
+        blockExtension = false;
+        extensionEntered();
+        await extensionHeld;
+      }
+      return originalUpdate(id, patch, expected);
+    });
+    const extending = h.scheduler.update(sch.id, { expireAt: futureExpiry });
+    await extensionReady;
+    expect(await originalUpdate(sch.id, {
+      status: 'expired', nextFireAt: undefined,
+    }, oldSnapshot)).toMatchObject({ status: 'expired' });
+    releaseExtension();
+
+    await expect(extending).resolves.toMatchObject({
+      status: 'active', expireAt: futureExpiry,
+      nextFireAt: Date.UTC(2026, 0, 1, 0, 2, 0),
+    });
+  });
+
   it('does not strand a one-shot schedule when its next fire is after expireAt', async () => {
     h.clock.setTo(Date.UTC(2026, 0, 1, 0, 10, 0));
     const sch = await h.scheduler.create({
@@ -1264,14 +1326,18 @@ describe('Scheduler', () => {
     let releaseUpdate!: () => void;
     const updateReleased = new Promise<void>((resolve) => { releaseUpdate = resolve; });
     const originalUpdate = h.storage.update.bind(h.storage);
-    const update = vi.fn(async (id: string, patch: Partial<Schedule>) => {
+    const update = vi.fn(async (id: string, patch: Partial<Schedule>, expected?: Schedule) => {
       if (patch.prompt === 'replacement') await updateReleased;
-      return originalUpdate(id, patch);
+      return originalUpdate(id, patch, expected);
     });
     h.storage.update = update;
 
     const updatePromise = h.scheduler.update(sch.id, { prompt: 'replacement' });
-    await vi.waitFor(() => expect(update).toHaveBeenCalledWith(sch.id, expect.objectContaining({ prompt: 'replacement' })));
+    await vi.waitFor(() => expect(update).toHaveBeenCalledWith(
+      sch.id,
+      expect.objectContaining({ prompt: 'replacement' }),
+      expect.objectContaining({ id: sch.id }),
+    ));
     const resumePromise = h.scheduler.resume(sch.id, approved);
     releaseUpdate();
     await updatePromise;

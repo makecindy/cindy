@@ -1626,7 +1626,12 @@ export class Scheduler extends EventEmitter {
     return { ...plugin, pluginId: this.resolvePreRunPlugin(plugin.pluginId) };
   }
 
-  private async updateUnlocked(id: string, patch: UpdateScheduleInput, expected?: ScheduleMutationGuard): Promise<Schedule> {
+  private async updateUnlocked(
+    id: string,
+    patch: UpdateScheduleInput,
+    expected?: ScheduleMutationGuard,
+    retryOnConflict = true,
+  ): Promise<Schedule> {
     if ((patch as Partial<Schedule>).source === 'bot') throw new Error('invalid schedule source');
     patch = this.normalizeManagedWorkingDir(patch);
     // patch 显式给了真实 workingDir 而未指明 workspaceKind 时,同步翻成 project
@@ -1729,8 +1734,17 @@ export class Scheduler extends EventEmitter {
     const intervalKeyPresent = Object.prototype.hasOwnProperty.call(patch, 'intervalMs');
     const expireAtKeyPresent = Object.prototype.hasOwnProperty.call(patch, 'expireAt');
     const expiryReachedByPatch = expireAtKeyPresent && isRecurringSchedulePastExpiry(candidate, now);
+    // nextFireAt=undefined can mean "no slot before cutoff" or "an automatic
+    // run claimed the current slot". Restoring a time for the latter publishes
+    // concurrent work to every other Desktop sharing this DB. Local attempt
+    // metadata distinguishes runNow; remote stores expose only the durable
+    // running row, where failing closed avoids duplicate automatic execution.
+    const missingNextHasInflightOwner = expireAtKeyPresent && existing.nextFireAt === undefined &&
+      ([...this.inflightAttempts.values()].some((attempt) =>
+        attempt.scheduleId === id && attempt.source === 'automatic') ||
+        await this.storage.hasRunningRuns(id));
     const expiryNeedsRecompute = expireAtKeyPresent && candidate.recurring && !candidate.manual &&
-      (existing.nextFireAt === undefined ||
+      ((existing.nextFireAt === undefined && !missingNextHasInflightOwner) ||
         (candidate.expireAt !== undefined && existing.nextFireAt !== undefined &&
           existing.nextFireAt >= candidate.expireAt));
     if (
@@ -1800,8 +1814,17 @@ export class Scheduler extends EventEmitter {
       }
       recomputeFromTo = { from: existing.nextFireAt, to: updates.nextFireAt };
     }
-    const updated = await this.storage.update(id, updates);
-    if (!updated) throw new Error(`Schedule not found: ${id}`);
+    const updated = await this.storage.update(id, updates, existing);
+    if (!updated) {
+      const fresh = await this.get(id);
+      if (!fresh) throw new Error(`Schedule not found: ${id}`);
+      // A caller-approved snapshot must not be silently rebased. Ordinary edits
+      // retry once so an expireAt extension racing automatic expiry can
+      // reactivate and replan from the actual winning row.
+      if (expected) assertScheduleMutationGuard(expected, fresh);
+      if (retryOnConflict) return this.updateUnlocked(id, patch, expected, false);
+      throw new Error('Schedule changed; retry update');
+    }
     if (updated.status === 'active') {
       this.activeSchedules.set(id, this.keepInvalidScheduleQuarantined(updated, now));
     } else {
