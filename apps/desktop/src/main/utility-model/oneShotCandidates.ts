@@ -1151,22 +1151,21 @@ async function requestExplicitProviderText(
         systemPrompt: requestOpts?.systemPrompt,
         onText: requestOpts?.onText,
         responseInstructions: requestOpts?.responseInstructions,
-        beforeDispatch: requestOpts?.beforeDispatch
-          ? () => requestOpts.beforeDispatch!({ providerId: provider.id, agentKind, model })
-          : undefined,
-        credentialStillCurrent: requestOpts?.beforeDispatch
-          ? async () => {
-              if (noAuth) return true;
-              if (isOAuth) {
-                return (await readGenericOAuthAccessToken(
-                  storedCustomProviderId(provider.id),
-                  provider.auth.oauth,
-                )) === credential;
-              }
-              return readCustomProviderKey(provider.id, agentKind) === credential;
-            }
-          : undefined,
-        routeStillCurrent: requestOpts?.beforeDispatch ? routeStillCurrent : undefined,
+        beforeDispatch: async (route) => {
+          if (requestOpts?.beforeDispatch && !(await requestOpts.beforeDispatch(route))) return false;
+          return routeStillCurrent();
+        },
+        credentialStillCurrent: async () => {
+          if (noAuth) return true;
+          if (isOAuth) {
+            return (await readGenericOAuthAccessToken(
+              storedCustomProviderId(provider.id),
+              provider.auth.oauth,
+            )) === credential;
+          }
+          return readCustomProviderKey(provider.id, agentKind) === credential;
+        },
+        routeStillCurrent,
       });
     },
   };

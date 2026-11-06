@@ -886,7 +886,7 @@ export async function discoverGenericOAuthModels(
   } catch {
     return null;
   }
-  if (!token) return null;
+  if (!token || !isCurrent()) return null;
   const url = resolveCopilotAccountUrl(configuredUrl, token);
   const headers: Record<string, string> = { authorization: `Bearer ${token}` };
   if (agent === 'claude-code' && !isOpenRouterModelsUrl(url)) headers['anthropic-version'] = '2023-06-01';
