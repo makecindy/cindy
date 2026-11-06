@@ -1,6 +1,8 @@
 import type { PluginMessageAttachment } from './pluginAttachments.js';
-/** Ordinary local Session API. Identity and permission grants remain Host-owned. */
+/** Ordinary Session API. Task data stays on the plugin host; execution may be remote. */
 export interface PluginTaskRoute {
+  /** Omitted = plugin host; a paired computer or share:<id> selects remote Agent execution. */
+  agentDeviceId?: string;
   agentKind: 'cc' | 'codex' | 'pi';
   providerId: string;
   model: string;

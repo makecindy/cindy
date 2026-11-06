@@ -427,7 +427,7 @@ export function createPluginTaskService(deps: PluginTaskServiceDeps) {
     }),
     assertDispatch,
     setModel: (pluginId: string, request: { taskId: string; expectedRevision: number; route: PluginTaskRoute | 'plugin-default' }) => exclusive(async () => {
-      const modelFields = ['agentKind', 'providerId', 'model', 'effort', 'fastMode'] as const;
+      const modelFields = ['agentKind', 'providerId', 'model', 'effort', 'fastMode', 'agentDeviceId'] as const;
       const followDefault = request.route === 'plugin-default';
       const preference = followDefault ? { ...deps.readModelPreference(pluginId) } : undefined;
       const assertUnchanged = async () => {
@@ -457,7 +457,7 @@ export function createPluginTaskService(deps: PluginTaskServiceDeps) {
       return { ...result, task: await ownTask(pluginId, request.taskId) };
     }),
     get: (pluginId: string, taskId: string) => exclusive(() => ownTask(pluginId, taskId)),
-    /** Background/visible switch for this plugin's own local task; Workers and remote tasks are not plugin tasks. */
+    /** Visibility of this plugin's task on the plugin host, including remote Agent execution. */
     setHidden: (pluginId: string, request: { taskId: string; hidden: boolean }) => exclusive(async () => {
       assertHiddenTasksAllowed(pluginId);
       const task = await ownTask(pluginId, request.taskId);

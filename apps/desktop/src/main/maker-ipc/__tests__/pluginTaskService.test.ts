@@ -23,6 +23,64 @@ import {
 import type { PluginTaskView } from '../../../shared/pluginTasks.js';
 import { controlOwnedSessionExecution, isSameSessionExecution, withdrawOwnedSessionInputs } from '../sessionExecutionOwnership.js';
 import { PLUGIN_TEAM_PLAN_MAX_JSON_CHARS, PLUGIN_TASK_RECEIPT_MAX_JSON_CHARS } from '../../../shared/pluginTasks.js';
+import { resolveRemotePluginTaskRoute } from '../pluginTaskModelRoute.js';
+import type { ProviderView } from '@cindy/model-providers';
+
+// User regression: picker routes were not executable by plugin tasks. The existing
+// local lifecycle matrix never exercised source identity at acceptance or after restart.
+// Production service + remote admission; paired/share sources, completion/cancellation. Tier: unit.
+it.each([
+  ['other-computer', 'completed'], ['share:provider', 'completed'],
+  ['other-computer', 'cancelled'], ['share:provider', 'cancelled'],
+] as const)('preserves %s through create, send, %s and restored run receipts', async (agentDeviceId, outcome) => {
+  const f = fixture();
+  const route = { ...f.route, agentDeviceId };
+  const readProviders = vi.fn(async (_deviceId: string) => [{ id: 'mine', source: 'user', connected: true, agents: ['codex'], routing: { codex: {} },
+    models: { codex: [{ id: 'model', efforts: ['high'] }] } }] as unknown as ProviderView[]);
+  f.deps.resolveRoute = vi.fn(async (_, selected) => selected?.agentDeviceId
+    ? resolveRemotePluginTaskRoute(selected, { readProviders, assertCurrent: f.deps.assertCurrent }) : f.route);
+  const task = await f.service.create('p', { requestKey: 'remote-create', title: 'Remote', route, hidden: false });
+  expect(task.resolvedConfig).toEqual(route);
+  const run = await f.service.send('p', { taskId: task.taskId, expectedRevision: task.revision, requestKey: 'remote-send', text: 'hello' });
+  expect(f.deps.dispatch).toHaveBeenCalledExactlyOnceWith('p', task.taskId, run.inputMessageId, 'hello', [], undefined);
+  expect(run.acceptedConfig).toEqual(route);
+  await f.service.accept(task.taskId, { clientId: run.inputMessageId }, f.execution);
+  f.deps.inspect = vi.fn(async () => ({ execution: f.execution, pending: [] }));
+  if (outcome === 'cancelled') {
+    f.deps.cancel = vi.fn(async () => 'stopping' as const);
+    expect((await f.service.cancel('p', run.runId)).status).toBe('stopping');
+    expect(f.deps.cancel).toHaveBeenCalledWith('p', task.taskId, expect.arrayContaining([run.inputMessageId]), f.execution);
+  }
+  // A terminal from a previous remote proxy/turn cannot complete this input.
+  await f.service.settle(task.taskId, { ...f.execution, generation: 0 }, 'completed', 'stale');
+  expect((await f.service.getRun('p', run.runId)).status).toBe(outcome === 'cancelled' ? 'stopping' : 'running');
+  await f.service.settle(task.taskId, f.execution, outcome, 'remote-output');
+  const restored = createPluginTaskService(f.deps);
+  expect(await restored.getRun('p', run.runId)).toMatchObject({ status: outcome, acceptedConfig: route, outputMessageId: 'remote-output' });
+  expect((await restored.listRuns('p', task.taskId)).items[0]).toMatchObject({ status: outcome, acceptedConfig: route });
+  expect(await restored.create('p', { requestKey: 'remote-create', title: 'Remote', route, hidden: false })).toEqual(task);
+  await expect(restored.create('p', { requestKey: 'remote-create', title: 'Remote', route: { ...route, agentDeviceId: 'different' }, hidden: false }))
+    .rejects.toMatchObject({ code: 'IDEMPOTENCY_CONFLICT' });
+  expect(readProviders.mock.calls.every(([id]) => id === agentDeviceId)).toBe(true);
+});
+
+it('blocks a revoked remote source before vendor acceptance and never substitutes a local namesake', async () => {
+  const f = fixture();
+  const route = { ...f.route, agentDeviceId: 'share:provider' };
+  const task = await f.service.create('p', { requestKey: 'remote', title: 'Remote', route });
+  const run = await f.service.send('p', { taskId: task.taskId, expectedRevision: task.revision, requestKey: 'send', text: 'hello' });
+  f.deps.resolveRoute = vi.fn(async (_, selected) => resolveRemotePluginTaskRoute(selected!, {
+    readProviders: async () => [], assertCurrent: f.deps.assertCurrent,
+  }));
+  await expect(f.service.accept(task.taskId, { clientId: run.inputMessageId }, f.execution))
+    .rejects.toMatchObject({ code: 'ROUTE_UNAVAILABLE' });
+  expect(JSON.parse(f.rows.get(run.runId)!.payload).status).toBe('queued');
+  // A source-only change is a different configuration even if all model fields are identical.
+  f.tasks.get(task.taskId)!.resolvedConfig = { ...f.route, agentDeviceId: 'different' };
+  await expect(f.service.accept(task.taskId, { clientId: run.inputMessageId }, f.execution))
+    .rejects.toMatchObject({ code: 'ROUTE_UNAVAILABLE' });
+  expect(f.deps.resolveRoute).toHaveBeenCalledTimes(1);
+});
 
 it('rejects oversized plans before saving and refuses oversized legacy receipts without truncation', async () => {
   const f=fixture(), task=await f.create();
