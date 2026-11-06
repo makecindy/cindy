@@ -3933,6 +3933,8 @@
         "disabledGroup": "Deaktiviert",
         "enableAllModels": "Alle aktivieren",
         "priceOverride": {
+          "resetShort": "Zurücksetzen",
+          "referenceDetails": "Referenzpreisdetails",
           "menu": "API-Preisschätzung bearbeiten",
           "title": "API-Preisschätzung für {{model}}",
           "description": "Dient nur zur Schätzung der Nutzung über deine eigene API oder dein Abonnement. Die Rechnung des Anbieters wird dadurch nicht geändert.",

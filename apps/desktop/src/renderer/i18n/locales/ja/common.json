@@ -3891,6 +3891,8 @@
         "disabledGroup": "無効",
         "enableAllModels": "すべて有効にする",
         "priceOverride": {
+          "resetShort": "リセット",
+          "referenceDetails": "参考価格の詳細",
           "menu": "API 料金見積もりを編集",
           "title": "{{model}} の API 料金見積もり",
           "description": "自分の API またはサブスクリプション経路の使用量見積もりにのみ使われ、プロバイダーの実際の請求は変わりません。",

@@ -3891,6 +3891,8 @@
         "disabledGroup": "비활성화됨",
         "enableAllModels": "모두 활성화",
         "priceOverride": {
+          "resetShort": "초기화",
+          "referenceDetails": "참고 가격 상세",
           "menu": "API 가격 추정치 편집",
           "title": "{{model}} API 가격 추정치",
           "description": "내 API 또는 구독 경로의 사용량을 추정할 때만 사용되며 제공자의 실제 청구 금액은 변경하지 않습니다.",
