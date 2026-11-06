@@ -1,5 +1,4 @@
 import { deviceDisplayName } from '@/lib/deviceName';
-import { pluginUiComposerAccess, pluginUiComposerKey } from '@/cindy-brain/pluginUiComposerActions';
 import {
   useCallback,
   useEffect,
@@ -422,7 +421,7 @@ import {
   shouldBlockLegacyRemotePiModelWindowSwitch,
 } from '../../../shared/modelSwitchAssessment';
 import { useVoiceInput } from '@/voice-input/useVoiceInput';
-import { getTextPreviewSearchHost } from '@/components/find-in-page/findInPageOwnership';
+import { getTextPreviewHost } from '@/components/find-in-page/findInPageOwnership';
 import { useVoiceInputSettings } from '@/hooks/useVoiceInputSettings';
 import { VoiceInputStatusNotice } from '@/voice-input/VoiceInputStatusNotice';
 import type { VoiceInputState } from '@cindy/voice-input-core';
@@ -513,6 +512,8 @@ function isPointInsideElement(
 }
 
 interface ChatInputProps {
+  modelPickerRequest?: number;
+  onModelPickerRequestConsumed?: (nonce: number) => void;
   onSend: (
     message: string,
     model: string,
@@ -1312,6 +1313,8 @@ function resolveModelThinkingIntent(input: {
 }
 
 export function ChatInput({
+  modelPickerRequest,
+  onModelPickerRequestConsumed,
   onSend,
   onComposerTyping,
   onComposerVoiceBusyChange,
@@ -1492,7 +1495,7 @@ export function ChatInput({
   const onComposerTypingRef = useRef(onComposerTyping);
   onComposerTypingRef.current = onComposerTyping;
   // session 切换时 ChatInput/Editor 会复用；推荐资格必须等目标草稿完成水合后再判断。
-  const [composerHydrationGeneration, setComposerHydrationGeneration] = useState(0);
+  const [, setComposerHydrationGeneration] = useState(0);
   // 完整输入框空判断:不仅检查 ProseMirror 文档是否为空,还检查附件、浏览器评论和语音稿。
   // 避免在用户放好了附件/评论/语音稿但正文为空时,仍发起付费的 predictNextPrompt 调用。
   const voiceDraftTextRef = useRef('');
@@ -1620,7 +1623,9 @@ export function ChatInput({
     if (turnStarting) {
       turnGenRef.current += 1;
       showRecommendationRef.current = false;
-      if (sessionId) dismissPromptRecommendation(sessionId);
+      // The session store owns turn invalidation. A mounted/reused composer can
+      // see a delayed busy projection; treating it as explicit consumption would
+      // erase B's buffered completion before the streams converge.
     }
   });
   useEffect(() => {
@@ -3693,7 +3698,7 @@ export function ChatInput({
       // 注册在 document 或组件层，晚于本 window capture handler 执行。
       if (
         event.key === 'Escape' &&
-        (getTextPreviewSearchHost() || (
+        (getTextPreviewHost() || (
           event.target instanceof Element &&
           event.target.closest('[role="alertdialog"], [data-morph-side]')
         ))
@@ -8615,47 +8620,6 @@ export function ChatInput({
     };
   }, []);
 
-  // Bind the actual visible editor. No draft copy is stored by the plugin UI.
-  const pluginComposerScopeRef = useRef({ sessionId, storageKey, ownsHardwareComposerActions, queueEditingClientId });
-  pluginComposerScopeRef.current = { sessionId, storageKey, ownsHardwareComposerActions, queueEditingClientId };
-  const pluginComposerOwner = getDataOwnerGeneration();
-  useEffect(() => {
-    if (!editor || !sessionId || deviceLinkDeviceId || !ownsHardwareComposerActions || queueEditingClientId || composerMutationLocked) return;
-    const draftKey = crypto.randomUUID();
-    let revision = 0;
-    const current = () => !editor.isDestroyed && editor.isEditable && !editor.view.composing &&
-      isDataOwnerGenerationCurrent(pluginComposerOwner) && isDataOwnerIdCurrent(editorDataOwnerRef.current) &&
-      pluginComposerScopeRef.current.sessionId === sessionId && pluginComposerScopeRef.current.storageKey === storageKey &&
-      pluginComposerScopeRef.current.ownsHardwareComposerActions && !pluginComposerScopeRef.current.queueEditingClientId &&
-      hasHydratedRef.current && storageKeyForDraftRef.current === storageKey && !isRestoringRef.current &&
-      !composerMutationLockedRef.current && document.visibilityState !== 'hidden';
-    const changed = ({ transaction }: { transaction: { docChanged: boolean; selectionSet: boolean } }) => {
-      if (transaction.docChanged || transaction.selectionSet) revision++;
-    };
-    editor.on('transaction', changed);
-    const off = pluginUiComposerAccess.register(pluginUiComposerKey({ sessionId }), {
-      current,
-      snapshot: () => {
-        const { from, to } = editor.state.selection;
-        return { draftKey, revision: String(revision), selection: { start: from, end: to },
-          selectedText: editor.state.doc.textBetween(from, to, '\n', '\uFFFC') };
-      },
-      apply: effect => {
-        if (!current()) throw new Error('EDITOR_UNAVAILABLE');
-        const from = effect.operation === 'append' ? Selection.atEnd(editor.state.doc).from : effect.selection.start;
-        const to = effect.operation === 'append' ? from : effect.selection.end;
-        const content: JSONContent[] = [];
-        effect.text.split('\n').forEach((text, index) => {
-          if (index) content.push({ type: 'hardBreak' });
-          if (text) content.push({ type: 'text', text });
-        });
-        return editor.commands.insertContentAt({ from, to }, content);
-      },
-    });
-    return () => { off(); editor.off('transaction', changed); };
-  }, [editor, sessionId, storageKey, deviceLinkDeviceId, ownsHardwareComposerActions, queueEditingClientId,
-    composerMutationLocked, composerHydrationGeneration, pluginComposerOwner]);
-
   useEffect(() => {
     if (!ownsHardwareComposerActions) {
       workLouderVoiceGestureRef.current?.cancelHeldPress();
@@ -9304,7 +9268,7 @@ export function ChatInput({
     hasAttachments: hasPreparedOrPendingAttachments,
     hasBrowserComments: browserComments.length > 0,
     hasVoiceDraftText,
-    mutationLocked: composerMutationLocked,
+    mutationLocked: composerMutationLocked || showStopButton,
   };
   const recommendationComposerReady = isComposerReadyForPromptRecommendation(recommendationComposerState);
   usePromptRecommendationPrediction({
@@ -9314,7 +9278,7 @@ export function ChatInput({
       recommendationComposerReady && !!editor && !editor.isDestroyed &&
       deviceLinkDeviceId !== undefined && runtimeAgentKind != null &&
       hasPredictionMessages && !remoteHostId,
-    predict: async (revision) => {
+    predict: async (revision, isCurrent) => {
       if (!sessionId || runtimeAgentKind == null) return null;
       // 素材仍由 Main 从 DB 读取；远程任务经 sticky 路由交给被控电脑。
       const result = await predictPromptUntilDisabled(makerApiForSticky(sessionId), {
@@ -9324,7 +9288,7 @@ export function ChatInput({
         workingDir: workingDirRef.current ?? undefined,
         turnGen: turnGenRef.current,
         completionRevision: revision,
-      });
+      }, isCurrent);
       return result?.prompt ?? null;
     },
   });
@@ -10138,6 +10102,8 @@ export function ChatInput({
                     : useNarrowToolbar ? 'min-w-0 shrink' : undefined}
                 >
                   {!sessionModelLoading && <ModelSelector
+                    openRequest={modelPickerRequest}
+                    onOpenRequestConsumed={onModelPickerRequestConsumed}
                     sshCodex={sshCodexCatalog}
                     // 选中态一律是会话 / 草稿持有的 **wire model id**(sessions.model 或
                     // lastByVendor.model)。面板行的归一化 id 只活在面板内部 —— 从这里递进去

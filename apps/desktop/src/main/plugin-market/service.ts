@@ -64,6 +64,7 @@ import {
   installOrUpdateMarketGhostPackage,
   isGhostAvailableForActiveSession,
   isBuiltinGhostRemovedByUser,
+  builtinSeedYieldsToStoreVersion,
   refreshPluginUsageBindings,
   uninstallGhostAndCleanup,
 } from '../cindy-brain/index.js';
@@ -758,6 +759,49 @@ function serverRecordMatchesDelivery(
   const evidence = getGhostManager().approvedInstallEvidence(installedGhostPhysicalRelId(ghost));
   return Boolean(evidence && (evidence.packageSha256 === record.sha256 ||
     (evidence.packageSha256 === null && evidence.legacyMigrated)));
+}
+
+/**
+ * 内置种子覆盖了这个商店安装，而种子已撤或当前 Release 不比种子旧（种子与商店按版本
+ * 取新，相同取商店）：已装字节虽与账本不符（装着的是种子），仍按原商店路由更新回商店包。
+ * 只认播种台账里的根 namespace 已批准实例，且账本仍指向当前目录项；不改变其它
+ * 来源冲突的判定，也不用于授权查找。
+ */
+function seededBuiltinYieldsToRelease(
+  plugin: VisiblePluginSummary,
+  ghost: InstalledGhost | null | undefined,
+  record: PluginMarketInstallationRecord | null | undefined,
+): boolean {
+  return Boolean(
+    ghost &&
+    record?.installed &&
+    (record.source === 'market' || record.source === 'legacy-adopted') &&
+    record.ghostId === plugin.ghostId &&
+    ghost.manifest.id === plugin.ghostId &&
+    (!hasDeliveryNamespace(ghost) || ghost.namespace === null) &&
+    ghost.approval.state === 'approved' &&
+    serverRecordMatchesSummaryRoute(plugin, record) &&
+    builtinSeedYieldsToStoreVersion(plugin.ghostId, plugin.currentRelease.version),
+  );
+}
+
+/**
+ * manifest 与账本一致（同版本种子只改了代码）时，市场只比对清单会误判为已安装。批准回执的
+ * 包摘要才是落位时的包身份：商店安装 = Release sha256，播种发布 = 目录摘要。当前 Release
+ * 已装入账本、回执摘要却对不上，且实例归播种管理并可交还商店时，视为被种子覆盖，需重装商店包。
+ */
+function seedShadowsInstalledRelease(
+  plugin: VisiblePluginSummary,
+  ghost: InstalledGhost | null | undefined,
+  record: PluginMarketInstallationRecord | null | undefined,
+): boolean {
+  if (!ghost || !record || record.releaseId !== plugin.currentRelease.id) return false;
+  const evidence = getGhostManager().approvedInstallEvidence(installedGhostPhysicalRelId(ghost));
+  return Boolean(
+    evidence?.packageSha256 &&
+    evidence.packageSha256 !== record.sha256 &&
+    seededBuiltinYieldsToRelease(plugin, ghost, record),
+  );
 }
 
 /** 账本是否仍指向当前服务端目录项；release 变化是升级，不属于路由漂移。 */
@@ -2587,7 +2631,8 @@ export class PluginMarketService {
     if (
       existing &&
       sourceReplacementMode === 'preserve-existing-source' &&
-      !serverRecordMatchesDelivery(plugin, existing, currentRecord, snapshotManifestIdentity(local, existing))
+      !serverRecordMatchesDelivery(plugin, existing, currentRecord, snapshotManifestIdentity(local, existing)) &&
+      !seededBuiltinYieldsToRelease(plugin, existing, currentRecord)
     ) {
       throwIpcError('ALREADY_EXISTS', 'A local Plugin already uses this Plugin ID');
     }
@@ -2757,7 +2802,8 @@ export class PluginMarketService {
       if (
         installedNow &&
         options.sourceReplacementMode === 'preserve-existing-source' &&
-        !serverRecordMatchesDelivery(plugin, installedNow, currentRecordNow)
+        !serverRecordMatchesDelivery(plugin, installedNow, currentRecordNow) &&
+        !seededBuiltinYieldsToRelease(plugin, installedNow, currentRecordNow)
       ) {
         throwIpcError('ALREADY_EXISTS', 'A local Plugin already uses this Plugin ID');
       }
@@ -2900,11 +2946,15 @@ export class PluginMarketService {
     const ghost = snapshotGhost(local, target);
     const record = snapshotInstallation(local, target);
     const identity = snapshotManifestIdentity(local, ghost);
-    const matchesUpdateRoute = Boolean(
+    const matchesDelivery = Boolean(
       ghost
       && serverRecordMatchesDelivery(plugin, ghost, record ?? null, identity)
       && serverRecordMatchesSummaryRoute(plugin, record ?? null),
     );
+    const seedYield = matchesDelivery
+      ? seedShadowsInstalledRelease(plugin, ghost, record)
+      : seededBuiltinYieldsToRelease(plugin, ghost, record);
+    const matchesUpdateRoute = matchesDelivery || seedYield;
     const conflict = Boolean((ghost && !matchesUpdateRoute) ||
       (!hasDeliveryNamespace(plugin) && plugin.scope === 'organization' &&
         local.ghosts.some((candidate) => candidate.manifest.id === plugin.ghostId &&
@@ -2933,7 +2983,7 @@ export class PluginMarketService {
       ? 'conflict'
       : !matchesUpdateRoute
         ? 'not-installed'
-        : record?.releaseId === plugin.currentRelease.id && !needsSourceRecovery
+        : record?.releaseId === plugin.currentRelease.id && !needsSourceRecovery && !seedYield
           ? 'installed'
           : 'update-available';
     const projectedTarget = matchesUpdateRoute && !hasDeliveryNamespace(target) &&

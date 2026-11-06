@@ -97,7 +97,6 @@ import { shouldOpenTextLightboxForOrigin } from '@/lib/filePreview';
 import { toRemoteMediaOrigin } from '@/lib/sessionFileOrigin';
 import { rewriteToRemoteMediaOrigin } from '../../../shared/remoteMediaUrl';
 import { useInstalledGhosts } from '@/cindy-brain/useInstalledGhosts';
-import { PluginUiRendererView } from '@/cindy-brain/PluginUiRendererView';
 import { useChatSessionFile } from './ChatSessionFileContext';
 import {
   ACTIVITY_ROW_CHEVRON_SLOT_CLASS,
@@ -1209,9 +1208,6 @@ export function AgentActionRow({
             'select-text cursor-text',
           )}
         >
-          <PluginUiRendererView sessionId={fileCtx.sessionId ?? ''} point="tool.body"
-            target={{ kind: 'tool', id: message.toolUseId ?? '' }}
-            active={Boolean(fileCtx.localConfirmed && fileCtx.sessionId && message.toolUseId && !onActivateOverride)}>
           {inlineInputText && (
             <pre className="whitespace-pre-wrap break-words m-0">{inlineInputText}</pre>
           )}
@@ -1230,7 +1226,6 @@ export function AgentActionRow({
               {t('chat.agentActionRow.noContent')}
             </span>
           )}
-          </PluginUiRendererView>
         </div>
       )}
 
@@ -1254,8 +1249,6 @@ export function AgentActionRow({
       {lightbox.kind === 'payload' && (
         <ToolPayloadLightbox
           payload={lightbox.payload}
-          renderer={fileCtx.localConfirmed && fileCtx.sessionId && message.toolUseId && !onActivateOverride
-            ? { sessionId: fileCtx.sessionId, toolUseId: message.toolUseId } : undefined}
           triggerRef={triggerRef}
           onClose={closeLightbox}
         />

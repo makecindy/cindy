@@ -337,7 +337,27 @@ export async function fetchProviderModels(
   // The parser can drop invalid members; only an originally empty data array is empty success.
   const ollamaCloudEmpty = ollamaCloudCatalog && json !== null && typeof json === 'object'
     && 'data' in json && Array.isArray(json.data) && json.data.length === 0;
-  if (!models || ollamaCloudError || (models.length === 0 && (ollamaCloudCatalog ? !ollamaCloudEmpty : !spec.allowEmpty))) {
+  // Magpie's enabled-model catalog can be empty. Identify the gateway rather
+  // than guessing from a user-editable port/name; never send credentials to hello.
+  let magpieEmpty = false;
+  const endpoint = new URL(url);
+  if (models?.length === 0 && !spec.allowEmpty && !ollamaCloudCatalog
+    && endpoint.pathname === '/v1/models' && !endpoint.search
+    && json !== null && typeof json === 'object' && !Array.isArray(json)
+    && 'data' in json && Array.isArray(json.data) && json.data.length === 0
+    && (!('error' in json) || json.error == null || json.error === '')
+    && (!('error_code' in json) || json.error_code === 0)) {
+    try {
+      const hello = await fetchImpl(new URL('/api/hello', endpoint).toString(), {
+        method: 'GET', redirect: 'error', signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),
+      });
+      if (hello.ok) {
+        const identity = JSON.parse(await readLimitedBody(hello, 16 * 1024));
+        magpieEmpty = identity?.name === 'magpie' && !identity.error;
+      } else await hello.body?.cancel();
+    } catch { /* An unconfirmed gateway keeps the existing conservative result. */ }
+  }
+  if (!models || ollamaCloudError || (models.length === 0 && (ollamaCloudCatalog ? !ollamaCloudEmpty : !spec.allowEmpty && !magpieEmpty))) {
     // 端点 200 但响应不是可识别的模型列表（或为空）——按「模型不存在」类引导用户手填。
     return {
       ok: false,

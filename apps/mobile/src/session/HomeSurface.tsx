@@ -12,6 +12,7 @@ import { SwipeableProjectHeader } from './SwipeableProjectHeader';
 import { useRetainedHomeState, getHomeViewSession } from './homeViewSession';
 import { rememberRecentTask } from './recentTasks';
 import { homeListStyles, SESSION_ROW_LONG_PRESS_MS, SessionStatusMark, SessionStatusPulse } from '@/session/HomeListVisuals';
+import { AnimationVisibilityProvider } from '@/hooks/useLoopingAnimation';
 import { useOptionalHeaderHeight } from '@/session/useOptionalHeaderHeight';
 import { rememberComposerEntry } from './composerMorph';
 import type { ComposerMorphOrigin } from './composerGeometry';
@@ -472,13 +473,15 @@ function useHomeFilterClock(enabled: boolean): number {
 export function MobileHome(props: MobileHomeProps) {
   const screenFocused = useIsFocused();
   const { accountGeneration } = useAuth();
-  return <RemoteSessionStoreSubscriptionGate enabled={screenFocused}>
-    <ActiveHomeSession.Provider value={props.currentSessionId}>
-      <HomeRosterProvider key={accountGeneration}>
-        <HomeScreenContent {...props} />
-      </HomeRosterProvider>
-    </ActiveHomeSession.Provider>
-  </RemoteSessionStoreSubscriptionGate>;
+  return <AnimationVisibilityProvider visible={screenFocused && props.active !== false}>
+    <RemoteSessionStoreSubscriptionGate enabled={screenFocused}>
+      <ActiveHomeSession.Provider value={props.currentSessionId}>
+        <HomeRosterProvider key={accountGeneration}>
+          <HomeScreenContent {...props} />
+        </HomeRosterProvider>
+      </ActiveHomeSession.Provider>
+    </RemoteSessionStoreSubscriptionGate>
+  </AnimationVisibilityProvider>;
 }
 
 function HomeScreenContent({ active = true, width, newSessionInSystemBar = false, newSessionInHeader = false, onSelectSession, runNavigation, newSessionActionRef }: MobileHomeProps) {

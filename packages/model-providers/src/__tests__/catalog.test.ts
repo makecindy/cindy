@@ -242,8 +242,22 @@ describe("bundled catalog validity (dynamic-first contract)", () => {
     });
   });
 
-  it("openai ships GPT Image 2.5 plus previous GPT Image 2", () => {
+  it("openai ships the complete server GPT Image catalog", () => {
     expect(provider("openai").imageModels).toEqual([
+      {
+        id: "openai/gpt-image-2.6-sunburst",
+        name: "GPT Image 2.6 Sunburst",
+        mode: "image_generation",
+        nativeApi: "openai-images",
+        modalities: { input: ["text", "image"], output: ["image"] },
+      },
+      {
+        id: "openai/gpt-image-2.6-flare",
+        name: "GPT Image 2.6 Flare",
+        mode: "image_generation",
+        nativeApi: "openai-images",
+        modalities: { input: ["text", "image"], output: ["image"] },
+      },
       {
         id: "openai/gpt-image-2.5-sunburst",
         name: "GPT Image 2.5 Sunburst",

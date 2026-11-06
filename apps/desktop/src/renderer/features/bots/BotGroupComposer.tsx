@@ -62,6 +62,7 @@ import {
   getDraft,
   isDraftDiscardTokenCurrent,
   saveDraft,
+  subscribeDraftContent,
 } from '@/lib/composerDraftStore';
 import type { AttachedFile } from '@/lib/fileTypes';
 import { isAnnotationBurnInError, materializeAnnotatedAttachmentsForSend } from '@/lib/annotationBurnIn';
@@ -244,7 +245,12 @@ export function BotGroupComposer({
   const [division, setDivision] = useState(false);
   const divisionRef = useRef(division);
   divisionRef.current = division;
-  const groupAttemptRef = useRef<{ clientId: string; signature: string } | null>(null);
+  const savedEdit = thread ? undefined : getDraft(draftKey)?.botGroupEdit;
+  const groupAttemptRef = useRef<{ clientId: string; signature: string; enqueueOperationId?: string;
+    editSource?: { groupId: string; clientId: string; revision: number } } | null>(
+      savedEdit?.source.groupId === groupId
+        ? { clientId: savedEdit.clientId, signature: savedEdit.signature, editSource: savedEdit.source,
+            enqueueOperationId: savedEdit.enqueueOperationId } : null);
   const [menuOpen, setMenuOpen] = useState(false);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -273,6 +279,12 @@ export function BotGroupComposer({
   const focusInputOnMenuCloseRef = useRef(false);
   const sendingRef = useRef(false);
   const stoppingRef = useRef(false);
+  const inputSnapshot = { text, files: attachmentState.attachments, division, quote: quoteView };
+  const inputVersion = useRef({ ...inputSnapshot, revision: 0 });
+  if (inputVersion.current.text !== text || inputVersion.current.files !== attachmentState.attachments
+    || inputVersion.current.division !== division || inputVersion.current.quote !== quoteView) {
+    inputVersion.current = { ...inputSnapshot, revision: inputVersion.current.revision + 1 };
+  }
 
   // A reply can settle in a different mounted composer after the panel was reopened.
   useEffect(() => {
@@ -309,10 +321,21 @@ export function BotGroupComposer({
     if (!existing && !value) return;
     saveDraft(
       draftKey,
-      { ...existing, attachments: existing?.attachments ?? [], text: value ? botGroupDraftDoc(value) : null },
+      { ...existing, attachments: existing?.attachments ?? [], text: value ? botGroupDraftDoc(value) : null,
+        botGroupEdit: groupAttemptRef.current?.editSource
+          ? { source: groupAttemptRef.current.editSource, signature: groupAttemptRef.current.signature,
+              clientId: groupAttemptRef.current.clientId, enqueueOperationId: groupAttemptRef.current.enqueueOperationId } : undefined },
       { silent: true },
     );
   }).current;
+  useEffect(() => {
+    if (thread) return;
+    const owner = getDataOwnerGeneration();
+    return subscribeDraftContent(draftKey, () => {
+      if (isDataOwnerGenerationCurrent(owner) && groupAttemptRef.current?.editSource
+        && !getDraft(draftKey)?.botGroupEdit) groupAttemptRef.current = null;
+    });
+  }, [draftKey, thread]);
   useEffect(() => {
     const timer = window.setTimeout(() => persistDraft(text), DRAFT_SAVE_DELAY_MS);
     return () => window.clearTimeout(timer);
@@ -421,9 +444,17 @@ export function BotGroupComposer({
   useEffect(
     () => thread ? undefined :
       registerBotGroupComposer(groupId, {
+        prepareRestore: () => {
+          if (textRef.current || attachmentsRef.current.length > 0 || divisionRef.current) return null;
+          const revision = inputVersion.current.revision;
+          return () => revision === inputVersion.current.revision && !textRef.current
+            && attachmentsRef.current.length === 0 && !divisionRef.current;
+        },
         restore: (entry) => {
           if (textRef.current || attachmentsRef.current.length > 0 || divisionRef.current) return false;
-          groupAttemptRef.current = { clientId: entry.input.clientId, signature: entry.signature };
+          groupAttemptRef.current = { clientId: entry.input.clientId, signature: entry.signature,
+            ...(entry.editHold ? { editSource: { groupId: entry.input.groupId, clientId: entry.input.clientId,
+              revision: entry.editHold.revision } } : {}) };
           textRef.current = entry.draft;
           setText(entry.draft);
           mention.setTracked([...entry.tracked]);
@@ -436,6 +467,7 @@ export function BotGroupComposer({
             onQuoteChangeRef.current?.(entry.quote);
           }
           if (entry.files.length > 0) attachmentsRef.current = restoreAttachmentsRef.current(entry.files);
+          persistDraft(entry.draft);
           return true;
         },
         notifyFailed: (errorKey) => toast.error(tRef.current(errorKey)),
@@ -467,9 +499,15 @@ export function BotGroupComposer({
       ...(sentQuote ? { quote: { messageId: sentQuote.messageId } } : {}),
     };
     const signature = botGroupSendSignature({ ...fields, clientId: '' }, botGroupAttachmentSignature(files));
-    const clientId = groupAttemptRef.current?.signature === signature ? groupAttemptRef.current.clientId : crypto.randomUUID();
-    // The outbox owns this attempt now; a failure hands it back through `restore`.
-    groupAttemptRef.current = null;
+    const previous = groupAttemptRef.current;
+    const clientId = previous?.signature === signature ? previous.clientId : crypto.randomUUID();
+    const attempt = { clientId, signature,
+      enqueueOperationId: previous?.signature === signature && previous.enqueueOperationId ? previous.enqueueOperationId : crypto.randomUUID(),
+      ...(previous?.editSource ? { editSource: previous.editSource } : {}) };
+    // Retain the exact operation on an unknown/failed enqueue. A later retry is not a new send.
+    groupAttemptRef.current = attempt;
+    const owner = getDataOwnerGeneration();
+    const revision = inputVersion.current.revision;
     sendingRef.current = true; setSending(true);
     try { const saved = enqueueBotGroupSend({
       input: { ...fields, clientId },
@@ -479,15 +517,31 @@ export function BotGroupComposer({
       quote: sentQuote,
       files,
       attachmentScope,
+      enqueueOperationId: attempt.enqueueOperationId,
+      ...(attempt.editSource ? { editSource: attempt.editSource } : {}),
     });
-      if (botGroupApi()?.botGroupOutbox) await saved;
+      if (botGroupApi()?.botGroupOutboxCommand || botGroupApi()?.botGroupOutbox) await saved;
       else void saved.catch(() => undefined);
     } catch {
       toast.error(t('bots.groupChat.composer.sendFailed'));
       return;
     } finally { sendingRef.current = false; setSending(false); }
-    // Clear at once like any chat, so the next message can be written while this one
-    // goes out. The batch leaves the tray without deleting its files: the message has them.
+    if (groupAttemptRef.current === attempt) groupAttemptRef.current = null;
+    // A remounted composer may already hold newer text. Consume only this edit's
+    // metadata; its live subscriber also retires the restored attempt.
+    if (attempt.editSource && isDataOwnerGenerationCurrent(owner)
+      && isDraftDiscardTokenCurrent(discardTokenRef.current)) {
+      const saved = getDraft(draftKey);
+      const source = saved?.botGroupEdit?.source;
+      if (saved && source?.groupId === attempt.editSource.groupId
+        && source.clientId === attempt.editSource.clientId && source.revision === attempt.editSource.revision) {
+        saveDraft(draftKey, { ...saved, botGroupEdit: undefined }, { silent: true });
+      }
+    }
+    // A durable enqueue may return after another input/target/account has taken its place.
+    if (!isDataOwnerGenerationCurrent(owner) || !isDraftDiscardTokenCurrent(discardTokenRef.current)
+      || inputVersion.current.revision !== revision) return;
+    // Main now owns this snapshot. Clearing the tray does not delete its files.
     textRef.current = '';
     setText('');
     mention.reset();
@@ -754,7 +808,7 @@ export function BotGroupComposer({
                 </DropdownMenuContent>
               </DropdownMenu>
               {footerStart?.(sending)}
-              {conversationKind !== 'direct' && <GroupMaskIndicator groupId={groupId} onTakeOver={() => textareaRef.current?.focus()} />}
+              {!thread && conversationKind !== 'direct' && <GroupMaskIndicator groupId={groupId} onTakeOver={() => textareaRef.current?.focus()} />}
               <span className="min-w-0 truncate text-12 text-[var(--text-tertiary)]" aria-live="polite">
                 {hint}
               </span>

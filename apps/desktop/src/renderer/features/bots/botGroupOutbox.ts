@@ -13,7 +13,7 @@ import { isAnnotationBurnInError, materializeAnnotatedAttachmentsForSend } from 
 import { cleanupStagedChatAttachmentFiles } from '@/lib/chatAttachmentStageCleanup';
 import { setBotGroupOutboxAttachmentUrls } from '@/lib/composerDraftStore';
 import type { AttachedFile } from '@/lib/fileTypes';
-import type { BotGroupOutboxStoredEntry } from '../../../shared/botGroupOutboxStorage';
+import type { BotGroupOutboxStoredEntry, BotGroupOutboxCommandRequest, BotGroupOutboxCommandResult, BotGroupOutboxExecution } from '../../../shared/botGroupOutboxStorage';
 import type {
   BotGroupAttachment,
   BotGroupErrorCode,
@@ -47,6 +47,8 @@ export interface BotGroupOutboxDraft {
   files: readonly AttachedFile[];
   /** Scope for burning drawn annotations into images (see botGroupAttachmentScope). */
   attachmentScope: string;
+  enqueueOperationId?: string;
+  editSource?: { groupId: string; clientId: string; revision: number };
 }
 
 /**
@@ -76,11 +78,16 @@ export interface BotGroupOutboxEntry extends BotGroupOutboxDraft {
   errorKey?: string;
   /** False when main refused the message itself: resending it unchanged can only fail again. */
   retryable?: boolean;
+  entryRevision?: number;
+  queueOrdinal?: number;
+  editHold?: { operationId: string; revision: number };
 }
 
 /** The mounted composer of a group: takes a failed message back into the input when it is empty. */
 export interface BotGroupComposerHandle {
   restore: (entry: BotGroupOutboxEntry) => boolean;
+  /** Capture an empty input's revision before awaiting a durable edit hold. */
+  prepareRestore?: () => (() => boolean) | null;
   notifyFailed: (errorKey: string) => void;
 }
 
@@ -126,7 +133,7 @@ const groups = new Map<string, GroupOutbox>();
 const composers = new Map<string, BotGroupComposerHandle>();
 const listeners = new Set<() => void>();
 /** One burn-in per message, shared by the bubble and its submission. */
-const preparing = new Map<string, Promise<readonly AttachedFile[]>>();
+const preparing = new Map<string, { revision: number | undefined; promise: Promise<readonly AttachedFile[]> }>();
 
 /**
  * Media only this outbox still refers to; storage cleanup must not sweep it. Previews of
@@ -162,10 +169,64 @@ function releaseStaged(files: readonly AttachedFile[]): void {
 const submitting = new Set<string>();
 const entryKey = (groupId: string, clientId: string) => `${groupId}\n${clientId}`;
 const durable = () => botGroupApi()?.botGroupOutbox;
+const coordinator = () => botGroupApi()?.botGroupOutboxCommand;
+let coordinatorInstance: string | undefined;
+let coordinatorRevision = 0;
+const retiredInstances = new Set<string>();
+const enqueuing = new Set<string>();
+/** Unknown edit replies retain only an operation identity, never a second copy of the draft. */
+const editOperations = new Map<string, { revision: number; operationId: string }>();
+let wakeCoordinator: (() => void) | undefined;
+
+function applyCoordinatorResult(result: BotGroupOutboxCommandResult, full = false): void {
+  if (retiredInstances.has(result.instanceId)) return;
+  if (coordinatorInstance && coordinatorInstance !== result.instanceId) {
+    retiredInstances.add(coordinatorInstance);
+    coordinatorRevision = 0;
+  }
+  coordinatorInstance = result.instanceId;
+  if (result.revision < coordinatorRevision || result.unchanged) return;
+  coordinatorRevision = result.revision;
+  const received = new Set(result.entries.map(row => entryKey(row.input.groupId, row.input.clientId)));
+  if (full) for (const group of groups.values()) {
+    group.entries = group.entries.filter(row => received.has(entryKey(row.input.groupId, row.input.clientId))
+      || enqueuing.has(entryKey(row.input.groupId, row.input.clientId)));
+  }
+  for (const value of result.entries) {
+    const row = value as unknown as BotGroupOutboxEntry;
+    const group = groupOf(row.input.groupId);
+    group.entries = [...group.entries.filter(entry => entry.input.clientId !== row.input.clientId), row]
+      .sort((a, b) => (a.queueOrdinal ?? Infinity) - (b.queueOrdinal ?? Infinity));
+  }
+  emit();
+}
+
+async function coordinate(request: BotGroupOutboxCommandRequest): Promise<BotGroupOutboxCommandResult> {
+  const call = coordinator();
+  if (!call) throw new Error('OUTBOX_COORDINATION_UNAVAILABLE');
+  const result = await call(request);
+  if (!isDataOwnerGenerationCurrent(request.owner)) throw new Error('OUTBOX_OWNER_CHANGED');
+  applyCoordinatorResult(result, true);
+  return result;
+}
+
+async function refreshCoordinator(): Promise<void> {
+  await coordinate({ action: 'snapshot', owner: getDataOwnerGeneration(),
+    ...(coordinatorInstance ? { known: { instanceId: coordinatorInstance, revision: coordinatorRevision } } : {}) });
+}
+
 function persist(entry: BotGroupOutboxEntry): Promise<unknown> {
+  // Coordinated rows are changed only through Main state transitions, never a late whole-row put.
+  if (coordinator()) return Promise.resolve();
   return durable()?.({ action: 'put', owner: getDataOwnerGeneration(), entry: entry as unknown as BotGroupOutboxStoredEntry }) ?? Promise.resolve();
 }
 function forgetSaved(groupId: string, clientId: string): void {
+  if (coordinator()) {
+    const entry = groups.get(groupId)?.entries.find(row => row.input.clientId === clientId);
+    if (entry?.entryRevision !== undefined) void coordinate({ action: 'remove', owner: getDataOwnerGeneration(),
+      groupId, clientId, entryRevision: entry.entryRevision }).catch(() => undefined);
+    return;
+  }
   void durable()?.({ action: 'remove', owner: getDataOwnerGeneration(), groupId, clientId }).catch(() => undefined);
 }
 
@@ -174,22 +235,14 @@ export function startBotGroupOutbox(): () => void {
   ensureOwner();
   const owner = getDataOwnerGeneration();
   let stopped = false;
-  let ready = false;
   const current = () => !stopped && isDataOwnerGenerationCurrent(owner);
   const run = async () => {
-    if (!current() || !owner.dataOwnerId || !durable()) return;
-    if (!ready) {
-      const saved = await durable()!({ action: 'list', owner });
-      if (!current()) return;
-      for (const value of saved) {
-        const entry = value as unknown as BotGroupOutboxEntry;
-        const group = groupOf(entry.input.groupId);
-        if (!group.entries.some(row => row.input.clientId === entry.input.clientId)) group.entries = [...group.entries, entry];
-      }
-      ready = true; emit();
-    }
+    if (!current() || !owner.dataOwnerId || !coordinator()) return;
+    // A missing/mismatched bridge must not reintroduce a second whole-row writer.
+    await refreshCoordinator();
+    if (!current()) return;
     for (const [groupId, group] of groups) {
-      const first = group.entries.find(entry => entry.status !== 'sent');
+      const first = group.entries.find(entry => entry.status !== 'sent' && !entry.editHold);
       if (first && first.retryable !== false && !submitting.has(entryKey(groupId, first.input.clientId))) {
         if (first.status === 'failed') retryBotGroupSend(groupId, first.input.clientId);
         else schedule(groupId, first.input.clientId);
@@ -221,8 +274,17 @@ export function startBotGroupOutbox(): () => void {
   let running = false;
   const tick = () => { if (!running) { running = true; void run().catch(() => undefined).finally(() => { running = false; }); } };
   const timer = setInterval(tick, 5_000);
+  const off = botGroupApi()?.onBotGroupOutboxChanged?.(event => {
+    if (event.owner.dataOwnerId === owner.dataOwnerId && event.owner.generation === owner.generation) tick();
+  });
+  wakeCoordinator = tick;
   window.addEventListener('online', tick); window.addEventListener('focus', tick); tick();
-  return () => { stopped = true; clearInterval(timer); window.removeEventListener('online', tick); window.removeEventListener('focus', tick); };
+  return () => {
+    stopped = true; clearInterval(timer); off?.();
+    if (isDataOwnerGenerationCurrent(owner)) void coordinator()?.({ action: 'release', owner }).catch(() => undefined);
+    if (wakeCoordinator === tick) wakeCoordinator = undefined;
+    window.removeEventListener('online', tick); window.removeEventListener('focus', tick);
+  };
 }
 
 /** Drop entries the outbox still owns; a request in progress settles its own (see `submit`). */
@@ -243,6 +305,10 @@ function ensureOwner(): void {
   if (!durable()) for (const [groupId, group] of groups) releaseUnsubmitted(groupId, group.entries);
   groups.clear();
   preparing.clear();
+  editOperations.clear();
+  coordinatorInstance = undefined;
+  coordinatorRevision = 0;
+  retiredInstances.clear();
   protectHeldMedia();
 }
 
@@ -307,15 +373,32 @@ export async function enqueueBotGroupSend(draft: BotGroupOutboxDraft): Promise<v
   // Sent again after 编辑 (same clientId): a burn that failed before is tried afresh.
   preparing.delete(entryKey(groupId, clientId));
   emit();
-  if (durable()) {
+  if (coordinator()) {
     const owner = getDataOwnerGeneration();
-    try { await persist(entry); }
-    catch (error) { if (isDataOwnerGenerationCurrent(owner)) remove(groupId, clientId); throw error; }
-    if (!isDataOwnerGenerationCurrent(owner)) throw new Error('OUTBOX_OWNER_CHANGED');
+    const key = entryKey(groupId, clientId);
+    enqueuing.add(key);
+    try {
+      const result = await coordinate({ action: 'enqueue', owner, entry: entry as unknown as BotGroupOutboxStoredEntry,
+        enqueueOperationId: draft.enqueueOperationId ?? crypto.randomUUID(), ...(draft.editSource ? { editSource: draft.editSource } : {}) });
+      if (result.accepted !== true) throw new Error('OUTBOX_ENQUEUE_NOT_ACCEPTED');
+    } catch (error) {
+      if (isDataOwnerGenerationCurrent(owner)) {
+        // The durable hold/previous row remains in Main. Failed enqueue must never delete it.
+        group.entries = group.entries.filter(row => row !== entry);
+        emit();
+        void refreshCoordinator().catch(() => undefined);
+      }
+      throw error;
+    } finally { enqueuing.delete(key); }
+  } else if (durable()) {
+    // A complete app with mismatched preload/main must not silently become a second writer.
+    group.entries = group.entries.filter(row => row !== entry);
+    emit();
+    throw new Error('OUTBOX_COORDINATION_UNAVAILABLE');
   }
   schedule(groupId, clientId);
   // Burn annotations in now, not when the message's turn comes: the bubble shows the result.
-  if (entry.files.length > 0) void prepare(groupId, clientId).catch(() => undefined);
+  if (!coordinator() && entry.files.length > 0) void prepare(groupId, clientId).catch(() => undefined);
 }
 
 /**
@@ -329,19 +412,21 @@ function prepare(groupId: string, clientId: string): Promise<readonly AttachedFi
   if (entry.files.length === 0) return Promise.resolve([]);
   const key = `${groupId}\n${clientId}`;
   const existing = preparing.get(key);
-  if (existing) return existing;
+  if (existing && existing.revision === entry.entryRevision) return existing.promise;
   const requestGeneration = generation;
   const requestOwner = getDataOwnerGeneration();
   const pending = materializeAnnotatedAttachmentsForSend(entry.files, entry.attachmentScope, { burnFailure: 'abort' })
     .then((files) => {
       const prepared = files ?? [];
-      if (requestGeneration === generation && isDataOwnerGenerationCurrent(requestOwner)) {
+      const current = groups.get(groupId)?.entries.find(row => row.input.clientId === clientId);
+      if (requestGeneration === generation && isDataOwnerGenerationCurrent(requestOwner)
+        && current?.entryRevision === entry.entryRevision && !current?.editHold) {
         update(groupId, clientId, { prepared, attachments: displayAttachments(prepared) });
       }
-      if (preparing.get(key) === pending) preparing.delete(key);
+      if (preparing.get(key)?.promise === pending) preparing.delete(key);
       return prepared;
     });
-  preparing.set(key, pending);
+  preparing.set(key, { revision: entry.entryRevision, promise: pending });
   return pending;
 }
 
@@ -349,21 +434,51 @@ function prepare(groupId: string, clientId: string): Promise<readonly AttachedFi
 export function retryBotGroupSend(groupId: string, clientId: string): void {
   ensureOwner();
   const entry = groups.get(groupId)?.entries.find((candidate) => candidate.input.clientId === clientId);
-  if (!entry || entry.status !== 'failed' || entry.retryable === false) return;
+  if (!entry || entry.status !== 'failed' || entry.retryable === false || entry.editHold) return;
+  if (coordinator()) {
+    preparing.delete(entryKey(groupId, clientId));
+    schedule(groupId, clientId);
+    return;
+  }
   // A burn that failed is tried again now, on the user's 重试.
   preparing.delete(entryKey(groupId, clientId));
   update(groupId, clientId, { status: 'sending', errorKey: undefined });
   schedule(groupId, clientId);
 }
 
-/** 编辑: hand a message that did not go out back to the composer. False when the input is busy. */
-export function editBotGroupSend(groupId: string, clientId: string): boolean {
+/** 编辑 commits the hold before touching the input; a failed save cannot revive old text later. */
+export async function editBotGroupSend(groupId: string, clientId: string): Promise<boolean> {
   ensureOwner();
+  const owner = getDataOwnerGeneration();
   const entry = groups.get(groupId)?.entries.find((candidate) => candidate.input.clientId === clientId);
   const composer = composers.get(groupId);
-  if (!entry || entry.status !== 'failed' || !composer?.restore(entry)) return false;
-  remove(groupId, clientId);
-  return true;
+  if (!entry || entry.status !== 'failed' || !composer) return false;
+  if (!coordinator()) {
+    if (durable() || !composer.restore(entry)) return false;
+    remove(groupId, clientId);
+    return true;
+  }
+  const canRestore = composer.prepareRestore?.();
+  if (canRestore === null || entry.entryRevision === undefined) return false;
+  const key = entryKey(groupId, clientId);
+  const previous = editOperations.get(key);
+  const operationId = entry.editHold?.operationId
+    ?? (previous?.revision === entry.entryRevision ? previous.operationId : crypto.randomUUID());
+  editOperations.set(key, { revision: entry.entryRevision, operationId });
+  let result: BotGroupOutboxCommandResult;
+  try {
+    result = await coordinate({ action: 'edit', owner, groupId, clientId, entryRevision: entry.entryRevision, operationId });
+  } catch (error) {
+    if (isDataOwnerGenerationCurrent(owner)) void refreshCoordinator().catch(() => undefined);
+    throw error;
+  }
+  const held = result.entries.find(row => row.input.groupId === groupId && row.input.clientId === clientId) as unknown as BotGroupOutboxEntry | undefined;
+  if (!held?.editHold || held.editHold.operationId !== operationId) throw new Error('OUTBOX_EDIT_NOT_COMMITTED');
+  if (editOperations.get(key)?.operationId === operationId) editOperations.delete(key);
+  preparing.delete(key);
+  wakeCoordinator?.();
+  if (!held || composers.get(groupId) !== composer || !isDataOwnerGenerationCurrent(owner) || (canRestore && !canRestore())) return false;
+  return composer.restore(held);
 }
 
 function schedule(groupId: string, clientId: string): void {
@@ -390,18 +505,67 @@ async function submit(
   if (!isCurrent()) return;
   const group = groups.get(groupId);
   const entry = group?.entries.find((candidate) => candidate.input.clientId === clientId);
-  if (!group || !entry || entry.status !== 'sending') return;
-  // A retryable earlier send must not be overtaken after a transport failure.
-  if (durable() && group.entries.slice(0, group.entries.indexOf(entry)).some(row => row.status !== 'sent')) return;
+  if (!group || !entry || (entry.status !== 'sending' && !(coordinator() && entry.status === 'failed' && entry.retryable !== false))) return;
+  // Local scheduling is only an optimization. Main validates the complete cross-window queue.
+  if (durable() && group.entries.slice(0, group.entries.indexOf(entry)).some(row => row.status !== 'sent' && !row.editHold)) return;
   // From here this request owns the files. Still the outbox's message: same account, still listed.
   const owned = () =>
     isCurrent() && (groups.get(groupId)?.entries.some((candidate) => candidate.input.clientId === clientId) ?? false);
   const key = entryKey(groupId, clientId);
   submitting.add(key);
   try {
-    await submitOwned(group, entry, owned, files);
+    if (coordinator()) await submitCoordinated(group, entry, owned);
+    else await submitOwned(group, entry, owned, files);
   } finally {
     submitting.delete(key);
+  }
+}
+
+async function submitCoordinated(group: GroupOutbox, entry: BotGroupOutboxEntry, owned: () => boolean): Promise<void> {
+  const { groupId, clientId } = entry.input;
+  if (entry.entryRevision === undefined || entry.editHold) return;
+  const owner = getDataOwnerGeneration();
+  let execution: BotGroupOutboxExecution | undefined;
+  let stage: 'claim' | 'materialize' | 'prepare' | 'send' = 'claim';
+  try {
+    const claim = await coordinate({ action: 'claim', owner, groupId, clientId, entryRevision: entry.entryRevision,
+    });
+    execution = claim.execution;
+    if (!execution || !owned()) return;
+    update(groupId, clientId, { baseline: group.latestSequence });
+    stage = 'materialize';
+    const prepared = await prepare(groupId, clientId);
+    if (!owned()) return;
+    stage = 'prepare';
+    const saved = await coordinate({ action: 'prepared', owner, execution,
+      prepared: [...prepared], attachments: displayAttachments(prepared) });
+    execution = saved.execution ?? execution;
+    if (!owned()) return;
+    stage = 'send';
+    const result = await botGroupApi()!.sendBotGroupMessage({ ...entry.input,
+      ...(prepared.length ? { attachments: toBotGroupAttachmentInputs(prepared) } : {}) }, execution);
+    if (!owned()) return;
+    const current = group.entries.find(row => row.input.clientId === clientId);
+    if (current?.entryRevision !== execution.entryRevision || current.editHold) return;
+    if (result.ok) {
+      group.claimed = [...group.claimed, result.messageId].slice(-CLAIMED_LIMIT);
+      update(groupId, clientId, { status: 'sent', messageId: result.messageId, receiptTick: ++tick, baseline: undefined });
+    } else {
+      update(groupId, clientId, { status: 'failed', baseline: undefined,
+        retryable: !CONTENT_REFUSALS.has(result.errorCode) && !['NOT_FOUND', 'PERMISSION_DENIED'].includes(result.errorCode),
+        errorKey: botGroupErrorKey(result.errorCode, 'bots.groupChat.composer.sendFailed'),
+        ...(result.errorCode === 'QUOTE_UNAVAILABLE' ? { quote: null } : {}) });
+    }
+  } catch (error) {
+    // Claim/FIFO refusals are scheduling, not content failures. Unknown IPC replies are repaired
+    // from Main; only a pre-service materialization failure may submit a failure transition.
+    if (execution && stage === 'materialize' && isDataOwnerGenerationCurrent(owner)) {
+      await coordinate({ action: 'fail', owner, execution,
+        errorKey: isAnnotationBurnInError(error) ? 'chat.media.annotateBurnFailedNotSent' : 'bots.groupChat.composer.sendFailed',
+        retryable: true }).catch(() => undefined);
+    }
+  } finally {
+    if (isDataOwnerGenerationCurrent(owner)) void refreshCoordinator().catch(() => undefined);
   }
 }
 
@@ -574,9 +738,10 @@ export function discardBotGroupOutbox(groupId: string): void {
   ensureOwner();
   const group = groups.get(groupId);
   if (!group) return;
-  groups.delete(groupId);
   for (const entry of group.entries) forgetSaved(groupId, entry.input.clientId);
-  releaseUnsubmitted(groupId, group.entries);
+  groups.delete(groupId);
+  // With a durable coordinator, file ownership ends only when Main confirms the removal.
+  if (!coordinator()) releaseUnsubmitted(groupId, group.entries);
   emit();
 }
 
@@ -773,4 +938,10 @@ export function resetBotGroupOutboxForTests(): void {
   unwatchGroupList?.();
   unwatchGroupList = null;
   composers.clear();
+  enqueuing.clear();
+  editOperations.clear();
+  coordinatorInstance = undefined;
+  coordinatorRevision = 0;
+  retiredInstances.clear();
+  wakeCoordinator = undefined;
 }
