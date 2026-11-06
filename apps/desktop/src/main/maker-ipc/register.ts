@@ -1459,6 +1459,7 @@ import {
 } from './agentCommandListIpcBoundary.js';
 import {
   assertAgentSkillListIpcCaller,
+  createProjectSkillPreparation,
   toAgentSkillListFailure,
 } from './agentSkillListIpcBoundary.js';
 import {
@@ -1632,6 +1633,13 @@ async function prepareProjectSkillLinksFailSoft(workingDir: unknown): Promise<bo
     });
     return false;
   }
+}
+const sharedProjectSkillLinkPreparation = createProjectSkillPreparation(prepareProjectSkillLinksFailSoft);
+/** Opening a task asks the / and @ palettes together; both prepare the same links. */
+function preparePaletteProjectSkillLinks(workingDir: unknown): Promise<boolean> {
+  // Remote invokes never prepare links, so they never join a local preparation.
+  if (isDeviceLinkInvoke() || typeof workingDir !== 'string' || !workingDir) return Promise.resolve(false);
+  return sharedProjectSkillLinkPreparation(JSON.stringify(captureDataOwnerBroadcastScope()), workingDir);
 }
 const workerTurnStartSequencer = createWorkerTurnStartSequencer(log);
 // session event wiring 是模块级函数；service 在 registerMakerIpc 内构造后注入给事件回调。
@@ -8457,7 +8465,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
         const linksChanged = skillParams.remoteHostId
           ? false
           : await measureTraceOperation('maker:list-agent-skills:project-links',
-            () => prepareProjectSkillLinksFailSoft(skillParams.workingDir));
+            () => preparePaletteProjectSkillLinks(skillParams.workingDir));
         if (kind === 'codex' && linksChanged) {
           skillParams.forceReload = true;
         }
@@ -8623,7 +8631,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     async (_e, agentKind: unknown, params: unknown) => {
       try {
         const resourceParams = params as { workingDir: string; cap?: number; query?: string };
-        await prepareProjectSkillLinksFailSoft(resourceParams?.workingDir);
+        await preparePaletteProjectSkillLinks(resourceParams?.workingDir);
         const kind = requireAgentKind(agentKind);
         const includeProjectAgents = supportsAtProjectAgentResources(kind);
         const [result, customizationResult] = await Promise.all([
