@@ -1,4 +1,3 @@
-import { hostSessionIdFor } from '../remote-agent/host/sessionIdentity.js';
 import { randomUUID } from 'node:crypto';
 import { isProviderAccessDeniedError, isScopedPeer, PROVIDER_GROUP_REMOTE_CHANNEL, REMOTE_AGENT_CHANNEL, parseRemoteAgentCaps } from '@cindy/device-link';
 import { findCatalogModel, isModelSelectableForNewRoute, supportsSubscriptionFastPolicy } from '@cindy/model-providers';
@@ -79,14 +78,10 @@ export function createGroupContinuityRuntime(readRunning: () => Promise<Readonly
     async bindFast(origin, grant, sessionId, current) {
       const policy = groupFastPolicyStore.received(origin, grant.group);
       const assertCurrent = () => { if (!current()) throw new Error('[ACCESS_REVOKED] Group routing context changed'); };
+      if (!policy) throw new Error('[ACCESS_REVOKED] Group Fast policy has not been confirmed');
       assertCurrent();
-      try { await groupFastPolicyStore.receive(origin, { group: grant.group,
-        ...(policy ?? { revision: 0, allowFast: false }),
-        binding: { sessionId, controllerDeviceId: grant.controller } }, getSelfDeviceId(), assertCurrent, undefined, true); }
-      catch {
-        assertCurrent();
-        groupFastPolicyStore.suppress(hostSessionIdFor(grant.controller, sessionId), origin, grant.group);
-      }
+      await groupFastPolicyStore.receive(origin, { group: grant.group, ...policy,
+        binding: { sessionId, controllerDeviceId: grant.controller } }, getSelfDeviceId(), assertCurrent);
       assertCurrent();
     },
   });

@@ -1,4 +1,3 @@
-import { parseOutputLimitDetails, type OutputLimitDetails } from '@cindy/maker-shared';
 /**
  * 会话尾部收尾提示(error-tail / interrupted)的纯判定模型 —— 对齐桌面
  * CCAgentSessionView 的 errorTailMsg / interruptedFromSession 两套 banner 语义,
@@ -107,7 +106,7 @@ export function resolveSessionTailBanner(input: ResolveSessionTailBannerInput): 
   const tail = findErrorTailMessage(input.messages);
   if (tail && !input.hiddenErrorClientIds.has(tail.clientId)) {
     const nonRetryableGuidance = describeNonRetryableAgentError(tail.text, tail.reason);
-    const agentErrorGuidance = localizeAgentError(tail.reason, tail.toolLoop, tail.text, tail.outputLimit);
+    const agentErrorGuidance = localizeAgentError(tail.reason, tail.toolLoop, tail.text);
     return {
       kind: 'error-tail',
       clientId: tail.clientId,
@@ -140,7 +139,6 @@ interface ErrorTailMessage {
   text: string;
   reason: string | null;
   toolLoop: MobileToolLoopErrorDetails | null;
-  outputLimit: OutputLimitDetails | null;
 }
 
 /**
@@ -174,7 +172,6 @@ function findErrorTailMessage(messages: readonly RemoteMessage[]): ErrorTailMess
       text: rawText,
       reason: typeof content?.reason === 'string' ? content.reason : null,
       toolLoop: parseMobileToolLoopErrorDetails(content?.toolLoop),
-      outputLimit: parseOutputLimitDetails(content?.outputLimit) ?? null,
     };
   }
   return null;

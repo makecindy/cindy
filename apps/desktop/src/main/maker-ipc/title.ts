@@ -367,8 +367,6 @@ type CancelPromptRequest = { sessionId: string; completionRevision: number; canc
 
 interface PromptPredictionCacheEntry {
   revision: number;
-  ownerScope: ReturnType<typeof activeOwnerScopeKey>;
-  agentKind: AgentKind;
   workingDir: string | null;
   promise: Promise<string | null>;
 }
@@ -436,11 +434,15 @@ export interface RegisterMakerTitleIpcOptions {
   isSessionTurnPendingCompletion?: (sessionId: string) => boolean;
 }
 
-/** A status:false patch can precede terminal delivery; this is not an empty prediction. */
-class PromptPredictionPendingError extends Error {}
-
-async function readPromptPredictionSession(sessionId: string) {
-  const [row] = await getDbClient()
+async function predictPromptForCompletedRevision(
+  request: PredictPromptRequest,
+  options: RegisterMakerTitleIpcOptions,
+): Promise<string | null> {
+  const { sessionId, agentKind, completionRevision } = request;
+  if (wasPromptPredictionSessionCancelled(sessionId, completionRevision, activeOwnerScopeKey())) return null;
+  // 防御纵深：身份、来源、完成轮次都以 DB 为准。activeTurnStartedAt 不早于完成
+  // revision 表示下一轮已经启动（含同毫秒），即使命中缓存也不能返回上一轮推荐。
+  const [sessionRow] = await getDbClient()
     .drizzle.select({
       remoteHostId: sessions.remoteHostId,
       source: sessions.source,
@@ -453,19 +455,6 @@ async function readPromptPredictionSession(sessionId: string) {
     })
     .from(sessions)
     .where(eq(sessions.id, sessionId));
-  return row;
-}
-
-async function predictPromptForCompletedRevision(
-  request: PredictPromptRequest,
-  options: RegisterMakerTitleIpcOptions,
-): Promise<string | null> {
-  const { sessionId, agentKind, completionRevision } = request;
-  const ownerScope = activeOwnerScopeKey();
-  if (wasPromptPredictionSessionCancelled(sessionId, completionRevision, ownerScope)) return null;
-  // 防御纵深：身份、来源、完成轮次都以 DB 为准。activeTurnStartedAt 不早于完成
-  // revision 表示下一轮已经启动（含同毫秒），即使命中缓存也不能返回上一轮推荐。
-  const sessionRow = await readPromptPredictionSession(sessionId);
   if (
     !sessionRow ||
     sessionRow.remoteHostId ||
@@ -475,11 +464,10 @@ async function predictPromptForCompletedRevision(
     (sessionRow.activeTurnStartedAt != null &&
       sessionRow.activeTurnStartedAt >= completionRevision) ||
     wasPromptPredictionSessionStopped(sessionId) ||
-    activeOwnerScopeKey() !== ownerScope
+    options.isSessionTurnPendingCompletion?.(sessionId) === true
   ) {
     return null;
   }
-  if (options.isSessionTurnPendingCompletion?.(sessionId)) throw new PromptPredictionPendingError();
 
   const dbAgentKind = dbToMakerAgentKind(sessionRow.agentKind);
   if (dbAgentKind !== agentKind) {
@@ -492,34 +480,16 @@ async function predictPromptForCompletedRevision(
   }
 
   const cached = _promptPredictionCache.get(sessionId);
-  if (wasPromptPredictionSessionCancelled(sessionId, completionRevision, ownerScope)) return null;
-
-  // Generation and retries can wait across a new turn. Only B's current state
-  // can authorize returning the result, including callers joining an old Promise.
-  const validateResult = async (promise: Promise<string | null>): Promise<string | null> => {
-    const prompt = await promise;
-    if (!prompt || activeOwnerScopeKey() !== ownerScope) return null;
-    const latest = await readPromptPredictionSession(sessionId);
-    if (!latest || activeOwnerScopeKey() !== ownerScope || latest.remoteHostId ||
-        latest.source === 'review' || latest.status === 'deleted' ||
-        latest.lastTurnEndedAt !== completionRevision ||
-        (latest.activeTurnStartedAt != null && latest.activeTurnStartedAt >= completionRevision) ||
-        dbToMakerAgentKind(latest.agentKind) !== agentKind ||
-        (latest.workingDir ?? null) !== (sessionRow.workingDir ?? null) ||
-        wasPromptPredictionSessionStopped(sessionId) ||
-        wasPromptPredictionSessionCancelled(sessionId, completionRevision, ownerScope)) return null;
-    if (options.isSessionTurnPendingCompletion?.(sessionId)) throw new PromptPredictionPendingError();
-    return prompt;
-  };
-  if (cached?.revision === completionRevision && cached.ownerScope === ownerScope) {
+  if (wasPromptPredictionSessionCancelled(sessionId, completionRevision, activeOwnerScopeKey())) return null;
+  if (cached?.revision === completionRevision) {
     // workingDir 会进入模型 prompt；同轮改过目录后不能复用旧目录上下文的结果。
-    if (cached.workingDir !== (sessionRow.workingDir ?? null) || cached.agentKind !== agentKind) return null;
-    return validateResult(cached.promise);
+    if (cached.workingDir !== (sessionRow.workingDir ?? null)) return null;
+    return cached.promise;
   }
   // Opening a completed remote task may reuse a live host prediction, but must
   // not turn historical navigation into a new paid model request.
   if (request.cacheOnly) return null;
-  if (cached?.ownerScope === ownerScope && cached.revision > completionRevision) {
+  if (cached && cached.revision > completionRevision) {
     return null;
   }
   if (cached) {
@@ -543,10 +513,21 @@ async function predictPromptForCompletedRevision(
       }
       return pendingCompletionObserved;
     };
-    if (activeOwnerScopeKey() !== ownerScope) return null;
-    if (latestTurnIsPendingCompletion()) throw new PromptPredictionPendingError();
+    if (latestTurnIsPendingCompletion()) return null;
 
-    const latestSessionRow = await readPromptPredictionSession(sessionId);
+    const [latestSessionRow] = await getDbClient()
+      .drizzle.select({
+        remoteHostId: sessions.remoteHostId,
+        source: sessions.source,
+        status: sessions.status,
+        agentKind: sessions.agentKind,
+        workingDir: sessions.workingDir,
+        updatedAt: sessions.updatedAt,
+        activeTurnStartedAt: sessions.activeTurnStartedAt,
+        lastTurnEndedAt: sessions.lastTurnEndedAt,
+      })
+      .from(sessions)
+      .where(eq(sessions.id, sessionId));
     if (
       !latestSessionRow ||
       latestSessionRow.remoteHostId ||
@@ -555,8 +536,7 @@ async function predictPromptForCompletedRevision(
       latestSessionRow.lastTurnEndedAt !== completionRevision ||
       (latestSessionRow.activeTurnStartedAt != null &&
         latestSessionRow.activeTurnStartedAt >= completionRevision) ||
-      wasPromptPredictionSessionStopped(sessionId) ||
-      activeOwnerScopeKey() !== ownerScope
+      wasPromptPredictionSessionStopped(sessionId)
     ) {
       return null;
     }
@@ -579,8 +559,6 @@ async function predictPromptForCompletedRevision(
       PREDICTION_RECENT_MESSAGE_LIMIT,
       latestTurnIsPendingCompletion,
     );
-    if (activeOwnerScopeKey() !== ownerScope) return null;
-    if (latestTurnIsPendingCompletion()) throw new PromptPredictionPendingError();
     const messages = material.recent.map((message) => ({
       role: message.role,
       content: message.text,
@@ -595,7 +573,7 @@ async function predictPromptForCompletedRevision(
     });
   })().catch((error: unknown) => {
     const current = _promptPredictionCache.get(sessionId);
-    if (current?.promise === predictionPromise) {
+    if (current?.revision === completionRevision) {
       _promptPredictionCache.delete(sessionId);
     }
     throw error;
@@ -603,12 +581,10 @@ async function predictPromptForCompletedRevision(
 
   _promptPredictionCache.set(sessionId, {
     revision: completionRevision,
-    ownerScope,
-    agentKind,
     workingDir: sessionRow.workingDir ?? null,
     promise: predictionPromise,
   });
-  return validateResult(predictionPromise);
+  return predictionPromise;
 }
 
 export function registerMakerTitleIpc(options: RegisterMakerTitleIpcOptions = {}): void {
@@ -684,7 +660,7 @@ export function registerMakerTitleIpc(options: RegisterMakerTitleIpcOptions = {}
     async (
       event: Electron.IpcMainInvokeEvent,
       request: unknown,
-    ): Promise<{ prompt: string | null; retryable?: boolean }> => {
+    ): Promise<{ prompt: string | null }> => {
       assertTitleIpcCaller(event);
       const parsed = parsePredictPromptRequest(request);
       try {
@@ -696,7 +672,6 @@ export function registerMakerTitleIpc(options: RegisterMakerTitleIpcOptions = {}
           prompt: await predictPromptForCompletedRevision(parsed, options),
         };
       } catch (error: unknown) {
-        if (error instanceof PromptPredictionPendingError) return { prompt: null, retryable: true };
         // 将数据库不可用、查询失败等意外错误编码为 IPC error，避免 Electron
         // 将原始 Drizzle/SQLite 异常序列化到 Renderer 侧泄露内部细节。
         if (isIpcError(error)) throw error;

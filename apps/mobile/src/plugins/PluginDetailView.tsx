@@ -47,8 +47,6 @@ export interface PluginDetailViewProps {
   uiApprovalNotice?: PluginNoticeProps;
   onEnabledChange(enabled: boolean): void;
   onOpen(surface: PluginPageSurface): void;
-  /** Opens the detailed introduction; omitted when the Host declared none. */
-  onOpenReadme?(): void;
   onNewTask(): void;
   onChooseTask(): void;
   onResolveStatus(): void;
@@ -192,14 +190,6 @@ export function PluginDetailView(p: PluginDetailViewProps) {
             ) : null}
           </View>
         ) : null}
-        {!p.settingsOpen && model.readme && p.onOpenReadme
-          ? row(
-              t("plugins.detail.readme"),
-              p.onOpenReadme,
-              !p.online,
-              "plugins.readme",
-            )
-          : null}
         {p.settingsContent ? (
           <View style={styles.information}>
             <Text style={styles.sectionHeading}>{t("plugins.settings")}</Text>

@@ -176,7 +176,7 @@ export function registerPluginMarketIpc(): void {
   ipcMain.handle('plugin-market:detail', (event, pluginId: unknown) => {
     assertTrustedAppRendererEvent(event);
     return invokePluginMarket(() =>
-      service().detail(requireString(pluginId, 'pluginId'), { includeReadme: true }),
+      service().detail(requireString(pluginId, 'pluginId')),
     );
   });
   ipcMain.handle('plugin-market:prepare-share', (event, pluginId: unknown, options: unknown) => {

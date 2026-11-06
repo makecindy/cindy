@@ -90,7 +90,6 @@ function sourceRevision(source: BotRemoteResourceSource): string {
     source.updatedAt,
     source.lastMessageAt ?? 0,
     source.lastReplyAt ?? 0,
-    source.lastReadAt ?? 0,
     source.hiddenAt ?? 0,
     source.pinnedAt ?? 0,
     source.activityAt,
@@ -120,8 +119,6 @@ export function botRemoteCollectionItemFromSource(
       teammateActivity: { phase: source.needsAttention ? 'error'
         : source.lastMessageRole === 'assistant' && source.lastMessageAt === source.lastReplyAt ? 'completed' : 'idle' },
       lastReplyAt: source.lastReplyAt ?? 0,
-      // Read position kept on this computer; also tells controllers the `read` action exists.
-      lastReadAt: source.lastReadAt ?? 0,
       ...(source.description ? { subtitle: source.description } : {}),
       ...(source.lastMessagePreview ? { preview: source.lastMessagePreview } : {}),
       ...(source.activityAt ? { timestamp: source.activityAt } : {}),

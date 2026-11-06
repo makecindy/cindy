@@ -42,11 +42,6 @@ export interface PreRunHookStdinPayload {
    * skip 都会把它推新,脚本会永久自锁;这类条件应自己落盘记录上次放行时间。
    */
   lastFinishedAt?: number;
-  /**
-   * Present when host code started this run early instead of the cron or a user, for example
-   * `{ kind: 'watch', source: 'pr-status', detail: <PR URL> }` when a watched PR's status changed.
-   */
-  trigger?: { kind: 'watch'; source: string; detail?: string };
 }
 
 export interface PreRunHookInput {

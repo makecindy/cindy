@@ -61,7 +61,6 @@ export function effectiveGatewayModelCost(model: Pick<ModelAccessGatewayModel,
 
 function gatewayInputTokenPriceBands(
   model: ModelAccessGatewayModel,
-  includeThresholdBaseline = false,
 ): ModelPriceQuote['inputTokenPriceBands'] {
   const explicit = model.tieredPricing
     ?.map((tier) => {
@@ -108,22 +107,11 @@ function gatewayInputTokenPriceBands(
       tier.outputPerMtok !== undefined ||
       tier.cacheReadPerMtok !== undefined,
   );
-  if (thresholdBands.length === 0) return undefined;
-  // Reference quotes require complete ranges. Only legacy threshold fields omit
-  // the baseline; explicit tier tables above must keep their declared coverage.
-  return includeThresholdBaseline ? [{
-    minInputTokens: 0,
-    maxInputTokens: thresholdBands[0].minInputTokens,
-    inputPerMtok: perMtok(model.inputCostPerToken),
-    outputPerMtok: perMtok(model.outputCostPerToken),
-    cacheReadPerMtok: perMtok(model.cacheReadInputTokenCost),
-    cacheCreatePerMtok: perMtok(model.cacheCreationInputTokenCost),
-  }, ...thresholdBands] : thresholdBands;
+  return thresholdBands.length > 0 ? thresholdBands : undefined;
 }
 
 function gatewayPriorityInputTokenPriceBands(
   model: ModelAccessGatewayModel,
-  includeThresholdBaseline = false,
 ): ModelPriceQuote['inputTokenPriceBands'] {
   const thresholdBands = [
     {
@@ -144,14 +132,7 @@ function gatewayPriorityInputTokenPriceBands(
       tier.outputPerMtok !== undefined ||
       tier.cacheReadPerMtok !== undefined,
   );
-  if (thresholdBands.length === 0) return undefined;
-  return includeThresholdBaseline ? [{
-    minInputTokens: 0,
-    maxInputTokens: thresholdBands[0].minInputTokens,
-    inputPerMtok: perMtok(model.inputCostPerTokenPriority),
-    outputPerMtok: perMtok(model.outputCostPerTokenPriority),
-    cacheReadPerMtok: perMtok(model.cacheReadInputTokenCostPriority),
-  }, ...thresholdBands] : thresholdBands;
+  return thresholdBands.length > 0 ? thresholdBands : undefined;
 }
 
 /** 该条目是否会产生报价(与币种无关;目录币种裁决与覆盖率统计共用此判定)。 */
@@ -170,7 +151,7 @@ export function gatewayModelPriceQuote(
   model: ModelAccessGatewayModel,
   fallbackCurrency: MoneyCurrency,
   fallbackIsInferred = false,
-  options: { allowFreeModel?: boolean; includeThresholdBaseline?: boolean } = {},
+  options: { allowFreeModel?: boolean } = {},
 ): ModelPriceQuote | undefined {
   const modelId = model.id.trim();
   const inputPerMtok = perMtok(model.inputCostPerToken);
@@ -183,7 +164,7 @@ export function gatewayModelPriceQuote(
   const priorityInputPerMtok = perMtok(model.inputCostPerTokenPriority);
   const priorityOutputPerMtok = perMtok(model.outputCostPerTokenPriority);
   const priorityCacheReadPerMtok = perMtok(model.cacheReadInputTokenCostPriority);
-  const priorityInputTokenPriceBands = gatewayPriorityInputTokenPriceBands(model, options.includeThresholdBaseline);
+  const priorityInputTokenPriceBands = gatewayPriorityInputTokenPriceBands(model);
   if (
     !options.allowFreeModel &&
     inputPerMtok === 0 &&
@@ -196,7 +177,7 @@ export function gatewayModelPriceQuote(
   // quote 保留标准价供模型选择器展示原价；所有 Gateway 模型统一把
   // costDiscount 带入计费计算，CatalogModel.cost 继续承载折后展示价。
   const costDiscount = normalizedCostDiscount(model.costDiscount);
-  const inputTokenPriceBands = gatewayInputTokenPriceBands(model, options.includeThresholdBaseline);
+  const inputTokenPriceBands = gatewayInputTokenPriceBands(model);
   const declaredCurrency = model.currency;
   return {
     providerId: 'xd',

@@ -79,9 +79,12 @@ const secondaryActionClass = cn(
   'enabled:hover:[--button-face-bg:var(--perm-code-bg)]',
   'enabled:active:[--button-face-bg:color-mix(in_srgb,var(--perm-code-bg)_90%,var(--chat-input-text))]',
 );
-// Allow once takes its fill and states from palette="permission" (DESIGN.md §4 Filled button
-// states): a local hover class would lose to the variant's more specific selector.
-const allowActionClass = cn(actionClass, '[--button-face-border:var(--chat-input-border)]');
+const allowActionClass = cn(
+  actionClass,
+  '[--button-face-border:var(--chat-input-border)] [--button-face-bg:var(--perm-allow-btn-bg)] text-[var(--perm-allow-btn-text)]',
+  'enabled:hover:[--button-face-bg:color-mix(in_srgb,var(--perm-allow-btn-bg)_90%,var(--perm-allow-btn-text))]',
+  'enabled:active:[--button-face-bg:color-mix(in_srgb,var(--perm-allow-btn-bg)_80%,var(--perm-allow-btn-text))]',
+);
 
 // ---------------------------------------------------------------------------
 // Component
@@ -311,7 +314,6 @@ export function PermissionPrompt({ permission, onRespond, companion }: Permissio
         <Button
           pressFeedback={false}
           variant="secondary"
-          palette="permission"
           size="lg"
           onClick={handleAllowOnce}
           disabled={submitting}

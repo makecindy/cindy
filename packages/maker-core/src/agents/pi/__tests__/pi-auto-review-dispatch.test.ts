@@ -978,9 +978,7 @@ describe('pi auto-review dispatch & spawn config (mocked pi process)', () => {
       expect.objectContaining({ data: expect.objectContaining({ isTerminal: true }) }),
     ]);
     expect(seen.filter((event) => event.type === 'done')).toEqual(stopped ? [
-      expect.objectContaining({ data: expect.objectContaining({ status: 'cancelled',
-        usage: expect.objectContaining({ receipts: [], settlementId: expect.any(String) }),
-      }) }),
+      expect.objectContaining({ data: { status: 'cancelled' } }),
     ] : []);
     expect(captured.requests.filter((request) => request.type === 'prompt')).toHaveLength(1);
     await handle.close();

@@ -27,9 +27,6 @@ import {
   readWorkLouderDeviceStatusOrThrow,
   unwrapWorkLouderKeymapText,
   isCindyExclusiveAgentKeymap,
-  shouldSaveCreatorKeymapSession,
-  isWorkLouderUnsupportedRpc,
-  WORKLOUDER_CREATOR_LIT_TASK_KEY_COUNT,
   WORKLOUDER_DEVICE_KEYMAP_FILE,
   workLouderFirmwareIdlesHidRead,
   parseWorkLouderCodexJoystickEvent,
@@ -66,7 +63,7 @@ interface WorkLouderComm {
 interface WorkLouderRpcResult {
   ok?: boolean;
   value?: unknown;
-  error?: { message?: string; code?: unknown };
+  error?: { message?: string };
 }
 
 interface WorkLouderFsApi {
@@ -146,8 +143,6 @@ let creatorKeymapRetryTimer: ReturnType<typeof setTimeout> | null = null;
 let creatorKeymapRetryAt = 0;
 let creatorKeymap: readonly (readonly string[])[] = CREATOR_MICRO_2_AGENT_KEYMAP;
 let creatorKeymapGeneration = 0;
-/** The SDK offers no file RPC, so the board keeps its factory keymap. */
-let keymapUnsupported = false;
 
 if (parentPort) {
   parentPort.on('message', (event) => {
@@ -650,7 +645,7 @@ function workLouderFsSucceeded(result: WorkLouderRpcResult | null | undefined): 
 }
 
 async function restoreCreatorKeymap(deviceApi: WorkLouderApi): Promise<void> {
-  if (!connectedDevice || !keymapBackupDir || !comm) return;
+  if (connectedDevice?.deviceType !== 'creator-micro-2' || !keymapBackupDir || !comm) return;
   const sessionPath = path.join(
     keymapBackupDir,
     creatorMicro2KeymapSessionFileName(connectedDevice.backupId),
@@ -677,8 +672,6 @@ async function restoreCreatorKeymap(deviceApi: WorkLouderApi): Promise<void> {
   }
   creatorKeymapBound = false;
   creatorKeymapWritten = false;
-  // A snapshot that outlives its restore would overwrite the next, unrelated layout.
-  await fs.rm(sessionPath, { force: true });
   hostLog('info', 'Work Louder pre-occupancy keymap restored');
 }
 
@@ -694,7 +687,7 @@ async function backupCreatorKeymap(
   layerIndex: number,
 ): Promise<void> {
   if (!keymapBackupDir) {
-    throw new Error('Work Louder keymap backup directory is missing');
+    throw new Error('Creator Micro 2 keymap backup directory is missing');
   }
   await fs.mkdir(keymapBackupDir, { recursive: true });
   const factoryPath = path.join(
@@ -708,72 +701,26 @@ async function backupCreatorKeymap(
   }
   // Snapshot the whole document, but decide from the layer Cindy is about to
   // overwrite. A stale Cindy map on another layer must not skip this capture.
-  const sessionPath = path.join(
-    keymapBackupDir,
-    creatorMicro2KeymapSessionFileName(connectedDevice?.backupId),
-  );
-  const sessionExists = await fs.access(sessionPath).then(
-    () => true,
-    () => false,
-  );
-  if (
-    shouldSaveCreatorKeymapSession(
-      isCindyExclusiveAgentKeymap(liveText, profileIndex, layerIndex),
-      sessionExists,
-    )
-  ) {
-    await writeKeymapSnapshot(sessionPath, liveText);
-  }
-}
-
-async function hasKeymapSession(): Promise<boolean> {
-  if (!keymapBackupDir) return false;
-  return fs
-    .access(
+  if (!isCindyExclusiveAgentKeymap(liveText, profileIndex, layerIndex)) {
+    await writeKeymapSnapshot(
       path.join(keymapBackupDir, creatorMicro2KeymapSessionFileName(connectedDevice?.backupId)),
-    )
-    .then(
-      () => true,
-      () => false,
+      liveText,
     );
+  }
 }
 
 async function bindCreatorAgentKeys(deviceApi: WorkLouderApi): Promise<void> {
   if (creatorKeymapBound || stopping) return;
-  if (!connectedDevice) return;
+  if (connectedDevice?.deviceType !== 'creator-micro-2') return;
   if (!comm) return;
   const generation = creatorKeymapGeneration;
   const fsApi = loadWorkLouderFsApi(deviceApi, comm);
-  // Optional in the SDK contract, and old firmware may refuse the file RPC. Stay on the
-  // factory keymap and say so, instead of leaving the bind loop to spin or reconnect on a
-  // board that can never be rewritten.
-  const keepFactoryKeymap = async (reason: string): Promise<void> => {
-    hostLog('warn', `Work Louder keymap bind ${reason}; keeping factory keymap`);
-    keymapUnsupported = true;
-    creatorKeymapBound = true;
-    clearCreatorKeymapRetry();
-    if (connectedDevice) {
-      await postDeviceStatus(deviceApi, connectedDevice.deviceType, connectedDevice.isUsb);
-    }
-  };
   if (!fsApi) {
-    await keepFactoryKeymap('could not load WLRPCApi');
+    hostLog('warn', 'Work Louder keymap bind could not load WLRPCApi');
     return;
   }
-  let liveResult: WorkLouderRpcResult;
-  try {
-    liveResult = await fsApi.readFile(WORKLOUDER_DEVICE_KEYMAP_FILE);
-  } catch (error) {
-    const record = typeof error === 'object' && error !== null ? (error as { code?: unknown }) : {};
-    if (!isWorkLouderUnsupportedRpc(record.code, safeErrorMessage(error))) throw error;
-    await keepFactoryKeymap('was refused by the firmware');
-    return;
-  }
+  const liveResult = await fsApi.readFile(WORKLOUDER_DEVICE_KEYMAP_FILE);
   if (!workLouderFsSucceeded(liveResult)) {
-    if (isWorkLouderUnsupportedRpc(liveResult?.error?.code, liveResult?.error?.message)) {
-      await keepFactoryKeymap('was refused by the firmware');
-      return;
-    }
     throw new Error(liveResult?.error?.message ?? 'fs.read keymap.json failed');
   }
   const liveText = unwrapWorkLouderKeymapText(liveResult);
@@ -793,9 +740,7 @@ async function bindCreatorAgentKeys(deviceApi: WorkLouderApi): Promise<void> {
   const next = applyCreatorMicro2AgentLayer(document, layerIndex, creatorKeymap, profileIndex);
   if (!next.changed) {
     creatorKeymapBound = true;
-    // Nothing was changed, so there is nothing to hand back, unless an earlier
-    // occupancy was never released and its snapshot is still waiting.
-    if (next.alreadyBound && (await hasKeymapSession())) creatorKeymapWritten = true;
+    if (next.alreadyBound) creatorKeymapWritten = true;
     clearCreatorKeymapRetry();
     hostLog(
       'info',
@@ -822,7 +767,7 @@ async function bindCreatorAgentKeys(deviceApi: WorkLouderApi): Promise<void> {
 }
 
 async function bindCreatorAgentKeysWhenIdle(deviceApi: WorkLouderApi): Promise<void> {
-  if (!connectedDevice) return;
+  if (connectedDevice?.deviceType !== 'creator-micro-2') return;
   while (!stopping && !creatorKeymapBound) {
     if (Date.now() < creatorKeymapRetryAt) break;
     if (creatorKeymapBinding) {
@@ -832,9 +777,12 @@ async function bindCreatorAgentKeysWhenIdle(deviceApi: WorkLouderApi): Promise<v
     const task = bindCreatorAgentKeys(deviceApi)
       .catch((error) => {
         const message = safeErrorMessage(error);
-        hostLog('warn', `Work Louder keymap bind failed: ${message}`);
+        hostLog('warn', `Creator Micro 2 keymap bind failed: ${message}`);
         if (isWorkLouderHidContention(message)) {
-          hostLog('warn', 'Work Louder vendor HID is busy; another app may be using the keyboard');
+          hostLog(
+            'warn',
+            'Creator Micro 2 vendor HID is busy; another app may be using the keyboard',
+          );
           scheduleCreatorKeymapRetry();
         }
         throw error;
@@ -846,7 +794,7 @@ async function bindCreatorAgentKeysWhenIdle(deviceApi: WorkLouderApi): Promise<v
     await task;
   }
   if (!stopping && !creatorKeymapBound && Date.now() < creatorKeymapRetryAt) {
-    throw new Error('Work Louder vendor HID is busy; device has been closed');
+    throw new Error('Creator Micro 2 vendor HID is busy; device has been closed');
   }
 }
 
@@ -910,7 +858,7 @@ async function ensureConnected(): Promise<WorkLouderApi | null> {
   connectedDevice = {
     deviceType: candidate.deviceType,
     isUsb: candidate.device.isUsbConnection === true,
-    backupId: creatorKeymapBackupId(candidate.device, candidate.deviceType),
+    backupId: creatorKeymapBackupId(candidate.device),
   };
   await postDeviceStatus(nextApi, candidate.deviceType, candidate.device.isUsbConnection === true);
   await bindCreatorAgentKeysWhenIdle(nextApi);
@@ -988,7 +936,6 @@ function postDeviceState(
           : null,
       isCharging: typeof status.isCharging === 'boolean' ? status.isCharging : null,
       inputMonitoringPermission: process.platform === 'darwin' ? 'unknown' : 'not-required',
-      ...(keymapUnsupported ? { factoryKeymap: true } : {}),
     },
   });
 }
@@ -1018,20 +965,7 @@ function reportConnectionError(message: string): void {
   if (reason !== 'permission-required') scheduleRetry();
 }
 
-/**
- * Creator Micro 2 ids stay unprefixed so existing backups keep matching. Codex
- * Micro backups share the directory, so they carry their own prefix.
- */
-function creatorKeymapBackupId(
-  device: WorkLouderDevice,
-  deviceType: 'codex-micro' | 'creator-micro-2',
-): string | null {
-  const id = workLouderDeviceBackupId(device);
-  if (deviceType === 'creator-micro-2') return id;
-  return id ? `codex-micro-${id}` : 'codex-micro';
-}
-
-function workLouderDeviceBackupId(device: WorkLouderDevice): string | null {
+function creatorKeymapBackupId(device: WorkLouderDevice): string | null {
   const serial = typeof device.serialNumber === 'string' ? device.serialNumber.trim() : '';
   if (serial) return serial;
   const pid = typeof device.devicePid === 'string' ? device.devicePid.trim() : '';
@@ -1073,7 +1007,7 @@ async function disconnect(): Promise<void> {
     try {
       await restoreCreatorKeymap(currentApi);
     } catch (error) {
-      hostLog('warn', `Work Louder keymap restore failed: ${safeErrorMessage(error)}`);
+      hostLog('warn', `Creator Micro 2 keymap restore failed: ${safeErrorMessage(error)}`);
     }
   }
   transportFaulted = false;
@@ -1081,7 +1015,6 @@ async function disconnect(): Promise<void> {
   creatorKeymapBound = false;
   creatorKeymapWritten = false;
   creatorKeymapBinding = null;
-  keymapUnsupported = false;
   const unsubscribe = unsubscribeHid;
   unsubscribeHid = null;
   if (unsubscribe) {
@@ -1144,8 +1077,7 @@ async function stop(): Promise<void> {
   await awaitWithTimeout(creatorKeymapBinding, 400);
   const currentApi = api;
   if (currentApi) {
-    // Cindy's keymap can bind up to 13 task-key threads; clear them all.
-    const off = createWorkLouderCodexOffFrame(WORKLOUDER_CREATOR_LIT_TASK_KEY_COUNT);
+    const off = createWorkLouderCodexOffFrame();
     await awaitWithTimeout(
       Promise.allSettled([
         currentApi.sendLightingConfig({ ambient: off.ambient, keys: off.keys }),

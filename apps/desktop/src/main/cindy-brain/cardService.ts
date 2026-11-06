@@ -36,8 +36,6 @@ import {
   isTurnEndGhostCardHtml,
   type GhostToolCallResult,
 } from '../../shared/ghost.js';
-import { markGhostCardSuperseded } from '@cindy/maker-shared/ghost-card-form';
-
 import type { SanitizeCardResult } from './cardSanitizer.js';
 
 /**
@@ -435,13 +433,6 @@ export class GhostCardService {
       return reject('bad-state');
     }
     const activityState = p.state === 'working' || p.state === 'done' ? p.state : null;
-    // supersededBy: the card the plugin moved this one to. Only the active call that reopened this card
-    // (sourceCallId, verified before this handler) may name itself; views then hide this card.
-    if (p.supersededBy !== undefined && (hostMail || typeof p.supersededBy !== 'string' ||
-        p.supersededBy !== p.sourceCallId || p.supersededBy === p.callId || !/^[A-Za-z0-9_:.-]{1,128}$/.test(p.supersededBy))) {
-      return reject('bad-superseded-by', { callId: p.callId });
-    }
-    const supersededBy = typeof p.supersededBy === 'string' ? p.supersededBy : undefined;
 
     const entry = this.calls.get(p.callId);
     if (!entry) return reject('unknown-call', { callId: p.callId });
@@ -494,12 +485,11 @@ export class GhostCardService {
       entry.workingSince = null;
     }
 
-    const html = supersededBy ? markGhostCardSuperseded(sanitized.html, supersededBy) : sanitized.html;
     const row: GhostCardRow = {
       callId: p.callId,
       ghostId: senderGhostId,
       sessionId: entry.sessionId,
-      html,
+      html: sanitized.html,
       height,
       v: cardVersion,
       updatedAt: now,
@@ -518,8 +508,8 @@ export class GhostCardService {
       ghostId: senderGhostId,
       ...(entry.logicalGhostId !== undefined ? { logicalGhostId: entry.logicalGhostId } : {}),
       toolUseId: entry.toolUseId,
-      html,
-      animatedHtml: supersededBy ? null : sanitized.animatedHtml ?? null,
+      html: sanitized.html,
+      animatedHtml: sanitized.animatedHtml ?? null,
       height,
       state: activityState,
     });

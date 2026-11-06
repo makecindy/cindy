@@ -15,7 +15,6 @@
 import { useEffect, useState } from 'react';
 import type { InstalledGhost } from '../../shared/ghost';
 import { installedGhostStoragePart } from '../../shared/pluginIdentity';
-import { getDataOwnerGeneration, isDataOwnerGenerationCurrent, isDataOwnerPushCurrent } from '../contexts/dataOwnerGeneration';
 
 /** 该 workdir 下被禁用的 ghostId 集合;无 workdir / 查询异常 = 空集。 */
 export function getWorkdirDisabledGhostIds(workdir: string | null | undefined): Set<string> {
@@ -57,30 +56,13 @@ export function useWorkdirDisabledGhostIds(
   useEffect(() => {
     if (!enabled || !workdir?.trim() || ghosts.length === 0) return;
     let current = true;
-    let workdirKey: string | undefined;
-    let revision = 0;
-    const refresh = () => {
-      const owner = getDataOwnerGeneration();
-      const requested = ++revision;
-      void Promise.resolve().then(() => window.electronAPI.ghosts.workdirPrefs(workdir)).then((policy) => {
-        if (!current || requested !== revision || !isDataOwnerGenerationCurrent(owner)) return;
-        workdirKey = policy.workdirKey;
-        setSnapshot({ workdir, ghosts, disabled: new Set(policy.disabled) });
-      }).catch(() => {
-        // Unknown policy must not expose a previously enabled directory's commands.
-        if (current && requested === revision && isDataOwnerGenerationCurrent(owner)) setSnapshot(null);
-      });
-    };
-    const unsubscribe = window.electronAPI.ghosts.onWorkdirPrefsChanged?.((policy, ownerStamp) => {
-      if (!current || !isDataOwnerPushCurrent(ownerStamp)) return;
-      // Before the first response, the Host has not supplied the canonical key yet.
-      if (workdirKey === undefined) { refresh(); return; }
-      if (workdirKey !== policy.workdirKey) return;
-      revision++;
-      setSnapshot({ workdir, ghosts, disabled: new Set(policy.disabled) });
+    void Promise.resolve().then(() => window.electronAPI.ghosts.workdirPrefs(workdir)).then(({ disabled }) => {
+      if (current) setSnapshot({ workdir, ghosts, disabled: new Set(disabled) });
+    }).catch(() => {
+      // Unknown policy must not expose a previously enabled directory's commands.
+      if (current) setSnapshot(null);
     });
-    refresh();
-    return () => { current = false; unsubscribe?.(); };
+    return () => { current = false; };
   }, [workdir, ghosts, enabled]);
   if (!enabled || !workdir?.trim() || ghosts.length === 0) return NO_DISABLED_GHOSTS;
   return snapshot?.workdir === workdir && snapshot.ghosts === ghosts ? snapshot.disabled : null;

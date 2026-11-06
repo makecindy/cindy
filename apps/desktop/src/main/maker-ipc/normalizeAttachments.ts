@@ -90,20 +90,8 @@ function assertSafeTempSessionId(sessionId: string): void {
   }
 }
 
-/**
- * POSIX temp directories such as /tmp are shared by every OS account, and the
- * root is created 0700. Scoping it by uid keeps one account's Desktop from
- * locking every other account on the same machine out of attachments.
- */
-export function tempAttachmentRootPath(
-  tempDir: string,
-  uid: number | null = typeof process.getuid === 'function' ? process.getuid() : null,
-): string {
-  return path.join(tempDir, uid === null ? 'cindy-attachments' : `cindy-attachments-${uid}`);
-}
-
 function tempRoot(): string {
-  return tempAttachmentRootPath(app.getPath('temp'));
+  return path.join(app.getPath('temp'), 'cindy-attachments');
 }
 
 function tempOwnerRoot(): string {

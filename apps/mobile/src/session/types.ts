@@ -1,4 +1,3 @@
-import type { OutputLimitDetails } from '@cindy/maker-shared';
 import type { MobileSessionAgentSwitchIntent } from '@cindy/maker-shared/device-link-contract';
 import type { AgentInputReference } from '@cindy/maker-shared/agent-input-projection';
 import type { RemoteMoney } from '@/session/remoteMoney';
@@ -300,7 +299,6 @@ export interface InputProjection {
   errorReason?: string | null;
   /** Bounded details for tool-loop errors; older projections may omit them. */
   toolLoop?: MobileToolLoopErrorDetails | null;
-  outputLimit?: OutputLimitDetails | null;
   recovery?: unknown;
   errorRetryText: string | null;
   /** Explicit failed-turn continuation eligibility; absent on older hosts. */

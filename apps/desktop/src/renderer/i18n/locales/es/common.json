@@ -1,34 +1,4 @@
 {
-  "sharedTaskRecovery": {
-    "title": "No se puede reanudar en el ordenador original",
-    "description": "Elige otro ordenador o proveedor para continuar con un traspaso de contexto. Tus mensajes se conservan, pero no se transfiere el estado de ejecución completo del ordenador original.",
-    "choose": "Elegir otro ordenador",
-    "cancel": "Permanecer aquí",
-    "stage": {
-      "owner": "Error al contactar con el ordenador que comparte.",
-      "allocation": "Error al asignar permisos al ejecutor original.",
-      "executor": "Error al comprobar la conexión device-link del ejecutor.",
-      "capability": "Error al comprobar las capacidades del ejecutor.",
-      "authorization": "Error al instalar la autorización de ejecución.",
-      "unknown": "No se ha indicado la etapa que falló."
-    },
-    "reason": {
-      "offline": "El ordenador contactado en esta etapa se ha indicado como desconectado. Otras tareas pueden ejecutarse en otros ordenadores.",
-      "timeout": "La solicitud agotó el tiempo de espera. La etapa que falló indica el servicio contactado; no se ha confirmado un fallo de la conexión directa ni del relé.",
-      "relay": "La conexión device-link no está lista o se ha cerrado. Si solo falla la conexión directa, normalmente se usa el relé automáticamente.",
-      "denied": "Se ha denegado el acceso o desactivado el control remoto. Reintentar no permite eludir esta restricción.",
-      "model": "El proveedor compartido o el modelo no están permitidos para esta sesión.",
-      "budget": "El proveedor ha indicado un límite de uso o una cuota insuficiente. Otro ordenador puede usar la misma cuota.",
-      "capacity": "Se ha alcanzado la capacidad de sesiones o conexiones. Cierra las sesiones que no uses o elige otro ordenador.",
-      "unsupported": "El ejecutor no admite las capacidades necesarias para la sesión compartida.",
-      "authorization": "No se pudo instalar la autorización de ejecución. Esto no demuestra que el ejecutor esté desconectado.",
-      "history": "No se puede usar la ubicación de la sesión original. Su historial nativo no puede abrirse directamente en otro ordenador.",
-      "policy": "Las reglas de uso compartido requieren comprobaciones en tiempo real a través del ordenador que comparte. La ejecución directa no puede aplicarlas; esto no implica que el saldo esté agotado.",
-      "unknown": "El ordenador que comparte no ha proporcionado una causa precisa. No se han confirmado la desconexión, la cuota ni la ruta directa o de relé.",
-      "rate": "El servicio limita las solicitudes o está saturado. Espera a que termine el periodo de espera; otro ordenador puede compartir el mismo límite.",
-      "service": "No se pudo acceder al servicio de autorización del recurso compartido o este devolvió un error. No se ha confirmado que el ejecutor esté desconectado."
-    }
-  },
   "pluginUi": {
     "renderer": "Visualización",
     "original": "Original",
@@ -3880,12 +3850,7 @@
           "stop": "detener la prueba"
         },
         "fetch": {
-          "selectedCount": "{{count}} modelos seleccionados",
-          "availableCount": "{{count}} modelos disponibles obtenidos",
-          "notFetched": "Aún no se ha obtenido la lista de modelos",
-          "failedRetry": "No se pudo obtener la lista de modelos. Inténtalo de nuevo.",
-          "retryFailed": "La última consulta falló. Inténtalo de nuevo.",
-          "button": "Obtener y seleccionar modelos",
+          "button": "Obtener lista de modelos",
           "fetching": "Recuperando modelos…",
           "needBaseUrl": "Complete primero la base URL",
           "failed": "No se pudo recuperar la lista de modelos",
@@ -6847,6 +6812,8 @@
             "task": "Tecla de tarea",
             "action": "Tecla de acción"
           },
+          "lightingLimit": "El firmware puede iluminar de forma independiente las primeras 6 teclas de tarea en el orden del tablero. Las teclas de tarea adicionales también permiten cambiar de tarea.",
+          "unlitKey": "Esta tecla está después de las primeras 6, por lo que no tiene una luz de estado independiente.",
           "taskHint": "Se recomienda una cubierta transparente para mostrar el estado de la tarea en distintos colores."
         },
         "commandKeys": {
@@ -7900,7 +7867,6 @@
         "customSlotAsleep": "Este complemento está desactivado. Actívalo para ver aquí su interfaz de configuración.",
         "descriptionExpand": "Mostrar más",
         "descriptionCollapse": "Mostrar menos",
-        "readmeTitle": "Acerca de",
         "useAction": "Usar complemento",
         "chatAction": "Conversación",
         "enabledLabel": "Activado",
@@ -8491,26 +8457,6 @@
         "title": "¿Eliminar \"{{name}}\"?",
         "message": "Las nuevas sesiones ya no cargarán este MCP.",
         "confirm": "Eliminar"
-      },
-      "duplicates": {
-        "title": "Posibles conexiones MCP duplicadas",
-        "description": "Cindy y tu configuración de usuario de Claude Code tienen conexiones iguales o similares que podrían cargar herramientas dos veces. Elige cuál conservar, o conserva ambas si tienes dudas.",
-        "scope": "Solo afecta a las tareas normales de Claude Code en Cindy en este equipo, a partir de la próxima sesión del agente. No modifica tu configuración de Claude Code. Los duplicados relacionados comparten la elección.",
-        "unavailable": "No se pudo leer parte de la configuración. Las conexiones no han cambiado. Se comprobará de nuevo al abrir esta página.",
-        "endpoint": "Misma dirección de conexión",
-        "similar": "Direcciones de conexión similares",
-        "keep": {
-          "both": "Conservar ambas fuentes de este grupo"
-        },
-        "selected": {
-          "cindy": "Conexión de Cindy seleccionada",
-          "claude": "Conexión de Claude Code seleccionada",
-          "both": "Se conservan ambas fuentes de este grupo"
-        },
-        "reset": "Elegir de nuevo",
-        "saveFailed": "No se pudo guardar. Las conexiones pueden haber cambiado. Elige de nuevo en la lista actual.",
-        "keepThis": "Conservar esta conexión",
-        "keepThese": "Conservar estas conexiones"
       }
     },
     "remotePermission": {
@@ -15571,7 +15517,7 @@
       },
       "fields": {
         "title": "Título",
-        "schedule": "Activación",
+        "schedule": "Programación",
         "notify": "Notificar",
         "prompt": "Prompt",
         "once": "Una vez",
@@ -15687,13 +15633,6 @@
         "preRunPluginRequired": "Elige un complemento para la comprobación previa",
         "templateParamRequired": "Ingresa {{label}}",
         "templateApplyFailed": "No se pudo aplicar la plantilla. Revisa los parámetros y vuelve a intentarlo."
-      },
-      "layout": {
-        "content": "Qué ejecutar",
-        "notifications": "Notificaciones y ejecución silenciosa",
-        "contentTab": "Contenido y activación",
-        "optionsTab": "Opciones de ejecución",
-        "sections": "Configuración de automatización"
       }
     },
     "chips": {
@@ -15894,13 +15833,6 @@
           "prompt": "Revisa el estado de los documentos del directorio de trabajo y busca contenido que necesite actualizarse.\nRestricciones:\n- Busca información desactualizada (fechas antiguas, enlaces rotos, procesos o herramientas obsoletos), contradicciones y duplicaciones\n- Cita la ruta del archivo y la ubicación de cada problema y explica el razonamiento\n- Clasifica las sugerencias como \"actualizar / combinar / eliminar\" y elabora una lista de verificación de revisiones\n- Presenta solo el informe; no modifiques los documentos"
         }
       }
-    },
-    "deadline": {
-      "label": "Fecha y hora de finalización",
-      "clear": "Borrar",
-      "hint": "Déjalo vacío para no limitarlo. Horario de {{timezone}}. Después no se iniciarán ejecuciones automáticas; las ya iniciadas podrán finalizar.",
-      "invalid": "Introduce una fecha y hora válidas",
-      "expired": "Vencida"
     }
   },
   "issueTracker": {
@@ -17125,10 +17057,7 @@
       "registrationFailed": "No se pudo crear, inténtalo de nuevo más tarde",
       "silentStopExhausted": "El modelo devolvió respuestas vacías repetidamente; la reanudación automática está en pausa. Haz clic en \"Continuar\" para reanudar la tarea.",
       "executionResultUnavailable": "No se puede recuperar el resultado de la ejecución. La continuación automática se ha detenido. Pídale al asistente que verifique el resultado de la ejecución existente.",
-      "outputLimit": "El modelo alcanzó su límite de salida, por lo que esta respuesta puede estar incompleta. Envía un nuevo mensaje para continuar. Si se repite, reduce el esfuerzo de razonamiento o compacta primero el historial de la conversación.",
-      "outputLimitReasoning": "El razonamiento consumió la mayor parte del presupuesto de salida de esta solicitud, por lo que la respuesta puede estar incompleta. Reduce el esfuerzo de razonamiento o compacta el historial de la conversación antes de continuar.",
-      "outputLimitUsage": "Esta solicitud al modelo utilizó {{outputTokens}} tokens de salida, incluidos {{reasoningTokens}} tokens de razonamiento.",
-      "outputLimitOutputUsage": "Esta solicitud al modelo utilizó {{outputTokens}} tokens de salida.",
+      "outputLimit": "El modelo alcanzó su límite de producción, por lo que esta respuesta puede estar incompleta. Envía el siguiente mensaje para continuar.",
       "permissionTightenInterruptFailed": "No se pudo detener la tarea en ejecución al restringir los permisos; podría seguir ejecutándose sin solicitar aprobación hasta que termine. Detenla manualmente si es necesario.",
       "codexAutoReviewUnavailable": "La revisión automática no está disponible temporalmente. Se bloqueó la acción actual y los permisos cambiaron a Predeterminado. Reintenta la solicitud; Cindy te preguntará cuando sea necesario.",
       "hostShellCommandBlocked": "Cindy bloqueó este comando de shell. Revisa el comando y usa una herramienta o un comando disponible para continuar.",

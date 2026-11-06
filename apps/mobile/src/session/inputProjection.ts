@@ -1,4 +1,3 @@
-import { parseOutputLimitDetails } from '@cindy/maker-shared';
 import { readChatReplyQuote, type ChatReplyQuote } from '@cindy/maker-shared/chat-reply-quote';
 import {
   buildAttachmentPersistFileRefs,
@@ -75,7 +74,6 @@ export const EMPTY_INPUT_PROJECTION: InputProjection = Object.freeze({
   error: null,
   errorReason: null,
   toolLoop: null,
-  outputLimit: null,
   recovery: null,
   errorRetryText: null,
   credentialSwitchWait: null,
@@ -103,7 +101,6 @@ export function normalizeInputProjection(value: unknown, fallbackSessionId = '')
     error: readString(record?.error),
     errorReason: readString(record?.errorReason),
     toolLoop: parseMobileToolLoopErrorDetails(record?.toolLoop),
-    outputLimit: parseOutputLimitDetails(record?.outputLimit) ?? null,
     recovery: record?.recovery,
     errorRetryText: readString(record?.errorRetryText),
     errorCanContinue: record?.errorCanContinue === true,

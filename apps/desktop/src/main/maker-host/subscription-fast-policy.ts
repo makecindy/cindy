@@ -33,7 +33,6 @@ export async function notifySubscriptionFastPolicyChanged(): Promise<void> {
 export function createSubscriptionFastPolicy(
   sessionId: string,
   providerId: () => string | null | undefined,
-  requireGroupPolicy = false,
 ): Policy {
   const owner = activeOwnerScopeKey();
   const isAllowed = () => {
@@ -46,7 +45,7 @@ export function createSubscriptionFastPolicy(
       !binding ||
       !!binding.groupDeviceId ||
       readProviderGroup(binding.providerId)?.allowFast !== false;
-    return providerFastPolicy.allows(id!) && groupAllows && groupFastPolicyStore.allows(sessionId, requireGroupPolicy);
+    return providerFastPolicy.allows(id!) && groupAllows && groupFastPolicyStore.allows(sessionId);
   };
   return {
     isAllowed,

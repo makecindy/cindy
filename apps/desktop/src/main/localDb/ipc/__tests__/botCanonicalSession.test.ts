@@ -2,6 +2,7 @@ import { createTaskCompletionDeliveryHost } from '../../../maker-ipc/taskComplet
 import { emitSessionCreated } from '../sessionCreatedBroadcast.js';
 import { captureAgentRequest } from '../../../maker-ipc/forwardedRequest';
 import { admitTaskAction, assertTaskActionCurrent, TaskActionAuthorizationError } from '../../../maker-ipc/taskActionAuthorization';
+import { formatForwardedRequest } from '../../../../shared/forwardedRequest';
 import { AcceptedCallbackDispatchCancelled, runAcceptedCallback } from '../../../maker-ipc/acceptedCallbackRunner';
 import { setSessionOpeningModelAdmission } from '../../sessionOpening';
 import { ScriptTarget, transpileModule } from 'typescript';
@@ -8319,15 +8320,12 @@ describe('Bot Session task end-to-end runtime', () => {
       restored = createDelegationRuntime({ captureRequest });
       await restored.delegation.restore();
       const first = restored.dispatch.mock.calls.find(([p]) => p.targetSessionId === task.childSessionId)![0];
-      // 2026-11-05: the body is the objective itself; the receipt keeps where the request started.
-      expect(first.persistedContent).toBe('用户原话：可以发布');
-      expect(first.autoReviewUserText?.request).toEqual({ sessionId: 'session-1', clientId: 'human', plainBody: true });
+      expect(first.persistedContent).toBe(formatForwardedRequest({ userText: '  只检查\n不要发布  ', sessionId: 'session-1', clientId: 'human' }, '用户原话：可以发布'));
       expect(first.message).not.toContain('Work independently');
       await restored.settleChild(task.childSessionId, 'Checked');
       await restored.delegation.messageSessionTask('session-1', task.delegationId, { kind: 'message', text: '继续检查' });
       const next = restored.dispatch.mock.calls.filter(([p]) => p.targetSessionId === task.childSessionId).at(-1)![0];
-      expect(next.persistedContent).toBe('继续检查');
-      expect(next.autoReviewUserText?.request).toEqual({ sessionId: 'session-1', clientId: 'human', plainBody: true });
+      expect(next.persistedContent).toBe(formatForwardedRequest({ userText: original, sessionId: 'session-1', clientId: 'human' }, '继续检查'));
     } finally { runtime.dispose(); restored?.dispose(); }
   });
 

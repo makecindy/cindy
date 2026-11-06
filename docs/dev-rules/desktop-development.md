@@ -233,27 +233,6 @@ localStorage 按 **origin + userData 目录** 分家——dev 的 renderer 从
 - 只修改 renderer 时优先使用现有实例的热更新，不重复重启。
 - 不确定运行实例来自哪个 checkout 时，先运行 `pnpm desktop:whoami -- --all` 核对。
 
-## 内存排查
-
-main 日志里 scope 为 `memory-usage` 的行是各进程内存采样（正式版每 10 分钟一次，dev 每 30 秒
-一次；实现见 `src/main/process-monitor/memory-log.ts`）：`main{...}` 是主进程
-`process.memoryUsage()` 细分，后面按进程类型分组列出 `app.getAppMetrics()` 的常驻内存，
-组内从大到小，单位 MB。排查「越用越卡」时，先按启动分段看 `Browser`（主进程）和最大的
-`Tab`（主界面）每小时涨多少：持续上涨、重启才回落就是泄漏；再看 `heapUsed` 与 `external` /
-`arrayBuffers` 谁在涨，区分 JS 对象和 Buffer。该 scope 只写进程类型与数字，已精确放行进
-日志上报，不要往这行里加标题、服务名、pid 或路径。
-
-`getAppMetrics()` 的 GPU 数字不含 IOSurface 等显存，macOS 上要看 GPU 进程真实占用用
-`footprint -p <pid>`。
-
-确认主进程在涨、要找是谁在涨时，在开发版日志目录的 `log-config.json` 写
-`"mainHeapSampling": true`（与 `level` 并列），重启后主进程常驻 V8 采样式堆分析（实现见
-`src/main/process-monitor/heap-sampling.ts`），每 30 分钟写一份到 `logs/heap-sampling/`，
-保留最近 48 份：`.heapprofile` 可在 Chrome DevTools 的 Memory 面板载入，`.summary.txt` 按
-「最近一帧应用代码」和「分配帧」两种口径列出仍存活的采样内存。对比前后几份摘要，持续
-变大的那几行就是泄漏点。不要在用户正在用的 GB 级主进程上拍完整堆快照：会冻结一两分钟
-并额外占用同等内存。正式版不读这个开关。
-
 ## 分层验证
 
 工作目录误报缺失或切到备用目录时，参见[工作目录异常日志判读](../working-directory-diagnostics.md)，

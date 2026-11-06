@@ -25,8 +25,6 @@ export interface PluginDetailModel {
     labelKey?: string;
   }>;
   description?: string;
-  /** Host declared a detailed introduction; content is fetched only when opened. Older Hosts omit it. */
-  readme?: boolean;
   version?: string;
   status?: PluginDetailStatus;
   statusAction?: "connect" | "retry" | "enable" | "settings" | "reconnect";
@@ -62,7 +60,6 @@ export function pluginDetailModel(
         tools?: unknown;
         permissions?: unknown;
         details?: unknown;
-        readme?: unknown;
       }
     | undefined;
   const usage = parsePluginUsageSummary(capabilities?.usage);
@@ -163,7 +160,6 @@ export function pluginDetailModel(
     permissions,
     description: resource?.blocks?.find((block) => block.id === "about")
       ?.fallbackMarkdown,
-    readme: capabilities?.readme === true,
     version: resource?.blocks?.find((block) => block.id === "version")
       ?.fallbackMarkdown,
     status,

@@ -481,6 +481,30 @@
           }
         }
       },
+      "confirm-btn-primary-hover": {
+        "light": {
+          "$type": "color",
+          "$value": "{semantic.defaults.accent-hover.light}",
+          "$extensions": {
+            "com.cindy.desktop": {
+              "cssAlias": "accent-hover",
+              "wrapper": "var",
+              "mode": "light"
+            }
+          }
+        },
+        "dark": {
+          "$type": "color",
+          "$value": "{semantic.defaults.accent-hover.dark}",
+          "$extensions": {
+            "com.cindy.desktop": {
+              "cssAlias": "accent-hover",
+              "wrapper": "var",
+              "mode": "dark"
+            }
+          }
+        }
+      },
       "sidebar": {
         "light": {
           "$type": "color",
@@ -1243,6 +1267,54 @@
           "$extensions": {
             "com.cindy.desktop": {
               "cssAlias": "text-disabled-tertiary",
+              "wrapper": "var",
+              "mode": "dark"
+            }
+          }
+        }
+      },
+      "send-btn-hover-bg": {
+        "light": {
+          "$type": "color",
+          "$value": "{semantic.defaults.accent-cta-bg.light}",
+          "$extensions": {
+            "com.cindy.desktop": {
+              "cssAlias": "send-btn-bg",
+              "wrapper": "var",
+              "mode": "light"
+            }
+          }
+        },
+        "dark": {
+          "$type": "color",
+          "$value": "{semantic.defaults.accent-cta-bg.dark}",
+          "$extensions": {
+            "com.cindy.desktop": {
+              "cssAlias": "send-btn-bg",
+              "wrapper": "var",
+              "mode": "dark"
+            }
+          }
+        }
+      },
+      "send-btn-pressed-bg": {
+        "light": {
+          "$type": "color",
+          "$value": "{semantic.defaults.accent-cta-bg.light}",
+          "$extensions": {
+            "com.cindy.desktop": {
+              "cssAlias": "send-btn-bg",
+              "wrapper": "var",
+              "mode": "light"
+            }
+          }
+        },
+        "dark": {
+          "$type": "color",
+          "$value": "{semantic.defaults.accent-cta-bg.dark}",
+          "$extensions": {
+            "com.cindy.desktop": {
+              "cssAlias": "send-btn-bg",
               "wrapper": "var",
               "mode": "dark"
             }
@@ -5674,6 +5746,30 @@
           "$extensions": {
             "com.cindy.desktop": {
               "cssAlias": "accent-cta-bg",
+              "wrapper": "var",
+              "mode": "dark"
+            }
+          }
+        }
+      },
+      "button-cta-hover": {
+        "light": {
+          "$type": "color",
+          "$value": "{semantic.defaults.accent-hover.light}",
+          "$extensions": {
+            "com.cindy.desktop": {
+              "cssAlias": "accent-hover",
+              "wrapper": "var",
+              "mode": "light"
+            }
+          }
+        },
+        "dark": {
+          "$type": "color",
+          "$value": "{semantic.defaults.accent-hover.dark}",
+          "$extensions": {
+            "com.cindy.desktop": {
+              "cssAlias": "accent-hover",
               "wrapper": "var",
               "mode": "dark"
             }

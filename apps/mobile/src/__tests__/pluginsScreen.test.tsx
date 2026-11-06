@@ -224,7 +224,6 @@ vi.mock("@/plugins/PluginTaskPicker", () => ({
   },
 }));
 vi.mock("@/plugins/PluginPage", () => ({ PluginPage: () => null }));
-vi.mock("@/plugins/PluginReadmePage", () => ({ PluginReadmePage: () => null }));
 vi.mock("@/plugins/pluginClient", () => ({
   invokePlugin: (...args: any[]) => fixture.invoke(...args),
 }));

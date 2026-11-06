@@ -1,5 +1,4 @@
 import type { Schedule } from '@cindy/maker-scheduler';
-import { parseScheduleDeadline } from '@cindy/maker-shared/schedule-form';
 
 import { buildPreRunHook, scheduleAgentKindForForm } from './scheduleFormLogic';
 import type { ScheduleFormState } from '../hooks/useScheduleForm';
@@ -15,7 +14,6 @@ export interface ProjectScheduleConfig {
   recurring?: boolean;
   manual?: boolean;
   intervalMs?: number;
-  expireAt?: number;
   agentKind?: 'claude-code' | 'codex' | 'pi';
   /** 显式模型选择的 Harness；省略时保留旧配置的跟随绑定任务语义。 */
   modelAgentKind?: 'claude-code' | 'codex' | 'pi';
@@ -64,7 +62,6 @@ export function scheduleToProjectConfig(
     recurring: schedule.recurring,
     manual: schedule.manual,
     intervalMs: schedule.intervalMs,
-    expireAt: schedule.expireAt,
     agentKind: schedule.agentKind,
     modelAgentKind: schedule.modelAgentKind,
     modelAgentDeviceId: schedule.modelAgentDeviceId,
@@ -97,7 +94,6 @@ export function formToProjectConfig(
     recurring: form.recurring,
     manual: form.manual,
     intervalMs: form.intervalMs,
-    expireAt: parseScheduleDeadline(form.deadline ?? '', form.sourceExpireAt) ?? undefined,
     agentKind: scheduleAgentKindForForm(form),
     modelAgentKind: form.model.trim() ? form.modelAgentKind : undefined,
     modelAgentDeviceId: form.model.trim() ? form.modelAgentDeviceId : undefined,

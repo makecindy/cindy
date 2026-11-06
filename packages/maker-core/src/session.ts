@@ -1,4 +1,3 @@
-import { parseOutputLimitDetails, type OutputLimitDetails } from '@cindy/maker-shared';
 /**
  * Session — 单次 agent 会话的上层包装。
  *
@@ -536,7 +535,6 @@ export class Session {
     sdkError?: string;
     errorStatus?: number;
     toolLoop?: import('./types/events.js').ToolLoopErrorDetails;
-    outputLimit?: OutputLimitDetails;
     /** Codex app-server 的结构化错误 tag(如 badRequest / cyberPolicy)。 */
     codexErrorInfo?: string;
   } | null = null;
@@ -714,7 +712,6 @@ export class Session {
     sdkError?: string;
     errorStatus?: number;
     toolLoop?: import('./types/events.js').ToolLoopErrorDetails;
-    outputLimit?: OutputLimitDetails;
     codexErrorInfo?: string;
   } {
     if (
@@ -743,9 +740,6 @@ export class Session {
         ...(this.terminalEventObservedErrorSignals?.toolLoop
           ? { toolLoop: this.terminalEventObservedErrorSignals.toolLoop }
           : {}),
-        ...(this.terminalEventObservedErrorSignals?.outputLimit
-          ? { outputLimit: this.terminalEventObservedErrorSignals.outputLimit }
-          : {}),
         ...(this.terminalEventObservedErrorSignals?.codexErrorInfo
           ? { codexErrorInfo: this.terminalEventObservedErrorSignals.codexErrorInfo }
           : {}),
@@ -761,7 +755,6 @@ export class Session {
       sdkError?: string;
       errorStatus?: number;
       toolLoop?: import('./types/events.js').ToolLoopErrorDetails;
-      outputLimit?: OutputLimitDetails;
       codexErrorInfo?: string;
     } | null;
   } {
@@ -771,7 +764,6 @@ export class Session {
       sdkError?: unknown;
       errorStatus?: unknown;
       toolLoop?: unknown;
-      outputLimit?: unknown;
       codexErrorInfo?: unknown;
     } | null;
     const errorMessage = errorData?.message;
@@ -780,7 +772,6 @@ export class Session {
       sdkError?: string;
       errorStatus?: number;
       toolLoop?: import('./types/events.js').ToolLoopErrorDetails;
-      outputLimit?: OutputLimitDetails;
       codexErrorInfo?: string;
     } = {};
     if (typeof errorData?.reason === 'string' && errorData.reason.length > 0) {
@@ -794,8 +785,6 @@ export class Session {
     }
     const toolLoop = parseToolLoopErrorDetails(errorData?.toolLoop);
     if (toolLoop) signals.toolLoop = toolLoop;
-    const outputLimit = parseOutputLimitDetails(errorData?.outputLimit);
-    if (outputLimit) signals.outputLimit = outputLimit;
     // Codex 的结构化 tag 是有界枚举名(translator 只取 tag,不带原文),不需要脱敏。
     if (typeof errorData?.codexErrorInfo === 'string' && /^[A-Za-z][A-Za-z0-9_]{0,63}$/u.test(errorData.codexErrorInfo)) {
       signals.codexErrorInfo = errorData.codexErrorInfo;
@@ -807,7 +796,6 @@ export class Session {
         signals.sdkError ||
         signals.errorStatus !== undefined ||
         signals.toolLoop ||
-        signals.outputLimit ||
         signals.codexErrorInfo
           ? signals
           : null,
@@ -844,7 +832,6 @@ export class Session {
       sdkError?: string;
       errorStatus?: number;
       toolLoop?: import('./types/events.js').ToolLoopErrorDetails;
-      outputLimit?: OutputLimitDetails;
     } | null;
   } | null {
     const snapshot = this.terminalObservedDuringReservation;
@@ -1718,13 +1705,11 @@ export class Session {
 
   private settleUnfinishedTurn(message: string): void {
     if (!this.hasUnsettledTurn()) return;
-    const usage = this.handle.getPendingTurnUsage?.();
     if (this.abortRecoveryScheduledFor === this.turnGeneration) {
-      this.fanOutEvent({ type: 'done', data: { status: 'cancelled', ...(usage ? { usage } : {}) }, source: this.agentKind });
+      this.fanOutEvent({ type: 'done', data: { status: 'cancelled' }, source: this.agentKind });
     } else {
       this.fanOutEvent({ type: 'error', data: {
         message, isTerminal: true, reason: 'session_event_loop_crashed',
-        ...(usage ? { usage } : {}),
       }, source: this.agentKind });
     }
   }
@@ -1752,7 +1737,6 @@ export class Session {
       if (this.handle.detach) {
         await this.handle.detach(teardown);
       } else {
-        if (this.handle.getPendingTurnUsage) this.settleUnfinishedTurn(SESSION_CLOSED_MID_TURN_MESSAGE);
         await this.handle.close(teardown);
       }
       detachSucceeded = true;

@@ -179,17 +179,10 @@ export class PluginMarketApi {
     throw new Error('Plugin 市场分页超过安全上限');
   }
 
-  /** `readmeLocale` 让服务端按该语言选详细介绍；旧服务端忽略这个参数。 */
-  async detail(
-    pluginId: string,
-    options?: { readmeLocale?: string },
-  ): Promise<GetPluginResponse['plugin']> {
-    const query = options?.readmeLocale
-      ? `?readmeLocale=${encodeURIComponent(options.readmeLocale)}`
-      : '';
+  async detail(pluginId: string): Promise<GetPluginResponse['plugin']> {
     return parseGetPluginResponse(
       await this.fetcher<unknown>(
-        `/api/plugins/${encodeURIComponent(pluginId)}${query}`,
+        `/api/plugins/${encodeURIComponent(pluginId)}`,
         this.requestOptions(),
       ),
       pluginObjectUrlOptions(),

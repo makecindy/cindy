@@ -56,7 +56,6 @@ import {
   decodeGhostManualMarkdown,
   ghostManualLogicalPathForEntry,
 } from './ghostManualValidation.js';
-import { checkGhostReadmeForPack } from './ghostReadme.js';
 import { validateGhostLocaleResourcesInDirectory } from './ghostLocaleFiles.js';
 import { GHOST_SIGNATURE_FILE } from './ghostSignature.js';
 import {
@@ -1018,13 +1017,6 @@ async function buildGhostPackage(
       } catch {
         return { ok: false, errorCode: 'ENTRY_MISSING', message: `清单声明的文件不存在:${rel}` };
       }
-    }
-
-    // 3.4) 详细介绍:声明的 Markdown 与正文引用的包内图片在场且不超限,
-    // 与详情页读取同一套上限(读取侧超限只静默跳过,作者在这里得到明确原因)。
-    const readmeProblem = await checkGhostReadmeForPack(dir, manifest);
-    if (readmeProblem) {
-      return { ok: false, errorCode: 'MANIFEST_INVALID', message: readmeProblem };
     }
 
     // 3.5) skill 能力:SKILL.md frontmatter 与清单声明必须逐字一致。与装入侧

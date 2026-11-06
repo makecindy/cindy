@@ -10,7 +10,6 @@ import { runInNewContext } from 'node:vm';
 import crypto from 'node:crypto';
 import fs from 'node:fs';
 import JSZip from 'jszip';
-import { GHOST_README_IMAGE_MAX_BYTES } from '@cindy/plugin-protocol';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -174,32 +173,6 @@ async function makeSrcDir(files: Record<string, string | Buffer>): Promise<strin
 }
 
 describe('packGhostDir', () => {
-  // FORGE_GUIDE §2「详细介绍」:打包期拦下缺图与超限图片,作者得到明确原因;运行时读取侧只会静默跳过。
-  // Tier: unit.
-  it('checks readme files and the package images they reference', async () => {
-    const manifest = { ...GOOD_MANIFEST, readme: { en: 'README.md' } };
-    const dir = await makeSrcDir({
-      'ghost.json': JSON.stringify(manifest),
-      'main.js': '',
-      'README.md': '# Demo\n![Search](assets/search.png) ![Remote](https://example.com/x.png)\n',
-    });
-    expect(await packGhostDir(dir)).toMatchObject({
-      ok: false,
-      errorCode: 'MANIFEST_INVALID',
-      message: expect.stringContaining('assets/search.png'),
-    });
-    await fs.promises.mkdir(path.join(dir, 'assets'));
-    await fs.promises.writeFile(path.join(dir, 'assets/search.png'), Buffer.alloc(GHOST_README_IMAGE_MAX_BYTES + 1));
-    expect(await packGhostDir(dir)).toMatchObject({ ok: false, errorCode: 'MANIFEST_INVALID' });
-    await fs.promises.writeFile(path.join(dir, 'assets/search.png'), Buffer.from('png'));
-    const packed = await packGhostDir(dir);
-    expect(packed.ok).toBe(true);
-    if (packed.ok) {
-      const zip = await JSZip.loadAsync(packed.buf);
-      expect(zip.file('README.md')).not.toBeNull();
-      expect(zip.file('assets/search.png')).not.toBeNull();
-    }
-  });
   // 4.1: a named-tab declaration must not package successfully with a missing
   // page. Contribution-page coverage does not exercise this entry list. Tier: unit.
   it('requires named tab pages before producing an installable package', async () => {

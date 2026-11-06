@@ -1,4 +1,3 @@
-import { type OutputLimitDetails } from '@cindy/maker-shared';
 /**
  * useCCAgentChat — thin subscription layer over `makerChatStore`.
  * ---------------------------------------------------------------------------
@@ -199,7 +198,6 @@ interface UseCCAgentChatReturn {
   errorReason: string | null;
   /** Structured details for a tool-loop terminal error, when available. */
   toolLoop: ToolLoopErrorDetails | null;
-  outputLimit: OutputLimitDetails | null;
   /** error 是非终止 recoverableError(turn 在跑,daemon 自动重试中):ErrorBanner
    *  网络分支据此显示「正在自动重试…」而非「可点击重试」。 */
   errorIsRecoverable: boolean;
@@ -899,7 +897,6 @@ export function useCCAgentChat(
           ? (lightState.errorReason ?? null)
           : null,
     toolLoop: lightState.error ? (lightState.toolLoop ?? null) : null,
-    outputLimit: lightState.error ? (lightState.outputLimit ?? null) : null,
     // 当前 error 是非终止 recoverableError(turn 在跑,daemon 自动重试中):
     // ErrorBanner 网络分支据此显示「正在自动重试…」而非「可点击重试」。
     errorIsRecoverable: !lightState.error && lightState.recoverableError != null,

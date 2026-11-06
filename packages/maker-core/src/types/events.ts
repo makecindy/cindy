@@ -9,8 +9,6 @@
  * 与现有 ccAgent.types StreamEvent 接近，但精简了未启用字段。
  */
 
-import type { OutputLimitDetails } from '@cindy/maker-shared';
-
 import type { WorkflowProgressEntry } from '@cindy/maker-shared/agent-task';
 import type { TokenSpeedSnapshot } from '@cindy/maker-shared/usage-format';
 import type { SubagentObservation } from '@cindy/maker-shared/subagent-observation';
@@ -94,8 +92,6 @@ export interface AgentErrorEventData {
   usageResetAt?: number;
   /** Structured details for reason='tool_use_loop_detected'. */
   toolLoop?: ToolLoopErrorDetails;
-  /** Bounded usage of the request that ended with reason='output-limit'. */
-  outputLimit?: OutputLimitDetails;
   [key: string]: unknown;
 }
 

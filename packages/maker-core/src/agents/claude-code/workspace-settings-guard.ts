@@ -108,12 +108,6 @@ function stripJsonc(text: string): string {
 
 type ParsedSettings = { kind: 'missing' } | { kind: 'unparseable' } | { kind: 'ok'; value: unknown };
 
-/** Shared native settings parser; invalid input still throws to the caller. */
-export function parseClaudeSettingsJson(raw: string): unknown {
-  const text = raw.startsWith('\uFEFF') ? raw.slice(1) : raw;
-  return text.trim() ? JSON.parse(stripJsonc(text)) : {};
-}
-
 async function readSettings(file: string): Promise<ParsedSettings> {
   let raw: string;
   try {
@@ -121,8 +115,10 @@ async function readSettings(file: string): Promise<ParsedSettings> {
   } catch {
     return { kind: 'missing' };
   }
+  const text = raw.startsWith('\uFEFF') ? raw.slice(1) : raw;
+  if (!text.trim()) return { kind: 'ok', value: {} };
   try {
-    return { kind: 'ok', value: parseClaudeSettingsJson(raw) };
+    return { kind: 'ok', value: JSON.parse(stripJsonc(text)) };
   } catch {
     return { kind: 'unparseable' };
   }
@@ -185,7 +181,7 @@ async function findCanonicalGitRoot(start: string): Promise<string | null> {
 }
 
 /** CLI 会加载的项目级设置文件(按路径去重)。 */
-export async function workspaceSettingsFiles(workingDir: string): Promise<string[]> {
+async function workspaceSettingsFiles(workingDir: string): Promise<string[]> {
   const cwd = path.resolve(workingDir);
   const real = await realpathOrSelf(cwd);
   const files: string[] = [];

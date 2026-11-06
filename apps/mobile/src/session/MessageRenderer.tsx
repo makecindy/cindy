@@ -3630,18 +3630,16 @@ function MessageBubble({
     && item.message.kind === 'user'
     && !isFirstUserMessage
   );
-  // 对齐桌面 edit-last-message:只在最后一条用户消息开放,首条同样可编辑。
-  // 任务运行中不外显、收进「…」菜单(点编辑不中断任务,发送时才中断);停下后回到操作行。
-  const canEditMessage = !!(
+  // 对齐桌面 edit-last-message:只在最后一条用户消息开放,首条同样可编辑;
+  // 运行中也显示(点了先停止当前回复)。
+  const canEdit = !!(
     showCompletedActionBar
     && clientId
     && actions.onEditMessage
     && item.message.kind === 'user'
     && clientId === actions.lastUserMessageClientId
   );
-  const editInMenu = canEditMessage && actions.isSessionStreaming === true;
-  const canEdit = canEditMessage && !editInMenu;
-  const editing = canEditMessage && clientId === actions.editingMessageClientId;
+  const editing = canEdit && clientId === actions.editingMessageClientId;
   // 对齐桌面:任务运行中也保留删除入口,点了由页面提示等回复结束,不让菜单项时有时无。
   const canDelete = !!(
     showCompletedActionBar
@@ -3720,9 +3718,8 @@ function MessageBubble({
     canAddToChat,
     canCopyLink,
     canDelete,
-    canEditInMenu: editInMenu && !editing,
     canRewind,
-  }), [canSideChat, canAddToChat, canCopyLink, canDelete, editInMenu, editing, canRewind, i18nInstance.language]);
+  }), [canSideChat, canAddToChat, canCopyLink, canDelete, canRewind, i18nInstance.language]);
   const actionBar = useMemo(() => buildMessageActionBarPresentation({
     align: isUser ? 'user' : 'agent',
     canCopy,
@@ -3828,7 +3825,6 @@ function MessageBubble({
   const selectMenuAction = useCallback((id: MobileMessageMenuActionId) => {
     if (!clientId) return;
     if (id === 'rewind') return selectControlAction('rewind');
-    if (id === 'edit') return selectControlAction('edit');
     if (id === 'delete') return selectControlAction('delete');
     if (id === 'add-to-chat') return actions.onAddMessageToComposer?.(clientId);
     if (id === 'side-chat') return actions.onSideChatMessage?.(copyText);
@@ -3837,7 +3833,7 @@ function MessageBubble({
   const openMessageActionMenu = useCallback(() => {
     if (usesSystemActionMenu()) {
       const disabled = actionBusy
-        ? new Set<MobileMessageMenuActionId>(['edit', 'rewind', 'delete'])
+        ? new Set<MobileMessageMenuActionId>(['rewind', 'delete'])
         : null;
       void showActionMenu({
         cancelLabel: t('session.common.cancel'),
@@ -4237,7 +4233,7 @@ function MessageBubble({
                   actions={messageMenu.map((item) => ({
                     image: item.image,
                     destructive: item.destructive,
-                    disabled: actionBusy && (item.id === 'edit' || item.id === 'rewind' || item.id === 'delete'),
+                    disabled: actionBusy && (item.id === 'rewind' || item.id === 'delete'),
                     id: item.id,
                     title: item.label,
                   }))}
@@ -4290,7 +4286,7 @@ function MessageBubble({
         </View>
       ) : null}
       <MessageActionSheet
-        disabledActions={actionBusy ? ['edit', 'rewind', 'delete'] : undefined}
+        disabledActions={actionBusy ? ['rewind', 'delete'] : undefined}
         items={messageMenu}
         onAction={selectMenuAction}
         onClose={() => setActionSheetOpen(false)}

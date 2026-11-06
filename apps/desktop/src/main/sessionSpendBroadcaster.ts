@@ -197,14 +197,13 @@ export async function recordSessionTurnTokens(
       .where(sql`${sessions.id} = ${sessionId}`)
       .get();
     if (!isOwnerScopeCurrent(ownerScope)) return;
-    broadcastSessionTokens({ sessionId, totalTokens: row?.totalTokenUsage ?? 0 }, ownerScope);
+    broadcastTokens({ sessionId, totalTokens: row?.totalTokenUsage ?? 0 }, ownerScope);
   } catch (err) {
     log.warn('recordSessionTurnTokens failed:', err instanceof Error ? err.message : String(err));
   }
 }
 
-export function broadcastSessionTokens(payload: SessionTokensPayload, ownerScope: OwnerScope | null = null): void {
-  if (!isOwnerScopeCurrent(ownerScope)) return;
+function broadcastTokens(payload: SessionTokensPayload, ownerScope: OwnerScope | null = null): void {
   const ownerStamp = ownerScope ? ownerScope.ownerStamp : broadcastTap.getSafeDataOwnerPushStamp?.();
   if (ownerScope === null) {
     broadcastTap.tapWindowBroadcast(USAGE_SESSION_TOKENS_CHANGED, payload);

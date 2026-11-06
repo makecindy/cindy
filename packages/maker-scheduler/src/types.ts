@@ -345,16 +345,6 @@ export type ScheduleMutationGuard = Readonly<Schedule> & {
   effectiveWorkingDir?: string;
 };
 
-/**
- * An early run started by host code instead of the cron or a user. `kind: 'watch'`: something the
- * schedule watches changed (`source` names the watcher, `detail` the watched object, such as a PR URL).
- */
-export interface ScheduleRunTrigger {
-  kind: 'watch';
-  source: string;
-  detail?: string;
-}
-
 export interface ScheduleRun {
   id: string;
   scheduleId: string;
@@ -463,8 +453,7 @@ export interface CreateScheduleInput {
   /** 插件前置检查;update 时 null = 清除,省略 = 保留(旧客户端不认识该字段)。 */
   preRunPlugin?: PreRunPluginConfig | null;
   notify: ScheduleNotifyConfig;
-  /** null explicitly clears the deadline across JSON transports. */
-  expireAt?: number | null;
+  expireAt?: number;
 }
 
 export type UpdateScheduleInput = Partial<CreateScheduleInput>;

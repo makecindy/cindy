@@ -45,7 +45,6 @@ module.exports = {
     "cindy-link-2",
     "cindy-undo-2",
     "cindy-trash-2",
-    "cindy-pencil",
   ]
     .map((name) => ({
       type: "dir",
