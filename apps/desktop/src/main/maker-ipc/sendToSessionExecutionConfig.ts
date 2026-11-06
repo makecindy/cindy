@@ -285,7 +285,7 @@ export async function resolveSendToSessionCreateRoute(
     /** 来源任务的 Agent 所在电脑；null = 本机。SSH 来源也传 null。 */
     sourceAgentDeviceId: string | null;
     sourceIsSsh: boolean;
-    /** undefined = 继承来源；null = 本机；字符串 = 那台电脑或分享。 */
+    /** undefined = 继承来源；null = 本机；字符串 = 那台电脑或分享。SSH 来源不接受显式位置。 */
     requestedAgentDeviceId?: string | null;
     overrides?: SendToSessionExecutionOverrides;
   },
@@ -311,6 +311,16 @@ export async function resolveSendToSessionCreateRoute(
     };
   }
   const agentDeviceId = location.agentDeviceId;
+  // SSH 来源的 Agent 在 SSH 主机上，显式位置(含 "local" 与本机设备 id)一律不支持。
+  // resolveRequestedAgentDeviceId 先按 Worker 语义接受本机位置，若放行，SSH 来源的位置会被
+  // 当成未变(locationChanged=false)，随后沿用 SSH 来源的模型与供应商在本机建任务。
+  if (params.sourceIsSsh && params.requestedAgentDeviceId !== undefined) {
+    return {
+      ok: false,
+      errorCode: 'INVALID_ARGS',
+      message: 'the source task runs its Agent on an SSH host; agent_device_id is not supported',
+    };
+  }
   const locationChanged = agentDeviceId !== params.sourceAgentDeviceId;
   const overrides = params.overrides ?? {};
   const hasOverrides = overrides.agentKind !== undefined

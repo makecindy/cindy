@@ -541,6 +541,20 @@ describe('resolveSendToSessionCreateRoute', () => {
       errorCode: 'INVALID_ARGS',
     },
     {
+      // "local" 到宿主是 null；SSH 来源的 Agent 在 SSH 主机上，显式本机位置同样要拒绝，
+      // 否则位置被当成未变、沿用 SSH 来源的模型与供应商在本机建任务。
+      name: 'SSH 来源显式 "local"',
+      params: { sourceIsSsh: true, requestedAgentDeviceId: null },
+      device: async () => deviceSnapshot(),
+      errorCode: 'INVALID_ARGS',
+    },
+    {
+      name: 'SSH 来源显式本机设备 id',
+      params: { sourceIsSsh: true, requestedAgentDeviceId: SELF },
+      device: async () => deviceSnapshot(),
+      errorCode: 'INVALID_ARGS',
+    },
+    {
       name: '那台没有来源模型',
       params: { sourceIsSsh: false, requestedAgentDeviceId: 'device-b' },
       device: async () => deviceSnapshot(['claude-opus-fast']),
