@@ -1,5 +1,12 @@
 import { usePreviewFocusReturn } from './PreviewChrome';
-import { PreviewHeader, PreviewFooter, PreviewButton } from './PreviewChrome';
+import {
+  PREVIEW_PANEL_CLASS,
+  PREVIEW_PANEL_STYLE,
+  PreviewHeader,
+  PreviewFooter,
+  PreviewButton,
+  PreviewScrim,
+} from './PreviewChrome';
 import { previewSourceName } from '@cindy/maker-shared/attachment-preview';
 import { shouldShowOpenPathError } from '../../../shared/openPathResult';
 /**
@@ -216,6 +223,13 @@ export function ModelLightbox({ source, onClose, filename }: ModelLightboxProps)
     // 还给打开前的元素(ChatImageView 键盘路径 = 预览触发器)。handleClose
     // 里既有的 blur 仍保留——点进模型后 model-viewer shadow DOM 的焦点框
     // 要在淡出前先灭掉。
+    <>
+    <PreviewScrim
+      onClose={() => {
+        if (performance.now() - lastMenuCloseAt.current < 150) return;
+        handleClose();
+      }}
+    />
     <FocusScope
       onUnmountAutoFocus={restorePreviewFocus}
       asChild
@@ -229,11 +243,10 @@ export function ModelLightbox({ source, onClose, filename }: ModelLightboxProps)
     <div
       ref={overlayRef}
       data-lightbox-layer
+      className={PREVIEW_PANEL_CLASS}
       style={{
-        position: 'fixed',
-        inset: 0,
+        ...PREVIEW_PANEL_STYLE,
         zIndex: 9999,
-        background: 'var(--surface)',
         display: 'flex',
         alignItems: 'center',
         justifyContent: 'center',
@@ -302,8 +315,8 @@ export function ModelLightbox({ source, onClose, filename }: ModelLightboxProps)
       {/* biome-ignore lint/a11y/noStaticElementInteractions: right-click opens a pointer context menu for the model canvas. */}
       <div
         style={{
-          width: 'min(85vw, 1024px)',
-          height: 'calc(100vh - 160px)',
+          width: 'min(calc(var(--preview-width) - 80px), 1024px)',
+          height: 'calc(var(--preview-height) - 160px)',
           position: 'relative',
           zIndex: 1,
         }}
@@ -452,6 +465,7 @@ export function ModelLightbox({ source, onClose, filename }: ModelLightboxProps)
       </DropdownMenu>
     </div>
     </FocusScope>
+    </>
   );
 
   return createPortal(overlay, document.body);

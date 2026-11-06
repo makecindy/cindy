@@ -35,6 +35,7 @@ export function ProviderRow({
   return (
     <button
       {...buttonProps}
+      data-settings-search-action="Select a provider to open its connection setup"
       type="button"
       title={name}
       disabled={busy || buttonProps.disabled}

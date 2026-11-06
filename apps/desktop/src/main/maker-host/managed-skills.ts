@@ -8,8 +8,8 @@ import {
   isAppSessionBoundaryPending,
 } from '../appSessionState.js';
 import type { AgentDeps } from '@cindy/maker-core';
-import { builtInSkillDescriptors, sharedBuiltInSkillsRoot } from './built-in-skills.js';
-import { getGhostManager, listAvailableGhostsForAuthorization } from '../cindy-brain/index.js';
+import { builtInSkillDescriptorsAsync, sharedBuiltInSkillsRoot } from './built-in-skills.js';
+import { getGhostManager, listAvailableGhostsAsync } from '../cindy-brain/index.js';
 import { withSharedGlobalSkillProjectionMutation } from '../authBoundaryQuarantine.js';
 import { prepareCodexGlobalSkillsLinks } from './codex-global-skills.js';
 import { installedGhostStoragePart } from '../../shared/pluginIdentity.js';
@@ -33,7 +33,7 @@ export async function cindyManagedSkillRoots(): Promise<string[]> {
 export const listCindyManagedSkills: NonNullable<AgentDeps['getManagedSkills']> = async () => {
   const owner = activeOwnerScopeKey();
   if (isAppSessionBoundaryPending()) throw new Error('Skill owner is changing');
-  const builtIns = builtInSkillDescriptors(app.getPath('userData'), app.getPath('appData'));
+  const builtIns = await builtInSkillDescriptorsAsync(app.getPath('userData'), app.getPath('appData'));
   const skills: Awaited<ReturnType<NonNullable<AgentDeps['getManagedSkills']>>> = [];
   const addSkill = (directory: string, name: string, namespace: string, description?: string) => {
     try {
@@ -60,7 +60,7 @@ export const listCindyManagedSkills: NonNullable<AgentDeps['getManagedSkills']> 
   // Reuse receipt verification. Occupants preserved in the projection directory
   // (real directories, foreign links, stale slots) are not an approval catalog.
   const manager = getGhostManager();
-  for (const ghost of listAvailableGhostsForAuthorization()) {
+  for (const ghost of await listAvailableGhostsAsync()) {
     if (
       !ghost.enabled ||
       !ghost.approvedSkillRoot ||

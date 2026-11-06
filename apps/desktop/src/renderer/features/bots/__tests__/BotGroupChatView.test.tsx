@@ -11,9 +11,10 @@ import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vite
 import { captureDraftDiscardToken, clearDraft, getAllDraftAttachmentUrls, getDraft, isDraftDiscardTokenCurrent, saveDraft } from '@/lib/composerDraftStore';
 import { FeatureSidebarSlotProvider, useFeatureContentHeader } from '../../feature-context';
 import { markBotRead, getBotLastReadAt, botGroupReadKey, resetBotReadStateForTests } from '../botReadState';
-import { botGroupAttachmentScope, botGroupThreadDraftKey } from '../botGroupAttachments';
+import { botGroupAttachmentScope, botGroupDraftDoc, botGroupThreadDraftKey } from '../botGroupAttachments';
 import { getBotGroupListSnapshot, refreshBotGroups, resetBotGroupStoreForTests } from '../botGroupStore';
-import { getBotGroupOutbox, getBotGroupOutboxPreviews, resetBotGroupOutboxForTests } from '../botGroupOutbox';
+import { botGroupSendSignature, enqueueBotGroupSend, getBotGroupOutbox, getBotGroupOutboxPreviews, resetBotGroupOutboxForTests } from '../botGroupOutbox';
+import type { BotGroupOutboxCommandRequest, BotGroupOutboxCommandResult, BotGroupOutboxStoredEntry } from '../../../../shared/botGroupOutboxStorage';
 import { resetCompanionCloudStoreForTests } from '../companionCloudStore';
 import { botGroupWorkPreview } from '../BotGroupLivePreview';
 import { BotGroupChatView } from '../BotGroupChatView';
@@ -369,6 +370,208 @@ beforeEach(() => {
 afterEach(() => { cleanup(); vi.unstubAllGlobals(); });
 
 describe('BotGroupChatView', () => {
+  function localResult(request: BotGroupOutboxCommandRequest, entries: BotGroupOutboxStoredEntry[] = []): BotGroupOutboxCommandResult {
+    return { ok: true, owner: request.owner, instanceId: 'main-test', revision: 1, entries };
+  }
+
+  it('keeps text and files after durable enqueue rejection, and retries the same immutable operation', async () => {
+    const attempts: Extract<BotGroupOutboxCommandRequest, { action: 'enqueue' }>[] = [];
+    window.electronAPI.maker.botGroupOutbox = async () => [];
+    window.electronAPI.maker.botGroupOutboxCommand = async request => {
+      if (request.action !== 'enqueue') return localResult(request);
+      attempts.push(request);
+      throw new Error('OUTBOX_SOURCE_CONSUMED');
+    };
+    renderView();
+    const input = await screen.findByRole('textbox') as HTMLTextAreaElement;
+    fireEvent.change(input, { target: { value: '不能丢掉的正文' } });
+    pickFiles([diskFile('kept.png', 'image/png')]);
+    await screen.findByAltText('kept.png');
+    fireEvent.click(screen.getByRole('button', { name: 'bots.send' }));
+    await waitFor(() => expect(mocks.toastError).toHaveBeenCalledWith('bots.groupChat.composer.sendFailed'));
+    expect(input.value).toBe('不能丢掉的正文');
+    expect(screen.getAllByAltText('kept.png')).toHaveLength(1);
+    fireEvent.click(screen.getByRole('button', { name: 'bots.send' }));
+    await waitFor(() => expect(attempts).toHaveLength(2));
+    expect(attempts[1]!.enqueueOperationId).toBe(attempts[0]!.enqueueOperationId);
+    expect(attempts[1]!.entry.input.clientId).toBe(attempts[0]!.entry.input.clientId);
+    expect(attempts[1]!.entry.files).toEqual(attempts[0]!.entry.files);
+    expect(mocks.sendBotGroupMessage).not.toHaveBeenCalled();
+  });
+
+  it.each(['unchanged', 'changed', 'attachment', 'lost-reply', 'late-reply'])('keeps the failed edit source across composer remount (%s)', async mode => {
+    const enqueues: Extract<BotGroupOutboxCommandRequest, { action: 'enqueue' }>[] = [];
+    let stored: BotGroupOutboxStoredEntry[] = [];
+    let revision = 0;
+    let releaseReply!: () => void;
+    window.electronAPI.maker.botGroupOutbox = async () => [];
+    window.electronAPI.maker.botGroupOutboxCommand = async request => {
+      if (request.action === 'enqueue') {
+        enqueues.push(request);
+        if (mode === 'lost-reply' && enqueues.length === 3) {
+          return { ...localResult(request, stored), revision, accepted: true };
+        }
+        const source = request.editSource;
+        if (source) stored = stored.filter(row => row.input.clientId !== source.clientId);
+        stored = [...stored, { ...request.entry, entryRevision: ++revision, queueOrdinal: revision,
+          status: 'failed', retryable: false }];
+        if (mode === 'lost-reply' && enqueues.length === 2) throw new Error('committed reply lost');
+        if (mode === 'late-reply' && enqueues.length === 2) await new Promise<void>(resolve => { releaseReply = resolve; });
+        return { ...localResult(request, stored), revision, accepted: true };
+      }
+      if (request.action === 'edit') {
+        stored = [{ ...stored[0]!, entryRevision: ++revision,
+          editHold: { operationId: request.operationId, revision } }];
+      }
+      return { ...localResult(request, stored), revision };
+    };
+    const input = { groupId: 'g1', clientId: 'edited-original', text: 'original failed draft',
+      mentions: { all: false, botIds: [] } };
+    await enqueueBotGroupSend({ input, signature: botGroupSendSignature(input, '[]'), draft: input.text,
+      tracked: [], files: [], attachmentScope: botGroupAttachmentScope('g1'), enqueueOperationId: 'original-edit' });
+    const first = renderView();
+    await screen.findByRole('textbox');
+    fireEvent.click(screen.getByRole('button', { name: 'bots.groupChat.outbox.edit' }));
+    await waitFor(() => expect((screen.getByRole('textbox') as HTMLTextAreaElement).value).toBe(input.text));
+    const text = mode === 'changed' || mode === 'lost-reply' || mode === 'late-reply' ? 'edited draft after navigation' : input.text;
+    if (text !== input.text) fireEvent.change(screen.getByRole('textbox'), { target: { value: text } });
+    if (mode === 'attachment') {
+      pickFiles([diskFile('edited-note.txt', 'text/plain')]);
+      await waitFor(() => expect(getDraft(botGroupAttachmentScope('g1'))?.attachments).toHaveLength(1));
+    }
+    first.unmount();
+    const second = renderView();
+    const restored = await screen.findByRole('textbox') as HTMLTextAreaElement;
+    expect(restored.value).toBe(text);
+    fireEvent.keyDown(restored, { key: 'Enter' });
+    await waitFor(() => expect(enqueues).toHaveLength(2));
+    expect(enqueues[1]!.editSource).toEqual({ groupId: 'g1', clientId: input.clientId, revision: 2 });
+    expect(enqueues[1]!.entry.input.clientId === input.clientId).toBe(mode === 'unchanged');
+    expect(stored.filter(row => row.editHold)).toHaveLength(0);
+    if (mode === 'late-reply') {
+      second.unmount();
+      renderView();
+      fireEvent.change(await screen.findByRole('textbox'), { target: { value: 'newer draft while saving' } });
+      await waitFor(() => expect(getDraft(botGroupAttachmentScope('g1'))?.text).toEqual(botGroupDraftDoc('newer draft while saving')));
+      releaseReply();
+      await waitFor(() => expect(getDraft(botGroupAttachmentScope('g1'))?.botGroupEdit).toBeUndefined());
+      expect(getDraft(botGroupAttachmentScope('g1'))?.text).toEqual(botGroupDraftDoc('newer draft while saving'));
+      fireEvent.keyDown(screen.getByRole('textbox'), { key: 'Enter' });
+      await waitFor(() => expect(enqueues).toHaveLength(3));
+      expect(enqueues[2]!.editSource).toBeUndefined();
+    }
+    if (mode === 'lost-reply') {
+      await waitFor(() => expect(mocks.toastError).toHaveBeenCalled());
+      second.unmount();
+      renderView();
+      const retry = await screen.findByRole('textbox') as HTMLTextAreaElement;
+      expect(retry.value).toBe(text);
+      fireEvent.keyDown(retry, { key: 'Enter' });
+      await waitFor(() => expect(enqueues).toHaveLength(3));
+      expect(enqueues[2]!.entry.input.clientId).toBe(enqueues[1]!.entry.input.clientId);
+      expect(enqueues[2]!.enqueueOperationId).toBe(enqueues[1]!.enqueueOperationId);
+      expect(enqueues[2]!.editSource).toEqual(enqueues[1]!.editSource);
+    }
+  });
+
+  it('does not overwrite newer input after an edit hold commits asynchronously', async () => {
+    let commit!: () => void;
+    let saving!: () => void;
+    const begun = new Promise<void>(resolve => { saving = resolve; });
+    const gate = new Promise<void>(resolve => { commit = resolve; });
+    let stored: BotGroupOutboxStoredEntry[] = [];
+    window.electronAPI.maker.botGroupOutbox = async () => [];
+    window.electronAPI.maker.botGroupOutboxCommand = async request => {
+      if (request.action === 'enqueue') {
+        stored = [{ ...request.entry, entryRevision: 1, queueOrdinal: 1, status: 'failed', retryable: false }];
+        return { ...localResult(request, stored), accepted: true };
+      }
+      if (request.action === 'edit') {
+        saving(); await gate;
+        stored = [{ ...stored[0]!, entryRevision: 2, editHold: { operationId: request.operationId, revision: 2 } }];
+        return { ...localResult(request, stored), revision: 2 };
+      }
+      return localResult(request, stored);
+    };
+    const input = { groupId: 'g1', clientId: 'original', text: '等待恢复的原文', mentions: { all: false, allBots: false, botIds: [] } };
+    await enqueueBotGroupSend({ input, signature: botGroupSendSignature(input, '[]'), draft: input.text,
+      tracked: [], files: [], attachmentScope: 'bot-group:g1', enqueueOperationId: 'initial' });
+    renderView();
+    const textbox = await screen.findByRole('textbox') as HTMLTextAreaElement;
+    fireEvent.click(screen.getByRole('button', { name: 'bots.groupChat.outbox.edit' }));
+    await begun;
+    fireEvent.change(textbox, { target: { value: '等待期间写的新内容' } });
+    await act(async () => { commit(); await gate; });
+    await waitFor(() => expect(mocks.toastWarning).toHaveBeenCalledWith('bots.groupChat.outbox.editBlocked'));
+    expect(textbox.value).toBe('等待期间写的新内容');
+    expect(getBotGroupOutbox('g1')[0]).toMatchObject({ draft: '等待恢复的原文', editHold: { revision: 2 } });
+    expect(mocks.sendBotGroupMessage).not.toHaveBeenCalled();
+  });
+
+  it('offers jump to bottom while scrolling down through read history', async () => {
+    mocks.getControlledState.mockResolvedValue({ controlledBy: [{ deviceId: 'studio', name: 'Mac Studio' }] });
+    mocks.getBotGroup.mockResolvedValue({ ok: true, group: detail({ threads: ['t1', 't2'].map(rootId => ({
+      rootId, rootText: rootId, rootAuthorName: 'Bot', rootAuthorBotId: null, replyCount: 1,
+      unread: { count: 1, mentioned: true }, lastReply: null,
+    })) }) });
+    const view = renderView();
+    const scroll = await screen.findByTestId('bot-group-timeline');
+    Object.defineProperties(scroll, {
+      scrollHeight: { configurable: true, value: 2000 },
+      clientHeight: { configurable: true, value: 500 },
+    });
+    fireEvent.click(screen.getByTestId('group-attention-hint'));
+    expect(screen.getByRole('dialog')).toBeTruthy();
+    vi.useFakeTimers();
+    try {
+      scroll.scrollTop = 100; fireEvent.scroll(scroll);
+      expect(screen.queryByRole('dialog')).toBeNull();
+      const jump = screen.getByRole('button', { name: 'chat.jumpToBottom' });
+      expect(jump.parentElement?.className).toContain('opacity-100');
+      const chip = view.container.querySelector('[data-controlled-banner-chip]')!;
+      expect(chip).toBeTruthy();
+      expect(chip.closest('[inert]')).not.toBeNull();
+      act(() => vi.advanceTimersByTime(2000));
+      expect(chip.closest('[inert]')).toBeNull();
+      expect(screen.queryByRole('dialog')).toBeNull();
+      expect(view.container.querySelector('[data-controlled-banner-chip]')).toBe(chip);
+      expect(jump.parentElement?.className).toContain('opacity-0');
+      scroll.scrollTop = 200; fireEvent.scroll(scroll);
+      expect(jump.parentElement?.className).toContain('opacity-100');
+      scroll.scrollTop = 100; fireEvent.scroll(scroll);
+      expect(jump.parentElement?.className).toContain('opacity-0');
+      scroll.scrollTop = 200; fireEvent.scroll(scroll);
+      const scrollTo = vi.fn(); scroll.scrollTo = scrollTo;
+      fireEvent.click(jump);
+      expect(scrollTo).toHaveBeenCalledWith({ top: 2000, behavior: 'smooth' });
+      expect(chip.closest('[inert]')).not.toBeNull();
+      scroll.scrollTop = 400; fireEvent.scroll(scroll);
+      expect(chip.closest('[inert]')).not.toBeNull();
+      scroll.scrollTop = 1500; fireEvent.scroll(scroll);
+      expect(jump.parentElement?.className).toContain('opacity-0');
+    } finally { view.unmount(); vi.useRealTimers(); }
+  });
+
+  it.each([false, true])('tracks a growing tail during a jump unless the user takes over (%s)', async (takeOver) => {
+    renderView();
+    const scroll = await screen.findByTestId('bot-group-timeline');
+    Object.defineProperties(scroll, {
+      scrollHeight: { configurable: true, value: 2000 }, clientHeight: { configurable: true, value: 500 },
+    });
+    scroll.scrollTop = 200; fireEvent.scroll(scroll);
+    scroll.scrollTo = vi.fn();
+    fireEvent.click(screen.getByRole('button', { name: 'chat.jumpToBottom' }));
+    scroll.scrollTop = 400; fireEvent.scroll(scroll);
+    if (takeOver) fireEvent.wheel(scroll, { deltaY: -100 });
+    Object.defineProperty(scroll, 'scrollHeight', { configurable: true, value: 3000 });
+    mocks.getBotGroup.mockResolvedValue({ ok: true, group: detail({ messages: [
+      msg({ id: 'arrival', sequence: 3, content: 'Arrived during jump' }),
+    ] }) });
+    act(() => mocks.pushes.forEach(push => push({ groupId: 'g1', change: 'messages' })));
+    await screen.findByText('Arrived during jump');
+    expect(scroll.scrollTop).toBe(takeOver ? 400 : 3000);
+  });
+
   // Renderer integration: isolated confirmed deltas must not conceal a missing page after reconnect.
   it('keeps a skipped message reachable by pagination after multiple deltas overtake a full page', async () => {
     const page = (from: number, to: number) => Array.from({ length: to - from + 1 }, (_, index) =>
@@ -883,6 +1086,8 @@ describe('BotGroupChatView', () => {
     for (const button of within(header).getAllByRole('button')) {
       await user.click(trigger);
       const panel = screen.getByRole('complementary');
+      // 键盘模态：pointer 交互之后的程序化焦点不再弹提示（见 tooltip.tsx）。
+      fireEvent.keyDown(document.body, { key: 'Tab' });
       button.focus();
       expect(panel.parentElement?.contains(button)).toBe(false);
       // Header icon buttons with a tooltip: its Escape closes the tooltip first.
@@ -922,6 +1127,21 @@ describe('BotGroupChatView', () => {
         await user.click(screen.getByText('Preview note content'));
         expect(preview.contains(document.activeElement)).toBe(true);
       } else expect(preview.contains(document.activeElement)).toBe(true);
+    }
+    // CI regression: FocusScope's programmatic entry focus does not guarantee
+    // an open tooltip after the preview finishes loading. Establish keyboard
+    // focus explicitly; still require tooltip -> preview -> thread Escape order.
+    if (kind === 'text-trigger' || kind === 'text-control') {
+      const focusedControl = document.activeElement;
+      await user.tab();
+      await user.tab({ shift: true });
+      expect(document.activeElement).toBe(focusedControl);
+      await screen.findByRole('tooltip');
+      await user.keyboard('{Escape}');
+      await waitFor(() => expect(screen.queryByRole('tooltip')).toBeNull());
+      expect(document.contains(preview)).toBe(true);
+      expect(screen.getByRole('complementary')).toBe(panel);
+      expect((within(panel).getByRole('textbox') as HTMLTextAreaElement).value).toBe('Unsent thread reply');
     }
     await user.keyboard('{Escape}');
     expect(screen.getByRole('complementary')).toBe(panel);
@@ -1269,14 +1489,15 @@ describe('BotGroupChatView', () => {
     const view = renderView();
     await screen.findByRole('textbox');
     const main = view.container.querySelector('main')!;
-    const originalRows = main.childElementCount;
+    const bottomStack = main.querySelector('[data-group-bottom-bubbles]')!;
+    const originalRows = bottomStack.childElementCount;
     expect(main.querySelector('[data-controlled-banner-chip]')).toBeNull();
     act(() => mocks.controlledPush?.({ controllers: [{ deviceId: 'studio', name: 'Mac Studio' }] }));
-    expect(main.childElementCount).toBe(originalRows + 1);
+    expect(bottomStack.childElementCount).toBe(originalRows + 1);
     expect(main.querySelector('[data-controlled-banner-chip]')).toBeTruthy();
     expect(fallback.container.childElementCount).toBe(0);
     act(() => mocks.controlledPush?.({ controllers: [] }));
-    expect(main.childElementCount).toBe(originalRows);
+    expect(bottomStack.childElementCount).toBe(originalRows);
     expect(document.querySelector('[data-controlled-banner-chip]')).toBeNull();
   });
 
@@ -1946,7 +2167,7 @@ describe('BotGroupChatView', () => {
       expect(mocks.sendBotGroupMessage).toHaveBeenCalledTimes(1);
 
       fireEvent.click(within(failed).getByRole('button', { name: 'bots.groupChat.outbox.edit' }));
-      expect(mocks.toastWarning).toHaveBeenCalledWith('bots.groupChat.outbox.editBlocked');
+      await waitFor(() => expect(mocks.toastWarning).toHaveBeenCalledWith('bots.groupChat.outbox.editBlocked'));
       expect(input.value).toBe('正在写的');
 
       mocks.sendBotGroupMessage.mockResolvedValueOnce({ ok: false, errorCode: 'INTERNAL', message: '' });
@@ -2292,6 +2513,50 @@ describe('BotGroupChatView', () => {
       expect(screen.queryByRole('complementary')).toBeNull();
     });
 
+    it.each(['message', 'content resize', 'viewport resize'] as const)('reveals unread navigation when a located short group grows: %s', async change => {
+      const observed = new Map<Element, ResizeObserverCallback>();
+      vi.stubGlobal('ResizeObserver', class {
+        constructor(private callback: ResizeObserverCallback) {}
+        observe(element: Element) { observed.set(element, this.callback); }
+        disconnect() {}
+      });
+      const messages = [
+        msg({ id: 'original', sequence: 1, content: 'Short original' }),
+        msg({ id: 'quoted', sequence: 2, content: 'Short quote', quote: quoteOf('original') }),
+      ];
+      mocks.getBotGroup.mockResolvedValue({ ok: true, group: detail({ serverBacked: true, messages }) });
+      renderView();
+      const scroll = await screen.findByTestId('bot-group-timeline');
+      let contentHeight = 500;
+      let viewportHeight = 500;
+      Object.defineProperties(scroll, {
+        scrollHeight: { configurable: true, get: () => contentHeight },
+        clientHeight: { configurable: true, get: () => viewportHeight },
+      });
+      scroll.scrollTop = 0;
+      fireEvent.click(await screen.findByTestId('bot-group-quote'));
+      await waitFor(() => expect(document.activeElement?.getAttribute('data-bot-group-message-id')).toBe('original'));
+      const arrived = msg({ id: 'arrival', sequence: 3, authorKind: 'bot', content: 'Unread after locating', createdAt: 2000 });
+      if (change === 'message') contentHeight = 1000;
+      mocks.getBotGroup.mockResolvedValue({ ok: true, group: detail({ serverBacked: true, messages: [...messages, arrived] }) });
+      act(() => mocks.pushes.forEach(push => push({ groupId: 'g1', change: 'messages' })));
+      await screen.findByText('Unread after locating');
+      if (change !== 'message') {
+        expect(document.querySelector('[data-group-bottom-bubbles]')?.hasAttribute('inert')).toBe(false);
+        if (change === 'content resize') contentHeight = 1000;
+        else viewportHeight = 250;
+        const resized = change === 'content resize' ? scroll.firstElementChild! : scroll;
+        act(() => observed.get(resized)!([], {} as ResizeObserver));
+      }
+      expect(screen.getByRole('button', { name: 'chat.newMessageIndicator.aria' }).parentElement?.className).toContain('opacity-100');
+      expect(document.querySelector('[data-group-bottom-bubbles]')?.hasAttribute('inert')).toBe(true);
+      expect(scroll.scrollTop).toBe(0);
+      contentHeight = viewportHeight;
+      act(() => observed.get(scroll)!([], {} as ResizeObserver));
+      expect(document.querySelector('[data-group-bottom-bubbles]')?.hasAttribute('inert')).toBe(false);
+      expect(scroll.scrollTop).toBe(0);
+    });
+
     it('shows a deleted original without its snapshot and never jumps', async () => {
       const base = detail({ serverBacked: true });
       mocks.getBotGroup.mockResolvedValue({ ok: true, group: { ...base, messages: [
@@ -2374,6 +2639,37 @@ describe('BotGroupChatView', () => {
       }
       const quoteState = () => screen.getByTestId('bot-group-quote').getAttribute('data-quote-state');
       const push = () => act(async () => { mocks.pushes.forEach((listener) => listener({ groupId: 'g1', change: 'messages' })); });
+
+      it.each([false, true])('keeps jump-to-bottom after a pending quote lookup returns (already paged: %s)', async (alreadyPaged) => {
+        serve(async () => [original]);
+        renderView();
+        await screen.findByTestId('bot-group-quote');
+        if (alreadyPaged) {
+          fireEvent.click(screen.getByRole('button', { name: 'bots.groupChat.timeline.loadEarlier' }));
+          await waitFor(() => expect(quoteState()).toBe('live'));
+        }
+        let finish!: (messages: BotGroupMessageView[]) => void;
+        serve(() => new Promise(resolve => { finish = resolve; }));
+        fireEvent.click(screen.getByTestId('bot-group-quote'));
+        await waitFor(() => expect(finish).toBeTypeOf('function'));
+        const scroll = screen.getByTestId('bot-group-timeline');
+        Object.defineProperties(scroll, {
+          scrollHeight: { configurable: true, value: 2000 }, clientHeight: { configurable: true, value: 500 },
+        });
+        scroll.scrollTop = 200; fireEvent.scroll(scroll);
+        scroll.scrollTo = vi.fn();
+        fireEvent.click(screen.getByRole('button', { name: 'chat.jumpToBottom' }));
+        await act(async () => finish([original]));
+        expect(document.querySelector('[class*="search-match-bg"]')).toBeNull();
+        expect(mocks.toastInfo).not.toHaveBeenCalled();
+        Object.defineProperty(scroll, 'scrollHeight', { configurable: true, value: 3000 });
+        mocks.getBotGroup.mockResolvedValue({ ok: true, group: detail({ messages: [
+          latest, msg({ id: 'arrival', sequence: 51, content: 'New tail after lookup' }),
+        ] }) });
+        await push();
+        await screen.findByText('New tail after lookup');
+        expect(scroll.scrollTop).toBe(3000);
+      });
 
       it('drops a deleted original from the quote on a push, without a click', async () => {
         const user = userEvent.setup();
@@ -2647,7 +2943,8 @@ describe('BotGroupChatView', () => {
       const card = await screen.findByTestId('bot-group-arrangement');
       expect(card.closest('article')).toBeNull();
       expect(card.textContent).not.toContain('bots.groupChat.plan.intro');
-      expect(card.textContent).toContain('bots.groupChat.plan.talkTurn');
+      expect(card.textContent).toContain('bots.groupChat.plan.talkTitle');
+      expect(card.textContent).toContain('bots.groupChat.plan.queueWaiting');
       expect(card.querySelectorAll('li')).toHaveLength(shown);
       expect(screen.getByTestId('bot-group-plan-follow-up')).toBeTruthy();
       const fold = screen.queryByTestId('bot-group-plan-fold');
@@ -2658,11 +2955,12 @@ describe('BotGroupChatView', () => {
       }
     });
 
-    // Only the creator, an owner or an admin may change who speaks next in a waiting queue.
-    it.each([[true, 1], [false, 0]] as const)('offers reassigning a waiting queue turn only to a manager (canManage=%s)', async (canManage, menus) => {
+    // A waiting talk queue supports skipping, not reassigning (Plans.action only reassigns proposed plans).
+    // Unit: the real card must send the pending position and enforce the projected management permission.
+    it.each([[true, 1], [false, 0]] as const)('offers skipping a waiting queue turn only to a manager (canManage=%s)', async (canManage, buttons) => {
       const base = plan().steps;
       const queue = plan({
-        status: 'waiting', currentStep: 0, kind: 'talk', canManage,
+        status: 'waiting', currentStep: 0, kind: 'talk', canManage, supportsPendingSkip: true,
         steps: [{ ...base[0]!, task: '', status: 'done' }, { ...base[1]!, task: '', status: 'pending' }],
       });
       mocks.getBotGroup.mockResolvedValue({ ok: true, group: withPlan(queue) });
@@ -2670,7 +2968,15 @@ describe('BotGroupChatView', () => {
       const card = await screen.findByTestId('bot-group-arrangement');
       const pending = within(card).getAllByTestId('bot-group-plan-step')[1]!;
       fireEvent.pointerDown(pending, { button: 0, ctrlKey: false });
-      expect(screen.queryAllByRole('menu')).toHaveLength(menus);
+      expect(screen.queryAllByRole('menu')).toHaveLength(0);
+      const skips = within(pending).queryAllByRole('button', { name: /bots\.groupChat\.plan\.skipTurnLabel/ });
+      expect(skips).toHaveLength(buttons);
+      if (skips[0]) {
+        fireEvent.click(skips[0]);
+        await waitFor(() => expect(mocks.editBotGroupPlanStep).toHaveBeenCalledWith({
+          groupId: 'g1', planId: 'p1', position: 1, action: 'skip', executionId: undefined,
+        }));
+      } else expect(mocks.editBotGroupPlanStep).not.toHaveBeenCalled();
     });
 
     it('offers the next step after a hand-off and opens its files inside the work directory', async () => {
@@ -3240,9 +3546,20 @@ it('keeps copy/share in each author row\'s more menu and shares only message con
     act(() => window.dispatchEvent(new Event('focus')));
     expect(getBotLastReadAt(botGroupReadKey('g1'))).toBe(200);
     expect(scroll.scrollTop).toBe(0);
-    expect(screen.getByRole('button', { name: 'chat.newMessageIndicator.aria' })).toBeTruthy();
+    const newMessages = screen.getByRole('button', { name: 'chat.newMessageIndicator.aria' });
+    expect(newMessages).toBeTruthy();
+    const bubbles = document.querySelector('[data-group-bottom-bubbles]')!;
+    expect(bubbles.hasAttribute('inert')).toBe(true);
+    scroll.scrollTo = vi.fn();
+    fireEvent.click(newMessages);
+    scroll.scrollTop = 400; fireEvent.scroll(scroll);
+    // Smooth navigation does not acknowledge unread replies before reaching the tail.
+    expect(getBotLastReadAt(botGroupReadKey('g1'))).toBe(200);
+    expect(newMessages.parentElement?.className).toContain('opacity-100');
+    expect(screen.getByRole('button', { name: 'chat.jumpToBottom' }).parentElement?.className).toContain('opacity-0');
     scroll.scrollTop = 900; fireEvent.scroll(scroll);
     expect(getBotLastReadAt(botGroupReadKey('g1'))).toBe(1200);
+    expect(bubbles.hasAttribute('inert')).toBe(false);
   } finally { focus.mockRestore(); resetBotReadStateForTests(); }
 });
 

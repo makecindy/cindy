@@ -10,7 +10,14 @@ import {
 import { attachmentPreviewKind } from '@cindy/maker-shared/attachment-preview';
 import { FocusScope } from '@radix-ui/react-focus-scope';
 import { toLocalFileUrl } from '@/lib/localPathResolver';
-import { PreviewHeader, PreviewFooter, PreviewButton } from './PreviewChrome';
+import {
+  PREVIEW_PANEL_CLASS,
+  PREVIEW_PANEL_STYLE,
+  PreviewHeader,
+  PreviewFooter,
+  PreviewButton,
+  PreviewScrim,
+} from './PreviewChrome';
 import { DropdownMenuItem } from '@/components/ui/dropdown-menu';
 import { Button } from '@/components/ui/button';
 import { shouldShowOpenPathError } from '../../../shared/openPathResult';
@@ -21,6 +28,8 @@ import {
   useContext, useEffect, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { isLightboxCovered } from '@/lib/lightboxLayer';
+import { acquireFindInPage, isPreviewPopupKeyEvent } from '@/components/find-in-page/findInPageOwnership';
+import { useAppShortcut } from '@/hooks/useAppShortcut';
 import { Copy, Search, WrapText, ListOrdered, ExternalLink, TriangleAlert } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 
@@ -132,13 +141,19 @@ export function TextLightbox(props: TextLightboxProps) {
   ) : (
     <Suspense
       fallback={createPortal(
-        <div className="fixed inset-0 z-[9999] bg-[var(--surface)]">
-          <PreviewHeader
-            name={props.fileName ?? basename(props.filePath)}
-            onClose={props.onClose}
-          />
-          <Spinner />
-        </div>,
+        <>
+          <PreviewScrim onClose={props.onClose} />
+          <div
+            className={cn('z-[9999] flex items-center justify-center', PREVIEW_PANEL_CLASS)}
+            style={PREVIEW_PANEL_STYLE}
+          >
+            <PreviewHeader
+              name={props.fileName ?? basename(props.filePath)}
+              onClose={props.onClose}
+            />
+            <Spinner />
+          </div>
+        </>,
         document.body,
       )}
     >
@@ -254,29 +269,68 @@ function TextDocumentLightbox({ filePath, fileName, initialLine, triggerRef, onC
     return () => cancelAnimationFrame(raf);
   }, []);
 
-  // F6: Esc key listener
+  // Rendered Markdown delegates to the shared search host. Source/plain text
+  // owns editor search; the claim makes global window-capture find yield first.
+  useEffect(acquireFindInPage, []);
+  const isCovered = useCallback(() => !overlayRef.current || isLightboxCovered(overlayRef.current) ||
+    overlayRef.current.contains(document.fullscreenElement), []);
+  useAppShortcut('find-in-page', (event) => {
+    if (event.defaultPrevented || event.keyCode === 229 || isCovered() ||
+        (renderable.kind === 'markdown' && !showSource)) return false;
+    setShowSource(true);
+    setSearch(true);
+    queueMicrotask(() => {
+      searchInput.current?.focus();
+      searchInput.current?.select();
+    });
+    return true;
+  }, { stopImmediate: true });
+
+  // Escape runs after menus/tooltips have claimed it.
   useEffect(() => {
-    const handler = (e: KeyboardEvent) => {
-      if (e.repeat || e.defaultPrevented || e.isComposing || e.keyCode === 229) return;
-      if ((e.metaKey || e.ctrlKey) && e.key === 'f') {
-        e.preventDefault();
-        e.stopImmediatePropagation();
-        setShowSource(true);
-        setSearch(true);
+    let fullscreen = Boolean(overlayRef.current?.contains(document.fullscreenElement));
+    let exitedFullscreenAt = -Infinity;
+    let handledFullscreenExit = false;
+    const onFullscreenChange = () => {
+      const next = Boolean(overlayRef.current?.contains(document.fullscreenElement));
+      if (fullscreen && !next) {
+        exitedFullscreenAt = handledFullscreenExit ? -Infinity : performance.now();
+      }
+      fullscreen = next;
+      handledFullscreenExit = false;
+    };
+    const onKeyUp = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') exitedFullscreenAt = -Infinity;
+    };
+    const onEscape = (e: KeyboardEvent) => {
+      if (e.key !== 'Escape' || e.repeat || e.defaultPrevented || e.isComposing || e.keyCode === 229) return;
+      const overlay = overlayRef.current;
+      if (!overlay || isLightboxCovered(overlay)) return;
+      if (isPreviewPopupKeyEvent(e, overlay)) return;
+      const ownsNativeFullscreen = overlay.contains(document.fullscreenElement);
+      // Chromium may exit fullscreen before delivering this same keydown,
+      // even with find closed. Preserve the document in either event order.
+      if (fullscreen || ownsNativeFullscreen || performance.now() - exitedFullscreenAt < 250) {
+        exitedFullscreenAt = -Infinity;
+        handledFullscreenExit = fullscreen || ownsNativeFullscreen;
         return;
       }
-      if (e.key === 'Escape' && search) {
+      if (search) {
         e.preventDefault();
         setSearch(false);
         return;
       }
-      if (e.key === 'Escape' && overlayRef.current && !isLightboxCovered(overlayRef.current)) {
-        handleClose();
-      }
+      handleClose();
     };
-    document.addEventListener('keydown', handler, true);
-    return () => document.removeEventListener('keydown', handler, true);
-  }, [handleClose, search]);
+    document.addEventListener('keydown', onEscape);
+    document.addEventListener('fullscreenchange', onFullscreenChange);
+    window.addEventListener('keyup', onKeyUp, true);
+    return () => {
+      document.removeEventListener('keydown', onEscape);
+      document.removeEventListener('fullscreenchange', onFullscreenChange);
+      window.removeEventListener('keyup', onKeyUp, true);
+    };
+  }, [handleClose, search, renderable.kind, showSource]);
 
   // F6: Scroll lock on the message stream's scroll container.
   // Same selector ImageLightbox uses; keeping it in sync prevents the page
@@ -473,7 +527,6 @@ function TextDocumentLightbox({ filePath, fileName, initialLine, triggerRef, onC
         position: 'fixed',
         inset: 0,
         zIndex: TEXT_LIGHTBOX_OVERLAY_Z_INDEX,
-        background: 'var(--overlay-lightbox)',
         display: 'flex',
         flexDirection: 'column',
         alignItems: 'center',
@@ -483,36 +536,18 @@ function TextDocumentLightbox({ filePath, fileName, initialLine, triggerRef, onC
         cursor: 'default',
       }}
     >
-      <button
-        type="button"
-        tabIndex={-1}
-        aria-hidden="true"
-        style={{
-          position: 'absolute',
-          inset: 0,
-          border: 0,
-          padding: 0,
-          background: 'transparent',
-          cursor: 'default',
-        }}
-        onClick={handleClose}
-      />
+      {/* 遮罩在根节点的层叠上下文里,压在预览窗(zIndex 1)之下。 */}
+      <PreviewScrim onClose={handleClose} zIndex={0} />
       {/* F3: Doc Card — clicks inside MUST NOT close (per F6 异常流). */}
       <div
         data-text-lightbox-card
-        data-text-lightbox-search-host={renderable.kind === 'markdown' ? '' : undefined}
+        data-text-lightbox-search-host={renderable.kind === 'markdown' && !showSource ? '' : undefined}
         className={cn(
-          'cursor-auto flex flex-col overflow-hidden pt-16',
+          'cursor-auto flex flex-col pt-16',
           collection && 'pb-16',
-          'border border-[var(--msg-tool-card-border)]',
-          'bg-[var(--msg-tool-card-bg)]',
+          PREVIEW_PANEL_CLASS,
         )}
-        style={{
-          width: '100vw',
-          height: '100vh',
-          position: 'relative',
-          zIndex: 1,
-        }}
+        style={{ ...PREVIEW_PANEL_STYLE, zIndex: 1 }}
       >
         <PreviewHeader
           name={displayName}

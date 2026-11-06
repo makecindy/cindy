@@ -1,4 +1,4 @@
-import { parseChatInvitationToken } from '@cindy/device-link';
+import { parseChatInvitationShareId, parseChatInvitationToken } from '@cindy/device-link';
 import { useSyncExternalStore } from 'react';
 
 export interface ChatInviteIntent {
@@ -7,6 +7,8 @@ export interface ChatInviteIntent {
   readonly link?: string;
   /** Resolved manual target; keep link absent so the sheet remains editable. */
   readonly manualLink?: string;
+  /** Original share reference remains an alias of the resolved manual target. */
+  readonly manualSourceLink?: string;
   readonly hasOtherInvitation: boolean;
 }
 
@@ -21,29 +23,23 @@ export function isChatInviteLinkPath(path: string): boolean {
   return /(?:^|\/)chat-invite(?:\/|$)/i.test(beforePayload);
 }
 
-function invitationToken(path: string): string | null {
-  // Scheme hints identify the installed app; they never select a server.
-  if (/^(cindy|cindycn|cindydev):\/\//i.test(path)) {
-    return parseChatInvitationToken(path.replace(/^[^:]+:/, 'cindy:'));
-  }
-  if (path.startsWith('/')) {
-    // Router may strip the scheme on a warm delivery. A public-page path keeps
-    // its fragment, whereas the existing native link carries the token in path.
-    if (path.split(/[?#]/, 1)[0].endsWith('/chat-invite/join')) {
-      return parseChatInvitationToken(`https://invitation.invalid${path}`);
-    }
-    return parseChatInvitationToken(`cindy:/${path}`);
-  }
-  if (/^https?:\/\//.test(path)) return parseChatInvitationToken(path);
-  return null;
+function invitationLink(path: string): string | null {
+  const token = parseChatInvitationToken(path.startsWith('/') ? `cindy:/${path}` : path);
+  if (token) return `cindy://chat-invite/${token}`;
+  return parseChatInvitationShareId(path) ? path.trim() : null;
+}
+
+function sameInvitation(left: string | undefined, right: string): boolean {
+  if (left === right) return true;
+  const shareId = parseChatInvitationShareId(left ?? '');
+  return shareId !== null && shareId === parseChatInvitationShareId(right);
 }
 
 /** Automatic discovery accepts only complete links, never bare tokens or malformed clipboard text. */
 export function parseChatInviteLink(path: string): string | null {
   if (!/^(https?|cindy|cindycn|cindydev):\/\//i.test(path)) return null;
   if (!isChatInviteLinkPath(path)) return null;
-  const token = invitationToken(path);
-  return token ? `cindy://chat-invite/${token}` : null;
+  return invitationLink(path);
 }
 
 export const getChatInviteSequence = () => sequence;
@@ -51,11 +47,10 @@ export const getChatInviteSequence = () => sequence;
 /** One current invitation, in memory only. Login/account changes retain its target. */
 export function receiveChatInviteLink(path: string): boolean {
   if (!isChatInviteLinkPath(path)) return false;
-  const token = invitationToken(path);
   // Retain only an empty canonical link for malformed input.
-  const link = `cindy://chat-invite/${token ?? ''}`;
+  const link = invitationLink(path) ?? 'cindy://chat-invite/';
   if (current) {
-    if ((current.link ?? current.manualLink) !== link && !current.hasOtherInvitation) {
+    if (!sameInvitation(current.link ?? current.manualLink, link) && !sameInvitation(current.manualSourceLink, link) && !current.hasOtherInvitation) {
       current = { ...current, hasOtherInvitation: true };
       notify();
     }
@@ -77,7 +72,9 @@ export function setManualChatInviteLink(id: number, link?: string): void {
   if (current?.id !== id || current.link !== undefined) return;
   const manualLink = link ? parseChatInviteLink(link) ?? undefined : undefined;
   if (current.manualLink === manualLink) return;
-  current = { ...current, manualLink };
+  const manualSourceLink = !manualLink || parseChatInvitationShareId(manualLink) ? undefined
+    : parseChatInvitationShareId(current.manualLink ?? '') ? current.manualLink : current.manualSourceLink;
+  current = { ...current, manualLink, manualSourceLink };
   notify();
 }
 

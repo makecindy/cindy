@@ -91,6 +91,7 @@ export function MyPluginsPage({
   const [picker, setPicker] = useState<PluginPublishDialogRequest | null>(null);
   const pickerSequence = useRef(0);
   const [updateRefresh, setUpdateRefresh] = useState(0);
+  const [selectedInstallation, setSelectedInstallation] = useState<{ context: string; instanceId: string } | null>(null);
   const preparePreview = onPrepare ?? reader.prepare;
   const [accountSwitcherOpen, setAccountSwitcherOpen] = useState(false);
   const accountTrigger = useRef<HTMLButtonElement>(null);
@@ -539,7 +540,12 @@ export function MyPluginsPage({
       installationRead.revision === installedRevision);
   const localInstallation = installationIsCurrent && localRead === writeKey && navigator.onLine
     ? plugin?.localInstallation : undefined;
-  const installedLocal = localInstallation?.state === 'installed' ? localInstallation : null;
+  const localCandidates = localInstallation && localInstallation.state !== 'installed'
+    ? localInstallation.candidates ?? [] : [];
+  const installationSelectionContext = JSON.stringify([ownerKey, location.key, selectedId, installedRevision]);
+  const installedLocal = localInstallation?.state === 'installed' ? localInstallation
+    : selectedInstallation?.context === installationSelectionContext
+      ? localCandidates.find(candidate => candidate.instanceId === selectedInstallation.instanceId) ?? null : null;
   const publishedKey = JSON.stringify([writeKey, plugin?.market.releaseId, plugin?.market.version]);
   useEffect(() => {
     const sequence = ++publishedRequest.current;
@@ -805,10 +811,17 @@ export function MyPluginsPage({
             <h2 className="text-16 font-medium leading-6 text-[var(--text-primary)]">{t(`${copy}.localVersion`)}</h2>
             <p className="text-14 leading-6 text-[var(--text-secondary)]">
               {installedLocal ? `${installedLocal.version} · ${t(`settings.ghosts.page.origin.${installedLocal.origin}`)} · ${t(`${copy}.${installedLocal.enabled ? 'localEnabled' : 'localDisabled'}`)}`
-                : t(`${copy}.localState.${localInstallation?.state ?? 'unavailable'}`)}
+                : localCandidates.length > 1 ? t(`${copy}.chooseVersion`) : t(`${copy}.localState.${localInstallation?.state ?? 'unavailable'}`)}
             </p>
           </div>
-          <div className="flex flex-wrap items-center gap-2">
+          <div className="flex min-w-0 flex-wrap items-center gap-2">
+            {localCandidates.length > 1 ? (
+              <Select label={t(`${copy}.localVersion`)} value={installedLocal?.instanceId ?? ''}
+                options={localCandidates.map(candidate => ({ value: candidate.instanceId,
+                  label: `${candidate.version} · ${t(`settings.ghosts.page.origin.${candidate.origin}`)}` }))}
+                onValueChange={instanceId => setSelectedInstallation({ context: installationSelectionContext, instanceId })}
+                className="w-full min-w-0 sm:w-64" />
+            ) : null}
             {installedLocal && canPrepareUpdate && currentUpdateDraft?.prepared?.preflight?.actions.canSubmit && !updateBlocker ? (
               <Button variant="cta" size="sm" loading={submitBusy} disabled={submitBusy}
                 onClick={() => {

@@ -22,6 +22,7 @@
  */
 
 import { stripTrailingPathSeparators } from '../../shared/pathText';
+import { isWindowsPathLike } from '../../shared/workingDir';
 
 /** Image extension whitelist. Case-insensitive. Allows `?v=2`-style suffix. */
 const IMAGE_EXT_RE = /\.(png|jpe?g|gif|webp|svg|bmp|ico)(\?.*)?$/i;
@@ -236,6 +237,7 @@ export function resolveKnownLocalFileHref(
  *
  * Behavior:
  *   - `file://...`                    → decode + strip leading slash on Win
+ *   - `/C:/...` + Windows cwd         → strip the extra leading slash
  *   - POSIX absolute (`^/`)           → return as-is
  *   - Windows absolute (`^[A-Za-z]:`) → return as-is
  *   - relative                        → joinPath(cwd, href)
@@ -260,6 +262,7 @@ export function resolveLocalPath(href: string, cwd: string): string {
     if (/^\/[A-Za-z]:[\\/]/.test(p)) p = p.slice(1);
     return p;
   }
+  href = normalizeWindowsDriveHref(href, cwd);
   if (href.startsWith('/')) return href;
   if (WIN_ABS_RE.test(href)) return href;
   // UNC share (`\\server\share\...`) is already absolute on Windows — joining
@@ -294,6 +297,8 @@ export function resolveLocalPath(href: string, cwd: string): string {
  */
 export function resolveToolFilePath(rawPath: string, workingDir: string): string {
   if (!rawPath || !workingDir) return rawPath;
+  // Tool paths are literal runtime results, not model-authored Markdown hrefs.
+  if (rawPath.startsWith('/')) return rawPath;
   return resolveLocalPath(rawPath, workingDir);
 }
 
@@ -323,8 +328,18 @@ export type SmartResolveResult =
   | { status: 'multiple'; candidates: string[] }
   | { status: 'none'; fallbackAbsPath: string };
 
+/** Model-authored /C:/ links name a drive only for a Windows file owner.
+ * Use the task's cwd, never the viewing device's OS: /C: is legal on POSIX. */
+function normalizeWindowsDriveHref(href: string, workingDir: string): string {
+  if (!isWindowsPathLike(workingDir)) return href;
+  // Directory classification strips /C:/ to /C:. Keep the drive-root slash:
+  // C: alone names the drive's current directory, not its root.
+  if (/^\/[A-Za-z]:$/.test(href)) return `${href.slice(1)}/`;
+  return /^\/[A-Za-z]:[\\/]/.test(href) ? href.slice(1) : href;
+}
+
 function toMainLookupHref(href: string, workingDir: string): string {
-  if (!href.startsWith('file://')) return href;
+  if (!href.startsWith('file://')) return normalizeWindowsDriveHref(href, workingDir);
   // File URL conversion yields literal text; main still decodes its href input.
   return resolveLocalPath(href, workingDir).replace(/%/g, '%25');
 }

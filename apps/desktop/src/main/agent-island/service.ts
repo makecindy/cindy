@@ -38,6 +38,7 @@ import {
   AGENT_ISLAND_SET_DISPLAY_TARGET_CHANNEL,
   AGENT_ISLAND_SET_ENABLED_CHANNEL,
   AGENT_ISLAND_SET_MASCOT_SKIN_CHANNEL,
+  AGENT_ISLAND_SET_SUBTLE_REMINDERS_CHANNEL,
   AGENT_ISLAND_SET_REMOTE_SESSIONS_CHANNEL,
   AGENT_ISLAND_SET_COMPANION_CHATS_CHANNEL,
   AGENT_ISLAND_READ_COMPANION_CHAT_CHANNEL,
@@ -68,6 +69,7 @@ import {
   type AgentIslandDisplayOption,
   type AgentIslandDisplayState,
   type AgentIslandPillSnapshot,
+  type AgentIslandQuotaItem,
   type AgentIslandRemoteSessionInput,
   type AgentIslandCompanionSnapshot,
   type AgentIslandSessionActivity,
@@ -110,6 +112,7 @@ import {
   buildAgentIslandDisplayState,
   buildAgentIslandTaskOverview,
   buildAllSessionActivitySnapshots,
+  buildDeviceSessionActivitySnapshots,
   closeAgentIslandSessionPreservingUnread,
   completeAgentIslandSessionWithoutAttention,
   completedReplySummary,
@@ -228,7 +231,11 @@ export interface AgentIslandServiceDeps {
   nativeHost?: AgentIslandNativeRenderer;
   /** Main-process upgrade window used to classify remote daemon shutdowns. */
   isPlannedRemoteDaemonClose?: (sessionId: string) => boolean;
-  /** Optional process-local consumer for task activity, such as hardware status lighting. */
+  /**
+   * Optional process-local consumer for task activity, such as hardware status lighting.
+   * Unlike the relay payload it also carries tasks mirrored from other devices, so it sees
+   * the same tasks Agent Island shows.
+   */
   onSessionActivityChange?: (activity: readonly AgentIslandSessionActivity[]) => void;
   /** 其它设备任务的状态跃迁。灵动岛开启时由岛面展示;关闭时才交给这里发桌面通知。 */
   onDeviceSessionEvent?: (event: AgentIslandDeviceSessionEvent) => void;
@@ -333,6 +340,31 @@ function safeSessionActionSummary(snapshot: AgentIslandSessionSnapshot): string 
   return '正在运行';
 }
 
+function toSessionActivity(s: AgentIslandSessionSnapshot): AgentIslandSessionActivity {
+  return {
+    ...(s.completionToken ? { completionToken: s.completionToken } : {}),
+    ...(s.completionNotification ? { completionNotification: s.completionNotification } : {}),
+    ...projectSessionActivity({
+      sessionId: s.sessionId,
+      recordStatus: 'active',
+      title: s.title,
+      source: 'live',
+      livePhase: s.phase,
+      startedAtMs: s.startedAt,
+      lastActivityAtMs: s.lastActivityAt,
+      currentActionSummary: safeSessionActionSummary(s),
+      interactionKind: s.interactionKind,
+      attention: s.attention,
+    }),
+    phase: s.phase,
+    interactionKind: s.interactionKind,
+    // 完成后这份摘要只给其它设备的完成卡片用(本机岛面直接读展示快照)。
+    compactDetail: s.phase === 'completed' ? completedReplySummary(s) : s.compactDetail,
+    summaryFormat: 'plain-text',
+    workingPhase: s.workingPhase,
+  };
+}
+
 function canonicalSessionActivity(
   activity: AgentIslandSessionActivity,
 ): SessionActivitySnapshot {
@@ -385,6 +417,8 @@ export class AgentIslandService {
   private nativePreferredDisplayId: number | null = null;
   private soundSettings: AgentIslandSoundSettings = createDefaultAgentIslandDisplayConfig().soundSettings;
   private mascotSkin: AgentIslandMascotSkin = DEFAULT_AGENT_ISLAND_MASCOT_SKIN;
+  private quota: AgentIslandQuotaItem[] = [];
+  private readonly enabledListeners = new Set<(enabled: boolean) => void>();
   private displayTarget: AgentIslandDisplayTarget = DEFAULT_AGENT_ISLAND_DISPLAY_TARGET;
   private lastSoundDisplayState: AgentIslandDisplayState | null = null;
   private readonly soundCooldownUntilByEvent = new Map<AgentIslandSoundEvent, number>();
@@ -663,6 +697,16 @@ export class AgentIslandService {
       return { ok: true };
     });
 
+    ipcMain.handle(AGENT_ISLAND_SET_SUBTLE_REMINDERS_CHANNEL, (event, enabled: unknown) => {
+      assertTrustedAppRendererEvent(event);
+      if (typeof enabled !== 'boolean') {
+        throwIpcError('INVALID_PARAMS', 'enabled must be boolean');
+      }
+      this.state.subtleReminders = enabled;
+      this.publish();
+      return { ok: true };
+    });
+
     ipcMain.handle(AGENT_ISLAND_SET_MASCOT_SKIN_CHANNEL, (_event, rawSkin: unknown) => {
       if (!isAgentIslandMascotSkin(rawSkin)) {
         throwIpcError('INVALID_PARAMS', 'mascot skin is invalid');
@@ -739,12 +783,36 @@ export class AgentIslandService {
       this.hiddenPublished = true;
       // Windows / headless 永远走这条:岛 UI 关着,但远程未读 TTL 仍要自己触发。
       this.publish();
+      this.notifyEnabledChange();
       return;
     }
     if (enabled) {
       this.syncAppContentFocusState(now);
     }
     this.publish();
+    this.notifyEnabledChange();
+  }
+
+  /** Called with the new value whenever the island is switched on or off. */
+  subscribeEnabled(listener: (enabled: boolean) => void): () => void {
+    this.enabledListeners.add(listener);
+    return () => this.enabledListeners.delete(listener);
+  }
+
+  private notifyEnabledChange(): void {
+    const enabled = this.isEnabled();
+    for (const listener of this.enabledListeners) {
+      try { listener(enabled); } catch (error) {
+        log.warn('agent island enabled listener failed', { error: error instanceof Error ? error.message : String(error) });
+      }
+    }
+  }
+
+  /** Remaining quota from the menu bar overview, already ordered and filtered. */
+  setQuota(items: readonly AgentIslandQuotaItem[]): void {
+    if (sameAgentIslandQuota(this.quota, items)) return;
+    this.quota = [...items];
+    if (this.isEnabled()) this.publish();
   }
 
   /** Main-process consumers use this to avoid duplicating Agent Island completion UI. */
@@ -979,6 +1047,10 @@ export class AgentIslandService {
     this.enabled = false;
     this.enabledSynced = this.headless;
     this.hiddenPublished = true;
+    // The previous account's quota must not survive into the next one: drop it and let the
+    // quota bridge release the overview, so turning the island back on reads the new account.
+    this.quota = [];
+    this.notifyEnabledChange();
     if (this.nativeHost.suspend) {
       this.nativeHost.suspend();
     } else {
@@ -1922,28 +1994,21 @@ export class AgentIslandService {
    * attention=true 投给远程侧栏,直到真正已读。
    */
   private buildSessionActivityPayload(): AgentIslandSessionActivity[] {
-    return buildAllSessionActivitySnapshots(this.state).map((s) => ({
-      ...(s.completionToken ? { completionToken: s.completionToken } : {}),
-      ...(s.completionNotification ? { completionNotification: s.completionNotification } : {}),
-      ...projectSessionActivity({
-        sessionId: s.sessionId,
-        recordStatus: 'active',
-        title: s.title,
-        source: 'live',
-        livePhase: s.phase,
-        startedAtMs: s.startedAt,
-        lastActivityAtMs: s.lastActivityAt,
-        currentActionSummary: safeSessionActionSummary(s),
-        interactionKind: s.interactionKind,
-        attention: s.attention,
-      }),
-      phase: s.phase,
-      interactionKind: s.interactionKind,
-      // 完成后这份摘要只给其它设备的完成卡片用(本机岛面直接读展示快照)。
-      compactDetail: s.phase === 'completed' ? completedReplySummary(s) : s.compactDetail,
-      summaryFormat: 'plain-text',
-      workingPhase: s.workingPhase,
-    }));
+    return buildAllSessionActivitySnapshots(this.state).map(toSessionActivity);
+  }
+
+  /**
+   * 本机活动之外再加上其它设备任务的岛面镜像，只交给本进程内的消费方(键盘状态灯),
+   * 使它与灵动岛看到同一批任务；relay、renderer 与订阅方仍只拿本机活动。
+   */
+  private buildProcessLocalActivityPayload(
+    local: readonly AgentIslandSessionActivity[],
+  ): AgentIslandSessionActivity[] {
+    const localIds = new Set(local.map((activity) => activity.sessionId));
+    const device = buildDeviceSessionActivitySnapshots(this.state)
+      .filter((snapshot) => !localIds.has(snapshot.sessionId))
+      .map(toSessionActivity);
+    return [...local, ...device];
   }
 
   /** Current public activity only; avoids scanning historical Bot Session links. */
@@ -2061,7 +2126,7 @@ export class AgentIslandService {
     const payload = this.buildSessionActivityPayload();
     this.sessionActivityRelay.publish(payload);
     this.emitSessionActivityTransitions(payload, Date.now());
-    this.notifySessionActivityConsumer(payload);
+    this.notifySessionActivityConsumer(this.buildProcessLocalActivityPayload(payload));
     // 广播给所有 app content window(含「在新窗口打开」的副窗),不只主窗 —— 副窗也有侧栏、
     // 也订阅同一频道,只发主窗会让副窗卡片预览停在陈旧 summary(PR #246 review)。
     const windows = BrowserWindow.getAllWindows().filter(isAppContentWindow);
@@ -2111,12 +2176,12 @@ export class AgentIslandService {
     // Sounds follow real runtime transitions. Chat read/visibility filters only own
     // the rendered unread projection and must neither mute a fresh turn nor replay history.
     const soundDisplayState = withAgentIslandConfig(
-      buildAgentIslandDisplayState(this.state, now), this.soundSettings, this.mascotSkin,
+      buildAgentIslandDisplayState(this.state, now), this.soundSettings, this.mascotSkin, this.quota,
     );
     const chatDisplayState = this.companionChats.size > 0
       ? withAgentIslandConfig(
         buildAgentIslandDisplayState(this.state, now, this.companionChatProjections()),
-        this.soundSettings, this.mascotSkin,
+        this.soundSettings, this.mascotSkin, this.quota,
       )
       : soundDisplayState;
     if (!this.enabled) {
@@ -3050,13 +3115,26 @@ function withAgentIslandConfig(
   displayState: AgentIslandDisplayState,
   soundSettings: AgentIslandSoundSettings,
   mascotSkin: AgentIslandMascotSkin,
+  quota: readonly AgentIslandQuotaItem[] = [],
 ): AgentIslandDisplayState {
   return {
     ...displayState,
+    ...(quota.length > 0 ? { quota: [...quota] } : {}),
     strings: buildAgentIslandStrings(),
     soundSettings: cloneAgentIslandSoundSettings(soundSettings),
     mascotSkin,
   };
+}
+
+function sameAgentIslandQuota(a: readonly AgentIslandQuotaItem[], b: readonly AgentIslandQuotaItem[]): boolean {
+  return a.length === b.length && a.every((item, index) => {
+    const other = b[index]!;
+    return item.id === other.id && item.logoSvg === other.logoSvg && item.text === other.text
+      && item.level === other.level && item.stale === other.stale
+      && item.accessibilityLabel === other.accessibilityLabel && item.lowest === other.lowest
+      && item.compactText === other.compactText
+      && item.width === other.width && item.textWidth === other.textWidth;
+  });
 }
 
 function collapseManualExpandedStateForInactiveDisplay(displayState: AgentIslandDisplayState): AgentIslandDisplayState {

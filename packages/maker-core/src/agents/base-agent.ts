@@ -485,6 +485,8 @@ export interface RefreshLocalModelsOptions {
    * 捕获监听器,让调用方按发起时的登录代际决定是否采用。
    */
   onSupportedModels?: (models: unknown[]) => void;
+  /** Codex: route a complete live snapshot to this caller instead of OAuth discovery. */
+  onModelsListed?: (models: readonly CodexModelListItem[]) => void | Promise<void>;
 }
 
 export interface ClaudeSubagentTaskRegistration {
@@ -733,6 +735,14 @@ export interface AgentDeps {
    * provider，并转换成底层 SDK 接受的 MCP 配置。
    */
   mcpProviders?: McpProvider[];
+
+  /** Explicit local user choices only; never used by Bots, SSH or hosted runtimes. */
+  resolveLocalMcpDuplicateChoices?: (input: { workingDir: string; env: NodeJS.ProcessEnv }) => Promise<{
+    skipHostServers: string[];
+    denyNativeServers: string[];
+    /** Confirm these native connections in the live CLI before omitting any host. */
+    nativeServersToKeep?: string[];
+  }>;
 
   /**
    * pi 专用:pi 配置目录(PI_CODING_AGENT_DIR,内含 models.json / sessions/ 等)
@@ -1827,6 +1837,13 @@ export interface DeviceHostedSession {
    */
   guestProvider?: DeviceHostedGuestProvider;
   /**
+   * 任务所在电脑提供了这个任务的 Cindy 托管 Skill(内置与插件带的，已按那台的启用状态与伙伴授权过滤)。
+   * 存在时 Agent 不再加载本机的托管 Skill，受邀者也一样；缺省(旧控制端)时沿用原规则。
+   *  - claudePluginRoots：Claude Code 以本地插件挂载的目录(在影子目录里，保持 `cindy:` 等命名)；
+   *    Codex / Pi 的托管 Skill 已作为项目 Skill 放在影子目录，这里为空。
+   */
+  controllerManagedSkills?: { claudePluginRoots: string[] };
+  /**
    * 任务隧道的往来记录。托管会话里 Codex 每读一个项目文件都要过一次设备互联，慢链路下线程启动会
    * 合法地超过关键 RPC 的固定上限(#5764)：链路上还有往来就顺延等待，超时时把这里的计数写进错误说明。
    * 不提供时按固定上限。
@@ -2519,6 +2536,8 @@ export interface AgentSessionHandle {
 
   /** 当前 usage 快照 */
   getUsageSnapshot(): UsageSnapshot;
+  /** Replayable authoritative usage for Host-synthesized terminal events. */
+  getPendingTurnUsage?(): Record<string, unknown> | undefined;
 
   /** Structured context usage breakdown. Only Claude Code implements this today. */
   getContextUsage?(): Promise<ContextUsageData>;

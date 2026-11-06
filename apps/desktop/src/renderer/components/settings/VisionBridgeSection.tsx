@@ -1,3 +1,5 @@
+import { visionBridgeSettings } from './VisionBridgeSection.settings-search';
+import { useAppSettingsRevision } from '@/hooks/useAppSettingsRevision';
 /**
  * Settings -> Personalization 的视觉桥（Vision Bridge）设置。
  *
@@ -44,6 +46,7 @@ interface TargetRow {
 }
 
 export function VisionBridgeSection() {
+  const settingsRevision = useAppSettingsRevision('vision-bridge');
   const { t } = useTranslation();
   const { providers, loading: providersLoading } = useProviders();
 
@@ -89,7 +92,7 @@ export function VisionBridgeSection() {
     return () => {
       disposed = true;
     };
-  }, []);
+  }, [settingsRevision]);
 
   const persistPatch = useCallback(
     async (patch: Record<string, unknown>) => {
@@ -355,14 +358,14 @@ export function VisionBridgeSection() {
       {/* ── 总开关 ────────────────────────────────────────────────────── */}
       <div className="flex items-center justify-between gap-3 rounded-xl border border-[var(--settings-theme-card-border)] bg-[var(--settings-theme-card-bg)] px-4 py-4">
         <div className="flex min-w-0 flex-col gap-1">
-          <p id="settings-search-settings-visionBridge-enableLabel" className="text-14 font-medium text-[var(--text-primary)]">
-            {t('settings.visionBridge.enableLabel')}
+          <p id={visionBridgeSettings.enableLabel.targetId} className="text-14 font-medium text-[var(--text-primary)]">
+            {t(visionBridgeSettings.enableLabel.titleKey)}
           </p>
           <p className="text-12 leading-[1.4] text-[var(--text-secondary)]">
-            {t('settings.visionBridge.enableHint')}
+            {t(visionBridgeSettings.enableLabel.descriptionKey)}
           </p>
         </div>
-        <Switch
+        <Switch data-setting-id={visionBridgeSettings.enableLabel.id}
           checked={enabled}
           disabled={pending}
           onCheckedChange={toggleEnabled}
@@ -374,11 +377,11 @@ export function VisionBridgeSection() {
       <div className="flex flex-col rounded-xl border border-[var(--settings-theme-card-border)] bg-[var(--settings-theme-card-bg)]">
         <div className="flex items-center justify-between gap-3 px-4 py-4">
           <div className="flex min-w-0 flex-col gap-1">
-            <p id="settings-search-settings-visionBridge-targetModels-label" className="text-14 font-medium text-[var(--text-primary)]">
-              {t('settings.visionBridge.targetModels.label')}
+            <p id={visionBridgeSettings.targetModelsLabel.targetId} className="text-14 font-medium text-[var(--text-primary)]">
+              {t(visionBridgeSettings.targetModelsLabel.titleKey)}
             </p>
             <p className="text-12 leading-[1.4] text-[var(--text-secondary)]">
-              {t('settings.visionBridge.targetModels.hint')}
+              {t(visionBridgeSettings.targetModelsLabel.descriptionKey)}
             </p>
           </div>
           <DefaultOverrideControls
@@ -412,7 +415,7 @@ export function VisionBridgeSection() {
                       {t(CAPABILITY_LABEL_KEY[row.capability])}
                     </span>
                   </div>
-                  <Switch
+                  <Switch data-setting-id={visionBridgeSettings.targetModelsLabel.id}
                     checked={checked}
                     disabled={pending || !enabled}
                     onCheckedChange={() => {
@@ -431,11 +434,11 @@ export function VisionBridgeSection() {
       <div className="flex flex-col rounded-xl border border-[var(--settings-theme-card-border)] bg-[var(--settings-theme-card-bg)]">
         <div className="px-4 py-4">
           <div className="flex flex-col gap-1">
-            <p id="settings-search-settings-visionBridge-backends-label" className="text-14 font-medium text-[var(--text-primary)]">
-              {t('settings.visionBridge.backends.label')}
+            <p id={visionBridgeSettings.backendsLabel.targetId} className="text-14 font-medium text-[var(--text-primary)]">
+              {t(visionBridgeSettings.backendsLabel.titleKey)}
             </p>
             <p className="text-12 leading-[1.4] text-[var(--text-secondary)]">
-              {t('settings.visionBridge.backends.hint')}
+              {t(visionBridgeSettings.backendsLabel.descriptionKey)}
             </p>
           </div>
         </div>
@@ -450,6 +453,7 @@ export function VisionBridgeSection() {
             </div>
             <div className="min-w-0 flex-1">
               <ModelSelector
+                localOnlyReason="vision-bridge-local-proxy"
                 providersOverride={visionProviders}
                 modelId={primary?.modelId ?? ''}
                 effort=""
@@ -504,6 +508,7 @@ export function VisionBridgeSection() {
             </div>
             <div className="min-w-0 flex-1">
               <ModelSelector
+                localOnlyReason="vision-bridge-local-proxy"
                 providersOverride={visionProviders}
                 modelId={fallback?.modelId ?? ''}
                 effort=""

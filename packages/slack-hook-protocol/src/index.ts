@@ -32,6 +32,8 @@ export {
   makeProviderBindStart,
   makeProviderBindCancel,
   makeProviderBindRevoke,
+  makeProviderBindSelect,
+  makeProviderBindSelection,
   makeProviderBindUpdate,
   makeProviderBindState,
   makeQueryRequest,

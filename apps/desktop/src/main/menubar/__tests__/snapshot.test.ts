@@ -353,6 +353,18 @@ it('projects Kimi monthly windows as remaining percentages with their real perio
   expect(JSON.stringify(view.details.kimi)).toContain('Monthly Coding');
 });
 
+it('projects OpenCode Go rolling and monthly windows under its own provider', () => {
+  const view = buildMenubarView(input([codex('opencode', 0, {
+    family: 'opencode-go', logoSvg: familyLogo('opencode-go'), brand: 'OpenCode Go', account: null, plan: null,
+    windows: [
+      { kind: 'session', usedPercent: 30, resetsAtMs: NOW + 2 * 60 * 60_000, windowMinutes: 300 },
+      { kind: 'period', label: 'monthly', usedPercent: 10, resetsAtMs: NOW + 20 * DAY, windowMinutes: 0 },
+    ],
+  })]));
+  expect(view.sources[0]).toMatchObject({ id: 'opencode', name: 'OpenCode Go', value: '70', valueUnit: '%' });
+  expect(JSON.stringify(view.details.opencode)).toContain('Monthly Total');
+});
+
 // iPhone widgets show the panel's tubes only: rows without a level stay out, and the reset
 // time travels with each tube so the widget can keep the countdown current between refreshes.
 describe('buildUsageWidgetSnapshot', () => {

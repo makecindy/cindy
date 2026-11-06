@@ -377,3 +377,16 @@ describe('selectMarketPluginIdForInstance', () => {
     }])).toBeNull();
   });
 });
+
+
+it('reuses only the same local identity when reinstalling through a different development entry', () => {
+  const local = record({ instanceKey: '_ns__local__helper', contentRelId: '_ns/local/helper',
+    namespace: 'local', source: 'manual', pluginId: null, active: false });
+  const root = record({ instanceKey: '_root__helper', contentRelId: '_ns/_root/helper',
+    namespace: null, source: 'manual', pluginId: null, active: false });
+  const registry = upsertInstance(upsertInstance(emptyPluginInstanceRegistry(), root), local);
+  expect(findReusableInstance(registry, { ghostId: 'helper', namespace: 'local', source: 'agent-forge' }))
+    .toEqual(local);
+  expect(findReusableInstance(registry, { ghostId: 'helper', namespace: null, source: 'agent-forge' })).toBeNull();
+  expect(findReusableInstance(registry, { ghostId: 'helper', namespace: 'local', source: 'market', pluginId: 'market-a' })).toBeNull();
+});

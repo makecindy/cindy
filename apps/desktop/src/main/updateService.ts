@@ -611,9 +611,14 @@ export function setUpdateAutoRelaunchBusyProbe(
   void evaluateAutoRelaunch('busy-probe-installed');
 }
 
+/**
+ * Only records the activity. Evaluating here can never pass: lastBusyAtMs was just
+ * set, so the result is always busy / recent-busy. Busy edges can arrive dozens of
+ * times per second (remote invokes), and each evaluation re-ran the busy probe and
+ * logged a block. The 30s poller picks the relaunch up after the quiet period.
+ */
 export function notifyUpdateAutoRelaunchBusyStateChanged(): void {
   markRecentBusyActivity();
-  void evaluateAutoRelaunch('busy-state-changed');
 }
 
 /**

@@ -1795,9 +1795,9 @@ const makeStyles = (colors: ThemeColors) => {
       fontSize: typeScale.caption,
       lineHeight: lineHeight.caption,
     },
+    // 与页面同底:预览顶栏透明,图片区另设底色会在顶栏下方露出接缝。
     imagePage: {
       alignItems: 'center',
-      backgroundColor: colors.surface,
       flex: 1,
       justifyContent: 'center',
     },

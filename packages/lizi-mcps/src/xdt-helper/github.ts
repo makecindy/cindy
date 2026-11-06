@@ -93,7 +93,7 @@ export function registerGithubTools(
     name: "manage_session_prs",
     category: "github",
     description:
-      "明确管理任务的 PR 关联（本机/跨电脑）。省略 session_id 为当前任务。list 含历史引用与已移除记录；attach 不恢复已移除关系，restore 才恢复。reorder 传同一固定分组内全部 PR。搜索、阅读和引用链接不应 attach；接手处理或成功创建 PR 后显式 attach。此工具不创建自动跟进。",
+      "明确管理任务的 PR 关联（本机/跨电脑）。省略 session_id 为当前任务。list 含历史引用与已移除记录；attach 不恢复已移除关系，restore 才恢复。reorder 传同一固定分组内全部 PR。用户或助手消息提到完整 PR 链接时会自动关联；需要主动关联时用 attach。查询工具本身不建立关联。此工具不创建自动跟进。",
     inputShape: {
       session_id: z.string().min(1).max(512).optional(),
       device,

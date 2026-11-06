@@ -328,7 +328,7 @@ export async function resolveWorkspacePathCached(
  * Async BFS that resolves MANY href suffixes in a SINGLE directory-tree walk.
  *
  * Each href gets its own candidate bucket (capped at `maxCandidates`). Every
- * file visited is suffix-tested against all not-yet-full buckets, so one walk
+ * file visited is suffix-tested against buckets with the same basename, so one walk
  * answers every href at once. The walk stops early when all buckets are full,
  * otherwise when the queue drains or `maxDepth` is reached.
  *
@@ -350,7 +350,8 @@ export async function bfsFindManyBySuffix(
   // `named` stays per href: the walk enters an ignored directory any href
   // names, but only that href may match files under it, so every bucket ends
   // up with what `bfsFindBySuffix` would return for its href alone.
-  const buckets = new Map<string, { suffix: string; named: Set<string>; out: string[] }>();
+  type Bucket = { suffix: string; named: Set<string>; out: string[] };
+  const buckets = new Map<string, Bucket>();
   for (const href of hrefs) {
     if (buckets.has(href)) continue;
     buckets.set(href, {
@@ -361,6 +362,13 @@ export async function bfsFindManyBySuffix(
   }
   const result = new Map<string, string[]>();
   for (const [href, bucket] of buckets) result.set(href, bucket.out);
+  const byBasename = new Map<string, Bucket[]>();
+  for (const bucket of buckets.values()) {
+    const basename = bucket.suffix.slice(bucket.suffix.lastIndexOf('/') + 1);
+    const matching = byBasename.get(basename) ?? [];
+    matching.push(bucket);
+    byBasename.set(basename, matching);
+  }
   const enterable = new Set<string>();
   for (const bucket of buckets.values()) {
     for (const pair of bucket.named) enterable.add(pair);
@@ -375,11 +383,14 @@ export async function bfsFindManyBySuffix(
 
   // Depth-tagged queue so we can cut off at maxDepth without recursion.
   // `crossed` lists the ignored directories entered on the way down.
-  const queue: Array<{ dir: string; depth: number; crossed: readonly string[] }> = [
+  const queue: Array<{ dir: string; depth: number; crossed: readonly string[] } | undefined> = [
     { dir: root, depth: 0, crossed: [] },
   ];
-  while (queue.length > 0 && !allFull()) {
-    const { dir, depth, crossed } = queue.shift()!;
+  let visited = 0;
+  for (let cursor = 0; cursor < queue.length && !allFull(); cursor++) {
+    const { dir, depth, crossed } = queue[cursor]!;
+    // Release consumed paths without shifting the pending breadth-first queue.
+    queue[cursor] = undefined;
     let entries: fs.Dirent[];
     try {
       entries = await fs.promises.readdir(dir, { withFileTypes: true });
@@ -387,6 +398,8 @@ export async function bfsFindManyBySuffix(
       continue;
     }
     for (const ent of entries) {
+      // A single very wide directory also needs to leave room for main IPC.
+      if (++visited % 512 === 0) await new Promise<void>((resolve) => setImmediate(resolve));
       if (ent.isDirectory()) {
         if (depth >= maxDepth) continue;
         if (skipsDirectory(dir, ent.name, ignoreDirs, enterable)) continue;
@@ -396,9 +409,11 @@ export async function bfsFindManyBySuffix(
           crossed: ignoreDirs.has(ent.name) ? [...crossed, ignoredDirPair(dir, ent.name)] : crossed,
         });
       } else if (ent.isFile()) {
+        const matching = byBasename.get(normalizeForSuffix(ent.name));
+        if (!matching) continue;
         const abs = path.join(dir, ent.name);
         const norm = normalizeForSuffix(abs);
-        for (const bucket of buckets.values()) {
+        for (const bucket of matching) {
           if (bucket.out.length >= maxCandidates) continue;
           if (!crossed.every((pair) => bucket.named.has(pair))) continue;
           if (norm.endsWith(bucket.suffix) && isPathAllowed(abs)) {

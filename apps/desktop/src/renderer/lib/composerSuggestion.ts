@@ -37,6 +37,8 @@ export interface ComposerSuggestionAction {
   disabled?: boolean;
   /** Shown as a row tooltip when the action is disabled (e.g. collab policy). */
   disabledReason?: string;
+  /** Opens a next-level page inside the `+` panel instead of finishing there (add directory). */
+  opensPanelPage?: boolean;
   run: () => void;
 }
 

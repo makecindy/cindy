@@ -119,8 +119,9 @@ export function askOwnerDescription(kinds: readonly AskOwnerKind[], context: Pic
     lines.push('- For choices between options, use your own question tool (request_user_input).');
   }
   if (kinds.includes('fill')) {
-    lines.push('- fill: they type what only they may (a sign-in name, password, verification code, or personal details you do not know) '
-      + 'into fields of a window on this computer (`target`). Cindy types it in and presses the page\'s own button; you never see the values. '
+    lines.push('- fill: only for what you must never see, in a window on this computer (`target`): a sign-in, or a password, API key, token or verification code. '
+      + 'The owner does a sign-in on the window itself; other secret fields get a form, and Cindy types the answer in. You never see the values. '
+      + 'Anything else the owner can tell you (an email address, a name, a street address) is not for fill: ask in your reply and enter it yourself. '
       + 'Buttons, options and consent pages are yours to handle.');
   }
   if (kinds.includes('scan')) {
@@ -131,7 +132,7 @@ export function askOwnerDescription(kinds: readonly AskOwnerKind[], context: Pic
     lines.push('- connect: they connect an account (`service`). Plugin accounts connect through connect_account on the cindy server.');
   }
   if (kinds.includes('fill') || kinds.includes('scan')) {
-    lines.push('Never ask for passwords, codes or QR scans in chat or in a question. While a fill or scan is pending, '
+    lines.push('Never ask for passwords, keys, codes or QR scans in chat or in a question. While a fill or scan is pending, '
       + 'do not touch that window. Terminal password prompts (sudo -A, ssh, git over HTTPS) ask the owner automatically.');
   }
   return lines.join('\n');

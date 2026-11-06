@@ -3,6 +3,7 @@ import { describe, expect, it, vi } from 'vitest';
 
 import { withRemoteOauthContext, type RemoteOauthContext } from '../../plugin-oauth/context.js';
 import type { InstalledGhost } from '../../../shared/ghost.js';
+import { canUseGithubHostCredentials } from '../GhostManager.js';
 import { GhostConnectionManager } from '../ghostConnections.js';
 import { GhostOauthAccountManager } from '../ghostOauthAccounts.js';
 import { handleGhostConnectionsRequest } from '../runtime/ghostConnectionsEndpoint.js';
@@ -90,6 +91,7 @@ function harness(route: Route, opts: { omitGuard?: boolean; githubProbe?: boolea
     getAuthState: () => ({ user: null }),
     resolveConnectionAudienceForGhost: () => null, isConnectionSecretReady: () => false,
     isCindyOfficialTrustInfo: () => true,
+    canUseGithubHostCredentials,
     getSharedGhCliTokenSource: () => ({ probeAvailability }),
     GHOST_NETWORK_MAX_CONNECTIONS_PER_DECL: 2,
     dialog: { showMessageBox }, t: (key: string) => key,

@@ -326,15 +326,20 @@ describe('plugin target queries and delivery', () => {
     await expect(f.call({ ...request, context: 'Another window' }))
       .rejects.toMatchObject({ code: 'REQUEST_KEY_CONFLICT' });
   });
-  it('opts new project tasks into automatic naming and never renames existing targets', async () => {
+  // Unit regression: the naming adapter receives the title model's material.
+  // Reference boilerplate must not consume its input budget or become the topic.
+  it('names new project tasks from instructions without reference material and never renames existing targets', async () => {
     const f = fixture();
     const schedule = vi.fn();
     f.slot.adapter!.scheduleAutoTitle = schedule;
-    const request = { ...f.request, target: { kind: 'project', id: 'chosen' }, autoTitle: true };
+    const request = { ...f.request, target: { kind: 'project', id: 'chosen' }, autoTitle: true,
+      text: 'Release this project', context: 'Capture metadata. '.repeat(30) };
     await f.call(request);
     await f.call(request);
     expect(f.create.mock.calls[0]?.[6]).toBe(true);
     expect(schedule).toHaveBeenCalledOnce();
+    expect(schedule).toHaveBeenCalledWith('plugin', expect.any(String), request.text, request.text);
+    expect(f.send.mock.calls[0]?.[8]).toEqual({ context: request.context });
     for (const targetKind of ['task', 'bot']) {
       await expect(f.call({ ...request, requestKey: targetKind, target: { kind: targetKind, id: 'chosen' } }))
         .rejects.toMatchObject({ code: 'INVALID_PARAMS' });

@@ -47,6 +47,13 @@ const runtime = vi.hoisted(() => ({
   collectionSize: 2,
 }));
 
+// 预览外壳的液态玻璃与系统菜单:测试环境没有原生模块,走实色底与底部面板回退。
+vi.mock('expo-glass-effect', () => ({ GlassView: ({ children }: any) => children }));
+vi.mock('@/session/useLiquidGlassAvailable', () => ({ useLiquidGlassAvailable: () => false }));
+vi.mock('@/platform/chrome', () => ({
+  NativePullDownMenu: ({ children }: any) => children,
+  usesNativePullDownMenu: () => false,
+}));
 vi.mock("@/session/SheetModal", () => ({
   SheetModal: ({ visible, children }: any) => (visible ? children : null),
 }));

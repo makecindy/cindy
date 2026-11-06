@@ -79,19 +79,31 @@ import {
 import { PROVIDER_GROUP_LOCAL_MEMBER_KEY } from '../../../shared/providerGroup';
 import { isAccountUsageLimitError } from '../../maker-ipc/usageLimitAutoResume';
 import { projectPathText } from '../executor/workspace';
+import { listManagedSkillFiles, managedSkillDigest } from '../managedSkillDigest';
 import {
   MAX_ANCESTOR_LEVELS,
   PROJECT_INSTRUCTION_FILES,
   decodeOpenPayload,
   decodeSendOptions,
   decodeUserMessage,
+  MAX_MANAGED_SKILL_BYTES,
+  MAX_MANAGED_SKILL_FILES,
+  REMOTE_AGENT_MAX_PERSONAL_FILES,
+  REMOTE_AGENT_SYNC_FILE_BYTES,
+  REMOTE_AGENT_SYNC_TOTAL_BYTES,
+  managedSkillPluginLayout,
+  parseManagedSkillCommand,
   type RemoteAgentOpenPayload,
+  type RemoteAgentWireFile,
+  type RemoteAgentWireManagedSkill,
+  type RemoteAgentWirePersonal,
   type RemoteAgentWireStartOptions,
   type RemoteAgentWireWorkspace,
 } from '../wire';
 import {
   GUEST_SUPPORTED_AGENTS,
   confineGuestDirs,
+  guestInstructionAsset,
   neutralizeExternalImports,
   sanitizeGuestOpenPayload,
   sanitizeGuestVendorOptions,
@@ -140,6 +152,8 @@ export interface HostedStartInput {
   /** Host-derived path, scoped to controller/relay/application; never from wire. */
   localApplicationStorage?: string;
   groupProviderId?: string;
+  /** Missing/expired group speed policy selects ordinary speed, not an unusable task. */
+  requireGroupFastPolicy?: boolean;
   kind: RemoteAgentKind;
   /** 本机侧的任务 id(由控制端与任务 id 派生，恢复同一任务时不变)。 */
   hostSessionId: string;
@@ -172,6 +186,8 @@ export interface HostedStartInput {
    * 认出这条任务请求的令牌，modelIds 是该供应商为本 Agent 提供的模型。
    */
   guestProvider?: { providerId: string; modelIds: string[]; routeToken: string };
+  /** 控制端提供了托管 Skill：Agent 只用这些(Claude Code 的插件目录在影子目录里)，不加载本机的。 */
+  controllerManagedSkills?: { claudePluginRoots: string[] };
 }
 
 /** 一次受邀者任务的出站登记(见 RemoteAgentHostDeps.bindGuestProviderRoute)。 */
@@ -191,6 +207,11 @@ export interface OwnerProviderRouteBinding {
 }
 
 export interface RemoteAgentHostDeps {
+  /**
+   * 这台自己的 Cindy 托管 Skill(启用中的；命令名与 SKILL.md 所在目录)。caps 据此报指纹，任务所在电脑报「用你自己那份」
+   * 时据此复制；组所在电脑中转时据此替组内电脑补文件。
+   */
+  managedSkills?(): Promise<Array<{ command: string; dir: string }>>;
   nativeHistory?(scope: string, command: unknown, workingDir: string, assertCurrent: () => void): Promise<unknown>;
   fastPolicy?(controller: string, command: import('@cindy/device-link').RemoteAgentFastPolicy): Promise<unknown>;
   /** Prepare native bytes; retain recovery ownership only for receipted controllers. */
@@ -225,10 +246,11 @@ export interface RemoteAgentHostDeps {
    *    null / 缺省时在已开放的供应商里按本机默认规则挑一个。返回 null = 没有开放的供应商可用。
    *  - isAllowed：进行中的任务每次发消息前复核(用户可能刚把它关掉)。
    * 两者都带上控制端：供应商分享的受邀者只能用分享给它的那个供应商。
+   * groupRouting 由宿主在分配或向已确认的组员转发时设定，不来自 wire；本机执行不带它重新 resolve。
    */
   providerAccess?: {
     resolve(kind: RemoteAgentKind, model: string, providerId: string | null | undefined, controller: string,
-      sessionId?: string): Promise<string | null>;
+      sessionId?: string, context?: { groupRouting?: boolean }): Promise<string | null>;
     isAllowed(providerId: string, controller: string, model?: string, sessionId?: string): boolean;
     models?(kind: RemoteAgentKind, providerId: string, controller: string, sessionId?: string): Promise<string[]>;
     restricted?(providerId: string, controller: string, sessionId?: string): boolean;
@@ -257,6 +279,7 @@ export interface RemoteAgentHostDeps {
    * 组内电脑运行，本机中转。不提供 = 受邀者的任务一律在本机运行(现有接线)。
    */
   groupRelay?: RemoteAgentGroupRelayDeps;
+  groupContinuity?(): boolean;
   /** Group owner chooses an executor; executor accepts a bounded grant from its authenticated owner peer. */
   directGuestExecution?: {
     ownerScope(): string;
@@ -1248,7 +1271,8 @@ export function createRemoteAgentHost(deps: RemoteAgentHostDeps) {
     payload: RemoteAgentOpenPayload,
     hostSessionId: string,
     trust: RemoteAgentControllerTrust,
-  ): Promise<{ shadowDir: string; mirrorRoot: string; shortcutLayout: ExecServerShortcutLayout; sessionRoot: string; extraDirs: string[]; writableDirs: string[]; projectText(text: string): string }> {
+    kind: RemoteAgentKind,
+  ): Promise<{ shadowDir: string; mirrorRoot: string; shortcutLayout: ExecServerShortcutLayout; sessionRoot: string; extraDirs: string[]; writableDirs: string[]; projectText(text: string): string; controllerManagedSkills?: { claudePluginRoots: string[] } }> {
     const sessionRoot = shadowSessionRoot(controller, hostSessionId);
     /** 受邀者的说明文件：指向会话目录之外的 `@` 引用不再被当作导入(否则会在本机读文件)。 */
     const instructionBytes = (data: Buffer, fileDir: string): Buffer => (
@@ -1367,10 +1391,33 @@ export function createRemoteAgentHost(deps: RemoteAgentHostDeps) {
       await writeNew(path.join(sessionRoot, 'CLAUDE.md'), instructionBytes(Buffer.from(projectText(personal.memory), 'utf8'), sessionRoot));
     }
     // 项目里已有同名文件时以项目为准(只写不存在的)。
-    for (const file of personal.files) {
+    for (const file of [...personal.files, ...(personal.managedFiles ?? [])]) {
       const target = path.join(shadowDir, ...file.path.split('/'));
       if (!inside(target, shadowDir)) continue;
       await writeNew(target, markdownBytes(projectBytes(Buffer.from(file.data, 'base64')), target));
+    }
+    // 任务所在电脑报「与你那份一样」的托管 Skill：复制这台自己的，指纹不再一致(刚更新过)就不带这个 Skill。
+    const reused = personal.managedSkills?.filter((skill) => skill.reuse) ?? [];
+    if (reused.length) {
+      const own = await ownManagedSkills(trust === 'guest');
+      for (const skill of reused) {
+        const source = own.get(skill.command);
+        const files = source ? await listManagedSkillFiles(source) : null;
+        if (!source || !files || (await managedSkillDigest(source, files)) !== skill.digest) {
+          deps.log?.warn('remote agent: reused managed skill no longer matches; skipping it', { skill: skill.command });
+          continue;
+        }
+        for (const file of files) {
+          const relative = `${skill.dir}/${file.relative}`;
+          const target = path.join(shadowDir, ...relative.split('/'));
+          if (!inside(target, shadowDir)) continue;
+          // 与传输过来的同一份内容落地结果相同：受邀者任务里同样过 Markdown 检查与落地改写(不变量：复用 ≡ 传输)。
+          const own = { path: relative, data: (await fsp.readFile(file.local)).toString('base64') };
+          for (const asset of trust === 'guest' ? guestInstructionAsset(own) : [own]) {
+            await writeNew(target, markdownBytes(projectBytes(Buffer.from(asset.data, 'base64')), target));
+          }
+        }
+      }
     }
     // 说明文件里 `@` 导入的文件：workspace 相对影子目录(可落在上级目录的镜像里)，session 相对会话目录
     // (个人说明旁边，不进虚拟工作区)。已有同名文件的不覆盖。
@@ -1383,10 +1430,40 @@ export function createRemoteAgentHost(deps: RemoteAgentHostDeps) {
       if (!allowed) continue;
       await writeNew(target, markdownBytes(projectBytes(Buffer.from(file.data, 'base64')), target));
     }
+    // 控制端提供的托管 Skill(字段存在即由控制端决定，本机的不再加载)。Claude Code 以插件挂载，保持 `cindy:pr`
+    // 这样的命名：从项目 Skill 目录整体挪进插件目录，同一个 Skill 不出现两次。Codex / Pi 本来就不带插件前缀，
+    // 留在项目 Skill 目录加载。
+    let controllerManagedSkills: { claudePluginRoots: string[] } | undefined;
+    if (personal.managedSkills) {
+      const pluginRoots = new Set<string>();
+      for (const skill of kind === 'claude-code' ? personal.managedSkills : []) {
+        const parts = parseManagedSkillCommand(skill.command);
+        const layout = managedSkillPluginLayout(skill.command);
+        if (!parts || !layout || !skill.dir.startsWith('.claude/skills/')) continue;
+        const from = path.join(shadowDir, ...skill.dir.split('/'));
+        try {
+          await fsp.access(path.join(from, 'SKILL.md'));
+        } catch {
+          continue;
+        }
+        const root = path.join(shadowDir, ...layout.root.split('/'));
+        if (!pluginRoots.has(root)) {
+          await fsp.mkdir(path.join(root, '.claude-plugin'), { recursive: true });
+          await fsp.writeFile(path.join(root, '.claude-plugin', 'plugin.json'), JSON.stringify({ name: parts.plugin, version: '1.0.0' }));
+          await fsp.mkdir(path.join(root, 'skills'), { recursive: true });
+          pluginRoots.add(root);
+        }
+        await fsp.rename(from, path.join(shadowDir, ...layout.dir.split('/')));
+      }
+      controllerManagedSkills = { claudePluginRoots: [...pluginRoots] };
+    }
     if (personal.permissions) await mergeLocalPermissions(path.join(shadowDir, '.claude', 'settings.local.json'), Object.fromEntries(Object.entries(personal.permissions).map(([key, rules]) => [key, rules?.map(projectText)])));
     // virtualParent 停在控制端有对应目录的最上一级(与控制端 shadowAliases 逐级映射的范围一致)。
     const shortcutLayout: ExecServerShortcutLayout = { mirrorRoot, mappedRoot: virtualParent, ancestorAbsence, taskAncestorAbsence };
-    return { shadowDir, mirrorRoot, shortcutLayout, sessionRoot, extraDirs: virtualAll.slice(0, extraCount), writableDirs: virtualAll.slice(extraCount), projectText };
+    return {
+      shadowDir, mirrorRoot, shortcutLayout, sessionRoot, extraDirs: virtualAll.slice(0, extraCount), writableDirs: virtualAll.slice(extraCount), projectText,
+      ...(controllerManagedSkills ? { controllerManagedSkills } : {}),
+    };
   }
 
   async function startRun(run: Run, payload: RemoteAgentOpenPayload): Promise<void> {
@@ -1407,6 +1484,13 @@ export function createRemoteAgentHost(deps: RemoteAgentHostDeps) {
       forwarded: 0,
     };
     try {
+      if (run.trust === 'guest' && run.groupProviderId && deps.providerAccess) {
+        // Group preflight did not require O's login. Every local start, including a fallback from M,
+        // must resolve again against this computer's real connection state before starting an agent.
+        const provider = await deps.providerAccess.resolve(run.kind, payload.options.model,
+          run.providerId, run.controller, payload.sessionId);
+        if (provider !== run.providerId) failProviderNotAllowed();
+      }
       // 中转过来的任务按(控制端, relay)派生：不同受邀者即使任务 id 相同也不会共用本机侧任务。
       const hostSessionId = hostSessionIdFor(guestScopeOf(run.controller, run.relayKey), payload.sessionId);
       run.hostSessionId = hostSessionId;
@@ -1423,7 +1507,7 @@ export function createRemoteAgentHost(deps: RemoteAgentHostDeps) {
         guestHome = guestHomeFor(guestScopeOf(run.controller, run.relayKey));
         await fsp.mkdir(guestHome, { recursive: true, mode: 0o700 });
       }
-      const { shadowDir, mirrorRoot, shortcutLayout, sessionRoot, extraDirs, writableDirs, projectText } = await timing.measure('shadow-workspace', () =>
+      const { shadowDir, mirrorRoot, shortcutLayout, sessionRoot, extraDirs, writableDirs, projectText, controllerManagedSkills } = await timing.measure('shadow-workspace', () =>
         withShadowLock(hostSessionId, async () => {
           // 断线后旧实例还没清理就重新打开同一任务时，新旧实例共用同一个影子目录：
           // 先结束旧实例再重建，避免删掉旧 Agent 还在使用的目录，或两个实例争用重建后的目录。
@@ -1432,7 +1516,7 @@ export function createRemoteAgentHost(deps: RemoteAgentHostDeps) {
               await finishRun(other, 'superseded', 'navigation');
             }
           }
-          return prepareShadow(run.controller, payload, hostSessionId, run.trust);
+          return prepareShadow(run.controller, payload, hostSessionId, run.trust, run.kind);
         }),
       );
       run.workspaceDir = sessionRoot;
@@ -1566,6 +1650,8 @@ export function createRemoteAgentHost(deps: RemoteAgentHostDeps) {
       const handle = await timing.measure('agent-session', () =>
         deps.startHosted({
           ...(run.groupProviderId ? { groupProviderId: run.groupProviderId } : {}),
+          requireGroupFastPolicy: payload.groupAssigned === true || !!payload.relay
+            || !!deps.directGuestExecution?.sessionDelegated(run.controller, payload.sessionId),
           kind: run.kind,
           hostSessionId,
           shadowDir,
@@ -1582,6 +1668,7 @@ export function createRemoteAgentHost(deps: RemoteAgentHostDeps) {
           workspace: payload.workspace,
           tunnel: { url: tunnel.url, token: tunnel.token, linkActivity: () => tunnel.linkActivity() },
           mcpServers: payload.mcpServers,
+          ...(controllerManagedSkills ? { controllerManagedSkills } : {}),
           ...(payload.options.localApplication ? { localApplicationStorage: path.join(guestHomeFor(guestScopeOf(run.controller, run.relayKey)),
             'local-applications', payload.options.localApplication.storageKey, run.kind) } : {}),
           ...(run.trust === 'guest' ? { guest: true, ...(guestHome ? { guestHome } : {}), ...(guestProvider ? { guestProvider } : {}) } : {}),
@@ -1787,6 +1874,94 @@ export function createRemoteAgentHost(deps: RemoteAgentHostDeps) {
   // ─── 供应商组：本机是组所在电脑，把受邀者的任务转给组内电脑 ─────────────────
 
   /** 转给组内电脑的打开载荷：已按受邀者复核过；来源换成那台上的供应商，带防转圈标记与受邀者的 relay 键。 */
+  /**
+   * 这台自己的托管 Skill：命令名 → SKILL.md 所在目录。列不出来时当作没有。受邀者只能看到、也只能复用 Cindy 内置的
+   * (`cindy:`)：提供者装的插件不对受邀者透露、也不被受邀者点名复制进它的任务。
+   */
+  async function ownManagedSkills(guest: boolean): Promise<Map<string, string>> {
+    try {
+      return new Map((await deps.managedSkills?.() ?? [])
+        .filter((skill) => !guest || skill.command.startsWith('cindy:'))
+        .map((skill) => [skill.command, skill.dir]));
+    } catch (error) {
+      deps.log?.warn('remote agent: managed skills unavailable', { error: String(error) });
+      return new Map();
+    }
+  }
+
+  /** caps 里报的指纹。受邀者只看到 Cindy 内置的，不透露这台装了哪些插件。 */
+  async function ownManagedSkillDigests(guest: boolean): Promise<Record<string, string>> {
+    const digests: Record<string, string> = {};
+    for (const [command, dir] of await ownManagedSkills(guest)) {
+      const digest = await managedSkillDigest(dir);
+      if (digest) digests[command] = digest;
+    }
+    return digests;
+  }
+
+  /**
+   * 组所在电脑中转：受邀者是按这台的 caps 决定哪些托管 Skill 只报名字的。按组内电脑的 caps 重排：它也有同样一份的
+   * 继续只报名字，没有的由这台用自己那份补上文件(指纹与受邀者的一致)；旧版组内电脑不认单独的托管额度，
+   * 文件放回 `files`，放不下的整个不带。
+   */
+  async function adaptManagedSkillsForMember(
+    personal: RemoteAgentWirePersonal,
+    memberDigests: Readonly<Record<string, string>> | undefined,
+    guest: boolean,
+  ): Promise<RemoteAgentWirePersonal> {
+    if (!personal.managedSkills) return personal;
+    const own = await ownManagedSkills(guest);
+    const byteLimit = memberDigests ? MAX_MANAGED_SKILL_BYTES : REMOTE_AGENT_SYNC_TOTAL_BYTES;
+    const sizeOf = (list: readonly RemoteAgentWireFile[]) => list.reduce((sum, file) => sum + Buffer.byteLength(file.data, 'base64'), 0);
+    const skills: RemoteAgentWireManagedSkill[] = [];
+    const filesBySkill = new Map<string, RemoteAgentWireFile[]>();
+    for (const file of personal.managedFiles ?? []) {
+      const skill = personal.managedSkills.find((item) => file.path.startsWith(`${item.dir}/`));
+      if (skill) filesBySkill.set(skill.dir, [...(filesBySkill.get(skill.dir) ?? []), file]);
+    }
+    for (const skill of personal.managedSkills) {
+      if (!skill.reuse) {
+        skills.push(skill);
+        continue;
+      }
+      if (memberDigests && skill.digest && memberDigests[skill.command] === skill.digest) {
+        skills.push(skill);
+        continue;
+      }
+      const source = own.get(skill.command);
+      const list = source ? await listManagedSkillFiles(source) : null;
+      if (!source || !list || (await managedSkillDigest(source, list)) !== skill.digest) continue;
+      // 与正常收集同样的大小限制(指纹的清单允许更大)：放不下就整个不带，读文件之前先按大小判断。
+      if (list.some((file) => file.size > REMOTE_AGENT_SYNC_FILE_BYTES)
+        || list.reduce((sum, file) => sum + file.size, 0) > byteLimit) continue;
+      const files: RemoteAgentWireFile[] = [];
+      for (const file of list) {
+        files.push({ path: `${skill.dir}/${file.relative}`, data: (await fsp.readFile(file.local)).toString('base64') });
+      }
+      skills.push({ command: skill.command, dir: skill.dir, ...(skill.digest ? { digest: skill.digest } : {}) });
+      filesBySkill.set(skill.dir, files);
+    }
+    const kept: RemoteAgentWireManagedSkill[] = [];
+    const managedFiles: RemoteAgentWireFile[] = [];
+    const files = [...personal.files];
+    const limit = memberDigests ? MAX_MANAGED_SKILL_FILES : REMOTE_AGENT_MAX_PERSONAL_FILES;
+    const target = memberDigests ? managedFiles : files;
+    // 旧版组内电脑与个人配置共用额度：已有的个人文件先占。
+    let bytes = memberDigests ? 0 : sizeOf(files);
+    for (const skill of skills) {
+      const skillFiles = filesBySkill.get(skill.dir) ?? [];
+      const skillBytes = sizeOf(skillFiles);
+      if (target.length + skillFiles.length > limit || bytes + skillBytes > byteLimit) continue;
+      target.push(...skillFiles);
+      bytes += skillBytes;
+      kept.push(skill);
+    }
+    const next: RemoteAgentWirePersonal = { ...personal, files, managedSkills: kept };
+    delete next.managedFiles;
+    if (managedFiles.length) next.managedFiles = managedFiles;
+    return next;
+  }
+
   function relayedOpenPayload(run: Run, payload: RemoteAgentOpenPayload, member: GroupRelayMember): RemoteAgentOpenPayload {
     // 「需要换一台」只在受邀者与本机之间：组内电脑不认识也不需要。受邀者自己填的转分享键不转发。
     const { acceptsGroupSwitch: _accepts, groupSwitchToken: _token, reshareKey: _reshare, relayModelAccess: _modelAccess, ...rest } = payload;
@@ -2165,7 +2340,10 @@ export function createRemoteAgentHost(deps: RemoteAgentHostDeps) {
         await deps.groupRelay?.bindFastPolicy?.({ group: groupProviderId, deviceId: current.agentDeviceId,
           sessionId: relaySessionIdFor(run.controller, payload.sessionId), relay: relayKeyFor(run.controller) });
         if (run.closing) return;
-        const started = await backend.client.open(run.kind, relayedOpenPayload(run, payload, current));
+        const relayed = relayedOpenPayload(run, payload, current);
+        relayed.personal = await adaptManagedSkillsForMember(relayed.personal, caps.managedSkills?.digests, run.trust === 'guest');
+        if (run.closing) return;
+        const started = await backend.client.open(run.kind, relayed);
         if (run.closing) {
           await backend.client.close('close', 'navigation').catch(() => undefined);
           return;
@@ -2266,7 +2444,8 @@ export function createRemoteAgentHost(deps: RemoteAgentHostDeps) {
         // 来源钉在分享的供应商上(本机按分享的那个供应商核对模型)，转给那台时换成那台上的这个供应商。
         const opts = args[1] && typeof args[1] === 'object' && !Array.isArray(args[1]) ? args[1] as Record<string, unknown> : {};
         if (access) {
-          const resolved = await access.resolve(run.kind, typeof args[0] === 'string' ? args[0] : '', run.providerId ?? null, run.controller, run.sessionId);
+          const resolved = await access.resolve(run.kind, typeof args[0] === 'string' ? args[0] : '',
+            run.providerId ?? null, run.controller, run.sessionId, { groupRouting: true });
           if (!resolved) failProviderNotAllowed();
         }
         callArgs = [args[0], { ...opts, providerId: relay.member.providerId }, ...args.slice(2)];
@@ -2933,8 +3112,11 @@ export function createRemoteAgentHost(deps: RemoteAgentHostDeps) {
         if (guest && !(await guestOwnsSession(controller, request.relay, request.sourceSdkSessionId))) {
           fail('REMOTE_AGENT_INVALID', 'this conversation cannot be forked on this computer');
         }
+        // Only a recorded executor makes this a coordinator operation; local forks keep their login check.
+        const member = guest && !request.relay ? await relayMemberOf(controller, request.sourceSdkSessionId) : null;
         const providerId = await deps.providerAccess?.resolve(
           request.agentKind, request.model, request.providerId, controller, request.sourceSessionId,
+          { groupRouting: member !== null },
         );
         if (deps.providerAccess && !providerId) failProviderNotAllowed();
         const assertProvider = () => {
@@ -2942,7 +3124,6 @@ export function createRemoteAgentHost(deps: RemoteAgentHostDeps) {
           if (providerId && !deps.providerAccess?.isAllowed(providerId, controller, request.model, request.sourceSessionId)) failProviderNotAllowed();
         };
         assertProvider();
-        const member = guest && !request.relay ? await relayMemberOf(controller, request.sourceSdkSessionId) : null;
         const hostSessionId = hostSessionIdFor(scope, request.sourceSessionId);
         const forkWorkspaceIds = [...new Set([...(await forkWorkspacesFor(scope, request.sourceSdkSessionId)), hostSessionId])];
         let result: RemoteAgentForkResult;
@@ -3042,9 +3223,10 @@ export function createRemoteAgentHost(deps: RemoteAgentHostDeps) {
       }
       case 'caps': {
         const guest = trustOf(controller) === 'guest';
+        const managedSkillDigests = await ownManagedSkillDigests(guest);
         const limits = deps.readLimits?.() ?? DEFAULT_REMOTE_AGENT_LIMITS;
         const caps: RemoteAgentCaps = {
-          ...(deps.fastPolicy ? { subscriptionFastPolicy: true as const } : {}),
+          ...(deps.fastPolicy ? { subscriptionFastPolicy: true as const, subscriptionFastPolicyCache: true as const } : {}),
           version: REMOTE_AGENT_VERSION,
           agents: (['claude-code', 'codex', 'pi'] as const).map((kind) => ({
             kind,
@@ -3063,10 +3245,12 @@ export function createRemoteAgentHost(deps: RemoteAgentHostDeps) {
           ...(deps.providerAccess && deps.bindGuestProviderRoute ? { guestRelay: true } : {}),
           ...(deps.directGuestExecution && deps.providerAccess && deps.bindGuestProviderRoute
             ? { directGuestExecution: true } : {}),
+          ...(!guest && deps.groupContinuity?.() ? { groupContinuity: true as const } : {}),
           ...(deps.providerAccess && deps.bindGuestProviderRoute ? { relayModelAccess: true } : {}),
           // 转分享的同意只对受邀者(把这里分享的供应商放进自己组的人)有意义。
           ...(guest && deps.reshare && (deps.reshare.canUse?.(controller) ?? true) ? { reshareConsent: true } : {}),
           ...(guest && deps.reshare && (deps.reshare.canUse?.(controller) ?? true) ? { reshareBatch: true } : {}),
+          managedSkills: { digests: managedSkillDigests },
         };
         return caps;
       }
@@ -3189,6 +3373,11 @@ export function createRemoteAgentHost(deps: RemoteAgentHostDeps) {
             fail('REMOTE_AGENT_INVALID', 'this conversation cannot be resumed on this computer');
           }
         }
+        // The host derives this scope before provider resolution: O's own login must not prevent
+        // its group from selecting M. Assigned, relayed and delegated executions keep local checks.
+        const groupRouted = controllerTrust === 'guest' && !relayKey && !payload.groupAssigned
+          && !deps.directGuestExecution?.sessionDelegated(controller, payload.sessionId)
+          && !!deps.groupRelay;
         // 供应商授权：来源落到本机已开放的供应商上，并以显式来源启动(核对的就是实际用的)。
         let providerId: string | undefined;
         if (deps.providerAccess) {
@@ -3198,6 +3387,7 @@ export function createRemoteAgentHost(deps: RemoteAgentHostDeps) {
             payload.options.providerId,
             controller,
             payload.sessionId,
+            { groupRouting: groupRouted },
           );
           if (!resolved) failProviderNotAllowed();
           providerId = resolved;
@@ -3210,12 +3400,6 @@ export function createRemoteAgentHost(deps: RemoteAgentHostDeps) {
         let avoid: string[] = [];
         /** 选电脑的同一步已计入那台(或本机这一台)的负载，交给任务；任务没建起来时放掉。 */
         let reserved: GroupRelayLoad | undefined;
-        // The guest-supplied groupAssigned hint cannot authorize M to route a
-        // delegated task into M's own group. Ordinary G→O guests have no local
-        // delegation and must retain O's group routing.
-        const groupRouted = controllerTrust === 'guest' && !relayKey && !payload.groupAssigned
-          && !deps.directGuestExecution?.sessionDelegated(controller, payload.sessionId)
-          && !!deps.groupRelay && !!providerId;
         if (groupRouted && deps.groupRelay && providerId) {
           const resumeId = payload.options.resumeSessionId;
           if (resumeId) {

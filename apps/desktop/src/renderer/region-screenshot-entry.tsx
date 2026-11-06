@@ -41,6 +41,7 @@ const bridge: RegionScreenshotOverlayBridge | undefined = editor ? {
   elementsAt: async () => null, autoScroll: async () => false, restoreEditor: async () => false,
   holdCapture: async () => {}, startLive: async () => null, liveFrame: async () => null, saveRecording: async () => false,
   recordingControls: async () => null, previewRecording: async () => false,
+  startAudio: async () => 'audioFailed', readAudio: async () => new Uint8Array(0), stopAudio: async () => {},
 } : window.regionScreenshot;
 if (!rootElement || !bridge) throw new Error('Missing region screenshot root or bridge');
 

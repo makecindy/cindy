@@ -1,7 +1,13 @@
 import fs from 'node:fs';
 import ts from 'typescript';
+import { confirmedAutoTools } from '../ghostInstallConsent.js';
 import { ghostInstallTargetContext, resolveForgeInstallTarget } from '../ghostInstallTarget.js';
 import {
+  parsePluginStoragePart,
+  parsePluginInstallRelId,
+  findInstalledGhostForDeliveryTarget,
+  LOCAL_PLUGIN_NAMESPACE,
+  isOrganizationPluginNamespace,
   installedGhostPhysicalRelId,
   installedGhostStoragePart,
   isPluginInstanceKey,
@@ -9,6 +15,12 @@ import {
 } from '../../../shared/pluginIdentity.js';
 
 const productionIdentityDeps = {
+  parsePluginStoragePart,
+  parsePluginInstallRelId,
+  findInstalledGhostForDeliveryTarget,
+  LOCAL_PLUGIN_NAMESPACE,
+  isOrganizationPluginNamespace,
+  confirmedAutoTools,
   ghostInstallTargetContext,
   resolveForgeInstallTarget,
   installedGhostPhysicalRelId,

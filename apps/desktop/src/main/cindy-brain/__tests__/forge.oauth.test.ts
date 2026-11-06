@@ -32,27 +32,29 @@ describe('FORGE_GUIDE · oauth 凭证章节', () => {
     expect(FORGE_GUIDE).toContain('`/secrets`、`/oauth`、`/wake`');
   });
 
-  it('redirectPort 与 tokenBroker 三路资格在场(§2 样例 + §4.7 说明 + 拒装原因)', () => {
+  it('redirectPort 与 tokenBroker 企业绑定两路资格在场(§2 样例 + §4.7 说明 + 拒装原因)', () => {
     for (const marker of [
       '"redirectPort"',
       '"tokenBroker"',
       'redirectPort 不是 1024–65535 整数',
       'tokenBroker 没同时声明 redirectPort',
       '或与 clientSecret 同时声明',
-      '三路资格',
-      '随包官方种子或受信任公开市场的官方插件',
+      '企业绑定的安装，资格有两路',
+      '官方公共来源、随包来源、名称和 local 副本均不构成资格',
       '当前组织的服务端',
       'organization market 包已安装',
       'organizationId 与当前组织一致',
       'release sha256 与批准 receipt 的 packageSha256 相等',
       '企业作者通过 `ghost_forge_install` 明确安装',
       '手动导入不属于 Forge 路径',
-      '只给 Broker',
-      '不给宿主原语',
+      '通用能力仍按各自声明和实例批准处理',
       '总长不得超过 64 字符',
     ]) {
       expect(FORGE_GUIDE).toContain(marker);
     }
+    expect(FORGE_GUIDE).not.toContain('三路资格');
+    expect(FORGE_GUIDE).not.toContain('仅官方 cindy-github 可用');
+    expect(FORGE_GUIDE).not.toContain('下载仅对第一方官方插件生效');
   });
 
   it('brokerBounce / scopeDelimiter 两个授权细节字段在场(§2 样例 + 说明 + 拒装原因)', () => {

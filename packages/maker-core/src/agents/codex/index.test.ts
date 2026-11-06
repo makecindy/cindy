@@ -1678,6 +1678,40 @@ describe('CodexAgent spawn configuration', () => {
   });
 });
 
+describe('CodexAgent oneShot Goal ownership', () => {
+  it('disables native Goals before sending an auxiliary prompt', async () => {
+    const prompt = 'Generate a title.';
+    const agent = new CodexAgent(createDeps());
+    MockCodexTransport.onCreate = transport => {
+      transport.setMockResponse(Method.TurnStart, { result: { turn: { id: 'one-shot-turn' } } });
+    };
+    const pending = agent.oneShot(prompt, { timeoutMs: 2_000 });
+    void pending.catch(() => undefined);
+    try {
+      await vi.waitFor(() => expect(createdTransports[0]?.lines.some(line =>
+        JSON.parse(line).method === Method.TurnStart)).toBe(true));
+      const transport = createdTransports[0];
+      const messages = transport.lines.map(line => JSON.parse(line));
+      expect(messages.find(message => message.method === Method.ThreadStart)?.params).toMatchObject({
+        sandbox: 'read-only',
+        config: { 'features.goals': false },
+      });
+      const threadId = messages.find(message => message.method === Method.TurnStart).params.threadId;
+      transport.emitMockLine({ method: 'item/completed', params: {
+        threadId, turnId: 'one-shot-turn', item: { type: 'agentMessage', id: 'answer', text: 'Bounded result' },
+      } });
+      await expect(pending).resolves.toBe('Bounded result');
+      expect(transport.lines.map(line => JSON.parse(line)).filter(message =>
+        message.method === Method.ThreadUnsubscribe)).toEqual([
+        expect.objectContaining({ params: { threadId } }),
+      ]);
+    } finally {
+      await pending.catch(() => undefined);
+      await agent.forceDisposeLocalHostForAuthChange('oneShot Goal test cleanup');
+    }
+  });
+});
+
 describe('CodexAgent oneShot dispatch guard', () => {
   it('fails closed without thread/start when ownership changes during host startup', async () => {
     const agent = new CodexAgent(createDeps());
@@ -1817,6 +1851,7 @@ function installFakeHost(
     codexBrowserMcpToolAvailable?: boolean;
     remoteCompactionProviderId?: string;
     cindyRemoteCompactionProviderId?: string;
+    defaultModelProviderId?: string;
     localCompactionProviderId?: string;
     codexCustomProviderRoutes?: Array<{
       providerId: string;
@@ -1962,6 +1997,7 @@ function installFakeHost(
     waitForMcpTool,
     getRemoteCompactionProviderId,
     getCindyRemoteCompactionProviderId,
+    getDefaultModelProviderId: () => opts.defaultModelProviderId,
     getLocalCompactionProviderId: () => opts.localCompactionProviderId ?? null,
     getCustomProviderModelProviderId,
     getCustomProviderThreadPolicy,
@@ -5439,6 +5475,39 @@ describe('CodexAgent.listCustomizations', () => {
 });
 
 describe('CodexAgent.refreshLocalModels', () => {
+  it('delivers API capabilities only to the requesting callback and keeps OAuth discovery separate', async () => {
+    const publishOAuth = vi.fn();
+    const publishApi = vi.fn();
+    const agent = new CodexAgent(createDeps({}, { onCodexLocalModelsListed: publishOAuth }));
+    (agent as any).codexHome = '/subscription-history';
+    const host = installFakeHost(agent, method => method === Method.ModelList
+      ? { data: [{ id: 'gpt-6.1-sol', model: 'gpt-6.1-sol' }], nextCursor: null } : undefined,
+    { codexHome: '/api-control-plane' });
+    await expect(agent.refreshLocalModels({ credentialMode: 'provider-oauth', onModelsListed: publishApi }))
+      .resolves.toBe(true);
+    expect((agent as any).getHost).toHaveBeenCalledWith(undefined, 'provider-oauth', {
+      providerId: undefined, keyOverride: 'local-control:provider-oauth:external-auth',
+      localAuthPolicy: 'isolated', hostPurpose: 'control-plane',
+    });
+    expect(publishApi).toHaveBeenCalledExactlyOnceWith([{ id: 'gpt-6.1-sol', model: 'gpt-6.1-sol' }]);
+    expect(publishOAuth).not.toHaveBeenCalled();
+    expect((agent as any).codexHome).toBe('/subscription-history');
+    expect(host.request.mock.calls.every(([method]) => method === Method.ModelList)).toBe(true);
+  });
+
+  it('drops a late API capability callback when its host has been retired', async () => {
+    const publishApi = vi.fn();
+    const agent = new CodexAgent(createDeps());
+    installFakeHost(agent, method => {
+      if (method !== Method.ModelList) return undefined;
+      (agent as any).hosts.clear();
+      return { data: [{ model: 'stale' }], nextCursor: null };
+    });
+    await expect(agent.refreshLocalModels({ credentialMode: 'provider-oauth', onModelsListed: publishApi }))
+      .resolves.toBe(false);
+    expect(publishApi).not.toHaveBeenCalled();
+  });
+
   it('reconnects a model-only SSH host after daemon closure without explicit host retirement', async () => {
     const transports: InstanceType<typeof MockCodexTransport>[] = [];
     const agent = new CodexAgent(createDeps({}, { getRemoteCodexTransport: () => {
@@ -6039,6 +6108,43 @@ describe('CodexAgent.startSession developerInstructions', () => {
     await expect(agent.startSession({ sessionId: 'resume-provider-refusal', model: 'gpt-6.1-sol', providerId: 'openai',
       workingDir: '/repo', resumeSessionId: '11111111-1111-1111-1111-111111111111' })).rejects.toThrow();
     expect(host.request.mock.calls.filter(([method]) => method === Method.ThreadFork)).toHaveLength(0);
+  });
+
+  // #8670: after switching a subscription task to another provider, the rebuilt
+  // app-server only declares cindy_openai as a spawn placeholder. That lets native
+  // config validation pass and thread/resume surface the structured mismatch above,
+  // so the saved history is forked onto the selected gateway identity. The bare
+  // -32600 case stays a hard error — it is what a spawn without the declaration
+  // reduces to. Coverage gap: installFakeHost had no default provider, so the
+  // provider-oauth route resolved threadModelProvider to undefined and this fork
+  // was only reachable through the integration fixture that declares every
+  // provider unconditionally (provider-compatibility.integration.test.ts).
+  it('forks history when a switched provider resumes a thread saved on cindy_openai', async () => {
+    const agent = new CodexAgent(createDeps());
+    const host = installFakeHost(agent, (method, params) => {
+      if (method === Method.ThreadResume) {
+        throw Object.assign(
+          new Error('This chat uses model provider "cindy_openai", which is no longer configured'),
+          { code: -32600, data: { type: 'modelProviderMismatch', modelProvider: 'cindy_openai', currentModelProvider: 'cindy_gateway' } },
+        );
+      }
+      if (method === Method.ThreadFork) {
+        const { model, modelProvider } = params as { model?: string; modelProvider?: string };
+        return { thread: { id: 'fork-thread-id' }, model, modelProvider, cwd: '/repo' };
+      }
+      return undefined;
+    }, { codexProxyActive: true, defaultModelProviderId: 'cindy_gateway' });
+    const handle = await agent.startSession({
+      sessionId: 'resume-legacy-cindy-openai', model: 'gpt-6.1-sol', providerId: 'xai',
+      workingDir: '/repo', resumeSessionId: '11111111-1111-1111-1111-111111111111',
+    });
+    const forks = host.request.mock.calls.filter(([method]) => method === Method.ThreadFork);
+    expect(forks).toHaveLength(1);
+    expect(forks[0][1]).toMatchObject({
+      threadId: '11111111-1111-1111-1111-111111111111',
+      modelProvider: 'cindy_gateway',
+    });
+    await handle.close();
   });
 
   it('selects one generic custom Provider identity for every eligible Responses model', async () => {
@@ -11663,6 +11769,40 @@ describe('CodexAgent MCP thread context hooks', () => {
         expect(events.some((event) => event.type === 'done')).toBe(true);
       });
       await handle.close();
+    });
+
+    it('drops a recorded HTTP replay when Codex completes with a definitive model rejection', async () => {
+      const armCodexHttpRecovery = vi.fn(() => 'encrypted_content');
+      const agent = new CodexAgent(createDeps({}, { armCodexHttpRecovery }));
+      const host = installRecoveryHost(agent);
+      const handle = await agent.startSession({
+        sessionId: 'session-replay-model-rejection', model: 'gpt-6.1-sol', workingDir: '/repo',
+      });
+      try {
+        const events: AgentEvent[] = [];
+        void (async () => { for await (const event of handle.events()) events.push(event); })();
+        await handle.send({ type: 'user', content: 'hello' });
+        const handlers = host.getThreadHandlers()!;
+        const threadId = 'start-thread-id';
+        const turnId = 'turn-1';
+        handlers.error?.({
+          threadId, turnId, willRetry: false,
+          error: { message: 'Bad request', additionalDetails: ENCRYPTED_ERROR, codexErrorInfo: 'badRequest' },
+        });
+        expect(armCodexHttpRecovery).toHaveBeenCalledTimes(1);
+        handlers.turnCompleted?.({ threadId, turn: { id: turnId, status: 'failed', error: {
+          message: 'unexpected status 400: {"error":{"code":"model_not_found"}}',
+        } } });
+        await waitForExpectation(() => {
+          expect(events.filter(event => event.type === 'error')).toEqual([expect.objectContaining({
+            data: expect.objectContaining({ reason: 'model_unavailable', isTerminal: true }),
+          })]);
+        });
+        expect(host.request.mock.calls.filter(([method]) => method === Method.TurnStart)).toHaveLength(1);
+        expect(handle.isTurnRunning?.()).toBe(false);
+      } finally {
+        await handle.close();
+      }
     });
 
     it('does not arm HTTP fallback for remote compact encrypted-content 400', async () => {
@@ -26397,6 +26537,134 @@ describe('CodexAgent turn lifecycle', () => {
       turnId: 'turn-2',
     });
     await handle.close();
+  });
+
+  it('interrupts a retrying turn when Codex reports that its model is unavailable', async () => {
+    const interruptAck = deferred<Record<string, never>>();
+    const agent = new CodexAgent(createDeps());
+    const host = installFakeHost(agent, method => method === Method.TurnInterrupt ? interruptAck.promise : undefined);
+    const handle = await agent.startSession({
+      sessionId: 'session-unavailable-model', model: 'gpt-6.1-sol', workingDir: '/repo',
+    });
+    try {
+      const subscribeCalls = host.subscribeThread.mock.calls as unknown as Array<[string, ThreadEventHandlers]>;
+      const handlers = subscribeCalls[0]![1];
+      const iterator = handle.events()[Symbol.asyncIterator]();
+      const threadId = 'start-thread-id';
+      const turnId = 'turn-1';
+      const error = {
+        message: 'Reconnecting... 1/5',
+        additionalDetails: "unexpected status 400 Bad Request: The 'gpt-6.1-sol' model is not supported when using Codex with a ChatGPT account.",
+        codexErrorInfo: { responseStreamDisconnected: { httpStatusCode: 400 } },
+      } as const;
+
+      handlers.turnStarted?.({ threadId, turn: { id: turnId } });
+      handlers.error?.({ threadId, turnId: 'other-turn', willRetry: true, error });
+      expect(host.request.mock.calls.filter(([method]) => method === Method.TurnInterrupt)).toHaveLength(0);
+      handlers.error?.({ threadId, turnId, willRetry: true, error });
+      expect(host.request).toHaveBeenCalledWith(Method.TurnInterrupt, { threadId, turnId });
+      expect(handle.isTurnRunning?.()).toBe(true);
+
+      handlers.error?.({ threadId, turnId, willRetry: true, error });
+      handlers.turnCompleted?.({ threadId, turn: { id: turnId, status: 'interrupted' } });
+      expect(handle.isTurnRunning?.()).toBe(true);
+      interruptAck.resolve({});
+      expect(await nextEvent(iterator)).toMatchObject({
+        type: 'error',
+        data: {
+          message: expect.stringContaining('[MODEL_SELECTION_UNAVAILABLE]'),
+          reason: 'model_unavailable', isTerminal: true, willRetry: false,
+        },
+      });
+      expect(await nextEvent(iterator)).toMatchObject({ type: 'status', data: { isRunning: false } });
+      expect(handle.isTurnRunning?.()).toBe(false);
+
+      expect(host.request.mock.calls.filter(([method]) => method === Method.TurnInterrupt)).toHaveLength(1);
+      await expect(nextEvent(iterator)).rejects.toThrow('timed out waiting for event');
+    } finally {
+      await handle.close();
+    }
+  });
+
+  it.each([true, false])('marks partial sampling output failed on model rejection with willRetry=%s', async (willRetry) => {
+    const interruptAck = deferred<Record<string, never>>();
+    const agent = new CodexAgent(createDeps());
+    const host = installFakeHost(agent, method => method === Method.TurnInterrupt ? interruptAck.promise : undefined);
+    const handle = await agent.startSession({
+      sessionId: 'session-model-rejection-partial-output', model: 'gpt-6.1-sol', workingDir: '/repo',
+    });
+    try {
+      const handlers = host.getThreadHandlers()!;
+      const iterator = handle.events()[Symbol.asyncIterator]();
+      const threadId = 'start-thread-id';
+      const turnId = 'turn-1';
+      const error = {
+        message: 'Reconnecting... 1/5',
+        codexErrorInfo: { responseStreamDisconnected: { httpStatusCode: 400 } },
+        additionalDetails: '{"error":{"code":"model_not_found"}}',
+      };
+
+      handlers.turnStarted?.({ threadId, turn: { id: turnId } });
+      handlers.itemCompleted?.({
+        threadId, turnId,
+        item: { type: 'agentMessage', id: 'partial', text: 'Partial answer', phase: 'final_answer' },
+      });
+      expect(await nextEvent(iterator)).toMatchObject({ type: 'text', data: { agentMessageId: 'partial' } });
+      expect(await nextEvent(iterator)).toMatchObject({ type: 'status', data: { isRunning: true } });
+
+      handlers.error?.({ threadId, turnId, willRetry, error });
+      expect(host.request.mock.calls.filter(([method]) => method === Method.TurnInterrupt))
+        .toHaveLength(willRetry ? 1 : 0);
+      if (willRetry) expect(handle.isTurnRunning?.()).toBe(true);
+      interruptAck.resolve({});
+      expect(await nextEvent(iterator)).toMatchObject({
+        type: 'error',
+        data: {
+          reason: 'model_unavailable', isTerminal: true, willRetry: false,
+          assistantAttemptFailure: { threadId, turnId, attempt: 1, agentMessageIds: ['partial'] },
+        },
+      });
+      expect(await nextEvent(iterator)).toMatchObject({ type: 'status', data: { isRunning: false } });
+
+      handlers.turnCompleted?.({ threadId, turn: { id: turnId, status: 'failed', error } });
+      await expect(nextEvent(iterator)).rejects.toThrow('timed out waiting for event');
+    } finally {
+      await handle.close();
+    }
+  });
+
+  it('lets Codex retry an internal server error with a model code in the details', async () => {
+    const agent = new CodexAgent(createDeps());
+    const host = installFakeHost(agent);
+    const handle = await agent.startSession({
+      sessionId: 'session-retry-internal-server-error', model: 'gpt-6.1-sol', workingDir: '/repo',
+    });
+    try {
+      const handlers = host.getThreadHandlers()!;
+      const iterator = handle.events()[Symbol.asyncIterator]();
+      const threadId = 'start-thread-id';
+      const turnId = 'turn-1';
+      handlers.turnStarted?.({ threadId, turn: { id: turnId } });
+      handlers.error?.({
+        threadId, turnId, willRetry: true,
+        error: {
+          message: 'Reconnecting... 1/5',
+          codexErrorInfo: 'internalServerError',
+          additionalDetails: '{"error":{"code":"model_not_found"}}',
+        },
+      });
+
+      expect(host.request.mock.calls.filter(([method]) => method === Method.TurnInterrupt)).toHaveLength(0);
+      expect(await nextEvent(iterator)).toMatchObject({
+        type: 'error', data: { message: 'Reconnecting... 1/5', isTerminal: false, willRetry: true },
+      });
+      expect(handle.isTurnRunning?.()).toBe(true);
+      handlers.turnCompleted?.({ threadId, turn: { id: turnId, status: 'completed' } });
+      expect(await nextEvent(iterator)).toMatchObject({ type: 'status', data: { isRunning: false } });
+      expect(await nextEvent(iterator)).toMatchObject({ type: 'done' });
+    } finally {
+      await handle.close();
+    }
   });
 
   it('escalates a persistent willRetry retry-loop to a terminal error (issue #677)', async () => {

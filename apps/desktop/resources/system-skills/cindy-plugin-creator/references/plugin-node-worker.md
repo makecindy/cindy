@@ -219,7 +219,8 @@ MCP server 的 sampling / elicitation / roots 等 server→client 反向请求�
   最多 2048 个文件、解压后 256MB、.cindy 128MB；超限直接拒绝；
 - `on-demand` 首次 `cindy.node.request` 才启动，缺省空闲 120 秒关闭；停用、更新、
   卸载、退出 Cindy 都立即关闭。`resident` 会随插件启用一直运行，详情页单独显示；
-- 每个插件最多 32 条在途请求；单次 params 256KB、单行 stdout 1MB。单次请求缺省
+- 每个插件最多 32 条在途请求；单次 params 256KB、单行 stdout 1MB。未收齐换行的 stdout 缓冲区超限会
+  杀掉该工作进程，使它的全部在途请求失败。输出前检查完整 JSON 行的字节数，多份响应合并也按总量计。单次请求缺省
   30 秒、上限 120 秒;长任务用 maxTotalMs 开启"有动静就续期",绝对上限 15 分钟
   (见 §4.12.1)。进程崩溃只影响
   自己，所有在途请求收到结构化失败，下次请求可重新启动；

@@ -335,6 +335,34 @@ describe('session control domain service', () => {
     expect(updated.autoReviewUserText).toEqual(queued.autoReviewUserText);
   });
 
+  // 2026-11-05: edited text is a new hand-off. It speaks for the owner only when the editor's
+  // own request checked exactly that text; otherwise the item keeps its provenance only.
+  it('re-checks an edited plain hand-off instead of carrying the old authority', () => {
+    const queued = item({ kind: 'session', senderSessionId: 'caller', displayText: 'before' });
+    const provenance = { sessionId: 'owner', clientId: 'human' };
+    queued.autoReviewUserText = { kind: 'agent-request', request: { ...provenance,
+      plainBody: true, delegatedText: 'before' } };
+    const unchecked = rebuildSessionQueueItem(queued, 'Also deploy it.');
+    expect(unchecked.persistedContent).toBe('Also deploy it.');
+    expect(unchecked.autoReviewUserText).toEqual({ kind: 'agent-request', request: { ...provenance, plainBody: true } });
+    const recheck = { ...provenance, plainBody: true as const, delegatedText: 'Merge it after checks.' };
+    const checked = rebuildSessionQueueItem(queued, 'Merge it after checks.', { kind: 'agent-request', request: recheck });
+    expect(checked.persistedContent).toBe('Merge it after checks.');
+    expect(checked.autoReviewUserText).toEqual({ kind: 'agent-request', request: recheck });
+  });
+
+  // Review feedback on #9023: an ordinary queued message (no authority) later edited at the
+  // user's request must adopt the editor's freshly checked receipt, not keep the empty one.
+  it('adopts a freshly checked receipt when editing an ordinary queued message', () => {
+    const queued = item({ kind: 'session', senderSessionId: 'caller', displayText: 'before' });
+    queued.autoReviewUserText = { kind: 'agent-request' };
+    const recheck = { sessionId: 'owner', clientId: 'human', plainBody: true as const, delegatedText: 'Merge it after checks.' };
+    const checked = rebuildSessionQueueItem(queued, 'Merge it after checks.', { kind: 'agent-request', request: recheck });
+    expect(checked.autoReviewUserText).toEqual({ kind: 'agent-request', request: recheck });
+    const unchecked = rebuildSessionQueueItem(queued, 'Merge it after checks.');
+    expect(unchecked.autoReviewUserText).toEqual({ kind: 'agent-request', request: { userText: null } });
+  });
+
   it('keeps renderer composer envelopes intact when rebuilding a non-session queue item', () => {
     const queued = item();
     queued.persistedContent = JSON.stringify({

@@ -33,6 +33,7 @@ import { isWizardOAuthChoice, isWizardApiKeyChoice, presetChoiceMeta, builtinCho
 import { CURRENT_CINDY_REGION } from '../../../shared/brandRegion';
 import { configuredPresetAgents } from '../../../shared/piRuntimeInitialization';
 import { presetConnectionRuntime } from '../../../shared/presetConnectionRuntime';
+import { presetCandidateRoute, presetModelCandidate, presetRouteHasInterfaceProfiles, presetSupplementalModels } from '../../../shared/providerModelCandidates';
 import { uniqueCustomProviderId } from '@/lib/customProviderId';
 import {
   isLocalRuntimeBetaProviderId,
@@ -57,8 +58,8 @@ import { SpeechModelChoices } from './SpeechModelChoices';
 import { isSpeechModel, SPEECH_API_PRESETS, speechReferenceModels, speechSetupTarget, withSpeechApiPresets } from '../../../shared/speechProviderSetup';
 
 import {
-  providerModelsForRoute,
   isOpenRouterModelsUrl,
+  isOpenHubsModelsUrl,
   isLoopbackProviderUrl,
   isProviderRequestPath,
   presetDisplayName,
@@ -66,9 +67,11 @@ import {
 } from '@cindy/model-providers';
 import type {
   AgentKind,
+  ModelRegistry,
   CustomProviderConfig,
   ProviderModelDiscoverySource,
   ProviderModelRouteConfig,
+  ProviderRuntimeModelConfig,
   ProviderPreset,
   ProviderView,
 } from '@cindy/model-providers';
@@ -403,23 +406,39 @@ export function AddProviderWizard({
          *  cc=1M / codex=272K);完成创建时按所属 runtime 取值,作为供应商事实单独保存。 */
         contextWindows?: Partial<Record<AgentKind, number>>;
         discoveredCosts?: Partial<Record<AgentKind, import("@cindy/model-providers").ModelCost>>;
+        discoveredSources?: Partial<Record<AgentKind, import('@cindy/model-providers').DiscoveredModelSource>>;
+        discoverySnapshotIds?: Partial<Record<AgentKind, string>>;
+        opaqueModelIds?: Partial<Record<AgentKind, true>>;
         discoveredMetadata?: Partial<
           Record<AgentKind, import('@cindy/model-providers').ModelMetadata>
         >;
         /** 附加目录发现出的模型级路由；主 runtime 目录发现的模型保持缺省路由。 */
         routes?: Partial<Record<AgentKind, ProviderModelRouteConfig>>;
+        interfaceIds?: Partial<Record<AgentKind, string>>;
       }
     >
   >(new Map());
+
+  const [modelRegistry, setModelRegistry] = useState<ModelRegistry>();
 
   useEffect(() => {
     let cancelled = false;
     void window.electronAPI.maker
       .listProviderPresets()
       .then((r) => {
-        if (!cancelled) { setPresets(withSpeechApiPresets(r.presets)); setPresetsLoadState('ready'); }
+        if (!cancelled) {
+          setModelRegistry(r.modelRegistry);
+          setPresets(withSpeechApiPresets(r.presets));
+          setPresetsLoadState('ready');
+        }
       })
-      .catch(() => { if (!cancelled) { setPresets(withSpeechApiPresets(BUNDLED_CATALOG.presets ?? [])); setPresetsLoadState('failed'); } });
+      .catch(() => {
+        if (!cancelled) {
+          setModelRegistry(BUNDLED_CATALOG.modelRegistry);
+          setPresets(withSpeechApiPresets(BUNDLED_CATALOG.presets ?? []));
+          setPresetsLoadState('failed');
+        }
+      });
     return () => {
       cancelled = true;
     };
@@ -855,6 +874,9 @@ export function AddProviderWizard({
             choices.set(model.id, { name: model.name, checked: recommended, recommended,
               agents: [...(existing?.agents ?? []), agent],
               discoveredMetadata: { ...existing?.discoveredMetadata, [agent]: model.discoveredMetadata },
+              discoveredSources: { ...existing?.discoveredSources, [agent]: model.discoveredSource },
+              discoverySnapshotIds: { ...existing?.discoverySnapshotIds, [agent]: model.discoveredSource?.snapshotId },
+              opaqueModelIds: { ...existing?.opaqueModelIds, [agent]: model.opaqueModelId },
               discoveredCosts: { ...existing?.discoveredCosts,
                 [agent]: model.userModelConfig?.discoveredCost ?? model.discoveredCost },
             });
@@ -919,7 +941,7 @@ export function AddProviderWizard({
 
   // ── 预设:进入 Step 3 时自动拉取模型 ─────────────────────────────────────
   const startFetch = useCallback(async () => {
-    if (!sel || sel.kind !== 'preset') return;
+    if (presetsLoadState === 'loading' || !sel || sel.kind !== 'preset') return;
     const preset = sel.preset;
     const agents = configuredPresetAgents(preset);
     const editableBaseUrlsValid = agents.every((agent) => {
@@ -932,23 +954,8 @@ export function AddProviderWizard({
     if (!editableBaseUrlsValid) return;
     // Curated presets use omission as their legacy default-on; generated catalog additions
     // explicitly default off. Keep the checkbox and recommendation badge consistent.
-    const initial = new Map<
-      string,
-      {
-        name: string;
-        checked: boolean;
-        recommended: boolean;
-        speechReference?: boolean;
-        manualSpeech?: boolean;
-        agents: AgentKind[];
-        contextWindows?: Partial<Record<AgentKind, number>>;
-        discoveredCosts?: Partial<Record<AgentKind, import("@cindy/model-providers").ModelCost>>;
-        discoveredMetadata?: Partial<
-          Record<AgentKind, import('@cindy/model-providers').ModelMetadata>
-        >;
-        routes?: Partial<Record<AgentKind, ProviderModelRouteConfig>>;
-      }
-    >();
+    const initial: typeof picks = new Map();
+
     for (const agent of agents) {
       for (const m of preset.runtimes[agent]?.models ?? []) {
         const existing = initial.get(m.id);
@@ -961,12 +968,18 @@ export function AddProviderWizard({
           if (m.route && !existing.routes?.[agent]) {
             existing.routes = { ...existing.routes, [agent]: m.route };
           }
+          existing.discoveredSources = { ...existing.discoveredSources, [agent]: m.discoveredSource };
+          existing.discoverySnapshotIds = { ...existing.discoverySnapshotIds, [agent]: m.discoverySnapshotId };
+          existing.opaqueModelIds = { ...existing.opaqueModelIds, [agent]: m.opaqueModelId };
         } else {
           initial.set(m.id, {
             name: m.name,
             checked: m.defaultEnabled !== false,
             recommended: m.defaultEnabled !== false,
             agents: [agent],
+            discoveredSources: { [agent]: m.discoveredSource },
+            discoverySnapshotIds: { [agent]: m.discoverySnapshotId },
+            opaqueModelIds: { [agent]: m.opaqueModelId },
             ...(m.route ? { routes: { [agent]: m.route } } : {}),
           });
         }
@@ -976,14 +989,16 @@ export function AddProviderWizard({
       const runtime = preset.runtimes[agent]!;
       if (runtime.requestPath) continue;
       const baseUrl = presetRuntimeBaseUrl(preset, agent, presetBaseUrls);
-      const protocol = runtime.wireProtocol ?? (agent === 'claude-code' ? 'anthropic-messages' : agent === 'pi' ? 'openai-chat' : 'openai-responses');
-      for (const model of providerModelsForRoute(baseUrl, agent === 'pi' ? undefined : protocol)) {
+      for (const model of presetSupplementalModels(preset, agent, modelRegistry, baseUrl)) {
         const existing = initial.get(model.id);
         if (existing) {
           if (!existing.agents.includes(agent)) existing.agents.push(agent);
         } else {
           initial.set(model.id, { name: model.name, checked: false, recommended: false, agents: [agent] });
         }
+        const candidate = initial.get(model.id)!;
+        if (model.route) candidate.routes = { ...candidate.routes, [agent]: model.route };
+        if (model.interfaceId) candidate.interfaceIds = { ...candidate.interfaceIds, [agent]: model.interfaceId };
       }
     }
     // Suggestions add no account membership until the user finishes this wizard.
@@ -1009,6 +1024,9 @@ export function AddProviderWizard({
         initial.set(m.id, { ...existing, name: m.name, checked: true, recommended: false,
           agents: [...new Set([...(existing?.agents ?? []), agent])],
           discoveredMetadata: { ...existing?.discoveredMetadata, [agent]: m.discoveredMetadata },
+          discoveredSources: { ...existing?.discoveredSources, [agent]: m.discoveredSource },
+          discoverySnapshotIds: { ...existing?.discoverySnapshotIds, [agent]: m.discoverySnapshotId },
+          opaqueModelIds: { ...existing?.opaqueModelIds, [agent]: m.opaqueModelId },
           ...(m.route ? { routes: { ...existing?.routes, [agent]: m.route } } : {}),
         });
       }
@@ -1044,6 +1062,9 @@ export function AddProviderWizard({
         })
         .map(([modelsUrl]) => modelsUrl),
     );
+    const sharedProtocolUrls = new Set([...discoveryAgentsByUrl.entries()]
+      .filter(([, owners]) => new Set(owners.map(agent => presetCandidateRoute(preset, agent).wireProtocol)).size > 1)
+      .map(([url]) => url));
     const results = await Promise.all(
       agents.flatMap((agent) => {
         const originalRuntime = preset.runtimes[agent];
@@ -1078,6 +1099,9 @@ export function AddProviderWizard({
         ];
         return sources.map(async (source) => {
           try {
+            const openHubsInventory = preset.id === 'openhubs' && !source.route
+              && /^https:\/\/openhubs\.zhidemai\.com(?:\/v1)?\/?$/.test(source.baseUrl)
+              && !!source.modelsUrl && isOpenHubsModelsUrl(source.modelsUrl);
             const reuseDetection = detected?.catalog?.ok && agent === detected.agent
               && apiKey === detected.apiKey && source.baseUrl === detected.preset.runtimes[agent]?.baseUrl
               && !source.route && !source.modelsUrl?.includes('client_version=');
@@ -1087,6 +1111,7 @@ export function AddProviderWizard({
               baseUrl: source.baseUrl,
               authMethod: preset.authMethod ?? 'apiKey',
               modelsUrl: source.modelsUrl,
+              ...(openHubsInventory ? { allowEmpty: true } : {}),
               apiKey: apiKey.trim() || null,
               ...(source.wireProtocol ? { wireProtocol: source.wireProtocol } : {}),
               ...(rt.headers ? { headers: rt.headers } : {}),
@@ -1094,8 +1119,8 @@ export function AddProviderWizard({
             return {
               agent,
               modelsUrl: source.modelsUrl,
-              completeInventory: /^https:\/\/openrouter\.ai\/api(?:\/v1)?\/?$/.test(source.baseUrl)
-                && (!source.modelsUrl || isOpenRouterModelsUrl(source.modelsUrl)),
+              completeInventory: openHubsInventory || (/^https:\/\/openrouter\.ai\/api(?:\/v1)?\/?$/.test(source.baseUrl)
+                && (!source.modelsUrl || isOpenRouterModelsUrl(source.modelsUrl))),
               route: source.route,
               ok: !!(r.ok && r.models),
               models: r.models ?? [],
@@ -1141,13 +1166,20 @@ export function AddProviderWizard({
         const userModels = new Set(Object.values(detected?.config.runtimes ?? {}).flatMap(runtime => runtime?.models.map(model => model.id) ?? []));
         for (const [id] of next) if (!available.has(id) && !userModels.has(id)) next.delete(id);
       }
+      const confirmedRoutes = new Set<string>();
       for (const { agent, models, modelsUrl, route } of results) {
         const preservePresetOwnership = !!modelsUrl && splitDiscoveryUrls.has(modelsUrl);
+        const runtimeRoute = presetCandidateRoute(preset, agent, presetRuntimeBaseUrl(preset, agent, presetBaseUrls));
+        const hasInterfaceProfiles = presetRouteHasInterfaceProfiles(preset, modelRegistry, runtimeRoute);
         for (const m of models) {
           const existing = next.get(m.id);
+          const candidate = presetModelCandidate(preset, agent, m, modelRegistry,
+            runtimeRoute,
+            route, preservePresetOwnership || (!!hasInterfaceProfiles && !!modelsUrl && sharedProtocolUrls.has(modelsUrl)));
+          if (!candidate && !existing?.agents.includes(agent)) continue;
           if (existing) {
             const mergedAgents =
-              !preservePresetOwnership && !existing.agents.includes(agent)
+              candidate && !existing.agents.includes(agent)
                 ? [...existing.agents, agent]
                 : existing.agents;
             // 端点上报的窗口按 agent 分槽、只补该槽的空(同一 id 双端窗口可以不同,
@@ -1157,18 +1189,21 @@ export function AddProviderWizard({
               existing.contextWindows?.[agent] === undefined && m.contextWindow !== undefined;
             const presetOwnsModel =
               preset.runtimes[agent]?.models.some((model) => model.id === m.id) === true;
-            const discoveredRoute =
-              route &&
-              !presetOwnsModel &&
-              !defaultDiscoveredModels.has(`${agent}\u0000${m.id}`) &&
-              !existing.routes?.[agent]
-                ? route
-                : undefined;
+            const discoveryKey = `${agent}\u0000${m.id}`;
+            const configuredRoute = detected?.config.runtimes[agent]?.models.find(model => model.id === m.id)?.route;
+            // A confirmed online route replaces an offline suggestion, while
+            // imported routes, main-source hits and earlier sources keep priority.
+            const updateRouting = !!candidate && !presetOwnsModel && !configuredRoute
+              && !confirmedRoutes.has(discoveryKey)
+              && (!route || !defaultDiscoveredModels.has(discoveryKey));
+            if (updateRouting) confirmedRoutes.add(discoveryKey);
             if (
               mergedAgents !== existing.agents ||
               backfillWindow ||
-              discoveredRoute ||
+              updateRouting ||
               existing.name !== m.name ||
+              m.discoveredSource || m.discoverySnapshotId || m.opaqueModelId ||
+              existing.discoveredSources?.[agent] || existing.discoverySnapshotIds?.[agent] ||
               m.discoveredCost ||
               m.discoveredMetadata || existing.speechReference
             ) {
@@ -1179,6 +1214,9 @@ export function AddProviderWizard({
                 ...(existing.speechReference && m.discoveredMetadata?.mode && m.discoveredMetadata.mode !== 'audio_speech'
                   ? { checked: false, recommended: false } : {}),
                 name: m.name,
+                discoveredSources: { ...existing.discoveredSources, [agent]: m.discoveredSource },
+                discoverySnapshotIds: { ...existing.discoverySnapshotIds, [agent]: m.discoverySnapshotId },
+                opaqueModelIds: { ...existing.opaqueModelIds, [agent]: m.opaqueModelId || existing.opaqueModelIds?.[agent] },
                 ...(m.discoveredCost ? { discoveredCosts: { ...existing.discoveredCosts, [agent]: m.discoveredCost } } : {}),
                 agents: mergedAgents,
                 discoveredMetadata: {
@@ -1191,14 +1229,19 @@ export function AddProviderWizard({
                 ...(backfillWindow
                   ? { contextWindows: { ...existing.contextWindows, [agent]: m.contextWindow } }
                   : {}),
-                ...(discoveredRoute
-                  ? { routes: { ...existing.routes, [agent]: discoveredRoute } }
-                  : {}),
+                ...(updateRouting ? {
+                  routes: { ...existing.routes, [agent]: candidate?.route },
+                  interfaceIds: { ...existing.interfaceIds, [agent]: candidate?.interfaceId },
+                } : {}),
               });
             }
-          } else if (!preservePresetOwnership) {
+          } else {
+            confirmedRoutes.add(`${agent}\u0000${m.id}`);
             next.set(m.id, {
               name: m.name,
+              discoveredSources: { [agent]: m.discoveredSource },
+              discoverySnapshotIds: { [agent]: m.discoverySnapshotId },
+              opaqueModelIds: { [agent]: m.opaqueModelId },
               ...(m.discoveredCost ? { discoveredCosts: { [agent]: m.discoveredCost } } : {}),
               checked: false,
               recommended: false,
@@ -1212,7 +1255,8 @@ export function AddProviderWizard({
               ...(m.contextWindow !== undefined
                 ? { contextWindows: { [agent]: m.contextWindow } }
                 : {}),
-              ...(route ? { routes: { [agent]: route } } : {}),
+              ...(candidate?.route ? { routes: { [agent]: candidate.route } } : {}),
+              ...(candidate?.interfaceId ? { interfaceIds: { [agent]: candidate.interfaceId } } : {}),
             });
           }
         }
@@ -1225,7 +1269,7 @@ export function AddProviderWizard({
       failed: !results.some((r) => r.ok),
       empty: !results.some((r) => r.models.length > 0),
     });
-  }, [sel, apiKey, presetBaseUrls, detected, entry]);
+  }, [sel, apiKey, presetBaseUrls, detected, entry, modelRegistry, presetsLoadState]);
 
   /**
    * 零推荐模型的本机代理（例如 LiteLLM）若 `/models` 不可用或返回空清单，仍允许用户
@@ -1309,7 +1353,11 @@ export function AddProviderWizard({
         contextWindows: v.contextWindows,
         discoveredMetadata: v.discoveredMetadata,
         discoveredCosts: v.discoveredCosts,
+        discoveredSources: v.discoveredSources,
+        discoverySnapshotIds: v.discoverySnapshotIds,
+        opaqueModelIds: v.opaqueModelIds,
         routes: v.routes,
+        interfaceIds: v.interfaceIds,
         manualSpeech: v.manualSpeech,
       }));
     if (!selected.some(model => model.checked)) {
@@ -1349,16 +1397,22 @@ export function AddProviderWizard({
             const discoveredMetadata = m.discoveredMetadata?.[agent] ?? {};
             // Current picks own visibility; an old disabled draft must not override
             // a checked row. Leave checked models on the existing default contract.
-            const { defaultEnabled: _oldEnabled, ...draftModel } =
+            const { defaultEnabled: _oldEnabled, ...draftModel }: Partial<ProviderRuntimeModelConfig> =
               detected?.config.runtimes[agent]?.models.find(model => model.id === m.id) ?? {};
             return {
               ...draftModel,
+              // An automatic catalog pin must not override an explicit draft API or route.
+              ...(!draftModel.interfaceId && !draftModel.api && !draftModel.piApi && !draftModel.route
+                && m.interfaceIds?.[agent] ? { interfaceId: m.interfaceIds[agent] } : {}),
               id: m.id,
               name: m.name,
               // Selecting a model follows native-engine defaults; it is not an
               // explicit opt-in to every compatibility engine carrying the model.
               ...(!m.checked ? { defaultEnabled: false } : {}),
               discoveredMetadata,
+              discoveredSource: m.discoveredSources?.[agent],
+              discoverySnapshotId: m.discoverySnapshotIds?.[agent],
+              opaqueModelId: m.opaqueModelIds?.[agent],
               ...(m.discoveredCosts?.[agent] ? { discoveredCost: m.discoveredCosts[agent] } : {}),
               ...(m.manualSpeech ? { mode: 'audio_speech' as const } : presetModel?.mode ? { mode: presetModel.mode } : {}),
               ...(presetModel?.modalities ? { modalities: { input: [...presetModel.modalities.input], output: [...presetModel.modalities.output] } } : {}),
@@ -1381,7 +1435,8 @@ export function AddProviderWizard({
           const original = detected.config.runtimes[agent]?.models.find(m => m.id === model.id);
           if (!original) return model;
           // These are user fields from the custom draft, not imported preset defaults.
-          const { defaultEnabled: _enabled, discoveredMetadata: _metadata, discoveredCost: _cost, ...explicit } = original;
+          const { defaultEnabled: _enabled, discoveredMetadata: _metadata, discoveredCost: _cost,
+            discoveredSource: _source, discoverySnapshotId: _snapshot, opaqueModelId: _opaque, ...explicit } = original;
           const preserved = { ...model, ...explicit };
           return rt.baseUrl === detected.preset.runtimes[agent]?.baseUrl ? preserved
             : modelsAfterProviderEndpointEdit([preserved], detected.config.runtimes[agent]?.baseUrl, rt.baseUrl)[0];
@@ -1486,6 +1541,7 @@ export function AddProviderWizard({
     });
   const presetCanContinue =
     sel?.kind === 'preset' &&
+    presetsLoadState !== 'loading' &&
     presetBaseUrlsValid &&
     (!presetNeedsApiKey || apiKey.trim().length > 0 || (detected?.catalog?.ok === true && apiKey === detected.apiKey
       && presetRuntimeBaseUrl(sel.preset, detected.agent, presetBaseUrls) === detected.preset.runtimes[detected.agent]?.baseUrl));
@@ -1543,7 +1599,7 @@ export function AddProviderWizard({
             {wizardTitle}
           </h3></Dialog.Title>
           {step === 1 ? (
-            <button
+            <button data-settings-search-action="Open the custom provider connection form"
               type="button"
               disabled={saving}
               onClick={() => { if (!savingRef.current) onOpenCustomForm(); }}
@@ -2240,13 +2296,20 @@ export function AddProviderWizard({
                       const saved = original.models.find(row => row.id === id);
                       // Only checked rows return to the custom form. Do not
                       // resurrect an older disabled flag on this second save path.
-                      const { defaultEnabled: _oldEnabled, ...selectedModel } = saved ?? {};
-                      return { ...selectedModel, id, name: model.name,
+                      const { defaultEnabled: _oldEnabled, ...selectedModel }: Partial<ProviderRuntimeModelConfig> = saved ?? {};
+                      return { ...(!selectedModel.interfaceId && !selectedModel.api && !selectedModel.piApi && !selectedModel.route
+                        && model.interfaceIds?.[target] ? { interfaceId: model.interfaceIds[target] } : {}),
+                        ...selectedModel, id, name: model.name,
                         discoveredMetadata: model.discoveredMetadata?.[target] ?? saved?.discoveredMetadata,
+                        discoveredSource: model.discoveredSources?.[target],
+                        discoverySnapshotId: model.discoverySnapshotIds?.[target],
+                        opaqueModelId: model.opaqueModelIds?.[target] || saved?.opaqueModelId,
                         ...(saved?.route ?? model.routes?.[target] ? { route: saved?.route ?? model.routes?.[target] } : {}),
                       };
                     }) : original.models;
                   runtimes[target] = { ...original, baseUrl: targetBase,
+                    // Interface references need their product identity on both save paths.
+                    ...(models.some(model => model.interfaceId) ? { catalogPresetId: original.catalogPresetId ?? sel.preset.id } : {}),
                     models: modelsAfterProviderEndpointEdit(models, original.baseUrl, targetBase),
                   };
                   if (target === agent || keys[target] === detected.apiKey) keys[target] = apiKey;

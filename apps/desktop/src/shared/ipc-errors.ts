@@ -167,6 +167,12 @@ export type IpcErrorCode =
   | 'REGION_MISMATCH'
   | 'CREDENTIAL_STORE_UNAVAILABLE'
   | 'AUTH_FLOW_SUPERSEDED'
+  // 新电脑设置(docs/product-rules/new-device-setup-migration.md):那台电脑版本过旧 / 现在读不到 /
+  // 回包不合法 / 预览已过期(换号、超时或另一次预览)。
+  | 'SETUP_SOURCE_OUTDATED'
+  | 'SETUP_SOURCE_UNAVAILABLE'
+  | 'SETUP_SNAPSHOT_INVALID'
+  | 'SETUP_PLAN_EXPIRED'
   // domain-specific
   | 'STALE_DIFF'
   | 'PUSH_LEASE_EXPIRED'
@@ -419,6 +425,10 @@ const IPC_ERROR_CODES: ReadonlySet<IpcErrorCode> = new Set<IpcErrorCode>([
   'REGION_MISMATCH',
   'CREDENTIAL_STORE_UNAVAILABLE',
   'AUTH_FLOW_SUPERSEDED',
+  'SETUP_SOURCE_OUTDATED',
+  'SETUP_SOURCE_UNAVAILABLE',
+  'SETUP_SNAPSHOT_INVALID',
+  'SETUP_PLAN_EXPIRED',
   'STALE_DIFF',
   'PUSH_LEASE_EXPIRED',
   'PUSH_NO_REMOTE',

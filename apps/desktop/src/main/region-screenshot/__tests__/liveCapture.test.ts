@@ -1,6 +1,9 @@
 import type { Display } from 'electron';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { SnapshotHelper } from '../snapshotHost';
+import { setTraceOperationObserver } from '../../performance-trace/measure';
+import { projectTraceEvent } from '../../performance-trace/report';
+import type { PerformanceTraceEvent } from '../../../shared/performanceTrace';
 
 const mocks = vi.hoisted(() => ({ sources: vi.fn(), capture: vi.fn(), nativeOptions: vi.fn(), frame: vi.fn(), toPhysical: vi.fn(), createBitmap: vi.fn(), pixels: null as Buffer | null }));
 vi.mock('electron', () => ({
@@ -32,6 +35,7 @@ const helper = { capture: mocks.capture } as unknown as SnapshotHelper;
 // suite mocks this module itself, so it cannot cover backend fallback or cancellation.
 // Minimum failure: helper returns null, but Electron still offers the selected screen.
 describe('live region capture recovery', () => {
+  const events: PerformanceTraceEvent[] = [];
   beforeEach(() => {
     vi.stubGlobal('process', Object.create(process, { platform: { value: 'win32' } }));
     vi.clearAllMocks();
@@ -40,8 +44,25 @@ describe('live region capture recovery', () => {
     mocks.createBitmap.mockImplementation((_pixels, size) => bitmap(size.width, size.height));
     mocks.capture.mockResolvedValue(null);
     mocks.sources.mockResolvedValue([{ display_id: '1', thumbnail: bitmap(200, 400) }]);
+    events.length = 0;
+    setTraceOperationObserver(event => events.push(event));
   });
-  afterEach(() => vi.unstubAllGlobals());
+  afterEach(() => {
+    setTraceOperationObserver(null);
+    vi.unstubAllGlobals();
+  });
+
+  // Screenshot performance reports lacked the fallback decision. Exercise real capture and report
+  // projection together: fixed reasons survive, display metadata/pixels do not.
+  // Existing backend tests could not distinguish color rejection from failure;
+  // minimum inputs are one unsupported display or one null frame; tier: unit.
+  // Standalone Vitest duration: 0.39s on Windows.
+  function expectFallbackDiagnostic(reason: string) {
+    const event = projectTraceEvent(events.at(-1), 0, Date.now());
+    expect(event).toEqual({
+      at: expect.any(Number), kind: 'ipc', label: `region-screenshot:electron:${reason}`, durationMs: expect.any(Number),
+    });
+  }
 
   // Unit: the first-frame path now prefers native capture. Existing live tests
   // do not cover display selection, HDR fallback, or physical-pixel dimensions.
@@ -53,6 +74,7 @@ describe('live region capture recovery', () => {
     mocks.capture.mockImplementation(async rect => ({ width: rect.width, height: rect.height, data: new Uint8Array(rect.width * rect.height * 4).fill(77) }));
     const result = await captureScreenshotDisplays([sdr, second], helper);
     expect(result.backend).toBe('native');
+    expect(result.fallbackReason).toBeUndefined();
     expect(result.captures.map(c => [c.display.id, c.image.getSize()])).toEqual([
       [1, { width: 200, height: 400 }], [2, { width: 100, height: 200 }],
     ]);
@@ -71,6 +93,9 @@ describe('live region capture recovery', () => {
     mocks.sources.mockResolvedValueOnce([{ display_id: '2', thumbnail: electronSecond }, { display_id: '1', thumbnail: electronFirst }]);
     const result = await captureScreenshotDisplays([sdr, second], helper);
     expect(result.backend).toBe('electron');
+    const reason = badFrame ? 'native-size-mismatch' : 'native-frame-unavailable';
+    expect(result.fallbackReason).toBe(reason);
+    expectFallbackDiagnostic(reason);
     expect(result.captures.map(c => c.image)).toEqual([electronFirst, electronSecond]);
   });
   it.each([
@@ -80,12 +105,23 @@ describe('live region capture recovery', () => {
     ['win32', { ...sdr, colorSpace: undefined }],
   ] as const)('preserves Electron capture for unsupported color/platform (%s, %j)', async (platform, monitor) => {
     vi.stubGlobal('process', Object.create(process, { platform: { value: platform } }));
-    expect((await captureScreenshotDisplays([monitor as Display], helper)).backend).toBe('electron');
+    const reason = platform === 'darwin' ? 'platform' : 'color-space';
+    expect(await captureScreenshotDisplays([monitor as Display], helper)).toMatchObject({ backend: 'electron', fallbackReason: reason });
+    expectFallbackDiagnostic(reason);
     expect(mocks.capture).not.toHaveBeenCalled();
   });
   it('never guesses a missing source on a multi-display desktop', async () => {
     const result = await captureScreenshotDisplays([display, { ...display, id: 2 }]);
     expect(result.captures.map(c => c.display.id)).toEqual([1]);
+    expect(result.fallbackReason).toBe('helper-missing');
+    expectFallbackDiagnostic('helper-missing');
+  });
+  it('retains Electron recovery and a diagnostic when native bitmap conversion returns an empty image', async () => {
+    mocks.capture.mockResolvedValueOnce({ width: 100, height: 200, data: new Uint8Array(80000) });
+    mocks.createBitmap.mockReturnValueOnce({ isEmpty: () => true });
+    const result = await captureScreenshotDisplays([sdr], helper);
+    expect(result).toMatchObject({ backend: 'electron', fallbackReason: 'native-image-empty', captures: [{ display: sdr }] });
+    expectFallbackDiagnostic('native-image-empty');
   });
   it.each(['scroll', 'video', 'gif'] as const)('recovers %s capture and only returns the selected pixels', async mode => {
     const recording = new RegionVideoCapture(helper);

@@ -6,7 +6,7 @@ import { RotateCcw, Minus, Plus } from "lucide-react-native";
 import { useTranslation } from "react-i18next";
 import { Text } from "@/components/AppText";
 import { spacing, textStyles, useTheme } from "@/theme";
-import { PreviewIconButton } from "./PreviewChrome";
+import { PreviewIconButton, PreviewToolbar } from "./PreviewChrome";
 import { MOBILE_MODEL_JS } from "./documentPreviewAssets.generated";
 
 /** Receives an already authorized local copy. The viewer cannot fetch other files or networks. */
@@ -108,13 +108,7 @@ export function ModelDocumentPreview({
           )}
         </View>
       ) : null}
-      <View
-        style={{
-          alignItems: "center",
-          justifyContent: "center",
-          flexDirection: "row",
-        }}
-      >
+      <PreviewToolbar>
         <PreviewIconButton
           icon={Minus}
           label={t("message.attachmentPreview.zoomOut")}
@@ -143,7 +137,7 @@ export function ModelDocumentPreview({
             )
           }
         />
-      </View>
+      </PreviewToolbar>
     </View>
   );
 }

@@ -5,7 +5,16 @@ import {
   useState,
   type ReactNode,
 } from "react";
-import { Pressable, ScrollView, StyleSheet, View } from "react-native";
+import {
+  Alert,
+  Pressable,
+  ScrollView,
+  StyleSheet,
+  View,
+  type StyleProp,
+  type ViewStyle,
+} from "react-native";
+import { GlassView } from "expo-glass-effect";
 import {
   ChevronLeft,
   ChevronRight,
@@ -28,7 +37,9 @@ import {
   useThemedStyles,
   type ThemeColors,
 } from "@/theme";
+import { NativePullDownMenu, usesNativePullDownMenu } from "@/platform/chrome";
 import { SheetModal } from "./SheetModal";
+import { useLiquidGlassAvailable } from "./useLiquidGlassAvailable";
 
 export interface PreviewCollectionNavigation {
   index: number;
@@ -84,6 +95,43 @@ export function PreviewIconButton({
   );
 }
 
+/**
+ * 预览外壳与内置浏览器同一做法(用户定稿 2026-11-03):按钮浮在页面上,iOS 26+ 用
+ * 系统 Liquid Glass,其它环境退回实色圆角底;工具按钮成组放进一枚胶囊,不铺满整行底栏。
+ */
+export function PreviewGlass({
+  children,
+  style,
+}: {
+  children: ReactNode;
+  style?: StyleProp<ViewStyle>;
+}) {
+  const glass = useLiquidGlassAvailable();
+  const { mode } = useTheme();
+  const styles = useThemedStyles(makeStyles);
+  return glass ? (
+    <GlassView
+      colorScheme={mode}
+      glassEffectStyle="regular"
+      style={[styles.glass, style]}
+    >
+      {children}
+    </GlassView>
+  ) : (
+    <View style={[styles.glass, styles.glassFallback, style]}>{children}</View>
+  );
+}
+
+/** 查看器自己的工具行(页码、缩放、查找等):透明行里一枚居中的玻璃胶囊。 */
+export function PreviewToolbar({ children }: { children: ReactNode }) {
+  const styles = useThemedStyles(makeStyles);
+  return (
+    <View style={styles.toolbarRow}>
+      <PreviewGlass>{children}</PreviewGlass>
+    </View>
+  );
+}
+
 /** Always reachable, including when the content hides its playback/gesture chrome. */
 export function PreviewHeader({
   name,
@@ -105,44 +153,70 @@ export function PreviewHeader({
   const styles = useThemedStyles(makeStyles);
   const [menu, setMenu] = useState(false);
   const afterClose = useRef<(() => void) | null>(null);
+  // 「文件信息」始终在「更多」里:标题只显示一行,被截断的完整文件名要有地方看
+  // (没有 detail 时只显示文件名)。
+  const menuActions: readonly PreviewAction[] = [
+    {
+      key: "preview.fileInfo",
+      label: t("files.preview.browserFileInfo"),
+      onPress: () => Alert.alert(name, detail),
+    },
+    ...actions,
+  ];
+  const nativeMenu = usesNativePullDownMenu();
   return (
     <>
       <View
         testID="preview.header"
+        pointerEvents="box-none"
         style={[
           styles.header,
           {
             height: insets.top + 64,
             paddingTop: insets.top,
-            paddingLeft: insets.left + spacing.sm,
-            paddingRight: insets.right + spacing.sm,
+            paddingLeft: insets.left + spacing.md,
+            paddingRight: insets.right + spacing.md,
           },
         ]}
       >
-        <PreviewIconButton
-          icon={X}
-          label={t("message.attachmentPreview.close")}
-          onPress={onClose}
-          disabled={closeDisabled}
-          testID={closeTestID}
-        />
-        <View style={styles.titleColumn}>
-          <Text numberOfLines={1} style={styles.title}>
-            {name}
-          </Text>
-          {detail ? (
-            <Text numberOfLines={1} style={styles.detail}>
-              {detail}
-            </Text>
-          ) : null}
-        </View>
-        {actions.length ? (
+        <PreviewGlass>
           <PreviewIconButton
-            icon={Ellipsis}
-            label={t("message.attachmentPreview.more")}
-            onPress={() => setMenu(true)}
-            testID="preview.more"
+            icon={X}
+            label={t("message.attachmentPreview.close")}
+            onPress={onClose}
+            disabled={closeDisabled}
+            testID={closeTestID}
           />
+        </PreviewGlass>
+        <View pointerEvents="box-none" style={styles.titleSlot}>
+          <PreviewGlass style={styles.titleCapsule}>
+            <Text numberOfLines={1} style={styles.title} testID="preview.title">
+              {name}
+            </Text>
+          </PreviewGlass>
+        </View>
+        {menuActions.length ? (
+          <NativePullDownMenu
+            accessibilityLabel={t("message.attachmentPreview.more")}
+            actions={menuActions.map((action) => ({
+              id: action.key,
+              title: action.label,
+              icon: action.icon,
+              disabled: action.disabled,
+            }))}
+            onAction={(id) => menuActions.find((action) => action.key === id)?.onPress()}
+            testID="preview.moreMenu"
+          >
+            <PreviewGlass>
+              <PreviewIconButton
+                icon={Ellipsis}
+                label={t("message.attachmentPreview.more")}
+                // 系统菜单接管点按;没有系统菜单的旧包退回底部面板。
+                onPress={nativeMenu ? () => {} : () => setMenu(true)}
+                testID="preview.more"
+              />
+            </PreviewGlass>
+          </NativePullDownMenu>
         ) : (
           <View style={styles.button} />
         )}
@@ -217,6 +291,7 @@ export function PreviewFooter({
   return (
     <>
       <View
+        pointerEvents="box-none"
         style={[
           styles.footer,
           {
@@ -226,31 +301,37 @@ export function PreviewFooter({
           },
         ]}
       >
-        {children ? <View style={styles.tools}>{children}</View> : null}
+        {children ? (
+          <View pointerEvents="box-none" style={styles.tools}>
+            <PreviewGlass style={styles.toolsGroup}>{children}</PreviewGlass>
+          </View>
+        ) : null}
         {multiple ? (
-          <View style={styles.tools}>
-            <PreviewIconButton
-              icon={ChevronLeft}
-              label={t("message.attachmentPreview.previous")}
-              disabled={collection.index === 0}
-              onPress={() => collection.onSelect(collection.index - 1)}
-            />
-            <Pressable
-              accessibilityRole="button"
-              onPress={() => setList(true)}
-              style={styles.button}
-            >
-              <Text
-                testID="preview.collectionCount"
-                style={styles.detail}
-              >{`${collection.index + 1} / ${collection.names.length}`}</Text>
-            </Pressable>
-            <PreviewIconButton
-              icon={ChevronRight}
-              label={t("message.attachmentPreview.next")}
-              disabled={collection.index === collection.names.length - 1}
-              onPress={() => collection.onSelect(collection.index + 1)}
-            />
+          <View pointerEvents="box-none" style={styles.tools}>
+            <PreviewGlass>
+              <PreviewIconButton
+                icon={ChevronLeft}
+                label={t("message.attachmentPreview.previous")}
+                disabled={collection.index === 0}
+                onPress={() => collection.onSelect(collection.index - 1)}
+              />
+              <Pressable
+                accessibilityRole="button"
+                onPress={() => setList(true)}
+                style={styles.button}
+              >
+                <Text
+                  testID="preview.collectionCount"
+                  style={styles.detail}
+                >{`${collection.index + 1} / ${collection.names.length}`}</Text>
+              </Pressable>
+              <PreviewIconButton
+                icon={ChevronRight}
+                label={t("message.attachmentPreview.next")}
+                disabled={collection.index === collection.names.length - 1}
+                onPress={() => collection.onSelect(collection.index + 1)}
+              />
+            </PreviewGlass>
           </View>
         ) : null}
       </View>
@@ -299,9 +380,7 @@ const makeStyles = (colors: ThemeColors) =>
       minHeight: 64,
       flexDirection: "row",
       alignItems: "center",
-      backgroundColor: colors.surface,
-      borderBottomColor: colors.border,
-      borderBottomWidth: StyleSheet.hairlineWidth,
+      gap: spacing.sm,
       paddingBottom: spacing.sm,
     },
     button: {
@@ -312,7 +391,27 @@ const makeStyles = (colors: ThemeColors) =>
       borderRadius: radius.pill,
     },
     pressed: { backgroundColor: colors.surfaceChip },
-    titleColumn: { flex: 1, minWidth: 0, alignItems: "center" },
+    glass: {
+      flexDirection: "row",
+      alignItems: "center",
+      borderRadius: radius.pill,
+      overflow: "hidden",
+    },
+    glassFallback: {
+      backgroundColor: colors.surfaceElevated,
+      borderColor: colors.border,
+      borderWidth: StyleSheet.hairlineWidth,
+    },
+    // 宽屏(iPad)上文件名胶囊限宽居中,不拉满整行。
+    titleSlot: { flex: 1, minWidth: 0, alignItems: "center" },
+    titleCapsule: {
+      width: "100%",
+      maxWidth: 560,
+      minWidth: 0,
+      minHeight: 48,
+      justifyContent: "center",
+      paddingHorizontal: spacing.lg,
+    },
     title: {
       color: colors.textPrimary,
       fontSize: typeScale.body,
@@ -330,16 +429,20 @@ const makeStyles = (colors: ThemeColors) =>
       right: 0,
       bottom: 0,
       zIndex: 20,
-      backgroundColor: colors.surface,
-      borderTopColor: colors.border,
-      borderTopWidth: StyleSheet.hairlineWidth,
     },
     tools: {
       minHeight: 56,
       flexDirection: "row",
       alignItems: "center",
       justifyContent: "center",
-      flexWrap: "wrap",
+    },
+    toolsGroup: { flexWrap: "wrap", justifyContent: "center", maxWidth: "100%" },
+    toolbarRow: {
+      minHeight: 56,
+      flexDirection: "row",
+      alignItems: "center",
+      justifyContent: "center",
+      paddingHorizontal: spacing.sm,
     },
     sheet: {
       backgroundColor: colors.surface,
