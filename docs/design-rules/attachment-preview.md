@@ -8,7 +8,7 @@ Desktop 与手机分别贴合各自平台：Desktop 预览浮在原界面之上�
 
 - **Desktop**：遮罩用弹窗同款 `.modal-scrim`，点窗外即关闭。预览窗距窗口四边 40px，最宽 1440px 并水平居中；12px 圆角、Board 描边、`--shadow-menu`。顶部 40px 是窗口标题栏（mac 红绿灯、拖动窗口），预览窗从它下面开始。遮罩整层 no-drag，盖掉主界面顶栏的拖拽区（Electron 只按几何命中，不看层级，否则会吞掉关闭键的点击），顶部 40px 再声明为拖拽区。几何与组件见 `PreviewChrome.tsx` 的 `PREVIEW_PANEL_STYLE` / `PreviewScrim`。
 - **Desktop 打不开的文件**（压缩包等，只有文件信息和「在系统中打开 / 显示所在文件夹」）用同一外观的居中小窗（480×360），不占大窗；「显示所在文件夹」在访达 / 资源管理器里选中该文件。
-- **iOS / Android（含 iPad）**：全屏，外壳与内置浏览器同一做法。顶部是浮动的玻璃圆钮「关闭」、文件名、玻璃圆钮「更多」；文件名背后的玻璃和文件名一样宽、居中，不拉满中间一栏，过长时截断（最宽 560pt）；顶栏不画底色与分隔线。文件详情收进「更多」，「更多」用系统下拉菜单（没有系统菜单的旧包退回底部面板）。底部类型工具与查看器自带工具行（页码、缩放、查找、换行等）各成一枚玻璃胶囊，居中浮在页面上；手机不放附件集合导航（上一项 / 下一项与计数），切换方式见产品合同。iOS 上顶栏、底部工具、查看器工具行与载入提示全部是 SwiftUI 原生控件（见 [iOS 原生界面规范](./ios-native-design.md) §1「能用原生的都用原生」）：按钮用 SF Symbol，单个圆钮是系统玻璃按钮，成组按钮是一枚可交互的系统玻璃胶囊，按下有系统的液态反馈；玻璃不压底色，明暗与图标颜色由系统决定。成组按钮是一枚整体胶囊，不给每个按钮各包一块圆形玻璃再融合（会留下串珠状腰线）。iOS 26 以前退回 `surfaceElevated` 实色圆角底；Android 用 React Native 画同样结构的实色胶囊。查看器内容区不自带底色，跟随宿主页面，避免透明顶栏下露出接缝。组件见 `apps/mobile/src/session/PreviewChrome.tsx` 的 `PreviewGlassGroup`（按钮组）/ `PreviewIconButton`（需同时给 lucide 图标与 SF Symbol）/ `PreviewToolLabel` / `PreviewToolbar`，iOS 原生画法在 `PreviewNativeChrome.ios.tsx`。
+- **iOS / Android（含 iPad）**：全屏，外壳与内置浏览器同一做法。顶部是浮动的玻璃圆钮「关闭」、文件名、玻璃圆钮「更多」；文件名背后的玻璃和文件名一样宽、居中，不拉满中间一栏，过长时截断（最宽 560pt）；顶栏不画底色与分隔线。文件详情收进「更多」，「更多」用系统下拉菜单（没有系统菜单的旧包退回底部面板）。底部类型工具与查看器自带工具行（页码、缩放、查找、换行等）各成一枚玻璃胶囊，居中浮在页面上；手机不放附件集合导航（上一项 / 下一项与计数），切换方式见产品合同。iOS 上顶栏、底部工具、查看器工具行与载入提示全部是 SwiftUI 原生控件（见 [iOS 原生界面规范](./ios-native-design.md) §1「能用原生的都用原生」）：玻璃风格与 App 自己的界面（任务页顶栏、首页、远程画面）一致，直接复用同一套组件：单个圆钮是 `NativeChromeButton`，成组按钮共用 `useNativeGlassGroupStyle` 的一枚玻璃胶囊、组内是 borderless 按钮，「更多」与首页显示菜单同一写法（`useNativeGlassButtonStyle({ shape: "circle" })`），文件名与载入提示用按钮组同一材质；按钮用 SF Symbol，图标色由 Host 的 `seedColor` 统一，玻璃不压底色。不为预览另配一套玻璃参数。成组按钮是一枚整体胶囊，不给每个按钮各包一块圆形玻璃再融合（会留下串珠状腰线）。iOS 26 以前退回 `surfaceElevated` 实色圆角底；Android 用 React Native 画同样结构的实色胶囊。查看器内容区不自带底色，跟随宿主页面，避免透明顶栏下露出接缝。组件见 `apps/mobile/src/session/PreviewChrome.tsx` 的 `PreviewGlassGroup`（按钮组）/ `PreviewIconButton`（需同时给 lucide 图标与 SF Symbol）/ `PreviewToolLabel` / `PreviewToolbar`，iOS 原生画法在 `PreviewNativeChrome.ios.tsx`。
 
 ## Desktop
 
@@ -16,7 +16,7 @@ Desktop 与手机分别贴合各自平台：Desktop 预览浮在原界面之上�
 
 ## iOS / Android
 
-顶栏为安全区加 64px：左侧关闭、居中文件名、右侧更多（均为浮动玻璃按钮，见上节）；图标 20px、热区至少 48px（原生按钮要把整块 48pt 设为可点区域，不能只有图标笔画）。底部只有类型工具一行。系统播放器负责媒体控件，宿主负责退出与文件操作。横屏按实际可用区域计算，不能直接缩小一张竖屏截图。
+顶栏为安全区加 64px：左侧关闭、居中文件名、右侧更多（均为浮动玻璃按钮，见上节）；图标 20px、热区与 App 顶栏同一尺寸 `navigationChrome.target`（44pt；原生按钮把整块设为可点区域，不能只有图标笔画）。底部只有类型工具一行。系统播放器负责媒体控件，宿主负责退出与文件操作。横屏按实际可用区域计算，不能直接缩小一张竖屏截图。
 
 手机外壳的三条固定做法（用户定稿 2026-11-06）：
 
