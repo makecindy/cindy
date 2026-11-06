@@ -68,7 +68,7 @@ function ArtifactStream({ artifactCase }: { artifactCase: string }) {
     </ThreadPanel>
   </div>;
   return <div className="flex h-screen w-full min-w-0 flex-col bg-[var(--surface)]" data-ui-page-subject>
-    {artifactCase === 'artifacts-cached' && <div className="flex gap-2">
+    {artifactCase === 'artifacts-cached' && <div className="flex gap-2" data-ui-page-control>
       <Button data-testid="fixture-remount" onClick={() => { holdArtifactStats = true; setGeneration(value => value + 1); }}>Remount</Button>
       <Button data-testid="fixture-confirm" onClick={() => settleArtifactStats(false)}>Confirm</Button>
       <Button data-testid="fixture-remove" onClick={() => settleArtifactStats(true)}>Remove</Button>
@@ -82,7 +82,7 @@ function Subject({ done, retry, artifactCase }: { done: boolean; retry: boolean;
   const rows = retry ? retryMessages : messages;
   if (artifactCase) return <ArtifactStream artifactCase={artifactCase} />;
   return <div className="flex h-screen w-full min-w-0 flex-col bg-[var(--surface)]" data-ui-page-subject>
-    <div className="self-end p-2"><Button onClick={() => setFinished(true)} data-testid="fixture-finish">Finish fixture</Button></div>
+    <div className="self-end p-2" data-ui-page-control><Button onClick={() => setFinished(true)} data-testid="fixture-finish">Finish fixture</Button></div>
     <MessageStream workingDir="" historyLoaded messages={finished ? [...rows, { ...text('final_answer', '任务与 PR 的进展已整理。未处理完的事项和需要你判断的部分，已分别列出。', 'final_answer'), turnCompleted: true }] : rows}
       assistantAvatar={<span data-testid="fixture-partner-avatar"><BotAvatar bot={{ id: "fixture", name: "Cindy", avatar: "cindy://avatar/preset/cindy" }} size="sm" /></span>} simplifiedBotConversation isSessionStreaming={!finished} contentWidth={720} />
   </div>;
