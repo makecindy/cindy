@@ -1048,22 +1048,42 @@ if CommandLine.arguments == [CommandLine.arguments[0], "--privacy-input"] {
 // locks as well, so a crashed Cindy never leaves an unlocked desktop behind.
 // All state lives on the main queue; only fixed words cross stdout.
 final class AwayGuard {
+  var tap: CFMachPort?
   private var ended = false
   private let lockSession: () -> Bool
-  init(lockSession: @escaping () -> Bool) { self.lockSession = lockSession }
+  private let isLocked: () -> Bool
+  // The app in front when the cover went up; unlocking hands this Mac back to it.
+  private let previousApp = NSWorkspace.shared.frontmostApplication
+  init(lockSession: @escaping () -> Bool, isLocked: @escaping () -> Bool) {
+    self.lockSession = lockSession
+    self.isLocked = isLocked
+  }
   func finish(lock: Bool) {
     if ended { return }
     ended = true
-    DispatchQueue.global().async { [lockSession] in
+    DispatchQueue.global().async { [self] in
       if !lock { print("released"); fflush(stdout); exit(0) }
-      if lockSession() { print("locked"); fflush(stdout); exit(0) }
-      print("lock-failed"); fflush(stdout); exit(3)
+      guard lockSession() else { print("lock-failed"); fflush(stdout); exit(3) }
+      // The lock screen owns input now; never hold the owner's keys or clicks after unlock.
+      DispatchQueue.main.sync { if let tap = tap { CGEvent.tapEnable(tap: tap, enable: false) } }
+      print("locked"); fflush(stdout)
+      // Removing the masks can leave the owner's app behind other windows after unlock.
+      let deadline = Date().addingTimeInterval(8 * 3600)
+      while Date() < deadline && isLocked() { usleep(250_000) }
+      if !isLocked() {
+        DispatchQueue.main.sync {
+          _ = previousApp?.activate(options: [.activateAllWindows, .activateIgnoringOtherApps])
+        }
+      }
+      exit(0)
     }
   }
 }
 if CommandLine.arguments == [CommandLine.arguments[0], "--away-guard"] {
   // Locking is the only action left once Main is gone; it never needs Main's authority.
-  let away = AwayGuard(lockSession: { lockOwnedSession(requireCaller: false) })
+  let away = AwayGuard(
+    lockSession: { lockOwnedSession(requireCaller: false) },
+    isLocked: { ownedConsoleSession()?["CGSSessionScreenIsLocked"] as? Bool == true })
   var heartbeat = Date()
   let events: [CGEventType] = [.keyDown, .keyUp, .flagsChanged, .leftMouseDown, .leftMouseUp,
     .rightMouseDown, .rightMouseUp, .otherMouseDown, .otherMouseUp, .mouseMoved,
@@ -1085,6 +1105,7 @@ if CommandLine.arguments == [CommandLine.arguments[0], "--away-guard"] {
     }, userInfo: Unmanaged.passUnretained(away).toOpaque()), let runSource = CFMachPortCreateRunLoopSource(nil, tap, 0) else {
       print("error"); fflush(stdout); exit(2)
     }
+  away.tap = tap
   CFRunLoopAddSource(CFRunLoopGetMain(), runSource, .commonModes)
   CGEvent.tapEnable(tap: tap, enable: true)
   print("ready"); fflush(stdout)

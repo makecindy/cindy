@@ -101,9 +101,10 @@ export interface AwayGuardInputMonitor extends PrivacyInputMonitor {
 }
 
 /** `--away-guard`: the helper itself turns physical input, a missed heartbeat or a
- * dead Main into the system lock and then exits. `stop()` releases it without a lock
- * (the screen is already locked, or remote desktop takes over the display). `ended`
- * runs once when the helper is gone, with whether it confirmed the lock.
+ * dead Main into the system lock. `stop()` releases it without a lock (the screen is
+ * already locked, or remote desktop takes over the display). `ended` runs once: on the
+ * confirmed lock, or when the helper is gone. After the lock the helper stops reading
+ * input and lingers only to bring the owner's app back to the front after unlock.
  */
 export async function watchAwayGuardInput(
   ended: (locked: boolean) => void,
@@ -117,6 +118,17 @@ export async function watchAwayGuardInput(
   const closed = new Promise<void>((resolve) => child.once('close', () => resolve()));
   let locked = false;
   let ready = false;
+  let reported = false;
+  let lockedNow: (() => void) | undefined;
+  const lockConfirmed = new Promise<void>((resolve) => {
+    lockedNow = resolve;
+  });
+  const report = () => {
+    if (reported || !ready) return;
+    reported = true;
+    clearInterval(heartbeat);
+    ended(locked);
+  };
   let buffer = '';
   let settleReady: ((error?: Error) => void) | undefined;
   const readyPromise = new Promise<void>((resolve, reject) => {
@@ -147,7 +159,11 @@ export async function watchAwayGuardInput(
       if (line === 'ready') {
         ready = true;
         settleReady?.();
-      } else if (line === 'locked') locked = true;
+      } else if (line === 'locked') {
+        locked = true;
+        lockedNow?.();
+        report();
+      }
       // `permission`, `error`, `released` and `lock-failed` all end with process exit.
     }
   });
@@ -155,13 +171,15 @@ export async function watchAwayGuardInput(
     clearTimeout(readyTimer);
     clearInterval(heartbeat);
     settleReady?.(new Error('DESKTOP_PRIVACY_UNAVAILABLE'));
-    if (ready) ended(locked);
+    report();
   });
   const finish = (command: 'lock' | 'release', timeoutMs: number): Promise<void> => {
+    // Once locked, the helper is only waiting to restore the owner's app; leave it be.
+    if (locked) return Promise.resolve();
     write(command);
     const timer = setTimeout(() => child.kill(), timeoutMs);
     timer.unref();
-    return closed.finally(() => clearTimeout(timer));
+    return Promise.race([closed, lockConfirmed]).finally(() => clearTimeout(timer));
   };
   try {
     await readyPromise;
