@@ -95,6 +95,55 @@
     localThemes: Object.freeze({ success: true, themes: Object.freeze([]), diagnostics: Object.freeze([]) }),
     ghostsUnread: Object.freeze({ entries: Object.freeze([]) }),
     ghostRecentUsage: Object.freeze({ ids: Object.freeze([]) }),
+    companionCloud: Object.freeze({ enabled: false, selfDeviceId: null, humanActorId: null, actors: Object.freeze([]), demotedBotIds: Object.freeze([]) }),
+    pluginMarketSnapshot: Object.freeze({ items: Object.freeze([]), unavailableReason: null, customSourceNames: Object.freeze([]), unavailableCustomSourceNames: Object.freeze([]), organizationAccessError: null }),
+    workdirPrefs: Object.freeze({ disabled: Object.freeze([]) }),
+    localCliDetections: Object.freeze({ detections: Object.freeze([]) }),
+    llamaCppStatus: Object.freeze({ installed: false, supported: false, running: false, models: Object.freeze([]) }),
+    localModelStatus: Object.freeze({ runtime: 'ollama', kind: 'not-installed', appInstalled: false }),
+    creditUsage: Object.freeze({
+      available: '0',
+      plan: Object.freeze({ remaining: '0', used: null, total: null }),
+      purchased: Object.freeze({ remaining: '0', used: null, total: null }),
+      promotional: Object.freeze({ remaining: '0', used: null, total: null }),
+      promotionalGrants: Object.freeze([]),
+      promotionalGrantsComplete: true,
+      promotionalGrantConsistency: 'OBSERVED',
+      ledgerUpdatedAt: null,
+      scale: 9,
+      observedAt: '2026-11-06T00:00:00.000Z',
+    }),
+    billingOrders: Object.freeze({ orders: Object.freeze([]), nextCursor: null }),
+    billingSubscription: Object.freeze({ subscription: null }),
+    billingCatalog: Object.freeze({ products: Object.freeze([]), plans: Object.freeze([]) }),
+    billingBalance: Object.freeze({ available: '0' }),
+    deviceLinkDevices: Object.freeze({ devices: Object.freeze([]) }),
+    visionBridgeSettings: Object.freeze({
+      enabled: false,
+      targetModels: Object.freeze([]),
+      primary: null,
+      fallback: null,
+      isCustomized: false,
+      customizedKeys: Object.freeze([]),
+      defaults: Object.freeze({ enabled: false, targetModels: Object.freeze([]), primary: null, fallback: null }),
+    }),
+    mediaStorageStats: Object.freeze({
+      success: true,
+      blobs: Object.freeze({ totalCount: 0, totalBytes: 0, cacheCount: 0, cacheBytes: 0 }),
+      legacy: Object.freeze({ bytes: 0, fileCount: 0 }),
+      fixedCaches: Object.freeze({
+        legacyImages: Object.freeze({ bytes: 0, fileCount: 0 }),
+        chatAttachments: Object.freeze({ bytes: 0, fileCount: 0 }),
+      }),
+      deadDirs: Object.freeze([]),
+    }),
+    piKernelState: Object.freeze({
+      currentVersion: null,
+      restartRequired: false,
+      official: Object.freeze({ release: null, checkedAt: null, error: false }),
+      upstream: Object.freeze({ release: null, checkedAt: null, error: false }),
+      operation: null,
+    }),
     voiceModelSelection: Object.freeze({ serviceMode: null, asrProvider: null, refinerProvider: null, refinerModel: null }),
     appShortcuts: Object.freeze({ overrides: Object.freeze({}), platform: 'linux', globalFailures: Object.freeze([]) }),
   });
@@ -221,6 +270,12 @@
     'maker.syncModelVisibility': () => undefined,
     'ghosts.listPickerModels': () => STATIC.emptyList,
     'maker.memoryGetSettings': () => STATIC.memorySettings,
+    'maker.memoryGetSettingsState': () => ({ ...STATIC.memorySettings, isCustomized: false, customizedKeys: [], defaults: STATIC.memorySettings }),
+    'maker.memoryGet': () => ({ enabled: true, source: 'host-runtime' }),
+    'maker.memorySet': () => ({ effective: 'immediate', isCustomized: false, customizedKeys: [], defaults: STATIC.memorySettings }),
+    'maker.memoryReset': () => ({ removedEntries: 0, removedBytes: 0 }),
+    'maker.makerMemorySetEnabled': () => ({ effective: 'next-session', isCustomized: false, customizedKeys: [], defaults: STATIC.memorySettings, codexRestartDeferred: false }),
+    'maker.makerMemoryReset': () => ({ removedCount: 0 }),
     'maker.memoryPreserveLegacyMakerDisabled': () => STATIC.memorySettings,
     'voiceInput.getReadinessCached': () => STATIC.voiceNotReady,
     'voiceInput.getReadiness': () => STATIC.voiceNotReady,
@@ -254,7 +309,7 @@
     'maker.botGroupOutbox': () => STATIC.emptyList,
     'maker.schedule.listSidebarIndexRuns': () => STATIC.emptyList,
     'deviceLink.getState': () => STATIC.deviceLinkState,
-    'deviceLink.listDevices': () => STATIC.emptyList,
+    'deviceLink.listDevices': () => STATIC.deviceLinkDevices,
     'deviceLink.mirrorCache.getSessionList': () => STATIC.emptyList,
     'deviceLink.mirrorCache.putSessionList': () => undefined,
     'localDb.sessions.interruptedPending': () => rpc('/sessions/interrupted-pending'),
@@ -449,7 +504,8 @@
     'localDb.sessions.create': (args) => rpc('/sessions/create', args?.[0] ?? {}),
     'localDb.sessions.update': (args) => rpc('/sessions/update', { sessionId: args?.[0], patch: args?.[1] ?? {} }),
     'localDb.sessions.get': (args) => rpc('/sessions/get', { sessionId: args?.[0] }),
-    'localDb.sessions.list': () => rpc('/sessions/list'),
+    'localDb.sessions.list': (args) => rpc('/sessions/list', { limit: args?.[0], status: args?.[1], options: args?.[2] }),
+    'localDb.recentWorkdirs.list': () => rpc('/recent-workdirs/list'),
     'localDb.projectAliases.list': () => rpc('/project-aliases/list'),
     'localDb.projectAliases.set': (args) => rpc('/project-aliases/set', args?.[0] ?? {}),
     'localDb.projectAliases.delete': (args) => rpc('/project-aliases/delete', typeof args?.[0] === 'string' ? { projectKey: args[0] } : (args?.[0] ?? {})),
@@ -465,6 +521,89 @@
       window.__cindyErrors?.push(`${scope}: ${String(message).slice(0, 400)}`);
       return undefined;
     },
+    'voiceConversation.publishCallStatus': () => undefined,
+    'voiceConversation.callStatus': () => null,
+    'voiceInput.prewarm': () => undefined,
+    'voiceInput.consumeShortcutRecoveryFailure': () => ({ failed: false }),
+    'maker.schedule.list': () => STATIC.emptyList,
+    'maker.schedule.getRuntimeState': () => ({ state: 'idle', activeRunCount: 0 }),
+    'maker.browser.status': () => ({ running: false, available: false }),
+    'browserBackend.getState': () => ({ mode: 'none', backend: 'none' }),
+    'maker.computer.status': () => ({ available: false, running: false, error: null }),
+    'maker.computer.restart': () => undefined,
+    'maker.android.getConfig': () => ({ enabled: false, adbPath: null, deviceId: null }),
+    'maker.plugins.getState': () => ({ activePlugins: [] }),
+    'billing.getBalance': () => STATIC.billingBalance,
+    'billing.getCreditUsage': () => STATIC.creditUsage,
+    'billing.getCatalog': () => STATIC.billingCatalog,
+    'billing.listOrders': () => STATIC.billingOrders,
+    'billing.getCurrentSubscription': () => STATIC.billingSubscription,
+    'authListAccounts': () => (window.__cindyBoot?.auth?.user ? [window.__cindyBoot.auth.user] : []),
+    'authGetAccountDeletionAvailability': () => ({ available: false, reason: 'not_supported' }),
+    'windowBehavior.getLinuxCloseBehavior': () => 'minimize',
+    'sidebarSettings.getProjectOrder': () => STATIC.emptyList,
+    'workLouderCodex.publishTasks': () => undefined,
+    'notificationClearSessionAttention': () => undefined,
+    'notificationSetAppAttentionCount': () => undefined,
+    'localDb.orcaWorkflows.getCollaborationSettings': () => ({ enabled: false }),
+    'maker.agentResourceSettingsGet': () => ({ maxProcesses: 4, memoryLimitMb: 4096 }),
+    'remoteSsh.list': () => STATIC.emptyList,
+    'remoteSsh.ccMgrListPendingUpgrades': () => STATIC.emptyList,
+    'localDb.databaseSizeWarning.getSettings': () => ({ enabled: false, warningThresholdMb: 1024 }),
+    'localDb.databaseSizeWarning.getStatus': () => ({ status: 'normal', sizeMb: 10, databaseBytes: 0 }),
+    'localDb.databaseSizeWarning.measure': () => ({ databaseBytes: 0 }),
+    'cindyMediaStorage.stats': () => STATIC.mediaStorageStats,
+    'getUpdateChannelSettings': () => ({ channel: 'stable', autoUpdate: false }),
+    'maker.chatDisplayCache': () => STATIC.emptyRecord,
+    'agentIsland.setCompanionChats': () => undefined,
+    'agentIsland.setRemoteSessions': () => undefined,
+    'pluginContributions.reviewUpdates': () => STATIC.emptyList,
+    'pluginMarket.snapshot': () => STATIC.pluginMarketSnapshot,
+    'ghosts.workdirPrefsSync': () => STATIC.workdirPrefs,
+    'feishuBot.getState': () => ({ enabled: false }),
+    'wecomGroupNotification.getState': () => ({ enabled: false }),
+    'maker.projectAutomation.listPendingImports': () => STATIC.emptyList,
+    'appearanceSettings.ensureWallpaperImage': () => null,
+    'localDb.maintenance.getLastResult': () => null,
+    'appReadyForBot': () => true,
+    'sidebarTabWindow.getState': () => ({ visible: false }),
+    'rightSidebarWindow.getState': () => ({ visible: false }),
+    'performanceTrace.command': () => ({ phase: 'idle', startedAt: null, reportId: null, uploaded: false, partial: false, durationMs: 0 }),
+    'maker.listSessionBackgroundActivity': () => STATIC.emptyList,
+    'getCindyMakeState': () => ({ active: false }),
+    'ghosts.uiPrompts': () => STATIC.emptyList,
+    'ghosts.takePendingInstall': () => ({ filePath: null }),
+    'fetchReleaseNotes': () => ({ version: appVersion, notes: STATIC.emptyList }),
+    'pluginMarket.consumeRemovalNotice': () => null,
+    'regionScreenshotCompose.take': () => null,
+    'binding.listAttached': () => STATIC.emptyList,
+    'maker.getCompanionCloudState': () => STATIC.companionCloud,
+    'ghosts.legacyRecoveryStatus': () => ({ inProgress: false }),
+    'maker.auth.getState': () => ({ authenticated: true }),
+    'maker.requestProviderModelsAutoRefresh': () => undefined,
+    'maker.scanLocalCli': () => STATIC.localCliDetections,
+    'maker.llamaCppStatus': () => STATIC.llamaCppStatus,
+    'maker.localModelStatus': () => STATIC.localModelStatus,
+    'maker.agent.getStatus': () => ({ ready: true }),
+    'maker.piKernel.getState': () => STATIC.piKernelState,
+    'maker.piKernel.install': () => ({ restartRequired: false }),
+    'maker.agent.getBinaryVersion': (args) => ({
+      kind: args?.[0] ?? 'claude-code',
+      binaryPath: null,
+      version: '0.1.0',
+      latestVersion: null,
+      updateAvailable: false,
+      latestCheckFailed: false,
+    }),
+    'maker.visionBridgeSettingsGet': () => STATIC.visionBridgeSettings,
+    'maker.visionBridgeSettingsSet': () => STATIC.visionBridgeSettings,
+    'maker.visionBridgeSettingsReset': () => STATIC.visionBridgeSettings,
+    'maker.getGoalStatus': () => null,
+    'maker.setGoal': () => ({ ok: true }),
+    'maker.clearGoal': () => ({ ok: true }),
+    'maker.pauseGoal': () => ({ ok: true }),
+    'maker.resumeGoal': () => ({ ok: true }),
+    'maker.updateGoal': () => ({ ok: true }),
   };
 
   /**
@@ -483,10 +622,22 @@
   };
 
   function unsupported(path) {
-    const error = new Error(`host channel not implemented: ${path}`);
-    error.code = 'HOST_CHANNEL_UNSUPPORTED';
     (window.__cindyRpcFailures ??= []).push({ path, error: 'unsupported' });
-    return Promise.reject(error);
+    // In browser client mode, return safe fallback shapes to prevent unhandled rejections
+    // from crashing React UI trees and error boundaries.
+    if (/(set|clear|publish|cancel|note|mark|sync|log|report|record|update|close|open|show|hide|focus|blur|dismiss|remove|delete|add|post|send|save|write|touch|reset|prewarm|consume)/i.test(path)) {
+      return Promise.resolve(undefined);
+    }
+    if (/(list|get|load|read|fetch|find|search|scan|query|check|status|state|preview)/i.test(path)) {
+      if (/(list|all|items|rows|history|notes|channels|devices|tasks|runs|sessions|plugins|commands|skills|refs|scopes|candidates|prompts|updates|shares)/i.test(path)) {
+        return Promise.resolve([]);
+      }
+      if (/(status|state|config|settings)/i.test(path)) {
+        return Promise.resolve({});
+      }
+      return Promise.resolve(null);
+    }
+    return Promise.resolve(undefined);
   }
 
   const appVersion = window.__cindyBoot?.appVersion ?? '0.1.124';

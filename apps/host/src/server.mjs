@@ -63,7 +63,7 @@ function serveWebApp(request, response, deps, urlPath) {
     const html = body.toString('utf8')
       .replace(/<head([^>]*)>/, `<head$1><script>window.__cindyBoot=${boot};</script><script src="/shim.js"></script>`);
     body = Buffer.from(html, 'utf8');
-    response.setHeader('set-cookie', `cindy_host_web=${deps.webSession}; HttpOnly; SameSite=Strict; Path=/`);
+    response.setHeader('set-cookie', `cindy_host_web=${deps.webSession}; HttpOnly; SameSite=Lax; Path=/`);
   }
   response.writeHead(200, {
     'content-type': MIME[path.extname(file)] ?? 'application/octet-stream',
@@ -146,7 +146,7 @@ export function createHostServer(deps) {
           return;
         }
         // The preload contract for `localDb.sessions.list()` is a bare array.
-        if (url.pathname === '/api/sessions/list') { send(response, 200, await deps.listSessions()); return; }
+        if (url.pathname === '/api/sessions/list') { send(response, 200, await deps.listSessions(body)); return; }
         if (url.pathname === '/api/project-aliases/list') { send(response, 200, await deps.listProjectAliases()); return; }
         if (url.pathname === '/api/project-aliases/set') {
           send(response, 200, await deps.setProjectAlias(body));

@@ -24,7 +24,10 @@ export const HOST_CONTRACT_CHANNELS: readonly HostChannelDef[] = [
     desktopChannel: 'local-db:sessions:list',
     webPath: 'localDb.sessions.list',
     hostPath: '/api/sessions/list',
-    body: () => null,
+    body: ([limit, status, options] = []) =>
+      limit !== undefined || status !== undefined || options !== undefined
+        ? { limit, status, options }
+        : null,
   },
   {
     desktopChannel: 'local-db:sessions:get',

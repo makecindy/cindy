@@ -4,7 +4,7 @@ import { getDefaultVoiceInputSettings } from '../../desktop/src/shared/voiceInpu
 import { DEFAULT_APPEARANCE_SETTINGS } from '../../desktop/src/shared/appearanceSettings.ts';
 import { createDefaultLayout } from '../../desktop/src/shared/layoutTree.ts';
 
-import { randomBytes } from 'node:crypto';
+import { createHash, randomBytes } from 'node:crypto';
 import { writeFileSync, rmSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 
@@ -46,8 +46,9 @@ import { createEventHub } from './events.mjs';
 import { createInputQueue } from './agent/input-queue.mjs';
 import { createInteractionBroker } from './agent/interactions.mjs';
 import { messageToCamel, sessionToCamel } from '../../desktop/src/main/localDb/mapper.ts';
+import { selectSessionListRows, flattenSessionReadRow, ordinaryTaskListFilter } from '../../desktop/src/main/localDb/sessionQueries.js';
 import { messages as messageTable, projectAliases as projectAliasTable, sessions as sessionTable } from '../../desktop/src/main/localDb/schema.js';
-import { eq } from 'drizzle-orm';
+import { and, eq, isNull, ne } from 'drizzle-orm';
 import { projectHistoryView } from '@cindy/maker-shared/message-window';
 
 const DEFAULT_VOICE_INPUT_SETTINGS = getDefaultVoiceInputSettings();
@@ -434,8 +435,8 @@ async function insertSessionMessage(sessionId: string, input: Record<string, unk
 }
 
 const apiToken = readOrCreateApiToken(resolveHostDataDir());
-// Per-boot cookie for the bundled web client; the bearer remains the CLI path.
-const webSession = randomBytes(24).toString('base64url');
+// Deterministic cookie for the bundled web client bound to profile token; stable across host restarts.
+const webSession = createHash('sha256').update(apiToken + ':web').digest('base64url');
 const webDir = process.env.CINDY_HOST_WEB_DIR?.trim()
   || path.resolve(desktopRoot, '.vite', 'renderer', 'main_window');
 /** The profile the browser client reads: same account, same files, no copy. */
@@ -558,7 +559,25 @@ const server = createHostServer({
     account = { authenticated: false, realm: null };
     return result;
   },
-  listSessions: async () => (sessionStorage ? listActiveSessions(sessionStorage) : []),
+  listSessions: async (body?: Record<string, unknown>) => {
+    if (!sessionStorage) return [];
+    try {
+      const db = getDbClient().drizzle;
+      const statusParam = body?.status;
+      const statusFilter: 'active' | 'archived' | null =
+        statusParam === 'active' || statusParam === 'archived' ? statusParam : null;
+      const sourceFilter = ordinaryTaskListFilter();
+      const statusWhere = () =>
+        statusFilter ? eq(sessionTable.status, statusFilter) : ne(sessionTable.status, 'deleted');
+      const limitParam = typeof body?.limit === 'number' && Number.isFinite(body.limit) && body.limit > 0
+        ? Math.min(body.limit, 1000)
+        : 1000;
+      const rawRows = await selectSessionListRows(db, and(sourceFilter, statusWhere()), limitParam);
+      return rawRows.map((r) => sessionToCamel(flattenSessionReadRow(r)));
+    } catch {
+      return sessionStorage ? listActiveSessions(sessionStorage) : [];
+    }
+  },
   // Project aliases are rows in the same owner database; the sidebar groups by
   // them on both clients, so they come straight from that table.
   listProjectAliases: async () => {
