@@ -127,6 +127,10 @@ final class RemoteDesktopReceiver: NSObject, RTCPeerConnectionDelegate, RTCDataC
     timer?.invalidate()
     let config = RTCConfiguration()
     config.sdpSemantics = .unifiedPlan
+    // Video, audio and input share one transport. The default balanced policy gathers
+    // a full candidate set per media type, which on a phone with several networks
+    // approached the 128-candidate limit that ends the attempt without a retry.
+    config.bundlePolicy = .maxBundle
     config.iceServers = servers.compactMap { server in
       let urls = (server["urls"] as? [String]) ?? (server["urls"] as? String).map { [$0] } ?? []
       guard !urls.isEmpty else { return nil }
