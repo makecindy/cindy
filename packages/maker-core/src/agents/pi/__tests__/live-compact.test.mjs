@@ -343,6 +343,55 @@ describe('live compact card roles and tool excerpts (1.0.3-1.0.5)', () => {
     }
   });
 
+  it('does not count a quarantined file it could not delete as freed space', () => {
+    // 隔离目录里的文件删不掉时,既不能报「已释放」,也不能让它变成卡片找不到的孤儿:
+    // 搬回原位,占用照实算。
+    const dir = mkdtempSync(join(tmpdir(), 'spine-unlink-fail-'));
+    try {
+      writeFileSync(join(dir, 'a.txt'), 'x'.repeat(600));
+      writeFileSync(join(dir, 'b.txt'), 'y'.repeat(400));
+      const older = new Date(2026, 0, 1);
+      utimesSync(join(dir, 'a.txt'), older, older);
+      const newer = new Date(2026, 0, 2);
+      utimesSync(join(dir, 'b.txt'), newer, newer);
+      // 上限 1000、已用 1000、新写 300:只删得掉 a(600) 也装不下 → 结果必须是 ok:false 且文件齐全。
+      const result = rotateShadow({
+        dir,
+        incomingBytes: 300,
+        cap: 1000,
+        unlink: () => {
+          throw Object.assign(new Error('EPERM'), { code: 'EPERM' });
+        },
+      });
+      expect(result.ok).toBe(false);
+      expect(result.deleted).toBe(0);
+      expect(result.freed).toBe(0);
+      expect(result.used).toBe(1000);
+      expect(readdirSync(dir).sort()).toEqual(['a.txt', 'b.txt']);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('sweeps files left behind in an old quarantine directory', () => {
+    // 双重失败(删不掉又搬不回去)的残留仍占磁盘,下一次轮换要补删。
+    const dir = mkdtempSync(join(tmpdir(), 'spine-trash-sweep-'));
+    try {
+      const trash = join(dir, '.rotate-999-1');
+      mkdirSync(trash, { recursive: true });
+      writeFileSync(join(trash, 'stale.txt'), 'z'.repeat(500));
+      const old = new Date(2026, 0, 1);
+      utimesSync(trash, old, old);
+      writeFileSync(join(dir, 'a.txt'), 'x'.repeat(100));
+      const result = rotateShadow({ dir, incomingBytes: 10, cap: 10000 });
+      expect(result.ok).toBe(true);
+      expect(existsSync(trash)).toBe(false);
+      expect(result.used).toBe(100);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   it('removes raw snapshots that no card ended up referencing', () => {
     // 原文写入不走容量轮换:这一刀被拒时若不清,残留会一轮轮堆积。
     const dir = mkdtempSync(join(tmpdir(), 'spine-raw-discard-'));

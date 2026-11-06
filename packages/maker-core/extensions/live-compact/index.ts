@@ -83,6 +83,8 @@
  * 两处数据安全偏离(语义等价,只是失败路径不再丢原文;上游同版本没有):
  *   - 容量轮换先 rename 进 `.rotate-<pid>-<ts>` 隔离目录,确认装得下再真删,装不下原路搬回。
  *     上游边算边删,中途撞上占用会「删了旧备份又放弃这一刀」,已有卡片就指向空文件。
+ *     隔离目录里删不掉的文件搬回原位,占用照实算(不把「移走」当「已释放」);两次都失败的
+ *     残留在下一次轮换补删,补删前仍计入用量。
  *   - 被拒的一刀会撤掉本次刚落盘、无卡片引用的 `raw-*.txt` 与其 meta —— 原文写入不走容量轮换,
  *     不清理会一轮轮堆积突破单会话上限。
  * Logging: stderr lines prefixed "[pi-live-compact]" (grep "spine cut"), plus an
@@ -1316,7 +1318,7 @@ export function rotateShadow(options: {
   if (options.protectPath) protect.add(resolve(options.protectPath));
   for (const path of options.protectPaths ?? []) protect.add(resolve(path));
   const files = listShadowFiles(options.dir);
-  let used = files.reduce((sum, file) => sum + file.size, 0);
+  let used = files.reduce((sum, file) => sum + file.size, 0) + sweepRotationTrash(options.dir);
   if (options.incomingBytes > cap) {
     return { ok: false, deleted: 0, freed: 0, used, cap, oversize: true };
   }
@@ -1381,7 +1383,15 @@ export function rotateShadow(options: {
     try {
       unlink(item.to);
     } catch {
-      // 隔离目录里的文件不再被任何卡片引用;删不掉就留着,下次轮换不扫它。
+      // 删不掉就搬回原位:卡片指向的路径仍然有效,占用也照实算 —— 不能把「移进隔离目录」
+      // 当成「已释放」。搬不回去时文件留在隔离目录里,仍算占用,由下一次轮换补删。
+      try {
+        rename(item.to, item.from);
+      } catch (error) {
+        logLine({ key: "rotate" }, `spine rotation restore failed: ${(error as Error)?.message ?? error}`);
+      }
+      used += item.size;
+      continue;
     }
     // 原文的 .meta.json 要跟着正文一起回收;它不进容量统计(上游同样只算列出的备份文件)。
     if (basename(item.from).startsWith("raw-")) {
@@ -1395,7 +1405,54 @@ export function rotateShadow(options: {
   try {
     rmdirSync(trash);
   } catch {}
-  return { ok: true, deleted, freed, used, cap, oversize: false };
+  return { ok: used + options.incomingBytes <= cap, deleted, freed, used, cap, oversize: false };
+}
+
+/**
+ * 上一轮删不掉、又搬不回去的文件会留在 `.rotate-*` 里;它们不再被任何卡片引用,这里补删。
+ * 返回来没能删掉的字节数 —— 它们照样占磁盘,要算进用量,不能让上限被绕过去。
+ */
+function sweepRotationTrash(dir: string): number {
+  let names: string[] = [];
+  try {
+    names = readdirSync(dir).filter((name) => name.startsWith(".rotate-"));
+  } catch {
+    return 0;
+  }
+  const now = Date.now();
+  let leftover = 0;
+  for (const name of names) {
+    const trash = join(dir, name);
+    let files: string[] = [];
+    try {
+      files = readdirSync(trash);
+    } catch {
+      continue;
+    }
+    // 只补删放了 10 分钟以上的:同一进程正在用的隔离目录不能被自己扫掉。
+    let recent = true;
+    try {
+      recent = now - statSync(trash).mtimeMs < 10 * 60 * 1000;
+    } catch {}
+    for (const file of files) {
+      const full = join(trash, file);
+      if (!recent) {
+        try {
+          unlinkSync(full);
+          continue;
+        } catch {}
+      }
+      try {
+        leftover += statSync(full).size;
+      } catch {}
+    }
+    if (!recent) {
+      try {
+        rmdirSync(trash);
+      } catch {}
+    }
+  }
+  return leftover;
 }
 
 /**
