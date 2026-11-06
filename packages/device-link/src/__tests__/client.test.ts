@@ -10,6 +10,7 @@ import { DeviceLinkClient, computeReconnectDelayMs, type WsLike } from '../clien
 import {
   PROTOCOL_VERSION,
   DeviceLinkError,
+  DEVICE_LINK_CAPABILITY_BACKGROUND_LINK_V1,
   sharedTaskHostPeer,
   SHARED_TASK_RELAY_CAPABILITY,
   type Envelope,
@@ -610,6 +611,136 @@ describe('self-hosted relay device signatures', () => {
       await expect(read).resolves.toEqual({ ok: true, result: [] });
       expect(h.sockets).toHaveLength(1);
     } finally { h.client.stop(); vi.useRealTimers(); }
+  });
+
+  // 声明了 capabilities 却不带 transportStreamId 的 link-open 是自相矛盾的帧:
+  // 能力集本身是后加字段,只有新客户端才传,不存在「新客户端忘了带传输身份」
+  // 的合法情形。旧行为是静默丢弃,控制端只能等满 requestTimeout,无法区分
+  // 「对端拒绝」与「网络不通」。这里验证被控端会主动回 link-close。
+  it('rejects link-open that declares capabilities without transportStreamId', async () => {
+    const h = makeHarness({ timing: { pingIntervalMs: 60_000 } });
+    const accepted: unknown[] = [];
+    h.client.onFrame((env) => {
+      if (env.kind !== 'link-open') return;
+      accepted.push(env.payload);
+    });
+    try {
+      h.client.start(); await tick();
+      const socket = h.current(); socket.ack();
+      socket.push({
+        v: PROTOCOL_VERSION,
+        kind: 'link-open',
+        id: 'malformed-open-1',
+        src: 'dev-b',
+        payload: {
+          controllerName: 'Broken Phone',
+          protocolVersion: 1,
+          appVersion: '1',
+          capabilities: [DEVICE_LINK_CAPABILITY_RELIABLE_TRANSPORT],
+          // 故意不给 transportStreamId
+        },
+      });
+      await tick();
+      // 畸形帧不应交给 host。
+      expect(accepted).toHaveLength(0);
+      // 控制端应收到 link-close(protocol-error),而不是等到超时。
+      const closes = socket.sent.filter((env) => env.kind === 'link-close');
+      expect(closes).toHaveLength(1);
+      expect(closes[0].dst).toBe('dev-b');
+      expect(closes[0].payload).toEqual({ reason: 'protocol-error' });
+    } finally { h.client.stop(); }
+  });
+
+  // 回包覆盖所有未通过校验的 link-open，所以日志必须按实际失败项指认，
+  // 不能一律宣称「缺 transportStreamId」——那会误导跨端实现按错的方向排查。
+  it('names the actually missing field when rejecting a malformed link-open', async () => {
+    const warnings: string[] = [];
+    const h = makeHarness({
+      timing: { pingIntervalMs: 60_000 },
+      logger: {
+        debug: () => undefined,
+        info: () => undefined,
+        warn: (msg: string) => { warnings.push(String(msg)); },
+        error: () => undefined,
+      } as unknown as ConstructorParameters<typeof DeviceLinkClient>[0]['logger'],
+    });
+    try {
+      h.client.start(); await tick();
+      const socket = h.current(); socket.ack();
+      socket.push({
+        v: PROTOCOL_VERSION,
+        kind: 'link-open',
+        id: 'no-app-version-1',
+        src: 'dev-b',
+        payload: {
+          controllerName: 'Phone',
+          protocolVersion: 1,
+          // 缺 appVersion；capabilities 与 streamId 都合法
+          capabilities: [DEVICE_LINK_CAPABILITY_RELIABLE_TRANSPORT],
+          transportStreamId: 'stream-1',
+        },
+      });
+      await tick();
+      const rejection = warnings.find((w) => w.includes('rejected link-open'));
+      expect(rejection).toBeDefined();
+      expect(rejection).toContain('appVersion');
+      expect(rejection).not.toContain('transportStreamId');
+      expect(socket.sent.some((env) => env.kind === 'link-close')).toBe(true);
+    } finally { h.client.stop(); }
+  });
+
+  // 对照组的重点分支:capabilities 非空，但声明的是与传输无关的能力。
+  // reliable-transport-v1 是可选的，一个故意不实现它的控制端带非空能力集
+  // 而不带 streamId 完全合法——判据必须是具体能力，不是数组长度。
+  it('accepts link-open declaring capabilities other than reliable-transport-v1', async () => {
+    const h = makeHarness({ timing: { pingIntervalMs: 60_000 } });
+    const accepted: unknown[] = [];
+    h.client.onFrame((env) => {
+      if (env.kind === 'link-open') accepted.push(env.payload);
+    });
+    try {
+      h.client.start(); await tick();
+      const socket = h.current(); socket.ack();
+      socket.push({
+        v: PROTOCOL_VERSION,
+        kind: 'link-open',
+        id: 'other-caps-open-1',
+        src: 'dev-b',
+        payload: {
+          controllerName: 'Phone',
+          protocolVersion: 1,
+          appVersion: '1',
+          // 声明了无关能力，但没声明可靠传输，因此不给 streamId 是合法的
+          capabilities: [DEVICE_LINK_CAPABILITY_BACKGROUND_LINK_V1],
+        },
+      });
+      await tick();
+      expect(accepted).toHaveLength(1);
+      expect(socket.sent.some((env) => env.kind === 'link-close')).toBe(false);
+    } finally { h.client.stop(); }
+  });
+
+  // 对照组:不带 capabilities 的旧客户端不受这条约束,照旧能建链。
+  it('still accepts a legacy link-open without capabilities or transportStreamId', async () => {
+    const h = makeHarness({ timing: { pingIntervalMs: 60_000 } });
+    const accepted: unknown[] = [];
+    h.client.onFrame((env) => {
+      if (env.kind === 'link-open') accepted.push(env.payload);
+    });
+    try {
+      h.client.start(); await tick();
+      const socket = h.current(); socket.ack();
+      socket.push({
+        v: PROTOCOL_VERSION,
+        kind: 'link-open',
+        id: 'legacy-open-1',
+        src: 'dev-b',
+        payload: { controllerName: 'Old Phone', protocolVersion: 1, appVersion: '1' },
+      });
+      await tick();
+      expect(accepted).toHaveLength(1);
+      expect(socket.sent.some((env) => env.kind === 'link-close')).toBe(false);
+    } finally { h.client.stop(); }
   });
 
   // #7722:冷启动证书迟到不丢首次link-open；认证完成后再发送它。

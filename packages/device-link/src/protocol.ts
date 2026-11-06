@@ -85,6 +85,7 @@ export type DeviceLinkErrorCode = RelayErrorCode
   | 'INVOKE_TIMEOUT' // 控制端等待 invoke-result 超时
   | 'PEER_RESET' // peer 传输复位；仅用于可安全重试的幂等读请求
   | 'LINK_NOT_OPEN' // 控制链路未建立
+  | 'PROTOCOL_ERROR' // 对端 link-open 不满足当前协议契约(如声明了 capabilities 却缺 transportStreamId)
   | 'NOT_CONNECTED' // 本端尚未连上 relay
   | 'BACKPRESSURE' // 本端可靠传输缓冲已满，拒绝继续制造积压
   | 'MEDIA_FETCH_FAILED' // 入方向媒体取件失败(被控端解析本机媒体 / 上传 OSS 中转出错)
@@ -131,7 +132,20 @@ export interface LinkOpenPayload {
    * 被控端只有在能力明确声明时才发送对应的新 wire 字段。
    */
   capabilities?: string[];
-  /** reliable-transport-v1 下，本端发往对端的 stream generation。 */
+  /**
+   * reliable-transport-v1 下，本端发往对端的 stream generation。
+   *
+   * **声明了 `reliable-transport-v1` 就必须提供本字段**。被控端据此判断能否
+   * 进入可靠传输档位；声明了该能力却不给 streamId 是自相矛盾的帧。
+   *
+   * 注意判据是**这一个能力**，不是 `capabilities` 非空：能力集是 append-only 的，
+   * 里面还有其他与传输无关的能力（如 `background-link-v1`），一个故意不实现
+   * 可靠传输的控制端可以带非空 capabilities 而不带本字段，那是合法的。
+   *
+   * 违反时被控端会回 `link-close('protocol-error')` 而不是静默丢弃——后者会让
+   * 控制端只能等满 requestTimeout，无法区分“对端拒绝”与“网络不通”。
+   * 未声明该能力的客户端不受此约束，它走 legacy 链路。
+   */
   transportStreamId?: string;
   /** 本端当前仍可能发送的最小 seq；对端重启丢失 ACK 内存时从这里恢复。 */
   transportBaseSeq?: number;
@@ -195,8 +209,19 @@ export interface LinkAcceptPayload {
  *   的旧控制端走整连接重连的兼容恢复路径。理解该 reason 的接收端按瞬时
  *   重置处理:保留可靠层 stream/pending/在途请求,立即重新 link-open(或触发
  *   rehydrate);重建后按 reconnect-continuity 语义同 seq 续传。
+ * - **协议不满足**(`protocol-error`):被控端收到了一条自相矛盾或缺少必需
+ *   字段的 link-open,判定该控制端实现有误,主动回本 reason 而不是静默丢弃。
+ *   对存量客户端它是未知值,按上面的约定 fail-generic 到永久关闭档——语义
+ *   正确:这条链路确实建不起来,不该自动重建。新增本值的目的只是把控制端
+ *   原本只能等满 requestTimeout 的黑洞,变成一个立即可见的失败。
  */
-export type LinkCloseReason = 'user' | 'toggle-off' | 'shutdown' | 'revoked' | 'transport-timeout';
+export type LinkCloseReason =
+  | 'user'
+  | 'toggle-off'
+  | 'shutdown'
+  | 'revoked'
+  | 'transport-timeout'
+  | 'protocol-error';
 
 export interface LinkClosePayload {
   reason: LinkCloseReason;

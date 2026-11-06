@@ -2831,6 +2831,30 @@ export class DeviceLinkClient {
     // 其它已知 kind 的非法 payload 直接丢弃。
     if (!validForHeartbeat && env.kind !== 'invoke' && env.kind !== 'link-close') {
       this.log.warn(`dropping invalid device-link frame kind=${env.kind}`);
+      // 被控端收到自相矛盾的 link-open 时，控制端正卡在等 link-accept。
+      // 这里不发回包的话，控制端只能等满 requestTimeout，且无法区分
+      // 「对端拒绝」与「网络不通」——而目标设备就在线、链路也是通的。
+      //
+      // 用 link-close 而不是 relay-error：后者是 server→发送方 的帧，
+      // 不在 ROUTED_KINDS 里，设备之间发不出去。link-close 是路由帧，
+      // 且控制端按 dst 拒绝 pending（见 rejectPendingLinkOpen），不需要 id。
+      if (env.kind === 'link-open' && env.src) {
+        const problem = describeInvalidLinkOpen(env.payload);
+        try {
+          this.sendEnvelope({
+            v: PROTOCOL_VERSION,
+            kind: 'link-close',
+            dst: env.src,
+            payload: { reason: 'protocol-error' },
+          });
+        } catch (err) {
+          // 回执是尽力而为:本端 socket 不在或背压满时不能因为「报错失败」
+          // 把整个分发路径抛断。控制端在那个情形下仍会走到自己的超时，
+          // 与改动前行为一致，不会倒退。
+          this.log.debug('link-close for a rejected link-open failed', err);
+        }
+        this.log.warn(`rejected link-open from ${env.src.slice(0, 8)}: ${problem}`);
+      }
       return;
     }
     if (validForHeartbeat) {
@@ -3282,10 +3306,20 @@ export class DeviceLinkClient {
           this.pendingInboundLinkOffers.delete(env.src);
           this.rejectPendingLinkOpen(
             env.src,
-            close?.reason === 'revoked' ? 'ACCESS_REVOKED' : 'LINK_NOT_OPEN',
+            close?.reason === 'revoked'
+              ? 'ACCESS_REVOKED'
+              : close?.reason === 'protocol-error'
+                ? 'PROTOCOL_ERROR'
+                : 'LINK_NOT_OPEN',
             close?.reason === 'revoked'
               ? 'access revoked by target device'
-              : 'control link closed by peer',
+              : close?.reason === 'protocol-error'
+                // 被控端判定我们的 link-open 不满足协议契约。wire 上只有这个
+                // 笼统的 reason，不带具体缺哪个字段，所以这里不指名——错指
+                // 字段比不指更坑，真实原因看被控端日志。
+                ? 'target rejected link-open: protocol-error '
+                  + '(see target device logs for the offending field)'
+                : 'control link closed by peer',
           );
           const peer = this.getPeerTransport(env.src);
           this.markPeerLinkDown(peer);
@@ -6073,7 +6107,7 @@ export class DeviceLinkClient {
 
   private rejectPendingLinkOpen(
     dst: string,
-    code: 'LINK_NOT_OPEN' | 'ACCESS_REVOKED',
+    code: 'LINK_NOT_OPEN' | 'ACCESS_REVOKED' | 'PROTOCOL_ERROR',
     message: string,
   ): void {
     for (const [id, pending] of this.pending) {
@@ -6236,6 +6270,36 @@ function isKnownInboundEnvelope(value: unknown): value is Envelope {
 }
 
 /**
+ * 把一条未通过校验的 link-open 翻译成可操作的失败原因。
+ *
+ * 被控端回给控制端的只有 `link-close('protocol-error')`，不带细节（payload
+ * 是封闭 shape，加字段要同步改两端类型）。所以本函数至少要让**被控端日志**
+ * 说清楚到底缺了什么，否则运维只能对着「某个字段不对」徒猜。
+ *
+ * 只覆盖 link-open 的已知必填项；未识别的形状回一个不指名的通用描述——
+ * 错指字段比不指更坑。
+ */
+function describeInvalidLinkOpen(payload: unknown): string {
+  if (!isRecord(payload)) return 'protocol-error (payload is not an object)';
+  const missing: string[] = [];
+  if (typeof payload.controllerName !== 'string') missing.push('controllerName');
+  if (typeof payload.protocolVersion !== 'number' || !Number.isFinite(payload.protocolVersion)) {
+    missing.push('protocolVersion');
+  }
+  if (typeof payload.appVersion !== 'string') missing.push('appVersion');
+  if (
+    Array.isArray(payload.capabilities)
+    && payload.capabilities.includes(DEVICE_LINK_CAPABILITY_RELIABLE_TRANSPORT)
+    && typeof payload.transportStreamId !== 'string'
+  ) {
+    missing.push('transportStreamId (required when reliable-transport-v1 is declared)');
+  }
+  return missing.length > 0
+    ? `protocol-error (missing or invalid: ${missing.join(', ')})`
+    : 'protocol-error (frame does not match the current link-open contract)';
+}
+
+/**
  * 入站帧的轻量 heartbeat 活性校验。它不复制完整隧道协议 validator，只拦截会让
  * heartbeat 误判为“仍有流量”的明显坏帧；业务分发仍由各自 handler 负责。
  */
@@ -6323,7 +6387,17 @@ function isValidInboundEnvelope(value: Envelope): boolean {
         && typeof payload.controllerName === 'string'
         && typeof payload.protocolVersion === 'number'
         && Number.isFinite(payload.protocolVersion)
-        && typeof payload.appVersion === 'string';
+        && typeof payload.appVersion === 'string'
+        // 声明了 reliable-transport-v1 却没给传输身份 = 自相矛盾的帧。
+        // 不能只看 capabilities 非空：那是 append-only 能力集，里面还有其他
+        // 无关能力（如 background-link-v1）。一个故意不实现可选可靠传输的
+        // 控制端完全可以带非空 capabilities 而不带 streamId，那是合法的。
+        // 见 packages/device-link/README.md 的「弱网可靠传输（可选）」。
+        && !(
+          Array.isArray(payload.capabilities)
+          && payload.capabilities.includes(DEVICE_LINK_CAPABILITY_RELIABLE_TRANSPORT)
+          && typeof payload.transportStreamId !== 'string'
+        );
     case 'link-accept':
       return isRecord(payload)
         && typeof payload.appVersion === 'string'

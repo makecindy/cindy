@@ -5133,3 +5133,40 @@ Agent 的 GitHub 工具和脚本入口仍不支持 GitLab，不复用其 GitHub 
 帧格式、认证、版本或部署程序。验证入口为 `pnpm --filter @cindy/device-link test`、
 `pnpm --filter @cindy/device-link-relay test` 与
 `pnpm --filter @cindy/device-link-relay run interop`；结果以本次交付的执行日志为准。
+
+## link-open 缺传输身份的即时拒绝（`protocol-error`，未发布）
+
+被控端拒绝一条 `link-open` 时，新增 wire 值 `LinkCloseReason = 'protocol-error'`，控制端据此把该
+reason 映射为跨包错误码 `DeviceLinkErrorCode = 'PROTOCOL_ERROR'`，并立即拒绝 pending 的 link-open。
+
+**验收收紧的判据只认 `reliable-transport-v1`。** `LinkOpenPayload.capabilities` 是 append-only 的通用
+能力数组（含 `background-link-v1`、`session-text-snapshot-v1`、`maker-event-batch-v1` 等与传输无关的
+独立特性），`transportStreamId` 只属于 `reliable-transport-v1` 的 stream generation。因此「声明了
+`capabilities` 却缺 `transportStreamId`」只有在 `capabilities` 包含
+`DEVICE_LINK_CAPABILITY_RELIABLE_TRANSPORT` 时才算自相矛盾；仅声明其它能力的控制端按类型契约本就
+不必传该字段，其 `link-open` 照常建链。不声明任何能力集的旧控制端行为逐字不变。
+
+**兼容边界。** 回包用 `link-close` 而不是 `relay-error`：后者是 server→发送方 的帧，不在
+`ROUTED_KINDS` 内，设备之间发不出去；`link-close` 是路由帧，且控制端按 `dst` 拒绝 pending
+（`rejectPendingLinkOpen` 只用 `pending.dst` 匹配），不需要请求 id。存量客户端把未知 `LinkCloseReason`
+一律 fail-generic 到永久关闭档（拆可靠层、拒在途请求、不自动重建）——这里语义正确：该链路确实建不起来，
+不应自动重连，因此旧端不会在错误配置下陷入重连循环。被控端回执是尽力而为：socket 不在或背压队列满时
+只记日志、不抛出打断分发，控制端在该情形下仍走自身超时，与改动前一致。
+
+**未改动的部分。** 握手 `hello` / `hello-ack`、`RELAY_ERROR` 错误码表、channel 白名单、`PROTOCOL_VERSION`
+与 `MAX_FRAME_BYTES` 均不变；reliable-transport wrapper 的帧格式与 seq/ACK 语义不变；relay 对
+`link-open` / `link-close` 只做 `dst` 路由与 `remoteControlEnabled` 校验，不解析 payload 新语义，故不改
+relay 内核、认证、版本或部署程序，自建中转无需同步适配。无数据库迁移、无权限扩大、无服务端改动。
+
+**桌面侧透传。** `PROTOCOL_ERROR` 在 `apps/desktop/src/main/device-link/ipc.ts` 的 `DEVICE_LINK_CODE_MAP`
+映射到既有 `DEVICE_LINK_VERSION_MISMATCH`（不复用则为 `INTERNAL`，renderer 只剩通用内部错误）。
+未新增 `IpcErrorCode`，因此 renderer 文案表与既有消费者不变。Mobile 侧把该码与 `LINK_NOT_OPEN`
+归为一档：`sessionOutbox` 视其为「未发出、可安全重入队」，`sessionReferences` 视其为源设备不可用。
+
+**被控端日志按实际缺项指认。** `describeInvalidLinkOpen()` 列出真正缺失或非法的字段，不再固定宣称
+缺少 `transportStreamId`——后者会误导漏掉其它必填项（如 `appVersion`）的跨端实现按错方向排查。
+控制端侧不指名具体字段（wire 只有笼统 reason），错误文案改为指向被控端日志。
+
+回归入口：`pnpm --filter @cindy/device-link test`。本次新增用例覆盖三种形状——声明
+`reliable-transport-v1` 却缺 `transportStreamId`（拒绝并回 `link-close`）、仅声明 `background-link-v1`
+（照常建链）、缺 `appVersion` 而传输字段齐全（拒绝且日志指认 `appVersion`）。

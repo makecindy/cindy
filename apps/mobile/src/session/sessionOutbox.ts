@@ -111,6 +111,8 @@ export function isSafelyUnsentOutboxEnqueueError(error: unknown): boolean {
     code === 'NOT_CONNECTED'
     || code === 'BACKPRESSURE'
     || code === 'LINK_NOT_OPEN'
+    // 对端拒绝了 link-open：链路从未建立，请求不可能已被执行。
+    || code === 'PROTOCOL_ERROR'
     || code === 'DEVICE_OFFLINE'
     || code === 'DEVICE_UNRESPONSIVE'
   ) return true;

@@ -626,6 +626,8 @@ function sourceFailure(ref: MobileSessionReference, error: unknown): MobileSessi
   if (
     code === 'DEVICE_OFFLINE' ||
     code === 'LINK_NOT_OPEN' ||
+    // 对端拒绝建链：控制链无法建立，与链路未建立归为同一档。
+    code === 'PROTOCOL_ERROR' ||
     code === 'INVOKE_TIMEOUT' ||
     code === 'NOT_CONNECTED' ||
     code === 'BACKPRESSURE'
