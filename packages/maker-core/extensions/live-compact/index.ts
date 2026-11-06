@@ -1177,7 +1177,10 @@ const REDACT_RULES: Array<[RegExp, string]> = [
   // 大写下划线键名(env/配置的通用写法)只要以 KEY/TOKEN/SECRET/... 结尾就命中;
   // MONKEY/TURKEY/HOCKEY/WHISKEY/JOKEY 这类以 KEY 结尾的普通词用小 stoplist 挡掉。
   // 「MAX_TOKENS」「MODEL_TOKEN_LIMIT」这类不以后缀结尾的不受影响(后缀后必须紧跟引号?/=/:)。
-  [/([_A-Z0-9]*(?:KEY|TOKEN|SECRET|PASSWD|PASSWORD|CREDENTIALS?|AUTH)(?<!MONKEY)(?<!TURKEY)(?<!HOCKEY)(?<!WHISKEY)(?<!JOKEY)["'`]?\s*[=:]\s*)(["'`]?)(?!\[REDACTED)([^\s"'`]{8,})/g, "$1$2[REDACTED]"],
+  // 开头的 (?<![A-Z0-9_]) 是性能红线:没有它,连续大写/数字段会从每个位置重扫,
+  // 128K 字符要 25 秒(实测);有它只从标识符起点尝试,同样输入 <1ms。redactSecrets
+  // 跑在同步的 agent_before_settle 钩子里,卡住就是卡住整个 settle。
+  [/((?<![A-Z0-9_])[_A-Z0-9]*(?:KEY|TOKEN|SECRET|PASSWD|PASSWORD|CREDENTIALS?|AUTH)(?<!MONKEY)(?<!TURKEY)(?<!HOCKEY)(?<!WHISKEY)(?<!JOKEY)["'`]?\s*[=:]\s*)(["'`]?)(?!\[REDACTED)([^\s"'`]{8,})/g, "$1$2[REDACTED]"],
   // 小写/驼峰/连字符键名没有统一后缀(apiKey、refresh-token),保留显式小列表。
   // 值里允许 `[`(密码可能含方括号),只豁免「已经是替换标记」的情况,否则会把标记再啃一口。
   [/((?:api[_-]?key|access[_-]?key|access[_-]?token|auth[_-]?token|session[_-]?token|refresh[_-]?token|id[_-]?token|client[_-]?secret|secret[_-]?key|private[_-]?key|password|passwd|secret)["'`]?\s*[=:]\s*)(["'`]?)(?!\[REDACTED)([^\s"'`]{8,})/gi, "$1$2[REDACTED]"],
@@ -1192,7 +1195,9 @@ const REDACT_RULES: Array<[RegExp, string]> = [
   [/(?<![A-Za-z0-9])(?:AKIA|ASIA)[A-Z0-9]{16}/g, "[REDACTED]"],
   [/(?<![A-Za-z0-9])AIza[0-9A-Za-z_-]{35}/g, "[REDACTED]"],
   // 连接串里内嵌的密码:postgres://user:pass@host → 只打码密码段。
-  [/([a-z][a-z0-9+.-]*:\/\/[^:/\s@]+:)([^@\s/]{4,})(@)/gi, "$1[REDACTED]$3"],
+  // 起始边界同样是性能红线:没有它,/i 下连续 [a-z0-9+.-] 类字符段(含大写)会从每个
+  // 起点贪吃再逐位回溯,128K 要 17 秒(实测);有它每个 scheme 起点只试一次。
+  [/((?<![A-Za-z0-9+.-])[a-z][a-z0-9+.-]*:\/\/[^:/\s@]+:)([^@\s/]{4,})(@)/gi, "$1[REDACTED]$3"],
 ];
 export function redactSecrets(text: string): string {
   let out = text;

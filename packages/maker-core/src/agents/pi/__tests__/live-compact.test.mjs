@@ -191,6 +191,15 @@ describe('live compact spine selection', () => {
     expect(redactSecrets(once)).toBe(once);
   });
 
+  it('stays linear on long uppercase runs without a sensitive suffix', () => {
+    // 起始边界被删掉的话,128K 连续大写会让这条规则跑 25 秒(实测),而它在同步的
+    // settle 钩子里。阈值给到 2 秒:线性实现 <5ms,只有退化成 O(n²) 才会超。
+    const wall = 'A'.repeat(128000) + ' padding text without any separator';
+    const start = Date.now();
+    redactSecrets(wall);
+    expect(Date.now() - start).toBeLessThan(2000);
+  });
+
   it('masks cloud keys, connection-string passwords and PEM blocks', () => {
     // 工具结果里最常见的是「跑一条命令把凭证打出来」,这几种形态必须一起打码。
     // 私钥块同样按扫描规则拼接:源码里不出现连续的 "-----BEGIN … PRIVATE KEY-----" 形态。
