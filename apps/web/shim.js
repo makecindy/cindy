@@ -489,12 +489,13 @@
     return Promise.reject(error);
   }
 
+  const appVersion = window.__cindyBoot?.appVersion ?? '0.1.124';
   const SYNC_VALUES = {
     platform: 'linux',
     windowBackdropMaterial: 'none',
-    appVersion: '0.0.0-host',
-    isPackaged: false,
-    locale: 'en',
+    appVersion,
+    isPackaged: true,
+    locale: 'zh-CN',
   };
 
   /**
@@ -624,9 +625,9 @@
   /** Non-function members the preload exposes as plain values. */
   const VALUE_CHANNELS = Object.freeze({
     'clientEndpoints.websiteUrl': 'https://cindy.app',
-    'appDisplayVersion': '0.0.0-host',
-    'appDisplayVersionDetail': 'cindy-host',
-    'preferredSystemLocale': 'en',
+    'appDisplayVersion': appVersion,
+    'appDisplayVersionDetail': `cindy-host (${appVersion})`,
+    'preferredSystemLocale': 'zh-CN',
   });
 
   /**

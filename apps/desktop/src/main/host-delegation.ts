@@ -260,7 +260,6 @@ export function installUnsupportedMakerFallbacks(deps: UnsupportedMakerFallbackD
   if (target._invokeHandlers instanceof Map) {
     const handlers = target._invokeHandlers;
     const origGet = handlers.get.bind(handlers);
-    const origHas = handlers.has.bind(handlers);
     handlers.get = (channel: string) => {
       const existing = origGet(channel);
       if (existing) return existing;
@@ -269,9 +268,6 @@ export function installUnsupportedMakerFallbacks(deps: UnsupportedMakerFallbackD
         return createFallback(channel);
       }
       return undefined;
-    };
-    handlers.has = (channel: string) => {
-      return origHas(channel) || (typeof channel === 'string' && channel.startsWith('maker:'));
     };
   }
 

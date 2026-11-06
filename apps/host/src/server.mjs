@@ -47,7 +47,7 @@ const MIME = {
 };
 
 /** Serve the prebuilt renderer and inject the host shim before the app entry. */
-function serveWebApp(response, deps, urlPath) {
+function serveWebApp(request, response, deps, urlPath) {
   const root = deps.webDir;
   const relative = urlPath === '/' ? '/index.html' : urlPath;
   const file = path.join(root, path.normalize(relative).replace(/^(\.\.[/\\])+/, ''));
@@ -69,6 +69,10 @@ function serveWebApp(response, deps, urlPath) {
     'content-type': MIME[path.extname(file)] ?? 'application/octet-stream',
     'cache-control': 'no-store',
   });
+  if (request?.method === 'HEAD') {
+    response.end();
+    return;
+  }
   response.end(body);
 }
 
@@ -80,7 +84,7 @@ export function createHostServer(deps) {
       // Resolve the bundle per request: a desktop build can remove and rebuild it
       // while the host keeps running, and a restart should not be required.
       const webRoot = typeof deps.webDir === 'function' ? deps.webDir() : deps.webDir;
-      if (webRoot && request.method === 'GET'
+      if (webRoot && (request.method === 'GET' || request.method === 'HEAD')
         && (url.pathname === '/' || url.pathname === '/shim.js' || url.pathname.startsWith('/assets/'))) {
         if (url.pathname === '/shim.js') {
           if (!deps.shimPath || !fs.existsSync(deps.shimPath)) {
@@ -91,7 +95,7 @@ export function createHostServer(deps) {
           response.end(fs.readFileSync(deps.shimPath));
           return;
         }
-        serveWebApp(response, { ...deps, webDir: webRoot }, url.pathname);
+        serveWebApp(request, response, { ...deps, webDir: webRoot }, url.pathname);
         return;
       }
 
