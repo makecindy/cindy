@@ -8,7 +8,7 @@ import { notifyAppSettingsChanged } from './changes.js';
 import { runtimeSettingsSections } from './runtime.js';
 import { appPreferenceSchema } from '../../shared/appPreferenceControl.js';
 import { z } from 'zod';
-import { APPEARANCE_LIMITS, WALLPAPER_IDS } from '../../shared/appearanceSettings.js';
+import { APP_ICONS, APPEARANCE_LIMITS, WALLPAPER_IDS } from '../../shared/appearanceSettings.js';
 import { createAppSettingsService, type AppSettingsSection } from './service.js';
 
 const numberIn = (range: { min: number; max: number }) => z.number().min(range.min).max(range.max);
@@ -22,7 +22,7 @@ export const appSettingsSections: AppSettingsSection[] = [{
   update: async patch => manageAppPreferences('update', patch),
 }, {
   id: 'appearance', title: '外观、字体与壁纸',
-  description: '界面、代码、终端字体和字号，窗口缩放，壁纸及动态效果。', effective: 'immediate',
+  description: '界面、代码、终端字体和字号，窗口缩放，壁纸及动态效果，macOS Dock 图标。', effective: 'immediate',
   schema: z.strictObject({
     uiFamily: z.string().max(256).optional(), codeFamily: z.string().max(256).optional(),
     terminalFamily: z.string().max(256).optional(), uiSize: numberIn(APPEARANCE_LIMITS.uiSize).optional(),
@@ -32,6 +32,7 @@ export const appSettingsSections: AppSettingsSection[] = [{
     wallpaperVisibility: numberIn(APPEARANCE_LIMITS.wallpaperVisibility).nullable().optional(),
     wallpaperBlur: numberIn(APPEARANCE_LIMITS.wallpaperBlur).nullable().optional(),
     wallpaperMotion: z.enum(['static', 'dynamic']).optional(),
+    appIcon: z.enum(APP_ICONS).optional(),
   }),
   read: async () => {
     const state = readAppearanceSettingsState();

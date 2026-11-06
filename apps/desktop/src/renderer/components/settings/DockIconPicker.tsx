@@ -1,0 +1,94 @@
+import { useEffect, useState } from 'react';
+import { useTranslation } from 'react-i18next';
+
+import defaultIconUrl from '@/../../resources/icon-dock.png?url';
+import catUrl from '@/../../resources/app-icons/cat.png?url';
+import markDarkUrl from '@/../../resources/app-icons/mark-dark.png?url';
+import markLightUrl from '@/../../resources/app-icons/mark-light.png?url';
+import wordmarkDarkUrl from '@/../../resources/app-icons/wordmark-dark.png?url';
+import wordmarkLightUrl from '@/../../resources/app-icons/wordmark-light.png?url';
+import { useIsDarkMode } from '@/components/markdown/useIsDarkMode';
+import { getInitialAppearanceSettings } from '@/hooks/useFontSettings';
+import { cn } from '@/lib/utils';
+import { toast } from '@/lib/toast';
+import { APP_ICONS, normalizeAppearanceSettings, type AppIcon } from '../../../shared/appearanceSettings';
+
+/** Same Dock-ready files main passes to app.dock.setIcon (Apple icon grid baked in). */
+const PREVIEWS: Record<AppIcon, { light: string; dark: string }> = {
+  default: { light: defaultIconUrl, dark: defaultIconUrl },
+  mark: { light: markLightUrl, dark: markDarkUrl },
+  wordmark: { light: wordmarkLightUrl, dark: wordmarkDarkUrl },
+  cat: { light: catUrl, dark: catUrl },
+};
+
+/**
+ * macOS Dock icon choice. The 44px tile and its 1.5px inset ring use the 12px
+ * container radius; the artwork's grid margin (≈4px) and corner (≈8px) sit
+ * concentric inside it.
+ */
+export function DockIconPicker() {
+  const { t } = useTranslation();
+  const isDark = useIsDarkMode();
+  const [selected, setSelected] = useState<AppIcon>(() => getInitialAppearanceSettings().appIcon);
+
+  useEffect(
+    () =>
+      window.electronAPI?.appearanceSettings?.onChanged?.((next) => {
+        setSelected(normalizeAppearanceSettings(next).appIcon);
+      }),
+    [],
+  );
+
+  const select = (next: AppIcon) => {
+    if (next === selected) return;
+    const previous = selected;
+    setSelected(next);
+    window.electronAPI?.appearanceSettings?.setPatch({ appIcon: next }).catch(() => {
+      setSelected(previous);
+      toast.error(t('settings.appearance.appIcon.saveFailed'));
+    });
+  };
+
+  const handleKeyDown = (event: React.KeyboardEvent<HTMLButtonElement>) => {
+    const step = { ArrowRight: 1, ArrowDown: 1, ArrowLeft: -1, ArrowUp: -1 }[event.key];
+    if (!step) return;
+    event.preventDefault();
+    const index = (APP_ICONS.indexOf(selected) + step + APP_ICONS.length) % APP_ICONS.length;
+    select(APP_ICONS[index]);
+    (event.currentTarget.parentElement?.children[index] as HTMLElement | undefined)?.focus();
+  };
+
+  return (
+    <div className="flex gap-2" role="radiogroup" aria-label={t('settings.appearance.appIcon.label')}>
+      {APP_ICONS.map((icon) => {
+        const isSelected = icon === selected;
+        return (
+          <button
+            key={icon}
+            type="button"
+            role="radio"
+            aria-checked={isSelected}
+            aria-label={t(`settings.appearance.appIcon.options.${icon}`)}
+            tabIndex={isSelected ? 0 : -1}
+            onClick={() => select(icon)}
+            onKeyDown={handleKeyDown}
+            className={cn(
+              'size-11 shrink-0 rounded-xl transition-[background-color,box-shadow]',
+              'focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--focus-ring)]',
+              isSelected
+                ? 'shadow-[inset_0_0_0_1.5px_var(--text-secondary)]'
+                : 'hover:bg-[var(--settings-menu-bg-hover)]',
+            )}
+          >
+            <img
+              src={isDark ? PREVIEWS[icon].dark : PREVIEWS[icon].light}
+              alt=""
+              draggable={false}
+              className="size-full"
+            />
+          </button>
+        );
+      })}
+    </div>
+  );
+}

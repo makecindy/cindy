@@ -95,6 +95,7 @@ describe('wallpaper catalog compatibility', () => {
         terminalFamily: '',
         terminalSize: 13,
         wallpaperId: 'none',
+        appIcon: 'default',
         customWallpaperUrl: '',
         wallpaperMotion: 'dynamic',
         wallpaperOverlay: 0.35,
