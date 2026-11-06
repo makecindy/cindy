@@ -39,12 +39,12 @@ import {
 import { useAgentIslandActivityMap } from '@/state/agentIslandActivity';
 import { useRemoteBots } from './useRemoteBots';
 import { useCompanionCloud } from './companionCloudStore';
-import { cloudRemoteBots, isCloudCompanionRemote, withoutCloudCompanions, withoutShadowedBots } from './companionCloudPresentation';
+import { cloudRemoteBots, recoveryCompanionRows, isLocalRecoveryRow, isCloudCompanionRemote, withoutCloudCompanions, withoutShadowedBots } from './companionCloudPresentation';
 import { useDeviceLinkDeviceList } from '@/features/device-link/useDeviceLinkDeviceList';
 import { remoteBotKey, isRemoteBotUnread } from './remoteBotRoster';
 import { BotConnectionStatus } from './BotConnectionStatus';
 import { CindyDeviceRow } from './CindyDeviceRow';
-import { cindyDeviceKey, cindyDeviceOptions, isCindyDeviceBot } from './cindyDeviceRoster';
+import { cindyDeviceKey, cindyDeviceOptions } from './cindyDeviceRoster';
 import { BotAvatar } from './BotAvatar';
 import { BotCreateMenu } from './BotCreateMenu';
 import { BotDeleteDialog } from './BotDeleteDialog';
@@ -145,7 +145,10 @@ export function TeammatesSection() {
   const cloud = useCompanionCloud();
   const rosterRemoteBots = useRemoteBots();
   // One row per companion, on its main computer (offline rows for computers never listed here).
-  const remoteBots = useMemo(() => cloudRemoteBots(cloud, rosterRemoteBots), [rosterRemoteBots, cloud]);
+  const remoteBots = useMemo(() => {
+    const rows = cloudRemoteBots(cloud, rosterRemoteBots).filter(bot => !cloud.enabled || bot.deviceId !== cloud.selfDeviceId || !cloud.demotedBotIds.includes(bot.id));
+    return [...rows, ...recoveryCompanionRows(cloud, rows)];
+  }, [rosterRemoteBots, cloud]);
   const devices = useDeviceLinkDeviceList();
   const self = devices?.find((device) => device.isSelf);
   const rosterDevices = [
@@ -240,7 +243,7 @@ export function TeammatesSection() {
   const cindyOptions = cindyDeviceOptions(withoutCloudCompanions(bots, cloud), withoutCloudCompanions(remoteBots, cloud),
     devices ?? [], unreadByBotId, t('bots.devicePicker.local'));
   const statusForBot = (bot: BotProfile | (typeof remoteBots)[number]) => 'deviceId' in bot
-    ? remoteTeammateStatus(bot, isRemoteBotUnread(bot), isCloudCompanionRemote(cloud, bot))
+    ? isLocalRecoveryRow(cloud, bot) ? 'idle' : remoteTeammateStatus(bot, isRemoteBotUnread(bot), isCloudCompanionRemote(cloud, bot))
     : localTeammateStatus(bot, islandActivity, (unreadByBotId[bot.id] ?? 0) > 0);
   const cindyStatus = aggregateTeammateStatus(cindyOptions.map(option => statusForBot(option.bot)));
   const hasMultipleCindys = cindyOptions.length > 1;
@@ -250,7 +253,7 @@ export function TeammatesSection() {
   const showCindy = hasMultipleCindys && Boolean(currentCindy);
   const visibleBots = [
     ...roster.visible.filter(bot => !hasMultipleCindys || !cindyOptions.some(option => option.bot === bot)),
-    ...remoteBots.filter(bot => !hasMultipleCindys || !isCindyDeviceBot(bot)),
+    ...remoteBots.filter(bot => !hasMultipleCindys || !cindyOptions.some(option => option.bot === bot)),
   ];
   // 已归档的群不在段内列出,经侧栏总搜索找回(TeammateSearchResults)。
   const visibleGroups = groups.filter(group => !group.archived);
@@ -667,6 +670,7 @@ export function TeammatesSection() {
                 const selected = bot.id === botId && bot.deviceId === deviceId;
                 const deviceName = botDeviceLabel({ deviceId: bot.deviceId, name: bot.deviceName }, rosterDevices);
                 const status = statusForBot(bot);
+                const recovering = isLocalRecoveryRow(cloud, bot);
                 const showRunning = status !== 'awaiting' && bot.online
                   && Boolean(bot.generation || bot.teammateActivity?.phase === 'running');
                 return (
@@ -677,10 +681,10 @@ export function TeammatesSection() {
                     <span className="flex min-w-0 flex-1 flex-col gap-0.5">
                       <span className="flex min-w-0 items-baseline gap-2">
                         <span className="min-w-0 truncate text-14 leading-5">{bot.name}</span>
-                        <BotConnectionStatus inline online={bot.online} connectionKnown={bot.connectionKnown} deviceName={deviceName} quiet={isCloudCompanionRemote(cloud, bot)} className={selected ? 'opacity-70' : 'text-[var(--sidebar-list-muted)]'} />
+                        {!recovering && <BotConnectionStatus inline online={bot.online} connectionKnown={bot.connectionKnown} deviceName={deviceName} quiet={isCloudCompanionRemote(cloud, bot)} className={selected ? 'opacity-70' : 'text-[var(--sidebar-list-muted)]'} />}
                       </span>
                       <span className="flex min-w-0 items-center">
-                        <span className={cn('min-w-0 truncate text-12 leading-4', !showRunning && (selected ? 'opacity-70' : 'text-[var(--sidebar-list-muted)]'))}>{status === 'awaiting' ? t('bots.avatarStatus.awaiting') : showRunning ? <TeammateRunningPreview><BotGenerationLabel sessionId={bot.sessionId ?? undefined} {...(bot.generation ?? { phase: 'processing', startedAt: null })} remote={{ deviceId: bot.deviceId, botId: bot.id }} /></TeammateRunningPreview> : bot.preview || bot.description || t('bots.list.startChat')}</span>
+                        <span className={cn('min-w-0 truncate text-12 leading-4', !showRunning && (selected ? 'opacity-70' : 'text-[var(--sidebar-list-muted)]'))}>{recovering ? t('bots.cloud.recoveryNotReady') : status === 'awaiting' ? t('bots.avatarStatus.awaiting') : showRunning ? <TeammateRunningPreview><BotGenerationLabel sessionId={bot.sessionId ?? undefined} {...(bot.generation ?? { phase: 'processing', startedAt: null })} remote={{ deviceId: bot.deviceId, botId: bot.id }} /></TeammateRunningPreview> : bot.preview || bot.description || t('bots.list.startChat')}</span>
                         <TeammateRowStatus status={status} />
                       </span>
                     </span>

@@ -519,6 +519,9 @@ let hydrationGeneration = 0;
 const hydrationPromises = new Set<Promise<void>>();
 /** 每个伙伴各自的写入代际 —— 见 updateBotProfile 里的 isLatestWrite。 */
 const profileWriteGenerations = new Map<string, number>();
+const pendingProfileWrites = new Map<string, number>();
+const deletionGenerations = new Map<string, number>();
+const deletingProfiles = new Map<string, number>();
 
 /** Clear account-scoped projections before a new owner can read or mutate them. */
 function ensureProfileOwner(): void {
@@ -531,6 +534,9 @@ function ensureProfileOwner(): void {
   globalModelChainCustomized = null;
   modelSettingsQueue = Promise.resolve();
   profileWriteGenerations.clear();
+  pendingProfileWrites.clear();
+  deletionGenerations.clear();
+  deletingProfiles.clear();
   hydrationPromises.clear();
   hydrationGeneration += 1;
   hydrated = false;
@@ -811,6 +817,41 @@ export async function ensureBotProfilesLoaded(refresh = false): Promise<BotProfi
   return getBotProfiles();
 }
 
+/** Capture before any recovery confirmation so deletion invalidates the entire operation. */
+export function captureBotRecovery(botId: string): () => boolean {
+  ensureProfileOwner();
+  const owner = getDataOwnerGeneration();
+  const generation = deletionGenerations.get(botId) ?? 0;
+  const startedDuringDelete = deletingProfiles.has(botId);
+  return () => !startedDuringDelete && isDataOwnerGenerationCurrent(owner) && !deletingProfiles.has(botId)
+    && (deletionGenerations.get(botId) ?? 0) === generation;
+}
+
+export async function refreshRecoveredBot(botId: string, current: () => boolean): Promise<boolean> {
+  const api = botsApi();
+  if (!current() || !api?.get) return false;
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const timeout = new Promise<never>((_, reject) => {
+    timer = setTimeout(() => reject(new Error('Bot refresh timed out')), 10_000);
+  });
+  try {
+    if (hydrationPromises.size) await Promise.race([waitForHydration(), timeout]);
+    if (!current() || pendingProfileWrites.has(botId)) return false;
+    const generation = hydrationGeneration;
+    const writeGeneration = profileWriteGenerations.get(botId) ?? 0;
+    const profile = profiles.find(bot => bot.id === botId);
+    const value = await Promise.race([api.get(botId), timeout]);
+    const next = normalizeDbProfile(value);
+    if (!current() || pendingProfileWrites.has(botId) || hydrationPromises.size || generation !== hydrationGeneration
+      || writeGeneration !== (profileWriteGenerations.get(botId) ?? 0)
+      || profile !== profiles.find(bot => bot.id === botId)
+      || !next || next.id !== botId || next.status === 'deleting') return false;
+    profiles = [...profiles.filter(bot => bot.id !== botId), next];
+    emit();
+    return current();
+  } finally { clearTimeout(timer); }
+}
+
 /** Replaces an avatar using gallery bytes, or the host file chooser when omitted. */
 export async function chooseBotAvatar(botId: string, avatarImageBase64?: string): Promise<BotProfile | null> {
   const api = botsApi();
@@ -829,27 +870,40 @@ export async function chooseBotAvatar(botId: string, avatarImageBase64?: string)
 export async function runBotLifecycleAction(
   request: import('../../../shared/botLifecycle').BotLifecycleActionRequest,
 ): Promise<import('../../../shared/botLifecycle').BotLifecycleActionResult> {
+  ensureProfileOwner();
   const owner = getDataOwnerGeneration();
-  // Complete pending reads first so their snapshots cannot resurrect a deleted row.
-  if (request.action === 'delete') await waitForHydration();
-  assertCurrentOwner(owner);
-  const result = await window.electronAPI.maker.runBotLifecycleAction(request);
-  assertCurrentOwner(owner);
-  const api = botsApi();
-  if (result.status === 'deleted') {
-    profiles = profiles.filter((bot) => bot.id !== request.botId);
-    emit();
-    return result;
+  const deleting = request.action === 'delete';
+  if (deleting) {
+    deletionGenerations.set(request.botId, (deletionGenerations.get(request.botId) ?? 0) + 1);
+    deletingProfiles.set(request.botId, (deletingProfiles.get(request.botId) ?? 0) + 1);
   }
-  if (api) {
-    const refreshed = normalizeDbProfile(await api.get(request.botId));
+  try {
+    // Complete pending reads first, including their main-process side effects.
+    if (request.action === 'delete') await waitForHydration();
     assertCurrentOwner(owner);
-    if (refreshed) {
-      profiles = profiles.map((bot) => (bot.id === request.botId ? refreshed : bot));
+    const result = await window.electronAPI.maker.runBotLifecycleAction(request);
+    assertCurrentOwner(owner);
+    const api = botsApi();
+    if (result.status === 'deleted') {
+      profiles = profiles.filter((bot) => bot.id !== request.botId);
       emit();
+      return result;
+    }
+    if (api) {
+      const refreshed = normalizeDbProfile(await api.get(request.botId));
+      assertCurrentOwner(owner);
+      if (refreshed) {
+        profiles = profiles.map((bot) => (bot.id === request.botId ? refreshed : bot));
+        emit();
+      }
+    }
+    return result;
+  } finally {
+    if (deleting && isDataOwnerGenerationCurrent(owner)) {
+      const remaining = (deletingProfiles.get(request.botId) ?? 1) - 1;
+      if (remaining) deletingProfiles.set(request.botId, remaining); else deletingProfiles.delete(request.botId);
     }
   }
-  return result;
 }
 
 export function hasLoadedBotProfiles(): boolean {
@@ -1044,6 +1098,7 @@ export function updateBotProfile(id: string, patch: BotProfileUpdatePatch): Prom
   const optimistic = profiles.find((bot) => bot.id === id) ?? applyPatch(before);
   const api = botsApi();
   if (!api) return Promise.resolve(optimistic);
+  pendingProfileWrites.set(id, (pendingProfileWrites.get(id) ?? 0) + 1);
   return api
     .update({
       id,
@@ -1093,6 +1148,11 @@ export function updateBotProfile(id: string, patch: BotProfileUpdatePatch): Prom
         }
       }
       throw error;
+    }).finally(() => {
+      if (!isDataOwnerGenerationCurrent(owner)) return;
+      const remaining = (pendingProfileWrites.get(id) ?? 1) - 1;
+      if (remaining) pendingProfileWrites.set(id, remaining);
+      else pendingProfileWrites.delete(id);
     });
 }
 

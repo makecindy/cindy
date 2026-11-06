@@ -100,6 +100,20 @@ describe('teammates in the sidebar-wide search', () => {
     expect(names('周报')).toEqual([]);
   });
 
+  it('finds a demoted local cloud home once and opens its recovery route', () => {
+    mocks.cloud = { enabled: true, selfDeviceId: 'desk', humanActorId: 'human', demotedBotIds: ['writer'], actors: [
+      { id: 'actor', externalId: 'writer', name: 'Writer', avatar: null, homeDeviceId: 'desk',
+        homeDevice: { deviceId: 'desk', name: 'My Mac', online: false, isSelf: true } },
+    ] };
+    const matches = renderHook(() => useTeammateSearchMatches('writer', null)).result.current;
+    expect(matches).toHaveLength(1);
+    expect(matches[0]?.route).toBe('/bots/remote/desk/writer');
+    render(<TeammateSearchResults matches={matches} />);
+    const row = screen.getByRole('button', { name: /Writer/ });
+    expect(row.textContent).toContain('bots.cloud.recoveryNotReady');
+    expect(row.textContent).not.toContain('My Mac');
+  });
+
   it('finds dissolved history by group or member name and opens its read-only chat route', () => {
     mocks.groups = [{ id: 'dissolved', name: '周末出游', archived: true,
       dissolvedAt: '2026-10-15T12:00:00Z', members: [{ botId: 'lead', name: 'Trip Planner' }] }];

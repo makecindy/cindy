@@ -31,6 +31,7 @@ export interface CloudCompanionOfflineViewProps {
   deviceName: string;
   /** The home is online but has not opened remote control; otherwise it is simply not reachable. */
   controlOff?: boolean;
+  recovery?: boolean;
 }
 
 type TakeOverState =
@@ -46,7 +47,7 @@ export function CloudCompanionOfflineView(props: CloudCompanionOfflineViewProps)
   if (!owner.dataOwnerId || !isDataOwnerGenerationCurrent(transcriptOwner)) { transcriptOwner = owner; transcriptPages.clear(); }
   return <CloudCompanionOfflineContent key={JSON.stringify([owner, props.botId, props.deviceId])} {...props} />;
 }
-function CloudCompanionOfflineContent({ botId, deviceId, name, avatar, avatarColor, deviceName, controlOff = false }: CloudCompanionOfflineViewProps) {
+function CloudCompanionOfflineContent({ botId, deviceId, name, avatar, avatarColor, deviceName, controlOff = false, recovery = false }: CloudCompanionOfflineViewProps) {
   const { t } = useTranslation();
   const navigate = useNavigate();
   const devices = useDeviceLinkDeviceList();
@@ -171,16 +172,18 @@ function CloudCompanionOfflineContent({ botId, deviceId, name, avatar, avatarCol
         <BotAvatar bot={identity} size="sm" />
         <div className="min-w-0 flex-1">
           <p className="text-14 font-medium text-[var(--text-primary)]">
-            {t(controlOff ? 'bots.cloud.homeControlOff' : 'bots.cloud.homeOffline', { device })}
+            {recovery ? t('bots.cloud.recoveryNotReady') : t(controlOff ? 'bots.cloud.homeControlOff' : 'bots.cloud.homeOffline', { device })}
           </p>
           <p className="mt-0.5 text-12 text-[var(--text-secondary)]">
-            {state.kind === 'running' ? t('bots.cloud.takingOver', { name })
-              : state.kind === 'conflict' ? t('bots.cloud.takeOverConflict', { name, device: state.device })
-                : state.kind === 'error' ? t(state.key, { name })
-                  : t('bots.cloud.takeOverHint', { name })}
+            {recovery ? t('bots.globalSettings.defaultModelHint')
+              : state.kind === 'running' ? t('bots.cloud.takingOver', { name })
+                : state.kind === 'conflict' ? t('bots.cloud.takeOverConflict', { name, device: state.device })
+                  : state.kind === 'error' ? t(state.key, { name }) : t('bots.cloud.takeOverHint', { name })}
           </p>
         </div>
-        <Button
+        {recovery ? <Button variant="secondary" size="md" type="button" onClick={() => navigate('/settings?tab=general&section=general.botModel')}>
+          {t('bots.globalSettings.defaultModel')}
+        </Button> : <Button
           variant="primary"
           size="md"
           type="button"
@@ -189,7 +192,7 @@ function CloudCompanionOfflineContent({ botId, deviceId, name, avatar, avatarCol
           onClick={() => void takeOver()}
         >
           {t('bots.cloud.continueHere')}
-        </Button>
+        </Button>}
       </section>
       <div
         ref={scroller}

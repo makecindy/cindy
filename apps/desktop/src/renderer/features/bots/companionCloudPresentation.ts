@@ -76,6 +76,21 @@ export function cloudRemoteBots(cloud: CompanionCloudSnapshot, remoteBots: reado
   return [...listed, ...cloudOnlyRemoteBots(cloud, listed)];
 }
 
+export function isLocalRecoveryRow(cloud: CompanionCloudSnapshot, bot: Pick<RemoteBot, 'id' | 'deviceId'>): boolean {
+  return !!cloud.enabled && !!cloud.selfDeviceId && bot.deviceId === cloud.selfDeviceId && cloud.demotedBotIds.includes(bot.id);
+}
+
+/** Recovery rows are presentation-only and must never become execution candidates. */
+export function recoveryCompanionRows(cloud: CompanionCloudSnapshot, remoteBots: readonly RemoteBot[]): RemoteBot[] {
+  if (!cloud.enabled || !cloud.selfDeviceId) return [];
+  const seen = new Set(remoteBots.map(bot => bot.id));
+  return cloudOnlyRemoteBots({ ...cloud, selfDeviceId: null }, []).filter(bot => {
+    if (bot.deviceId !== cloud.selfDeviceId || !cloud.demotedBotIds.includes(bot.id) || seen.has(bot.id)) return false;
+    seen.add(bot.id);
+    return true;
+  });
+}
+
 export function homeDeviceName(cloud: CompanionCloudSnapshot, botId: string, fallback: string): string {
   const actor = cloud.actors.find((candidate) => candidate.externalId === botId);
   return actor?.homeDevice?.name?.trim() || fallback;
