@@ -3,15 +3,22 @@ import { act, createElement as el, useEffect } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 
-const h = vi.hoisted(() => ({ dark: false, frameWidth: 390, naturalWidth: null as number | null }));
+const h = vi.hoisted(() => ({ dark: false, frameWidth: 390, naturalWidth: null as number | null, menuFrame: null as [number, number] | null }));
 vi.mock('react-native', () => ({
   StyleSheet: { create: (value: unknown) => value },
   Image: () => null,
-  Pressable: ({ children }: any) => el('div', null, typeof children === 'function' ? children({ pressed: false }) : children),
+  Pressable: ({ children, style }: any) => {
+    const flat = [typeof style === 'function' ? style({ pressed: false }) : style].flat(Infinity);
+    const pick = (key: string) => flat.reduce((found: unknown, s: any) => s?.[key] ?? found, undefined);
+    return el('div', { 'data-title-hit': true, 'data-padding-left': pick('paddingLeft'), 'data-margin-left': pick('marginLeft') },
+      typeof children === 'function' ? children({ pressed: false }) : children);
+  },
   View: ({ children, onLayout, style }: any) => {
-    // The hidden measuring row reports the title's natural width, as on device.
-    useEffect(() => { if (onLayout && h.naturalWidth != null) onLayout({ nativeEvent: { layout: { width: h.naturalWidth } } }); }, [onLayout]);
     const width = [style].flat(Infinity).reduce((found: unknown, s: any) => s?.width ?? found, undefined);
+    // The hidden measuring row reports the title's natural width, as on device; a sized view
+    // reports the width it asked for, as UIKit grants a trailing item that fits.
+    const reported = typeof width === 'number' ? width : h.naturalWidth;
+    useEffect(() => { if (onLayout && reported != null) onLayout({ nativeEvent: { layout: { width: reported } } }); }, [onLayout, reported]);
     return el('div', { 'data-width': typeof width === 'number' ? width : undefined }, children);
   },
 }));
@@ -22,6 +29,7 @@ vi.mock('react-native-safe-area-context', () => ({
 vi.mock('expo-router', () => ({ Stack: {
   Toolbar: Object.assign(({ children }: any) => children, {
     Button: () => null,
+    View: ({ children }: any) => el('div', { 'data-testid': 'custom-toolbar-item' }, children),
     Menu: ({ icon, iconRenderingMode, accessibilityLabel }: any) => el('div', {
       'data-testid': 'display-menu', 'data-icon': icon, 'data-rendering': iconRenderingMode, 'aria-label': accessibilityLabel,
     }),
@@ -40,7 +48,11 @@ vi.mock('@/platform/chrome/SimpleStackHeader', () => ({ usesNativeStackHeader: (
 // Keep the real centered-width arithmetic; only the bar chrome is replaced.
 vi.mock('@/platform/chrome/HomeStackHeader', async (importOriginal) => ({
   ...await importOriginal<typeof import('@/platform/chrome/HomeStackHeader')>(),
-  HomeStackHeader: ({ title, children }: any) => el('div', null, title, children),
+  HomeStackHeader: ({ title, children, onMenuFrame }: any) => {
+    // The kept top-left menu reports its settled window frame, as on the Duo cover screen.
+    useEffect(() => { if (onMenuFrame && h.menuFrame) onMenuFrame(...h.menuFrame); }, [onMenuFrame]);
+    return el('div', null, title, children);
+  },
 }));
 vi.mock('@/platform/chrome/homeMenuIcon', () => ({ homeMenuIcon: 'home-menu', homeMenuArtworkSize: 26 }));
 vi.mock('@/session/HomeHeaderGlassButton', () => ({ HomeHeaderGlassButton: () => null }));
@@ -68,6 +80,7 @@ beforeEach(() => {
   h.dark = false;
   h.frameWidth = 390;
   h.naturalWidth = null;
+  h.menuFrame = null;
   node = document.createElement('div');
   root = createRoot(node);
 });
@@ -96,11 +109,12 @@ it.each([
   expect(menu.getAttribute('aria-label')).toBe('Display settings');
 });
 
-async function renderTitleWidth(props: { statusRowReserve?: number; remoteDesktop: boolean }) {
+async function renderTitleWidth(props: { statusRowReserve?: number; remoteDesktop: boolean; keepMenuTopLeft?: boolean }) {
   await act(async () => root.render(el(HomeNativeStackHeader, {
     displayA11y: 'Display settings', displayActions: [], displayBadge: false, menuA11y: 'Open menu',
     onDisplayAction: vi.fn(), onOpenDeviceMenu: vi.fn(), onOpenMenu: vi.fn(), remoteDesktopA11y: 'Remote desktop',
     onOpenRemoteDesktop: props.remoteDesktop ? vi.fn() : undefined, statusRowReserve: props.statusRowReserve,
+    keepMenuTopLeft: props.keepMenuTopLeft,
     onSelectScope: vi.fn(), scopeActions: [], showRemoteGuide: false, title: 'Dash MacBook Pro', titleA11y: 'Select scope',
   })));
   // The outermost sized view is the title frame handed to the native bar.
@@ -124,3 +138,28 @@ it.each([
   h.naturalWidth = natural;
   expect(await renderTitleWidth({ statusRowReserve: reserve, remoteDesktop })).toBe(width);
 });
+
+// Regression: Duo cover screen home (2026-11-06). The vertical system bar takes the trailing items,
+// and UIKit caps a title view to the mirrored space around its center, so "Dash的Mac Studio" was cut
+// with the row's trailing side empty. The title now rides in a custom trailing item spanning the gap
+// after the menu (382 - 44 - 64 - 4 = 270pt, from 112pt). Like the phone, a name that fits is
+// centered (over the 382pt column, 191pt); a longer one sits against the tight side, here the menu
+// (22 + 44 + 12 = 78pt), and grows toward the trailing side, starting left of the item if needed.
+it.each([
+  // [natural title width, menu frame, expected leading margin, expected leading padding]
+  // First: the settled menu frame is kept for later mounts.
+  [300, null, 0, 4], // menu not settled yet: stays inside the item
+  [92, [22, 44], 0, 33], // 100pt with hit padding: centered at 141pt, 29pt into the item
+  [300, [22, 44], -34, 4], // too wide to center: starts right after the menu, 34pt left of the item
+] as const)('Duo vertical system bar natural=%s menu=%j starts the title at margin %s padding %s',
+  async (natural, menu, margin, padding) => {
+    h.frameWidth = 382;
+    h.naturalWidth = natural;
+    h.menuFrame = menu as [number, number] | null;
+    expect(await renderTitleWidth({ remoteDesktop: true, keepMenuTopLeft: true })).toBe(270);
+    const item = node.querySelector('[data-testid="custom-toolbar-item"]')!;
+    expect(item.textContent).toContain('Dash MacBook Pro');
+    const hit = item.querySelector('[data-title-hit]')!;
+    expect(Number(hit.getAttribute('data-margin-left'))).toBe(margin);
+    expect(Number(hit.getAttribute('data-padding-left'))).toBe(padding);
+  });

@@ -1,4 +1,4 @@
-import { memo, useState } from "react";
+import { memo, useCallback, useState } from "react";
 import { Stack } from "expo-router";
 import { centeredHomeTitleWidth, HomeStackHeader } from "./HomeStackHeader";
 import { homeDisplayAttentionIcon, homeDisplayIcon } from "./homeDisplayIcon";
@@ -6,7 +6,7 @@ import { nativeToolbarMenuItems } from "./nativeToolbarMenuItems";
 import { QuietSyncIndicator } from '@/components/QuietSyncIndicator';
 import { useDelayedConnectionNotice } from '@/components/ConnectionNoticeOverlay';
 import { ChevronDown } from "lucide-react-native";
-import { Pressable, StyleSheet, View } from "react-native";
+import { Pressable, StyleSheet, View, type LayoutChangeEvent } from "react-native";
 import { useSafeAreaFrame, useSafeAreaInsets } from "react-native-safe-area-context";
 import { Text } from "@/components/AppText";
 import {
@@ -25,6 +25,9 @@ import {
   type ThemeColors,
 } from "@/theme";
 import { lineHeight, navigationChrome, spacing } from "@/theme/tokens";
+
+/** Last settled right edge of the Duo top-left menu, so a remount hugs it without waiting. */
+let lastMenuRight: number | null = null;
 
 /**
  * 首页 iOS 顶栏走系统 UINavigationBar。
@@ -112,6 +115,41 @@ export const HomeNativeStackHeader = memo(function HomeNativeStackHeader({
     && naturalWidth > mirroredWidth - spacing.xs * 2;
   const titleWidth = showRemoteGuide ? Math.min(220, mirroredWidth)
     : asymmetric && !pinnedTrailing ? mirroredWidth : gapWidth;
+  // A vertical system bar (Duo cover screen, landscape) moves the system items into it, and UIKit
+  // (iOS 27.1) caps a title view to the mirrored space around its center (84–318pt of the 466pt
+  // cover screen), leaving the row's trailing side unused. A custom trailing item stays in the row
+  // and ends at the content edge beside the vertical bar, so the title rides there, as wide as the
+  // gap after the menu: UIKit moves an item wider than it allows (278pt there) into the vertical
+  // bar's overflow menu when it builds the row, and keeps it at least ~33pt from the menu.
+  // Like the phone, a name that fits is centered (over the content column); one too long for that
+  // sits against the tight side, here the menu, and grows toward the free trailing side before it
+  // ellipsizes. Against the menu it starts left of the item, drawn outside it: that first stretch
+  // does not take taps, the rest of the name and the chevron do. Until the menu's position is
+  // known the name stays inside the item.
+  const sideTitle = keepMenuTopLeft && !showRemoteGuide;
+  const sideRequest = Math.max(navigationChrome.target, Math.min(360,
+    barWidth - navigationChrome.target - spacing.lg * 4 - spacing.xs));
+  const [sideLayoutWidth, setSideLayoutWidth] = useState<number | null>(null);
+  const sideWidth = sideLayoutWidth ?? sideRequest;
+  const onSideLayout = useCallback((event: LayoutChangeEvent) => {
+    const next = event.nativeEvent.layout.width;
+    if (next > 0) setSideLayoutWidth((prev) => prev != null && Math.abs(prev - next) < 0.5 ? prev : next);
+  }, []);
+  const [menuRight, setMenuRight] = useState<number | null>(() => lastMenuRight);
+  const onMenuFrame = useCallback((x: number, w: number) => {
+    // A frame outside the bar's leading half is a read from mid-rebuild; keep the last good one.
+    if (x < 0 || x + w > width / 2) return;
+    lastMenuRight = x + w;
+    setMenuRight((prev) => prev != null && Math.abs(prev - (x + w)) < 0.5 ? prev : x + w);
+  }, [width]);
+  const sideContent = naturalWidth == null ? null : naturalWidth + spacing.xs * 2;
+  const contentRight = width - insets.right;
+  const sideLeft = contentRight - sideWidth;
+  const sideHugLeft = menuRight == null ? sideLeft : Math.min(sideLeft, menuRight + spacing.md);
+  // Where the name starts, in window points: centered, but never left of the menu and never past
+  // the content edge; offset from the item's own leading edge.
+  const sideOffset = sideContent == null ? 0 : Math.max(sideHugLeft,
+    Math.min((insets.left + contentRight - sideContent) / 2, contentRight - sideContent)) - sideLeft;
 
   if (!usesNativeStackHeader()) return null;
 
@@ -128,7 +166,11 @@ export const HomeNativeStackHeader = memo(function HomeNativeStackHeader({
         accessibilityRole="button"
         onPress={nativeMenus ? undefined : onOpenDeviceMenu}
         onPressIn={nativeMenus ? undefined : onOpenDeviceMenu}
-        style={({ pressed }) => [styles.titleHit, pinnedTrailing && styles.titleHitTrailing, pressed && styles.pressed]}
+        style={({ pressed }) => [styles.titleHit,
+          sideTitle ? [styles.titleHitLeading,
+            { marginLeft: Math.min(0, sideOffset), paddingLeft: spacing.xs + Math.max(0, sideOffset) }]
+            : pinnedTrailing && styles.titleHitTrailing,
+          pressed && styles.pressed]}
         testID="devices.title"
       >
         {/* The title sits directly on the bar: no capsule material behind it. */}
@@ -172,9 +214,17 @@ export const HomeNativeStackHeader = memo(function HomeNativeStackHeader({
   return (
     <HomeStackHeader menuA11y={menuA11y} menuTestID="home.chromeMenu" onOpenMenu={onOpenMenu}
       keepMenuTopLeft={keepMenuTopLeft}
-      title={<View style={[styles.titleFrame, { width: titleWidth }]}>{titleMeasure}{titleNode}</View>}>
+      onMenuFrame={sideTitle ? onMenuFrame : undefined}
+      title={sideTitle ? null : <View style={[styles.titleFrame, { width: titleWidth }]}>{titleMeasure}{titleNode}</View>}>
       {showRemoteGuide ? null : (
         <Stack.Toolbar placement="right">
+          {sideTitle ? (
+            <Stack.Toolbar.View hidesSharedBackground>
+              <View onLayout={onSideLayout} style={[styles.titleFrame, { width: sideRequest }]}>
+                {titleMeasure}{titleNode}
+              </View>
+            </Stack.Toolbar.View>
+          ) : null}
           {onOpenRemoteDesktop ? <Stack.Toolbar.Button icon={require("../../../assets/navigation/monitor.png")} iconRenderingMode="template"
             accessibilityLabel={remoteDesktopA11y} onPress={onOpenRemoteDesktop} /> : null}
           <Stack.Toolbar.Menu
@@ -220,6 +270,7 @@ const makeStyles = (colors: ThemeColors) =>
       minHeight: 44,
       minWidth: 44,
     },
+    titleHitLeading: { alignItems: "flex-start" },
     titleHitTrailing: { alignItems: "flex-end" },
     titleMeasureBox: {
       left: 0,
