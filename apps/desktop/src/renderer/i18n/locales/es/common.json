@@ -19347,6 +19347,9 @@
     "pendingApprovals": "{{count}} aprobaciones pendientes"
   },
   "richAnswer": {
+    "invalidImageReference": "La referencia de esta imagen no es válida.",
+    "requestImageAgain": "Pedir que se muestre de nuevo",
+    "requestImageAgainMessage": "Vuelve a mostrar esta imagen existente ({{name}}, referencia: {{source}}). Comprueba el resultado original de la herramienta o el archivo y usa su dirección real. No generes otra imagen; pregúntame primero si no puedes identificarla.",
     "send": "Enviar mensaje",
     "sending": "Enviando…",
     "sent": "Enviado",
