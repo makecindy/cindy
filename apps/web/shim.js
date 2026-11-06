@@ -274,7 +274,21 @@
       // every read can keep a subscribing component re-rendering forever.
       const key = String(args?.[0] ?? '');
       capabilitiesCache ??= new Map();
-      if (!capabilitiesCache.has(key)) capabilitiesCache.set(key, rpc('/capabilities', { agentKind: key }));
+      if (!capabilitiesCache.has(key)) {
+        capabilitiesCache.set(
+          key,
+          rpc('/capabilities', { agentKind: key }).then((res) => {
+            if (res && res.capabilities) {
+              return {
+                ...res.capabilities,
+                ...res,
+                capabilities: res.capabilities,
+              };
+            }
+            return res;
+          }),
+        );
+      }
       return capabilitiesCache.get(key);
     },
     'maker.input.getProjection': (args) => {
@@ -293,6 +307,40 @@
     'maker.input.remove': (args) => rpc('/input/remove', { sessionId: args?.[0], clientId: args?.[1] }),
     'maker.input.resume': (args) => rpc('/input/resume', { sessionId: args?.[0] }),
     'maker.listAvailableAgents': () => rpc('/agents'),
+    'maker.setPermissionMode': (args) => {
+      const sessionId = args?.[0];
+      const mode = args?.[1];
+      if (!sessionId) return Promise.resolve();
+      return rpc('/sessions/update', { sessionId, patch: { permissionMode: mode } });
+    },
+    'maker.setModel': (args) => {
+      const [sessionId, model, providerId, _rev, selection] = args ?? [];
+      if (!sessionId) return Promise.resolve({ deferred: false });
+      const patch = { model };
+      if (providerId !== undefined) patch.providerId = providerId;
+      if (selection?.effort) patch.effort = selection.effort;
+      if (selection?.fastMode !== undefined) patch.fastMode = selection.fastMode;
+      return rpc('/sessions/update', { sessionId, patch }).then(() => ({ deferred: false }));
+    },
+    'maker.setEffort': (args) => {
+      const sessionId = args?.[0];
+      const effort = args?.[1];
+      if (!sessionId) return Promise.resolve();
+      return rpc('/sessions/update', { sessionId, patch: { effort } });
+    },
+    'maker.setFastMode': (args) => {
+      const sessionId = args?.[0];
+      const fastMode = args?.[1];
+      if (!sessionId) return Promise.resolve();
+      return rpc('/sessions/update', { sessionId, patch: { fastMode } });
+    },
+    'maker.setPlanMode': (args) => {
+      const sessionId = args?.[0];
+      const planModeEnabled = args?.[1];
+      if (!sessionId) return Promise.resolve();
+      return rpc('/sessions/update', { sessionId, patch: { planModeEnabled } });
+    },
+    'maker.setThinkingEnabled': () => Promise.resolve(),
     'maker.listAgentCommands': (args) => rpc('/agent-commands', { agentKind: args?.[0], sessionId: args?.[1]?.sessionId }),
     'maker.listAgentSkills': (args) => rpc('/agent-skills', { agentKind: args?.[0], workingDir: args?.[1]?.workingDir, sessionId: args?.[1]?.sessionId, forceReload: args?.[1]?.forceReload === true }),
     'maker.listDesktopCommands': () => ({ success: true, commands: STATIC.emptyList }),

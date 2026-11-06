@@ -630,6 +630,7 @@ const server = createHostServer({
     const allowed: Record<string, true> = {
       title: true, status: true, pinnedAt: true, notificationsMuted: true, model: true,
       effort: true, permissionMode: true, fastMode: true, planModeEnabled: true,
+      providerId: true, agentKind: true,
     };
     if (Object.keys(patch).some((key) => allowed[key] !== true)) {
       throw new Error('unsupported session field');
@@ -645,6 +646,8 @@ const server = createHostServer({
     if (typeof patch.permissionMode === 'string') update.permissionMode = patch.permissionMode;
     if (typeof patch.fastMode === 'boolean' || patch.fastMode === 'ultrafast') update.fastMode = patch.fastMode;
     if (typeof patch.planModeEnabled === 'boolean') update.planModeEnabled = patch.planModeEnabled;
+    if (patch.providerId === null || typeof patch.providerId === 'string') update.providerId = patch.providerId;
+    if (typeof patch.agentKind === 'string') update.agentKind = patch.agentKind;
     await getDbClient().drizzle.update(sessionTable).set(update).where(eq(sessionTable.id, sessionId));
     const rows = await getDbClient().drizzle.select().from(sessionTable)
       .where(eq(sessionTable.id, sessionId)).limit(1);
@@ -838,8 +841,14 @@ const server = createHostServer({
     }
     return {
       agentKind,
-      capabilities: { ...baseCaps, availableModels },
+      ...baseCaps,
       availableModels,
+      capabilities: { ...baseCaps, availableModels },
+      supportsSessionAgentSwitch: true,
+      supportsModelWindowSwitchGuard: true,
+      supportsSessionAgentSwitchCas: true,
+      supportsOrcaWorkerPermissionMode: true,
+      supportsOrcaWorkerUpdate: true,
     };
   },
   createMessage: insertSessionMessage,
