@@ -20,6 +20,13 @@ export default {
         name: await ui.t(`settings.appearance.appIcon.options.${icon}`),
         exact: true,
       });
+    for (const icon of icons) {
+      assert.equal(
+        await (await option(icon)).getAttribute('data-setting-id'),
+        'settings.appearance.appIcon.label',
+        'Every Dock icon option must bind to the registered settings search definition',
+      );
+    }
     if (ui.case === 'hover') {
       for (const icon of icons) {
         await (await option(icon)).hover();

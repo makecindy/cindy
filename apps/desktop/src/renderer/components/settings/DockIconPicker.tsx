@@ -13,6 +13,7 @@ import { getInitialAppearanceSettings } from '@/hooks/useFontSettings';
 import { cn } from '@/lib/utils';
 import { toast } from '@/lib/toast';
 import { APP_ICONS, normalizeAppearanceSettings, type AppIcon } from '../../../shared/appearanceSettings';
+import { appearanceSettings } from './AppearanceSection.settings-search';
 
 /** Same Dock-ready files main passes to app.dock.setIcon (Apple icon grid baked in). */
 const PREVIEWS: Record<AppIcon, { light: string; dark: string }> = {
@@ -67,6 +68,7 @@ export function DockIconPicker() {
         return (
           <Tip key={icon} text={label}>
             <button
+              data-setting-id={appearanceSettings.appIcon.id}
               type="button"
               role="radio"
               aria-checked={isSelected}
