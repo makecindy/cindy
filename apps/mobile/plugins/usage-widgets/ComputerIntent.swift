@@ -110,6 +110,9 @@ struct QuotaWidgetIntent: UsageWidgetConfiguration {
     .systemSmall: IntentCollectionSize(min: 0, max: 4),
     .systemMedium: IntentCollectionSize(min: 0, max: 6),
     .systemLarge: IntentCollectionSize(min: 0, max: 7),
+    .accessoryCircular: IntentCollectionSize(min: 0, max: 2),
+    .accessoryRectangular: IntentCollectionSize(min: 0, max: 4),
+    .accessoryInline: IntentCollectionSize(min: 0, max: 1),
   ])
   var pinned: [AccountEntity]?
 
