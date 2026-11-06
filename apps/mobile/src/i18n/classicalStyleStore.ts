@@ -24,6 +24,9 @@ const STORAGE_KEYS = {
 type StoredStyles = Record<ClassicalReplyStyleContext, ClassicalReplyStyleId | null>;
 
 const current: StoredStyles = { classical: null, modern: null };
+// 本会话用户改过的语境:存储读回与用户写入竞速时以内存为准,保证设置显示与
+// 发送路径(currentClassicalStyleForLocale)始终一致。
+const dirtyContexts = new Set<ClassicalReplyStyleContext>();
 
 /** 未选过的语境返回 null,由调用方按界面语言取默认。 */
 export function currentClassicalStyle(context: ClassicalReplyStyleContext): ClassicalReplyStyleId | null {
@@ -36,10 +39,15 @@ export function currentClassicalStyleForLocale(locale: string | null | undefined
 
 export async function readClassicalStyle(): Promise<StoredStyles> {
   // 单个 key 读失败只降级那一档,不拖垮另一档的已存值(Promise.all 需要永不 reject 的入参)。
+  // 读回迟于用户操作 resolve 时,被改过的语境不得用旧值洗掉新选择。
   const read = (key: string) => AsyncStorage.getItem(key).catch(() => null);
   const [classical, modern] = await Promise.all([read(STORAGE_KEYS.classical), read(STORAGE_KEYS.modern)]);
-  current.classical = isClassicalReplyStyle(classical) ? classical : null;
-  current.modern = isClassicalReplyStyle(modern) ? modern : null;
+  if (!dirtyContexts.has('classical')) {
+    current.classical = isClassicalReplyStyle(classical) ? classical : null;
+  }
+  if (!dirtyContexts.has('modern')) {
+    current.modern = isClassicalReplyStyle(modern) ? modern : null;
+  }
   return { ...current };
 }
 
@@ -47,6 +55,7 @@ export async function saveClassicalStyle(
   context: ClassicalReplyStyleContext,
   style: ClassicalReplyStyleId,
 ): Promise<void> {
+  dirtyContexts.add(context);
   current[context] = style;
   await AsyncStorage.setItem(STORAGE_KEYS[context], style).catch(() => undefined);
 }
