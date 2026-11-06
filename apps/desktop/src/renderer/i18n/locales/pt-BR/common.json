@@ -5180,7 +5180,7 @@
         "ariaLabel": "Escolher o segundo modelo auxiliar alternativo"
       },
       "emptySlot": "Não selecionado",
-      "customHint": "Os modelos são testados na ordem escolhida e também servem de alternativa à Revisão automática quando os modelos integrados estão indisponíveis. Os provedores selecionados recebem o contexto da revisão: mensagens e referências, detalhes de tarefas e ações (incluindo ações bloqueadas), identidade e permissões, caminhos de arquivos e sistema operacional.",
+      "customHint": "Os modelos são testados na ordem escolhida e também servem de alternativa à Revisão automática quando os modelos integrados estão indisponíveis. Os provedores selecionados recebem o contexto da revisão: mensagens e referências, texto público do Agent (apenas referência), detalhes de tarefas e ações (incluindo ações bloqueadas), identidade e permissões, caminhos de arquivos e sistema operacional.",
       "signInHint": "Entre na Cindy para usar as recomendações automáticas. Sem fazer login, escolha um modelo configurado de outro provedor em Personalizado.",
       "chooseAgent": "Escolher um Agent",
       "backToAgents": "Voltar à seleção de Agent",

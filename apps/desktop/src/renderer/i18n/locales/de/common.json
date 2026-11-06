@@ -5125,7 +5125,7 @@
         "ariaLabel": "Zweites Ersatz-Hilfsmodell auswählen"
       },
       "emptySlot": "Nicht ausgewählt",
-      "customHint": "Die Modelle werden in deiner gewählten Reihenfolge ausprobiert und dienen auch als Ersatz für die automatische Überprüfung, wenn deren integrierte Modelle nicht verfügbar sind. Ausgewählte Anbieter erhalten den Überprüfungskontext: Nachrichten und Referenzen, Aufgaben- und Aktionsdetails (einschließlich blockierter Aktionen), Identität und Berechtigungen, Dateipfade und Betriebssystem.",
+      "customHint": "Die Modelle werden in deiner gewählten Reihenfolge ausprobiert und dienen auch als Ersatz für die automatische Überprüfung, wenn deren integrierte Modelle nicht verfügbar sind. Ausgewählte Anbieter erhalten den Überprüfungskontext: Nachrichten und Referenzen, öffentliche Texte des Agent (nur als Referenz), Aufgaben- und Aktionsdetails (einschließlich blockierter Aktionen), Identität und Berechtigungen, Dateipfade und Betriebssystem.",
       "signInHint": "Melde dich bei Cindy an, um die automatischen Empfehlungen zu nutzen. Wenn du nicht angemeldet bist, wähle unter „Benutzerdefiniert“ ein konfiguriertes Modell eines anderen Anbieters aus.",
       "chooseAgent": "Agent auswählen",
       "backToAgents": "Zurück zur Agent-Auswahl",

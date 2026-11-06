@@ -5180,7 +5180,7 @@
         "ariaLabel": "Choisir le second modèle auxiliaire de secours"
       },
       "emptySlot": "Non sélectionné",
-      "customHint": "Les modèles sont essayés dans l'ordre choisi et servent aussi de secours à la revue automatique lorsque ses modèles intégrés sont indisponibles. Les fournisseurs sélectionnés reçoivent le contexte de la revue : messages et références, détails des tâches et des actions (y compris les actions bloquées), identité et autorisations, chemins de fichiers et système d'exploitation.",
+      "customHint": "Les modèles sont essayés dans l'ordre choisi et servent aussi de secours à la revue automatique lorsque ses modèles intégrés sont indisponibles. Les fournisseurs sélectionnés reçoivent le contexte de la revue : messages et références, texte public de l'Agent (à titre indicatif), détails des tâches et des actions (y compris les actions bloquées), identité et autorisations, chemins de fichiers et système d'exploitation.",
       "signInHint": "Connectez-vous à Cindy pour utiliser les recommandations automatiques. Sans connexion, choisissez un modèle configuré d'un autre fournisseur sous Personnalisé.",
       "chooseAgent": "Choisir un Agent",
       "backToAgents": "Retour à la sélection de l'Agent",
