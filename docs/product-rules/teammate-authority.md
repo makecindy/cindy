@@ -22,9 +22,11 @@
 | 调度命令 | `schedule_create` / `schedule_update` 保存脚本执行或命令前置检查、`schedule_run_now` 执行含此类命令的已存定义、`cindy_helper` 和 `cindy_scheduler` 两个入口的 `schedule_set_pre_run_hook` 安装并自测脚本，以及 `routine_save` 保存新命令前置检查（沿用同一命令不追加确认）、`routine_run_now` 手动执行含前置命令的已存规则；本机和跨电脑统一判定 |
 | 新建完全访问 Agent | `send_to_session` 不带目标任务与目录覆盖时新建完全访问任务，以及本机 `schedule_create` 创建未绑定任务的 Agent 调度、`schedule_update` 改写其指令/目录/worktree 隔离或解除绑定/改成可重建的持续模式、`schedule_run_now` 手动执行；跨电脑已有独立调度的同类改写与执行沿同一风险确认；包含持续模式丢失目标后新建任务的分支 |
 | 授予常驻指令 | `routine_save` 新建启用的自定义规则或改写启用规则的指令；禁用草稿和不改指令的编辑沿原权限 |
-| 删除自动化或释放接收地址 | `routine_delete`、`schedule_delete`、`schedule_webhook_release`（可释放同账号旧电脑的地址） |
+| 释放接收地址 | `schedule_webhook_release`（可释放同账号旧电脑的地址） |
 | 代用户回答权限请求 | `message_session_task` 携带 `decision` |
 | 恢复暂停执行 | `message_session_task(mode=resume)`、`schedule_resume`、`schedule_webhook_restore`（重新申请已释放的接收地址），以及 `routine_save` 将已有停用规则保存为启用（含内置规则），以及 `routine_run_now` 手动执行停用规则；`set_teammate_capability(kind=feature, joined=true)` 重新打开主人关掉的记忆或系统技能 |
+
+2026-11-06 修订：删除自动化（`schedule_delete`、`routine_delete`）沿用任务原有权限，移除自主轮额外删除确认。达到既定清理条件的自身调度可正常收尾，不另建自清理白名单；未获授权的删除仍由普通权限流程判断。
 
 其余操作不命中风险表就继续现有权限流程。新增普通工具不需要另开“自主解锁”例外。
 主人输入、已核实的主人转达和受托指令沿正常权限审核，不再加第二张行动确认卡。

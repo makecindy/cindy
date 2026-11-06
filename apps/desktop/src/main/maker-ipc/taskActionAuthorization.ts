@@ -214,7 +214,7 @@ export function taskActionRisk(call: Pick<Call, 'server' | 'tool' | 'args'>,
   if (call.tool === 'routine_save' && routineHook && typeof routineHook === 'object' &&
     'command' in routineHook && typeof routineHook.command === 'string' && routineHook.command.trim() &&
     routineHook.command !== facts?.routinePreRunCommand) return 'command';
-  if (call.tool === 'routine_delete' || call.tool === 'schedule_delete' || call.tool === 'schedule_webhook_release')
+  if (call.tool === 'schedule_webhook_release')
     return 'remove';
   if (call.tool === 'message_session_task' && args.decision !== undefined) return 'permission';
   if ((call.tool === 'routine_save' && args.enabled === true || call.tool === 'routine_run_now') &&
