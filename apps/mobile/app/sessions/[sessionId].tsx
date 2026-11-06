@@ -252,7 +252,6 @@ import { RewindPreviewPanel } from '@/session/RewindPreviewPanel';
 import { BlurBackdrop, FLOATING_CHROME_BLUR_INTENSITY } from '@/session/BlurBackdrop';
 import { SheetModal } from '@/session/SheetModal';
 import { SheetGrabber, SheetSurface } from '@/session/SheetSurface';
-import { GestureDetector } from '@/platform/gestureHandler';
 import { NativePermissionSheet } from '@/session/NativePermissionSheet';
 import { permissionAccentColor, permissionPresentation } from '@/session/permissionPresentation';
 import {
