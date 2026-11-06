@@ -1112,7 +1112,11 @@
   },
   "awayGuard": {
     "status": "Cindy is working",
-    "hint": "Press any key to lock, then unlock with Touch ID or your password."
+    "hint": "Press any key to lock, then unlock with Touch ID or your password.",
+    "lockFailed": {
+      "status": "Cindy couldn't lock this Mac",
+      "hint": "Press Control-Command-Q to lock it. The screen will also lock on its own after a while."
+    }
   },
   "appBadge": {
     "attentionCount": "Tasks needing attention: {{count}}"

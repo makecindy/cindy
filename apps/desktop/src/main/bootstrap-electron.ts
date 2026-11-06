@@ -616,7 +616,7 @@ import {
 } from './remote-desktop/linuxClipboardNative';
 import { initHeartbeatService } from './heartbeatService';
 import { markStartupMilestone } from './startupTimeline';
-import { registerRemoteDesktopIpc, remoteDesktop } from './remote-desktop';
+import { registerRemoteDesktopIpc } from './remote-desktop';
 import { isAwayCoverUp, registerAwayGuardIpc, startAwayGuard } from './remote-desktop/awayGuardService';
 import {
   isDesktopScreenLocked,
@@ -4731,7 +4731,6 @@ const registerIpcHandlers = () => {
     startAwayGuard({
       enabled: () => readWindowBehaviorSettings().awayGuard,
       delaySeconds: () => readWindowBehaviorSettings().awayGuardDelaySeconds,
-      remoteDesktopActive: () => remoteDesktop.state !== null,
       screenLocked: isDesktopScreenLocked,
       seedScreenLocked: seedDesktopScreenLocked,
       msSinceOwnerInput: () => msSinceForeignDesktopInput(),

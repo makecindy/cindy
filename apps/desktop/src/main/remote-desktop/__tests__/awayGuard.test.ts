@@ -6,6 +6,7 @@
  *   Locked use 解锁后被立即锁回的回归。
  * - 现有覆盖缺口：新模块，远程桌面 controller 测试不覆盖离开时的遮罩生命周期。
  * - 最小失败输入：主人解锁后仍有任务运行（不应立即重新遮罩）；遮罩建立失败（必须放弃常亮）；
+ *   PR #9190 review：遮罩建立中接入显示器、建立中放行 Agent 输入、锁屏失败、远程会话撤罩；
  *   在已锁屏时启动（2026-11-06 实测：没有锁屏事件，测试版在锁屏后面一直常亮）。
  * - tier：unit，内存 fake，无 Electron / 原生进程。
  */
@@ -26,16 +27,15 @@ function setup(overrides: Partial<AwayGuardDeps> = {}) {
   const state = {
     now: 0,
     enabled: true,
-    remote: false,
     locked: false,
     sinceOwner: 0 as number | null,
     awake: false,
     events: [] as string[],
     showFails: false,
+    lockFails: false,
   };
   const deps: AwayGuardDeps = {
     enabled: () => state.enabled,
-    remoteDesktopActive: () => state.remote,
     screenLocked: () => state.locked,
     msSinceOwnerInput: () => state.sinceOwner,
     awayAfterMs: () => AWAY_MS,
@@ -48,6 +48,7 @@ function setup(overrides: Partial<AwayGuardDeps> = {}) {
     },
     lockAndHideMasks: async () => {
       state.events.push('lock');
+      if (state.lockFails) throw new Error('DESKTOP_LOCK_FAILED');
       state.locked = true;
     },
     hideMasks: () => {
@@ -145,17 +146,50 @@ describe('AwayGuardController', () => {
     expect(state.awake).toBe(false);
   });
 
-  it('hands the display to remote desktop without locking, and locks for a new display', async () => {
+  it('locks for a display added while covered, even while the masks are still going up', async () => {
+    let finishShow = () => {};
     const { state, guard, away } = setup();
     await away(AWAY_MS);
-    state.remote = true;
-    await guard.tick();
-    expect(state.events).toEqual(['show', 'hide']);
-    expect(state.awake).toBe(false);
-    state.remote = false;
-    await away(AWAY_MS);
     await guard.displaysChanged();
-    expect(state.events).toEqual(['show', 'hide', 'show', 'lock']);
+    expect(state.events).toEqual(['show', 'lock']);
+    state.locked = false;
+    state.events = [];
+    const slow = setup({
+      showMasks: () =>
+        new Promise<void>((resolve) => {
+          finishShow = resolve;
+        }),
+    });
+    const ticking = slow.away(AWAY_MS);
+    // Masks are still loading and the helper is not consuming input yet.
+    expect(slow.guard.masked).toBe(true);
+    expect(slow.guard.inputShielded).toBe(false);
+    await slow.guard.displaysChanged();
+    finishShow();
+    await ticking;
+    expect(slow.state.events).toEqual(['lock']);
+    expect(slow.guard.inputShielded).toBe(false);
+  });
+
+  it('keeps covering through a remote desktop session', async () => {
+    // A session alone does not prove anyone protects this screen (view-only, plugin screens).
+    const { state, guard, away } = setup();
+    await away(AWAY_MS);
+    await away(60_000);
+    expect(state.events).toEqual(['show']);
+    expect(guard.inputShielded).toBe(true);
+  });
+
+  it('releases the display but reports no unlock when the lock cannot be confirmed', async () => {
+    const { state, guard, away } = setup();
+    await away(AWAY_MS);
+    state.lockFails = true;
+    state.enabled = false;
+    await guard.tick();
+    expect(state.events).toEqual(['show', 'lock']);
+    // The service keeps the masks up until macOS locks; the controller frees the display.
+    expect(state.awake).toBe(false);
+    expect(guard.masked).toBe(false);
   });
 
   it('previews the cover even with the setting off and no work, then uncovers when it runs out', async () => {

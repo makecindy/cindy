@@ -1100,7 +1100,11 @@
   },
   "awayGuard": {
     "status": "Cindy 正在工作",
-    "hint": "按任意键锁屏，用 Touch ID 或密码解锁"
+    "hint": "按任意键锁屏，用 Touch ID 或密码解锁",
+    "lockFailed": {
+      "status": "Cindy 没能锁住这台电脑",
+      "hint": "按 Control-Command-Q 锁屏，稍后系统也会自动锁屏"
+    }
   },
   "appBadge": {
     "attentionCount": "需要关注的任务：{{count}}"

@@ -62,9 +62,14 @@ displays three seconds after the click; touching locks as usual, and an untouche
 preview uncovers after two minutes without locking (the owner was just using the Mac). It also locks on
 stdin EOF, a missed heartbeat or a dead parent, so a crashed Cindy leaves a locked
 screen rather than an uncovered desktop. Main locks before removing masks when the
-setting is turned off, a display is added, or a mask window fails. Remote
-desktop takes over without a lock (its own privacy screen and lock-on-exit apply);
-an already-locked screen just drops the masks. A Cindy started on a locked screen reads
+setting is turned off, a display is added (including while the masks are still going
+up), or a mask window fails, and removes them only once the lock is confirmed. If it
+cannot lock (e.g. Accessibility was revoked), the masks stay up with a "press
+Control-Command-Q" note, the display assertion is released and the masks go when macOS
+locks. Agent input skips the person-at-the-Mac check only after every mask is up and
+the helper is consuming physical input. Remote desktop sessions do not end the cover:
+the remote viewer captures through it, and a session alone (view-only, plugin screens)
+does not prove anyone protects this screen. An already-locked screen just drops the masks. A Cindy started on a locked screen reads
 the lock from the console session (`ioreg`), because Electron's idle-state probe never
 reports `locked` on macOS and the guard would otherwise keep the display on behind it.
 

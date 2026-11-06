@@ -1129,7 +1129,11 @@
   },
   "awayGuard": {
     "status": "Cindy está trabajando",
-    "hint": "Pulsa cualquier tecla para bloquear y desbloquea con Touch ID o tu contraseña."
+    "hint": "Pulsa cualquier tecla para bloquear y desbloquea con Touch ID o tu contraseña.",
+    "lockFailed": {
+      "status": "Cindy no pudo bloquear esta Mac",
+      "hint": "Pulsa Control-Comando-Q para bloquearla. La pantalla también se bloqueará sola al cabo de un rato."
+    }
   },
   "appBadge": {
     "attentionCount": "Tareas que requieren atención: {{count}}"

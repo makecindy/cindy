@@ -1100,7 +1100,11 @@
   },
   "awayGuard": {
     "status": "Cindy 正在工作",
-    "hint": "按任意鍵鎖定螢幕，用 Touch ID 或密碼解鎖"
+    "hint": "按任意鍵鎖定螢幕，用 Touch ID 或密碼解鎖",
+    "lockFailed": {
+      "status": "Cindy 沒能鎖定這台電腦",
+      "hint": "按 Control-Command-Q 鎖定螢幕，稍後系統也會自動鎖定"
+    }
   },
   "appBadge": {
     "attentionCount": "需要關注的任務：{{count}}"

@@ -1112,7 +1112,11 @@
   },
   "awayGuard": {
     "status": "Cindy arbeitet",
-    "hint": "Drücke eine Taste zum Sperren und entsperre dann mit Touch ID oder deinem Passwort."
+    "hint": "Drücke eine Taste zum Sperren und entsperre dann mit Touch ID oder deinem Passwort.",
+    "lockFailed": {
+      "status": "Cindy konnte diesen Mac nicht sperren",
+      "hint": "Drücke Control-Command-Q zum Sperren. Nach einer Weile sperrt sich der Bildschirm auch von selbst."
+    }
   },
   "appBadge": {
     "attentionCount": "Aufgaben, die Aufmerksamkeit benötigen: {{count}}"

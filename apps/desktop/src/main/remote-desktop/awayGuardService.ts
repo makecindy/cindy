@@ -38,7 +38,6 @@ export interface AwayGuardServiceDeps {
   enabled(): boolean;
   /** Chosen absence before the cover; null follows the system display-sleep time. */
   delaySeconds(): AwayGuardDelaySeconds | null;
-  remoteDesktopActive(): boolean;
   screenLocked(): boolean;
   /** Startup lock state, used until the first lock/unlock event. */
   seedScreenLocked(locked: boolean): void;
@@ -57,8 +56,9 @@ export function supportsAwayGuard(): boolean {
 let controller: AwayGuardController | null = null;
 
 /** True while the away cover is up (physical input cannot reach any app). */
+/** Physical input is already consumed by the helper, so Agent input cannot hit the owner's work. */
 export function isAwayCoverUp(): boolean {
-  return controller?.masked === true;
+  return controller?.inputShielded === true;
 }
 
 export function startAwayGuard(deps: AwayGuardServiceDeps): void {
@@ -111,20 +111,45 @@ export function startAwayGuard(deps: AwayGuardServiceDeps): void {
     });
   };
 
-  const lockNow = async () => {
-    if (deps.screenLocked()) return;
-    await lockDesktopScreen(() => true, AbortSignal.timeout(6000)).catch((error) =>
-      log.error('away guard lock failed', error),
-    );
+  /** True only when the screen is confirmed locked. */
+  const lockNow = async (): Promise<boolean> => {
+    if (deps.screenLocked()) return true;
+    try {
+      await lockDesktopScreen(() => true, AbortSignal.timeout(6000));
+      return true;
+    } catch (error) {
+      log.error('away guard lock failed', error);
+      return deps.screenLocked();
+    }
   };
+
+  // The lock could not be confirmed (e.g. Accessibility was revoked): never uncover an
+  // unlocked desktop. The masks stay up with a way out, the controller releases the
+  // display, and the masks go once macOS locks by itself or the owner locks.
+  let heldUntilLocked = false;
+  const holdUntilLocked = () => {
+    heldUntilLocked = true;
+    void masks
+      .replacePage(awayScreenHtml(t('awayGuard.lockFailed.status'), t('awayGuard.lockFailed.hint'), false))
+      .catch(() => {});
+  };
+  const releaseHeld = () => {
+    if (!heldUntilLocked) return;
+    heldUntilLocked = false;
+    masks.stop();
+  };
+  powerMonitor.on('lock-screen', releaseHeld);
 
   const masks = new PrivacyScreen(
     // Nothing streams these masks; Agent screenshots read the windows behind them.
     () => {},
     // The helper or a mask ended on its own: never leave the desktop without a lock.
     async () => {
-      if (!helperLocked) await lockNow();
+      const locked = helperLocked || (await lockNow());
       controller?.masksEnded();
+      if (locked) return;
+      holdUntilLocked();
+      return false;
     },
     // No local confirmation dialog: physical input goes straight to the system lock.
     async () => async () => {},
@@ -149,7 +174,6 @@ export function startAwayGuard(deps: AwayGuardServiceDeps): void {
 
   controller = new AwayGuardController({
     enabled: deps.enabled,
-    remoteDesktopActive: deps.remoteDesktopActive,
     screenLocked: deps.screenLocked,
     msSinceOwnerInput: deps.msSinceOwnerInput,
     awayAfterMs: () => {
@@ -158,7 +182,9 @@ export function startAwayGuard(deps: AwayGuardServiceDeps): void {
       refreshDisplaySleep();
       return awayAfterMs;
     },
-    keepDisplayAwake: (awake) => {
+    keepDisplayAwake: (requested) => {
+      // While masks wait for macOS to lock by itself, the display must be free to sleep.
+      const awake = requested && !heldUntilLocked;
       if (awake && displayAwake === null) {
         displayAwake = powerSaveBlocker.start('prevent-display-sleep');
       } else if (!awake && displayAwake !== null) {
@@ -167,6 +193,10 @@ export function startAwayGuard(deps: AwayGuardServiceDeps): void {
       }
     },
     showMasks: async () => {
+      if (heldUntilLocked) {
+        if (!deps.screenLocked()) throw new Error('DESKTOP_LOCK_PENDING');
+        releaseHeld();
+      }
       const current = ++generation;
       restoreWindow = BrowserWindow.getFocusedWindow();
       try {
@@ -178,8 +208,11 @@ export function startAwayGuard(deps: AwayGuardServiceDeps): void {
     },
     lockAndHideMasks: async () => {
       generation++;
-      const locked = monitor ? await monitor.lock() : false;
-      if (!locked) await lockNow();
+      const locked = (monitor ? await monitor.lock() : false) || (await lockNow());
+      if (!locked) {
+        holdUntilLocked();
+        throw new Error('DESKTOP_LOCK_FAILED');
+      }
       masks.stop();
     },
     hideMasks: () => {

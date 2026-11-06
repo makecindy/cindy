@@ -30,7 +30,8 @@ export class PrivacyScreen {
   }
   constructor(
     private readonly excluded: (ids: number[]) => void,
-    private readonly stopped: () => void | Promise<void>,
+    /** Returns false to keep the masks up (the away guard could not lock). */
+    private readonly stopped: () => void | false | Promise<void | false>,
     private readonly suspendInput: () => Promise<() => Promise<void>>,
     private readonly watchInput: PrivacyInputWatcher = watchPrivacyInput,
     private readonly options: {
@@ -50,16 +51,17 @@ export class PrivacyScreen {
     // Invalidate callbacks immediately, but retain masks and capture exclusions
     // until the controller has finished locking and ended the viewing lease.
     const ending = ++this.generation;
+    let keep = false;
     try {
       // The confirming hook rejects injected input, including our lock shortcut.
       // Keep the masks, but wait for hook teardown before asking the OS to lock.
       await this.monitor?.stop();
       if (ending !== this.generation) return;
-      await this.stopped();
+      keep = (await this.stopped()) === false;
     } catch {
       log.warn('privacy disconnect failed');
     } finally {
-      if (ending === this.generation) this.stop();
+      if (ending === this.generation && !keep) this.stop();
     }
   }
   private async confirmExit(window: BrowserWindow, generation: number): Promise<void> {
@@ -263,6 +265,14 @@ export class PrivacyScreen {
       throw error;
     }
   }
+  /** Swaps the page on every mask, keeping the masks in place. */
+  async replacePage(html: string): Promise<void> {
+    const url = `data:text/html;charset=utf-8,${encodeURIComponent(html)}`;
+    await Promise.all(
+      this.windows.filter((window) => !window.isDestroyed()).map((window) => window.loadURL(url)),
+    );
+  }
+
   stop(): void {
     this.generation++;
     this.confirming = false;

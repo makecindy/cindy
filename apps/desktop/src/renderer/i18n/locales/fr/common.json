@@ -1129,7 +1129,11 @@
   },
   "awayGuard": {
     "status": "Cindy travaille",
-    "hint": "Appuyez sur une touche pour verrouiller, puis déverrouillez avec Touch ID ou votre mot de passe."
+    "hint": "Appuyez sur une touche pour verrouiller, puis déverrouillez avec Touch ID ou votre mot de passe.",
+    "lockFailed": {
+      "status": "Cindy n'a pas pu verrouiller ce Mac",
+      "hint": "Appuyez sur Contrôle-Commande-Q pour le verrouiller. L'écran se verrouillera aussi de lui-même au bout d'un moment."
+    }
   },
   "appBadge": {
     "attentionCount": "Tâches nécessitant votre attention : {{count}}"

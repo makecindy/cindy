@@ -1100,7 +1100,11 @@
   },
   "awayGuard": {
     "status": "Cindy が作業中です",
-    "hint": "いずれかのキーを押すとロックされます。Touch ID またはパスワードで解除してください。"
+    "hint": "いずれかのキーを押すとロックされます。Touch ID またはパスワードで解除してください。",
+    "lockFailed": {
+      "status": "Cindy はこの Mac をロックできませんでした",
+      "hint": "Control-Command-Q でロックしてください。しばらくするとシステムも自動でロックします。"
+    }
   },
   "appBadge": {
     "attentionCount": "対応が必要なセッション：{{count}}"

@@ -8,7 +8,9 @@
  * working behind it. Physical input at this Mac turns into the real system lock (the
  * native helper does this itself), so the owner unlocks with Touch ID or password.
  * Turning the setting off, a new display, or the masks failing also end in the real
- * lock. Nothing here ever unlocks the screen.
+ * lock. Remote desktop sessions do not end the cover: the remote viewer captures
+ * through it, and a session alone does not prove anyone protects this screen.
+ * Nothing here ever unlocks the screen.
  *
  * Fail-safe direction: whenever the guard cannot prove masks are up (missing
  * permission, mask failure, unknown input state), it releases the display
@@ -17,7 +19,6 @@
 
 export interface AwayGuardDeps {
   enabled(): boolean;
-  remoteDesktopActive(): boolean;
   screenLocked(): boolean;
   /**
    * Milliseconds since the owner's last keyboard/pointer input. Infinity when the
@@ -29,9 +30,12 @@ export interface AwayGuardDeps {
   keepDisplayAwake(awake: boolean): void;
   /** Rejects when masks or the native input guard cannot start. */
   showMasks(): Promise<void>;
-  /** Locks the screen, then removes the masks. */
+  /**
+   * Locks the screen, then removes the masks. Rejects when the lock is not confirmed;
+   * the masks then stay up until the system locks by itself.
+   */
   lockAndHideMasks(): Promise<void>;
-  /** Removes the masks without locking (already locked, or remote desktop took over). */
+  /** Removes the masks without locking (already locked, or a preview ran out). */
   hideMasks(): void;
   now(): number;
   log(event: string, detail?: Record<string, unknown>): void;
@@ -65,6 +69,7 @@ export class AwayGuardController {
   private ownerInputAt: number;
   private retryAt = 0;
   private previewUntil = 0;
+  private displayAddedWhileShowing = false;
   private ticking = false;
 
   constructor(private readonly deps: AwayGuardDeps) {
@@ -73,6 +78,11 @@ export class AwayGuardController {
 
   get masked(): boolean {
     return this.mask !== 'none';
+  }
+
+  /** Every display is covered and the helper is already consuming physical input. */
+  get inputShielded(): boolean {
+    return this.mask === 'shown';
   }
 
   async tick(): Promise<void> {
@@ -91,16 +101,15 @@ export class AwayGuardController {
    * real cover; running out uncovers without a lock.
    */
   async preview(): Promise<void> {
-    if (this.mask !== 'none' || this.deps.screenLocked() || this.deps.remoteDesktopActive()) return;
-    this.mask = 'showing';
+    if (this.mask !== 'none' || this.deps.screenLocked()) return;
+    this.beginShowing();
     try {
       await this.deps.showMasks();
     } catch (error) {
-      if (this.mask === 'showing') this.mask = 'none';
+      if ((this.mask as MaskState) === 'showing') this.mask = 'none';
       throw error;
     }
-    if (this.mask !== 'showing') return;
-    this.mask = 'shown';
+    if (!(await this.finishShowing())) return;
     this.previewUntil = this.deps.now() + AWAY_GUARD_PREVIEW_MS;
     this.deps.keepDisplayAwake(true);
     this.deps.log('preview shown');
@@ -118,8 +127,24 @@ export class AwayGuardController {
 
   /** A display was added while covered: it is not masked, so lock. */
   async displaysChanged(): Promise<void> {
+    // Masks are built for the displays seen when showing began; recheck once they are up.
+    if (this.mask === 'showing') this.displayAddedWhileShowing = true;
     if (this.mask !== 'shown') return;
     await this.end(true, 'display added');
+  }
+
+  private beginShowing(): void {
+    this.mask = 'showing';
+    this.displayAddedWhileShowing = false;
+  }
+
+  /** True when the masks are up and still cover every display. */
+  private async finishShowing(): Promise<boolean> {
+    if (this.mask !== 'showing') return false;
+    this.mask = 'shown';
+    if (!this.displayAddedWhileShowing) return true;
+    await this.end(true, 'display added while covering');
+    return false;
   }
 
   private async evaluate(): Promise<void> {
@@ -127,11 +152,11 @@ export class AwayGuardController {
     // A preview is still putting its masks up; let it finish first.
     if (this.mask === 'showing') return;
     const now = deps.now();
-    if (deps.screenLocked() || deps.remoteDesktopActive()) {
-      // The owner unlocking (or viewing remotely) starts a fresh absence period.
+    if (deps.screenLocked()) {
+      // The owner unlocking starts a fresh absence period.
       this.ownerInputAt = now;
       this.previewUntil = 0;
-      return this.standDown(false, 'locked or remote');
+      return this.standDown(false, 'locked');
     }
     if (this.previewUntil) {
       if (this.mask === 'shown' && now < this.previewUntil) return deps.keepDisplayAwake(true);
@@ -155,14 +180,12 @@ export class AwayGuardController {
     }
     deps.keepDisplayAwake(true);
     if (now - this.ownerInputAt < deps.awayAfterMs()) return;
-    this.mask = 'showing';
+    this.beginShowing();
     try {
       await deps.showMasks();
-      if (this.mask !== 'showing') return;
-      this.mask = 'shown';
-      deps.log('masks shown');
+      if (await this.finishShowing()) deps.log('masks shown');
     } catch (error) {
-      if (this.mask === 'showing') this.mask = 'none';
+      if ((this.mask as MaskState) === 'showing') this.mask = 'none';
       this.retryAt = now + AWAY_GUARD_RETRY_MS;
       deps.keepDisplayAwake(false);
       deps.log('masks unavailable', { error: error instanceof Error ? error.message : String(error) });
@@ -188,6 +211,9 @@ export class AwayGuardController {
     try {
       if (lock) await this.deps.lockAndHideMasks();
       else this.deps.hideMasks();
+    } catch (error) {
+      // The masks stay up; with the display released macOS sleeps and locks by itself.
+      this.deps.log('lock not confirmed', { reason, error: error instanceof Error ? error.message : String(error) });
     } finally {
       this.mask = 'none';
       this.ownerInputAt = this.deps.now();

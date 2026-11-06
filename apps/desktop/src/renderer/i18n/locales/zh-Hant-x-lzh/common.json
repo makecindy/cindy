@@ -1100,7 +1100,11 @@
   },
   "awayGuard": {
     "status": "Cindy 正勞作",
-    "hint": "按任一鍵即鎖屏，以 Touch ID 或密碼解之"
+    "hint": "按任一鍵即鎖屏，以 Touch ID 或密碼解之",
+    "lockFailed": {
+      "status": "Cindy 未能鎖此機",
+      "hint": "按 Control-Command-Q 鎖屏，稍候系統亦自鎖"
+    }
   },
   "appBadge": {
     "attentionCount": "待察之差事：{{count}}"

@@ -1129,7 +1129,11 @@
   },
   "awayGuard": {
     "status": "O Cindy está a trabalhar",
-    "hint": "Prima qualquer tecla para bloquear e desbloqueie com Touch ID ou a sua palavra-passe."
+    "hint": "Prima qualquer tecla para bloquear e desbloqueie com Touch ID ou a sua palavra-passe.",
+    "lockFailed": {
+      "status": "O Cindy não conseguiu bloquear este Mac",
+      "hint": "Prima Control-Comando-Q para o bloquear. O ecrã também bloqueia sozinho passado algum tempo."
+    }
   },
   "appBadge": {
     "attentionCount": "Tarefas que precisam de atenção: {{count}}"

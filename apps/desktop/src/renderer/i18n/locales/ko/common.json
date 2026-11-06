@@ -1100,7 +1100,11 @@
   },
   "awayGuard": {
     "status": "Cindy가 작업 중입니다",
-    "hint": "아무 키나 누르면 잠깁니다. Touch ID나 암호로 잠금 해제하세요."
+    "hint": "아무 키나 누르면 잠깁니다. Touch ID나 암호로 잠금 해제하세요.",
+    "lockFailed": {
+      "status": "Cindy가 이 Mac을 잠그지 못했습니다",
+      "hint": "Control-Command-Q를 눌러 잠그세요. 잠시 후 시스템도 자동으로 잠급니다."
+    }
   },
   "appBadge": {
     "attentionCount": "확인이 필요한 세션: {{count}}"
