@@ -2994,7 +2994,6 @@ export function getCindyGhostsMcpDeps(
             version: packed.manifest.version,
             publishToken: staged.ticket,
             note: `${iconNote}已打包为待发布产物。仅企业组织成员可用 ghost_forge_publish 提交;个人账号不可用。`,
-            ...(packed.warnings?.length ? { warnings: packed.warnings } : {}),
           };
         }
         log.info('ghost forge packed', { dir, cindyPath: packed.cindyPath, id: packed.manifest.id });
@@ -3005,7 +3004,6 @@ export function getCindyGhostsMcpDeps(
           name: packed.manifest.name,
           version: packed.manifest.version,
           note: `${iconNote}已完成校验和打包；本工具不会安装或更新插件。`,
-          ...(packed.warnings?.length ? { warnings: packed.warnings } : {}),
         };
       });
     },

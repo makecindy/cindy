@@ -30,10 +30,6 @@
   // 否则请始终声明一个 command。
   "tools": [ /* 见 §3；下方 open_view 必须在此声明 */ ],
   // 可选交互页面，完整示例见 §4.23；需要 minCindyVersion >= 0.1.122-beta
-  // 原生位置的贡献与多个独立视图另用 ui；开发中，完整契约见 plugin-native-ui.md。
-  // "ui": { "version": 1, "contributions": [{ "id": "format", "point": "composer.tools", "scope": "session" }] },
-  // 可并列 tabViews: [{ "id": "logs", "title": "日志", "scope": "session", "page": "views/logs.html" }]。
-  // 只登记可打开的页面，不自动打开；不替代 mainView / panel / taskView。
   "mcpApps": { "ui": {
     "resources": [{ "uri": "ui://records/v1", "file": "ui/page.html" }],
     "tools": { "open_view": { "resourceUri": "ui://records/v1" } }
