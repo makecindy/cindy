@@ -48,6 +48,8 @@ export function normalizeMenubarSettings(raw: unknown): MenubarSettings {
     lowAlert: typeof r.lowAlert === 'boolean' ? r.lowAlert : d.lowAlert,
     privacy: typeof r.privacy === 'boolean' ? r.privacy : d.privacy,
     scope: MENUBAR_USAGE_SCOPES.includes(r.scope as never) ? (r.scope as MenubarSettings['scope']) : d.scope,
+    hideFullMagpieAccounts:
+      typeof r.hideFullMagpieAccounts === 'boolean' ? r.hideFullMagpieAccounts : d.hideFullMagpieAccounts,
   };
 }
 

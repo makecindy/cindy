@@ -526,6 +526,14 @@ export const MAKER_INVOKE = {
    */
   PROVIDER_MODELS_AUTO_REFRESH: 'maker:provider:models-auto-refresh',
   /**
+   * Magpie（本机网关）模型清单同步。入参仅 providerId；Main 从 safeStorage 读取
+   * 该连接自己的 gateway key 并发起列模型请求，不接收 URL、凭证或任意执行参数。
+   * status 为只读查询；sync 为显式同步，跳过冷却但仍在途合并。
+   * 属本机账号/目录操作，不进 device-link allowlist。
+   */
+  PROVIDER_MAGPIE_SYNC_STATUS: 'maker:provider:magpie-sync-status',
+  PROVIDER_MAGPIE_SYNC: 'maker:provider:magpie-sync',
+  /**
    * 自定义模型供应商 CRUD（配置入 localDb；update 的 runtime 密钥与配置原子排队）。
    * create/update 入参 = config + runtimeKeys；delete 入参 = providerId。
    * 成功后 main 重算 active-catalog 并广播 PROVIDER_CHANGED（见 MAKER_PUSH）。

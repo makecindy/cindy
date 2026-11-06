@@ -351,6 +351,19 @@ export * from './providerDetection.js';
 export { validDiscoveredModelSource, modelSupplierLabel } from './modelSource.js';
 export type { DiscoveredModelSource } from './modelSource.js';
 export {
+  MAGPIE_PRESET_ID,
+  MAGPIE_LOOPBACK_ORIGIN,
+  MAGPIE_MODELS_URL,
+  MAGPIE_NATIVE_ENDPOINTS,
+  isMagpiePresetId,
+  isMagpieCustomProviderConfig,
+  parseMagpieNativeEndpoints,
+  magpieOriginPrefix,
+  magpieRouteForAgent,
+  magpieModelForAgent,
+} from './magpie.js';
+export type { MagpieNativeEndpoint } from './magpie.js';
+export {
   markedSelectionAliasGroups, projectSelectionAliases, inheritSelectionAliasPreferences,
   selectionAliasTargets, type SelectionAliasGroup, type SelectionAliasPreferences,
 } from './selectionAliasGroups.js';

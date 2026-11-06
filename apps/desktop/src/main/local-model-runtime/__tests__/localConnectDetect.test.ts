@@ -32,6 +32,13 @@ describe('detectLocalConnectPresets', () => {
         probe: async (url) => url.includes(':4000'),
       }),
     ).resolves.toEqual(['litellm']);
+    await expect(
+      detectLocalConnectPresets({
+        platform: 'linux',
+        appExists: () => false,
+        probe: async (url) => url.includes(':3425'),
+      }),
+    ).resolves.toEqual(['magpie']);
   });
 
   it('returns nothing when no local runtime is installed or listening', async () => {

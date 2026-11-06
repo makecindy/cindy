@@ -7,6 +7,7 @@ import {
   LMSTUDIO_OPENAI_BASE_URL,
   LOCAL_ADVANCED_PRESET_IDS,
   LOCAL_CONNECT_PRESET_IDS,
+  MAGPIE_MODELS_URL,
   VLLM_OPENAI_BASE_URL,
 } from '../../shared/localModelRuntime.js';
 
@@ -17,6 +18,7 @@ export const LOCAL_PRESET_MODELS_URLS: Record<string, string> = {
   llamacpp: `${LLAMACPP_OPENAI_BASE_URL}/models`,
   vllm: `${VLLM_OPENAI_BASE_URL}/models`,
   litellm: `${LITELLM_OPENAI_BASE_URL}/models`,
+  magpie: MAGPIE_MODELS_URL,
 };
 
 export function lmStudioInstallPaths(

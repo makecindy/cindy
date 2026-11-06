@@ -2,6 +2,13 @@
 
 > 迁自 `DESIGN.md` §4，规范效力不变。文中未注明文档的 `§N` 均指 [DESIGN.md](./DESIGN.md)。
 
+### Magpie 上游账号
+
+- 上游额度与 Cindy 余额、任务费用分开显示。每个账号展示剩余窗口、重置时间和读数时间；网关失联时保留上次读数并标记陈旧，不伪装成实时推送。
+- 柱状账号区固定可视宽度，约六个正常尺寸单元；更多账号通过按住鼠标横拖或账号区内滚轮访问，拖动不能触发详情点击。账号减少或视口改变时偏移收敛，不留下不可恢复的空白。
+- 所有账号仍在管理列表可恢复显示。默认隐藏所有账号级窗口都已耗尽的 Magpie 账号，显式显示优先；六个单元是可视预算，不是账号数量上限。
+- 详情圆环、大数字和说明对应同一个限制窗口，其余窗口留在事实列表。长说明置于圈外，颜色继续复用原生 Light/Dark 主题。
+
 ### macOS menu bar quota panel (owner-approved v6 prototype, 2026-10-11)
 
 Icon refinement reference (2026-10-18, macOS AppKit rendering; enlarged and actual 18pt size):

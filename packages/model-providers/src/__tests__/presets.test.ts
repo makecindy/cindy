@@ -10,6 +10,8 @@
 import { describe, it, expect } from 'vitest';
 
 import { BUNDLED_CATALOG, parseCatalog, presetDisplayName, sanitizePresets, sortPresetsForRegion } from '../catalog.js';
+import { MAGPIE_PRESET_ID } from '../magpie.js';
+import { isLoopbackProviderUrl } from '../provider-url.js';
 import { mergeWithBundled } from '../source.js';
 import type { AgentKind, Catalog } from '../types.js';
 
@@ -868,11 +870,15 @@ describe('BUNDLED_CATALOG 首批预设自检', () => {
     for (const p of BUNDLED_CATALOG.presets ?? []) {
       for (const rt of Object.values(p.runtimes)) {
         const url = new URL(rt.baseUrl);
+        // 全局规则不变：本机 http 只允许「明确无鉴权 + 可编辑」的回环代理。
+        // Magpie 是唯一例外——它的 Bearer gateway key 只在本机回环上使用，
+        // 因此按预设 id 显式白名单放行，且仍要求 base URL 指向 loopback。
+        const magpieLoopback = p.id === MAGPIE_PRESET_ID && isLoopbackProviderUrl(rt.baseUrl);
         const secureLocal =
-          p.authMethod === 'none'
-          && rt.baseUrlEditable === true
+          rt.baseUrlEditable === true
           && url.protocol === 'http:'
-          && (url.hostname === '127.0.0.1' || url.hostname === 'localhost');
+          && (url.hostname === '127.0.0.1' || url.hostname === 'localhost')
+          && (p.authMethod === 'none' || magpieLoopback);
         expect(url.protocol === 'https:' || secureLocal, `${p.id}: ${rt.baseUrl}`).toBe(true);
       }
     }

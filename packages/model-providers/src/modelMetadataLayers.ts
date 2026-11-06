@@ -477,6 +477,11 @@ export interface DiscoveredModel {
   /** Main-issued receipt for a successful response, including source-field removal. */
   discoverySnapshotId?: string;
   discoveredSource?: import("./modelSource.js").DiscoveredModelSource;
+  /**
+   * Magpie-only: the native wire paths this model declares. Transient discovery
+   * evidence, never copied into persistent model metadata.
+   */
+  nativeEndpoints?: readonly string[];
   id: string;
   name: string;
   /** Account entitlement, never inherited as public model metadata. */
