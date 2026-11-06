@@ -26,6 +26,8 @@ const h = vi.hoisted(() => ({
   local: [] as Array<Record<string, unknown>>,
   remote: [] as Array<Record<string, unknown>>,
   delegations: [] as Array<Record<string, unknown>>,
+  running: new Map<string, { isRunning: boolean }>(),
+  getSession: vi.fn(),
   send: vi.fn(async () => true),
   sessions: [] as Array<Record<string, unknown>>,
   remoteSessions: [] as Array<Record<string, unknown>>,
@@ -52,9 +54,11 @@ vi.mock('../remoteBotSettingsClient', () => ({ invokeBotSettings: h.remoteRoutin
 vi.mock('@/lib/composerActionsBus', () => ({ insertTodoReferenceIntoComposer: h.insert }));
 vi.mock('@/lib/toast', () => ({ toast: { info: h.toastInfo, error: h.toastError } }));
 vi.mock('@/lib/orcaSessionIdentity', () => ({ resolveSessionRoute: async (id: string) => `/cc-agent/${id}` }));
-vi.mock('@/lib/makerChatStore', () => ({ makerChatStore: { sendMessage: h.send } }));
+vi.mock('@/lib/makerChatStore', () => ({ makerChatStore: {
+  sendMessage: h.send, getRunningSnapshot: () => h.running, subscribeAll: () => () => {},
+} }));
 vi.mock('@/lib/sessionService', () => ({
-  get: async (id: string) => ({ id, model: 'm', effort: 'high', permissionMode: 'auto', workingDir: '/w' }),
+  get: h.getSession,
 }));
 vi.mock('../BotAvatar', () => ({ BotAvatar: () => <span data-testid="bot-avatar" /> }));
 vi.mock('../botStore', () => ({ useBotProfiles: () => h.local, useBotUnreadCounts: () => ({}) }));
@@ -77,7 +81,10 @@ vi.mock('@/contexts/PrRefsContext', () => ({
   usePrRefsForSessions: (ids: string[]) => h.refs.filter(ref => ids.includes(ref.sessionId as string)),
   usePrStatuses: () => ({ statuses: h.statuses, successfulStatuses: new Map() }),
 }));
-vi.mock('../botDelegationLive', () => ({ useBotDelegations: () => h.delegations }));
+vi.mock('../botDelegationLive', () => ({
+  useBotDelegations: () => h.delegations,
+  useBotDelegationList: () => ({ rows: h.delegations, resolved: true, stale: false, retry: () => {} }),
+}));
 vi.mock('@/features/device-link/useDeviceLinkDeviceList', () => ({
   useDeviceLinkDeviceList: () => [{ deviceId: 'self', name: 'Mac-Studio', isSelf: true }],
 }));
@@ -133,6 +140,10 @@ beforeEach(() => {
   h.local = [];
   h.remote = [];
   h.delegations = [];
+  h.running = new Map();
+  h.getSession.mockReset().mockImplementation(async (id: string) => ({
+    id, status: 'active', model: 'm', effort: 'high', permissionMode: 'auto', workingDir: '/w',
+  }));
   window.localStorage.clear();
   (window as unknown as { electronAPI: unknown }).electronAPI = {
     localDb: { bots: { todos: { list, update, dailyCheck }, workbench: { followScopes: async () => h.scopes } } },
@@ -158,6 +169,63 @@ async function openGlance(target: BotChatIdentity = bot) {
 }
 
 describe('BotGlanceButton', () => {
+  it('opens the fixed background task view without transcript cards, projecting this teammate’s task status and original session', async () => {
+    const task = { id: 'd1', title: 'Review release', childSessionId: 'review', requestingBotId: bot.id,
+      targetBotId: null, targetProfileVersion: null, status: 'completed', updatedAt: 20, artifacts: [] };
+    h.delegations = [
+      task,
+      { ...task, id: 'd2', title: 'Approve plan', childSessionId: 'approve', status: 'waiting', updatedAt: 30,
+        pendingInteraction: { type: 'plan' } },
+      { ...task, id: 'foreign', title: 'Other teammate’s task', requestingBotId: 'other-bot' },
+      { ...task, id: 'recipient', title: 'Delegated to a teammate', targetBotId: 'other-bot' },
+      { ...task, id: 'deleted-recipient', title: 'Deleted recipient’s task', targetProfileVersion: 2 },
+      { ...task, id: 'missing-child', title: 'No task session', childSessionId: null },
+    ];
+    h.running.set('review', { isRunning: true });
+    h.sessions = [{ id: 'review', title: 'Review release again', status: 'active', lastActivityAt: new Date(40).toISOString() }];
+    h.getSession.mockResolvedValueOnce({ id: 'approve', status: 'archived' });
+    await openGlance();
+    fireEvent.click(screen.getByTestId('bot-glance-background-tasks'));
+    const rows = screen.getAllByTestId('bot-glance-background-task');
+    expect(rows.map(row => row.querySelector('[title]')?.getAttribute('title'))).toEqual(['Review release again', 'Approve plan']);
+    expect(rows[0].textContent).toContain('bots.collab.status.running');
+    expect(rows[0].textContent).toContain('bots.glance.background.updatedAt');
+    expect(rows[1].textContent).toContain('bots.collab.status.waiting');
+    expect(h.getSession).not.toHaveBeenCalled();
+
+    fireEvent.click(rows[1]);
+    await waitFor(() => expect(h.navigate).toHaveBeenCalledExactlyOnceWith('/cc-agent/approve'));
+    expect(h.getSession).toHaveBeenCalledExactlyOnceWith('approve');
+    expect(screen.queryByTestId('bot-glance-background-list')).toBeNull();
+  });
+
+  it('keeps the task view open and reports failure when the original task was deleted', async () => {
+    h.delegations = [{ id: 'd1', title: 'Old task', childSessionId: 'gone', requestingBotId: bot.id,
+      targetBotId: null, targetProfileVersion: null, status: 'failed', updatedAt: 20, artifacts: [] }];
+    h.getSession.mockResolvedValueOnce({ id: 'gone', status: 'deleted' });
+    await openGlance();
+    fireEvent.click(screen.getByTestId('bot-glance-background-tasks'));
+    fireEvent.click(screen.getByTestId('bot-glance-background-task'));
+    await waitFor(() => expect(h.toastError).toHaveBeenCalledWith('bots.glance.background.openFailed'));
+    expect(h.navigate).not.toHaveBeenCalled();
+    await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'bots.glance.background.back' })); });
+    expect(document.activeElement).toBe(screen.getByTestId('bot-glance-background-tasks'));
+  });
+
+  it('makes older background tasks reachable without rendering the whole history at once', async () => {
+    h.delegations = Array.from({ length: 31 }, (_, index) => ({ id: `d${index}`, title: `Task ${index}`,
+      childSessionId: `task${index}`, requestingBotId: bot.id, targetBotId: null, targetProfileVersion: null,
+      status: 'running', updatedAt: 31 - index, artifacts: [] }));
+    await openGlance();
+    fireEvent.click(screen.getByTestId('bot-glance-background-tasks'));
+    expect(screen.getAllByTestId('bot-glance-background-task')).toHaveLength(30);
+    const more = screen.getByRole('button', { name: 'bots.glance.showMore' });
+    more.focus();
+    fireEvent.click(more);
+    expect(screen.getByText('Task 30')).toBeTruthy();
+    expect(document.activeElement).toBe(screen.getByRole('button', { name: 'bots.glance.showLess' }));
+  });
+
   // A never-run rule must be visible in the same list as ordinary tasks. Multiple run
   // sessions for one rule must not duplicate it or discard its latest unread result.
   // Recency follows ordinary task activity (creation for never-run rules), not rule edits.

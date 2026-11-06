@@ -1,4 +1,5 @@
 import { AppFrame, forbid, mountPage, subscription } from '../../ui-page/harness';
+import { useLocation } from 'react-router-dom';
 import { BotSessionContentHeaderRegistration } from '../../../src/renderer/features/bots/BotSessionContentHeader';
 import { todoLocalDate, type TeammateTodo } from '@cindy/maker-shared/teammate-todo';
 
@@ -19,7 +20,7 @@ const today = todoLocalDate(new Date(), zone);
 const friday = new Date(Date.now() + 3 * 86_400_000).toISOString().slice(0, 10);
 
 function items(caseName: string): TeammateTodo[] {
-  if (caseName === 'new' || caseName === 'activity' || caseName === 'routines') return [];
+  if (caseName === 'new' || caseName === 'activity' || caseName === 'routines' || caseName === 'background-tasks') return [];
   return [
     todo('t1', 'Reply to MagicLizi about the release date 回 MagicLizi 的邮件，确认发版时间', 'mail', 'MagicLizi', {
       sourceDeadline: { kind: 'date', date: today, timeZone: zone },
@@ -33,6 +34,11 @@ function items(caseName: string): TeammateTodo[] {
       status: 'done', history: [{ summary: 'You said it was paid', at: '2026-10-19T02:00:00Z' }],
     }),
   ];
+}
+
+function CurrentRoute() {
+  const { pathname } = useLocation();
+  return <output data-testid="glance-fixture-route" hidden>{pathname}</output>;
 }
 
 mountPage({
@@ -66,6 +72,7 @@ mountPage({
           : { id: 'cindy-default', name: 'Cindy', avatar: 'cindy://avatar/preset/cindy', templateId: 'cindy', sessionId: 'chat-1', canonicalChat: true }}
       />
       <div className="min-h-0 flex-1 p-6" data-ui-page-subject />
+      {ctx.case === 'background-tasks' ? <CurrentRoute /> : null}
     </AppFrame>
   ),
 });
