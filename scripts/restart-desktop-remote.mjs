@@ -118,8 +118,60 @@ function stripTrailingSlashes(value) {
   return value.replace(/\/+$/, '');
 }
 
+const LAUNCHER_ENTRY = String.raw`(?:node(?:\.exe)?|pnpm(?:\.cjs|\.js|\.exe|\.cmd)?|npm(?:-cli\.js|\.cmd)?|npx(?:-cli\.js|\.cmd)?|corepack(?:\.js|\.cmd)?)`;
+const LAUNCHER_BARE_RE = new RegExp(String.raw`^\s*${LAUNCHER_ENTRY}(?=\s|$)`, 'i');
+const LAUNCHER_QUOTED_RE = /^\s*(?:"([^"]*)"|'([^']*)')/;
+const LAUNCHER_PATH_RE = new RegExp(String.raw`(?:^|/)${LAUNCHER_ENTRY}$`, 'i');
+const LAUNCHER_PATH_END_RE = new RegExp(String.raw`/${LAUNCHER_ENTRY}(?=\s|$)`, 'gi');
+const ABSOLUTE_PATH_RE = /^(?:\/|[a-z]:\/)/i;
+
+function isExistingFile(candidate) {
+  try {
+    return fs.statSync(candidate).isFile();
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * 命令行开头那个启动器入口占多长（0 = 开头不是启动器）。
+ * 引号包裹的整段、裸命令名（`node`）直接按文字判断。未加引号的绝对路径可能含空格
+ * （`ps` 不补引号），而目录名也可能长得像启动器（`/repo/node workspace/cindy/...`），
+ * 光看文字分不清：逐个候选结尾去文件系统确认「这一段确实是个文件」才算。
+ */
+function launcherPrefixLength(rest) {
+  const bare = rest.match(LAUNCHER_BARE_RE);
+  if (bare) return bare[0].length;
+  const quoted = rest.match(LAUNCHER_QUOTED_RE);
+  if (quoted) return LAUNCHER_PATH_RE.test(quoted[1] ?? quoted[2]) ? quoted[0].length : 0;
+  const leading = rest.match(/^\s*/)[0].length;
+  for (const match of rest.matchAll(LAUNCHER_PATH_END_RE)) {
+    const end = match.index + match[0].length;
+    const candidate = rest.slice(leading, end);
+    if (ABSOLUTE_PATH_RE.test(candidate) && isExistingFile(candidate)) return end;
+  }
+  return 0;
+}
+
+/**
+ * 去掉命令行开头的 Node 运行时与包管理器入口（node / pnpm / npm / corepack）。
+ * 解释器装在哪个 checkout 里不代表进程属于它：另一份 checkout 借用本 checkout 自带的 node
+ * 启动 dev 时，命令行开头带着本 checkout 的路径，按路径认归属会被本 checkout 的 restart
+ * 当成自己的实例整组杀掉（2026-11-06 实际发生）。Electron、electron-forge 等指向 checkout
+ * 自身依赖的路径不在此列，仍是归属依据。
+ */
+function stripLauncherPrefix(command) {
+  let rest = command.replaceAll('\\', '/');
+  for (let i = 0; i < 4; i += 1) {
+    const length = launcherPrefixLength(rest);
+    if (length === 0) break;
+    rest = rest.slice(length);
+  }
+  return rest;
+}
+
 export function commandContainsPath(command, candidatePath) {
-  const normalizedCommand = normalize(command);
+  const normalizedCommand = normalize(stripLauncherPrefix(command));
   const normalizedPath = stripTrailingSlashes(normalize(candidatePath));
   if (!normalizedPath) return false;
   let index = normalizedCommand.indexOf(normalizedPath);

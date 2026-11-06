@@ -129,3 +129,50 @@ describe("Sonnet 5.5 adopted official reference price", () => {
     expect(resolveModelReferencePrice(registry, "anthropic", "claude-sonnet-5-5", { ...options, variant: "fast" })).toBeUndefined();
   });
 });
+
+// Unit: explicit Batch lookup must preserve official cache prices, unknown fields,
+// adoption history and 200K boundaries. Existing tests did not cover these PDF SKUs.
+describe("Anthropic Batch reference prices vendor-effective 2026-10-22 and adopted 2026-11-06", () => {
+  it.each([
+  ["claude-opus-5-5", 2, 10, 0.1, 2.5, 4, undefined],
+  ["claude-fable-5-1", 5, 25, 0.125, 6.25, 10, undefined],
+  ["claude-fable-5", 5, 25, 0.5, 6.25, 10, undefined],
+  ["claude-mythos-5", 5, 25, 0.5, 6.25, 10, undefined],
+  ["claude-opus-5", 2.5, 12.5, 0.25, 3.125, 5, undefined],
+  ["claude-opus-4-8", 2.5, 12.5, 0.25, 3.125, 5, undefined],
+  ["claude-opus-4-7", 2.5, 12.5, 0.25, 3.125, 5, undefined],
+  ["claude-opus-4-6", 2.5, 12.5, 0.25, 3.125, 5, undefined],
+  ["claude-opus-4-5", 2.5, 12.5, 0.25, 3.125, 5, 200001],
+  ["claude-sonnet-5", 1, 5, 0.1, 1.25, 2, undefined],
+  ["claude-sonnet-4-6", 1.5, 7.5, 0.15, 1.875, 3, undefined],
+  ["claude-sonnet-4-5", 1.5, 7.5, undefined, undefined, undefined, 200001],
+  ["claude-haiku-4-5", 0.5, 2.5, 0.05, 0.625, 1, 200001],
+  ] as const)("resolves %s Batch at its evidence-backed effective date while preserving standard", (id, input, output, read, write, oneHour, maximum) => {
+    const options = { at: "2026-11-06", variant: "batch" as const, currency: "USD" as const };
+    const direct = resolveModelReferencePrice(registry, "anthropic", id, options)?.price;
+    expect(direct).toEqual({
+      currency: "USD", variant: "batch", inputPerMtok: input, outputPerMtok: output,
+      ...(read !== undefined ? { cacheReadPerMtok: read, cacheWritePerMtok: write, cacheWrite1hPerMtok: oneHour } : {}),
+      ...(maximum !== undefined ? { maxInputTokens: maximum } : {}),
+      effectiveFrom: id === "claude-sonnet-4-5" ? "2026-11-06" : "2026-10-22",
+      source: { kind: "provider-official", url: id === "claude-sonnet-4-5"
+        ? "https://platform.claude.com/docs/en/about-claude/pricing"
+        : "https://assets.claude.com/5633dc848caa431115468f31c7085d695bbfb9cc.pdf", verifiedAt: "2026-11-06" },
+    });
+    expect(resolveBaseModelReferencePrice(registry, id, { ...options, priceGroup: "global" })?.price).toEqual(direct);
+    expect(resolveModelReferencePrice(registry, "anthropic", id, { ...options, at: "2026-10-21" })).toBeUndefined();
+    if (id === "claude-sonnet-4-5") {
+      expect(resolveModelReferencePrice(registry, "anthropic", id, { ...options, at: "2026-11-05" })).toBeUndefined();
+    } else {
+      expect(resolveModelReferencePrice(registry, "anthropic", id, { ...options, at: "2026-10-22" })?.price).toEqual(direct);
+      expect(resolveModelReferencePrice(registry, "anthropic", id, { ...options, at: "2026-11-05" })?.price).toEqual(direct);
+    }
+    expect(resolveModelReferencePrice(registry, "anthropic", id, { ...options, currency: "CNY" })).toBeUndefined();
+    expect(resolveBaseModelReferencePrice(registry, id, { ...options, priceGroup: "cn" })).toBeUndefined();
+    expect(resolveModelReferencePrice(registry, "anthropic", id, { at: "2026-11-06" })?.price.variant).toBe("standard");
+    if (maximum !== undefined) {
+      expect(resolveModelReferencePrice(registry, "anthropic", id, { ...options, inputTokens: 200000 })?.price).toEqual(direct);
+      expect(resolveModelReferencePrice(registry, "anthropic", id, { ...options, inputTokens: 200001 })).toBeUndefined();
+    }
+  });
+});

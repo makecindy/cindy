@@ -3915,6 +3915,8 @@
         "disabledGroup": "已停",
         "enableAllModels": "尽启",
         "priceOverride": {
+          "resetShort": "重置",
+          "referenceDetails": "参考价详目",
           "menu": "修 API 估价",
           "title": "{{model}} API 估价",
           "description": "仅用以估君自有 API 或订阅通道之耗用，不易供方之实际帐单。",
