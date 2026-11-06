@@ -884,7 +884,7 @@ function CCAgentSessionContent({
       })),
     [rosterProfiles, companionCloud],
   );
-  const composerBotMentions = botMentions ?? ordinaryTaskBotMentions;
+  const composerBotMentions = botMentions ?? ordinaryTaskBotMentions
   const { sessionId: paramSessionId } = useParams<{ sessionId: string }>();
   const sessionId = sessionIdProp ?? paramSessionId;
   const navigate = useNavigate();
