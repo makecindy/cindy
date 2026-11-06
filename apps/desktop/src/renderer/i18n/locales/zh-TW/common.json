@@ -17791,9 +17791,8 @@
     "todoCheck": {
       "name": "每天查待辦"
     },
-    "builtinNightlyLearning": {
-      "name": "夜間學習（內建）",
-      "hint": "每天 3:30 整理和你的對話：合併記憶，把反覆用到的做法總結成技能。沒有新對話就略過，不呼叫模型。"
+    "nightlyLearning": {
+      "name": "夜間學習"
     },
     "remote": {
       "pause": "暫停例行任務",

@@ -936,7 +936,7 @@ export class MakerScheduleRunner implements ScheduleRunner {
       if (ctx.expectedPreRunWorkingDir !== undefined && hookCwd !== ctx.expectedPreRunWorkingDir) {
         throw new Error('Schedule execution directory changed; refresh before executing the approved action');
       }
-      // Teammate routines can skip when the owner has not talked since the last run (built-in nightly learning does).
+      // Teammate routines can skip when the owner has not talked since the last run (the default nightly learning routine does).
       const ownerActiveAt = schedule.source === 'bot' && schedule.targetSessionId
         ? await lastOwnerActivityAt(schedule.targetSessionId).catch(() => undefined)
         : undefined;

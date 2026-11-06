@@ -1048,10 +1048,9 @@ function routineInput(routine: Routine): RoutineInput {
 /**
  * 宿主内置规则保留指令与触发条件；普通 Agent 规则允许暂停或单独配置模型。
  */
-/** 内置例行任务（跟进、夜间学习）的文案键；名称与说明随界面语言，不用宿主存的名字。 */
+/** 内置例行任务（跟进）的文案键；名称与说明随界面语言，不用宿主存的名字。 */
 const BUILTIN_COPY: Record<string, string | undefined> = {
   'follow-up': 'routines.builtinFollowUp',
-  'nightly-learning': 'routines.builtinNightlyLearning',
 };
 
 function BuiltinRoutineRow({

@@ -18020,9 +18020,8 @@
     "todoCheck": {
       "name": "Vérification quotidienne des tâches à faire"
     },
-    "builtinNightlyLearning": {
-      "name": "Apprentissage nocturne (intégré)",
-      "hint": "Chaque nuit à 3:30, passe en revue vos conversations : organise les mémoires et enregistre sous forme de skills les approches récurrentes. Ignoré sans appeler de modèle s'il n'y a rien de nouveau."
+    "nightlyLearning": {
+      "name": "Apprentissage nocturne"
     },
     "remote": {
       "pause": "Suspendre la routine",

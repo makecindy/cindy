@@ -68,7 +68,7 @@ Bot Market 原生包的例行任务只通过原导入服务保存停用定义，
 
 消息机器人接收位置先由 `routine_delivery_targets` 查询，返回本伙伴自有连接和个人连接的已知收件人、群／话题，沿渠道现有传输发送，不读出凭证。目的地绑定连接和平台身份，换机器人或断线后不能落到另一身份；不可用时记录送达失败。桌面跨电脑设置通过 `routines.saveWithDelivery` / `routines.deliveryTargets` 协商，在伙伴所在电脑执行；旧端省略字段时保留已有选择。
 
-开启静默检查后，无变化仍不送达；`schedule_notify_current_run` 明确要求报告后才送达。预检跳过和中止不补发成功结果。执行成功与送达状态分开保存：送达失败仍保留完整结果，不为补发重跑已执行工作。内置跟进及导入自动化保留各自既有输出合同，不把存量检查变成额外对话；夜间学习按普通静默检查送达，只有确实改了记忆或技能才通知。导入自动化只有明确设置新目的地才替换旧投放渠道，继续经过原有结果脱敏。
+开启静默检查后，无变化仍不送达；`schedule_notify_current_run` 明确要求报告后才送达。预检跳过和中止不补发成功结果。执行成功与送达状态分开保存：送达失败仍保留完整结果，不为补发重跑已执行工作。内置跟进及导入自动化保留各自既有输出合同，不把存量检查变成额外对话。导入自动化只有明确设置新目的地才替换旧投放渠道，继续经过原有结果脱敏。
 
 模型发现共用 `schedule_list_models`：使用已连接来源的型号、推理档位、速度、上下文及已知价格；同名型号按来源分开。`cost` 是 USD/百万 token，`currency` 对应 `displayPricing`，订阅参考价不代表实际扣费，缺价不能当免费。Agent 按任务需要推荐经济型号，保存后回读完整路由、运行方式和送达选择，不批量覆盖既有设置。Pi 直接工具和 helper 共用这些参数；模型发现的本机 `local` 在保存边界归一为 null。
 
@@ -192,33 +192,32 @@ const receipt = await cindy.routines.request({
   升级前已排队的检查照常执行；迁移只做一次，之后主人保存的名称与指令（即使与旧默认值相同）不再被改写。旧版电脑上仍是内置规则的这一条，
   经桌面远程查看时只显示名称，沿用那台电脑的锁定行为。
 
-## 内置夜间学习例行任务
+## 夜间学习例行任务
 
-伙伴整理自己记忆与技能的后台入口（主人 2026-10-23 裁决只保留这一个入口；2026-11-06 主人裁决改为普通 Agent
-例行任务，不再特殊化）。宿主内置规则 `builtin: 'nightly-learning'`，id 为 `builtin-nightly-learning-<伙伴 id>`，
-过长时同样改用 sha256 前缀。模板见 `apps/desktop/src/main/bot-autonomy/nightlyLearningRoutine.ts`。
+伙伴整理自己记忆与技能的后台入口（主人 2026-10-23 裁决只保留这一个入口；2026-11-06 主人裁决改为默认的普通例行任务，
+不再特殊化，主人和伙伴都能随意改）。模板见 `apps/desktop/src/main/bot-autonomy/nightlyLearningRoutine.ts`，
+做法与「每天查待办」相同。
 
-- **默认开**：每个在用、本机是主力电脑的伙伴，与内置跟进一起在引擎启动、伙伴新建与恢复时幂等 ensure；
-  落地失败只记日志，不影响跟进。主人可暂停 / 恢复、单独选模型和运行方式，删除与改指令、触发条件以 `BUILTIN_ROUTINE` 拒绝。
-- **怎么执行**：和其它例行任务一样走 `routines/service.ts` 的普通派发：默认 `sessionMode: 'fresh'`，每次新建一条
-  同伙伴身份、同权限的任务，用伙伴自己的模型链（或主人选的模型）。伙伴在这一轮里用普通工具做事：history 类
-  `search_chat_history` / `get_chat_history`（带 `teammate_id`）读前置检查给出的 `since` 以来主人和它的对话（首次看最近 7 天），
-  `cindy_memory` 读写记忆，`list_teammate_skills` / `save_teammate_skill` / `set_teammate_skill_enabled` 整理技能；
-  需要时用任务摘要、工作区文档核实记忆是否过时。只改自己的记忆与技能，不改主人写的身份资料和规则，不发消息，
-  不动任务与调度。
-- **跳过**：用普通的前置检查（`preRunHook`，模板里一行 `xdt-node` 脚本），不另设例行任务选项。伙伴例行任务的前置检查
+- **默认建一条**：每个在用、本机是主力电脑的伙伴，宿主在引擎启动、伙伴新建与恢复时按默认内容建一次
+  （`RoutineEngine.seedOnce`，id 为 `builtin-nightly-learning-<伙伴 id>`，过长时改用 sha256 前缀；沿用 `builtin-`
+  前缀只为运行按宿主发起判定身份）。已建过的 id 记在例行任务状态的 `seeded` 里：之后不再改写，删掉后也不重建。
+- **普通例行任务**：没有内置标记。名称、指令、触发时间、前置检查、模型、运行方式和送达方式，主人在设置页、伙伴用
+  `routine_save` 都能改，也能删除。默认内容不会更新到已建好的规则上。
+- **默认内容**：每天 3:30（第一次建时这台电脑的时区），`sessionMode: 'fresh'`，`silentWhenIdle: true`。伙伴用自己的模型，
+  用 history 类 `search_chat_history` / `get_chat_history`（带 `teammate_id`）读前置检查给出的 `since` 以来主人和它的对话
+  （首次看最近 7 天），`cindy_memory` 读写记忆，`list_teammate_skills` / `save_teammate_skill` / `set_teammate_skill_enabled`
+  整理技能；只改自己的记忆与技能；改了才调用 `schedule_notify_current_run` 告诉主人。
+- **默认前置检查**：普通的 `preRunHook`（一行 `xdt-node` 脚本），不另设例行任务选项。伙伴例行任务的前置检查
   stdin 除既有字段外还带 `ownerActiveAt`：主人最近一轮和这个伙伴已完成对话的时间（伙伴主任务、私聊话题与 IM 渠道专线里
   主人本人发起的轮次，不算自动输入、任务回执、私下回复与群专线，`bot-autonomy/ownerActivity.ts`）。脚本在
   `ownerActiveAt` 不晚于 `lastFinishedAt` 时 exit 2 跳过，不建任务、不调用模型；放行时把 `since`（上次运行时间）输出给模型。
   被跳过的轮次说明期间没有对话，推新 `lastFinishedAt` 不会漏掉之后的对话。手动「立即运行」同样经过前置检查。
   其它伙伴例行任务的前置检查也能读到 `ownerActiveAt`。
-- **送达**：`silentWhenIdle: true`。改了记忆或技能才调用 `schedule_notify_current_run` 用一两句话告诉主人；没有改动静默结束。
-  每次运行的完整过程在运行历史的「查看任务」里。
-- **频率**：每天 3:30，宿主所在时区，在第一次建立时取一次。旧版的「每周一 3:30」选项随专用设置页一起移除。
-- **升级**：模板版本 2 起是普通规则；ensure 时重写旧规则的指令、触发条件与前置检查，
-  主人从未选过的运行方式取模板的 `fresh`，暂停选择保留；旧版用于降级跳过的 `exit 2` 换成上面的前置检查。旧版专用实现留在伙伴 Home 的 `nightly-learning.json`
-  与 `learning-history/` 不再读取，也不删除。专用的学习记录页（逐条撤销、在观察的做法、改频率）已移除；
-  伙伴用普通工具做的改动与对话中保存的记忆一样没有逐条撤销。
+- **升级**：旧版存成宿主内置规则（`builtin: 'nightly-learning'`）。调度器加载旧数据时去掉内置标记、记入 `seeded`，
+  保留开关、模型、触发时间与运行记录；仍是旧版占位指令的，指令和前置检查换成默认内容，没选过运行方式的取 `fresh`。
+  只在这次迁移时做。旧版专用实现留在伙伴 Home 的 `nightly-learning.json` 与 `learning-history/` 不再读取，也不删除；
+  专用的学习记录页（逐条撤销、在观察的做法、改频率）已移除。
+- 云端同步与搬家：仍不随伙伴迁移，新主力电脑按默认内容建一条。
 - 回复后复盘已于 2026-10-23 停用（`cindy-bots-runtime.md` §3.2）；对话中记忆照常当场保存，
   技能只在主人明确要求或纠正已有技能时当场保存，其余交给夜间学习。
 

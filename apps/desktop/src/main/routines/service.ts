@@ -41,9 +41,9 @@ import {
 } from '../../shared/botAutonomy.js';
 import { buildTodoCheckRoutineInput, localizedLegacyTodoCheck, todoCheckRoutineId } from '../bot-autonomy/todoCheckRoutine.js';
 import {
-  NIGHTLY_LEARNING_BUILTIN_VERSION,
   buildNightlyLearningRoutineInput,
   builtinNightlyLearningRoutineId,
+  legacyNightlyLearningContent,
 } from '../bot-autonomy/nightlyLearningRoutine.js';
 
 /** Bootstrap supplies live getters without a service -> scheduler -> IPC dependency cycle. */
@@ -454,6 +454,7 @@ export async function getRoutineEngine(): Promise<RoutineEngine> {
     const engine = new RoutineEngine({
       load: async () => saved,
       legacyTodoCheckContent: localizedLegacyTodoCheck,
+      legacyNightlyLearningContent,
       save: async (state) => {
         assertScope(scope);
         if (epoch !== generation) throw new Error('Routine service was reset');
@@ -742,18 +743,13 @@ export const routineTools = {
 };
 
 /**
- * 按模板落地内置「夜间学习」：不存在时建（默认开），模板版本变化时重写，保留用户的开关、模型与运行方式选择。
- * 时区沿用已有规则里记下的那个，只在第一次创建时取这台电脑当时的时区。
+ * 默认的「夜间学习」：每个伙伴只按默认内容建一次（之后可改可删，删掉不重建）。时区取这台电脑当时的时区。
  */
-export async function ensureNightlyLearningBuiltin(engine: RoutineEngine, botId: string): Promise<Routine | null> {
+export async function seedNightlyLearning(engine: RoutineEngine, botId: string): Promise<Routine | null> {
   if (isCompanionShadowed(botId)) return null;
-  const id = builtinNightlyLearningRoutineId(botId);
-  const existing = engine.list(botId).find((routine) => routine.id === id);
-  const existingTimezone = existing?.triggers.find((trigger) => trigger.kind === 'cron')?.timezone;
-  const timezone = existingTimezone || Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC';
-  return engine.ensureBuiltin(botId, 'nightly-learning', buildNightlyLearningRoutineInput(timezone), id, NIGHTLY_LEARNING_BUILTIN_VERSION);
+  const timezone = Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC';
+  return engine.seedOnce(botId, buildNightlyLearningRoutineInput(timezone), builtinNightlyLearningRoutineId(botId));
 }
-
 
 /** A stopped/crashed plugin must not continue to appear as a listening source. */
 export function disconnectRoutineSource(pluginId: string): void {

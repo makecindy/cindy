@@ -17859,9 +17859,8 @@
     "todoCheck": {
       "name": "Tägliche To-do-Prüfung"
     },
-    "builtinNightlyLearning": {
-      "name": "Nächtliches Lernen (integriert)",
-      "hint": "Prüft jede Nacht um 3:30 Uhr deine Unterhaltungen: räumt Erinnerungen auf und speichert wiederkehrende Ansätze als Skills. Wird ohne Modellaufruf übersprungen, wenn es nichts Neues gibt."
+    "nightlyLearning": {
+      "name": "Nächtliches Lernen"
     },
     "remote": {
       "pause": "Routine pausieren",

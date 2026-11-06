@@ -18020,9 +18020,8 @@
     "todoCheck": {
       "name": "Revisión diaria de pendientes"
     },
-    "builtinNightlyLearning": {
-      "name": "Aprendizaje nocturno (integrado)",
-      "hint": "Cada noche a las 3:30, revisa tus conversaciones: organiza los recuerdos y guarda como habilidades los enfoques recurrentes. Se omite sin llamar a un modelo cuando no hay novedades."
+    "nightlyLearning": {
+      "name": "Aprendizaje nocturno"
     },
     "remote": {
       "pause": "Pausar rutina",

@@ -17790,9 +17790,8 @@
     "todoCheck": {
       "name": "日查待办"
     },
-    "builtinNightlyLearning": {
-      "name": "夜学（内置）",
-      "hint": "每日 3:30 整理与君之言谈：并记忆，将屡用之法总结为技艺。无新言谈则略过，不呼模型。"
+    "nightlyLearning": {
+      "name": "夜学"
     },
     "checkSource": "检查之法",
     "remote": {

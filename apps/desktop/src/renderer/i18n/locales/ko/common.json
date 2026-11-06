@@ -17791,9 +17791,8 @@
     "todoCheck": {
       "name": "매일 할 일 확인"
     },
-    "builtinNightlyLearning": {
-      "name": "야간 학습(기본 제공)",
-      "hint": "매일 3:30에 대화를 정리합니다. 메모리를 정돈하고 반복해서 쓰는 방법을 스킬로 정리합니다. 새 대화가 없으면 모델을 호출하지 않고 건너뜁니다."
+    "nightlyLearning": {
+      "name": "야간 학습"
     },
     "remote": {
       "pause": "루틴 일시 중지",

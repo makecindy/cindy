@@ -18020,9 +18020,8 @@
     "todoCheck": {
       "name": "Verificação diária de pendências"
     },
-    "builtinNightlyLearning": {
-      "name": "Aprendizado noturno (integrado)",
-      "hint": "Todas as noites às 3:30, revisa suas conversas: organiza memórias e salva abordagens recorrentes como Skills. Não aciona um modelo quando não há novidades."
+    "nightlyLearning": {
+      "name": "Aprendizado noturno"
     },
     "remote": {
       "pause": "Pausar rotina",

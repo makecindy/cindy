@@ -303,15 +303,15 @@ describe('resolveHookCommand(xdt-node 前缀解析)', () => {
 
 /**
  * 测试价值
- * - 生产入口与可观察结果：内置夜间学习的前置检查命令经 executePreRunHook 真实执行（xdt-node + 系统 shell）：
+ * - 生产入口与可观察结果：默认夜间学习的前置检查命令经 executePreRunHook 真实执行（xdt-node + 系统 shell）：
  *   从没运行过放行；上次运行之后主人没有新对话（ownerActiveAt 缺省或更早）跳过；有新对话放行并把 since 交给模型。
- * - Bug／规则依据：docs/product-rules/bot-routines.md「内置夜间学习例行任务」——没有新对话不调用模型，
+ * - Bug／规则依据：docs/product-rules/bot-routines.md「夜间学习例行任务」——没有新对话不调用模型，
  *   用已有的前置检查实现，不另加例行任务选项。
  * - 现有覆盖缺口：命令是宿主写死的字符串，引号或比较写错只会在真实 shell 里暴露。
  * - 最小失败输入：lastFinishedAt=1000 且没有 ownerActiveAt。
  * - tier：unit（与本文件其它用例一样启动真实子进程，单个命令毫秒级）。
  */
-describe('内置夜间学习的前置检查', () => {
+describe('默认夜间学习的前置检查', () => {
   it.each([
     ['first run', {}, 'run', ''],
     ['no owner chat since the last run', { lastFinishedAt: 1_000, ownerActiveAt: 500 }, 'skip', ''],

@@ -17859,9 +17859,8 @@
     "todoCheck": {
       "name": "Daily todo check"
     },
-    "builtinNightlyLearning": {
-      "name": "Nightly learning (built-in)",
-      "hint": "Every night at 3:30, reviews your conversations: tidies memories and saves approaches that keep coming up as skills. Skipped without calling a model when there’s nothing new."
+    "nightlyLearning": {
+      "name": "Nightly learning"
     },
     "remote": {
       "pause": "Pause Routine",

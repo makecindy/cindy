@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import { RoutineEngine, type RoutineState, type RoutineEngineDeps } from "../routine-engine.js";
-import { parseRoutineInput, type RoutineInput } from "../routines.js";
+import { parseRoutineInput, type Routine, type RoutineInput } from "../routines.js";
 
 const input: RoutineInput = {
   name: "PR review",
@@ -834,29 +834,39 @@ describe('routine check configuration', () => {
 
   /*
    * 测试价值
-   * - 生产入口与可观察结果：RoutineEngine.ensureBuiltin 把旧版「夜间学习」对齐到新模板：主人从没选过的运行方式
-   *   跟随模板（fresh），主人选过的保留；主人可以给夜间学习单独选模型。
-   * - Bug／规则依据：docs/product-rules/bot-routines.md「内置夜间学习」改为普通 Agent 例行任务；旧规则从未保存
-   *   sessionMode，若照搬「保留主人选择」会让升级后的夜间学习永远停在持久专线。
-   * - 现有覆盖缺口：上一用例只覆盖跟进规则，且没有覆盖模板自带运行方式、主人未作选择的组合。
-   * - 最小失败输入：没有 sessionMode 的 v1 夜间学习规则被 v2 模板（sessionMode: fresh）对齐；随后 put 选模型。
+   * - 生产入口与可观察结果：RoutineEngine.start 读到旧版内置「夜间学习」时去掉内置标记、保留开关与运行记录，之后主人能改能删；
+   *   seedOnce 只建一次默认规则，再次调用不改写，删掉后不重建，暂停的伙伴不建。
+   * - Bug／规则依据：docs/product-rules/bot-routines.md「夜间学习例行任务」（2026-11-06 主人裁决：只是默认的普通例行任务）。
+   * - 现有覆盖缺口：只有每天查待办的迁移用例；默认规则「建一次、删了不回来」是新增的引擎语义。
+   * - 最小失败输入：带 builtin: nightly-learning 的已存规则；seedOnce 后 remove 再 seedOnce。
    * - tier：unit（内存 load/save fake，无真实等待）。
    */
-  it('lets a built-in template supply a run mode the owner never chose, and lets the owner pick a model for nightly learning', async () => {
-    const f = await fixture();
+  it('turns the legacy nightly learning rule into an editable routine and seeds a default only once', async () => {
     const id = 'builtin-nightly-learning-bot';
+    const legacy = { ...input, id, botId: 'bot', builtin: 'nightly-learning', builtinVersion: 1, enabled: false,
+      revision: 3, createdAt: 1, updatedAt: 1 } as unknown as Routine;
+    const f = await fixture(undefined, { version: 1, routines: [legacy], runs: [
+      { id: 'old-run', routineId: id, revision: 3, triggerIds: ['manual'], events: [], status: 'success', createdAt: 1, finishedAt: 2 },
+    ], receipts: {}, next: {} });
     try {
-      const legacy = await f.engine.ensureBuiltin('bot', 'nightly-learning', input, id, 1);
-      expect(legacy?.sessionMode).toBeUndefined();
-      const template = { ...input, prompt: 'v2', sessionMode: 'fresh' as const };
-      const upgraded = await f.engine.ensureBuiltin('bot', 'nightly-learning', template, id, 2);
-      expect(upgraded).toMatchObject({ prompt: 'v2', sessionMode: 'fresh', builtinVersion: 2 });
-      const modelOverride = { agentKind: 'claude-code' as const, model: 'strong-model' };
-      const chosen = await f.engine.put('bot', { ...template, modelOverride, sessionMode: 'persistent' }, id);
-      expect(chosen).toMatchObject({ modelOverride, sessionMode: 'persistent' });
-      await expect(f.engine.put('bot', { ...template, prompt: 'edited' }, id)).rejects.toThrow('BUILTIN_ROUTINE');
-      expect(await f.engine.ensureBuiltin('bot', 'nightly-learning', { ...template, prompt: 'v3' }, id, 3))
-        .toMatchObject({ prompt: 'v3', modelOverride, sessionMode: 'persistent' });
+      const migrated = f.engine.list('bot')[0]!;
+      expect(migrated).toMatchObject({ id, enabled: false });
+      expect(migrated.builtin).toBeUndefined();
+      expect(f.engine.history(id)).toHaveLength(1);
+      // Already created once: seeding again neither rewrites nor duplicates it.
+      expect(await f.engine.seedOnce('bot', { ...input, prompt: 'default' }, id)).toBeNull();
+      expect((await f.engine.put('bot', { ...input, prompt: 'my own words' }, id)).prompt).toBe('my own words');
+      await f.engine.remove('bot', id);
+      expect(await f.engine.seedOnce('bot', { ...input, prompt: 'default' }, id)).toBeNull();
+      expect(f.engine.list('bot')).toEqual([]);
+
+      const seeded = await f.engine.seedOnce('other', { ...input, prompt: 'default' }, 'builtin-nightly-learning-other');
+      expect(seeded).toMatchObject({ prompt: 'default', enabled: true });
+      await f.engine.remove('other', seeded!.id);
+      expect(await f.engine.seedOnce('other', { ...input, prompt: 'default' }, seeded!.id)).toBeNull();
+      await f.engine.setBotPaused('third', true);
+      expect(await f.engine.seedOnce('third', input, 'builtin-nightly-learning-third')).toBeNull();
+      expect(f.engine.list('third')).toEqual([]);
     } finally { await f.engine.stop(); }
   });
 

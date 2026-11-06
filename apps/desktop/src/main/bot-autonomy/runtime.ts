@@ -57,7 +57,7 @@ export interface AutonomyRuntimeDeps {
   push(payload: { botIds?: string[] }): void;
   /** 订阅灵动岛活动；返回 null 表示服务还没就绪（下次扫描再试）。 */
   subscribeActivity(watch: TaskWatch): (() => void) | null;
-  /** 与跟进同时落地的其它默认内置规则（夜间学习）；同样只对在用、主力电脑上的伙伴调用。 */
+  /** 与跟进同时落地的默认例行任务（夜间学习，只建一次）；同样只对在用、主力电脑上的伙伴调用。 */
   ensureOwnBuiltins?(botId: string): Promise<void>;
 }
 

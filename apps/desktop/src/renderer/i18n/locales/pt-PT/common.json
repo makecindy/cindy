@@ -18020,9 +18020,8 @@
     "todoCheck": {
       "name": "Verificação diária de afazeres"
     },
-    "builtinNightlyLearning": {
-      "name": "Aprendizagem noturna (integrada)",
-      "hint": "Todas as noites às 3:30, revê as suas conversas: organiza memórias e guarda como Skills as abordagens recorrentes. É ignorada sem consultar um modelo quando não há novidades."
+    "nightlyLearning": {
+      "name": "Aprendizagem noturna"
     },
     "remote": {
       "pause": "Pausar rotina",
