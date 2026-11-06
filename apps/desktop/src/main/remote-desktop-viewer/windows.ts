@@ -23,6 +23,7 @@ import {
   remoteInvoke,
   getDeviceLinkStatus,
   getUnresponsiveDeviceIds,
+  retainForegroundLink,
 } from '../device-link/index.js';
 import { loadDesktopIceServers } from '../remote-desktop/iceConfig.js';
 import {
@@ -187,6 +188,7 @@ export class RemoteDesktopViewerWindows {
     });
     const connection: RemoteViewerConnection = new RemoteViewerConnection({
       owner: activeOwnerScopeKey,
+      retainLink: retainForegroundLink,
       readClipboard: () => clipboard.readText(),
       writeClipboard: (value) => clipboard.writeText(value),
       preferences: readViewerPreferences,
