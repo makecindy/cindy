@@ -372,6 +372,34 @@ describe('ModelPriceOverrideDialog', () => {
     expect(priceInput(result).value).toBe('1');
   });
 
+  it('reloads a refreshed catalog snapshot with the same IDs before editing its quote', async () => {
+    const initialRow = row('model-a');
+    const current = priceView('model-a');
+    getModelPriceOverride.mockResolvedValueOnce(current);
+    const props = { provider, row: initialRow, open: true, onOpenChange: vi.fn(), presentation: 'inline' as const };
+    const result = render(<ModelPriceOverrideDialog {...props} />);
+    await waitFor(() => expect(priceInput(result).value).toBe('1'));
+    fireEvent.change(priceInput(result), { target: { value: '7' } });
+    result.rerender(<ModelPriceOverrideDialog {...props} row={{ ...initialRow }} />);
+    expect(getModelPriceOverride).toHaveBeenCalledOnce();
+    expect(priceInput(result).value).toBe('7');
+    const refreshed = { ...current, effective: { ...current.effective!, outputPerMtok: 8 },
+      reference: { ...current.reference!, outputPerMtok: 8 } };
+    getModelPriceOverride.mockResolvedValueOnce(refreshed);
+    result.rerender(<ModelPriceOverrideDialog {...props} row={{ ...initialRow, byAgent: {
+      codex: { ...initialRow.byAgent.codex!, name: 'refreshed catalog model' },
+    } }} />);
+    await waitFor(() => expect(priceInput(result, 'output').value).toBe('8'));
+    expect(getModelPriceOverride).toHaveBeenCalledTimes(2);
+    expect(setModelPriceOverride).not.toHaveBeenCalled();
+    setModelPriceOverride.mockResolvedValue(refreshed);
+    fireEvent.change(priceInput(result), { target: { value: '7' } });
+    fireEvent.blur(priceInput(result));
+    await waitFor(() => expect(setModelPriceOverride).toHaveBeenCalledExactlyOnceWith(current.target, {
+      currency: 'USD', inputPerMtok: 7, outputPerMtok: 8, cacheReadPerMtok: null, cacheCreatePerMtok: null,
+    }));
+  });
+
   it.each(['', '-1', 'Infinity'])('restores invalid inline input %j without saving', async (value) => {
     const result = await renderInline();
     fireEvent.change(priceInput(result), { target: { value } });

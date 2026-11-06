@@ -689,7 +689,7 @@ export function ModelAdvancedDrawer({
             style={{ WebkitAppRegion: 'no-drag' } as React.CSSProperties}
             aria-describedby={undefined}
             onEscapeKeyDown={(event) => {
-              if (!(event.target instanceof HTMLElement) || !event.target.hasAttribute('data-model-price-input')) return;
+              if (!(event.target instanceof HTMLElement) || !event.target.closest('[data-model-price-editor]')) return;
               event.preventDefault();
             }}
             onOpenAutoFocus={(event) => {

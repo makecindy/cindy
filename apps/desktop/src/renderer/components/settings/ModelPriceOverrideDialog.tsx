@@ -92,10 +92,9 @@ export function ModelPriceOverrideDialog({ provider, row, open, onOpenChange, pr
   };
 
   const model = row.byAgent[agent];
-  const modelId = model?.id;
   const target = useMemo(
-    () => (modelId ? { providerId: provider.id, agent, modelId } : null),
-    [agent, modelId, provider.id],
+    () => (model ? { providerId: provider.id, agent, modelId: model.id } : null),
+    [agent, model, provider.id],
   );
 
   // DESIGN.md §4:弹窗打开时焦点落主输入,而不是 Radix 默认的首个可聚焦元素(关闭按钮)。
@@ -238,14 +237,14 @@ export function ModelPriceOverrideDialog({ provider, row, open, onOpenChange, pr
     const dirty = view && JSON.stringify(form) !== JSON.stringify(formFromView(view));
     const details = typeof referenceDetails === 'function' ? referenceDetails(agent) : referenceDetails;
     return (
-      <section {...pricingSetting.anchorProps} className="pt-5" aria-busy={saving}
+      <section {...pricingSetting.anchorProps} data-model-price-editor className="pt-5" aria-busy={saving}
         aria-label={t('settings.providers.models.advanced.pricing')}
         onBlur={(event) => {
           if (event.relatedTarget instanceof Node && event.currentTarget.contains(event.relatedTarget)) return;
           if (dirty) void save();
         }}
         onKeyDown={(event) => {
-          if (!(event.target instanceof HTMLInputElement || event.target instanceof HTMLSelectElement)) return;
+          if (!(event.target instanceof HTMLElement)) return;
           if (event.nativeEvent.isComposing || event.repeat || event.ctrlKey || event.shiftKey || event.altKey || event.metaKey) return;
           if (event.key === 'Escape') {
             event.preventDefault();
