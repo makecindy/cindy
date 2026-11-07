@@ -625,11 +625,23 @@ export async function sharedGlobalSkillLinksFingerprint(
  * - A real skill directory on either side is exposed to the other side with a link.
  * - Existing non-managed paths are never overwritten; conflicts are reported as warnings.
  * - Empty projects are left untouched, so merely opening a project does not create folders.
+ * - The home directory is not a project: it is the global scope, so it goes through the
+ *   gated global projection instead (#9282 — a Codex/Pi user without Claude must not
+ *   get a `~/.claude` directory from merely opening a task in their home directory).
  */
 export async function prepareSharedProjectSkillLinks(
   opts: PrepareProjectOptions,
 ): Promise<SharedProjectSkillLinksResult> {
   const paths = sharedProjectSkillsPaths(opts.workingDir);
+  if (paths.workingDir === path.resolve(os.homedir())) {
+    const global = await prepareSharedGlobalSkillLinks({ homeDir: paths.workingDir });
+    return {
+      ...paths,
+      changed: global.changed,
+      actions: global.actions,
+      warnings: global.warnings,
+    };
+  }
   const sharedRootCompare = (await realPathOrNull(paths.sharedSkillsDir))
     ?? normalizeForCompare(paths.sharedSkillsDir);
   const claudeRootCompare = (await realPathOrNull(paths.claudeSkillsDir))

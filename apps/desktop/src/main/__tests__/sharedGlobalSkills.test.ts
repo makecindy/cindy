@@ -191,6 +191,34 @@ describe('shouldProjectToClaudeSkills (#9282)', () => {
   });
 });
 
+describe('home directory as a project working dir (#9282)', () => {
+  it('never creates ~/.claude for a user who does not use Claude', async () => {
+    const root = await makeTmpDir();
+    vi.spyOn(os, 'homedir').mockReturnValue(root);
+    const paths = sharedGlobalSkillsPaths(root);
+    await writeSkill(paths.sharedSkillsDir, 'home-skill');
+
+    const result = await prepareSharedProjectSkillLinks({ workingDir: root });
+
+    expect(result.changed).toBe(false);
+    expect(nodeFs.existsSync(path.join(root, '.claude'))).toBe(false);
+    expect(nodeFs.existsSync(path.join(root, '.claude', 'skills'))).toBe(false);
+  });
+
+  it('projects into ~/.claude once a Claude session has been observed', async () => {
+    const root = await makeTmpDir();
+    vi.spyOn(os, 'homedir').mockReturnValue(root);
+    const paths = sharedGlobalSkillsPaths(root);
+    const source = await writeSkill(paths.sharedSkillsDir, 'home-skill');
+
+    markClaudeSessionObserved();
+    const result = await prepareSharedProjectSkillLinks({ workingDir: root });
+
+    expect(result.changed).toBe(true);
+    expect(await sameRealPath(path.join(paths.claudeSkillsDir, 'home-skill'), source)).toBe(true);
+  });
+});
+
 describe('prepareSharedGlobalSkillLinks', () => {
   it('projects a nested namespace Skill into the Claude discovery root', async () => {
     const root = await makeTmpDir();
