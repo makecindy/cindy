@@ -190,6 +190,7 @@ import {
   restoreHiddenProjectIfPresent,
   restoreSelectedHiddenProject,
 } from './lib/sidebarProjectRestore';
+import { matchesSidebarAutomationFilter } from './lib/scheduledSessionGrouping';
 import { PinnedSection, type PinnedSidebarEntry } from './sidebar/sections/PinnedSection';
 import { ProjectNode as ProjectNodeView } from './sidebar/sections/ProjectNode';
 import { compareDialogueSessions, type DialogueSortBy } from './sidebar/sections/DialogueSection';
@@ -1609,13 +1610,23 @@ function ExpandedView({
     [scopedSidebarSessions, hiddenProjectKeys, localPlatform],
   );
 
+  const pinnedProjectKeys = useMemo(() => {
+    const keys = new Set<string>();
+    for (const entryId of filter.manualPinnedOrder) {
+      const projectKey = projectKeyFromPinnedEntryId(entryId);
+      if (projectKey) keys.add(projectKey);
+    }
+    return keys;
+  }, [filter.manualPinnedOrder]);
+
   const taskCreatorIndex = useTaskCreatorIndex();
   const activityFilteredSessions = useMemo(() => {
     const cutoff = cutoffForLastActivity(filter.lastActivity);
-    if (cutoff === null && filter.creators === 'all') return sidebarSessions;
+    if (cutoff === null && filter.creators === 'all' && !filter.hideAutomation) return sidebarSessions;
     return sidebarSessions.filter((s) => (cutoff === null || sessionActivityMs(s) >= cutoff)
-      && matchesTaskCreators(s, filter.creators, taskCreatorIndex));
-  }, [sidebarSessions, filter.lastActivity, filter.creators, taskCreatorIndex]);
+      && matchesTaskCreators(s, filter.creators, taskCreatorIndex)
+      && (!filter.hideAutomation || matchesSidebarAutomationFilter(s, pinnedProjectKeys, localPlatform)));
+  }, [sidebarSessions, filter.lastActivity, filter.creators, taskCreatorIndex, filter.hideAutomation, pinnedProjectKeys, localPlatform]);
   const activityFilteredPersistentLocalProjects = useMemo(
     () =>
       filterPersistentLocalProjectsByLastActivity(
@@ -1831,14 +1842,6 @@ function ExpandedView({
     return (s: { agentKind?: string | null }) => (s.agentKind ?? 'cc') === v;
   }, [filter.vendor]);
 
-  const pinnedProjectKeys = useMemo(() => {
-    const keys = new Set<string>();
-    for (const entryId of filter.manualPinnedOrder) {
-      const projectKey = projectKeyFromPinnedEntryId(entryId);
-      if (projectKey) keys.add(projectKey);
-    }
-    return keys;
-  }, [filter.manualPinnedOrder]);
   const pinnedProjectComparisonKeys = useMemo(
     () => buildProjectKeyComparisonSet(pinnedProjectKeys, localPlatform),
     [pinnedProjectKeys, localPlatform],
@@ -1850,7 +1853,9 @@ function ExpandedView({
   const getRestorableProjectKeys = useCallback(
     () =>
       collectRestorableProjectKeys({
-        sessions: scopedSidebarSessions,
+        sessions: filter.hideAutomation
+          ? scopedSidebarSessions.filter((s) => matchesSidebarAutomationFilter(s, pinnedProjectKeys, localPlatform))
+          : scopedSidebarSessions,
         provisionalDraftTaskId: provisionalProjectTaskId,
         persistentLocalProjects: visiblePersistentLocalProjects,
         lastActivityCutoff: cutoffForLastActivity(filter.lastActivity),
@@ -1859,6 +1864,7 @@ function ExpandedView({
         localPlatform,
       }),
     [
+      filter.hideAutomation,
       filter.lastActivity,
       provisionalProjectTaskId,
       localPlatform,

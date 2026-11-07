@@ -14579,7 +14579,12 @@
       "selectFolderFailed": "Impossible de sélectionner le dossier. Réessayez.",
       "projectsToggleExpand": "Développer toutes les sessions des projets",
       "projectsToggleCollapse": "Réduire toutes les sessions des projets",
-      "filterAria": "Paramètres de la barre latérale (statut : {{status}}, Harness : {{vendor}}, dernière activité : {{lastActivity}}, regrouper par : {{groupBy}}, trier par : {{sortBy}}, projets : {{projects}}, coéquipiers : {{creators}})",
+      "filterAria": "Paramètres de la barre latérale (statut : {{status}}, Harness : {{vendor}}, dernière activité : {{lastActivity}}, Automatisation: {{automation}}, regrouper par : {{groupBy}}, trier par : {{sortBy}}, projets : {{projects}}, coéquipiers : {{creators}})",
+      "filterAutomationHeading": "Automatisation",
+      "filterAutomation": {
+        "all": "Toutes",
+        "hidden": "Masquées"
+      },
       "organizeSidebar": "Paramètres de la barre latérale",
       "filterAllText": "tous",
       "filterSelectedProjects": "{{count}} sélectionnés",

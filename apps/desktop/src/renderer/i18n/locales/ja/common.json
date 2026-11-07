@@ -14376,7 +14376,7 @@
       "selectFolderFailed": "フォルダーを選択できませんでした。もう一度お試しください。",
       "projectsToggleExpand": "すべてのプロジェクトセッションを展開",
       "projectsToggleCollapse": "すべてのプロジェクトセッションを折りたたむ",
-      "filterAria": "サイドバー表示設定（ステータス：{{status}}、Harness：{{vendor}}、最終アクティビティ：{{lastActivity}}、グループ：{{groupBy}}、並び替え：{{sortBy}}、プロジェクト：{{projects}}、チームメイト：{{creators}}）",
+      "filterAria": "サイドバー表示設定（ステータス：{{status}}、Harness：{{vendor}}、最終アクティビティ：{{lastActivity}}、自動化：{{automation}}、グループ：{{groupBy}}、並び替え：{{sortBy}}、プロジェクト：{{projects}}、チームメイト：{{creators}}）",
       "organizeSidebar": "サイドバー表示設定",
       "filterAllText": "すべて",
       "filterSelectedProjects": "{{count}} 件選択",
@@ -14430,6 +14430,11 @@
       "filterStatusHeading": "ステータス",
       "filterAgentHeading": "Harness",
       "filterLastActivityHeading": "最終アクティビティ",
+      "filterAutomationHeading": "自動化",
+      "filterAutomation": {
+        "all": "すべて",
+        "hidden": "非表示"
+      },
       "filterGroupByHeading": "グループ",
       "filterSortByHeading": "並び替え",
       "filterTaskSortHeading": "セッション順",

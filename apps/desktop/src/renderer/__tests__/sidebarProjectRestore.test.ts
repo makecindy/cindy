@@ -8,6 +8,7 @@ import {
   restoreSelectedHiddenProject,
 } from '@/features/cc-agent/lib/sidebarProjectRestore';
 import type { Session } from '@/lib/ccAgent.types';
+import { matchesSidebarAutomationFilter } from '@/features/cc-agent/lib/scheduledSessionGrouping';
 
 const PROJECT_KEY = 'local:/workspace/cindy';
 
@@ -42,6 +43,35 @@ function projectSession(overrides: Partial<Session> = {}): Session {
 }
 
 describe('collectRestorableProjectKeys', () => {
+  // unit: hiding automation must preserve explicit pins, including Windows
+  // case-insensitive local identities, without promoting hidden dialogue rows.
+  it.each([
+    [{ source: 'desktop' }, [], 'darwin', true],
+    [{ source: 'scheduler' }, [], 'darwin', false],
+    [{ title: '[Schedule] legacy' }, [], 'darwin', false],
+    [{ source: 'scheduler', pinnedAt: '2026-08-01' }, [], 'darwin', true],
+    [{ source: 'scheduler' }, [PROJECT_KEY], 'darwin', true],
+    [{ source: 'scheduler', workspaceKind: 'dialogue' }, [PROJECT_KEY], 'darwin', false],
+    [{ source: 'scheduler', workingDir: 'C:/repo' }, ['local:C:/Repo'], 'win32', true],
+    [{ source: 'scheduler', workingDir: '/Repo', remoteHostId: 'host' }, ['remote:host:/repo'], 'win32', false],
+  ] as const)('filters automation with pin boundaries: %j', (overrides, pins, platform, visible) => {
+    expect(matchesSidebarAutomationFilter(
+      projectSession(overrides), new Set(pins), platform,
+    )).toBe(visible);
+  });
+
+  it('keeps only explicitly pinned automation projects in the restore catalogue', () => {
+    const pins = new Set([PROJECT_KEY]);
+    const sessions = [projectSession({ source: 'scheduler' }),
+      projectSession({ id: 'other', source: 'scheduler', workingDir: '/other' })];
+    expect(Array.from(collectRestorableProjectKeys({
+      sessions: sessions.filter((s) => matchesSidebarAutomationFilter(s, pins, 'darwin')),
+      pinnedProjectKeys: pins,
+      lastActivityCutoff: null,
+      vendorPredicate: null,
+    }))).toEqual([PROJECT_KEY]);
+  });
+
   // PR #6956: project restore must use the same provisional identity as the
   // sidebar, even when its only row has not been sent yet (unit).
   it('includes the current draft project without including unrelated empty drafts', () => {

@@ -14376,7 +14376,7 @@
       "selectFolderFailed": "選擇目錄失敗，請重試",
       "projectsToggleExpand": "展開所有專案任務",
       "projectsToggleCollapse": "收起所有專案任務",
-      "filterAria": "側邊欄顯示設定（狀態：{{status}}，Harness：{{vendor}}，最近活躍：{{lastActivity}}，分組：{{groupBy}}，排序：{{sortBy}}，專案：{{projects}}，夥伴：{{creators}}）",
+      "filterAria": "側邊欄顯示設定（狀態：{{status}}，Harness：{{vendor}}，最近活躍：{{lastActivity}}，自動化：{{automation}}，分組：{{groupBy}}，排序：{{sortBy}}，專案：{{projects}}，夥伴：{{creators}}）",
       "organizeSidebar": "側邊欄顯示設定",
       "filterAllText": "全部",
       "filterSelectedProjects": "已選 {{count}} 個",
@@ -14430,6 +14430,11 @@
       "filterStatusHeading": "狀態",
       "filterAgentHeading": "Harness",
       "filterLastActivityHeading": "最近活躍",
+      "filterAutomationHeading": "自動化",
+      "filterAutomation": {
+        "all": "全部",
+        "hidden": "隱藏"
+      },
       "filterGroupByHeading": "分組",
       "filterSortByHeading": "排序",
       "filterTaskSortHeading": "任務排序",
