@@ -169,8 +169,7 @@
     "permission": "Esta ação responde a um pedido de permissão noutra tarefa em seu nome. Reveja a ação; a aprovação aplica-se apenas uma vez.",
     "resume": "Esta ação retoma a execução em pausa. Reveja o destino; a aprovação aplica-se apenas uma vez.",
     "command": "Esta ação guarda ou executa um comando no seu computador fora da aprovação de ferramentas do Agent. Reveja o comando e a pasta de trabalho; a aprovação aplica-se apenas uma vez.",
-    "authority": "Esta ação cria ou altera instruções de automatização que as execuções futuras tratarão como autorização permanente. Reveja as instruções completas; a aprovação aplica-se a esta gravação.",
-    "other-task": "Isto altera a forma como outra tarefa é executada: mudar o modelo, intervir ou parar o turno, ou escolher o modelo de uma nova tarefa. Confirme o destino; a autorização aplica-se apenas a esta ação."
+    "authority": "Esta ação cria ou altera instruções de automatização que as execuções futuras tratarão como autorização permanente. Reveja as instruções completas; a aprovação aplica-se a esta gravação."
   },
   "logSupport": {
     "title": "Registos e comentários",

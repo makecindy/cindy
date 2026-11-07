@@ -167,8 +167,7 @@
     "permission": "This answers a permission request in another task on your behalf. Review the action; approval applies only once.",
     "resume": "This resumes paused execution. Review the target; approval applies only once.",
     "command": "This saves or runs a command on your computer outside the agent’s tool approval. Review the command and working folder; approval applies only once.",
-    "authority": "This creates or changes automation instructions that future runs will treat as standing authorization. Review the complete instructions; approval applies to this save.",
-    "other-task": "This changes how another task runs: switching its model, steering or stopping its turn, or choosing the model for a new task. Check the target; approval applies to this action only."
+    "authority": "This creates or changes automation instructions that future runs will treat as standing authorization. Review the complete instructions; approval applies to this save."
   },
   "logSupport": {
     "title": "Logs and Feedback",

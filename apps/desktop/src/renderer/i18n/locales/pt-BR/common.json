@@ -169,8 +169,7 @@
     "permission": "Isso responde a uma solicitação de permissão em outra tarefa em seu nome. Revise a ação; a aprovação vale apenas uma vez.",
     "resume": "Isso retoma a execução pausada. Revise o destino; a aprovação vale apenas uma vez.",
     "command": "Isso salva ou executa um comando no seu computador fora da aprovação de ferramentas do Agent. Revise o comando e a pasta de trabalho; a aprovação vale apenas uma vez.",
-    "authority": "Isso cria ou altera instruções de automação que execuções futuras tratarão como autorização permanente. Revise as instruções completas; a aprovação vale para este salvamento.",
-    "other-task": "Isso muda como outra tarefa é executada: trocar o modelo, intervir ou interromper o turno, ou escolher o modelo de uma nova tarefa. Confira o destino; a permissão vale só para esta ação."
+    "authority": "Isso cria ou altera instruções de automação que execuções futuras tratarão como autorização permanente. Revise as instruções completas; a aprovação vale para este salvamento."
   },
   "logSupport": {
     "title": "Logs e feedback",
