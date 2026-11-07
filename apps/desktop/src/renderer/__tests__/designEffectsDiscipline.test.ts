@@ -102,6 +102,11 @@ function isRegisteredArbitraryShadow(value: string): boolean {
   return value.split(/,(?![^(]*\))/).every((layer) => HAIRLINE_LAYER.test(layer));
 }
 
+function isCommentLine(source: string, index: number): boolean {
+  const line = source.slice(source.lastIndexOf('\n', index) + 1, index).trimStart();
+  return line.startsWith('//') || line.startsWith('*') || line.startsWith('/*');
+}
+
 function findEffects(source: string, hslTokens: ReadonlySet<string>): Finding[] {
   const findings: Finding[] = [];
   const collect = (kind: EffectKind, pattern: RegExp, keep: (match: RegExpMatchArray) => boolean = () => true) => {
@@ -115,6 +120,8 @@ function findEffects(source: string, hslTokens: ReadonlySet<string>): Finding[] 
   collect('shadow', /(?<![\w-])shadow-(?:sm|md|lg|xl|2xl|inner)(?![\w-])/g);
   collect('shadow', /(?<![\w-])shadow-\[((?!var\()[^\]\s]+)\]/g, (match) => !isRegisteredArbitraryShadow(match[1]));
   collect('shadow', /\bdrop-shadow(?:\(|-[a-z[])/g);
+  // 无后缀的 `shadow`（含 `hover:shadow`）也是预设阴影；注释里的英文单词不算。
+  collect('shadow', /(?<=[\s'"`])(?:[\w-]+:|\[[^\]\s]+\]:)*shadow(?=[\s'"`])/g, (match) => !isCommentLine(source, match.index ?? 0));
   collect('gradient', /\b(?:linear|radial|conic)-gradient\(|\bbg-gradient-to-/g);
   collect(
     'invalidHslColor',
@@ -158,6 +165,8 @@ describe('阴影、渐变与写法失效门禁', () => {
 
     expect(kinds("'shadow-[var(--shadow-menu)]'")).toEqual(['untypedShadow']);
     expect(kinds("'shadow-md hover:shadow-lg'")).toEqual(['shadow', 'shadow']);
+    expect(kinds("'shadow' 'rounded hover:shadow'")).toEqual(['shadow', 'shadow']);
+    expect(kinds("// no shadow here\n * inset shadow 画在盒内\n'shadow-none'")).toEqual([]);
     expect(kinds("'shadow-[0_4px_16px_black] shadow-[shadow:var(--unknown)]'")).toEqual(['shadow', 'shadow']);
     expect(kinds("'shadow-[0_1px_0_#fff,0_8px_24px_#000]'")).toEqual(['shadow']);
     expect(kinds("'drop-shadow-md' filter: 'drop-shadow(0 1px 2px red)'")).toEqual(['shadow', 'shadow']);
