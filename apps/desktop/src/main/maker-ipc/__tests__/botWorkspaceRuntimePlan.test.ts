@@ -45,7 +45,14 @@ describe('prepareBotWorkspaceRuntime for 分工 Sessions', () => {
         ('c', 'mimi', 'step', 'group', 'group:g1:plan:p1'),
         ('d', 'mimi', 'step-gone', 'group', 'group:g1:plan:p2'),
         ('e', 'mimi', 'step-unstarted', 'group', 'group:g1:plan:p3'),
-        ('f', 'mimi', 'step-wrong-group', 'group', 'group:g2:plan:p1');
+        ('f', 'mimi', 'step-wrong-group', 'group', 'group:g2:plan:p1'),
+        ('g', 'v2', 'v2-main', 'canonical', NULL);
+      CREATE TABLE bot_profiles (id TEXT PRIMARY KEY, current_version INTEGER NOT NULL);
+      CREATE TABLE bot_profile_versions (bot_id TEXT NOT NULL, version INTEGER NOT NULL, capabilities_json TEXT NOT NULL);
+      INSERT INTO bot_profiles VALUES ('mimi', 1), ('v2', 2);
+      INSERT INTO bot_profile_versions VALUES ('mimi', 1, '{}'), ('v2', 1, '{}'), ('v2', 2, '{"projectMode":true}');
+      CREATE TABLE sessions (id TEXT PRIMARY KEY, working_dir TEXT, workspace_kind TEXT, project_dir TEXT);
+      INSERT INTO sessions VALUES ('v2-main', '/owner-root/bots/v2/workspace', 'dialogue', NULL);
     `);
   });
 
@@ -57,6 +64,14 @@ describe('prepareBotWorkspaceRuntime for 分工 Sessions', () => {
       await prepareBotWorkspaceRuntime(o, deps);
       expect(o).toMatchObject({ workingDir: '/owner-root/bots/mimi/workspace', workspaceKind: 'dialogue', remoteHostId: undefined });
     }
+  });
+
+  it('runs a V2 teammate\'s chats as project sessions so the tasks they open stay in its project', async () => {
+    const o = opts('v2-main');
+    await prepareBotWorkspaceRuntime(o, deps);
+    expect(o).toMatchObject({ workingDir: '/owner-root/bots/mimi/workspace', workspaceKind: 'project', projectDir: '/owner-root/bots/mimi/workspace' });
+    expect(h.sqlite!.prepare('SELECT workspace_kind, project_dir FROM sessions WHERE id = ?').get('v2-main'))
+      .toEqual({ workspace_kind: 'project', project_dir: '/owner-root/bots/mimi/workspace' });
   });
 
   it("runs a 分工 Session in its plan's recorded directory", async () => {

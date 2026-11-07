@@ -2036,7 +2036,6 @@ function ExpandedView({
       },
       [
         ...allProjectGroups.projects.flatMap((project) => project.sessions),
-        ...groups.bots.flatMap((bot) => bot.sessions),
         ...visibleDialogues,
         ...visibleUnclassified,
       ],
@@ -2064,7 +2063,6 @@ function ExpandedView({
     activeSessionId,
     attentionKinds,
     displayRunningSessionIds,
-    groups.bots,
     remoteActivityRevision,
     sidebarNotifications,
     urgentSet,
@@ -3943,8 +3941,6 @@ function ExpandedView({
                   projects={visibleProjectsWithVendor}
                   dialogues={visibleDialogues}
                   dialogueActionSessions={dialogueActionSessions}
-                  bots={groups.bots}
-                  onOpenBot={(botId) => navigate(`/bots/${botId}`)}
                   allKnownProjects={visibleProjectUniverse}
                   dialogueCount={allGroups.dialogues.length}
                   allProjectKeysForOrder={gcProjectKeys}

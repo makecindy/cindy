@@ -10217,9 +10217,6 @@
     },
     "creationName": "이름",
     "settingsBack": "설정으로 돌아가기",
-    "sidebar": {
-      "newTaskWith": "{{name}}와(과) 새 작업 시작"
-    },
     "title": "동료",
     "add": "동료 추가",
     "createWizard": {
@@ -10230,7 +10227,23 @@
       "description": "동료는 기억과 익힌 작업 방식을 스스로 관리합니다. 바로잡을 때만 폴더를 직접 여세요.",
       "contents": "SOUL.md, USER.md, system_prompt.md, skills/, memories/가 들어 있습니다. 모델, 권한과 연결은 Cindy가 관리합니다.",
       "open": "폴더 열기",
-      "openFailed": "동료 폴더를 열 수 없습니다."
+      "openFailed": "동료 폴더를 열 수 없습니다.",
+      "projectMode": {
+        "title": "프로젝트로 작업(실험)",
+        "description": "동료의 작업 공간이 사이드바의 프로젝트가 됩니다. 그 안의 AGENTS.md는 동료의 작업 규칙이며 동료가 직접 고칠 수 있습니다. 모든 변경은 버전으로 남아 되돌릴 수 있습니다.",
+        "memoryReviewName": "{{name}} · 기억 정리",
+        "carryover": {
+          "title": "업그레이드 전 남은 일",
+          "intro": "이 팀원을 업그레이드할 때 아직 끝나지 않은 항목입니다. 필요한 것은 계속하고 나머지는 삭제하세요. 이전 기록 전체는 팀원 폴더의 v1-archive에 남아 있습니다.",
+          "todos": "열린 할 일",
+          "work": "워크벤치 항목",
+          "threads": "진행 중",
+          "commitments": "약속한 일",
+          "waiting": "기다리는 일",
+          "corrections": "내가 바로잡은 점",
+          "routines": "확인이 필요한 루틴"
+        }
+      }
     },
     "profile": {
       "title": "프로필",
@@ -19677,5 +19690,9 @@
     "directory": "계정 폴더",
     "loginAgain": "다시 로그인",
     "login": "로그인"
+  },
+  "sessionNotify": {
+    "finished": "이 작업이 이번 턴을 마쳤습니다. 최종 답변:",
+    "ended": "이 작업의 이번 턴이 정상적으로 끝나지 않았습니다. 마지막 출력:"
   }
 }

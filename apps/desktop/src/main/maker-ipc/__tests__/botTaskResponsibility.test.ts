@@ -3,7 +3,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { botProfileDir } from '../botProfileFolder.js';
-import { collectTaskResponsibilityScopes, readTaskResponsibilities, responsibleSessionIds, setTaskResponsibility } from '../botTaskResponsibility.js';
+import { collectTaskResponsibilityScopes, createdSessionIds, readTaskResponsibilities, responsibleSessionIds, setTaskResponsibility } from '../botTaskResponsibility.js';
 import { setBotAutonomyBotsChangedListener } from '../../bot-autonomy/botsChangedSignal.js';
 
 // Lock mechanics have their own cross-process suite; exercise this store's guarded write.
@@ -25,6 +25,16 @@ describe('task responsibility', () => {
     expect(responsibleSessionIds(['created'], await readTaskResponsibilities(root, 'one'))).toEqual([]);
     expect(await readTaskResponsibilities(root, 'two')).toEqual({});
     expect(await readTaskResponsibilities(root + '-other-owner', 'one')).toEqual({});
+  });
+  // 依据：用普通任务工具开的任务也是伙伴「开的」（项目模式不再走委派）；缺口：只记成接手，任务卡归属丢失。
+  // 最小失败输入：一次带 created 的写入后再解除。tier：unit。
+  it('remembers who opened a task even after it is released', async () => {
+    await setTaskResponsibility(root, 'one', 'opened', true, () => {}, { created: true });
+    await setTaskResponsibility(root, 'one', 'taken', true, () => {});
+    await setTaskResponsibility(root, 'one', 'opened', false, () => {});
+    const records = await readTaskResponsibilities(root, 'one');
+    expect(createdSessionIds(records)).toEqual(['opened']);
+    expect(responsibleSessionIds([], records)).toEqual(['taken']);
   });
   // 依据：伙伴自主跟进的归属须在接手 / 解除后立即生效（cindy-bots-runtime.md §6.3.2）；缺口：写入成功后
   // 观察层要等 60 秒定时重读。最小失败输入：一次成功接手、一次被拒的非法写入。tier：unit。

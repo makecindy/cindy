@@ -126,9 +126,25 @@ export function botSkillRootDir(userDataDir: string, botId: string): string {
   return path.join(userDataDir, 'bots', botDirName(botId));
 }
 
-/** 技能真正躺的地方。CC plugin 规范要求这一层就叫 `skills`。 */
+/**
+ * 伙伴 V2(项目模式)的技能就是它项目里的技能(`workspace/.agents/skills`),三个引擎按项目
+ * 原生方式加载,也跟着项目的版本走。登记由读取伙伴档案的地方完成(档案里才有开关)。
+ */
+const projectSkillDirs = new Map<string, string>();
+
+export function setBotProjectSkillsDir(userDataDir: string, botId: string, enabled: boolean): void {
+  const root = botSkillRootDir(userDataDir, botId);
+  const next = enabled ? path.join(root, 'workspace', '.agents', 'skills') : undefined;
+  if (projectSkillDirs.get(root) === next) return;
+  if (next) projectSkillDirs.set(root, next);
+  else projectSkillDirs.delete(root);
+  invalidateBotSkillRuntime(root);
+}
+
+/** 技能真正躺的地方。CC plugin 规范要求这一层就叫 `skills`;V2 伙伴是它项目里的技能目录。 */
 export function botSkillsDir(userDataDir: string, botId: string): string {
-  return path.join(botSkillRootDir(userDataDir, botId), 'skills');
+  const root = botSkillRootDir(userDataDir, botId);
+  return projectSkillDirs.get(root) ?? path.join(root, 'skills');
 }
 
 /**

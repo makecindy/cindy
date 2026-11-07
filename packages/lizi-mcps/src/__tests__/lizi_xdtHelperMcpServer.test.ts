@@ -142,6 +142,35 @@ describe("cindy_helper MCP server", () => {
     } finally { await client.close(); await server.close(); }
   });
 
+  // Teammate V2 (2026-11-06): a project-mode teammate opens tasks with the ordinary
+  // send_to_session, so the teammate-only delegation tools are gone from every entry.
+  it('leaves the teammate-only task tools out for a project-mode teammate', async () => {
+    let projectMode = true;
+    const start = vi.fn(async () => ({ ok: true as const }) as never);
+    const server = createXdtHelperMcpServer({
+      resolveSurface: async () => 'bot-main',
+      resolveTeammateProjectMode: async () => projectMode,
+      sessionTasks: { startSessionTask: start, getSessionTask: start, messageSessionTask: start, stopSessionTask: start },
+      botCapabilities: {
+        list: async () => ({ ok: true as const, capabilities: [] }),
+        select: async () => ({ ok: true as const, effective: 'next-turn' as const, joined: true }),
+      },
+    }, { agentKind: 'claude-code', workingDir: '/repo', sessionId: 'teammate-task' });
+    const client = new Client({ name: 'project-mode-test', version: '1' });
+    const [ct, st] = InMemoryTransport.createLinkedPair();
+    await Promise.all([server.connect(st), client.connect(ct)]);
+    try {
+      const listed = parsePayload(await client.callTool({ name: 'list_tools', arguments: { category: 'bots' } }));
+      expect((listed.tools as Array<{ name: string }>).map((tool) => tool.name)).not.toContain('start_session_task');
+      expect(parsePayload(await client.callTool({ name: 'call_tool', arguments: { name: 'start_session_task', args: { instruction: 'x' } } })))
+        .toMatchObject({ ok: false, errorCode: 'CAPABILITY_NOT_AVAILABLE' });
+      expect(start).not.toHaveBeenCalled();
+      projectMode = false;
+      const classic = parsePayload(await client.callTool({ name: 'list_tools', arguments: { category: 'bots' } }));
+      expect((classic.tools as Array<{ name: string }>).map((tool) => tool.name)).toContain('start_session_task');
+    } finally { await client.close(); await server.close(); }
+  });
+
   // The agent never found input handoff behind list_tools(auth) (2026-10-30).
   // Unit: a fresh client sees it in tools/list, with the window/title arguments,
   // before its first call; the old name stays callable for saved calls but unlisted.

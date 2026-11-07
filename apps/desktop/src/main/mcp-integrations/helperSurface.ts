@@ -1,5 +1,6 @@
 import type { DbClient } from '../localDb/client/DbClient.js';
-import { readBotSystemSkillsOff, type BotSystemSkillId } from '../../shared/botSystemSkills.js';
+import { effectiveBotSystemSkillsOff, type BotSystemSkillId } from '../../shared/botSystemSkills.js';
+import { readBotProjectMode } from '../../shared/botProjectMode.js';
 
 /** Companion tasks add their profile tools to the ordinary transport's helper surface.
  * Classification is a business-object distinction, not a separate permission tier.
@@ -50,6 +51,23 @@ export async function resolveHelperSystemSkillsOff(
   db: Pick<DbClient, 'queryOne'>,
   sessionId: string,
 ): Promise<BotSystemSkillId[]> {
+  const config = await readOwningBotConfig(db, sessionId);
+  return config ? effectiveBotSystemSkillsOff(config) : [];
+}
+
+/** The teammate owning this task runs as a project (V2). */
+export async function resolveHelperTeammateProjectMode(
+  db: Pick<DbClient, 'queryOne'>,
+  sessionId: string,
+): Promise<boolean> {
+  const config = await readOwningBotConfig(db, sessionId);
+  return config ? readBotProjectMode(config) : false;
+}
+
+async function readOwningBotConfig(
+  db: Pick<DbClient, 'queryOne'>,
+  sessionId: string,
+): Promise<Record<string, unknown> | null> {
   const row = await db.queryOne<{ config: string | null }>(
     `SELECT v.capabilities_json AS config
        FROM bot_session_links b
@@ -59,10 +77,11 @@ export async function resolveHelperSystemSkillsOff(
       LIMIT 1`,
     [sessionId],
   );
-  if (!row?.config) return [];
+  if (!row?.config) return null;
   try {
-    return readBotSystemSkillsOff((JSON.parse(row.config) as { systemSkillsOff?: unknown }).systemSkillsOff);
+    const config = JSON.parse(row.config) as unknown;
+    return config && typeof config === 'object' && !Array.isArray(config) ? config as Record<string, unknown> : null;
   } catch {
-    return [];
+    return null;
   }
 }

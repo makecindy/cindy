@@ -39,8 +39,18 @@ export function teammateSystemSkillsOff(raw: unknown): TeammateSystemSkillId[] {
   return Array.isArray(raw) ? TEAMMATE_SYSTEM_SKILL_IDS.filter((id) => raw.includes(id)) : [];
 }
 
-export function teammateDeniedTools(off: readonly string[]): Set<string> {
-  const denied = new Set<string>();
+/**
+ * A project-mode teammate works like any project task: it opens tasks with the ordinary
+ * `send_to_session` and automations with `cindy_scheduler`, so the teammate-only delegation
+ * tools are left out. Its routine Skill counts as off (the caller adds it to `off`).
+ */
+export const TEAMMATE_PROJECT_MODE_HIDDEN_TOOLS: readonly string[] = [
+  "start_session_task", "check_session_task", "message_session_task", "stop_session_task",
+  "inspect_session_task_route", "advance_session_task_route",
+];
+
+export function teammateDeniedTools(off: readonly string[], projectMode = false): Set<string> {
+  const denied = new Set<string>(projectMode ? TEAMMATE_PROJECT_MODE_HIDDEN_TOOLS : []);
   for (const id of teammateSystemSkillsOff(off)) for (const tool of TEAMMATE_SYSTEM_SKILL_TOOLS[id]) denied.add(tool);
   return denied;
 }

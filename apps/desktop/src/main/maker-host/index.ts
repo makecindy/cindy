@@ -123,6 +123,7 @@ import {
   migrateLegacyBotProfileFolder,
   readBotProfileFolder,
 } from '../maker-ipc/botProfileFolder.js';
+import { readBotLinkedProjects } from '../maker-ipc/botWorkbenchService.js';
 import {
   listBotTeammates,
 } from '../localDb/botHistoryScope.js';
@@ -2899,6 +2900,16 @@ export function getMaker(): Maker {
           systemPromptOverride: folder.systemPromptOverride,
         };
       },
+      // 项目模式:本机的关联项目作为只读附加目录;另一台电脑上的只是引用,不在这里挂载。
+      listLinkedProjectDirs: async ({ botId }) => {
+        const linked = await readBotLinkedProjects(ownerScopedUserDataPath(), botId);
+        const dirs: string[] = [];
+        for (const project of linked) {
+          if (project.deviceId) continue;
+          if (await fs.stat(project.path).then((value) => value.isDirectory(), () => false)) dirs.push(project.path);
+        }
+        return dirs;
+      },
       readMemoryIndex: async (scopeKey) =>
         (await makerMemoryManager.getStore(scopeKey)).getIndex(),
       // 队友名册进提示词(见 buildBotTeammateRoster)。
@@ -3088,7 +3099,8 @@ export function getMaker(): Maker {
           opts.vendorOptions = {
             ...(opts.vendorOptions ?? {}),
             [CODEX_DISABLED_BUILTIN_PLUGIN_IDS_KEY]: disabledPluginIds,
-            ...(botRuntimeSnapshot
+            // V2 teammates (projectContext) get the ordinary task's MCP and plugin surface.
+            ...(botRuntimeSnapshot && !createOpts.botRuntimeProfile?.projectContext
               ? {
                   [RUNTIME_MCP_NAMES_KEY]: (_mcpProviders[createOpts.agentKind] ?? [])
                     .filter((provider) => isBotMcpServerAllowed(createOpts.botRuntimeProfile?.mcpPolicy, provider.name))

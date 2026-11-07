@@ -78,6 +78,10 @@ import { syncBotProfileFromFolder } from '../../maker-ipc/botProfileFolderSync.j
 import { requestBotRuntimeEpochRefresh } from '../../maker-ipc/botRuntimeEpochRefreshSignal.js';
 import { createLogger } from '../../logger.js';
 import { collectTaskResponsibilityScopes } from '../../maker-ipc/botTaskResponsibility.js';
+import { ensureBotProjectAutomations, nameBotProject, prepareBotProjectWorkspace, removeBotProjectAutomations } from '../../maker-ipc/botProjectMode.js';
+import { normalizeRecentWorkdirPath } from './recentWorkdirs.js';
+import { setBotProjectSkillsDir } from '../../maker-ipc/botSkillStore.js';
+import { readBotProjectMode } from '../../../shared/botProjectMode.js';
 import {
   readBotWorkbenchTaskForOwner,
   readBotResponsibilityScope,
@@ -128,6 +132,8 @@ import { normalizeBotWelcomeContext, type BotWelcomeContext } from '../../../sha
 import { broadcastBotRemoteResourceChanged } from '../../maker-ipc/botRemoteResourceInvalidation.js';
 import { routineTools } from '../../routines/service.js';
 import { createBotMemoryService } from '../../maker-ipc/botMemoryService.js';
+import { readTeammateProjectMode } from '../../maker-ipc/botWorkspaceRuntime.js';
+import { resolveMemoryScopeKey } from '@cindy/maker-core';
 
 const log = createLogger('bots');
 
@@ -173,9 +179,12 @@ export function getBotMemoryService(): ReturnType<typeof createBotMemoryService>
         .where(eq(botProfiles.id, botId))
         .limit(1);
       owner.assertCurrent();
-      return row && row.status !== 'deleting'
-        ? { canonicalSessionId: row.canonicalSessionId, assertCurrent: owner.assertCurrent }
-        : null;
+      if (!row || row.status === 'deleting') return null;
+      const scopeKey = await readTeammateProjectMode(botId)
+        ? await resolveMemoryScopeKey(path.join(botProfileDir(owner.userDataDir, botId), 'workspace'))
+        : undefined;
+      owner.assertCurrent();
+      return { canonicalSessionId: row.canonicalSessionId, assertCurrent: owner.assertCurrent, ...(scopeKey ? { scopeKey } : {}) };
     },
     requestRefresh: (sessionId) => requestBotRuntimeEpochRefresh(sessionId, 'resource'),
   });
@@ -1273,6 +1282,7 @@ async function readProfile(
     lastReadAt,
   );
   const config = normalizeBotToolCapabilities(parseJson(version?.capabilitiesJson ?? '{}'));
+  setBotProjectSkillsDir(owner.userDataDir, profile.id, readBotProjectMode(config));
   const modelChain = await readEffectiveBotModelChain(config);
   const primaryModelRoute = modelChain[0];
   const invitation = botInvitationProgress(config.invitation);
@@ -1374,6 +1384,7 @@ async function readProfile(
       // back from here, so an explicit choice must survive a reload. Absent keeps the defaults.
       ...(config.inputHandoff === false ? { inputHandoff: false } : {}),
       ...(config.allowSchedulerFollow === true ? { allowSchedulerFollow: true } : {}),
+      ...(readBotProjectMode(config) ? { projectMode: true } : {}),
       // Absent = every system Skill on (shared/botSystemSkills.ts).
       ...(readBotSystemSkillsOff(config.systemSkillsOff).length
         ? { systemSkillsOff: readBotSystemSkillsOff(config.systemSkillsOff) } : {}),
@@ -2316,6 +2327,41 @@ export async function updateBotProfile(raw: unknown, expectedVersion?: number,
   owner.assertCurrent();
   if (Object.keys(folderPatch).length > 0) {
     await syncBotProfileFolder(id, folderPatch, owner.userDataDir);
+    owner.assertCurrent();
+  }
+  // Project mode (experimental): turning it on makes the workspace a registered,
+  // versioned project before the refreshed chat loads its AGENTS.md.
+  if (readBotProjectMode(normalizedNextConfig) && !readBotProjectMode(previous)) {
+    const displayName = patch.displayName ?? current.displayName;
+    const prepared = await prepareBotProjectWorkspace({
+      botId: id,
+      displayName,
+      ownerRoot: owner.userDataDir,
+      legacyUserDataDir: app.getPath('userData'),
+    }).catch((error) => {
+      log.warn('teammate project preparation failed', { botId: id, error: String(error) });
+      return null;
+    });
+    owner.assertCurrent();
+    // The nightly review becomes the project's own automation.
+    if (prepared) {
+      const [route] = await readEffectiveBotModelChain(normalizedNextConfig).catch(() => []);
+      await ensureBotProjectAutomations({ botId: id, displayName, workingDir: prepared.workingDir, route })
+        .catch((error) => log.warn('teammate project automations failed', { botId: id, error: String(error) }));
+      owner.assertCurrent();
+    }
+  } else if (readBotProjectMode(normalizedNextConfig) && patch.displayName !== undefined
+    && patch.displayName !== current.displayName) {
+    // The project carries the teammate's standard name; a name the user gave it is kept.
+    const projectDir = normalizeRecentWorkdirPath(
+      await ensureBotWorkspaceDir(owner.userDataDir, id, app.getPath('userData')),
+    );
+    if (projectDir) await nameBotProject(id, projectDir, patch.displayName, current.displayName);
+    owner.assertCurrent();
+  } else if (!readBotProjectMode(normalizedNextConfig) && readBotProjectMode(previous)) {
+    const workingDir = await ensureBotWorkspaceDir(owner.userDataDir, id, app.getPath('userData'));
+    await removeBotProjectAutomations(workingDir)
+      .catch((error) => log.warn('teammate project automations removal failed', { botId: id, error: String(error) }));
     owner.assertCurrent();
   }
   if (profileContentChanged || acceptsSavedModel) {

@@ -10262,9 +10262,6 @@
     },
     "creationName": "Name",
     "settingsBack": "Zurück zu den Einstellungen",
-    "sidebar": {
-      "newTaskWith": "Eine Aufgabe mit {{name}} starten"
-    },
     "title": "Teammitglieder",
     "add": "Teammitglied hinzufügen",
     "createWizard": {
@@ -10275,7 +10272,23 @@
       "description": "Das Teammitglied pflegt eigene Erinnerungen und wiederverwendbare Arbeitsweisen. Öffne seinen Ordner nur, wenn etwas korrigiert werden muss.",
       "contents": "Enthält SOUL.md, USER.md, system_prompt.md, skills/ und memories/. Modelle, Berechtigungen und Verbindungen werden weiterhin von Cindy verwaltet.",
       "open": "Ordner öffnen",
-      "openFailed": "Der Ordner des Teammitglieds konnte nicht geöffnet werden."
+      "openFailed": "Der Ordner des Teammitglieds konnte nicht geöffnet werden.",
+      "projectMode": {
+        "title": "Als Projekt arbeiten (experimentell)",
+        "description": "Der Arbeitsbereich des Teammitglieds wird zu einem Projekt in der Seitenleiste. Seine AGENTS.md enthält die eigenen Arbeitsregeln, die es selbst bearbeiten kann; jede Änderung bleibt als Version erhalten und lässt sich rückgängig machen.",
+        "memoryReviewName": "{{name}} · Erinnerungen ordnen",
+        "carryover": {
+          "title": "Aus der Zeit vor dem Upgrade übernommen",
+          "intro": "Was beim Upgrade dieses Teammitglieds noch offen war. Mach weiter, was noch wichtig ist, und lösche den Rest. Die vollständigen alten Daten bleiben im Ordner v1-archive des Teammitglieds.",
+          "todos": "Offene Aufgaben",
+          "work": "Werkbank",
+          "threads": "In Arbeit",
+          "commitments": "Zugesagt",
+          "waiting": "Wartet auf",
+          "corrections": "Deine Korrekturen",
+          "routines": "Zu prüfende Routinen"
+        }
+      }
     },
     "profile": {
       "title": "Profil",
@@ -19749,5 +19762,9 @@
     "directory": "Kontoordner",
     "loginAgain": "Erneut anmelden",
     "login": "Anmelden"
+  },
+  "sessionNotify": {
+    "finished": "Diese Aufgabe hat ihren Durchgang abgeschlossen. Ihre endgültige Antwort:",
+    "ended": "Der Durchgang dieser Aufgabe wurde nicht normal beendet. Letzte Ausgabe:"
   }
 }

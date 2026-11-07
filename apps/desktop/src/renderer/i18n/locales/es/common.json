@@ -10344,9 +10344,6 @@
     },
     "creationName": "Nombre",
     "settingsBack": "Volver a Configuración",
-    "sidebar": {
-      "newTaskWith": "Iniciar una tarea con {{name}}"
-    },
     "title": "Compañeros",
     "add": "Agregar compañero de equipo",
     "createWizard": {
@@ -10357,7 +10354,23 @@
       "description": "El compañero mantiene su propia memoria y métodos de trabajo reutilizables. Abre su carpeta solo cuando haya algo que corregir.",
       "contents": "Contiene SOUL.md, USER.md, system_prompt.md, skills/ y memories/. Cindy sigue administrando los modelos, permisos y conexiones.",
       "open": "Abrir carpeta",
-      "openFailed": "No se pudo abrir la carpeta del compañero."
+      "openFailed": "No se pudo abrir la carpeta del compañero.",
+      "projectMode": {
+        "title": "Trabajar como proyecto (experimental)",
+        "description": "El espacio de trabajo del compañero se convierte en un proyecto de la barra lateral. Su AGENTS.md guarda sus propias reglas de trabajo, que puede editar; cada cambio queda como una versión que puedes deshacer.",
+        "memoryReviewName": "{{name}} · Ordenar memoria",
+        "carryover": {
+          "title": "Pendiente de antes de la actualización",
+          "intro": "Lo que seguía abierto al actualizar a este compañero. Continúa con lo que aún importa y elimina el resto. Los registros antiguos completos quedan en la carpeta v1-archive del compañero.",
+          "todos": "Tareas abiertas",
+          "work": "Mesa de trabajo",
+          "threads": "En curso",
+          "commitments": "Prometido",
+          "waiting": "A la espera de",
+          "corrections": "Tus correcciones",
+          "routines": "Rutinas por revisar"
+        }
+      }
     },
     "profile": {
       "title": "Perfil",
@@ -19936,5 +19949,9 @@
     "directory": "Carpeta de la cuenta",
     "loginAgain": "Iniciar sesión nuevamente",
     "login": "Iniciar sesión"
+  },
+  "sessionNotify": {
+    "finished": "Esta tarea terminó su turno. Su respuesta final:",
+    "ended": "El turno de esta tarea no terminó con normalidad. Última salida:"
   }
 }

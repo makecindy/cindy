@@ -10344,9 +10344,6 @@
     },
     "creationName": "Nom",
     "settingsBack": "Retour aux paramètres",
-    "sidebar": {
-      "newTaskWith": "Démarrer une tâche avec {{name}}"
-    },
     "title": "Coéquipiers",
     "add": "Ajouter un coéquipier",
     "createWizard": {
@@ -10357,7 +10354,23 @@
       "description": "Le coéquipier gère sa propre mémoire et ses méthodes de travail réutilisables. N'ouvrez son dossier que si quelque chose doit être corrigé.",
       "contents": "Contient SOUL.md, USER.md, system_prompt.md, skills/ et memories/. Les modèles, les autorisations et les connexions restent gérés par Cindy.",
       "open": "Ouvrir le dossier",
-      "openFailed": "Impossible d'ouvrir le dossier du coéquipier."
+      "openFailed": "Impossible d'ouvrir le dossier du coéquipier.",
+      "projectMode": {
+        "title": "Travailler comme un projet (expérimental)",
+        "description": "L'espace de travail du coéquipier devient un projet dans la barre latérale. Son AGENTS.md contient ses propres règles de travail, qu'il peut modifier ; chaque modification est conservée comme une version que vous pouvez annuler.",
+        "memoryReviewName": "{{name}} · Ranger la mémoire",
+        "carryover": {
+          "title": "Repris d'avant la mise à niveau",
+          "intro": "Ce qui restait ouvert lors de la mise à niveau de ce coéquipier. Poursuivez ce qui compte encore et supprimez le reste. Les anciens enregistrements complets restent dans le dossier v1-archive du coéquipier.",
+          "todos": "Tâches ouvertes",
+          "work": "Établi",
+          "threads": "En cours",
+          "commitments": "Promis",
+          "waiting": "En attente de",
+          "corrections": "Vos corrections",
+          "routines": "Routines à vérifier"
+        }
+      }
     },
     "profile": {
       "title": "Profil",
@@ -19936,5 +19949,9 @@
     "directory": "Dossier du compte",
     "loginAgain": "Se reconnecter",
     "login": "Se connecter"
+  },
+  "sessionNotify": {
+    "finished": "Cette tâche a terminé son tour. Sa réponse finale :",
+    "ended": "Le tour de cette tâche ne s'est pas terminé normalement. Dernière sortie :"
   }
 }

@@ -10217,9 +10217,6 @@
     },
     "creationName": "名字",
     "settingsBack": "返回设置",
-    "sidebar": {
-      "newTaskWith": "和{{name}}开个新任务"
-    },
     "title": "伙伴",
     "add": "添加伙伴",
     "createWizard": {
@@ -10230,7 +10227,23 @@
       "description": "伙伴会自己维护记忆和学会的做法。只有需要纠正时，才直接打开它的文件夹。",
       "contents": "包含 SOUL.md、USER.md、system_prompt.md，以及 Skill 和记忆文件夹。模型、权限和连接仍由 Cindy 管理。",
       "open": "打开文件夹",
-      "openFailed": "无法打开伙伴文件夹。"
+      "openFailed": "无法打开伙伴文件夹。",
+      "projectMode": {
+        "title": "作为项目工作（实验）",
+        "description": "伙伴的工作区会成为侧栏里的一个项目。其中的 AGENTS.md 是伙伴自己的做事规则，伙伴可以修改；每次改动都会保留版本，可以撤销。",
+        "memoryReviewName": "{{name}} · 整理记忆",
+        "carryover": {
+          "title": "升级前没做完的事",
+          "intro": "伙伴升级时还没完成的事项。还有用的接着做，没用的直接删掉。旧版完整记录保存在伙伴文件夹的 v1-archive 里。",
+          "todos": "待办",
+          "work": "工作台",
+          "threads": "进行中",
+          "commitments": "答应过的",
+          "waiting": "在等",
+          "corrections": "你纠正过的做法",
+          "routines": "需要看一下的例行任务"
+        }
+      }
     },
     "profile": {
       "title": "资料",
@@ -19677,5 +19690,9 @@
     "directory": "账号目录",
     "loginAgain": "重新登录",
     "login": "登录"
+  },
+  "sessionNotify": {
+    "finished": "这个任务这一轮做完了，最终答复如下：",
+    "ended": "这个任务这一轮没有正常结束，最后的输出如下："
   }
 }

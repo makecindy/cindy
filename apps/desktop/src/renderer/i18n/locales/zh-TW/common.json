@@ -10217,9 +10217,6 @@
     },
     "creationName": "名字",
     "settingsBack": "返回設定",
-    "sidebar": {
-      "newTaskWith": "和{{name}}開個新任務"
-    },
     "title": "夥伴",
     "add": "新增夥伴",
     "createWizard": {
@@ -10230,7 +10227,23 @@
       "description": "夥伴會自己維護記憶與學會的做法。只有需要修正時，才直接開啟它的資料夾。",
       "contents": "包含 SOUL.md、USER.md、system_prompt.md，以及 Skill 和記憶資料夾。模型、權限和連線仍由 Cindy 管理。",
       "open": "開啟資料夾",
-      "openFailed": "無法開啟夥伴資料夾。"
+      "openFailed": "無法開啟夥伴資料夾。",
+      "projectMode": {
+        "title": "作為專案工作（實驗）",
+        "description": "夥伴的工作區會成為側欄中的一個專案。其中的 AGENTS.md 是夥伴自己的做事規則，夥伴可以修改；每次變更都會保留版本，可以復原。",
+        "memoryReviewName": "{{name}} · 整理記憶",
+        "carryover": {
+          "title": "升級前沒做完的事",
+          "intro": "夥伴升級時還沒完成的事項。還有用的接著做，沒用的直接刪掉。舊版完整紀錄保存在夥伴資料夾的 v1-archive 裡。",
+          "todos": "待辦",
+          "work": "工作台",
+          "threads": "進行中",
+          "commitments": "答應過的",
+          "waiting": "在等",
+          "corrections": "你糾正過的做法",
+          "routines": "需要看一下的例行任務"
+        }
+      }
     },
     "profile": {
       "title": "資料",
@@ -19677,5 +19690,9 @@
     "directory": "帳號目錄",
     "loginAgain": "重新登入",
     "login": "登入"
+  },
+  "sessionNotify": {
+    "finished": "這個任務這一輪做完了，最終答覆如下：",
+    "ended": "這個任務這一輪沒有正常結束，最後的輸出如下："
   }
 }

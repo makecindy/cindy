@@ -10217,9 +10217,6 @@
     },
     "creationName": "名",
     "settingsBack": "歸規制",
-    "sidebar": {
-      "newTaskWith": "與{{name}}新開差事"
-    },
     "title": "同僚",
     "add": "增同僚",
     "createWizard": {
@@ -10230,7 +10227,23 @@
       "description": "同僚自守其記憶與所習之法。唯須匡正時，方直啟其卷匣。",
       "contents": "內有 SOUL.md、USER.md、system_prompt.md，及 Skill 與記憶之卷匣。模型、權柄與連線仍由 Cindy 掌之。",
       "open": "啟卷匣",
-      "openFailed": "不能啟同僚之卷匣。"
+      "openFailed": "不能啟同僚之卷匣。",
+      "projectMode": {
+        "title": "以專案行事（試行）",
+        "description": "同僚之工坊化為側欄一專案。其中 AGENTS.md 乃同僚自守之規，可自修之；每一改皆存其版，可復。",
+        "memoryReviewName": "{{name}} · 理記",
+        "carryover": {
+          "title": "升級前未竟之事",
+          "intro": "夥伴升級之時尚未了結者。有用者續之，無用者刪之。舊錄全存於夥伴資料夾之 v1-archive。",
+          "todos": "待辦",
+          "work": "案頭",
+          "threads": "進行中",
+          "commitments": "所諾",
+          "waiting": "所待",
+          "corrections": "君所糾正",
+          "routines": "例行之務待查"
+        }
+      }
     },
     "profile": {
       "title": "行狀",
@@ -19677,5 +19690,9 @@
     "directory": "帳號目錄",
     "loginAgain": "重登",
     "login": "登入"
+  },
+  "sessionNotify": {
+    "finished": "此務此輪已畢，終答如下：",
+    "ended": "此務此輪未得善終，末出如下："
   }
 }

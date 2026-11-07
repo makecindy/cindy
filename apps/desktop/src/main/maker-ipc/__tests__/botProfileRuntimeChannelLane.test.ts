@@ -9,6 +9,7 @@ vi.mock('../../localDb/client/current.js', () => ({ getDbClient: () => ({ drizzl
 } } }) }));
 
 import { hydrateBotProfileRuntime } from '../botProfileRuntime';
+import { resolveMemoryScopeKey } from '@cindy/maker-core';
 import type { MakerSessionCreateOpts } from '../sessionRequest';
 import { BOT_IM_CHANNELS_VENDOR_KEY, type BotImChannel } from '../../../shared/botImConnection';
 
@@ -172,6 +173,68 @@ describe('IM channel lanes hydrate the full Bot profile', () => {
     await hydrateBotProfileRuntime(lane, deps, { persistSnapshot: false });
     expect(deps.listBotImChannels).not.toHaveBeenCalled();
     expect(lane.vendorOptions?.[BOT_IM_CHANNELS_VENDOR_KEY]).toBeUndefined();
+  });
+
+  // 伙伴 V2:在自己 workspace 里干活时就是普通项目任务——不用伙伴记忆、不收窄工具集与技能,只叠加身份;
+  // 本机关联项目只读挂载。别的目录(群分工)和未开启时保持原伙伴。依据:主人 2026-11-06。unit,mock DB。
+  it('runs a V2 teammate in its workspace as an ordinary project task', async () => {
+    const deps = {
+      readProfileFolder: vi.fn(async () => ({ homeDir: '/bots/bot', systemPromptOverride: '' })),
+      readMemoryIndex: vi.fn(async () => 'BOT MEMORY'),
+      listToolsets: vi.fn(async () => [
+        { id: 'browser', name: 'Browser', available: true },
+        { id: 'docs', name: 'Docs', available: true },
+      ]),
+      listLinkedProjectDirs: vi.fn(async () => ['/code/app']),
+    };
+    const narrow = { toolCapabilityVersion: 1, memory: true, mcpMode: 'allowlist', mcpServers: [], toolsetMode: 'allowlist', toolsets: [] };
+    seed('canonical', null, { ...narrow, projectMode: true });
+    const main = { id: 'main', agentKind: 'pi', workingDir: '/bots/bot/workspace', model: 'm' } as MakerSessionCreateOpts;
+    const snapshot = await hydrateBotProfileRuntime(main, deps, { persistSnapshot: false });
+    expect(main.botRuntimeProfile?.projectContext).toBe(true);
+    expect(main.makerMemoryScopeKey).toBeUndefined();
+    // Project memory, switched by the teammate's own memory setting, not the global one.
+    expect(main.makerMemoryEnabled).toBe(true);
+    expect(deps.readMemoryIndex).not.toHaveBeenCalled();
+    expect(snapshot?.disabledToolsets).toEqual([]);
+    expect(main.extraDirs).toEqual(['/code/app']);
+    expect(main.botProfileContextPrompt).toContain('/bots/bot/workspace');
+    // It works like an ordinary task: no teammate how-to guidance on top.
+    expect(main.botProfileContextPrompt).not.toContain('# 你会做什么');
+    expect(main.botProfileContextPrompt).not.toContain('teammate-guide');
+
+    seed('canonical', null, { ...narrow, projectMode: true });
+    const elsewhere = { id: 'plan', agentKind: 'pi', workingDir: '/code/app', model: 'm' } as MakerSessionCreateOpts;
+    const planSnapshot = await hydrateBotProfileRuntime(elsewhere, deps, { persistSnapshot: false });
+    expect(elsewhere.botRuntimeProfile?.projectContext).toBeUndefined();
+    expect(planSnapshot?.disabledToolsets).toEqual(['browser', 'docs']);
+
+    // A group lane in the workspace keeps the group's own tool authorization.
+    seed('group', 'group:g1', { ...narrow, projectMode: true });
+    const group = { id: 'group', agentKind: 'pi', workingDir: '/bots/bot/workspace', model: 'm' } as MakerSessionCreateOpts;
+    const groupSnapshot = await hydrateBotProfileRuntime(group, deps, { persistSnapshot: false });
+    expect(group.botRuntimeProfile?.projectContext).toBeUndefined();
+    expect(groupSnapshot?.disabledToolsets).toEqual(['browser', 'docs']);
+    // ...but shares the teammate's one project memory, not the old teammate store.
+    expect(group.makerMemoryEnabled).toBe(true);
+    expect(group.makerMemoryScopeKey).toBe(await resolveMemoryScopeKey('/bots/bot/workspace'));
+    expect(deps.readMemoryIndex).not.toHaveBeenCalled();
+
+    // An IM lane (other people) keeps the channel isolation: never the owner's ordinary-task
+    // context (personal instructions, settings, Skills), only the teammate's project memory.
+    seed('channel', 'im:telegram:777:g:-100123', { ...narrow, projectMode: true });
+    const lane = { id: 'lane', agentKind: 'pi', workingDir: '/bots/bot/workspace', model: 'm' } as MakerSessionCreateOpts;
+    const laneSnapshot = await hydrateBotProfileRuntime(lane, deps, { persistSnapshot: false });
+    expect(lane.botRuntimeProfile?.projectContext).toBeUndefined();
+    expect(laneSnapshot?.disabledToolsets).toEqual(['browser', 'docs']);
+    expect(lane.makerMemoryScopeKey).toBe(await resolveMemoryScopeKey('/bots/bot/workspace'));
+
+    seed('canonical', null, narrow);
+    const classic = { id: 'main', agentKind: 'pi', workingDir: '/bots/bot/workspace', model: 'm' } as MakerSessionCreateOpts;
+    await hydrateBotProfileRuntime(classic, deps, { persistSnapshot: false });
+    expect(classic.botRuntimeProfile?.projectContext).toBeUndefined();
+    expect(classic.makerMemoryScopeKey).toBe('bot:bot');
+    expect(classic.extraDirs).toBeUndefined();
   });
 
   it('still refuses read-only history links', async () => {

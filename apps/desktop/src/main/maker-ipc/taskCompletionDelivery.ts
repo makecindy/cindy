@@ -1,8 +1,8 @@
 import type { BotAutonomyExecution } from '../../shared/botAutonomy.js';
 
-/** The caller's conversation at creation. Following and execution location never rewrite it. */
+/** The task that asked to hear back (`notify_when_done`), or a teammate conversation. */
 export interface TaskCompletionOrigin {
-  botId: string;
+  botId?: string;
   sessionId: string;
   groupId?: string;
   threadRootId?: string;
@@ -13,6 +13,10 @@ export interface TaskCompletionReceipt {
   execution: BotAutonomyExecution;
   text: string;
   status: 'pending' | 'delivered' | 'failed';
+  /** Who asked for this result; a later request on the same task never redirects it. */
+  origin?: TaskCompletionOrigin;
+  /** false: the turn did not finish normally (error or stop); the requester still hears about it. */
+  successful?: boolean;
   errorCode?: string;
   failureShown?: boolean;
   postSnapshot?: unknown;
@@ -21,6 +25,13 @@ export interface TaskCompletionReceipt {
 export interface TaskCompletionRecord {
   origin: TaskCompletionOrigin;
   receipts: TaskCompletionReceipt[];
+  /**
+   * One-shot: the next turn of this task that ends after `after` (the turn running or last
+   * finished when the request was sent) is delivered to `origin`, then it disarms.
+   */
+  armed?: { after?: BotAutonomyExecution };
+  /** Created by `notify_when_done`: only an armed request delivers, never a later explicit report. */
+  notify?: boolean;
 }
 
 interface TaskCompletionTerminal {
@@ -52,6 +63,8 @@ export function createTaskCompletionDelivery(deps: TaskCompletionDeliveryDeps) {
   const unsettled = new Map<string, TaskCompletionTerminal>();
   let disposed = false;
   const current = () => !disposed && deps.isCurrent();
+  // A finished notify_when_done request no longer makes the task "delivering" (no report prompt, no suppression).
+  const waiting = (record: TaskCompletionRecord | null) => !!record && (!record.notify || !!record.armed);
   const same = (a: BotAutonomyExecution, b: BotAutonomyExecution) =>
     a.instanceId === b.instanceId && a.generation === b.generation;
   const executionKey = (id: string, execution: BotAutonomyExecution) =>
@@ -88,7 +101,7 @@ export function createTaskCompletionDelivery(deps: TaskCompletionDeliveryDeps) {
       };
       try {
         if (receipt.status === 'failed') { await showFailure(); continue; }
-        const result = await deps.post(id, record.origin, receipt, async prepare => {
+        const result = await deps.post(id, receipt.origin ?? record.origin, receipt, async prepare => {
           if (receipt.postSnapshot !== undefined) return receipt.postSnapshot;
           const snapshot = await prepare();
           if (!current()) throw new Error('OWNER_CHANGED');
@@ -127,8 +140,8 @@ export function createTaskCompletionDelivery(deps: TaskCompletionDeliveryDeps) {
   async function settle(input: TaskCompletionTerminal) {
     const key = executionKey(input.sessionId, input.execution);
     const report = reports.get(key);
-    if (!report) return;
-    if (!report.final || !input.successful || !current()) {
+    // A legacy explicit report that is not final, or a failed reported turn, delivers nothing.
+    if ((report && (!report.final || !input.successful)) || !current()) {
       reports.delete(key);
       unsettled.delete(key);
       return;
@@ -138,13 +151,21 @@ export function createTaskCompletionDelivery(deps: TaskCompletionDeliveryDeps) {
     try {
       await serial(input.sessionId, async () => {
         const saved = await deps.read(input.sessionId);
-        if (!saved || !current()) return;
+        const armedFor = (armed: TaskCompletionRecord['armed']) => !!armed && (!armed.after
+          || armed.after.instanceId !== input.execution.instanceId || input.execution.generation > armed.after.generation);
+        const wanted = saved && (saved.notify ? armedFor(saved.armed) : !!report || armedFor(saved.armed));
+        if (!saved || !current() || !wanted) {
+          unsettled.delete(key);
+          return;
+        }
         if (!saved.receipts.some(receipt => same(receipt.execution, input.execution))) {
           const text = deps.resolveText ? await deps.resolveText(input) : input.text;
           if (!current()) return;
           await deps.update(input.sessionId, record => {
             record.receipts.push({ id: `task-result:${input.sessionId}:${input.execution.instanceId}:${input.execution.generation}`,
-              execution: input.execution, text, status: 'pending' });
+              execution: input.execution, text, status: 'pending', origin: { ...record.origin },
+              ...(input.successful ? {} : { successful: false }) });
+            delete record.armed;
           });
         }
         unsettled.delete(key);
@@ -165,10 +186,10 @@ export function createTaskCompletionDelivery(deps: TaskCompletionDeliveryDeps) {
     report(id: string, execution: BotAutonomyExecution, final: boolean) {
       if (current()) reports.set(executionKey(id, execution), { execution: { ...execution }, final });
     },
-    hasOrigin: async (id: string) => current() && !!await deps.read(id),
+    hasOrigin: async (id: string) => current() && waiting(await deps.read(id)),
     settle,
     /** Suppress follower replies even if delivery failed; only the frozen origin may receive it. */
-    async handles(id: string) { return current() && !!await deps.read(id); },
+    async handles(id: string) { return current() && waiting(await deps.read(id)); },
     async restore() {
       for (const id of await deps.pending()) {
         if (!current()) return;

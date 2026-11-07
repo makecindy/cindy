@@ -75,6 +75,8 @@ export interface BotSystemPromptInput {
    * 远端会话没有本机 userData,这时不给,也就一个字都不提。
    */
   homeDir?: string;
+  /** 伙伴 V2:它的 workspace 是一个普通项目(项目说明、记忆、技能都按项目走)。 */
+  projectMode?: boolean;
 }
 
 /**
@@ -187,6 +189,7 @@ const TEAMMATE_ROLE_MAX_CHARS = 160;
 
 export function buildBotTeammateRoster(
   entries: readonly { id: string; name: string; description?: string | null }[],
+  options: { projectMode?: boolean } = {},
 ): string {
   const rows = entries
     .map((entry) => {
@@ -201,10 +204,11 @@ export function buildBotTeammateRoster(
     })
     .filter(Boolean);
   if (rows.length === 0) return '';
+  if (options.projectMode) return ['## 你的队友', ...rows].join('\n');
   return [
     '## 你的队友',
     ...rows,
-    '只有明确要联系某个伙伴时，才把上面或 `list_agents` 返回的 id 传给 `send_to_agent`。开后台任务用 `start_session_task`，不要从名册挑人。不确定该找谁就别猜，问用户一句。',
+    '只有明确要联系某个伙伴时，才把上面或 `list_agents` 返回的 id 传给 `send_to_agent`。开任务用 `start_session_task`，不要从名册挑人。不确定该找谁就别猜，问用户一句。',
   ].join('\n');
 }
 
@@ -227,6 +231,14 @@ function buildHomeGuidance(homeDir: string): string {
   ].join('\n');
 }
 
+/** 伙伴 V2:伙伴就是一个项目;做事方式与普通任务相同,只说清项目和身份在哪。 */
+function buildProjectHomeGuidance(homeDir: string): string {
+  return [
+    '## 你的项目',
+    `\`${homeDir}/workspace\` 是你的项目，也是默认工作目录。项目里的 AGENTS.md、记忆和 \`.agents/skills/\` 都是你自己的。你的身份（SOUL.md 等）在项目外，由主人维护。`,
+  ].join('\n');
+}
+
 function has(signals: BotPromptCapabilitySignals, toolset: string): boolean {
   return signals.toolsets.includes(toolset);
 }
@@ -242,13 +254,19 @@ export function buildBotStableTier(input: BotSystemPromptInput): string {
   const botModeEnabled = input.capabilities.botModeEnabled !== false;
   const identity = input.identity.trim();
   if (identity) parts.push(identity);
+  const homeDir = input.homeDir?.trim();
+  // V2: an ordinary project task with an identity. How to work comes from the
+  // ordinary task prompt and each tool's own description, not teammate guidance.
+  if (input.projectMode) {
+    if (homeDir) parts.push(buildProjectHomeGuidance(homeDir));
+    return parts.filter(Boolean).join('\n\n');
+  }
   parts.push(TASK_COMPLETION_GUIDANCE);
 
   // 能力说明按「这个伙伴真的挂了什么」注入 —— 没挂的能力一个字都不提,
   // 免得模型去调一个不存在的工具(Hermes 同款 valid_tool_names 门)。
   const capabilityParts: string[] = [];
   // 家排在最前:它不是某个工具的用法,是「你有身份、有积累、能改自己」这件事本身。
-  const homeDir = input.homeDir?.trim();
   if (homeDir) capabilityParts.push(buildHomeGuidance(homeDir));
   if (has(input.capabilities, 'docs')) capabilityParts.push(DOCS_GUIDANCE);
   if (input.capabilities.memoryEnabled) capabilityParts.push(MEMORY_GUIDANCE);
@@ -300,7 +318,7 @@ export function buildBotVolatileTier(input: BotSystemPromptInput): string {
   // 队友名册随「有哪些伙伴 / 谁改了名」变,所以在易变层 —— 与技能索引同理。
   const teammates =
     input.capabilities.botModeEnabled !== false
-      ? buildBotTeammateRoster(input.teammates ?? [])
+      ? buildBotTeammateRoster(input.teammates ?? [], { projectMode: input.projectMode })
       : '';
   if (teammates) parts.push(teammates);
   const memory = input.memorySnapshot?.trim();

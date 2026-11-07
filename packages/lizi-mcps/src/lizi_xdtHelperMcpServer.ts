@@ -542,7 +542,7 @@ function registerSendToAgentEntry(
       'Send one asynchronous message to a named Cindy Bot teammate.',
       'Use it for a brief question, discussion, or information transfer. It does not create a task, status, progress, cancellation, or a completion contract.',
       "The message remains visible in both teammates' timelines. The recipient may answer in a later turn. Do not poll or send acknowledgement-only replies.",
-      'For independently tracked development or deliverable work, use start_session_task instead.',
+      'For independently tracked development or deliverable work, open a task instead.',
       'Use the exact stable id from list_agents (deviceId::botId for a remote teammate) or a structured @Bot reference. Never route by name.',
     ].join('\n'),
     inputShape: {
@@ -825,6 +825,8 @@ export interface XdtHelperMcpDeps {
    * denied at call time and left out of new tool listings; the core prompt stops naming them.
    */
   resolveSystemSkillsOff?: (input: { sessionId: string }) => Promise<readonly string[]>;
+  /** The calling teammate runs as a project (V2): teammate-only delegation tools are left out. */
+  resolveTeammateProjectMode?: (input: { sessionId: string }) => Promise<boolean>;
   runtimeCapabilities?: (
     context: import('./types.js').LiziMcpSessionContext,
     query: import('./xdt-helper/get_capabilities.js').RuntimeCapabilityQuery,
@@ -971,7 +973,10 @@ export function createXdtHelperMcpServer(
       const off = deps.resolveSystemSkillsOff
         ? await deps.resolveSystemSkillsOff({ sessionId }).catch(() => [] as readonly string[])
         : [];
-      return { categories: new Set([...categories, 'bots']), deniedTools: teammateDeniedTools(off) };
+      const projectMode = deps.resolveTeammateProjectMode
+        ? await deps.resolveTeammateProjectMode({ sessionId }).catch(() => false)
+        : false;
+      return { categories: new Set([...categories, 'bots']), deniedTools: teammateDeniedTools(off, projectMode) };
     }
     if (surface === 'restricted') return none;
     return allow(remoteBotOnly ? new Set(['auth', 'cindy']) : defaultCategories);

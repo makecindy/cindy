@@ -10217,9 +10217,6 @@
     },
     "creationName": "名前",
     "settingsBack": "設定に戻る",
-    "sidebar": {
-      "newTaskWith": "{{name}}と新しいタスクを始める"
-    },
     "title": "仲間",
     "add": "仲間を追加",
     "createWizard": {
@@ -10230,7 +10227,23 @@
       "description": "仲間は記憶と身につけた手順を自分で管理します。修正が必要なときだけフォルダを直接開いてください。",
       "contents": "SOUL.md、USER.md、system_prompt.md、skills/、memories/ が入っています。モデル、権限、接続は Cindy が管理します。",
       "open": "フォルダを開く",
-      "openFailed": "仲間のフォルダを開けませんでした。"
+      "openFailed": "仲間のフォルダを開けませんでした。",
+      "projectMode": {
+        "title": "プロジェクトとして作業（試験運用）",
+        "description": "仲間の作業フォルダがサイドバーのプロジェクトになります。中の AGENTS.md は仲間自身の作業ルールで、仲間が編集できます。変更はすべてバージョンとして残り、元に戻せます。",
+        "memoryReviewName": "{{name}} · 記憶を整理",
+        "carryover": {
+          "title": "アップグレード前の未完了事項",
+          "intro": "このチームメイトをアップグレードした時点で未完了だった事項です。必要なものは続け、不要なものは削除してください。旧版の記録はチームメイトのフォルダ内の v1-archive に残っています。",
+          "todos": "未完了のToDo",
+          "work": "ワークベンチ",
+          "threads": "進行中",
+          "commitments": "約束したこと",
+          "waiting": "待っていること",
+          "corrections": "あなたが訂正したこと",
+          "routines": "確認が必要な定期タスク"
+        }
+      }
     },
     "profile": {
       "title": "プロフィール",
@@ -19677,5 +19690,9 @@
     "directory": "アカウントフォルダー",
     "loginAgain": "再ログイン",
     "login": "ログイン"
+  },
+  "sessionNotify": {
+    "finished": "このタスクは今回のターンを終えました。最終回答：",
+    "ended": "このタスクの今回のターンは正常に終了しませんでした。最後の出力："
   }
 }

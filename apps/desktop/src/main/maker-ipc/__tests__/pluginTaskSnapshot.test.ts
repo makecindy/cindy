@@ -100,6 +100,7 @@ it.each(['other-computer', 'share:provider'])('uses the %s catalog in the produc
     readUsableAgentDeviceProviders: remote, getDesktopProviderService: local, assertModelRouteUsable: local,
     findCatalogModel, resolveSessionRuntimeAxes, performSessionAgentSwitch: stage, agentSwitchDeps: {},
     throwIpcError: (code: string, message: string) => { throw Object.assign(new Error(message), { code }); },
+    updateScheduledPreference: async () => true, reconcileBotModelRoute: { acceptTaskChoice: async () => {} },
   });
   const request = { targetSessionId: 'task', expectedGeneration: 4,
     patch: { harness: 'codex', agentDeviceId, model: 'model', providerId: 'remote-only', effort: 'high', fastMode: false } };

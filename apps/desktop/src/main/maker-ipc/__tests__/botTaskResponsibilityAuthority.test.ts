@@ -102,7 +102,7 @@ it.each(['canonical', 'thread', 'channel', 'group'])(
       const record = await f.captureBotCreatedTaskResponsibility('caller');
       expect(record).not.toBeNull();
       await record!('created');
-      expect(f.save).toHaveBeenCalledWith('/synthetic-owner-home', 'hihi', 'created', true, expect.any(Function));
+      expect(f.save).toHaveBeenCalledWith('/synthetic-owner-home', 'hihi', 'created', true, expect.any(Function), { created: true });
       expect(f.broadcast).toHaveBeenCalledWith('hihi');
       // Phones re-read the roster's follow links, so the new task shows the teammate's mark there too.
       expect(f.remoteBroadcast).toHaveBeenCalledWith('hihi');

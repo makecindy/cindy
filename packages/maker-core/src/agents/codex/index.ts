@@ -64,6 +64,8 @@ import {
   type RefreshLocalModelsOptions,
   type SendOptions,
   type TurnPermissionPolicy,
+  botRuntimeSkillPolicy,
+  isolatedBotProfile,
 } from '../base-agent.js';
 import { skillEntryPath, snapshotDisabledSkillLaunch, currentDisabledSkillLaunchPaths } from '../shared/skill-activation.js';
 import { snapshotManagedSkillGrants } from '../shared/managed-skill-policy.js';
@@ -3632,7 +3634,7 @@ assertRouteCurrent();
       })()
       : undefined;
     const botSkillGrants = !opts.remoteHostId && !reviewMode
-      ? snapshotManagedSkillGrants(opts.botRuntimeProfile?.skillPolicy) : undefined;
+      ? snapshotManagedSkillGrants(isolatedBotProfile(opts.botRuntimeProfile)?.skillPolicy) : undefined;
     let refreshedBotSkillConfig: Record<string, unknown> | undefined;
     if (reviewMode && opts.remoteHostId) {
       throw new Error('Cindy Review currently supports local Codex sessions only');
@@ -5331,7 +5333,7 @@ assertRouteCurrent();
         if (botSkillGrants !== undefined) {
           const unscopedError = refreshed.errors.find(error => !error.path);
           if (unscopedError) throw new Error(unscopedError.message);
-          refreshedBotSkillConfig = buildCodexBotSkillConfigOverrides(opts.botRuntimeProfile?.skillPolicy, {
+          refreshedBotSkillConfig = buildCodexBotSkillConfigOverrides(isolatedBotProfile(opts.botRuntimeProfile)?.skillPolicy, {
             grants: botSkillGrants,
             skills: [...refreshed.skills, ...refreshed.errors.flatMap(error =>
               error.path ? [{ path: error.path, enabled: false }] : [])],
@@ -5577,7 +5579,7 @@ assertRouteCurrent();
         'features.image_generation': false, 'features.multi_agent': false, 'features.multi_agent_v2': false,
         'memories.generate_memories': false, 'memories.use_memories': false });
     }
-    if (!reviewMode && opts.botRuntimeProfile?.mcpPolicy) {
+    if (!reviewMode && isolatedBotProfile(opts.botRuntimeProfile)?.mcpPolicy) {
       try {
         const response = await host.request<{ config?: Record<string, unknown> }>(
           Method.ConfigRead, { includeLayers: false },
@@ -5590,7 +5592,7 @@ assertRouteCurrent();
           const match = /^mcp_servers\.([A-Za-z0-9_-]+)\.(?:url|command)$/.exec(key);
           if (match && typeof value === 'string' && value.trim()) transports.add(match[1]);
         }
-        botMcpConfig = buildCodexBotMcpConfigOverrides(opts.botRuntimeProfile.mcpPolicy, transports);
+        botMcpConfig = buildCodexBotMcpConfigOverrides(isolatedBotProfile(opts.botRuntimeProfile)!.mcpPolicy, transports);
         // Remote daemons keep this shared transport disabled for ordinary tasks.
         if (opts.remoteHostId && transports.has('cindy_helper')) {
           botMcpConfig['mcp_servers.cindy_helper.enabled'] = true;
@@ -5607,11 +5609,11 @@ assertRouteCurrent();
     capabilityRoutingConfig = mergeCodexSkillConfigOverrides(
       capabilityRoutingConfig,
       refreshedBotSkillConfig ?? buildCodexBotSkillConfigOverrides(
-        reviewMode ? undefined : opts.botRuntimeProfile?.skillPolicy,
+        reviewMode ? undefined : botRuntimeSkillPolicy(opts.botRuntimeProfile),
       ),
     );
     // 受邀者(另一个账号)不读本机用户的技能停用偏好(本机技能在上面已整体关闭)。
-    const disabledSkillPaths = opts.remoteHostId || opts.botRuntimeProfile || reviewMode || hostedGuest
+    const disabledSkillPaths = opts.remoteHostId || isolatedBotProfile(opts.botRuntimeProfile) || reviewMode || hostedGuest
       ? [] : [...(this.deps.getDisabledSkillPaths?.() ?? [])];
     // 任务所在电脑提供了托管技能(已作为项目技能放在影子目录)：共用 CODEX_HOME 里本机的那份对这个线程停用。
     if (hosted?.controllerManagedSkills && !hostedGuest && !reviewMode) {
@@ -5645,8 +5647,9 @@ assertRouteCurrent();
       ...capabilityRoutingConfig,
       ...botMcpConfig,
       // Bot sessions must not absorb project AGENTS.md from the cwd chain —
-      // their context is the Bot profile, not the workspace.
-      ...(!reviewMode && opts.botRuntimeProfile ? { project_doc_max_bytes: 0 } : {}),
+      // their context is the Bot profile, not the workspace. A V2 teammate is
+      // an ordinary project task and loads them like one.
+      ...(!reviewMode && isolatedBotProfile(opts.botRuntimeProfile) ? { project_doc_max_bytes: 0 } : {}),
     };
     if (
       Object.keys(capabilityRoutingConfig).length > 0 &&
@@ -6551,7 +6554,7 @@ assertRouteCurrent();
         ...taskShellEnvConfig,
         // Keep companion memory in its own Home. Native delegation uses the
         // same feature settings and permissions as an ordinary task.
-        ...(opts.botRuntimeProfile ? {
+        ...(isolatedBotProfile(opts.botRuntimeProfile) ? {
           'memories.generate_memories': false,
           'memories.use_memories': false,
         } : {}),
@@ -6606,7 +6609,7 @@ assertRouteCurrent();
         // Its host omits Cindy's MCP bridge, so a bare memory override would
         // create an invalid transport even though the entry is disabled.
         // 设备托管：只停用本机确实配置了的 cindy_memory(没有传输配置的空条目会让 Codex 拒绝配置)。
-        ...(!reviewMode && !opts[LOCAL_AGENT_CLIENT] && !makerMemoryEnabled && !opts.botRuntimeProfile
+        ...(!reviewMode && !opts[LOCAL_AGENT_CLIENT] && !makerMemoryEnabled && !isolatedBotProfile(opts.botRuntimeProfile)
           && (!hosted || hostedLocalMcpNames.includes('cindy_memory'))
           ? { 'mcp_servers.cindy_memory.enabled': false }
           : {}),
@@ -6962,7 +6965,7 @@ assertRouteCurrent();
     // 因此与 Claude 远端路径一致地 fail-closed，不把召回清单注入到不可达会话。
     // 设备托管(含受邀者)用任务所在电脑给的花名册：插件工具在那台，本机装的插件不进这个任务。
     const localGhostRoster = () => this.deps.getGhostRosterPrompt?.({ workingDir: opts.workingDir }) ?? '';
-    const ghostRosterPrompt = opts.remoteHostId || reviewMode || opts.botRuntimeProfile
+    const ghostRosterPrompt = opts.remoteHostId || reviewMode || isolatedBotProfile(opts.botRuntimeProfile)
       ? ''
       : hosted
         ? deviceHostedGhostRoster(hosted, opts.ghostRosterSnapshot, localGhostRoster)
@@ -6974,17 +6977,17 @@ assertRouteCurrent();
       // 本机任务逐字保持原值；设备托管时在末尾加上「项目在哪台电脑」的说明。
       runtimeSystemPrompt: hosted
         ? [
-            opts.botRuntimeProfile ? undefined : this.deps.runtimeConfig.systemPrompt,
+            isolatedBotProfile(opts.botRuntimeProfile) ? undefined : this.deps.runtimeConfig.systemPrompt,
             deviceHostedEnvironmentNote(hosted, opts.workingDir),
           ].filter((part): part is string => !!part && part.trim().length > 0).join('\n\n')
-        : opts.botRuntimeProfile
+        : isolatedBotProfile(opts.botRuntimeProfile)
           ? undefined
           : this.deps.runtimeConfig.systemPrompt,
       makerMemoryIndex,
       botProfilePrompt: reviewMode ? undefined : opts.botProfilePrompt,
       botProfileContextPrompt: reviewMode ? undefined : opts.botProfileContextPrompt,
       botUserProfilePrompt: reviewMode ? undefined : opts.botUserProfilePrompt,
-      userPrompt: reviewMode || opts.botRuntimeProfile ? undefined : opts.userPrompt,
+      userPrompt: reviewMode || isolatedBotProfile(opts.botRuntimeProfile) ? undefined : opts.userPrompt,
     });
     const useProxyChannel = isCodexProxyChannelReady();
     let threadId!: string;

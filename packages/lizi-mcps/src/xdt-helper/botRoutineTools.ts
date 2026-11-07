@@ -7,7 +7,7 @@ import { registerScheduleListModelsTool } from '../scheduler/listModels.js';
 import type { SchedulerMcpDeps, RoutineToolService, LiziMcpSessionContext } from '../types.js';
 
 export interface BotRoutineCallbacks {
-  resolveBotId(callerSessionId: string): Promise<string>;
+  resolveBotId(callerSessionId: string, callerSessionInstanceId?: string): Promise<string>;
   service: RoutineToolService;
   scheduler?: SchedulerMcpDeps;
 }
@@ -46,7 +46,7 @@ export function registerBotRoutineTools(
         try {
           const sessionId = getSessionId();
           if (!sessionId) throw new Error('当前调用未绑定伙伴主任务');
-          const botId = await callbacks.resolveBotId(sessionId);
+          const botId = await callbacks.resolveBotId(sessionId, getSessionContext?.().sessionInstanceId);
           const scopedArgs: Record<string, unknown> = { ...args, botId };
           if (summary.name === 'schedule_notify_current_run') delete scopedArgs.runId;
           if (summary.name === 'schedule_set_pre_run_hook') {

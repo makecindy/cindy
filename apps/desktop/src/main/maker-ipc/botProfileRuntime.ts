@@ -1,9 +1,9 @@
 import { isChatOnlyGroupLane } from '../../shared/botGroupChat.js';
 import { buildTeammateGuide as buildBotCapabilityContextPrompt } from './teammateGuide.js';
-import { BOT_DENIED_TOOLS_VENDOR_KEY, readBotSystemSkillsOff } from '../../shared/botSystemSkills.js';
+import { BOT_DENIED_TOOLS_VENDOR_KEY, effectiveBotSystemSkillsOff } from '../../shared/botSystemSkills.js';
 import { teammateDeniedTools } from '@cindy/mcps';
 import { and, desc, eq, inArray } from 'drizzle-orm';
-import { buildBotMemoryScopeKey } from '@cindy/maker-core';
+import { buildBotMemoryScopeKey, resolveMemoryScopeKey } from '@cindy/maker-core';
 import { createHash, randomUUID } from 'node:crypto';
 import path from 'node:path';
 
@@ -31,6 +31,8 @@ import { normalizeBotToolCapabilities } from '../../shared/botCapabilitySelectio
 import { BOT_BASELINE_PLUGIN_IDS } from '../maker-host/plugins/types.js';
 import { BOT_IM_CHANNELS_VENDOR_KEY, type BotImChannel } from '../../shared/botImConnection.js';
 import businessOwnershipPrompt from '../maker-host/business-ownership-prompt.md?raw';
+import { readBotProjectMode } from '../../shared/botProjectMode.js';
+import { botLearningTracker } from './botLearningTracker.js';
 
 const log = createLogger('maker-ipc:bot-profile-runtime');
 
@@ -168,6 +170,8 @@ export interface BotProfileRuntimeDeps {
     contentWritableDirs?: string[];
     systemPromptOverride: string;
   }>;
+  /** Project mode: this computer's linked project directories (other computers' links are only references). */
+  listLinkedProjectDirs?: (input: { botId: string }) => Promise<string[]>;
 }
 
 function runtimeFailureMetadata(
@@ -581,12 +585,50 @@ export async function hydrateBotProfileRuntime(
         : configuredToolsets.length > 0
           ? 'allowlist'
           : 'inherit';
+  /*
+    伙伴的家。读失败一律当"没有" —— 一次读不动不该让整个伙伴起不来,只是这一轮
+    它不知道自己有个家(工具面也不会多出这个目录,两边同时缺,不会出现"提示词说有、
+    工具够不到"的错位)。overlay 只有真的写了才生效,且不能取代 Cindy 核心协议。
+  */
+  let folderPrompt: {
+    homeDir: string;
+    contentWritableDirs?: string[];
+    systemPromptOverride: string;
+  } | null = null;
+  // Local userData paths are meaningless on a remote harness. Do not promise or
+  // mount a Home there until the host provisions an actual remote-owned path.
+  if (!chatOnly && deps.readProfileFolder && !opts.remoteHostId) {
+    folderPrompt = await deps
+      .readProfileFolder({ botId: row.botId })
+      .catch(() => null);
+  }
+  const botHomeDir = folderPrompt?.homeDir.trim() ?? '';
+  /*
+    伙伴 V2(项目模式):伙伴就是一个包装过的项目 + 一堆任务。在自己的 workspace 里干活时,
+    它和同目录的普通任务完全一样(说明文件、设置、技能、MCP、记忆、宿主提示词),只多一层
+    伙伴身份和它自己的技能。群分工等在别的目录干活的会话按普通任务走那个目录。
+  */
+  const workspaceDir = botHomeDir ? path.join(path.resolve(botHomeDir), 'workspace') : '';
+  // Only the owner's own chats run as an ordinary project task. IM lanes (other people, groups,
+  // topics) and group lanes keep the existing channel isolation: they never load the owner's
+  // personal instructions, settings, Skills or native memories, only the teammate's project memory.
+  const projectContext = !!workspaceDir && readBotProjectMode(config) && ownerChat
+    && path.resolve(opts.workingDir) === workspaceDir;
+  const fullLane = ownerChat;
   // Bot Memory belongs to the Bot Home and is independent from Cindy's global
   // Maker Memory switch. The profile can still explicitly disable its own memory.
-  const memoryEngineEnabled = config.memory !== false;
-  opts.makerMemoryEnabled = memoryEngineEnabled;
+  // A V2 teammate uses its project's memory like an ordinary task, still switched
+  // by the teammate's own memory setting rather than the global one.
+  // Every V2 lane (group and plan lanes too, wherever they run) shares that one project memory.
+  const projectMode = !!workspaceDir && readBotProjectMode(config);
+  if (projectMode && opts.id) botLearningTracker.markProjectTeammate(opts.id);
+  const memoryEngineEnabled = !projectMode && config.memory !== false;
+  opts.makerMemoryEnabled = projectMode ? config.memory !== false : memoryEngineEnabled;
   const botMemoryScopeKey = buildBotMemoryScopeKey(row.botId);
-  if (config.memory !== false) opts.makerMemoryScopeKey = botMemoryScopeKey;
+  if (memoryEngineEnabled) opts.makerMemoryScopeKey = botMemoryScopeKey;
+  else if (projectMode && !projectContext && opts.makerMemoryEnabled) {
+    opts.makerMemoryScopeKey = await resolveMemoryScopeKey(workspaceDir);
+  }
   const memoryActive = memoryEngineEnabled;
   let botMemoryIndex: string | null = '';
   if (memoryActive && deps.readMemoryIndex) {
@@ -616,7 +658,10 @@ export async function hydrateBotProfileRuntime(
   let resolvedSkillEntries: BotSkillCatalogItem[] = [];
   let skillCatalogAvailable = true;
   let runtimeSkillMode: 'inherit' | 'allowlist' = 'allowlist';
-  if (deps.listSkills) {
+  if (projectContext) {
+    // Every Skill an ordinary task here sees is available; nothing to resolve.
+    resolvedSkills = [];
+  } else if (deps.listSkills) {
     try {
       catalog = await deps.listSkills({
         agentKind: opts.agentKind,
@@ -728,10 +773,14 @@ export async function hydrateBotProfileRuntime(
   if (!chatOnly && deps.listOwnSkills && !opts.remoteHostId) {
     try {
       const own = await deps.listOwnSkills({ botId: row.botId });
-      ownSkills = [...(own.baseline && ownerChat ? [own.baseline.skill] : []), ...own.skills];
+      // V2: the teammate's Skills live in its project and load natively, and it
+      // works like an ordinary task, so the teammate core Skill is not mounted.
+      const learned = projectContext ? [] : own.skills;
+      const core = own.baseline && fullLane && !projectContext ? own.baseline : null;
+      ownSkills = [...(core ? [core.skill] : []), ...learned];
       ownSkillPluginRoots = [
-        ...(own.baseline && ownerChat ? [own.baseline.pluginRoot] : []),
-        ...(own.skills.length > 0 ? [own.pluginRoot] : []),
+        ...(core ? [core.pluginRoot] : []),
+        ...(learned.length > 0 ? [own.pluginRoot] : []),
       ];
     } catch {
       ownSkills = [];
@@ -793,8 +842,14 @@ export async function hydrateBotProfileRuntime(
   } else if (toolsetMode === 'allowlist') {
     unavailableToolsets = configuredToolsets;
   }
+  if (projectContext) {
+    // V2: every toolset an ordinary task here has; nothing is switched off.
+    resolvedToolsets = toolsetCatalog.filter((item) => item.available !== false).map((item) => item.id);
+    unavailableToolsets = [];
+    disabledToolsets = [];
+  }
   const runtimeConfiguredToolsets =
-    toolsetMode === 'inherit' ? [...resolvedToolsets] : [...configuredToolsets];
+    toolsetMode === 'inherit' || projectContext ? [...resolvedToolsets] : [...configuredToolsets];
   // 工具集与内置 MCP 共用宿主映射；已选择的能力必须同轮进入 MCP allowlist。
   // 显式挂载 docs 时提示词会承诺文档能力，其他工具集同样需要真正挂载。
   // 开头记录的那类事故:「提示词说有,运行时够不到」。伙伴基线工具集（如 scheduler）
@@ -818,7 +873,7 @@ export async function hydrateBotProfileRuntime(
   // 可在桌面/后台轮次由 feishuTransportRouting.ts 查询 canonical 归属, 经伙伴可用连接
   // 通知已绑定主人; 伙伴连接不可用则拒绝发送, 不回落个人 bot, 也不授予轮次内 API 权限。
   const boundImChannels: readonly BotImChannel[] =
-    ownerChat ? (deps.listBotImChannels?.({ botId: row.botId }) ?? []) : [];
+    fullLane ? (deps.listBotImChannels?.({ botId: row.botId }) ?? []) : [];
   if (boundImChannels.length > 0) {
     opts.vendorOptions = { ...(opts.vendorOptions ?? {}), [BOT_IM_CHANNELS_VENDOR_KEY]: [...boundImChannels] };
   }
@@ -876,10 +931,11 @@ export async function hydrateBotProfileRuntime(
   // 三层装配(见 botSystemPrompt.ts):身份与「你会做什么」进稳定段,会话控制等
   // 进上下文段,技能索引与记忆快照进易变段并排在最后。能力说明按**这个伙伴
   // 实际挂载到的 toolset** 注入 —— 挂了 docs 才讲怎么做文件,没挂的一个字不提。
-  const systemSkillsOff = readBotSystemSkillsOff(config.systemSkillsOff);
+  const systemSkillsOff = effectiveBotSystemSkillsOff(config);
   // Calls are denied live by the helper; Pi also leaves these direct tools out of its listing.
-  if (systemSkillsOff.length > 0) {
-    opts.vendorOptions = { ...(opts.vendorOptions ?? {}), [BOT_DENIED_TOOLS_VENDOR_KEY]: [...teammateDeniedTools(systemSkillsOff)] };
+  const deniedTools = teammateDeniedTools(systemSkillsOff, readBotProjectMode(config));
+  if (deniedTools.size > 0) {
+    opts.vendorOptions = { ...(opts.vendorOptions ?? {}), [BOT_DENIED_TOOLS_VENDOR_KEY]: [...deniedTools] };
   }
   const promptCapabilities: BotPromptCapabilitySignals = {
     toolsets: resolvedToolsets,
@@ -888,39 +944,21 @@ export async function hydrateBotProfileRuntime(
     // the essential helper. It is not the generic Orca/team-worker surface and
     // therefore must not depend on optional toolset inheritance.
     partnerActionsEnabled: row.role === 'canonical' && helperAvailable,
-    routinesEnabled: ownerChat && helperAvailable && !opts.remoteHostId && !systemSkillsOff.includes('routine'),
+    routinesEnabled: fullLane && helperAvailable && !opts.remoteHostId && !systemSkillsOff.includes('routine'),
     followEnabled: !systemSkillsOff.includes('follow'),
-    botCreationEnabled: ownerChat && helperAvailable,
+    botCreationEnabled: fullLane && helperAvailable,
     // Skill management is available before the first Skill exists. An empty
     // index must not hide the instructions for learning the first reusable method.
     // IM 专线与主任务是同一个伙伴: 群 / 话题里学到的做法同样该沉淀成它自己的技能, 否则主人在
     // 群里让它「记成技能」只能听到「当前任务只读」。写入仍只认主人触发的轮次(botSkillService
     // 按逐轮渠道作用域判定), 其他成员触发时工具会说明原因。
-    ownSkillsEnabled: (ownerChat || row.role === 'channel') && helperAvailable && !opts.remoteHostId,
-    botModeEnabled: ownerChat,
+    ownSkillsEnabled: (fullLane || row.role === 'channel') && helperAvailable && !opts.remoteHostId,
+    botModeEnabled: fullLane,
     // Match the ordinary helper surface on this engine and transport.
     sessionControlEnabled: helperAvailable && (!opts.remoteHostId || opts.agentKind === 'pi'),
     // scheduler 是伙伴基线工具(maker-host/plugins/types.ts),与挂载 allowlist 同一份目录判定。
     automationEnabled: toolsetCatalog.some((item) => item.id === 'scheduler' && item.available !== false),
   };
-  /*
-    伙伴的家。读失败一律当"没有" —— 一次读不动不该让整个伙伴起不来,只是这一轮
-    它不知道自己有个家(工具面也不会多出这个目录,两边同时缺,不会出现"提示词说有、
-    工具够不到"的错位)。overlay 只有真的写了才生效,且不能取代 Cindy 核心协议。
-  */
-  let folderPrompt: {
-    homeDir: string;
-    contentWritableDirs?: string[];
-    systemPromptOverride: string;
-  } | null = null;
-  // Local userData paths are meaningless on a remote harness. Do not promise or
-  // mount a Home there until the host provisions an actual remote-owned path.
-  if (!chatOnly && deps.readProfileFolder && !opts.remoteHostId) {
-    folderPrompt = await deps
-      .readProfileFolder({ botId: row.botId })
-      .catch(() => null);
-  }
-  const botHomeDir = folderPrompt?.homeDir.trim() ?? '';
   // 提示词与可写工具面必须同进同退 —— 只给其中一个就是开一张打不开的空头支票。
   if (botHomeDir) {
     const mounted = withBotHomeAccess(
@@ -931,6 +969,23 @@ export async function hydrateBotProfileRuntime(
     );
     opts.extraDirs = mounted.extraDirs;
     opts.writableDirs = mounted.writableDirs;
+  }
+  /*
+    项目模式(实验):伙伴的 workspace 就是它的项目。只在这次真的在 workspace 里干活时生效
+    (群分工在别的项目目录里干活，不算)。项目说明由各引擎按项目原生方式加载;工作目录里的
+    项目技能视同伙伴自己的技能放行;关联项目作为只读的附加目录带进来。
+  */
+  if (projectContext) {
+    const linked = deps.listLinkedProjectDirs
+      ? await deps.listLinkedProjectDirs({ botId: row.botId }).catch(() => [])
+      : [];
+    if (linked.length > 0) {
+      const references = [...(opts.extraDirs ?? [])];
+      for (const dir of linked) {
+        if (!references.some((existing) => path.resolve(existing) === path.resolve(dir))) references.push(dir);
+      }
+      opts.extraDirs = references;
+    }
   }
   /*
     队友名册。只在伙伴消息能力真的开着时才查 —— 关闭时看见一份自己用不上的
@@ -953,13 +1008,15 @@ export async function hydrateBotProfileRuntime(
       ? { systemPromptOverride: folderPrompt.systemPromptOverride }
       : {}),
     ...(botHomeDir ? { homeDir: botHomeDir } : {}),
+    ...(projectContext ? { projectMode: true } : {}),
     ...(teammates.length > 0 ? { teammates } : {}),
     contextSections: [
       buildBotProfileContextPrompt(profile.displayName),
       // Hermes-style Bot Mode is a property of the owner's Bot Chat (the permanent
       // Chat and its private topics). Delegation children keep Cindy's normal
       // Session prompt plus their narrow task context.
-      ...(ownerChat
+      // V2 works like an ordinary task: its tools describe themselves.
+      ...(fullLane && !projectContext
         ? [buildBotCapabilityContextPrompt({ helperAvailable, cindyAvailable,
           ownSkillsEnabled: promptCapabilities.ownSkillsEnabled,
           systemSkillsOff,
@@ -1012,6 +1069,7 @@ export async function hydrateBotProfileRuntime(
       configured: runtimeConfiguredToolsets,
       catalog: toolsetCatalog.map((item) => ({ ...item })),
     },
+    ...(projectContext ? { projectContext: true } : {}),
   };
   const preparedAt = Date.now();
   const resolutionStatus =

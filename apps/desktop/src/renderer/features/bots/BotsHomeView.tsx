@@ -1,5 +1,6 @@
 import { Button } from '@/components/ui/button';
 import { Textarea } from '@/components/ui/input';
+import { Switch } from '@/components/ui/switch';
 import { shouldShowOpenPathError } from '../../../shared/openPathResult';
 import { ConnectProviderCard } from '@/components/onboarding/ConnectProviderCard';
 import { useProviderOnboarding } from '@/hooks/useProviderOnboarding';
@@ -41,7 +42,7 @@ import { BotRosterView } from './BotRosterView';
 import { BotAvatar } from './BotAvatar';
 import { BotBasicProfileFields } from './BotBasicProfileFields';
 import { normalizeBotName } from '../../../shared/botCreation';
-import { withBotSystemSkill } from '../../../shared/botSystemSkills';
+import { effectiveBotSystemSkillsOff, withBotSystemSkill } from '../../../shared/botSystemSkills';
 import {
   botEntryTarget,
   createBotCanonicalSessionWithRetry,
@@ -725,6 +726,24 @@ export function BotSettings({
         ) : null}
         {page === 'advanced' ? (
           <div className="mt-4 flex flex-col gap-5 px-3">
+            {bot.homeDir ? (
+              <div className="flex items-start gap-3">
+                <div className="min-w-0 flex-1">
+                  <p className="text-13 font-medium leading-5 text-[var(--text-primary)]">
+                    {t('bots.homeFolder.projectMode.title')}
+                  </p>
+                  <p className="mt-1 text-12 leading-5 text-[var(--text-secondary)]">
+                    {t('bots.homeFolder.projectMode.description')}
+                  </p>
+                </div>
+                <Switch
+                  aria-label={t('bots.homeFolder.projectMode.title')}
+                  className="mt-0.5 shrink-0"
+                  checked={capabilities.projectMode === true}
+                  onCheckedChange={(value) => updateCapability('projectMode', value === true)}
+                />
+              </div>
+            ) : null}
             <div className="flex items-center gap-3">
               <FolderOpen size={16} className="shrink-0 text-[var(--text-tertiary)]" />
               <div className="min-w-0 flex-1">
@@ -791,8 +810,9 @@ export function BotSettings({
             inheritedRoute={displayedModelChain[0]}
             beforeLeaveRef={routineLeaveRef}
             backRef={routineBackRef}
-            systemSkillsOff={capabilities.systemSkillsOff ?? []}
-            header={
+            systemSkillsOff={effectiveBotSystemSkillsOff(capabilities)}
+            // A V2 teammate has no follow-up of its own, so there is nothing to switch here.
+            header={capabilities.projectMode === true ? undefined : (
               <BotAutonomySettings
                 botId={bot.id}
                 botName={displayName}
@@ -800,7 +820,7 @@ export function BotSettings({
                 onAllowSchedulerFollowChange={(value) => updateCapability('allowSchedulerFollow', value)}
                 followOff={capabilities.systemSkillsOff?.includes('follow') === true}
               />
-            }
+            )}
           />
         ) : null}
       </div>

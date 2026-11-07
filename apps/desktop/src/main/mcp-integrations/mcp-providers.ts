@@ -21,7 +21,7 @@ import { TodoError, queryTodoItems, type TodoListQuery, type TodoPatch, type pre
 import { t } from '../i18n.js';
 import { executeTaskTags } from '../localDb/ipc/taskTags.js';
 import { getPluginMarketService } from '../plugin-market/service.js';
-import { resolveHelperSurface, resolveHelperSystemSkillsOff } from './helperSurface.js';
+import { resolveHelperSurface, resolveHelperSystemSkillsOff, resolveHelperTeammateProjectMode } from './helperSurface.js';
 import { createProject } from './createProject.js';
 import { createMoveSession } from './moveSession.js';
 import { createTaskWorktreeHost } from './createTaskWorktree.js';
@@ -155,6 +155,7 @@ import { HELP_KNOWLEDGE } from '../maker-ipc/helpKnowledge.generated.js';
 import { consumeLearnInvocationGrant } from '../learn-host/invocationGrant.js';
 import { createSkillhubAgentTools } from '../skillhub/agentTools.js';
 import { startGrokDeviceLogin, grokDeviceLoginStatus, cancelGrokDeviceLogin } from '../maker-host/grok-device-login-service.js';
+import { resolveTeammateOwnerAction } from '../maker-ipc/teammateOwnerAction.js';
 
 export interface DesktopMcpProvidersDeps {
   askUserQuestionAsync?: XdtHelperMcpDeps['askUserQuestionAsync'];
@@ -759,7 +760,7 @@ export function createDesktopMcpProviders(deps: DesktopMcpProvidersDeps): LiziMc
       withAccountDataAccess,
       getManager: deps.getMakerMemoryManager,
       beginWrite: (context) => {
-        const saved = botLearningTracker.capture(context?.memoryScopeKey?.startsWith('bot:') ? context.sessionId ?? '' : '');
+        const saved = botLearningTracker.capture(botLearningTracker.learnsFrom(context?.sessionId, context?.memoryScopeKey));
         return receipt => saved({ ...receipt, kind: 'memory' });
       },
       searchSessions: async (query, opts = {}) => {
@@ -1007,6 +1008,11 @@ export function createDesktopMcpProviders(deps: DesktopMcpProvidersDeps): LiziMc
         if (!dbClient || isAppSessionBoundaryPending()) return [];
         return resolveHelperSystemSkillsOff(dbClient, sessionId);
       },
+      resolveTeammateProjectMode: async ({ sessionId }) => {
+        const dbClient = tryGetDbClient();
+        if (!dbClient || isAppSessionBoundaryPending()) return false;
+        return resolveHelperTeammateProjectMode(dbClient, sessionId);
+      },
       sessionQueue: {
         listSessionQueue: wrap((service, sessionId: string) => service.listSessionQueue(sessionId)),
         listSessionQueuedCounts: wrap((service, sessionIds: string[]) =>
@@ -1104,6 +1110,7 @@ export function createDesktopMcpProviders(deps: DesktopMcpProvidersDeps): LiziMc
         effort,
         fast,
         agentDeviceId,
+        notifyWhenDone,
       }) => {
         // deviceId::sessionId → 目标在另一台电脑:交给那台电脑按它本机的同一条通路投递。
         const svc = tryGetOrcaCollabService();
@@ -1126,6 +1133,7 @@ export function createDesktopMcpProviders(deps: DesktopMcpProvidersDeps): LiziMc
             useWorktree,
             workingDir,
             projectDir,
+            ...(notifyWhenDone ? { notifyWhenDone: true } : {}),
             ...(hasExecutionOverrides
               ? {
                   execution: {
@@ -1266,29 +1274,20 @@ export function createDesktopMcpProviders(deps: DesktopMcpProvidersDeps): LiziMc
             taskActionRoutineRevision(botId, id)),
           runNow: (botId, id) => routineTools.runNow(botId, id, taskActionRoutineRevision(botId, id)),
         },
-        resolveBotId: async (callerSessionId) => {
+        resolveBotId: async (callerSessionId, callerSessionInstanceId) => {
           const scope = activeOwnerScopeKey();
           if (!getActiveAppSession().dataOwnerId || isAppSessionBoundaryPending()) {
             throw new Error('Routine account is no longer active');
           }
-          const dbClient = tryGetDbClient();
-          if (!dbClient) throw new Error('localDb not ready');
-          const [owned] = await dbClient.drizzle
-            .select({ botId: botSessionLinks.botId })
-            .from(botSessionLinks)
-            .innerJoin(sessions, eq(sessions.id, botSessionLinks.sessionId))
-            .where(and(
-              eq(botSessionLinks.sessionId, callerSessionId),
-              eq(sessions.source, 'bot'),
-              // The owner's Bot Chat: the main Chat or one of its private-chat topics.
-              inArray(botSessionLinks.role, ['canonical', 'thread', 'routine']),
-            ))
-            .limit(1);
+          if (!tryGetDbClient()) throw new Error('localDb not ready');
+          // The owner's Bot Chat (main Chat, topics, routines) or, for a V2 teammate,
+          // an IM lane on a turn the owner started.
+          const botId = await resolveTeammateOwnerAction(callerSessionId, callerSessionInstanceId);
           if (isAppSessionBoundaryPending() || activeOwnerScopeKey() !== scope) {
             throw new Error('Routine account is no longer active');
           }
-          if (!owned) throw new Error('当前调用未绑定伙伴主任务');
-          return owned.botId;
+          if (!botId) throw new Error('当前调用未绑定伙伴主任务');
+          return botId;
         },
       },
       ...(deps.machineDirectory ? { machines: {
@@ -1343,23 +1342,11 @@ export function createDesktopMcpProviders(deps: DesktopMcpProvidersDeps): LiziMc
         },
       },
       botProfiles: {
-        create: async ({ callerSessionId, name, description, identitySource }) => {
-          const dbClient = tryGetDbClient();
-          if (!dbClient) {
+        create: async ({ callerSessionId, callerSessionInstanceId, name, description, identitySource }) => {
+          if (!tryGetDbClient()) {
             return { ok: false, errorCode: 'HOST_NOT_READY', message: 'localDb not ready' };
           }
-          const [owned] = await dbClient.drizzle
-            .select({ botId: botSessionLinks.botId })
-            .from(botSessionLinks)
-            .innerJoin(sessions, eq(sessions.id, botSessionLinks.sessionId))
-            .where(
-              and(
-                eq(botSessionLinks.sessionId, callerSessionId),
-                eq(sessions.source, 'bot'),
-                inArray(botSessionLinks.role, ['canonical', 'thread', 'routine']),
-              ),
-            )
-            .limit(1);
+          const owned = await resolveTeammateOwnerAction(callerSessionId, callerSessionInstanceId);
           if (!owned) {
             return { ok: false, errorCode: 'NOT_A_BOT_SESSION', message: '当前调用未绑定伙伴主任务' };
           }

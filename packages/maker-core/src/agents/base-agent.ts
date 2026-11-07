@@ -1763,6 +1763,34 @@ export interface BotRuntimeProfile {
   skillPolicy: BotRuntimeSkillPolicy;
   mcpPolicy: BotRuntimeMcpPolicy;
   toolsetPolicy: BotRuntimeToolsetPolicy;
+  /**
+   * Teammate V2 (project mode): the teammate is an ordinary project task with
+   * its identity layered on top. Context files, settings, Skills, MCP, memory
+   * and the host prompt are exactly those of an ordinary task in the same
+   * working directory; only the identity prompt and the teammate's own Skills
+   * are added. Without it the classic, isolated teammate runtime applies.
+   */
+  projectContext?: boolean;
+}
+
+/** The profile when the classic isolated teammate runtime applies; undefined for V2 and ordinary tasks. */
+export function isolatedBotProfile(profile: BotRuntimeProfile | undefined): BotRuntimeProfile | undefined {
+  return profile && !profile.projectContext ? profile : undefined;
+}
+
+/**
+ * Skill policy handed to the engines: the full allowlist for a classic teammate,
+ * only the teammate's own Skills for V2 (everything else loads as for any task).
+ */
+export function botRuntimeSkillPolicy(profile: BotRuntimeProfile | undefined): BotRuntimeSkillPolicy | undefined {
+  if (!profile) return undefined;
+  if (!profile.projectContext) return profile.skillPolicy;
+  const { ownSkills, ownSkillPluginRoots } = profile.skillPolicy;
+  return {
+    mode: 'inherit', configured: [], catalog: [],
+    ...(ownSkills ? { ownSkills } : {}),
+    ...(ownSkillPluginRoots ? { ownSkillPluginRoots } : {}),
+  };
 }
 
 /**

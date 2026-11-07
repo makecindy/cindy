@@ -4,6 +4,7 @@ const mock = vi.hoisted(() => ({
   scope: 'owner-a',
   followUpEvents: vi.fn<(botId: string, events: RoutineRun['events']) => RoutineRun['events'] | null>((_id, events) => events),
   skillsOff: [] as string[],
+  projectMode: false,
   boundaryPending: false,
   schedulerReady: true,
   dbReady: true,
@@ -35,6 +36,7 @@ vi.mock('../../bot-autonomy/hub.js', () => ({ currentFollowUpEvents: async (botI
   const events = mock.followUpEvents(botId, input);
   return events === null ? null : { events, canDispatch: () => mock.followUpEvents(botId, input)?.length === events.length };
 }, botSystemSkillsOff: async () => mock.skillsOff }));
+vi.mock('../../bot-autonomy/hostData.js', () => ({ readBotProjectModeFor: async () => mock.projectMode }));
 vi.mock('../../appSessionState.js', () => ({
   activeOwnerScopeKey: () => mock.scope,
   getActiveAppSession: () => ({ dataOwnerId: mock.scope }),
@@ -85,6 +87,7 @@ afterEach(async () => {
   vi.clearAllMocks();
   mock.followUpEvents.mockImplementation((_id, events) => events);
   mock.skillsOff = [];
+  mock.projectMode = false;
   mock.scope = 'owner-a';
   mock.boundaryPending = false;
   mock.schedulerReady = true;
@@ -337,6 +340,22 @@ it('skips follow-up and daily todo check runs while their system Skill is off, a
     .map(async id => (await routineTools.history('bot', id))[0]?.status))).toEqual(['skipped', 'skipped', 'success']));
   expect(mock.scheduler.runNow).toHaveBeenCalledOnce();
   expect(await routineTools.setTodoCheck('bot', false)).toBe(false);
+});
+
+// 依据：项目模式下夜间学习由项目自己的「整理记忆」自动化接替，原条目永远跳过；缺口：设置页仍列出可开关的夜间学习。
+// 最小失败输入：一条内置夜间学习 + 项目模式。tier：unit。
+it('hides the built-in routines of a project-mode teammate and skips nightly learning', async () => {
+  const engine = await getRoutineEngine();
+  await engine.ensureBuiltin('bot', 'nightly-learning', { name: 'Nightly', prompt: 'Learn', enabled: true,
+    triggers: [{ id: 'tick', kind: 'interval', intervalMs: 60000 }] }, 'builtin-nightly-learning-bot');
+  await engine.ensureBuiltin('bot', 'follow-up', { name: 'Follow up', prompt: 'Follow', enabled: true,
+    triggers: [{ id: 'tick', kind: 'interval', intervalMs: 60000 }] }, 'builtin-follow-up-bot');
+  await routineTools.setTodoCheck('bot', true);
+  expect((await routineTools.list('bot')).length).toBe(3);
+  mock.projectMode = true;
+  expect(await routineTools.list('bot')).toEqual([]);
+  await routineTools.runNow('bot', 'builtin-nightly-learning-bot');
+  await vi.waitFor(async () => expect((await routineTools.history('bot', 'builtin-nightly-learning-bot'))[0]?.status).toBe('skipped'));
 });
 
 it('skips a demoted teammate\'s routine while its home is another computer, keeping the rule', async () => {

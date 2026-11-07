@@ -10262,9 +10262,6 @@
     },
     "creationName": "Name",
     "settingsBack": "Back to Settings",
-    "sidebar": {
-      "newTaskWith": "Start a task with {{name}}"
-    },
     "title": "Teammates",
     "add": "Add teammate",
     "createWizard": {
@@ -10275,7 +10272,23 @@
       "description": "The teammate maintains its own memory and reusable ways of working. Open its folder only when something needs correcting.",
       "contents": "Contains SOUL.md, USER.md, system_prompt.md, skills/, and memories/. Models, permissions, and connections remain managed by Cindy.",
       "open": "Open folder",
-      "openFailed": "The teammate folder could not be opened."
+      "openFailed": "The teammate folder could not be opened.",
+      "projectMode": {
+        "title": "Work as a project (experimental)",
+        "description": "The teammate's workspace becomes a project in your sidebar. Its AGENTS.md holds the teammate's own working rules, which it can edit; every change is kept as a version you can undo.",
+        "memoryReviewName": "{{name}} · Review memory",
+        "carryover": {
+          "title": "Carried over from before the upgrade",
+          "intro": "Things still open when this teammate was upgraded. Keep working on what still matters and delete the rest. The full old records stay in the v1-archive folder in the teammate's folder.",
+          "todos": "Open todos",
+          "work": "Workbench items",
+          "threads": "In progress",
+          "commitments": "Promised",
+          "waiting": "Waiting on",
+          "corrections": "Corrections you made",
+          "routines": "Routines to check"
+        }
+      }
     },
     "profile": {
       "title": "Profile",
@@ -19749,5 +19762,9 @@
     "directory": "Account folder",
     "loginAgain": "Sign in again",
     "login": "Sign in"
+  },
+  "sessionNotify": {
+    "finished": "This task finished its turn. Its final answer:",
+    "ended": "This task's turn did not finish normally. Its last output:"
   }
 }

@@ -11,7 +11,8 @@
 
 import type { RoutineRun } from '@cindy/maker-scheduler';
 import { HOST_SESSIONS_SOURCE_ID, type WatchedSession } from '../../shared/botAutonomy.js';
-import { readBotSystemSkillsOff, type BotSystemSkillId } from '../../shared/botSystemSkills.js';
+import { effectiveBotSystemSkillsOff, type BotSystemSkillId } from '../../shared/botSystemSkills.js';
+import { readBotProjectMode } from '../../shared/botProjectMode.js';
 import { isPendingForFallback } from './events.js';
 
 export interface FollowerBotState {
@@ -78,9 +79,17 @@ export function readAllowSchedulerFollow(capabilitiesJson: string | null | undef
   return readCapabilities(capabilitiesJson)?.allowSchedulerFollow === true;
 }
 
-/** 资料 capabilities_json 里关掉的系统技能；缺失或读不了都按全开（shared/botSystemSkills.ts）。 */
+/**
+ * 资料 capabilities_json 里关掉的系统技能；缺失或读不了都按全开（shared/botSystemSkills.ts）。
+ * 项目模式（V2）没有自己的跟进和例行任务，这两项按关掉算。
+ */
 export function readSystemSkillsOff(capabilitiesJson: string | null | undefined): BotSystemSkillId[] {
-  return readBotSystemSkillsOff(readCapabilities(capabilitiesJson)?.systemSkillsOff);
+  return effectiveBotSystemSkillsOff(readCapabilities(capabilitiesJson) ?? {});
+}
+
+export function readProjectMode(capabilitiesJson: string | null | undefined): boolean {
+  const capabilities = readCapabilities(capabilitiesJson);
+  return capabilities ? readBotProjectMode(capabilities) : false;
 }
 
 function readCapabilities(capabilitiesJson: string | null | undefined): Record<string, unknown> | null {
