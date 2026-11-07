@@ -27,8 +27,10 @@ it.skipIf(!binaryPath).each([
   let duringToolReport: AgentMcpServerToolsReport | null | undefined;
   let duringToolError: unknown;
   let collisionConnections = 0;
+  let collaborationConnections = 0;
   const server = createServer(async (req, res) => {
     if (req.url === '/collision') collisionConnections += 1;
+    if (req.url === '/orca') collaborationConnections += 1;
     let body = '';
     for await (const chunk of req) body += chunk;
     if (req.method !== 'POST') { res.writeHead(405).end(); return; }
@@ -57,7 +59,7 @@ it.skipIf(!binaryPath).each([
     const result = message.method === 'initialize'
       ? { protocolVersion: '2024-11-05', capabilities: { tools: {} }, serverInfo: { name: 'local-fixture', version: '1' } }
       : message.method === 'tools/list'
-        ? { tools: [{ name: req.url === '/helper' ? 'routine_list' : 'external_echo', description: 'Read-only local fixture', inputSchema: { type: 'object', properties: {} } }] }
+        ? { tools: [{ name: req.url === '/helper' ? 'routine_list' : req.url === '/orca' ? 'get_workspace_info' : 'external_echo', description: 'Read-only local fixture', inputSchema: { type: 'object', properties: {} } }] }
         : {};
     res.writeHead(200, { 'content-type': 'application/json' });
     res.end(JSON.stringify({ jsonrpc: '2.0', id: message.id, result }));
@@ -76,6 +78,7 @@ it.skipIf(!binaryPath).each([
         '-c', 'mcp_servers.cindy_memory={command="false",enabled=false}',
         '-c', `mcp_servers.cindy_helper={url="${endpoint}/helper"}`,
         '-c', `mcp_servers.fixture_external={url="${endpoint}/external"}`,
+        '-c', `mcp_servers.cindy_orca={url="${endpoint}/orca"}`,
         ...(collision ? ['-c', `mcp_servers.codex_apps={url="${endpoint}/collision"}`] : []),
       ], extraEnv: {} }),
       auth: {
@@ -91,10 +94,11 @@ it.skipIf(!binaryPath).each([
         botId: 'fixture', profileVersion: 1,
         skillPolicy: { mode: 'allowlist', configured: [], catalog: [] },
         toolsetPolicy: { mode: 'allowlist', configured: [], catalog: [] },
-        mcpPolicy: { mode: 'allowlist', configured: external ? ['fixture_external', 'codex_apps'] : [], catalog: [
+        mcpPolicy: { mode: 'allowlist', configured: external ? ['fixture_external', 'codex_apps', 'cindy_orca'] : [], catalog: [
           { name: 'cindy_helper', source: 'builtin' },
           { name: 'fixture_external', source: 'custom' },
           { name: 'codex_apps', source: 'harness' },
+          { name: 'cindy_orca', source: 'builtin', available: true },
         ] },
       },
     });
@@ -126,6 +130,13 @@ it.skipIf(!binaryPath).each([
       const report = await handle.readMcpServerTools?.('fixture_external');
       if (external) expect(report).toMatchObject({ state: 'connected', tools: [{ name: 'external_echo' }] });
       else expect(report?.tools).toEqual([]);
+      const collaboration = await handle.readMcpServerTools?.('cindy_orca');
+      if (external) {
+        expect(collaboration).toMatchObject({ state: 'connected', tools: [{ name: 'get_workspace_info' }] });
+      } else {
+        expect(collaboration?.tools).toEqual([]);
+        expect(collaborationConnections).toBe(0);
+      }
       if (collision) {
         expect((await handle.readMcpServerTools?.('codex_apps'))?.tools).toEqual([]);
         expect(collisionConnections).toBe(0);
