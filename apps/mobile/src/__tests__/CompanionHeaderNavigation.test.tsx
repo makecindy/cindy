@@ -156,7 +156,7 @@ function PageHost({ bindings }) {
   const isSideChatSheet = false;
   const horizontalSystemHeader = bindings.nativeHeader ?? false;
   const companionSettingsRequest = bindings.companionSettingsRequest;
-  const deviceName = 'PC', remoteUnavailableReason = null, sessionListDrawerOverlayMounted = false;
+  const deviceName = 'PC', remoteUnavailableReason = null, sessionListDrawerOverlayMounted = false, sessionListDrawerFloating = false;
   ${statements.slice(stateStart, stateEnd).map(n => n.getText(source)).join('\n')}
   ${statements[declaration('companionHeaderShown')].getText(source)}
   ${relevantJsx(header)}

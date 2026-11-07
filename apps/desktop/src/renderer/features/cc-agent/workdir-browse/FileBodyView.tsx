@@ -1075,7 +1075,7 @@ export const FileBodyView = forwardRef<FileBodyHandle, FileBodyViewProps>(functi
               'fixed z-[9999] w-[168px] rounded-xl p-0.5 overflow-hidden',
               'bg-[var(--cmd-palette-bg)]',
               'border border-[var(--cmd-palette-border)]',
-              'shadow-[var(--shadow-menu)]',
+              'shadow-[shadow:var(--shadow-menu)]',
             )}
             style={{ left: menuPos.x, top: menuPos.y }}
           >
@@ -1175,7 +1175,7 @@ function EditingChip({
       aria-live="polite"
       className={cn(
         'inline-flex items-center gap-1.5 rounded-full border px-2.5 h-7 text-12 font-medium',
-        'shadow-sm backdrop-blur',
+        'shadow-[shadow:var(--shadow-menu)] backdrop-blur',
         showAmber
           ? cn(
               'border-amber-300/70 bg-amber-50/95 text-amber-800',

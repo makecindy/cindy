@@ -659,3 +659,25 @@ it('hides superseded mail entirely instead of showing another draft-updated card
   expect(container.innerHTML).toBe('');
   expect(h.invoke).not.toHaveBeenCalled();
 });
+
+
+it('opens in-card task links through task navigation without a browser or plugin action', async () => {
+  h.invoke.mockImplementation(async () => ({ result: { confirms: [] } }));
+  const onOpenSessionLink = vi.fn();
+  const container = document.createElement('div'), root = createRoot(container);
+  unmount = () => act(() => root.unmount());
+  await act(async () => root.render(createElement(PluginCardActions, { deviceId: 'device', sessionId: 's', callId: 'c', onOpenSessionLink,
+    data: { pluginId: 'github', revision: '1', form: null,
+      items: [{ id: 'link:0', label: '打开原任务', url: 'cindy://session/original-task', disabled: false }] } })));
+  const { Alert, Linking } = await import('react-native');
+  vi.mocked(Linking.openURL).mockClear();
+  vi.mocked(Alert.alert).mockClear();
+  h.invoke.mockClear();
+  const button = [...container.querySelectorAll('button')].find(button => button.textContent === '打开原任务')!;
+  expect(button).toBeTruthy();
+  await act(async () => button.click());
+  expect(onOpenSessionLink).toHaveBeenCalledWith('cindy://session/original-task');
+  expect(Linking.openURL).not.toHaveBeenCalled();
+  expect(Alert.alert).not.toHaveBeenCalled();
+  expect(h.invoke).not.toHaveBeenCalled();
+});

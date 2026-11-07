@@ -45,6 +45,28 @@ export interface DelegationCheck {
   authorize(): Promise<DelegationAuthorization>;
 }
 
+/** Who the hand-off goes to; a cross-device teammate has no local session, only its confirmed identity. */
+export interface DelegationTarget {
+  sessionId?: string;
+  targetTeammate?: { name: string; id: string };
+}
+
+/** The action payload naming the recipient to the sender review (2026-11-06). */
+export type DelegationReviewTarget =
+  | { targetSessionId: string }
+  | { targetTeammate: { name: string; id: string } };
+
+/**
+ * Only a hand-off with no identity at all is "a new task". A confirmed remote teammate keeps its
+ * own name and full id, so the review sees the recipient the owner confirmed instead of
+ * contradicting it (#9198).
+ */
+export function delegationReviewTarget(target?: DelegationTarget): DelegationReviewTarget {
+  if (target?.sessionId) return { targetSessionId: target.sessionId };
+  if (target?.targetTeammate) return { targetTeammate: target.targetTeammate };
+  return { targetSessionId: 'a new task' };
+}
+
 export function requestSourceFromInput(sessionId: string, input: RequestInputEvidence): ForwardedRequestSource {
   if (input.delegatedRequest) return readForwardedRequestSource(input.delegatedRequest) ?? { userText: null };
   // Older peer hosts persisted the compatibility bridge as desktop input.

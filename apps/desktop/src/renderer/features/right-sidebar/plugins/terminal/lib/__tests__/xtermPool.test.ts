@@ -4,6 +4,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { disposeXterm, getOrCreateXterm, openTerminalExternalLink } from '../xtermPool';
 import { finishClosing, markClosing } from '../../../../lib/tabClosingSignal';
+import { markAllPtyDetached, markPtyDetached } from '../xtermEntries';
 
 const { warn } = vi.hoisted(() => ({
   warn: vi.fn(),
@@ -36,6 +37,44 @@ it('marks a real xterm entry registered after closing begins and clears it after
   } finally {
     finishClosing('late-terminal');
     disposeXterm('late-terminal');
+  }
+});
+
+// PR8881 merge / unit: window migration must invalidate the real pool's attachment
+// without losing close rollback or SSH context. Existing pool tests only cover
+// close registration; two attached tabs distinguish single-tab and whole-host moves.
+it('detaches the canonical pooled entries while retaining close and SSH state', () => {
+  const first = getOrCreateXterm('moving-terminal');
+  const second = getOrCreateXterm('remaining-terminal');
+  const resume = vi.fn();
+  const remoteContext = { sessionId: 'remote-session', deviceId: 'remote-device' };
+  const remoteDraft = { contextKey: 'remote-context', submitted: true };
+  try {
+    first.ptyAttached = second.ptyAttached = true;
+    first.remoteContext = remoteContext;
+    first.remoteDraft = remoteDraft;
+    first.closeCancelledListeners.add(resume);
+    markClosing('moving-terminal');
+
+    markPtyDetached('moving-terminal');
+    expect(first.ptyAttached).toBe(false);
+    expect(second.ptyAttached).toBe(true);
+    expect(getOrCreateXterm('moving-terminal')).toBe(first);
+    expect(first.closing).toBe(true);
+    expect(first.remoteContext).toBe(remoteContext);
+    expect(first.remoteDraft).toBe(remoteDraft);
+    expect(resume).not.toHaveBeenCalled();
+
+    first.ptyAttached = true;
+    markAllPtyDetached();
+    expect(first.ptyAttached).toBe(false);
+    expect(second.ptyAttached).toBe(false);
+    finishClosing('moving-terminal');
+    expect(resume).toHaveBeenCalledOnce();
+  } finally {
+    finishClosing('moving-terminal');
+    disposeXterm('moving-terminal');
+    disposeXterm('remaining-terminal');
   }
 });
 

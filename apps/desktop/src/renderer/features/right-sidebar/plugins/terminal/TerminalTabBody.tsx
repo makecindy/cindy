@@ -484,7 +484,7 @@ function ExitedOverlay({
     : t('rightSidebar.terminal.processExited', { code: exit.code ?? (onEditConnection ? '—' : 0) });
   return (
     <div className="pointer-events-none absolute inset-0 flex items-end justify-center pb-6">
-      <div role="status" className="pointer-events-auto flex max-h-full max-w-[90%] flex-wrap items-center justify-center gap-3 overflow-y-auto rounded-xl border border-[var(--border-default)] bg-[var(--surface-elevated)] px-4 py-2 text-sm text-[var(--text-primary)]">
+      <div role="status" className="pointer-events-auto flex max-h-full max-w-[90%] flex-wrap items-center justify-center gap-3 overflow-y-auto rounded-xl border border-[var(--border-default)] bg-[var(--surface-elevated)] px-4 py-2 text-sm text-[var(--text-primary)] shadow-[shadow:var(--shadow-menu)]">
         <span className="min-w-0 break-words">{message}</span>
         <Button
           variant="secondary"

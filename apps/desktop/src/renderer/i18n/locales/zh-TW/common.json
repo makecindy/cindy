@@ -163,7 +163,7 @@
   "taskActionConfirmation": {
     "title": "確認任務操作",
     "once": "請核對下方的目標、動作與完整內容。允許僅對本次操作生效。",
-    "remove": "這會刪除自動化。請核對目標，僅允許這一次。",
+    "remove": "這會釋放自動化的接收位址。請核對目標，僅允許這一次。",
     "permission": "這會代你回答另一個任務的授權請求。請核對操作，僅允許這一次。",
     "resume": "這會恢復已暫停的執行。請核對目標，僅允許這一次。",
     "command": "這會在電腦上儲存或執行命令，執行時不經過 Agent 的工具審批。請核對命令與工作目錄，僅允許這一次。",
@@ -1098,6 +1098,14 @@
     "cancel": "保持連線",
     "disconnect": "中斷連線"
   },
+  "awayGuard": {
+    "status": "Cindy 正在工作",
+    "hint": "按任意鍵鎖定螢幕，用 Touch ID 或密碼解鎖",
+    "lockFailed": {
+      "status": "Cindy 沒能鎖定這台電腦",
+      "hint": "按 Control-Command-Q 鎖定螢幕，稍後系統也會自動鎖定"
+    }
+  },
   "appBadge": {
     "attentionCount": "需要關注的任務：{{count}}"
   },
@@ -1421,13 +1429,19 @@
       "actionFailed": "操作未完成，提醒已保留，請重試。",
       "newConversationTitle": "新建任務",
       "newConversationHint": "開始一個新的任務",
-      "muteSound": "關閉靈動島聲音",
-      "enableSound": "開啟靈動島聲音",
-      "settings": "靈動島設定",
+      "muteSound": "關閉任務膠囊聲音",
+      "enableSound": "開啟任務膠囊聲音",
+      "settings": "任務膠囊設定",
       "newMessage": "新建訊息",
       "review": "檢視",
       "needsInput": "需要輸入",
       "completed": "已完成",
+      "liveActivityRunning_one": "{{count}} 個任務執行中",
+      "liveActivityRunning_other": "{{count}} 個任務執行中",
+      "liveActivityAlsoRunning_one": "另有 {{count}} 個任務執行中",
+      "liveActivityAlsoRunning_other": "另有 {{count}} 個任務執行中",
+      "liveActivityWaiting_one": "{{count}} 個任務等你處理",
+      "liveActivityWaiting_other": "{{count}} 個任務等你處理",
       "error": "錯誤",
       "input": "輸入",
       "done": "完成",
@@ -1446,6 +1460,13 @@
     }
   },
   "menubar": {
+    "shared": {
+      "label": "分享",
+      "note": "這是帳號共用額度，不是分配給你的專屬額度。",
+      "highestWeekly": "分享 · 週剩餘最多",
+      "highestWeeklyNote": "顯示可讀取帳號中週剩餘最多的一項，額度不相加。帳號共用，非個人專屬。",
+      "from": "來自 {{name}} 的分享"
+    },
     "balance": {
       "name": "Cindy 餘額",
       "quotaName": "Cindy 本期配額",
@@ -1767,7 +1788,7 @@
       "apiKeys": "工具金鑰",
       "voiceInput": "語音輸入",
       "shortcuts": "鍵盤快捷鍵",
-      "agentIsland": "靈動島",
+      "agentIsland": "動態島",
       "import": "任務匯入",
       "connections": "第三方平臺",
       "providers": "模型供應商",
@@ -1789,7 +1810,7 @@
       "billing": "用量和計費",
       "appearance": "外觀",
       "notifications": "通知",
-      "agentIsland": "靈動島",
+      "agentIsland": "動態島",
       "collaboration": "協同",
       "agentResource": "Agent 資源佔用",
       "gitSafety": "Git 安全",
@@ -2089,6 +2110,17 @@
     "appearance": {
       "title": "外觀",
       "modeLabel": "顯示模式",
+      "appIcon": {
+        "label": "Dock 圖示",
+        "description": "選擇應用程式在 Dock 中使用的圖示",
+        "saveFailed": "無法儲存 Dock 圖示，請稍後再試",
+        "options": {
+          "default": "預設",
+          "cat": "黑貓",
+          "wordmark": "Cindy 字標",
+          "mark": "Cindy 符號"
+        }
+      },
       "sidebarAndPanels": "側邊欄與面板",
       "themeLabel": "主題",
       "themeAriaLabel": "主題選擇",
@@ -2254,7 +2286,7 @@
     "notifications": {
       "title": "通知",
       "sessionDoneLabel": "系統通知",
-      "sessionDoneHint": "任務完成、出錯或需要回覆時提醒。一般任務僅在視窗處於背景時通知；開啟靈動島時改由靈動島提醒。",
+      "sessionDoneHint": "任務完成、出錯或需要回覆時提醒。一般任務僅在視窗處於背景時通知；開啟任務膠囊或在動態島顯示任務時，改由它們提醒；只開動態島時，出錯仍發系統通知。",
       "sessionDoneAria": "切換任務系統通知",
       "feishuLabel": "任務完成或需要回復時傳送飛書 / Lark 訊息",
       "feishuHint": "透過已繫結的飛書或 Lark 機器人，向你私聊傳送一條訊息；僅在視窗失焦時傳送。",
@@ -2346,31 +2378,51 @@
       "swallowActivationClickLabel": "切回時防誤觸",
       "swallowActivationClickHint": "左鍵點回背景視窗時，只喚起視窗。關閉後會同時操作點擊位置，可能誤觸。",
       "swallowActivationClickAria": "切換返回視窗時的誤點保護",
-      "macRestartNote": "macOS 上需要重啟應用才能生效。"
+      "macRestartNote": "macOS 上需要重啟應用才能生效。",
+      "awayGuard": {
+        "label": "離開時繼續工作",
+        "hint": "開啟後，這台電腦不會因為沒人操作而關閉螢幕、鎖定，AI 隨時可以使用。你離開一段時間後，螢幕會被一塊黑色遮罩蓋住，AI 在後面繼續工作；有人按鍵或點按就立即鎖定螢幕，用 Touch ID 或密碼解鎖。",
+        "permission": "需要在「系統設定 → 隱私權與安全性 → 輔助使用」中允許 Cindy，才能在有人碰電腦時立即鎖定螢幕。允許之前，電腦會照常關閉螢幕並鎖定。",
+        "preview": "立即試一下",
+        "previewStarting": "請放開滑鼠和鍵盤，3 秒後螢幕會被遮住；按任意鍵即可鎖定螢幕，再解鎖試試。",
+        "previewUnavailable": "無法遮住螢幕，請重新啟動 Cindy 後再試。",
+        "delay": {
+          "label": "離開多久後遮住螢幕",
+          "hint": "鍵盤滑鼠沒人碰這麼久後蓋上遮罩。預設與系統關閉螢幕的時間一致。",
+          "30": "30 秒",
+          "60": "1 分鐘",
+          "120": "2 分鐘",
+          "300": "5 分鐘",
+          "system": "跟隨系統"
+        }
+      }
     },
     "agentIsland": {
-      "title": "靈動島",
-      "unsupported": "靈動島需要 macOS 14 或更高版本。",
+      "title": "動態島",
+      "unsupported": "任務膠囊需要 macOS 14 或更高版本。",
       "subtleRemindersLabel": "輕提醒",
-      "subtleRemindersHint": "有新訊息、待回覆事項或錯誤時，不向下彈出通知卡片，透過圖示變化提示。點擊靈動島可查看完整任務清單。",
+      "subtleRemindersHint": "有新訊息、待回覆事項或錯誤時，不向下彈出通知卡片，透過圖示變化提示。點擊任務膠囊可查看完整任務清單。",
       "subtleRemindersFailed": "無法儲存提醒設定，請重試。",
-      "enableLabel": "顯示靈動島",
-      "enableHint": "在螢幕頂部顯示正在執行、待互動和未讀完成的任務。啟用後會抑制同類系統通知，避免重複打擾。",
-      "enableAria": "切換靈動島",
+      "liveActivityLabel": "在動態島顯示任務",
+      "liveActivityHint": "在新款 MacBook Pro 的動態島裡顯示任務進度，需要你處理或完成時自動展開；其他 Mac 顯示在選單列右側。與任務膠囊互不影響。",
+      "liveActivityFailed": "無法儲存即時動態設定，請重試。",
+      "enableLabel": "顯示任務膠囊",
+      "enableHint": "在螢幕頂部顯示任務進度，需要你處理或有新結果時及時提醒。開啟後，這些提醒不再另發系統通知。",
+      "enableAria": "切換任務膠囊",
       "displayLabel": "顯示位置",
-      "displayHint": "選擇靈動島顯示在哪個顯示器上；選擇全部時，每個顯示器都會顯示一份。",
-      "displaySelectAria": "選擇靈動島顯示器",
+      "displayHint": "選擇任務膠囊顯示在哪個顯示器上；選擇全部時，每個顯示器都會顯示一份。",
+      "displaySelectAria": "選擇任務膠囊顯示器",
       "displayAll": "全部顯示器",
       "displayOption": "{{name}} · {{resolution}}",
       "displayNameFallback": "顯示器 {{index}}",
       "displayPrimary": "主顯示器",
       "displayInternal": "內建",
       "displayMissing": "已斷開的顯示器 {{id}}",
-      "skinLabel": "圖示皮膚",
-      "skinHint": "選擇靈動島裡用於執行狀態的角色皮膚。",
+      "skinLabel": "角色",
+      "skinHint": "任務膠囊和動態島裡顯示的角色。",
       "soundLabel": "事件音效",
-      "soundHint": "為每類靈動島事件選擇 8-bit 音效。",
-      "soundAria": "切換靈動島音效",
+      "soundHint": "為每類提醒選擇 8-bit 音效，任務膠囊和動態島共用；點按的音效只在點任務膠囊時播放。",
+      "soundAria": "切換任務膠囊音效",
       "soundSelectAria": "{{event}}的音效",
       "soundPreviewAria": "預覽{{event}}音效",
       "skinAnimationAria": "切換{{skin}}的預覽動畫",
@@ -2393,7 +2445,7 @@
         },
         "boli": {
           "name": "波利",
-          "description": "粉色波利，輕快地在鍵盤邊蹦躂；想讓靈動島更軟萌一點就選它。"
+          "description": "粉色波利，輕快地蹦蹦躂躂；想讓任務膠囊更軟萌一點就選它。"
         },
         "whitesnow": {
           "name": "蘋果妹",
@@ -3915,6 +3967,8 @@
         "disabledGroup": "已停用",
         "enableAllModels": "全部啟用",
         "priceOverride": {
+          "resetShort": "重設",
+          "referenceDetails": "參考價詳情",
           "menu": "編輯 API 估價",
           "title": "{{model}} API 估價",
           "description": "僅用於估算你自己的 API 或訂閱通道用量，不會改變供應商的實際帳單。",
@@ -5080,7 +5134,7 @@
         "ariaLabel": "選擇第二備選輔助模型"
       },
       "emptySlot": "未選擇",
-      "customHint": "輕量文字按所選順序嘗試；內建審核無法使用時，也用於自動審核備援。所選供應商會收到審核上下文，包括訊息與引用內容、任務與操作詳情及攔截記錄、身分與權限、檔案路徑和作業系統。",
+      "customHint": "輕量文字按所選順序嘗試；內建審核無法使用時，也用於自動審核備援。所選供應商會收到審核上下文，包括訊息與引用內容、Agent 的公開文字（僅作參考）、任務與操作詳情及攔截記錄、身分與權限、檔案路徑和作業系統。",
       "signInHint": "登入 Cindy 後可使用自動推薦；未登入時請在自訂中選擇已設定的其他供應商模型。",
       "chooseAgent": "選擇 Agent",
       "backToAgents": "返回選擇 Agent",
@@ -5509,6 +5563,11 @@
           "installPlugin": "安裝插件",
           "enablePlugin": "前往啟用",
           "installExtension": "安裝瀏覽器擴充功能",
+          "updatingTitle": "正在更新瀏覽器連線",
+          "updatingBody": "更新完成後會自動恢復連線。",
+          "selectPluginTitle": "選擇瀏覽器擴充功能",
+          "selectPluginBody": "請開啟插件詳情，選擇「使用此瀏覽器擴充功能」，確認 Cindy 使用的擴充功能。",
+          "selectPlugin": "開啟插件",
           "updatePluginTitle": "更新 Cindy Chrome 插件",
           "updatePluginBody": "已安裝的 Cindy Chrome 插件版本較舊，還不支援「我的瀏覽器」。更新到最新版後，再依提示把擴充功能裝進瀏覽器。",
           "updatePlugin": "前往更新",
@@ -6095,7 +6154,7 @@
         "hook": "Cindy IM 機器人"
       },
       "hook": {
-        "description": "把 Slack 和 Telegram 接入同一個 Cindy：訊息都會派發到這臺裝置，共享專案清單與 session 執行鏈；帳號繫結和執行偏好按渠道隔離。",
+        "description": "把 Slack、Telegram、飛書 / Lark 等渠道接入同一個 Cindy：訊息都會派發到這臺裝置，共用這裡的專案清單和任務；帳號繫結和執行偏好按渠道分開保存。",
         "slackDescription": "繫結 Slack workspace，在 Slack 裡 @Cindy 派發任務。",
         "slackDisabledHint": "開啟開關即發起 Slack 授權，繫結完成後即可在 Slack 裡派活。",
         "slackBoundHint": "已完成繫結。關閉開關將解除繫結，重新開啟需再次授權。",
@@ -6316,6 +6375,45 @@
             "revoked": "已解除關聯",
             "superseded": "已關聯到另一臺裝置"
           }
+        },
+        "feishu": {
+          "description": "從飛書發訊息，交給工作電腦處理。",
+          "disabledHint": "開啟開關後，在瀏覽器裡授權飛書帳號，或把關聯碼傳給飛書機器人。",
+          "toggleAria": "切換飛書 / Lark 連線",
+          "connect": "關聯飛書",
+          "openApp": "開啟授權頁",
+          "cancel": "取消關聯",
+          "retry": "重新關聯",
+          "openBot": "開啟飛書機器人",
+          "unlink": "解綁飛書",
+          "unlinkConfirmTitle": "解綁飛書？",
+          "unlinkConfirmDescription": "僅解除這台電腦的關聯。",
+          "unavailableHint": "你所在的組織還沒有設定飛書機器人，請聯絡組織管理員。",
+          "unavailableHintPersonal": "飛書機器人暫未向個人帳號開放。",
+          "status": {
+            "checking": "正在檢查伺服器支援…",
+            "unavailable": "組織未設定",
+            "unavailablePersonal": "暫未開放",
+            "disabled": "已停用",
+            "none": "未繫結",
+            "pending": "在瀏覽器裡授權，或把關聯碼傳給飛書機器人",
+            "awaiting_confirmation": "請在飛書 / Lark 裡確認更換這台電腦關聯的帳號",
+            "confirmed": "{{user}} 已關聯飛書機器人",
+            "denied": "已拒絕授權",
+            "expired": "授權已過期",
+            "failed": "關聯失敗",
+            "revoked": "已解除關聯",
+            "superseded": "這台電腦已關聯到另一個飛書 / Lark 帳號",
+            "appChanged": "飛書機器人已更換，請重新關聯"
+          },
+          "bindCode": {
+            "label": "關聯碼",
+            "copy": "複製關聯碼",
+            "copied": "關聯碼已複製",
+            "hint": "或者在飛書裡把關聯碼私訊傳給 Cindy 機器人"
+          },
+          "setWorkingDevice": "設為工作電腦",
+          "workingDeviceSet": "已設為工作電腦"
         }
       },
       "summary": {
@@ -6334,7 +6432,7 @@
     "tina": {
       "chat": {
         "title": "對話",
-        "description": "不落任何倉庫的純對話；在 Slack、Telegram 或 X 裡選擇 chat 即可使用，每條對話 lane 獨立對應一個任務。"
+        "description": "不落任何倉庫的純對話；在 Slack、Telegram、X 或飛書 / Lark 裡選擇 chat 即可使用，每條對話 lane 獨立對應一個任務。"
       },
       "prefs": {
         "agentLabel": "Agent",
@@ -6344,6 +6442,7 @@
         "providerSlack": "Slack",
         "providerTelegram": "Telegram",
         "providerX": "X",
+        "providerFeishu": "飛書 / Lark",
         "requireConnected": "連線 {{provider}} 後可編輯（先在上方開啟對應開關並等待連線成功）。",
         "offlineLocal": "{{provider}} 暫時連不上，變更會保存在本機；連上後同步到對話裡的模型卡。",
         "requireBinding": "先完成 {{provider}} 帳號關聯後可編輯。",
@@ -12615,6 +12714,10 @@
       "defer": "暫不下載"
     },
     "permissionPrompt": {
+      "titleStdin": "允許向終端傳送輸入？",
+      "titleMcpUrl": "完成 {{server}} 的請求",
+      "mcpComplete": "已完成",
+      "mcpCancel": "取消",
       "alwaysAllowScoped": "本任務都允許 {{scope}}",
       "alwaysAllowScopedHint": "作用於整個任務，且只限這裡列出的範圍。",
       "alwaysAllowSessionHint": "作用於整個任務，不只是這一次請求。",
@@ -12878,7 +12981,13 @@
       "sendAndContinue": "傳送並繼續",
       "close": "關閉",
       "customAnswer": "輸入其他回答…",
-      "answerPlaceholder": "請輸入回答…"
+      "answerPlaceholder": "請輸入回答…",
+      "validation": {
+        "required": "請填寫此必填項目。",
+        "choice": "請選擇列出的選項。",
+        "tooShort": "請至少輸入 {{count}} 個字元。",
+        "tooLong": "請最多輸入 {{count}} 個字元。"
+      }
     },
     "planReviewBubble": {
       "title": "計劃審閱",
@@ -13960,7 +14069,13 @@
       "mailAttach": "新增附件",
       "mailRemoveAttachment": "移除 {{name}}",
       "mailUpdated": "草稿已更新（唯讀）",
-      "mailLegacy": "歷史草稿（唯讀）"
+      "mailLegacy": "歷史草稿（唯讀）",
+      "taskAutoArchived": "已歸檔「{{title}}」",
+      "taskAutoArchivedUndo": "撤銷",
+      "taskAutoArchivePending": "離開此任務後將自動封存",
+      "taskAutoArchiveCancel": "取消",
+      "taskAutoArchiveCancelled": "本次不會自動封存",
+      "taskArchiveNow": "立即封存"
     },
     "ghostHook": {
       "blockedFallback": "訊息被插件攔下，未傳送",
@@ -13997,6 +14112,8 @@
       "updateHost": "請先更新執行任務的電腦，再開啟側邊追問。",
       "failed": "開啟側邊追問失敗，請稍後重試。",
       "mainTaskOnly": "請從主任務開啟側邊追問。",
+      "sharedTaskUnavailable": "共享任務不支援側邊追問",
+      "archivedTask": "請先取消歸檔，再開啟側邊追問",
       "closeTitle": "關閉側邊追問？",
       "closeDescription": "將停止並刪除本次追問，主任務不受影響。",
       "closeConfirm": "關閉並刪除",
@@ -19112,6 +19229,9 @@
     "pendingApprovals": "{{count}} 個待確認"
   },
   "richAnswer": {
+    "invalidImageReference": "圖片引用無效，無法顯示。",
+    "requestImageAgain": "請助手重新顯示",
+    "requestImageAgainMessage": "請重新顯示這張既有圖片（{{name}}，引用：{{source}}）。請核對原工具結果或原始檔案並使用真實位址，不要重新產生；無法確認是哪張圖片時先問我。",
     "send": "傳送訊息",
     "sending": "正在傳送…",
     "sent": "已提交",
@@ -19543,5 +19663,33 @@
     "rendered": "查看文件",
     "wrap": "自動換行",
     "lineNumbers": "行號"
+  },
+  "subscriptionAccounts": {
+    "signIn": {
+      "checking": "正在偵測本機帳號…",
+      "detected": "偵測到已登入帳號",
+      "useAccount": "使用此帳號",
+      "anotherAccount": "登入另一個帳號",
+      "keepExisting": "新帳號會加入此供應商，現有帳號的登入保持不變。",
+      "checkFailed": "無法讀取本機帳號狀態，請重試。",
+      "retry": "重試",
+      "useCodex": "使用 Codex 登入"
+    },
+    "title": "訂閱帳號",
+    "note": "首個帳號沿用 CLI 預設目錄，新增帳號獨立登入。新任務按策略分配，已有任務保留原帳號。",
+    "strategy": "負載平衡",
+    "add": "新增帳號",
+    "default": "預設目錄",
+    "ready": "已連線",
+    "signedOut": "需要登入",
+    "unavailable": "暫時讀不到狀態",
+    "limited": "配額已用完",
+    "remove": "移出帳號",
+    "removeTitle": "移出 {{name}}？",
+    "removeDescription": "Cindy 將不再給這個帳號分配任務。CLI 登入和對話歷史仍保留在本機。",
+    "failed": "無法讀取或更新帳號。請檢查 CLI 登入和網路連線後重試。",
+    "directory": "帳號目錄",
+    "loginAgain": "重新登入",
+    "login": "登入"
   }
 }

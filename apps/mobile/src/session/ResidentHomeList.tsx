@@ -11,6 +11,8 @@ import { sessionPaneLayout } from './sessionPaneLayout';
 import { SessionPaneDivider } from './SessionPaneDivider';
 
 const PaneLayoutContext = createContext<ReturnType<typeof sessionPaneLayout> | null>(null);
+type SidebarWidthPreference = { width: number | null; setWidth(width: number): void };
+const SidebarWidthContext = createContext<SidebarWidthPreference | null>(null);
 
 export function useSessionPaneLayout() {
   const geometry = useAdaptiveWindow();
@@ -47,12 +49,22 @@ export function useResidentHomeListContextBridge(children: ReactNode) {
   );
 }
 
+/** One task-list width for the side column and the floating quick-switch
+ * drawer: resizing either one is the same choice. Each surface clamps it to
+ * its own bounds and uses its own default until the user has dragged. */
+export function useSessionSidebarWidthPreference(): SidebarWidthPreference {
+  const context = useContext(SidebarWidthContext);
+  const [width, setWidth] = useState<number | null>(null);
+  return context ?? { width, setWidth };
+}
+
 /** The list lives above route lifetimes. Owners only supply its frame and props;
  * never key the host by route, session, or presentation width. */
 export function ResidentHomeListProvider({ children }: { children: ReactNode }) {
   const geometry = useAdaptiveWindow();
-  // Window preference, shared by retained routes; rotation clamps only the
-  // displayed width, so returning to a wide window restores the user's choice.
+  // Window preference, shared by retained routes and the floating drawer;
+  // rotation clamps only the displayed width, so returning to a wide window
+  // restores the user's choice.
   const [sidebarWidth, setSidebarWidth] = useState<number | null>(null);
   const paneLayout = useMemo(() => sessionPaneLayout(geometry, sidebarWidth), [geometry, sidebarWidth]);
   const { persistent } = paneLayout;
@@ -72,10 +84,12 @@ export function ResidentHomeListProvider({ children }: { children: ReactNode }) 
     setEntry(current => current?.owner === owner ? null : current);
   }, []);
   const context = useMemo(() => ({ persistent, mounted, publish, unpublish, host }), [persistent, publish, unpublish]);
+  const widthPreference = useMemo(() => ({ width: sidebarWidth, setWidth: setSidebarWidth }), [sidebarWidth]);
   useLayoutEffect(() => {
     mounted.current = !!entry;
   }, [entry]);
-  return <PaneLayoutContext.Provider value={paneLayout}><Context.Provider value={context}>
+  return <SidebarWidthContext.Provider value={widthPreference}>
+    <PaneLayoutContext.Provider value={paneLayout}><Context.Provider value={context}>
     <View ref={host} collapsable={false} style={styles.root}>
       {children}
       {entry ? <Animated.View collapsable={false} pointerEvents={visible ? 'box-none' : 'none'}
@@ -98,7 +112,8 @@ export function ResidentHomeListProvider({ children }: { children: ReactNode }) 
         onResize={setSidebarWidth}
       /> : null}
     </View>
-  </Context.Provider></PaneLayoutContext.Provider>;
+  </Context.Provider></PaneLayoutContext.Provider>
+  </SidebarWidthContext.Provider>;
 }
 
 /** A route supplies a measuring slot, not another native list. Its header stays

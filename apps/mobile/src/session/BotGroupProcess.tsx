@@ -70,6 +70,5 @@ export function BotGroupProcessEntries({ messages, id, running = false }: { mess
         </View> : null)}
       </TeammateWorkSegment>;
     })}
-    {running && (!projection.segments.length || projection.segments.at(-1)?.kind === 'content') && <TeammateWorkSegment id={`${id}:pending`} title={t(projection.segments.length ? 'chat.teammateProcess.thinking' : 'chat.teammateProcess.processing')} running hasTools={false} />}
   </View>;
 }

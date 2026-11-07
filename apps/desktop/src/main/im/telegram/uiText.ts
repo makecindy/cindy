@@ -101,7 +101,9 @@ export const ui = {
   error: {
     agentUnsupported: '🤔 当前 Agent 无法在 Telegram 群里完成所需的权限确认，请换一个 Agent 再试。',
     permissionModeUnsupported:
-      '🤔 当前权限设置无法用于这条 Telegram 群对话。发 /permission 换成「自动审批」后再试。',
+      (mode: string) => mode === 'bypassPermissions'
+        ? '这条群消息尚未执行：当前任务设为「完全访问」，但其他群成员的请求仍需经过审批，本次未能切换到自动审批。请机器人绑定的用户在 Cindy 中把当前任务改为「自动审批」，或发送 /permission 修改后重发。'
+        : '这条群消息尚未执行：当前权限档位无法提供群消息所需的操作审批。请机器人绑定的用户在 Cindy 中把当前任务改为「自动审批」，或发送 /permission 修改后重发。',
   },
 
   cards: {

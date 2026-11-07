@@ -102,6 +102,13 @@ const call = (b: UserBrowserBackend, req: Record<string, unknown>) =>
   b.call(req as unknown as BrowserControlRequest);
 
 describe('UserBrowserBackend · 就绪与连接', () => {
+  // Actual absence and temporarily unavailable selection must not share the old-plugin advice.
+  it.each(['plugin-updating', 'plugin-selection-required'] as const)('status preserves %s from the plugin slot', async reason => {
+    const b = new UserBrowserBackend({ getPageControl: () => null, getUnavailableReason: () => reason,
+      logger: { info: vi.fn(), warn: vi.fn() } });
+    expect(await call(b, { action: 'status' })).toMatchObject({ data: { configured: false, reason } });
+  });
+
   it('没有页面控制插件时 status 如实报告,动作按未配置拒绝', async () => {
     const b = backend(null);
     expect(await call(b, { action: 'status' })).toMatchObject({
