@@ -408,11 +408,13 @@ function GhostCardCanvas({
     [renderedCardHtml],
   );
 
+  // The outer card takes its width from static HTML, including while animation HTML runs.
+  const fullWidth = isFullWidthGhostCardHtml(html);
   const measureHeight = useCallback(() => {
     const doc = iframeRef.current?.contentDocument;
     const body = doc?.body;
     if (!doc || !body) return;
-    // scrollHeight is at least the iframe viewport height, so it cannot shrink a footer.
+    // Preserve visible overflow in plugin posters; editable footers use their layout height.
     const h = Math.ceil(formFields ? body.getBoundingClientRect().height : body.scrollHeight);
     if (h <= 0) return;
     const clamped = Math.min(GHOST_CARD_HEIGHT_MAX, Math.max(GHOST_CARD_HEIGHT_MIN, h));
@@ -433,6 +435,21 @@ function GhostCardCanvas({
       window.electronAPI?.ghosts?.reportCardHeight?.(callId, clamped)?.catch(() => {});
     }
   }, [callId, height, formFields]);
+
+  useEffect(() => {
+    const frame = iframeRef.current;
+    if (!fullWidth || !frame) return;
+    let previousWidth = 0;
+    const observer = new ResizeObserver(([entry]) => {
+      const width = entry.contentRect.width;
+      // Height updates trigger this observer too; only remeasure horizontal reflow.
+      if (width <= 0 || width === previousWidth) return;
+      previousWidth = width;
+      measureHeight();
+    });
+    observer.observe(frame);
+    return () => observer.disconnect();
+  }, [fullWidth, measureHeight]);
 
   /** data-ghost-audio 插槽装配:注入标准播放器行 + 双向接线(UI → audio 控制,
    *  audio 事件 → UI 刷新)。同 url 复用同一 <audio>(跨文档重载接续播放)。 */

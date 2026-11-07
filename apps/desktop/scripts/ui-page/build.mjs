@@ -140,7 +140,7 @@ function boundaries(stubs, replaced, overlay) {
 }
 
 const sourcePath = (file) =>
-  path.resolve(root, file.replace(/^ui-url:/, '').replace(/ with \{[^}]*\}$/, ''));
+  path.resolve(root, file.replace(/^ui-(?:url|inline):/, '').replace(/ with \{[^}]*\}$/, ''));
 
 // Vite ?url imports emit the original bytes as an asset, even for JavaScript
 // (PDF workers / AudioWorklets). Resolve through esbuild for package exports,
@@ -149,16 +149,23 @@ function urlAssets(overlay) {
   return {
     name: 'ui-page-url-assets',
     setup(build) {
-      build.onResolve({ filter: /\?url$/ }, async (args) => {
-        const resolved = await build.resolve(args.path.slice(0, -4), {
+      build.onResolve({ filter: /\?(?:url|inline)$/ }, async (args) => {
+        const inline = args.path.endsWith('?inline');
+        const resolved = await build.resolve(args.path.slice(0, inline ? -7 : -4), {
           kind: args.kind,
           importer: args.importer,
           resolveDir: args.resolveDir,
         });
         return resolved.errors.length || resolved.external
           ? resolved
-          : { path: resolved.path, namespace: 'ui-url', warnings: resolved.warnings };
+          : { path: resolved.path, namespace: inline ? 'ui-inline' : 'ui-url', warnings: resolved.warnings };
       });
+      // Vite's CSS ?inline exports the stylesheet for iframe/shadow-root injection.
+      build.onLoad({ filter: /.*/, namespace: 'ui-inline' }, async (args) => ({
+        contents: overlay?.get(args.path) ?? await readFile(args.path),
+        loader: 'text',
+        watchFiles: [args.path],
+      }));
       build.onLoad({ filter: /.*/, namespace: 'ui-url' }, async (args) => ({
         contents: overlay?.get(args.path) ?? await readFile(args.path),
         loader: 'file',
