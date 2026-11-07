@@ -55,7 +55,7 @@ export type BackgroundCommandStartResult =
   | { ok: true; runId: string; logPath: string; pid: number | undefined }
   | {
       ok: false;
-      errorCode: 'INVALID_ARGS' | 'TOO_MANY_RUNS' | 'SPAWN_FAILED' | 'LOG_FAILED';
+      errorCode: 'INVALID_ARGS' | 'TOO_MANY_RUNS' | 'SPAWN_FAILED' | 'LOG_FAILED' | 'DISPOSED';
       message: string;
     };
 
@@ -77,7 +77,9 @@ export interface BackgroundCommandServiceDeps {
 }
 
 export function createBackgroundCommandService(deps: BackgroundCommandServiceDeps) {
-  const running = new Map<string, { startedAt: number; timeoutTimer: NodeJS.Timeout }>();
+  const running = new Map<string, { startedAt: number; timeoutTimer: NodeJS.Timeout; killTree: () => void }>();
+  // 切账号时置位:在途报告(含 retry 循环)不再投递——旧账号会话的回注不能落进新账号。
+  let disposed = false;
 
   function pruneOldLogs(): void {
     const logDir = deps.resolveLogDir();
@@ -158,6 +160,13 @@ export function createBackgroundCommandService(deps: BackgroundCommandServiceDep
     const attempt = async (): Promise<void> => {
       attempts += 1;
       const { text, persistedContent } = buildReport(params);
+      if (disposed) {
+        // 服务已被账号边界作废:报告丢弃,也不再排下一次 retry。
+        deps.logger.warn?.('[background-command] report dropped: service disposed (account boundary)', {
+          runId: params.runId,
+        });
+        return;
+      }
       let result: Awaited<ReturnType<typeof deps.enqueueReport>>;
       try {
         result = await deps.enqueueReport({
@@ -197,6 +206,13 @@ export function createBackgroundCommandService(deps: BackgroundCommandServiceDep
 
   return {
     start(input: BackgroundCommandStartInput): BackgroundCommandStartResult {
+      if (disposed) {
+        return {
+          ok: false,
+          errorCode: 'DISPOSED',
+          message: 'service disposed (account boundary); a fresh service is created on next use',
+        };
+      }
       const command = input.command?.trim();
       if (!command || !input.sessionId || !input.cwd) {
         return {
@@ -290,6 +306,13 @@ export function createBackgroundCommandService(deps: BackgroundCommandServiceDep
           windowsHide: true,
           stdio: ['ignore', 'pipe', 'pipe'],
           detached: process.platform !== 'win32',
+          env: {
+            ...process.env,
+            // Windows 下 Python piped stdout 默认走 locale encoding(cp936/GBK),不看 chcp 65001;
+            // 完成报告按 UTF-8 读尾部,不强制的话中文输出会变乱码。与 commands/builtins.ts 同一做法。
+            PYTHONUTF8: process.env.PYTHONUTF8 ?? '1',
+            PYTHONIOENCODING: process.env.PYTHONIOENCODING ?? 'utf-8',
+          },
         });
       } catch (error) {
         return {
@@ -407,7 +430,11 @@ export function createBackgroundCommandService(deps: BackgroundCommandServiceDep
         if (child.stderr?.readableEnded) onEnd();
       };
 
-      running.set(runId, { startedAt, timeoutTimer });
+      running.set(runId, {
+        startedAt,
+        timeoutTimer,
+        killTree: () => killProcessTree(child.pid, child, () => {}),
+      });
       child.once('exit', (code, signal) => {
         settle({ code, signal, timedOut });
       });
@@ -422,6 +449,24 @@ export function createBackgroundCommandService(deps: BackgroundCommandServiceDep
 
     runningCount(): number {
       return running.size;
+    },
+
+    /**
+     * 账号边界作废:杀掉在途进程树、清掉硬顶计时器、丢弃待投递报告。
+     * 切号后旧账号的运行不能继续占用并发名额(否则新账号直接 TOO_MANY_RUNS),
+     * 报告也不能投进新账号;单例引用由调用方清空,下次懒建全新服务。
+     */
+    dispose(): void {
+      disposed = true;
+      for (const [runId, entry] of running) {
+        clearTimeout(entry.timeoutTimer);
+        try {
+          entry.killTree();
+        } catch {
+          // child 已退出时 killProcessTree 本就是 no-op;这里只防拒绁性异常。
+        }
+        running.delete(runId);
+      }
     },
   };
 }

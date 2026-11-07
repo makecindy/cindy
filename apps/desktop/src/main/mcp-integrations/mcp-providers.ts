@@ -244,6 +244,17 @@ async function getBackgroundCommandService(): Promise<
   return backgroundCommandServiceSingleton;
 }
 
+/**
+ * 切账号边界作废后台命令服务:杀掉旧账号的在途进程树、清计时器、丢弃待投递报告，
+ * 并清空单例引用（下次使用懒建全新服务）。不处理的后果：旧账号的长命令一直
+ * 占着并发名额，新账号的 run_command_background 持续 TOO_MANY_RUNS。
+ */
+export function resetBackgroundCommandService(): void {
+  const pending = backgroundCommandServiceSingleton;
+  backgroundCommandServiceSingleton = null;
+  void pending?.then((service) => service.dispose());
+}
+
 export function createDesktopMcpProviders(deps: DesktopMcpProvidersDeps): LiziMcpProvider[] {
   setSessionPathAuthorizer((request) =>
     authorizeDesktopSessionPath(request, deps.getLiveSessionGrantState),

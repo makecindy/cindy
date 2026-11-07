@@ -191,3 +191,30 @@ it('日志目录建不出来:拒绝启动且不回注', async () => {
   // 拒绝发生在 spawn 之前,回注不可能被触发;同步断言即可,无需真实等待。
   expect(capture).not.toHaveBeenCalled();
 });
+
+it('dispose(账号边界):释放并发名额、丢弃在途报告、拒绝新启动', async () => {
+  // 切号后旧账号的运行不能占住名额(新账号 TOO_MANY_RUNS),报告也不能落进新账号。
+  const capture = vi.fn();
+  const service = buildService(capture);
+  const started = service.start({
+    sessionId: 'sess-boundary',
+    command: `${JSON.stringify(process.execPath)} -e "setTimeout(() => process.exit(0), 30_000)"`,
+    cwd: logDir,
+  });
+  expect(started).toMatchObject({ ok: true });
+  expect(service.runningCount()).toBe(1);
+
+  service.dispose();
+  expect(service.runningCount()).toBe(0);
+  // 名额已清:同实例再 start 被拒(生产里切号后是重建单例,这里验旧实例不可复用)。
+  const again = service.start({
+    sessionId: 'sess-boundary',
+    command: `${JSON.stringify(process.execPath)} -e "process.exit(0)"`,
+    cwd: logDir,
+  });
+  expect(again).toMatchObject({ ok: false, errorCode: 'DISPOSED' });
+
+  // 被杀的命令不会再回注报告(短等一次退出事件传播,远小于 30s 命令本身)。
+  await new Promise((resolve) => setTimeout(resolve, 500));
+  expect(capture).not.toHaveBeenCalled();
+}, 10_000);
