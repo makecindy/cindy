@@ -32,7 +32,7 @@ describe('Telegram group history access scope', () => {
       replyContext: { author: 'Alice', text: 'quoted text' },
     } as IMMessageEvent);
     expect(result?.agentText).toContain('Private instructions');
-    expect(result?.contextSnapshot).toEqual({ replyContext: '[Alice] quoted text', replyMessageCount: 1 });
+    expect(result?.contextSnapshot).toEqual({ replyContext: '[Alice] [时间未知] quoted text', replyMessageCount: 1 });
     // The same reply the model sees is the one Auto-review may use.
     expect(result?.replyContext).toEqual({ author: 'Alice', text: 'quoted text' });
   });
@@ -292,7 +292,7 @@ describe('Telegram group history media', () => {
       unsupported: [],
       speaker: { id: '222', name: 'Tom', isOwner: false },
     } as never);
-    expect(collectGroupHistoryMedia).toHaveBeenCalledWith('-100200', ['80'], undefined);
+    expect(collectGroupHistoryMedia).toHaveBeenCalledWith('-100200', ['80'], undefined, { attachmentMessageIds: undefined, provided: [] });
     expect(result?.contextAttachments).toEqual([
       { kind: 'file', absPath: '/tmp/IMG_80.MP4', originalName: 'IMG_80.MP4', mimeType: 'video/mp4' },
     ]);

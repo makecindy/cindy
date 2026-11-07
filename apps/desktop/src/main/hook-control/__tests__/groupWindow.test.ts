@@ -171,8 +171,8 @@ describe('recordGroupMessage', () => {
     expect(rows.n).toBe(1);
   });
 
-  it('正文全文入库, 但拼 prompt 仍按 500 字符截断', async () => {
-    const text = 'x'.repeat(700);
+  it('正文全文入库, 但拼 prompt 仍按 4000 字符截断', async () => {
+    const text = 'x'.repeat(4700);
     await recordGroupMessage(frame({ messageId: 'long', text }));
     const row = sqlite
       .prepare('SELECT text FROM hook_group_messages WHERE message_id = ?')
@@ -188,8 +188,9 @@ describe('recordGroupMessage', () => {
         prompt: 'q',
       })
     ).prefix;
-    expect(prefix).toContain('x'.repeat(500));
-    expect(prefix).not.toContain('x'.repeat(501));
+    expect(prefix).toContain('x'.repeat(3900));
+    expect(prefix).toContain('[…已截断]');
+    expect(prefix).not.toContain('x'.repeat(4001));
   });
 
   it('重置只删除官方 provider 的持久游标', async () => {
@@ -638,9 +639,9 @@ describe('buildGroupContextPrefix', () => {
       prompt: 'q',
       source: { im: 'telegram', triggerMessageId: '19' },
     });
-    // 500 body characters + the author prefix: seven messages fit 4000.
-    expect(assembly.messageCount).toBe(7);
-    expect(assembly.prefix).toContain('[... 更早的消息已省略 ...]');
+    // All nineteen previous messages fit; multiline bodies do not inflate the count.
+    expect(assembly.messageCount).toBe(19);
+    expect(assembly.prefix).not.toContain('[... 更早的消息已省略 ...]');
     expect(assembly.prefix).toContain('first\n[another author]');
   });
 
