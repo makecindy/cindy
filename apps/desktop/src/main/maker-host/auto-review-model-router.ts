@@ -6,6 +6,7 @@ import {
   requestDedicatedAutoReviewCandidateText,
   type AutoReviewAuxiliaryFallback,
   type DedicatedAutoReviewCandidate,
+  type UtilityTextAuditContext,
 } from '../utility-model/oneShotCandidates.js';
 import { requestUtilityTextWithinTimeout } from '../utility-model/utilityTextTimeout.js';
 import { parseAutoPermissionReviewDecision } from './auto-permission-reviewer.js';
@@ -35,7 +36,7 @@ interface AutoReviewModelRouterDeps {
   requestCandidate?: (
     prompt: string,
     candidate: DedicatedAutoReviewCandidate,
-    opts: { timeoutMs: number; signal?: AbortSignal },
+    opts: { timeoutMs: number; signal?: AbortSignal; audit?: UtilityTextAuditContext },
   ) => Promise<UtilityTextResult>;
   createAuxiliaryFallback?: () => AutoReviewAuxiliaryFallback | undefined;
   parseDecision?: (text: string) => AutoReviewDecision | null;
@@ -130,14 +131,14 @@ interface PendingCandidateAttempt {
  */
 export function createAutoReviewModelRouter(
   deps: AutoReviewModelRouterDeps,
-): (prompt: string, signal?: AbortSignal) => Promise<string | null> {
+): (prompt: string, signal?: AbortSignal, options?: { audit?: UtilityTextAuditContext }) => Promise<string | null> {
   const candidates = deps.candidates ?? DEDICATED_AUTO_REVIEW_CANDIDATES;
   const requestCandidate = deps.requestCandidate ?? requestDedicatedAutoReviewCandidateText;
   const parseDecision = deps.parseDecision ?? parseAutoPermissionReviewDecision;
   const now = deps.now ?? Date.now;
   const sleep = deps.sleep ?? sleepWithSignal;
 
-  return async (prompt, parentSignal) => {
+  return async (prompt, parentSignal, options) => {
     const startedAt = now();
     let auxiliaryFallback: AutoReviewAuxiliaryFallback | undefined;
     try {
@@ -178,7 +179,7 @@ export function createAutoReviewModelRouter(
         try {
           const timeoutMs = Math.min(AUTO_REVIEW_CANDIDATE_TIMEOUT_MS, remainingMs);
           result = await requestUtilityTextWithinTimeout(
-            (signal) => requestCandidate(prompt, candidate, { timeoutMs, signal }),
+            (signal) => requestCandidate(prompt, candidate, { timeoutMs, signal, audit: options?.audit }),
             timeoutMs,
             controller.signal,
             () => candidateTimeoutFailure(candidate),
@@ -252,6 +253,7 @@ export function createAutoReviewModelRouter(
                 timeoutMs: AUTO_REVIEW_CANDIDATE_TIMEOUT_MS,
                 signal,
                 validateResponse: (text) => parseDecision(text) !== null,
+                audit: options?.audit,
               }),
               timeoutMs,
               controller.signal,

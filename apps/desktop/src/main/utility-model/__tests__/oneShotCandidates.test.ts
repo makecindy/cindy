@@ -3119,6 +3119,30 @@ describe('utility one-shot candidates', () => {
     expect(DEDICATED_AUTO_REVIEW_CANDIDATES.map((candidate) => candidate.providerId)).not.toContain('anthropic');
   });
 
+  it('accepts caller audit context on dedicated auto-review requests', async () => {
+    readKey.mockReturnValue('xd-key');
+    activeCatalog.mockReturnValue({ providers: [] } as never);
+    fetchMock.mockResolvedValueOnce({
+      ok: true,
+      text: async () => JSON.stringify({
+        choices: [{ message: { content: '{"verdict":"allow"}' } }],
+      }),
+    } as never);
+
+    const audit = { feature: 'auto-review', sessionId: 'sess-test-audit-123' };
+    const result = await requestDedicatedAutoReviewCandidateText(
+      'classify',
+      DEDICATED_AUTO_REVIEW_CANDIDATES[0],
+      { timeoutMs: 8_000, audit },
+    );
+
+    expect(result).toMatchObject({
+      ok: true,
+      providerId: 'xd',
+      model: 'cindy/auto-review',
+    });
+  });
+
   it('never dispatches through a retired independent Claude account', async () => {
     activeCatalog.mockReturnValue({ providers: [{ id: 'claude-work', name: 'Work', source: 'user',
       agents: ['claude-code'], auth: { method: 'oauth', native: 'claude' },

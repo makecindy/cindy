@@ -373,4 +373,32 @@ describe('dedicated Auto-review candidate policy', () => {
     await expect(pending).resolves.toBeNull();
     expect(requestCandidate).toHaveBeenCalledTimes(1);
   });
+
+  it('passes audit context down to requestCandidate and auxiliary fallback', async () => {
+    const candidateAuditOpts: unknown[] = [];
+    const requestCandidate = vi.fn(async (_prompt, candidate, opts) => {
+      candidateAuditOpts.push(opts?.audit);
+      return failed(candidate, 'http_error', 402);
+    });
+
+    const fallbackAuditOpts: unknown[] = [];
+    const fallback: AutoReviewAuxiliaryFallback = vi.fn(async (_prompt, opts) => {
+      fallbackAuditOpts.push(opts?.audit);
+      return succeeded(DEDICATED_AUTO_REVIEW_CANDIDATES[0], '{"verdict":"allow"}');
+    });
+
+    const route = createAutoReviewModelRouter({
+      logger: logger(),
+      createAuxiliaryFallback: () => fallback,
+      requestCandidate,
+    });
+
+    const audit = { feature: 'auto-review', sessionId: 'sess-test-audit-42' };
+    const result = await route('classify', undefined, { audit });
+
+    expect(result).toBe('{"verdict":"allow"}');
+    expect(candidateAuditOpts.length).toBeGreaterThan(0);
+    expect(candidateAuditOpts.every((entry) => entry === audit)).toBe(true);
+    expect(fallbackAuditOpts).toEqual([audit]);
+  });
 });
