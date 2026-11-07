@@ -77,7 +77,7 @@ export function NewMessageIndicator({
           'flex h-8 items-center gap-1.5 rounded-full px-3 py-1.5',
           // 皮肤：content-area 填充 + msg-tool-card-border 细边 + 轻阴影
           'border border-[var(--msg-tool-card-border)]',
-          'bg-[hsl(var(--content-area))] shadow-md',
+          'bg-[hsl(var(--content-area))] shadow-[shadow:var(--shadow-menu)]',
           // 文字：12px / 500 / 使用 msg-tool-text
           'text-12 font-medium leading-none text-[var(--msg-tool-text)]',
           // hover / active:用项目通用的 list-item hover token,与

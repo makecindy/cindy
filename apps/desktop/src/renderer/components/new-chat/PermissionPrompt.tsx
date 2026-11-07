@@ -69,8 +69,6 @@ const actionClass = 'h-auto min-h-9 max-w-full gap-2 px-3 py-1.5';
 const secondaryActionClass = cn(
   actionClass,
   '[--button-face-border:var(--chat-input-border)] [--button-face-bg:transparent] text-[var(--chat-input-text)]',
-  'enabled:hover:[--button-face-bg:var(--perm-code-bg)]',
-  'enabled:active:[--button-face-bg:color-mix(in_srgb,var(--perm-code-bg)_90%,var(--chat-input-text))]',
 );
 // Allow once takes its fill and states from palette="permission" (DESIGN.md §4 Filled button
 // states): a local hover class would lose to the variant's more specific selector.

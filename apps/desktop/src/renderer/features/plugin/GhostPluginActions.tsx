@@ -35,7 +35,7 @@ export function GhostPluginActions({
           type="button"
           disabled={disabled}
           aria-label={t('settings.ghosts.page.addPluginAria')}
-          className="plugin-management-action-trigger group shrink-0 shadow-[var(--plugin-card-shadow)] data-[state=open]:[--button-face-bg:var(--surface-chip)]"
+          className="plugin-management-action-trigger group shrink-0 data-[state=open]:[--button-face-bg:var(--surface-chip)]"
         >
           <Plus size={14} strokeWidth={1.8} aria-hidden="true" />
           <span className="plugin-management-action-label">
