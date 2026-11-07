@@ -274,12 +274,10 @@ function watchPiSkillTreeMtimes(roots: Map<string, number>, skillsDir: string): 
     if (entry.isSymbolicLink()) continue;
     const realChild = realpathOrNull(childPath);
     if (!realChild || !isDir(realChild)) continue;
-    if (hasSkillFile(realChild)) {
-      // skill 目录:collector 不再往里枚举;但 SKILL.md 本身可能是指向仓内目标的软链,
-      // 目标移动/删除只改目标处,盯住解析后的清单本体。
-      watchPiSkillManifestTargets(roots, realChild);
-      continue;
-    }
+    // 清单本体无论当前是否解析都盯住:悬空链(目标尚不存在)落地成 skill 时,
+    // 改动的只是未盯视的目标处,盯住链接自身才能检出(与 prompts 同款)。
+    watchPiSkillManifestTargets(roots, realChild);
+    if (hasSkillFile(realChild)) continue; // skill 目录:collector 不再往里枚举
     if (shouldPruneSkillScanDirectory(entry.name)) continue; // collector 剪枝的 namespace
     for (const nested of listDir(realChild)) {
       if (nested.name.startsWith('.') || /\.bak\.\d+$/.test(nested.name)) continue;
@@ -287,9 +285,9 @@ function watchPiSkillTreeMtimes(roots: Map<string, number>, skillsDir: string): 
       const nestedPath = path.join(realChild, nested.name);
       roots.set(nestedPath, statMtimeMs(nestedPath));
       const realNested = realpathOrNull(nestedPath);
-      if (realNested && isDir(realNested) && hasSkillFile(realNested)) {
-        watchPiSkillManifestTargets(roots, realNested);
-      }
+      if (!realNested || !isDir(realNested)) continue;
+      // 同上层:悬空的嵌套清单(.pi/skills/@scope/foo/SKILL.md 为悬空软链)也要盯住本体
+      watchPiSkillManifestTargets(roots, realNested);
     }
   }
 }

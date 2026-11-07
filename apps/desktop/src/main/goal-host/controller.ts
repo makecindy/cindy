@@ -21,6 +21,7 @@ import { isTurnContinuationBoundaryEvent } from '@cindy/maker-shared/turn-contin
 import { buildContinuationDirective, buildFirstTurnDirective } from './directive';
 import { agentHandoffPending } from '../maker-ipc/agentHandoffPendingSingleton';
 import { onUiSessionIntervention } from '../maker-ipc/uiContinuationSignal';
+import { getMaker } from '../maker-host';
 import { prependHandoffToUserMessage } from '../maker-ipc/agentHandoff';
 import {
   MAX_CONSECUTIVE_OVERLOAD_TURNS,
@@ -2506,6 +2507,12 @@ export class GoalController {
       releaseAgentSwitchLock =
         (await this.deps.acquirePendingAgentSwitch?.(sessionId)) ?? (() => {});
       if (!isCurrentLifecycle()) return;
+      // 项目资源漂移:先经 Maker 回收旧运行时(runtime-refresh),随后的 ensureSession
+      // 活化即按最新配置重扫重建;与桌面发送事务同口径。
+      const preDispatchLive = getMaker().getSession(sessionId);
+      if (preDispatchLive && await getMaker().recyclePiRuntimeIfResourcesDrifted(preDispatchLive)) {
+        this.deps.logger.info?.('[goal] project resources drifted, recycled runtime before dispatch', { sessionId });
+      }
       const session = await this.deps.ensureSession(sessionId);
       if (!isCurrentLifecycle()) return;
       if (!session) throw new GoalSessionRestoreError();

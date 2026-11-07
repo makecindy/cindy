@@ -1653,6 +1653,20 @@ export function createTurnRunner(
         return { kind: 'rejected', reason: 'aborted' };
       }
 
+      // 项目资源漂移(如会话中途 openspec init):空闲时经 Maker 以 runtime-refresh
+      // 回收运行时,再按 DB 行自愈重建 —— 与桌面发送事务同口径,IM 直发不用旧资源。
+      // 无 agent-switch 锁的装配不支持关闭后重建,保持原样投递。
+      try {
+        if (deps.acquirePendingAgentSwitch
+          && await getMaker().recyclePiRuntimeIfResourcesDrifted(state.makerSession)) {
+          await refreshSessionAfterPendingAgentSwitch(state, state.makerSession.id, userId);
+          log.info('im send: project resources drifted, recycled runtime before dispatch');
+        }
+      } catch (err) {
+        log.warn('im send: resource-drift recycle failed, sending as-is',
+          err instanceof Error ? err.message : String(err));
+      }
+
       const sendResult = await state.makerSession.send(outgoingMessage as typeof item.userMessage, {
         planMode: false,
         // IM owns successful replies, including turns in an attached desktop task.

@@ -1917,6 +1917,12 @@ export class MakerScheduleRunner implements ScheduleRunner {
       );
     }
 
+    // 直发降级路径(无 schedulerQueue):项目资源漂移时先经 Maker 以 runtime-refresh
+    // 回收,stale 自愈(下方 getSession !== session 分支)按最新 DB 行重建后投递。
+    if (await this.deps.maker.recyclePiRuntimeIfResourcesDrifted(session)) {
+      this.deps.logger.info?.('[runner] project resources drifted, recycled runtime before dispatch', { sessionId: session.id });
+    }
+
     // Resolve Pi's last provider change before listener, abort and handoff
     // state bind to the Session instance. The transaction may retire it.
     if (!agentDeviceId && effectiveAgentKind === 'pi' && this.deps.checkModelRoute) {

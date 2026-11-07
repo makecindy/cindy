@@ -282,6 +282,17 @@ describe('piProjectResourcesDrifted', () => {
     expect(piProjectResourcesDrifted(baseline)).toBe(true);
   });
 
+  itPosixOnly('detects a nested skill manifest target materializing behind a dangling symlink', () => {
+    // 嵌套候选目录的清单是悬空软链时,hasSkillFile 为 false 不入收集,但链接本体
+    // 已入盯视:目标落地(改动的 elsewhere 目录未被盯视)也能检出。
+    mkdirSync(path.join(project, '.pi', 'skills', '@scope', 'foo'), { recursive: true });
+    mkdirSync(path.join(project, 'elsewhere'), { recursive: true });
+    symlinkSync(path.join(project, 'elsewhere', 'skill.md'), path.join(project, '.pi', 'skills', '@scope', 'foo', 'SKILL.md'));
+    const baseline = snapshot();
+    writeFileSync(path.join(project, 'elsewhere', 'skill.md'), '---\nname: foo\ndescription: t\n---\n');
+    expect(piProjectResourcesDrifted(baseline)).toBe(true);
+  });
+
   it('collectors honor a shared repoRootHint (launch shares one resolution)', () => {
     writeFileSync(path.join(project, '.git'), '');
     writeSkill(path.join('.pi', 'skills'), 'alpha');
