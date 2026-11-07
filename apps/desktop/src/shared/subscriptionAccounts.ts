@@ -79,6 +79,8 @@ export type SubscriptionAccountCommand =
       weight?: number;
     };
 
+/** Accounts one provider pool can hold. */
+export const MAX_SUBSCRIPTION_ACCOUNTS = 32;
 export const DEFAULT_SUBSCRIPTION_ACCOUNT: SubscriptionAccountConfig = {
   id: 'default',
   paused: false,

@@ -76,6 +76,20 @@ describe('SubscriptionAccountsSection usage', () => {
       expect(added.getByRole('progressbar', { name })).toBeTruthy();
     expect(within(rows[0] as HTMLElement).queryByRole('progressbar')).toBeNull();
   });
+  // Regression: a failed refresh kept the list and also showed the provider card below it.
+  it('shows the provider card once when a refresh fails after the list loaded', async () => {
+    render(
+      <SubscriptionAccountsSection
+        providerId="anthropic"
+        defaultUsage={<div data-testid="original-card">original</div>}
+      />,
+    );
+    await screen.findByTestId('original-card');
+    vi.mocked(window.electronAPI.subscriptionAccounts.command).mockRejectedValueOnce(new Error('offline'));
+    fireEvent.focus(window);
+    expect(await screen.findByRole('alert')).toBeTruthy();
+    expect(screen.getAllByTestId('original-card')).toHaveLength(1);
+  });
   // Regression: a connected account's menu offered plain "Sign in", reading as if it were signed out.
   it.each([
     ['ready', 'subscriptionAccounts.loginAgain'],

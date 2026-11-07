@@ -193,6 +193,11 @@ describe('share quota projection', () => {
     const result = await readProviderShareQuota('anthropic');
     expect(result.accounts).toEqual([ready, second, ready]);
     expect(JSON.stringify(result)).not.toContain('private');
+    // A member pool may hold 32 accounts; none of them may be dropped.
+    state.owner++;
+    state.group = { members: [{ kind: 'device', agentDeviceId: 'new-device', providerId: 'anthropic' }] };
+    remote.mockResolvedValue({ ...ready, accounts: Array.from({ length: 33 }, () => second) });
+    expect((await readProviderShareQuota('anthropic')).accounts).toHaveLength(32);
   });
   it('excludes borrowed accounts and strips remote identity fields while coalescing repeated queries', async () => {
     state.group = {

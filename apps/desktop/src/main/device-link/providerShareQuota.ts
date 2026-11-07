@@ -3,7 +3,10 @@ import type {
   ProviderShareQuotaAccount,
   ProviderShareQuotaAccountResult,
 } from '../../shared/providerShareInsights.js';
-import { isSubscriptionProvider } from '../../shared/subscriptionAccounts.js';
+import {
+  isSubscriptionProvider,
+  MAX_SUBSCRIPTION_ACCOUNTS,
+} from '../../shared/subscriptionAccounts.js';
 import { providerWeeklyQuotaSource } from '../../shared/providerQuotaSource.js';
 import { CURRENT_CINDY_REGION } from '../../shared/brandRegion.js';
 import { activeOwnerScopeKey } from '../appSessionState.js';
@@ -233,7 +236,7 @@ async function readGroupQuota(providerId: string) {
             )) as ProviderShareQuotaAccountResult;
             // Older computers return only their default account.
             return Array.isArray(raw?.accounts) && raw.accounts.length > 0
-              ? raw.accounts.slice(0, 16).map(sanitizeQuotaAccount)
+              ? raw.accounts.slice(0, MAX_SUBSCRIPTION_ACCOUNTS).map(sanitizeQuotaAccount)
               : [sanitizeQuotaAccount(raw)];
           } catch (error) {
             const message = error instanceof Error ? error.message : '';

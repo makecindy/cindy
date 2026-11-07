@@ -143,11 +143,13 @@ export function SubscriptionAccountsSection({
           <Spinner size={16} />
         </div>
       )}
-      {defaultUsage && (failed || view?.accounts.every((account) => account.id !== 'default')) && (
-        <div data-testid="provider-usage-module" className="-mx-4 mt-3">
-          {defaultUsage}
-        </div>
-      )}
+      {/* A failed refresh keeps the loaded list, whose default row already holds the card. */}
+      {defaultUsage &&
+        ((!view && failed) || view?.accounts.every((account) => account.id !== 'default')) && (
+          <div data-testid="provider-usage-module" className="-mx-4 mt-3">
+            {defaultUsage}
+          </div>
+        )}
       {view && (
         <>
           <div className="mt-4 flex flex-wrap items-center justify-between gap-2">

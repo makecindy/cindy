@@ -24,7 +24,10 @@ import type {
   SubscriptionProvider,
   SubscriptionPoolView,
 } from '../../shared/subscriptionAccounts.js';
-import { DEFAULT_SUBSCRIPTION_ACCOUNT } from '../../shared/subscriptionAccounts.js';
+import {
+  DEFAULT_SUBSCRIPTION_ACCOUNT,
+  MAX_SUBSCRIPTION_ACCOUNTS,
+} from '../../shared/subscriptionAccounts.js';
 import {
   accountDirectory,
   accountOwnerPrefix,
@@ -680,7 +683,7 @@ export async function runSubscriptionAccountCommand(
       }
       if (adding) {
         await updatePool(provider, (pool) => {
-          if (pool.accounts.length >= 32 && !pool.accounts.some((a) => a.id === accountId))
+          if (pool.accounts.length >= MAX_SUBSCRIPTION_ACCOUNTS && !pool.accounts.some((a) => a.id === accountId))
             throw new Error('Too many subscription accounts');
           return {
             ...pool,
