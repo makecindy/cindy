@@ -277,6 +277,9 @@ import { startSubagentTabDiscovery } from './subagentTabDiscovery';
 import { requestChatTaskFocus, subscribeChatTaskFocus } from '@/features/right-sidebar/plugins/background-tasks/chatTaskFocusIntent';
 import { BotChatQuoteProvider, type BotChatQuoteValue } from '@/features/bots/botChatQuoteContext';
 import { BotChatQuoteComposerPreview } from '@/features/bots/BotChatQuoteViews';
+import { useBotProfiles } from '@/features/bots/botStore';
+import { useCompanionCloud } from '@/features/bots/companionCloudStore';
+import { withoutShadowedBots } from '@/features/bots/companionCloudPresentation';
 import { clearSentBotReplyQuote, getPendingBotReplyQuote, setPendingBotReplyQuote, usePendingBotReplyQuote } from '@/features/bots/botDmQuote';
 import { useBotReplyTargetPreference } from '@/features/bots/useBotReplyTargetPreference';
 import { canFocusWithoutJumpLoad } from '@/lib/searchJumpTargeting';
@@ -865,6 +868,20 @@ function CCAgentSessionContent({
   onBotReadThrough,
 }: CCAgentSessionViewProps = {}) {
   const { t } = useTranslation();
+  // Ordinary task routes do not have a BotSessionView wrapper, so supply the live roster to the @ suggestion panel at this shared production entry.
+  const rosterProfiles = useBotProfiles();
+  const companionCloud = useCompanionCloud();
+  const ordinaryTaskBotMentions = useMemo(
+    () => withoutShadowedBots(rosterProfiles, companionCloud)
+      .filter((bot) => bot.status === 'active')
+      .map((bot) => ({
+        id: bot.id,
+        name: bot.name,
+        ...(bot.description?.trim() ? { description: bot.description } : {}),
+      })),
+    [rosterProfiles, companionCloud],
+  );
+  const composerBotMentions = botMentions ?? ordinaryTaskBotMentions
   const { sessionId: paramSessionId } = useParams<{ sessionId: string }>();
   const sessionId = sessionIdProp ?? paramSessionId;
   const navigate = useNavigate();
@@ -6327,7 +6344,7 @@ function CCAgentSessionContent({
                         }
                       : undefined
                   }
-                  botMentions={botMentions}
+                  botMentions={composerBotMentions}
                   hideRuntimeControls={Boolean(botChatIdentity)}
                 />
                 </div>
