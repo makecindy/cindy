@@ -88,6 +88,7 @@ export function SubscriptionSignInChoices({
         >
           <span>{t('subscriptionAccounts.signIn.checkFailed')}</span>
           <Button
+            data-settings-search-action="Retry detection of the default CLI subscription account"
             size="sm"
             variant="secondary"
             disabled={busy}
@@ -99,7 +100,13 @@ export function SubscriptionSignInChoices({
       )}
       <div className="flex flex-wrap items-center gap-2">
         {busy ? (
-          <Button variant="secondary" size="lg" type="button" onClick={onCancel}>
+          <Button
+            data-settings-search-action="Cancel this wizard's pending subscription sign-in"
+            variant="secondary"
+            size="lg"
+            type="button"
+            onClick={onCancel}
+          >
             <Spinner size={13} />
             {t('settings.providers.button.cancel')}
           </Button>
@@ -107,6 +114,7 @@ export function SubscriptionSignInChoices({
           <>
             {!loading && !failed && (
               <Button
+                data-settings-search-action="Connect the detected default subscription account"
                 variant="primary"
                 size="lg"
                 type="button"
@@ -122,7 +130,13 @@ export function SubscriptionSignInChoices({
               </Button>
             )}
             {(detected || hasOtherAccounts || loading || failed) && (
-              <Button variant="secondary" size="lg" type="button" onClick={() => onConnect('new')}>
+              <Button
+                data-settings-search-action="Sign in to another account within this provider"
+                variant="secondary"
+                size="lg"
+                type="button"
+                onClick={() => onConnect('new')}
+              >
                 {t('subscriptionAccounts.signIn.anotherAccount')}
               </Button>
             )}
