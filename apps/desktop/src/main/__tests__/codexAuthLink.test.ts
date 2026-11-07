@@ -193,22 +193,37 @@ describe('relinkSharedCodexAuth', () => {
 
     // 没有任何一次把 auth.json 弄丢。
     expect(outcomes.some((o) => o.kind === 'lost')).toBe(false);
-    // 至少有人成功建立了共享链接。
-    expect(outcomes.some((o) => o.kind === 'linked')).toBe(true);
-    // 终态:myAuth 存在、内容是 systemAuth、与 systemAuth 同 inode、无残留 sidecar。
     expect(fs.existsSync(myAuth)).toBe(true);
-    expect(fs.readFileSync(myAuth, 'utf-8')).toBe(SYSTEM_CONTENT);
-    expect(sameInode(systemAuth, myAuth)).toBe(true);
     expect(leftoverSidecars()).toEqual([]);
+    if (canLinkFile) {
+      // 至少有人成功建立了共享链接。
+      expect(outcomes.some((o) => o.kind === 'linked')).toBe(true);
+      // 终态:myAuth 存在、内容是 systemAuth、与 systemAuth 同 inode。
+      expect(fs.readFileSync(myAuth, 'utf-8')).toBe(SYSTEM_CONTENT);
+      expect(sameInode(systemAuth, myAuth)).toBe(true);
+    } else {
+      // 建不出 symlink:relink 走 link-unsupported,原凭证一字未动(降级路径由
+      // syncIndependentCodexAuth 负责,不在这条断言里)。
+      expect(outcomes.every((o) => o.kind === 'link-unsupported')).toBe(true);
+      expect(fs.readFileSync(myAuth, 'utf-8')).toBe(MY_CONTENT);
+    }
   });
 
   it('幂等:对已是 symlink 的 myAuth 再 relink 仍 linked、仍共享', async () => {
     fs.writeFileSync(systemAuth, SYSTEM_CONTENT);
 
     const first = await relinkSharedCodexAuth(systemAuth, myAuth);
-    expect(first.kind).toBe('linked');
     const second = await relinkSharedCodexAuth(systemAuth, myAuth);
 
+    if (!canLinkFile) {
+      // 建不出 symlink:两次都是 link-unsupported,凭证保持原样。
+      expect(first.kind).toBe('link-unsupported');
+      expect(second.kind).toBe('link-unsupported');
+      expect(fs.existsSync(myAuth)).toBe(false);
+      expect(leftoverSidecars()).toEqual([]);
+      return;
+    }
+    expect(first.kind).toBe('linked');
     expect(second.kind).toBe('linked');
     expect(sameInode(systemAuth, myAuth)).toBe(true);
     expect(leftoverSidecars()).toEqual([]);
@@ -334,6 +349,37 @@ describe('syncIndependentCodexAuth (#9277)', () => {
     expect(first.kind).toBe('unchanged');
     expect(second.kind).toBe('unchanged');
     expect(fs.statSync(systemAuth).mtimeMs).toBe(systemMtimeBefore);
+  });
+
+  it('等 mtime 但内容不同:按授权方向挑确定权威端,不是「未变化」', async () => {
+    fs.writeFileSync(systemAuth, SYSTEM_CONTENT);
+    fs.writeFileSync(myAuth, MY_CONTENT);
+    const same = new Date('2026-01-01T00:00:00Z');
+    fs.utimesSync(systemAuth, same, same);
+    fs.utimesSync(myAuth, same, same);
+
+    const out = await syncIndependentCodexAuth(systemAuth, myAuth, 'win32');
+
+    // 账号未证明一致 → 系统凭证获胜,本地被刷成系统内容。
+    expect(out.kind).toBe('copied-from-system');
+    expect(fs.readFileSync(systemAuth, 'utf8')).toBe(SYSTEM_CONTENT);
+    expect(fs.readFileSync(myAuth, 'utf8')).toBe(SYSTEM_CONTENT);
+  });
+
+  it('等 mtime 且内容不同、允许回写时本地获胜(已证明同账号)', async () => {
+    fs.writeFileSync(systemAuth, SYSTEM_CONTENT);
+    fs.writeFileSync(myAuth, MY_CONTENT);
+    const same = new Date('2026-01-01T00:00:00Z');
+    fs.utimesSync(systemAuth, same, same);
+    fs.utimesSync(myAuth, same, same);
+
+    const out = await syncIndependentCodexAuth(systemAuth, myAuth, 'win32', undefined, {
+      allowLocalToSystem: true,
+    });
+
+    expect(out.kind).toBe('copied-from-local');
+    expect(fs.readFileSync(systemAuth, 'utf8')).toBe(MY_CONTENT);
+    expect(fs.readFileSync(myAuth, 'utf8')).toBe(MY_CONTENT);
   });
 
   it('写回系统文件时 rename 失败会从仍存在的本地源恢复,不留空窗', async () => {

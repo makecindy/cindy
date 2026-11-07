@@ -1853,7 +1853,10 @@ describe('Codex system credential suppression marker', () => {
     });
   });
 
-  it('repairs a pre-upgrade Windows hardlink rotated before provenance migration', async () => {
+  it('repairs a pre-upgrade Windows hardlink rotated before provenance migration', async ({ skip }) => {
+    // Windows 未启用 Developer Mode 时 symlink 返回 EPERM,生产代码降级为独立副本,
+    // 断言口径不同(降级路径由 codexAuthLink 用例覆盖)。与 POSIX 同款用例一致跳过。
+    if (!canLinkFile) skip();
     const originalPlatform = process.platform;
     Object.defineProperty(process, 'platform', { value: 'win32', configurable: true });
     try {

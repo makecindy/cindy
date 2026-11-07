@@ -1979,9 +1979,16 @@ export class DesktopCodexAuthAdapter implements AuthAdapter {
             if (relink.kind !== 'linked') {
               // Windows 无 symlink 权限时接受独立副本降级(#9277),不再要求同 inode。
               if (process.platform !== 'win32') throw new Error('Local auth link failed');
+              // 登录读的是系统凭证,但本地残留副本可能属于另一个账号(旧账号之后
+              // 又被刷新过)。只有账号证明一致才允许把本地写回 ~/.codex。
+              const sysAccountId = await readCodexAccountId(systemAuth);
+              const localAccountId = existsSync(localAuth)
+                ? await readCodexAccountId(localAuth)
+                : null;
+              const accountsMatch =
+                !!sysAccountId && !!localAccountId && sysAccountId === localAccountId;
               const synced = await syncIndependentCodexAuth(systemAuth, localAuth, process.platform, undefined, {
-                // 登录刚从系统凭证读出,两侧是同一账号。
-                allowLocalToSystem: true,
+                allowLocalToSystem: accountsMatch,
               });
               const syncedOk =
                 synced.kind === 'copied-from-system' ||

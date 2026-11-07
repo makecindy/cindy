@@ -287,7 +287,8 @@ async function preserveSourceMtime(source: string, target: string): Promise<void
 }
 
 /**
- * Windows 建不出文件 symlink 时的降级(#9277):两侧各持独立副本,按较新 mtime 对齐。
+ * Windows 建不出文件 symlink 时的降级(#9277):两侧各持独立副本,按较新 mtime 对齐;
+ * mtime 相同但内容不同时按 `allowLocalToSystem` 挑确定权威端(不是「未变化」)。
  * 存量 hardlink(nlink>1)会被拆开,系统 auth.json 恢复为单一链接,Codex 才能原子写入。
  * 不创建 hardlink。已是 symlink 的路径跳过,避免把活链接拍成副本。
  *
@@ -346,14 +347,14 @@ export async function syncIndependentCodexAuth(
 
   const systemStat = await fsp.stat(systemAuth);
   const localStat = await fsp.stat(myAuth);
-  if (localStat.mtimeMs > systemStat.mtimeMs) {
-    if (!opts.allowLocalToSystem) {
-      // 账号未证明一致:系统凭证单向获胜,只把系统内容刷到本地。
-      return publish(systemAuth, myAuth, 'copied-from-system');
-    }
+  // 两侧 mtime 相同但内容不同(备份恢复、时间精度)不是「未变化」:必须挑一个确定
+  // 的权威端,否则 reconcile 会把旧 token/旧账号当成已对齐,永不自愈。
+  // 权威端由调用方授权决定:允许回写且本地不比系统旧 → 本地赢;否则系统凭证获胜。
+  const localWins = opts.allowLocalToSystem === true;
+  if (localWins && localStat.mtimeMs >= systemStat.mtimeMs) {
     return publish(myAuth, systemAuth, 'copied-from-local');
   }
-  if (localStat.mtimeMs === systemStat.mtimeMs) return { kind: 'unchanged' };
+  // 账号未证明一致、或系统更新:系统凭证单向获胜,只把系统内容刷到本地。
   return publish(systemAuth, myAuth, 'copied-from-system');
 }
 
