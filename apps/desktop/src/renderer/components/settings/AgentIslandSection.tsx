@@ -442,7 +442,7 @@ export function AgentIslandSection() {
               onClick={() => setSkinsOpen((open) => !open)}
               className={cn(
                 'flex w-full items-center justify-between gap-3 rounded-xl p-5 text-left outline-none',
-                'focus-visible:ring-2 focus-visible:ring-[var(--focus-ring-soft)]',
+                'focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-[var(--focus-ring-soft)]',
               )}
             >
               <span className="flex min-w-0 flex-col gap-1">

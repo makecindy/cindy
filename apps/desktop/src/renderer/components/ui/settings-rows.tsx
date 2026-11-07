@@ -12,7 +12,10 @@ import { ChevronRight, Info } from 'lucide-react';
 
 import { cn } from '@/lib/utils';
 
-export const SETTINGS_DIVIDER = 'relative [&:not(:first-child)]:before:pointer-events-none [&:not(:first-child)]:before:absolute [&:not(:first-child)]:before:inset-x-4 [&:not(:first-child)]:before:top-0 [&:not(:first-child)]:before:h-px [&:not(:first-child)]:before:bg-[var(--border-default)]';
+const DIVIDER_SHAPE = 'relative [&:not(:first-child)]:before:pointer-events-none [&:not(:first-child)]:before:absolute [&:not(:first-child)]:before:inset-x-4 [&:not(:first-child)]:before:top-0 [&:not(:first-child)]:before:h-px';
+export const SETTINGS_DIVIDER = `${DIVIDER_SHAPE} [&:not(:first-child)]:before:bg-[var(--border-default)]`;
+/** 设置页的分割线跟卡片描边同一个 token，自定义主题单独改了设置卡片描边时一起生效。 */
+const PAGE_DIVIDER = `${DIVIDER_SHAPE} [&:not(:first-child)]:before:bg-[var(--settings-theme-card-border)]`;
 const PAGE_CARD = 'overflow-hidden rounded-xl border border-[var(--settings-theme-card-border)] bg-[var(--settings-theme-card-bg)]';
 const DRAWER_CARD = 'overflow-hidden rounded-xl border border-[var(--border-default)] bg-[var(--surface-elevated)]';
 export const SETTINGS_HINT = 'text-12 leading-[1.42] text-[var(--text-secondary)] [text-wrap:pretty]';
@@ -96,7 +99,7 @@ export function SettingsRow({ lead, title, tag, hint, value, chevron, trailing, 
     </span>)}
   </>;
   const classes = cn(
-    'flex w-full items-center gap-3 px-4 text-left', SETTINGS_DIVIDER,
+    'flex w-full items-center gap-3 px-4 text-left', drawer ? SETTINGS_DIVIDER : PAGE_DIVIDER,
     media ? 'min-h-[52px] py-2' : drawer || flush ? 'min-h-12 py-3' : 'py-4',
     flush && 'px-0 [&:not(:first-child)]:before:inset-x-0',
     wrap && 'flex-wrap gap-y-2.5',
