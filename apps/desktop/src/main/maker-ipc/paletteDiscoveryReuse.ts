@@ -4,14 +4,19 @@
  * One palette load reaches `maker:list-agent-skills` from several places (mount,
  * context switch, the open itself), and each miss starts an isolated discovery
  * process and rescans every Skill root. Every change Cindy knows about — SkillHub
- * activation, Pi package install/update, the Pi runtime catalog retry — already
- * asks for `forceReload`, so that call refreshes the snapshot while the rest read
- * it. Only an edit made outside Cindy can be up to one window stale.
+ * activation, Pi package install/update, the Pi runtime catalog retry, a Ghost
+ * install/toggle — asks for `forceReload`, which clears the snapshot for every
+ * context. Only an edit made outside Cindy can be up to one window stale.
  */
 
 export interface PaletteDiscoveryReuse<T> {
   read(key: string): T | undefined;
-  write(key: string, value: T): void;
+  /**
+   * Stamp taken before a scan starts. `clear()` moves it on, so a scan that began
+   * before the clear can no longer publish its pre-change result afterwards.
+   */
+  generation(): number;
+  write(key: string, value: T, generation: number): void;
   clear(): void;
 }
 
@@ -28,6 +33,7 @@ export function createPaletteDiscoveryReuse<T>(
   const now = options.now ?? Date.now;
   const entries = new Map<string, { at: number; value: T }>();
   const scopedKey = (key: string) => (options.scope ? `${options.scope()}\u0000${key}` : key);
+  let generation = 0;
   return {
     read(key) {
       const scoped = scopedKey(key);
@@ -42,7 +48,9 @@ export function createPaletteDiscoveryReuse<T>(
       entries.set(scoped, entry);
       return entry.value;
     },
-    write(key, value) {
+    generation: () => generation,
+    write(key, value, stamped) {
+      if (stamped !== generation) return;
       const scoped = scopedKey(key);
       // Re-insert so the eviction order follows the most recent use.
       entries.delete(scoped);
@@ -55,6 +63,7 @@ export function createPaletteDiscoveryReuse<T>(
     },
     clear() {
       entries.clear();
+      generation += 1;
     },
   };
 }

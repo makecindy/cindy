@@ -8498,6 +8498,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
           const reused = skillListReuse.read(reuseKey);
           if (reused) return reused;
         }
+        const scanGeneration = skillListReuse.generation();
         const linksChanged = skillParams.remoteHostId
           ? false
           : await measureTraceOperation('maker:list-agent-skills:project-links',
@@ -8531,8 +8532,16 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
             (source) => !disabled.has(skillActivationKey(source)),
           ),
         };
-        // Never publish a listing that may have been assembled across an owner switch.
-        if (activeOwnerScopeKey() === ownerScope) skillListReuse.write(reuseKey, listing);
+        // A listing assembled across an owner switch, or by a scan that started
+        // before a `forceReload` cleared the snapshot, must not repopulate it; a
+        // partial scan stays uncached so the unreadable root is retried on the
+        // next open instead of staying missing for the whole window.
+        if (
+          activeOwnerScopeKey() === ownerScope
+          && !result.errors?.length
+        ) {
+          skillListReuse.write(reuseKey, listing, scanGeneration);
+        }
         return listing;
       } catch (err) {
         return toAgentSkillListFailure(err, {
