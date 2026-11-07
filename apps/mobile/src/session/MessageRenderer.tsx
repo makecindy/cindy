@@ -939,9 +939,22 @@ export function MessageRenderer({
     [scrollResetKey],
   );
   const [listRevealed, setListRevealed] = useState(false);
-  // Once revealed, detach opacity from the native animation. Its delayed stop callback
-  // may still update the Animated.Value; later keyboard/layout renders must stay visible.
-  const initialRevealOpacity = listRevealed ? 1 : initialRevealProgress;
+  // Animate a disposable cover, never the retained list. Fabric can restore an
+  // old native opacity on a later layout even after JS switched the prop to 1.
+  // Removing the cover on reveal makes delayed animation writes harmless.
+  const initialRevealCoverOpacity = useMemo(() => initialRevealProgress.interpolate({
+    inputRange: [0, 1], outputRange: [1, 0],
+  }), [initialRevealProgress]);
+  // Data/scroll readiness cannot prove that the native list is visible. Record the
+  // JS visibility gate independently, including retained histories on reentry.
+  useEffect(() => {
+    mobileDebugLog('debug', 'recovery', 'message list visibility gate', {
+      hostRef: remoteDeviceId?.slice(0, 8), sessionRef: scrollResetKey?.slice(0, 8),
+      revealed: listRevealed, active: historyActive, positioning: historyPositioning,
+      initialAnchorDone: initialAnchorDoneRef.current,
+      revealAnimationPending: initialRevealAnimationRef.current !== null,
+    });
+  }, [remoteDeviceId, scrollResetKey, listRevealed, historyActive, historyPositioning]);
   // Re-evaluate the near-start predicate after a prepend request releases its ref-only lock.
   // Without a render tick, a user who remains at the top can stall after one page because the
   // page commit effect ran while readingOlderRef was still true.
@@ -2874,7 +2887,8 @@ export function MessageRenderer({
       onTouchEnd={handleHistoryTouchEnd}
       onTouchCancel={handleHistoryTouchCancel}
     >
-      <Animated.View style={[styles.messageList, { opacity: initialRevealOpacity }]}>
+      <View style={styles.messageList} accessibilityElementsHidden={!listRevealed}
+        importantForAccessibility={listRevealed ? 'auto' : 'no-hide-descendants'}>
       <LegendList
         keyboardShouldPersistTaps="handled"
         // 与 main 一致：每个任务用完整历史重挂；首次命令式落底在 opacity 遮罩下完成。
@@ -2947,7 +2961,10 @@ export function MessageRenderer({
         onViewableItemsChanged={handleViewableItemsChanged}
         renderScrollComponent={renderScrollComponent}
       />
-      </Animated.View>
+      {!listRevealed ? <Animated.View pointerEvents="none" accessibilityElementsHidden
+        importantForAccessibility="no-hide-descendants" testID="message.entryCover"
+        style={[StyleSheet.absoluteFill, { backgroundColor: colors.surface, opacity: initialRevealCoverOpacity }]} /> : null}
+      </View>
       {shareSelectionActive && stickyShareClientId ? (
         // 与分享消息行同构，保持吸顶 check 和行内 check 水平对齐。
         <View

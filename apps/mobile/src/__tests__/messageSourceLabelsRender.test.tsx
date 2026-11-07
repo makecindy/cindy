@@ -26,6 +26,8 @@ const viewportHarness = vi.hoisted(() => ({
   list: null as any,
   finishReveal: null as any,
   renders: 0,
+  captureNativeOpacity: false,
+  opacityTargets: new Set<HTMLElement>(),
 }));
 
 // Keep the production list, bubble gate, invocation header, and message model.
@@ -33,10 +35,11 @@ const viewportHarness = vi.hoisted(() => ({
 vi.mock("react-native", async () => {
   const React = await import("react");
   // onLongPress 映射到 contextmenu,便于测试长按显示来源 ID。
-  const view = ({ children, testID, accessibilityLabel, accessibilityHint, onLongPress, onPress, disabled, selectable, style }: any) =>
+  const view = ({ children, testID, accessibilityLabel, accessibilityHint, onLongPress, onPress, disabled, selectable, style, nativeRef }: any) =>
     React.createElement(
       "div",
       {
+        ref: nativeRef,
         "data-testid": testID,
         "data-min-height": Object.assign({}, ...[typeof style === 'function' ? style({ pressed: false }) : style].flat(Infinity).filter(Boolean)).minHeight,
         ...(selectable !== undefined ? { "data-selectable": String(selectable) } : {}),
@@ -56,6 +59,17 @@ vi.mock("react-native", async () => {
     setValue() {}
     stopAnimation() {}
   }
+  function AnimatedView(props: any) {
+    const nativeRef = React.useRef<HTMLElement>(null);
+    React.useLayoutEffect(() => {
+      const style = Object.assign({}, ...[props.style].flat(Infinity).filter(Boolean));
+      if (viewportHarness.captureNativeOpacity && nativeRef.current && style.opacity !== undefined) {
+        // Keep the native target after detachment to model a late native write.
+        viewportHarness.opacityTargets.add(nativeRef.current);
+      }
+    });
+    return view({ ...props, nativeRef });
+  }
   return {
     View: view,
     Text: view,
@@ -66,7 +80,7 @@ vi.mock("react-native", async () => {
     ActivityIndicator: view,
     Animated: {
       Value,
-      View: view,
+      View: AnimatedView,
       Text: view,
       createAnimatedComponent: (c: any) => c,
       timing: () => ({
@@ -325,11 +339,44 @@ function mount(messages: RemoteMessage[], props: Record<string, unknown> = {}) {
   const host = document.createElement("div");
   const root = createRoot(host);
   act(() => root.render(<MessageRenderer items={items} {...props} />));
-  return { host, unmount: () => act(() => root.unmount()) };
+  return { host,
+    rerender: (nextProps: Record<string, unknown>) => act(() => root.render(<MessageRenderer items={items} {...props} {...nextProps} />)),
+    unmount: () => act(() => root.unmount()) };
 }
 
 beforeAll(async () => {
   await i18n.changeLanguage("zh-CN");
+});
+
+// Native replay: opening the keyboard restored opacity=0 on a revealed list.
+// Existing positioning tests checked JS state only. Unit tier: render the real
+// MessageRenderer, complete its reveal, resize, then deliver the stale native
+// opacity write. Messages must remain visible and retain their mounted rows.
+it('keeps revealed messages visible after a late native opacity write and keyboard resize', () => {
+  viewportHarness.captureNativeOpacity = true;
+  viewportHarness.opacityTargets.clear();
+  const h = mount([msg('opacity', 'Late reply remains visible', null)], { scrollResetKey: 'opacity-replay' });
+  try {
+    const row = h.host.querySelector('section')!;
+    expect(row).not.toBeNull();
+    expect(viewportHarness.opacityTargets.size).toBeGreaterThan(0);
+    const cover = h.host.querySelector('[data-testid="message.entryCover"]');
+    expect(cover).not.toBeNull();
+    act(() => viewportHarness.finishReveal({ finished: true }));
+    h.rerender({ bottomOverlayHeight: 320 });
+    // The cover is a sibling of the rows: it must be gone once the reveal ends.
+    expect(h.host.querySelector('[data-testid="message.entryCover"]')).toBeNull();
+    expect(h.host.contains(cover)).toBe(false);
+    for (const target of viewportHarness.opacityTargets) target.style.opacity = '0';
+    expect(h.host.querySelector('section')).toBe(row);
+    for (let parent = row.parentElement; parent && parent !== h.host; parent = parent.parentElement) {
+      expect(parent.style.opacity).not.toBe('0');
+    }
+  } finally {
+    h.unmount();
+    viewportHarness.captureNativeOpacity = false;
+    viewportHarness.opacityTargets.clear();
+  }
 });
 
 // PR #8082 discussion_r4427054221: exercise normalization and the real message

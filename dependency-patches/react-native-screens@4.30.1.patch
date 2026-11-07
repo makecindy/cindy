@@ -420,3 +420,53 @@ index 12f2272..811b3d8 100644
            imageLoader:_imageLoader];
        NSNumber *index = dict[@"index"];
        if (index.integerValue < items.count) {
+diff --git a/ios/RNSScreenStack.mm b/ios/RNSScreenStack.mm
+--- a/ios/RNSScreenStack.mm
++++ b/ios/RNSScreenStack.mm
+@@ -256,6 +256,7 @@ @implementation RNSPanGestureRecognizer
+ @implementation RNSScreenStackView {
+   UINavigationController *_controller;
+   NSMutableArray<RNSScreenView *> *_reactSubviews;
++  NSMutableSet<NSNumber *> *_screensMovedInCurrentTransaction;
+   BOOL _invalidated;
+   BOOL _isFullWidthSwipingWithPanGesture; // used only for content swipe with RNSPanGestureRecognizer
+   RNSPercentDrivenInteractiveTransition *_interactionController;
+@@ -1401,7 +1402,13 @@ - (nullable RNSScreenView *)childScreenForTag:(react::Tag)tag
+ - (void)unmountChildComponentView:(UIView<RCTComponentViewProtocol> *)childComponentView index:(NSInteger)index
+ {
+   RNSScreenView *screenChildComponent = (RNSScreenView *)childComponentView;
+-  [screenChildComponent.controller addSnapshotToView];
++  // Cindy: Fabric expresses a reorder as Remove + Insert of the same screen.
++  // Keep its live UIKit view in place; snapshots belong only to departing screens.
++  BOOL moving = [_screensMovedInCurrentTransaction containsObject:@(screenChildComponent.tag)] &&
++      !screenChildComponent.isMarkedForUnmountInCurrentTransaction;
++  if (!moving) {
++    [screenChildComponent.controller addSnapshotToView];
++  }
+ 
+   RCTAssert(screenChildComponent.reactSuperview == self,
+             @"Attempt to unmount a view which is mounted inside different view. (parent: %@, child: %@, index: %@)",
+@@ -1419,7 +1426,7 @@ - (void)unmountChildComponentView:(UIView<RCTComponentViewProtocol> *)childCompo
+   screenChildComponent.reactSuperview = nil;
+   [_reactSubviews removeObject:screenChildComponent];
+ 
+-  if (screenChildComponent.window == nil) {
++  if (!moving && screenChildComponent.window == nil) {
+     [screenChildComponent removeFromSuperview];
+   }
+ }
+@@ -1427,7 +1434,14 @@ - (void)unmountChildComponentView:(UIView<RCTComponentViewProtocol> *)childCompo
+ - (void)mountingTransactionWillMount:(const facebook::react::MountingTransaction &)transaction
+                 withSurfaceTelemetry:(const facebook::react::SurfaceTelemetry &)surfaceTelemetry
+ {
++  _screensMovedInCurrentTransaction = [NSMutableSet new];
+   for (const auto &mutation : transaction.getMutations()) {
++    // An existing direct child inserted back into this stack is a move. Do not
++    // change its controller.view to a frozen screenshot during the Remove half.
++    if (mutation.parentTag == self.tag && mutation.type == react::ShadowViewMutation::Insert &&
++        [self childScreenForTag:mutation.newChildShadowView.tag] != nil) {
++      [_screensMovedInCurrentTransaction addObject:@(mutation.newChildShadowView.tag)];
++    }
+     if (mutation.type == react::ShadowViewMutation::Delete) {
+       RNSScreenView *_Nullable toBeRemovedChild = [self childScreenForTag:mutation.oldChildShadowView.tag];
+       if (toBeRemovedChild != nil) {

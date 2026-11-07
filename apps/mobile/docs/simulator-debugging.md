@@ -5,6 +5,10 @@ or Windows Android Emulator. It exists because Expo Go, a development client,
 and an installed distribution build look similar during manual testing but prove
 different things.
 
+For task content that stays blank or frozen despite completed history updates,
+use the [native task-entry replay](blank-task-reproduction.md) to distinguish
+message delivery, list visibility and a stale navigation snapshot.
+
 On Windows, the explicit Mainland China one-command entry starts or reuses the
 `cindy-api36` AVD, waits for Android to finish booting, configures `adb reverse`,
 and then keeps the current worktree's Metro in the foreground:
