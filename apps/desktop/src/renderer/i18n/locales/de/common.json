@@ -14137,6 +14137,8 @@
       "closeFailed": "Der Nebenchat konnte nicht geschlossen werden. Versuch es erneut."
     },
     "teammateProcess": {
+      "empty": "Für diese Antwort sind keine Prozessdetails vorhanden",
+      "unavailable": "Prozessdetails konnten nicht geladen werden",
       "record": "Aktivität",
       "operations": "Aktivitätsprotokoll",
       "elapsed": "In Bearbeitung seit {{duration}}",

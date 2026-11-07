@@ -51,6 +51,8 @@ export default {
     'work-queued-step-mixed': { about: '#8064 review: queued plan step does not override a running reply', data: { ...base, messages: 2, workState: 'queued', workParallel: true, workQueuedStep: true } },
     'work-queued': { about: '#8047: queued execution is busy without speaking or elapsed work', data: { ...base, messages: 2, workState: 'queued' } },
     'process-history': { about: 'Owned teammate historical process, final reply outside', data: { ...base, sidebar: false, processRecord: true, workRemote: true } },
+    'process-empty': { about: 'Final-only reply explains the empty process', data: { ...base, sidebar: false, processRecord: true, processEmpty: true, workRemote: true } },
+    'process-unavailable': { about: 'Unavailable process shows a retry action', data: { ...base, sidebar: false, processRecord: true, processUnavailable: true, workRemote: true } },
     'process-other-owner': { about: 'Other members never receive a private process entry', data: { ...base, sidebar: false, processRecord: true, processOtherOwner: true, workRemote: true } },
     'work-thinking': { about: 'Actual group work status, scenario data: thinking', data: { ...base, messages: 2, workState: 'thinking' } },
     'work-tools': { about: 'Actual group work status, scenario data: command execution', data: { ...base, messages: 2, workState: 'testing' } },
@@ -181,6 +183,15 @@ export default {
       const heading = journal.locator(':scope > button');
       assert.equal(await heading.getAttribute('aria-expanded'), 'false');
       await heading.click();
+      if (definition.data.processEmpty || definition.data.processUnavailable) {
+        await journal.getByText(await ui.t(definition.data.processEmpty ? 'chat.teammateProcess.empty' : 'chat.teammateProcess.unavailable')).waitFor();
+        assert.equal(await journal.getByRole('button', { name: await ui.t('chat.errorBanner.retry'), exact: true }).count(), definition.data.processUnavailable ? 1 : 0);
+        await ui.capture('process-expanded');
+        await heading.click();
+        assert.equal(await heading.getAttribute('aria-expanded'), 'false');
+        await ui.capture('process-collapsed');
+        return;
+      }
       await journal.getByText('我先核对任务的最近进展，再看未完成 PR 的阻塞点。').waitFor();
       await ui.capture('history-expanded');
       const endError = await journal.evaluate(root => {

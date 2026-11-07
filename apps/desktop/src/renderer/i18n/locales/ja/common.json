@@ -12904,6 +12904,8 @@
       }
     },
     "teammateProcess": {
+      "empty": "この返信には表示できる処理記録がありません",
+      "unavailable": "処理記録を読み込めませんでした",
       "record": "作業履歴",
       "operations": "操作履歴",
       "elapsed": "処理中 {{duration}}",
