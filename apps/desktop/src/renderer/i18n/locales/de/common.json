@@ -12758,6 +12758,10 @@
       "defer": "Nicht jetzt"
     },
     "permissionPrompt": {
+      "titleStdin": "Eingabe in diesem Terminal erlauben?",
+      "titleMcpUrl": "Anfrage von {{server}} abschließen",
+      "mcpComplete": "Fertig",
+      "mcpCancel": "Abbrechen",
       "alwaysAllowScoped": "{{scope}} in dieser Sitzung immer erlauben",
       "alwaysAllowScopedHint": "Gilt für die gesamte Sitzung und nur für die hier aufgeführten Elemente.",
       "alwaysAllowSessionHint": "Gilt für die gesamte Sitzung, nicht nur für diese Anfrage.",
@@ -12994,7 +12998,13 @@
       "sendAndContinue": "Senden und fortfahren",
       "close": "Schließen",
       "customAnswer": "Etwas anderes eingeben…",
-      "answerPlaceholder": "Deine Antwort eingeben…"
+      "answerPlaceholder": "Deine Antwort eingeben…",
+      "validation": {
+        "required": "Füllen Sie dieses Pflichtfeld aus.",
+        "choice": "Wählen Sie eine der aufgeführten Optionen.",
+        "tooShort": "Geben Sie mindestens {{count}} Zeichen ein.",
+        "tooLong": "Geben Sie höchstens {{count}} Zeichen ein."
+      }
     },
     "planReviewBubble": {
       "title": "Planprüfung",

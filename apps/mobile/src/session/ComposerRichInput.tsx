@@ -18,6 +18,7 @@ import {
 } from '@/session/composerDocument';
 import { composerNodesForBoundedPlainTextPaste } from '@/session/composerPaste';
 import { buildComposerRichInputHtml, type ComposerRichInputTheme } from '@/session/composerRichInputHtml';
+import type { ComposerTextScrollEdge } from '@/session/composerResize';
 import { COMPOSER_SINGLE_LINE_HEIGHT } from '@/session/composerTextMetrics';
 import {
   parseComposerWebMessage,
@@ -26,9 +27,9 @@ import {
 import { COMPOSER_PASTED_IMAGE_FILE_PREFIX } from '@/session/pastedImageAttachment';
 import { registerMobileMessageWebView } from '@/session/mobileMessageWebViewMetrics';
 import { useComposerWebViewRecovery } from '@/session/useComposerWebViewRecovery';
+import { Gesture, GestureDetector } from '@/platform/gestureHandler';
 
 export interface ComposerRichInputHandle {
-  expand?(): void;
   /** WebView read barrier; validates the caller's scope before acknowledging the draft. */
   flushDocument?(isCurrent?: () => boolean): Promise<ComposerDocument>;
   getSelection(draft: string): ComposerSelection;
@@ -61,6 +62,8 @@ export interface ComposerRichInputProps {
   onPasteImages?: (uris: string[]) => void;
   onPasteImagesLoadFailed?: () => void;
   onPasteImagesLoading?: (count: number) => void;
+  /** 文字滚到了哪一端；按在文字上上下拖动时据此决定滚动还是调高输入框。 */
+  onScrollEdgeChange?: (edge: ComposerTextScrollEdge) => void;
   opticalPadding?: boolean;
   placeholder: string;
   resolveSessionLinkLabel?: (href: string) => Promise<ResolvedSessionLinkSemantic | null>;
@@ -95,6 +98,7 @@ const ComposerWebInput = forwardRef<ComposerRichInputHandle, ComposerRichInputPr
     onPasteImages,
     onPasteImagesLoadFailed,
     onPasteImagesLoading,
+    onScrollEdgeChange,
     opticalPadding = true,
     placeholder,
     resolveSessionLinkLabel,
@@ -485,6 +489,7 @@ const ComposerWebInput = forwardRef<ComposerRichInputHandle, ComposerRichInputPr
         }
         return;
       }
+      if (message.type === 'scroll-edge') return onScrollEdgeChange?.({ atTop: message.atTop, atBottom: message.atBottom });
       if (message.type === 'focus') return onFocus?.();
       if (message.type === 'blur') return onBlur?.();
       if (message.type === 'paste-text-request') {
@@ -522,12 +527,18 @@ const ComposerWebInput = forwardRef<ComposerRichInputHandle, ComposerRichInputPr
             }
           });
       }
-    }, [applyDocument, commitPlainTextPaste, focusEditor, hidden, inject, maxHeight, onBlur, onChangeDocument, onFocus, onHeightChange, onPasteImages, onPasteImagesLoadFailed, onPasteImagesLoading, persistPastedImage, runtimeConfig, settlePastedImage, generation, currentGeneration, recovery.onPong, recovery.onReady, rejectSnapshot]);
+    }, [applyDocument, commitPlainTextPaste, focusEditor, hidden, inject, maxHeight, onBlur, onChangeDocument, onFocus, onHeightChange, onPasteImages, onPasteImagesLoadFailed, onPasteImagesLoading, onScrollEdgeChange, persistPastedImage, runtimeConfig, settlePastedImage, generation, currentGeneration, recovery.onPong, recovery.onReady, rejectSnapshot]);
 
     const heightStyle = useAnimatedStyle(() => ({ height: animatedHeight?.value ?? height }));
+    // Android: a gesture that takes over (dragging the composer taller) only stops
+    // forwarding touches to native children; the WebView never sees ACTION_CANCEL and
+    // finishes the stale touch as a tap / scroll. Registering its frame as a native
+    // view lets RNGH send that cancel. UIKit already cancels touches on iOS.
+    const touchGesture = useMemo(() => Gesture.Native().enabled(Platform.OS === 'android'), []);
     return (
       // WebView's imperative ref is a command handle, not a Fabric host ref.
       // Animate its native View container and let the WebView fill that frame.
+      <GestureDetector gesture={touchGesture}>
       <Animated.View style={[styles.frame, heightStyle, { opacity: hidden ? 0 : 1 }]}>
       <WebView
         key={generation}
@@ -565,6 +576,7 @@ const ComposerWebInput = forwardRef<ComposerRichInputHandle, ComposerRichInputPr
         textInteractionEnabled
       />
       </Animated.View>
+      </GestureDetector>
     );
   },
 );

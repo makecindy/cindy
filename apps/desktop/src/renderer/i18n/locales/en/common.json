@@ -12758,6 +12758,10 @@
       "defer": "Not now"
     },
     "permissionPrompt": {
+      "titleStdin": "Allow input to this terminal?",
+      "titleMcpUrl": "Complete the request from {{server}}",
+      "mcpComplete": "Done",
+      "mcpCancel": "Cancel",
       "alwaysAllowScoped": "Always Allow {{scope}} in This Session",
       "alwaysAllowScopedHint": "Applies to the whole session, and only to what is listed here.",
       "alwaysAllowSessionHint": "Applies to the whole session, not just this one request.",
@@ -13029,7 +13033,13 @@
       "sendAndContinue": "Send and continue",
       "close": "Close",
       "customAnswer": "Type something else…",
-      "answerPlaceholder": "Type your answer…"
+      "answerPlaceholder": "Type your answer…",
+      "validation": {
+        "required": "Complete this required field.",
+        "choice": "Choose one of the listed options.",
+        "tooShort": "Enter at least {{count}} characters.",
+        "tooLong": "Enter no more than {{count}} characters."
+      }
     },
     "planReviewBubble": {
       "title": "Plan review",
