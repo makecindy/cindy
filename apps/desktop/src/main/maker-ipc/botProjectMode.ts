@@ -93,6 +93,13 @@ async function writeIfMissing(filePath: string, content: string): Promise<boolea
   }
 }
 
+const BOT_PROJECT_GITIGNORE = [
+  'node_modules/', 'tmp/', '.DS_Store', '*.log',
+  '*.zip', '*.tar', '*.tar.gz', '*.tgz', '*.dmg', '*.iso',
+  '*.db', '*.sqlite', '*.sqlite3', '*-wal', '*-shm', 'pg_wal/',
+  '',
+].join('\n');
+
 /** A repository whose root is the workspace itself; an enclosing repo does not count. */
 async function ensureWorkspaceRepository(workspace: string): Promise<'initialized' | 'already-git' | 'unavailable'> {
   const before = await detectCwd(workspace);
@@ -102,6 +109,9 @@ async function ensureWorkspaceRepository(workspace: string): Promise<'initialize
     before.repoRoot ? fs.realpath(before.repoRoot).catch(() => before.repoRoot) : Promise.resolve(null),
   ]);
   if (before.isGitRepo && repoRoot === ownRoot) return 'already-git';
+  // A long-lived teammate folder collects archives, databases and logs; versions are for its
+  // own work, so those stay out of the history from the first snapshot on.
+  await writeIfMissing(path.join(workspace, '.gitignore'), BOT_PROJECT_GITIGNORE);
   await gitExec(['init'], workspace);
   await createSnapshotDetailed(workspace, {
     label: 'Start teammate project',

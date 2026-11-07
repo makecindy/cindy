@@ -10177,7 +10177,18 @@
       "projectMode": {
         "title": "Als Projekt arbeiten (experimentell)",
         "description": "Der Arbeitsbereich des Teammitglieds wird zu einem Projekt in der Seitenleiste. Seine AGENTS.md enthält die eigenen Arbeitsregeln, die es selbst bearbeiten kann; jede Änderung bleibt als Version erhalten und lässt sich rückgängig machen.",
-        "memoryReviewName": "{{name}} · Erinnerungen ordnen"
+        "memoryReviewName": "{{name}} · Erinnerungen ordnen",
+        "carryover": {
+          "title": "Aus der Zeit vor dem Upgrade übernommen",
+          "intro": "Was beim Upgrade dieses Teammitglieds noch offen war. Mach weiter, was noch wichtig ist, und lösche den Rest. Die vollständigen alten Daten bleiben im Ordner v1-archive des Teammitglieds.",
+          "todos": "Offene Aufgaben",
+          "work": "Werkbank",
+          "threads": "In Arbeit",
+          "commitments": "Zugesagt",
+          "waiting": "Wartet auf",
+          "corrections": "Deine Korrekturen",
+          "routines": "Zu prüfende Routinen"
+        }
       }
     },
     "profile": {

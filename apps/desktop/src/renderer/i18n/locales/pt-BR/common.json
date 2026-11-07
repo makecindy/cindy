@@ -10256,7 +10256,18 @@
       "projectMode": {
         "title": "Trabalhar como projeto (experimental)",
         "description": "O espaço de trabalho do colega vira um projeto na barra lateral. O AGENTS.md dele guarda as próprias regras de trabalho, que ele pode editar; cada alteração fica salva como uma versão que você pode desfazer.",
-        "memoryReviewName": "{{name}} · Organizar memória"
+        "memoryReviewName": "{{name}} · Organizar memória",
+        "carryover": {
+          "title": "Trazido de antes da atualização",
+          "intro": "O que ainda estava aberto quando este colega foi atualizado. Continue o que ainda importa e apague o resto. Os registros antigos completos ficam na pasta v1-archive do colega.",
+          "todos": "Tarefas abertas",
+          "work": "Bancada",
+          "threads": "Em andamento",
+          "commitments": "Prometido",
+          "waiting": "Aguardando",
+          "corrections": "Suas correções",
+          "routines": "Rotinas para revisar"
+        }
       }
     },
     "profile": {

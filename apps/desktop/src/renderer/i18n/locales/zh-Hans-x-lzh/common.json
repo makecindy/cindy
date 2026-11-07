@@ -10132,7 +10132,18 @@
       "projectMode": {
         "title": "以项目行事（试行）",
         "description": "同僚之工坊化为侧栏一项目。其中 AGENTS.md 乃同僚自守之规，可自修之；每一改皆存其版，可复。",
-        "memoryReviewName": "{{name}} · 理记"
+        "memoryReviewName": "{{name}} · 理记",
+        "carryover": {
+          "title": "升级前未竟之事",
+          "intro": "伙伴升级之时尚未了结者。有用者续之，无用者删之。旧录全存于伙伴文件夹之 v1-archive。",
+          "todos": "待办",
+          "work": "案头",
+          "threads": "进行中",
+          "commitments": "所诺",
+          "waiting": "所待",
+          "corrections": "君所纠正",
+          "routines": "例行之务待查"
+        }
       }
     },
     "profile": {

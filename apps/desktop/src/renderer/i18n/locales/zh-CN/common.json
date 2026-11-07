@@ -10132,7 +10132,18 @@
       "projectMode": {
         "title": "作为项目工作（实验）",
         "description": "伙伴的工作区会成为侧栏里的一个项目。其中的 AGENTS.md 是伙伴自己的做事规则，伙伴可以修改；每次改动都会保留版本，可以撤销。",
-        "memoryReviewName": "{{name}} · 整理记忆"
+        "memoryReviewName": "{{name}} · 整理记忆",
+        "carryover": {
+          "title": "升级前没做完的事",
+          "intro": "伙伴升级时还没完成的事项。还有用的接着做，没用的直接删掉。旧版完整记录保存在伙伴文件夹的 v1-archive 里。",
+          "todos": "待办",
+          "work": "工作台",
+          "threads": "进行中",
+          "commitments": "答应过的",
+          "waiting": "在等",
+          "corrections": "你纠正过的做法",
+          "routines": "需要看一下的例行任务"
+        }
       }
     },
     "profile": {

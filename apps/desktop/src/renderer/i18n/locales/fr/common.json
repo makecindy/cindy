@@ -10256,7 +10256,18 @@
       "projectMode": {
         "title": "Travailler comme un projet (expérimental)",
         "description": "L'espace de travail du coéquipier devient un projet dans la barre latérale. Son AGENTS.md contient ses propres règles de travail, qu'il peut modifier ; chaque modification est conservée comme une version que vous pouvez annuler.",
-        "memoryReviewName": "{{name}} · Ranger la mémoire"
+        "memoryReviewName": "{{name}} · Ranger la mémoire",
+        "carryover": {
+          "title": "Repris d'avant la mise à niveau",
+          "intro": "Ce qui restait ouvert lors de la mise à niveau de ce coéquipier. Poursuivez ce qui compte encore et supprimez le reste. Les anciens enregistrements complets restent dans le dossier v1-archive du coéquipier.",
+          "todos": "Tâches ouvertes",
+          "work": "Établi",
+          "threads": "En cours",
+          "commitments": "Promis",
+          "waiting": "En attente de",
+          "corrections": "Vos corrections",
+          "routines": "Routines à vérifier"
+        }
       }
     },
     "profile": {

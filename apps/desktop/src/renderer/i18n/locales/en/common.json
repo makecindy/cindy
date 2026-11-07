@@ -10177,7 +10177,18 @@
       "projectMode": {
         "title": "Work as a project (experimental)",
         "description": "The teammate's workspace becomes a project in your sidebar. Its AGENTS.md holds the teammate's own working rules, which it can edit; every change is kept as a version you can undo.",
-        "memoryReviewName": "{{name}} · Review memory"
+        "memoryReviewName": "{{name}} · Review memory",
+        "carryover": {
+          "title": "Carried over from before the upgrade",
+          "intro": "Things still open when this teammate was upgraded. Keep working on what still matters and delete the rest. The full old records stay in the v1-archive folder in the teammate's folder.",
+          "todos": "Open todos",
+          "work": "Workbench items",
+          "threads": "In progress",
+          "commitments": "Promised",
+          "waiting": "Waiting on",
+          "corrections": "Corrections you made",
+          "routines": "Routines to check"
+        }
       }
     },
     "profile": {

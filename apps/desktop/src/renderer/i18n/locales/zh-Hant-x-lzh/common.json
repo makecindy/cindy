@@ -10132,7 +10132,18 @@
       "projectMode": {
         "title": "以專案行事（試行）",
         "description": "同僚之工坊化為側欄一專案。其中 AGENTS.md 乃同僚自守之規，可自修之；每一改皆存其版，可復。",
-        "memoryReviewName": "{{name}} · 理記"
+        "memoryReviewName": "{{name}} · 理記",
+        "carryover": {
+          "title": "升級前未竟之事",
+          "intro": "夥伴升級之時尚未了結者。有用者續之，無用者刪之。舊錄全存於夥伴資料夾之 v1-archive。",
+          "todos": "待辦",
+          "work": "案頭",
+          "threads": "進行中",
+          "commitments": "所諾",
+          "waiting": "所待",
+          "corrections": "君所糾正",
+          "routines": "例行之務待查"
+        }
       }
     },
     "profile": {

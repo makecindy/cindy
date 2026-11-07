@@ -10256,7 +10256,18 @@
       "projectMode": {
         "title": "Trabajar como proyecto (experimental)",
         "description": "El espacio de trabajo del compañero se convierte en un proyecto de la barra lateral. Su AGENTS.md guarda sus propias reglas de trabajo, que puede editar; cada cambio queda como una versión que puedes deshacer.",
-        "memoryReviewName": "{{name}} · Ordenar memoria"
+        "memoryReviewName": "{{name}} · Ordenar memoria",
+        "carryover": {
+          "title": "Pendiente de antes de la actualización",
+          "intro": "Lo que seguía abierto al actualizar a este compañero. Continúa con lo que aún importa y elimina el resto. Los registros antiguos completos quedan en la carpeta v1-archive del compañero.",
+          "todos": "Tareas abiertas",
+          "work": "Mesa de trabajo",
+          "threads": "En curso",
+          "commitments": "Prometido",
+          "waiting": "A la espera de",
+          "corrections": "Tus correcciones",
+          "routines": "Rutinas por revisar"
+        }
       }
     },
     "profile": {

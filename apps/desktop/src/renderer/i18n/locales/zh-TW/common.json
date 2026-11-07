@@ -10132,7 +10132,18 @@
       "projectMode": {
         "title": "作為專案工作（實驗）",
         "description": "夥伴的工作區會成為側欄中的一個專案。其中的 AGENTS.md 是夥伴自己的做事規則，夥伴可以修改；每次變更都會保留版本，可以復原。",
-        "memoryReviewName": "{{name}} · 整理記憶"
+        "memoryReviewName": "{{name}} · 整理記憶",
+        "carryover": {
+          "title": "升級前沒做完的事",
+          "intro": "夥伴升級時還沒完成的事項。還有用的接著做，沒用的直接刪掉。舊版完整紀錄保存在夥伴資料夾的 v1-archive 裡。",
+          "todos": "待辦",
+          "work": "工作台",
+          "threads": "進行中",
+          "commitments": "答應過的",
+          "waiting": "在等",
+          "corrections": "你糾正過的做法",
+          "routines": "需要看一下的例行任務"
+        }
       }
     },
     "profile": {
