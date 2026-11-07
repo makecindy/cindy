@@ -14059,8 +14059,10 @@
       "mailLegacy": "下書きの履歴（読み取り専用）",
       "taskAutoArchived": "「{{title}}」をアーカイブしました",
       "taskAutoArchivedUndo": "元に戻す",
-      "taskAutoArchivePending": "離れると自動でアーカイブ",
-      "taskAutoArchiveCancel": "今回はしない"
+      "taskAutoArchivePending": "このタスクを離れると自動アーカイブします",
+      "taskAutoArchiveCancel": "キャンセル",
+      "taskAutoArchiveCancelled": "今回は自動アーカイブしません",
+      "taskArchiveNow": "今すぐアーカイブ"
     },
     "ghostHook": {
       "blockedFallback": "メッセージはプラグインによりブロックされました(未送信)",

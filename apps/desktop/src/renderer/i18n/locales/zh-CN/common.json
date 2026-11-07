@@ -14059,8 +14059,10 @@
       "mailLegacy": "历史草稿（只读）",
       "taskAutoArchived": "已归档「{{title}}」",
       "taskAutoArchivedUndo": "撤销",
-      "taskAutoArchivePending": "离开后自动归档",
-      "taskAutoArchiveCancel": "本次不归档"
+      "taskAutoArchivePending": "离开此任务后将自动归档",
+      "taskAutoArchiveCancel": "取消",
+      "taskAutoArchiveCancelled": "本次不会自动归档",
+      "taskArchiveNow": "立即归档"
     },
     "ghostHook": {
       "blockedFallback": "消息被插件拦下，未发送",

@@ -14221,8 +14221,10 @@
       "mailLegacy": "Historique du brouillon (lecture seule)",
       "taskAutoArchived": "« {{title}} » archivée",
       "taskAutoArchivedUndo": "Annuler",
-      "taskAutoArchivePending": "Archivée à la sortie",
-      "taskAutoArchiveCancel": "Garder cette fois"
+      "taskAutoArchivePending": "Archivage automatique en quittant cette tâche",
+      "taskAutoArchiveCancel": "Annuler",
+      "taskAutoArchiveCancelled": "Pas d’archivage automatique cette fois",
+      "taskArchiveNow": "Archiver maintenant"
     },
     "ghostHook": {
       "blockedFallback": "Message bloqué par un plugin ; non envoyé",

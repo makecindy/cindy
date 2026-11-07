@@ -14058,8 +14058,10 @@
       "mailLegacy": "歷史草稿（唯讀）",
       "taskAutoArchived": "已歸檔「{{title}}」",
       "taskAutoArchivedUndo": "撤銷",
-      "taskAutoArchivePending": "離開後自動歸檔",
-      "taskAutoArchiveCancel": "這次不歸檔"
+      "taskAutoArchivePending": "離開此任務後將自動封存",
+      "taskAutoArchiveCancel": "取消",
+      "taskAutoArchiveCancelled": "本次不會自動封存",
+      "taskArchiveNow": "立即封存"
     },
     "ghostHook": {
       "blockedFallback": "訊息被插件攔下，未傳送",
