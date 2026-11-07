@@ -4,8 +4,8 @@
  * 只有一个点击目标。名称 13/500、说明 12、当前值 13；文字行高用无单位比例，跟随
  * 「外观 → UI 字号」放大（DESIGN.md §3）。
  *
- * 设置页直接用；窄抽屉包在 SettingsDrawerScope 里，组名和行高收紧一档（行高 48，带头像 52），
- * 见 §4 Narrow drawer exception。
+ * 设置页直接用：组名 h2，分区内的组名、卡片和说明间隔 14px。窄抽屉包在 SettingsDrawerScope 里，组名 h3、间隔 8px，
+ * 行高收紧一档（行高 48，带头像 52），见 §4 Narrow drawer exception。
  */
 import { createContext, useContext, type ButtonHTMLAttributes, type HTMLAttributes, type ReactNode } from 'react';
 import { ChevronRight, Info } from 'lucide-react';
@@ -20,18 +20,9 @@ const PAGE_CARD = 'overflow-hidden rounded-xl border border-[var(--settings-them
 const DRAWER_CARD = 'overflow-hidden rounded-xl border border-[var(--border-default)] bg-[var(--surface-elevated)]';
 export const SETTINGS_HINT = 'text-12 leading-[1.42] text-[var(--text-secondary)] [text-wrap:pretty]';
 
-/** 尚未迁到组件的设置页仍在直接用这几个类，迁完后一起删除。 */
-export const SETTINGS_CARD_CLASS = cn(
-  'flex flex-col rounded-xl',
-  'bg-[var(--settings-theme-card-bg)]',
-  'border border-[var(--settings-theme-card-border)]',
-);
-export const SETTINGS_ROW_CLASS = 'flex items-center justify-between gap-3 px-4 py-4';
+/** 卡片标题这类不是设置行、但要和行名称同一档的文字（手柄页的卡片标题）。 */
 export const SETTINGS_ROW_LABEL_CLASS = 'text-13 font-medium text-[var(--settings-section-sublabel)]';
-export const SETTINGS_ROW_HINT_CLASS = 'text-12 leading-[1.4] text-[var(--text-secondary)]';
-/** 行间分割线:左右缩进与行内边距对齐。 */
-export const SETTINGS_ROW_DIVIDER_CLASS = 'mx-4 h-px bg-[var(--settings-theme-card-border)]';
-export const SETTINGS_SECTION_TITLE_CLASS = 'text-16 font-medium leading-[1.2] text-[var(--settings-section-title)]';
+const SETTINGS_SECTION_TITLE_CLASS = 'text-16 font-medium leading-[1.2] text-[var(--settings-section-title)]';
 
 const DrawerScope = createContext(false);
 
@@ -39,19 +30,27 @@ export function SettingsDrawerScope({ children }: { children: ReactNode }) {
   return <DrawerScope.Provider value>{children}</DrawerScope.Provider>;
 }
 
-export function SettingsSection({ title, count, action, caption, children, testId }: {
+export function SettingsSection({ title, count, description, action, caption, children, testId, headingLevel, className, ...rest }: {
   title?: ReactNode; count?: number; action?: ReactNode; caption?: ReactNode; children: ReactNode; testId?: string;
-}) {
+  /** 组名下面一行说明，紧贴组名；卡片下面的补充说明用 caption。 */
+  description?: ReactNode;
+  /** 设置页的分区是 h2（页面标题是 h1），抽屉和页内的子分区是 h3。 */
+  headingLevel?: 2 | 3;
+} & Omit<HTMLAttributes<HTMLElement>, 'title' | 'children'>) {
   const drawer = useContext(DrawerScope);
-  return <section className="flex min-w-0 flex-col" data-testid={testId}>
-    {(title || action) && <div className="mb-2 flex min-h-6 items-center justify-between gap-3">
-      <h3 className={cn('min-w-0', drawer ? 'text-13 font-medium leading-[1.38] text-[var(--text-secondary)]' : SETTINGS_SECTION_TITLE_CLASS)}>
-        {title}{count !== undefined && <span className="ml-1.5 font-normal tabular-nums text-[var(--text-tertiary)]">{count}</span>}
-      </h3>
+  const Heading = (headingLevel ?? (drawer ? 3 : 2)) === 2 ? 'h2' : 'h3';
+  return <section {...rest} className={cn('flex min-w-0 flex-col', !drawer && 'gap-[14px]', className)} data-testid={testId}>
+    {(title || action) && <div className={cn('flex items-center justify-between gap-3', (drawer || action) && 'min-h-6', drawer && 'mb-2')}>
+      <div className="flex min-w-0 flex-col gap-1">
+        <Heading className={cn('min-w-0', drawer ? 'text-13 font-medium leading-[1.38] text-[var(--text-secondary)]' : SETTINGS_SECTION_TITLE_CLASS)}>
+          {title}{count !== undefined && <span className="ml-1.5 font-normal tabular-nums text-[var(--text-tertiary)]">{count}</span>}
+        </Heading>
+        {description && <p className="text-12 leading-[1.45] text-[var(--settings-section-desc)]">{description}</p>}
+      </div>
       {action}
     </div>}
     {children}
-    {caption && <p className={cn('mt-2', SETTINGS_HINT)}>{caption}</p>}
+    {caption && <p className={cn(drawer && 'mt-2', SETTINGS_HINT)}>{caption}</p>}
   </section>;
 }
 
@@ -106,10 +105,16 @@ export function SettingsRow({ lead, title, tag, hint, value, chevron, trailing, 
     disabled && 'opacity-60',
     className,
   );
-  if (!interactive) return <div className={classes} aria-disabled={disabled || undefined}>{body}</div>;
+  if (!interactive) return <div {...(rest as HTMLAttributes<HTMLDivElement>)} className={classes} aria-disabled={disabled || undefined}>{body}</div>;
   return <button type="button" {...rest} disabled={disabled} onClick={onClick} className={cn(classes,
     'outline-none transition-colors duration-[var(--motion-fast)] ease-[var(--motion-ease-out)] focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-[var(--focus-ring)]',
     !disabled && (danger ? 'hover:bg-[color-mix(in_srgb,var(--text-danger)_8%,transparent)]' : 'hover:bg-[var(--surface-hover)]'))}>{body}</button>;
+}
+
+/** 卡片里放不进「名称 + 控件」一行的内容（滑块、字体选择、预览）：同样的内边距和行间分割线。 */
+export function SettingsBlock({ className, ...rest }: HTMLAttributes<HTMLDivElement>) {
+  const drawer = useContext(DrawerScope);
+  return <div className={cn('px-4 py-4', drawer ? SETTINGS_DIVIDER : PAGE_DIVIDER, className)} {...rest} />;
 }
 
 /** A 32px round icon tile leading a row (群管理, AI 代答 without a teammate). */

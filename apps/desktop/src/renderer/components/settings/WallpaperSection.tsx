@@ -21,11 +21,7 @@ import {
   SELECTABLE_WALLPAPER_IDS,
   type WallpaperId,
 } from '@/../shared/appearanceSettings';
-import {
-  SETTINGS_CARD_CLASS,
-  SETTINGS_ROW_DIVIDER_CLASS,
-  SETTINGS_SECTION_TITLE_CLASS,
-} from './settingsRowClasses';
+import { SettingsBlock, SettingsCard, SettingsSection } from '@/components/ui/settings-rows';
 
 export function WallpaperSection() {
   const { t } = useTranslation();
@@ -111,13 +107,12 @@ export function WallpaperSection() {
   };
 
   return (
-    <section
+    <SettingsSection
       id="settings-search-target-appearance-wallpaper"
-      className="flex flex-col gap-[14px]"
       aria-label={t(appearanceSettings.wallpaperTitle.titleKey)}
-    >
-      <div className="flex min-h-[30px] items-center justify-between gap-3">
-        <h3 className={SETTINGS_SECTION_TITLE_CLASS}>{t(appearanceSettings.wallpaperTitle.titleKey)}</h3>
+      headingLevel={3}
+      title={t(appearanceSettings.wallpaperTitle.titleKey)}
+      action={
         <Button data-setting-id={appearanceSettings.wallpaperTitle.id}
           variant="secondary"
           size="md"
@@ -137,10 +132,10 @@ export function WallpaperSection() {
           <RotateCcw size={14} />
           <span>{t('settings.appearance.wallpaper.reset')}</span>
         </Button>
-      </div>
-
-      <div id={appearanceSettings.wallpaperCustomChoose.targetId} className={SETTINGS_CARD_CLASS}>
-        <div className="flex flex-col gap-4 px-4 py-4">
+      }
+    >
+      <SettingsCard id={appearanceSettings.wallpaperCustomChoose.targetId}>
+        <SettingsBlock className="flex flex-col gap-4">
           <div
             className="grid grid-cols-[repeat(auto-fill,minmax(6rem,1fr))] gap-2"
             role="radiogroup"
@@ -350,11 +345,9 @@ export function WallpaperSection() {
               message={error || t('settings.appearance.wallpaper.customPlaybackFailed')}
             />
           )}
-        </div>
+        </SettingsBlock>
 
-        <div className={SETTINGS_ROW_DIVIDER_CLASS} />
-
-        <div className="flex flex-col gap-3 px-4 py-4">
+        <SettingsBlock className="flex flex-col gap-3">
           {(isSceneWallpaper(wallpaperId) || (wallpaperId === 'custom' && customVideo)) && (
             <div className="flex items-center justify-between gap-3">
               <div>
@@ -429,8 +422,8 @@ export function WallpaperSection() {
           >
             {t('settings.appearance.wallpaper.blurHint')}
           </p>
-        </div>
-      </div>
-    </section>
+        </SettingsBlock>
+      </SettingsCard>
+    </SettingsSection>
   );
 }

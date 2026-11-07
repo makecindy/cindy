@@ -3,14 +3,14 @@ import { Button } from '@/components/ui/button';
 /**
  * ExperimentalSection — Settings → General 的"实验功能"区块。
  *
- * 各项是同一张卡片里的设置行(settingsRowClasses),行间分割线只出现在可见行之间。
+ * 各项是同一张 SettingsCard 里的设置行,每行外层是不带内边距的 SettingsBlock,分割线只出现在可见行之间。
  *
  * LSP 这类实验能力有专用 IPC 行；普通实验功能由 EXPERIMENTAL_FEATURES 驱动。
  * 全员可见(2026-07 与 Lizi 定案):原 admin 门控随产品级 role 退役——实验
  * 开关都是本地 flag、默认关闭,对普通用户无破坏性。
  */
 
-import { Fragment, type ReactNode } from 'react';
+import { type ReactNode } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
 
@@ -20,8 +20,8 @@ import {
   useExperimentalFlag,
   type ExperimentalFeatureMeta,
 } from '@/hooks/useExperimentalFeatures';
+import { SettingsBlock, SettingsCard, SettingsSection } from '@/components/ui/settings-rows';
 import { LspBetaCell } from './LspBetaCell';
-import { SETTINGS_CARD_CLASS, SETTINGS_ROW_DIVIDER_CLASS } from './settingsRowClasses';
 import { BetaChannelCell } from './BetaChannelCell';
 import { additionalSettings } from './AdditionalSettings.settings-search';
 
@@ -41,20 +41,15 @@ export function ExperimentalSection() {
   ];
 
   return (
-    <div className="flex flex-col gap-[14px]">
-      <h2 className="text-16 font-medium leading-[1.2] text-[var(--settings-section-title)]">
-        {t('settings.experimental.title')}
-      </h2>
-
-      <div className={SETTINGS_CARD_CLASS}>
-        {rows.map((row, index) => (
-          <Fragment key={row.key}>
-            {index > 0 ? <div className={SETTINGS_ROW_DIVIDER_CLASS} /> : null}
+    <SettingsSection title={t('settings.experimental.title')}>
+      <SettingsCard>
+        {rows.map((row) => (
+          <SettingsBlock key={row.key} className="p-0">
             {row.node}
-          </Fragment>
+          </SettingsBlock>
         ))}
-      </div>
-    </div>
+      </SettingsCard>
+    </SettingsSection>
   );
 }
 

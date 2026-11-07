@@ -40,14 +40,7 @@ import { extractIpcError } from '@/utils/ipcError';
 import { DockIconPicker } from './DockIconPicker';
 import { FontFamilyPicker } from './FontFamilyPicker';
 import { LayoutResetControl } from './LayoutResetControl';
-import {
-  SETTINGS_CARD_CLASS,
-  SETTINGS_ROW_CLASS,
-  SETTINGS_ROW_DIVIDER_CLASS,
-  SETTINGS_ROW_HINT_CLASS,
-  SETTINGS_ROW_LABEL_CLASS,
-  SETTINGS_SECTION_TITLE_CLASS,
-} from './settingsRowClasses';
+import { SettingsBlock, SettingsCard, SettingsRow, SettingsSection } from '@/components/ui/settings-rows';
 import { WallpaperSection } from './WallpaperSection';
 import {
   APPEARANCE_LIMITS,
@@ -307,11 +300,10 @@ function FamilyDropdown({
   const selected = families.find((f) => f.id === selectedId) ?? families[0];
 
   return (
-    <div className={cn(SETTINGS_ROW_CLASS, 'gap-6')}>
-      <p className={cn(SETTINGS_ROW_LABEL_CLASS, 'min-w-0')} style={{ letterSpacing: '0.12px' }}>
-        {label}
-      </p>
-
+    <SettingsRow
+      className="gap-6"
+      title={label}
+      trailing={
       <Select.Root value={selected.id} onValueChange={onSelect}>
         <Select.Trigger data-setting-id={appearanceSettings.themeLabel.id}
           aria-label={ariaLabel}
@@ -375,7 +367,8 @@ function FamilyDropdown({
           </Select.Content>
         </Select.Portal>
       </Select.Root>
-    </div>
+      }
+    />
   );
 }
 
@@ -595,7 +588,7 @@ export function AppearanceSection() {
   };
 
   // 「外观」已是独立分区,页内不再重复页名;按主题 / 壁纸 / 字体 / 侧边栏与面板分节,
-  // 每节标题在卡片外,卡片内是带分割线的设置行(settingsRowClasses)。
+  // 每节标题在卡片外,卡片内是带分割线的设置行(settings-rows)。
   return (
     <div className="flex flex-col gap-6">
       {/* 页面标题:比各节标题(16px)高一级,标题段 20px / 1.3 */}
@@ -604,13 +597,12 @@ export function AppearanceSection() {
       </h2>
 
       <div className="flex flex-col gap-[36px]">
-        <section
+        <SettingsSection
           id="settings-search-target-appearance-theme"
-          className="flex flex-col gap-[14px]"
           aria-label={t(appearanceSettings.themeLabel.titleKey)}
         >
           {/* 主题卡片紧接页面标题,不再另设节标题 */}
-          <div id={appearanceSettings.themeLabel.targetId} className={SETTINGS_CARD_CLASS}>
+          <SettingsCard id={appearanceSettings.themeLabel.targetId}>
             <FamilyDropdown
               label={t(appearanceSettings.themeLabel.titleKey)}
               ariaLabel={t('settings.appearance.themeAriaLabel')}
@@ -621,27 +613,14 @@ export function AppearanceSection() {
               getVariantBadge={getVariantBadge}
             />
 
-            <div className={SETTINGS_ROW_DIVIDER_CLASS} />
-
             {/* Appearance mode — 主题决定可用方案,故排在主题之后;左名称、右缩略图 */}
-            <div className="cindy-segmented-row px-4 py-4">
-              <div className="flex min-w-0 flex-col gap-1">
-                <p
-                  id={appearanceSettings.modeLabel.targetId}
-                  className={SETTINGS_ROW_LABEL_CLASS}
-                  style={{ letterSpacing: '0.12px' }}
-                >
-                  {t(appearanceSettings.modeLabel.titleKey)}
-                </p>
-                {lockedType ? (
-                  <p className={SETTINGS_ROW_HINT_CLASS}>
-                    {t(`settings.appearance.singleVariant.${lockedType}Notice`, {
-                      name: selectedFamily.name,
-                    })}
-                  </p>
-                ) : null}
-              </div>
-
+            <SettingsRow
+              className="cindy-segmented-row"
+              title={<span id={appearanceSettings.modeLabel.targetId}>{t(appearanceSettings.modeLabel.titleKey)}</span>}
+              hint={lockedType
+                ? t(`settings.appearance.singleVariant.${lockedType}Notice`, { name: selectedFamily.name })
+                : undefined}
+              trailing={
               <div
                 className="flex shrink-0 gap-3"
                 role="radiogroup"
@@ -684,41 +663,22 @@ export function AppearanceSection() {
                   onKeyDown={handleKeyDown}
                 />
               </div>
-            </div>
+              }
+            />
 
             {window.electronAPI?.platform === 'darwin' ? (
-              <>
-                <div className={SETTINGS_ROW_DIVIDER_CLASS} />
-                <div className="cindy-segmented-row px-4 py-4">
-                  <div className="flex min-w-0 flex-col gap-1">
-                    <p
-                      id={appearanceSettings.appIcon.targetId}
-                      className={SETTINGS_ROW_LABEL_CLASS}
-                      style={{ letterSpacing: '0.12px' }}
-                    >
-                      {t(appearanceSettings.appIcon.titleKey)}
-                    </p>
-                    <p className={SETTINGS_ROW_HINT_CLASS}>
-                      {t(appearanceSettings.appIcon.descriptionKey)}
-                    </p>
-                  </div>
-                  <DockIconPicker />
-                </div>
-              </>
+              <SettingsRow
+                className="cindy-segmented-row"
+                title={<span id={appearanceSettings.appIcon.targetId}>{t(appearanceSettings.appIcon.titleKey)}</span>}
+                hint={t(appearanceSettings.appIcon.descriptionKey)}
+                trailing={<DockIconPicker />}
+              />
             ) : null}
 
-            <div className={SETTINGS_ROW_DIVIDER_CLASS} />
-
-            <div className={cn(SETTINGS_ROW_CLASS, 'flex-wrap')}>
-              <div className="flex min-w-0 flex-col gap-1">
-                <p
-                  id={appearanceSettings.localThemesTitle.targetId}
-                  className={SETTINGS_ROW_LABEL_CLASS}
-                  style={{ letterSpacing: '0.12px' }}
-                >
-                  {t(appearanceSettings.localThemesTitle.titleKey)}
-                </p>
-              </div>
+            <SettingsRow
+              wrap
+              title={<span id={appearanceSettings.localThemesTitle.targetId}>{t(appearanceSettings.localThemesTitle.titleKey)}</span>}
+              trailing={
               <div className="flex flex-wrap gap-2">
                 <LocalThemeIconButton
                   icon={Copy}
@@ -749,21 +709,21 @@ export function AppearanceSection() {
                   }}
                 />
               </div>
-            </div>
-          </div>
-        </section>
+              }
+            />
+          </SettingsCard>
+        </SettingsSection>
 
         <WallpaperSection />
 
-        <section
+        <SettingsSection
           id={appearanceSettings.fonts.targetId}
-          className="flex flex-col gap-[14px]"
+          headingLevel={3}
+          title={t(appearanceSettings.fonts.titleKey)}
           aria-label={t(appearanceSettings.fonts.titleKey)}
         >
-          <h3 className={SETTINGS_SECTION_TITLE_CLASS}>{t(appearanceSettings.fonts.titleKey)}</h3>
-
-          <div className={SETTINGS_CARD_CLASS}>
-            <div id={appearanceSettings.fontUiFamilyLabel.targetId} className="px-4 py-4">
+          <SettingsCard>
+            <SettingsBlock id={appearanceSettings.fontUiFamilyLabel.targetId}>
               <FontFamilyPicker data-setting-id={appearanceSettings.fontUiFamilyLabel.id}
                 label={t(appearanceSettings.fontUiFamilyLabel.titleKey)}
                 description={t(appearanceSettings.fontUiFamilyLabel.descriptionKey)}
@@ -775,11 +735,9 @@ export function AppearanceSection() {
                 onChange={setUiFamily}
                 onReset={resetUiFamily}
               />
-            </div>
+            </SettingsBlock>
 
-            <div className={SETTINGS_ROW_DIVIDER_CLASS} />
-
-            <div className="flex flex-col gap-3 px-4 py-4">
+            <SettingsBlock className="flex flex-col gap-3">
               <div className="flex items-start justify-between gap-3">
                 <div className="min-w-0">
                   <p
@@ -841,14 +799,9 @@ export function AppearanceSection() {
                   )}
                 />
               </div>
-            </div>
+            </SettingsBlock>
 
-            <div className={SETTINGS_ROW_DIVIDER_CLASS} />
-
-            <div
-              id={appearanceSettings.fontCodeFamilyLabel.targetId}
-              className="px-4 py-4"
-            >
+            <SettingsBlock id={appearanceSettings.fontCodeFamilyLabel.targetId}>
               <FontFamilyPicker data-setting-id={appearanceSettings.fontCodeFamilyLabel.id}
                 label={t(appearanceSettings.fontCodeFamilyLabel.titleKey)}
                 description={t(appearanceSettings.fontCodeFamilyLabel.descriptionKey)}
@@ -861,11 +814,9 @@ export function AppearanceSection() {
                 onChange={setCodeFamily}
                 onReset={resetCodeFamily}
               />
-            </div>
+            </SettingsBlock>
 
-            <div className={SETTINGS_ROW_DIVIDER_CLASS} />
-
-            <div className="flex flex-col gap-3 px-4 py-4">
+            <SettingsBlock className="flex flex-col gap-3">
               <div className="flex items-start justify-between gap-3">
                 <div className="min-w-0">
                   <p
@@ -927,14 +878,9 @@ export function AppearanceSection() {
                   )}
                 />
               </div>
-            </div>
+            </SettingsBlock>
 
-            <div className={SETTINGS_ROW_DIVIDER_CLASS} />
-
-            <div
-              id={appearanceSettings.fontTerminalFamilyLabel.targetId}
-              className="px-4 py-4"
-            >
+            <SettingsBlock id={appearanceSettings.fontTerminalFamilyLabel.targetId}>
               <FontFamilyPicker data-setting-id={appearanceSettings.fontTerminalFamilyLabel.id}
                 label={t(appearanceSettings.fontTerminalFamilyLabel.titleKey)}
                 description={t(appearanceSettings.fontTerminalFamilyLabel.descriptionKey)}
@@ -946,11 +892,9 @@ export function AppearanceSection() {
                 onChange={setTerminalFamily}
                 onReset={resetTerminalFamily}
               />
-            </div>
+            </SettingsBlock>
 
-            <div className={SETTINGS_ROW_DIVIDER_CLASS} />
-
-            <div className="flex flex-col gap-3 px-4 py-4">
+            <SettingsBlock className="flex flex-col gap-3">
               <div className="flex items-start justify-between gap-3">
                 <div className="min-w-0">
                   <p
@@ -1012,74 +956,50 @@ export function AppearanceSection() {
                   )}
                 />
               </div>
-            </div>
-          </div>
-        </section>
+            </SettingsBlock>
+          </SettingsCard>
+        </SettingsSection>
 
         {/* Sidebar view modes — 置顶段(三态) / 主列表(两态)分离(sidebar-redesign B 期)。
           独立卡片，沿用 NotificationSection 的 label+hint+Switch 行模式。 */}
-        <section
+        <SettingsSection
           id={appearanceSettings.sidebar.targetId}
-          className="flex flex-col gap-[14px]"
+          headingLevel={3}
+          title={t(appearanceSettings.sidebar.titleKey)}
           aria-label={t(appearanceSettings.sidebar.titleKey)}
         >
-          <h3 className={SETTINGS_SECTION_TITLE_CLASS}>
-            {t(appearanceSettings.sidebar.titleKey)}
-          </h3>
+          <SettingsCard>
+            <SettingsRow
+              className="cindy-segmented-row"
+              title={<span id={appearanceSettings.sidebarCardModeLabel.targetId}>{t(appearanceSettings.sidebarCardModeLabel.titleKey)}</span>}
+              hint={t(appearanceSettings.sidebarCardModeLabel.descriptionKey)}
+              trailing={
+                <SegmentedControl data-setting-id={appearanceSettings.sidebarCardModeLabel.id}
+                  aria-label={t('settings.appearance.sidebarCardMode.aria')}
+                  value={sidebarViewMode}
+                  onValueChange={setSidebarViewMode}
+                  options={appearanceSettings.sidebarCardModeLabel.options.map(({ value, labelKey }) => ({ value, label: t(labelKey) }))}
+                />
+              }
+            />
 
-          <div className={SETTINGS_CARD_CLASS}>
-            <div className="cindy-segmented-row px-4 py-4">
-              <div className="flex min-w-0 flex-col gap-1">
-                <p
-                  id={appearanceSettings.sidebarCardModeLabel.targetId}
-                  className="text-13 font-medium text-[var(--settings-section-sublabel)]"
-                  style={{ letterSpacing: '0.12px' }}
-                >
-                  {t(appearanceSettings.sidebarCardModeLabel.titleKey)}
-                </p>
-                <p className="text-12 leading-[1.4] text-[var(--text-secondary)]">
-                  {t(appearanceSettings.sidebarCardModeLabel.descriptionKey)}
-                </p>
-              </div>
-
-              <SegmentedControl data-setting-id={appearanceSettings.sidebarCardModeLabel.id}
-                aria-label={t('settings.appearance.sidebarCardMode.aria')}
-                value={sidebarViewMode}
-                onValueChange={setSidebarViewMode}
-                options={appearanceSettings.sidebarCardModeLabel.options.map(({ value, labelKey }) => ({ value, label: t(labelKey) }))}
-              />
-            </div>
-
-            <div className={SETTINGS_ROW_DIVIDER_CLASS} />
-
-            <div className="cindy-segmented-row px-4 py-4">
-              <div className="flex min-w-0 flex-col gap-1">
-                <p
-                  id={appearanceSettings.sidebarMainListModeLabel.targetId}
-                  className="text-13 font-medium text-[var(--settings-section-sublabel)]"
-                  style={{ letterSpacing: '0.12px' }}
-                >
-                  {t(appearanceSettings.sidebarMainListModeLabel.titleKey)}
-                </p>
-                <p className="text-12 leading-[1.4] text-[var(--text-secondary)]">
-                  {t(appearanceSettings.sidebarMainListModeLabel.descriptionKey)}
-                </p>
-              </div>
-
-              <SegmentedControl data-setting-id={appearanceSettings.sidebarMainListModeLabel.id}
-                aria-label={t('settings.appearance.sidebarMainListMode.aria')}
-                value={sidebarMainViewMode}
-                onValueChange={setSidebarMainViewMode}
-                options={appearanceSettings.sidebarMainListModeLabel.options.map(({ value, labelKey }) => ({ value, label: t(labelKey) }))}
-              />
-            </div>
-
-
-            <div className={SETTINGS_ROW_DIVIDER_CLASS} />
+            <SettingsRow
+              className="cindy-segmented-row"
+              title={<span id={appearanceSettings.sidebarMainListModeLabel.targetId}>{t(appearanceSettings.sidebarMainListModeLabel.titleKey)}</span>}
+              hint={t(appearanceSettings.sidebarMainListModeLabel.descriptionKey)}
+              trailing={
+                <SegmentedControl data-setting-id={appearanceSettings.sidebarMainListModeLabel.id}
+                  aria-label={t('settings.appearance.sidebarMainListMode.aria')}
+                  value={sidebarMainViewMode}
+                  onValueChange={setSidebarMainViewMode}
+                  options={appearanceSettings.sidebarMainListModeLabel.options.map(({ value, labelKey }) => ({ value, label: t(labelKey) }))}
+                />
+              }
+            />
 
             <LayoutResetControl />
-          </div>
-        </section>
+          </SettingsCard>
+        </SettingsSection>
       </div>
     </div>
   );
