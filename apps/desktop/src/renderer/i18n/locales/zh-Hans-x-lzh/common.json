@@ -5188,6 +5188,15 @@
         "ariaLabel": "以 {{shortcut}} 遣讯"
       }
     },
+    "defaultNewTaskWorkingDir": {
+      "title": "新任务常例工作目录",
+      "label": "此机常例工作目录",
+      "hint": "新立此机之任而未择项目，则先取此目录；若已明择项目、言谈或远机，仍从其择。",
+      "unset": "未设（不预取目录）",
+      "choose": "择目录",
+      "clear": "清常例目录",
+      "failed": "存常例工作目录未成，请重试"
+    },
     "linkOpen": {
       "title": "启链接",
       "description": "择讯中链接打开之处，右键可临时更换",

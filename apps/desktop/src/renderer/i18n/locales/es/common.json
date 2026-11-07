@@ -5355,6 +5355,15 @@
         "ariaLabel": "Utilice {{shortcut}} para enviar mensajes"
       }
     },
+    "defaultNewTaskWorkingDir": {
+      "title": "Directorio de trabajo predeterminado para tareas nuevas",
+      "label": "Directorio predeterminado en este equipo",
+      "hint": "Se preselecciona para tareas locales nuevas sin proyecto elegido. Tienen prioridad los proyectos, diálogos o equipos remotos seleccionados explícitamente.",
+      "unset": "Sin configurar (no se preselecciona ningún directorio)",
+      "choose": "Elegir directorio",
+      "clear": "Borrar valor predeterminado",
+      "failed": "No se pudo guardar el directorio de trabajo predeterminado. Inténtalo de nuevo."
+    },
     "linkOpen": {
       "title": "Enlaces abiertos",
       "description": "Elija dónde se abren los enlaces en los mensajes. Haga clic derecho en un enlace para usar otra opción solo para ese enlace.",

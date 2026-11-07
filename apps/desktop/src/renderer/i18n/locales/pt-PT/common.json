@@ -5355,6 +5355,15 @@
         "ariaLabel": "Usar {{shortcut}} para enviar mensagens"
       }
     },
+    "defaultNewTaskWorkingDir": {
+      "title": "Diretório de trabalho predefinido para novas tarefas",
+      "label": "Diretório predefinido neste computador",
+      "hint": "Pré-selecionado para novas tarefas locais sem projeto escolhido. Um projeto, uma conversa ou um computador remoto selecionado explicitamente tem prioridade.",
+      "unset": "Não definido (nenhum diretório pré-selecionado)",
+      "choose": "Escolher diretório",
+      "clear": "Limpar predefinição",
+      "failed": "Não foi possível guardar o diretório de trabalho predefinido. Tenta novamente."
+    },
     "linkOpen": {
       "title": "Abrir ligações",
       "description": "Escolha onde abrir as ligações nas mensagens. Clique com o botão direito numa ligação para usar outra opção apenas nessa ligação.",
