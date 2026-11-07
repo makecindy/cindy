@@ -377,6 +377,7 @@ function resetTurnState(turn: TurnState): void {
 
 /**
  * Worker 派发工具成功后，主 Agent 按 Orca 约定会直接 end_turn 且不输出正文。
+ * 该收口是正常完成，而非需要 host 续跑的静默中断。
  * 只识别这三个明确的派发入口，避免把其它工具的无正文失败误判成正常收口。
  */
 function isWorkerDispatchToolName(toolName: string | undefined): boolean {
