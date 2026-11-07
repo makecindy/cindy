@@ -146,23 +146,26 @@ it.each([false, true])('shows catalog provenance for a read-only preset (legacy 
 });
 
 it.each([
-  { name: 'Pi piApi and custom route', agent: 'pi', baseUrl: 'https://supplier.example.test/v1', modelId: 'fixture-model', expected: 'openai-completions', source: 'connection' },
-  { name: 'Codex custom request path', agent: 'codex', baseUrl: 'https://supplier.example.test/v1', modelId: 'fixture-model', expected: 'openai-completions', source: 'connection' },
-  { name: 'Codex mixed-protocol catalog', agent: 'codex', baseUrl: 'https://api.individual.githubcopilot.com', modelId: 'gpt-5-mini', expected: 'openai-responses', source: 'catalog' },
-] as const)('restores protocol and complete route: $name', async ({ agent, baseUrl, modelId, expected, source }) => {
+  { name: 'Pi piApi and custom route', agent: 'pi', baseUrl: 'https://supplier.example.test/v1', modelId: 'fixture-model', expected: 'openai-completions', source: 'connection', presetId: undefined },
+  { name: 'Codex custom request path', agent: 'codex', baseUrl: 'https://supplier.example.test/v1', modelId: 'fixture-model', expected: 'openai-completions', source: 'connection', presetId: undefined },
+  { name: 'Codex mixed-protocol catalog', agent: 'codex', baseUrl: 'https://api.individual.githubcopilot.com', modelId: 'gpt-5-mini', expected: 'openai-responses', source: 'catalog', presetId: undefined },
+  // r4500211542: prior real-drawer reset cases missed unbound V6 Pi presets.
+  { name: 'Pi unbound V6 preset', agent: 'pi', baseUrl: 'https://opencode.ai/zen/v1', modelId: 'claude-sonnet-4', expected: 'anthropic-messages', source: 'catalog', presetId: 'opencode' },
+] as const)('restores protocol and complete route: $name', async ({ agent, baseUrl, modelId, expected, source, presetId }) => {
   const engine: AgentKind = agent;
   let saved: CustomProviderConfig = { id: 'restore-fixture', name: 'Restore fixture', runtimes: { [engine]: {
-    baseUrl, wireProtocol: 'openai-chat', models: [{ id: modelId, name: 'Fixture', contextWindow: 32768,
+    baseUrl, wireProtocol: 'openai-chat', ...(presetId ? { catalogPresetId: presetId } : {}), models: [{ id: modelId, name: 'Fixture', contextWindow: 32768,
       api: 'anthropic-messages', piApi: 'anthropic-messages',
       route: { baseUrl: 'https://custom.example.test', wireProtocol: 'anthropic-messages', requestPath: '/custom/messages' },
     }],
   } } };
   const original = structuredClone(saved.runtimes[engine]!.models[0]!);
+  const options = { presets: BUNDLED_CATALOG.presets, modelRegistry: BUNDLED_CATALOG.modelRegistry };
   const previousAPI = window.electronAPI;
   const update = vi.fn(async (value: CustomProviderConfig) => { saved = structuredClone(value); return { ok: true }; });
   Object.defineProperty(window, 'electronAPI', { configurable: true, value: { maker: { updateCustomProvider: update } } });
   function renderDrawer() {
-    const provider = { ...buildUserProvider(saved), connected: true } as ProviderView;
+    const provider = { ...buildUserProvider(saved, options), connected: true } as ProviderView;
     const model = provider.models[engine]![0]!;
     return render(<ModelAdvancedDrawer provider={provider}
       row={{ id: model.id, name: model.name, avail: [engine], byAgent: { [engine]: model } }}
@@ -180,9 +183,11 @@ it.each([
     delete unchanged.piApi;
     delete unchanged.route;
     expect(saved.runtimes[engine]!.models[0]).toEqual(unchanged);
-    const restored = buildUserProvider(saved);
+    const restored = buildUserProvider(saved, options);
     expect(modelProtocolComparison(restored, { [engine]: restored.models[engine]![0]! }).forAgent(engine))
       .toMatchObject({ outbound: expected, source, customized: false });
+    if (presetId) expect(restored.models[engine]![0]!.route)
+      .toMatchObject({ baseUrl: 'https://opencode.ai/zen', wireProtocol: 'anthropic-messages' });
     view.unmount();
     renderDrawer();
     expect(screen.getByText(`settings.providers.models.advanced.protocol.source${source === 'catalog' ? 'Catalog' : 'Connection'}`)).toBeTruthy();

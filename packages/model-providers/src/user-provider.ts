@@ -514,8 +514,22 @@ export function buildUserProvider(
     models[agent] = rt.models.map((storedModel) => {
       // Old ID-only imports must pick up newly known per-model interfaces too.
       // An explicit model API/path remains a user choice, not a preset default.
-      const interfaceDefault = (options.modelRegistry?.schemaVersion ?? 0) < 6 && followsPreset && !storedModel.api && !storedModel.piApi && !storedModel.route
-        ? presetRuntime.models.find(model => model.id === storedModel.id) : undefined;
+      const presetDefault = followsPreset ? presetRuntime.models.find(model => model.id === storedModel.id) : undefined;
+      const interfaceRegistry = options.modelRegistry;
+      // V6 governs models with interface declarations, including withdrawn or
+      // unsupported bindings. Unbound presets (notably Pi's mixed-API catalog)
+      // still supply their per-model default after the user removes an override.
+      const v6InterfaceManaged = interfaceRegistry && interfaceRegistry.schemaVersion >= 6 && (
+        Boolean(presetDefault?.interfaceId) ||
+        Boolean(storedModel.interfaceId && storedModel.interfaceId !== 'auto') ||
+        interfaceRegistry.models.some(entry => entry.routes.some(route =>
+          route.providerId === rt.catalogPresetId && route.modelId === storedModel.id &&
+          (route.interfaces !== undefined || entry.status === 'retired'))) ||
+        interfaceRegistry.interfaceProfiles?.some(profile => profile.providerId === rt.catalogPresetId &&
+          (!profile.modelIds || profile.modelIds.includes(storedModel.id)))
+      );
+      const interfaceDefault = !v6InterfaceManaged && !storedModel.api && !storedModel.piApi && !storedModel.route
+        ? presetDefault : undefined;
       const configuredModel = interfaceDefault ? { ...storedModel,
         ...(interfaceDefault.api ? { api: interfaceDefault.api } : {}),
         ...(agent === 'pi' && interfaceDefault.piApi ? { piApi: interfaceDefault.piApi } : {}),

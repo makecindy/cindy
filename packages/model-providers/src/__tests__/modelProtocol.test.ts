@@ -268,6 +268,56 @@ describe('custom supplier transport ownership', () => {
 
 
 describe('preset protocol provenance (#6015)', () => {
+  // #6015 / r4500211542: the existing reset cases had V6 bindings or no
+  // preset. One ID-only Pi model must recover its live, unbound preset route
+  // through buildUserProvider without persisting the projected default (unit).
+  it('restores an unbound Pi preset route under the current V6 registry', () => {
+    const current = BUNDLED_CATALOG.presets!.find(item => item.id === 'opencode')!;
+    const value: CustomProviderConfig = { id: 'unbound-reset', name: 'Fixture', runtimes: { pi: {
+      ...structuredClone(current.runtimes.pi!), catalogPresetId: current.id,
+      models: [{ id: 'claude-sonnet-4', name: 'Sonnet', contextWindow: 32768 }],
+    } } };
+    const before = structuredClone(value);
+    const provider = buildUserProvider(value, { presets: [current], modelRegistry: BUNDLED_CATALOG.modelRegistry });
+    const restored = provider.models.pi![0]!;
+    expect(restored).toMatchObject({ api: 'anthropic-messages', piApi: 'anthropic-messages',
+      route: { baseUrl: 'https://opencode.ai/zen', wireProtocol: 'anthropic-messages' }, contextWindow: 32768 });
+    expect(modelProtocolComparison(provider, { pi: restored }).forAgent('pi'))
+      .toMatchObject({ outbound: 'anthropic-messages', source: 'catalog', customized: false });
+    expect(restored.userModelConfig).toEqual(before.runtimes.pi!.models[0]);
+    expect(value).toEqual(before);
+    const missingPreset = buildUserProvider(value, { presets: [], modelRegistry: BUNDLED_CATALOG.modelRegistry });
+    expect(missingPreset.models.pi![0]!.route).toBeUndefined();
+    value.runtimes.pi!.baseUrl = 'https://detached.example.test/v1';
+    const detached = buildUserProvider(value, { presets: [current], modelRegistry: BUNDLED_CATALOG.modelRegistry });
+    expect(detached.models.pi![0]!.route).toBeUndefined();
+  });
+  // The unbound fallback must not revive a V6 transport that the live catalog
+  // withdrew or cannot execute. These are distinct routing outcomes, not UI guards.
+  it.each(['empty bindings', 'missing profile', 'retired profile', 'unsupported profile', 'explicit interface'] as const)(
+    'does not inherit a preset route over %s', reason => {
+      const current = BUNDLED_CATALOG.presets!.find(item => item.id === 'opencode')!;
+      const registry = structuredClone(BUNDLED_CATALOG.modelRegistry!);
+      const id = 'claude-sonnet-4';
+      if (reason === 'empty bindings' || reason === 'missing profile') registry.models.push({
+        id: 'opencode-test-sonnet', name: 'Sonnet', routes: [{ providerId: current.id, modelId: id,
+          agents: [], interfaces: reason === 'empty bindings' ? [] : [{ profileId: 'missing-profile' }] }],
+      });
+      if (reason === 'retired profile' || reason === 'unsupported profile') registry.interfaceProfiles!.push({
+        id: 'unavailable-profile', providerId: current.id, api: 'anthropic-messages',
+        baseUrl: 'https://opencode.ai/zen', inputBaseUrls: [current.runtimes.pi!.baseUrl],
+        modelIds: [id], defaultFor: ['pi'],
+        ...(reason === 'retired profile' ? { retired: true } : { requires: ['unknown-transport'] }),
+      });
+      const model: ProviderRuntimeModelConfig = { id, name: 'Sonnet',
+        ...(reason === 'explicit interface' ? { interfaceId: 'missing-profile' } : {}) };
+      const provider = buildUserProvider({ id: 'unavailable-reset', name: 'Fixture', runtimes: { pi: {
+        ...structuredClone(current.runtimes.pi!), catalogPresetId: current.id, models: [model],
+      } } }, { presets: [current], modelRegistry: registry });
+      expect(provider.models.pi![0]!.api).toBeUndefined();
+      expect(provider.models.pi![0]!.route).toBeUndefined();
+      expect(provider.models.pi![0]!.userModelConfig).toEqual(model);
+    });
   const presetModel: ProviderRuntimeModelConfig = {
     id: 'preset-model', name: 'Preset model', api: 'anthropic-messages', piApi: 'anthropic-messages',
     route: { baseUrl: 'https://supplier.example.test', wireProtocol: 'anthropic-messages', requestPath: '/messages' },
@@ -342,6 +392,14 @@ describe('preset protocol provenance (#6015)', () => {
     delete selected.route;
     expect(project(sparse, [current]).protocol)
       .toMatchObject({ source: 'model', customized: true, outbound: 'anthropic-messages' });
+    // Removing all live interfaces must not restore an old generated snapshot.
+    const reset = structuredClone(sparse);
+    delete reset.runtimes.pi!.models[0]!.interfaceId;
+    const withdrawn = buildUserProvider(reset, { presets: [current], modelRegistry: {
+      ...BUNDLED_CATALOG.modelRegistry!, models: [], interfaceProfiles: [],
+    } });
+    expect(withdrawn.models.pi![0]!.api).toBeUndefined();
+    expect(withdrawn.models.pi![0]!.route).toBeUndefined();
     const alternative = result.model.availableInterfaces!.find(item => item.profileId !== original.interfaceId)!;
     expect(alternative).toBeDefined();
     value.runtimes.pi!.models[0]!.interfaceId = alternative.profileId;
