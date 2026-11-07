@@ -36,7 +36,7 @@ function collect(node, prefix, out) {
   for (const [key, value] of Object.entries(node)) collect(value, `${prefix}.${key}`, out);
 }
 
-/** 按语言目录名排序输出，内容稳定，便于 diff。 */
+/** 按语言目录名与 key 的码点顺序输出（不随系统区域设置变化），内容稳定，便于 diff。 */
 export function buildCrossLocaleStrings() {
   const result = {};
   const locales = fs
@@ -51,7 +51,7 @@ export function buildCrossLocaleStrings() {
       const node = key.split('.').reduce((value, part) => value?.[part], common);
       collect(node, key, strings);
     }
-    result[locale] = Object.fromEntries(Object.entries(strings).sort(([a], [b]) => a.localeCompare(b)));
+    result[locale] = Object.fromEntries(Object.entries(strings).sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0)));
   }
   return `${JSON.stringify(result, null, 2)}\n`;
 }

@@ -23,7 +23,10 @@ import enCommon from './locales/en/common.json';
 import enAiRename from './locales/en/aiRename.json';
 import { GHOST_OFFICIAL_ID_PREFIX } from '../../shared/ghost';
 import { DEFAULT_LOCALE, type SupportedLocale } from '../../shared/locale';
-import { getEffectiveLocale } from '../lib/localePreference';
+import { createLogger } from '../lib/logger';
+import { getEffectiveLocale, LOCALE_STORAGE_KEY } from '../lib/localePreference';
+
+const log = createLogger('i18n');
 
 export {
   DEFAULT_LOCALE,
@@ -37,7 +40,7 @@ type Namespace = 'common' | 'aiRename';
 type JsonModule = { default: Record<string, unknown> };
 type LazyLocale = Exclude<SupportedLocale, 'en'>;
 
-// 每个路径都写成字面量，Vite 与 ui:check 的 esbuild 都能据此拆出独立分包。
+// 每个路径都写成字面量：Vite 据此拆出独立分包；ui:check 的 esbuild 打包（不拆分）也能解析。
 const LOCALE_LOADERS: Record<LazyLocale, Record<Namespace, () => Promise<JsonModule>>> = {
   'zh-CN': {
     common: () => import('./locales/zh-CN/common.json'),
@@ -115,7 +118,8 @@ function withLocaleOverrides(
 
 /**
  * 按需加载语言包。i18next 解析回退链时也会请求 `zh`、`pt` 这类不单独提供的语言代码，
- * 返回空包即可，查找会继续落到 fallbackLng。加载失败交给 i18next 的重试，最终回退英文。
+ * 返回空包即可，查找会继续落到 fallbackLng。加载失败不重试（本地分包读不到说明安装已损坏，
+ * 重试只会推迟首屏）：该语言在本窗口回退英文，记一条日志，窗口重新打开时会再加载。
  */
 const lazyLocaleBackend: BackendModule = {
   type: 'backend',
@@ -194,6 +198,20 @@ export const i18nReady: Promise<void> = initialized.then(
   () => undefined,
   () => undefined,
 );
+
+// 只记语言与 namespace，不记错误文本（其中可能带安装路径）。
+i18n.on('failedLoading', (lng: string, ns: string) => {
+  log.warn('locale bundle failed to load; falling back to English', { lng, ns });
+});
+
+// 用户在主窗口切换语言会写入 localStorage；同源的其他常驻窗口（预热的截图、贴图、录屏预览、
+// 远程桌面等）借 storage 事件提前加载新语言包。它们之后收到语言切换消息时 changeLanguage
+// 立即完成，界面不会先显示旧语言再切换。
+if (typeof window !== 'undefined' && typeof window.addEventListener === 'function') {
+  window.addEventListener('storage', (event) => {
+    if (event.key === LOCALE_STORAGE_KEY) void i18n.loadLanguages(getEffectiveLocale());
+  });
+}
 
 export { i18n };
 export default i18n;
