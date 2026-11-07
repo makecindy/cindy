@@ -2,7 +2,9 @@ import { beforeAll, describe, expect, it, vi } from 'vitest';
 import { i18n } from '@/i18n';
 import {
   buildAttachmentPayload,
+  buildFilePayload,
   resolveAttachmentPreviewSource,
+  toRemoteAttachmentUrl,
   buildDiffPayload,
   buildMediaPayload,
   buildMermaidPayload,
@@ -262,6 +264,19 @@ describe('messagePayload', () => {
 // #8356 r4436061981: direct audio must reach the player without a host fetch.
 // Existing payload-format tests never executed the preview resolver (unit tier).
 describe('attachment preview source', () => {
+  it.each([
+    ['C:\\Users\\cindy\\report.pdf', 'xdt-file://open?path=C%3A%5CUsers%5Ccindy%5Creport.pdf'],
+    ['D:/Cindy files/report.md', 'xdt-file://open?path=D%3A%2FCindy%20files%2Freport.md'],
+    ['/home/cindy/report.txt', 'xdt-file://open?path=%2Fhome%2Fcindy%2Freport.txt'],
+  ])('wraps desktop paths as host-file URLs (%s)', (source, expected) => {
+    expect(toRemoteAttachmentUrl(source)).toBe(expected);
+  });
+
+  it.each(['https://media.example.invalid/report.pdf', 'xdt-file://open?path=%2Freport.pdf', 'data:text/plain;base64,SGk='])
+    ('keeps an existing URI source unchanged (%s)', (source) => {
+      expect(toRemoteAttachmentUrl(source)).toBe(source);
+    });
+
   it.each(['https://media.example.invalid/clip.mp3', 'data:audio/mpeg;base64,SUQz'])('plays direct audio %s without remote fetching', async (url) => {
     const resolve = vi.fn();
     const payload = buildMediaPayload({ kind: 'audio', url, previewable: true, mimeType: 'audio/mpeg' }, 'clip.mp3');
@@ -276,5 +291,20 @@ describe('attachment preview source', () => {
     const payload = buildMediaPayload({ kind: 'audio', url: 'xdt-file://open?path=%2Fclip.mp3', previewable: false }, 'clip.mp3');
     await expect(resolveAttachmentPreviewSource(payload, resolve, signal)).resolves.toBe(resolved);
     expect(resolve).toHaveBeenCalledExactlyOnceWith({ kind: 'file', url: payload.media.url, previewable: false }, { front: true, signal });
+  });
+
+  it('authorizes a Windows drive path through the host-file resolver', async () => {
+    const resolve = vi.fn().mockResolvedValue({ url: 'file:///cache/report.pdf', mimeType: 'application/pdf' });
+    const payload = buildFilePayload('report.pdf', 'C:\\Users\\cindy\\report.pdf');
+    const signal = new AbortController().signal;
+    await expect(resolveAttachmentPreviewSource(payload, resolve, signal)).resolves.toEqual({
+      url: 'file:///cache/report.pdf',
+      mimeType: 'application/pdf',
+    });
+    expect(resolve).toHaveBeenCalledExactlyOnceWith({
+      kind: 'file',
+      url: 'xdt-file://open?path=C%3A%5CUsers%5Ccindy%5Creport.pdf',
+      previewable: false,
+    }, { front: true, signal });
   });
 });
