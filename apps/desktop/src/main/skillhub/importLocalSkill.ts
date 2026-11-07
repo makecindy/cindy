@@ -17,6 +17,7 @@ import {
   withSharedGlobalSkillProjectionMutation,
 } from '../authBoundaryQuarantine.js';
 import { createLogger, maskPath } from '../logger';
+import { paletteSkillListReuse } from '../maker-ipc/paletteSkillListCache';
 import {
   prepareSharedGlobalSkillLinks,
   prepareSharedProjectSkillLinks,
@@ -574,6 +575,8 @@ export async function importLocalSkill(params: ImportLocalParams): Promise<Impor
       log.warn('[importLocal] prepare shared global skill links failed:', err);
     }
 
+    // The palette reads a shared roster snapshot; imported Skills have to drop it here.
+    paletteSkillListReuse.clear();
     return {
       success: true,
       name,

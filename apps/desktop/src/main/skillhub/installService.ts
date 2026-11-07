@@ -78,6 +78,7 @@ import {
 import { withSkillhubCatalogScope, type SkillhubCatalogScope } from '../../shared/skillhubCatalog';
 
 import { createLogger } from '../logger';
+import { paletteSkillListReuse } from '../maker-ipc/paletteSkillListCache';
 
 const log = createLogger('skillhub:installService');
 const MAX_SKILL_ZIP = 200 * 1024 * 1024; // 200 MB
@@ -973,6 +974,9 @@ export async function install(p: InstallParams, onProgress: ProgressCb, remoteGu
     }
 
     onProgress({ phase: 'done', name: p.name, version: versionStr, absolutePath: logicalFinalDir });
+    // The palette reads a shared roster snapshot; the install has to drop it here so
+    // background auto-sync installs invalidate it too, not only the IPC caller.
+    paletteSkillListReuse.clear();
     return {
       success: true,
       name: p.name,

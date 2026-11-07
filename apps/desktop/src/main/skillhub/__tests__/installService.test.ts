@@ -2920,3 +2920,23 @@ describe('skillhub/installService', () => {
     }
   });
 });
+
+describe('skillhub/installService palette invalidation', () => {
+  it('drops the shared palette roster snapshot once a market install lands', async () => {
+    const name = 'palette-invalidation';
+    const finalDir = path.join(TEST_ROOT, 'skills', name);
+    await setupInstallDownload(name, await makeZip({ 'SKILL.md': 'installed content' }));
+    const { install } = await import('../installService');
+    const { paletteSkillListReuse } = await import('../../maker-ipc/paletteSkillListCache');
+    paletteSkillListReuse.write(
+      'palette-test',
+      { success: true, skills: [] },
+      paletteSkillListReuse.generation(),
+    );
+
+    const result = await install({ name, installPath: finalDir, version: '1.0.0' }, () => {});
+
+    expect(result).toMatchObject({ success: true, absolutePath: finalDir });
+    expect(paletteSkillListReuse.read('palette-test')).toBeUndefined();
+  });
+});
