@@ -23,7 +23,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Navigate, useNavigate, useOutletContext, useSearchParams } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
 import { useSyncExternalStore } from 'react';
-import { ArrowLeft, ChevronRight } from 'lucide-react';
+import { ArrowLeft } from 'lucide-react';
 
 import { cn } from '@/lib/utils';
 import { Tip } from '@/components/ui/tooltip';
@@ -31,13 +31,7 @@ import { TAB_IDS, isSettingsTab } from '@/lib/tabLabels';
 import type { SettingsTab } from '@/lib/tabLabels';
 import { SettingsSidebarNav } from './SettingsSidebarNav';
 import { isLegacyAppearanceDeepLink, resolveSettingsSearchEntry } from './settingsSearchCatalog';
-import {
-  SETTINGS_CARD_CLASS,
-  SETTINGS_ROW_CLASS,
-  SETTINGS_ROW_HINT_CLASS,
-  SETTINGS_ROW_LABEL_CLASS,
-  SETTINGS_SECTION_TITLE_CLASS,
-} from './settingsRowClasses';
+import { SettingsCard, SettingsRow, SettingsSection } from '@/components/ui/settings-rows';
 import { SettingsSearchNavigationContext } from './SettingsSearchNavigation';
 import type { SettingsSearchContext } from './settingsSearchTypes';
 import { useSettingsSectionTarget } from './useSettingsSectionTarget';
@@ -532,29 +526,16 @@ function SettingsViewContent() {
 
                     {/* Pi 扩展只在通用页提供一行入口，不占用设置一级菜单；与 Agent 相关设置放在一起。 */}
                     <section id={generalSettings.piExtensions.targetId} className="py-[18px]" aria-label={t('settings.piPackages.title')}>
-                      <div className="flex flex-col gap-[14px]">
-                        <h2 className={SETTINGS_SECTION_TITLE_CLASS}>{t('settings.piPackages.title')}</h2>
-                        <div className={SETTINGS_CARD_CLASS}>
-                          <button data-setting-id={generalSettings.piExtensions.id}
-                            type="button"
+                      <SettingsSection title={t('settings.piPackages.title')}>
+                        <SettingsCard>
+                          <SettingsRow data-setting-id={generalSettings.piExtensions.id}
+                            title={t('settings.piPackages.manageLabel')}
+                            hint={t('settings.piPackages.entryDescription')}
+                            chevron
                             onClick={handleOpenPiExtensions}
-                            className={cn(
-                              SETTINGS_ROW_CLASS,
-                              'w-full rounded-xl text-left transition-colors hover:bg-[var(--settings-menu-bg-hover)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)]',
-                            )}
-                          >
-                            <span className="flex min-w-0 flex-col gap-1">
-                              <span className={SETTINGS_ROW_LABEL_CLASS} style={{ letterSpacing: '0.12px' }}>
-                                {t('settings.piPackages.manageLabel')}
-                              </span>
-                              <span className={SETTINGS_ROW_HINT_CLASS}>
-                                {t('settings.piPackages.entryDescription')}
-                              </span>
-                            </span>
-                            <ChevronRight size={16} aria-hidden="true" className="shrink-0 text-[var(--text-tertiary)]" />
-                          </button>
-                        </div>
-                      </div>
+                          />
+                        </SettingsCard>
+                      </SettingsSection>
                     </section>
 
                     {/* Section — Experimental (py 18). */}

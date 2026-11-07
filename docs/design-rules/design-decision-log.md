@@ -1004,3 +1004,9 @@ Switch 解耦。插件插槽挂载同一个媒体组件，不再维护单独拖�
 此前有三套写法：群设置抽屉的 `ChatGroupSettingsRows`、手柄页各自复制的局部组件、设置页的 `settingsRowClasses` 类名。提升为 `components/ui/settings-rows.tsx`，行名称按用户裁决统一 13px/500（群设置原为 14px）。局部副本已删除；其余设置页仍用类名，按页面分批迁移。
 
 用户确认 13px 符合 §4 后，同时把窄抽屉登记为例外：群设置抽屉保留 13px 次要色组名和 48px 行高，不套用设置页的 16px 组名与 `py-4`，行名称仍是 13px/500。
+
+## 2026-11-08 · 设置页全部迁到设置行组件
+
+剩下 17 个直接用 `settingsRowClasses` 类名的设置页迁到 `SettingsSection`、`SettingsCard`、`SettingsRow`，`settingsRowClasses.ts` 删除。迁移时补了几处组件此前没覆盖的约定：设置页分区标题是 `h2`、标题到卡片 14px（与其余设置页一致，抽屉仍是 8px），组名下一行说明用 `description`；滑块、字体选择这类不是「名称 + 控件」的内容用 `SettingsBlock`；原来同一卡片里靠「不画分割线」表示一组的行（应用连接和它的开关），改为一组一张卡片。行内文字按组件的行高，两行的设置行比原来矮约 3px。
+
+实现：`components/ui/settings-rows.tsx` 与各设置页；现行规则见 `DESIGN.md` §4 Desktop settings rows。
