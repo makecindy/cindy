@@ -2301,10 +2301,17 @@ export class Session {
   /**
    * 空闲且项目资源漂移时回收运行时:close 后由 host 的 lazy bootstrap 在下次发送时
    * 重新 startSession(重扫项目资源、重算 argv)。返回是否发生了回收。
-   * turn 运行中绝不回收;中途新增的 openspec 类项目 skill 由此在下一条消息前生效。
+   * 与 closeIfIdle 同一空闲口径:turn 运行中、结束未收口的 turn、换代续接、以及
+   * 手动压缩 / rewind 等宿主排他操作进行中绝不回收 —— 否则会关掉正在等待结果的
+   * 压缩请求;中途新增的 openspec 类项目 skill 由此在下一条消息前生效。
    */
   async recycleIfProjectResourcesDrifted(): Promise<boolean> {
-    if (this.isTurnRunning()) return false;
+    if (this.status !== 'active' || this.closePromise) return false;
+    if (this.isTurnRunning() || this.hasUnsettledTurn()
+      || this.retirementContinuationGeneration === this.turnGeneration
+      || this.hasPendingHostOperation()) {
+      return false;
+    }
     if (!this.hasProjectResourceDrift()) return false;
     await this.close({ reason: 'resource-refresh' });
     return true;

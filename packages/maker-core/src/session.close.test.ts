@@ -211,6 +211,31 @@ describe('Session close lifecycle', () => {
     expect(handle.close).toHaveBeenCalledOnce();
   });
 
+  it('resource recycling shares the closeIfIdle idle predicate and never breaks manual compaction', async () => {
+    const { session, handle } = liveTurn();
+    let hostOperationInFlight = true;
+    handle.hasPendingHostOperation = () => hostOperationInFlight;
+    handle.hasProjectResourceDrift = () => true;
+
+    // 手动压缩等宿主排他操作进行中:即使资源已漂移也绝不回收(否则会关掉
+    // 正在等待结果的压缩请求),与 closeIfIdle 同一口径。
+    await expect(session.recycleIfProjectResourcesDrifted()).resolves.toBe(false);
+    expect(handle.close).not.toHaveBeenCalled();
+
+    hostOperationInFlight = false;
+    await expect(session.recycleIfProjectResourcesDrifted()).resolves.toBe(true);
+    expect(handle.close).toHaveBeenCalledOnce();
+  });
+
+  it('skips resource recycling while a turn is running even if resources drifted', async () => {
+    const { session, handle } = liveTurn();
+    handle.hasProjectResourceDrift = () => true;
+    await session.send('work');
+    expect(await session.recycleIfProjectResourcesDrifted()).toBe(false);
+    expect(handle.close).not.toHaveBeenCalled();
+    await session.close();
+  });
+
   it('rejects a non-Host send while a retiring silent-stop claim is live', async () => {
     const { session, handle, queue, seen, idle } = liveTurn();
     await session.send('work');

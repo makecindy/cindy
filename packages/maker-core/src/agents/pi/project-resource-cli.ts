@@ -202,13 +202,23 @@ function statMtimeMs(target: string): number {
 export interface PiProjectResourceLaunchSnapshot {
   readonly workingDir: string;
   readonly paths: PiProjectResourceCliPaths;
-  readonly watchRootMtimes: ReadonlyArray<readonly [string, number]>;
+  /**
+   * watch root 的 mtime 基线。Map 值可在重扫确认路径集合未变后就地刷新(见
+   * piProjectResourcesDrifted),避免 mtime 变化来自无关文件时每条消息重复全量重扫;
+   * 路径集合与 paths 一样保持启动口径不变。
+   */
+  readonly watchRootMtimes: Map<string, number>;
 }
 
 /**
  * 收集漂移快检要盯的目录 mtime 基线。目录集合必须覆盖 collector 实际枚举的
- * 每个资源目录及其父目录(父目录捕获"目录从无到有"的创建事件):
+ * 每一层目录:在已存在的子目录内增删条目只改该子目录自身的 mtime,父目录不动,
+ * 漏盯哪层就在哪层漏检(如已有 namespace 下增删 skill、已有扩展目录内补 index.ts、
+ * 已有 skill 目录内删 SKILL.md):
  * - `<wd>/.pi` 本身 + `.pi/skills` / `.pi/prompts` / `.pi/extensions`
+ * - `.pi/skills` 与 `.agents/skills` 各自的两层 skill 树(skills 根、namespace 级、
+ *   namespace 内 skill 级;与 collector 的枚举深度一致,不往更深处看)
+ * - `.pi/extensions` 的每个子目录(index.ts 增删只改子目录 mtime)
  * - cwd→git root 链上每级的 `.agents` + `.agents/skills`
  * 不含 workingDir 本身:往项目根丢无关文件不应触发全量重扫。
  */
@@ -218,14 +228,15 @@ export function collectPiProjectResourceWatchRootMtimes(workingDir: string): Map
   if (!isDir(scanRoot)) return roots;
   const repoRoot = findNearestGitRoot(scanRoot) ?? scanRoot;
   const piDir = path.join(scanRoot, '.pi');
-  for (const dir of [piDir, path.join(piDir, 'skills'), path.join(piDir, 'prompts'), path.join(piDir, 'extensions')]) {
-    roots.set(dir, statMtimeMs(dir));
-  }
+  roots.set(piDir, statMtimeMs(piDir));
+  watchPiSkillTreeMtimes(roots, path.join(piDir, 'skills'));
+  roots.set(path.join(piDir, 'prompts'), statMtimeMs(path.join(piDir, 'prompts')));
+  watchPiExtensionChildMtimes(roots, path.join(piDir, 'extensions'));
   let current = scanRoot;
   while (true) {
     const agentsDir = path.join(current, '.agents');
     roots.set(agentsDir, statMtimeMs(agentsDir));
-    roots.set(path.join(agentsDir, 'skills'), statMtimeMs(path.join(agentsDir, 'skills')));
+    watchPiSkillTreeMtimes(roots, path.join(agentsDir, 'skills'));
     if (current === repoRoot) break;
     const parent = path.dirname(current);
     if (parent === current) break;
@@ -234,7 +245,46 @@ export function collectPiProjectResourceWatchRootMtimes(workingDir: string): Map
   return roots;
 }
 
-/** 冻结一份启动快照(mtime 基线在调用时采集)。 */
+/**
+ * stat 一个 skills 根及其下 collector 实际枚举的两层子目录。statSync 跟随符号
+ * 链接:软链 skill 的增删由父目录 mtime 捕获,软链目标内的 SKILL.md 增删由目标
+ * 目录 mtime 捕获,与 realpath 收集口径一致。跳过 collector 不枚举的子树
+ * (隐藏/bak、软链 namespace、剪枝名),避免无关变化触发无谓重扫。
+ */
+function watchPiSkillTreeMtimes(roots: Map<string, number>, skillsDir: string): void {
+  roots.set(skillsDir, statMtimeMs(skillsDir));
+  if (!isDir(skillsDir)) return;
+  for (const entry of listDir(skillsDir)) {
+    if (entry.name.startsWith('.') || /\.bak\.\d+$/.test(entry.name)) continue;
+    if (!entry.isDirectory() && !entry.isSymbolicLink()) continue;
+    const childPath = path.join(skillsDir, entry.name);
+    roots.set(childPath, statMtimeMs(childPath));
+    if (entry.isSymbolicLink()) continue;
+    const realChild = realpathOrNull(childPath);
+    if (!realChild || !isDir(realChild)) continue;
+    if (hasSkillFile(realChild)) continue; // skill 目录:collector 不再往里枚举
+    if (shouldPruneSkillScanDirectory(entry.name)) continue; // collector 剪枝的 namespace
+    for (const nested of listDir(realChild)) {
+      if (nested.name.startsWith('.') || /\.bak\.\d+$/.test(nested.name)) continue;
+      if (!nested.isDirectory() && !nested.isSymbolicLink()) continue;
+      roots.set(path.join(realChild, nested.name), statMtimeMs(path.join(realChild, nested.name)));
+    }
+  }
+}
+
+/** stat 一个 extensions 根及其子目录:已有扩展目录内 index.ts 增删只改子目录 mtime。 */
+function watchPiExtensionChildMtimes(roots: Map<string, number>, extDir: string): void {
+  roots.set(extDir, statMtimeMs(extDir));
+  if (!isDir(extDir)) return;
+  for (const entry of listDir(extDir)) {
+    if (entry.name.startsWith('.')) continue;
+    if (!entry.isDirectory() && !entry.isSymbolicLink()) continue;
+    const childPath = path.join(extDir, entry.name);
+    roots.set(childPath, statMtimeMs(childPath));
+  }
+}
+
+/** 冻结一份启动快照(mtime 基线在调用时采集,后续可由 drift 检测就地刷新)。 */
 export function snapshotPiProjectResourceLaunch(
   workingDir: string,
   paths: PiProjectResourceCliPaths,
@@ -242,7 +292,7 @@ export function snapshotPiProjectResourceLaunch(
   return Object.freeze({
     workingDir,
     paths,
-    watchRootMtimes: Object.freeze([...collectPiProjectResourceWatchRootMtimes(workingDir)]),
+    watchRootMtimes: collectPiProjectResourceWatchRootMtimes(workingDir),
   });
 }
 
@@ -252,19 +302,25 @@ function samePiResourceList(left: readonly string[], right: readonly string[]): 
 
 /**
  * 盘上项目资源相对启动快照是否已漂移(argv 重算后会不同)。两级判定:
- * 1. stat 快检:所有 watch root 的 mtime 与启动基线一致(含缺失态 -1) → 无漂移;
- * 2. mtime 有变化才全量重扫,按最终路径集合判定 —— mtime 变了但集合相同(如
- *    触碰无关目录)不算漂移,集合相同也不要求内容相同(路径集合才是 argv 的输入)。
+ * 1. stat 快检:所有 watch root 的 mtime 与基线一致(含缺失态 -1) → 无漂移;
+ * 2. mtime 有变化才全量重扫(每次调用至多一次),按最终路径集合判定 —— 集合相同
+ *    (如触碰无关目录)不算漂移,且就地刷新该 root 的基线,让下一次快检恢复零扫描;
+ *    集合相同不要求内容相同(路径集合才是 argv 的输入)。判定漂移时不动基线:
+ *    调用方将回收运行时并重建新快照。
  */
 export function piProjectResourcesDrifted(snapshot: PiProjectResourceLaunchSnapshot): boolean {
+  let freshPaths: PiProjectResourceCliPaths | null = null;
   for (const [dir, mtimeAtLaunch] of snapshot.watchRootMtimes) {
-    if (statMtimeMs(dir) === mtimeAtLaunch) continue;
-    const fresh = collectPiProjectResourceCliPaths(snapshot.workingDir);
-    return !(
-      samePiResourceList(fresh.skills, snapshot.paths.skills)
-      && samePiResourceList(fresh.promptTemplates, snapshot.paths.promptTemplates)
-      && samePiResourceList(fresh.extensions, snapshot.paths.extensions)
+    const mtimeNow = statMtimeMs(dir);
+    if (mtimeNow === mtimeAtLaunch) continue;
+    freshPaths ??= collectPiProjectResourceCliPaths(snapshot.workingDir);
+    const driftedNow = !(
+      samePiResourceList(freshPaths.skills, snapshot.paths.skills)
+      && samePiResourceList(freshPaths.promptTemplates, snapshot.paths.promptTemplates)
+      && samePiResourceList(freshPaths.extensions, snapshot.paths.extensions)
     );
+    if (driftedNow) return true;
+    snapshot.watchRootMtimes.set(dir, mtimeNow);
   }
   return false;
 }

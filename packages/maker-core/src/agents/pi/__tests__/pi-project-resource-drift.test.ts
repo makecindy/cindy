@@ -3,12 +3,13 @@
  *
  * 契约:snapshotPiProjectResourceLaunch 冻结"路径集合 + watch root mtime 基线";
  * piProjectResourcesDrifted 两级判定 —— mtime 全等 → 无漂移(stat 快检,零扫描);
- * mtime 变化 → 全量重扫按路径集合判定(集合相同不回收,路径集合才是 argv 的输入)。
- * watch roots 必须覆盖 collector 枚举的每个资源目录及其父目录,否则"目录从无到有"
- * 的创建事件会被漏掉。
+ * mtime 变化 → 全量重扫(每次调用至多一次)按路径集合判定(集合相同不回收,
+ * 路径集合才是 argv 的输入),且就地刷新基线让后续快检恢复零扫描。
+ * watch roots 必须覆盖 collector 实际枚举的每一层目录:在已存在子目录内增删
+ * 条目只改该子目录自身 mtime,漏盯哪层就在哪层漏检。
  */
 
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
@@ -32,6 +33,10 @@ afterEach(() => {
 function writeSkill(relativeDir: string, name: string): void {
   mkdirSync(path.join(project, relativeDir, name), { recursive: true });
   writeFileSync(path.join(project, relativeDir, name, 'SKILL.md'), `---\nname: ${name}\ndescription: test\n---\n`);
+}
+
+function statMtime(target: string): number {
+  return statSync(target).mtimeMs;
 }
 
 function snapshot() {
@@ -113,6 +118,70 @@ describe('piProjectResourcesDrifted', () => {
     expect(roots.has(path.join(nested, '.agents', 'skills'))).toBe(true);
     expect(roots.has(path.join(project, '.agents'))).toBe(true);
     expect(roots.has(path.join(project, '.agents', 'skills'))).toBe(true);
+  });
+
+  it('detects a skill added inside an existing namespace dir (nested level)', () => {
+    writeSkill(path.join('.pi', 'skills', '@scope'), 'alpha');
+    const baseline = snapshot();
+    writeSkill(path.join('.pi', 'skills', '@scope'), 'beta');
+    expect(piProjectResourcesDrifted(baseline)).toBe(true);
+  });
+
+  it('detects a skill removed from an existing namespace dir (nested level)', () => {
+    writeSkill(path.join('.pi', 'skills', '@scope'), 'alpha');
+    writeSkill(path.join('.pi', 'skills', '@scope'), 'beta');
+    const baseline = snapshot();
+    rmSync(path.join(project, '.pi', 'skills', '@scope', 'beta'), { recursive: true, force: true });
+    expect(piProjectResourcesDrifted(baseline)).toBe(true);
+  });
+
+  it('detects SKILL.md added into an existing non-skill nested dir', () => {
+    mkdirSync(path.join(project, '.pi', 'skills', '@scope', 'empty'), { recursive: true });
+    const baseline = snapshot();
+    writeFileSync(path.join(project, '.pi', 'skills', '@scope', 'empty', 'SKILL.md'), '---\nname: empty\ndescription: t\n---\n');
+    expect(piProjectResourcesDrifted(baseline)).toBe(true);
+  });
+
+  it('detects SKILL.md removed from an existing top-level skill dir', () => {
+    writeSkill(path.join('.pi', 'skills'), 'alpha');
+    const baseline = snapshot();
+    rmSync(path.join(project, '.pi', 'skills', 'alpha', 'SKILL.md'), { force: true });
+    expect(piProjectResourcesDrifted(baseline)).toBe(true);
+  });
+
+  it('detects index.ts added inside an existing extension dir', () => {
+    mkdirSync(path.join(project, '.pi', 'extensions', 'myext'), { recursive: true });
+    const baseline = snapshot();
+    writeFileSync(path.join(project, '.pi', 'extensions', 'myext', 'index.ts'), 'export {};\n');
+    expect(piProjectResourcesDrifted(baseline)).toBe(true);
+  });
+
+  it('refreshes the mtime baseline after a rescan finds the same path set', () => {
+    writeSkill(path.join('.pi', 'skills'), 'alpha');
+    const baseline = snapshot();
+    const skillsDir = path.join(project, '.pi', 'skills');
+    const mtimeAtLaunch = baseline.watchRootMtimes.get(skillsDir)!;
+    // 无关子目录:改了 skills 根 mtime,但不改变路径集合
+    mkdirSync(path.join(skillsDir, 'unrelated'), { recursive: true });
+    expect(piProjectResourcesDrifted(baseline)).toBe(false);
+    // 基线已就地刷新:下一次快检恢复零扫描,且真实漂移仍能检出
+    expect(baseline.watchRootMtimes.get(skillsDir)).toBe(statMtime(skillsDir));
+    expect(baseline.watchRootMtimes.get(skillsDir)).not.toBe(mtimeAtLaunch);
+    expect(piProjectResourcesDrifted(baseline)).toBe(false);
+    writeSkill(path.join('.pi', 'skills'), 'beta');
+    expect(piProjectResourcesDrifted(baseline)).toBe(true);
+  });
+
+  it('watch roots cover namespace and nested skill levels plus extension child dirs', () => {
+    writeSkill(path.join('.pi', 'skills', '@scope'), 'alpha');
+    mkdirSync(path.join(project, '.pi', 'skills', '@scope', 'plain'), { recursive: true });
+    mkdirSync(path.join(project, '.pi', 'extensions', 'myext'), { recursive: true });
+    const roots = collectPiProjectResourceWatchRootMtimes(project);
+    const ns = path.join(project, '.pi', 'skills', '@scope');
+    expect(roots.has(ns)).toBe(true);
+    expect(roots.has(path.join(ns, 'alpha'))).toBe(true);
+    expect(roots.has(path.join(ns, 'plain'))).toBe(true);
+    expect(roots.has(path.join(project, '.pi', 'extensions', 'myext'))).toBe(true);
   });
 
   it('missing directories baseline as -1 and compare against real mtimes', () => {
