@@ -445,6 +445,8 @@
     'maker.makerMemoryReset': () => ({ removedCount: 0 }),
     'maker.memoryPreserveLegacyMakerDisabled': () => STATIC.memorySettings,
     'voiceInput.getReadinessCached': () => STATIC.voiceNotReady,
+    'voiceInput.getMicrophonePermissionCached': () => ({ granted: false, state: 'unsupported' }),
+    'voiceInput.getSystemPermissionsCached': () => ({ microphone: 'unsupported' }),
     'voiceInput.getReadiness': () => STATIC.voiceNotReady,
     'voiceInput.getHistory': () => STATIC.emptyList,
     'voiceInput.getHistoryForRefinement': () => STATIC.emptyList,
@@ -979,6 +981,9 @@
     'maker.getSessionBackgroundActivity': () => null,
     'maker.listSideChats': () => [],
     'binding.resolveSession': () => null,
+    'resolvePathBatch': () => [],
+    'maker.claudeOAuthStatus': () => ({ connected: false }),
+    'maker.claudeSessionRouteGet': () => null,
     'learn.listRuns': () => [],
     'localDb.subagentRuns.list': () => [],
   };
