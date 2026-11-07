@@ -577,6 +577,12 @@
     'modelFavoritesHost.ready': () => undefined,
     'modelFavoritesHost.changed': () => () => {},
     'gitContext.listAllPrRefs': () => [],
+    'gitContext.getForSession': () => ({ workdir: null, head: null, source: null }),
+    'gitContext.listPrRefs': () => [],
+    'gitContext.findLinkedWorktree': () => null,
+    'gitContext.watch': () => undefined,
+    'gitContext.unwatch': () => undefined,
+    'gitContext.onChanged': () => () => {},
     // Layout tree comes from <dataDir>/layout.v1.json.
     'layout.getStateSync': () => ({ layout: settingsMirror.layout }),
     'layout.set': async (args) => {
@@ -818,6 +824,9 @@
     'pluginContributions.reviewUpdates': () => STATIC.emptyList,
     'pluginMarket.snapshot': () => STATIC.pluginMarketSnapshot,
     'ghosts.workdirPrefsSync': () => STATIC.workdirPrefs,
+    'ghosts.workdirPrefs': () => STATIC.workdirPrefs,
+    'ghosts.listCardsBySession': () => [],
+    'worktreeRestoreStatus': () => ({}),
     'feishuBot.getState': () => ({
       service: 'feishu',
       appId: '',
@@ -961,6 +970,17 @@
     'maker.usage.getXaiSubscription': () => null,
     'maker.usage.getModelPricing': () => null,
     'maker.usage.getReferenceModelPricing': () => ({ overrides: {}, catalog: [] }),
+    'maker.listTurnChangeSets': () => [],
+    'maker.getSessionAgentSwitchIntent': () => null,
+    'maker.getSessionContextWindowBounds': () => null,
+    'maker.getModelContextLimit': () => null,
+    'maker.getSessionTurnActive': () => ({ active: false }),
+    'maker.listSessionBackgroundTasks': () => [],
+    'maker.getSessionBackgroundActivity': () => null,
+    'maker.listSideChats': () => [],
+    'binding.resolveSession': () => null,
+    'learn.listRuns': () => [],
+    'localDb.subagentRuns.list': () => [],
   };
 
   /**
