@@ -78,8 +78,29 @@ describe('buildMenubarView', () => {
   it('hatches a used-up window that still has extra credits', () => {
     const view = buildMenubarView(input([codex('alpha', 100, { credits: 61_838 }), codex('beta', 10)]));
     const alpha = view.sources.find((s) => s.id === 'alpha');
-    expect(alpha).toMatchObject({ value: null, reserve: true, fill: 0, level: 'error' });
+    expect(alpha).toMatchObject({ value: '61.8K', valueUnit: 'credits', reserve: true, fill: 0, level: 'error' });
+    expect(alpha?.accessibilityLabel).toContain('61,838');
     expect(view.details.alpha.action).toEqual({ kind: 'new-task', providerId: 'codex-alpha' });
+  });
+
+  // Regression: exhausted subscriptions must expose the usable balance, never a
+  // rounded zero or a percentage. The same values feed the mobile widget snapshot.
+  it.each([
+    { credits: 128, creditsUnlimited: false, value: '128' },
+    { credits: 0.04, creditsUnlimited: false, value: '0.04' },
+    { credits: null, creditsUnlimited: true, value: '∞' },
+  ])('shows remaining credits in the panel and widget: $value', ({ value, ...credits }) => {
+    const view = buildMenubarView(input([codex('alpha', 100, credits)]));
+    expect(view.sources[0]).toMatchObject({ value, valueUnit: 'credits', fill: 0, reserve: true });
+    const widget = buildUsageWidgetSnapshot(view, NOW, () => null);
+    expect(widget?.sources[0]).toMatchObject({ value, unit: 'credits', fill: 0, reserve: true });
+  });
+
+  // PR #8622: buildMenubarView must expose fractional Credits to screen readers.
+  // Existing unit coverage only checked an integer label; 0.0004 was read as zero.
+  it.each([0.0004, 128.1234])('preserves fractional credit precision in accessibility labels: %s', (credits) => {
+    const view = buildMenubarView(input([codex('alpha', 100, { credits })]));
+    expect(view.sources[0].accessibilityLabel).toContain(`${credits} credits`);
   });
 
   it('follows the saved order and hides pay-as-you-go connections until shown', () => {

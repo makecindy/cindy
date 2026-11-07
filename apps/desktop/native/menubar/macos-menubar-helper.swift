@@ -2266,7 +2266,19 @@ struct CellView: View {
 
   @ViewBuilder
   private var valueLabel: some View {
-    if let value = cell.value {
+    if cell.reserve, let value = cell.value {
+      // Credits have no percentage denominator. Stack their unit inside the existing
+      // 22pt header so five narrow columns keep their widths and tube alignment.
+      VStack(spacing: 0) {
+        NumFont.adaptive(value, size: 15, weight: .semibold, textSize: 12)
+          .foregroundStyle(Palette.ink)
+        if let unit = cell.valueUnit {
+          Text(unit).font(.system(size: 8)).foregroundStyle(Palette.ink3)
+        }
+      }
+      .lineLimit(1)
+      .minimumScaleFactor(0.75)
+    } else if let value = cell.value {
       // The % sign uses the number font at about 60% of the value, on the same baseline.
       HStack(alignment: .firstTextBaseline, spacing: 1) {
         CountUpText(text: value, font: NumFont.font(cell.kind == "balance" ? 16 : 18), replayToken: fillToken, delay: Double(index) * 0.06)
