@@ -138,12 +138,12 @@ function collectSkillDirs(repoRoot: string, skillsDir: string, bucket: Set<strin
   }
 }
 
-export function collectPiProjectResourceCliPaths(workingDir: string): PiProjectResourceCliPaths {
+export function collectPiProjectResourceCliPaths(workingDir: string, repoRootHint?: string): PiProjectResourceCliPaths {
   if (!workingDir || !path.isAbsolute(workingDir) || !isDir(workingDir)) {
     return emptyPiProjectResourceCliPaths();
   }
   const scanRoot = realpathOrNull(workingDir) ?? path.resolve(workingDir);
-  const repoRoot = resolvePiResourceRepoRoot(workingDir);
+  const repoRoot = repoRootHint ?? resolvePiResourceRepoRoot(workingDir);
   const skills = new Set<string>();
   const promptTemplates = new Set<string>();
   const extensions = new Set<string>();
@@ -234,17 +234,16 @@ export interface PiProjectResourceLaunchSnapshot {
  * - cwd→git root 链上每级的 `.agents` + `.agents/skills`
  * 不含 workingDir 本身:往项目根丢无关文件不应触发全量重扫。
  */
-export function collectPiProjectResourceWatchRootMtimes(workingDir: string): Map<string, number> {
+export function collectPiProjectResourceWatchRootMtimes(workingDir: string, repoRootHint?: string): Map<string, number> {
   const roots = new Map<string, number>();
   const scanRoot = realpathOrNull(workingDir) ?? path.resolve(workingDir);
   if (!isDir(scanRoot)) return roots;
-  const repoRoot = findNearestGitRoot(scanRoot) ?? scanRoot;
+  const repoRoot = repoRootHint ?? (findNearestGitRoot(scanRoot) ?? scanRoot);
   const piDir = path.join(scanRoot, '.pi');
   roots.set(piDir, statMtimeMs(piDir));
   watchPiSkillTreeMtimes(roots, path.join(piDir, 'skills'));
   watchPiPromptTargets(roots, path.join(piDir, 'prompts'), repoRoot);
   watchPiExtensionChildMtimes(roots, path.join(piDir, 'extensions'));
-  watchPiPromptTargets(roots, path.join(piDir, 'prompts'), repoRoot);
   let current = scanRoot;
   while (true) {
     const agentsDir = path.join(current, '.agents');
@@ -365,7 +364,10 @@ function samePiResourceList(left: readonly string[], right: readonly string[]): 
  *      下一次快检恢复零收集。
  */
 export function piProjectResourcesDrifted(snapshot: PiProjectResourceLaunchSnapshot): boolean {
-  const boundaryChanged = resolvePiResourceRepoRoot(snapshot.workingDir) !== snapshot.state.repoRoot;
+  // 本次调用只解析一次 git root,贯穿传给所有收集器;独立探测会在重扫窗口内
+  // 采出不一致的边界+盯视面(.git 消失时 watch 面停在旧根、集合来自新根)。
+  const repoRoot = resolvePiResourceRepoRoot(snapshot.workingDir);
+  const boundaryChanged = repoRoot !== snapshot.state.repoRoot;
   let mtimeChanged = false;
   for (const [dir, mtimeAtLaunch] of snapshot.watchRootMtimes) {
     if (statMtimeMs(dir) !== mtimeAtLaunch) {
@@ -378,9 +380,8 @@ export function piProjectResourcesDrifted(snapshot: PiProjectResourceLaunchSnaps
   // 重扫与启动同序:先采样 watch 基线,再收集路径 —— 重扫窗口内新增的资源落在
   // 基线之后,下次快检仍会检出;反序(先路径后基线)会把新 mtime 与旧集合固化在
   // 一起,静默漏检。
-  const freshRoots = collectPiProjectResourceWatchRootMtimes(snapshot.workingDir);
-  const freshBoundary = resolvePiResourceRepoRoot(snapshot.workingDir);
-  const fresh = collectPiProjectResourceCliPaths(snapshot.workingDir);
+  const freshRoots = collectPiProjectResourceWatchRootMtimes(snapshot.workingDir, repoRoot);
+  const fresh = collectPiProjectResourceCliPaths(snapshot.workingDir, repoRoot);
   if (!(
     samePiResourceList(fresh.skills, snapshot.paths.skills)
     && samePiResourceList(fresh.promptTemplates, snapshot.paths.promptTemplates)
@@ -390,10 +391,13 @@ export function piProjectResourcesDrifted(snapshot: PiProjectResourceLaunchSnaps
   }
 
   // 有信号但集合未变:整表重建(新建的空目录/解析后的 prompt 目标纳入盯视)
-  // 并更新边界持有者,下一次快检恢复零收集。
+  // 并更新边界持有者,下一次快检恢复零收集。重建后复核边界:重扫窗口内
+  // .git 又动了就按漂移交回收路径重建(下次快检从一致的新快照出发),
+  // 不把混合口径的基线/边界写回快照。
+  if (resolvePiResourceRepoRoot(snapshot.workingDir) !== repoRoot) return true;
   snapshot.watchRootMtimes.clear();
   for (const [dir, mtime] of freshRoots) snapshot.watchRootMtimes.set(dir, mtime);
-  snapshot.state.repoRoot = freshBoundary;
+  snapshot.state.repoRoot = repoRoot;
   return false;
 }
 
