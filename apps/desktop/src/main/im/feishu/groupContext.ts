@@ -102,21 +102,25 @@ export interface FeishuGroupContextResult {
  */
 export const formatHistoryTime = formatImHistoryTime;
 
+function renderHistoryAuthor(m: FeishuRecentChatMessage, senderId?: string): string {
+  const name = sanitizeDisplayText(m.senderName) || (m.senderIsBot ? 'bot' : 'user');
+  const idPart = senderId ? ` (user_id: ${senderId})` : '';
+  return neutralizeFenceTags(`[${name}${idPart}${m.senderIsBot ? ' (bot)' : ''}]`);
+}
+
 /**
  * 渲染一条历史消息为上下文行(带时间, 附件给占位标注, 内容经 fence 中和)。
  * senderId 传入时在名字后写 `(user_id: …)` —— 只用于最终给模型的前缀;
  * 展示只去掉身份标注，正文使用同一份截断结果。
  */
 function renderHistoryLine(m: FeishuRecentChatMessage, senderId?: string): string {
-  const name = sanitizeDisplayText(m.senderName) || (m.senderIsBot ? 'bot' : 'user');
-  const idPart = senderId ? ` (user_id: ${senderId})` : '';
   const parts: string[] = [];
   if (m.text) parts.push(truncateChannelHistory(m.text));
   for (const att of m.attachments) {
     parts.push(att.kind === 'image' ? '[图片]' : `[文件: ${att.fileName}]`);
   }
   return neutralizeFenceTags(
-    `[${name}${idPart}${m.senderIsBot ? ' (bot)' : ''}] ${formatHistoryTime(m.createTimeMs)} ${parts.join(' ')}`,
+    `${renderHistoryAuthor(m, senderId)} ${formatHistoryTime(m.createTimeMs)} ${parts.join(' ')}`,
   );
 }
 
@@ -256,8 +260,17 @@ export async function buildFeishuGroupContext(args: {
   // Both views use exactly the selected text, including any budget truncation.
   const senderIds = senderIdsForLines(picked);
   const renderLines = (withSenderIds: boolean): string[] => {
-    // Remove identity annotations only; never re-render a longer body in the UI.
-    const lines = selected.entries.map(({ text }, index) => withSenderIds && senderIds[index] ? text : text.replace(/ \(user_id: [A-Za-z0-9_-]+\)/g, ''));
+    // Only replace the exact host-generated author prefix; body/name text may
+    // contain identity-like strings whose removal would reconstruct fence tags.
+    const lines = selected.entries.map(({ item, text }, index) => {
+      if (withSenderIds && senderIds[index]) return text;
+      const id = item.senderIsBot ? undefined : safeOpenId(item.senderOpenId);
+      if (!id) return text;
+      const author = renderHistoryAuthor(item, id);
+      return text.startsWith(author)
+        ? renderHistoryAuthor(item) + text.slice(author.length)
+        : text;
+    });
     if (selected.truncated || pageToken) lines.unshift('[... 更早的消息已省略 ...]');
     return lines;
   };
