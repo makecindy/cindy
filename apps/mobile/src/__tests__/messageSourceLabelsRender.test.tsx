@@ -360,8 +360,13 @@ it('keeps revealed messages visible after a late native opacity write and keyboa
     const row = h.host.querySelector('section')!;
     expect(row).not.toBeNull();
     expect(viewportHarness.opacityTargets.size).toBeGreaterThan(0);
+    const cover = h.host.querySelector('[data-testid="message.entryCover"]');
+    expect(cover).not.toBeNull();
     act(() => viewportHarness.finishReveal({ finished: true }));
     h.rerender({ bottomOverlayHeight: 320 });
+    // The cover is a sibling of the rows: it must be gone once the reveal ends.
+    expect(h.host.querySelector('[data-testid="message.entryCover"]')).toBeNull();
+    expect(h.host.contains(cover)).toBe(false);
     for (const target of viewportHarness.opacityTargets) target.style.opacity = '0';
     expect(h.host.querySelector('section')).toBe(row);
     for (let parent = row.parentElement; parent && parent !== h.host; parent = parent.parentElement) {
