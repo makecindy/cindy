@@ -298,6 +298,12 @@ export const HOST_CONTRACT_CHANNELS: readonly HostChannelDef[] = [
 
   // --- Auth (Single Writer) ---
   {
+    desktopChannel: 'auth:logout',
+    webPath: 'auth.logout',
+    hostPath: '/api/auth/logout',
+    body: () => ({}),
+  },
+  {
     desktopChannel: 'auth:refresh',
     webPath: 'auth.refresh',
     hostPath: '/api/auth/refresh',

@@ -74,3 +74,16 @@ test('unsupported web actions cannot report a successful save or execution', asy
   }
   assert.equal(b.calls.length, 0);
 });
+
+// Local setters must invalidate synchronous reads without waiting for SSE:
+// otherwise the next drag or appearance edit starts from the old snapshot.
+test('local setting writes and resets invalidate their synchronous snapshots', async () => {
+  const b = browser(url => url.includes('/reset') ? { value: 'reset' } : { value: 'saved' });
+  for (const [get, write, reset, unwrap] of [
+    [() => b.api.layout.getStateSync(), () => b.api.layout.set({}), () => b.api.layout.reset(), x => x.layout],
+    [() => b.api.appearanceSettings.getSync(), () => b.api.appearanceSettings.setPatch({}), () => b.api.appearanceSettings.reset(), x => x],
+  ]) {
+    get(); await write(); assert.equal(unwrap(get()).value, 'saved');
+    await reset(); assert.equal(unwrap(get()).value, 'reset');
+  }
+});

@@ -358,3 +358,17 @@ test('deleting a task aborts its turn and prevents queued or later messages', as
   assert.equal(h.queue.projection('s').pendingQueue.length, 0);
   await assert.rejects(h.queue.enqueue('s', { text: 'late' }), /closed/);
 });
+
+// Regression: cold-start settings must match the persisted task, even when the
+// caller sends only text. Existing resume coverage checked only the SDK id.
+test('restores persisted execution settings when the composer omits them', async () => {
+  const h = createHarness({ readSession: async id => ({ id, agentKind: 'claude-code', model: 'stored',
+    permissionMode: 'ask', effort: 'high', fastMode: false, planModeEnabled: true }) });
+  await h.queue.enqueue('settings', { clientId: 'next', text: 'continue' });
+  const opts = h.maker.sessions.get('settings').options;
+  assert.equal(opts.permissionMode, 'ask');
+  assert.equal(opts.effort, 'high');
+  assert.equal(opts.fastMode, false);
+  assert.equal(opts.planMode, true);
+  await h.queue.dispose();
+});

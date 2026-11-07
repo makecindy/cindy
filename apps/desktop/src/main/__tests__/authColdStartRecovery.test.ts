@@ -28,6 +28,7 @@ const names = new Set([
   'commitDesktopRefreshCredentials',
   'writeResourceSessionToVault',
   'initialize',
+  'receiveHostAuthState',
   'refresh',
   'scheduleRefresh',
   'scheduleRefreshRetry',
@@ -83,6 +84,7 @@ return {
   manualLogin: () => runLoginAction({ type: 'discover', identifier: 'test@example.invalid' }),
   state: snapshotAuthState,
   hostAuth: (reader) => { authRefreshOverride = reader; },
+  receiveHostAuthState,
   activateRuntime: () => { accessToken = 'test-expired'; currentUser = { id: 'original' }; },
   backoff: refreshBackoff,
   fallback: () => { coldStartTimeoutFallbacks.record(authStateEpoch, authStateEpoch + 1); authStateEpoch++; loginFlowEpoch++; },
@@ -181,6 +183,7 @@ function setup(random = 0) {
     claimLegacyNamespaceForVerifiedUser: vi.fn(async () => {}),
     mapMembershipToAuthUser: (value: unknown) => value,
     commitCloudAppSession: vi.fn(),
+    commitVolatileAppSession: vi.fn(),
     clearReplacementIntegrationReloadTimers: vi.fn(),
     migrateLocalProviderBindingsAfterCloudCommit: vi.fn(async () => {}),
     scheduleCanaryFlagSync: vi.fn(),
@@ -600,5 +603,36 @@ describe('runtime token rejection after an offline backoff', () => {
     expect(h.request).toHaveBeenCalledTimes(3);
     await vi.advanceTimersByTimeAsync(1);
     expect(h.request).toHaveBeenCalledTimes(4);
+  });
+});
+
+// Regression: explicit Host login must establish the process-local data owner,
+// without writing a second account record or rotating credentials from Desktop.
+describe('delegated Host owner state', () => {
+  it('commits the remote owner at startup and clears it on a logout event', async () => {
+    const h = setup();
+    const state = { isAuthenticated: true, user: { id: 'host-owner' } };
+    h.hostAuth(async () => state);
+    await expect(h.start()).resolves.toEqual(state);
+    expect(h.deps.commitVolatileAppSession).toHaveBeenLastCalledWith('cloud', 'host-owner');
+    h.receiveHostAuthState({ isAuthenticated: false, user: null });
+    expect(h.deps.commitVolatileAppSession).toHaveBeenLastCalledWith('signed-out');
+    expect(h.request).not.toHaveBeenCalled();
+    expect(h.transaction).not.toHaveBeenCalled();
+    expect(h.deps.commitCloudAppSession).not.toHaveBeenCalled();
+  });
+
+  it('runtime refresh commits the same owner projection as startup', async () => {
+    const h = setup();
+    h.hostAuth(async () => ({ isAuthenticated: true, user: { id: 'host-owner' } }));
+    await expect(h.runtimeRefresh()).resolves.toBe(true);
+    expect(h.deps.commitVolatileAppSession).toHaveBeenCalledWith('cloud', 'host-owner');
+  });
+
+  it('rejects an event without explicit Host mode', () => {
+    const h = setup();
+    expect(() => h.receiveHostAuthState({ isAuthenticated: true, user: { id: 'foreign' } }))
+      .toThrow('explicit client mode');
+    expect(h.deps.commitVolatileAppSession).not.toHaveBeenCalled();
   });
 });

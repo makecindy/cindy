@@ -533,6 +533,14 @@ export function setAuthRefreshOverride(
 
 export function receiveHostAuthState(state: AuthState): void {
   if (!authRefreshOverride) throw new Error('Host auth state requires explicit client mode');
+  // The Host owns durable credentials and owner selection. This client only
+  // commits its in-memory owner so local readers never fall back to a stale
+  // account (and a remote logout clears that owner before notifying windows).
+  if (state.isAuthenticated && state.user?.id) {
+    commitVolatileAppSession('cloud', state.user.id);
+  } else {
+    commitVolatileAppSession('signed-out');
+  }
   delegatedAuthState = state;
   notifyRenderer();
 }
@@ -4713,8 +4721,8 @@ export async function updateServerProfile(
 
 export async function initialize(options: AuthInitializeOptions = {}): Promise<AuthState> {
   if (authRefreshOverride) {
-    delegatedAuthState = await authRefreshOverride();
-    return delegatedAuthState;
+    receiveHostAuthState(await authRefreshOverride());
+    return delegatedAuthState!;
   }
   const initializeStartEpoch = authStateEpoch;
   const settledLoginsAtInitialize = settledLoginCommitCount;
@@ -6093,9 +6101,8 @@ export async function dispatchLoginAction(action: unknown): Promise<DesktopLogin
 
 export async function refresh(options?: { serverRejectedToken?: boolean }): Promise<boolean> {
   if (authRefreshOverride !== null) {
-    delegatedAuthState = await authRefreshOverride(options);
-    notifyRenderer();
-    return delegatedAuthState.isAuthenticated;
+    receiveHostAuthState(await authRefreshOverride(options));
+    return delegatedAuthState!.isAuthenticated;
   }
   if (getActiveAppSession().mode === 'local') {
     log.debug('runtime refresh skipped in local mode');

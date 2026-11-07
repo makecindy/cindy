@@ -11,7 +11,7 @@ import { fileURLToPath } from 'node:url';
 
 import { createDbClientForHandle } from '../../desktop/src/main/localDb/client/createDbClientForHandle.js';
 import { OwnerSessionStorage } from '../../desktop/src/main/localDb/sessionStorageAdapter.js';
-import { getDbClient, setCurrentDbClient } from '../../desktop/src/main/localDb/client/current.ts';
+import { getDbClient, setCurrentDbClient, clearCurrentDbClient } from '../../desktop/src/main/localDb/client/current.ts';
 import { AGENT_BINARY_LAYOUT, readCachedBinaryStatus } from '../../desktop/src/main/agent-binaries/binaryStatus.js';
 import { openOwnerDatabase, OwnerDatabaseError } from '../../desktop/src/main/localDb/startupCore.js';
 import { discoverHostOwner, ownerDatabasePath, resolveHostDataDir, resolveHostRegion } from './profile-path.mjs';
@@ -50,6 +50,7 @@ import { withCrossProcessLock } from '../../desktop/src/main/device-link/crossPr
 import { createChatHandler } from './chat.mjs';
 import { createEventHub } from './events.mjs';
 import { createInputQueue } from './agent/input-queue.mjs';
+import { applyLiveSessionSettings } from './agent/session-settings.mjs';
 import { createInteractionBroker } from './agent/interactions.mjs';
 import { messageToCamel, sessionToCamel } from '../../desktop/src/main/localDb/mapper.ts';
 import { selectSessionListRows, flattenSessionReadRow, ordinaryTaskListFilter } from '../../desktop/src/main/localDb/sessionQueries.js';
@@ -196,7 +197,7 @@ const ACCOUNT_DEFAULT_EFFORT = 'medium';
  * refresh token is written back through the shared safeStorage record both
  * clients read (same path, same rotation semantics as the Desktop).
  */
-async function resolveAccountUser(): Promise<AccountUser | null> {
+async function resolveAccountUser(expectedOwner: string | null = runtime.owner): Promise<AccountUser | null> {
   const realm = (account.realm ?? resolveHostRegion()) as 'cn' | 'global';
   const endpoints = readAuthEndpoints(realm);
   const store = await createCredentialStore({
@@ -218,7 +219,7 @@ async function resolveAccountUser(): Promise<AccountUser | null> {
   const me = await client.getMe(sessionToken) as Record<string, any>;
   const membership = me?.membership as Record<string, any> | undefined;
   if (!membership || typeof membership.id !== 'string' || !membership.id) return null;
-  if (runtime.owner && runtime.owner !== membership.id) throw new Error('The signed-in account does not match the active Host profile');
+  if (expectedOwner && expectedOwner !== membership.id) throw new Error('The signed-in account does not match the active Host profile');
   currentSessionToken = sessionToken;
   const email = typeof membership.email === 'string' ? membership.email : null;
   const displayName = typeof membership.displayName === 'string' ? membership.displayName : '';
@@ -325,6 +326,23 @@ async function ensureRuntime(ownerId: string): Promise<void> {
   }
   runtimeLease = lease;
 
+  // Verify the credential owner under the profile lease, before opening any
+  // database or constructing an agent. Refresh errors here must not be swallowed
+  // by the periodic refresh path: an account B login cannot run on A's data.
+  if (!currentSessionToken) {
+    const state = await readAdoptedSessionState({
+      userDataDir: dataDir,
+      keyringApplication: process.env.CINDY_HOST_KEYRING_APPLICATION?.trim() || undefined,
+    });
+    account = { authenticated: false, realm: state.realm };
+    if (state.authenticated) {
+      const user = await resolveAccountUser(ownerId);
+      if (!user) throw new Error('Unable to verify the signed-in Host account');
+      accountUser = user;
+      account = { authenticated: true, realm: state.realm };
+    }
+  }
+
   const vecFile = process.platform === 'win32'
     ? 'vec0.dll'
     : process.platform === 'darwin' ? 'vec0.dylib' : 'vec0.so';
@@ -346,19 +364,11 @@ async function ensureRuntime(ownerId: string): Promise<void> {
   // installing it here keeps them on the same connection as the host runtime.
   setCurrentDbClient(client, ownerId);
   activeOwner = ownerId;
-  closeStorage = () => client.dispose();
+  closeStorage = async () => { clearCurrentDbClient(client); await client.dispose(); };
   runtime.state = 'ready';
   runtime.owner = ownerId;
   runtime.storage = 'ready';
   delete runtime.detail;
-
-  // Resolve the account after acquiring the profile lease and before assembling
-  // agents, so a fresh login can receive its managed model connection.
-  if (!currentSessionToken) {
-    const state = await readAdoptedSessionState({ userDataDir: dataDir });
-    account = { authenticated: false, realm: state.realm };
-    if (state.authenticated) await refreshAuthSession();
-  }
 
   const claudeBinary = harnessBinaryPath('claude-code');
   const codexBinary = harnessBinaryPath('codex');
@@ -430,6 +440,8 @@ const readSessionForRun = async (sessionId: string) => {
     workingDir: row.workingDir,
     providerId: row.providerId,
     sdkSessionId: row.sdkSessionId,
+    effort: row.effort, permissionMode: row.permissionMode,
+    fastMode: row.fastMode, planModeEnabled: row.planModeEnabled,
   };
 };
 /** Web client cross-engine switches: registered as an intent, applied on next enqueue. */
@@ -744,28 +756,9 @@ const serverDeps = {
     // disagree (a tighter mode must bind the very next tool call). An engine
     // switch is left to the input queue, which recreates the Session.
     const live = patch.agentKind === undefined ? agentGraph?.maker.getSession(sessionId) : undefined;
-    if (live) {
-      const unsupportedIsFine = async (apply: () => Promise<void>) => {
-        try { await apply(); } catch (error) {
-          if (!(error instanceof Error && error.name === 'NotSupportedError')) throw error;
-        }
-      };
-      if (typeof patch.permissionMode === 'string') await live.setPermissionMode(patch.permissionMode as never);
-      if (typeof patch.model === 'string') {
-        await live.setModel(patch.model, {
-          ...(patch.providerId === null || typeof patch.providerId === 'string' ? { providerId: patch.providerId } : {}),
-          ...(typeof patch.effort === 'string' ? { effort: patch.effort as never } : {}),
-        });
-      } else if (typeof patch.effort === 'string') {
-        await unsupportedIsFine(() => live.setEffort(patch.effort as never));
-      }
-      if (typeof patch.fastMode === 'boolean' || patch.fastMode === 'ultrafast') {
-        await unsupportedIsFine(() => live.setFastMode(patch.fastMode as boolean | 'ultrafast'));
-      }
-      if (typeof patch.planModeEnabled === 'boolean') {
-        await unsupportedIsFine(() => live.setPlanMode(patch.planModeEnabled as boolean));
-      }
-    }
+    const stored = live && patch.model === undefined && Object.hasOwn(patch, 'providerId')
+      ? await readSessionForRun(sessionId) : null;
+    await applyLiveSessionSettings(live, patch, stored);
     const update: Record<string, unknown> = { updatedAt: Date.now() };
     if (typeof patch.title === 'string') update.title = patch.title;
     if (patch.status === 'active' || patch.status === 'archived') update.status = patch.status;
@@ -944,14 +937,7 @@ const serverDeps = {
     return { ...sessionToCamel({ ...row, messageCount: 0 }), provisional: input.provisional === true };
   },
   chat: createChatHandler({
-    readSession: async (sessionId: string) => {
-      const rows = await getDbClient().drizzle.select().from(sessionTable)
-        .where(eq(sessionTable.id, sessionId)).limit(1);
-      const row = rows[0];
-      if (!row || row.status !== 'active') throw new Error('session is not active');
-      const agentKind = row.agentKind === 'codex' ? 'codex' : row.agentKind === 'pi' ? 'pi' : 'claude-code';
-      return { id: row.id, agentKind, model: row.model, workingDir: row.workingDir, providerId: row.providerId };
-    },
+    readSession: readSessionForRun,
     get maker() {
       if (!agentGraph) throw new Error('agent runtime is not ready');
       return agentGraph.maker;
@@ -1180,7 +1166,19 @@ server.listen(PORT, '127.0.0.1', () => {
     });
     account = { authenticated: false, realm: state.realm };
     if (state.authenticated && await refreshAuthSession()) schedulePeriodicRefresh();
-  })().catch((error: unknown) => {
+  })().catch(async (error: unknown) => {
+    try { await closeStorage?.(); }
+    finally {
+      closeStorage = null;
+      sessionStorage = null;
+      activeOwner = null;
+      runtimeLease?.release();
+      runtimeLease = null;
+      runtime.storage = 'unopened';
+      account = { authenticated: false, realm: account.realm };
+      accountUser = null;
+      currentSessionToken = null;
+    }
     if (runtime.state !== 'blocked') runtime.state = 'error';
     runtime.detail = error instanceof Error ? error.message : String(error);
     console.error('cindy-host initialization failed:', runtime.detail);

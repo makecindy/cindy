@@ -1108,15 +1108,12 @@
                 } else if (parsed.type === 'settings_changed') {
                   if (parsed.domain === 'appearance') {
                     settingsMirror.appearance = parsed.value;
-                    syncSnapshots.delete('appearanceSettings.getSync\u0000[]');
                     emit('appearanceSettings.onChanged', parsed.value);
                   } else if (parsed.domain === 'layout') {
                     settingsMirror.layout = parsed.value;
-                    syncSnapshots.delete('layout.getStateSync\u0000[]');
                     emit('layout.onChanged', { layout: parsed.value });
                   } else if (parsed.domain === 'shortcuts') {
                     settingsMirror.appShortcuts = parsed.value;
-                    syncSnapshots.delete('appShortcuts.getState\u0000[]');
                     emit('appShortcuts.onChanged', parsed.value);
                   } else if (parsed.domain === 'sidebar') {
                     settingsMirror.sidebar = parsed.value;
@@ -1130,7 +1127,6 @@
                   }
                 } else if (parsed.type === 'appearance_changed') {
                   settingsMirror.appearance = parsed.appearance;
-                  syncSnapshots.delete('appearanceSettings.getSync\u0000[]');
                   emit('appearanceSettings.onChanged', parsed.appearance);
                 } else if (parsed.type === 'session_changed') {
                   if (parsed.action === 'create') {
@@ -1182,6 +1178,12 @@
   /** Event listeners registered through `onX` members. */
   const listeners = new Map();
   function emit(channel, ...args) {
+    // Both local writes and SSE events invalidate before notifying subscribers.
+    const snapshot = channel === 'appearanceSettings.onChanged' ? 'appearanceSettings.getSync'
+      : channel === 'layout.onChanged' ? 'layout.getStateSync'
+        : channel === 'appShortcuts.onChanged' ? 'appShortcuts.getState'
+          : channel.startsWith('sidebarSettings.on') ? 'sidebarSettings.loadSnapshot' : null;
+    if (snapshot) syncSnapshots.delete(`${snapshot}\u0000[]`);
     for (const cb of listeners.get(channel) ?? []) {
       try { cb(...args); } catch (error) { console.error('[cindy-web] listener failed', channel, error); }
     }

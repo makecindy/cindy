@@ -37,3 +37,11 @@ it('asks for runtime sessions and preserves versioned snapshot options', () => {
   expect(entry.hostPath).toBe('/api/runtime/sessions');
   expect(entry.body?.([{ summary: true, snapshotVersion: 2 }])).toEqual({ options: { summary: true, snapshotVersion: 2 } });
 });
+
+// Regression: an explicit Host client must log out the credential owner, not
+// mutate the desktop client's unrelated local credential record.
+it('routes explicit Host logout to the same writer as refresh', () => {
+  const entry = HOST_CONTRACT_CHANNELS.find(c => c.desktopChannel === 'auth:logout')!;
+  expect(entry.hostPath).toBe('/api/auth/logout');
+  expect(entry.body?.([])).toEqual({});
+});

@@ -151,8 +151,10 @@ export function createInputQueue(deps) {
           // The composer owns the route for this message; the row only supplies the
           // fallback when the item does not name one.
           model: next.model || stored.model,
-          effort: next.effort || undefined,
-          permissionMode: next.permissionMode || undefined,
+          effort: next.effort || stored.effort || undefined,
+          permissionMode: next.permissionMode || stored.permissionMode || undefined,
+          fastMode: stored.fastMode ?? undefined,
+          planMode: stored.planModeEnabled ?? undefined,
           providerId: stored.providerId ?? undefined,
           resumeSessionId: makerKind === toMakerAgentKind(stored.agentKind)
             ? stored.sdkSessionId || undefined : undefined,

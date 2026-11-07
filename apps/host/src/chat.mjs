@@ -102,6 +102,11 @@ export function createChatHandler(deps) {
         workingDir: stored?.workingDir || workDir,
         model: stored?.model || (typeof payload.model === 'string' ? payload.model : deps.defaultModel),
         providerId: stored?.providerId ?? undefined,
+        resumeSessionId: stored?.sdkSessionId || undefined,
+        effort: stored?.effort || undefined,
+        permissionMode: stored?.permissionMode || undefined,
+        fastMode: stored?.fastMode ?? undefined,
+        planMode: stored?.planModeEnabled ?? undefined,
         title: typeof payload.title === 'string' ? payload.title : undefined,
       });
       // Tool calls need a resolver: without one the session denies every request

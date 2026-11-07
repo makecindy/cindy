@@ -66,3 +66,23 @@ test('rejects unknown fields and empty prompts before touching the runtime', asy
     assert.equal(response.writableEnded, true);
   }
 });
+
+// Same restart invariant as the queue: the direct streaming entry must pass
+// native identity and stored permissions to Maker before sending (unit).
+test('direct chat resumes the stored SDK conversation and execution settings', async () => {
+  let options;
+  const { response } = harness([]);
+  const handler = createChatHandler({ defaultWorkDir: '/tmp',
+    readSession: async () => ({ agentKind: 'claude-code', sdkSessionId: 'native-existing',
+      model: 'stored', permissionMode: 'ask', effort: 'high', fastMode: false, planModeEnabled: true }),
+    maker: { getSession: () => null, createSession: async opts => {
+      options = opts; return fakeSession([{ type: 'done' }]);
+    } },
+  });
+  await handler(request({ sessionId: 's1', prompt: 'continue' }), response);
+  assert.equal(options.resumeSessionId, 'native-existing');
+  assert.equal(options.permissionMode, 'ask');
+  assert.equal(options.effort, 'high');
+  assert.equal(options.fastMode, false);
+  assert.equal(options.planMode, true);
+});
