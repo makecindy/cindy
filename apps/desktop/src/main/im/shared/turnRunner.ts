@@ -1674,6 +1674,20 @@ export function createTurnRunner(
       if (turnTerminalNow() === 'aborted') {
         const index = state.queue.indexOf(item.turn);
         if (index >= 0) state.queue.splice(index, 1);
+        // beginChunkedReply 早在消息准备期已执行(企微 beginReply 已登记未结束流),
+        // 与上方停止分支同款补发停止终稿,否则回复永不结束、下一轮终稿错位。
+        if (output.kind === 'chunked-text' && item.turn.chunkedReplyBegun) {
+          try {
+            await output.commitFinal({
+              userId,
+              text: ui.agent.stopDone(0),
+              terminal: 'aborted',
+              threadTs: item.turn.scopeKey,
+            });
+          } catch (err) {
+            log.warn(`cancelled reply finalization failed: ${err instanceof Error ? err.message : String(err)}`);
+          }
+        }
         await completeTurnCallbackAfterAck(item.turn);
         settleTurnTerminal(item.turn);
         if (!finishDeferredDetachIfIdle(state)) armDispatchRetry(state, userId);

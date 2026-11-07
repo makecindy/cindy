@@ -293,6 +293,20 @@ describe('piProjectResourcesDrifted', () => {
     expect(piProjectResourcesDrifted(baseline)).toBe(true);
   });
 
+  itPosixOnly('detects a second-level manifest target move for a direct symlinked skill root', () => {
+    // 直链 skill 根的 SKILL.md 是二级软链:目标删除只改目标处,跟随后的目录与
+    // skills 根 mtime 都不变,必须靠清单本体盯视检出。
+    mkdirSync(path.join(project, 'real-skill'), { recursive: true });
+    mkdirSync(path.join(project, 'targets'), { recursive: true });
+    writeFileSync(path.join(project, 'real-skill', 'SKILL.md'), '---\nname: foo\ndescription: t\n---\n');
+    symlinkSync(path.join(project, 'real-skill'), path.join(project, '.pi', 'skills', 'foo'), 'dir');
+    rmSync(path.join(project, 'real-skill', 'SKILL.md'));
+    symlinkSync(path.join(project, 'targets', 'real.md'), path.join(project, 'real-skill', 'SKILL.md'));
+    const baseline = snapshot();
+    rmSync(path.join(project, 'targets', 'real.md'));
+    expect(piProjectResourcesDrifted(baseline)).toBe(true);
+  });
+
   it('collectors honor a shared repoRootHint (launch shares one resolution)', () => {
     writeFileSync(path.join(project, '.git'), '');
     writeSkill(path.join('.pi', 'skills'), 'alpha');

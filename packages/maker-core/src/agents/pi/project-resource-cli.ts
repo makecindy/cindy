@@ -271,12 +271,14 @@ function watchPiSkillTreeMtimes(roots: Map<string, number>, skillsDir: string): 
     if (!entry.isDirectory() && !entry.isSymbolicLink()) continue;
     const childPath = path.join(skillsDir, entry.name);
     roots.set(childPath, statMtimeMs(childPath));
-    if (entry.isSymbolicLink()) continue;
     const realChild = realpathOrNull(childPath);
     if (!realChild || !isDir(realChild)) continue;
     // 清单本体无论当前是否解析都盯住:悬空链(目标尚不存在)落地成 skill 时,
     // 改动的只是未盯视的目标处,盯住链接自身才能检出(与 prompts 同款)。
+    // 直链 skill 根同样适用:其 SKILL.md 为二级软链时,目标移动/删除只改目标处,
+    // 跟随后的目录与 skills 根 mtime 都不动,必须先记清单本体再跳过软链目录。
     watchPiSkillManifestTargets(roots, realChild);
+    if (entry.isSymbolicLink()) continue;
     if (hasSkillFile(realChild)) continue; // skill 目录:collector 不再往里枚举
     if (shouldPruneSkillScanDirectory(entry.name)) continue; // collector 剪枝的 namespace
     for (const nested of listDir(realChild)) {
