@@ -224,13 +224,6 @@ struct PululuMascotView: View {
     Path(roundedRect: rect, cornerRadius: radius)
   }
 
-  private func drawShadow(_ c: GraphicsContext, v: V, width: CGFloat, opacity: Double, dy: CGFloat = 0) {
-    c.fill(
-      Path(ellipseIn: v.ellipse(cx: 8, cy: 14.0, rx: width / 2, ry: 0.55, dy: dy)),
-      with: .color(.black.opacity(opacity))
-    )
-  }
-
   private func drawPululu(
     _ c: GraphicsContext,
     v: V,
@@ -420,7 +413,6 @@ struct PululuMascotView: View {
 
     return Canvas(rendersAsynchronously: true) { c, sz in
       let v = V(sz)
-      drawShadow(c, v: v, width: 8.2 - abs(float) * 0.25, opacity: 0.22)
       drawPululu(
         c,
         v: v,
@@ -451,7 +443,6 @@ struct PululuMascotView: View {
       let dy = CGFloat(bounce - 0.25)
       let squashY: CGFloat = dy > 0.25 ? 0.98 : 1.0
 
-      drawShadow(c, v: v, width: 8.1 - abs(dy) * 0.32, opacity: 0.30)
       drawPululu(
         c,
         v: v,
@@ -506,7 +497,6 @@ struct PululuMascotView: View {
 
     return Canvas(rendersAsynchronously: true) { c, sz in
       let v = V(sz)
-      drawShadow(c, v: v, width: 8.4 - abs(min(0, jumpY)) * 0.42, opacity: 0.36)
       var body = c
       body.translateBy(x: shakeX * v.s, y: 0)
       drawPululu(
@@ -553,7 +543,6 @@ struct PululuMascotView: View {
       let v = V(sz)
       if mascotPct < 1 {
         let dy = hop
-        drawShadow(c, v: v, width: 8.0 - abs(dy) * 0.36, opacity: 0.26 * Double(disappear))
         var mascot = c
         let center = CGPoint(x: v.ox + 8 * v.s, y: v.oy + 8.15 * v.s)
         mascot.translateBy(x: center.x, y: center.y)
@@ -897,13 +886,6 @@ struct SpriteMascotView: View {
     Path(roundedRect: rect, cornerRadius: radius)
   }
 
-  private func drawShadow(_ c: GraphicsContext, v: V, width: CGFloat, opacity: Double, dy: CGFloat = 0) {
-    c.fill(
-      Path(ellipseIn: v.ellipse(cx: 8, cy: 14.3, rx: width / 2, ry: 0.48, dy: dy)),
-      with: .color(.black.opacity(opacity))
-    )
-  }
-
   private func drawSprite(
     _ c: GraphicsContext,
     v: V,
@@ -1066,7 +1048,6 @@ struct SpriteMascotView: View {
 
     return Canvas(rendersAsynchronously: true) { c, sz in
       let v = V(sz)
-      drawShadow(c, v: v, width: 8.8 - abs(float) * 0.22, opacity: 0.23)
       drawSprite(
         c,
         v: v,
@@ -1097,7 +1078,6 @@ struct SpriteMascotView: View {
     return Canvas(rendersAsynchronously: true) { c, sz in
       let v = V(sz)
       let dy = bounce - 0.25
-      drawShadow(c, v: v, width: 8.4 - abs(dy) * 0.32, opacity: 0.30)
       drawSprite(
         c,
         v: v,
@@ -1149,7 +1129,6 @@ struct SpriteMascotView: View {
 
     return Canvas(rendersAsynchronously: true) { c, sz in
       let v = V(sz)
-      drawShadow(c, v: v, width: 8.6 - abs(min(0, jumpY)) * 0.42, opacity: 0.36)
       drawSprite(
         c,
         v: v,
@@ -1190,7 +1169,6 @@ struct SpriteMascotView: View {
       let v = V(sz)
       if mascotPct < 1 {
         let dy = hop
-        drawShadow(c, v: v, width: 8.4 - abs(dy) * 0.36, opacity: 0.26 * Double(disappear))
         drawSprite(
           c,
           v: v,

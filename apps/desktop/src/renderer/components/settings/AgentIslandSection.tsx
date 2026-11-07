@@ -685,7 +685,7 @@ function MascotPreviewImage({
 }
 
 /**
- * Sprite 皮肤预览:影子与眼睛用绝对定位 HTML 元素表达(原为内联 SVG),
+ * Sprite 皮肤预览:眼睛用绝对定位 HTML 元素表达(原为内联 SVG),
  * 让 eye-focus 等常驻动画挂在 HTML 上(规则 7)。
  * props(src / config)均为模块常量,memo 让 1.7s 轮播 tick 不再重渲此子树
  * (动画模式切换走父级 data-motion 属性,不经过本组件)。
@@ -700,14 +700,6 @@ const SpriteMascotPreview = memo(function SpriteMascotPreview({
   const eyesBox = getMascotEyesBox(config);
   return (
     <div className="relative h-10 w-10">
-      <span
-        className="pointer-events-none absolute block rounded-[50%] bg-black"
-        style={{
-          ...mascotViewBoxStyle(8 - 4.2, 14.3 - 0.48, 4.2 * 2, 0.48 * 2),
-          opacity: 0.28,
-        }}
-        aria-hidden="true"
-      />
       <div
         className="agent-island-mascot-character absolute inset-0 flex items-center justify-center"
         style={{ '--agent-island-mascot-scale': config.imageScale ?? 1 } as CSSProperties}
