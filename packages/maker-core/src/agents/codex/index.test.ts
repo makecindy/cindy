@@ -2125,7 +2125,7 @@ describe('CodexAgent permissions', () => {
 
   it.each([false, true])('keeps goal continuation owned by Cindy on thread startup (resume=%s)', async (resume) => {
     const agent = new CodexAgent(createDeps());
-    installFakeHost(agent);
+    const host = installFakeHost(agent);
     const handle = await agent.startSession({
       sessionId: 'host-owned-goal',
       model: 'gpt-6-astra',
