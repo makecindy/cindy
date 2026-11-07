@@ -9419,14 +9419,28 @@
       }
     },
     "terminal": {
+      "closeFailed": "终端未能关闭，页签仍留",
+      "remote": {
+        "selectAgain": "请于列表重选连接，或改主机、用户名而后再连",
+        "setupDescription": "以 SSH 主机或别名连接，存之以供同一目标沿用。",
+        "host": "SSH 主机或别名",
+        "user": "用户名",
+        "optional": "可选",
+        "connect": "连接终端",
+        "selectedHost": "选既有 SSH 连接",
+        "targetUnavailable": "无法确认远程任务的目录或归属",
+        "hostInvalid": "请输入不含空格的有效 SSH 主机或别名",
+        "userInvalid": "请输入不含空格的有效用户名",
+        "editConnection": "修改连接"
+      },
       "defaultTitle": "终端",
       "processExited": "处理程序已退（退出码 {{code}}）",
       "processKilled": "处理程序已止（信号 {{signal}}）",
       "restart": "复启",
       "shellNotFound": "未得可用之 shell：{{detail}}",
       "spawnFailed": "终端不能启：{{detail}}",
-      "remoteUnavailableTitle": "远程差事暂不可用",
-      "remoteUnavailableDescription": "终端今仅适于此设备上所行之本机差事。"
+      "remoteUnavailableTitle": "正确认终端位置",
+      "remoteUnavailableDescription": "正确认此差事于何机执行。"
     },
     "review": {
       "turn": {

@@ -1117,6 +1117,7 @@ export const MAKER_PUSH = {
  *   - GET / SET DEFAULT_SHELL_PREF: 持久化用户默认 shell 偏好
  */
 export const TERMINAL_INVOKE = {
+  DESCRIBE_REMOTE: 'terminal:describe-remote',
   CREATE: 'terminal:create',
   WRITE: 'terminal:write',
   RESIZE: 'terminal:resize',

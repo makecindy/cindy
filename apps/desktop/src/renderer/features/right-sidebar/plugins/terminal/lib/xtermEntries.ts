@@ -8,6 +8,7 @@
 
 import type { Terminal } from '@xterm/xterm';
 import type { FitAddon } from '@xterm/addon-fit';
+import type { RemoteTerminalConnection, RemoteTerminalContext } from '../../../../../../shared/terminal-bridge';
 
 export interface XtermEntry {
   terminal: Terminal;
@@ -22,6 +23,14 @@ export interface XtermEntry {
    * 否则 PTY 输出仍推给旧窗口。见 TerminalTabBody effect #2。
    */
   ptyAttached: boolean;
+  /** Closing entries reject late asynchronous work until disposal. */
+  closing: boolean;
+  /** Resume suspended preparation when a close is rolled back. */
+  closeCancelledListeners: Set<() => void>;
+  /** Original create/attach origin; retained across transient device-index gaps. */
+  remoteContext?: RemoteTerminalContext;
+  /** SSH form values and submission intent live only as long as this pooled tab. */
+  remoteDraft?: { contextKey: string; connection?: RemoteTerminalConnection; submitted: boolean };
 }
 
 /** tabId → xterm 实例。只由 xtermPool 增删。 */

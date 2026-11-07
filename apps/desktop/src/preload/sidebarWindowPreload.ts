@@ -1,4 +1,5 @@
 import { createAccessibilitySupportBridge } from './accessibilitySupport';
+import type { RemoteTerminalContext, RemoteTerminalDescription, TerminalDescribeRemoteParams } from '../shared/terminal-bridge';
 import { invokeOpenPath } from './openPath';
 import { COPY_PNG_TO_CLIPBOARD_CHANNEL, type CopyPngToClipboardParams } from '../shared/pngClipboard';
 import { SELECTION_CONTEXT_MENU_ADD_TO_CHAT_CHANNEL } from '../shared/selectionContextMenu';
@@ -270,10 +271,11 @@ contextBridge.exposeInMainWorld('electronAPI', {
     chatStat: (params: unknown): Promise<unknown> => ipcRenderer.invoke('maker:chat-file:stat', params),
   },
   terminal: {
+    describeRemote: (params: TerminalDescribeRemoteParams): Promise<RemoteTerminalDescription & { ticket?: string }> => ipcRenderer.invoke('terminal:describe-remote', params),
     create: (params: unknown): Promise<unknown> => ipcRenderer.invoke('terminal:create', params),
     write: (id: string, data: string): Promise<unknown> => ipcRenderer.invoke('terminal:write', id, data),
     resize: (id: string, cols: number, rows: number): Promise<unknown> => ipcRenderer.invoke('terminal:resize', id, cols, rows),
-    dispose: (id: string): Promise<unknown> => ipcRenderer.invoke('terminal:dispose', id),
+    dispose: (id: string, context?: RemoteTerminalContext): Promise<unknown> => ipcRenderer.invoke('terminal:dispose', id, context),
     restart: (id: string): Promise<unknown> => ipcRenderer.invoke('terminal:restart', id),
     onData: (cb: (event: unknown) => void): (() => void) => onPayload('terminal:data', cb),
     onExit: (cb: (event: unknown) => void): (() => void) => onPayload('terminal:exit', cb),

@@ -23,6 +23,7 @@ import { createIpcError } from '../../../shared/ipc-errors';
 import { MAX_STATE_JSON_BYTES } from '../../../shared/rightSidebarTabState';
 import { getSessionDeviceId } from '@/features/device-link/remoteProjectsStore';
 import { getTabKind } from './registry';
+import { finishClosing } from './lib/tabClosingSignal';
 import { browserWebviewPool } from './lib/browserWebviewPool';
 import { unmarkPopupSpawnedTab } from './lib/popupTabs';
 import { closeNativePopupForTab } from './lib/nativePopupTabs';
@@ -1249,6 +1250,7 @@ export async function closeTab(
     }
   }).finally(() => {
     closingTabIds.delete(tabId);
+    if (!opts.skipBeforeClose) finishClosing(tabId);
   });
   return mutation;
 }

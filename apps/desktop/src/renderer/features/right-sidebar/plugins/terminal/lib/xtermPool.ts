@@ -25,6 +25,7 @@ import { FitAddon } from '@xterm/addon-fit';
 import { WebLinksAddon } from '@xterm/addon-web-links';
 
 import { createLogger } from '@/lib/logger';
+import { registerClosing, unregisterClosing } from '../../../lib/tabClosingSignal';
 import {
   DEFAULT_APPEARANCE_SETTINGS,
   DEFAULT_TERMINAL_FONT_FAMILY,
@@ -57,6 +58,11 @@ const DEFAULT_OPTIONS: ITerminalOptions = {
   },
 };
 
+/** Read existing close context without creating a terminal for an unmounted tab. */
+export function getXterm(tabId: string): XtermEntry | undefined {
+  return pool.get(tabId);
+}
+
 /** 获取或创建某个 tabId 的 xterm 实例。重复调用同 id 返回同一个。 */
 export function getOrCreateXterm(tabId: string): XtermEntry {
   let entry = pool.get(tabId);
@@ -76,8 +82,18 @@ export function getOrCreateXterm(tabId: string): XtermEntry {
     fitAddon,
     lastSize: { cols: 80, rows: 24 },
     ptyAttached: false,
+    closing: false,
+    closeCancelledListeners: new Set(),
   };
   pool.set(tabId, entry);
+  const registeredEntry = entry;
+  registerClosing(tabId, (closing) => {
+    const wasClosing = registeredEntry.closing;
+    registeredEntry.closing = closing;
+    if (wasClosing && !closing) {
+      registeredEntry.closeCancelledListeners.forEach(listener => listener());
+    }
+  });
   return entry;
 }
 
@@ -107,6 +123,9 @@ export function disposeXterm(tabId: string): void {
   const entry = pool.get(tabId);
   if (!entry) return;
   pool.delete(tabId);
+  unregisterClosing(tabId);
+  entry.remoteDraft = undefined;
+  entry.closeCancelledListeners.clear();
   try {
     entry.terminal.dispose();
   } catch {

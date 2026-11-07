@@ -5,7 +5,7 @@ import { Button } from '@/components/ui/button';
  * 生命周期：
  *   1. 首次 mount：从 xtermPool 拿 Terminal 实例 → `terminal.open(slot)` → fit
  *      → state.created === false → IPC create PTY → patchState({ created: true })
- *      之后再次 mount(用户切回此 tab)只重挂 DOM + 重新 fit + focus，不重建 PTY
+ *      之后再次 mount 重挂 DOM + fit + focus，并 attach 检查离开期间的退出状态
  *   2. 用户输入 → xterm onData → IPC.terminal.write(id, data)
  *   3. PTY 输出 → main 推 terminal:data event → 自己按 id filter → terminal.write(chunk)
  *   4. PTY 退出 → state.exited 填上 → 渲染 overlay (退出码 + Restart 按钮)
@@ -19,10 +19,13 @@ import { Button } from '@/components/ui/button';
  */
 
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
-import { RotateCw, AlertTriangle, ServerOff } from 'lucide-react';
+import { RotateCw, ServerOff } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 
 import { Spinner } from '@/components/ui/spinner';
+import { ErrorNotice } from '@/components/ui/error-notice';
+import { extractIpcError } from '@/utils/ipcError';
+import { RemoteTerminalSetup } from './RemoteTerminalSetup';
 import type { TabKindHostContext } from '../../types';
 import { getOrCreateXterm, type XtermEntry } from './lib/xtermPool';
 import { createTerminalFontController } from './lib/terminalFont';
@@ -30,8 +33,9 @@ import { useTerminalFontSettings } from './lib/useTerminalFontSettings';
 import type {
   TerminalDataEvent,
   TerminalExitEvent,
+  RemoteTerminalContext,
 } from '../../../../../shared/terminal-bridge';
-import type { TerminalState } from './index';
+import { TERMINAL_RENDERER_INSTANCE_ID, type TerminalState } from './index';
 
 interface Props {
   state: TerminalState;
@@ -48,12 +52,13 @@ interface RuntimeError {
 }
 
 export function TerminalTabBody({ state, ctx, active, shellVisible = true }: Props) {
-  // The PTY IPC always executes on this Desktop instance. Remote workdirs must
-  // fail closed, including while device-link ownership is still unresolved.
-  const isLocalSession = ctx.remoteHostId === null && ctx.deviceLinkDeviceId === null;
-  if (!isLocalSession) return <RemoteTerminalUnavailable />;
-
-  return <LocalTerminalTabBody state={state} ctx={ctx} active={active} shellVisible={shellVisible} />;
+  // Unknown ownership must never pass a remote workdir to a local shell.
+  if (ctx.deviceLinkDeviceId === undefined) return <RemoteTerminalUnavailable />;
+  if (ctx.remoteHostId !== null || ctx.deviceLinkDeviceId !== null) {
+    const contextKey = JSON.stringify([ctx.tabId, ctx.sessionId, ctx.deviceLinkDeviceId, ctx.remoteHostId]);
+    return <RemoteTerminalSetup key={contextKey} state={state} ctx={ctx} active={active} shellVisible={shellVisible} />;
+  }
+  return <TerminalSessionBody state={state} ctx={ctx} active={active} shellVisible={shellVisible} />;
 }
 
 function RemoteTerminalUnavailable() {
@@ -73,13 +78,25 @@ function RemoteTerminalUnavailable() {
   );
 }
 
-function LocalTerminalTabBody({ state, ctx, active, shellVisible = true }: Props) {
+/** Local and SSH shells share the same xterm pool, IPC and tab lifecycle. */
+export function TerminalSessionBody({ state, ctx, active, shellVisible = true, remote, onBeginEditConnection, onEditConnection, onPrepare }: Props & {
+  remote?: RemoteTerminalContext & { ticket?: string };
+  onBeginEditConnection?: () => void;
+  onEditConnection?: () => void;
+  onPrepare?: () => void;
+}) {
   const { tabId, workdir, patchState } = ctx;
+  const isRemote = Boolean(remote);
   const { t } = useTranslation();
   const { terminalFamily, terminalSize } = useTerminalFontSettings();
 
   const slotRef = useRef<HTMLDivElement>(null);
   const entryRef = useRef<XtermEntry | null>(null);
+  // A pooled attachment outlives this body's exit subscription. Each new body
+  // must attach once after subscribing: SSH replays missed exits, while local
+  // create rejects an exited session so the error overlay offers restart.
+  const attachedEntryRef = useRef<XtermEntry | null>(null);
+  const exitRevisionRef = useRef(0);
   const fontControllerRef = useRef<ReturnType<typeof createTerminalFontController> | null>(null);
   const activeRef = useRef(active);
   activeRef.current = active;
@@ -92,6 +109,7 @@ function LocalTerminalTabBody({ state, ctx, active, shellVisible = true }: Props
 
   const [runtimeError, setRuntimeError] = useState<RuntimeError | null>(null);
   const [restarting, setRestarting] = useState(false);
+  const [creating, setCreating] = useState(false);
 
   // ─── 1. xterm DOM 挂载 + IPC data/exit 订阅 ───
   // 用 useLayoutEffect 确保 paint 前 DOM 已经 attach,避免首帧空白
@@ -120,28 +138,40 @@ function LocalTerminalTabBody({ state, ctx, active, shellVisible = true }: Props
       });
     });
 
+    // A cleaned-up subscription must stay inactive even if this body's next
+    // layout effect makes aliveRef true again.
+    let subscribed = true;
     // 订阅 main 推过来的 PTY 输出 / 退出,按 tabId filter
     const offData = window.electronAPI.terminal.onData((evt: unknown) => {
       const data = evt as TerminalDataEvent;
-      if (!aliveRef.current || data.id !== tabId) return;
+      if (!subscribed || !aliveRef.current || data.id !== tabId) return;
       entry.terminal.write(data.chunk);
     });
     const offExit = window.electronAPI.terminal.onExit((evt: unknown) => {
       const ex = evt as TerminalExitEvent;
-      if (!aliveRef.current || ex.id !== tabId) return;
-      patchState({ exited: ex.exit });
+      if (subscribed && aliveRef.current && ex.id === tabId) {
+        exitRevisionRef.current += 1;
+        patchState({
+          rendererInstanceId: TERMINAL_RENDERER_INSTANCE_ID,
+          // Persistence rollback does not undo this body's completed attach.
+          // Leave created to an in-flight create so its effect is not cancelled.
+          ...(entry.ptyAttached && attachedEntryRef.current === entry ? { created: true } : {}),
+          exited: ex.exit,
+        });
+      }
     });
 
     fontControllerRef.current = createTerminalFontController(
       entry.terminal,
       () => activeRef.current !== false && shellVisibleRef.current && hasSize(slot),
-      () => fitAndPushSize(entry, tabId, slot),
+      () => fitAndPushSize(entry, tabId, slot, isRemote),
     );
 
     // 折叠侧栏或隐藏页签时保留最后可用尺寸，恢复可见后再测量。
     if (activeRef.current !== false && shellVisibleRef.current) fitNow(entry, slot);
 
     return () => {
+      subscribed = false;
       aliveRef.current = false;
       fontControllerRef.current?.dispose();
       fontControllerRef.current = null;
@@ -151,7 +181,7 @@ function LocalTerminalTabBody({ state, ctx, active, shellVisible = true }: Props
       offExit();
       // xterm 实例和 PTY 都保活,这里仅 detach DOM 不 dispose
     };
-  }, [tabId, patchState]);
+  }, [tabId, patchState, isRemote]);
 
   // Font changes are independent from the DOM/PTY lifecycle and never focus the terminal.
   useEffect(() => {
@@ -159,59 +189,99 @@ function LocalTerminalTabBody({ state, ctx, active, shellVisible = true }: Props
   }, [terminalFamily, terminalSize, tabId, patchState]);
 
   // ─── 2. PTY 创建 / 跨窗口 re-attach ───
-  // 两种进入条件:
-  //   a) state.created === false:首次创建 PTY
-  //   b) state.created === true 但本 renderer 的 xterm entry 从未 attach 过
-  //      (entry.ptyAttached === false):侧边栏宿主在"内嵌 ↔ 独立子窗口"间迁移,
+  // 本 body 尚未 attach，或 pool 已失去 attachment 时创建 / re-attach:
+  //      state.created 仅用于判断成功后的状态补写，持久化回滚不代表 attachment 失效。
+  //      切回任务时补收退出状态；侧边栏宿主在"内嵌 ↔ 独立子窗口"间迁移时,
   //      PTY 在 main 仍活着但输出 sink 绑在旧窗口的 webContents 上。
   //      ptyManager.create 是幂等 attach、可换 owner —— 再调一次把 sink 切到本窗口,
   //      输入输出即恢复(xterm scrollback 是 per-renderer 的,迁移后丢失可接受)。
   useEffect(() => {
-    if (restarting) return;
     const entry = entryRef.current;
     if (!entry) return;
-    if (state.created && entry.ptyAttached) return;
-    const isReattach = state.created;
     let cancelled = false;
-    const { cols, rows } = entry.lastSize;
-    const fallbackCwd = workdir || (typeof process !== 'undefined' && process.env?.HOME) || '/';
-    void window.electronAPI.terminal
-      .create({
-        id: tabId,
-        cwd: fallbackCwd,
-        cols,
-        rows,
-        // 不传 shellPref → main 端读取 Settings 中持久化的默认 shell。
-      })
-      .then((result) => {
-        if (cancelled || !aliveRef.current) return;
+    let pending = false;
+    let needsAttach = true;
+    const attach = () => {
+      if (cancelled || entry.closing || pending || !needsAttach) return;
+      if (entry.ptyAttached && attachedEntryRef.current === entry) {
+        if (isRemote) setCreating(false);
+        return;
+      }
+      const isReattach = state.created;
+      pending = true;
+      // A result skipped during close is not a completed attachment, even when
+      // this body attached the same pooled entry before an earlier invalidation.
+      attachedEntryRef.current = null;
+      const { cols, rows } = entry.lastSize;
+      if (isRemote) setCreating(true);
+      const fallbackCwd = workdir || (typeof process !== 'undefined' && process.env?.HOME) || '/';
+      // For SSH, discard hydrated exit state, then reconcile on completion: a late
+      // canonical snapshot can restore it while the IPC is pending. A real exit
+      // delivered during this request always wins over that cleanup.
+      const exitRevision = exitRevisionRef.current;
+      if (isRemote && state.exited != null) patchState({ exited: null });
+      // Keep the launch identity in the pool across task/window unmounts. A mirror
+      // index may disappear before close; never retain a short-lived ticket here.
+      if (remote) entry.remoteContext = { sessionId: remote.sessionId, deviceId: remote.deviceId ?? null };
+      // Layout subscriptions above are installed before this ownership handoff.
+      const request = window.electronAPI.terminal.create({
+        id: tabId, cwd: fallbackCwd, cols, rows,
+        ...(remote ? { remote } : {}),
+      });
+      void request.then((result) => {
+        pending = false;
+        if (cancelled || !aliveRef.current || entry.closing) return;
+        needsAttach = false;
+        if (isRemote) setCreating(false);
         entry.ptyAttached = true;
-        // A font can finish loading while create is in flight. Ensure the PTY
-        // receives the final dimensions even if the earlier resize arrived too soon.
-        if (entry.lastSize.cols !== cols || entry.lastSize.rows !== rows) {
-          void window.electronAPI.terminal
-            .resize(tabId, entry.lastSize.cols, entry.lastSize.rows)
-            .catch(() => undefined);
+        attachedEntryRef.current = entry;
+        if (remote && entry.remoteDraft?.submitted && entry.remoteDraft.contextKey === JSON.stringify([ctx.sessionId, ctx.deviceLinkDeviceId, ctx.remoteHostId])) {
+          entry.remoteDraft = undefined;
         }
-        // re-attach 路径不重复 patchState —— 持久化字段没变,写一遍只是无谓 IPC。
+        // A hidden view has no measured size yet. Keep the old PTY dimensions
+        // until this view becomes visible, then synchronize its first fit.
+        const slot = slotRef.current;
+        if (isRemote) {
+          if (activeRef.current !== false && shellVisibleRef.current && slot) fitAndPushSize(entry, tabId, slot, true);
+        } else if (entry.lastSize.cols !== cols || entry.lastSize.rows !== rows) {
+          void window.electronAPI.terminal.resize(tabId, entry.lastSize.cols, entry.lastSize.rows).catch(() => undefined);
+        }
+        const clearStaleExit = isRemote && exitRevisionRef.current === exitRevision;
         if (!isReattach) {
           patchState({
+            rendererInstanceId: TERMINAL_RENDERER_INSTANCE_ID,
             created: true,
             shellId: result.shellId,
             shellDisplayName: result.shellDisplayName,
-            exited: null,
+            ...(!isRemote || clearStaleExit ? { exited: null } : {}),
           });
+        } else if (clearStaleExit) {
+          patchState({ exited: null });
         }
         setRuntimeError(null);
-      })
-      .catch((err: unknown) => {
-        if (cancelled || !aliveRef.current) return;
-        setRuntimeError(parseError(err));
+      }).catch((err: unknown) => {
+        pending = false;
+        if (cancelled || !aliveRef.current || entry.closing) return;
+        needsAttach = false;
+        if (isRemote) setCreating(false);
+        if (isRemote && extractIpcError(err)?.code === 'PRECONDITION_FAILED') {
+          entry.ptyAttached = false;
+          if (state.created) patchState({ created: false, exited: null });
+          onPrepare?.();
+        } else {
+          setRuntimeError(parseError(err));
+        }
       });
+    };
+    // Subscribe even when mounting during close. Rollback resumes skipped work;
+    // an in-flight request finishes normally without a duplicate create/restart.
+    entry.closeCancelledListeners.add(attach);
+    attach();
     return () => {
       cancelled = true;
+      entry.closeCancelledListeners.delete(attach);
     };
-  }, [state.created, restarting, tabId, workdir, patchState]);
+  }, [state.created, tabId, workdir, patchState, remote, isRemote, onPrepare]);
 
   // ─── 3. ResizeObserver → fit → IPC resize ───
   useEffect(() => {
@@ -220,11 +290,11 @@ function LocalTerminalTabBody({ state, ctx, active, shellVisible = true }: Props
     const ro = new ResizeObserver(() => {
       const entry = entryRef.current;
       if (!entry || !aliveRef.current || !shellVisibleRef.current || activeRef.current === false || !hasSize(slot)) return;
-      if (!fontControllerRef.current?.flush()) fitAndPushSize(entry, tabId, slot);
+      if (!fontControllerRef.current?.flush()) fitAndPushSize(entry, tabId, slot, isRemote);
     });
     ro.observe(slot);
     return () => ro.disconnect();
-  }, [tabId]);
+  }, [tabId, isRemote]);
 
   // ─── 4. active 切换时 fit + focus(避免后台 layout 抖动)───
   useEffect(() => {
@@ -235,31 +305,49 @@ function LocalTerminalTabBody({ state, ctx, active, shellVisible = true }: Props
     const frame = requestAnimationFrame(() => {
       const slot = slotRef.current;
       if (!aliveRef.current || entryRef.current !== entry || !shellVisibleRef.current || activeRef.current === false || !slot || !hasSize(slot)) return;
-      if (!fontControllerRef.current?.flush()) fitAndPushSize(entry, tabId, slot);
+      if (!fontControllerRef.current?.flush()) fitAndPushSize(entry, tabId, slot, isRemote);
       entry.terminal.focus();
     });
     return () => cancelAnimationFrame(frame);
-  }, [active, shellVisible, tabId]);
+  }, [active, shellVisible, tabId, isRemote]);
 
   // ─── 5. Restart 按钮 handler ───
   const onRestart = useCallback(async () => {
     if (restarting) return;
+    if (remote && (!state.created || !entryRef.current?.ptyAttached)) {
+      onPrepare?.();
+      return;
+    }
     const entry = entryRef.current;
     setRestarting(true);
     setRuntimeError(null);
     try {
-      const result = await window.electronAPI.terminal.restart(tabId);
+      const result = await window.electronAPI.terminal.restart(tabId).catch((err: unknown) => {
+        // A failed first spawn has no registered PTY. Try restart first because
+        // hydrated state.created can also be false for an existing exited PTY.
+        if (remote || extractIpcError(err)?.code !== 'TERMINAL_NOT_FOUND') throw err;
+        // Close can finish while restart is pending; never recreate its disposed PTY.
+        if (!aliveRef.current || !entry || entry.closing || entryRef.current !== entry) throw err;
+        return window.electronAPI.terminal.create({
+          id: tabId,
+          cwd: workdir || (typeof process !== 'undefined' && process.env?.HOME) || '/',
+          ...(entry?.lastSize ?? { cols: 80, rows: 24 }),
+        });
+      });
       if (!aliveRef.current) return;
       // The exited PTY ignored font-driven resizes. Restart uses its old grid,
       // so resend the latest usable size even when the renderer has not changed.
       // Do not measure a hidden or collapsed panel just to synchronize restart.
       if (entry && entryRef.current === entry) {
+        entry.ptyAttached = true;
+        attachedEntryRef.current = entry;
         const { cols, rows } = entry.lastSize;
         if (Number.isFinite(cols) && Number.isFinite(rows) && cols > 0 && rows > 0) {
           void window.electronAPI.terminal.resize(tabId, cols, rows).catch(() => undefined);
         }
       }
       patchState({
+        rendererInstanceId: TERMINAL_RENDERER_INSTANCE_ID,
         created: true,
         shellId: result.shellId,
         shellDisplayName: result.shellDisplayName,
@@ -268,21 +356,56 @@ function LocalTerminalTabBody({ state, ctx, active, shellVisible = true }: Props
       // xterm 自身的 scrollback 保留;新 PTY 输出会继续 append
     } catch (err) {
       if (!aliveRef.current) return;
-      setRuntimeError(parseError(err));
+      if (remote && extractIpcError(err)?.code === 'TERMINAL_NOT_FOUND') {
+        if (entry) entry.ptyAttached = false;
+        patchState({ created: false, exited: null });
+        onPrepare?.();
+      } else {
+        setRuntimeError(parseError(err));
+      }
     } finally {
       if (aliveRef.current) setRestarting(false);
     }
-  }, [restarting, tabId, patchState]);
+  }, [restarting, tabId, workdir, patchState, state.created, remote, onPrepare]);
+
+  const editConnection = useCallback(async () => {
+    if (!onEditConnection || restarting) return;
+    onBeginEditConnection?.();
+    setRestarting(true);
+    try {
+      // Even an exited PTY remains registered in main until explicitly disposed.
+      const entry = entryRef.current;
+      if (!entry) return;
+      await window.electronAPI.terminal.dispose(tabId);
+      entry.ptyAttached = false;
+      if (!aliveRef.current) return;
+      onEditConnection();
+      patchState({ created: false, exited: null });
+    } catch (err) {
+      if (aliveRef.current) setRuntimeError(parseError(err));
+    } finally {
+      if (aliveRef.current) setRestarting(false);
+    }
+  }, [onBeginEditConnection, onEditConnection, restarting, tabId, patchState]);
 
   // 渲染:slot 撑满,exited / runtimeError 在上面叠一层 overlay
   return (
     <div className="relative h-full w-full bg-[#1c1c1c]">
       <div ref={slotRef} className="absolute top-2 bottom-0 left-2 right-2" />
+      {isRemote && (creating || (restarting && !state.created)) && !runtimeError && (
+        <div role="status" className="pointer-events-none absolute inset-0 flex items-center justify-center">
+          <div className="flex items-center gap-2 rounded-xl border border-[var(--border-default)] bg-[var(--surface-elevated)] px-4 py-2 text-13 text-[var(--text-secondary)]">
+            <Spinner size={14} aria-hidden />
+            {t('settings.remote.status.connecting')}
+          </div>
+        </div>
+      )}
       {state.exited != null && !runtimeError && (
         <ExitedOverlay
           exit={state.exited}
           restarting={restarting}
           onRestart={onRestart}
+          onEditConnection={onEditConnection ? editConnection : undefined}
           t={t}
         />
       )}
@@ -291,6 +414,7 @@ function LocalTerminalTabBody({ state, ctx, active, shellVisible = true }: Props
           message={t(runtimeError.i18nKey, { detail: runtimeError.detail })}
           restarting={restarting}
           onRetry={onRestart}
+          onEditConnection={onEditConnection ? editConnection : undefined}
           t={t}
         />
       )}
@@ -304,28 +428,26 @@ function hasSize(slot: HTMLElement): boolean {
   return slot.clientWidth > 0 && slot.clientHeight > 0;
 }
 
-function fitNow(entry: XtermEntry, slot: HTMLElement): void {
-  if (!hasSize(slot)) return;
+function fitNow(entry: XtermEntry, slot: HTMLElement): boolean {
+  if (!hasSize(slot)) return false;
   try {
+    const proposed = entry.fitAddon.proposeDimensions();
+    if (!proposed || proposed.cols < 1 || proposed.rows < 1) return false;
     entry.fitAddon.fit();
-    entry.lastSize = { cols: entry.terminal.cols, rows: entry.terminal.rows };
+    const { cols, rows } = entry.terminal;
+    if (!Number.isFinite(cols) || !Number.isFinite(rows) || cols < 1 || rows < 1) return false;
+    entry.lastSize = { cols, rows };
+    return true;
   } catch {
-    /* slot 可能还没尺寸,忽略 */
+    return false;
   }
 }
 
-function fitAndPushSize(entry: XtermEntry, tabId: string, slot: HTMLElement): void {
-  if (!hasSize(slot)) return;
-  try {
-    entry.fitAddon.fit();
-  } catch {
-    return;
-  }
-  const cols = entry.terminal.cols;
-  const rows = entry.terminal.rows;
-  if (!Number.isFinite(cols) || !Number.isFinite(rows) || cols < 1 || rows < 1) return;
-  if (cols === entry.lastSize.cols && rows === entry.lastSize.rows) return;
-  entry.lastSize = { cols, rows };
+function fitAndPushSize(entry: XtermEntry, tabId: string, slot: HTMLElement, force = false): void {
+  const previous = entry.lastSize;
+  if (!fitNow(entry, slot)) return;
+  const { cols, rows } = entry.lastSize;
+  if (cols === previous.cols && rows === previous.rows && !force) return;
   // create/reattach will reconcile these dimensions once it has an owner.
   if (!entry.ptyAttached) return;
   void window.electronAPI.terminal.resize(tabId, cols, rows).catch(() => {
@@ -348,20 +470,22 @@ function ExitedOverlay({
   exit,
   restarting,
   onRestart,
+  onEditConnection,
   t,
 }: {
   exit: { code: number | null; signal: string | null };
   restarting: boolean;
   onRestart: () => void;
+  onEditConnection?: () => void;
   t: ReturnType<typeof useTranslation>['t'];
 }) {
   const message = exit.signal
     ? t('rightSidebar.terminal.processKilled', { signal: exit.signal })
-    : t('rightSidebar.terminal.processExited', { code: exit.code ?? 0 });
+    : t('rightSidebar.terminal.processExited', { code: exit.code ?? (onEditConnection ? '—' : 0) });
   return (
     <div className="pointer-events-none absolute inset-0 flex items-end justify-center pb-6">
-      <div className="pointer-events-auto flex items-center gap-3 rounded-xl border border-white/15 bg-black/80 px-4 py-2 text-sm text-white shadow-[shadow:var(--shadow-menu)] backdrop-blur">
-        <span>{message}</span>
+      <div role="status" className="pointer-events-auto flex max-h-full max-w-[90%] flex-wrap items-center justify-center gap-3 overflow-y-auto rounded-xl border border-[var(--border-default)] bg-[var(--surface-elevated)] px-4 py-2 text-sm text-[var(--text-primary)] shadow-[shadow:var(--shadow-menu)]">
+        <span className="min-w-0 break-words">{message}</span>
         <Button
           variant="secondary"
           size="xs"
@@ -374,6 +498,9 @@ function ExitedOverlay({
           <Spinner icon={RotateCw} size={12} spinning={restarting} />
           {t('rightSidebar.terminal.restart')}
         </Button>
+        {onEditConnection && <Button type="button" variant="secondary" size="xs" compact disabled={restarting} onClick={onEditConnection}>
+          {t('rightSidebar.terminal.remote.editConnection')}
+        </Button>}
       </div>
     </div>
   );
@@ -383,33 +510,39 @@ function ErrorOverlay({
   message,
   restarting,
   onRetry,
+  onEditConnection,
   t,
 }: {
   message: string;
   restarting: boolean;
   onRetry: () => void;
+  onEditConnection?: () => void;
   t: ReturnType<typeof useTranslation>['t'];
 }) {
   return (
-    <div className="pointer-events-none absolute inset-0 flex items-center justify-center">
-      <div className="pointer-events-auto flex max-w-[90%] flex-col items-center gap-2 rounded-xl border border-white/15 bg-black/80 px-4 py-3 text-sm text-white shadow-[shadow:var(--shadow-menu)] backdrop-blur">
-        <div className="flex items-center gap-2 text-red-300">
-          <AlertTriangle size={14} />
-          <span>{message}</span>
-        </div>
-        <Button
-          variant="secondary"
-          size="xs"
-          compact
-          loading={restarting}
-          type="button"
-          onClick={onRetry}
-          disabled={restarting}
-        >
-          <Spinner icon={RotateCw} size={12} spinning={restarting} />
-          {t('rightSidebar.terminal.restart')}
-        </Button>
-      </div>
+    <div className="pointer-events-none absolute inset-0 flex items-center justify-center p-4">
+      <ErrorNotice
+        role="alert"
+        className="pointer-events-auto max-h-full min-w-0 max-w-full overflow-y-auto [overflow-wrap:anywhere]"
+        message={message}
+        actions={<>
+          <Button
+            variant="secondary"
+            size="xs"
+            compact
+            loading={restarting}
+            type="button"
+            onClick={onRetry}
+            disabled={restarting}
+          >
+            <Spinner icon={RotateCw} size={12} spinning={restarting} />
+            {t('rightSidebar.terminal.restart')}
+          </Button>
+          {onEditConnection && <Button type="button" variant="secondary" size="xs" compact disabled={restarting} onClick={onEditConnection}>
+            {t('rightSidebar.terminal.remote.editConnection')}
+          </Button>}
+        </>}
+      />
     </div>
   );
 }

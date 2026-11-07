@@ -8,8 +8,9 @@ import type { TabKindHostContext } from '../../../types';
 import type { TerminalState } from '../index';
 import type { XtermEntry } from '../lib/xtermPool';
 
-const poolMocks = vi.hoisted(() => ({ getOrCreateXterm: vi.fn() }));
+const poolMocks = vi.hoisted(() => ({ getOrCreateXterm: vi.fn(), markClosing: vi.fn(), disposeXterm: vi.fn() }));
 vi.mock('../lib/xtermPool', () => poolMocks);
+vi.mock('@/i18n', () => ({ i18n: { t: (key: string) => key } }));
 vi.mock('react-i18next', () => ({
   useTranslation: () => ({ t: (key: string) => key }),
 }));
@@ -115,6 +116,10 @@ function makeEntry() {
     refresh: vi.fn(),
   };
   const fitAddon = {
+    proposeDimensions: vi.fn(() => ({
+      cols: Math.max(1, Math.floor(width / (terminal.options.fontSize * 0.6))),
+      rows: Math.max(1, Math.floor(height / (terminal.options.fontSize * 1.2))),
+    })),
     fit: vi.fn(() => {
       fitSamples.push({ fontFamily: terminal.options.fontFamily, fontSize: terminal.options.fontSize });
       // Deliberately responsive to the public font option. This checks that the
@@ -127,6 +132,7 @@ function makeEntry() {
     terminal, fitAddon, fitSamples, inputListeners, output,
     lastSize: { cols: 80, rows: 24 },
     ptyAttached: true,
+    closeCancelledListeners: new Set<() => void>(),
   };
 }
 
@@ -223,6 +229,55 @@ afterEach(() => {
   Reflect.deleteProperty(window, 'electronAPI');
 });
 
+// PR8881 regressions (unit): exercise TerminalTabBody's visible recovery UI.
+// Font coverage did not reject initial create or exit a PTY while unsubscribed.
+// Minimal inputs: one failed spawn followed by retry; one exit between mounts.
+describe('TerminalTabBody local PTY recovery', () => {
+  it('retries create when restart cannot find the PTY after an initial spawn failure', async () => {
+    const ctx = context();
+    ctx.workdir = '/workspace';
+    const entry = makeEntry();
+    entry.ptyAttached = false;
+    entries.set(ctx.tabId, entry);
+    api.terminal.create.mockRejectedValueOnce(new Error('TERMINAL_SPAWN_FAILED'));
+    api.terminal.restart.mockRejectedValue(new Error('[TERMINAL_NOT_FOUND] missing PTY'));
+    render(<TerminalTabBody state={{ ...runningState, created: false }} ctx={ctx} active />);
+    await flushWork();
+    expect(screen.getByRole('alert')).toBeTruthy();
+
+    fireEvent.click(screen.getByRole('button', { name: 'rightSidebar.terminal.restart' }));
+    await flushWork();
+
+    expect(screen.queryByRole('alert')).toBeNull();
+    expect(api.terminal.create).toHaveBeenCalledTimes(2);
+    expect(api.terminal.create).toHaveBeenLastCalledWith({ id: ctx.tabId, cwd: ctx.workdir, ...entry.lastSize });
+    expect(api.terminal.restart).toHaveBeenCalledWith(ctx.tabId);
+    expect(ctx.patchState).toHaveBeenCalledWith(expect.objectContaining({ created: true, exited: null }));
+  });
+
+  it.each([true, false])('offers recovery after an unmounted local exit with created=%s on remount', async (created) => {
+    const ctx = context();
+    const view = render(<TerminalTabBody state={runningState} ctx={ctx} active />);
+    await flushWork();
+    const entry = entries.get(ctx.tabId)!;
+    view.unmount();
+    expect(exitListeners.size).toBe(0);
+    // Local main retains exited sessions and rejects create; only restart spawns.
+    api.terminal.create.mockRejectedValueOnce(new Error(`terminal session already exists (exited): ${ctx.tabId}`));
+    render(<TerminalTabBody state={{ ...runningState, created }} ctx={ctx} active />);
+    await flushWork();
+
+    expect(screen.getByRole('alert')).toBeTruthy();
+    expect(entries.get(ctx.tabId)).toBe(entry);
+    fireEvent.click(screen.getByRole('button', { name: 'rightSidebar.terminal.restart' }));
+    await flushWork();
+    expect(screen.queryByRole('alert')).toBeNull();
+    expect(api.terminal.restart).toHaveBeenCalledWith(ctx.tabId);
+    expect(ctx.patchState).toHaveBeenCalledWith(expect.objectContaining({ created: true, exited: null }));
+    expect(entry.terminal.open).toHaveBeenCalledOnce();
+  });
+});
+
 describe('TerminalTabBody terminal font preferences', () => {
   it('keeps the existing defaults and starts the PTY once without a settings provider', async () => {
     const ctx = context();
@@ -263,7 +318,7 @@ describe('TerminalTabBody terminal font preferences', () => {
     expect(entry.terminal.focus).not.toHaveBeenCalled();
     expect(entry.terminal.open).toHaveBeenCalledOnce();
     expect(poolMocks.getOrCreateXterm).toHaveBeenCalledOnce();
-    expect(api.terminal.create).not.toHaveBeenCalled();
+    expect(api.terminal.create).toHaveBeenCalledOnce(); // mount reattaches; font changes do not
     expect(api.terminal.restart).not.toHaveBeenCalled();
     expect(api.terminal.dispose).not.toHaveBeenCalled();
     expect(entry.terminal.dispose).not.toHaveBeenCalled();
@@ -327,7 +382,7 @@ describe('TerminalTabBody terminal font preferences', () => {
     expect(entry.terminal.options.fontFamily).toContain('Menlo');
     expect(entry.terminal.options.fontSize).toBe(20);
     expect(api.terminal.resize).toHaveBeenLastCalledWith(ctx.tabId, 66, 20);
-    expect(api.terminal.create).not.toHaveBeenCalled();
+    expect(api.terminal.create).toHaveBeenCalledOnce();
   });
 
   it('holds a font that finishes loading after collapse until the shell becomes visible', async () => {
@@ -358,7 +413,7 @@ describe('TerminalTabBody terminal font preferences', () => {
     expect(entry.terminal.options.fontFamily).toContain('Slow Mono');
     expect(entry.terminal.options.fontSize).toBe(22);
     expect(api.terminal.resize).toHaveBeenLastCalledWith(ctx.tabId, 60, 18);
-    expect(api.terminal.create).not.toHaveBeenCalled();
+    expect(api.terminal.create).toHaveBeenCalledOnce();
     expect(api.terminal.restart).not.toHaveBeenCalled();
   });
 
@@ -432,7 +487,7 @@ describe('TerminalTabBody terminal font preferences', () => {
     expect(appearanceListeners.size).toBe(1);
     expect(dataListeners.size).toBe(1);
     expect(entry.inputListeners.size).toBe(1);
-    expect(api.terminal.create).not.toHaveBeenCalled();
+    expect(api.terminal.create).toHaveBeenCalledTimes(2); // one attach per mount
     expect(api.terminal.restart).not.toHaveBeenCalled();
   });
 
@@ -532,7 +587,7 @@ describe('TerminalTabBody terminal font preferences', () => {
       expect(ptySize).toEqual({ cols: 66, rows: 20 });
       expect(ptySize).toEqual(entry.lastSize);
       expect(api.terminal.restart).toHaveBeenCalledOnce();
-      expect(api.terminal.create).not.toHaveBeenCalled();
+      expect(api.terminal.create).toHaveBeenCalledOnce();
       expect(api.terminal.dispose).not.toHaveBeenCalled();
       expect(entry.terminal.open).toHaveBeenCalledOnce();
       expect(entry.terminal.dispose).not.toHaveBeenCalled();
@@ -579,7 +634,7 @@ describe('TerminalTabBody terminal font preferences', () => {
       await notifyResize();
       expect(entry.terminal.options.fontSize).toBe(24);
       expect(api.terminal.resize).toHaveBeenLastCalledWith(ctx.tabId, 55, 16);
-      expect(api.terminal.create).not.toHaveBeenCalled();
+      expect(api.terminal.create).toHaveBeenCalledOnce();
     },
   );
 
@@ -637,7 +692,7 @@ describe('TerminalTabBody terminal font preferences', () => {
     expect(api.terminal.resize).toHaveBeenLastCalledWith(secondCtx.tabId, 66, 20);
     expect(first.terminal.open).toHaveBeenCalledOnce();
     expect(second.terminal.open).toHaveBeenCalledOnce();
-    expect(api.terminal.create).not.toHaveBeenCalled();
+    expect(api.terminal.create).toHaveBeenCalledTimes(2); // one attach per terminal
   });
 
   it('still applies local fonts when the browser does not expose the Font Loading API', async () => {

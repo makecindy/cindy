@@ -9462,14 +9462,28 @@
       }
     },
     "terminal": {
+      "closeFailed": "Das Terminal konnte nicht geschlossen werden. Der Tab bleibt geöffnet.",
+      "remote": {
+        "selectAgain": "Wähle die Verbindung erneut aus der Liste oder ändere den Host oder Benutzernamen.",
+        "setupDescription": "Verbinde dich über einen SSH-Host oder Alias. Diese Verbindung wird für dieses Ziel gespeichert.",
+        "host": "SSH-Host oder Alias",
+        "user": "Benutzername",
+        "optional": "Optional",
+        "connect": "Mit Terminal verbinden",
+        "selectedHost": "Vorhandene SSH-Verbindung auswählen",
+        "targetUnavailable": "Verzeichnis oder Zugehörigkeit der Remote-Sitzung konnte nicht bestätigt werden",
+        "hostInvalid": "Gib einen gültigen SSH-Host oder Alias ohne Leerzeichen ein",
+        "userInvalid": "Gib einen gültigen Benutzernamen ohne Leerzeichen ein",
+        "editConnection": "Verbindung bearbeiten"
+      },
       "defaultTitle": "Terminal",
       "processExited": "Prozess beendet (Code {{code}})",
       "processKilled": "Prozess abgebrochen (Signal {{signal}})",
       "restart": "Neu starten",
       "shellNotFound": "Shell nicht gefunden: {{detail}}",
       "spawnFailed": "Terminal konnte nicht gestartet werden: {{detail}}",
-      "remoteUnavailableTitle": "Für Remote-Sitzungen nicht verfügbar",
-      "remoteUnavailableDescription": "Das Terminal ist derzeit nur für Sitzungen auf diesem Gerät verfügbar."
+      "remoteUnavailableTitle": "Terminalstandort wird geprüft",
+      "remoteUnavailableDescription": "Es wird geprüft, wo diese Sitzung ausgeführt wird."
     },
     "review": {
       "turn": {

@@ -103,6 +103,10 @@ export interface CreateOptions {
   owner: WebContents;
   /** 额外 env 覆盖（不强制）。会跟 process.env 浅合并。 */
   env?: Record<string, string | undefined>;
+  /** Main-only launch override (for SSH); never parsed from renderer payloads. */
+  launch?: ResolvedShell;
+  /** Main-only remote ownership; retained across window transfers and explicit restarts. */
+  remoteIdentity?: { context: string; ownerKey: string };
 }
 
 export interface CreateResult {
@@ -142,6 +146,9 @@ interface PtySession {
   shellPref: ShellId | null;
   exit: ExitInfo | null;
   owner: WebContents;
+  launch?: ResolvedShell;
+  remoteIdentity?: CreateOptions['remoteIdentity'];
+  env?: CreateOptions['env'];
   /** 累积待发的 input；flush 完清空。 */
   pendingInput: string;
   /** flush 用的 microtask 是否已经 schedule。 */
@@ -192,6 +199,33 @@ export class PtyManager {
     return this.sessions.has(id);
   }
 
+  /** Only main-created SSH sessions have a launch override. */
+  isRemote(id: string): boolean {
+    return this.sessions.get(id)?.launch !== undefined;
+  }
+
+  remoteIdentity(id: string): CreateOptions['remoteIdentity'] {
+    const identity = this.sessions.get(id)?.remoteIdentity;
+    return identity ? { ...identity } : undefined;
+  }
+
+  isOwner(id: string, owner: WebContents): boolean {
+    return this.sessions.get(id)?.owner === owner;
+  }
+
+  disposeRemote(): void {
+    for (const [id, session] of this.sessions) {
+      if (!session.launch) continue;
+      // Secure teardown must finish even if its renderer has disappeared. Notify
+      // surviving tabs so an auth-realm change cannot leave a silent dead shell.
+      this.dispose(id);
+      if (!session.owner.isDestroyed()) {
+        try { this.sink.emitExit(session.owner, { id, exit: session.exit ?? { code: null, signal: null } }); }
+        catch { log.warn('terminal invalidation notification failed', { id }); }
+      }
+    }
+  }
+
   /**
    * 创建 PTY,或在同 id 已存在时返回现有 session 的元数据(幂等 / createOrAttach 语义)。
    *
@@ -207,14 +241,13 @@ export class PtyManager {
    *   - 同 id 已存在 + 仍在运行 → 返回现有 metadata, **更新 owner 到新 webContents**
    *     (renderer 重新 mount 后用新 webContents,旧 owner 可能已 destroyed);
    *     新传入的 cwd/cols/rows 忽略 —— PTY 内部状态已经走过了,xterm 之后会 resize 同步。
-   *   - 同 id 已存在但已 exit → 跟 codex 一致, restart() 是显式动作, 这里也拒绝(抛错让
-   *     renderer 知道要走 restart 路径); 但目前 plugin 在 exited 状态会渲染 overlay,
-   *     用户点 Restart 后才会调 restart() IPC,不会再调 create。
+   *   - 同 id 已 exit：本地终端保留原来的抛错行为，需显式 restart。
+   *     SSH 允许接管并补发退出状态，不 spawn，让窗口迁移后仍可显式重启。
    */
   create(opts: CreateOptions): CreateResult {
     const existing = this.sessions.get(opts.id);
     if (existing) {
-      if (existing.exit) {
+      if (existing.exit && !existing.launch) {
         throw new Error(`terminal session already exists (exited): ${opts.id}`);
       }
       // 幂等 attach:把 owner 切到当前 webContents,后续 sink.emitData 才能正确推过去。
@@ -222,6 +255,9 @@ export class PtyManager {
       // 时兜底。
       existing.owner = opts.owner;
       this.trackOwner(opts.owner);
+      if (existing.exit && !opts.owner.isDestroyed()) {
+        this.sink.emitExit(opts.owner, { id: existing.id, exit: existing.exit });
+      }
       log.info('pty attached (already exists)', {
         safe: {
           id: opts.id,
@@ -337,6 +373,9 @@ export class PtyManager {
       cols: old.cols,
       rows: old.rows,
       shellPref: old.shellPref,
+      launch: old.launch,
+      remoteIdentity: old.remoteIdentity,
+      env: old.env,
       owner,
     });
   }
@@ -370,7 +409,7 @@ export class PtyManager {
   private spawnSession(opts: CreateOptions): PtySession {
     const cols = opts.cols && opts.cols > 0 ? opts.cols : DEFAULT_COLS;
     const rows = opts.rows && opts.rows > 0 ? opts.rows : DEFAULT_ROWS;
-    const resolved = resolveShellForCreate(opts.shellPref ?? null);
+    const resolved = opts.launch ?? resolveShellForCreate(opts.shellPref ?? null);
 
     // 合并 env:先复制父进程环境,做平台兜底,再应用调用方显式覆盖。
     // ENV_KEYS_TO_STRIP 与 TERM 仍在下方强制执行,不允许 opts.env 改写。
@@ -412,6 +451,9 @@ export class PtyManager {
       shellPref: opts.shellPref ?? null,
       exit: null,
       owner: opts.owner,
+      launch: opts.launch,
+      remoteIdentity: opts.remoteIdentity,
+      env: opts.env,
       pendingInput: '',
       flushScheduled: false,
       decoder: new StringDecoder('utf8'),
@@ -434,6 +476,8 @@ export class PtyManager {
         code: typeof exitCode === 'number' ? exitCode : null,
         signal: signal != null ? String(signal) : null,
       };
+      // SSH uses node-pty's zero signal for normal exit; keep local behavior intact.
+      if (session.launch && signal === 0) exitInfo.signal = null;
       session.exit = exitInfo;
       // flush 一下残留输入（exit 后写无意义，但保持状态干净）
       session.pendingInput = '';
