@@ -607,6 +607,7 @@ export function createMessageHandler(
         // Only clear if I'm still the tail (no follow-up enqueued).
         if (userLocks.get(key) === work) userLocks.delete(key);
       });
+      return work;
     });
   };
 }

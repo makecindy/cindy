@@ -154,3 +154,10 @@ export type {
 } from './binding/index.js';
 
 export type { TelegramHistoryImageRef } from './telegram/inbound.js';
+
+export { BlueBubblesIM, parseBlueBubblesConfig, BLUEBUBBLES_SECRET_KEYS } from './bluebubbles/index.js';
+export type { BlueBubblesConfig, BlueBubblesOptions } from './bluebubbles/index.js';
+export type { BlueBubblesState, BlueBubblesStateStorage } from './bluebubbles/state.js';
+export { LocalWebhookReceiver } from './localWebhook.js';
+
+export { applyBlueBubblesReceiptUpdate, type BlueBubblesReceiptUpdate } from './bluebubbles/state.js';

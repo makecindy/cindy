@@ -463,6 +463,20 @@ describe('bot im connection runtime', () => {
     expect(listBotImConnections()[0]?.groupActivation).toBeUndefined();
   });
 
+  // Runtime acceptance found both IPC and stored settings restricted to numeric Telegram IDs.
+  // Tier 1: real IPC + settings persistence must retain an actual BlueBubbles group identifier.
+  it('persists an iMessage group mode through the settings IPC', async () => {
+    const record = await addBotImConnectionRecord({ botId: 'bot-mia', channel: 'imessage' });
+    registerBotImConnectionIpc();
+    const handler = h.ipcHandlers.get('botImConnection:set-group-activation')!;
+    const chatId = 'any;+;acceptance-group';
+    await handler({}, { id: record.id, chatId, mode: 'always' });
+    expect(connectionStore.readBotImConnection(record.id)?.groupActivation).toEqual({ [chatId]: 'always' });
+    await handler({}, { id: record.id, chatId, mode: 'mention' });
+    expect(connectionStore.readBotImConnection(record.id)?.groupActivation).toBeUndefined();
+    expect(() => handler({}, { id: record.id, chatId: 'any;-;private', mode: 'always' })).toThrow(/INVALID_PARAMS/);
+  });
+
   afterEach(async () => {
     vi.restoreAllMocks();
     laneTesting.setStore(null);

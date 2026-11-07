@@ -11486,7 +11486,8 @@
         "lark": "Lark",
         "wecom": "WeCom",
         "dingtalk": "DingTalk",
-        "discord": "Discord"
+        "discord": "Discord",
+        "imessage": "iMessage"
       },
       "status": {
         "connected": "接続済み",
@@ -11617,6 +11618,22 @@
           "existing": "Cindy で設定済みのボットを使う",
           "manual": "新しい認証情報を入力",
           "moveNote": "このボットは 設定 → IM ボット から移され、そちらは空になります。これまでの個人チャットとグループチャットは {{name}} が引き継いで返信します。"
+        },
+        "imessage": {
+          "serverUrlLabel": "BlueBubbles サーバー",
+          "serverUrlPlaceholder": "http://192.168.1.20:1234",
+          "passwordLabel": "API パスワード",
+          "passwordPlaceholder": "••••••••",
+          "ownerAddressLabel": "あなたの iMessage アドレス",
+          "ownerAddressPlaceholder": "owner@example.com",
+          "chatGuidsLabel": "チャット GUID（カンマ区切り）",
+          "chatGuidsPlaceholder": "any;-;owner@example.com",
+          "listenHostLabel": "ローカル待受アドレス",
+          "listenHostPlaceholder": "192.168.1.10",
+          "listenPortLabel": "ローカル待受ポート",
+          "listenPortPlaceholder": "18747",
+          "hint": "ローカルネットワークで BlueBubbles に接続し、選択したチャットのみ処理します。接続前に、これらのチャットの他の自動応答を停止してください。",
+          "uncertain": "{{count}} 件の処理結果の確認が必要です。重複を避けるため、再試行前にチャット履歴を確認してください。"
         }
       },
       "removeConfirm": {

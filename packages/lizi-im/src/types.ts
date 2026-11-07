@@ -114,7 +114,7 @@ export interface IMHost {
  */
 export interface IMHostFileStaging {
   stage(params: {
-    integration: 'feishu' | 'discord' | 'telegram' | 'wecom';
+    integration: 'imessage' | 'feishu' | 'discord' | 'telegram' | 'wecom';
     buffer: Uint8Array;
     /** 平台给的原始文件名(不可信, host 负责消毒)。 */
     fileName: string;
@@ -125,7 +125,7 @@ export interface IMHostFileStaging {
 export interface IMHostMediaCache {
   /** 图片字节入 host 总仓;返回仓内绝对路径(喂 agent)+ 渲染 URL(cindy-media://)。 */
   cacheImage(params: {
-    integration: 'feishu' | 'discord' | 'telegram' | 'dingtalk' | 'wecom';
+    integration: 'imessage' | 'feishu' | 'discord' | 'telegram' | 'dingtalk' | 'wecom';
     /** 平台侧稳定 token(feishu image_key / discord attachment id / telegram file_id),host 据此免重下。 */
     token: string;
     buffer: Uint8Array;
@@ -144,7 +144,7 @@ export interface IMHostMediaCache {
    * 不得新增写入冻结的 `cc-agent/*-media` 历史目录。
    */
   cacheMedia?(params: {
-    integration: 'feishu' | 'discord' | 'telegram' | 'wecom';
+    integration: 'imessage' | 'feishu' | 'discord' | 'telegram' | 'wecom';
     token: string;
     buffer: Uint8Array;
     mimeType: string;
@@ -157,7 +157,7 @@ export interface IMHostMediaCache {
   }>;
   /** 按 token 查已缓存图片;未缓存返回 null(调用方去真下载)。 */
   getCachedImage(
-    integration: 'feishu' | 'discord' | 'telegram' | 'dingtalk' | 'wecom',
+    integration: 'imessage' | 'feishu' | 'discord' | 'telegram' | 'dingtalk' | 'wecom',
     token: string,
     options?: {
       /** Re-check transport/account ownership after the async lookup, before host-side pinning. */
