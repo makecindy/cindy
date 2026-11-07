@@ -90,7 +90,7 @@ export function buildTeammateGuide(options: TeammateGuideOptions = {}): string {
   lines.push('### Memory');
   lines.push('Save a clear stable preference, correction or long-lived fact when it first appears; search first and update instead of duplicating. Respect the memory switch and requests not to retain information.');
   lines.push(ownSkillsEnabled
-    ? 'Save a personal Skill only when the owner asks you to keep a method or corrects one of yours; nightly learning turns recurring approaches into Skills.'
+    ? 'Save a personal Skill only when the owner asks you to keep a method or corrects one of yours.'
     : 'Personal Skill storage and learning are unavailable in this runtime; do not read or write the local personal shelf or claim a saved Skill will load here.');
   return lines.join('\n');
 }

@@ -187,7 +187,7 @@ export async function ensureBotProjectAutomations(input: {
   return true;
 }
 
-/** Turning project mode off hands the nightly review back to the host. */
+/** Turning project mode off removes the project's memory review. */
 export async function removeBotProjectAutomations(workingDir: string): Promise<void> {
   const { getProjectAutomationLoader } = await import('../scheduler-host/index.js');
   await getProjectAutomationLoader().removeSchedule(workingDir, BOT_PROJECT_MEMORY_REVIEW_ID);

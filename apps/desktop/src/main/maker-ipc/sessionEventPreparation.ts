@@ -131,11 +131,6 @@ export interface PrepareSessionEventDeps {
   ) => boolean;
   readonly isGatewayProxyTokenRecoveryErrorEvent: (sessionId: string, event: AgentEvent) => boolean;
   /**
-   * 伙伴工作记忆刷新登记(botWorkingMemory):原生自动压缩后,下一次发送前置一次账本。
-   * 对所有会话登记,发送时再按伙伴主对话 / 有无账本决定是否真的注入。
-   */
-  readonly workingMemoryRefresh?: { markCompacted(sessionId: string): void };
-  /**
    * 逐轮环境说明的去重记忆(wireNoteMemory.ts)。原生自动压缩后摘要可能已丢掉旧说明,
    * 下一轮要整体重发一次;缺省(未注入)不去重,行为同旧版。
    */
@@ -154,9 +149,6 @@ export function prepareSessionEvent(
   // on-demand detail IPC; forwarding the raw diff through maker:event would duplicate a
   // potentially multi-megabyte payload to every renderer and device-link controller.
   if (event.type === 'turn_diff') return;
-  // Native compaction keeps its current runtime. Only explicit resource/configuration
-  // changes register a companion refresh; compaction itself is not such a change.
-  if (event.type === 'compact_boundary') deps.workingMemoryRefresh?.markCompacted(session.id);
   if (event.type === 'compact_boundary') deps.wireNoteMemory?.reset(session.id);
   if (
     event.turnScope === 'background' &&

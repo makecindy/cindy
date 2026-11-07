@@ -1242,20 +1242,6 @@ contextBridge.exposeInMainWorld('electronAPI', {
     history: (botId: string, id: string) => ipcRenderer.invoke('routines:history', botId, id),
     sources: () => ipcRenderer.invoke('routines:sources'),
     deliveryTargets: (botId: string) => ipcRenderer.invoke('routines:delivery-targets', botId),
-    nightlyLearning: {
-      get: (botId: string): Promise<import('../shared/botNightlyLearning').NightlyLearningView> =>
-        ipcRenderer.invoke('routines:nightly-learning:get', botId),
-      setEnabled: (botId: string, enabled: boolean): Promise<import('../shared/botNightlyLearning').NightlyLearningView> =>
-        ipcRenderer.invoke('routines:nightly-learning:set-enabled', botId, enabled),
-      setFrequency: (botId: string, frequency: import('../shared/botNightlyLearning').NightlyLearningFrequency): Promise<import('../shared/botNightlyLearning').NightlyLearningView> =>
-        ipcRenderer.invoke('routines:nightly-learning:set-frequency', botId, frequency),
-      runNow: (botId: string): Promise<import('../shared/botNightlyLearning').NightlyLearningView> =>
-        ipcRenderer.invoke('routines:nightly-learning:run-now', botId),
-      revert: (botId: string, runId: string, itemId: string, redo: boolean): Promise<import('../shared/botNightlyLearning').NightlyLearningView> =>
-        ipcRenderer.invoke('routines:nightly-learning:revert', botId, runId, itemId, redo),
-      candidate: (botId: string, candidateId: string, action: 'promote' | 'decline'): Promise<import('../shared/botNightlyLearning').NightlyLearningView> =>
-        ipcRenderer.invoke('routines:nightly-learning:candidate', botId, candidateId, action),
-    },
     onChanged: (listener: () => void) => {
       const wrapped = () => listener();
       ipcRenderer.on('routines:changed', wrapped);
