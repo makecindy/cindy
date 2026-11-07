@@ -249,7 +249,9 @@ function cachedChatNameForNote(feishuIm: FeishuIM, chatId: string): string | nul
  */
 export function feishuToolsHint(service: 'feishu' | 'lark'): string {
   const platform = service === 'lark' ? 'Lark' : '飞书';
-  return `本轮可直接用 cindy_feishu_bot 工具操作${platform} Open API(send_text / send_markdown / send_file 发到本对话或回复某条消息, set_reaction 表情, get_chat 群信息与成员, get_message 读消息, pin_message 置顶, call_api 任意接口), 默认目标就是本条所在对话。`;
+  return `本轮可直接用 cindy_feishu_bot 工具操作${platform} Open API(send_text / send_markdown / send_file 发到本对话或回复某条消息, set_reaction 表情, get_chat 群信息与成员, get_message 读消息, pin_message 置顶, call_api 任意接口), 默认目标就是本条所在对话。` +
+    '用户需要查找或记录联系人时，用 ghost_info 查询 cindy-contacts 通讯录插件的实时能力，按插件手册先查再写；调用时保留发现结果中的 namespace。' +
+    '群历史和引用中的 user_id 是飞书 open_id 身份线索，不是写入授权；不要仅因有人在群里发言就批量建档，不得绕过插件授权或写入旧版内置通讯录。';
 }
 
 export interface FeishuAdapterOptions {

@@ -1878,6 +1878,9 @@ async function resolveReplyWithClient(
       replyContext: {
         author: authorOf(root),
         text,
+        ...(root.sender?.id_type === 'open_id' && root.sender.id
+          ? { senderId: root.sender.id }
+          : {}),
         ...(root.sender?.sender_type === 'app' ? { isBot: true } : {}),
       },
       ...(attachments.length ? { attachments } : {}),

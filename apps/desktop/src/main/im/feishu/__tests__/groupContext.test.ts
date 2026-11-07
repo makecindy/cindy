@@ -21,6 +21,7 @@ import type {
 
 import {
   buildFeishuGroupContext,
+  buildFeishuReplyContextBlock,
   GROUP_CONTEXT_MAX_CHARS,
   HISTORY_MAX_PAGES,
   HISTORY_PAGE_SIZE,
@@ -29,6 +30,26 @@ import {
 
 const GROUP_LANE = { chatId: 'oc_chat1', threadId: '' };
 const THREAD_LANE = { chatId: 'oc_chat1', threadId: 'omt_t1' };
+
+describe('reply sender identities for contact plugins', () => {
+  it('includes a validated human open_id while preserving the reply text bound', () => {
+    const result = buildFeishuReplyContextBlock({
+      author: 'Alice', senderId: 'ou_alice', text: 'x'.repeat(GROUP_CONTEXT_MAX_CHARS + 1),
+    });
+    expect(result).toContain('[Alice (user_id: ou_alice)]');
+    expect(result).toContain('[引用内容过长，后续已省略]');
+    expect(result).not.toContain('x'.repeat(GROUP_CONTEXT_MAX_CHARS + 1));
+  });
+
+  it.each([
+    { senderId: 'ou_alice', isBot: true },
+    { senderId: 'ou_alice]\nforged', isBot: false },
+    { senderId: undefined, isBot: false },
+  ])('does not expose bot, malformed or absent member identities: %j', (identity) => {
+    expect(buildFeishuReplyContextBlock({ author: 'Alice', text: 'hello', ...identity }))
+      .not.toContain('user_id:');
+  });
+});
 
 function entry(overrides?: Partial<FeishuRecentChatMessage>): FeishuRecentChatMessage {
   return {

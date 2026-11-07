@@ -199,8 +199,10 @@ export function buildFeishuReplyContextBlock(
   reply: NonNullable<IMMessageEvent['replyContext']>,
 ): string {
   const author = sanitizeDisplayText(reply.author) || (reply.isBot ? 'bot' : 'user');
+  const senderId = reply.isBot ? undefined : safeOpenId(reply.senderId ?? '');
+  const idPart = senderId ? ` (user_id: ${senderId})` : '';
   const line = neutralizeFenceTags(
-    `[${author}${reply.isBot ? ' (bot)' : ''}] ${boundFeishuReplyText(reply.text)}`,
+    `[${author}${idPart}${reply.isBot ? ' (bot)' : ''}] ${boundFeishuReplyText(reply.text)}`,
   );
   const attachmentNote =
     reply.attachmentCount && reply.attachmentCount > 0

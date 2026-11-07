@@ -439,7 +439,7 @@ describe('feishu outbound lane routing', () => {
             chat_id: 'oc_group1',
             msg_type: 'text',
             body: { content: JSON.stringify({ text: 'Omarchy @_user_1 发布了' }) },
-            sender: { sender_type: 'user', sender_name: '张乾' },
+            sender: { sender_type: 'user', sender_name: '张乾', id_type: 'open_id', id: 'ou_zhangqian' },
             mentions: [{ key: '@_user_1', name: 'Quattro' }],
           },
         ],
@@ -450,6 +450,7 @@ describe('feishu outbound lane routing', () => {
       replyContext: {
         author: '张乾',
         text: 'Omarchy @Quattro 发布了',
+        senderId: 'ou_zhangqian',
       },
     });
     expect(larkMocks.getMessage).toHaveBeenCalledWith({
