@@ -51,14 +51,20 @@ describe('ChatImageView 键盘交互(真实 ImageLightbox / ModelLightbox)', () 
   it('shows the inline error when the 3D viewer code fails to load, and retry recovers', async () => {
     modelViewerPackage.fail = true;
     const url = 'cindy-media://blobs/' + 'f'.repeat(64) + '.glb';
-    render(React.createElement(ModelLightbox, { source: { kind: 'blob', url }, onClose: vi.fn() }));
+    await act(async () => {
+      render(React.createElement(ModelLightbox, { source: { kind: 'blob', url }, onClose: vi.fn() }));
+      await vi.dynamicImportSettled();
+    });
 
-    expect(await screen.findByText('chat.media.modelLoadFailed')).toBeTruthy();
+    expect(screen.getByText('chat.media.modelLoadFailed')).toBeTruthy();
     expect(screen.queryByText('正在加载 3D 模型…')).toBeNull();
     expect(document.body.querySelector('model-viewer')).toBeNull();
 
     modelViewerPackage.fail = false;
-    fireEvent.click(screen.getByRole('button', { name: 'attachmentPreview.retry' }));
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: 'attachmentPreview.retry' }));
+      await vi.dynamicImportSettled();
+    });
     const viewer = await waitForModelViewer();
     expect(viewer.getAttribute('src')).toBe(url);
     expect(screen.queryByText('chat.media.modelLoadFailed')).toBeNull();

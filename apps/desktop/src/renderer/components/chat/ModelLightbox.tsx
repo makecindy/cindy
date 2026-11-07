@@ -35,7 +35,7 @@ import { shouldShowOpenPathError } from '../../../shared/openPathResult';
  *     inside, and returns focus to the pre-open element on unmount.
  */
 
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { FocusScope } from '@radix-ui/react-focus-scope';
 import { Box, FolderOpen, RotateCcw, Minus, Plus } from 'lucide-react';
@@ -79,7 +79,8 @@ interface ModelLightboxProps {
 }
 
 // `<model-viewer>`(连同 three.js,约 1 MB)只在首次打开 3D 预览时加载,不进主窗口
-// 首屏。包加载后自行注册自定义元素;失败时清掉缓存,让「重试」重新加载。
+// 首屏。包加载后自行注册自定义元素;失败时清掉缓存,「重试」会再次调用 import()
+// (浏览器是否重新读取分包取决于其模块缓存;分包缺失本身属于安装损坏)。
 let modelViewerModule: Promise<unknown> | null = null;
 
 function loadModelViewer(): Promise<unknown> {
@@ -179,7 +180,10 @@ export function ModelLightbox({ source, onClose, filename }: ModelLightboxProps)
   // 上——不监听就是"看起来像一张拖不动的静态图"的静默失败(历史上协议特权
   // 丢失导致 fetch 被拒时正是这个表现)。失败时保留 lightbox(poster 仍可
   // 看、右键"打开模型"仍可用),toast 告知即可,不自动关闭。
-  useEffect(() => {
+  // 用 layout effect 在元素挂上的同一次提交里绑定:查看器代码异步就绪后,元素是在
+  // 非交互的更新里插入的,普通 effect 可能晚于绘制才执行,很快失败的加载(如 fetch
+  // 被拒)会在绑定前就派发 'error'。
+  useLayoutEffect(() => {
     const el = modelViewerRef.current;
     if (!el) return;
     const onError = () => {
