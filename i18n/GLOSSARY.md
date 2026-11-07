@@ -326,6 +326,10 @@
 
 任务中主对话之外的额外模型费用，按模型和调用渠道汇总；用户于 2026-10-30 选定中文名称。
 
+### Agent Notch
+
+Cindy 在屏幕顶部显示任务的面板（原名灵动岛 / Agent Island）。苹果在新款 MacBook Pro 上推出灵动岛后改名，避免与 Apple 的灵动岛混同；中文不直译 notch（「刘海」易联想发型），用户于 2026-11-07 选定。设置页搜索保留旧名作别名。
+
 ### Anthropic Messages
 
 Anthropic Messages API / wire protocol 的用户可见名称。四语统一保留官方英文名称，避免与普通的“消息”概念混译；先登记为 proposed，待产品术语评审后固化。
@@ -349,6 +353,10 @@ Anthropic Messages API / wire protocol 的用户可见名称。四语统一保�
 ### Automatically unlock computer
 
 远程桌面操作菜单的安全设置；仅用于可选的本机保存密码自动解锁。
+
+### Trigger mode
+
+自动化何时运行的选择：定时、手动或 Webhook。独立于执行方式（AI 任务或脚本），用户于 2026-11-04 选择此交互方向。
 
 ### At a glance
 
@@ -498,9 +506,17 @@ Irreversible group termination, distinct from archive, leave and personal list r
 
 远程桌面操作菜单的安全设置；仅用于可选的本机保存密码自动解锁。
 
+### Link code
+
+官方飞书 / Lark 机器人关联时的一次性短码：网页授权不可用的用户把它私聊发给机器人完成关联，只在关联进行中出现，过期作废，不是密钥。与供应商分享的「配对码」(Pairing Code)、本机应用的「连接码」(Connection code) 是不同概念；ko 取「연동 코드」以免与「연결 코드」(Connection code) 撞名。
+
 ### Follow Up on All Sessions
 
 伙伴设置里的开关与工作台小标：账号里只有一位伙伴负责定时看一遍所有任务（实现里叫 scheduler / 总调度，默认 Cindy 助理）。面向用户不写「总调度」「调度员」，一律用这句；在别的伙伴上打开就移过去，关闭则没有伙伴统一跟进。session 按已裁决译法写「任务 / Session / セッション / 세션」。
+
+### MR
+
+GitLab Merge Request 的平台名称，界面保留 MR 与 !编号；不同于 GitHub PR。
 
 ### Group Admin
 
@@ -554,6 +570,10 @@ Agent 遇到需要主人填写的界面（选择、文本、密码、验证码�
 
 Apple Simulator 的用户可见名称，也用于原内置 iOS 模拟器的历史与下线说明。Cindy 已移除内置查看器能力；替代插件 cindy-simulator 使用独立术语 Device Simulator。iOS 保留官方大小写；中文使用「模拟器」，日语使用「シミュレータ」，韩语使用「시뮬레이터」。译法仍为 proposed。
 
+### Subtle reminders
+
+灵动岛设置：新消息、待回复和错误通过图标变化提示，不向下弹出通知卡片；手动点击展开完整任务列表保持不变。
+
 ### Lark
 
 Lark 国际版 IM 服务的官方品牌名，四语统一保留原品牌写法；先登记为 proposed，待产品术语评审后再决定是否固化。
@@ -578,6 +598,14 @@ Orca 协同角色名，与 Worker 成对。五语统一保留英文 Lead，不�
 
 远程桌面原生密码表单中的 macOS 系统账户密码，区别于 Cindy 账号密码；密码不经过 JavaScript。
 
+### Dynamic Island
+
+Apple 的灵动岛（新款 MacBook Pro 摄像头挖孔处），沿用 Apple 各地区用语，繁中按 Apple 台湾用语作「動態島」。Cindy 自己的顶部任务面板已改名为任务胶囊 / Agent Notch（见 agent-notch），「灵动岛」只指 Apple 的；设置页分区标题也用这个词，统称两者所在的一页。
+
+### Live Activities
+
+Apple 的实时活动（ActivityKit）。沿用 Apple 各地区官方译名；Cindy 只以此展示任务状态，不作为自有功能名。
+
 ### Black Cat
 
 灵动岛角色皮肤名(设置页「图标皮肤」列表)。角色本体是黑猫形象,四语先采用直译并登记为待讨论,避免后续界面出现「ブラックキャット / 블랙캣」等音译与直译混用。
@@ -589,6 +617,10 @@ Orca 协同角色名，与 Worker 成对。五语统一保留英文 Lead，不�
 ### MCP App
 
 标准 MCP Apps 协议提供的交互应用；卡片标题与消息来源沿用协议名称，各语言保留 MCP App，待术语评审后固化。
+
+### Merge conflict
+
+GitHub PR / GitLab MR 的合并冲突。数据行标签为 Merge / 合并，状态值为 Conflicts / 有冲突；与检查失败及应用崩溃区分。
 
 ### Read
 
@@ -653,6 +685,10 @@ issue #882：模型管理/新对话选择器的分类标签，对应 Gateway mod
 ### Not signed in
 
 跳过登录后应用内的账号状态名（侧边栏账号胶囊、设置页资料卡、语音服务提示，以及 main 侧不走 locale 的 model-visible 文案——已知 mcp-integrations/ghost.ts 的 GHOST_NOT_FOUND tool result，它会被模型读到并可能回显进对话，#907 review 补上）。**约束范围不限于 locale JSON**：guard 只扫 locale 文件，这类硬编码文案要人工找（见 engineering-conventions §5.1「Slack / IM 侧的文案不在任何 locale 文件里」同类问题）。2026-07-29 产品口径：面向用户只说「未登录」，不再叫「本地模式」——后者听起来像另一种服务端连接方式，实际只是没有登录 Cindy 账号。「本地」仅用于描述数据落在本机（如资料卡副文案「数据仅保存在本机」），不作为状态名。代码内部标识（AuthState mode='local'、authEnterLocal IPC、data owner）不受本条约束，仍用 local。en 侧统一走 not signed in 一种说法（含 settings.userProfile.local 的 exit / exitFailed 两条当前无引用的文案：the not-signed-in state），不与 unauthenticated 混用——PR #907 review 指出过同一状态两种英文说法会让日后启用这些文案时 UI 自相矛盾。status 仍为 proposed：Not signed in 作为状态名尚未与设计侧正式过一遍。
+
+### Working computer
+
+官方飞书 / Lark 机器人中接收新消息的已关联电脑；每个应用和飞书账号独立选择，默认最新关联的电脑。
 
 ### Chat Completions
 
@@ -738,6 +774,10 @@ OS 进程语境(资源用量面板、浏览器 guest 进程、终端)。注意�
 
 把自己电脑上的某个供应商分享给其他 Cindy 账号使用(docs/product-rules/provider-sharing.md)。中文一律用「分享」，不用「共享」——「共享」留给共享任务，两者是独立的授权关系；ja / ko 两个功能都自然译作「共有 / 공유」，靠「プロバイダー / 제공자」与「セッション / 세션」区分。界面上「管理分享」「分享 {供应商}」「分享给我的供应商」都属于本词。
 
+### Provider transaction ID
+
+支付渠道记录的交易号，用于开票弹窗和邮件；支付宝为实际交易号，Stripe 为 PaymentIntent ID 或 Charge ID，不是本地订单号或商户订单号。
+
 ### Quote reply
 
 伙伴群聊消息操作：在当前时间线发一条带被引用者与原消息摘要的新消息，不创建话题（group-thread）；被引用的原消息作者是仍在群中的伙伴时，宿主自动将该伙伴加入接收人，与显式点名去重。引用正文中的名字不产生额外接收人。输入框上方的待发引用用「引用 {name}」，取消叫「取消引用」。与任务里「选中文字引用」（chat quote）是不同功能。
@@ -817,6 +857,10 @@ Explicit user action that replaces the current remote desktop viewer; never used
 ### Remote device
 
 远程连接、任务与设备列表中的另一台设备；明确是电脑时优先说远程电脑。不要把本地浏览器内部控制器称为远程设备。
+
+### Request Refund
+
+订单行的邮件退款申请入口；由用户确认使用客服邮件处理，不代表自动退款。
 
 ### Activity Monitor
 

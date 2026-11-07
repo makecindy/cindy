@@ -1040,3 +1040,81 @@ it('keeps legacy results available when their task cannot be read', async () => 
   await act(async () => node.querySelector('button')!.click());
   expect(node.textContent).toContain('Saved result');
 });
+
+// Unit: a GitLab association must use MR routing/labels/navigation on mobile;
+// previous fixtures only represented github.com PRs and could silently misroute it.
+it('shows and opens a GitLab MR using the provider-aware status channel', async () => {
+  const ref = {
+    id: 'mr',
+    sessionId: 'child',
+    provider: 'gitlab',
+    host: 'git.example.com',
+    owner: 'group/sub',
+    repo: 'project',
+    prNumber: 7,
+    firstSeenAt: 1,
+    lastSeenAt: 1,
+  };
+  h.invoke.mockImplementation(async (_device, channel) => {
+    if (channel === 'git-context:pr-refs:list') return [ref];
+    if (channel === 'git-context:mr-status') return [{ ...ref, ok: true, status: 'merged' }];
+    return {
+      ok: true,
+      delegations: [{ id: 'job', status: 'completed', title: 'Report', childSessionId: 'child' }],
+    };
+  });
+  await render();
+  expect(node.textContent).toContain('!7');
+  expect(h.invoke).toHaveBeenCalledWith('home', 'git-context:mr-status', [
+    {
+      sessionId: 'child',
+      queries: [
+        {
+          provider: 'gitlab',
+          host: 'git.example.com',
+          owner: 'group/sub',
+          repo: 'project',
+          prNumber: 7,
+        },
+      ],
+    },
+  ]);
+  expect(h.invoke.mock.calls.some((call) => call[1] === 'git-context:pr-status')).toBe(false);
+  const button = [...node.querySelectorAll('button')].find(
+    (b) => b.textContent === 'devices.companions.viewMr',
+  )!;
+  await act(async () => button.click());
+  expect(h.openURL).toHaveBeenCalledWith(
+    'https://git.example.com/group/sub/project/-/merge_requests/7',
+  );
+});
+
+// Unit regression: the single-MR fixture did not cover an all-GitLab multi-link button.
+it.each([
+  ['gitlab', 'devices.companions.viewMr'],
+  ['github', 'devices.companions.viewPrMr'],
+])('labels a GitLab link plus a %s link by the whole list', async (secondProvider, label) => {
+  const refs = ['gitlab', secondProvider].map((provider, index) => ({
+    id: `ref-${index}`,
+    sessionId: 'child',
+    provider,
+    host: provider === 'gitlab' ? 'git.example.com' : 'github.com',
+    owner: 'group',
+    repo: 'project',
+    prNumber: index + 7,
+    firstSeenAt: 1,
+    lastSeenAt: 1,
+  }));
+  h.invoke.mockImplementation(async (_device, channel) => {
+    if (channel === 'git-context:pr-refs:list') return refs;
+    if (channel === 'git-context:mr-status' || channel === 'git-context:pr-status') return [];
+    return {
+      ok: true,
+      delegations: [{ id: 'job', status: 'completed', title: 'Report', childSessionId: 'child' }],
+    };
+  });
+  await render();
+  expect([...node.querySelectorAll('button')].some((button) => button.textContent === label)).toBe(
+    true,
+  );
+});

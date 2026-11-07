@@ -520,6 +520,7 @@
     "searchMembers": "尋成員",
     "membersNoMatch": "尋不得「{{query}}」",
     "you": "君",
+    "companionOf": "{{name}} 之同僚",
     "teammateTag": "同僚",
     "paused": "已暫止",
     "accessNone": "唯主人可用",

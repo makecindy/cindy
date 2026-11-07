@@ -73,9 +73,12 @@ Claude.ai 登录，也不得收集、存储或中转订阅凭证。Cindy 因此�
 
 - 登录只拉起内置 CLI 的 `claude auth login --claudeai`，登录态只读
   `claude auth status --json`。凭证留在 CLI 默认凭证库（macOS 钥匙串 / `~/.claude`），
-  Cindy 不读取、不复制、不刷新它。CLI 按配置目录区分凭证库，所以本机 CLI 的会话（任何来源）
-  与登录检查都不得设 `CLAUDE_CONFIG_DIR`（dev 多实例也用默认目录），否则会看不到本机已有的
-  Claude Code 登录；SSH 远端的配置目录由远端 cc-manager 自己管理，不在此列。
+  Cindy 不读取、不复制、不刷新它。默认账号的会话与登录检查不设 `CLAUDE_CONFIG_DIR`
+  （dev 多实例的默认账号也一样），确保仍能看到终端已有登录。
+  2026-11-07 起，用户显式添加的[供应商内订阅账号](../product-rules/subscription-account-pools.md)
+  使用官方多账号方式：只在该账号的 CLI 子进程设置 `CLAUDE_CONFIG_DIR=~/.claude-cindy-<owner摘要>-<随机id>`，
+  登录、状态、用量、任务及分叉始终使用同一目录。目录不含邮箱，不接受外部传入路径。
+  SSH 远端的配置目录仍由远端 cc-manager 自己管理，不在此列。
   只有 Claude.ai 订阅账号的 OAuth 登录算「Claude 订阅」；CLI 用 Console 账号、API Key、
   apiKeyHelper、中转 token 或第三方云登录时按 `not_a_subscription` 处理，也不替用户改 CLI 的登录。
 - 登录态读取不得阻塞与订阅无关的路径：启动只在已连接时等待，列表类读取用缓存并后台刷新，
@@ -229,13 +232,38 @@ Desktop 冷启动恢复与运行时 refresh 共用随机指数退避策略：连
 冷启动画面超时转后台不能重置失败次数。冷启动的等待期限和失败次数归属于当前保存的
 凭证，返回／取消再恢复沿用原期限，取消后的迟到限流响应也必须保留期限；手动重试释放
 纯网络错误的等待时不清零失败次数。恢复停止期间的启动超时不能清除手动登录进度。
-网络变化、resume 或 relay 恢复信号均不能跳过等待或清零失败次数；在途请求仍复用同一个
-promise，恢复信号不能在旧请求结束后追加立即续期。只有用户主动点击登录页重试，且
-此前失败没有服务端响应、没有服务端等待期限时，才能提前结束冷启动等待。
+网络变化、resume 或普通 relay 恢复信号均不能跳过等待或清零失败次数；在途请求仍复用
+同一个 promise，恢复信号不能在旧请求结束后追加立即续期。只有用户主动点击登录页重试，
+且此前失败没有服务端响应、没有服务端等待期限时，才能提前结束冷启动等待。
+
+运行时的唯一自动例外是：当前等待源于纯网络失败（`status=0` 且无 `retryAt`），随后收到
+官方 relay 鉴权失败（含跨账号连接，排除自建中转）或 `serverApiClient` 按既有
+`isRefreshableUnauthorizedCode` 认可的 401，才能启用小基数快速重试。其它调用方不提供
+这一证据；5xx／429／503 或带服务器等待期限的失败仍遵守原来的长等待，401 不能提前。
+relay 客户端对同类 issue 去重，只在连接刚转为 auth-failed 时通知一次；断网也不会清除
+该 issue。因此 relay 只在这次通知时提供证据，节流窗后的延迟自救只复查 issue 仍在，不再
+提供证据；持续的新证据来自 `serverApiClient` 的 401。
+每次快速尝试都必须有上一次快速尝试发起之后收到的新可信 401 证据（可在上次请求在途时
+收到）。发起尝试即消费已有证据；纯网络失败只推进快速档位并记录该档最早可再试时间，
+不自动排下一次快速请求。没有新证据时，`authManager` 的计时器回到原来的长等待期限，
+快速失败不增加长等待的失败次数或推后原期限；普通长等待到期后的失败仍按原策略推进。
+快速档位在同一登录代次内跨断网及普通长等待重试保留，不因缺少证据回到第一档。
+
+第一次在 `[0, 3s)` 内随机；快速失败后的 equal jitter 上界依次为 3、6、12、24、48、60 秒，
+每次在上界的一半至上界之间取值作为最早可再试时间，封顶后仍随机。新证据到达时，快速
+时间点取「该档最早可再试时间」与「收到证据的时刻 + `[0, 3s)` 随机」中较晚的一个，
+避免服务器恢复后集中请求；最早可再试时间已过时也重新加这段随机，单次等待不超过 60 秒。
+仅当这一时间点早于原长期限时才提前计时器；已经排上的快速时间点和在途请求继续合并，
+重复 401 不重新取值、不推后。由 `authManager` 统一计时，不依赖调用方再次轮询。
+有服务器回应或本地状态异常时退出快速通道并清零快速档位，沿用长等待及 `Retry-After`；
+确定性失效走现有过期出口。成功续期／登录及登录代次变化使快速状态失效。
+relay 原有 60 秒主动续期节流保持不变。
+快速计时器续期成功也通知当前持有连接的实例，只立即重连仍有鉴权失败的官方连接，不打断
+已在线连接或自建中转。
 续期完成后的立即重连须复验 client、owner 与持有权，不能唤醒旧实例。
 确定性失效和同机 token 替换恢复继续沿用原有判定。状态只留在进程内存中。
 实现见 `main/authRefreshBackoff.ts`、`main/authManager.ts`；回归见
-`main/__tests__/authRefreshBackoff.test.ts`。
+`main/__tests__/authRefreshBackoff.test.ts`、`main/__tests__/authColdStartRecovery.test.ts`。
 
 ## 路径与生命周期
 
@@ -247,6 +275,7 @@ promise，恢复信号不能在旧请求结束后追加立即续期。只有用�
 | 浏览器用户配方与经验 | `userData/browser-recipes/<site>/recipes/<id 的 SHA-256>.json`，每站多个流程，原子替换；兼容旧 `recipe.json`，新文件优先。只保存参数化定义及 candidate/active/suspended 状态、浏览器 profile 范围，不保存试跑 inputs/页面返回值；禁止写入凭据，业务变动值用 inputs。同站 `experience.json` 最多保存 32 种操作形状（动作枚举、次数、时间），不保存 URL 路径/查询、选择器、脚本或输入输出；删除站点目录一并重置。重复形状仅提示当前 Agent 判断，不触发后台模型。试跑凭证与单轮修复预算只在 MCP 会话内存，暂停状态跨重启保留。 |
 | 浏览器大结果补读 | MCP 工具会话内存中保留最近四份原始 JSON，每份最多 200 万字符；不落盘、不上传，关闭会话后释放。`readResult` 只能读当前会话生成的引用，沿用原页面实际 profile 的代输入读取限制；切换后端、stop 或读取受保护页面时清除。工具复用宿主现有生命周期与后端对象引用，在下一次访问及异步预检后核对，包括设置/其它任务切换、切走再切回和嵌入后端恢复；切换中的动作仍报告真实结果，但不缓存原文或保存试跑凭证。超过上限明确截断，不能声称完整原文已保存。 |
 | 自建中转服务（Desktop） | `owners/<owner-key>/device-link-relay/`：`config.json` 只存选择、本机中转设置与服务器部署记录（地址、中转 ID、主人公钥，不含秘密）；`secrets/<中转ID>.enc` 是本机在该中转上的设备凭证与 Ed25519 签名私钥（本机当主人时即主人密钥），经 safeStorage 加密，Linux 只有 basic_text 时拒绝保存；第 1 版的 `credential.enc` / `owner-credential.enc` 读到旧配置时删除；`host/` 是本机运行中转时的数据（`relay-state.json` 只存各设备凭证的 SHA-256 与档案，0600 原子写入；`media/` 为设备间中转的文件，创建 24 小时后清理）。全部按账号隔离，账号作用域未提交时不读写。见 `device-link/selfHostedRelayConfig.ts`、`packages/device-link-relay` 与 [方案](../self-hosted-relay-plan.md) |
+| 自动化任务 Webhook | `owners/<账号>/schedule-webhooks/`：`state.json` 存本机端口、排队事件所属的本机路由 ID、固定元数据和 24 小时投递回执，不含请求正文和密钥；`secrets/<路由 ID>.enc` 存开发版本机入口的 safeStorage 加密签名密钥；`remote-identities.json` 只存任务 ID 与本机触发路由 ID 的对应关系，不含云端 URL 或密钥，创建请求前落盘、云端删除确认后清除，离线关闭时保留以防重启复用旧地址。宿主创建时固定账号目录，队列、身份与密钥的读写及清理始终使用该目录，停止后的迟到操作不得改用新账号目录。均为 0600 原子写入；触发条件关闭或任务删除时清理本机队列与密钥，启动时补清孤儿文件。加密不可用时生成密钥明确报错，不回退明文；启动不访问钥匙串，首个事件才解密。见 `scheduler-host/webhook/index.ts` 与 `__tests__/host.test.ts` |
 | 自建中转服务（Mobile） | AsyncStorage `cindy.mobile.self-hosted-relay.v2.<账号>` 只存选择（中转地址、名称、主人公钥、本机设备 ID），不含秘密；设备凭证与 Ed25519 签名私钥合存为 `expo-secure-store` 的 `cindy.selfHostedRelay.credential.v2.<账号哈希>`，仅本机、解锁后可读。没有签名私钥的 v1 记录不再使用，读到时尽力删除。见 `apps/mobile/src/device-link/selfHostedRelay.ts` |
 | 自建中转服务（用户服务器） | 「部署到我的服务器」经 SSH 写入用户自己的服务器：`/opt/cindy-relay`（Node 运行环境与 `relay.mjs`）、`/var/lib/cindy-relay`（属 `cindy-relay` 系统用户、0700：设备凭证哈希与证书档案、Let's Encrypt 账户密钥、0600 原子发布的 `tls/material.json` 证书与 TLS 私钥、`status.json`）、`/etc/systemd/system/cindy-relay.service`。旧分立 PEM 文件仅在密钥配对且未过期时兼容读取；续期提交失败保留上一完整代次。主人凭证明文与主人私钥从不离开主人电脑；卸载前核对中转 ID 和主人公钥，匹配才删除。见 `device-link/selfHostedRelayDeploy.ts` |
 | 本机应用 Agent 授权 | `owners/<owner-key>/local-agent/grants.json`，仅含令牌 SHA-256、自报应用资料、账号范围和按授权归属的原生恢复绑定，不存令牌明文、供应商凭据或消息。复用原子写入与恢复 helper；profile 根 `local-agent/host.lock` 复用跨进程锁，保证一个发现端点和写入者。开发连接码从当前服务内存按需生成，不新增公共实例登记或短码映射文件。临时输入与新授权的 Codex 运行历史在同一 owner 下的 `local-agent/clients/<grant-hash>/`；撤权同时关闭执行及工具入口，不允许跨授权恢复。协议与旧版兼容见 [本机应用接入](../local-agent-api.md) |
@@ -275,6 +304,7 @@ promise，恢复信号不能在旧请求结束后追加立即续期。只有用�
 | macOS 菜单栏余量设置 | `userData/menubar-settings.json`，本机偏好：是否显示、来源顺序与显隐、菜单栏文字、快见底通知、隐藏个人信息、统计范围；只含供应商 id，不含凭证或用量数值 |
 | macOS 菜单栏 Cindy 余额样本 | `userData/owners/<账号>/menubar-credit-samples.json`，只记录观测到的余额数值与时间（按区域与币种分组），用于估算日均消耗；保留 30 天、原子替换写入，不含凭证或账号标识 |
 | 云端伙伴同步状态 | `userData/owners/<账号>/companion-cloud/<sha256(端点\n主人 actor id)>.json`，只记伙伴的云端 actor id、1:1 房间 id、对话导入游标（本机消息时间与 id）、已上传资料的内容哈希与版本号、是否已交出主力电脑（本机副本隐藏、不跑例行任务）、接管后待重建上下文的标记；原子替换写入，读不出时从空开始并向服务器重新核对，不含凭证、消息正文或资料正文。见 `main/companion-cloud/state.ts` |
+| 伙伴已读位置 | `userData/owners/<账号>/bot-read-state.json`（electron-store），只存这台电脑上伙伴私聊（伙伴 id）、早期本机群（`group:<群 id>`）与私聊话题（`thread:<Session id>`）的已读时刻，最多 2000 条；只前进不后退，读不出时从空开始，不含消息正文或凭证。本机窗口、手机与其他电脑经远程资源 `read` 推进同一份；Renderer 另在 localStorage `cindy.bots.readState.v1.<账号>` 留副本供首帧读取。见 `main/maker-ipc/botReadStateStore.ts` |
 | macOS 菜单栏 helper（开发构建） | `userData/menubar/`，开发时由 `swiftc` 编译的 helper 及其 wordmark 图片和源码哈希；打包版改用 `resources/tools/menubar/`，不在 userData 落盘 |
 | 供应商分享：受邀者会话登记 | `userData/remote-agent/guest-sessions.json`（控制端摘要 → 本机侧任务与原生会话 id），只用来限制受邀者只能恢复自己的会话，并在分享删除时精确清理影子工作区、附件与会话记录 |
 | 供应商分享：跨区域标记 | `userData/remote-agent/provider-share-regions.json`，账号摘要 → 对方区域；**不含凭证**。跨区连接凭证只在内存里，用新身份名片重新换取；没有标记的账号从不联系对方区域 |
@@ -283,6 +313,7 @@ promise，恢复信号不能在旧请求结束后追加立即续期。只有用�
 | 语音输入声纹识别模型 | `userData/voice-models/<哈希前缀>-<文件名>.onnx`，按内容哈希从区域 CDN 下载并在可见前校验 SHA-256；不含个人数据，本机所有账号共用。新版本模型下载完成后删除旧版本文件 |
 | Mobile 语音输入声纹（生物特征） | SecureStore（iOS 钥匙串 / Android Keystore）键 `xdt.voiceSpeakerProfile.v1.<账号 key 的 SHA-256 前 32 位>`，内容同 Desktop：声纹向量、录入时间与模型哈希；开关与灵敏度 override 在 AsyncStorage `cindy.mobile.voice-speaker-filter.v1.<账号 key>`。只在本机，不同步、不上传、不进日志；退出登录时随该账号的其他本机数据一起删除（模型文件保留）。删除前写 AsyncStorage `cindy.mobile.voice-speaker-filter.cleanup.v1.<账号 key>` 重试标记，不含声纹；失败时保留标记，启动、回到前台及该账号下次读写前重试，全部删除成功后才移除。标记落盘也失败时保留进程内重试，无法保证进程终止后的恢复；不因声纹删除失败阻止退出凭证清除。朗读音频只在内存中处理 |
 | Mobile 语音输入声纹识别模型 | `cacheDirectory/voice-models/`，与 Desktop 同一组按内容哈希下载、校验 SHA-256 后才可见的文件；放缓存目录以免进入 iCloud / Android 备份。系统清理缓存后，下次语音输入发现缺失会在后台重新下载，本次不过滤 |
+| Mobile iOS 键盘停靠高度 | AsyncStorage `cindy.mobile.keyboard-docked-height.v2`（设备级，不分账号）：`{ 窗口宽度: 键盘高度 }` 两个整数，只在 iOS 正常停靠键盘、且不在转屏后 1 秒内时更新（取最高），供系统发来异常键盘坐标时沿用（见 `docs/dev-rules/mobile-development.md`「iOS 键盘坐标异常」）。不含用户内容，退出登录不清除。见 `apps/mobile/src/session/keyboardOverlap.ts` |
 | 新电脑设置：上次迁移记录 | `userData/owners/<账号>/setup-migration-state.json`，只记上次迁移来源电脑的名称、完成时间、一次性清单（类别、显示名称、插件实例键或供应商 / MCP id、完成标记）与是否已关闭首次建议；不含密钥、令牌、凭证或设置值。复用设置文件跨进程锁与原子替换，账号切换按目录隔离，用户「关闭清单」后清空。快照只带「是否已配置」的布尔提示。用户勾选「密钥」且原电脑的人允许后，API Key / PAT 以一次性加密传来，在 Main 内存中解开后写入各自原有的 safeStorage 存储，不落其他文件（`docs/product-rules/new-device-setup-migration.md`） |
 | iOS 桌面小组件数据 | App Group `group.<bundle id>`（与 expo-sharing 共用）里的 `usage-widget-snapshot.json`：每台电脑最近一次的余量与用量快照（已按电脑上「隐藏个人信息」打码，含账号名或邮箱前缀、余量、近 30 天用量与模型名）、「自动」所选电脑 id 与电脑名列表；不含凭证。同一 App Group 的 UserDefaults 键 `usageWidgetPins` 只记组件选中的电脑 id 与时间，超过 2 天的丢弃。App 在前台时整份原子替换写入；切换或退出账号时删除快照文件。见 `apps/mobile/modules/cindy-usage-widgets` 与 `plugins/usage-widgets` |
 | Android 桌面小组件数据 | 应用私有 `noBackupFilesDir/usage-widget-snapshot.json`（不进 Android 自动备份），内容与 iOS 的 App Group 文件相同（已打码的余量与用量快照、「自动」所选电脑 id 与电脑名列表，不含凭证）；SharedPreferences `cindy-usage-widgets` 里 `computer.<组件 id>` 记组件选中的电脑，`usageWidgetPins` 记固定电脑 id 与时间（超过 2 天丢弃），删除组件时清理。切换或退出账号时删除快照文件，并清掉所有 `computer.` / `pinned.` / `hidden.` 与 `usageWidgetPins`（它们含上一个账号的电脑 id 与账号名），再重绘组件。见 `apps/mobile/modules/cindy-usage-widgets/android` |

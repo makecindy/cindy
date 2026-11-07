@@ -1,3 +1,4 @@
+import { remoteControlSettings } from './RemoteControlSection.settings-search';
 import { deviceDisplayName } from '@/lib/deviceName';
 import { Button } from '@/components/ui/button';
 /**
@@ -7,10 +8,11 @@ import { Button } from '@/components/ui/button';
  * 列表,每台设备一张卡,在一处管理两个方向 + 设备本身(重命名 / 删除)。
  *
  *  - 首行「本机」:承载本机重命名、「允许其他设备控制本机」总开关(总闸)+ relay 连接状态。
- *  - 其余每台设备两条控件:
- *      · 「我控制它」(outbound = controlEnabled):对方已拒绝本机时整行**不展示**(不让用户看到
+ *  - 其余每台设备按方向分两行胶囊(统一授权 B 方案,2026-11-03):
+ *      · 「我可以:控制它」(outbound = controlEnabled):对方已拒绝本机时整行**不展示**(不让用户看到
  *        控不了的选中态而纠结);对方未开被控时仍可编辑(本地偏好独立于对方状态),附「对方未开启被控」说明;
- *      · 「允许它控制本机」(inbound = revoke/restore 的反面):总开关关时置灰;关掉走二次确认。
+ *      · 「它可以:控制本机」(inbound = revoke/restore 的反面):总开关关时置灰。
+ *    以后的模型 key 同步、模型共享也作为「它可以」行的胶囊加入。
  *
  * 模型 = 总闸 + 逐设备例外。底层全部复用 useDeviceLinkSettings,本面板只做组装与展示。
  */
@@ -25,6 +27,7 @@ import {
 } from 'react';
 import { useTranslation } from 'react-i18next';
 import { RefreshCw, Pencil, Trash2, Check, X, Monitor } from 'lucide-react';
+import { cn } from '@/lib/utils';
 import { toast } from '@/lib/toast';
 
 import { Switch } from '@/components/ui/switch';
@@ -177,6 +180,67 @@ function ControlRow({
 }
 
 /**
+ * 设备卡里的一项权限:可切换的胶囊。选中 = chip 填充 + 对勾,未选 = 描边。
+ * 语义与原 Switch 相同(aria-pressed 代替 switch 的 checked),点击即生效、不弹确认。
+ */
+function AccessPill({
+  label,
+  ariaLabel,
+  pressed,
+  disabled,
+  onToggle,
+}: {
+  label: string;
+  ariaLabel: string;
+  pressed: boolean;
+  disabled?: boolean;
+  onToggle: (next: boolean) => void;
+}) {
+  return (
+    <button data-setting-id={remoteControlSettings.devices.id}
+      type="button"
+      aria-pressed={pressed}
+      aria-label={ariaLabel}
+      disabled={disabled}
+      onClick={() => onToggle(!pressed)}
+      className={cn(
+        'inline-flex h-7 select-none items-center gap-1 whitespace-nowrap rounded-full border text-12 transition-colors duration-[var(--motion-fast,150ms)]',
+        // 全局 *:focus-visible 去掉了 outline,焦点环与 Switch 一样用 ring。
+        'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background',
+        'disabled:cursor-not-allowed disabled:opacity-40',
+        pressed
+          ? 'border-transparent bg-[var(--surface-chip)] pl-2.5 pr-3 text-[var(--text-primary)]'
+          : 'border-[var(--border-default)] px-3 text-[var(--text-tertiary)] enabled:hover:bg-[var(--surface-hover)] enabled:hover:text-[var(--text-primary)]',
+      )}
+    >
+      {pressed ? <Check size={12} strokeWidth={2.25} aria-hidden /> : null}
+      {label}
+    </button>
+  );
+}
+
+/** 一个方向一行:左边「我可以 / 它可以」,右边该方向的胶囊,原因副文案在胶囊下面。 */
+function AccessRow({
+  label,
+  reason,
+  children,
+}: {
+  label: string;
+  reason?: string | null;
+  children: ReactNode;
+}) {
+  return (
+    <>
+      <span className="select-none pt-1.5 text-12 leading-4 text-[var(--text-secondary)]">{label}</span>
+      <div className="flex min-w-0 flex-col gap-1">
+        <div className="flex flex-wrap gap-1.5">{children}</div>
+        {reason ? <span className="text-11 text-[var(--text-tertiary)]">{reason}</span> : null}
+      </div>
+    </>
+  );
+}
+
+/**
  * variant:
  *  - 'all'    完整面板(本机卡 + 刷新 + 其它设备),独立使用时的默认形态
  *  - 'self'   仅本机卡(重命名 + 被控总开关 + relay 状态)——供折叠布局把本机常驻外层
@@ -283,7 +347,7 @@ export function MyDevicesPanel({
     <div className="flex flex-col gap-4">
       {variant !== 'self' && (
         <div className="flex items-center justify-end">
-          <Button
+          <Button data-setting-id={remoteControlSettings.devices.id}
             variant="secondary"
             size="sm"
             compact
@@ -304,7 +368,7 @@ export function MyDevicesPanel({
         aria-label={
           variant === 'self'
             ? t('settings.devices.thisDevice')
-            : t('settings.remoteControl.sections.myDevices')
+            : t(remoteControlSettings.devices.titleKey)
         }
       >
         {/* 本机:承载重命名 + 被控总开关 + relay 状态 */}
@@ -323,7 +387,7 @@ export function MyDevicesPanel({
             <div className="flex min-w-0 flex-1 flex-col gap-0.5">
               {self && editingId === self.deviceId ? (
                 <div className="flex items-center gap-1.5">
-                  <input
+                  <input data-setting-id={remoteControlSettings.devices.id}
                     value={editingName}
                     autoFocus
                     maxLength={64}
@@ -334,7 +398,7 @@ export function MyDevicesPanel({
                     }}
                     className="w-44 rounded-lg border border-[var(--border-default)] bg-transparent px-2 py-0.5 text-13 text-[var(--settings-input-text)] outline-none"
                   />
-                  <button
+                  <button data-setting-id={remoteControlSettings.devices.id}
                     type="button"
                     onClick={() => void handleRename(self.deviceId)}
                     aria-label={t('settings.devices.renameConfirm')}
@@ -342,7 +406,7 @@ export function MyDevicesPanel({
                   >
                     <Check size={14} />
                   </button>
-                  <button
+                  <button data-setting-id={remoteControlSettings.devices.id}
                     type="button"
                     onClick={() => setEditingId(null)}
                     aria-label={t('settings.devices.renameCancel')}
@@ -375,7 +439,7 @@ export function MyDevicesPanel({
               ) : null}
             </div>
             {self && editingId !== self.deviceId ? (
-              <button
+              <button data-setting-id={remoteControlSettings.devices.id}
                 type="button"
                 onClick={() => {
                   setEditingId(self.deviceId);
@@ -393,7 +457,7 @@ export function MyDevicesPanel({
               label={t('settings.devices.allowControl')}
               reason={t('settings.devices.allowControlHint')}
             >
-              <Switch
+              <Switch data-setting-id={remoteControlSettings.devices.id}
                 checked={s.enabled}
                 onCheckedChange={(v) => void s.setEnabled(v)}
                 aria-label={t('settings.devices.allowControl')}
@@ -446,7 +510,7 @@ export function MyDevicesPanel({
                   <div className="flex min-w-0 flex-1 flex-col gap-0.5">
                     {editingId === d.deviceId ? (
                       <div className="flex items-center gap-1.5">
-                        <input
+                        <input data-setting-id={remoteControlSettings.devices.id}
                           value={editingName}
                           autoFocus
                           maxLength={64}
@@ -457,7 +521,7 @@ export function MyDevicesPanel({
                           }}
                           className="w-44 rounded-lg border border-[var(--border-default)] bg-transparent px-2 py-0.5 text-13 text-[var(--settings-input-text)] outline-none"
                         />
-                        <button
+                        <button data-settings-search-action="Save the device display name"
                           type="button"
                           onClick={() => void handleRename(d.deviceId)}
                           aria-label={t('settings.devices.renameConfirm')}
@@ -465,7 +529,7 @@ export function MyDevicesPanel({
                         >
                           <Check size={14} />
                         </button>
-                        <button
+                        <button data-settings-search-action="Start or cancel editing the device display name"
                           type="button"
                           onClick={() => setEditingId(null)}
                           aria-label={t('settings.devices.renameCancel')}
@@ -486,14 +550,14 @@ export function MyDevicesPanel({
                   {editingId !== d.deviceId && (
                     <div className="flex shrink-0 items-center gap-1">
                       {canBeControlledPlatform(d.platform) && !peerRevoked && (
-                        <button type="button" className="inline-flex min-h-11 min-w-11 items-center justify-center rounded-full text-[var(--text-primary)] hover:bg-[var(--surface-chip)] disabled:opacity-40"
+                        <button data-settings-search-action="Open a remote desktop session for this device" type="button" className="inline-flex min-h-11 min-w-11 items-center justify-center rounded-full text-[var(--text-primary)] hover:bg-[var(--surface-chip)] disabled:opacity-40"
                           disabled={!d.online || !d.remoteControlEnabled || !d.controlEnabled}
                           title={t('remoteDesktop.title')} aria-label={t('remoteDesktop.title')}
                           onClick={() => void window.electronAPI.openRemoteDesktop({deviceId:d.deviceId,name:d.name}).catch(() => toast.error(t('remoteDesktop.connectionError')))}>
                           <Monitor size={16}/>
                         </button>
                       )}
-                      <button
+                      <button data-settings-search-action="Start or cancel editing the device display name"
                         type="button"
                         onClick={() => {
                           setEditingId(d.deviceId);
@@ -504,7 +568,7 @@ export function MyDevicesPanel({
                       >
                         <Pencil size={13} />
                       </button>
-                      <button
+                      <button data-settings-search-action="Open confirmation to remove this device"
                         type="button"
                         onClick={() => setDeleteTarget(d)}
                         disabled={deleting}
@@ -517,38 +581,31 @@ export function MyDevicesPanel({
                   )}
                 </div>
 
-                {/* 两个方向控件。手机等「不可被控」的设备、以及对方已拒绝本机的设备,都不展示「我控制它」
+                {/* 两个方向各一行。手机等「不可被控」的设备、以及对方已拒绝本机的设备,都不展示「我可以」行
                     (前者永远控不了;后者避免让用户看到一个控不了的选中态而纠结)。 */}
-                <div className="mt-3 flex flex-col gap-3 border-t border-[var(--border-default)] pt-3">
+                <div className="mt-3 grid grid-cols-[max-content_minmax(0,1fr)] items-start gap-x-4 gap-y-2 border-t border-[var(--border-default)] pt-3">
                   {canBeControlledPlatform(d.platform) && !peerRevoked && (
-                    <ControlRow
-                      label={t('settings.remoteControl.myDevices.controlIt')}
-                      reason={controlReason}
-                    >
-                      <Switch
-                        checked={control.checked}
-                        onCheckedChange={(v) => void s.setDeviceControlEnabled(d.deviceId, v)}
-                        aria-label={t('settings.remoteControl.deviceControlToggleAria', {
-                          name: d.name,
-                        })}
+                    <AccessRow label={t('settings.remoteControl.myDevices.iCan')} reason={controlReason}>
+                      <AccessPill
+                        label={t('settings.remoteControl.myDevices.controlIt')}
+                        ariaLabel={t('settings.remoteControl.deviceControlToggleAria', { name: d.name })}
+                        pressed={control.checked}
+                        onToggle={(v) => void s.setDeviceControlEnabled(d.deviceId, v)}
                       />
-                    </ControlRow>
+                    </AccessRow>
                   )}
-                  <ControlRow
-                    label={t('settings.remoteControl.myDevices.allowInbound')}
-                    reason={
-                      inbound.disabled ? t('settings.remoteControl.myDevices.masterOffHint') : null
-                    }
+                  <AccessRow
+                    label={t('settings.remoteControl.myDevices.itCan')}
+                    reason={inbound.disabled ? t('settings.remoteControl.myDevices.masterOffHint') : null}
                   >
-                    <Switch
-                      checked={inbound.checked}
+                    <AccessPill
+                      label={t('settings.remoteControl.myDevices.controlThisDevice')}
+                      ariaLabel={t('settings.remoteControl.myDevices.allowInboundAria', { name: d.name })}
+                      pressed={inbound.checked}
                       disabled={inbound.disabled}
-                      onCheckedChange={(v) => void onInboundChange(d.deviceId, v)}
-                      aria-label={t('settings.remoteControl.myDevices.allowInboundAria', {
-                        name: d.name,
-                      })}
+                      onToggle={(v) => void onInboundChange(d.deviceId, v)}
                     />
-                  </ControlRow>
+                  </AccessRow>
                 </div>
               </li>
             );

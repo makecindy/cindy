@@ -1,5 +1,5 @@
 import { Button } from '@/components/ui/button';
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import * as Dialog from '@radix-ui/react-dialog';
 import { AlertTriangle, X } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
@@ -15,6 +15,8 @@ import type {
   ModelPriceOverrideView,
 } from '../../../shared/modelPriceOverride';
 import type { UnionModelRow } from './UnifiedModelList';
+import { providersSettings } from './ProvidersSection.settings-search';
+import { useSettingDefinition } from './useSettingDefinition';
 
 const AGENT_LABEL: Record<AgentKind, string> = {
   'claude-code': 'Claude Code',
@@ -27,6 +29,9 @@ interface Props {
   row: UnionModelRow;
   open: boolean;
   onOpenChange: (open: boolean) => void;
+  presentation?: 'dialog' | 'inline';
+  referenceDetails?: ReactNode | ((agent: AgentKind) => ReactNode);
+  onPendingChange?: (pending: boolean) => void;
 }
 
 interface FormState {
@@ -70,13 +75,21 @@ function parseOptionalPrice(value: string): number | null | 'invalid' {
   return Number.isFinite(parsed) && parsed >= 0 ? parsed : 'invalid';
 }
 
-export function ModelPriceOverrideDialog({ provider, row, open, onOpenChange }: Props) {
+export function ModelPriceOverrideDialog({ provider, row, open, onOpenChange, presentation = 'dialog', referenceDetails, onPendingChange }: Props) {
+  const inline = presentation === 'inline';
   const { t } = useTranslation();
+  const pricingSetting = useSettingDefinition(providersSettings.modelPricing, t);
   const [agent, setAgent] = useState<AgentKind>(row.avail[0]);
   const [view, setView] = useState<ModelPriceOverrideView | null>(null);
   const [form, setForm] = useState<FormState>(EMPTY_FORM);
   const [loading, setLoading] = useState(false);
   const [saving, setSaving] = useState(false);
+  const pendingRef = useRef(false);
+  const setPending = (pending: boolean) => {
+    pendingRef.current = pending;
+    setSaving(pending);
+    onPendingChange?.(pending);
+  };
 
   const model = row.byAgent[agent];
   const target = useMemo(
@@ -86,12 +99,17 @@ export function ModelPriceOverrideDialog({ provider, row, open, onOpenChange }: 
 
   // DESIGN.md §4:弹窗打开时焦点落主输入,而不是 Radix 默认的首个可聚焦元素(关闭按钮)。
   const primaryInputRef = useRef<HTMLInputElement | null>(null);
+  const resetButtonRef = useRef<HTMLButtonElement | null>(null);
+  const restoreResetFocus = () => {
+    if (inline && document.activeElement === resetButtonRef.current) primaryInputRef.current?.focus();
+  };
 
   // 弹窗关闭或目标切换后,在途 save/reset 的迟到响应必须整体作废:旧实例捕获的
   // setView/onOpenChange(false) 会覆盖新目标的表单、甚至直接关掉刚打开的弹窗。
   const mutationEpochRef = useRef(0);
   useEffect(() => {
     mutationEpochRef.current += 1;
+    if (inline) setPending(false);
   }, [open, target]);
   // UnifiedModelList 按行条件渲染本弹窗:换行会卸载重挂、换新实例,但旧实例的
   // 在途 save/reset 闭包仍握着共享的 onOpenChange。卸载时同样作废 epoch,
@@ -99,6 +117,7 @@ export function ModelPriceOverrideDialog({ provider, row, open, onOpenChange }: 
   useEffect(
     () => () => {
       mutationEpochRef.current += 1;
+      onPendingChange?.(false);
     },
     [],
   );
@@ -133,7 +152,7 @@ export function ModelPriceOverrideDialog({ provider, row, open, onOpenChange }: 
   }, [open, target, t]);
 
   const save = async () => {
-    if (!target || !view || loading) return;
+    if (!target || !view || loading || (inline && (pendingRef.current || !view.editable))) return false;
     const inputPerMtok = parseRequiredPrice(form.input);
     const outputPerMtok = parseRequiredPrice(form.output);
     const cacheReadPerMtok = parseOptionalPrice(form.cacheRead);
@@ -144,8 +163,9 @@ export function ModelPriceOverrideDialog({ provider, row, open, onOpenChange }: 
       cacheReadPerMtok === 'invalid' ||
       cacheCreatePerMtok === 'invalid'
     ) {
+      if (inline) setForm(formFromView(view));
       toast.error(t('settings.providers.models.priceOverride.invalid'));
-      return;
+      return false;
     }
     const desired: ModelPriceOverrideDesiredQuote = {
       currency: form.currency,
@@ -154,38 +174,55 @@ export function ModelPriceOverrideDialog({ provider, row, open, onOpenChange }: 
       cacheReadPerMtok,
       cacheCreatePerMtok,
     };
-    setSaving(true);
+    if (inline) {
+      const previous = formFromView(view);
+      if (desired.currency === previous.currency && inputPerMtok === parseRequiredPrice(previous.input) &&
+          outputPerMtok === parseRequiredPrice(previous.output) && cacheReadPerMtok === parseOptionalPrice(previous.cacheRead) &&
+          cacheCreatePerMtok === parseOptionalPrice(previous.cacheCreate)) {
+        setForm(previous);
+        return true;
+      }
+    }
+    setPending(true);
     const epoch = mutationEpochRef.current;
     try {
       const next = await window.electronAPI.maker.setModelPriceOverride(target, desired);
-      if (mutationEpochRef.current !== epoch) return;
+      if (mutationEpochRef.current !== epoch) return false;
       setView(next);
       setForm(formFromView(next));
       toast.success(t('settings.providers.models.priceOverride.saved'));
-      onOpenChange(false);
+      if (!inline) onOpenChange(false);
+      return true;
     } catch {
-      if (mutationEpochRef.current !== epoch) return;
+      if (mutationEpochRef.current !== epoch) return false;
       toast.error(t('settings.providers.models.priceOverride.saveFailed'));
+      return false;
     } finally {
-      setSaving(false);
+      if (!inline || mutationEpochRef.current === epoch) setPending(false);
     }
   };
 
   const reset = async () => {
-    if (!target) return;
-    setSaving(true);
+    if (!target || (inline && (pendingRef.current || !view?.editable))) return;
+    if (inline && view && !view.override) {
+      restoreResetFocus();
+      setForm(formFromView(view));
+      return;
+    }
+    setPending(true);
     const epoch = mutationEpochRef.current;
     try {
       const next = await window.electronAPI.maker.resetModelPriceOverride(target);
       if (mutationEpochRef.current !== epoch) return;
       setView(next);
       setForm(formFromView(next));
+      restoreResetFocus();
       toast.success(t('settings.providers.models.priceOverride.resetDone'));
     } catch {
       if (mutationEpochRef.current !== epoch) return;
       toast.error(t('settings.providers.models.priceOverride.saveFailed'));
     } finally {
-      setSaving(false);
+      if (!inline || mutationEpochRef.current === epoch) setPending(false);
     }
   };
 
@@ -194,6 +231,79 @@ export function ModelPriceOverrideDialog({ provider, row, open, onOpenChange }: 
     'border-[var(--settings-input-border)] bg-[var(--settings-input-bg)]',
     'text-[var(--settings-section-title)] focus:border-[var(--focus-ring)]',
   );
+
+  if (inline) {
+    const unavailable = loading || !view?.editable;
+    const dirty = view && JSON.stringify(form) !== JSON.stringify(formFromView(view));
+    const details = typeof referenceDetails === 'function' ? referenceDetails(agent) : referenceDetails;
+    return (
+      <section {...pricingSetting.anchorProps} data-model-price-editor className="pt-5" aria-busy={saving}
+        aria-label={t('settings.providers.models.advanced.pricing')}
+        onBlur={(event) => {
+          if (event.relatedTarget instanceof Node && event.currentTarget.contains(event.relatedTarget)) return;
+          if (dirty) void save();
+        }}
+        onKeyDown={(event) => {
+          if (!(event.target instanceof HTMLElement)) return;
+          if (event.nativeEvent.isComposing || event.repeat || event.ctrlKey || event.shiftKey || event.altKey || event.metaKey) return;
+          if (event.key === 'Escape') {
+            event.preventDefault();
+            event.stopPropagation();
+            event.target.blur();
+          } else if (event.key === 'Enter' && event.target instanceof HTMLInputElement) event.preventDefault();
+        }}>
+        <div className="flex min-h-8 items-center justify-between gap-2">
+          <h4 className="text-12 font-medium text-[var(--text-secondary)]">{t('settings.providers.models.advanced.pricing')}</h4>
+          <Button ref={resetButtonRef} variant="secondary" compact type="button" disabled={unavailable || (!view?.override && !dirty)}
+            aria-disabled={saving || undefined} onClick={() => void reset()}
+            data-settings-search-action="Reset this model quote using its existing reset API">
+            {t('settings.providers.models.priceOverride.resetShort')}
+          </Button>
+        </div>
+        {row.avail.length > 1 && <SegmentedControl className="mt-1.5" value={agent} disabled={saving || loading}
+          aria-label={t('settings.providers.custom.fields.protocols')}
+          data-settings-search-action="Choose which engine quote to edit"
+          onValueChange={(next) => {
+            if (!dirty) setAgent(next);
+            else void save().then((saved) => { if (saved) setAgent(next); });
+          }} options={row.avail.map(candidate => ({ value: candidate, label: AGENT_LABEL[candidate] }))} />}
+        {(view?.allowedCurrencies.length ?? 0) > 1 && <label className="mt-2 flex items-center justify-between gap-4 text-12 text-[var(--text-secondary)]">
+          {t('settings.providers.models.priceOverride.currency')}
+          <select {...pricingSetting.controlProps} data-model-price-input value={form.currency} disabled={unavailable} aria-disabled={saving || undefined}
+            onPointerDown={(event) => { if (pendingRef.current) event.preventDefault(); }}
+            onKeyDown={(event) => { if (pendingRef.current && event.key !== 'Tab') event.preventDefault(); }}
+            onChange={(event) => { if (!pendingRef.current) setForm(current => ({ ...current, currency: event.target.value as FormState['currency'] })); }}
+            className={fieldClass + ' w-auto'}>
+            {view?.allowedCurrencies.map(currency => <option key={currency}>{currency}</option>)}
+          </select>
+        </label>}
+        {([['input', 'input'], ['output', 'output'], ['cacheRead', 'cacheRead'], ['cacheCreate', 'cacheWrite']] as const).map(([field, label]) => (
+          <label key={field} className="flex min-h-[34px] items-center justify-between gap-4 border-b border-[var(--settings-theme-card-border)] py-2 last:border-b-0">
+            <span className="shrink-0 text-13 text-[var(--text-secondary)]">{t('settings.providers.models.priceOverride.' + label)}</span>
+            <span className="inline-flex min-w-0 items-center gap-1 text-13 text-[var(--text-primary)]">
+              <span aria-hidden>{form.currency === 'CNY' ? '¥' : '$'}</span>
+              <input ref={field === 'input' ? primaryInputRef : undefined} {...pricingSetting.controlProps} data-model-price-input type="number" min="0" step="any" inputMode="decimal"
+                value={form[field]} placeholder="—" disabled={unavailable} readOnly={saving}
+                aria-label={t('settings.providers.models.priceOverride.' + label)}
+                onChange={(event) => setForm(current => ({ ...current, [field]: event.target.value }))}
+                style={{ width: Math.max(3, form[field].length + 1) + 'ch', maxWidth: '12ch' }}
+                className="h-8 min-w-0 rounded-full border border-transparent bg-transparent px-1 text-right text-13 tabular-nums text-[var(--text-primary)] outline-none hover:border-[var(--border-default)] focus:border-[var(--settings-input-border-focus)] focus:ring-2 focus:ring-[var(--focus-ring-soft)] placeholder:text-[var(--text-placeholder)] [&::-webkit-inner-spin-button]:appearance-none [&::-webkit-outer-spin-button]:appearance-none" />
+              <span className="text-11 text-[var(--text-tertiary)]">{t('settings.providers.models.advanced.perMtok')}</span>
+            </span>
+          </label>
+        ))}
+        {details && <details className="mt-2 text-12 text-[var(--text-secondary)]">
+          <summary className="cursor-pointer">{t('settings.providers.models.priceOverride.referenceDetails')}</summary>
+          {details}
+        </details>}
+        {view?.conflict && <p className="mt-2 text-12 text-[var(--warning-fg)]">{t('settings.providers.models.priceOverride.conflict')}</p>}
+        <p className="mt-2 text-11 text-[var(--text-tertiary)]">{t('settings.providers.models.priceOverride.description')}</p>
+        {view?.registryUpdatedAt && <p className="mt-1 text-11 text-[var(--text-tertiary)]">
+          {t('settings.providers.models.priceOverride.registryDate', { date: view.registryUpdatedAt.slice(0, 10) })}
+        </p>}
+      </section>
+    );
+  }
 
   return (
     <Dialog.Root open={open} onOpenChange={onOpenChange}>
@@ -222,6 +332,7 @@ export function ModelPriceOverrideDialog({ provider, row, open, onOpenChange }: 
             </div>
             <Dialog.Close asChild>
               <button
+                data-settings-search-action="Close the model price editor"
                 type="button"
                 aria-label={t('settings.providers.models.priceOverride.close')}
                 className="flex h-7 w-7 shrink-0 items-center justify-center rounded-lg text-[var(--text-tertiary)] hover:bg-[var(--surface-hover)]"
@@ -234,6 +345,7 @@ export function ModelPriceOverrideDialog({ provider, row, open, onOpenChange }: 
           <div className="flex flex-col gap-4 px-5 pb-5">
             {row.avail.length > 1 && (
               <SegmentedControl
+                data-settings-search-action="Choose which engine quote to edit"
                 aria-label={t('settings.providers.custom.fields.protocols')}
                 value={agent}
                 onValueChange={setAgent}
@@ -256,6 +368,7 @@ export function ModelPriceOverrideDialog({ provider, row, open, onOpenChange }: 
             )}
 
             <div
+              {...pricingSetting.anchorProps}
               className={cn('grid grid-cols-2 gap-3', loading && 'pointer-events-none opacity-60')}
             >
               <label className="col-span-2 flex flex-col gap-1.5">
@@ -263,6 +376,7 @@ export function ModelPriceOverrideDialog({ provider, row, open, onOpenChange }: 
                   {t('settings.providers.models.priceOverride.currency')}
                 </span>
                 <select
+                  {...pricingSetting.controlProps}
                   value={form.currency}
                   onChange={(event) =>
                     setForm((current) => ({
@@ -292,6 +406,7 @@ export function ModelPriceOverrideDialog({ provider, row, open, onOpenChange }: 
                     {t(`settings.providers.models.priceOverride.${label}`)}
                   </span>
                   <input
+                    {...pricingSetting.controlProps}
                     ref={field === 'input' ? primaryInputRef : undefined}
                     type="number"
                     min="0"
@@ -320,6 +435,7 @@ export function ModelPriceOverrideDialog({ provider, row, open, onOpenChange }: 
               <div>
                 {view?.override && (
                   <Button
+                    data-settings-search-action="Reset this model quote using its existing reset API"
                     variant="secondary"
                     size="md"
                     tone="quiet"
@@ -334,11 +450,12 @@ export function ModelPriceOverrideDialog({ provider, row, open, onOpenChange }: 
               </div>
               <div className="flex gap-2">
                 <Dialog.Close asChild>
-                  <Button variant="secondary" size="md" compact type="button">
+                  <Button data-settings-search-action="Cancel editing the model quote" variant="secondary" size="md" compact type="button">
                     {t('settings.providers.models.priceOverride.cancel')}
                   </Button>
                 </Dialog.Close>
                 <Button
+                  data-settings-search-action="Save the entered model quote"
                   variant="cta"
                   size="md"
                   compact

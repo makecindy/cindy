@@ -5,6 +5,11 @@
   "sourceLocale": "en",
   "punctuationExempt": ["desktop:settings.help.qnaFeedbackBodyTemplate"],
   "terms": [
+    {"id":"automation-trigger-mode","status":"proposed","en":"Trigger mode","translations":{"zh-CN":"触发方式","zh-TW":"觸發方式","ja":"トリガー方式","ko":"트리거 방식"},"note":"自动化何时运行的选择：定时、手动或 Webhook。独立于执行方式（AI 任务或脚本），用户于 2026-11-04 选择此交互方向。"},
+    {"id": "request-refund", "status": "proposed", "en": "Request Refund", "translations": {"zh-CN": "申请退款", "zh-TW": "申請退款", "ja": "返金を申請", "ko": "환불 신청", "fr": "Demander un remboursement", "es": "Solicitar reembolso", "de": "Rückerstattung anfordern", "pt-PT": "Pedir reembolso", "pt-BR": "Solicitar reembolso", "zh-Hant-x-lzh": "請退款", "zh-Hans-x-lzh": "请退款"}, "note": "订单行的邮件退款申请入口；由用户确认使用客服邮件处理，不代表自动退款。"},
+    {"id": "provider-transaction-id", "status": "proposed", "en": "Provider transaction ID", "translations": {"zh-CN": "渠道交易号", "zh-TW": "渠道交易號", "ja": "決済取引ID", "ko": "결제 거래 ID", "fr": "Identifiant de transaction du prestataire", "es": "ID de transacción del proveedor", "de": "Transaktions-ID des Zahlungsanbieters", "pt-PT": "ID de transação do prestador", "pt-BR": "ID da transação do provedor", "zh-Hant-x-lzh": "渠道交易號", "zh-Hans-x-lzh": "渠道交易号"}, "note": "支付渠道记录的交易号，用于开票弹窗和邮件；支付宝为实际交易号，Stripe 为 PaymentIntent ID 或 Charge ID，不是本地订单号或商户订单号。"},
+    {"id": "island-subtle-reminders", "status": "proposed", "en": "Subtle reminders", "translations": {"zh-CN": "轻提醒", "zh-TW": "輕提醒", "ja": "控えめな通知", "ko": "은은한 알림", "es": "Avisos discretos", "fr": "Alertes discrètes", "de": "Dezente Hinweise", "pt-PT": "Avisos discretos", "pt-BR": "Avisos discretos", "zh-Hant-x-lzh": "輕提醒", "zh-Hans-x-lzh": "轻提醒"}, "checkCase": false, "note": "灵动岛设置：新消息、待回复和错误通过图标变化提示，不向下弹出通知卡片；手动点击展开完整任务列表保持不变。"},
+    {"id": "gitlab-merge-request", "status": "proposed", "en": "MR", "translations": {"zh-CN": "MR", "zh-TW": "MR", "ja": "MR", "ko": "MR", "fr": "MR", "es": "MR", "de": "MR", "pt-PT": "MR", "pt-BR": "MR", "zh-Hans-x-lzh": "MR", "zh-Hant-x-lzh": "MR"}, "note": "GitLab Merge Request 的平台名称，界面保留 MR 与 !编号；不同于 GitHub PR。"},
     {"id": "additional-fees", "status": "proposed", "en": "Additional fees", "translations": {"zh-CN": "附加费用", "zh-TW": "附加費用", "ja": "追加費用", "ko": "추가 비용"}, "note": "任务中主对话之外的额外模型费用，按模型和调用渠道汇总；用户于 2026-10-30 选定中文名称。"},
     {"id": "cindy-ai-personal", "status": "proposed", "en": "Cindy AI · Personal", "translations": {"zh-CN": "Cindy AI · 个人", "zh-TW": "Cindy AI · 個人", "ja": "Cindy AI · 個人", "ko": "Cindy AI · 개인"}, "note": "个人身份使用的 Cindy AI 显示名。按模型来源电脑的登录身份生成；不改变供应商 ID、路由或 Auto 模型名。"},
     {"id": "cindy-ai-xd", "status": "proposed", "en": "Cindy AI · XD", "translations": {"zh-CN": "Cindy AI · 心动", "zh-TW": "Cindy AI · 心動", "ja": "Cindy AI · XD", "ko": "Cindy AI · XD"}, "note": "心动企业身份使用的 Cindy AI 显示名。其他企业使用 Cindy AI · 企业名称；与 Nova 或新版网关后端无关。身份未知时只显示 Cindy AI，不猜测归属。"},
@@ -592,6 +597,19 @@
         "ko": "Lark"
       },
       "note": "Lark 国际版 IM 服务的官方品牌名，四语统一保留原品牌写法；先登记为 proposed，待产品术语评审后再决定是否固化。"
+    },
+    {
+      "id": "feishu-link-code",
+      "status": "proposed",
+      "en": "Link code",
+      "translations": {
+        "zh-CN": "关联码",
+        "zh-TW": "關聯碼",
+        "ja": "連携コード",
+        "ko": "연동 코드"
+      },
+      "checkCase": false,
+      "note": "官方飞书 / Lark 机器人关联时的一次性短码：网页授权不可用的用户把它私聊发给机器人完成关联，只在关联进行中出现，过期作废，不是密钥。与供应商分享的「配对码」(Pairing Code)、本机应用的「连接码」(Connection code) 是不同概念；ko 取「연동 코드」以免与「연결 코드」(Connection code) 撞名。"
     },
     {
       "id": "personal-wechat",
@@ -2776,6 +2794,7 @@
         ]
       },
       "minorityByDesign": {
+        "ko": "英文 Turn 的全词统计还包含大量 turn on/off（启用/关闭），录屏音频错误提示中的 turn it off / turn off audio 也属此义，不应译成表示完整问答往返的 턴。韩语按实际语境表达开关动作；不为提高占比改写开关文案。",
         "de": "英文 Turn 的全词统计还包含大量 turn on/off（启用/关闭），这些不是完整问答往返，不应译成此处术语。仅完整往返使用 Runde，普通界面沿用消息；不为提高占比改写开关文案。",
         "pt-PT": "英文 Turn 的全词统计还包含大量 turn on/off（启用/关闭），这些不是完整问答往返，不应译成此处术语。仅完整往返使用 turno，普通界面沿用消息；不为提高占比改写开关文案。",
         "pt-BR": "英文 Turn 的全词统计还包含大量 turn on/off（启用/关闭），这些不是完整问答往返，不应译成此处术语。仅完整往返使用 turno，普通界面沿用消息；不为提高占比改写开关文案。"
@@ -3467,6 +3486,85 @@
         "ko": "읽음"
       },
       "note": "群聊里「别的成员已经看过这条消息」的状态（消息气泡下的双勾、「N 人已读」）。与「Read」作动词（读取文件）无关；只用于消息读取状态。"
+    },
+    {
+      "id": "merge-conflict",
+      "status": "proposed",
+      "en": "Merge conflict",
+      "translations": {
+        "zh-CN": "合并冲突",
+        "zh-TW": "合併衝突",
+        "ja": "マージコンフリクト",
+        "ko": "병합 충돌"
+      },
+      "checkCase": false,
+      "note": "GitHub PR / GitLab MR 的合并冲突。数据行标签为 Merge / 合并，状态值为 Conflicts / 有冲突；与检查失败及应用崩溃区分。"
+    },
+    {
+      "id": "macos-dynamic-island",
+      "status": "proposed",
+      "en": "Dynamic Island",
+      "translations": {
+        "zh-CN": "灵动岛",
+        "zh-TW": "動態島",
+        "ja": "Dynamic Island",
+        "ko": "Dynamic Island"
+      },
+      "checkCase": false,
+      "note": "Apple 的灵动岛（新款 MacBook Pro 摄像头挖孔处），沿用 Apple 各地区用语，繁中按 Apple 台湾用语作「動態島」。Cindy 自己的顶部任务面板已改名为任务胶囊 / Agent Notch（见 agent-notch），「灵动岛」只指 Apple 的；设置页分区标题也用这个词，统称两者所在的一页。"
+    },
+    {
+      "id": "agent-notch",
+      "status": "proposed",
+      "en": "Agent Notch",
+      "translations": {
+        "zh-CN": "任务胶囊",
+        "zh-TW": "任務膠囊",
+        "ja": "Agent Notch",
+        "ko": "Agent Notch",
+        "fr": "Agent Notch",
+        "es": "Agent Notch",
+        "de": "Agent Notch",
+        "pt-PT": "Agent Notch",
+        "pt-BR": "Agent Notch",
+        "zh-Hans-x-lzh": "任务胶囊",
+        "zh-Hant-x-lzh": "任務膠囊"
+      },
+      "checkCase": false,
+      "note": "Cindy 在屏幕顶部显示任务的面板（原名灵动岛 / Agent Island）。苹果在新款 MacBook Pro 上推出灵动岛后改名，避免与 Apple 的灵动岛混同；中文不直译 notch（「刘海」易联想发型），用户于 2026-11-07 选定。设置页搜索保留旧名作别名。"
+    },
+    {
+      "id": "macos-live-activities",
+      "status": "proposed",
+      "en": "Live Activities",
+      "translations": {
+        "zh-CN": "实时活动",
+        "zh-TW": "即時動態",
+        "ja": "ライブアクティビティ",
+        "ko": "실시간 현황"
+      },
+      "checkCase": false,
+      "note": "Apple 的实时活动（ActivityKit）。沿用 Apple 各地区官方译名；Cindy 只以此展示任务状态，不作为自有功能名。"
+    },
+    {
+      "id": "official-feishu-working-computer",
+      "status": "proposed",
+      "en": "Working computer",
+      "translations": {
+        "zh-CN": "工作电脑",
+        "zh-TW": "工作電腦",
+        "ja": "作業用パソコン",
+        "ko": "작업 컴퓨터",
+        "fr": "Ordinateur de travail",
+        "es": "Ordenador de trabajo",
+        "de": "Arbeitscomputer",
+        "pt-PT": "Computador de trabalho",
+        "pt-BR": "Computador de trabalho",
+        "zh-Hant-x-lzh": "工作電腦",
+        "zh-Hans-x-lzh": "工作电脑"
+      },
+      "checkCase": false,
+      "note": "官方飞书 / Lark 机器人中接收新消息的已关联电脑；每个应用和飞书账号独立选择，默认最新关联的电脑。"
     }
   ]
 }

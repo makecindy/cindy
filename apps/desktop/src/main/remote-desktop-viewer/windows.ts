@@ -16,7 +16,11 @@ import {
 import { createHash } from 'node:crypto';
 import { desktopDiagnosticCode } from '../../shared/remoteDesktopDiagnostics';
 import { REMOTE_VIEWER, type RemoteViewerTarget } from '../../shared/remoteDesktopViewer.js';
-import { activeOwnerScopeKey, isAppSessionBoundaryPending } from '../appSessionState.js';
+import {
+  activeOwnerScopeKey,
+  getPersistedAppSessionMode,
+  isAppSessionBoundaryPending,
+} from '../appSessionState.js';
 import { getAppCapabilities } from '../appCapabilities.js';
 import {
   getSelfDeviceId,
@@ -116,6 +120,10 @@ export class RemoteDesktopViewerWindows {
   private locale: SupportedLocale | null = null;
   constructor(private readonly isOpenSender: (sender: WebContents) => boolean) {}
   prewarm(): void {
+    // Remote desktop needs a Cindy account, so local and signed-out profiles
+    // never keep a spare shell. A persisted cloud intent still prewarms while
+    // auth is verifying at startup; a later sign-in opens the first viewer cold.
+    if (!getAppCapabilities().canUseDeviceLink && getPersistedAppSessionMode() !== 'cloud') return;
     if (![...this.entries].some((e) => e.connection.target === null))
       this.create().controller.prewarm();
   }

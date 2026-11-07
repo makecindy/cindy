@@ -98,6 +98,7 @@ vi.mock("../rpc-client.js", () => {
     }
   }
   return {
+    PI_RPC_OVERSIZED_FRAME_ERROR: 'RPC response exceeded 16 MiB and was discarded.',
     PiRpcRequestTimeoutError,
     PiRpcProcess: class {
       isClosed = false;
@@ -231,6 +232,7 @@ import {
 } from "../../base-agent.js";
 import type { ModelDescriptor } from "../../../types/capabilities.js";
 import type { Logger } from "../../../interfaces/logger.js";
+import { NATIVE_SUBSCRIPTION_ACCOUNT, type NativeSubscriptionAccount } from '../../../interfaces/auth-adapter.js';
 
 const noopLogger: Logger = {
   trace: () => {},
@@ -303,6 +305,38 @@ describe("Pi provider-aware model routing", () => {
   afterEach(() => {
     rmSync(agentHome, { recursive: true, force: true });
     rmSync(cwd, { recursive: true, force: true });
+  });
+
+  // Standard: the actual Pi launch passes the host account to auth and both authenticated proxy scopes.
+  it('binds the selected subscription account to the root and same-provider child proxy tokens', async () => {
+    const account: NativeSubscriptionAccount = { id: 'fixture-b', configDir: '/fixture/.codex-b',
+      assertCurrent: () => {}, readState: async () => ({ authenticated: true }) };
+    const state = vi.fn(async (options) => {
+      expect(options.nativeSubscriptionAccount).toBe(account);
+      return account.readState();
+    });
+    const release = vi.fn();
+    const register = vi.fn(() => release);
+    const agent = new PiAgent({
+      auth: { getState: state, triggerLogin: async () => ({ authenticated: true }),
+        logout: async () => {}, getAuthEnv: async () => ({}) },
+      runtimeConfig: { endpoint: 'http://127.0.0.1:9' }, binaryPath: path.join(agentHome, 'pi'),
+      logger: noopLogger, resolvePiAgentHome: () => agentHome, registerPiProxySession: register,
+      resolvePiNativeProviders: async () => ({ providers: [{ id: 'openai-codex', sourceProviderId: 'openai',
+        name: 'OpenAI', baseUrl: 'http://127.0.0.1:9', api: 'openai-codex-responses' as const,
+        headers: { 'x-cindy-pi-session-id': '$CINDY_PI_SESSION_ID', 'x-cindy-pi-session-token': '$CINDY_PI_SESSION_TOKEN' },
+        models: [{ id: 'chatgpt/gpt-6-astra' }] }], env: {} }),
+    });
+    const handle = await agent.startSession({ sessionId: 'selected-profile', workingDir: cwd,
+      model: 'chatgpt/gpt-6-astra', providerId: 'openai', [NATIVE_SUBSCRIPTION_ACCOUNT]: account });
+    try {
+      expect(state).toHaveBeenCalledTimes(1);
+      const registrations = register.mock.calls as unknown as [string, string, () => string, { nativeSubscriptionAccount?: NativeSubscriptionAccount }][];
+      expect(registrations.length).toBeGreaterThanOrEqual(2);
+      expect(registrations.every(call => call[3].nativeSubscriptionAccount === account)).toBe(true);
+      expect(new Set(registrations.map(call => call[1])).size).toBe(registrations.length);
+    } finally { await handle.close(); }
+    expect(release).toHaveBeenCalledTimes(register.mock.calls.length);
   });
 
   it("keeps native Fast in the host even when a Full Access shell can rewrite old preference files", async () => {
@@ -7027,7 +7061,7 @@ describe("Pi provider-aware model routing", () => {
     await handle.close();
   });
 
-  it.each(['413', 'gateway-400', 'settings-changed', 'other-error', 'compaction-413', 'compaction-timeout', 'compaction-error', 'compaction-cancelled', 'cancelled-after-compaction', 'nothing-to-compact', 'cancelled-navigation', 'new-window', 'output'])(
+  it.each(['413', 'gateway-400', 'settings-changed', 'other-error', 'compaction-413', 'compaction-timeout', 'compaction-error', 'compaction-cancelled', 'cancelled-after-compaction', 'nothing-to-compact', 'cancelled-navigation', 'new-window', 'output', 'oversized-after-tree'])(
     'prepares an identity-bound Pi retry without duplicating accepted input: %s', async mode => {
       let navigated = false;
       const controller = new AbortController();
@@ -7035,6 +7069,9 @@ describe("Pi provider-aware model routing", () => {
         if (command.type === 'get_state') return { success: true, data: {
           sessionFile: '/mock/s.jsonl', model: { contextWindow: 200_000 },
         } };
+        if (command.type === 'get_tree' && mode === 'oversized-after-tree' && navigated) {
+          return { success: false, error: 'RPC response exceeded 16 MiB and was discarded.' };
+        }
         if (command.type === 'get_tree') return { success: true, data: {
           leafId: navigated || mode === 'new-window' ? 'parent' : mode === 'settings-changed' ? 'effort' : 'failure',
           tree: [{ entry: { id: 'parent', type: 'message', message: { role: 'assistant' } }, children: [
@@ -7085,8 +7122,9 @@ describe("Pi provider-aware model routing", () => {
       });
       const needsRollover = ['compaction-413', 'compaction-timeout', 'compaction-error', 'nothing-to-compact'].includes(mode);
       const cancelled = ['compaction-cancelled', 'cancelled-after-compaction'].includes(mode);
-      const blocked = needsRollover || cancelled || ['cancelled-navigation', 'output'].includes(mode);
-      if (needsRollover) await expect(promise).rejects.toThrow('PI_REQUEST_BODY_RECOVERY_EXHAUSTED');
+      const blocked = needsRollover || cancelled || ['cancelled-navigation', 'output', 'oversized-after-tree'].includes(mode);
+      if (mode === 'oversized-after-tree') await expect(promise).rejects.toThrow('RPC response exceeded 16 MiB and was discarded.');
+      else if (needsRollover) await expect(promise).rejects.toThrow('PI_REQUEST_BODY_RECOVERY_EXHAUSTED');
       else if (cancelled) await expect(promise).rejects.toThrow('cancelled before acceptance');
       else if (blocked) await expect(promise).rejects.toThrow();
       else await promise;
@@ -7104,6 +7142,26 @@ describe("Pi provider-aware model routing", () => {
       await handle.close();
     },
   );
+
+  it('reports the oversized history response before retry accepts another prompt', async () => {
+    captured.requestHandler = async command => {
+      if (command.type === 'get_state') return { success: true, data: {
+        sessionFile: '/mock/s.jsonl', model: { contextWindow: 200_000 },
+      } };
+      if (command.type === 'get_tree') return {
+        success: false, error: 'RPC response exceeded 16 MiB and was discarded.',
+      };
+      return { success: true, data: {} };
+    };
+    const agent = new PiAgent(byomDeps(async () => ({ providers: [], env: {} })));
+    const handle = await agent.startSession({ sessionId: 'retry-oversized-tree', workingDir: cwd, model: 'local-model' });
+    const retryStart = captured.requests.length;
+    await expect(handle.send({ type: 'user', content: 'same input' }, {
+      retryTranscriptUserEntryId: 'accepted',
+    })).rejects.toThrow('RPC response exceeded 16 MiB and was discarded.');
+    expect(captured.requests.slice(retryStart).filter(r => r.type === 'prompt')).toHaveLength(0);
+    await handle.close();
+  });
 
   it("reports the stable Pi user entry id after prompt acceptance", async () => {
     let promptAccepted = false;

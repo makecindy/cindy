@@ -840,7 +840,7 @@ export function ConversationSearchBox({
         collisionPadding={12}
         className={cn(
           'w-[min(640px,calc(100vw-32px))] rounded-xl border border-[var(--cmd-palette-border)]',
-          'bg-[var(--cmd-palette-bg)] p-0 text-[var(--cmd-palette-item-text)] shadow-[var(--cmd-palette-shadow)]',
+          'bg-[var(--cmd-palette-bg)] p-0 text-[var(--cmd-palette-item-text)] shadow-[shadow:var(--cmd-palette-shadow)]',
         )}
       >
         <div className="border-b border-[var(--cmd-palette-border)] p-2">

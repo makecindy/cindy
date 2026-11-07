@@ -1,3 +1,4 @@
+import { entryModelIds, entryWireIds, readEntryPreference } from '@/components/new-chat/unifiedModelSelection';
 /**
  * 统一模型选择器(模型优先)M3 / M4 的**纯逻辑锁**:行生效配置合成、收藏副本语义、
  * 收藏 / 最近置顶 + 分组陈列、rail 派生、浮层定位、档位绝对色。
@@ -1354,4 +1355,39 @@ it('shows the wire ID for an unavailable gateway shortcut without rewriting its 
   expect(placeholder.modelId).toBe(stored.modelId);
   expect(placeholder.capabilities).toEqual({});
   expect(unavailableFavoriteEntry(favoriteOf({ modelId: 'ordinary' })).displayName).toBe('ordinary');
+});
+
+describe('alias identity and saved preferences', () => {
+  const original = (id: string) => entryOf({ modelId: id, candidates: ['codex'], recommended: 'codex',
+    capabilities: { codex: capability('codex', { wireModelId: id }) } });
+  const merged = () => ({ ...original('flash'), aliasEntries: [original('flash'), original('flash-old')] });
+  it('reads one-sided legacy values and retains explicit false', () => {
+    const row = merged();
+    expect(entryModelIds(row)).toEqual(['flash', 'flash-old']);
+    expect(entryWireIds(row, 'codex')).toEqual(['flash', 'flash-old']);
+    expect(readEntryPreference(row, entryWireIds(row, 'codex'), (_, id) => id === 'flash-old' ? 'high' : undefined)).toBe('high');
+    expect(readEntryPreference(row, entryWireIds(row, 'codex'), (_, id) => id === 'flash-old' ? false : undefined)).toBe(false);
+    expect(readEntryPreference(row, entryWireIds(row, 'codex'), (_, id) => id === 'flash-old' ? false : true)).toBeUndefined();
+  });
+  it('matches old IDs and resolves old favorites with their original route', () => {
+    const row = merged();
+    expect(entryMatchesModelId(row, 'flash-old')).toBe(true);
+    const config = resolveFavoriteRowConfig({ entry: row, item: favoriteOf({ modelId: 'flash-old', agent: 'codex', effort: 'high' }) });
+    expect(config.wireModelId).toBe('flash-old');
+    expect(config.effort).toBe('high');
+  });
+  it.each(['favorites', 'recent'] as const)('keeps old-ID %s visible through the real list resolver', (kind) => {
+    const entry = merged();
+    const favorite = favoriteOf({ providerId: entry.providerId, modelId: 'flash-old', agent: 'codex', effort: 'high' });
+    const recent = { ...favorite, usedAt: 1 };
+    const before = JSON.stringify({ favorite, recent });
+    const rows = buildUnifiedListSections({ entries: [entry], favorites: [favorite], recentModels: [recent],
+      query: '', rail: { kind } }).flatMap((section) => section.rows);
+    expect(rows).toHaveLength(1);
+    expect(rows[0].entry).toBe(entry);
+    const config = resolveFavoriteRowConfig({ entry: rows[0].entry, item: rows[0].favorite ?? rows[0].recent! });
+    expect(config.wireModelId).toBe('flash-old');
+    expect(config.effort).toBe('high');
+    expect(JSON.stringify({ favorite, recent })).toBe(before);
+  });
 });

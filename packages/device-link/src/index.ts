@@ -53,6 +53,7 @@ export * from "./providerShareApi.js";
 export * from "./providerShareInvitation.js";
 export * from "./chatInvitation.js";
 export * from "./providerShareCatalog.js";
+export * from "./metadataContinuity.js";
 export * from "./providerShareEnvelope.js";
 export * from "./providerGroup.js";
 export * from "./modelFavorites.js";
@@ -83,3 +84,5 @@ export * from "./orcaRemoteWorker.js";
 export * from "./companionCloud.js";
 export * from "./machineStatus.js";
 export * from "./pluginPages.js";
+
+export { StallDiagnostics, diagnosticChannel, diagnosticRef, diagnosticOperation } from './stallDiagnostics.js';

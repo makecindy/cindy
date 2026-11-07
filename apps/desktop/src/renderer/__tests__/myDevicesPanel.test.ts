@@ -70,6 +70,55 @@ describe('MyDevicesPanel device identity', () => {
   });
 });
 
+// 统一授权 B 方案把两个 Switch 换成「我可以 / 它可以」胶囊;点击必须仍走原来的
+// setDeviceControlEnabled / revoke / restore,禁用与隐藏条件不变。
+describe('MyDevicesPanel access pills', () => {
+  afterEach(cleanup);
+
+  const pill = (name: string) => screen.getByRole('button', { name });
+
+  it('keeps both directions wired to the original device-link actions and gates', () => {
+    const s = settings();
+    s.devices = [
+      device('self', 'Studio Mac', true),
+      { ...device('mac', 'MBP'), platform: 'darwin', remoteControlEnabled: false },
+      device('phone-1', 'iPhone'),
+    ];
+    s.revokedControllers = ['phone-1'];
+    // settings() 里各操作共用一个 noop,这里拆开才能分辨调用的是哪个。
+    s.setDeviceControlEnabled = vi.fn(async () => undefined);
+    s.revoke = vi.fn(async () => undefined);
+    s.restore = vi.fn(async () => undefined);
+    const { rerender } = render(createElement(MyDevicesPanel, { s, variant: 'others' }));
+
+    const macRow = within(document.querySelector<HTMLElement>('[data-device-id="mac"]')!);
+    expect(macRow.getByText('settings.remoteControl.myDevices.peerControlOff')).toBeTruthy();
+    fireEvent.click(pill('settings.remoteControl.deviceControlToggleAria'));
+    expect(s.setDeviceControlEnabled).toHaveBeenCalledExactlyOnceWith('mac', false);
+
+    const inbound = 'settings.remoteControl.myDevices.allowInboundAria';
+    const phoneRow = within(document.querySelector<HTMLElement>('[data-device-id="phone-1"]')!);
+    const macInbound = macRow.getByRole('button', { name: inbound });
+    const phoneInbound = phoneRow.getByRole('button', { name: inbound });
+    expect(macInbound.getAttribute('aria-pressed')).toBe('true');
+    fireEvent.click(macInbound);
+    expect(s.revoke).toHaveBeenCalledExactlyOnceWith('mac');
+    expect(phoneInbound.getAttribute('aria-pressed')).toBe('false');
+    fireEvent.click(phoneInbound);
+    expect(s.restore).toHaveBeenCalledExactlyOnceWith('phone-1');
+
+    // 手机不可被控:只有「它可以」行。
+    expect(phoneRow.queryByText('settings.remoteControl.myDevices.iCan')).toBeNull();
+
+    // 本机总开关关:「控制本机」置灰并说明原因。
+    rerender(createElement(MyDevicesPanel, { s: { ...s, enabled: false }, variant: 'others' }));
+    for (const b of screen.getAllByRole('button', { name: 'settings.remoteControl.myDevices.allowInboundAria' })) {
+      expect((b as HTMLButtonElement).disabled).toBe(true);
+    }
+    expect(screen.getAllByText('settings.remoteControl.myDevices.masterOffHint')).toHaveLength(2);
+  });
+});
+
 function settings(): DeviceLinkSettings {
   const noop = vi.fn(async () => undefined);
   return {

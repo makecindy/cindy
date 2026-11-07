@@ -5,6 +5,10 @@ or Windows Android Emulator. It exists because Expo Go, a development client,
 and an installed distribution build look similar during manual testing but prove
 different things.
 
+For task content that stays blank or frozen despite completed history updates,
+use the [native task-entry replay](blank-task-reproduction.md) to distinguish
+message delivery, list visibility and a stale navigation snapshot.
+
 On Windows, the explicit Mainland China one-command entry starts or reuses the
 `cindy-api36` AVD, waits for Android to finish booting, configures `adb reverse`,
 and then keeps the current worktree's Metro in the foreground:
@@ -444,9 +448,8 @@ For JavaScript freshness, the Metro terminal must show a new bundle/reload after
 the source change. Matching native fingerprints does not prove page rendering.
 
 If a freshly built app exits before loading JavaScript with `UIScene life cycle
-is required`, check the SDK 57 scene backport: `expo >= 57.0.23` and
-`expo-build-properties` with `ios.enableSceneSupport: true`. The repository enables
-this official path for Xcode 27 / iOS 27. Prebuild should generate an
+is required`, check that SDK 58 prebuild has regenerated the scene lifecycle. Scene support
+is now the default; the SDK 57 `ios.enableSceneSupport` opt-in was removed. Prebuild should generate an
 `EXExpoAppSceneDelegate` manifest for the main app and make AppDelegate conform to
 `ExpoReactNativeFactoryProvider`; it must no longer create the legacy window.
 This native migration changes the runtime fingerprint and requires a new native

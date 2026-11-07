@@ -8,9 +8,12 @@ import type { RemoteProjectTarget } from '@/components/new-chat/AddRemoteProject
 import type { AgentCapabilities } from '@/hooks/useAgentCapabilities';
 import { parseDeviceProvidersPayload } from '@/hooks/useDeviceProviders';
 import { extractIpcError } from '@/utils/ipcError';
-import { normalizeDbAgentKind } from '../../../../shared/agentKindConversion';
+import { dbToMakerAgentKind, normalizeDbAgentKind } from '../../../../shared/agentKindConversion';
+import { modelCatalogKey } from '../../../../shared/controlledModelCatalog';
+import { isProviderShareAgentDeviceId } from '../../../../shared/providerShare';
 import {
   resolveDeviceLinkDraftDefaults,
+  shouldReseedDeviceLinkDraftDefaults,
   type DeviceLinkDraftSelection,
   type RemoteDraftDefaults,
 } from '../deviceLinkDraftDefaults';
@@ -27,27 +30,37 @@ const source = ts.createSourceFile(
   ts.ScriptKind.TSX,
 );
 const factories = new Map<string, (...args: unknown[]) => unknown>();
-function callback<T>(name: string, bindings: Record<string, unknown>): T {
+function compile<T>(id: string, find: (node: ts.Node) => ts.Node | undefined, bindings: Record<string, unknown>): T {
   const keys = Object.keys(bindings);
-  let factory = factories.get(name);
+  let factory = factories.get(id);
   if (!factory) {
     let expression: ts.Node | undefined;
     const visit = (node: ts.Node) => {
-      if (ts.isVariableDeclaration(node) && node.name.getText(source) === name
-        && node.initializer && ts.isCallExpression(node.initializer)) {
-        expression = node.initializer.arguments[0];
-      }
+      expression ??= find(node);
       ts.forEachChild(node, visit);
     };
     visit(source);
-    if (!expression) throw new Error(`Missing draft callback: ${name}`);
+    if (!expression) throw new Error(`Missing draft callback: ${id}`);
     const code = ts.transpileModule(`const callback = ${expression.getText(source)};`, {
       compilerOptions: { target: ts.ScriptTarget.ES2022 },
     }).outputText;
     factory = new Function(...keys, code + ';return callback;') as (...args: unknown[]) => unknown;
-    factories.set(name, factory);
+    factories.set(id, factory);
   }
   return factory(...Object.values(bindings)) as T;
+}
+function callback<T>(name: string, bindings: Record<string, unknown>): T {
+  return compile<T>(name, node => ts.isVariableDeclaration(node) && node.name.getText(source) === name
+    && node.initializer && ts.isCallExpression(node.initializer)
+    ? node.initializer.arguments[0]
+    : undefined, bindings);
+}
+// Effects are anonymous, so their log line identifies them.
+function effect(marker: string, bindings: Record<string, unknown>): () => void {
+  return compile<() => void>(marker, node => ts.isCallExpression(node) && node.expression.getText(source) === 'useEffect'
+    && node.getText(source).includes(marker)
+    ? node.arguments[0]
+    : undefined, bindings);
 }
 
 function provider(id: string, efforts: Effort[]): ProviderView {
@@ -177,5 +190,55 @@ describe('remote project draft catalog ownership', () => {
     expect(h.current()).toBe(previous);
     expect(h.patchDraft).not.toHaveBeenCalled();
     expect(h.setRemoteDraftState).not.toHaveBeenCalled();
+  });
+});
+
+// A task computer's source list can offer the controller itself, which the
+// controller's own device list never contains.
+describe('Agent location chosen on a controlled new-task draft', () => {
+  function runLocationFallback(catalogHostDeviceId: string | undefined) {
+    const patchDraft = vi.fn();
+    effect('selected agent computer is no longer selectable', {
+      effectiveAgentDeviceId: 'controller-device',
+      selectableDevices: [{ deviceId: 'task-device' }],
+      selectableDevicesLoaded: true,
+      controlledModelRoute: { catalogHostDeviceId },
+      isProviderShareAgentDeviceId, patchDraft, log: { warn: vi.fn() },
+    })();
+    return patchDraft;
+  }
+
+  it('keeps a location offered by the task computer', () => {
+    expect(runLocationFallback('task-device')).not.toHaveBeenCalled();
+  });
+
+  it('still drops a location missing from the device list when this computer owns that list', () => {
+    expect(runLocationFallback(undefined)).toHaveBeenCalledWith({ agentDeviceId: null, agentDeviceName: null });
+  });
+
+  it('does not reseed the chosen model when its catalog is read through the task computer', () => {
+    const dlSeedKeyRef = { current: null as string | null };
+    const dlRuntimeTouchedRef = { current: false };
+    const patchDraft = vi.fn();
+    const select = callback<(selection: unknown) => void>('handleUnifiedDraftSelect', {
+      setDraftFavoriteAnchor: vi.fn(), getDraft: () => ({}), switchVendor: vi.fn(), setDlSel: vi.fn(),
+      normalizeDbAgentKind, dbToMakerAgentKind, modelCatalogKey, patchDraft,
+      effectiveAgentDeviceId: undefined, isDeviceLinkDraft: true, deviceLinkInitial: null,
+      controlledModelRoute: { catalogHostDeviceId: 'task-device' },
+      dlRuntimeTouchedRef, dlSeedKeyRef, dlSeedCapabilitiesRef: { current: null },
+    });
+    select({
+      vendor: 'codex', providerId: 'source', modelId: 'chosen', effort: 'high', fast: false,
+      favoriteUid: null, agentDevice: { deviceId: 'controller-device', name: 'Controller' },
+    });
+    expect(patchDraft).toHaveBeenCalledWith({ agentDeviceId: 'controller-device', agentDeviceName: 'Controller' });
+    // Same key useRemoteDraftSelection builds once the draft reads this routed catalog.
+    expect(shouldReseedDeviceLinkDraftDefaults({
+      currentSeedKey: dlSeedKeyRef.current,
+      nextSeedKey: `${modelCatalogKey('controller-device', 'task-device')}:codex`,
+      capabilitiesChanged: true,
+      controllerTouched: dlRuntimeTouchedRef.current,
+      remoteModelChosenByUser: true,
+    })).toBe(false);
   });
 });

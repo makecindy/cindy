@@ -8,7 +8,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 
 import { GhostPipeDispatcher, toolNotFoundMessage, type PipeDispatcherDeps } from '../pipeDispatcher';
 import type { GhostPipeToolCall, InstalledGhost } from '../../../shared/ghost';
-import type { GhostRuntimeState } from '../runtime/GhostRuntime';
+import { GhostRuntime, type GhostRuntimeState } from '../runtime/GhostRuntime';
 
 function fakeGhost(overrides: Partial<InstalledGhost> = {}): InstalledGhost {
   return {
@@ -61,7 +61,7 @@ function makeHarness(opts: {
   const deps = {
     getGhost: vi.fn(() => (opts.ghost === undefined ? fakeGhost() : opts.ghost)),
     runtimeStateOf: vi.fn(() => opts.state ?? 'running'),
-    spawn: vi.fn(async () => ({ ok: true as const })),
+    spawn: vi.fn(async () => { deps.runtimeStateOf.mockReturnValue('running'); return { ok: true as const }; }),
     sendToGhost: vi.fn((_id: string, payload: GhostPipeToolCall) => {
       sent.push(payload);
       return true;
@@ -81,6 +81,72 @@ function makeHarness(opts: {
 }
 
 const CALL = { ghostId: 'art', tool: 'gen_image', args: { prompt: '一只猫' } };
+
+// Unit regression: Workforce cold startup lost concurrent calls before the listener was ready.
+// Existing dispatcher fakes resolved spawn immediately; these use the real runtime entry
+// with a deferred load and assert delivery/results through callGhostTool (no real waits).
+describe('tool dispatch while a real sandbox is starting', () => {
+  beforeEach(() => vi.useFakeTimers());
+  afterEach(() => vi.useRealTimers());
+
+  function coldHarness() {
+    const loads: Array<{ resolve(): void; reject(error: Error): void }> = [];
+    const gone: Array<() => void> = [];
+    const ghost = fakeGhost();
+    const runtime = new GhostRuntime({ adapter: { create: () => ({
+      load: () => new Promise<void>((resolve, reject) => loads.push({ resolve, reject })),
+      destroy() {}, crashForTest() {}, onGone: cb => { gone.push(() => cb({ reason: 'crashed' })); },
+    }) } });
+    const sent: GhostPipeToolCall[] = [];
+    const dispatcher = new GhostPipeDispatcher({ getGhost: () => ghost,
+      runtimeStateOf: id => runtime.stateOf(id), spawn: g => runtime.spawnForTool(g),
+      sendToGhost: (_id, payload) => { sent.push(payload); return true; },
+    });
+    return { runtime, dispatcher, ghost, loads, gone, sent };
+  }
+
+  it('holds two overlapping calls until running, then starts their execution timers', async () => {
+    const h = coldHarness();
+    const startup = h.runtime.spawn(h.ghost);
+    const calls = [h.dispatcher.callGhostTool(CALL), h.dispatcher.callGhostTool(CALL)];
+    await vi.advanceTimersByTimeAsync(1000);
+    expect(h.runtime.stateOf('art')).toBe('starting');
+    expect(h.sent).toHaveLength(0);
+    h.loads[0].resolve(); await startup; await vi.advanceTimersByTimeAsync(0);
+    expect(h.sent).toHaveLength(2);
+    await vi.advanceTimersByTimeAsync(329999);
+    expect(h.dispatcher.pendingCount()).toBe(2); // Execution budget starts after readiness.
+    for (const payload of h.sent) h.dispatcher.handleToolResult('art', { callId: payload.callId, ok: true, result: 'done' });
+    expect(await Promise.all(calls)).toEqual([{ ok: true, result: 'done' }, { ok: true, result: 'done' }]);
+    await vi.advanceTimersByTimeAsync(330000);
+    expect(vi.getTimerCount()).toBe(0);
+    h.runtime.destroyAll();
+  });
+
+  it.each(['load-failure', 'stop', 'crash', 'replace', 'timeout'] as const)(
+    'returns without dispatching stale work on %s', async outcome => {
+      const h = coldHarness();
+      const call = h.dispatcher.callGhostTool(CALL);
+      await vi.advanceTimersByTimeAsync(0);
+      let replacement: Promise<unknown> | undefined;
+      if (outcome === 'load-failure') h.loads[0].reject(new Error('bad entry'));
+      if (outcome === 'stop') h.runtime.stop('art');
+      if (outcome === 'crash') h.gone[0]();
+      if (outcome === 'replace') {
+        replacement = h.runtime.spawn({ ...h.ghost, manifest: { ...h.ghost.manifest, version: '2.0.0' } });
+      }
+      if (outcome === 'timeout') await vi.advanceTimersByTimeAsync(30000);
+      expect(await call).toMatchObject({ ok: false, errorCode: 'GHOST_CRASHED' });
+      expect(h.sent).toHaveLength(0);
+      // Late load completion must not revive the rejected call or affect its replacement.
+      h.loads[0].resolve();
+      if (replacement) { h.loads[1].resolve(); await replacement; expect(h.runtime.stateOf('art')).toBe('running'); }
+      await vi.advanceTimersByTimeAsync(0);
+      expect(h.sent).toHaveLength(0);
+      expect(vi.getTimerCount()).toBe(0);
+      h.runtime.destroyAll();
+    });
+});
 
 // #6404: wrapper-only tests did not exercise ordinary ghost_call arguments.
 // Unit: dispatch real tool payloads; only Host opening + literal opt-in may mark read.
@@ -174,7 +240,7 @@ describe('caller cancellation', () => {
     const h = makeHarness({ state: 'stopped' as GhostRuntimeState });
     const abort = new AbortController(), gate = deferred();
     if (when === 'before') abort.abort();
-    h.deps.spawn.mockImplementation(async () => { await gate.promise; return { ok: true }; });
+    h.deps.spawn.mockImplementation(async () => { await gate.promise; h.deps.runtimeStateOf.mockReturnValue('running'); return { ok: true }; });
     const pending = h.dispatcher.callGhostTool({ ...CALL, callId: 'legacy', signal: abort.signal, sessionId: 'task' });
     abort.abort();
     h.dispatcher.cancelSessionCalls('task');
@@ -189,7 +255,7 @@ describe('caller cancellation', () => {
     h.deps.runtimeStateOf.mockReturnValue('off');
     let started!: () => void;
     h.deps.spawn.mockImplementation(() => new Promise(resolve => {
-      started = () => resolve({ ok: true });
+      started = () => { h.deps.runtimeStateOf.mockReturnValue('running'); resolve({ ok: true }); };
     }));
     const pending = h.dispatcher.callGhostTool({ ...CALL, callId: 'stopped-before-binding', sessionId: 'stopped' });
     h.dispatcher.cancelSessionCalls('stopped');
@@ -270,11 +336,29 @@ describe('资格审(结构化错误分类)', () => {
 });
 
 describe('toolNotFoundMessage(纯函数直测)', () => {
+  // Validate opener selection independently of the ghost_call setup mocks.
+  // The old formatter only knew a filtered tool list. Unit; minimal visibility map.
+  it.each([true, false])('页面工具优先提示开页面入口，无入口时只列模型工具（opener=%s）', opener => {
+    const manifest = { tools: ['read_page', 'open_view', 'call_tool', 'list_tools'].map(name => ({ name, description: name })),
+      mcpApps: { ui: { resources: [{ uri: 'ui://records', file: 'ui/page.html' }], tools: {
+        read_page: { visibility: ['app' as const], resourceUri: 'ui://records' },
+        open_view: { visibility: [opener ? 'model' as const : 'app' as const], resourceUri: 'ui://records' },
+        call_tool: { visibility: ['app' as const] },
+      } } } };
+    const message = toolNotFoundMessage('records', 'read_page', manifest, 'model');
+    expect(message).toContain('只供插件页面调用');
+    expect(message).toContain(opener ? '开页面工具: open_view' : '模型可见的工具: list_tools');
+    expect(message).not.toContain('二级分派');
+    expect(message).not.toContain('没有工具');
+    expect(toolNotFoundMessage('records', 'missing', manifest, 'model')).not.toContain('call_tool');
+    // A page calling a model-only tool must not get the opposite audience's hint.
+    expect(toolNotFoundMessage('records', 'list_tools', manifest, 'app')).not.toContain('只供插件页面调用');
+  });
   it('分派型插件:回填 agent 想调的名字并给出 call_tool 形态', () => {
-    const msg = toolNotFoundMessage('cindy-github', 'create_pull_request', [
+    const msg = toolNotFoundMessage('cindy-github', 'create_pull_request', { tools: [
       { name: 'list_tools', description: '' },
       { name: 'call_tool', description: '' },
-    ]);
+    ] });
     expect(msg).toContain('cindy-github');
     expect(msg).toContain('create_pull_request');
     expect(msg).toContain('tool:"call_tool"');
@@ -283,14 +367,14 @@ describe('toolNotFoundMessage(纯函数直测)', () => {
   });
 
   it('普通插件:列出可用工具名', () => {
-    const msg = toolNotFoundMessage('art', 'nope', [{ name: 'gen_image', description: '' }]);
+    const msg = toolNotFoundMessage('art', 'nope', { tools: [{ name: 'gen_image', description: '' }] });
     expect(msg).toContain('gen_image');
     expect(msg).not.toContain('call_tool');
   });
 
   it('tools 缺省/空:不崩,提示未声明任何工具', () => {
-    expect(toolNotFoundMessage('art', 'nope', undefined)).toContain('(未声明任何工具)');
-    expect(toolNotFoundMessage('art', 'nope', [])).toContain('(未声明任何工具)');
+    expect(toolNotFoundMessage('art', 'nope', {})).toContain('(未声明任何工具)');
+    expect(toolNotFoundMessage('art', 'nope', { tools: [] })).toContain('(未声明任何工具)');
   });
 });
 

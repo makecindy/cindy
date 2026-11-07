@@ -1,3 +1,5 @@
+import { additionalSettings } from './AdditionalSettings.settings-search';
+import { useSettingDefinition } from './useSettingDefinition';
 import { useCallback, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { ShieldAlert } from 'lucide-react';
@@ -12,6 +14,7 @@ import { DefaultOverrideControls } from './DefaultOverrideControls';
 const log = createLogger('SilentEncryptedRetryCell');
 
 export function SilentEncryptedRetryCell() {
+  const setting = useSettingDefinition(additionalSettings.silentRetry);
   const { t } = useTranslation();
   const { enabled, isCustomized, setEnabled, setIsCustomized } = useSilentEncryptedRetry();
   const [pending, setPending] = useState(false);
@@ -61,7 +64,7 @@ export function SilentEncryptedRetryCell() {
   }, [setEnabled, setIsCustomized, t]);
 
   return (
-    <div className="flex items-center justify-between gap-3 px-4 py-[14px]">
+    <div {...setting.anchorProps} className="flex items-center justify-between gap-3 px-4 py-[14px]">
       <div className="flex items-center gap-3">
         <div
           className={cn(
@@ -73,10 +76,10 @@ export function SilentEncryptedRetryCell() {
         </div>
         <div className="flex flex-col gap-[8px]">
           <p className="text-14 font-medium leading-none text-[var(--settings-section-title)]">
-            {t('settings.silentEncryptedRetry.cell.label')}
+            {setting.title}
           </p>
           <p className="text-12 leading-[1.4] text-[var(--settings-section-desc)]">
-            {t('settings.silentEncryptedRetry.cell.description')}
+            {setting.description}
           </p>
         </div>
       </div>
@@ -87,6 +90,7 @@ export function SilentEncryptedRetryCell() {
           onReset={() => void handleReset()}
         />
         <Switch
+          {...setting.controlProps}
           checked={enabled}
           disabled={pending}
           onCheckedChange={(v) => void handleToggle(v)}

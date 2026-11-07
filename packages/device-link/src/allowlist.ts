@@ -328,6 +328,7 @@ const CORE_INVOKE_CHANNELS: readonly string[] = [
   'git-context:pr-refs:list',
   'git-context:pr-refs:manage',
   'git-context:pr-status',
+  'git-context:mr-status',
   'git-context:github-read',
   // —— 通用远程资源面——
   // 固定的 manifest / list / get / invoke 入口。业务模块只在被控端 provider
@@ -450,6 +451,14 @@ const EXTENDED_INVOKE_CHANNELS: readonly string[] = [
   'maker:schedule:create-from-template',
   // script 任务能力选择器的可用性探测:纯只读查询,意识状态在被控端才有意义
   'maker:schedule:script-capability-status',
+  // Status only: webhook-set-secret carries a credential and webhook-rotate-url replaces the
+  // address; both stay on the computer that runs the schedule.
+  'maker:schedule:webhook-status',
+  'maker:schedule:webhook-receiver',
+  // 同账号查看和释放云端地址；不携带密钥、不执行任务，不要求旧设备在线。
+  'maker:schedule:webhook-account',
+  'maker:schedule:webhook-release',
+  'maker:schedule:webhook-restore',
   // —— 会话未读已读回执(控制端真实展示会话内容后,把被控端的会话未读态清掉)——
   // 准入:会话粒度状态操作(与 mark-run-read 同类),无 event.sender 依赖、无 shell/UI
   // 副作用;语义在被控端执行才正确(灵动岛 / Dock 角标 / 侧栏红绿点的未读真相都在被控端
@@ -578,6 +587,9 @@ const EXTENDED_INVOKE_CHANNELS: readonly string[] = [
   // Codex app-server 官方控制面:额度/reset 次数读取 + 经 desktop 账号绑定 offer 的
   // 人工 reset。mutation 不接收 creditId,不能泛化成任意账号/凭证控制入口。
   'maker:usage:codex-rate-limits',
+  // Owner-only native subscription profile management; no credentials cross this channel.
+  'maker:subscription-accounts',
+  'maker:subscription-pool:quota',
   'maker:usage:codex-rate-limit-reset',
   'maker:usage:codex-reset-auto-use',
   // 桌面小组件快照（只读，被控端 dispatch 拦截；准入同上方用量只读通道）。
@@ -598,6 +610,7 @@ const EXTENDED_INVOKE_CHANNELS: readonly string[] = [
   // Same-account read-only Kimi quota; no secrets, arbitrary endpoints, shared-task or share guests.
   // Old hosts reject the channel; callers never fall back to their local account.
   'maker:usage:kimi-coding',
+  'maker:usage:opencode-go',
   // cc 默认路由会话的生效计费路由观察值(只读,'gateway' | 'subscription' | null):
   // 控制端远程会话据此判定订阅 / 网关显示形态 —— 路由真值在被控端 proxy 的按请求
   // 观察 registry 里,控制端拿本机凭证状态重算必然张冠李戴。入参 sessionId,无
@@ -836,6 +849,7 @@ export const PUSH_FORWARD_ALLOWLIST: ReadonlySet<string> = new Set([
   // headers 观察器按 (5h,7d,status) 签名去抖、端点刷新 180s 节流,只有数值变化才
   // 广播,不随 turn 内逐请求刷帧。
   'usage:claude-subscription-changed',
+  'subscription-accounts:changed',
   // Codex 账号订阅用量变化(账号级组合 payload:app-server 桶表 + WHAM web 槽):
   // 控制端远程 codex / chatgpt-bridge 会话 chip 镜像被控端限额窗口。频率上限:
   // app-server 每 turn 记录一次、WHAM 后台刷新 10s 节流。

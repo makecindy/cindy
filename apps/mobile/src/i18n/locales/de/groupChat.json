@@ -520,6 +520,7 @@
     "searchMembers": "Mitglieder suchen",
     "membersNoMatch": "Keine Mitglieder passen zu „{{query}}“",
     "you": "Du",
+    "companionOf": "Teammitglied von {{name}}",
     "teammateTag": "Teammitglied",
     "paused": "Pausiert",
     "accessNone": "Nur Inhaber",

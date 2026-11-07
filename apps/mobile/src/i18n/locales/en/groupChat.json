@@ -520,6 +520,7 @@
     "searchMembers": "Search members",
     "membersNoMatch": "No members match “{{query}}”",
     "you": "You",
+    "companionOf": "{{name}}’s companion",
     "teammateTag": "Teammate",
     "paused": "Paused",
     "accessNone": "Owner only",

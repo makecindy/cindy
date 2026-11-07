@@ -16,7 +16,6 @@ import { useCallback, useEffect, useId, useMemo, useState } from 'react';
 import type { ProviderView } from '@cindy/model-providers';
 import { useTranslation } from 'react-i18next';
 
-import { formatQuotaResetAt } from '@/components/status/usageCardModel';
 import { Button } from '@/components/ui/button';
 import { useConfirmDialog } from '@/components/ui/confirm-dialog-provider';
 import {
@@ -50,11 +49,14 @@ import { GroupMemberDetailsButton, GroupMemberVersion } from './GroupMemberVersi
 import { ProviderGroupAddDialog } from './ProviderGroupAddDialog';
 import {
   groupProviderGroupItems,
+  memberStatusText,
   providerGroupAccountName,
   providerGroupDeviceVersion,
 } from './providerGroupPresentation';
 import { useProviderGroup } from './useProviderGroup';
 import { providerManagementErrorKey } from './providerManagement';
+
+export { memberStatusText };
 
 /**
  * Claude 订阅的配额排序已对所有组策略生效(provider-groups.md §5，2026-10-15)，不再单列「用量均衡」；
@@ -88,9 +90,14 @@ export function ProviderGroupSection({ providerId, providerName, deviceId, devic
   useEffect(() => {
     if (group.view) onConfigChange?.(group.view.config);
   }, [group.view, onConfigChange]);
+  // A failed or stale source may still provide navigation/config, but its running/cooling/
+  // quota values are not live status. Hiding the rows' status keeps the old snapshot from
+  // masquerading as current, matching RemoteProviderGroupMembers and SharedProviderGroupStatus.
+  const statusStale = group.failed || group.expired
+    || group.view?.providerContinuity?.stale === true;
   const statuses = useMemo(
-    () => new Map((group.view?.members ?? []).map((status) => [status.key, status])),
-    [group.view],
+    () => new Map((statusStale ? [] : group.view?.members ?? []).map((status) => [status.key, status])),
+    [group.view, statusStale],
   );
 
   const save = useCallback(
@@ -539,37 +546,4 @@ function MemberRow({
       {quotaOpen && reshare && <GroupMemberReshare summary={reshare} owner={ownerName ?? ''} />}
     </div>
   );
-}
-
-/** 组内电脑的状态词(本机的组与另一台电脑上的组的只读列表共用)。 */
-export function memberStatusText(
-  t: ReturnType<typeof useTranslation>['t'],
-  status: ProviderGroupMemberStatus | undefined,
-  locale: string,
-  nowMs: number = Date.now(),
-): string {
-  if (!status) return t('providerGroup.member.status.checking');
-  switch (status.state) {
-    case 'available':
-      // 「可用」不报负载，整列空着时就看不出每台跑了几个；状态词直接承载运行数。
-      return status.running > 0
-        ? t('providerGroup.member.runningCount', { count: status.running })
-        : t('providerGroup.member.status.idle');
-    case 'full':
-      return t('providerGroup.member.status.full');
-    case 'paused':
-      return t('providerGroup.member.status.paused');
-    case 'cooling': {
-      // 不在今天恢复的(周上限等)带上日期，不让「约 16:00 恢复」看起来像今天就能用。
-      const time = status.coolingUntil ? formatQuotaResetAt(status.coolingUntil / 1000, nowMs, locale) : null;
-      return time
-        ? t('providerGroup.member.status.coolingUntil', { time })
-        : t('providerGroup.member.status.cooling');
-    }
-    case 'offline':
-      return t('providerGroup.member.status.offline');
-    case 'unavailable':
-    default:
-      return t(`providerGroup.member.status.unavailable.${status.reason ?? 'disconnected'}`);
-  }
 }

@@ -128,6 +128,9 @@
   "detail": {
     "useItIn": "用法",
     "openPlugin": "启法器",
+    "readme": "介绍",
+    "readmeLoadFailed": "介绍未能载入，请再试。",
+    "readmeUnavailable": "暂无介绍。",
     "computerSettings": "请于机上 Cindy 之「法器」中启此法器详情，以竟其设。",
     "runtimeIssue": "法器前次行之有异，可重启或于差事中再试。",
     "runtimeFused": "法器屡止。关之再启，然后再试。",
