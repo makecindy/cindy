@@ -3919,6 +3919,7 @@
           "unsupportedProtocol": "Este protocolo de modelo não é suportado pelo teste de ligação",
           "inconclusive": "Não foi possível confirmar a ligação. Verifique o endereço ou a rede antes de tentar novamente; o pedido anterior pode ter sido executado.",
           "exhausted": "Foram testadas todas as interfaces candidatas. Não foi encontrada nenhuma ligação funcional.",
+          "model": "Modelo testado: {{model}}",
           "costHint": "O teste envia pedidos curtos de geração e pode implicar um pequeno custo.",
           "details": "Ver tentativas",
           "stop": "Parar teste"

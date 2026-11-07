@@ -3827,6 +3827,7 @@
           "unsupportedProtocol": "试连接暂不支持此模型协定",
           "inconclusive": "暂不能确认连接。请察地址或网络后再试；前一请求或已行。",
           "exhausted": "诸候选界面皆已试，暂未得可用之连接。",
+          "model": "所试之模型：{{model}}",
           "costHint": "试时将遣简短生成请求，或生少许费用。",
           "details": "览所试之果",
           "stop": "止试"

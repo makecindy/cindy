@@ -3827,6 +3827,7 @@
           "unsupportedProtocol": "試連線暫不支援此模型協定",
           "inconclusive": "暫不能確認連線。請察位址或網路後再試；前一請求或已行。",
           "exhausted": "諸候選介面皆已試，暫未得可用之連線。",
+          "model": "所試之模型：{{model}}",
           "costHint": "試時將遣簡短生成請求，或生少許費用。",
           "details": "覽所試之果",
           "stop": "止試"
