@@ -167,6 +167,7 @@ Pi pin、许可证声明与设计清单检查通过，第三方声明已随新�
 | 渠道 | 入口类型 | 官方入口 | 新增 OAuth |
 | --- | --- | --- | --- |
 | openrouter | apiKey | https://openrouter.ai/settings/keys | 有 |
+| devin | account | https://app.devin.ai/ | 有 |
 | deepseek | apiKey | https://platform.deepseek.com/api_keys | — |
 | zhipu-glm-cn | apiKey | https://bigmodel.cn/usercenter/proj-mgmt/apikeys | — |
 | zhipu-glm-global | apiKey | https://z.ai/manage-apikey/apikey-list | — |
@@ -221,7 +222,7 @@ Pi pin、许可证声明与设计清单检查通过，第三方声明已随新�
 
 OAuth 复用既有 Main 凭证存储、取消与刷新机制；新渠道登录后进入同一个模型选择页。密钥和令牌不回传 Renderer；未完成添加时删除本次临时创建的连接，已保存连接不受影响。已有 Claude、ChatGPT、xAI 原生账号入口保留。
 
-协议来源：Pi 0.85.1 的 `auth/oauth/openrouter`、`github-copilot`、`kimi-coding`；[OpenRouter PKCE](https://openrouter.ai/docs/use-cases/oauth-pkce)；[Nous Hermes 公开鉴权常量](https://github.com/NousResearch/hermes-agent/blob/main/hermes_cli/auth_constants.py)及同目录 `auth_nous.py`、`auth_minimax.py`、`auth_device_flow.py`。MiniMax OAuth 使用订阅的 Messages 端点，API Key 连接保留自身端点。Copilot 刷新先交换推理令牌，并按官方令牌内的个人/企业账户域名路由。
+协议来源：Pi 0.85.1 的 `auth/oauth/openrouter`、`github-copilot`、`kimi-coding`；[oh-my-pi Devin CLI OAuth](https://github.com/can1357/oh-my-pi/blob/main/packages/catalog/src/compat/rules/auth/devin.kdl)；[OpenRouter PKCE](https://openrouter.ai/docs/use-cases/oauth-pkce)；[Nous Hermes 公开鉴权常量](https://github.com/NousResearch/hermes-agent/blob/main/hermes_cli/auth_constants.py)及同目录 `auth_nous.py`、`auth_minimax.py`、`auth_device_flow.py`。MiniMax OAuth 使用订阅的 Messages 端点，API Key 连接保留自身端点。Copilot 刷新先交换推理令牌，并按官方令牌内的个人/企业账户域名路由。
 
 较难定位入口的依据：[Vercel](https://vercel.com/docs/ai-gateway/authentication)、[阿里云 Coding Plan](https://help.aliyun.com/zh/model-studio/coding-plan)、[个人 Token Plan](https://help.aliyun.com/zh/model-studio/token-plan-personal-overview)、[团队 Token Plan](https://help.aliyun.com/zh/model-studio/token-plan-team-overview)、[Ling 控制台](https://developer.ant-ling.com/en/docs/models/price)、[Moonshot](https://platform.moonshot.ai/docs/overview.en-US)、[MiniMax](https://platform.minimax.io/docs/faq/about-apis)、[Together](https://docs.together.ai/docs/quickstart)。
 
