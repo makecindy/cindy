@@ -1,6 +1,6 @@
 import { createChatWorkPolling, createWorkRequestGate, WorkRequestDeferred } from './chatWorkPolling.js';
 import { teammateChatActivity } from '@cindy/maker-shared/teammate-status';
-import { prepareChatReplyFiles } from './chatServerReplyFiles.js';
+import { prepareChatReplyFiles, replyFileLinks } from './chatServerReplyFiles.js';
 import type { ChatUploadAttachment } from './chatServerMedia.js';
 import { createConversationListState } from '@cindy/maker-shared/chatConversationList';
 /** Production chat transport. The server owns messages and execution leases;
@@ -2385,9 +2385,20 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
               && !['STALE_EXECUTOR', 'STALE_EXECUTION', 'EXECUTION_EXPIRED'].includes(code);
             const permanentUpload = code === 'MEDIA_UPLOAD_FAILED' && status !== undefined
               && status >= 400 && status < 500 && ![408, 429].includes(status);
-            if (!ordinaryReply || !(fileRefusedHere(error) || permanentMediaResponse || permanentUpload
-              || ['INVALID_MEDIA_URL', 'ERR_INVALID_URL'].includes(code))) throw error;
-            terminal = pending.terminal = { ...terminal, outcome: 'error', failureCode: 'RUNTIME_ERROR' };
+            if (ordinaryReply && fileRefusedHere(error)) {
+              // A local path can become unavailable after the Agent emitted its
+              // reply (for example, it points outside the task directory). The
+              // path must remain unreadable and unuploadable, but losing the
+              // whole message turns an attachment problem into a misleading
+              // runtime failure. Keep the safe Markdown text and omit files.
+              contentText = replyFileLinks(text).text;
+              produced.length = 0;
+              files = [];
+            } else {
+              if (!ordinaryReply || !(permanentMediaResponse || permanentUpload
+                || ['INVALID_MEDIA_URL', 'ERR_INVALID_URL'].includes(code))) throw error;
+              terminal = pending.terminal = { ...terminal, outcome: 'error', failureCode: 'RUNTIME_ERROR' };
+            }
           }
           if (terminal.outcome === 'error') {
             failureCodes.set(`${run.execution.id}:${run.execution.epoch}`, terminal.failureCode ?? 'RUNTIME_ERROR');
