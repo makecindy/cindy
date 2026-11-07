@@ -77,6 +77,8 @@ struct MBDetail: Decodable, Equatable {
   let bigColor: String?
   let bigCompact: Bool
   let bigCaption: String
+  /// Main asks for the caption under the ring when it is longer than the ring's hole.
+  let bigCaptionOutside: Bool?
   let legend: [MBLegend]
   let sayPrimary: String
   let saySecondary: String?
@@ -2143,18 +2145,133 @@ struct Caption<Trailing: View>: View {
   }
 }
 
+/// Horizontal reading for the account tubes. The panel has a fixed width, so more tubes
+/// than fit at their natural size scroll sideways instead of squeezing every tube thinner:
+/// drag with the mouse, swipe or wheel over the row. Few tubes keep the plain HStack, so
+/// the common case and the drag-to-reorder target are unchanged.
+struct HScroll<Content: View>: View {
+  @ViewBuilder let content: Content
+  @State private var dragX: CGFloat = 0
+  @State private var baseX: CGFloat = 0
+  @State private var maxX: CGFloat = 0
+  @State private var viewportWidth: CGFloat = 0
+  @State private var contentWidth: CGFloat = 0
+  @State private var contentHeight: CGFloat = 0
+  @State private var hovering = false
+  @State private var monitor: Any?
+  private let spacing: CGFloat
+
+  init(spacing: CGFloat = 8, @ViewBuilder content: () -> Content) {
+    self.spacing = spacing
+    self.content = content()
+  }
+
+  var body: some View {
+    Color.clear
+      .frame(height: contentHeight)
+      .background(
+        GeometryReader { geo in
+          Color.clear
+            .onAppear { viewportWidth = geo.size.width }
+            .onChange(of: geo.size.width) { _, w in viewportWidth = w }
+        }
+      )
+      .overlay(alignment: .topLeading) {
+      content
+        .fixedSize()
+        .padding(.horizontal, spacing)
+        .contentShape(Rectangle())
+        .offset(x: min(0, max(-maxX, baseX + dragX)))
+        .highPriorityGesture(
+          DragGesture(minimumDistance: 5)
+            .onChanged { dragX = $0.translation.width }
+            .onEnded { value in
+              baseX = min(0, max(-maxX, baseX + value.translation.width))
+              dragX = 0
+            }
+        )
+        .background(
+          GeometryReader { inner in
+            Color.clear
+              .onAppear {
+                contentWidth = inner.size.width
+                contentHeight = inner.size.height
+              }
+              .onChange(of: inner.size) { _, size in
+                contentWidth = size.width
+                contentHeight = size.height
+              }
+          }
+        )
+    }
+    .clipped()
+    .contentShape(Rectangle())
+    .onHover { hovering = $0 }
+    .onChange(of: contentWidth) { _, w in maxX = max(0, w - viewportWidth) }
+    .onChange(of: viewportWidth) { _, w in maxX = max(0, contentWidth - w) }
+    .onChange(of: maxX) { _, limit in baseX = min(0, max(-limit, baseX)) }
+    .onAppear {
+      maxX = max(0, contentWidth - viewportWidth)
+      installMonitor()
+    }
+    .onDisappear { removeMonitor() }
+  }
+
+  private func installMonitor() {
+    guard monitor == nil else { return }
+    monitor = NSEvent.addLocalMonitorForEvents(matching: .scrollWheel) { [self] event in
+      guard maxX > 0, hovering, event.window is MenubarPanel else { return event }
+      let dx = event.scrollingDeltaX
+      let dy = event.scrollingDeltaY
+      let horizontal = abs(dx) > abs(dy)
+      let delta = horizontal ? dx : dy
+      let next = min(0, max(-maxX, baseX + delta))
+      guard next != baseX else { return event }
+      baseX = next
+      return nil
+    }
+  }
+
+  private func removeMonitor() {
+    if let monitor { NSEvent.removeMonitor(monitor) }
+    monitor = nil
+  }
+}
+
 struct Cells: View {
   @ObservedObject var store: MenubarStore
   let cells: [MBCell]
 
+  /// Tubes that fit at their natural width; more than this and the row scrolls sideways.
+  static let visibleCellBudget = 6
+
   var body: some View {
-    HStack(alignment: .top, spacing: cells.count > 6 ? 4 : 8) {
+    let scrolling = cells.count > Self.visibleCellBudget
+    let spacing: CGFloat = scrolling ? 4 : 8
+    let row = HStack(alignment: .top, spacing: spacing) {
       ForEach(Array(cells.enumerated()), id: \.element.id) { index, cell in
-        CellView(cell: cell, index: index, fillToken: store.fillToken, tubeHeight: store.short ? 82 : 104) {
+        let tube = CellView(cell: cell, index: index, fillToken: store.fillToken, tubeHeight: store.short ? 82 : 104) {
           store.go(.detail(cell.id))
+        }
+        if scrolling {
+          tube.frame(width: cellWidth(spacing: spacing))
+        } else {
+          tube
         }
       }
     }
+    if scrolling {
+      HScroll(spacing: spacing) { row }
+    } else {
+      row
+    }
+  }
+
+  /// Natural tube width: the panel's inner width split over the visible budget, so the row
+  /// of many tubes reads at the same size six would, and the rest scrolls.
+  private func cellWidth(spacing: CGFloat) -> CGFloat {
+    let inner = store.narrowWidth - 2 * spacing - 2 * 16
+    return max(52, (inner - CGFloat(Self.visibleCellBudget - 1) * spacing) / CGFloat(Self.visibleCellBudget))
   }
 }
 
@@ -3070,22 +3187,38 @@ struct DetailPage: View {
         VStack(alignment: .leading, spacing: 0) {
 
         let ring: CGFloat = store.short ? 160 : 188
-        ZStack {
-          RingsView(rings: detail.rings, fillToken: store.fillToken, size: ring)
-          VStack(spacing: 3) {
-            HStack(alignment: .firstTextBaseline, spacing: 2) {
-              CountUpText(text: detail.bigValue, font: NumFont.font((detail.bigCompact ? 48 : 68) * ring / 188, .medium), replayToken: store.fillToken)
-                .lineLimit(1)
-                .minimumScaleFactor(0.7)
-              if let unit = detail.bigUnit {
-                Text(unit).font(NumFont.font(24 * ring / 188, .medium)).foregroundStyle(Palette.ink3)
+        // Every extra ring eats into the hole the number sits in, so with several rings the
+        // caption no longer fits inside and would be painted over the innermost arc; it
+        // then goes under the ring instead. A single ring keeps the caption inside it.
+        let captionInside = detail.bigCaptionOutside != true && detail.rings.count <= 1
+        VStack(spacing: captionInside ? 0 : 6) {
+          ZStack {
+            RingsView(rings: detail.rings, fillToken: store.fillToken, size: ring)
+            VStack(spacing: 3) {
+              HStack(alignment: .firstTextBaseline, spacing: 2) {
+                CountUpText(text: detail.bigValue, font: NumFont.font((detail.bigCompact ? 48 : 68) * ring / 188, .medium), replayToken: store.fillToken)
+                  .lineLimit(1)
+                  .minimumScaleFactor(0.7)
+                if let unit = detail.bigUnit {
+                  Text(unit).font(NumFont.font(24 * ring / 188, .medium)).foregroundStyle(Palette.ink3)
+                }
+              }
+              .monospacedDigit()
+              .foregroundStyle(detail.bigColor.map(Palette.named) ?? Palette.ink)
+              if captionInside {
+                Text(detail.bigCaption).font(.system(size: 11)).foregroundStyle(Palette.ink3).lineLimit(1)
               }
             }
-            .monospacedDigit()
-            .foregroundStyle(detail.bigColor.map(Palette.named) ?? Palette.ink)
-            Text(detail.bigCaption).font(.system(size: 11)).foregroundStyle(Palette.ink3).lineLimit(1)
+            .frame(maxWidth: ring - 44)
           }
-          .frame(maxWidth: ring - 44)
+          if !captionInside {
+            Text(detail.bigCaption)
+              .font(.system(size: 11))
+              .foregroundStyle(Palette.ink3)
+              .lineLimit(1)
+              .minimumScaleFactor(0.8)
+              .padding(.horizontal, 16)
+          }
         }
         .frame(maxWidth: .infinity)
         .accessibilityElement(children: .combine)

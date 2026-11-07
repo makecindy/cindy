@@ -29,6 +29,7 @@ import {
   type MenubarModelUsage,
   type MenubarSettings,
   type MenubarSourceCell,
+  type MenubarSourceKind,
   type MenubarStatusTextMode,
   type MenubarStrings,
   type MenubarTask,
@@ -42,13 +43,44 @@ export type MenubarHarness = 'claude-code' | 'codex' | 'pi';
 export type MenubarFamily = 'claude' | 'codex' | 'grok' | 'kimi' | 'opencode-go' | 'shared';
 
 export interface MenubarWindowInput {
-  kind: 'session' | 'week' | 'scoped' | 'period';
-  /** Model name for scoped windows ("Fable"). */
+  kind: 'session' | 'week' | 'scoped' | 'period' | 'named';
+  /** Model name for scoped windows ("Fable"); verbatim upstream label for named ones. */
   label?: string | null;
   /** 0...100 used. */
   usedPercent: number;
   resetsAtMs: number | null;
   windowMinutes: number;
+  /** Upstream's own amount text for a Magpie window ("318.78 / 500"); detail facts only. */
+  display?: string | null;
+}
+
+/**
+ * One upstream account of a Magpie gateway. Its own kind (not a subscription): Magpie
+ * accounts stay out of account dedupe, the recommended-account claim, status texts and
+ * the low-everywhere notification, and show no dollar figure of their own.
+ */
+export interface MenubarMagpieInput {
+  kind: 'magpie';
+  id: string;
+  /** Cindy provider id of the Magpie connection; the detail action target. */
+  providerId: string;
+  logoSvg: string;
+  /** Brand of the upstream the account belongs to ("Claude", "Codex"). */
+  brand: string;
+  /** Account display name (a handle, never the upstream email); masked in privacy mode. */
+  name: string;
+  plan: string | null;
+  /** Empty while the first read is still pending or the account could not be read. */
+  windows: MenubarWindowInput[];
+  /** Accounts without windows: the upstream balance string, detail facts only. */
+  balanceText: string | null;
+  status: 'ok' | 'needs-sign-in' | 'no-windows';
+  /** When the gateway observed this account; null when it did not say. */
+  observedAtMs: number | null;
+  /** Set when the gateway is unreachable now: the reading is from this time. */
+  staleAtMs: number | null;
+  /** A running task on this computer routes through this Magpie connection. */
+  consuming?: boolean;
 }
 
 export interface MenubarSubscriptionInput {
@@ -145,7 +177,7 @@ export interface MenubarPaygInput {
   consuming?: boolean;
 }
 
-export type MenubarSourceInput = MenubarSubscriptionInput | MenubarBalanceInput | MenubarPaygInput;
+export type MenubarSourceInput = MenubarSubscriptionInput | MenubarBalanceInput | MenubarPaygInput | MenubarMagpieInput;
 
 export interface MenubarTaskInput {
   sessionId: string;
@@ -285,7 +317,7 @@ function windowState(window: MenubarWindowInput, nowMs: number): WindowState {
  * window that has not started (no reset time yet) never blanks the countdown. Accounts without
  * a weekly window fall back to their tightest one.
  */
-function subscriptionState(source: MenubarSubscriptionInput, nowMs: number): SubscriptionState {
+function subscriptionState(source: { windows: readonly MenubarWindowInput[] }, nowMs: number): SubscriptionState {
   const windows = source.windows.map((window) => windowState(window, nowMs));
   const limits = windows.filter((state) => state.window.kind !== 'scoped');
   const weekly = limits.filter((state) => state.window.kind === 'week');
@@ -325,13 +357,24 @@ function levelColor(level: MenubarLevel): MenubarColor | null {
   return null;
 }
 
+/**
+ * Whether a Magpie account is used up on every account-wide window. Full accounts start
+ * hidden (like pay-as-you-go) until the user shows them, so twenty upstream accounts do
+ * not crowd out the ones that matter; the toggle is per account in Manage.
+ */
+function isFullMagpieAccount(source: { windows: readonly MenubarWindowInput[] }): boolean {
+  const limits = source.windows.filter((window) => window.kind !== 'scoped');
+  return limits.length > 0 && limits.every((window) => window.usedPercent >= 100);
+}
+
 /** Ordered, visible sources. Pay-as-you-go connections start hidden until the user shows them. */
-export function orderSources<T extends { id: string; kind: string }>(
+export function orderSources<T extends { id: string; kind: string; windows?: readonly MenubarWindowInput[] }>(
   sources: readonly T[],
   settings: MenubarSettings,
 ): { ordered: T[]; isHidden: (source: T) => boolean } {
   const rank = new Map(settings.order.map((id, index) => [id, index]));
-  const naturalRank = (source: T): number => (source.kind === 'balance' ? 0 : source.kind === 'subscription' ? 1 : 2);
+  const naturalRank = (source: T): number =>
+    source.kind === 'balance' ? 0 : source.kind === 'subscription' ? 1 : source.kind === 'magpie' ? 2 : 3;
   const ordered = sources
     .map((source, index) => ({ source, index }))
     .sort((a, b) => {
@@ -345,8 +388,14 @@ export function orderSources<T extends { id: string; kind: string }>(
     .map(({ source }) => source);
   const hidden = new Set(settings.hidden);
   const shown = new Set(settings.shown);
-  const isHidden = (source: T): boolean =>
-    hidden.has(source.id) || (source.kind === 'payg' && !shown.has(source.id));
+  const isHidden = (source: T): boolean => {
+    if (hidden.has(source.id)) return true;
+    if (source.kind === 'payg') return !shown.has(source.id);
+    if (source.kind === 'magpie' && settings.hideFullMagpieAccounts && !shown.has(source.id)) {
+      return isFullMagpieAccount(source as { windows: readonly MenubarWindowInput[] });
+    }
+    return false;
+  };
   return { ordered, isHidden };
 }
 
@@ -370,7 +419,9 @@ class Builder {
     // Never render an empty menu: if every source is hidden, show them all.
     this.visible = visible.length > 0 ? visible : ordered;
     for (const source of input.sources) {
-      if (source.kind === 'subscription') this.states.set(source.id, subscriptionState(source, input.nowMs));
+      if (source.kind === 'subscription' || source.kind === 'magpie') {
+        this.states.set(source.id, subscriptionState(source, input.nowMs));
+      }
     }
   }
 
@@ -378,7 +429,7 @@ class Builder {
     return this.input.t;
   }
 
-  private state(source: MenubarSubscriptionInput): SubscriptionState {
+  private state(source: { id: string; windows: readonly MenubarWindowInput[] }): SubscriptionState {
     return this.states.get(source.id) ?? subscriptionState(source, this.input.nowMs);
   }
 
@@ -468,6 +519,7 @@ class Builder {
   }
 
   private windowLabel(window: MenubarWindowInput): string {
+    if (window.kind === 'named') return window.label ?? this.t('window.week');
     if (window.kind === 'period') return this.t(window.label === 'limit_month_code' ? 'window.kimiMonthCode' : 'window.kimiMonthTotal');
     if (window.kind === 'session') return this.t('window.session', { hours: Math.round(window.windowMinutes / 60) });
     if (window.kind === 'scoped') return this.t('window.scoped', { model: window.label ?? '' });
@@ -476,9 +528,10 @@ class Builder {
 
   // ── Identity ──────────────────────────────────────────────────────────────
 
-  private handle(source: MenubarSubscriptionInput): string | null {
-    if (!source.account) return null;
-    const [local] = source.account.split('@');
+  private handle(source: { account?: string | null; name?: string }): string | null {
+    const account = source.account ?? source.name ?? null;
+    if (!account) return null;
+    const [local] = account.split('@');
     if (!local) return null;
     if (!this.input.settings.privacy) return local;
     return `${local[0]}•••${local.length > 1 ? local[local.length - 1] : ''}`;
@@ -501,12 +554,14 @@ class Builder {
   private who(source: MenubarSourceInput): string {
     if (source.kind === 'subscription') return this.sharedIdentity(source)?.label ?? source.device?.name ?? this.handle(source) ?? source.brand;
     if (source.kind === 'balance') return this.t('balance.short');
+    if (source.kind === 'magpie') return this.handle(source) ?? source.name ?? source.brand;
     return source.name;
   }
 
   private sourceTitle(source: MenubarSourceInput): string {
     if (source.kind === 'subscription') return this.sharedIdentity(source)?.label ?? source.device?.name ?? this.handle(source) ?? source.brand;
     if (source.kind === 'balance') return this.t(source.quota ? 'balance.quotaName' : 'balance.name');
+    if (source.kind === 'magpie') return this.handle(source) ?? source.brand;
     return source.name;
   }
 
@@ -516,7 +571,7 @@ class Builder {
     return this.visible.filter((source): source is MenubarSubscriptionInput => source.kind === 'subscription');
   }
 
-  private remaining(source: MenubarSubscriptionInput): number | null {
+  private remaining(source: { id: string; windows: readonly MenubarWindowInput[] }): number | null {
     return this.state(source).remaining;
   }
 
@@ -600,6 +655,18 @@ class Builder {
         || this.visibleSubscriptions().some((source) => this.usableRemaining(source) !== null);
       if (!measured) {
         const unread = this.visibleSubscriptions().length > 0;
+        if (!unread) {
+          // Magpie upstreams are not Cindy accounts, so an all-Magpie panel must not claim
+          // "no accounts with room" while their tubes show remaining quota.
+          const magpies = this.visible.filter(
+            (source): source is MenubarMagpieInput => source.kind === 'magpie' && source.windows.length > 0,
+          );
+          if (magpies.length > 0) {
+            return magpies.some((source) => (this.remaining(source) ?? 0) > 0)
+              ? { primary: this.t('headline.magpie'), secondary: this.t('headline.magpieHint'), alert: false }
+              : { primary: this.t('headline.none'), secondary: null, alert: true };
+          }
+        }
         return unread
           ? { primary: this.t('headline.unread'), secondary: null, alert: false }
           : { primary: this.t('headline.empty'), secondary: this.t('headline.emptyHint'), alert: false };
@@ -645,6 +712,7 @@ class Builder {
 
   private cell(source: MenubarSourceInput, emphasized: boolean, roomy: boolean): MenubarSourceCell {
     const base = { id: source.id, kind: source.kind, logoSvg: source.logoSvg, emphasized, active: source.consuming === true };
+    if (source.kind === 'magpie') return this.magpieCell(source, base);
     if (source.kind === 'payg') {
       const label = this.t(source.billing === 'api' ? 'cell.payg' : 'cell.plan');
       return {
@@ -742,6 +810,110 @@ class Builder {
     };
   }
 
+  /**
+   * A Magpie upstream account: a tube when it has account-wide windows, a quiet row
+   * otherwise (signed out, balance-only). It is never the recommended source, so it is
+   * never emphasized, and an unreachable gateway shows the age of its last reading.
+   */
+  private magpieCell(
+    source: MenubarMagpieInput,
+    base: { id: string; kind: MenubarSourceKind; logoSvg: string; emphasized: boolean; active: boolean },
+  ): MenubarSourceCell {
+    const name = this.who(source);
+    const fullName = `${source.brand} ${name}`.trim();
+    const staleAtMs = source.staleAtMs ?? null;
+    if (source.status === 'needs-sign-in') {
+      return {
+        ...base,
+        emphasized: false,
+        name,
+        value: null,
+        valueUnit: null,
+        valueLabel: '—',
+        level: 'normal',
+        fill: null,
+        reserve: false,
+        when: this.t('magpie.cellSignIn'),
+        whenLevel: 'normal',
+        accessibilityLabel: this.t('magpie.a11ySignIn', { name: fullName }),
+      };
+    }
+    const state = this.state(source);
+    if (staleAtMs !== null) {
+      // Last good reading from an unreachable gateway: show it with its age, no countdown.
+      if (!state.limit || state.remaining === null) {
+        return {
+          ...base,
+          emphasized: false,
+          name,
+          value: null,
+          valueUnit: null,
+          valueLabel: '—',
+          level: 'normal',
+          fill: null,
+          reserve: false,
+          when: this.ago(staleAtMs),
+          whenLevel: 'normal',
+          stale: true,
+          accessibilityLabel: this.t('a11y.noData', { name: fullName }),
+        };
+      }
+      return {
+        ...base,
+        emphasized: false,
+        name,
+        value: String(Math.round(state.remaining)),
+        valueUnit: '%',
+        valueLabel: null,
+        level: levelOf(state.remaining),
+        fill: clamp(state.remaining / 100, 0, 1),
+        reserve: false,
+        when: this.ago(staleAtMs),
+        whenLevel: 'normal',
+        stale: true,
+        accessibilityLabel: this.t('a11y.remaining', { name: fullName, n: Math.round(state.remaining) }),
+      };
+    }
+    if (!state.limit || state.remaining === null) {
+      // Balance-only or unread: the native panel lists fill==null sources as quiet rows.
+      return {
+        ...base,
+        emphasized: false,
+        name,
+        value: null,
+        valueUnit: null,
+        valueLabel: '—',
+        level: 'normal',
+        fill: null,
+        reserve: false,
+        when: this.t('magpie.cellNoWindows'),
+        whenLevel: 'normal',
+        accessibilityLabel: this.t('magpie.a11yNoWindows', { name: fullName }),
+      };
+    }
+    const remaining = state.remaining;
+    const limit = state.limit;
+    let when = '';
+    if (limit.window.resetsAtMs !== null) when = this.shortDuration(limit.window.resetsAtMs - this.input.nowMs);
+    const unusedAtReset = limit.window.resetsAtMs !== null
+      && willLeaveQuotaUnused({ usedPercent: 100 - remaining, windowMs: limit.window.windowMinutes * 60_000, leftMs: limit.leftMs });
+    return {
+      ...base,
+      name,
+      value: String(Math.round(remaining)),
+      valueUnit: '%',
+      valueLabel: null,
+      level: levelOf(remaining),
+      fill: clamp(remaining / 100, 0, 1),
+      reserve: false,
+      when,
+      whenLevel: panelLevel(resetTimeLevel(limit.leftMs, unusedAtReset)),
+      resetsAtMs: limit.window.resetsAtMs,
+      ...(unusedAtReset ? { unusedAtReset: true } : {}),
+      accessibilityLabel: this.t('a11y.remaining', { name: fullName, n: Math.round(remaining) }),
+    };
+  }
+
   // ── Details ───────────────────────────────────────────────────────────────
 
   private details(): Record<string, MenubarDetail> {
@@ -753,6 +925,7 @@ class Builder {
   private detail(source: MenubarSourceInput): MenubarDetail {
     if (source.kind === 'balance') return this.balanceDetail(source);
     if (source.kind === 'payg') return this.paygDetail(source);
+    if (source.kind === 'magpie') return this.magpieDetail(source);
     return this.subscriptionDetail(source);
   }
 
@@ -881,6 +1054,121 @@ class Builder {
       actionLabel: this.t('action.manage'),
       action: { kind: 'open-settings' },
     };
+  }
+
+  /**
+   * A Magpie upstream account. Percentages only — no dollar figure Cindy computes (an
+   * upstream amount may appear verbatim, labeled as upstream's own billing). The action
+   * opens Cindy's provider settings, where the connection lives.
+   */
+  private magpieDetail(source: MenubarMagpieInput): MenubarDetail {
+    const state = this.state(source);
+    const limit = state.tightest;
+    const staleAtMs = source.staleAtMs ?? null;
+    const facts: MenubarFact[] = [];
+    if (source.status === 'needs-sign-in') {
+      return {
+        id: source.id,
+        logoSvg: source.logoSvg,
+        title: source.brand,
+        plan: source.plan ?? '',
+        rings: [{ fraction: 0, color: 'ink3' }],
+        bigValue: '—',
+        bigUnit: null,
+        bigColor: null,
+        bigCompact: false,
+        bigCaption: this.t('magpie.detailSignIn'),
+        legend: [],
+        sayPrimary: this.t('magpie.saySignIn'),
+        saySecondary: this.t('magpie.saySignInSub'),
+        facts: this.magpieAccountFacts(source, facts),
+        actionLabel: this.t('action.manage'),
+        action: { kind: 'open-settings' },
+      };
+    }
+    if (!limit) {
+      return {
+        id: source.id,
+        logoSvg: source.logoSvg,
+        title: source.brand,
+        plan: source.plan ?? '',
+        rings: [{ fraction: 0, color: 'ink3' }],
+        bigValue: '—',
+        bigUnit: null,
+        bigColor: null,
+        bigCompact: false,
+        bigCaption: this.t('magpie.detailNoWindows'),
+        legend: [],
+        sayPrimary: this.t('magpie.sayNoWindows'),
+        saySecondary: this.t('magpie.sayNoWindowsSub'),
+        facts: this.magpieAccountFacts(source, facts),
+        actionLabel: this.t('action.manage'),
+        action: { kind: 'open-settings' },
+      };
+    }
+    const remaining = limit.remaining;
+    const level = levelOf(remaining);
+    // One ring, exactly the window the big number and caption describe. Showing every
+    // window as its own ring put a visible arc for a *different* window next to the number
+    // (a used-up limit draws no arc, so the eye landed on a fuller ring) — the number and
+    // the ring disagreed. The other windows stay in the facts below, each with its percent.
+    const rings = [{ fraction: clamp(remaining / 100, 0, 1), color: levelColor(level) ?? 'fill' }];
+    const resetAt = limit.window.resetsAtMs !== null ? this.at(limit.window.resetsAtMs) : null;
+    let sayPrimary: string;
+    let saySecondary: string | null = null;
+    if (remaining <= 0) {
+      sayPrimary = this.t('say.usedUp', { window: this.windowLabel(limit.window) });
+      if (resetAt) saySecondary = this.t('say.resetsAt', { at: resetAt });
+    } else if (limit.etaMs !== null && staleAtMs === null) {
+      sayPrimary = this.t('say.emptyIn', { duration: this.duration(limit.etaMs) });
+      saySecondary = this.t('say.beforeReset', { duration: this.duration(limit.leftMs - limit.etaMs) });
+    } else if (remaining >= 99.5) {
+      sayPrimary = this.t('say.full');
+    } else {
+      sayPrimary = this.t('say.onPace');
+    }
+    for (const window of state.windows) {
+      facts.push({
+        label: this.windowLabel(window.window),
+        value: this.t('fact.remainingPercent', { n: Math.round(window.remaining) }),
+        sub: window.window.resetsAtMs !== null && staleAtMs === null
+          ? this.t('magpie.windowResetsAt', { at: this.at(window.window.resetsAtMs) })
+          : window.window.kind === 'scoped' ? this.t('fact.perModel') : '',
+      });
+    }
+    return {
+      id: source.id,
+      logoSvg: source.logoSvg,
+      title: source.brand,
+      plan: source.plan ?? '',
+      rings,
+      bigValue: String(Math.round(remaining)),
+      bigUnit: '%',
+      bigColor: levelColor(level),
+      bigCompact: false,
+      bigCaption: this.t('detail.windowLeft', { window: this.windowLabel(limit.window) }),
+      // Upstream window names ("Claude & GPT · 7 days") are longer than the ring's hole.
+      bigCaptionOutside: true,
+      legend: [],
+      sayPrimary,
+      saySecondary,
+      facts: this.magpieAccountFacts(source, facts),
+      actionLabel: this.t('action.manage'),
+      action: { kind: 'open-settings' },
+    };
+  }
+
+  /** The account row, masked like a handle, with the reading's age; never the upstream email. */
+  private magpieAccountFacts(source: MenubarMagpieInput, facts: MenubarFact[]): MenubarFact[] {
+    const atMs = source.staleAtMs ?? source.observedAtMs;
+    const sub = source.staleAtMs !== null
+      ? this.t('magpie.factStale', { ago: this.ago(source.staleAtMs) })
+      : atMs !== null
+        ? this.t('fact.updatedAgo', { ago: this.ago(atMs) })
+        : this.t('magpie.factUpstream');
+    const all = [...facts];
+    if (source.name) all.push({ label: this.t('fact.account'), value: this.handle(source) ?? source.name, sub });
+    return all;
   }
 
   private subscriptionDetail(source: MenubarSubscriptionInput): MenubarDetail {
@@ -1131,6 +1419,9 @@ class Builder {
   private manageSubtitle(source: MenubarSourceInput): string {
     if (source.kind === 'balance') return this.t(source.quota ? 'manage.quota' : 'manage.balance');
     if (source.kind === 'payg') return this.t(source.billing === 'api' ? 'manage.payg' : 'manage.plan');
+    if (source.kind === 'magpie') {
+      return this.t('magpie.manage', { plan: source.plan ?? source.brand });
+    }
     const plan = source.plan ? ` · ${source.plan}` : '';
     const windows = source.windows
       .filter((window) => window.kind !== 'scoped')
@@ -1145,6 +1436,10 @@ class Builder {
   private manageValue(source: MenubarSourceInput): string {
     if (source.kind === 'balance') return this.balanceMoney(source.available, source.currency);
     if (source.kind === 'payg') return '—';
+    if (source.kind === 'magpie') {
+      const remaining = this.remaining(source);
+      return remaining === null ? '—' : `${Math.round(remaining)}%`;
+    }
     const remaining = this.remaining(source);
     if (remaining === null) return '—';
     if (remaining <= 0 && (source.creditsUnlimited || (source.credits ?? 0) > 0)) return this.t('cell.credits');
@@ -1188,9 +1483,14 @@ class Builder {
     };
   }
 
-  /** Every visible source that can still be used is near empty (or already used up). */
+  /**
+   * Every visible source that can still be used is near empty (or already used up).
+   * Magpie accounts do not count: they are upstream accounts behind a gateway, and a
+   * used-up one must not fire a "low everywhere" notification while Cindy's own sources
+   * are fine.
+   */
   lowOnEverything(): boolean {
-    const counted = this.visible.filter((source) => source.kind !== 'payg');
+    const counted = this.visible.filter((source) => source.kind !== 'payg' && source.kind !== 'magpie');
     if (counted.length === 0) return false;
     let known = 0;
     for (const source of counted) {

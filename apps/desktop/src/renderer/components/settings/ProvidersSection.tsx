@@ -148,6 +148,9 @@ import {
 
 import { localCliDisplayName, type LocalCliDetection } from '../../../shared/localCliDetect';
 import { isBuiltinRefreshableProviderId } from '../../../shared/providerModelRefresh';
+import type { ProviderModelSyncStatus } from '../../../shared/magpieModelSync';
+import { isMagpieProvider } from '@/lib/magpieProvider';
+import { formatRelative } from '@/hooks/useRelativeTime';
 import { providerGroupDeviceCount } from '../../../shared/providerGroup';
 import { applyProviderOrder } from '../../../shared/providerOrder';
 import type { AgentKind, CustomProviderConfig, ProviderView } from '@cindy/model-providers';
@@ -156,6 +159,39 @@ import { isCustomRoutedProvider, isOrganizationManagedProvider, storedCustomProv
 // ---------------------------------------------------------------------------
 // 工具
 // ---------------------------------------------------------------------------
+
+function magpieSyncStatusLabel(
+  status: ProviderModelSyncStatus | null,
+  t: (key: string, options?: Record<string, unknown>) => string,
+  now: number,
+): { label: string; warning: boolean } {
+  const failure = status?.failure ?? null;
+  const successAt = status?.lastSuccessAt ?? null;
+  if (failure) {
+    const reason = failure.code === 'CONFIG_CHANGED'
+      ? t('settings.providers.magpie.syncChanged')
+      : t(
+          `providerError.${failure.code === 'KEY_UNAVAILABLE' ? 'AUTH_INVALID' : failure.code}`,
+          { defaultValue: failure.code },
+        );
+    return {
+      label: successAt
+        ? t('settings.providers.magpie.status.failed', {
+            code: reason,
+            time: formatRelative(successAt, now, t),
+          })
+        : t('settings.providers.magpie.status.failedNever', { code: reason }),
+      warning: true,
+    };
+  }
+  if (successAt === null) {
+    return { label: t('settings.providers.magpie.status.never'), warning: true };
+  }
+  const time = formatRelative(successAt, now, t);
+  return status?.stale
+    ? { label: t('settings.providers.magpie.status.stale', { time }), warning: true }
+    : { label: t('settings.providers.magpie.status.refreshed', { time }), warning: false };
+}
 
 function providerHasModels(provider: ProviderView): boolean {
   // 专属媒体清单(imageModels/videoModels/embeddingModels)也算「有模型」:XD 动态
@@ -2617,6 +2653,7 @@ export function ProvidersSection() {
   const [detections, setDetections] = useState<LocalCliDetection[]>([]);
   const [rediscovering, setRediscovering] = useState(false);
   const [refreshingProviderId, setRefreshingProviderId] = useState<string | null>(null);
+  const [magpieSyncStatus, setMagpieSyncStatus] = useState<ProviderModelSyncStatus | null>(null);
   // React state 负责渲染反馈；ref 才是同一事件循环内立即生效的互斥锁，防止双击在
   // disabled 状态提交到 DOM 前启动两条刷新。
   const refreshingProviderIdRef = useRef<string | null>(null);
@@ -2973,6 +3010,36 @@ export function ProvidersSection() {
       : selected;
   }, [selectedId, listProviders, codexAuth.state, openaiPoolState, dataOwnerId]);
 
+  const selectedIsMagpie = effectiveSelected ? isMagpieProvider(effectiveSelected) : false;
+  const magpieStatusView = selectedIsMagpie
+    ? magpieSyncStatusLabel(
+        magpieSyncStatus,
+        t as unknown as (key: string, options?: Record<string, unknown>) => string,
+        Date.now(),
+      )
+    : null;
+
+  // Magpie keeps its sync state in Main. Re-read it when the selection or the
+  // provider snapshot changes (after a sync Main broadcasts PROVIDER_CHANGED).
+  useEffect(() => {
+    if (!effectiveSelected || !selectedIsMagpie) {
+      setMagpieSyncStatus(null);
+      return;
+    }
+    let cancelled = false;
+    void window.electronAPI.maker
+      .getMagpieModelSyncStatus(effectiveSelected.id)
+      .then((status) => {
+        if (!cancelled) setMagpieSyncStatus(status);
+      })
+      .catch(() => {
+        if (!cancelled) setMagpieSyncStatus(null);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [effectiveSelected, selectedIsMagpie]);
+
   const handleDelete = useCallback(
     async (p: ProviderView) => {
       try {
@@ -3090,6 +3157,39 @@ export function ProvidersSection() {
       }
     },
     [beginProviderRefresh, confirmProviderChange, finishProviderRefresh, refetch, t],
+  );
+
+  /**
+   * Magpie 同步走 Main 自己的发现通道：Main 直接读取该连接的 key、合并新增模型
+   * 并持久化状态；renderer 只拿回状态与新模型数。它不会删除网关不再返回的模型。
+   */
+  const handleMagpieSync = useCallback(
+    async (p: ProviderView) => {
+      if (!beginProviderRefresh(p.id)) return;
+      try {
+        const result = await window.electronAPI.maker.syncMagpieModels(p.id);
+        setMagpieSyncStatus(result.status);
+        if (!result.ok) {
+          toast.error(
+            result.code === 'CONFIG_CHANGED'
+              ? t('settings.providers.magpie.syncChanged')
+              : t('settings.providers.magpie.syncFailed'),
+          );
+          return;
+        }
+        if (result.added > 0) {
+          toast.success(t('settings.providers.magpie.syncAdded', { count: result.added }));
+        } else {
+          toast.success(t('settings.providers.magpie.syncDone'));
+        }
+        refetch();
+      } catch {
+        toast.error(t('settings.providers.magpie.syncFailed'));
+      } finally {
+        finishProviderRefresh(p.id);
+      }
+    },
+    [beginProviderRefresh, finishProviderRefresh, refetch, t],
   );
 
   /** 内置四家复用 main 已有的 provider-specific 真源刷新，不在 Renderer 复制网络逻辑。 */
@@ -3517,6 +3617,35 @@ export function ProvidersSection() {
                         />
                       </div>
                     )}
+                  {/* Magpie 的清单由 Main 定时同步；这里给出「连接 + 上次同步 / 失败过期」
+                      状态，并保留一个显式同步入口(不走列表头部的普通刷新)。 */}
+                  {selectedIsMagpie &&
+                    !effectiveSelected.suspended &&
+                    magpieStatusView && (
+                      <div
+                        className="flex shrink-0 flex-wrap items-center justify-between gap-3 border-t px-5 py-3 text-13"
+                        style={{ borderColor: 'var(--settings-theme-card-border)' }}
+                      >
+                        <span
+                          style={{
+                            color: magpieStatusView.warning
+                              ? 'var(--settings-integration-warning)'
+                              : 'var(--text-tertiary)',
+                          }}
+                        >
+                          {magpieStatusView.label}
+                        </span>
+                        <PillButton
+                          label={t(
+                            refreshingProviderId === effectiveSelected.id
+                              ? 'settings.providers.magpie.syncing'
+                              : 'settings.providers.magpie.sync',
+                          )}
+                          onClick={() => void handleMagpieSync(effectiveSelected)}
+                          disabled={refreshingProviderId !== null}
+                        />
+                      </div>
+                    )}
                   {/* 允许被远程调用 + 「远程与分享」入口(含供应商组)：供应商已连接且能跑 Agent 时出现。
                       本机未允许远程控制时整行仍显示，但开关不可用(provider-sharing.md §3)；入口始终可用，
                       只给本机用时也可以建组(provider-groups.md §10)。 */}
@@ -3585,7 +3714,9 @@ export function ProvidersSection() {
                                 refreshDisabled: refreshingProviderId !== null,
                                 refreshIdleLabel: t('settings.providers.models.refreshBuiltinAria'),
                               }
-                            : effectiveSelected.source === 'user' && effectiveSelected.id !== MANAGED_LLAMACPP_PROVIDER_ID
+                            : effectiveSelected.source === 'user' &&
+                                effectiveSelected.id !== MANAGED_LLAMACPP_PROVIDER_ID &&
+                                !selectedIsMagpie
                               ? {
                                   onRefresh: () => void handleRefreshModels(effectiveSelected),
                                   refreshing: refreshingProviderId === effectiveSelected.id,

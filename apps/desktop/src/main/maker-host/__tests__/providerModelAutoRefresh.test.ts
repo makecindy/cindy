@@ -420,6 +420,40 @@ describe('provider model auto-refresh coordinator', () => {
       expect.objectContaining({ trigger: 'providers-open' }),
     );
   });
+
+  it('refreshes connection-owned custom sources even without connected built-ins', async () => {
+    const refreshCustomSources = vi.fn(async () => undefined);
+    const coordinator = createProviderModelRefreshCoordinator({
+      listProviders: async () => [],
+      refreshProvider: vi.fn(async () => undefined),
+      refreshCustomSources,
+      now: () => 1_000,
+      log: { debug: vi.fn(), warn: vi.fn() },
+    });
+
+    await coordinator.requestAutoRefresh('providers-open');
+    expect(refreshCustomSources).toHaveBeenCalledOnce();
+    expect(refreshCustomSources).toHaveBeenCalledWith('providers-open');
+  });
+
+  it('keeps a custom-source failure out of the renderer hint', async () => {
+    const warn = vi.fn();
+    const coordinator = createProviderModelRefreshCoordinator({
+      listProviders: async () => [],
+      refreshProvider: vi.fn(async () => undefined),
+      refreshCustomSources: async () => {
+        throw new Error('gateway offline');
+      },
+      now: () => 1_000,
+      log: { debug: vi.fn(), warn },
+    });
+
+    await expect(coordinator.requestAutoRefresh('model-selector-open')).resolves.toBeUndefined();
+    expect(warn).toHaveBeenCalledWith(
+      'custom source model auto-refresh failed',
+      expect.objectContaining({ trigger: 'model-selector-open' }),
+    );
+  });
 });
 
 describe('app focus auto-refresh tracker', () => {

@@ -1515,7 +1515,9 @@
       "subscriptionsUsed": "구독은 모두 다 썼어요",
       "waitReset": "구독 초기화를 기다리는 중",
       "sentence": "{{text}}.",
-      "joiner": ", "
+      "joiner": ", ",
+      "magpie": "Magpie 업스트림에 여유가 있습니다.",
+      "magpieHint": "Cindy 자체 계정은 연결 후 여기에 표시됩니다."
     },
     "cell": {
       "payg": "종량",
@@ -1670,6 +1672,22 @@
       "plan": "구독 · 남은 양을 알 수 없음",
       "subscription": "구독 · {{plan}} · {{windows}}",
       "onDevice": "{{name}} · {{subtitle}}"
+    },
+    "magpie": {
+      "manage": "Magpie · {{plan}}",
+      "cellSignIn": "로그인 필요",
+      "cellNoWindows": "창 없음",
+      "a11ySignIn": "{{name}}, 업스트림 계정 로그인 필요",
+      "a11yNoWindows": "{{name}}, 할당량 창 보고되지 않음",
+      "detailSignIn": "업스트림 로그인 필요",
+      "detailNoWindows": "창 보고되지 않음",
+      "factStale": "마지막 읽기 {{ago}}",
+      "factUpstream": "게이트웨이가 보고",
+      "windowResetsAt": "{{at}}에 재설정",
+      "saySignIn": "이 업스트림 계정은 다시 로그인해야 합니다.",
+      "saySignInSub": "Magpie에서 다시 연결하세요. 게이트웨이가 읽을 수 있게 되면 Cindy가 할당량을 다시 표시합니다.",
+      "sayNoWindows": "이 계정에 대해 보고된 할당량 창이 없습니다.",
+      "sayNoWindowsSub": "게이트웨이가 창으로 나눌 수 없는 잔액만 있을 수 있습니다."
     },
     "notify": {
       "lowTitle": "곧 소진돼요",
@@ -3453,6 +3471,21 @@
       }
     },
     "providers": {
+      "magpie": {
+        "sync": "모델 동기화",
+        "syncing": "동기화 중…",
+        "syncDone": "모델 목록을 동기화했습니다",
+        "syncAdded": "동기화 완료, 모델 {{count}}개 추가됨",
+        "syncFailed": "모델 목록을 동기화하지 못했습니다",
+        "syncChanged": "동기화 중 연결이 변경되었습니다. 다시 시도하세요",
+        "status": {
+          "never": "모델 목록이 아직 동기화되지 않았습니다",
+          "refreshed": "모델 목록 동기화: {{time}}",
+          "stale": "모델 목록이 오래되었을 수 있습니다 · 마지막 동기화 {{time}}",
+          "failed": "마지막 동기화 실패({{code}}) · {{time}} 목록 표시 중",
+          "failedNever": "모델 목록 동기화 실패({{code}})"
+        }
+      },
       "llamacpp": {
         "ownedElsewhere": "다른 Cindy 인스턴스에서 모델 서비스가 실행 중입니다. 해당 인스턴스에서 모델을 다운로드하거나 컨텍스트를 변경하거나, 먼저 서비스를 중지하세요.",
         "primaryPick": "우선 선택 · 먼저 사용",

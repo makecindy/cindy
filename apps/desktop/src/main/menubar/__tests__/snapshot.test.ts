@@ -8,6 +8,7 @@ import {
   buildMenubarView,
   isLowOnEverything,
   type MenubarBuildInput,
+  type MenubarMagpieInput,
   type MenubarSourceInput,
   type MenubarSubscriptionInput,
 } from '../snapshot';
@@ -33,6 +34,24 @@ function codex(id: string, usedPercent: number, extra: Partial<MenubarSubscripti
     creditsUnlimited: false,
     prepaidUsd: null,
     updatedAtMs: NOW - 60_000,
+    ...extra,
+  };
+}
+
+function magpie(id: string, usedPercent: number, extra: Partial<MenubarMagpieInput> = {}): MenubarMagpieInput {
+  return {
+    kind: 'magpie',
+    id: `magpie:magpie:${id}`,
+    providerId: 'magpie',
+    logoSvg: '',
+    brand: 'Claude',
+    name: `${id}@example.com`,
+    plan: 'Max',
+    windows: [{ kind: 'week', usedPercent, resetsAtMs: NOW + 3 * DAY, windowMinutes: 10_080, label: null, display: null }],
+    balanceText: null,
+    status: 'ok',
+    observedAtMs: NOW - 60_000,
+    staleAtMs: null,
     ...extra,
   };
 }
@@ -226,6 +245,17 @@ describe('buildMenubarView', () => {
     expect(usedUp.headlinePrimary).toBe('Everything is used up.');
   });
 
+  it('names Magpie upstreams instead of "nothing with a quota" when they are the only room', () => {
+    const view = buildMenubarView(input([magpie('alpha', 40)]));
+    expect(view.headlinePrimary).toBe('Magpie upstreams have room.');
+    expect(view.headlineAlert).toBe(false);
+    // An exhausted Magpie upstream is measured empty, not "nothing with a quota".
+    expect(buildMenubarView(input([magpie('alpha', 100)])).headlinePrimary).toBe('Everything is used up.');
+    // Without any measured window there is still nothing to narrate.
+    expect(buildMenubarView(input([magpie('alpha', 0, { windows: [], status: 'no-windows' })])).headlinePrimary)
+      .toBe('Nothing with a quota yet.');
+  });
+
   it('carries the sign-in gate with no status text', () => {
     const view = buildMenubarView({ ...input([]), gate: 'sign-in' });
     expect(view.gate).toBe('sign-in');
@@ -304,10 +334,121 @@ describe('buildMenubarView', () => {
   });
 });
 
+describe('magpie sources', () => {
+  it('renders a named window with its verbatim label and reads the tightest as the limit', () => {
+    const account = magpie('alpha', 0, {
+      windows: [
+        { kind: 'named', label: 'Credits', usedPercent: 90, resetsAtMs: NOW + DAY, windowMinutes: 0, display: '318.78 / 500' },
+        { kind: 'week', usedPercent: 40, resetsAtMs: NOW + 3 * DAY, windowMinutes: 10_080, label: null },
+      ],
+    });
+    const view = buildMenubarView(input([account]));
+    // The tube reads the weekly window (60% left), not the tightest named one.
+    expect(view.sources[0]).toMatchObject({ kind: 'magpie', value: '60', valueUnit: '%', fill: 0.6 });
+    expect(JSON.stringify(view.details[account.id])).toContain('Credits');
+    expect(JSON.stringify(view.details[account.id])).not.toContain('318.78');
+  });
+
+  it('tubes on the weekly window then falls back to the tightest', () => {
+    const weekly = magpie('a', 0, { windows: [
+      { kind: 'session', usedPercent: 95, resetsAtMs: NOW + HOUR, windowMinutes: 300 },
+      { kind: 'week', usedPercent: 40, resetsAtMs: NOW + 3 * DAY, windowMinutes: 10_080 },
+    ] });
+    expect(buildMenubarView(input([weekly])).sources[0].value).toBe('60');
+    const namedOnly = magpie('b', 0, { windows: [
+      { kind: 'named', label: 'Credits', usedPercent: 25, resetsAtMs: NOW + DAY, windowMinutes: 0 },
+    ] });
+    expect(buildMenubarView(input([namedOnly])).sources[0].value).toBe('75');
+  });
+
+  it('hides a full Magpie account by default and shows it when toggled or when not full', () => {
+    const full = magpie('full', 100);
+    const partial = magpie('partial', 50);
+    const hidden = buildMenubarView(input([full, partial]));
+    expect(hidden.sources.map((s) => s.id)).toEqual(['magpie:magpie:partial']);
+    expect(hidden.manage.find((r) => r.id === 'magpie:magpie:full')?.hidden).toBe(true);
+    const shown = buildMenubarView(input([full, partial], { settings: { shown: ['magpie:magpie:full'] } }));
+    expect(shown.sources.map((s) => s.id)).toContain('magpie:magpie:full');
+    const off = buildMenubarView(input([full, partial], { settings: { hideFullMagpieAccounts: false } }));
+    expect(off.sources.map((s) => s.id)).toContain('magpie:magpie:full');
+  });
+
+  it('renders cell, detail and manage rows for a Magpie account', () => {
+    const view = buildMenubarView(input([magpie('alpha', 75)]));
+    expect(view.sources[0]).toMatchObject({ kind: 'magpie', level: 'warn', emphasized: false });
+    expect(view.details['magpie:magpie:alpha']).toMatchObject({ title: 'Claude', plan: 'Max', action: { kind: 'open-settings' } });
+    expect(view.manage.find((r) => r.id === 'magpie:magpie:alpha')).toMatchObject({ subtitle: 'Magpie · Max', value: '25%' });
+  });
+
+  it('masks the account name in privacy mode', () => {
+    const view = buildMenubarView(input([magpie('alpha', 10)], { settings: { privacy: true } }));
+    expect(view.sources[0].name).not.toContain('alpha');
+    expect(view.sources[0].name).not.toContain('@example.com');
+  });
+
+  it('stays out of the recommendation, headline and status text', () => {
+    const view = buildMenubarView(input([magpie('rich', 0), codex('poor', 90)]));
+    // The Codex subscription is recommended, not the full Magpie account.
+    expect(view.headlinePrimary).toContain('poor');
+    expect(view.sources.find((s) => s.id === 'magpie:magpie:rich')?.emphasized).toBe(false);
+    // Status "lowest" reflects only subscriptions.
+    expect(view.statusTextByMode.lowest).toBe('10%');
+  });
+
+  it('shows an unreachable gateway’s last reading with its age, marked stale', () => {
+    const view = buildMenubarView(input([magpie('alpha', 30, { staleAtMs: NOW - 3 * HOUR })]));
+    expect(view.sources[0]).toMatchObject({ value: '70', stale: true, emphasized: false });
+    expect(view.sources[0].when).toContain('ago');
+    expect(view.sources[0].resetsAtMs).toBeUndefined();
+  });
+
+  it('renders a signed-out account as a quiet row with no number', () => {
+    const view = buildMenubarView(input([magpie('alpha', 0, { status: 'needs-sign-in', windows: [] })]));
+    expect(view.sources[0]).toMatchObject({ fill: null, value: null });
+    expect(view.details['magpie:magpie:alpha'].bigValue).toBe('—');
+  });
+
+  // Regression: with several windows the detail used to draw one neutral ring per window,
+  // so a used-up limit showed no arc next to a fuller one and the number disagreed with
+  // the ring. One ring now, colored by the level of the window the number describes.
+  it('draws one ring for the window the number describes, colored by its level', () => {
+    const multi = magpie('delta', 0, {
+      windows: [
+        { kind: 'named', label: 'Credits', usedPercent: 100, resetsAtMs: NOW + DAY, windowMinutes: 0 },
+        { kind: 'week', usedPercent: 60, resetsAtMs: NOW + 3 * DAY, windowMinutes: 10_080 },
+      ],
+    });
+    const usedUp = buildMenubarView(input([multi])).details['magpie:magpie:delta'];
+    expect(usedUp).toMatchObject({ bigValue: '0', bigColor: 'error', legend: [] });
+    expect(usedUp.rings).toEqual([{ fraction: 0, color: 'error' }]);
+    // The other window is still reported, as a fact with its own percent.
+    expect(usedUp.facts.map((f) => f.label)).toContain('Weekly');
+
+    const warn = buildMenubarView(input([magpie('beta', 75)])).details['magpie:magpie:beta'];
+    expect(warn).toMatchObject({ bigColor: 'warn' });
+    expect(warn.rings).toEqual([{ fraction: 0.25, color: 'warn' }]);
+
+    const ok = buildMenubarView(input([magpie('gamma', 20)])).details['magpie:magpie:gamma'];
+    expect(ok.bigColor).toBeNull();
+    expect(ok.rings).toEqual([{ fraction: 0.8, color: 'fill' }]);
+  });
+
+  it('renders a balance-only account as a row and never shows the upstream balance', () => {
+    const view = buildMenubarView(input([magpie('alpha', 0, { status: 'no-windows', windows: [], balanceText: '318.78' })]));
+    expect(view.sources[0]).toMatchObject({ fill: null, value: null });
+    expect(JSON.stringify(view)).not.toContain('318.78');
+  });
+});
+
 describe('isLowOnEverything', () => {
   it('is true only when every readable source is nearly empty', () => {
     expect(isLowOnEverything(input([codex('alpha', 95), codex('beta', 99)]))).toBe(true);
     expect(isLowOnEverything(input([codex('alpha', 95), codex('beta', 50)]))).toBe(false);
+  });
+
+  it('ignores Magpie accounts', () => {
+    expect(isLowOnEverything(input([codex('alpha', 50), magpie('gone', 100)]))).toBe(false);
+    expect(isLowOnEverything(input([magpie('gone', 100)]))).toBe(false);
   });
 
   it('ignores sources it cannot read and stays quiet with nothing known', () => {
@@ -396,6 +537,19 @@ describe('buildUsageWidgetSnapshot', () => {
   it('has nothing to show behind the sign-in gate', () => {
     const view = buildMenubarView({ ...input([]), gate: 'sign-in' });
     expect(buildUsageWidgetSnapshot(view, NOW, () => null)).toBeNull();
+  });
+
+  it('emits a Magpie account as a subscription widget source with no family logo', () => {
+    const view = buildMenubarView(input([magpie('alpha', 30)]));
+    const snapshot = buildUsageWidgetSnapshot(view, NOW, () => null);
+    // The small Swift widget only draws `subscription` rows, so Magpie maps to that kind.
+    expect(snapshot?.sources[0]).toMatchObject({ id: 'magpie:magpie:alpha', kind: 'subscription', logo: null, value: '70' });
+  });
+
+  it('leaves an unread Magpie row (no fill) out of the widget', () => {
+    const view = buildMenubarView(input([magpie('alpha', 0, { status: 'needs-sign-in', windows: [] })]));
+    const snapshot = buildUsageWidgetSnapshot(view, NOW, () => null);
+    expect(snapshot?.sources).toEqual([]);
   });
 });
 

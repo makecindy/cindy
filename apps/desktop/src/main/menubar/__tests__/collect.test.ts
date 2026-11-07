@@ -1,5 +1,5 @@
 import type { ProviderView } from '@cindy/model-providers';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 
 import {
   kimiSource,
@@ -8,6 +8,7 @@ import {
   collectMenubarInputs,
   dayKeysEndingAt,
   distinctRemoteSubscriptions,
+  magpieGateProviders,
   paygSource,
   planLabel,
   type MenubarCollectDeps,
@@ -15,6 +16,7 @@ import {
   opencodeGoSource,
   usageScope,
 } from '../collect';
+import type { MagpieQuotaAccount } from '../../../shared/magpieQuota';
 import { retainRemoteSubscriptions, REMOTE_RETAIN_MS, type RemoteSeen } from '../remoteSubscriptions';
 import { topModels, type MenubarSubscriptionInput } from '../snapshot';
 import type { UsageHistoryPayload, UsageHistoryTask } from '../../usage/usageHistory';
@@ -283,6 +285,116 @@ describe('collectMenubarInputs', () => {
     }));
 
     expect(collected.tasks.map((entry) => entry.sessionId)).toEqual(ordinaryIds.slice(0, 30));
+  });
+});
+
+describe('magpieGateProviders', () => {
+  const loopback = provider({
+    id: 'magpie', source: 'user', connected: true,
+    routing: { codex: { upstream: 'http://127.0.0.1:3425/v1' } },
+  } as never);
+
+  it('selects a connected user provider routing to a loopback upstream', () => {
+    expect(magpieGateProviders([loopback])).toEqual([{ provider: loopback, origin: 'http://127.0.0.1:3425' }]);
+  });
+
+  it('ignores builtin, suspended, removed and non-loopback providers', () => {
+    expect(magpieGateProviders([provider({ id: 'x', source: 'builtin', routing: { codex: { upstream: 'http://127.0.0.1:3425' } } } as never)])).toEqual([]);
+    expect(magpieGateProviders([provider({ ...loopback, suspended: true } as never)])).toEqual([]);
+    expect(magpieGateProviders([provider({ ...loopback, removed: true } as never)])).toEqual([]);
+    expect(magpieGateProviders([provider({ ...loopback, connected: false } as never)])).toEqual([]);
+    expect(magpieGateProviders([provider({ id: 'r', source: 'user', routing: { codex: { upstream: 'https://api.remote.com/v1' } } } as never)])).toEqual([]);
+  });
+
+  it('accepts localhost and ::1 as loopback', () => {
+    expect(magpieGateProviders([provider({ id: 'a', source: 'user', routing: { codex: { upstream: 'http://localhost:3425/v1' } } } as never)])[0]?.origin).toBe('http://localhost:3425');
+    expect(magpieGateProviders([provider({ id: 'b', source: 'user', routing: { codex: { upstream: 'http://[::1]:3425/v1' } } } as never)])[0]?.origin).toBe('http://[::1]:3425');
+  });
+});
+
+describe('magpie collect integration', () => {
+  function magpieAccount(overrides: Partial<MagpieQuotaAccount> = {}): MagpieQuotaAccount {
+    return {
+      kind: 'magpie', id: 'magpie:magpie:aaa', providerId: 'magpie', provider: 'claude', name: 'Team',
+      plan: 'Max', windows: [{ kind: 'week', usedPercent: 40, resetsAtMs: NOW + 3 * 86_400_000, windowMinutes: 10_080, label: null, display: null }],
+      balanceText: null, status: 'ok', observedAtMs: NOW, staleAtMs: null, ...overrides,
+    };
+  }
+
+  function loopbackProvider() {
+    return provider({ id: 'magpie', source: 'user', auth: { method: 'apiKey' }, access: { kind: 'api' }, routing: { codex: { upstream: 'http://127.0.0.1:3425/v1' } } } as never);
+  }
+
+  function deps(overrides: Partial<MenubarCollectDeps> = {}): MenubarCollectDeps {
+    return {
+      nowMs: NOW,
+      listProviders: async () => [loopbackProvider()],
+      readCodex: async () => null, readClaude: async () => null, readXai: async () => null,
+      readBalance: async () => null, readUsage: async () => null,
+      activities: () => [], sessionRow: async () => null, selfDeviceName: 'Mac',
+      ...overrides,
+    };
+  }
+
+  it('maps Magpie accounts to sources and suppresses the pay-as-you-go row', async () => {
+    const collected = await collectMenubarInputs(deps({ readMagpie: async () => [magpieAccount()] }));
+    expect(collected.sources.map((s) => s.kind)).toEqual(['magpie']);
+    expect(collected.sources[0]).toMatchObject({ id: 'magpie:magpie:aaa', providerId: 'magpie', brand: 'Claude', name: 'Team', plan: 'Max' });
+  });
+
+  it('does not call readMagpie without a loopback user provider', async () => {
+    const readMagpie = vi.fn(async () => []);
+    await collectMenubarInputs(deps({ listProviders: async () => [provider({ id: 'remote', source: 'user', auth: { method: 'apiKey' } } as never)], readMagpie }));
+    expect(readMagpie).not.toHaveBeenCalled();
+  });
+
+  it('falls back to the pay-as-you-go row when the gateway is not Magpie', async () => {
+    const collected = await collectMenubarInputs(deps({
+      listProviders: async () => [loopbackProvider(), { ...loopbackProvider(), id: 'magpie-alias' }],
+      readMagpie: async () => [],
+      activities: () => [{ sessionId: 'on-alias', phase: 'running', startedAtMs: NOW - 1000 } as never],
+      sessionRow: async () => ({ title: 'task', model: 'gpt-5.5', agentKind: 'codex', providerId: 'magpie-alias' }),
+    }));
+    expect(collected.sources.map((s) => s.kind)).toEqual(['payg', 'payg']);
+    expect(collected.sources.filter((s) => s.consuming).map((s) => s.id)).toEqual(['magpie-alias']);
+  });
+
+  it('drops only the Magpie sources when the reader fails', async () => {
+    const errors: string[] = [];
+    const collected = await collectMenubarInputs(deps({
+      listProviders: async () => [loopbackProvider(), provider({ id: 'openai', auth: { method: 'oauth', native: 'codex' } } as never)],
+      readMagpie: async () => { throw new Error('gateway down'); },
+      readCodex: async () => ({ primary: { usedPercent: 20, windowMinutes: 10_080, resetsAt: nowSec + 86_400 } }) as never,
+      onError: (scope) => errors.push(scope),
+    }));
+    expect(errors).toEqual(['magpie:magpie']);
+    // The failed gateway falls back to its own pay-as-you-go card; the rest is untouched.
+    expect(collected.sources.map((s) => s.id)).toEqual(['magpie', 'openai']);
+    expect(collected.sources[0]!.kind).toBe('payg');
+  });
+
+  it('keeps usage and tasks byte-identical with and without Magpie rows', async () => {
+    const usagePayload = {
+      todayKey: '2026-10-11',
+      modelDaily: [{ day: '2026-10-11', agentKind: 'codex', model: 'gpt-5.5', tokens: 1000, money: { amount: 2, currency: 'USD' }, apiMoney: { amount: 2 }, subscriptionEstimateMoney: { amount: 2 } }],
+      tasks: [], taskDaily: [],
+    } as unknown as UsageHistoryPayload;
+    const base = { readUsage: async () => usagePayload };
+    const withoutMagpie = await collectMenubarInputs(deps({ ...base, readMagpie: async () => [] }));
+    const withMagpie = await collectMenubarInputs(deps({ ...base, readMagpie: async () => [magpieAccount({ balanceText: '318.78' })] }));
+    expect(JSON.stringify(withMagpie.usage)).toBe(JSON.stringify(withoutMagpie.usage));
+    expect(JSON.stringify(withMagpie.tasks)).toBe(JSON.stringify(withoutMagpie.tasks));
+    expect(withMagpie.updatedAtMs).toBe(withoutMagpie.updatedAtMs);
+  });
+
+  it.each(['magpie', 'magpie-alias'])('marks the gateway accounts consuming for a task through %s', async (providerId) => {
+    const collected = await collectMenubarInputs(deps({
+      listProviders: async () => [loopbackProvider(), { ...loopbackProvider(), id: 'magpie-alias' }],
+      readMagpie: async () => [magpieAccount()],
+      activities: () => [{ sessionId: 'on-magpie', phase: 'running', startedAtMs: NOW - 1000 } as never],
+      sessionRow: async () => ({ title: 'task', model: 'gpt-5.5', agentKind: 'codex', providerId }),
+    }));
+    expect(collected.sources.find((s) => s.kind === 'magpie')?.consuming).toBe(true);
   });
 });
 

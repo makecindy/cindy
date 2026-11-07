@@ -25,10 +25,11 @@ import { writeProviderGroup } from '../provider-group/store.js';
 import type { CodexContextWindowInfo } from '@cindy/maker-core';
 import {
   PI_MODEL_APIS,
-  mergeDiscoveredRuntimeModels,
   isByokProviderId,
   isLoopbackProviderUrl,
+  isMagpieCustomProviderConfig,
   isProviderRequestPath,
+  mergeDiscoveredRuntimeModels,
   runtimeCustomProviderId,
   storedCustomProviderId,
   type AgentKind,
@@ -70,6 +71,10 @@ import {
   type ProviderModelAutoRefreshResult,
   type ProviderModelRefreshResult,
 } from '../../shared/providerModelRefresh.js';
+import type {
+  ProviderModelSyncResult,
+  ProviderModelSyncStatus,
+} from '../../shared/magpieModelSync.js';
 
 import { createLogger } from '../logger.js';
 import type { UnrecoverableProviderCredential } from '../secrets/providerSecretStore.js';
@@ -352,6 +357,14 @@ export interface ProviderHandlerDeps {
   refreshBuiltinModels(providerId: BuiltinRefreshableProviderId): Promise<void>;
   /** Renderer 自动刷新提示；Main 侧负责静默失败、冷却和跨窗口去重。 */
   requestModelsAutoRefresh(trigger: ProviderModelAutoRefreshRendererTrigger): Promise<void>;
+  /**
+   * Magpie 连接自己的模型清单同步（生产 = magpie-model-sync 单例）。
+   * 只接受 providerId；端点与会话凭证都由 Main 从该连接读取。
+   */
+  getMagpieModelSyncStatus?(providerId: string): ProviderModelSyncStatus;
+  syncMagpieModelsNow?(providerId: string): Promise<ProviderModelSyncResult>;
+  /** 连接/编辑提交后异步补一次同步；失败只影响状态，不回滚已保存的凭证。 */
+  requestMagpieModelSyncAfterChange?(providerId: string): void;
   /**
    * 重新发现某供应商的动态清单（生产 = anthropic 的 refreshAnthropicModelsFromHttp）。
    * 返回本次结束后的失败归因，成功为 null。不认识的 providerId 直接返回 null（没有
@@ -1303,6 +1316,37 @@ export function registerProviderHandlers(
       }
       await deps.requestModelsAutoRefresh(trigger);
       return { ok: true };
+    },
+  );
+
+  function readMagpieProviderId(value: unknown): string {
+    if (typeof value !== 'string' || value.length === 0 || value.length > 128) {
+      throwIpcError('INVALID_PARAMS', 'providerId must be a non-empty string');
+    }
+    return value;
+  }
+
+  registry.handle(
+    MAKER_INVOKE.PROVIDER_MAGPIE_SYNC_STATUS,
+    (event, providerId: unknown): ProviderModelSyncStatus => {
+      assertTrustedProviderMutationSender(event);
+      const id = readMagpieProviderId(providerId);
+      if (!deps.getMagpieModelSyncStatus) {
+        throwIpcError('INTERNAL', 'Magpie model sync status is unavailable');
+      }
+      return deps.getMagpieModelSyncStatus(id);
+    },
+  );
+
+  registry.handle(
+    MAKER_INVOKE.PROVIDER_MAGPIE_SYNC,
+    async (event, providerId: unknown): Promise<ProviderModelSyncResult> => {
+      assertTrustedProviderMutationSender(event);
+      const id = readMagpieProviderId(providerId);
+      if (!deps.syncMagpieModelsNow) {
+        throwIpcError('INTERNAL', 'Magpie model sync is unavailable');
+      }
+      return deps.syncMagpieModelsNow(id);
     },
   );
 
@@ -2262,6 +2306,11 @@ export function registerProviderHandlers(
         assertProviderMutationOwner(ownerAtIngress);
         await afterChange(codexHostPrepared, commitRouteMutation);
         assertProviderMutationOwner(ownerAtIngress);
+        // The wizard performs its own discovery; Main still refreshes the gateway
+        // catalog once the key is committed so a failed wizard fetch can recover.
+        if (isMagpieCustomProviderConfig(config)) {
+          deps.requestMagpieModelSyncAfterChange?.(config.id);
+        }
         return { ok: true };
       } finally {
         if (codexHostPrepared) deps.cancelCodexCustomProviderHostChange?.();
@@ -2462,6 +2511,9 @@ export function registerProviderHandlers(
           codexHostChangeRequired ? commitRouteMutation : undefined,
         );
         assertProviderMutationOwner(ownerAtIngress);
+        if (isMagpieCustomProviderConfig(config)) {
+          deps.requestMagpieModelSyncAfterChange?.(config.id);
+        }
         return { ok: true, ...(speechReferenceAdded ? { speechReferenceAdded: true as const } : {}) };
       } finally {
         if (codexHostPrepared) deps.cancelCodexCustomProviderHostChange?.();

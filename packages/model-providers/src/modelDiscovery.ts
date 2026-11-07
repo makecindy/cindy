@@ -1,3 +1,4 @@
+import { parseMagpieNativeEndpoints } from './magpie.js';
 import { discoveredMagpieSource } from './modelSource.js';
 import {
   pickModelMetadata,
@@ -294,9 +295,13 @@ export function parseModelsListResponse(
       }),
     );
     const discoveredSource = discoveredMagpieSource(record);
+    const nativeEndpoints = discoveredSource
+      ? parseMagpieNativeEndpoints(record.native_endpoints)
+      : undefined;
     out.push({
       id,
       ...(discoveredSource ? { discoveredSource } : {}),
+      ...(nativeEndpoints ? { nativeEndpoints } : {}),
       ...(magpieCatalog ? { opaqueModelId: true as const } : {}),
       ...(Array.isArray(serviceTiers) || Array.isArray(additionalSpeedTiers)
         ? { supportsUltrafastMode: declaredSpeedTiers.includes('ultrafast') } : {}),

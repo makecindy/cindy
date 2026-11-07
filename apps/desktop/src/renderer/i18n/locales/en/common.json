@@ -1534,7 +1534,9 @@
       "subscriptionsUsed": "Subscriptions are used up",
       "waitReset": "Wait for subscriptions to reset",
       "sentence": "{{text}}.",
-      "joiner": ", "
+      "joiner": ", ",
+      "magpie": "Magpie upstreams have room.",
+      "magpieHint": "Cindy's own accounts show here once connected."
     },
     "cell": {
       "payg": "API",
@@ -1694,6 +1696,22 @@
       "plan": "Subscription · remaining amount unavailable",
       "subscription": "Subscription · {{plan}} · {{windows}}",
       "onDevice": "{{name}} · {{subtitle}}"
+    },
+    "magpie": {
+      "manage": "Magpie · {{plan}}",
+      "cellSignIn": "Needs sign-in",
+      "cellNoWindows": "No windows",
+      "a11ySignIn": "{{name}}, upstream account needs sign-in",
+      "a11yNoWindows": "{{name}}, no quota windows reported",
+      "detailSignIn": "Upstream needs sign-in",
+      "detailNoWindows": "No windows reported",
+      "factStale": "Last read {{ago}}",
+      "factUpstream": "Reported by the gateway",
+      "windowResetsAt": "Resets {{at}}",
+      "saySignIn": "The upstream account needs to be signed in again.",
+      "saySignInSub": "Reconnect it in Magpie; Cindy shows its quota again once the gateway can read it.",
+      "sayNoWindows": "No quota windows reported for this account.",
+      "sayNoWindowsSub": "It may only have a balance the gateway cannot break into windows."
     },
     "notify": {
       "lowTitle": "Running low",
@@ -3494,6 +3512,21 @@
       }
     },
     "providers": {
+      "magpie": {
+        "sync": "Sync models",
+        "syncing": "Syncing…",
+        "syncDone": "Model list synced",
+        "syncAdded": "Synced, added {{count}} models",
+        "syncFailed": "Could not sync the model list",
+        "syncChanged": "The connection changed during sync. Try again",
+        "status": {
+          "never": "Model list not synced yet",
+          "refreshed": "Model list synced {{time}}",
+          "stale": "Model list may be out of date · last synced {{time}}",
+          "failed": "Last sync failed ({{code}}) · showing the list from {{time}}",
+          "failedNever": "Model list sync failed ({{code}})"
+        }
+      },
       "llamacpp": {
         "ownedElsewhere": "The model service is running in another Cindy instance. Download models or change context there, or stop its service first.",
         "primaryPick": "Primary pick · try this first",

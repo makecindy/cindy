@@ -1534,7 +1534,9 @@
       "subscriptionsUsed": "Abos sind aufgebraucht",
       "waitReset": "Auf das Zurücksetzen der Abonnements warten",
       "sentence": "{{text}}.",
-      "joiner": ", "
+      "joiner": ", ",
+      "magpie": "Magpie-Upstreams haben Kontingent.",
+      "magpieHint": "Eigene Cindy-Konten erscheinen hier nach der Verbindung."
     },
     "cell": {
       "payg": "API",
@@ -1694,6 +1696,22 @@
       "plan": "Abo · Restmenge nicht verfügbar",
       "subscription": "Abo · {{plan}} · {{windows}}",
       "onDevice": "{{name}} · {{subtitle}}"
+    },
+    "magpie": {
+      "manage": "Magpie · {{plan}}",
+      "cellSignIn": "Anmeldung nötig",
+      "cellNoWindows": "Keine Fenster",
+      "a11ySignIn": "{{name}}, Upstream-Konto benötigt Anmeldung",
+      "a11yNoWindows": "{{name}}, keine Kontingentfenster gemeldet",
+      "detailSignIn": "Upstream benötigt Anmeldung",
+      "detailNoWindows": "Keine Fenster gemeldet",
+      "factStale": "Zuletzt gelesen {{ago}}",
+      "factUpstream": "Vom Gateway gemeldet",
+      "windowResetsAt": "Setzt {{at}} zurück",
+      "saySignIn": "Das Upstream-Konto muss erneut angemeldet werden.",
+      "saySignInSub": "Verbinde es in Magpie erneut; Cindy zeigt das Kontingent wieder, sobald das Gateway es lesen kann.",
+      "sayNoWindows": "Für dieses Konto wurden keine Kontingentfenster gemeldet.",
+      "sayNoWindowsSub": "Möglicherweise gibt es nur ein Guthaben, das das Gateway nicht in Fenster aufteilen kann."
     },
     "notify": {
       "lowTitle": "Fast aufgebraucht",
@@ -3494,6 +3512,21 @@
       }
     },
     "providers": {
+      "magpie": {
+        "sync": "Modelle synchronisieren",
+        "syncing": "Synchronisierung…",
+        "syncDone": "Modellliste synchronisiert",
+        "syncAdded": "Synchronisiert, {{count}} Modelle hinzugefügt",
+        "syncFailed": "Modellliste konnte nicht synchronisiert werden",
+        "syncChanged": "Die Verbindung wurde während der Synchronisierung geändert. Bitte erneut versuchen",
+        "status": {
+          "never": "Modellliste noch nicht synchronisiert",
+          "refreshed": "Modellliste synchronisiert {{time}}",
+          "stale": "Modellliste ist möglicherweise veraltet · zuletzt synchronisiert {{time}}",
+          "failed": "Letzte Synchronisierung fehlgeschlagen ({{code}}) · Liste von {{time}} wird angezeigt",
+          "failedNever": "Synchronisierung der Modellliste fehlgeschlagen ({{code}})"
+        }
+      },
       "llamacpp": {
         "ownedElsewhere": "Der Modelldienst läuft in einer anderen Cindy-Instanz. Lade dort Modelle herunter oder ändere den Kontext, oder beende zuerst den dortigen Dienst.",
         "primaryPick": "Erste Wahl · zuerst ausprobieren",

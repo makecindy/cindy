@@ -68,6 +68,8 @@ import {
 } from '../menubar/collect.js';
 import { MENUBAR_HARNESS_LOGOS } from '../menubar/logos.js';
 import { OwnedInFlight } from '../menubar/ownedInFlight.js';
+import { MAGPIE_QUOTA_COLD_READ_TIMEOUT_MS, readMagpieQuotas } from '../magpie/quotaReader.js';
+import type { MagpieQuotaAccount } from '../../shared/magpieQuota.js';
 import { readRemoteSubscriptions, retainRemoteSubscriptions, type RemoteSeen } from '../menubar/remoteSubscriptions.js';
 import { readMenubarSettings, writeMenubarSettings } from '../menubar/settingsStore.js';
 import {
@@ -83,6 +85,12 @@ const log = createLogger('quota-overview');
 
 const REBUILD_DEBOUNCE_MS = 400;
 const PERIODIC_REBUILD_MS = 5 * 60_000;
+/**
+ * While a panel is on screen the readers' "open" TTLs are a minute, so the periodic rebuild
+ * has to come around at least that often or an idle panel would only refresh every
+ * PERIODIC_REBUILD_MS and the open TTLs would never be reached.
+ */
+const INTERACTIVE_REBUILD_MS = 60_000;
 /** A usage payload marked stale is being re-aggregated; look again shortly. */
 const STALE_FOLLOW_UP_MS = 3_000;
 const STALE_FOLLOW_UP_MAX = 5;
@@ -106,6 +114,16 @@ const REMOTE_FRESH_WHILE_CLOSED_MS = 10 * 60_000;
 const REMOTE_RETRY_MS = 60_000;
 const RESETS_FRESH_WHILE_OPEN_MS = 3 * 60_000;
 const RESETS_FRESH_WHILE_CLOSED_MS = 30 * 60_000;
+/**
+ * A Magpie gateway serves every upstream account in one loopback read, so it keeps the
+ * balance's cadence: short while the panel is open, long while closed, sooner after a
+ * failure. The identity verdict (is this origin Magpie at all) is memoized separately.
+ */
+const MAGPIE_FRESH_WHILE_OPEN_MS = 60_000;
+const MAGPIE_FRESH_WHILE_CLOSED_MS = 10 * 60_000;
+const MAGPIE_RETRY_MS = 60_000;
+/** A non-Magpie loopback origin is not probed again for this long. */
+const MAGPIE_NOT_MAGPIE_MS = 10 * 60_000;
 /** A build this recent answers a remote request without waiting for another. */
 const FRESH_BUILD_MS = PERIODIC_REBUILD_MS + 30_000;
 /** Phones refresh their widgets every few minutes while open; keep collecting in between. */
@@ -170,10 +188,15 @@ export class QuotaOverviewService {
   private remoteSeen: TimedCache<Map<string, RemoteSeen>> | null = null;
   private readonly remoteInFlight = new OwnedInFlight<MenubarSubscriptionInput[]>();
   private readonly resets = new Map<string, TimedCache<MenubarResetCredits | null>>();
+  /** Last good Magpie reading per origin, so an unreachable gateway keeps showing it (stale). */
+  private readonly magpie = new Map<string, TimedCache<MagpieQuotaAccount[]> & { failed: boolean; goodAtMs: number | null }>();
+  /** Whether an origin is a Magpie gateway at all; a negative verdict is memoized per origin. */
+  private readonly magpieIdentity = new Map<string, TimedCache<boolean>>();
+  private readonly magpieInFlight = new Map<string, OwnedInFlight<MagpieQuotaAccount[]>>();
 
   private rebuildTimer: ReturnType<typeof setTimeout> | null = null;
   private remoteRetryTimer: ReturnType<typeof setTimeout> | null = null;
-  private periodicTimer: ReturnType<typeof setInterval> | null = null;
+  private periodicTimer: ReturnType<typeof setTimeout> | null = null;
   private building = false;
   private rebuildQueued = false;
   private forceNext = false;
@@ -239,7 +262,10 @@ export class QuotaOverviewService {
   /** A panel is on screen: shorter cadences, and opening it refreshes every source. */
   setInteractive(open: boolean): void {
     this.interactive = open;
-    if (open) this.refresh(false);
+    // Opening the panel is the user asking "what is it now": every reader re-reads even
+    // inside its closed TTL, so the first paint after open is fresh (Magpie included).
+    if (open) this.refresh(true);
+    if (this.started) this.armPeriodicRebuild();
   }
 
   /** Locale or presentation changed; rebuild from the caches. */
@@ -317,6 +343,8 @@ export class QuotaOverviewService {
           this.remote = null;
           this.remoteSeen = null;
           this.resets.clear();
+          this.magpie.clear();
+          this.magpieIdentity.clear();
         }
         this.scheduleRebuild();
       }),
@@ -331,8 +359,24 @@ export class QuotaOverviewService {
         }),
       );
     }
-    this.periodicTimer = setInterval(() => this.scheduleRebuild(), PERIODIC_REBUILD_MS);
+    this.armPeriodicRebuild();
     this.scheduleRebuild(0);
+  }
+
+  /**
+   * The slow heartbeat that re-reads caches on a cadence. It follows the panel: a minute
+   * while open (so the readers' open TTLs are actually reached), the slow period while
+   * closed. A fixed interval would keep the closed cadence after the panel opens.
+   */
+  private armPeriodicRebuild(): void {
+    if (this.periodicTimer) clearTimeout(this.periodicTimer);
+    const period = this.interactive ? INTERACTIVE_REBUILD_MS : PERIODIC_REBUILD_MS;
+    this.periodicTimer = setTimeout(() => {
+      this.periodicTimer = null;
+      if (!this.started) return;
+      this.scheduleRebuild();
+      this.armPeriodicRebuild();
+    }, period);
   }
 
   private halt(): void {
@@ -345,7 +389,7 @@ export class QuotaOverviewService {
         // Listener already gone.
       }
     }
-    if (this.periodicTimer) clearInterval(this.periodicTimer);
+    if (this.periodicTimer) clearTimeout(this.periodicTimer);
     this.periodicTimer = null;
     if (this.rebuildTimer) clearTimeout(this.rebuildTimer);
     this.rebuildTimer = null;
@@ -356,6 +400,8 @@ export class QuotaOverviewService {
     this.usageCache.clear();
     this.remote = null;
     this.resets.clear();
+    this.magpie.clear();
+    this.magpieIdentity.clear();
   }
 
   private scheduleRebuild(delayMs = REBUILD_DEBOUNCE_MS, force = false): void {
@@ -424,6 +470,7 @@ export class QuotaOverviewService {
       readClaude: (providerId) => readClaudeSubscriptionUsageSnapshotForDeviceLink(providerId),
       readXai: (providerId) => readXaiSubscriptionUsageSnapshotForDeviceLink(providerId),
       readCodexResets: (providerId) => this.readCodexResets(providerId, force, nowMs),
+      readMagpie: (providerId, origin) => this.readMagpie(providerId, origin, force, nowMs),
       readRemoteSubscriptions: () => this.readRemote(force, nowMs),
       readBalance: () => this.readBalance(force, nowMs),
       readUsage: async (scope: MenubarUsageScope) => {
@@ -573,6 +620,61 @@ export class QuotaOverviewService {
       this.resets.set(providerId, { ownerId, value: cached?.value ?? null, readAtMs: Date.now() });
       return cached?.value ?? null;
     }
+  }
+
+  /**
+   * Upstream accounts of one Magpie gateway, cached per origin+provider and data owner.
+   * A read that fails keeps the last good reading marked stale; a result read for a
+   * previous owner is dropped. Non-Magpie loopback origins are memoized so other proxies
+   * cost one probe. Logs origin/status/account-count only — never bodies, emails or errors.
+   */
+  private async readMagpie(providerId: string, origin: string, force: boolean, nowMs: number): Promise<MagpieQuotaAccount[]> {
+    const { dataOwnerId: ownerId, generation } = getActiveAppSession();
+    const isCurrent = () => {
+      const active = getActiveAppSession();
+      return active.dataOwnerId === ownerId && active.generation === generation;
+    };
+    const key = `${providerId}|${origin}`;
+    const cached = this.magpie.get(key);
+    const fresh = cached?.ownerId === ownerId ? cached : null;
+    const maxAge = fresh?.failed ? MAGPIE_RETRY_MS : this.interactive ? MAGPIE_FRESH_WHILE_OPEN_MS : MAGPIE_FRESH_WHILE_CLOSED_MS;
+    if (fresh && !force && nowMs - fresh.readAtMs < maxAge) {
+      return fresh.value.map((account) => ({ ...account, staleAtMs: fresh.failed ? fresh.goodAtMs : null }));
+    }
+    const identity = this.magpieIdentity.get(origin);
+    if (identity?.ownerId === ownerId && identity.value === false && !force && nowMs - identity.readAtMs < MAGPIE_NOT_MAGPIE_MS) {
+      return [];
+    }
+    const inFlight = this.magpieInFlight.get(key) ?? new OwnedInFlight<MagpieQuotaAccount[]>();
+    this.magpieInFlight.set(key, inFlight);
+    // Joined only by callers of the same account; after a switch the new owner reads its own.
+    await inFlight.run(ownerId, async () => {
+      const attemptAtMs = Date.now();
+      try {
+        const read = await readMagpieQuotas(providerId, origin, {
+          timeoutMs: MAGPIE_QUOTA_COLD_READ_TIMEOUT_MS,
+        });
+        if (!isCurrent()) return [] as MagpieQuotaAccount[];
+        this.magpieIdentity.set(origin, { ownerId, value: !read.notMagpie, readAtMs: attemptAtMs });
+        const accounts = read.notMagpie ? [] : read.accounts;
+        this.magpie.set(key, { ownerId, value: accounts, readAtMs: attemptAtMs, failed: false, goodAtMs: Date.now() });
+        log.info('magpie quota read', { origin, accounts: accounts.length });
+        return accounts;
+      } catch (error) {
+        // Never log the body, the upstream email or the error string; origin + status only.
+        log.info('magpie quota unavailable', { origin, error: errorMessage(error) });
+        if (!isCurrent()) return [] as MagpieQuotaAccount[];
+        // Keep the last good reading and mark the cache failed so the retry cadence applies;
+        // goodAtMs is the age shown as the stale reading.
+        const last = fresh?.value ?? [];
+        this.magpie.set(key, { ownerId, value: last, readAtMs: attemptAtMs, failed: true, goodAtMs: fresh?.goodAtMs ?? null });
+        return last;
+      }
+    });
+    if (!isCurrent()) return [];
+    const settled = this.magpie.get(key);
+    if (!settled) return [];
+    return settled.value.map((account) => ({ ...account, staleAtMs: settled.failed ? settled.goodAtMs : null }));
   }
 
   // ── Cindy balance ──────────────────────────────────────────────────────────

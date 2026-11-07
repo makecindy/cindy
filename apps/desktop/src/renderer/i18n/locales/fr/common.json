@@ -1561,7 +1561,9 @@
       "subscriptionsUsed": "Les abonnements sont épuisés",
       "waitReset": "Attendez la réinitialisation des abonnements",
       "sentence": "{{text}}.",
-      "joiner": ", "
+      "joiner": ", ",
+      "magpie": "Les upstreams Magpie ont du quota.",
+      "magpieHint": "Les comptes Cindy apparaîtront une fois connectés."
     },
     "cell": {
       "payg": "API",
@@ -1726,6 +1728,22 @@
       "plan": "Abonnement · montant restant indisponible",
       "subscription": "Abonnement · {{plan}} · {{windows}}",
       "onDevice": "{{name}} · {{subtitle}}"
+    },
+    "magpie": {
+      "manage": "Magpie · {{plan}}",
+      "cellSignIn": "Connexion requise",
+      "cellNoWindows": "Aucune fenêtre",
+      "a11ySignIn": "{{name}}, le compte amont nécessite une connexion",
+      "a11yNoWindows": "{{name}}, aucune fenêtre de quota signalée",
+      "detailSignIn": "L’amont nécessite une connexion",
+      "detailNoWindows": "Aucune fenêtre signalée",
+      "factStale": "Dernière lecture {{ago}}",
+      "factUpstream": "Signalé par la passerelle",
+      "windowResetsAt": "Réinitialisation {{at}}",
+      "saySignIn": "Le compte amont doit être reconnecté.",
+      "saySignInSub": "Reconnectez-le dans Magpie ; Cindy affichera à nouveau son quota dès que la passerelle pourra le lire.",
+      "sayNoWindows": "Aucune fenêtre de quota signalée pour ce compte.",
+      "sayNoWindowsSub": "Il n’a peut-être qu’un solde que la passerelle ne peut pas découper en fenêtres."
     },
     "notify": {
       "lowTitle": "Bientôt épuisé",
@@ -3543,6 +3561,21 @@
       }
     },
     "providers": {
+      "magpie": {
+        "sync": "Synchroniser les modèles",
+        "syncing": "Synchronisation…",
+        "syncDone": "Liste des modèles synchronisée",
+        "syncAdded": "Synchronisé, {{count}} modèles ajoutés",
+        "syncFailed": "Impossible de synchroniser la liste des modèles",
+        "syncChanged": "La connexion a changé pendant la synchronisation. Réessayez",
+        "status": {
+          "never": "Liste des modèles pas encore synchronisée",
+          "refreshed": "Liste des modèles synchronisée {{time}}",
+          "stale": "La liste des modèles est peut-être obsolète · dernière synchronisation {{time}}",
+          "failed": "La dernière synchronisation a échoué ({{code}}) · liste de {{time}} affichée",
+          "failedNever": "Échec de la synchronisation de la liste des modèles ({{code}})"
+        }
+      },
       "llamacpp": {
         "ownedElsewhere": "Le service de modèles s'exécute dans une autre instance de Cindy. Téléchargez les modèles ou modifiez le contexte depuis celle-ci, ou arrêtez d'abord son service.",
         "primaryPick": "Choix principal · à essayer en premier",

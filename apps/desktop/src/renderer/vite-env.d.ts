@@ -5783,6 +5783,14 @@ interface ElectronAPI {
     requestProviderModelsAutoRefresh: (
       trigger: import('../shared/providerModelRefresh').ProviderModelAutoRefreshRendererTrigger,
     ) => Promise<import('../shared/providerModelRefresh').ProviderModelAutoRefreshResult>;
+    /** Read the persisted Magpie catalog sync state for one custom connection. */
+    getMagpieModelSyncStatus: (
+      providerId: string,
+    ) => Promise<import('../shared/magpieModelSync').ProviderModelSyncStatus>;
+    /** Explicit Magpie catalog sync; bypasses the automatic cooldown. */
+    syncMagpieModels: (
+      providerId: string,
+    ) => Promise<import('../shared/magpieModelSync').ProviderModelSyncResult>;
 
     // 自定义供应商配置 CRUD（配置与 runtime 密钥均由 main 原子排队）。
     createCustomProvider: (
