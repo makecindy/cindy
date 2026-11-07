@@ -2527,9 +2527,13 @@ export async function resolveManagedPiPackageResources(
         ? await inspectAllPackagesFreshUnderMutationLock({ startupTiming })
         // A following snapshot copy verifies approved extensions against these
         // fingerprints, so it keeps the short window instead of a palette reuse one.
+        // Session startup (`startupTiming`) freezes this list into the task's
+        // capability manifest, which outlives any reuse window, so a warm palette
+        // entry would hide a package installed a moment earlier for the whole task.
+        // Only palette previews — no snapshot, no startup — take the long window.
         : await inspectAllPackages(
             startupTiming,
-            snapshotRoot ? INSPECTION_CACHE_MS : PALETTE_INSPECTION_REUSE_MS,
+            snapshotRoot || startupTiming ? INSPECTION_CACHE_MS : PALETTE_INSPECTION_REUSE_MS,
           );
       if (snapshotRoot) {
         const staleApprovals = inspected

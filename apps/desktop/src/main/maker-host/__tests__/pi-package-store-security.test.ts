@@ -732,6 +732,34 @@ describe('Pi package executable-code boundary', () => {
     expect(runtime.spawns.filter(({ args }) => args.includes('list'))).toHaveLength(1);
   });
 
+  it('keeps the palette reuse window out of session startup metadata', async () => {
+    const { root } = await createSkillOnlyPackage('npm:palette-warm-startup');
+    const store = await import('../pi-package-store.js');
+    const canonicalRoot = await fs.realpath(root);
+    const listSpawns = () => runtime.spawns.filter(({ args }) => args.includes('list')).length;
+    const now = Date.now();
+    const clock = vi.spyOn(Date, 'now').mockReturnValue(now);
+    try {
+      await expect(store.resolveManagedPiPackageResources()).resolves.toMatchObject({
+        packageRoots: [canonicalRoot],
+      });
+      expect(listSpawns()).toBe(1);
+      // A palette preview may reuse the finished inspection past the short window.
+      clock.mockReturnValue(now + 5_000);
+      await expect(store.resolveManagedPiPackageResources()).resolves.toMatchObject({
+        packageRoots: [canonicalRoot],
+      });
+      expect(listSpawns()).toBe(1);
+      // Startup metadata is frozen into the task capability manifest, so it must
+      // not inherit that reuse and hide a package installed after the palette read.
+      clock.mockReturnValue(now + 6_000);
+      await store.resolveManagedPiPackageResources({ startupTraceId: '0123456789abcdef' });
+      expect(listSpawns()).toBe(2);
+    } finally {
+      clock.mockRestore();
+    }
+  });
+
   it('records in-flight inspection wait separately for each startup and skips completed-cache hits', async () => {
     const { root } = await createSkillOnlyPackage('npm:waiting-startup');
     const manifest = path.join(await fs.realpath(root), 'package.json');
