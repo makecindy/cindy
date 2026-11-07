@@ -20,7 +20,7 @@ import {
 } from './session.js';
 import type { HandoffDriver } from './macDriver.js';
 import { markSecretEntered } from './secretTaint.js';
-import { TerminalPromptSession, type TerminalProgram } from './terminalPrompt.js';
+import { TerminalPromptSession, type TerminalProgram, type TerminalPromptStep } from './terminalPrompt.js';
 import { ImageQrHandoffSession } from './imageQr.js';
 import { qrContent } from './qrCode.js';
 
@@ -359,6 +359,22 @@ export class InputHandoffService {
       return run;
     });
     return started.ok ? { ...started, abandon: () => run?.abandon() } : started;
+  }
+
+  /** A Main-owned secret input, delivered only to its waiting host operation, never the model. */
+  startHostSecretPrompt(request: {
+    sessionId: string;
+    step: TerminalPromptStep;
+    answer(value: string | null): void;
+  }): StartResult {
+    const refused = this.admit(request.sessionId);
+    if (refused) return refused;
+    return this.launch(request.sessionId, true, (requestId, entry) => new TerminalPromptSession({
+      requestId, step: request.step, timeoutMs: timeoutMs(undefined),
+      remoteInput: this.deps.remoteInputAvailable(), answer: request.answer,
+      publish: snapshot => this.publish(entry, snapshot),
+      finish: result => this.finish(entry, result),
+    }));
   }
 
   private admit(sessionId: string): Extract<StartResult, { ok: false }> | null {

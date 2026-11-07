@@ -2,13 +2,15 @@ import { manageAppPreferences } from './preferences.js';
 import { isModelVisible } from '@cindy/model-providers';
 import type { AppModelsRequest } from '@cindy/mcps';
 import type { registerProviderHandlers } from '../maker-ipc/providerHandlers.js';
+import { manageProviderConnection, type RequestProviderSecret } from './connections.js';
 
 type Actions = ReturnType<typeof registerProviderHandlers>;
 let actions: Actions | undefined;
 export function configureModelSettingsActions(value: Actions): void { actions = value; }
 
 /** These are shared domain operations. IPC still performs its sender checks separately. */
-export async function manageAppModels(input: AppModelsRequest, assertCurrent: () => Promise<void>) {
+export async function manageAppModels(input: AppModelsRequest, assertCurrent: () => Promise<void>,
+  requestSecret: RequestProviderSecret = async () => { throw new Error('SECRET_INPUT_UNAVAILABLE'); }) {
   if (!actions) throw new Error('MODEL_SETTINGS_NOT_READY');
   const api = actions;
   await assertCurrent();
@@ -19,6 +21,7 @@ export async function manageAppModels(input: AppModelsRequest, assertCurrent: ()
     if (current.dataOwnerId !== owner.dataOwnerId || current.ownerGeneration !== owner.ownerGeneration)
       throw new Error('OWNER_SCOPE_CHANGED');
   };
+  if (input.operation === 'connection') return { scope: 'local', ...await manageProviderConnection(input.change, api.connections, guard, requestSecret) };
   if (input.operation === 'get') {
     const [context, imageInput, price] = await Promise.all([
       api.getContext(input.target), api.getImageInput(input.target), api.getPrice(input.target),

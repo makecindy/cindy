@@ -2190,6 +2190,7 @@ export function registerProviderHandlers(
     input: unknown,
     keyInput?: unknown,
     optionsInput?: unknown,
+    assertActionCurrent?: () => Promise<void>,
   ): Promise<CustomProviderUpdateResult> {
     assertTrustedProviderMutationSender(event);
     const v = validateCustomProviderConfig(input);
@@ -2221,6 +2222,8 @@ export function registerProviderHandlers(
       separated.config = sanitizeModelSources(separated.config, null, keys, separated.headers);
       const targetCodexConfigSignature =
         deps.codexCustomProviderConfigSignature?.(separated.config) ?? '';
+      if (assertActionCurrent) await assertActionCurrent();
+      assertProviderMutationOwner(ownerAtIngress);
       const preparation = await prepareCodexCustomProviderChange(
         targetCodexConfigSignature.length > 0,
         options,
@@ -2229,6 +2232,8 @@ export function registerProviderHandlers(
       if (preparation.confirmation) return preparation.confirmation;
       codexHostPrepared = preparation.prepared;
       try {
+        if (assertActionCurrent) await assertActionCurrent();
+        assertProviderMutationOwner(ownerAtIngress);
         const credentialSnapshots = stageProviderCredentials(
           config.id,
           planProviderKeyMutations(config, keys, 'create'),
@@ -2259,7 +2264,8 @@ export function registerProviderHandlers(
       }
     });
   }
-  registry.handle(MAKER_INVOKE.PROVIDER_CUSTOM_CREATE, createProviderFromInput);
+  registry.handle(MAKER_INVOKE.PROVIDER_CUSTOM_CREATE, (event, input, keys, options) =>
+    createProviderFromInput(event, input, keys, options));
   mainProcessProviderCreate = (input, keys) => createProviderFromInput(MAIN_PROCESS_SENDER, input, keys);
 
   /** Credential identity changes invalidate labels before an optional re-discovery. */
@@ -2285,6 +2291,7 @@ export function registerProviderHandlers(
     keyInput?: unknown,
     optionsInput?: unknown,
     resolveLatest?: (current: CustomProviderConfig) => CustomProviderConfig,
+    assertActionCurrent?: () => Promise<void>,
   ): Promise<CustomProviderUpdateResult> {
     assertTrustedProviderMutationSender(event);
     const v = validateCustomProviderConfig(input, { allowLegacyXai: true });
@@ -2383,6 +2390,8 @@ export function registerProviderHandlers(
           previousCodexConfigSignature !== targetCodexConfigSignature ||
           (codexCredentialGenerationChanged &&
             (previousCodexConfigSignature.length > 0 || targetCodexConfigSignature.length > 0));
+        if (assertActionCurrent) await assertActionCurrent();
+        assertProviderMutationOwner(ownerAtIngress);
         const preparation = await prepareCodexCustomProviderChange(
           codexHostChangeRequired,
           options,
@@ -2390,6 +2399,8 @@ export function registerProviderHandlers(
         );
         if (preparation.confirmation) return preparation.confirmation;
         codexHostPrepared = preparation.prepared;
+        if (assertActionCurrent) await assertActionCurrent();
+        assertProviderMutationOwner(ownerAtIngress);
         const credentialSnapshots = stageProviderCredentials(
           config.id,
           keyMutations,
@@ -2458,7 +2469,8 @@ export function registerProviderHandlers(
     updateProviderFromInput(event, input, keys, options),
   );
 
-  registry.handle(MAKER_INVOKE.PROVIDER_CUSTOM_DELETE, async (event, providerId: unknown, ownerScope?: unknown, optionsInput?: unknown) => {
+  const deleteProviderFromInput = async (event: unknown, providerId: unknown, ownerScope?: unknown, optionsInput?: unknown,
+    assertActionCurrent?: () => Promise<void>, expectedConfig?: CustomProviderConfig): Promise<CustomProviderUpdateResult> => {
     assertTrustedProviderMutationSender(event);
     assertOptionalRequestedOwner(ownerScope);
     const options = parseCustomProviderUpdateOptions(optionsInput);
@@ -2477,6 +2489,10 @@ export function registerProviderHandlers(
       assertProviderMutationOwner(ownerAtIngress);
       const previous = await getCustomProvider(providerId);
       assertProviderMutationOwner(ownerAtIngress);
+      if (expectedConfig && JSON.stringify(previous) !== JSON.stringify(expectedConfig))
+        throwIpcError('PRECONDITION_FAILED', 'Connection changed');
+      if (assertActionCurrent) await assertActionCurrent();
+      assertProviderMutationOwner(ownerAtIngress);
       const codexHostChangeRequired = Boolean(
         previous && (deps.codexCustomProviderConfigSignature?.(previous) ?? '').length > 0,
       );
@@ -2489,6 +2505,8 @@ export function registerProviderHandlers(
       codexHostPrepared = preparation.prepared;
       const generation = beginOAuthMutation(providerId);
       try {
+        if (assertActionCurrent) await assertActionCurrent();
+        assertProviderMutationOwner(ownerAtIngress);
         if (previous?.auth?.native === 'codex') {
           await deps.retireCodexAccount?.(providerId);
           assertProviderMutationOwner(ownerAtIngress);
@@ -2511,6 +2529,7 @@ export function registerProviderHandlers(
           // 清理与恢复都直接调用。
           await enqueueDisableWrite(async () => {
             // 进入 disable 全局队列后可能再次换号；以下会写 owner-scoped override/OAuth blob。
+            if (assertActionCurrent) await assertActionCurrent();
             assertProviderMutationOwner(ownerAtIngress);
             const credentialSnapshots = stageProviderCredentials(
               providerId,
@@ -2592,7 +2611,9 @@ export function registerProviderHandlers(
         finishOAuthMutation(providerId, generation);
       }
     });
-  });
+  };
+  registry.handle(MAKER_INVOKE.PROVIDER_CUSTOM_DELETE, (event, providerId, ownerScope, options) =>
+    deleteProviderFromInput(event, providerId, ownerScope, options));
 
   // 只读：目录 presets 段（创建对话框「从模板创建」消费）。
   registry.handle(
@@ -2682,7 +2703,7 @@ export function registerProviderHandlers(
     }
   });
 
-  registry.handle(MAKER_INVOKE.PROVIDER_MODELS_FETCH, async (event, input: unknown) => {
+  const fetchModelsFromInput = async (event: unknown, input: unknown): Promise<ProviderModelsFetchResult> => {
     // 这条查询会把 renderer 提供的 API key / 自定义 headers 带到目标 endpoint；
     // 与重新发现一样，必须先确认调用方是 Cindy 自有顶层页面，避免 WebView / 子 frame
     // 把 Main 变成可向任意 http(s) 地址发凭证请求的代理。
@@ -2746,7 +2767,8 @@ export function registerProviderHandlers(
     if (!current() || (id && providerConfigMutationCounts.has(id))) return { ok: false, code: 'UNKNOWN', detail: 'model discovery context changed' };
     bindModelSourceSnapshot(result.models, id ?? undefined, current);
     return result;
-  });
+  };
+  registry.handle(MAKER_INVOKE.PROVIDER_MODELS_FETCH, fetchModelsFromInput);
 
   // 本机 CLI 扫描：查询型；任何失败降级空数组（检测建议是增强,不是功能依赖,
   // renderer 空列表即不显示建议区,规则 13 例外条款）。
@@ -3038,6 +3060,38 @@ export function registerProviderHandlers(
   );
   return { list: modelSettingsList, presentation: modelSettingsPresentation, order: modelSettingsOrder, visibility: modelSettingsVisibility, getPrice: modelSettingsGetPrice, setPrice: modelSettingsSetPrice, resetPrice: modelSettingsResetPrice, getImageInput: modelSettingsGetImageInput, setImageInput: modelSettingsSetImageInput, getContext: modelSettingsGetContext, setCompaction: modelSettingsSetCompaction, setContext: modelSettingsSetContext, resetContext: modelSettingsResetContext, rediscover: modelSettingsRediscover,
     owner: () => { const owner = captureProviderOwnerSession(); return { dataOwnerId: owner?.dataOwnerId ?? null, ownerGeneration: owner?.generation ?? 0 }; },
+    connections: {
+      presets: () => deps.listPresets(),
+      get: (id: string) => getCustomProvider(storedCustomProviderId(id)),
+      // Check before asking for a secret; the transaction rechecks after queueing.
+      checkHostChange: (next: CustomProviderConfig | null, previous: CustomProviderConfig | null, keysChanged = false) => {
+        const before = previous ? deps.codexCustomProviderConfigSignature?.(previous) ?? '' : '';
+        const after = next ? deps.codexCustomProviderConfigSignature?.(next) ?? '' : '';
+        return (before !== after || (keysChanged && !!(before || after)))
+          ? deps.listBusyLocalCodexSessionIds?.().length ?? 0 : 0;
+      },
+      create: (config: CustomProviderConfig, keys: RuntimeKeys, guard: () => Promise<void>, interrupt = false) =>
+        createProviderFromInput(MAIN_PROCESS_SENDER, config, keys,
+          { source: 'manual-settings', ...(interrupt ? { codexImageGenerationRestartPolicy: 'interrupt' } : {}) }, guard),
+      update: (config: CustomProviderConfig, keys: RuntimeKeys, guard: () => Promise<void>,
+        resolveLatest: (current: CustomProviderConfig) => CustomProviderConfig, interrupt = false) =>
+        updateProviderFromInput(MAIN_PROCESS_SENDER, config, keys,
+          { source: 'manual-settings', ...(interrupt ? { codexImageGenerationRestartPolicy: 'interrupt' } : {}) }, resolveLatest, guard),
+      remove: (config: CustomProviderConfig, guard: () => Promise<void>, interrupt = false) =>
+        deleteProviderFromInput(MAIN_PROCESS_SENDER, config.id, undefined,
+          { source: 'manual-settings', ...(interrupt ? { codexImageGenerationRestartPolicy: 'interrupt' } : {}) }, guard, config),
+      async fetch(config: CustomProviderConfig, agent: AgentKind) {
+        const runtime = config.runtimes[agent];
+        if (!runtime) throwIpcError('INVALID_PARAMS', 'runtime unavailable');
+        const key = deps.readCustomProviderKeyForMutation(config.id, agent);
+        if (typeof key === 'symbol') throwIpcError('PRECONDITION_FAILED', 'credential unavailable');
+        return fetchModelsFromInput(MAIN_PROCESS_SENDER, {
+          agent, savedProviderId: config.id, baseUrl: runtime.baseUrl, modelsUrl: runtime.modelsUrl,
+          wireProtocol: runtime.wireProtocol, authMethod: config.auth?.method ?? 'apiKey', apiKey: key,
+        });
+      },
+      test: (providerId: string, agent: AgentKind) => deps.testConnection({ kind: 'saved', providerId, agent }),
+    },
   };
 
 }

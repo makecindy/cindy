@@ -52,6 +52,23 @@ function harness() {
 }
 
 describe('terminal prompt handoff', () => {
+  // Unit: host credentials must use the existing sealed submission/holder flow,
+  // even without a desktop driver. Terminal-only coverage did not exercise this entry.
+  it('delivers a host API key only to Main, with origin and no fake terminal command', async () => {
+    const h = harness();
+    h.service.startHostSecretPrompt({ sessionId: 'task', step: {
+      purpose: 'Example API key', source: { app: 'Cindy', origin: 'https://example.test' },
+      controls: [{ id: 'answer', kind: 'text', label: 'API key', contentType: 'password' }],
+    }, answer: value => h.answers.push(value) });
+    const snapshot = h.latest();
+    expect(snapshot).toMatchObject({ remoteInput: true, source: { app: 'Cindy', origin: 'https://example.test' } });
+    expect(snapshot.command).toBeUndefined();
+    const submission = { expectedRevision: snapshot.revision, values: { answer: 'synthetic-api-key' }, action: { kind: 'submit' as const } };
+    expect(await h.service.submit(snapshot.requestId, submission, { deviceId: 'phone-1' })).toBe(true);
+    expect(h.answers).toEqual(['synthetic-api-key']);
+    expect(JSON.stringify(h.snapshots)).not.toContain('synthetic-api-key');
+    expect(h.continued).toEqual([]);
+  });
   it('gives the typed answer to the program only, and the agent gets no message', async () => {
     const h = harness();
     const started = h.ask();

@@ -2,6 +2,7 @@ import { getPiKernelManager } from '../agent-binaries/index.js';
 import { PiKernelError } from '../agent-binaries/pi-kernel-manager.js';
 import { manageAppSettings } from '../app-settings/sections.js';
 import { manageAppModels } from '../app-settings/models.js';
+import { classifyOrigin } from '../input-handoff/originPolicy.js';
 import { captureBotSettingsAccess } from '../maker-ipc/botCapabilityService.js';
 import { inspectAppDefaultModel, changeAppDefaultModel } from '../maker-ipc/appDefaultModelControl.js';
 import { hostname } from 'node:os';
@@ -1387,10 +1388,29 @@ export function createDesktopMcpProviders(deps: DesktopMcpProvidersDeps): LiziMc
           const botGuard = surface === 'bot' || surface === 'bot-main'
             ? await captureBotSettingsAccess(callerSessionId)
             : undefined;
-          return manageAppModels(input, async () => {
+          const guard = async () => {
             await assertCurrent();
             if (botGuard) await botGuard();
-            if (input.operation === 'set' || input.operation === 'provider') await assertTaskActionCurrent();
+            if (input.operation === 'set' || input.operation === 'provider' || input.operation === 'connection') await assertTaskActionCurrent();
+          };
+          return manageAppModels(input, guard, async (name, endpoints) => {
+            await guard();
+            if (await isInputHandoffDisabledForSession(callerSessionId)) throw new Error('DISABLED_BY_OWNER');
+            await guard();
+            const service = getInputHandoffService();
+            if (!service) throw new Error('SECRET_INPUT_UNAVAILABLE');
+            return new Promise<string | null>((resolve, reject) => {
+              const started = service.startHostSecretPrompt({
+                sessionId: callerSessionId,
+                step: {
+                  purpose: `${name.slice(0, 128)} · API key${endpoints[1] ? ` · ${new URL(endpoints[1]).origin}` : ''}`,
+                  source: { app: 'Cindy', ...classifyOrigin(endpoints[0], true) },
+                  controls: [{ id: 'answer', kind: 'text', label: 'API key', contentType: 'password' }],
+                },
+                answer: resolve,
+              });
+              if (!started.ok) reject(new Error(started.errorCode));
+            });
           });
         }),
       },

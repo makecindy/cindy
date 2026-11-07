@@ -1515,7 +1515,7 @@ it('discovers native app settings in all three harnesses and rejects invalid or 
       const overview = parsePayload(await client.callTool({ name: 'list_tools', arguments: {} }));
       expect(overview.categories).toEqual(expect.arrayContaining([expect.objectContaining({ name: 'settings' })]));
       const catalog = parsePayload(await client.callTool({ name: 'list_tools', arguments: { category: 'settings' } }));
-      expect(catalog.tools).toEqual(expect.arrayContaining(['list_app_settings', 'get_app_default_model', 'list_model_providers', 'set_model_configuration']
+      expect(catalog.tools).toEqual(expect.arrayContaining(['list_app_settings', 'get_app_default_model', 'list_model_providers', 'set_model_configuration', 'configure_model_connection']
         .map(name => expect.objectContaining({ name }))));
       const call = (name: string, args = {}) => client.callTool({ name: 'call_tool', arguments: { name, args } });
       expect(parsePayload(await call('get_app_default_model'))).toMatchObject({ ok: true, available: [] });
@@ -1525,7 +1525,20 @@ it('discovers native app settings in all three harnesses and rejects invalid or 
         change: { setting: 'contextLimit', value: -1 } });
       expect(invalid.isError).toBe(true);
       expect(models).not.toHaveBeenCalled();
+      for (const change of [
+        { action: 'setKey', providerId: 'example', agent: 'pi', apiKey: 'synthetic-secret' },
+        { action: 'create', name: 'Example', runtimes: { pi: { baseUrl: 'https://example.test/?token=synthetic-secret', wireProtocol: 'openai-chat', models: [] } } },
+        { action: 'create', name: 'Example', runtimes: { pi: { baseUrl: 'not-a-url', wireProtocol: 'openai-chat', models: [] } } },
+      ]) expect((await call('configure_model_connection', { change })).isError).toBe(true);
+      if (agentKind === 'codex') expect(parsePayload(await call('configure_model_connection', { change: {
+        action: 'setKey', providerId: 'example', agent: 'codex', interruptCodex: true,
+      } }))).toMatchObject({ ok: false, errorCode: 'CODEX_CALLER_WOULD_STOP' });
+      expect(models).not.toHaveBeenCalled();
+      await call('configure_model_connection', { change: { action: 'presets' } });
+      expect(models).toHaveBeenCalledExactlyOnceWith({ callerSessionId: 'settings-owner', operation: 'connection', change: { action: 'presets' } });
       restricted = true;
+      expect(parsePayload(await call('configure_model_connection', { change: { action: 'presets' } })).ok).toBe(false);
+      expect(models).toHaveBeenCalledTimes(1);
       expect(parsePayload(await call('update_app_settings', { section: 'appearance', patch: { uiSize: 17 } })).ok).toBe(false);
       expect(settings).toHaveBeenCalledTimes(1);
     } finally { await client.close(); await server.close(); }

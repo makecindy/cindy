@@ -68,9 +68,11 @@ export function buildTerminalPromptStep(rawPrompt: string, program: TerminalProg
 
 export interface TerminalPromptSessionOptions {
   requestId: string;
-  prompt: string;
-  program: TerminalProgram;
-  command: string;
+  prompt?: string;
+  program?: TerminalProgram;
+  command?: string;
+  /** Host-owned credential forms use the same sealed input and holder lifecycle. */
+  step?: TerminalPromptStep;
   requester?: string;
   timeoutMs: number;
   remoteInput: boolean;
@@ -97,7 +99,7 @@ export class TerminalPromptSession {
   private readonly step: TerminalPromptStep;
 
   constructor(private readonly options: TerminalPromptSessionOptions) {
-    this.step = buildTerminalPromptStep(options.prompt, options.program);
+    this.step = options.step ?? buildTerminalPromptStep(options.prompt ?? '', options.program ?? 'sudo');
   }
 
   get requestId(): string {
@@ -113,7 +115,7 @@ export class TerminalPromptSession {
       purpose: this.step.purpose,
       ...(this.holder ? { holder: { ...this.holder } } : {}),
       ...(this.options.requester ? { requester: this.options.requester } : {}),
-      command: this.options.command,
+      ...(this.options.command ? { command: this.options.command } : {}),
       source: this.step.source,
       stepNumber: 1,
       controls: this.phase === 'ready' ? this.step.controls : [],
@@ -217,7 +219,7 @@ export class TerminalPromptSession {
       reason,
       steps: status === 'succeeded' ? 1 : 0,
       ...(failure ? { failure } : {}),
-      finalApp: this.options.program,
+      finalApp: this.step.source.app,
       ...(this.step.source.origin ? { finalOrigin: this.step.source.origin } : {}),
       ...(this.answeredOn ? { answeredOn: { ...this.answeredOn } } : {}),
     });
