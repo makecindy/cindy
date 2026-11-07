@@ -40,18 +40,16 @@ const {
     mediaReady: false,
     customOverride: null as ProviderView | null,
     loading: false,
-    error: null as { reason: 'storage-quota' } | null,
+    error: null as { reason: 'storage-quota' | 'catalog-unavailable' } | null,
   },
   wizardSpy: vi.fn(),
 }));
 
-vi.mock('react-i18next', () => ({
-  useTranslation: () => ({
-    t: (key: string, options?: { count?: number }) =>
-      key === 'settings.providers.models.manage.selected' ? `${key}:${options?.count}` : key,
-    i18n: { language: 'zh-CN' },
-  }),
-}));
+vi.mock('react-i18next', () => {
+  const t = (key: string, options?: { count?: number }) =>
+    key === 'settings.providers.models.manage.selected' ? `${key}:${options?.count}` : key;
+  return { useTranslation: () => ({ t, i18n: { language: 'zh-CN' } }) };
+});
 
 vi.mock('@/hooks/useProviders', () => ({
   useProviders: () => {
@@ -184,6 +182,7 @@ vi.mock('@/lib/providerSubtitle', () => ({
 
 vi.mock('@/state/modelVisibilityPrefs', () => ({
   isModelEnabled: () => true,
+  isModelVisibilityCustomized: () => false,
   setModelVisibilities: vi.fn(),
   setModelVisibility: vi.fn(),
   useModelVisibilityVersion: () => 0,
@@ -235,6 +234,10 @@ beforeEach(() => {
       requestProviderModelsAutoRefresh: requestAutoRefreshSpy,
       setProviderOrder: setProviderOrderSpy,
       onProviderOAuthProgress: vi.fn(() => () => {}),
+      getModelPriceOverride: vi.fn(async (target: Parameters<typeof window.electronAPI.maker.getModelPriceOverride>[0]) => ({
+        target, editable: true, effective: null, reference: null, override: null,
+        conflict: false, allowedCurrencies: ['USD', 'CNY'], registryUpdatedAt: null,
+      })),
     },
   };
 });
@@ -245,6 +248,139 @@ afterEach(() => {
 });
 
 describe('ProvidersSection — 双栏管理', () => {
+  // #6601 review / #5090, unit: real ProvidersSection → list → drawer. Existing
+  // discovery tests only cover completed refreshes. One pending fetch/readback
+  // must block alias writes, keep the draft, then save against the refreshed config.
+  it.each(['success', 'failed'] as const)('keeps a name draft across a %s refresh readback', async (outcome) => {
+    // The successful read adds the same row under Pi, changing its primary
+    // engine without selecting another model. The old Codex-only input missed
+    // this draft-loss branch; reuse the existing unit case, no extra I/O/waits.
+    const initial = { id: 'refresh-rename', name: 'Relay', runtimes: {
+      codex: { baseUrl: 'https://relay.example.invalid/v1', models: [{ id: 'private', name: 'Private', extra: { keep: true } }] },
+      ...(outcome === 'success' ? { pi: { baseUrl: 'https://relay.example.invalid/v1', models: [] } } : {}),
+    } };
+    let stored: CustomProviderConfig = initial;
+    providerSnapshotState.customOverride = { ...buildUserProvider(stored), connected: true };
+    providerSnapshotState.order = [stored.id];
+    let finishFetch!: () => void;
+    let discoveryReady = false;
+    const discovery = { ok: true, models: [{ id: 'private', name: 'Discovered' }, { id: 'new', name: 'New' }] };
+    const fetchModels = vi.fn(() => discoveryReady ? Promise.resolve(discovery) : new Promise(resolve => {
+      finishFetch = () => { discoveryReady = true; resolve(discovery); };
+    }));
+    let finishReadback!: () => void;
+    const readback = new Promise<void>(resolve => { finishReadback = resolve; });
+    const persist = vi.fn(async (config: CustomProviderConfig) => { stored = structuredClone(config); return { ok: true as const }; });
+    Object.assign(window.electronAPI.maker, { fetchProviderModels: fetchModels, updateCustomProvider: persist, getModelContextLimit: async () => ({ limit: null, isCustomized: false }) });
+    const actual = await vi.importActual<typeof import('@/lib/customProviders')>('@/lib/customProviders');
+    vi.mocked(updateCustomProvider).mockImplementation(actual.updateCustomProvider);
+    const page = () => <MemoryRouter><ProvidersSection /></MemoryRouter>;
+    const view = render(page());
+    refetchProvidersSpy.mockImplementation(async () => {
+      await readback;
+      if (outcome === 'failed') {
+        providerSnapshotState.error = { reason: 'catalog-unavailable' };
+        view.rerender(page());
+        return false;
+      }
+      providerSnapshotState.customOverride = { ...buildUserProvider(stored), connected: true };
+      view.rerender(page());
+      return true;
+    });
+    try {
+      fireEvent.click(await screen.findByRole('button', { name: 'settings.providers.models.refreshAria' }));
+      await waitFor(() => expect(fetchModels).toHaveBeenCalledOnce());
+      fireEvent.click(screen.getByRole('button', { name: 'settings.providers.models.advanced.openAria' }));
+      const input = screen.getByRole('textbox', { name: 'settings.providers.models.advanced.displayName' }) as HTMLInputElement;
+      fireEvent.change(input, { target: { value: 'Work Alias' } });
+      const save = screen.getByRole('button', { name: 'settings.providers.models.advanced.saveName' }) as HTMLButtonElement;
+      expect(save.disabled).toBe(true);
+      fireEvent.click(save);
+      expect(persist).not.toHaveBeenCalled();
+      await act(async () => { finishFetch(); });
+      await waitFor(() => expect(refetchProvidersSpy).toHaveBeenCalledOnce());
+      expect(save.disabled).toBe(true);
+      expect(persist).toHaveBeenCalledOnce();
+      expect(fetchModels).toHaveBeenCalledTimes(Object.keys(initial.runtimes).length);
+      const refreshed = structuredClone(stored);
+      await act(async () => { finishReadback(); });
+      if (outcome === 'failed') {
+        expect(save.disabled).toBe(true);
+        fireEvent.click(save);
+        expect(persist).toHaveBeenCalledOnce();
+        expect(input.value).toBe('Work Alias');
+        refetchProvidersSpy.mockImplementation(async () => {
+          providerSnapshotState.error = null;
+          providerSnapshotState.customOverride = { ...buildUserProvider(stored), connected: true };
+          view.rerender(page());
+          return true;
+        });
+        await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'settings.providers.catalogRecovery.retry' })); });
+      }
+      expect(input.value).toBe('Work Alias');
+      await waitFor(() => expect(save.disabled).toBe(false));
+      fireEvent.click(save);
+      await waitFor(() => expect(persist).toHaveBeenCalledTimes(2));
+      const expected = structuredClone(refreshed);
+      for (const runtime of Object.values(expected.runtimes)) {
+        for (const model of runtime?.models ?? []) if (model.id === 'private') {
+          Object.assign(model, { name: 'Work Alias', nameExplicit: true });
+        }
+      }
+      expect(stored).toEqual(expected);
+      if (outcome === 'success') expect(stored.runtimes.pi!.models.find(model => model.id === 'private')).toMatchObject({ name: 'Work Alias', nameExplicit: true });
+      expect(stored.runtimes.codex!.models.map(model => model.id).sort()).toEqual(['new', 'private']);
+    } finally { finishReadback(); vi.mocked(updateCustomProvider).mockReset(); refetchProvidersSpy.mockReset(); }
+  });
+
+  // #6601 inverse-order review: unit, real provider -> list -> drawer. The
+  // name-save-first tests cannot expose a slow footer closing a later rename.
+  // One deferred admission IPC distinguishes success (close) from failure
+  // (retain the draft and permit retry), with no network or timed sleeps.
+  it.each(['success', 'failed'] as const)('serializes a %s footer request before a name save', async outcome => {
+    const config = { id: 'footer-rename', name: 'Relay', runtimes: { codex: {
+      baseUrl: 'https://relay.example.invalid/v1', models: [{ id: 'private', name: 'Private' }],
+    } } };
+    providerSnapshotState.customOverride = { ...buildUserProvider(config), connected: true };
+    providerSnapshotState.order = [config.id];
+    refetchProvidersSpy.mockResolvedValue(true);
+    let finish: (() => void) | undefined;
+    const toggle = vi.fn<typeof window.electronAPI.maker.setModelDisable>(() => new Promise<{ ok: true }>((resolve, reject) => {
+      finish = () => outcome === 'success' ? resolve({ ok: true }) : reject(new Error('admission failed'));
+    }));
+    window.electronAPI.maker.setModelDisable = toggle;
+    render(<MemoryRouter><ProvidersSection /></MemoryRouter>);
+    try {
+      fireEvent.click(await screen.findByRole('button', { name: 'settings.providers.models.advanced.openAria' }));
+      const input = screen.getByRole('textbox', { name: 'settings.providers.models.advanced.displayName' }) as HTMLInputElement;
+      fireEvent.change(input, { target: { value: 'Work Alias' } });
+      const save = screen.getByRole('button', { name: 'settings.providers.models.advanced.saveName' }) as HTMLButtonElement;
+      expect(save.disabled).toBe(false);
+      // A queued name click must also be blocked before React renders the lock.
+      act(() => {
+        fireEvent.click(screen.getByRole('button', { name: 'settings.providers.models.disableModel' }));
+        fireEvent.click(save);
+      });
+      expect(toggle).toHaveBeenCalledOnce();
+      expect(updateCustomProvider).not.toHaveBeenCalled();
+      expect(input.disabled).toBe(true);
+      expect(save.disabled).toBe(true);
+      await act(async () => { finish!(); });
+      if (outcome === 'success') {
+        await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
+        expect(updateCustomProvider).not.toHaveBeenCalled();
+      } else {
+        await waitFor(() => expect(save.disabled).toBe(false));
+        expect(input.value).toBe('Work Alias');
+        fireEvent.click(save);
+        await waitFor(() => expect(updateCustomProvider).toHaveBeenCalledOnce());
+        expect(vi.mocked(updateCustomProvider).mock.calls[0]![0]).toMatchObject({ runtimes: { codex: {
+          models: [{ id: 'private', name: 'Work Alias', nameExplicit: true }],
+        } } });
+      }
+    } finally { finish?.(); }
+  });
+
   // Renderer unit: click the real provider refresh/menu, inspect the persisted
   // config and visible dialog. Earlier refresh cases only used chat-only proxies;
   // a MiniMax API connection with no speech is the minimal missing-default case.

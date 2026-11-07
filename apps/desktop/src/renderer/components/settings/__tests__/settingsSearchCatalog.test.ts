@@ -46,6 +46,17 @@ const searchContext = { platform: 'win32', region: 'cn', mode: 'cloud', membersh
 } as const;
 
 describe('settings discoverability regressions', () => {
+  // #6601, configuration-and-overrides §6: unit, query the translated name
+  // field through the real index. Existing provider-title tests did not find
+  // per-model display-name editing; dynamic model values must not enter search.
+  it.each(['zh-CN', 'en'])('finds model display-name editing at its provider entry in %s', (lng) => {
+    const documents = buildSettingsSearchDocuments(searchI18n.getFixedT(lng), TAB_IDS, searchContext);
+    const query = searchI18n.t('settings.providers.models.advanced.displayName', { lng });
+    const result = searchSettings(documents, query).find(({ entry }) => entry.id === 'providers');
+    expect(result?.entry.tab).toBe('providers');
+    expect(result?.entry.targetId).toBe('settings-panel-providers');
+  });
+
   // Unit regression (#8481): automatic mode renders no slot explanations.
   // Existing catalog tests did not query those hidden descriptions.
   it('does not advertise custom-only auxiliary slot explanations', () => {

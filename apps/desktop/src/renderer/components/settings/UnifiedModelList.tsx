@@ -1502,6 +1502,7 @@ export function UnifiedModelList({
       </div>
       <ModelAdvancedDrawer
         provider={provider}
+        refreshing={refreshing}
         row={currentAdvancedRow}
         selectedMemberId={advancedRow?.id}
         onSelectMember={setAdvancedRow}

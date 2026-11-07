@@ -75,6 +75,8 @@ export const providersSettings = defineSettings({
     tab: 'providers',
     targetId: 'settings-panel-providers',
     titleKey: TAB_LABEL_KEY['providers'],
+    // Per-model controls use this entry; never index users' model names or IDs.
+    keywordKeys: ['settings.providers.models.advanced.displayName'],
     sectionKey: 'settings.sections.providers',
   },
   addProvider: {
