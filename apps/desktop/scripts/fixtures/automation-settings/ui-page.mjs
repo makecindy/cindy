@@ -21,6 +21,8 @@ export default {
       about:
         'Backend configuration fails twice, showing localized recovery inside the browser card',
     },
+    'my-browser-disconnected': { about: 'Disconnected extension is not presented as missing or requiring reinstall' },
+    'my-browser-probe-failed': { about: 'Probe failure does not show the extension store instruction' },
     'my-browser': {
       about: 'My browser selected while login copying is on; the login copy switch stays hidden',
     },
@@ -43,7 +45,7 @@ export default {
       name: await ui.t('settings.computerUse.realProfile.toggleAria'),
     });
     if (ui.case === 'default') await loginCopy.waitFor();
-    if (ui.case === 'my-browser') {
+    if (ui.case.startsWith('my-browser')) {
       await page
         .getByRole('radio', {
           name: await ui.t('settings.computerUse.browserBackend.userBrowser.title'),
@@ -51,6 +53,14 @@ export default {
         })
         .waitFor();
       assert.equal(await loginCopy.count(), 0);
+    }
+    if (ui.case === 'my-browser-disconnected') {
+      await page.getByText(await ui.t('settings.computerUse.browserBackend.userBrowserSetup.connectExtensionTitle'), { exact: true }).waitFor();
+      assert.ok(await page.getByRole('button', { name: await ui.t('settings.computerUse.browserBackend.userBrowserSetup.openExtensionStore') }).isVisible());
+    }
+    if (ui.case === 'my-browser-probe-failed') {
+      await page.getByRole('alert').waitFor();
+      assert.equal(await page.getByRole('button', { name: await ui.t('settings.computerUse.browserBackend.userBrowserSetup.openExtensionStore') }).count(), 0);
     }
     if (ui.case === 'error') {
       await page

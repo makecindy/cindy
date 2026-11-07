@@ -12,7 +12,7 @@
 import { additionalSettings } from './AdditionalSettings.settings-search';
 import { useSettingDefinition } from './useSettingDefinition';
 import { useTranslation } from 'react-i18next';
-import { AlertTriangle, CheckCircle2, Download, Puzzle, RefreshCw } from 'lucide-react';
+import { AlertTriangle, CheckCircle2, Puzzle, RefreshCw } from 'lucide-react';
 
 import { cn } from '@/lib/utils';
 import { SegmentedControl } from '@/components/ui/segmented-control';
@@ -173,21 +173,21 @@ export function BrowserBackendSubsection({
             {userBrowserHealth.reason === 'plugin-missing' ? (
               <Puzzle size={14} className="mt-0.5 shrink-0 text-[var(--settings-section-desc)]" />
             ) : (
-              <Download size={14} className="mt-0.5 shrink-0 text-[var(--settings-section-desc)]" />
+              <RefreshCw size={14} className="mt-0.5 shrink-0 text-[var(--settings-section-desc)]" />
             )}
             <div className="flex min-w-0 flex-col gap-0.5">
               <span className="font-medium text-[var(--settings-section-title)]">
                 {t(
                   userBrowserHealth.reason === 'plugin-missing'
                     ? PLUGIN_STEP_KEYS[userBrowserPluginState].title
-                    : 'settings.computerUse.browserBackend.userBrowserSetup.installExtensionTitle',
+                    : 'settings.computerUse.browserBackend.userBrowserSetup.connectExtensionTitle',
                 )}
               </span>
               <span className="text-[var(--settings-section-desc)]">
                 {t(
                   userBrowserHealth.reason === 'plugin-missing'
                     ? PLUGIN_STEP_KEYS[userBrowserPluginState].body
-                    : 'settings.computerUse.browserBackend.userBrowserSetup.extensionBody',
+                    : 'settings.computerUse.browserBackend.userBrowserSetup.connectionBody',
                 )}
               </span>
             </div>
@@ -204,7 +204,7 @@ export function BrowserBackendSubsection({
               {t(
                 userBrowserHealth.reason === 'plugin-missing'
                   ? PLUGIN_STEP_KEYS[userBrowserPluginState].action
-                  : 'settings.computerUse.browserBackend.userBrowserSetup.installExtension',
+                  : 'settings.computerUse.browserBackend.userBrowserSetup.openExtensionStore',
               )}
             </Button>
           ) : null}

@@ -81,13 +81,15 @@ void mountPage({
     browserBackend: {
       getState: async () => {
         if (ctx.case === 'error') throw new Error('Configuration unavailable');
-        return ctx.case === 'my-browser'
+        return ctx.case.startsWith('my-browser')
           ? { active: 'user-browser', useRealProfile: true }
           : { active: 'external', useRealProfile: false };
       },
       getHealth: async () => ({
-        active: ctx.case === 'my-browser' ? 'user-browser' : 'external',
-        status: 'ready',
+        active: ctx.case.startsWith('my-browser') ? 'user-browser' : 'external',
+        status: ctx.case === 'my-browser-disconnected' || ctx.case === 'my-browser-probe-failed' ? 'error' : 'ready',
+        reason: ctx.case === 'my-browser-disconnected' ? 'extension-disconnected'
+          : ctx.case === 'my-browser-probe-failed' ? 'status-failed' : undefined,
         canRecover: false,
       }),
     },
