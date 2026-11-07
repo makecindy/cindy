@@ -356,6 +356,7 @@ DB 中下一条输入的 armed 值为 false 不代表原生执行已退出 Plan�
 - `send({target,requestKey,text,context?,title?,autoTitle?,route?,permissionMode?,delivery?,attachments?})` 在指定项目中新建普通任务，或向指定普通任务/伙伴投递。
   新任务经现有 `PluginTaskService.create` 登记归属后使用 `createPluginTaskSession`，沿用插件模型选择、受限动手权限及卸载撤销流程，可传统一模型目录的 route，以及当前授权范围内的 permissionMode。
   存量任务和伙伴保留其模型、权限、目录，不接受 route 或 permissionMode；伙伴通过唯一 canonical 注册解析，不使用兼容镜像或伪造伙伴身份。
+  本机伙伴的 canonical 使用供应商分享运行 Agent 时，目标归属仍是本机；仅当前账号已收到且 active 的分享可进入 bot 候选，解析和实际派发重新复核。远端 Session、普通跨电脑 Agent 来源、隐藏／归档与歧义 canonical 仍拒绝；普通 task 的本机执行限制不变。
 - 同键并发发送共享同一 Promise。回执复用当前账号 SQLite 的 `plugin_task_requests`，以 `operation=target` 按插件和请求键读写单行；只保存请求摘要、Host 生成的 taskId/clientId、批准修订和状态，
   不保存正文、图片或插件固定配置。执行前原子预留回执；已接受请求可在重启后返回原结果，尚未确定的回执返回 DELIVERY_UNCERTAIN，
   不自动重派。幂等键按插件和 requestKey 隔离，不因插件升级或 Host 重启更换身份；同键修改目标、正文、附件或 delivery 返回 REQUEST_KEY_CONFLICT。
