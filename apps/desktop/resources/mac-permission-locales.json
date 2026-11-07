@@ -1,7 +1,7 @@
 {
   "en": {
-    "NSMicrophoneUsageDescription": "This app needs access to the microphone for voice input.",
-    "NSAudioCaptureUsageDescription": "Share computer audio with your connected remote desktop.",
+    "NSMicrophoneUsageDescription": "Cindy uses the microphone for voice input and screen recordings.",
+    "NSAudioCaptureUsageDescription": "Cindy captures computer audio for screen recordings and your connected remote desktop.",
     "NSDesktopFolderUsageDescription": "Cindy's AI agent needs access to read and write files on your Desktop.",
     "NSDocumentsFolderUsageDescription": "Cindy's AI agent needs access to read and write files in your Documents folder.",
     "NSDownloadsFolderUsageDescription": "Cindy's AI agent needs access to read and write files in your Downloads folder.",
@@ -10,8 +10,8 @@
     "NSLocalNetworkUsageDescription": "Cindy uses your local network to connect directly, with encryption, to your other devices signed in to the same account."
   },
   "zh-Hans": {
-    "NSMicrophoneUsageDescription": "Cindy 需要使用麦克风进行语音输入。",
-    "NSAudioCaptureUsageDescription": "将电脑声音分享给已连接的远程桌面。",
+    "NSMicrophoneUsageDescription": "Cindy 使用麦克风进行语音输入和屏幕录制。",
+    "NSAudioCaptureUsageDescription": "Cindy 采集电脑声音，用于屏幕录制和已连接的远程桌面。",
     "NSDesktopFolderUsageDescription": "Cindy 的 AI Agent 需要读取和写入你桌面上的文件。",
     "NSDocumentsFolderUsageDescription": "Cindy 的 AI Agent 需要读取和写入你文稿文件夹中的文件。",
     "NSDownloadsFolderUsageDescription": "Cindy 的 AI Agent 需要读取和写入你下载文件夹中的文件。",
@@ -20,8 +20,8 @@
     "NSLocalNetworkUsageDescription": "Cindy 使用局域网与同一账号下的其他设备直接建立加密连接。"
   },
   "zh-Hant": {
-    "NSMicrophoneUsageDescription": "Cindy 需要使用麥克風進行語音輸入。",
-    "NSAudioCaptureUsageDescription": "將電腦聲音分享給已連線的遠端桌面。",
+    "NSMicrophoneUsageDescription": "Cindy 使用麥克風進行語音輸入和螢幕錄製。",
+    "NSAudioCaptureUsageDescription": "Cindy 擷取電腦聲音，用於螢幕錄製和已連線的遠端桌面。",
     "NSDesktopFolderUsageDescription": "Cindy 的 AI Agent 需要讀取和寫入你桌面上的檔案。",
     "NSDocumentsFolderUsageDescription": "Cindy 的 AI Agent 需要讀取和寫入你文件檔案夾中的檔案。",
     "NSDownloadsFolderUsageDescription": "Cindy 的 AI Agent 需要讀取和寫入你下載項目檔案夾中的檔案。",
@@ -30,8 +30,8 @@
     "NSLocalNetworkUsageDescription": "Cindy 使用區域網路與同一帳號下的其他裝置直接建立加密連線。"
   },
   "ja": {
-    "NSMicrophoneUsageDescription": "Cindy は音声入力のためにマイクへのアクセスを必要とします。",
-    "NSAudioCaptureUsageDescription": "接続中のリモートデスクトップとコンピューターの音声を共有します。",
+    "NSMicrophoneUsageDescription": "Cindy は音声入力と画面録画にマイクを使用します。",
+    "NSAudioCaptureUsageDescription": "Cindy は画面録画と接続中のリモートデスクトップのためにコンピュータの音声を収録します。",
     "NSDesktopFolderUsageDescription": "Cindy の AI Agent がデスクトップ上のファイルを読み書きするためにアクセスを必要とします。",
     "NSDocumentsFolderUsageDescription": "Cindy の AI Agent が書類フォルダー内のファイルを読み書きするためにアクセスを必要とします。",
     "NSDownloadsFolderUsageDescription": "Cindy の AI Agent がダウンロードフォルダー内のファイルを読み書きするためにアクセスを必要とします。",
@@ -40,8 +40,8 @@
     "NSLocalNetworkUsageDescription": "Cindy はローカルネットワークを使用し、同じアカウントの他のデバイスと暗号化された接続で直接通信します。"
   },
   "ko": {
-    "NSMicrophoneUsageDescription": "Cindy가 음성 입력을 사용하려면 마이크 접근 권한이 필요합니다.",
-    "NSAudioCaptureUsageDescription": "연결된 원격 데스크톱과 컴퓨터 오디오를 공유합니다.",
+    "NSMicrophoneUsageDescription": "Cindy는 음성 입력과 화면 녹화에 마이크를 사용합니다.",
+    "NSAudioCaptureUsageDescription": "Cindy는 화면 녹화와 연결된 원격 데스크톱을 위해 컴퓨터 소리를 캡처합니다.",
     "NSDesktopFolderUsageDescription": "Cindy의 AI Agent가 데스크톱의 파일을 읽고 쓰려면 접근 권한이 필요합니다.",
     "NSDocumentsFolderUsageDescription": "Cindy의 AI Agent가 문서 폴더의 파일을 읽고 쓰려면 접근 권한이 필요합니다.",
     "NSDownloadsFolderUsageDescription": "Cindy의 AI Agent가 다운로드 폴더의 파일을 읽고 쓰려면 접근 권한이 필요합니다.",
@@ -50,8 +50,8 @@
     "NSLocalNetworkUsageDescription": "Cindy는 로컬 네트워크를 사용하여 같은 계정의 다른 기기와 암호화된 연결로 직접 통신합니다."
   },
   "es": {
-    "NSMicrophoneUsageDescription": "Cindy necesita acceso al micrófono para la entrada de voz.",
-    "NSAudioCaptureUsageDescription": "Comparte el audio del ordenador con el escritorio remoto conectado.",
+    "NSMicrophoneUsageDescription": "Cindy usa el micrófono para la entrada de voz y las grabaciones de pantalla.",
+    "NSAudioCaptureUsageDescription": "Cindy captura el audio del ordenador para las grabaciones de pantalla y el escritorio remoto conectado.",
     "NSDesktopFolderUsageDescription": "El Agent de IA de Cindy necesita acceso para leer y escribir archivos en tu Escritorio.",
     "NSDocumentsFolderUsageDescription": "El Agent de IA de Cindy necesita acceso para leer y escribir archivos en tu carpeta Documentos.",
     "NSDownloadsFolderUsageDescription": "El Agent de IA de Cindy necesita acceso para leer y escribir archivos en tu carpeta Descargas.",
@@ -60,8 +60,8 @@
     "NSLocalNetworkUsageDescription": "Cindy usa tu red local para conectarse directamente, con cifrado, a tus otros dispositivos con la misma cuenta."
   },
   "fr": {
-    "NSMicrophoneUsageDescription": "Cindy a besoin d’accéder au microphone pour la saisie vocale.",
-    "NSAudioCaptureUsageDescription": "Partagez le son de l’ordinateur avec le bureau à distance connecté.",
+    "NSMicrophoneUsageDescription": "Cindy utilise le microphone pour la saisie vocale et les enregistrements d’écran.",
+    "NSAudioCaptureUsageDescription": "Cindy capture le son de l’ordinateur pour les enregistrements d’écran et le bureau à distance connecté.",
     "NSDesktopFolderUsageDescription": "L’Agent IA de Cindy a besoin d’un accès pour lire et écrire des fichiers sur votre Bureau.",
     "NSDocumentsFolderUsageDescription": "L’Agent IA de Cindy a besoin d’un accès pour lire et écrire des fichiers dans votre dossier Documents.",
     "NSDownloadsFolderUsageDescription": "L’Agent IA de Cindy a besoin d’un accès pour lire et écrire des fichiers dans votre dossier Téléchargements.",
@@ -70,8 +70,8 @@
     "NSLocalNetworkUsageDescription": "Cindy utilise votre réseau local pour se connecter directement, de façon chiffrée, à vos autres appareils utilisant le même compte."
   },
   "de": {
-    "NSMicrophoneUsageDescription": "Cindy benötigt Zugriff auf das Mikrofon für die Spracheingabe.",
-    "NSAudioCaptureUsageDescription": "Teile den Computerton mit dem verbundenen Remote-Desktop.",
+    "NSMicrophoneUsageDescription": "Cindy verwendet das Mikrofon für Spracheingaben und Bildschirmaufnahmen.",
+    "NSAudioCaptureUsageDescription": "Cindy erfasst den Computerton für Bildschirmaufnahmen und den verbundenen Remote-Desktop.",
     "NSDesktopFolderUsageDescription": "Cindys KI-Agent benötigt Zugriff, um Dateien auf deinem Schreibtisch zu lesen und zu schreiben.",
     "NSDocumentsFolderUsageDescription": "Cindys KI-Agent benötigt Zugriff, um Dateien in deinem Ordner Dokumente zu lesen und zu schreiben.",
     "NSDownloadsFolderUsageDescription": "Cindys KI-Agent benötigt Zugriff, um Dateien in deinem Ordner Downloads zu lesen und zu schreiben.",
@@ -80,8 +80,8 @@
     "NSLocalNetworkUsageDescription": "Cindy nutzt dein lokales Netzwerk, um sich verschlüsselt und direkt mit deinen anderen Geräten mit demselben Konto zu verbinden."
   },
   "pt-PT": {
-    "NSMicrophoneUsageDescription": "O Cindy precisa de acesso ao microfone para a introdução por voz.",
-    "NSAudioCaptureUsageDescription": "Partilhe o áudio do computador com o ambiente de trabalho remoto ligado.",
+    "NSMicrophoneUsageDescription": "O Cindy utiliza o microfone para a introdução por voz e gravações de ecrã.",
+    "NSAudioCaptureUsageDescription": "O Cindy capta o áudio do computador para gravações de ecrã e para o ambiente de trabalho remoto ligado.",
     "NSDesktopFolderUsageDescription": "O Agent de IA do Cindy precisa de acesso para ler e escrever ficheiros na sua Secretária.",
     "NSDocumentsFolderUsageDescription": "O Agent de IA do Cindy precisa de acesso para ler e escrever ficheiros na pasta Documentos.",
     "NSDownloadsFolderUsageDescription": "O Agent de IA do Cindy precisa de acesso para ler e escrever ficheiros na pasta Descargas.",
@@ -90,8 +90,8 @@
     "NSLocalNetworkUsageDescription": "O Cindy utiliza a rede local para se ligar diretamente, com encriptação, aos seus outros dispositivos com a mesma conta."
   },
   "pt-BR": {
-    "NSMicrophoneUsageDescription": "O Cindy precisa de acesso ao microfone para a entrada por voz.",
-    "NSAudioCaptureUsageDescription": "Compartilhe o áudio do computador com a área de trabalho remota conectada.",
+    "NSMicrophoneUsageDescription": "O Cindy usa o microfone para a entrada por voz e gravações de tela.",
+    "NSAudioCaptureUsageDescription": "O Cindy captura o áudio do computador para gravações de tela e para a área de trabalho remota conectada.",
     "NSDesktopFolderUsageDescription": "O Agent de IA do Cindy precisa de acesso para ler e gravar arquivos na sua Mesa.",
     "NSDocumentsFolderUsageDescription": "O Agent de IA do Cindy precisa de acesso para ler e gravar arquivos na pasta Documentos.",
     "NSDownloadsFolderUsageDescription": "O Agent de IA do Cindy precisa de acesso para ler e gravar arquivos na pasta Downloads.",

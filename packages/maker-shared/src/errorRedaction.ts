@@ -85,6 +85,8 @@ export interface NonSecretErrorSignals {
 }
 
 const DETERMINISTIC_USAGE_EXHAUSTION_PATTERNS = [
+  // #8705: LiteLLM may retain only the structured error type in the message.
+  /\binsufficient_balance_error\b/i,
   /\binsufficient[-_ ]?quota\b/i,
   /\binsufficient.{0,12}\b(?:balance|credit|funds)\b/i,
   /\bquota\b.{0,24}\b(?:exhausted|exceeded)\b/i,
@@ -278,7 +280,11 @@ const AGENT_CHAT_ERROR_CODES: ReadonlySet<string> = new Set([
  * promote their upstream fallback text into localized user-facing guidance.
  */
 export function parseAgentErrorCode(message: string): { code: string; fallback: string } | null {
-  const match = /(?:^|: Error: )(?:\[IPC_ERROR\]\s*)?\[([A-Z0-9_]+)\]\s*([\s\S]*)$/.exec(message);
+  // Host send failures wrap the original startup error in a stable
+  // `LAZY_CREATE_FAILED:` envelope. Keep accepting that wrapper here so the
+  // renderer can still select the actionable remote-provider guidance instead
+  // of collapsing the whole failure to the generic "reply failed" card.
+  const match = /(?:^|: Error: )(?:\[IPC_ERROR\]\s*)?(?:LAZY_CREATE_FAILED:\s*)?\[([A-Z0-9_]+)\]\s*([\s\S]*)$/.exec(message);
   if (!match || (!/^REMOTE_[A-Z_]+$/.test(match[1]) && !AGENT_CHAT_ERROR_CODES.has(match[1]))) {
     return null;
   }

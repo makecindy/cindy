@@ -5,6 +5,7 @@ import {
   createPresenceFreshnessTracker,
   deviceMirrorCleanupDisposition,
   markPresenceFresh,
+  mergeDeviceViewsForStaleDirectory,
   mergeDeviceViewsWithFreshPresence,
   patchDeviceViewsWithPresence,
 } from '@/device-link/presenceDevices';
@@ -238,5 +239,26 @@ describe('mergeDeviceViewsWithFreshPresence', () => {
     const merged = mergeDeviceViewsWithFreshPresence(serverDevices, [], new Set(['dev-1']));
 
     expect(merged[0]).toMatchObject({ deviceId: 'dev-1', online: true, remoteControlEnabled: true });
+  });
+
+  /**
+   * 测试价值
+   * - 生产入口与可观察结果：mergeDeviceViewsForStaleDirectory；首页在 stale 目录缺设备时仍保留当前行。
+   * - 规则依据：目录快照是有界回退，不能证明设备已移除（provider-groups / remote-and-mobile）。
+   * - 现有覆盖缺口：fresh presence 合并用例只覆盖“请求飞行期间的 presence”，未覆盖 stale 目录缺席设备。
+   * - 最小失败输入：server 只有 dev-1，current 还有 dev-gone，stale 合并后仍应有 dev-gone。
+   * - tier：unit（纯函数，jsdom 无关）。
+   */
+  it('keeps a current device that a bounded stale roster omits', () => {
+    const serverDevices = [device({ deviceId: 'dev-1', online: false })];
+    const currentDevices = [
+      device({ deviceId: 'dev-1', online: true, remoteControlEnabled: true }),
+      device({ deviceId: 'dev-gone', online: true, remoteControlEnabled: true }),
+    ];
+
+    const merged = mergeDeviceViewsForStaleDirectory(serverDevices, currentDevices);
+
+    expect(merged.map(item => item.deviceId)).toEqual(['dev-1', 'dev-gone']);
+    expect(merged[0].online).toBe(true);
   });
 });

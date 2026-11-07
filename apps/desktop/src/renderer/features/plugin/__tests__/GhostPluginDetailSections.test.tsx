@@ -49,6 +49,12 @@ vi.mock('@/contexts/AuthContext', () => ({
   useOptionalDataOwnerGeneration: () => ownerGeneration.value,
 }));
 
+// 本文件只测详情页其它区块;介绍区带着完整 Markdown 渲染器(会初始化真实 i18n),另有专门测试。
+vi.mock('../PluginReadmeSection', () => ({
+  PluginReadmeSection: () => null,
+  usePluginReadme: () => null,
+}));
+
 vi.mock('react-i18next', () => ({
   useTranslation: () => ({
     t: (key: string, options?: Record<string, unknown>) => {
@@ -470,6 +476,20 @@ describe('Ghost plugin detail sections', () => {
     expect(requestTaskApproval).toHaveBeenCalledWith(detail.id, 'observe');
     rerender(view(true));
     expect(screen.queryByRole('button', { name: 'settings.ghosts.perm.agentObserveRequest' })).toBeNull();
+  });
+  // unit: a declined first-use companions prompt is not retried by the plugin; this Host button is the only re-approval path.
+  it('offers a separate companions permission retry that requests only companions', () => {
+    vi.stubGlobal('ResizeObserver', class { observe() {} unobserve() {} disconnect() {} });
+    const requestTaskApproval = vi.fn(async () => ({ granted: false }));
+    Object.assign(window.electronAPI, { ghosts: { requestTaskApproval } });
+    const ghost = { manifest: { agent: { companions: true } }, enabled: true } as InstalledGhost;
+    const view = (approved = false) => <GhostPluginDetailView ghost={{ ...ghost, ...(approved ? { companionsCapabilityApproved: true as const } : {}) }} detail={detail} panelStatus="Docked" onBack={vi.fn()} onToggle={vi.fn()} onUse={vi.fn()} onUpdate={vi.fn()} onUpdateFromFile={vi.fn()} onUninstall={vi.fn()} toggleDisabled={false} />;
+    const { rerender } = render(view());
+    expect(screen.queryByRole('button', { name: 'settings.ghosts.perm.agentObserveRequest' })).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: 'settings.ghosts.perm.agentCompanionsRequest' }));
+    expect(requestTaskApproval).toHaveBeenCalledWith(detail.id, 'companions');
+    rerender(view(true));
+    expect(screen.queryByRole('button', { name: 'settings.ghosts.perm.agentCompanionsRequest' })).toBeNull();
   });
   it('uses the shared Cindy Switch for the plugin enabled control', () => {
     vi.stubGlobal(

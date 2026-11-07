@@ -59,6 +59,7 @@ import { isSpeechModel, SPEECH_API_PRESETS, speechReferenceModels, speechSetupTa
 
 import {
   isOpenRouterModelsUrl,
+  isOpenHubsModelsUrl,
   isLoopbackProviderUrl,
   isProviderRequestPath,
   presetDisplayName,
@@ -813,6 +814,19 @@ export function AddProviderWizard({
       setXaiDeviceLogin(selected.id === 'xai' && method === 'device');
       try {
         let ok = false;
+        if (id === 'openai') {
+          const loginKey = crypto.randomUUID();
+          const login = { cancel: () => { void window.electronAPI.subscriptionAccounts.command({ action: 'cancel', providerId: 'openai', loginKey }).catch(() => {}); } };
+          localLoginRef.current = login;
+          try {
+            await window.electronAPI.subscriptionAccounts.command({ action: 'add', providerId: 'openai', loginKey });
+            if (localLoginRef.current === login) onDone('openai');
+          } catch (error) {
+            if (localLoginRef.current !== login || String(error).includes('SUBSCRIPTION_LOGIN_CANCELLED')) return;
+            throw error;
+          } finally { if (localLoginRef.current === login) localLoginRef.current = null; }
+          return;
+        }
         if (id === 'openai' || id === 'anthropic' || id === 'xai' || preset) {
           const brand = id;
           const native = brand === 'openai' ? 'codex' as const : brand === 'anthropic' ? 'claude' as const : 'xai' as const;
@@ -1098,6 +1112,9 @@ export function AddProviderWizard({
         ];
         return sources.map(async (source) => {
           try {
+            const openHubsInventory = preset.id === 'openhubs' && !source.route
+              && /^https:\/\/openhubs\.zhidemai\.com(?:\/v1)?\/?$/.test(source.baseUrl)
+              && !!source.modelsUrl && isOpenHubsModelsUrl(source.modelsUrl);
             const reuseDetection = detected?.catalog?.ok && agent === detected.agent
               && apiKey === detected.apiKey && source.baseUrl === detected.preset.runtimes[agent]?.baseUrl
               && !source.route && !source.modelsUrl?.includes('client_version=');
@@ -1107,6 +1124,7 @@ export function AddProviderWizard({
               baseUrl: source.baseUrl,
               authMethod: preset.authMethod ?? 'apiKey',
               modelsUrl: source.modelsUrl,
+              ...(openHubsInventory ? { allowEmpty: true } : {}),
               apiKey: apiKey.trim() || null,
               ...(source.wireProtocol ? { wireProtocol: source.wireProtocol } : {}),
               ...(rt.headers ? { headers: rt.headers } : {}),
@@ -1114,8 +1132,8 @@ export function AddProviderWizard({
             return {
               agent,
               modelsUrl: source.modelsUrl,
-              completeInventory: /^https:\/\/openrouter\.ai\/api(?:\/v1)?\/?$/.test(source.baseUrl)
-                && (!source.modelsUrl || isOpenRouterModelsUrl(source.modelsUrl)),
+              completeInventory: openHubsInventory || (/^https:\/\/openrouter\.ai\/api(?:\/v1)?\/?$/.test(source.baseUrl)
+                && (!source.modelsUrl || isOpenRouterModelsUrl(source.modelsUrl))),
               route: source.route,
               ok: !!(r.ok && r.models),
               models: r.models ?? [],
@@ -1594,7 +1612,7 @@ export function AddProviderWizard({
             {wizardTitle}
           </h3></Dialog.Title>
           {step === 1 ? (
-            <button
+            <button data-settings-search-action="Open the custom provider connection form"
               type="button"
               disabled={saving}
               onClick={() => { if (!savingRef.current) onOpenCustomForm(); }}
@@ -1913,7 +1931,7 @@ export function AddProviderWizard({
                     {sel.provider.id !== 'anthropic' && (
                       <Button variant="secondary" size="lg" type="button" onClick={() => void handleAuthorize()}>
                         {t(
-                          ['openai', 'xai'].includes(sel.provider.id)
+                          sel.provider.id === 'openai' ? 'subscriptionAccounts.add' : sel.provider.id === 'xai'
                               ? 'settings.providers.openai.addIndependentAccount'
                               : sel.provider.auth.oauth?.flow === 'device-code'
                                 ? 'settings.providers.wizard.authorizeWithDeviceCode'

@@ -320,6 +320,7 @@ import {
 import { VoiceRecordingPillContent, useMobileVoiceRecordingTimer } from '@/session/VoiceRecordingPill';
 import { VoicePillWidthFrame } from '@/session/voicePillWidthMotion';
 import { useMobileVoiceProcessingIndicator } from '@/session/useMobileVoiceProcessingIndicator';
+import { useHandheldVoiceKey } from '@/handheld/handheldMode';
 import { useComposerCardTransition } from '@/session/useComposerCardTransition';
 import { ComposerKeyboardAvoidingView } from '@/session/ComposerKeyboardAvoidingView';
 import { useComposerResize } from '@/session/useComposerResize';
@@ -3151,6 +3152,7 @@ function NewRemoteSessionContent({ creatingRef }: { creatingRef: { current: bool
         connectionProvider: (providerId: string) => voiceContext.createAsrConnection(providerId),
         refinerTargetProvider: (providerId: string, options?: { refreshAccessToken?: boolean }) =>
           voiceContext.createRefinerTarget(providerId, options),
+        refineRequestBudget: () => voiceContext.refineRequestBudget(),
         warmRefiner: (input: { system: string; user: unknown; promptCacheKey: string;
         }) =>
           voiceContext.warmRefiner(input),
@@ -3289,6 +3291,31 @@ function NewRemoteSessionContent({ creatingRef }: { creatingRef: { current: bool
         if (voiceStartPendingSeqRef.current === pendingSeq) setVoiceStartPending(false);
       });
   }, [creating, selectedDeviceId, startVoiceRecording, voiceIsProcessing, voiceState]);
+
+  // 掌机模式:长按手柄语音键 = 按住说话,松手停止(文字留在输入框)。首页长按会先打开
+  // 本页,本页聚焦时由分发层补发 start。起录尚未完成就松手的,等进入 listening 再收尾。
+  const handheldStopAfterStartRef = useRef(false);
+  useHandheldVoiceKey({
+    start: () => {
+      handheldStopAfterStartRef.current = false;
+      handleVoiceButtonPressIn();
+      voiceStartedOnPressInRef.current = false;
+    },
+    end: () => {
+      if (voiceRecordingActiveRef.current || voiceState === 'listening') {
+        void finishVoiceRecording();
+        return;
+      }
+      if (voicePermissionRequestInFlightRef.current || voiceStartupInFlightRef.current) {
+        handheldStopAfterStartRef.current = true;
+      }
+    },
+  });
+  useEffect(() => {
+    if (voiceState !== 'listening' || !handheldStopAfterStartRef.current) return;
+    handheldStopAfterStartRef.current = false;
+    void finishVoiceRecording();
+  }, [finishVoiceRecording, voiceState]);
 
   useEffect(() => {
     return () => {
@@ -5764,7 +5791,7 @@ function NewRemoteSessionContent({ creatingRef }: { creatingRef: { current: bool
               <ContextSheetRow
                 disabled={creating}
                 icon={<Image color={colors.textPrimary} size={iconSize.lg} strokeWidth={iconStroke.regular} />}
-                label={t('session.common.photo')}
+                label={t('session.common.photosAndVideos')}
                 onPress={() => void addLocalImageAttachments('library')}
                 dismissBeforePress
                   testID="newSession.contextSheetPhotoRow"
@@ -6102,7 +6129,6 @@ function NewRemoteSessionContent({ creatingRef }: { creatingRef: { current: bool
         selectedId={composerPreviewAttachmentId}
         annotation={composerAnnotations.trayAnnotation}
         resolveRemoteMedia={resolveComposerMedia}
-        onSelect={setComposerPreviewAttachmentId}
           onClose={() => setComposerPreviewAttachmentId(null)}
         />
       {composerAnnotations.host}

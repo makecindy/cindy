@@ -19,7 +19,7 @@ import { useProviders } from '@/hooks/useProviders';
 import { useDeviceProviders } from '@/hooks/useDeviceProviders';
 import { useModelRouteDevices } from '@/hooks/useModelRouteDevices';
 import { RemoteSourceMark } from '@/components/icons/RemoteSourceMark';
-import { ModelIconMark } from '@/components/new-chat/ModelSelector';
+import { VendorIcon, agentKindToVendor } from '@/components/sidebar/VendorIcon';
 import { ModelRouteSelectorContent } from '@/components/new-chat/ModelRouteSelector';
 import { useModelDiscoveryPending } from '@/components/new-chat/useModelDiscoveryPending';
 import {
@@ -49,7 +49,7 @@ import {
   SUPPORTED_INTERVAL_MINUTES,
   type CodexScheduleConfig,
 } from '../lib/cronCodexPreset';
-import { getScheduleDefaultRoute, type EffortValue } from '../hooks/useScheduleForm';
+import type { EffortValue } from '../hooks/useScheduleForm';
 import {
   isFollowingSessionSelection,
   PENDING_SESSION_ID,
@@ -1077,11 +1077,7 @@ export function ModelEffortChip({
   effortValue: EffortValue | '';
   onChangeEffort: (v: EffortValue | '') => void;
   disabled?: boolean;
-  /**
-   * heartbeat(绑定会话)形态:下拉顶部加"跟随会话"行(= model 空值),
-   * model 空时显示"跟随会话"而非默认回退模型。false/缺省路径行为零变化
-   * (空值回退默认模型的"所见即所存"逻辑保持原样,防 2026-06 显示≠运行事故复发)。
-   */
+  /** Bound automations may explicitly inherit the session model when modelValue is empty. */
   followSession?: boolean;
   /** 显式选定来源(供应商)id;'' = 跟随该 agent 原生默认来源(no-break)。 */
   providerId: string;
@@ -1125,7 +1121,7 @@ export function ModelEffortChip({
   // 过滤 + 分组),这里只为 trigger 文案保留最小化 model 解析。
   const localProviders = useProviders();
   const remoteProviders = useDeviceProviders(agentDeviceId || undefined);
-  const { providers, loading: providersLoading } = agentDeviceId ? remoteProviders : localProviders;
+  const { providers } = agentDeviceId ? remoteProviders : localProviders;
   // 触发器的位置说明与统一选择器使用相同候选，沿用设备名称的统一回退规则。
   const routeDevices = useModelRouteDevices({
     controlledDeviceId: null,
@@ -1143,9 +1139,7 @@ export function ModelEffortChip({
       ),
     [availableModels, agentKind, xdConnected],
   );
-  // 只有 model/provider/effort 都为空时才显示「跟随会话」;混合覆盖态必须显式暴露，
-  // 不能把来源或强度覆盖伪装成完整继承。非 followSession 维持原逻辑:空值回退跟实际
-  // 运行语义同源(三级回退默认),绝不回退 models[0]。
+  // A partial bound override must remain visible instead of looking fully inherited.
   const isFollowingSession = isFollowingSessionSelection({
     followSession,
     model: modelValue,
@@ -1153,19 +1147,16 @@ export function ModelEffortChip({
     effort: effortValue,
   });
   const followsSessionModel = usesBoundSessionModel({ followSession, model: modelValue });
-  // 模型留空时显示与表单回填同源的默认路由(模型与来源成对)。
-  const defaultRoute =
-    followsSessionModel || modelValue
-      ? null
-      : getScheduleDefaultRoute(agentKind, providersLoading ? undefined : providers, providerId);
-  const effectiveId = followsSessionModel ? '' : modelValue || defaultRoute?.model || '';
-  const effectiveProviderId = providerId || defaultRoute?.providerId || null;
+  // The form owns default resolution. Empty means no selected model, not permission
+  // to resolve another default from this chip's independent catalog snapshot.
+  const effectiveId = followsSessionModel ? '' : modelValue;
+  const effectiveProviderId = providerId || null;
   const current = models.find((m) => m.id === effectiveId);
   const sourceId = effectiveSourceIdForModel(providers, effectiveProviderId, effectiveId, agentKind);
   const source = providers.find((provider) => provider.id === sourceId);
   const catalogModel = source ? getModel(source, effectiveId, agentKind) : undefined;
-  const effectiveEffort = effortValue || catalogModel?.defaultEffort || current?.defaultEffort || '';
-  const modelLabel = catalogModel?.name || current?.displayName || effectiveId;
+  const effectiveEffort = effectiveId ? effortValue || catalogModel?.defaultEffort || current?.defaultEffort || '' : '';
+  const modelLabel = catalogModel?.name || current?.displayName || effectiveId || t('scheduler.chips.model.default');
   const agentLabel = t(`newChat.modelSelector.trigger.agent.${agentKind === 'claude-code' ? 'claudeCode' : agentKind}`);
   const effortLabel = (e: EffortValue) => t(`effortLevels.${e}`);
   const display = followsSessionModel
@@ -1177,31 +1168,13 @@ export function ModelEffortChip({
       effortValue ? effortLabel(effortValue) : null,
     ].filter(Boolean).join(' · ')
     : [agentLabel, modelLabel, effectiveEffort ? effortLabel(effectiveEffort as EffortValue) : null,
-      fastMode ? '⚡' : null].filter(Boolean).join(' · ');
+      effectiveId && fastMode ? '⚡' : null].filter(Boolean).join(' · ');
 
   const vendorKey = agentKind === 'claude-code' ? 'cc' : agentKind;
-  // 当前生效来源 —— 与聊天 trigger 同口径(effectiveSourceIdForModel):按「已连接且**确实
-  // 提供当前模型**」收窄后再应用显式选择 / 原生默认。只查「已连接」会在显式来源不提供
-  // effectiveId 时渲染错误来源的标识(如 providerId=openai 而默认模型只有 xd 提供);
-  // followSession(effectiveId 为空)无从收窄,返回 null,icon 分支本就被 isFollowingSession 挡住。
-  const activeSourceId = useMemo(
-    () =>
-      effectiveId
-        ? effectiveSourceIdForModel(providers, effectiveProviderId, effectiveId, agentKind)
-        : null,
-    [providers, effectiveProviderId, effectiveId, agentKind],
-  );
-  const activeProvider = providers.find((p) => p.id === activeSourceId);
-  const modelIcon = !isFollowingSession && (activeSourceId || agentDeviceId) ? (
-    <ModelIconMark
-      icon={activeProvider ? getModel(activeProvider, effectiveId, agentKind)?.icon : undefined}
-      providerId={activeSourceId ?? providerId}
-      name={activeProvider?.name}
-      routing={activeProvider?.routing}
-      logoKind={activeProvider?.logoKind}
-      colorClass=""
-      withMargin={false}
-    />
+  // This label starts with the Agent identity; its icon must identify that same
+  // Agent. Model/source branding remains in the model picker.
+  const agentIcon = !followsSessionModel ? (
+    <VendorIcon vendor={agentKindToVendor(agentKind)} size={14} colorClassName="text-current" />
   ) : undefined;
 
   const agentDeviceTitle = agentDeviceName
@@ -1212,7 +1185,7 @@ export function ModelEffortChip({
     <Popover open={open} onOpenChange={handleOpenChange}>
       <PopoverTrigger asChild>
         <ChipButton
-          icon={agentDeviceId && modelIcon ? <RemoteSourceMark>{modelIcon}</RemoteSourceMark> : modelIcon}
+          icon={agentDeviceId && agentIcon ? <RemoteSourceMark markSize={14}>{agentIcon}</RemoteSourceMark> : agentIcon}
           label={display}
           title={agentDeviceTitle ? `${display} · ${agentDeviceTitle}` : undefined}
           active={open}

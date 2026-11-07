@@ -7,6 +7,8 @@ import { REMOTE_AGENT_MAX_POLL_RUNS, REMOTE_AGENT_READ_MAX_BYTES, REMOTE_AGENT_R
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { RemoteAgentPoller, type PolledRun } from '../controller/poller';
+import { remoteAgentInvoker } from '../controller/runClient';
+import { createDeviceUnresponsiveError } from '../../device-link/responsivenessTracker';
 import { EventLog } from '../eventLog';
 import { REMOTE_AGENT_HOST_IDLE_MS } from '../host/runHost';
 
@@ -337,7 +339,9 @@ describe('multiplexed poll', () => {
     expect(kept.text()).toBe('{"n":1}\n{"n":2}\n');
   });
 
-  it('ends every run when the other computer refuses the poll, and gives up after it stays unreachable', async () => {
+  // Unit regression: the existing outage-budget test only covered DEVICE_OFFLINE.
+  // A persistent circuit-open error must also wait, then end through the same public poller lifecycle.
+  it.each(['DEVICE_OFFLINE', 'DEVICE_UNRESPONSIVE'])('ends refused polls and bounds a persistent %s outage', async code => {
     const refused = collector(randomUUID());
     new RemoteAgentPoller(async () => {
       throw Object.assign(new Error('[CHANNEL_NOT_ALLOWED] not allowed'), { code: 'CHANNEL_NOT_ALLOWED' });
@@ -351,7 +355,7 @@ describe('multiplexed poll', () => {
     let attempts = 0;
     const poller = new RemoteAgentPoller(async () => {
       attempts += 1;
-      throw Object.assign(new Error('offline'), { code: 'DEVICE_OFFLINE' });
+      throw Object.assign(new Error('target device is unavailable'), { code });
     }, undefined, () => t);
     poller.register(offline.run);
     for (let step = 0; step < 40 && !offline.lost; step += 1) {
@@ -360,6 +364,75 @@ describe('multiplexed poll', () => {
     }
     expect(offline.lost!.reason).toBe('unreachable');
     expect(attempts).toBeGreaterThan(5);
+  });
+
+  // Unit regression: a breaker rejection wrapped by remoteAgentInvoker used to discard
+  // an active run immediately. Cover nonzero-cursor recovery and another controller
+  // polling the same host; existing link-reset tests do not exercise circuit-open errors.
+  it('keeps the cursor through a circuit outage while another controller keeps polling', async () => {
+    vi.useFakeTimers();
+    const host = fakeHost();
+    const affected = collector(randomUUID());
+    const healthy = collector(randomUUID());
+    const affectedLog = host.add(affected.run.runId);
+    const healthyLog = host.add(healthy.run.runId);
+    affectedLog.append({ n: 1 });
+    healthyLog.append({ n: 10 });
+    const requests: Array<{ op: string; runs: Array<{ runId: string; cursor: number }> }> = [];
+    let circuitOpen = true;
+    const poller = new RemoteAgentPoller(remoteAgentInvoker('host', async (_device, _channel, args) => {
+      requests.push(args[0] as typeof requests[number]);
+      if (requests.length > 1 && circuitOpen) throw createDeviceUnresponsiveError('host');
+      return { ok: true, result: await host.invoke(args) };
+    }));
+    const other = new RemoteAgentPoller(args => host.invoke(args));
+    try {
+      poller.register(affected.run);
+      other.register(healthy.run);
+      await vi.advanceTimersByTimeAsync(1);
+      expect(affected.text()).toBe('{"n":1}\n');
+      expect(affected.lost).toBeNull();
+      expect(poller.size).toBe(1);
+
+      healthyLog.append({ n: 11 });
+      healthyLog.end();
+      await vi.advanceTimersByTimeAsync(60_000);
+      expect(healthy.text()).toBe('{"n":10}\n{"n":11}\n');
+      expect(healthy.done).toBe(true);
+      expect(healthy.lost).toBeNull();
+      expect(affected.lost).toBeNull();
+      expect(requests.length).toBeGreaterThan(2);
+      expect(requests.slice(1).every(request => request.runs[0].cursor === Buffer.byteLength(affected.text()))).toBe(true);
+
+      affectedLog.append({ n: 2 });
+      affectedLog.end();
+      circuitOpen = false;
+      await vi.advanceTimersByTimeAsync(5_000);
+      expect(affected.text()).toBe('{"n":1}\n{"n":2}\n');
+      expect(affected.done).toBe(true);
+      expect(affected.lost).toBeNull();
+      expect(poller.size).toBe(0);
+      expect(requests.every(request => request.op === 'poll')).toBe(true);
+    } finally {
+      poller.unregister(affected.run.runId);
+      other.unregister(healthy.run.runId);
+    }
+  });
+
+  it('cancels circuit-outage retries when the run is unregistered', async () => {
+    vi.useFakeTimers();
+    const sink = collector(randomUUID());
+    const invoke = vi.fn(async () => { throw createDeviceUnresponsiveError('host'); });
+    const poller = new RemoteAgentPoller(invoke);
+    poller.register(sink.run);
+    await vi.advanceTimersByTimeAsync(1);
+    expect(sink.lost).toBeNull();
+    expect(poller.size).toBe(1);
+    poller.unregister(sink.run.runId);
+    await vi.advanceTimersByTimeAsync(130_000);
+    expect(invoke).toHaveBeenCalledOnce();
+    expect(sink.lost).toBeNull();
+    expect(poller.size).toBe(0);
   });
 
   // Unit regression: a share restart briefly rejects authorization after a link outage.
@@ -407,6 +480,29 @@ describe('multiplexed poll', () => {
     failure = 'REMOTE_AGENT_SHARE_UNAVAILABLE';
     await vi.advanceTimersByTimeAsync(5_000);
     failure = null;
+    await vi.advanceTimersByTimeAsync(5_000);
+    expect(sink.lost).toBeNull();
+    expect(sink.text()).toBe('ok');
+    expect(sink.done).toBe(true);
+  });
+
+  // Regression: an open circuit breaker (after a short network wobble) used to end the
+  // remote turn at once instead of waiting inside the outage window.
+  it('keeps polling through an open device circuit and resumes once it closes', async () => {
+    vi.useFakeTimers();
+    const sink = collector(randomUUID());
+    let circuitOpen = true;
+    const { remoteAgentInvoker } = await import('../controller/runClient');
+    const poller = new RemoteAgentPoller(remoteAgentInvoker('d', async () => {
+      if (circuitOpen) {
+        throw Object.assign(new Error('target device d is unresponsive (circuit open)'), { code: 'DEVICE_UNRESPONSIVE' });
+      }
+      return { ok: true, result: { runs: [{ runId: sink.run.runId, cursor: 2, data: Buffer.from('ok').toString('base64'), done: true }] } };
+    }));
+    poller.register(sink.run);
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(sink.lost).toBeNull();
+    circuitOpen = false;
     await vi.advanceTimersByTimeAsync(5_000);
     expect(sink.lost).toBeNull();
     expect(sink.text()).toBe('ok');

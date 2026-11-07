@@ -122,24 +122,57 @@ describe('botDirectMessageService', () => {
   let sqlite: Database.Database;
   let dispatch: ReturnType<typeof vi.fn>;
 
-  // 2026-10-27: send_to_agent dropped a real owner handoff. Unit/persistence:
-  // exercise the actual capture and send, then relay the accepted receipt again.
-  it('delivers the original owner request through a peer and a second handoff', async () => {
+  // 2026-10-27: send_to_agent dropped a real owner handoff. 2026-11-05: the sender checks the
+  // hand-off and the peer reviews the delegated text. Unit/persistence: exercise the actual
+  // capture and send, relay the accepted receipt again, and reply into the original task.
+  it('delivers a checked owner hand-off through a peer and a second handoff', async () => {
     const original = 'Sanitize the test fixtures and retain coverage.';
+    const authorize = vi.fn(async () => ({ kind: 'authorized' as const }));
     const captureRequest = (sessionId: string, message: string) => captureAgentRequest(sessionId, message,
-      { clientId: 'owner-input', authoredText: original }, async () => [], true, true);
+      { clientId: 'owner-input', authoredText: original }, async () => [], true, true, { authorize });
     const service = createBotDirectMessageService({ dispatch, captureRequest });
     expect(await service.messageAgent({ callerSessionId: 'a-main', targetBotId: 'bot-b', message: 'Please handle the fixtures.' }))
       .toMatchObject({ ok: true });
     const delivered = dispatch.mock.calls[0]![0];
-    expect(verifiedOwnerRequestText(delivered.autoReviewUserText)).toBe(original);
-    expect(sqlite.prepare('SELECT content FROM bot_direct_messages').get()).toEqual({
-      content: (await captureRequest('a-main', 'Please handle the fixtures.')).message,
-    });
+    expect(verifiedOwnerRequestText(delivered.autoReviewUserText)).toBe('Please handle the fixtures.');
+    expect(delivered.autoReviewUserText.request).toEqual({ sessionId: 'a-main', clientId: 'owner-input',
+      plainBody: true, delegatedText: 'Please handle the fixtures.' });
+    expect(sqlite.prepare('SELECT content FROM bot_direct_messages').get()).toEqual({ content: 'Please handle the fixtures.' });
     const next = await captureAgentRequest('b-main', 'Keep coverage', {
       clientId: delivered.clientId, delegatedRequest: delivered.autoReviewUserText.request,
-    }, async () => [], true);
-    expect(next.autoReviewUserText.request).toEqual(delivered.autoReviewUserText.request);
+    }, async () => [], true, false, { targetSessionId: 'c-main', authorize });
+    expect(next.autoReviewUserText.request).toMatchObject({ sessionId: 'a-main', delegatedText: 'Keep coverage' });
+    // The peer's answer into the task the owner spoke in keeps provenance only.
+    const reply = createBotDirectMessageService({ dispatch, captureRequest: (sessionId, message, target) => captureAgentRequest(sessionId, message,
+      { clientId: delivered.clientId, delegatedRequest: delivered.autoReviewUserText.request }, async () => [], true, false,
+      { targetSessionId: target?.sessionId, authorize }) });
+    expect(await reply.messageAgent({ callerSessionId: 'b-main', targetBotId: 'bot-a', message: 'Fixtures are clean.' }))
+      .toMatchObject({ ok: true });
+    expect(verifiedOwnerRequestText(dispatch.mock.calls.at(-1)![0].autoReviewUserText)).toBeUndefined();
+  });
+
+  // Review feedback on #9023: the target is resolved before capture, so a reply into the task the
+  // user's request came from skips the delegation review instead of being refused by it.
+  it('does not review a reply into the task the request came from', async () => {
+    const authorize = vi.fn(async () => ({ kind: 'blocked' as const, reason: 'unavailable' }));
+    const captureRequest = (sessionId: string, message: string, target?: { sessionId?: string }) => captureAgentRequest(sessionId, message,
+      { clientId: 'x', delegatedRequest: { sessionId: 'a-main', clientId: 'owner-input', plainBody: true, delegatedText: 'Fix it.' } },
+      async () => [], true, false, { targetSessionId: target?.sessionId, authorize });
+    const service = createBotDirectMessageService({ dispatch, captureRequest });
+    expect(await service.messageAgent({ callerSessionId: 'b-main', targetBotId: 'bot-a', message: 'Done.' })).toMatchObject({ ok: true });
+    expect(authorize).not.toHaveBeenCalled();
+    expect(verifiedOwnerRequestText(dispatch.mock.calls.at(-1)![0].autoReviewUserText)).toBeUndefined();
+  });
+
+  it('sends nothing when the sender review refuses the hand-off', async () => {
+    const captureRequest = (sessionId: string, message: string) => captureAgentRequest(sessionId, message,
+      { clientId: 'owner-input', authoredText: 'Only check the fixtures.' }, async () => [], true, true,
+      { authorize: async () => ({ kind: 'blocked', reason: 'Not requested by the owner.' }) });
+    const service = createBotDirectMessageService({ dispatch, captureRequest });
+    expect(await service.messageAgent({ callerSessionId: 'a-main', targetBotId: 'bot-b', message: 'Delete the fixtures.' }))
+      .toMatchObject({ ok: false, errorCode: 'DELEGATION_NOT_AUTHORIZED', message: 'Not requested by the owner.' });
+    expect(dispatch).not.toHaveBeenCalled();
+    expect(sqlite.prepare('SELECT COUNT(*) AS n FROM bot_direct_messages').get()).toEqual({ n: 0 });
   });
 
   // unit/persistence: peer messages must not acquire a task-delegation envelope

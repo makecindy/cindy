@@ -3,6 +3,7 @@ import { homedir } from 'node:os';
 import path from 'node:path';
 
 import { ScriptTarget, transpileModule } from 'typescript';
+import type { AgentIslandLiveActivity } from '../liveActivity.js';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { BrowserWindow } from 'electron';
 import { SESSION_ACTIVITY_CHANNEL } from '@cindy/device-link';
@@ -16,6 +17,7 @@ import {
   AGENT_ISLAND_PREVIEW_SOUND_CHANNEL,
   AGENT_ISLAND_SET_DISPLAY_TARGET_CHANNEL,
   AGENT_ISLAND_SET_MASCOT_SKIN_CHANNEL,
+  AGENT_ISLAND_SET_SUBTLE_REMINDERS_CHANNEL,
   AGENT_ISLAND_SET_REMOTE_SESSIONS_CHANNEL,
   AGENT_ISLAND_SET_COMPANION_CHATS_CHANNEL,
   AGENT_ISLAND_READ_COMPANION_CHAT_CHANNEL,
@@ -660,6 +662,25 @@ describe('AgentIslandService native publishing', () => {
     headless.setEnabled(true);
     expect(headless.notifyGroupChat('group')).toBe(false);
     headless.resetRuntimeState();
+  });
+
+  it('account switch: reset drops the previous account quota and tells enabled subscribers, so the overview is released', async () => {
+    // 灵动岛余量跟随账号:reset 把 enabled 置 false 却不通知订阅者时,概览仍被持有,重新开启会先显示旧账号余量。
+    const { AgentIslandService } = await import('../service.js');
+    const publish = vi.fn<(state: AgentIslandDisplayState) => boolean>(() => true);
+    const service = new AgentIslandService({ getMainWindow: () => null, nativeHost: { failed: false, publish } });
+    syncEnabledForTest(service, publish);
+    const item = { id: 'a', logoSvg: '<svg/>', text: '50%', level: 'normal' as const, stale: false,
+      accessibilityLabel: 'a', lowest: true, width: 35, textWidth: 22 };
+    service.setQuota([item]);
+    expect(publish.mock.calls.at(-1)![0].quota).toEqual([item]);
+    const enabledChanges: boolean[] = [];
+    service.subscribeEnabled(enabled => enabledChanges.push(enabled));
+    service.resetRuntimeState();
+    expect(enabledChanges).toEqual([false]);
+    service.setEnabled(true);
+    expect(publish.mock.calls.at(-1)![0].quota).toBeUndefined();
+    service.resetRuntimeState();
   });
 
   it('keeps group lane approvals but lets chat unread own the successful reply reminder', async () => {
@@ -3273,6 +3294,63 @@ describe('AgentIslandService native publishing', () => {
     });
   });
 
+  // Unit: new presentation IPC must reject bad senders/values and deliver compact
+  // reminders to the native host; previous settings tests do not exercise this path.
+  it('accepts subtle reminders only from the app and preserves automatic cards when disabled', async () => {
+    const { AgentIslandService } = await import('../service.js');
+    const publish = vi.fn((state: AgentIslandDisplayState) => { void state; return true; });
+    const service = new AgentIslandService({ getMainWindow: () => null,
+      nativeHost: { failed: false, publish } });
+    syncEnabledForTest(service, publish);
+    service.registerIpc();
+    const set = registeredIpcHandler(AGENT_ISLAND_SET_SUBTLE_REMINDERS_CHANNEL);
+    expect(() => set({}, 'true')).toThrow('INVALID_PARAMS');
+    mocks.assertTrustedAppRendererEvent.mockImplementationOnce(() => { throw new Error('[PERMISSION_DENIED] Untrusted renderer'); });
+    expect(() => set({}, true)).toThrow('PERMISSION_DENIED');
+    set({}, true);
+    service.handleAgentEvent({ sessionId: 'subtle' }, doneEvent());
+    expect(publish.mock.calls.at(-1)?.[0]).toMatchObject({ mode: 'compact', compactReminder: { phase: 'completed' } });
+    set({}, false);
+    expect(publish.mock.calls.at(-1)?.[0]).toMatchObject({ mode: 'expanded', displaySurface: 'completionCard' });
+    expect(publish.mock.calls.at(-1)?.[0].compactReminder).toBeUndefined();
+  });
+
+  // Unit regression #8848: a dismissed waiting task must not silence a different
+  // task's completion. Existing sound tests do not cover the subtle projection.
+  it.each([false, true])('keeps completion sound after dismissing another task (subtle=%s)', async (subtle) => {
+    vi.useFakeTimers();
+    try {
+      vi.setSystemTime(1_000);
+      const { AgentIslandService } = await import('../service.js');
+      const publish = vi.fn((state: AgentIslandDisplayState) => { void state; return true; });
+      const playSound = vi.fn<(sound: AgentIslandSoundChoice) => boolean>(() => true);
+      const service = new AgentIslandService({ getMainWindow: () => null,
+        nativeHost: { failed: false, publish, playSound } });
+      syncEnabledForTest(service, publish);
+      service.registerIpc();
+      service.setSoundSettings({ enabled: true, sounds: {
+        ...DEFAULT_AGENT_ISLAND_SOUND_SETTINGS.sounds, complete: customSound('complete.wav'),
+      } });
+      handleInteractionRequestForTest(service, { sessionId: 'waiting' }, {
+        kind: 'permission', requestId: 'p', toolName: 'Bash', input: { command: 'pwd' },
+      });
+      vi.setSystemTime(2_000);
+      (service as unknown as { handleOutsideClick(): void }).handleOutsideClick();
+      expect(publish.mock.calls.at(-1)?.[0]).toMatchObject({ mode: 'compact', smartSuppressed: true });
+      registeredIpcHandler(AGENT_ISLAND_SET_SUBTLE_REMINDERS_CHANNEL)({}, subtle);
+      playSound.mockClear();
+
+      service.handleAgentEvent({ sessionId: 'done' }, doneEvent());
+      expect(playSound).toHaveBeenCalledExactlyOnceWith(customSound('complete.wav'));
+      expect(publish.mock.calls.at(-1)?.[0].mode).toBe(subtle ? 'compact' : 'expanded');
+      // Republishing the same state must not replay the completion sound.
+      registeredIpcHandler(AGENT_ISLAND_SET_SUBTLE_REMINDERS_CHANNEL)({}, subtle);
+      expect(playSound).toHaveBeenCalledTimes(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it('publishes the selected mascot skin through native state', async () => {
     const { AgentIslandService } = await import('../service.js');
     const publish = vi.fn((state: AgentIslandDisplayState, frameOrFrames: AgentIslandNativeFrame | AgentIslandNativeFrame[]) => {
@@ -3320,6 +3398,40 @@ describe('AgentIslandService native publishing', () => {
 
     expect(playSound).toHaveBeenNthCalledWith(1, customSound('start.wav'));
     expect(playSound).toHaveBeenNthCalledWith(2, customSound('complete.wav'));
+  });
+
+  // Agent Notch off, Live Activity on: the Live Activity alert is silent, so the same
+  // event sounds must still play (without respawning the suspended helper), and only
+  // its done / needs-reply alerts stand in for OS notifications. Unit tier.
+  it('keeps event sounds and owns routine alerts when only the Live Activity is on', async () => {
+    const { AgentIslandService } = await import('../service.js');
+    const publish = vi.fn(() => true);
+    const playSound = vi.fn<(sound: AgentIslandSoundChoice) => boolean>(() => true);
+    const playSoundWithoutHelper = vi.fn<(sound: AgentIslandSoundChoice) => void>();
+    const liveActivity = { sync: vi.fn(), ownsAlerts: () => true, setEnabled: vi.fn(), isSupported: () => true };
+    const service = new AgentIslandService({
+      getMainWindow: () => null,
+      nativeHost: { failed: false, publish, playSound, suspend: () => undefined },
+      liveActivity: liveActivity as unknown as AgentIslandLiveActivity,
+      playSoundWithoutHelper,
+    });
+    service.setEnabled(false);
+    service.setSoundSettings({
+      enabled: true,
+      sounds: { ...DEFAULT_AGENT_ISLAND_SOUND_SETTINGS.sounds, start: customSound('start.wav'), complete: customSound('complete.wav') },
+    });
+
+    service.handleUserPrompt({ sessionId: 's1', agentKind: 'codex' }, 'run tests');
+    service.handleAgentEvent({ sessionId: 's1', agentKind: 'codex' }, doneEvent());
+
+    expect(playSoundWithoutHelper.mock.calls).toEqual([[customSound('start.wav')], [customSound('complete.wav')]]);
+    expect(playSound).not.toHaveBeenCalled();
+    expect([service.ownsTaskAlert('done'), service.ownsTaskAlert('needs-reply'), service.ownsTaskAlert('error')])
+      .toEqual([true, true, false]);
+    liveActivity.sync.mockClear();
+    service.resetRuntimeState();
+    // Sign-out / account switch must not leave the old account's tasks in the system UI.
+    expect(liveActivity.sync).toHaveBeenCalledWith(null);
   });
 
   it('plays the start sound on user prompt without waiting for an isRunning status event', async () => {
@@ -5689,6 +5801,69 @@ describe('AgentIslandService native publishing', () => {
     const framesById = new Map(latestNativeFrames(publish).map((frame) => [frame.displayId, frame]));
     expect(framesById.get(1)).toMatchObject({ contentWidth: 320 });
     expect(framesById.get(2)).toMatchObject({ contentWidth: 210 });
+  });
+
+  // The macOS Dynamic Island draws above our panel and passes clicks through, so on
+  // those displays the island must not start at the screen center; a stored
+  // position is still the user's choice.
+  it.each([
+    { stored: undefined, expectRightOfSystemIsland: true },
+    { stored: 0.25, expectRightOfSystemIsland: false },
+  ])('starts beside the macOS Dynamic Island unless a position is stored ($stored)', async ({ stored, expectRightOfSystemIsland }) => {
+    const display = {
+      id: 1,
+      label: 'Built-in Liquid Retina XDR Display',
+      bounds: { x: 0, y: 0, width: 1512, height: 993 },
+      internal: true,
+    };
+    mocks.readLayoutPreferences.mockReturnValueOnce(new Map<number, AgentIslandLayoutPreference>(
+      stored === undefined
+        ? []
+        : [[1, { centerXRatio: stored, displayName: display.label, displayIndex: 0, displayInternal: true, displayBounds: display.bounds }]],
+    ));
+    mocks.displays.splice(0, mocks.displays.length, display);
+    const { AgentIslandService } = await import('../service.js');
+    const publish = vi.fn((state: AgentIslandDisplayState, frameOrFrames: AgentIslandNativeFrame | AgentIslandNativeFrame[]) => {
+      void state;
+      void frameOrFrames;
+      return true;
+    });
+    const service = new AgentIslandService({
+      getMainWindow: () => null,
+      nativeHost: { failed: false, publish },
+    });
+    syncEnabledForTest(service, publish);
+    (
+      service as unknown as {
+        handleNativeScreenMetrics(metrics: { screens: unknown[]; preferredDisplayId: number | null }): void;
+      }
+    ).handleNativeScreenMetrics({
+      preferredDisplayId: 1,
+      screens: [{
+        displayId: 1,
+        frame: display.bounds,
+        hasNotch: false,
+        hasSystemIsland: true,
+        notchWidth: 211,
+        topBarHeight: 30,
+        menuBarHeight: 30,
+        safeAreaTop: 0,
+        isMain: true,
+        signature: 'builtin-system-island',
+      }],
+    });
+
+    service.handleUserPrompt({ sessionId: 's1', agentKind: 'codex' }, 'run tests');
+
+    const frame = latestNativeFrames(publish).find((item) => item.displayId === 1);
+    if (!frame || typeof frame.contentWidth !== 'number') throw new Error('missing native frame');
+    const compactLeftEdge = frame.x + frame.width / 2 - frame.contentWidth / 2;
+    const systemIslandRightEdge = display.bounds.width / 2 + 131;
+    if (expectRightOfSystemIsland) {
+      expect(compactLeftEdge).toBeGreaterThanOrEqual(systemIslandRightEdge);
+    } else {
+      expect(frame.x + frame.width / 2).toBeCloseTo(display.bounds.width * stored!, 0);
+    }
   });
 
   it('applies native layout preferences to the emitting display instead of the current target display', async () => {

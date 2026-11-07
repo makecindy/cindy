@@ -1,4 +1,5 @@
 import fs from 'node:fs';
+import { safeStorage } from 'electron';
 import os from 'node:os';
 import path from 'node:path';
 
@@ -46,6 +47,8 @@ vi.mock('../../appSessionState', () => ({
 
 import {
   createProviderSecretStore,
+  providerSecretSavedForSetup,
+  storeCustomMcpToken,
   botEnvironmentSecretIo,
   readCustomProviderHeadersForMutation,
   readCustomProviderKeyForMutation,
@@ -600,4 +603,143 @@ it('checks companion environment presence without decrypting or unlocking the va
     Object.assign(electronState, previous); Object.assign(sessionState, previousSession);
     fs.rmSync(root, { recursive: true, force: true });
   }
+});
+
+// Regression #6473: builtin has() opened safeStorage while preparing source consent.
+// Existing injected-IO tests did not cover a presence-only lookup of the real owner slot.
+// Tier: unit, temporary fake files only; corrupt owner-A slot plus absent owner-B slot.
+// Timing: not run in the edit-only window; measure during the authorized targeted run.
+describe('setup builtin secret presence', () => {
+  it('uses only the current owner standard slot and propagates IO failures without decrypting', () => {
+    const previousSession = { ...sessionState };
+    const previousElectron = { ...electronState };
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'cindy-setup-presence-'));
+    const decrypt = vi.fn(() => { throw new Error('must not decrypt before consent'); });
+    try {
+      sessionState.mode = 'cloud'; sessionState.dataOwnerId = 'owner-a';
+      electronState.userData = root; electronState.encryptionAvailable = true;
+      electronState.decryptString = decrypt;
+      const dir = path.join(root, 'safe-storage');
+      fs.mkdirSync(dir);
+      const logical = providerSecretStorageKey('brave');
+      fs.writeFileSync(path.join(dir, `${logical}.enc`), 'invalid-unscoped-test');
+      expect(providerSecretSavedForSetup('brave')).toBe(false);
+      const scoped = resolveOwnerScopedSecretStorageKey(logical)!;
+      fs.writeFileSync(path.join(dir, `${scoped}.enc`), 'invalid-owner-test');
+      expect(providerSecretSavedForSetup('brave')).toBe(true);
+      sessionState.dataOwnerId = 'owner-b';
+      expect(providerSecretSavedForSetup('brave')).toBe(false);
+      sessionState.dataOwnerId = null;
+      expect(providerSecretSavedForSetup('brave')).toBe(false);
+      sessionState.dataOwnerId = 'owner-a';
+      const stat = vi.spyOn(fs, 'statSync').mockImplementation(() => {
+        throw Object.assign(new Error('test permission failure'), { code: 'EACCES' });
+      });
+      try {
+        expect(() => providerSecretSavedForSetup('brave')).toThrow('test permission failure');
+        expect(decrypt).not.toHaveBeenCalled();
+      } finally {
+        stat.mockRestore();
+      }
+    } finally {
+      Object.assign(sessionState, previousSession); Object.assign(electronState, previousElectron);
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  });
+});
+
+// Regression #6473 B1: the shared direct writer can truncate an existing MCP token.
+// Existing injected-IO tests do not exercise replacement failures on the real filesystem.
+// Unit tier: public storeCustomMcpToken, fake ciphertext in mkdtemp, no real keychain.
+// Minimal input: one old owner slot, then encryption / partial write / rename failure.
+// Execution and timing pending the separately authorized test window.
+describe('custom MCP token replacement', () => {
+  it.each(['encrypt', 'write', 'rename'] as const)(
+    'preserves old ciphertext and cleans its temporary file after %s failure', (failure) => {
+      const previousSession = { ...sessionState };
+      const previousElectron = { ...electronState };
+      const root = fs.mkdtempSync(path.join(os.tmpdir(), 'cindy-mcp-atomic-'));
+      const realWrite = fs.writeFileSync;
+      const spies: Array<{ mockRestore(): void }> = [];
+      try {
+        sessionState.mode = 'cloud'; sessionState.dataOwnerId = 'owner-a';
+        electronState.userData = root; electronState.encryptionAvailable = true;
+        const directory = path.join(root, 'safe-storage');
+        fs.mkdirSync(directory);
+        const key = resolveOwnerScopedSecretStorageKey(customMcpSecretStorageKey('test-mcp'))!;
+        const target = path.join(directory, `${key}.enc`);
+        const old = Buffer.from('old fake ciphertext').toString('base64');
+        fs.writeFileSync(target, old);
+        spies.push(vi.spyOn(safeStorage, 'encryptString').mockImplementation(() => {
+          if (failure === 'encrypt') throw new Error('fake encryption failure');
+          return Buffer.from('new fake ciphertext');
+        }));
+        if (failure === 'write') {
+          spies.push(vi.spyOn(fs, 'writeFileSync').mockImplementation((file, data, options) => {
+            realWrite(file, String(data).slice(0, 4), options);
+            throw new Error('fake partial write failure');
+          }));
+        }
+        if (failure === 'rename') {
+          spies.push(vi.spyOn(fs, 'renameSync').mockImplementation(() => {
+            throw new Error('fake replacement refusal');
+          }));
+        }
+        expect(storeCustomMcpToken('test-mcp', 'fake-new-token')).toBe(false);
+        expect(fs.readFileSync(target, 'utf8')).toBe(old);
+        expect(fs.readdirSync(directory)).toEqual([`${key}.enc`]);
+      } finally {
+        for (const spy of spies.reverse()) spy.mockRestore();
+        Object.assign(sessionState, previousSession); Object.assign(electronState, previousElectron);
+        fs.rmSync(root, { recursive: true, force: true });
+      }
+    },
+  );
+
+  it('replaces only the active owner slot after writing ciphertext, with private file permissions', () => {
+    const previousSession = { ...sessionState };
+    const previousElectron = { ...electronState };
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'cindy-mcp-atomic-'));
+    const realRename = fs.renameSync;
+    const spies: Array<{ mockRestore(): void }> = [];
+    try {
+      sessionState.mode = 'cloud'; sessionState.dataOwnerId = 'owner-a';
+      electronState.userData = root; electronState.encryptionAvailable = true;
+      const directory = path.join(root, 'safe-storage');
+      fs.mkdirSync(directory);
+      const logical = customMcpSecretStorageKey('test-mcp');
+      const target = path.join(directory, `${resolveOwnerScopedSecretStorageKey(logical)}.enc`);
+      fs.writeFileSync(target, 'old-A');
+      sessionState.dataOwnerId = 'owner-b';
+      const other = path.join(directory, `${resolveOwnerScopedSecretStorageKey(logical)}.enc`);
+      fs.writeFileSync(other, 'old-B');
+      sessionState.dataOwnerId = 'owner-a';
+      const encrypted = Buffer.from('new fake ciphertext');
+      spies.push(vi.spyOn(safeStorage, 'encryptString').mockReturnValue(encrypted));
+      const rename = vi.spyOn(fs, 'renameSync').mockImplementation((source, destination) => {
+        expect(path.dirname(String(source))).toBe(directory);
+        expect(destination).toBe(target);
+        expect(fs.readFileSync(target, 'utf8')).toBe('old-A');
+        expect(fs.readFileSync(source, 'utf8')).toBe(encrypted.toString('base64'));
+        if (process.platform !== 'win32') expect(fs.statSync(source).mode & 0o777).toBe(0o600);
+        realRename(source, destination);
+      });
+      spies.push(rename);
+      expect(storeCustomMcpToken('test-mcp', 'fake-new-token')).toBe(true);
+      expect(rename).toHaveBeenCalledTimes(1);
+      expect(fs.readFileSync(target, 'utf8')).toBe(encrypted.toString('base64'));
+      expect(fs.readFileSync(other, 'utf8')).toBe('old-B');
+      expect(fs.readdirSync(directory).sort()).toEqual([path.basename(target), path.basename(other)].sort());
+      sessionState.dataOwnerId = null;
+      expect(storeCustomMcpToken('test-mcp', 'fake-signed-out')).toBe(false);
+      sessionState.dataOwnerId = 'owner-a'; electronState.encryptionAvailable = false;
+      expect(storeCustomMcpToken('test-mcp', 'fake-unavailable')).toBe(false);
+      expect(fs.readFileSync(target, 'utf8')).toBe(encrypted.toString('base64'));
+      expect(rename).toHaveBeenCalledTimes(1);
+    } finally {
+      for (const spy of spies.reverse()) spy.mockRestore();
+      Object.assign(sessionState, previousSession); Object.assign(electronState, previousElectron);
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  });
 });

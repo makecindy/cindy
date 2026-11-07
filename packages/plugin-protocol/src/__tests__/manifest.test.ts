@@ -197,6 +197,33 @@ describe('Ghost manifest contract', () => {
     expect(result).toEqual({ ok: true, manifest: validManifest });
   });
 
+  // Unit regression for the production validator: the existing 16KB protocol cap must use
+  // UTF-8 bytes. Shape coverage missed Chinese schemas accepted by the old UTF-16 length check.
+  it('enforces the tools parameters byte limit without rejecting the exact boundary', () => {
+    const schema = (description: string) => ({ type: 'object', description });
+    const utf8Bytes = (parameters: Record<string, unknown>) =>
+      new TextEncoder().encode(JSON.stringify(parameters)).length;
+    const emptySchemaBytes = utf8Bytes(schema(''));
+    const atLimit = schema('a'.repeat(16_384 - emptySchemaBytes));
+    const chineseDescription = '汉'.repeat(5_000);
+    const overLimit = schema(
+      `${chineseDescription}${'a'.repeat(16_385 - utf8Bytes(schema(chineseDescription)))}`,
+    );
+
+    expect(utf8Bytes(atLimit)).toBe(16_384);
+    expect(validateGhostManifest({
+      ...validManifest,
+      tools: [{ name: 'help', description: 'Help', parameters: atLimit }],
+    }).ok).toBe(true);
+
+    expect(JSON.stringify(overLimit).length).toBeLessThan(16_384);
+    expect(utf8Bytes(overLimit)).toBe(16_385);
+    expect(validateGhostManifest({
+      ...validManifest,
+      tools: [{ name: 'help', description: 'Help', parameters: overLimit }],
+    })).toEqual({ ok: false, reason: 'tools[].parameters 过大(上限 16KB)' });
+  });
+
   it('keeps minCindyVersion optional for old plugins and validates declared versions', () => {
     expect(validateGhostManifest(validManifest)).toEqual({
       ok: true,
@@ -1969,6 +1996,15 @@ it('validates read-only observe access without a tasks dependency', () => {
   expect(validateGhostManifest({ ...base, agent: { observe: false } }).ok).toBe(false);
 });
 
+// Companion viewing is standalone; a non-boolean value must not install.
+it('validates companion viewing without a tasks dependency', () => {
+  const base = { schemaVersion: 3, minCindyVersion: '0.1.0', id: 'companions-test', name: 'Companions', version: '1.0.0', entry: 'main.js' };
+  const approved = validateGhostManifest({ ...base, agent: { companions: true } });
+  expect(approved.ok && approved.manifest.agent).toEqual({ companions: true });
+  expect(validateGhostManifest({ ...base, agent: { companions: 1 } }).ok).toBe(false);
+  expect(validateGhostManifest({ ...base, agent: { companions: false } }).ok).toBe(false);
+});
+
 describe('package release notes', () => {
   const base = { schemaVersion: 3, minCindyVersion: '0.1.0', id: 'notes-test', name: 'Notes test', version: '1.0.0', entry: 'main.js' };
   it('keeps old packages without notes installable', () => {
@@ -2105,5 +2141,23 @@ describe('tool approval declaration', () => {
   it('rejects an unknown approval policy', () => {
     expect(validateGhostManifest({ ...validManifest, tools: [{ name: 'run', description: 'Run', approval: 'bypass' }] }))
       .toMatchObject({ ok: false });
+  });
+});
+
+describe('readme declarations', () => {
+  // 作者契约(FORGE_GUIDE §2「详细介绍」):readme 规范化保留在 manifest 上,与已声明文件冲突时拒绝。
+  it('keeps a valid readme map and rejects paths that collide with other declared files', () => {
+    const readme = { en: 'README.md', 'zh-CN': 'README.zh-CN.md' };
+    expect(validateGhostManifest({ ...validManifest, readme })).toMatchObject({
+      ok: true,
+      manifest: { readme },
+    });
+    expect(
+      validateGhostManifest({
+        ...validManifest,
+        manual: { items: [{ dir: 'docs', name: 'docs', description: 'Docs' }] },
+        readme: { en: 'docs/README.md' },
+      }),
+    ).toMatchObject({ ok: false, reason: expect.stringContaining('readme.en') });
   });
 });

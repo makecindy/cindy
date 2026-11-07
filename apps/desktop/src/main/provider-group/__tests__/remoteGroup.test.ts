@@ -9,6 +9,7 @@ import { describe, expect, it, vi } from 'vitest';
 import type { ProviderGroupConfig, ProviderGroupMember, ProviderGroupView } from '../../../shared/providerGroup';
 import type { ProviderGroupBinding, ProviderGroupRef } from '../bindings';
 import type { ProviderGroupDirectory, ResolvedMemberState } from '../directory';
+import { ProviderGroupLocalCapacityError } from '../localCapacity';
 import { createProviderGroupRouter } from '../router';
 import {
   createProviderGroupService,
@@ -68,7 +69,8 @@ function harness(options: {
     random: () => 0,
   });
   const remote = {
-    readGroup: vi.fn(async () => config),
+    readGroup: vi.fn<ProviderGroupRemoteGroups['readGroup']>(async () => config),
+    readSnapshotGroup: vi.fn<NonNullable<ProviderGroupRemoteGroups['readSnapshotGroup']>>(async () => null),
     pick: vi.fn(async () => {
       const next = picks.shift() ?? 'unavailable';
       if (next instanceof Error) throw next;
@@ -148,7 +150,7 @@ function harness(options: {
     sleep: vi.fn(async (_ms: number) => {}),
     log: { info: vi.fn(), warn: vi.fn() },
   } satisfies ProviderGroupServiceDeps;
-  return { service: createProviderGroupService(deps), deps, remote, row, bindings, released, probe };
+  return { service: createProviderGroupService(deps), deps, remote, row, bindings, released, probe, config };
 }
 
 async function flush() {
@@ -162,6 +164,8 @@ describe('assigning through a group on another computer', () => {
     const h = harness();
     const context = await h.service.assignBeforeStart(START);
     expect(h.remote.pick).toHaveBeenCalledWith(OWNER, expect.objectContaining({ sessionId: 's1', providerId: 'anthropic', exclude: [] }));
+    expect(h.remote.pick).toHaveBeenCalledWith(OWNER, expect.objectContaining({ allowOffline: true }));
+    expect(h.remote.readGroup).toHaveBeenCalledWith(OWNER, 'anthropic', { allowSnapshot: true });
     expect(context).toMatchObject({
       groupDeviceId: OWNER,
       overrideRoute: true,
@@ -270,8 +274,173 @@ describe('assigning through a group on another computer', () => {
 
     const gone = harness({ config: null, row: { agentDeviceId: 'studio', providerId: STUDIO.providerId } });
     gone.bindings.set('s1', { providerId: 'anthropic', memberKey: STUDIO.key, groupDeviceId: OWNER, at: 1 });
+    gone.remote.readSnapshotGroup.mockResolvedValueOnce(harness().config!);
     expect(await gone.service.assignBeforeStart(START)).toBeNull();
     expect(gone.bindings.has('s1')).toBe(false);
+    expect(gone.remote.readSnapshotGroup).not.toHaveBeenCalled();
+  });
+
+  it('uses a still-valid prepared config for a never-run bound task after the owner directory is unavailable', async () => {
+    const h = harness({ live: false });
+    h.bindings.set('s1', { providerId: 'anthropic', memberKey: OWNER_LOCAL.key, groupDeviceId: OWNER, at: 1 });
+    h.remote.readGroup.mockResolvedValue(undefined);
+    h.remote.readSnapshotGroup.mockResolvedValueOnce(h.config!);
+    const context = await h.service.assignBeforeStart(START);
+    expect(context).toMatchObject({ member: { key: OWNER_LOCAL.key }, offlineRouting: true, config: h.config });
+    expect(h.bindings.get('s1')).toMatchObject({ memberKey: OWNER_LOCAL.key });
+    const next = await h.service.nextAfterStartFailure(context!, new Error('[REMOTE_AGENT_DEVICE_UNREACHABLE] gone'));
+    expect(next?.route).toEqual({ agentDeviceId: STUDIO.agentDeviceId, providerId: STUDIO.providerId });
+    expect(h.bindings.get('s1')).toMatchObject({ memberKey: STUDIO.key });
+    expect(h.remote.pick).toHaveBeenLastCalledWith(OWNER, expect.objectContaining({ allowOffline: true }));
+  });
+
+  // Test value
+  // - Production entry: createProviderGroupService.assignBeforeStart via the real service.
+  // - Rule: a cached snapshot is not proof of explicit member removal; keep the binding and
+  //   use the existing pending/adoption boundary when the snapshot predates a live-picked member.
+  // - Gap: existing snapshot cases contain the bound member; none covers a newer live-picked
+  //   legacy/no-continuity member absent from an older acknowledged snapshot.
+  // - Minimal failing input: a never-run task gets a live pick to STUDIO without continuity,
+  //   then the owner is unavailable and an older snapshot without STUDIO is read.
+  // - Tier: unit (real service; transport/directory doubles only).
+  it('keeps a never-run binding when an older snapshot cannot prove the live-picked member was removed', async () => {
+    const older = { strategy: 'least' as const, autoSwitch: true,
+      members: [OWNER_LOCAL, SELF, SHARED] };
+    const h = harness({ live: false });
+    expect(await h.service.assignBeforeStart(START)).toMatchObject({ member: { key: STUDIO.key },
+      route: { agentDeviceId: STUDIO.agentDeviceId, providerId: STUDIO.providerId } });
+    h.remote.readGroup.mockResolvedValue(undefined);
+    h.remote.readSnapshotGroup.mockResolvedValueOnce(older);
+
+    const context = await h.service.assignBeforeStart(START);
+
+    expect(h.bindings.get('s1')).toMatchObject({ providerId: 'anthropic',
+      memberKey: STUDIO.key, groupDeviceId: OWNER });
+    expect(h.deps.markReleased).not.toHaveBeenCalled();
+    expect(context).toMatchObject({ groupProviderId: 'anthropic', groupDeviceId: OWNER,
+      pendingGroupAdoption: true, member: { key: STUDIO.key },
+      route: { agentDeviceId: STUDIO.agentDeviceId, providerId: STUDIO.providerId } });
+    expect(context?.offlineRouting).toBeUndefined();
+  });
+
+  it('still treats a fresh null or live member removal as authoritative', async () => {
+    const older = { strategy: 'least' as const, autoSwitch: true,
+      members: [OWNER_LOCAL, SELF, SHARED] };
+    const row = { agentDeviceId: STUDIO.agentDeviceId, providerId: STUDIO.providerId };
+    const gone = harness({ config: null, live: false, row });
+    gone.bindings.set('s1', { providerId: 'anthropic', memberKey: STUDIO.key, groupDeviceId: OWNER, at: 1 });
+    expect(await gone.service.assignBeforeStart(START)).toBeNull();
+    expect(gone.bindings.has('s1')).toBe(false);
+    expect(gone.deps.markReleased).toHaveBeenCalled();
+
+    const removed = harness({ config: older, live: false, row });
+    removed.bindings.set('s1', { providerId: 'anthropic', memberKey: STUDIO.key, groupDeviceId: OWNER, at: 1 });
+    expect(await removed.service.assignBeforeStart(START)).toBeNull();
+    expect(removed.bindings.has('s1')).toBe(false);
+    expect(removed.deps.markReleased).toHaveBeenCalled();
+  });
+
+  it('does not use a prepared config for an already-run task', async () => {
+    const h = harness({ row: { sdkSessionId: 'native-1' }, live: false });
+    h.bindings.set('s1', { providerId: 'anthropic', memberKey: OWNER_LOCAL.key, groupDeviceId: OWNER, at: 1 });
+    h.remote.readGroup.mockResolvedValue(undefined);
+    h.remote.readSnapshotGroup.mockResolvedValueOnce(h.config!);
+    const context = await h.service.assignBeforeStart(START);
+    expect(context).toMatchObject({ pendingGroupAdoption: true });
+    expect(context?.offlineRouting).toBeUndefined();
+    expect(h.remote.readSnapshotGroup).not.toHaveBeenCalled();
+    expect(await h.service.nextAfterStartFailure(context!, new Error('[REMOTE_AGENT_DEVICE_UNREACHABLE] gone'))).toBeNull();
+    expect(h.bindings.get('s1')).toMatchObject({ memberKey: OWNER_LOCAL.key });
+    expect(h.remote.pick).not.toHaveBeenCalled();
+  });
+
+  it('does not bind or route when the verified config is refused at admission', async () => {
+    const h = harness();
+    h.remote.readGroup.mockResolvedValueOnce(h.config!);
+    h.remote.pick.mockRejectedValueOnce(new Error('[ACCESS_REVOKED] provider removed'));
+    expect(await h.service.assignBeforeStart(START)).toBeNull();
+    expect(h.bindings.size).toBe(0);
+    expect(h.deps.persistRoute).not.toHaveBeenCalled();
+  });
+
+  // Test value
+  // - Production entry: provider-group service assignBeforeStart -> assignFromRemoteGroup.
+  // - Rule: provider-groups.md section 5: a task assigned to a group must not run on the group
+  //   owner directly just because the local routing table is full; the owner is not a member here.
+  // - Gap: the new local capacity failure was caught by the same catch that means "owner
+  //   unreadable", returning none and leaving the task on the original O route.
+  // - Minimal failing input: owner directory readable, group contains only a remote M, and the
+  //   local coalescer is at capacity before the pick.
+  // - Tier: unit, in-memory service harness.
+  it('does not fall through to the group owner when local routing capacity is full', async () => {
+    const h = harness({ config: { strategy: 'least', autoSwitch: true, members: [STUDIO] } });
+    h.remote.pick.mockRejectedValueOnce(new ProviderGroupLocalCapacityError());
+    await expect(h.service.assignBeforeStart(START)).rejects.toThrow('Group routing capacity is temporarily exhausted');
+    expect(h.bindings.size).toBe(0);
+    expect(h.deps.persistRoute).not.toHaveBeenCalled();
+    expect(h.row.agentDeviceId).toBe(OWNER);
+  });
+
+  // Test value
+  // - Production entry: provider-group service resolveSwitchTarget (model-list "group" move).
+  // - Rule: a local capacity failure must abort the move, not silently keep the user's raw
+  //   location (the group owner) when that owner is not a group member.
+  // - Gap: resolveSwitchTarget caught every pick error as "group unreadable" and returned null.
+  // - Minimal failing input: group contains only a remote M, target is the owner, local capacity
+  //   fails before the pick.
+  // - Tier: unit, in-memory service harness.
+  it('does not replace a task route with the owner when local capacity blocks a group move', async () => {
+    const h = harness({ config: { strategy: 'least', autoSwitch: true, members: [STUDIO] } });
+    h.remote.pick.mockRejectedValueOnce(new ProviderGroupLocalCapacityError());
+    await expect(h.service.resolveSwitchTarget('s1', {
+      agentKind: 'claude-code', model: MODEL, providerId: 'anthropic', agentDeviceId: OWNER,
+      current: { agentDeviceId: 'elsewhere', providerId: 'anthropic' },
+    })).rejects.toThrow('Group routing capacity is temporarily exhausted');
+    expect(h.bindings.size).toBe(0);
+  });
+
+  it('binds a prepared executor when the directory is unavailable but its verified config is still valid', async () => {
+    const h = harness();
+    h.remote.readGroup.mockImplementation(async (_owner, _provider, options) =>
+      options?.allowSnapshot ? h.config! : undefined);
+    const context = await h.service.assignBeforeStart(START);
+    expect(context?.route).toEqual({ agentDeviceId: STUDIO.agentDeviceId, providerId: STUDIO.providerId });
+    expect(h.bindings.get('s1')).toMatchObject({ memberKey: STUDIO.key, groupDeviceId: OWNER });
+    expect(h.deps.persistRoute).toHaveBeenCalledWith('s1', {
+      agentDeviceId: STUDIO.agentDeviceId, providerId: STUDIO.providerId,
+    });
+    expect(h.remote.pick).toHaveBeenCalledWith(OWNER, expect.objectContaining({ allowOffline: true }));
+  });
+
+  // Test value
+  // - Production entry/observable result: assignBeforeStart -> assignFromRemoteGroup; a hung
+  //   owner directory must still use the acknowledged pick config within the 3s group budget.
+  // - Rule: provider-groups.md section 5 (group picks wait at most 3s) and the 2026-11-03
+  //   short-outage section (a new task may use contexts acknowledged by O/M while O is unreachable).
+  // - Coverage gap: existing snapshot cases make readGroup throw; none cover a hung read.
+  // - Minimal failing input: readGroup never settles and a snapshot config is available.
+  // - Tier: unit (in-memory service harness), same file as the other assignment cases.
+  it('uses the acknowledged config when the owner directory hangs instead of throwing', async () => {
+    const h = harness();
+    h.remote.readGroup.mockImplementationOnce(() => new Promise<ProviderGroupConfig | null | undefined>(() => {}));
+    h.remote.readSnapshotGroup.mockResolvedValueOnce(h.config!);
+    vi.useFakeTimers();
+    try {
+      const pending = h.service.assignBeforeStart(START);
+      const raced = Promise.race([
+        pending.then(context => context ?? 'missing'),
+        new Promise<'timeout'>(resolve => setTimeout(() => resolve('timeout'), 5_000)),
+      ]);
+      await vi.advanceTimersByTimeAsync(5_000);
+      const result = await raced;
+      expect(result).not.toBe('timeout');
+      expect(result).toMatchObject({
+        route: { agentDeviceId: STUDIO.agentDeviceId, providerId: STUDIO.providerId },
+      });
+      expect(h.remote.readSnapshotGroup).toHaveBeenCalledWith(OWNER, 'anthropic');
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it('tries the next computer when the chosen one does not start', async () => {
@@ -279,10 +448,21 @@ describe('assigning through a group on another computer', () => {
     const context = await h.service.assignBeforeStart(START);
     const next = await h.service.nextAfterStartFailure(context!, new Error('[REMOTE_AGENT_DEVICE_UNREACHABLE] gone'));
     expect(h.remote.pick).toHaveBeenLastCalledWith(OWNER, expect.objectContaining({ exclude: [STUDIO.key] }));
+    expect(h.remote.pick).toHaveBeenLastCalledWith(OWNER, expect.objectContaining({ allowOffline: true }));
     // 连不上只由本机自己避开，不替全组冷却那台。
     expect(h.remote.cool).not.toHaveBeenCalled();
     expect(next?.route).toEqual({ agentDeviceId: 'share:s1', providerId: 'anthropic' });
     expect(h.bindings.get('s1')).toMatchObject({ memberKey: SHARED.key, groupDeviceId: OWNER });
+  });
+
+  it('keeps the last known group config for offline start failover after the owner catalog is unavailable', async () => {
+    const h = harness({ picks: [STUDIO, SELF, SHARED] });
+    const context = await h.service.assignBeforeStart(START);
+    const first = await h.service.nextAfterStartFailure(context!, new Error('[REMOTE_AGENT_DEVICE_UNREACHABLE] gone'));
+    expect(first?.member.key).toBe(SELF.key);
+    h.remote.readGroup.mockResolvedValue(undefined);
+    const second = await h.service.nextAfterStartFailure(first!, new Error('[REMOTE_AGENT_DEVICE_UNREACHABLE] gone'));
+    expect(second?.member.key).toBe(SHARED.key);
   });
 
   it('drops the binding when the group is deleted before the agent starts', async () => {
@@ -425,6 +605,36 @@ describe('switching computers within a group on another computer', () => {
     expect(h.bindings.has('s1')).toBe(true);
   });
 
+  // Test value
+  // - Production entry: provider-group service onTurnError -> failoverRun (running-turn failover).
+  // - Rule: provider-groups.md section 5 / section 6: group reads wait at most 3s; an unreadable
+  //   group computer keeps the binding and hands the original error back instead of switching.
+  // - Gap: the adjacent "cannot be reached" case resolves readGroup immediately; it does not
+  //   cover a hung owner read, which would otherwise wait for the default RPC timeout.
+  // - Minimal failing input: bound task, rate-limit error, readGroup never settles.
+  // - Tier: unit (in-memory service harness).
+  it('does not hang running-turn failover on a slow group read', async () => {
+    const h = bound();
+    h.remote.readGroup.mockImplementation(() => new Promise<ProviderGroupConfig | null | undefined>(() => {}));
+    vi.useFakeTimers();
+    try {
+      const pending = h.service.onTurnError('s1', { sdkError: 'rate_limit' }, 3);
+      let settled = false;
+      const observed = pending.then(() => { settled = true; });
+      await vi.advanceTimersByTimeAsync(PROVIDER_GROUP_ADOPT_TIMEOUT_MS - 1);
+      expect(settled).toBe(false);
+      await vi.advanceTimersByTimeAsync(1);
+      await Promise.resolve();
+      expect(settled).toBe(true);
+      await observed;
+      expect(h.deps.switchAgentLocation).not.toHaveBeenCalled();
+      expect(h.deps.fallback).toHaveBeenCalled();
+      expect(h.bindings.has('s1')).toBe(true);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it('releases the task as soon as the group computer confirms the group was deleted', async () => {
     const failing = bound({ config: null });
     failing.service.onTurnError('s1', { sdkError: 'rate_limit' }, 3);
@@ -511,7 +721,7 @@ describe('switching computers within a group on another computer', () => {
 describe('old tasks already running on the group computer', () => {
   it('takes the task in when it hits the usage limit there, then moves it and continues', async () => {
     const h = harness({ row: { sdkSessionId: 'native-1' }, picks: [STUDIO] });
-    h.service.onTurnError('s1', { sdkError: 'rate_limit' }, 3);
+    await h.service.onTurnError('s1', { sdkError: 'rate_limit' }, 3);
     await flush();
     expect(h.remote.cool).toHaveBeenCalledWith(OWNER, { providerId: 'anthropic', memberKey: OWNER_LOCAL.key, cause: 'usage-limit', resetAt: 5_000, model: MODEL });
     expect(h.deps.switchAgentLocation).toHaveBeenCalledWith(
@@ -546,6 +756,62 @@ describe('old tasks already running on the group computer', () => {
     );
     expect(next?.member.key).toBe(STUDIO.key);
     expect(h.bindings.get('s1')).toMatchObject({ memberKey: STUDIO.key, groupDeviceId: OWNER });
+  });
+
+  // Test value
+  // - Production entry: provider-group service assignBeforeStart -> nextAfterStartFailure.
+  // - Rule: provider-groups.md section 9.4: a task released because its group was deleted must
+  //   not be taken back when the same group is recreated.
+  // - Gap: existing cases cover deletion during a running-turn failover, but not a pending
+  //   startup adoption whose owner read timed out first.
+  // - Minimal failing input: bound task, owner unreadable while opening, then owner confirms the
+  //   group was deleted on the startup-failure retry.
+  // - Tier: unit, in-memory service harness.
+  it('releases a bound task when the group is confirmed deleted after an unreadable startup read', async () => {
+    const h = harness({ row: { sdkSessionId: 'native-1' }, live: false });
+    h.bindings.set('s1', { providerId: 'anthropic', memberKey: OWNER_LOCAL.key, groupDeviceId: OWNER, at: 1 });
+    h.remote.readGroup.mockResolvedValueOnce(undefined);
+    const context = await h.service.assignBeforeStart(START);
+    expect(context?.pendingGroupAdoption).toBe(true);
+
+    h.remote.readGroup.mockResolvedValue(null);
+    expect(await h.service.nextAfterStartFailure(context!, new Error('[REMOTE_AGENT_DEVICE_UNREACHABLE] gone'))).toBeNull();
+    expect(h.bindings.has('s1')).toBe(false);
+    expect(h.released.get('s1')).toEqual({ providerId: 'anthropic', groupDeviceId: OWNER });
+  });
+
+  // Test value
+  // - Production entry: provider-group service assignBeforeStart -> nextAfterStartFailure.
+  // - Rule: provider-groups.md section 9.4: once a startup failure adopts a member, deleting the
+  //   group must release that task rather than leave an adoptable binding behind.
+  // - Gap: the pending-adoption context still says no binding was written after a successful
+  //   member pick; the deletion gate must look at the binding, not only the stale flag.
+  // - Minimal failing input: no binding, owner unreadable while opening, owner readable on the
+  //   first start failure, then owner confirms the group was deleted on the next failure.
+  // - Tier: unit, in-memory service harness.
+  it('releases a task adopted by a startup-failure retry when the group is later confirmed deleted', async () => {
+    const h = harness({ row: { sdkSessionId: 'native-1' }, live: false, picks: [STUDIO] });
+    h.remote.readGroup.mockResolvedValueOnce(undefined);
+    const context = await h.service.assignBeforeStart(START);
+    expect(context).toMatchObject({ pendingGroupAdoption: true });
+    expect(h.bindings.size).toBe(0);
+
+    // Nothing was adopted yet: a confirmed deletion must not mark this task as released.
+    h.remote.readGroup.mockResolvedValue(null);
+    expect(await h.service.nextAfterStartFailure(context!, new Error('[REMOTE_AGENT_DEVICE_UNREACHABLE] gone'))).toBeNull();
+    expect(h.bindings.size).toBe(0);
+    expect(h.released.size).toBe(0);
+
+    // The owner answers on the retry: the startup failure adopts a member.
+    h.remote.readGroup.mockResolvedValue(h.config!);
+    const next = await h.service.nextAfterStartFailure(context!, new Error('[REMOTE_AGENT_DEVICE_UNREACHABLE] gone'));
+    expect(h.bindings.get('s1')).toMatchObject({ memberKey: STUDIO.key, groupDeviceId: OWNER });
+    expect(next).not.toBeNull();
+
+    h.remote.readGroup.mockResolvedValue(null);
+    expect(await h.service.nextAfterStartFailure(next!, new Error('[REMOTE_AGENT_DEVICE_UNREACHABLE] gone'))).toBeNull();
+    expect(h.bindings.has('s1')).toBe(false);
+    expect(h.released.get('s1')).toEqual({ providerId: 'anthropic', groupDeviceId: OWNER });
   });
 
   it('does not release a bound task when the group computer is merely slow to answer (timeout is not "group deleted")', async () => {
@@ -583,6 +849,37 @@ describe('old tasks already running on the group computer', () => {
     );
     expect(next?.member.key).toBe(STUDIO.key);
     expect(h.bindings.get('s1')).toMatchObject({ memberKey: STUDIO.key, groupDeviceId: OWNER });
+  });
+
+  // Test value
+  // - Production entry: provider-group service nextAfterStartFailure (reachable from register's
+  //   startup-failure retry loop).
+  // - Rule: provider-groups.md section 5 / section 6: the group owner is asked for at most 3s;
+  //   the short-outage section lets a new task use O/M-confirmed prepared executors.
+  // - Gap: existing cases cover a hung read in assignBeforeStart, but not the start-failure retry
+  //   which would otherwise stay on the owner's default RPC timeout.
+  // - Minimal failing input: a verified start context, then readGroup never settles on failure.
+  // - Tier: unit (in-memory service harness).
+  it('does not wait for a hung owner read before using the verified config for start failover', async () => {
+    const h = harness({ picks: [STUDIO, SHARED] });
+    const context = await h.service.assignBeforeStart(START);
+    h.remote.readGroup.mockImplementation(() => new Promise<ProviderGroupConfig | null | undefined>(() => {}));
+    vi.useFakeTimers();
+    try {
+      const pending = h.service.nextAfterStartFailure(context!, new Error('[REMOTE_AGENT_DEVICE_UNREACHABLE] gone'));
+      let settled = false;
+      const observed = pending.then(next => { settled = true; return next; });
+      await vi.advanceTimersByTimeAsync(PROVIDER_GROUP_ADOPT_TIMEOUT_MS - 1);
+      expect(settled).toBe(false);
+      await vi.advanceTimersByTimeAsync(1);
+      await Promise.resolve();
+      expect(settled).toBe(true);
+      const next = await observed;
+      expect(next).toMatchObject({ member: { key: SHARED.key } });
+      expect(h.remote.pick).toHaveBeenLastCalledWith(OWNER, expect.objectContaining({ allowOffline: true }));
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it('lets a failed reopen move an old task whose native session must be resumed (register hands it off first)', async () => {

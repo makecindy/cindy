@@ -23,6 +23,7 @@ export {
   type ClaudeCliLoginStatus,
   type ReadClaudeCliStatusOptions,
 } from './agents/claude-code/cli-login-status.js';
+export { workspaceSettingsFiles, parseClaudeSettingsJson } from './agents/claude-code/workspace-settings-guard.js';
 export * from './agents/pi/managed-command.js';
 export { evaluatePiProjectTrust, piProjectKey } from './agents/pi/project-trust.js';
 export {

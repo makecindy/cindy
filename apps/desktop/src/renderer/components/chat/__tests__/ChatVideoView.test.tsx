@@ -253,3 +253,17 @@ it('coordinates inline videos and audio through playback and retry', () => {
   expect(pause.mock.contexts).not.toContain(second);
   unregister();
 });
+// Regression #8735: a local audio preview looped and kept playing after the
+// preview closed. Collection previews close by unmounting the player without its
+// own close handler; the cases above only cover video menus and inline players.
+// Tier 1, minimum input: open one audio preview, then unmount it.
+it('audio previews play once and stop when the preview unmounts', () => {
+  const view = render(
+    <VideoLightbox src="xdt-audio://local/?path=%2Fsong.mp3" kind="audio" onClose={vi.fn()} />,
+    { wrapper: Tooltip.Provider },
+  );
+  const audio = document.querySelector('audio')!;
+  expect(audio.loop).toBe(false);
+  view.unmount();
+  expect(pause.mock.contexts).toContain(audio);
+});

@@ -13,7 +13,7 @@
 
 import path from 'node:path';
 
-import type { AgentCredentialMode, AuthAdapter } from '../../interfaces/auth-adapter.js';
+import type { AuthAdapter, AuthAdapterOptions } from '../../interfaces/auth-adapter.js';
 import type { AgentRuntimeConfig } from '../../interfaces/runtime-config.js';
 import { applyPlainTextTerminalEnv } from '../shared/terminal-output.js';
 
@@ -35,7 +35,7 @@ function prependPath(env: Record<string, string>, prepends: string[]): void {
 export async function buildCodexEnv(
   auth: AuthAdapter,
   runtimeConfig: AgentRuntimeConfig,
-  options: { credentialMode?: AgentCredentialMode; providerId?: string } = {},
+  options: AuthAdapterOptions = {},
 ): Promise<Record<string, string>> {
   // Codex 不需要剥 process.env 里的 OAuth token —— 它的鉴权走 CODEX_HOME 文件路径，
   // 不读 process.env 里的 OPENAI_API_KEY（且本项目 D6 决策不补 API key 通道）。
@@ -56,10 +56,16 @@ export async function buildCodexEnv(
     Object.assign(env, behaviorFlags);
   }
   // endpoint 字段：Codex SDK 当前无对应 env，跳过
-  const authOptions = options.credentialMode || options.providerId
+  const authOptions = options.credentialMode || options.providerId || options.nativeSubscriptionAccount
     ? options
     : undefined;
   Object.assign(env, await auth.getAuthEnv(authOptions));
+  if (options.nativeSubscriptionAccount) {
+    const replaced = new Set(['CODEX_HOME', 'CODEX_ACCESS_TOKEN', 'CODEX_API_KEY', 'OPENAI_API_KEY', 'OPENAI_BASE_URL',
+      'OPENAI_FEDERATION_RULE_ID', 'OPENAI_IDENTITY_TOKEN_FILE', 'OPENAI_WORKLOAD_IDENTITY_CONTEXT']);
+    for (const key of Object.keys(env)) if (replaced.has(key.toUpperCase())) delete env[key];
+    env.CODEX_HOME = options.nativeSubscriptionAccount.configDir;
+  }
   prependPath(env, runtimeConfig.pathPrepends ?? []);
 
   // Windows 下 Python piped stdout 默认走 locale encoding(cp936/GBK), 不看 chcp 65001。

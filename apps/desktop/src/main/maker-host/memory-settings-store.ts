@@ -24,6 +24,7 @@ import path from 'node:path';
 import { desktopMakerLogger } from './logger-adapter.js';
 import {
   createOverrideSettingsFile,
+  portableOverrideSettings,
   type OverrideSettingsState,
 } from './override-settings-file.js';
 import { hasCommittedOwner, ownerScopedPath } from '../ownerContext.js';
@@ -134,3 +135,6 @@ export function preserveLegacyMakerMemoryDisabled(
 export function resetMemorySettings(): MemorySettings {
   return currentStore().reset();
 }
+
+/** New-computer setup: values the user changed here (docs/product-rules/new-device-setup-migration.md). */
+export const memoryPortableSettings = portableOverrideSettings(() => currentStore());

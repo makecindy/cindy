@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import { COMPANION_CLOUD_VERSION } from '@cindy/device-link';
 import type { DeviceLinkDeviceView } from '../../../shared/deviceLinkIpc.js';
 import { createCompanionHomeRegistry } from '../homes.js';
 import { readTranscriptPage } from '../room.js';
@@ -24,7 +25,7 @@ function setup(options: { home: string | null; handler?: ApiHandler; devices?: D
   readValues?: () => Promise<Array<{ key: string; value: unknown }>>; syncProfile?: (botId: string) => Promise<void>;
   turnActive?: () => boolean; homeLink?: CompanionCloudHost['homeLink']; stopBotTurns?: CompanionCloudHost['stopBotTurns'];
   canonicalSession?: CompanionCloudHost['canonicalSession']; paused?: (botId: string) => boolean; refreshForeground?: () => Promise<void>;
-  savedState?: string }) {
+  store?: Parameters<typeof startCompanionCloud>[0]['store']; savedState?: string }) {
   const actors: CompanionRuntimeActor[] = [{ id: 'actor-1', kind: 'bot', externalId: 'bot_mia', name: 'Mia', avatar: null, homeDeviceId: options.home }];
   const { api, calls } = fakeApi(options.handler ?? ((route, method) => {
     // The home has uploaded the profile snapshot a take-over builds from.
@@ -54,7 +55,7 @@ function setup(options: { home: string | null; handler?: ApiHandler; devices?: D
   };
   runtime = startCompanionCloud({ api, ...(options.backgroundIdentityApi ? { backgroundIdentity: {
     api: options.backgroundIdentityApi, isDeferred: options.identityDeferred ?? (() => false) } } : {}),
-    host, endpoint: 'https://chat', humanActorId: 'human', selfDeviceId: 'desk', current: () => true,
+    store: options.store, host, endpoint: 'https://chat', humanActorId: 'human', selfDeviceId: 'desk', current: () => true,
     bots: () => actors.filter(a => a.homeDeviceId === 'desk' && !state.isDemoted(a.externalId)).map(a => ({ botId: a.externalId, actorId: a.id, name: a.name })),
     actors: () => actors, refresh, refreshForeground: options.refreshForeground, publish, onShadowChanged, ...(options.syncProfile ? { syncProfile: options.syncProfile } : {}),
     ...(options.paused ? { paused: options.paused } : {}) });
@@ -346,6 +347,44 @@ describe('transfer', () => {
     expect(await t.runtime.transfer('bot_mia', 'laptop')).toEqual({ ok: false, code: 'FAILED' });
     expect(t.calls.some(call => call.method === 'PATCH')).toBe(false);
     expect(t.state.isDemoted('bot_mia')).toBe(false);
+  });
+
+  // Regression: 127 shipped store readers but still advertised v2. Exercise the real
+  // transfer decision with the shipped declaration, not a hardcoded v3 test peer.
+  it.each([
+    { peer: 'current', version: COMPANION_CLOUD_VERSION, storeEnabled: true, succeeds: true },
+    { peer: 'old', version: 2, storeEnabled: true, succeeds: false },
+    { peer: 'current without server store', version: COMPANION_CLOUD_VERSION, storeEnabled: false, succeeds: false },
+  ])('hands large content only to a capable peer ($peer)', async ({ version, storeEnabled, succeeds }) => {
+    const key = 'companion.skill.v1:large';
+    const value = { slug: 'large', content: 'x'.repeat(70 * 1024) };
+    let stored: unknown;
+    const t = setup({ home: 'desk', devices: [device('laptop')],
+      values: [{ key: 'companion.profile.v1', value: MIA }, { key, value }],
+      store: { enabled: () => storeEnabled },
+      homeLink: { version: async () => version, targets: async () => [], handOver: async () => ({ ok: true }) },
+      handler: (route, method, data) => {
+        if (route === '/preferences') return method === 'GET' ? [{ key: 'companion.profile.v1', value: MIA, revision: 1 }] : { revision: 1 };
+        if (route.startsWith('/companion-store/changes')) return { entries: [], cursor: '0', hasMore: false };
+        if (route === '/companion-store/entry' && method === 'POST') {
+          stored = (data as { value: unknown }).value;
+          return { revision: 1 };
+        }
+        if (route.startsWith('/companion-store/entry?')) return { key, revision: 1, deleted: false, value: stored };
+        if (route === '/conversations') return { id: ROOM };
+        if (route.includes('/messages?')) return [];
+        if (route.endsWith('/import') || method === 'PATCH') return {};
+        throw new Error(`unexpected ${method} ${route}`);
+      } });
+    expect(await t.runtime.switchHome('bot_mia', 'laptop')).toEqual(succeeds ? { ok: true } : { ok: false, code: 'FAILED' });
+    expect(t.actors[0]!.homeDeviceId).toBe(succeeds ? 'laptop' : 'desk');
+    expect(t.state.isDemoted('bot_mia')).toBe(succeeds);
+    expect(t.calls.some(call => call.method === 'PATCH')).toBe(succeeds);
+    if (succeeds) {
+      expect(stored).toEqual({ companionStore: 1, prefRevision: 0, value });
+      const uploaded = t.calls.findIndex(call => call.route === '/companion-store/entry' && call.method === 'POST');
+      expect(uploaded).toBeLessThan(t.calls.findIndex(call => call.method === 'PATCH'));
+    } else expect(stored).toBeUndefined();
   });
 
   it('only transfers from the home computer', async () => {

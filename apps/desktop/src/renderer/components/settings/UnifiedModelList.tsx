@@ -71,6 +71,8 @@ import {
   useModelVisibilityVersion,
 } from '@/state/modelVisibilityPrefs';
 import { LocalPackagingTag } from './LocalPackagingTag';
+import { getModelEngineOverride, useModelEnginePrefsVersion } from '@/state/modelEnginePrefs';
+import { getProviderModelEffort, getProviderModelFast, getProviderModelThinking, useProviderModelMemoryVersion } from '@/state/providerModelMemory';
 import { ModelAdvancedDrawer } from './ModelAdvancedDrawer';
 import {
   groupModelsForManagement,
@@ -86,6 +88,7 @@ import {
   pickRecommendedAgent,
   nativeModelAgents,
   resolveModelIconKind,
+  markedSelectionAliasGroups, type SelectionAliasPreferences,
 } from '@cindy/model-providers';
 import type { AgentKind, CatalogModel, ProviderView } from '@cindy/model-providers';
 import { modelCompactionTarget } from '../../../shared/modelContextLimit';
@@ -161,6 +164,8 @@ export function loadCollapsedMap(): Record<string, boolean> {
 
 /** 并集行:同一模型跨 agent 合并;byAgent 保留各 agent 的目录条目(id / 元数据可能不同)。 */
 export interface UnionModelRow {
+  /** Real member rows for management and precise advanced edits. Never discard their raw IDs. */
+  aliasRows?: readonly UnionModelRow[];
   /** 规范化 id(剥掉桥接命名空间前缀后的 canonical key;仅用于合并与搜索,写开关用 byAgent 的真实 id)。 */
   id: string;
   name: string;
@@ -181,7 +186,8 @@ function canonicalModelKey(provider: ProviderView, agent: AgentKind, id: string)
 
 /** 构建并集(导出供单测):行序 = 第一个 agent 的目录序,后续 agent 独占模型追加其后;
  *  专属媒体清单(imageModels/videoModels,不挂 agent)以合成能力行追加在最后。 */
-export function buildUnionRows(provider: ProviderView): UnionModelRow[] {
+export function buildUnionRows(provider: ProviderView,
+  aliasPreferences?: (agent: AgentKind, modelId: string) => SelectionAliasPreferences): UnionModelRow[] {
   const rows: UnionModelRow[] = [];
   const byKey = new Map<string, UnionModelRow>();
   for (const agent of provider.agents) {
@@ -278,7 +284,22 @@ export function buildUnionRows(provider: ProviderView): UnionModelRow[] {
     byKey.set(m.id, row);
     rows.push(row);
   }
-  return rows;
+  if (!aliasPreferences) return rows;
+  const groups = markedSelectionAliasGroups(provider, aliasPreferences);
+  const emitted = new Set<string>();
+  return rows.flatMap((row) => {
+    const group = groups.find((g) => Object.values(g.members).some((models) => models?.some((m) => m.id === row.id)));
+    if (!group) return [row];
+    if (emitted.has(group.keyModelId)) return [];
+    emitted.add(group.keyModelId);
+    const aliasRows = rows.filter((candidate) => Object.values(group.members).some((models) => models?.some((m) => m.id === candidate.id)));
+    if (aliasRows.length < 2) return aliasRows;
+    const preferred = aliasRows.find((r) => r.id === group.keyModelId) ?? aliasRows[0];
+    const byAgent: UnionModelRow['byAgent'] = {};
+    for (const agent of provider.agents) byAgent[agent] = preferred.byAgent[agent] ?? aliasRows.find((r) => r.byAgent[agent])?.byAgent[agent];
+    return [{ ...preferred, id: group.keyModelId, aliasRows, byAgent,
+      avail: provider.agents.filter((agent) => byAgent[agent]) }];
+  });
 }
 
 function rowHasVisibilitySwitch(row: UnionModelRow, userProvider: boolean): boolean {
@@ -351,6 +372,8 @@ export function modelVisibilityTargets(
   row: UnionModelRow,
   enabled: boolean,
 ) {
+  if (row.aliasRows) return row.aliasRows.flatMap((member) => member.avail.flatMap((agent) =>
+    member.byAgent[agent] ? [{ agent, modelId: member.byAgent[agent]!.id }] : []));
   const userProvider = provider.source === 'user';
   if (rowHasVisibilitySwitch(row, userProvider) && isCapabilityRow(row, userProvider)) {
     return row.avail.flatMap((agent) => {
@@ -392,6 +415,7 @@ function rowAnyEnabled(providerId: string, row: UnionModelRow, userProvider: boo
 
 /** 该行全部 avail agent 的真实目录 id(桥接投影两端 id 不同,写停用要两端一起写)。 */
 function rowModelIds(row: UnionModelRow): string[] {
+  if (row.aliasRows) return [...new Set(row.aliasRows.flatMap(rowModelIds))];
   const ids = new Set<string>();
   for (const a of row.avail) {
     const m = row.byAgent[a];
@@ -587,11 +611,22 @@ export function UnifiedModelList({
   // 订阅可见性 version:开关变更后 counts memo 必须重算(否则「全部开启/关闭」
   // 按钮方向与计数陈旧)。行内开关读取不 memo,天然新鲜;只有 counts 依赖它。
   const visibilityVersion = useModelVisibilityVersion();
+  const aliasEngineVersion = useModelEnginePrefsVersion();
+  const aliasMemoryVersion = useProviderModelMemoryVersion();
 
   const selectionAvailable = provider.connected && !provider.suspended;
   const multiAgent = provider.agents.length > 1;
-  const unionRows = useMemo(() => buildUnionRows(provider), [provider]);
-  const currentAdvancedRow = unionRows.find((row) => row.id === advancedRow?.id) ?? advancedRow;
+  const unionRows = useMemo(() => buildUnionRows(provider, (agent, modelId) => ({
+    engine: getModelEngineOverride(provider.id, modelId),
+    customThinking: getProviderModelThinking(agent, provider.id, modelId) !== undefined,
+    customPrice: (() => { const model = provider.models[agent]!.find((m) => m.id === modelId)!;
+      const p = pricePresentationOf(agent, model); return p?.kind === 'priced' && p.current.source === 'user-override'; })(),
+    effort: getProviderModelEffort(agent, provider.id, modelId),
+    fast: getProviderModelFast(agent, provider.id, modelId),
+    visible: isModelEnabled(agent, provider.id, provider.models[agent]!.find((m) => m.id === modelId)!),
+  })), [provider, visibilityVersion, aliasEngineVersion, aliasMemoryVersion, pricePresentationOf]);
+  const currentAdvancedRow = unionRows.find((row) => row.id === advancedRow?.id ||
+    row.aliasRows?.some((member) => member.id === advancedRow?.id)) ?? advancedRow;
 
   const rowDisabledEffective = useCallback(
     (row: UnionModelRow) => pendingDisabled[row.id] ?? isRowDisabled(row),
@@ -612,6 +647,7 @@ export function UnifiedModelList({
     if (!focusModelId) return null;
     return (
       unionRows.find((row) => {
+        if (row.aliasRows?.some((m) => m.avail.some((a) => (!focusAgent || a === focusAgent) && m.byAgent[a]?.id === focusModelId))) return true;
         if (focusAgent) return row.byAgent[focusAgent]?.id === focusModelId;
         return row.avail.some((agent) => row.byAgent[agent]?.id === focusModelId);
       }) ?? null
@@ -637,15 +673,16 @@ export function UnifiedModelList({
   /** 写停用轴:乐观覆盖 + IPC;失败回滚并提示(错误 = 发生了什么 + 下一步)。 */
   const setRowDisabled = useCallback(
     (row: UnionModelRow, disabled: boolean) => {
-      if (!disabled && !selectionAvailable) return;
+      if (!disabled && !selectionAvailable) return Promise.resolve(false);
       setPendingDisabled((prev) => ({ ...prev, [row.id]: disabled }));
-      void window.electronAPI.maker
+      return window.electronAPI.maker
         .setModelDisable({
           kind: 'model',
           providerId: provider.id,
           modelIds: rowModelIds(row),
           disabled,
         })
+        .then(() => true)
         .catch(() => {
           setPendingDisabled((prev) => {
             // 只回滚仍属于本次请求的乐观态:IPC 在途期间用户可能又点了反向操作
@@ -658,6 +695,7 @@ export function UnifiedModelList({
             return next;
           });
           toast.error(t('settings.providers.models.accessWriteFailed'));
+          return false;
         });
     },
     [provider.id, selectionAvailable, t],
@@ -750,7 +788,7 @@ export function UnifiedModelList({
   // 分组沿用现有口径:用每行第一个可用 agent 的目录条目作代表参与分组。
   const { groups, hiddenRows, disabledRows } = useMemo(() => {
     const q = query.trim().toLowerCase();
-    const searched = q ? unionRows.filter((r) => matchesModelName(r, q, t)) : unionRows;
+    const searched = q ? unionRows.filter((r) => matchesModelName(r, q, t) || r.aliasRows?.some((m) => matchesModelName(m, q, t))) : unionRows;
     const matched =
       showKindFilter && kindFilter !== 'all'
         ? searched.filter((r) =>
@@ -1465,6 +1503,8 @@ export function UnifiedModelList({
       <ModelAdvancedDrawer
         provider={provider}
         row={currentAdvancedRow}
+        selectedMemberId={advancedRow?.id}
+        onSelectMember={setAdvancedRow}
         open={advancedOpen && currentAdvancedRow !== null}
         onOpenChange={(next) => {
           setAdvancedOpen(next);
@@ -1472,10 +1512,9 @@ export function UnifiedModelList({
         pricePresentationOf={pricePresentationOf}
         disabled={currentAdvancedRow ? rowDisabledEffective(currentAdvancedRow) : false}
         paymentRequired={currentAdvancedRow ? isRowPaymentRequired(currentAdvancedRow) : false}
-        onDisable={(row) => {
+        onDisable={async (row) => {
           // 抽屉里的停用/启用与列表行同一条写入路径(乐观覆盖 + IPC),不另开一套。
-          setRowDisabled(row, !rowDisabledEffective(row));
-          setAdvancedOpen(false);
+          if (await setRowDisabled(row, !rowDisabledEffective(row))) setAdvancedOpen(false);
         }}
         {...(provider.id === MANAGED_OLLAMA_PROVIDER_ID
           ? {

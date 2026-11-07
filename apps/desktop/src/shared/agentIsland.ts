@@ -466,9 +466,9 @@ export const DEFAULT_AGENT_ISLAND_STRINGS: AgentIslandStrings = {
   appName: BRAND_NAME,
   newConversationTitle: 'New Session',
   newConversationHint: 'Start a new session',
-  muteSound: 'Mute Agent Island',
-  enableSound: 'Enable Agent Island sound',
-  settings: 'Agent Island settings',
+  muteSound: 'Mute Agent Notch',
+  enableSound: 'Enable Agent Notch sound',
+  settings: 'Agent Notch settings',
   newMessage: 'New message',
   review: 'Review',
   needsInput: 'Needs input',
@@ -541,6 +541,26 @@ export const AGENT_ISLAND_EXPANDED_MEASURED_HEIGHT_OFFSET = 8;
 export const AGENT_ISLAND_EXPANDED_HARDWARE_NOTCH_SIDE_WIDTH = 96;
 export const AGENT_ISLAND_EXPANDED_HARDWARE_NOTCH_HORIZONTAL_PADDING = 36;
 
+/**
+ * Half width of the macOS Dynamic Island at its largest (an opened Live Activity,
+ * ~261pt wide, measured on macOS 27.3). It draws above our panel and passes clicks
+ * through, so our island starts clear of it on those displays.
+ */
+export const AGENT_ISLAND_SYSTEM_ISLAND_EXPANDED_HALF_WIDTH = 131;
+export const AGENT_ISLAND_SYSTEM_ISLAND_GAP = 12;
+
+/**
+ * Default compact center on a Dynamic Island display: right of the system island,
+ * far enough that an active compact island (the widest compact state) stays clear.
+ */
+export function computeAgentIslandSystemIslandDefaultCenterXRatio(displayWidth: number): number {
+  if (!(displayWidth > 0)) return 0.5;
+  const offset = AGENT_ISLAND_SYSTEM_ISLAND_EXPANDED_HALF_WIDTH
+    + AGENT_ISLAND_SYSTEM_ISLAND_GAP
+    + AGENT_ISLAND_COMPACT_ACTIVE_WIDTH / 2;
+  return Math.min(1, 0.5 + offset / displayWidth);
+}
+
 export interface AgentIslandScreenLayoutMetrics {
   hasNotch: boolean;
   notchWidth: number;
@@ -602,6 +622,72 @@ export function getAgentIslandCompactBadgeWidth(input: AgentIslandCompactBadgeCo
     minWidth,
     segmentsWidth + spacing + AGENT_ISLAND_COMPACT_BADGE_CONTENT_INSET * 2,
   );
+}
+
+/**
+ * One plan's remaining quota, projected from the menu bar quota panel (same sources, order,
+ * visibility and privacy masking). Main decides the text; the helper only draws it.
+ */
+export interface AgentIslandQuotaItem {
+  id: string;
+  /** Complete monochrome SVG, drawn as a template image. */
+  logoSvg: string;
+  /** "72%", a balance like "$12.30", or a short label when only extra credits are left. */
+  text: string;
+  level: 'normal' | 'warn' | 'error';
+  /** The last reading of a computer that cannot be reached now. */
+  stale: boolean;
+  accessibilityLabel: string;
+  /**
+   * The plan the menu bar's "lowest" status text names. When not every chip fits it keeps
+   * its place, and when not even one fits it is shown as its bare percentage.
+   */
+  lowest: boolean;
+  /**
+   * What the lowest plan shows when only its bare reading fits: the menu bar's own text, which
+   * can differ from `text` (extra credits left, the menu bar says "0%"). Set on that plan only.
+   */
+  compactText?: string;
+  /**
+   * Nominal upper-bound widths of the chip and of its text alone. The island never widens
+   * for quota (its width is the user's); the helper picks what fits from these, without
+   * measuring fonts.
+   */
+  width: number;
+  textWidth: number;
+}
+
+// Quota chip metrics, mirrored by `AgentIslandQuotaRow` in
+// `native/agent-island/macos-agent-island-helper.swift`.
+export const AGENT_ISLAND_QUOTA_LOGO_SIZE = 10;
+export const AGENT_ISLAND_QUOTA_LOGO_GAP = 3;
+/** Upper bound for one monospaced 10pt character; wide (CJK) characters take the second. */
+export const AGENT_ISLAND_QUOTA_CHAR_WIDTH_BOUND = 7;
+export const AGENT_ISLAND_QUOTA_WIDE_CHAR_WIDTH_BOUND = 11;
+export const AGENT_ISLAND_QUOTA_ROUNDING_SLACK = 1;
+
+function isWideQuotaChar(char: string): boolean {
+  const code = char.codePointAt(0) ?? 0;
+  return (code >= 0x1100 && code <= 0x115f)
+    || (code >= 0x2e80 && code <= 0xa4cf)
+    || (code >= 0xac00 && code <= 0xd7a3)
+    || (code >= 0xf900 && code <= 0xfaff)
+    || (code >= 0xfe30 && code <= 0xfe4f)
+    || (code >= 0xff00 && code <= 0xff60)
+    || (code >= 0xffe0 && code <= 0xffe6)
+    || code >= 0x20000;
+}
+
+export function getAgentIslandQuotaTextWidth(text: string): number {
+  let textWidth = 0;
+  for (const char of text) {
+    textWidth += isWideQuotaChar(char) ? AGENT_ISLAND_QUOTA_WIDE_CHAR_WIDTH_BOUND : AGENT_ISLAND_QUOTA_CHAR_WIDTH_BOUND;
+  }
+  return textWidth + AGENT_ISLAND_QUOTA_ROUNDING_SLACK;
+}
+
+export function getAgentIslandQuotaChipWidth(text: string): number {
+  return AGENT_ISLAND_QUOTA_LOGO_SIZE + AGENT_ISLAND_QUOTA_LOGO_GAP + getAgentIslandQuotaTextWidth(text);
 }
 
 export function getAgentIslandDefaultContentWidth(input: {
@@ -733,6 +819,10 @@ export interface AgentIslandDisplayState {
   sessions: AgentIslandSessionSnapshot[];
   totalCount: number;
   measuredContentHeight: number;
+  /** Local presentation only; absent on older hosts. Never relayed as task activity. */
+  compactReminder?: { phase: AgentIslandSessionPhase; until: number };
+  /** Remaining quota in the menu bar's order; absent or empty when there is none to show. */
+  quota?: AgentIslandQuotaItem[];
   strings: AgentIslandStrings;
   soundSettings: AgentIslandSoundSettings;
   mascotSkin: AgentIslandMascotSkin;
@@ -799,6 +889,11 @@ export const AGENT_ISLAND_CONSUME_ENTRY_ALERT_CHANNEL = 'agent-island:consume-en
 export const AGENT_ISLAND_SET_ENABLED_CHANNEL = 'agent-island:set-enabled';
 export const AGENT_ISLAND_SET_SOUND_SETTINGS_CHANNEL = 'agent-island:set-sound-settings';
 export const AGENT_ISLAND_SET_MASCOT_SKIN_CHANNEL = 'agent-island:set-mascot-skin';
+/** Show task status as a macOS Live Activity (system Dynamic Island / menu bar). */
+export const AGENT_ISLAND_SET_LIVE_ACTIVITY_CHANNEL = 'agent-island:set-live-activity';
+export const AGENT_ISLAND_GET_LIVE_ACTIVITY_SUPPORT_CHANNEL = 'agent-island:get-live-activity-support';
+export const DEFAULT_AGENT_ISLAND_LIVE_ACTIVITY = true;
+export const AGENT_ISLAND_SET_SUBTLE_REMINDERS_CHANNEL = 'agent-island:set-subtle-reminders';
 export const AGENT_ISLAND_SET_DISPLAY_TARGET_CHANNEL = 'agent-island:set-display-target';
 export const AGENT_ISLAND_GET_DISPLAY_OPTIONS_CHANNEL = 'agent-island:get-display-options';
 export const AGENT_ISLAND_PREVIEW_SOUND_CHANNEL = 'agent-island:preview-sound';

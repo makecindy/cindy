@@ -18,6 +18,7 @@ import { userDataPath } from '../userDataPath.js';
 import { desktopMakerLogger } from './logger-adapter.js';
 import {
   createOverrideSettingsFile,
+  portableOverrideSettings,
   type OverrideSettingsState,
 } from './override-settings-file.js';
 
@@ -121,3 +122,6 @@ export function resetAgentResourceSettings(): AgentResourceSettings {
 }
 
 export const __testing = { normalize };
+
+/** New-computer setup: values the user changed here (docs/product-rules/new-device-setup-migration.md). */
+export const agentResourcePortableSettings = portableOverrideSettings(store);

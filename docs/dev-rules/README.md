@@ -32,6 +32,7 @@
 | 日志、IPC 错误、main 业务、测试价值／性能预算、跨平台与 i18n | [工程约定](engineering-conventions.md) |
 | 日志采集、脱敏、上报、行格式与崩溃标记 | [日志上报](log-upload-and-redaction.md) |
 | 本地协议包、插件分发来源、device-link、relay、wire protocol 与 allowlist | [协议兼容](protocol-compatibility.md) |
+| 服务器请求、订阅、同步、轮询与重试的调用方式、共享压力及缺陷审查 | [服务器通道调用审查](server-channel-review.md) |
 | package 依赖、Main 模块加载与布局树 | [架构原则与不变量](architecture-invariants.md) |
 | Settings、配置文件、偏好、运行时 profile 与能力开关 | [配置与 override](configuration-and-overrides.md) |
 | workdir、Agent 进程、任务数据、IPC／推送与断链恢复 | [远程与手机适配](remote-and-mobile-adaptation.md) |

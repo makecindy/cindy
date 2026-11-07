@@ -161,6 +161,8 @@ import {
   readAllowedBuiltinPluginIds,
 } from './codexBuiltinToolPolicy.js';
 import { t } from '../i18n.js';
+import { connectGithubSignInResult } from '../git-context/githubConnection.js';
+import { openGithubSignIn, readGithubConnection } from '../git-context/githubSetupIpc.js';
 import { createLogger } from '../logger.js';
 import { isIpcError } from '../../shared/ipc-errors.js';
 
@@ -2103,6 +2105,15 @@ export function getCindyGhostsMcpDeps(
       if (!visible.ok) return visible;
       const instanceId = installedGhostStoragePart(visible.ghost);
       const assessment = getGhostSetupAssessment(instanceId);
+      const ghCliSecret = visible.ghost.manifest.network?.secrets?.find((secret) => secret.source === 'gh-cli');
+      if (assessment.state === 'ready' && assessment.groups.length === 0 && ghCliSecret) {
+        // gh-cli plugins sign in through this computer's GitHub login, which Cindy owns; the fallback
+        // token checked is the one this plugin's own requests would use.
+        return connectGithubSignInResult(target.id, target.reauthorize === true, {
+          readConnection: () => readGithubConnection({ instanceId, key: ghCliSecret.key }),
+          openSignIn: openGithubSignIn,
+        });
+      }
       if (assessment.state === 'ready' && assessment.groups.length === 0) {
         // gh-cli and other Host-derived sources deliberately have no synchronous
         // setup requirement. An empty assessment is not proof of platform login.
@@ -2353,7 +2364,7 @@ export function getCindyGhostsMcpDeps(
         return {
           ok: false,
           errorCode: 'TOOL_NOT_FOUND',
-          message: toolNotFoundMessage(ghostId, tool, target.manifest.tools?.filter(t => pluginToolVisible(target.manifest, t.name, audience))),
+          message: toolNotFoundMessage(ghostId, tool, target.manifest, audience),
         };
       }
       if (grantOnly && (!attachments || attachments.length === 0)) {
@@ -2403,7 +2414,7 @@ export function getCindyGhostsMcpDeps(
         return {
           ok: false,
           errorCode: 'TOOL_NOT_FOUND',
-          message: toolNotFoundMessage(ghostId, tool, refreshed.manifest.tools?.filter(t => pluginToolVisible(refreshed.manifest, t.name, audience))),
+          message: toolNotFoundMessage(ghostId, tool, refreshed.manifest, audience),
         };
       }
       let finalAssessment;
@@ -2645,7 +2656,7 @@ export function getCindyGhostsMcpDeps(
         return {
           ok: false,
           errorCode: 'TOOL_NOT_FOUND',
-          message: toolNotFoundMessage(ghostId, tool, preDispatch.manifest.tools?.filter(t => pluginToolVisible(preDispatch.manifest, t.name, audience))),
+          message: toolNotFoundMessage(ghostId, tool, preDispatch.manifest, audience),
         };
       }
       try {
@@ -2690,7 +2701,7 @@ export function getCindyGhostsMcpDeps(
         return {
           ok: false,
           errorCode: 'TOOL_NOT_FOUND',
-          message: toolNotFoundMessage(ghostId, tool, postCtx.manifest.tools?.filter(t => pluginToolVisible(postCtx.manifest, t.name, audience))),
+          message: toolNotFoundMessage(ghostId, tool, postCtx.manifest, audience),
         };
       }
       let postCtxAssessment: GhostSetupAssessment;
@@ -2818,7 +2829,7 @@ export function getCindyGhostsMcpDeps(
       }
       const requestedImages = result.ok ? result.images : undefined;
       const plainResult: GhostToolCallResult = result.ok && result.images ? { ok: true, result: result.result } : result;
-      const finalized = withCardToken(plainResult, cardService.finalizeCall(callId), callId);
+      const finalized = withCardToken(plainResult, cardService.finalizeCall(callId), callId, cardService.isTurnEnd(callId));
       if (!finalized.ok) return finalized;
       const fitted = requestedImages?.length ? await fitGhostModelImages(requestedImages, compressInlineImage) : null;
       const modelImages = {

@@ -30,6 +30,10 @@ const entries = new Map<string, PromptRecommendationSnapshot>();
 const sessionListeners = new Map<string, Set<() => void>>();
 const runningSessionIds = new Set<string>();
 const sawRunningSessionIds = new Set<string>();
+/** Accepted/dismissed completions must not be revived by late patches. */
+const suppressedSessionIds = new Set<string>();
+/** A delayed running edge must not resurrect an explicitly consumed host revision. */
+const consumedCompletionRevisions = new Map<string, number>();
 /** running 上升沿捕获的 agent startedAt，用于拒绝上一轮迟到的 ended patch。 */
 const runStartedAtBySession = new Map<string, number>();
 const pendingCompletionRevisions = new Map<string, number>();
@@ -39,6 +43,15 @@ let nextRequestSeq = 0;
 let initialized = false;
 let ownerKey: string | null = null;
 const globalUnsubscribers: Array<() => void> = [];
+
+function observedRunStartedAt(sessionId: string): number | null {
+  // Remote agentStatus.startedAt is A's arrival time, not B's turn clock.
+  // Only B's completion revision identifies a remote turn; B revalidates it
+  // before generating, joining a cached request, and returning its result.
+  return getStickySessionDeviceId(sessionId)
+    ? null
+    : makerChatStore.getPromptRecommendationRunStartedAt(sessionId);
+}
 
 function emitSession(sessionId: string): void {
   for (const listener of sessionListeners.get(sessionId) ?? []) listener();
@@ -62,6 +75,8 @@ function clearRuntimeState(): void {
   entries.clear();
   runningSessionIds.clear();
   sawRunningSessionIds.clear();
+  suppressedSessionIds.clear();
+  consumedCompletionRevisions.clear();
   runStartedAtBySession.clear();
   pendingCompletionRevisions.clear();
   handledCompletionRevisions.clear();
@@ -84,7 +99,8 @@ function handlePreferenceChanged(enabled: boolean): void {
   // 与前台原行为对齐：运行中打开开关，本轮正常结束后仍可产生推荐。
   for (const sessionId of runningSessionIds) {
     sawRunningSessionIds.add(sessionId);
-    const startedAt = makerChatStore.getPromptRecommendationRunStartedAt(sessionId);
+    suppressedSessionIds.delete(sessionId);
+    const startedAt = observedRunStartedAt(sessionId);
     if (startedAt != null) runStartedAtBySession.set(sessionId, startedAt);
   }
 }
@@ -101,26 +117,27 @@ function scheduleCompletionSettle(sessionId: string): void {
 function settleCompletion(sessionId: string): void {
   if (runningSessionIds.has(sessionId)) return;
   const revision = pendingCompletionRevisions.get(sessionId);
-  if (revision == null || !sawRunningSessionIds.has(sessionId)) return;
+  if (revision == null || !sawRunningSessionIds.has(sessionId) || suppressedSessionIds.has(sessionId)) return;
 
-  pendingCompletionRevisions.delete(sessionId);
   // status:false 与最终 done 都可能写 ended revision。500ms 只是合并窗口，
   // 不是终末证明：保留本轮观察资格，Main 暂时返回 null 后仍能接住迟到的 done。
   const previousHandled = handledCompletionRevisions.get(sessionId) ?? 0;
   if (revision <= previousHandled) return;
-  handledCompletionRevisions.set(sessionId, revision);
 
   const status = makerChatStore.getPromptRecommendationCompletionStatus(sessionId);
+  // Hydration and queue/background projections can lag the completion push.
+  // Keep its identity until a later store notification provides the terminal state.
+  if (!status || status.hasBackgroundAgentWork || status.hasAutoDrainingQueue) return;
   const eligible =
     getPromptRecommendationPreference() &&
-    status != null &&
     !status.turnStoppedByUser &&
     !status.hasTerminalError &&
-    !status.sideTask &&
-    !status.hasBackgroundAgentWork &&
-    !status.hasAutoDrainingQueue;
+    !status.sideTask;
+
+  handledCompletionRevisions.set(sessionId, revision);
 
   if (!eligible) {
+    pendingCompletionRevisions.delete(sessionId);
     sawRunningSessionIds.delete(sessionId);
     runStartedAtBySession.delete(sessionId);
     deleteEntry(sessionId);
@@ -143,7 +160,7 @@ function applyRunningSnapshot(snapshot: ReadonlyMap<string, { isRunning: boolean
   }
 
   for (const sessionId of nextRunning) {
-    const startedAt = makerChatStore.getPromptRecommendationRunStartedAt(sessionId);
+    const startedAt = observedRunStartedAt(sessionId);
     if (runningSessionIds.has(sessionId)) {
       // wake bridge 会让聚合 running 在「主 turn → 后台任务 → wake turn」之间一直为 true，
       // 因而没有新的 false→true 边沿。仍需观察底层 agent startedAt 的换代，清掉主 turn
@@ -165,14 +182,20 @@ function applyRunningSnapshot(snapshot: ReadonlyMap<string, { isRunning: boolean
     }
     runningSessionIds.add(sessionId);
     sawRunningSessionIds.add(sessionId);
+    suppressedSessionIds.delete(sessionId);
     // A new running edge is a new completion generation. Do not let the
     // previous generation's revision fence suppress a later completion that
     // happens to reuse the same millisecond timestamp.
     handledCompletionRevisions.delete(sessionId);
     if (startedAt != null) runStartedAtBySession.set(sessionId, startedAt);
     else runStartedAtBySession.delete(sessionId);
-    // 新 turn 开始：旧完成 patch / 推荐 / 在途 renderer Promise 全部作废。
-    pendingCompletionRevisions.delete(sessionId);
+    // Completion and running arrive on separate streams. Keep a buffered remote
+    // revision even when running arrives last; B rejects it if a newer turn exists.
+    // Local timestamps share a clock, so they can still discard an older revision.
+    const pendingRevision = pendingCompletionRevisions.get(sessionId);
+    if (startedAt != null && pendingRevision != null && pendingRevision <= startedAt) {
+      pendingCompletionRevisions.delete(sessionId);
+    }
     clearSettleTimer(sessionId);
     deleteEntry(sessionId);
   }
@@ -182,22 +205,36 @@ function applyRunningSnapshot(snapshot: ReadonlyMap<string, { isRunning: boolean
     runningSessionIds.delete(sessionId);
     scheduleCompletionSettle(sessionId);
   }
+  for (const [sessionId, revision] of pendingCompletionRevisions) {
+    if (!runningSessionIds.has(sessionId) && sawRunningSessionIds.has(sessionId) &&
+        !suppressedSessionIds.has(sessionId) && !settleTimers.has(sessionId) &&
+        revision > (handledCompletionRevisions.get(sessionId) ?? 0)) {
+      scheduleCompletionSettle(sessionId);
+    }
+  }
 }
 
 function noteTurnEnded(sessionId: string, revision: number): void {
   if (!Number.isFinite(revision) || revision <= 0) return;
-  if (!sawRunningSessionIds.has(sessionId)) return;
+  if (!getPromptRecommendationPreference()) return;
+  if (revision <= (consumedCompletionRevisions.get(sessionId) ?? 0)) return;
   // 两条 push 通道没有顺序契约：上一轮 ended patch 可能在下一轮 running 后才到。
   // ended 时间不晚于本轮 startedAt 时必须忽略，不能把同毫秒的上一轮 patch
   // 配给下一轮 stopped 边沿。真实模型轮不会在启动同一毫秒内正常完成。
-  const runStartedAt = runStartedAtBySession.get(sessionId);
+  // Sticky origin can resolve after the first running snapshot. Never reuse a
+  // start captured on A once this completion is known to belong to B.
+  const runStartedAt = getStickySessionDeviceId(sessionId) ? undefined : runStartedAtBySession.get(sessionId);
   if (runStartedAt != null && revision <= runStartedAt) return;
   const handled = handledCompletionRevisions.get(sessionId) ?? 0;
   const pending = pendingCompletionRevisions.get(sessionId) ?? 0;
   if (revision <= handled || revision <= pending) return;
   pendingCompletionRevisions.set(sessionId, revision);
-  // 新 revision 已到达时立即隔离旧 Promise，不能等 settle timer 才作废。
+  // 新 revision 已到达时立即隔离旧 Promise/可见推荐，不能等 settle timer 才作废。
   deleteEntry(sessionId);
+  // A newer B completion can precede the next running stream even while the
+  // previous recommendation is ready/consumed. Buffer it, but do not generate
+  // again until a running edge establishes eligibility for the next turn.
+  if (suppressedSessionIds.has(sessionId)) return;
   scheduleCompletionSettle(sessionId);
 }
 
@@ -330,6 +367,7 @@ export function resolvePromptRecommendationPrediction(
     return;
   }
   sawRunningSessionIds.delete(sessionId);
+  suppressedSessionIds.add(sessionId);
   runStartedAtBySession.delete(sessionId);
   entries.set(sessionId, {
     ...current,
@@ -344,8 +382,16 @@ export function dismissPromptRecommendation(sessionId: string, revision?: number
   const current = entries.get(sessionId);
   if (revision != null && current?.revision !== revision) return;
   // 无 entry 也可能仍在等待最终 done；显式发送/换目录应取消这份等待。
-  // 新 running 的 layout effect 也会调用本函数，不能清掉刚开始的新轮资格。
+  // 发送可能先发布新 running，再清理旧推荐，不能清掉刚开始的新轮资格。
   if (!runningSessionIds.has(sessionId)) {
+    suppressedSessionIds.add(sessionId);
+    const consumed = Math.max(
+      consumedCompletionRevisions.get(sessionId) ?? 0,
+      current?.revision ?? 0,
+      pendingCompletionRevisions.get(sessionId) ?? 0,
+      handledCompletionRevisions.get(sessionId) ?? 0,
+    );
+    if (consumed > 0) consumedCompletionRevisions.set(sessionId, consumed);
     clearSettleTimer(sessionId);
     pendingCompletionRevisions.delete(sessionId);
     sawRunningSessionIds.delete(sessionId);
@@ -354,10 +400,21 @@ export function dismissPromptRecommendation(sessionId: string, revision?: number
   deleteEntry(sessionId);
 }
 
+/** Retry callbacks cannot outlive their owner, turn, or explicit consumption. */
+export function isPromptRecommendationPredictionCurrent(
+  sessionId: string, revision: number, requestSeq: number,
+): boolean {
+  const current = entries.get(sessionId);
+  return current?.phase === 'predicting' && current.revision === revision &&
+    current.requestSeq === requestSeq;
+}
+
 export function clearPromptRecommendationSession(sessionId: string): void {
   clearSettleTimer(sessionId);
   runningSessionIds.delete(sessionId);
   sawRunningSessionIds.delete(sessionId);
+  suppressedSessionIds.delete(sessionId);
+  consumedCompletionRevisions.delete(sessionId);
   runStartedAtBySession.delete(sessionId);
   pendingCompletionRevisions.delete(sessionId);
   handledCompletionRevisions.delete(sessionId);

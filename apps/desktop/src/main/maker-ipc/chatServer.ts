@@ -1,4 +1,3 @@
-import { botGroupProcessCard, readBotGroupProcessCard } from '../../shared/botGroupChat.js';
 import { createChatWorkPolling, createWorkRequestGate, WorkRequestDeferred } from './chatWorkPolling.js';
 import { teammateChatActivity } from '@cindy/maker-shared/teammate-status';
 import { prepareChatReplyFiles } from './chatServerReplyFiles.js';
@@ -22,7 +21,7 @@ import { MIRROR_ATTACHMENT_MAX_BYTES } from '../companion-cloud/mirror.js';
 import { request as httpRequest } from 'node:http';
 import { request as httpsRequest } from 'node:https';
 import { migrateLocalGroups, type ChatContentBlock } from './chatServerMigration.js';
-import { chatErrorDiagnostic, chatGroupFailure, missingGroupCode } from './chatServerErrors.js';
+import { chatErrorDiagnostic, chatGroupFailure, contentShapes, detailsDiagnostic, missingGroupCode } from './chatServerErrors.js';
 import { chatInviteShareBase, createChatInviteShare, notifyChatInviteRevoked, resolveChatInviteShare } from './chatInviteShares.js';
 import { createChatMedia } from './chatServerMedia.js';
 import { mergeChatReplyAttachments } from './chatServerReplyAttachments.js';
@@ -55,7 +54,8 @@ import {
   type BotGroupThreadShareView, type BotGroupThreadSummary, type BotGroupThreadUnread,
   type BotGroupDetail, type BotGroupMessageReaders, type BotGroupSpeaker, type BotGroupPlanView, type BotGroupFailure, type BotGroupMessageView, type BotGroupAttachment, type ChatServerApi,
   botGroupQuoteAttachmentName, botGroupQuoteExcerpt, botGroupQuoteFromMessage, buildBotGroupQuoteCard, readBotGroupQuote, readBotGroupQuoteCard, type BotGroupQuoteView,
-  readBotGroupTaskCard, botGroupMessageSummaryText,
+  readBotGroupTaskCard, botGroupMessageSummaryText, botGroupProcessCard, readBotGroupProcessCard,
+  readBotGroupCapabilityNotice, buildBotGroupCapabilityNotice, type BotGroupCapabilityNoticeCode,
 } from '../../shared/botGroupChat.js';
 import type { BotGroupChatService, BotGroupChatServiceDeps, BotGroupLaneTerminal, BotGroupPreparedAttachments, BotGroupTaskPostInput, BotGroupTaskPostResult } from './botGroupChatService.js';
 import { readPersistedReplyText } from './botGroupChatService.js';
@@ -88,7 +88,7 @@ interface Room {
 }
 /**
  * `reads`: this reader's read position per Thread (`thread_key` = root ID, `main` for the main timeline); older servers omit it.
- * `othersRead`: per Thread, the highest read position among the other human members; only servers
+ * `othersRead`: per Thread, the highest read position among the other members, teammates included; only servers
  * that report message readers (`capabilities.messageReaders`) send it.
  */
 interface Snapshot { room: Room; members: Member[]; messages: Message[]; cursor: string; mentionReadIds?: string[]; reads?: Array<{ thread_key: string; read_seq: string; following?: boolean; muted?: boolean; notification_scope?: 'all' | 'mentions' | null }>; othersRead?: Array<{ thread_key: string; read_seq: string }> }
@@ -113,6 +113,8 @@ interface Execution {
   context_seq: string; attachment_after_seq?: string; epoch: number; status: string; access_mode: 'owner' | 'chat' | 'tools'; access_revision: number;
 }
 interface ServerPlan {
+  activeExecution?: { id: string; status: string };
+  supportsPendingSkip?: boolean;
   id: string; revision: number; source_message_id: string; request_text: string; organizer_id: string; creator_id: string;
   note_message_ids?: string[];
   status: BotGroupPlanView['status']; current_step: number | null; steps: Array<BotGroupPlanView['steps'][number] & { resultMessageId?: string | null }>;
@@ -128,16 +130,24 @@ interface Running {
   context?: ExecutionContext;
   attachmentAfter?: string;
   textProgress?: { scope: string; after: string; seen: Map<string, string> };
-  settlement?: { terminal: BotGroupLaneTerminal; cancelled?: boolean; payload?: Record<string, unknown>; reply?: { sourceText: string; text: string; attachments: ChatUploadAttachment[] }; fileReply?: Awaited<ReturnType<typeof prepareChatReplyFiles>>; retryAt: number; keepLease?: boolean };
+  settlement?: { terminal: BotGroupLaneTerminal; cancelled?: boolean; payload?: Record<string, unknown>; reply?: { sourceText: string; text: string; attachments: ChatUploadAttachment[] }; fileReply?: Awaited<ReturnType<typeof prepareChatReplyFiles>>; retryAt: number; keepLease?: boolean; refused?: boolean };
   delivery?: Promise<void>;
   plan?: ServerPlan;
   workspace?: { workDir: string; branch: string | null; ownerSessionId: string | null };
   beforeFiles?: Map<string, string>;
   pauseStarted?: number;
   releaseToolAuthority?: () => void;
+  capabilityNotices?: Map<BotGroupCapabilityNoticeCode, Promise<void>>;
 }
 export class ChatResponseError extends Error {
   constructor(code: string, readonly status: number, readonly retryAt?: number, readonly details?: unknown) { super(code); }
+}
+/**
+ * The group's terminal result was definitely refused for its content — not for auth, permissions
+ * or the lease. The reply cannot be published, so the turn has to end as a failure instead.
+ */
+class SettlementRefused extends Error {
+  constructor(readonly refusal: unknown) { super('SETTLEMENT_REFUSED'); }
 }
 const CHAT_AUTH_RETRY_MS = 60_000;
 /** A read list is served from memory this long; a receipt for the group ends it sooner. */
@@ -223,7 +233,7 @@ const groupInput = z.object({ name: z.string().trim().min(1).max(40), botIds: z.
 const taskCardOf = (m: Message) => m.author.kind === 'bot' ? m.content.map(readBotGroupTaskCard).find(Boolean) ?? null : null;
 const bodyBlocks = (m: Message) => m.content.filter(b => !readBotGroupProcessCard(b) && (b.namespace !== 'cindy.local-history' || b.data?.activity === true) && !readBotGroupQuoteCard(b)
   && !(m.author.kind === 'bot' && readBotGroupTaskCard(b)));
-const contentText = (m: Message, forModel: boolean) => m.deleted ? '（消息已删除）' : readImportedBotGroupRuntimeFailureCode(m) ? '' : bodyBlocks(m)
+const contentText = (m: Message, forModel: boolean) => m.deleted ? '（消息已删除）' : forModel && readBotGroupCapabilityNotice(m) ? '' : readImportedBotGroupRuntimeFailureCode(m) ? '' : bodyBlocks(m)
   .flatMap(b => b.type !== 'media' ? [b.text ?? b.fallback ?? ''] : forModel ? [b.text ?? b.fallback ?? `[附件: ${b.caption ?? '文件'}]`] : []).join('\n');
 /** What a Bot reads: each attachment stays a `[附件: …]` line beside the text. */
 // A share's fallback is an old-client display only, never authoritative model context.
@@ -418,6 +428,8 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
   // Cloud companions (cloud-companions.md): inert unless the server announces homes.
   let selfDeviceId: string | null = null;
   let companionHome = false;
+  /** The server keeps companion values too large for preferences (`capabilities.companionStore`). */
+  let companionStore = false;
   let directRoomClaims = false;
   let workAvailability = false;
   let workNotifications = false;
@@ -539,6 +551,7 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
   let profileRefreshedAt = 0;
   /** Turns in progress by execution ID: one companion may answer in several conversations at once. */
   const running = new Map<string, Running>();
+  const capabilityNoticeRetries = new Map<ReturnType<typeof setTimeout>, () => void>();
   // Only a verified live native context may consume a text cursor. Never persist
   // this across host restarts: a cold/resumed context gets background again.
   const textProgress = new Map<string, NonNullable<Running['textProgress']> & {
@@ -746,8 +759,10 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
       const routeTemplate = route.split('?')[0].split('/').map(part =>
         ['conversations','media','complete','messages','plans','members','snapshot','import','actors','me','executions'].includes(part) || !part ? part : ':id').join('/');
       const operation = data && typeof data === 'object' && 'operationId' in data ? data.operationId : null;
+      const details = error instanceof ChatResponseError ? detailsDiagnostic(error.details) : undefined;
       deps.log?.warn('Chat request failed', { route: routeTemplate, method, durationMs: Date.now() - started,
-        ...(typeof operation === 'string' ? { trace: createHash('sha256').update(operation).digest('hex').slice(0, 16) } : {}), ...chatErrorDiagnostic(error) });
+        ...(typeof operation === 'string' ? { trace: createHash('sha256').update(operation).digest('hex').slice(0, 16) } : {}), ...chatErrorDiagnostic(error),
+        ...(details === undefined ? {} : { details }) });
       throw error;
     });
   }
@@ -995,6 +1010,7 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
       if (!workNotifications) workPolling.shortenIdle();
       selfDeviceId = typeof me.deviceId === 'string' && me.deviceId ? me.deviceId : null;
       companionHome = !!deps.companionCloud && me.capabilities?.companionHome === true && !!selfDeviceId;
+      companionStore = (me.capabilities as { companionStore?: number } | undefined)?.companionStore === 1;
       // Work in a 1:1 room is only claimed by a copy that hands it to the companion's main task;
       // a server without the capability never sees the field (its strict contract would reject it).
       directRoomClaims = companionHome && me.capabilities?.directRoomClaim === true;
@@ -1094,7 +1110,8 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
         // The conversation mirror is not a file backup: large files stay a name in the room.
         for (const file of files) if (file.path && (await fsp.stat(file.path)).size > MIRROR_ATTACHMENT_MAX_BYTES) throw new Error('ATTACHMENT_TOO_LARGE');
         return media.upload(room, source, files, author);
-      }, download: (room, mediaId) => media.download(room, mediaId) } });
+      }, download: (room, mediaId) => media.download(room, mediaId) },
+      store: { enabled: () => companionStore, transfer: media.companionTransfer } });
     const runtime = companion;
     await registerCompanionHomes({ api: request, selfDeviceId: self, actors, log: deps.log,
       botIds: profiles.filter(p => p.status === 'active').map(p => p.id), isDemoted: botId => runtime.state.isDemoted(botId) });
@@ -1453,6 +1470,7 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
       content: displayText(m), threadRootId: m.threadRootId, replyCount: 0, reactions: [], mentions: { all: false, botIds: [] },
       noticeCode, planId: null, files: [], attachments: [], createdAt: Date.parse(m.createdAt),
     };
+    const capabilityNoticeCode = readBotGroupCapabilityNotice(m);
     const member = members.find(member => member.id === m.authorId);
     const planCard = m.content.find(b => b.namespace === 'cindy.plan');
     const legacy = m.origin === 'import' ? m.content.find(b => b.namespace === 'cindy.local-history')?.data : undefined;
@@ -1465,7 +1483,7 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
     const quote = m.deleted || planCard ? null : readBotGroupQuote(m.content);
     const task = m.deleted || planCard ? null : taskCardOf(m);
     const process = !m.deleted && m.author.kind === 'bot' ? m.content.map(readBotGroupProcessCard).find(Boolean) : null;
-    return { id: m.id, maskAttribution: m.maskAttribution, sequence: Number(m.seq), serverSequence: m.seq, deleted: m.deleted, kind: planCard ? 'plan' : 'message', authorKind: legacy?.authorKind === 'system' ? 'system' : m.author.kind === 'human' ? 'user' : 'bot',
+    return { id: m.id, maskAttribution: m.maskAttribution, sequence: Number(m.seq), serverSequence: m.seq, deleted: m.deleted, kind: capabilityNoticeCode ? 'notice' : planCard ? 'plan' : 'message', ...(capabilityNoticeCode ? { capabilityNoticeCode } : {}), authorKind: legacy?.authorKind === 'system' ? 'system' : m.author.kind === 'human' ? 'user' : 'bot',
       isSelf: m.authorId === selfId, threadRootId: m.threadRootId, replyCount: m.replyCount ?? 0, reactions: m.reactions ?? [], ...(quote ? { quote } : {}), ...(task ? { task } : {}), ...(process ? { process } : {}),
       authorBotId: localBot(m.authorId)?.id ?? m.authorId, authorName: legacy?.authorKind === 'system' && typeof legacy.authorName === 'string' ? legacy.authorName : member ? memberName(member, ownerMembers) : m.author.name, content: displayText(m),
       mentions: { all: m.mentionAudience === 'humans' || m.mentionAudience === 'everyone', ...(m.mentionAudience === 'bots' || m.mentionAudience === 'everyone' ? { allBots: true } : {}), botIds: (m.mentions ?? []).map(actorId => localBot(actorId)?.id ?? actorId) }, noticeCode: null, planId: typeof planCard?.data?.planId === 'string' ? planCard.data.planId : null, files: [], attachments: [], createdAt: Date.parse(m.createdAt) };
@@ -1837,7 +1855,7 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
     const executionFailures = summaryOnly || direct ? undefined : await failureSnapshot(roomId, s.members, [...(o.sourceMessageIds ?? []), ...page.map(m => m.id)], executions);
     const serverPlans = await plansRead;
     const workspace = workspaces().read(roomId);
-    const plans = serverPlans.map(plan => planView(plan, s.members, workspace));
+    const plans = serverPlans.map(plan => planView(plan, s.members, workspace, Boolean(s.room.archived || s.room.dissolved_at)));
     const open = plans.find(p => ['proposed', 'running', 'waiting'].includes(p.status));
     // Keep execution identity across computers and concurrent threads. Only the executing
     // computer resolves a lane; authenticated peers retrieve it through the group resource.
@@ -1914,13 +1932,15 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
         othersActive: executions.some(e => ['queued', 'running', 'needs_input'].includes(e.status) && e.requester_id !== selfId
           && !localBot(e.bot_id) && !s.members.some(m => m.id === e.bot_id && m.ownerActorId === selfId)), canContinue: !open && !planning.has(roomId) && (executions.some(e => !e.plan_id && ordinaryExecution(e)) || s.messages.some(discussionSource)) && !executions.some(e => ['queued','running','stopping'].includes(e.status)) } };
   }
-  function planView(plan: ServerPlan, members: Member[], workspace: ReturnType<ReturnType<typeof chatServerWorkspaces>['read']>): BotGroupPlanView {
+  function planView(plan: ServerPlan, members: Member[], workspace: ReturnType<ReturnType<typeof chatServerWorkspaces>['read']>, readOnly = false): BotGroupPlanView {
     return { id: plan.id, status: plan.status, organizerBotId: localBot(plan.organizer_id)?.id ?? plan.organizer_id,
       organizerName: members.find(m => m.id === plan.organizer_id)?.name ?? '',
-      steps: plan.steps.map(s => ({ ...s, botId: localBot(s.botId)?.id ?? s.botId })), currentStep: plan.current_step,
+      supportsPendingSkip: plan.supportsPendingSkip === true,
+      steps: plan.steps.map(s => ({ ...s, botId: localBot(s.botId)?.id ?? s.botId,
+        ...(s.position === plan.current_step && plan.activeExecution ? { executionId: plan.activeExecution.id, executionStatus: plan.activeExecution.status } : {}) })), currentStep: plan.current_step,
       workDir: workspace?.plans[plan.id]?.workDir ?? null, branch: workspace?.plans[plan.id]?.branch ?? null,
       ...(plan.kind ? { kind: plan.kind,
-        canManage: plan.creator_id === selfId || members.some(m => m.ownerActorId === selfId && m.state === 'joined' && ['owner', 'admin'].includes(m.role)),
+        canManage: !readOnly && (plan.creator_id === selfId || members.some(m => m.ownerActorId === selfId && m.state === 'joined' && ['owner', 'admin'].includes(m.role))),
         // Same rule as sendMessage's commentPlan: additions are written as the human, so a teammate's role does not count.
         canAdd: plan.creator_id === selfId || members.some(m => m.id === selfId && ['owner', 'admin'].includes(m.role)) } : {}),
       // Only a 分工 started here follows this computer's choice; its 继续 is pressed from here.
@@ -1929,7 +1949,7 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
   }
   async function actPlan(input: unknown, action: string) {
     const i = z.object({ groupId: id, planId: id, position: z.number().int().min(0).max(11).optional(),
-      action: z.enum(['remove','reassign']).optional(), botId: z.string().optional() }).parse(input);
+      action: z.enum(['remove','reassign','skip']).optional(), botId: z.string().optional(), executionId: id.optional() }).parse(input);
     const room = await groupRoom(i.groupId);
     await replacePlanIntent(room);
     const plans = await api<ServerPlan[]>(`/conversations/${room}/plans?ids=${i.planId}`);
@@ -1942,7 +1962,7 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
     const manager = plan.creator_id === selfId ? undefined : managementActor(await recentSnapshot(room));
     const asManager = manager === selfId ? undefined : manager;
     await api(`/conversations/${room}/plans/${plan.id}`, 'POST', { operationId: randomUUID(), expectedRevision: plan.revision,
-      action: serverAction, position: i.position, botId }, asManager);
+      action: serverAction, position: i.position, botId, ...(serverAction === 'skip' ? { executionId: i.executionId } : {}) }, asManager);
     changed(room); return { ok: true as const };
   }
   /**
@@ -2098,6 +2118,43 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
       executorId, epoch: run.execution.epoch, action, ...extra,
     }, run.execution.bot_id);
   }
+  function postCapabilityNotice(run: Running, code: BotGroupCapabilityNoticeCode, threadRootId?: string): Promise<void> {
+    if (!current() || running.get(run.execution.id) !== run || run.execution.mask_owner_id) return Promise.resolve();
+    const notices = run.capabilityNotices ??= new Map();
+    const existing = notices.get(code);
+    if (existing) return existing;
+    const name = actors.find(actor => actor.id === run.execution.bot_id)?.name ?? '';
+    // Freeze the server operation ID and payload for bounded retries, even after this turn ends.
+    const payload = {
+      operationId: `capability:${run.execution.id}:${run.execution.epoch}:${code}`,
+      content: [buildBotGroupCapabilityNotice(code, t(`bots.groupChat.notice.capability.${code}`).replaceAll('{{name}}', () => name))],
+      mentions: [], ...(threadRootId ? { threadRootId } : {}),
+    };
+    const pending = (async () => {
+      for (let attempt = 0; attempt < 3 && current(); attempt++) {
+        try {
+          await api(`/conversations/${run.execution.conversation_id}/messages`, 'POST', payload, run.execution.bot_id);
+          if (current()) changed(run.execution.conversation_id);
+          return;
+        } catch (error) {
+          if (attempt === 2 || error instanceof ChatResponseError && !retryableResponse(error)) {
+            // Keep the completed attempt budget: another denial in this turn
+            // must not restart delivery after all retries have failed.
+            deps.log?.warn('Group capability notice could not be delivered', { noticeCode: code, ...chatErrorDiagnostic(error) });
+            return;
+          }
+          await new Promise<void>(resolve => {
+            const delay = Math.max(1000 * (attempt + 1),
+              error instanceof ChatResponseError ? (error.retryAt ?? 0) - Date.now() : 0);
+            const timer = setTimeout(() => { capabilityNoticeRetries.delete(timer); resolve(); }, delay);
+            capabilityNoticeRetries.set(timer, resolve);
+          });
+        }
+      }
+    })();
+    notices.set(code, pending);
+    return pending;
+  }
   async function validateExecutionAuthority(run: Running): Promise<void> {
     const execution = run.execution;
     const assertCurrent = () => {
@@ -2193,6 +2250,74 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
     }
     await deliverSettlement(run);
   }
+  type Settlement = NonNullable<Running['settlement']>;
+  /**
+   * The terminal result goes out once, with one explainable degradation: a completion the server
+   * definitely refuses for its content is retried without the optional `cindy.work-record`
+   * locator, so a reply the companion already wrote still reaches the group instead of being lost
+   * (#8598). Same operation, same text and files — the card contract itself is never rewritten to
+   * slip past validation, and the refusal plus what was left out stay in the log.
+   *
+   * Only the settlement request is judged here: a later `plans`/`snapshot` read that fails must not
+   * be mistaken for a refused reply and turn a published answer into a failure.
+   */
+  async function settleRun(run: Running, action: string, pending: Settlement) {
+    const payload = pending.payload!;
+    const attempt = () => updateExecution(run, action, payload).then(() => null, (error: unknown) => error);
+    const refusal = await attempt();
+    if (!refusal) return;
+    if (!contentRefusal(action, refusal)) throw refusal;
+    reportRefusal(run, action, refusal, payload.content, 1);
+    if (!dropProcessLocator(payload)) throw new SettlementRefused(refusal);
+    const retried = await attempt();
+    if (!retried) return;
+    if (!contentRefusal(action, retried)) throw retried;
+    // Describe the request that was actually refused this time: the locator is gone by now, so the
+    // second refusal must not be paired with the first attempt's block shapes.
+    reportRefusal(run, action, retried, payload.content, 2);
+    throw new SettlementRefused(retried);
+  }
+  /** A 4xx the server means as "this content will never be accepted": not auth, permissions or the lease. */
+  function contentRefusal(action: string, error: unknown): error is ChatResponseError {
+    return action === 'complete' && error instanceof ChatResponseError && !retryableResponse(error)
+      && error.status >= 400 && error.status < 500 && error.status !== 408
+      && ['INVALID_INPUT', 'INVALID_PARAMS', 'REQUEST_FAILED'].includes(error.message);
+  }
+  /** Drops the optional locator block the retry leaves out; `false` when there is nothing to drop. */
+  function dropProcessLocator(payload: Record<string, unknown>): boolean {
+    if (!Array.isArray(payload.content)) return false;
+    const kept = (payload.content as unknown[]).filter(block =>
+      (block as { namespace?: unknown } | null)?.namespace !== 'cindy.work-record');
+    if (kept.length === payload.content.length) return false;
+    payload.content = kept;
+    return true;
+  }
+  /** What was refused, without any message text: action, block shapes and the server's own field. */
+  function reportRefusal(run: Running, action: string, error: ChatResponseError, blocks: unknown, attempt: number) {
+    deps.log?.warn(attempt === 1 ? 'Group settlement refused' : 'Group settlement refused again', {
+      groupId: run.execution.conversation_id, action, attempt,
+      ...(Array.isArray(blocks) ? { blocks: contentShapes(blocks) } : {}), ...chatErrorDiagnostic(error), ...refusalDetails(error) });
+  }
+  function refusalDetails(error: unknown) {
+    const details = error instanceof ChatResponseError ? detailsDiagnostic(error.details) : undefined;
+    return details === undefined ? {} : { details };
+  }
+  /**
+   * The reply cannot be published at all. Retire the turn as a failure through the same delivery
+   * ladder rather than leaving it to a lease nobody releases: a refused settlement keeps the run,
+   * so a transient failure of this receipt keeps retrying with the existing backoff and lease
+   * renewal, and the group gets the failure it already knows how to present (#8598).
+   */
+  function retireRefusedSettlement(run: Running, pending: Settlement): boolean {
+    if (pending.refused || pending.cancelled || pending.terminal.outcome === 'error') return false;
+    pending.refused = true;
+    failureCodes.set(`${run.execution.id}:${run.execution.epoch}`, 'RUNTIME_ERROR');
+    if (failureCodes.size > 1000) failureCodes.delete(failureCodes.keys().next().value!);
+    pending.payload = { detail: botGroupRuntimeFailureDetail('RUNTIME_ERROR') };
+    pending.terminal = { ...pending.terminal, outcome: 'error' };
+    pending.retryAt = 0;
+    return true;
+  }
   function deliverSettlement(run: Running): Promise<void> {
     if (run.delivery) return run.delivery;
     const pending = run.settlement;
@@ -2274,7 +2399,8 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
               ...(singleSpeaker || run.execution.mask_owner_id ? {} : { continueDiscussion: run.context?.kind !== 'member.joined' && !run.plan && !isBotGroupNoReplyText(text) }) };
         }
         if (!current() || running.get(run.execution.id) !== run || run.settlement !== pending) return;
-        await updateExecution(run, pending.cancelled ? 'cancel' : pending.terminal.outcome === 'error' ? 'fail' : 'complete', pending.payload);
+        const action = pending.cancelled ? 'cancel' : pending.terminal.outcome === 'error' ? 'fail' : 'complete';
+        await settleRun(run, action, pending);
         if (pending.cancelled || pending.terminal.outcome === 'error') textProgress.delete(run.sessionId);
         else if (run.textProgress) {
           const runtime = laneContext(run.sessionId);
@@ -2323,7 +2449,13 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
         // rejection (including revoked/expired leases) must never rerun the Agent
         // or post the private result under a new execution identity.
         const recoveringAuth = error instanceof ChatResponseError && recoverableAuth(error);
-        if (!(error instanceof ChatResponseError) || retryableResponse(error)) {
+        // The reply itself was refused: publish the failure instead, and keep the run so a
+        // transient failure of that receipt is retried rather than forgotten (#8598).
+        if (error instanceof SettlementRefused) {
+          if (retireRefusedSettlement(run, pending)) return;
+          deps.log?.warn('Group settlement could not be retired', { groupId: run.execution.conversation_id,
+            ...chatErrorDiagnostic(error.refusal), ...refusalDetails(error.refusal) });
+        } else if (!(error instanceof ChatResponseError) || retryableResponse(error)) {
           const rateLimited = chatErrorDiagnostic(error).status === 429;
           const retryAt = rateLimited && error instanceof Error && 'retryAt' in error && typeof error.retryAt === 'number' ? error.retryAt : 0;
           const delayed = recoveringAuth || rateLimited;
@@ -2470,6 +2602,7 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
           sourceGroup: { groupId: s.room.id, name: s.room.name },
           isCurrent: () => current() && running.get(execution.id) === run && !run.settlement,
           validate: () => validateExecutionAuthority(run),
+          onDenied: error => postCapabilityNotice(run, error.temporary ? 'GROUP_AUTHORIZATION_UNAVAILABLE' : 'GROUP_AUTHORIZATION_REQUIRED', threadRootId),
         });
         if (run.plan && run.workspace?.ownerSessionId) {
           const settings = workspaces().read(s.room.id)!;
@@ -2581,6 +2714,7 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
       const lane = await laneSetup;
       const { history, source, threadRootId, thread, focusMessages, quotedMessage, attachments, missingAttachments, mediaDelivery } = await contextRead;
       if (!current()) throw new Error('OWNER_CHANGED');
+      if (missingAttachments.length) void postCapabilityNotice(run, 'ATTACHMENTS_UNAVAILABLE', threadRootId ?? undefined);
       const runtime = laneContext(lane.sessionId);
       const contextScope = JSON.stringify([s.room.id, threadRootId, run.plan?.id, execution.access_mode, execution.access_revision, execution.mask_owner_id]);
       const savedProgress = !digest && (!run.plan || run.plan.kind === 'talk') ? textProgress.get(lane.sessionId) : undefined;
@@ -3364,7 +3498,7 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
         readCount: z.number().int().min(0).optional(), listed: z.boolean().optional(),
         readers: z.array(z.object({ actorId: id, readAt: z.string().nullable() })),
       }), await api(`/conversations/${room}/messages/${i.messageId}/readers`));
-      // Former members stay on the list under their group name; a bot is never a reader.
+      // Former members stay on the list under their group name; a teammate is a reader like anyone once its computer took the execution up.
       const members = await api<Member[]>(`/conversations/${room}/members`);
       const nameOf = (actorId: string) => { const member = members.find(m => m.id === actorId); return member ? memberName(member, members) : null; };
       const value = projectMessageReaders(reply, members, nameOf);
@@ -3683,6 +3817,7 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
       const s = await recentSnapshot(room);
       // Owners and admins may be the account's own teammate; that member acts for everyone's work.
       const manager = managementActor(s);
+      const humanIsManager = s.members.some(m => m.id === selfId && m.state === 'joined' && ['owner', 'admin'].includes(m.role));
       const everything = scopeInput === 'all' && !!manager;
       const asManager = manager === selfId ? undefined : manager;
       const ownBot = (botId: string) => !!localBot(botId) || s.members.some(m => m.id === botId && m.ownerActorId === selfId);
@@ -3703,10 +3838,13 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
           // Your own teammate stops its work for others as itself; a request you made, as you.
           const asBot = !everything && e.requester_id !== selfId && ownBot(e.bot_id);
           if (!everything && !asBot && e.requester_id !== selfId) {
-            // A source message author is not proof of who requested this execution.
-            if (!e.requester_id) unknownRequester = true;
-            continue;
+            if (e.requester_id) continue;
+            // A manager's human identity could stop anyone on the server. Without
+            // ownership metadata, only an explicit all action may use that power.
+            if (humanIsManager) { unknownRequester = true; continue; }
           }
+          // Some servers omit requester_id. For an ordinary human, ask the server
+          // to authorize the stop; never infer ownership or use a foreign teammate.
           try { await api(`/conversations/${room}/executions/${e.id}/control`, 'POST', { operationId: randomUUID(), action: 'stop' }, asBot ? e.bot_id : everything && e.requester_id !== selfId ? asManager : undefined); }
           catch (error) { if (refused(error)) { refusedExecutions.set(e.id, error); continue; } throw error; }
           stopped = true;
@@ -3870,7 +4008,10 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
       postedThreads.clear();
       for (const roomId of attentionGroups) clearGroupAttention(roomId);
       unsubscribeProfiles();
-      disposed = true; threads.dispose(); clearInterval(timer); clearInterval(heartbeat); clearTimeout(reconnect); workPolling.dispose(); socket?.close();
+      disposed = true;
+      for (const [timer, finish] of capabilityNoticeRetries) { clearTimeout(timer); finish(); }
+      capabilityNoticeRetries.clear();
+      threads.dispose(); clearInterval(timer); clearInterval(heartbeat); clearTimeout(reconnect); workPolling.dispose(); socket?.close();
       textProgress.clear();
       companion?.dispose(); companion = undefined; deps.companionCloud?.homes.reset();
       for (const refresh of attachmentRefreshes.values()) clearTimeout(refresh);
