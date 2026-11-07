@@ -38,7 +38,7 @@ function QuoteScenario({ content }: { content: string }) {
       <BotChatQuoteInBubble quote={quote} context={context} />
       <pre hidden data-ui-quote-snapshot>{quote.excerpt}</pre>
     </div>}
-    <button data-ui-unload onClick={() => setLoaded(false)}>Unload original (fixture)</button>
+    <button data-ui-unload data-ui-page-control onClick={() => setLoaded(false)}>Unload original (fixture)</button>
   </BotChatQuoteProvider></div>;
 }
 

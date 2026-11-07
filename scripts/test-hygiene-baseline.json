@@ -819,12 +819,6 @@
     "apps/desktop/src/renderer/features/bots/__tests__/botNavigation.test.ts": {
       "sourceReads": 5
     },
-    "apps/desktop/src/renderer/features/bots/__tests__/botStore.lifecycle.test.ts": {
-      "resetModules": 2
-    },
-    "apps/desktop/src/renderer/features/bots/__tests__/botStore.modelSettings.test.ts": {
-      "resetModules": 1
-    },
     "apps/desktop/src/renderer/features/bots/__tests__/chatInviteBrowserHandoff.test.tsx": {
       "sourceReads": 1
     },

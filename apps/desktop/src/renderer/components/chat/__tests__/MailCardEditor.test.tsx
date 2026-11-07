@@ -6,12 +6,15 @@ import { renderMailCard } from '../../../../main/cindy-brain/mailCards';
 import { ingestCardPush } from '@/cindy-brain/ghostCardStore';
 import type { MailCardData } from '@cindy/maker-shared/ghost-card-form';
 import { pendingGhostCardFormDelivery } from '@cindy/maker-shared/ghost-card-form';
+import { enableGhostCardTaskAutoArchive, isGhostCardTaskAutoArchivePending } from '@/cindy-brain/ghostCardTaskArchive';
 
 vi.mock('react-i18next', () => ({ useTranslation: () => ({ t: (key: string) => key }) }));
 vi.mock('@/cindy-brain/useGhostCardThemeVars', () => ({ useGhostCardThemeVars: () => '' }));
 vi.mock('@/features/right-sidebar/lib/mailPreview', () => ({ openMailCard: vi.fn() }));
-vi.mock('@/contexts/PrRefsContext', () => ({ usePrStatuses: () => ({ statuses: new Map() }) }));
+const prStatuses = vi.hoisted(() => new Map<string, unknown>());
+vi.mock('@/contexts/PrRefsContext', () => ({ usePrStatuses: () => ({ statuses: prStatuses }) }));
 vi.mock('../GhostCardModelSelect', () => ({ GhostCardModelSelect: () => null }));
+vi.mock('../GhostCardSessionLink', () => ({ GhostCardSessionLink: () => null }));
 afterEach(() => { cleanup(); vi.unstubAllGlobals(); });
 
 // User regression (unit): syncing between pointerdown/click lost Send, and
@@ -135,4 +138,63 @@ it('sends the latest delivered text when the other view has not repainted yet', 
   expect(dispatch).toHaveBeenCalledTimes(2);
   expect(dispatch.mock.calls[1][1]).toBe(`mail:send:${mail.key}`);
   expect(dispatch.mock.calls[1][3].body).toBe('Edited in sidebar');
+});
+
+// #9118 (unit): exercise the shared production GhostCardCanvas through its
+// existing editor entry. Prior tests only loaded complete iframe documents.
+// A Document with no root during srcdoc replacement must not crash the task;
+// the subsequent load must still bind actions exactly once.
+it('waits for the iframe root and body and binds actions after each document loads', async () => {
+  vi.stubGlobal('matchMedia', () => ({ matches: true }));
+  const dispatch = vi.fn().mockResolvedValue({ ok: true });
+  vi.stubGlobal('electronAPI', { ghosts: { dispatchCardAction: dispatch } });
+  let current = document.implementation.createHTMLDocument('');
+  current.removeChild(current.documentElement);
+  const content = vi.spyOn(HTMLIFrameElement.prototype, 'contentDocument', 'get')
+    .mockImplementation(() => current);
+  try {
+    const props = { callId: 'loading-card', sessionId: 'loading-session', height: 80 };
+    const html = '<button data-ghost-action="retry">Retry</button>';
+    const view = render(<MailCardEditor {...props} html={html} />);
+    const frame = screen.getByTitle('mailReader.title');
+    for (const action of ['retry', 'next']) {
+      current = document.implementation.createHTMLDocument('');
+      current.body.remove();
+      view.rerender(<MailCardEditor {...props} html={`${html}<!--${action}-->`} />);
+      const body = current.createElement('body');
+      body.innerHTML = `<button data-ghost-action="${action}">Continue</button>`;
+      current.documentElement.append(body);
+      fireEvent.load(frame);
+      fireEvent.load(frame);
+      body.querySelector('button')!.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+      await act(async () => {});
+      expect(dispatch).toHaveBeenLastCalledWith(props.callId, action);
+    }
+    expect(dispatch).toHaveBeenCalledTimes(2);
+  } finally {
+    content.mockRestore();
+  }
+});
+
+// Review of PR 9147: a card replaced in place by content without any PR marker must withdraw its own
+// auto-archive eligibility, or the task-level "pending" and "seen" state outlives the card's declaration.
+// Production entry: the card canvas, rerendered with the new card HTML (card-update).
+it('withdraws auto-archive when the card is replaced by content without PR markers', () => {
+  prStatuses.set('octo/repo#9', { ok: true, owner: 'octo', repo: 'repo', prNumber: 9, status: 'merged', title: 'T', htmlUrl: '', branch: 'b', unresolvedCount: 0, checks: { total: 0, passed: 0, failed: 0, pending: 0, skipped: 0 } });
+  const disable = enableGhostCardTaskAutoArchive('review-session');
+  const props = { callId: 'pr-card', sessionId: 'review-session', height: 80 };
+  const merged = '<div><button data-ghost-task-archive="octo/repo#9" data-ghost-task-archive-auto aria-label="Archive" style="display:none"></button></div>';
+  const view = render(<MailCardEditor {...props} html={merged} />);
+  const load = () => {
+    const frame = screen.getByTitle('mailReader.title') as HTMLIFrameElement;
+    frame.contentDocument!.open(); frame.contentDocument!.write(frame.srcdoc); frame.contentDocument!.close();
+    fireEvent.load(frame);
+  };
+  load();
+  expect(isGhostCardTaskAutoArchivePending('review-session')).toBe(true);
+  view.rerender(<MailCardEditor {...props} html="<div>No PR here</div>" />);
+  load();
+  expect(isGhostCardTaskAutoArchivePending('review-session')).toBe(false);
+  disable();
+  prStatuses.clear();
 });

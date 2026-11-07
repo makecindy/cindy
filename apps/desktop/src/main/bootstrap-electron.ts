@@ -1,5 +1,4 @@
 import { registerRuntimeSettingsSection } from './app-settings/runtime.js';
-import { initializeRuntimeAppIcon } from './app-icon.js';
 import { z as settingsSchema } from 'zod';
 import { deliverRoutineResult, listRoutineDeliveryTargets } from './routines/delivery.js';
 import { flushPluginUsageLifecycle } from './plugin-usage/current.js';
@@ -569,6 +568,8 @@ import { reapClaudeOrphansSync } from './claude-orphan-reaper';
 import { reapCodexToolTreesSync } from './codex-tool-tree-reaper';
 import { startAgentProcessPriorityWatcher } from './agent-process-priority';
 import { registerProcessMonitorIpc } from './process-monitor/ipc.js';
+import { readMainHeapSamplingFlag, startMainHeapSampling } from './process-monitor/heap-sampling.js';
+import { startMemoryLog } from './process-monitor/memory-log.js';
 import { disposeWindowsProcessScanWorkers } from './process-monitor/windowsProcessScanWorkerClient.js';
 import {
   initAppBadgeService,
@@ -616,6 +617,13 @@ import {
 import { initHeartbeatService } from './heartbeatService';
 import { markStartupMilestone } from './startupTimeline';
 import { registerRemoteDesktopIpc } from './remote-desktop';
+import { isAwayCoverUp, registerAwayGuardIpc, startAwayGuard } from './remote-desktop/awayGuardService';
+import {
+  isDesktopScreenLocked,
+  seedDesktopScreenLocked,
+  msSinceForeignDesktopInput,
+  setPhysicalInputShielded,
+} from './mcp-integrations/computer.js';
 import { initAnalyticsSettingsService, noteAuthColdStartState } from './analyticsSettingsService';
 import { initLogUploadService, scheduleStartupBackfill } from './log-upload';
 import { initPerformanceTraceService } from './performance-trace';
@@ -645,6 +653,8 @@ import { registerSharedTaskIpc } from './device-link/sharedTaskIpc.js';
 import { registerProviderShareIpc } from './device-link/providerShareRuntime.js';
 import { registerSelfHostedRelayIpc } from './device-link/selfHostedRelayRuntime.js';
 import { registerProviderGroupIpc } from './provider-group/ipc.js';
+import { registerSubscriptionAccountsIpc } from './subscription-accounts/ipc.js';
+import { attachDefaultSubscriptionPool, disconnectSubscriptionPool } from './subscription-accounts/runtime.js';
 import { registerProviderGroupRemoteHandler } from './provider-group/remoteRegistration.js';
 import { providerGroupReshare, registerProviderGroupReshare } from './provider-group/reshareRuntime.js';
 import {
@@ -1064,6 +1074,8 @@ import { CURRENT_APP_ID, CURRENT_CINDY_REGION } from '../shared/brandRegion.js';
 import {
   readWindowBehaviorSettings,
   writeLinuxCloseBehavior,
+  writeAwayGuard,
+  writeAwayGuardDelay,
   writeSwallowActivationClick,
   writeWindowsCloseBehavior,
 } from './window-behavior-settings-store.js';
@@ -1126,6 +1138,7 @@ import {
   registerAppearanceSettingsIpc,
   updatePersistedWindowZoom,
 } from './appearance-settings-ipc.js';
+import { applyDockIcon } from './app-icon.js';
 import { registerBillingIpc } from './billing/index.js';
 import {
   initModelAccess,
@@ -1134,7 +1147,7 @@ import {
   refreshXdGatewayModels,
 } from './model-access/index.js';
 import { effectiveXdGatewayBaseUrl } from './model-access/effectiveEndpoint.js';
-import { withCindyGatewayKeyRejectionReport } from './model-access/gatewayKeyRejection.js';
+import { withCindyGatewayKeyRejectionReport, noteCindyGatewayKeyReplaced } from './model-access/gatewayKeyRejection.js';
 import { isLocalDbOwnerCurrent } from './appSessionPolicy.js';
 import { getAppCapabilities, requireAppCapability } from './appCapabilities.js';
 import {
@@ -1172,7 +1185,6 @@ import {
   refreshGhostLocalization,
   refreshPluginUsageBindings,
   registerGhostIpc,
-  restorePluginAppIcon,
   setRemotePluginManagementServices,
   runStableOwnerPostCommitTask,
   setGhostNodeRuntimeStartAttemptContextReader,
@@ -1693,6 +1705,7 @@ import {
   keepRecentSync,
   keepRecentSessionCcDebugSync,
   createLogger,
+  getLogDir,
   setCcDebugTailingEnabled,
   type LogLevel,
 } from './logger.js';
@@ -2585,6 +2598,14 @@ registerAppearanceSettingsIpc();
 registerAccessibilitySupportIpc();
 registerLoginItemIpc();
 registerMenubarIpc();
+registerAwayGuardIpc({
+  read: () => {
+    const settings = readWindowBehaviorSettings();
+    return { enabled: settings.awayGuard, delaySeconds: settings.awayGuardDelaySeconds };
+  },
+  writeEnabled: writeAwayGuard,
+  writeDelay: writeAwayGuardDelay,
+});
 
 // ── 资源用量面板 IPC ─────────────────────────────────────────────────
 // 订阅驱动采样(面板不开不采样),interval 已 unref 不拖退出;terminate 只认
@@ -4671,6 +4692,7 @@ const registerIpcHandlers = () => {
   initNotificationService({
     isCompletionHandledByTeammate: (sessionId) => getAgentIslandService()?.waitForCompletionNotification(sessionId)
       ?? isCompletionHandledByTeammate(sessionId),
+    isTaskAlertShownElsewhere: (kind) => getAgentIslandService()?.ownsTaskAlert(kind) === true,
     getWindow: () => getWindow() ?? null,
     feishuIm,
   });
@@ -4707,6 +4729,18 @@ const registerIpcHandlers = () => {
     },
   });
   app.once('will-quit', stopMenubarService);
+  // macOS「离开时继续工作」(默认关):开着时本机不因空闲熄屏锁屏;主人离开后盖黑色遮罩,
+  // 本机有人按键/点击即转系统真锁屏。共享 userData 的被动实例不接管本机屏幕。
+  if (!authManager.isPassiveSharedUserDataInstance()) {
+    startAwayGuard({
+      enabled: () => readWindowBehaviorSettings().awayGuard,
+      delaySeconds: () => readWindowBehaviorSettings().awayGuardDelaySeconds,
+      screenLocked: isDesktopScreenLocked,
+      seedScreenLocked: seedDesktopScreenLocked,
+      msSinceOwnerInput: () => msSinceForeignDesktopInput(),
+    });
+    setPhysicalInputShielded(isAwayCoverUp);
+  }
   // 灵动岛余量:与菜单栏同一份余量概览(顺序、显示与隐私设置都跟菜单栏),岛开着时才读取。
   const agentIsland = getAgentIslandService();
   if (agentIsland) app.once('will-quit', startAgentIslandQuota(agentIsland, getQuotaOverviewService()));
@@ -4870,6 +4904,7 @@ const registerIpcHandlers = () => {
       );
     }
     rememberResolvedAppTheme(payload.isDark);
+    applyDockIcon(undefined, payload.isDark);
     applyWindowVibrancy(payload.familyId, payload.isDark);
   });
 
@@ -5471,6 +5506,7 @@ const registerIpcHandlers = () => {
     resetProviderModelAutoRefreshCooldowns('anthropic');
     // Binding is the commit point; auxiliary refresh must not prolong the cancellable login.
     connectClaudeNativeLogin();
+    await attachDefaultSubscriptionPool('anthropic');
     // CLI 登录态变化的监听先于绑定触发,那次探测会因尚未绑定而跳过;绑定后再请求一次。
     requestAnthropicModelProbe();
     void broadcastClaudeAuthStateChanged();
@@ -5494,6 +5530,7 @@ const registerIpcHandlers = () => {
       // Cancel a pending CLI login before revoking the binding; keep the CLI's own login.
       try {
         cancelClaudeCliLogin();
+        await disconnectSubscriptionPool('anthropic');
         await disconnectClaudeNativeLogin();
         if (owner !== activeOwnerScopeKey() || isAppSessionBoundaryPending())
           return { authorized: false };
@@ -6028,11 +6065,13 @@ const registerIpcHandlers = () => {
         if (!filepath) return false;
         if (!safeStorage.isEncryptionAvailable()) return false;
         const encrypted = safeStorage.encryptString(value);
+        const keyOwnerScope = key === 'api_key' ? activeOwnerScopeKey() : null;
         const prepareResult = await prepareApiKeyChangeMaybeRestartCodex(key);
         if (!prepareResult.ok) return false;
         const dir = path.dirname(filepath);
         const hadPrevious = fs.existsSync(filepath);
         const previousContent = hadPrevious ? fs.readFileSync(filepath, 'utf-8') : null;
+        const previousXdKey = key === 'api_key' ? getProviderSecretStore().get('xd') : null;
         let mutated = false;
         let finalized = false;
         fs.mkdirSync(dir, { recursive: true });
@@ -6045,6 +6084,9 @@ const registerIpcHandlers = () => {
             // 手填 XD key 保存成功:来源标记翻 manual(endpoint 回落编译期常量,
             // 与 model-access 自动下发的 endpoint 解耦,见 credentialsStore 注释)。
             if (key === 'api_key') {
+              if (activeOwnerScopeKey() === keyOwnerScope) {
+                noteCindyGatewayKeyReplaced(previousXdKey, value);
+              }
               noteManualXdKeySaved();
               notifyProviderKeyChanged('xd');
             }
@@ -9434,9 +9476,9 @@ app.on('ready', async () => {
 
   initializeUpdatePresentationRecovery();
 
-  await initializeRuntimeAppIcon().then(restorePluginAppIcon).catch(err => {
-    createLogger('dock-icon').warn('Runtime icon initialization failed', { error: String(err) });
-  });
+  // dev 跑的是 node_modules 里的官方 Electron 二进制，Dock 默认显示 Electron 图标；
+  // packaged 版由 icon.icns 生效。这里同时恢复用户在「外观」里选的 Dock 图标。
+  applyDockIcon();
 
   await ensureMainAppPresence('app-ready');
 
@@ -10192,6 +10234,7 @@ app.on('ready', async () => {
   // 自建中转服务(docs/self-hosted-relay-plan.md):本机中转与加入别的中转。
   registerSelfHostedRelayIpc();
   registerProviderGroupIpc({ reshare: providerGroupReshare });
+  registerSubscriptionAccountsIpc();
   registerProviderGroupRemoteHandler({ onGroupChanged: () => providerGroupReshare.kick('group') });
   registerProviderGroupReshare();
   registerFilePeerIpc();
@@ -10255,17 +10298,22 @@ app.on('ready', async () => {
   );
   authCredentialRecovery.request();
 
-  // Memory diagnostics — dev only, log per-process memory every 30s
-  if (!app.isPackaged) {
-    setInterval(() => {
-      const parts = app
-        .getAppMetrics()
-        .map(
-          (m) =>
-            `${m.type}:${(m.memory.workingSetSize / 1024).toFixed(0)}MB/${m.cpu.percentCPUUsage.toFixed(1)}%`,
-        );
-      console.log(`[mem] ${parts.join(' | ')}`);
-    }, 30_000);
+  // 各进程内存采样进 main 日志(scope memory-usage):正式版 10 分钟一次,dev 保持 30s。
+  const stopMemoryLog = startMemoryLog({
+    getMetrics: () => app.getAppMetrics(),
+    memoryUsage: () => process.memoryUsage(),
+    log: createLogger('memory-usage'),
+    intervalMs: app.isPackaged ? 10 * 60_000 : 30_000,
+  });
+  onQuit('memory-usage-log', stopMemoryLog, 'sync');
+  // 主进程堆采样:只在开发版、日志目录 log-config.json 写了 mainHeapSampling 时运行。
+  if (!app.isPackaged && readMainHeapSamplingFlag(getLogDir())) {
+    const stopHeapSampling = startMainHeapSampling({
+      dir: path.join(getLogDir(), 'heap-sampling'),
+      intervalMs: 30 * 60_000,
+      log: createLogger('heap-sampling'),
+    });
+    onQuit('main-heap-sampling', stopHeapSampling, 'sync');
   }
 });
 

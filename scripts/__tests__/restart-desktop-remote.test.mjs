@@ -242,6 +242,76 @@ test("restart kill scope only targets the checkout that runs the script", () => 
 	assert.deepEqual(preserved.map((proc) => proc.pid), [2]);
 });
 
+// 借用的 node / pnpm 必须是真实文件：含空格路径与「长得像启动器的目录名」只能靠文件系统区分。
+function makeLauncherFixture(ownDirName = "cindy-src") {
+	const base = fs.mkdtempSync(path.join(os.tmpdir(), "restart-launcher-"));
+	const ownRoot = path.join(base, ownDirName);
+	const otherRoot = path.join(base, "cindy-personal");
+	const binDir = path.join(ownRoot, ".tooling/node-v22/bin");
+	fs.mkdirSync(binDir, { recursive: true });
+	const borrowedNode = path.join(binDir, "node");
+	const borrowedPnpm = path.join(binDir, "pnpm");
+	fs.writeFileSync(borrowedNode, "");
+	fs.writeFileSync(borrowedPnpm, "");
+	const forge = (root) => path.join(root, "node_modules/@electron-forge/cli/dist/electron-forge-start.js");
+	return { base, ownRoot, otherRoot, borrowedNode, borrowedPnpm, forge, checkoutPaths: [ownRoot, otherRoot] };
+}
+
+test("restart kill scope ignores a node runtime borrowed from this checkout by another checkout", () => {
+	// 2026-11-06：另一份 checkout 用本 checkout 的 node 启动 dev，本 checkout restart 把它整组杀掉。
+	const fx = makeLauncherFixture();
+	try {
+		const processes = [
+			{ pid: 1, command: `${fx.borrowedNode} /home/u/.cache/corepack/pnpm/10/bin/pnpm.cjs dev:desktop:remote` },
+			{ pid: 2, command: `node ${fx.borrowedPnpm} --filter desktop dev:remote` },
+			{ pid: 3, command: `${fx.borrowedNode} ${fx.forge(fx.otherRoot)}` },
+			{ pid: 4, command: `${fx.borrowedNode} ${fx.forge(fx.ownRoot)}` },
+			{ pid: 5, command: `${path.join(fx.ownRoot, "node_modules/electron/dist/Electron.app/Contents/MacOS/Electron")} .` },
+		];
+		const devProcesses = processes.filter((proc) => isRepositoryDesktopDevProcess(proc, fx.checkoutPaths, 999));
+
+		const { targets } = partitionDesktopDevProcesses(devProcesses, fx.ownRoot, fx.checkoutPaths);
+		assert.deepEqual(targets.map((proc) => proc.pid), [4, 5]);
+		assert.equal(commandBelongsToCheckout(processes[2].command, fx.otherRoot, fx.checkoutPaths), true);
+	} finally {
+		fs.rmSync(fx.base, { recursive: true, force: true });
+	}
+});
+
+for (const ownDirName of ["cindy src", "cindy src - old"]) {
+	test(`restart kill scope strips a borrowed node whose unquoted path contains spaces (${ownDirName})`, () => {
+		// `ps` 不给带空格的参数补引号：借用的 node 路径含空格（含「空格 + 横线」）时仍要整段剥掉。
+		const fx = makeLauncherFixture(ownDirName);
+		try {
+			const processes = [
+				{ pid: 1, command: `${fx.borrowedNode} ${fx.forge(fx.otherRoot)}` },
+				{ pid: 2, command: `${fx.borrowedNode} ${fx.forge(fx.ownRoot)}` },
+				{ pid: 3, command: `"${fx.borrowedNode}" ${fx.forge(fx.otherRoot)}` },
+			];
+			const { targets } = partitionDesktopDevProcesses(processes, fx.ownRoot, fx.checkoutPaths);
+			assert.deepEqual(targets.map((proc) => proc.pid), [2]);
+		} finally {
+			fs.rmSync(fx.base, { recursive: true, force: true });
+		}
+	});
+}
+
+test("restart kill scope keeps a checkout whose directory name looks like a launcher", () => {
+	// /…/node workspace/cindy 里的 `/…/node` 只是目录名前缀，不是启动器。
+	const base = fs.mkdtempSync(path.join(os.tmpdir(), "restart-launcher-"));
+	try {
+		const ownRoot = path.join(base, "node workspace", "cindy");
+		const electron = path.join(ownRoot, "node_modules/electron/dist/Electron.app/Contents/MacOS/Electron");
+		fs.mkdirSync(path.dirname(electron), { recursive: true });
+		const command = `${electron} .`;
+
+		assert.equal(commandContainsPath(command, ownRoot), true);
+		assert.equal(isRepositoryDesktopDevProcess({ pid: 1, command }, [ownRoot], 999), true);
+	} finally {
+		fs.rmSync(base, { recursive: true, force: true });
+	}
+});
+
 test("restart from the main checkout keeps dev instances of nested managed worktrees", () => {
 	const mainRoot = path.resolve("/repo/cindy-src");
 	const nestedRoot = path.join(mainRoot, ".cindy-worktrees", "fierce-newton");

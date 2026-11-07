@@ -334,12 +334,21 @@ button/cta  (Black Pill — maximum emphasis)
   padding   horizontal 24px; vertical content centered within the fixed height
   height    28px (sm) / 32px (md) / 36px (lg); compact xs 24px / xxs 22px — no 40px size (DS-4 G1)
   type      text-13 / font-medium 500 (DS-4 G4)
-  hover     --button-cta-hover    = --accent-hover  #262626 / #e5e5e5   (swap-color; was opacity-90 on the private prototype, DS-4 G2, intentional)
-  pressed   --button-cta-pressed  cta hover mixed a further 10% toward --accent-pure-cta-fg
+  hover     --button-cta-hover    derived from the fill, see Filled button states below (swap-color, never opacity; DS-4 G2)
+  pressed   --button-cta-pressed  derived from the fill, see Filled button states below
   disabled  opacity 60%; ordinary pointer
   note      pure black on white (inverts in Dark); at most one per screen
   impl      components/ui/button.tsx variant="cta"
 ```
+
+**Filled button states (owner decision, 2026-11-05).** Themes supply a filled button's base color; hover and pressed are computed from it, so a theme or custom color never needs state colors. This follows Apple's model of one color plus a system effect (`NSColor.withSystemEffect`), with steps calibrated from Cindy's approved neutral values.
+
+- Rule (`themes/filledButtonStates.ts`): in OKLCH, hover lowers lightness by 0.045 and pressed by 0.085. A base at or below lightness 0.25 has no visible room to darken, so hover lifts to 0.27 and pressed to 0.355. Pressed always continues in the same direction as hover.
+- Applies to: `cta`, SendButton, confirmation primary, permission allow, `danger-solid` and Cindy's solid relaunch pill.
+- Neutral buttons (`primary`, `secondary`, quiet) keep mixing toward `--text-primary` as specified above.
+- One registered exception: `danger-solid` in Dark keeps mixing toward `--text-primary`. It is dark text on a mid-lightness red, and darkening would drop text contrast below 4.5:1.
+- A theme may still override a state token explicitly; the override wins.
+- Compatibility: a local or imported theme that sets `accent-hover` keeps it as the hover of `cta` and confirmation primary (load-time only, `local-themes-normalize`); pressed takes one more 0.04 lightness step in the direction from base to hover.
 
 **Compact settings actions (owner feedback, 2026-09-21).** Button adds an explicit 28px sm size alongside 32px md and 36px lg. Logs and compact automation actions use this shared size with their existing horizontal spacing. Contacts section actions retain their approved 24px target; appearance actions retain 36px or 32px targets. A 13px identity-removal icon keeps its visible size inside a 24px target. Destructive contacts actions retain semantic red hover/pressed feedback. The authorization-waiting Cancel action remains named and enabled; it is not a disabled loading button. The contacts discard/add-identity treatments are retained per this batch’s explicit keep-before decisions.
 
@@ -1376,9 +1385,9 @@ The splash wordmark is a separate asset pair (`assets/splash/wordmark.png`, whit
 
 ### 15.10 Red-System Boundary & Neutral CTAs — current state(E1D 红色边界)
 
-- Ordinary primary actions never use brand red — they are neutral-inverse. **Neutral button four states**: light bg `#3C3F43` / text `#FCFCFC`, hover `#2E3237`, pressed `#25282C`; dark bg `#EEEEEE` / text `#151515` (2026-08: inverse dark text shifted with the darker ramp, was `#252222`), hover `#E2E2E2`, pressed `#D4D4D4` (WCAG 10.32/15.74:1).
+- Ordinary primary actions never use brand red — they are neutral-inverse. **Neutral button four states**: light bg `#3C3F43` / text `#FCFCFC`, hover `#303337`, pressed `#27292D`; dark bg `#EEEEEE` / text `#151515` (2026-08: inverse dark text shifted with the darker ramp, was `#252222`), hover `#DFDFDF`, pressed `#D2D2D2` (WCAG 10.32/15.74:1). Hover and pressed are computed from the base by §4 Filled button states.
 - Red is confined to brand display / splash surfaces (§15.7, §15.13) and semantic exceptions: `destructive`/delete, `error-*`, warning, diff red, status dots, the explicit Mobile Beta-channel state badge (`betaChannelBadgeBackground/Foreground`, user decision 2026-08-25), the Windows taskbar attention badge (§2), the quota critical fill (§2, §10), the Mobile thread new-reply divider (`threadUnreadDivider`, line and localized “New” label, §2), the Computer Use automated cursor (§15.7) and the Mobile `activeGlyph` (§15.13) — plus the login brand accent via `--login-brand-accent` (§16). Red members of palettes that identify rather than signal stay registered with their palette and carry no red semantics: file-type badges and Bot avatar hues (§2, §10), task tags, screenshot annotation ink (§2), chart series and tier scales, and code syntax highlighting. This list is the complete red whitelist; other sections only refer to it. The Desktop sidebar's Beta label is ordinary version text. The older `brand-login-*` tokens were retired with the wave4 white-canvas login and survive only as whitelist strings in `cindyDecisionData.ts` (harmless — the whitelist permits, it does not require).
-- **send-btn family**: `send-btn-bg/-icon/-hover-bg/-pressed-bg/-disabled-bg/-disabled-icon` — CINDY overrides the whole family to the neutral four states + disabled grays (light `#444242`/`#585555` unchanged; dark shifted 2026-08 to `#323232`/`#464646`); defaults keep `--accent-cta-bg` with the opacity-85 hover. Whole family sits in `cindyDecisionData` REQUIRED_IDS + CINDY_EXPECTED, guarded by assertion ③. SendButton does not consume `-disabled-bg/-icon`: a disabled send keeps the normal `send-btn-bg/-icon` at 40% opacity, and the two disabled tokens stay registered for compatibility.
+- **send-btn family**: `send-btn-bg/-icon/-disabled-bg/-disabled-icon` — CINDY overrides these to the neutral fill + disabled grays (light `#444242`/`#585555` unchanged; dark shifted 2026-08 to `#323232`/`#464646`); these sit in `cindyDecisionData` REQUIRED_IDS + CINDY_EXPECTED, guarded by assertion ③. `-hover-bg/-pressed-bg` are computed from `send-btn-bg` in every theme by §4 Filled button states. SendButton does not consume `-disabled-bg/-icon`: a disabled send keeps the normal `send-btn-bg/-icon` at 40% opacity, and the two disabled tokens stay registered for compatibility.
 - **Sidebar color hierarchy** (same set for light/dark):
   - Body (session titles) = `text-foreground` (= `text-primary`: black ink 88% / white ink 82%, §15.16).
   - Secondary gray (timestamps / meta / group labels) = secondary ink (black 56% / white 55%, same as `text-secondary`), via CINDY overrides `sidebar-muted` (HSL with alpha) and `cmd-palette-item-meta`; leading icons at rest use `sidebar-action-icon` = tertiary ink (black 44% / white 40%). Since 2026-10-22 these follow the ink ladder (§15.16) instead of `#888883` / `#6F6F6F`.
@@ -1500,7 +1509,7 @@ The execution rulebook for subsequent desktop / mobile UI updates. Sources: the 
   - `--content-header-h` is broadcast by `ContentHeaderSlot` (inside FeatureSidebarSlotProvider) through a display:contents wrapper (46px rendered / 0px hidden, same source as ContentHeader `h-[46px]`) — content stays pinned at the "header present" position with **zero jump** when selecting a project toggles the header;
   - header visibility has a single decision source = `useContentHeaderHidden` (mac + sidebar expanded + no injected content + no right-panel toggle; continues the 2026-06-11 "hide empty header" ruling);
   - guard: the position formula and its anti-regression assertions are part of the create-page review contract.
-- **Hover-token discipline**: `--update-btn-hover` is exclusively the upgrade button's hover (inverse dark CTA) — **forbidden** on ordinary ghost buttons/badges (near-black `#2E3237` under CINDY light swallows text and icons; 6 misuses cleaned up 2026-07-21). Correct picks:
+- **Hover-token discipline**: `--update-btn-hover` is exclusively the upgrade button's hover (inverse dark CTA) — **forbidden** on ordinary ghost buttons/badges (near-black under CINDY light swallows text and icons; 6 misuses cleaned up 2026-07-21). Correct picks:
   - titlebar-area (ContentHeader) ghost elements → `titlebar-button-hover` (same as the ChromeActions window buttons);
   - general light hover in the content area → `--surface-hover`.
 

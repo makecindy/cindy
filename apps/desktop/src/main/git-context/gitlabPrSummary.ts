@@ -7,7 +7,7 @@ export const GITLAB_MR_QUERY = `query MrStatus($path: ID!, $iid: String!) {
     mergeRequest(iid: $iid) {
       state draft title webUrl sourceBranch diffHeadSha conflicts
       resolvableDiscussionsCount resolvedDiscussionsCount
-      headPipeline { status sha jobs(first: 100) { count nodes { status } pageInfo { hasNextPage } } }
+      headPipeline { status jobs(retried: false, first: 100) { count nodes { status allowFailure } pageInfo { hasNextPage } } }
     }
   }
 }`;
@@ -23,10 +23,9 @@ type MergeRequest = {
   resolvedDiscussionsCount: number | null;
   headPipeline: null | {
     status: string;
-    sha: string;
     jobs: {
       count: number;
-      nodes: Array<{ status: string }>;
+      nodes: Array<{ status: string; allowFailure?: boolean }>;
       pageInfo: { hasNextPage: boolean };
     };
   };
@@ -34,7 +33,9 @@ type MergeRequest = {
 
 export function gitlabChecks(mr: MergeRequest): PrChecksSummary | null {
   const pipeline = mr.headPipeline;
-  if (!pipeline || !mr.diffHeadSha || pipeline.sha !== mr.diffHeadSha) return null;
+  if (!mr.diffHeadSha) return null;
+  if (pipeline === null) return { total: 0, failed: 0, passed: 0, pending: 0, skipped: 0 };
+  if (!pipeline) return null;
   const jobs = pipeline.jobs;
   if (
     !jobs ||
@@ -53,7 +54,8 @@ export function gitlabChecks(mr: MergeRequest): PrChecksSummary | null {
   for (const job of jobs.nodes) {
     const status = job?.status?.toUpperCase();
     if (status === 'SUCCESS') counts.passed++;
-    else if (status === 'SKIPPED') counts.skipped++;
+    else if (status === 'SKIPPED' || (status === 'MANUAL' && job.allowFailure === true))
+      counts.skipped++;
     else if (status === 'FAILED' || status === 'CANCELED') counts.failed++;
     else if (
       [

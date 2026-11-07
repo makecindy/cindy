@@ -57,7 +57,9 @@ export const MermaidDiagramWebView = forwardRef<MermaidDiagramWebViewHandle, {
   const runtime = useContext(RichContentContext);
   const previewEnabled = cachePreview && !!runtime && !fill && !zoomable;
   const [width, setWidth] = useState(0);
-  const cacheKey = JSON.stringify(['mermaid', source, mode, colors.surfaceChip, colors.textPrimary,
+  // 全屏查看器(bare)铺在页面上,画布用页面底色;内联预览仍是 chip 底。
+  const canvas = bare ? colors.surface : colors.surfaceChip;
+  const cacheKey = JSON.stringify(['mermaid', source, mode, canvas, colors.textPrimary,
     colors.textSecondary, colors.textTertiary, width, height]);
   const [snapshot, setSnapshot] = useState<{ runtime: typeof runtime; key: string; uri: string;
   } | null>(null);
@@ -163,7 +165,7 @@ export const MermaidDiagramWebView = forwardRef<MermaidDiagramWebViewHandle, {
     () => {
       if (!mountWebView) return '';
       return buildMermaidWebViewHtml(source, {
-        surfaceChip: colors.surfaceChip,
+        surfaceChip: canvas,
         textPrimary: colors.textPrimary,
         textSecondary: colors.textSecondary,
         textTertiary: colors.textTertiary,
@@ -173,7 +175,7 @@ export const MermaidDiagramWebView = forwardRef<MermaidDiagramWebViewHandle, {
         preview: previewEnabled && failedKey !== cacheKey,
       });
     },
-    [mountWebView, source, colors.surfaceChip, colors.textPrimary, colors.textSecondary, colors.textTertiary, mode, deferSource, zoomable, previewEnabled, failedKey, cacheKey],
+    [mountWebView, source, canvas, colors.textPrimary, colors.textSecondary, colors.textTertiary, mode, deferSource, zoomable, previewEnabled, failedKey, cacheKey],
   );
   return (
     // 尺寸必须钉在容器上(height 或 flex:1)、WebView 用 flex:1 填满:
@@ -249,7 +251,7 @@ const makeStyles = (colors: ThemeColors) => StyleSheet.create({
   },
   // 沉浸式全屏形态:无边框无圆角,图表铺到屏幕边缘。
   containerBare: {
-    backgroundColor: colors.surfaceChip,
+    backgroundColor: colors.surface,
     overflow: 'hidden',
   },
   containerFill: {

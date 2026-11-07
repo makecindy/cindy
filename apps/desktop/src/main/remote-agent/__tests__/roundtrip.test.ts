@@ -32,6 +32,7 @@ import { credentialGrantFor, forgetCredentialGrants } from '../executor/credenti
 import { cancelPendingRemoteStart, startRemoteAgentSession, type StartRemoteAgentDeps } from '../controller/startRemote';
 import { createRemoteAgentHost, type HostedStartInput } from '../host/runHost';
 import { hostedStartOptions } from '../host/service';
+import { createGroupFastPolicyStore } from '../../provider-group/fastPolicyStore';
 import { PROVIDER_SHARE_CREDENTIAL_SESSION_APPROVAL } from '../../../shared/providerShareCredentialConsent';
 import { DEFAULT_REMOTE_AGENT_LIMITS, type RemoteAgentLimits } from '../../../shared/remoteAgentLimits';
 import { installDesktopInteractionHandler } from '../../maker-ipc/interactionRouter';
@@ -246,7 +247,7 @@ afterEach(() => {
 function createHost(
   readLimits: () => RemoteAgentLimits = () => DEFAULT_REMOTE_AGENT_LIMITS,
   log?: StartRemoteAgentDeps['log'],
-  start = fakeHostedAgent,
+  start: (input: HostedStartInput) => AgentSessionHandle | Promise<AgentSessionHandle> = fakeHostedAgent,
 ) {
   return createRemoteAgentHost({
     readLimits,
@@ -264,6 +265,52 @@ function createHost(
 }
 
 describe('remote agent round trip', () => {
+  // R3 routing observation: target starts as input.deviceId for an ordinary
+  // same-account remote task; crossing computers alone is not groupAssigned.
+  it('keeps an ordinary cross-computer task outside the group speed-policy requirement', async () => {
+    const host = createHost(undefined, undefined, input => {
+      expect(input.requireGroupFastPolicy).toBe(false);
+      return fakeHostedAgent(input);
+    });
+    const invoke = makeDeps(host).invoke;
+    const log = { trace() {}, debug() {}, info() {}, warn() {}, error() {}, fatal() {}, child() { return this; } };
+    const start = createDeviceAgentStarter({
+      remoteInvoke: async (deviceId, _channel, args) => {
+        expect(deviceId).toBe('ordinary-peer');
+        if ((args[0] as { op: string }).op === 'open')
+          expect((args[0] as { payload: { json: object } }).payload.json).not.toHaveProperty('groupAssigned');
+        return { ok: true, result: await invoke(args) };
+      },
+      rgPath: () => RG, mcpProviders: () => [], prepareMcpBridge: vi.fn(async () => null), makerMemory: () => undefined,
+      captureKnownFileBefore: async () => {}, noteOpaqueTurnChange: () => {}, logger: log,
+    });
+    let handle: AgentSessionHandle | undefined;
+    try {
+      handle = await start({ agentKind: 'codex', deviceId: 'ordinary-peer', options: {
+        sessionId: 'ordinary-remote', workingDir: project, model: 'gpt-5', providerId: 'openai',
+      } });
+      expect(hostInputs).toHaveLength(1);
+    } finally { await handle?.close(); host.dispose(); }
+  });
+  // R2-F1: check after the real controller/host open has added M's local
+  // policy; allocate-only assertions miss that local=true source entirely.
+  it('opens an assigned task at ordinary speed when only the executor local policy exists', async () => {
+    const policy = createGroupFastPolicyStore({ filePath: () => path.join(root, 'speed.json'), scopeKey: () => 'test' });
+    const host = createHost(undefined, undefined, async input => {
+      await policy.receive('executor', { group: 'openai', revision: 1, allowFast: true,
+        binding: { sessionId: input.hostSessionId } }, 'executor', () => {}, input.hostSessionId, false, true);
+      expect(input.requireGroupFastPolicy).toBe(true);
+      expect(policy.allows(input.hostSessionId)).toBe(true);
+      expect(policy.allows(input.hostSessionId, input.requireGroupFastPolicy)).toBe(false);
+      return fakeHostedAgent(input);
+    });
+    let handle: AgentSessionHandle | undefined;
+    try {
+      handle = await startRemoteAgentSession('codex', { sessionId: 'missing-owner-policy',
+        workingDir: project, model: 'gpt-5', providerId: 'openai' }, { ...makeDeps(host), groupAssigned: true });
+      expect(hostInputs).toHaveLength(1);
+    } finally { await handle?.close(); host.dispose(); }
+  });
   // External application's only MCP traverses the real controller/router/tunnel;
   // host-only access must reject native tools even if a peer forges a request.
   it.each(['codex', 'pi', 'claude-code'] as const)('preserves application tools and isolation through %s remote execution', async kind => {
@@ -279,6 +326,7 @@ describe('remote agent round trip', () => {
     const host = createHost(undefined, undefined, input => {
       expect(input.options.localApplication).toMatchObject({ mcpName: 'hhh', hostToolsOnly: true });
       expect(input.localApplicationStorage).toContain('local-applications');
+      expect(input.requireGroupFastPolicy).toBe(true);
       expect(input.localApplicationStorage).not.toContain(local.storageDirectory);
       return fakeHostedAgent(input);
     });
@@ -1557,11 +1605,21 @@ describe('shared startup lease budget', () => {
     await resumed.close();
   });
 
+  // Unit: a failed O lookup is a known stage, not an unspecified M failure.
+  it('reports a failed owner lookup without allocating or opening another executor', async () => {
+    const f = fixture();
+    historyInvoke.mockRejectedValueOnce(Object.assign(new Error('owner unavailable'), { code: 'DEVICE_OFFLINE' }));
+    await expect(authorizeSharedTaskHistory(f.owner, 'missing-owner', 'codex', 'm'))
+      .rejects.toThrow('[SHARED_TASK_RECOVERY_offline] [SHARED_TASK_STAGE_owner]');
+    expect(f.calls.filter(call => call.op === 'allocate' || call.op === 'open')).toHaveLength(0);
+  });
+
   it('keeps a historical grant through a transient M probe failure', async () => {
     const f = fixture(); f.state.ready = true; f.state.duration = 30 * 60_000;
     const first = await f.open('history-transient'); await first.close({ reason: 'navigation' });
     historyInvoke.mockRejectedValueOnce(Object.assign(new Error('offline'), { code: 'DEVICE_OFFLINE' }));
-    await expect(f.open('history-transient', f.owner, 'm', 'native-only-on-m')).rejects.toThrow('offline');
+    await expect(f.open('history-transient', f.owner, 'm', 'native-only-on-m'))
+      .rejects.toThrow('[SHARED_TASK_RECOVERY_offline] [SHARED_TASK_STAGE_capability] [SHARED_TASK_CODE_DEVICE_OFFLINE]');
     expect(f.calls.filter(call => call.op === 'allocate')).toHaveLength(1);
     f.state.ownerOffline = true;
     const resumed = await f.open('history-transient', f.owner, 'm', 'native-only-on-m');
@@ -1603,7 +1661,8 @@ describe('shared startup lease budget', () => {
     const f = fixture(); f.state.ready = true; f.state.duration = 10 * 60_000;
     const first = await f.open('historical'); await first.close({ reason: 'navigation' });
     historyInvoke.mockRejectedValueOnce(Object.assign(new Error('explicit permission denial'), { code }));
-    await expect(f.open('historical', f.owner, 'm', 'native-only-on-m')).rejects.toThrow('explicit permission denial');
+    await expect(f.open('historical', f.owner, 'm', 'native-only-on-m'))
+      .rejects.toThrow(`[SHARED_TASK_RECOVERY_denied] [SHARED_TASK_STAGE_capability] [SHARED_TASK_CODE_${code}]`);
     expect(f.calls.filter(call => call.op === 'allocate')).toHaveLength(1);
     expect(f.calls.filter(call => call.op === 'open')).toHaveLength(1);
   });
@@ -1679,7 +1738,7 @@ describe('shared startup lease budget', () => {
     expect(liveSharedTaskTarget('historical', f.owner)).toBeNull();
     expect(f.disposed).toEqual(['historical']);
     guestPermission.status = 'active'; guestPermission.epoch++; f.state.ownerOffline = true;
-    await expect(f.open('historical', f.owner, 'm', 'native-original')).rejects.toThrow('owner offline');
+    await expect(f.open('historical', f.owner, 'm', 'native-original')).rejects.toThrow('[SHARED_TASK_RECOVERY_relay] [SHARED_TASK_STAGE_owner] [SHARED_TASK_CODE_NOT_CONNECTED]');
     expect(f.calls.filter(call => call.op === 'open')).toHaveLength(1);
     await handle.close();
   });
@@ -1720,7 +1779,7 @@ describe('shared startup lease budget', () => {
     historyInvoke.mockImplementationOnce(async (...args: unknown[]) => { await gate.promise; return invoke(...args); });
     const pending = authorizeSharedTaskHistory(f.owner, 'historical', 'codex', 'm'); void pending.catch(() => undefined);
     await flush(); forgetSharedTaskAuthorization(f.owner, 'historical'); gate.resolve();
-    await expect(pending).rejects.toThrow('original shared executor authorization');
+    await expect(pending).rejects.toThrow('[SHARED_TASK_RECOVERY_history] [SHARED_TASK_STAGE_authorization]');
     expect(f.calls.filter(call => call.op === 'allocate')).toHaveLength(1);
   });
 
@@ -1733,7 +1792,7 @@ describe('shared startup lease budget', () => {
       await vi.waitFor(() => expect(f.calls.filter(call => call.op === 'allocate')).toHaveLength(2));
       forgetSharedTaskAuthorization(f.owner, 'historical');
     } finally { f.allocation.resolve(); }
-    await expect(pending).rejects.toThrow('original shared executor authorization');
+    await expect(pending).rejects.toThrow('[SHARED_TASK_RECOVERY_history] [SHARED_TASK_STAGE_authorization]');
     expect(f.calls.filter(call => call.op === 'open')).toHaveLength(2);
   });
 
@@ -1745,7 +1804,7 @@ describe('shared startup lease budget', () => {
     if (boundary === 'wall-expiry') vi.setSystemTime(Date.now() + 30 * 60_000);
     const before = f.calls.filter(call => call.op === 'open').length;
     await expect(f.open(boundary === 'task' ? 'unrelated' : 'historical', f.owner,
-      boundary === 'model' ? 'other-model' : 'm', 'native-only-on-m')).rejects.toThrow('owner offline');
+      boundary === 'model' ? 'other-model' : 'm', 'native-only-on-m')).rejects.toThrow('[SHARED_TASK_RECOVERY_relay] [SHARED_TASK_STAGE_owner] [SHARED_TASK_CODE_NOT_CONNECTED]');
     expect(f.calls.filter(call => call.op === 'open')).toHaveLength(before);
   });
 
@@ -2002,7 +2061,26 @@ describe('shared startup lease budget', () => {
     f.state.duration = undefined;
     await expect(authorizeSharedTaskExecutor(f.owner, 'legacy', 'codex', 'm', 'executor-m')).resolves.toMatchObject({ target: f.target, direct: true });
     historyInvoke.mockResolvedValueOnce({ ok: true, result: { deviceId: 'different-m', generation: f.generation, leaseDurationMs: 2000 } });
-    await expect(authorizeSharedTaskExecutor(f.owner, 'history', 'codex', 'm', 'executor-m')).rejects.toThrow('holding this shared task');
+    await expect(authorizeSharedTaskExecutor(f.owner, 'history', 'codex', 'm', 'executor-m')).rejects.toThrow('[SHARED_TASK_RECOVERY_history]');
+  });
+
+  // Unit: restored history may probe its original link once more after a
+  // transient handshake failure, but never after an explicit denial. Previous
+  // tests covered retained-only retry and lost the failure's public reason.
+  it.each(['TIMEOUT', 'ACCESS_REVOKED'] as const)('bounds pinned history handshake recovery for %s', async code => {
+    const f = fixture();
+    historyOpenLink.mockRejectedValueOnce(Object.assign(new Error(code === 'ACCESS_REVOKED'
+      ? '[SHARED_TASK_RECOVERY_timeout] old diagnostic' : 'private transport details'), { code }));
+    const opening = authorizeSharedTaskExecutor(f.owner, 'history', 'codex', 'm', 'executor-m');
+    if (code === 'TIMEOUT') {
+      await expect(opening).resolves.toMatchObject({ target: f.target, direct: true });
+      expect(historyOpenLink).toHaveBeenCalledTimes(2);
+    } else {
+      await expect(opening).rejects.toThrow('[SHARED_TASK_RECOVERY_denied]');
+      expect(historyOpenLink).toHaveBeenCalledTimes(1);
+    }
+    expect(f.calls.filter(call => call.op === 'allocate')).toHaveLength(1);
+    expect(f.calls.some(call => call.op === 'open' || call.op === 'call')).toBe(false);
   });
 
   it('keeps ordinary archive cancellation attempt-local when a replacement with the same session is starting', async () => {

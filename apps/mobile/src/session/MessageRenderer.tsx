@@ -2,7 +2,6 @@ import { resolveAttachmentPreviewSource } from './messagePayload';
 import {
   PreviewHeader,
   PreviewFooter,
-  PreviewCollectionContext,
 } from "./PreviewChrome";
 import { RemoteAttachmentPreview } from "./RemoteAttachmentPreview";
 import { segmentTeammateWork, summarizeTeammateWork, teammateWorkSummaryText } from '@cindy/maker-shared/work-activity-projection';
@@ -2978,22 +2977,7 @@ export function MessageRenderer({
           testID={hasNewMessages ? 'message.newMessageButton' : 'message.jumpToLatestButton'}
           dotTestID="message.newMessageDot" />
       ) : null}
-                <PreviewCollectionContext.Provider
-                  value={
-                    attachmentPayloads.length > 1
-                      ? {
-                          index: attachmentIndex,
-                          names: attachmentPayloads.map((entry) => entry.title),
-                          onSelect: (index) => {
-                            if (attachmentPayloads[index]) {
-                              setAttachmentIndex(index);
-                              setPayload(attachmentPayloads[index]);
-                            }
-                          },
-                        }
-                      : undefined
-                  }
-                >
+                <>
                   {imageLightboxOpen && payload?.kind === 'media' && lightboxImages ? (
         // 图片 / 视频走 IM 级全屏查看器(手势缩放/下滑关闭/横滑翻页);其余 payload 走通用查看器。
         <ImageLightbox
@@ -3032,7 +3016,7 @@ export function MessageRenderer({
           payload={historyActive ? payload : null}
         />
       )}
-                </PreviewCollectionContext.Provider>
+                </>
               </View>
     </MessageListRevealContext.Provider>
     </MarkdownRemoteMediaContext.Provider>
@@ -3597,6 +3581,7 @@ function MessageBubble({
   // 不挂。分享态只保留与导出图片一致的消息内容,不显示操作图标、时间或费用。
   // 流式回复不显示操作，但保留最终操作行的占位，收尾时不把正在看的正文推走。
   const showCompletedActionBar = !shareSelectionActive && mobileMessageShowsActionBar({
+    role: item.message.role,
     hasSystemCard: !!item.message.systemCardType,
     isStreamingAssistant,
     isTurnFinalAssistant: item.message.isTurnFinalAssistant === true,
@@ -6091,13 +6076,16 @@ function MarkdownBodyBase({
   // 偏矮的 onLayout 裁切 agent 回复;点分享会换上确定宽度的容器从而完整显示。
   // 外层始终 stretch 测可用宽,内层再钉像素宽:测宽不能钉在自己身上,否则旋转/
   // 分屏变宽后 onLayout 仍报旧值。1px 内抖动忽略,避免公式 WebView 重挂。
+  // Android RN Text 在 stretch 宽度下测高正确;钉宽靠换 key 重挂文本,会让每条
+  // agent 回复挂载两遍,所以只在 iOS 测宽。外层 stretch 两端保留,版面宽度一致。
+  const measuresSettledWidth = pinContentWidth && Platform.OS === 'ios';
   const [contentWidth, setContentWidth] = useRecyclingState(0);
   const handleSettledWidthLayout = useCallback((event: LayoutChangeEvent) => {
-    if (!pinContentWidth) return;
+    if (!measuresSettledWidth) return;
     const nextWidth = Math.round(event.nativeEvent.layout.width);
     setContentWidth((current) => nextSettledContentWidth(current, nextWidth));
-  }, [pinContentWidth]);
-  const pinSettledWidth = pinContentWidth && contentWidth > 0;
+  }, [measuresSettledWidth]);
+  const pinSettledWidth = measuresSettledWidth && contentWidth > 0;
   const settledTextStyle = useMemo(() => pinSettledWidth
     ? [styles.messageText, { width: contentWidth }]
     : styles.messageText, [contentWidth, pinSettledWidth, styles.messageText]);
@@ -6483,7 +6471,7 @@ function MarkdownBodyBase({
   return (
     <View
       collapsable={false}
-      onLayout={handleSettledWidthLayout}
+      onLayout={measuresSettledWidth ? handleSettledWidthLayout : undefined}
       style={[
         styles.markdownBody,
         { maxWidth: '100%' },
@@ -7067,6 +7055,7 @@ function PluginResultCard({ callId, sessionId, excludedUrls, actions }: {
       if (block === controlsText) return null;
       if (block.primitive === 'plugin-card-actions') return (
             <PluginCardActions key={block.id} data={block.data} deviceId={actions.remoteDeviceId} sessionId={sessionId} callId={callId}
+        onOpenSessionLink={actions.onOpenSessionLink}
         text={controlsText ? pluginCardPlainText(controlsText.fallbackMarkdown) : undefined}
         onOpenAttachment={actions.onOpenPayload ? (url, name) => actions.onOpenPayload!(buildMediaPayload({ kind: 'image', url, previewable: true }, name)) : undefined} />
           );
@@ -7752,7 +7741,6 @@ export function MessagePayloadModal({
   // mermaid 走沉浸式全屏查看器:图表铺满整个 Modal(标题与源码区都不渲染,
   // 图表最大化优先),仅右上角浮动「复制源码 / 关闭」;源码用复制按钮获取。
   const immersiveMermaid = payload?.kind === 'mermaid';
-  const collection = useContext(PreviewCollectionContext);
   if (
     payload &&
     onResolveRemoteMedia &&
@@ -7783,7 +7771,7 @@ export function MessagePayloadModal({
             styles.payloadModal,
             {
               paddingTop: safeAreaInsets.top + 64,
-              paddingBottom: safeAreaInsets.bottom + (collection ? 56 : 0),
+              paddingBottom: safeAreaInsets.bottom,
             },
           ]} testID="message.payloadModal">
           <MermaidDiagramWebView
@@ -7843,7 +7831,7 @@ export function MessagePayloadModal({
         style={[
           styles.payloadModal,
           {
-            paddingBottom: modalSafeArea.paddingBottom + (collection ? 56 : 0),
+            paddingBottom: modalSafeArea.paddingBottom,
             // Landscape side insets hold the notch or a vertical system bar (Duo).
             paddingLeft: safeAreaInsets.left,
             paddingRight: safeAreaInsets.right,

@@ -7,6 +7,7 @@ import { Button } from './button';
 
 export interface SelectProps {
   id?: string;
+  'data-setting-id'?: string;
   label: string;
   value: string;
   options: ReadonlyArray<{
@@ -38,6 +39,7 @@ export interface SelectProps {
  */
 export function Select({
   id,
+  'data-setting-id': settingId,
   label,
   value,
   options,
@@ -65,6 +67,7 @@ export function Select({
         <Button
           pressFeedback={false}
           id={id}
+          data-setting-id={settingId}
           variant="secondary"
           size="lg"
           aria-label={label}

@@ -61,6 +61,7 @@ vi.mock('@/components/icons/ProviderLogoMark', () => ({
 }));
 
 import { AddProviderWizard } from '@/components/settings/AddProviderWizard';
+import { createCustomProvider } from '@/lib/customProviders';
 
 const anthropicProvider = {
   id: 'anthropic',
@@ -96,6 +97,9 @@ beforeEach(() => {
   codexState.kind = 'unauthenticated';
   delete codexState.authSource;
   (window as unknown as { electronAPI: unknown }).electronAPI = {
+    subscriptionAccounts: { command: vi.fn(async () => ({
+      providerId: 'openai', configured: true, strategy: 'least', accounts: [],
+    })) },
     maker: {
       auth: { triggerLogin: vi.fn(async () => ({ authenticated: true, authSource: 'oauth', credentialScope: 'system-shared' })) },
       listProviderPresets: vi.fn(async () => ({ presets: [] })),
@@ -125,7 +129,7 @@ describe('AddProviderWizard — OpenAI 检测建议直达', () => {
     renderWizard('openai', onDone);
 
     // 授权步可见、可交互;onDone 不得被立即触发。
-    expect(screen.getByText('settings.providers.openai.addIndependentAccount')).not.toBeNull();
+    expect(screen.getByText('subscriptionAccounts.add')).not.toBeNull();
     expect(onDone).not.toHaveBeenCalled();
     expect(screen.getByText('settings.providers.openai.useLocalAccount')).not.toBeNull();
   });
@@ -148,7 +152,7 @@ describe('AddProviderWizard — OpenAI 检测建议直达', () => {
     const { rerender } = renderWizard('openai', onDone, { ...openaiProvider, ...state });
     expect(screen.queryByText('settings.providers.openai.useLocalAccount')).toBeNull();
     expect(screen.getByText('settings.providers.openai.independentAccountDescription')).not.toBeNull();
-    expect(screen.getByText('settings.providers.openai.addIndependentAccount')).not.toBeNull();
+    expect(screen.getByText('subscriptionAccounts.add')).not.toBeNull();
     expect(screen.getByText('settings.providers.wizard.useApiKey')).not.toBeNull();
     // A provider update must also restore the option when the local binding is removed.
     rerender(<AddProviderWizard providers={[anthropicProvider, openaiProvider]} entry={{ kind: 'builtin', providerId: 'openai' }} onDone={onDone} onClose={vi.fn()} onOpenCustomForm={vi.fn()} />);
@@ -156,14 +160,18 @@ describe('AddProviderWizard — OpenAI 检测建议直达', () => {
     expect(onDone).not.toHaveBeenCalled();
   });
 
-  it('本向导内点「授权」登录成功 → onDone(独立账号供应商) 收口', async () => {
+  it('添加订阅账号成功后返回同一 OpenAI 供应商，不创建独立供应商', async () => {
     triggerLoginMock.mockResolvedValue('authenticated');
     const onDone = vi.fn();
     renderWizard('openai', onDone);
 
-    fireEvent.click(screen.getByText('settings.providers.openai.addIndependentAccount'));
-    await waitFor(() => expect(onDone).toHaveBeenCalledWith(expect.stringMatching(/^openai-/)));
-    expect(window.electronAPI.maker.providerOAuthLogin).toHaveBeenCalledTimes(1);
+    fireEvent.click(screen.getByText('subscriptionAccounts.add'));
+    await waitFor(() => expect(onDone).toHaveBeenCalledWith('openai'));
+    expect(window.electronAPI.subscriptionAccounts.command).toHaveBeenCalledExactlyOnceWith({
+      action: 'add', providerId: 'openai', loginKey: expect.any(String),
+    });
+    expect(createCustomProvider).not.toHaveBeenCalled();
+    expect(window.electronAPI.maker.providerOAuthLogin).not.toHaveBeenCalled();
     expect(triggerLoginMock).not.toHaveBeenCalled();
   });
 

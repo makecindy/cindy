@@ -73,6 +73,12 @@ PR 选择器只能是完整 GitHub PR URL，或 `{repo:"owner/repo",number:123}`
   正在运行的任务不触发，同一任务两次触发至少间隔 60 秒。宿主不判断要不要叫醒 Agent，仍由前置检查决定。
 - **只在 PR 开着时成立的卡片部分**：卡片元素标 `data-ghost-pr-open-only="owner/repo#N"`，标题栏同源状态为已合并或
   已关闭时，电脑端藏起，手机投影在宿主侧去掉（文字、`live` 状态与按钮一起），新旧手机都不用改；查不到状态照常显示。
+- **PR 结束后归档任务**：卡片按钮标 `data-ghost-task-archive="owner/repo#N"`，PR 已合并或关闭时电脑端露出，点击由宿主走与
+  标题栏相同的归档流程（插件拿不到归档能力）。用户在卡片设置里开了「合并后自动归档」时，宿主自己确认已合并、用户在电脑上
+  看过卡片并离开这个任务（包括直接切到另一个任务），且任务没在运行、没被接管、确认没绑定定时任务（没读到绑定列表就保留）、输入框没有草稿、
+  worktree 干净，才静默归档并提示可撤销；
+  关闭未合并的 PR、在另一台电脑上的任务都只提供按钮，不自动归档。待生效时卡片上显示「离开后自动归档 · 本次不归档」；点「本次不归档」，或之后用户
+  在这个任务里发了消息（电脑、手机、IM 都算，自动化与插件代发的不算），本次就不自动归档，手动归档按钮照旧可用。手机这一版不显示按钮、也不算看过。协议细节见 `protocol-compatibility.md`。
 - **从对话里引导登录**：任务对声明 `gh-cli` 凭证的插件调用 `connect_account` 时，本机 GitHub 登录可用（gh 或插件保存的
   备用 Token）就回报 ready；不可用或明确要求重新连接时，在用户正看着的窗口（否则主窗口）打开 Cindy 自己的 GitHub
   登录框，返回 `GITHUB_SIGN_IN_REQUIRED`，不在对话里索要凭证，不夺焦点。
@@ -113,11 +119,44 @@ HTTPS origin，重定向不得跨 origin 或降级 HTTP。没有令牌不请求 
 远程、SSH 和只读任务不展示本机登录引导；GitLab 不使用 GitHub 安装登录窗口。
 
 每个 MR 一次 GraphQL 汇总读取，复用 60 秒缓存、并发合并和前台 90 秒刷新。
-未解决数为 resolvableDiscussionsCount 减 resolvedDiscussionsCount。流水线 SHA
-不同于 diffHeadSha、作业未完整返回或出现未知状态时 checks 不可用，不能算通过。
-SUCCESS 为通过，SKIPPED 为跳过；FAILED / CANCELED 为失败；MANUAL 与等待、
-准备、排队、运行、定时状态均为进行中。手动作业保持未完成，不猜它是否允许失败。
+未解决数为 resolvableDiscussionsCount 减 resolvedDiscussionsCount。缺少 diffHeadSha、
+headPipeline 字段缺失、作业未完整返回或出现未知状态时 checks 不可用，不能算通过。
+headPipeline 由 GitLab 按当前 diff head 匹配，包含合并结果流水线和合并队列：这些流水线
+的 SHA 是临时合并提交，GitLab 使用 source_sha 关联当前 diff head，Cindy 不再自行比对 SHA。
+已知 diff head 但 headPipeline 为 null 时记为 0 项检查，与 GitHub 无检查一致。推送后、
+新流水线创建前也可能短暂显示 0 项，后续刷新拿到流水线后再显示进行中等实际状态。
+作业使用 `jobs(retried: false)` 只读取最新尝试，不计已被重试替换的旧作业。
+SUCCESS 为通过，SKIPPED 为跳过；MANUAL 仅在 `allowFailure === true` 时计入跳过，
+否则（包括字段缺失或不是布尔值）仍为进行中。等待、准备、排队、运行、定时状态
+也为进行中。FAILED / CANCELED 仍为失败，即使允许失败也不改计数。
+
+实现见 [gitlabPrSummary.ts](../../apps/desktop/src/main/git-context/gitlabPrSummary.ts)，
+回归见 [gitContextPrStatusService.test.ts](../../apps/desktop/src/main/__tests__/gitContextPrStatusService.test.ts)。
 
 GitHub Agent 工具与脚本 `github.read` 仍只支持 GitHub。GitHub 管理工具 list 跳过
 GitLab 关联，显式 GitLab 选择器沿用现有校验拒绝；包含 GitLab 的整组排序也明确拒绝，
 避免 GitHub 工具误改不完整的排序。UI 管理和任务摘要支持两者，不新增后台跟进。
+
+
+## PR 只读引用卡片与任务导航
+
+同一 PR 可以在多个任务中显示卡片，没有任务跟进时由用户选择在哪个任务点击「自动跟进到合并」。只有其他
+任务正在跟进（或正在开启／停止）时，本任务卡片显示只读状态，并说明「其他任务正在跟进」，
+唯一入口为卡内「打开跟进任务」。链接不在卡片外重复。停止并核实定时任务已删除后，用户
+可以选择其他任务重新开启；不永久归属最早展示卡片的任务。
+
+跟进归属在插件刷新卡片或处理点击时核对；不绕过宿主同任务更新限制去修改其他任务中已结束
+的卡片。旧卡片刷新前可能仍显示旧入口，但插件会拦住过时的重复跟进点击。PR 检查状态继续
+沿用实时状态槽；跨任务跟进关系的即时同步尚未实现。
+
+宿主卡片链接白名单除原有 HTTP(S)，仅新增 `cindy://session/<id>`（1–128 位
+ASCII 字母、数字、下划线和连字符，无参数、片段或子路径），仍需声明 `card.externalLinks`。
+净化器、桌面点击桥和手机消费端独立校验。电脑复用普通任务引用的导航与嵌入窗口行为，
+手机复用消息已有的任务链接回调；均不调用插件动作、Agent 或系统浏览器。
+旧客户端不具备此导航能力，配套插件需在宿主发布后再锁定兼容版本发布。
+
+
+本次开发验证：净化与手机投影、桌面任务导航共 122 项测试通过；手机卡片 19 项、共享卡片
+解析 18 项通过；Desktop/Mobile 类型检查通过。只读卡片 Light/Dark 定向渲染通过。
+全页面 `ui:check --changed --theme all` 在依赖扫描阶段耗时超过三分钟，已停止，未取得
+全页面验证结果。上述证据不替代真实账号下跨任务导航和旧版客户端兼容验收。

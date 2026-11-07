@@ -1,4 +1,4 @@
-import { getPluginToolUi, pluginHasToolUi, pluginToolVisible } from '@cindy/plugin-protocol';
+import { compareCindyVersions, getPluginToolUi, pluginHasToolUi, pluginToolVisible } from '@cindy/plugin-protocol';
 import crypto from 'node:crypto';
 import fs from 'node:fs';
 import os from 'node:os';
@@ -43,6 +43,7 @@ const runtime = vi.hoisted(() => ({
   inspectedManifest: null as Record<string, unknown> | null,
   uninstall: vi.fn(),
   builtinRemoved: new Set<string>(),
+  hostSeedVersions: new Map<string, string | null>(),
   accountGhostAvailable: true,
   pendingCalls: false,
   runningErrand: false,
@@ -226,6 +227,11 @@ vi.mock('../../cindy-brain/index.js', () => ({
     return runtime.cindyWork;
   }),
   isBuiltinGhostRemovedByUser: (id: string) => runtime.builtinRemoved.has(id),
+  builtinSeedYieldsToStoreVersion: (id: string, storeVersion: string) => {
+    if (!runtime.hostSeedVersions.has(id)) return false;
+    const seedVersion = runtime.hostSeedVersions.get(id) ?? null;
+    return seedVersion === null || compareCindyVersions(seedVersion, storeVersion) !== 1;
+  },
   uninstallGhostAndCleanup: runtime.uninstall,
 }));
 vi.mock('../download.js', () => ({
@@ -290,6 +296,7 @@ afterEach(() => {
   runtime.inspectedManifest = null;
   runtime.uninstall.mockReset();
   runtime.builtinRemoved.clear();
+  runtime.hostSeedVersions.clear();
   runtime.accountGhostAvailable = true;
   runtime.pendingCalls = false;
   runtime.runningErrand = false;
@@ -3412,6 +3419,97 @@ describe('PluginMarketService migration and defaultInstall', () => {
       version: '2.0.0',
       installed: true,
     });
+  });
+
+  // 测试价值
+  // - 生产入口与可观察结果：snapshot() 的市场投影与随后的自动更新——内置种子覆盖过的商店安装
+  //   在种子已撤或当前种子不比 Release 新时被更新回商店包，否则保持冲突、不下载。
+  // - 规则依据：种子与商店按版本取新、相同取商店（2026-11）；只放行播种台账内的实例。
+  // - 现有覆盖缺口：上一条用例只覆盖普通本地漂移（冲突、不自动更新）。
+  // - 最小失败输入：已装字节与账本不符且在播种台账内，当前 Release 与种子同版本；
+  //   或种子已撤而已装的旧种子版本更高（本地测试抬过版本号）。
+  // - tier：unit（内存 runtime）。
+  it.each([
+    { installed: '2.0.0', seed: '2.0.0' as string | null | undefined, updates: true },
+    { installed: '3.0.0', seed: null, updates: true },
+    { installed: '3.0.0', seed: '3.0.0', updates: false },
+    { installed: '2.0.0', seed: undefined, updates: false },
+  ])('installed $installed with seed $seed yields to release 2.0.0: $updates', async ({ installed, seed, updates }) => {
+    const item = summary({
+      currentRelease: { ...summary().currentRelease, id: 'release-2', version: '2.0.0' },
+    });
+    const seedManifest = manifest(item.ghostId, installed, ['notify']);
+    const installedDir = fs.mkdtempSync(path.join(os.tmpdir(), 'cindy-seeded-ghost-'));
+    roots.push(installedDir);
+    fs.writeFileSync(path.join(installedDir, 'ghost.json'), JSON.stringify(seedManifest));
+    runtime.ghosts = [{ manifest: seedManifest, dir: installedDir, enabled: true }];
+    if (seed !== undefined) runtime.hostSeedVersions.set(item.ghostId, seed);
+    const h = harness([item]);
+    h.ledger.upsertInstallation({
+      ...recordForTest(item),
+      releaseId: 'release-1',
+      version: '1.0.0',
+      manifestDigest: ghostManifestDigest(manifest(item.ghostId, '1.0.0', ['notify'])),
+    });
+    runtime.install.mockImplementationOnce(async () => {
+      const ghost = { manifest: manifest(item.ghostId, '2.0.0', ['notify']), dir: installedDir, enabled: true };
+      runtime.ghosts = [ghost];
+      return ghost;
+    });
+
+    const items = (await h.service.snapshot()).items;
+    if (updates) {
+      expect(runtime.install).toHaveBeenCalledTimes(1);
+      expect(h.ledger.installationForGhost(item.ghostId)).toMatchObject({
+        releaseId: 'release-2',
+        version: '2.0.0',
+        installed: true,
+      });
+    } else {
+      expect(runtime.install).not.toHaveBeenCalled();
+      expect(items[0]?.installState).toBe('conflict');
+    }
+  });
+
+  // 补充依据：Codex review（#9078）——同版本、清单相同但代码不同的种子覆盖商店安装。
+  // 最小失败输入：账本已是当前 Release 且清单一致，批准回执的包摘要不是 Release sha256，实例在播种台账内。
+  it.each([
+    { seed: '2.0.0' as string | undefined, evidenceSha: 'b'.repeat(64), updates: true },
+    { seed: '2.0.0', evidenceSha: null, updates: false },
+    { seed: undefined, evidenceSha: 'b'.repeat(64), updates: false },
+  ])('same-release install shadowed by a seed (seed $seed, receipt $evidenceSha) reinstalls: $updates', async ({ seed, evidenceSha, updates }) => {
+    const item = summary({
+      currentRelease: { ...summary().currentRelease, id: 'release-2', version: '2.0.0' },
+    });
+    const installedManifest = manifest(item.ghostId, '2.0.0', ['notify']);
+    const installedDir = fs.mkdtempSync(path.join(os.tmpdir(), 'cindy-shadowed-ghost-'));
+    roots.push(installedDir);
+    fs.writeFileSync(path.join(installedDir, 'ghost.json'), JSON.stringify(installedManifest));
+    runtime.ghosts = [{ manifest: installedManifest, dir: installedDir, enabled: true }];
+    if (seed !== undefined) runtime.hostSeedVersions.set(item.ghostId, seed);
+    runtime.approvedInstallEvidence.mockReturnValue({
+      packageSha256: evidenceSha,
+      approvedManifest: installedManifest as unknown as GhostManifest,
+      legacyMigrated: false,
+    });
+    const h = harness([item]);
+    h.ledger.upsertInstallation({
+      ...recordForTest(item),
+      manifestDigest: ghostManifestDigest(installedManifest),
+    });
+    runtime.install.mockImplementationOnce(async () => ({
+      manifest: installedManifest,
+      dir: installedDir,
+      enabled: true,
+    }));
+
+    const items = (await h.service.snapshot()).items;
+    if (updates) {
+      expect(runtime.install).toHaveBeenCalledTimes(1);
+    } else {
+      expect(runtime.install).not.toHaveBeenCalled();
+      expect(items[0]?.installState).toBe('installed');
+    }
   });
 
   it('updates a legacy record without treating server metadata as a package cap', async () => {

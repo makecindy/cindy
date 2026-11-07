@@ -206,6 +206,7 @@ export class ScriptScheduleRunner {
       if (retired) return retired;
     }
 
+    if (ctx.canDispatch?.() === false) return { sessionId: '', deferred: true };
     if (schedule.preRunHook?.command?.trim()) {
       const hook = await withPreRunHookDiagnosis(await executePreRunHook({
         command: schedule.preRunHook.command,
@@ -218,6 +219,7 @@ export class ScriptScheduleRunner {
           scheduleName: schedule.name,
           runId: ctx.runId,
           firedAt: ctx.firedAt,
+          ...(ctx.webhook ? { webhook: ctx.webhook } : {}),
           workingDir: schedule.workingDir,
           lastFinishedAt: schedule.lastFinishedAt,
           ...(ctx.trigger ? { trigger: ctx.trigger } : {}),
@@ -265,6 +267,9 @@ export class ScriptScheduleRunner {
       });
     }
 
+    // A hook or owner lookup may outlive the deadline. Once spawned, the script
+    // remains free to finish; this gate only controls starting a new process.
+    if (ctx.canDispatch?.() === false) return { sessionId: '', deferred: true };
     const granted = new Set(config.capabilities);
     const startedAt = Date.now();
     let child: ChildProcess;
@@ -527,6 +532,7 @@ export class ScriptScheduleRunner {
         firedAt: ctx.firedAt,
         workingDir: schedule.workingDir,
         ...(schedule.targetSessionId ? { targetSessionId: schedule.targetSessionId } : {}),
+        ...(ctx.webhook ? { webhook: ctx.webhook } : {}),
       },
     });
 

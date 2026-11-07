@@ -62,7 +62,6 @@ import type { TabKindHostContext, TabKindId, TabState } from './types';
 // getTabKind 查 registry。
 import './plugins';
 import { initRsbBrowserBridge } from './lib/rsbBrowserBridge';
-import { initPluginTabViewHost } from './pluginTabViews';
 import { initPopupRouter, setPopupFallbackSession } from './lib/popupRouter';
 import { TabBodyErrorBoundary } from './TabBodyErrorBoundary';
 import { useRetainedBrowserTabHosts } from './hooks/useRetainedBrowserTabHosts';
@@ -249,7 +248,6 @@ export function RightSidebarShell({
       : 0;
   const { t } = useTranslation();
   const installedGhosts = useInstalledGhosts();
-  useEffect(() => { initPluginTabViewHost(); }, [installedGhosts]);
   // 已弹出到独立窗口的页签:数据留在桶里,但本 Shell 不投影、不挂 body。
   // 弹出窗口自身(soloMode)反过来只投影 main 指派给它承载的那几个。
   const poppedOutTabs = useSidebarTabWindowsState();
