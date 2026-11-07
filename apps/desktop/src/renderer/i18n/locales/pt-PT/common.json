@@ -14372,7 +14372,7 @@
       "running": "Em execução…",
       "waitingWorkflow": "A aguardar o Workflow…",
       "waitingWorkflowProgress": "A aguardar o Workflow · {{done}}/{{total}} Agents",
-      "turnStart": "{{status}}",
+      "turnStart": "A processar, {{name}}…",
       "issueTip": "{{name}}, experimente /issue para nos enviar comentários ou sugestões",
       "runningTool": "{{tool}} em execução…"
     },
