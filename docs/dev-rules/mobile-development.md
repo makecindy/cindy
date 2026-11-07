@@ -217,7 +217,7 @@ iOS 的系统选图器在确认后立即把选中项交给现有附件队列。�
 `useMobileLocalAttachments.ts`；回归：`deferredPhotoLibrary.test.ts`、
 `useMobileLocalAttachmentsAbandon.test.tsx`。新增原生模块需要冷更，不能作为旧安装包的 OTA
 独立交付；旧原生包缺模块时继续使用 Expo 选图入口。首次发布应随下一次 iOS 原生包交付，
-指纹与存量装机影响仍须按下文冷更门确认。Android 保持系统选图器和既有附件队列。
+指纹与存量装机影响仍须按下文冷更边界在 PR 中写明。Android 保持系统选图器和既有附件队列。
 
 ### 相册照片与视频附件
 
@@ -562,12 +562,10 @@ Mobile 用 `runtimeVersion.policy: "fingerprint"`:OTA 热更只在**指纹一致
 - 确实必须冷更时(升原生依赖、改 config plugin / 原生模块、动 production 段 `app.json` /
   `eas.json`),PR Description 必须写明三件事:为什么冷更不可避免、存量装机影响范围、发版
   节奏建议。
-- **审查标准:会触发冷更的 PR 与技术框架变动同级,必须由仓库指定的把关人针对冷更明确
-  确认后才能合并。** 不看改动大小,也不看谁提的——提交者是不是维护者、有没有拿到普通
-  Approve、有没有被标回 Ready 都不构成例外;把关人自己提的 PR 同样要留下一条显式的冷更
-  确认。冷更 PR 可以保持 Ready 并正常进入自动审查,不因冷更要求新建讨论 issue 或转为
-  draft;冷更确认可直接留在 PR 中。未确认前不得合并(包括自动合并),把关人名单与确认
-  判定细则属维护者内部 gate。若同时命中其他独立的讨论或草稿门禁,仍按对应规则处理。
+- **审查标准:会触发冷更的 PR 按普通流程审查与合并,不需要指定把关人另外确认。** 审查时
+  逐条核对:是否确实必须冷更(同样效果能用不动指纹的写法达成时,要求改写),PR Description
+  是否写全上面三件事。冷更 PR 可以保持 Ready 并正常进入自动审查,不因冷更要求新建讨论
+  issue 或转为 draft。若同时命中其他独立的讨论、草稿或确认门禁,仍按对应规则处理。
 - 提交前自查:在改动前后各跑一次
   `node apps/mobile/scripts/ci-fingerprint.mjs compute --output <file>` 并比对 hash。PR 上
   出现 fingerprint guard 的 sticky comment 时,以它给出的 base(main) vs 合并结果对比为准。
@@ -580,7 +578,7 @@ Mobile 用 `runtimeVersion.policy: "fingerprint"`:OTA 热更只在**指纹一致
   `fingerprintConfig.test.ts` 校验排除文件的完整 macOS 编译保护，并使用 Expo 哈希器
   验证两端的排除项与保留项。移除平台保护或让手机依赖这些文件前，必须同步移除排除项。
   **首次采用此边界仍改变旧指纹**，须随计划内原生发版迁移；它只避免迁移后桌面专用
-  修改反复触发手机冷更，不为旧安装包伪造兼容 runtime，也不豁免上面的冷更确认门。
+  修改反复触发手机冷更，不为旧安装包伪造兼容 runtime，也不豁免上面的冷更说明要求。
 - 改 `app.json` / `app.config.js` 前先判断是否会动指纹。被哈希的是**解析后的
   ExpoConfig**(app.config.js 的输出),不是源文件本身:凡进入 resolved config 的字段,
   改了值就会变指纹;只有被 app.config.js **覆写 / 剥离、传不到 resolved config** 的值才指纹
@@ -673,6 +671,6 @@ FCM data 消息与显式开启的前台服务都通过同一通知入口，按�
 发行到 Play 前须完成对应前台服务用途申报。Doze、厂商电池策略和强行停止可能中断连接；FCM 也需要 Google
 服务及有效项目配置，不能承诺所有设备强杀后送达。
 
-本次 Swift 扩展、Android 原生模块和头像资源都需要新原生包，不能只发 OTA；按冷更门由指定把关人明确
-批准。上线顺序为服务端兼容接口／通道配置、各端原生包，再验证 token 注册、前后台、拒绝权限、预览关闭、
-停止后台连接、断网重连、通知点击定位及人／伙伴头像。旧服务端没有 chat push API 时手机保留已有任务通知。
+本次 Swift 扩展、Android 原生模块和头像资源都需要新原生包，不能只发 OTA；PR 须按冷更边界写明原因、
+存量装机影响与发版节奏。上线顺序为服务端兼容接口／通道配置、各端原生包，
+再验证 token 注册、前后台、拒绝权限、预览关闭、停止后台连接、断网重连、通知点击定位及人／伙伴头像。旧服务端没有 chat push API 时手机保留已有任务通知。
