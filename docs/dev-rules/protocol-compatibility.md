@@ -5175,6 +5175,15 @@ Agent 的 GitHub 工具和脚本入口仍不支持 GitLab，不复用其 GitHub 
 `pnpm --filter @cindy/device-link-relay test` 与
 `pnpm --filter @cindy/device-link-relay run interop`；结果以本次交付的执行日志为准。
 
+## 浏览器插件更新与选择状态（2026-11-07）
+
+`BrowserBackendHealthReason` 和 Browser Use `status.data.reason` 增加可选状态
+`plugin-updating`、`plugin-selection-required`，分别说明插件更新进行中、控制端需要用户选择。
+旧宿主仍返回原有 `plugin-missing`；新版设置页同时检查插件能力声明，避免把支持页面控制的插件
+误报为旧版本。旧查看端遇到新原因按原有通用错误回退，不新增 IPC、权限或写入入口。
+扩展桥接更新暂停期间，新作业返回 `BRIDGE_UPDATING` 和 `execution:not_executed`；已接受作业
+继续沿用原有结果／超时和 `unknown` 语义，不新增重放行为，不要求浏览器扩展升级。
+
 ### Codex 提问身份与活动回执（2026-11-07）
 
 既有 interaction 通道增加可选问题 `id` 和请求 `isBlocking`。新端按 ID 保存/返回答案，
