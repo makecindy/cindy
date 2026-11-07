@@ -1876,6 +1876,8 @@ async function resolveReplyWithClient(
     if (!text) return null;
     return {
       replyContext: {
+        messageId: root.message_id,
+        ...(root.create_time ? { sentAt: Number(root.create_time) } : {}),
         author: authorOf(root),
         text,
         ...(root.sender?.sender_type === 'app' ? { isBot: true } : {}),

@@ -1013,7 +1013,7 @@ function WorkerTabsList({
               key={worker.workerId}
               side="bottom"
               delay={250}
-              contentClassName="min-w-[220px] max-w-[260px] border-[var(--border-default)] bg-[var(--surface-elevated)] text-[var(--text-primary)] shadow-[var(--shadow-menu)]"
+              contentClassName="min-w-[220px] max-w-[260px] border-[var(--border-default)] bg-[var(--surface-elevated)] text-[var(--text-primary)] shadow-[shadow:var(--shadow-menu)]"
               text={
                 <div className="py-0.5">
                   <WorkerSummary worker={worker} attentionKind={attentionKind} />

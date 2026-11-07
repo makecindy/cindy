@@ -26,6 +26,7 @@ import {
   userBrowserCapabilities,
   UserBrowserBackend,
   type UserBrowserPageControl,
+  type UserBrowserBackendOptions,
 } from './browser-backend/user-browser-backend.js';
 import { artifactSessionRoot } from './browser-backend/rsb-webview-artifacts.js';
 import { extractBrowserAvailability, type BrowserAvailability } from './browser-availability.js';
@@ -363,8 +364,13 @@ const initialKind = readBrowserBackendSettings().kind;
  */
 let userBrowserPageControlProvider: () => UserBrowserPageControl | null = () => null;
 
-export function setUserBrowserPageControlProvider(provider: () => UserBrowserPageControl | null): void {
+let userBrowserUnavailableReason: UserBrowserBackendOptions['getUnavailableReason'];
+export function setUserBrowserPageControlProvider(
+  provider: () => UserBrowserPageControl | null,
+  unavailableReason?: UserBrowserBackendOptions['getUnavailableReason'],
+): void {
   userBrowserPageControlProvider = provider;
+  userBrowserUnavailableReason = unavailableReason;
 }
 
 let currentUserBrowserBackend: UserBrowserBackend | null = null;
@@ -377,6 +383,7 @@ export function clearUserBrowserMarksForSession(sessionId: string): void {
 function createUserBrowserBackend(): UserBrowserBackend {
   return (currentUserBrowserBackend = new UserBrowserBackend({
     getPageControl: () => userBrowserPageControlProvider(),
+    getUnavailableReason: () => userBrowserUnavailableReason?.() ?? 'plugin-missing',
     // Same upload roots as the sidebar browser: the session's own folders plus its artifacts.
     resolveUploadRoots: async (sessionId) => [
       artifactSessionRoot(nodePath.join(app.getPath('temp'), 'cindy-browser-artifacts'), sessionId),

@@ -1083,6 +1083,8 @@ function devEnvEntries(env) {
     ['OPEN_DEVTOOLS', env.OPEN_DEVTOOLS],
     // --wait-ready 的一次性状态文件：runner 写失败，Electron main ready-to-show 写成功。
     ['XDT_DESKTOP_DEV_STARTUP_STATUS_FILE', env.XDT_DESKTOP_DEV_STARTUP_STATUS_FILE],
+    ['CINDY_PERSONAL_MONITOR_DIR', env.CINDY_PERSONAL_MONITOR_DIR],
+    ['CINDY_PERSONAL_GENERATION', env.CINDY_PERSONAL_GENERATION],
     // 插件存储启动边界的 dev 黑盒验收：仅显式临时结果路径时启用。
     ['XDT_PLUGIN_STORAGE_SMOKE_RESULT_FILE', env.XDT_PLUGIN_STORAGE_SMOKE_RESULT_FILE],
   ];

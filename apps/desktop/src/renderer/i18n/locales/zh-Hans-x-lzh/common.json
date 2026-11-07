@@ -1429,13 +1429,19 @@
       "actionFailed": "操作未竟，提醒已留，请再试。",
       "newConversationTitle": "新开差事",
       "newConversationHint": "另启新差事，再展鸿图",
-      "muteSound": "灵动岛静音",
-      "enableSound": "启灵动岛之声",
-      "settings": "灵动岛规制",
+      "muteSound": "任务胶囊静音",
+      "enableSound": "启任务胶囊之声",
+      "settings": "任务胶囊规制",
       "newMessage": "新讯",
       "review": "览之",
       "needsInput": "待输入",
       "completed": "已毕",
+      "liveActivityRunning_one": "{{count}} 事方行",
+      "liveActivityRunning_other": "{{count}} 事方行",
+      "liveActivityAlsoRunning_one": "另 {{count}} 事方行",
+      "liveActivityAlsoRunning_other": "另 {{count}} 事方行",
+      "liveActivityWaiting_one": "{{count}} 事待汝处",
+      "liveActivityWaiting_other": "{{count}} 事待汝处",
       "error": "谬",
       "input": "书",
       "done": "毕",
@@ -1454,6 +1460,13 @@
     }
   },
   "menubar": {
+    "shared": {
+      "label": "共用",
+      "note": "此乃名籍共用之额度，非专分予君者。",
+      "highestWeekly": "共享 · 周余最多",
+      "highestWeeklyNote": "取可阅诸号周余最多者，不相加。此为号共用，非君专享。",
+      "from": "{{name}} 所享"
+    },
     "balance": {
       "name": "Cindy 余资",
       "quotaName": "Cindy 本期限额",
@@ -2273,7 +2286,7 @@
     "notifications": {
       "title": "告",
       "sessionDoneLabel": "系统之告",
-      "sessionDoneHint": "差事毕、生谬或待回复时提醒。寻常差事唯窗口退居背景时告之；启灵动岛，则改由灵动岛提醒。",
+      "sessionDoneHint": "差事毕、生谬或待回复时提醒。寻常差事唯窗口退居背景时告之；启任务胶囊或于灵动岛显任务，则改由其提醒；唯启灵动岛者，生谬仍发系统之告。",
       "sessionDoneAria": "切换差事系统之告",
       "feishuLabel": "差事毕或待回复时遣飞书 / Lark 讯",
       "feishuHint": "经已系之飞书或 Lark 机器人，私遣一讯于君；唯窗口失焦时遣之。",
@@ -2386,27 +2399,30 @@
     },
     "agentIsland": {
       "title": "灵动岛",
-      "unsupported": "灵动岛须 macOS 14 或更高之版。",
+      "unsupported": "任务胶囊须 macOS 14 或更高之版。",
       "subtleRemindersLabel": "轻提醒",
-      "subtleRemindersHint": "新讯至、待答或有误时，不向下弹出通知卡片，以图示变化相告。点灵动岛可阅任务全表。",
+      "subtleRemindersHint": "新讯至、待答或有误时，不向下弹出通知卡片，以图示变化相告。点任务胶囊可阅任务全表。",
       "subtleRemindersFailed": "提醒设定未存，请重试。",
-      "enableLabel": "显灵动岛",
-      "enableHint": "于屏幕之巅显方行、待应及未读已毕之差事。启之则抑同类系统之告，免重复相扰。",
-      "enableAria": "启闭灵动岛",
+      "liveActivityLabel": "于灵动岛显任务",
+      "liveActivityHint": "于新款 MacBook Pro 之灵动岛显差事进展，待君处置或事毕时自展；余 Mac 显于菜单栏之右。与任务胶囊各不相扰。",
+      "liveActivityFailed": "实时活动设定未存，请重试。",
+      "enableLabel": "显任务胶囊",
+      "enableHint": "于屏幕之巅显差事进展，待君处置或有新果时即告。启之，则此类提醒不复另发系统之告。",
+      "enableAria": "启闭任务胶囊",
       "displayLabel": "显示之处",
-      "displayHint": "择灵动岛显于何显示器；择全部，则每显示器各显一份。",
-      "displaySelectAria": "择灵动岛显示器",
+      "displayHint": "择任务胶囊显于何显示器；择全部，则每显示器各显一份。",
+      "displaySelectAria": "择任务胶囊显示器",
       "displayAll": "诸显示器",
       "displayOption": "{{name}} · {{resolution}}",
       "displayNameFallback": "显示器 {{index}}",
       "displayPrimary": "主屏",
       "displayInternal": "本具",
       "displayMissing": "已断之显示器 {{id}}",
-      "skinLabel": "图标之皮",
-      "skinHint": "择灵动岛中示方行之态所用角色之皮。",
+      "skinLabel": "角色",
+      "skinHint": "任务胶囊与灵动岛中所显之角色。",
       "soundLabel": "事之音",
-      "soundHint": "为灵动岛各类事择 8-bit 之音。",
-      "soundAria": "切换灵动岛之音",
+      "soundHint": "为诸类提醒择 8-bit 之音，任务胶囊与灵动岛共之；点按之音唯触任务胶囊时鸣。",
+      "soundAria": "切换任务胶囊之音",
       "soundSelectAria": "{{event}}之音",
       "soundPreviewAria": "先听{{event}}之音",
       "skinAnimationAria": "切换{{skin}}之先览动画",
@@ -2429,7 +2445,7 @@
         },
         "boli": {
           "name": "波利",
-          "description": "粉色波利，轻跃于键盘之侧；欲令灵动岛更添软萌，择之可也。"
+          "description": "粉色波利，轻跃不息；欲令任务胶囊更添软萌，择之可也。"
         },
         "whitesnow": {
           "name": "苹果妹",
@@ -5541,12 +5557,17 @@
         "userBrowserSetup": {
           "installPluginTitle": "纳 Cindy Chrome 法器",
           "enablePluginTitle": "启 Cindy Chrome 法器",
-          "installExtensionTitle": "将 Cindy 扩充装入浏览器",
+          "connectExtensionTitle": "浏览器扩充尚未连",
           "pluginBody": "「我之浏览器」藉 Cindy Chrome 法器及其浏览器扩充，连君之 Chrome / Edge。先于 Cindy 中纳法器，再依提示将扩充装入浏览器。",
-          "extensionBody": "点「纳浏览器扩充」，将于君之浏览器开 Cindy 扩充之商店页，点「添加」后此处自转为已连。早已装过？请于浏览器之扩充功能管理中启之。",
+          "connectionBody": "请保持 Cindy 与浏览器运行，并查 Cindy 扩充是否已启。未连非须重装；复连后，此处自更。",
           "installPlugin": "纳法器",
           "enablePlugin": "往启",
-          "installExtension": "纳浏览器扩充",
+          "openExtensionStore": "开扩充商店",
+          "updatingTitle": "正更新浏览器连接",
+          "updatingBody": "更新既毕，连接自复。",
+          "selectPluginTitle": "择浏览器扩展",
+          "selectPluginBody": "请启法器详情，择「使用此浏览器扩展」，以定 Cindy 所用。",
+          "selectPlugin": "启法器",
           "updatePluginTitle": "更新 Cindy Chrome 法器",
           "updatePluginBody": "所纳 Cindy Chrome 法器版本较旧，尚不支持「我之浏览器」。更新至最新版后，再依提示将扩充装入浏览器。",
           "updatePlugin": "往更新",
@@ -12679,6 +12700,10 @@
       "defer": "暂不取"
     },
     "permissionPrompt": {
+      "titleStdin": "可向终端输入乎？",
+      "titleMcpUrl": "应 {{server}} 之请",
+      "mcpComplete": "已毕",
+      "mcpCancel": "取消",
       "alwaysAllowScoped": "此差事恒许 {{scope}}",
       "alwaysAllowScopedHint": "及于整个差事，且仅限此处所列之范围。",
       "alwaysAllowSessionHint": "及于整个差事，不止此一请求。",
@@ -12934,7 +12959,13 @@
       "sendAndContinue": "遣而续之",
       "close": "阖",
       "customAnswer": "另书他答…",
-      "answerPlaceholder": "请书君答…"
+      "answerPlaceholder": "请书君答…",
+      "validation": {
+        "required": "此项必填。",
+        "choice": "请择所列之项。",
+        "tooShort": "所填须足 {{count}} 字。",
+        "tooLong": "所填勿逾 {{count}} 字。"
+      }
     },
     "planReviewBubble": {
       "title": "审方略",
@@ -14019,8 +14050,10 @@
       "mailLegacy": "旧稿（唯读）",
       "taskAutoArchived": "「{{title}}」已封存",
       "taskAutoArchivedUndo": "撤",
-      "taskAutoArchivePending": "去则自封存",
-      "taskAutoArchiveCancel": "此番不封"
+      "taskAutoArchivePending": "离此任务后自封存",
+      "taskAutoArchiveCancel": "取消",
+      "taskAutoArchiveCancelled": "此番不自封存",
+      "taskArchiveNow": "即封存"
     },
     "ghostHook": {
       "blockedFallback": "讯为法器所拦，未遣",
@@ -19616,5 +19649,33 @@
         "deny": "拒绝"
       }
     }
+  },
+  "subscriptionAccounts": {
+    "signIn": {
+      "checking": "正察本机账号…",
+      "detected": "已有账号登录",
+      "useAccount": "用此账号",
+      "anotherAccount": "另登一号",
+      "keepExisting": "新号归于此供应商，原号登录如故。",
+      "checkFailed": "未能读取本机账号，请重试。",
+      "retry": "重试",
+      "useCodex": "以 Codex 登录"
+    },
+    "title": "订阅账号",
+    "note": "首号沿用 CLI 默认目录，增号各自登录。新务依策分派，旧务仍用原号。",
+    "strategy": "负载均衡",
+    "add": "添加账号",
+    "default": "默认目录",
+    "ready": "已连接",
+    "signedOut": "须登录",
+    "unavailable": "状态暂不可得",
+    "limited": "配额已尽",
+    "remove": "移出账号",
+    "removeTitle": "移出 {{name}}？",
+    "removeDescription": "Cindy 将不再给这个账号分配任务。CLI 登录和对话历史仍保留在本机。",
+    "failed": "无法读取或更新账号。请检查 CLI 登录和网络连接后重试。",
+    "directory": "账号目录",
+    "loginAgain": "重登",
+    "login": "登录"
   }
 }

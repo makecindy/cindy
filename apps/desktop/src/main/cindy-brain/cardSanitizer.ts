@@ -350,7 +350,7 @@ function sanitizeAttrs(tag: string, attrs: ParsedAttrs, opts: CssOpts): string |
   // 卡内外链(v3):data-ghost-link 声明"点击经宿主确认框后 openExternal"。
   // <a href> 转写为同一声明——真实 href 不落地(无脚本 iframe 里点真链接会把
   // 外部页面导航进卡片画布)。一元素一行为:合法动作/音频插槽在场即忽略;
-  // 值必须整串 http/https(isGhostCardLinkAllowed),不合法只丢属性。
+  // 值必须整串 http/https 或导航专用任务链接(isGhostCardLinkAllowed),不合法只丢属性。
   if (!audioSlot && !actionValid) {
     const explicit = (attrs['data-ghost-link'] ?? '').trim();
     const linkDecl = explicit !== '' || tag !== 'a' ? explicit : (attrs['href'] ?? '').trim();

@@ -94,7 +94,7 @@ describe('deferred photo library', () => {
     await flush();
     expect(cancelled.upload).not.toHaveBeenCalled();
     expect(mock.native.cancel).toHaveBeenCalledWith('movie');
-    expect(mock.deleteAsync).toHaveBeenCalledWith(movie.uri, { idempotent: true });
+    await vi.waitFor(() => expect(mock.deleteAsync).toHaveBeenCalledWith(movie.uri, { idempotent: true }));
     expect(upload).toHaveBeenCalledOnce();
     cancelled.controller.dispose();
   });

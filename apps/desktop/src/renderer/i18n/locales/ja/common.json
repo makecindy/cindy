@@ -1429,13 +1429,19 @@
       "actionFailed": "操作を完了できませんでした。通知は保持されています。もう一度お試しください。",
       "newConversationTitle": "新しいセッション",
       "newConversationHint": "新しいセッションを開始",
-      "muteSound": "Agent Island の音をミュート",
-      "enableSound": "Agent Island の音を有効化",
-      "settings": "Agent Island 設定",
+      "muteSound": "Agent Notch の音をミュート",
+      "enableSound": "Agent Notch の音を有効化",
+      "settings": "Agent Notch 設定",
       "newMessage": "新規メッセージ",
       "review": "確認",
       "needsInput": "入力が必要",
       "completed": "完了",
+      "liveActivityRunning_one": "{{count}} 件のタスクを実行中",
+      "liveActivityRunning_other": "{{count}} 件のタスクを実行中",
+      "liveActivityAlsoRunning_one": "ほかに {{count}} 件実行中",
+      "liveActivityAlsoRunning_other": "ほかに {{count}} 件実行中",
+      "liveActivityWaiting_one": "{{count}} 件のタスクが返答待ち",
+      "liveActivityWaiting_other": "{{count}} 件のタスクが返答待ち",
       "error": "エラー",
       "input": "入力",
       "done": "完了",
@@ -1454,6 +1460,13 @@
     }
   },
   "menubar": {
+    "shared": {
+      "label": "共有",
+      "note": "アカウント全体で共有する利用枠です。あなた専用の枠ではありません。",
+      "highestWeekly": "共有 · 週の残り最多",
+      "highestWeeklyNote": "読み取れるアカウントで週間クォータの残りが最多のものです。アカウント共用の枠で、合算値や個人専用の枠ではありません。",
+      "from": "{{name}} からの共有"
+    },
     "balance": {
       "name": "Cindy 残高",
       "quotaName": "Cindy の今期クォータ",
@@ -1775,7 +1788,7 @@
       "apiKeys": "ツールキー",
       "voiceInput": "音声入力",
       "shortcuts": "キーボードショートカット",
-      "agentIsland": "Agent Island",
+      "agentIsland": "Dynamic Island",
       "import": "セッションインポート",
       "connections": "サードパーティ連携",
       "providers": "プロバイダー",
@@ -1797,7 +1810,7 @@
       "billing": "使用量と請求",
       "appearance": "外観",
       "notifications": "通知",
-      "agentIsland": "Agent Island",
+      "agentIsland": "Dynamic Island",
       "collaboration": "コラボレーション",
       "agentResource": "Agent リソース使用量",
       "gitSafety": "Git セーフティ",
@@ -2273,7 +2286,7 @@
     "notifications": {
       "title": "通知",
       "sessionDoneLabel": "システム通知",
-      "sessionDoneHint": "セッションの完了、エラー、返信が必要なときに通知します。通常のセッションでは、ウィンドウが背面にあるときのみ通知します。Agent Island が有効な場合は、そちらでお知らせします。",
+      "sessionDoneHint": "セッションの完了、エラー、返信が必要なときに通知します。通常のセッションでは、ウィンドウが背面にあるときのみ通知します。Agent Notch または Dynamic Island がオンの場合は、そちらでお知らせします。Dynamic Island のみオンのときは、エラーはシステム通知でお知らせします。",
       "sessionDoneAria": "セッションのシステム通知を切り替え",
       "feishuLabel": "セッション完了または返信が必要な時に Feishu / Lark メッセージを送信",
       "feishuHint": "連携済みの Feishu または Lark ボットからプライベートメッセージを送信します。ウィンドウが非アクティブの場合のみ送信。",
@@ -2385,28 +2398,31 @@
       }
     },
     "agentIsland": {
-      "title": "Agent Island",
-      "unsupported": "Agent Island を利用するには macOS 14 以降が必要です。",
+      "title": "Dynamic Island",
+      "unsupported": "Agent Notch を利用するには macOS 14 以降が必要です。",
       "subtleRemindersLabel": "控えめな通知",
-      "subtleRemindersHint": "新着メッセージ、返答が必要な項目、エラーは、アイランドの下に通知カードを表示せず、アイコンの変化で知らせます。アイランドをクリックすると、タスク一覧を確認できます。",
+      "subtleRemindersHint": "新着メッセージ、返答が必要な項目、エラーは、Agent Notch の下に通知カードを表示せず、アイコンの変化で知らせます。Agent Notch をクリックすると、タスク一覧を確認できます。",
       "subtleRemindersFailed": "通知設定を保存できませんでした。もう一度お試しください。",
-      "enableLabel": "Agent Island を表示",
-      "enableHint": "実行中、返信が必要、未読の完了タスクを画面上部に表示します。オンにすると同種のシステム通知を抑制し、二重通知を防ぎます。",
-      "enableAria": "Agent Island を切り替え",
+      "liveActivityLabel": "Dynamic Island にタスクを表示",
+      "liveActivityHint": "新しい MacBook Pro の Dynamic Island にタスクの進行状況を表示し、対応が必要なときや完了したときに展開します。その他の Mac ではメニューバーに表示されます。Agent Notch とは別に動作します。",
+      "liveActivityFailed": "ライブアクティビティの設定を保存できませんでした。もう一度お試しください。",
+      "enableLabel": "Agent Notch を表示",
+      "enableHint": "画面上部にタスクの進行状況を表示し、対応が必要なときや結果が届いたときにお知らせします。オンの間、これらの通知はシステム通知としては届きません。",
+      "enableAria": "Agent Notch を切り替え",
       "displayLabel": "表示位置",
-      "displayHint": "Agent Island を表示するディスプレイを選択します。すべてを選ぶと各ディスプレイに表示されます。",
-      "displaySelectAria": "Agent Island のディスプレイを選択",
+      "displayHint": "Agent Notch を表示するディスプレイを選択します。すべてを選ぶと各ディスプレイに表示されます。",
+      "displaySelectAria": "Agent Notch のディスプレイを選択",
       "displayAll": "すべてのディスプレイ",
       "displayOption": "{{name}} · {{resolution}}",
       "displayNameFallback": "ディスプレイ {{index}}",
       "displayPrimary": "メイン",
       "displayInternal": "内蔵",
       "displayMissing": "接続されていないディスプレイ {{id}}",
-      "skinLabel": "アイコンスキン",
-      "skinHint": "実行中アイコンに使うキャラクタースキンを選択します。",
+      "skinLabel": "キャラクター",
+      "skinHint": "Agent Notch と Dynamic Island に表示するキャラクター。",
       "soundLabel": "イベントサウンド",
-      "soundHint": "Agent Island の各イベントに 8-bit サウンドを選択します。",
-      "soundAria": "Agent Island サウンドを切り替え",
+      "soundHint": "アラートごとに 8-bit サウンドを選べます。Agent Notch と Dynamic Island で共通です。タップ音は Agent Notch をタップしたときだけ鳴ります。",
+      "soundAria": "Agent Notch サウンドを切り替え",
       "soundSelectAria": "{{event}} のサウンド",
       "soundPreviewAria": "{{event}} のサウンドをプレビュー",
       "skinAnimationAria": "{{skin}} のプレビューアニメーションを切り替え",
@@ -2429,7 +2445,7 @@
         },
         "boli": {
           "name": "Boli",
-          "description": "軽く跳ねるピンクの Boli。Agent Island を少しやわらかく、軽快な雰囲気にします。"
+          "description": "軽く跳ねるピンクの Boli。Agent Notch を少しやわらかく、軽快な雰囲気にします。"
         },
         "whitesnow": {
           "name": "アップルガール",
@@ -5541,12 +5557,17 @@
         "userBrowserSetup": {
           "installPluginTitle": "Cindy Chrome プラグインをインストール",
           "enablePluginTitle": "Cindy Chrome プラグインを有効にする",
-          "installExtensionTitle": "ブラウザに Cindy 拡張機能を追加",
+          "connectExtensionTitle": "ブラウザー拡張機能が未接続です",
           "pluginBody": "「自分のブラウザ」は Cindy Chrome プラグインとそのブラウザ拡張機能を通じて Chrome / Edge に接続します。まず Cindy でプラグインをインストールし、案内に従って拡張機能を追加してください。",
-          "extensionBody": "「ブラウザ拡張機能を追加」を押すと、使用中のブラウザで Cindy 拡張機能のストアページが開きます。「追加」を押すと、ここは自動的に「接続済み」になります。追加済みの場合は、ブラウザの拡張機能管理で有効にしてください。",
+          "connectionBody": "Cindy とブラウザーを起動したまま、Cindy 拡張機能が有効になっているか確認してください。未接続でも再インストールが必要とは限りません。再接続すると表示が自動で更新されます。",
           "installPlugin": "プラグインをインストール",
           "enablePlugin": "有効にする",
-          "installExtension": "ブラウザ拡張機能を追加",
+          "openExtensionStore": "拡張機能ストアを開く",
+          "updatingTitle": "ブラウザー接続を更新中",
+          "updatingBody": "更新が完了すると自動的に再接続します。",
+          "selectPluginTitle": "ブラウザー拡張機能を選択",
+          "selectPluginBody": "プラグインの詳細を開き、「このブラウザー拡張機能を使用」を選択して、Cindy が使用する拡張機能を確認してください。",
+          "selectPlugin": "プラグインを開く",
           "updatePluginTitle": "Cindy Chrome プラグインを更新",
           "updatePluginBody": "インストール済みの Cindy Chrome プラグインは古く、「自分のブラウザ」に対応していません。最新版に更新してから、案内に従って拡張機能を追加してください。",
           "updatePlugin": "更新する",
@@ -12679,6 +12700,10 @@
       "defer": "今はダウンロードしない"
     },
     "permissionPrompt": {
+      "titleStdin": "端末への入力を許可しますか？",
+      "titleMcpUrl": "{{server}} のリクエストを完了",
+      "mcpComplete": "完了",
+      "mcpCancel": "キャンセル",
       "alwaysAllowScoped": "このセッションでは {{scope}} を常に許可",
       "alwaysAllowScopedHint": "このセッション全体に適用され、ここに挙げた範囲にのみ及びます。",
       "alwaysAllowSessionHint": "この 1 回のリクエストだけでなく、このセッション全体に適用されます。",
@@ -12943,7 +12968,13 @@
       "sendAndContinue": "送信して続行",
       "close": "閉じる",
       "customAnswer": "別の回答を入力…",
-      "answerPlaceholder": "回答を入力…"
+      "answerPlaceholder": "回答を入力…",
+      "validation": {
+        "required": "この必須項目を入力してください。",
+        "choice": "一覧の選択肢から選んでください。",
+        "tooShort": "{{count}}文字以上で入力してください。",
+        "tooLong": "{{count}}文字以内で入力してください。"
+      }
     },
     "planReviewBubble": {
       "title": "計画レビュー",
@@ -14028,8 +14059,10 @@
       "mailLegacy": "下書きの履歴（読み取り専用）",
       "taskAutoArchived": "「{{title}}」をアーカイブしました",
       "taskAutoArchivedUndo": "元に戻す",
-      "taskAutoArchivePending": "離れると自動でアーカイブ",
-      "taskAutoArchiveCancel": "今回はしない"
+      "taskAutoArchivePending": "このタスクを離れると自動アーカイブします",
+      "taskAutoArchiveCancel": "キャンセル",
+      "taskAutoArchiveCancelled": "今回は自動アーカイブしません",
+      "taskArchiveNow": "今すぐアーカイブ"
     },
     "ghostHook": {
       "blockedFallback": "メッセージはプラグインによりブロックされました(未送信)",
@@ -19616,5 +19649,33 @@
     "rendered": "文書を表示",
     "wrap": "行の折り返し",
     "lineNumbers": "行番号"
+  },
+  "subscriptionAccounts": {
+    "signIn": {
+      "checking": "ローカルアカウントを確認中…",
+      "detected": "ログイン済みのアカウントが見つかりました",
+      "useAccount": "このアカウントを使う",
+      "anotherAccount": "別のアカウントでログイン",
+      "keepExisting": "新しいアカウントはこのプロバイダーに追加されます。既存のログインは維持されます。",
+      "checkFailed": "ローカルアカウントを確認できませんでした。再試行してください。",
+      "retry": "再試行",
+      "useCodex": "Codex でログイン"
+    },
+    "title": "サブスクリプションアカウント",
+    "note": "最初のアカウントは CLI の既定フォルダーを使います。追加アカウントは個別にログインします。新しいタスクは分散され、既存のタスクは元のアカウントを使い続けます。",
+    "strategy": "負荷分散",
+    "add": "アカウントを追加",
+    "default": "既定フォルダー",
+    "ready": "接続済み",
+    "signedOut": "ログインが必要",
+    "unavailable": "状態を取得できません",
+    "limited": "利用上限に到達",
+    "remove": "アカウントを削除",
+    "removeTitle": "{{name}} を削除しますか？",
+    "removeDescription": "Cindy はこのアカウントにタスクを割り当てなくなります。CLI のログイン情報と会話履歴はこのコンピューターに残ります。",
+    "failed": "アカウントの取得または更新ができませんでした。CLI のログインとネットワーク接続を確認して、もう一度お試しください。",
+    "directory": "アカウントフォルダー",
+    "loginAgain": "再ログイン",
+    "login": "ログイン"
   }
 }

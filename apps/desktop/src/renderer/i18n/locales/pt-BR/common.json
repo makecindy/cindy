@@ -1460,13 +1460,22 @@
       "actionFailed": "Não foi possível concluir a ação. A notificação foi mantida. Tente novamente.",
       "newConversationTitle": "Nova sessão",
       "newConversationHint": "Iniciar uma nova sessão",
-      "muteSound": "Silenciar Agent Island",
-      "enableSound": "Ativar som do Agent Island",
-      "settings": "Configurações do Agent Island",
+      "muteSound": "Silenciar Agent Notch",
+      "enableSound": "Ativar som do Agent Notch",
+      "settings": "Configurações do Agent Notch",
       "newMessage": "Nova mensagem",
       "review": "Revisar",
       "needsInput": "Precisa de informações",
       "completed": "Concluído",
+      "liveActivityRunning_one": "{{count}} tarefa em andamento",
+      "liveActivityRunning_other": "{{count}} tarefas em andamento",
+      "liveActivityRunning_many": "{{count}} tarefas em andamento",
+      "liveActivityAlsoRunning_one": "Mais {{count}} tarefa em andamento",
+      "liveActivityAlsoRunning_other": "Mais {{count}} tarefas em andamento",
+      "liveActivityAlsoRunning_many": "Mais {{count}} tarefas em andamento",
+      "liveActivityWaiting_one": "{{count}} tarefa esperando por você",
+      "liveActivityWaiting_other": "{{count}} tarefas esperando por você",
+      "liveActivityWaiting_many": "{{count}} tarefas esperando por você",
       "error": "Erro",
       "input": "Entrada",
       "done": "Concluído",
@@ -1485,6 +1494,13 @@
     }
   },
   "menubar": {
+    "shared": {
+      "label": "Compartilhado",
+      "note": "Esta cota é compartilhada pela conta, não reservada para você.",
+      "highestWeekly": "Compartilhado · maior saldo semanal",
+      "highestWeeklyNote": "Maior cota semanal restante entre as contas consultáveis. Compartilhada pela conta, sem soma nem reserva pessoal.",
+      "from": "Compartilhado por {{name}}"
+    },
     "balance": {
       "name": "Saldo do Cindy",
       "quotaName": "Cota do Cindy",
@@ -1840,7 +1856,7 @@
       "apiKeys": "Chaves de ferramentas",
       "voiceInput": "Entrada de voz",
       "shortcuts": "Atalhos de teclado",
-      "agentIsland": "Agent Island",
+      "agentIsland": "Dynamic Island",
       "import": "Importação de sessões",
       "connections": "Plataformas de terceiros",
       "providers": "Provedores",
@@ -1862,7 +1878,7 @@
       "billing": "Uso e cobrança",
       "appearance": "Aparência",
       "notifications": "Notificações",
-      "agentIsland": "Agent Island",
+      "agentIsland": "Dynamic Island",
       "collaboration": "Colaboração",
       "agentResource": "Uso de recursos do Agent",
       "gitSafety": "Segurança do Git",
@@ -2338,7 +2354,7 @@
     "notifications": {
       "title": "Notificações",
       "sessionDoneLabel": "Notificações do sistema",
-      "sessionDoneHint": "Notifique quando uma sessão terminar, encontrar um erro ou precisar de uma resposta. Sessões comuns só notificam quando a janela está em segundo plano. Quando o Agent Island está ativado, ele cuida desses alertas.",
+      "sessionDoneHint": "Notifique quando uma sessão terminar, encontrar um erro ou precisar de uma resposta. Sessões comuns só notificam quando a janela está em segundo plano. Quando o Agent Notch ou a Dynamic Island está ativado, eles cuidam desses alertas; só com a Dynamic Island, erros ainda chegam como notificação do sistema.",
       "sessionDoneAria": "Ativar ou desativar notificações do sistema para sessões",
       "feishuLabel": "Enviar mensagem privada pelo Feishu / Lark quando uma sessão terminar ou precisar de uma resposta",
       "feishuHint": "Envia uma mensagem privada pelo bot vinculado do Feishu ou Lark; apenas quando a janela está sem foco.",
@@ -2450,28 +2466,31 @@
       }
     },
     "agentIsland": {
-      "title": "Agent Island",
-      "unsupported": "O Agent Island requer macOS 14 ou posterior.",
+      "title": "Dynamic Island",
+      "unsupported": "O Agent Notch requer macOS 14 ou posterior.",
       "subtleRemindersLabel": "Avisos discretos",
-      "subtleRemindersHint": "Quando houver novas mensagens, pedidos de resposta ou erros, o ícone muda em vez de mostrar um cartão de notificação abaixo da ilha. Clique na ilha para ver a lista completa de tarefas.",
+      "subtleRemindersHint": "Quando houver novas mensagens, pedidos de resposta ou erros, o ícone muda em vez de mostrar um cartão de notificação abaixo do Agent Notch. Clique no Agent Notch para ver a lista completa de tarefas.",
       "subtleRemindersFailed": "Não foi possível salvar as configurações dos avisos. Tente novamente.",
-      "enableLabel": "Mostrar Agent Island",
-      "enableHint": "Mostra tarefas em execução, que precisam de resposta e concluídas não lidas no topo da tela. Ao ativar, as notificações equivalentes do sistema são suprimidas para evitar alertas duplicados.",
-      "enableAria": "Ativar ou desativar Agent Island",
+      "liveActivityLabel": "Mostrar tarefas na Dynamic Island",
+      "liveActivityHint": "Mostra o progresso das tarefas na Dynamic Island do novo MacBook Pro e se expande quando algo precisa de você ou termina. Em outros Macs, aparece na barra de menus. Funciona separadamente do Agent Notch.",
+      "liveActivityFailed": "Não foi possível salvar as configurações das Atividades ao Vivo. Tente novamente.",
+      "enableLabel": "Mostrar Agent Notch",
+      "enableHint": "Mostra o progresso das tarefas no topo da tela e avisa quando algo precisa de você ou um resultado fica pronto. Enquanto estiver ativado, esses avisos não chegam também como notificações do sistema.",
+      "enableAria": "Ativar ou desativar Agent Notch",
       "displayLabel": "Local de exibição",
-      "displayHint": "Escolha em qual monitor o Agent Island aparece. Escolha todos para exibir um em cada monitor.",
-      "displaySelectAria": "Escolher monitor do Agent Island",
+      "displayHint": "Escolha em qual monitor o Agent Notch aparece. Escolha todos para exibir um em cada monitor.",
+      "displaySelectAria": "Escolher monitor do Agent Notch",
       "displayAll": "Todas as telas",
       "displayOption": "{{name}} · {{resolution}}",
       "displayNameFallback": "Tela {{index}}",
       "displayPrimary": "Principal",
       "displayInternal": "Integrada",
       "displayMissing": "Tela desconectada {{id}}",
-      "skinLabel": "Skin do ícone",
-      "skinHint": "Escolha a skin do personagem usada no ícone de execução.",
+      "skinLabel": "Personagem",
+      "skinHint": "O personagem exibido no Agent Notch e na Dynamic Island.",
       "soundLabel": "Sons de eventos",
-      "soundHint": "Escolha sons de 8 bits para cada evento do Agent Island.",
-      "soundAria": "Ativar ou desativar sons do Agent Island",
+      "soundHint": "Escolha um som de 8 bits para cada aviso, compartilhado pelo Agent Notch e pela Dynamic Island. O som de toque só toca quando você toca no Agent Notch.",
+      "soundAria": "Ativar ou desativar sons do Agent Notch",
       "soundSelectAria": "Som de {{event}}",
       "soundPreviewAria": "Ouvir prévia do som de {{event}}",
       "skinAnimationAria": "Alternar prévia da animação de {{skin}}",
@@ -2494,7 +2513,7 @@
         },
         "boli": {
           "name": "Boli",
-          "description": "Um companheiro Boli rosa com um leve saltitar e uma silhueta simples para dar um clima mais suave à ilha."
+          "description": "Um companheiro Boli rosa com um leve saltitar e uma silhueta simples, para um visual mais suave."
         },
         "whitesnow": {
           "name": "Apple Girl",
@@ -5639,12 +5658,17 @@
         "userBrowserSetup": {
           "installPluginTitle": "Instalar o plugin Cindy Chrome",
           "enablePluginTitle": "Ativar o plugin Cindy Chrome",
-          "installExtensionTitle": "Adicionar a extensão Cindy ao seu navegador",
+          "connectExtensionTitle": "Extensão do navegador desconectada",
           "pluginBody": "Meu navegador acessa seu Chrome ou Edge pelo plugin Cindy Chrome e sua extensão de navegador. Primeiro, instale o plugin em Cindy e siga a orientação para adicionar a extensão.",
-          "extensionBody": "Adicionar extensão ao navegador abre a página da extensão Cindy na loja do seu navegador; escolha Adicionar e o status mudará automaticamente para conectado. Já adicionou? Ative-a nas configurações de extensões do navegador.",
+          "connectionBody": "Mantenha Cindy e o navegador abertos e verifique se a extensão Cindy está ativada. A falta de conexão não significa que seja necessário reinstalá-la. O status é atualizado automaticamente ao reconectar.",
           "installPlugin": "Instalar plugin",
           "enablePlugin": "Ativar",
-          "installExtension": "Adicionar extensão ao navegador",
+          "openExtensionStore": "Abrir loja de extensões",
+          "updatingTitle": "Atualizando a conexão do navegador",
+          "updatingBody": "A conexão será restaurada automaticamente após a atualização.",
+          "selectPluginTitle": "Selecionar extensão do navegador",
+          "selectPluginBody": "Abra os detalhes do plugin e escolha “Usar esta extensão do navegador” para confirmar qual extensão o Cindy deve usar.",
+          "selectPlugin": "Abrir plugin",
           "updatePluginTitle": "Atualizar o plugin Cindy Chrome",
           "updatePluginBody": "O plugin Cindy Chrome instalado é antigo demais para Meu navegador. Atualize-o para a versão mais recente e siga a orientação para adicionar a extensão.",
           "updatePlugin": "Atualizar",
@@ -12821,6 +12845,10 @@
       "defer": "Agora não"
     },
     "permissionPrompt": {
+      "titleStdin": "Permitir entrada neste terminal?",
+      "titleMcpUrl": "Concluir a solicitação de {{server}}",
+      "mcpComplete": "Concluído",
+      "mcpCancel": "Cancelar",
       "alwaysAllowScoped": "Sempre permitir {{scope}} nesta sessão",
       "alwaysAllowScopedHint": "Aplica-se à sessão inteira e apenas ao que está listado aqui.",
       "alwaysAllowSessionHint": "Aplica-se à sessão inteira, não apenas a esta solicitação.",
@@ -13063,7 +13091,13 @@
       "sendAndContinue": "Enviar e continuar",
       "close": "Fechar",
       "customAnswer": "Digite outra coisa…",
-      "answerPlaceholder": "Digite sua resposta…"
+      "answerPlaceholder": "Digite sua resposta…",
+      "validation": {
+        "required": "Preencha este campo obrigatório.",
+        "choice": "Escolha uma das opções da lista.",
+        "tooShort": "Digite pelo menos {{count}} caracteres.",
+        "tooLong": "Digite no máximo {{count}} caracteres."
+      }
     },
     "planReviewBubble": {
       "title": "Revisão do plano",
@@ -14187,8 +14221,10 @@
       "mailLegacy": "Histórico de rascunhos (somente leitura)",
       "taskAutoArchived": "\"{{title}}\" arquivada",
       "taskAutoArchivedUndo": "Desfazer",
-      "taskAutoArchivePending": "Arquiva ao sair",
-      "taskAutoArchiveCancel": "Manter desta vez"
+      "taskAutoArchivePending": "Será arquivada ao sair desta tarefa",
+      "taskAutoArchiveCancel": "Cancelar",
+      "taskAutoArchiveCancelled": "Não será arquivada automaticamente desta vez",
+      "taskArchiveNow": "Arquivar agora"
     },
     "ghostHook": {
       "blockedFallback": "Mensagem bloqueada por um plugin; não enviada",
@@ -19872,5 +19908,33 @@
     "rendered": "Ver documento",
     "wrap": "Quebra de linha",
     "lineNumbers": "Números de linha"
+  },
+  "subscriptionAccounts": {
+    "signIn": {
+      "checking": "Verificando a conta local…",
+      "detected": "Conta conectada encontrada",
+      "useAccount": "Usar esta conta",
+      "anotherAccount": "Entrar com outra conta",
+      "keepExisting": "A nova conta será adicionada a este provedor. Os acessos existentes serão mantidos.",
+      "checkFailed": "Não foi possível verificar a conta local. Tente novamente.",
+      "retry": "Tentar novamente",
+      "useCodex": "Entrar com o Codex"
+    },
+    "title": "Contas de assinatura",
+    "note": "A primeira conta usa a pasta padrão da CLI. As contas adicionais fazem login separadamente. Novas tarefas são distribuídas; as existentes mantêm sua conta.",
+    "strategy": "Balanceamento de carga",
+    "add": "Adicionar conta",
+    "default": "Pasta padrão",
+    "ready": "Conectada",
+    "signedOut": "Login necessário",
+    "unavailable": "Status indisponível",
+    "limited": "Cota esgotada",
+    "remove": "Remover conta",
+    "removeTitle": "Remover {{name}}?",
+    "removeDescription": "A Cindy deixará de atribuir tarefas a esta conta. O login da CLI e o histórico de conversas permanecerão neste computador.",
+    "failed": "Não foi possível ler ou atualizar a conta. Verifique o login da CLI e a conexão de rede e tente novamente.",
+    "directory": "Pasta da conta",
+    "loginAgain": "Entrar novamente",
+    "login": "Entrar"
   }
 }

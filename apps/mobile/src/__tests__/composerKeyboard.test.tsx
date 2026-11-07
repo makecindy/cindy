@@ -113,6 +113,8 @@ function keyboardEvent(
   return {
     duration,
     easing: 'keyboard',
+    startCoordinates: { screenX: 0, screenY: 844, width: 390, height: 0 },
+    isEventFromThisApp: true,
     endCoordinates: { screenX: 0, screenY, width: 390, height },
   };
 }
@@ -297,8 +299,8 @@ describe('composer keyboard geometry and motion', () => {
   it('does not move the whole page for a narrow floating iPad keyboard', () => {
     native.platform.isPad = true;
     render();
-    const floating = keyboardEvent();
-    floating.endCoordinates.width = 250;
+    const event = keyboardEvent();
+    const floating = { ...event, endCoordinates: { ...event.endCoordinates, width: 250 } };
     emit('keyboardWillShow', floating);
     expect(height()).toBe(0);
   });
@@ -312,6 +314,8 @@ describe('composer keyboard geometry and motion', () => {
     const corner: KeyboardEvent = {
       duration: 383,
       easing: 'keyboard',
+    startCoordinates: { screenX: 0, screenY: 844, width: 390, height: 0 },
+    isEventFromThisApp: true,
       endCoordinates: { screenX: 192, screenY: 500, width: 274, height: 178 },
     };
     const frame = (screenY: number, height: number): KeyboardEvent => ({
@@ -387,6 +391,8 @@ describe('composer keyboard geometry and motion', () => {
     emit('keyboardWillShow', {
       duration: 383,
       easing: 'keyboard',
+    startCoordinates: { screenX: 0, screenY: 844, width: 390, height: 0 },
+    isEventFromThisApp: true,
       endCoordinates: { screenX: 192, screenY: 500, width: 274, height: 178 },
     });
     expect(height()).toBe(342);

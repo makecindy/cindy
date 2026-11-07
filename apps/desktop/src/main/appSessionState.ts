@@ -127,6 +127,14 @@ export function startFreshProfileInLocalMode(): boolean {
   return true;
 }
 
+/**
+ * The mode persisted by the last stable commit. Unlike the active session, a
+ * `cloud` value here is still only an intent while auth verifies the account.
+ */
+export function getPersistedAppSessionMode(): AppSessionMode {
+  return store.read().activeMode;
+}
+
 /** Read the last committed stable session. */
 export function getActiveAppSession(): ActiveAppSession {
   return { ...ensureLoaded() };

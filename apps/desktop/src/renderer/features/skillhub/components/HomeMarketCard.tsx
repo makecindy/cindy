@@ -14,7 +14,7 @@ export function HomeMarketCard({ skill: s, onClick, onUpdate, updating }: Market
       onClick={() => onClick(s)}
       className={cn(
         'group flex min-h-[100px] cursor-pointer flex-col gap-1.5 rounded-[12px] border-[0.5px] border-[var(--border-default)]',
-        'bg-[var(--surface-elevated)] p-3 text-left shadow-[var(--plugin-card-shadow)]',
+        'bg-[var(--surface-elevated)] p-3 text-left',
         'transition-[background-color,border-color,transform] duration-150 ease-out',
         'hover:-translate-y-0.5 hover:border-[var(--text-tertiary)]',
         'active:translate-y-0 active:scale-[0.992]',

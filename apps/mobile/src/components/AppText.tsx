@@ -1,3 +1,4 @@
+import type { TextInstance, TextInputInstance } from 'react-native';
 import { Text as RNText, TextInput as RNTextInput } from 'react-native';
 import type { TextInputProps, TextProps } from 'react-native';
 import type { Ref } from 'react';
@@ -16,12 +17,12 @@ import { useTheme } from '@/theme/ThemeProvider';
  */
 export const MAX_FONT_SIZE_MULTIPLIER = 1.2;
 
-export function Text({ ref, ...props }: TextProps & { ref?: Ref<RNText> }) {
+export function Text({ ref, ...props }: TextProps & { ref?: Ref<TextInstance> }) {
   return <RNText ref={ref} maxFontSizeMultiplier={MAX_FONT_SIZE_MULTIPLIER} {...props} />;
 }
 
 /** ref 直接透传给原生 TextInput(React 19 ref-as-prop),`focus()` 等命令式调用不受影响。 */
-export function TextInput({ ref, ...props }: TextInputProps & { ref?: Ref<RNTextInput> }) {
+export function TextInput({ ref, ...props }: TextInputProps & { ref?: Ref<TextInputInstance> }) {
   const { colors } = useTheme();
   return (
     <RNTextInput

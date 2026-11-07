@@ -232,6 +232,13 @@ PR 门禁必须在 Windows 上用多个并行分片（当前为 4 个）完整�
 - 资源在 `renderer/i18n/locales/<locale>/common.json`，语言由 `shared/locale.ts` 的
   `SUPPORTED_LOCALES` 定义（当前 `zh-CN` / `zh-TW` / `en` / `ja` / `ko` / `es` / `fr` / `de` / `pt-PT` / `pt-BR` / `zh-Hant-x-lzh` / `zh-Hans-x-lzh`），组件通过 `react-i18next` 的
   `t('<嵌套.key>')` 消费，单 namespace `common`。
+- **加载方式**：只有英文静态打包，其他语言由 `renderer/i18n/index.ts` 的 `LOCALE_LOADERS` 按需
+  加载（新增语言要在这里加一行）；renderer 分发入口 `index.tsx` 先等 `i18nReady` 再加载各窗口，
+  首屏直接是目标语言。`t(key, { lng })`、`getFixedT(lng)` 只对已加载的语言有效：需要在非当前
+  语言下同步读文案的功能，把 key 加进 `scripts/i18n-cross-locale.mjs` 的 `CROSS_LOCALE_KEYS`，
+  运行该脚本重新生成 `crossLocaleStrings.generated.json`，代码经 `@/i18n/crossLocale` 读取；
+  改这些 key 的文案后同样要重新生成。测试需要其他语言时先
+  `await i18n.loadLanguages([...])` 或 `await i18n.changeLanguage(lng)`。
 - **新增**：复用已有嵌套分组选 key，组件用 `t('key')`，绝不写 `<div>保存</div>` 裸文案。
 - **修改**：改某 key 文案时全部已支持语言同步更新，不要只改中文留其它语言旧值。
 - **删除**：删 UI 时把对应 key 从全部 locale 一起删掉，不留孤儿 key。
@@ -269,7 +276,8 @@ PR 门禁必须在 Windows 上用多个并行分片（当前为 4 个）完整�
   或以 `.` 结尾的子树前缀；同形异义必须在 `note` 里写明理由。
 - **门禁**：
   - `pnpm check:i18n` 校验 key 结构——缺 key、孤儿 key、跨 locale 类型冲突报错阻断；
-    空值与“与默认语言完全相同”只发警告。
+    空值与“与默认语言完全相同”只发警告。跨语言常驻表 `crossLocaleStrings.generated.json`
+    与各 locale 不一致时同样阻断，按提示运行 `node scripts/i18n-cross-locale.mjs` 重新生成。
   - `pnpm check:i18n-glossary` 校验译文术语与标点，并检查 `GLOSSARY.md` 是否与术语表同步。
   - 两者互补：前者管「key 齐不齐」，后者管「词译得一不一致」，谁也替代不了谁。改
     i18n 后两个都要跑（CI 已强制）。
