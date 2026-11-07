@@ -633,6 +633,9 @@ importers:
       remark-parse:
         specifier: 11.0.0
         version: 11.0.0
+      selfsigned:
+        specifier: ^5.5.0
+        version: 5.5.0
       tailwindcss:
         specifier: ^3.4.17
         version: 3.4.19(tsx@4.23.1)(yaml@2.9.0)

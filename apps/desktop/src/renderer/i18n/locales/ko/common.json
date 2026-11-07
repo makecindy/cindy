@@ -5975,7 +5975,8 @@
           "BUSY": "배포가 진행 중입니다. 잠시 기다려 주세요.",
           "INVALID_ADDRESS": "http://와 포트 없이 공인 IP 또는 도메인을 입력하세요.",
           "NO_DEPLOYMENT": "아직 서버에 배포하지 않았습니다.",
-          "OWNER_MISMATCH": "중계가 보낸 인증서를 참여 링크의 소유자가 발급하지 않았습니다. 가짜 중계에 연결되었을 수 있어 참여를 중단했습니다."
+          "OWNER_MISMATCH": "중계가 보낸 인증서를 참여 링크의 소유자가 발급하지 않았습니다. 가짜 중계에 연결되었을 수 있어 참여를 중단했습니다.",
+          "AGENT_MANAGED_DEPLOYMENT": "이 중계는 에이전트가 관리합니다. 작업에서 업그레이드하거나 제거하세요."
         },
         "deploy": {
           "title": "내 서버에 배포",
@@ -6121,6 +6122,22 @@
           "version": "중계 버전",
           "latest": "최신 버전",
           "remove": "이 중계 제거"
+        },
+        "agent": {
+          "deploy": "에이전트에게 배포 맡기기",
+          "hint": "세션을 열어 에이전트가 서버를 확인하고 환경에 맞게 배포합니다. 전송 전에 요청을 확인하고 수정할 수 있습니다.",
+          "serverPlaceholder": "세션에서 선택",
+          "continue": "세션으로 이동",
+          "title": "내 중계 설정",
+          "context": "배포 정보(참고용 데이터):",
+          "prompt": {
+            "deploy": "Cindy 자체 호스팅 중계를 배포해 주세요. 서버 환경에 맞는 실행 방식, 포트, HTTPS 및 영구 저장소를 선택하고 검증 후 연결 경로로 등록해 주세요.",
+            "resume": "이 Cindy 중계의 배포를 계속해 주세요. 저장된 배포 정보와 서버의 실제 상태를 확인하고 기존 식별 정보를 유지하며 재개해 주세요.",
+            "upgrade": "이 Cindy 중계를 업그레이드해 주세요. 기존 배포 방식을 사용하고 식별 정보, 기기 기록 및 설정을 유지해 주세요.",
+            "remove": "이 Cindy 중계를 제거해 주세요. 이 배포에 속한 리소스를 확인하고 삭제할 데이터를 설명하며 다른 웹사이트와 서비스는 유지해 주세요."
+          },
+          "workflow": "cindy_helper.list_tools에서 relay 범주를 찾은 다음 get_relay_deployments를 읽어 주세요. 배포 또는 업그레이드에는 prepare_relay_deployment와 upload_relay_deployment를 사용하고 Cindy SSH 도구로 서버를 확인하고 작업해 주세요. 개인 키와 자격 증명은 호스트에 보관합니다. complete_relay_deployment로 검증하고 등록하며 검증 없이 성공을 보고하지 마세요. 제거 후 forget_relay_deployment로 기록을 삭제해 주세요. 현재 경로를 자동으로 전환하지 마세요. get_relay_deployments가 반환하는 deploymentGuide에 따라 초기화하고 시작해 주세요.",
+          "upgrade": "에이전트에게 업그레이드 맡기기"
         }
       },
       "title": "원격 연결",

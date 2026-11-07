@@ -9,11 +9,12 @@
  * - 加入别的中转:粘贴主人电脑给出的加入链接 → 申请 → 主人同意 → 保存中转凭证与签名密钥并切换。
  * - 设备签名(§16):主人密钥只在主人电脑;同意加入时主人核对配对证明后签发设备证书。
  *
- * 只接受本机应用窗口的命令,不经设备互联代理。凭证、私钥、加入码、加入链接不写日志。
+ * 接受本机可信窗口和已授权任务的宿主调用，不经设备互联代理。凭证、私钥、加入码、加入链接不写日志。
  */
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import fs from 'node:fs';
 import os from 'node:os';
+import path from 'node:path';
 import { app, ipcMain } from 'electron';
 import {
   acceptRelayDeviceCert,
@@ -23,6 +24,7 @@ import {
   createRelaySigningKey,
   fetchRelayInfo,
   issueRelayDeviceCert,
+  normalizeRelayBaseUrl,
   parseRelayJoinLink,
   relayPublicKeyOf,
   RelayJoinError,
@@ -45,6 +47,8 @@ import { assertTrustedAppRendererEvent } from '../security/trustedAppRenderer.js
 import { throwIpcError } from '../utils/ipcValidate.js';
 import {
   parseSelfHostedRelayCommand,
+  normalizeRelayName,
+  parseAgentRelayDeploymentMetadata,
   RELAY_DEPLOY_STEPS,
   RELAY_UNINSTALL_STEPS,
   relayBaseUrlForAddress,
@@ -59,6 +63,7 @@ import {
   type SelfHostedRelayState,
   type RelayDeployProgressMessage,
   type RelayDeployStep,
+  type AgentRelayDeploymentMetadata,
 } from '../../shared/selfHostedRelay.js';
 import { deviceName } from './deviceName.js';
 import {
@@ -90,8 +95,11 @@ import {
   deployRelayToServer,
   RelayDeployError,
   uninstallRelayFromServer,
+  resolveRelayBundlePath,
 } from './selfHostedRelayDeploy.js';
 import { refreshRelayCertificatesSoon } from './selfHostedRelayFrameAuth.js';
+import { uploadRelayArtifacts } from './selfHostedRelayUpload.js';
+import { verifyAgentRelayEndpoint } from './selfHostedRelayEndpoint.js';
 import { readDeviceLinkSettings } from './settings-store.js';
 import { activeOwnerScopeKey, getActiveAppSession, isAppSessionBoundaryPending, onAppSessionInvalidated } from '../appSessionState.js';
 
@@ -180,6 +188,7 @@ export function getState(): SelfHostedRelayState {
       suggestedUrls: suggestedUrls(config),
     },
     deployments: config.deployments.map((deployment) => ({
+      ...(deployment.managedBy === 'agent' ? { managedBy: 'agent' as const, deploymentKey: deployment.deploymentKey, metadata: deployment.metadata, lastUpload: deployment.lastUpload } : {}),
       relayId: deployment.relayId,
       sshHostId: deployment.sshHostId,
       address: deployment.address,
@@ -188,7 +197,7 @@ export function getState(): SelfHostedRelayState {
       relayVersion: deployment.complete ? deployment.relayVersion : '',
       deployedAt: deployment.deployedAt,
       active: relay?.relayId === deployment.relayId,
-      upgradeAvailable: Boolean(bundled && deployment.complete && bundled !== deployment.relayVersion),
+      upgradeAvailable: Boolean(deployment.managedBy !== 'agent' && bundled && deployment.complete && bundled !== deployment.relayVersion),
     })),
     deployJob,
     bundledRelayVersion: bundled,
@@ -196,6 +205,17 @@ export function getState(): SelfHostedRelayState {
     pendingRequests,
     join,
   };
+}
+
+/** UI 的加入链接含一次性秘密，不属于 Agent 的线路发现结果。只投影这份白名单。 */
+export type AgentRelayState = Pick<SelfHostedRelayState, 'mode' | 'relay' | 'issue' | 'deployments' | 'bundledRelayVersion'>;
+
+export function projectAgentRelayState(state: SelfHostedRelayState): AgentRelayState {
+  return { mode: state.mode, relay: state.relay, issue: state.issue, deployments: state.deployments, bundledRelayVersion: state.bundledRelayVersion };
+}
+
+export function getAgentRelayState(): AgentRelayState {
+  return projectAgentRelayState(getState());
 }
 
 // ─── 主人身份 ────────────────────────────────────────────────────────────────
@@ -212,7 +232,7 @@ function createOwnerSecrets(relayId: string): RelaySecrets {
 }
 
 /** 交给中转初始化的主人信息(哈希、公钥、自签证书),不含秘密。 */
-function ownerInitArgs(relayId: string, secrets: RelaySecrets, name: string) {
+function ownerInitArgs(relayId: string, secrets: RelaySecrets, name: string, issuedAt = Date.now()) {
   const ownerPublicKey = relayPublicKeyOf(crypto, secrets.seed)!;
   const ownerDeviceId = authManager.getDeviceId();
   return {
@@ -228,7 +248,7 @@ function ownerInitArgs(relayId: string, secrets: RelaySecrets, name: string) {
       deviceId: ownerDeviceId,
       publicKey: ownerPublicKey,
       role: 'owner',
-      issuedAt: Date.now(),
+      issuedAt,
     }),
   };
 }
@@ -354,6 +374,7 @@ async function ownerFetch(path: string, init: { method: string; body?: unknown }
   if (!owner) throw new Error('NOT_OWNER');
   const res = await fetch(`${owner.baseUrl}/api/device-link${path}`, {
     method: init.method,
+    redirect: 'error',
     headers: {
       authorization: `CindyRelay ${owner.credential}`,
       ...(init.body === undefined ? {} : { 'content-type': 'application/json' }),
@@ -505,6 +526,178 @@ type CommandResult = {
   deploymentStatus?: SelfHostedRelayDeploymentStatus;
 };
 
+/** Agent 桥接提供任务授权代次检查；账号归属始终还由本模块独立核对。 */
+export interface AgentRelayOperationContext {
+  assertCurrent?: () => void | Promise<void>;
+}
+
+function agentOperationGuard(context: AgentRelayOperationContext): () => Promise<void> {
+  const assertOwner = captureOwner();
+  return async () => {
+    assertOwner();
+    await context.assertCurrent?.();
+    assertOwner();
+  };
+}
+
+export interface PreparedAgentRelayDeployment {
+  relayId: string;
+  managedBy: 'agent';
+  bundle: { path: string; sha256: string; version: string };
+  /** 只有哈希、公钥和公开证书；原始主人凭证与签名 seed 永远留在安全存储。 */
+  init: ReturnType<typeof ownerInitArgs>;
+}
+
+function readAgentBundle(): { path: string; bytes: Buffer; sha256: string; version: string } | null {
+  const bundlePath = resolveRelayBundlePath();
+  const version = bundledRelayVersion();
+  if (!bundlePath || !version) return null;
+  try {
+    const bytes = fs.readFileSync(bundlePath);
+    return bytes.length ? { path: bundlePath, bytes, sha256: createHash('sha256').update(bytes).digest('hex'), version } : null;
+  } catch {
+    return null;
+  }
+}
+
+/** 只准备身份与公开安装材料；部署拓扑由 Agent 决定，重复 key 沿用原身份且不改变正在使用的线路。 */
+export async function prepareAgentRelayDeployment(
+  input: { deploymentKey: string; name: string },
+  context: AgentRelayOperationContext = {},
+): Promise<CommandResult & { prepared?: PreparedAgentRelayDeployment }> {
+  const assertCurrent = agentOperationGuard(context);
+  await assertCurrent();
+  const notReady = requireReady();
+  if (notReady) return { state: getState(), error: notReady };
+  const name = normalizeRelayName(input.name);
+  if (!name || typeof input.deploymentKey !== 'string' || !/^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/.test(input.deploymentKey)) {
+    return { state: getState(), error: 'INVALID_ADDRESS' };
+  }
+  const bundle = readAgentBundle();
+  if (!bundle) return { state: getState(), error: 'BUNDLE_MISSING' };
+  await assertCurrent();
+  // 这一段同步读/写，避免两个重试在 await 间隙为同一个 key 各建一份身份。
+  const config = readRelayConfig();
+  const previous = config.deployments.find((d) => d.managedBy === 'agent' && d.deploymentKey === input.deploymentKey);
+  if (previous && previous.ownerDeviceId !== authManager.getDeviceId()) return { state: getState(), error: 'NOT_OWNER' };
+  const secrets = previous ? readRelaySecrets(previous.relayId) : generateOwnerSecrets();
+  if (!secrets) return { state: getState(), error: 'SECURE_STORAGE_UNAVAILABLE' };
+  const relayId = previous?.relayId ?? randomUUID();
+  const issuedAt = previous ? Date.parse(previous.deployedAt) : Date.now();
+  const init = ownerInitArgs(relayId, secrets, previous?.name ?? name, issuedAt);
+  if (previous && previous.ownerPublicKey !== init.ownerPublicKey) return { state: getState(), error: 'RELAY_MISMATCH' };
+  if (!previous) {
+    const record: RelayDeployment = {
+      managedBy: 'agent', deploymentKey: input.deploymentKey, ownerDeviceId: init.ownerDeviceId,
+      // 旧客户端要求非空 sshHostId；空值使其拒绝接管 Agent 选择的安装。
+      sshHostId: '', address: '', baseUrl: '', relayId, name, ownerPublicKey: init.ownerPublicKey,
+      relayVersion: '', deployedAt: new Date(issuedAt).toISOString(), complete: false,
+    };
+    writeRelaySecrets(relayId, secrets);
+    writeRelayConfig({ ...config, deployments: withDeployment(config.deployments, record) });
+    emitChanged();
+  }
+  return { state: getState(), prepared: { relayId, managedBy: 'agent', bundle: { path: bundle.path, sha256: bundle.sha256, version: bundle.version }, init } };
+}
+
+/** 将可信 bundle 与公开 init JSON 搬到 Agent 已准备的目录，不安装运行时、不执行远端服务。 */
+export async function uploadAgentRelayDeployment(
+  input: { relayId: string; sshHostId: string; remoteDir: string },
+  context: AgentRelayOperationContext = {},
+): Promise<CommandResult & { uploaded?: { relayId: string; sshHostId: string; bundlePath: string; initPath: string; bundleSha256: string; initSha256: string } }> {
+  const assertCurrent = agentOperationGuard(context);
+  await assertCurrent();
+  const notReady = requireReady();
+  if (notReady) return { state: getState(), error: notReady };
+  if (typeof input.remoteDir !== 'string' || !path.posix.isAbsolute(input.remoteDir) || input.remoteDir.length > 4096 || /[\u0000-\u001f]/.test(input.remoteDir) ||
+      typeof input.sshHostId !== 'string' || !input.sshHostId.trim()) return { state: getState(), error: 'INVALID_ADDRESS' };
+  const record = findDeployment(readRelayConfig(), input.relayId);
+  if (!record || record.managedBy !== 'agent') return { state: getState(), error: 'NO_DEPLOYMENT' };
+  if (record.ownerDeviceId !== authManager.getDeviceId()) return { state: getState(), error: 'NOT_OWNER' };
+  const secrets = readRelaySecrets(record.relayId);
+  if (!secrets) return { state: getState(), error: 'SECURE_STORAGE_UNAVAILABLE' };
+  const bundle = readAgentBundle();
+  if (!bundle) return { state: getState(), error: 'BUNDLE_MISSING' };
+  const init = ownerInitArgs(record.relayId, secrets, record.name, Date.parse(record.deployedAt));
+  if (init.ownerPublicKey !== record.ownerPublicKey) return { state: getState(), error: 'RELAY_MISMATCH' };
+  let uploaded: Awaited<ReturnType<typeof uploadRelayArtifacts>>;
+  try {
+    uploaded = await uploadRelayArtifacts({ ...input, bundle: bundle.bytes, init: Buffer.from(JSON.stringify(init)), assertCurrent });
+  } catch {
+    await assertCurrent();
+    return { state: getState(), error: 'DEPLOY_FAILED' };
+  }
+  await assertCurrent();
+  const config = readRelayConfig();
+  const current = findDeployment(config, record.relayId);
+  if (!current || current.ownerPublicKey !== record.ownerPublicKey) return { state: getState(), error: 'NO_DEPLOYMENT' };
+  writeRelayConfig({ ...config, deployments: withDeployment(config.deployments, {
+    // 上传目录可能只是另一台机器上的暂存位置。未经登记核验，不能覆盖现有服务的维护信息。
+    ...current, lastUpload: { sshHostId: input.sshHostId, remoteDir: input.remoteDir, ...uploaded, uploadedAt: new Date().toISOString() },
+  }) });
+  emitChanged();
+  return { state: getState(), uploaded: { relayId: record.relayId, sshHostId: input.sshHostId, ...uploaded } };
+}
+
+/** 先由上传时的 SSH 主机绑定 TLS 端点，再在同一证书校验握手上核验身份与主人访问。 */
+export async function registerAgentRelayDeployment(
+  input: { relayId: string; baseUrl: string; tlsPort: number; nodePath?: string; metadata?: AgentRelayDeploymentMetadata },
+  context: AgentRelayOperationContext = {},
+): Promise<CommandResult> {
+  const assertCurrent = agentOperationGuard(context);
+  await assertCurrent();
+  const notReady = requireReady();
+  if (notReady) return { state: getState(), error: notReady };
+  const baseUrl = typeof input.baseUrl === 'string' ? normalizeRelayBaseUrl(input.baseUrl) : null;
+  const metadata = input.metadata === undefined ? {} : parseAgentRelayDeploymentMetadata(input.metadata);
+  const nodePath = input.nodePath ?? 'node';
+  if (!baseUrl || !baseUrl.startsWith('https://') || baseUrl.length > 4096 || !metadata ||
+      !Number.isInteger(input.tlsPort) || input.tlsPort < 1 || input.tlsPort > 65535 ||
+      typeof nodePath !== 'string' || !nodePath.trim() || nodePath.length > 4096 || /[\u0000-\u001f]/.test(nodePath)) {
+    return { state: getState(), error: 'INVALID_ADDRESS' };
+  }
+  const record = findDeployment(readRelayConfig(), input.relayId);
+  if (!record || record.managedBy !== 'agent' || !record.lastUpload) return { state: getState(), error: 'NO_DEPLOYMENT' };
+  if (record.ownerDeviceId !== authManager.getDeviceId()) return { state: getState(), error: 'NOT_OWNER' };
+  const secrets = readRelaySecrets(record.relayId);
+  if (!secrets) return { state: getState(), error: 'SECURE_STORAGE_UNAVAILABLE' };
+  if (relayPublicKeyOf(crypto, secrets.seed) !== record.ownerPublicKey) return { state: getState(), error: 'RELAY_MISMATCH' };
+  let relayVersion: string;
+  try {
+    // 不采信 Agent metadata 中的主机或公开 info 字段作为信任锚。每次登记（含换地址）重新证明。
+    const request = await verifyAgentRelayEndpoint({
+      sshHostId: record.lastUpload.sshHostId, baseUrl, tlsPort: input.tlsPort, nodePath, assertCurrent,
+    });
+    await assertCurrent();
+    const info = await request('info');
+    await assertCurrent();
+    if (!info || info.relayId !== record.relayId || info.ownerPublicKey !== record.ownerPublicKey) return { state: getState(), error: 'RELAY_MISMATCH' };
+    if (info.protocolVersion !== 1 || !Array.isArray(info.features) || !info.features.includes('pairing-v1') || !info.features.includes('device-signatures-v1') ||
+        typeof info.relayVersion !== 'string' || !info.relayVersion || info.relayVersion.length > 64) return { state: getState(), error: 'INCOMPATIBLE' };
+    await assertCurrent();
+    const admin = await request('admin/status', secrets.credential);
+    await assertCurrent();
+    if (!admin || admin.relayId !== record.relayId) return { state: getState(), error: 'RELAY_MISMATCH' };
+    relayVersion = info.relayVersion;
+  } catch {
+    await assertCurrent();
+    return { state: getState(), error: 'NOT_REACHABLE' };
+  }
+  await assertCurrent();
+  const config = readRelayConfig();
+  const current = findDeployment(config, record.relayId);
+  if (!current || current.ownerPublicKey !== record.ownerPublicKey) return { state: getState(), error: 'NO_DEPLOYMENT' };
+  if (JSON.stringify(current.lastUpload) !== JSON.stringify(record.lastUpload)) return { state: getState(), error: 'BUSY' };
+  const registered: RelayDeployment = { ...current, baseUrl, address: new URL(baseUrl).host, relayVersion, complete: true,
+    metadata: { ...current.metadata, ...metadata, sshHostId: record.lastUpload.sshHostId } };
+  // 注册不切换；正在使用这条线路时，验证过的新地址继续沿用同一身份。
+  const inUse = config.active?.relayId === record.relayId;
+  writeRelayConfig({ ...config, deployments: withDeployment(config.deployments, registered), ...(inUse ? { active: deploymentActive(registered) } : {}) });
+  if (inUse) restartDeviceLinkForRelayChange();
+  emitChanged();
+  return { state: getState() };
+}
+
 function requireReady(): SelfHostedRelayErrorCode | null {
   // 账号数据作用域提交之前不能读写中转配置(否则会落进临时命名空间)。
   if (isAppSessionBoundaryPending() || !authManager.getAuthState().isAuthenticated || !getActiveAppSession().dataOwnerId) return 'NOT_SIGNED_IN';
@@ -513,19 +706,21 @@ function requireReady(): SelfHostedRelayErrorCode | null {
 }
 
 /** 成员退出所加入的中转(尽力而为,中转不可达也照样在本机切回),并删掉本机在它上面的秘密。 */
-async function leaveMemberRelay(): Promise<void> {
+async function leaveMemberRelay(check?: () => Promise<void>): Promise<void> {
   const assertOwner = captureOwner();
   const relay = activeSelfHostedRelay();
   if (relay?.role !== 'member') return;
   try {
     await fetch(`${relay.baseUrl}/api/device-link/devices/${encodeURIComponent(relay.deviceId)}`, {
       method: 'DELETE',
+      redirect: 'error',
       headers: { authorization: `CindyRelay ${relay.credential}` },
       signal: AbortSignal.timeout(5_000),
     });
   } catch {
     log.info('could not notify the relay before leaving; switching locally');
   }
+  if (check) await check();
   assertOwner();
   deleteRelaySecrets(relay.relayId);
   // Retire the old connection before the caller resumes on the official route.
@@ -533,10 +728,11 @@ async function leaveMemberRelay(): Promise<void> {
 }
 
 /** 切换到另一个中转前收尾:成员退出;本机中转停掉(不通知成员停用,切回时还能接着用)。 */
-async function leaveCurrent(): Promise<void> {
+async function leaveCurrent(check?: () => Promise<void>): Promise<void> {
   const assertOwner = captureOwner();
   cancelJoin();
-  await leaveMemberRelay();
+  await leaveMemberRelay(check);
+  if (check) await check();
   assertOwner();
   stopPairing();
 }
@@ -590,13 +786,14 @@ async function enableHost(command: Extract<SelfHostedRelayCommand, { type: 'enab
   return { state: getState() };
 }
 
-async function useOfficial(): Promise<CommandResult> {
+async function useOfficial(check?: () => Promise<void>): Promise<CommandResult> {
   const assertOwner = captureOwner();
   cancelJoin();
   const config = readRelayConfig();
   const origin = activeRelayOrigin();
   if (origin === 'host' || config.host.enabled) await stopHost(true);
-  else await leaveMemberRelay();
+  else await leaveMemberRelay(check);
+  if (check) await check();
   assertOwner();
   stopPairing();
   if (requireReady() !== 'NOT_SIGNED_IN') {
@@ -708,7 +905,10 @@ function findDeployment(config: RelayConfig, relayId: string): RelayDeployment |
 
 /** 写入一条部署记录:同一个中转或同一台服务器的旧记录原位替换(一台服务器一个中转),否则加在最后。 */
 function withDeployment(deployments: RelayDeployment[], record: RelayDeployment): RelayDeployment[] {
-  const same = (deployment: RelayDeployment) => deployment.relayId === record.relayId || deployment.sshHostId === record.sshHostId;
+  const same = (deployment: RelayDeployment) => deployment.relayId === record.relayId ||
+    (record.managedBy === 'agent'
+      ? deployment.managedBy === 'agent' && deployment.deploymentKey === record.deploymentKey
+      : deployment.managedBy !== 'agent' && deployment.sshHostId === record.sshHostId);
   const index = deployments.findIndex(same);
   if (index < 0) return [...deployments, record];
   return deployments.flatMap((deployment, i) => (i === index ? [record] : same(deployment) ? [] : [deployment]));
@@ -848,6 +1048,7 @@ function deploy(input: { sshHostId: string; address: string; name: string; repla
 function upgradeDeployment(relayId: string): CommandResult {
   const deployment = findDeployment(readRelayConfig(), relayId);
   if (!deployment) return { state: getState(), error: 'NO_DEPLOYMENT' };
+  if (deployment.managedBy === 'agent') return { state: getState(), error: 'AGENT_MANAGED_DEPLOYMENT' };
   return deploy({ sshHostId: deployment.sshHostId, address: deployment.address, name: deployment.name, replaceExisting: false }, 'upgrade');
 }
 
@@ -857,6 +1058,7 @@ function uninstallDeployment(relayId: string, removeData: boolean): CommandResul
   if (deployJob?.status === 'running') return { state: getState(), error: 'BUSY' };
   const deployment = findDeployment(readRelayConfig(), relayId);
   if (!deployment) return { state: getState(), error: 'NO_DEPLOYMENT' };
+  if (deployment.managedBy === 'agent') return { state: getState(), error: 'AGENT_MANAGED_DEPLOYMENT' };
   const target = { sshHostId: deployment.sshHostId, address: deployment.address, name: deployment.name, baseUrl: deployment.baseUrl };
   runDeployJob({ action: 'uninstall', steps: [...RELAY_UNINSTALL_STEPS], target, relayId, serverChanged: true }, async (onStep, assertOwner) => {
     await uninstallRelayFromServer(deployment.sshHostId, deployment, removeData, onStep, assertOwner);
@@ -891,7 +1093,7 @@ function forgetDeployment(relayId: string): CommandResult {
   return { state: getState() };
 }
 
-async function useDeployment(relayId: string): Promise<CommandResult> {
+async function useDeployment(relayId: string, check?: () => Promise<void>): Promise<CommandResult> {
   const assertOwner = captureOwner();
   const notReady = requireReady();
   if (notReady) return { state: getState(), error: notReady };
@@ -900,10 +1102,15 @@ async function useDeployment(relayId: string): Promise<CommandResult> {
   if (!deployment?.complete || !readRelaySecrets(deployment.relayId)) return { state: getState(), error: 'NO_DEPLOYMENT' };
   if (config.active?.relayId === relayId) return { state: getState() };
   if (config.host.enabled) await stopHost(false);
+  if (check) await check();
   assertOwner();
-  await leaveCurrent();
+  await leaveCurrent(check);
+  if (check) await check();
   assertOwner();
-  writeRelayConfig({ ...readRelayConfig(), active: deploymentActive(deployment), host: { ...readRelayConfig().host, enabled: false } });
+  const latest = readRelayConfig();
+  const current = findDeployment(latest, relayId);
+  if (!current?.complete) return { state: getState(), error: 'NO_DEPLOYMENT' };
+  writeRelayConfig({ ...latest, active: deploymentActive(current), host: { ...latest.host, enabled: false } });
   restartDeviceLinkForRelayChange();
   return { state: getState() };
 }
@@ -960,6 +1167,7 @@ async function deploymentStatus(relayId: string): Promise<CommandResult> {
   let status: SelfHostedRelayDeploymentStatus = { online: false };
   try {
     const res = await fetch(`${deployment.baseUrl}/api/device-link/relay/admin/status`, {
+      redirect: 'error',
       headers: { authorization: `CindyRelay ${secrets.credential}` },
       signal: AbortSignal.timeout(10_000),
     });
@@ -1018,6 +1226,18 @@ async function execute(command: SelfHostedRelayCommand): Promise<CommandResult> 
     case 'deployment-status':
       return deploymentStatus(command.relayId);
   }
+}
+
+/** 已通过任务授权的宿主桥接复用设置能力；不暴露到远控 IPC 或不受信任 Renderer。 */
+export async function executeSelfHostedRelayCommand(command: SelfHostedRelayCommand, context: AgentRelayOperationContext = {}): Promise<CommandResult> {
+  const assertCurrent = agentOperationGuard(context);
+  await assertCurrent();
+  const result = command.type === 'use-deployment' ? await useDeployment(command.relayId, assertCurrent)
+    : command.type === 'use-official' ? await useOfficial(assertCurrent)
+      : await execute(command);
+  await assertCurrent();
+  if (command.type !== 'state' && command.type !== 'deployment-status' && command.type !== 'check-server') emitChanged();
+  return result;
 }
 
 export function registerSelfHostedRelayIpc(): void {

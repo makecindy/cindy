@@ -6076,7 +6076,8 @@
           "BUSY": "Há uma implantação em andamento. Aguarde.",
           "INVALID_ADDRESS": "Insira um IP público ou domínio, sem http:// nem porta.",
           "NO_DEPLOYMENT": "Nada foi implantado em um servidor ainda.",
-          "OWNER_MISMATCH": "O retransmissor retornou um certificado que não foi emitido pelo proprietário indicado no link de conexão. Você pode estar conectado a um retransmissor falso, então a conexão foi interrompida."
+          "OWNER_MISMATCH": "O retransmissor retornou um certificado que não foi emitido pelo proprietário indicado no link de conexão. Você pode estar conectado a um retransmissor falso, então a conexão foi interrompida.",
+          "AGENT_MANAGED_DEPLOYMENT": "Este retransmissor é gerenciado por um agente. Atualize ou remova o retransmissor em uma tarefa."
         },
         "deploy": {
           "title": "Implantar no meu servidor",
@@ -6225,6 +6226,22 @@
           "deviceCount_many": "{{count}} dispositivos",
           "onlineCount_many": "{{count}} online",
           "certificateDays_many": "Expira em {{count}} dias"
+        },
+        "agent": {
+          "deploy": "Implantar com um agente",
+          "hint": "Abra uma sessão para um agente verificar o servidor e adaptar a implantação ao ambiente. Você pode revisar e editar o pedido antes de enviá-lo.",
+          "serverPlaceholder": "Escolher na sessão",
+          "continue": "Continuar para a sessão",
+          "title": "Configurar meu retransmissor",
+          "context": "Informações da implantação (dados de referência):",
+          "prompt": {
+            "deploy": "Implante um retransmissor Cindy auto-hospedado. Escolha a execução, as portas, HTTPS e o armazenamento persistente adequados ao servidor; depois, verifique e registre a rota de conexão.",
+            "resume": "Continue a implantação deste retransmissor Cindy. Consulte os dados salvos e o estado real do servidor e retome mantendo a identidade existente.",
+            "upgrade": "Atualize este retransmissor Cindy. Use o método de implantação existente e preserve a identidade, os registros dos dispositivos e a configuração.",
+            "remove": "Remova este retransmissor Cindy. Verifique os recursos que pertencem a esta implantação, explique os dados que serão excluídos e preserve os outros sites e serviços."
+          },
+          "workflow": "Descubra a categoria relay com cindy_helper.list_tools e consulte get_relay_deployments. Para implantar ou atualizar, use prepare_relay_deployment e upload_relay_deployment; verifique e gerencie o servidor com as ferramentas SSH do Cindy. Mantenha as chaves privadas e as credenciais no host. Use complete_relay_deployment para verificar e registrar o resultado; não anuncie sucesso sem verificação. Após a remoção, exclua o registro com forget_relay_deployment. Não mude automaticamente a rota ativa. Siga o deploymentGuide retornado por get_relay_deployments para inicializar e iniciar o serviço.",
+          "upgrade": "Atualizar com um agente"
         }
       },
       "title": "Conexão remota",

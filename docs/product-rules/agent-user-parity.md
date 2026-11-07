@@ -118,6 +118,7 @@ Agent 新建普通独立任务（`send_to_session` create 与 `start_session_tas
 | 社区插件贡献 | 当前安装快照准备、提交审核/当前进度、本人列表/详情/留存内容 | 有（2026-10-15） | 无 |
 | SSH 主机 | 列出、查状态、执行命令、添加主机、重新读取 ~/.ssh/config（与设置页同一实现；只用 ssh-agent／私钥，密码登录先用 `ssh-copy-id` 经终端代输入装公钥） | 有（添加与重读 2026-10-29） | 无 |
 | SSH 主机 | 编辑、删除、安装远端 Agent、Agent Proxy | 无 | 无 |
+| 连接线路 | 查询本机部署、准备／恢复主人身份、上传并校验登记 Agent 部署、切换自建／官方线路、忘记部署；设置入口与对话入口共用宿主能力 | 有（`cindy_helper` 的 `relay` 类目；`use_official_relay` 保留服务器部署记录及主人身份） | 无；手机可继续运行在身份所属电脑上的任务，SSH 仅是部署目标 |
 
 Worker 工具省略 working_dir 时保持继承 Lead 任务记录目录，不跟随之后 cd 进入的 worktree。
 面板默认识别实际目录属于 UI 行为；Agent 通过显式 working_dir 共用已有 worktree，
@@ -128,6 +129,12 @@ Worker 工具省略 working_dir 时保持继承 Lead 任务记录目录，不跟
 
 ## 实现入口
 
+- Agent 自适应部署：`cindy_helper` 的 `relay` 类目从第一层目录说明本机身份与 SSH 目标的区别，
+  准备、上传、完成、切换和忘记等写操作沿用任务权限与行动授权；中转凭证和签名私钥由宿主管理。
+  上传暂存收据与实际运行位置分别保存；登记前由宿主核验上传目标的回环 TLS 与公开 HTTPS
+  端点的证书绑定。切回官方与永久忘记分别提供工具，不能以删除身份来代替线路切换。
+  两个入口、安装器边界和恢复语义见
+  [自建中转方案 §15.7](../self-hosted-relay-plan.md#157-agent-自适应部署2026-11-04)。
 - 工具索引与作用范围：`packages/lizi-mcps/src/lizi_xdtHelperMcpServer.ts`
   （`HELPER_CATEGORY_DESCRIPTIONS`）、`cindy_schedulerMcpServer.ts`
   （`SCHEDULER_CATEGORY_DESCRIPTIONS`）、`xdt-helper/capabilities.ts` 的 `self-management`。

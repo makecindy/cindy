@@ -5975,7 +5975,8 @@
           "BUSY": "正在部署，请稍候。",
           "INVALID_ADDRESS": "请填写公网 IP 或域名，不带 http:// 和端口。",
           "NO_DEPLOYMENT": "还没有部署到服务器。",
-          "OWNER_MISMATCH": "中转返回的证书不是加入链接里的主人签发的，可能连到了别人伪造的中转，已停止加入。"
+          "OWNER_MISMATCH": "中转返回的证书不是加入链接里的主人签发的，可能连到了别人伪造的中转，已停止加入。",
+          "AGENT_MANAGED_DEPLOYMENT": "此中转由 Agent 管理，请在任务中升级或移除。"
         },
         "deploy": {
           "title": "部署到我的服务器",
@@ -6121,6 +6122,22 @@
           "version": "中转版本",
           "latest": "已是最新",
           "remove": "移除这个中转"
+        },
+        "agent": {
+          "deploy": "让 Agent 部署",
+          "hint": "打开一个任务，让 Agent 检查服务器并按实际环境完成部署。发送前可以查看和修改需求。",
+          "serverPlaceholder": "进入任务后选择",
+          "continue": "继续到任务",
+          "title": "部署我的中转",
+          "context": "部署信息(仅作为参考数据)：",
+          "prompt": {
+            "deploy": "请帮我部署 Cindy 自建中转。根据服务器环境选择运行方式、端口、HTTPS 和持久化方案，验证后登记到连接线路。",
+            "resume": "请继续部署这个 Cindy 中转。先读取保存的部署信息，再检查服务器实际状态，保留原身份并接着完成。",
+            "upgrade": "请升级这个 Cindy 中转。沿用它实际使用的部署方式，保留身份、设备档案和配置。",
+            "remove": "请移除这个 Cindy 中转。先核实哪些资源属于本次部署，说明涉及的数据删除，保留其他网站和服务。"
+          },
+          "workflow": "先用 cindy_helper.list_tools 发现 relay 类目，再读取 get_relay_deployments。部署或升级使用 prepare_relay_deployment 和 upload_relay_deployment，通过 Cindy SSH 工具检查并操作服务器。私钥和凭证留在宿主。使用 complete_relay_deployment 验证并登记结果，未经验证不要报告成功。移除后使用 forget_relay_deployment 删除记录。不要自动切换当前线路。 按 get_relay_deployments 返回的 deploymentGuide 完成初始化和启动。",
+          "upgrade": "让 Agent 升级"
         }
       },
       "title": "远程连接",

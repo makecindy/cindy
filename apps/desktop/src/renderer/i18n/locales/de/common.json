@@ -6018,7 +6018,8 @@
           "BUSY": "Eine Bereitstellung läuft. Bitte warte.",
           "INVALID_ADDRESS": "Gib eine öffentliche IP-Adresse oder Domain ein, ohne http:// oder Port.",
           "NO_DEPLOYMENT": "Es wurde noch nichts auf einem Server bereitgestellt.",
-          "OWNER_MISMATCH": "Das Relay hat ein Zertifikat zurückgegeben, das nicht vom Eigentümer im Beitrittslink ausgestellt wurde. Du bist möglicherweise mit einem gefälschten Relay verbunden. Der Beitritt wurde daher gestoppt."
+          "OWNER_MISMATCH": "Das Relay hat ein Zertifikat zurückgegeben, das nicht vom Eigentümer im Beitrittslink ausgestellt wurde. Du bist möglicherweise mit einem gefälschten Relay verbunden. Der Beitritt wurde daher gestoppt.",
+          "AGENT_MANAGED_DEPLOYMENT": "Dieses Relay wird von einem Agenten verwaltet. Aktualisiere oder entferne es in einer Aufgabe."
         },
         "deploy": {
           "title": "Auf meinem Server bereitstellen",
@@ -6164,6 +6165,22 @@
           "version": "Relay-Version",
           "latest": "Auf dem neuesten Stand",
           "remove": "Dieses Relay entfernen"
+        },
+        "agent": {
+          "deploy": "Mit einem Agenten bereitstellen",
+          "hint": "Öffne eine Sitzung, in der ein Agent den Server prüft und die Bereitstellung an seine Umgebung anpasst. Du kannst die Anfrage vor dem Senden prüfen und bearbeiten.",
+          "serverPlaceholder": "In der Sitzung auswählen",
+          "continue": "Weiter zur Sitzung",
+          "title": "Mein Relay einrichten",
+          "context": "Bereitstellungsinformationen (Referenzdaten):",
+          "prompt": {
+            "deploy": "Stelle ein selbst gehostetes Cindy-Relay bereit. Wähle Laufzeit, Ports, HTTPS und dauerhaften Speicher passend zum Server und prüfe und registriere anschließend die Verbindungsroute.",
+            "resume": "Setze die Bereitstellung dieses Cindy-Relays fort. Lies die gespeicherten Informationen und prüfe den tatsächlichen Serverzustand. Behalte die vorhandene Identität bei.",
+            "upgrade": "Aktualisiere dieses Cindy-Relay. Verwende die vorhandene Bereitstellungsmethode und behalte Identität, Gerätedaten und Konfiguration bei.",
+            "remove": "Entferne dieses Cindy-Relay. Prüfe, welche Ressourcen zu dieser Bereitstellung gehören, erkläre die betroffenen Datenlöschungen und erhalte andere Websites und Dienste."
+          },
+          "workflow": "Entdecke die Kategorie relay mit cindy_helper.list_tools und lies get_relay_deployments. Verwende für Bereitstellung oder Aktualisierung prepare_relay_deployment und upload_relay_deployment; prüfe und verwalte den Server mit den SSH-Werkzeugen von Cindy. Private Schlüssel und Zugangsdaten bleiben beim Host. Prüfe und registriere das Ergebnis mit complete_relay_deployment; melde ohne Prüfung keinen Erfolg. Entferne nach der Deinstallation den Eintrag mit forget_relay_deployment. Wechsle die aktive Route nicht automatisch. Folge dem von get_relay_deployments zurückgegebenen deploymentGuide für Initialisierung und Start.",
+          "upgrade": "Mit einem Agenten aktualisieren"
         }
       },
       "title": "Remote-Verbindung",
