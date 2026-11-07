@@ -4417,11 +4417,17 @@ function _messageCharacters(message: ChatMessage): number {
   return size;
 }
 
+function isRetirableHistoryTool(name: string): boolean {
+  // Folding is only a presentation decision. Review and HTML preview still
+  // consume these file-edit inputs from the raw store, including borrowed rows.
+  return isHistoryDetailTool(name) && name !== 'file_change' && name !== 'NotebookEdit';
+}
+
 function retiredDurableToolPairs(messages: ChatMessage[], eligible: (row: ChatMessage, index: number) => boolean) {
   const candidates = messages.filter((row, index) => eligible(row, index) && durableToolRows.has(row)
     && !row.isStreaming && !row.isPendingPersist && !row.parentToolUseId && !row.systemCardType);
   const calls = new Map(candidates.filter(row => row.role === 'tool_use' && row.toolUseId
-    && isHistoryDetailTool(row.toolName ?? '')).map(row => [row.toolUseId, row]));
+    && isRetirableHistoryTool(row.toolName ?? '')).map(row => [row.toolUseId, row]));
   const retired = new Set<ChatMessage>();
   for (const row of candidates) {
     const call = row.toolUseId && calls.get(row.toolUseId);
@@ -12083,6 +12089,7 @@ function createRemoteHistoryView(sessionId: string) {
           && (!running || index < messages.length - 10));
         for (const row of messages) {
           if (borrowedDetailRows.has(row) && !availableIds.has(row.clientId)
+            && (row.role !== 'tool_use' || isRetirableHistoryTool(row.toolName ?? ''))
             && !row.isStreaming && !row.isPendingPersist) retired.add(row);
         }
         // History owns these folded bodies and can load them through workDetails.
