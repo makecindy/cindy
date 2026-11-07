@@ -97,6 +97,15 @@
  *      (`ctx.getContextUsage`),收尾每刀只拿模拟总量重选,entries 也只有一份。
  * 另:1.1.1「备份失败不致命」—— 本仓写不进 shadow 时就放弃这一刀并留日志,异常在钩子边界
  * 被吞掉,宿主会话不受影响,语义已覆盖。
+ * 图片屏障与指针刀:指针段是从「超大结果」回溯到「发起调用」,中间可以夹着别的结果。
+ * 卡片与原文快照只存文本,所以这个范围内只要出现图片屏障就整刀拒绝(上游没有图片屏障这一类)。
+ *
+ * 与上游 1.1.0 行为一致、但和上游文档各说各话的两点(已向上游提问,未单方面改):
+ *   - 上游 README 说「同一次收尾可以连切」;1.1.0 把卡片当地板之后,收尾第一刀落在保留区
+ *     前面,卡片正好贴着保留区,第二刀算出的切点就是这张卡片本身,于是本次收尾只切一刀。
+ *   - 1.1.1 说「长 read 这一轮切不下来,才按原来的规则切更早的轮」;但卡片贴着保留区时,
+ *     保留区分支先按地板返回 null,长 read 那一轮(在卡片右边、比保留区新)根本没被试切。
+ *     本仓逐字复刻这两处,等上游裁决后再决定改不改。
  *
  * Mapping notes (DSH -> pi):
  *   - agent/status idle + turn/end completed  -> pi.on("agent_before_settle", outcome === "completed")
@@ -1045,6 +1054,9 @@ export function pointerSpanAllowed(items: CutItem[], start: number, end: number,
   if (engine === "local" && lastUser >= 0 && start <= lastUser) return false;
   for (let index = start; index <= end; index += 1) {
     if (items[index]?.checkpoint) return false;
+    // 1.1.x: 指针段是从「结果」往回扩到「调用」,中间可以有别的结果。
+    // 图片屏障不在卡片里,整段删掉就再也拿不回来 —— 只要范围内有屏障就拒绝。
+    if (items[index]?.barrier) return false;
     if (items[index]?.type === "user" && index === lastUser) return false;
   }
   return true;

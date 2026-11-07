@@ -1212,3 +1212,34 @@ describe('live compact 1.1.x: 卡片地板与长 read 独占一刀', () => {
     expect(picked.card.text).not.toContain('xxxxxxxxxx');
   });
 });
+
+describe('live compact 1.1.x: 指针段不能吞掉图片', () => {
+  const round = (id, text) => [
+    entry('assistant', `call ${id}`, { calls: [id] }),
+    entry('toolResult', text, { results: [id] }),
+  ];
+  it('rejects a pointer span that stretches back over an image result', () => {
+    // 一条 assistant 同时发两个调用:图片结果先回来,超大文本结果后回来。
+    // 指针刀会从超大结果往回扩到调用,中间的图片一并被删 —— 卡片和备份只有文本,图片回不来。
+    const entries = [
+      entry('system', 'sys'),
+      entry('user', 'go'),
+      entry('assistant', 'two calls', { calls: ['cImg', 'cBig'] }),
+      entry('toolResult', 'shot in the dark', { results: ['cImg'], opaque: true }),
+      entry('toolResult', 'x'.repeat(200000), { results: ['cBig'] }),
+      ...round('c1', 'tiny '.repeat(100)),
+      ...round('c2', 'tiny '.repeat(100)),
+      ...round('c3', 'tiny '.repeat(100)),
+    ];
+    expect(entries[3].opaque).toBe(true);
+    const items = entries.map((item) => ({
+      type: item.role === 'toolResult' ? 'tool' : item.role,
+      tokens: item.est,
+      checkpoint: false,
+      barrier: Boolean(item.opaque),
+    }));
+    expect(pointerSpanAllowed(items, 2, 4, 'cloud')).toBe(false);
+    expect(pointerSpanAllowed(items, 4, 4, 'cloud')).toBe(true);
+    expect(selectNewestChunk(entries, undefined, { drain: true, totalTokens: 90000 })).toBeNull();
+  });
+});
