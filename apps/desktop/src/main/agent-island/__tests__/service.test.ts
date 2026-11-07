@@ -40,6 +40,8 @@ import { runDeviceLinkInvokeContext } from '../../device-link/invoke-context.js'
 
 // Keep the real implementation; record each instance so its scheduled publishing
 // cannot outlive a test and run against reset Electron mocks in the next test.
+// Individual cases that install fake timers still reset in `finally` before
+// restoring real timers; this teardown covers every other instance created here.
 const serviceInstances = vi.hoisted(() => new Set<AgentIslandService>());
 vi.mock('../service.js', async importOriginal => {
   const actual = await importOriginal<typeof import('../service.js')>();
@@ -7340,14 +7342,18 @@ describe('会话关闭原因决定条目去留', () => {
     expect(generations.has('gone')).toBe(false);
   });
 
+  // #8361: fake-timer coverage advances the completed-card TTL by a full day.
+  // Dispose the real service before restoring timers so its deferred publish
+  // callback cannot leak into the next Windows CI case.
   it('TTL prune 后再 Stop 会清账本并立刻给远端发收尾包', async () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date('2026-01-01T00:00:00.000Z'));
+    let service: AgentIslandService | undefined;
     try {
       const { AgentIslandService } = await import('../service.js');
       const { AGENT_ISLAND_COMPLETED_RETENTION_MS } = await import('../state.js');
       const publish = vi.fn(() => true);
-      const service = new AgentIslandService({
+      service = new AgentIslandService({
         getMainWindow: () => null,
         nativeHost: { failed: false, headless: true, publish, suspend: () => undefined },
       });
@@ -7369,6 +7375,7 @@ describe('会话关闭原因决定条目去留', () => {
         expect.objectContaining({ sessionId: 's1', attention: false }),
       );
     } finally {
+      service?.resetRuntimeState();
       vi.useRealTimers();
     }
   });
@@ -7376,11 +7383,12 @@ describe('会话关闭原因决定条目去留', () => {
   it('TTL prune 后再 process-close 仍保留远程未读,直到真正 ack', async () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date('2026-01-01T00:00:00.000Z'));
+    let service: AgentIslandService | undefined;
     try {
       const { AgentIslandService } = await import('../service.js');
       const { AGENT_ISLAND_COMPLETED_RETENTION_MS } = await import('../state.js');
       const publish = vi.fn(() => true);
-      const service = new AgentIslandService({
+      service = new AgentIslandService({
         getMainWindow: () => null,
         nativeHost: { failed: false, headless: true, publish, suspend: () => undefined },
       });
@@ -7410,6 +7418,7 @@ describe('会话关闭原因决定条目去留', () => {
         expect.objectContaining({ sessionId: 's1', attention: false }),
       );
     } finally {
+      service?.resetRuntimeState();
       vi.useRealTimers();
     }
   });
@@ -7418,11 +7427,12 @@ describe('会话关闭原因决定条目去留', () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date('2026-01-01T00:00:00.000Z'));
     const { markSessionNeedsAttention, clearAllSessionAttention } = await import('../../appBadgeService.js');
+    let service: AgentIslandService | undefined;
     try {
       const { AgentIslandService } = await import('../service.js');
       const { AGENT_ISLAND_UNREAD_TRANSIENT_TTL_MS } = await import('../state.js');
       const publish = vi.fn(() => true);
-      const service = new AgentIslandService({
+      service = new AgentIslandService({
         getMainWindow: () => null,
         nativeHost: { failed: false, headless: true, publish, suspend: () => undefined },
       });
@@ -7456,6 +7466,7 @@ describe('会话关闭原因决定条目去留', () => {
       expect(islandState.remoteUnreadTerminals.has('s-err')).toBe(false);
       expect(islandState.sessions.get('s-err')?.unread).toBe(false);
     } finally {
+      service?.resetRuntimeState();
       clearAllSessionAttention();
       vi.useRealTimers();
     }
