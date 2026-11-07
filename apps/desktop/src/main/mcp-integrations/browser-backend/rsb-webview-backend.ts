@@ -83,7 +83,7 @@ export interface RsbWebviewBackendOptions {
   disposeGraceMs?: number;
   resolveUploadRoots?: (sessionId: string) => Promise<string[]>;
   /**
-   * Timing overrides for the detached-window tab re-registration wait (tests
+   * Timing overrides for the guest tab re-registration wait (tests
    * only — production uses the defaults below).
    */
   reattachWait?: { totalMs: number; pollMs: number };
@@ -1220,7 +1220,7 @@ export class RsbWebviewBackend implements BrowserBackend {
   private async resolveDirectActionTarget(req: BackendRequest): Promise<string | null> {
     const explicit = this.extractTargetId(req);
     if (explicit) return explicit;
-    if (!this.opts.bridge.ensureHost || !this.opts.bridge.isDetached?.()) return null;
+    if (!this.opts.bridge.ensureHost) return null;
     const sessionId = this.resolveSessionId(req);
     if (!sessionId) return null;
     try {
@@ -1250,18 +1250,11 @@ export class RsbWebviewBackend implements BrowserBackend {
    *      TabRegistry pruned their records; without reopening the host there is
    *      no renderer that could ever re-register the tab. No-op when embedded
    *      or the window is already up.
-   *   2. Resolve; on miss — and ONLY in detached mode — dispatch an 'ensure'
-   *      tab-op so the renderer hydrates the request session and eagerly
-   *      re-materializes this tab's webview (report → registry), then
-   *      re-resolve with a bounded poll (`TAB_REATTACH_*`) as safety net.
-   *
-   * The poll is gated on `bridge.isDetached`: embedded mode's host is the
-   * always-alive main window, so a resolve miss there is genuinely stale
-   * (user closed the tab / cross-session access) and must fail fast — in
-   * production `ensureHost` is always wired (a no-op when embedded), so its
-   * presence alone can't justify waiting. In detached mode a genuinely stale
-   * tabId does pay the poll timeout before surfacing the same clear error —
-   * an accepted trade: automation favors eventual success over fast failure.
+   *   2. Resolve; on miss dispatch an ensure tab-op in either host mode.
+   *      Embedded hosts can lose guests through pool eviction or reparenting.
+   *      The renderer checks the request session's bucket before restoring;
+   *      closed or foreign-session tabs fail fast without polling. Afterwards
+   *      registry ownership is checked again with the same request session.
    */
   private async resolveTabForDirectAction(
     req: BackendRequest,
@@ -1292,7 +1285,10 @@ export class RsbWebviewBackend implements BrowserBackend {
       }
     }
     let resolved = this.resolveTabInActiveSession(req, tabId);
-    if (resolved.ok || !ensureHost || !this.opts.bridge.isDetached?.()) return resolved;
+    // Embedded hosts also lose guests through pool eviction or reparenting.
+    // The renderer checks the request session's persisted bucket before
+    // restoring anything; registry ownership is checked again afterwards.
+    if (resolved.ok || !ensureHost) return resolved;
     // Renderer-driven recovery. Passive polling alone is NOT enough: the
     // reopened sidebar window only hydrates the main window's context session,
     // so a cross-session agent tab would never re-register on its own. Ask
