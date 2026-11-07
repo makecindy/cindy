@@ -760,6 +760,40 @@ describe('Pi package executable-code boundary', () => {
     }
   });
 
+  it('keeps a duration-limited package out of the palette inspection cache', async () => {
+    const { root } = await createSkillOnlyPackage('npm:palette-duration-limit');
+    const store = await import('../pi-package-store.js');
+    const canonicalRoot = await fs.realpath(root);
+    const listSpawns = () => runtime.spawns.filter(({ args }) => args.includes('list')).length;
+    let now = Date.now();
+    const clock = vi.spyOn(Date, 'now').mockImplementation(() => now);
+    const originalReaddir = fs.readdir.bind(fs);
+    let stretched = false;
+    const readdirSpy = vi.spyOn(fs, 'readdir').mockImplementation(((target: never, options: never) => {
+      const resolved = path.resolve(String(target));
+      if (!stretched
+        && (resolved === canonicalRoot || resolved.startsWith(`${canonicalRoot}${path.sep}`))) {
+        stretched = true;
+        // Cross the per-package budget so this read degrades to `inspection-limit`.
+        now += 3_000;
+      }
+      return originalReaddir(target, options);
+    }) as never);
+    try {
+      await expect(store.resolveManagedPiPackageResources())
+        .resolves.toMatchObject({ skills: [] });
+      expect(listSpawns()).toBe(1);
+      // Same clock, far inside the reuse window: the degraded roster must retry
+      // instead of keeping this package's Skill missing.
+      const retried = await store.resolveManagedPiPackageResources();
+      expect(retried.skills).toHaveLength(1);
+      expect(listSpawns()).toBe(2);
+    } finally {
+      readdirSpy.mockRestore();
+      clock.mockRestore();
+    }
+  });
+
   it('records in-flight inspection wait separately for each startup and skips completed-cache hits', async () => {
     const { root } = await createSkillOnlyPackage('npm:waiting-startup');
     const manifest = path.join(await fs.realpath(root), 'package.json');
@@ -2459,9 +2493,11 @@ describe('Pi package executable-code boundary', () => {
       await expect(store.resolveManagedPiPackageResources({
         snapshotRoot: path.join(runtime.userData, 'inspection-duration-first-snapshot'),
       })).resolves.toMatchObject({ packageRoots: [] });
-      await expect(store.listPiPackages()).resolves.toMatchObject({
-        packages: [{ source, enabled: true, warning: 'inspection-limit' }],
-      });
+      // A degraded roster is never reused, so this read re-inspects instead of
+      // echoing the timed-out projection.
+      const listed = await store.listPiPackages();
+      expect(listed.packages).toMatchObject([{ source, enabled: true }]);
+      expect(listed.packages[0]?.warning).toBeUndefined();
 
       const stateFile = await fs.readFile(
         path.join(runtime.userData, 'pi-package-home', 'cindy-package-state.json'),

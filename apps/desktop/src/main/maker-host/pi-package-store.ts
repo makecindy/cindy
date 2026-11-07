@@ -2265,6 +2265,16 @@ function invalidateInspectionCache(): void {
   inspectionPromise = undefined;
 }
 
+/**
+ * Warnings that mean this package's resources could not be read right now, so a
+ * cached roster would keep its Skills and prompts missing after conditions
+ * recover. `unsafe-source`, `unsupported-filter` and `no-resources` are durable
+ * answers, and a package change invalidates the cache directly.
+ */
+function isTransientInspectionWarning(warning: PiPackageView['warning']): boolean {
+  return warning === 'inspection-failed' || warning === 'inspection-limit';
+}
+
 async function inspectAllPackages(
   startupTiming?: PiPackageStartupTiming,
   reuseMs = INSPECTION_CACHE_MS,
@@ -2280,11 +2290,8 @@ async function inspectAllPackages(
   }
   const generation = inspectionGeneration;
   const pending = inspectAllPackagesUncached({ startupTiming }).then((value) => {
-    // A retryable read failure (`inspection-failed`) would keep that package's
-    // Skills and prompt commands missing for the whole reuse window, and nothing
-    // invalidates it when the read recovers: keep it out of the cache.
-    const retryable = value.some((pkg) => pkg.view.warning === 'inspection-failed');
-    if (generation === inspectionGeneration && !retryable) {
+    const incomplete = value.some((pkg) => isTransientInspectionWarning(pkg.view.warning));
+    if (generation === inspectionGeneration && !incomplete) {
       inspectionCache = { computedAt: Date.now(), value };
     }
     return value;
