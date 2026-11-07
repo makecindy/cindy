@@ -329,9 +329,10 @@ it('renders message bodies natively with in-place per-block selectable text', ()
     // 列表内正文只有原生渲染路径:无选择 WebView、无全屏选择查看器。
     expect(markdownBodySource).toContain('testID="message.markdownBody"');
     // Agent 回复二次测宽:stretch 量到像素宽后钉死,避免 UITextView 首帧偏矮被列表裁切。
+    // 只在 iOS 测宽;Android 行为由 userMessageCollapse.test.ts 执行真实 MarkdownBody 覆盖。
     expect(markdownBodySource).toContain('nextSettledContentWidth');
     expect(markdownBodySource).toContain('collapsable={false}');
-    expect(markdownBodySource).toContain('onLayout={handleSettledWidthLayout}');
+    expect(markdownBodySource).toContain('onLayout={measuresSettledWidth ? handleSettledWidthLayout : undefined}');
     expect(markdownBodySource).toContain('pinContentWidth');
     expect(markdownBodySource).toContain('pinSettledWidth');
     expect(markdownBodySource).toContain("pinContentWidth ? { alignSelf: 'stretch' } : null");

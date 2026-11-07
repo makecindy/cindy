@@ -163,7 +163,7 @@
   "taskActionConfirmation": {
     "title": "确认差事操作",
     "once": "请核下方之目标、动作与全文。所许仅及此一操作。",
-    "remove": "此举将删自运。请核其目标，仅许此一次。",
+    "remove": "此将释自动化之接收址。请核其目标，仅许此次。",
     "permission": "此举将代君答他差事之授权请求。请核其操作，仅许此一次。",
     "resume": "此举将复已暂停之运行。请核其目标，仅许此一次。",
     "command": "此举将于机上存或行命令，运行时不经 Agent 之工具审批。请核命令与工作目录，仅许此一次。",
@@ -1098,6 +1098,14 @@
     "cancel": "保连接",
     "disconnect": "断连"
   },
+  "awayGuard": {
+    "status": "Cindy 正劳作",
+    "hint": "按任一键即锁屏，以 Touch ID 或密码解之",
+    "lockFailed": {
+      "status": "Cindy 未能锁此机",
+      "hint": "按 Control-Command-Q 锁屏，稍候系统亦自锁"
+    }
+  },
   "appBadge": {
     "attentionCount": "待察之差事：{{count}}"
   },
@@ -1421,13 +1429,19 @@
       "actionFailed": "操作未竟，提醒已留，请再试。",
       "newConversationTitle": "新开差事",
       "newConversationHint": "另启新差事，再展鸿图",
-      "muteSound": "灵动岛静音",
-      "enableSound": "启灵动岛之声",
-      "settings": "灵动岛规制",
+      "muteSound": "任务胶囊静音",
+      "enableSound": "启任务胶囊之声",
+      "settings": "任务胶囊规制",
       "newMessage": "新讯",
       "review": "览之",
       "needsInput": "待输入",
       "completed": "已毕",
+      "liveActivityRunning_one": "{{count}} 事方行",
+      "liveActivityRunning_other": "{{count}} 事方行",
+      "liveActivityAlsoRunning_one": "另 {{count}} 事方行",
+      "liveActivityAlsoRunning_other": "另 {{count}} 事方行",
+      "liveActivityWaiting_one": "{{count}} 事待汝处",
+      "liveActivityWaiting_other": "{{count}} 事待汝处",
       "error": "谬",
       "input": "书",
       "done": "毕",
@@ -2089,6 +2103,17 @@
     "appearance": {
       "title": "仪容",
       "modeLabel": "显示之式",
+      "appIcon": {
+        "label": "Dock 之标",
+        "description": "择应用于 Dock 所用之标",
+        "saveFailed": "Dock 之标未能存，请稍后再试",
+        "options": {
+          "default": "本然",
+          "cat": "玄猫",
+          "wordmark": "Cindy 字标",
+          "mark": "Cindy 符记"
+        }
+      },
       "sidebarAndPanels": "侧栏与面板",
       "themeLabel": "格调",
       "themeAriaLabel": "择主题",
@@ -2254,7 +2279,7 @@
     "notifications": {
       "title": "告",
       "sessionDoneLabel": "系统之告",
-      "sessionDoneHint": "差事毕、生谬或待回复时提醒。寻常差事唯窗口退居背景时告之；启灵动岛，则改由灵动岛提醒。",
+      "sessionDoneHint": "差事毕、生谬或待回复时提醒。寻常差事唯窗口退居背景时告之；启任务胶囊或于灵动岛显任务，则改由其提醒；唯启灵动岛者，生谬仍发系统之告。",
       "sessionDoneAria": "切换差事系统之告",
       "feishuLabel": "差事毕或待回复时遣飞书 / Lark 讯",
       "feishuHint": "经已系之飞书或 Lark 机器人，私遣一讯于君；唯窗口失焦时遣之。",
@@ -2346,31 +2371,51 @@
       "swallowActivationClickLabel": "归时防误触",
       "swallowActivationClickHint": "左键点回背景窗口时，唯唤起窗口。阖之，则兼行点击处之操作，或致误触。",
       "swallowActivationClickAria": "切换归窗口时之误触防护",
-      "macRestartNote": "macOS 上须重启应用方生效。"
+      "macRestartNote": "macOS 上须重启应用方生效。",
+      "awayGuard": {
+        "label": "离席续作",
+        "hint": "开之，此机无人操作亦不熄屏、不自锁，AI 可随时用之。君离座稍久，玄幕覆屏，AI 于其后续作；有人按键或点按即锁屏，以 Touch ID 或密码解之。",
+        "permission": "须于「系统设置 → 隐私与安全性 → 辅助功能」许 Cindy，方能于有人触机时即锁屏。未许之前，屏照常熄而锁。",
+        "preview": "即试之",
+        "previewStarting": "请释鼠标与键盘，三秒后屏将覆；按任一键即锁屏，再解之以试。",
+        "previewUnavailable": "未能覆屏，请重启 Cindy 再试。",
+        "delay": {
+          "label": "离座几时而覆屏",
+          "hint": "键盘鼠标无人触及逾此时，即覆以玄幕。默认同系统熄屏之时。",
+          "30": "三十秒",
+          "60": "一分",
+          "120": "二分",
+          "300": "五分",
+          "system": "从系统"
+        }
+      }
     },
     "agentIsland": {
       "title": "灵动岛",
-      "unsupported": "灵动岛须 macOS 14 或更高之版。",
+      "unsupported": "任务胶囊须 macOS 14 或更高之版。",
       "subtleRemindersLabel": "轻提醒",
-      "subtleRemindersHint": "新讯至、待答或有误时，不向下弹出通知卡片，以图示变化相告。点灵动岛可阅任务全表。",
+      "subtleRemindersHint": "新讯至、待答或有误时，不向下弹出通知卡片，以图示变化相告。点任务胶囊可阅任务全表。",
       "subtleRemindersFailed": "提醒设定未存，请重试。",
-      "enableLabel": "显灵动岛",
-      "enableHint": "于屏幕之巅显方行、待应及未读已毕之差事。启之则抑同类系统之告，免重复相扰。",
-      "enableAria": "启闭灵动岛",
+      "liveActivityLabel": "于灵动岛显任务",
+      "liveActivityHint": "于新款 MacBook Pro 之灵动岛显差事进展，待君处置或事毕时自展；余 Mac 显于菜单栏之右。与任务胶囊各不相扰。",
+      "liveActivityFailed": "实时活动设定未存，请重试。",
+      "enableLabel": "显任务胶囊",
+      "enableHint": "于屏幕之巅显差事进展，待君处置或有新果时即告。启之，则此类提醒不复另发系统之告。",
+      "enableAria": "启闭任务胶囊",
       "displayLabel": "显示之处",
-      "displayHint": "择灵动岛显于何显示器；择全部，则每显示器各显一份。",
-      "displaySelectAria": "择灵动岛显示器",
+      "displayHint": "择任务胶囊显于何显示器；择全部，则每显示器各显一份。",
+      "displaySelectAria": "择任务胶囊显示器",
       "displayAll": "诸显示器",
       "displayOption": "{{name}} · {{resolution}}",
       "displayNameFallback": "显示器 {{index}}",
       "displayPrimary": "主屏",
       "displayInternal": "本具",
       "displayMissing": "已断之显示器 {{id}}",
-      "skinLabel": "图标之皮",
-      "skinHint": "择灵动岛中示方行之态所用角色之皮。",
+      "skinLabel": "角色",
+      "skinHint": "任务胶囊与灵动岛中所显之角色。",
       "soundLabel": "事之音",
-      "soundHint": "为灵动岛各类事择 8-bit 之音。",
-      "soundAria": "切换灵动岛之音",
+      "soundHint": "为诸类提醒择 8-bit 之音，任务胶囊与灵动岛共之；点按之音唯触任务胶囊时鸣。",
+      "soundAria": "切换任务胶囊之音",
       "soundSelectAria": "{{event}}之音",
       "soundPreviewAria": "先听{{event}}之音",
       "skinAnimationAria": "切换{{skin}}之先览动画",
@@ -2393,7 +2438,7 @@
         },
         "boli": {
           "name": "波利",
-          "description": "粉色波利，轻跃于键盘之侧；欲令灵动岛更添软萌，择之可也。"
+          "description": "粉色波利，轻跃不息；欲令任务胶囊更添软萌，择之可也。"
         },
         "whitesnow": {
           "name": "苹果妹",
@@ -5089,7 +5134,7 @@
         "ariaLabel": "择第二备选辅佐模型"
       },
       "emptySlot": "未择",
-      "customHint": "轻简文字依所择之序试之；内置审核不可用时，亦充自动审核之备。所择供方将收审核上下文，含讯与引用内容、差事与操作详情及拦截之录、身分与权柄、卷之路径及操作系统。",
+      "customHint": "轻简文字依所择之序试之；内置审核不可用时，亦充自动审核之备。所择供方将收审核上下文，含讯与引用内容、Agent 之公开文字（仅作参考）、差事与操作详情及拦截之录、身分与权柄、卷之路径及操作系统。",
       "signInHint": "登门 Cindy 后方可用自荐；未登门时，请于自订中择已设之他供方模型。",
       "chooseAgent": "择 Agent",
       "backToAgents": "归择 Agent",
@@ -6104,7 +6149,7 @@
         "hook": "Cindy IM 使者"
       },
       "hook": {
-        "description": "将 Slack 与 Telegram 接入同一 Cindy：讯皆派至此台设备，共享案之清单与 session 运行链；名籍绑定与运行偏好依渠道各自隔离。",
+        "description": "将 Slack、Telegram、飞书 / Lark 诸渠道接入同一 Cindy：讯皆派至此台设备，共用此间案之清单与差事；名籍绑定与运行偏好依渠道各自隔离。",
         "slackDescription": "绑定 Slack workspace，于 Slack 中 @Cindy 派差事。",
         "slackDisabledHint": "开此开关即发起 Slack 授权，绑定毕即可于 Slack 中派活。",
         "slackBoundHint": "绑定已毕。关此开关将解除绑定，重开须再授权。",
@@ -6325,6 +6370,45 @@
             "revoked": "关联已解",
             "superseded": "已关联至他台设备"
           }
+        },
+        "feishu": {
+          "description": "由飞书发讯，交工作电脑处理。",
+          "disabledHint": "开此开关后，或于浏览器中授权飞书名籍，或将关联码遣予飞书机器人。",
+          "toggleAria": "启闭飞书 / Lark 连接",
+          "connect": "结飞书",
+          "openApp": "开授权页",
+          "cancel": "罢关联",
+          "retry": "重关联",
+          "openBot": "开飞书机器人",
+          "unlink": "解飞书",
+          "unlinkConfirmTitle": "解绑飞书乎？",
+          "unlinkConfirmDescription": "仅解此机之系。",
+          "unavailableHint": "君所属之组织尚未设飞书机器人，请洽组织管理员。",
+          "unavailableHintPersonal": "飞书机器人尚未向个人账号开放。",
+          "status": {
+            "checking": "方察服务器支持…",
+            "unavailable": "组织未设",
+            "unavailablePersonal": "尚未开放",
+            "disabled": "已停",
+            "none": "未绑",
+            "pending": "于浏览器中授权，或将关联码遣予飞书机器人",
+            "awaiting_confirmation": "请于飞书 / Lark 确认更换此机所系账号",
+            "confirmed": "{{user}} 已结飞书机器人",
+            "denied": "授权已拒",
+            "expired": "授权已逾期",
+            "failed": "关联未成",
+            "revoked": "关联已解",
+            "superseded": "此机已系另一飞书 / Lark 账号",
+            "appChanged": "飞书机器人已更易，请重为关联"
+          },
+          "bindCode": {
+            "label": "关联码",
+            "copy": "录关联码",
+            "copied": "关联码已录",
+            "hint": "或于飞书中将关联码私遣予 Cindy 机器人"
+          },
+          "setWorkingDevice": "设为工作电脑",
+          "workingDeviceSet": "已设为工作电脑"
         }
       },
       "summary": {
@@ -6343,7 +6427,7 @@
     "tina": {
       "chat": {
         "title": "言谈",
-        "description": "不落任何仓库之纯言谈；于 Slack、Telegram 或 X 中选 chat 即可用之，每条言谈 lane 各对应一差事。"
+        "description": "不落任何仓库之纯言谈；于 Slack、Telegram、X 或飞书 / Lark 中选 chat 即可用之，每条言谈 lane 各对应一差事。"
       },
       "prefs": {
         "agentLabel": "Agent",
@@ -6353,6 +6437,7 @@
         "providerSlack": "Slack",
         "providerTelegram": "Telegram",
         "providerX": "X",
+        "providerFeishu": "飞书 / Lark",
         "requireConnected": "连上 {{provider}} 后方可修（先于上方打开相应开关，候其连接成功）。",
         "offlineLocal": "{{provider}} 暂连不上，变更存于此机；连上后同步至言谈中之模型卡。",
         "requireBinding": "须先完成 {{provider}} 名籍关联，方可修。",
@@ -13947,7 +14032,11 @@
       "mailAttach": "增附件",
       "mailRemoveAttachment": "除 {{name}}",
       "mailUpdated": "草稿已更（唯读）",
-      "mailLegacy": "旧稿（唯读）"
+      "mailLegacy": "旧稿（唯读）",
+      "taskAutoArchived": "「{{title}}」已封存",
+      "taskAutoArchivedUndo": "撤",
+      "taskAutoArchivePending": "去则自封存",
+      "taskAutoArchiveCancel": "此番不封"
     },
     "ghostHook": {
       "blockedFallback": "讯为法器所拦，未遣",
@@ -13984,6 +14073,8 @@
       "updateHost": "请先更新行差事之机，再开旁问。",
       "failed": "旁问未能开，请稍后再试。",
       "mainTaskOnly": "请自主差事开旁问。",
+      "sharedTaskUnavailable": "共事不可开旁问。",
+      "archivedTask": "请先解封存，再开旁问。",
       "closeTitle": "阖旁问？",
       "closeDescription": "将止而删此番追问，主差事不受其扰。",
       "closeConfirm": "阖而删之",
@@ -19107,6 +19198,9 @@
     "pendingApprovals": "{{count}} 项待确"
   },
   "richAnswer": {
+    "invalidImageReference": "图之引用无效，未能示之。",
+    "requestImageAgain": "请重示此图",
+    "requestImageAgainMessage": "请重示此既有之图（{{name}}，引用：{{source}}）。核原工具之果或原档，以实址示之，勿另生新图；若未能辨其所指，先问于我。",
     "send": "遣讯",
     "sending": "方遣…",
     "sent": "已呈",
@@ -19538,5 +19632,23 @@
         "deny": "拒绝"
       }
     }
+  },
+  "subscriptionAccounts": {
+    "title": "订阅账号",
+    "note": "首号沿用 CLI 默认目录，增号各自登录。新务依策分派，旧务仍用原号。",
+    "strategy": "负载均衡",
+    "add": "添加账号",
+    "default": "默认目录",
+    "ready": "已连接",
+    "signedOut": "须登录",
+    "unavailable": "状态暂不可得",
+    "limited": "配额已尽",
+    "remove": "移出账号",
+    "removeTitle": "移出 {{name}}？",
+    "removeDescription": "Cindy 将不再给这个账号分配任务。CLI 登录和对话历史仍保留在本机。",
+    "failed": "无法读取或更新账号。请检查 CLI 登录和网络连接后重试。",
+    "used": "已用 {{percent}}%",
+    "directory": "账号目录",
+    "login": "登录"
   }
 }

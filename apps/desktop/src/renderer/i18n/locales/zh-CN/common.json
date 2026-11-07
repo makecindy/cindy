@@ -163,7 +163,7 @@
   "taskActionConfirmation": {
     "title": "确认任务操作",
     "once": "请核对下面的目标、动作和完整内容。允许仅对本次操作生效。",
-    "remove": "这会删除自动化。请核对目标，仅允许这一次。",
+    "remove": "这会释放自动化的接收地址。请核对目标，仅允许这一次。",
     "permission": "这会代你回答另一个任务的授权请求。请核对操作，仅允许这一次。",
     "resume": "这会恢复已暂停的执行。请核对目标，仅允许这一次。",
     "command": "这会在电脑上保存或运行命令，执行时不经过 Agent 的工具审批。请核对命令和工作目录，仅允许这一次。",
@@ -1098,6 +1098,14 @@
     "cancel": "保持连接",
     "disconnect": "断开连接"
   },
+  "awayGuard": {
+    "status": "Cindy 正在工作",
+    "hint": "按任意键锁屏，用 Touch ID 或密码解锁",
+    "lockFailed": {
+      "status": "Cindy 没能锁住这台电脑",
+      "hint": "按 Control-Command-Q 锁屏，稍后系统也会自动锁屏"
+    }
+  },
   "appBadge": {
     "attentionCount": "需要关注的任务：{{count}}"
   },
@@ -1421,13 +1429,19 @@
       "actionFailed": "操作未完成，提醒已保留，请重试。",
       "newConversationTitle": "新建任务",
       "newConversationHint": "开始一个新的任务",
-      "muteSound": "关闭灵动岛声音",
-      "enableSound": "开启灵动岛声音",
-      "settings": "灵动岛设置",
+      "muteSound": "关闭任务胶囊声音",
+      "enableSound": "开启任务胶囊声音",
+      "settings": "任务胶囊设置",
       "newMessage": "新建消息",
       "review": "查看",
       "needsInput": "需要输入",
       "completed": "已完成",
+      "liveActivityRunning_one": "{{count}} 个任务运行中",
+      "liveActivityRunning_other": "{{count}} 个任务运行中",
+      "liveActivityAlsoRunning_one": "另有 {{count}} 个任务运行中",
+      "liveActivityAlsoRunning_other": "另有 {{count}} 个任务运行中",
+      "liveActivityWaiting_one": "{{count}} 个任务等你处理",
+      "liveActivityWaiting_other": "{{count}} 个任务等你处理",
       "error": "错误",
       "input": "输入",
       "done": "完成",
@@ -2089,6 +2103,17 @@
     "appearance": {
       "title": "外观",
       "modeLabel": "显示模式",
+      "appIcon": {
+        "label": "Dock 图标",
+        "description": "选择应用在 Dock 中使用的图标",
+        "saveFailed": "无法保存 Dock 图标，请稍后重试",
+        "options": {
+          "default": "默认",
+          "cat": "黑猫",
+          "wordmark": "Cindy 字标",
+          "mark": "Cindy 符号"
+        }
+      },
       "sidebarAndPanels": "侧边栏与面板",
       "themeLabel": "主题",
       "themeAriaLabel": "主题选择",
@@ -2254,7 +2279,7 @@
     "notifications": {
       "title": "通知",
       "sessionDoneLabel": "系统通知",
-      "sessionDoneHint": "任务完成、出错或需要回复时提醒。普通任务仅在窗口处于后台时通知；开启灵动岛时改由灵动岛提醒。",
+      "sessionDoneHint": "任务完成、出错或需要回复时提醒。普通任务仅在窗口处于后台时通知；开启任务胶囊或在灵动岛显示任务时，改由它们提醒；只开灵动岛时，出错仍发系统通知。",
       "sessionDoneAria": "切换任务系统通知",
       "feishuLabel": "任务完成或需要回复时发送飞书 / Lark 消息",
       "feishuHint": "通过已绑定的飞书或 Lark 机器人，向你私聊发送一条消息；仅在窗口失焦时发送。",
@@ -2346,31 +2371,51 @@
       "swallowActivationClickLabel": "切回时防误触",
       "swallowActivationClickHint": "左键点回后台窗口时，只唤起窗口。关闭后会同时操作点击位置，可能误触。",
       "swallowActivationClickAria": "切换返回窗口时的误点保护",
-      "macRestartNote": "macOS 上需要重启应用才能生效。"
+      "macRestartNote": "macOS 上需要重启应用才能生效。",
+      "awayGuard": {
+        "label": "离开时继续工作",
+        "hint": "开启后，这台电脑不会因为没人操作而熄屏、锁屏，AI 随时可以用它。你离开一段时间后，屏幕会被一块黑色遮罩盖住，AI 在后面继续工作；有人按键或点按就立即锁屏，用 Touch ID 或密码解锁。",
+        "permission": "需要在「系统设置 → 隐私与安全性 → 辅助功能」中允许 Cindy，才能在有人碰电脑时立即锁屏。允许之前，电脑会照常熄屏、锁屏。",
+        "preview": "立即试一下",
+        "previewStarting": "请松开鼠标和键盘，3 秒后屏幕会被遮住；按任意键即可锁屏，再解锁试试。",
+        "previewUnavailable": "无法遮住屏幕，请重启 Cindy 后再试。",
+        "delay": {
+          "label": "离开多久后遮住屏幕",
+          "hint": "键盘鼠标没人碰这么久后盖上遮罩。默认与系统熄屏时间一致。",
+          "30": "30 秒",
+          "60": "1 分钟",
+          "120": "2 分钟",
+          "300": "5 分钟",
+          "system": "跟随系统"
+        }
+      }
     },
     "agentIsland": {
       "title": "灵动岛",
-      "unsupported": "灵动岛需要 macOS 14 或更高版本。",
+      "unsupported": "任务胶囊需要 macOS 14 或更高版本。",
       "subtleRemindersLabel": "轻提醒",
-      "subtleRemindersHint": "有新消息、待回复事项或错误时，不向下弹出通知卡片，通过图标变化提示。点击灵动岛可查看完整任务列表。",
+      "subtleRemindersHint": "有新消息、待回复或出错时，不向下弹出通知卡片，只通过图标变化提示。点击任务胶囊可查看完整任务列表。",
       "subtleRemindersFailed": "未能保存提醒设置，请重试。",
-      "enableLabel": "显示灵动岛",
-      "enableHint": "在屏幕顶部显示正在运行、待交互和未读完成的任务。启用后会抑制同类系统通知，避免重复打扰。",
-      "enableAria": "切换灵动岛",
+      "liveActivityLabel": "在灵动岛显示任务",
+      "liveActivityHint": "在新款 MacBook Pro 的灵动岛里显示任务进度，需要你处理或完成时自动展开；其他 Mac 显示在菜单栏右侧。与任务胶囊互不影响。",
+      "liveActivityFailed": "未能保存实时活动设置，请重试。",
+      "enableLabel": "显示任务胶囊",
+      "enableHint": "在屏幕顶部显示任务进度，需要你处理或有新结果时及时提醒。开启后，这些提醒不再另发系统通知。",
+      "enableAria": "切换任务胶囊",
       "displayLabel": "显示位置",
-      "displayHint": "选择灵动岛显示在哪个显示器上；选择全部时，每个显示器都会显示一份。",
-      "displaySelectAria": "选择灵动岛显示器",
+      "displayHint": "选择任务胶囊显示在哪个显示器上；选全部时，每个显示器各显示一个。",
+      "displaySelectAria": "选择任务胶囊显示器",
       "displayAll": "全部显示器",
       "displayOption": "{{name}} · {{resolution}}",
       "displayNameFallback": "显示器 {{index}}",
       "displayPrimary": "主显示器",
       "displayInternal": "内置",
       "displayMissing": "已断开的显示器 {{id}}",
-      "skinLabel": "图标皮肤",
-      "skinHint": "选择灵动岛里用于运行状态的角色皮肤。",
+      "skinLabel": "角色",
+      "skinHint": "任务胶囊和灵动岛里显示的角色。",
       "soundLabel": "事件音效",
-      "soundHint": "为每类灵动岛事件选择 8-bit 音效。",
-      "soundAria": "切换灵动岛音效",
+      "soundHint": "为每类提醒选择 8-bit 音效，任务胶囊和灵动岛共用；点按的音效只在点任务胶囊时播放。",
+      "soundAria": "切换任务胶囊音效",
       "soundSelectAria": "{{event}}的音效",
       "soundPreviewAria": "预览{{event}}音效",
       "skinAnimationAria": "切换{{skin}}的预览动画",
@@ -2393,7 +2438,7 @@
         },
         "boli": {
           "name": "波利",
-          "description": "粉色波利，轻快地在键盘边蹦跶；想让灵动岛更软萌一点就选它。"
+          "description": "粉色波利，轻快地蹦蹦跶跶；想让任务胶囊更软萌一点就选它。"
         },
         "whitesnow": {
           "name": "苹果妹",
@@ -5089,7 +5134,7 @@
         "ariaLabel": "选择第二备选辅助模型"
       },
       "emptySlot": "未选择",
-      "customHint": "轻量文本按所选顺序尝试；内置审核不可用时，也用于自动审核兜底。所选供应商会收到审核上下文，包括消息与引用内容、任务与操作详情及拦截记录、身份与权限、文件路径和操作系统。",
+      "customHint": "轻量文本按所选顺序尝试；内置审核不可用时，也用于自动审核兜底。所选供应商会收到审核上下文，包括消息与引用内容、Agent 的公开文字（仅作参考）、任务与操作详情及拦截记录、身份与权限、文件路径和操作系统。",
       "signInHint": "登录 Cindy 后可使用自动推荐；未登录时请在自定义中选择已配置的其他供应商模型。",
       "chooseAgent": "选择 Agent",
       "backToAgents": "返回选择 Agent",
@@ -6104,7 +6149,7 @@
         "hook": "Cindy IM 机器人"
       },
       "hook": {
-        "description": "把 Slack 和 Telegram 接入同一个 Cindy：消息都会派发到这台设备，共享项目清单与 session 执行链；账号绑定和运行偏好按渠道隔离。",
+        "description": "把 Slack、Telegram、飞书 / Lark 等渠道接入同一个 Cindy：消息都会派发到这台设备，共用这里的项目清单和任务；账号绑定和运行偏好按渠道分开保存。",
         "slackDescription": "绑定 Slack workspace，在 Slack 里 @Cindy 派发任务。",
         "slackDisabledHint": "打开开关即发起 Slack 授权，绑定完成后即可在 Slack 里派活。",
         "slackBoundHint": "已完成绑定。关闭开关将解除绑定，重新打开需再次授权。",
@@ -6325,6 +6370,45 @@
             "revoked": "已解除关联",
             "superseded": "已关联到另一台设备"
           }
+        },
+        "feishu": {
+          "description": "从飞书发消息，交给工作电脑处理。",
+          "disabledHint": "打开开关后，在浏览器里授权飞书账号，或把关联码发给飞书机器人。",
+          "toggleAria": "切换飞书 / Lark 连接",
+          "connect": "关联飞书",
+          "openApp": "打开授权页",
+          "cancel": "取消关联",
+          "retry": "重新关联",
+          "openBot": "打开飞书机器人",
+          "unlink": "解绑飞书",
+          "unlinkConfirmTitle": "解绑飞书？",
+          "unlinkConfirmDescription": "仅解绑这台电脑。",
+          "unavailableHint": "你所在的组织还没有配置飞书机器人，请联系组织管理员。",
+          "unavailableHintPersonal": "飞书机器人暂未向个人账号开放。",
+          "status": {
+            "checking": "正在检查服务器支持…",
+            "unavailable": "组织未配置",
+            "unavailablePersonal": "暂未开放",
+            "disabled": "已停用",
+            "none": "未绑定",
+            "pending": "在浏览器里授权，或把关联码发给飞书机器人",
+            "awaiting_confirmation": "请在飞书 / Lark 里确认更换这台电脑关联的账号",
+            "confirmed": "{{user}} 已关联飞书机器人",
+            "denied": "已拒绝授权",
+            "expired": "授权已过期",
+            "failed": "关联失败",
+            "revoked": "已解除关联",
+            "superseded": "这台电脑已关联到另一个飞书 / Lark 账号",
+            "appChanged": "飞书机器人已更换，请重新关联"
+          },
+          "bindCode": {
+            "label": "关联码",
+            "copy": "复制关联码",
+            "copied": "关联码已复制",
+            "hint": "或者在飞书里把关联码私聊发给 Cindy 机器人"
+          },
+          "setWorkingDevice": "设为工作电脑",
+          "workingDeviceSet": "已设为工作电脑"
         }
       },
       "summary": {
@@ -6343,7 +6427,7 @@
     "tina": {
       "chat": {
         "title": "对话",
-        "description": "不落任何仓库的纯对话；在 Slack、Telegram 或 X 里选择 chat 即可使用，每条对话 lane 独立对应一个任务。"
+        "description": "不落任何仓库的纯对话；在 Slack、Telegram、X 或飞书 / Lark 里选择 chat 即可使用，每条对话 lane 独立对应一个任务。"
       },
       "prefs": {
         "agentLabel": "Agent",
@@ -6353,6 +6437,7 @@
         "providerSlack": "Slack",
         "providerTelegram": "Telegram",
         "providerX": "X",
+        "providerFeishu": "飞书 / Lark",
         "requireConnected": "连接 {{provider}} 后可编辑（先在上方开启对应开关并等待连接成功）。",
         "offlineLocal": "{{provider}} 暂时连不上，改动会保存在本机；连上后同步到对话里的模型卡。",
         "requireBinding": "先完成 {{provider}} 账号关联后可编辑。",
@@ -13956,7 +14041,11 @@
       "mailAttach": "添加附件",
       "mailRemoveAttachment": "移除 {{name}}",
       "mailUpdated": "草稿已更新（只读）",
-      "mailLegacy": "历史草稿（只读）"
+      "mailLegacy": "历史草稿（只读）",
+      "taskAutoArchived": "已归档「{{title}}」",
+      "taskAutoArchivedUndo": "撤销",
+      "taskAutoArchivePending": "离开后自动归档",
+      "taskAutoArchiveCancel": "本次不归档"
     },
     "ghostHook": {
       "blockedFallback": "消息被插件拦下，未发送",
@@ -13992,6 +14081,8 @@
       "updateHost": "请先更新执行任务的电脑，再打开侧边追问。",
       "failed": "打开侧边追问失败，请稍后重试。",
       "mainTaskOnly": "请从主任务打开侧边追问。",
+      "sharedTaskUnavailable": "共享任务不支持侧边追问",
+      "archivedTask": "请先取消归档，再打开侧边追问",
       "closeTitle": "关闭侧边追问？",
       "closeDescription": "将停止并删除本次追问，主任务不受影响。",
       "closeConfirm": "关闭并删除",
@@ -19107,6 +19198,9 @@
     "pendingApprovals": "{{count}} 个待确认"
   },
   "richAnswer": {
+    "invalidImageReference": "图片引用无效，无法显示。",
+    "requestImageAgain": "请助手重新显示",
+    "requestImageAgainMessage": "请重新显示这张已有图片（{{name}}，引用：{{source}}）。请核对原工具结果或原文件并使用真实地址，不要重新生成；无法确认是哪张图片时先问我。",
     "send": "发送消息",
     "sending": "正在发送…",
     "sent": "已提交",
@@ -19538,5 +19632,23 @@
     "rendered": "查看文稿",
     "wrap": "自动换行",
     "lineNumbers": "行号"
+  },
+  "subscriptionAccounts": {
+    "title": "订阅账号",
+    "note": "首个账号沿用 CLI 默认目录，新增账号独立登录。新任务按策略分配，已有任务保留原账号。",
+    "strategy": "负载均衡",
+    "add": "添加账号",
+    "default": "默认目录",
+    "ready": "已连接",
+    "signedOut": "需要登录",
+    "unavailable": "暂时读不到状态",
+    "limited": "配额已用完",
+    "remove": "移出账号",
+    "removeTitle": "移出 {{name}}？",
+    "removeDescription": "Cindy 将不再给这个账号分配任务。CLI 登录和对话历史仍保留在本机。",
+    "failed": "无法读取或更新账号。请检查 CLI 登录和网络连接后重试。",
+    "used": "已用 {{percent}}%",
+    "directory": "账号目录",
+    "login": "登录"
   }
 }

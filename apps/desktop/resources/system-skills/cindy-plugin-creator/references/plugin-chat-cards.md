@@ -76,6 +76,14 @@ cindy.onHostMessage(async function (msg) {
   新版 Host 给旧卡打宿主标记，桌面和新手机整张隐去（插件 html 伪造不了标记）；旧 Host 和旧手机忽略它，显示这次更新的 html，
   所以仍要给旧卡一段指向新位置的简短文字（如「最新状态在下方」）。
   表单动作活动归原 callId，完成后原地更新；不用额外画空的 spawnCallId 卡片。
+- **卡片内打开已有任务**：声明 `card.externalLinks` 后可写
+  `<a href="cindy://session/<任务ID>">打开原任务</a>`。仅接受 1–128 位字母、数字、
+  下划线或连字符组成的任务 ID，不接受 query、hash、路径穿越或其它 Cindy 命令。
+  宿主将它变成任务导航，鼠标点击、Enter 和空格均可打开；不会交给插件或 Agent，
+  也不会用系统浏览器打开。手机版沿当前任务的原有任务链接导航入口处理。
+  此能力需包含该支持的新版 Desktop/Mobile；旧版本会保留文字但不能点击。
+  发布依赖此能力的插件前，先确认宿主已发布，并据实际 release 设置最低版本。
+
 - **可放外部链接**(外链 v3,经宿主确认):写 `<a href="https://…">官网</a>`,或在
   任意可用标签上挂 `data-ghost-link="https://…"`(整块可点)。仅收**整串**
   http/https URL(≤2048 字,不合法只丢属性——文字保留、点不动)。用户点击时主机
@@ -110,6 +118,12 @@ cindy.onHostMessage(async function (msg) {
   同一份状态把这些部分藏起来,手机上也不再显示;状态查不到时原样显示,旧版主机忽略这个属性。
   手机只在卡片含 PR 状态位或指向该 PR 的链接时定时重读,所以带这个标记的卡片要同时保留其中之一
   (例如标题链接到 PR),否则手机上的卡片要等重新进入页面才会更新。
+- **PR 结束后的归档任务按钮**:`button` 加 `data-ghost-task-archive="owner/repo#123"`,不要再加
+  `data-ghost-action` / `data-ghost-link`(加了主机就不认这个标记)。写成 `display:none`,按钮名放在
+  `aria-label`,用你自己的样式(如 `::before{content:attr(aria-label)}`)画出文字。主机按标题栏同一份状态在
+  PR 已合并或关闭时露出它(查不到状态时看 `data-ghost-task-archive-state="merged|closed"` 快照),点击由主机
+  走标准归档流程,插件收不到这次点击。用户开了自动归档时再加空值 `data-ghost-task-archive-auto`:主机自己确认
+  已合并、用户看过并离开、且归档不会丢东西时才归档。旧版主机和手机不显示这颗按钮。
 - **手机端呈现提示**(手机不跑卡片 HTML,只收文字和原生按钮;这几个属性让它画得更像卡片):
   - 主操作 `button` 加空值属性 `data-ghost-primary`,手机画成主按钮;
   - 开关型设置的 `button` 加 `data-ghost-toggle="on|off"`,按钮里第一行文字是标题、其余是说明,
