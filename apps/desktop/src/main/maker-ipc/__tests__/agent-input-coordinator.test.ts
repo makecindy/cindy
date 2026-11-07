@@ -1609,6 +1609,7 @@ function createHarness(opts?: {
         reason?: string;
         sdkError?: string;
         errorStatus?: number;
+        codexErrorInfo?: string;
       }
     | undefined = { kind: 'none' };
   let observedCurrentTurnTerminalThrows = false;
@@ -1881,6 +1882,7 @@ function createHarness(opts?: {
             reason?: string;
             sdkError?: string;
             errorStatus?: number;
+            codexErrorInfo?: string;
           }
         | undefined,
     ) {
@@ -8623,6 +8625,62 @@ describe('AgentInputCoordinator steer transaction', () => {
     expect(h.sendToAgent).toHaveBeenCalledTimes(1);
     expect(h.steerToAgent).toHaveBeenCalledTimes(1);
     expect(latestProjection(h.projections).recovery).toBeNull();
+  });
+
+  it('补收的终端快照把 codexErrorInfo 一起转发给续跑判定', async () => {
+    vi.useFakeTimers();
+    try {
+      const h = createHarness();
+      const sid = 'drain-lost-terminal-codex-retries-exhausted';
+      h.setResumableTurnErrorCandidate((signals) => signals.reason === 'empty-response');
+      h.setResumableTurnErrorTakeover({
+        error: 'empty response',
+        attempt: 1,
+        maxAttempts: 5,
+        sessionTotal: 1,
+      });
+      h.coordinator.enqueue(sid, makeItem('q-1', 'first'));
+      await flush();
+
+      h.setLiveRunning(false);
+      h.setLiveSessionPresent(true);
+      h.setRunning(false);
+      // 终态快照是「协调器先于 error 回调补收」的那条路径。丢掉 codexErrorInfo 时，
+      // 529 + empty-response 会命中自动续跑白名单，再跑一整轮采样重试（#8309）。
+      h.setObservedCurrentTurnTerminal({
+        kind: 'error',
+        generation: 0,
+        message: 'stream disconnected before completion',
+        reason: 'empty-response',
+        sdkError: 'server_error',
+        errorStatus: 529,
+        codexErrorInfo: 'responseTooManyFailedAttempts',
+      });
+      h.reconcileTurnIdle.mockImplementation(() => true);
+      h.coordinator.enqueue(sid, makeItem('q-2', 'queued-after-error'));
+      await flush();
+      await vi.advanceTimersByTimeAsync(250);
+      await flush();
+
+      expect(h.onResumableTurnError).toHaveBeenCalledWith(
+        sid,
+        expect.objectContaining({
+          reason: 'empty-response',
+          errorStatus: 529,
+          codexErrorInfo: 'responseTooManyFailedAttempts',
+        }),
+        expect.objectContaining({ clientId: 'q-1' }),
+      );
+      // 生产分类器拿到这个 tag 后必须拒绝续跑。
+      expect(isInterruptedTurnError({
+        message: 'stream disconnected before completion',
+        reason: 'empty-response',
+        errorStatus: 529,
+        codexErrorInfo: 'responseTooManyFailedAttempts',
+      })).toBe(false);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it('does not settle a deferred persist done against a later-generation error snapshot', async () => {
