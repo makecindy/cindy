@@ -885,7 +885,6 @@ describe('teammate turn principal', () => {
     live(h);
     const admitted = async (request: ReturnType<typeof helper>) =>
       withToolCallAuthority(h.authorize, request, async () => 'changed');
-    expect(await admitted(helper('send_to_agent', { target_id: 'other', message: 'hi' }))).toBe('changed');
     expect(await admitted(helper('continue_workbench_task', { task_id: 'handed', message: 'Carry on' }))).toBe('changed');
     expect(await admitted(helper('set_workbench_task_responsibility', { task_id: 'handed', responsible: false }))).toBe('changed');
     expect(await admitted(helper('set_session_runtime', { model: 'self' }))).toBe('changed');

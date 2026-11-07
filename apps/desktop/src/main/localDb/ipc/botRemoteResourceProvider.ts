@@ -1,5 +1,4 @@
 import { TEAMMATE_STATUS_ORDER, resolveTeammateStatus } from '@cindy/maker-shared/teammate-status';
-import { readForwardedRequestSource } from '../../../shared/forwardedRequest.js';
 import { createHash } from 'node:crypto';
 import { botTodoRemoteProjection } from './botTodoRemoteProjection.js';
 import { todoAccess } from '../../maker-ipc/botTodoAccess.js';
@@ -25,7 +24,6 @@ import { RemoteResourceRegistryError, remoteResourceRegistry } from '../../devic
 import { routineTools } from '../../routines/service.js';
 import { broadcastBotRemoteResourceChanged } from '../../maker-ipc/botRemoteResourceInvalidation.js';
 import { markBotReadPositions, readBotReadPosition } from '../../maker-ipc/botReadStateStore.js';
-import { getBotRemoteMessageService } from '../../maker-ipc/botRemoteMessageReceiver.js';
 import { isIpcError } from '../../../shared/ipc-errors.js';
 import {
   BOT_REMOTE_RESOURCE_KIND,
@@ -187,7 +185,7 @@ export function registerBotRemoteResourceProvider(management?: typeof botRemoteM
         } });
       }
       resource.links = [...(resource.links ?? []), {rel:'todos',label:{fallback:'Todos',translations:{'zh-CN':'待办','zh-TW':'待辦',ja:'Todo',ko:'할 일', "es":"Tareas pendientes","fr":"Tâches à faire","de":"Aufgaben","pt-PT":"Tarefas","pt-BR":"Tarefas","zh-Hant-x-lzh":"待辦","zh-Hans-x-lzh":"待办"}},target:{kind:'resource',ref:{collectionId:TEAMMATES_REMOTE_COLLECTION_ID,kind:'bot',id:'todos:'+source.id}}}];
-      return { ...resource, teammateMessaging: { version: 1, available: source.status === 'active' } };
+      return resource;
     },
     async invoke(context, request) {
       if (request.actionId === 'todo-update' || request.actionId === 'todo-act') {
@@ -251,47 +249,8 @@ export function registerBotRemoteResourceProvider(management?: typeof botRemoteM
       if (management && request.actionId === 'open-agent-import' && request.resourceRef?.id === 'create') return {
         effects: [{ kind: 'navigate', target: { kind: 'resource', ref: { collectionId: 'companion-import', kind: 'import', id: 'sources' } } }],
       };
-      const scope = captureDataOwnerBroadcastScope();
-      if (request.actionId !== 'send-message' && request.actionId !== 'verify-message' && request.actionId !== 'message-receipt') {
-        if (management) return management.invoke(context, request);
-        throw new RemoteResourceRegistryError('UNSUPPORTED_CAPABILITY', 'Unknown teammate action');
-      }
-      const input = request.input;
-      const requestSource = readForwardedRequestSource(input?.requestSource);
-      if (input?.requestSource !== undefined && !requestSource) {
-        throw new RemoteResourceRegistryError('NOT_FOUND', 'Invalid teammate request source');
-      }
-      const validBotId = (value: unknown): value is string => typeof value === 'string' && /^[A-Za-z0-9_-]{1,128}$/.test(value);
-      const validMessageId = (value: unknown): value is string => typeof value === 'string' && /^[A-Za-z0-9_-]{1,80}$/.test(value);
-      if (!validBotId(request.resourceRef?.id) || !validBotId(request.actionId === 'verify-message' ? input?.targetBotId : input?.senderBotId) || !validMessageId(input?.messageId)
-        || (request.actionId !== 'message-receipt' && (typeof input?.message !== 'string' || !input.message.trim() || input.message.length > (input.requestSource ? 200_000 : 12_000)))) {
-        throw new RemoteResourceRegistryError('NOT_FOUND', 'Invalid teammate message');
-      }
-      const source = await readVisibleBotSource(request.resourceRef.id);
-      if (!source) throw new RemoteResourceRegistryError('NOT_FOUND', 'remote resource does not exist');
-      if (!isDataOwnerBroadcastScopeCurrent(scope)) throw new RemoteResourceRegistryError('NOT_FOUND', 'Account changed');
-      const service = getBotRemoteMessageService();
-      if (!service) throw new RemoteResourceRegistryError('UNSUPPORTED_CAPABILITY', 'Teammate messaging is unavailable');
-      if (request.actionId === 'message-receipt') {
-        const receipt = await service.readRemoteReceipt({ controllerDeviceId: context.controllerDeviceId,
-          senderBotId: input.senderBotId as string, targetBotId: request.resourceRef.id,
-          messageId: input.messageId });
-        return { effects: [], ...receipt };
-      }
-      if (request.actionId === 'verify-message') {
-        const verified = await service.verifyRemoteMessage({ controllerDeviceId: context.controllerDeviceId,
-          senderBotId: request.resourceRef.id, targetBotId: input.targetBotId as string,
-          ...(requestSource ? { requestSource } : {}),
-          messageId: input.messageId, message: input.message as string });
-        return { effects: [], verified };
-      }
-      const teammateMessage = await service.receiveRemote({
-        controllerDeviceId: context.controllerDeviceId,
-        senderBotId: input.senderBotId as string, targetBotId: request.resourceRef.id,
-        ...(requestSource ? { requestSource } : {}),
-        messageId: input.messageId, message: input.message as string,
-      });
-      return { effects: [], teammateMessage };
+      if (management) return management.invoke(context, request);
+      throw new RemoteResourceRegistryError('UNSUPPORTED_CAPABILITY', 'Unknown teammate action');
     },
   });
   getAgentIslandService()?.subscribeSessionActivity(({ sessionId, previous, current }) => {

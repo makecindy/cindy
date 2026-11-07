@@ -88,11 +88,10 @@ import { createAppMessageSender } from '../mcp-apps/messageSender.js';
 import { MCP_APP_MESSAGE_GUARD, type McpAppMessageGuard } from '../mcp-apps/message.js';
 import { mcpAppModelContext } from '../mcp-apps/runtime.js';
 import { prepareCompanionImportDeletion } from '../bot-import/host.js';
-import { createBotMessageTransport } from './botMessageTransport.js';
+import { createTeammateDirectory } from './teammateDirectory.js';
 import { MANAGED_LLAMACPP_PROVIDER_ID, llamaCppModelPreset, llamaCppMaxContextSize } from '../../shared/llamaCpp.js';
 import { getManagedLlamaCppService } from '../local-model-runtime/llamaCppService.js';
 import { ensureManagedLlamaCppProvider } from '../local-model-runtime/managedLlamaCppProvider.js';
-import { setBotRemoteMessageService } from './botRemoteMessageReceiver.js';
 import { handleListDevices, defaultDeps as deviceDirectoryDeps } from '../device-link/ipc.js';
 import { configureBotAutonomyHost, getBotAutonomyGlance, noteBotAutonomyInputProjection } from '../bot-autonomy/hub.js';
 import { countMachineRunningTasks } from '../machines/directory.js';
@@ -3214,7 +3213,6 @@ const botRuntimeRestoreCoordinator = createBotRuntimeRestoreCoordinator({
       : null;
   },
   readServices: () => ({
-    directMessages: botDirectMessageServiceHolder,
     delegation: botDelegationServiceHolder,
   }),
   log,
@@ -13760,48 +13758,8 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
   });
 
   botDirectMessageServiceHolder = createBotDirectMessageService({
-    captureRequest: captureSessionAgentRequest,
-    transport: createBotMessageTransport({ selfDeviceId: getSelfDeviceId,
+    directory: createTeammateDirectory({
       listDevices: () => handleListDevices(deviceDirectoryDeps()), invoke: invokeBotPeer }),
-    discardQueuedDelivery: async (sessionId, clientId, assertOwner) => {
-      await inputCoordinator.ensureQueueRestored(sessionId);
-      assertOwner();
-      inputCoordinator.remove(sessionId, clientId);
-    },
-    hasQueuedDelivery: async (sessionId, clientId) => {
-      await inputCoordinator.ensureQueueRestored(sessionId);
-      return inputCoordinator.hasKnownClientId(sessionId, clientId);
-    },
-    dispatch: ({
-      autoReviewUserText,
-      targetSessionId,
-      dispatcherSessionId,
-      message,
-      persistedContent,
-      clientId,
-      onAccepted,
-      onAcceptedRollback,
-    }) =>
-      dispatchBotSessionMessage({
-        autoReviewUserText,
-        targetSessionId,
-        dispatcherSessionId,
-        message,
-        persistedContent,
-        clientId,
-        onAccepted: onAccepted
-          ? async () => {
-              try {
-                await onAccepted();
-              } catch (error) {
-                throw new AcceptedCallbackDispatchCancelled(
-                  error instanceof Error ? error.message : String(error),
-                );
-              }
-            }
-          : undefined,
-        onAcceptedRollback,
-      }),
     ensureCanonicalSession: async (botId, beforeRecovery) => {
       if (!botDelegationServiceHolder) {
         return { ok: false as const, errorCode: 'DELEGATION_UNAVAILABLE', message: '伙伴消息服务尚未就绪' };
@@ -13813,13 +13771,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       isDataOwnerBroadcastScopeCurrent(
         scope as ReturnType<typeof captureDataOwnerBroadcastScope>,
       ),
-    onChanged: (payload, scope) => {
-      const ownerScope = scope as ReturnType<typeof captureDataOwnerBroadcastScope> | undefined;
-      if (ownerScope && !isDataOwnerBroadcastScopeCurrent(ownerScope)) return;
-      broadcastToAllWindows(MAKER_PUSH.BOT_DIRECT_MESSAGE_CHANGED, payload, ownerScope);
-    },
   });
-  setBotRemoteMessageService(botDirectMessageServiceHolder);
   botGroupChatServiceHolder?.dispose();
   // 分工 steps run in the group's folder, the 项目文件夹, or one worktree per plan (bot-group-chat.md §7.5).
   const botGroupAttachments = createBotGroupAttachmentStore({ ownerRoot: () => ownerScopedUserDataPath(), log });
@@ -21005,9 +20957,9 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
         try { await assertPluginTargetQueuedDelivery(sessionId, item.clientId); }
         catch { throw new AcceptedCallbackDispatchCancelled('Plugin target delivery is no longer authorized'); }
       }
+      // Teammate-to-teammate messages left in a queue from before V2 have no sender to answer.
       if (restoredFromSnapshot && item.clientId.startsWith('bot-dm:')) {
-        if (!botDirectMessageServiceHolder) throw new AcceptedCallbackDispatchCancelled('Bot message recovery unavailable');
-        await botDirectMessageServiceHolder.assertRestoredQueuedDelivery(sessionId, item.clientId);
+        throw new AcceptedCallbackDispatchCancelled('Teammate direct messages were retired');
       }
       // 已派发 → 该项不会再走 discard,释放 scheduler 的 discard 监听防泄漏。
       schedulerQueuedPromptDiscardWatchers.delete(item.clientId);

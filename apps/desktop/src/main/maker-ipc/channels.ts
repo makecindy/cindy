@@ -1019,8 +1019,6 @@ export const MAKER_PUSH = {
   ORCA_WORKER_CHANGED: 'maker:orca:worker-changed',
   /** Bot 间委派状态改变；payload 带父/子任务 id，广播自动附 owner generation。 */
   BOT_DELEGATION_CHANGED: 'maker:bot-delegation:changed',
-  /** Hidden Bot pair conversation accepted another message or reached its limit. */
-  BOT_DIRECT_MESSAGE_CHANGED: 'maker:bot-direct-message:changed',
   /** A Bot group, its members, messages or running round changed. */
   BOT_GROUP_CHANGED: 'maker:bot-group:changed',
   /** Local complete-app windows only; never forwarded to Device Link. */

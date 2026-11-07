@@ -288,6 +288,7 @@ describe('agent-facing Composer projection', () => {
         availability: 'ready',
         activity: 'working',
         activeDelegations: 2,
+        mainSessionId: 'dash-main',
       },
     };
 
@@ -298,7 +299,7 @@ describe('agent-facing Composer projection', () => {
     expect(projected).toContain('Bot ID: "bot-control-1"');
     expect(projected).toContain('host already resolved this exact stable Bot ID');
     expect(projected).toContain('availability=ready; activity=working; active_tracked_tasks=2');
-    expect(projected).toContain("call send_to_agent once with this Bot ID");
+    expect(projected).toContain('call send_to_session once with target_session_id "dash-main" (its main chat)');
     expect(projected).toContain("use start_session_task instead");
     expect(projected).toContain("message only confirms delivery");
     expect(projected).toContain('Do not list Bots');

@@ -122,6 +122,7 @@ async function readBotHostSnapshot(
           ? 'idle'
           : 'unknown',
       activeDelegations: activeDelegations.length,
+      ...(canonical ? { mainSessionId: canonical.sessionId } : {}),
       ...(profile.attentionReason
         ? { reason: profile.attentionReason.slice(0, 240) }
         : !canonical

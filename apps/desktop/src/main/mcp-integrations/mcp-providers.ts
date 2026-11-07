@@ -35,7 +35,7 @@ import { taskActionRoutineRevision } from '../maker-ipc/taskActionAuthorization.
 import { join as pathJoin } from 'node:path';
 import { homedir } from 'node:os';
 import { app } from 'electron';
-import { and, eq, inArray, isNull } from 'drizzle-orm';
+import { and, eq, isNull } from 'drizzle-orm';
 
 import {
   createLiziMcpProviders,
@@ -1237,34 +1237,10 @@ export function createDesktopMcpProviders(deps: DesktopMcpProvidersDeps): LiziMc
           if (!svc) return { ok: false, errorCode: 'HOST_NOT_READY', message: t('groupTools.privateUnavailable') };
           return svc.sendToUser(params);
         },
-        checkMessage: async (params) => {
-          const svc = tryGetBotDirectMessageService();
-          if (!svc) return { ok: false, errorCode: 'HOST_NOT_READY', message: 'Teammate messaging is unavailable' };
-          return svc.checkMessage(params);
-        },
         listAgents: async ({ callerSessionId }) => {
           const svc = tryGetBotDirectMessageService();
           if (!svc) return { ok: false, errorCode: 'HOST_NOT_READY', message: 'Teammate service is not ready' };
           return svc.listAgents(callerSessionId);
-        },
-        messageAgent: async (params) => {
-          const svc = tryGetBotDirectMessageService();
-          if (!svc) {
-            return {
-              ok: false,
-              errorCode: 'HOST_NOT_READY',
-              message: 'Bot direct message service not initialized',
-            };
-          }
-          try {
-            return await svc.messageAgent(params);
-          } catch (err) {
-            return {
-              ok: false,
-              errorCode: 'INTERNAL',
-              message: err instanceof Error ? err.message : String(err),
-            };
-          }
         },
       },
       botRoutines: {

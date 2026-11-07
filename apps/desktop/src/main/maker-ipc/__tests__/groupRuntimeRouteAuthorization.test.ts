@@ -65,6 +65,9 @@ it.each(['catalog', 'harness-read', 'native-preview', 'valid-harness', 'valid-mo
       resolveSessionRuntimeAxes: () => ({ ok: true, effort: null, fastMode: false }),
       mergeSessionRuntimeProfilePatch,
       runtimeSelectionRequiresModelWindowConfirmation: () => false,
+      // A deliberate choice becomes the task's own; this boundary does not inspect that bookkeeping.
+      updateScheduledPreference: async () => true,
+      reconcileBotModelRoute: { acceptTaskChoice: async () => {} },
       agentSwitchDeps: {
         getSessionRow: async () => {
           if (point === 'harness-read') revoked = true;

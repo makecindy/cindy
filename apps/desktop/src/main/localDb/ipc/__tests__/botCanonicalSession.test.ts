@@ -5716,8 +5716,7 @@ describe('Bot Session task end-to-end runtime', () => {
     await seedPair(); seedGroupLane();
     const release = registerGroupToolAuthority('group-lane', { botId: 'bot-a', mode: 'owner',
       sourceGroup: { groupId: 'fixture', name: 'Fixture group' }, isCurrent: () => true, validate: async () => {} });
-    const dispatch = vi.fn();
-    const service = createBotDirectMessageService({ dispatch });
+    const service = createBotDirectMessageService({});
     try {
       h.getSession.mockReturnValue({ isTurnRunning: () => running, compactSession: vi.fn() });
       const sent = await service.sendToUser({ callerSessionId: 'group-lane', message: 'Explicit private reply', idempotencyKey: 'visible-private-fixture' });
@@ -5737,7 +5736,6 @@ describe('Bot Session task end-to-end runtime', () => {
       h.sqlite!.prepare('UPDATE sessions SET cleared_at=? WHERE id=?').run(row.createdAt + 3, sent.targetSessionId);
       expect(await list(row.createdAt - 1)).toMatchObject({ unreadCount: 0 });
       expect((await getBotRemoteResourceSource('bot-a')).lastReplyAt).toBe(0);
-      expect(dispatch).not.toHaveBeenCalled();
     } finally { release(); }
   });
 
@@ -5745,8 +5743,7 @@ describe('Bot Session task end-to-end runtime', () => {
     await seedPair(); seedGroupLane();
     const release = registerGroupToolAuthority('group-lane', { botId: 'bot-a', mode: 'owner',
       sourceGroup: { groupId: 'fixture' }, isCurrent: () => true, validate: async () => {} });
-    const dispatch = vi.fn();
-    const service = createBotDirectMessageService({ dispatch });
+    const service = createBotDirectMessageService({});
     const input = { callerSessionId: 'group-lane', message, idempotencyKey: 'exact-text-fixture' };
     try {
       const first = await service.sendToUser(input);
@@ -5757,54 +5754,8 @@ describe('Bot Session task end-to-end runtime', () => {
       expect(await service.sendToUser({ ...input, message: message + ' changed' }))
         .toMatchObject({ ok: false, errorCode: 'IDEMPOTENCY_CONFLICT' });
       expect(h.sqlite!.prepare("SELECT count(*) FROM messages WHERE client_id LIKE 'bot-group-private:%'").pluck().get()).toBe(1);
-      expect(dispatch).not.toHaveBeenCalled();
     } finally { release(); }
   });
-
-  it.each((['missing', 'deleted'] as const).flatMap(state => [false, true].map(revoke => ({ state, revoke }))))(
-    'guards peer canonical recovery after its async lookup ($state, revoke=$revoke)', async ({ state, revoke }) => {
-      await seedPair(); seedGroupLane();
-      await invoke('local-db:bots:create', { id: 'bot-b', name: 'Peer', capabilities: { harness: 'pi', model: 'grok-4.5', providerId: PROVIDER } });
-      const peer = await invoke('local-db:bots:create-canonical-session', { botId: 'bot-b', expectedCanonicalSessionId: null, expectedProfileVersion: 1 }) as { canonicalSessionId: string };
-      if (state === 'missing') {
-        h.sqlite!.pragma('foreign_keys = OFF');
-        h.sqlite!.prepare('DELETE FROM sessions WHERE id=?').run(peer.canonicalSessionId);
-        h.sqlite!.pragma('foreign_keys = ON');
-      } else h.sqlite!.prepare("UPDATE sessions SET status='deleted' WHERE id=?").run(peer.canonicalSessionId);
-      let revoked = false;
-      let crossed = false;
-      const release = registerGroupToolAuthority('group-lane', { botId: 'bot-a', mode: 'owner',
-        sourceGroup: { groupId: 'fixture' }, isCurrent: () => true,
-        validate: async () => { if (revoked) throw new GroupToolAuthorizationError(); } });
-      const select = h.db!.select.bind(h.db!);
-      const spy = vi.spyOn(h.db!, 'select').mockImplementation(fields => {
-        const query = select(fields);
-        if (fields?.role === botSessionLinks.role && fields?.status === sessions.status) {
-          crossed = true;
-          queueMicrotask(() => { revoked = revoke; });
-        }
-        return query;
-      });
-      const runtime = createDelegationRuntime();
-      const service = createBotDirectMessageService({ dispatch: runtime.dispatch, ensureCanonicalSession: runtime.delegation.ensureCanonicalSession });
-      const sessionCount = h.sqlite!.prepare('SELECT count(*) FROM sessions').pluck().get();
-      try {
-        const result = await service.messageAgent({ callerSessionId: 'group-lane', targetBotId: 'bot-b', message: 'Fixture peer request' });
-        expect(crossed).toBe(true);
-        if (revoke) {
-          expect(result).toMatchObject({ ok: false, errorCode: 'GROUP_AUTHORIZATION_REQUIRED' });
-          expect(h.sqlite!.prepare('SELECT count(*) FROM sessions').pluck().get()).toBe(sessionCount);
-          expect(h.sqlite!.prepare("SELECT session_id FROM bot_session_links WHERE bot_id='bot-b' AND role='canonical' AND archived_at IS NULL").pluck().get()).toBe(peer.canonicalSessionId);
-          expect(runtime.dispatch).not.toHaveBeenCalled();
-          expect(h.sqlite!.prepare('SELECT count(*) FROM bot_direct_messages').pluck().get()).toBe(0);
-        } else {
-          expect(result).toMatchObject({ ok: true });
-          if (!result.ok) throw new Error(result.message);
-          expect(result.targetSessionId).not.toBe(peer.canonicalSessionId);
-          expect(h.sqlite!.prepare('SELECT status FROM sessions WHERE id=?').pluck().get(result.targetSessionId)).toBe('active');
-        }
-      } finally { spy.mockRestore(); release(); runtime.dispose(); }
-    });
 
   it.each(['missing', 'deleted'] as const)('repairs a %s canonical chat for group private messages and independent tasks', async state => {
     await seedPair(); seedGroupLane();
@@ -5817,7 +5768,7 @@ describe('Bot Session task end-to-end runtime', () => {
       botId: 'bot-a', mode: 'owner', sourceGroup: { groupId: 'fixture' }, isCurrent: () => true, validate: async () => {},
     });
     const runtime = createDelegationRuntime();
-    const direct = createBotDirectMessageService({ dispatch: runtime.dispatch, ensureCanonicalSession: runtime.delegation.ensureCanonicalSession });
+    const direct = createBotDirectMessageService({ ensureCanonicalSession: runtime.delegation.ensureCanonicalSession });
     try {
       const sent = await direct.sendToUser({ callerSessionId: 'group-lane', message: 'Recovered private chat', idempotencyKey: 'recovery-fixture' });
       expect(sent).toMatchObject({ ok: true, delivered: true });
@@ -5853,15 +5804,13 @@ describe('Bot Session task end-to-end runtime', () => {
       }
       return result;
     };
-    const dispatch = vi.fn();
-    const service = createBotDirectMessageService({ dispatch,
+    const service = createBotDirectMessageService({
       captureOwnerScope: () => ({ ownerScopeKey: h.ownerScopeKey, ownerStamp: { dataOwnerId: 'owner-a', ownerGeneration: 1 } }),
       isOwnerScopeCurrent: scope => scope.ownerScopeKey === h.ownerScopeKey });
     try {
       expect(await service.sendToUser({ callerSessionId: 'group-lane', message: 'Must stay private', idempotencyKey: 'post-write-revoke' }))
         .toMatchObject({ ok: false, errorCode: 'GROUP_AUTHORIZATION_REQUIRED' });
       expect(h.sqlite!.prepare("SELECT count(*) FROM messages WHERE content = 'Must stay private'").pluck().get()).toBe(0);
-      expect(dispatch).not.toHaveBeenCalled();
     } finally { h.tx = originalTx; release(); }
   });
 
@@ -5949,7 +5898,7 @@ describe('Bot Session task end-to-end runtime', () => {
       validate: async () => { if (revoked) throw new GroupToolAuthorizationError(); },
     });
     const runtime = createDelegationRuntime();
-    const direct = createBotDirectMessageService({ dispatch: runtime.dispatch, ensureCanonicalSession: runtime.delegation.ensureCanonicalSession });
+    const direct = createBotDirectMessageService({ ensureCanonicalSession: runtime.delegation.ensureCanonicalSession });
     const before = h.sqlite!.prepare('SELECT id FROM sessions ORDER BY id').all();
     const links = h.sqlite!.prepare('SELECT * FROM bot_session_links ORDER BY id').all();
     try {
@@ -5967,17 +5916,11 @@ describe('Bot Session task end-to-end runtime', () => {
     } finally { release(); runtime.dispose(); }
   });
 
-  it.each((['private-message', 'peer-message'] as const).flatMap(operation =>
+  it.each((['private-message'] as const).flatMap(operation =>
     (['deleted', 'unlinked'] as const).map(state => ({ operation, state }))))('does not commit $state canonical recovery for $operation after preparation revokes the grant', async ({ operation, state }) => {
     await seedPair(); seedGroupLane();
-    const targetBotId = operation === 'peer-message' ? 'bot-b' : 'bot-a';
-    let canonicalSessionId = 'session-1';
-    if (operation === 'peer-message') {
-      await invoke('local-db:bots:create', { id: targetBotId, name: 'Peer', capabilities: { harness: 'pi', model: 'grok-4.5', providerId: PROVIDER } });
-      const peer = await invoke('local-db:bots:create-canonical-session', { botId: targetBotId, expectedCanonicalSessionId: null, expectedProfileVersion: 1 });
-      canonicalSessionId = peer.canonicalSessionId;
-    }
-    h.sqlite!.prepare("UPDATE sessions SET status='deleted' WHERE id=?").run(canonicalSessionId);
+    const targetBotId = 'bot-a';
+    h.sqlite!.prepare("UPDATE sessions SET status='deleted' WHERE id=?").run('session-1');
     if (state === 'unlinked') {
       h.sqlite!.prepare("DELETE FROM bot_session_links WHERE bot_id=? AND role='canonical'").run(targetBotId);
       h.sqlite!.prepare('UPDATE bot_profiles SET canonical_session_id=NULL WHERE id=?').run(targetBotId);
@@ -5994,13 +5937,11 @@ describe('Bot Session task end-to-end runtime', () => {
     const tx = vi.fn(baseTx);
     h.tx = tx;
     const runtime = createDelegationRuntime();
-    const service = createBotDirectMessageService({ dispatch: runtime.dispatch, ensureCanonicalSession: runtime.delegation.ensureCanonicalSession });
+    const service = createBotDirectMessageService({ ensureCanonicalSession: runtime.delegation.ensureCanonicalSession });
     try {
       const result = operation === 'private-message'
         ? await service.sendToUser({ callerSessionId: 'group-lane', message: 'Fixture', idempotencyKey: 'no-recovery-commit' })
-        : operation === 'peer-message'
-          ? await service.messageAgent({ callerSessionId: 'group-lane', targetBotId, message: 'Fixture' })
-          : await runtime.delegation.startSessionTask({ callerSessionId: 'group-lane', objective: 'Fixture' });
+        : await runtime.delegation.startSessionTask({ callerSessionId: 'group-lane', objective: 'Fixture' });
       expect(revoked).toBe(true);
       expect(result).toMatchObject({ ok: false, errorCode: 'GROUP_AUTHORIZATION_REQUIRED' });
       expect(tx.mock.calls.map(([name]) => name)).not.toContain('bots.replaceCanonicalSession');
@@ -6720,61 +6661,6 @@ describe('Bot Session task end-to-end runtime', () => {
       } finally { release(); for (const reset of restore) reset(); }
     },
   );
-
-  it.each(['delete-first', 'message-first'])('serializes shared-history writes and deletion (%s)', async (order) => {
-    await seedPair();
-    const target = await invoke('local-db:bots:create-canonical-session', {
-      botId: 'bot-1', expectedCanonicalSessionId: null, expectedProfileVersion: 1,
-    });
-    const sqlite = h.sqlite!;
-    let release!: () => void;
-    const barrier = new Promise<void>((resolve) => { release = resolve; });
-    let entered!: () => void;
-    const atBoundary = new Promise<void>((resolve) => { entered = resolve; });
-    const realTx = h.tx!;
-    h.tx = async (name, args) => {
-      const result = await realTx(name, args);
-      if (order === 'delete-first' && name === 'bots.prepareProfileDeletion') {
-        entered();
-        await barrier;
-      }
-      return result;
-    };
-    const ensureCanonicalSession = vi.fn(async () => ({ ok: true as const, sessionId: target.session.id }));
-    const dispatch = vi.fn(async () => {
-      if (order === 'message-first') { entered(); await barrier; }
-      return { ok: true as const, targetSessionId: target.session.id, wakeKind: 'queued' as const };
-    });
-    const direct = createBotDirectMessageService({ dispatch, ensureCanonicalSession });
-    const lifecycle = createBotLifecycleService({
-      maker: { closeSession: h.closeSession } as never,
-      getDelegationService: () => null,
-      deleteProfileAndDetachSessions: async (botId, sessionIds, keepTaskHistory) => {
-        await realTx('bots.deleteProfile', { botId, sessionIds, keepTaskHistory, at: Date.now() });
-      },
-    });
-    const remove = () => lifecycle.run({ botId: 'bot-a', action: 'delete', confirmName: '发起方伙伴', keepTaskHistory: true });
-    const send = () => direct.messageAgent({ callerSessionId: 'session-1', targetBotId: 'bot-1', message: 'Race against deletion' });
-    const first = order === 'delete-first' ? remove() : send();
-    await atBoundary;
-    const second = order === 'delete-first' ? send() : remove();
-    if (order === 'delete-first') await vi.waitFor(() => expect(ensureCanonicalSession).toHaveBeenCalled());
-    release();
-    const [firstResult, secondResult] = await Promise.allSettled([first, second]);
-    if (order === 'delete-first') {
-      expect(firstResult, firstResult.status === 'rejected' ? String(firstResult.reason) : '').toMatchObject({ status: 'fulfilled', value: { status: 'deleted' } });
-      expect(secondResult).toMatchObject({ status: 'fulfilled', value: { ok: false } });
-      expect(dispatch).not.toHaveBeenCalled();
-      expect(sqlite.prepare('SELECT * FROM bot_direct_message_threads').all()).toEqual([]);
-      expect(sqlite.prepare('SELECT * FROM bot_direct_messages').all()).toEqual([]);
-    } else {
-      expect(firstResult).toMatchObject({ status: 'fulfilled', value: { ok: true } });
-      expect(secondResult, secondResult.status === 'rejected' ? String(secondResult.reason) : '').toMatchObject({ status: 'fulfilled', value: { status: 'deleted' } });
-      expect(sqlite.prepare("SELECT id FROM bot_profiles WHERE id = 'bot-a'").get()).toBeUndefined();
-      expect(sqlite.prepare('SELECT * FROM bot_direct_message_threads').all()).toHaveLength(1);
-      expect(sqlite.prepare('SELECT * FROM bot_direct_messages').all()).toHaveLength(1);
-    }
-  });
 
   it.each(['delayed', 'failed'])('revokes caller capabilities while Session close is %s', async (mode) => {
     await seedPair();

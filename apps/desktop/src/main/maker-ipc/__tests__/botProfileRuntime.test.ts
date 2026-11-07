@@ -78,14 +78,14 @@ describe('Bot Profile runtime prompt', () => {
   it('keeps orchestration in a capped core and the details one read away', () => {
     const prompt = buildBotCapabilityContextPrompt();
     expect(prompt.length).toBeLessThanOrEqual(TEAMMATE_CORE_MAX_CHARS);
-    for (const tool of ['`read_teammate_skill`', '`send_to_agent`', '`find_teammate_capabilities`', '`set_teammate_capability`',
+    for (const tool of ['`read_teammate_skill`', '`send_to_session`', '`find_teammate_capabilities`', '`set_teammate_capability`',
       '`get_teammate_state`', '`update_teammate_profile`', '`ghost_list`', '`connect_account`'])
       expect(prompt).toContain(tool);
     for (const topic of Object.keys(TEAMMATE_CORE_TOPICS)) expect(prompt).toContain(`\`${topic}\``);
     // Moved, not dropped: the task and teammate boundaries live in their topics.
     expect(TEAMMATE_CORE_TOPICS.tasks.body).toContain('Completion returns automatically');
     expect(TEAMMATE_CORE_TOPICS.tasks.body).toContain('the user explicitly requests an independent task');
-    expect(TEAMMATE_CORE_TOPICS.teammates.body).toContain('It is not a task and has no progress or cancellation');
+    expect(TEAMMATE_CORE_TOPICS.teammates.body).toContain('A message is not a task and has no progress or cancellation');
     expect(TEAMMATE_CORE_TOPICS.teammates.body).toContain('offer either a message or a tracked Session task');
     // MCP (Chris 2026-11-01): config files are not a connection and a new task is never the fix;
     // registering uses Cindy's own form and an already-joined server is left alone.
@@ -119,7 +119,7 @@ describe('Bot Profile runtime prompt', () => {
     const prompt = buildBotCapabilityContextPrompt({ helperAvailable: false });
     expect(prompt).toContain('Respect the memory switch');
     expect(prompt).not.toContain('`read_teammate_skill`');
-    expect(prompt).not.toContain('`send_to_agent`');
+    expect(prompt).not.toContain('`send_to_session`');
     expect(prompt).not.toContain('`save_teammate_skill`');
     expect(prompt).not.toContain('ghost_list');
   });
@@ -161,7 +161,7 @@ describe('Bot Profile runtime prompt', () => {
         buildBotProfileContextPrompt(identity.name),
         buildBotCapabilityContextPrompt(),
       ].join('\n\n');
-      expect(runtimePrompt).toContain('`send_to_agent`');
+      expect(runtimePrompt).toContain('`send_to_session`');
       expect(runtimePrompt).toContain('`read_teammate_skill`');
       expect(runtimePrompt).not.toContain('redirecting them to a separate team workflow.\n\nYou are');
     }

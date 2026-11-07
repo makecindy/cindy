@@ -98,6 +98,8 @@ export interface AgentInputBotHostSnapshot {
   availability: 'ready' | 'degraded' | 'failed' | 'unverified' | 'unavailable';
   activity: 'working' | 'idle' | 'unknown';
   activeDelegations: number;
+  /** The teammate's main chat on this computer; messages to it go through send_to_session. */
+  mainSessionId?: string;
   /** Bounded host diagnosis; never raw capability or transcript data. */
   reason?: string;
 }
@@ -542,10 +544,14 @@ function readBotHostSnapshot(value: unknown): AgentInputBotHostSnapshot | null {
   const reason = typeof candidate.reason === 'string'
     ? oneLine(candidate.reason).slice(0, 240)
     : '';
+  const mainSessionId = typeof candidate.mainSessionId === 'string' && /^[A-Za-z0-9_-]{1,128}$/.test(candidate.mainSessionId)
+    ? candidate.mainSessionId
+    : '';
   return {
     availability: availability as AgentInputBotHostSnapshot['availability'],
     activity: activity as AgentInputBotHostSnapshot['activity'],
     activeDelegations: activeDelegations as number,
+    ...(mainSessionId ? { mainSessionId } : {}),
     ...(reason ? { reason } : {}),
   };
 }
@@ -653,7 +659,7 @@ function formatReference(reference: AgentInputReference): string {
         : [
             "Host status: not refreshed. Do not invent availability or activity.",
           ]),
-      "Action: infer intent from the surrounding request. Answer status questions from Host status without sending a new message. To contact this teammate, call send_to_agent once with this Bot ID. For independently tracked work or deliverables, use start_session_task instead; it does not target a Bot.",
+      `Action: infer intent from the surrounding request. Answer status questions from Host status without sending a new message. To contact this teammate, call send_to_session once with ${snapshot?.mainSessionId ? `target_session_id ${quotedMetadata(snapshot.mainSessionId)} (its main chat)` : 'the session_id that list_agents returns for this Bot ID'}. For independently tracked work or deliverables, use start_session_task instead; it does not target a Bot.`,
       "Boundary: Do not blindly forward the surrounding user text. A teammate message only confirms delivery and must never stand in for a tracked task.",
       '[/Referenced Cindy Bot]',
     ].join('\n');

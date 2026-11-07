@@ -185,7 +185,7 @@ export const HELPER_CATEGORY_DESCRIPTIONS: Record<(typeof CATEGORY_ENUM)[number]
   handoff: '给已有任务发消息或新建任务。新建可指定 title；省略 project_path 继承来源归属，传已有项目路径切换项目，传 null 创建不绑项目的任务。执行目录独立，不隐式创建项目。发给已有任务可跨电脑（deviceId::sessionId）；新建的任务与文件仍在本机，新建时可用 agent_device_id 选择 Agent 使用哪台电脑的远程或分享供应商（取 list_available_models 的 locations）。',
   skills: 'Skill 的搜索、发布与学习。本机与 SkillHub。',
   app_update: `检查与安装本机的 ${BRAND_NAME} 更新。本机。`,
-  bots: '伙伴：资料、能力、关联项目（list_teammate_projects / set_teammate_project，仅自身）、工作台、待办、后台任务、伙伴间消息与主力电脑。例行任务用 routine_list / routine_save；schedule_list_models 查可选模型、来源、档位与已知价格，modelOverride 与 sessionMode 设置每条例行任务的模型与运行方式。伙伴间消息（list_agents / send_to_agent）、主力电脑（get_teammate_home / move_teammate_home）、总调度伙伴读取与继续另一台电脑上的任务（read_workbench_task / continue_workbench_task 传 deviceId::sessionId）可跨电脑；其余本机。',
+  bots: '伙伴：资料、能力、关联项目（list_teammate_projects / set_teammate_project，仅自身）、工作台、待办、后台任务、发现伙伴与主力电脑。例行任务用 routine_list / routine_save；schedule_list_models 查可选模型、来源、档位与已知价格，modelOverride 与 sessionMode 设置每条例行任务的模型与运行方式。发现伙伴（list_agents，返回伙伴主对话的 session_id，发消息用 handoff 类的 send_to_session）、主力电脑（get_teammate_home / move_teammate_home）、总调度伙伴读取与继续另一台电脑上的任务（read_workbench_task / continue_workbench_task 传 deviceId::sessionId）可跨电脑；其余本机。',
 };
 
 interface SessionTaskCallbacks {
@@ -230,36 +230,10 @@ interface BotMessagingCallbacks {
   sendToUser?(params: { callerSessionId: string; message: string; idempotencyKey: string }): Promise<
     { ok: true; messageId: string; targetSessionId: string; delivered: boolean }
     | { ok: false; errorCode: string; message: string }>;
-  checkMessage?(params: { callerSessionId: string; messageId: string }): Promise<
-    { ok: true } | { ok: false; errorCode: string; message: string }>;
   listAgents?(params: { callerSessionId: string;
   }): Promise<
     | { ok: true; agents: unknown[]; unavailableDevices: unknown[] }
     | { ok: false; errorCode: string; message: string }>;
-
-  messageAgent(params: {
-    callerSessionId: string;
-    targetBotId: string;
-    message: string;
-  }): Promise<
-    | {
-        ok: true;
-        targetBotId: string;
-        targetBotName: string;
-        targetSessionId: string;
-        wakeKind: 'resumed' | 'already-active' | 'created' | 'queued' | 'unknown';
-        messageId?: string;
-        delivered?: boolean;
-        transport?: 'remote-conversation';
-      }
-    | {
-        ok: false;
-        errorCode: string;
-        message: string;
-        availableBots?: Array<{ id: string; name: string }>;
-        messageId?: string;
-      }
-  >;
 }
 
 // ── Entry tool registration ──────────────────────────────────────────────────
@@ -434,7 +408,7 @@ function registerStartSessionTaskEntry(
       'Normally omit model_selection: the host uses the teammate task model, or inherits its current model when no task model is configured. When the user requests another model or this task needs a different available capability, read get_app_default_model and pass an available route id in model_selection, with supported effort or fast_mode if needed. The id binds model, provider account and Harness together. This changes only this task, never application or teammate defaults. An unavailable explicit choice fails instead of silently using another model.',
       'Choose the route internally when starting the task. In ordinary replies, briefly describe the work or result; do not repeat the delegated instruction, tool names, argument names, route JSON, or task/session ids. The task card already tracks progress. Explain model or routing details when the user asks, and explain failures in plain language with the action needed.',
       'Pass the objective, constraints, known facts, relevant files, completed actions, and acceptance criteria in instruction; the task does not automatically inherit this chat. Do not duplicate its work. Review the returned result and follow up on the same task if needed.',
-      "This never calls a Cindy Bot or any other teammate. Use send_to_agent for a bounded message to a named teammate.",
+      "This never calls a Cindy Bot or any other teammate. To message a teammate, use send_to_session with the session_id from list_agents.",
       "The task appears in the user's task list and returns its completion automatically. Start it once and use check_session_task, message_session_task, or stop_session_task only when there is a concrete reason.",
     ].join('\n'),
     inputShape: {
@@ -494,8 +468,8 @@ function registerStartSessionTaskEntry(
   });
 }
 
-/** One bounded, asynchronous message between two persistent teammates. */
-function registerSendToAgentEntry(
+/** Teammate discovery and a group lane's private message to its owner. */
+function registerBotMessagingEntries(
   registry: XdtHelperToolRegistry,
   deps: XdtHelperMcpDeps,
   sessionCtx: XdtHelperMcpSessionCtx,
@@ -513,76 +487,15 @@ function registerSendToAgentEntry(
         delivered: result.delivered, read: null }) : errorPayload(result.errorCode, result.message);
     },
   });
-  if (deps.botMessaging.checkMessage) registry.register({
-    name: 'check_agent_message', category: 'bots',
-    description: 'Check your own remote message: read native acceptance receipts or ordinary replies from an older teammate conversation. Use the message_id returned by send_to_agent when its transport is remote-conversation, or after uncertain delivery. This does not send or retry. It returns native acceptance or persisted ordinary reply text, not proof of engine delivery, a remote tool call, or a completed turn. Check when following up; do not poll.',
-    inputShape: { message_id: z.string().min(1).max(80) },
-    handler: async ({ message_id }) => {
-      const callerSessionId = resolveLiziMcpSessionContext(sessionCtx).sessionId;
-      if (!callerSessionId) return errorPayload('NOT_A_BOT_SESSION', 'An active teammate is required');
-      const result = await deps.botMessaging!.checkMessage!({ callerSessionId, messageId: message_id });
-      return result.ok ? okPayload(result) : errorPayload(result.errorCode, result.message);
-    },
-  });
   if (deps.botMessaging.listAgents) registry.register({
     name: 'list_agents', category: 'bots',
-    description: 'Discover teammates on this device and other authorized devices. Use the exact returned id with send_to_agent; device names distinguish namesakes. unavailableDevices explains incomplete discovery. Do not guess IDs or poll.',
+    description: 'Discover teammates on this device and other authorized devices. To talk to one, pass its session_id (its main chat; deviceId::sessionId on another computer) to send_to_session. Device names distinguish namesakes; unavailableDevices explains incomplete discovery. Do not guess IDs or poll.',
     inputShape: {},
     handler: async () => {
       const callerSessionId = resolveLiziMcpSessionContext(sessionCtx).sessionId;
       if (!callerSessionId) return errorPayload('NOT_A_BOT_SESSION', 'An active teammate is required');
       const result = await deps.botMessaging!.listAgents!({ callerSessionId });
       return result.ok ? okPayload(result) : errorPayload(result.errorCode, result.message);
-    },
-  });
-  registry.register({
-    name: 'send_to_agent',
-    category: 'bots',
-    description: [
-      'Send one asynchronous message to a named Cindy Bot teammate.',
-      'Use it for a brief question, discussion, or information transfer. It does not create a task, status, progress, cancellation, or a completion contract.',
-      "The message remains visible in both teammates' timelines. The recipient may answer in a later turn. Do not poll or send acknowledgement-only replies.",
-      'For independently tracked development or deliverable work, open a task instead.',
-      'Use the exact stable id from list_agents (deviceId::botId for a remote teammate) or a structured @Bot reference. Never route by name.',
-    ].join('\n'),
-    inputShape: {
-      // deviceId (80) + separator (2) + existing Bot profile ID (128).
-      target_id: z.string().min(1).max(210),
-      message: z.string().min(1).max(12_000).describe('The message to send to the teammate.'),
-    },
-    handler: async ({ target_id, message }) => {
-      const callerSessionId = resolveLiziMcpSessionContext(sessionCtx).sessionId;
-      if (!callerSessionId) {
-        return errorPayload('NOT_A_BOT_SESSION', '当前调用未绑定 Cindy 伙伴任务。');
-      }
-      const result = await deps.botMessaging!.messageAgent({
-        callerSessionId,
-        targetBotId: target_id,
-        message: message.trim(),
-      });
-      if (!result.ok) {
-        return errorPayload(result.errorCode, result.message, {
-          ...(result.messageId ? { message_id: result.messageId } : {}),
-          ...(result.availableBots
-            ? { available_agents: result.availableBots }
-            : {}),
-        });
-      }
-      return okPayload({
-        action: 'send_to_agent',
-        accepted: true,
-        delivered: result.delivered ?? result.wakeKind !== 'queued',
-        replied: false,
-        ...(result.transport ? { transport: result.transport } : {}),
-        ...(result.messageId ? { message_id: result.messageId } : {}),
-        target_id: result.targetBotId,
-        target_name: result.targetBotName,
-        wake_kind: result.wakeKind,
-        guidance:
-          result.transport === 'remote-conversation'
-            ? 'The older host accepted a clearly attributed message in its ordinary conversation. Use check_agent_message with message_id to read its reply on follow-up; do not resend or poll. The older teammate does not actively send cross-device replies.'
-            : 'The host accepted this message. Queued acceptance is not delivery or a reply. End this turn; only an actual incoming message proves a reply.',
-      });
     },
   });
 }
@@ -1181,7 +1094,7 @@ export function createXdtHelperMcpServer(
   }
 
   registerStartSessionTaskEntry(registry, deps, sessionCtx);
-  registerSendToAgentEntry(registry, deps, sessionCtx);
+  registerBotMessagingEntries(registry, deps, sessionCtx);
   registerSessionTaskControlEntries(registry, deps, sessionCtx);
   if (deps.botProfiles) {
     registerCreateTeammateTool(registry, {

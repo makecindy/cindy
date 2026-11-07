@@ -167,7 +167,7 @@ describe('设置页与会话挂载读的是同一份磁盘事实', () => {
     expect(cindy.baseline.pluginRoot).not.toContain('bot-cindy');
     const source = await fs.readFile(fresh.baseline.skill.filePath, 'utf8');
     // The mounted core mirrors the preloaded one: orchestration plus the read_teammate_skill index.
-    for (const tool of ['send_to_agent', 'get_app_default_model', 'update_teammate_profile', 'set_teammate_capability', 'ghost_list', 'read_teammate_skill'])
+    for (const tool of ['send_to_session', 'get_app_default_model', 'update_teammate_profile', 'set_teammate_capability', 'ghost_list', 'read_teammate_skill'])
       expect(source).toContain(tool);
     expect(source).not.toContain('routine_list');
     expect(cindy.skills).toEqual([]);

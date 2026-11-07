@@ -292,13 +292,10 @@ function scriptedAnthropicTurn(requestBody: string): string {
           'workflow complete: READY, SUM[16], CONFIGURED[2:safe,fast], WORKSPACE[release-notes], CONTACT[Ada]',
         );
   }
-  if (requestBody.includes("direct agent message")) {
+  if (requestBody.includes("direct teammate lookup")) {
     return toolResultCount === 0
-      ? anthropicToolTurn(1, "send_to_agent", {
-          target_id: 'bot-b',
-          message: "Please review the release risk.",
-        })
-      : anthropicTextTurn(2, "message delivered");
+      ? anthropicToolTurn(1, "list_agents", {})
+      : anthropicTextTurn(2, "teammates listed");
   }
   if (requestBody.includes('direct Session task')) {
     return toolResultCount === 0
@@ -434,7 +431,7 @@ describe.skipIf(!piAvailable)('PiAgent × cindy-bridge (real pi + MCP bridge + p
   const configureCalls: Array<{ options: { retries: number; flags: string[] } }> = [];
   const workspaceLookupCalls: Array<{ query: string }> = [];
   const contactsLookupCalls: Array<{ query: string }> = [];
-  const agentMessageCalls: Array<Record<string, unknown>> = [];
+  const teammateLookupCalls: Array<Record<string, unknown>> = [];
   const sessionTaskCalls: Array<Record<string, unknown>> = [];
   const taskControlCalls: Array<{ name: string; args: unknown }> = [];
   const botMemoryCalls: Array<Record<string, unknown>> = [];
@@ -791,18 +788,15 @@ describe.skipIf(!piAvailable)('PiAgent × cindy-bridge (real pi + MCP bridge + p
           },
         );
         server.registerTool(
-              "send_to_agent",
+              "list_agents",
               {
-            description: "Send one asynchronous message to a teammate",
-                inputSchema: {
-                  target_id: z.string(),
-                  message: z.string(),
-                },
+            description: "Discover teammates and their main chats",
+                inputSchema: {},
               },
               async (args) => {
-                agentMessageCalls.push(args);
+                teammateLookupCalls.push(args);
                 return {
-                  content: [{ type: "text", text: "MESSAGE[bot-b:delivered]" }],
+                  content: [{ type: "text", text: "TEAMMATES[bot-b:b-main]" }],
                 };
               },
             );
@@ -1320,10 +1314,10 @@ describe.skipIf(!piAvailable)('PiAgent × cindy-bridge (real pi + MCP bridge + p
   );
 
   it(
-      "sends a typed teammate message directly without MCP discovery",
+      "finds teammates through a typed tool directly without MCP discovery",
       { timeout: 90_000 },
     async () => {
-        agentMessageCalls.length = 0;
+        teammateLookupCalls.length = 0;
       const permissions: Array<{ toolName: string; input: unknown }> = [];
       const { events, requests } = await runOneTurn(
         'ask',
@@ -1334,23 +1328,14 @@ describe.skipIf(!piAvailable)('PiAgent × cindy-bridge (real pi + MCP bridge + p
           return { kind: 'permission', behavior: 'allow' };
         },
         'local-multi',
-          "run direct agent message",
+          "run direct teammate lookup",
         );
 
-      expect(agentMessageCalls).toEqual([{
-            target_id: 'bot-b',
-            message: "Please review the release risk.",
-          }]);
-      expect(permissions).toEqual([{
-        toolName: "mcp__cindy_helper__send_to_agent",
-            input: {
-              target_id: 'bot-b',
-              message: "Please review the release risk.",
-            },
-      }]);
+      expect(teammateLookupCalls).toEqual([{}]);
+      expect(permissions).toEqual([{ toolName: "mcp__cindy_helper__list_agents", input: {} }]);
       const startupToolNames = (requests[0]?.tools as Array<{ name?: string }> | undefined)
         ?.map((tool) => tool.name) ?? [];
-      expect(startupToolNames).toContain("send_to_agent");
+      expect(startupToolNames).toContain("list_agents");
       expect(startupToolNames).toContain('cindy_mcp_list_tools');
       expect(requests).toHaveLength(2);
       const finalText = events
@@ -1359,7 +1344,7 @@ describe.skipIf(!piAvailable)('PiAgent × cindy-bridge (real pi + MCP bridge + p
         .filter((data) => data.isFinal)
         .map((data) => data.text)
         .join('');
-      expect(finalText).toContain("message delivered");
+      expect(finalText).toContain("teammates listed");
     },
   );
 
@@ -1423,7 +1408,7 @@ describe.skipIf(!piAvailable)('PiAgent × cindy-bridge (real pi + MCP bridge + p
             "check_session_task",
             "message_session_task",
             "stop_session_task",
-            "send_to_agent",
+            "list_agents",
           ]),
         );
         expect(startupToolNames).not.toContain('collaborate_with_bot');

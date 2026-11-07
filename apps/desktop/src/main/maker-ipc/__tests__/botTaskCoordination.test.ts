@@ -117,7 +117,7 @@ it('uses the registered host entry for both quiet and explicitly visible delegat
   expect(send.mock.calls.at(-1)?.[0]).not.toHaveProperty('botTaskCoordination');
   await dispatch({ dispatcherSessionId: 'ordinary', targetSessionId: 'parent', message: 'Ordinary task message' });
   expect(send).toHaveBeenLastCalledWith({ dispatcherSessionId: 'ordinary', targetSessionId: 'parent',
-    message: 'Ordinary task message',
+    message: 'Ordinary task message', notifyWhenDone: false,
     autoReviewUserText: { kind: 'agent-request' } });
   currentOwner = false;
   const count = send.mock.calls.length;
