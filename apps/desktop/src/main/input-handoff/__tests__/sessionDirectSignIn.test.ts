@@ -426,6 +426,32 @@ describe('a waiting card watching its window', () => {
     expect(run.finished[0]).toMatchObject({ status: 'failed', failure: 'target_gone' });
   });
 
+  it('follows the sign-in window to its new title while the browser shows a save-password bubble', async () => {
+    const { driver, state } = desktop();
+    const list = driver.windows.bind(driver);
+    driver.windows = async (options) => {
+      const windows = await list(options);
+      return state.windowTitle === 'Sign in'
+        ? windows
+        : {
+            ...windows,
+            apps: windows.apps.map((app) => ({
+              ...app,
+              windows: [
+                ...app.windows,
+                { index: 2, title: '', frame: [600, 80, 200, 120], focused: false, minimized: false },
+              ],
+            })),
+          };
+    };
+    const run = start(driver);
+    await run.session.start();
+    state.screen = 'signedIn';
+    state.windowTitle = 'Inbox';
+    await vi.waitFor(() => expect(run.finished).toHaveLength(1));
+    expect(run.finished[0]).toMatchObject({ status: 'succeeded', reason: 'detected', steps: 0, finalWindow: 'Inbox' });
+  });
+
   it('does not follow another window whose title changes as the target closes', async () => {
     const { driver, state } = desktop();
     const list = driver.windows.bind(driver);
