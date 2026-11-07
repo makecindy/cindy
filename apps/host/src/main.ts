@@ -1,3 +1,4 @@
+import os from 'node:os';
 import path from 'node:path';
 import { existsSync } from 'node:fs';
 import { getDefaultVoiceInputSettings } from '../../desktop/src/shared/voiceInputData.ts';
@@ -42,6 +43,7 @@ import {
 } from './profile-settings.mjs';
 import { createPreparedLinuxCredentialStore } from './credentials/store.mjs';
 import { createHostServer } from './server.mjs';
+import { createDeviceLinkService } from './device-link/service.mjs';
 import { createChatHandler } from './chat.mjs';
 import { createEventHub } from './events.mjs';
 import { createInputQueue } from './agent/input-queue.mjs';
@@ -205,6 +207,7 @@ async function resolveAccountUser(): Promise<AccountUser | null> {
     store,
     refresh: (token) => client.refresh(token),
   });
+  currentSessionToken = sessionToken;
   const me = await client.getMe(sessionToken) as Record<string, any>;
   const membership = me?.membership as Record<string, any> | undefined;
   if (!membership || typeof membership.id !== 'string' || !membership.id) return null;
@@ -232,6 +235,8 @@ async function resolveAccountUser(): Promise<AccountUser | null> {
 
 /** Real account profile from the adopted session; null until it resolves. */
 let accountUser: AccountUser | null = null;
+let currentSessionToken: string | null = null;
+let deviceLinkService: ReturnType<typeof createDeviceLinkService> | null = null;
 let activeOwner: string | null = null;
 let closeStorage: (() => Promise<void>) | null = null;
 let sessionStorage: OwnerSessionStorage | null = null;
@@ -245,6 +250,7 @@ async function refreshAuthSession(): Promise<boolean> {
       accountUser = user;
       account = { authenticated: true, realm: account.realm ?? resolveHostRegion() };
       eventHub.publish({ type: 'auth_changed', authenticated: true, user });
+      ensureDeviceLinkRunning();
       return true;
     }
     return false;
@@ -463,7 +469,7 @@ function writeProfileAppearance(patch: unknown) {
   return applied;
 }
 
-const server = createHostServer({
+const serverDeps = {
   token: apiToken,
   webSession,
   shimPath: path.resolve(desktopRoot, '..', 'web', 'shim.js'),
@@ -563,6 +569,11 @@ const server = createHostServer({
       logout: (accessToken) => client.logout(accessToken),
     });
     account = { authenticated: false, realm: null };
+    if (deviceLinkService) {
+      deviceLinkService.stop();
+      deviceLinkService = null;
+    }
+    currentSessionToken = null;
     return result;
   },
   listSessions: async (body?: Record<string, unknown>) => {
@@ -720,7 +731,7 @@ const server = createHostServer({
       id,
       agentKind,
       workDir: requestedWorkDir,
-      title: 'New Maker',
+      title: typeof input.title === 'string' && input.title.trim() ? input.title.trim() : 'New Maker',
       model,
       workspaceKind: input.workspaceKind === 'dialogue' ? 'dialogue' : 'project',
       projectDir: typeof input.projectDir === 'string' ? input.projectDir : null,
@@ -897,7 +908,43 @@ const server = createHostServer({
   listPlugins: () => (runtime.owner
     ? listInstalledPlugins(resolveHostDataDir(), runtime.owner)
     : { plugins: [], namespace: 'canonical', legacyNamespacePresent: false }),
-});
+};
+
+const server = createHostServer(serverDeps);
+
+function ensureDeviceLinkRunning(): void {
+  if (!deviceLinkService && account.authenticated) {
+    const realm = (account.realm ?? resolveHostRegion()) as 'cn' | 'global';
+    const { machineIdSync } = createRequire(import.meta.url)('node-machine-id');
+    deviceLinkService = createDeviceLinkService({
+      realm,
+      deviceId: machineIdSync(),
+      deviceName: os.hostname(),
+      appVersion: '0.1.128',
+      getAccessToken: async () => {
+        if (!currentSessionToken) await refreshAuthSession();
+        return currentSessionToken;
+      },
+      listSessions: (body: unknown) => serverDeps.listSessions(body as Record<string, unknown>),
+      getSession: (id: string) => serverDeps.getSession(id),
+      updateSession: (id: string, patch: Record<string, unknown>) => serverDeps.updateSession(id, patch),
+      createSession: (body: Record<string, unknown>) => serverDeps.createSession(body),
+      listMessages: (opts: { sessionId: string; limit?: number }) => serverDeps.history(opts.sessionId, opts.limit ?? 200),
+      historyView: (sessionId: string, before?: string | null) => serverDeps.historyView(sessionId, before),
+      workDetails: (sessionId: string, ref: unknown, after?: string | null) => serverDeps.workDetails(sessionId, ref, after),
+      estimatedSessionValue: (sessionId: string) => serverDeps.estimatedSessionValue(sessionId),
+      listProviders: () => serverDeps.providers(),
+      listAvailableAgents: () => serverDeps.agents(),
+      getCapabilities: (agentKind: string) => serverDeps.capabilities(agentKind),
+      listProjectAliases: () => serverDeps.listProjectAliases(),
+      listRecentWorkdirs: () => serverDeps.listRecentWorkdirs(),
+      inputQueue,
+      interactions: interactionBroker,
+      eventHub,
+    });
+    deviceLinkService.start();
+  }
+}
 
 server.on('error', (error) => {
   console.error(`cindy-host failed to listen: ${error.message}`);
@@ -916,6 +963,10 @@ server.listen(PORT, '127.0.0.1', () => {
     );
     const cleanup = () => {
       try { rmSync(path.join(resolveHostDataDir(), 'host-endpoint.json'), { force: true }); } catch { /* ignore */ }
+      if (deviceLinkService) {
+        deviceLinkService.stop();
+        deviceLinkService = null;
+      }
     };
     process.once('exit', cleanup);
     process.once('SIGTERM', () => { cleanup(); process.exit(0); });
@@ -930,6 +981,7 @@ server.listen(PORT, '127.0.0.1', () => {
         .then((user) => {
           accountUser = user;
           schedulePeriodicRefresh();
+          ensureDeviceLinkRunning();
         })
         .catch((error: unknown) => {
           console.warn('[host] account profile unavailable:', error instanceof Error ? error.message : String(error));

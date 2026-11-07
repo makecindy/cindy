@@ -657,6 +657,9 @@ importers:
       '@cindy/auth-client':
         specifier: workspace:*
         version: link:../../packages/auth-client
+      '@cindy/device-link':
+        specifier: workspace:*
+        version: link:../../packages/device-link
       '@cindy/maker-core':
         specifier: workspace:*
         version: link:../../packages/maker-core
@@ -672,6 +675,9 @@ importers:
       node-machine-id:
         specifier: ^1.1.12
         version: 1.1.12
+      ws:
+        specifier: ^8.18.0
+        version: 8.21.1
     devDependencies:
       tsx:
         specifier: ^4.19.0

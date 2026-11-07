@@ -211,6 +211,9 @@ export function createInputQueue(deps) {
 
   return {
     projection,
+    getProjection(sessionId) {
+      return projection(sessionId);
+    },
     async enqueue(sessionId, item) {
       const state = stateFor(sessionId);
       const text = typeof item?.text === 'string' ? item.text : '';

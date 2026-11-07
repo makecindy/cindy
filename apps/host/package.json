@@ -16,10 +16,12 @@
   },
   "dependencies": {
     "@cindy/auth-client": "workspace:*",
+    "@cindy/device-link": "workspace:*",
     "@cindy/maker-core": "workspace:*",
     "@cindy/maker-shared": "workspace:*",
     "@cindy/model-providers": "workspace:*",
     "better-sqlite3": "^12.9.0",
-    "node-machine-id": "^1.1.12"
+    "node-machine-id": "^1.1.12",
+    "ws": "^8.18.0"
   }
 }
