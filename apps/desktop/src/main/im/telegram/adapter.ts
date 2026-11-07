@@ -339,7 +339,10 @@ export function buildTelegramAdapter(
       return {
         agentText: `${persona}${ambientBlock}${assembly.prefix}${historyMediaNote.modelText}${replyBlock}${speakerLine}${event.text}`,
         contextSnapshot: captureImContext({
-          groupPrefix: assembly.prefix.replace('\n</group_chat_context>', `${historyMediaNote.displayText ? `\n${historyMediaNote.displayText}` : ''}\n</group_chat_context>`),
+          groupPrefix: assembly.prefix.replace(
+            '\n</group_chat_context>',
+            () => `${historyMediaNote.displayText ? `\n${historyMediaNote.displayText}` : ''}\n</group_chat_context>`,
+          ),
           groupMessageCount: assembly.messageCount,
           replyPrefix: replyBlock,
           replyMessageCount: 1,

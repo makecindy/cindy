@@ -3,6 +3,7 @@ import type { IMMessageEvent } from '@cindy/im';
 
 import { buildTelegramAdapter, TELEGRAM_TOOLS_HINT } from '../adapter';
 import { ui } from '../uiText';
+import { buildTelegramGroupContextPrefix } from '../groupWindow';
 vi.mock('../groupWindow', async (importOriginal) => ({
   ...(await importOriginal<typeof import('../groupWindow')>()),
   buildTelegramGroupContextPrefix: vi.fn(async () => ({
@@ -306,6 +307,33 @@ describe('Telegram group history media', () => {
     expect(result?.agentText.indexOf('<group_chat_attachments>')).toBeGreaterThan(
       result!.agentText.indexOf('</group_chat_context>'),
     );
+  });
+
+  it('preserves replacement markers in attachment names without expanding the display snapshot', async () => {
+    const background = '[Tom] ' + '群背景'.repeat(5_000);
+    const fileName = 'report$$-$&-$\x60-$\x27-' + '$\x60'.repeat(115) + '.txt';
+    vi.mocked(buildTelegramGroupContextPrefix).mockResolvedValueOnce({
+      prefix: `<group_chat_context>\n[群里最近的消息]\n${background}\n</group_chat_context>\n`,
+      messageCount: 1,
+      messageIds: ['80'],
+      commit: vi.fn(),
+    });
+    const adapter = buildTelegramAdapter({ collectGroupHistoryMedia: async () => ({
+      attachments: [{ kind: 'file', absPath: '/tmp/report.txt', originalName: fileName, mimeType: 'text/plain', author: 'Tom' }],
+      unavailable: [`未提供：${fileName}`],
+    }) } as never, {} as never);
+    const result = await adapter.prepareAgentTurnText?.({
+      contextId: 'bot-1', senderId: 'g/-100200', messageId: TRIGGER_MESSAGE_ID,
+      chatId: '-100200', text: '查看附件', attachments: [], unsupported: [],
+    } as never);
+    const snapshot = result!.contextSnapshot!.groupContext!;
+    expect(snapshot).toContain(fileName);
+    expect(result!.agentText).toContain(fileName);
+    expect(snapshot.length).toBeLessThanOrEqual(background.length + 1 + 4_000);
+    const modelPayload = result!.agentText.match(/<group_chat_attachments>\n([\s\S]*?)\n<\/group_chat_attachments>/)![1];
+    expect(snapshot).toBe(`${background}\n${modelPayload}`);
+    expect(result!.contextAttachments?.[0].originalName).toBe(fileName);
+    expect(result!.contextSnapshot!.groupMessageCount).toBe(1);
   });
 
   it('skips history media for ambient (always-respond) turns', async () => {
