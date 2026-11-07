@@ -38,6 +38,8 @@ export interface RelayJoinLink {
   ownerPublicKey: string;
   /** 一次性配对秘密(base64url):新设备用它证明自己的公钥。 */
   pairSecret: string;
+  /** Additive pairing for V2 on the same owner-pinned origin. Old clients continue using `code`. */
+  agentNetCode?: string;
 }
 
 /** 规范化中转地址:只接受 http(s)、不带账号密码 / 查询 / 片段;去掉末尾斜杠。 */
@@ -61,6 +63,7 @@ export function buildRelayJoinLink(input: {
   ownerPublicKey: string;
   pairSecret: string;
   app: SharedTaskInvitationApp;
+  agentNetCode?: string;
 }): string {
   const baseUrl = normalizeRelayBaseUrl(input.baseUrl);
   if (
@@ -73,6 +76,10 @@ export function buildRelayJoinLink(input: {
     throw new Error('Invalid relay join link');
   }
   const query = new URLSearchParams({ u: baseUrl, c: input.code, o: input.ownerPublicKey, s: input.pairSecret });
+  if (input.agentNetCode !== undefined) {
+    if (!/^[A-Za-z0-9_-]{32}$/.test(input.agentNetCode)) throw new Error('Invalid Agent-Net join code');
+    query.set('a', input.agentNetCode);
+  }
   return `${input.app}://${RELAY_JOIN_HOST}${RELAY_JOIN_PATH}?${query.toString()}`;
 }
 
@@ -94,7 +101,9 @@ export function parseRelayJoinLink(value: string): RelayJoinLink | null {
   if (!rawBase || !code || !JOIN_CODE_PATTERN.test(code)) return null;
   if (!isRelayPublicKey(ownerPublicKey) || !pairSecret || !PAIR_SECRET_PATTERN.test(pairSecret)) return null;
   const baseUrl = normalizeRelayBaseUrl(rawBase);
-  return baseUrl ? { baseUrl, code, ownerPublicKey, pairSecret } : null;
+  const agentNetCode = params.get('a');
+  if (agentNetCode !== null && !/^[A-Za-z0-9_-]{32}$/.test(agentNetCode)) return null;
+  return baseUrl ? { baseUrl, code, ownerPublicKey, pairSecret, ...(agentNetCode ? { agentNetCode } : {}) } : null;
 }
 
 // ─── 加入流程 ────────────────────────────────────────────────────────────────

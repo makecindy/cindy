@@ -198,6 +198,8 @@ export interface DeviceLinkDeviceView {
 export type DeviceLinkPeerPath = 'direct' | 'relay';
 export interface DeviceLinkPeerLinkView {
   deviceId: string;
+  /** Absent on old hosts; true only for a link carried by the authenticated V2 stream. */
+  encrypted?: boolean;
   path: DeviceLinkPeerPath;
   /** 可靠帧 ACK 的平滑往返;首个 ACK 之前为 null,闲置时是最近测得的值 */
   rttMs: number | null;

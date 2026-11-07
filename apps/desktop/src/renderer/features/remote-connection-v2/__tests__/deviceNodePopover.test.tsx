@@ -47,6 +47,12 @@ const remoteDesktop = () => screen.queryByRole('button', { name: 'remoteDesktop.
 afterEach(() => cleanup());
 
 describe('DeviceNodePopover', () => {
+  // The UI must distinguish certified V2, legacy relay exposure and an old host's unknown status.
+  it.each([[true, 'encrypted'], [false, 'legacyConnection'], [undefined, 'encryptionUnknown']] as const)('shows the actual encryption status %s', (encrypted, key) => {
+    render(<DeviceNodePopover node={node({ encrypted })} relayName="Cindy" onRemoteDesktop={vi.fn()} />);
+    expect(screen.getByText('settings.remoteControl.v2.popover.' + key)).toBeTruthy();
+    expect(!!screen.queryByText('settings.remoteControl.v2.popover.legacyEncryptionHint')).toBe(encrypted === false);
+  });
   it('只展示信息:没有开关、没有删除,也没有「管理设备…」', () => {
     render(<DeviceNodePopover node={node()} relayName="Cindy" onRemoteDesktop={vi.fn()} />);
     expect(screen.queryAllByRole('switch')).toHaveLength(0);

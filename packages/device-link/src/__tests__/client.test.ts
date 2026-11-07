@@ -112,6 +112,7 @@ function makeHarness(opts?: {
   peerResetReadRetry?: ConstructorParameters<typeof DeviceLinkClient>[0]['peerResetReadRetry'];
   invokeMetrics?: ConstructorParameters<typeof DeviceLinkClient>[0]['invokeMetrics'];
   frameAuth?: ConstructorParameters<typeof DeviceLinkClient>[0]['frameAuth'];
+  transportAllowed?: () => boolean;
 }): Harness {
   const sockets: FakeWs[] = [];
   const client = new DeviceLinkClient({
@@ -134,6 +135,7 @@ function makeHarness(opts?: {
     peerResetReadRetry: opts?.peerResetReadRetry,
     invokeMetrics: opts?.invokeMetrics,
     frameAuth: opts?.frameAuth,
+    transportAllowed: opts?.transportAllowed,
     timing: {
       reconnectBaseMs: 5,
       reconnectMaxMs: 40,
@@ -147,6 +149,43 @@ function makeHarness(opts?: {
 }
 
 const tick = (ms = 0): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
+
+describe('host transport policy', () => {
+  // Regression: settings can change before an asynchronous relay restart closes
+  // the old socket. Exercise the real send and inbound paths during that gap.
+  it('blocks an already open socket immediately, including late inbound frames', async () => {
+    let allowed = true;
+    const h = makeHarness({ transportAllowed: () => allowed, timing: { pingIntervalMs: 60_000 } });
+    const received = vi.fn();
+    h.client.onFrame(received);
+    try {
+      h.client.start(); await tick(); h.current().ack();
+      h.current().push({ v: PROTOCOL_VERSION, kind: 'push', src: 'peer-a', payload: { channel: 'unit', payload: 1 } });
+      expect(received).toHaveBeenCalled();
+      received.mockClear();
+      const sent = h.current().sent.length;
+      allowed = false;
+      const request = h.client.invoke('peer-a', { channel: 'sessions:list', args: [] });
+      await expect(request).rejects.toMatchObject({ code: 'CHANNEL_NOT_ALLOWED' });
+      h.current().push({ v: PROTOCOL_VERSION, kind: 'push', src: 'peer-a', payload: { channel: 'unit', payload: 2 } });
+      await tick();
+      expect(h.current().sent).toHaveLength(sent);
+      expect(received).not.toHaveBeenCalled();
+    } finally { h.client.stop(); }
+  });
+
+  it('closes a socket whose upgrade completes after the host disables its transport', async () => {
+    let allowed = true;
+    const h = makeHarness({ transportAllowed: () => allowed });
+    try {
+      h.client.start(); await tick();
+      allowed = false;
+      expect(() => h.current().emit('open')).not.toThrow();
+      expect(h.current().closed?.code).toBe(1000);
+      expect(h.current().sent).toHaveLength(0);
+    } finally { h.client.stop(); }
+  });
+});
 
 describe('outbound invoke admission', () => {
   // Unit, PR #9153: resource actions share one channel. Valid parsed actionId

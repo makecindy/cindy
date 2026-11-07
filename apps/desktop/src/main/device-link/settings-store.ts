@@ -30,6 +30,9 @@ import { createLogger } from '../logger';
 const log = createLogger('device-link-settings');
 
 export interface DeviceLinkSettings {
+  /** Device-local V2 preference; absent in existing files means V1. */
+  agentNetEnabled?: boolean;
+  agentNetOnlyEncrypted?: boolean;
   /** Full desktop viewing/input is a separate, local opt-in. */
   remoteDesktopEnabled: boolean;
   remoteControlEnabled: boolean;
@@ -48,6 +51,8 @@ export interface DeviceLinkSettings {
 }
 
 const DEFAULTS: DeviceLinkSettings = {
+  agentNetEnabled: false,
+  agentNetOnlyEncrypted: false,
   remoteDesktopEnabled: false,
   remoteControlEnabled: false,
   keepAwake: false,
@@ -64,6 +69,8 @@ function normalize(raw: unknown): DeviceLinkSettings {
   if (!raw || typeof raw !== 'object') return { ...DEFAULTS };
   const r = raw as Record<string, unknown>;
   return {
+    agentNetEnabled: r.agentNetEnabled === true,
+    agentNetOnlyEncrypted: r.agentNetOnlyEncrypted === true,
     remoteDesktopEnabled: r.remoteDesktopEnabled === true,
     remoteControlEnabled: r.remoteControlEnabled === true,
     keepAwake: r.keepAwake === true,

@@ -7,7 +7,7 @@
  * tier:unit。实测耗时:纯函数,<1s。
  */
 
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 
 import {
   FLOW_WINDOW_MS,
@@ -26,6 +26,8 @@ import {
   _resetRemoteConnectionV2ForTests,
   getRemoteConnectionV2Enabled,
   setRemoteConnectionV2Enabled,
+  setRemoteConnectionOnlyEncrypted,
+  getRemoteConnectionOnlyEncrypted,
 } from '../useRemoteConnectionV2';
 
 function device(partial: Partial<DeviceLinkDeviceView> & { deviceId: string }): DeviceLinkDeviceView {
@@ -330,6 +332,32 @@ describe('appendPresenceEvent', () => {
 });
 
 describe('useRemoteConnectionV2 持久化', () => {
+  // Main now owns the setting: a rejected start must not display an enabled transport, and late replies cannot undo a newer choice.
+  it('waits for the host commit, preserves the old value on failure and ignores a stale toggle reply', async () => {
+    const previous = Object.getOwnPropertyDescriptor(window, 'electronAPI');
+    const replies: Array<(value: unknown) => void> = [];
+    const command = vi.fn(() => new Promise((resolve) => replies.push(resolve)));
+    Object.defineProperty(window, 'electronAPI', { configurable: true, value: { selfHostedRelay: { command } } });
+    _resetRemoteConnectionV2ForTests(); localStorage.removeItem('remoteConnection.v2');
+    try {
+      const failed = setRemoteConnectionV2Enabled(true);
+      expect(getRemoteConnectionV2Enabled()).toBe(false);
+      replies.shift()!({ error: 'START_FAILED', state: { agentNetEnabled: false } });
+      await expect(failed).rejects.toThrow('START_FAILED');
+      expect(getRemoteConnectionV2Enabled()).toBe(false);
+      const first = setRemoteConnectionV2Enabled(true), second = setRemoteConnectionV2Enabled(false);
+      replies[1]({ state: { agentNetEnabled: false } }); await second;
+      replies[0]({ state: { agentNetEnabled: true } }); await first;
+      expect(getRemoteConnectionV2Enabled()).toBe(false); expect(localStorage.getItem('remoteConnection.v2')).toBeNull();
+      const encryption = setRemoteConnectionOnlyEncrypted(true);
+      expect(getRemoteConnectionOnlyEncrypted()).toBe(false);
+      replies[2]({ state: { agentNetEnabled: false, agentNetOnlyEncrypted: true } }); await encryption;
+      expect(getRemoteConnectionOnlyEncrypted()).toBe(true);
+    } finally {
+      if (previous) Object.defineProperty(window, 'electronAPI', previous); else Reflect.deleteProperty(window, 'electronAPI');
+      _resetRemoteConnectionV2ForTests(); localStorage.removeItem('remoteConnection.v2');
+    }
+  });
   it('只存 override:开写 on,关删 key,坏值当默认关', () => {
     _resetRemoteConnectionV2ForTests();
     localStorage.removeItem('remoteConnection.v2');

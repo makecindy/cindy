@@ -14,6 +14,8 @@ import type { RelayConfig } from '../selfHostedRelayConfig';
 import type { SelfHostedRelayCommand, SelfHostedRelayCommandResult } from '../../../shared/selfHostedRelay';
 import { RELAY_VERSION } from '../../../../../../packages/device-link-relay/src/version';
 import { RELAY_DEPLOY_STEPS } from '../../../shared/selfHostedRelay';
+import { resetClientEndpointsForTest } from '../../clientEndpointsService.js';
+import { TEST_CLIENT_ENDPOINTS } from '../../../test/vitest/clientEndpointsFixture.js';
 
 const h = vi.hoisted(() => ({
   owner: 'account-a',
@@ -29,6 +31,7 @@ const h = vi.hoisted(() => ({
   deploy: vi.fn(),
   uninstall: vi.fn(),
   startServer: vi.fn(),
+  onlyEncrypted: false,
 }));
 
 vi.mock('electron', () => ({
@@ -46,6 +49,7 @@ vi.mock('../../authManager.js', () => ({
   getAuthState: () => ({ isAuthenticated: true }),
   getCurrentUserId: () => h.owner,
   getDeviceId: () => 'test-device',
+  getActiveAuthRealm: () => 'global',
   onAuthStateChange: (cb: () => void) => { h.authChanged = cb; },
 }));
 vi.mock('../../logger.js', () => ({ createLogger: () => ({ info: vi.fn(), warn: vi.fn(), error: vi.fn() }) }));
@@ -54,7 +58,9 @@ vi.mock('../../utils/ipcValidate.js', () => ({ throwIpcError: (code: string) => 
 vi.mock('../invoke-context.js', () => ({ getDeviceLinkInvokeContext: () => null }));
 vi.mock('../deviceName.js', () => ({ deviceName: () => 'Test computer' }));
 vi.mock('../providerShareApi.js', () => ({ providerShareLinkApp: () => 'cindy' }));
-vi.mock('../settings-store.js', () => ({ readDeviceLinkSettings: () => ({ keepAwake: true }) }));
+vi.mock('../settings-store.js', () => ({ readDeviceLinkSettings: () => ({ keepAwake: true, agentNetOnlyEncrypted: h.onlyEncrypted }),
+  writeDeviceLinkSetting: async (key: string, value: boolean) => { if (key === 'agentNetOnlyEncrypted') h.onlyEncrypted = value; },
+}));
 vi.mock('../selfHostedRelayFrameAuth.js', () => ({ refreshRelayCertificatesSoon: vi.fn() }));
 vi.mock('../index.js', () => ({
   broadcast: vi.fn(), getDeviceLinkConnectionIssue: () => null,
@@ -83,6 +89,7 @@ vi.mock('../selfHostedRelayConfig.js', () => ({
   activeRelayOrigin: () => h.config.get(h.owner)?.active?.origin ?? null,
   secureStorageAvailable: () => true, installSelfHostedRelayRouting: vi.fn(),
   relayDataPath: () => 'in-memory-relay-data',
+  readHostNotificationBridgeConfig: () => undefined,
 }));
 
 import { getState, registerSelfHostedRelayIpc } from '../selfHostedRelayRuntime';
@@ -112,6 +119,8 @@ async function switchOwner(owner: string) {
 }
 
 beforeEach(async () => {
+  resetClientEndpointsForTest(TEST_CLIENT_ENDPOINTS);
+  h.onlyEncrypted = false;
   vi.useFakeTimers();
   vi.clearAllMocks();
   h.owner = 'account-a';
@@ -126,6 +135,15 @@ afterEach(() => { vi.useRealTimers(); vi.unstubAllGlobals(); });
 
 const deploymentOf = (owner = 'account-a', sshHostId = 'test-server') =>
   h.config.get(owner)!.deployments.find((deployment) => deployment.sshHostId === sshHostId);
+
+// Minimal privacy policy change must reach the host-owned preference and close compatibility routes.
+// Existing deployment tests did not exercise the new IPC command (unit tier, no network).
+it('commits the encrypted-only policy through the existing IPC and reconnects with the new rule', async () => {
+  const result = await command({ type: 'set-agent-net-encryption', enabled: true });
+  expect(result.error).toBeUndefined(); expect(result.state.agentNetOnlyEncrypted).toBe(true);
+  expect(h.restart).toHaveBeenCalledTimes(1);
+  expect((await command({ type: 'state' })).state.agentNetOnlyEncrypted).toBe(true);
+});
 
 // 用户 2026-10-30：部署是部署，切换要让用户自己切。原实现部署完成就改用新中转。
 // 最小输入：官方线路上部署一次，再显式 use-deployment。tier: unit。

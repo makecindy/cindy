@@ -13,7 +13,6 @@
  */
 import { randomUUID } from 'node:crypto';
 import fs from 'node:fs';
-import os from 'node:os';
 import { app, ipcMain } from 'electron';
 import {
   acceptRelayDeviceCert,
@@ -40,6 +39,7 @@ import {
   type RelayServerHandle,
 } from '@cindy/device-link-relay';
 import * as authManager from '../authManager.js';
+import { outboundFetch } from '../maker-host/outbound-fetch.js';
 import { createLogger } from '../logger.js';
 import { assertTrustedAppRendererEvent } from '../security/trustedAppRenderer.js';
 import { throwIpcError } from '../utils/ipcValidate.js';
@@ -75,6 +75,7 @@ import {
   deleteRelaySecrets,
   installSelfHostedRelayRouting,
   readRelayConfig,
+  readHostNotificationBridgeConfig,
   readRelaySecrets,
   relayDataPath,
   secureStorageAvailable,
@@ -92,8 +93,29 @@ import {
   uninstallRelayFromServer,
 } from './selfHostedRelayDeploy.js';
 import { refreshRelayCertificatesSoon } from './selfHostedRelayFrameAuth.js';
-import { readDeviceLinkSettings } from './settings-store.js';
+import { createJoinRequest, startAgentNetRelay, verifyJoinPairingProof, type JoinRequest } from '@cindy/agent-net-relay';
+import { createNotificationBridge } from '@cindy/agent-net-relay/notification-bridge';
+import { createAgentNetSharingAuth, type SharingAuthConfig } from '@cindy/agent-net-relay/sharing-auth';
+import { getClientEndpoint, getClientEndpointForRealm, loadClientEndpointsForRealm } from '../clientEndpointsService.js';
+import { hostJoinBaseUrl, suggestedRelayUrls as suggestedUrls } from './selfHostedRelayAddress.js';
+import { submitJoin, pollJoin } from '@cindy/agent-net-relay/client';
+import { startRelayGateway } from '@cindy/agent-net';
+import { agentNetClientForRelay, approveAgentNetMember, ensureOwnerAgentNetBootstrap, memberAgentNetIdentity, memberAgentNetSecrets } from './agentNetRuntime.js';
+import { readDeviceLinkSettings, writeDeviceLinkSetting } from './settings-store.js';
 import { activeOwnerScopeKey, getActiveAppSession, isAppSessionBoundaryPending, onAppSessionInvalidated } from '../appSessionState.js';
+
+async function sharingAuthConfig(): Promise<SharingAuthConfig> {
+  const key = activeOwnerScopeKey(), region = authManager.getActiveAuthRealm(), issuer = getClientEndpoint('authApiBaseUrl');
+  const other = region === 'cn' ? 'global' : 'cn';
+  const result: SharingAuthConfig = { issuer, region, fetch: outboundFetch };
+  try {
+    await loadClientEndpointsForRealm(other);
+    const peer = getClientEndpointForRealm(other, 'authApiBaseUrl');
+    if (peer && peer !== issuer) result.peers = [{ issuer: peer, region: other }];
+  } catch { log.warn('peer-region sharing issuer discovery unavailable'); }
+  if (key !== activeOwnerScopeKey() || isAppSessionBoundaryPending() || authManager.getActiveAuthRealm() !== region) throw new Error('AGENT_NET_OWNER_CHANGED');
+  return result;
+}
 
 const log = createLogger('self-hosted-relay');
 
@@ -108,9 +130,11 @@ let hostError: SelfHostedRelayErrorCode | null = null;
 let hostStarting: Promise<void> | null = null;
 let joinLink: { link: string; expiresAt: number } | null = null;
 /** 这台电脑生成的加入链接里的配对秘密(只在内存,随链接一起过期)。 */
-let pairSecrets: Array<{ relayId: string; secret: string; expiresAt: number }> = [];
+let pairSecrets: Array<{ relayId: string; secret: string; expiresAt: number; agentNetCode?: string }> = [];
 let pendingRequests: SelfHostedRelayPairRequestView[] = [];
 let pendingRaw = new Map<string, { deviceId: string; publicKey: string }>();
+let pendingAgentNet = new Map<string, JoinRequest>();
+let pendingRefreshing = false;
 let pendingTimer: ReturnType<typeof setInterval> | null = null;
 let join: SelfHostedRelayJoinView = { status: 'idle' };
 let joinAbort: AbortController | null = null;
@@ -134,26 +158,6 @@ function emitChanged(): void {
   broadcast(SELF_HOSTED_RELAY_IPC.CHANGED, getState());
 }
 
-function lanAddresses(): string[] {
-  const result: string[] = [];
-  for (const entries of Object.values(os.networkInterfaces())) {
-    for (const entry of entries ?? []) {
-      if (entry.family === 'IPv4' && !entry.internal) result.push(entry.address);
-    }
-  }
-  return result;
-}
-
-function suggestedUrls(config: RelayConfig): string[] {
-  if (!config.host.listenAll) return [];
-  return lanAddresses().map((address) => `http://${address}:${config.host.port}`);
-}
-
-/** 本机中转加入链接里写的地址:用户填的对外地址优先;监听所有网络时退回第一个局域网地址。 */
-function hostJoinBaseUrl(config: RelayConfig): string | null {
-  return config.host.externalUrl ?? suggestedUrls(config)[0] ?? null;
-}
-
 function localBaseUrl(port: number): string {
   return `http://127.0.0.1:${port}`;
 }
@@ -166,6 +170,8 @@ export function getState(): SelfHostedRelayState {
   if (joinLink && joinLink.expiresAt < Date.now()) joinLink = null;
   const bundled = bundledRelayVersion();
   return {
+    agentNetEnabled: readDeviceLinkSettings().agentNetEnabled === true,
+    agentNetOnlyEncrypted: readDeviceLinkSettings().agentNetOnlyEncrypted === true,
     available: authManager.getAuthState().isAuthenticated && secureStorageAvailable(),
     mode: relay ? 'self-hosted' : 'official',
     relay: relay && origin ? { name: relay.name, baseUrl: relay.baseUrl, role: relay.role, origin } : null,
@@ -241,6 +247,7 @@ function stopPairing(): void {
   pairSecrets = [];
   pendingRequests = [];
   pendingRaw = new Map();
+  pendingAgentNet = new Map();
 }
 
 async function stopHost(retire: boolean): Promise<void> {
@@ -278,7 +285,8 @@ async function prepareHostData(dataDir: string, config: RelayConfig): Promise<st
 
 async function startHost(config: RelayConfig): Promise<void> {
   const assertOwner = captureOwner();
-  const key = `${config.host.port}:${config.host.listenAll}:${config.host.externalUrl ?? ''}`;
+  const useAgentNet = readDeviceLinkSettings().agentNetEnabled === true || !!(config.host.relayId && readRelaySecrets(config.host.relayId)?.agentNet);
+  const key = `${config.host.port}:${config.host.listenAll}:${config.host.externalUrl ?? ''}:${useAgentNet}`;
   if (host && hostKey === key) return;
   await stopHost(false);
   assertOwner();
@@ -287,10 +295,10 @@ async function startHost(config: RelayConfig): Promise<void> {
   try {
     await prepareHostData(dataDir, config);
     assertOwner();
-    const started = await startRelayServer({
+    const legacy = await startRelayServer({
       dataDir,
-      host: config.host.listenAll ? '0.0.0.0' : '127.0.0.1',
-      port: config.host.port,
+      host: useAgentNet ? '127.0.0.1' : config.host.listenAll ? '0.0.0.0' : '127.0.0.1',
+      port: useAgentNet ? 0 : config.host.port,
       publicUrl: config.host.externalUrl ?? undefined,
       // 只监听本机时,请求来自同机的前置代理,可以信任它给的外部地址。
       trustProxyHeaders: !config.host.listenAll,
@@ -300,6 +308,24 @@ async function startHost(config: RelayConfig): Promise<void> {
         error: (message, fields) => log.error(message, fields ?? {}),
       },
     });
+    let started = legacy;
+    if (useAgentNet) {
+      let agentNet: Awaited<ReturnType<typeof startAgentNetRelay>> | null = null;
+      try {
+        const bootstrap = ensureOwnerAgentNetBootstrap(readRelayConfig().host.relayId!, deviceName().slice(0, 64) || 'Cindy');
+        agentNet = await startAgentNetRelay({ bootstrap, dataDir: relayDataPath('agent-net', 'host'),
+          notify: await createNotificationBridge(readHostNotificationBridgeConfig(), { fetch: outboundFetch }),
+          host: '127.0.0.1', port: 0, udpHost: config.host.listenAll ? '0.0.0.0' : '127.0.0.1', udpPort: config.host.port,
+          sharing: createAgentNetSharingAuth(await sharingAuthConfig()) });
+        const gateway = await startRelayGateway({ host: config.host.listenAll ? '0.0.0.0' : '127.0.0.1',
+          port: config.host.port, legacyUrl: legacy.localUrl, agentNetUrl: agentNet.url });
+        const ownedAgentNet = agentNet;
+        started = { relayId: legacy.relayId, localUrl: localBaseUrl(gateway.port), port: gateway.port,
+          updateTls: (tls) => legacy.updateTls(tls),
+          async close(options) { await gateway.close(); await Promise.all([legacy.close(options), ownedAgentNet.close()]); },
+        };
+      } catch (error) { await agentNet?.close(); await legacy.close(); throw error; }
+    }
     try {
       assertOwner();
     } catch (error) {
@@ -348,6 +374,10 @@ function ownerBase(): { baseUrl: string; credential: string; relayId: string; se
   }
   return { baseUrl: relay.baseUrl, credential: relay.credential, relayId: relay.relayId, seed: relay.signingSeed, ownerPublicKey: relay.ownerPublicKey };
 }
+function ownerAgentNetApi() {
+  const owner = ownerBase();
+  return owner && readRelaySecrets(owner.relayId)?.agentNet ? agentNetClientForRelay(owner.relayId, owner.baseUrl) : null;
+}
 
 async function ownerFetch(path: string, init: { method: string; body?: unknown } = { method: 'GET' }): Promise<unknown> {
   const owner = ownerBase();
@@ -376,14 +406,21 @@ function proofMatches(relayId: string, request: { deviceId: string; publicKey: s
 }
 
 async function refreshPendingRequests(): Promise<void> {
+  if (pendingRefreshing) return;
   const assertOwner = captureOwner();
   const owner = ownerBase();
   if (!owner) return;
+  pendingRefreshing = true;
   try {
     const body = (await ownerFetch('/relay/admin/pair-requests')) as { requests?: unknown[] };
     assertOwner();
     if (ownerBase()?.relayId !== owner.relayId) return;
     const raw = new Map<string, { deviceId: string; publicKey: string }>();
+    const v2 = ownerAgentNetApi();
+    const v2Requests = v2 && pairSecrets.some((s) => s.agentNetCode)
+      ? (await v2.request<{ requests: JoinRequest[] }>('GET', '/join-requests')).requests : [];
+    assertOwner();
+    const v2Matches = new Map<string, JoinRequest>();
     const next = (body.requests ?? []).flatMap((item): SelfHostedRelayPairRequestView[] => {
       const r = item as Record<string, unknown>;
       if (
@@ -396,6 +433,9 @@ async function refreshPendingRequests(): Promise<void> {
         return [];
       }
       raw.set(r.requestId, { deviceId: r.deviceId, publicKey: r.publicKey });
+      const candidate = v2Requests.find((v) => v.deviceId === r.deviceId && v.signingKey === r.publicKey
+        && pairSecrets.some((s) => s.relayId === owner.relayId && s.agentNetCode === v.joinCode && verifyJoinPairingProof(v, s.secret)));
+      if (candidate) v2Matches.set(r.requestId, candidate);
       return [{
         requestId: r.requestId,
         deviceName: r.deviceName,
@@ -406,13 +446,14 @@ async function refreshPendingRequests(): Promise<void> {
       }];
     });
     pendingRaw = raw;
+    pendingAgentNet = v2Matches;
     if (JSON.stringify(next) !== JSON.stringify(pendingRequests)) {
       pendingRequests = next;
       emitChanged();
     }
   } catch {
     // 中转刚重启或暂时连不上:下一轮再试;停用时轮询会被一并停掉。
-  }
+  } finally { pendingRefreshing = false; }
 }
 
 function startPendingPolling(): void {
@@ -443,8 +484,11 @@ async function createJoinLink(): Promise<CommandResult> {
     assertOwner();
     if (ownerBase()?.relayId !== owner.relayId) return { state: getState(), error: 'NOT_OWNER' };
     const pairSecret = createRelayPairSecret(crypto);
-    const expiresAt = Date.now() + JOIN_LINK_TTL_MS;
-    pairSecrets.push({ relayId: owner.relayId, secret: pairSecret, expiresAt });
+    const v2 = ownerAgentNetApi();
+    const v2Code = v2 ? await v2.request<{ joinCode: string; expiresAt: number }>('POST', '/join-codes') : null;
+    assertOwner();
+    const expiresAt = Math.min(Date.now() + JOIN_LINK_TTL_MS, v2Code?.expiresAt ?? Infinity);
+    pairSecrets.push({ relayId: owner.relayId, secret: pairSecret, expiresAt, agentNetCode: v2Code?.joinCode });
     joinLink = {
       link: buildRelayJoinLink({
         baseUrl: base,
@@ -452,6 +496,7 @@ async function createJoinLink(): Promise<CommandResult> {
         ownerPublicKey: owner.ownerPublicKey,
         pairSecret,
         app: providerShareLinkApp(),
+        agentNetCode: v2Code?.joinCode,
       }),
       expiresAt,
     };
@@ -464,6 +509,7 @@ async function createJoinLink(): Promise<CommandResult> {
 }
 
 async function decide(requestId: string, approve: boolean): Promise<CommandResult> {
+  const assertOwner = captureOwner();
   const owner = ownerBase();
   if (!owner) return { state: getState(), error: 'NOT_OWNER' };
   const view = pendingRequests.find((request) => request.requestId === requestId);
@@ -475,6 +521,13 @@ async function decide(requestId: string, approve: boolean): Promise<CommandResul
       if (!view?.verified || !raw) {
         error = 'PAIR_PROOF_INVALID';
       } else {
+        const v2Request = pendingAgentNet.get(requestId), v2 = ownerAgentNetApi();
+        if (v2Request && v2) {
+          const secret = pairSecrets.find((s) => s.relayId === owner.relayId && s.agentNetCode === v2Request.joinCode)?.secret;
+          if (!secret) throw new Error('PAIRING_PROOF_INVALID');
+          const certificate = approveAgentNetMember(owner.relayId, v2Request, secret);
+          await v2.request('POST', '/join-requests/' + v2Request.requestId + '/approve', { certificate }); assertOwner();
+        }
         const cert = issueRelayDeviceCert(crypto, owner.seed, {
           relayId: owner.relayId,
           deviceId: raw.deviceId,
@@ -487,10 +540,13 @@ async function decide(requestId: string, approve: boolean): Promise<CommandResul
         setTimeout(refreshRelayCertificatesSoon, 3_000).unref?.();
       }
     } else {
+      const v2Request = pendingAgentNet.get(requestId), v2 = ownerAgentNetApi();
+      if (v2Request && v2) { await v2.request('POST', '/join-requests/' + v2Request.requestId + '/reject'); assertOwner(); }
       await ownerFetch(`/relay/admin/pair-requests/${requestId}/reject`, { method: 'POST' });
     }
   } catch {
     // 申请可能已过期:刷新列表让界面反映真实状态。
+    error = 'FAILED';
   }
   await refreshPendingRequests();
   return { state: getState(), error };
@@ -518,11 +574,14 @@ async function leaveMemberRelay(): Promise<void> {
   const relay = activeSelfHostedRelay();
   if (relay?.role !== 'member') return;
   try {
-    await fetch(`${relay.baseUrl}/api/device-link/devices/${encodeURIComponent(relay.deviceId)}`, {
+    const legacy = fetch(`${relay.baseUrl}/api/device-link/devices/${encodeURIComponent(relay.deviceId)}`, {
       method: 'DELETE',
       headers: { authorization: `CindyRelay ${relay.credential}` },
       signal: AbortSignal.timeout(5_000),
     });
+    const agentNet = readRelaySecrets(relay.relayId)?.agentNet
+      ? Promise.resolve().then(() => agentNetClientForRelay(relay.relayId, relay.baseUrl).request('DELETE', '/devices/' + encodeURIComponent(relay.deviceId), undefined, { signal: AbortSignal.timeout(5_000) })) : Promise.resolve();
+    await Promise.allSettled([legacy, agentNet]);
   } catch {
     log.info('could not notify the relay before leaving; switching locally');
   }
@@ -631,6 +690,10 @@ function startJoin(rawLink: string): CommandResult {
       assertOwner();
       if (abort.signal.aborted) return;
       const identity = createRelayJoinIdentity(crypto, link, info.relayId, deviceId);
+      const agentIdentity = link.agentNetCode ? memberAgentNetIdentity(info.relayId, identity.seed, deviceId) : null;
+      const v2Request = agentIdentity ? createJoinRequest(agentIdentity, 'private:' + info.relayId, link.agentNetCode!, deviceName().slice(0, 64), link.pairSecret) : null;
+      const v2Poll = v2Request ? await submitJoin(link.baseUrl, v2Request, { ownerPinnedHttp: true, fetch: outboundFetch }) : null;
+      assertOwner(); if (abort.signal.aborted) return;
       const request = await submitRelayPairRequest(
         relayFetch,
         link,
@@ -655,12 +718,16 @@ function startJoin(rawLink: string): CommandResult {
       if (abort.signal.aborted || authManager.getCurrentUserId() !== accountUserId) return;
       // 证书必须出自链接里的主人、发给本机这把公钥;否则中转可能被人替换,不加入。
       acceptRelayDeviceCert(crypto, link, { relayId: info.relayId, deviceId, publicKey: identity.publicKey, cert: result.cert });
+      const v2Result = v2Request && v2Poll ? await pollJoin(link.baseUrl, link.ownerPublicKey, v2Request.networkId, v2Request.requestId, v2Poll.pollToken, { ownerPinnedHttp: true, fetch: outboundFetch }) : null;
+      assertOwner(); if (abort.signal.aborted) return;
+      if (v2Request && (!v2Result?.certificate || v2Result.status !== 'approved' || v2Result.certificate.subject !== accountUserId)) throw new RelayJoinError('FAILED', 'Agent-Net pairing did not complete');
+      const agentNet = agentIdentity && v2Result?.certificate ? memberAgentNetSecrets(agentIdentity, v2Result.certificate, link.ownerPublicKey) : undefined;
       // 之前加入的中转先退出(不能用 leaveCurrent:它会取消正在进行的这次加入)。
       await leaveMemberRelay();
       assertOwner();
       if (abort.signal.aborted) return;
       stopPairing();
-      writeRelaySecrets(info.relayId, { credential: result.credential, seed: identity.seed });
+      writeRelaySecrets(info.relayId, { credential: result.credential, seed: identity.seed, ...(agentNet ? { agentNet } : {}) });
       writeRelayConfig({
         ...readRelayConfig(),
         active: {
@@ -814,12 +881,18 @@ function deploy(input: { sshHostId: string; address: string; name: string; repla
     serverChanged: false,
   };
   runDeployJob(plan, async (onStep, assertOwner, onProgress) => {
+    const sharingAuth = await sharingAuthConfig(); assertOwner();
     const { relayVersion } = await deployRelayToServer({
       sshHostId: input.sshHostId,
       address: input.address,
       baseUrl,
       replaceExisting: input.replaceExisting,
       init,
+      agentNetBootstrap: () => {
+        assertOwner(); return ensureOwnerAgentNetBootstrap(relayId, input.name);
+      },
+      agentNetAuthIssuer: sharingAuth.issuer, agentNetAuthRegion: sharingAuth.region, agentNetAuthPeer: sharingAuth.peers?.[0],
+      verifyAgentNet: async (baseUrl) => { assertOwner(); await agentNetClientForRelay(relayId, baseUrl).directory(); assertOwner(); },
       preferMirror: providerShareLinkApp() === 'cindycn',
       onStep,
       onProgress,
@@ -981,6 +1054,35 @@ async function deploymentStatus(relayId: string): Promise<CommandResult> {
 
 async function execute(command: SelfHostedRelayCommand): Promise<CommandResult> {
   switch (command.type) {
+    case 'set-agent-net-encryption': {
+      const assertOwner = captureOwner();
+      await writeDeviceLinkSetting('agentNetOnlyEncrypted', command.enabled); assertOwner();
+      restartDeviceLinkForRelayChange();
+      return { state: getState() };
+    }
+    case 'set-agent-net': {
+      const notReady = command.enabled ? requireReady() : null;
+      if (notReady) return { state: getState(), error: notReady };
+      const assertOwner = captureOwner();
+      const previous = readDeviceLinkSettings().agentNetEnabled === true;
+      if (previous === command.enabled) return { state: getState() };
+      await writeDeviceLinkSetting('agentNetEnabled', command.enabled); assertOwner();
+      try {
+        if (readRelayConfig().host.enabled) {
+          await startHost(readRelayConfig()); assertOwner();
+          if (!host) throw new Error('AGENT_NET_HOST_START_FAILED');
+        }
+      } catch (error) {
+        if (error instanceof RelayOperationExpired) throw error;
+        const reason = hostError ?? 'START_FAILED';
+        await writeDeviceLinkSetting('agentNetEnabled', previous); assertOwner();
+        if (readRelayConfig().host.enabled) await startHost(readRelayConfig());
+        restartDeviceLinkForRelayChange();
+        return { state: getState(), error: reason };
+      }
+      restartDeviceLinkForRelayChange();
+      return { state: getState() };
+    }
     case 'state':
       return { state: getState() };
     case 'enable-host':

@@ -43,6 +43,7 @@ export type TopologyFlow = 'out' | 'in' | 'both';
 
 export interface TopologyNode {
   id: string;
+  encrypted?: boolean;
   name: string;
   platform: string | null;
   modelLabel: string | null;
@@ -145,6 +146,7 @@ function deriveNode(
     isMobile,
     status,
     path,
+    encrypted: open ? link.encrypted : undefined,
     rttMs: open ? link.rttMs : null,
     flow: open && (status === 'direct' || status === 'relay') ? flowOf(link) : null,
     flowText: open && (status === 'direct' || status === 'relay') ? flowTextOf(link) : null,

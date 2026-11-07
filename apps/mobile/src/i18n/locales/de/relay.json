@@ -1,4 +1,12 @@
 {
+  "agentNet": {
+    "enabled": "Agent-Net aktivieren",
+    "onlyEncrypted": "Nur verschlüsselte Verbindungen",
+    "hint": "Geräte kommunizieren Ende-zu-Ende-verschlüsselt. Für ausschließlich verschlüsselte Verbindungen muss Agent-Net auf beiden Geräten aktiviert sein.",
+    "updateRequired": "Installiere die neueste App, um Agent-Net zu nutzen.",
+    "notConfigured": "Dieses Relay bietet noch kein Agent-Net. Aktualisiere es oder tritt einem V2-Relay bei.",
+    "failed": "Die Agent-Net-Einstellungen konnten nicht geändert werden. Prüfe die Relay-Verbindung und versuche es erneut."
+  },
   "settings": {
     "sectionTitle": "Relay-Dienst",
     "currentLabel": "Relay-Dienst",

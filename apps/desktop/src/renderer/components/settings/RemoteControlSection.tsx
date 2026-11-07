@@ -8,7 +8,7 @@ import { remoteControlSettings } from './RemoteControlSection.settings-search';
  *   2. SSH:原 RemoteSection 原样嵌入(showTitle=false,标题由本页统一给)
  * (Slack 连接子块已迁至「IM 机器人」页 Cindy 栏, 见 ImBotSection.tsx + HookConnectionsSection.tsx)
  *
- * 「Agent-Net (Beta)」开关(useRemoteConnectionV2,新版本的 device-link,只改这台电脑的显示,默认关):
+ * 「Agent-Net (Beta)」开关(useRemoteConnectionV2,默认关，由主进程保存并切换这台电脑的传输):
  * 打开后「我的设备」只留本机卡片(改名、允许控制本机、远程桌面等),下面紧接拓扑图
  * (features/remote-connection-v2);其它设备不再列出,在拓扑里看(用户裁决 2026-11-07)。
  * 关闭时与原来完全一致。连接线路与 SSH 开不开都一样。设备深链在打开时:本机定位本机卡片,
@@ -46,6 +46,7 @@ import { useAuth } from '@/contexts/AuthContext';
 import { useSettingsSearchNavigation } from './SettingsSearchNavigation';
 import { useRemoteConnectionV2 } from '@/features/remote-connection-v2/useRemoteConnectionV2';
 import { RemoteConnectionV2Section } from '@/features/remote-connection-v2/RemoteConnectionV2Section';
+import { toast } from '@/lib/toast';
 
 export { CollapsibleSubSection } from './CollapsibleSubSection';
 
@@ -108,6 +109,15 @@ export function RemoteControlSection() {
   const deviceLinkAvailable = mode === 'cloud';
   const s = useDeviceLinkSettings(deviceLinkAvailable);
   const v2 = useRemoteConnectionV2();
+  useEffect(() => {
+    const report = (event: Event) => {
+      const code = (event as CustomEvent<{ code: string }>).detail?.code;
+      const known = ['NOT_SIGNED_IN', 'SECURE_STORAGE_UNAVAILABLE', 'PORT_IN_USE', 'START_FAILED', 'FAILED'].includes(code) ? code : 'FAILED';
+      toast.error(t(`settings.remoteControl.relay.errors.${known}`));
+    };
+    window.addEventListener('agent-net-preference-error', report);
+    return () => window.removeEventListener('agent-net-preference-error', report);
+  }, [t]);
   const deepLink = useRemoteDevicesDeepLink();
   const relay = useSelfHostedRelayState(deviceLinkAvailable);
   const location = useLocation();
@@ -187,6 +197,15 @@ export function RemoteControlSection() {
                 aria-label={t(remoteControlSettings.v2.titleKey)}
               />
             </div>
+            {v2.enabled ? (
+              <div className={SETTINGS_ROW_CLASS}>
+                <div className="flex min-w-0 flex-col gap-0.5">
+                  <span className={SETTINGS_ROW_LABEL_CLASS}>{t('settings.remoteControl.v2.onlyEncrypted')}</span>
+                  <span className={SETTINGS_ROW_HINT_CLASS}>{t('settings.remoteControl.v2.onlyEncryptedHint')}</span>
+                </div>
+                <Switch checked={v2.onlyEncrypted} onCheckedChange={v2.setOnlyEncrypted} aria-label={t('settings.remoteControl.v2.onlyEncrypted')} />
+              </div>
+            ) : null}
           </div>
         ) : null}
 

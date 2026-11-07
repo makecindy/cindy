@@ -1,4 +1,12 @@
 {
+  "agentNet": {
+    "enabled": "Ativar Agent-Net",
+    "onlyEncrypted": "Usar apenas conexões criptografadas",
+    "hint": "Os dispositivos usam criptografia de ponta a ponta. O modo somente criptografado requer Agent-Net nos dois dispositivos.",
+    "updateRequired": "Instale a versão mais recente do aplicativo para usar o Agent-Net.",
+    "notConfigured": "Este relay ainda não oferece Agent-Net. Atualize-o ou entre em um relay V2.",
+    "failed": "Não foi possível alterar as configurações do Agent-Net. Verifique a conexão com o relay e tente novamente."
+  },
   "settings": {
     "sectionTitle": "Serviço de retransmissão",
     "currentLabel": "Serviço de retransmissão",

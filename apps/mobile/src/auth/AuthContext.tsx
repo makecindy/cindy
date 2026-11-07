@@ -1,4 +1,5 @@
 import * as WebBrowser from 'expo-web-browser';
+import { isAgentNetMediaReference } from '@cindy/agent-net-protocol';
 import { requireNativeModule } from 'expo-modules-core';
 import {
   createContext,
@@ -122,10 +123,10 @@ import { unregisterPushTokenBestEffort } from '@/notifications/pushNotifications
 import { resetAgentCapabilitiesCache } from '@/session/agentCapabilitiesCache';
 import { resetComposerPaletteCache } from '@/session/composerPaletteCache';
 import { clearRemoteResourceCache } from '@/device-link/remoteResourceCache';
-import { isSelfHostedRelayBaseUrl } from '@/device-link/selfHostedRelayRouting';
+import { isSelfHostedRelayBaseUrl, getSelfHostedRelayRouteGeneration } from '@/device-link/selfHostedRelayRouting';
 import { clearCachedHomeListSnapshot } from '@/session/mobileHomeListCache';
 import { clearHomeSessionPrCache } from '@/session/homeSessionPrStore';
-import { getMobileAuthOwner, invalidateMobileAuthOwnerForSwitch, setMobileAuthOwner } from '@/auth/authOwnerGeneration';
+import { getMobileAuthOwner, isMobileAuthOwnerCurrent, invalidateMobileAuthOwnerForSwitch, setMobileAuthOwner } from '@/auth/authOwnerGeneration';
 import { updateCredentialAccessToken } from '@/remote-desktop/credentialIdentity';
 import { clearMobileChatHistoryStore } from '@/chat/chatHistoryStore';
 import { clearCachedSessionMessages } from '@/session/mobileSessionMessageCache';
@@ -3318,6 +3319,29 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       opts.assertCurrent?.();
       // 自建中转:中转凭证由 apiFetchRaw 按目标地址附上;账号 token 不取、不发,中转的 401
       // 只说明中转凭证失效,不刷新也不退出账号(docs/self-hosted-relay-plan.md §5.3)。
+      const nativeOwner = getMobileAuthOwner(), nativeRoute = getSelfHostedRelayRouteGeneration(), nativeDevice = deviceIdRef.current;
+      const nativeGuard = () => {
+        opts.assertCurrent?.();
+        if (!isMobileAuthOwnerCurrent(nativeOwner) || getSelfHostedRelayRouteGeneration() !== nativeRoute || deviceIdRef.current !== nativeDevice) {
+          throw new Error('AGENT_NET_OWNER_CHANGED');
+        }
+      };
+      if (path.startsWith('/api/device-link/media') && nativeDevice
+        && typeof (opts.body as { key?: unknown })?.key === 'string'
+        && isAgentNetMediaReference((opts.body as { key: string }).key)) {
+        const { mobileAgentNetMediaRequest } = await import('@/device-link/agentNetMediaApi');
+        nativeGuard();
+        const result = await mobileAgentNetMediaRequest<T>(path, { ...opts, assertCurrent: nativeGuard }, { deviceId: nativeDevice,
+          deviceName: nativeDevice, getAccessToken });
+        if (result.handled) return result.value;
+      }
+      if (/^\/api\/device-link\/devices(?:\/|$)/.test(path) && nativeDevice) {
+        const { mobileAgentNetDeviceRequest } = await import('@/device-link/agentNetDeviceApi');
+        nativeGuard();
+        const result = await mobileAgentNetDeviceRequest<T>(path, { ...opts, assertCurrent: nativeGuard }, { deviceId: nativeDevice,
+          deviceName: nativeDevice, getAccessToken });
+        if (result.handled) return result.value;
+      }
       if (isSelfHostedRelayBaseUrl(opts.baseUrl)) {
         return apiFetchRaw<T>(path, { ...opts, token: null });
       }

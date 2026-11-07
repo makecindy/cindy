@@ -19,14 +19,23 @@ import {
 import { EdgeHub } from './edgehub.ts';
 import { connectAgentNetRelay, connectPushTunnel } from './relay-client.ts';
 import { startRelay } from './relay-fixture.ts';
+import { startV2Relay } from './relay-v2-fixture.ts';
 import type { TransportKind } from './transport.ts';
 import { nowMs, sleep, summarize } from './util.mjs';
 
-type Mode = 'core' | 'relay' | 'push' | 'punch' | 'quic';
+type Mode = 'core' | 'relay' | 'push' | 'punch' | 'quic' | 'v2' | 'v2-punch';
 const mode = (process.argv[2] ?? 'core') as Mode;
-if (!['core', 'relay', 'push', 'punch', 'quic'].includes(mode)) throw new Error(`unknown mode ${mode}`);
+if (!['core', 'relay', 'push', 'punch', 'quic', 'v2', 'v2-punch'].includes(mode)) throw new Error(`unknown mode ${mode}`);
 const transport: TransportKind = mode === 'quic' ? 'quic' : 'core';
-const relayed = mode === 'relay' || mode === 'push' || mode === 'punch';
+const v2 = mode === 'v2' || mode === 'v2-punch';
+const relayed = mode === 'relay' || mode === 'push' || mode === 'punch' || v2;
+if (v2) {
+  const localFetch = globalThis.fetch;
+  globalThis.fetch = (input, init) => {
+    if (new URL(String(input)).hostname !== '127.0.0.1') throw new Error('OFFICIAL_NETWORK_DISABLED_IN_V2_TEST');
+    return localFetch(input, init);
+  };
+}
 const roster = new Map();
 const userId = 'spike-account';
 const results: Array<{ check: string; ok: boolean; extra?: boolean; detail?: string }> = [];
@@ -48,14 +57,29 @@ const tap = transport === 'core' ? (datagram: Uint8Array, via: 'udp' | 'relay') 
 // 中转上的设备号和 EdgeHub 的设备号不同：中转只按自己的设备号转发。流氓节点也加入了中转，只是不在别人的 agent-net 名册里。
 const relayIds: Record<string, string> = { 'h-host': 'hub-host', 'a-phone': 'hub-phone', 'c-laptop': 'hub-laptop', rogue: 'hub-rogue' };
 // 设了 AGENT_NET_RELAY_CONFIG 就用远端已经起好的中转（真实网络测试，见 real/README.md）：{ relay: { url, servername, ca }, credentials }。
-const remote = relayed && process.env.AGENT_NET_RELAY_CONFIG ? JSON.parse(readFileSync(process.env.AGENT_NET_RELAY_CONFIG, 'utf8')) : null;
-const fixture = relayed ? (remote ? { url: remote.relay.url, credentials: new Map(Object.entries(remote.credentials as Record<string, string>)), close: async () => undefined } : await startRelay(Object.values(relayIds))) : null;
+const remote = !v2 && relayed && process.env.AGENT_NET_RELAY_CONFIG ? JSON.parse(readFileSync(process.env.AGENT_NET_RELAY_CONFIG, 'utf8')) : null;
+const v2Fixture = v2 ? await startV2Relay(Object.values(relayIds)) : null;
+const fixture = v2Fixture ?? (relayed ? (remote ? { url: remote.relay.url, credentials: new Map(Object.entries(remote.credentials as Record<string, string>)), close: async () => undefined } : await startRelay(Object.values(relayIds))) : null);
 const tls = remote ? { servername: remote.relay.servername, ca: remote.relay.ca } : undefined;
+if (v2Fixture) {
+  const directory = await v2Fixture.clients.get(relayIds['h-host'])!.directory();
+  for (const [nodeId, relayId] of Object.entries(relayIds)) {
+    if (nodeId === 'rogue') continue; // The negative admission case intentionally lacks a local grant.
+    const certificate = directory.find((device) => device.certificate.deviceId === relayId)?.certificate;
+    assert.ok(certificate && certificate.expiresAt > Date.now(), 'missing valid V2 directory binding');
+    roster.set(nodeId, { id: Buffer.from(certificate.transportKey, 'base64url').toString('hex'), dial: { relayId } });
+  }
+}
 
 async function hubOptions(deviceId: string) {
   const base = { userId, transport, ...(tap ? { tap } : {}) };
   if (!fixture) return base;
   const relayId = relayIds[deviceId];
+  if (v2Fixture) {
+    return { ...base, relay: { uplink: await v2Fixture.clients.get(relayId)!.connect(), deviceId: relayId },
+      identity: v2Fixture.identities.get(relayId)!.transportPrivateKey, udp: mode === 'v2-punch',
+      stunServers: [v2Fixture.stunServer], reprobeMs: 2_000 };
+  }
   const credential = fixture.credentials.get(relayId)!;
   const uplink = mode === 'push' ? await connectPushTunnel(fixture.url, credential, deviceId, tls) : await connectAgentNetRelay(fixture.url, credential, tls);
   return { ...base, relay: { uplink, deviceId: relayId }, udp: mode === 'punch', reprobeMs: 2_000 };
@@ -140,7 +164,7 @@ const a = makeClient(hubA, 'a-phone', false);
 const c = makeClient(hubC, 'c-laptop', false);
 const executions = serve(host.client);
 
-await check('真实 DeviceLinkClient 在没有中转时进入 online', async () => {
+await check('真实 DeviceLinkClient 通过本机节点进入 online', async () => {
   await Promise.all([
     a.client.waitUntilOnline(3_000),
     host.client.waitUntilOnline(3_000),
@@ -277,7 +301,7 @@ await check('点对点连接断开后重连，请求不重复执行', async () =
   return `总执行 ${executions.size} 次，全部恰好一次`;
 });
 
-await check('全程没有任何中转连接', async () => {
+await check('业务层全程未建立 V1 中转连接', async () => {
   const hubs = [hubA, hubC, hubHost];
   assert.equal(hubs.reduce((sum, hub) => sum + hub.stats.relayConnections, 0), 0);
   const out = hubs.reduce((sum, hub) => sum + hub.stats.routedOut, 0);
@@ -303,9 +327,9 @@ if (tap) {
 }
 
 const count = (via: 'udp' | 'relay') => captured.filter((entry) => entry.via === via).length;
-if (mode === 'relay' || mode === 'push') {
+if (mode === 'relay' || mode === 'push' || mode === 'v2') {
   await check(
-    'UDP 全被挡时所有数据报都经中转（443 上的 WebSocket）',
+    'UDP 全被挡时所有数据报都经 WebSocket 中转',
     async () => {
       assert.equal(count('udp'), 0);
       assert.ok(count('relay') > 1000, `经中转只有 ${count('relay')} 个包`);
@@ -314,7 +338,7 @@ if (mode === 'relay' || mode === 'push') {
     true,
   );
 }
-if (mode === 'punch') {
+if (mode === 'punch' || mode === 'v2-punch') {
   await check(
     '先经中转连上，交换地址后换到直连',
     async () => {

@@ -13,6 +13,8 @@ export const DEFAULT_RELAY_PORT = 47820;
 
 export type SelfHostedRelayCommand =
   | { type: 'state' }
+  | { type: 'set-agent-net'; enabled: boolean }
+  | { type: 'set-agent-net-encryption'; enabled: boolean }
   /** 在这台电脑上开启中转;已开启时按新设置重启。 */
   | { type: 'enable-host'; port: number; listenAll: boolean; externalUrl: string | null }
   /** 停用本机中转,并切回官方中转。 */
@@ -204,6 +206,9 @@ export interface SelfHostedRelayDeploymentView {
 }
 
 export interface SelfHostedRelayState {
+  /** Actual Main-owned device preference, absent on old hosts. */
+  agentNetEnabled?: boolean;
+  agentNetOnlyEncrypted?: boolean;
   /** 已登录且系统安全存储可用。 */
   available: boolean;
   mode: 'official' | 'self-hosted';
@@ -270,6 +275,9 @@ export function relayBaseUrlForAddress(address: string): string {
 export function parseSelfHostedRelayCommand(raw: unknown): SelfHostedRelayCommand | null {
   if (!isRecord(raw) || typeof raw.type !== 'string') return null;
   switch (raw.type) {
+    case 'set-agent-net':
+    case 'set-agent-net-encryption':
+      return typeof raw.enabled === 'boolean' ? { type: raw.type, enabled: raw.enabled } : null;
     case 'state':
     case 'disable-host':
     case 'create-join-link':

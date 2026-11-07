@@ -1,4 +1,12 @@
 {
+  "agentNet": {
+    "enabled": "Enable Agent-Net",
+    "onlyEncrypted": "Only use encrypted connections",
+    "hint": "Devices use end-to-end encryption. Encrypted-only mode requires Agent-Net on both devices.",
+    "updateRequired": "Install the latest app to use Agent-Net.",
+    "notConfigured": "This relay does not provide Agent-Net yet. Update it or join a V2 relay.",
+    "failed": "Could not change Agent-Net settings. Check the relay connection and try again."
+  },
   "settings": {
     "sectionTitle": "Relay Service",
     "currentLabel": "Relay Service",

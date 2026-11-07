@@ -60,6 +60,7 @@ import { useDeviceLink } from '@/device-link/DeviceLinkContext';
 import { buildMobileDeviceName } from '@/device-link/mobileDeviceIdentity';
 import { formatRemoteError } from '@/device-link/remoteStatus';
 import { clearSelfHostedRelay, useSelfHostedRelay } from '@/device-link/selfHostedRelay';
+import { AgentNetSettingsGroup } from '@/device-link/AgentNetSettingsGroup';
 import { buildMobileSettingsOverview } from '@/settings/mobileSettings';
 import {
   isPushSupported,
@@ -734,6 +735,8 @@ export default function SettingsScreen() {
             />
           ) : null}
         </SettingsGroup>
+
+        <AgentNetSettingsGroup deviceName={deviceName} />
 
         {/* 版本:当前版本 + 统一检查入口(允许整包分发时先查整包,否则直接查热更);
             更新方式与检查结果写在分组下方。检查不可用或审核模式时不显示检查行。 */}

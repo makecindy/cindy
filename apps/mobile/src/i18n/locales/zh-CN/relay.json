@@ -1,4 +1,12 @@
 {
+  "agentNet": {
+    "enabled": "启用 Agent-Net",
+    "onlyEncrypted": "仅使用加密连接",
+    "hint": "设备之间使用端到端加密。仅使用加密连接时，两端都需要启用 Agent-Net。",
+    "updateRequired": "请安装新版应用以使用 Agent-Net。",
+    "notConfigured": "当前中转尚未提供 Agent-Net，请更新中转或加入 V2 中转。",
+    "failed": "未能修改 Agent-Net 设置，请检查中转连接后重试。"
+  },
   "settings": {
     "sectionTitle": "中转服务",
     "currentLabel": "中转服务",

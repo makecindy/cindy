@@ -2,6 +2,7 @@ import { beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { setMobileAuthOwner } from '@/auth/authOwnerGeneration';
 import { apiFetchRaw } from '@/api/client';
 import { installPeerUpload } from '@/device-link/peerFileRegistry';
+import { installMobileAgentNetMedia } from '@/device-link/agentNetMediaRegistry';
 import { buildPeerAttachmentRef, parsePeerAttachmentRef } from '@cindy/device-link';
 import { DEVICE_LINK_API_BASE_URL, getOfficialDeviceLinkApiBaseUrl, setDeviceLinkApiBaseOverride } from '@/config/env';
 import { i18n } from '@/i18n';
@@ -27,6 +28,25 @@ const readFileChunk = vi.fn(async (_uri: string, _position: number, length: numb
 beforeEach(() => setMobileAuthOwner('alice'));
 
 describe('mobileAttachmentUpload', () => {
+  // Production file upload must select the V2 encrypting adapter before OSS,
+  // and a native failure must not send the same attachment through plaintext.
+  it.each([false, true])('keeps an encrypted upload on its selected adapter (native failure=%s)', async (fails) => {
+    const legacy = vi.fn(), readFileChunk = vi.fn(async () => 'eHh4');
+    const off = installMobileAgentNetMedia({ available: device => device === 'paired-v2', requiresEncryption: () => true,
+      async upload(options) {
+        expect(await options.read(0, 3)).toEqual(new Uint8Array([120, 120, 120]));
+        if (fails) throw new Error('NATIVE_UPLOAD_FAILED');
+        return { key: 'agent-net-v3/unit-public-fixture', sha256: 'a'.repeat(64) };
+      } });
+    try {
+      const work = uploadMobileAttachmentFromFile({ name: 'note.txt', size: 3, mimeType: 'text/plain' }, 'file:///unit-note', {
+        token: 'unit-unused-account-token', deviceId: 'paired-v2', deps: { apiFetch: legacy, readFileChunk },
+      });
+      if (fails) await expect(work).rejects.toThrow('NATIVE_UPLOAD_FAILED');
+      else expect(parseAttachmentOssRef((await work).path)?.ossKey).toBe('agent-net-v3/unit-public-fixture');
+      expect(legacy).not.toHaveBeenCalled();
+    } finally { off(); }
+  });
   // Unit: late peer completion must not retain removed uploads or an invalidated owner's pixels.
   it.each(['cancelled', 'outbox-removed', 'account-switched'] as const)('does not retain a late upload after %s', async (reason) => {
     const abort = new AbortController();

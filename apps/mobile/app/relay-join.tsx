@@ -33,6 +33,8 @@ import { MainWindowActionButton } from '@/components/MobilePrimitives';
 import { APP_BINARY_VERSION } from '@/config/env';
 import { buildMobileDeviceName } from '@/device-link/mobileDeviceIdentity';
 import { mobileRelayAuthCrypto } from '@/device-link/relayAuthCrypto';
+import { prepareMobileAgentNetPairing } from '@/device-link/agentNetPairing';
+import { ensureMobileAgentNetIdentity } from '@/device-link/agentNetIdentity';
 import { clearRelayJoinIntent, usePendingRelayJoinIntent } from '@/device-link/relayJoinIntent';
 import { createRelayJoinFetch, saveSelfHostedRelay, useSelfHostedRelay } from '@/device-link/selfHostedRelay';
 import {
@@ -152,6 +154,11 @@ export default function RelayJoinScreen() {
     try {
       // 本机签名密钥:公钥连同用链接里配对秘密做的证明一起提交,中转换不掉它。
       const identity = createRelayJoinIdentity(mobileRelayAuthCrypto, link, info.relayId, deviceId);
+      const agentNet = await prepareMobileAgentNetPairing({
+        owner, link, relayId: info.relayId, deviceId, seed: identity.seed, signingKey: identity.publicKey,
+        name: buildMobileDeviceName({ constantsDeviceName: Constants.deviceName, platform: Platform.OS }),
+        signal: controller.signal,
+      });
       const request = await submitRelayPairRequest(
         createRelayJoinFetch(REQUEST_TIMEOUT_MS),
         link,
@@ -195,10 +202,18 @@ export default function RelayJoinScreen() {
           ownerPublicKey: link.ownerPublicKey,
           credential: approved.credential,
           seed: identity.seed,
+          ...(agentNet ? { agentNet } : {}),
         });
       } catch {
         if (!controller.signal.aborted) setPhase({ kind: 'failed', info, code: 'SAVE_FAILED', retry: null });
         return;
+      }
+      if (agentNet) {
+        // The one-shot V1 credential is already safe. Best effort completion
+        // stores the public V2 certificate while its approval receipt is fresh.
+        void ensureMobileAgentNetIdentity({ deviceId,
+          deviceName: buildMobileDeviceName({ constantsDeviceName: Constants.deviceName, platform: Platform.OS }),
+          getAccessToken: auth.getAccessToken }).catch(() => undefined);
       }
       if (!controller.signal.aborted) setPhase({ kind: 'joined', info });
     } catch (error) {

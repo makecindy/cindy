@@ -162,6 +162,7 @@ interface DeviceLinkPresenceSnapshot {
 /** 远程连接拓扑:一条已协商可靠链路的本机视角(镜像 shared/deviceLinkIpc 的 DeviceLinkPeerLinkView) */
 interface DeviceLinkPeerLinkView {
   deviceId: string;
+  encrypted?: boolean;
   path: 'direct' | 'relay';
   /** 可靠帧 ACK 的平滑往返;首个 ACK 之前为 null,闲置时是最近测得的值 */
   rttMs: number | null;
@@ -3146,7 +3147,7 @@ interface ElectronAPI {
         | { type: 'new-session'; workingDir: string }
         | { type: 'share-import'; filePath: string }
         | { type: 'provider-import'; importId: string }
-        | { type: 'shared-task-join'; invitation: string; server: string }
+        | { type: 'shared-task-join'; invitation: string; server: string; link?: string }
         | { type: 'chat-invite'; token: string }
         | { type: 'chat-invite-malformed' }
         | { type: 'provider-share-join'; link: string }
@@ -3170,7 +3171,7 @@ interface ElectronAPI {
     | { type: 'new-session'; workingDir: string }
     | { type: 'share-import'; filePath: string }
     | { type: 'provider-import'; importId: string }
-    | { type: 'shared-task-join'; invitation: string; server: string }
+    | { type: 'shared-task-join'; invitation: string; server: string; link?: string }
     | { type: 'chat-invite'; token: string }
     | { type: 'chat-invite-malformed' }
     | { type: 'provider-share-join'; link: string }

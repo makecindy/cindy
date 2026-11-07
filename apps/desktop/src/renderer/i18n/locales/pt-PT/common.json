@@ -275,7 +275,7 @@
     "completeWithSkipped_many": "Copiado, {{count}} itens ignorados"
   },
   "sharedTask": {
-    "officialRelayNote": "Está a utilizar o seu próprio relay. O conteúdo das tarefas partilhadas continua a passar pelo relay da Cindy.",
+    "officialRelayNote": "O Agent-Net usa o relay indicado no convite; as partilhas antigas continuam a usar o relay da Cindy.",
     "selfJoin": "Iniciou esta tarefa partilhada, por isso não precisa de aderir. Abra-a em «Partilhadas por mim».",
     "manageSharing": "Gerir partilhas",
     "manageMembers": "Gerir membros…",
@@ -377,7 +377,7 @@
     "closeAllDescription": "Os convidados perderão o acesso. O histórico das tarefas é mantido."
   },
   "providerShare": {
-    "officialRelayNote": "Está a utilizar o seu próprio relay. O conteúdo da partilha de fornecedores continua a passar pelo relay da Cindy.",
+    "officialRelayNote": "O Agent-Net usa o relay indicado no convite; as partilhas antigas continuam a usar o relay da Cindy.",
     "owned": {
       "title": "Fornecedores que partilho"
     },
@@ -2448,12 +2448,12 @@
         "previewStarting": "Largue o rato e o teclado. O ecrã fica tapado dentro de 3 segundos; prima qualquer tecla para o bloquear e, depois, desbloqueie-o.",
         "previewUnavailable": "Não foi possível tapar o ecrã. Reinicie o Cindy e tente novamente.",
         "delay": {
-          "label": "Tapar o ecrã após",
-          "hint": "Tempo sem tocar no teclado nem no rato até a camada aparecer. Por predefinição, igual ao repouso do ecrã.",
           "30": "30 s",
           "60": "1 min",
           "120": "2 min",
           "300": "5 min",
+          "label": "Tapar o ecrã após",
+          "hint": "Tempo sem tocar no teclado nem no rato até a camada aparecer. Por predefinição, igual ao repouso do ecrã.",
           "system": "Sistema"
         }
       }
@@ -5965,7 +5965,7 @@
         "current": "Em utilização",
         "ownerName": "Este computador",
         "unavailable": "Para utilizar o seu próprio relay, inicie sessão na Cindy e certifique-se de que o porta-chaves do sistema está disponível.",
-        "limits": "Enquanto utilizar o seu próprio relay, as notificações push no telemóvel ficam indisponíveis. A partilha de fornecedores e as tarefas partilhadas continuam a passar pelo relay da Cindy.",
+        "limits": "As partilhas do Agent-Net usam o relay indicado no convite. As notificações do sistema requerem um serviço de push configurado nesse relay. As partilhas antigas continuam a usar o relay da Cindy.",
         "actions": {
           "join": "Aderir a outro relay",
           "useOfficial": "Voltar ao relay da Cindy",
@@ -6181,7 +6181,7 @@
           "switchFromHost": "O relay neste computador para e os dispositivos que aderiram são desligados.",
           "switchFromMember": "Este computador sai de {{name}}. Para voltar a aderir mais tarde, o proprietário tem de criar uma nova ligação de adesão.",
           "switchConfirm": "Mudar",
-          "switchFromOfficial": "O controlo remoto entre os seus dispositivos passará por {{name}}. As notificações push no telemóvel não estão disponíveis enquanto utilizar o seu próprio relay. A partilha de fornecedores e as tarefas partilhadas continuam a passar pelo relay da Cindy."
+          "switchFromOfficial": "O controlo remoto entre dispositivos usará «{{name}}». O Agent-Net usa o relay do convite; as partilhas antigas continuam a usar o relay da Cindy."
         },
         "dialog": {
           "steps": {
@@ -6527,7 +6527,7 @@
       "v2": {
         "switch": {
           "title": "Agent-Net (Beta)",
-          "hint": "A nova versão do device-link, ainda em evolução. Já implementado: um mapa de topologia das ligações (se cada dispositivo liga diretamente ou através de um relay, latência de ida e volta, linhas com mensagens em trânsito, dispositivos ocupados e dispositivos que precisam de atenção) e a atividade recente. Muda apenas a visualização neste computador."
+          "hint": "Mostra a topologia das ligações e a atividade recente. A ligação é cifrada quando ambos os dispositivos ativam o Agent-Net e foram emparelhados através do Agent-Net. Os outros dispositivos usam a ligação habitual. Aplica-se apenas a este computador."
         },
         "empty": "Ainda não há outros dispositivos. Inicie sessão com a mesma conta noutro computador ou telemóvel e ele aparecerá aqui.",
         "stats": {
@@ -6586,8 +6586,15 @@
           "manage": "Gerir dispositivo…",
           "linkStatus": "Com {{name}}",
           "version": "Cindy {{version}}",
-          "remoteDesktopFailed": "Não foi possível abrir o Ambiente de Trabalho Remoto"
-        }
+          "remoteDesktopFailed": "Não foi possível abrir o Ambiente de Trabalho Remoto",
+          "encryption": "Encriptação",
+          "encrypted": "Encriptação ponto a ponto",
+          "legacyConnection": "Ligação anterior",
+          "encryptionUnknown": "Não confirmado",
+          "legacyEncryptionHint": "O caminho pelo retransmissor da ligação anterior não tem encriptação ponto a ponto."
+        },
+        "onlyEncrypted": "Permitir apenas ligações encriptadas",
+        "onlyEncryptedHint": "Dispositivos antigos e partilhas que usam a ligação anterior ficarão indisponíveis."
       }
     },
     "tina": {

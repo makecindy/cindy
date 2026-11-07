@@ -124,6 +124,14 @@ export function DeviceNodePopover({
             value={`${formatRtt(node.rttMs, t)} · ${t('settings.remoteControl.v2.popover.rttNote')}`}
           />
         ) : null}
+        {node.path ? (
+          <Row label={t('settings.remoteControl.v2.popover.encryption')} value={t(node.encrypted === true
+            ? 'settings.remoteControl.v2.popover.encrypted' : node.encrypted === false
+              ? 'settings.remoteControl.v2.popover.legacyConnection' : 'settings.remoteControl.v2.popover.encryptionUnknown')} />
+        ) : null}
+        {node.path && node.encrypted === false ? (
+          <p className="text-12 leading-[1.5] text-[var(--text-secondary)]">{t('settings.remoteControl.v2.popover.legacyEncryptionHint')}</p>
+        ) : null}
         {node.status === 'offline' ? (
           <Row label={t('settings.remoteControl.v2.popover.lastSeen')} value={relativeTime(node.lastSeenAt, t)} />
         ) : null}

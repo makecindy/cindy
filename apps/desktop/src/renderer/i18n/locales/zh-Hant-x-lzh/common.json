@@ -270,7 +270,7 @@
     "estimateTooManyFiles": "案中檔案逾 {{limit, number}} 個，不可複製。請改錄檔案較少之案。"
   },
   "sharedTask": {
-    "officialRelayNote": "君今用自家中繼，共事之內容仍經 Cindy 官方中繼。",
+    "officialRelayNote": "Agent-Net 分享循邀請所定中轉；舊版分享仍經 Cindy 官方中轉。",
     "selfJoin": "此共事乃君所發起，無須加入。請自「吾所發起」啟之",
     "manageSharing": "共事之管",
     "manageMembers": "理成員…",
@@ -372,7 +372,7 @@
     "closeAllDescription": "諸賓皆不能再存取，差事紀錄仍留。"
   },
   "providerShare": {
-    "officialRelayNote": "君今用自家中繼，供方分享之內容仍經 Cindy 官方中繼。",
+    "officialRelayNote": "Agent-Net 分享循邀請所定中轉；舊版分享仍經 Cindy 官方中轉。",
     "owned": {
       "title": "吾所分享之供方"
     },
@@ -2380,12 +2380,12 @@
         "previewStarting": "請釋滑鼠與鍵盤，三秒後屏將覆；按任一鍵即鎖屏，再解之以試。",
         "previewUnavailable": "未能覆屏，請重啟 Cindy 再試。",
         "delay": {
-          "label": "離座幾時而覆屏",
-          "hint": "鍵盤滑鼠無人觸及逾此時，即覆以玄幕。預設同系統熄屏之時。",
           "30": "三十秒",
           "60": "一分",
           "120": "二分",
           "300": "五分",
+          "label": "離座幾時而覆屏",
+          "hint": "鍵盤滑鼠無人觸及逾此時，即覆以玄幕。預設同系統熄屏之時。",
           "system": "從系統"
         }
       }
@@ -5864,7 +5864,7 @@
         "current": "今用",
         "ownerName": "此機",
         "unavailable": "須登入 Cindy 名籍，且系統鑰匙圈可用，方能用自家中繼。",
-        "limits": "用自家中繼時，手機系統推播暫不可用；供方分享與共事仍經 Cindy 官方中繼。",
+        "limits": "Agent-Net 之分享，循邀請所定中轉；系統通知須備推播服務。舊版分享仍經 Cindy 官方中轉。",
         "actions": {
           "join": "入他處中繼",
           "useOfficial": "歸官方中繼",
@@ -6080,7 +6080,7 @@
           "switchFromHost": "此機之中繼將停，已入之裝置將斷線。",
           "switchFromMember": "此機將退出「{{name}}」，此後欲再入，須對方重生加入連結。",
           "switchConfirm": "易之",
-          "switchFromOfficial": "裝置之間遠端操控將改經「{{name}}」轉送。用自家中繼時，手機系統推播暫不可用；供方分享與共事仍經 Cindy 官方中繼。"
+          "switchFromOfficial": "裝置遠控將改循「{{name}}」。Agent-Net 分享循邀請所定中轉；舊版分享仍經 Cindy 官方中轉。"
         },
         "dialog": {
           "steps": {
@@ -6419,7 +6419,7 @@
       "v2": {
         "switch": {
           "title": "Agent-Net (Beta)",
-          "hint": "新制 device-link，漸次修成。今已成者：連接之圖（諸裝置直連或經中轉、往返之遲、方收發之線、忙者與待理者），並近事之錄。唯改此機之所見。"
+          "hint": "顯連接之圖，錄近事。兩端皆啟用且已完成 Agent-Net 配對，方用加密連接；其餘裝置循舊途。唯施於此機。"
         },
         "empty": "尚無他裝置。於他機或手機登同一帳號，即現於此。",
         "stats": {
@@ -6478,8 +6478,15 @@
           "manage": "理裝置…",
           "linkStatus": "與「{{name}}」",
           "version": "Cindy {{version}}",
-          "remoteDesktopFailed": "開遠端桌面不成"
-        }
+          "remoteDesktopFailed": "開遠端桌面不成",
+          "encryption": "加密",
+          "encrypted": "端間加密",
+          "legacyConnection": "舊版連線",
+          "encryptionUnknown": "尚未核實",
+          "legacyEncryptionHint": "舊路經中繼時，內容未施端間加密。"
+        },
+        "onlyEncrypted": "唯許加密相連",
+        "onlyEncryptedHint": "舊版裝置及仍循舊路之分享將不可用。"
       }
     },
     "tina": {

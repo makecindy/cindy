@@ -9,7 +9,7 @@ agent-net 的自研传输核心。纯状态机，不碰网络和时钟，运行�
 目前完成了第 1 到第 6 步，第 7 步的核心部分和本机验证做完了：一条连接里多条可靠字节流，带优先级，拥塞控制验证过和别的流量共用线路，
 `SecureConnection` 提供端到端加密，地址变了连接不断，`Endpoint` 把一个端口上的多条连接按连接号分发；
 路径可以有代价、可以主动验证，打洞成功就换到直连，直连断了退回中转。`udp/` 是只用标准库的真机 UDP 驱动，
-`wasm/` 把核心编成 WebAssembly、由 Node 驱动跑（电脑端用）。**还没有接入产品**，线上格式在接入之前不做兼容承诺。
+`wasm/` 把核心编成 WebAssembly、由 Node 驱动跑（电脑端用）。Desktop 私有中转已接入实验开关，Mobile 使用同一核心的原生 ABI；两端分享路由已接入，尚未发布或完成目标环境全业务验收。实验线上格式不作版本兼容承诺。
 
 2026-11-07：公网防护里的握手准入、关闭通知、连接号轮换均已在核心实现；换号的模拟、回环验证与原始对照数据见
 [`连接号轮换记录`](sim/results/2026-11-07-id-rotation/README.md)，本轮未重测真实 Wi-Fi／蜂窝切换。
@@ -23,6 +23,13 @@ sim/mutants.py    往核心注入已知 bug，检验测试本身
 ```
 
 ## 使用方式
+
+Node/Desktop 包使用 `@cindy/agent-net-core/node`。正常构建运行 `node packages/agent-net-core/build.mjs`，
+只使用仓内 `prebuilt/core.wasm`（本次 359804 字节），无需用户安装 Rust。
+构建同时核对 Rust 源码、Cargo 清单/锁文件及 WASM 的 SHA-256；不匹配时拒绝暂存旧核心。
+修改核心后由开发者安装 `wasm32-unknown-unknown` 目标，再运行
+`node packages/agent-net-core/build.mjs --refresh-prebuilt`，同步提交预编译包和 manifest。
+这是分发/构建入口；Rust 核心仍是零运行时第三方依赖的通用协议，不含 Cindy 设备身份或业务路由。
 
 调用方自己收发 UDP，把时间和包喂给核心：
 

@@ -735,7 +735,7 @@ export function MainLayout() {
         | { type: 'new-session'; workingDir: string }
         | { type: 'share-import'; filePath: string }
         | { type: 'provider-import'; importId: string }
-        | { type: 'shared-task-join'; invitation: string; server: string }
+        | { type: 'shared-task-join'; invitation: string; server: string; link?: string }
         | { type: 'chat-invite'; token: string }
         | { type: 'chat-invite-malformed' }
         | { type: 'provider-share-join'; link: string }
@@ -764,7 +764,7 @@ export function MainLayout() {
         return;
       }
       if (payload.type === 'shared-task-join') {
-        setSharedTaskInvitation({ link: buildSharedTaskInvitationLink(payload.invitation, payload.server), id: ++invitationSequence.current });
+        setSharedTaskInvitation({ link: payload.link ?? buildSharedTaskInvitationLink(payload.invitation, payload.server), id: ++invitationSequence.current });
         return;
       }
       if (payload.type === 'local-plugin-share') {

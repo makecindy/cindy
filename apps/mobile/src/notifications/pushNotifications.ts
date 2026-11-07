@@ -15,6 +15,7 @@ import {
   type DevServerEnvironment,
 } from '@/config/devServerEnvironment';
 import { getActiveSelfHostedRelay } from '@/device-link/selfHostedRelayRouting';
+import { mobileAgentNetPushSelected, mutateMobileAgentNetPush, clearMobileAgentNetPush, refreshMobileAgentNetPushPreferences } from '@/device-link/agentNetPushRegistry';
 import Notifications from './nativeNotifications';
 import { buildPushTokenRegistrationBody, parseNotificationResponseDeepLink } from './pushRegistrationModel';
 
@@ -195,7 +196,7 @@ function deviceLinkBaseForRealm(realm: ClientEndpointRegion): string {
 function pushTargets(realm: ClientEndpointRegion, method: 'PUT' | 'DELETE' = 'DELETE') {
   // 自建中转不转发系统推送(docs/self-hosted-relay-plan.md §5.3、§7):这时不在官方 device-link
   // 登记 token;注销仍发往官方地址(realm 缓存,不受中转覆盖),清掉以前的登记。
-  const skipDeviceLink = method === 'PUT' && getActiveSelfHostedRelay() !== null;
+  const skipDeviceLink = method === 'PUT' && (getActiveSelfHostedRelay() !== null || mobileAgentNetPushSelected());
   const targets = skipDeviceLink
     ? []
     : [{ baseUrl: deviceLinkBaseForRealm(realm), path: PUSH_TOKEN_PATH, optional: false }];
@@ -206,6 +207,7 @@ function pushTargets(realm: ClientEndpointRegion, method: 'PUT' | 'DELETE' = 'DE
   return targets;
 }
 async function mutatePushTokens(apiFetch: AuthedApiFetch, realm: ClientEndpointRegion, method: 'PUT' | 'DELETE', body?: unknown) {
+  await mutateMobileAgentNetPush(method, body);
   const results = await Promise.allSettled(pushTargets(realm, method).map(async target => {
     try { await apiFetch(target.path, { baseUrl: target.baseUrl, method, headers: { 'Accept-Language': i18n.language || 'en' }, ...(body ? { body } : {}) }); }
     catch (error) {
@@ -273,6 +275,7 @@ export function subscribePushPreferences(listener: (signedOut?: boolean) => void
 export async function readPushPreviewEnabled() { return (await AsyncStorage.getItem('cindy.push.preview')) !== '0'; }
 export async function writePushPreviewEnabled(enabled: boolean) {
   await AsyncStorage.setItem('cindy.push.preview', enabled ? '1' : '0');
+  await refreshMobileAgentNetPushPreferences();
   for (const listener of pushPreferenceListeners) listener();
 }
 export async function readPushEnabled(): Promise<boolean> {
@@ -285,6 +288,7 @@ export async function readPushEnabled(): Promise<boolean> {
 
 export async function writePushEnabled(enabled: boolean): Promise<void> {
   await AsyncStorage.setItem(PUSH_ENABLED_KEY, enabled ? '1' : '0');
+  if (!enabled) clearMobileAgentNetPush();
   for (const listener of pushPreferenceListeners) listener();
 }
 
@@ -457,6 +461,7 @@ export function unregisterPushTokenBestEffort(
   realm: ClientEndpointRegion = getActiveMobileSessionRealm(),
 ): Promise<void> {
   pushLifecycleGeneration += 1;
+  clearMobileAgentNetPush();
   for (const listener of pushPreferenceListeners) listener(true);
   // 不进入 pushMutationTail：当前 tail 可能正在 apiFetch → terminal handler →
   // clearLocalSession → 本函数。等待 tail 会形成自等待死锁。

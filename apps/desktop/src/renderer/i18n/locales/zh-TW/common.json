@@ -270,7 +270,7 @@
     "estimateTooManyFiles": "專案檔案超過 {{limit, number}} 個，無法複製。請改為複製檔案較少的專案。"
   },
   "sharedTask": {
-    "officialRelayNote": "你正在使用自己的中繼，共享任務的內容仍經 Cindy 官方中繼。",
+    "officialRelayNote": "Agent-Net 分享使用邀請指定的中轉；舊版分享仍經 Cindy 官方中轉。",
     "selfJoin": "這是你發起的共享任務，無需加入。請從「我發起的」開啟",
     "manageSharing": "共享管理",
     "manageMembers": "管理成員…",
@@ -372,7 +372,7 @@
     "closeAllDescription": "所有訪客將無法繼續存取，任務記錄保留。"
   },
   "providerShare": {
-    "officialRelayNote": "你正在使用自己的中繼，供應商分享的內容仍經 Cindy 官方中繼。",
+    "officialRelayNote": "Agent-Net 分享使用邀請指定的中轉；舊版分享仍經 Cindy 官方中轉。",
     "owned": {
       "title": "我分享的供應商"
     },
@@ -2380,12 +2380,12 @@
         "previewStarting": "請放開滑鼠和鍵盤，3 秒後螢幕會被遮住；按任意鍵即可鎖定螢幕，再解鎖試試。",
         "previewUnavailable": "無法遮住螢幕，請重新啟動 Cindy 後再試。",
         "delay": {
-          "label": "離開多久後遮住螢幕",
-          "hint": "鍵盤滑鼠沒人碰這麼久後蓋上遮罩。預設與系統關閉螢幕的時間一致。",
           "30": "30 秒",
           "60": "1 分鐘",
           "120": "2 分鐘",
           "300": "5 分鐘",
+          "label": "離開多久後遮住螢幕",
+          "hint": "鍵盤滑鼠沒人碰這麼久後蓋上遮罩。預設與系統關閉螢幕的時間一致。",
           "system": "跟隨系統"
         }
       }
@@ -5864,7 +5864,7 @@
         "current": "目前使用",
         "ownerName": "這台電腦",
         "unavailable": "登入 Cindy 帳號，並且系統鑰匙圈可用時，才能使用自己的中繼。",
-        "limits": "使用自己的中繼時，手機系統推播暫不可用；供應商分享和共享任務仍經 Cindy 官方中繼。",
+        "limits": "Agent-Net 分享使用邀請指定的中轉；系統通知需要中轉設定推播服務。舊版分享仍經 Cindy 官方中轉。",
         "actions": {
           "join": "加入別的中繼",
           "useOfficial": "切回官方中繼",
@@ -6080,7 +6080,7 @@
           "switchFromHost": "這台電腦上的中繼會停用，已加入它的裝置會斷線。",
           "switchFromMember": "這台電腦會退出「{{name}}」，之後要再加入，需要對方重新產生加入連結。",
           "switchConfirm": "切換",
-          "switchFromOfficial": "裝置之間的遠端控制會改經「{{name}}」轉送。使用自己的中繼時，手機系統推播暫時無法使用；供應商分享和共享任務仍經 Cindy 官方中繼。"
+          "switchFromOfficial": "裝置之間的遠端控制會改經「{{name}}」轉送。Agent-Net 分享使用邀請指定的中轉；舊版分享仍經 Cindy 官方中轉。"
         },
         "dialog": {
           "steps": {
@@ -6419,7 +6419,7 @@
       "v2": {
         "switch": {
           "title": "Agent-Net (Beta)",
-          "hint": "新版本的 device-link，持續迭代中。目前已實作：連線拓撲圖（每臺裝置直連還是經中轉、往返延遲、正在收發訊息的線路、忙碌與需處理的裝置），以及最近活動。只改變這臺電腦的顯示。"
+          "hint": "顯示連線拓撲與最近活動。雙方都開啟並完成 Agent-Net 配對時使用加密連線，其他裝置沿用原有連線。只影響這臺電腦。"
         },
         "empty": "還沒有其它裝置。在另一台電腦或手機登入同一帳號，它就會出現在這裡。",
         "stats": {
@@ -6478,8 +6478,15 @@
           "manage": "管理裝置…",
           "linkStatus": "與「{{name}}」",
           "version": "Cindy {{version}}",
-          "remoteDesktopFailed": "開啟遠端桌面失敗"
-        }
+          "remoteDesktopFailed": "開啟遠端桌面失敗",
+          "encryption": "加密",
+          "encrypted": "端對端加密",
+          "legacyConnection": "舊版連線",
+          "encryptionUnknown": "尚未確認",
+          "legacyEncryptionHint": "舊版連線經過中繼時，內容未端對端加密。"
+        },
+        "onlyEncrypted": "只允許加密連線",
+        "onlyEncryptedHint": "舊版裝置和仍使用舊連線的分享將無法使用。"
       }
     },
     "tina": {

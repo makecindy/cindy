@@ -31,12 +31,38 @@ export function officialDeviceLinkApiFetch<T>(
   });
 }
 
-export function deviceLinkApiFetch<T>(
+export async function deviceLinkApiFetch<T>(
   apiPath: string,
   opts: Omit<ApiFetchOptions, 'baseUrl' | 'token' | 'authorization'> = {},
 ): Promise<T> {
   const relay = activeSelfHostedRelay();
   if (!relay) return officialDeviceLinkApiFetch<T>(apiPath, opts);
+  const routeKey = (value: typeof relay | null) => value && JSON.stringify([value.relayId, value.baseUrl, value.deviceId, value.credential, value.scopeKey]);
+  const selected = routeKey(relay);
+  const assertRoute = () => { if (selected !== routeKey(activeSelfHostedRelay())) throw new Error('DEVICE_LINK_SCOPE_CHANGED'); };
+  const device = /^\/api\/device-link\/devices\/([^/?#]+)$/.exec(apiPath);
+  if (device && ['DELETE', 'PATCH'].includes(opts.method ?? 'GET')) {
+    const { readRelaySecrets } = await import('./selfHostedRelayConfig.js');
+    assertRoute();
+    if (readRelaySecrets(relay.relayId)?.agentNet) {
+    const { agentNetClientForRelay } = await import('./agentNetRuntime.js');
+    const { activeOwnerScopeKey, isAppSessionBoundaryPending } = await import('../appSessionState.js');
+    assertRoute();
+    const scope = activeOwnerScopeKey();
+    const assertCurrent = () => { assertRoute(); if (scope !== activeOwnerScopeKey() || isAppSessionBoundaryPending()) throw new Error('DEVICE_LINK_SCOPE_CHANGED'); };
+    assertCurrent();
+    const api = agentNetClientForRelay(relay.relayId, relay.baseUrl);
+    if (api.rootPublicKey !== relay.ownerPublicKey) throw new Error('AGENT_NET_IDENTITY_MISMATCH');
+    const target = decodeURIComponent(device[1]);
+    const directory = await api.directory();
+    assertCurrent();
+    if (directory.some((d) => d.certificate.deviceId === target)) {
+      await api.request(opts.method!, '/devices/' + encodeURIComponent(target), opts.method === 'PATCH' ? opts.body : undefined);
+      assertCurrent();
+    }
+    }
+  }
+  assertRoute();
   return serverApiFetch<T>(apiPath, {
     ...opts,
     baseUrl: relay.baseUrl,

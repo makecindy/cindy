@@ -18,6 +18,10 @@ const mocks = vi.hoisted(() => ({
   invalidateSession: vi.fn(),
   officialBase: 'https://device-link.official.invalid',
   relay: null as null | import('../selfHostedRelayRouting').ActiveSelfHostedRelay,
+  hasV2: false,
+  scope: 'owner-a',
+  v2Directory: vi.fn(), v2Request: vi.fn(),
+  readV2Secrets: vi.fn(),
 }));
 
 vi.mock('electron', () => ({ net: { fetch: mocks.netFetch } }));
@@ -35,6 +39,11 @@ vi.mock('../index.js', () => ({ deviceLinkApiBase: () => 'http://192.168.1.20:47
 vi.mock('../providerShareGuest.js', () => ({ getReceivedShares: () => [] }));
 vi.mock('../settings-store.js', () => ({ readDeviceLinkSettings: () => ({ disabledControlDeviceIds: [], lastKnownDeviceNames: {} }) }));
 vi.mock('../../remote-agent/controller/deviceCatalog.js', () => ({ readDeviceProviderViews: vi.fn(async () => []) }));
+vi.mock('../selfHostedRelayConfig.js', () => ({ readRelaySecrets: mocks.readV2Secrets }));
+vi.mock('../agentNetRuntime.js', () => ({ agentNetClientForRelay: () => ({
+  rootPublicKey: 'A'.repeat(43), directory: mocks.v2Directory, request: mocks.v2Request,
+}) }));
+vi.mock('../../appSessionState.js', () => ({ activeOwnerScopeKey: () => mocks.scope, isAppSessionBoundaryPending: () => false }));
 
 import { deviceLinkApiFetch, officialDeviceLinkApiFetch } from '../deviceLinkApi';
 import { setSelfHostedRelaySource } from '../selfHostedRelayRouting';
@@ -52,6 +61,39 @@ describe('deviceLinkApiFetch', () => {
     vi.clearAllMocks();
     mocks.relay = null;
     mocks.officialBase = 'https://device-link.official.invalid';
+    mocks.hasV2 = false; mocks.scope = 'owner-a';
+    mocks.readV2Secrets.mockReset().mockImplementation(() => mocks.hasV2 ? { agentNet: {} } : null);
+    mocks.v2Directory.mockReset(); mocks.v2Request.mockReset().mockResolvedValue({});
+  });
+  // Lazy V2 discovery is an await boundary even for a legacy-only deployment. The captured route's
+  // owner generation must be checked before sending any legacy mutation (unit tier, real API adapter).
+  it('rejects a device mutation if ownership changes during lazy credential discovery', async () => {
+    mocks.relay = { relayId: 'private', name: 'test', baseUrl: 'http://192.168.1.20:47820', role: 'owner',
+      credential: 'relay-credential', deviceId: 'owner', signingSeed: 'A'.repeat(43), ownerPublicKey: 'A'.repeat(43),
+      get scopeKey() { return mocks.scope; } };
+    mocks.readV2Secrets.mockImplementationOnce(() => { mocks.scope = 'owner-b'; return null; });
+    await expect(deviceLinkApiFetch('/api/device-link/devices/peer', { method: 'DELETE' })).rejects.toThrow('DEVICE_LINK_SCOPE_CHANGED');
+    expect(mocks.netFetch).not.toHaveBeenCalled(); expect(mocks.v2Request).not.toHaveBeenCalled();
+  });
+  // V1 and V2 use independent membership stores: a successful management operation must not leave the V2 identity active.
+  it.each(['DELETE', 'PATCH'] as const)('updates both private protocols for %s without sending an account token', async (method) => {
+    mocks.relay = { baseUrl: 'http://192.168.1.20:47820', credential: 'relay-credential', role: 'owner',
+      relayId: 'r', name: 'Home', deviceId: 'pc', signingSeed: 'A'.repeat(43), ownerPublicKey: 'A'.repeat(43) };
+    mocks.hasV2 = true; mocks.v2Directory.mockResolvedValue([{ certificate: { deviceId: 'peer' } }]);
+    mocks.netFetch.mockResolvedValue(new Response('{}', { status: 200 }));
+    const body = method === 'PATCH' ? { name: 'Updated' } : undefined;
+    await deviceLinkApiFetch('/api/device-link/devices/peer', { method, body });
+    expect(mocks.v2Request).toHaveBeenCalledWith(method, '/devices/peer', body);
+    expect(lastRequest()).toEqual({ url: 'http://192.168.1.20:47820/api/device-link/devices/peer', authorization: 'CindyRelay relay-credential' });
+    expect(mocks.getAccessToken).not.toHaveBeenCalled();
+  });
+  it('cancels a management mutation if the owner changes while the V2 directory is loading', async () => {
+    mocks.relay = { baseUrl: 'http://192.168.1.20:47820', credential: 'relay-credential', role: 'owner',
+      relayId: 'r', name: 'Home', deviceId: 'pc', signingSeed: 'A'.repeat(43), ownerPublicKey: 'A'.repeat(43) };
+    mocks.hasV2 = true;
+    mocks.v2Directory.mockImplementation(async () => { mocks.scope = 'owner-b'; return [{ certificate: { deviceId: 'peer' } }]; });
+    await expect(deviceLinkApiFetch('/api/device-link/devices/peer', { method: 'DELETE' })).rejects.toThrow('DEVICE_LINK_SCOPE_CHANGED');
+    expect(mocks.v2Request).not.toHaveBeenCalled(); expect(mocks.netFetch).not.toHaveBeenCalled();
   });
 
   // /models 复用真实目录读取与 API 路由；旧 caller 直接用 serverApiFetch 会把官方 token 发到自建中转。

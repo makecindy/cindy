@@ -16,6 +16,22 @@
 第 0 阶段 2026-10-30 在一台 macOS 26（arm64）上运行，第 6 步 2026-11-05 在一台 Windows（x64）上运行。
 除非注明，都是本机回环，**不是真实网络指标**。
 
+2026-11-07 新增独立 V2 服务接缝：
+
+```sh
+pnpm --dir prototypes/agent-net-spike exec tsx --tsconfig tsconfig.json poc-edgehub.ts v2
+pnpm --dir prototypes/agent-net-spike exec tsx --tsconfig tsconfig.json poc-edgehub.ts v2-punch
+```
+
+两种方式都只起 V2 自主中转，阻断非回环 fetch，不启动 V1 fixture 或请求官方服务。
+设备经主人配对证书加入，实际 Noise 密钥绑定已签名目录；第一种关闭 UDP，第二种使用自己的 STUN、
+先经中转再直连。运行同一套 12 项 DeviceLinkClient 检查，并增加密文/实际路径验证。
+这仍是原型接缝，不是 App 的 V2 开关、安装器、共享业务授权或原生推送实现。
+随后新增的生产包 `packages/agent-net` 与 Desktop 私有中转接线不再依赖原型构建；
+当前范围、分层测试、打包方式与剩余项见 [`Desktop 接线记录`](results/2026-11-07-desktop-runtime/README.md)。
+2026-11-08 的 Mobile 原生、App 私有分享/多资源路由和执行电脑接线已进入生产 packages；
+本原型不承载这些业务，当前验证与部署交接入口见 [`交付验证记录`](../../docs/agent-net-delivery-verification.md)。
+
 ## 准备
 
 自研传输要先编好核心的 WebAssembly（`rustup target add wasm32-unknown-unknown`）：

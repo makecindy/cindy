@@ -270,7 +270,7 @@
     "estimateTooManyFiles": "项目文件超过 {{limit, number}} 个，无法复制。请改为复制文件更少的项目。"
   },
   "sharedTask": {
-    "officialRelayNote": "你正在使用自己的中转，共享任务的内容仍经 Cindy 官方中转。",
+    "officialRelayNote": "Agent-Net 分享使用邀请指定的中转；旧版分享仍经 Cindy 官方中转。",
     "selfJoin": "这是你发起的共享任务，无需加入。请从“我发起的”打开",
     "manageSharing": "共享管理",
     "manageMembers": "管理成员…",
@@ -372,7 +372,7 @@
     "closeAllDescription": "所有访客将无法继续访问，任务记录保留。"
   },
   "providerShare": {
-    "officialRelayNote": "你正在使用自己的中转，供应商分享的内容仍经 Cindy 官方中转。",
+    "officialRelayNote": "Agent-Net 分享使用邀请指定的中转；旧版分享仍经 Cindy 官方中转。",
     "owned": {
       "title": "我分享的供应商"
     },
@@ -2380,12 +2380,12 @@
         "previewStarting": "请松开鼠标和键盘，3 秒后屏幕会被遮住；按任意键即可锁屏，再解锁试试。",
         "previewUnavailable": "无法遮住屏幕，请重启 Cindy 后再试。",
         "delay": {
-          "label": "离开多久后遮住屏幕",
-          "hint": "键盘鼠标没人碰这么久后盖上遮罩。默认与系统熄屏时间一致。",
           "30": "30 秒",
           "60": "1 分钟",
           "120": "2 分钟",
           "300": "5 分钟",
+          "label": "离开多久后遮住屏幕",
+          "hint": "键盘鼠标没人碰这么久后盖上遮罩。默认与系统熄屏时间一致。",
           "system": "跟随系统"
         }
       }
@@ -5864,7 +5864,7 @@
         "current": "当前使用",
         "ownerName": "这台电脑",
         "unavailable": "登录 Cindy 账号，并且系统钥匙串可用时，才能使用自己的中转。",
-        "limits": "使用自己的中转时，手机系统推送暂不可用；供应商分享和共享任务仍经 Cindy 官方中转。",
+        "limits": "Agent-Net 分享使用邀请指定的中转；系统通知需要中转配置推送服务。旧版分享仍经 Cindy 官方中转。",
         "actions": {
           "join": "加入别的中转",
           "useOfficial": "切回官方中转",
@@ -6080,7 +6080,7 @@
           "switchFromHost": "这台电脑上的中转会停用，已加入它的设备会断开。",
           "switchFromMember": "这台电脑会退出「{{name}}」，之后要再加入，需要对方重新生成加入链接。",
           "switchConfirm": "切换",
-          "switchFromOfficial": "设备之间的远程控制会改经「{{name}}」转发。使用自己的中转时，手机系统推送暂不可用；供应商分享和共享任务仍经 Cindy 官方中转。"
+          "switchFromOfficial": "设备之间的远程控制会改经「{{name}}」转发。Agent-Net 分享使用邀请指定的中转；旧版分享仍经 Cindy 官方中转。"
         },
         "dialog": {
           "steps": {
@@ -6419,7 +6419,7 @@
       "v2": {
         "switch": {
           "title": "Agent-Net (Beta)",
-          "hint": "新版本的 device-link，逐渐迭代中。当前实现了：连接拓扑图（每台设备直连还是经中转、往返延迟、正在收发消息的线路、忙碌与要处理的设备），以及最近活动。只改这台电脑的显示。"
+          "hint": "显示连接拓扑和最近活动。双方都开启并完成 Agent-Net 配对时使用加密连接，其它设备沿用原有连接。只影响这台电脑。"
         },
         "empty": "还没有其它设备。在另一台电脑或手机上登录同一账号，它就会出现在这里。",
         "stats": {
@@ -6478,8 +6478,15 @@
           "manage": "管理设备…",
           "linkStatus": "与「{{name}}」",
           "version": "Cindy {{version}}",
-          "remoteDesktopFailed": "打开远程桌面失败"
-        }
+          "remoteDesktopFailed": "打开远程桌面失败",
+          "encryption": "加密",
+          "encrypted": "端到端加密",
+          "legacyConnection": "旧版连接",
+          "encryptionUnknown": "尚未确认",
+          "legacyEncryptionHint": "旧版连接经过中转时，内容未端到端加密。"
+        },
+        "onlyEncrypted": "只允许加密连接",
+        "onlyEncryptedHint": "旧版设备和仍使用旧连接的分享将无法使用。"
       }
     },
     "tina": {

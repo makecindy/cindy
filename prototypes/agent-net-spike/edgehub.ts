@@ -12,6 +12,7 @@ import {
   type Envelope,
   type PresenceSnapshot,
 } from '@cindy/device-link-protocol';
+import type { KeyObject } from 'node:crypto';
 import type { WsLike } from '../../packages/device-link/src/client';
 import type { RelayUplink } from './relay-client.ts';
 import { createTransport, type PeerChannel, type RosterEntry, type Transport, type TransportKind } from './transport.ts';
@@ -100,6 +101,8 @@ class FrameReader {
 }
 
 export interface EdgeHubOptions {
+  /** V2 directory certificate binds this exact Noise identity. */
+  identity?: KeyObject;
   deviceId: string;
   userId: string;
   roster: Map<string, RosterEntry>;
@@ -153,12 +156,15 @@ export class EdgeHub {
         return undefined;
       },
       ...(options.tap ? { tap: options.tap } : {}),
+      ...(options.identity ? { identity: options.identity } : {}),
       ...(options.relay ? { relay: options.relay } : {}),
       ...(options.udp === false ? { udp: false } : {}),
       ...(options.reprobeMs ? { reprobeMs: options.reprobeMs } : {}),
       ...(options.bindAddress ? { bindAddress: options.bindAddress } : {}),
       ...(options.stunServers ? { stunServers: options.stunServers } : {}),
     });
+    const certified = options.roster.get(options.deviceId);
+    if (options.identity && certified && certified.id !== hub.transport.id) throw new Error('CERTIFICATE_TRANSPORT_IDENTITY_MISMATCH');
     options.roster.set(options.deviceId, { id: hub.transport.id, dial: hub.transport.dial });
     return hub;
   }

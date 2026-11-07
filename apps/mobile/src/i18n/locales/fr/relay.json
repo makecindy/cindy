@@ -1,4 +1,12 @@
 {
+  "agentNet": {
+    "enabled": "Activer Agent-Net",
+    "onlyEncrypted": "Connexions chiffrées uniquement",
+    "hint": "Les appareils utilisent le chiffrement de bout en bout. Le mode chiffré uniquement nécessite Agent-Net sur les deux appareils.",
+    "updateRequired": "Installez la dernière version de l’application pour utiliser Agent-Net.",
+    "notConfigured": "Ce relais ne propose pas encore Agent-Net. Mettez-le à jour ou rejoignez un relais V2.",
+    "failed": "Impossible de modifier les réglages Agent-Net. Vérifiez la connexion au relais et réessayez."
+  },
   "settings": {
     "sectionTitle": "Service de relais",
     "currentLabel": "Service de relais",

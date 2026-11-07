@@ -270,7 +270,7 @@
     "estimateTooManyFiles": "프로젝트 파일이 {{limit, number}}개를 넘어 복사할 수 없습니다. 파일이 더 적은 프로젝트를 복사하세요."
   },
   "sharedTask": {
-    "officialRelayNote": "내 중계를 사용 중입니다. 공유 작업 내용은 계속 Cindy 공식 중계를 거칩니다.",
+    "officialRelayNote": "Agent-Net 공유는 초대에 지정된 중계를 사용하며, 기존 방식의 공유는 계속 Cindy 중계를 사용합니다.",
     "selfJoin": "내가 시작한 공유 작업이므로 참여할 필요가 없습니다. “내가 공유한 항목”에서 여세요.",
     "manageSharing": "공유 관리",
     "manageMembers": "멤버 관리…",
@@ -372,7 +372,7 @@
     "closeAllDescription": "모든 게스트의 접근이 차단됩니다. 작업 기록은 유지됩니다."
   },
   "providerShare": {
-    "officialRelayNote": "내 중계를 사용 중입니다. 제공자 공유 내용은 계속 Cindy 공식 중계를 거칩니다.",
+    "officialRelayNote": "Agent-Net 공유는 초대에 지정된 중계를 사용하며, 기존 방식의 공유는 계속 Cindy 중계를 사용합니다.",
     "owned": {
       "title": "내가 공유한 제공자"
     },
@@ -2380,12 +2380,12 @@
         "previewStarting": "마우스와 키보드에서 손을 떼세요. 3초 후 화면이 가려지며, 아무 키나 누르면 잠깁니다. 그다음 잠금을 해제해 보세요.",
         "previewUnavailable": "화면을 가리지 못했습니다. Cindy를 다시 시작한 후 다시 시도하세요.",
         "delay": {
-          "label": "화면을 가리기까지",
-          "hint": "키보드와 마우스를 이 시간 동안 건드리지 않으면 가림 화면이 나타납니다. 기본값은 디스플레이 끄기 시간과 같습니다.",
           "30": "30초",
           "60": "1분",
           "120": "2분",
           "300": "5분",
+          "label": "화면을 가리기까지",
+          "hint": "키보드와 마우스를 이 시간 동안 건드리지 않으면 가림 화면이 나타납니다. 기본값은 디스플레이 끄기 시간과 같습니다.",
           "system": "시스템"
         }
       }
@@ -5864,7 +5864,7 @@
         "current": "사용 중",
         "ownerName": "이 컴퓨터",
         "unavailable": "내 중계를 사용하려면 Cindy에 로그인하고 시스템 키체인을 사용할 수 있어야 합니다.",
-        "limits": "내 중계를 사용하는 동안에는 휴대폰 푸시 알림을 사용할 수 없습니다. 제공자 공유와 공유 작업은 계속 Cindy 공식 중계를 거칩니다.",
+        "limits": "Agent-Net 공유는 초대에 지정된 중계를 사용합니다. 시스템 알림을 받으려면 해당 중계에 푸시 제공자를 설정해야 합니다. 기존 방식의 공유는 계속 Cindy 중계를 사용합니다.",
         "actions": {
           "join": "다른 중계에 참여",
           "useOfficial": "공식 중계로 돌아가기",
@@ -6080,7 +6080,7 @@
           "switchFromHost": "이 컴퓨터의 중계가 중지되고, 참여한 기기는 연결이 끊어집니다.",
           "switchFromMember": "이 컴퓨터는 {{name}}에서 나갑니다. 다시 참여하려면 상대방이 새 참여 링크를 만들어야 합니다.",
           "switchConfirm": "전환",
-          "switchFromOfficial": "기기 간 원격 제어가 {{name}}을(를) 거쳐 중계됩니다. 내 중계를 사용하는 동안에는 휴대폰 시스템 알림을 사용할 수 없습니다. 제공자 공유와 공유 작업은 계속 Cindy 공식 중계를 거칩니다."
+          "switchFromOfficial": "기기 간 원격 제어가 ‘{{name}}’을 통해 전달됩니다. Agent-Net 공유는 초대의 중계를, 기존 방식의 공유는 계속 Cindy 중계를 사용합니다."
         },
         "dialog": {
           "steps": {
@@ -6419,7 +6419,7 @@
       "v2": {
         "switch": {
           "title": "Agent-Net (Beta)",
-          "hint": "새 버전의 device-link로, 계속 개선 중입니다. 현재 구현된 기능: 연결 토폴로지 지도(각 기기가 직접 연결인지 릴레이 경유인지, 왕복 지연, 메시지가 오가는 연결선, 바쁜 기기와 조치가 필요한 기기)와 최근 활동. 이 컴퓨터의 표시만 바뀝니다."
+          "hint": "연결 토폴로지와 최근 활동을 표시합니다. 양쪽 기기에서 Agent-Net을 켜고 Agent-Net 페어링을 완료하면 암호화된 연결을 사용합니다. 다른 기기는 기존 연결을 사용합니다. 이 컴퓨터에만 적용됩니다."
         },
         "empty": "아직 다른 기기가 없습니다. 다른 컴퓨터나 휴대폰에서 같은 계정으로 로그인하면 여기에 나타납니다.",
         "stats": {
@@ -6478,8 +6478,15 @@
           "manage": "기기 관리…",
           "linkStatus": "「{{name}}」 연결",
           "version": "Cindy {{version}}",
-          "remoteDesktopFailed": "원격 데스크톱을 열지 못했습니다"
-        }
+          "remoteDesktopFailed": "원격 데스크톱을 열지 못했습니다",
+          "encryption": "암호화",
+          "encrypted": "종단 간 암호화",
+          "legacyConnection": "이전 연결",
+          "encryptionUnknown": "확인되지 않음",
+          "legacyEncryptionHint": "이전 연결의 중계 경로는 종단 간 암호화되지 않습니다."
+        },
+        "onlyEncrypted": "암호화된 연결만 허용",
+        "onlyEncryptedHint": "이전 버전 기기와 이전 연결을 사용하는 공유는 사용할 수 없게 됩니다."
       }
     },
     "tina": {

@@ -913,6 +913,32 @@ CLI 和分发构建；产品里开始用它时再升版本、加开关，并按�
 Node 驱动 6/6（含真实 UDP 换端口与两端换号计数）。本次没有部署 V2 服务，也没有真实公网或手机换网复测。
 记录见 [`连接号轮换`](../../packages/agent-net-core/sim/results/2026-11-07-id-rotation/README.md)。
 
+### 独立 Agent-Net V2 与 Desktop 兼容接线（2026-11-07）
+
+V2 是独立 `/api/agent-net` 路由与 `AgentNet` 设备持钥认证，不接受 V1 凭据或账号 token 回退。
+V1 内核的 server/hub 和 v1 线格式不变；部署 bundle `0.4.0` 新增的只是 CLI 入口/TLS 托管方式与
+Nginx 的独立 V2 路径。公共前端只代理两个固定回环内核，不解析或转换业务与认证。
+
+- 原加入链接增加可选 `a=<V2 加入码>`，原 `u/c/o/s` 保留。旧 Desktop/Mobile 忽略 `a`，仍执行 V1 配对；
+  新 Desktop 还提交 V2 CSR。主人分别核对两个配对证明、公钥和设备绑定，一次 UI 批准两份证书。
+  V1 成员未持有 V2 证书时继续使用原路径，不自动制造新身份或强制打开开关。
+- `link-open` / `link-accept` 现有可扩展 capabilities 增加可选 `agent-net-node-v2`，属于对端签名内容。
+  新 RoutedDeviceLinkClient 在未知 V2 当前模式时，只先发有界的 V1 link 握手，收到已签名能力后再选业务路径。
+  已知 V2 对端掉线不能仅凭中转不可达明文降级；声明 V2 的对端发来 V1 invoke/push 时拒绝业务分发。
+  未配置此适配器的客户端保持原行为，旧中转仍只需现有不透明签名/能力转发，不需要改内核。
+- 同账号 V2 消息走 Rust 加密流；旧/关闭 V2 的对端继续走所选 V1 自建线路。
+  2026-11-08 起，明确的 V2 分享/共享任务邀请与后续 API、按资源路由、媒体、续期/撤销均固定到邀请中的服务和根。
+  旧 V1 资源只在允许兼容时沿原路径工作；私有资源不能因为未登记官方证书或中转不可达而回落官方线路。
+  官方普通 V1 与跨账号 V1 兼容流共用同一设备 socket，避免重复注册同一身份互踢。
+  V2 scoped grant 可增量携带精确执行电脑背书；紧凑 Guest PoP 额外绑定 network/委托 ID，旧完整委托仍校验当前主体和授权。
+  各账号网络只同步设备签名的公开来源，跨区专用名片使用显式 issuer/region allowlist，不改普通登录 token 的准入范围。
+- V2 设备移除/改名与 V1 管理同步处理，账号切换前后的异步结果不能跨作用域落地。
+  私有配对关系持久至撤销，缓存名册的离线信任仍最多 14 天；不改变官方账号证书期限。
+
+共享客户端/中转测试、签名加入与重连 `run interop`、真实 V1/V2 公共入口和 V2 socket 集成通过；
+部署控制器与 Renderer 开关验证通过；Mobile iOS/Android 原生构建和探针通过，实际 SSH/systemd/ACME、真实账号全业务和物理手机锁屏推送仍待验收。
+记录与剩余项见 [`Desktop 接线记录`](../../prototypes/agent-net-spike/results/2026-11-07-desktop-runtime/README.md)。
+
 ### 自建中转同步维护
 
 服务器部署的 Nginx 自动接入使用中转 bundle `0.3.0`（`nginx` 为 SSH 部署内部 CLI）。公网仍使用

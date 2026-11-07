@@ -7,6 +7,8 @@
  */
 export interface ActiveSelfHostedRelay {
   relayId: string;
+  /** Host-owned session generation; local-only and never serialized into a network request. */
+  scopeKey?: string;
   name: string;
   baseUrl: string;
   role: 'owner' | 'member';

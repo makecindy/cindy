@@ -295,6 +295,15 @@ interface RelayChallengeQueue {
 export interface DeviceLinkClientOptions {
   /** Host WebRTC adapter. Both peers must opt in; unavailable/old hosts keep using relay. */
   directRuntime?: DirectRuntime;
+  /** Local host policy for transports which already negotiate their own encrypted direct paths. */
+  directRuntimeEnabled?(): boolean;
+  /** Synchronous host policy, checked again at every physical write and inbound dispatch. */
+  transportAllowed?(): boolean;
+  /** Local transport mode advertised inside the existing authenticated link handshake. Unknown values are additive. */
+  transportCapabilities?(): readonly string[];
+  /** Optional, request-bound transport-mode proof. No key or identity logic belongs in this client. */
+  transportAttestation?(peer: string, requestId: string): unknown;
+  verifyTransportAttestation?(peer: string, requestId: string, value: unknown): boolean;
   /** Host executions/outbox can outlive transport admission; keep their direct peer alive. */
   isPeerBusy?(peer: string): boolean;
   /** Preserve existing same-account RPC paths during bounded signaling loss. No offline admission. */
@@ -992,11 +1001,11 @@ export class DeviceLinkClient {
           || this.isOfflineRetainedDirectPath(id);
       },
       diagnostic: (id, event) => this.logDirectDiagnostic(id, event),
-      canSignal: (peer) => this.status === 'online'
+      canSignal: (peer) => this.opts.directRuntimeEnabled?.() !== false && this.status === 'online'
         && (!isProviderSharePeer(peer) || this.hasServerCapability(PROVIDER_SHARE_DIRECT_SIGNAL_CAPABILITY)),
       streams: (id) => {
         const peer = this.peerTransport.get(id);
-        return !this.stopped && (!isScopedPeer(id) || this.hasProviderShareDirectLease(id))
+        return this.opts.directRuntimeEnabled?.() !== false && !this.stopped && (!isScopedPeer(id) || this.hasProviderShareDirectLease(id))
           && this.directPeerSupport.has(id) && peer?.reliable && peer.receiveReady
           && this.isPeerSendReady(peer) && peer.remoteStreamId
           ? { local: peer.streamId, remote: peer.remoteStreamId } : null;
@@ -1325,6 +1334,9 @@ export class DeviceLinkClient {
   getStatus(): DeviceLinkStatus {
     return this.status;
   }
+  /** Recovery may have an independent resource connection even when the main
+   * account relay is unavailable. The basic client owns just one connection. */
+  hasOnlineConnection(): boolean { return this.status === 'online'; }
 
   /** Verified outbound handshake, before recovered business frames are delivered. */
   onPeerStreamAccepted(cb: (peer: string, streamId: string) => void): () => void {
@@ -1823,8 +1835,10 @@ export class DeviceLinkClient {
     // 主动开链 = 控制意图续新:清除出站关闭标记,后续 transport-timeout 恢复照常。
     this.getPeerTransport(dst).outboundExplicitlyClosed = false;
     const linkPayload = this.addLocalCapabilities(dst, payload);
+    const id = createRequestId();
+    const attestation = this.opts.transportAttestation?.(dst, id);
     const env = await this.request(
-      { v: PROTOCOL_VERSION, kind: 'link-open', dst, payload: linkPayload },
+      { v: PROTOCOL_VERSION, kind: 'link-open', id, dst, payload: attestation && isRecord(linkPayload) ? { ...linkPayload, transportAttestation: attestation } : linkPayload },
       'link-accept',
       timeoutMs,
     );
@@ -2057,14 +2071,16 @@ export class DeviceLinkClient {
       dst,
       payload: {
         ...payload,
+        ...(this.opts.transportAttestation ? { transportAttestation: this.opts.transportAttestation(dst, requestId) } : {}),
         ...(peerSupportsReliable
           ? {
               capabilities: this.mergeCapabilities(payload?.capabilities, [
+                ...(this.opts.transportCapabilities?.() ?? []),
                 DEVICE_LINK_CAPABILITY_RELIABLE_TRANSPORT,
-                ...(this.directNegotiator && (!isScopedPeer(dst)
+                ...(this.directNegotiator && this.opts.directRuntimeEnabled?.() !== false && (!isScopedPeer(dst)
                   || (isProviderSharePeer(dst) && matchingOffer?.capabilities?.includes(PROVIDER_SHARE_DIRECT_CAPABILITY)))
                   ? [DIRECT_LINK_CAPABILITY] : []),
-                ...(this.directNegotiator && isProviderSharePeer(dst)
+                ...(this.directNegotiator && this.opts.directRuntimeEnabled?.() !== false && isProviderSharePeer(dst)
                   && matchingOffer?.capabilities?.includes(PROVIDER_SHARE_DIRECT_CAPABILITY)
                   ? [PROVIDER_SHARE_DIRECT_CAPABILITY] : []),
                 ...(peerSupportsLinkConfirm
@@ -2171,7 +2187,7 @@ export class DeviceLinkClient {
 
   /** 发送请求帧并等待同 id 响应;同 id relay-error 转成 DeviceLinkError reject */
   private request(
-    env: Omit<Envelope, 'id'>,
+    env: Omit<Envelope, 'id'> & { id?: string },
     expectKind: 'invoke-result' | 'link-accept',
     timeoutMs?: number,
     allowPeerResetRetry = true,
@@ -2183,7 +2199,7 @@ export class DeviceLinkClient {
     if (this.status !== 'online' && !(env.kind === 'invoke' && env.dst && this.hasOfflineDirectPath(env.dst))) {
       return Promise.reject(new DeviceLinkError('NOT_CONNECTED', 'not connected to relay'));
     }
-    const id = diagnostic?.id ?? createRequestId();
+    const id = diagnostic?.id ?? env.id ?? createRequestId();
     const timeout = timeoutMs ?? this.timing.requestTimeoutMs;
     const startedAt = Date.now();
     const startedMonotonicAt = this.monotonicNow();
@@ -2539,6 +2555,10 @@ export class DeviceLinkClient {
 
     ws.on('open', () => {
       if (epoch !== this.connEpoch) return;
+      if (this.opts.transportAllowed?.() === false) {
+        ws.close(1000, 'transport disabled by host policy');
+        return;
+      }
       // TCP/TLS upgrade made progress. Give hello/ack its own bounded RTT window;
       // a slow upgrade must not consume almost all of the application handshake budget.
       this.armHandshakeTimeout(epoch);
@@ -2825,6 +2845,7 @@ export class DeviceLinkClient {
   // ─── 内部:入站分发 ─────────────────────────────────────────────────────────
 
   private handleMessage(raw: string): void {
+    if (this.opts.transportAllowed?.() === false) return;
     let parsed: unknown;
     try {
       parsed = JSON.parse(raw) as unknown;
@@ -3011,6 +3032,15 @@ export class DeviceLinkClient {
   }
 
   private dispatchEnvelope(env: Envelope): boolean | Promise<boolean> {
+    if (this.opts.transportAllowed?.() === false) return false;
+    if ((env.kind === 'link-open' || env.kind === 'link-accept') && env.src && env.id && this.opts.verifyTransportAttestation
+      && !this.opts.verifyTransportAttestation(env.src, env.id, (env.payload as { transportAttestation?: unknown })?.transportAttestation)) {
+      const pending = this.pending.get(env.id);
+      if (env.kind === 'link-accept' && pending?.expectKind === env.kind && pending.dst === env.src) {
+        this.pending.delete(env.id); pending.reject(new DeviceLinkError('CHANNEL_NOT_ALLOWED', 'Untrusted transport mode'));
+      }
+      return true;
+    }
     if (env.src && isBusinessTraffic(env)) {
       // 在 invoke-result 配对 resolve 之前记:本机发请求、对端回包同样算「收到」。
       const peer = this.peerTransport.get(env.src);
@@ -4097,6 +4127,7 @@ export class DeviceLinkClient {
     wireBytes: number,
     channel: DeviceLinkDirectChannel,
   ): number | null {
+    this.assertTransportAllowed();
     const dst = pending.envelope.dst!;
     const buffered = channel.bufferedAmount ?? 0;
     // 与 relay 一致：缓冲排空后单条大消息总能发出，不会被软上限永久卡住。
@@ -4119,6 +4150,7 @@ export class DeviceLinkClient {
     let sent = 0;
     for (const frame of frames) {
       try {
+        this.assertTransportAllowed();
         channel.send(JSON.stringify(frame));
       } catch (err) {
         this.log.debug(`device-link direct send failed dst=${dst.slice(0, 8)} seq=${pending.seq} frames=${sent}`, err);
@@ -4228,6 +4260,7 @@ export class DeviceLinkClient {
    * 只走 relay)。不刷新 relay 心跳：直连有流量不能掩盖 relay 已经失联。
    */
   private handleDirectFrame(deviceId: string, text: string): void {
+    if (this.opts.transportAllowed?.() === false) return;
     if (this.stopped) return;
     if (this.sameAccountDirectGrace.has(deviceId) && !this.hasSameAccountDirectGrace(deviceId)) return;
     const self = this.selfDeviceId;
@@ -4490,7 +4523,14 @@ export class DeviceLinkClient {
     this.retryPending(dst, { ignoreInterval: false, onlyUnsent: true });
   }
 
+  private assertTransportAllowed(): void {
+    if (this.opts.transportAllowed?.() === false) {
+      throw new DeviceLinkError('CHANNEL_NOT_ALLOWED', 'Transport disabled by current host policy');
+    }
+  }
+
   private sendEnvelope(env: Envelope, allowAuthenticationQueue = true): boolean {
+    this.assertTransportAllowed();
     const ws = this.ws;
     if (!ws) throw new DeviceLinkError('NOT_CONNECTED', 'no active connection');
     let wire = encodeScopedEnvelope(env, this.scopeSupport());
@@ -4531,6 +4571,7 @@ export class DeviceLinkClient {
     // 观察点的 RN 实现仍由可靠消息的有界 pending buffer 兜底；有这个观察点
     // 时提前拒绝，避免弱网下 native socket 持续吃内存。
     this.assertWebSocketCapacity(frameBytes);
+    this.assertTransportAllowed();
     ws.send(text);
     return true;
   }
@@ -4923,7 +4964,7 @@ export class DeviceLinkClient {
     const peer = this.getPeerTransport(dst);
     this.clearSameAccountDirectGrace(dst);
     if (source === 'outbound-accept') peer.supportsGithubRead = capabilities?.includes(DEVICE_LINK_CAPABILITY_GITHUB_READ_V1) === true;
-    if (this.directNegotiator && capabilities?.includes(DIRECT_LINK_CAPABILITY)
+    if (this.directNegotiator && this.opts.directRuntimeEnabled?.() !== false && capabilities?.includes(DIRECT_LINK_CAPABILITY)
       && (!isScopedPeer(dst) || (isProviderSharePeer(dst)
         && capabilities.includes(PROVIDER_SHARE_DIRECT_CAPABILITY)))) {
       this.directPeerSupport.add(dst);
@@ -4988,12 +5029,13 @@ export class DeviceLinkClient {
     return {
       ...payload,
       capabilities: this.mergeCapabilities(payload.capabilities, [
+        ...(this.opts.transportCapabilities?.() ?? []),
         DEVICE_LINK_CAPABILITY_RELIABLE_LINK_CONFIRM,
         DEVICE_LINK_CAPABILITY_RELIABLE_TRANSPORT,
         DEVICE_LINK_CAPABILITY_TRANSPORT_TIMEOUT_CLOSE,
-        ...(this.directNegotiator && (!isScopedPeer(dst) || isProviderSharePeer(dst))
+        ...(this.directNegotiator && this.opts.directRuntimeEnabled?.() !== false && (!isScopedPeer(dst) || isProviderSharePeer(dst))
           ? [DIRECT_LINK_CAPABILITY] : []),
-        ...(this.directNegotiator && isProviderSharePeer(dst) ? [PROVIDER_SHARE_DIRECT_CAPABILITY] : []),
+        ...(this.directNegotiator && this.opts.directRuntimeEnabled?.() !== false && isProviderSharePeer(dst) ? [PROVIDER_SHARE_DIRECT_CAPABILITY] : []),
       ]),
       transportStreamId: typeof payload.transportStreamId === 'string'
         ? payload.transportStreamId
@@ -5026,6 +5068,7 @@ export class DeviceLinkClient {
     ackSeq: number,
     linkRequestId?: string,
   ): boolean {
+    if (this.opts.transportAllowed?.() === false) return false;
     const peer = this.peerTransport.get(dst);
     // Explicit handshake confirmations remain relay-only. Once data arrives on
     // the authenticated direct stream, its ordinary cumulative ACK must return

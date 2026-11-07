@@ -22,7 +22,7 @@ const SELF = device({ deviceId: 'self', name: 'Studio Mac', selfName: 'Studio Ma
 
 /** 一条已建链路;sent / received 是「多少毫秒前有业务消息」,不传就是闲着。 */
 function link(deviceId: string, path: Link['path'], rttMs: number | null, sent: number | null = null, received: number | null = null): Link {
-  return { deviceId, path, rttMs, open: true, sentAgoMs: sent, receivedAgoMs: received };
+  return { deviceId, path, rttMs, open: true, encrypted: true, sentAgoMs: sent, receivedAgoMs: received };
 }
 
 function scenario(name: string): { devices: Device[]; links: Link[]; relayRttMs: number | null } {
@@ -104,6 +104,7 @@ function scenario(name: string): { devices: Device[]; links: Link[]; relayRttMs:
 }
 
 const data = scenario(ctx.case);
+if (ctx.case === 'default' && data.links[0]) data.links[0].encrypted = false;
 
 void mountPage({
   route: '/settings?tab=remote-control',
@@ -137,6 +138,8 @@ void mountPage({
       command: async () => ({
         state: {
           available: true,
+          agentNetEnabled: ctx.case !== 'legacy-off',
+          agentNetOnlyEncrypted: ctx.case === 'empty',
           mode: 'official',
           relay: null,
           issue: null,

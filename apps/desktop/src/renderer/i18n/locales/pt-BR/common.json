@@ -275,7 +275,7 @@
     "completeWithSkipped_many": "Copiado, {{count}} itens ignorados"
   },
   "sharedTask": {
-    "officialRelayNote": "Você está usando seu próprio retransmissor. O conteúdo das tarefas compartilhadas continua passando pelo Retransmissor Cindy.",
+    "officialRelayNote": "O Agent-Net usa o relay indicado no convite; os compartilhamentos antigos continuam usando o relay da Cindy.",
     "selfJoin": "Você iniciou esta tarefa compartilhada, então não precisa entrar. Abra-a em “Compartilhadas por mim”.",
     "manageSharing": "Gerenciar compartilhamento",
     "manageMembers": "Gerenciar membros…",
@@ -377,7 +377,7 @@
     "closeAllDescription": "Os convidados perderão o acesso. O histórico das tarefas será mantido."
   },
   "providerShare": {
-    "officialRelayNote": "Você está usando seu próprio retransmissor. O conteúdo do compartilhamento de provedores continua passando pelo Retransmissor Cindy.",
+    "officialRelayNote": "O Agent-Net usa o relay indicado no convite; os compartilhamentos antigos continuam usando o relay da Cindy.",
     "owned": {
       "title": "Provedores que compartilho"
     },
@@ -2448,12 +2448,12 @@
         "previewStarting": "Solte o mouse e o teclado. A tela será coberta em 3 segundos; pressione qualquer tecla para bloqueá-la e depois desbloqueie.",
         "previewUnavailable": "Não foi possível cobrir a tela. Reinicie o Cindy e tente novamente.",
         "delay": {
-          "label": "Cobrir a tela após",
-          "hint": "Tempo sem tocar no teclado e no mouse até a camada aparecer. Por padrão, o mesmo do repouso da tela.",
           "30": "30 s",
           "60": "1 min",
           "120": "2 min",
           "300": "5 min",
+          "label": "Cobrir a tela após",
+          "hint": "Tempo sem tocar no teclado e no mouse até a camada aparecer. Por padrão, o mesmo do repouso da tela.",
           "system": "Sistema"
         }
       }
@@ -5965,7 +5965,7 @@
         "current": "Em uso",
         "ownerName": "Este computador",
         "unavailable": "Para usar seu próprio retransmissor, entre no Cindy e verifique se o chaveiro do sistema está disponível.",
-        "limits": "Enquanto você usa seu próprio retransmissor, as notificações push no celular ficam indisponíveis. O compartilhamento de provedores e as tarefas compartilhadas continuam passando pelo Retransmissor Cindy.",
+        "limits": "Os compartilhamentos do Agent-Net usam o relay indicado no convite. As notificações do sistema exigem um provedor de push configurado nesse relay. Os compartilhamentos antigos continuam usando o relay da Cindy.",
         "actions": {
           "join": "Conectar-se a outro retransmissor",
           "useOfficial": "Voltar ao retransmissor Cindy",
@@ -6181,7 +6181,7 @@
           "switchFromHost": "O retransmissor neste computador será interrompido, e os dispositivos conectados a ele serão desconectados.",
           "switchFromMember": "Este computador sai de {{name}}. Para se conectar novamente mais tarde, o proprietário precisará criar um novo link de conexão.",
           "switchConfirm": "Trocar",
-          "switchFromOfficial": "O controle remoto entre seus dispositivos passará por {{name}}. Notificações push no celular não ficam disponíveis enquanto você usa seu próprio retransmissor. O compartilhamento de provedores e as tarefas compartilhadas continuam passando pelo Retransmissor Cindy."
+          "switchFromOfficial": "O controle remoto entre dispositivos usará “{{name}}”. O Agent-Net usa o relay do convite; os compartilhamentos antigos continuam usando o relay da Cindy."
         },
         "dialog": {
           "steps": {
@@ -6527,7 +6527,7 @@
       "v2": {
         "switch": {
           "title": "Agent-Net (Beta)",
-          "hint": "A nova versão do device-link, ainda em evolução. Já implementado: um mapa de topologia das conexões (se cada dispositivo se conecta diretamente ou por um relay, latência de ida e volta, linhas com mensagens em trânsito, dispositivos ocupados e dispositivos que precisam de atenção) e a atividade recente. Muda apenas a exibição neste computador."
+          "hint": "Mostra a topologia das conexões e a atividade recente. A conexão é criptografada quando os dois dispositivos ativam o Agent-Net e foram pareados pelo Agent-Net. Os demais dispositivos usam a conexão habitual. Aplica-se apenas a este computador."
         },
         "empty": "Ainda não há outros dispositivos. Entre com a mesma conta em outro computador ou celular e ele aparecerá aqui.",
         "stats": {
@@ -6586,8 +6586,15 @@
           "manage": "Gerenciar dispositivo…",
           "linkStatus": "Com {{name}}",
           "version": "Cindy {{version}}",
-          "remoteDesktopFailed": "Não foi possível abrir a Área de Trabalho Remota"
-        }
+          "remoteDesktopFailed": "Não foi possível abrir a Área de Trabalho Remota",
+          "encryption": "Criptografia",
+          "encrypted": "Criptografia de ponta a ponta",
+          "legacyConnection": "Conexão anterior",
+          "encryptionUnknown": "Não confirmado",
+          "legacyEncryptionHint": "O caminho pelo retransmissor da conexão anterior não tem criptografia de ponta a ponta."
+        },
+        "onlyEncrypted": "Permitir apenas conexões criptografadas",
+        "onlyEncryptedHint": "Dispositivos antigos e compartilhamentos que usam a conexão anterior ficarão indisponíveis."
       }
     },
     "tina": {

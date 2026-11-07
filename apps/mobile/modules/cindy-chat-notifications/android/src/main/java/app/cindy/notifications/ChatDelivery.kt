@@ -28,7 +28,21 @@ object ChatDelivery {
     if (prefs.getString("actor", "") != actor) prefs.edit().clear().putString("actor", actor).apply()
   }
   @Synchronized fun receive(context: Context, data: Map<String, String>) {
-    val body = try { JSONObject(data["body"] ?: "{}") } catch (_: Exception) { return }
+    var body = try { JSONObject(data["body"] ?: "{}") } catch (_: Exception) { return }
+    val display = data.toMutableMap()
+    if (body.optString("deepLink").startsWith("cindy://agent-net-notification")) {
+      // Optional native module: old installations continue their existing notification path.
+      // Reflection avoids a Gradle dependency cycle; the target class is explicitly kept by R8.
+      val decoded = try {
+        Class.forName("app.cindy.agentnet.AgentNetNotifications")
+          .getMethod("open", Context::class.java, String::class.java).invoke(null, context, body.getString("deepLink")) as? String
+      } catch (_: Exception) { null } ?: return
+      body = try { JSONObject(decoded) } catch (_: Exception) { return }
+      display["title"] = body.optString("title", "Cindy")
+      display["message"] = body.optString("body")
+      display["tag"] = body.optString("collapseId")
+      display["body"] = body.toString()
+    }
     if (body.optString("category") == "chat-message") {
       val prefs = context.getSharedPreferences(STORE, Context.MODE_PRIVATE)
       val actor = prefs.getString("actor", "") ?: ""
@@ -42,7 +56,6 @@ object ChatDelivery {
       next.put(id)
       prefs.edit().putString("ids", next.toString()).apply()
     }
-    val display = data.toMutableMap()
     if (!context.getSharedPreferences("cindy-chat-background", Context.MODE_PRIVATE).getBoolean("preview", true)) {
       body.remove("sender"); body.remove("senderName"); body.remove("body")
       display["body"] = body.toString(); display["message"] = ""

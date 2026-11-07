@@ -95,6 +95,7 @@ import { createSentImageRetainer } from './remoteMediaPersistentCache';
 import { withOutboundReviewConfirmation } from '../maker-ipc/reviewOutboundInput.js';
 import { confirmReviewArtifacts } from '../reviewer/confirmReviewArtifacts.js';
 import { tryUploadPeerAttachment } from './filePeer';
+import { withAgentNetMediaTarget } from './agentNetMediaRouting.js';
 import { withSourceFileAccessRecovery, releaseSourceFileAccessUploads } from './sourceFileAccessRecovery';
 import { parseSharedTaskPeer, scrubSharedProviderCatalog } from '@cindy/device-link';
 import { withSharedTaskMedia } from './sharedTaskMediaContext.js';
@@ -865,8 +866,8 @@ export async function handleInvoke(
         throwIpcError('DEVICE_LINK_CHANNEL_NOT_ALLOWED', 'Queued content editing is not supported by the target device');
       }
       callArgs = await withPeerAttachmentUpload((source, mime, signal) => peer ? Promise.resolve(null) : tryUploadPeerAttachment(normalizedDeviceId, source, mime, deps.invoke, undefined, signal), () =>
-        withSharedTaskMedia(peer?.role === 'host' ? peer.sharedTaskId : undefined,
-          () => existing ? deps.rewriteOutboundMedia!(channel, callArgs, existing) : deps.rewriteOutboundMedia!(channel, callArgs)),
+        withAgentNetMediaTarget(normalizedDeviceId, () => withSharedTaskMedia(peer?.role === 'host' ? peer.sharedTaskId : undefined,
+          () => existing ? deps.rewriteOutboundMedia!(channel, callArgs, existing) : deps.rewriteOutboundMedia!(channel, callArgs))),
         createSentImageRetainer(normalizedDeviceId));
      } catch (err) {
        if (isIpcError(err) && (err.code === 'DEVICE_LINK_CHANNEL_NOT_ALLOWED'

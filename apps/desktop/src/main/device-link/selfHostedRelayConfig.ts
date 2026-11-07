@@ -20,6 +20,10 @@ import { createLogger } from '../logger.js';
 import { oauthSecureStorageAvailable } from '../plugin-oauth/identityStore.js';
 import { DEFAULT_RELAY_PORT } from '../../shared/selfHostedRelay.js';
 import { setSelfHostedRelaySource, type ActiveSelfHostedRelay } from './selfHostedRelayRouting.js';
+import type { DeviceCertificate } from '@cindy/agent-net-protocol';
+import { readNotificationBridgeConfig } from '@cindy/agent-net-relay/notification-bridge';
+
+export function readHostNotificationBridgeConfig() { return readNotificationBridgeConfig(process.env); }
 
 const log = createLogger('self-hosted-relay:config');
 
@@ -80,6 +84,14 @@ export interface RelaySecrets {
   credential: string;
   /** Ed25519 私钥种子(base64url)。 */
   seed: string;
+  /** V2 keys use this same account-scoped safeStorage boundary, never renderer state or plaintext JSON. */
+  agentNet?: {
+    version: 2;
+    signingPrivateKey: string;
+    transportPrivateKey: string;
+    certificate: DeviceCertificate;
+    rootPublicKey: string;
+  };
 }
 
 const DEFAULT_CONFIG: RelayConfig = {
@@ -216,7 +228,8 @@ function readSecretsFile(relayId: string): RelaySecrets | null {
   try {
     const encrypted = fs.readFileSync(secretsFile(relayId), 'utf8');
     const parsed = JSON.parse(safeStorage.decryptString(Buffer.from(encrypted, 'base64'))) as Partial<RelaySecrets>;
-    return isString(parsed.credential) && isString(parsed.seed) ? { credential: parsed.credential, seed: parsed.seed } : null;
+    return isString(parsed.credential) && isString(parsed.seed)
+      ? { credential: parsed.credential, seed: parsed.seed, ...(parsed.agentNet ? { agentNet: parsed.agentNet } : {}) } : null;
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code !== 'ENOENT') log.warn('relay secrets unreadable');
     return null;
@@ -260,8 +273,9 @@ export function readRelayConfig(): RelayConfig {
   return structuredClone(load().config);
 }
 
-export function readRelaySecrets(relayId: string): RelaySecrets | null {
+export function readRelaySecrets(relayId: string, options?: { fresh?: boolean }): RelaySecrets | null {
   if (!getActiveAppSession().dataOwnerId) return null;
+  if (options?.fresh) load().secrets.delete(relayId);
   return cachedSecrets(load(), relayId);
 }
 
@@ -276,6 +290,7 @@ export function activeSelfHostedRelay(): ActiveSelfHostedRelay | null {
   if (!active || !secrets) return null;
   return {
     relayId: active.relayId,
+    scopeKey: activeOwnerScopeKey(),
     name: active.name,
     baseUrl: active.baseUrl,
     role: active.role,

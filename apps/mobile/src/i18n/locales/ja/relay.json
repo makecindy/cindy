@@ -1,4 +1,12 @@
 {
+  "agentNet": {
+    "enabled": "Agent-Net を有効にする",
+    "onlyEncrypted": "暗号化された接続のみ使用",
+    "hint": "デバイス間はエンドツーエンドで暗号化されます。暗号化された接続のみを使う場合、両方のデバイスで Agent-Net を有効にしてください。",
+    "updateRequired": "Agent-Net を使うには最新のアプリをインストールしてください。",
+    "notConfigured": "このリレーはまだ Agent-Net に対応していません。更新するか V2 リレーに参加してください。",
+    "failed": "Agent-Net の設定を変更できませんでした。リレーの接続を確認して再試行してください。"
+  },
   "settings": {
     "sectionTitle": "リレーサービス",
     "currentLabel": "リレーサービス",

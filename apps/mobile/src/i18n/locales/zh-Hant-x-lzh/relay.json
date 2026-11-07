@@ -1,4 +1,12 @@
 {
+  "agentNet": {
+    "enabled": "啟用 Agent-Net",
+    "onlyEncrypted": "惟用加密連線",
+    "hint": "諸裝置間以端到端加密相連。惟用加密連線時，兩端皆須啟用 Agent-Net。",
+    "updateRequired": "請裝新版應用，以用 Agent-Net。",
+    "notConfigured": "此中繼尚無 Agent-Net，請更新或加入 V2 中繼。",
+    "failed": "Agent-Net 設定未成，請核中繼連線再試。"
+  },
   "settings": {
     "sectionTitle": "中繼",
     "currentLabel": "中繼",

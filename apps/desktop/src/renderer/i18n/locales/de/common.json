@@ -270,7 +270,7 @@
     "estimateTooManyFiles": "Das Projekt enthält mehr als {{limit, number}} Dateien und kann nicht kopiert werden. Kopiere stattdessen ein Projekt mit weniger Dateien."
   },
   "sharedTask": {
-    "officialRelayNote": "Du nutzt dein eigenes Relay. Inhalte geteilter Aufgaben laufen weiterhin über das Cindy-Relay.",
+    "officialRelayNote": "Agent-Net-Freigaben verwenden das Relay der Einladung; ältere Freigaben verwenden weiterhin das Cindy-Relay.",
     "selfJoin": "Du hast diese geteilte Aufgabe gestartet und musst daher nicht beitreten. Öffne sie unter „Von mir geteilt“.",
     "manageSharing": "Freigabe verwalten",
     "manageMembers": "Mitglieder verwalten…",
@@ -372,7 +372,7 @@
     "closeAllDescription": "Gäste verlieren den Zugriff. Der Aufgabenverlauf bleibt erhalten."
   },
   "providerShare": {
-    "officialRelayNote": "Du nutzt dein eigenes Relay. Inhalte von Anbieterfreigaben laufen weiterhin über das Cindy-Relay.",
+    "officialRelayNote": "Agent-Net-Freigaben verwenden das Relay der Einladung; ältere Freigaben verwenden weiterhin das Cindy-Relay.",
     "owned": {
       "title": "Von mir geteilte Anbieter"
     },
@@ -2410,12 +2410,12 @@
         "previewStarting": "Nimm die Hände von Maus und Tastatur. In 3 Sekunden wird der Bildschirm verdeckt; drücke eine Taste, um ihn zu sperren, und entsperre ihn dann.",
         "previewUnavailable": "Der Bildschirm konnte nicht verdeckt werden. Starte Cindy neu und versuche es erneut.",
         "delay": {
-          "label": "Bildschirm verdecken nach",
-          "hint": "So lange bleiben Tastatur und Maus unberührt, bevor die Abdeckung erscheint. Standardmäßig wie der Ruhezustand des Displays.",
           "30": "30 s",
           "60": "1 Min.",
           "120": "2 Min.",
           "300": "5 Min.",
+          "label": "Bildschirm verdecken nach",
+          "hint": "So lange bleiben Tastatur und Maus unberührt, bevor die Abdeckung erscheint. Standardmäßig wie der Ruhezustand des Displays.",
           "system": "System"
         }
       }
@@ -5907,7 +5907,7 @@
         "current": "In Verwendung",
         "ownerName": "Dieser Computer",
         "unavailable": "Um dein eigenes Relay zu nutzen, melde dich bei Cindy an und stelle sicher, dass der Systemschlüsselbund verfügbar ist.",
-        "limits": "Solange du dein eigenes Relay nutzt, sind Push-Mitteilungen auf dem Smartphone nicht verfügbar. Anbieterfreigaben und geteilte Aufgaben laufen weiterhin über das Cindy-Relay.",
+        "limits": "Agent-Net-Freigaben verwenden das in der Einladung angegebene Relay. Systembenachrichtigungen benötigen dort einen Push-Dienst. Ältere Freigaben verwenden weiterhin das Cindy-Relay.",
         "actions": {
           "join": "Anderem Relay beitreten",
           "useOfficial": "Zurück zum Cindy-Relay wechseln",
@@ -6123,7 +6123,7 @@
           "switchFromHost": "Das Relay auf diesem Computer wird gestoppt und die Verbindung zu den beigetretenen Geräten getrennt.",
           "switchFromMember": "Dieser Computer verlässt {{name}}. Um später erneut beizutreten, muss der Eigentümer einen neuen Beitrittslink erstellen.",
           "switchConfirm": "Wechseln",
-          "switchFromOfficial": "Die Fernsteuerung zwischen deinen Geräten läuft über {{name}}. Push-Benachrichtigungen auf dem Smartphone sind nicht verfügbar, solange du dein eigenes Relay nutzt. Das Teilen von Anbietern und gemeinsame Aufgaben laufen weiterhin über das Cindy-Relay."
+          "switchFromOfficial": "Die Fernsteuerung zwischen Geräten läuft künftig über „{{name}}“. Agent-Net-Freigaben folgen dem Relay der Einladung; ältere Freigaben verwenden weiterhin das Cindy-Relay."
         },
         "dialog": {
           "steps": {
@@ -6462,7 +6462,7 @@
       "v2": {
         "switch": {
           "title": "Agent-Net (Beta)",
-          "hint": "Die neue Version von device-link, wird schrittweise weiterentwickelt. Bisher umgesetzt: eine Verbindungstopologie (ob jedes Gerät direkt oder über ein Relay verbunden ist, Round-Trip-Latenz, Leitungen mit laufenden Nachrichten, ausgelastete Geräte und Geräte mit Handlungsbedarf) sowie die letzte Aktivität. Ändert nur die Ansicht auf diesem Computer."
+          "hint": "Zeigt die Verbindungstopologie und die letzte Aktivität. Verbindungen sind verschlüsselt, wenn Agent-Net auf beiden Geräten aktiviert ist und die Geräte über Agent-Net gekoppelt wurden. Andere Geräte verwenden die bisherige Verbindung. Gilt nur für diesen Computer."
         },
         "empty": "Noch keine anderen Geräte. Melde dich auf einem anderen Computer oder Telefon mit demselben Konto an, dann erscheint es hier.",
         "stats": {
@@ -6521,8 +6521,15 @@
           "manage": "Gerät verwalten …",
           "linkStatus": "Zu {{name}}",
           "version": "Cindy {{version}}",
-          "remoteDesktopFailed": "Remote-Desktop konnte nicht geöffnet werden"
-        }
+          "remoteDesktopFailed": "Remote-Desktop konnte nicht geöffnet werden",
+          "encryption": "Verschlüsselung",
+          "encrypted": "Ende-zu-Ende-verschlüsselt",
+          "legacyConnection": "Ältere Verbindung",
+          "encryptionUnknown": "Nicht bestätigt",
+          "legacyEncryptionHint": "Der Relay-Pfad der älteren Verbindung ist nicht Ende-zu-Ende-verschlüsselt."
+        },
+        "onlyEncrypted": "Nur verschlüsselte Verbindungen",
+        "onlyEncryptedHint": "Ältere Geräte und Freigaben, die noch die ältere Verbindung nutzen, sind dann nicht verfügbar."
       }
     },
     "tina": {

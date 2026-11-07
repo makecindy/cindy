@@ -33,6 +33,8 @@ export interface SelfHostedRelayRoute {
 }
 
 export interface SelfHostedRelaySigning {
+  /** Secure membership/pending approval; includes a private polling token. Never log. */
+  agentNet?: import('./agentNetMembership').MobileAgentNetMembership;
   /** 证书里的设备 ID(= 加入时上报的官方设备 ID)。 */
   deviceId: string;
   /** 加入链接里的主人公钥。 */
@@ -68,7 +70,8 @@ export function normalizeSelfHostedRelayBase(url: string): string {
 
 function sameSigning(a: SelfHostedRelaySigning | null, b: SelfHostedRelaySigning | null): boolean {
   if (!a || !b) return a === b;
-  return a.deviceId === b.deviceId && a.ownerPublicKey === b.ownerPublicKey && a.seed === b.seed;
+  return a.deviceId === b.deviceId && a.ownerPublicKey === b.ownerPublicKey && a.seed === b.seed
+    && JSON.stringify(a.agentNet ?? null) === JSON.stringify(b.agentNet ?? null);
 }
 
 function sameRoute(a: SelfHostedRelayRoute | null, b: SelfHostedRelayRoute | null): boolean {
