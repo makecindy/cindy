@@ -69,6 +69,7 @@ import {
   useRemoteHostProjectOrders,
 } from '../../hooks/useRemoteHostProjectOrders';
 import { SortableList } from '@/components/sidebar/SortableList';
+import { PROJECT_DROP_CLASS } from '../useSessionProjectDrop';
 import { useReducedMotion } from '@/hooks/useReducedMotion';
 import { useSidebarMainViewMode } from '@/hooks/useSidebarCardMode';
 import { ProjectNode } from './ProjectNode';
@@ -1092,6 +1093,7 @@ export function ProjectsSection({
       return (
         <SessionGroupNode
           key={`${entry.kind}:${dialogueGroupKey}`}
+          dialogueDropDevice={isMake ? undefined : dialogueDeviceTarget?.deviceId ?? (dialogueDeviceTarget === null ? '' : 'source')}
           sessions={entry.sessions}
           lamp={lampAgg(entry.sessions)}
           foldExemptSessionIds={lampFoldExemptIds}
@@ -1413,6 +1415,7 @@ export function ProjectsSection({
  * 标题「对话」是归属分类名(task-and-conversation-naming §2.3)。
  */
 export function SessionGroupNode({
+  dialogueDropDevice,
   sessions,
   lamp,
   foldExemptSessionIds,
@@ -1443,6 +1446,8 @@ export function SessionGroupNode({
   onScheduleAction,
   sessionVariant,
 }: {
+  /** Empty = this computer, source = mixed group, absent = a non-dialogue group. */
+  dialogueDropDevice?: string;
   sessions: Session[];
   /** 仅收起时显示组头聚合灯(ProjectNode.lamp 同款语义):running → 图标呼吸橙;
    *  dotTone → 右侧状态槽。聚合集合 = 组内会话(与渲染一致)。 */
@@ -1498,7 +1503,11 @@ export function SessionGroupNode({
   const Chevron = collapsed ? ChevronRight : ChevronDown;
   const showRunning = collapsed && lamp?.running;
   return (
-    <div className="relative flex w-full select-none flex-col" data-no-drag>
+    <div
+      className={cn('relative flex w-full select-none flex-col rounded-xl', PROJECT_DROP_CLASS)}
+      data-session-dialogue-drop={dialogueDropDevice}
+      data-no-drag
+    >
       {/* 段头:与 ProjectNode Header 同款规格(h-8 药丸 hover / pl-3 pr-2 /
           gap-2.5 / 15px 图标 / meta 灰 font-normal),仅图标换 MessagesSquare、
           菜单内容由调用方提供，固定分类不继承项目专属操作。 */}
