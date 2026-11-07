@@ -234,7 +234,12 @@ export function SubscriptionAccountsSection({
                             })
                           }
                         >
-                          {t('subscriptionAccounts.login')}
+                          {/* Signing in replaces this folder's own login; say so when it is already connected. */}
+                          {t(
+                            account.status === 'ready' || account.status === 'limited'
+                              ? 'subscriptionAccounts.loginAgain'
+                              : 'subscriptionAccounts.login',
+                          )}
                         </DropdownMenuItem>
                         {account.id !== 'default' && (
                           <DropdownMenuItem

@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 
-import { render, screen, within } from '@testing-library/react';
+import { fireEvent, render, screen, within } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { SubscriptionPoolView } from '../../../../shared/subscriptionAccounts';
 
@@ -75,5 +75,19 @@ describe('SubscriptionAccountsSection usage', () => {
     for (const name of ['quotaCard.fiveHourLabel', 'quotaCard.weeklyLabel', 'Fable weekly'])
       expect(added.getByRole('progressbar', { name })).toBeTruthy();
     expect(within(rows[0] as HTMLElement).queryByRole('progressbar')).toBeNull();
+  });
+  // Regression: a connected account's menu offered plain "Sign in", reading as if it were signed out.
+  it.each([
+    ['ready', 'subscriptionAccounts.loginAgain'],
+    ['signed-out', 'subscriptionAccounts.login'],
+  ] as const)('labels sign-in for a %s account by its state', async (status, label) => {
+    vi.mocked(window.electronAPI.subscriptionAccounts.command).mockResolvedValue({
+      ...view,
+      accounts: [{ ...view.accounts[0], status }],
+    });
+    render(<SubscriptionAccountsSection providerId="anthropic" />);
+    const trigger = await screen.findByRole('button', { name: 'providerGroup.member.moreAria' });
+    fireEvent.pointerDown(trigger, { button: 0, ctrlKey: false, pointerType: 'mouse' });
+    expect(await screen.findByRole('menuitem', { name: label })).toBeTruthy();
   });
 });
