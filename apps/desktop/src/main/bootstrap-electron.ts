@@ -2637,10 +2637,14 @@ registerHostDaemonsIpc({
     hostDaemonsService ??= createHostDaemonsService({
       scanTasks: scanScheduledTasks,
       readToolMessages,
-      ledger: createHostDaemonLedger(path.join(app.getPath('userData'), 'host-daemons.v1.json')),
+      // 台账按当前账号隔离：归属记录带会话标题，共享路径会让切号后的账号看到
+      // 旧账号留下的标题与 id（路径随账号变化 → 切号即换目录）。
+      ledger: createHostDaemonLedger(() => ownerScopedUserDataPath('host-daemons.v1.json')),
       stopTask: stopScheduledTask,
       runTask: runScheduledTask,
       deleteTask: deleteScheduledTask,
+      // 切号即作废在途追溯与本次清单：归属记录带会话标题，不能跨账号。
+      ownerScopeKey: activeOwnerScopeKey,
     });
     return hostDaemonsService;
   },

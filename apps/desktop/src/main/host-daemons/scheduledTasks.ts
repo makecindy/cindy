@@ -16,10 +16,13 @@ import { runWindowsScriptWorker } from '../process-monitor/windowsProcessScanWor
  *  - `mtime` = 任务定义文件（`C:\Windows\System32\Tasks\<id>`）的修改时间，是本功能
  *    判定「这条任务是什么时候被创建」的唯一可用证据（`RegistrationInfo.Date` 在
  *    schtasks 创建的任务上普遍为空）。
- *  - 非 ASCII 任务名由 ConvertTo-Json 转成 \uXXXX，因此不依赖控制台代码页。
+ *  - 非 ASCII 任务名不依赖控制台代码页：worker 按 UTF-8 读输出，脚本显式把
+ *    `[Console]::OutputEncoding` 设为 UTF-8（沿用 processIdentity.ts 的做法），
+ *    否则中文任务名在非 UTF-8 代码页的机器上会读成乱码，无法匹配历史工具消息。
  */
 export const WINDOWS_SCHEDULED_TASK_SCAN_SCRIPT = [
   "$ErrorActionPreference = 'Stop'",
+  '[Console]::OutputEncoding = [System.Text.UTF8Encoding]::new($false);',
   "$root = Join-Path $env:SystemRoot 'System32\\Tasks'",
   "Get-ScheduledTask | Where-Object { $_.TaskPath -notlike '\\Microsoft\\*' } | ForEach-Object {",
   '  $task = $_',

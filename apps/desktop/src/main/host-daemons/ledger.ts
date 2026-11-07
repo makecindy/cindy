@@ -89,14 +89,26 @@ export interface HostDaemonLedger {
   save(): void;
 }
 
-export function createHostDaemonLedger(filePath: string): HostDaemonLedger {
+export function createHostDaemonLedger(filePath: string | (() => string)): HostDaemonLedger {
   let state: LedgerFile | null = null;
   let dirty = false;
+  let loadedPath: string | null = null;
+
+  /**
+   * 台账按当前账号隔离（路径随账号变化）。路径变了就丢弃内存态：切号后旧账号的
+   * 归属记录（含会话标题）不能被新账号读到，内存缓存也不能继续当旧数据用。
+   */
+  function currentPath(): string {
+    return typeof filePath === 'function' ? filePath() : filePath;
+  }
 
   function ensure(): LedgerFile {
-    if (state) return state;
+    const path = currentPath();
+    if (state && loadedPath === path) return state;
+    loadedPath = path;
+    dirty = false;
     try {
-      state = parseLedger(fs.readFileSync(filePath, 'utf8'));
+      state = parseLedger(fs.readFileSync(path, 'utf8'));
     } catch {
       // 文件不存在 = 首次运行；损坏 = 当成空台账重来（判定可重建，不阻塞面板）。
       state = { ...EMPTY };
@@ -129,7 +141,7 @@ export function createHostDaemonLedger(filePath: string): HostDaemonLedger {
     },
     save() {
       if (!dirty) return;
-      atomicWriteFileSync(filePath, `${JSON.stringify(ensure(), null, 2)}\n`);
+      atomicWriteFileSync(currentPath(), `${JSON.stringify(ensure(), null, 2)}\n`);
       dirty = false;
     },
   };

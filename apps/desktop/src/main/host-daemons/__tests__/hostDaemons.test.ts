@@ -329,4 +329,53 @@ describe('hostDaemons service', () => {
 
     await expect(service.list()).resolves.toMatchObject({ supported: false, entries: [] });
   });
+
+  it('drops the traced owner when the account switched mid-query', async () => {
+    // 归属记录带会话标题：切号瞬间读到的消息可能已属于另一个账号，结果不能落盘。
+    let scope = 'account-a';
+    const ledger = memoryLedger();
+    const service = createHostDaemonsService({
+      scanTasks: async () => [task()],
+      readToolMessages: async () => {
+        scope = 'account-b';
+        return [
+          { sessionId: 'session-a', title: '账号A的标题', content: 'schtasks /create /tn airlink-autopm' },
+        ];
+      },
+      ledger,
+      stopTask: async () => {},
+      runTask: async () => {},
+      deleteTask: async () => {},
+      platform: 'win32',
+      now: () => 1_800_000_000_000,
+      ownerScopeKey: () => scope,
+    });
+
+    const snapshot = await service.list();
+    expect(snapshot.entries).toEqual([]);
+    expect(ledger.owners.has('\\airlink-autopm')).toBe(false);
+  });
+
+  it('drops the whole snapshot when the account switched during the scan', async () => {
+    let scope = 'account-a';
+    const service = createHostDaemonsService({
+      scanTasks: async () => {
+        scope = 'account-b';
+        return [task()];
+      },
+      readToolMessages: async () => [
+        { sessionId: 'session-a', title: '账号A的标题', content: 'schtasks /create /tn airlink-autopm' },
+      ],
+      ledger: memoryLedger(),
+      stopTask: async () => {},
+      runTask: async () => {},
+      deleteTask: async () => {},
+      platform: 'win32',
+      now: () => 1_800_000_000_000,
+      ownerScopeKey: () => scope,
+    });
+
+    const snapshot = await service.list();
+    expect(snapshot.entries).toEqual([]);
+  });
 });

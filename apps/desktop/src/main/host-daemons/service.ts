@@ -48,6 +48,11 @@ export interface HostDaemonsServiceDeps {
   deleteTask: (id: string) => Promise<void>;
   now?: () => number;
   platform?: NodeJS.Platform;
+  /**
+   * 当前账号边界标识（切号即变）。默认不启用校验：纯逻辑层不依赖账号态，
+   * 由 main 接线时传入 `activeOwnerScopeKey`。
+   */
+  ownerScopeKey?: () => string;
 }
 
 function toState(raw: string): HostDaemonState {
@@ -106,7 +111,11 @@ export function createHostDaemonsService(deps: HostDaemonsServiceDeps): HostDaem
     if (!task.definitionMtimeMs) return null;
     const fromMs = task.definitionMtimeMs - ATTRIBUTION_WINDOW_MS;
     const toMs = task.definitionMtimeMs + ATTRIBUTION_WINDOW_MS;
+    // 追溯要读消息库（跨 await）：切号期间读到的可能已是另一个账号的库。
+    const scopeBefore = deps.ownerScopeKey?.();
     const rows = await deps.readToolMessages(fromMs, toMs);
+    // 切号后作废在途查询：旧账号的结果不能写进新账号的台账。
+    if (scopeBefore !== undefined && scopeBefore !== deps.ownerScopeKey?.()) return null;
     const picked = pickOwnerSession(rows, [task.name]);
     return picked ? { sessionId: picked.sessionId, title: picked.title } : null;
   }
@@ -153,7 +162,9 @@ export function createHostDaemonsService(deps: HostDaemonsServiceDeps): HostDaem
       if (platform !== 'win32') {
         return { capturedAtMs, supported: false, entries: [], unrelatedCount: 0 };
       }
-
+      // 清单里的条目带归属会话标题：账号切换后本次结果作废，不能把旧账号的标题
+      // 交给新账号的界面（下次扫描会按新账号重新归属）。
+      const scopeBefore = deps.ownerScopeKey?.();
       const tasks = await deps.scanTasks();
       const entries: HostDaemonEntry[] = [];
       let unrelatedCount = 0;
@@ -214,6 +225,9 @@ export function createHostDaemonsService(deps: HostDaemonsServiceDeps): HostDaem
       }
 
       entries.sort((left, right) => left.name.localeCompare(right.name));
+      if (scopeBefore !== undefined && scopeBefore !== deps.ownerScopeKey?.()) {
+        return { capturedAtMs, supported: true, entries: [], unrelatedCount };
+      }
       return { capturedAtMs, supported: true, entries, unrelatedCount };
     },
 
