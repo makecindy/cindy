@@ -1638,7 +1638,10 @@ export function ProviderConnectionDialog({
         return;
       if (requestId) connectionTestRef.current = null;
       const ipc = extractIpcError(e);
-      setTest((prev) => ({ ...prev, [agent]: { status: 'fail', code: 'UNKNOWN', modelId: firstModel } }));
+      setTest((prev) => ({ ...prev, [agent]: { status: 'fail', code: 'UNKNOWN',
+        // 只有 adhoc 请求的被测模型由本窗口决定；saved 请求由 Main 挑选，抛错时拿不到，
+        // 表单当前的首个模型可能不是它实际测的那个，宁可不标也不标错。
+        ...(useSaved ? {} : { modelId: firstModel }) } }));
       if (ipc?.message) toast.error(ipc.message);
     }
   }, [activeTab, authMode, rt, t, savedBaselineFor, initial, presets, matchesEndpointTemplate, catalogModels, simpleAdding, setRtSynced, picker, draft]);

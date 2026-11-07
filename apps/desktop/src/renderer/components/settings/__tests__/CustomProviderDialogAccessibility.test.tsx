@@ -664,14 +664,27 @@ describe('ProviderConnectionDialog accessibility', () => {
   });
 
   // The probe can throw after the response headers (first stream frame lost); Main rethrows unchanged and
-  // the IPC rejection carries no result, so the dialog falls back to the model it asked to test.
-  it('探测抛错(无结果)时仍标明被测模型', async () => {
-    window.electronAPI.maker.testProviderConnection = vi.fn(async () => { throw new Error('first frame interrupted'); });
-    await openFailingTest();
+  // the IPC rejection carries no result. An adhoc request was built from the form, so its model is known.
+  it('探测抛错(无结果)时 adhoc 请求仍标明发出的模型', async () => {
+    const test = vi.fn(async () => { throw new Error('first frame interrupted'); });
+    window.electronAPI.maker.testProviderConnection = test;
+    await openFailingTest({ editedForm: true });
     expect(await screen.findByText('settings.providers.custom.test.model:chat')).toBeTruthy();
+    expect(test).toHaveBeenCalledWith(expect.objectContaining({ kind: 'adhoc' }));
   });
 
-  async function openFailingTest() {
+  // A saved request is probed with whatever model Main picks, which can differ from the unsaved form's
+  // first row. With no result to say which, naming the form's model could blame the wrong one.
+  it('探测抛错(无结果)时 saved 请求不猜测被测模型', async () => {
+    const test = vi.fn(async () => { throw new Error('first frame interrupted'); });
+    window.electronAPI.maker.testProviderConnection = test;
+    await openFailingTest();
+    expect(await screen.findByText('providerError.UNKNOWN')).toBeTruthy();
+    expect(test).toHaveBeenCalledWith(expect.objectContaining({ kind: 'saved' }));
+    expect(screen.queryByText(/settings\.providers\.custom\.test\.model/)).toBeNull();
+  });
+
+  async function openFailingTest(opts: { editedForm?: boolean } = {}) {
     const route = { baseUrl: 'https://host.example/v1', wireProtocol: 'openai-chat' as const };
     const initial: CustomProviderConfig = {
       id: 'test-model-label', name: 'Test model label', auth: { method: 'apiKey' },
@@ -681,6 +694,10 @@ describe('ProviderConnectionDialog accessibility', () => {
     const user = userEvent.setup();
     render(<ProviderConnectionDialog initial={initial} focusAgent="pi" onSaved={vi.fn()} onClose={vi.fn()} />);
     await waitForInitialDialogFocus();
+    if (opts.editedForm) {
+      // An unsaved edit makes the saved record stale, so the dialog tests the form values (adhoc).
+      fireEvent.change(screen.getByPlaceholderText('settings.providers.custom.fields.baseUrlPlaceholder'), { target: { value: 'https://edited.example/v1' } });
+    }
     await user.click(screen.getByRole('button', { name: 'settings.providers.custom.test.button' }));
   }
 
