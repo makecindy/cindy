@@ -680,6 +680,12 @@ it('opens the original task from an inert card link and removes handlers when th
   mocks.navigate.mockClear();
   fireEvent.keyDown(element, { key: 'Enter' });
   await waitFor(() => expect(mocks.navigate).toHaveBeenCalledOnce());
+  mocks.navigate.mockClear();
+  fireEvent(element, new MouseEvent('auxclick', { bubbles: true, cancelable: true, button: 2 }));
+  expect(mocks.openSessionInNewWindow).not.toHaveBeenCalled();
+  fireEvent(element, new MouseEvent('auxclick', { bubbles: true, cancelable: true, button: 1 }));
+  await waitFor(() => expect(mocks.openSessionInNewWindow).toHaveBeenCalledWith('original-task', undefined, null));
+  expect(mocks.navigate).not.toHaveBeenCalled();
   view.unmount();
   mocks.navigate.mockClear();
   fireEvent.click(element);
