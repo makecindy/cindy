@@ -667,6 +667,27 @@ describe('provider group runtime quota account selection', () => {
     return { read, config, localId };
   }
 
+  // Unit: a new controller must keep the existing provider usable when an old
+  // host explicitly rejects the new pool channel; named-account echo tests do
+  // not cover that capability failure and fallback across both quota sources.
+  it.each(['claude', 'codex'])('uses legacy %s quota when an old host rejects pool queries', async (native) => {
+    const providerId = native === 'claude' ? 'anthropic' : 'openai';
+    const h = harness(providerId, native);
+    const bucket = { updatedAt: Date.now(), primary: { usedPercent: 12, windowMinutes: 300, resetsAt: Date.now() / 1000 + 3600 } };
+    io.invoke.mockImplementation(async (_device, channel) => {
+      if (channel === 'maker:subscription-pool:quota')
+        return { ok: false, error: { code: 'CHANNEL_NOT_ALLOWED', message: 'old host' } };
+      return { ok: true, result: channel === 'maker:usage:claude-subscription'
+        ? usage() : channel === 'maker:usage:codex-rate-limits' ? { rateLimits: bucket } : bucket };
+    });
+    const member = (await h.read())[1];
+    expect(member.state).toBe('ok');
+    if (native === 'claude') expect(member.claudeUsage?.fiveHour?.utilization).toBe(25);
+    else expect(member.codexUsage?.appServerBuckets?.__default__?.primary?.usedPercent).toBe(12);
+    await h.read();
+    expect(io.invoke.mock.calls.filter(([, channel]) => channel === 'maker:subscription-pool:quota')).toHaveLength(1);
+  });
+
   // PR review: pooled native quota must survive both remote parsing and source merging for bridge engines.
   it('uses remote pool buckets for Pi and Claude Code while retaining model-specific capacity', async () => {
     const h = harness('openai', 'codex');

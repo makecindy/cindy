@@ -286,6 +286,15 @@ export function refreshSubscriptionPool(
 /** Outer groups see the next usable account's quota, not an exhausted default.
  * No identity, directory, credentials, or account identifiers cross this boundary.
  */
+export function readLegacySubscriptionPoolUsage(provider: SubscriptionProvider): Promise<Usage | null | undefined> {
+  const pool = readPool(provider);
+  // One ordinary default account keeps its original native/web usage readers.
+  if (!pool || (!pool.disconnected && pool.accounts.length === 1
+    && pool.accounts[0].id === 'default' && !pool.accounts[0].paused))
+    return Promise.resolve(undefined);
+  return readSubscriptionPoolUsage(provider);
+}
+
 export async function readSubscriptionPoolUsage(
   provider: SubscriptionProvider,
 ): Promise<Usage | null | undefined> {

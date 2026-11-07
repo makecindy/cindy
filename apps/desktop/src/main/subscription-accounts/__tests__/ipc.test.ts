@@ -28,6 +28,7 @@ vi.mock('../../device-link/invoke-context.js', () => ({
   getDeviceLinkInvokeContext: () => h.context,
 }));
 vi.mock('../../device-link/index.js', () => ({ broadcast: vi.fn() }));
+vi.mock('../../device-link/dispatch.js', () => ({ setRemoteSubscriptionPoolQuotaReader: vi.fn() }));
 vi.mock('../../appSessionState.js', () => ({
   activeOwnerScopeKey: () => `${h.owner}:${h.generation}`,
   getActiveAppSession: () => ({ dataOwnerId: h.owner }),
@@ -41,6 +42,7 @@ vi.mock('../service.js', () => ({ executeSubscriptionAccountCommand: h.execute }
 vi.mock('../runtime.js', () => ({
   onSubscriptionAccountsChanged: vi.fn(),
   readSubscriptionPoolUsage: vi.fn(async () => undefined),
+  readLegacySubscriptionPoolUsage: vi.fn(async () => undefined),
 }));
 import { registerSubscriptionAccountsIpc } from '../ipc.js';
 import { accountDirectory, accountOwnerPrefix, readBoundClaudeConfigDir } from '../store.js';

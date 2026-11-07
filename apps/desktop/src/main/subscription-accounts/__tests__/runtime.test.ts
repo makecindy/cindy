@@ -78,11 +78,13 @@ import {
   readSubscriptionPool,
   disconnectSubscriptionPool,
   readSubscriptionPoolUsage,
+  readLegacySubscriptionPoolUsage,
   readSubscriptionPoolAccountUsages,
   runSubscriptionAccountCommand,
   observeSubscriptionAccountUsage,
 } from '../runtime.js';
-import { providerGroupMemberUsageState } from '../../provider-group/usage.js';
+import { providerGroupMemberUsageState, providerGroupCodexUsageFromReads, providerGroupUsageSnapshot } from '../../provider-group/usage.js';
+import { readLegacySubscriptionQuota } from '../legacyQuota.js';
 import { withSubscriptionAccounts } from '../agent.js';
 import { getSessionSubscriptionAccount } from '../session.js';
 const account = (id: string) => ({ id, paused: false, limit: 1, weight: 1 });
@@ -105,6 +107,75 @@ beforeEach(() => {
 });
 
 describe('native account assignment on the executing computer', () => {
+  // Unit: legacy wire reads must expose usable pool quota when the first account
+  // is exhausted. Existing tests only exercise the new pool query, not old calls.
+  it.each(['anthropic', 'openai'] as const)('keeps old %s quota readers usable without changing the default account card', async (provider) => {
+    h.pools[provider] = { strategy: 'order', accounts: [account('default'), account('second')] };
+    const now = Date.now();
+    h.usage.mockImplementation(async (_provider: string, directory: string) => {
+      const used = directory.endsWith('default') ? 100 : 12;
+      const bucket = { limitId: 'codex', limitName: null, updatedAt: now,
+        primary: { usedPercent: used, windowMinutes: 300, resetsAt: now / 1000 + 3600 }, secondary: null };
+      return provider === 'anthropic'
+        ? { claudeUsage: { updatedAt: now, fiveHour: { utilization: used, resetsAt: now / 1000 + 3600 }, sevenDay: null, scoped: [], accountFingerprint: 'private-identity' } }
+        : { codexUsage: { appServerBuckets: { codex: bucket }, webSnapshot: bucket } };
+    });
+    const read = (channel: string, args: unknown[]) => readLegacySubscriptionQuota(readLegacySubscriptionPoolUsage, channel, args);
+    if (provider === 'anthropic') {
+      const usage = await read('maker:usage:claude-subscription', []);
+      expect(usage).toMatchObject({ fiveHour: { utilization: 12 }, providerId: 'anthropic' });
+      expect(providerGroupMemberUsageState({ claudeUsage: providerGroupUsageSnapshot(usage, now) }, undefined, now, 'claude-code').limited).toBe(false);
+      expect(JSON.stringify(usage)).not.toContain('private-identity');
+    } else {
+      const usage = await read('maker:usage:account', ['codex']);
+      const limits = await read('maker:usage:codex-rate-limits', []);
+      const combined = providerGroupCodexUsageFromReads(usage, limits, now);
+      for (const kind of ['codex', 'claude-code', 'pi'])
+        expect(providerGroupMemberUsageState({ codexUsage: combined }, undefined, now, kind).limited).toBe(false);
+      expect(limits).toMatchObject({ rateLimits: { primary: { usedPercent: 12 } }, resetOffer: null, rateLimitResetCredits: null });
+    }
+    const original = (await readSubscriptionPool(provider)).accounts[0];
+    expect(provider === 'anthropic' ? original.usage?.claude?.fiveHour?.utilization
+      : original.usage?.codex?.buckets.codex.primary?.usedPercent).toBe(100);
+    const lease = await acquireSubscriptionAccount(provider, undefined, []);
+    expect(lease).toMatchObject({ account: { configDir: `${provider}/second` } });
+    lease?.release();
+  });
+
+  it('preserves legacy, named and explicit default-account reads, and never revives a disconnected pool', async () => {
+    const read = vi.fn(readLegacySubscriptionPoolUsage);
+    for (const [channel, args] of [
+      ['maker:usage:claude-subscription', ['anthropic', false, 'default-subscription-account']],
+      ['maker:usage:account', ['codex', 'openai', 'default-subscription-account']],
+      ['maker:usage:codex-rate-limits', ['openai', 'default-subscription-account']],
+      ['maker:usage:account', ['codex', 'openai-second']],
+      ['maker:usage:claude-subscription', ['anthropic-second']],
+      ['maker:usage:account', ['claude-code']],
+    ] as Array<[string, unknown[]]>) expect(await readLegacySubscriptionQuota(read, channel, args)).toBeUndefined();
+    expect(read).not.toHaveBeenCalled();
+    h.pools = {};
+    expect(await readLegacySubscriptionQuota(read, 'maker:usage:account', ['codex'])).toBeUndefined();
+    h.pools.openai = { strategy: 'order', accounts: [account('default')] };
+    expect(await readLegacySubscriptionQuota(read, 'maker:usage:account', ['codex'])).toBeUndefined();
+    h.pools.openai = { strategy: 'order', disconnected: true, accounts: [account('default')] };
+    expect(await readLegacySubscriptionQuota(read, 'maker:usage:account', ['codex'])).toBeNull();
+  });
+
+  // Unit: legacy rate-limits readers timestamp a reply as fresh. A cached model
+  // bucket must neither gain a new lifetime nor become the generic/WHAM quota.
+  it.each([0, 11 * 60_000])('keeps model-only quota separate and rejects %i ms old native reads', async (age) => {
+    h.pools.openai = { strategy: 'order', accounts: [account('second')] };
+    const now = Date.now();
+    const bucket = { limitId: 'spark', limitName: 'Spark', updatedAt: now - age,
+      primary: { usedPercent: 100, windowMinutes: 300, resetsAt: now / 1000 + 3600 }, secondary: null };
+    h.usage.mockResolvedValue({ codexUsage: { appServerBuckets: { spark: bucket }, webSnapshot: null } });
+    const usage = await readLegacySubscriptionQuota(readLegacySubscriptionPoolUsage, 'maker:usage:account', ['codex']);
+    expect(usage).toMatchObject({ webSnapshot: null, appServerBuckets: { spark: { updatedAt: now - age } } });
+    expect(usage).not.toHaveProperty('primary');
+    const limits = await readLegacySubscriptionQuota(readLegacySubscriptionPoolUsage, 'maker:usage:codex-rate-limits', []);
+    if (age) expect(limits).toBeNull();
+    else expect(limits).toMatchObject({ rateLimits: { primary: null }, rateLimitsByLimitId: { spark: { primary: { usedPercent: 100 } } } });
+  });
   // Regression: a signed-in CLI was silently reused by the wizard's "add account".
   // Unit tier: the real command entry must keep preview read-only and explicit
   // new-account intent isolated, including an unbound or expired first account.
