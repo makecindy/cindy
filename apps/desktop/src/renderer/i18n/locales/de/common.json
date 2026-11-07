@@ -2417,12 +2417,12 @@
         "previewStarting": "Nimm die Hände von Maus und Tastatur. In 3 Sekunden wird der Bildschirm verdeckt; drücke eine Taste, um ihn zu sperren, und entsperre ihn dann.",
         "previewUnavailable": "Der Bildschirm konnte nicht verdeckt werden. Starte Cindy neu und versuche es erneut.",
         "delay": {
-          "label": "Bildschirm verdecken nach",
-          "hint": "So lange bleiben Tastatur und Maus unberührt, bevor die Abdeckung erscheint. Standardmäßig wie der Ruhezustand des Displays.",
           "30": "30 s",
           "60": "1 Min.",
           "120": "2 Min.",
           "300": "5 Min.",
+          "label": "Bildschirm verdecken nach",
+          "hint": "So lange bleiben Tastatur und Maus unberührt, bevor die Abdeckung erscheint. Standardmäßig wie der Ruhezustand des Displays.",
           "system": "System"
         }
       }
@@ -4082,8 +4082,10 @@
           "compaction": {
             "title": "Automatische Komprimierung",
             "hint": "Kontext beim gewählten Auslastungsprozentsatz komprimieren. Niedrigere Werte führen zu früherer Komprimierung; die Engine-Limits gelten weiterhin.",
-            "default": "{{pct}} % (Standard)",
-            "timing": "Gilt für alle verfügbaren Engines für dieses Modell und diese Quelle bei nachfolgenden Durchläufen, ohne eine Antwort zu unterbrechen."
+            "timing": "Gilt für alle verfügbaren Engines für dieses Modell und diese Quelle bei nachfolgenden Durchläufen, ohne eine Antwort zu unterbrechen.",
+            "defaultBadge": "Standard",
+            "sliderAria": "Schwelle für die automatische Komprimierung anpassen",
+            "restoreAria": "Standardmäßiges Verhältnis der automatischen Komprimierung wiederherstellen"
           },
           "contextLimitRoute": "Aktuell {{tokens}} Tokens",
           "contextLimitOverWindow": "Über dem vom Anbieter angegebenen Kontextfenster; Anfragen können fehlschlagen.",
