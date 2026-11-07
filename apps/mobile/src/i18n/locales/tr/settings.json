@@ -1,0 +1,395 @@
+{
+  "localLogs": {
+    "upload": "Günlükleri yükle",
+    "uploadResult": {
+      "unavailable": "Bu derlemede günlük yükleme kullanılamıyor.",
+      "consentRequired": "Günlükleri yüklemeden önce Gizlilik Politikasını kabul edin.",
+      "empty": "Yakın zamana ait günlük yok. Önce kaydı etkinleştirin ve sorunu yeniden oluşturun.",
+      "failed": "Yükleme başarısız oldu. Günlükler yine de bu telefona kaydedilir."
+    },
+    "title": "Hata ayıklama günlükleri",
+    "record": "Günlükleri kaydet",
+    "export": "Günlükleri dışa aktar",
+    "clear": "Günlükleri temizle",
+    "busy": "Çalışıyor…",
+    "failed": "Günlükler kaydedilemedi veya paylaşılamadı. Lütfen tekrar deneyin.",
+    "clearHint": "Kaydedilen tanılama günlükleri silinsin mi?",
+    "cancel": "İptal",
+    "uploadCopied": "Günlükler yüklendi. Kod {{code}} kopyalandı",
+    "uploadSucceeded": "Günlükler yüklendi. Kod {{code}}",
+    "footer": "Günlükler bu telefonda en fazla 7 gün veya 8 MB süreyle kalır ve hiçbir zaman otomatik olarak yüklenmez. Dışa aktarılan günlükler diyalog metnini ve kimlik bilgilerini içermez; yüklemeler yalnızca filtrelenmiş çalışma kayıtlarını ve sürüm bilgilerini gönderir."
+  },
+  "title": "Ayarlar",
+  "appearance": {
+    "title": "Görünüm",
+    "modeLabel": "Görünüm Modu",
+    "options": {
+      "system": "Otomatik (sistemi takip et)",
+      "light": "Açık",
+      "dark": "Koyu"
+    },
+    "saveFailed": "Görünüm modu kaydedilemedi. Önceki ayar yeniden başlatmanın ardından geri dönecektir.",
+    "userBubble": {
+      "title": "Mesaj baloncuğumun rengi",
+      "presets": "Renk",
+      "default": "Varsayılan",
+      "peach": "İlk Taslak",
+      "yellow": "Gün Ağarması",
+      "sage": "Kıvılcım",
+      "blue": "Düşler",
+      "lavender": "Gece Kedisi",
+      "red": "Kırmızı Yaka",
+      "custom": "Özel renk",
+      "hue": "Ton",
+      "preview": "Mesaj önizlemesi",
+      "sampleUser": "Bugünün fikirlerini düzenlememe yardım et.",
+      "sampleAssistant": "Elbette, fikirleriniz üzerinde birlikte çalışalım.",
+      "hint": "Metnin okunabilir kalması için açık ve koyu moda göre ayarlanır. Yalnızca bu cihaza kaydedilir.",
+      "customHint": "Bir ton seçmek için renk şeridini sürükleyin. Açık ve koyu moda göre ayarlanır; yalnızca bu cihaza kaydedilir.",
+      "saveFailed": "Renk şimdilik uygulandı ancak kaydedilemedi.",
+      "retry": "Yeniden Dene",
+      "cancel": "İptal",
+      "reset": "Varsayılana sıfırla",
+      "apply": "Uygula",
+      "hex": "Renk değeri"
+    }
+  },
+  "language": {
+    "title": "Dil",
+    "hint": "Arayüz ve AI hata bildirimleri için kullanılır. Diğer yanıtlar mesajınızı veya dil talebinizi takip eder.",
+    "options": {
+      "system": "Otomatik (sistemi takip et)",
+      "zh-CN": "简体中文",
+      "zh-TW": "繁體中文",
+      "en": "English",
+      "ja": "日本語",
+      "ko": "한국어",
+      "es": "Español",
+      "fr": "Français",
+      "de": "Deutsch",
+      "pt-PT": "Português (Portugal)",
+      "pt-BR": "Português (Brasil)",
+      "classical": "文言",
+      "tr": "Türkçe"
+    },
+    "classical": {
+      "label": "Yazı ve stil",
+      "hint": "AI seçilen stilde yanıt verir. “Olağan yanıtlar” arayüzü Klasik Çince tutarken yanıtlar dilinizi takip eder.",
+      "scriptAriaLabel": "Klasik Çince yazı biçimi",
+      "styleAriaLabel": "AI yanıt stili",
+      "script": {
+        "hans": "简体",
+        "hant": "繁體"
+      },
+      "styles": {
+        "prose": "Klasik nesir (varsayılan)",
+        "tang-poetry": "Tang şiiri",
+        "song-ci": "Song ci",
+        "yuan-qu": "Yuan qu",
+        "chu-ci": "Chu ci",
+        "parallel-prose": "Paralel nesir",
+        "pre-qin": "Qin öncesi ustalar",
+        "historian": "Büyük Tarihçi stili",
+        "ming-qing-essay": "Ming–Qing denemeleri",
+        "plain": "Olağan yanıtlar"
+      }
+    }
+  },
+  "version": {
+    "sectionTitle": "Sürüm",
+    "updateMethodInApp": "Güncellemeler uygulama içine yüklenir ve yeniden başlatmanın ardından uygulanır.",
+    "updateMethodPackage": "Güncellemek için yeni sürümü indirip yükleyin.",
+    "updateMethodUnavailable": "Geliştirme derlemeleri uygulama içinden güncellenemez.",
+    "checkAction": "Güncellemeleri Kontrol Et",
+    "testFlightCheckAction": "İçerik Güncellemelerini Kontrol Et",
+    "checking": "Kontrol ediliyor",
+    "checkingAccessibility": "Güncellemeler kontrol ediliyor",
+    "testFlightCheckingAccessibility": "İçerik güncellemeleri kontrol ediliyor",
+    "testFlightUpdateManaged": "Yeni test derlemelerini TestFlight üzerinden yükleyin.",
+    "testFlightNoContentUpdate": "Kullanılabilir içerik güncellemesi yok.",
+    "testFlightContentUpdateUnavailable": "Bu derleme içerik güncellemelerini kontrol edemez.",
+    "googlePlayUpdateManaged": "Google Play üzerinden yeni sürümlere güncelleyin.",
+    "googlePlayNoContentUpdate": "Kullanılabilir içerik güncellemesi yok.",
+    "googlePlayContentUpdateUnavailable": "Bu derleme içerik güncellemelerini kontrol edemez.",
+    "bundleUpdateFound": "Uygulama paketi güncellemesi mevcut",
+    "upToDate": "Zaten güncel",
+    "bundleUpToDateNoOta": "Güncel. Bu sürüm kablosuz (OTA) güncellemeleri desteklemiyor.",
+    "downloadedRestarting": "Güncelleme indirildi, yeniden başlatılıyor",
+    "downloadedRestartRequired": "Güncelleme indirildi. Uygulamak için uygulamadan tamamen çıkın ve yeniden açın.",
+    "bundleCheckFailed": "Uygulama paketi güncellemeleri kontrol edilemedi. Daha sonra tekrar deneyin.",
+    "checkFailedDetail": "Güncelleme kontrolü başarısız oldu: {{detail}}",
+    "checkFailed": "Güncelleme kontrolü başarısız oldu. Daha sonra tekrar deneyin.",
+    "currentLabel": "Geçerli sürüm",
+    "pairedDesktopLabel": "Eşleştirilmiş masaüstü sürümü"
+  },
+  "betaChannel": {
+    "title": "Beta kanalı",
+    "badge": "Beta",
+    "description": "Gelecek istemci güncellemelerini erkenden alın. İçerik güncellemeleri bir sonraki güncelleme kontrolünde indirilir ve uygulama yeniden başlatıldıktan sonra geçerli olur.",
+    "saveFailed": "Beta kanalı ayarı kaydedilemedi",
+    "unavailable": "Beta kanalı kullanılamıyor — beta güncelleme sunucusuna ulaşılamadı."
+  },
+  "notifications": {
+    "sectionTitle": "Bildirimler",
+    "taskDone": "Mesaj ve görev bildirimleri",
+    "taskDoneHint": "Biten, başarısız olan veya yanıtınızı bekleyen sohbet mesajları ve görevler hakkında bildirim alın.",
+    "permissionDenied": "Sistem ayarlarınızda Cindy bildirimlerine izin verin.",
+    "unregisterQueued": "Kapatıldı. Tekrar çevrimiçi olduğunuzda kayıt silme işlemi tamamlanacaktır.",
+    "preview": "Sohbet önizlemelerini göster",
+    "background": "Sohbet bağlantısını arka planda açık tut",
+    "backgroundActive": "Arka planda sohbet mesajları alınıyor",
+    "backgroundStop": "Almayı durdur",
+    "backgroundHint": "Arka plan bağlantısı Google olmadan çalışır ve devam eden bir bildirim gösterir. Bu bildirim üzerinden durdurabilirsiniz.",
+    "googleUnavailable": "Google push kullanılamıyor. Mesajları almak için arka plan sohbet bağlantısını etkinleştirin."
+  },
+  "about": {
+    "sectionTitle": "Bu Telefon Hakkında",
+    "deviceName": "Cihaz Adı",
+    "deviceNameDetail": "Bilgisayarın yetkilendirme listesinde gösterilir.",
+    "platform": "Platform",
+    "editAccessibility": "{{label}} düzenle"
+  },
+  "relay": {
+    "online": "Aktarma bağlı",
+    "connecting": "Aktarmaya Bağlanılıyor",
+    "stopped": "Aktarma bağlı değil",
+    "lastSynced": "Son eşitleme: {{time}}",
+    "canSync": "Uzak oturumlar eşitlenebilir.",
+    "reconnectHint": "Ağ düzeldiğinde uzak oturumlar otomatik olarak yeniden abone olacaktır.",
+    "resumeHint": "Uygulamaya döndüğünüzde veya tekrar giriş yaptığınızda bağlantı devam eder."
+  },
+  "header": {
+    "notSignedIn": "Giriş yapılmadı",
+    "thisPhone": "Bu telefon"
+  },
+  "debug": {
+    "sectionTitle": "Hata Ayıklama / Geliştirici",
+    "userId": "Kullanıcı Kimliği",
+    "notSynced": "Eşitlenmedi",
+    "deviceId": "Cihaz Kimliği",
+    "initializing": "Başlatılıyor",
+    "authServer": "Kimlik Doğrulama Sunucusu",
+    "authRegion": "Giriş Bölgesi"
+  },
+  "devServerEnvironment": {
+    "title": "Sunucu Ortamı",
+    "description": "Yalnızca CindyDev'in bağlandığı arka ucu etkiler",
+    "accessibility": "Sunucu ortamını değiştir",
+    "options": {
+      "dev": "Geliştirme",
+      "release": "Yayın"
+    },
+    "confirmTitle": "{{environment}} ortamına geçilsin mi?",
+    "confirmBody": "Geçiş yapmak çıkış yapmanızı sağlar ve uygulamayı yeniden başlatır.",
+    "cancel": "İptal",
+    "switchAction": "Geçiş Yap",
+    "switching": "Geçiş yapılıyor",
+    "switchFailed": "Sunucu ortamı değiştirilemedi. Tekrar deneyin."
+  },
+  "updateInfo": {
+    "embedded": "Uygulama paketiyle birlikte",
+    "embeddedFallback": "Uygulama paketiyle birlikte (OTA uygulanmadı)",
+    "unknown": "Bilinmiyor",
+    "source": "Çalışan Kaynak",
+    "sourceEmbedded": "Gömülü (uygulama paketiyle)",
+    "sourceEmergencyFallback": "Gömülü (acil durum başlatması; OTA uygulanmadı)",
+    "sourceOta": "OTA güncellemesi",
+    "updateId": "Güncelleme Kimliği",
+    "updatedAt": "Güncellenme Zamanı",
+    "channel": "Kanal",
+    "runtime": "Çalışma Zamanı",
+    "otaMarker": "OTA İşaretçisi",
+    "emergencyLaunch": "Acil Durum Başlatması",
+    "emergencyLaunchYes": "Evet (bu çalıştırmada OTA uygulanamaz)",
+    "otaVersion": "OTA sürümü"
+  },
+  "legal": {
+    "sectionTitle": "Yasal",
+    "privacyPolicy": "Gizlilik Politikası",
+    "userAgreement": "Kullanıcı Sözleşmesi",
+    "view": "Görüntüle",
+    "openPrivacyPolicy": "Gizlilik politikasını aç",
+    "openUserAgreement": "Kullanıcı sözleşmesini aç",
+    "appFilingNumber": "Uygulama Kayıt Numarası",
+    "analytics": "Kullanım istatistikleri",
+    "analyticsHint": "Başlatmaları ve elde tutmayı anlamamıza yardımcı olur. Model, işletim sistemi ve uygulama sürümü gibi cihaz bilgilerini ve bir cihaz tanımlayıcısını, ayrıca oturum açtıktan sonra hesap kimliğinizi bildirir; hiçbir zaman diyalogları, dosyaları veya istemleri içermez.",
+    "analyticsSaveFailed": "Bu ayar kaydedilemedi; yeniden başlatmanın ardından eski durumuna dönebilir.",
+    "analyticsReset": "Varsayılana sıfırla",
+    "analyticsResetAction": "Sıfırla"
+  },
+  "account": {
+    "logoutConfirmTitle": "Çıkış yapılsın mı?",
+    "logoutConfirmRunning": "Bazı görevler hâlâ çalışıyor. Bilgisayarınızda çalışmaya devam ederler ancak bu telefon onları almayı ve kontrol etmeyi durdurur ve bu telefona kaydedilen tüm hesaplar ve yerel kopyalar temizlenir.",
+    "logoutHint": "Bu telefondaki her hesabı ve uzak kopyayı temizler. Bilgisayarınızdaki görevler etkilenmez.",
+    "logout": "Çıkış Yap",
+    "loggingOut": "Çıkış yapılıyor",
+    "loggingOutAccessibility": "Çıkış yapılıyor"
+  },
+  "copyRow": {
+    "action": "Kopyala",
+    "done": "Kopyalandı",
+    "accessibility": "{{label}} kopyala"
+  },
+  "voiceDictionary": {
+    "sectionTitle": "Ses sözlüğü",
+    "label": "Sözlüğü görüntüle",
+    "hint": "Sözlüğü bir bilgisayarda düzenleyin; otomatik olarak eşitlenir. Bu telefonda salt okunurdur.",
+    "openAccessibility": "Ses sözlüğünü görüntüle",
+    "screenTitle": "Ses sözlüğü",
+    "entryCount": "{{count}} terim",
+    "aliasSeparator": ", ",
+    "aliases": "Genellikle yanlış duyulanlar: {{aliases}}",
+    "refresh": "Yenile",
+    "refreshing": "Yenileniyor…",
+    "refreshAccessibility": "Sözlüğü yenile",
+    "readOnlyHint": "Telefonunuzda görüntüleyin; bir bilgisayarda girdi ekleyin veya kaldırın.",
+    "offlineHint": "Bilgisayarlarınız çevrimdışı. Son eşitlenen sözlük gösteriliyor.",
+    "noDesktops": "Sözlüğünüzü eşitlemek için bir bilgisayarda aynı hesapla giriş yapın."
+  },
+  "voiceSpeakerFilter": {
+    "actionFailed": "Değişiklik kaydedilemedi. Lütfen tekrar deneyin.",
+    "title": "Sesimi tanı",
+    "sectionTitle": "Ses izi filtresi",
+    "label": "Sesimi tanı",
+    "entryHint": "Ses girişi sırasında diğer kişilerin sesini kapatır. Ses iziniz bu telefonda kalır.",
+    "openAccessibility": "Sesimi tanı ayarlarını aç",
+    "on": "Açık",
+    "off": "Kapalı",
+    "hint": "Ses girişi sırasında diğer kişilerin sesini kapatır, böylece yalnızca sizin konuşmanız metne dökülür; sizin konuşmanızla çakışan sesler tamamen kaldırılamayabilir. Ses iziniz bu telefonda şifrelenir ve hiçbir zaman yüklenmez veya eşitlenmez.",
+    "unsupported": "Uygulamanın bu sürümü ses izlerini desteklemiyor. En son sürüme güncelleyin.",
+    "model": {
+      "title": "Tanıma modeli",
+      "needed": "İlk kullanım yaklaşık {{size}} boyutunda bir tanıma modeli indirir. Wi-Fi önerilir.",
+      "download": "Tanıma modelini indir",
+      "downloading": "İndiriliyor ({{done}} / {{total}})",
+      "cancel": "İndirmeyi iptal et",
+      "retry": "Tekrar indir",
+      "failed": {
+        "network": "Tanıma modeli indirilemedi. Ağınızı kontrol edip tekrar deneyin.",
+        "disk": "Tanıma modeli kaydedilemedi. Telefonunuzun boş depolama alanını kontrol edip tekrar deneyin.",
+        "checksum": "İndirilen tanıma modeli doğrulamadan geçemedi. Tekrar deneyin.",
+        "unavailable": "Tanıma modeli şu anda kullanılamıyor. Daha sonra tekrar deneyin."
+      }
+    },
+    "profile": {
+      "title": "Ses izi",
+      "missing": "Henüz ses izi yok",
+      "missingHint": "Filtrelemeyi etkinleştirmek için ses izinizi kaydedin.",
+      "enrolled": "Ses izi kaydedildi",
+      "enrolledAt": "Kayıt tarihi: {{date}}",
+      "enroll": "Ses izi kaydet",
+      "reenroll": "Tekrar kaydet",
+      "delete": "Ses izini sil",
+      "deleteConfirm": {
+        "title": "Ses izi silinsin mi?",
+        "description": "Ses izinizi tekrar kaydedene kadar ses girişi diğer kişileri filtrelemeyi durduracaktır.",
+        "confirm": "Sil",
+        "cancel": "İptal"
+      }
+    },
+    "strictness": {
+      "label": "Katılık",
+      "hint": "Daha katı ayar daha fazla sesi dışarıda tutar ancak gürültülü yerlerde kendi kelimelerinizi de kesebilir.",
+      "restoreDefault": "Varsayılana dön",
+      "options": {
+        "relaxed": "Esnek",
+        "standard": "Standart",
+        "strict": "Katı"
+      }
+    },
+    "enroll": {
+      "description": "Aşağıdaki {{clips}} pasajı normal sesinizle okuyun. Her kayıt en fazla {{seconds}} saniye sürer; okumayı bitirdiğinizde kaydı durdurun. Ses girişini genellikle kullandığınız yerde, başka kimsenin konuşmadığı bir ortamda kaydedin.",
+      "step": "Pasaj {{current}} / {{total}}",
+      "record": "Okumaya başla",
+      "stop": "Kaydı Durdur",
+      "rerecord": "Bunu tekrar kaydet",
+      "recording": "Kaydediliyor… {{seconds}} saniye kaldı",
+      "saving": "Ses izi oluşturuluyor…",
+      "submit": "Bitir",
+      "cancel": "İptal",
+      "passages": {
+        "p1": "Bu sabah haftalık planın üzerinden geçeceğim, öğleden sonra ise tartışmamız gereken soruları listeleyip herkesin önceden okuyabilmesi için göndereceğim.",
+        "p2": "Yarın hava güzel olursa biraz daha erken çıkabilir, yoldan biraz meyve ve atıştırmalık alıp parkta öğle yemeği yiyebiliriz.",
+        "p3": "Lütfen bu metni daha özlü hale getirin, temel sayıları ve sonuçları koruyun ve ardından ana noktaları üç ila beş cümleyle özetleyin."
+      },
+      "errors": {
+        "too_short": "{{index}}. pasajda çok az konuşma algılandı. Tekrar kaydedin.",
+        "no_embedding": "{{index}}. pasajdan ses izi okunamadı. Tekrar kaydedin.",
+        "inconsistent": "{{index}}. pasaj diğerleriyle aynı kişiye ait gibi görünmüyor; başka bir ses veya gürültü algılanmış olabilir. Tekrar kaydedin.",
+        "models_missing": "Tanıma modelinin indirilmesi henüz bitmedi. Kısa süre sonra tekrar deneyin.",
+        "storage_unavailable": "Sistem anahtar zinciri kullanılamıyor, bu nedenle ses izi şifreli olarak saklanamaz. Daha sonra tekrar deneyin.",
+        "failed": "Ses izi oluşturulamadı. Tekrar deneyin.",
+        "microphone": "Mikrofon kullanılamıyor. Mikrofon iznini kontrol edip tekrar deneyin.",
+        "noAudio": "Mikrofondan ses gelmedi. Kontrol edip tekrar deneyin."
+      },
+      "stepChoice": "Pasaj {{index}}, {{status}}",
+      "stepStatus": {
+        "pending": "Kaydedilmedi",
+        "recorded": "Kaydedildi",
+        "retry": "Tekrar kaydet",
+        "recording": "Kaydediliyor"
+      },
+      "rerecordStep": "{{index}}. Pasajı Tekrar Kaydet",
+      "readHint": "Hazır olduğunuzda başlayın. Okumayı bitirdiğinizde kaydı durdurun.",
+      "otherClipsKept": "Diğer kayıtlarınız korundu."
+    }
+  },
+  "deviceNameEditor": {
+    "screenTitle": "Cihaz Adı",
+    "placeholder": "Telefon adı",
+    "resetAccessibility": "Varsayılan telefon adını geri yükle",
+    "emptyError": "Cihaz adı boş olamaz.",
+    "deviceInitializing": "Cihaz hâlâ başlatılıyor. Daha sonra tekrar deneyin.",
+    "restoredDefault": "Varsayılan ad geri yüklendi.",
+    "resetAction": "Varsayılan Adı Geri Yükle",
+    "clearAccessibility": "Adı temizle",
+    "discardTitle": "Değişiklikler Yok Sayılsın mı?",
+    "discardBody": "Cihaz adında yaptığınız değişiklikler kaydedilmedi.",
+    "discardConfirm": "Değişiklikleri Yok Say",
+    "keepEditing": "Düzenlemeye Devam Et"
+  },
+  "developer": {
+    "title": "Geliştirici",
+    "identity": "Tanımlayıcılar",
+    "updateInfo": "Güncelleme bilgisi"
+  },
+  "handheld": {
+    "sectionTitle": "El Konsolu",
+    "label": "El konsolu modu",
+    "entryHint": "Cindy'yi bir el konsolunun yerleşik kumandasıyla kullanın ve konuşmak için ses tuşunu basılı tutun.",
+    "on": "Açık",
+    "off": "Kapalı",
+    "openAccessibility": "El konsolu modu ayarlarını aç",
+    "title": "El konsolu modu",
+    "hint": "Cindy'yi yalnızca kumandayla kullanın: D-pad veya sol çubuk odağı taşır, A seçer ve B geri döner.",
+    "saveFailed": "Bu ayar kaydedilemedi. Cindy kapanana kadar geçerli kalır.",
+    "reset": "Varsayılana sıfırla",
+    "voiceKey": {
+      "title": "Ses tuşu",
+      "hint": "Konuşmak için bu tuşu basılı tutun ve bitirmek için bırakın. Sözleriniz mesaj kutusunda kalır. Ana ekranda basılı tutmak yeni bir görev başlatır. A, B, L1 veya R1 tuşunu seçmek o düğmenin normal işlevinin yerini alır.",
+      "capture": "Ayarlamak için bir kumanda düğmesine basın",
+      "capturing": "Kullanmak istediğiniz düğmeye basın…"
+    },
+    "display": {
+      "title": "Ekran",
+      "secondary": "İkinci ekranda göster",
+      "hint": "Cindy, çift ekranlı bir el konsolunun alt ekranı gibi ikinci ekrana taşınır. El konsolu modunu kapatmak onu ana ekrana geri taşır.",
+      "none": "Bu cihaz tek ekrana sahip. Cindy boyutuna uyum sağlar.",
+      "current": "Geçerli ekran",
+      "single": "Ana ekran"
+    },
+    "controls": {
+      "title": "Kumanda",
+      "gamepad": "Kumanda",
+      "noGamepad": "Algılanmadı",
+      "moveKeys": "D-pad / sol çubuk",
+      "move": "Odağı taşı",
+      "confirm": "Seç",
+      "back": "Geri",
+      "voice": "Konuşmak için basılı tutun",
+      "scrollKeys": "Sağ çubuk",
+      "scroll": "Kaydır",
+      "page": "Sayfa yukarı / aşağı"
+    }
+  }
+}

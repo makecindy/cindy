@@ -2574,7 +2574,8 @@
         "de": "Deutsch",
         "pt-PT": "Português (Portugal)",
         "pt-BR": "Português (Brasil)",
-        "classical": "文言"
+        "classical": "文言",
+        "tr": "Türkçe"
       },
       "classical": {
         "label": "Escrita e estilo",

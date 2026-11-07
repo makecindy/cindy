@@ -55,6 +55,10 @@ const messages = {
     "showHiddenDirectories": "Mostrar pastas ocultas",
     "emptyDirectory": "Não há pastas para exibir."
   },
+  tr: {
+    showHiddenDirectories: "Gizli klasörleri göster",
+    emptyDirectory: "Gösterilecek alt klasör yok.",
+  },
 } as const;
 
 export type NewSessionMessageKey = keyof (typeof messages)["zh-CN"];

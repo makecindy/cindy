@@ -34,7 +34,8 @@
       "pt-PT",
       "pt-BR",
       "zh-Hant-x-lzh",
-      "zh-Hans-x-lzh"
+      "zh-Hans-x-lzh",
+      "tr"
     ]
   },
   "states": [
@@ -178,6 +179,16 @@
           "os": "desktop",
           "mode": "dark",
           "lang": "zh-Hans-x-lzh"
+        }
+      },
+      {
+        "id": "en-dark-tr",
+        "prefs": {
+          "plat": "desk",
+          "region": "na",
+          "os": "desktop",
+          "mode": "dark",
+          "lang": "tr"
         }
       }
     ],

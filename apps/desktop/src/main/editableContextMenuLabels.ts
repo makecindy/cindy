@@ -130,4 +130,13 @@ export const EDITABLE_CONTEXT_MENU_LABELS: Record<SupportedLocale, EditableConte
     pasteAsPlainText: '贴为纯文',
     selectAll: '尽选',
   },
+  tr: {
+    undo: 'Geri Al',
+    redo: 'Yinele',
+    cut: 'Kes',
+    copy: 'Kopyala',
+    paste: 'Yapıştır',
+    pasteAsPlainText: 'Düz Metin Olarak Yapıştır',
+    selectAll: 'Tümünü Seç',
+  },
 };

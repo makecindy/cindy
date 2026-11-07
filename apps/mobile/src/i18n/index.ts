@@ -17,6 +17,7 @@ import ptPTCommon from "./locales/pt-PT";
 import ptBRCommon from "./locales/pt-BR";
 import lzhCommon from "./locales/zh-Hant-x-lzh";
 import lzhHansCommon from "./locales/zh-Hans-x-lzh";
+import trCommon from "./locales/tr";
 import i18n from "i18next";
 import { initReactI18next } from "react-i18next";
 import { BRAND_NAME } from "@cindy/maker-shared/branding";
@@ -52,6 +53,7 @@ const resources = {
   "zh-TW": { common: zhTWCommon },
   ja: { common: jaCommon },
   ko: { common: koCommon },
+  tr: { common: trCommon },
 } as const;
 
 // 同步 init —— 没有 backend / detector / suspense,i18n.init 立即返回。

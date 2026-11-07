@@ -132,4 +132,14 @@ export const RSB_BROWSER_WEBAUTHN_LABELS: Record<
     unknownRelyingParty: '此网站',
     touchIdPromptReason: '于 $1 验君之身份',
   },
+  tr: {
+    title: 'Bir Geçiş Anahtarı Seçin',
+    message: '{{relyingPartyId}} için bir geçiş anahtarı seçin',
+    detail:
+      'Cindy seçiminizi yalnızca kimlik doğrulayıcıya iletir; geçiş anahtarı parolası kimlik doğrulayıcıda kalır.',
+    cancel: 'Geçiş Anahtarı ile Girişi İptal Et',
+    unknownAccount: 'Geçiş Anahtarı {{index}}',
+    unknownRelyingParty: 'bu web sitesi',
+    touchIdPromptReason: '$1 üzerinde kimliğinizi doğrulayın',
+  },
 };

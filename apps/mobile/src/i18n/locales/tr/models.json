@@ -1,0 +1,118 @@
+{
+  "picker": {
+    "title": "Model",
+    "permissionTitle": "İzinler",
+    "searchAccessibility": "Modelleri ara",
+    "searchPlaceholder": "Modelleri ara…",
+    "noResults": "Eşleşen model yok",
+    "emptyDefault": "Kullanılabilir model yok",
+    "loadingDefault": "Modeller yükleniyor…",
+    "subscriptionBadge": "Abonelik",
+    "subscriptionBadgeCompact": "Abonelik",
+    "backToModels": "Model listesine geri dön",
+    "agentSwitchHint": "Bir model seçtikten sonra sonraki mesaj {{agent}} modeline geçer",
+    "crossAgentEmptyHint": "Önce uzak cihazda bir {{agent}} model kaynağı bağlayın",
+    "permissionModeAccessibility": "İzin modu: {{mode}}",
+    "selectProviderModelAccessibility": "{{provider}} sağlayıcısından {{model}} seç",
+    "selectModelAccessibility": "{{model}} seç",
+    "configureAccessibility": "{{model}} yapılandır",
+    "budgetDisabledHint": "Bu model için önce uzak cihazda bir API anahtarı yapılandırılmalıdır",
+    "priceLine": "Girdi {{input}} · Çıktı {{output}} / milyon token",
+    "priceTitle": "1M token başına",
+    "priceAmounts": "Girdi {{input}} · Çıktı {{output}}",
+    "discountedVsStandard": "İndirimli · Standarttan %{{percent}} indirim",
+    "contextSuffix": "{{size}} bağlam",
+    "fastTag": "Hızlı"
+  },
+  "options": {
+    "speed": {
+      "label": "Hız",
+      "standard": "Standart",
+      "fast": "Hızlı",
+      "ultrafast": "Çok Hızlı"
+    },
+    "fastMode": "Hızlı Mod",
+    "fastModeAccessibility": "Hızlı mod {{model}}",
+    "reasoningEffort": "Akıl Yürütme Yoğunluğu",
+    "reasoningEffortAccessibility": "Akıl yürütme yoğunluğu {{label}}",
+    "effortLevels": {
+      "minimal": "En Az",
+      "low": "Düşük",
+      "medium": "Orta",
+      "high": "Yüksek",
+      "xhigh": "Çok Yüksek",
+      "max": "Maksimum",
+      "ultra": "Ultra"
+    }
+  },
+  "contextWindowSwitch": {
+    "title": "Bu model geçerli diyaloğa sığmıyor",
+    "remoteTitle": "Bu uzak model değişimi desteklenmiyor",
+    "description": "Bu diyalog zaten {{used}} kullanıyor; bu miktar yeni modelin alabileceğinden ({{total}}, yaklaşık %{{pct}}) daha fazla. Geçiş yaparsanız, Cindy kısa bir özet oluşturacak ve devam edecektir. Sohbet geçmişiniz kalır; yalnızca tamamı harfi harfine aktarılmaz.",
+    "remoteDescription": "Bu uzak görev zaten daha küçük modelin bağlamının {{used}} / {{total}} kadarını kullanıyor (yaklaşık %{{pct}}), bu nedenle Cindy güvenli bir şekilde geçiş yapamıyor. Bu modeli seçmeden önce mevcut modeli koruyun veya yeni bir görev başlatın.",
+    "cancel": "Bu modeli koru",
+    "confirm": "Geçiş yap ve devam et"
+  },
+  "switchOutcome": {
+    "applied": "Model sağlayıcı değişikliği uygulandı.",
+    "failed": "Model sağlayıcı değişikliği başarısız oldu. Modeli tekrar seçin."
+  },
+  "agentSwitch": {
+    "browseAccessibility": "{{agent}} modellerine göz at",
+    "confirmTitle": "{{agent}} modeline geçilsin mi?",
+    "confirmMessage": "Sonraki mesajı gönderdiğinizde, {{appName}} mevcut görevi {{agent}} modeline devreder. İki Agent bağlamı ve araçları farklı yorumlayabilir, bu nedenle hedef modeli seçmeden önce onaylayın.",
+    "cancel": "İptal",
+    "confirm": "Devam Et"
+  },
+  "agentRelocation": {
+    "titleOther": "Agent “{{device}}” üzerinde çalıştırılsın mı?",
+    "titleHost": "Agent tekrar “{{host}}” üzerinde çalıştırılsın mı?",
+    "titleHostUnnamed": "Agent tekrar görevin bilgisayarında çalıştırılsın mı?",
+    "message": "Diğer bilgisayardaki diyalog kaydı taşınamaz, bu nedenle bir devir özetiyle devam eder. Düşünme adımları ve benzeri ayrıntılar tamamen aktarılamayabilir. Sonraki mesajı gönderdiğinizde geçerli olur.",
+    "messageNativeHistory": "Diyalog kaydının tamamı kopyalanır ve kaldığı yerden devam eder. Geri yüklenemezse bunun yerine bir devir özetiyle devam eder; düşünme adımları ve benzer ayrıntılar tamamen aktarılamayabilir. Sonraki mesajı gönderdiğinizde geçerli olur.",
+    "confirm": "Bilgisayarı değiştir",
+    "cancel": "Olduğu gibi bırak"
+  },
+  "unified": {
+    "favoriteConfiguration": "Bu Yapılandırmayı Favorilere Ekle",
+    "savedConfiguration": "Favorilere Eklendi · Kaldırmak İçin Dokunun",
+    "currentConfiguration": "Mevcut Yapılandırma",
+    "usingRecommended": "Önerilen Ayarlar Kullanılıyor",
+    "customized": "Özelleştirildi",
+    "resetScopeHint": "Önerilenleri Geri Yükle seçeneği harness'ı, akıl yürütme yoğunluğunu ve Hızlı modu sıfırlar. Mevcut favoriler değişmez.",
+    "saveFavoriteHint": "Favorilerden hızlı erişim için bu ayarları kaydedin.",
+    "removeFavoriteHint": "Kısayolu kaldırmak mevcut ayarlarınızı değiştirmez.",
+    "editFavorite": "Orijinal Favoriyi Düzenle",
+    "editFavoriteHint": "Değişiklikler bu favoriye yalnızca kaydedildikten sonra uygulanır. Kullanımdaki yapılandırma değişmez.",
+    "saveFavorite": "Favoriyi Kaydet",
+    "cancelEdit": "Düzenlemeyi İptal Et",
+    "originalFavoriteKept": "Ayarlar güncellendi. Orijinal favori değişmedi.",
+    "parametersSaved": "Ayarlar kaydedildi.",
+    "restoredHint": "Önerilen ayarlar geri yüklendi. Mevcut favoriler değişmedi.",
+    "favoriteRemoved": "Favori kaldırıldı. Mevcut ayarlar değişmedi.",
+    "favoriteSaved": "Yapılandırma Favorilere eklendi.",
+    "favoriteUpdated": "Favori güncellendi. Kullanımdaki yapılandırma değişmedi.",
+    "favoriteChanged": "Bu favori değiştirildi veya kaldırıldı. Düzenlemeyi iptal edip tekrar denemek için yeniden açın.",
+    "favoriteExists": "Bu yapılandırma zaten Favorilerde var. Kullanmak için düzenlemeyi iptal edin.",
+    "favorites": "Favoriler",
+    "all": "Tüm modeller",
+    "recommended": "Önerilen",
+    "source": "Kaynak",
+    "remoteProvider": "{{provider}} · {{device}}",
+    "remoteProviderGroup": "{{provider}} · {{device}} · {{group}}",
+    "providerGroup": "{{provider}} · {{group}}",
+    "groupBadge_one": "Sağlayıcı Grubu · {{count}} bilgisayar",
+    "groupBadge_other": "Sağlayıcı Grubu · {{count}} bilgisayar",
+    "harness": "Harness",
+    "restoreRecommended": "Önerilenleri geri yükle",
+    "saveFailed": "Kaydedilemedi. Lütfen tekrar deneyin.",
+    "configure": "Yapılandır",
+    "syncFailed": "Favoriler eşitlenemedi. Tekrar denemek için seçiciyi yeniden açın; uzak bilgisayarın bir güncellemeye ihtiyacı olabilir.",
+    "timeUnit": {
+      "day": "g",
+      "hour": "sa",
+      "minute": "dk",
+      "second": "sn"
+    }
+  }
+}
