@@ -1460,6 +1460,13 @@
     }
   },
   "menubar": {
+    "shared": {
+      "label": "分享",
+      "note": "这是账号共用额度，不是分配给你的专属额度。",
+      "highestWeekly": "分享 · 周剩余最多",
+      "highestWeeklyNote": "显示可读取账号中周剩余最多的一项，额度不相加。账号共用，非个人专属。",
+      "from": "来自 {{name}} 的分享"
+    },
     "balance": {
       "name": "Cindy 余额",
       "quotaName": "Cindy 本期配额",

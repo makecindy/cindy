@@ -1494,6 +1494,13 @@
     }
   },
   "menubar": {
+    "shared": {
+      "label": "Compartido",
+      "note": "Esta asignación es compartida por la cuenta, no reservada para usted.",
+      "highestWeekly": "Compartido · mayor saldo semanal",
+      "highestWeeklyNote": "Mayor cuota semanal restante entre las cuentas consultables. Es compartida por la cuenta, no una suma ni una cuota personal.",
+      "from": "Compartido por {{name}}"
+    },
     "balance": {
       "name": "balanza Cindy",
       "quotaName": "Cuota Cindy",

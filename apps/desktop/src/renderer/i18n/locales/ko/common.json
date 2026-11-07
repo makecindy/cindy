@@ -1460,6 +1460,13 @@
     }
   },
   "menubar": {
+    "shared": {
+      "label": "공유",
+      "note": "계정 전체가 함께 사용하는 한도이며, 나에게만 배정된 한도가 아닙니다.",
+      "highestWeekly": "공유 · 주간 잔여 최대",
+      "highestWeeklyNote": "조회 가능한 계정 중 주간 잔여량이 가장 많은 계정입니다. 합산하거나 개인에게 할당한 한도가 아닌 계정 공용 한도입니다.",
+      "from": "{{name}}님의 공유"
+    },
     "balance": {
       "name": "Cindy 잔액",
       "quotaName": "Cindy 이번 기간 할당량",

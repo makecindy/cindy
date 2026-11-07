@@ -1494,6 +1494,13 @@
     }
   },
   "menubar": {
+    "shared": {
+      "label": "Compartilhado",
+      "note": "Esta cota é compartilhada pela conta, não reservada para você.",
+      "highestWeekly": "Compartilhado · maior saldo semanal",
+      "highestWeeklyNote": "Maior cota semanal restante entre as contas consultáveis. Compartilhada pela conta, sem soma nem reserva pessoal.",
+      "from": "Compartilhado por {{name}}"
+    },
     "balance": {
       "name": "Saldo do Cindy",
       "quotaName": "Cota do Cindy",

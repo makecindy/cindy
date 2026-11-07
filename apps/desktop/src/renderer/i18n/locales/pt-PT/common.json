@@ -1494,6 +1494,13 @@
     }
   },
   "menubar": {
+    "shared": {
+      "label": "Partilhado",
+      "note": "Esta quota é partilhada pela conta, não está reservada para si.",
+      "highestWeekly": "Partilhado · maior saldo semanal",
+      "highestWeeklyNote": "Maior quota semanal restante entre as contas consultáveis. Partilhada pela conta, sem soma nem reserva pessoal.",
+      "from": "Partilhado por {{name}}"
+    },
     "balance": {
       "name": "Saldo de Cindy",
       "quotaName": "Quota de Cindy",

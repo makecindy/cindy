@@ -1460,6 +1460,13 @@
     }
   },
   "menubar": {
+    "shared": {
+      "label": "共用",
+      "note": "此乃名籍共用之额度，非专分予君者。",
+      "highestWeekly": "共享 · 周余最多",
+      "highestWeeklyNote": "取可阅诸号周余最多者，不相加。此为号共用，非君专享。",
+      "from": "{{name}} 所享"
+    },
     "balance": {
       "name": "Cindy 余资",
       "quotaName": "Cindy 本期限额",

@@ -1460,6 +1460,13 @@
     }
   },
   "menubar": {
+    "shared": {
+      "label": "共有",
+      "note": "アカウント全体で共有する利用枠です。あなた専用の枠ではありません。",
+      "highestWeekly": "共有 · 週の残り最多",
+      "highestWeeklyNote": "読み取れるアカウントで週間クォータの残りが最多のものです。アカウント共用の枠で、合算値や個人専用の枠ではありません。",
+      "from": "{{name}} からの共有"
+    },
     "balance": {
       "name": "Cindy 残高",
       "quotaName": "Cindy の今期クォータ",

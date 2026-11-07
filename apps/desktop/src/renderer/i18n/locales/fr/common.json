@@ -1494,6 +1494,13 @@
     }
   },
   "menubar": {
+    "shared": {
+      "label": "Partagé",
+      "note": "Ce crédit est partagé au niveau du compte et ne vous est pas réservé.",
+      "highestWeekly": "Partagé · solde hebdomadaire maximal",
+      "highestWeeklyNote": "Quota hebdomadaire restant le plus élevé parmi les comptes consultables. Partagé par le compte, sans cumul ni réservation personnelle.",
+      "from": "Partagé par {{name}}"
+    },
     "balance": {
       "name": "Solde Cindy",
       "quotaName": "Quota Cindy",

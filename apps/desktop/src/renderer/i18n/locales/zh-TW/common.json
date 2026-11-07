@@ -1460,6 +1460,13 @@
     }
   },
   "menubar": {
+    "shared": {
+      "label": "分享",
+      "note": "這是帳號共用額度，不是分配給你的專屬額度。",
+      "highestWeekly": "分享 · 週剩餘最多",
+      "highestWeeklyNote": "顯示可讀取帳號中週剩餘最多的一項，額度不相加。帳號共用，非個人專屬。",
+      "from": "來自 {{name}} 的分享"
+    },
     "balance": {
       "name": "Cindy 餘額",
       "quotaName": "Cindy 本期配額",
