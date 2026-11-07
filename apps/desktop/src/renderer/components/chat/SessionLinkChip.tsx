@@ -56,69 +56,26 @@ function compactMessageLinkLabel(text: string): string {
   return `${compact.slice(0, MESSAGE_LINK_LABEL_MAX - 1)}…`;
 }
 
-export function SessionLinkChip({ href, label }: SessionLinkChipProps) {
-  const { t } = useTranslation();
+/** Shared task navigation for chat links and inert plugin-card links. */
+export function useSessionLinkTarget(href: string) {
   const navigate = useNavigate();
   const localDeviceId = useOptionalAuthDeviceId();
   const navigationMode = useSessionNavigationMode();
   const reportSessionNavigation = useSessionNavigationIntent();
   const target = useMemo(() => parseSessionDeepLinkHref(href), [href]);
   const remoteSessions = useRemoteProjectSessions();
-  const [fetchedTitle, setFetchedTitle] = useState<string | null>(null);
-  const [messageText, setMessageText] = useState<string | null>(null);
   const navigationRequestVersionRef = useRef(0);
-
   const sessionId = target?.sessionId ?? null;
   const messageClientId = target?.messageClientId ?? null;
   const targetDeviceId = target?.deviceId ?? null;
-  const targetsOtherDevice = !!targetDeviceId && targetDeviceId !== localDeviceId;
-  const explicitLabel = label?.trim() || null;
-
   useEffect(
     () => () => {
       navigationRequestVersionRef.current += 1;
     },
     [sessionId, messageClientId, targetDeviceId, navigationMode],
   );
-
-  useEffect(() => {
-    // 先清旧值:同一实例被复用渲染另一个 href(虚拟列表 / 消息 patch)时,
-    // 不能让上一个会话的标题串到新链接上(Codex review P2)。
-    setFetchedTitle(null);
-    if (!sessionId || messageClientId || explicitLabel || targetsOtherDevice) return;
-    let cancelled = false;
-    sessionService
-      .get(sessionId)
-      .then((session) => {
-        if (!cancelled && session.title?.trim()) setFetchedTitle(session.title.trim());
-      })
-      .catch(() => {
-        // 本地库没有(远程 / 未知会话)→ 静默,走 remote 镜像 / 短 ID 降级。
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [sessionId, messageClientId, explicitLabel, targetsOtherDevice]);
-
-  useEffect(() => {
-    setMessageText(null);
-    if (!sessionId || !messageClientId) return;
-    let cancelled = false;
-    resolveSessionMessageText(sessionId, messageClientId)
-      .then((text) => {
-        if (!cancelled && text) setMessageText(text);
-      })
-      .catch(() => {
-        // Missing/offline target: keep the compact client-id fallback.
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [sessionId, messageClientId]);
-
   const remoteSession = remoteSessions.find((s) =>
     s.id === sessionId && (!targetDeviceId || s.deviceLinkDeviceId === targetDeviceId)) ?? null;
-  const remoteTitle = fetchedTitle ? null : remoteSession?.title?.trim() || null;
   const openTarget = async (separate: boolean) => {
     if (!target || !sessionId) return;
     const navigationRequestVersion = ++navigationRequestVersionRef.current;
@@ -164,6 +121,63 @@ export function SessionLinkChip({ href, label }: SessionLinkChipProps) {
       );
     });
   };
+  return { openTarget, navigationMode };
+}
+
+export function SessionLinkChip({ href, label }: SessionLinkChipProps) {
+  const { openTarget, navigationMode } = useSessionLinkTarget(href);
+  const { t } = useTranslation();
+  const localDeviceId = useOptionalAuthDeviceId();
+  const target = useMemo(() => parseSessionDeepLinkHref(href), [href]);
+  const remoteSessions = useRemoteProjectSessions();
+  const [fetchedTitle, setFetchedTitle] = useState<string | null>(null);
+  const [messageText, setMessageText] = useState<string | null>(null);
+
+  const sessionId = target?.sessionId ?? null;
+  const messageClientId = target?.messageClientId ?? null;
+  const targetDeviceId = target?.deviceId ?? null;
+  const targetsOtherDevice = !!targetDeviceId && targetDeviceId !== localDeviceId;
+  const explicitLabel = label?.trim() || null;
+
+
+  useEffect(() => {
+    // 先清旧值:同一实例被复用渲染另一个 href(虚拟列表 / 消息 patch)时,
+    // 不能让上一个会话的标题串到新链接上(Codex review P2)。
+    setFetchedTitle(null);
+    if (!sessionId || messageClientId || explicitLabel || targetsOtherDevice) return;
+    let cancelled = false;
+    sessionService
+      .get(sessionId)
+      .then((session) => {
+        if (!cancelled && session.title?.trim()) setFetchedTitle(session.title.trim());
+      })
+      .catch(() => {
+        // 本地库没有(远程 / 未知会话)→ 静默,走 remote 镜像 / 短 ID 降级。
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [sessionId, messageClientId, explicitLabel, targetsOtherDevice]);
+
+  useEffect(() => {
+    setMessageText(null);
+    if (!sessionId || !messageClientId) return;
+    let cancelled = false;
+    resolveSessionMessageText(sessionId, messageClientId)
+      .then((text) => {
+        if (!cancelled && text) setMessageText(text);
+      })
+      .catch(() => {
+        // Missing/offline target: keep the compact client-id fallback.
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [sessionId, messageClientId]);
+
+  const remoteSession = remoteSessions.find((s) =>
+    s.id === sessionId && (!targetDeviceId || s.deviceLinkDeviceId === targetDeviceId)) ?? null;
+  const remoteTitle = fetchedTitle ? null : remoteSession?.title?.trim() || null;
   const handleMouseDown = (event: MouseEvent<HTMLElement>) => {
     // Shift extends the text selection on mousedown, before click opens the window.
     // Cancel only that gesture so ordinary text selection and copying still work.
