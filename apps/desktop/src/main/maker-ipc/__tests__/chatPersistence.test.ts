@@ -38,6 +38,18 @@ it('restores display snapshots, removes them durably and rejects late writes fro
   expect(accessChatDisplayCache({ action: 'read', key: 'groups', owner: state.owner })).toBeNull();
 });
 
+// PR #8346 regression: the production cache entry is shared by renderer windows.
+ // The smallest failure is a newer window persisting a retired companion followed by
+ // an older window writing a stale full roster with an empty retiredBotIds list.
+ it('preserves cloud companion tombstones across stale window writes', () => {
+   const owner = state.owner;
+   const current = { enabled: true, selfDeviceId: 'desk', humanActorId: 'human', demotedBotIds: [],
+     actors: [], retiredBotIds: ['mia'] };
+   accessChatDisplayCache({ action: 'write', key: 'cloud-homes', owner, value: current });
+   accessChatDisplayCache({ action: 'write', key: 'cloud-homes', owner, value: { ...current, retiredBotIds: [] } });
+   expect(accessChatDisplayCache({ action: 'read', key: 'cloud-homes', owner })).toMatchObject({ retiredBotIds: ['mia'] });
+ });
+
 it('replays the frozen intent after restart, compacts its receipt and fences another owner', () => {
   const owner = state.owner;
   const current = () => state.owner === owner;

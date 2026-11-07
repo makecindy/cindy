@@ -6,12 +6,14 @@ const h = vi.hoisted(() => ({
   devices: [] as any[],
   invoke: vi.fn(),
   cloudEnabled: false,
+  retired: new Set<string>(),
   copies: vi.fn(),
   status: null as any,
   push: null as any,
 }));
 vi.mock('../companionCloudStore', () => ({
   useCompanionCloud: () => ({ enabled: h.cloudEnabled, actors: [] }),
+  getRetiredCompanionBotIds: () => h.retired,
   companionCloudApi: () => ({ listCindyCopies: h.copies }),
 }));
 vi.mock('@/contexts/AuthContext', () => ({
@@ -56,6 +58,7 @@ beforeEach(async () => {
   window.localStorage.clear();
   resetBotReadStateForTests();
   h.cloudEnabled = false;
+  h.retired = new Set();
   h.copies.mockReset();
   h.owner = `owner-${Math.random()}`;
   setDataOwnerGeneration(h.owner);
@@ -146,6 +149,21 @@ it('lets secondary mirrors update but never replace the main window roster cache
 });
 
 describe('remote teammate roster', () => {
+  it('removes cached rows as soon as the cloud retires their companion identity', async () => {
+    h.owner = 'retired-owner';
+    h.retired = new Set();
+    h.devices = [host('a', false)];
+    const cached = parseRemoteBots(collection(), 'a', 'a');
+    window.localStorage.setItem('cindy.remoteBots.v1.retired-owner', JSON.stringify(cached));
+    const { result, rerender } = renderHook(useRoster);
+    await waitFor(() => expect(result.current).toHaveLength(1));
+
+    h.retired = new Set(['same-bot']);
+    rerender();
+    await waitFor(() => expect(result.current).toEqual([]));
+    expect(JSON.parse(window.localStorage.getItem('cindy.remoteBots.v1.retired-owner') ?? 'null')).toEqual([]);
+  });
+
   it('keeps identical bot ids on two hosts distinct and retains only the offline host as offline', async () => {
     const { result, rerender } = renderHook(useRoster);
     await waitFor(() => expect(result.current).toHaveLength(2));
