@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
-import type { RemoteDesktopRequest } from '@cindy/device-link';
+import { resolveRemoteInvokeTimeoutMs, type RemoteDesktopRequest } from '@cindy/device-link';
 import type { RemoteDesktopViewerApi } from '../../../../shared/remoteDesktopViewer';
 import { RemoteViewerConnection } from '../../../../main/remote-desktop-viewer/connection';
 import { DesktopViewerController, type ViewerSnapshot } from '../viewerController';
@@ -178,6 +178,38 @@ it('dumps recent heartbeat results only on failure and preserves the timeout/ret
   expect(JSON.stringify(data)).not.toContain('lease-one');
   await vi.advanceTimersByTimeAsync(3000);
   expect(current.requests.filter((r) => r.op === 'start')).toHaveLength(2);
+});
+
+// Unit regression: the live DesktopViewerController used to wait the 59s media
+// budget for a lost renewal reply, suppressing every heartbeat past the 12s lease.
+// Existing timeout coverage rejected immediately, so it never exercised that gap.
+it('renews a live desktop before its lease expires when one heartbeat reply is lost', async () => {
+  const renewals: number[] = [];
+  const current = await fixture({
+    heartbeat: async () => {
+      renewals.push(Date.now());
+      if (renewals.length === 1) {
+        await new Promise<never>((_resolve, reject) => {
+          setTimeout(
+            () => reject(new Error('INVOKE_TIMEOUT')),
+            resolveRemoteInvokeTimeoutMs(
+              'device-link:remote-desktop:v1',
+              [{ op: 'heartbeat' }],
+              'desktop',
+            ),
+          );
+        });
+      }
+      return { controlling: true };
+    },
+  });
+  runtime.post?.({ type: 'streaming', epoch: 'lease-one' });
+  await vi.advanceTimersByTimeAsync(14_000);
+  expect(renewals).toHaveLength(3);
+  expect(renewals[1] - renewals[0]).toBeLessThan(12_000);
+  expect(snapshot).toMatchObject({ status: 'live', controlling: true, error: null });
+  expect(current.requests.filter((r) => r.op === 'start')).toHaveLength(1);
+  expect(current.requests.filter((r) => r.op === 'stop')).toHaveLength(0);
 });
 
 it('does not attach a late old heartbeat result to a replacement display lease', async () => {
