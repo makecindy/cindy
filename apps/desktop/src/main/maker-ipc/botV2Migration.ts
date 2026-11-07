@@ -43,7 +43,9 @@ const log = createLogger('maker-ipc:bot-v2-migration');
 const RECEIPT_FILE = 'v2-migration.json';
 const ARCHIVE_DIR = 'v1-archive';
 /** V1-only state no V2 code reads; moved aside after the carryover is written. */
-const V1_STATE = ['todos.v1.json', 'workbench.json', 'working-memory.json', 'nightly-learning.json', 'learning-history'];
+const V1_STATE = ['todos.v1.json', 'working-memory.json', 'nightly-learning.json', 'learning-history'];
+/** Still read by V2 (its directories are the linked projects): archived as a copy, left in place. */
+const V1_COPIED_STATE = ['workbench.json'];
 
 async function readJson<T>(file: string): Promise<T | null> {
   try { return JSON.parse(await fs.readFile(file, 'utf8')) as T; } catch { return null; }
@@ -72,7 +74,9 @@ async function migrateRoutines(botId: string, workingDir: string, archiveDir: st
   const routines = (await routineTools.list(botId))
     .filter((routine) => !routine.builtin && routine.id !== todoCheckRoutineId(botId));
   assertCurrent();
-  if (routines.length === 0) return [];
+  const notesFile = path.join(archiveDir, 'routine-notes.json');
+  const savedNotes = ((await readJson<unknown[]>(notesFile)) ?? []).filter((note): note is string => typeof note === 'string');
+  if (routines.length === 0) return savedNotes;
   // Keep the exact definitions before anything is removed; a rerun after a partial run adds to them.
   await fs.mkdir(archiveDir, { recursive: true });
   const archiveFile = path.join(archiveDir, 'routines.json');
@@ -90,10 +94,14 @@ async function migrateRoutines(botId: string, workingDir: string, archiveDir: st
       await loader.upsertSchedule(workingDir, automation.config);
       if (!automation.enabled) await pauseProjectAutomation(workingDir, automation.config.id);
     }
-    if (converted.note) notes.push(converted.note);
+    if (converted.note) {
+      // Kept on disk before the routine is removed, so a rerun after a partial run still lists it.
+      notes.push(converted.note);
+      await writeAtomic(notesFile, JSON.stringify([...new Set([...savedNotes, ...notes])], null, 2));
+    }
     await routineTools.remove(botId, routine.id);
   }
-  return notes;
+  return [...new Set([...savedNotes, ...notes])];
 }
 
 async function writeCarryover(home: string, workingDir: string, routineNotes: string[]): Promise<boolean> {
@@ -125,6 +133,11 @@ async function archiveV1State(home: string, archiveDir: string): Promise<void> {
     if (await exists(target)) continue;
     await fs.rename(source, target);
   }
+  for (const name of V1_COPIED_STATE) {
+    const source = path.join(home, name);
+    const target = path.join(archiveDir, name);
+    if (await exists(source) && !await exists(target)) await fs.copyFile(source, target);
+  }
 }
 
 export async function migrateTeammateToV2(botId: string, ownerRoot: string,
@@ -136,15 +149,13 @@ export async function migrateTeammateToV2(botId: string, ownerRoot: string,
   const capabilities = profile.capabilities as unknown as Record<string, unknown>;
   const displayName = profile.name;
   const legacyUserDataDir = app.getPath('userData');
-  if (!readBotProjectMode(capabilities)) {
-    // The ordinary save path: prepares the project and adds its memory-review automation.
-    await updateBotProfile({ id: botId, capabilities: { ...capabilities, projectMode: true } });
-  } else {
-    // Already V2: rerun the idempotent preparation (fills anything an earlier version missed).
-    const prepared = await prepareBotProjectWorkspace({ botId, displayName, ownerRoot, legacyUserDataDir });
-    const [route] = await readEffectiveBotModelChain(capabilities).catch(() => []);
-    await ensureBotProjectAutomations({ botId, displayName, workingDir: prepared.workingDir, route });
-  }
+  // Only the flag: the rest of the stored configuration (model, permissions, …) stays as it is.
+  if (!readBotProjectMode(capabilities)) await updateBotProfile({ id: botId, capabilities: { projectMode: true } });
+  assertCurrent();
+  // The save path logs preparation failures; run it here (idempotent) so a failure retries next start.
+  const prepared = await prepareBotProjectWorkspace({ botId, displayName, ownerRoot, legacyUserDataDir });
+  const [route] = await readEffectiveBotModelChain(capabilities).catch(() => []);
+  await ensureBotProjectAutomations({ botId, displayName, workingDir: prepared.workingDir, route });
   assertCurrent();
   const workingDir = await ensureBotWorkspaceDir(ownerRoot, botId, legacyUserDataDir);
   const archiveDir = path.join(home, ARCHIVE_DIR);
@@ -158,12 +169,13 @@ export async function migrateTeammateToV2(botId: string, ownerRoot: string,
   return 'migrated';
 }
 
-let running: Promise<void> | null = null;
+let running: { scope: string; promise: Promise<void> } | null = null;
 
 /** Startup entry. Never throws; each teammate is independent and retries on the next start. */
 export function migrateTeammatesToV2(): Promise<void> {
-  running ??= (async () => {
-    const scope = activeOwnerScopeKey();
+  const scope = activeOwnerScopeKey();
+  if (running?.scope === scope) return running.promise;
+  const promise = (async () => {
     const ownerRoot = ownerScopedUserDataPath();
     const rows = await getDbClient().drizzle.select({ id: botProfiles.id }).from(botProfiles)
       .where(inArray(botProfiles.status, ['active', 'paused']));
@@ -181,6 +193,7 @@ export function migrateTeammatesToV2(): Promise<void> {
       }
     }
   })().catch((error) => log.warn('teammate V2 upgrade skipped', { error: String(error) }))
-    .finally(() => { running = null; });
-  return running;
+    .finally(() => { if (running?.promise === promise) running = null; });
+  running = { scope, promise };
+  return promise;
 }

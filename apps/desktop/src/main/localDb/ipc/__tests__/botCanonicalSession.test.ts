@@ -5445,7 +5445,8 @@ describe('Bot Session task end-to-end runtime', () => {
       expect(deliver).toHaveBeenCalledTimes(1);
       expect(deliver).toHaveBeenCalledWith(expect.objectContaining({ targetSessionId: 'session-1', fromSessionId: 'notify-child',
         text: expect.stringContaining('Stopped halfway') }));
-      // One-shot: later turns stay quiet until asked again.
+      // One-shot: later turns stay quiet until asked again, even if the task reports a final result itself.
+      expect(host.report('notify-child', { instanceId: 'native', generation: 6 }, true)).toBe(false);
       await host.settleTerminal({ sessionId: 'notify-child', execution: { instanceId: 'native', generation: 6 },
         successful: true, text: 'Later work' });
       expect(deliver).toHaveBeenCalledTimes(1);

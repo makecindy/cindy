@@ -609,14 +609,12 @@ export async function hydrateBotProfileRuntime(
     伙伴身份和它自己的技能。群分工等在别的目录干活的会话按普通任务走那个目录。
   */
   const workspaceDir = botHomeDir ? path.join(path.resolve(botHomeDir), 'workspace') : '';
-  // Group lanes stay on the group's own tool authorization even in the workspace.
-  const projectContext = !!workspaceDir && readBotProjectMode(config)
-    && row.role !== 'group'
+  // Only the owner's own chats run as an ordinary project task. IM lanes (other people, groups,
+  // topics) and group lanes keep the existing channel isolation: they never load the owner's
+  // personal instructions, settings, Skills or native memories, only the teammate's project memory.
+  const projectContext = !!workspaceDir && readBotProjectMode(config) && ownerChat
     && path.resolve(opts.workingDir) === workspaceDir;
-  // A V2 teammate's IM lanes are the same teammate with the same tools; the host
-  // still checks per turn that the owner started it (teammateOwnerAction.ts).
-  // Group lanes keep the group's own tool authorization.
-  const fullLane = ownerChat || (projectContext && row.role === 'channel');
+  const fullLane = ownerChat;
   // Bot Memory belongs to the Bot Home and is independent from Cindy's global
   // Maker Memory switch. The profile can still explicitly disable its own memory.
   // A V2 teammate uses its project's memory like an ordinary task, still switched

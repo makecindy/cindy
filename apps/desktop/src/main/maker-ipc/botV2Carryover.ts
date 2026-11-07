@@ -128,6 +128,8 @@ export function convertRoutine(
   const reasons = [
     ...(skipped.length > 0 ? [`trigger not carried: ${skipped.join(', ')}`] : []),
     ...(lostCheck ? ['plugin check not carried, created paused'] : []),
+    // Results now stay in the automation's own task; a chat destination needs setting up again.
+    ...(routine.delivery?.kind === 'im' ? [`results were sent to a chat (${routine.delivery.targetId}); they now stay in the automation's task`] : []),
   ];
   return { automations, note: reasons.length > 0 ? `${routine.name}: ${reasons.join('; ')}` : null };
 }

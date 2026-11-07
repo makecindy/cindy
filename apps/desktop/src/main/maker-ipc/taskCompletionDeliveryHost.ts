@@ -24,6 +24,7 @@ const recordSchema = z.object({
     text: z.string(), status: z.enum(['pending', 'delivered', 'failed']), origin: originSchema.optional(), successful: z.boolean().optional(),
     errorCode: z.string().optional(), failureShown: z.boolean().optional(), postSnapshot: z.unknown().optional() })),
   armed: z.object({ after: z.object({ instanceId: z.string(), generation: z.number().int() }).optional() }).optional(),
+  notify: z.boolean().optional(),
 });
 
 export interface TaskResultDelivery {
@@ -44,6 +45,11 @@ export function createTaskCompletionDeliveryHost(
   deliverToSession: (input: TaskResultDelivery) => Promise<TaskResultDeliveryOutcome>,
 ) {
   const origins = new Set<string>();
+  const notifyOnly = new Set<string>();
+  const remember = (id: string, record: { notify?: boolean }) => {
+    origins.add(id);
+    if (record.notify) notifyOnly.add(id); else notifyOnly.delete(id);
+  };
   let disposed = false;
   const scope = activeOwnerScopeKey();
   const directory = path.join(ownerScopedUserDataPath(), 'task-completion-delivery');
@@ -73,7 +79,7 @@ export function createTaskCompletionDeliveryHost(
       const record = recordSchema.parse(JSON.parse(await fs.readFile(fileFor(id), 'utf8')));
       assertCurrent();
       if (record.sessionId !== id) throw new Error('TASK_DELIVERY_ID_MISMATCH');
-      origins.add(id);
+      remember(id, record);
       return record;
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code === 'ENOENT') return null;
@@ -93,7 +99,7 @@ export function createTaskCompletionDeliveryHost(
         await fs.writeFile(temp, JSON.stringify({ ...record, sessionId: id }), { mode: 0o600 });
         assertCurrent();
         await fs.rename(temp, file);
-        origins.add(id);
+        remember(id, record);
       } finally { await fs.rm(temp, { force: true }); }
     });
   };
@@ -169,7 +175,8 @@ export function createTaskCompletionDeliveryHost(
     pruneDeleted,
     dispose() { disposed = true; delivery.dispose(); },
     report(id: string, execution: { instanceId: string; generation: number }, final: boolean) {
-      if (!isCurrent() || !origins.has(id)) return false;
+      // A notify_when_done task never needs the explicit report; settlement follows its arming.
+      if (!isCurrent() || !origins.has(id) || notifyOnly.has(id)) return false;
       delivery.report(id, execution, final);
       return true;
     },
@@ -200,7 +207,7 @@ export function createTaskCompletionDeliveryHost(
      * A later request replaces the requester for the next result; results already produced keep theirs.
      */
     arm: (id: string, origin: TaskCompletionOrigin, after?: { instanceId: string; generation: number }) =>
-      write(id, record => ({ origin, receipts: record?.receipts ?? [], armed: after ? { after } : {} })),
+      write(id, record => ({ origin, receipts: record?.receipts ?? [], armed: after ? { after } : {}, notify: true })),
     disarm: (id: string) => write(id, record => {
       if (!record) throw new Error('TASK_DELIVERY_ORIGIN_MISSING');
       delete record.armed;

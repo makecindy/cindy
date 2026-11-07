@@ -30,6 +30,8 @@ export interface TaskCompletionRecord {
    * finished when the request was sent) is delivered to `origin`, then it disarms.
    */
   armed?: { after?: BotAutonomyExecution };
+  /** Created by `notify_when_done`: only an armed request delivers, never a later explicit report. */
+  notify?: boolean;
 }
 
 interface TaskCompletionTerminal {
@@ -61,6 +63,8 @@ export function createTaskCompletionDelivery(deps: TaskCompletionDeliveryDeps) {
   const unsettled = new Map<string, TaskCompletionTerminal>();
   let disposed = false;
   const current = () => !disposed && deps.isCurrent();
+  // A finished notify_when_done request no longer makes the task "delivering" (no report prompt, no suppression).
+  const waiting = (record: TaskCompletionRecord | null) => !!record && (!record.notify || !!record.armed);
   const same = (a: BotAutonomyExecution, b: BotAutonomyExecution) =>
     a.instanceId === b.instanceId && a.generation === b.generation;
   const executionKey = (id: string, execution: BotAutonomyExecution) =>
@@ -149,7 +153,8 @@ export function createTaskCompletionDelivery(deps: TaskCompletionDeliveryDeps) {
         const saved = await deps.read(input.sessionId);
         const armedFor = (armed: TaskCompletionRecord['armed']) => !!armed && (!armed.after
           || armed.after.instanceId !== input.execution.instanceId || input.execution.generation > armed.after.generation);
-        if (!saved || !current() || (!report && !armedFor(saved.armed))) {
+        const wanted = saved && (saved.notify ? armedFor(saved.armed) : !!report || armedFor(saved.armed));
+        if (!saved || !current() || !wanted) {
           unsettled.delete(key);
           return;
         }
@@ -181,10 +186,10 @@ export function createTaskCompletionDelivery(deps: TaskCompletionDeliveryDeps) {
     report(id: string, execution: BotAutonomyExecution, final: boolean) {
       if (current()) reports.set(executionKey(id, execution), { execution: { ...execution }, final });
     },
-    hasOrigin: async (id: string) => current() && !!await deps.read(id),
+    hasOrigin: async (id: string) => current() && waiting(await deps.read(id)),
     settle,
     /** Suppress follower replies even if delivery failed; only the frozen origin may receive it. */
-    async handles(id: string) { return current() && !!await deps.read(id); },
+    async handles(id: string) { return current() && waiting(await deps.read(id)); },
     async restore() {
       for (const id of await deps.pending()) {
         if (!current()) return;

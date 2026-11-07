@@ -220,6 +220,15 @@ describe('IM channel lanes hydrate the full Bot profile', () => {
     expect(group.makerMemoryScopeKey).toBe(await resolveMemoryScopeKey('/bots/bot/workspace'));
     expect(deps.readMemoryIndex).not.toHaveBeenCalled();
 
+    // An IM lane (other people) keeps the channel isolation: never the owner's ordinary-task
+    // context (personal instructions, settings, Skills), only the teammate's project memory.
+    seed('channel', 'im:telegram:777:g:-100123', { ...narrow, projectMode: true });
+    const lane = { id: 'lane', agentKind: 'pi', workingDir: '/bots/bot/workspace', model: 'm' } as MakerSessionCreateOpts;
+    const laneSnapshot = await hydrateBotProfileRuntime(lane, deps, { persistSnapshot: false });
+    expect(lane.botRuntimeProfile?.projectContext).toBeUndefined();
+    expect(laneSnapshot?.disabledToolsets).toEqual(['browser', 'docs']);
+    expect(lane.makerMemoryScopeKey).toBe(await resolveMemoryScopeKey('/bots/bot/workspace'));
+
     seed('canonical', null, narrow);
     const classic = { id: 'main', agentKind: 'pi', workingDir: '/bots/bot/workspace', model: 'm' } as MakerSessionCreateOpts;
     await hydrateBotProfileRuntime(classic, deps, { persistSnapshot: false });

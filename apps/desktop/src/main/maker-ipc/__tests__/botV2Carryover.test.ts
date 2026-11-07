@@ -43,6 +43,9 @@ describe('convertRoutine', () => {
       { now: 0, timezone: 'UTC' });
     expect(plugin.automations[0]?.enabled).toBe(false);
     expect(plugin.note).toContain('plugin check');
+    // A routine that posted to a chat says so: its results now stay in the automation's task.
+    expect(convertRoutine(routine({ delivery: { kind: 'im', targetId: 'feishu:group' } }), route, { now: 0, timezone: 'UTC' }).note)
+      .toContain('feishu:group');
   });
 });
 
