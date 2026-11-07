@@ -1,6 +1,11 @@
 import { withSpeechApiPresets } from '../../../shared/speechProviderSetup';
 import { ProviderNameSearch } from './ProviderNameSearch';
 import { providerSearchChoices, type ProviderSearchTarget } from './providerSearch';
+import {
+  credentialGuidanceKind,
+  mergedHeaderNames,
+  missingCredentialRuntime,
+} from './customProviderCredentialGuard';
 import { useDialogExit } from '@/hooks/useDialogExit';
 import { WINDOW_DRAG_STYLE, WINDOW_NO_DRAG_STYLE } from '@/components/layout/windowDrag';
 import { providerEndpointBindings, canonicalProviderEndpoint, BUNDLED_CATALOG, mergeModelMetadata } from '@cindy/model-providers';
@@ -2136,6 +2141,51 @@ export function ProviderConnectionDialog({
       reportFieldError(
         `${activeTab}:baseUrl`,
         t('settings.providers.custom.errors.runtimeRequired'),
+      );
+      return;
+    }
+    // apiKey 形态留空会存出不带 `auth` 的配置，下游按 apiKey 处理后因缺凭据静默
+    // 跳过该 Provider，界面只剩一个没有解释的灰置开关（#8693 / #7646）。在保存前挡住。
+    const credentialDrafts = Object.keys(runtimes).map((key) => {
+      const a = key as DialogAgentKind;
+      const saved = runtimes[a];
+      const previous = initial?.runtimes[a];
+      const norm = (value: string | null | undefined) => (value ?? '').trim();
+      // main 侧保留既存密文鉴权头的条件(planProviderHeaderMutations 'update' 分支):
+      // runtime 仍在、仍是 apiKey 鉴权、本次未显式带 headers、且端点(baseUrl /
+      // modelsUrl)未变。判据与上面「已存密文头徽标」(activeHeadersCanRemainSaved)
+      // 同口径,其中 headersState 是 main 给的不含值的存在信号:
+      //   - 'configured' 才表示确实存着头凭证;
+      //   - 上次保存就是 apiKey 才可能留存 —— none / oauth 下头凭证一律被清除
+      //     (planProviderHeaderMutations 开头的 usesApiKey 注释),所以从 none 切到
+      //     apiKey 时 main 侧无凭证可保留,不能放行(PR #9034 review P1)。
+      const preservesStoredHeaderCredential =
+        editing
+        && previous?.headersState === 'configured'
+        && authMode === 'apiKey'
+        && (!initial?.auth || initial.auth.method === 'apiKey')
+        && Object.keys(mergedHeaderNames(rt[a].headers)).length === 0
+        && norm(previous.baseUrl) === norm(saved?.baseUrl)
+        && norm(previous.modelsUrl) === norm(saved?.modelsUrl);
+      return {
+        agent: a,
+        apiKey: rt[a].apiKey,
+        headers: rt[a].headers,
+        baseUrl: saved?.baseUrl ?? '',
+        ...(saved?.modelsUrl ? { modelsUrl: saved.modelsUrl } : {}),
+        keyEdited: !editing || keyEditRevisionRef.current[a] > 0,
+        hasStoredKey: (loadedKeyRef.current[a] ?? '').trim().length > 0,
+        preservesStoredHeaderCredential,
+      };
+    });
+    const credentialGap = missingCredentialRuntime(authMode, credentialDrafts);
+    if (credentialGap) {
+      setActiveTab(credentialGap);
+      reportFieldError(
+        `${credentialGap}:apiKey`,
+        credentialGuidanceKind(credentialDrafts) === 'loopback'
+          ? t('settings.providers.custom.errors.apiKeyRequiredLoopback')
+          : t('settings.providers.custom.errors.apiKeyRequiredRemote'),
       );
       return;
     }

@@ -3843,7 +3843,9 @@
           "requestPathInvalid": "Den exakten Anfragepfad mit einem einzelnen / beginnen. Keine Fragmente oder Pfadsegmente mit . und .. verwenden; Leerzeichen und unsichere Zeichen prozentkodieren.",
           "modelRequired": "Mindestens ein Modell hinzufügen",
           "oauthInvalid": "Unvollständige OAuth-Konfiguration: Alle Felder sind erforderlich und beide Endpunkte müssen sicher sein https URLs",
-          "baseUrlRequired": "Gib die Basis-URL dieser Laufzeit ein oder stelle ihr Protokoll auf den Standard zurück."
+          "baseUrlRequired": "Gib die Basis-URL dieser Laufzeit ein oder stelle ihr Protokoll auf den Standard zurück.",
+          "apiKeyRequiredLoopback": "Gib einen API-Key ein oder stelle die Authentifizierung auf „Keine“ um – dieser Endpunkt ist eine Loopback-Adresse und erlaubt Zugriff ohne Authentifizierung.",
+          "apiKeyRequiredRemote": "Gib einen API-Key ein. Zugriff ohne Authentifizierung ist auf Loopback-Adressen beschränkt; ignoriert der Dienst den Key, genügt ein Platzhalter (zum Beispiel ollama)."
         },
         "toast": {
           "created": "Anbieter hinzugefügt",
