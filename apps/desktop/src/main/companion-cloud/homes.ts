@@ -83,6 +83,22 @@ export function isCompanionShadowed(botId: string): boolean {
   return companionHomes.isShadowed(botId);
 }
 
+/**
+ * Account-local shadows that may be ignored only by ordinary local-name checks.
+ * Invalid or unavailable state is an empty exception list, so normal uniqueness
+ * checks remain in force.
+ */
+export function companionShadowIdsForLocalNameCheck(): string[] {
+  try {
+    const ids = companionHomes.snapshot().demotedBotIds;
+    if (!Array.isArray(ids) || ids.length > 10_000) return [];
+    return [...new Set(ids.filter(id => typeof id === 'string' && id.length > 0 && id.length <= 128
+      && id.trim() === id && !/[\u0000-\u001f\u007f]/u.test(id)))];
+  } catch {
+    return [];
+  }
+}
+
 interface HomeActor { id: string; kind: string; externalId: string; homeDeviceId?: string | null; disabled?: boolean }
 
 /**

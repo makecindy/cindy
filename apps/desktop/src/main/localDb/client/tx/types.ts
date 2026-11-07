@@ -656,6 +656,10 @@ export interface BotsCreateProfileArgs {
   avatarColor: string;
   identitySource: string;
   capabilitiesJson: string;
+  /** Main-only exception scope for ordinary name checks; Cindy template checks still see every row. */
+  ignoreShadowedBotIds?: string[];
+  /** Main-only trusted cloud restore exception. */
+  allowDuplicateName?: boolean;
   eventSubscription?: {
     id: string;
     name: string;
@@ -672,6 +676,10 @@ export interface BotsUpdateProfileArgs {
   /** Explicit settings changes also update the permanent chat in this transaction. */
   canonicalPermissionMode?: 'ask' | 'auto' | 'bypassPermissions';
   displayName?: string;
+  /** Main-only exception scope for ordinary name checks. */
+  ignoreShadowedBotIds?: string[];
+  /** Main-only trusted cloud restore exception. */
+  allowDuplicateName?: boolean;
   description?: string;
   avatar?: string;
   avatarColor?: string;

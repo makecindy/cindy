@@ -334,17 +334,36 @@ function expectOptionalFlag(value: unknown, name: string): boolean {
   return value;
 }
 
+/** Main → worker internal allowlist. Malformed input must never widen name-check exceptions. */
+function expectOptionalBotIdList(value: unknown, name: string): string[] {
+  if (value === undefined) return [];
+  if (!Array.isArray(value) || value.length > 10_000) throw invalidArgs(`${name} must be a bounded string array`);
+  const ids: string[] = [];
+  const seen = new Set<string>();
+  for (const id of value) {
+    if (typeof id !== 'string' || id.length === 0 || id.length > 128 || id.trim() !== id
+      || /[\u0000-\u001f\u007f]/u.test(id) || seen.has(id)) {
+      throw invalidArgs(`${name} contains an invalid bot id`);
+    }
+    seen.add(id);
+    ids.push(id);
+  }
+  return ids;
+}
+
 function botsCreateProfile(db: Database.Database, args: unknown): void {
   const p = asRecord(args, 'bots.createProfile args');
   const id = expectString(p.id, 'id');
   const now = expectNumber(p.now, 'now');
   const allowDuplicateName = expectOptionalFlag(p.allowDuplicateName, 'allowDuplicateName');
+  const ignoredShadowIds = new Set(expectOptionalBotIdList(p.ignoreShadowedBotIds, 'ignoreShadowedBotIds'));
   db.transaction(() => {
     const config = JSON.parse(expectString(p.capabilitiesJson, 'capabilitiesJson'));
     const rows = db.prepare(`SELECT p.id, p.display_name AS name, v.capabilities_json AS config, v.identity_source AS identity
       FROM bot_profiles p JOIN bot_profile_versions v ON v.bot_id = p.id AND v.version = p.current_version
       WHERE p.status != 'archived'`).all() as Array<{ id: string; name: string; config: string; identity: string }>;
-    if ((!allowDuplicateName && rows.some(row => normalizeBotName(row.name) === normalizeBotName(expectString(p.displayName, 'displayName')))) ||
+    if ((!allowDuplicateName && rows.some(row => !ignoredShadowIds.has(row.id)
+        && normalizeBotName(row.name) === normalizeBotName(expectString(p.displayName, 'displayName')))) ||
         (config.templateId === 'cindy' && rows.some(row => JSON.parse(row.config).templateId === 'cindy' || inferBotTemplatePresetId(row.identity) === 'cindy'))) {
       throw Object.assign(new Error('A matching companion already exists'), { code: 'ALREADY_EXISTS' });
     }
@@ -381,6 +400,7 @@ function botsUpdateProfile(db: Database.Database, args: unknown): { currentVersi
   const expectedVersion = expectNumber(p.expectedCurrentVersion, 'expectedCurrentVersion');
   const now = expectNumber(p.now, 'now');
   const allowDuplicateName = expectOptionalFlag(p.allowDuplicateName, 'allowDuplicateName');
+  const ignoredShadowIds = new Set(expectOptionalBotIdList(p.ignoreShadowedBotIds, 'ignoreShadowedBotIds'));
   const avatarRef = p.botAvatarRef === undefined
     ? null
     : asRecord(p.botAvatarRef, 'botAvatarRef');
@@ -408,8 +428,8 @@ function botsUpdateProfile(db: Database.Database, args: unknown): { currentVersi
     }
     if (!allowDuplicateName && p.displayName !== undefined && normalizeBotName(expectString(p.displayName, 'displayName')) !== normalizeBotName(current.displayName)) {
       const name = normalizeBotName(expectString(p.displayName, 'displayName'));
-      const others = db.prepare("SELECT display_name AS name FROM bot_profiles WHERE id != ? AND status != 'archived'").all(id) as Array<{ name: string }>;
-      if (others.some(row => normalizeBotName(row.name) === name)) throw Object.assign(new Error('A companion with this name already exists'), { code: 'ALREADY_EXISTS' });
+      const others = db.prepare("SELECT id, display_name AS name FROM bot_profiles WHERE id != ? AND status != 'archived'").all(id) as Array<{ id: string; name: string }>;
+      if (others.some(row => !ignoredShadowIds.has(row.id) && normalizeBotName(row.name) === name)) throw Object.assign(new Error('A companion with this name already exists'), { code: 'ALREADY_EXISTS' });
     }
     if (p.preserveUpdatedAt !== undefined && typeof p.preserveUpdatedAt !== 'boolean') {
       throw new Error('preserveUpdatedAt must be a boolean');

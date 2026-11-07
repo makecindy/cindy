@@ -77,6 +77,7 @@ import {
 import { syncBotProfileFromFolder } from '../../maker-ipc/botProfileFolderSync.js';
 import { requestBotRuntimeEpochRefresh } from '../../maker-ipc/botRuntimeEpochRefreshSignal.js';
 import { createLogger } from '../../logger.js';
+import { companionShadowIdsForLocalNameCheck } from '../../companion-cloud/homes.js';
 import { collectTaskResponsibilityScopes } from '../../maker-ipc/botTaskResponsibility.js';
 import {
   readBotWorkbenchTaskForOwner,
@@ -1992,18 +1993,21 @@ export async function createBotProfile(raw: unknown, restored?: RestoredBotOrigi
     botAvatarRef = { id: randomUUID(), hash: written.hash, createdAt: now };
   }
   try {
-  await client.tx('bots.createProfile', {
-    id,
-    ...(botAvatarRef ? { botAvatarRef } : {}),
-    displayName: name,
-    description,
-    avatar,
-    avatarColor,
-    identitySource,
-    capabilitiesJson: safeJson(persistedCapabilities),
-    ...(restored?.allowSameName === true ? { allowDuplicateName: true } : {}),
-    now,
-  });
+    const ignoreShadowedBotIds = companionShadowIdsForLocalNameCheck();
+    assertCreationOwnerStillCurrent();
+    await client.tx('bots.createProfile', {
+      id,
+      ...(botAvatarRef ? { botAvatarRef } : {}),
+      displayName: name,
+      description,
+      avatar,
+      avatarColor,
+      identitySource,
+      capabilitiesJson: safeJson(persistedCapabilities),
+      ignoreShadowedBotIds,
+      ...(restored?.allowSameName === true ? { allowDuplicateName: true } : {}),
+      now,
+    });
   } catch (error) {
     assertCreationOwnerStillCurrent();
     if (templateId === 'cindy' && (error as { code?: string }).code === 'ALREADY_EXISTS') {
@@ -2242,10 +2246,13 @@ export async function updateBotProfile(raw: unknown, expectedVersion?: number,
       // Hold send locks only through persistence/invalidation, not runtime
       // permission refresh, which may wait for the current turn to finish.
       owner.assertCurrent();
+      const ignoreShadowedBotIds = companionShadowIdsForLocalNameCheck();
+      owner.assertCurrent();
       await client.tx('bots.updateProfile', {
         id,
         ...(acceptsModelSelection ? { clearScheduledModelBaseline: true } : {}),
         ...(changesPermissions ? { canonicalPermissionMode: botSessionPermissionMode(normalizedNextConfig) } : {}),
+        ignoreShadowedBotIds,
         ...(restored?.allowSameName === true ? { allowDuplicateName: true } : {}),
         ...(patch.displayName !== undefined ? { displayName: patch.displayName } : {}),
         ...(patch.description !== undefined ? { description: patch.description } : {}),

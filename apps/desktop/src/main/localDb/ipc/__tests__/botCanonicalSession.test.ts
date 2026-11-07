@@ -22,6 +22,7 @@ import type { AgentInputQueuedMessage } from '../../../../shared/agentInputQueue
 import type { ProviderView } from '@cindy/model-providers';
 import { createHash } from 'node:crypto';
 import { createCompanionCloudHost } from '../../../companion-cloud/host';
+import { companionHomes } from '../../../companion-cloud/homes';
 import { clearSessionPersistState, noteSessionAgentKind, getAssistantSamplingRuntimeId } from '../../../messagePersistBroadcaster';
 import { join, resolve } from 'node:path';
 import { existsSync, mkdirSync, promises as fsPromises, readFileSync, rmSync, writeFileSync } from 'node:fs';
@@ -120,6 +121,7 @@ const h = await vi.hoisted(async () => {
   providers: [] as ProviderView[],
   listProviders: vi.fn(async (): Promise<ProviderView[]> => h.providers),
   ownerScopeKey: 'owner-a:1',
+  shadowBotIds: [] as string[],
   ownerBoundaryPending: false,
   showOpenDialog: vi.fn(async () => ({ canceled: true, filePaths: [] as string[] })),
 });
@@ -573,6 +575,10 @@ beforeEach(async () => {
   h.getSession.mockReset();
   h.getSession.mockReturnValue(null);
   h.ownerScopeKey = 'owner-a:1';
+  h.shadowBotIds = [];
+  companionHomes.reset();
+  companionHomes.bindOwner(() => h.ownerScopeKey, () => h.shadowBotIds);
+  companionHomes.setPersistedShadows(h.shadowBotIds);
   setNewMakerDraftCache({ selectedRoute: { harness: 'pi', providerId: 'xd', model: 'z-ai/glm-5.3-flash', effort: 'high', fastMode: false }, lastByVendor: {}, effortByModel: {}, fastModeByModel: {} }, h.ownerScopeKey);
   h.ownerBoundaryPending = false;
   h.searchConversations.mockResolvedValue({
@@ -1157,10 +1163,14 @@ describe('Bot canonical Session lifecycle', () => {
 
     it('does not let a renderer or model body switch the name check off', async () => {
       const { createBotProfile } = await import('../bots');
-      for (const flag of ['allowSameName', 'allowDuplicateName']) {
-        await expect(invoke('local-db:bots:create', { id: 'import_other', name: 'Release Bot', [flag]: true }))
+      for (const forgedOptions of [
+        { allowSameName: true },
+        { allowDuplicateName: true },
+        { ignoreShadowedBotIds: ['bot-1'] },
+      ]) {
+        await expect(invoke('local-db:bots:create', { id: 'import_other', name: 'Release Bot', ...forgedOptions }))
           .rejects.toMatchObject({ code: 'ALREADY_EXISTS' });
-        await expect(createBotProfile({ id: 'import_other', name: 'Release Bot', [flag]: true })).rejects.toMatchObject({ code: 'ALREADY_EXISTS' });
+        await expect(createBotProfile({ id: 'import_other', name: 'Release Bot', ...forgedOptions })).rejects.toMatchObject({ code: 'ALREADY_EXISTS' });
       }
       expect(names()).toEqual(['bot-1']);
     });
@@ -1168,9 +1178,36 @@ describe('Bot canonical Session lifecycle', () => {
     it('keeps the default Cindy unique for a take-over', async () => {
       const { createBotProfile } = await import('../bots');
       await invoke('local-db:bots:create', { id: 'local-cindy', name: 'Cindy', templateId: 'cindy' });
+      companionHomes.setPersistedShadows(['local-cindy']);
       await expect(createBotProfile({ id: 'import_cindy', name: 'Cindy 2' }, { templateId: 'cindy', allowSameName: true }))
         .rejects.toMatchObject({ code: 'ALREADY_EXISTS' });
       expect(h.sqlite!.prepare("SELECT COUNT(*) FROM bot_profiles WHERE id = 'import_cindy'").pluck().get()).toBe(0);
+    });
+
+    // 测试价值
+    // - 生产入口与可观察结果：createBotProfile/updateBotProfile 真正提交 worker tx，观察能否保存及 ALREADY_EXISTS。
+    // - Bug／规则依据：#8272 与 cloud-companions.md §6 的 shadow-only 名称例外。
+    // - 现有覆盖缺口：原用例只覆盖普通冲突和 takeover 放行，没有覆盖当前账号明确 demotedBotIds。
+    // - 最小失败输入和 tier：一个同名 shadow profile、再加一个同名 active profile；本地内存 SQLite unit，无网络。
+    // - 实测耗时：单独运行本文件 30.42s；因缺少 original-fs 在收集阶段阻断，新增断言未执行。
+    it('ignores only current-owner shadows for ordinary create while active duplicates still block', async () => {
+      companionHomes.setPersistedShadows(['bot-1']);
+      const { createBotProfile } = await import('../bots');
+      const created = await createBotProfile({ id: 'shadow-name-copy', name: 'release bot' });
+      expect(created.id).toBe('shadow-name-copy');
+      await expect(createBotProfile({ id: 'active-name-duplicate', name: 'Release Bot' }))
+        .rejects.toMatchObject({ code: 'ALREADY_EXISTS' });
+    });
+
+    it('ignores a current-owner shadow during ordinary rename but still blocks another active name', async () => {
+      companionHomes.setPersistedShadows(['bot-1']);
+      const { createBotProfile } = await import('../bots');
+      const renameTarget = await createBotProfile({ id: 'rename-shadow-name', name: 'Rename Target' });
+      const renamed = await updateStoredBotProfile({ id: renameTarget.id, name: 'Release Bot' });
+      expect(renamed.name).toBe('Release Bot');
+      const anotherTarget = await createBotProfile({ id: 'rename-active-duplicate', name: 'Another Target' });
+      await expect(updateStoredBotProfile({ id: anotherTarget.id, name: 'Release Bot' }))
+        .rejects.toMatchObject({ code: 'ALREADY_EXISTS' });
     });
 
     it('takes over an existing copy whose cloud name now matches another local companion', async () => {
