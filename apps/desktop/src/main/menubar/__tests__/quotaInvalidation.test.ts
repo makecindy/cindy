@@ -25,7 +25,13 @@ vi.mock('../../agent-island/service.js', () => ({ getAgentIslandService: () => (
   subscribeSessionActivity: () => () => {},
 }) }));
 vi.mock('../../appCapabilities.js', () => ({ getAppCapabilities: () => ({ canUseCindyAccountServices: true }) }));
-vi.mock('../../appSessionState.js', () => ({ getActiveAppSession: () => ({ dataOwnerId: mocks.auth.dataOwnerId, mode: mocks.auth.mode, generation: mocks.auth.ownerGeneration }), isAppSessionBoundaryPending: () => mocks.boundaryPending }));
+vi.mock('../../appSessionState.js', async importOriginal => {
+  const actual = await importOriginal<typeof import('../../appSessionState.js')>();
+  return { ...actual,
+    getActiveAppSession: () => ({ dataOwnerId: mocks.auth.dataOwnerId, mode: mocks.auth.mode, generation: mocks.auth.ownerGeneration }),
+    isAppSessionBoundaryPending: () => mocks.boundaryPending || actual.isAppSessionBoundaryPending(),
+  };
+});
 vi.mock('../../authManager.js', () => ({ getAuthState: () => mocks.auth, onAuthStateChange: (changed: (state: { isAuthenticated: boolean }) => void) => {
   mocks.authListeners.add(changed); return () => { mocks.authListeners.delete(changed); };
 } }));
@@ -64,6 +70,7 @@ vi.mock('../creditSamples.js', () => ({ CreditSampleStore: class { record() { re
 vi.mock('../collect.js', async (importOriginal) => ({ ...await importOriginal<typeof import('../collect')>(), collectMenubarInputs: (...args: unknown[]) => mocks.collect(...args) }));
 import { MenubarService } from '../service';
 import { getQuotaOverviewService, QuotaOverviewService, readUsageWidgetSnapshot } from '../../quota-overview/service';
+import { beginAppSessionBoundary } from '../../appSessionState';
 let overview: QuotaOverviewService;
 beforeEach(() => {
   overview = new QuotaOverviewService();
@@ -339,7 +346,7 @@ it('adds the highest shared weekly quota only to the open native panel and clear
 
 // Unit regression for provider-sharing §7.5: the reader cleared memory on auth changes,
 // but a null overview suppressed the native update. Hold an old collection unresolved.
-it.each(['logout', 'owner', 'boundary'])('clears the presented share immediately on %s while overview is unavailable', async kind => {
+it.each(['logout', 'owner', 'boundary', 'session-invalidated'])('clears the presented share immediately on %s while overview is unavailable', async kind => {
   const collected = emptyMenubarInputs(Date.now(), 'Fixture');
   mocks.collect.mockResolvedValue(collected);
   mocks.activities = [activity('private-task')];
@@ -350,6 +357,7 @@ it.each(['logout', 'owner', 'boundary'])('clears the presented share immediately
   });
   const service = new MenubarService({ openNewTask() {}, overview });
   let finishOverview: ((value: typeof collected) => void) | undefined;
+  let releaseBoundary: (() => void) | undefined;
   try {
     service.init();
     await vi.advanceTimersByTimeAsync(0);
@@ -360,12 +368,19 @@ it.each(['logout', 'owner', 'boundary'])('clears the presented share immediately
     overview.rebuildSoon();
     await vi.advanceTimersByTimeAsync(400);
     expect(finishOverview).toBeDefined();
-    if (kind === 'boundary') mocks.boundaryPending = true;
-    else mocks.auth.dataOwnerId = kind === 'logout' ? null : 'other';
-    if (kind === 'logout') mocks.auth.mode = 'signed-out';
-    mocks.auth.ownerGeneration++;
-    if (kind === 'boundary') mocks.sharedChanged?.();
-    else for (const changed of [...mocks.authListeners]) changed({ isAuthenticated: kind !== 'logout' });
+    if (kind === 'session-invalidated') {
+      // Real synchronous boundary signal: no synthetic auth/share notification or owner change.
+      const reads = mocks.sharedRead.mock.calls.length;
+      releaseBoundary = beginAppSessionBoundary();
+      expect(mocks.sharedRead).toHaveBeenCalledTimes(reads);
+    } else {
+      if (kind === 'boundary') mocks.boundaryPending = true;
+      else mocks.auth.dataOwnerId = kind === 'logout' ? null : 'other';
+      if (kind === 'logout') mocks.auth.mode = 'signed-out';
+      mocks.auth.ownerGeneration++;
+      if (kind === 'boundary') mocks.sharedChanged?.();
+      else for (const changed of [...mocks.authListeners]) changed({ isAuthenticated: kind !== 'logout' });
+    }
     expect(overview.latest()).toBeNull();
     const cleared = mocks.publish.mock.lastCall?.[0];
     expect(cleared.sources).toEqual([]);
@@ -380,5 +395,6 @@ it.each(['logout', 'owner', 'boundary'])('clears the presented share immediately
   } finally {
     finishOverview?.(collected);
     service.stop();
+    releaseBoundary?.();
   }
 });

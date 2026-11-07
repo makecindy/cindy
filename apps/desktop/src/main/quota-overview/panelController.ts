@@ -18,7 +18,7 @@ import type {
   MenubarView,
 } from '../../shared/menubarQuota.js';
 import { getAgentIslandService } from '../agent-island/service.js';
-import { getActiveAppSession, isAppSessionBoundaryPending } from '../appSessionState.js';
+import { getActiveAppSession, isAppSessionBoundaryPending, onAppSessionInvalidated } from '../appSessionState.js';
 import { onAuthStateChange } from '../authManager.js';
 import {
   focusMainWindow,
@@ -226,7 +226,8 @@ export class QuotaPanelController {
       subscribe: changed => {
         const offShares = onProviderShareReceivedChanged(changed);
         const offAuth = onAuthStateChange(changed);
-        return () => { offShares(); offAuth(); };
+        const offSession = onAppSessionInvalidated(changed);
+        return () => { offShares(); offAuth(); offSession(); };
       },
       publish: sources => {
         this.sharedSources = sources;

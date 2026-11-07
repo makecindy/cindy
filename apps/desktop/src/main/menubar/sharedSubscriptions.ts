@@ -57,6 +57,7 @@ export class SharedQuotaReader {
   private dispose: (() => void) | null = null;
   private identity: string | null = null;
   private directoryIdentity: string | null = null;
+  private inFlightRevision: number | null = null;
   private readings: SharedQuotaReading[] = [];
   private expiryTimer: ReturnType<typeof setTimeout> | null = null;
   constructor(private readonly deps: SharedQuotaDeps) {}
@@ -133,13 +134,23 @@ export class SharedQuotaReader {
       return;
     }
     const identity = this.currentIdentity();
+    // A refresh reuses the current authorized batch rather than stacking uncancellable RPCs.
+    if (identity === this.identity && this.inFlightRevision === this.revision) return;
     this.invalidateRead();
     // Keep the detail source mounted during a same-identity manual refresh. A scope or
     // relationship change must still remove the old reading before its replacement arrives.
     if (identity !== this.identity) this.clearReadings();
     this.identity = identity;
     this.directoryIdentity = this.currentDirectoryIdentity();
-    void this.read(this.revision);
+    this.startRead(this.revision);
+  }
+
+  private startRead(revision: number): void {
+    this.inFlightRevision = revision;
+    void this.read(revision).finally(() => {
+      // A late previous lease must not release a newer lease's single flight.
+      if (this.inFlightRevision === revision) this.inFlightRevision = null;
+    });
   }
 
   private async read(revision: number): Promise<void> {
@@ -174,7 +185,7 @@ export class SharedQuotaReader {
     if (!current()) return;
     this.timer = setTimeout(() => {
       this.timer = null;
-      void this.read(revision);
+      this.startRead(revision);
     }, 5_000);
   }
 

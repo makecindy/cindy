@@ -98,6 +98,60 @@ function harness() {
   };
 }
 
+// A three-share pending batch plus two native refresh commands formerly issued nine RPCs.
+// Keep the actual request fanout bounded for both the initial read and a periodic read.
+it('joins repeated same-identity refreshes to the pending batch and publishes its result', async () => {
+  const h = harness();
+  h.changeShares([share, { ...share, shareId: 'two' }, { ...share, shareId: 'three' }]);
+  const pending: ((value: unknown) => void)[] = [];
+  h.read.mockImplementation(() => new Promise(done => { pending.push(done); }));
+  try {
+    h.reader.setOpen(true);
+    h.reader.refresh(); h.reader.refresh();
+    expect(h.read).toHaveBeenCalledTimes(3);
+    pending.splice(0).forEach(done => done(quota()));
+    await vi.advanceTimersByTimeAsync(0);
+    expect(h.sources).toHaveLength(3);
+    await vi.advanceTimersByTimeAsync(5_000);
+    h.reader.refresh(); h.reader.refresh();
+    expect(h.read).toHaveBeenCalledTimes(6);
+    const next = quota(); next.quota!.accounts[0]!.windows[0]!.remainingPercent = 82;
+    pending.splice(0).forEach(done => done(next));
+    await vi.advanceTimersByTimeAsync(0);
+    expect(h.sources).toHaveLength(3);
+    expect(h.sources.every(source => source.windows[0].usedPercent === 18)).toBe(true);
+    h.reader.refresh();
+    expect(h.read).toHaveBeenCalledTimes(9);
+  } finally {
+    h.reader.setOpen(false);
+    pending.splice(0).forEach(done => done(quota()));
+  }
+});
+
+it('starts a new visible lease while an old read is pending and keeps its single flight after the old reply', async () => {
+  const h = harness();
+  let finishOld!: (value: unknown) => void;
+  let finishNew!: (value: unknown) => void;
+  h.read.mockImplementationOnce(() => new Promise(done => { finishOld = done; }))
+    .mockImplementationOnce(() => new Promise(done => { finishNew = done; }));
+  try {
+    h.reader.setOpen(true);
+    h.reader.setOpen(false); h.reader.setOpen(true);
+    expect(h.read).toHaveBeenCalledTimes(2);
+    finishOld(quota());
+    await vi.advanceTimersByTimeAsync(0);
+    expect(h.sources).toEqual([]);
+    h.reader.refresh(); h.reader.refresh();
+    expect(h.read).toHaveBeenCalledTimes(2);
+    finishNew(quota());
+    await vi.advanceTimersByTimeAsync(0);
+    expect(h.sources).toHaveLength(1);
+  } finally {
+    h.reader.setOpen(false);
+    finishOld?.(quota()); finishNew?.(quota());
+  }
+});
+
 // One fast share can expire while a sibling read is pending. Projection must use the
 // final publication time, including reselecting a still-live account from a group.
 it.each([false, true])('rechecks weekly validity after the whole batch finishes (fallback=%s)', async fallback => {
