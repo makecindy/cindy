@@ -101,6 +101,7 @@ export function InstallTargetPicker({
 }: InstallTargetPickerProps) {
   const { t } = useTranslation();
   const target = useSkillhubTarget();
+  const windowsPaths = !!target || window.electronAPI?.platform === 'win32';
   const { projects, loading: projectsLoading } = useProjectsForPicker();
   const { confirm } = useConfirmDialog();
   const [installing, setInstalling] = useState(false);
@@ -122,7 +123,7 @@ export function InstallTargetPicker({
       for (const local of target.state.skills) {
         if (local.registrySkillName !== skill.name || !local.registryEntry
           || (local.registryEntry.catalogScope ?? 'market') !== (skill.catalogScope ?? 'market')) continue;
-        paths.set(normalizeInstallPathKey(joinSkillInstallPath(local.projectRoot ?? 'remote-global', skill.name)), local.registryEntry.version);
+        paths.set(normalizeInstallPathKey(joinSkillInstallPath(local.projectRoot ?? 'remote-global', skill.name), { windows: windowsPaths }), local.registryEntry.version);
       }
       setInstalledPaths(paths);
       return;
@@ -134,7 +135,7 @@ export function InstallTargetPicker({
         if (cancelled || !res.success || !res.manifest) return;
         const paths = new Map<string, string>();
         for (const [p, entry] of Object.entries(res.manifest.installs)) {
-          paths.set(normalizeInstallPathKey(p), entry.version);
+          paths.set(normalizeInstallPathKey(p, { windows: windowsPaths }), entry.version);
         }
         setInstalledPaths(paths);
       })
@@ -142,7 +143,7 @@ export function InstallTargetPicker({
     return () => {
       cancelled = true;
     };
-  }, [open, skill?.name, skill?.catalogScope, target?.state.skills]);
+  }, [open, skill?.name, skill?.catalogScope, target?.state.skills, windowsPaths]);
 
   useEffect(() => {
     if (!open) {
@@ -154,14 +155,14 @@ export function InstallTargetPicker({
   if (!open || !skill) return null;
 
   const getInstalledVersion = (targetPath: string): string | null => {
-    return installedPaths.get(normalizeInstallPathKey(targetPath)) ?? null;
+    return installedPaths.get(normalizeInstallPathKey(targetPath, { windows: windowsPaths })) ?? null;
   };
 
   // Global 行：找 registry 中不属于任何 projectRoot 的条目
   const globalInstalledVersion = (() => {
     for (const [p, v] of installedPaths) {
-      if (!isInstallPathForSkill(p, skill.name)) continue;
-      const isProjectPath = projects.some((proj) => isInstallPathUnderProject(p, proj.projectRoot));
+      if (!isInstallPathForSkill(p, skill.name, { windows: windowsPaths })) continue;
+      const isProjectPath = projects.some((proj) => isInstallPathUnderProject(p, proj.projectRoot, { windows: windowsPaths }));
       if (!isProjectPath) return v;
     }
     return null;

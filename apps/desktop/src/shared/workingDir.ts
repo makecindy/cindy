@@ -37,7 +37,7 @@ export function normalizeWorkingDirForStorage(raw: string | null | undefined): s
 }
 
 /**
- * 两个工作目录是否指向同一位置。
+ * 工作目录的比较键，不用于文件访问，也不折叠独立 worktree。
  *
  * 先按 storage 规则归一化(Windows 分隔符 / 长路径前缀 / 尾部斜杠),Windows 盘符与
  * UNC 路径再按大小写不敏感比较 —— Windows 文件系统大小写不敏感,而用户从目录选择器
@@ -47,21 +47,26 @@ export function normalizeWorkingDirForStorage(raw: string | null | undefined): s
  * `windows` 默认取当前进程平台;renderer 没有 `process` 时应由调用方传入
  * (`window.electronAPI.platform === 'win32'`)。
  */
+export function workingDirComparisonKey(
+  raw: string | null | undefined,
+  options: { windows?: boolean } = {},
+): string | null {
+  const normalized = normalizeWorkingDirForStorage(raw);
+  if (normalized === null) return null;
+  const windows =
+    options.windows ?? (typeof process !== 'undefined' && process.platform === 'win32');
+  return windows && isWindowsPathLike(normalized) ? normalized.toLowerCase() : normalized;
+}
+
+/** Comparison only: keep the original path for display/IO, and do not collapse worktrees. */
 export function workingDirEquals(
   left: string | null | undefined,
   right: string | null | undefined,
   options: { windows?: boolean } = {},
 ): boolean {
-  const a = normalizeWorkingDirForStorage(left);
-  const b = normalizeWorkingDirForStorage(right);
-  if (a === null || b === null) return false;
-  if (a === b) return true;
-  const windows =
-    options.windows ?? (typeof process !== 'undefined' && process.platform === 'win32');
-  if (!windows) return false;
-  const caseFoldable = (value: string): boolean =>
-    /^[A-Za-z]:\//.test(value) || value.startsWith('//');
-  return caseFoldable(a) && caseFoldable(b) && a.toLowerCase() === b.toLowerCase();
+  const a = workingDirComparisonKey(left, options);
+  const b = workingDirComparisonKey(right, options);
+  return a !== null && b !== null && a === b;
 }
 
 /**

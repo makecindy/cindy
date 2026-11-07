@@ -528,6 +528,30 @@ describe('scanAllSkills', () => {
     ].sort());
   });
 
+  // Unit regression through scanAllSkills: duplicate project hashes previously
+  // split one physical skill into two rows. Existing shared-ancestor tests use
+  // distinct directories, not casing aliases. POSIX must retain both projects.
+  it('merges Windows project casing aliases while preserving POSIX case-sensitive roots', async () => {
+    const projectRoot = path.resolve('/SkillHub-Project-Case-Regression');
+    const alternateRoot = projectRoot.toLowerCase();
+    const skillDir = path.join(projectRoot, '.agents', 'skills', 'demo');
+    const maker = {
+      listCustomizations: vi.fn(async () => ({
+        errors: [],
+        items: [projectRoot, alternateRoot].map((workingDir) => ({
+          engine: 'pi' as const, kind: 'skill' as const, scope: 'repo' as const, name: 'demo',
+          absolutePath: skillDir, mdPath: path.join(skillDir, 'SKILL.md'), workingDir, files: [],
+        })),
+      })),
+    } as unknown as Maker;
+    const result = await scanAllSkills({ projects: [
+      { projectRoot, hash: 'primary' },
+      { projectRoot: alternateRoot, hash: 'alternate' },
+    ] }, maker);
+    expect(result.skills).toHaveLength(process.platform === 'win32' ? 1 : 2);
+    expect(result.skills[0]).toMatchObject({ projectRoot, projectHash: 'primary' });
+  });
+
   it('maps a canonical scanner workingDir back to the original symlink project root', async () => {
     const projectRoot = path.resolve('/workspace/project-link');
     const canonicalRoot = path.resolve('/workspace/project-real');
