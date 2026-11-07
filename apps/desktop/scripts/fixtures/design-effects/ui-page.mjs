@@ -5,10 +5,10 @@ const settle = (page) => page.waitForTimeout(260);
 export default {
   name: 'design-effects',
   entry: './design-effects-fixture.tsx',
-  viewport: { width: 760, height: 560 },
-  real: 'JumpToBottomChip, NewMessageIndicator, PrevMessageJumpChip, Tip, PermissionSelector, ChatAudioCard, BotDirectMessageCard, ChromeIconButton, theme tokens and translations',
+  viewport: { width: 760, height: 500 },
+  real: 'JumpToBottomChip, NewMessageIndicator, PrevMessageJumpChip, Tip, PermissionSelector, ChatAudioCard, ChromeIconButton, theme tokens and translations',
   notCovered: 'Other floating layers changed by the same class rewrite (find bar, terminal notices, schedule panels); non-Cindy themes',
-  cases: { default: { about: 'Registered floating shadow, solid audio placeholder, approved copy and state colours' } },
+  cases: { default: { about: 'Registered floating shadow, field panel shadow, title-bar icon colour and create-agent states' } },
   async check(page, ui) {
     // shadow-none computes to transparent layers rather than `none`; --shadow-menu has a 16px blur.
     const hasMenuShadow = (locator) => locator.evaluate((el) => getComputedStyle(el).boxShadow.includes('16px'));

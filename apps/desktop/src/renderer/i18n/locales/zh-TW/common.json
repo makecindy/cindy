@@ -10461,8 +10461,8 @@
       "messageSentWithText": "已告訴背景任務：「{{text}}」"
     },
     "directMessage": {
-      "sentTo": "傳給 {{name}}",
-      "receivedFrom": "收到 {{name}}",
+      "sentTo": "已傳訊息給 {{name}}",
+      "receivedFrom": "訊息來自 {{name}}",
       "exchangeCount": "與 {{name}} 的 {{count}} 則訊息往來",
       "open": "查看夥伴之間的對話",
       "readOnly": "此對話僅供查看",

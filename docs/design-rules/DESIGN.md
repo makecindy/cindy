@@ -180,7 +180,7 @@ _Dark Mode text uses softened neutrals to reduce eye strain: **Soft Gray** (`#d4
 ### Gradient System
 
 - **None in the core UI.** Cindy uses no gradients; visual separation comes from flat color blocks and single-pixel borders. This is a deliberate, almost philosophical design choice. (The login canvas is also flat by ruling — see §16.5.)
-- **Functional edge fades (owner decision, 2026-11-07).** A fade may show that content continues past an edge: the composer fade, the horizontal scroll ends of `RolePillDropdown` and the right-sidebar `TabBar`, and scroll-list and collapsed-body masks. It runs from the surface colour to transparent, or is a mask, and carries no colour of its own. Same-colour overlay layers (`linear-gradient(c, c)`) and the transparency checkerboard are not visual gradients. The WorkLouder device illustration keeps its knob highlight. Everything else stays flat: an audio card without a cover uses a solid placeholder. `designEffectsDiscipline.test.ts` keeps this list closed.
+- **Functional edge fades (owner decision, 2026-11-07).** A fade may show that content continues past an edge: the composer fade, the horizontal scroll ends of `RolePillDropdown` and the right-sidebar `TabBar`, and scroll-list and collapsed-body masks. It runs from the surface colour to transparent, or is a mask, and carries no colour of its own. Same-colour overlay layers (`linear-gradient(c, c)`) and the transparency checkerboard are not visual gradients. The WorkLouder device illustration keeps its knob highlight. An audio card without a cover keeps its gradient placeholder (owner decision, 2026-11-07). Everything else stays flat. `designEffectsDiscipline.test.ts` keeps this list closed.
 - **Session-loading wordmark sheen — narrow functional exception (Desktop approved 2026-08-10).** `BrandLoadingMark` may use one neutral `transparent → --text-primary → transparent` gradient solely as a mask-clipped highlight inside the official Light/Dark wordmark while a session's message tree is deferred. It is a loading-progress signal, not a background, separator, fill, or reusable surface treatment. It may appear only after the 200ms delayed-reveal threshold, disappears as soon as the message tree mounts, and may not leak to messages, cards, dialogs, sidebars, or static branding. Full motion and brand-surface constraints are registered in §14.4 and §15.7.
 
 ### Filter reminder inside display settings (2026-10-28)
@@ -1575,7 +1575,7 @@ and media position (`ui/media-scrubber`, seconds in/out). Native media controls 
 
 ### 伙伴内部通讯入口（2026-11-01）
 
-伙伴间收发只留一行次级文字「发给 X」／「收到 X」，复用原小头像与双向箭头的单行胶囊入口，
+伙伴间收发只留一行次级文字「已发消息给 X」／「消息来自 X」，复用原小头像与双向箭头的单行胶囊入口，
 入口与「处理记录」及助手正文共用左对齐轴，不用两侧伸展分隔线把入口推到中间；
 11px 字号、28px 最小点击高度，颜色走现有语义 token，键盘焦点可见。
 不铺两行摘要、不另放展开/完整对话按钮。点击直接打开原只读往来页，返回原主任务位置。

@@ -10506,8 +10506,8 @@
       "messageSentWithText": "Told the background task: “{{text}}”"
     },
     "directMessage": {
-      "sentTo": "Sent to {{name}}",
-      "receivedFrom": "Received from {{name}}",
+      "sentTo": "Sent a message to {{name}}",
+      "receivedFrom": "Message from {{name}}",
       "exchangeCount": "{{count}} messages with {{name}}",
       "open": "View the conversation between teammates",
       "readOnly": "This conversation is view-only",

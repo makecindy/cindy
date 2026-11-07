@@ -10461,8 +10461,8 @@
       "messageSentWithText": "バックグラウンドタスクに伝えました：「{{text}}」"
     },
     "directMessage": {
-      "sentTo": "{{name}} に送信",
-      "receivedFrom": "{{name}} から受信",
+      "sentTo": "{{name}} にメッセージを送信",
+      "receivedFrom": "{{name}} からのメッセージ",
       "exchangeCount": "{{name}} との {{count}} 件のやり取り",
       "open": "仲間同士の会話を見る",
       "readOnly": "この会話は閲覧専用です",

@@ -40,6 +40,7 @@ const RAW_BUTTON_FRAMES = new Set([
 ]);
 
 const GRADIENT_REGISTRY: Record<string, { count: number; reason: string }> = {
+  'components/chat/ChatAudioCard.tsx': { count: 1, reason: '没有封面的音频占位（2026-11-07 用户裁决保留）' },
   'components/chat/GhostToolCard.tsx': { count: 1, reason: 'GhostTool 闪光（§15.4）' },
   'components/chat/JumpToBottomChip.tsx': { count: 1, reason: '单色叠加悬停，不是视觉渐变' },
   'components/chat/NewMessageIndicator.tsx': { count: 1, reason: '单色叠加悬停，不是视觉渐变' },

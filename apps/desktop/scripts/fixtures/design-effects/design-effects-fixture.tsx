@@ -6,21 +6,9 @@ import { PrevMessageJumpChip } from '../../../src/renderer/components/chat/PrevM
 import { PermissionSelector } from '../../../src/renderer/components/new-chat/PermissionSelector';
 import { ChromeIconButton } from '../../../src/renderer/components/title-bar/ChromeIconButton';
 import { Tip } from '../../../src/renderer/components/ui/tooltip';
-import { BotDirectMessageCard } from '../../../src/renderer/features/bots/BotDirectMessageCard';
 import { Settings } from 'lucide-react';
 
 const noop = () => {};
-
-const directMessage = (direction: 'sent' | 'received') => ({
-  v: 1,
-  threadId: 'thread',
-  viewerBotId: 'viewer',
-  peerBotId: 'peer',
-  peerBotName: 'orik',
-  direction,
-  sequence: 1,
-  preview: '',
-});
 
 function Row({ title, children }: { title: string; children: React.ReactNode }) {
   return (
@@ -64,12 +52,8 @@ mountPage({
           <PermissionSelector permissionMode="ask" onPermissionModeChange={noop} triggerVariant="field" />
         </div>
       </Row>
-      <Row title="音频占位">
+      <Row title="面板下层内容">
         <div className="w-80"><ChatAudioCard track={{ kind: 'music', audioUrl: '', title: '没有封面的音频' }} /></div>
-      </Row>
-      <Row title="伙伴消息">
-        <div className="w-56"><BotDirectMessageCard data={directMessage('sent')} /></div>
-        <div className="w-56"><BotDirectMessageCard data={directMessage('received')} /></div>
       </Row>
       <Row title="标题栏图标">
         <ChromeIconButton aria-label="settings" onClick={noop}><Settings size={16} /></ChromeIconButton>

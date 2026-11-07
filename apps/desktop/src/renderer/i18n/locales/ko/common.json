@@ -10461,8 +10461,8 @@
       "messageSentWithText": "백그라운드 작업에 전달함: “{{text}}”"
     },
     "directMessage": {
-      "sentTo": "{{name}}에게 보냄",
-      "receivedFrom": "{{name}}에게서 받음",
+      "sentTo": "{{name}}에게 메시지를 보냄",
+      "receivedFrom": "{{name}}의 메시지",
       "exchangeCount": "{{name}}와 주고받은 메시지 {{count}}개",
       "open": "동료 간 대화 보기",
       "readOnly": "이 대화는 보기 전용입니다",

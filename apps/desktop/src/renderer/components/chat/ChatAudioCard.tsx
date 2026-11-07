@@ -211,11 +211,13 @@ export function ChatAudioCard({ track, sessionId }: ChatAudioCardProps) {
             onError={() => setCoverFailed(true)}
           />
         ) : (
-          // Fallback: 纯色 + Music icon,没有 cover 时的占位形态。
+          // Fallback: 暗灰渐变 + Music icon,匹配 .pen 设计里没有 cover
+          // 时的占位形态。
           <div
             className="flex h-full w-full items-center justify-center"
             style={{
-              background: 'var(--msg-tool-card-chevron)',
+              background:
+                'linear-gradient(135deg, var(--msg-tool-card-chevron) 0%, var(--msg-tool-card-text) 100%)',
               opacity: 0.4,
             }}
           >
