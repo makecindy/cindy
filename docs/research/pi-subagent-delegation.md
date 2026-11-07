@@ -38,6 +38,16 @@ parentSessionId、runDir 和全部 child/session/agent 身份，并确认所有�
 保持未知并阻止账号交接，不能仅凭宿主退出、文件陈旧或 stop 无回执放行。恢复只读取证据，
 不修改或删除原状态、结果和对话文件。
 
+若 `result.json` 从未写出（例如 runner 在首次状态刷盘与终态写出之间崩溃），恢复可改用
+runner 在启动时一次性写出的 `runner-identity.json`：它只含 version、runId、
+runnerInstanceId、runnerPid、runnerScript、startedAt 与启动时固定的全部子进程 sessionId，
+不含任何任务结果。身份文件必须匹配 `config.json` 的 runId、parentSessionId 与 runDir，且 runnerScript 位于该 run 目录内；
+固定子进程列表与 `config.json` 不一致或缺失时同样阻止交接：恢复只认启动时固定的列表，
+launch 后改写同一用户可写的 `config.json` 不能藏起仍存活的续跑子进程；
+恢复仍须通过同一独立 OS 进程清单确认 runner 与全部子进程均已消失，清单未知时同样阻止
+交接。身份文件本身不是结束证据，不能单独放行；仅在该文件存在的 run（即修复后启动的
+run）上可用，此前的损坏记录仍保持未知并阻止交接。
+
 ## 对标与取舍
 
 对照社区 [pi-subagents 工具契约](https://github.com/nicobailon/pi-subagents/blob/main/docs/tool-reference.md)、

@@ -20,6 +20,16 @@
  * before signalling. Identity mismatch, or any inability to read the command
  * line, means the host does not signal (fail conservative). See
  * `verifyPiSubagentRunnerIdentity` in `pi-subagent-runs.ts`.
+ *
+ * A run also publishes a write-once `runner-identity.json` at startup, before
+ * any status flush (#8736): if `status.json` is later unreadable and no
+ * `result.json` was ever written, the host may still prove the run's
+ * processes are gone from that identity plus the launch config, under the
+ * same OS-inventory check. The file alone is never exit evidence. The
+ * identity also pins the launch config's child session IDs, read before any
+ * Pi child exists: recovery trusts only the pinned list, and a pinned list
+ * that disagrees with the launch config fails closed, so a later rewrite of
+ * the same-user-writable config cannot hide a live (resumed) child.
  */
 
 import { createPiCacheInputTracker } from './cache-input.js';
@@ -253,6 +263,32 @@ function main() {
   fs.mkdirSync(controlReceiptDir, { recursive: true, mode: 0o700 });
   const startedAt = Date.now();
   const runnerInstanceId = randomUUID();
+  // Write-once runner identity (#8736): if status.json is later unreadable
+  // and no result.json was ever written, the Host can still prove this run's
+  // processes are gone from this file plus the launch config. Never rewrite
+  // it: a second generation in this directory does not exist (resume mints a
+  // fresh run UUID), and a stale copy must not impersonate a later runner.
+  // Best effort only — a failed write leaves the file absent and recovery
+  // keeps blocking, exactly as before this change.
+  const runnerIdentityPath = path.join(config.runDir, 'runner-identity.json');
+  try {
+    if (!fs.existsSync(runnerIdentityPath)) {
+      atomicWriteJson(runnerIdentityPath, {
+        version: 1,
+        runId: config.runId,
+        runnerInstanceId: runnerInstanceId,
+        runnerPid: process.pid,
+        runnerScript: runnerScriptPath,
+        startedAt: startedAt,
+        // Pin the launch config's child session IDs here, before any Pi
+        // child exists: recovery must not read them back from the
+        // same-user-writable config.json, whose path is visible in this
+        // runner's argv. A non-string sessionId pins as '' so recovery
+        // fails closed instead of trusting a forged value.
+        sessionIds: config.tasks.map((task) => typeof task.sessionId === 'string' ? task.sessionId : ''),
+      });
+    }
+  } catch (_) {}
   const timeoutMs = Number.isFinite(config.timeoutMs) && config.timeoutMs > 0
     ? Math.floor(config.timeoutMs)
     : 30 * 60 * 1000;

@@ -1661,6 +1661,212 @@ describe('PI durable subagent run store', () => {
         await expect(stopAllPiSubagentRunsForExit(agentHome, 0, { killUnresponsiveRunners: true }))
           .resolves.toBe(true);
       });
+
+      // #8736: a run whose status.json is corrupt and which never wrote a
+      // result.json (crash between the first status flush and the terminal
+      // write) permanently blocked login and account switching. The runner
+      // writes a write-once identity file at startup; recovery may use it as
+      // the process-identity source in place of the terminal receipt, under
+      // the same OS-inventory proof. Runs launched before the identity file
+      // existed still block, exactly as before.
+      async function identityHome(
+        write: (dir: string) => Promise<void>,
+        mutate?: (
+          draft: { identity: Record<string, unknown>; config: Record<string, unknown> },
+          dir: string,
+        ) => void,
+      ) {
+        fsKnobs.isolateProcfs = true;
+        childProcess.spawnSync.mockImplementation(() => ({ status: 0, stdout: inventory(['node unrelated.js']) }));
+        const agentHome = await homeWithUnreadableRun(write);
+        const root = piSubagentRunRoot(agentHome, 'session-1');
+        const dir = path.join(root, runId);
+        const task = { childId: 'child-1', sessionId: 'native-1', agent: 'scout' };
+        const config: Record<string, unknown> = {
+          version: 1, runId, runDir: dir, taskId: 'tool-1', parentSessionId: 'session-1',
+          cwd: dir, binary: 'pi', tasks: [task],
+        };
+        const identity: Record<string, unknown> = {
+          version: 1, runId, runnerInstanceId: 'runner-1',
+          runnerPid: 4242, runnerScript: path.join(dir, 'runner.cjs'), startedAt: 100,
+          sessionIds: ['native-1'],
+        };
+        mutate?.({ identity, config }, dir);
+        await writeFile(path.join(dir, 'config.json'), JSON.stringify(config));
+        await writeFile(path.join(dir, 'runner-identity.json'), JSON.stringify(identity));
+        return { agentHome, root, dir, config, identity };
+      }
+
+      const identityCases = [
+        ...cases,
+        ['contains zero bytes', async (dir: string) => writeFile(path.join(dir, 'status.json'), Buffer.alloc(72_506))],
+      ] satisfies typeof cases;
+      it.each(identityCases.flatMap(([label, write]) =>
+        (['linux', 'win32'] as const).map(platform => [platform, label, write] as const),
+      ))('on %s recovers from a runner identity file when status %s and no result exists, without changing history', async (platform, _label, write) => {
+        usePlatform(platform);
+        if (platform === 'linux' && process.geteuid === undefined) {
+          Object.defineProperty(process, 'geteuid', { configurable: true, value: () => 1000 });
+          restores.push(() => { Reflect.deleteProperty(process, 'geteuid'); });
+        }
+        const { agentHome, root, dir } = await identityHome(write);
+        const files = ['config.json', 'status.json', 'runner-identity.json'];
+        const before = await Promise.all(files.map(file => readFile(path.join(dir, file)).catch(() => null)));
+        await expect(stopAllPiSubagentRunsForExit(agentHome, 0, { hostPid: process.pid, killUnresponsiveRunners: true }))
+          .resolves.toBe(true);
+        await expect(stopPiSubagentRunsForAccountBoundary(root, { timeoutMs: 0 }))
+          .resolves.toBe(true);
+        const after = await Promise.all(files.map(file => readFile(path.join(dir, file)).catch(() => null)));
+        for (let index = 0; index < files.length; index += 1) {
+          const original = before[index]!;
+          const current = after[index]!;
+          expect(current === null ? original === null : original !== null && current.equals(original), files[index])
+            .toBe(true);
+        }
+        expect(existsSync(path.join(dir, 'controls'))).toBe(false);
+      });
+
+      type IdentityDraft = {
+        identity: Record<string, unknown>;
+        config: Record<string, unknown>;
+      };
+      const refusalMutations: Array<[string, (draft: IdentityDraft, dir: string) => void]> = [
+        ['another generation', ({ identity }) => { identity.runId = '123e4567-e89b-42d3-a456-426614174099'; }],
+        ['another version', ({ identity }) => { identity.version = 2; }],
+        ['a non-numeric pid', ({ identity }) => { identity.runnerPid = '4242'; }],
+        ['a script outside the run directory', ({ identity }, dir) => { identity.runnerScript = path.join(path.dirname(dir), 'runner.cjs'); }],
+        ['no child session to verify', ({ config }) => { config.tasks = []; }],
+        ['a config detached from its run directory', ({ config }, dir) => { config.runDir = path.dirname(dir); }],
+        ['a missing start time', ({ identity }) => { delete identity.startedAt; }],
+        ['a missing runner pid', ({ identity }) => { delete identity.runnerPid; }],
+        ['a missing pinned session list', ({ identity }) => { delete identity.sessionIds; }],
+        ['an empty pinned session id', ({ identity }) => { identity.sessionIds = ['']; }],
+      ];
+      it.each(refusalMutations)('refuses a runner identity for %s', async (_label, mutate) => {
+        const { agentHome } = await identityHome(async () => {}, mutate);
+        await expect(stopAllPiSubagentRunsForExit(agentHome, 0, { killUnresponsiveRunners: true }))
+          .resolves.toBe(false);
+      });
+
+      it('does not follow a linked runner identity', async context => {
+        const { agentHome, dir } = await identityHome(async () => {});
+        const identityFile = path.join(dir, 'runner-identity.json');
+        const outside = path.join(agentHome, 'outside-identity.json');
+        await writeFile(outside, await readFile(identityFile));
+        await rm(identityFile);
+        try {
+          await symlink(outside, identityFile, 'file');
+        } catch (error) {
+          if (['EPERM', 'EACCES', 'ENOTSUP', 'ENOSYS'].includes((error as NodeJS.ErrnoException).code ?? '')) {
+            context.skip();
+            return;
+          }
+          throw error;
+        }
+        await expect(stopAllPiSubagentRunsForExit(agentHome, 0)).resolves.toBe(false);
+      });
+
+      it('keeps a runner identity in scope while its runner is alive', async () => {
+        const { agentHome, dir } = await identityHome(async () => {});
+        const command = `node ${path.join(dir, 'runner.cjs')} ${path.join(dir, 'config.json')}`;
+        childProcess.spawnSync.mockImplementation(() => ({ status: 0, stdout: inventory([command]) }));
+        await expect(stopAllPiSubagentRunsForExit(agentHome, 0, { killUnresponsiveRunners: true })).resolves.toBe(false);
+        // Process discovery never grants permission to signal an unverified PID.
+        expect(childProcess.spawnSync.mock.calls.some(call => call[0] === 'taskkill')).toBe(false);
+        childProcess.spawnSync.mockImplementation(() => ({ status: 0, stdout: inventory(['node unrelated.js']) }));
+        await expect(stopAllPiSubagentRunsForExit(agentHome, 0)).resolves.toBe(true);
+      });
+
+      it.each([
+        ['empty output', { status: 0, stdout: '' }],
+        ['failed probe', { status: 1, stdout: '' }],
+      ] as const)('does not treat %s as process exit for a runner identity', async (_label, probe) => {
+        const { agentHome } = await identityHome(async () => {});
+        childProcess.spawnSync.mockImplementation(() => probe);
+        await expect(stopAllPiSubagentRunsForExit(agentHome, 0)).resolves.toBe(false);
+      });
+
+      // The terminal receipt stays primary: a corrupt identity file must not
+      // be consulted at all when a valid result.json exists, so recovery
+      // still succeeds exactly as it did before identities existed.
+      it('prefers a terminal receipt over a corrupt runner identity', async () => {
+        const { agentHome, root, dir } = await identityHome(
+          async (dir) => writeFile(path.join(dir, 'status.json'), Buffer.alloc(72_506)),
+        );
+        const result = {
+          version: 1, runId, taskId: 'tool-1', state: 'completed', completedAt: 100,
+          tasks: [{ childId: 'child-1', sessionId: 'native-1', agent: 'scout', status: 'completed', output: 'original result' }],
+        };
+        await writeFile(path.join(dir, 'result.json'), JSON.stringify(result));
+        await writeFile(path.join(dir, 'runner-identity.json'), '{broken');
+        await expect(stopAllPiSubagentRunsForExit(agentHome, 0, { killUnresponsiveRunners: true }))
+          .resolves.toBe(true);
+        await expect(stopPiSubagentRunsForAccountBoundary(root, { timeoutMs: 0 }))
+          .resolves.toBe(true);
+      });
+
+      it.each([
+        ['not valid JSON', '{broken'],
+        ['oversized', 'x'.repeat(3 * 1024 * 1024)],
+      ] as const)('refuses a runner identity file that is %s', async (_label, content) => {
+        const { agentHome, dir } = await identityHome(async () => {});
+        await writeFile(path.join(dir, 'runner-identity.json'), content);
+        await expect(stopAllPiSubagentRunsForExit(agentHome, 0, { killUnresponsiveRunners: true }))
+          .resolves.toBe(false);
+      });
+
+      // Greptile review on #8802: the alive-runner test above only proves the
+      // runId substring blocks, so it would pass even if child sessionIds
+      // were never checked. An orphan child keeps its sessionId but no run
+      // UUID in its command line; it must block both boundary entries until
+      // it disappears, even though every other identity is gone.
+      it('blocks on an orphan child session even when the runner UUID is gone', async () => {
+        const { agentHome, root } = await identityHome(async () => {}, ({ config, identity }) => {
+          config.tasks = [
+            { childId: 'child-1', sessionId: 'native-1', agent: 'scout' },
+            { childId: 'child-2', sessionId: 'native-2', agent: 'scout' },
+          ];
+          identity.sessionIds = ['native-1', 'native-2'];
+        });
+        childProcess.spawnSync.mockImplementation(() => ({ status: 0, stdout: inventory(['pi --mode rpc --session-id native-2']) }));
+        await expect(stopAllPiSubagentRunsForExit(agentHome, 0, { killUnresponsiveRunners: true }))
+          .resolves.toBe(false);
+        await expect(stopPiSubagentRunsForAccountBoundary(root, { timeoutMs: 0 }))
+          .resolves.toBe(false);
+        childProcess.spawnSync.mockImplementation(() => ({ status: 0, stdout: inventory(['node unrelated.js']) }));
+        await expect(stopAllPiSubagentRunsForExit(agentHome, 0)).resolves.toBe(true);
+        await expect(stopPiSubagentRunsForAccountBoundary(root, { timeoutMs: 0 }))
+          .resolves.toBe(true);
+      });
+
+      // Codex review on #8802: resume reuses the source sessionId, so a
+      // live resumed child carries no new run UUID. The child IDs used as
+      // exit evidence must be pinned in the write-once runner identity at
+      // startup, not read back from config.json: a worker with the bash
+      // tool can learn the config path from its runner parent's argv and
+      // rewrite the same-user-writable config.json after launch. These
+      // fixtures write a config that disagrees with the pinned identity,
+      // simulating such a post-launch rewrite.
+      it('blocks when config.json is rewritten to hide a live pinned child session', async () => {
+        const { agentHome, root } = await identityHome(async () => {}, ({ config }) => {
+          config.tasks = [{ childId: 'child-1', sessionId: 'dead-native', agent: 'scout' }];
+        });
+        childProcess.spawnSync.mockImplementation(() => ({ status: 0, stdout: inventory(['pi --mode rpc --session-id native-1']) }));
+        await expect(stopAllPiSubagentRunsForExit(agentHome, 0, { killUnresponsiveRunners: true }))
+          .resolves.toBe(false);
+        await expect(stopPiSubagentRunsForAccountBoundary(root, { timeoutMs: 0 }))
+          .resolves.toBe(false);
+      });
+
+      it('blocks when the pinned child list disagrees with config.json even with an empty inventory', async () => {
+        const { agentHome, root } = await identityHome(async () => {}, ({ config }) => {
+          config.tasks = [{ childId: 'child-1', sessionId: 'dead-native', agent: 'scout' }];
+        });
+        await expect(stopAllPiSubagentRunsForExit(agentHome, 0, { killUnresponsiveRunners: true }))
+          .resolves.toBe(false);
+        await expect(stopPiSubagentRunsForAccountBoundary(root, { timeoutMs: 0 }))
+          .resolves.toBe(false);
+      });
     });
   });
 
