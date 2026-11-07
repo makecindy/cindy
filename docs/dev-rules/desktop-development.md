@@ -286,6 +286,12 @@ pnpm test:unit
   对应规则，不以本页命令替代专项验证。
 - 记录实际执行和结果；未执行的高相关检查必须说明原因。
 
+菜单栏状态按钮的原生回归在 macOS 上运行
+`node apps/desktop/native/menubar/test.mjs`。它编译完整 Swift helper，并在离屏 AppKit
+按钮上检查重复更新、标题、提示文字、远控标识和 Light/Dark 切换；不启动 Cindy 或创建
+菜单栏项。该检查属于原生集成层，独立于默认单测池，由 CI 的 `macos-menubar` job 执行并
+纳入 `verify`。脚本分别输出编译与测试耗时；Windows/Linux 不支持运行，不能将其计为通过。
+
 ## 单页 UI 快速验证
 
 `pnpm ui:check` 只编译被改的真实 renderer 组件，在一个隔离的 Electron 窗口（与 Cindy 同一
