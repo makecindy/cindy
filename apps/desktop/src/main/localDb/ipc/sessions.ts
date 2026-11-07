@@ -80,6 +80,7 @@ import {
   finalizePlainPreview,
 } from '../mapper';
 import { ensureDialogueWorkspaceDir } from '../dialogueWorkspace';
+import { recomputePrRefsForSession } from '../../git-context/prRefsStore';
 import * as imageCacheStore from '../../imageCacheStore';
 import { removeSessionRefsIfDeleted as removeDeletedSessionMediaRefs } from '../../cindy-media/ledger';
 import { imAttachmentsRoot, removeImSessionAttachmentDirs } from '../../im/shared/inboundFileStaging';
@@ -573,7 +574,7 @@ function broadcastRecentWorkdirsChanged(path: string, ownerScope: OwnerScope): v
  * 只广播给本机窗口、不进 device-link tap:控制端(手机/另一台桌面)的远程会话
  * worktree 元数据走 device-link 自己的镜像链路,不经本机 WorktreeContext。
  */
-function broadcastWorktreeChanged(sessionId: string): void {
+export function broadcastWorktreeChanged(sessionId: string): void {
   for (const w of BrowserWindow.getAllWindows()) {
     if (!w.isDestroyed()) w.webContents.send('worktree:changed', { sessionId });
   }
@@ -1055,6 +1056,8 @@ export interface SessionRowSnapshot {
   source?: string | null;
   /** 会话当前模型;限额判定据此只看该模型的额度窗口。 */
   model?: string | null;
+  /** Native id used by the execution host to resolve the task's subscription account. */
+  sdkSessionId?: string | null;
   /** Authoritative `/clear` visibility boundary (unix ms). */
   clearedAt?: number | null;
 }
@@ -1082,6 +1085,7 @@ async function selectSessionRowSnapshot(id: string): Promise<SessionRowSnapshot 
       agentKind: sessions.agentKind,
       source: sessions.source,
       model: sessions.model,
+      sdkSessionId: sessions.sdkSessionId,
     })
     .from(sessions)
     .where(eq(sessions.id, id))
@@ -1504,6 +1508,7 @@ export async function clearSessionContextInDb(sessionId: string, atMs?: number):
       error: error instanceof Error ? error.message : String(error),
     });
   }
+  void recomputePrRefsForSession(sessionId).catch(() => undefined);
   if (isOwnerScopeCurrent(ownerScope)) {
     broadcastSessionPatched(
       sessionId,
@@ -2499,6 +2504,7 @@ export async function updateSessionInDb(
       if (isOwnerScopeCurrent(ownerScope)) {
         broadcastSessionPatched(sid, { summary: null, preview: null }, ownerScope);
       }
+      void recomputePrRefsForSession(sid).catch(() => undefined);
     }
     const row = await selectSessionWithCount(db, sid);
     moveGuard?.assertCurrent();
@@ -3600,7 +3606,7 @@ export async function setSessionProviderIdInDb(
 /** Persist the provider-facing source for a newly-created shared IM session. */
 export async function setSessionSourceInDb(
   sessionId: string,
-  source: 'telegram' | 'x',
+  source: 'telegram' | 'x' | 'feishu',
 ): Promise<void> {
   try {
     const db = getDbClient().drizzle;

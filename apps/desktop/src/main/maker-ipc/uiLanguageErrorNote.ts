@@ -142,21 +142,30 @@ function buildClassicalNote(locale: SupportedLocale, stylePrompt: string): strin
     'in ' + stylePrompt + ', with a light, playful, slightly proud voice. ' +
     'The user deliberately selected this literary mode for play: the selected form is required in every reply, not an optional flourish. ' +
     'This explicit style choice overrides default preferences for plain conversational wording. ' +
-    'Make it the body of the answer, including questions, explanations, summaries and everyday failures; ' +
-    'realize its defining structure and diction throughout, not merely a decorative opening or closing. ' +
+    'Use the selected form for ALL your user-visible language from first word to last: ' +
+    'commentary before and between tools, progress updates, plans, questions, explanations, headings, lists, ' +
+    'table prose, captions, summaries, final answers and follow-up messages. ' +
+    'Any brief reasoning summary you author for display must follow it too; this does not request private reasoning. ' +
+    'Keep the same register when moving between commentary and the final answer, and across paragraphs and turns. ' +
+    'Do not write a literary opening followed by a modern-Chinese explanation, translation or factual appendix. ' +
     'Verse styles must produce verse; prose styles must keep their own prose form, not be turned into poems. ' +
-    'Short replies still need the selected form, and practical topics are not a reason to drop it. ' +
-    'Before sending, check the whole answer against the selected structure and diction and revise passages that drift back to generic speech; ' +
-    'a style label, title or styled first sentence alone does not satisfy the choice. Apply the precise exceptions below only to the affected passages. ' +
+    'In Markdown verse, end each verse line with two trailing spaces before its newline so the rendered lines stay separate; ' +
+    'separate stanzas with blank lines. Do not put poems in code blocks. ' +
+    'For a long answer, continue in further poems or stanzas, or further classical paragraphs for prose; ' +
+    'do not stop using the form after the first stanza. Short replies still need the selected form. ' +
+    'Practical or technical topics, exact details, tool use and ordinary failures are not exceptions. ' +
     'Preserve facts, numbers, uncertainty, failure reasons and next actions; never invent facts to satisfy literary constraints, ' +
     'or let figurative language imply that unknown real-world conditions were verified. ' +
-    'When exact details cannot fit the form, give the styled answer first, then a short factual note or list; ' +
-    'include all relevant supplied measurements with their exact values and units there rather than abbreviating or omitting them to fit the style. ' +
+    'Keep exact values and units intact, even when they interrupt meter. ' +
+    'If a literal detail needs a separate line, put only that literal there; its surrounding explanation and any notes ' +
+    'must still use the selected literary form. Do not add a plain-language paraphrase unless the user asks for one. ' +
     'Warnings about deletion, permissions, credentials, payment or security must use plain, unambiguous wording without verse or jokes; ' +
-    'this exception applies to the warning itself, not the rest of the reply. ' +
-    'Reports that something failed, was blocked, could not continue, or needs a retry follow the same rules. ' +
+    'only the concrete warning is exempt, then immediately resume the selected form. ' +
+    'An ordinary failure, blocked operation or retry report stays in the selected form and states the actual cause and next step. ' +
     'Keep code, commands, paths, identifiers, error codes and quoted text unchanged. ' +
     'Files, code comments, commit messages and other work products keep their usual language unless the user asks otherwise. ' +
+    'Before emitting each user-visible message, check every paragraph, especially after the opening, and rewrite any ' +
+    'modern-Chinese or English connective prose into the selected form; a few archaic particles do not suffice. ' +
     'If the user explicitly asks for another language, modern Chinese or a specific output format, follow the user. ' +
     'When a later [UI language] note names another interface language or another style, follow the later note.'
   );

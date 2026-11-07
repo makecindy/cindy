@@ -2,7 +2,7 @@
 
 先读[编写指南 §4.23](../../plugin-interactive-pages.md)，需要字段或方法时查[参考](REFERENCE.md)。
 这些都是作者源码，不会自动安装或发布。使用标准 SDK 导入，不需要构建 SDK。
-示例最低 Cindy 版本为 **0.1.122-beta**（loader 用到对话文件交接，为 **0.1.123-beta**），执行端和查看端都需要支持此版本能力。
+示例最低 Cindy 版本为 **0.1.122-beta**（loader 从宿主读取页面手册，为 **0.1.123-beta**），执行端和查看端都需要支持此版本能力。
 `ghost_forge_scaffold` 的 `withUi: true` 采用 static 示例；省略最低版本时默认为上述要求，
 声明更低版本会被拒绝，更高版本会保留。四种基础模板的原工具照常可用。
 
@@ -11,7 +11,7 @@
 | `loader/` | 后端或 Cindy AI 生成完整页面；页面脚本查询 JSON、保存记录、切换内容 |
 | `static/` | 包内静态表单，打开后编辑并保存 |
 | `files/` | 按需裁剪的文件、进度、导出、消息及显示能力示例 |
-| `PAGE-GENERATION.md` | 《Cindy MCP Apps 页面生成手册》，交给生成页面的 LLM；loader 的 `manual/pages/MANUAL.md` 与它逐字节一致 |
+| `PAGE-GENERATION.md` | 《Cindy MCP Apps 页面生成手册》，交给生成页面的 LLM；宿主用 `ghost_forge_guide({section:"pages"})` 提供同一份，loader 的 show_page 说明指向它 |
 
 每个目录的 ghost.json、main.js、ui/page.html 构成独立插件。files 另有 settings.html
 和 settings.js，用来配置自己的后端凭证；其中网络和文件操作不是默认自动执行的。
@@ -83,7 +83,7 @@ HANDOFF_UNAVAILABLE，提示用户重新发送。限额和有效期见 [§4.10.3
 
 ### 没有交接时：dir 交接单文件
 
-插件没声明交接，或 Cindy 早于 0.1.123-beta 时，AI 从用户附件取得执行电脑上的单文件路径，调用：
+插件没声明交接，或 Cindy 早于 0.1.122-beta 时，AI 从用户附件取得执行电脑上的单文件路径，调用：
 
 ```js
 ghost_call({

@@ -12,12 +12,14 @@
  */
 import { pluginHasToolUi } from '@cindy/plugin-protocol';
 import {
+  declaredAutoApproveTools,
   declaredGhostControlPoints,
   GHOST_CONTROL_POINTS,
   type GhostControlPointId,
   type GhostManifest,
   type InstalledGhost,
 } from '../../shared/ghost.js';
+import type { PluginTaskCapability } from './taskCapability.js';
 import {
   evaluateGhostInstallConsent,
   ghostInstallConsentKey,
@@ -67,7 +69,7 @@ export function confirmedTaskCapability(
   decision: GhostInstallConsentDecision,
   installed: InstalledGhost | null | undefined,
   next: GhostManifest,
-  capability: 'tasks' | 'targets' | 'delegation' | 'observe' = 'tasks',
+  capability: PluginTaskCapability = 'tasks',
 ): true | undefined {
   if (decision.mode !== 'confirmed') return undefined;
   const facts = evaluateGhostInstallConsent(installed, next);
@@ -90,6 +92,23 @@ export function confirmedControlPoints(
   const facts = evaluateGhostInstallConsent(installed, next);
   const shown = new Set((facts?.kind === 'install' ? facts.permissions : facts?.added ?? []).map(item => item.key));
   return declared.filter(point => shown.has(GHOST_CONTROL_POINTS[point].permissionKey));
+}
+
+/**
+ * 本次确认里用户看到过的免确认工具(`tools[].approval: "auto"`)。口径同控制节点：
+ * 服务端默认安装(exempt)视为已批准全部声明；未确认/无需确认时返回空，已批准项由 update 延续。
+ */
+export function confirmedAutoTools(
+  decision: GhostInstallConsentDecision,
+  installed: InstalledGhost | null | undefined,
+  next: GhostManifest,
+): string[] {
+  const declared = declaredAutoApproveTools(next);
+  if (decision.mode === 'exempt') return declared;
+  if (decision.mode !== 'confirmed') return [];
+  const facts = evaluateGhostInstallConsent(installed, next);
+  const shown = new Set((facts?.kind === 'install' ? facts.permissions : facts?.added ?? []).map(item => item.key));
+  return declared.filter(tool => shown.has(`tool-auto:${tool}`));
 }
 
 /**
@@ -152,7 +171,7 @@ export async function obtainGhostInstallConsent(
       origin: policy.origin,
       ...(policy.trust ? { trust: policy.trust } : {}),
       ...(policy.originLabel ? { originLabel: policy.originLabel } : {}),
-      ...(policy.target ? { target: policy.target } : {}),
+      ...(policy.target ? { target: { ...policy.target, ...(policy.target.namespace === 'local' && manifest.network?.secrets?.some(secret => secret.source === 'oidc-token') ? { organizationIdentityUnavailable: true as const } : {}) } } : {}),
       facts,
     });
   } catch {

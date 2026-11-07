@@ -130,6 +130,9 @@
   "detail": {
     "useItIn": "使用方式",
     "openPlugin": "開啟插件",
+    "readme": "介紹",
+    "readmeLoadFailed": "無法載入介紹，請重試。",
+    "readmeUnavailable": "暫無介紹。",
     "computerSettings": "請在電腦端 Cindy 的「插件」中開啟此插件詳情，完成配置。",
     "runtimeIssue": "插件上次執行異常，可重新開啟或在任務中重試。",
     "runtimeFused": "插件多次停止。關閉後重新啟用，再試一次。",
@@ -284,6 +287,8 @@
       "workspaceDetail": "它發起請求時，由你親手選擇資料夾，或在確認卡上看到完整路徑後再決定；它正在處理你發起的呼叫時，當前任務工作目錄內的子資料夾可直接使用，不再單獨確認。資料夾已有任務時直接複用，不重複建立。建立的只是空任務，不會自動開始執行。",
       "sessionContext": "可獲知當前任務正在使用的專案資料夾位置",
       "sessionContextDetail": "只在它為當前任務幹活時告知位置資訊(任務編號與專案資料夾路徑)，不包含檔案內容，也不因此獲得檔案訪問權。",
+      "liveScreen": "在手機上檢視與操作裝置畫面",
+      "liveScreenDetail": "透過遠端桌面，你的手機可以檢視它提供的裝置畫面（例如模擬器）並直接觸控、按鍵和輸入文字。只在你從手機開啟時連線，不會開啟電腦的其他內容。",
       "preview": "可在右側欄瀏覽器中開啟以下網站的預覽頁面",
       "previewDetail": "只能開啟下方列出的網站；每次開啟都會提示是哪個插件開啟的。",
       "nodeChildSpawn": "Node 程式可請宿主再啟動包內申報過的子處理程序",
@@ -341,5 +346,23 @@
     "purpose": "確認互動頁面權限",
     "updateHost": "請更新執行電腦上的 Cindy，再在此確認。文字工具仍可使用。",
     "failed": "互動頁面未能啟用，請檢查連線和插件版本後重試。"
+  },
+  "openLinkHost": "開啟 {{host}}",
+  "prStatus": {
+    "checksFailed": "失敗",
+    "checksPending": "進行中",
+    "checksPassed": "通過",
+    "checksSkipped": "略過或中立",
+    "threadsOpen": "{{count}} 條未解決的 review 評論",
+    "threadsNone": "沒有待處理意見",
+    "mergeReady": "可以合併",
+    "mergeConflict": "有衝突",
+    "mergeBehind": "需要同步目標分支",
+    "mergeApproval": "等待核准",
+    "mergeChanges": "需要修改",
+    "mergeWaiting": "等待合併",
+    "merged": "已合併",
+    "closed": "已關閉",
+    "draft": "草稿"
   }
 }

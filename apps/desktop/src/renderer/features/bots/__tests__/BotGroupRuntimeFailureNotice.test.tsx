@@ -1,12 +1,14 @@
 // @vitest-environment jsdom
 import { cleanup, render, screen } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import { BotGroupCapabilityNotice } from '../BotGroupCapabilityNotice';
 import { BotGroupRuntimeFailureNotice } from '../BotGroupRuntimeFailureNotice';
 import zhCN from '../../../i18n/locales/zh-CN/common.json';
 
 vi.mock('react-i18next', () => ({ useTranslation: () => ({ t: (key: string, { name }: { name: string }) => {
   const code = key.split('.').at(-1)!;
-  return zhCN.bots.groupChat.notice.runtimeFailure[code as keyof typeof zhCN.bots.groupChat.notice.runtimeFailure].replace('{{name}}', name);
+  const values = key.includes('.capability.') ? zhCN.bots.groupChat.notice.capability : zhCN.bots.groupChat.notice.runtimeFailure;
+  return (values[code as keyof typeof values] as string).replace('{{name}}', name);
 } }) }));
 afterEach(cleanup);
 
@@ -35,5 +37,23 @@ describe('group failure notice', () => {
     render(<BotGroupRuntimeFailureNotice name="m" code="UPSTREAM_OVERLOADED" />);
     expect(screen.getByText(/模型服务暂时繁忙/).textContent).toContain('稍后重新发送');
     expect(screen.getByText(/模型服务暂时繁忙/).textContent).toContain('其他可用模型');
+  });
+});
+
+// Unit: operation failures must be visible without claiming the whole reply failed.
+describe('group operation capability notice', () => {
+  it.each([
+    ['GROUP_AUTHORIZATION_REQUIRED', '群内授权已失效'],
+    ['GROUP_AUTHORIZATION_UNAVAILABLE', '暂时无法核验'],
+    ['ATTACHMENTS_UNAVAILABLE', '部分附件未交给'],
+  ])('shows the actual reason %s with a next action', (code, reason) => {
+    const { container } = render(<BotGroupCapabilityNotice name="Writer" code={code} />);
+    expect(container.textContent).toContain('Writer');
+    expect(container.textContent).toContain(reason);
+    expect(container.textContent).not.toContain('回复失败');
+  });
+  it('does not expose an unknown diagnostic', () => {
+    const { container } = render(<BotGroupCapabilityNotice name="Writer" code="private diagnostic" />);
+    expect(container.textContent).toBe('');
   });
 });

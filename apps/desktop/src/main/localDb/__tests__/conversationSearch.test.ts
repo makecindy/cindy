@@ -14,7 +14,8 @@ const mocks = vi.hoisted(() => ({
 }));
 
 vi.mock('../chatHistorySearch.js', () => ({
-  searchChatHistoryHybrid: mocks.searchChatHistoryHybrid,
+  prepareChatHistorySearch: async (args: unknown) => (page: unknown) =>
+    mocks.searchChatHistoryHybrid({ ...(args as object), ...(page as object) }),
 }));
 
 import { searchConversations } from '../conversationSearch.js';

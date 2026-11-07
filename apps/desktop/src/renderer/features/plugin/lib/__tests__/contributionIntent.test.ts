@@ -43,3 +43,11 @@ describe('public contribution login intent', () => {
     expect(consumeContributionIntent(nonce)).toBeNull();
   });
 });
+
+
+it('preserves the exact local development instance across login navigation', () => {
+  const local = { ...ghost, namespace: 'local', instanceKey: '_ns__local__hello', dir: '/test-only/owner-A/local/hello' };
+  const target = consumeContributionIntent(rememberContributionIntent(local))!;
+  expect(matchesContributionIntent(target, local)).toBe(true);
+  expect(matchesContributionIntent(target, ghost)).toBe(false);
+});

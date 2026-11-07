@@ -233,7 +233,7 @@ await cindy.library({
   之后上传返回 `errorCode:'HANDOFF_UNAVAILABLE'`，页面上该项没有 `url`；请提示用户重新发送。
   `expiresAt` 是收到时的当前到期时间，使用时会顺延，不要把它当成固定截止时间。
 - 手机和其他电脑暂时打不开带这类文件的卡片；Node 工作进程不能使用这个能力。
-- 需要 `minCindyVersion: 0.1.123-beta`；旧宿主不认识这个参数，非媒体文件仍会要求改用 dir。
+- 需要 `minCindyVersion: 0.1.122-beta`；旧宿主不认识这个参数，非媒体文件仍会要求改用 dir。
 
 ```js
 // main.js 里 app-only 的 confirm_import：页面把 ref 作为 file 传回

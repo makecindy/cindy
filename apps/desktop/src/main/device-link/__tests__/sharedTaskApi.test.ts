@@ -7,7 +7,7 @@ vi.mock('../../authManager.js', () => ({ getAuthState: () => ({ isAuthenticated:
   getCurrentUserId: () => state.accountId, getActiveAuthRealm: () => state.region, getAccessToken: () => state.token }));
 vi.mock('../../clientEndpointsService.js', () => ({ getClientEndpoint: () => state.endpoint }));
 vi.mock('../../serverApiClient.js', () => ({ serverApiFetch: http }));
-import { captureSharedTaskBoundaryClose, forgetSharedTaskList, sharedTaskApi } from '../sharedTaskApi.js';
+import { captureSharedTaskBoundaryClose, forgetSharedTaskList, runWithSharedTaskCallerGuard, sharedTaskApi } from '../sharedTaskApi.js';
 
 beforeEach(() => {
   state.key = 'account:1'; state.endpoint = 'https://relay.example.test'; state.authenticated = true; state.boundary = false;
@@ -15,6 +15,26 @@ beforeEach(() => {
   http.mockReset();
 });
 describe('sharedTask Main HTTP adapter', () => {
+  // Unit: the native HTTP adapter must recheck the caller before each physical
+  // attempt (including auth refresh), not only before awaiting the command.
+  it('blocks a guarded invitation retry and late success without affecting ordinary UI calls', async () => {
+    let current = true;
+    const guard = () => { if (!current) throw new Error('caller changed'); };
+    const receipt = { sharedTaskId: 'shared', invitation: 'A'.repeat(43) };
+    http.mockImplementationOnce(async (_path, options) => {
+      options.baseUrl();
+      current = false;
+      options.baseUrl();
+      return receipt;
+    });
+    await expect(runWithSharedTaskCallerGuard(guard, () => sharedTaskApi.invite('shared'))).rejects.toThrow();
+    current = true;
+    http.mockImplementationOnce(async () => { current = false; return receipt; });
+    await expect(runWithSharedTaskCallerGuard(guard, () => sharedTaskApi.invite('shared'))).rejects.toThrow();
+    http.mockResolvedValue(receipt);
+    await expect(sharedTaskApi.invite('shared')).resolves.toMatchObject(receipt);
+    expect(http).toHaveBeenCalledTimes(3);
+  });
   it('adds a fragment invitation link without changing the legacy invite result', async () => {
     const invitation = 'A'.repeat(43);
     http.mockResolvedValue({ sharedTaskId: 'shared', invitation });
@@ -110,6 +130,19 @@ describe('sharedTask Main HTTP adapter', () => {
 describe('sharedTask Main list reuse', () => {
   const listed = (id: string) => ({ sharedTasks: [{ sharedTaskId: id, sessionId: 'session', ownerAccountId: 'owner', hostDeviceId: 'desktop', title: 'Task', revision: 1 }] });
   const listCalls = () => http.mock.calls.filter(([path]) => path === '/api/device-link/shared-tasks').length;
+  it('gives explicit helper queries fresh authority without contaminating UI caching or its caller scope', async () => {
+    state.key = 'list-helper';
+    http.mockResolvedValueOnce(listed('old')).mockResolvedValue(listed('new'));
+    expect((await sharedTaskApi.list())[0]?.sharedTaskId).toBe('old');
+    let current = true;
+    const guard = () => { if (!current) throw new Error('caller changed'); };
+    expect((await runWithSharedTaskCallerGuard(guard, () => sharedTaskApi.list()))[0]?.sharedTaskId).toBe('new');
+    current = false;
+    expect((await sharedTaskApi.list())[0]?.sharedTaskId).toBe('old');
+    expect(listCalls()).toBe(2);
+    await expect(runWithSharedTaskCallerGuard(guard, () => sharedTaskApi.list())).rejects.toThrow();
+    expect(listCalls()).toBe(2);
+  });
   it('shares concurrent and recent reads, but not across accounts or after a write', async () => {
     state.key = 'list-reuse:1';
     http.mockImplementation(async (path: string) => path.endsWith('/close') ? { sharedTaskId: 'a', status: 'closed' } : listed('a'));

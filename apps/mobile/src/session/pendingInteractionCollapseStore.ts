@@ -20,6 +20,7 @@ import {
  * 需要「切 session 时重新装载 + 变化时写回」两个 effect,而它们同帧执行会用新 sessionId
  * 写回旧 state,把上一个会话的收起意图串到新会话。
  */
+const seenBySession = new Map<string, Set<string>>();
 const collapsedBySession = new Map<string, readonly string[]>();
 const listeners = new Set<() => void>();
 
@@ -59,6 +60,9 @@ export function useCollapsedPendingRequestIds(sessionId: string): readonly strin
 /** 切换这条请求的收起态。 */
 export function togglePendingInteractionCollapse(sessionId: string, requestId: string): void {
   if (!sessionId || !requestId) return;
+  const seen = seenBySession.get(sessionId) ?? new Set<string>();
+  seen.add(requestId);
+  seenBySession.set(sessionId, seen);
   write(sessionId, togglePendingInteractionCollapsed(getCollapsedPendingRequestIds(sessionId), requestId));
 }
 
@@ -73,12 +77,27 @@ export function prunePendingInteractionCollapse<T extends PendingInteractionLike
 ): void {
   if (!sessionId) return;
   const current = getCollapsedPendingRequestIds(sessionId);
-  if (current.length === 0) return;
-  write(sessionId, prunePendingInteractionCollapsed(current, pending, options));
+  const next = [...prunePendingInteractionCollapsed(current, pending, options)];
+  const seen = seenBySession.get(sessionId) ?? new Set<string>();
+  for (const item of pending) {
+    const id = item.request.requestId;
+    if (typeof id !== 'string') continue;
+    if (!seen.has(id) && item.request.kind === 'ask_user_question' && item.request.delivery === 'async') next.push(id);
+    seen.add(id);
+  }
+  if (options.authoritative) {
+    const activeIds = new Set(pending.map((item) => item.request.requestId));
+    for (const id of seen) if (!activeIds.has(id)) seen.delete(id);
+  }
+  if (seen.size) seenBySession.set(sessionId, seen);
+  else seenBySession.delete(sessionId);
+  while (seenBySession.size > MAX_TRACKED_SESSIONS) seenBySession.delete(seenBySession.keys().next().value!);
+  if (next.length !== current.length || next.some((id, i) => current[i] !== id)) write(sessionId, next);
 }
 
 /** 仅测试用:清空全部会话的收起意图。 */
 export function clearAllPendingInteractionCollapse(): void {
+  seenBySession.clear();
   if (collapsedBySession.size === 0) return;
   collapsedBySession.clear();
   emit();

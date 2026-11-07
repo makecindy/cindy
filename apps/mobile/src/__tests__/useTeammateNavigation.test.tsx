@@ -1,3 +1,4 @@
+import { stackState, reduceStack } from './navigationFixture';
 // @vitest-environment jsdom
 import { act, createElement } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
@@ -8,7 +9,7 @@ const h = vi.hoisted(() => ({
   user: { id: 'account', passportId: 'passport', membershipKind: 'personal', orgId: null } as MobileUser,
   sessions: [] as import('@/session/types').RemoteSession[], upsert: vi.fn(), get: vi.fn(), set: vi.fn(), routes: [] as Array<{ name: string; params?: unknown }>,
 }));
-vi.mock('expo-router', () => ({ useRouter: () => ({ dismissTo: h.dismissTo, dismiss: h.dismiss, replace: h.replace }), useNavigation: () => ({ reset: h.reset, getState: () => ({ routes: h.routes, index: h.routes.length - 1 }) }) }));
+vi.mock('expo-router', () => ({ useRouter: () => ({ dismissTo: h.dismissTo, dismiss: h.dismiss, replace: h.replace }), useNavigation: () => ({ reset: h.reset, getState: () => ({ key: 'test-stack', routeKeySeq: 10, stale: false, type: 'stack', routeNames: ['resources/[collectionId]', 'sessions/[sessionId]', 'devices/index'], routes: h.routes, index: h.routes.length - 1 }) }) }));
 vi.mock('react-native', () => ({ Keyboard: { dismiss() {} } }));
 vi.mock('react-i18next', () => ({ useTranslation: () => ({ i18n: { language: 'en' } }) }));
 vi.mock('@/auth/AuthContext', () => ({ useAuth: () => ({ user: h.user, accountGeneration: h.accountGeneration }) }));
@@ -109,7 +110,7 @@ describe('header/home shared navigation', () => {
     const list = { name: 'devices/index', key: 'list' }; const cloud = { name: 'companions/cloud/[actorId]', key: 'cloud' };
     h.routes = [list, old, cloud];
     await render(); await act(async () => result.openTeammate(moved, { replace: true, leaving: { botId: 'writer', deviceId: 'mac' } }));
-    expect(h.reset).toHaveBeenCalledExactlyOnceWith({ index: 1, routes: [list, { name: 'resources/[collectionId]/[resourceId]', params: {
+    expect(h.reset).toHaveBeenCalledExactlyOnceWith({ key: 'test-stack', routeKeySeq: 10, stale: false, type: 'stack', routeNames: ['resources/[collectionId]', 'sessions/[sessionId]', 'devices/index'], index: 1, routes: [list, { name: 'resources/[collectionId]/[resourceId]', params: {
       collectionId: 'teammates', resourceId: 'writer', resourceKind: 'bot', deviceId: 'win', deviceName: 'Studio', title: 'Writer',
     } }] });
     expect(h.replace).not.toHaveBeenCalled();
@@ -219,16 +220,16 @@ it('removes the retired teammate list from the stack before returning home', asy
   const router = StackRouter({ initialRouteName: 'resources/[collectionId]' });
   const options = { routeNames: ['resources/[collectionId]', 'sessions/[sessionId]', 'devices/index'],
     routeParamList: { 'resources/[collectionId]': { collectionId: 'teammates' } }, routeGetIdList: {}, routeKeyChanges: [] };
-  let state = router.getInitialState(options);
-  state = router.getStateForAction(state, StackActions.push('sessions/[sessionId]'), options)! as typeof state;
+  let state = stackState(options, 'resources/[collectionId]');
+  state = reduceStack(router, state, StackActions.push('sessions/[sessionId]'), options);
   h.routes = state.routes;
-  h.reset.mockImplementationOnce(next => { state = router.getRehydratedState({ ...next, stale: true }, options) as typeof state; });
+  h.reset.mockImplementationOnce(next => { state = reduceStack(router, state, { type: 'RESET', payload: next }, options); });
   await render();
   await act(async () => result.returnHome());
   expect(h.dismiss).not.toHaveBeenCalled();
   expect(h.dismissTo).not.toHaveBeenCalled();
   expect(state.routes.map(route => route.name)).toEqual(['devices/index']);
-  expect(router.getStateForAction(state, StackActions.pop(), options)).toBeNull();
+  expect(router.getStateForAction(state, StackActions.pop(), options)).toBe('UNHANDLED');
 });
 it('preserves earlier unrelated routes when removing multiple retired entries', async () => {
   const prior = { name: 'resources/[collectionId]', params: { collectionId: 'tools', targets: 'hosts' } };
@@ -240,7 +241,7 @@ it('preserves earlier unrelated routes when removing multiple retired entries', 
   ];
   await render();
   await act(async () => result.returnHome());
-  expect(h.reset).toHaveBeenCalledExactlyOnceWith({ index: 1, routes: [prior, { name: 'devices/index' }] });
+  expect(h.reset).toHaveBeenCalledExactlyOnceWith({ key: 'test-stack', routeKeySeq: 10, stale: false, type: 'stack', routeNames: ['resources/[collectionId]', 'sessions/[sessionId]', 'devices/index'], index: 1, routes: [prior, { name: 'devices/index' }] });
   expect(h.dismissTo).not.toHaveBeenCalled();
 });
 it('opens a known conversation directly and seeds its first-frame identity', async () => {

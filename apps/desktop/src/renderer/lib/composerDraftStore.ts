@@ -60,6 +60,13 @@ export interface ComposerDraft {
   text: JSONContent | null;
   /** Snapshot of attachments at save time. Empty array means no attachments. */
   attachments: AttachedFile[];
+  /** Failed companion send being edited; follows this owner-scoped, in-memory draft only. */
+  botGroupEdit?: {
+    clientId: string;
+    enqueueOperationId?: string;
+    source: { groupId: string; clientId: string; revision: number };
+    signature: string;
+  };
   /** Plugin-page handoff consumed by ChatInput after its editor hydration. */
   pendingGhostId?: string;
   /** Routed built-in identity; re-resolve in the final task environment before sending. */

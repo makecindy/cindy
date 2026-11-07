@@ -611,8 +611,10 @@ export class ExecutorWorkspace {
    * 连回同一个会话时补进对方新给的映射。已有的保持原来的目标、排在同长度的新映射前面：对话里出现过的
    * 虚拟路径(含运行中分配的 runtime-*)接回后仍指向同一个本机目录，不会被换成别的目录。
    */
-  addAliases(aliases: readonly ExecutorPathAlias[]): void {
-    this.setAliases([...this.aliases, ...aliases]);
+  addAliases(aliases: readonly ExecutorPathAlias[], replaceFrom?: ReadonlySet<string>): void {
+    // replaceFrom：这些虚拟路径以新给的为准(对方这次重新同步了里面的文件，旧目标可能已不是那份内容)。
+    const kept = replaceFrom?.size ? this.aliases.filter((alias) => !replaceFrom.has(alias.from)) : this.aliases;
+    this.setAliases([...kept, ...aliases]);
   }
 
   /**

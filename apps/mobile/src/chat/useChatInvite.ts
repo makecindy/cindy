@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { randomUUID } from 'expo-crypto';
-import { parseChatInvitationToken } from '@cindy/device-link';
+import { parseChatInvitationShareId, parseChatInvitationToken } from '@cindy/device-link';
+import { resolveChatInviteShare } from './chatInviteShare';
 import { parseChatInviteLink } from './chatInviteIntent';
 import { useChatClient } from './useChatServer';
 import type { MobileChatInvitePreview } from './chatServerClient';
@@ -51,9 +52,10 @@ export function useChatInvite(props: ChatInviteSheetProps) {
   const run = async (accept: boolean) => {
     if (request.current || !interactive()) return;
     if (!api.enabled) { setState({ owner: api.owner, phase: 'error', error: 'auth' }); return; }
-    const token = parseChatInvitationToken(target.current);
-    if (!token) { setState({ owner: api.owner, phase: 'error', error: 'format' }); return; }
-    if (!accept) callbacks.current.onTargetChange?.(`cindy://chat-invite/${token}`);
+    let token = parseChatInvitationToken(target.current);
+    const shareId = parseChatInvitationShareId(target.current);
+    if (!token && !shareId) { setState({ owner: api.owner, phase: 'error', error: 'format' }); return; }
+    if (!accept) callbacks.current.onTargetChange?.(shareId ? target.current : `cindy://chat-invite/${token}`);
     // Existing members see their status first; opening never accepts the invitation again.
     if (accept && state.phase === 'preview' && state.owner === api.owner && state.preview?.joined && api.current()) {
       receipt.current = { owner: api.owner, groupId: state.preview.groupId };
@@ -73,6 +75,12 @@ export function useChatInvite(props: ChatInviteSheetProps) {
     const current = () => epoch.current === id && interactive();
     setState(old => ({ owner: api.owner, phase: accept ? 'joining' : 'reading', ...(accept ? { preview: old.preview } : {}) }));
     try {
+      if (!token) {
+        token = await Promise.race([resolveChatInviteShare(shareId!, controller.signal), timeout]);
+        if (!current()) return;
+        target.current = `cindy://chat-invite/${token}`;
+        callbacks.current.onTargetChange?.(target.current);
+      }
       let groupId: string | undefined;
       if (accept) {
         if (operation.current?.owner !== api.owner || operation.current.token !== token) operation.current = { owner: api.owner, token, id: randomUUID() };

@@ -139,6 +139,7 @@ async function startHostedSession(
     local?: boolean;
     ghostRosterSnapshot?: string;
     mcpServers?: string[];
+    controllerManagedSkills?: { claudePluginRoots: string[] };
   } = {},
 ): Promise<{ options: CapturedOptions; sessionRoot: string }> {
   const configDir = await makeTempDir();
@@ -196,6 +197,7 @@ async function startHostedSession(
     mirrorRoot,
     ...(guest ? { guest: true } : {}),
     ...(guest && overrides.guestProvider !== null ? { guestProvider: overrides.guestProvider ?? GUEST_PROVIDER } : {}),
+    ...(overrides.controllerManagedSkills ? { controllerManagedSkills: overrides.controllerManagedSkills } : {}),
   };
   const handle = await new ClaudeCodeAgent(deps).startSession({
     sessionId: 'hosted-session',
@@ -255,6 +257,18 @@ describe('Claude Code device-hosted guest sessions', () => {
     // 任务所在电脑没有可召回的插件(空快照)：同账号也不能退回本机的花名册。
     const empty = await startHostedSession(false, { ghostRosterSnapshot: '', mcpServers: ['cindy'] });
     expect(empty.options.systemPrompt?.append).not.toContain(GHOST_ROSTER);
+  });
+
+  // 内置与插件带的 Skill 以任务所在电脑为准(工具与脚本都在那台)：挂它带来的插件目录，本机的不加载；受邀者也一样。
+  it('mounts the task computer managed skills instead of this computer ones', async () => {
+    for (const guest of [true, false]) {
+      const shadow = await makeTempDir();
+      const root = path.join(shadow, '.cindy', 'managed-skills', 'cindy');
+      const { options } = await startHostedSession(guest, { controllerManagedSkills: { claudePluginRoots: [root] } });
+      expect(options.plugins).toEqual([{ type: 'local', path: root }]);
+      // 插件目录属于影子目录，随任务清理；这里提前删掉，好让公共收尾只核对本机临时挂载的插件。
+      await fs.rm(path.join(shadow, '.cindy'), { recursive: true, force: true });
+    }
   });
 
   it('routes only through the shared provider: route token, shared models, no host subagent model', async () => {

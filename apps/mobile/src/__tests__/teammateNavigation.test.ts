@@ -1,3 +1,4 @@
+import { stackState, reduceStack } from './navigationFixture';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { HostedRemoteCollectionItem } from '@/device-link/remoteResources';
 const disk = vi.hoisted(() => new Map<string, string>());
@@ -74,13 +75,13 @@ describe('teammate identity navigation', () => {
   it.each(['index', 'devices/index'])('preserves the actual %s stack entry across repeated teammate opens', (name) => {
     const router = StackRouter({ initialRouteName: name });
     const options = { routeNames: [name, 'sessions/[sessionId]'], routeParamList: { [name]: { collectionId: 'teammates', targets: 'fixture-hosts', title: 'Teammates' } }, routeGetIdList: {}, routeKeyChanges: [] };
-    let state = router.getInitialState(options);
+    let state = stackState(options, name);
     const home = state.routes[0];
     for (let turn = 0; turn < 3; turn++) {
-      for (const sessionId of ['a', 'b']) state = router.getRehydratedState(router.getStateForAction(state, StackActions.push('sessions/[sessionId]', { sessionId }), options)!, options);
+      for (const sessionId of ['a', 'b']) state = reduceStack(router, state, StackActions.push('sessions/[sessionId]', { sessionId }), options);
       const count = homeDismissCount(state.routes);
       expect(count).toBe(2);
-      state = router.getRehydratedState(router.getStateForAction(state, StackActions.pop(count!), options)!, options);
+      state = reduceStack(router, state, StackActions.pop(count!), options);
       expect(state.routes).toEqual([home]);
       expect(state.routes[0]).toBe(home); // Same key and params: React retains the mounted list.
     }

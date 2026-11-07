@@ -46,6 +46,11 @@ export interface UsageSegment {
   cacheReadTokens?: number;
   /** 写入缓存的 token (Anthropic cache_creation_input_tokens) */
   cacheCreateTokens?: number;
+  /**
+   * cacheCreateTokens 中按 1 小时 TTL 写入的部分 (Anthropic
+   * cache_creation.ephemeral_1h_input_tokens)。1h 写入单价高于 5m，计价需分开。
+   */
+  cacheCreate1hTokens?: number;
   /** Provider diagnostic subset; never add this to outputTokens again. */
   reasoningTokens?: number;
   /** Provider-reported request cost, used only on routes where that value is authoritative. */
@@ -166,6 +171,14 @@ export class UsageTracker {
       outputTokens: Math.max(existing.outputTokens, usage.outputTokens),
       cacheReadTokens: Math.max(existing.cacheReadTokens ?? 0, usage.cacheReadTokens ?? 0),
       cacheCreateTokens: Math.max(existing.cacheCreateTokens ?? 0, usage.cacheCreateTokens ?? 0),
+      ...(existing.cacheCreate1hTokens !== undefined || usage.cacheCreate1hTokens !== undefined
+        ? {
+            cacheCreate1hTokens: Math.max(
+              existing.cacheCreate1hTokens ?? 0,
+              usage.cacheCreate1hTokens ?? 0,
+            ),
+          }
+        : {}),
       reasoningTokens: Math.max(existing.reasoningTokens ?? 0, usage.reasoningTokens ?? 0),
       costUsd: Math.max(existing.costUsd ?? 0, usage.costUsd ?? 0),
       ...(existing.complete !== undefined || usage.complete !== undefined

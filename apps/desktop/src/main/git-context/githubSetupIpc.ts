@@ -15,6 +15,56 @@ import {
 import { outboundFetch } from '../maker-host/outbound-fetch.js';
 import { activeOwnerScopeKey } from '../appSessionState.js';
 import { getGhostSetupChangeBus } from '../cindy-brain/ghostSetupChangeBus.js';
+import { getDeepLinkMainWindow } from '../deepLink.js';
+import { isSecondaryAppWindow } from '../secondary-windows.js';
+import type { GithubConnectionState } from '../../shared/githubSetup.js';
+
+export const GITHUB_SETUP_OPEN_CHANNEL = 'git-context:github-setup:open';
+
+const cindyGithubRootInstance = () => pluginInstallStoragePart(
+  pluginNewInstallRelId(createPluginLogicalIdentity(null, 'cindy-github')),
+);
+
+/**
+ * This computer's effective GitHub sign-in for the active owner: gh first, then the fallback token the
+ * requested plugin would actually use (`fallback`: its installed instance and declared secret key; the
+ * GitHub plugin's own token when omitted).
+ */
+export async function readGithubConnection(
+  fallback?: { instanceId: string; key: string },
+): Promise<GithubConnectionState> {
+  const owner = activeOwnerScopeKey();
+  const source = getSharedGhCliTokenSource();
+  source.invalidate();
+  const rootInstance = cindyGithubRootInstance();
+  const result = await githubConnection({
+    readGh: () => source.readToken(),
+    readFallback: () =>
+      owner !== activeOwnerScopeKey()
+        ? null
+        : fallback
+          ? readGhostSecret(fallback.instanceId, fallback.key)
+          : readGhostSecret(rootInstance, 'github_pat') ?? readGhostSecret('cindy-github', 'github_pat'),
+    fetch: outboundFetch,
+  });
+  return owner === activeOwnerScopeKey() ? result : { status: 'missing' };
+}
+
+/**
+ * Open Cindy's own GitHub sign-in dialog in the window the user is looking at (or the main window),
+ * but only a window that mounts the App (the main and secondary windows; detached sidebar windows run
+ * their own entry and could not show it),
+ * for a task that asked to connect a plugin signing in through this computer's GitHub login.
+ * Does not take focus; returns false when no app window can show it.
+ */
+export function openGithubSignIn(): boolean {
+  const main = getDeepLinkMainWindow();
+  const focused = BrowserWindow.getFocusedWindow();
+  const win = focused && !focused.isDestroyed() && (focused === main || isSecondaryAppWindow(focused)) ? focused : main;
+  if (!win || win.isDestroyed()) return false;
+  win.webContents.send(GITHUB_SETUP_OPEN_CHANNEL);
+  return true;
+}
 
 /** Local app UI only. These channels intentionally have no device-link grant:
  * authorizing this machine's GitHub identity is not a shared-task capability. */
@@ -29,29 +79,13 @@ export function registerGithubSetupIpc(invalidateStatuses: () => void): void {
     }
   };
   const setup = createGithubSetup(root, changed);
-  const cindyGithubRootInstance = pluginInstallStoragePart(
-    pluginNewInstallRelId(createPluginLogicalIdentity(null, 'cindy-github')),
-  );
-  const unsubscribes = ['cindy-github', cindyGithubRootInstance].map(id => getGhostSetupChangeBus().subscribe(id, (event) => {
+  const unsubscribes = ['cindy-github', cindyGithubRootInstance()].map(id => getGhostSetupChangeBus().subscribe(id, (event) => {
     if (event.source === 'secret') changed();
   }));
   for (const [channel, handle] of [
     [
       'git-context:github-setup:connection',
-      async () => {
-        const owner = activeOwnerScopeKey();
-        const source = getSharedGhCliTokenSource();
-        source.invalidate();
-        const result = await githubConnection({
-          readGh: () => source.readToken(),
-          readFallback: () =>
-            owner === activeOwnerScopeKey()
-              ? readGhostSecret(cindyGithubRootInstance, 'github_pat') ?? readGhostSecret('cindy-github', 'github_pat')
-              : null,
-          fetch: outboundFetch,
-        });
-        return owner === activeOwnerScopeKey() ? result : { status: 'missing' as const };
-      },
+      readGithubConnection,
     ],
     ['git-context:github-setup:status', () => setup.snapshot()],
     ['git-context:github-setup:start', () => setup.start()],

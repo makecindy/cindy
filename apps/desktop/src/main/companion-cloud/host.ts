@@ -8,6 +8,7 @@ import type { DeviceLinkDeviceView } from '../../shared/deviceLinkIpc.js';
 import { activeOwnerScopeKey, ownerScopedUserDataPath } from '../appSessionState.js';
 import { atomicWriteFileSync, readAtomicFileSync } from '../utils/atomicWriteFile.js';
 import { getDbClient } from '../localDb/client/current.js';
+import { flushAssistantSamplingMetadata, getAssistantSamplingRuntimeId } from '../messagePersistBroadcaster.js';
 import { createBotProfile, getBotMemoryService, setBotProfileAvatar, updateBotProfile } from '../localDb/ipc/bots.js';
 import { decodeBotAvatarImage } from '../localDb/ipc/botAvatarSelection.js';
 import { restoreCloudAvatar } from './avatarRestore.js';
@@ -25,7 +26,7 @@ import { listCustomMcpServers } from '../maker-host/custom-mcp-store.js';
 import { resolveAvailableTaskModels } from '../maker-ipc/appDefaultModelControl.js';
 import { botProfileDir, botProfileMemoryDir, readBotProfileFolder, writeBotProfileFolder } from '../maker-ipc/botProfileFolder.js';
 import { onBotRemoteResourceChanged } from '../maker-ipc/botRemoteResourceInvalidation.js';
-import { deleteBotSkillForBot, listBotSkillSourcesForBot, readBotSkillSourceForBot, saveBotSkillSourceForBot } from '../maker-ipc/botSkillService.js';
+import { applyBotSkillFilesForBot, deleteBotSkillForBot, listBotSkillFilesForBot, listBotSkillSourcesForBot, readBotSkillFilesForBot, readBotSkillSourceForBot, saveBotSkillSourceForBot } from '../maker-ipc/botSkillService.js';
 import { companionTodoStore } from '../maker-ipc/botTodoAccess.js';
 import { mergeCompanionWorkbench, readCompanionWorkbench } from '../maker-ipc/botWorkbenchService.js';
 import { importCompanionRoutines, listCompanionRoutines, type CompanionRoutineValue } from '../routines/service.js';
@@ -34,6 +35,7 @@ import { portableTodo, travellingTodos } from './travel.js';
 import type { CompanionMaterializeHost } from './materialize.js';
 import { companionHomes } from './homes.js';
 import { createMcpServerNamesReader } from './mcpServerNames.js';
+import { companionHasLocalData } from './localData.js';
 import { companionCapabilitiesPatch, portableCompanionCapabilities, type CompanionArrivalNotice } from './capabilities.js';
 import { MIRROR_ATTACHMENT_MAX_BYTES, type CompanionMirrorCursor, type CompanionMirrorRow } from './mirror.js';
 import { replyArtifactAttachments, replyTextWithFiles } from './replyArtifacts.js';
@@ -47,6 +49,7 @@ import {
   COMPANION_PROFILE_KEY,
   COMPANION_ROUTINE_PREFIX,
   COMPANION_SKILL_PREFIX,
+  COMPANION_SKILL_FILES_PREFIX,
   COMPANION_TODO_PREFIX,
   COMPANION_WORKBENCH_KEY,
   type CompanionPreferenceValue,
@@ -109,6 +112,8 @@ export async function readCompanionValues(botId: string, selfDeviceId: string | 
     values.push({ key: `${COMPANION_SKILL_PREFIX}${skill.slug}`, value: {
       slug: skill.slug, content: skill.source, ...(skill.enabled ? {} : { enabled: false }),
     } });
+    const files = await listBotSkillFilesForBot(botId, skill.slug, skill.enabled);
+    if (files.length) values.push({ key: `${COMPANION_SKILL_FILES_PREFIX}${skill.slug}`, value: null, localFiles: files });
   }
   // Todos, routines and the workbench move with the companion too (cloud-companions.md §2). A read
   // failure aborts the cycle like the files above, so nothing is tombstoned by mistake.
@@ -254,6 +259,8 @@ function createMaterializer(input: {
     readSkill: readSkillContent,
     saveSkill: async (botId, slug, content, enabled) => { await saveBotSkillSourceForBot(botId, slug, content, { enabled }); },
     removeSkill: async (botId, slug) => { await deleteBotSkillForBot(botId, slug); },
+    readSkillFiles: (botId, slug) => readBotSkillFilesForBot(botId, slug),
+    applySkillFiles: (botId, slug, files, fetch, options) => applyBotSkillFilesForBot(botId, slug, files, fetch, options),
     ensureCanonicalSession: botId => input.ensureCanonicalSession(botId),
     // Rewound and deleted rows are included (`removed`): removed here means never re-imported.
     localMessageTimes: async (sessionId, fromMs) => (await getDbClient().drizzle
@@ -307,6 +314,14 @@ export async function readMirrorRowsAfter(sessionId: string, cursor: CompanionMi
     .where(and(visibleRows(sessionId), or(gt(messages.createdAt, cursor.createdAt),
       and(eq(messages.createdAt, cursor.createdAt), gt(messages.id, cursor.id)))))
     .orderBy(asc(messages.createdAt), asc(messages.id)).limit(limit);
+}
+
+/** Rows older than `cursor`, newest first: walking a conversation back a page at a time. */
+export async function readMirrorRowsBefore(sessionId: string, cursor: CompanionMirrorCursor, limit: number): Promise<CompanionMirrorRow[]> {
+  return getDbClient().drizzle.select(mirrorColumns).from(messages)
+    .where(and(visibleRows(sessionId), or(lt(messages.createdAt, cursor.createdAt),
+      and(eq(messages.createdAt, cursor.createdAt), lt(messages.id, cursor.id)))))
+    .orderBy(desc(messages.createdAt), desc(messages.id)).limit(limit);
 }
 
 export async function readLatestMirrorRows(sessionId: string, limit: number,
@@ -370,6 +385,13 @@ export function createCompanionCloudHost(input: {
   // Every reader (send guards, routines, lists) sees only the active owner's homes, and that
   // owner's persisted demotion, even before its Chat Server instance has started.
   companionHomes.bindOwner(activeOwnerScopeKey, () => companionShadowStore().read());
+  const samplingRows = async (sessionId: string, read: () => Promise<CompanionMirrorRow[]>) => {
+    if (!await flushAssistantSamplingMetadata(sessionId)) throw new Error('COMPANION_STILL_CHANGING');
+    const samplingRuntimeId = getAssistantSamplingRuntimeId(sessionId);
+    const rows = await read();
+    if (getAssistantSamplingRuntimeId(sessionId) !== samplingRuntimeId) throw new Error('COMPANION_STILL_CHANGING');
+    return rows.map(row => ({ ...row, samplingRuntimeId }));
+  };
   return {
     homes: companionHomes,
     openState: (endpoint, humanActorId, current) => createCompanionCloudState({
@@ -378,6 +400,18 @@ export function createCompanionCloudHost(input: {
       current, log: input.log,
     }),
     readValues: botId => readCompanionValues(botId, input.selfDeviceId?.() ?? null),
+    hasLocalData: async botId => {
+      const db = getDbClient().drizzle;
+      return companionHasLocalData({
+        hasProfile: async () => (await db.select({ id: botProfiles.id }).from(botProfiles)
+          .where(eq(botProfiles.id, botId)).limit(1)).length > 0,
+        // No status filter: archived links count.
+        hasTaskLink: async () => (await db.select({ id: botSessionLinks.id }).from(botSessionLinks)
+          .where(eq(botSessionLinks.botId, botId)).limit(1)).length > 0,
+        directory: botProfileDir(ownerScopedUserDataPath(), botId),
+        owner: activeOwnerScopeKey,
+      });
+    },
     // No main task yet is nothing to sync; conflicting ones are not: syncing, a hand-over and a merge
     // must stop rather than count this computer's history as sent.
     canonicalSession: async botId => {
@@ -385,8 +419,8 @@ export function createCompanionCloudHost(input: {
       if (resolved.status === 'conflict') throw new Error('COMPANION_TASK_CONFLICT');
       return resolved.status === 'resolved' ? resolved.sessionId : null;
     },
-    rowsAfter: readMirrorRowsAfter,
-    latestRows: readLatestMirrorRows,
+    rowsAfter: (sessionId, cursor, limit) => samplingRows(sessionId, () => readMirrorRowsAfter(sessionId, cursor, limit)),
+    latestRows: (sessionId, limit, options) => samplingRows(sessionId, () => readLatestMirrorRows(sessionId, limit, options)),
     replyAttachments: (_botId, sessionId, row, text) => replyArtifactAttachments(row, text, sessionId, {
       roots: readTaskFileRoots,
       blob: readReplyBlob,
