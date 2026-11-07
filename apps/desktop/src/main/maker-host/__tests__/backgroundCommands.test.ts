@@ -145,6 +145,20 @@ it('exit 0 报成功;空命令直接拒绝且不回注', async () => {
   expect(capture).toHaveBeenCalledTimes(1);
 });
 
+it('桌面键鼠模拟命令直接拒绝且不 spawn（与 Bash PreToolUse 守卫同一判定）', () => {
+  const capture = vi.fn();
+  const service = buildService(capture);
+
+  const blocked = service.start({
+    sessionId: 'sess-desktop-input',
+    command: "osascript -e 'tell application \"System Events\" to keystroke \"x\"'",
+    cwd: logDir,
+  });
+  expect(blocked).toMatchObject({ ok: false, errorCode: 'DESKTOP_INPUT_BLOCKED' });
+  // 拒绝发生在 spawn 之前:同步断言即可。
+  expect(capture).not.toHaveBeenCalled();
+});
+
 it('超上限的输出:文件截断到上限,完成报告仍带最后的输出(内存尾部)', async () => {
   const capture = vi.fn();
   const service = buildService(capture);

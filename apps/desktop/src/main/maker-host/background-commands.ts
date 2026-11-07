@@ -24,6 +24,11 @@ import { readdir, stat, unlink } from 'node:fs/promises';
 import path from 'node:path';
 
 import { killProcessTree } from '../scheduler-host/proc-util.js';
+import {
+  isShellDesktopInputCommand,
+  SHELL_DESKTOP_INPUT_DENIAL_CODE,
+  SHELL_DESKTOP_INPUT_DENIAL_REASON,
+} from '@cindy/maker-core';
 import type { SchedulerQueuedPromptRequest } from '../maker-ipc/register.js';
 
 /** 后台命令的最长存活:防孤儿进程无限挂(默认与显式上限共用这条硬顶)。 */
@@ -55,7 +60,7 @@ export type BackgroundCommandStartResult =
   | { ok: true; runId: string; logPath: string; pid: number | undefined }
   | {
       ok: false;
-      errorCode: 'INVALID_ARGS' | 'TOO_MANY_RUNS' | 'SPAWN_FAILED' | 'LOG_FAILED' | 'DISPOSED';
+      errorCode: 'INVALID_ARGS' | 'TOO_MANY_RUNS' | 'SPAWN_FAILED' | 'LOG_FAILED' | 'DISPOSED' | 'DESKTOP_INPUT_BLOCKED';
       message: string;
     };
 
@@ -219,6 +224,16 @@ export function createBackgroundCommandService(deps: BackgroundCommandServiceDep
           ok: false,
           errorCode: 'INVALID_ARGS',
           message: 'command, sessionId and cwd are required',
+        };
+      }
+      // 桌面键鼠只走 cindy_computer：后台命令是独立执行入口（不经过 Bash 的 PreToolUse
+      // 守卫），完全访问档也不会在这里再弹审批，必须在宿主入口复用同一份判定，
+      // 否则 osascript keystroke / cliclick 可绕过键鼠保护（CU-014 同类事故）。
+      if (isShellDesktopInputCommand(command)) {
+        return {
+          ok: false,
+          errorCode: 'DESKTOP_INPUT_BLOCKED',
+          message: `${SHELL_DESKTOP_INPUT_DENIAL_CODE}: ${SHELL_DESKTOP_INPUT_DENIAL_REASON}`,
         };
       }
       if (running.size >= BACKGROUND_COMMAND_MAX_CONCURRENT) {
