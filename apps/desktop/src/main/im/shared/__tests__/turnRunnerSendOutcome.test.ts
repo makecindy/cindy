@@ -25,6 +25,10 @@ import type {
 } from '@cindy/maker-core';
 import type { ChannelIM } from '@cindy/im';
 import { setMainLocale } from '../../../i18n';
+import { createTelegramGuestTurnPermissionPolicy } from '../../telegram/permissionPolicy';
+import { createDingTalkTurnPermissionPolicy } from '../../dingtalk/permissionPolicy';
+import { createFeishuGroupTurnPermissionPolicy } from '../../feishu/permissionPolicy';
+import { createWechatTurnPermissionPolicy } from '../../wechat/permissionPolicy';
 import { enqueueAskCardPatch } from '../askCardPatchQueue';
 import { createSerializedConnectionLifecycle } from '../../connectionLifecycle';
 
@@ -1679,9 +1683,7 @@ describe('turnRunner send outcome policy (feishu adapter characterization)', () 
         autoReviewContext: { requesterAuthority: 'guest', source: 'group' },
         confirmationSurface: 'channel', forceConfirmToolCall: () => true,
       };
-      const localRunner = createTurnRunner({ ...fakeAdapter,
-        turnPolicyAutoFallbackForMode: (mode) => mode === 'bypassPermissions',
-      }, fakeRepo, fakeCards);
+      const localRunner = createTurnRunner(fakeAdapter, fakeRepo, fakeCards);
       try {
         const result = await localRunner.dispatchAgentTurn({
           botContextId: 'cli_test_bot', userId: 'ou_user', userMessageId: 'guest-auto',
@@ -1712,7 +1714,13 @@ describe('turnRunner send outcome policy (feishu adapter characterization)', () 
     },
   );
 
-  it('keeps the real Session occupied until guest Auto restoration finishes', async () => {
+  it.each([
+    ['telegram', () => createTelegramGuestTurnPermissionPolicy('guest', false)],
+    ['dingtalk', () => createDingTalkTurnPermissionPolicy('guest', false)],
+    ['dingtalk-owner', () => createDingTalkTurnPermissionPolicy('owner', true)],
+    ['feishu', () => createFeishuGroupTurnPermissionPolicy('guest', false)],
+    ['wechat', () => createWechatTurnPermissionPolicy('unknown')],
+  ] as const)('retains the %s policy and keeps the real Session occupied through Auto restoration', async (_channel, makePolicy) => {
     const terminal = deferred<void>();
     const ended = deferred<void>();
     const restoreStarted = deferred<void>();
@@ -1753,13 +1761,8 @@ describe('turnRunner send outcome policy (feishu adapter characterization)', () 
       } as unknown as Capabilities,
     });
     mocks.getMaker.mockReturnValue(createMakerHarness(session));
-    const localRunner = createTurnRunner({ ...fakeAdapter,
-      turnPolicyAutoFallbackForMode: (current) => current === 'bypassPermissions',
-    }, fakeRepo, fakeCards);
-    const policy: TurnPermissionPolicy = {
-      origin: { kind: 'im', channel: 'telegram' }, confirmationSurface: 'channel',
-      autoReviewContext: { requesterAuthority: 'guest', source: 'group' }, forceConfirmToolCall: () => true,
-    };
+    const localRunner = createTurnRunner(fakeAdapter, fakeRepo, fakeCards);
+    const policy = makePolicy();
     try {
       const result = await localRunner.dispatchAgentTurn({
         botContextId: 'cli_test_bot', userId: 'ou_user', userMessageId: 'guest-real-session',
@@ -1768,6 +1771,7 @@ describe('turnRunner send outcome policy (feishu adapter characterization)', () 
       });
       expect(result.kind).toBe('accepted');
       expect(handle.send).toHaveBeenCalledOnce();
+      expect(handle.validateSendOptions).toHaveBeenCalledWith(expect.objectContaining({ turnPermissionPolicy: policy }));
       expect(mode).toBe('auto');
       terminal.resolve();
       await restoreStarted.promise;

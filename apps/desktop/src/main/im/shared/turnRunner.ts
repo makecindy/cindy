@@ -1668,10 +1668,13 @@ export function createTurnRunner(
         },
         ...(effectiveTurnPolicy ? { turnPermissionPolicy: effectiveTurnPolicy } : {}),
         afterTurnReserved: async () => {
-          if (!effectiveTurnPolicy || !adapter.turnPolicyAutoFallbackForMode) return;
+          if (!effectiveTurnPolicy) return;
           const session = state.makerSession;
           const previous = session.stablePermissionModeState;
-          if (!previous?.mode || !adapter.turnPolicyAutoFallbackForMode(previous.mode, effectiveTurnPolicy)) return;
+          // A retained policy is mandatory, regardless of channel or whether its
+          // requester is known. Explicit channel/companion exemptions were resolved
+          // above; never remove a mandatory policy just to admit Full access.
+          if (previous?.mode !== 'bypassPermissions') return;
           if (!session.capabilities.setPermissionModeMidSession?.supported
               || !session.capabilities.permissionModes?.some((mode) => mode.id === 'auto')
               || !session.capabilities.turnPermissionPolicy?.supported?.supported

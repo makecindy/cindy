@@ -218,10 +218,6 @@ export function buildTelegramAdapter(
     // 必须确认, 把伙伴设成 Auto 或 Ask。
     turnPolicyOptionalForMode: (mode, policy) =>
       mode === 'bypassPermissions' && (companion || ownerGroupTurnPolicies.has(policy)),
-    // Personal bot guests keep their identity and destructive-action policy. Full
-    // access belongs to the bound user; guest turns temporarily use Auto instead.
-    turnPolicyAutoFallbackForMode: (mode, policy) =>
-      mode === 'bypassPermissions' && !companion && !ownerGroupTurnPolicies.has(policy),
     groupHistoryAccessFor: (event): GroupHistoryAccessScope | undefined => {
       const lane = decodeTelegramLaneUserId(event.senderId);
       // Companion bots admit guest DMs too. Reuse the verified requester identity
