@@ -508,6 +508,7 @@ pub extern "C" fn conn_poll_event(id: u32) -> f64 {
 /// 往返（微秒）、最小往返、带宽估计（字节/秒）、发出包数、收到包数、线上发出字节、线上收到字节、重传分片、
 /// 握手往返（微秒）、认证失败丢掉的包、重放丢掉的包、开始验证新路径的次数、换过去的次数、
 /// 这一端主动验证路径的次数、其中数据路径断了退回备用路径的次数、验证通过但留作备用的次数、收到 cookie 的次数。
+/// 之后追加：换连接号次数、缺备用号次数、作废本地号数、交号／确认包数、交号快照重发次数。
 #[unsafe(no_mangle)]
 pub extern "C" fn conn_stats(id: u32) -> i32 {
     let io = io();
@@ -533,6 +534,11 @@ pub extern "C" fn conn_stats(id: u32) -> i32 {
             security.fallback_probes,
             security.alternates_kept,
             security.cookies_received,
+            security.connection_id_rotations,
+            security.connection_id_exhaustions,
+            security.connection_ids_retired,
+            security.connection_id_packets,
+            security.connection_id_retransmissions,
         ];
         write_f64s(io, &values)
     })

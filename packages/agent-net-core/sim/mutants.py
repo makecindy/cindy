@@ -43,6 +43,15 @@ import tempfile
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 
 MUTANTS = [
+    ("连接号轮换：换网仍用旧号", "src/ids.rs",
+     "        let fresh = self.remote.iter().find(|id|", "        let fresh = self.remote.iter().filter(|_| false).find(|id|"),
+    ("连接号轮换：不作废", "src/ids.rs",
+     "        self.local.retain(|id| !retired.contains(&id.sequence));", "        self.local.retain(|_| true);"),
+    ("连接号轮换：丢包不重发", "src/ids.rs",
+     "        self.due_at = Some(now_us + retry_us);", "        self.due_at = None;\n        let _ = retry_us;"),
+    ("连接号轮换：仍在使用的号也作废", "src/ids.rs",
+     "        if !self.routes.iter().any(|route| route.sequence == sequence) && !self.retired.contains(&sequence) {",
+     "        if !self.retired.contains(&sequence) {"),
     ("干净路径也逐包确认", "src/connection.rs",
      "        self.config.recovery_policy != RecoveryPolicy::Lean\n            && self.congestion.window_bound_path()\n            && !self.limiter_suspected()\n            && (self.loss_ppm + self.late_ppm).max(floor) >= PARITY_MIN_LOSS_PPM\n",
      "        self.config.recovery_policy != RecoveryPolicy::Lean\n"),
@@ -436,6 +445,8 @@ MUTANTS = [
 
 
 def test_targets(name):
+    if name.startswith("连接号轮换："):
+        return ["--test", "secure", "connection_id"]
     if name.startswith("加密："):
         return ["--test", "secure"]
     if name.startswith("连接号："):

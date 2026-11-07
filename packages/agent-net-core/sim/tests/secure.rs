@@ -13,14 +13,15 @@
 //!   一次性密钥按种子生成，不能用于真实通信；产品里由各平台传入系统实现。
 //! - 实测耗时：2026-11-03，本机默认 200 个种子共 0.7 秒；`AGENT_NET_SEEDS=10000` 的记录见 `sim/results/2026-11-03-encryption/`。
 //!   2026-11-06 加了两个准入用例和两个关闭用例，整个文件 1.7 秒，其中洪水用例 1.1 秒（2.5 秒虚拟时间里 5 万个请求）。
+//!   2026-11-07 加了 7 个连接号用例，整个文件 2.44 秒；只跑连接号用例 0.03 秒（不含编译）。
 //! - 测试本身的有效性由 `sim/mutants.py` 验证：注入已知 bug，这里必须变红。
 
-use std::collections::VecDeque;
+use std::collections::{BTreeSet, VecDeque};
 use std::net::SocketAddr;
 use std::rc::Rc;
 
 use agent_net_core::noise::Handshake;
-use agent_net_core::{Admission, Config, Crypto, Endpoint, Incoming, PacketError, SecureConnection, TAG_LEN, is_initiation};
+use agent_net_core::{Admission, Config, Crypto, Endpoint, Incoming, PacketError, SecureConnection, TAG_LEN, destination_id, is_initiation};
 use agent_net_sim::crypto::{AesGcm, ChaChaPoly, PROLOGUE, Probe, SecurePeer, Suite, TestCrypto};
 use agent_net_sim::{Rng, Shifted, random_case, run};
 
@@ -815,6 +816,10 @@ fn listener_public() -> [u8; 32] {
 
 /// 接受所有人的端点，长期密钥固定；`probe` 记它做过多少次 DH。
 fn listener(probe: &Rc<Probe>) -> Node {
+    listener_with_config(probe, Config::default())
+}
+
+fn listener_with_config(probe: &Rc<Probe>, config: Config) -> Node {
     let mut rng = Rng::new(71);
     let mut node = Node::new(move || rng.next_u64() as u32);
     let secret = TestCrypto::<AesGcm>::from_seed(LISTENER_SEED).secret_bytes();
@@ -822,7 +827,7 @@ fn listener(probe: &Rc<Probe>) -> Node {
     let mut created = 0;
     node.listen(
         PROLOGUE,
-        Config::default(),
+        config,
         &[],
         move || {
             created += 1;
@@ -1030,4 +1035,330 @@ fn endpoint_close_tells_the_peer() {
     client.on_datagram(now, server_addr, &packets[0].0);
     let connection = client.connection(id).expect("client connection");
     assert!(connection.is_dead() && connection.closed_by_peer());
+}
+
+// 测试价值（连接号轮换，2026-11-07）
+// - 入口与可观察结果：Endpoint 的公开收发／换网／关闭入口；抓取线上目的号，检查换地址时换号、
+//   作废的号不再路由、有效号不能被篡改、缺号不阻塞数据，多连接共享一个端口仍各收各的。
+// - 规则依据：用户确认的备用 7 号、每路径独立用号、可靠作废和补号方案；agent-net-plan §0 的公网防护。
+// - 缺口：原有 migration 用例直接用 SecureConnection、没有备用号，原有 Endpoint 用例不换号。
+// - 最小输入：下面的固定包丢失／乱序／8 次连续通知／64 条连接，135 字节 MTU 也必须能完成交号。
+// - tier：Rust integration，虚拟时间，使用真实加密和生产分发入口，无真实 socket 或等待。
+
+struct RoutingPair {
+    nodes: [Node; 2],
+    handles: [u32; 2],
+    addresses: [SocketAddr; 2],
+    now: u64,
+    wire: Vec<(usize, SocketAddr, SocketAddr, Vec<u8>)>,
+}
+
+impl RoutingPair {
+    fn new(max_packet_size: usize, settle: bool) -> Self {
+        let config = Config { max_packet_size, ..Config::default() };
+        let server = listener_with_config(&Rc::new(Probe::default()), config.clone());
+        let mut client = dialer(1_007);
+        let addresses = [SocketAddr::from(([192, 0, 2, 1], 5_000)), SocketAddr::from(([198, 51, 100, 1], 443))];
+        let handle = client.connect(0, TestCrypto::from_seed(1_008), config, PROLOGUE, &listener_public(), &[], addresses[1]).expect("connect");
+        let mut pair = Self { nodes: [client, server], handles: [handle, 0], addresses, now: 0, wire: Vec::new() };
+        if settle {
+            pair.pump(500_000, &mut |_, _| true);
+            pair.handles[1] = pair.nodes[1].ids().next().expect("accepted");
+            pair.assert_live();
+        }
+        pair
+    }
+
+    fn connection(&self, side: usize) -> &SecureConnection<TestCrypto> {
+        self.nodes[side].connection(self.handles[side]).expect("stable handle")
+    }
+
+    fn pump(&mut self, duration: u64, pass: &mut impl FnMut(usize, &[u8]) -> bool) {
+        let until = self.now + duration;
+        while self.now < until {
+            self.now += 1_000;
+            for side in 0..2 {
+                self.nodes[side].tick(self.now);
+                for (packet, to) in drain(&mut self.nodes[side], self.now) {
+                    let from = self.addresses[side];
+                    self.wire.push((side, from, to, packet.clone()));
+                    if to == self.addresses[1 - side] && pass(side, &packet) {
+                        self.nodes[1 - side].on_datagram(self.now, from, &packet);
+                    }
+                }
+            }
+        }
+    }
+
+    fn assert_live(&self) {
+        for side in 0..2 {
+            assert!(self.connection(side).is_established(), "side {side}");
+            assert_eq!(self.connection(side).local_connection_ids().count(), 8, "side {side}");
+        }
+    }
+
+    fn exchange(&mut self, data: &[u8]) {
+        for side in 0..2 {
+            assert_eq!(self.nodes[side].connection_mut(self.handles[side]).expect("connection").send(self.now, data), data.len());
+        }
+        self.pump(200_000, &mut |_, _| true);
+        for side in 0..2 {
+            let mut received = vec![0; data.len() + 1];
+            let size = self.nodes[side].connection_mut(self.handles[side]).expect("connection").recv(self.now, &mut received);
+            assert_eq!(&received[..size], data, "side {side}");
+        }
+    }
+}
+
+fn wire_ids(wire: &[(usize, SocketAddr, SocketAddr, Vec<u8>)], side: usize) -> BTreeSet<u32> {
+    wire.iter().filter(|(sender, _, _, packet)| *sender == side && packet[0] & 0xE0 == 0xA0).filter_map(|(_, _, _, packet)| destination_id(packet)).collect()
+}
+
+#[test]
+fn connection_ids_rotate_and_retired_routes_disappear() {
+    for mtu in [135, 1_200] {
+        for same_host in [false, true] {
+            for noticed in [false, true] {
+                let mut pair = RoutingPair::new(mtu, true);
+                pair.exchange(b"before moving");
+                let old = [wire_ids(&pair.wire, 0), wire_ids(&pair.wire, 1)];
+                let delayed = pair.wire.iter().rev().find(|(side, _, _, packet)| *side == 0 && packet[0] & 0xE0 == 0xA0).expect("old transport packet").3.clone();
+                pair.wire.clear();
+                pair.addresses[0] = if same_host { SocketAddr::from(([192, 0, 2, 1], 6_000)) } else { SocketAddr::from(([203, 0, 113, 1], 6_000)) };
+                if noticed {
+                    pair.nodes[0].on_local_address_change(pair.now);
+                } else {
+                    pair.nodes[0].connection_mut(pair.handles[0]).expect("connection").ping();
+                }
+                pair.pump(500_000, &mut |_, _| true);
+                let to_new = pair.wire.iter().filter(|(side, _, to, _)| *side == 1 && *to == pair.addresses[0]).cloned().collect::<Vec<_>>();
+                assert!(wire_ids(&to_new, 1).is_disjoint(&old[1]), "first validation packet reused an id: mtu {mtu}, noticed {noticed}");
+                if noticed {
+                    assert!(wire_ids(&pair.wire, 0).is_disjoint(&old[0]), "local change reused an id");
+                }
+                pair.wire.clear();
+                pair.exchange(b"intact after moving");
+                pair.assert_live();
+                for (side, ids) in old.iter().enumerate() {
+                    assert!(wire_ids(&pair.wire, side).is_disjoint(ids), "side {side} kept the old id after validation");
+                    assert!(pair.connection(side).security_stats().connection_ids_retired > 0);
+                }
+                let unknown = pair.nodes[1].stats().unknown_destination;
+                pair.nodes[1].on_datagram(pair.now, pair.addresses[0], &delayed);
+                assert_eq!(pair.nodes[1].stats().unknown_destination, unknown + 1, "retired id was still routed");
+
+                pair.nodes[0].connection_mut(pair.handles[0]).expect("connection").ping();
+                let (original, _) = drain(&mut pair.nodes[0], pair.now).pop().expect("ping");
+                let another = pair.connection(1).local_connection_ids().find(|id| Some(*id) != destination_id(&original)).expect("spare");
+                let mut tampered = original.clone();
+                tampered[3..7].copy_from_slice(&another.to_be_bytes());
+                let unauthenticated = pair.connection(1).security_stats().unauthenticated_packets;
+                let path = pair.nodes[1].peer_addr(pair.handles[1]);
+                pair.nodes[1].on_datagram(pair.now, pair.addresses[0], &tampered);
+                assert_eq!(pair.connection(1).security_stats().unauthenticated_packets, unauthenticated + 1);
+                assert_eq!(pair.nodes[1].peer_addr(pair.handles[1]), path);
+                pair.nodes[1].on_datagram(pair.now, pair.addresses[0], &original);
+                pair.exchange(b"still intact after tampering");
+
+                let live_ids = pair.connection(1).local_connection_ids().collect::<Vec<_>>();
+                assert!(pair.nodes[1].close(pair.handles[1]).is_some());
+                let unknown = pair.nodes[1].stats().unknown_destination;
+                for id in &live_ids {
+                    tampered[3..7].copy_from_slice(&id.to_be_bytes());
+                    pair.nodes[1].on_datagram(pair.now, pair.addresses[0], &tampered);
+                }
+                assert_eq!(pair.nodes[1].stats().unknown_destination, unknown + live_ids.len() as u64, "close left aliases behind");
+                pair.pump(5_000, &mut |_, _| true);
+                assert!(pair.connection(0).closed_by_peer(), "close must use the current destination id");
+            }
+        }
+    }
+}
+
+#[test]
+fn connection_id_loss_reordering_and_exhaustion_do_not_stop_data() {
+    let mut pair = RoutingPair::new(135, false);
+    let mut delayed = Vec::new();
+    // 初次满池快照长 98，确认长 32（加密后的 wire contract）。全部扣下，握手与可靠层仍照常走。
+    pair.pump(800_000, &mut |side, packet| {
+        if packet.len() == 98 || packet.len() == 32 {
+            delayed.push((side, packet.to_vec()));
+            false
+        } else {
+            true
+        }
+    });
+    pair.handles[1] = pair.nodes[1].ids().next().expect("accepted");
+    pair.assert_live();
+    assert!(pair.connection(0).security_stats().connection_id_retransmissions >= 2, "lost offers were not retried");
+    pair.nodes[0].on_local_address_change(pair.now);
+    assert!(pair.connection(0).security_stats().connection_id_exhaustions > 0, "missing spares were not counted");
+    let data = b"data proceeds while the offer is missing";
+    for side in 0..2 {
+        pair.nodes[side].connection_mut(pair.handles[side]).expect("connection").send(pair.now, data);
+    }
+    pair.pump(200_000, &mut |_, packet| packet.len() != 98 && packet.len() != 32);
+    for side in 0..2 {
+        let mut buffer = [0; 100];
+        let size = pair.nodes[side].connection_mut(pair.handles[side]).expect("connection").recv(pair.now, &mut buffer);
+        assert_eq!(&buffer[..size], data);
+    }
+    let retransmissions = pair.connection(0).security_stats().connection_id_retransmissions;
+    // 交号放行、确认全丢：收到交号还不等于发出方知道对端收到了，仍须重发。
+    pair.pump(600_000, &mut |side, packet| {
+        if packet.len() == 32 {
+            delayed.push((side, packet.to_vec()));
+            false
+        } else {
+            true
+        }
+    });
+    assert!(pair.connection(0).security_stats().connection_id_retransmissions > retransmissions, "lost acknowledgement stopped retries");
+    pair.pump(300_000, &mut |_, _| true);
+    pair.assert_live();
+
+    let before = wire_ids(&pair.wire, 0);
+    pair.wire.clear();
+    // 不给补号包送达的机会，连续 8 次换网络，把 7 个备用号用完。
+    for index in 0..8 {
+        pair.addresses[0] = SocketAddr::from(([203, 0, 113, index + 1], 6_000));
+        pair.nodes[0].on_local_address_change(pair.now);
+    }
+    pair.exchange(b"data proceeds after exhausting the pool");
+    pair.pump(500_000, &mut |_, _| true);
+    pair.assert_live();
+    assert!(pair.connection(0).security_stats().connection_id_exhaustions >= 2);
+    assert!(pair.connection(1).security_stats().connection_ids_retired >= 7, "retired ids were not replaced");
+    let ids_before = pair.connection(1).local_connection_ids().collect::<Vec<_>>();
+    // 最早的交号包和确认现在才到；不得把已经作废的号复活，也不能停止新代次的重发。
+    for (side, packet) in delayed.into_iter().rev() {
+        pair.nodes[1 - side].on_datagram(pair.now, pair.addresses[side], &packet);
+    }
+    assert_eq!(pair.connection(1).local_connection_ids().collect::<Vec<_>>(), ids_before);
+    pair.wire.clear();
+    pair.addresses[0] = SocketAddr::from(([203, 0, 113, 20], 7_000));
+    pair.nodes[0].on_local_address_change(pair.now);
+    pair.exchange(b"fresh pool works after delayed old controls");
+    assert!(wire_ids(&pair.wire, 0).is_disjoint(&before), "stale snapshot restored an old destination");
+    pair.assert_live();
+}
+
+#[test]
+fn connection_id_aliases_remain_unique_among_many_connections() {
+    let mut pair = RoutingPair::new(1_200, true);
+    let mut serial = 0u32;
+    // 刻意重复随机结果，还会返回 0 和当前句柄／别名，分配器必须跳过。
+    pair.nodes[0] = Node::new(move || { serial += 1; serial / 2 });
+    let mut handles = Vec::new();
+    for index in 0..64 {
+        handles.push(pair.nodes[0].connect(pair.now, TestCrypto::from_seed(2_000 + index), Config::default(), PROLOGUE, &listener_public(), &[], pair.addresses[1]).expect("connect"));
+    }
+    pair.pump(500_000, &mut |_, _| true);
+    let mut all = BTreeSet::new();
+    for &handle in &handles {
+        let connection = pair.nodes[0].connection_mut(handle).expect("handle");
+        assert!(connection.is_established());
+        assert_eq!(connection.local_connection_ids().count(), 8);
+        for id in connection.local_connection_ids() {
+            assert!(all.insert(id), "two connections share id {id}");
+        }
+        connection.send(pair.now, &handle.to_be_bytes());
+    }
+    assert_eq!(all.len(), handles.len() * 8);
+    pair.pump(100_000, &mut |_, _| true);
+    let mut received = BTreeSet::new();
+    for handle in pair.nodes[1].ids().collect::<Vec<_>>() {
+        let mut bytes = [0; 8];
+        let size = pair.nodes[1].connection_mut(handle).expect("server connection").recv(pair.now, &mut bytes);
+        if size != 0 {
+            assert_eq!(size, 4);
+            received.insert(u32::from_be_bytes(bytes[..4].try_into().expect("four bytes")));
+        }
+    }
+    assert_eq!(received, handles.into_iter().collect());
+}
+
+/// 老交号快照第一次到达时包号仍在重放窗口内，且目的号仍有效：必须按快照代次判断，不能倒退回小池子。
+#[test]
+fn connection_id_snapshots_do_not_roll_back_when_reordered() {
+    let mut pair = Pair::new(1_009, Config::default(), &[]);
+    pair.transfer(b"ready", b"ready");
+    let mut buffer = vec![0; pair.config.max_packet_size];
+    assert!(pair.initiator.add_connection_id(10_001));
+    let first = pair.initiator.poll_transmit(pair.now, &mut buffer).expect("first snapshot");
+    let first = buffer[..first].to_vec();
+    assert!(pair.initiator.add_connection_id(10_002));
+    let second = pair.initiator.poll_transmit(pair.now, &mut buffer).expect("newer snapshot");
+    let second = buffer[..second].to_vec();
+    assert_eq!(pair.deliver(true, &second), Ok(()));
+    assert_eq!(pair.deliver(true, &first), Ok(()), "fresh old-generation packet is handled, not a replay");
+    let responder = pair.responder.as_mut().expect("responder");
+    for expected in [10_001, 10_002] {
+        responder.on_local_address_change(pair.now);
+        let size = responder.poll_transmit(pair.now, &mut buffer).expect("rotated packet");
+        assert_eq!(destination_id(&buffer[..size]), Some(expected), "old snapshot discarded the newer spare");
+    }
+    assert_eq!(responder.security_stats().connection_id_exhaustions, 0);
+}
+
+/// 缺号时临时给验证路径借用了数据路径的号，验证失败只能移除该路径，不能作废仍在用的那个号。
+#[test]
+fn connection_id_shared_fallback_keeps_the_active_id() {
+    let mut pair = Pair::new(1_010, Config::default(), &[]);
+    pair.transfer(b"ready", b"ready");
+    let mut buffer = vec![0; pair.config.max_packet_size];
+    let now = pair.now;
+    let responder = pair.responder.as_mut().expect("responder");
+    assert!(responder.probe_path(now, 7));
+    let (_, path) = responder.poll_transmit_via(now, &mut buffer).expect("validation");
+    assert_eq!(path, 7);
+    pair.now += 15 * pair.config.initial_rto_us + 1;
+    responder.tick(pair.now);
+    assert_eq!(responder.validating().count(), 0);
+    responder.send(pair.now, b"active route survives");
+    while let Some((size, path)) = pair.responder.as_mut().expect("responder").poll_transmit_via(pair.now, &mut buffer) {
+        assert_eq!(path, 0);
+        assert_eq!(pair.deliver(false, &buffer[..size]), Ok(()), "a live id was erroneously retired");
+    }
+    let mut received = [0; 100];
+    let size = pair.initiator.recv(pair.now, &mut received);
+    assert_eq!(&received[..size], b"active route survives");
+}
+
+/// 一端刚跟随对端换过路径，自己随即悄悄换网：拥塞估计的「刚换过」窗口不能抑制第二次换号。
+#[test]
+fn connection_ids_change_when_both_peers_move_in_quick_succession() {
+    let mut pair = RoutingPair::new(1_200, true);
+    pair.addresses[1] = SocketAddr::from(([198, 51, 100, 2], 444));
+    pair.nodes[1].on_local_address_change(pair.now);
+    pair.pump(200_000, &mut |_, _| true);
+    assert_eq!(pair.connection(0).security_stats().migrations, 1);
+    pair.wire.clear();
+    pair.exchange(b"after the first move");
+    let old = wire_ids(&pair.wire, 0);
+    pair.addresses[0] = SocketAddr::from(([203, 0, 113, 2], 6_000));
+    pair.nodes[0].connection_mut(pair.handles[0]).expect("connection").ping();
+    pair.pump(200_000, &mut |_, _| true);
+    pair.wire.clear();
+    pair.exchange(b"after both peers moved");
+    assert!(wire_ids(&pair.wire, 0).is_disjoint(&old), "recent path switch suppressed the unannounced local change");
+    pair.assert_live();
+}
+
+/// 系统通知过一次，验证回复却一直收不到；此后又发生未通知的换网，第一次收到的验证也必须再换号。
+#[test]
+fn connection_ids_change_again_when_the_first_validation_was_lost() {
+    let mut pair = RoutingPair::new(1_200, true);
+    pair.addresses[0] = SocketAddr::from(([203, 0, 113, 3], 6_000));
+    pair.nodes[0].on_local_address_change(pair.now);
+    pair.wire.clear();
+    pair.pump(20_000, &mut |side, _| side == 0);
+    let old = wire_ids(&pair.wire, 0);
+    pair.addresses[0] = SocketAddr::from(([203, 0, 113, 4], 6_001));
+    pair.nodes[0].connection_mut(pair.handles[0]).expect("connection").ping();
+    pair.pump(200_000, &mut |_, _| true);
+    pair.wire.clear();
+    pair.exchange(b"second local move survived");
+    assert!(wire_ids(&pair.wire, 0).is_disjoint(&old), "the stale system notification suppressed a later unannounced move");
+    pair.assert_live();
 }

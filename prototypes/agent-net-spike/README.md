@@ -4,6 +4,10 @@
 [`docs/agent-net-plan.md`](../../docs/agent-net-plan.md) §2，第 6 步见 [`results/2026-11-05-edgehub-core`](results/2026-11-05-edgehub-core/README.md)，
 第 7 步见 [`results/2026-11-05-traversal`](results/2026-11-05-traversal/README.md)。
 
+2026-11-07 连接号轮换后复跑：Node 驱动 6/6，EdgeHub 的 core／relay／push／punch 各 12/12，
+包括加密与路径附加检查；换端口时另查两端换号、旧号作废计数。详见
+[`连接号轮换记录`](../../packages/agent-net-core/sim/results/2026-11-07-id-rotation/README.md)。
+
 > 2026-10-30 路线改为自研传输，iroh 不进产品。这里的 iroh 代码只保留作性能参照。
 > 2026-11-05（第 6 步）`edgehub.ts` 改成可以换传输：默认跑自研核心（`transport-core.ts`），QUIC（`transport-quic.ts`）留作对照，
 > 两种传输跑同一套检查。

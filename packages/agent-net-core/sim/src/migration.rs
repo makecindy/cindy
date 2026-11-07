@@ -5,9 +5,9 @@
 //! 到达时直接丢掉：那里已经没有人了。攻击者从 [`ATTACKER`] 这个地址注入包，发往那里的包也丢掉，只记字节数。
 
 use std::cmp::Reverse;
-use std::collections::{BTreeMap, BinaryHeap, VecDeque};
+use std::collections::{BTreeMap, BTreeSet, BinaryHeap, VecDeque};
 
-use agent_net_core::{Config, Incoming, PacketError, SecureConnection, SecurityStats, Stats, is_initiation};
+use agent_net_core::{Config, Incoming, PacketError, SecureConnection, SecurityStats, Stats, destination_id, is_initiation};
 
 use crate::crypto::{AesGcm, PROLOGUE, TestCrypto};
 use crate::{Link, LinkProfile, Rng, random_link, stream_byte};
@@ -74,6 +74,10 @@ pub struct Report {
     pub client: Option<(SecurityStats, Stats)>,
     pub server: Option<(SecurityStats, Stats)>,
     pub server_path: u64,
+    /// 上传／下载，每个客户端地址在线上出现过哪些目的连接号（不含握手）。
+    pub connection_ids: [BTreeMap<u64, BTreeSet<u32>>; 2],
+    /// 作废以后才到的旧号包，由分发层直接丢弃。
+    pub retired_packets: u64,
 }
 
 /// 两个方向：0 是上传（客户端写、服务端读），1 是下载。
@@ -130,6 +134,21 @@ type Arrival = Reverse<(u64, u64, bool, u64, Vec<u8>)>;
 
 /// 跑完一个场景。每个到达的字节都和发送内容逐一核对。
 pub fn run_moves(scenario: &Scenario) -> Report {
+    run_with_ids(scenario, false)
+}
+
+/// 同一个网络场景，双方补满 8 个连接号并统计换地址时的号是否重叠。
+pub fn run_rotating_moves(scenario: &Scenario) -> Report {
+    run_with_ids(scenario, true)
+}
+
+fn replenish(connection: &mut SecureConnection<TestCrypto>, rng: &mut Rng) {
+    while connection.is_established() && connection.local_connection_ids().count() < 8 {
+        connection.add_connection_id(rng.next_u64() as u32);
+    }
+}
+
+fn run_with_ids(scenario: &Scenario, rotate_ids: bool) -> Report {
     let seed = scenario.seed;
     let listener_crypto = TestCrypto::<AesGcm>::from_seed(seed.wrapping_mul(2).wrapping_add(2));
     let client_config = Config { connection_id: seed as u32 ^ 0xC11E_0001, ..scenario.config.clone() };
@@ -154,6 +173,7 @@ pub fn run_moves(scenario: &Scenario) -> Report {
     let mut buffer = vec![0u8; scenario.config.max_packet_size];
     let mut chunk = vec![0u8; 64 * 1024];
     let mut rng = Rng::new(seed ^ 0xBAD5_EED);
+    let mut ids_rng = Rng::new(seed ^ 0x1D5_2026);
     // 客户端现在在第几个地址，已经换了几次。每个地址的 IP 是第几个：只换端口时 IP 不变。
     let mut address = 0u64;
     let mut ips = vec![0u64];
@@ -210,8 +230,18 @@ pub fn run_moves(scenario: &Scenario) -> Report {
             }
         }
 
+        if rotate_ids {
+            replenish(&mut client, &mut ids_rng);
+            if let Some(server) = &mut server {
+                replenish(server, &mut ids_rng);
+            }
+        }
+
         while let Some((size, path)) = client.poll_transmit_via(now, &mut buffer) {
             let packet = buffer[..size].to_vec();
+            if packet[0] & 0xE0 == 0xA0 && let Some(id) = destination_id(&packet) {
+                report.connection_ids[0].entry(address).or_default().insert(id);
+            }
             if path != 0 {
                 report.violation = Some(format!("the client sent to path {path}, the server never moves"));
             }
@@ -260,6 +290,9 @@ pub fn run_moves(scenario: &Scenario) -> Report {
         }
         if let Some(server) = &mut server {
             while let Some((size, path)) = server.poll_transmit_via(now, &mut buffer) {
+                if buffer[0] & 0xE0 == 0xA0 && path != ATTACKER && let Some(id) = destination_id(&buffer[..size]) {
+                    report.connection_ids[1].entry(path).or_default().insert(id);
+                }
                 if path != server.path() && path != ATTACKER {
                     report.unvalidated.entry(path).or_default().0 += size as u64;
                 }
@@ -330,6 +363,10 @@ pub fn run_moves(scenario: &Scenario) -> Report {
                 if path != address || outage(now) {
                     continue;
                 }
+                if packet[0] & 0xE0 == 0xA0 && destination_id(&packet).is_some_and(|id| !client.local_connection_ids().any(|live| live == id)) {
+                    report.retired_packets += 1;
+                    continue;
+                }
                 match client.on_packet_via(now, 0, &packet) {
                     Ok(()) | Err(PacketError::Replayed) => {}
                     Err(error) if !client.is_dead() => report.violation = Some(format!("the client rejected a genuine packet: {error:?}")),
@@ -358,6 +395,10 @@ pub fn run_moves(scenario: &Scenario) -> Report {
             };
             // 驱动看到的：来源和数据路径 IP 相同、只差端口。攻击者的地址不算。
             let active = connection.path();
+            if packet[0] & 0xE0 == 0xA0 && destination_id(&packet).is_some_and(|id| !connection.local_connection_ids().any(|live| live == id)) {
+                report.retired_packets += 1;
+                continue;
+            }
             let same_route = path != ATTACKER && path != active && ips.get(path as usize).is_some_and(|ip| ips.get(active as usize) == Some(ip));
             let result = connection.on_packet_via_route(now, path, same_route, &packet);
             match result {

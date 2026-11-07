@@ -21,6 +21,7 @@ use crate::admission::{Admission, Admitter, Gate, Verdict};
 
 use crate::connection::{Config, PacketError};
 use crate::crypto::{Crypto, PUBLIC_KEY_LEN};
+use crate::ids::MAX_IDS;
 use crate::noise::HandshakeError;
 use crate::secure::{CLOSE_PACKET_LEN, Incoming, SecureConnection, destination_id, is_cookie_reply, is_initiation};
 
@@ -84,6 +85,7 @@ pub struct EndpointStats {
 
 struct Slot<C: Crypto, A: PathAddress> {
     connection: SecureConnection<C>,
+    routing_ids: Vec<u32>,
     /// 路径号 → （地址，最后一次从那里收到包的时间）。
     paths: BTreeMap<u64, (A, u64)>,
     next_path: u64,
@@ -94,7 +96,8 @@ impl<C: Crypto, A: PathAddress> Slot<C, A> {
         if peer.cost() != 0 {
             connection.set_path_cost(0, peer.cost());
         }
-        Self { connection, paths: BTreeMap::from([(0, (peer, now_us))]), next_path: 1 }
+        let routing_ids = connection.local_connection_ids().collect();
+        Self { connection, routing_ids, paths: BTreeMap::from([(0, (peer, now_us))]), next_path: 1 }
     }
 
     fn knows(&self, address: A) -> bool {
@@ -147,6 +150,8 @@ struct Listener<C: Crypto, A> {
 /// 一个本地端口和上面的所有连接。`A` 是驱动的地址类型，默认是 UDP 地址。
 pub struct Endpoint<C: Crypto, A: PathAddress = SocketAddr> {
     connections: BTreeMap<u32, Slot<C, A>>,
+    /// 线上收包号 → 稳定句柄。一个句柄可以同时有多个收包号。
+    destinations: BTreeMap<u32, u32>,
     listener: Option<Listener<C, A>>,
     accepted: VecDeque<u32>,
     /// 新连接号、cookie 密钥和盐的来源。
@@ -163,6 +168,7 @@ impl<C: Crypto, A: PathAddress> Endpoint<C, A> {
     pub fn new(random: impl FnMut() -> u32 + 'static) -> Self {
         Self {
             connections: BTreeMap::new(),
+            destinations: BTreeMap::new(),
             listener: None,
             accepted: VecDeque::new(),
             random: Box::new(random),
@@ -185,13 +191,39 @@ impl<C: Crypto, A: PathAddress> Endpoint<C, A> {
     fn allocate_id(&mut self) -> u32 {
         loop {
             let id = (self.random)();
-            if id != 0 && !self.connections.contains_key(&id) {
+            if id != 0 && !self.connections.contains_key(&id) && !self.destinations.contains_key(&id) {
                 return id;
             }
         }
     }
 
-    /// 向 `peer` 发起加密连接，返回这条连接在本端点的编号（也就是它的连接号）。`config.connection_id` 会被替换。
+    /// 作废号先从分发表删掉，再补备用号。稳定句柄仍占位，不能被另一条新连接拿走。
+    fn maintain_ids(&mut self, handle: u32) {
+        let Some(slot) = self.connections.get_mut(&handle) else { return };
+        slot.routing_ids.retain(|id| {
+            if slot.connection.local_connection_ids().any(|local| local == *id) {
+                true
+            } else {
+                self.destinations.remove(id);
+                false
+            }
+        });
+        if !slot.connection.is_established() {
+            return;
+        }
+        while self.connections.get(&handle).is_some_and(|slot| slot.routing_ids.len() < MAX_IDS) {
+            let id = self.allocate_id();
+            let slot = self.connections.get_mut(&handle).expect("live handle");
+            if !slot.connection.add_connection_id(id) {
+                break;
+            }
+            slot.routing_ids.push(id);
+            self.destinations.insert(id, handle);
+        }
+    }
+
+    /// 向 `peer` 发起加密连接，返回稳定句柄，初值等于握手里的连接号。线上号码轮换、作废后句柄仍有效；
+    /// 不要把后续包的 `destination_id` 当成句柄。`config.connection_id` 会被替换。
     #[allow(clippy::too_many_arguments)]
     pub fn connect(
         &mut self,
@@ -206,6 +238,7 @@ impl<C: Crypto, A: PathAddress> Endpoint<C, A> {
         let id = self.allocate_id();
         let connection = SecureConnection::connect(crypto, Config { connection_id: id, ..config }, prologue, remote_static, payload, now_us)?;
         self.connections.insert(id, Slot::new(connection, peer, now_us));
+        self.destinations.insert(id, id);
         Ok(id)
     }
 
@@ -250,6 +283,9 @@ impl<C: Crypto, A: PathAddress> Endpoint<C, A> {
     /// 对端收到就停，不用等判死，见 `SecureConnection::close`。
     pub fn close(&mut self, id: u32) -> Option<SecureConnection<C>> {
         let mut slot = self.connections.remove(&id)?;
+        for routing_id in &slot.routing_ids {
+            self.destinations.remove(routing_id);
+        }
         slot.connection.close();
         let mut packet = [0; CLOSE_PACKET_LEN];
         while let Some((size, path)) = slot.connection.poll_close(&mut packet) {
@@ -340,13 +376,15 @@ impl<C: Crypto, A: PathAddress> Endpoint<C, A> {
             }
             return;
         }
-        let Some(slot) = destination_id(packet).and_then(|id| self.connections.get_mut(&id)) else {
+        let Some(handle) = destination_id(packet).and_then(|id| self.destinations.get(&id)).copied() else {
             self.stats.unknown_destination += 1;
             return;
         };
+        let Some(slot) = self.connections.get_mut(&handle) else { return };
         let path = slot.path_of(from, now_us);
         let same_route = slot.same_route(from);
         let _ = slot.connection.on_packet_via_route(now_us, path, same_route, packet);
+        self.maintain_ids(handle);
     }
 
     fn admit(&mut self, now_us: u64, from: A, packet: &[u8]) {
@@ -364,6 +402,7 @@ impl<C: Crypto, A: PathAddress> Endpoint<C, A> {
         match accepted {
             Some(connection) => {
                 self.connections.insert(id, Slot::new(connection, from, now_us));
+                self.destinations.insert(id, id);
                 self.accepted.push_back(id);
             }
             None => self.stats.rejected_initiations += 1,

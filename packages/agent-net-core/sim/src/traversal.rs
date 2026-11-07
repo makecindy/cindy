@@ -6,9 +6,9 @@
 //! 交换候选地址这一步在真实产品里走已经建好的加密连接，这里直接在中继单程延迟之后交给对方，不经过连接。
 
 use std::cmp::Reverse;
-use std::collections::{BTreeMap, BinaryHeap};
+use std::collections::{BTreeMap, BTreeSet, BinaryHeap};
 
-use agent_net_core::{Config, Endpoint, PathAddress, SecurityStats, Stats};
+use agent_net_core::{Config, Endpoint, PathAddress, SecurityStats, Stats, destination_id};
 
 use crate::crypto::{AesGcm, PROLOGUE, TestCrypto};
 use crate::{Link, LinkProfile, Rng, stream_byte};
@@ -159,6 +159,8 @@ pub struct Side {
     pub direct_bytes: u64,
     /// 发往当时还没有包到达过对端的 UDP 地址的字节：打洞时被对端 NAT 挡掉的、打洞失败时白发的验证包。
     pub unanswered_bytes: u64,
+    /// 每条直连候选／中继路径在线上出现的目的号。
+    pub connection_ids: BTreeMap<SimAddr, BTreeSet<u32>>,
 }
 
 #[derive(Debug, Default)]
@@ -349,6 +351,9 @@ pub fn run(scenario: &Scenario) -> Report {
         for side in 0..2 {
             while let Some((size, to)) = peers[side].endpoint.poll_transmit(now, &mut buffer) {
                 let packet = buffer[..size].to_vec();
+                if packet[0] & 0xE0 == 0xA0 && let Some(id) = destination_id(&packet) {
+                    report.sides[side].connection_ids.entry(to).or_default().insert(id);
+                }
                 let other = 1 - side;
                 match to {
                     SimAddr::Relay => {

@@ -139,6 +139,7 @@ for (const notify of [true, false]) {
     stream.finish();
     const result = await received;
     const stats = result.connection.stats();
+    const clientStats = connection.stats();
     const peer = udpPeer(result.connection);
     client.close();
     server.close();
@@ -146,7 +147,10 @@ for (const notify of [true, false]) {
     assert.equal(result.hash, sha(payload));
     assert.equal(peer?.port, after, '服务端的数据没有换到新端口');
     assert.ok((stats?.migrations ?? 0) >= 1);
-    return `端口 ${before} → ${after}，服务端换路径 ${stats?.migrations} 次，用时 ${Math.round(result.ms)}ms`;
+    assert.ok((stats?.connectionIdRotations ?? 0) >= 1, '服务端没有给新路径换连接号');
+    assert.ok((clientStats?.connectionIdRotations ?? 0) >= 1, '客户端没有换连接号');
+    assert.ok((stats?.connectionIdsRetired ?? 0) >= 1, '服务端没有作废旧连接号');
+    return `端口 ${before} → ${after}，服务端换路径 ${stats?.migrations} 次、换号 ${stats?.connectionIdRotations} 次，用时 ${Math.round(result.ms)}ms`;
   });
 }
 

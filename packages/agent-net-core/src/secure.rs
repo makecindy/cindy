@@ -17,7 +17,10 @@
 //!
 //! **连接号。** 每一端自己选一个号（`Config::connection_id`），握手时告诉对端，之后对端发来的每个数据包都带着它。
 //! 一个端口上有多条连接时，调用方用 [`destination_id`] 取出连接号找连接，不按来源地址找：NAT 换了端口、
-//! 手机换了网络，地址都会变。连接号整条连接期间不变，路上的人能据此把换网前后的通信对上。
+//! 手机换了网络，地址都会变。`Endpoint` 自动补齐 7 个备用号，在加密通道里交换：发往新路径从验证包起用新号，
+//! 本地换网（系统通知，或收到对端验证才发现）时给所有在用路径换号。作废通知随交号快照可靠重发，旧代次不会覆盖新代次。
+//! 直接使用本类型的驱动用 `add_connection_id` 补号，并按 `local_connection_ids` 维护收包路由；不补号时沿用握手的号。
+//! 缺号不阻塞数据，暂用旧号并计数；系统没通知时，被发现之前的包仍可能带旧号，轮换也不能隐藏时间、大小等流量特征。
 //!
 //! **不放大流量。** 请求可能是录下来重放的，来源地址也可能是伪造的。响应方在收到发起方第一个
 //! 有效数据包之前，只发和请求一样长的回复，而且只在每次收到请求时发一次，不发任何数据。
@@ -63,6 +66,7 @@ use alloc::vec::Vec;
 use crate::admission::{self, COOKIE_LEN, COOKIE_REPLY, COOKIE_USABLE_US, MAC_LEN};
 use crate::connection::{Config, Connection, PacketError, Stats};
 use crate::crypto::{Crypto, HASH_LEN, PUBLIC_KEY_LEN, TAG_LEN};
+use crate::ids::ConnectionIds;
 use crate::noise::{FIRST_MESSAGE_FIXED_LEN, Handshake, HandshakeError, SECOND_MESSAGE_FIXED_LEN, TransportKeys};
 use crate::stream::{Priority, StreamEvent};
 use crate::wire;
@@ -365,6 +369,16 @@ pub struct SecurityStats {
     pub alternates_kept: u64,
     /// 发起方收到响应方忙时回的 cookie 的次数，见模块说明的“握手准入”。
     pub cookies_received: u64,
+    /// 发往一条路径的包改用了一个从未用过的连接号。
+    pub connection_id_rotations: u64,
+    /// 需要新号但备用号还没送到，暂时沿用旧号的次数。补到号后自动换过去。
+    pub connection_id_exhaustions: u64,
+    /// 已按对端请求作废的本地连接号。
+    pub connection_ids_retired: u64,
+    /// 备用号、作废通知和确认包，合计发送数。
+    pub connection_id_packets: u64,
+    /// 没收到确认，重发了连接号快照。
+    pub connection_id_retransmissions: u64,
 }
 
 /// 收到的握手请求，还没有回复。调用方检查对方身份和附带数据后决定是否接受。
@@ -764,7 +778,7 @@ impl Paths {
 ///
 /// 之后照常 `send`、`on_packet`、`tick`、`poll_transmit`、`recv`。握手完成前写入的数据先缓存，完成后才发。
 /// 地址可能变的场合改用 `on_packet_via` 和 `poll_transmit_via`，见模块说明。
-/// `max_packet_size` 仍是整个 UDP 载荷的上限，加密的 16 字节标签和 4 字节连接号算在里面，握手要求它至少 103 字节。
+/// `max_packet_size` 仍是整个 UDP 载荷的上限，加密的 16 字节标签和 4 字节连接号算在里面，握手要求它至少 135 字节。
 /// 两端的 `initial_packet_number` 必须相同，和 [`Connection`] 一样。
 pub struct SecureConnection<C: Crypto> {
     crypto: C,
@@ -777,8 +791,8 @@ pub struct SecureConnection<C: Crypto> {
     remote_static: [u8; PUBLIC_KEY_LEN],
     remote_payload: Option<Vec<u8>>,
     handshake_hash: Option<[u8; HASH_LEN]>,
-    /// 对端的连接号，写进发给它的每个数据包。握手完成以后才知道。
-    remote_id: u32,
+    /// 本地收包号，以及按路径分配的对端收包号。
+    ids: ConnectionIds,
     /// 已经处理过的那个请求的一次性公钥：响应方是接受的那个，发起方是同时发起时忽略的那个。
     /// 同样的请求再来，是网络重复或重放，不是新连接。
     known_ephemeral: Option<[u8; PUBLIC_KEY_LEN]>,
@@ -791,6 +805,8 @@ pub struct SecureConnection<C: Crypto> {
     moved_at: Option<u64>,
     /// 最近一次路径验证通过、数据换到新路径的时间。
     switched_at: Option<u64>,
+    /// 同一目的号的路径验证重发只换一次；新的目的号能区分紧接着的下一次换网。
+    last_id_challenge: Option<u32>,
     /// 握手失败、超时，或者认证失败的包太多。
     dead: bool,
     /// 这一端关闭以后还要发的关闭包个数，发完就停。
@@ -805,6 +821,7 @@ impl<C: Crypto> SecureConnection<C> {
         let local_static = crypto.static_public();
         let connection = Connection::with_overhead(config.clone(), now_us, CONNECTION_ID_LEN + TAG_LEN);
         let scratch = vec![0; config.max_packet_size];
+        let ids = ConnectionIds::new(config.connection_id);
         Self {
             crypto,
             config,
@@ -816,13 +833,14 @@ impl<C: Crypto> SecureConnection<C> {
             remote_static,
             remote_payload: None,
             handshake_hash: None,
-            remote_id: 0,
+            ids,
             known_ephemeral: None,
             paths: Paths::new(now_us),
             silence_heard: 0,
             silence_sent_at: None,
             moved_at: None,
             switched_at: None,
+            last_id_challenge: None,
             dead: false,
             closing: 0,
             closed_by_peer: false,
@@ -866,7 +884,7 @@ impl<C: Crypto> SecureConnection<C> {
     fn adopt(&mut self, accepted: Accepted) {
         self.remote_payload = Some(accepted.remote_payload);
         self.handshake_hash = Some(accepted.handshake_hash);
-        self.remote_id = accepted.remote_id;
+        self.ids.set_remote(accepted.remote_id);
     }
 
     /// 双方都已证明身份、密钥已确认。发起方收到回复后、响应方收到对方第一个数据包后成立。
@@ -890,6 +908,19 @@ impl<C: Crypto> SecureConnection<C> {
 
     pub fn security_stats(&self) -> SecurityStats {
         self.stats
+    }
+
+    /// 仍有效的收包连接号。自己分发数据报时，用它们维护连接号到连接的路由。
+    /// `Endpoint` 自动管理；初始连接号作废后，上层持有的 Endpoint 句柄仍然有效。
+    pub fn local_connection_ids(&self) -> impl Iterator<Item = u32> + '_ {
+        self.ids.local_ids()
+    }
+
+    /// 提供一个不可预测、非零、在本地端口内唯一的备用号，最多同时 8 个（含握手里的号）。
+    /// 只有握手已确认才接受；交号、确认与作废会自动重发。直接使用本类型时由驱动补号；
+    /// 经 `Endpoint` 使用时由它管理，不要另行添加。
+    pub fn add_connection_id(&mut self, id: u32) -> bool {
+        self.is_established() && self.ids.add(id)
     }
 
     /// 内部的可靠连接，只读：缓冲量、内部账目检查等。
@@ -936,7 +967,7 @@ impl<C: Crypto> SecureConnection<C> {
         let plain = DATA_PREFIX + wire::CLOSE_FRAME_LEN;
         let number = self.connection.take_packet_number(CLOSE_PACKET_LEN);
         wire::write_header(out, number, false);
-        self.address(out);
+        self.address(out, self.paths.active);
         wire::write_close_frame(&mut out[DATA_PREFIX..plain]);
         let size = self.seal_into(out, plain, number)?;
         Some((size, self.paths.active))
@@ -1043,6 +1074,8 @@ impl<C: Crypto> SecureConnection<C> {
     /// 往返和带宽从头量，并马上发一个包：对端从新地址收到就会跟过来。
     pub fn on_local_address_change(&mut self, now_us: u64) {
         if self.is_established() {
+            self.rotate_connection_ids();
+            self.last_id_challenge = None;
             self.moved_at = Some(now_us);
             self.connection.on_path_change(now_us);
             self.ping();
@@ -1092,7 +1125,8 @@ impl<C: Crypto> SecureConnection<C> {
         }
         let (truncated, _) = wire::parse_header(packet).ok_or(PacketError::Malformed)?;
         // 不是发给这条连接的：调用方把别的连接的包送错了地方。
-        if read_id(packet, wire::PACKET_HEADER_LEN) != Some(self.config.connection_id) {
+        let destination = read_id(packet, wire::PACKET_HEADER_LEN).ok_or(PacketError::Malformed)?;
+        if !self.ids.accepts(destination) {
             return Err(PacketError::Unauthenticated);
         }
         let number = wire::expand(truncated, self.replay.expected(self.config.initial_packet_number), wire::PACKET_NUMBER_BITS);
@@ -1140,7 +1174,17 @@ impl<C: Crypto> SecureConnection<C> {
         }
         if wire::is_path_frame(frames) {
             let (frame, value) = wire::parse_path_frame(frames).ok_or(PacketError::Malformed)?;
-            self.on_probe(now_us, path, packet.len(), frame, value);
+            self.on_probe(now_us, path, packet.len(), destination, frame, value);
+            return Ok(());
+        }
+        if ConnectionIds::is_frame(frames) {
+            self.stats.connection_ids_retired += self.ids.receive(frames, destination)?;
+            self.connection.on_probe_received(packet.len());
+            let failing = Self::active_failing(&self.connection, &self.paths, now_us);
+            if newest && self.paths.observe(now_us, path, self.config.initial_rto_us, same_route, failing) {
+                self.stats.path_challenges += 1;
+            }
+            self.paths.on_received(now_us, path, packet.len());
             return Ok(());
         }
         // 可靠层要的是包头紧跟着帧：把包头挪到连接号的位置上。
@@ -1155,7 +1199,7 @@ impl<C: Crypto> SecureConnection<C> {
     }
 
     /// 只含路径验证的包：回复对端的验证，或者确认自己发出的验证。
-    fn on_probe(&mut self, now_us: u64, path: u64, size: usize, frame: wire::PathFrame, value: u64) {
+    fn on_probe(&mut self, now_us: u64, path: u64, size: usize, destination: u32, frame: wire::PathFrame, value: u64) {
         self.connection.on_probe_received(size);
         self.paths.on_received(now_us, path, size);
         match frame {
@@ -1168,6 +1212,10 @@ impl<C: Crypto> SecureConnection<C> {
                 // 换的时候已经重量过，对端是跟着这一端过来、在验证这一端在新路径上的地址。
                 let window = self.config.initial_rto_us * VALIDATION_RTOS;
                 let recently_switched = self.switched_at.is_some_and(|at| now_us.saturating_sub(at) < window);
+                if path == self.paths.active && self.last_id_challenge != Some(destination) {
+                    self.rotate_connection_ids();
+                    self.last_id_challenge = Some(destination);
+                }
                 if same_route && path == self.paths.active {
                     self.connection.hold_timeouts(now_us + 2 * self.connection.srtt_us());
                 } else if path == self.paths.active && !recently_switched && self.moved_at.is_none_or(|at| now_us.saturating_sub(at) >= window) {
@@ -1238,6 +1286,7 @@ impl<C: Crypto> SecureConnection<C> {
             response.due = true;
             // 发起方握手途中换了地址：回复跟着最新的请求走。还没确认之前只回和请求一样长的回复，换到哪里都放大不了。
             self.paths.active = path;
+            self.ids.handshake_path(path);
             return Ok(());
         }
         if self.known_ephemeral.is_some_and(|known| ephemeral_of(packet) == Some(&known[..])) {
@@ -1284,7 +1333,7 @@ impl<C: Crypto> SecureConnection<C> {
         let keys = initiation.handshake.take().and_then(|handshake| handshake.finish(&self.crypto)).ok_or(PacketError::Malformed)?;
         self.handshake_hash = Some(keys.handshake_hash);
         self.remote_payload = Some(remote_payload);
-        self.remote_id = remote_id;
+        self.ids.set_remote(remote_id);
         self.phase = Phase::Established { keys: Keys::new(keys, &self.config), confirmed: true, established_at: now_us, response: None };
         self.connection.reset_clock(now_us);
         // 响应方要见到这一端的数据包才确认，没有数据要发时也要让它尽快确认。
@@ -1345,13 +1394,22 @@ impl<C: Crypto> SecureConnection<C> {
 
     /// 确认以后要发的包：先发路径验证，再发数据。
     fn poll_established(&mut self, now_us: u64, out: &mut [u8]) -> Option<(usize, u64)> {
+        self.retain_connection_id_paths();
         let (size, number, path) = match self.write_probe(now_us, out) {
             Some(probe) => probe,
             None => {
+                // 新号补到以后，先给曾经缺号的路径换号，再写包含作废通知的快照。
+                self.address(out, self.paths.active);
+                if let Some(control) = self.write_connection_ids(now_us, out) {
+                    let (plain, number, path) = control;
+                    let size = self.seal_into(out, plain, number)?;
+                    self.paths.on_sent(path, size);
+                    return Some((size, path));
+                }
                 // 可靠层写的是包头紧跟着帧，在两者之间插进对端的连接号。
                 let size = self.connection.poll_transmit(now_us, &mut out[CONNECTION_ID_LEN..])?;
                 out.copy_within(CONNECTION_ID_LEN..DATA_PREFIX, 0);
-                self.address(out);
+                self.address(out, self.paths.active);
                 (size + CONNECTION_ID_LEN, self.connection.last_packet_number(), self.paths.active)
             }
         };
@@ -1375,8 +1433,33 @@ impl<C: Crypto> SecureConnection<C> {
     }
 
     /// 包头后面写上对端的连接号。
-    fn address(&self, out: &mut [u8]) {
-        out[wire::PACKET_HEADER_LEN..DATA_PREFIX].copy_from_slice(&self.remote_id.to_be_bytes());
+    fn address(&mut self, out: &mut [u8], path: u64) {
+        let (id, rotated, exhausted) = self.ids.address(path, false);
+        self.stats.connection_id_rotations += u64::from(rotated);
+        self.stats.connection_id_exhaustions += u64::from(exhausted);
+        out[wire::PACKET_HEADER_LEN..DATA_PREFIX].copy_from_slice(&id.to_be_bytes());
+    }
+
+    fn rotate_connection_ids(&mut self) {
+        let (rotated, exhausted) = self.ids.rotate();
+        self.stats.connection_id_rotations += rotated;
+        self.stats.connection_id_exhaustions += exhausted;
+    }
+
+    fn retain_connection_id_paths(&mut self) {
+        let paths = &self.paths;
+        self.ids.retain_paths(|path| path == paths.active || paths.candidate(path).is_some() || paths.responses.iter().any(|(reply, _, _)| *reply == path));
+    }
+
+    fn write_connection_ids(&mut self, now_us: u64, out: &mut [u8]) -> Option<(usize, u64, u64)> {
+        let retry = self.config.initial_rto_us.max(2 * self.connection.srtt_us()).min(self.config.max_rto_us);
+        let (length, retransmission) = self.ids.write(now_us, retry, &mut out[DATA_PREFIX..])?;
+        let plain = DATA_PREFIX + length;
+        let number = self.connection.take_packet_number(plain + TAG_LEN);
+        wire::write_header(out, number, false);
+        self.stats.connection_id_packets += 1;
+        self.stats.connection_id_retransmissions += u64::from(retransmission);
+        Some((plain, number, self.paths.active))
     }
 
     /// 路径验证包的明文：先回对端的验证，再在没验证过的新路径上发验证。返回明文长度、包号和发往的路径。
@@ -1391,7 +1474,7 @@ impl<C: Crypto> SecureConnection<C> {
         let number = self.connection.take_packet_number(size);
         let plain = size - TAG_LEN;
         wire::write_header(out, number, false);
-        self.address(out);
+        self.address(out, path);
         wire::write_path_frame(&mut out[DATA_PREFIX..plain], frame, value);
         Some((plain, number, path))
     }
@@ -1437,6 +1520,7 @@ impl<C: Crypto> SecureConnection<C> {
 
     fn tick_established(&mut self, now_us: u64) {
         self.stats.path_failures += self.paths.expire(now_us);
+        self.retain_connection_id_paths();
         self.connection.tick(now_us);
         // 数据路径断了、又有代价更高的备用路径（比如中继）：去验证它，通了就换过去；数据路径在验证期间恢复了就不换。
         if Self::active_dead(&self.connection, &self.paths, now_us)
@@ -1483,6 +1567,9 @@ impl<C: Crypto> SecureConnection<C> {
                     consider(at);
                 }
                 if let Some(at) = self.silence_ping_at() {
+                    consider(at);
+                }
+                if let Some(at) = self.ids.next_wake() {
                     consider(at);
                 }
                 wake

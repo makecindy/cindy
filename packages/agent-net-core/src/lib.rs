@@ -17,6 +17,7 @@ mod congestion;
 mod connection;
 mod crypto;
 mod endpoint;
+mod ids;
 pub mod noise;
 mod parity;
 mod rtt;

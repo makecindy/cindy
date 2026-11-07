@@ -19,6 +19,8 @@
 //!   系统换网通知和 NAT 行为要在真机上测，见 `docs/agent-net-plan.md` 第 5 步。
 //! - 实测耗时：2026-11-05，Windows 本机默认 100 个随机种子加 6 个固定种子，整个文件 5.4 秒（不含编译）；
 //!   `AGENT_NET_SEEDS=10000` 时 381 秒，记录见 `sim/results/2026-11-05-migration/`。
+//!   2026-11-07 加上 306 个场景各跑有号／无号两遍的矩阵，整个 integration 文件 16.56 秒；
+//!   该矩阵用于协议／时序和性能对照，保留在 Rust 专用 integration tier，不进入 JS 默认 unit。
 //! - 测试本身的有效性由 `sim/mutants.py` 验证：注入已知 bug，这里必须变红。
 
 use std::collections::VecDeque;
@@ -26,7 +28,7 @@ use std::collections::VecDeque;
 use agent_net_core::{Config, Incoming, PacketError, SecureConnection, destination_id, is_initiation};
 use agent_net_sim::LinkProfile;
 use agent_net_sim::crypto::{AesGcm, PROLOGUE, TestCrypto};
-use agent_net_sim::migration::{Attack, Move, Report, Scenario, random_scenario, run_moves};
+use agent_net_sim::migration::{Attack, Move, Report, Scenario, random_scenario, run_moves, run_rotating_moves};
 
 fn wifi() -> LinkProfile {
     LinkProfile { bits_per_second: 50_000_000, delay_us: 10_000, jitter_us: 1_000, queue_us: 30_000, ..LinkProfile::default() }
@@ -437,4 +439,87 @@ fn random_moves_deliver_intact_streams() {
         }
     }
     assert!(failures.is_empty(), "{} failing seeds:\n{}", failures.len(), failures.join("\n"));
+}
+
+// 测试价值：公开 SecureConnection 收发入口上的换网矩阵；守住 2026-11-07 用户确认的每路径换号、
+// 防放大与可靠传输规则。原矩阵不提供备用号，无法发现复用旧号、晚到的作废包和控制包乱序。
+// 最小输入：下列固定的 306 个场景，含三次换网、只换端口、丢包与抢先复制。Rust integration，虚拟时间。
+#[test]
+fn rotating_ids_survive_the_migration_matrix() {
+    let mut total = [0u64; 2];
+    let mut recovery = [0u64; 2];
+    let mut retired = 0;
+    let mut known_reuse = 0;
+    let mut cases = 0;
+    let mut records = vec!["seed,noticed,loss,mode,before_finish_us,after_finish_us,before_recovery_us,after_recovery_us,before_wire_bytes,after_wire_bytes,retired_packets,client_exhaustions,server_exhaustions".to_string()];
+    for seed in 0..17 {
+        for noticed in [false, true] {
+            for loss in [0.0, 0.01, 0.10] {
+                for mode in 0..3 {
+                    let mut new = cellular();
+                    new.loss = loss;
+                    let mut moves = vec![Move { at_us: 500_000, outage_us: 0, up: new.clone(), down: new.clone(), noticed, same_route: false }];
+                    if mode == 1 {
+                        moves.push(Move { at_us: 1_000_000, outage_us: 0, up: new.clone(), down: new.clone(), noticed, same_route: true });
+                        moves.push(Move { at_us: 1_500_000, outage_us: 0, up: wifi(), down: wifi(), noticed, same_route: false });
+                    }
+                    let mut case = scenario(wifi(), wifi(), moves, if mode == 0 { 0 } else { 2_000_000 }, 3_000_000, Attack::None);
+                    case.seed = seed;
+                    if mode == 2 {
+                        case.attack = Attack::Race { every: 8, lead_us: 5_000 };
+                    }
+                    let before = run_moves(&case);
+                    let report = run_rotating_moves(&case);
+                    let label = format!("seed {seed}, noticed {noticed}, loss {loss}, mode {mode}: {}", describe(&report));
+                    assert!(before.finished && report.finished, "{label}");
+                    assert!(amplification_bounded(&report), "{label}");
+                    assert_eq!(report.spurious_wakes, 0, "{label}");
+                    let exhausted = report.client.expect("client").0.connection_id_exhaustions;
+                    for direction in 0..2 {
+                        // 不知情一端被发现前仍用原号；没有任何回退时，主动通知和发往新地址的包必须互不重叠。
+                        if direction == 0 && (!noticed || exhausted > 0) {
+                            continue;
+                        }
+                        let mut seen = std::collections::BTreeSet::new();
+                        for ids in report.connection_ids[direction].values() {
+                            let reused = ids.intersection(&seen).count();
+                            known_reuse += reused;
+                            assert_eq!(reused, 0, "direction {direction} reused ids: {label}");
+                            seen.extend(ids);
+                        }
+                    }
+                    total[0] += before.finish_us;
+                    total[1] += report.finish_us;
+                    recovery[0] += before.recoveries_us.iter().flatten().sum::<u64>();
+                    recovery[1] += report.recoveries_us.iter().flatten().sum::<u64>();
+                    retired += report.retired_packets;
+                    let wire = |r: &Report| r.client.expect("client").1.wire_bytes_sent + r.server.expect("server").1.wire_bytes_sent;
+                    records.push(format!("{seed},{noticed},{loss},{mode},{},{},{},{},{},{},{},{},{}", before.finish_us, report.finish_us,
+                        before.recoveries_us.iter().flatten().sum::<u64>(), report.recoveries_us.iter().flatten().sum::<u64>(), wire(&before), wire(&report), report.retired_packets,
+                        exhausted, report.server.expect("server").0.connection_id_exhaustions));
+                    cases += 1;
+                }
+            }
+        }
+    }
+    eprintln!("id rotation matrix: {cases} cases; total_us={total:?}; recovery_us={recovery:?}; retired_packets={retired}; known_reuse={known_reuse}");
+    if let Ok(path) = std::env::var("AGENT_NET_ROTATION_REPORT") {
+        std::fs::write(path, records.join("\n") + "\n").expect("write requested rotation report");
+    }
+    // 同一随机网络多了控制包会改变个别丢包抽样，用整组比较，保留严格的完传／防放大／隐私断言。
+    assert!(total[1] <= total[0] * 105 / 100, "rotation slowed the matrix: {total:?}");
+    assert!(recovery[1] <= recovery[0] * 110 / 100, "rotation delayed recovery: {recovery:?}");
+}
+
+#[test]
+fn rotating_ids_survive_random_moves() {
+    let seeds: Vec<u64> = match std::env::var("AGENT_NET_REPLAY") {
+        Ok(value) => vec![value.parse().expect("replay seed")],
+        Err(_) => HARD_SEEDS.into_iter().chain(seed_start()..seed_start() + seed_count()).collect(),
+    };
+    for seed in seeds {
+        let case = random_scenario(seed);
+        let report = run_rotating_moves(&case);
+        assert!(report.finished && report.spurious_wakes == 0 && amplification_bounded(&report), "seed {seed}: {}\n{case:?}", describe(&report));
+    }
 }

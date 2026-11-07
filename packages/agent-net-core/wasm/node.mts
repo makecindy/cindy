@@ -114,6 +114,11 @@ export interface ConnectionStats {
   alternatesKept: number;
   /** 对端忙时回了 cookie、这一端带着它重发的次数。 */
   cookiesReceived: number;
+  connectionIdRotations: number;
+  connectionIdExhaustions: number;
+  connectionIdsRetired: number;
+  connectionIdPackets: number;
+  connectionIdRetransmissions: number;
 }
 
 export interface EndpointStats {
@@ -441,6 +446,11 @@ export class Connection extends EventEmitter {
         fallbackProbes: v[14],
         alternatesKept: v[15],
         cookiesReceived: v[16],
+          connectionIdRotations: v[17],
+          connectionIdExhaustions: v[18],
+          connectionIdsRetired: v[19],
+          connectionIdPackets: v[20],
+          connectionIdRetransmissions: v[21],
       };
     });
   }

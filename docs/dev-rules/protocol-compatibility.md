@@ -806,6 +806,17 @@ CLI 和分发构建；产品里开始用它时再升版本、加开关，并按�
   `pnpm --filter @cindy/device-link-relay test` 50 项与 `run interop` 通过；EdgeHub 原型在本机起的内核上
   用专用通道和 push 夹带两种方式各跑真实 `DeviceLinkClient` 的 12 项检查，UDP 关闭时全部通过。
 
+### agent-net 连接号轮换（2026-11-07，实验、未接入产品）
+
+`packages/agent-net-core` 增加加密的交号快照（帧 10）和确认（帧 11）：线上目的号按路径轮换，
+`Endpoint` 给驱动和 WASM/Node 的连接句柄仍稳定。普通数据报包头仍是 3 字节包头 + 4 字节目的号；
+尚无与旧实验核心的能力协商，两端须一起更新。本次不改 V1 Device Link 客户端或帧。
+
+专用中继与 push 夹带仍只转发原有的不透明加密数据报，不解析目的号或帧，内核、分发版本与部署不变。
+验证使用本机真实自建中转原型：`poc-edgehub.ts relay`、`push`、`punch` 各 12/12，直连 `core` 12/12，
+Node 驱动 6/6（含真实 UDP 换端口与两端换号计数）。本次没有部署 V2 服务，也没有真实公网或手机换网复测。
+记录见 [`连接号轮换`](../../packages/agent-net-core/sim/results/2026-11-07-id-rotation/README.md)。
+
 ### 自建中转同步维护
 
 服务器部署的 Nginx 自动接入使用中转 bundle `0.3.0`（`nginx` 为 SSH 部署内部 CLI）。公网仍使用

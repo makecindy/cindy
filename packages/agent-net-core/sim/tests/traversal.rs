@@ -10,7 +10,7 @@
 //! - tier：Rust integration，确定性模拟器，虚拟时钟，不碰网络。
 //! - 实测耗时：2026-11-05，Windows 本机（不含编译），整个文件约 4 秒：随机矩阵默认 30 个种子；`AGENT_NET_SEEDS=1000` 约 110 秒。
 
-use agent_net_sim::traversal::{Change, Nat, Report, Scenario, run, scenario};
+use agent_net_sim::traversal::{Change, Nat, Report, Scenario, SimAddr, run, scenario};
 use agent_net_sim::{LinkProfile, Rng};
 
 const MIB: u64 = 1 << 20;
@@ -83,6 +83,14 @@ fn nat_combinations_punch_through_or_stay_on_relay() {
             // 打通了只换一次，不来回；打不通就一次都不换。
             assert_eq!(side.switches, punches as u32, "{label}");
             if punches {
+                // 2026-11-07：第一份交号可能还在中继队列里，打洞先走、缺号单独计数；有备用号就不复用。
+                let mut seen = std::collections::BTreeSet::new();
+                let mut reused = 0;
+                for ids in side.connection_ids.values() {
+                    reused += seen.intersection(ids).count();
+                    seen.extend(ids);
+                }
+                assert!(reused as u64 <= side.security.connection_id_exhaustions, "unreported id reuse: {label}");
                 // 握手和换路径之前的那一两百毫秒走中继；对称型一端要多等对端跟过来的一个往返，约 6%。
                 assert!(side.relay_bytes * 10 < side.relay_bytes + side.direct_bytes, "{label}: more than 10% went over the relay");
             }
@@ -128,6 +136,10 @@ fn a_dead_direct_path_falls_back_to_the_relay_and_comes_back() {
     assert!(report.recoveries_us.first().copied().flatten().is_some_and(|at| at <= 500_000), "{label}");
     for side in &report.sides {
         assert!(side.direct_at_end && side.switches == 3 && side.security.fallback_probes == 1, "{label}");
+        assert!(side.security.connection_ids_retired >= 2 && side.security.connection_id_rotations >= 3, "{label}");
+        let relay = side.connection_ids.get(&SimAddr::Relay).expect("relay ids");
+        let overlap: usize = side.connection_ids.iter().filter(|(path, _)| **path != SimAddr::Relay).map(|(_, ids)| relay.intersection(ids).count()).sum();
+        assert!(overlap as u64 <= side.security.connection_id_exhaustions, "unreported relay/direct id overlap: {label}");
     }
 }
 
