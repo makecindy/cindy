@@ -131,7 +131,7 @@ import {
 import { writeForgeScaffoldWithStableParent } from '../cindy-brain/forgeScaffoldCapability.js';
 import { GhostInstallTargetRequiredError } from '../cindy-brain/ghostInstallTarget.js';
 import { getGhostSetupCoordinator } from '../cindy-brain/ghostSetupCoordinator.js';
-import { classifyGhostVisibility, classifyInstalledGhostVisibility } from '../cindy-brain/ghostVisibility.js';
+import { classifyGhostVisibility, classifyInstalledGhostVisibility, preferLatestLocalOrPublicGhosts } from '../cindy-brain/ghostVisibility.js';
 import { readInstalledGhostManual } from '../cindy-brain/ghostManual.js';
 import { isGhostDisabledForWorkdir } from '../cindy-brain/ghostWorkdirPrefs.js';
 import { FORGE_GUIDE, FORGE_PAGE_MANUAL, packGhostDir, scaffoldGhostDir } from '../cindy-brain/forge.js';
@@ -1809,15 +1809,18 @@ export function collectCindyMediaUrls(
 function visibleChipGhosts(
   workdir: string | null,
   installed = getGhostManager().list(),
+  preferLatest = true,
 ): InstalledGhost[] {
-  return installed.filter(
+  const visible = installed.filter(
       (ghost) =>
         ghost.enabled &&
-        isGhostAvailableForActiveSession(ghost.manifest.id) &&
+        !ghost.retirement &&
+        isGhostAvailableForActiveSession(installedGhostStoragePart(ghost)) &&
         ghost.manifest.kind === 'chip' &&
         (ghostHasTools(ghost) || ghostHasManual(ghost)) &&
         !isGhostDisabledForWorkdir(installedGhostStoragePart(ghost), workdir),
     );
+  return preferLatest ? preferLatestLocalOrPublicGhosts(visible) : visible;
 }
 
 const ghostVisibilityDeps = {
@@ -2254,7 +2257,7 @@ export function getCindyGhostsMcpDeps(
       const installed = await listInstalledGhostsAsync();
       const visibility = classifyGhostVisibility(ghostId, workdir, { ...ghostVisibilityDeps, listGhosts: () => installed }, namespace);
       if (!visibility.ok) return visibility;
-      const visible = visibleChipGhosts(workdir, installed).some(
+      const visible = visibleChipGhosts(workdir, installed, namespace === undefined).some(
         (ghost) => ghost === visibility.ghost || ghost.dir === visibility.ghost.dir,
       );
       if (visible) {
