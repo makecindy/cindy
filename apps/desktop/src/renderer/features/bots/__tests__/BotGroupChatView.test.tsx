@@ -4023,6 +4023,40 @@ describe('thread previews and posting to the main chat', () => {
     expect(content.style.minHeight).toBe('');
   });
 
+  // Unit / #9249 r4501261274: Chromium pinch/modified wheel must not navigate
+  // the list. Existing cases cover direction/portals, not zoom modifiers. Verify
+  // the real main/topic callbacks preserve both inspection and following.
+  it.each(['main', 'topic'])('ignores %s zoom wheel input in inspection and following', async context => {
+    const observed = new Map<Element, ResizeObserverCallback>();
+    vi.stubGlobal('ResizeObserver', class {
+      constructor(private callback: ResizeObserverCallback) {}
+      observe(element: Element) { observed.set(element, this.callback); }
+      disconnect() {}
+    });
+    const scroller = await renderProcessScroller(context);
+    let height = 1400;
+    Object.defineProperties(scroller, {
+      scrollHeight: { configurable: true, get: () => height }, clientHeight: { configurable: true, value: 600 },
+    });
+    const content = scroller.firstElementChild as HTMLElement;
+    vi.spyOn(content, 'getBoundingClientRect').mockReturnValue({ height: 1400 } as DOMRect);
+    scroller.scrollTop = 800; fireEvent.scroll(scroller);
+    await act(async () => fireEvent.click(scroller.querySelector('button[data-scroll-disclosure-header]')!));
+    for (const modifier of ['ctrlKey', 'metaKey']) {
+      fireEvent.wheel(scroller, { [modifier]: true, deltaY: 80 });
+      expect(content.style.minHeight).toBe('1400px');
+      expect(scroller.scrollTop).toBe(800);
+    }
+    fireEvent.wheel(scroller, { deltaY: 80 });
+    expect(content.style.minHeight).toBe('');
+    for (const modifier of ['ctrlKey', 'metaKey']) {
+      fireEvent.wheel(scroller, { [modifier]: true, deltaY: -80 });
+      height += 100;
+      act(() => observed.get(scroller)!([], {} as ResizeObserver));
+      expect(scroller.scrollTop).toBe(height);
+    }
+  });
+
   // Unit / #9249 r4501133788: prior stationary presses ended inside the list.
   // Release over the real sibling composer must end only the temporary pause;
   // a genuine upward move must remain browsing through the next resize.

@@ -78,6 +78,8 @@ export function useProcessDisclosureScroll(
       content.style.minHeight = `${viewportContentHeight(event.currentTarget, content)}px`;
     },
     onWheel(event: WheelEvent<HTMLDivElement>) {
+      // Chromium pinch/modified wheel zoom is not list navigation.
+      if (event.ctrlKey || event.metaKey) return;
       // Portalled previews retain React ancestry, but own their own wheel input.
       if (event.defaultPrevented || !(event.target instanceof Node) || !event.currentTarget.contains(event.target)) return;
       if (shouldUnpinOnWheel({ deltaX: event.deltaX, deltaY: event.deltaY,

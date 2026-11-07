@@ -326,6 +326,28 @@ async function checkProcessDisclosure(page, ui) {
     await heading.click();
     await page.waitForFunction(() => !!document.querySelector('[data-process-scroll-check]').firstElementChild.style.minHeight);
     const before = await timeline.evaluate(el => ({ top: el.scrollTop, reserve: el.firstElementChild.style.minHeight }));
+    // Send actual Chromium wheel input with zoom modifiers through the real
+    // main/topic handlers; zoom must not release the reserved reading position.
+    for (const modifier of ['Control', 'Meta']) {
+      await page.evaluate(() => {
+        window.__uiPage.zoomWheelReceived = false;
+        // React's root handler runs before this document bubble listener. Only
+        // the fixture cancels the browser's default scroll/zoom afterwards, so
+        // the position assertion measures the product handler's own mutations.
+        document.addEventListener('wheel', event => {
+          window.__uiPage.zoomWheelReceived = event.ctrlKey || event.metaKey;
+          event.preventDefault();
+        }, { once: true, passive: false });
+      });
+      await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
+      await page.keyboard.down(modifier);
+      try { await page.mouse.wheel(0, 80); }
+      finally { await page.keyboard.up(modifier); }
+      await page.waitForFunction(() => window.__uiPage.zoomWheelReceived);
+      assert.deepEqual(await timeline.evaluate(el => ({ top: el.scrollTop, reserve: el.firstElementChild.style.minHeight })), before,
+        `${modifier} wheel must preserve process inspection`);
+    }
+    await ui.capture('zoom-wheel-keeps-inspection');
     const tableBox = await table.boundingBox();
     assert.ok(tableBox && tableBox.y > box.y && tableBox.y < box.y + box.height, 'actual table is visible for wheel input');
     await page.mouse.move(Math.max(tableBox.x, box.x) + 30, tableBox.y + 20);
