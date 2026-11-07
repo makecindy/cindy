@@ -299,6 +299,9 @@ export function buildTelegramAdapter(
         threadId: lane.threadId,
         cursorScope: lane.threadId,
         triggerMessageId,
+        replyMessageId: event.replyContext?.messageId,
+        reservedChars: replyBlock.length,
+        reservedMessages: event.replyContext ? 1 : 0,
       });
       // 「先发视频/图片、再单独 @bot」: 群上下文里纳入的那些消息带的附件一并补齐,
       // 只进模型消息不落库(contextAttachments 语义, 与飞书群上下文同口径)。
@@ -312,8 +315,9 @@ export function buildTelegramAdapter(
               assembly.messageIds ?? [],
               // 触发消息的相册成员与被引消息已随本轮附件送达, 由 transport 排除。
               event.raw as Parameters<TelegramIM['collectGroupHistoryMedia']>[2],
+              { attachmentMessageIds: assembly.attachmentMessageIds, provided: event.attachments },
             )
-            .catch(() => ({ attachments: [], unavailable: [] }));
+            .catch(() => ({ attachments: [], unavailable: ['历史附件读取失败，未提供原件'] }));
       const historyMediaNote = buildTelegramHistoryMediaNote({
         provided: historyMedia.attachments,
         unavailable: historyMedia.unavailable,
@@ -333,9 +337,12 @@ export function buildTelegramAdapter(
         : '';
       // 顺序: 群窗口(较远的背景) → 引用块(直接相关) → 发言人 → 用户正文。
       return {
-        agentText: `${persona}${ambientBlock}${assembly.prefix}${historyMediaNote}${replyBlock}${speakerLine}${event.text}`,
+        agentText: `${persona}${ambientBlock}${assembly.prefix}${historyMediaNote.modelText}${replyBlock}${speakerLine}${event.text}`,
         contextSnapshot: captureImContext({
-          groupPrefix: assembly.prefix,
+          groupPrefix: assembly.prefix.replace(
+            '\n</group_chat_context>',
+            () => `${historyMediaNote.displayText ? `\n${historyMediaNote.displayText}` : ''}\n</group_chat_context>`,
+          ),
           groupMessageCount: assembly.messageCount,
           replyPrefix: replyBlock,
           replyMessageCount: 1,
