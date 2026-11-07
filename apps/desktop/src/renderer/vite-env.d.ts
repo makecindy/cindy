@@ -862,6 +862,7 @@ interface CCAgentAskUserQuestionOption {
 }
 
 interface CCAgentAskUserQuestionItem {
+  id?: string;
   question: string;
   header?: string;
   options?: CCAgentAskUserQuestionOption[];

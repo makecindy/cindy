@@ -360,7 +360,7 @@ function ExitedOverlay({
     : t('rightSidebar.terminal.processExited', { code: exit.code ?? 0 });
   return (
     <div className="pointer-events-none absolute inset-0 flex items-end justify-center pb-6">
-      <div className="pointer-events-auto flex items-center gap-3 rounded-md border border-white/15 bg-black/80 px-4 py-2 text-sm text-white shadow-lg backdrop-blur">
+      <div className="pointer-events-auto flex items-center gap-3 rounded-xl border border-white/15 bg-black/80 px-4 py-2 text-sm text-white shadow-[shadow:var(--shadow-menu)] backdrop-blur">
         <span>{message}</span>
         <Button
           variant="secondary"
@@ -392,7 +392,7 @@ function ErrorOverlay({
 }) {
   return (
     <div className="pointer-events-none absolute inset-0 flex items-center justify-center">
-      <div className="pointer-events-auto flex max-w-[90%] flex-col items-center gap-2 rounded-md border border-white/15 bg-black/80 px-4 py-3 text-sm text-white shadow-lg backdrop-blur">
+      <div className="pointer-events-auto flex max-w-[90%] flex-col items-center gap-2 rounded-xl border border-white/15 bg-black/80 px-4 py-3 text-sm text-white shadow-[shadow:var(--shadow-menu)] backdrop-blur">
         <div className="flex items-center gap-2 text-red-300">
           <AlertTriangle size={14} />
           <span>{message}</span>

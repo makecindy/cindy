@@ -463,10 +463,11 @@ export function ComputerUseSection({ workingDir }: ComputerUseSectionProps) {
     [setBackendConfig],
   );
   const navigate = useNavigate();
+  const installedGhosts = useInstalledGhosts();
   const userBrowserPlugin =
     // Only the root instance can provide My browser (an organization copy with the same id cannot),
     // so that is the one the setup steps install, enable and open.
-    useInstalledGhosts().find(
+    installedGhosts.find(
       (ghost) => ghost.manifest.id === RECOMMENDED_PAGE_CONTROL_PLUGIN_ID && ghost.namespace == null,
     ) ?? null;
   const [userBrowserSetupBusy, setUserBrowserSetupBusy] = useState(false);
@@ -510,6 +511,20 @@ export function ComputerUseSection({ workingDir }: ComputerUseSectionProps) {
       else openPluginPage();
       return;
     }
+    if (browserBackendHealth?.reason === 'plugin-selection-required') {
+      // Any enabled page-control plugin can need the confirmation, not only the recommended one:
+      // open the one that does; with several, the list lets the user pick.
+      const candidates = installedGhosts.filter(
+        (ghost) => ghost.enabled && ghost.approval.state === 'approved' &&
+          ghost.manifest.browserExtension?.pageControl === true,
+      );
+      navigate(
+        candidates.length === 1
+          ? `/plugins?ghost=${encodeURIComponent(installedGhostStoragePart(candidates[0]!))}`
+          : '/plugins',
+      );
+      return;
+    }
     if (browserBackendHealth?.reason !== 'plugin-missing' || userBrowserPlugin?.enabled) {
       openPluginPage();
       return;
@@ -549,7 +564,7 @@ export function ComputerUseSection({ workingDir }: ComputerUseSectionProps) {
     } finally {
       setUserBrowserSetupBusy(false);
     }
-  }, [browserBackendHealth?.reason, navigate, refreshUserBrowserHealth, t, userBrowserPlugin]);
+  }, [browserBackendHealth?.reason, installedGhosts, navigate, refreshUserBrowserHealth, t, userBrowserPlugin]);
   // While "My browser" still lacks its plugin or extension, check again every few seconds so the
   // guidance turns into "connected" as soon as the user finishes a step elsewhere.
   useEffect(() => {
@@ -1594,6 +1609,7 @@ export function ComputerUseSection({ workingDir }: ComputerUseSectionProps) {
                   ? 'enabled'
                   : 'disabled'
             }
+            userBrowserPluginSupportsControl={userBrowserPlugin?.manifest.browserExtension?.pageControl === true}
             userBrowserSetupBusy={userBrowserSetupBusy}
             onSetUpUserBrowser={() => void handleSetUpUserBrowser()}
           />

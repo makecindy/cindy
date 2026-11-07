@@ -1,3 +1,4 @@
+import { useProcessDisclosureScroll } from './useProcessDisclosureScroll';
 /**
  * 话题（Thread）面板：与主时间线同一套消息行（BotGroupTimelineItem）与密度规则——根消息、
  * 「N 条回复」分隔、回复按作者五分钟合并；有新回复且读者在底部时跟到底。
@@ -186,6 +187,8 @@ export function ChatThreadPanel({ group, rootId, quoteSources = group.messages, 
   const contentRef = useRef<HTMLDivElement>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
   const stickToBottomRef = useRef(true);
+  const processScroll = useProcessDisclosureScroll(scrollRef, contentRef, stickToBottomRef, STICK_TO_BOTTOM_PX);
+  const { resumeFollow } = processScroll;
   const panelRef = useRef<HTMLElement>(null);
   useEffect(() => {
     const panel = panelRef.current;
@@ -472,12 +475,12 @@ export function ChatThreadPanel({ group, rootId, quoteSources = group.messages, 
     refreshRef.current();
   }, []);
   const onSendStart = useCallback((message: BotGroupOutgoingMessage) => {
-    stickToBottomRef.current = true;
+    resumeFollow();
     setPendingSends((previous) => [
       ...previous.filter((send) => send.clientId !== message.clientId),
       { ...message, createdAt: Date.now(), afterSequence: lastRealSequenceRef.current },
     ]);
-  }, []);
+  }, [resumeFollow]);
   const onSendSettled = useCallback((clientId: string, outcome: BotGroupSendOutcome) => {
     setPendingSends((previous) => outcome.ok
       ? previous.map((send) => (send.clientId === clientId ? { ...send, messageId: outcome.messageId } : send))
@@ -626,6 +629,13 @@ export function ChatThreadPanel({ group, rootId, quoteSources = group.messages, 
   // when older replies sit above it.
   const firstNewIndex = readBefore === null ? -1 : replyRows.findIndex(message => message.sequence > readBefore && !message.isSelf && !message.deleted && message.authorKind !== 'system');
   const firstNewId = firstNewIndex > 0 ? replyRows[firstNewIndex]!.id : null;
+  const navigateTimeline = (navigate: () => void) => {
+    const wasFollowing = stickToBottomRef.current;
+    navigate();
+    // Wheel/End can resume before a scroll event, or without any displacement.
+    // Use the existing coalesced reader once for every return to visible replies.
+    if (!wasFollowing && stickToBottomRef.current) refreshRef.current();
+  };
 
   return <ThreadPanel panelRef={panelRef} resize={resize} onClose={onClose} actions={<>
             {following !== undefined ? (
@@ -640,13 +650,15 @@ export function ChatThreadPanel({ group, rootId, quoteSources = group.messages, 
             ) : null}
         </>}>
         <div ref={scrollRef} className="min-h-0 flex-1 overflow-y-auto px-5 pb-4 pt-3"
-          onScroll={(event) => {
-            const element = event.currentTarget;
-            const wasAtBottom = stickToBottomRef.current;
-            stickToBottomRef.current = element.scrollHeight - element.scrollTop - element.clientHeight < STICK_TO_BOTTOM_PX;
-            // Back at the newest reply: what arrived meanwhile has now been seen.
-            if (!wasAtBottom && stickToBottomRef.current) refreshRef.current();
-          }}>
+          onClickCapture={processScroll.onClickCapture}
+          onWheel={event => navigateTimeline(() => processScroll.onWheel(event))}
+          onKeyDown={event => navigateTimeline(() => processScroll.onKeyDown(event))}
+          onPointerDown={processScroll.onPointerDown}
+          onPointerUp={processScroll.onPointerUp}
+          onPointerCancel={processScroll.onPointerUp}
+          onScroll={event => navigateTimeline(() => {
+            stickToBottomRef.current = processScroll.onScroll(event);
+          })}>
           <div ref={contentRef} className="flex min-w-0 flex-col">
             <ThreadPanelRoot replyCount={replyCount} testId="bot-group-thread-replies">
               {rootRows.map(message => <Fragment key={message.id}>{renderRow(message, false)}</Fragment>)}

@@ -39,6 +39,8 @@ export function useTeammateNavigation(hostPush?: ReturnType<typeof useGuardedPus
         && (route.params as { collectionId?: string } | undefined)?.collectionId === 'teammates');
       // POP_TO only replaces the top when home is absent, leaving the retired route underneath.
       if (legacyIndex >= 0) navigation.reset({
+        ...state,
+        stale: false,
         index: legacyIndex,
         routes: [...routes.slice(0, legacyIndex), { name: 'devices/index' }],
       } as never);
@@ -76,6 +78,8 @@ export function useTeammateNavigation(hostPush?: ReturnType<typeof useGuardedPus
         const routes = state?.routes.slice(0, state.index + 1) ?? [];
         const stale = options?.leaving ? staleCompanionChatCount(routes, options.leaving.botId, options.leaving.deviceId) : 0;
         if (stale > 0) navigation.reset({
+          ...state,
+          stale: false,
           index: routes.length - stale - 1,
           routes: [...routes.slice(0, routes.length - 1 - stale), { name: route.pathname.slice(1), params: route.params }],
         } as never);

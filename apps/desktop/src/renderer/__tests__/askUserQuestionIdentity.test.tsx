@@ -53,6 +53,18 @@ async function fillBothQuestions(view: ReturnType<typeof render>) {
 }
 
 describe('AskUserQuestionPrompt identity', () => {
+  it('submits distinct ids for two identical question titles', async () => {
+    const props = { ...makeProps(), pending: { requestId: 'duplicate-titles', questions: [
+      { id: 'first', question: 'Choose', options: [{ label: 'A' }] },
+      { id: 'second', question: 'Choose', options: [{ label: 'B' }] },
+    ] } };
+    const view = render(createElement(AskUserQuestionPrompt, props));
+    fireEvent.click(view.getByText('A'));
+    await waitFor(() => expect(view.queryByText('B')).not.toBeNull());
+    fireEvent.click(view.getByText('B'));
+    expect(props.onAnswer).toHaveBeenCalledWith('duplicate-titles', { first: 'A', second: 'B' });
+  });
+
   it.each([
     { label: 'single-select custom answer', options: [{ label: 'A' }], multiSelect: false },
     { label: 'multi-select custom answer', options: [{ label: 'A' }], multiSelect: true },

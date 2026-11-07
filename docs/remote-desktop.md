@@ -223,7 +223,10 @@ rebinding to a different owner or target does not wait on that old barrier.
 The window reuses the existing resource-usage auxiliary-window controller and
 factory for hidden prewarming, two-phase readiness, hide/reuse and bounded crash
 recovery. Prewarming loads only the shell and never connects to or captures a
-computer. Closing/minimizing retires its lease, clears pixels and stops polling;
+computer. It is skipped unless the session can use device-link or the saved
+session mode is `cloud` (auth may still be verifying at startup), so local and
+signed-out profiles keep no spare viewer; after a later sign-in the first viewer
+opens cold. Closing/minimizing retires its lease, clears pixels and stops polling;
 ordinary focus loss releases held input while retaining viewing. A crashed or
 automatically restored viewer uses `resume`, preserving a host's explicit stop.
 An account boundary destroys the viewer windows. The host's single-viewer lease

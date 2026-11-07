@@ -632,6 +632,9 @@ export interface SkillsListResponse {
 //   - FileChange:        { threadId, turnId, itemId, reason?, grantRoot? }
 
 export interface CommandExecutionRequestApprovalParams {
+  kind?: 'command' | 'humanCommand' | 'writeStdin';
+  environmentId?: string | null;
+  networkApprovalContext?: { host: string; protocol: string } | null;
   threadId: string;
   turnId: string;
   itemId: string;
@@ -682,7 +685,7 @@ export type McpServerElicitationRequestParams = {
   serverName: string;
 } & (
   | {
-      mode: 'form';
+      mode: 'form' | 'openai/form' | 'openaiForm';
       _meta: unknown | null;
       message: string;
       requestedSchema: unknown;
@@ -753,6 +756,9 @@ export interface ToolRequestUserInputParams {
   turnId: string;
   itemId: string;
   questions: ToolRequestUserInputQuestion[];
+  /** Missing on older servers; only explicit false permits idle resolution. */
+  isBlocking?: boolean;
+  autoResolutionMs?: number | null;
 }
 
 export interface ToolRequestUserInputAnswer {

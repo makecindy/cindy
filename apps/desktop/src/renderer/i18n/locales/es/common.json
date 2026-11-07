@@ -5658,12 +5658,17 @@
         "userBrowserSetup": {
           "installPluginTitle": "Instale el complemento Cindy Chrome",
           "enablePluginTitle": "Habilite el complemento Cindy Chrome",
-          "installExtensionTitle": "Agregue la extensión Cindy a su navegador",
+          "connectExtensionTitle": "Extensión del navegador sin conexión",
           "pluginBody": "Mi navegador llega a su Chrome o Edge a través del complemento Cindy Chrome y su extensión de navegador. Primero instale el complemento en Cindy, luego siga las indicaciones para agregar la extensión.",
-          "extensionBody": "Agregar extensión del navegador abre la página de tienda de la extensión Cindy en su navegador; elija Agregar y esto cambiará a conectado por sí solo. ¿Ya agregado? Habilítelo en la configuración de extensión del navegador.",
+          "connectionBody": "Mantén Cindy y el navegador abiertos y comprueba que la extensión Cindy esté activada. La falta de conexión no significa que debas reinstalarla. El estado se actualiza automáticamente al reconectarse.",
           "installPlugin": "Instalar complemento",
           "enablePlugin": "Activar",
-          "installExtension": "Agregar extensión del navegador",
+          "openExtensionStore": "Abrir tienda de extensiones",
+          "updatingTitle": "Actualizando la conexión del navegador",
+          "updatingBody": "La conexión se restablecerá automáticamente al terminar la actualización.",
+          "selectPluginTitle": "Elegir extensión del navegador",
+          "selectPluginBody": "Abre los detalles del complemento y elige «Usar esta extensión del navegador» para confirmar cuál usará Cindy.",
+          "selectPlugin": "Abrir complemento",
           "updatePluginTitle": "Actualice el complemento Cindy Chrome",
           "updatePluginBody": "El complemento Cindy Chrome instalado es demasiado antiguo para Mi navegador. Actualícelo a la última versión y luego siga las indicaciones para agregar la extensión.",
           "updatePlugin": "Actualizar",
@@ -12840,6 +12845,10 @@
       "defer": "Ahora no"
     },
     "permissionPrompt": {
+      "titleStdin": "¿Permitir entrada en este terminal?",
+      "titleMcpUrl": "Completar la solicitud de {{server}}",
+      "mcpComplete": "Listo",
+      "mcpCancel": "Cancelar",
       "alwaysAllowScoped": "Permitir siempre {{scope}} durante esta sesión",
       "alwaysAllowScopedHint": "Se aplica a toda la sesión y solo a lo que se indica aquí.",
       "alwaysAllowSessionHint": "Se aplica a toda la sesión, no solo a esta solicitud.",
@@ -13082,7 +13091,13 @@
       "sendAndContinue": "Enviar y continuar",
       "close": "Cerrar",
       "customAnswer": "Escribe algo más…",
-      "answerPlaceholder": "Escribe tu respuesta…"
+      "answerPlaceholder": "Escribe tu respuesta…",
+      "validation": {
+        "required": "Completa este campo obligatorio.",
+        "choice": "Elige una de las opciones de la lista.",
+        "tooShort": "Introduce al menos {{count}} caracteres.",
+        "tooLong": "Introduce como máximo {{count}} caracteres."
+      }
     },
     "planReviewBubble": {
       "title": "Revisión del plan",
@@ -14206,8 +14221,10 @@
       "mailLegacy": "Historial de borradores (solo lectura)",
       "taskAutoArchived": "Se archivó «{{title}}»",
       "taskAutoArchivedUndo": "Deshacer",
-      "taskAutoArchivePending": "Se archiva al salir",
-      "taskAutoArchiveCancel": "Conservar esta vez"
+      "taskAutoArchivePending": "Se archivará al salir de esta tarea",
+      "taskAutoArchiveCancel": "Cancelar",
+      "taskAutoArchiveCancelled": "No se archivará automáticamente esta vez",
+      "taskArchiveNow": "Archivar ahora"
     },
     "ghostHook": {
       "blockedFallback": "Mensaje bloqueado por un complemento; no se envió",
@@ -19916,8 +19933,8 @@
     "removeTitle": "¿Quitar {{name}}?",
     "removeDescription": "Cindy dejará de asignar tareas a esta cuenta. La sesión de la CLI y el historial de conversaciones permanecerán en este equipo.",
     "failed": "No se pudo leer o actualizar la cuenta. Comprueba el inicio de sesión de la CLI y la conexión, e inténtalo de nuevo.",
-    "used": "{{percent}}% utilizado",
     "directory": "Carpeta de la cuenta",
+    "loginAgain": "Iniciar sesión nuevamente",
     "login": "Iniciar sesión"
   }
 }

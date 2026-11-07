@@ -204,7 +204,8 @@ it('uses LegendList virtualization with platform-scoped history anchoring', () =
       scrollSource.indexOf('const wasNearBottom'),
     )).toContain('return;');
     expect(scrollSource).toContain('shouldPreserveMobileHistoryBrowseIntent({');
-    expect(scrollSource).toContain('historyBrowseIntent: userScrollForOlderRef.current');
+    // History/process browse ownership is exercised by messageFollowGesture.test.ts;
+    // keep native ordering guards here rather than pinning the JS input expression.
     expect(scrollSource).toContain('userControllingScroll: isDragSample');
     // 深链 / 搜索定位本身就是明确的历史浏览意图,后续近顶自动补页无需再拖一下。
     const focusEffectStart = source.indexOf('// 深链/搜索:滚到指定消息');
@@ -283,8 +284,8 @@ it('measures mounted shareable messages for manual sharing sticky selection', ()
     expect(readerEnd).toBeGreaterThan(readerStart);
     const readerSource = source.slice(readerStart, readerEnd);
 
-    expect(source).toContain('shareableMessageViewsRef = useRef(new Map<string, View>())');
-    expect(source).toContain('onShareableMessageViewChange?: (clientId: string, view: View | null) => void');
+    expect(source).toContain('shareableMessageViewsRef = useRef(new Map<string, ViewInstance>())');
+    expect(source).toContain('onShareableMessageViewChange?: (clientId: string, view: ViewInstance | null) => void');
     expect(source).toContain('ref={shareableMessage ? handleShareableMessageViewChange : undefined}');
     expect(readerSource).toContain('shareableMessageViewsRef.current.entries()');
     expect(readerSource).not.toContain("token.item.type !== 'message'");

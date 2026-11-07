@@ -5658,12 +5658,17 @@
         "userBrowserSetup": {
           "installPluginTitle": "Instalar o plugin Cindy Chrome",
           "enablePluginTitle": "Ativar o plugin Cindy Chrome",
-          "installExtensionTitle": "Adicionar a extensão Cindy ao seu navegador",
+          "connectExtensionTitle": "Extensão do navegador desligada",
           "pluginBody": "O meu navegador acede ao seu Chrome ou Edge através do plugin Cindy Chrome e da respetiva extensão do navegador. Instale primeiro o plugin na Cindy e siga as instruções para adicionar a extensão.",
-          "extensionBody": "Adicionar extensão do navegador abre a página da extensão Cindy na loja no seu navegador; escolha Adicionar e o estado muda automaticamente para ligado. Já a adicionou? Ative-a nas definições de extensões do navegador.",
+          "connectionBody": "Mantenha o Cindy e o navegador abertos e verifique se a extensão Cindy está ativada. A falta de ligação não significa que seja necessário reinstalá-la. O estado é atualizado automaticamente ao voltar a ligar.",
           "installPlugin": "Instalar plugin",
           "enablePlugin": "Ativar",
-          "installExtension": "Adicionar extensão do navegador",
+          "openExtensionStore": "Abrir loja de extensões",
+          "updatingTitle": "A atualizar a ligação ao navegador",
+          "updatingBody": "A ligação será restabelecida automaticamente após a atualização.",
+          "selectPluginTitle": "Selecionar extensão do navegador",
+          "selectPluginBody": "Abra os detalhes do plugin e escolha «Usar esta extensão do navegador» para confirmar qual extensão o Cindy deve usar.",
+          "selectPlugin": "Abrir plugin",
           "updatePluginTitle": "Atualizar o plugin Cindy Chrome",
           "updatePluginBody": "O plugin Cindy Chrome instalado é demasiado antigo para O meu navegador. Atualize-o para a versão mais recente e siga as instruções para adicionar a extensão.",
           "updatePlugin": "Atualizar",
@@ -12840,6 +12845,10 @@
       "defer": "Agora não"
     },
     "permissionPrompt": {
+      "titleStdin": "Permitir entrada neste terminal?",
+      "titleMcpUrl": "Concluir o pedido de {{server}}",
+      "mcpComplete": "Concluído",
+      "mcpCancel": "Cancelar",
       "alwaysAllowScoped": "Permitir sempre {{scope}} nesta sessão",
       "alwaysAllowScopedHint": "Aplica-se a toda a sessão e apenas ao que está listado aqui.",
       "alwaysAllowSessionHint": "Aplica-se a toda a sessão, não apenas a este pedido.",
@@ -13082,7 +13091,13 @@
       "sendAndContinue": "Enviar e continuar",
       "close": "Fechar",
       "customAnswer": "Escreva outra coisa…",
-      "answerPlaceholder": "Escreva a sua resposta…"
+      "answerPlaceholder": "Escreva a sua resposta…",
+      "validation": {
+        "required": "Preencha este campo obrigatório.",
+        "choice": "Escolha uma das opções apresentadas.",
+        "tooShort": "Introduza pelo menos {{count}} caracteres.",
+        "tooLong": "Introduza no máximo {{count}} caracteres."
+      }
     },
     "planReviewBubble": {
       "title": "Revisão do plano",
@@ -14206,8 +14221,10 @@
       "mailLegacy": "Histórico de rascunhos (só de leitura)",
       "taskAutoArchived": "\"{{title}}\" arquivada",
       "taskAutoArchivedUndo": "Desfazer",
-      "taskAutoArchivePending": "Arquiva ao sair",
-      "taskAutoArchiveCancel": "Manter desta vez"
+      "taskAutoArchivePending": "Será arquivada ao sair desta tarefa",
+      "taskAutoArchiveCancel": "Cancelar",
+      "taskAutoArchiveCancelled": "Sem arquivo automático desta vez",
+      "taskArchiveNow": "Arquivar agora"
     },
     "ghostHook": {
       "blockedFallback": "Mensagem bloqueada por um plugin; não enviada",
@@ -19916,8 +19933,8 @@
     "removeTitle": "Remover {{name}}?",
     "removeDescription": "A Cindy deixará de atribuir tarefas a esta conta. A sessão da CLI e o histórico de conversas permanecem neste computador.",
     "failed": "Não foi possível ler ou atualizar a conta. Verifique a sessão da CLI e a ligação à rede e tente novamente.",
-    "used": "{{percent}}% utilizado",
     "directory": "Pasta da conta",
+    "loginAgain": "Iniciar sessão novamente",
     "login": "Iniciar sessão"
   }
 }
