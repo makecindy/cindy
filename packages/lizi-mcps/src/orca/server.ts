@@ -302,6 +302,14 @@ export interface OrcaWorkspaceInfo {
   } | null;
   ui_capacity: number;
   worker_count: number;
+  /** Persisted label owners, including archived/deleted tasks; absent on older hosts. */
+  reserved_labels?: Array<{
+    label: string | null;
+    worker_id: string;
+    session_id: string;
+    role: string;
+    session_status: string | null;
+  }>;
   workers: Array<{
     worker_id: string;
     session_id: string;
@@ -441,7 +449,7 @@ function registerOrcaDiagnosticTools(
     name: 'get_workspace_info',
     category: 'control',
     description:
-      'List the current Orca workflow and worker sessions, including whether each worker queue is paused. owns_worktree is true only for a Worker-owned checkout recycled on archive; worktree then includes its path and branch. Inheriting the Lead directory does not grant ownership. execution_devices lists other same-account computers a worker can run on (pass device_id as create_worker.execution_device_id only when supported=true); workers running on another computer carry execution_device.',
+      'List the current Lead\'s Orca team and active worker sessions on the Lead\'s host computer, including whether each worker queue is paused. reserved_labels lists persisted label owners and task statuses, including archived/deleted tasks; archived labels stay reserved, so recreate with the same role and an unused label. Older hosts may omit reserved_labels. owns_worktree is true only for a Worker-owned checkout recycled on archive; worktree then includes its path and branch. Inheriting the Lead directory does not grant ownership. execution_devices lists other same-account computers a worker can run on (pass device_id as create_worker.execution_device_id only when supported=true); workers running on another computer carry execution_device.',
     inputShape: {},
     handler: async () => {
       const ctx = resolveLeadSessionContext(getSessionContext);
@@ -453,6 +461,7 @@ function registerOrcaDiagnosticTools(
         ui_capacity: result.ui_capacity,
         worker_count: result.worker_count,
         workers: result.workers,
+        ...(result.reserved_labels ? { reserved_labels: result.reserved_labels } : {}),
         ...(result.execution_devices ? { execution_devices: result.execution_devices } : {}),
       });
     },

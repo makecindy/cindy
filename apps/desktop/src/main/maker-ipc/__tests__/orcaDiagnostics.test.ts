@@ -40,6 +40,7 @@ function createDeps(overrides: Partial<OrcaDiagnosticsDeps> = {}): OrcaDiagnosti
         workingDir: '/repo',
       },
     }]),
+    listWorkerLabelsByTeam: vi.fn(async () => []),
     getSessionStatus: vi.fn((sessionId) => sessionId === 'worker-session-1' ? 'not_running' : 'active'),
     getWorkerFlowStatus: vi.fn(async () => ({
       isWorking: false,
@@ -53,6 +54,32 @@ function createDeps(overrides: Partial<OrcaDiagnosticsDeps> = {}): OrcaDiagnosti
 }
 
 describe('orca diagnostics read-only helpers', () => {
+  // Regression: archived Workers disappear from workers but still reserve their labels.
+  // Existing coverage only listed active Workers. Minimal input: one archived label,
+  // zero active Workers. Unit tier: the production diagnostic must expose its identity
+  // without inspecting a queue or waking a runtime.
+  it('exposes archived label owners separately from available Workers', async () => {
+    const deps = createDeps({
+      listWorkersByLead: vi.fn(async () => []),
+      listWorkerLabelsByTeam: vi.fn(async () => [{
+        workerId: 'worker-old', sessionId: 'session-old', label: 'reviewer',
+        role: 'reviewer', sessionStatus: 'archived',
+      }]),
+    });
+
+    await expect(getOrcaWorkspaceInfoReadOnly(deps, 'lead-1')).resolves.toMatchObject({
+      worker_count: 0,
+      workers: [],
+      reserved_labels: [{
+        worker_id: 'worker-old', session_id: 'session-old', label: 'reviewer',
+        role: 'reviewer', session_status: 'archived',
+      }],
+    });
+    expect(deps.listWorkerLabelsByTeam).toHaveBeenCalledWith('team-1');
+    expect(deps.getWorkerFlowStatus).not.toHaveBeenCalled();
+    expect(deps.getSessionStatus).not.toHaveBeenCalled();
+  });
+
   it('returns empty workspace info without reading workers when there is no active team', async () => {
     const deps = createDeps({
       readActiveTeam: vi.fn(async () => null),
@@ -67,10 +94,12 @@ describe('orca diagnostics read-only helpers', () => {
       ui_capacity: 1,
       worker_count: 0,
       workers: [],
+      reserved_labels: [],
     });
 
     expect(deps.readActiveTeam).toHaveBeenCalledWith('lead-without-active-team');
     expect(deps.listWorkersByLead).not.toHaveBeenCalled();
+    expect(deps.listWorkerLabelsByTeam).not.toHaveBeenCalled();
   });
 
   it('matches legacy workspace diagnostic fields', async () => {

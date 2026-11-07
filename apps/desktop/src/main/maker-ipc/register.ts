@@ -591,6 +591,7 @@ import {
   isActiveWorkerStatus,
   isOrphanedTeamInit,
   listWorkersByLead,
+  listWorkerLabelsByTeam,
   markTeamEnded,
   markWorkersStatusByTeam,
   markWorkerIdleIfStatus,
@@ -8928,6 +8929,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       getWorkerWorktree: getWorkerOwnedWorktree,
       readActiveTeam: readActiveOrcaTeamByLeadReadOnly,
       listWorkersByLead,
+      listWorkerLabelsByTeam,
       // 远端 Worker 的本机代理行从不运行；状态取运行设备的轮询投影。
       getSessionStatus: (sessionId: string) =>
         remoteRuntime?.isRemote(sessionId)

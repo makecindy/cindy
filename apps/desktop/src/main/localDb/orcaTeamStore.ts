@@ -510,6 +510,31 @@ export async function listWorkersByLead(
   return grouped[leadSessionId] ?? [];
 }
 
+/** Persisted label owners, including archived/deleted tasks that still occupy the unique index. */
+export async function listWorkerLabelsByTeam(teamId: string): Promise<OrcaWorkerLabelRecord[]> {
+  return getDbClient().drizzle
+    .select({
+      workerId: orcaWorkers.id,
+      sessionId: orcaWorkers.sessionId,
+      label: orcaWorkers.label,
+      role: orcaWorkers.role,
+      sessionStatus: sessions.status,
+    })
+    .from(orcaWorkers)
+    .leftJoin(sessions, eq(sessions.id, orcaWorkers.sessionId))
+    .where(and(eq(orcaWorkers.teamId, teamId), isNotNull(orcaWorkers.label)))
+    .orderBy(orcaWorkers.createdAt, orcaWorkers.id);
+}
+
+export interface OrcaWorkerLabelRecord {
+  workerId: string;
+  sessionId: string;
+  label: string | null;
+  role: string;
+  /** Persistent task status; null only for a legacy Worker whose task row is missing. */
+  sessionStatus: string | null;
+}
+
 export async function listWorkersByLeads(
   leadSessionIds: readonly string[],
 ): Promise<Record<string, OrcaWorkerRecord[]>> {

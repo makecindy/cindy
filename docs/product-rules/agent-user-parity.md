@@ -89,6 +89,7 @@ Agent 新建普通独立任务（`send_to_session` create 与 `start_session_tas
 | 任务     | 模型、推理强度、Fast                                       | 有   | 无               |
 | 任务     | 删除、Fork、Rewind、切换权限档、代用户确认权限或回答提问   | 无   | 无               |
 | 协同 / Worker | 单个 / 批量创建、指定已有目录、查询实际目录与自有 worktree | 有 | 有（运行设备；新建 worktree 仅本机） |
+| 协同 / Worker | 发现当前团队的历史占用标签，归档后用新标签重新创建 | 有（`get_workspace_info.reserved_labels`；归档状态与活动列表分开） | Lead 所在电脑查询同一团队，含运行设备 Worker 的代理身份；不新增跨电脑查询入口 |
 | 协同 / Worker | Lead 使用远程供应商时派发跨设备 Worker；独立选择工作电脑与模型电脑 | 有 | 有（`execution_device_id` + `agent_device_id`；目录查询支持同一工作电脑范围） |
 | 协同 / Worker | 为 Worker 新建 worktree、指定源分支、归档时回收 | 有 | 无 |
 | 协同 / Worker | 单个／批量创建默认跟随本机手动面板已提交路线，返回实际路线与回退原因 | 有（按当前账号本机 scope；旧逐 Agent 偏好不算选择） | 运行设备与 SSH 保持原策略；远程供应商路线可记忆 |
