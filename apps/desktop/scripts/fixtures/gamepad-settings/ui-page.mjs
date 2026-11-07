@@ -1,0 +1,27 @@
+export default {
+  name: 'gamepad-settings',
+  entry: './gamepad-settings-fixture.tsx',
+  viewport: { width: 800, height: 1500 },
+  real: 'XboxGamepadSettings, WorkLouderCodexSettings, SettingsCard, SettingsRow, SettingsSection, Select, Switch, themes and translations',
+  notCovered: 'Real devices, input monitoring, saving and the Codex guard; hooks supply one connected device with default settings',
+  stubs: {
+    'src/renderer/hooks/useXboxGamepad': './stubs.ts',
+    'src/renderer/hooks/useWorkLouderCodex': './stubs.ts',
+    'src/renderer/hooks/useCodexMicroGuard': './stubs.ts',
+    'src/renderer/features/skillhub/hooks/useSkillhub': './stubs.ts',
+  },
+  cases: {
+    default: { about: 'Connected Xbox controller with default bindings' },
+    worklouder: { about: 'Connected Codex Micro keyboard with default settings; sections use the shared rows' },
+  },
+  async check(page, ui) {
+    // Rows in an editor dialog sit flush with its padding and keep their dividers.
+    const opener = ui.case === 'worklouder'
+      ? page.getByRole('button', { name: /AG02/ })
+      : page.getByRole('button', { name: await ui.t('settings.shortcuts.xboxGamepad.familyControls.xbox.leftStick') }).first();
+    await opener.click();
+    await page.getByRole('dialog').waitFor();
+    await page.waitForTimeout(300);
+    await ui.capture('editor');
+  },
+};

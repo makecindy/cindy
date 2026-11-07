@@ -992,3 +992,7 @@ Switch 解耦。插件插槽挂载同一个媒体组件，不再维护单独拖�
 - 移除旧的按轮次反向关联和召唤结束动画，不改提示词、上下文、调用路由或设置。
 
 实现：桌面 `GhostSummonCard.tsx`、`UserMessage.tsx`、`MessageStream.tsx` 与手机 `MessageRenderer.tsx`；现行规则见 `DESIGN.md` §14.4。
+
+## 2026-11-07 · 设置分区和行进入组件库
+
+此前有三套写法：群设置抽屉的 `ChatGroupSettingsRows`、手柄页各自复制的局部组件、设置页的 `settingsRowClasses` 类名。提升为 `components/ui/settings-rows.tsx`，行名称按用户裁决统一 13px/500（群设置原为 14px）。局部副本已删除；其余设置页仍用类名，按页面分批迁移。
