@@ -82,7 +82,7 @@ export interface BackgroundCommandServiceDeps {
 }
 
 export function createBackgroundCommandService(deps: BackgroundCommandServiceDeps) {
-  const running = new Map<string, { startedAt: number; timeoutTimer: NodeJS.Timeout; killTree: () => void }>();
+  const running = new Map<string, { startedAt: number; timeoutTimer: NodeJS.Timeout; groupPoll: NodeJS.Timeout | null; killTree: () => void }>();
   // 切账号时置位:在途报告(含 retry 循环)不再投递——旧账号会话的回注不能落进新账号。
   let disposed = false;
 
@@ -448,6 +448,7 @@ export function createBackgroundCommandService(deps: BackgroundCommandServiceDep
       running.set(runId, {
         startedAt,
         timeoutTimer,
+        groupPoll,
         killTree: () => killProcessTree(child.pid, child, () => {}),
       });
       child.once('exit', (code, signal) => {
@@ -475,6 +476,9 @@ export function createBackgroundCommandService(deps: BackgroundCommandServiceDep
       disposed = true;
       for (const [runId, entry] of running) {
         clearTimeout(entry.timeoutTimer);
+        // POSIX 的进程组探测定时器一并清掉：记录已删后 releaseSlot 会提前返回，
+        // 不清的话每 30s 的轮询会带着闭包活到进程退出。
+        if (entry.groupPoll) clearInterval(entry.groupPoll);
         try {
           entry.killTree();
         } catch {
