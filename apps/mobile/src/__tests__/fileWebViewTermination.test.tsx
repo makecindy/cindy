@@ -410,3 +410,42 @@ it.each(['changed', 'same', 'failed', 'left'] as const)('replaces a stale snapsh
   await act(async () => root!.render(createElement(Harness, { enabled: false })));
   expect(initial.close).toHaveBeenCalledOnce();
 });
+
+// Regression (reported 2026-11-07): switching apps stops the native server, the snapshot is
+// rebuilt on return and the page reopened at its top. Real hook + reader; the suspension case
+// above never scrolled or navigated. Minimal input: navigate/scroll -> background -> active.
+it.each(['entry', 'inner'] as const)('reopens a page rebuilt after backgrounding where the reader left it (%s)', async (page) => {
+  vi.useFakeTimers();
+  root = createRoot(document.createElement('div'));
+  let port = 1000;
+  const prepare = vi.fn().mockImplementation(async () => ({
+    url: `http://127.0.0.1:${++port}/__cindy/token`, documents: ['/report.html', '/detail.html'], close: async () => {},
+  }));
+  let snapshot!: ReturnType<typeof useHtmlSnapshot>;
+  function Harness() {
+    snapshot = useHtmlSnapshot('/w/report.html', true, prepare);
+    return createElement(HtmlSnapshotReader, {
+      preview: snapshot.preview, onError() {}, viewportInsets: { top: 80 },
+      restore: snapshot.restore, onScroll: snapshot.onScroll, onNavigationStateChange: snapshot.onNavigationStateChange,
+    });
+  }
+  await act(async () => root!.render(createElement(Harness)));
+  act(() => state.props.onNavigationStateChange({ url: 'http://127.0.0.1:1001/report.html' }));
+  if (page === 'inner') act(() => state.props.onNavigationStateChange({ url: 'http://127.0.0.1:1001/detail.html' }));
+  // UIKit offset with an 80pt obscured top inset: CSS scrollY 500.
+  act(() => state.props.onScroll({ nativeEvent: { contentOffset: { x: 0, y: 420 } } }));
+  await act(async () => state.appStateListeners.forEach(listener => listener('background')));
+  await act(async () => state.appStateListeners.forEach(listener => listener('active')));
+  expect(prepare).toHaveBeenCalledTimes(2);
+  state.inject.mockClear();
+  act(() => state.props.onLoadEnd({ nativeEvent: { url: 'http://127.0.0.1:1002/report.html' } }));
+  if (page === 'inner') {
+    expect(state.inject).toHaveBeenLastCalledWith('location.replace("http://127.0.0.1:1002/detail.html"); true;');
+    expect(hidden()).toBe(true);
+    act(() => state.props.onLoadEnd({ nativeEvent: { url: 'http://127.0.0.1:1002/detail.html' } }));
+  }
+  expect(state.inject.mock.lastCall?.[0]).toContain('const x = 0, y = 500');
+  expect(hidden()).toBe(true);
+  act(() => vi.advanceTimersByTime(100));
+  expect(hidden()).toBe(false);
+});
