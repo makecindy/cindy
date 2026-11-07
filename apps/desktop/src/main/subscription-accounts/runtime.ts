@@ -295,6 +295,30 @@ export function readLegacySubscriptionPoolUsage(provider: SubscriptionProvider):
   return readSubscriptionPoolUsage(provider);
 }
 
+/** Quota errors belong to a task's pinned account, including paused accounts.
+ * Unbound pre-pool sessions retain their original default reader; removed or
+ * disconnected bound accounts must never borrow another account's reset time.
+ */
+export async function readSubscriptionSessionUsage(provider: SubscriptionProvider, nativeSessionId: string): Promise<Usage | null | undefined> {
+  const state = currentRuntime();
+  assertOwner(state);
+  const binding = readAccountBinding(`native:${nativeSessionId}`, provider);
+  if (!binding) return undefined;
+  const current = () => {
+    const pool = readPool(provider);
+    return pool && !pool.disconnected && pool.accounts.some(a => a.id === binding.accountId)
+      && (binding.accountId !== 'default' || defaultAccountBound(provider))
+      && readAccountBinding(`native:${nativeSessionId}`, provider)?.accountId === binding.accountId;
+  };
+  if (!current()) return null;
+  // The default account keeps its existing native/web reader and refresh policy.
+  if (binding.accountId === 'default') return undefined;
+  const info = await snapshot(state, provider, binding.accountId);
+  assertOwner(state);
+  if (!current() || !info.auth.authenticated) return null;
+  return info.usage ?? null;
+}
+
 export async function readSubscriptionPoolUsage(
   provider: SubscriptionProvider,
 ): Promise<Usage | null | undefined> {

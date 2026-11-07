@@ -16,23 +16,33 @@ export async function readLegacySubscriptionQuota(
   read: ReadPoolUsage,
   channel: string,
   args: unknown[],
+  readSession?: (provider: SubscriptionProvider, nativeSessionId: string) => Promise<PoolUsage | null | undefined>,
 ): Promise<unknown | undefined> {
   let provider: SubscriptionProvider;
+  let scope: unknown;
   if (channel === 'maker:usage:claude-subscription') {
     if (args[0] !== undefined && args[0] !== 'anthropic') return undefined;
     if (args[2] === DEFAULT_ACCOUNT_USAGE_SCOPE) return undefined;
     provider = 'anthropic';
+    scope = args[2];
   } else if (channel === 'maker:usage:account') {
     if (args[0] !== 'codex' || (args[1] !== undefined && args[1] !== 'openai')) return undefined;
     if (args[2] === DEFAULT_ACCOUNT_USAGE_SCOPE) return undefined;
     provider = 'openai';
+    scope = args[2];
   } else if (channel === 'maker:usage:codex-rate-limits') {
     if (args[0] !== undefined && args[0] !== 'openai') return undefined;
     if (args[1] === DEFAULT_ACCOUNT_USAGE_SCOPE) return undefined;
     provider = 'openai';
+    scope = args[1];
   } else return undefined;
 
-  const pool = await read(provider);
+  const sessionId = scope && typeof scope === 'object' && !Array.isArray(scope)
+    ? (scope as { subscriptionSessionId?: unknown }).subscriptionSessionId : undefined;
+  if (sessionId !== undefined && (typeof sessionId !== 'string' || !sessionId || sessionId.length > 256))
+    throw new Error('Invalid subscription session');
+  const pool = typeof sessionId === 'string'
+    ? await readSession?.(provider, sessionId) : await read(provider);
   if (pool === undefined) return undefined;
   if (!pool) return null;
   if (provider === 'anthropic') {
@@ -66,6 +76,7 @@ export async function readLegacySubscriptionQuota(
     providerId: provider,
     source: 'codex-app-server',
     appServerBuckets: buckets,
+    ...(typeof sessionId === 'string' ? { nativeAccountPool: true } : {}),
     // Old bridge consumers cannot express model-specific native pool buckets.
     // Unknown lets the execution host select/check the real account; relabeling
     // a native bucket as WHAM could incorrectly exclude a usable bridge model.

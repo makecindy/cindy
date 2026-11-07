@@ -43,6 +43,7 @@ vi.mock('../runtime.js', () => ({
   onSubscriptionAccountsChanged: vi.fn(),
   readSubscriptionPoolUsage: vi.fn(async () => undefined),
   readLegacySubscriptionPoolUsage: vi.fn(async () => undefined),
+  readSubscriptionSessionUsage: vi.fn(async () => undefined),
 }));
 import { registerSubscriptionAccountsIpc } from '../ipc.js';
 import { accountDirectory, accountOwnerPrefix, readBoundClaudeConfigDir } from '../store.js';

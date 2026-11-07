@@ -79,6 +79,7 @@ import {
   disconnectSubscriptionPool,
   readSubscriptionPoolUsage,
   readLegacySubscriptionPoolUsage,
+  readSubscriptionSessionUsage,
   readSubscriptionPoolAccountUsages,
   runSubscriptionAccountCommand,
   observeSubscriptionAccountUsage,
@@ -107,6 +108,39 @@ beforeEach(() => {
 });
 
 describe('native account assignment on the executing computer', () => {
+  // Unit, #9295 review: reset lookups refresh the pinned profile rather than
+  // taking a different ready account; prior tests only covered pool availability.
+  it.each([
+    ['anthropic', 'default'], ['anthropic', 'second'], ['openai', 'default'], ['openai', 'second'],
+  ] as const)('reads only the bound %s/%s quota for a native task', async (provider, accountId) => {
+    h.pools[provider] = { strategy: 'order', accounts: [account('default'), account('second')] };
+    h.bindings.set('native:limited-task', { providerId: provider, accountId });
+    const now = Date.now();
+    const reset = now / 1000 + 3600;
+    const bucket = { limitId: 'codex', limitName: null, updatedAt: now,
+      primary: { usedPercent: 100, resetsAt: reset, windowMinutes: 300 }, secondary: null };
+    h.usage.mockResolvedValue(provider === 'anthropic'
+      ? { claudeUsage: { updatedAt: now, fiveHour: { utilization: 100, resetsAt: reset }, sevenDay: null, scoped: [] } }
+      : { codexUsage: { appServerBuckets: { codex: bucket }, webSnapshot: bucket } });
+    const scope = { subscriptionSessionId: 'limited-task' };
+    const channel = provider === 'anthropic' ? 'maker:usage:claude-subscription' : 'maker:usage:account';
+    const args = provider === 'anthropic' ? [provider, true, scope] : ['codex', provider, scope];
+    const result = await readLegacySubscriptionQuota(readLegacySubscriptionPoolUsage, channel, args, readSubscriptionSessionUsage);
+    if (accountId === 'default') {
+      expect(result).toBeUndefined();
+      expect(h.usage).not.toHaveBeenCalled();
+    } else {
+      expect(result).toMatchObject(provider === 'anthropic' ? { fiveHour: { utilization: 100, resetsAt: reset } }
+        : { primary: { usedPercent: 100, resetsAt: reset }, nativeAccountPool: true });
+      expect(h.usage).toHaveBeenCalledExactlyOnceWith(provider, `${provider}/${accountId}`);
+    }
+    // A removed binding must not fall back to the still-available other profile.
+    h.pools[provider]!.accounts = h.pools[provider]!.accounts.filter(a => a.id !== accountId);
+    expect(await readSubscriptionSessionUsage(provider, 'limited-task')).toBeNull();
+    expect(await readSubscriptionSessionUsage(provider, 'pre-pool-task')).toBeUndefined();
+    expect(h.usage).toHaveBeenCalledTimes(accountId === 'default' ? 0 : 1);
+  });
+
   // Unit: legacy wire reads must expose usable pool quota when the first account
   // is exhausted. Existing tests only exercise the new pool query, not old calls.
   it.each(['anthropic', 'openai'] as const)('keeps old %s quota readers usable without changing the default account card', async (provider) => {
