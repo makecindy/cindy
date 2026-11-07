@@ -16,6 +16,7 @@ import {
 const FAKE_IP_POLICY = {
   allowRfc2544BenchmarkRange: true,
   allowIpv6UniqueLocalRange: true,
+  allowIpv6BenchmarkingRange: true,
 };
 
 const lookupAddresses = (addresses: Array<{ address: string; family: 4 | 6 }>): LookupFn =>
@@ -60,6 +61,15 @@ describe('vendored SSRF decision primitives', () => {
     expect(resolved.addresses).toEqual(['fd00::1']);
   });
 
+  it('allows an IPv6 benchmarking proxy fake-IP DNS answer without enabling private networks', async () => {
+    const resolved = await resolvePinnedHostnameWithPolicy('example.com', {
+      policy: FAKE_IP_POLICY,
+      lookupFn: lookupAddresses([{ address: '2001:2::1', family: 6 }]),
+    });
+
+    expect(resolved.addresses).toEqual(['2001:2::1']);
+  });
+
   it.each([
     ['cloud metadata', '169.254.169.254', 4],
     ['link-local', '169.254.1.1', 4],
@@ -75,6 +85,14 @@ describe('vendored SSRF decision primitives', () => {
       ).rejects.toThrow(/blocked/i);
     },
   );
+
+  it('still blocks an IPv6 benchmarking DNS answer without the explicit exemption', async () => {
+    await expect(
+      resolvePinnedHostnameWithPolicy('example.com', {
+        lookupFn: lookupAddresses([{ address: '2001:2::1', family: 6 }]),
+      }),
+    ).rejects.toThrow(/blocked/i);
+  });
 });
 
 describe('proxied browser navigation policy', () => {
