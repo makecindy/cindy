@@ -17,6 +17,7 @@ import {
   collectPiProjectResourceCliPaths,
   collectPiProjectResourceWatchRootMtimes,
   piProjectResourcesDrifted,
+  resolvePiResourceRepoRoot,
   snapshotPiProjectResourceLaunch,
 } from '../project-resource-cli.js';
 
@@ -45,7 +46,7 @@ function statMtime(target: string): number {
 function snapshot() {
   // 与生产调用点同序:基线先采样,路径后收集(见 snapshotPiProjectResourceLaunch)。
   const watchRootMtimes = collectPiProjectResourceWatchRootMtimes(project);
-  return snapshotPiProjectResourceLaunch(project, collectPiProjectResourceCliPaths(project), watchRootMtimes);
+  return snapshotPiProjectResourceLaunch(project, collectPiProjectResourceCliPaths(project), watchRootMtimes, resolvePiResourceRepoRoot(project));
 }
 
 describe('piProjectResourcesDrifted', () => {
@@ -103,7 +104,7 @@ describe('piProjectResourcesDrifted', () => {
     const nested = path.join(project, 'sub');
     mkdirSync(nested, { recursive: true });
     const baseline = snapshotPiProjectResourceLaunch(
-      nested, collectPiProjectResourceCliPaths(nested), collectPiProjectResourceWatchRootMtimes(nested));
+      nested, collectPiProjectResourceCliPaths(nested), collectPiProjectResourceWatchRootMtimes(nested), resolvePiResourceRepoRoot(nested));
     writeSkill(path.join('.agents', 'skills'), 'gamma');
     expect(piProjectResourcesDrifted(baseline)).toBe(true);
   });
@@ -197,7 +198,7 @@ describe('piProjectResourcesDrifted', () => {
     const watchRootMtimes = collectPiProjectResourceWatchRootMtimes(project);
     writeSkill(path.join('.pi', 'skills'), 'alpha');
     const baseline = snapshotPiProjectResourceLaunch(
-      project, collectPiProjectResourceCliPaths(project), watchRootMtimes);
+      project, collectPiProjectResourceCliPaths(project), watchRootMtimes, resolvePiResourceRepoRoot(project));
     expect(piProjectResourcesDrifted(baseline)).toBe(false);
     expect(baseline.watchRootMtimes.get(path.join(project, '.pi', 'skills')))
       .toBe(statMtime(path.join(project, '.pi', 'skills')));
@@ -222,7 +223,7 @@ describe('piProjectResourcesDrifted', () => {
     const nested = path.join(project, 'outer', 'sub');
     mkdirSync(nested, { recursive: true });
     const baseline = snapshotPiProjectResourceLaunch(
-      nested, collectPiProjectResourceCliPaths(nested), collectPiProjectResourceWatchRootMtimes(nested));
+      nested, collectPiProjectResourceCliPaths(nested), collectPiProjectResourceWatchRootMtimes(nested), resolvePiResourceRepoRoot(nested));
     expect(piProjectResourcesDrifted(baseline)).toBe(false);
     // 子目录自己 git init:枚举链截断,outer skill 不再属于本项目边界
     mkdirSync(path.join(nested, '.git'), { recursive: true });
@@ -236,7 +237,7 @@ describe('piProjectResourcesDrifted', () => {
     mkdirSync(path.join(nested, '.pi', 'skills', 'alpha'), { recursive: true });
     writeFileSync(path.join(nested, '.pi', 'skills', 'alpha', 'SKILL.md'), '---\nname: alpha\ndescription: t\n---\n');
     const baseline = snapshotPiProjectResourceLaunch(
-      nested, collectPiProjectResourceCliPaths(nested), collectPiProjectResourceWatchRootMtimes(nested));
+      nested, collectPiProjectResourceCliPaths(nested), collectPiProjectResourceWatchRootMtimes(nested), resolvePiResourceRepoRoot(nested));
     // 嵌套目录 git init:被截断的上层链没有任何项目资源,集合不变,不应触发回收
     mkdirSync(path.join(nested, '.git'), { recursive: true });
     expect(piProjectResourcesDrifted(baseline)).toBe(false);
@@ -255,6 +256,16 @@ describe('piProjectResourcesDrifted', () => {
     expect(piProjectResourcesDrifted(baseline)).toBe(false);
     // 目标移动/删除不改变 .pi/prompts 自身的 mtime,只有盯住解析后的文件本体才能检出
     rmSync(path.join(project, 'targets', 'opsx.md'));
+    expect(piProjectResourcesDrifted(baseline)).toBe(true);
+  });
+
+  itPosixOnly('detects a prompt target materializing behind a dangling symlink', () => {
+    mkdirSync(path.join(project, '.pi', 'prompts'), { recursive: true });
+    mkdirSync(path.join(project, 'elsewhere'), { recursive: true });
+    symlinkSync(path.join(project, 'elsewhere', 'target.md'), path.join(project, '.pi', 'prompts', 'foo.md'));
+    const baseline = snapshot();
+    // 悬空软链自身已入盯视:目标落地(改动的是未盯视的 elsewhere 目录)也能检出
+    writeFileSync(path.join(project, 'elsewhere', 'target.md'), '---\ndescription: t\n---\n');
     expect(piProjectResourcesDrifted(baseline)).toBe(true);
   });
 

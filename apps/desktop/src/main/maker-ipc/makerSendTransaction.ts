@@ -1202,7 +1202,9 @@ export function createMakerSendTransaction(deps: MakerSendTransactionDeps): Make
       // 'runtime-refresh' 回收运行时(session:closed 带刷新原因,IM runner 保留
       // 排队回合),下面的 lazy bootstrap 会重扫重算 argv 后再投递
       // (见 Session.hasRecyclableProjectResourceDrift 的空闲口径说明)。
-      if (sess?.hasRecyclableProjectResourceDrift?.()) {
+      // 无 createOpts 的直发/老链路调用无法走 lazy-create 重建,跳过回收按
+      // 原运行时投递(维持回收前行为,不把触发消息拒成 NOT_FOUND)。
+      if (createOpts && sess?.hasRecyclableProjectResourceDrift?.()) {
         await deps.closeSessionIfCurrent(sessionId);
         deps.log.info('send: project resources drifted, recycling runtime before dispatch', { sessionId });
         sess = undefined;

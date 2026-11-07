@@ -69,7 +69,7 @@ function findNearestGitRoot(workingDir: string): string | null {
 }
 
 /** collector 与漂移快检共用的 git 边界解析(同输入必同输出,才能恒等比较)。 */
-function resolvePiResourceRepoRoot(workingDir: string): string {
+export function resolvePiResourceRepoRoot(workingDir: string): string {
   const scanRoot = realpathOrNull(workingDir) ?? path.resolve(workingDir);
   return findNearestGitRoot(scanRoot) ?? scanRoot;
 }
@@ -217,7 +217,8 @@ export interface PiProjectResourceLaunchSnapshot {
   /** 启动时认定的 git root 可变持有器:更近的 .git 出现/消失会改变 collector 的枚举链
    * (.agents 向上走到 repoRoot),而任何被盯目录的 mtime 都不动,必须单独核对。边界
    * 变化只作重扫信号(见 piProjectResourcesDrifted),确认集合未变后就地更新,避免
-   * 嵌套目录 git init 在无实际资源变化时多余回收。 */
+   * 嵌套目录 git init 在无实际资源变化时多余回收。必须与 watchRootMtimes 同批采样
+   * (都先于 paths 收集),否则窗口内新旧边界会与路径集合错配。 */
   readonly state: { repoRoot: string };
 }
 
@@ -243,6 +244,7 @@ export function collectPiProjectResourceWatchRootMtimes(workingDir: string): Map
   watchPiSkillTreeMtimes(roots, path.join(piDir, 'skills'));
   watchPiPromptTargets(roots, path.join(piDir, 'prompts'), repoRoot);
   watchPiExtensionChildMtimes(roots, path.join(piDir, 'extensions'));
+  watchPiPromptTargets(roots, path.join(piDir, 'prompts'), repoRoot);
   let current = scanRoot;
   while (true) {
     const agentsDir = path.join(current, '.agents');
@@ -311,27 +313,35 @@ function watchPiPromptTargets(roots: Map<string, number>, promptsDir: string, re
   if (!isDir(promptsDir)) return;
   for (const entry of listDir(promptsDir)) {
     if (entry.name.startsWith('.') || !entry.name.endsWith('.md')) continue;
-    const realFile = realpathOrNull(path.join(promptsDir, entry.name));
-    if (!realFile || !isFile(realFile) || !isWithinRoot(repoRoot, realFile)) continue;
+    const entryPath = path.join(promptsDir, entry.name);
+    const realFile = realpathOrNull(entryPath);
+    if (!realFile || !isFile(realFile) || !isWithinRoot(repoRoot, realFile)) {
+      // 悬空软链(或目标越界):把链接自身入盯视 —— 目标落地时 statSync 解析到
+      // 新 mtime(未盯视目录里的变化也能触发重扫);普通文件不存在此形态。
+      if (entry.isSymbolicLink()) roots.set(entryPath, statMtimeMs(entryPath));
+      continue;
+    }
     roots.set(realFile, statMtimeMs(realFile));
   }
 }
 
 /**
- * 冻结一份启动快照。watchRootMtimes 必须由调用方在收集 paths **之前**采样传入
- * (见 pi/index.ts 调用点):基线在前,采样窗口内新增的资源只会让首次快检多一次
- * 重扫后收敛;反过来(先收集后采样)会漏掉窗口内新增的资源,静默漏检。
+ * 冻结一份启动快照。watchRootMtimes 与 repoRoot 必须由调用方在收集 paths **之前**
+ * 采样传入(见 pi/index.ts 调用点):三样同批且基线在前,采样窗口内新增的资源只会
+ * 让首次快检多一次重扫后收敛;反过来(先收集后采样)会漏掉窗口内新增的资源,或让
+ * 新旧边界与路径集合错配,静默漏检。
  */
 export function snapshotPiProjectResourceLaunch(
   workingDir: string,
   paths: PiProjectResourceCliPaths,
   watchRootMtimes: Map<string, number>,
+  repoRoot: string,
 ): PiProjectResourceLaunchSnapshot {
   return Object.freeze({
     workingDir,
     paths,
     watchRootMtimes,
-    state: { repoRoot: resolvePiResourceRepoRoot(workingDir) },
+    state: { repoRoot },
   });
 }
 
