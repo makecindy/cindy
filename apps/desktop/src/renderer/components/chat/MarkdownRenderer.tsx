@@ -552,7 +552,8 @@ function CodeBlockPre({ children, ...props }: HTMLAttributes<HTMLPreElement>) {
         className={cn(
           CHAT_CODE_SURFACE_CLASS,
           CHAT_CODE_CLASS,
-          'p-4',
+          // Keep the persistent copy button above the code, including wrapped first lines.
+          'p-4 pt-10',
           // 取消横向滚动:长行/长 token 自动折行,避免出现横滚条
           'whitespace-pre-wrap break-all',
         )}
