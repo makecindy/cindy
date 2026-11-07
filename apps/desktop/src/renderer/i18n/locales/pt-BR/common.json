@@ -19798,5 +19798,9 @@
     "rendered": "Ver documento",
     "wrap": "Quebra de linha",
     "lineNumbers": "Números de linha"
+  },
+  "sessionNotify": {
+    "finished": "Esta tarefa concluiu a rodada. Resposta final:",
+    "ended": "A rodada desta tarefa não terminou normalmente. Última saída:"
   }
 }

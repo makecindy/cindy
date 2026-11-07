@@ -1,8 +1,8 @@
 import type { BotAutonomyExecution } from '../../shared/botAutonomy.js';
 
-/** The caller's conversation at creation. Following and execution location never rewrite it. */
+/** The task that asked to hear back (`notify_when_done`), or a teammate conversation. */
 export interface TaskCompletionOrigin {
-  botId: string;
+  botId?: string;
   sessionId: string;
   groupId?: string;
   threadRootId?: string;
@@ -13,6 +13,8 @@ export interface TaskCompletionReceipt {
   execution: BotAutonomyExecution;
   text: string;
   status: 'pending' | 'delivered' | 'failed';
+  /** false: the turn did not finish normally (error or stop); the requester still hears about it. */
+  successful?: boolean;
   errorCode?: string;
   failureShown?: boolean;
   postSnapshot?: unknown;
@@ -21,6 +23,11 @@ export interface TaskCompletionReceipt {
 export interface TaskCompletionRecord {
   origin: TaskCompletionOrigin;
   receipts: TaskCompletionReceipt[];
+  /**
+   * One-shot: the next turn of this task that ends after `after` (the turn running or last
+   * finished when the request was sent) is delivered to `origin`, then it disarms.
+   */
+  armed?: { after?: BotAutonomyExecution };
 }
 
 interface TaskCompletionTerminal {
@@ -127,8 +134,8 @@ export function createTaskCompletionDelivery(deps: TaskCompletionDeliveryDeps) {
   async function settle(input: TaskCompletionTerminal) {
     const key = executionKey(input.sessionId, input.execution);
     const report = reports.get(key);
-    if (!report) return;
-    if (!report.final || !input.successful || !current()) {
+    // A legacy explicit report that is not final, or a failed reported turn, delivers nothing.
+    if ((report && (!report.final || !input.successful)) || !current()) {
       reports.delete(key);
       unsettled.delete(key);
       return;
@@ -138,13 +145,19 @@ export function createTaskCompletionDelivery(deps: TaskCompletionDeliveryDeps) {
     try {
       await serial(input.sessionId, async () => {
         const saved = await deps.read(input.sessionId);
-        if (!saved || !current()) return;
+        const armedFor = (armed: TaskCompletionRecord['armed']) => !!armed && (!armed.after
+          || armed.after.instanceId !== input.execution.instanceId || input.execution.generation > armed.after.generation);
+        if (!saved || !current() || (!report && !armedFor(saved.armed))) {
+          unsettled.delete(key);
+          return;
+        }
         if (!saved.receipts.some(receipt => same(receipt.execution, input.execution))) {
           const text = deps.resolveText ? await deps.resolveText(input) : input.text;
           if (!current()) return;
           await deps.update(input.sessionId, record => {
             record.receipts.push({ id: `task-result:${input.sessionId}:${input.execution.instanceId}:${input.execution.generation}`,
-              execution: input.execution, text, status: 'pending' });
+              execution: input.execution, text, status: 'pending', ...(input.successful ? {} : { successful: false }) });
+            delete record.armed;
           });
         }
         unsettled.delete(key);

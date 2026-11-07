@@ -19542,5 +19542,9 @@
     "rendered": "查看文稿",
     "wrap": "自动换行",
     "lineNumbers": "行号"
+  },
+  "sessionNotify": {
+    "finished": "这个任务这一轮做完了，最终答复如下：",
+    "ended": "这个任务这一轮没有正常结束，最后的输出如下："
   }
 }

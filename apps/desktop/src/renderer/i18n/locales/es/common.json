@@ -19798,5 +19798,9 @@
     "rendered": "Ver documento",
     "wrap": "Ajustar líneas",
     "lineNumbers": "Números de línea"
+  },
+  "sessionNotify": {
+    "finished": "Esta tarea terminó su turno. Su respuesta final:",
+    "ended": "El turno de esta tarea no terminó con normalidad. Última salida:"
   }
 }

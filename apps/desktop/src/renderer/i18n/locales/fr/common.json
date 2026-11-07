@@ -19798,5 +19798,9 @@
     "rendered": "Afficher le document",
     "wrap": "Retour à la ligne",
     "lineNumbers": "Numéros de ligne"
+  },
+  "sessionNotify": {
+    "finished": "Cette tâche a terminé son tour. Sa réponse finale :",
+    "ended": "Le tour de cette tâche ne s'est pas terminé normalement. Dernière sortie :"
   }
 }

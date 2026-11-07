@@ -19798,5 +19798,9 @@
     "rendered": "Ver documento",
     "wrap": "Moldar linhas",
     "lineNumbers": "Números de linha"
+  },
+  "sessionNotify": {
+    "finished": "Esta tarefa concluiu a ronda. Resposta final:",
+    "ended": "A ronda desta tarefa não terminou normalmente. Última saída:"
   }
 }

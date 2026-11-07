@@ -2,7 +2,12 @@ import { registerRuntimeSettingsSection } from '../app-settings/runtime.js';
 import { z as settingsSchema } from 'zod';
 import { registerPreferenceControlIpc } from '../app-settings/preferences.js';
 import { configureModelSettingsActions } from '../app-settings/models.js';
-import { createTaskCompletionDeliveryHost, type TaskCompletionDeliveryHost } from './taskCompletionDeliveryHost.js';
+import {
+  createTaskCompletionDeliveryHost,
+  type TaskCompletionDeliveryHost,
+  type TaskResultDelivery,
+  type TaskResultDeliveryOutcome,
+} from './taskCompletionDeliveryHost.js';
 import { setRoutineResultDispatch } from '../routines/deliveryDispatch.js';
 import { McpSetupBridge } from './mcpSetupBridge.js';
 import type { McpSetupProposal, McpSetupRequest } from '../../shared/mcpSetup.js';
@@ -2795,6 +2800,8 @@ interface OrcaCollabService {
     /** Host-generated stable delivery ID for a script retry, not model-supplied metadata. */
     deliveryClientId?: string;
     messagePurpose?: SessionMessagePurpose;
+    /** The handling turn's final answer comes back to the dispatcher once. */
+    notifyWhenDone?: boolean;
     /** 省略 → create 新 session;提供 → jump 到该既有 session。 */
     targetSessionId?: string;
     message: string;
@@ -3115,6 +3122,8 @@ interface EnableOrcaOptions {
 let orcaCollabServiceHolder: OrcaCollabService | null = null;
 let botDelegationServiceHolder: BotDelegationService | null = null;
 let taskCompletionDeliveryHolder: TaskCompletionDeliveryHost | null = null;
+/** Bound once the session handoff exists: delivers a finished turn back to the task that asked. */
+let taskResultDeliverer: ((input: TaskResultDelivery) => Promise<TaskResultDeliveryOutcome>) | null = null;
 let taskCompletionDeliveryScope: string | null = null;
 function taskCompletionDeliveryForOwner(): TaskCompletionDeliveryHost | null {
   if (isAppSessionBoundaryPending()) return null;
@@ -3124,7 +3133,10 @@ function taskCompletionDeliveryForOwner(): TaskCompletionDeliveryHost | null {
     taskCompletionDeliveryScope = scope;
     taskCompletionDeliveryHolder = createTaskCompletionDeliveryHost(input => botGroupChatServiceHolder
       ? botGroupChatServiceHolder.postCompanionTaskMessage(input)
-      : Promise.resolve({ ok: false, errorCode: 'GROUP_CHANNEL_UNAVAILABLE', retryable: true }));
+      : Promise.resolve({ ok: false, errorCode: 'GROUP_CHANNEL_UNAVAILABLE', retryable: true }),
+    input => taskResultDeliverer
+      ? taskResultDeliverer(input)
+      : Promise.resolve({ ok: false, errorCode: 'HOST_NOT_READY', retryable: true }));
     void taskCompletionDeliveryHolder.restore().catch(() => log.warn('Task delivery restore deferred'));
   }
   return taskCompletionDeliveryHolder;
@@ -12644,6 +12656,8 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
      * reconcileCreateOptsAgainstDb 再读当前落库档位,不使用入队时的旧快照。
      */
     resumeWithStoredPermissionMode?: boolean;
+    /** create: the new task's first turn end is delivered back to the dispatcher once. */
+    notifyWhenDone?: boolean;
   }): Promise<SendToSessionInternalResult> {
     await assertTaskActionCurrent();
     if (hasTaskActionAuthorization()) params = { ...params, forceQueue: true };
@@ -12750,7 +12764,8 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
         };
       }
       const taskDeliveryHost = taskCompletionDeliveryForOwner();
-      const taskDeliveryOrigin = await taskDeliveryHost?.capture(dispatcherSessionId);
+      const taskDeliveryOrigin = params.notifyWhenDone
+        ? await taskDeliveryHost?.capture(dispatcherSessionId, { anyTask: true }) : null;
       let createdPreviewSessionId: string | null = null;
       let createdPreviewClientId: string | null = null;
       let createdPreviewStarted = false;
@@ -12948,7 +12963,8 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
             });
           }
         }
-        if (taskDeliveryOrigin) await taskDeliveryHost!.saveOrigin(session.id, taskDeliveryOrigin);
+        // Before the first input can run, so even a quick first turn is delivered.
+        if (taskDeliveryOrigin) await taskDeliveryHost!.arm(session.id, taskDeliveryOrigin);
         const clientId = createId();
         createdPreviewSessionId = session.id;
         createdPreviewClientId = clientId;
@@ -13510,6 +13526,19 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     // 告警日志携带 lockStage 定位挂点。返回值仍是 run 本体,调用方观察到真实结果。
     return trackSendToSessionLockRun(targetSessionId, run, () => lockStage);
   }
+
+  // notify_when_done: a finished turn reaches the asking task as an ordinary, labelled message.
+  taskResultDeliverer = async ({ targetSessionId, fromSessionId, text, clientId }) => {
+    const [delivered] = await getDbClient().drizzle.select({ id: messages.id }).from(messages)
+      .where(and(eq(messages.sessionId, targetSessionId), eq(messages.clientId, clientId))).limit(1);
+    if (delivered) return { ok: true };
+    const result = await sendToSessionInternal({
+      targetSessionId, message: text, clientId, dispatcherSessionId: fromSessionId, forceQueue: true,
+    });
+    if (result.ok) return { ok: true };
+    return { ok: false, errorCode: result.errorCode,
+      retryable: !['NOT_FOUND', 'DELETED', 'ARCHIVED', 'INVALID_ARGS', 'UNSUPPORTED_CAPABILITY'].includes(result.errorCode) };
+  };
 
   const welcomeDispatchReceipts = createQueuedDispatchReceipts();
   const dispatchBotSessionMessage = async (params: {
@@ -18308,6 +18337,31 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       }
       if (!isDataOwnerBroadcastScopeCurrent(ownerScope)) {
         return { ok: false, errorCode: 'AGENT_NOT_READY', message: 'Data owner changed before delivery.' };
+      }
+      // notify_when_done on an existing task: armed before delivery, for the turn that handles it.
+      const notifyTarget = params.notifyWhenDone && params.targetSessionId ? params.targetSessionId : null;
+      if (notifyTarget) {
+        const host = taskCompletionDeliveryForOwner();
+        const origin = await host?.capture(params.dispatcherSessionId, { anyTask: true });
+        if (!host || !origin) {
+          return { ok: false, errorCode: 'INVALID_ARGS', message: 'notify_when_done 需要从一个任务里调用。' };
+        }
+        const live = getMakerIfReady()?.getSession(notifyTarget);
+        try {
+          await host.arm(notifyTarget, origin,
+            live ? { instanceId: live.instanceId, generation: live.getTurnGeneration() } : undefined);
+        } catch (error) {
+          const missing = error instanceof Error && error.message === 'TASK_UNAVAILABLE';
+          return { ok: false, errorCode: missing ? 'NOT_FOUND' as const : 'AGENT_NOT_READY' as const,
+            message: missing ? '目标任务不存在。' : '暂时无法登记做完通知，请稍后重试。' };
+        }
+        const sent = await sendToSessionInternal({ ...params, notifyWhenDone: false,
+          ...(params.deliveryClientId ? { clientId: params.deliveryClientId } : {}),
+          autoReviewUserText: request.autoReviewUserText,
+          ...(classification.coordination ? { ...coordinationInput(params.message, classification.coordination), forceQueue: true } : {}),
+        });
+        if (!sent.ok) await host.disarm(notifyTarget).catch(() => log.warn('notify_when_done disarm deferred'));
+        return sent;
       }
       return sendToSessionInternal({
         ...params,

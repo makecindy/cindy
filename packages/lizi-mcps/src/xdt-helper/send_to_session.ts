@@ -38,6 +38,8 @@ export type SendToSessionCallback = (params: {
   effort?: "minimal" | "low" | "medium" | "high" | "xhigh" | "max" | "ultra";
   /** create 模式可选:显式 Fast 开关；缺省继承 dispatcher。jump 忽略。 */
   fast?: boolean | 'ultrafast';
+  /** 对方处理完这条消息的那一轮结束时，把最终答复作为来信送回发送方一次。 */
+  notifyWhenDone?: boolean;
 }) => Promise<
   ControlResult<
     {
@@ -241,6 +243,9 @@ export function registerSendToSessionTool(
         .describe(
           "仅 create 模式可选:目标模型推理强度。按实际 provider+model 支持档位校验；jump 模式忽略。",
         ),
+      notify_when_done: z.boolean().optional().describe(
+        "可选：需要对方的结果时传 true。对方处理这条消息的那一轮结束后，宿主把它的最终答复作为来信送回本任务一次（没正常结束也会告诉你），本任务空闲时会被叫醒；之后不再自动回送。无需轮询，也不要求对方回复。仅本机任务。",
+      ),
       fast: z
         .union([z.boolean(), z.literal('ultrafast')])
         .optional()
@@ -260,6 +265,7 @@ export function registerSendToSessionTool(
       model,
       effort,
       fast,
+      notify_when_done,
     }) => {
       const ctx = deps.getSessionContext();
       const qualified = parseQualifiedSessionId(target_session_id);
@@ -268,6 +274,9 @@ export function registerSendToSessionTool(
       if (qualified && qualified.deviceId !== "local") {
         if (!deps.sendToRemoteSession) {
           return errorPayload("REMOTE_UNSUPPORTED", "当前宿主不支持给其它电脑上的任务发消息。");
+        }
+        if (notify_when_done) {
+          return errorPayload("INVALID_ARGS", "notify_when_done 目前只支持本机任务；发给其它电脑上的任务时请省略。");
         }
         if (message_purpose === "coordination") {
           return errorPayload(
@@ -307,6 +316,7 @@ export function registerSendToSessionTool(
         ...(model !== undefined ? { model } : {}),
         ...(effort !== undefined ? { effort } : {}),
         ...(fast !== undefined ? { fast } : {}),
+        ...(notify_when_done ? { notifyWhenDone: true } : {}),
       });
 
       if (!result.ok) {

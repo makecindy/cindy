@@ -19614,5 +19614,9 @@
     "rendered": "Dokument anzeigen",
     "wrap": "Zeilenumbruch",
     "lineNumbers": "Zeilennummern"
+  },
+  "sessionNotify": {
+    "finished": "Diese Aufgabe hat ihren Durchgang abgeschlossen. Ihre endgültige Antwort:",
+    "ended": "Der Durchgang dieser Aufgabe wurde nicht normal beendet. Letzte Ausgabe:"
   }
 }

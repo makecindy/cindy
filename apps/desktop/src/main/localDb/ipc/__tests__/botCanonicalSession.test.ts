@@ -14,8 +14,7 @@ import { setMainLocale } from '../../../i18n';
 import Database from 'better-sqlite3';
 import { AgentInputCoordinator } from '../../../maker-ipc/agent-input-coordinator';
 import { createSessionQueueControlService } from '../../../maker-ipc/sessionQueueControl';
-import { createMessage, readMessagesList } from '../messages';
-import { projectHistoryView } from '@cindy/maker-shared/message-window';
+import { createMessage } from '../messages';
 import { authorizeSessionQueueItem, createSessionControlService, rebuildSessionQueueItem } from '../../../maker-ipc/sessionControlService';
 import type { AgentInputQueuedMessage } from '../../../../shared/agentInputQueue';
 import type { ProviderView } from '@cindy/model-providers';
@@ -5399,7 +5398,7 @@ describe('Bot Session task end-to-end runtime', () => {
     await seedPair(); seedGroupLane('generic-origin', 'group:fixture:access:owner:1:thread:root');
     h.sqlite!.prepare("INSERT INTO sessions (id, source, status, created_at, updated_at) VALUES ('session-2', 'desktop', 'active', 1, 1)").run();
     const post = vi.fn(async () => ({ ok: false as const, errorCode: 'OFFLINE', retryable: true }));
-    let host = createTaskCompletionDeliveryHost(post);
+    let host = createTaskCompletionDeliveryHost(post, vi.fn());
     const savedFile = join(h.userDataDir, createHash('sha256').update(h.ownerScopeKey).digest('hex'),
       'task-completion-delivery', createHash('sha256').update('session-2').digest('hex') + '.json');
     try {
@@ -5414,7 +5413,7 @@ describe('Bot Session task end-to-end runtime', () => {
       expect(post).toHaveBeenLastCalledWith(expect.objectContaining({ groupId: 'fixture', threadRootId: 'root', text: 'Done.\n\n- First\n- Second' }));
       host.dispose();
       const restoredPost = vi.fn(async () => ({ ok: true as const, messageId: 'posted' }));
-      host = createTaskCompletionDeliveryHost(restoredPost);
+      host = createTaskCompletionDeliveryHost(restoredPost, vi.fn());
       await host.restore();
       expect(restoredPost).toHaveBeenCalledTimes(1);
       expect(restoredPost).toHaveBeenCalledWith(expect.objectContaining({ groupId: 'fixture', threadRootId: 'root', botId: 'bot-a' }));
@@ -5424,21 +5423,32 @@ describe('Bot Session task end-to-end runtime', () => {
     } finally { host.dispose(); await fsPromises.rm(savedFile, { force: true }); }
   });
 
-  // Integration: runtime acceptance found receipt-only assistant messages folded as work.
-  // Enter the Host writer and the real history projection, not a source/metadata assertion.
-  it('shows a generic private result as a final message rather than folded work', async () => {
+  // notify_when_done (2026-11-07): any task can ask to hear back once. Bug guarded: the reply
+  // arrived only for teammate callers, needed a report tool, never woke the asker, and a busy
+  // target's already-running turn would have been reported instead of the turn handling the message.
+  it('delivers the handling turn of an armed task back to the asking task once, finished or not', async () => {
     await seedPair();
-    h.sqlite!.prepare("INSERT INTO sessions (id, source, status, created_at, updated_at) VALUES ('generic-private-child', 'desktop', 'active', 1, 1)").run();
-    const host = createTaskCompletionDeliveryHost(vi.fn());
+    h.sqlite!.prepare("INSERT INTO sessions (id, source, status, created_at, updated_at) VALUES ('notify-child', 'desktop', 'active', 1, 1)").run();
+    const deliver = vi.fn(async () => ({ ok: true as const }));
+    const host = createTaskCompletionDeliveryHost(vi.fn(), deliver);
     const savedFile = join(h.userDataDir, createHash('sha256').update(h.ownerScopeKey).digest('hex'),
-      'task-completion-delivery', createHash('sha256').update('generic-private-child').digest('hex') + '.json');
+      'task-completion-delivery', createHash('sha256').update('notify-child').digest('hex') + '.json');
     try {
-      await host.saveOrigin('generic-private-child', (await host.capture('session-1'))!);
-      host.report('generic-private-child', { instanceId: 'private-native', generation: 1 }, true);
-      await host.settleTerminal({ sessionId: 'generic-private-child', execution: { instanceId: 'private-native', generation: 1 },
-        successful: true, text: 'Visible final result' });
-      const view = projectHistoryView(await readMessagesList('session-1', {}, true), false);
-      expect(view.some(item => item.type === 'messages' && item.messages?.some(message => message.content === 'Visible final result'))).toBe(true);
+      expect(await host.capture('session-1', { anyTask: true })).toMatchObject({ sessionId: 'session-1' });
+      // Armed while generation 4 was running: that turn is not the one handling the message.
+      await host.arm('notify-child', { sessionId: 'session-1' }, { instanceId: 'native', generation: 4 });
+      await host.settleTerminal({ sessionId: 'notify-child', execution: { instanceId: 'native', generation: 4 },
+        successful: true, text: 'Earlier work' });
+      expect(deliver).not.toHaveBeenCalled();
+      await host.settleTerminal({ sessionId: 'notify-child', execution: { instanceId: 'native', generation: 5 },
+        successful: false, text: 'Stopped halfway' });
+      expect(deliver).toHaveBeenCalledTimes(1);
+      expect(deliver).toHaveBeenCalledWith(expect.objectContaining({ targetSessionId: 'session-1', fromSessionId: 'notify-child',
+        text: expect.stringContaining('Stopped halfway') }));
+      // One-shot: later turns stay quiet until asked again.
+      await host.settleTerminal({ sessionId: 'notify-child', execution: { instanceId: 'native', generation: 6 },
+        successful: true, text: 'Later work' });
+      expect(deliver).toHaveBeenCalledTimes(1);
     } finally { host.dispose(); await fsPromises.rm(savedFile, { force: true }); }
   });
 

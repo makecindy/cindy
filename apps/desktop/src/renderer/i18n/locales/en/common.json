@@ -19614,5 +19614,9 @@
     "rendered": "View document",
     "wrap": "Wrap lines",
     "lineNumbers": "Line numbers"
+  },
+  "sessionNotify": {
+    "finished": "This task finished its turn. Its final answer:",
+    "ended": "This task's turn did not finish normally. Its last output:"
   }
 }

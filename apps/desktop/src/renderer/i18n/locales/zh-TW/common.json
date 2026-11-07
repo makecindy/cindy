@@ -19542,5 +19542,9 @@
     "rendered": "查看文件",
     "wrap": "自動換行",
     "lineNumbers": "行號"
+  },
+  "sessionNotify": {
+    "finished": "這個任務這一輪做完了，最終答覆如下：",
+    "ended": "這個任務這一輪沒有正常結束，最後的輸出如下："
   }
 }
