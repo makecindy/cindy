@@ -287,6 +287,9 @@ export function getDesktopMcpToolApprovalPolicy(
     if (action === 'schedule_set_pre_run_hook' || (action === 'routine_save' && args?.preRunHook != null)) {
       return 'prompt-each-time';
     }
+    // 后台命令是任意 shell 执行面(借宿主进程绕开 bash 的同步超时):每次调用都
+    // 交会话权限档判定,不享受可信 helper server 的静默放行。
+    if (action === 'run_command_background') return 'prompt-each-time';
     // Creating a task worktree adds a branch and directory to the repository and binds them
     // to the task, like `git worktree add`; the task's permission mode decides.
     if (action === 'move_session' || action === 'publish_skill' || action === 'create_task_worktree') {

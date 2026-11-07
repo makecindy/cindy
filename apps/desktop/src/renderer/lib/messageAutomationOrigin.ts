@@ -17,7 +17,14 @@ import type {
 export function toMessageAutomationOrigin(origin: unknown): MessageAutomationOrigin | undefined {
   if (!origin || typeof origin !== 'object') return undefined;
   const value = origin as Partial<StoredMessageOrigin> & Record<string, unknown>;
-  if (value.kind === 'scheduler') return value as MessageAutomationOrigin;
+  if (value.kind === 'scheduler') {
+    // 后台命令完成回注复用 scheduler 形态（scheduleId 为 `bgcmd:<runId>`）：正文自述
+    // 「〔后台命令完成〕」，不是自动化，不出「由自动化…发送」标签，也没有可跳转条目。
+    if (typeof value.scheduleId === 'string' && value.scheduleId.startsWith(BGCMD_SCHEDULE_ID_PREFIX)) {
+      return undefined;
+    }
+    return value as MessageAutomationOrigin;
+  }
   if (value.kind !== 'session' && value.kind !== 'orca') return undefined;
   const senderSessionId = readNonEmptyString(value.senderSessionId);
   if (value.kind === 'orca') {
@@ -44,6 +51,7 @@ export function toMessageAutomationOrigin(origin: unknown): MessageAutomationOri
 }
 
 const HOOK_SCHEDULE_ID_PREFIX = 'hook:';
+const BGCMD_SCHEDULE_ID_PREFIX = 'bgcmd:';
 const HOOK_SCHEDULE_NAME_PREFIX = /^Hook\s*·\s*/;
 
 /**

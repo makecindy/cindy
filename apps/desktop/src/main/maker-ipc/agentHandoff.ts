@@ -255,11 +255,17 @@ export function describeHandoffUserSource(message: Pick<HandoffSourceMessage, 'c
   const im = asRecord(meta.imSource)?.im ?? asRecord(meta.hookSource)?.im;
   // Hook 渠道消息复用 scheduler 形态（scheduleId 为 `hook:<连接>`），是真人从渠道发来的，
   // 不是定时触发：只写渠道（下方 im）；缺渠道信息的旧行写成外部渠道。
+  // 后台命令完成回注同样复用 scheduler 形态（`bgcmd:<runId>`），写宿主回调而不是定时任务。
   const isHookOrigin = origin?.kind === 'scheduler'
     && typeof origin.scheduleId === 'string'
     && origin.scheduleId.startsWith('hook:');
+  const isBgcmdOrigin = origin?.kind === 'scheduler'
+    && typeof origin.scheduleId === 'string'
+    && origin.scheduleId.startsWith('bgcmd:');
   if (isHookOrigin) {
     if (im === undefined) parts.push('来自外部渠道');
+  } else if (isBgcmdOrigin) {
+    parts.push('由宿主后台命令回调发送');
   } else if (origin?.kind === 'scheduler') {
     parts.push(`由定时任务${formatSourceRef(origin.scheduleName, 'schedule_id', origin.scheduleId)} 触发`);
   } else if (origin?.kind === 'orca') {
