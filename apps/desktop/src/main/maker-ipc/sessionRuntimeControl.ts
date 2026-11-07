@@ -324,6 +324,14 @@ export function acceptSessionRuntimeMutation(params: {
   return state.generation;
 }
 
+/** New recovery budget, same effective/pending route: do not switch back to the preferred model. */
+export function resetSessionRuntimeFallbackEpisode(sessionId: string): void {
+  const state = states.get(sessionId);
+  if (!state) return;
+  state.fallbackHop = 0;
+  state.visitedRoutes.clear();
+}
+
 export function recordFailedSessionRuntimeFallbackCandidate(
   sessionId: string,
   expectedGeneration: number,
@@ -332,6 +340,19 @@ export function recordFailedSessionRuntimeFallbackCandidate(
   const state = stateFor(sessionId);
   if (state.generation !== expectedGeneration) return false;
   state.visitedRoutes.add(routeKey(profile));
+  return true;
+}
+
+export function recordSkippedSessionRuntimeFallbackRoutes(
+  sessionId: string,
+  expectedGeneration: number,
+  routeKeys: readonly string[],
+): boolean {
+  const state = stateFor(sessionId);
+  if (state.generation !== expectedGeneration) return false;
+  for (const key of routeKeys) {
+    state.visitedRoutes.add(key);
+  }
   return true;
 }
 

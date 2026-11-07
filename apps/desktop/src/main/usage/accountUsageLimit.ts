@@ -82,6 +82,63 @@ export function xaiAccountUsageLimit(
   );
 }
 
+/** `/v1/quota` payload of the local Antigravity bridge (docs/examples/antigravity-bridge). */
+export interface AntigravityQuotaPayload {
+  windows?: Array<{ key?: string; window?: { utilization?: number; resetsAt?: number | null } }>;
+}
+
+/**
+ * Antigravity runs three independent quota groups: Gemini 4 Argon, other Gemini models,
+ * and third-party (Claude / GPT) models. Only the group the model draws from counts.
+ */
+export function antigravityQuotaLimit(
+  payload: AntigravityQuotaPayload | null,
+  modelId: string | null | undefined,
+  nowMs = Date.now(),
+): AccountUsageLimit | null {
+  const model = (modelId ?? '').toLowerCase();
+  if (!payload?.windows || !model) return null;
+  const group = model.includes('argon') ? 'argon'
+    : /claude|gpt/.test(model) ? '3p' : 'gemini';
+  const windows = payload.windows
+    .filter((w) => {
+      const key = (w.key ?? '').toLowerCase();
+      if (group === 'argon') return key.includes('argon');
+      if (group === '3p') return key.startsWith('3p-');
+      return key.startsWith('gemini-') && !key.includes('argon');
+    })
+    .filter((w) => typeof w.window?.utilization === 'number')
+    .map((w) => ({ usedPercent: w.window!.utilization as number, resetsAtSec: w.window!.resetsAt }));
+  return windows.length > 0 ? fromWindows(windows, nowMs) : null;
+}
+
+/** Only a bridge on this computer is asked; a remote upstream is never probed for quota. */
+async function readAntigravityBridgeLimit(
+  agentKind: string,
+  providerId: string,
+  modelId: string | null | undefined,
+): Promise<AccountUsageLimit | null | undefined> {
+  const provider = getActiveCatalog().providers.find((p) => p.id === providerId);
+  const routing = provider?.routing as Record<string, { upstream?: string } | undefined> | undefined;
+  const upstream = routing?.[agentKind]?.upstream
+    ?? Object.values(routing ?? {}).find((r) => r?.upstream)?.upstream;
+  if (!upstream) return undefined;
+  let url: URL;
+  try {
+    url = new URL(`${upstream.replace(/\/+$/, '')}/quota`);
+  } catch {
+    return undefined;
+  }
+  if (!['127.0.0.1', 'localhost', '[::1]'].includes(url.hostname)) return undefined;
+  try {
+    const res = await fetch(url, { signal: AbortSignal.timeout(2000) });
+    if (!res.ok) return undefined; // not an Antigravity bridge
+    return antigravityQuotaLimit((await res.json()) as AntigravityQuotaPayload, modelId);
+  } catch {
+    return undefined;
+  }
+}
+
 /**
  * 会话所用 provider 属于哪个订阅家族。providerId 缺省（旧会话的隐式默认来源）时只有
  * Codex 能确定是 ChatGPT 默认账号；其它 agent 的默认来源可能是 Cindy 网关，不猜。
@@ -111,25 +168,35 @@ export function sessionUsesOtherMachineAccount(
 }
 
 /**
- * @returns `undefined` = 不是订阅家族（调用方另找来源）；`null` = 是订阅家族但暂无可用快照。
+ * @returns `undefined` = 非订阅来源或窗口不能判定请求准入；`null` = 订阅家族暂无可用快照。
  */
 export async function readAccountUsageLimit(
   agentKind: string,
   providerId: string | null | undefined,
   modelId?: string | null,
+  purpose: 'reset' | 'admission' = 'reset',
 ): Promise<AccountUsageLimit | null | undefined> {
   const family = subscriptionFamilyOf(agentKind, providerId);
+  // ChatGPT windows do not establish credit-backed request admission. Actual
+  // rejections still drive the candidate failure scope and reset-time lookup.
+  if (purpose === 'admission' && family === 'codex') return undefined;
   switch (family) {
     case 'codex':
       return codexAccountUsageLimit(await readCodexAccountUsageSnapshot(providerId ?? undefined), {
         agentKind,
         modelId,
       });
-    case 'claude':
+    case 'claude': {
       // 独立 Claude 账号已停用，只有内置默认账号有快照。
-      return providerId === 'anthropic' || !providerId
-        ? claudeAccountUsageLimit(await readClaudeSubscriptionUsageSnapshot(), modelId)
-        : null;
+      if (providerId && providerId !== 'anthropic') return null;
+      const snapshot = await readClaudeSubscriptionUsageSnapshot();
+      // Enabled extra usage can admit requests after the plan window fills.
+      // Cached paid balances are not an admission verdict; let the upstream decide.
+      if (purpose === 'admission' && snapshot?.extraUsage?.isEnabled) {
+        return { limited: false, resetAtMs: null };
+      }
+      return claudeAccountUsageLimit(snapshot, modelId);
+    }
     case 'xai':
       return xaiAccountUsageLimit(
         !providerId || providerId === 'xai'
@@ -139,7 +206,7 @@ export async function readAccountUsageLimit(
             )) as XaiSubscriptionUsageSnapshot | null),
       );
     default:
-      return undefined;
+      return providerId ? readAntigravityBridgeLimit(agentKind, providerId, modelId) : undefined;
   }
 }
 
