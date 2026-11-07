@@ -2455,12 +2455,12 @@
         "previewStarting": "Suelta el mouse y el teclado. La pantalla se cubrirá en 3 segundos; pulsa cualquier tecla para bloquearla y luego desbloquéala.",
         "previewUnavailable": "No se pudo cubrir la pantalla. Reinicia Cindy e inténtalo de nuevo.",
         "delay": {
-          "label": "Cubrir la pantalla tras",
-          "hint": "Tiempo sin tocar el teclado ni el mouse antes de que aparezca la capa. Por omisión, el mismo que el reposo de la pantalla.",
           "30": "30 s",
           "60": "1 min",
           "120": "2 min",
           "300": "5 min",
+          "label": "Cubrir la pantalla tras",
+          "hint": "Tiempo sin tocar el teclado ni el mouse antes de que aparezca la capa. Por omisión, el mismo que el reposo de la pantalla.",
           "system": "Sistema"
         }
       }
@@ -10024,7 +10024,48 @@
       "terminated": "Se detuvo el proceso {{name}}",
       "terminateFailed": "No se pudo detener este proceso; es posible que ya haya terminado. La lista se actualizará con el próximo muestreo.",
       "sessionDetail": "Tarea: {{title}}",
-      "processCount_many": "Árbol de procesos: {{count}} procesos"
+      "processCount_many": "Árbol de procesos: {{count}} procesos",
+      "tabs": {
+        "label": "Vista de recursos",
+        "processes": "Procesos",
+        "hostDaemons": "Elementos en segundo plano"
+      }
+    },
+    "hostDaemons": {
+      "scanning": "Explorando elementos en segundo plano…",
+      "refresh": "Actualizar",
+      "loadFailed": "No se pudieron leer los elementos en segundo plano",
+      "refreshFailed": "La actualización falló; puede que esta lista no esté al día",
+      "unsupported": "Los elementos en segundo plano solo están disponibles en Windows",
+      "empty": "Todavía no hay elementos en segundo plano creados por tareas",
+      "owner": "Creado por: {{title}}",
+      "ownerUnknown": "Desconocido",
+      "state": {
+        "running": "En ejecución",
+        "ready": "Inactivo",
+        "disabled": "Desactivado",
+        "unknown": "Desconocido"
+      },
+      "trigger": {
+        "logon": "Al iniciar sesión",
+        "startup": "Al arrancar",
+        "schedule": "Según la programación",
+        "other": "Otro disparador"
+      },
+      "stop": "Detener",
+      "delete": "Eliminar",
+      "run": "Iniciar",
+      "started": "{{name}} iniciado",
+      "stopTitle": "¿Detener «{{name}}»?",
+      "stopBody": "Solo termina la ejecución actual. La tarea se volverá a iniciar según su programación.",
+      "deleteTitle": "¿Eliminar «{{name}}»?",
+      "deleteBody": "Elimina de forma permanente esta tarea programada de este equipo, por lo que ya no se iniciará automáticamente. Los registros de tareas en Cindy no se ven afectados.",
+      "stopped": "{{name}} detenido",
+      "deleted": "{{name}} eliminado",
+      "actionFailed": "La acción falló. Inténtalo de nuevo.",
+      "unrelated_one": "{{count}} elemento en segundo plano no relacionado está oculto",
+      "unrelated_other": "{{count}} elementos en segundo plano no relacionados están ocultos",
+      "unrelated_many": "{{count}} elemento en segundo plano no relacionado está oculto"
     }
   },
   "update": {

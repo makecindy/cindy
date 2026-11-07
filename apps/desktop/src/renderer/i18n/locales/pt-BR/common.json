@@ -2455,12 +2455,12 @@
         "previewStarting": "Solte o mouse e o teclado. A tela será coberta em 3 segundos; pressione qualquer tecla para bloqueá-la e depois desbloqueie.",
         "previewUnavailable": "Não foi possível cobrir a tela. Reinicie o Cindy e tente novamente.",
         "delay": {
-          "label": "Cobrir a tela após",
-          "hint": "Tempo sem tocar no teclado e no mouse até a camada aparecer. Por padrão, o mesmo do repouso da tela.",
           "30": "30 s",
           "60": "1 min",
           "120": "2 min",
           "300": "5 min",
+          "label": "Cobrir a tela após",
+          "hint": "Tempo sem tocar no teclado e no mouse até a camada aparecer. Por padrão, o mesmo do repouso da tela.",
           "system": "Sistema"
         }
       }
@@ -10024,7 +10024,48 @@
       "terminated": "Processo {{name}} interrompido",
       "terminateFailed": "Não foi possível interromper este processo — ele pode já ter sido encerrado. A lista será atualizada na próxima amostragem.",
       "sessionDetail": "Tarefa: {{title}}",
-      "processCount_many": "Árvore de processos: {{count}} processos"
+      "processCount_many": "Árvore de processos: {{count}} processos",
+      "tabs": {
+        "label": "Visualização de recursos",
+        "processes": "Processos",
+        "hostDaemons": "Itens em segundo plano"
+      }
+    },
+    "hostDaemons": {
+      "scanning": "Verificando itens em segundo plano…",
+      "refresh": "Atualizar",
+      "loadFailed": "Não foi possível ler os itens em segundo plano",
+      "refreshFailed": "A atualização falhou; esta lista pode estar desatualizada",
+      "unsupported": "Itens em segundo plano só estão disponíveis no Windows",
+      "empty": "Ainda não há itens em segundo plano criados por tarefas",
+      "owner": "Criado por: {{title}}",
+      "ownerUnknown": "Desconhecido",
+      "state": {
+        "running": "Em execução",
+        "ready": "Ocioso",
+        "disabled": "Desativado",
+        "unknown": "Desconhecido"
+      },
+      "trigger": {
+        "logon": "Ao entrar",
+        "startup": "Na inicialização",
+        "schedule": "Conforme a programação",
+        "other": "Outro gatilho"
+      },
+      "stop": "Parar",
+      "delete": "Excluir",
+      "run": "Iniciar",
+      "started": "{{name}} iniciado",
+      "stopTitle": "Parar “{{name}}”?",
+      "stopBody": "Encerra apenas a execução atual. A tarefa será iniciada novamente conforme sua programação.",
+      "deleteTitle": "Excluir “{{name}}”?",
+      "deleteBody": "Remove permanentemente esta tarefa agendada deste computador, então ela não será mais iniciada automaticamente. Os registros de tarefas no Cindy não são afetados.",
+      "stopped": "{{name}} parado",
+      "deleted": "{{name}} excluído",
+      "actionFailed": "A ação falhou. Tente novamente.",
+      "unrelated_one": "{{count}} item em segundo plano não relacionado está oculto",
+      "unrelated_other": "{{count}} itens em segundo plano não relacionados estão ocultos",
+      "unrelated_many": "{{count}} item em segundo plano não relacionado está oculto"
     }
   },
   "update": {

@@ -2417,12 +2417,12 @@
         "previewStarting": "Nimm die Hände von Maus und Tastatur. In 3 Sekunden wird der Bildschirm verdeckt; drücke eine Taste, um ihn zu sperren, und entsperre ihn dann.",
         "previewUnavailable": "Der Bildschirm konnte nicht verdeckt werden. Starte Cindy neu und versuche es erneut.",
         "delay": {
-          "label": "Bildschirm verdecken nach",
-          "hint": "So lange bleiben Tastatur und Maus unberührt, bevor die Abdeckung erscheint. Standardmäßig wie der Ruhezustand des Displays.",
           "30": "30 s",
           "60": "1 Min.",
           "120": "2 Min.",
           "300": "5 Min.",
+          "label": "Bildschirm verdecken nach",
+          "hint": "So lange bleiben Tastatur und Maus unberührt, bevor die Abdeckung erscheint. Standardmäßig wie der Ruhezustand des Displays.",
           "system": "System"
         }
       }
@@ -9944,7 +9944,47 @@
       "terminateConfirmDescription": "Dadurch wird der Agent-Prozess zwangsweise beendet. Alle Aufgaben, die diesen Prozess verwenden, werden unterbrochen. Sende eine weitere Nachricht in einer betroffenen Aufgabe, um wieder einen Agent zu starten.",
       "terminated": "Prozess {{name}} gestoppt",
       "terminateFailed": "Dieser Prozess konnte nicht gestoppt werden – möglicherweise wurde er bereits beendet. Die Liste wird bei der nächsten Erfassung aktualisiert.",
-      "sessionDetail": "Aufgabe: {{title}}"
+      "sessionDetail": "Aufgabe: {{title}}",
+      "tabs": {
+        "label": "Ressourcenansicht",
+        "processes": "Prozesse",
+        "hostDaemons": "Hintergrundelemente"
+      }
+    },
+    "hostDaemons": {
+      "scanning": "Hintergrundelemente werden geprüft…",
+      "refresh": "Aktualisieren",
+      "loadFailed": "Hintergrundelemente konnten nicht gelesen werden",
+      "refreshFailed": "Aktualisierung fehlgeschlagen; diese Liste ist möglicherweise veraltet",
+      "unsupported": "Hintergrundelemente sind nur unter Windows verfügbar",
+      "empty": "Noch keine von Aufgaben erstellten Hintergrundelemente",
+      "owner": "Erstellt von: {{title}}",
+      "ownerUnknown": "Unbekannt",
+      "state": {
+        "running": "Läuft",
+        "ready": "Bereit",
+        "disabled": "Deaktiviert",
+        "unknown": "Unbekannt"
+      },
+      "trigger": {
+        "logon": "Bei der Anmeldung",
+        "startup": "Beim Start",
+        "schedule": "Nach Zeitplan",
+        "other": "Andere Auslöser"
+      },
+      "stop": "Stoppen",
+      "delete": "Löschen",
+      "run": "Starten",
+      "started": "{{name}} gestartet",
+      "stopTitle": "„{{name}}“ stoppen?",
+      "stopBody": "Beendet nur den aktuellen Lauf. Die Aufgabe startet wieder nach ihrem Zeitplan.",
+      "deleteTitle": "„{{name}}“ löschen?",
+      "deleteBody": "Entfernt diese geplante Aufgabe dauerhaft von diesem Rechner, sodass sie nicht mehr automatisch startet. Aufgabeneinträge in Cindy bleiben unberührt.",
+      "stopped": "{{name}} gestoppt",
+      "deleted": "{{name}} gelöscht",
+      "actionFailed": "Aktion fehlgeschlagen. Versuche es erneut.",
+      "unrelated_one": "{{count}} nicht zugehöriges Hintergrundelement ist ausgeblendet",
+      "unrelated_other": "{{count}} nicht zugehörige Hintergrundelemente sind ausgeblendet"
     }
   },
   "update": {
