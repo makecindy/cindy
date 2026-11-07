@@ -1083,6 +1083,29 @@ describe('private notification topic output', () => {
     expect(larkMocks.reply).not.toHaveBeenCalled();
   });
 
+  // 测试价值(#9313 review): 合并转发根对 reply_in_thread 的拒绝是确定性的。
+  // 修复前每次出站都先写一次注定失败的 reply_in_thread 再降级, 一条多段答案
+  // 每条消息都多一次 API 往返。最小失败输入: 同一个根先被 230072 拒绝, 再发一次。
+  it('remembers a rejected topic root and replies directly next time (#9313)', async () => {
+    larkMocks.reply.mockResolvedValueOnce({
+      code: 230072,
+      msg: 'reply in thread not supported',
+      data: { message_id: '' },
+    } as unknown as { data: { message_id: string } });
+    larkMocks.reply.mockResolvedValue({ data: { message_id: 'om_plain_reply' } });
+
+    await outbound.sendText('ou_owner', '第一条', { threadTs: 'om_merge_root' });
+    await outbound.sendText('ou_owner', '第二条', { threadTs: 'om_merge_root' });
+
+    // 第一次:被拒后降级成普通回复; 第二次:直接普通回复, 不再重复那次失败的写。
+    expect(larkMocks.reply).toHaveBeenCalledTimes(3);
+    expect(larkMocks.reply.mock.calls[0]?.[0].data).toEqual(expect.objectContaining({ reply_in_thread: true }));
+    expect(larkMocks.reply.mock.calls[1]?.[0].data).not.toHaveProperty('reply_in_thread');
+    expect(larkMocks.reply.mock.calls[2]?.[0].data).not.toHaveProperty('reply_in_thread');
+    expect(larkMocks.reply.mock.calls[2]?.[0].path).toEqual({ message_id: 'om_merge_root' });
+    expect(larkMocks.create).not.toHaveBeenCalled();
+  });
+
   it('does not retry onto a replaced account after 230072 (#9313)', async () => {
     larkMocks.reply.mockImplementationOnce(async (payload) => {
       const data = payload.data as { reply_in_thread?: boolean };
