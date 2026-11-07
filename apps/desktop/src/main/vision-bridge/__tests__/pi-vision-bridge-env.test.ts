@@ -85,6 +85,18 @@ beforeEach(() => {
 });
 
 describe('buildPiVisionBridgeEnv', () => {
+  // Per-teammate effective settings must also reach the native tool env, not only Layer B.
+  it('serializes an effective teammate selection including no fallback without enabling a disabled app', () => {
+    const global = settings({ fallback: { providerId: 'user-x', modelId: 'app-backup' } });
+    mockedSettings.mockReturnValue(global);
+    const effective = { ...global, primary: { providerId: 'user-x', modelId: 'teammate-vision' }, fallback: null };
+    const deps = depsWithProvider({ id: 'user-x', routingAuth: 'api-key-header' });
+    const first = buildPiVisionBridgeEnv(deps, 'deepseek-v4', 'teammate-session', effective);
+    expect(JSON.parse(first![PI_VISION_BRIDGE_ENV])).toMatchObject({ primary: { model: 'teammate-vision' }, fallback: null });
+    expect(buildPiVisionBridgeEnv(deps, 'deepseek-v4', 'teammate-session', effective)).toEqual(first);
+    expect(buildPiVisionBridgeEnv(deps, 'deepseek-v4', 'teammate-session', { ...effective, enabled: false })).toBeNull();
+    expect(JSON.parse(buildPiVisionBridgeEnv(deps, 'deepseek-v4', 'ordinary')![PI_VISION_BRIDGE_ENV]).primary.model).toBe(global.primary!.modelId);
+  });
   it('returns null when disabled', () => {
     mockedSettings.mockReturnValue(settings({ enabled: false }));
     expect(buildPiVisionBridgeEnv(depsWithProvider({ id: 'user-x', routingAuth: 'api-key-header' }), 'deepseek-v4', 'session-1')).toBeNull();

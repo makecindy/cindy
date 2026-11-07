@@ -5063,6 +5063,7 @@ interface ElectronAPI {
       // Stage 2 C2: fork 已迁到 electronAPI.maker.fork (走 maker:fork IPC)。
     };
     bots: {
+      mediaModels: () => Promise<import('@cindy/maker-shared/teammate-media-models').TeammateMediaCatalog>;
       getModelChainSettings: () => Promise<{
         modelChain: import('../shared/botModelChain').BotModelRoute[];
         isCustomized: boolean;

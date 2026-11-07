@@ -30,6 +30,8 @@ import {
   type VisionChannelDeps,
 } from './vision-channel.js';
 
+import type { VisionBridgeSettings } from '../../shared/visionBridgeSettings.js';
+
 interface LoggerLike {
   info?(msg: string, meta?: Record<string, unknown>): void;
   warn?(msg: string, meta?: Record<string, unknown>): void;
@@ -39,6 +41,7 @@ interface LoggerLike {
 /** 视觉桥依赖：视觉通道 deps + 配置 + 提示回调。 */
 export interface VisionBridgeDeps extends VisionChannelDeps {
   logger?: LoggerLike;
+  resolveSettings?: (sessionId?: string) => Promise<{ settings: VisionBridgeSettings; scope: string }>;
   /** Resolve only the current task route; never borrow metadata from another provider. */
   resolveTargetModel?: (modelId: string, sessionId: string) => CatalogModel | null;
   /** 视觉桥不可用 / fallback 生效时的提示回调（host 可据此发 UI 事件）。sessionId 由 hook ctx 传入。
@@ -117,6 +120,7 @@ export function createVisionBridge(deps: VisionBridgeDeps): {
     imagePath?: string;
     prompt: string;
     signal?: AbortSignal;
+    sessionId?: string;
   }) => Promise<string>;
   dispose: () => void;
 } {
@@ -266,17 +270,25 @@ export function createVisionBridge(deps: VisionBridgeDeps): {
     prompt: string,
     signal?: AbortSignal,
     runtimeModel?: string,
+    sessionId?: string,
   ): Promise<{ text: string; usedFallback: boolean }> {
     if (disposed) {
       throw new VisionBackendError('unavailable', 'vision bridge disposed');
     }
-    const settings = readVisionBridgeSettings();
+    const { settings, scope } = deps.resolveSettings
+      ? await deps.resolveSettings(sessionId)
+      : { settings: readVisionBridgeSettings(), scope: '' };
+    if (disposed) throw new VisionBackendError('unavailable', 'vision bridge disposed');
+    if (!settings.enabled) throw new VisionBackendError('unavailable', 'vision bridge disabled');
     const primary = settings.primary;
     if (!primary) {
       throw new VisionBackendError('unavailable', 'vision bridge has no primary backend configured');
     }
     const imageSource = input.imagePath ?? input.imageUrl ?? '';
-    const ck = cacheKey(imageSource, prompt, primary);
+    // Include the full policy: an in-flight fallback from an old selection cannot satisfy a new one.
+    const policy = JSON.stringify([scope, primary, settings.fallback]);
+    const scopedKey = (backend: typeof primary) => cacheKey(JSON.stringify([policy, imageSource]), prompt, backend);
+    const ck = scopedKey(primary);
     const cached = cacheGet(ck);
     if (cached !== null) {
       // 不记 imagePath（本地路径/文件名是元数据，日志可能被上传/外发）。
@@ -327,7 +339,7 @@ export function createVisionBridge(deps: VisionBridgeDeps): {
       if (fallback && !sameBackend) {
         // fallback 缓存/去重闭环：primary 持续失败时复用已缓存的 fallback 描述，
         // 不同 primary 共享同 fallback 时合并请求。
-        const fallbackCk = cacheKey(imageSource, prompt, fallback);
+        const fallbackCk = scopedKey(fallback);
         const cachedFallback = cacheGet(fallbackCk);
         if (cachedFallback !== null) {
           logger?.debug?.('vision bridge fallback cache hit');
@@ -433,7 +445,7 @@ export function createVisionBridge(deps: VisionBridgeDeps): {
         if (current >= blocks.length) return;
         const block = blocks[current];
         try {
-          const r = await describeWithFallback({ imagePath: block.path }, focusHint, ctx.signal, ctx.model);
+          const r = await describeWithFallback({ imagePath: block.path }, focusHint, ctx.signal, ctx.model, ctx.sessionId);
           if (r.usedFallback) usedFallback = true;
           descriptions.push({ idx: block.idx, text: r.text });
           anySucceeded = true;
@@ -511,11 +523,14 @@ export function createVisionBridge(deps: VisionBridgeDeps): {
       imagePath?: string;
       prompt: string;
       signal?: AbortSignal;
+      sessionId?: string;
     }): Promise<string> =>
       describeWithFallback(
         { imageUrl: input.imageUrl, imagePath: input.imagePath },
         input.prompt,
         input.signal,
+        undefined,
+        input.sessionId,
       ).then((r) => r.text),
     dispose: () => {
       // 硬封口：跑着的 in-flight 请求 resolve 后不再回填 cache（disposed 检查在 cacheSet 前）。

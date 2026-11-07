@@ -265,6 +265,7 @@ export function createRemoteBotSettingsTarget(input: RemoteBotSettingsInput) {
 
   const target: BotSettingsTarget = {
     kind: 'remote',
+    mediaModels: input.ops.has('models.media') ? () => call('models.media') : undefined,
     deviceId,
     deviceName: input.deviceName,
     get online() {
