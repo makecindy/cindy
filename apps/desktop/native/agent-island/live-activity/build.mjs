@@ -182,8 +182,9 @@ function writeSilentAlertSound(resources) {
 
 /**
  * Installs the widget extension into a packaged `.app` and declares Live Activity
- * support in its Info.plist. Local builds are ad-hoc signed; release signing must
- * sign the `.appex` with `extension.entitlements` (App Sandbox) before the app.
+ * support in its Info.plist. Local builds are ad-hoc signed; release signing
+ * (`signMacAppWithIdentity` in scripts/ci/lib.mjs) re-signs the `.appex` with
+ * `extension.entitlements` (App Sandbox) before the app.
  */
 export function installAgentActivityExtension(appPath, arch = process.arch) {
   const skip = agentActivityBuildSkipReason(arch);

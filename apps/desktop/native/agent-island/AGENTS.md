@@ -133,6 +133,6 @@ pnpm --filter desktop preview:island-mascots
   此功能；`CINDY_LIVE_ACTIVITY=0` 可主动跳过。本地验证：
   `DEVELOPER_DIR=/Applications/Xcode-beta.app/Contents/Developer node build.mjs addon <out.node> arm64`，
   再对打包好的 `.app` 运行 `build.mjs extension <App.app> arm64`。
-- **发布签名**：扩展必须带 App Sandbox。正式签名时先用 `live-activity/extension.entitlements`
-  单独签 `Contents/PlugIns/CindyAgentActivity.appex`，再签应用本体；对整个包 `--deep` 统一签会
-  丢掉扩展的沙盒权限，扩展将无法加载。
+- **发布签名**：扩展必须带 App Sandbox。`scripts/ci/lib.mjs` 的 `signMacAppWithIdentity` 在签主 app 之前，
+  先用 `live-activity/extension.entitlements` 和发布身份单独签 `Contents/PlugIns/*.appex`；对整个包 `--deep`
+  统一签会丢掉扩展的沙盒权限，扩展将无法加载。
