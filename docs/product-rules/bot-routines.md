@@ -204,8 +204,8 @@ const receipt = await cindy.routines.request({
 - **普通例行任务**：没有内置标记。名称、指令、触发时间、前置检查、模型、运行方式和送达方式，主人在设置页、伙伴用
   `routine_save` 都能改，也能删除。默认内容不会更新到已建好的规则上。
 - **默认内容**：每天 3:30（第一次建时这台电脑的时区），`sessionMode: 'fresh'`，`silentWhenIdle: true`。伙伴用自己的模型，
-  用 history 类 `search_chat_history` / `get_chat_history`（带 `teammate_id`）读前置检查给出的 `since` 以来主人和它的对话
-  （首次看最近 7 天），`cindy_memory` 读写记忆，`list_teammate_skills` / `save_teammate_skill` / `set_teammate_skill_enabled`
+  用 `list_sessions` / `search_chat_history`（带 `teammate_id`）找出前置检查给出的 `since` 以来有对话的任务（首次看最近 7 天），
+  再用 `get_chat_history` 按 `session_ids` 读对话（它不接受 `teammate_id`），`cindy_memory` 读写记忆，`list_teammate_skills` / `save_teammate_skill` / `set_teammate_skill_enabled`
   整理技能；只改自己的记忆与技能；改了才调用 `schedule_notify_current_run` 告诉主人。
 - **默认前置检查**：普通的 `preRunHook`（一行 `xdt-node` 脚本），不另设例行任务选项。伙伴例行任务的前置检查
   stdin 除既有字段外还带 `ownerActiveAt`：主人最近一轮和这个伙伴已完成对话的时间（伙伴主任务、私聊话题与 IM 渠道专线里
@@ -215,6 +215,7 @@ const receipt = await cindy.routines.request({
   其它伙伴例行任务的前置检查也能读到 `ownerActiveAt`。
 - **升级**：旧版存成宿主内置规则（`builtin: 'nightly-learning'`）。调度器加载旧数据时去掉内置标记、记入 `seeded`，
   保留开关、模型、触发时间与运行记录；仍是旧版占位指令的，指令和前置检查换成默认内容，没选过运行方式的取 `fresh`。
+  旧版在宿主里直接执行、没有经过调度器，没有「上次运行」时间，所以升级后第一次运行一定放行、回看最近 7 天。
   只在这次迁移时做。旧版专用实现留在伙伴 Home 的 `nightly-learning.json` 与 `learning-history/` 不再读取，也不删除；
   专用的学习记录页（逐条撤销、在观察的做法、改频率）已移除。
 - 云端同步与搬家：仍不随伙伴迁移，新主力电脑按默认内容建一条。
