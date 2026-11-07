@@ -4179,7 +4179,7 @@ class CindyMcpGateway {
             model: { type: 'string', minLength: 1, maxLength: 512 },
             providerId: { anyOf: [{ type: 'null' }, { type: 'string', minLength: 1, maxLength: 512 }] },
             agentDeviceId: { anyOf: [{ type: 'null' }, { type: 'string', minLength: 1, maxLength: 512 }] },
-            effort: { type: 'string', enum: ['', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max', 'ultra'] },
+            effort: { type: 'string', enum: ['', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max', 'ultra'] }, // '' is the explicit-unset sentinel: keep it in the shared schema so non-Gemini providers can express it; Gemini-bound requests have '' stripped per request in before_provider_request (sanitizeGeminiToolPayload), because Gemini rejects empty enum values (#8784).
             fastMode: { anyOf: [{ type: 'boolean' }, { type: 'string', enum: ['ultrafast'] }] },
           }, required: ['agentKind', 'model'], additionalProperties: false }], description: 'This routine only: choose a complete route from schedule_list_models. null follows the companion; omission preserves the saved choice. Read back with routine_list.' },
           delivery: { anyOf: [
@@ -4527,6 +4527,90 @@ async function nativeFastPayload(payload, model, ctx) {
   return out;
 }
 
+// Gemini rejects empty-string enum values outright (400 INVALID_ARGUMENT), so
+// the '' effort sentinel must never reach a Gemini request — but the shared
+// pi.registerTool schema keeps '' so non-Gemini providers can still express
+// the explicit-unset sentinel (routines.ts stores '' distinctly from
+// omission). Strip '' enums from Gemini-bound tool parameters here, at the
+// provider request hook: the only point that knows the model. Pi wires this
+// hook to pi-ai's onPayload (sdk.ts), so for google-generative-ai the tools
+// already sit at config.tools[].functionDeclarations[].parametersJsonSchema.
+// The bridge template cannot import host packages, so this is a focused copy
+// of the '' rule in sanitizeGeminiToolParameters (packages/model-compat),
+// which remains the unit-tested reference; the hook deliberately does NOT
+// re-run the full sanitizer (allowlisting, ref inlining) — the payload is
+// already in final wire form. Required lists are left untouched: dropping ''
+// only unconstrains the value, the property stays required and '' stays
+// expressible to the tool's own validation. Returns a new payload only when
+// something was stripped, else undefined (keep the payload unchanged).
+function sanitizeGeminiToolPayload(payload, model) {
+  if (!model || model.api !== 'google-generative-ai') return undefined;
+  if (!payload || typeof payload !== 'object' || Array.isArray(payload)) return undefined;
+  const config = payload.config;
+  if (!config || typeof config !== 'object' || Array.isArray(config)) return undefined;
+  if (!Array.isArray(config.tools)) return undefined;
+  let changed = false;
+  const stripSchema = (schema) => {
+    if (!schema || typeof schema !== 'object') return schema;
+    if (Array.isArray(schema)) {
+      let out = schema;
+      for (let index = 0; index < schema.length; index++) {
+        const next = stripSchema(schema[index]);
+        if (next !== schema[index]) {
+          if (out === schema) out = schema.slice();
+          out[index] = next;
+        }
+      }
+      return out;
+    }
+    let out = schema;
+    if (Array.isArray(schema.enum) && schema.enum.includes('')) {
+      const values = schema.enum.filter((value) => value !== '');
+      if (out === schema) out = { ...schema };
+      if (values.length > 0) out.enum = values;
+      else delete out.enum;
+      changed = true;
+    }
+    if (schema.const === '') {
+      if (out === schema) out = { ...schema };
+      delete out.const;
+      changed = true;
+    }
+    for (const key of Object.keys(out)) {
+      if (key === 'enum' || key === 'const') continue;
+      const next = stripSchema(out[key]);
+      if (next !== out[key]) {
+        if (out === schema) out = { ...schema };
+        out[key] = next;
+      }
+    }
+    return out;
+  };
+  const tools = config.tools.map((tool) => {
+    if (!tool || typeof tool !== 'object' || Array.isArray(tool)) return tool;
+    if (!Array.isArray(tool.functionDeclarations)) return tool;
+    const declarations = tool.functionDeclarations.map((declaration) => {
+      if (!declaration || typeof declaration !== 'object' || Array.isArray(declaration)) return declaration;
+      let next = declaration;
+      for (const key of ['parametersJsonSchema', 'parameters']) {
+        if (next[key] === undefined) continue;
+        const stripped = stripSchema(next[key]);
+        if (stripped !== next[key]) {
+          if (next === declaration) next = { ...declaration };
+          next[key] = stripped;
+        }
+      }
+      return next;
+    });
+    if (declarations.some((declaration, index) => declaration !== tool.functionDeclarations[index])) {
+      return { ...tool, functionDeclarations: declarations };
+    }
+    return tool;
+  });
+  if (!changed) return undefined;
+  return { ...payload, config: { ...config, tools } };
+}
+
 ${PI_CACHE_RECOVERY_SOURCE}
 
 ${PI_NATIVE_PROVIDER_ADAPTER_SOURCE}
@@ -4778,23 +4862,31 @@ export default async function cindyBridge(piApi: any) {
     const preparationStarted = performance.now();
     const payload = astraResponsesPayload(event.payload, ctx.model) ?? event.payload;
     const next = (await nativeFastPayload(payload, ctx.model, ctx)) ?? payload;
+    // Gemini-bound requests must not carry '' enum values; other providers
+    // keep the shared schema untouched. A sanitizer failure must never block
+    // a model request — fall back to the unrewritten payload (Gemini may
+    // still 400 on '' enums, the pre-existing symptom).
+    let geminiSafe = next;
+    try {
+      geminiSafe = sanitizeGeminiToolPayload(next, ctx.model) ?? next;
+    } catch { /* Fall through with the unrewritten payload. */ }
     // A one-way native notification adds no host round trip. This is the payload
     // preparation hook, not proof that HTTP was sent or accepted upstream.
     const token = process.env.CINDY_PI_TURN_TOOL_POLICY;
     if (token) {
       try {
-        const messages = next?.messages ?? next?.input ?? next?.contents;
+        const messages = geminiSafe?.messages ?? geminiSafe?.input ?? geminiSafe?.contents;
         ctx.ui.notify(${JSON.stringify(CINDY_PI_REQUEST_DIAGNOSTICS_PREFIX)} + token + ':' + JSON.stringify(
           projectPiRequestDiagnostics({
             preparationMs: performance.now() - preparationStarted,
-            toolCount: Array.isArray(next?.tools) ? next.tools.length : undefined,
+            toolCount: Array.isArray(geminiSafe?.tools) ? geminiSafe.tools.length : undefined,
             messageCount: Array.isArray(messages) ? messages.length : undefined,
-            wireEffort: next?.reasoning_effort ?? next?.reasoning?.effort ?? next?.output_config?.effort,
+            wireEffort: geminiSafe?.reasoning_effort ?? geminiSafe?.reasoning?.effort ?? geminiSafe?.output_config?.effort,
           }),
         ), 'info');
       } catch { /* Diagnostics must never block a model request. */ }
     }
-    return next;
+    return geminiSafe;
   });
   const mcpGateway = new CindyMcpGateway();
   // bash 隔离 home 经 resolveBashPackageHome 解析(首次加载读删 + 防篡改 stash,
