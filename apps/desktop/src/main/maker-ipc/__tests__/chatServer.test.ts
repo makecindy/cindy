@@ -1719,6 +1719,7 @@ describe('Chat Server result delivery and refresh', () => {
     replyFiles.prepare.mockRejectedValue(new Error('ATTACHMENT_UNAVAILABLE'));
     await startFileReply();
     await service.settleLaneTurn({ ...terminal, resultText: '[Report](./report.pdf)' });
+    expect(deliveries()).toHaveLength(1);
     expect(deliveries()[0][2].content).toEqual([{ type: 'text', text: 'Report' }, processRecord]);
     expect(fixture.handle.mock.calls.filter(([, , body]) => body?.action === 'fail')).toHaveLength(0);
   });
