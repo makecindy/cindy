@@ -118,6 +118,24 @@ test('dispatches a queued message and stores the user and assistant rows', async
   );
 });
 
+// PR #9246 review: every assistant message of a tool-use turn keeps its own id.
+test('text before a tool call and the final answer are stored as separate messages', async () => {
+  const h = createHarness();
+  await h.queue.enqueue('task-tools', { clientId: 'u-tools', text: 'use a tool' });
+  const session = h.maker.sessions.get('task-tools');
+
+  session.emit({ type: 'text', data: { text: 'let me check', isFinal: true }, agentMeta: { uuid: 'assistant-a' } });
+  session.emit({ type: 'text', data: { text: 'all done', isFinal: true }, agentMeta: { uuid: 'assistant-b' } });
+  session.emit({ type: 'done', data: {} });
+
+  await waitFor(() => h.persisted.filter((row) => row.role === 'assistant').length === 2);
+  const assistants = h.persisted.filter((row) => row.role === 'assistant');
+  assert.deepEqual(assistants.map((row) => [row.clientId, row.content]), [
+    ['assistant-a', 'let me check'],
+    ['assistant-b', 'all done'],
+  ]);
+});
+
 test('a second message waits for the running turn instead of interleaving', async () => {
   const h = createHarness();
   await h.queue.enqueue('task-2', { clientId: 'a', text: 'first' });

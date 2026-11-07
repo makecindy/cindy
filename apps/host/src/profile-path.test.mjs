@@ -23,9 +23,9 @@ test('accepts only explicit CN or global identities', () => {
 
 test('explicit Host data dirs retain Desktop XDT_USER_DATA_DIR semantics', () => {
   const base = { XDG_CONFIG_HOME: path.join('/config-home') };
-  assert.equal(resolveHostDataDir({ env: base, appDataDir: '/appdata' }), '/appdata/CindyGlobal');
-  assert.equal(resolveHostDataDir({ env: { ...base, CINDY_HOST_REGION: 'cn' }, appDataDir: '/appdata' }), '/appdata/Cindy');
-  assert.equal(resolveHostDataDir({ env: { ...base, XDT_USER_DATA_DIR: '/data/desktop' }, appDataDir: '/appdata' }), '/data/desktop');
+  assert.equal(resolveHostDataDir({ env: base, appDataDir: '/appdata' }), path.join('/appdata', 'CindyGlobal'));
+  assert.equal(resolveHostDataDir({ env: { ...base, CINDY_HOST_REGION: 'cn' }, appDataDir: '/appdata' }), path.join('/appdata', 'Cindy'));
+  assert.equal(resolveHostDataDir({ env: { ...base, XDT_USER_DATA_DIR: '/data/desktop' }, appDataDir: '/appdata' }), path.resolve('/data/desktop'));
   assert.equal(resolveHostDataDir({ env: { ...base, CINDY_HOST_DATA_DIR: './host-data' }, appDataDir: '/appdata' }), path.resolve('./host-data'));
 });
 

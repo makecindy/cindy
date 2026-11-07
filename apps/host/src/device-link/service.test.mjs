@@ -1,3 +1,4 @@
+import os from 'node:os';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createDeviceLinkService } from './service.mjs';
@@ -320,7 +321,7 @@ test('device-link handles mobile channels (around-client-id, fs:stat-path, maker
       kind: 'invoke',
       src: 'mobile-1',
       id: 'req-4',
-      payload: { channel: 'fs:stat-path', args: [{ path: '/tmp' }] },
+      payload: { channel: 'fs:stat-path', args: [{ path: os.tmpdir() }] },
     });
     assert.equal(invokeResult.ok, true);
     assert.equal(invokeResult.result.kind, 'dir');

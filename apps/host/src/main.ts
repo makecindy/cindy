@@ -739,6 +739,33 @@ const serverDeps = {
     if (Object.keys(patch).some((key) => allowed[key] !== true)) {
       throw new Error('unsupported session field');
     }
+    // A live Session keeps its own permission mode and model route. Apply the
+    // change there first so the stored value and the running Agent cannot
+    // disagree (a tighter mode must bind the very next tool call). An engine
+    // switch is left to the input queue, which recreates the Session.
+    const live = patch.agentKind === undefined ? agentGraph?.maker.getSession(sessionId) : undefined;
+    if (live) {
+      const unsupportedIsFine = async (apply: () => Promise<void>) => {
+        try { await apply(); } catch (error) {
+          if (!(error instanceof Error && error.name === 'NotSupportedError')) throw error;
+        }
+      };
+      if (typeof patch.permissionMode === 'string') await live.setPermissionMode(patch.permissionMode as never);
+      if (typeof patch.model === 'string') {
+        await live.setModel(patch.model, {
+          ...(patch.providerId === null || typeof patch.providerId === 'string' ? { providerId: patch.providerId } : {}),
+          ...(typeof patch.effort === 'string' ? { effort: patch.effort as never } : {}),
+        });
+      } else if (typeof patch.effort === 'string') {
+        await unsupportedIsFine(() => live.setEffort(patch.effort as never));
+      }
+      if (typeof patch.fastMode === 'boolean' || patch.fastMode === 'ultrafast') {
+        await unsupportedIsFine(() => live.setFastMode(patch.fastMode as boolean | 'ultrafast'));
+      }
+      if (typeof patch.planModeEnabled === 'boolean') {
+        await unsupportedIsFine(() => live.setPlanMode(patch.planModeEnabled as boolean));
+      }
+    }
     const update: Record<string, unknown> = { updatedAt: Date.now() };
     if (typeof patch.title === 'string') update.title = patch.title;
     if (patch.status === 'active' || patch.status === 'archived') update.status = patch.status;

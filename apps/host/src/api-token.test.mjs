@@ -12,7 +12,10 @@ test('creates one owner-only token and reuses it across restarts', (t) => {
 
   const first = readOrCreateApiToken(dir);
   assert.ok(first.length >= 32);
-  assert.equal(fs.statSync(path.join(dir, 'host-api-token')).mode & 0o777, 0o600);
+  // POSIX permission bits do not exist on Windows; the file lives in the owner's profile there.
+  if (process.platform !== 'win32') {
+    assert.equal(fs.statSync(path.join(dir, 'host-api-token')).mode & 0o777, 0o600);
+  }
   assert.equal(readOrCreateApiToken(dir), first);
 });
 

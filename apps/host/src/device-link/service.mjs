@@ -214,10 +214,11 @@ export function createDeviceLinkService(deps) {
         result = { ok: true };
       } else if (channel === 'maker:resolve-interaction') {
         const [requestId, decision] = args;
-        if (deps.interactions?.resolve) {
-          await deps.interactions.resolve(String(requestId), decision);
+        if (typeof deps.interactions?.respond !== 'function') {
+          throw new Error('interaction broker unavailable');
         }
-        result = { ok: true };
+        // The request id is unique across sessions; the broker resolves it wherever it is pending.
+        result = { ok: deps.interactions.respond('', String(requestId), decision) === true };
       } else if (channel === 'maker:get-context-usage') {
         result = null;
       } else if (channel === 'fs:stat-path') {

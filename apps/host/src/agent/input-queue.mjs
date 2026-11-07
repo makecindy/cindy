@@ -207,7 +207,7 @@ export function createInputQueue(deps) {
         });
       } else if (!finalTextPersisted && turnError && deps.persistMessage) {
         persistReply(sessionId, state, {
-          clientId: turnAssistantClientId,
+          clientId: `${turnAssistantClientId}:error`,
           role: 'error',
           content: JSON.stringify({ message: turnError }),
           agentKind: dbKind,
@@ -228,12 +228,15 @@ export function createInputQueue(deps) {
     let assistantText = '';
     let finalTextPersisted = false;
     state.unsubscribe = session.onEvent((event) => {
-      if (!finalTextPersisted && event.agentMeta?.uuid && typeof event.agentMeta.uuid === 'string') {
+      // One turn can hold several assistant messages (text, tool call, final answer);
+      // each is stored under its own id or the later ones collide on clientId.
+      if (event.agentMeta?.uuid && typeof event.agentMeta.uuid === 'string') {
         turnAssistantClientId = event.agentMeta.uuid;
       }
       if (event.type === 'error') {
         turnError = event.data?.message || event.message || (typeof event.data === 'string' ? event.data : 'Agent error');
         state.error = turnError;
+        finalTextPersisted = false;
       }
       deps.hub.publish({
         type: 'agent_event',
@@ -258,6 +261,7 @@ export function createInputQueue(deps) {
           finalTextPersisted = true;
         } else {
           assistantText += event.data.text;
+          finalTextPersisted = false;
         }
       }
       if (event.type === 'done' || (event.type === 'error' && event.turnScope !== 'background')) {
