@@ -624,7 +624,7 @@ export function RemoteDesktopSession({
     foldSkin !== "keyboard" &&
     frameReady &&
     !keyboard &&
-    !operations;
+    (!operations || Boolean(fittedDisplay));
   const keyboardDeck =
     foldSkinAvailable &&
     foldSkin === "keyboard" &&
@@ -662,7 +662,9 @@ export function RemoteDesktopSession({
             : hardwareMedia,
           foldSkin,
           foldLayout.media,
-          lease && lease.display.height > 0
+          // While fitting, the glass opening determines the host resolution.
+          // Feeding the old host ratio back here would lock in its portrait shape.
+          !fittedDisplay && lease && lease.display.height > 0
             ? lease.display.width / lease.display.height
             : undefined,
         )
@@ -1950,10 +1952,14 @@ export function RemoteDesktopSession({
     send({
       type: "mouseButtons",
       native: Platform.OS === "ios",
-      fitToInsets: fullScreenFoldBackground,
+      // init clears the viewer's transient display-geometry flag. Keep the
+      // remembered fit active across reconnects and native viewer reloads too.
+      fitToInsets: fullScreenFoldBackground || Boolean(fittedDisplay),
       // Portrait fitting uses the space between Back and the bottom toolbar,
       // with breathing room on both edges; measurement and rendering share it.
-      topInset: retroDesktop
+      // Duo cover and unfolded landscape draw behind system chrome; its
+      // reservations still position controls but do not reduce picture space.
+      topInset: retroDesktop || (systemSideRail && !screenPlugin)
         ? 0
         : fullScreenFoldBackground
           ? foldLayout!.media.y
@@ -1965,8 +1971,7 @@ export function RemoteDesktopSession({
                   edgePadding.paddingTop,
                   (sharedStatusRow
                     ? sharedBackTop
-                    : edgePadding.paddingTop + spacing.xs) +
-                    backControlHeight,
+                    : edgePadding.paddingTop + spacing.xs) + backControlHeight,
                 ) + spacing.lg,
       bottomInset: retroDesktop
         ? 0
@@ -1993,8 +1998,6 @@ export function RemoteDesktopSession({
         keyboard && !landscape && !tableRegion
           ? edgePadding.paddingTop + spacing.xs + backControlHeight + spacing.sm
           : 0,
-      // Side controls float over the desktop; fit against the full canvas width
-      // in either landscape direction, including while the keyboard is open.
       rightInset: 0,
       leftInset: 0,
       enabled:
@@ -2014,6 +2017,9 @@ export function RemoteDesktopSession({
     tableRegion?.first.height,
     tableRegion?.first.width,
     fullScreenFoldBackground,
+    fittedDisplay,
+    systemSideRail,
+    screenPlugin,
     foldLayout?.media.y,
     foldLayout?.media.height,
     geometry.height,
@@ -3286,7 +3292,14 @@ export function RemoteDesktopSession({
         fittedViewport.current.height === viewerViewport.height)
     )
       return;
-    void fitViewerDisplay(viewerViewport.width, viewerViewport.height);
+    // Rotation delivers window bounds, safe areas and toolbar measurements in
+    // separate turns. Apply only the settled area; a new layout or leaving this
+    // screen cancels the pending request. In-flight changes are picked up when
+    // settingBusy clears, using the latest viewport rather than a queued size.
+    const timer = setTimeout(() => {
+      void fitViewerDisplay(viewerViewport.width, viewerViewport.height);
+    }, 200);
+    return () => clearTimeout(timer);
   }, [
     viewerViewport,
     fittedDisplay,

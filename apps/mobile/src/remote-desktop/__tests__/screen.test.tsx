@@ -2755,6 +2755,13 @@ describe("remote desktop controls", () => {
     expect(
       sent().filter((message) => message.type === "videoSettings"),
     ).toEqual([]);
+    // Unit regression: restoring a remembered resolution must also restore safe
+    // viewport rendering after init; previously only the remote mode survived.
+    expect(
+      sent()
+        .filter((message) => message.type === "mouseButtons")
+        .at(-1),
+    ).toMatchObject({ fitToInsets: true });
     // The fit stays selected in the top-level controls after reconnecting.
     act(() => button("operations").click());
     expect(button("fitViewerDisplay").getAttribute("aria-selected")).toBe(
@@ -3234,32 +3241,52 @@ describe("remote desktop controls", () => {
       expect(button("fitViewerDisplay").getAttribute("aria-selected")).toBe(
         "true",
       );
-      // Rotation applies without another tap, including an equal-ratio repeat.
+      // Unit regression: rotation reports the window, rail and safe area in
+      // separate turns. None of those intermediate sizes should resize the host.
+      await viewport(844, 390);
+      expect(fits()).toHaveLength(1);
+      await act(async () => vi.advanceTimersByTimeAsync(50));
+      await viewport(780, 390);
+      await act(async () => vi.advanceTimersByTimeAsync(50));
       await viewport(760, 390);
+      expect(fits()).toHaveLength(1);
+      await act(async () => vi.advanceTimersByTimeAsync(200));
+      expect(fits()).toHaveLength(2);
       expect(fits().at(-1)).toMatchObject({ width: 1920, height: 986 });
       await viewport(760, 390);
       expect(fits()).toHaveLength(2);
       // A skin resize arriving during an earlier adjustment must not be lost.
       holdDisplay = true;
       await viewport(600, 400);
+      await act(async () => vi.advanceTimersByTimeAsync(200));
       await viewport(480, 360);
       await viewport(400, 300);
       expect(fits()).toHaveLength(3);
       await act(async () => finishDisplay?.());
+      await act(async () => vi.advanceTimersByTimeAsync(200));
       expect(fits()).toHaveLength(4);
       expect(fits().at(-1)).toMatchObject({ width: 1920, height: 1440 });
       expect(
         requests().filter((r) => r.op === "restoreViewerDisplay"),
       ).toHaveLength(0);
+      // Returning to portrait must apply the final full-width area, and turning
+      // fit off during the next rotation must cancel its pending adjustment.
+      await viewport(390, 760);
+      await act(async () => vi.advanceTimersByTimeAsync(200));
+      expect(fits()).toHaveLength(5);
+      expect(fits().at(-1)).toMatchObject({ width: 986, height: 1920 });
+      await viewport(760, 390);
       await act(async () => button("fitViewerDisplay").click());
       expect(button("fitViewerDisplay").getAttribute("aria-selected")).toBe(
         "false",
       );
+      await act(async () => vi.advanceTimersByTimeAsync(200));
       expect(
         requests().filter((r) => r.op === "restoreViewerDisplay"),
       ).toHaveLength(canRestore ? 1 : 0);
       await viewport(390, 760);
-      expect(fits()).toHaveLength(4);
+      await act(async () => vi.advanceTimersByTimeAsync(200));
+      expect(fits()).toHaveLength(5);
       expect(await AsyncStorage.getAllKeys()).not.toContain(
         "cindy.mobile.remote-desktop.resolution.v1.computer.display",
       );
@@ -6166,6 +6193,106 @@ describe("remote desktop controls", () => {
     expect(requests().filter((r) => r.op === "start")).toHaveLength(starts);
     expect(requests().filter((r) => r.op === "stop")).toHaveLength(stops);
   });
+  // Unit regression: a portrait-fitted desktop entering Duo's CRT skin must
+  // use the glass opening, not feed its old ratio back into that opening.
+  // Existing folding coverage only used an unfitted landscape host.
+  it("keeps the fitted retro opening stable across host resize and controls", async () => {
+    const original = fixture.invoke.getMockImplementation()!;
+    fixture.invoke.mockImplementation(async (...args) => {
+      const request = args[2][0];
+      if (request.op === "capabilities")
+        return {
+          ...(await original(...args)),
+          viewerDisplay: true,
+          liveDisplaySwitch: true,
+          autoControl: true,
+        };
+      if (request.op === "viewerDisplay")
+        return {
+          lease: "lease",
+          controlling: true,
+          videoKept: true,
+          display: {
+            ...display,
+            id: "virtual",
+            width: request.width,
+            height: request.height,
+          },
+        };
+      return original(...args);
+    });
+    const renderGeometry = (g: WindowGeometry) =>
+      act(() =>
+        root.render(
+          <GeometryContext.Provider value={g}>
+            <RemoteDesktopScreen />
+          </GeometryContext.Provider>,
+        ),
+      );
+    renderGeometry({
+      ...fixture.size,
+      insets: fixture.safe,
+      regularWidth: false,
+      regularHeight: true,
+      barEdge: "none",
+      reservedRegionsSupported: true,
+      regions: [],
+    });
+    await connect();
+    act(() => button("operations").click());
+    act(() => button("fitViewerDisplay").click());
+    const viewport = (width: number, height: number, type: string) =>
+      act(async () =>
+        fixture.message!({
+          nativeEvent: {
+            data: JSON.stringify({
+              type,
+              epoch: "lease",
+              width,
+              height,
+            }),
+          },
+        }),
+      );
+    await viewport(390, 760, "viewportSize");
+    act(() => button("operations").click());
+    fixture.size = { width: 700, height: 900 };
+    const geometry: WindowGeometry = {
+      ...fixture.size,
+      insets: { top: 0, bottom: 20, left: 0, right: 60 },
+      regularWidth: true,
+      regularHeight: true,
+      barEdge: "none",
+      reservedRegionsSupported: true,
+      regions: [{ kind: "division", x: 0, y: 400, width: 700, height: 30 }],
+    };
+    renderGeometry(geometry);
+    act(() => fixture.views["remoteDesktop.foldOperations"].onPress());
+    for (let index = 0; index < 4; index++)
+      act(() => fixture.views["remoteDesktop.skinSwitch"].onPress());
+    act(() => fixture.views["remoteDesktop.operations"].onPress());
+    const bounds = () =>
+      Object.assign(
+        {},
+        ...fixture.views["remoteDesktop.media"].style
+          .flat(Infinity)
+          .filter(Boolean),
+      );
+    const frame = bounds();
+    const width = fixture.size.width - frame.left - frame.right;
+    const height = fixture.size.height - frame.top - frame.bottom;
+    expect(width).toBeGreaterThan(height);
+    await viewport(width, height, "viewportChanged");
+    await act(async () => vi.advanceTimersByTimeAsync(200));
+    const fitted = requests().filter((request) => request.op === "viewerDisplay").at(-1)!;
+    expect(fitted.width).toBeGreaterThan(fitted.height);
+    expect(fitted.width / fitted.height).toBeCloseTo(width / height, 2);
+    expect(bounds()).toEqual(frame);
+    act(() => fixture.views["remoteDesktop.operations"].onPress());
+    expect(bounds()).toEqual(frame);
+    act(() => fixture.views["remoteDesktop.operations"].onPress());
+    expect(bounds()).toEqual(frame);
+  });
   it("folding and unfolding preserve the viewer and control lease", async () => {
     const geometry: WindowGeometry = {
       width: 900,
@@ -6217,7 +6344,7 @@ describe("remote desktop controls", () => {
       sent()
         .filter((m) => m.type === "mouseButtons")
         .at(-1),
-    ).toMatchObject({ rightInset: 0 });
+    ).toMatchObject({ topInset: 0, bottomInset: 0, rightInset: 0, leftInset: 0 });
     // Rotating to the opposite landscape must not send custom chrome to the left.
     renderGeometry({
       ...geometry,
@@ -6247,7 +6374,17 @@ describe("remote desktop controls", () => {
       sent()
         .filter((m) => m.type === "mouseButtons")
         .at(-1),
-    ).toMatchObject({ rightInset: 0 });
+    ).toMatchObject({ topInset: 0, bottomInset: 0, rightInset: 0, leftInset: 0 });
+    // User policy: Duo's tall cover and unfolded landscape use the full canvas.
+    // System reservations position controls but must not shrink the picture.
+    fixture.size = { width: 700, height: 900 };
+    renderGeometry({ ...geometry, ...fixture.size });
+    expect(
+      sent()
+        .filter((m) => m.type === "mouseButtons")
+        .at(-1),
+    ).toMatchObject({ topInset: 0, bottomInset: 0, rightInset: 0, leftInset: 0 });
+    fixture.size = { width: 900, height: 700 };
     renderGeometry({ ...geometry, barEdge: "none" });
     const noPreferredEdge = Object.assign(
       {},
