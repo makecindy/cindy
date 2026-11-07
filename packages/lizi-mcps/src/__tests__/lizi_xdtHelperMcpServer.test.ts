@@ -1067,6 +1067,8 @@ describe("cindy_helper MCP server", () => {
       );
       for (const description of Object.values(described)) expect(description).toMatch(/\S/);
       for (const name of ['history', 'handoff', 'bots']) expect(described[name]).toContain('可跨电脑');
+      expect(described.handoff).toContain('agent_device_id');
+      expect(described.handoff).not.toContain('新建只在本机');
       expect(described.control).toMatch(/本机。$/);
       const controlTools = parsePayload(await client.callTool({ name: 'list_tools', arguments: { category: 'control' } }));
       const controlNames = controlTools.tools as Array<{ name: string; description: string }>;
