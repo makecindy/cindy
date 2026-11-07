@@ -23,7 +23,10 @@ vi.mock('../chatServerWorkspaces.js', () => ({ chatServerWorkspaces: () => ({
   save: (room: string, value: unknown) => { workspaceSettings.set(room, value); },
 }) }));
 beforeEach(() => workspaceSettings.clear());
-const migration = vi.hoisted(() => ({ read: vi.fn<(_groupId: string) => { roomId: string; sequence: number; version: 2 } | null>(() => null) }));
+const migration = vi.hoisted(() => ({
+  read: vi.fn<(_groupId: string) => { roomId: string; sequence: number; version: 2 } | null>(() => null),
+  readFailure: vi.fn<(_groupId: string) => { code: string } | null>(() => null),
+}));
 const sendJournal = vi.hoisted(() => ({ enabled: false, rows: new Map<string, { intent?: unknown; receipt?: string }>() }));
 vi.mock('../chatSendJournal.js', () => ({ chatSendJournal: () => ({
   read: (key: string) => sendJournal.enabled ? sendJournal.rows.get(key) ?? null : null,
@@ -33,7 +36,12 @@ vi.mock('../chatSendJournal.js', () => ({ chatSendJournal: () => ({
 }) }));
 beforeEach(() => { sendJournal.enabled = false; sendJournal.rows.clear(); });
 vi.mock('../chatLocalHistory.js', () => ({ chatLocalHistory: () => ({ read: () => null, save: vi.fn(), forget: vi.fn() }) }));
-vi.mock('../chatMigrationReceipts.js', () => ({ chatMigrationReceipts: () => ({ read: migration.read, save: vi.fn() }) }));
+vi.mock('../chatMigrationReceipts.js', () => ({ chatMigrationReceipts: () => ({
+  read: migration.read,
+  save: vi.fn(),
+  readFailure: migration.readFailure,
+  saveFailure: vi.fn(),
+}) }));
 vi.mock('electron', () => ({ app: { get isPackaged() { return fixture.packaged; }, getPath: () => '/isolated' },
   nativeImage: { createFromBuffer: () => ({ isEmpty: () => false, getSize: () => ({ width: 1, height: 1 }) }) } }));
 // The real filesystem, except an `lstat` failure a test injects for a delivery file.
@@ -188,6 +196,7 @@ describe('Chat Server result delivery and refresh', () => {
   beforeEach(() => {
     vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval', 'setTimeout', 'clearTimeout', 'Date'] });
     vi.setSystemTime(new Date('2026-10-03T00:00:00Z'));
+    migration.readFailure.mockReturnValue(null);
     fixture.packaged = false; fixture.exists.mockReturnValue(true); fixture.profiles = []; fixture.sockets = []; fixture.urls = []; claimed = false;
     fixture.config = '{"baseUrl":"http://127.0.0.1:3018","auth":"cindy"}';
     vi.stubEnv('XDT_ISOLATED', '1');
@@ -4659,6 +4668,58 @@ describe('Chat Server result delivery and refresh', () => {
         expect(imported).toHaveBeenCalledOnce();
       } finally {
         expired = false; finish(true); await refreshing; imported.mockRestore();
+      }
+    });
+
+    it('stops retrying a terminal group history upgrade after the first failure', async () => {
+      const source = '10000000-0000-4000-8000-000000000089';
+      service.dispose();
+      fixture.profiles = [{ id: 'local-bot', displayName: 'Bot', avatar: null, status: 'active' }];
+      service = withChatServer({ listGroups: vi.fn(async () => ({ ok: true, groups: [{ id: source, name: 'Archived group', members: [] }] })),
+        dispose: vi.fn() } as unknown as BotGroupChatService, deps);
+      const migrator = await import('../chatServerMigration.js');
+      const imported = vi.spyOn(migrator, 'migrateLocalGroups').mockImplementation(async input => {
+        input.onRoom?.(source, roomId);
+        input.onError?.(source, Object.assign(new Error('CONVERSATION_ARCHIVED'), {
+          code: 'CONVERSATION_ARCHIVED', status: 409,
+        }), { terminal: true, code: 'CONVERSATION_ARCHIVED' });
+        return new Map([[source, roomId]]);
+      });
+      try {
+        await service.listGroups();
+        await vi.advanceTimersByTimeAsync(0);
+        expect(imported).toHaveBeenCalledOnce();
+        await vi.advanceTimersByTimeAsync(60_000);
+        expect(imported).toHaveBeenCalledOnce();
+        expect(await service.getGroup(source)).toMatchObject({
+          ok: true,
+          group: { migrationPending: false },
+        });
+      } finally {
+        imported.mockRestore();
+      }
+    });
+
+    it('surfaces a terminal category on the first foreground group open', async () => {
+      const source = '10000000-0000-4000-8000-000000000090';
+      service.dispose();
+      fixture.profiles = [{ id: 'local-bot', displayName: 'Bot', avatar: null, status: 'active' }];
+      service = withChatServer({ listGroups: vi.fn(async () => ({ ok: true, groups: [{ id: source, name: 'Archived group', members: [] }] })),
+        dispose: vi.fn() } as unknown as BotGroupChatService, deps);
+      const migrator = await import('../chatServerMigration.js');
+      const imported = vi.spyOn(migrator, 'migrateLocalGroups').mockImplementation(async input => {
+        const failure = Object.assign(new Error('CONVERSATION_ARCHIVED'), {
+          code: 'CONVERSATION_ARCHIVED', status: 409,
+        });
+        migration.readFailure.mockReturnValue({ code: 'CONVERSATION_ARCHIVED' });
+        input.onError?.(source, failure, { terminal: true, code: 'CONVERSATION_ARCHIVED' });
+        return new Map();
+      });
+      try {
+        expect(await service.getGroup(source)).toMatchObject({ ok: false, errorCode: 'GROUP_ARCHIVED' });
+      } finally {
+        imported.mockRestore();
+        migration.readFailure.mockReturnValue(null);
       }
     });
 
