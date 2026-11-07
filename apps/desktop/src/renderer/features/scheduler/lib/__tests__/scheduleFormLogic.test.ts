@@ -26,6 +26,7 @@ import {
   buildHookCommandForScriptFile,
   applyRunMode,
   buildScheduleInput,
+  previewScheduleFirstFire,
   webhookSourceFormFields,
   canSubmitSessionBinding,
   captureBinding,
@@ -426,6 +427,32 @@ const hasKey = (obj: object, key: string): boolean =>
   Object.prototype.hasOwnProperty.call(obj, key);
 
 describe('schedule timing mode conversion', () => {
+  // Creation preview / unit: no prior preview coverage. Use the same clock with
+  // nonlocal zones, month-end, interval and deadline inputs; assert actual UTC
+  // instants rather than the cron/formatting implementation.
+  it.each([
+    { zone: 'America/New_York', cron: '0 9 * * *', now: '2026-11-08T00:00:00Z', next: '2026-11-08T14:00:00Z' },
+    { zone: 'Europe/Berlin', cron: '0 9 * * *', now: '2026-11-08T00:00:00Z', next: '2026-11-08T08:00:00Z' },
+    { zone: 'America/New_York', cron: '0 9 * * *', now: '2026-03-08T05:00:00Z', next: '2026-03-08T13:00:00Z' },
+    { zone: 'UTC', cron: '0 9 31 * *', now: '2026-04-01T00:00:00Z', next: '2026-04-30T09:00:00Z' },
+  ])('previews $cron in $zone from $now', ({ zone, cron, now, next }) => {
+    expect(previewScheduleFirstFire(makeForm({ timezone: zone, cronExpr: cron }), Date.parse(now)))
+      .toBe(Date.parse(next));
+  });
+
+  it('uses the first interval delay and suppresses runs at or after the deadline', () => {
+    const now = Date.parse('2026-11-08T00:00:00Z');
+    const form = makeForm({ timezone: 'UTC', intervalMs: 600_000 });
+    expect(previewScheduleFirstFire(form, now)).toBe(now + 600_000);
+    const deadline = new Date(now + 600_000);
+    // The deadline input is intentionally in the editing client's local time.
+    const pad = (n: number) => String(n).padStart(2, '0');
+    form.deadline = `${deadline.getFullYear()}-${pad(deadline.getMonth() + 1)}-${pad(deadline.getDate())}T${pad(deadline.getHours())}:${pad(deadline.getMinutes())}`;
+    expect(previewScheduleFirstFire(form, now)).toBeUndefined();
+    expect(previewScheduleFirstFire({ ...form, manual: true, deadline: '' }, now)).toBeUndefined();
+    expect(() => previewScheduleFirstFire({ ...form, timezone: 'Invalid/Zone' }, now)).toThrow();
+  });
+
   it('preserves the authoritative interval when cronExpr is stale', () => {
     const input = buildScheduleInput(makeForm({
       cronExpr: '*/5 * * * *',

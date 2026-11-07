@@ -9,6 +9,7 @@
   "exports": {
     ".": "./src/index.ts",
     "./cron": "./src/engine/cron.ts",
+    "./timing": "./src/engine/monthlyClamp.ts",
     "./types": "./src/types.ts",
     "./templates": "./src/builtin-templates.ts",
     "./template-engine": "./src/engine/template.ts",

@@ -9,7 +9,7 @@
  */
 
 import { useCallback, useRef, useState } from 'react';
-import { formatScheduleDeadline, parseScheduleDeadline } from '@cindy/maker-shared/schedule-form';
+import { formatScheduleDeadline, getDefaultScheduleTimezone, parseScheduleDeadline } from '@cindy/maker-shared/schedule-form';
 import type { CreateScheduleInput, Schedule, ScheduleTemplate, ScheduleWorkspaceKind } from '@cindy/maker-scheduler';
 import { effectiveSourceIdForModel, type ProviderView } from '@cindy/model-providers';
 import { getDraft, getPersistedVendorModel } from '@/state/newMakerDraft';
@@ -37,7 +37,7 @@ export { EFFORT_VALUES, isEffortValue } from '../lib/scheduleFormLogic';
 export type { EffortValue, ScheduleFormState, RunMode } from '../lib/scheduleFormLogic';
 export { deriveRunMode, hasRealBinding, PENDING_SESSION_ID } from '../lib/scheduleFormLogic';
 
-const DEFAULT_FORM: ScheduleFormState = {
+const DEFAULT_FORM: Omit<ScheduleFormState, 'timezone'> = {
   name: '',
   prompt: '',
   executionMode: 'agent',
@@ -46,7 +46,6 @@ const DEFAULT_FORM: ScheduleFormState = {
   scriptCapabilities: [],
   cronExpr: '0 9 * * *',
   intervalMs: undefined,
-  timezone: 'Asia/Shanghai',
   recurring: true,
   manual: false,
   webhookEnabled: false,
@@ -259,6 +258,7 @@ function makeDefaultForm(): ScheduleFormState {
   const defaultRoute = getScheduleDefaultRoute(prefs.agentKind, undefined, agentPrefs.providerId);
   return {
     ...DEFAULT_FORM,
+    timezone: getDefaultScheduleTimezone(),
     agentKind: prefs.agentKind,
     model: defaultRoute.model,
     // providerId 空 = 跟随原生默认来源（no-break）。默认路由已限定在任务记忆的来源内,

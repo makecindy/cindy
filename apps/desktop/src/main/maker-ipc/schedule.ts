@@ -37,6 +37,7 @@
  */
 
 import path from 'node:path';
+import { getDefaultScheduleTimezone } from '@cindy/maker-shared/schedule-form';
 
 import { ipcMain, BrowserWindow, app } from 'electron';
 
@@ -313,7 +314,7 @@ function buildCreateScheduleInput(
     prompt: overrides.prompt ?? prompt,
     kind: overrides.kind ?? 'cron',
     cronExpr: requireString(overrides.cronExpr ?? template.cronExpr, 'cronExpr'),
-    timezone: requireString(overrides.timezone ?? template.timezone, 'timezone'),
+    timezone: requireString(overrides.timezone ?? template.timezone ?? getDefaultScheduleTimezone(), 'timezone'),
     recurring: overrides.recurring ?? template.recurring ?? true,
     manual: overrides.manual,
     intervalMs: overrides.intervalMs,

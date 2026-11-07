@@ -15663,7 +15663,13 @@
         "label": "触发方式",
         "timed": "定时"
       },
-      "runSettings": "运行设置"
+      "runSettings": "运行设置",
+      "timing": {
+        "timezone": "时区：{{timezone}}",
+        "next": "预计下次触发：{{when}}",
+        "none": "截止前没有可触发的时间",
+        "invalid": "无法计算下次触发时间，请检查时间设置、时区和截止时间"
+      }
     },
     "chips": {
       "selectProject": "选择项目",

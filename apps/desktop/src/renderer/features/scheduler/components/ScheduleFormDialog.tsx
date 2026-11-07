@@ -40,6 +40,7 @@ import type { Schedule, CreateScheduleInput, ScheduleTemplate, UpdateScheduleInp
 import { applyTemplateParams } from '@cindy/maker-scheduler/template-engine';
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
 import { ScriptCapabilityMultiSelect } from './ScriptCapabilityMultiSelect';
+import { ScheduleTimingPreview } from './ScheduleTimingPreview';
 import { WebhookSourceFields } from './WebhookSourceFields';
 import { WebhookAccountManager } from './WebhookAccountManager';
 
@@ -1205,6 +1206,7 @@ export function ScheduleFormDialog({
                           </Popover>
                         )}
                       </div>
+                      {!initial && triggerMode === 'automatic' && <ScheduleTimingPreview form={form} />}
                       {/* 项目配置不保存接收地址；未登录时保留已配置的触发方式。 */}
                       {webhookSettingsVisible && <WebhookAccountManager allowOpenSchedule={false} />}
                       {webhookSettingsVisible && (

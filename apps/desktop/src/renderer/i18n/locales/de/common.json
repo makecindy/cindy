@@ -15729,7 +15729,13 @@
         "label": "Auslöseart",
         "timed": "Zeitgesteuert"
       },
-      "runSettings": "Ausführungseinstellungen"
+      "runSettings": "Ausführungseinstellungen",
+      "timing": {
+        "timezone": "Zeitzone: {{timezone}}",
+        "next": "Nächste Ausführung (voraussichtlich): {{when}}",
+        "none": "Keine Ausführung vor Ablauf der Frist",
+        "invalid": "Die nächste Ausführung kann nicht berechnet werden. Zeitplan, Zeitzone und Frist prüfen."
+      }
     },
     "chips": {
       "selectProject": "Projekt auswählen",

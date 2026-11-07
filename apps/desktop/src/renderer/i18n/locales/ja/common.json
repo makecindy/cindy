@@ -15663,7 +15663,13 @@
         "label": "トリガー方式",
         "timed": "定期実行"
       },
-      "runSettings": "実行設定"
+      "runSettings": "実行設定",
+      "timing": {
+        "timezone": "タイムゾーン：{{timezone}}",
+        "next": "次回実行予定：{{when}}",
+        "none": "期限までに実行予定はありません",
+        "invalid": "次回の実行時刻を計算できません。スケジュール、タイムゾーン、期限を確認してください。"
+      }
     },
     "chips": {
       "selectProject": "プロジェクトを選択",

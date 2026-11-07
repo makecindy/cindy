@@ -288,6 +288,25 @@ describe('scheduled model selection IPC compatibility', () => {
     }));
   });
 
+  // System-timezone regression / unit: template IPC can be called without a form.
+  // Prior cases always supplied a timezone; missing must use the host system zone,
+  // while an explicit caller zone must remain authoritative.
+  it.each([undefined, 'Europe/Berlin'])('defaults template creation only when timezone is omitted: %s', async (timezone) => {
+    const options = Intl.DateTimeFormat().resolvedOptions();
+    const zone = vi.spyOn(Intl.DateTimeFormat.prototype, 'resolvedOptions')
+      .mockReturnValue({ ...options, timeZone: 'America/New_York' });
+    try {
+      const create = vi.fn(async (input: CreateScheduleInput) => input);
+      setSchedulerReady({ create } as never, {} as never);
+      registerScheduleHandlers();
+      const wire = JSON.parse(JSON.stringify({ templateId: BUILTIN_TEMPLATES[0]!.id, overrides: { timezone } }));
+      const result = await handlers.get('maker:schedule:create-from-template')!(null, wire);
+      expect(result).toMatchObject({ timezone: timezone ?? 'America/New_York' });
+    } finally {
+      zone.mockRestore();
+    }
+  });
+
   // PR #6832: template creation dropped the runtime location while retaining its
   // model/provider. Existing template cases bound a task and had no device field.
   // Unit tier: JSON -> real IPC handler -> creation input, with a remote-only route.
