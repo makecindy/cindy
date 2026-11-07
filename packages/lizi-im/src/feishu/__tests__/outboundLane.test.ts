@@ -1044,6 +1044,39 @@ describe('private notification topic output', () => {
     expect(larkMocks.create).not.toHaveBeenCalled();
   });
 
+  // 测试价值(#9245): 生产入口是 sendText → createMessage。合并转发根/不能开话题的
+  // 单聊对 reply_in_thread 回 230072, 修复前这次失败把「不支持」提示一起吞掉。
+  // 成功的私聊话题回复仍带 reply_in_thread(上一条用例)。最小失败输入: threadTs
+  // 指向的回复先被 230072 拒绝。tier: unit。
+  it.each(['thrown', 'body'] as const)(
+    'retries without reply_in_thread when Feishu rejects the topic reply (230072 %s, #9245)',
+    async (shape) => {
+      if (shape === 'thrown') {
+        const err = new Error('reply in thread not supported') as Error & {
+          response?: { data?: { code: number } };
+        };
+        err.response = { data: { code: 230072 } };
+        larkMocks.reply.mockRejectedValueOnce(err);
+      } else {
+        larkMocks.reply.mockResolvedValueOnce({
+          code: 230072,
+          msg: 'reply in thread not supported',
+          data: { message_id: '' },
+        } as unknown as { data: { message_id: string } });
+      }
+      larkMocks.reply.mockResolvedValueOnce({ data: { message_id: 'om_plain_reply' } });
+      const { messageId } = await outbound.sendText('ou_owner', '合并转发内容读取失败', {
+        threadTs: 'om_merge_root',
+      });
+      expect(messageId).toBe('om_plain_reply');
+      expect(larkMocks.reply).toHaveBeenCalledTimes(2);
+      expect(larkMocks.reply.mock.calls[0]?.[0].data).toEqual(expect.objectContaining({ reply_in_thread: true }));
+      expect(larkMocks.reply.mock.calls[1]?.[0].data).not.toHaveProperty('reply_in_thread');
+      expect(larkMocks.reply.mock.calls[1]?.[0].path).toEqual({ message_id: 'om_merge_root' });
+      expect(larkMocks.create).not.toHaveBeenCalled();
+    },
+  );
+
   it('rejects thread ids used as message ids without falling back to the main chat', async () => {
     await expect(outbound.sendText('ou_owner', 'hello', { threadTs: 'omt_thread' })).rejects.toThrow();
     expect(larkMocks.create).not.toHaveBeenCalled();

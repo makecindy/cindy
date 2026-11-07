@@ -663,6 +663,24 @@ function resolveSendTarget(userId: string, opts?: { advanceRound?: boolean; thre
   return { kind: 'chat_id', id: lane.chatId };
 }
 
+/**
+ * 飞书 230072: 聚合消息(合并转发根)和不能开话题的单聊拒绝 reply_in_thread。
+ * 业务码可能在 2xx 响应体里(SDK 不抛), 也可能在抛出的 HTTP 错误上。
+ */
+const REPLY_IN_THREAD_UNSUPPORTED_CODE = 230072;
+
+function responseBusinessCode(res: { code?: number }): number | undefined {
+  return typeof res.code === 'number' ? res.code : undefined;
+}
+
+function thrownBusinessCode(err: unknown): number | undefined {
+  if (!err || typeof err !== 'object') return undefined;
+  const direct = (err as { code?: unknown }).code;
+  if (typeof direct === 'number') return direct;
+  const nested = (err as { response?: { data?: { code?: unknown } } }).response?.data?.code;
+  return typeof nested === 'number' ? nested : undefined;
+}
+
 /** 统一出站: target 三形态 → message.create(open_id/chat_id) 或 message.reply。 */
 async function createMessage(
   target: SendTarget,
@@ -672,15 +690,36 @@ async function createMessage(
 ): Promise<{ messageId: string; chatId?: string }> {
   const c = ensureClient();
   if (target.kind === 'reply') {
-    const res = await c.im.v1.message.reply({
+    const sendReply = (inThread: boolean) => c.im.v1.message.reply({
       path: { message_id: target.messageId },
       data: {
         content,
         msg_type: msgType,
         // 回拨到群主流触发消息的锚点: 必须 reply_in_thread 才落回话题。
-        ...(target.replyInThread ? { reply_in_thread: true } : {}),
+        ...(inThread ? { reply_in_thread: true } : {}),
       },
     });
+    const inThread = target.replyInThread === true;
+    let res: { code?: number; data?: { message_id?: string } };
+    let retriedWithoutThread = false;
+    try {
+      res = await sendReply(inThread);
+    } catch (err) {
+      // 话题回复被拒时改成普通回复再发一次, 否则「不支持」提示会跟这次失败一起被吞(#9245)。
+      if (!inThread || thrownBusinessCode(err) !== REPLY_IN_THREAD_UNSUPPORTED_CODE) throw err;
+      getLog().warn('[feishu/outbound] reply_in_thread rejected (230072); retrying as a normal reply');
+      retriedWithoutThread = true;
+      res = await sendReply(false);
+    }
+    if (
+      !retriedWithoutThread &&
+      inThread &&
+      responseBusinessCode(res) === REPLY_IN_THREAD_UNSUPPORTED_CODE &&
+      !res.data?.message_id
+    ) {
+      getLog().warn('[feishu/outbound] reply_in_thread rejected (230072); retrying as a normal reply');
+      res = await sendReply(false);
+    }
     const id = res.data?.message_id ?? '';
     if (!id) throw new Error('[feishu/outbound] reply: no message_id in response');
     return { messageId: id };

@@ -207,7 +207,9 @@ function parsePost(c: Record<string, unknown>): ParsedIncoming {
 /**
  * Bot 答案走 interactive 卡片(v2 markdown / v1 lark_md)。引用回复需要把卡片
  * 正文抽出来,抽不出(模板卡等)就留空,让 resolveReplyMessage 返回 null 走群历史。
- * 卡片图只当上下文标记,不当可下载附件——image_key 在卡片里,下载协议与消息图不同。
+ * 这个空结果不能给入站门禁用: 直接转发的第三方卡片会在那里被静默丢掉, 入站侧
+ * 另记 unsupported(#9245)。卡片图只当上下文标记,不当可下载附件——image_key
+ * 在卡片里,下载协议与消息图不同。
  */
 function parseInteractive(c: Record<string, unknown>): ParsedIncoming {
   const parts: string[] = [];
