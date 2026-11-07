@@ -1094,7 +1094,24 @@
                 } else if (parsed.type === 'project_aliases_changed') {
                   emit('localDb.projectAliases.onChanged');
                 } else {
-                  emit('maker.onEvent', parsed);
+                  const event = parsed.event ?? {
+                    type: parsed.type,
+                    data: parsed.data,
+                    source: parsed.source,
+                    agentMeta: parsed.agentMeta,
+                    turnContinuationId: parsed.turnContinuationId,
+                    turnScope: parsed.turnScope,
+                    turnOrigin: parsed.turnOrigin,
+                  };
+                  emit('maker.onEvent', {
+                    sessionId: parsed.sessionId,
+                    event,
+                    persistId: parsed.persistId,
+                    resolvedContent: parsed.resolvedContent,
+                  });
+                  if (event.type === 'status' && event.data?.status === 'closed') {
+                    emit('maker.onStatusChanged', { sessionId: parsed.sessionId, status: 'closed' });
+                  }
                 }
               } catch { /* ignore partial */ }
             }
@@ -1188,6 +1205,7 @@
         if (prop.startsWith('on') && prop.length > 2 && prop[2] === prop[2].toUpperCase()) {
           const channel = path ? `${path}.${String(prop)}` : String(prop);
           return (callback) => {
+            ensureEventStream();
             const set = listeners.get(channel) ?? new Set();
             set.add(callback);
             listeners.set(channel, set);
@@ -1231,5 +1249,7 @@
   window.addEventListener('error', (event) => {
     console.error('[cindy-web] renderer error', event.error ?? event.message);
   });
+  // Start event stream immediately on boot
+  ensureEventStream();
   void pending;
 })();

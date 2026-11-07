@@ -146,7 +146,7 @@ export function createInputQueue(deps) {
     let assistantText = '';
     let finalTextPersisted = false;
     state.unsubscribe = session.onEvent((event) => {
-      deps.hub.publish({ sessionId, ...event });
+      deps.hub.publish({ sessionId, event, ...event });
       if (event.type === 'text' && typeof event.data?.text === 'string') {
         if (event.data.isFinal) {
           // Final text carries the complete assistant answer for this turn.
@@ -176,6 +176,7 @@ export function createInputQueue(deps) {
         deps.hub.publish({
           type: 'error',
           sessionId,
+          event: { type: 'error', reason: 'send_rejected', detail: result ?? null },
           reason: 'send_rejected',
           detail: result ?? null,
         });
@@ -196,6 +197,11 @@ export function createInputQueue(deps) {
       deps.hub.publish({
         type: 'error',
         sessionId,
+        event: {
+          type: 'error',
+          reason: 'send_failed',
+          message: error instanceof Error ? error.message : String(error),
+        },
         reason: 'send_failed',
         message: error instanceof Error ? error.message : String(error),
       });
