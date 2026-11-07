@@ -5606,6 +5606,11 @@
           "installPlugin": "Install plugin",
           "enablePlugin": "Enable",
           "openExtensionStore": "Open Extension Store",
+          "updatingTitle": "Updating browser connection",
+          "updatingBody": "The connection will recover automatically when the update finishes.",
+          "selectPluginTitle": "Select a browser extension",
+          "selectPluginBody": "Open the plugin details and choose “Use this browser extension” to confirm which extension Cindy should use.",
+          "selectPlugin": "Open plugin",
           "updatePluginTitle": "Update the Cindy Chrome plugin",
           "updatePluginBody": "The installed Cindy Chrome plugin is too old for My browser. Update it to the latest version, then follow its prompt to add the extension.",
           "updatePlugin": "Update",
@@ -14120,8 +14125,10 @@
       "mailLegacy": "Draft history (read-only)",
       "taskAutoArchived": "Archived \"{{title}}\"",
       "taskAutoArchivedUndo": "Undo",
-      "taskAutoArchivePending": "Archives when you leave",
-      "taskAutoArchiveCancel": "Keep this time"
+      "taskAutoArchivePending": "Will archive when you leave this task",
+      "taskAutoArchiveCancel": "Cancel",
+      "taskAutoArchiveCancelled": "Will not auto-archive this time",
+      "taskArchiveNow": "Archive now"
     },
     "ghostHook": {
       "blockedFallback": "Message blocked by a plugin; not sent",

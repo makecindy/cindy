@@ -81,15 +81,17 @@ void mountPage({
     browserBackend: {
       getState: async () => {
         if (ctx.case === 'error') throw new Error('Configuration unavailable');
-        return ctx.case.startsWith('my-browser')
+        return (ctx.case.startsWith('my-browser') || ['browser-updating', 'browser-selection'].includes(ctx.case))
           ? { active: 'user-browser', useRealProfile: true }
           : { active: 'external', useRealProfile: false };
       },
       getHealth: async () => ({
-        active: ctx.case.startsWith('my-browser') ? 'user-browser' : 'external',
-        status: ctx.case === 'my-browser-disconnected' || ctx.case === 'my-browser-probe-failed' ? 'error' : 'ready',
-        reason: ctx.case === 'my-browser-disconnected' ? 'extension-disconnected'
-          : ctx.case === 'my-browser-probe-failed' ? 'status-failed' : undefined,
+        active: (ctx.case.startsWith('my-browser') || ['browser-updating', 'browser-selection'].includes(ctx.case)) ? 'user-browser' : 'external',
+        status: ctx.case.startsWith('browser-') || ['my-browser-disconnected', 'my-browser-probe-failed'].includes(ctx.case) ? 'error' : 'ready',
+        ...(ctx.case === 'my-browser-disconnected' ? { reason: 'extension-disconnected' } : {}),
+        ...(ctx.case === 'my-browser-probe-failed' ? { reason: 'status-failed' } : {}),
+        ...(ctx.case === 'browser-updating' ? { reason: 'plugin-updating' } : {}),
+        ...(ctx.case === 'browser-selection' ? { reason: 'plugin-selection-required' } : {}),
         canRecover: false,
       }),
     },

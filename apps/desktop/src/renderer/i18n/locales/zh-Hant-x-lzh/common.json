@@ -5563,6 +5563,11 @@
           "installPlugin": "納法器",
           "enablePlugin": "往啟",
           "openExtensionStore": "開擴充商店",
+          "updatingTitle": "正更新瀏覽器連線",
+          "updatingBody": "更新既畢，連線自復。",
+          "selectPluginTitle": "擇瀏覽器擴充功能",
+          "selectPluginBody": "請啟法器詳情，擇「使用此瀏覽器擴充功能」，以定 Cindy 所用。",
+          "selectPlugin": "啟法器",
           "updatePluginTitle": "更新 Cindy Chrome 法器",
           "updatePluginBody": "所納 Cindy Chrome 法器版本較舊，尚不支援「我之瀏覽器」。更新至最新版後，再依提示將擴充裝入瀏覽器。",
           "updatePlugin": "往更新",
@@ -14045,8 +14050,10 @@
       "mailLegacy": "舊稿（唯讀）",
       "taskAutoArchived": "「{{title}}」已封存",
       "taskAutoArchivedUndo": "撤",
-      "taskAutoArchivePending": "去則自封存",
-      "taskAutoArchiveCancel": "此番不封"
+      "taskAutoArchivePending": "離此任務後自封存",
+      "taskAutoArchiveCancel": "取消",
+      "taskAutoArchiveCancelled": "此番不自封存",
+      "taskArchiveNow": "即封存"
     },
     "ghostHook": {
       "blockedFallback": "訊為法器所攔，未遣",

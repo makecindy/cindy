@@ -5563,6 +5563,11 @@
           "installPlugin": "プラグインをインストール",
           "enablePlugin": "有効にする",
           "openExtensionStore": "拡張機能ストアを開く",
+          "updatingTitle": "ブラウザー接続を更新中",
+          "updatingBody": "更新が完了すると自動的に再接続します。",
+          "selectPluginTitle": "ブラウザー拡張機能を選択",
+          "selectPluginBody": "プラグインの詳細を開き、「このブラウザー拡張機能を使用」を選択して、Cindy が使用する拡張機能を確認してください。",
+          "selectPlugin": "プラグインを開く",
           "updatePluginTitle": "Cindy Chrome プラグインを更新",
           "updatePluginBody": "インストール済みの Cindy Chrome プラグインは古く、「自分のブラウザ」に対応していません。最新版に更新してから、案内に従って拡張機能を追加してください。",
           "updatePlugin": "更新する",
@@ -14054,8 +14059,10 @@
       "mailLegacy": "下書きの履歴（読み取り専用）",
       "taskAutoArchived": "「{{title}}」をアーカイブしました",
       "taskAutoArchivedUndo": "元に戻す",
-      "taskAutoArchivePending": "離れると自動でアーカイブ",
-      "taskAutoArchiveCancel": "今回はしない"
+      "taskAutoArchivePending": "このタスクを離れると自動アーカイブします",
+      "taskAutoArchiveCancel": "キャンセル",
+      "taskAutoArchiveCancelled": "今回は自動アーカイブしません",
+      "taskArchiveNow": "今すぐアーカイブ"
     },
     "ghostHook": {
       "blockedFallback": "メッセージはプラグインによりブロックされました(未送信)",

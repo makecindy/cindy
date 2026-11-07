@@ -182,7 +182,7 @@ export class BrowserBackendHealthService {
     if (active === 'user-browser') {
       try {
         const status = await this.controller.call({ action: 'status' });
-        const data = status.data as { connected?: unknown; configured?: unknown; error?: unknown } | undefined;
+        const data = status.data as { connected?: unknown; configured?: unknown; error?: unknown; reason?: unknown } | undefined;
         if (status.ok && data?.connected === true) return { active, status: 'ready', canRecover: false };
         const errorCode = status.errorCode ?? data?.error;
         // Preserve a bounded diagnostic code, not an arbitrary bridge error message.
@@ -195,7 +195,10 @@ export class BrowserBackendHealthService {
           canRecover: false,
           ...diagnostic,
           reason: !status.ok || data?.error ? 'status-failed'
-            : data?.configured === false ? 'plugin-missing' : 'extension-disconnected',
+            : data?.configured === false
+              ? data.reason === 'plugin-updating' || data.reason === 'plugin-selection-required'
+                ? data.reason : 'plugin-missing'
+              : 'extension-disconnected',
         };
       } catch (err) {
         this.logger.warn('user browser status probe failed', { err });
