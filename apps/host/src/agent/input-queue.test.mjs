@@ -214,3 +214,23 @@ test('setExpanded, setInteractionLock, setEditLock, clearSession update projecti
   proj = await h.queue.clearSession('task-7');
   assert.equal(proj.pendingQueue.length, 0);
 });
+
+test('persists error message and updates projection when turn fails', async () => {
+  const h = createHarness();
+  await h.queue.enqueue('task-err', { clientId: 'u-1', text: 'will fail' });
+
+  const session = h.maker.getSession('task-err');
+  assert.ok(session);
+
+  session.emit({ type: 'error', data: { message: 'Auth failed: 403' } });
+
+  await waitFor(() => h.queue.projection('task-err').turnInProgress === false);
+
+  const proj = h.queue.projection('task-err');
+  assert.equal(proj.turnInProgress, false);
+  assert.equal(proj.error, 'Auth failed: 403');
+
+  const errorMessages = h.persisted.filter((m) => m.role === 'error');
+  assert.equal(errorMessages.length, 1);
+  assert.match(errorMessages[0].content, /Auth failed: 403/);
+});

@@ -73,7 +73,7 @@ export function createInputQueue(deps) {
       queueInteractionLocks: [...(state?.queueInteractionLocks ?? [])],
       queueEditLocks: [...(state?.queueEditLocks ?? [])],
       queueAbortPending: false,
-      error: null,
+      error: state?.error ?? null,
       recovery: null,
       errorRetryText: null,
       usageLimitWait: null,
@@ -129,11 +129,13 @@ export function createInputQueue(deps) {
     deps.interactions?.attach(session, sessionId);
 
     state.running = true;
+    state.error = null;
     emitProjection(sessionId);
 
     state.unsubscribe?.();
     let finished = false;
     let turnAssistantClientId = `${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
+    let turnError = null;
 
     const finish = () => {
       if (finished) return;
@@ -151,6 +153,13 @@ export function createInputQueue(deps) {
           content: assistantText,
           agentKind: dbKind,
         }).catch(() => {});
+      } else if (!finalTextPersisted && turnError && deps.persistMessage) {
+        void deps.persistMessage(sessionId, {
+          clientId: turnAssistantClientId,
+          role: 'error',
+          content: JSON.stringify({ message: turnError }),
+          agentKind: dbKind,
+        }).catch(() => {});
       }
       // Start the next queued item from a microtask so the terminal event of
       // this turn is delivered first.
@@ -162,6 +171,10 @@ export function createInputQueue(deps) {
     state.unsubscribe = session.onEvent((event) => {
       if (!finalTextPersisted && event.agentMeta?.uuid && typeof event.agentMeta.uuid === 'string') {
         turnAssistantClientId = event.agentMeta.uuid;
+      }
+      if (event.type === 'error') {
+        turnError = event.data?.message || event.message || (typeof event.data === 'string' ? event.data : 'Agent error');
+        state.error = turnError;
       }
       deps.hub.publish({
         type: 'agent_event',
@@ -196,6 +209,8 @@ export function createInputQueue(deps) {
     try {
       const result = await session.send(next.text);
       if (!result || result.accepted !== true) {
+        turnError = 'send_rejected';
+        state.error = turnError;
         deps.hub.publish({
           type: 'error',
           sessionId,
@@ -208,16 +223,18 @@ export function createInputQueue(deps) {
       }
       deps.sent(sessionId);
     } catch (error) {
+      turnError = error instanceof Error ? error.message : String(error);
+      state.error = turnError;
       deps.hub.publish({
         type: 'error',
         sessionId,
         event: {
           type: 'error',
           reason: 'send_failed',
-          message: error instanceof Error ? error.message : String(error),
+          message: turnError,
         },
         reason: 'send_failed',
-        message: error instanceof Error ? error.message : String(error),
+        message: turnError,
       });
       finish();
     }

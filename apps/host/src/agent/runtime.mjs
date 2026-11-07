@@ -27,13 +27,33 @@ export const LOGGER = {
   child: () => LOGGER,
 };
 
+async function resolveCustomClaudeRoute(providerId, gateway) {
+  if (!providerId || providerId === 'xd' || providerId === 'cindy') return null;
+  try {
+    const { listProviders } = await import('./providers.mjs');
+    const catalog = await listProviders(gateway ? { gateway } : {});
+    const p = catalog.providers?.find((item) => item.id === providerId);
+    if (!p) return null;
+    const rawUrl = p.runtimes?.['claude-code']?.baseUrl ?? p.runtimes?.pi?.baseUrl ?? p.routing?.['claude-code']?.upstream ?? p.routing?.pi?.upstream ?? 'http://127.0.0.1:3425/v1';
+    const anthropicBaseUrl = rawUrl.replace(/\/v1\/?$/, '').replace(/\/+$/, '');
+    const apiKey = p.auth?.credential || p.apiKey || gateway?.credential || 'sk-custom-provider';
+    return { anthropicBaseUrl, apiKey, rawUrl };
+  } catch (err) {
+    LOGGER.warn('failed to resolve custom claude route', err);
+    return null;
+  }
+}
+
 /**
  * Subscription-only view: state comes from the shared verdict, and the lane
  * injects no credentials because the CLI authenticates itself.
  */
-export function createClaudeSubscriptionAuth() {
+export function createClaudeSubscriptionAuth(gateway) {
   return {
-    async getState() {
+    async getState(opts) {
+      if (opts?.providerId && opts.providerId !== 'xd' && opts.providerId !== 'cindy') {
+        return { authenticated: true, authSource: 'api-key', identity: opts.providerId };
+      }
       return hasClaudeNativeLogin()
         ? { authenticated: true, authSource: 'oauth', identity: 'Claude subscription' }
         : { authenticated: false, errorReason: 'not_connected' };
@@ -44,7 +64,14 @@ export function createClaudeSubscriptionAuth() {
     async logout() {
       throw new Error('sign out with the Claude Code CLI; the host does not manage its credentials');
     },
-    async getAuthEnv() {
+    async getAuthEnv(opts) {
+      const custom = await resolveCustomClaudeRoute(opts?.providerId, gateway);
+      if (custom) {
+        return {
+          ANTHROPIC_BASE_URL: custom.anthropicBaseUrl,
+          ANTHROPIC_API_KEY: custom.apiKey,
+        };
+      }
       return {};
     },
   };
@@ -56,7 +83,10 @@ export function createClaudeSubscriptionAuth() {
 /** Gateway-key lane: the key is injected as ANTHROPIC_API_KEY for the CLI spawn. */
 export function createClaudeGatewayAuth(gateway) {
   return {
-    async getState() {
+    async getState(opts) {
+      if (opts?.providerId && opts.providerId !== 'xd' && opts.providerId !== 'cindy') {
+        return { authenticated: true, authSource: 'api-key', identity: opts.providerId };
+      }
       return { authenticated: true, authSource: 'api-key', identity: 'Cindy gateway' };
     },
     async triggerLogin() {
@@ -65,8 +95,15 @@ export function createClaudeGatewayAuth(gateway) {
     async logout() {
       throw new Error('the Cindy gateway key is managed by the Desktop settings');
     },
-    async getAuthEnv() {
-      return { ANTHROPIC_API_KEY: gateway.credential };
+    async getAuthEnv(opts) {
+      const custom = await resolveCustomClaudeRoute(opts?.providerId, gateway);
+      if (custom) {
+        return {
+          ANTHROPIC_BASE_URL: custom.anthropicBaseUrl,
+          ANTHROPIC_API_KEY: custom.apiKey,
+        };
+      }
+      return gateway?.credential ? { ANTHROPIC_API_KEY: gateway.credential } : {};
     },
   };
 }
@@ -79,7 +116,10 @@ export function createClaudeGatewayAuth(gateway) {
  */
 export function createCodexLocalCliAuth(gateway) {
   return {
-    async getState() {
+    async getState(opts) {
+      if (opts?.providerId && opts.providerId !== 'xd' && opts.providerId !== 'cindy') {
+        return { authenticated: true, authSource: 'api-key', identity: opts.providerId };
+      }
       return { authenticated: true, authSource: 'oauth', identity: 'Codex CLI login' };
     },
     async triggerLogin() {
@@ -88,7 +128,17 @@ export function createCodexLocalCliAuth(gateway) {
     async logout() {
       throw new Error('sign out with the Codex CLI; the host does not manage its credentials');
     },
-    async getAuthEnv() {
+    async getAuthEnv(opts) {
+      if (opts?.providerId && opts.providerId !== 'xd' && opts.providerId !== 'cindy') {
+        const custom = await resolveCustomClaudeRoute(opts.providerId, gateway);
+        if (custom) {
+          const baseUrl = custom.rawUrl.endsWith('/v1') ? custom.rawUrl : `${custom.rawUrl}/v1`;
+          return {
+            OPENAI_BASE_URL: baseUrl,
+            OPENAI_API_KEY: custom.apiKey,
+          };
+        }
+      }
       return gateway?.credential ? { XDT_CODEX_API_KEY: gateway.credential } : {};
     },
   };
@@ -112,7 +162,7 @@ export function createPiAuthAdapter(gateway) {
 export function createHostAgentGraph(options) {
   const mcpProviders = options.mcpProviders ?? [];
   const agent = new ClaudeCodeAgent({
-    auth: options.gateway ? createClaudeGatewayAuth(options.gateway) : createClaudeSubscriptionAuth(),
+    auth: options.gateway ? createClaudeGatewayAuth(options.gateway) : createClaudeSubscriptionAuth(options.gateway),
     runtimeConfig: {
       ...(options.gateway ? { endpoint: options.gateway.endpoint } : {}),
       // The session flag gates whether cindy_memory is registered at all.
