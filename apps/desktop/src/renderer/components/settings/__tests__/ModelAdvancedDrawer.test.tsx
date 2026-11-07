@@ -651,6 +651,52 @@ describe('model advanced editor', () => {
     expect(screen.queryByText('settings.providers.models.advanced.codexContextHint')).toBeNull();
   });
 
+  it('declares reasoning efforts for a custom provider model', async () => {
+    const update = vi.fn(async (...args: unknown[]) => {
+      void args;
+      return { ok: true };
+    });
+    const previous = window.electronAPI;
+    Object.defineProperty(window, 'electronAPI', { configurable: true, value: { maker: { updateCustomProvider: update } } });
+    const source = { ...buildUserProvider({ id: 'opencode-test', name: 'OpenCode', runtimes: {
+      pi: { baseUrl: 'https://opencode.example/v1', wireProtocol: 'openai-chat',
+        models: [{ id: 'deepseek-chat', name: 'DeepSeek' }] },
+    } }), connected: true } as ProviderView;
+    try {
+      render(<ModelAdvancedDrawer provider={source} row={{ id: 'deepseek-chat', name: 'DeepSeek',
+        avail: ['pi'], byAgent: { pi: source.models.pi![0] } }} open onOpenChange={vi.fn()}
+        pricePresentationOf={() => null} onDisable={vi.fn()} disabled={false} paymentRequired={false} />);
+      expect(screen.queryByRole('radio', { name: 'effortLevels.medium' })).toBeNull();
+      fireEvent.keyDown(screen.getByRole('button', { name: 'settings.providers.models.advanced.reasoningEfforts' }), { key: 'ArrowDown' });
+      fireEvent.click(await screen.findByRole('menuitemcheckbox', { name: 'effortLevels.medium' }));
+      await waitFor(() => expect(update).toHaveBeenCalledOnce());
+      const config = update.mock.calls[0]![0] as Parameters<typeof buildUserProvider>[0];
+      expect(config.runtimes.pi!.models[0]).toMatchObject({ id: 'deepseek-chat', name: 'DeepSeek',
+        reasoning: true, reasoningEfforts: ['medium'], reasoningDefaultEffort: 'medium' });
+      const refreshed = { ...buildUserProvider(config), connected: true } as ProviderView;
+      expect(refreshed.models.pi![0].efforts).toEqual(['medium']);
+    } finally { Object.defineProperty(window, 'electronAPI', { configurable: true, value: previous }); }
+  });
+
+  it('shows reasoning effort controls for a custom model that declares them', () => {
+    const source = { ...buildUserProvider({ id: 'opencode-test', name: 'OpenCode', runtimes: {
+      pi: { baseUrl: 'https://opencode.example/v1', wireProtocol: 'openai-chat',
+        models: [{ id: 'deepseek-chat', name: 'DeepSeek', reasoning: true,
+          reasoningEfforts: ['low', 'high'], reasoningDefaultEffort: 'high' }] },
+    } }), connected: true } as ProviderView;
+    render(<ModelAdvancedDrawer provider={source} row={{ id: 'deepseek-chat', name: 'DeepSeek',
+      avail: ['pi'], byAgent: { pi: source.models.pi![0] } }} open onOpenChange={vi.fn()}
+      pricePresentationOf={() => null} onDisable={vi.fn()} disabled={false} paymentRequired={false} />);
+    expect(screen.getByRole('radio', { name: 'effortLevels.low' })).toBeTruthy();
+    expect(screen.getByRole('radio', { name: 'effortLevels.high' })).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'settings.providers.models.advanced.reasoningEfforts' })).toBeTruthy();
+  });
+
+  it('does not offer reasoning declaration for built-in models', () => {
+    draw(model);
+    expect(screen.queryByRole('button', { name: 'settings.providers.models.advanced.reasoningEfforts' })).toBeNull();
+  });
+
   it('omits an undeclared manufacturer reference instead of presenting it as broken setup', () => {
     render(drawer({ ...model, nativeApi: undefined }, undefined, undefined, { ...provider, id: 'unknown-provider', source: 'user' }));
     expect(screen.queryByText('settings.providers.models.advanced.protocol.reference')).toBeNull();
