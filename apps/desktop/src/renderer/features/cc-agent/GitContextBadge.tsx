@@ -201,7 +201,9 @@ function PrChip({
   useEffect(() => {
     if (!prCard || (status?.ok && (status.status === 'merged' || status.status === 'closed'))) setSettingsOpen(false);
   }, [prCard, status]);
-  const cardInteraction = useRef(false);
+  // 跟进区域的交互保活：指针在区域内、焦点在区域内、设置菜单打开，任一为真都暂停悬停收起。
+  const cardHold = useRef({ pointer: false, focus: false, menu: false });
+  const panelHovered = useRef(false);
   const cardSettingsButton = useRef<HTMLButtonElement | null>(null);
   const triggerRef = useRef<HTMLButtonElement>(null);
   const panelRef = useRef<HTMLDivElement>(null);
@@ -228,7 +230,11 @@ function PrChip({
     [],
   );
   useEffect(() => {
-    if (!summaryOpen) { cancelClose(); cardInteraction.current = false; }
+    if (!summaryOpen) {
+      cancelClose();
+      cardHold.current = { pointer: false, focus: false, menu: false };
+      panelHovered.current = false;
+    }
   }, [summaryOpen]);
 
   const closeSummary = () => {
@@ -240,7 +246,8 @@ function PrChip({
   const scheduleClose = () => {
     cancelOpen();
     cancelClose();
-    if (keyboardPreview.current || cardInteraction.current) return;
+    const hold = cardHold.current;
+    if (keyboardPreview.current || hold.pointer || hold.focus || hold.menu) return;
     closeTimer.current = setTimeout(() => {
       closeTimer.current = null;
       setSummary((current) => (current === prRef.id ? null : current));
@@ -445,10 +452,14 @@ function PrChip({
               }
             }}
             onPointerEnter={(event) => {
-              if (event.pointerType === 'mouse') cancelClose();
+              if (event.pointerType !== 'mouse') return;
+              panelHovered.current = true;
+              cancelClose();
             }}
             onPointerLeave={(event) => {
-              if (event.pointerType === 'mouse') scheduleClose();
+              if (event.pointerType !== 'mouse') return;
+              panelHovered.current = false;
+              scheduleClose();
             }}
             onKeyDown={(event) => {
               if (event.key === 'Escape') {
@@ -503,7 +514,9 @@ function PrChip({
               </a>
               {canManage && (prCard?.settingsLabel && kind !== 'merged' && kind !== 'closed' ? (
                 <DropdownMenu onOpenChange={(open) => {
-                  if (open) { cardInteraction.current = true; cancelClose(); }
+                  cardHold.current.menu = open;
+                  if (open) cancelClose();
+                  else if (!panelHovered.current && !triggerHovered.current) scheduleClose();
                 }}>
                   <DropdownMenuTrigger asChild>
                     <ChromeIconButton aria-label={t('titleBar.menuItems.settings')} data-pr-manage=""
@@ -612,8 +625,15 @@ function PrChip({
               </div>
             )}
             {prCard?.summaryHtml && kind !== 'merged' && kind !== 'closed' && (
-              <div className="mt-3 border-t border-[var(--border-default)] pt-2" onPointerEnter={() => { cardInteraction.current = true; cancelClose(); }}
-                onFocusCapture={() => { cardInteraction.current = true; cancelClose(); }}>
+              <div className="mt-3 border-t border-[var(--border-default)] pt-2"
+                onPointerEnter={() => { cardHold.current.pointer = true; cancelClose(); }}
+                onPointerLeave={() => { cardHold.current.pointer = false; }}
+                onFocusCapture={() => { cardHold.current.focus = true; cancelClose(); }}
+                onBlurCapture={(event) => {
+                  if (event.currentTarget.contains(event.relatedTarget as Node | null)) return;
+                  cardHold.current.focus = false;
+                  if (!panelHovered.current && !triggerHovered.current) scheduleClose();
+                }}>
                 <Suspense fallback={null}>
                   <GhostCardPreview key={prCard.callId} {...prCard} html={prCard.summaryHtml} sessionId={session.id}
                     onEscape={() => { closeSummary(); pointerFocus.current = true; triggerRef.current?.focus(); }}
