@@ -20,6 +20,7 @@ import {
 } from '../../shared/claudeSubscriptionUsage.js';
 import type {
   SubscriptionAccountCommand,
+  SubscriptionAccountUsage,
   SubscriptionProvider,
   SubscriptionPoolView,
 } from '../../shared/subscriptionAccounts.js';
@@ -45,6 +46,7 @@ import {
 type Usage = {
   claudeUsage?: ReturnType<typeof parseClaudeSdkRateLimitInfo>;
   codexUsage?: ReturnType<typeof providerGroupCodexUsageFromReads>;
+  codexCredits?: NonNullable<SubscriptionAccountUsage['codex']>['credits'];
 };
 interface AccountSnapshot {
   auth: AuthState & { plan?: string };
@@ -189,7 +191,7 @@ export function observeSubscriptionAccountUsage(
             ? mergeClaudeSubscriptionUsageSnapshot(cached.usage?.claudeUsage ?? null, incoming)
             : cached.usage?.claudeUsage,
         }
-      : { codexUsage };
+      : { ...cached.usage, codexUsage };
   state.cache.set(key, { ...cached, usage, at: Date.now() });
   changed(provider);
 }
@@ -371,6 +373,31 @@ export async function readSubscriptionPoolUsage(
     },
   };
 }
+/** Assignable signed-in accounts in pool order, for owner-enabled quota sharing.
+ * Only quota snapshots and whether the entry is the CLI default account leave here.
+ */
+export async function readSubscriptionPoolAccountUsages(
+  provider: SubscriptionProvider,
+): Promise<Array<{ isDefault: boolean; usage: Usage | undefined }> | undefined> {
+  const pool = readPool(provider);
+  if (!pool || pool.disconnected) return undefined;
+  const state = currentRuntime();
+  const accounts = pool.accounts.filter((account) => !account.paused);
+  const infos = await Promise.all(accounts.map((a) => snapshot(state, provider, a.id)));
+  assertOwner(state);
+  return accounts.flatMap((account, index) =>
+    infos[index].auth.authenticated
+      ? [{ isDefault: account.id === 'default', usage: infos[index].usage }]
+      : [],
+  );
+}
+function accountUsage(usage: Usage | undefined): { usage?: SubscriptionAccountUsage } {
+  if (usage?.claudeUsage) return { usage: { claude: usage.claudeUsage } };
+  const buckets = usage?.codexUsage?.appServerBuckets;
+  return buckets && Object.keys(buckets).length > 0
+    ? { usage: { codex: { buckets, credits: usage?.codexCredits ?? null } } }
+    : {};
+}
 export async function readSubscriptionPool(
   provider: SubscriptionProvider,
   previewDefault = false,
@@ -414,7 +441,7 @@ export async function readSubscriptionPool(
                   ? ('limited' as const)
                   : ('ready' as const),
         running: state.running.get(keyOf(provider, account.id))?.size ?? 0,
-        ...(usage.quota ? { quota: usage.quota } : {}),
+        ...(!pool.disconnected && info.auth.authenticated ? accountUsage(info.usage) : {}),
       };
     }),
   );

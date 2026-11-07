@@ -53,7 +53,7 @@ import { providerShareVisibility } from './providerShareVisibility.js';
 import { remoteModelAccess } from './remoteModelAccess.js';
 import { isRemoteModelSelection, type RemoteModelAccessView } from '../../shared/remoteModelAccess.js';
 import { createProviderShareInsightsReader } from './providerShareInsights.js';
-import { readProviderShareQuota, readProviderShareQuotaAccount } from './providerShareQuota.js';
+import { readProviderShareQuota, readProviderShareQuotaAccountResult } from './providerShareQuota.js';
 import { isDataOwnerPushStamp } from '../../shared/dataOwnerPush.js';
 import { t } from '../i18n.js';
 import { createLogger } from '../logger.js';
@@ -1002,7 +1002,7 @@ async function execute(command: ProviderShareCommand, assertCurrent: () => void 
       return result;
     }
     case 'quota-account':
-      return readProviderShareQuotaAccount(command.providerId);
+      return readProviderShareQuotaAccountResult(command.providerId);
     case 'insights': {
       const assertOwner = captureProviderManagementScope();
       const share = findReceivedShare(command.shareId);

@@ -32,6 +32,11 @@ export interface ProviderShareQuotaAccount {
   } | null;
 }
 
+/** Member computers also list each pooled subscription account; older ones send one account. */
+export type ProviderShareQuotaAccountResult = ProviderShareQuotaAccount & {
+  accounts?: ProviderShareQuotaAccount[];
+};
+
 export type ProviderShareUsageDay = Omit<ProviderUsageDayView, 'providerId' | 'memberKey'>;
 
 export interface ProviderShareUsageDetails {
