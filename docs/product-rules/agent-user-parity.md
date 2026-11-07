@@ -71,6 +71,7 @@ Agent 新建普通独立任务（`send_to_session` create 与 `start_session_tas
 
 | 对象     | 操作                                                       | 本机 | 跨电脑           |
 | -------- | ---------------------------------------------------------- | ---- | ---------------- |
+| 订阅账号 | `configure_model_provider` 的 `subscriptionAccounts`：查看、官方 CLI 登录、暂停、限额、权重与调度策略 | 有（Claude / Codex，同供应商内多账号） | 工具按目标电脑的本机任务执行；同账号远控 UI 复用管理 IPC |
 | 任务     | 列出、搜索、读聊天记录、发现电脑                           | 有   | 有               |
 | 任务     | 获取可直接引用的任务链接（列表、搜索、聊天记录与摘要返回 sessionUrl） | 有 | 有（链接携带所属电脑；旧远端查询结果由调用端补齐） |
 | 任务     | 读摘要（状态、最后的要求与回答、模型路线、PR、排队数）     | 有   | 有（2026-10-17） |
@@ -180,8 +181,7 @@ Ask 或审核要求确认时复用现有确认入口；Plan 不允许副作用�
 审核到执行及延迟投递均保留账号、实例、权限／Plan 代次与输入边界校验，
 不得借定时工作扩大原授权范围。
 2026-10-29 修订：伙伴的来源记录与访问权限、操作风险分开。移除自主工具白名单与
-例行任务的静默 `NEEDS_OWNER_REQUEST`；普通操作沿用任务权限，仅对自主删除自动化、
-代答授权、恢复暂停、调度命令、独立完全访问 Agent、授予常驻指令等明确风险显示可操作的一次性授权请求与等待状态。
+例行任务的静默 `NEEDS_OWNER_REQUEST`；普通操作沿用任务权限，仅对自主代答授权、恢复暂停、调度命令、独立完全访问 Agent、授予常驻指令等明确风险显示可操作的一次性授权请求与等待状态。
 确认、拒绝与取消共用桌面／手机原交互通道。见 [伙伴操作权限](teammate-authority.md)。
 2026-10-22 修订：伙伴、转入消息与定时跟进的任务操作
 统一沿用普通任务权限流程：Full Access 免审、Auto 使用原有自动审核、Ask 使用原有确认。
@@ -235,6 +235,10 @@ Bearer、PUT 票据或受管文件路径。公开写入遵循当前任务 Full A
 2026-10-16：个人发布 prepare 返回包内 releaseNotes 和远端只读预检；submit 前重新校验所见快照内容。
 `ghost_cancel_plugin_review` 使用本人版本的精确 revision，区分停止上传与取消审核，沿现有 Full Access/Auto/Ask 授权。
 旧版本包仍可安装，成功提审后的同版本不再支持改包重提。
+
+自动化任务的 Webhook 触发（2026-11-04 更新）：桌面任务表单与 `schedule_create` / `schedule_update` 共用 `webhookTrigger`（含事件筛选和发送方 `source`），`schedule_get` 返回接收地址和状态。设置密钥（生成或粘贴）和更换地址只由用户在任务所在电脑的详情操作，这是凭证规则带来的有意差异：明文不能进入任务记录，工具参数夹带密钥会被拒绝。账号管理与用户能力一致：`schedule_webhook_list` 查看本账号所有电脑的地址及用量，`schedule_webhook_release` 释放离线旧电脑的名额；`schedule_webhook_restore` 明确重新连接，支持 `device` 选择在线目标电脑，恢复后仍须用户配置密钥。第一步 scheduler 类目索引说明账号范围与离线释放。写操作经过现有权限，自主伙伴释放／恢复分别按删除／恢复风险处理。规则见 [schedule-webhook-trigger.md](schedule-webhook-trigger.md)。使用 Webhook 需要 Cindy 账号：未登录或没有接收服务时 Agent 开启报错，表单隐藏入口；可用性由任务所在电脑的 `webhook-receiver` 决定。
+
+Webhook 跨电脑配置（2026-11-06）：`schedule_create` / `schedule_update` 的 `device` 可设置或清空目标电脑的 `webhookTrigger`。第一步 scheduler 类目索引即说明触发配置可指定电脑，并区分密钥和普通地址轮换仍由用户在目标电脑详情操作。沿用同账号远程控制权限，写前检查目标的 `supportsScheduleWebhookTrigger`，开启时再检查其 `webhook-receiver`；旧版本或不可用目标明确报错，清空不要求接收服务可用。`schedule_get` 指定电脑或 `all` 查询也返回目标电脑的 `webhookStatus`：通过现有只读状态通道补取，失败时明确报告该电脑查询失败，两次读取之间及返回前复核账号。未增加密钥工具或跨账号权限。
 
 自动化与例行任务的插件前置检查（2026-10-31）：桌面「前置检查」与 `schedule_create` / `schedule_update` / `routine_save` 共用 `preRunPlugin`（插件实例 id + 出错处理），Agent 与用户能力一致；只能在插件所在的电脑上设置，跨电脑的 `schedule_update` 明确拒绝。
 

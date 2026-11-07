@@ -5,26 +5,34 @@ import { useTheme } from '@/theme';
 import { navigationChrome, radius, spacing } from '@/theme/tokens';
 
 /** A dedicated edge target; vertical list scrolling never starts a resize. */
-export function SessionPaneDivider({ width, left, top, bottom, bounds, onResize }: {
+export function SessionPaneDivider({ width, left, top, bottom, bounds, onResize, grip = true, elastic }: {
   width: number;
+  /** The floating drawer's edge is draggable without a visible grip. */
+  grip?: boolean;
   left: number;
   top: number;
   bottom: number;
   bounds: { min: number; max: number };
   onResize(width: number): void;
+  /** Past the bounds the edge reports how far the finger overshoots (signed,
+   * 0 inside them) so the host can stretch elastically; onSettle on release. */
+  elastic?: { onStretch(overflow: number): void; onSettle(): void };
 }) {
   const { colors } = useTheme();
   const { t } = useTranslation();
   const [dragging, setDragging] = useState(false);
-  const latest = useRef({ width, bounds, onResize });
-  latest.current = { width, bounds, onResize };
+  const latest = useRef({ width, bounds, onResize, elastic });
+  latest.current = { width, bounds, onResize, elastic };
   const responder = useMemo(() => {
     let initial = 0;
     const resize = (next: number) => {
-      const current = latest.current;
-      current.onResize(Math.round(Math.max(current.bounds.min, Math.min(current.bounds.max, next))));
+      const { bounds: { min, max }, onResize: report, elastic: spring } = latest.current;
+      const clamped = Math.max(min, Math.min(max, next));
+      report(Math.round(clamped));
+      spring?.onStretch(next - clamped);
     };
     const finish = () => {
+      latest.current.elastic?.onSettle();
       setDragging(false);
     };
     return PanResponder.create({
@@ -49,7 +57,7 @@ export function SessionPaneDivider({ width, left, top, bottom, bounds, onResize 
       if (direction) onResize(Math.max(bounds.min, Math.min(bounds.max, width + direction * spacing.xl)));
     }}
     style={[styles.target, { left: left - navigationChrome.target / 2, top, bottom }]}>
-    <View pointerEvents="none" style={[styles.grip, { backgroundColor: dragging ? colors.textSecondary : colors.borderStrong }]} />
+    {grip ? <View pointerEvents="none" style={[styles.grip, { backgroundColor: dragging ? colors.textSecondary : colors.borderStrong }]} /> : null}
   </View>;
 }
 

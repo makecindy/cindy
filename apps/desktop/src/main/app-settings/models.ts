@@ -60,6 +60,14 @@ export async function manageAppModels(input: AppModelsRequest, assertCurrent: ()
     const change = input.change;
     await guard();
     switch (change.action) {
+      case 'subscriptionAccounts': {
+        const { parseSubscriptionAccountCommand } = await import('../subscription-accounts/commands.js');
+        const { executeSubscriptionAccountCommand } = await import('../subscription-accounts/service.js');
+        await guard();
+        const accounts = await executeSubscriptionAccountCommand(parseSubscriptionAccountCommand({ ...change.command, providerId: change.providerId }));
+        await guard();
+        return { scope: 'local', providerId: change.providerId, accounts };
+      }
       case 'rename': case 'remove': case 'restore': await api.presentation({ ...owner, ...change }); break;
       case 'order': await api.order({ ...owner, providerIds: change.providerIds }); break;
       case 'visibility': await api.visibility({ providerId: change.providerId, kind: change.modelIds ? 'model' : 'provider',

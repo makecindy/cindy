@@ -53,6 +53,7 @@ import {
   deactivatePendingQueueRowFocus,
   deactivatePendingQueueRowHover,
   emptyPendingQueueRowActivityState,
+  isPendingQueueBodyTipOpen,
   isPendingQueueRowActive,
   prunePendingQueueRowActivity,
 } from './pendingQueueRowActivity';
@@ -187,6 +188,15 @@ export function PendingQueuePanel({
   const botProfiles = useBotProfiles();
   const resolvedAriaLabel = ariaLabel ?? t('newChat.pendingQueue.regionAria');
   const [rowActivity, setRowActivity] = useState(emptyPendingQueueRowActivityState);
+  /**
+   * 正文全文提示的目标行:指针 / 键盘焦点现量到这一行真的被单行截断时记成它的 clientId。
+   * 只记「哪一行溢出」而不记「刚刚量到溢出」,上一次的结果才不会残留到另一行头上。
+   */
+  const [bodyTipClientId, setBodyTipClientId] = useState<string | null>(null);
+  /** 已经等满悬停延迟、可以真正浮出的行:受控 Tip 不会自己走 Provider 的 delay。 */
+  const [revealedBodyTipClientId, setRevealedBodyTipClientId] = useState<string | null>(null);
+  /** 拖动排序进行中:Sortable 指针捕获期间不允许行级浮层留在屏幕上。 */
+  const [dragActive, setDragActive] = useState(false);
   const editingLockOwnerRef = useRef<QueueEditLockOwner | null>(null);
   const onEditLockRef = useRef(onEditLock);
   const interactionLockedRef = useRef(false);
@@ -227,11 +237,32 @@ export function PendingQueuePanel({
       // a turn `done` event must not drain the queue before React commits the
       // local drag state update.
       setInteractionLocked(active);
+      setDragActive(active);
+      // 拖动全程压着一块气泡在行上,松手前不该再弹正文全文。
+      if (active) setBodyTipClientId(null);
     },
     [setInteractionLocked],
   );
 
   useEffect(() => () => setInteractionLocked(false), [setInteractionLocked]);
+
+  // Tip 的关闭请求(窗口失活、Radix 自己的 pointerleave / Esc)必须复位目标行,
+  // 否则受控浮层关不掉:切到别的窗口时浮层就僵在屏幕上。
+  const dismissBodyTip = useCallback(() => setBodyTipClientId(null), []);
+
+  // 受控 Tip 绕过 Provider 的 delayDuration,指针只是划过一行截断正文就会铺开一大块
+  // 全文。这里自己补上同一节奏的延迟:目标行停留满 delay 才允许浮出,关闭立即生效。
+  useEffect(() => {
+    if (bodyTipClientId === null) return undefined;
+    const timer = window.setTimeout(
+      () => setRevealedBodyTipClientId(bodyTipClientId),
+      QUEUE_BODY_TIP_HOVER_DELAY_MS,
+    );
+    return () => {
+      window.clearTimeout(timer);
+      setRevealedBodyTipClientId((current) => (current === bodyTipClientId ? null : current));
+    };
+  }, [bodyTipClientId]);
 
   const acquireEditLock = useCallback((clientId: string) => {
     editingLockOwnerRef.current = acquireQueueEditLock(
@@ -253,6 +284,9 @@ export function PendingQueuePanel({
     }
     setRowActivity((activity) =>
       prunePendingQueueRowActivity(activity, queue.map(getQueuedMessageId)),
+    );
+    setBodyTipClientId((current) =>
+      current !== null && !queue.some((q) => q.clientId === current) ? null : current,
     );
   }, [editingClientId, queue, releaseEditLock]);
 
@@ -354,6 +388,27 @@ export function PendingQueuePanel({
               ? 'w-[44px]'
               : 'w-5';
           const dragDisabled = !onReorder || isPendingEnqueue || isRowEditing || isSteering;
+          // 正文提示:被截断时才展开全文;合成指令行按契约只显示标签、不给原文。
+          // 目标行由本行正文的实测溢出决定(不是面板级共享标记),上次量到的结果不会
+          // 残留到另一行头上。text/结构始终稳定,只由 controlledOpen 决定开合:悬停时若
+          // 把 Tip 从透明分支换成 Trigger 分支,正文节点会重建、丢掉当时这次 mouseover,
+          // 提示就永远不弹。
+          const bodyTipText = rowPresentation.isSyntheticTrigger
+            ? null
+            : rowPresentation.displayText;
+          const bodyTipOpen = isPendingQueueBodyTipOpen(
+            bodyTipClientId,
+            revealedBodyTipClientId,
+            {
+              clientId: entry.clientId,
+              syntheticTrigger: rowPresentation.isSyntheticTrigger,
+              editing: isRowEditing,
+              dragActive,
+            },
+          );
+          /** 把「正文要全文提示」指向这一行,或清掉它:溢出判定始终跟着当前这一行。 */
+          const syncBodyTip = (overflowed: boolean) =>
+            setBodyTipClientId(overflowed ? entry.clientId : null);
           const steerTipText = (() => {
             if (isSteering) return t('newChat.pendingQueue.steeringAction');
             const base = t(
@@ -444,9 +499,18 @@ export function PendingQueuePanel({
                   deactivatePendingQueueRowHover(activity, entry.clientId),
                 );
               }}
-              onFocusCapture={() => {
+              onFocusCapture={(event) => {
                 setRowActivity((activity) =>
                   activatePendingQueueRowFocus(activity, entry.clientId),
+                );
+                // 键盘激活也要按当行现量;焦点落在行内动作按钮 / 引用 chip 上时让位给它们自己的 Tip。
+                syncBodyTip(
+                  !isQueueRowChildTipTarget(event.target) &&
+                    isQueueRowBodyOverflowed(
+                      event.currentTarget.querySelector<HTMLElement>(
+                        QUEUE_ROW_BODY_SELECTOR,
+                      ),
+                    ),
                 );
               }}
               onBlurCapture={(event) => {
@@ -459,6 +523,7 @@ export function PendingQueuePanel({
                 setRowActivity((activity) =>
                   deactivatePendingQueueRowFocus(activity, entry.clientId),
                 );
+                setBodyTipClientId((current) => (current === entry.clientId ? null : current));
               }}
               aria-selected={isRowActive}
               className={cn(
@@ -504,7 +569,6 @@ export function PendingQueuePanel({
                     { sender: queueRowSenderLabel },
                   )}
                   className="relative top-px flex min-w-0 flex-1 items-center gap-1.5"
-                  title={queueRowSourceIdTitle(entry, t) ?? undefined}
                 >
                   {rowPresentation.senderBotId ? (
                     <BotAvatar
@@ -545,41 +609,85 @@ export function PendingQueuePanel({
                       className="shrink-0 text-[var(--msg-assistant-text)]"
                     />
                   )}
-                  <span className="min-w-0 max-w-[120px] shrink truncate text-13 font-semibold leading-[1.25] text-[var(--msg-assistant-text)]">
+                  {/* 来源 ID 提示归来源标签:整行只留正文提示,两件事不再抢同一个悬停位置。 */}
+                  <span
+                    title={queueRowSourceIdTitle(entry, t) ?? undefined}
+                    className="min-w-0 max-w-[120px] shrink truncate text-13 font-semibold leading-[1.25] text-[var(--msg-assistant-text)]"
+                  >
                     {queueRowSenderLabel}
                   </span>
-                  <span
-                    className={cn(
-                      'min-w-0 flex-1 truncate text-13 leading-[1.25]',
-                      isRowActive
-                        ? 'text-[var(--msg-assistant-text)]'
-                        : 'text-[var(--settings-section-desc)]',
-                    )}
+                  <Tip
+                    text={bodyTipText}
+                    controlledOpen={bodyTipOpen}
+                    onOpenChange={dismissBodyTip}
+                    contentClassName={queueBodyTipClassName}
                   >
-                    {rowPresentation.isSyntheticTrigger
-                      ? t(
-                          rowPresentation.syntheticKind === 'continue'
-                          ? 'newChat.pendingQueue.syntheticContinueLabel'
-                          : 'newChat.pendingQueue.syntheticTriggerLabel',
+                    <span
+                      data-queue-row-body
+                      onPointerOver={(event) =>
+                        // pointerover 会冒泡到正文内的 chip:指针在 chip 上时行级全文提示让位。
+                        syncBodyTip(
+                          !isQueueRowChildTipTarget(event.target) &&
+                            isQueueRowBodyOverflowed(event.currentTarget),
                         )
-                      : rowPresentation.displayText || t('newChat.pendingQueue.noTextContent')}
-                  </span>
+                      }
+                      onPointerLeave={() =>
+                        setBodyTipClientId((current) =>
+                          current === entry.clientId ? null : current,
+                        )
+                      }
+                      className={cn(
+                        'min-w-0 flex-1 truncate text-13 leading-[1.25]',
+                        isRowActive
+                          ? 'text-[var(--msg-assistant-text)]'
+                          : 'text-[var(--settings-section-desc)]',
+                      )}
+                    >
+                      {rowPresentation.isSyntheticTrigger
+                        ? t(
+                            rowPresentation.syntheticKind === 'continue'
+                            ? 'newChat.pendingQueue.syntheticContinueLabel'
+                            : 'newChat.pendingQueue.syntheticTriggerLabel',
+                          )
+                        : rowPresentation.displayText || t('newChat.pendingQueue.noTextContent')}
+                    </span>
+                  </Tip>
                 </div>
               ) : (
                 <>
                 {/* 手机 / 另一台电脑发来的本人排队消息:与已发送消息同一规则标出设备(查看者即发送设备时不标)。 */}
                 {entry.sourceDevice ? <QueueSourceDeviceTag device={entry.sourceDevice} /> : null}
-                <p
-                  className={cn(
-                    // top-px: 在居中基础上把文字再压低 1px, 抵消字体 metrics, 与 drag handle 光学对齐
-                    'relative top-px min-w-0 flex-1 truncate text-13 leading-[1.25]',
-                    isRowActive
-                      ? 'text-[var(--msg-assistant-text)]'
-                      : 'text-[var(--settings-section-desc)]',
-                  )}
+                <Tip
+                  text={bodyTipText}
+                  controlledOpen={bodyTipOpen}
+                  onOpenChange={dismissBodyTip}
+                  contentClassName={queueBodyTipClassName}
                 >
-                  {pendingRowContent}
-                </p>
+                  <p
+                    data-queue-row-body
+                    onPointerOver={(event) =>
+                      // pointerover 会冒泡到正文内的 chip:指针在 chip 上时行级全文提示让位。
+                      syncBodyTip(
+                        !isQueueRowChildTipTarget(event.target) &&
+                          isQueueRowBodyOverflowed(event.currentTarget),
+                      )
+                    }
+                    onPointerLeave={() =>
+                      setBodyTipClientId((current) =>
+                        current === entry.clientId ? null : current,
+                      )
+                    }
+                    className={cn(
+                      // top-px: 在居中基础上把文字再压低 1px, 抵消字体 metrics, 与 drag handle 光学对齐
+                      'relative top-px min-w-0 flex-1 truncate text-13 leading-[1.25]',
+                      isRowActive
+                        ? 'text-[var(--msg-assistant-text)]'
+                        : 'text-[var(--settings-section-desc)]',
+                    )}
+                  >
+                    {pendingRowContent}
+                  </p>
+                </Tip>
                 </>
               )}
 
@@ -594,6 +702,7 @@ export function PendingQueuePanel({
                 <span aria-hidden className="h-5 w-5 shrink-0" />
               ) : showActions ? (
                 <div
+                  data-pending-queue-row-action="true"
                   className={cn('flex shrink-0 items-center justify-end gap-1', actionSlotWidth)}
                 >
                   {canSteerRow && onSteer && (
@@ -711,6 +820,35 @@ export function PendingQueuePanel({
       )}
     </div>
   );
+}
+
+// 正文全文提示:保留原换行。限高是防止超长协调指令把浮层铺满整屏,但固定 200px 会
+// 在十几行处把内容裁掉,而这类行没有别的可读表面。改用视口相对上限,常见长指令能
+// 整段读完;再长的尾部仍会被裁 —— 这个浮层不能滚动:仓库统一给 Tip 设了
+// disableHoverableContent=true(见 ui/tooltip.tsx),指针一移到浮层上就关,滚轮没有
+// 落点。要真正做到可滚动得先放开那条全局裁决,不在本 PR 范围。
+const queueBodyTipClassName =
+  'max-h-[min(60vh,480px)] overflow-hidden whitespace-pre-wrap';
+
+const QUEUE_ROW_BODY_SELECTOR = '[data-queue-row-body]';
+/**
+ * 行内自带 Tip 的子元素:动作按钮、正文里的引用 chip。
+ * 指针 / 焦点落在这些子元素上时,行级全文提示必须先收起,否则两层提示叠在一屏。
+ */
+const QUEUE_ROW_CHILD_TIP_SELECTOR =
+  '[data-pending-queue-row-action="true"], [data-inline-reference-chip]';
+
+/** 与 Tip 共享的 delayDuration 对齐:指针划过列表时不该立刻铺开全文浮层。 */
+const QUEUE_BODY_TIP_HOVER_DELAY_MS = 500;
+
+/** 正文被单行截断时才需要全文提示,短消息不重复一遍可见内容。 */
+function isQueueRowBodyOverflowed(node: HTMLElement | null): boolean {
+  return Boolean(node && node.scrollWidth > node.clientWidth);
+}
+
+/** 行内自带 Tip 的子元素(插话/编辑/删除按钮、引用 chip)不该被行级浮层盖住。 */
+function isQueueRowChildTipTarget(target: EventTarget | null): boolean {
+  return target instanceof Element && target.closest(QUEUE_ROW_CHILD_TIP_SELECTOR) !== null;
 }
 
 const iconButtonClassName = cn(

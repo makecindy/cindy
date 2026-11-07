@@ -7,7 +7,7 @@ import type { RemoteSerializedAttachment } from '@/session/types';
 
 const mock = vi.hoisted(() => ({
   available: true,
-  native: { pick: vi.fn(), load: vi.fn(), cancel: vi.fn(), release: vi.fn() },
+  native: { pick: vi.fn(), pickMedia: undefined as undefined | ReturnType<typeof vi.fn>, load: vi.fn(), cancel: vi.fn(), release: vi.fn() },
   deleteAsync: vi.fn(),
 }));
 vi.mock('expo-modules-core', () => ({ requireOptionalNativeModule: () => mock.available ? mock.native : null }));
@@ -23,6 +23,7 @@ afterEach(async () => { await i18n.changeLanguage(initialLanguage); });
 beforeEach(() => {
   vi.resetAllMocks();
   mock.available = true;
+  mock.native.pickMedia = mock.native.pick;
   mock.native.pick.mockResolvedValue([selection('cloud'), selection('local')]);
   mock.native.load.mockImplementation(async (id: string) => file(id));
   mock.native.cancel.mockResolvedValue(undefined);
@@ -48,6 +49,56 @@ function makeController() {
 }
 
 describe('deferred photo library', () => {
+  // unit: mixed native selections must retain the deferred iCloud lifecycle,
+  // while videos bypass image conversion and keep their file metadata.
+  it('resolves a mixed selection as an image and a video file without converting the video', async () => {
+    mock.native.pick.mockResolvedValue([selection('still'), {
+      id: 'movie', name: 'clip', previewUri: '', mediaType: 'video',
+    }]);
+    mock.native.load.mockImplementation(async (id: string) => id === 'movie'
+      ? { uri: 'file:///cache/clip.mov', fileName: 'clip.mov', mimeType: 'video/quicktime', fileSize: 500 }
+      : file(id));
+    const candidates = (await pickDeferredLibraryPhotos(2))!;
+    expect(candidates.map(item => item.kind)).toEqual(['image', 'file']);
+    expect(mock.native.load).not.toHaveBeenCalled();
+    const { controller, upload } = makeController();
+    controller.enqueue(candidates, { token: 'token' });
+    expect(await controller.waitForIdle()).toEqual({ failedCount: 0 });
+    expect(upload).toHaveBeenCalledWith(expect.objectContaining({
+      name: 'clip.mov', mimeType: 'video/quicktime', size: 500,
+    }), 'file:///cache/clip.mov', expect.anything());
+    expect(mock.native.release).toHaveBeenCalledWith('movie');
+    controller.dispose();
+  });
+
+  it('retains a failed video for retry and cleans a late cancelled movie', async () => {
+    mock.native.pick.mockResolvedValue([{ id: 'movie', name: 'clip', previewUri: '', mediaType: 'video' }]);
+    const movie = { uri: 'file:///cache/clip.mov', fileName: 'clip.mov', mimeType: 'video/quicktime', fileSize: 500 };
+    mock.native.load.mockRejectedValueOnce(new Error('offline')).mockResolvedValueOnce(movie);
+    const { controller, pending, upload } = makeController();
+    controller.enqueue((await pickDeferredLibraryPhotos(1))!, { token: 'token' });
+    expect(await controller.waitForIdle()).toEqual({ failedCount: 1 });
+    expect(mock.native.release).not.toHaveBeenCalled();
+    controller.retry(pending()[0].localId, { token: 'token' });
+    expect(await controller.waitForIdle()).toEqual({ failedCount: 0 });
+    expect(mock.native.release).toHaveBeenCalledExactlyOnceWith('movie');
+    controller.dispose();
+
+    let finish!: (value: typeof movie) => void;
+    mock.native.load.mockReturnValueOnce(new Promise(resolve => { finish = resolve; }));
+    const cancelled = makeController();
+    cancelled.controller.enqueue((await pickDeferredLibraryPhotos(1))!, { token: 'token' });
+    await flush();
+    cancelled.controller.remove(cancelled.pending()[0].localId);
+    finish(movie);
+    await flush();
+    expect(cancelled.upload).not.toHaveBeenCalled();
+    expect(mock.native.cancel).toHaveBeenCalledWith('movie');
+    expect(mock.deleteAsync).toHaveBeenCalledWith(movie.uri, { idempotent: true });
+    expect(upload).toHaveBeenCalledOnce();
+    cancelled.controller.dispose();
+  });
+
   it.each([
     ['zh-CN', '没有读取到可上传的图片。', '附件上传已取消。'],
     ['en', 'No uploadable image was read.', 'Attachment upload cancelled.'],
@@ -185,6 +236,9 @@ describe('deferred photo library', () => {
     mock.available = false;
     expect(await pickDeferredLibraryPhotos(1)).toBeNull();
     mock.available = true;
+    mock.native.pickMedia = undefined;
+    expect(await pickDeferredLibraryPhotos(1)).toBeNull();
+    mock.native.pickMedia = mock.native.pick;
     mock.native.pick.mockResolvedValue([]);
     expect(await pickDeferredLibraryPhotos(1)).toEqual([]);
     expect(mock.native.load).not.toHaveBeenCalled();

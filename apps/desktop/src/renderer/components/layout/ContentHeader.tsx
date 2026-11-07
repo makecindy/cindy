@@ -146,7 +146,6 @@ export function ContentHeader({
 
   return (
     <header
-      data-plugin-ui-element="header"
       className={cn(
         // 46px 行高 (与 CONTENT_HEADER_HEIGHT_PX 同步):红绿灯钉 y=16(实测灯心 ≈23 = 46/2,macOS 渲染比理论低约 1pt),标题/图标与
         // 红绿灯同轴(对齐 Codex 的紧凑 titlebar)。与 ChromeActions / Sidebar

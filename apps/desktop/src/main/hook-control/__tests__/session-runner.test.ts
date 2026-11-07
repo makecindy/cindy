@@ -1342,37 +1342,45 @@ describe('hook session-runner 的 userSendAt 时序(未分类误判回归)', () 
     expect(session.send).not.toHaveBeenCalled();
   });
 
-  it('官方 Telegram 新会话保留 provider 标记并把包命令留给 Desktop 确认', async () => {
+  it.each([
+    ['telegram', 'telegram:dm:bot:user:g0', 'telegram'],
+    // 官方飞书的 vendorOptions.source 刻意不是 'feishu'(个人飞书 bot 会话的值):
+    // cindy_feishu_bot 据此追加官方会话提示, 插件配置按无桌面交互面收口。
+    ['feishu', 'feishu:dm:cli_app:ou_user:g0', 'feishu-hook'],
+  ] as const)('官方 %s 新会话保留 provider 标记并把包命令留给 Desktop 确认', async (im, externalKey, vendorSource) => {
     const runner = createMakerHookSessionRunner({ log });
     const outcome = await runner.run(
       baseReq({
-        source: { im: 'telegram', channelName: 'Release topic', userText: 'hello' },
+        source: { im, channelName: 'Release topic', userText: 'hello' },
         origin: {
-          connectionId: 'slack:account:telegram',
-          connectionName: 'Cindy Telegram',
-          externalKey: 'telegram:dm:bot:user:g0',
+          connectionId: `slack:account:${im}`,
+          connectionName: `Cindy ${im}`,
+          externalKey,
         },
       }),
     );
     expect(outcome.status).toBe('ok');
     expect(fakeMaker.createSession).toHaveBeenCalledWith(
-      expect.objectContaining({ vendorOptions: { source: 'telegram' } }),
+      expect.objectContaining({ vendorOptions: { source: vendorSource } }),
     );
     const session = await fakeMaker.createSession.mock.results[0].value;
     expect(session.send.mock.calls[0][0]).toMatchObject({
-      content: `hello\n\n${buildHookPromptNote('telegram')}\n\n${buildUiLanguageErrorNote(getResolvedMainLocale())}`,
+      content: `hello\n\n${buildHookPromptNote(im)}\n\n${buildUiLanguageErrorNote(getResolvedMainLocale())}`,
     });
     expect(session.send.mock.calls[0][1]?.[MAIN_OWNED_SEND_CONTEXT]).toEqual({
-      origin: { kind: 'hook', source: 'telegram' },
+      origin: { kind: 'hook', source: im },
       rawChannelText: 'hello',
     });
-    expect(h.setSessionSourceInDb).toHaveBeenCalledWith('sess-new', 'telegram');
+    expect(h.setSessionSourceInDb).toHaveBeenCalledWith('sess-new', im);
   });
 
   it.each([
     ['slack', { kind: 'im', channel: 'slack' }],
     ['telegram', { kind: 'hook', source: 'telegram' }],
     ['x', { kind: 'hook', source: 'x' }],
+    // 安全回归: 官方飞书 hook 的 source.im 与个人飞书 bot 同为 'feishu', 但它是服务端
+    // 转发的轮次, 不得拿到个人 bot 的可信 IM origin(否则包管理命令绕过桌面确认)。
+    ['feishu', { kind: 'hook', source: 'feishu' }],
   ] as const)('线程来源 %s 使用 source.userText 作为确定性命令原文', async (im, expectedOrigin) => {
     const runner = createMakerHookSessionRunner({ log });
     const rawCommand = 'pi install npm:context-mode';
@@ -2190,6 +2198,31 @@ describe('进度快照(turn.progress 链路)', () => {
       expect(outcome.finalText).toBe('结论: 该库已停止维护。');
       expect(outcome.finalText).not.toContain('我先看看');
       expect(outcome.finalText).not.toContain('\uE200');
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('Telegram: 本机文件链接只保留文字', async () => {
+    vi.useFakeTimers();
+    try {
+      fakeMaker.createSession.mockImplementationOnce(async (opts: { id?: string }) =>
+        makeManualSession(opts.id ?? 'sess-tg'),
+      );
+      const runner = createMakerHookSessionRunner({ log });
+      const p = runner.run(baseReq({ source: { im: 'telegram' } }));
+      await flush();
+      const cb = h.eventCbs.get('sess-new')!;
+
+      // 实踩: 对方打不开这台电脑上的文件, Telegram 还会原样显示整段 Markdown。
+      cb({
+        type: 'text',
+        data: { text: '要发 PR 吗？[PR 技能](</Users/a b/SKILL.md>)、[文档](https://example.com)', isFinal: true },
+      });
+      cb({ type: 'done', data: null });
+
+      const outcome = await p;
+      expect(outcome.finalText).toBe('要发 PR 吗？PR 技能、[文档](https://example.com)');
     } finally {
       vi.useRealTimers();
     }

@@ -116,6 +116,10 @@ const ALLOWED_ROOT_SCOPES: readonly string[] = [
 const ALLOWED_EXACT_SCOPES: readonly string[] = [
   'workdir-diagnostics',
   'device-link', //                     服务初始化、relay 连接/断开/重连、心跳
+  // Fixed channels, request refs, numeric timing/queue evidence only. Never allow the root or future children.
+  'device-link:ipc-diagnostics',
+  'device-link:execution-diagnostics',
+  'device-link-transfer',
   'device-link:cross-process-lock', //   跨进程锁的获取与释放(只有锁状态,无路径)
   // 主库打开 / migration / schema 漂移 / 完整性 / fatal —— bare `localDb` 只打这些基础设施
   // 事件(dbPath 会经家目录脱敏,userId 本就是上报身份)。精确放行而非根放行:子 scope

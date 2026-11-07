@@ -22,6 +22,7 @@ import { countHomeSuggestionSessions, remoteTaskSuggestionsMode, type RemoteTask
 import { cacheRemoteResourceHome, readRemoteResourceSnapshot } from '@/device-link/remoteResourceCache';
 import { canBrowseMobileHomeDevice } from '@/session/mobileHome';
 import { useFocusEffect, useIsFocused, useRouter } from 'expo-router';
+import { useHandheldVoiceKey } from '@/handheld/handheldMode';
 import { createContext, useContext, Fragment, memo, useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type MutableRefObject, type ReactNode } from 'react';
 import {
   ActivityIndicator,
@@ -2619,6 +2620,12 @@ function HomeScreenContent({ active = true, width, newSessionInSystemBar = false
     newSessionActionRef.current = action;
     return () => { if (newSessionActionRef.current === action) newSessionActionRef.current = null; };
   }, [newSessionActionRef, openNewSession]);
+
+  // 掌机模式:首页长按语音键直接开新任务并开始说话(新建页聚焦后接手这次按住)。
+  useHandheldVoiceKey({
+    start: () => openNewSession(),
+    end: () => undefined,
+  }, active && !embedded);
 
   const openSuggestedSession = useCallback((suggestion?: RemoteTaskSuggestionId) => {
     openNewSession(undefined, suggestion, taskSuggestionsDeviceId);

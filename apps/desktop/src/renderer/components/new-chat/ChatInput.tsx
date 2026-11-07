@@ -1,5 +1,4 @@
 import { deviceDisplayName } from '@/lib/deviceName';
-import { pluginUiComposerAccess, pluginUiComposerKey } from '@/cindy-brain/pluginUiComposerActions';
 import {
   useCallback,
   useEffect,
@@ -72,7 +71,9 @@ import {
   type GhostSourceLabels,
 } from './GhostCommandDecoration';
 import {
+  commandPaletteReplacementNames,
   replaceSlashCommandRunWithText,
+  resolveSlashCommandRunEnd,
   setSlashCommandRoster,
   SlashCommandDecoration,
 } from './SlashCommandDecoration';
@@ -1496,7 +1497,7 @@ export function ChatInput({
   const onComposerTypingRef = useRef(onComposerTyping);
   onComposerTypingRef.current = onComposerTyping;
   // session 切换时 ChatInput/Editor 会复用；推荐资格必须等目标草稿完成水合后再判断。
-  const [composerHydrationGeneration, setComposerHydrationGeneration] = useState(0);
+  const [, setComposerHydrationGeneration] = useState(0);
   // 完整输入框空判断:不仅检查 ProseMirror 文档是否为空,还检查附件、浏览器评论和语音稿。
   // 避免在用户放好了附件/评论/语音稿但正文为空时,仍发起付费的 predictNextPrompt 调用。
   const voiceDraftTextRef = useRef('');
@@ -5354,31 +5355,14 @@ export function ChatInput({
         return;
       }
       const { from } = trigger;
-      // Replace the WHOLE slash-run, not just up-to-caret: the user may
-      // have moved the caret back inside the run (e.g. `/compa|ct`) and
-      // still hit Enter. Extend `to` to the first whitespace / end of
-      // paragraph after the `/`.
-      const $from = editor.state.doc.resolve(from);
-      const parent = $from.parent;
-      const parentStart = $from.start();
-      let runEnd = from + 1; // skip the `/` itself
-      // Walk forward through inline nodes until whitespace / chip boundary
-      const offset = from - parentStart + 1;
-      parent.forEach((child, childOffset) => {
-        // childOffset is relative to parentStart
-        if (childOffset + child.nodeSize <= offset) return;
-        if (child.type.name === 'mentionChip') return; // chip boundary
-        if (!child.isText) return;
-        const localStart = Math.max(0, offset - childOffset);
-        const text = child.text ?? '';
-        for (let i = localStart; i < text.length; i++) {
-          if (/\s/.test(text[i])) {
-            runEnd = parentStart + childOffset + i;
-            return;
-          }
-        }
-        runEnd = parentStart + childOffset + text.length;
-      });
+      // Preserve any draft after the caret. Only consume a suffix when it
+      // completes this exact command (e.g. `/compa|ct`) at a real boundary.
+      const runEnd = resolveSlashCommandRunEnd(
+        editor.state.doc,
+        from,
+        trigger.query,
+        commandPaletteReplacementNames(cmd),
+      );
       const setupSkillName = pluginSkillSetupName(cmd);
       if (setupSkillName) {
         if (trigger.sigil !== '/' || !pluginSkillSetup) return;
@@ -8620,47 +8604,6 @@ export function ChatInput({
       }
     };
   }, []);
-
-  // Bind the actual visible editor. No draft copy is stored by the plugin UI.
-  const pluginComposerScopeRef = useRef({ sessionId, storageKey, ownsHardwareComposerActions, queueEditingClientId });
-  pluginComposerScopeRef.current = { sessionId, storageKey, ownsHardwareComposerActions, queueEditingClientId };
-  const pluginComposerOwner = getDataOwnerGeneration();
-  useEffect(() => {
-    if (!editor || !sessionId || deviceLinkDeviceId || !ownsHardwareComposerActions || queueEditingClientId || composerMutationLocked) return;
-    const draftKey = crypto.randomUUID();
-    let revision = 0;
-    const current = () => !editor.isDestroyed && editor.isEditable && !editor.view.composing &&
-      isDataOwnerGenerationCurrent(pluginComposerOwner) && isDataOwnerIdCurrent(editorDataOwnerRef.current) &&
-      pluginComposerScopeRef.current.sessionId === sessionId && pluginComposerScopeRef.current.storageKey === storageKey &&
-      pluginComposerScopeRef.current.ownsHardwareComposerActions && !pluginComposerScopeRef.current.queueEditingClientId &&
-      hasHydratedRef.current && storageKeyForDraftRef.current === storageKey && !isRestoringRef.current &&
-      !composerMutationLockedRef.current && document.visibilityState !== 'hidden';
-    const changed = ({ transaction }: { transaction: { docChanged: boolean; selectionSet: boolean } }) => {
-      if (transaction.docChanged || transaction.selectionSet) revision++;
-    };
-    editor.on('transaction', changed);
-    const off = pluginUiComposerAccess.register(pluginUiComposerKey({ sessionId }), {
-      current,
-      snapshot: () => {
-        const { from, to } = editor.state.selection;
-        return { draftKey, revision: String(revision), selection: { start: from, end: to },
-          selectedText: editor.state.doc.textBetween(from, to, '\n', '\uFFFC') };
-      },
-      apply: effect => {
-        if (!current()) throw new Error('EDITOR_UNAVAILABLE');
-        const from = effect.operation === 'append' ? Selection.atEnd(editor.state.doc).from : effect.selection.start;
-        const to = effect.operation === 'append' ? from : effect.selection.end;
-        const content: JSONContent[] = [];
-        effect.text.split('\n').forEach((text, index) => {
-          if (index) content.push({ type: 'hardBreak' });
-          if (text) content.push({ type: 'text', text });
-        });
-        return editor.commands.insertContentAt({ from, to }, content);
-      },
-    });
-    return () => { off(); editor.off('transaction', changed); };
-  }, [editor, sessionId, storageKey, deviceLinkDeviceId, ownsHardwareComposerActions, queueEditingClientId,
-    composerMutationLocked, composerHydrationGeneration, pluginComposerOwner]);
 
   useEffect(() => {
     if (!ownsHardwareComposerActions) {

@@ -40,7 +40,6 @@ vi.mock('@/lib/useCindyVersions', () => ({
 
 const { Stub, voicePage } = vi.hoisted(() => ({ Stub: () => null, voicePage: { real: false } }));
 vi.mock('../VoiceSpeakerFilterCard', () => ({ VoiceSpeakerFilterCard: Stub }));
-vi.mock('@/cindy-brain/PluginUiControls', () => ({ PluginUiContributionControls: Stub }));
 vi.mock('../UserProfileCard', () => ({ UserProfileCard: Stub }));
 vi.mock('../VoiceInputSection', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../VoiceInputSection')>();

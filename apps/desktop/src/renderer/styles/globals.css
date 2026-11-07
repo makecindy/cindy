@@ -1076,8 +1076,6 @@ body.resizing-pane [data-ghost-webview] {
 [data-app-hidden='true'] .brand-loading-mark-sheen::before,
 [data-app-hidden='true'] .ghost-bubble-face,
 [data-app-hidden='true'] .agent-island-mascot-character,
-[data-app-hidden='true'] .agent-island-mascot-keyboard,
-[data-app-hidden='true'] .agent-island-mascot-key,
 [data-app-hidden='true'] .agent-island-mascot-eyes,
 [data-app-hidden='true'] .agent-island-mascot-sparkle,
 [data-app-hidden='true'] [class*='animate-spinner'],
@@ -1771,18 +1769,10 @@ body.resizing-pane [data-ghost-webview] {
   will-change: transform;
 }
 
-.agent-island-mascot-keyboard {
-  transform-origin: 50% 92%;
-  will-change: transform;
-}
-
 .agent-island-mascot-eyes {
   transform-origin: center;
   will-change: transform;
 }
-
-/* 键帽不设常驻 will-change:12 键 x 6 皮肤会造出 72 个常驻合成层,
-   而 opacity/transform keyframe 动画激活时 Chromium 会自动按需提层。 */
 
 .agent-island-mascot-sparkle {
   position: absolute;
@@ -1819,15 +1809,6 @@ body.resizing-pane [data-ghost-webview] {
   animation: agent-island-mascot-type 520ms ease-in-out infinite;
 }
 
-.agent-island-mascot-stage[data-motion='working'] .agent-island-mascot-keyboard {
-  animation: agent-island-mascot-keyboard-tap 520ms ease-in-out infinite;
-}
-
-.agent-island-mascot-stage[data-motion='working'] .agent-island-mascot-key {
-  animation: agent-island-mascot-key-flash 720ms ease-in-out infinite;
-  animation-delay: var(--agent-island-key-delay);
-}
-
 .agent-island-mascot-stage[data-motion='waitingApproval'] .agent-island-mascot-character {
   animation: agent-island-mascot-focus 1.15s ease-in-out infinite;
 }
@@ -1862,28 +1843,6 @@ body.resizing-pane [data-ghost-webview] {
   }
   50% {
     transform: translate3d(1px, 1px, 0) rotate(1deg) scale(var(--agent-island-mascot-scale));
-  }
-}
-
-@keyframes agent-island-mascot-keyboard-tap {
-  0%,
-  100% {
-    transform: translate3d(0, 0, 0);
-  }
-  50% {
-    transform: translate3d(0, 0.7px, 0);
-  }
-}
-
-@keyframes agent-island-mascot-key-flash {
-  0%,
-  100% {
-    opacity: 0.55;
-    transform: translate3d(0, 0, 0);
-  }
-  45% {
-    opacity: 1;
-    transform: translate3d(0, 0.35px, 0);
   }
 }
 
@@ -1937,8 +1896,6 @@ body.resizing-pane [data-ghost-webview] {
 
 @media (prefers-reduced-motion: reduce) {
   .agent-island-mascot-stage .agent-island-mascot-character,
-  .agent-island-mascot-stage .agent-island-mascot-keyboard,
-  .agent-island-mascot-stage .agent-island-mascot-key,
   .agent-island-mascot-stage .agent-island-mascot-eyes,
   .agent-island-mascot-stage .agent-island-mascot-sparkle {
     animation: none !important;
@@ -2537,12 +2494,3 @@ html[data-wallpaper-blur='true'] .app-wallpaper-video video {
   max-width: none;
   filter: blur(var(--app-wallpaper-blur));
 }
-
-/* Plugin visibility changes presentation only; critical interaction cards stay accessible. */
-html[data-plugin-ui-hidden~='workspace'] [data-plugin-ui-element='workspace'] { visibility: hidden; }
-html[data-plugin-ui-hidden~='workspace'] [data-plugin-ui-keep-visible] { visibility: visible; }
-html[data-plugin-ui-hidden~='sidebar'] [data-plugin-ui-element='sidebar'],
-html[data-plugin-ui-hidden~='header'] [data-plugin-ui-element='header'],
-html[data-plugin-ui-hidden~='messages'] [data-plugin-ui-element='messages'],
-html[data-plugin-ui-hidden~='composer'] [data-chat-input-root],
-html[data-plugin-ui-hidden~='windowControls'] [data-plugin-ui-element='windowControls'] { display: none !important; }
