@@ -14791,6 +14791,7 @@
       "file": "ファイル"
     },
     "sessionHeader": {
+      "switchProjectTask": "プロジェクト内のタスクを切り替え",
       "untitled": "無題のセッション",
       "moreActions": "その他の操作",
       "agentDevice": "Agent は {{device}} で実行中",

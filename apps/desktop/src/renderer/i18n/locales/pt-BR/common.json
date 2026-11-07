@@ -15000,6 +15000,7 @@
       "file": "Arquivo"
     },
     "sessionHeader": {
+      "switchProjectTask": "Alternar entre tarefas do projeto",
       "untitled": "Sessão sem título",
       "moreActions": "Mais ações",
       "agentDevice": "Agent é executado em {{device}}",

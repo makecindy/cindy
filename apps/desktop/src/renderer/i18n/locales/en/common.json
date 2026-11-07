@@ -14857,6 +14857,7 @@
       "file": "File"
     },
     "sessionHeader": {
+      "switchProjectTask": "Switch Project Task",
       "untitled": "Untitled session",
       "moreActions": "More actions",
       "agentDevice": "Agent runs on {{device}}",
