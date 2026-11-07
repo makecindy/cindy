@@ -851,10 +851,27 @@ final class StatusController: NSObject, NSWindowDelegate {
       .store(in: &cancellables)
   }
 
+  // Cached status-bar state: skip redraw when content is unchanged (fixes redraw storm #9019).
+  // nil = never rendered yet; forces the first layout pass to run unconditionally.
+  private var lastStatusTitle: String?
+  private var lastStatusDark: Bool?
+  private var lastStatusControlled: Bool?
+  private var lastStatusIcon: NSImage?
+
   private func updateStatusTitle() {
     guard let button = statusItem.button else { return }
     updateStatusIcon()
     let text = store.view?.statusTitle ?? ""
+    // Sentinel (nil) on first call: always run the full layout so the button switches
+    // from .imageLeading to .imageOnly when the title is empty on launch.
+    guard text != (lastStatusTitle ?? "__never__") else {
+      // Content unchanged — update accessibility/tooltip without touching the visual tree.
+      if let view = store.view {
+        button.toolTip = view.headlinePrimary
+      }
+      return
+    }
+    lastStatusTitle = text
     if text.isEmpty {
       button.attributedTitle = NSAttributedString(string: "")
       button.imagePosition = .imageOnly
@@ -878,7 +895,13 @@ final class StatusController: NSObject, NSWindowDelegate {
     guard let button = statusItem.button else { return }
     let dark = button.effectiveAppearance.bestMatch(from: [.aqua, .darkAqua]) == .darkAqua
     let controlled = store.view?.remotelyControlled == true
-    button.image = Logos.statusIcon(dark: dark, controlled: controlled)
+    // Only replace the icon when its appearance actually changed.
+    guard dark != lastStatusDark || controlled != lastStatusControlled || lastStatusIcon == nil else { return }
+    lastStatusDark = dark
+    lastStatusControlled = controlled
+    let icon = Logos.statusIcon(dark: dark, controlled: controlled)
+    lastStatusIcon = icon
+    button.image = icon
   }
 
   @objc func toggle() {
