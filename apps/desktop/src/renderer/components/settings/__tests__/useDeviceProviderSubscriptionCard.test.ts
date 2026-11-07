@@ -147,7 +147,7 @@ describe('useDeviceProviderSubscriptionCard', () => {
       models: useProviderUsageSnapshots(codex, { deviceId: 'mini' }, { web: true }),
     }));
     expect(invoke.mock.calls.filter(([, channel]) => channel === 'maker:usage:codex-rate-limits')).toEqual([
-      ['mini', 'maker:usage:codex-rate-limits', ['openai']],
+      ['mini', 'maker:usage:codex-rate-limits', ['openai', 'default-subscription-account']],
     ]);
     await act(async () => {});
     expect(result.current.models.codex?.web?.secondary?.usedPercent).toBe(88);
@@ -219,7 +219,7 @@ describe('useDeviceProviderSubscriptionCard', () => {
     });
     const { result } = renderHook(() => useDeviceProviderSubscriptionCard(codex, 'mini'));
     await act(async () => {});
-    expect(invoke).toHaveBeenLastCalledWith('mini', 'maker:usage:account', ['codex']);
+    expect(invoke).toHaveBeenLastCalledWith('mini', 'maker:usage:account', ['codex', 'openai', 'default-subscription-account']);
     expect(remaining(result.current)).toEqual([['secondary', 26]]);
     expect(result.current?.updatedAt).toBe(updatedAt);
     invoke.mockRejectedValue(new Error('offline'));

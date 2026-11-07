@@ -551,6 +551,11 @@ export function setRemoteTurnChangeAction(handler: RemoteTurnChangeAction): void
 type RemoteSubscriptionUsageReader = (providerId?: string, options?: { fresh?: boolean }) => Promise<unknown | null>;
 let remoteXaiSubscriptionUsageReader: RemoteSubscriptionUsageReader | null = null;
 let remoteClaudeSubscriptionUsageReader: RemoteSubscriptionUsageReader | null = null;
+type RemoteSubscriptionPoolQuotaReader = (channel: string, args: unknown[]) => Promise<unknown | undefined>;
+let remoteSubscriptionPoolQuotaReader: RemoteSubscriptionPoolQuotaReader | null = null;
+export function setRemoteSubscriptionPoolQuotaReader(reader: RemoteSubscriptionPoolQuotaReader | null): void {
+  remoteSubscriptionPoolQuotaReader = reader;
+}
 export function setRemoteClaudeSubscriptionUsageReader(reader: RemoteSubscriptionUsageReader | null): void {
   remoteClaudeSubscriptionUsageReader = reader;
 }
@@ -4851,6 +4856,16 @@ async function executeRemoteInvoke(src: string, payload: InvokePayload | undefin
     if (!request) return { ok: false, error: { code: 'IPC_ERROR', message: '[INVALID_PARAMS] invalid OpenCode Go usage query' } };
     return { ok: true, result: await readOpenCodeGoAccountUsage(request) };
   }
+  // Legacy controllers know only the provider, not its account pool. Keep their
+  // existing channels usable without widening either guest's authorization.
+  if (remoteSubscriptionPoolQuotaReader && isSameAccountController(src)) {
+    try {
+      const quota = await remoteSubscriptionPoolQuotaReader(payload.channel, payload.args ?? []);
+      if (quota !== undefined) return { ok: true, result: quota };
+    } catch {
+      return { ok: false, error: { code: 'IPC_ERROR', message: 'subscription quota read failed' } };
+    }
+  }
   if (payload.channel === 'maker:usage:xai-subscription' || payload.channel === 'maker:usage:claude-subscription') {
     const reader = payload.channel === 'maker:usage:xai-subscription'
       ? remoteXaiSubscriptionUsageReader : remoteClaudeSubscriptionUsageReader;
@@ -5178,6 +5193,7 @@ export const __testing = {
     remoteTurnChangeAction = null;
     remoteXaiSubscriptionUsageReader = null;
     remoteClaudeSubscriptionUsageReader = null;
+    remoteSubscriptionPoolQuotaReader = null;
   },
   getActiveControllers,
   getUpdateRelaunchControllers,
