@@ -30,6 +30,7 @@ import { remotePrStatuses, prStatusQuery, redactSensitiveText } from '@cindy/mak
 
 import {
   createContext,
+  useCallback,
   useContext,
   useEffect,
   useMemo,
@@ -39,7 +40,7 @@ import {
 } from 'react';
 
 import type { PrStatusResult, SessionPrRef } from '@/lib/gitContext.types';
-import { prStatusKey, MAX_STATUS_QUERIES, PR_STATUS_REFRESH_INTERVAL_MS } from '@/lib/prStatus';
+import { areAllTaskPrsMerged, prStatusKey, MAX_STATUS_QUERIES, PR_STATUS_REFRESH_INTERVAL_MS } from '@/lib/prStatus';
 import { useAuth } from '@/contexts/AuthContext';
 import { isRemoteDeviceMarkedDisconnected } from '@/features/device-link/remoteProjectsStore';
 import { unresponsiveDevicesStore } from '@/features/device-link/unresponsiveDevicesStore';
@@ -701,4 +702,16 @@ export function usePrStatuses(sessionId: string): PrStatusesContextValue {
 /** 行级动作(value 恒定,订阅不会因 refs/statuses 更新而重渲染)。 */
 export function usePrActions(): PrActionsContextValue {
   return useContext(PrActionsContext);
+}
+
+/** The same task-wide decision drives card hints and the final archive preflight.
+ * Read from the store again after asynchronous checks, not from a render snapshot.
+ */
+export function useTaskPrArchiveEligibility(sessionId: string): { eligible: boolean; checkEligibility: () => boolean } {
+  const store = useContext(PrStoreContext);
+  const checkEligibility = useCallback(() => areAllTaskPrsMerged(
+    store.getRefs(sessionId), store.getStatusesForSession(sessionId), store.hasRefreshError(sessionId),
+  ), [store, sessionId]);
+  const eligible = useSyncExternalStore(store.subscribe, checkEligibility, checkEligibility);
+  return { eligible, checkEligibility };
 }
