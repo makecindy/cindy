@@ -1,3 +1,4 @@
+import { configureOwnerContext } from '../../ownerContext.js';
 /**
  * dev 沙箱凭证隔离(XDT_ISOLATED_AUTH=1)回归锁。
  *
@@ -27,6 +28,13 @@ const h = vi.hoisted(() => ({
   isPackaged: false,
   dataOwnerId: null as string | null,
 }));
+
+// Mirror this fixture's changing profile/owner through the Host-neutral ports.
+vi.mock('../../userDataPath.js', () => ({ getUserDataDir: () => h.userDataDir, userDataPath: (...parts: string[]) => path.join(h.userDataDir, ...parts) }));
+configureOwnerContext({
+  read: () => ({ dataOwnerId: h.dataOwnerId, generation: 1, boundaryPending: false }),
+  fallbackBaseDir: () => h.userDataDir,
+});
 
 vi.mock('electron', () => ({
   app: {

@@ -308,20 +308,24 @@ test('worktree includes staged, unstaged and untracked source; commit mode exclu
   const summary = workflow.jobs.verify.steps[0];
   for (const checks of ['success','failure','cancelled','skipped']) {
     for (const shards of ['success','failure','cancelled','skipped']) {
+      for (const hosts of ['success','failure','cancelled','skipped']) {
       // Windows' bash.exe is a WSL shim and does not forward Node's ad-hoc
       // environment object. Set fixture values inside the shell script so
       // this contract test behaves the same on Windows and Linux.
       const aggregateScript = summary.run
         .replaceAll('$VERIFY_CHECKS_RESULT', checks)
-        .replaceAll('$LINUX_UNIT_SHARDS_RESULT', shards);
+        .replaceAll('$LINUX_UNIT_SHARDS_RESULT', shards)
+        .replaceAll('$HOST_REGRESSIONS_RESULT', hosts);
       const aggregate = runBash(aggregateScript);
       if (!aggregate) return t.skip('Git Bash is unavailable on this host');
-      assert.equal(aggregate.status === 0, checks === 'success' && shards === 'success');
+      assert.equal(aggregate.status === 0, checks === 'success' && shards === 'success' && hosts === 'success');
+      }
     }
   }
   const propagatedScript = summary.run
     .replaceAll('$VERIFY_CHECKS_RESULT', failed.status ? 'failure' : 'success')
-    .replaceAll('$LINUX_UNIT_SHARDS_RESULT', 'success');
+    .replaceAll('$LINUX_UNIT_SHARDS_RESULT', 'success')
+    .replaceAll('$HOST_REGRESSIONS_RESULT', 'success');
   const propagated = runBash(propagatedScript);
   if (!propagated) return t.skip('Git Bash is unavailable on this host');
   assert.notEqual(propagated.status,0);
@@ -424,7 +428,11 @@ test('CI design commands feed the existing verify job and preserve Windows aggre
   assert.ok(pkg.scripts['test:runner'].includes('scripts/__tests__/hardcoded-color-audit.test.mjs'));
   assert.equal(workflow.jobs.verify.name,'verify');
   assert.match(workflow.jobs.verify.if,/always\(\)/);
-  assert.deepEqual(workflow.jobs.verify.needs,['verify-checks','linux-unit-shards']);
+  assert.deepEqual(workflow.jobs.verify.needs,['verify-checks','linux-unit-shards','host-regressions']);
+  const host = workflow.jobs['host-regressions'];
+  assert.deepEqual(host.strategy.matrix.os, ['ubuntu-latest', 'windows-latest', 'macos-latest']);
+  assert.equal(host['continue-on-error'], undefined);
+  assert.ok(host.steps.some(s => s.run === 'pnpm --filter @cindy/host test'));
   const windows=workflow.jobs['windows-unit'];
   assert.equal(windows.name,'Windows unit tests');
   assert.deepEqual(windows.needs,['windows-unit-shards','windows-runner-checks']);
