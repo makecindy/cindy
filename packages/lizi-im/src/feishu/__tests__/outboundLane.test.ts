@@ -1082,4 +1082,23 @@ describe('private notification topic output', () => {
     expect(larkMocks.create).not.toHaveBeenCalled();
     expect(larkMocks.reply).not.toHaveBeenCalled();
   });
+
+  it('does not retry onto a replaced account after 230072 (#9313)', async () => {
+    larkMocks.reply.mockImplementationOnce(async (payload) => {
+      const data = payload.data as { reply_in_thread?: boolean };
+      if (data.reply_in_thread) {
+        // 第一次在途时账号被替换 — 重试必须被 pin epoch 拦下。
+        outbound.unbindClient();
+        outbound.bindClient(otherCreds);
+        return { code: 230072, msg: 'reply in thread not supported', data: { message_id: '' } };
+      }
+      return { data: { message_id: 'om_should_not_send' } };
+    });
+
+    await expect(
+      outbound.sendText('ou_owner', '合并转发内容读取失败', { threadTs: 'om_merge_root' }),
+    ).rejects.toThrow(/account was replaced/);
+    expect(larkMocks.reply).toHaveBeenCalledTimes(1);
+    expect(larkMocks.create).not.toHaveBeenCalled();
+  });
 });

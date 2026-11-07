@@ -690,7 +690,9 @@ async function createMessage(
 ): Promise<{ messageId: string; chatId?: string }> {
   const c = ensureClient();
   if (target.kind === 'reply') {
-    const sendReply = (inThread: boolean) => c.im.v1.message.reply({
+    // 每次发送重新 ensureClient:账号在途被替换时 pin epoch 拒绝,绝不把提示
+    // 发到旧 bot(#9313 review)。
+    const sendReply = (inThread: boolean) => ensureClient().im.v1.message.reply({
       path: { message_id: target.messageId },
       data: {
         content,
