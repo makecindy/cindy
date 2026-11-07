@@ -301,6 +301,40 @@ describe('mapAnthropicSdkModels', () => {
     expect(out[4]!.model.discoveredMetadata?.name).toBe('Opus 4.5');
   });
 
+  it('简称条目优先采用 SDK 的 resolvedModel:说明不带版本时新型号不再漏掉(#4961)', () => {
+    setActiveCatalog(BUNDLED_CATALOG);
+    // Claude Code 2.1.308 实报形态:简称的版本只在 resolvedModel / displayName 里,说明不带版本。
+    const out = mapAnthropicSdkModels([
+      { value: 'default', resolvedModel: 'claude-opus-5-5', displayName: 'Default (recommended)', description: 'Opus 5.5 · Best for everyday, complex tasks' },
+      { value: 'opus', resolvedModel: 'claude-opus-5-5', displayName: 'Opus 5.5', description: 'For complex work and everyday tasks' },
+      { value: 'fable', resolvedModel: 'claude-fable-5-1', displayName: 'Fable 5.1', description: 'For your toughest challenges' },
+      { value: 'sonnet', resolvedModel: 'claude-sonnet-5-5', displayName: 'Sonnet 5.5', description: 'Most efficient for simpler tasks' },
+      { value: 'haiku', resolvedModel: 'claude-haiku-5-5', displayName: 'Haiku 5.5', description: 'Fastest for quick answers' },
+      { value: 'claude-sonnet-5', resolvedModel: 'claude-sonnet-5', displayName: 'Sonnet 5', description: 'Efficient for routine tasks' },
+    ]);
+    expect(out.map(({ model }) => model.id)).toEqual([
+      'claude-opus-5-5',
+      'claude-fable-5-1',
+      'claude-sonnet-5-5',
+      'claude-haiku-5-5',
+      'claude-sonnet-5',
+    ]);
+    expect(out.map(({ model }) => model.name)).toEqual([
+      'Opus 5.5',
+      'Fable 5.1',
+      'Sonnet 5.5',
+      'Haiku 5.5',
+      'Sonnet 5',
+    ]);
+
+    // 2.1.280 形态的 [1m] 后缀同样归一;resolvedModel 不是 claude-* 时回落到说明解析。
+    const legacy = mapAnthropicSdkModels([
+      { value: 'opus[1m]', resolvedModel: 'claude-opus-5-5[1m]', displayName: 'Opus (1M context)', description: 'Opus 5.5 with 1M context · Best' },
+      { value: 'sonnet', resolvedModel: 'sonnet', displayName: 'Sonnet', description: 'Sonnet 5 · Efficient' },
+    ]);
+    expect(legacy.map(({ model }) => model.id)).toEqual(['claude-opus-5-5', 'claude-sonnet-5']);
+  });
+
   it('目录未登记的新版本照样显示,id 与名称按说明里的版本生成(Fable 5.2 不被显示成 5.1)', () => {
     setActiveCatalog(BUNDLED_CATALOG);
     const out = mapAnthropicSdkModels([
