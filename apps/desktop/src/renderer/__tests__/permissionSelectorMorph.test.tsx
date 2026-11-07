@@ -246,10 +246,10 @@ describe('PermissionSelector triggerVariant', () => {
     expect(fieldPanel.closest('[data-morph-side]')).toBeNull();
     const popperWrapper = fieldPanel.closest('[data-radix-popper-content-wrapper]');
     expect(popperWrapper).not.toBeNull();
-    // DESIGN.md §4:下拉面板无阴影(分离感来自层色/描边)。共享 PopoverContent 默认
-    // shadow-md,field 面板必须显式压掉(codex review 2026-07-25)。
+    // DESIGN.md §4:下拉面板带登记的浮层阴影(2026-11-07 用户裁决,取代曾压掉阴影的旧规则)。
     const content = popperWrapper?.firstElementChild as HTMLElement;
-    expect(content.className).toContain('shadow-none');
+    expect(content.className).toContain('shadow-[shadow:var(--shadow-menu)]');
+    expect(content.className).not.toContain('shadow-none');
     expect(screen.getAllByRole('option')).toHaveLength(4);
   });
 

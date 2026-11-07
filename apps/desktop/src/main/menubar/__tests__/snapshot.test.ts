@@ -398,3 +398,50 @@ describe('buildUsageWidgetSnapshot', () => {
     expect(buildUsageWidgetSnapshot(view, NOW, () => null)).toBeNull();
   });
 });
+
+// Shared quota details are read-only and must not offer a local task on the host's provider id.
+it('shows the account-wide sharing notice and no local subscription management actions', () => {
+  const source = codex('share:one', 54, {
+    family: 'shared', account: null, brand: 'Claude', plan: 'Shared',
+    shared: { label: 'Claude', note: 'Account-wide allowance' },
+  });
+  const view = buildMenubarView(input([source]));
+  expect(view.sources[0]).toMatchObject({ value: '46', name: 'Claude' });
+  expect(view.details[source.id]).toMatchObject({ plan: 'Shared', saySecondary: 'Account-wide allowance', action: { kind: 'open-app' } });
+  expect(view.details[source.id].facts.some(fact => /credits|resets left/i.test(fact.label))).toBe(false);
+});
+
+// Equal provider labels must remain distinguishable by the names already present in the
+// received-share directory; anonymous quota account identity stays undisclosed.
+it('distinguishes shares of the same provider by their sharers', () => {
+  const sources = ['dash', 'Chris'].map(name => codex(`share:${name}`, 18, {
+    family: 'shared', account: null, brand: 'Anthropic', plan: 'Shared',
+    shared: { label: name, ownerName: name, note: 'Account-wide allowance' },
+  }));
+  const view = buildMenubarView(input(sources));
+  expect(view.sources.map(source => source.name)).toEqual(['dash', 'Chris']);
+  expect(view.details['share:dash'].title).toBe('dash · Anthropic');
+  expect(view.details['share:Chris'].title).toBe('Chris · Anthropic');
+  expect(view.details['share:dash'].facts).toContainEqual(expect.objectContaining({ label: 'Shared by dash' }));
+});
+
+// Unit regression: new share identity bypassed the existing privacy setting in native
+// cells/headlines/manage/detail facts. Exercise both detail branches and legacy label-only input.
+it.each(['ready', 'no-windows', 'label-only'])('hides sharer identity across the native view in privacy mode (%s)', kind => {
+  const source = codex('share:one', 18, {
+    family: 'shared', account: null, brand: 'Anthropic', plan: 'Shared',
+    shared: { label: 'Private sharer', ownerName: kind === 'label-only' ? undefined : 'Private sharer', note: 'Account-wide allowance' },
+    ...(kind === 'no-windows' ? { windows: [] } : {}),
+  });
+  const visible = buildMenubarView(input([source]));
+  expect(visible.sources[0].name).toBe('Private sharer');
+  const hidden = buildMenubarView(input([source], { settings: { privacy: true } }));
+  expect(hidden.sources[0].name).toBe('Anthropic');
+  expect(hidden.manage.find(row => row.id === source.id)?.title).toBe('Anthropic');
+  expect(hidden.details[source.id].title).toBe('Anthropic');
+  expect(hidden.details[source.id].facts).toContainEqual(expect.objectContaining({ label: 'Anthropic' }));
+  expect(hidden.sources[0].value).toBe(visible.sources[0].value);
+  expect(JSON.stringify(hidden)).not.toContain('Private sharer');
+  // Projection must not overwrite the received name or lose it when privacy is turned off.
+  expect(buildMenubarView(input([source]))).toEqual(visible);
+});

@@ -448,6 +448,7 @@ describe('feishu outbound lane routing', () => {
 
     await expect(outbound.resolveReplyMessage('om_parent', 'oc_group1')).resolves.toEqual({
       replyContext: {
+        messageId: 'om_parent',
         author: '张乾',
         text: 'Omarchy @Quattro 发布了',
       },
@@ -476,11 +477,11 @@ describe('feishu outbound lane routing', () => {
     });
 
     await expect(outbound.resolveReplyMessage('om_parent_nameless', 'oc_group1')).resolves.toEqual({
-      replyContext: { author: 'Alice', text: 'hi @user @user' },
+      replyContext: { messageId: 'om_parent_nameless', author: 'Alice', text: 'hi @user @user' },
     });
   });
 
-  it('retains quoted media references for screened host downloads', async () => {
+  it('retains quoted media references for bounded host downloads', async () => {
     larkMocks.getMessage.mockResolvedValueOnce({
       code: 0,
       data: {
@@ -498,6 +499,7 @@ describe('feishu outbound lane routing', () => {
 
     await expect(outbound.resolveReplyMessage('om_parent_image', 'oc_group1')).resolves.toEqual({
       replyContext: {
+        messageId: 'om_parent_image',
         author: 'Alice', text: '[图片]',
       },
       attachments: [{ kind: 'image', imageKey: 'img_parent', messageId: 'om_parent_image' }],
@@ -621,6 +623,7 @@ describe('feishu outbound lane routing', () => {
 
     await expect(outbound.resolveReplyMessage('om_parent_card', 'oc_group1')).resolves.toEqual({
       replyContext: {
+        messageId: 'om_parent_card',
         author: 'Cindy',
         text: '这是上一条完整答案',
         isBot: true,

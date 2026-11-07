@@ -272,16 +272,16 @@ export interface ImChannelAdapter {
   /**
    * 按入站事件给该轮挂 per-turn 权限策略(telegram 群成员触发 → 破坏性调用
    * 强制确认卡, 卡片只认 owner 点击)。返回 undefined = 本轮不挂策略。
-   * 会话权限档不支持 turn 策略(acceptEdits/bypassPermissions)时 maker 拒跑
-   * 该轮(fail-closed), 不会静默放开。
+   * 保留的策略在完全访问下由 runner 临时切到 Auto 执行；不支持临时切档或
+   * 其他不兼容模式仍由 maker 拒跑(fail-closed)，不会静默放开。
    */
   turnPermissionPolicyFor?(event: IMMessageEvent): TurnPermissionPolicy | undefined;
   /**
    * 群轮次强确认策略对指定权限档「可选」的渠道判定 — 同时传入本轮 policy，
    * 让渠道能把会话档位授权限定到具体触发者。返回 true 时 dispatch 不挂
    * turnPermissionPolicy(maker 不再 fail-closed, 按用户显式选择直接执行)。
-   * 群上下文的防注入过滤/包裹独立于权限档, 照常生效。其它渠道不实现即保持
-   * fail-closed。
+   * 群上下文的防注入过滤/包裹独立于权限档, 照常生效。不实现本钩子则保留策略，
+   * 完全访问下先尝试临时 Auto，不能兑现策略时 fail-closed。
    */
   turnPolicyOptionalForMode?(
     permissionMode: PermissionMode,

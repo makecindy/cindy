@@ -12,7 +12,6 @@ const state = vi.hoisted(() => ({
   listDir: vi.fn(),
   scroll: vi.fn(),
   pager: null as any,
-  footer: null as any,
   params: { sessionId: 'task', deviceId: 'device', relPath: 'README.md' },
 }));
 vi.mock('react-native', async () => {
@@ -121,9 +120,8 @@ function expectVisiblePage(relPath: string, meta: string) {
   const visiblePages = pages.filter(page => page.visible);
   expect(visiblePages).toHaveLength(1);
   const [position, count] = meta.split(' · ')[0]!.split(' / ').map(Number);
-  expect(state.footer.collection.index).toBe(position! - 1);
-  expect(state.footer.collection.names).toHaveLength(count!);
-  expect(state.footer.collection.names[position! - 1]).toBe(relPath);
+  expect(pages).toHaveLength(count!);
+  expect(pages.findIndex(page => page.visible)).toBe(position! - 1);
   expect(visiblePages[0]).toMatchObject({
     active: true, item: { name: relPath, relPath }, htmlBrowserActions: { meta: meta.split(' · ')[1] ?? '' },
   });
@@ -179,4 +177,3 @@ vi.mock('@/session/TextDocumentPreview', () => ({ TextDocumentPreview: () => nul
 vi.mock('@/session/PdfDocumentPreview', () => ({ PdfDocumentPreview: () => null }));
 vi.mock('@/session/ModelDocumentPreview', () => ({ ModelDocumentPreview: () => null }));
 vi.mock('@/session/DiagramDocumentPreview', () => ({ DiagramDocumentPreview: () => null }));
-vi.mock('@/session/PreviewChrome', async () => ({ PreviewFooter: (props: any) => { state.footer = props; return null; }, PreviewCollectionContext: (await import('react')).createContext(undefined) }));

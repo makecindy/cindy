@@ -1460,13 +1460,22 @@
       "actionFailed": "No se pudo completar la acción. La notificación se ha mantenido. Intentar otra vez.",
       "newConversationTitle": "Nueva sesión",
       "newConversationHint": "Iniciar una nueva sesión",
-      "muteSound": "Silenciar isla Agent",
-      "enableSound": "Habilitar sonido de isla Agent",
-      "settings": "Configuración de la isla Agent",
+      "muteSound": "Silenciar Agent Notch",
+      "enableSound": "Habilitar sonido de Agent Notch",
+      "settings": "Configuración de Agent Notch",
       "newMessage": "Nuevo mensaje",
       "review": "Revisar",
       "needsInput": "Necesita información",
       "completed": "Completado",
+      "liveActivityRunning_one": "{{count}} tarea en curso",
+      "liveActivityRunning_other": "{{count}} tareas en curso",
+      "liveActivityRunning_many": "{{count}} tareas en curso",
+      "liveActivityAlsoRunning_one": "{{count}} tarea más en curso",
+      "liveActivityAlsoRunning_other": "{{count}} tareas más en curso",
+      "liveActivityAlsoRunning_many": "{{count}} tareas más en curso",
+      "liveActivityWaiting_one": "{{count}} tarea te espera",
+      "liveActivityWaiting_other": "{{count}} tareas te esperan",
+      "liveActivityWaiting_many": "{{count}} tareas te esperan",
       "error": "Error",
       "input": "Entrada",
       "done": "Listo",
@@ -1485,6 +1494,13 @@
     }
   },
   "menubar": {
+    "shared": {
+      "label": "Compartido",
+      "note": "Esta asignación es compartida por la cuenta, no reservada para usted.",
+      "highestWeekly": "Compartido · mayor saldo semanal",
+      "highestWeeklyNote": "Mayor cuota semanal restante entre las cuentas consultables. Es compartida por la cuenta, no una suma ni una cuota personal.",
+      "from": "Compartido por {{name}}"
+    },
     "balance": {
       "name": "balanza Cindy",
       "quotaName": "Cuota Cindy",
@@ -1840,7 +1856,7 @@
       "apiKeys": "Claves de herramientas",
       "voiceInput": "Entrada de voz",
       "shortcuts": "Atajos de teclado",
-      "agentIsland": "Isla Agent",
+      "agentIsland": "Dynamic Island",
       "import": "Importación de sesión",
       "connections": "Plataformas de terceros",
       "providers": "Proveedores",
@@ -1862,7 +1878,7 @@
       "billing": "Uso y facturación",
       "appearance": "Apariencia",
       "notifications": "Notificaciones",
-      "agentIsland": "Isla Agent",
+      "agentIsland": "Dynamic Island",
       "collaboration": "Colaboración",
       "agentResource": "Uso de recursos Agent",
       "gitSafety": "Seguridad Git",
@@ -2338,7 +2354,7 @@
     "notifications": {
       "title": "Notificaciones",
       "sessionDoneLabel": "Notificaciones del sistema",
-      "sessionDoneHint": "Notifique cuando finalice una sesión, encuentre un error o necesite una respuesta. Las sesiones regulares notifican solo mientras la ventana está en segundo plano. Cuando la isla Agent está habilitada, maneja estas alertas.",
+      "sessionDoneHint": "Notifique cuando finalice una sesión, encuentre un error o necesite una respuesta. Las sesiones regulares notifican solo mientras la ventana está en segundo plano. Cuando Agent Notch o la Dynamic Island están activados, se encargan de estas alertas; con solo la Dynamic Island, los errores siguen llegando como notificación del sistema.",
       "sessionDoneAria": "Alternar notificaciones del sistema para sesiones",
       "feishuLabel": "Envíe un DM Feishu / Lark cuando finalice una sesión o necesite una respuesta",
       "feishuHint": "Envía un mensaje privado a través del bot Feishu o Lark vinculado; sólo cuando la ventana está desenfocada.",
@@ -2450,28 +2466,31 @@
       }
     },
     "agentIsland": {
-      "title": "Isla Agent",
-      "unsupported": "La isla Agent requiere macOS 14 o posterior.",
+      "title": "Dynamic Island",
+      "unsupported": "La Agent Notch requiere macOS 14 o posterior.",
       "subtleRemindersLabel": "Avisos discretos",
-      "subtleRemindersHint": "Cuando haya mensajes nuevos, solicitudes de respuesta o errores, el icono cambia en lugar de mostrar una tarjeta de notificación debajo de la isla. Haz clic en la isla para ver la lista completa de tareas.",
+      "subtleRemindersHint": "Cuando haya mensajes nuevos, solicitudes de respuesta o errores, el icono cambia en lugar de mostrar una tarjeta de notificación debajo de Agent Notch. Haz clic en Agent Notch para ver la lista completa de tareas.",
       "subtleRemindersFailed": "No se han podido guardar los ajustes de avisos. Inténtalo de nuevo.",
-      "enableLabel": "Mostrar isla Agent",
-      "enableHint": "Muestra las tareas en ejecución, que necesitan respuesta y completadas no leídas en la parte superior de la pantalla. Habilitar suprime las notificaciones equivalentes del sistema para evitar alertas dobles.",
-      "enableAria": "Alternar isla Agent",
+      "liveActivityLabel": "Mostrar tareas en la Dynamic Island",
+      "liveActivityHint": "Muestra el progreso de las tareas en la Dynamic Island del nuevo MacBook Pro y se expande cuando algo requiere su atención o termina. En otros Mac aparece en la barra de menús. Funciona por separado de Agent Notch.",
+      "liveActivityFailed": "No se han podido guardar los ajustes de Actividades en vivo. Inténtalo de nuevo.",
+      "enableLabel": "Mostrar Agent Notch",
+      "enableHint": "Muestra el progreso de las tareas en la parte superior de la pantalla y le avisa cuando algo requiere su atención o hay un resultado listo. Mientras está activado, estos avisos no llegan además como notificaciones del sistema.",
+      "enableAria": "Alternar Agent Notch",
       "displayLabel": "Ubicación de visualización",
-      "displayHint": "Elija qué pantalla muestra la isla Agent. Elija todo para mostrar uno en cada pantalla.",
-      "displaySelectAria": "Elija la pantalla de isla Agent",
+      "displayHint": "Elija qué pantalla muestra Agent Notch. Elija todo para mostrar uno en cada pantalla.",
+      "displaySelectAria": "Elija la pantalla de Agent Notch",
       "displayAll": "Todas las pantallas",
       "displayOption": "{{name}} · {{resolution}}",
       "displayNameFallback": "Pantalla {{index}}",
       "displayPrimary": "Primaria",
       "displayInternal": "Incorporado",
       "displayMissing": "Pantalla desconectada {{id}}",
-      "skinLabel": "Piel de icono",
-      "skinHint": "Elija la apariencia del personaje utilizada para el ícono de estado de ejecución.",
+      "skinLabel": "Personaje",
+      "skinHint": "El personaje que aparece en Agent Notch y en la Dynamic Island.",
       "soundLabel": "Sonidos de eventos",
-      "soundHint": "Elija sonidos de 8 bits para cada evento de la isla Agent.",
-      "soundAria": "Alternar sonidos de la isla Agent",
+      "soundHint": "Elija un sonido de 8 bits para cada aviso; Agent Notch y la Dynamic Island lo comparten. El sonido de toque solo suena al pulsar Agent Notch.",
+      "soundAria": "Alternar sonidos de Agent Notch",
       "soundSelectAria": "Sonido para {{event}}",
       "soundPreviewAria": "Vista previa del sonido {{event}}",
       "skinAnimationAria": "Cambie la vista previa de la animación {{skin}}",
@@ -2494,7 +2513,7 @@
         },
         "boli": {
           "name": "Boli",
-          "description": "Un compañero Boli rosa con un ligero rebote y una silueta limpia para un ambiente isleño más suave."
+          "description": "Un compañero Boli rosa con un ligero rebote y una silueta limpia, para un aire más suave."
         },
         "whitesnow": {
           "name": "Apple Chica",
@@ -5645,6 +5664,11 @@
           "installPlugin": "Instalar complemento",
           "enablePlugin": "Activar",
           "installExtension": "Agregar extensión del navegador",
+          "updatingTitle": "Actualizando la conexión del navegador",
+          "updatingBody": "La conexión se restablecerá automáticamente al terminar la actualización.",
+          "selectPluginTitle": "Elegir extensión del navegador",
+          "selectPluginBody": "Abre los detalles del complemento y elige «Usar esta extensión del navegador» para confirmar cuál usará Cindy.",
+          "selectPlugin": "Abrir complemento",
           "updatePluginTitle": "Actualice el complemento Cindy Chrome",
           "updatePluginBody": "El complemento Cindy Chrome instalado es demasiado antiguo para Mi navegador. Actualícelo a la última versión y luego siga las indicaciones para agregar la extensión.",
           "updatePlugin": "Actualizar",
@@ -12821,6 +12845,10 @@
       "defer": "Ahora no"
     },
     "permissionPrompt": {
+      "titleStdin": "¿Permitir entrada en este terminal?",
+      "titleMcpUrl": "Completar la solicitud de {{server}}",
+      "mcpComplete": "Listo",
+      "mcpCancel": "Cancelar",
       "alwaysAllowScoped": "Permitir siempre {{scope}} durante esta sesión",
       "alwaysAllowScopedHint": "Se aplica a toda la sesión y solo a lo que se indica aquí.",
       "alwaysAllowSessionHint": "Se aplica a toda la sesión, no solo a esta solicitud.",
@@ -13063,7 +13091,13 @@
       "sendAndContinue": "Enviar y continuar",
       "close": "Cerrar",
       "customAnswer": "Escribe algo más…",
-      "answerPlaceholder": "Escribe tu respuesta…"
+      "answerPlaceholder": "Escribe tu respuesta…",
+      "validation": {
+        "required": "Completa este campo obligatorio.",
+        "choice": "Elige una de las opciones de la lista.",
+        "tooShort": "Introduce al menos {{count}} caracteres.",
+        "tooLong": "Introduce como máximo {{count}} caracteres."
+      }
     },
     "planReviewBubble": {
       "title": "Revisión del plan",
@@ -14187,8 +14221,10 @@
       "mailLegacy": "Historial de borradores (solo lectura)",
       "taskAutoArchived": "Se archivó «{{title}}»",
       "taskAutoArchivedUndo": "Deshacer",
-      "taskAutoArchivePending": "Se archiva al salir",
-      "taskAutoArchiveCancel": "Conservar esta vez"
+      "taskAutoArchivePending": "Se archivará al salir de esta tarea",
+      "taskAutoArchiveCancel": "Cancelar",
+      "taskAutoArchiveCancelled": "No se archivará automáticamente esta vez",
+      "taskArchiveNow": "Archivar ahora"
     },
     "ghostHook": {
       "blockedFallback": "Mensaje bloqueado por un complemento; no se envió",
@@ -19872,5 +19908,33 @@
     "rendered": "Ver documento",
     "wrap": "Ajustar líneas",
     "lineNumbers": "Números de línea"
+  },
+  "subscriptionAccounts": {
+    "signIn": {
+      "checking": "Comprobando la cuenta local…",
+      "detected": "Se encontró una cuenta conectada",
+      "useAccount": "Usar esta cuenta",
+      "anotherAccount": "Iniciar sesión con otra cuenta",
+      "keepExisting": "La cuenta nueva se añade a este proveedor. Las sesiones existentes se conservan.",
+      "checkFailed": "No se pudo comprobar la cuenta local. Inténtalo de nuevo.",
+      "retry": "Reintentar",
+      "useCodex": "Iniciar sesión con Codex"
+    },
+    "title": "Cuentas de suscripción",
+    "note": "La primera cuenta usa la carpeta predeterminada de la CLI. Las cuentas adicionales inician sesión por separado. Las tareas nuevas se distribuyen; las existentes conservan su cuenta.",
+    "strategy": "Equilibrio de carga",
+    "add": "Añadir cuenta",
+    "default": "Carpeta predeterminada",
+    "ready": "Conectada",
+    "signedOut": "Requiere iniciar sesión",
+    "unavailable": "Estado no disponible",
+    "limited": "Cuota agotada",
+    "remove": "Quitar cuenta",
+    "removeTitle": "¿Quitar {{name}}?",
+    "removeDescription": "Cindy dejará de asignar tareas a esta cuenta. La sesión de la CLI y el historial de conversaciones permanecerán en este equipo.",
+    "failed": "No se pudo leer o actualizar la cuenta. Comprueba el inicio de sesión de la CLI y la conexión, e inténtalo de nuevo.",
+    "directory": "Carpeta de la cuenta",
+    "loginAgain": "Iniciar sesión nuevamente",
+    "login": "Iniciar sesión"
   }
 }

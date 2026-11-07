@@ -351,3 +351,10 @@ describe('plugin-card-rich projection', () => {
     expect(await omitEndedPrOpenOnly(html, async () => true)).toBe('<p>tail</p>');
   });
 });
+
+
+it('projects an in-card task link to mobile without turning it into a plugin action', () => {
+  const html = '<a data-ghost-link="cindy://session/task-42">打开原任务</a>';
+  expect(projectGhostCardActions(html, true)).toEqual([{ id: 'link:0', label: '打开原任务', url: 'cindy://session/task-42', disabled: false }]);
+  expect(projectGhostCardActions(html, false)).toEqual([]);
+});

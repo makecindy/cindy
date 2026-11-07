@@ -43,6 +43,7 @@ import type {
 import type { CapabilityRoutingPolicy } from '../types/capability-routing.js';
 import { NotSupportedError } from '../types/capabilities.js';
 import type { AgentCredentialMode, AuthLoginOptions } from '../interfaces/auth-adapter.js';
+import { NATIVE_SUBSCRIPTION_ACCOUNT, type NativeSubscriptionAccount } from '../interfaces/auth-adapter.js';
 import type {
   MemoryStatus,
   MemorySetResult,
@@ -473,6 +474,7 @@ export interface CodexLocalCredentialModeSwitchContext {
 }
 
 export interface RefreshLocalModelsOptions {
+  [NATIVE_SUBSCRIPTION_ACCOUNT]?: NativeSubscriptionAccount;
   providerId?: string;
   /**
    * Bind model discovery to a specific local credential route.
@@ -856,7 +858,7 @@ export interface AgentDeps {
     sessionId: string,
     token: string,
     resolveProviderId: () => string | null,
-    options?: { scope?: 'session' | 'subagent-route' },
+    options?: { scope?: 'session' | 'subagent-route'; nativeSubscriptionAccount?: NativeSubscriptionAccount },
   ) => (() => void) | void;
 
   /**
@@ -1944,6 +1946,7 @@ export interface LocalAgentClient {
 }
 
 export interface StartSessionOptions {
+  [NATIVE_SUBSCRIPTION_ACCOUNT]?: NativeSubscriptionAccount;
   [LOCAL_AGENT_CLIENT]?: LocalAgentClient;
   /**
    * Business 层 session id (host 调用 maker.createSession 时传的 opts.id, 由

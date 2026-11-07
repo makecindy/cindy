@@ -52,7 +52,7 @@ export function AttachmentRejectionStrip({
             'pointer-events-auto inline-flex max-w-[640px] items-center gap-2',
             'rounded-full border border-[var(--cmd-palette-border)] bg-[var(--cmd-palette-bg)]',
             'px-4 py-[10px] text-13 font-medium leading-snug text-[var(--cmd-palette-item-text)]',
-            'shadow-[var(--shadow-menu)]',
+            'shadow-[shadow:var(--shadow-menu)]',
           )}
         >
           <TriangleAlert

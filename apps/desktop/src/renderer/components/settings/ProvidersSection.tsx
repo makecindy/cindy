@@ -92,6 +92,9 @@ import { BILLING_CURRENCY, formatBillingAmount } from '@/features/billing/money'
 import { canAccessBillingSettings } from './billingVisibility';
 import { resolveXdAssetModuleState } from './providerAssetModule';
 import { useProviderSubscriptionCard } from './useProviderSubscriptionCard';
+import { SubscriptionAccountsSection } from './SubscriptionAccountsSection';
+import { isSubscriptionProvider } from '../../../shared/subscriptionAccounts';
+import type { SubscriptionProvider } from '../../../shared/subscriptionAccounts';
 import { ProviderAccountUsageModule } from './ProviderAccountUsageModule';
 import { QuotaHoverCard } from '../status/QuotaHoverCard';
 import { ProviderConnectionDialog } from './ProviderConnectionDialog';
@@ -725,6 +728,41 @@ function DetailHeader({
         })
       : null;
 
+  const subscriptionPool = provider && isSubscriptionProvider(provider.id) ? provider.id : null;
+  const usageCard = subscription ? (
+    <QuotaHoverCard
+      key={JSON.stringify([
+        provider?.id,
+        provider?.connected,
+        provider?.subscriptionAccount?.source,
+        provider?.subscriptionAccount?.identity,
+        provider?.openAiAccount?.source,
+        provider?.openAiAccount?.identity,
+      ])}
+      variant="embedded"
+      hideIdentity={Boolean(subscriptionProduct)}
+      account={subscription}
+      dashboardLabel={
+        provider?.id === 'anthropic' || provider?.auth.native === 'claude'
+          ? t('settings.providers.usage.openClaudeUsage')
+          : provider?.id === 'xai' || provider?.auth.native === 'xai'
+            ? t('settings.providers.xai.asset.openUsage')
+            : undefined
+      }
+      onOpenDashboard={
+        provider?.id === 'anthropic' || provider?.auth.native === 'claude'
+          ? () => void window.electronAPI.openExternal('https://claude.ai/settings/usage')
+          : provider?.id === 'xai' || provider?.auth.native === 'xai'
+            ? () => void window.electronAPI.openExternal('https://grok.com')
+            : undefined
+      }
+    >
+      {resetEnabled ? (
+        <CodexResetCredits providerId={provider?.id} onChanged={refreshResets} key={provider?.id} variant="embedded" snapshot={resetSnapshot} busy={manualReset.busy} canReset={manualReset.canReset} canRetry={manualReset.canRetry} onReset={(credit) => void manualReset.reset(credit)} />
+      ) : null}
+    </QuotaHoverCard>
+  ) : null;
+
   return (
     <div className="flex min-h-0 flex-1 flex-col">
       <div className="shrink-0 px-5 py-4">
@@ -875,44 +913,22 @@ function DetailHeader({
       >
         {detail && <div className="px-5 pb-4">{detail}</div>}
         {provider?.subscriptionFastPolicy && <div className="px-5 pb-4"><SubscriptionFastSetting key={provider.id} provider={provider} /></div>}
+        {/* Pooled subscription accounts show the provider card in the default account's row. */}
+        {subscriptionPool && (
+          <SubscriptionAccountsSection
+            key={subscriptionPool}
+            providerId={subscriptionPool}
+            defaultUsage={usageCard}
+          />
+        )}
         {assetModule ??
-          (subscription ? (
+          (subscriptionPool ? null : usageCard ? (
             <div
               data-testid="provider-usage-module"
               className="border-t px-1 py-2"
               style={{ borderColor: 'var(--settings-theme-card-border)' }}
             >
-              <QuotaHoverCard
-                key={JSON.stringify([
-                  provider?.id,
-                  provider?.connected,
-                  provider?.subscriptionAccount?.source,
-                  provider?.subscriptionAccount?.identity,
-                  provider?.openAiAccount?.source,
-                  provider?.openAiAccount?.identity,
-                ])}
-                variant="embedded"
-                hideIdentity={Boolean(subscriptionProduct)}
-                account={subscription}
-                dashboardLabel={
-                  provider?.id === 'anthropic' || provider?.auth.native === 'claude'
-                    ? t('settings.providers.usage.openClaudeUsage')
-                    : provider?.id === 'xai' || provider?.auth.native === 'xai'
-                      ? t('settings.providers.xai.asset.openUsage')
-                      : undefined
-                }
-                onOpenDashboard={
-                  provider?.id === 'anthropic' || provider?.auth.native === 'claude'
-                    ? () => void window.electronAPI.openExternal('https://claude.ai/settings/usage')
-                    : provider?.id === 'xai' || provider?.auth.native === 'xai'
-                      ? () => void window.electronAPI.openExternal('https://grok.com')
-                      : undefined
-                }
-              >
-                {resetEnabled ? (
-                  <CodexResetCredits providerId={provider?.id} onChanged={refreshResets} key={provider?.id} variant="embedded" snapshot={resetSnapshot} busy={manualReset.busy} canReset={manualReset.canReset} canRetry={manualReset.canRetry} onReset={(credit) => void manualReset.reset(credit)} />
-                ) : null}
-              </QuotaHoverCard>
+              {usageCard}
             </div>
           ) : (
             <ProviderAccountUsageModule provider={provider} />
@@ -926,6 +942,64 @@ function DetailHeader({
 // ---------------------------------------------------------------------------
 // Anthropic —— OAuth(Claude.ai 订阅),复用 maker.claudeOAuth*。
 // ---------------------------------------------------------------------------
+
+function NativeSubscriptionHeader({ provider, onChanged, children, providerId, onPoolConnectionChange }: {
+  provider?: ProviderView; onChanged: () => void; children?: ReactNode; providerId: SubscriptionProvider;
+  onPoolConnectionChange?: (connected: boolean | null) => void;
+}) {
+  const { t } = useTranslation();
+  const { confirm } = useConfirmDialog();
+  const [pooled, setPooled] = useState(false);
+  const [poolConnected, setPoolConnected] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const login = useRef<string | null>(null);
+  useEffect(() => {
+    let current = true;
+    const refresh = () => void window.electronAPI.subscriptionAccounts.command({ action: 'read', providerId })
+      .then(view => { if (current) {
+        const connected = view.accounts.some(account => account.status === 'ready' || account.status === 'limited');
+        setPooled(view.configured);
+        setPoolConnected(connected);
+        onPoolConnectionChange?.(view.configured ? connected : null);
+      } }).catch(() => {});
+    refresh();
+    const off = window.electronAPI.subscriptionAccounts.onChanged(event => { if (event.providerId === providerId) refresh(); });
+    return () => {
+      current = false; off();
+      onPoolConnectionChange?.(null);
+      if (login.current) void window.electronAPI.subscriptionAccounts.command({ action: 'cancel', providerId, loginKey: login.current }).catch(() => {});
+    };
+  }, [providerId, onPoolConnectionChange]);
+  if (!pooled) return providerId === 'anthropic'
+    ? <AnthropicHeader provider={provider} onChanged={onChanged}>{children}</AnthropicHeader>
+    : <OpenAiHeader provider={provider} onChanged={onChanged}>{children}</OpenAiHeader>;
+  const connected = poolConnected;
+  const act = async () => {
+    if (login.current) {
+      await window.electronAPI.subscriptionAccounts.command({ action: 'cancel', providerId, loginKey: login.current }).catch(() => {});
+      return;
+    }
+    const prefix = providerId === 'anthropic' ? 'claude' : 'codex';
+    if (connected && !(await confirm({ title: t(`settings.connections.${prefix}.logoutConfirm.title`), description: t(`settings.connections.${prefix}.logoutConfirm.description`), confirmText: t(`settings.connections.${prefix}.logoutConfirm.confirm`) }))) return;
+    setBusy(true);
+    try {
+      if (connected && provider) await disconnectProvider(provider, await window.electronAPI.maker.listProviders());
+      else {
+        login.current = crypto.randomUUID();
+        await window.electronAPI.subscriptionAccounts.command({ action: 'login', providerId, accountId: 'default', loginKey: login.current });
+      }
+      onChanged();
+    } catch (error) {
+      if (!String(error).includes('SUBSCRIPTION_LOGIN_CANCELLED')) toast.error(t('subscriptionAccounts.failed'));
+    } finally { login.current = null; setBusy(false); }
+  };
+  return <DetailHeader provider={provider ? { ...provider, connected } : provider} children={children}
+    icon={providerId === 'anthropic' ? <AnthropicMark size={18} /> : <OpenAIMark size={18} />}
+    title={provider?.name ?? (providerId === 'anthropic' ? 'Anthropic' : 'OpenAI')}
+    subtitle={t('subscriptionAccounts.title')}
+    status={{ kind: connected ? 'connected' : 'neutral', label: t(busy ? 'settings.providers.pill.connecting' : 'settings.providers.pill.disconnected') }}
+    primaryAction={{ label: t(login.current ? 'settings.providers.button.cancel' : connected ? 'settings.providers.button.disconnect' : 'subscriptionAccounts.login'), onClick: () => void act(), disabled: busy && !login.current }} />;
+}
 
 function AnthropicHeader({
   children,
@@ -2449,6 +2523,10 @@ export function ProvidersSection() {
   // OpenAI 的 reconnect-required 是 useCodexAuth 独有状态(目录 connected 此时为 false):
   // 该状态下 OpenAI 行必须留在左栏,否则「重新连接」入口不可达,用户被迫从向导重发现。
   const codexAuth = useCodexAuth();
+  const [openaiPoolState, setOpenaiPoolState] = useState<{ dataOwnerId: string | null; connected: boolean } | null>(null);
+  const onOpenaiPoolConnectionChange = useCallback((connected: boolean | null) => {
+    setOpenaiPoolState(connected === null ? null : { dataOwnerId, connected });
+  }, [dataOwnerId]);
   const remoteControlEnabled = useRemoteControlEnabled();
   // 供应商分享：入口提示点读待审批申请与待处理的转分享请求；管理页是本页的子页面(返回回到供应商详情)。
   // 带 hostDeviceId 的申请在另一台电脑的分享里(那台的供应商 id 可能与本机重名)，只计入那台的组入口。
@@ -2888,10 +2966,12 @@ export function ProvidersSection() {
     return selected?.id === 'openai'
       ? {
           ...selected,
-          connected: isChatGptConnectionConnected(codexAuth.state, selected.connected),
+          connected: openaiPoolState && openaiPoolState.dataOwnerId === dataOwnerId
+            ? openaiPoolState.connected
+            : isChatGptConnectionConnected(codexAuth.state, selected.connected),
         }
       : selected;
-  }, [selectedId, listProviders, codexAuth.state]);
+  }, [selectedId, listProviders, codexAuth.state, openaiPoolState, dataOwnerId]);
 
   const handleDelete = useCallback(
     async (p: ProviderView) => {
@@ -3072,9 +3152,9 @@ export function ProvidersSection() {
     if (p.id === 'xd')
       return <XdGatewayHeader children={children} provider={p} onChanged={refetch} />;
     if (p.id === 'anthropic')
-      return <AnthropicHeader children={children} provider={p} onChanged={refetch} />;
+      return <NativeSubscriptionHeader key={p.id} children={children} provider={p} providerId="anthropic" onChanged={refetch} />;
     if (p.id === 'openai')
-      return <OpenAiHeader children={children} provider={p} onChanged={refetch} />;
+      return <NativeSubscriptionHeader key={p.id} children={children} provider={p} providerId="openai" onChanged={refetch} onPoolConnectionChange={onOpenaiPoolConnectionChange} />;
     if (p.id === 'xai') return <XaiHeader children={children} provider={p} onChanged={refetch} />;
     if (p.source === 'builtin' && p.auth.method === 'apiKey' && isBuiltinApiKeyProviderId(p.id)) {
       return (

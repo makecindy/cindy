@@ -98,6 +98,8 @@ import {
   AGENT_ISLAND_SET_ENABLED_CHANNEL,
   AGENT_ISLAND_SET_MASCOT_SKIN_CHANNEL,
   AGENT_ISLAND_SET_SUBTLE_REMINDERS_CHANNEL,
+  AGENT_ISLAND_SET_LIVE_ACTIVITY_CHANNEL,
+  AGENT_ISLAND_GET_LIVE_ACTIVITY_SUPPORT_CHANNEL,
   AGENT_ISLAND_SET_REMOTE_SESSIONS_CHANNEL,
   AGENT_ISLAND_SET_COMPANION_CHATS_CHANNEL,
   AGENT_ISLAND_READ_COMPANION_CHAT_CHANNEL,
@@ -928,6 +930,7 @@ const fanOutDeviceLinkControlTargetChanged = createIpcFanOut('device-link:contro
 const fanOutDeviceLinkKeepAwakeChanged = createIpcFanOut('device-link:keep-awake-changed');
 const fanOutProviderShareOwnedChanged = createIpcFanOut(PROVIDER_SHARE_IPC.OWNED_CHANGED);
 const fanOutProviderGroupChanged = createIpcFanOut(PROVIDER_GROUP_IPC.CHANGED);
+const fanOutSubscriptionAccountsChanged = createIpcFanOut('subscription-accounts:changed');
 const fanOutProviderShareReceivedChanged = createIpcFanOut(PROVIDER_SHARE_IPC.RECEIVED_CHANGED);
 const fanOutProviderShareRequested = createIpcFanOut(PROVIDER_SHARE_IPC.REQUESTED);
 const fanOutProviderShareSettled = createIpcFanOut(PROVIDER_SHARE_IPC.SETTLED);
@@ -1278,6 +1281,12 @@ contextBridge.exposeInMainWorld('electronAPI', {
   appDisplayVersion: appDisplayVersionInfo.display,
   appDisplayVersionDetail: appDisplayVersionInfo.detail,
   getDeviceId: (): Promise<string> => ipcRenderer.invoke('get-device-id'),
+  windowSidebarExpansion: (width: number, shrink?: number, adopt?: boolean): Promise<number> => ipcRenderer.invoke('window-sidebar-expansion', width, shrink, adopt),
+  onSidebarWindowUserResize: (callback: () => void) => {
+    const listener = () => callback();
+    ipcRenderer.on('window-sidebar-user-resize', listener);
+    return () => ipcRenderer.removeListener('window-sidebar-user-resize', listener);
+  },
   windowMinimize: () => ipcRenderer.send('window-minimize'),
   windowMaximize: () => ipcRenderer.send('window-maximize'),
   windowExitFullscreen: () => ipcRenderer.send('window-exit-fullscreen'),
@@ -2327,6 +2336,11 @@ contextBridge.exposeInMainWorld('electronAPI', {
       ipcRenderer.invoke(AGENT_ISLAND_SET_MASCOT_SKIN_CHANNEL, skin),
     setSubtleReminders: (enabled: boolean): Promise<{ ok: true }> =>
       ipcRenderer.invoke(AGENT_ISLAND_SET_SUBTLE_REMINDERS_CHANNEL, enabled),
+    /** macOS 27.3+: mirror task status as a Live Activity in the system Dynamic Island. */
+    setLiveActivity: (enabled: boolean): Promise<{ ok: true }> =>
+      ipcRenderer.invoke(AGENT_ISLAND_SET_LIVE_ACTIVITY_CHANNEL, enabled),
+    getLiveActivitySupport: (): Promise<{ ok: true; supported: boolean }> =>
+      ipcRenderer.invoke(AGENT_ISLAND_GET_LIVE_ACTIVITY_SUPPORT_CHANNEL),
     setDisplayTarget: (target: AgentIslandDisplayTarget): Promise<{ ok: true }> =>
       ipcRenderer.invoke(AGENT_ISLAND_SET_DISPLAY_TARGET_CHANNEL, target),
     getDisplayOptions: (): Promise<{
@@ -5063,6 +5077,11 @@ contextBridge.exposeInMainWorld('electronAPI', {
     onReshareRequested: fanOutProviderShareReshareRequested,
   },
   // 供应商组：这台电脑上某个供应商的组设置(只接受本机应用窗口)。
+  subscriptionAccounts: {
+    onChanged: fanOutSubscriptionAccountsChanged,
+    command: (command: import('../shared/subscriptionAccounts').SubscriptionAccountCommand): Promise<import('../shared/subscriptionAccounts').SubscriptionPoolView> =>
+      ipcRenderer.invoke('maker:subscription-accounts', command),
+  },
   providerGroup: {
     command: (command: ProviderGroupCommand): Promise<unknown> =>
       ipcRenderer.invoke(PROVIDER_GROUP_IPC.COMMAND, command),

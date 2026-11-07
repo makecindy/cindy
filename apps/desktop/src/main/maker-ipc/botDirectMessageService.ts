@@ -1,4 +1,4 @@
-import type { CapturedAgentRequest } from './forwardedRequest.js';
+import type { CapturedAgentRequest, DelegationTarget } from './forwardedRequest.js';
 import { matchesForwardedRequest, readForwardedRequestSource, type AgentRequestReceipt, type ForwardedRequestSource } from '../../shared/forwardedRequest.js';
 import { parseBotPeerAddress, botPeerAddress, MAX_BOT_PEER_ADDRESS_CHARS } from '../../shared/botPeerAddress.js';
 import { isCompanionShadowed } from '../companion-cloud/homes.js';
@@ -110,8 +110,9 @@ export interface BotMessageTransport {
 
 export interface BotDirectMessageServiceDeps {
   transport?: BotMessageTransport;
-  /** Capture the accepted caller input, never model-written claims of approval. */
-  captureRequest?: (sessionId: string, supplement: string, target?: { sessionId?: string }) => Promise<CapturedAgentRequest>;
+  /** Capture the accepted caller input, never model-written claims of approval.
+   *  Remote teammates have no local session; `targetTeammate` names the confirmed recipient for the review. */
+  captureRequest?: (sessionId: string, supplement: string, target?: DelegationTarget) => Promise<CapturedAgentRequest>;
   dispatch: (params: {
     autoReviewUserText?: AgentRequestReceipt;
     targetSessionId: string;
@@ -547,7 +548,11 @@ export function createBotDirectMessageService(deps: BotDirectMessageServiceDeps)
     let captured: CapturedAgentRequest = remoteSender ? { message: rawMessage,
       autoReviewUserText: { kind: 'agent-request',
         ...(remoteSender.requestSource ? { request: remoteSender.requestSource } : {}) } }
-      : await deps.captureRequest?.(input.callerSessionId, rawMessage, { sessionId: targetSessionId ?? undefined })
+      // A remote teammate has no local session; the review must still see the confirmed
+      // recipient instead of the "a new task" fallback, or an authorized hand-off is refused (#9198).
+      : await deps.captureRequest?.(input.callerSessionId, rawMessage, remoteTarget
+        ? { targetTeammate: { name: targetProfile.name, id: input.targetBotId } }
+        : { sessionId: targetSessionId ?? undefined })
         ?? { message: rawMessage, autoReviewUserText: { kind: 'agent-request' } };
     if (captured.blocked) return failed('DELEGATION_NOT_AUTHORIZED', captured.blocked);
     // No original words means a normal peer message, including on older peers

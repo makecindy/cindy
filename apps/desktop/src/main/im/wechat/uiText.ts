@@ -84,8 +84,8 @@ export const ui = {
     agentSwitchAlsoCheckPermissionMode:
       '若新的 Agent 仍提示权限模式问题，请在微信发送 /permission 调整权限模式后重试。',
     permissionModeUnsupported:
-      '⚠️ 当前 Agent 无法在个人微信中安全使用此权限模式。\n' +
-      '请在微信发送 /permission 切换权限模式后重试。',
+      '这条消息尚未执行：当前任务的权限模式无法提供个人微信所需的操作审批。\n' +
+      '请在 Cindy 中把当前任务改为「自动审批」，或在微信发送 /permission 调整后重发。',
   },
   cards: {
     permission: {

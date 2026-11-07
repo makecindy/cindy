@@ -1442,13 +1442,19 @@
       "actionFailed": "Die Aktion konnte nicht abgeschlossen werden. Die Benachrichtigung wurde beibehalten. Versuch es erneut.",
       "newConversationTitle": "Neue Sitzung",
       "newConversationHint": "Neue Sitzung starten",
-      "muteSound": "Agent Island stummschalten",
-      "enableSound": "Ton für Agent Island aktivieren",
-      "settings": "Agent Island-Einstellungen",
+      "muteSound": "Agent Notch stummschalten",
+      "enableSound": "Ton für Agent Notch aktivieren",
+      "settings": "Agent Notch-Einstellungen",
       "newMessage": "Neue Nachricht",
       "review": "Prüfen",
       "needsInput": "Eingabe erforderlich",
       "completed": "Abgeschlossen",
+      "liveActivityRunning_one": "{{count}} Aufgabe läuft",
+      "liveActivityRunning_other": "{{count}} Aufgaben laufen",
+      "liveActivityAlsoRunning_one": "{{count}} weitere Aufgabe läuft",
+      "liveActivityAlsoRunning_other": "{{count}} weitere Aufgaben laufen",
+      "liveActivityWaiting_one": "{{count}} Aufgabe wartet auf dich",
+      "liveActivityWaiting_other": "{{count}} Aufgaben warten auf dich",
       "error": "Fehler",
       "input": "Eingabe",
       "done": "Fertig",
@@ -1467,6 +1473,13 @@
     }
   },
   "menubar": {
+    "shared": {
+      "label": "Geteilt",
+      "note": "Dieses Kontingent wird vom gesamten Konto geteilt und ist nicht für dich reserviert.",
+      "highestWeekly": "Geteilt · größtes Wochenkontingent",
+      "highestWeeklyNote": "Höchstes verbleibendes Wochenkontingent der lesbaren Konten. Kontoweit geteilt, weder addiert noch persönlich reserviert.",
+      "from": "Geteilt von {{name}}"
+    },
     "balance": {
       "name": "Cindy-Guthaben",
       "quotaName": "Cindy-Kontingent",
@@ -1805,7 +1818,7 @@
       "apiKeys": "Tool-Schlüssel",
       "voiceInput": "Spracheingabe",
       "shortcuts": "Tastenkombinationen",
-      "agentIsland": "Agent Island",
+      "agentIsland": "Dynamic Island",
       "import": "Sitzungsimport",
       "connections": "Drittanbieterplattformen",
       "providers": "Anbieter",
@@ -1827,7 +1840,7 @@
       "billing": "Nutzung und Abrechnung",
       "appearance": "Darstellung",
       "notifications": "Benachrichtigungen",
-      "agentIsland": "Agent Island",
+      "agentIsland": "Dynamic Island",
       "collaboration": "Zusammenarbeit",
       "agentResource": "Agent-Ressourcennutzung",
       "gitSafety": "Git-Sicherheit",
@@ -2303,7 +2316,7 @@
     "notifications": {
       "title": "Benachrichtigungen",
       "sessionDoneLabel": "Systembenachrichtigungen",
-      "sessionDoneHint": "Benachrichtigen, wenn eine Sitzung abgeschlossen wird, ein Fehler auftritt oder eine Antwort erforderlich ist. Reguläre Sitzungen senden nur Benachrichtigungen, wenn das Fenster im Hintergrund ist. Wenn Agent Island aktiviert ist, übernimmt es stattdessen diese Hinweise.",
+      "sessionDoneHint": "Benachrichtigen, wenn eine Sitzung abgeschlossen wird, ein Fehler auftritt oder eine Antwort erforderlich ist. Reguläre Sitzungen senden nur Benachrichtigungen, wenn das Fenster im Hintergrund ist. Wenn Agent Notch oder die Dynamic Island aktiviert ist, übernehmen diese die Hinweise; ist nur die Dynamic Island aktiv, kommen Fehler weiterhin als Systemmitteilung.",
       "sessionDoneAria": "Systembenachrichtigungen für Sitzungen umschalten",
       "feishuLabel": "Eine Direktnachricht über Feishu / Lark senden, wenn eine Sitzung abgeschlossen wird oder eine Antwort erforderlich ist",
       "feishuHint": "Sendet eine private Nachricht über den verknüpften Feishu- oder Lark-Bot; nur, wenn das Fenster nicht fokussiert ist.",
@@ -2415,28 +2428,31 @@
       }
     },
     "agentIsland": {
-      "title": "Agent Island",
-      "unsupported": "Agent Island erfordert macOS 14 oder neuer.",
+      "title": "Dynamic Island",
+      "unsupported": "Agent Notch erfordert macOS 14 oder neuer.",
       "subtleRemindersLabel": "Dezente Hinweise",
-      "subtleRemindersHint": "Bei neuen Nachrichten, Rückfragen oder Fehlern ändert sich das Symbol, statt eine Benachrichtigungskarte unter der Insel einzublenden. Per Klick auf die Insel öffnet sich die vollständige Aufgabenliste.",
+      "subtleRemindersHint": "Bei neuen Nachrichten, Rückfragen oder Fehlern ändert sich das Symbol, statt eine Benachrichtigungskarte unter Agent Notch einzublenden. Per Klick auf Agent Notch öffnet sich die vollständige Aufgabenliste.",
       "subtleRemindersFailed": "Die Hinweiseinstellungen konnten nicht gespeichert werden. Bitte versuche es erneut.",
-      "enableLabel": "Agent Island anzeigen",
-      "enableHint": "Zeigt laufende, zu beantwortende und ungelesene erledigte Aufgaben oben im Display an. Durch die Aktivierung werden die entsprechenden Systembenachrichtigungen unterdrückt, um doppelte Warnungen zu vermeiden.",
-      "enableAria": "Agent Island ein-/ausschalten",
+      "liveActivityLabel": "Aufgaben in der Dynamic Island anzeigen",
+      "liveActivityHint": "Zeigt den Fortschritt von Aufgaben in der Dynamic Island des neuen MacBook Pro und klappt auf, wenn etwas eine Antwort braucht oder fertig ist. Auf anderen Macs erscheint es in der Menüleiste. Funktioniert unabhängig von Agent Notch.",
+      "liveActivityFailed": "Die Einstellungen für Live-Aktivitäten konnten nicht gespeichert werden. Bitte versuche es erneut.",
+      "enableLabel": "Agent Notch anzeigen",
+      "enableHint": "Zeigt den Fortschritt von Aufgaben oben auf dem Bildschirm und meldet sich, wenn etwas eine Antwort braucht oder ein Ergebnis bereitliegt. Solange es aktiv ist, kommen diese Hinweise nicht zusätzlich als Systemmitteilungen.",
+      "enableAria": "Agent Notch ein-/ausschalten",
       "displayLabel": "Anzeigeort",
-      "displayHint": "Wähle aus, auf welchem Bildschirm Agent Island angezeigt wird. Wähle alle aus, um es auf jedem Bildschirm anzuzeigen.",
-      "displaySelectAria": "Bildschirm für Agent Island auswählen",
+      "displayHint": "Wähle aus, auf welchem Bildschirm Agent Notch angezeigt wird. Wähle alle aus, um es auf jedem Bildschirm anzuzeigen.",
+      "displaySelectAria": "Bildschirm für Agent Notch auswählen",
       "displayAll": "Alle Bildschirme",
       "displayOption": "{{name}} · {{resolution}}",
       "displayNameFallback": "Bildschirm {{index}}",
       "displayPrimary": "Primär",
       "displayInternal": "Integriert",
       "displayMissing": "Getrennter Bildschirm {{id}}",
-      "skinLabel": "Symbol-Skin",
-      "skinHint": "Wähle den Charakter-Skin für das Symbol bei laufender Ausführung.",
+      "skinLabel": "Figur",
+      "skinHint": "Die Figur in Agent Notch und in der Dynamic Island.",
       "soundLabel": "Ereignistöne",
-      "soundHint": "Wähle 8-Bit-Sounds für jedes Agent Island-Ereignis.",
-      "soundAria": "Agent Island-Sounds ein-/ausschalten",
+      "soundHint": "Wähle für jeden Hinweis einen 8-Bit-Sound, gemeinsam für Agent Notch und die Dynamic Island. Der Tipp-Sound ertönt nur beim Tippen auf Agent Notch.",
+      "soundAria": "Agent Notch-Sounds ein-/ausschalten",
       "soundSelectAria": "Ton für {{event}}",
       "soundPreviewAria": "Ton für {{event}} vorhören",
       "skinAnimationAria": "Animationsvorschau für {{skin}} umschalten",
@@ -2459,7 +2475,7 @@
         },
         "boli": {
           "name": "Boli",
-          "description": "Ein rosafarbener Boli-Begleiter mit leichtem Schwung und klarer Silhouette für eine sanftere Inselstimmung."
+          "description": "Ein rosafarbener Boli-Begleiter mit leichtem Schwung und klarer Silhouette für einen sanfteren Look."
         },
         "whitesnow": {
           "name": "Apple Girl",
@@ -5590,6 +5606,11 @@
           "installPlugin": "Plugin installieren",
           "enablePlugin": "Aktivieren",
           "installExtension": "Browser-Erweiterung hinzufügen",
+          "updatingTitle": "Browserverbindung wird aktualisiert",
+          "updatingBody": "Nach dem Update wird die Verbindung automatisch wiederhergestellt.",
+          "selectPluginTitle": "Browsererweiterung auswählen",
+          "selectPluginBody": "Öffne die Plugin-Details und wähle „Diese Browsererweiterung verwenden“, um die Erweiterung für Cindy zu bestätigen.",
+          "selectPlugin": "Plugin öffnen",
           "updatePluginTitle": "Cindy Chrome-Plugin aktualisieren",
           "updatePluginBody": "Das installierte Cindy Chrome-Plugin ist für „Mein Browser“ zu alt. Aktualisiere es auf die neueste Version und folge dann der Aufforderung, die Erweiterung hinzuzufügen.",
           "updatePlugin": "Aktualisieren",
@@ -12725,6 +12746,10 @@
       "defer": "Nicht jetzt"
     },
     "permissionPrompt": {
+      "titleStdin": "Eingabe in diesem Terminal erlauben?",
+      "titleMcpUrl": "Anfrage von {{server}} abschließen",
+      "mcpComplete": "Fertig",
+      "mcpCancel": "Abbrechen",
       "alwaysAllowScoped": "{{scope}} in dieser Sitzung immer erlauben",
       "alwaysAllowScopedHint": "Gilt für die gesamte Sitzung und nur für die hier aufgeführten Elemente.",
       "alwaysAllowSessionHint": "Gilt für die gesamte Sitzung, nicht nur für diese Anfrage.",
@@ -12961,7 +12986,13 @@
       "sendAndContinue": "Senden und fortfahren",
       "close": "Schließen",
       "customAnswer": "Etwas anderes eingeben…",
-      "answerPlaceholder": "Deine Antwort eingeben…"
+      "answerPlaceholder": "Deine Antwort eingeben…",
+      "validation": {
+        "required": "Füllen Sie dieses Pflichtfeld aus.",
+        "choice": "Wählen Sie eine der aufgeführten Optionen.",
+        "tooShort": "Geben Sie mindestens {{count}} Zeichen ein.",
+        "tooLong": "Geben Sie höchstens {{count}} Zeichen ein."
+      }
     },
     "planReviewBubble": {
       "title": "Planprüfung",
@@ -14059,8 +14090,10 @@
       "mailLegacy": "Entwurfsverlauf (schreibgeschützt)",
       "taskAutoArchived": "„{{title}}“ archiviert",
       "taskAutoArchivedUndo": "Rückgängig",
-      "taskAutoArchivePending": "Wird beim Verlassen archiviert",
-      "taskAutoArchiveCancel": "Diesmal behalten"
+      "taskAutoArchivePending": "Wird beim Verlassen dieser Aufgabe archiviert",
+      "taskAutoArchiveCancel": "Abbrechen",
+      "taskAutoArchiveCancelled": "Diesmal keine automatische Archivierung",
+      "taskArchiveNow": "Jetzt archivieren"
     },
     "ghostHook": {
       "blockedFallback": "Nachricht von einem Plugin blockiert; nicht gesendet",
@@ -19688,5 +19721,33 @@
     "rendered": "Dokument anzeigen",
     "wrap": "Zeilenumbruch",
     "lineNumbers": "Zeilennummern"
+  },
+  "subscriptionAccounts": {
+    "signIn": {
+      "checking": "Lokales Konto wird geprüft…",
+      "detected": "Angemeldetes Konto gefunden",
+      "useAccount": "Dieses Konto verwenden",
+      "anotherAccount": "Mit anderem Konto anmelden",
+      "keepExisting": "Das neue Konto wird diesem Anbieter hinzugefügt. Bestehende Anmeldungen bleiben erhalten.",
+      "checkFailed": "Das lokale Konto konnte nicht geprüft werden. Bitte erneut versuchen.",
+      "retry": "Erneut versuchen",
+      "useCodex": "Mit Codex anmelden"
+    },
+    "title": "Abonnementkonten",
+    "note": "Das erste Konto verwendet den Standardordner der CLI. Weitere Konten melden sich separat an. Neue Aufgaben werden verteilt; bestehende Aufgaben behalten ihr Konto.",
+    "strategy": "Lastverteilung",
+    "add": "Konto hinzufügen",
+    "default": "Standardordner",
+    "ready": "Verbunden",
+    "signedOut": "Anmeldung erforderlich",
+    "unavailable": "Status nicht verfügbar",
+    "limited": "Kontingent ausgeschöpft",
+    "remove": "Konto entfernen",
+    "removeTitle": "{{name}} entfernen?",
+    "removeDescription": "Cindy weist diesem Konto keine Aufgaben mehr zu. Die CLI-Anmeldung und der Gesprächsverlauf bleiben auf diesem Computer erhalten.",
+    "failed": "Das Konto konnte nicht gelesen oder aktualisiert werden. Prüfe die CLI-Anmeldung und die Netzwerkverbindung und versuche es erneut.",
+    "directory": "Kontoordner",
+    "loginAgain": "Erneut anmelden",
+    "login": "Anmelden"
   }
 }

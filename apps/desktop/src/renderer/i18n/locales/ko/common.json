@@ -1430,13 +1430,19 @@
       "actionFailed": "작업을 완료하지 못했습니다. 알림은 유지됩니다. 다시 시도해 주세요.",
       "newConversationTitle": "새 세션",
       "newConversationHint": "새 세션 시작",
-      "muteSound": "Agent Island 소리 끄기",
-      "enableSound": "Agent Island 소리 켜기",
-      "settings": "Agent Island 설정",
+      "muteSound": "Agent Notch 소리 끄기",
+      "enableSound": "Agent Notch 소리 켜기",
+      "settings": "Agent Notch 설정",
       "newMessage": "새 메시지",
       "review": "확인",
       "needsInput": "입력이 필요함",
       "completed": "완료됨",
+      "liveActivityRunning_one": "작업 {{count}}개 실행 중",
+      "liveActivityRunning_other": "작업 {{count}}개 실행 중",
+      "liveActivityAlsoRunning_one": "작업 {{count}}개 더 실행 중",
+      "liveActivityAlsoRunning_other": "작업 {{count}}개 더 실행 중",
+      "liveActivityWaiting_one": "응답이 필요한 작업 {{count}}개",
+      "liveActivityWaiting_other": "응답이 필요한 작업 {{count}}개",
       "error": "오류",
       "input": "입력",
       "done": "완료",
@@ -1455,6 +1461,13 @@
     }
   },
   "menubar": {
+    "shared": {
+      "label": "공유",
+      "note": "계정 전체가 함께 사용하는 한도이며, 나에게만 배정된 한도가 아닙니다.",
+      "highestWeekly": "공유 · 주간 잔여 최대",
+      "highestWeeklyNote": "조회 가능한 계정 중 주간 잔여량이 가장 많은 계정입니다. 합산하거나 개인에게 할당한 한도가 아닌 계정 공용 한도입니다.",
+      "from": "{{name}}님의 공유"
+    },
     "balance": {
       "name": "Cindy 잔액",
       "quotaName": "Cindy 이번 기간 할당량",
@@ -1776,7 +1789,7 @@
       "apiKeys": "도구 키",
       "voiceInput": "음성 입력",
       "shortcuts": "키보드 단축키",
-      "agentIsland": "Agent Island",
+      "agentIsland": "Dynamic Island",
       "import": "세션 가져오기",
       "connections": "서드파티 플랫폼",
       "providers": "제공자",
@@ -1798,7 +1811,7 @@
       "billing": "사용량 및 결제",
       "appearance": "외관",
       "notifications": "알림",
-      "agentIsland": "Agent Island",
+      "agentIsland": "Dynamic Island",
       "collaboration": "협업",
       "agentResource": "Agent 리소스 사용량",
       "gitSafety": "Git 안전",
@@ -2274,7 +2287,7 @@
     "notifications": {
       "title": "알림",
       "sessionDoneLabel": "시스템 알림",
-      "sessionDoneHint": "세션이 완료되거나 오류가 발생하거나 답변이 필요할 때 알립니다. 일반 세션은 창이 뒤에 있을 때만 알립니다. Agent Island를 켜면 대신 그곳에 알림을 표시합니다.",
+      "sessionDoneHint": "세션이 완료되거나 오류가 발생하거나 답변이 필요할 때 알립니다. 일반 세션은 창이 뒤에 있을 때만 알립니다. Agent Notch나 Dynamic Island를 켜면 대신 그곳에서 알립니다. Dynamic Island만 켠 경우 오류는 시스템 알림으로 알립니다.",
       "sessionDoneAria": "세션 시스템 알림 전환",
       "feishuLabel": "세션 완료 또는 응답 필요 시 Feishu / Lark 메시지 전송",
       "feishuHint": "연동된 Feishu 또는 Lark 봇을 통해 개인 메시지를 보냅니다. 창이 비활성 상태일 때만 전송됩니다.",
@@ -2386,28 +2399,31 @@
       }
     },
     "agentIsland": {
-      "title": "Agent Island",
-      "unsupported": "Agent Island를 사용하려면 macOS 14 이상이 필요합니다.",
+      "title": "Dynamic Island",
+      "unsupported": "Agent Notch를 사용하려면 macOS 14 이상이 필요합니다.",
       "subtleRemindersLabel": "은은한 알림",
-      "subtleRemindersHint": "새 메시지, 응답이 필요한 항목, 오류가 있으면 아일랜드 아래로 알림 카드를 띄우지 않고 아이콘의 변화로 알려줍니다. 아일랜드를 클릭하면 전체 작업 목록을 볼 수 있습니다.",
+      "subtleRemindersHint": "새 메시지, 응답이 필요한 항목, 오류가 있으면 Agent Notch 아래로 알림 카드를 띄우지 않고 아이콘의 변화로 알려줍니다. Agent Notch를 클릭하면 전체 작업 목록을 볼 수 있습니다.",
       "subtleRemindersFailed": "알림 설정을 저장하지 못했습니다. 다시 시도해 주세요.",
-      "enableLabel": "Agent Island 표시",
-      "enableHint": "실행 중, 응답 필요, 읽지 않은 완료 작업을 화면 상단에 표시합니다. 사용 설정 시 동종의 시스템 알림을 억제해 이중 알림을 방지합니다.",
-      "enableAria": "Agent Island 전환",
+      "liveActivityLabel": "Dynamic Island에 작업 표시",
+      "liveActivityHint": "새 MacBook Pro의 Dynamic Island에 작업 진행 상황을 표시하고, 확인이 필요하거나 완료되면 펼쳐집니다. 다른 Mac에서는 메뉴 막대에 표시됩니다. Agent Notch와 별개로 동작합니다.",
+      "liveActivityFailed": "실시간 현황 설정을 저장하지 못했습니다. 다시 시도해 주세요.",
+      "enableLabel": "Agent Notch 표시",
+      "enableHint": "화면 상단에 작업 진행 상황을 표시하고, 확인이 필요하거나 결과가 나오면 알려 줍니다. 켜 두면 이런 알림은 시스템 알림으로 따로 오지 않습니다.",
+      "enableAria": "Agent Notch 전환",
       "displayLabel": "표시 위치",
-      "displayHint": "Agent Island를 표시할 디스플레이를 선택합니다. 모두를 선택하면 각 디스플레이에 표시됩니다.",
-      "displaySelectAria": "Agent Island 디스플레이 선택",
+      "displayHint": "Agent Notch를 표시할 디스플레이를 선택합니다. 모두를 선택하면 각 디스플레이에 표시됩니다.",
+      "displaySelectAria": "Agent Notch 디스플레이 선택",
       "displayAll": "모든 디스플레이",
       "displayOption": "{{name}} · {{resolution}}",
       "displayNameFallback": "디스플레이 {{index}}",
       "displayPrimary": "주 디스플레이",
       "displayInternal": "내장",
       "displayMissing": "연결 해제된 디스플레이 {{id}}",
-      "skinLabel": "아이콘 스킨",
-      "skinHint": "실행 중 아이콘에 사용할 캐릭터 스킨을 선택합니다.",
+      "skinLabel": "캐릭터",
+      "skinHint": "Agent Notch와 Dynamic Island에 표시할 캐릭터입니다.",
       "soundLabel": "이벤트 사운드",
-      "soundHint": "Agent Island 이벤트별 8-bit 사운드를 선택합니다.",
-      "soundAria": "Agent Island 사운드 전환",
+      "soundHint": "알림마다 8-bit 효과음을 고를 수 있으며 Agent Notch와 Dynamic Island에서 함께 사용합니다. 탭 소리는 Agent Notch를 탭할 때만 재생됩니다.",
+      "soundAria": "Agent Notch 사운드 전환",
       "soundSelectAria": "{{event}} 사운드",
       "soundPreviewAria": "{{event}} 사운드 미리 듣기",
       "skinAnimationAria": "{{skin}} 미리보기 애니메이션 전환",
@@ -2430,7 +2446,7 @@
         },
         "boli": {
           "name": "Boli",
-          "description": "가볍게 통통 뛰는 분홍 Boli. Agent Island를 더 부드럽고 경쾌한 분위기로 만듭니다."
+          "description": "가볍게 통통 뛰는 분홍 Boli. Agent Notch를 더 부드럽고 경쾌한 분위기로 만듭니다."
         },
         "whitesnow": {
           "name": "Apple Girl",
@@ -5569,6 +5585,11 @@
           "installPlugin": "플러그인 설치",
           "enablePlugin": "켜러 가기",
           "installExtension": "브라우저 확장 추가",
+          "updatingTitle": "브라우저 연결 업데이트 중",
+          "updatingBody": "업데이트가 끝나면 자동으로 다시 연결됩니다.",
+          "selectPluginTitle": "브라우저 확장 프로그램 선택",
+          "selectPluginBody": "플러그인 상세 정보에서 “이 브라우저 확장 프로그램 사용”을 선택하여 Cindy가 사용할 확장 프로그램을 확인하세요.",
+          "selectPlugin": "플러그인 열기",
           "updatePluginTitle": "Cindy Chrome 플러그인 업데이트",
           "updatePluginBody": "설치된 Cindy Chrome 플러그인이 오래되어 내 브라우저를 지원하지 않습니다. 최신 버전으로 업데이트한 뒤 안내에 따라 확장을 추가하세요.",
           "updatePlugin": "업데이트하러 가기",
@@ -12701,6 +12722,10 @@
       "defer": "나중에 다운로드"
     },
     "permissionPrompt": {
+      "titleStdin": "터미널 입력을 허용할까요?",
+      "titleMcpUrl": "{{server}} 요청 완료",
+      "mcpComplete": "완료",
+      "mcpCancel": "취소",
       "alwaysAllowScoped": "이 세션에서 {{scope}} 항상 허용",
       "alwaysAllowScopedHint": "이 세션 전체에 적용되며, 여기에 표시된 범위에만 해당합니다.",
       "alwaysAllowSessionHint": "이번 요청 한 번이 아니라 이 세션 전체에 적용됩니다.",
@@ -12965,7 +12990,13 @@
       "sendAndContinue": "보내고 계속",
       "close": "닫기",
       "customAnswer": "다른 답변 입력…",
-      "answerPlaceholder": "답변을 입력하세요…"
+      "answerPlaceholder": "답변을 입력하세요…",
+      "validation": {
+        "required": "이 필수 항목을 입력하세요.",
+        "choice": "목록의 옵션 중 하나를 선택하세요.",
+        "tooShort": "{{count}}자 이상 입력하세요.",
+        "tooLong": "{{count}}자 이하로 입력하세요."
+      }
     },
     "planReviewBubble": {
       "title": "계획 검토",
@@ -14050,8 +14081,10 @@
       "mailLegacy": "초안 기록 (읽기 전용)",
       "taskAutoArchived": "\"{{title}}\"을(를) 보관했습니다",
       "taskAutoArchivedUndo": "실행 취소",
-      "taskAutoArchivePending": "나가면 자동 보관",
-      "taskAutoArchiveCancel": "이번에는 보관 안 함"
+      "taskAutoArchivePending": "이 작업을 나가면 자동으로 보관됩니다",
+      "taskAutoArchiveCancel": "취소",
+      "taskAutoArchiveCancelled": "이번에는 자동으로 보관하지 않습니다",
+      "taskArchiveNow": "지금 보관"
     },
     "ghostHook": {
       "blockedFallback": "메시지가 플러그인에 의해 차단되어 전송되지 않았습니다",
@@ -19638,5 +19671,33 @@
     "rendered": "문서 보기",
     "wrap": "자동 줄 바꿈",
     "lineNumbers": "줄 번호"
+  },
+  "subscriptionAccounts": {
+    "signIn": {
+      "checking": "로컬 계정 확인 중…",
+      "detected": "로그인된 계정을 찾았습니다",
+      "useAccount": "이 계정 사용",
+      "anotherAccount": "다른 계정으로 로그인",
+      "keepExisting": "새 계정은 이 공급업체에 추가됩니다. 기존 로그인은 유지됩니다.",
+      "checkFailed": "로컬 계정을 확인하지 못했습니다. 다시 시도해 주세요.",
+      "retry": "다시 시도",
+      "useCodex": "Codex로 로그인"
+    },
+    "title": "구독 계정",
+    "note": "첫 계정은 CLI 기본 폴더를 사용합니다. 추가 계정은 별도로 로그인합니다. 새 작업은 계정에 분산되고 기존 작업은 원래 계정을 유지합니다.",
+    "strategy": "부하 분산",
+    "add": "계정 추가",
+    "default": "기본 폴더",
+    "ready": "연결됨",
+    "signedOut": "로그인 필요",
+    "unavailable": "상태를 확인할 수 없음",
+    "limited": "사용 한도 도달",
+    "remove": "계정 제거",
+    "removeTitle": "{{name}} 계정을 제거할까요?",
+    "removeDescription": "Cindy가 이 계정에 작업을 배정하지 않습니다. CLI 로그인과 대화 기록은 이 컴퓨터에 유지됩니다.",
+    "failed": "계정을 읽거나 업데이트하지 못했습니다. CLI 로그인과 네트워크 연결을 확인한 후 다시 시도하세요.",
+    "directory": "계정 폴더",
+    "loginAgain": "다시 로그인",
+    "login": "로그인"
   }
 }

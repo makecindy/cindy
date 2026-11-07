@@ -42,6 +42,7 @@ export interface UserBrowserPageControl {
 export interface UserBrowserBackendOptions {
   /** 声明 browserExtension.pageControl 的插件桥接;null = 没有这样的插件(或未启用)。 */
   getPageControl(): UserBrowserPageControl | null;
+  getUnavailableReason?(): 'plugin-missing' | 'plugin-updating' | 'plugin-selection-required';
   /** 上传可读取的本地目录(按会话);没有则上传不可用。 */
   resolveUploadRoots?(sessionId: string): Promise<string[]>;
   logger: {
@@ -347,6 +348,18 @@ export class UserBrowserBackend implements BrowserBackend {
 
   // ── 连接解析 ────────────────────────────────────────────────────────────
 
+  private unavailable() {
+    const reason = this.opts.getUnavailableReason?.() ?? 'plugin-missing';
+    return {
+      reason,
+      message: reason === 'plugin-updating'
+        ? '浏览器连接正在更新，完成后会自动恢复。'
+        : reason === 'plugin-selection-required'
+          ? '请在插件详情中选择「使用此浏览器扩展」。'
+          : NOT_CONFIGURED_MESSAGE,
+    };
+  }
+
   private control(
     action: BackendRequest['action'],
   ): { ok: true; control: UserBrowserPageControl } | { ok: false; result: BackendResult } {
@@ -354,7 +367,7 @@ export class UserBrowserBackend implements BrowserBackend {
     if (!control)
       return {
         ok: false,
-        result: actionFailed(action, NOT_CONFIGURED_MESSAGE, 'BROWSER_RUNTIME_NOT_CONFIGURED'),
+        result: actionFailed(action, this.unavailable().message, 'BROWSER_RUNTIME_NOT_CONFIGURED'),
       };
     return { ok: true, control };
   }
@@ -651,7 +664,7 @@ export class UserBrowserBackend implements BrowserBackend {
         backend: this.kind,
         running: false,
         configured: false,
-        message: NOT_CONFIGURED_MESSAGE,
+        ...this.unavailable(),
         capabilities: userBrowserCapabilities(null),
       });
     }

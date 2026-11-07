@@ -76,6 +76,7 @@ import {
 } from '../git-snapshot/gitSnapshotService';
 import { detectCwd } from '../worktree/WorktreeManager.js';
 import { gitExec } from '../worktree/gitExec';
+import { readBoundClaudeConfigDir } from '../subscription-accounts/store.js';
 import {
   loadClaudeTranscriptAnchorIndex,
   parseClaudeAgentMeta,
@@ -364,6 +365,7 @@ async function loadRewindContext(
     ? await loadClaudeTranscriptAnchorIndex({
         sdkSessionId,
         workingDir: makerSession.workDir,
+        claudeConfigDir: readBoundClaudeConfigDir(sdkSessionId),
       }).catch(() => null)
     : null;
   const assistantAnchor = resolveClaudeRewindAssistantEntry(targetMeta.uuid, anchorIndex);
