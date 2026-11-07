@@ -214,7 +214,9 @@ it('dispose(账号边界):释放并发名额、丢弃在途报告、拒绝新启
   });
   expect(again).toMatchObject({ ok: false, errorCode: 'DISPOSED' });
 
-  // 被杀的命令不会再回注报告(短等一次退出事件传播,远小于 30s 命令本身)。
+  // 被杀的命令不会再回注报告。这里必须等真实的退出事件传播（kill 是异步的），
+  // 用不到 fake timers；报告链自身还有 grace timer，短窗口不可靠。
+  // real-wait: 验证「被杀进程的退出回调不再触发投递」需要真实等待窗口。
   await new Promise((resolve) => setTimeout(resolve, 500));
   expect(capture).not.toHaveBeenCalled();
 }, 10_000);
