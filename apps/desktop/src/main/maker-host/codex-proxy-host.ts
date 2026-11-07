@@ -1,3 +1,4 @@
+import { bearerKeyFromHeaders, reportCindyGatewayKeyRejected } from '../model-access/gatewayKeyRejection.js';
 import { captureUsagePricing, createUsagePricingObserver } from './model-usage-pricing.js';
 import { rewriteFastModel } from './model-fast-mode.js';
 import { createAttachmentRecovery } from './oversized-attachment-recovery.js';
@@ -449,8 +450,13 @@ export function setCodexSubagentOAuthReader(reader: (providerId?: string) => Pro
 }
 
 let _readGatewayKey: () => string | null = () => null;
-export function setCodexProxyGatewayKeyReader(fn: () => string | null): void {
+let _isReplacedGatewayKey: (key: string) => boolean = () => false;
+export function setCodexProxyGatewayKeyReader(
+  fn: () => string | null,
+  isReplaced: (key: string) => boolean = () => false,
+): void {
   _readGatewayKey = fn;
+  _isReplacedGatewayKey = isReplaced;
 }
 
 function headerValue(headers: Readonly<Record<string, string>>, name: string): string {
@@ -2492,7 +2498,7 @@ function createCodexResponseObserver(): ResponseObserver {
 /**
  * 纯函数: 按 model(原始, 含 codex/ 前缀)+ spawn 鉴权注入方式决定 **默认** 上游 / 鉴权 override。
  * (会话显式选了供应商时由 resolveSessionRouteDecision 优先接管,不会走到这里。)
- *   - env-key spawn(codex 已带 gateway key): 全程 null(走默认上游 gateway, 不动 header)。
+ *   - env-key spawn: 仅把本次运行中已被替换的旧 key 换成当前 key，仍走默认网关。
  *   - oauth-bearer spawn(codex 带 OAuth token):
  *       codex/ 折扣模型 → 换 gateway key, 默认上游(gateway); 无 key 则 null(passthrough, 上游会 401)。
  *       普通模型        → override 上游到 ChatGPT, 透传 OAuth token(不动 header)= 订阅默认。
@@ -2502,8 +2508,17 @@ export function decideCodexRoute(opts: {
   model: string;
   authInjection: CodexProxyAuthInjection;
   gatewayKey: string | null;
+  requestKey?: string | null;
+  isReplacedGatewayKey?: (key: string) => boolean;
 }): RoutingDecision | null {
-  if (opts.authInjection === 'env-key' || opts.authInjection === 'provider-oauth') return null;
+  if (opts.authInjection === 'env-key') {
+    if (opts.gatewayKey && opts.requestKey && opts.requestKey !== opts.gatewayKey
+      && opts.isReplacedGatewayKey?.(opts.requestKey)) {
+      return { headerOverride: { authorization: `Bearer ${opts.gatewayKey}` } };
+    }
+    return null;
+  }
+  if (opts.authInjection === 'provider-oauth') return null;
   if (!opts.model) return null;
   const toGateway = gatewayProviderIdForRewrittenModel(opts.model) !== null;
   if (toGateway) {
@@ -2610,7 +2625,7 @@ export function createCodexGuestRoutingGuard(
     const defaultRouteIsShared = (providerId === 'xd' && authInjection === 'env-key')
       || (isOpenAiSubscriptionProviderId(providerId) && authInjection === 'oauth-bearer');
     return defaultRouteIsShared
-      ? decideCodexRoute({ model: requestModel, authInjection, gatewayKey: _readGatewayKey() })
+      ? decideCodexRoute({ model: requestModel, authInjection, gatewayKey: _readGatewayKey(), requestKey: bearerKeyFromHeaders(ctx.headers), isReplacedGatewayKey: _isReplacedGatewayKey })
       : codexGuestRouteRefusal();
   };
 }
@@ -3185,7 +3200,7 @@ export function createModelRoutingTransform(
             gatewayKey,
           );
           if (implicitProviderOAuth) return implicitProviderOAuth;
-          return decideCodexRoute({ model, authInjection, gatewayKey });
+          return decideCodexRoute({ model, authInjection, gatewayKey, requestKey: bearerKeyFromHeaders(ctx.headers), isReplacedGatewayKey: _isReplacedGatewayKey });
         });
       }
       const implicitProviderOAuth = resolveImplicitProviderOAuthRouteDecision(model, 'codex', gatewayKey);
@@ -3197,18 +3212,18 @@ export function createModelRoutingTransform(
     //    spawn 时那把凭证 —— oauth-bearer 揣的 OAuth token 在网关无效(要 sk-)→ 401。
     //    故按 spawn 凭证回它的原生后端: oauth-bearer → ChatGPT 订阅后端(只 override 上游、透传 OAuth
     //    token,等价 stock codex 订阅模式轮 /models 的去处); provider-oauth → 唯一 provider-oauth
-    //    供应商的上游/令牌(当前 xAI),避免把占位 key 打到网关; env-key → null(留默认网关, sk- key 本就有效)。
+    //    供应商的上游/令牌(当前 xAI),避免把占位 key 打到网关; env-key → 默认网关，只替换本次运行中已知被换掉的旧 key。
     //    `!model` 这道闸确保真实 /responses(永远带 model)绝不落进此分支,杜绝注册时序竞争误伤推理请求。
     if (!sessionId && !model) {
       if (authInjection === 'oauth-bearer') return { upstreamOverride: CODEX_OAUTH_UPSTREAM };
       if (authInjection === 'provider-oauth') {
         return resolveProviderOAuthControlRouteDecision('codex', gatewayKey);
       }
-      return null;
+      return decideCodexRoute({ model, authInjection, gatewayKey, requestKey: bearerKeyFromHeaders(ctx.headers), isReplacedGatewayKey: _isReplacedGatewayKey });
     }
 
-    // ② 未显式选供应商 → 回落默认路由(decideCodexRoute,与未升级行为字节级一致)。
-    const decision = decideCodexRoute({ model, authInjection, gatewayKey });
+    // ② 未显式选供应商 → 回落默认路由，env-key 只修复已知旧凭证。
+    const decision = decideCodexRoute({ model, authInjection, gatewayKey, requestKey: bearerKeyFromHeaders(ctx.headers), isReplacedGatewayKey: _isReplacedGatewayKey });
     // codex/ 折扣模型该走 gateway 换 key 但没配 key → null(passthrough), 上游大概率 401, 记一条诊断。
     if (decision === null && authInjection === 'oauth-bearer' && model
       && gatewayProviderIdForRewrittenModel(model) !== null && !gatewayKey) {
@@ -3557,6 +3572,13 @@ async function createCodexProxyHandle(
       () => buildCodexGatewayBaseUrl(),
     ),
     responseObserver: composeResponseObservers(
+      ctx => {
+        if (ctx.status === 401
+          && ctx.upstreamBase.replace(/\/+$/, '') === buildCodexGatewayBaseUrl().replace(/\/+$/, '')) {
+          reportCindyGatewayKeyRejected(bearerKeyFromHeaders(ctx.outboundHeaders ?? ctx.requestHeaders));
+        }
+        return null;
+      },
       ctx => {
         if (!guestSessionId || ctx.status < 200 || ctx.status >= 300) return null;
         let model = '';

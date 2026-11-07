@@ -1,12 +1,17 @@
+import type { ViewInstance } from 'react-native';
 /**
- * 群聊消息正文。伙伴的回复是 Markdown：这里只做轻量排版（段落、标题、引用、列表、代码块、
- * 表格、行内强调 / 代码），与伙伴私聊回看同样是只读文本，不加载任务页的完整消息渲染器；链接只
- * 显示文字，不在群聊里打开。用户自己的消息保留原文，`@名字` 画成点名标记。
+ * 群正文按需启用富文本和 HTTP(S) 链接；其它回看入口保持轻量，本人消息保留原文。
  */
 import { botGroupBodyParts } from '@cindy/maker-shared/botGroupPresentation';
 import type { BotGroupAuthorKind } from '@cindy/maker-shared/botGroupChat';
 import { useCallback, useMemo, useRef, useState, type ReactNode } from 'react';
-import { Platform, ScrollView, StyleSheet, View, useWindowDimensions, type GestureResponderEvent, type LayoutChangeEvent, type StyleProp, type TextStyle } from 'react-native';
+import { Linking, Pressable, Platform, ScrollView, StyleSheet, View, useWindowDimensions, type GestureResponderEvent, type LayoutChangeEvent, type StyleProp, type TextStyle } from 'react-native';
+import { useTranslation } from 'react-i18next';
+import { latexToUnicodeApproximation } from '@cindy/maker-shared/math-markdown';
+import { HighlightedCodeText } from './HighlightedCodeText';
+import { MarkdownCodeCopyButton } from './MarkdownCodeCopyButton';
+import { MermaidDiagramWebView } from './mermaidWebView';
+import { MathFormulaWebView } from './mathWebView';
 import { splitBotGroupMentionSegments, type BotGroupTextSegment } from '@cindy/maker-shared/botGroupMentions';
 import { Text } from '@/components/AppText';
 import { MarkdownSelectableText, MarkdownSelectableSpan } from './MarkdownSelectableText';
@@ -18,11 +23,19 @@ import { buildMobileMarkdownTableColumnWidths } from './messageTableLayout';
 import { botGroupMentionMember, type BotGroupMentionContext, type BotGroupMentionPoint } from './botGroupMentions';
 
 type Styles = ReturnType<typeof makeStyles>;
+type BodyOptions = {
+  /** 仅完整群正文启用，其它回看入口维持原行为。 */
+  richContent?: boolean;
+  active?: boolean;
+  interactive?: boolean;
+  onOpenDiagram?: (source: string) => void;
+};
+
 
 /** Observe touches without claiming the responder or changing the native text tree. */
 function useMentionTouchContext(context?: BotGroupMentionContext) {
   const touch = useRef<BotGroupMentionPoint | undefined>(undefined);
-  const body = useRef<View>(null);
+  const body = useRef<ViewInstance>(null);
   return {
     ref: body,
     onTouchStart: (event: GestureResponderEvent) => {
@@ -57,12 +70,13 @@ function renderMentionSegments(segments: readonly (BotGroupTextSegment & { label
   });
 }
 
-function renderInlines(inlines: readonly MobileMarkdownInline[], styles: Styles, context?: BotGroupMentionContext): ReactNode[] {
+function renderInlines(inlines: readonly MobileMarkdownInline[], styles: Styles, options: BodyOptions, context?: BotGroupMentionContext): ReactNode[] {
   const Span = Platform.OS === 'ios' ? MarkdownSelectableSpan : Text;
   const markStyles = { strong: styles.strong, emphasis: styles.emphasis, strikethrough: styles.strike };
   let offset = 0;
   const runs = inlines.map(inline => {
-    const text = inline.type === 'image' ? inline.alt ? `[${inline.alt}]` : '' : inline.text;
+    const text = inline.type === 'image' ? inline.alt ? `[${inline.alt}]` : ''
+      : inline.type === 'math' && options.richContent ? latexToUnicodeApproximation(inline.text) : inline.text;
     const start = offset;
     offset += text.length;
     return { inline, text, start, end: offset, excluded: ['code', 'link', 'image'].includes(inline.type) };
@@ -80,6 +94,11 @@ function renderInlines(inlines: readonly MobileMarkdownInline[], styles: Styles,
     const textStyle = [...(inline.marks?.map(mark => markStyles[mark]) ?? []),
       inline.type === 'strong' ? styles.strong : inline.type === 'emphasis' ? styles.emphasis
         : inline.type === 'strikethrough' ? styles.strike : inline.type === 'code' ? styles.inlineCode : undefined];
+    if (inline.type === 'link') {
+      const clickable = options.richContent && options.interactive !== false && /^https?:\/\//i.test(inline.url);
+      return <Span key={index} style={[textStyle, clickable && styles.link]}
+        onPress={clickable ? () => { void Linking.openURL(inline.url).catch(() => undefined); } : undefined}>{text}</Span>;
+    }
     // UITextView children inherit the root's style, not an enclosing span's.
     // Keep formatting on each actual text run when splitting it around a mention.
     // Code and existing links retain their original hierarchy and are never identity targets.
@@ -91,9 +110,10 @@ function renderInlines(inlines: readonly MobileMarkdownInline[], styles: Styles,
   });
 }
 
-function BotGroupMarkdownTable({ block, styles, context }: {
+function BotGroupMarkdownTable({ block, styles, options, context }: {
   block: Extract<MobileMarkdownBlock, { type: 'table' }>;
   styles: Styles;
+  options: BodyOptions;
   context?: BotGroupMentionContext;
 }) {
   const { width: screenWidth } = useWindowDimensions();
@@ -116,7 +136,7 @@ function BotGroupMarkdownTable({ block, styles, context }: {
       {widths.map((width, index) => (
         <View key={index} style={[styles.tableCell, { width }]}>
           <MarkdownSelectableText selectable style={[styles.tableText, header && styles.tableHeaderText]}>
-            {renderInlines(cells[index] ?? [], styles, context)}
+            {renderInlines(cells[index] ?? [], styles, options, context)}
           </MarkdownSelectableText>
         </View>
       ))}
@@ -130,39 +150,65 @@ function BotGroupMarkdownTable({ block, styles, context }: {
   </ScrollView>;
 }
 
-function renderBlock(block: MobileMarkdownBlock, styles: Styles, context?: BotGroupMentionContext): ReactNode {
+function renderBlock(block: MobileMarkdownBlock, styles: Styles, options: BodyOptions, diagramLabel: string, context?: BotGroupMentionContext): ReactNode {
   switch (block.type) {
     case 'heading':
-      return <MarkdownSelectableText key={block.key} selectable style={[styles.text, styles.heading]}>{renderInlines(block.inlines, styles, context)}</MarkdownSelectableText>;
+      return <MarkdownSelectableText key={block.key} selectable style={[styles.text, styles.heading]}>{renderInlines(block.inlines, styles, options, context)}</MarkdownSelectableText>;
     case 'blockquote':
       return <View key={block.key} style={styles.quote}>
-        <MarkdownSelectableText selectable style={[styles.text, styles.quoteText]}>{renderInlines(block.inlines, styles, context)}</MarkdownSelectableText>
+        <MarkdownSelectableText selectable style={[styles.text, styles.quoteText]}>{renderInlines(block.inlines, styles, options, context)}</MarkdownSelectableText>
       </View>;
     case 'list_item':
       return <View key={block.key} style={styles.listItem}>
         <Text style={styles.text}>{block.checked === undefined ? (block.ordered ? block.marker : '•') : block.checked ? '☑' : '☐'}</Text>
-        <MarkdownSelectableText selectable style={[styles.text, styles.listText]}>{renderInlines(block.inlines, styles, context)}</MarkdownSelectableText>
+        <MarkdownSelectableText selectable style={[styles.text, styles.listText]}>{renderInlines(block.inlines, styles, options, context)}</MarkdownSelectableText>
       </View>;
     case 'code':
+      if (options.richContent) {
+        const copyable = options.interactive !== false && block.text.trim().length > 0;
+        return <View key={block.key} style={[styles.codeBlock, copyable && styles.codeWithCopy]}>
+          <HighlightedCodeText text={block.text} language={block.language} styles={styles} selectable allowIosUITextView
+            SpanComponent={Platform.OS === 'ios' ? MarkdownSelectableSpan : Text} />
+          {copyable ? <MarkdownCodeCopyButton text={block.text} /> : null}
+        </View>;
+      }
+      return renderSourceBlock(block, styles);
     case 'mermaid':
-    case 'math':
-      return <View key={block.key} style={styles.codeBlock}>
-        <MarkdownSelectableText selectable style={styles.codeText}>{block.text}</MarkdownSelectableText>
+      if (options.richContent) return <View key={block.key}>
+        <MermaidDiagramWebView active={options.active} source={block.text} cachePreview testID="botGroup.mermaidDiagram" />
+        {options.onOpenDiagram && options.interactive !== false ? <Pressable
+          accessibilityLabel={diagramLabel} accessibilityRole="button" style={StyleSheet.absoluteFill}
+          onPress={() => options.onOpenDiagram?.(block.text)} testID="botGroup.openDiagram" /> : null}
       </View>;
+      return renderSourceBlock(block, styles);
+    case 'math':
+      if (options.richContent) return <MathFormulaWebView active={options.active} key={block.key} source={block.text} testID="botGroup.mathFormula" />;
+      return renderSourceBlock(block, styles);
     case 'table':
-      return <BotGroupMarkdownTable key={block.key} block={block} styles={styles} context={context} />;
+      return <BotGroupMarkdownTable key={block.key} block={block} styles={styles} options={options} context={context} />;
     default:
-      return <MarkdownSelectableText key={block.key} selectable style={styles.text}>{renderInlines(block.inlines, styles, context)}</MarkdownSelectableText>;
+      return <MarkdownSelectableText key={block.key} selectable style={styles.text}>{renderInlines(block.inlines, styles, options, context)}</MarkdownSelectableText>;
   }
 }
 
-export function BotGroupMarkdownText({ content, authorKind, mentionContext }: { content: string; authorKind?: BotGroupAuthorKind; mentionContext?: BotGroupMentionContext }) {
+function renderSourceBlock(block: { key: string; text: string }, styles: Styles) {
+  return <View key={block.key} style={styles.codeBlock}>
+    <MarkdownSelectableText selectable style={styles.markdownCodeText}>{block.text}</MarkdownSelectableText>
+  </View>;
+}
+
+export function BotGroupMarkdownText({ content, authorKind, mentionContext, richContent = false, interactive = true, active = true, onOpenDiagram }: {
+  content: string; authorKind?: BotGroupAuthorKind; mentionContext?: BotGroupMentionContext;
+} & BodyOptions) {
+  const { t } = useTranslation();
   const styles = useThemedStyles(makeStyles);
   const touch = useMentionTouchContext(mentionContext);
   const blocks = useMemo(() => botGroupBodyParts(content, authorKind).flatMap((part, index): MobileMarkdownBlock[] => part.kind === 'markdown'
     ? parseMobileMarkdown(part.content).map(block => ({ ...block, key: `${index}:${block.key}` }))
     : [{ type: 'paragraph', key: String(index), inlines: [{ type: 'text', text: part.content }] }]), [content, authorKind]);
-  return <View ref={touch.ref} collapsable={false} style={styles.body} onTouchStart={touch.onTouchStart}>{blocks.map((block) => renderBlock(block, styles, touch.context))}</View>;
+  const options = { richContent, interactive, active, onOpenDiagram };
+  const diagramLabel = t('message.renderer.openDiagramDetail');
+  return <View ref={touch.ref} collapsable={false} style={styles.body} onTouchStart={touch.onTouchStart}>{blocks.map((block) => renderBlock(block, styles, options, diagramLabel, touch.context))}</View>;
 }
 
 /** The user's own words: plain text with `@name` shown as a mention mark. */
@@ -182,6 +228,7 @@ const makeStyles = (colors: ThemeColors) => StyleSheet.create({
   strong: { fontWeight: fontWeight.semibold },
   emphasis: { fontStyle: 'italic' },
   strike: { textDecorationLine: 'line-through' },
+  link: { textDecorationLine: 'underline' },
   inlineCode: { fontFamily: monoFont, fontSize: typeScale.bodySmall, lineHeight: lineHeight.bodyLarge, backgroundColor: colors.surfaceChip },
   quote: { borderLeftWidth: 2, borderLeftColor: colors.border, paddingLeft: spacing.md },
   quoteText: { color: colors.textSecondary },
@@ -189,7 +236,14 @@ const makeStyles = (colors: ThemeColors) => StyleSheet.create({
   listText: { flex: 1, minWidth: 0 },
   codeBlock: { backgroundColor: colors.chatCodeSurface, borderColor: colors.border, borderWidth: StyleSheet.hairlineWidth,
     borderRadius: radius.control, paddingHorizontal: spacing.md, paddingVertical: spacing.sm },
-  codeText: { color: colors.textPrimary, fontFamily: monoFont, fontSize: typeScale.bodySmall, lineHeight: lineHeight.bodySmall },
+  markdownCodeText: { color: colors.textPrimary, fontFamily: monoFont, fontSize: typeScale.bodySmall, lineHeight: lineHeight.bodySmall, flexShrink: 1, maxWidth: '100%' },
+  codeWithCopy: { paddingRight: spacing.sm + spacing.xxl + spacing.md, minHeight: spacing.sm + spacing.xxl + spacing.sm },
+  syntaxKeyword: { color: colors.syntaxKeyword },
+  syntaxString: { color: colors.syntaxString },
+  syntaxComment: { color: colors.syntaxComment },
+  syntaxNumber: { color: colors.syntaxNumber },
+  syntaxFunction: { color: colors.syntaxFunction },
+  syntaxProperty: { color: colors.syntaxProperty },
   tableScroll: { maxWidth: '100%' },
   table: { borderColor: colors.border, borderWidth: StyleSheet.hairlineWidth,
     borderRadius: radius.container, overflow: 'hidden' },

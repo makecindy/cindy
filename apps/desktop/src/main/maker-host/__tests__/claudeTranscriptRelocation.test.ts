@@ -23,6 +23,10 @@ const h = vi.hoisted(() => ({
   query: vi.fn(),
   exec: vi.fn(),
   warn: vi.fn(),
+  boundDir: vi.fn<(_sdkSessionId: string) => string | undefined>(),
+}));
+vi.mock('../../subscription-accounts/store.js', () => ({
+  readBoundClaudeConfigDir: h.boundDir,
 }));
 
 vi.mock('@cindy/maker-core', () => ({
@@ -46,6 +50,7 @@ const META_ID = 'cccccccc-cccc-4ccc-8ccc-cccccccccccc';
 
 beforeEach(() => {
   vi.clearAllMocks();
+  h.boundDir.mockReset();
   setLiveCcSessionBridge(null);
   h.relocate.mockResolvedValue({
     copied: ['x'],
@@ -84,21 +89,31 @@ describe('relocateClaudeTranscriptsForSessionMove', () => {
     expect(closeSession).not.toHaveBeenCalled();
     expect(h.relocate).not.toHaveBeenCalled();
   });
-  it('unions DB sdk_session_id, message agent_meta ids and the live in-memory id', async () => {
+  // Standard regression: moving a task must copy each native id inside its own profile.
+  // The relocation adapter's projectsRoot is the filesystem write destination contract.
+  it.each([false, true])('unions DB sdk_session_id, message agent_meta ids and the live in-memory id (secondary=%s)', async (secondary) => {
     h.queryOne.mockResolvedValue({ sdkSessionId: DB_ID });
     h.query.mockResolvedValue([{ sid: META_ID }, { sid: DB_ID }, { sid: null }]);
     setLiveCcSessionBridge({
       resolveSdkSessionId: (sessionId) => (sessionId === 's1' ? LIVE_ID : null),
       closeSession: vi.fn(async () => undefined),
     });
+    const secondDir = path.join(os.tmpdir(), 'fixture-secondary-claude-profile');
+    if (secondary) h.boundDir.mockImplementation((id) => id === LIVE_ID ? secondDir : undefined);
 
     await relocateClaudeTranscriptsForSessionMove('s1', '/old/dir', '/new/dir');
 
-    expect(h.relocate).toHaveBeenCalledTimes(1);
-    const args = h.relocate.mock.calls[0][0];
-    expect([...args.sdkSessionIds].sort()).toEqual([LIVE_ID, DB_ID, META_ID].sort());
-    expect(args.oldWorkingDir).toBe('/old/dir');
-    expect(args.newWorkingDir).toBe('/new/dir');
+    expect(h.relocate).toHaveBeenCalledTimes(secondary ? 2 : 1);
+    const calls = h.relocate.mock.calls.map(([args]) => args);
+    expect(calls.flatMap((args) => args.sdkSessionIds).sort()).toEqual([LIVE_ID, DB_ID, META_ID].sort());
+    for (const args of calls) {
+      expect(args.oldWorkingDir).toBe('/old/dir');
+      expect(args.newWorkingDir).toBe('/new/dir');
+      if (secondary && args.sdkSessionIds.includes(LIVE_ID)) {
+        expect(args.sdkSessionIds).toEqual([LIVE_ID]);
+        expect(args.projectsRoot).toBe(path.join(secondDir, 'projects'));
+      }
+    }
   });
 
   it('reads the old DB id BEFORE overwriting it, then closes the handle BEFORE copying', async () => {

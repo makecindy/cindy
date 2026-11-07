@@ -1,4 +1,3 @@
-import { teammateSelectionStyle } from './teammateSelection';
 import { TeammateStatusDot, TeammateRowStatus, TeammateRunningPreview } from './TeammateStatusDot';
 import { aggregateTeammateStatus } from '@cindy/maker-shared/teammate-status';
 import { localTeammateStatus, remoteTeammateStatus, groupTeammateStatus } from './teammateRosterStatus';
@@ -25,6 +24,7 @@ import { cn } from '@/lib/utils';
 import { useAuth } from '@/contexts/AuthContext';
 import { Tip } from '@/components/ui/tooltip';
 import { SectionCollapse } from '@/features/cc-agent/sidebar/SectionCollapse';
+import { SIDEBAR_LIST_ROW_ACTIVE_CLASS, SIDEBAR_LIST_ROW_HEIGHT_CLASS } from '@/features/cc-agent/sidebar/listRowStyle';
 import { useCollapsibleShowAll } from '@/features/cc-agent/sidebar/hooks/useCollapsibleShowAll';
 import { useConfirmDialog } from '@/components/ui/confirm-dialog-provider';
 import { getDataOwnerGeneration, isDataOwnerGenerationCurrent } from '@/contexts/dataOwnerGeneration';
@@ -479,7 +479,7 @@ export function TeammatesSection() {
   };
 
   return (
-    <div ref={sidebarRef} style={teammateSelectionStyle} className="flex w-full flex-col gap-0.5" data-sidebar-section="teammates">
+    <div ref={sidebarRef} className="flex w-full flex-col gap-0.5" data-sidebar-section="teammates">
       {/* 段头与置顶 / 全部任务段头同款:高 24,左 24 / 右 12;动作悬停浮现。 */}
       <div className="group/sidebar-header flex h-6 items-center justify-between pr-3 pl-6">
         <div className="flex min-w-0 items-center gap-1">
@@ -612,7 +612,7 @@ export function TeammatesSection() {
             <BotCreateMenu label={t('bots.add')} />
           </div>
         ) : (
-          <div className="flex flex-col gap-1">
+          <div className="flex flex-col gap-0.5">
             {displayedChats.map(entry => {
               if (entry.kind === 'group') return renderGroupRow(entry.group);
               if (entry.kind === 'cindy') {
@@ -672,8 +672,8 @@ export function TeammatesSection() {
                 return (
                   <button key={remoteBotKey(bot)} type="button" aria-current={selected ? 'page' : undefined}
                     onClick={() => navigate(`/bots/remote/${encodeURIComponent(bot.deviceId)}/${encodeURIComponent(bot.id)}`)}
-                    className={cn('relative flex w-full min-w-0 items-center gap-2.5 rounded-xl px-2.5 py-2 text-left outline-none focus-visible:ring-2 focus-visible:ring-ring', selected ? 'bg-sidebar-item-active text-sidebar-item-active-foreground' : 'text-[var(--sidebar-nav-text)] hover:bg-sidebar-item-hover')}>
-                    <span className="relative shrink-0"><BotAvatar bot={bot} size="row" /></span>
+                    className={cn('relative flex w-full min-w-0 items-center gap-2.5 rounded-lg px-2.5 py-2 text-left outline-none focus-visible:ring-2 focus-visible:ring-ring', SIDEBAR_LIST_ROW_HEIGHT_CLASS, selected ? SIDEBAR_LIST_ROW_ACTIVE_CLASS : 'text-[var(--sidebar-nav-text)] hover:bg-sidebar-item-hover')}>
+                    <span className="relative flex shrink-0"><BotAvatar bot={bot} size="row" /></span>
                     <span className="flex min-w-0 flex-1 flex-col gap-0.5">
                       <span className="flex min-w-0 items-baseline gap-2">
                         <span className="min-w-0 truncate text-14 leading-5">{bot.name}</span>
@@ -718,9 +718,9 @@ export function TeammatesSection() {
                 <div
                   key={bot.id}
                   className={cn(
-                    'group relative flex w-full items-center rounded-xl transition-colors',
+                    'group relative flex w-full items-center rounded-lg transition-colors',
                     selected
-                      ? 'bg-sidebar-item-active text-sidebar-item-active-foreground'
+                      ? SIDEBAR_LIST_ROW_ACTIVE_CLASS
                       : 'text-[var(--sidebar-nav-text)] hover:bg-sidebar-item-hover',
                   )}
                 >
@@ -728,7 +728,10 @@ export function TeammatesSection() {
                       可点区域,左右内边距对称。行尾曾经还挂过一列齿轮/状态图标,
                       它下线后 `pr-2` 的占位残留了下来 —— 右边比左边窄一截,
                       单看不出问题,和左侧头像一比就是歪的。这里的行内边距与下方按钮样式
-                      保持同一套几何基线。 */}
+                      保持同一套几何基线。行高与任务列表模式的一条任务相同(SIDEBAR_LIST_ROW_HEIGHT_CLASS,
+                      随界面字号缩放),头像与文字垂直居中;py-2 保留,时间列 self-start 靠它
+                      落在名称同一行。头像外层必须是 flex,行内盒会落在
+                      文字基线上把整行撑高。 */}
                   <button
                     type="button"
                     onClick={() => navigate(`/bots/${bot.id}`)}
@@ -746,9 +749,9 @@ export function TeammatesSection() {
                       const rect = event.currentTarget.getBoundingClientRect();
                       openContextMenu('bot', bot.id, event.currentTarget, rect.left + 10, rect.bottom);
                     }}
-                    className="flex min-w-0 flex-1 items-center gap-2.5 rounded-xl px-2.5 py-2 text-left outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring"
+                    className={cn('flex min-w-0 flex-1 items-center gap-2.5 rounded-lg px-2.5 py-2 text-left outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring', SIDEBAR_LIST_ROW_HEIGHT_CLASS)}
                   >
-                    <span className="relative shrink-0"><BotAvatar bot={bot} size="row" /></span>
+                    <span className="relative flex shrink-0"><BotAvatar bot={bot} size="row" /></span>
                     <span className="flex min-w-0 flex-1 flex-col gap-0.5">
                       <span className="flex items-baseline gap-2">
                         {bot.pinnedAt ? (
@@ -821,12 +824,12 @@ export function TeammatesSection() {
                   ? roster.hidden.map((bot) => (
                       <div
                         key={bot.id}
-                        className="group flex w-full items-center rounded-xl text-[var(--sidebar-list-muted)] hover:bg-sidebar-item-hover"
+                        className="group flex w-full items-center rounded-lg text-[var(--sidebar-list-muted)] hover:bg-sidebar-item-hover"
                       >
                         <button
                           type="button"
                           onClick={() => navigate(`/bots/${bot.id}`)}
-                          className="flex min-w-0 flex-1 items-center gap-2.5 rounded-xl px-2.5 py-2 text-left opacity-60"
+                          className="flex min-w-0 flex-1 items-center gap-2.5 rounded-lg px-2.5 py-2 text-left opacity-60"
                         >
                           <BotAvatar bot={bot} size="sm" />
                           <span className="min-w-0 flex-1 truncate text-13 font-medium">
@@ -866,9 +869,9 @@ export function TeammatesSection() {
                     <div
                       key={bot.id}
                       className={cn(
-                        'group flex w-full items-center gap-2.5 rounded-xl px-2.5 py-2 text-left transition-colors',
+                        'group flex w-full items-center gap-2.5 rounded-lg px-2.5 py-2 text-left transition-colors',
                         selected
-                          ? 'bg-sidebar-item-active text-sidebar-item-active-foreground'
+                          ? SIDEBAR_LIST_ROW_ACTIVE_CLASS
                           : 'text-[var(--sidebar-list-muted)] hover:bg-sidebar-item-hover',
                       )}
                     >

@@ -133,6 +133,7 @@ const SCHEDULER_DDL = [
       job_config TEXT,
       execution_mode TEXT NOT NULL DEFAULT 'agent',
       script_config TEXT,
+      webhook_trigger TEXT,
       source TEXT DEFAULT 'user',
       project_config_id TEXT,
       legacy_session_fallback INTEGER NOT NULL DEFAULT 0,
@@ -193,6 +194,7 @@ const SCHEDULER_DDL = [
       cost_attribution TEXT NOT NULL DEFAULT 'legacy',
       result_text TEXT,
       pre_run_hook_result TEXT,
+      trigger_source TEXT,
       read_at INTEGER,
       heartbeat_at INTEGER
     )
@@ -947,6 +949,17 @@ describe('DrizzleScheduleStorage (in-memory)', () => {
     } finally {
       harness.close();
     }
+  });
+
+  // #8886 / db: a stale expiry scan must not undo another instance's extension.
+  it('matches expireAt before applying a guarded status update', async () => {
+    const harness = createStorageHarness();
+    try {
+      const original = await harness.storage.insert(baseSchedule({ expireAt: 1_800_000_000_000 }));
+      await harness.storage.update(original.id, { expireAt: original.expireAt! + 60_000 });
+      expect(await harness.storage.update(original.id, { status: 'expired', nextFireAt: undefined }, original)).toBeNull();
+      expect((await harness.storage.get(original.id))?.status).toBe('active');
+    } finally { harness.close(); }
   });
 
   it('claimDueFire: CAS 命中时置空 next_fire_at 并返回行;不命中不动行', async () => {

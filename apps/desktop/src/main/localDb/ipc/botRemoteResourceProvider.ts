@@ -4,7 +4,7 @@ import { createHash } from 'node:crypto';
 import { botTodoRemoteProjection } from './botTodoRemoteProjection.js';
 import { todoAccess } from '../../maker-ipc/botTodoAccess.js';
 import { queryTodoItems, type TodoListQuery, type TodoPatch } from '@cindy/maker-shared/teammate-todo';
-import { and, desc, inArray, isNull } from 'drizzle-orm';
+import { and, desc, eq, inArray, isNull } from 'drizzle-orm';
 import { getDbClient } from '../client/current.js';
 import { botSessionLinks } from '../schema.js';
 import type { BotRemoteResourceSource } from './bots.js';
@@ -24,6 +24,7 @@ import {
 import { RemoteResourceRegistryError, remoteResourceRegistry } from '../../device-link/remoteResourceRegistry.js';
 import { routineTools } from '../../routines/service.js';
 import { broadcastBotRemoteResourceChanged } from '../../maker-ipc/botRemoteResourceInvalidation.js';
+import { markBotReadPositions, readBotReadPosition } from '../../maker-ipc/botReadStateStore.js';
 import { getBotRemoteMessageService } from '../../maker-ipc/botRemoteMessageReceiver.js';
 import { isIpcError } from '../../../shared/ipc-errors.js';
 import {
@@ -214,6 +215,38 @@ export function registerBotRemoteResourceProvider(management?: typeof botRemoteM
         return { effects: [], dailyCheck };
       }
 
+      if (request.actionId === 'read') {
+        // The device showed this conversation up to `at` (host time, the reply it displayed).
+        // With `threadSessionId` it is one of the teammate's private-chat topics, which keep their
+        // own position and never move the main chat's.
+        const scope = captureDataOwnerBroadcastScope();
+        const botId = request.resourceRef?.id;
+        const at = request.input?.at;
+        const threadSessionId = request.input?.threadSessionId;
+        if (request.resourceRef?.collectionId !== TEAMMATES_REMOTE_COLLECTION_ID || request.resourceRef.kind !== BOT_REMOTE_RESOURCE_KIND
+          || typeof botId !== 'string' || !/^[A-Za-z0-9_-]{1,128}$/.test(botId)
+          || typeof at !== 'number' || !Number.isFinite(at) || at <= 0
+          || (threadSessionId !== undefined && (typeof threadSessionId !== 'string' || !/^[A-Za-z0-9_-]{1,128}$/.test(threadSessionId)))) {
+          throw new RemoteResourceRegistryError('INVALID_PARAMS', 'Invalid read position');
+        }
+        const source = await readVisibleBotSource(botId);
+        if (!source || !isDataOwnerBroadcastScopeCurrent(scope)) throw new RemoteResourceRegistryError('NOT_FOUND', 'Teammate unavailable');
+        if (threadSessionId !== undefined) {
+          const [link] = await getDbClient().drizzle.select({ id: botSessionLinks.id }).from(botSessionLinks).where(and(
+            eq(botSessionLinks.botId, botId), eq(botSessionLinks.sessionId, threadSessionId),
+            eq(botSessionLinks.role, 'thread'), isNull(botSessionLinks.archivedAt),
+          )).limit(1);
+          if (!link || !isDataOwnerBroadcastScopeCurrent(scope)) throw new RemoteResourceRegistryError('NOT_FOUND', 'Topic unavailable');
+          // A topic reply's time is not in the roster row: never past this computer's clock.
+          const key = `thread:${threadSessionId}`;
+          markBotReadPositions({ [key]: Math.min(Math.floor(at), Date.now()) });
+          return { effects: [], lastReadAt: readBotReadPosition(key) ?? 0 };
+        }
+        // Never past what exists here: a clock-skewed or future report cannot pre-read replies.
+        const latest = Math.max(source.lastMessageAt ?? 0, source.lastReplyAt ?? 0);
+        if (latest > 0) markBotReadPositions({ [botId]: Math.min(Math.floor(at), latest) });
+        return { effects: [], lastReadAt: readBotReadPosition(botId) ?? 0 };
+      }
       if (management && request.actionId === BOT_SETTINGS_ACTION_ID) return management.settingsHost.invoke(context, request);
       if (management && request.actionId === 'open-agent-import' && request.resourceRef?.id === 'create') return {
         effects: [{ kind: 'navigate', target: { kind: 'resource', ref: { collectionId: 'companion-import', kind: 'import', id: 'sources' } } }],

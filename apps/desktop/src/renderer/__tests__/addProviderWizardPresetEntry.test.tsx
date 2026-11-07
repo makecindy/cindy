@@ -308,6 +308,12 @@ it.each(['openrouter', 'minimax-cn', 'minimax-global', 'moonshot-kimi-code', 'gi
 beforeEach(() => {
   testI18n.language = 'zh-CN';
   (window as unknown as { electronAPI: unknown }).electronAPI = {
+    subscriptionAccounts: { command: vi.fn(async () => ({
+      providerId: 'anthropic', configured: false, strategy: 'least', accounts: [{
+        id: 'default', status: 'signed-out', directory: '/default',
+        running: 0, paused: false, limit: 4, weight: 1,
+      }],
+    })) },
     maker: {
       llamaCppEnsure: vi.fn(async () => undefined),
       llamaCppStatus: vi.fn(async () => ({ installed: false, supported: true, running: false, models: [] })),
@@ -352,6 +358,43 @@ afterEach(() => {
 describe('Magpie sources through preset discovery', () => {
   const baseUrl = 'http://127.0.0.1:3425/v1';
   const source = (agent: AgentKind) => ({ kind: 'magpie' as const, providerId: `supplier-${agent}`, snapshotId: `receipt-${agent}` });
+
+  // New preset entry: existing vLLM coverage cannot catch missing Magpie selection,
+  // its API-key form or the differing Messages/Responses/Chat runtime addresses.
+  it('saves the shipped Magpie preset with edited addresses and distinct complete route IDs', async () => {
+    const preset = BUNDLED_CATALOG.presets!.find(p => p.id === 'magpie')!;
+    vi.mocked(window.electronAPI.maker.listProviderPresets).mockResolvedValue({ presets: [preset] });
+    const ids = ['channel-a/foo', 'channel-b/foo'];
+    vi.mocked(window.electronAPI.maker.fetchProviderModels).mockImplementation(async ({ agent }) => ({
+      ok: true, models: ids.map(id => ({ id, name: 'Foo', discoveredSource: source(agent),
+        discoverySnapshotId: `receipt-${agent}`, opaqueModelId: true })),
+    }));
+    renderWizard('magpie');
+    fireEvent.change(await screen.findByPlaceholderText('sk-…'), { target: { value: 'fake-magpie-key' } });
+    const endpoints = document.querySelectorAll('input[type="url"]');
+    expect(endpoints).toHaveLength(3);
+    ['http://127.0.0.1:4425', 'http://127.0.0.1:4425/v1', 'http://127.0.0.1:4425/v1'].forEach((value, index) =>
+      fireEvent.change(endpoints[index], { target: { value } }));
+    fireEvent.click(screen.getByText('settings.providers.wizard.next'));
+    const rows = await screen.findAllByText('Foo');
+    expect(rows).toHaveLength(2);
+    rows.forEach(row => fireEvent.click(row));
+    fireEvent.click(screen.getByText('settings.providers.wizard.finish'));
+    await waitFor(() => expect(createCustomProvider).toHaveBeenCalledOnce());
+    const [saved, keys] = vi.mocked(createCustomProvider).mock.calls[0];
+    for (const agent of ['claude-code', 'codex', 'pi'] as const) {
+      expect(saved.runtimes[agent]).toMatchObject({ catalogPresetId: 'magpie',
+        baseUrl: 'http://127.0.0.1:4425' + (agent === 'claude-code' ? '' : '/v1'),
+        wireProtocol: preset.runtimes[agent]!.wireProtocol });
+      expect(saved.runtimes[agent]!.models.map(model => model.id)).toEqual(ids);
+      expect(keys![agent]).toBe('fake-magpie-key');
+    }
+    const entries = unifiedModelEntries({ providers: [{ ...buildUserProvider(saved), connected: true }] });
+    expect(entries.map(entry => entry.modelId)).toEqual(ids);
+    for (const entry of entries) for (const agent of entry.candidates) {
+      expect(entry.capabilities[agent]!.wireModelId).toBe(entry.modelId);
+    }
+  });
 
   it('retains full IDs and engine-owned receipts through the editable vLLM entry', async () => {
     const preset = BUNDLED_CATALOG.presets!.find(p => p.id === 'vllm')!;

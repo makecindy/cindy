@@ -79,7 +79,7 @@ describe('settings search anchor contract', () => {
       if (target === 'personal-im-wechat') continue;
       if (target) {
         const dynamicProviderAnchor =
-          /^cindy-im-(slack|telegram|x)$/.test(target) &&
+          /^cindy-im-(slack|telegram|x|feishu)$/.test(target) &&
           source.includes('id={`cindy-im-${provider}`}');
         expect(
           source.includes('id="' + target + '"') ||

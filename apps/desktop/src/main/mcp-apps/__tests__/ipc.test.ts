@@ -67,6 +67,9 @@ vi.mock('../../localDb/ipc/messages.js', () => ({
   broadcastMessageRow: state.broadcast,
   createMessage: (...args: unknown[]) => state.create(...args),
 }));
+vi.mock('../../git-context/prRefsStore.js', () => ({
+  recomputePrRefsForSession: vi.fn(async () => {}),
+}));
 vi.mock('../../device-link/broadcast-tap.js', () => ({
   captureDataOwnerBroadcastScope: () => ({ owner: state.owner }),
 }));

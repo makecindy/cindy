@@ -6,6 +6,7 @@ import { readRemoteAgentLimitsState } from './limitsStore.js';
  * 供应商分享的受邀者(其他账号)另按分享快照准入，只能用分享给它的那个供应商。
  */
 import path from 'node:path';
+import { sharedTaskFailureReason, sharedTaskRecoveryError, sharedTaskRecoveryReason, type SharedTaskRecoveryReason, type SharedTaskRecoveryStage } from '../../../shared/sharedTaskRecovery.js';
 import { createNativeHistoryTransfer } from '../nativeHistoryTransfer';
 import { nativeHistoryStorage } from '../nativeHistoryStorage';
 import fsp from 'node:fs/promises';
@@ -33,7 +34,7 @@ import { createProviderGroupGuestRelay } from '../../provider-group/guestRelay.j
 import { providerGroupReshare } from '../../provider-group/reshareRuntime.js';
 import { getProviderGroupOwnerScope, hasProviderGroupContinuityHandler } from '../../provider-group/runtime.js';
 import { onProviderGroupChanged, readProviderGroup } from '../../provider-group/store.js';
-import { bindGroupFastPolicy, bindLocalHostedGroupFastPolicy, receiveGroupFastPolicy, startGroupFastPolicySync } from '../../provider-group/fastPolicyRuntime.js';
+import { bindGroupFastPolicy, bindLocalHostedGroupFastPolicy, groupFastPolicyForGrant, receiveGroupFastPolicy, startGroupFastPolicySync } from '../../provider-group/fastPolicyRuntime.js';
 import { groupFastPolicyStore } from '../../provider-group/fastPolicyStore.js';
 import { captureProviderManagementScope } from '../../provider-group/managementScope.js';
 import { createSubscriptionFastPolicy } from '../../maker-host/subscription-fast-policy.js';
@@ -475,7 +476,9 @@ export function installRemoteAgentHost(options: {
       await verifyProviderShareMemberGeneration({ ...delegation, joinedAt: memberJoinedAt });
       const cleanupEpoch = await usage.registerDirectReceiptRoute(restored);
       if (!previousDirectRouteAllowed(previous)) throw new Error('Previous provider share route is no longer allowed');
-      await bindGroupFastPolicy({ group: previous.providerId, deviceId: previous.executorDeviceId,
+      const caps = await RemoteAgentRunClient.caps(invoke);
+      const fastPolicy = caps.subscriptionFastPolicyCache ? await groupFastPolicyForGrant(previous.providerId) : undefined;
+      if (!caps.subscriptionFastPolicyCache) await bindGroupFastPolicy({ group: previous.providerId, deviceId: previous.executorDeviceId,
         sessionId: previous.sessionId, providerShareGuest: {
           shareId: previous.shareId, memberId: previous.memberId, guestDeviceId: previous.guestDeviceId,
         } });
@@ -483,7 +486,8 @@ export function installRemoteAgentHost(options: {
       grantAttempted = true;
       await invoke([{ op: 'delegate', action: 'grant', ...delegation,
         providerId: previous.executorProviderId, model: previous.model,
-        sessionId: previous.sessionId, generation: granted.generation, cleanupEpoch }]);
+        sessionId: previous.sessionId, generation: granted.generation, cleanupEpoch,
+        ...(fastPolicy ? { fastPolicy } : {}) }]);
       if (!previousDirectRouteAllowed(previous)) throw new Error('Previous provider share route is no longer allowed');
       await usage.commitDirectReceiptRoute(restored);
       assertCommittedDirectRoute(restored);
@@ -874,7 +878,8 @@ export function installRemoteAgentHost(options: {
       if (input.groupProviderId) await bindLocalHostedGroupFastPolicy(input.groupProviderId, input.hostSessionId);
       return options.getMaker().startHostedAgentSession(input.kind, {
         ...hostedStartOptions(input),
-        fastModePolicy: createSubscriptionFastPolicy(input.hostSessionId, () => getSessionProvider(input.hostSessionId) ?? input.options.providerId),
+        fastModePolicy: createSubscriptionFastPolicy(input.hostSessionId,
+          () => getSessionProvider(input.hostSessionId) ?? input.options.providerId, input.requireGroupFastPolicy),
       });
     },
     forkHosted: (kind, opts) => options.getMaker().forkSdkSession(kind, opts),
@@ -1042,6 +1047,12 @@ export function installRemoteAgentHost(options: {
         }
       },
       async allocate(controller, request) {
+        // New tasks may select the legacy relay path. Pinned history must
+        // retain its executor and expose a bounded, public failure reason.
+        const unavailable = (reason: SharedTaskRecoveryReason, stage: SharedTaskRecoveryStage = 'allocation'): null => {
+          if (request.preferredExecutorDeviceId) throw sharedTaskRecoveryError(stage, reason);
+          return null;
+        };
         const routeKey = JSON.stringify([controller, request.sessionId]);
         while (allocations.has(routeKey)) await allocations.get(routeKey);
         let finish!: () => void;
@@ -1050,20 +1061,22 @@ export function installRemoteAgentHost(options: {
         try {
         const peer = parseProviderSharePeer(controller);
         const access = ownedProviderShareGuestAccess(controller);
-        if (peer?.role !== 'guest' || !access || !isRemoteProviderInvocationAllowed(access.providerId)
-          || !remoteModelAccess.allowsDelegatedExecution(access.providerId, request.model, access.memberId)) return null;
-        if (!directRoutes.has(routeKey) && directRoutes.size >= 512) return null;
+        if (peer?.role !== 'guest' || !access || !isRemoteProviderInvocationAllowed(access.providerId)) return unavailable('denied');
+        if (!remoteModelAccess.allowsDelegatedExecution(access.providerId, request.model, access.memberId)) {
+          return unavailable(remoteModelAccess.allows(access.providerId, request.model, access.memberId) ? 'policy' : 'model');
+        }
+        if (!directRoutes.has(routeKey) && directRoutes.size >= 512) return unavailable('capacity');
         const { identity, location, joinedAt } = directTaskContext(controller, request.sessionId);
         const old = restoreDirectRoute(controller, request.sessionId) ?? undefined;
         const group = readProviderGroup(access.providerId);
         if (location && (location.agentKind !== request.agentKind
-          || (request.preferredExecutorDeviceId && request.preferredExecutorDeviceId !== location.executorDeviceId))) return null;
+          || (request.preferredExecutorDeviceId && request.preferredExecutorDeviceId !== location.executorDeviceId))) return unavailable('history');
         const preferred = location?.executorDeviceId ?? request.preferredExecutorDeviceId;
         // A live G→M task cannot be renewed on a newly selected M: its run and
         // reliable link remain on the original executor, including after O restarts.
         if (preferred && !location && !group?.members.some((member) => member.kind === 'device'
-          && member.agentDeviceId === preferred)) return null;
-        if (preferred && readDeviceLinkSettings().revokedControllers.includes(preferred)) return null;
+          && member.agentDeviceId === preferred)) return unavailable('history');
+        if (preferred && readDeviceLinkSettings().revokedControllers.includes(preferred)) return unavailable('denied');
         const retained = old && old.expiresAt > Date.now() && old.groupProviderId === access.providerId
           && old.agentKind === request.agentKind && old.model === request.model
           && (!preferred || old.executorDeviceId === preferred)
@@ -1079,8 +1092,9 @@ export function installRemoteAgentHost(options: {
         if (!selected || !('sameAccount' in selected) || !selected.sameAccount
           || (preferred && selected.agentDeviceId !== preferred)) {
           if (selected && 'load' in selected) selected.load?.release();
-          return null;
+          return unavailable('history');
         }
+        let recoveryStage: SharedTaskRecoveryStage = 'capability';
         try {
           const assertCurrent = (generation = location?.generation) => {
             const current = directTaskContext(controller, request.sessionId);
@@ -1094,24 +1108,25 @@ export function installRemoteAgentHost(options: {
               || (!location && !currentGroup?.members.some((member) => member.kind === 'device'
                 && member.key === selected.memberKey && member.agentDeviceId === selected.agentDeviceId
                 && member.providerId === selected.providerId))) {
-              throw new Error('Provider share access changed');
+              throw sharedTaskRecoveryError('authorization', 'denied');
             }
           };
           const { invoke } = groupRelay.connect(selected.agentDeviceId);
           const caps = await RemoteAgentRunClient.caps(invoke);
           assertCurrent();
           if (!caps.directGuestExecution || !caps.guestRelay) {
-            if ('load' in selected) selected.load?.release();
-            return null;
+            if (!request.preferredExecutorDeviceId && 'load' in selected) selected.load?.release();
+            return unavailable('unsupported', 'capability');
           }
           const delegation = { shareId: peer.shareId, memberId: peer.memberId,
             guestDeviceId: peer.deviceId, executorDeviceId: selected.agentDeviceId };
+          recoveryStage = 'authorization';
           return await withDelegationGrant(JSON.stringify([delegation.shareId, delegation.memberId,
             delegation.guestDeviceId, delegation.executorDeviceId]), async () => {
           const ownerDeviceId = getSelfDeviceId();
           if (!ownerDeviceId) {
-            if ('load' in selected) selected.load?.release();
-            return null;
+            if (!request.preferredExecutorDeviceId && 'load' in selected) selected.load?.release();
+            return unavailable('authorization', 'authorization');
           }
           const ownerScope = providerShareOwnerKey();
           const cleaned = await settlePendingDirectCleanup(delegation, invoke);
@@ -1146,16 +1161,18 @@ export function installRemoteAgentHost(options: {
             // Persist a provisional route before M can execute. A crash before
             // commit leaves recovery enough information to revoke M's lease.
             const cleanupEpoch = await usage.registerDirectReceiptRoute(receiptRoute);
-            // M authenticates O against the server pair grant and persists the
-            // policy before its task lease can admit a guessed/reused task ID.
-            await bindGroupFastPolicy({ group: access.providerId, deviceId: selected.agentDeviceId,
+            // Modern M authenticates O once for both the lease and speed policy.
+            // Old M retains its original prebinding handshake.
+            const fastPolicy = caps.subscriptionFastPolicyCache ? await groupFastPolicyForGrant(access.providerId) : undefined;
+            if (!caps.subscriptionFastPolicyCache) await bindGroupFastPolicy({ group: access.providerId, deviceId: selected.agentDeviceId,
               sessionId: request.sessionId,
               providerShareGuest: { shareId: peer.shareId, memberId: peer.memberId, guestDeviceId: peer.deviceId } });
             assertCurrent();
             memberGrantAttempted = true;
             await invoke([{ op: 'delegate', action: 'grant', shareId: peer.shareId,
               memberId: peer.memberId, guestDeviceId: peer.deviceId, providerId: selected.providerId,
-              model: request.model, sessionId: request.sessionId, generation: granted.generation, cleanupEpoch }]);
+              model: request.model, sessionId: request.sessionId, generation: granted.generation, cleanupEpoch,
+              ...(fastPolicy ? { fastPolicy } : {}) }]);
             assertCurrent();
             await usage.commitDirectReceiptRoute(receiptRoute);
             assertCurrent(receiptRoute.generation);
@@ -1244,8 +1261,18 @@ export function installRemoteAgentHost(options: {
         } catch (error) {
           if ('load' in selected) selected.load?.release();
           log.warn('provider group direct allocation failed', { error: String(error) });
+          if (request.preferredExecutorDeviceId) {
+            if (error instanceof Error && sharedTaskRecoveryReason(error.message)) throw error;
+            throw sharedTaskRecoveryError(recoveryStage, sharedTaskFailureReason(error), error);
+          }
           return null;
         }
+        } catch (error) {
+          if (request.preferredExecutorDeviceId) {
+            if (error instanceof Error && sharedTaskRecoveryReason(error.message)) throw error;
+            throw sharedTaskRecoveryError('allocation', sharedTaskFailureReason(error), error);
+          }
+          throw error;
         } finally {
           if (allocations.get(routeKey) === turn) allocations.delete(routeKey);
           finish();

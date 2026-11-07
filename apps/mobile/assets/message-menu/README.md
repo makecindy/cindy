@@ -17,6 +17,7 @@ session, and file action sheets; the native menu retains system row spacing.
 | cindy-link-2              | Link2                        |
 | cindy-undo-2              | Undo2                        |
 | cindy-trash-2             | Trash2                       |
+| cindy-pencil              | Pencil                       |
 
 `with-message-menu-icons` copies the image sets into the app's existing Xcode
 asset catalog. The native menu loads them with `UIImage(named:)`; the JS wrapper

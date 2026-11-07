@@ -57,7 +57,7 @@ export function TaskListFilterPopover({ value, onChange }: Props) {
         sideOffset={8}
         className={cn(
           'w-[220px] rounded-xl border border-sidebar-border bg-popover p-0 text-popover-foreground',
-          'shadow-[var(--shadow-menu)]',
+          'shadow-[shadow:var(--shadow-menu)]',
         )}
       >
         {/* Status section — padding 12，3 个 chip 一行 */}

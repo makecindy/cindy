@@ -110,7 +110,7 @@ describe('durable Auto authority projection', () => {
     { reviewIntent: null },
     { sessionAmbiguous: 'false' },
     { reviewUnverified: null },
-    { reviewIntent: 'x'.repeat(2001) },
+    { reviewIntent: 'x'.repeat(createAutoReviewIntentProjection().maxIntentChars + 1) },
     { lastEventAt: '1' },
   ])('rebuilds structurally corrupt summaries before append and direct read: %j', (damage) => {
     for (const append of [true, false]) {
@@ -223,7 +223,7 @@ describe('durable Auto authority projection', () => {
         i % 11 === 0
           ? ''
           : i % 17 === 0
-            ? 'long '.repeat(500)
+            ? 'long '.repeat(createAutoReviewIntentProjection().maxIntentChars / 5)
             : `instruction ${i} ${'detail '.repeat(8)}`;
       add(
         db,
@@ -294,7 +294,8 @@ describe('durable Auto authority projection', () => {
     for (let i = 0; i < 1200; i++)
       add(db, String(i), i % 2 ? 'worker' : 'lead', i + 1, `instruction ${i}`);
     const initial = read(db);
-    expect(JSON.stringify(initial).length).toBeLessThan(4300);
+    // Two bounded intents (session and review) plus the revision.
+    expect(JSON.stringify(initial).length).toBeLessThan(2 * createAutoReviewIntentProjection().maxIntentChars + 300);
     db.function('cindy_authority_projection_v1', (_raw, _target, _previous, _event) => {
       throw new Error('unexpected replay');
     });

@@ -27,6 +27,9 @@ export { leadingSlashInvocation };
 import { createLogger } from '@/lib/logger';
 
 const log = createLogger('SlashCommands');
+// Diagnostics only: retain at most 256 name/kind conflicts per renderer lifetime.
+// Once full, suppress new conflicts too rather than evicting and repeating old warnings.
+const warnedCommandConflicts = new Set<string>();
 const shadowedUnavailableSkillsByCommands = new WeakMap<UnifiedCommand[], Set<string>>();
 
 export type { UnifiedCommand } from '@cindy/maker-core';
@@ -289,7 +292,11 @@ export function mergeCommands(
         if (isSlashCommandUnavailable(cmd)) {
           shadowedUnavailableSkills.add(cmd.name.toLowerCase());
         } else {
-          log.warn(`Slash command "/${cmd.name}" already provided by higher-priority tier; skipping ${cmd.kind}.`);
+          const conflict = JSON.stringify([cmd.name, cmd.kind]);
+          if (!warnedCommandConflicts.has(conflict) && warnedCommandConflicts.size < 256) {
+            warnedCommandConflicts.add(conflict);
+            log.warn(`Slash command "/${cmd.name}" already provided by higher-priority tier; skipping ${cmd.kind}.`);
+          }
         }
         continue;
       }
