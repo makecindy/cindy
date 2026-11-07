@@ -18118,60 +18118,8 @@
     "todoCheck": {
       "name": "每天查待办"
     },
-    "builtinNightlyLearning": {
-      "name": "夜间学习（内置）",
-      "title": "夜间学习",
-      "hint": "每天 3:30 整理和你的对话：合并记忆，把反复用到的做法总结成技能。没有新对话就跳过，不调用模型。",
-      "hintWeekly": "每周一 3:30 整理这一周和你的对话：合并记忆，把反复用到的做法总结成技能。没有新对话就跳过，不调用模型。"
-    },
-    "nightly": {
-      "switchLabel": "到点自动整理",
-      "paused": "已暂停。对话照常计数，打开后到点开始整理。",
-      "running": "正在整理…",
-      "memoryOff": "记忆已关闭，只整理技能。",
-      "pending": "待整理",
-      "pendingTurns_one": "{{count}} 轮对话",
-      "pendingTurns_other": "{{count}} 轮对话",
-      "pendingNone": "没有新对话，到点会跳过",
-      "last": "上次",
-      "lastNever": "还没整理过",
-      "lastFailed": "没整理完，下次会再试",
-      "lastLearned_one": "整理了 {{count}} 项",
-      "lastLearned_other": "整理了 {{count}} 项",
-      "nothing": "没有需要整理的",
-      "viewHistory": "查看记录",
-      "notHere": "夜间学习只在伙伴的主力电脑上运行。",
-      "switchHint": "没有新对话就跳过，不调用模型",
-      "frequency": "频率",
-      "daily": "每天",
-      "weekly": "每周",
-      "dailyHint": "每天 3:30",
-      "weeklyHint": "每周一 3:30",
-      "runNow": "现在整理",
-      "history": "记录",
-      "empty": "还没有整理过。有新对话后，到点会第一次整理。",
-      "manual": "手动整理",
-      "readTurns_one": "看了 {{count}} 轮对话",
-      "readTurns_other": "看了 {{count}} 轮对话",
-      "undone": "已撤销",
-      "undo": "撤销",
-      "redo": "恢复",
-      "watching": "在观察的做法",
-      "watchingHint": "只出现过一次的做法先放在这里，不会加载。再遇到同类事才会总结成技能。",
-      "promote": "现在记成技能",
-      "decline": "不用学",
-      "changedSince": "这一条之后被改过，不能撤销",
-      "failed": "没能完成，请重试",
-      "item": {
-        "memoryCreated": "新记住「{{title}}」",
-        "memoryUpdated": "整理了记忆「{{title}}」",
-        "memoryDeleted": "删除了记忆「{{title}}」",
-        "memoryMerged": "把记忆「{{title}}」并入「{{into}}」",
-        "skillCreated": "新学技能「{{title}}」",
-        "skillUpdated": "更新了技能「{{title}}」",
-        "skillDisabled": "停用了技能「{{title}}」",
-        "skillMerged": "把技能「{{title}}」并入「{{into}}」并停用"
-      }
+    "nightlyLearning": {
+      "name": "夜间学习"
     },
     "remote": {
       "pause": "暂停例行任务",

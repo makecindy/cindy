@@ -18117,60 +18117,8 @@
     "todoCheck": {
       "name": "日查待办"
     },
-    "builtinNightlyLearning": {
-      "name": "夜学（内置）",
-      "title": "夜学",
-      "hint": "每日 3:30 整理与君之言谈：并记忆，将屡用之法总结为技艺。无新言谈则略过，不呼模型。",
-      "hintWeekly": "每周一 3:30 整理本周与君之言谈：并记忆，将屡用之法总结为技艺。无新言谈则略过，不呼模型。"
-    },
-    "nightly": {
-      "switchLabel": "届时自理",
-      "paused": "已暂止。言谈照常计数，重启后届时即理。",
-      "running": "方理…",
-      "memoryOff": "记忆已关，唯理技艺。",
-      "pending": "待理",
-      "pendingTurns_one": "言谈 {{count}} 轮",
-      "pendingTurns_other": "言谈 {{count}} 轮",
-      "pendingNone": "无新言谈，届时当略过",
-      "last": "前番",
-      "lastNever": "未尝理",
-      "lastFailed": "未理竟，次番再试",
-      "lastLearned_one": "理 {{count}} 项",
-      "lastLearned_other": "理 {{count}} 项",
-      "nothing": "无所须理",
-      "viewHistory": "观其录",
-      "notHere": "夜学唯行于同僚之主力机。",
-      "switchHint": "无新言谈则略过，不呼模型",
-      "frequency": "频",
-      "daily": "每日",
-      "weekly": "每周",
-      "dailyHint": "每日 3:30",
-      "weeklyHint": "每周一 3:30",
-      "runNow": "即理",
-      "history": "录",
-      "empty": "尚未尝理。灯下黄卷待新言，有新言谈，届时当首理之。",
-      "manual": "手理",
-      "readTurns_one": "阅言谈 {{count}} 轮",
-      "readTurns_other": "阅言谈 {{count}} 轮",
-      "undone": "已撤销",
-      "undo": "撤之",
-      "redo": "复之",
-      "watching": "方察之法",
-      "watchingHint": "仅见一次之法，暂置于此，不加载。再遇同类之事，方总结为技艺。",
-      "promote": "即记为技艺",
-      "decline": "不必学",
-      "changedSince": "此条其后已改，无从复原",
-      "failed": "未能竟，请再试",
-      "item": {
-        "memoryCreated": "新记「{{title}}」",
-        "memoryUpdated": "理记忆「{{title}}」",
-        "memoryDeleted": "删记忆「{{title}}」",
-        "memoryMerged": "并记忆「{{title}}」入「{{into}}」",
-        "skillCreated": "新习技艺「{{title}}」",
-        "skillUpdated": "更技艺「{{title}}」",
-        "skillDisabled": "停技艺「{{title}}」",
-        "skillMerged": "并技艺「{{title}}」入「{{into}}」而停之"
-      }
+    "nightlyLearning": {
+      "name": "夜学"
     },
     "checkSource": "检查之法",
     "remote": {

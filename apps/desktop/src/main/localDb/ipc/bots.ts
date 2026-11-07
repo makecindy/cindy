@@ -1,4 +1,5 @@
 import { emitSessionCreated } from './sessionCreatedBroadcast.js';
+import { setSessionHidden } from './sessionHidden.js';
 import type { RoutineModel } from '@cindy/maker-scheduler';
 import { todoAccess } from '../../maker-ipc/botTodoAccess.js';
 import { loadBotReadState, loadAcknowledgedBotReadState, readBotReadPosition } from '../../maker-ipc/botReadStateStore.js';
@@ -519,12 +520,15 @@ export async function ensureBotChannelLaneSession(input: {
   return ensureBotOwnedLaneSession(input, 'channel');
 }
 
-/** A persistent execution context for one standing instruction, sharing its companion's Home. */
-export async function ensureBotRoutineLaneSession(input: { botId: string; routineId: string; title: string; modelOverride?: RoutineModel | null }): Promise<EnsureBotChannelLaneResult> {
+/**
+ * The execution context for one standing instruction, sharing its companion's Home. `hidden`
+ * creates it as a hidden task (one Session per trigger): it never enters the task list.
+ */
+export async function ensureBotRoutineLaneSession(input: { botId: string; routineId: string; title: string; modelOverride?: RoutineModel | null; hidden?: boolean }): Promise<EnsureBotChannelLaneResult> {
   return ensureBotOwnedLaneSession({ ...input, routeKey: `routine:${input.routineId}` }, 'routine');
 }
 
-async function ensureBotOwnedLaneSession(input: { botId: string; routeKey: string; title: string; modelOverride?: RoutineModel | null }, role: 'channel' | 'routine'): Promise<EnsureBotChannelLaneResult> {
+async function ensureBotOwnedLaneSession(input: { botId: string; routeKey: string; title: string; modelOverride?: RoutineModel | null; hidden?: boolean }, role: 'channel' | 'routine'): Promise<EnsureBotChannelLaneResult> {
   const owner = captureBotOperationOwner();
   const client = getDbClient();
   const db = client.drizzle;
@@ -620,7 +624,10 @@ async function ensureBotOwnedLaneSession(input: { botId: string; routeKey: strin
     await syncBotLinkedLanePermissions(result.permissionRepairCanonicalSessionId);
     owner.assertCurrent();
   }
-  if (result.created) emitSessionCreated(result.sessionId);
+  if (result.created && input.hidden) {
+    // Hide before anything announces it, so the task never flashes into the list.
+    await setSessionHidden({ sessionId: result.sessionId, hidden: true, db: client, assertCurrent: owner.assertCurrent });
+  } else if (result.created) emitSessionCreated(result.sessionId);
   return { ok: true, sessionId: result.sessionId, created: result.created };
 }
 

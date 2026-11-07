@@ -1,6 +1,7 @@
 import { RoutineEventAdmission, addRoutineReceipt, compactRoutineReceipts, receiptIsLive } from './routine-event-admission.js';
 import {
   BUILTIN_ROUTINE_ERROR,
+  LEGACY_NIGHTLY_LEARNING_BUILTIN,
   LEGACY_TODO_CHECK_BUILTIN,
   matchesRoutineEvent,
   nextRoutineTriggerAt,
@@ -43,6 +44,8 @@ export interface RoutineState {
   next: Record<string, number>;
   /** Lifecycle suspension preserves each routine's own enabled preference. */
   pausedBotIds?: string[];
+  /** Default routine ids the host already created once (seedOnce); a deleted one is not recreated. */
+  seeded?: string[];
 }
 
 
@@ -95,6 +98,8 @@ export interface RoutineEngineDeps {
    * load and before queued runs resume, so the revision and any pending batch stay valid.
    */
   legacyTodoCheckContent?(routine: Routine): Partial<Pick<RoutineInput, "name" | "prompt">> | null;
+  /** Same for the legacy built-in nightly learning rule: content to apply once while it becomes ordinary. */
+  legacyNightlyLearningContent?(routine: Routine): Partial<RoutineInput> | null;
   save(state: RoutineState): Promise<void>;
   execute(
     routine: Routine,
@@ -171,6 +176,13 @@ export class RoutineEngine {
           delete loaded.builtin;
           delete loaded.builtinVersion;
           Object.assign(loaded, this.deps.legacyTodoCheckContent?.(loaded) ?? {});
+        }
+        if ((routine.builtin as string | undefined) === LEGACY_NIGHTLY_LEARNING_BUILTIN) {
+          delete loaded.builtin;
+          delete loaded.builtinVersion;
+          Object.assign(loaded, parseRoutineInput({ ...loaded, ...this.deps.legacyNightlyLearningContent?.(loaded) }));
+          // It was created by the host already: deleting it later must not bring it back.
+          saved.seeded = [...new Set([...(saved.seeded ?? []), loaded.id])];
         }
         return loaded;
       });
@@ -300,6 +312,18 @@ export class RoutineEngine {
     return this.writeRoutine(botId, raw, { id, expectedRevision });
   }
 
+  /**
+   * Create a host default routine once per id. It is an ordinary routine afterwards: later calls do not
+   * rewrite it, and after the owner or teammate deletes it, it is not recreated. Paused teammates are skipped.
+   */
+  async seedOnce(botId: string, raw: RoutineInput, id: string): Promise<Routine | null> {
+    if (this.blockedBots.has(botId) || this.state.seeded?.includes(id)) return null;
+    const existing = this.state.routines.find((routine) => routine.id === id && routine.botId === botId);
+    const routine = existing ? structuredClone(existing) : await this.createOnce(botId, raw, id);
+    await this.change((state) => { state.seeded = [...new Set([...(state.seeded ?? []), id])]; });
+    return routine;
+  }
+
   /** A lost remote acknowledgement can be retried, including after a host restart. */
   async createOnce(botId: string, raw: RoutineInput, creationId: string): Promise<Routine> {
     if (!/^[a-zA-Z0-9_-]{16,128}$/.test(creationId)) throw new Error("Invalid routine creation ID");
@@ -360,7 +384,7 @@ export class RoutineEngine {
       // Host-owned instructions and triggers stay fixed; callers may pause or choose the execution model.
       if (existing?.builtin && !options.builtin &&
         JSON.stringify(parseRoutineInput({ ...existing, enabled: input.enabled,
-          ...(existing.builtin !== 'nightly-learning' ? { modelOverride: input.modelOverride } : {}),
+          modelOverride: input.modelOverride,
           sessionMode: input.sessionMode })) !== JSON.stringify(input))
         throw new Error(`${BUILTIN_ROUTINE_ERROR}: built-in instructions and triggers cannot be edited`);
       const builtin = options.builtin ?? existing?.builtin;

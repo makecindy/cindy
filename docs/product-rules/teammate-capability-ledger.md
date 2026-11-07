@@ -52,7 +52,7 @@
 
 | 类别 | 伙伴专属工具或机制 | 普通任务或项目的对应 | 方向 |
 | --- | --- | --- | --- |
-| 例行任务 | `routine_list/save/delete/run_now/history/sources/delivery_targets`；内置「跟进」「夜间学习」 | 定时任务 `schedule_*`（`cindy_scheduler`）；项目仓库里的 `.cindy/automations/schedules.json`（改动只是预览，主人确认快照才生效） | **并入定时任务**。两者已共用调度执行器，`Schedule.source` 已有 `'bot'`。例行任务多出的只有：事件触发（插件事件、`host:sessions`）、多条件并列、送达方式（伙伴 / IM / 静默）——先补给定时任务，普通项目也能用。插件前置检查（`preRunPlugin`）已由 `schedule_create` / `schedule_update` / `routine_save` 共用，不是缺口；限制只在跨电脑不能设置、项目自动化配置文件不支持（[Agent 与用户同权](agent-user-parity.md)） |
+| 例行任务 | `routine_list/save/delete/run_now/history/sources/delivery_targets`；内置「跟进」；默认的「夜间学习」（2026-11-06 起是普通例行任务） | 定时任务 `schedule_*`（`cindy_scheduler`）；项目仓库里的 `.cindy/automations/schedules.json`（改动只是预览，主人确认快照才生效） | **并入定时任务**。两者已共用调度执行器，`Schedule.source` 已有 `'bot'`。例行任务多出的只有：事件触发（插件事件、`host:sessions`）、多条件并列、送达方式（伙伴 / IM / 静默）——先补给定时任务，普通项目也能用。插件前置检查（`preRunPlugin`）已由 `schedule_create` / `schedule_update` / `routine_save` 共用，不是缺口；限制只在跨电脑不能设置、项目自动化配置文件不支持（[Agent 与用户同权](agent-user-parity.md)） |
 | 后台任务 | `start_session_task`、`check_session_task`、`message_session_task`、`stop_session_task`、路线检查与推进；完成回执与唤醒 | `send_to_session`、`get_task_digest`、插话、停止、队列工具（伙伴主任务已有，[伙伴运行时](cindy-bots-runtime.md) §6.4） | **并入通用任务工具**，委派只留一条「谁负责」关系。通用工具缺的任务卡、等你时代答、暂停与恢复、执行期限要先补齐 |
 | 工作台 | `get_workbench`、`read_workbench_task`、`continue_workbench_task`、`set_workbench_task_responsibility` | `list_sessions`、`get_chat_history`、`get_task_digest`、`send_to_session`（跨电脑发消息已支持） | 读和继续并入通用工具；「谁负责」保留为通用的任务关系（也是「按项目跟进」的基础） |
 | 记忆 | 伙伴记忆独立服务（`botMemoryService.ts`） | Cindy 记忆（`cindy_memory`），按工作目录隔离 | 伙伴即项目后合成一套；保留「全局记忆开关不影响伙伴记忆」 |
@@ -95,7 +95,7 @@ AGENTS.md、记忆和技能；关于被管项目的事实写进那个项目；�
 - **授权从「看文字」改成「看数据」**：接收方自动审核在 Ask / Auto / Full Access 三档下都要验证，不多弹也不越权；
   手机、其它电脑和历史消息仍要认旧格式。
 - **正在运行的委派按旧行为跑完**，新委派才用新行为。
-- **伙伴改自己的规则**：伙伴会读到不可信内容，规则改动要有版本、可撤销、主人可见；夜间学习不改写主人写的规则。
+- **伙伴改自己的规则**：伙伴会读到不可信内容，规则改动要有版本、可撤销、主人可见；夜间学习不改写主人写的规则（2026-11-06 起夜间学习是默认的普通例行任务，默认指令里写明只改自己的记忆与技能）。
 - **合并专属工具前先补齐通用能力**，旧工具名保留一段时间并映射到新工具，避免老伙伴规则里的调用失败；
   伙伴的定时任务仍只在主力电脑运行；两套确认语义（授予常驻指令、新建完全访问 Agent）合并时都要保留。
 

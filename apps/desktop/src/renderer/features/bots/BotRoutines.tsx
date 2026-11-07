@@ -36,9 +36,7 @@ import {
   DropdownMenuSubTrigger,
   DropdownMenuSubContent,
 } from '@/components/ui/dropdown-menu';
-import type { NightlyLearningView } from '../../../shared/botNightlyLearning';
 import { TODO_CHECK_ROUTINE_PREFIX } from '../../../shared/botAutonomy';
-import { BotNightlyLearning, useNightlyLearningView } from './BotNightlyLearning';
 
 const menuClass = 'p-2';
 const fieldClass = 'block space-y-2';
@@ -100,11 +98,6 @@ export function BotRoutines({
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState(false);
   const [deletePending, setDeletePending] = useState(false);
-  const [nightlyOpen, setNightlyOpen] = useState(false);
-  // The nightly review is read and run on this computer; a remote teammate's lives on its own one.
-  const nightlyLocal = settingsTarget.kind === 'local';
-  const nightly = useNightlyLearningView(botId, nightlyLocal);
-  useEffect(() => setNightlyOpen(false), [botId]);
   const refresh = useCallback(async () => {
     const [items, available] = await Promise.all([
       routinesApi.list(botId),
@@ -238,10 +231,6 @@ export function BotRoutines({
   useEffect(() => {
     if (!backRef) return;
     backRef.current = async () => {
-      if (nightlyOpen) {
-        setNightlyOpen(false);
-        return true;
-      }
       if (!draft) return false;
       if (!inFlight.current) await closeDraft();
       return true;
@@ -249,7 +238,7 @@ export function BotRoutines({
     return () => {
       backRef.current = null;
     };
-  }, [backRef, draft, closeDraft, nightlyOpen]);
+  }, [backRef, draft, closeDraft]);
   const editorRef = useRef<HTMLFieldSetElement>(null);
   // A number field the user left invalid is not silently replaced by the old
   // value on save: point at it instead.
@@ -290,19 +279,6 @@ export function BotRoutines({
     return t('routines.onEvent', { source: source?.name ?? trigger.sourceId, event: event?.name ?? trigger.eventType });
   };
   const running = history.some((run) => run.status === 'running' || run.status === 'queued');
-  if (nightlyOpen && !draft) {
-    return (
-      <section className={embedded ? 'py-3 text-13 text-[var(--text-primary)]' : 'app-wallpaper-surface h-full overflow-y-auto bg-[var(--surface)] p-4 text-13 text-[var(--text-primary)]'}>
-        {!backRef ? (
-          <div className="mb-5">
-            <Button variant="secondary" onClick={() => setNightlyOpen(false)}>{t('routines.back')}</Button>
-          </div>
-        ) : null}
-        <h3 className="mb-3 text-14 font-medium text-[var(--text-primary)]">{t('routines.builtinNightlyLearning.title')}</h3>
-        <BotNightlyLearning botId={botId} />
-      </section>
-    );
-  }
   return (
     <section
       className={
@@ -363,16 +339,11 @@ export function BotRoutines({
               key={routine.id}
               routine={routine}
               disabled={busy || skillOffFor(routine) !== null}
-              onOpen={supportsModels && routine.builtin !== 'nightly-learning' ? () => {
+              onOpen={supportsModels ? () => {
                 setSelected(routine.id);
                 setDraft(structuredClone(routine));
               } : undefined}
-              hint={skillOffHint(routine)
-                ?? (routine.builtin === 'nightly-learning' && nightly.view?.frequency === 'weekly'
-                  ? t('routines.builtinNightlyLearning.hintWeekly') : undefined)}
-              extra={routine.builtin === 'nightly-learning' && nightlyLocal
-                ? <NightlyLearningStatus routine={routine} view={nightly.view} onOpen={() => setNightlyOpen(true)} />
-                : null}
+              hint={skillOffHint(routine)}
               onEnabledChange={(enabled) =>
                 void act(() => routinesApi.save(botId, routineInput({ ...routine, enabled }), routine.id))
               }
@@ -486,7 +457,7 @@ export function BotRoutines({
             <Select
               label={t('routines.sessionMode')}
               className="w-full"
-              disabled={busy || saved?.builtin === 'nightly-learning'}
+              disabled={busy}
               value={draft.sessionMode ?? 'persistent'}
               options={[
                 { value: 'persistent', label: t('routines.sessionModePersistent') },
@@ -1077,66 +1048,10 @@ function routineInput(routine: Routine): RoutineInput {
 /**
  * 宿主内置规则保留指令与触发条件；普通 Agent 规则允许暂停或单独配置模型。
  */
-/** 内置例行任务（跟进、夜间学习）的文案键；名称与说明随界面语言，不用宿主存的名字。 */
+/** 内置例行任务（跟进）的文案键；名称与说明随界面语言，不用宿主存的名字。 */
 const BUILTIN_COPY: Record<string, string | undefined> = {
   'follow-up': 'routines.builtinFollowUp',
-  'nightly-learning': 'routines.builtinNightlyLearning',
 };
-
-/** 夜间学习行下方的两行状态（待整理、上次结果）与进入学习记录的入口。 */
-function NightlyLearningStatus({
-  routine,
-  view,
-  onOpen,
-}: {
-  routine: Routine;
-  view: NightlyLearningView | null;
-  onOpen: () => void;
-}) {
-  const { t, i18n } = useTranslation();
-  const last = view?.lastRun ?? null;
-  const when = (at: number) => new Intl.DateTimeFormat(i18n.language, {
-    month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit',
-  }).format(at);
-  const lastText = !last
-    ? t('routines.nightly.lastNever')
-    : `${when(last.at)} · ${last.outcome === 'failed'
-      ? t('routines.nightly.lastFailed')
-      : last.items.length
-        ? t('routines.nightly.lastLearned', { count: last.items.length })
-        : t('routines.nightly.nothing')}`;
-  return (
-    <>
-      {view ? (
-        <span className="mt-2 grid grid-cols-[auto_minmax(0,1fr)] gap-x-3 gap-y-0.5 text-12 leading-[1.5] text-[var(--text-secondary)]">
-          {!routine.enabled ? (
-            <span className="col-span-2">{t('routines.nightly.paused')}</span>
-          ) : view.running ? (
-            <span className="col-span-2">{t('routines.nightly.running')}</span>
-          ) : (
-            <>
-              {!view.memoryEnabled ? <span className="col-span-2">{t('routines.nightly.memoryOff')}</span> : null}
-              <span className="text-[var(--text-tertiary)]">{t('routines.nightly.pending')}</span>
-              <span className="tabular-nums">
-                {view.pendingTurns > 0 ? t('routines.nightly.pendingTurns', { count: view.pendingTurns }) : t('routines.nightly.pendingNone')}
-              </span>
-              <span className="text-[var(--text-tertiary)]">{t('routines.nightly.last')}</span>
-              <span className="tabular-nums">{lastText}</span>
-            </>
-          )}
-        </span>
-      ) : null}
-      <button
-        type="button"
-        className="-ml-1.5 mt-1.5 inline-flex items-center gap-0.5 rounded px-1.5 py-0.5 text-12 leading-[1.5] text-[var(--text-secondary)] outline-none transition-colors duration-[var(--motion-instant)] hover:bg-[var(--surface-hover)] hover:text-[var(--text-primary)] focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)]"
-        onClick={onOpen}
-      >
-        {t('routines.nightly.viewHistory')}
-        <ChevronRight size={14} aria-hidden="true" />
-      </button>
-    </>
-  );
-}
 
 function BuiltinRoutineRow({
   routine,
@@ -1144,14 +1059,12 @@ function BuiltinRoutineRow({
   onEnabledChange,
   onOpen,
   hint,
-  extra,
 }: {
   routine: Routine;
   disabled: boolean;
   onEnabledChange: (enabled: boolean) => void;
   onOpen?: () => void;
   hint?: string;
-  extra?: ReactNode;
 }) {
   const { t } = useTranslation();
   // 旧版电脑上的「每天查待办」仍是内置规则，远程查看时没有对应说明，只显示名称。
@@ -1166,7 +1079,6 @@ function BuiltinRoutineRow({
         </button> : <p className="break-words text-13 font-medium leading-5">{name}</p>}
         <RoutineState routine={routine} />
         {hint || copy ? <p className="mt-1 text-12 leading-5 text-[var(--text-secondary)]">{hint ?? t(`${copy}.hint`)}</p> : null}
-        {extra}
       </div>
       <Switch
         aria-label={name}

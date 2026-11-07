@@ -259,6 +259,7 @@ import {
   archiveBotChannelLanes,
   createBotCanonicalSession,
   ensureBotChannelLaneSession,
+  ensureBotRoutineLaneSession,
   findBotChannelLaneSession,
   registerBotIpc,
   createBotProfile,
@@ -2202,6 +2203,20 @@ describe('Bot canonical Session lifecycle', () => {
       }),
       { sessionSources: null },
     );
+  });
+
+  // bot-routines.md「例行任务 Session」: a run of a fresh routine is a hidden task. It must
+  // never be announced to the task list; the persistent lane still is.
+  it('creates a fresh routine run as a hidden task without announcing it to the task list', async () => {
+    await invoke('local-db:bots:create-canonical-session', { botId: 'bot-1', expectedCanonicalSessionId: null, expectedProfileVersion: 1 });
+    vi.mocked(emitSessionCreated).mockClear();
+    const run = await ensureBotRoutineLaneSession({ botId: 'bot-1', routineId: 'routine-fixture-0001:run-1', title: 'Nightly', hidden: true });
+    const lane = await ensureBotRoutineLaneSession({ botId: 'bot-1', routineId: 'routine-fixture-0002', title: 'Standing' });
+    if (!run.ok || !lane.ok) throw new Error('lane creation failed');
+    const hiddenAt = h.sqlite!.prepare('SELECT hidden_at FROM sessions WHERE id = ?').pluck();
+    expect(hiddenAt.get(run.sessionId)).toEqual(expect.any(Number));
+    expect(hiddenAt.get(lane.sessionId)).toBeNull();
+    expect(emitSessionCreated).toHaveBeenCalledExactlyOnceWith(lane.sessionId);
   });
 
   it('creates one IM channel lane per route key, notifies the task list and keeps it out of private history search', async () => {

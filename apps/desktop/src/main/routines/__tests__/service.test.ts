@@ -122,6 +122,7 @@ it('dispatches into the routine lane and records its task for inspection', async
   // persistent 专线承载上下文，永不自动删（只归档）。
   expect(mock.deleteRoutineSession).not.toHaveBeenCalled();
   expect(mock.ensureRoutineSession).toHaveBeenCalledWith(expect.objectContaining({ botId: 'bot', routineId: routine.id }));
+  expect(mock.ensureRoutineSession.mock.calls[0][0]).not.toHaveProperty('hidden');
 });
 
 it('rebinds a stored canonical backing schedule to its independent lane before running', async () => {
@@ -149,8 +150,9 @@ it('creates and closes an isolated lane for each fresh routine trigger', async (
   });
   await routineTools.runNow('bot', routine.id);
   await vi.waitFor(async () => expect((await routineTools.history('bot', routine.id))[0].status).toBe('success'));
+  // Each trigger's lane is a hidden task: the result reaches the teammate chat and run history.
   expect(mock.ensureRoutineSession).toHaveBeenCalledWith(expect.objectContaining({
-    routineId: expect.stringMatching(new RegExp(`^${routine.id}:`)),
+    routineId: expect.stringMatching(new RegExp(`^${routine.id}:`)), hidden: true,
   }));
   expect(mock.closeRoutineSession).toHaveBeenCalledWith(expect.stringMatching(new RegExp(`^lane-${routine.id}:`)));
   // 真实跑过的 fresh 任务保留：自动化文件夹和「查看任务」要能回放完整过程。
@@ -464,6 +466,35 @@ it('disables a previously exhausted import without dispatching, while ordinary m
   expect(mock.scheduler.runNow).not.toHaveBeenCalled();
   expect(mock.storage.insert).not.toHaveBeenCalled();
 });
+/**
+ * 测试价值
+ * - 生产入口与可观察结果：getRoutineEngine 启动时读到旧版内置夜间学习（宿主执行的占位指令、exit 2 检查），
+ *   变成普通例行任务：指令与前置检查换成默认内容，主人选的每周时间与暂停保留，之后可以改。
+ * - Bug／规则依据：docs/product-rules/bot-routines.md「夜间学习例行任务」升级说明；不迁移内容的话旧规则会一直被
+ *   exit 2 跳过，夜间学习永远不再运行。
+ * - 现有覆盖缺口：引擎测试不带宿主的迁移内容；这里验证宿主接上了 legacyNightlyLearningContent。
+ * - 最小失败输入：带 builtin: nightly-learning、占位指令与 exit 2 检查、每周一触发的已存规则。
+ * - tier：unit（存储为内存 fake）。
+ */
+it('upgrades a legacy built-in nightly learning rule to the default routine content, keeping the owner\'s choices', async () => {
+  const id = 'builtin-nightly-learning-bot';
+  mock.load.mockResolvedValue({ version: 1, receipts: {}, next: {}, runs: [], routines: [{
+    id, botId: 'bot', builtin: 'nightly-learning', builtinVersion: 1, revision: 2, createdAt: 1, updatedAt: 1,
+    name: '夜间学习', enabled: false, silentWhenIdle: true,
+    prompt: 'Nightly learning runs inside the host: tidy this teammate\'s memories and Skills from conversations since the last run.',
+    preRunHook: { command: 'exit 2', timeoutMs: 10_000 },
+    triggers: [{ id: 'nightly-weekly', kind: 'cron', expression: '30 3 * * 1', timezone: 'Pacific/Auckland' }],
+  }] } as unknown as RoutineState);
+  mock.profiles = [{ id: 'bot', status: 'active' }];
+  await getRoutineEngine();
+  const [routine] = await routineTools.list('bot');
+  expect(routine).toMatchObject({ id, enabled: false, sessionMode: 'fresh',
+    triggers: [{ expression: '30 3 * * 1' }], preRunHook: { command: expect.stringContaining('ownerActiveAt') } });
+  expect(routine!.builtin).toBeUndefined();
+  expect(routine!.prompt).toContain('整理你自己的长期记忆和个人技能');
+  expect((await routineTools.save('bot', { ...routine!, prompt: 'Only tidy feedback memories.' }, id)).prompt).toBe('Only tidy feedback memories.');
+});
+
 it('disables a one-shot reminder after it fires and is delivered, leaving no pending time', async () => {
   vi.useFakeTimers();
   await getRoutineEngine();

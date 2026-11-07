@@ -41,12 +41,10 @@ import {
 } from '../../shared/botAutonomy.js';
 import { buildTodoCheckRoutineInput, localizedLegacyTodoCheck, todoCheckRoutineId } from '../bot-autonomy/todoCheckRoutine.js';
 import {
-  NIGHTLY_LEARNING_BUILTIN_VERSION,
   buildNightlyLearningRoutineInput,
   builtinNightlyLearningRoutineId,
+  legacyNightlyLearningContent,
 } from '../bot-autonomy/nightlyLearningRoutine.js';
-import type { NightlyLearningFrequency } from '../../shared/botNightlyLearning.js';
-import { readNightlyLearningState, updateNightlyLearningState } from '../maker-ipc/botNightlyLearningState.js';
 
 /** Bootstrap supplies live getters without a service -> scheduler -> IPC dependency cycle. */
 export interface RoutineHostDeps {
@@ -57,7 +55,7 @@ export interface RoutineHostDeps {
   finishImportedAutomation?: typeof import('../bot-import/automationRuntime.js').finishImportedAutomation;
   recoverImports?: () => Promise<void>;
   getBot(botId: string): Promise<{ status: string; canonicalSessionId?: string | null }>;
-  ensureRoutineSession(input: { botId: string; routineId: string; title: string; modelOverride?: RoutineModel | null }): Promise<{ ok: true; sessionId: string; created: boolean } | { ok: false; message: string }>;
+  ensureRoutineSession(input: { botId: string; routineId: string; title: string; modelOverride?: RoutineModel | null; hidden?: boolean }): Promise<{ ok: true; sessionId: string; created: boolean } | { ok: false; message: string }>;
   closeRoutineSession?(sessionId: string): Promise<void>;
   /**
    * Fresh 任务未被派发给模型时回收：它与普通任务一样出现在任务列表里，
@@ -191,12 +189,6 @@ async function execute(scope: string, routine: Routine, run: RoutineRun, signal:
     if (off.includes(skill)) return { skipped: true };
   }
   if (!canDispatch()) return { deferred: true };
-  // 夜间学习在宿主里执行，不派到伙伴主对话；没有新对话时不调用模型，直接记一次跳过。
-  if (routine.builtin === 'nightly-learning') {
-    const { runNightlyLearning } = await import('../maker-ipc/botNightlyLearning.js');
-    assertScope(scope);
-    return runNightlyLearning(routine.botId, { manual: run.triggerIds.includes('manual') });
-  }
   // Persisted batches can predate an upgrade, opt-out or reassignment. Never replay their
   // task summaries under an obsolete follow-up choice. Manual runs remain explicit actions.
   let events = run.events;
@@ -268,12 +260,14 @@ async function execute(scope: string, routine: Routine, run: RoutineRun, signal:
   }
   const persistent = routine.sessionMode !== 'fresh';
   // Fresh mode still creates a host-owned lane so it inherits the same bot
-  // permissions and model route; the lane is closed after this trigger.
+  // permissions and model route; the lane is closed after this trigger. It is a
+  // hidden task: results reach the teammate chat, and run history opens the task.
   const lane = await getRoutineHost().ensureRoutineSession({
     botId: routine.botId,
     routineId: persistent ? routine.id : `${routine.id}:${randomUUID()}`,
     title: routine.name,
     modelOverride: routine.modelOverride,
+    ...(persistent ? {} : { hidden: true }),
   });
   assertScope(scope);
   if (!lane.ok) throw new Error(lane.message);
@@ -462,6 +456,7 @@ export async function getRoutineEngine(): Promise<RoutineEngine> {
     const engine = new RoutineEngine({
       load: async () => saved,
       legacyTodoCheckContent: localizedLegacyTodoCheck,
+      legacyNightlyLearningContent,
       save: async (state) => {
         assertScope(scope);
         if (epoch !== generation) throw new Error('Routine service was reset');
@@ -747,50 +742,15 @@ export const routineTools = {
     const saved = await engine.put(botId, { name, prompt, triggers, silentWhenIdle, preRunHook, enabled }, id, routine.revision);
     return saved.enabled;
   }),
-  /** 内置「夜间学习」：这台电脑上的那一条（不是主力电脑或伙伴暂停时不存在）。 */
-  nightlyLearningRoutine: (botId: string) => withBot(botId, (engine) =>
-    engine.list(botId).find((routine) => routine.id === builtinNightlyLearningRoutineId(botId)) ?? null),
-  /** 开关只切换 enabled；关掉只是暂停，再打开恢复同一条。 */
-  setNightlyLearning: (botId: string, enabled: boolean) => withBot(botId, async (engine, scope) => {
-    const routine = await ensureNightlyLearningBuiltin(engine, botId);
-    assertScope(scope);
-    if (!routine) throw new Error('Nightly learning runs on the teammate\'s home computer only');
-    if (routine.enabled === enabled) return enabled;
-    const { name, prompt, triggers, silentWhenIdle, preRunHook } = routine;
-    return (await engine.put(botId, { name, prompt, triggers, silentWhenIdle, preRunHook, enabled }, routine.id, routine.revision)).enabled;
-  }),
-  /** 频率只存用户改过的值（每天是默认，选回每天即删除），再按新频率重写内置规则，不改开关。 */
-  setNightlyLearningFrequency: (botId: string, frequency: NightlyLearningFrequency) => withBot(botId, async (engine, scope) => {
-    await updateNightlyLearningState(ownerScopedUserDataPath(), botId, (state) => {
-      if ((state.frequency ?? 'daily') === frequency) return null;
-      if (frequency === 'daily') delete state.frequency;
-      else state.frequency = frequency;
-      return state;
-    });
-    assertScope(scope);
-    await ensureNightlyLearningBuiltin(engine, botId);
-    return frequency;
-  }),
-  /** 「现在整理」：作为一次手动运行排进例行任务队列，不看对话计数。 */
-  runNightlyLearningNow: (botId: string) => withBot(botId, async (engine) => {
-    const routine = await ensureNightlyLearningBuiltin(engine, botId);
-    if (!routine) throw new Error('Nightly learning runs on the teammate\'s home computer only');
-    return engine.runNow(botId, routine.id, routine.revision);
-  }),
 };
 
 /**
- * 按模板落地内置「夜间学习」：不存在时建（默认开），频率或模板版本变化时重写，保留用户的开关选择。
- * 时区沿用已有规则里记下的那个，只在第一次创建时取这台电脑当时的时区。
+ * 默认的「夜间学习」：每个伙伴只按默认内容建一次（之后可改可删，删掉不重建）。时区取这台电脑当时的时区。
  */
-export async function ensureNightlyLearningBuiltin(engine: RoutineEngine, botId: string): Promise<Routine | null> {
+export async function seedNightlyLearning(engine: RoutineEngine, botId: string): Promise<Routine | null> {
   if (isCompanionShadowed(botId)) return null;
-  const id = builtinNightlyLearningRoutineId(botId);
-  const existing = engine.list(botId).find((routine) => routine.id === id);
-  const existingTimezone = existing?.triggers.find((trigger) => trigger.kind === 'cron')?.timezone;
-  const timezone = existingTimezone || Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC';
-  const frequency = (await readNightlyLearningState(ownerScopedUserDataPath(), botId))?.frequency ?? 'daily';
-  return engine.ensureBuiltin(botId, 'nightly-learning', buildNightlyLearningRoutineInput(frequency, timezone), id, NIGHTLY_LEARNING_BUILTIN_VERSION);
+  const timezone = Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC';
+  return engine.seedOnce(botId, buildNightlyLearningRoutineInput(timezone), builtinNightlyLearningRoutineId(botId));
 }
 
 /** A stopped/crashed plugin must not continue to appear as a listening source. */

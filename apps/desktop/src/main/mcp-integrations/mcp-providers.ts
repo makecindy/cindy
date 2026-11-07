@@ -111,6 +111,7 @@ import { searchChatHistoryHybrid } from '../localDb/chatHistorySearch.js';
 import { resolveBotHistorySessionIds } from '../localDb/botHistoryScope.js';
 import {
   listBotSkillsForSession,
+  setBotSkillEnabledForSession,
   saveBotSkillForSession,
 } from '../maker-ipc/botSkillService.js';
 import {
@@ -1488,6 +1489,7 @@ export function createDesktopMcpProviders(deps: DesktopMcpProvidersDeps): LiziMc
           return result;
         },
         list: (params) => listBotSkillsForSession(params),
+        setEnabled: (params) => setBotSkillEnabledForSession(params),
       },
       // 工作台观察范围与行动授权分开：角色只影响可见性，写入还需 Host 的具体授权。
       // 授权在 botWorkbenchAccess 里逐次确定性校验;投递复用 send_to_session 的同一条宿主路径。
