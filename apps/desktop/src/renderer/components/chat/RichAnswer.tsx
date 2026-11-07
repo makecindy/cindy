@@ -453,9 +453,9 @@ function RichAnswerDocument({
                 </Button>
               ))}
             </div>
-            {node.children.map((child) => (
+            {node.children.map((child, index) => (
               <div key={child} role="tabpanel" hidden={selected !== child}>
-                {render(child)}
+                {children[index]}
               </div>
             ))}
           </div>
