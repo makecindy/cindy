@@ -72,6 +72,45 @@ it('allows clearing an error without retry content', async () => {
   await show({ projection: { ...projection, errorRetryText: null } });
   expect(button('retry').disabled).toBe(true); expect(button('clearError').disabled).toBe(false);
 });
+// 测试价值
+// - 生产入口与可观察结果：渲染 InlineQueueSection；匹配的队首恢复记录显示可取消发送按钮，点击后把队首 clientId 交给现有移除入口。
+// - Bug／规则依据：Issue #7090 的 precondition 错误会恢复队首并阻塞后续输入。
+// - 现有覆盖缺口：相邻用例只覆盖重试、清除和继续，没有覆盖 queue-head 恢复记录的放弃路径。
+// - 最小失败输入：error 存在、recovery.kind 为 queue-head 且 clientId 等于 pendingQueue[0]；不匹配或 active-turn 不应显示按钮。
+// - tier：unit；直接渲染生产组件并检查用户可触发的回调。
+// - 实测耗时：从 apps/mobile 单独运行本文件 32.92s（Vitest 收集 12.77s、执行 107ms、环境 19.67s）；复用现有 jsdom 组件测试文件，无新增模块初始化。
+it('offers discard only for the queue head identified by recovery', async () => {
+  const discard = vi.fn();
+  const queued = { clientId: 'blocked-head' } as InputProjection['pendingQueue'][number];
+  await show({
+    projection: { ...projection, pendingQueue: [queued], recovery: { kind: 'queue-head', clientId: 'blocked-head' } },
+    onDiscardBlockedQueueHead: discard,
+  });
+  const discardButton = button('discardBlockedQueueHead');
+  expect(discardButton.disabled).toBe(false);
+  await act(async () => discardButton.click());
+  expect(discard).toHaveBeenCalledExactlyOnceWith('blocked-head');
+
+  await show({
+    projection: { ...projection, pendingQueue: [queued], recovery: { kind: 'queue-head', clientId: 'stale-id' } },
+    onDiscardBlockedQueueHead: discard,
+  });
+  expect(button('discardBlockedQueueHead')).toBeNull();
+
+  await show({
+    projection: { ...projection, pendingQueue: [queued], recovery: { kind: 'active-turn', clientId: 'blocked-head' } },
+    onDiscardBlockedQueueHead: discard,
+  });
+  expect(button('discardBlockedQueueHead')).toBeNull();
+
+  await show({
+    busy: true,
+    projection: { ...projection, pendingQueue: [queued], recovery: { kind: 'queue-head', clientId: 'blocked-head' } },
+    onDiscardBlockedQueueHead: discard,
+  });
+  expect(button('discardBlockedQueueHead').disabled).toBe(true);
+  expect(discard).toHaveBeenCalledOnce();
+});
 // Scheduler failures release the original recovery record. The real error UI
 // must activate the manual continuation callback while retaining its busy gate.
 it('continues a settled error without replaying its old scheduled input', async () => {
