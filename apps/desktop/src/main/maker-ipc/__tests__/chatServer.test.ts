@@ -1715,7 +1715,8 @@ describe('Chat Server result delivery and refresh', () => {
     expect(fixture.handle.mock.calls.filter(([, , body]) => body?.action === 'fail')).toHaveLength(1);
   });
 
-  // A local attachment refusal still publishes one safe reply body.\r\n  it('keeps the reply text when a local reply file is refused', async () => {
+  // A local attachment refusal still publishes one safe reply body exactly once.
+  it('keeps the reply text when a local reply file is refused', async () => {
     replyFiles.prepare.mockRejectedValue(new Error('ATTACHMENT_UNAVAILABLE'));
     await startFileReply();
     await service.settleLaneTurn({ ...terminal, resultText: '[Report](./report.pdf)' });
