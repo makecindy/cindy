@@ -406,12 +406,9 @@ export function createDesktopTaskActionAuthorizer(deps: {
         // Changing how another task runs is the owner's call on any task, not only a teammate's:
         // a turn started by another task or a plugin shows the same card.
         const othersTurn = !caller.botId && input.automatic === true && !scheduled && !input.ownerContinuation;
-        const classified = principal === 'autonomous' ? taskActionRisk(call, { routineEnabled: routine?.enabled, routinePrompt: routine?.prompt,
+        const risk = principal === 'autonomous' ? taskActionRisk(call, { routineEnabled: routine?.enabled, routinePrompt: routine?.prompt,
           routineBuiltin: routine?.builtin, routinePreRunCommand: routine?.preRunCommand, schedule, callerSessionId: sessionId })
           : othersTurn && taskActionChangesOtherTask(call, sessionId) ? 'other-task' as const : undefined;
-        // Under Ask or Auto the engine's own approval already puts this call before the owner when
-        // it is not clearly wanted; a second card would ask twice. Full Access has no such step.
-        const risk = classified === 'other-task' && permission?.permissionMode !== 'bypassPermissions' ? undefined : classified;
         const scheduleForConfirmation = schedule
           ? (({ mutationGuard: _mutationGuard, ...display }) => display)(schedule)
           : undefined;

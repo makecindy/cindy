@@ -919,12 +919,6 @@ describe('teammate turn principal', () => {
     const effect = vi.fn(async () => 'changed');
     expect(JSON.stringify(await withToolCallAuthority(h.authorize, changes[2]!, effect))).toContain('USER_CANCELLED');
     expect(effect).not.toHaveBeenCalled();
-    // Under Auto the engine's own review already asks; no second card.
-    live(h, 'auto');
-    h.confirm.mockClear();
-    expect(await withToolCallAuthority(h.authorize, changes[2]!, async () => 'changed')).toBe('changed');
-    expect(h.confirm).not.toHaveBeenCalled();
-    live(h);
     // Its own task, and a turn the owner started, stay ordinary.
     h.confirm.mockClear();
     expect(await withToolCallAuthority(h.authorize, helper('set_session_runtime', { model: 'self' }), async () => 'changed')).toBe('changed');
