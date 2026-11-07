@@ -577,6 +577,7 @@ App 内不加扫码组件：加一个会改变原生指纹，需要冷更。
   - 两种 Nginx 后端均启用代理模式，Nginx 覆盖客户端来源头；中转仅对回环代理传来的单个合法 IP 按来源限流。API 单独关闭访问与错误日志，并隔离原站点的自定义/递归错误页，避免后端掉线时将签名媒体地址写入原网站日志；原网站的错误页和日志照常保留。
   - 配置、备份与导出的证书仅存在服务器的 `/etc/cindy-relay/nginx` 私有目录；`nginx -t` 通过后平滑重载。证书按代写入私有目录，systemd timer 每 5 分钟检查并原子切换引用。
   - 验证成功才提交事务；每次配置或服务单元写入前记录前后指纹，失败或任意写入点中断后，重新部署或卸载可恢复未完成事务。恢复检测到管理员并发修改时保留备份并停止，不能覆盖新修改。卸载撤销本次补丁，不停止 Nginx。
+  - 续期 timer 首次触发按 timer 启动计时（`OnActiveSec=1min`，2026-11-02 真实云服务器）：原先用 `OnBootSec=1min`，服务器开机超过 1 分钟时 commit 前的 `enable --now` 立即触发 renew，抢到 `operation.lock`，commit 报 `Nginx deployment is already running` 后整轮回滚。timer 仍在 commit 前启动：commit 会删除回滚快照，之后的失败无法回滚。
   - 不支持安全解析的配置（例如没有精确地址的正则站点名、复杂的自定义 ACME 处理器或多个 master）明确失败，不猜测、不覆盖。
   - 实现：`packages/device-link-relay/src/nginx.ts`；回归：同目录 `__tests__/nginx.test.ts` 与 Desktop `selfHostedRelayDeploy.test.ts`；真实 Nginx 验证：`pnpm --filter @cindy/device-link-relay run interop:nginx`（Docker 内运行，不访问用户服务器）。
   - 已验证：中转内核 44 例、Desktop 部署与运行时 22 例及两包类型检查通过。真实 Nginx 容器覆盖仅 HTTP、仅 HTTPS、默认 HTTP 监听、NAT 公网 DNS、具体 IP 监听、域名的隐式默认网站、共享块的其他 IP/HTTP 名字、无关 IP 网站保留、其他 ACME 客户端（含中转掉线）、REST、WebSocket、大于 1 MB 的上传、伪造来源头与限流隔离、正常及后端掉线时的签名地址日志保护、证书轮换、升级回滚、已有 HTTPS 复用和卸载恢复。缺陷回归已先复现后修复；默认监听的真实 Nginx 回归复现原站从 200 变为 404，修复后保留原页面。测试使用容器内临时证书，生产 CA 签发和真实云服务器部署仍未验证。
