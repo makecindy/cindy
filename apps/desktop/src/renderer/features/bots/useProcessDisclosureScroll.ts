@@ -42,6 +42,8 @@ export function useProcessDisclosureScroll(
       content.style.minHeight = `${viewportContentHeight(event.currentTarget, content)}px`;
     },
     onWheel(event: WheelEvent<HTMLDivElement>) {
+      // Portalled previews retain React ancestry, but own their own wheel input.
+      if (event.defaultPrevented || !(event.target instanceof Node) || !event.currentTarget.contains(event.target)) return;
       if (event.deltaY < 0) stickToBottom.current = false;
       if (inspecting.current && event.deltaY > 0 && atBottom(event.currentTarget)) {
         resumeFollow();

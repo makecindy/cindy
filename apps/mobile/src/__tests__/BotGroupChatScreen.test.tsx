@@ -2260,6 +2260,34 @@ it.each(['jump', 'send'])('releases nested work-area space on outer %s without c
   expect(byId('botGroup.work.toggle')!.getAttribute('aria-label')).toContain('groupChat.work.collapse');
 });
 
+// Unit / #9249 r4500619904: a null-rendered WorkArea stays mounted across idle.
+// The next member's round must not inherit the previous process's reserved footer.
+it('releases nested process space across idle and the next round without outer navigation', async () => {
+  h.speakerDisclosure = true;
+  const active = group({ round: { status: 'running', canContinue: false, speakers: [
+    { botId: 'abu', sessionId: 's-abu', activity: 'reply', executionStatus: 'running' },
+  ] } });
+  await render(active);
+  await click('botGroup.work.toggle');
+  await act(async () => {
+    h.scrolls['botGroup.work.details'].onLayout({ nativeEvent: { layout: { height: 220 } } });
+    h.scrolls['botGroup.work.details'].onContentSizeChange(390, 500);
+    h.scrolls['botGroup.work.details'].onScroll({ nativeEvent: {
+      contentOffset: { y: 280 }, contentSize: { height: 500 }, layoutMeasurement: { height: 220 },
+    } });
+  });
+  await click('fixture.processCollapse');
+  expect(byId('botGroup.work.details')!.querySelector('[style*="height: 300px"]')).not.toBeNull();
+  await render(group());
+  expect(byId('botGroup.work')).toBeNull();
+  await render({ ...active, round: { ...active.round, speakers: [
+    { botId: 'mimi', sessionId: 's-next', activity: 'reply', executionStatus: 'running' },
+  ] } });
+  expect(byId('botGroup.work.details')!.querySelector('[style*="height: 300px"]')).toBeNull();
+  expect(byId('botGroup.work.toggle')!.getAttribute('aria-label')).toContain('groupChat.work.expand');
+  expect(h.chat.act).not.toHaveBeenCalled();
+});
+
 // PR #7806 integration fixture: the real screen/work area consumes server state.
 // A stop receipt alone must not hide work; only the next idle snapshot clears both surfaces.
 it('keeps one group stop for concurrent work and clears header and strip on the idle snapshot', async () => {

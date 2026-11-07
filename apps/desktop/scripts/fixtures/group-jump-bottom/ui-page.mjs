@@ -130,14 +130,19 @@ export default {
 async function checkProcessDisclosure(page, ui) {
   await page.emulateMedia({ reducedMotion: 'no-preference' });
   let surface = page;
+  const preview = {
+    content: '```mermaid\ngraph LR; A-->B\n```',
+    attachments: [{ id: 'wheel-preview', name: 'wheel-preview.png', category: 'image', mimeType: 'image/png', size: 68,
+      path: null, url: 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aN1cAAAAASUVORK5CYII=' }],
+  };
   if (ui.data.threadPanel) {
-    await page.evaluate(async () => {
+    await page.evaluate(async preview => {
       const { group } = await window.electronAPI.maker.getBotGroup('fixture-group');
       const answer = { ...group.messages[0], replyCount: 30 };
       group.messages = [answer];
       const replies = Array.from({ length: 30 }, (_, i) => ({ ...answer, id: `reply-${i}`,
         threadRootId: answer.id, sequence: i + 2, content: `Reply ${i + 1}`,
-        process: i === 29 ? answer.process : undefined }));
+        process: i === 29 ? answer.process : undefined, ...(i === 28 ? { ...preview, authorKind: 'user', isSelf: true } : {}) }));
       window.__uiPage.threadReads = [];
       window.electronAPI.maker.chatServer.thread = async input => {
         window.__uiPage.threadReads.push(input.markRead);
@@ -150,21 +155,22 @@ async function checkProcessDisclosure(page, ui) {
         return { ok: true, messageId: 'sent-reply' };
       };
       window.__uiPage.emit('botGroupChanged', { groupId: group.id, change: 'messages' });
-    });
+    }, preview);
     await page.locator('[data-thread-preview]').first().click();
     surface = page.locator('aside.thread-panel');
   }
   const heading = surface.locator('[data-teammate-process] > button').last();
   await heading.waitFor();
   if (ui.data.processRecord && !ui.data.threadPanel) {
-    await page.evaluate(async () => {
+    await page.evaluate(async preview => {
       const { group } = await window.electronAPI.maker.getBotGroup('fixture-group');
       const answer = group.messages[0];
       group.messages = [...Array.from({ length: 30 }, (_, i) => ({ ...answer,
         id: `history-${i}`, sequence: i + 1, content: `Checked record ${i + 1}`, process: undefined,
+        ...(i === 29 ? { ...preview, authorKind: 'user', isSelf: true } : {}),
       })), { ...answer, sequence: 31 }];
       window.__uiPage.emit('botGroupChanged', { groupId: group.id, change: 'messages' });
-    });
+    }, preview);
     await page.locator('[data-bot-group-message-id="history-29"]').waitFor();
   } else if (!ui.data.processRecord) {
     assert.equal(await page.locator('[data-teammate-process]').last().locator('.animate-spinner').count(), 1,
@@ -177,6 +183,14 @@ async function checkProcessDisclosure(page, ui) {
     const el = document.querySelector('[data-process-scroll-check]');
     return el.scrollHeight > el.clientHeight && Math.abs(el.scrollHeight - el.scrollTop - el.clientHeight) < 2;
   });
+  if (ui.data.processRecord || ui.data.threadPanel) {
+    const image = surface.getByRole('button', { name: 'wheel-preview.png', exact: true });
+    const diagram = surface.getByRole('button', { name: await ui.t('chat.mermaid.clickToZoom'), exact: true });
+    // Keep fixture thumbnails compact so real pointer input can open them next to
+    // the inspected heading without scrolling the underlying list first.
+    await image.evaluate(el => { el.style.height = '32px'; el.style.width = '32px'; });
+    await diagram.evaluate(el => { el.style.maxHeight = '32px'; el.style.overflow = 'hidden'; });
+  }
   const composerElement = ui.data.threadPanel ? surface.locator('textarea') : surface.locator('[data-chat-composer-stack]');
   const composer = await composerElement.boundingBox();
   for (let cycle = 0; cycle < 4; cycle++) {
@@ -198,6 +212,25 @@ async function checkProcessDisclosure(page, ui) {
     assert.ok(drift <= 1, `process heading moved ${drift}px during toggle ${cycle}`);
     assert.deepEqual(await composerElement.boundingBox(), composer);
     await ui.capture(`process-toggle-${cycle}`);
+  }
+  if (ui.data.processRecord || ui.data.threadPanel) {
+    for (const kind of ['image', 'diagram']) {
+      const trigger = surface.getByRole('button', { name: kind === 'image' ? 'wheel-preview.png' : await ui.t('chat.mermaid.clickToZoom'), exact: true });
+      const before = await timeline.evaluate(el => ({ top: el.scrollTop, reserve: el.firstElementChild.style.minHeight }));
+      assert.ok(before.reserve, 'preview starts during process inspection');
+      await trigger.click();
+      const overlay = page.locator('[data-lightbox-layer]');
+      await overlay.waitFor();
+      const bounds = await overlay.boundingBox();
+      await page.mouse.move(bounds.x + bounds.width / 2, bounds.y + bounds.height / 2);
+      await page.mouse.wheel(0, 120);
+      await page.evaluate(async () => { for (let i = 0; i < 8; i++) await new Promise(requestAnimationFrame); });
+      assert.deepEqual(await timeline.evaluate(el => ({ top: el.scrollTop, reserve: el.firstElementChild.style.minHeight })), before,
+        `${kind} preview wheel must not resume the background list`);
+      await ui.capture(`preview-${kind}-preserves-inspection`);
+      await overlay.getByRole('button', { name: await ui.t('chat.lightbox.close'), exact: true }).click();
+      await overlay.waitFor({ state: 'detached' });
+    }
   }
   const reserve = await timeline.evaluate(el => parseFloat(el.firstElementChild.style.minHeight));
   const box = await timeline.boundingBox();

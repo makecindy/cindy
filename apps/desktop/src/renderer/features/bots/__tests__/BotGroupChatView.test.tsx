@@ -3881,6 +3881,51 @@ describe('thread previews and posting to the main chat', () => {
   }
   beforeEach(() => { vi.stubGlobal('ResizeObserver', class { observe() {} disconnect() {} }); });
 
+  // Unit / #9249 r4500619897: actual portalled previews bubble React wheel
+  // events through the real main/topic scroller. Existing preview cases only cover Escape.
+  it.each(['main', 'topic'])(
+    'keeps %s process inspection while wheeling its image preview', async context => {
+      const process = { groupId: 'g1', executionId: 'preview-work', sessionId: 'work', clientId: 'note', deviceId: 'home' };
+      const answer = msg({ id: 'answer', sequence: 2, authorKind: 'bot', authorBotId: 'mimi',
+        content: 'Process result', process,
+      });
+      const attachment = msg({ id: 'attachment-message', sequence: 3, content: 'Preview image',
+        attachments: [{ id: 'image', name: 'photo.png', category: 'image', mimeType: 'image/png',
+          size: 10, url: 'cindy-media://blobs/photo.png', path: null }],
+      });
+      const root = msg({ id: 'root', content: 'Root' });
+      const data = detail({ serverBacked: true, messages: context === 'topic' ? [root] : [answer, attachment] });
+      data.members[0] = { ...data.members[0]!, isOwned: true, homeDeviceId: 'home' };
+      mocks.getBotGroup.mockResolvedValue({ ok: true, group: data });
+      mocks.remoteInvoke.mockResolvedValue([]);
+      mocks.thread.mockResolvedValue({ ok: true, root, replies: [answer, attachment], hasMore: false });
+      renderView();
+      if (context === 'topic') fireEvent.click((await screen.findAllByRole('button', { name: 'bots.groupChat.server.startTopic' }))[0]!);
+      const surface = context === 'topic' ? screen.getByRole('complementary') : await screen.findByTestId('bot-group-timeline');
+      const scroller = (context === 'topic' ? surface.querySelector('div.overflow-y-auto') : surface) as HTMLDivElement;
+      fireEvent.load(await within(surface).findByAltText('photo.png'));
+      Object.defineProperties(scroller, {
+        scrollHeight: { configurable: true, value: 1400 }, clientHeight: { configurable: true, value: 600 },
+      });
+      const content = scroller.firstElementChild as HTMLElement;
+      vi.spyOn(content, 'getBoundingClientRect').mockReturnValue({ height: 1400 } as DOMRect);
+      scroller.scrollTop = 800; fireEvent.scroll(scroller);
+      await act(async () => fireEvent.click(surface.querySelector('button[data-scroll-disclosure-header]')!));
+      expect(content.style.minHeight).toBe('1400px');
+      fireEvent.click(within(surface).getByRole('button', { name: 'photo.png' }));
+      await screen.findByRole('button', { name: 'chat.lightbox.close' });
+      const preview = document.querySelector('[data-lightbox-layer]') as HTMLElement;
+      expect(scroller.contains(preview)).toBe(false);
+      // The actual lightbox consumes the native event; React still bubbles it to the list.
+      fireEvent.wheel(preview, { deltaY: 80, bubbles: true, cancelable: true });
+      expect(content.style.minHeight).toBe('1400px');
+      expect(scroller.scrollTop).toBe(800);
+      fireEvent.click(screen.getByRole('button', { name: 'chat.lightbox.close' }));
+      fireEvent.wheel(scroller, { deltaY: 80 });
+      expect(content.style.minHeight).toBe('');
+    },
+  );
+
   // Unit / PR #9249 r4500563155: enter inspection through the real process
   // heading, receive a reply without reading it, then return with no scroll
   // displacement. Existing topic tests only acknowledge through onScroll.

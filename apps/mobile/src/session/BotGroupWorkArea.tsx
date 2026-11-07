@@ -41,8 +41,9 @@ export function BotGroupWorkArea({ group, deviceId, online, identityFor, onStop,
   // Keep the current work area and its subscriptions mounted through navigation.
   useEffect(detailViewport.resume, [resumeRequest, detailViewport.resume]);
   useEffect(() => {
+    detailViewport.resume();
     setExpandedScope(null);
-  }, [disclosureScope, group.round.status]);
+  }, [disclosureScope, group.round.status, detailViewport.resume]);
   const { invoke, openLink, connectionEpoch, presenceVersion, getPresenceAvailability, subscribe, unsubscribe, onRemoteResourceChanged } = useDeviceLink();
   const candidates = group.round.speakers.flatMap(speaker => {
     const member = group.members.find(member => member.botId === speaker.botId);

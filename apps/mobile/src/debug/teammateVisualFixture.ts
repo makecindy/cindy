@@ -59,6 +59,9 @@ const glanceTodo = {
 
 export type GroupRunScene = 'single' | 'multiple' | 'stop-pending' | 'stop-failure' | 'stop-idle';
 let runSceneStopped = false;
+// Foreground refreshes deliver running -> idle -> another member's running round
+// without remounting the real group page or using its send/jump controls.
+let processRoundSnapshot = 0;
 const RUN_SCENE_IDS: Record<string, GroupRunScene> = {
   'visual-run-single': 'single', 'visual-run-multiple': 'multiple',
   'visual-run-stop-pending': 'stop-pending', 'visual-run-stop-failure': 'stop-failure',
@@ -255,15 +258,20 @@ export function teammateVisualFixture(channel: string, args: unknown[], now = FI
     } }],
   };
   if (channel === REMOTE_RESOURCE_GET_CHANNEL && request?.ref?.collectionId === BOT_GROUP_REMOTE_COLLECTION_ID
-    && request.ref.id === 'visual-session-process') return {
-    ref: { collectionId: BOT_GROUP_REMOTE_COLLECTION_ID, kind: BOT_GROUP_REMOTE_RESOURCE_KIND, id: request.ref.id },
-    revision: 'visual-1', display: { title: '任务入口演示群' }, actions: [], links: [],
-    blocks: [{ id: 'chat', primitive: BOT_GROUP_CHAT_PRIMITIVE, fallbackMarkdown: 'Cindy 正在工作', data: {
-      id: request.ref.id, name: '任务入口演示群', members: [{ botId: 'cindy-default', name: 'Cindy', status: 'active' }],
-      messages: [], plans: [], createdAt: now, updatedAt: now,
-      round: { status: 'running', canContinue: false, speakers: [{ botId: 'cindy-default', activity: 'reply', sessionId: VISUAL_TEAMMATE_SESSION_ID }] },
-    } }],
-  };
+    && ['visual-session-process', 'visual-session-process-rollover'].includes(request.ref.id ?? '')) {
+    const snapshot = request.ref.id === 'visual-session-process-rollover' ? ++processRoundSnapshot : 1;
+    return {
+      ref: { collectionId: BOT_GROUP_REMOTE_COLLECTION_ID, kind: BOT_GROUP_REMOTE_RESOURCE_KIND, id: request.ref.id },
+      revision: `visual-${snapshot}`, display: { title: '任务入口演示群' }, actions: [], links: [],
+      blocks: [{ id: 'chat', primitive: BOT_GROUP_CHAT_PRIMITIVE, fallbackMarkdown: 'Cindy 正在工作', data: {
+        id: request.ref.id, name: '任务入口演示群', members: [{ botId: 'cindy-default', name: 'Cindy', status: 'active' },
+          ...(request.ref.id === 'visual-session-process-rollover' ? [{ botId: 'abu', name: 'Abu', status: 'active' }] : [])],
+        messages: [], plans: [], createdAt: now, updatedAt: now,
+        round: snapshot === 2 ? { status: 'idle', canContinue: true, speakers: [] }
+          : { status: 'running', canContinue: false, speakers: [{ botId: snapshot > 2 ? 'abu' : 'cindy-default', activity: 'reply', sessionId: VISUAL_TEAMMATE_SESSION_ID }] },
+      } }],
+    };
+  }
   // #7806 run-strip scenes: the four round states the screenshot matrix needs, synthetic only.
   if (channel === REMOTE_RESOURCE_GET_CHANNEL && request?.ref?.collectionId === BOT_GROUP_REMOTE_COLLECTION_ID
     && request.ref.id && RUN_SCENE_IDS[request.ref.id]) return runSceneResource(request.ref.id, RUN_SCENE_IDS[request.ref.id], now);
