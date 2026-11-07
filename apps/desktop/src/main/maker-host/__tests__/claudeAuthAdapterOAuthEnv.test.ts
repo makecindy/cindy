@@ -105,6 +105,7 @@ vi.mock('../shared-global-skills.js', () => ({
   prepareSharedGlobalSkillLinks: async () => ({ warnings: [], persistentWarnings: [] }),
   prepareSharedProjectSkillLinks: async () => ({ warnings: [] }),
   sharedGlobalSkillLinksFingerprint: async () => 'test',
+  shouldProjectToClaudeSkills: async () => true,
   SHARED_GLOBAL_SKILL_SYNC_DISABLED_NOTICE: 'sync disabled',
 }));
 

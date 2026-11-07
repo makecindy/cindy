@@ -30,6 +30,7 @@ vi.mock('../../skillhub/installService', () => ({
 vi.mock('../../maker-host/shared-global-skills.js', () => ({
   prepareSharedGlobalSkillLinks: vi.fn(async () => ({ warnings: [] })),
   prepareSharedProjectSkillLinks: vi.fn(async () => ({ warnings: [] })),
+  shouldProjectToClaudeSkills: vi.fn(async () => true),
 }));
 
 import { applyProposal } from '../apply';
@@ -87,6 +88,21 @@ describe('applyProposal', () => {
       path.join(SKILLS_DIR, 'new-skill'),
       expect.objectContaining({ origin: 'learned', provenance, authorId: 'user-1', folderHash: 'hash-abc' }),
     );
+  });
+
+  it('skips a new Claude discovery link when projection is disallowed (#9282)', async () => {
+    const shared = await import('../../maker-host/shared-global-skills.js');
+    const { ensureSymlinkToShared } = await import('../../skillhub/installService');
+    vi.mocked(shared.shouldProjectToClaudeSkills).mockResolvedValue(false);
+    try {
+      const proposalDir = await makeProposal('gate-off-skill');
+      const result = await applyProposal({ proposalDir, skillName: 'gate-off-skill', provenance });
+      expect(result.absolutePath).toBe(path.join(SKILLS_DIR, 'gate-off-skill'));
+      expect(vi.mocked(ensureSymlinkToShared)).not.toHaveBeenCalled();
+      expect(fs.existsSync(path.join(HOME, '.claude'))).toBe(false);
+    } finally {
+      vi.mocked(shared.shouldProjectToClaudeSkills).mockResolvedValue(true);
+    }
   });
 
   it('backs up an existing skill dir and reports the backup path', async () => {

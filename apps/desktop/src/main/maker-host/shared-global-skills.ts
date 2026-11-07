@@ -418,12 +418,32 @@ async function linkEntriesIntoRoot(
 }
 
 /**
+ * #9282：是否允许主动创建/写入 `~/.claude` 下的 Skill 投影。
+ *
+ * 显式 opt-in（`crossAgentSyncEnabled`，#2930）或本地已存在 `~/.claude` 配置时才
+ * 创建目录与链接；两者皆无时不创建（多引擎隔离的最小权限）。这里只决定「要不要
+ * 主动建」——存量目录与链接一律不删。
+ */
+export async function shouldProjectToClaudeSkills(
+  opts: { homeDir?: string; isCrossAgentSyncEnabled?: () => boolean } = {},
+): Promise<boolean> {
+  const homeDir = opts.homeDir ?? os.homedir();
+  if (fs.existsSync(path.join(homeDir, '.claude'))) return true;
+  if (opts.isCrossAgentSyncEnabled) return opts.isCrossAgentSyncEnabled();
+  // 延迟 import：本模块是纯 Node（无 electron 静态依赖），settings store 引
+  // electron 的 app.getPath，静态引入会拖坏单测环境。
+  const { readSharedGlobalSkillsSettings } = await import('./shared-global-skills-settings.js');
+  return readSharedGlobalSkillsSettings().crossAgentSyncEnabled;
+}
+
+/**
  * Makes global skills usable from Claude Code, Codex, and Pi without moving user data.
  *
  * Rules:
  * - ~/.agents/skills is the shared index that Cindy Codex and Pi scan.
  * - Existing ~/.claude/skills and ~/.codex/skills entries are linked into ~/.agents/skills.
- * - ~/.agents/skills and ~/.codex/skills entries are linked into ~/.claude/skills.
+ * - ~/.agents/skills and ~/.codex/skills entries are linked into ~/.claude/skills
+ *   only when Claude projection is allowed (#9282: opt-in or ~/.claude already exists).
  * - Existing non-symlink paths are never overwritten.
  */
 export async function prepareSharedGlobalSkillLinks(
@@ -433,17 +453,22 @@ export async function prepareSharedGlobalSkillLinks(
   const paths = sharedGlobalSkillsPaths(opts.homeDir);
   // #2930：跨 Agent 的「拉入」默认关闭，必须显式 opt-in（Claude→shared、
   // Codex→Claude、Codex→shared）。Cindy 自有索引向 Claude 的投影（shared→Claude）
-  // 保留，避免破坏 Ghost skill 的 .claude 兼容链接（职责分界见 skillSlot.ts）。
+  // 曾为 Ghost skill 的 .claude 兼容链接无条件保留（#3031）；#9282 起与
+  // shouldProjectToClaudeSkills 挂钩（Ghost 已收敛到私有投影，见 skillSlot.ts）。
   const crossAgentSyncEnabled = opts.isCrossAgentSyncEnabled
     ? opts.isCrossAgentSyncEnabled()
     : // 延迟 import：本模块是纯 Node（无 electron 静态依赖），settings store 引
       // electron 的 app.getPath，静态引入会拖坏单测环境。
       (await import('./shared-global-skills-settings.js'))
         .readSharedGlobalSkillsSettings().crossAgentSyncEnabled;
+  const claudeProjectionEnabled = crossAgentSyncEnabled
+    || fs.existsSync(path.join(paths.homeDir, '.claude'));
   opts.assertOwnerStable?.();
   await fsp.mkdir(paths.sharedSkillsDir, { recursive: true });
   opts.assertOwnerStable?.();
-  await fsp.mkdir(paths.claudeSkillsDir, { recursive: true });
+  if (claudeProjectionEnabled) {
+    await fsp.mkdir(paths.claudeSkillsDir, { recursive: true });
+  }
   const sharedRootCompare = (await realPathOrNull(paths.sharedSkillsDir)) ?? normalizeForCompare(paths.sharedSkillsDir);
   const claudeRootCompare = (await realPathOrNull(paths.claudeSkillsDir)) ?? normalizeForCompare(paths.claudeSkillsDir);
   const codexRootCompare = (await realPathOrNull(paths.codexSkillsDir)) ?? normalizeForCompare(paths.codexSkillsDir);
@@ -467,12 +492,14 @@ export async function prepareSharedGlobalSkillLinks(
     [],
     opts.assertOwnerStable,
   )) || changed;
-  changed = (await cleanupBrokenManagedLinks(
-    paths.claudeSkillsDir,
-    managedRoots,
-    [],
-    opts.assertOwnerStable,
-  )) || changed;
+  if (claudeProjectionEnabled) {
+    changed = (await cleanupBrokenManagedLinks(
+      paths.claudeSkillsDir,
+      managedRoots,
+      [],
+      opts.assertOwnerStable,
+    )) || changed;
+  }
 
   // 其它 Agent 根里、且不是「指向受管根」投影的用户技能，才是跨 Agent 拉入的对象。
   const claudeEntries = (await listSkillEntries('claude', paths.claudeSkillsDir))
@@ -519,17 +546,19 @@ export async function prepareSharedGlobalSkillLinks(
     persistentWarnings.push(SHARED_GLOBAL_SKILL_SYNC_DISABLED_NOTICE);
   }
 
-  const sharedEntries = await listSkillEntries('shared', paths.sharedSkillsDir);
-  const sharedToClaude = await linkEntriesIntoRoot(
-    sharedEntries,
-    paths.claudeSkillsDir,
-    false,
-    opts.assertOwnerStable,
-  );
-  actions.push(...sharedToClaude.actions);
-  warnings.push(...sharedToClaude.warnings);
-  persistentWarnings.push(...sharedToClaude.persistentWarnings);
-  changed = changed || sharedToClaude.changed;
+  if (claudeProjectionEnabled) {
+    const sharedEntries = await listSkillEntries('shared', paths.sharedSkillsDir);
+    const sharedToClaude = await linkEntriesIntoRoot(
+      sharedEntries,
+      paths.claudeSkillsDir,
+      false,
+      opts.assertOwnerStable,
+    );
+    actions.push(...sharedToClaude.actions);
+    warnings.push(...sharedToClaude.warnings);
+    persistentWarnings.push(...sharedToClaude.persistentWarnings);
+    changed = changed || sharedToClaude.changed;
+  }
 
   opts.assertOwnerStable?.();
   return {
