@@ -186,7 +186,7 @@ export function LiveCompactCell() {
               size="sm"
               compact
               type="button"
-              data-settings-search-action="opens the shadow directory in the file manager"
+              data-settings-search-action="opens the snapshot directory in the file manager"
               onClick={() => void handleOpenShadowDir()}
             >
               {t('settings.liveCompact.shadow.openButton')}
@@ -196,7 +196,7 @@ export function LiveCompactCell() {
               size="sm"
               compact
               type="button"
-              data-settings-search-action="deletes the stored shadow snapshots"
+              data-settings-search-action="deletes the stored snapshots"
               onClick={() => void handleClearShadow()}
               disabled={shadowBusy}
               aria-busy={shadowBusy || undefined}

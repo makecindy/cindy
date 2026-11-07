@@ -20,7 +20,7 @@ export const liveCompactSettings = defineSettings({
     titleKey: 'settings.liveCompact.shadow.label',
     descriptionKey: 'settings.liveCompact.shadow.description',
     sectionKey: 'settings.sections.experimental',
-    aliases: ['影子原文', '原文备份', 'shadow', 'spine', '清理压缩原文'],
+    aliases: ['影子原文', '原文备份', 'snapshots', 'spine', '清理压缩原文'],
   },
 });
 
