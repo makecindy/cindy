@@ -38,7 +38,15 @@ const r = await cindy.fetch({
 //   识别失败的真实 UTF-8 文本继续回落文本形态,未知二进制拒绝。
 //   媒体模式下 2xx 的文本响应(如轮询"生成中"JSON)自动
 //   回落文本形态给你看;非 2xx 同样回落文本,方便诊断。
-// 失败:{ ok:false, message: '原因' }(白名单外 / 凭证未配置 / 超时 / 网络错误…)
+// 失败:{ ok:false, message: '原因', errorCode? }(白名单外 / 凭证未配置 / 超时 / 网络错误…)
+//   请求已发出后的网络层失败带 errorCode,message 形如「请求失败:<原因>(<底层码>)」:
+//   NETWORK_TIMEOUT(超时,含主机到点中断「请求失败:请求超时(30000ms)」)/
+//   TLS_ERROR(证书过期、域名不匹配等,多为服务端问题)/ DNS_FAILED / CONNECTION_REFUSED /
+//   CONNECTION_RESET(连接中途断开)/ NETWORK_UNREACHABLE / NETWORK_ERROR(其余网络错误)。
+//   主机守门类失败(白名单外、凭证未配置等)不带 errorCode,message 自带处理指引。
+//   旧版主机不带 errorCode:以 errorCode 优先,缺省时按 message 处理。
+//   非幂等请求(POST 等)遇到 NETWORK_TIMEOUT / CONNECTION_RESET 时,服务端可能已执行,
+//   不要自动重放,提示用户先确认结果。
 ```
 
 **凭证语义(必读)**:你在详单里只声明"需要一条叫什么的凭证、注入到哪个请求头";
@@ -97,8 +105,7 @@ validPath:"status",validValue:"active",expiresAtPath:"expiresAtMs",expiresAtForm
 照"请重新登录"画)——详情页已如实披露,除展示外别拿它做别的;对该 key 的
 PUT/DELETE 一律 405(派生身份不可配置)。
 
-**GitHub CLI 优先凭证(source:"gh-cli",保留能力)**:仅官方 `cindy-github`
-插件可声明。主机每次 GitHub API 请求时优先复用本机 `gh auth token` 的登录态；
+**GitHub CLI 优先凭证(source:"gh-cli")**:任何已批准且身份已确认的插件实例均可声明。主机每次 GitHub API 请求时优先复用本机 `gh auth token` 的登录态；
 本机没装 gh、未登录或读取超时时,再回落到同一 key 经 `/secrets` 保存的备用 PAT。
 两种 token 都只在 Main 的 networkSlot 内存中进入请求头,插件沙箱、settings 页面、
 Renderer、Agent、KV 和日志都拿不到。设置页 GET `/secrets` 对这条 key 额外返回
@@ -120,7 +127,7 @@ audience 与组织身份由主机推导,插件清单和运行时代码都不能�
 audience/token；audience 固定为 `${orgSlug}:${ghostId}`,总长不得超过 64 字符。
 个人身份与手动导入不签发。临时例外，只对 root 实例生效：`ghostId` 精确等于 `mivo-canvas`、namespace 为 null 或尚未确认的旧 root 安装，且已装清单声明的精确 oidc-token host 仅为 `mivo-canvas.dsworks.cn` 时可解析 audience；企业 namespace 下的同名插件、其它本地插件、其它精确 host 仍不签发。已有市场
 organization 记录（含 installed:false）时必须仍走 digest，不得借例外跳过。市场账本损坏、schema 不认或该 ghostId 记录校验失败时 fail-closed，不得当成无记录。企业身份的 Forge 安装前会展示插件名、id 与精确域名，并要求手输相同 id
-确认。市场与 Forge 两条组织基座都只给 Broker 与 oidc-token、不给宿主原语。
+确认。市场与 Forge 两条组织基座提供 Broker 与 oidc-token 的资格，通用能力仍按各自声明和实例批准处理。
 该凭证必须固定声明
 `"inject": { "header": "Authorization", "format": "Bearer {value}", "hosts": [...] }`,
 且 `hosts` 必须是非空的显式子集,只允许把断言发给列出的企业服务域名。
@@ -204,22 +211,25 @@ identity.displayTemplate 时,`/oauth` 回查与连接结果里 account.label 给
 - `redirectPort`:回调固定端口。服务商要求回调 URI 与其后台注册值**精确匹配**
   (含端口,如 Atlassian)时声明,主机回调恒为 `http://127.0.0.1:<端口>/callback`;
   端口被占用时连接返回 LISTEN_FAILED(detail 带人话提示,settingsHtml 原样展示
-  即可;第一方官方内置插件会先自动结束占用进程并重试,第三方插件不享受此回收
-  ——请选一个不易撞车的端口)。声明 `tokenBroker` 时必须提供；非 broker 模式下，
+  即可；所有插件统一在主窗口展示占用程序，用户确认且进程身份复核通过后才结束它并重试)。声明 `tokenBroker` 时必须提供；非 broker 模式下，
   Google 这类允许任意 loopback 端口的服务商不用声明。
-- `tokenBroker`:资格有三路:①随包官方种子或受信任公开市场的官方插件,名称本身不构成资格；②当前组织的服务端
-  organization market 包已安装、source 为 `market`、organizationId 与当前组织一致,
+- `tokenBroker`:只发给企业绑定的安装，资格有两路：①当前组织的服务端
+  organization market 包已安装、source 为 `market`、organizationId 与当前组织一致，
   namespace 与当前组织的可信身份一致，且 release sha256 与批准 receipt 的 packageSha256 相等。
-  ③企业作者通过 `ghost_forge_install` 明确安装，Host 绑定当前组织 namespace；只有真实
-  存量待迁移安装仍使用本组织已登记前缀核对。是否已有同 id 市场记录不影响这条自测路径。
-  后两路不接受个人身份或别的组织身份；Forge 只给 Broker 与 oidc-token，不给宿主原语，
-  可信 XD 企业市场安装的宿主能力另按可信组织身份核验，不依赖名称前缀。手动导入不属于 Forge 路径。
+  ②企业作者通过 `ghost_forge_install` 明确安装到当前组织 namespace，批准 receipt
+  绑定本次包摘要；真实存量待迁移安装仍沿用本组织已登记前缀核对。
+  两路都不接受个人身份或别的组织身份；手动导入不属于 Forge 路径。
+  官方公共来源、随包来源、名称和 local 副本均不构成资格。普通插件使用自填
+  OAuth 客户端。企业 OIDC 的规则不变；通用能力仍按各自声明和实例批准处理。
   code/refresh 交换改经 Cindy 服务端 broker 完成,client secret 由服务端持有、不随包
   分发,且要求用户已登录 Cindy。声明它时必须同时声明 redirectPort,并与 clientSecret
   互斥;PKCE 缺省开(verifier
   经 broker exchange 透传服务端),不吃 PKCE 的服务商显式 `"pkce": false`;
   设置页的 `/oauth/<key>/client` 自填通道返回 405(settingsHtml 不要再画
   client 输入区)。
+  `"tokenBroker": "feishu"` 的企业应用由服务端按企业配置:主机每次连接开始时向服务端
+  取企业当前的 App ID 与一次性授权事务,不用清单里的 `clientId`(可省略;旧版主机
+  仍按清单 `clientId` 连接)。
 - `brokerBounce`:双地址弹跳回调(随 tokenBroker,资格与 tokenBroker 相同)。部分
   服务商后台只收 https redirect、不收 http loopback——声明后报给服务商的
   redirect_uri 是「broker 服务的 https 弹跳路由」(主机用 broker 基地址 + `path`
@@ -357,3 +367,34 @@ maxConnections 收紧到 1–8);token ≤4096 字符。新连接添加成功时�
 处理一单(忙时返回结构化"正忙",稍后重试即可);重定向最多 3 跳且逐跳重验
 白名单;不支持流式/WebSocket。长任务用"提交 + 轮询"两个工具拆开做;在一次
 tool-call 内轮询时记得定期发 tool-progress 心跳续命(见 §4"长任务续命")。
+
+### Library 下载与上传
+
+下载到本插件 Library 用 as:'library' 和库内 path；上传用 upload.library 相对路径数组。
+两者需要 library:true，域名和凭证按本章声明；检查 ok、HTTP status 和 truncated。
+
+```js
+const downloaded = await cindy.fetch({
+  url: 'https://api.example.com/report', as: 'library', path: 'downloads/report.pdf',
+  callId: msg.callId
+});
+const uploaded = await cindy.fetch({
+  url: 'https://api.example.com/upload', method: 'POST',
+  upload: { library: ['exports/result.pdf'], field: 'file' }, callId: msg.callId
+});
+```
+
+下载成功时从 downloaded.library 取 path、bytes、sha256 和 ref，失败不提供半个文件。
+upload.library 与 upload.hashes 二选一，最多 4 个文件，单件 64 MiB、总量 128 MiB。
+对话交接的副本用 `upload.handoff:['handoff:<uuid>']`，与两者三选一，见 4.10.3。
+超限返回 TOO_LARGE；下载到 Library 单件上限 8 GiB，仍受磁盘空间约束。
+401 时的令牌重试按本章各凭证规则（exchange / OAuth 对写请求也会重试一次）；插件代码不要再自行重试
+有副作用的调用，后端仍按请求编号去重。页面调用及文件预览见[§4.23](plugin-interactive-pages.md)。
+
+### MCP Apps 页面生成手册头
+
+主机给 `cindy.fetch` 自动加 `Cindy-MCP-Apps-Manual`（手册 CDN 地址，
+`mcp-apps/manual/<客户端版本号>/<sha256>.md`）与 `Cindy-MCP-Apps-Manual-Sha256`，供后端生成页面的模型使用。
+缺省仅当 `callId` 对应工具在 `mcpApps.ui.tools` 中对模型可见（`visibility` 含 `"model"` 或省略）时带；
+`mcpAppsManual: true` 强制带（如 `load_view` 要片段），`false` 不带。只发往已声明主机，跳到其它主机即删；
+自带的同名头被剥除。开发版（0.0.0）、Node 工作进程与旧版 Cindy 不带：后端缺头时用缓存手册，按 sha256 缓存与校验。

@@ -1,7 +1,9 @@
-import { forwardRef, useRef, type ReactNode } from 'react';
+import { forwardRef, useEffect, useLayoutEffect, useRef, useState, type ReactNode } from 'react';
 import { useTranslation } from 'react-i18next';
 import {
   Check,
+  ChevronDown,
+  ArrowLeft,
   Circle,
   Download,
   Droplets,
@@ -30,6 +32,7 @@ import { Tip } from '@/components/ui/tooltip';
 import { cn } from '@/lib/utils';
 import '@/components/ui/button.css';
 import type { RegionScreenshotAiAction } from '../../../shared/regionScreenshot';
+import { SCREENSHOT_TRANSLATION_LANGUAGES, resolveScreenshotTranslationLanguage, screenshotTranslationLanguageName, type ScreenshotTranslationPreference } from '../../../shared/screenshotTranslation';
 import type { RegionCaptureMode } from '../../../shared/regionCapture';
 import {
   ANNOTATION_COLORS,
@@ -189,6 +192,115 @@ export const ScreenshotToolbar = forwardRef<HTMLDivElement, ScreenshotToolbarPro
 
 export type ScreenshotMode = 'image' | Exclude<RegionCaptureMode, 'gif'>;
 
+export interface ScreenshotAiMenuProps {
+  canAsk: boolean;
+  aiMenuOpen: boolean;
+  onToggleAiMenu: () => void;
+  onAction: (action: RegionScreenshotAiAction) => void;
+  translationPreference: ScreenshotTranslationPreference;
+  onTranslationPreferenceChange: (value: ScreenshotTranslationPreference) => Promise<void>;
+}
+
+/** Shared by screen capture and the image editor; switching languages never sends. */
+export function ScreenshotAiMenu(props: ScreenshotAiMenuProps) {
+  const { t, i18n } = useTranslation();
+  const [languagePickerOpen, setLanguagePickerOpen] = useState(false);
+  const [savingLanguage, setSavingLanguage] = useState(false);
+  const [languageSaveFailed, setLanguageSaveFailed] = useState(false);
+  const menuRef = useRef<HTMLDivElement>(null);
+  const triggerRef = useRef<HTMLButtonElement>(null);
+  const locale = i18n.resolvedLanguage || i18n.language;
+  const targetLanguage = resolveScreenshotTranslationLanguage(props.translationPreference, locale);
+  useLayoutEffect(() => {
+    if (!props.aiMenuOpen) return;
+    const previous = document.activeElement;
+    const menu = menuRef.current;
+    return () => {
+      // Dismissal returns to annotation input or the keyboard trigger, but never
+      // steals focus from a different control selected while closing the menu.
+      const active = document.activeElement;
+      if (active !== document.body && active !== triggerRef.current && !menu?.contains(active)) return;
+      const target = previous instanceof HTMLElement && previous !== document.body && previous.isConnected
+        ? previous : triggerRef.current;
+      target?.focus({ preventScroll: true });
+    };
+  }, [props.aiMenuOpen]);
+  useEffect(() => {
+    if (!props.aiMenuOpen) { setLanguagePickerOpen(false); setLanguageSaveFailed(false); }
+  }, [props.aiMenuOpen]);
+  useEffect(() => {
+    if (!props.aiMenuOpen) return;
+    const selector = languagePickerOpen ? '[aria-checked="true"]' : '[role="menuitem"]';
+    menuRef.current?.querySelector<HTMLElement>(selector)?.focus();
+  }, [props.aiMenuOpen, languagePickerOpen]);
+  const closeLanguagePicker = () => setLanguagePickerOpen(false);
+  const chooseLanguage = async (value: ScreenshotTranslationPreference) => {
+    if (savingLanguage) return;
+    setSavingLanguage(true);
+    setLanguageSaveFailed(false);
+    try { await props.onTranslationPreferenceChange(value); closeLanguagePicker(); }
+    catch { setLanguageSaveFailed(true); }
+    finally { setSavingLanguage(false); }
+  };
+
+  const rowClass = 'flex min-h-8 items-center gap-2 rounded-lg px-2.5 text-left text-13 text-[var(--text-primary)] hover:bg-[var(--surface-hover)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)] disabled:opacity-50';
+  return <div className="relative [-webkit-app-region:no-drag]" onPointerDown={(event) => event.stopPropagation()}
+    onKeyDown={(event) => {
+      // Enter/Space on Cindy must not reach the screenshot's global copy shortcut.
+      if (event.key === 'Escape' && !props.aiMenuOpen) return;
+      event.stopPropagation();
+      if (event.key === 'Escape') props.onToggleAiMenu();
+    }}>
+    <Button ref={triggerRef} size="xs" variant="secondary" tone={props.aiMenuOpen ? 'default' : 'quiet'} disabled={!props.canAsk}
+      aria-label={t('regionScreenshot.cindy')} aria-expanded={props.aiMenuOpen}
+      onMouseDown={(event) => event.preventDefault()}
+      onClick={props.onToggleAiMenu}><Sparkles size={14} className="text-[var(--warning-fg)]" />Cindy</Button>
+    {props.aiMenuOpen && <div ref={menuRef} role="menu" aria-label={t('regionScreenshot.cindy')}
+      className="absolute right-0 top-full z-20 mt-2 flex w-64 max-w-[calc(100vw-16px)] flex-col rounded-xl border border-[var(--border-default)] bg-[var(--surface-elevated)] p-1.5"
+      onKeyDown={(event) => {
+        event.stopPropagation();
+        if (event.key === 'Escape') {
+          event.preventDefault();
+          if (languagePickerOpen) closeLanguagePicker(); else props.onToggleAiMenu();
+        }
+        if (['ArrowDown', 'ArrowUp', 'Home', 'End'].includes(event.key)) {
+          event.preventDefault();
+          const items = Array.from(event.currentTarget.querySelectorAll<HTMLButtonElement>('button:not(:disabled)'));
+          const index = items.indexOf(document.activeElement as HTMLButtonElement);
+          const next = event.key === 'Home' ? 0 : event.key === 'End' ? items.length - 1
+            : (index + (event.key === 'ArrowDown' ? 1 : -1) + items.length) % items.length;
+          items[next]?.focus();
+        }
+      }}>
+      {languagePickerOpen ? <>
+        <button type="button" role="menuitem" className={rowClass} onClick={closeLanguagePicker} disabled={savingLanguage}>
+          <ArrowLeft size={15} /><span>{t('regionScreenshot.translation.targetLanguage')}</span>
+        </button>
+        <div className="max-h-56 overflow-y-auto" aria-busy={savingLanguage}>
+          {(['ui', ...SCREENSHOT_TRANSLATION_LANGUAGES] as const).map((language) => <button key={language} type="button"
+            role="menuitemradio" aria-checked={props.translationPreference === language} disabled={savingLanguage}
+            className={cn(rowClass, 'w-full')} onClick={() => void chooseLanguage(language)}>
+            <span className="flex-1">{language === 'ui' ? t('regionScreenshot.translation.followUi') : screenshotTranslationLanguageName(language, locale)}</span>
+            {props.translationPreference === language && <Check size={15} />}
+          </button>)}
+        </div>
+        {languageSaveFailed && <p role="alert" className="px-2.5 py-1 text-12 text-[var(--error-fg)]">{t('regionScreenshot.translation.saveFailed')}</p>}
+      </> : (['ask', 'translate', 'explain', 'extract'] as const).map((action) => {
+        const Icon = AI_ICONS[action];
+        const label = action === 'translate' ? t('regionScreenshot.translation.action', { language: screenshotTranslationLanguageName(targetLanguage, locale) }) : t('regionScreenshot.ai.' + action);
+        return <div key={action} role="none" className="flex">
+          <button type="button" role="menuitem" className={cn(rowClass, 'min-w-0 flex-1')} onClick={() => props.onAction(action)}>
+            <Icon size={15} className="shrink-0 text-[var(--text-secondary)]" /><span className="flex-1">{label}</span>
+          </button>
+          {action === 'translate' && <button type="button" role="menuitem" aria-label={t('regionScreenshot.translation.targetLanguage')}
+            aria-haspopup="menu" className={cn(rowClass, 'w-8 shrink-0 justify-center px-0')}
+            onClick={() => setLanguagePickerOpen(true)}><ChevronDown size={15} /></button>}
+        </div>;
+      })}
+    </div>}
+  </div>;
+}
+
 /** Screen-top mode switcher stays available before and after selecting a region. */
 export function ScreenshotModeBar(props: {
   mode: ScreenshotMode;
@@ -196,6 +308,8 @@ export function ScreenshotModeBar(props: {
   finished: boolean;
   canAsk: boolean;
   aiMenuOpen: boolean;
+  translationPreference: ScreenshotTranslationPreference;
+  onTranslationPreferenceChange: (value: ScreenshotTranslationPreference) => Promise<void>;
   onToggleAiMenu: () => void;
   onAction: (action: RegionScreenshotAiAction) => void;
   /** 可拖动的横向范围 (本显示器 DIP 的安全区), 不拖进刘海或屏幕外。 */
@@ -241,19 +355,7 @@ export function ScreenshotModeBar(props: {
     {(['image', 'scroll', 'video'] as const).filter((mode) => !props.finished || mode === 'image').map((mode) => <Button key={mode} size="xs" variant="secondary" tone={props.mode === mode ? 'default' : 'quiet'} aria-pressed={props.mode === mode}
       onMouseDown={(event) => event.preventDefault()} onClick={() => props.onMode(mode)}>{t(mode === 'image' ? 'regionScreenshot.live.image' : 'regionScreenshot.live.' + mode)}</Button>)}
     <Divider />
-    <div className="relative">
-      <Button size="xs" variant="secondary" tone={props.aiMenuOpen ? 'default' : 'quiet'} disabled={!props.canAsk} aria-label={t('regionScreenshot.cindy')} aria-expanded={props.aiMenuOpen}
-        onMouseDown={(event) => event.preventDefault()} onClick={props.onToggleAiMenu}><Sparkles size={14} className="text-[var(--warning-fg)]" />Cindy</Button>
-      {props.aiMenuOpen && <div role="menu" className="absolute right-0 top-full z-10 mt-2 flex min-w-[168px] flex-col rounded-xl border border-[var(--border-default)] bg-[var(--surface-elevated)] p-1">
-        {(['ask', 'translate', 'explain', 'extract'] as const).map((action) => {
-          const Icon = AI_ICONS[action];
-          return <button key={action} type="button" role="menuitem" onMouseDown={(event) => event.preventDefault()} onClick={() => props.onAction(action)}
-            className="flex h-8 items-center gap-2 rounded-lg px-2.5 text-left text-13 text-[var(--text-primary)] hover:bg-[var(--surface-hover)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)]">
-            <Icon size={15} className="shrink-0 text-[var(--text-secondary)]" /><span className="flex-1">{t('regionScreenshot.ai.' + action)}</span>
-          </button>;
-        })}
-      </div>}
-    </div>
+    <ScreenshotAiMenu {...props} />
   </div>;
 }
 

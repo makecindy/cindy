@@ -19,8 +19,11 @@ import type { RemoteAgentHostDeps } from './runHost.js';
 /** Shared users and same-account group relays both need a guest-isolated proxy binding. */
 export function createGuestProviderRouteBinder(deps: {
   recordRequestUsage?(controller: string, providerId: string, kind: AgentKind, sample: GuestRequestUsage): void;
+  receiptMeteringAllowed?(controller: string, sessionId: string): boolean;
   readProviders(): Promise<readonly ProviderView[]>;
-  guestAccess(controller: string): { providerId: string; memberId: string } | null;
+  guestAccess(controller: string, sessionId: string): { providerId: string; memberId: string } | null;
+  modelAllowed?(controller: string, model: string, sessionId: string): boolean;
+  modelRestricted?(controller: string, sessionId: string): boolean;
   ownerAllowed(controller: string): boolean;
   providerAllowed(providerId: string): boolean;
   memberBudgetDenial?(providerId: string, model: string, memberId?: string): { code: string; message: string } | null;
@@ -30,7 +33,7 @@ export function createGuestProviderRouteBinder(deps: {
     read(providerId: string, memberId?: string): { models: readonly string[] | null; providerModels: readonly string[] | null; memberBudget?: { enabled: boolean; rules: unknown[] } | null };
   };
 }): NonNullable<RemoteAgentHostDeps['bindGuestProviderRoute']> {
-  return async ({ kind, hostSessionId, providerId, controller, isCurrent, relayModelAccess }) => {
+  return async ({ kind, hostSessionId, providerId, controller, sessionId, isCurrent, relayModelAccess }) => {
     const views = await deps.readProviders();
     // An obsolete asynchronous launch must never replace the current binding.
     if (!isCurrent()) return null;
@@ -38,15 +41,21 @@ export function createGuestProviderRouteBinder(deps: {
     // not a direct-share member of this computer. Intersect this computer's
     // provider grants with the original member's live grant at the coordinator.
     const sharedPeer = isProviderSharePeer(controller);
-    const memberId = sharedPeer ? deps.guestAccess(controller)?.memberId : undefined;
+    const memberId = sharedPeer ? deps.guestAccess(controller, sessionId)?.memberId : undefined;
     const providerAllowed = (): boolean => {
-      const access = sharedPeer ? deps.guestAccess(controller) : null;
+      const access = sharedPeer ? deps.guestAccess(controller, sessionId) : null;
       return (sharedPeer
         ? !!access && access.memberId === memberId && access.providerId === providerId
         : deps.ownerAllowed(controller)) && deps.providerAllowed(providerId);
     };
     if (!providerAllowed()) return null;
-    const localAllows = (model: string) => isCurrent() && providerAllowed() && deps.modelAccess.allows(providerId, model, memberId);
+    // The CLI catalog lists models the member may switch to; the current M
+    // lease pins the model allowed to execute right now. G must reauthorize
+    // that same task at O before the proxy permits a different model.
+    const catalogAllows = (model: string) => isCurrent() && providerAllowed()
+      && deps.modelAccess.allows(providerId, model, memberId);
+    const localAllows = (model: string) => catalogAllows(model)
+      && (deps.modelAllowed?.(controller, model, sessionId) ?? true);
     const relayDenials = new Map<string, { code: string; message: string }>();
     const allowsModel = async (model: string) => {
       relayDenials.delete(model);
@@ -66,11 +75,15 @@ export function createGuestProviderRouteBinder(deps: {
     // The native runtime freezes this list at startup. Keep temporary pauses out of
     // it: each request is checked live, and a recovered model must work without restart.
     const modelIds = guestProviderModelIds(views, providerId, kind)
-      .filter(model => localAllows(model) && (!relayModelAccess || relayModelAccess.models.includes(model)));
+      .filter(model => catalogAllows(model) && (!relayModelAccess || relayModelAccess.models.includes(model)));
     if (!isCurrent()) return null;
     const provider = views.find(view => view.id === providerId);
-    const receiptMetering = sharedPeer && (kind === 'codex' || kind === 'pi') && provider && providerWeeklyQuotaSource(provider) === 'codex' && !!deps.recordRequestUsage;
+    // Delegated runs send their turn counters to O. Local-only proxy receipts
+    // would otherwise zero those counters without delivering them to O.
+    const receiptMetering = sharedPeer && (deps.receiptMeteringAllowed?.(controller, sessionId) ?? true)
+      && (kind === 'codex' || kind === 'pi') && provider && providerWeeklyQuotaSource(provider) === 'codex' && !!deps.recordRequestUsage;
     const binding = registerGuestProviderRoute(hostSessionId, providerId, allowsModel, () => {
+      if (deps.modelRestricted?.(controller, sessionId)) return true;
       if (relayModelAccess) return true;
       try {
         const rule = deps.modelAccess.read(providerId, memberId);
@@ -116,6 +129,7 @@ export function resolveSharedProviderId(
  * 供应商分享的受邀者：来源只能是分享给它的那个供应商(没指定时也落到它上面)，而且这个供应商
  * 要为本 Agent 提供所选模型(口径同上：新路由优先，再按实际路由)。只看分享的这一个供应商，
  * 不会因为本机别的供应商有同名模型而放行。返回 null = 不允许。
+ * groupRouting 只给宿主分配组员或向已确认的组员转发时核对来源：本机登录不代表整组的可用性；本机执行不带它核对。
  */
 export function resolveGuestProviderId(
   views: readonly ProviderView[],
@@ -124,11 +138,13 @@ export function resolveGuestProviderId(
   kind: AgentKind,
   model: string,
   providerId: string | null | undefined,
+  context: { groupRouting?: boolean } = {},
 ): string | null {
   if (!sharedProviderId || !isAllowed(sharedProviderId)) return null;
   if (providerId && providerId !== sharedProviderId) return null;
   if (!model) return null;
-  const shared = views.filter((view) => view.id === sharedProviderId);
+  const shared = views.filter((view) => view.id === sharedProviderId)
+    .map((view) => context.groupRouting ? { ...view, connected: true } : view);
   return effectiveSourceIdForModel(shared, sharedProviderId, model, kind)
     ?? actualSourceIdForModel(shared, sharedProviderId, model, kind);
 }

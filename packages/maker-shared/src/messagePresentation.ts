@@ -92,11 +92,13 @@ export interface TodoCardPresentation {
 
 export type MessageActionBarAlignment = 'left' | 'right';
 
-export type MessageActionBarItemId = 'copy' | 'cost' | 'fork' | 'more' | 'time';
+export type MessageActionBarItemId = 'copy' | 'cost' | 'edit' | 'fork' | 'more' | 'time';
 
 export interface MessageActionBarPresentationInput {
   align: 'agent' | 'user';
   canCopy: boolean;
+  /** 只有最后一条用户消息可编辑(编辑 = 回退本轮 + 用改后的内容重发)。 */
+  canEdit?: boolean;
   canFork: boolean;
   hasMoreActions?: boolean;
   hasTime: boolean;
@@ -382,6 +384,8 @@ export function buildMessageActionBarPresentation(
     input.hasTime ? 'time' : null,
     input.canCopy ? 'copy' : null,
     input.canFork ? 'fork' : null,
+    // 对齐桌面用户消息操作行 [time][copy][fork][edit][...][more]。
+    input.canEdit ? 'edit' : null,
     input.hasMoreActions ? 'more' : null,
   ];
   const items = (input.align === 'agent' ? agentItems : userItems).filter(isMessageActionBarItemId);
@@ -685,7 +689,8 @@ export function isToolResultFailureLike(descriptor: ToolUseDescriptor, result: s
 /** 结果正文是「内容」的工具(读文件 / 搜索 / 网页):对其输出跑全文错误关键词匹配没有意义。 */
 function isContentOutputDescriptor(descriptor: ToolUseDescriptor): boolean {
   if (descriptor.kind === 'file') return descriptor.action === 'read';
-  return descriptor.kind === 'search' || descriptor.kind === 'web';
+  return descriptor.kind === 'search' || descriptor.kind === 'web'
+    || descriptor.kind === 'mcp' || descriptor.kind === 'dynamic';
 }
 
 /**
@@ -703,7 +708,7 @@ export function isContentToolFailureLike(
   const firstLine = secondary.split('\n', 1)[0].trim();
   // 字符类是全角冒号 U+FF1A + 半角冒号 U+003A 并列;别把全角的归一化成半角,
   // 会变成重复字符类(CodeQL 已拦过一次)。
-  return /^(error\b|request failed\b|failed to \S|enoent\b|eacces\b|permission denied\b|错误[：:]|(读取|搜索|请求|抓取)失败|无法(读取|访问|打开|获取))/i
+  return /^(error\b|mcp error(?:\s+-?\d+)?[：:]|request failed\b|failed to \S|enoent\b|eacces\b|permission denied\b|错误[：:]|(读取|搜索|请求|抓取)失败|无法(读取|访问|打开|获取))/i
     .test(firstLine);
 }
 
@@ -846,7 +851,7 @@ function isErrorRecord(value: string): boolean {
     const parsed = JSON.parse(value) as unknown;
     if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return false;
     const record = parsed as Record<string, unknown>;
-    if (record.ok === false || record.success === false) return true;
+    if (record.ok === false || record.success === false || record.isError === true || record.is_error === true) return true;
     const status = typeof record.status === 'string' ? record.status.toLowerCase() : '';
     if (status === 'error' || status === 'failed' || status === 'failure') return true;
     return ['error', 'errors', 'exception', 'stderr'].some((key) => {

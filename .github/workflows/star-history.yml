@@ -1,0 +1,57 @@
+name: README star history
+
+on:
+  schedule:
+    - cron: '23 1,7,13,19 * * *'
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - scripts/update-star-history.mjs
+      - scripts/__tests__/update-star-history.test.mjs
+      - .github/assets/star-history/**
+      - .github/workflows/star-history.yml
+  push:
+    branches: [main]
+    paths:
+      - scripts/update-star-history.mjs
+      - .github/assets/star-history/history.json
+      - .github/workflows/star-history.yml
+
+permissions:
+  contents: write
+
+concurrency:
+  group: readme-star-history
+  cancel-in-progress: false
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 22
+      - run: node --test scripts/__tests__/update-star-history.test.mjs
+      - run: node scripts/update-star-history.mjs --output "$RUNNER_TEMP/star-history-verify"
+  update:
+    needs: verify
+    if: github.repository == 'makecindy/cindy' && github.event_name != 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 22
+      - name: Generate and publish public chart assets
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: node scripts/update-star-history.mjs --refresh --publish --output "$RUNNER_TEMP/star-history"

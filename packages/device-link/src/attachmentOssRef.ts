@@ -9,6 +9,16 @@ export const ATTACH_OSS_SCHEME = 'cindy-oss-attach';
 /** 品牌迁移前的旧 scheme；解析面永久保留，混合版本 rollout 期间发送端继续使用。 */
 export const LEGACY_ATTACH_OSS_SCHEME = 'xdt-oss-attach';
 
+const SHARED_TASK_MEDIA_KEY_PREFIX = 'cindy/device-link/shared-task/';
+
+/**
+ * 共享任务附件的对象 key(服务端按 sharedTaskId 与成员授权)。这类对象只存在于官方存储,
+ * 本机中转走自建时也要向官方换取地址。
+ */
+export function isSharedTaskMediaKey(key: unknown): boolean {
+  return typeof key === 'string' && key.startsWith(SHARED_TASK_MEDIA_KEY_PREFIX);
+}
+
 const ATTACH_OSS_PREFIX = `${ATTACH_OSS_SCHEME}://m/`;
 const LEGACY_ATTACH_OSS_PREFIX = `${LEGACY_ATTACH_OSS_SCHEME}://m/`;
 const BASE64_ALPHABET = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/';

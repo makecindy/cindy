@@ -2,7 +2,7 @@ import { deviceDisplayName } from '@/device-link/deviceName';
 import { getSessionListActivityAt } from '@cindy/maker-shared/session-activity';
 import { modelNeedsReselection } from './modelReselection';
 import { stripTrailingPathSeparators } from '@cindy/maker-shared/path-text';
-import { collapseWorktreeDirForGrouping } from '@cindy/maker-shared/worktree-paths';
+import { collapseWorktreeDirForGrouping, sessionProjectDirectory } from '@cindy/maker-shared/worktree-paths';
 import { normalizeProjectOrderPath } from '@cindy/maker-shared/project-order-sync';
 import { resolveProjectAliasForSessions, type ProjectAliasDisplayIndex } from '@cindy/maker-shared/project-alias-sync';
 import {
@@ -378,7 +378,7 @@ export function buildRecentWorkspaceOptions(
     if (session.status === 'deleted') continue;
     if (session.workspaceKind !== 'project') continue;
     if (session.orcaRole === 'worker') continue;
-    const rawWorkingDir = session.workingDir?.trim();
+    const rawWorkingDir = sessionProjectDirectory(session)?.trim();
     if (!rawWorkingDir) continue;
     const workingDir = collapseWorktreeDirForGrouping(rawWorkingDir);
     // Match home project grouping; keep the original path for display and remote actions.

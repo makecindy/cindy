@@ -743,7 +743,8 @@ export async function stopSessionBackgroundTasksFor(sessionId: string): Promise<
  * 与 goal/learn 链路同款);老被控端无此 channel → CHANNEL_NOT_ALLOWED,调用方 catch
  * 后退化为只显示已加载消息 + 实时推送的部分值。
  */
-export function estimatedSessionValueFor(sessionId: string): Promise<{
+export function estimatedSessionValueFor(sessionId: string, options?: { includeBreakdown?: boolean; clientId?: string }): Promise<{
+  costBreakdown?: import('@cindy/maker-shared/usage-cost-details').UsageCostRow[];
   totalValueMoney?: import('../../shared/regionalMoney').RegionalMoney | null;
   totalValueUsd?: number;
   entries: Array<{
@@ -754,9 +755,11 @@ export function estimatedSessionValueFor(sessionId: string): Promise<{
   }>;
 }> {
   const deviceId = getStickySessionDeviceId(sessionId);
-  if (!deviceId) return messageService.estimatedSessionValue(sessionId);
+  if (!deviceId) return options ? messageService.estimatedSessionValue(sessionId, options)
+    : messageService.estimatedSessionValue(sessionId);
   return invokeRemote(deviceId, 'local-db:messages:estimatedSessionValue', [
     sessionId,
+    ...(options ? [options] : []),
   ]) as ReturnType<typeof estimatedSessionValueFor>;
 }
 

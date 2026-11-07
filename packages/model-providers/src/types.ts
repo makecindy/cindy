@@ -219,6 +219,8 @@ export interface RoutingDescriptor {
   requestPath?: string;
   /** 鉴权策略（见 AuthStrategy）。 */
   authStrategy: AuthStrategy;
+  /** Enterprise BYOK API-key routes force Cindy's Codex originator, including resumed threads. */
+  forceCindyCodexOriginator?: boolean;
   /**
    * 配置保留用于展示/修复，但运行时不得向该上游路由。用于把升级前不再满足安全边界的
    * 历史配置留在设置页，同时让所有路由解析 fail closed。
@@ -320,15 +322,21 @@ export interface ModelInterfaceSnapshot {
   nativeApis?: import('./modelAccessBean.js').ModelNativeApi[] | null;
 }
 export interface CatalogModel {
+  opaqueModelId?: true;
+  discoveredSource?: import("./modelSource.js").DiscoveredModelSource;
   interfaceUnavailable?: boolean;
   selectedInterface?: ModelInterfaceSnapshot;
   availableInterfaces?: ModelInterfaceSnapshot[];
   nativeApis?: import("./modelAccessBean.js").ModelNativeApi[] | null;
+  /** Catalog-recommended engine for this source and model (Registry `recommendedAgents`). */
+  recommendedAgent?: AgentKind;
   /** Same-provider display-only pricing; never inherited through public model metadata. */
   displayPricing?: ModelDisplayPricing;
   currency?: 'USD' | 'CNY';
   costDiscount?: number;
 
+  /** Execution-host derived display identity only; original id remains the request/storage key. */
+  selectionAliasKey?: string;
   supportsToolCalls?: boolean;
   reasoningRequired?: boolean;
   userModelConfig?: ProviderRuntimeModelConfig;
@@ -647,6 +655,10 @@ export interface Provider {
  * 并随用户配置持久化，避免已知长上下文模型被错误降级。
  */
 export interface ProviderRuntimeModelConfig extends ModelMetadata {
+  opaqueModelId?: true;
+  /** Transient discovery receipt; normalization excludes it from persistent configuration. */
+  discoverySnapshotId?: string;
+  discoveredSource?: import("./modelSource.js").DiscoveredModelSource;
   /** User override; absent follows the directory. Never persist derived snapshots. */
   interfaceId?: string;
   interfaceUnavailable?: boolean;

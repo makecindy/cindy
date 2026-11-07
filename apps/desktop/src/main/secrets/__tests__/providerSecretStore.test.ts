@@ -1,4 +1,5 @@
 import fs from 'node:fs';
+import { safeStorage } from 'electron';
 import os from 'node:os';
 import path from 'node:path';
 
@@ -46,13 +47,14 @@ vi.mock('../../appSessionState', () => ({
 
 import {
   createProviderSecretStore,
+  providerSecretSavedForSetup,
+  storeCustomMcpToken,
   botEnvironmentSecretIo,
   readCustomProviderHeadersForMutation,
   readCustomProviderKeyForMutation,
   readGhostSecretStrict,
   readGhostSecretTailFromIo,
   migrateGhostSecrets,
-  setMivoSecretAliasVerifier,
   resolveOwnerScopedSecretStorageKey,
   setProviderSecretsClearedListener,
   UNRECOVERABLE_PROVIDER_CREDENTIAL,
@@ -204,36 +206,29 @@ describe('providerSecrets registry', () => {
     expect(ghostSecretHintStorageKey('_ns__acme__helper', 'token')).toBe(
       'ghost_hint__ns__acme__helper_token',
     );
-    expect(ghostSecretStorageKey('_ns__xd__xd-mivo', 'mivo_api_key', true)).toBe(
+    expect(ghostSecretStorageKey('_ns__xd__xd-mivo', 'mivo_api_key')).toBe(
       'ghost_secret__ns__xd__xd-mivo_mivo_api_key',
     );
-    expect(ghostSecretStorageKey('_ns__xd__xd-mivo', 'mivo_api_key', true)).not.toBe(
-      ghostSecretStorageKey('xd-mivo', 'mivo_api_key', true),
+    expect(ghostSecretStorageKey('_ns__xd__xd-mivo', 'mivo_api_key')).not.toBe(
+      ghostSecretStorageKey('xd-mivo', 'mivo_api_key'),
     );
     expect(ghostSecretStorageKey('_ns__acme__xd-mivo', 'mivo_api_key')).toBe(
       'ghost_secret__ns__acme__xd-mivo_mivo_api_key',
     );
     expect(ghostSecretStorageKey('_ns__acme__xd-mivo', 'mivo_api_key')).not.toBe(
-      ghostSecretStorageKey('xd-mivo', 'mivo_api_key', true),
+      ghostSecretStorageKey('xd-mivo', 'mivo_api_key'),
     );
   });
 
-  it('官方别名:cindy-web-search 的凭证映射到历史 brave/tavily 存储键(老用户零迁移)', () => {
-    // 与「工具密钥」时代同一 .enc 文件:老用户已填 key 对意识立即生效,
-    // lizi_web_search MCP 也照读同一份。
-    expect(ghostSecretStorageKey('cindy-web-search', 'brave_api_key')).toBe(providerSecretStorageKey('brave'));
-    expect(ghostSecretStorageKey('cindy-web-search', 'tavily_api_key')).toBe(providerSecretStorageKey('tavily'));
-    // 别名只对登记过的 (ghostId, key) 生效:同 id 其它 key、其它意识同名 key 都走缺省命名空间。
-    expect(ghostSecretStorageKey('cindy-web-search', 'other_key')).toBe('ghost_secret_cindy-web-search_other_key');
-    expect(ghostSecretStorageKey('third-party', 'brave_api_key')).toBe('ghost_secret_third-party_brave_api_key');
-  });
-
-  it('官方别名:xd-mivo 的 mivo_api_key 映射到历史 mivo 存储键(老用户零迁移)', () => {
-    expect(ghostSecretStorageKey('xd-mivo', 'mivo_api_key', true)).toBe(providerSecretStorageKey('mivo'));
-    expect(ghostSecretStorageKey('xd-mivo', 'mivo_api_key')).not.toBe(providerSecretStorageKey('mivo'));
-    expect(ghostSecretStorageKey('_ns__xd__xd-mivo', 'mivo_api_key')).not.toBe(providerSecretStorageKey('mivo'));
-    expect(ghostSecretStorageKey('xd-mivo', 'other_key')).toBe('ghost_secret_xd-mivo_other_key');
-    expect(ghostSecretStorageKey('third-party', 'mivo_api_key')).toBe('ghost_secret_third-party_mivo_api_key');
+  it('plugin keys do not resolve historical provider aliases', () => {
+    for (const [id, secret, provider] of [
+      ['cindy-web-search', 'brave_api_key', 'brave'],
+      ['cindy-web-search', 'tavily_api_key', 'tavily'],
+      ['xd-mivo', 'mivo_api_key', 'mivo'],
+    ] as const) {
+      expect(ghostSecretStorageKey(id, secret)).toBe(`ghost_secret_${id}_${secret}`);
+      expect(ghostSecretStorageKey(id, secret)).not.toBe(providerSecretStorageKey(provider));
+    }
   });
 
   it('意识凭证尾指纹:键名独立前缀(ghost_hint_)+ 短值不产指纹', () => {
@@ -425,53 +420,12 @@ describe('readGhostSecretTailFromIo(尾指纹读取 + 老键懒回填)', () => {
     expect(io.store.get(ghostSecretHintStorageKey('my-ghost', 'api_key'))).toBe('5678');
   });
 
-  it.each([
-    ['helper', 'api_key'],
-    ['xd-feishu', 'oauth_accounts'],
-    ['_ns__xd__xd-feishu', 'oauth_accounts'],
-    ['_ns__xd__xd-mivo', 'mivo_api_key'],
-    ['xd-mivo', 'oauth_accounts'],
-  ])('reads %s/%s without loading unrelated Mivo install facts', (instanceKey, secretKey) => {
-    const verifier = vi.fn(() => { throw new Error('Mivo install facts unavailable'); });
-    setMivoSecretAliasVerifier(verifier);
-    io.store.set(ghostSecretStorageKey(instanceKey, secretKey), 'fake-secret-value-1234');
-    try {
-      expect(readGhostSecretTailFromIo(io, instanceKey, secretKey)).toBe('1234');
-      expect(verifier).not.toHaveBeenCalled();
-    } finally {
-      setMivoSecretAliasVerifier(null);
-    }
-  });
-
-  it('rechecks Mivo alias eligibility after a successful historical-key read', () => {
-    const verifier = vi.fn(() => true);
-    setMivoSecretAliasVerifier(verifier);
-    io.store.set(ghostSecretStorageKey('xd-mivo', 'mivo_api_key', true), 'fake-mivo-legacy-9999');
-    try {
-      expect(readGhostSecretTailFromIo(io, 'xd-mivo', 'mivo_api_key')).toBe('9999');
-      verifier.mockReturnValue(false);
-      expect(readGhostSecretTailFromIo(io, 'xd-mivo', 'mivo_api_key')).toBeNull();
-    } finally {
-      setMivoSecretAliasVerifier(null);
-    }
-  });
-
-  it('官方别名键(xd-mivo 老用户)同样能懒回填', () => {
-    setMivoSecretAliasVerifier((id) => id === 'xd-mivo');
-    io.store.set(ghostSecretStorageKey('xd-mivo', 'mivo_api_key', true), 'mivo_legacy_key_9999');
-    expect(readGhostSecretTailFromIo(io, 'xd-mivo', 'mivo_api_key')).toBe('9999');
-    expect(io.store.get(ghostSecretHintStorageKey('xd-mivo', 'mivo_api_key'))).toBe('9999');
-    setMivoSecretAliasVerifier(null);
-  });
-
-  it('a name-only Mivo cannot read the historical secret or its cached hint', () => {
-    io.store.set(ghostSecretStorageKey('xd-mivo', 'mivo_api_key', true), 'mivo_legacy_key_9999');
-    io.store.set(ghostSecretHintStorageKey('xd-mivo', 'mivo_api_key'), '9999');
-    setMivoSecretAliasVerifier(null);
+  it('reads only a migrated instance key and never the old provider alias', () => {
+    io.store.set(providerSecretStorageKey('mivo'), 'old-provider-secret-9999');
     expect(readGhostSecretTailFromIo(io, 'xd-mivo', 'mivo_api_key')).toBeNull();
-    setMivoSecretAliasVerifier((id) => id === 'xd-mivo');
-    expect(readGhostSecretTailFromIo(io, 'xd-mivo', 'mivo_api_key')).toBe('9999');
-    setMivoSecretAliasVerifier(null);
+    io.store.set(ghostSecretStorageKey('xd-mivo', 'mivo_api_key'), 'migrated-secret-1234');
+    expect(readGhostSecretTailFromIo(io, 'xd-mivo', 'mivo_api_key')).toBe('1234');
+    expect(readGhostSecretTailFromIo(io, '_ns__local__xd-mivo', 'mivo_api_key')).toBeNull();
   });
 
   it('没存过 / 值太短不产指纹 → null 且不落回填键', () => {
@@ -649,4 +603,143 @@ it('checks companion environment presence without decrypting or unlocking the va
     Object.assign(electronState, previous); Object.assign(sessionState, previousSession);
     fs.rmSync(root, { recursive: true, force: true });
   }
+});
+
+// Regression #6473: builtin has() opened safeStorage while preparing source consent.
+// Existing injected-IO tests did not cover a presence-only lookup of the real owner slot.
+// Tier: unit, temporary fake files only; corrupt owner-A slot plus absent owner-B slot.
+// Timing: not run in the edit-only window; measure during the authorized targeted run.
+describe('setup builtin secret presence', () => {
+  it('uses only the current owner standard slot and propagates IO failures without decrypting', () => {
+    const previousSession = { ...sessionState };
+    const previousElectron = { ...electronState };
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'cindy-setup-presence-'));
+    const decrypt = vi.fn(() => { throw new Error('must not decrypt before consent'); });
+    try {
+      sessionState.mode = 'cloud'; sessionState.dataOwnerId = 'owner-a';
+      electronState.userData = root; electronState.encryptionAvailable = true;
+      electronState.decryptString = decrypt;
+      const dir = path.join(root, 'safe-storage');
+      fs.mkdirSync(dir);
+      const logical = providerSecretStorageKey('brave');
+      fs.writeFileSync(path.join(dir, `${logical}.enc`), 'invalid-unscoped-test');
+      expect(providerSecretSavedForSetup('brave')).toBe(false);
+      const scoped = resolveOwnerScopedSecretStorageKey(logical)!;
+      fs.writeFileSync(path.join(dir, `${scoped}.enc`), 'invalid-owner-test');
+      expect(providerSecretSavedForSetup('brave')).toBe(true);
+      sessionState.dataOwnerId = 'owner-b';
+      expect(providerSecretSavedForSetup('brave')).toBe(false);
+      sessionState.dataOwnerId = null;
+      expect(providerSecretSavedForSetup('brave')).toBe(false);
+      sessionState.dataOwnerId = 'owner-a';
+      const stat = vi.spyOn(fs, 'statSync').mockImplementation(() => {
+        throw Object.assign(new Error('test permission failure'), { code: 'EACCES' });
+      });
+      try {
+        expect(() => providerSecretSavedForSetup('brave')).toThrow('test permission failure');
+        expect(decrypt).not.toHaveBeenCalled();
+      } finally {
+        stat.mockRestore();
+      }
+    } finally {
+      Object.assign(sessionState, previousSession); Object.assign(electronState, previousElectron);
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  });
+});
+
+// Regression #6473 B1: the shared direct writer can truncate an existing MCP token.
+// Existing injected-IO tests do not exercise replacement failures on the real filesystem.
+// Unit tier: public storeCustomMcpToken, fake ciphertext in mkdtemp, no real keychain.
+// Minimal input: one old owner slot, then encryption / partial write / rename failure.
+// Execution and timing pending the separately authorized test window.
+describe('custom MCP token replacement', () => {
+  it.each(['encrypt', 'write', 'rename'] as const)(
+    'preserves old ciphertext and cleans its temporary file after %s failure', (failure) => {
+      const previousSession = { ...sessionState };
+      const previousElectron = { ...electronState };
+      const root = fs.mkdtempSync(path.join(os.tmpdir(), 'cindy-mcp-atomic-'));
+      const realWrite = fs.writeFileSync;
+      const spies: Array<{ mockRestore(): void }> = [];
+      try {
+        sessionState.mode = 'cloud'; sessionState.dataOwnerId = 'owner-a';
+        electronState.userData = root; electronState.encryptionAvailable = true;
+        const directory = path.join(root, 'safe-storage');
+        fs.mkdirSync(directory);
+        const key = resolveOwnerScopedSecretStorageKey(customMcpSecretStorageKey('test-mcp'))!;
+        const target = path.join(directory, `${key}.enc`);
+        const old = Buffer.from('old fake ciphertext').toString('base64');
+        fs.writeFileSync(target, old);
+        spies.push(vi.spyOn(safeStorage, 'encryptString').mockImplementation(() => {
+          if (failure === 'encrypt') throw new Error('fake encryption failure');
+          return Buffer.from('new fake ciphertext');
+        }));
+        if (failure === 'write') {
+          spies.push(vi.spyOn(fs, 'writeFileSync').mockImplementation((file, data, options) => {
+            realWrite(file, String(data).slice(0, 4), options);
+            throw new Error('fake partial write failure');
+          }));
+        }
+        if (failure === 'rename') {
+          spies.push(vi.spyOn(fs, 'renameSync').mockImplementation(() => {
+            throw new Error('fake replacement refusal');
+          }));
+        }
+        expect(storeCustomMcpToken('test-mcp', 'fake-new-token')).toBe(false);
+        expect(fs.readFileSync(target, 'utf8')).toBe(old);
+        expect(fs.readdirSync(directory)).toEqual([`${key}.enc`]);
+      } finally {
+        for (const spy of spies.reverse()) spy.mockRestore();
+        Object.assign(sessionState, previousSession); Object.assign(electronState, previousElectron);
+        fs.rmSync(root, { recursive: true, force: true });
+      }
+    },
+  );
+
+  it('replaces only the active owner slot after writing ciphertext, with private file permissions', () => {
+    const previousSession = { ...sessionState };
+    const previousElectron = { ...electronState };
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'cindy-mcp-atomic-'));
+    const realRename = fs.renameSync;
+    const spies: Array<{ mockRestore(): void }> = [];
+    try {
+      sessionState.mode = 'cloud'; sessionState.dataOwnerId = 'owner-a';
+      electronState.userData = root; electronState.encryptionAvailable = true;
+      const directory = path.join(root, 'safe-storage');
+      fs.mkdirSync(directory);
+      const logical = customMcpSecretStorageKey('test-mcp');
+      const target = path.join(directory, `${resolveOwnerScopedSecretStorageKey(logical)}.enc`);
+      fs.writeFileSync(target, 'old-A');
+      sessionState.dataOwnerId = 'owner-b';
+      const other = path.join(directory, `${resolveOwnerScopedSecretStorageKey(logical)}.enc`);
+      fs.writeFileSync(other, 'old-B');
+      sessionState.dataOwnerId = 'owner-a';
+      const encrypted = Buffer.from('new fake ciphertext');
+      spies.push(vi.spyOn(safeStorage, 'encryptString').mockReturnValue(encrypted));
+      const rename = vi.spyOn(fs, 'renameSync').mockImplementation((source, destination) => {
+        expect(path.dirname(String(source))).toBe(directory);
+        expect(destination).toBe(target);
+        expect(fs.readFileSync(target, 'utf8')).toBe('old-A');
+        expect(fs.readFileSync(source, 'utf8')).toBe(encrypted.toString('base64'));
+        if (process.platform !== 'win32') expect(fs.statSync(source).mode & 0o777).toBe(0o600);
+        realRename(source, destination);
+      });
+      spies.push(rename);
+      expect(storeCustomMcpToken('test-mcp', 'fake-new-token')).toBe(true);
+      expect(rename).toHaveBeenCalledTimes(1);
+      expect(fs.readFileSync(target, 'utf8')).toBe(encrypted.toString('base64'));
+      expect(fs.readFileSync(other, 'utf8')).toBe('old-B');
+      expect(fs.readdirSync(directory).sort()).toEqual([path.basename(target), path.basename(other)].sort());
+      sessionState.dataOwnerId = null;
+      expect(storeCustomMcpToken('test-mcp', 'fake-signed-out')).toBe(false);
+      sessionState.dataOwnerId = 'owner-a'; electronState.encryptionAvailable = false;
+      expect(storeCustomMcpToken('test-mcp', 'fake-unavailable')).toBe(false);
+      expect(fs.readFileSync(target, 'utf8')).toBe(encrypted.toString('base64'));
+      expect(rename).toHaveBeenCalledTimes(1);
+    } finally {
+      for (const spy of spies.reverse()) spy.mockRestore();
+      Object.assign(sessionState, previousSession); Object.assign(electronState, previousElectron);
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  });
 });

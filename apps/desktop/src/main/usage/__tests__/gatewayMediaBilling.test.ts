@@ -29,6 +29,7 @@ vi.mock('../../device-link/broadcast-tap.js', () => ({
 vi.mock('../../sessionSpendBroadcaster.js', () => ({ broadcastSessionSpend: mocks.sessionPush }));
 vi.mock('../../usageBroadcaster.js', () => ({ rebroadcastTodaySpend: mocks.todayPush }));
 vi.mock('../../logger.js', () => ({ createLogger: () => ({ warn: mocks.warn }) }));
+vi.mock('../../maker-host/active-catalog.js', () => ({ getActiveCatalog: () => ({ providers: [] }) }));
 vi.mock('../modelPricing.js', () => ({
   getGatewayMediaBillingCurrency: async () => mocks.currency,
 }));

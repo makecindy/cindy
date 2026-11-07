@@ -35,6 +35,38 @@ beforeEach(() => {
 afterEach(() => { cleanup(); vi.restoreAllMocks(); vi.unstubAllGlobals(); });
 
 describe('recipient-owned shared model favorites', () => {
+  // #8028 r4429989411 / unit: B's membership is absent/different on A.
+  // Exercise real projections and writes; never infer membership from an old favorite.
+  it.each(['missing', 'different'])('uses B membership when A membership is %s and rejects replaced grants', mode => {
+    publish(mode === 'missing' ? [] : [share('s1', 'a-member')], false);
+    const bShare = share('s1', 'b-member');
+    const item = { ...config, uid: 'b-favorite', providerId: providerShareFavoriteSource(bShare) };
+    const home = { items: [item], store: { get: vi.fn(() => item), add: vi.fn(), update: vi.fn(), remove: vi.fn() } };
+    const view = renderHook(({ sources }) => ({
+      favorites: useProviderShareFavorites('share:s1', useModelFavorites(), home, sources),
+      sources: useProviderShareFavoriteSources(sources),
+    }), { initialProps: { sources: new Map([['share:s1', bShare]]) } });
+    expect(view.result.current.sources.get(item.providerId)).toBe('share:s1');
+    expect(view.result.current.favorites.items).toEqual([{ ...config, uid: item.uid }]);
+    act(() => {
+      view.result.current.favorites.store.add(config);
+      view.result.current.favorites.store.update(item.uid, { effort: 'low' });
+      view.result.current.favorites.store.remove(item.uid);
+    });
+    expect(home.store.add).toHaveBeenCalledWith({ ...config, providerId: item.providerId });
+    expect(home.store.update).toHaveBeenCalledWith(item.uid, { effort: 'low' });
+    expect(home.store.remove).toHaveBeenCalledWith(item.uid);
+    expect(listModelFavorites()).toEqual([]);
+    const stale = view.result.current.favorites.store;
+    view.rerender({ sources: new Map([['share:s1', share('s1', 'replacement')]]) });
+    expect(view.result.current.favorites.items).toEqual([]);
+    expect(() => stale.add(config)).toThrow('Shared favorite source unavailable');
+    expect(() => stale.remove(item.uid)).toThrow('Shared favorite source unavailable');
+    view.rerender({ sources: new Map() });
+    expect(view.result.current.sources.size).toBe(0);
+    expect(() => view.result.current.favorites.store.add(config)).toThrow('Shared favorite source unavailable');
+  });
+
   it('aggregates only exact, available grants for the current account', () => {
     const sources = renderHook(() => useProviderShareFavoriteSources());
     expect([...sources.result.current.values()]).toEqual(['share:s1', 'share:s2']);

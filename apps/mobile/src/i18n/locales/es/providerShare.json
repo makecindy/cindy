@@ -1,0 +1,16 @@
+{
+  "picker": {
+    "shareName": "Compartido por {{owner}}",
+    "numbered": "{{name}} ({{index}})",
+    "unavailable": "Compartir no disponible"
+  },
+  "link": {
+    "title": "Compartir proveedor",
+    "heading": "Abra este enlace en una computadora",
+    "body": "El uso compartido de proveedores solo se puede solicitar y utilizar en {{appName}} en una computadora. Envíe el enlace a su computadora y ábralo allí, o péguelo en Configuración → Proveedores → Proveedores compartidos conmigo.",
+    "note": "Los enlaces para compartir caducan 5 minutos después de su creación y funcionan solo una vez.",
+    "copy": "Copiar enlace compartido",
+    "copied": "Compartir enlace copiado",
+    "copyFailed": "No se pudo copiar el enlace para compartir. Inténtalo de nuevo en un momento."
+  }
+}

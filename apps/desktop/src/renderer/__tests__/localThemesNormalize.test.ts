@@ -1,12 +1,15 @@
 import { describe, expect, it } from 'vitest';
 
+import { convertVsCodeTheme } from '../../shared/theme-import';
 import {
   contrastRatio,
   parseCssColor,
   type Rgb,
 } from '../../shared/theme-import/color';
+import '../themes/colors';
 import legacyTable from '../themes/loginLegacyDefaults.json';
 import { LEGACY_SNAPSHOT_MIN_MATCHES } from '../themes/loginLegacyDefaults';
+import { filledButtonPressedFromHover } from '../themes/filledButtonStates';
 import { normalizeLocalThemeColors } from '../themes/local-themes-normalize';
 
 function rgb(value: string | undefined): Rgb {
@@ -19,6 +22,72 @@ function rgb(value: string | undefined): Rgb {
 const SWITCH_DERIVATION_TARGET = 3.2;
 
 describe('normalizeLocalThemeColors', () => {
+  it('旧主题显式写的 accent-hover 继续作为 CTA 与确认框主按钮的悬停色', () => {
+    const out = normalizeLocalThemeColors({ 'accent-hover': '#6a5acd' });
+    expect(out['button-cta-hover']).toBe('var(--accent-hover)');
+    expect(out['confirm-btn-primary-hover']).toBe('var(--accent-hover)');
+    expect(out['button-cta-pressed']).toBe(filledButtonPressedFromHover('var(--button-cta-hover)', 'darker'));
+    expect(out['confirm-btn-primary-pressed']).toBe(
+      filledButtonPressedFromHover('var(--confirm-btn-primary-hover)', 'darker'),
+    );
+    expect(normalizeLocalThemeColors(out)).toEqual(out);
+  });
+
+  it('按下沿底色到悬停的方向继续，接近黑色的悬停色不会被抬亮', () => {
+    // 真实导入路径：中性浅色主题省略按钮色时，accent-hover 落在低亮度分支以下。
+    const imported = convertVsCodeTheme(
+      JSON.stringify({ colors: { 'editor.background': '#ffffff', 'editor.foreground': '#262626' } }),
+      'Neutral',
+    );
+    const colors = imported?.themes[0]?.colors;
+    if (!colors) throw new Error('VS Code 主题导入失败');
+    expect(colors['accent-hover']).toBe('#1b1b1b');
+    const out = normalizeLocalThemeColors(colors);
+    expect(out['confirm-btn-primary-pressed']).toBe(
+      filledButtonPressedFromHover('var(--confirm-btn-primary-hover)', 'darker'),
+    );
+    expect(out['button-cta-pressed']).toBe(filledButtonPressedFromHover('var(--button-cta-hover)', 'darker'));
+
+    const lighter = normalizeLocalThemeColors({
+      'accent-hover': '#555555',
+      'accent-cta-bg-pure': '#222222',
+    });
+    expect(lighter['button-cta-pressed']).toBe(filledButtonPressedFromHover('var(--button-cta-hover)', 'lighter'));
+  });
+
+  it('主题没写底色时按模式取默认值判断方向，未知模式不猜', () => {
+    // 浅色默认底色接近黑色，比 #555555 暗：悬停变亮，按下继续变亮。
+    const sparse = normalizeLocalThemeColors({ 'accent-hover': '#555555' }, 'light');
+    expect(sparse['button-cta-pressed']).toBe(filledButtonPressedFromHover('var(--button-cta-hover)', 'lighter'));
+    expect(sparse['confirm-btn-primary-pressed']).toBe(
+      filledButtonPressedFromHover('var(--confirm-btn-primary-hover)', 'lighter'),
+    );
+
+    const aliased = normalizeLocalThemeColors(
+      { 'accent-hover': '#555555', 'accent-cta-bg-pure': 'var(--brand)', brand: '#eeeeee' },
+      'light',
+    );
+    expect(aliased['button-cta-pressed']).toBe(filledButtonPressedFromHover('var(--button-cta-hover)', 'darker'));
+
+    const unknownMode = normalizeLocalThemeColors({ 'accent-hover': '#555555' });
+    expect(unknownMode['button-cta-pressed']).toBe(filledButtonPressedFromHover('var(--button-cta-hover)', 'darker'));
+  });
+
+  it('显式状态色优先，没有 accent-hover 时仍由基础色算出', () => {
+    const explicit = normalizeLocalThemeColors({
+      'accent-hover': '#6a5acd',
+      'button-cta-hover': '#111111',
+      'button-cta-pressed': '#222222',
+    });
+    expect(explicit['button-cta-hover']).toBe('#111111');
+    expect(explicit['button-cta-pressed']).toBe('#222222');
+    expect(explicit['confirm-btn-primary-hover']).toBe('var(--accent-hover)');
+
+    const baseOnly = normalizeLocalThemeColors({ 'accent-cta-bg-pure': '#6a5acd' });
+    expect(baseOnly['button-cta-hover']).toBeUndefined();
+    expect(baseOnly['confirm-btn-primary-hover']).toBeUndefined();
+  });
+
   it('迁移旧 connected badge override 并保留原中性色给文字 token', () => {
     const out = normalizeLocalThemeColors({
       surface: '#111',

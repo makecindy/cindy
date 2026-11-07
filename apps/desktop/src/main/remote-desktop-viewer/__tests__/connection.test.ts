@@ -571,6 +571,7 @@ it.each([true, false])(
       writeClipboard: () => {},
       preferences: () => ({
         audio: true,
+        idleTimeoutMinutes: 5,
         privacyScreen: false,
         hostMute: false,
         clipboardSync: false,
@@ -1050,4 +1051,29 @@ describe('代输入 window view', () => {
     expect(safety.privacyActive).toBe(false);
     expect(request.mock.calls.map(([, message]) => message.op)).not.toContain('clipboardSync');
   });
+});
+
+// Unit: negotiate the host-enforced policy before sending it, and persist live edits.
+it.each([true, false])('negotiates idle protection only for capable hosts: %s', async (supported) => {
+  let preferences = { ...DEFAULT_VIEWER_PREFERENCES };
+  const request = vi.fn(async (_target, message, check): Promise<unknown> => {
+    check();
+    if (message.op === 'capabilities') return { idleLock: supported };
+    if (message.op === 'start') return { lease: 'lease', controlling: false };
+    return {};
+  });
+  const connection = new RemoteViewerConnection({
+    owner: () => 'owner', request, readClipboard: () => '', writeClipboard: () => {},
+    preferences: () => preferences,
+    savePreferences: async (_device, patch) => (preferences = { ...preferences, ...patch }),
+  });
+  connection.bind({ deviceId: 'host', name: 'Computer' });
+  connection.setActive(true);
+  const generation = connection.generation;
+  await connection.request(generation, { op: 'capabilities' });
+  await connection.request(generation, { op: 'start', displayId: '1' });
+  expect(request.mock.calls.at(-1)?.[1].idleTimeoutMinutes).toBe(supported ? 5 : undefined);
+  await connection.preferences(generation, { idleTimeoutMinutes: 1 });
+  expect(request.mock.calls.at(-1)?.[1].idleTimeoutMinutes).toBe(supported ? 1 : undefined);
+  connection.deactivate();
 });

@@ -5,6 +5,7 @@ import {
   type FileBrowserRemoteOpEntry,
   type FileBrowserSortMode,
 } from '@cindy/maker-shared/file-browser-grid';
+import { formatByteSize } from '@cindy/maker-shared/file-preview';
 
 export {
   fileThumbKind,
@@ -71,12 +72,4 @@ export function buildWorkdirPathLevels(workdirPath: string, relPath: string) {
     };
   }
   return levels;
-}
-
-function formatByteSize(bytes: number): string {
-  if (!Number.isFinite(bytes) || bytes <= 0) return '';
-  if (bytes < 1024) return `${bytes} B`;
-  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
-  if (bytes < 1024 * 1024 * 1024) return `${(bytes / 1024 / 1024).toFixed(1)} MB`;
-  return `${(bytes / 1024 / 1024 / 1024).toFixed(1)} GB`;
 }

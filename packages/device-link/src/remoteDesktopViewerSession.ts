@@ -27,6 +27,11 @@ interface ViewerConnectOptions {
    * to a single window.
    */
   handoff?: string;
+  /**
+   * Open a plugin live screen from the host's `screens` list. Needs a host
+   * advertising `liveScreens`; the reported caps keep only what applies to it.
+   */
+  screen?: { plugin: string; id: string };
   onCapabilities?: (caps: RemoteDesktopCapabilities) => void | Promise<void>;
   onStart?: () => void;
 }
@@ -41,6 +46,7 @@ export class RemoteDesktopViewerSession {
   private controlGeneration = 0;
   private releaseUnconfirmed = false;
   private lifecycle: Promise<void> | null = null;
+  private starting: { lockScreen: boolean } | null = null;
   constructor(private readonly request: DesktopViewerRequest) {}
 
   get lease(): RemoteDesktopLease | null {
@@ -93,34 +99,76 @@ export class RemoteDesktopViewerSession {
       if (!caps.handoffWindow) throw new Error("CHANNEL_NOT_ALLOWED");
       caps = handoffWindowCapabilities(caps);
     }
+    if (options.screen !== undefined) {
+      if (!caps.liveScreens || options.handoff !== undefined)
+        throw new Error("CHANNEL_NOT_ALLOWED");
+      caps = liveScreenCapabilities(caps);
+    }
     await options.onCapabilities?.(caps);
     check();
-    const display =
-      caps.displays.find((d) => d.id === options.displayId) ?? caps.displays[0];
+    const display = options.screen
+      ? { id: "live-screen" }
+      : (caps.displays.find((d) => d.id === options.displayId) ??
+        caps.displays[0]);
     if (!display) throw new Error("DESKTOP_DISPLAY_MISSING");
     options.onStart?.();
-    const lease = await this.request<RemoteDesktopLease>(
-      {
-        op: "start",
-        displayId: display.id,
-        ...(options.takeover && caps.connectionTakeover
-          ? { takeover: true }
-          : options.resume
-            ? { resume: true }
+    const starting = { lockScreen: false };
+    this.starting = starting;
+    let lease: RemoteDesktopLease;
+    try {
+      lease = await this.request<RemoteDesktopLease>(
+        {
+          op: "start",
+          displayId: display.id,
+          ...(options.takeover && caps.connectionTakeover
+            ? { takeover: true }
+            : options.resume
+              ? { resume: true }
+              : {}),
+          ...(options.control && caps.autoControl && caps.canControl
+            ? { control: true }
             : {}),
-        ...(options.control && caps.autoControl && caps.canControl
-          ? { control: true }
-          : {}),
-        ...(options.handoff !== undefined ? { handoff: options.handoff } : {}),
-      },
-      check,
-    );
+          ...(options.handoff !== undefined
+            ? { handoff: options.handoff }
+            : {}),
+          ...(options.screen
+            ? {
+                screen: {
+                  plugin: options.screen.plugin,
+                  id: options.screen.id,
+                },
+              }
+            : {}),
+        },
+        check,
+      );
+    } finally {
+      if (this.starting === starting) this.starting = null;
+    }
     if (generation !== this.generation || !options.isCurrent()) {
-      await this.request({ op: "stop", lease: lease.lease }).catch(() => {});
+      await this.request({
+        op: "stop",
+        lease: lease.lease,
+        ...(starting.lockScreen && !options.handoff && !options.screen
+          ? { lockScreen: true }
+          : {}),
+      }).catch(() => {});
       throw new Error("DESKTOP_VIDEO_STOPPED");
     }
     // A window view that came back as a whole display is not what was asked for.
-    if (options.handoff !== undefined && typeof lease.window?.app !== "string") {
+    if (
+      options.handoff !== undefined &&
+      typeof lease.window?.app !== "string"
+    ) {
+      await this.request({ op: "stop", lease: lease.lease }).catch(() => {});
+      throw new Error("INVALID_RESPONSE");
+    }
+    // Likewise a live screen must come back as that screen, never as the desktop.
+    if (
+      options.screen &&
+      (lease.screen?.plugin !== options.screen.plugin ||
+        lease.screen.id !== options.screen.id)
+    ) {
       await this.request({ op: "stop", lease: lease.lease }).catch(() => {});
       throw new Error("INVALID_RESPONSE");
     }
@@ -266,7 +314,9 @@ export class RemoteDesktopViewerSession {
         !Number.isFinite(result.display.height) ||
         result.display.height <= 0 ||
         // Control comes back only when it was asked for.
-        (control ? typeof result.controlling !== "boolean" : result.controlling !== false)
+        (control
+          ? typeof result.controlling !== "boolean"
+          : result.controlling !== false)
       )
         throw new Error("INVALID_RESPONSE");
       lease.display = result.display;
@@ -279,15 +329,19 @@ export class RemoteDesktopViewerSession {
     }
   }
 
-  stop(lockScreen = false): Promise<unknown> {
+  /** A protected transient retry leaves the bounded host lease running, so its
+   * idle deadline survives. The next start must resume; absent recovery, the
+   * host's heartbeat expiry locks it. Explicit exits always send stop. */
+  stop(lockScreen = false, preserveLease = false): Promise<unknown> {
     this.generation++;
+    if (this.starting && lockScreen) this.starting.lockScreen = true;
     const lease = this.active;
     this.active = null;
     this.controlPending = null;
     this.controlGeneration++;
     this.releaseUnconfirmed = false;
     return this.serialize(() =>
-      lease
+      lease && (!preserveLease || lockScreen)
         ? this.request({
             op: "stop",
             lease: lease.lease,
@@ -323,6 +377,32 @@ export function handoffWindowCapabilities(
     ...(caps.cursorOverlay ? { cursorOverlay: true } : {}),
     ...(caps.viewerHidden ? { viewerHidden: true } : {}),
     handoffWindow: true,
+  };
+}
+
+/**
+ * What a plugin live screen may use: video, input to the plugin and the
+ * connection features. Nothing that acts on the desktop itself; input needs no
+ * desktop permission, so control is always possible.
+ */
+export function liveScreenCapabilities(
+  caps: RemoteDesktopCapabilities,
+): RemoteDesktopCapabilities {
+  return {
+    version: caps.version,
+    enabled: caps.enabled,
+    canControl: true,
+    platform: caps.platform,
+    displays: [],
+    ...(caps.automaticReconnect ? { automaticReconnect: true } : {}),
+    ...(caps.connectionTakeover ? { connectionTakeover: true } : {}),
+    ...(caps.videoSettings ? { videoSettings: true } : {}),
+    ...(caps.trickleIce ? { trickleIce: true } : {}),
+    ...(caps.channelRequests ? { channelRequests: true } : {}),
+    ...(caps.autoControl ? { autoControl: true } : {}),
+    ...(caps.backgroundViewing ? { backgroundViewing: true } : {}),
+    ...(caps.viewerHidden ? { viewerHidden: true } : {}),
+    liveScreens: true,
   };
 }
 
@@ -395,12 +475,18 @@ export function findRememberedMode(
 
 /** Only transient connection errors may restart a viewer. Explicit stop wins. */
 export function remoteDesktopFailureKey(code: string): string | null {
+  if (/DESKTOP_INPUT_UNSUPPORTED/.test(code)) return "inputUnsupported";
+  if (/DESKTOP_IDLE_TIMEOUT/.test(code)) return "idleDisconnected";
   if (/DESKTOP_CONNECTION_TIMEOUT/.test(code)) return "connectionTimeout";
   if (/ACCESS_REVOKED/.test(code)) return "accessRevoked";
   if (/REMOTE_DISABLED/.test(code)) return "remoteDisabled";
   if (/DESKTOP_BUSY/.test(code)) return "connectionBusy";
+  // A device screen whose device was shut down or removed: retrying cannot help.
+  if (/DESKTOP_SCREEN_NOT_(RUNNING|FOUND)/.test(code))
+    return "screenNotRunning";
   if (/DESKTOP_HANDOFF_ENDED/.test(code)) return "handoffEnded";
-  if (/DESKTOP_HANDOFF_(UNAVAILABLE|WINDOW_ONLY)/.test(code)) return "handoffUnavailable";
+  if (/DESKTOP_HANDOFF_(UNAVAILABLE|WINDOW_ONLY)/.test(code))
+    return "handoffUnavailable";
   if (/CHANNEL_NOT_ALLOWED/.test(code)) return "upgrade";
   if (/DESKTOP_DISABLED/.test(code)) return "disabled";
   if (/PERMISSION|ACCESSIBILITY/.test(code)) return "permissionHint";

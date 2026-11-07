@@ -6,6 +6,7 @@ import { WallpaperSettingsProvider, useWallpaperSettings } from '../useWallpaper
 import { DEFAULT_APPEARANCE_SETTINGS } from '@/../shared/appearanceSettings';
 import type { WallpaperDownloadProgress } from '@/../shared/appearanceSettings';
 import manifest from '@/../shared/wallpaper-video-manifest.json';
+import { getBuiltinWallpaperBackground } from '@/lib/wallpaper';
 
 function Controls() {
   const settings = useWallpaperSettings();
@@ -13,6 +14,7 @@ function Controls() {
     <>
       <button onClick={() => settings.setWallpaper('cindy-window')}>Choose</button>
       <button onClick={() => settings.setWallpaper('night-launch')}>Choose Still</button>
+      <button onClick={settings.retryDownload}>Retry</button>
       <button onClick={settings.resetWallpaper}>Reset</button>
       <button onClick={() => settings.setMotion('dynamic')}>Animate</button>
       <button onClick={() => settings.setMotion('static')}>Static</button>
@@ -41,9 +43,10 @@ afterEach(() => {
 });
 
 describe('application wallpaper lifecycle', () => {
-  // Regression: changing static wallpaper must retain the displayed canvas
-  // until the selected original is decoded, including out-of-order downloads.
-  it('retains the background until the selected original is ready, ignoring late downloads', async () => {
+  // #8591: A -> B must show B's preview immediately, then its decoded original.
+  // Existing coverage required retaining A instead. Minimal input: two selections
+  // with out-of-order image downloads; unit tier, real provider and canvas.
+  it('shows the selected preview immediately, ignoring late downloads of the previous selection', async () => {
     const finishes = new Map<string, (url: string) => void>();
     const ensureImage = vi.fn(
       (id: string) =>
@@ -79,19 +82,22 @@ describe('application wallpaper lifecycle', () => {
       document.documentElement.style.getPropertyValue('--app-wallpaper-image');
     const originalBackground = background();
     fireEvent.click(screen.getByText('Choose Still'));
+    const preview = getBuiltinWallpaperBackground('night-launch');
+    expect(background()).toBe(preview);
+    expect(background()).not.toBe(originalBackground);
     await waitFor(() =>
       expect(setPatch).toHaveBeenCalledExactlyOnceWith({ wallpaperId: 'night-launch' }),
     );
-    expect(background()).toBe(originalBackground);
+    expect(background()).toBe(preview);
     await act(async () =>
       finishes.get('cindy-window')!(`cindy-media://client-wallpaper/${'a'.repeat(64)}.webp`),
     );
-    expect(background()).toBe(originalBackground);
+    expect(background()).toBe(preview);
     const stillUrl = `cindy-media://client-wallpaper/${'b'.repeat(64)}.webp`;
     await act(async () => finishes.get('night-launch')!(stillUrl));
     expect(background()).toContain(stillUrl);
     const root = document.documentElement;
-    expect(root.style.getPropertyValue('--app-wallpaper-previous-image')).toBe(originalBackground);
+    expect(root.style.getPropertyValue('--app-wallpaper-previous-image')).toBe(preview);
     expect(root.dataset.wallpaperTransition).toBe('true');
     const finished = new Event('animationend', { bubbles: true });
     Object.defineProperty(finished, 'animationName', { value: 'app-wallpaper-image-out' });
@@ -102,6 +108,62 @@ describe('application wallpaper lifecycle', () => {
     expect(ensureImage).toHaveBeenCalledTimes(2);
     expect(ensureVideo).not.toHaveBeenCalled();
   });
+
+  // #8591: failures used to pin A indefinitely. The asset hook's retry tests
+  // did not check the displayed canvas. Minimal input: ready A, failed B, retry;
+  // unit tier, covering both download and decode failures through the provider.
+  it.each(['download', 'decode'])(
+    'keeps B preview after %s failure and upgrades after retry',
+    async (failure) => {
+      vi.useFakeTimers();
+      try {
+        const a = 'cindy-media://client-wallpaper/a.webp';
+        const b = 'cindy-media://client-wallpaper/b.webp';
+        const ensureImage = vi
+          .fn()
+          .mockResolvedValueOnce(a)
+          .mockResolvedValueOnce(failure === 'download' ? null : b)
+          .mockResolvedValue(b);
+        const decode = vi.fn().mockResolvedValue(undefined);
+        if (failure === 'decode')
+          decode.mockResolvedValueOnce(undefined).mockRejectedValueOnce(new Error('decode'));
+        vi.stubGlobal(
+          'Image',
+          class {
+            src = '';
+            decode = decode;
+          },
+        );
+        vi.stubGlobal('electronAPI', {
+          appearanceSettings: {
+            getSync: () => ({ ...DEFAULT_APPEARANCE_SETTINGS, wallpaperId: 'cindy-window' }),
+            onChanged: () => () => {},
+            setPatch: vi.fn().mockResolvedValue(undefined),
+            ensureWallpaperImage: ensureImage,
+          },
+        });
+        render(
+          <WallpaperSettingsProvider>
+            <Controls />
+          </WallpaperSettingsProvider>,
+        );
+        const background = () =>
+          document.documentElement.style.getPropertyValue('--app-wallpaper-image');
+        await act(async () => {});
+        expect(background()).toContain(a);
+        fireEvent.click(screen.getByText('Choose Still'));
+        expect(background()).toBe(getBuiltinWallpaperBackground('night-launch'));
+        await act(async () => {});
+        expect(background()).toBe(getBuiltinWallpaperBackground('night-launch'));
+        fireEvent.click(screen.getByText('Retry'));
+        await act(async () => {});
+        expect(background()).toContain(b);
+      } finally {
+        cleanup();
+        vi.useRealTimers();
+      }
+    },
+  );
 
   it('weights required image and video progress by bytes, excluding video in static mode', async () => {
     const listeners = new Set<(progress: WallpaperDownloadProgress) => void>();

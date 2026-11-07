@@ -268,6 +268,7 @@ export function decideProviderGroupFailure(
   if (code && CONNECTION_LOST_CODES.has(code)) return switchTo('unavailable', 'lost');
   if (code && MEMBER_UNAVAILABLE_CODES.has(code)) return switchTo('unavailable', null);
   // 连续拉不到那台(remote-agent/controller/proxyHandle)：只说明连接断了。
+  if (reason === 'remote_agent_restarted') return switchTo('unavailable', 'lost');
   if (reason === REMOTE_AGENT_LOST_REASON) return switchTo('unavailable', 'lost');
   if ((code && CONNECTION_CHECK_CODES.has(code)) || reason === REMOTE_AGENT_CLOSED_REASON) return switchTo('unavailable', 'check');
 

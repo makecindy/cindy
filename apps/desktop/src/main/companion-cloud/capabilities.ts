@@ -5,6 +5,7 @@
  * configuration or credentials), the memory switch, hand-over and follow-up switches, and the
  * model *preference*. The permission level never travels; the new computer uses its default.
  */
+import { readBotSystemSkillsOff, type BotSystemSkillId } from '../../shared/botSystemSkills.js';
 import { BOT_MODEL_CHAIN_MAX, normalizeBotModelChain, readBotTaskModelOverride, type BotModelRoute } from '../../shared/botModelChain.js';
 
 const MAX_REFS = 100;
@@ -25,6 +26,8 @@ export interface CompanionCapabilitiesValue {
   memory?: boolean;
   inputHandoff?: boolean;
   allowSchedulerFollow?: boolean;
+  /** Turned-off system Skills; they mean the same on every computer. */
+  systemSkillsOff?: BotSystemSkillId[];
   gender?: string;
   /** The routes the owner chose for this companion; absent when it follows the default model. */
   modelChain?: BotModelRoute[];
@@ -70,6 +73,7 @@ export function portableCompanionCapabilities(config: Record<string, unknown>, e
   for (const field of ['memory', 'inputHandoff', 'allowSchedulerFollow'] as const) {
     if (typeof config[field] === 'boolean') value[field] = config[field];
   }
+  if (Array.isArray(config.systemSkillsOff)) value.systemSkillsOff = readBotSystemSkillsOff(config.systemSkillsOff);
   if (typeof config.gender === 'string' && config.gender.length <= 16) value.gender = config.gender;
   const chain = (explicitChain ?? []).filter(portableRoute);
   if (chain.length) value.modelChain = chain;
@@ -98,6 +102,7 @@ export function parseCompanionCapabilities(raw: unknown): CompanionCapabilitiesV
   for (const field of ['memory', 'inputHandoff', 'allowSchedulerFollow'] as const) {
     if (typeof input[field] === 'boolean') value[field] = input[field];
   }
+  if (Array.isArray(input.systemSkillsOff)) value.systemSkillsOff = readBotSystemSkillsOff(input.systemSkillsOff);
   if (typeof input.gender === 'string' && input.gender.length <= 16) value.gender = input.gender;
   const chain = normalizeBotModelChain(input.modelChain).filter(portableRoute).slice(0, BOT_MODEL_CHAIN_MAX);
   if (chain.length) value.modelChain = chain;
@@ -119,7 +124,7 @@ export function companionCapabilitiesPatch(value: CompanionCapabilitiesValue, mo
   chain: BotModelRoute[]; task: BotModelRoute | null;
 }): Record<string, unknown> {
   const patch: Record<string, unknown> = {};
-  for (const field of ['skills', 'skillMode', 'skillsExcluded', 'toolsets', 'toolsetMode', 'mcpServers', 'mcpMode', 'mcpServerNames', 'memory', 'inputHandoff', 'allowSchedulerFollow'] as const) {
+  for (const field of ['skills', 'skillMode', 'skillsExcluded', 'toolsets', 'toolsetMode', 'mcpServers', 'mcpMode', 'mcpServerNames', 'memory', 'inputHandoff', 'allowSchedulerFollow', 'systemSkillsOff'] as const) {
     if (value[field] !== undefined) patch[field] = value[field];
   }
   // The value exists, so the main computer's setup is known: a model it does not name is one it

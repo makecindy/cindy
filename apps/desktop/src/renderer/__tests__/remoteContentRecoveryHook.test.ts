@@ -2,8 +2,9 @@
 import { act, cleanup, renderHook } from '@testing-library/react';
 import { afterEach, expect, it, vi } from 'vitest';
 import { useRemoteSessionSync } from '../features/cc-agent/hooks/useRemoteSessionSync';
+import { sharedTaskHostPeer } from '@cindy/device-link';
 
-const mocks = vi.hoisted(() => ({ reconcile: vi.fn(async () => true), running: false }));
+const mocks = vi.hoisted(() => ({ reconcile: vi.fn(async () => true), running: false, devices: ['host', 'neighbor'] }));
 vi.mock('@/lib/makerChatStore', () => ({
   makerChatStore: {
     reconcileRemoteMessages: mocks.reconcile,
@@ -17,7 +18,7 @@ vi.mock('@/lib/logger', () => ({
 }));
 vi.mock('@/lib/makerTransport', () => ({ isSessionTurnRunningFor: async () => true }));
 vi.mock('@/features/device-link/remoteProjectsStore', () => ({
-  remoteProjectsStore: { getDeviceIds: () => ['host', 'neighbor'], getDeviceName: () => 'host', subscribe: () => () => {} },
+  remoteProjectsStore: { getDeviceIds: () => mocks.devices, getDeviceName: () => 'host', subscribe: () => () => {} },
 }));
 vi.mock('@/features/device-link/refreshRemoteSessions', () => ({
   refreshRemoteDeviceSessions: vi.fn(),
@@ -47,9 +48,37 @@ function recoveryEvents() {
     onResponsivenessChanged: responsiveness.on,
   } });
   mocks.running = false;
+  mocks.devices = ['host', 'neighbor'];
   mocks.reconcile.mockResolvedValue(true);
   return { status, presence, responsiveness, subscribe };
 }
+
+// PR #8182 / unit: primary relay status must not close an independent shared
+// recovery gate; real hook must still subscribe and reconcile after resync.
+it('keeps shared content readable through primary outages while same-account content pauses', async () => {
+  vi.useFakeTimers();
+  const events = recoveryEvents();
+  const peer = sharedTaskHostPeer('shared-task', 'shared-host');
+  mocks.devices = ['host', peer];
+  const shared = renderHook(() => useRemoteSessionSync('shared-session', peer));
+  const ordinary = renderHook(() => useRemoteSessionSync('ordinary-session', 'host'));
+  await act(async () => { await vi.advanceTimersByTimeAsync(250); });
+  expect(shared.result.current.contentState).toBe('ready');
+  await act(async () => {
+    events.status.emit({ status: 'connecting' });
+    events.status.emit({ status: 'stopped' });
+    await vi.advanceTimersByTimeAsync(250);
+  });
+  expect(shared.result.current.contentState).toBe('ready');
+  expect(ordinary.result.current.contentState).toBe('syncing');
+  mocks.reconcile.mockClear();
+  await act(async () => {
+    shared.result.current.resync();
+    await vi.advanceTimersByTimeAsync(250);
+  });
+  expect(shared.result.current.contentState).toBe('ready');
+  expect(mocks.reconcile).toHaveBeenCalledWith('shared-session');
+});
 
 it.each(['focus', 'manual', 'presence', 'relay', 'response'])('allows %s recovery after a terminal reply clears the breaker', async (trigger) => {
   vi.useFakeTimers();

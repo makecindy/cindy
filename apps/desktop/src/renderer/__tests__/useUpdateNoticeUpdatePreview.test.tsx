@@ -11,7 +11,7 @@
  * 同时钉住:火焰按钮的完整历史路径不受本次改动影响。
  */
 
-import { act, renderHook, waitFor } from '@testing-library/react';
+import { act, cleanup, renderHook, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { useUpdateNotice } from '@/hooks/useUpdateNotice';
@@ -79,6 +79,8 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  cleanup();
+  vi.useRealTimers();
   vi.restoreAllMocks();
 });
 
@@ -223,9 +225,14 @@ describe('useUpdateNotice onOpenVersion — pre-install preview', () => {
 
     act(() => { result.current.onOpenVersion('1.4.2'); });
     await waitFor(() => expect(result.current.open).toBe(true));
+    // CI 41177892495: complete the real hook's delayed exit cleanup before
+    // jsdom teardown; prior dismiss assertions left a live 200ms callback.
+    vi.useFakeTimers();
     act(() => { result.current.dismiss(); });
 
     expect(localStorage.getItem(STORAGE_KEY)).toBe('1.4.1');
+    await act(async () => { await vi.advanceTimersByTimeAsync(200); });
+    expect(result.current.releaseNotes).toBeNull();
   });
 
   it('passes the effective locale and refreshes loaded preview notes after a language switch', async () => {
@@ -394,6 +401,9 @@ describe('useUpdateNotice automatic popup', () => {
     await waitFor(() => expect(result.current.open).toBe(true));
     localeState.current = 'ja';
     rerender();
+    // Keep the locale-response assertions before the exit animation completes,
+    // then drain that callback using virtual time instead of leaking it to CI.
+    vi.useFakeTimers();
     act(() => { result.current.dismiss(); });
     expect(result.current.open).toBe(false);
 
@@ -402,5 +412,7 @@ describe('useUpdateNotice automatic popup', () => {
     expect(result.current.open).toBe(false);
     expect(localStorage.getItem(STORAGE_KEY)).toBe('1.4.2');
     expect(mocks.fetchReleaseNotes).toHaveBeenCalledTimes(2);
+    await act(async () => { await vi.advanceTimersByTimeAsync(200); });
+    expect(result.current.releaseNotes).toBeNull();
   });
 });

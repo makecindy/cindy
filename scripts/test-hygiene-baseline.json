@@ -311,7 +311,7 @@
       "sourceReads": 1
     },
     "apps/desktop/src/main/maker-ipc/__tests__/agent-input-coordinator.test.ts": {
-      "sourceReads": 2
+      "sourceReads": 1
     },
     "apps/desktop/src/main/maker-ipc/__tests__/bootstrapDirectoryGrants.test.ts": {
       "sourceReads": 1
@@ -344,9 +344,6 @@
       "sourceReads": 2
     },
     "apps/desktop/src/main/maker-ipc/__tests__/orcaTeamService.test.ts": {
-      "sourceReads": 1
-    },
-    "apps/desktop/src/main/maker-ipc/__tests__/orcaWorkerCreationService.test.ts": {
       "sourceReads": 1
     },
     "apps/desktop/src/main/maker-ipc/__tests__/pluginTaskAuthorshipWiring.test.ts": {
@@ -560,9 +557,6 @@
       "resetModules": 1
     },
     "apps/desktop/src/renderer/__tests__/deviceLinkProjectsConcurrency.test.tsx": {
-      "resetModules": 1
-    },
-    "apps/desktop/src/renderer/__tests__/deviceProvidersCache.test.ts": {
       "resetModules": 1
     },
     "apps/desktop/src/renderer/__tests__/deviceProvidersRecovery.test.tsx": {
@@ -804,9 +798,6 @@
     "apps/desktop/src/renderer/components/settings/__tests__/RemoteSection.addFormOrder.test.ts": {
       "sourceReads": 1
     },
-    "apps/desktop/src/renderer/components/settings/__tests__/settingsSearchCatalog.test.ts": {
-      "sourceReads": 1
-    },
     "apps/desktop/src/renderer/components/settings/usage/__tests__/usageHistoryDevices.test.tsx": {
       "sourceReads": 1
     },
@@ -827,12 +818,6 @@
     },
     "apps/desktop/src/renderer/features/bots/__tests__/botNavigation.test.ts": {
       "sourceReads": 5
-    },
-    "apps/desktop/src/renderer/features/bots/__tests__/botStore.lifecycle.test.ts": {
-      "resetModules": 2
-    },
-    "apps/desktop/src/renderer/features/bots/__tests__/botStore.modelSettings.test.ts": {
-      "resetModules": 1
     },
     "apps/desktop/src/renderer/features/bots/__tests__/chatInviteBrowserHandoff.test.tsx": {
       "sourceReads": 1
@@ -865,9 +850,6 @@
       "resetModules": 1
     },
     "apps/desktop/src/renderer/features/right-sidebar/plugins/resource-usage/__tests__/subscription.test.ts": {
-      "resetModules": 1
-    },
-    "apps/desktop/src/renderer/features/right-sidebar/plugins/review/DiffViewer/__tests__/highlight.test.ts": {
       "resetModules": 1
     },
     "apps/desktop/src/renderer/features/skillhub/hooks/__tests__/useCategoryList.test.tsx": {
@@ -992,9 +974,6 @@
     },
     "apps/mobile/src/__tests__/useBotGroupChat.test.tsx": {
       "realWaits": 2
-    },
-    "apps/mobile/src/__tests__/useDeviceProviders.test.ts": {
-      "resetModules": 1
     },
     "apps/mobile/src/__tests__/visualMock.test.ts": {
       "resetModules": 1

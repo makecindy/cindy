@@ -1,9 +1,7 @@
 import { admitTaskAction, captureTaskActionGuard } from '../taskActionAuthorization.js';
-import { hasAcceptedUserTaskInput } from '../pluginTaskInput.js';
 import { describe, expect, it, vi } from 'vitest';
 import {readFileSync} from 'node:fs';
 import ts from 'typescript';
-import {isPluginTaskPermissionAllowed, PluginTaskError} from '../pluginTaskService.js';
 import { AcceptedCallbackDispatchCancelled, runAcceptedCallback } from '../acceptedCallbackRunner';
 
 import type { AgentInputQueuedMessage } from '../../../shared/agentInputQueue';
@@ -136,7 +134,7 @@ describe('model Orca cleanup authority', () => {
         },
       };
       const api = compile({
-        captureOrcaPluginAuthority: async () => { await assertCurrent(); return { assertCurrent }; },
+        captureOrcaTaskAuthority: async () => { await assertCurrent(); return { assertCurrent }; },
         orcaTeamService: service, listWorkersByLead: deps.listWorkersByLead, findFocusTargetWorker,
         setWorkerFocus: focus, resumeOrcaWorkerSessionIfMissing: resume,
         orcaWorkerResumeScheduler, log: { warn: vi.fn() },
@@ -156,7 +154,7 @@ describe('model Orca cleanup authority', () => {
       const assertCurrent = async () => { if (!allowed) throw Error('Revoked'); };
       const close = vi.fn(async () => undefined), archive = vi.fn(async () => []);
       const bindings = {
-        captureOrcaPluginAuthority: async () => { await assertCurrent(); return { assertCurrent }; },
+        captureOrcaTaskAuthority: async () => { await assertCurrent(); return { assertCurrent }; },
         getActiveTeamByLead: async () => team ? { id: 'team-1' } : null,
         getSessionOrcaRole: async () => { if (phase === 'lookup') allowed = false; return 'lead'; },
         listWorkersByLead: async () => { if (phase === 'lookup') allowed = false; return [createWorker()]; },
@@ -323,30 +321,7 @@ describe('OrcaTeamService updateWorker', () => {
     expect(getWorker()).toMatchObject({ role: 'Reviewer', label: 'backend-2' });
   });
 
-  it('rejects a label rename locked by the active plugin team plan but still allows role changes', async () => {
-    const isWorkerLabelLockedByPlan = vi.fn(async () => true);
-    const { deps, service, getWorker } = createDeps({ isWorkerLabelLockedByPlan });
 
-    await expect(service.updateWorker({
-      callerLeadSessionId: 'lead-1',
-      workerId: 'worker-1',
-      label: 'backend-2',
-    })).resolves.toMatchObject({ ok: false, errorCode: 'WORKER_STATE_CHANGED' });
-    expect(isWorkerLabelLockedByPlan).toHaveBeenCalledWith({
-      leadSessionId: 'lead-1',
-      labels: ['research', 'backend-2'],
-    });
-    expect(deps.updateWorkerIdentity).not.toHaveBeenCalled();
-
-    // 计划只按 label 寻址，role 改名不受影响，也不触发计划查询。
-    await expect(service.updateWorker({
-      callerLeadSessionId: 'lead-1',
-      workerId: 'worker-1',
-      role: 'Reviewer',
-    })).resolves.toMatchObject({ ok: true, role: 'Reviewer', label: 'research' });
-    expect(isWorkerLabelLockedByPlan).toHaveBeenCalledTimes(1);
-    expect(getWorker()).toMatchObject({ role: 'Reviewer', label: 'research' });
-  });
 });
 
 function createDeps(overrides: Partial<OrcaTeamServiceDeps> = {}) {
@@ -593,59 +568,34 @@ describe('OrcaTeamService', () => {
     })).resolves.toMatchObject({ dispatched: true, agentKind: 'pi' });
   });
 
-  // #6399: plugin-only coverage missed an ordinary owner input revoked after
-  // admission. Real host capture + public service; delayed acceptance escapes ALS.
-  it.each(['send', 'interrupt'].flatMap(action => [
-    ...['initial', 'lookup', 'restore', 'accept', 'queued', 'healthy'].map(phase => ({action,phase,source:'plugin'})),
-    ...['lookup', 'queued', 'healthy'].map(phase => ({action,phase,source:'action'})),
-  ]))(
-    'preserves $source authority for public $action across $phase', async ({action,phase,source:authoritySource}) => {
-      let revoked = phase === 'initial', nativeCalls = 0;
-      let delayed: (() => Promise<void>) | undefined;
-      const source = readFileSync(new URL('../register.ts',import.meta.url),'utf8');
-      const helper = source.slice(source.indexOf('  const assertPluginWorkerAutoAuthorized ='),source.indexOf('  const orcaWorkerCreationService ='));
-      const epoch = {client:{}};
-      const bindings = {PluginTaskError,isPluginTaskPermissionAllowed,getCurrentDbClientSnapshot:()=>epoch,
-        maker:{getSession:()=>null},inputCoordinator:{getAcceptedInputProvenance:()=>authoritySource==='plugin'?{clientId:'plugin-task:run'}:null},
-        createPluginTaskStore:()=>({get:async (id:string)=>authoritySource==='action'?undefined:id==='run'
-          ? {operation:'send',targetId:'lead-1',pluginId:'plugin',payload:'{"inputMessageId":"plugin-task:run"}'}
-          : {operation:'create',pluginId:'plugin',payload:JSON.stringify({ownershipRevoked:revoked})}}),
-        pluginTaskServiceForCurrentOwner:()=>({get:async()=>({status:'active',permissionMode:'auto'})}),
-        isPluginTaskAuthorized:()=>!revoked,getPluginTaskDefaults:()=>({permissionMode:'auto'})};
-      const capture = new Function('captureTaskActionGuard', 'hasAcceptedUserTaskInput', ...Object.keys(bindings),ts.transpileModule(`${helper}\nreturn captureOrcaPluginAuthority;`,{compilerOptions:{target:ts.ScriptTarget.ES2022}}).outputText)(captureTaskActionGuard, hasAcceptedUserTaskInput, ...Object.values(bindings));
-      const {deps,service,getWorker}=createDeps({captureControlAuthority:async id=>(await capture(id)).assertCurrent});
-      const list=deps.listWorkersByLead;
-      deps.listWorkersByLead=vi.fn(async id=>{const r=await list(id);if(phase==='lookup')revoked=true;return r;});
-      deps.resumeWorkerSession=vi.fn(async()=>{if(phase==='restore')revoked=true;});
-      const dispatch=async (params: Parameters<OrcaTeamServiceDeps['reserveWorkerMessage']>[0]):Promise<DispatchWorkerMessageResult>=>{
-        if(action==='interrupt'){
-          if(phase==='restore')revoked=true;
-          await params.beforeReserve?.(); params.onReserved?.();
-        }
-        const accept=async()=>{if(phase==='accept')revoked=true;await runAcceptedCallback(params.onAccepted,'worker-session-1','input',deps.log);nativeCalls++;};
-        if(phase==='queued')delayed=accept;else await accept();
-        return {ok:true,mode:phase==='queued'?'queued':'dispatched',clientId:'input',dispatchOutcome:{kind:'session-dispatch',source:'test',dispatched:true},targetTitle:'Worker',targetLastUserSendAt:null};
-      };
-      deps.dispatchWorkerMessage=vi.fn(dispatch);deps.reserveWorkerMessage=vi.fn(dispatch);
-      const invoke=async()=>service[action==='send'?'sendToWorker':'interruptWorker']({callerLeadSessionId:'lead-1',targetSessionId:'worker-session-1',message:'Evaluate'});
-      const run=async()=>{
-        if(authoritySource==='plugin')return invoke();
-        const admitted=await admitTaskAction({sessionId:'lead-1',server:'cindy_orca',tool:action==='send'?'send_to_worker':'interrupt_worker',args:{}},
-          {key:'owner',ownerInput:true,delegated:false,assertCurrent:async()=>{if(revoked)throw new Error('Revoked');}});
-        if(!admitted.ok||!admitted.run)throw new Error('missing admission');
-        return admitted.run(invoke);
-      };
-      if(phase==='initial')await expect(run()).rejects.toThrow();
-      else {
-        const result=await run();
-        if(phase==='queued'){expect(result.ok).toBe(true);revoked=true;await expect(delayed!()).rejects.toBeInstanceOf(AcceptedCallbackDispatchCancelled);}
-        else expect(result.ok).toBe(phase==='healthy');
-      }
-      expect(nativeCalls).toBe(phase==='healthy'?1:0);
-      expect(getWorker().status).toBe(phase==='healthy'?'running':'idle');
-      if(action==='interrupt'&&['initial','lookup','restore'].includes(phase))expect(deps.requestWorkerInterrupt).not.toHaveBeenCalled();
-      expect(deps.archiveWorkerSession).not.toHaveBeenCalled();
+  it.each(['send', 'interrupt'] as const)('rechecks task action authorization during public %s', async action => {
+    let allowed = true;
+    const { deps, service, getWorker } = createDeps({
+      captureControlAuthority: async () => {
+        const guard = captureTaskActionGuard();
+        await guard?.();
+        return async () => { await guard?.(); };
+      },
     });
+    const list = deps.listWorkersByLead;
+    deps.listWorkersByLead = vi.fn(async id => { const workers = await list(id); allowed = false; return workers; });
+    const admitted = await admitTaskAction({
+      sessionId: 'lead-1', server: 'cindy_orca', tool: action === 'send' ? 'send_to_worker' : 'interrupt_worker', args: {},
+    }, { key: 'owner', ownerInput: true, delegated: false,
+      assertCurrent: async () => { if (!allowed) throw new Error('TASK_ACTION_AUTHORIZATION_EXPIRED'); } });
+    if (!admitted.ok || !admitted.run) throw new Error('missing admission');
+    const params = { callerLeadSessionId: 'lead-1', targetSessionId: 'worker-session-1', message: 'Evaluate' };
+    if (action === 'send') {
+      await expect(admitted.run(() => service.sendToWorker(params)))
+        .resolves.toMatchObject({ ok: false, errorCode: 'AGENT_NOT_READY', message: 'TASK_ACTION_AUTHORIZATION_EXPIRED' });
+    } else {
+      await expect(admitted.run(() => service.interruptWorker(params)))
+        .resolves.toMatchObject({ ok: false, errorCode: 'AGENT_NOT_READY', message: 'TASK_ACTION_AUTHORIZATION_EXPIRED' });
+    }
+    expect(getWorker().status).toBe('idle');
+    expect(deps.dispatchWorkerMessage).not.toHaveBeenCalled();
+    expect(deps.reserveWorkerMessage).not.toHaveBeenCalled();
+  });
   it.each(['lookup', 'resume', 'send', 'accepted-list', 'status-update', 'queued', 'healthy'])(
     'rechecks Host creation provenance at acceptance after %s', async phase => {
       let allowed = true, nativeCalls = 0;

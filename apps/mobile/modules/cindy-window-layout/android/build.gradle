@@ -1,0 +1,19 @@
+plugins {
+  id 'com.android.library'
+  id 'expo-module-gradle-plugin'
+}
+
+group = 'com.cindy.windowlayout'
+version = '0.1.0'
+
+android {
+  namespace 'com.cindy.windowlayout'
+  defaultConfig {
+    versionCode 1
+    versionName '0.1.0'
+  }
+}
+
+dependencies {
+  implementation 'androidx.window:window:1.5.1'
+}

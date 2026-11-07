@@ -56,6 +56,14 @@ export const TELEGRAM_HOOK_SESSION_CHANNEL_NOTE =
 export const X_HOOK_SESSION_CHANNEL_NOTE =
   '\n\n⚠️ 当前是 X 会话:当前账号为付费账号,不受 280 个字符限制,无需针对当前渠道调整回答篇幅;文字回复直接输出即可(系统会自动发回当前 X 会话,无需工具);正文可以使用标题、列表、表格、普通段落或代码块组织内容,发布时会转换为纯文本;附件引用不受此限制。在 X 中除附件引用外,尽量避免输出其他 URL 链接,也不要解释或复述这些格式要求;把文件发给用户是在最终回复文本里写 `[文件名](xdt-file:///绝对路径)`(文件须位于当前工作目录内),图片直接引用其地址 `![说明](本机图片绝对路径或 cindy-media://…)`;仅当用户明确说「发飞书 / 飞书通知我」时才走飞书通道。';
 
+/**
+ * 官方飞书 / Lark(Cindy 官方机器人, hook)会话。与个人飞书 bot 同平台但不是同一个
+ * 机器人: 当前对话的回复由 hook 自动发回, 本工具只会走用户另配的个人 bot ——
+ * 「发飞书」在这里不是改道的理由, 只有明确点名个人机器人时才用。
+ */
+export const FEISHU_HOOK_SESSION_CHANNEL_NOTE =
+  '\n\n⚠️ 当前是飞书 / Lark 官方机器人会话:文字回复直接输出即可(会自动回复到当前飞书 / Lark 对话或话题,无需工具);把文件发给用户是在最终回复文本里写 `[文件名](xdt-file:///绝对路径)`(文件须位于当前工作目录内),图片直接引用其地址 `![说明](本机图片绝对路径或 cindy-media://…)`,系统自动作为附件发回,不要用本工具;本工具发往用户另行配置的个人飞书机器人,仅当用户明确要求通过个人机器人发送时才使用。';
+
 export const WECOM_SESSION_CHANNEL_NOTE =
   '\n\n⚠️ 当前是企业微信会话:文字回复直接输出即可(会自动回复到当前企业微信会话,无需工具);把文件发给用户是在最终回复文本里写 `[文件名](xdt-file:///绝对路径)`(文件须位于当前工作目录内),图片直接引用其地址 `![说明](本机图片绝对路径或 cindy-media://…)`,系统自动作为企业微信附件发回,不要用本工具;仅当用户明确说「发飞书 / 飞书通知我」时才走飞书通道。';
 
@@ -65,6 +73,8 @@ const NOTE_BY_SOURCE: Record<string, string> = {
   // 键与 hook-control/session-runner.ts 的 vendorOptions.source 是一对隐式契约
   wecom: WECOM_SESSION_CHANNEL_NOTE,
   x: X_HOOK_SESSION_CHANNEL_NOTE,
+  // 官方飞书刻意不复用个人 bot 的 'feishu'(那是个人渠道会话, 不追加提示)。
+  'feishu-hook': FEISHU_HOOK_SESSION_CHANNEL_NOTE,
 };
 
 /** 按会话来源产出工具描述——无对应 note 的来源原样返回 D,保证字节级不变。 */

@@ -64,7 +64,9 @@ export function providerLogo(providerId: string, name: string, routing?: Provide
 /** Subscription logos follow the model maker: Anthropic for Claude, OpenAI for Codex, xAI for Grok. */
 export function familyLogo(family: MenubarFamily): string {
   if (family === 'claude') return logoForKind('anthropic', 'Claude');
+  if (family === 'kimi') return providerLogo('kimi-coding', 'Kimi Code');
   if (family === 'codex') return logoForKind('openai', 'Codex');
+  if (family === 'opencode-go') return providerLogo('opencode-go', 'OpenCode Go');
   return logoForKind('xai', 'Grok');
 }
 

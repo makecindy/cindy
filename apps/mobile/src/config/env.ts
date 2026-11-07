@@ -273,6 +273,32 @@ export let DEVICE_LINK_API_BASE_URL = resolveDeviceLinkApiBaseUrl(
   configuredValue('EXPO_PUBLIC_XDT_DEVICE_LINK_API_BASE_URL'),
 );
 
+// 官方中转地址:构建清单 / realm 激活写入的值,也是 realm 缓存里的 deviceLinkApiBaseUrl。
+// 自建中转(docs/self-hosted-relay-plan.md §5.3)只覆盖对外的 DEVICE_LINK_API_BASE_URL,
+// 区域函数之后的每次写入都重新套用覆盖值;推送等直接读 realm 缓存的路径仍拿到官方地址。
+let officialDeviceLinkApiBaseUrl = DEVICE_LINK_API_BASE_URL;
+let deviceLinkApiBaseOverride: string | null = null;
+
+function writeOfficialDeviceLinkApiBaseUrl(value: string): void {
+  officialDeviceLinkApiBaseUrl = value;
+  DEVICE_LINK_API_BASE_URL = deviceLinkApiBaseOverride ?? value;
+}
+
+/** 官方中转地址,不受自建中转覆盖:共享任务的接口、附件与跨账号连接都在官方。 */
+export function getOfficialDeviceLinkApiBaseUrl(): string {
+  return officialDeviceLinkApiBaseUrl;
+}
+
+/**
+ * 自建中转的地址覆盖:非空时所有 device-link 消费者(REST、WebSocket)改连这个地址;
+ * null 恢复官方中转。只由 device-link/selfHostedRelayRouting 调用,凭证与鉴权方案在那里一并切换。
+ */
+export function setDeviceLinkApiBaseOverride(baseUrl: string | null): void {
+  const normalized = baseUrl?.trim().replace(/\/+$/, '') ?? '';
+  deviceLinkApiBaseOverride = normalized || null;
+  DEVICE_LINK_API_BASE_URL = deviceLinkApiBaseOverride ?? officialDeviceLinkApiBaseUrl;
+}
+
 /** voice-server 数据面；正式包由启动端点清单回填。 */
 export let VOICE_API_BASE_URL = normalizeBaseUrlWithDefault(
   configuredValue('EXPO_PUBLIC_CINDY_VOICE_API_BASE_URL'),
@@ -286,7 +312,7 @@ function syncBuildTokenEndpointCache(): void {
     ...buildEndpointMap,
     authApiBaseUrl: AUTH_API_BASE_URL,
     oauthBrokerApiBaseUrl: OAUTH_BROKER_API_BASE_URL,
-    deviceLinkApiBaseUrl: DEVICE_LINK_API_BASE_URL,
+    deviceLinkApiBaseUrl: officialDeviceLinkApiBaseUrl,
     voiceApiBaseUrl: VOICE_API_BASE_URL,
   };
   realmEndpointCache.set(buildRealm, buildEndpointMap);
@@ -460,7 +486,9 @@ export function applyResolvedClientEndpoints(
     );
   }
   if (resolved.deviceLinkApiBaseUrl !== undefined) {
-    DEVICE_LINK_API_BASE_URL = resolved.deviceLinkApiBaseUrl.replace(/\/$/, '');
+    writeOfficialDeviceLinkApiBaseUrl(
+      resolved.deviceLinkApiBaseUrl.replace(/\/$/, ''),
+    );
   }
   if (resolved.voiceApiBaseUrl !== undefined) {
     VOICE_API_BASE_URL = resolved.voiceApiBaseUrl.replace(/\/$/, '');
@@ -566,7 +594,7 @@ export function activateMobileSessionRealm(region: ClientEndpointRegion): void {
   activeSessionRealm = region;
   AUTH_API_BASE_URL = endpoints.authApiBaseUrl;
   OAUTH_BROKER_API_BASE_URL = endpoints.oauthBrokerApiBaseUrl;
-  DEVICE_LINK_API_BASE_URL = endpoints.deviceLinkApiBaseUrl;
+  writeOfficialDeviceLinkApiBaseUrl(endpoints.deviceLinkApiBaseUrl);
   VOICE_API_BASE_URL = endpoints.voiceApiBaseUrl;
 }
 
@@ -577,7 +605,7 @@ export function resetMobileSessionRealm(): void {
   if (!endpoints) return;
   AUTH_API_BASE_URL = endpoints.authApiBaseUrl;
   OAUTH_BROKER_API_BASE_URL = endpoints.oauthBrokerApiBaseUrl;
-  DEVICE_LINK_API_BASE_URL = endpoints.deviceLinkApiBaseUrl;
+  writeOfficialDeviceLinkApiBaseUrl(endpoints.deviceLinkApiBaseUrl);
   VOICE_API_BASE_URL = endpoints.voiceApiBaseUrl;
 }
 

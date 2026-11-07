@@ -691,6 +691,12 @@ describe('requestForOrigin', () => {
 });
 
 describe('filterResultsByWorkingDirs', () => {
+  it('uses explicit membership for indexed search without changing cwd', () => {
+    const page = response([result('checkout', 1, { projectDir: '/project', workingDir: '/tmp/checkout' })]);
+    expect(filterResultsByWorkingDirs(page, ['/project']).results).toHaveLength(1);
+    expect(filterResultsByWorkingDirs(page, ['/tmp/checkout']).results).toHaveLength(0);
+    expect(remoteIndexedSearchIgnoredWorkingDirs(page, ['/project'])).toBe(false);
+  });
   it('drops remote hits that belong to another project', () => {
     const page = filterResultsByWorkingDirs(
       response([

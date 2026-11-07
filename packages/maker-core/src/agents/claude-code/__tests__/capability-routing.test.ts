@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
 import type { CapabilityRoutingPolicy } from '../../../types/capability-routing.js';
+import { withoutUserMcpRoutes } from '../../../types/capability-routing.js';
 import {
   buildClaudeAskUserQuestionCallerProvenanceHooks,
   buildClaudeDeniedMcpServers,
@@ -13,7 +14,7 @@ import {
   buildClaudeSkillOverrides,
   mergeClaudeHookSets,
   CLAUDE_ASK_USER_QUESTION_TOOL_NAME,
-  CINDY_ASYNC_QUESTION_TOOL_NAME,
+  CINDY_ASK_OWNER_TOOL_NAME,
   CLAUDE_SUBAGENT_ASK_USER_QUESTION_DENIAL_REASON,
   ORCA_SEND_TO_LEAD_TOOL_NAME,
 } from '../capability-routing.js';
@@ -52,7 +53,7 @@ describe('Claude Orca caller provenance', () => {
     expect(buildClaudeRemoteOrcaCallerGuards(false)).toEqual([]);
   });
 
-  it.each([CLAUDE_ASK_USER_QUESTION_TOOL_NAME, CINDY_ASYNC_QUESTION_TOOL_NAME])('allows only the root to ask using %s', async (toolName) => {
+  it.each([CLAUDE_ASK_USER_QUESTION_TOOL_NAME, CINDY_ASK_OWNER_TOOL_NAME])('allows only the root to ask using %s', async (toolName) => {
     const hook = buildClaudeAskUserQuestionCallerProvenanceHooks().PreToolUse?.find((entry) => entry.matcher === toolName)?.hooks[0];
     if (!hook) throw new Error('expected AskUserQuestion caller provenance hook');
     const input = {
@@ -85,7 +86,7 @@ describe('Claude Orca caller provenance', () => {
       invocation: 'root-only',
       denialMessage: CLAUDE_SUBAGENT_ASK_USER_QUESTION_DENIAL_REASON,
     }, {
-      toolNamePrefix: CINDY_ASYNC_QUESTION_TOOL_NAME,
+      toolNamePrefix: CINDY_ASK_OWNER_TOOL_NAME,
       sourceServerId: 'cindy_helper',
       invocation: 'root-only',
       denialMessage: CLAUDE_SUBAGENT_ASK_USER_QUESTION_DENIAL_REASON,
@@ -196,11 +197,42 @@ describe('Claude disabled built-in surfaces', () => {
     expect(buildClaudeDisallowedTools(undefined)).toEqual([]);
   });
 
+  it('withoutUserMcpRoutes drops only user-mcp routes and keeps the same object when there are none', () => {
+    const user = {
+      capabilityId: 'computer-use',
+      source: { kind: 'user-mcp' as const, harness: 'claude-code', surface: 'mcp' as const, id: 'cua-driver' },
+      invocation: 'disabled' as const,
+    };
+    const mixed = { overrides: [...policy.overrides, user] };
+    expect(withoutUserMcpRoutes(mixed)?.overrides).toEqual(policy.overrides);
+    expect(withoutUserMcpRoutes(policy)).toBe(policy);
+    expect(withoutUserMcpRoutes(undefined)).toBeUndefined();
+  });
+
   it('denies a disabled MCP server by name so its instructions leave the prompt too', () => {
     expect(buildClaudeDeniedMcpServers(policy)).toEqual([
       { serverName: 'claude.ai Claude Docs' },
     ]);
     expect(buildClaudeDeniedMcpServers(undefined)).toEqual([]);
+  });
+
+  // A user-mcp route names the user's own registration on purpose (cua-driver →
+  // cindy_computer); it is applied only as a denied server, never narrowed.
+  it('applies a user-mcp route only as a disabled server', () => {
+    const userRoute = (invocation: 'disabled' | 'explicit-only' | 'auto') => ({
+      overrides: [{
+        capabilityId: 'computer-use',
+        source: { kind: 'user-mcp' as const, harness: 'claude-code', surface: 'mcp' as const, id: 'cua-driver' },
+        invocation,
+        replacement: { kind: 'cindy-host' as const, id: 'cindy_computer' },
+      }],
+    });
+    expect(buildClaudeDeniedMcpServers(userRoute('disabled'))).toEqual([{ serverName: 'cua-driver' }]);
+    expect(buildClaudeDeniedMcpServers(userRoute('explicit-only'))).toEqual([]);
+    expect(buildClaudeRemoteToolGuards(userRoute('explicit-only'))).toEqual([]);
+    expect(buildClaudeRemoteToolGuards(userRoute('disabled'))).toEqual([
+      expect.objectContaining({ toolNamePrefix: 'mcp__cua-driver__', invocation: 'disabled' }),
+    ]);
   });
 });
 
@@ -349,6 +381,43 @@ describe('buildClaudeLocalToolGuardHooks', () => {
         { signal: new AbortController().signal },
       ),
     ).resolves.toEqual({ continue: true });
+  });
+
+  it('still intercepts a user-mcp route although the server is a user registration', async () => {
+    const preToolUse = buildClaudeLocalToolGuardHooks(
+      {
+        overrides: [{
+          capabilityId: 'computer-use',
+          source: { kind: 'user-mcp', harness: 'claude-code', surface: 'mcp', id: 'cua-driver' },
+          invocation: 'disabled',
+          replacement: { kind: 'cindy-host', id: 'cindy_computer' },
+        }],
+      },
+      () => '',
+      undefined,
+      () => new Set(['cua-driver']),
+    ).PreToolUse?.[0]?.hooks[0];
+    if (!preToolUse) throw new Error('expected local routing hook');
+    await expect(
+      preToolUse(
+        {
+          hook_event_name: 'PreToolUse',
+          session_id: 'session-user-driver',
+          transcript_path: '/tmp/transcript',
+          cwd: '/repo',
+          tool_name: 'mcp__cua-driver__run_steps',
+          tool_input: {},
+          tool_use_id: 'tool-user-driver',
+        },
+        'tool-user-driver',
+        { signal: new AbortController().signal },
+      ),
+    ).resolves.toMatchObject({
+      hookSpecificOutput: {
+        permissionDecision: 'deny',
+        permissionDecisionReason: expect.stringContaining('cindy_computer'),
+      },
+    });
   });
 
   it('does not intercept a user MCP whose id aliases the normalized plugin prefix', async () => {

@@ -37,6 +37,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 
 import JSZip from 'jszip';
+import { encodeLocalPluginShareContent } from '@cindy/plugin-protocol';
 
 import { type InstalledGhost } from '../../shared/ghost.js';
 import { findInstalledGhostByInstanceId, isGhostInstanceId } from '../../shared/pluginIdentity.js';
@@ -527,11 +528,11 @@ async function snapshotPackage(
   return null;
 }
 
-export async function snapshotInstalledGhostPackage(
+async function readInstalledGhostContent(
   id: unknown,
   deps: Pick<ExportGhostPackageDeps, 'listInstalled'>,
 ): Promise<
-  | { status: 'prepared'; bytes: Buffer; ghost: InstalledGhost; contentSha256: string }
+  | { status: 'prepared'; ghost: InstalledGhost; snapshot: PackageSnapshot; maxEntries: number; maxArchive: number }
   | Exclude<ExportGhostPackageResult, { status: 'saved' } | { status: 'canceled' }>
 > {
   if (typeof id !== 'string' || !isGhostInstanceId(id)) {
@@ -560,6 +561,32 @@ export async function snapshotInstalledGhostPackage(
   const snapshot = await snapshotPackage(ghost.dir, limits);
   if (snapshot === 'too_large') return { status: 'error', code: 'too_large' };
   if (!snapshot) return { status: 'error', code: 'read_failed' };
+  return { status: 'prepared', ghost, snapshot, maxEntries: limits.maxEntries, maxArchive };
+}
+
+function contentDigest(snapshot: PackageSnapshot): string {
+  return crypto.createHash('sha256').update(encodeLocalPluginShareContent(snapshot.entries.map(file => ({
+    path: file.rel, sha256: sha256hex(file.data), unixPermissions: file.unixPermissions,
+  })), snapshot.emptyDirs)).digest('hex');
+}
+
+/** Read the same bounded, consistent package content without compressing it. */
+export async function inspectInstalledGhostPackageContent(
+  id: unknown,
+  deps: Pick<ExportGhostPackageDeps, 'listInstalled'>,
+) {
+  const content = await readInstalledGhostContent(id, deps);
+  if (content.status !== 'prepared') return content;
+  return { status: 'prepared' as const, ghost: content.ghost, contentSha256: contentDigest(content.snapshot) };
+}
+
+export async function snapshotInstalledGhostPackage(
+  id: unknown,
+  deps: Pick<ExportGhostPackageDeps, 'listInstalled'>,
+) {
+  const content = await readInstalledGhostContent(id, deps);
+  if (content.status !== 'prepared') return content;
+  const { ghost, snapshot, maxEntries, maxArchive } = content;
 
   const zip = new JSZip();
   for (const rel of snapshot.emptyDirs) {
@@ -568,8 +595,8 @@ export async function snapshotInstalledGhostPackage(
   for (const file of snapshot.entries) {
     zip.file(file.rel, file.data, { unixPermissions: file.unixPermissions });
   }
-  if (Object.keys(zip.files).length > limits.maxEntries) {
-    return { status: 'error', code: 'too_large' };
+  if (Object.keys(zip.files).length > maxEntries) {
+    return { status: 'error' as const, code: 'too_large' as const };
   }
   let buf: Buffer;
   try {
@@ -580,17 +607,16 @@ export async function snapshotInstalledGhostPackage(
     });
   } catch {
     // 压缩失败(zlib 等)如实落到结构化结果,不冒成未捕获的 IPC 异常。
-    return { status: 'error', code: 'compress_failed' };
+    return { status: 'error' as const, code: 'compress_failed' as const };
   }
-  if (buf.byteLength > maxArchive) return { status: 'error', code: 'too_large' };
-
+  if (buf.byteLength > maxArchive) return { status: 'error' as const, code: 'too_large' as const };
+  // Contribution recovery persists this older digest; preserve its framing.
   const contentEntries = snapshot.entries.map(file => [
-    file.rel, file.unixPermissions, crypto.createHash('sha256').update(file.data).digest('hex'),
+    file.rel, file.unixPermissions, sha256hex(file.data),
   ]).sort((a, b) => String(a[0]).localeCompare(String(b[0])));
   const contentSha256 = crypto.createHash('sha256')
-    .update(JSON.stringify([snapshot.emptyDirs.slice().sort(), contentEntries]))
-    .digest('hex');
-  return { status: 'prepared', bytes: buf, ghost, contentSha256 };
+    .update(JSON.stringify([snapshot.emptyDirs.slice().sort(), contentEntries])).digest('hex');
+  return { status: 'prepared' as const, bytes: buf, ghost, contentSha256, shareContentSha256: contentDigest(snapshot) };
 }
 
 export async function exportGhostPackage(

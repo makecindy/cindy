@@ -232,6 +232,71 @@ describe('media download approval and network recovery', () => {
     expect(mocks.release).toHaveBeenCalledOnce();
   });
 
+  // 2026-10-30 线上回归：X 任务的 Seedance 成片连续四次在正好 120 秒失败，字节当时还在以 40 KB/s 到达。
+  // 入口 downloadMediaResult，unit；相邻用例的响应体都瞬时结束，没有覆盖慢速传输。
+  // 最小失败输入：每 20 秒一个分块，持续 5 分钟。
+  describe('slow transfers', () => {
+    let chunks = 0;
+    let end: 'close' | 'stall' = 'close';
+    beforeEach(() => {
+      vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'Date'] });
+      mocks.fetch.mockImplementation(async (_url, init: RequestInit, gate) => {
+        await gate();
+        let sent = 0;
+        return response(new ReadableStream<Uint8Array>({
+          start(stream) { init.signal?.addEventListener('abort', () => stream.error(new Error('aborted'))); },
+          async pull(stream) {
+            await new Promise((resolve) => setTimeout(resolve, 20_000));
+            if (sent++ < chunks) stream.enqueue(Buffer.from('x'));
+            else if (end === 'close') stream.close();
+            else await new Promise(() => {});
+          },
+        }));
+      });
+    });
+    function drip(count: number, completion: 'close' | 'stall' = 'close') {
+      chunks = count;
+      end = completion;
+    }
+    /** 文件操作全换成内存实现，时序只由假时钟决定；真实磁盘 I/O 跟不上时钟推进，负载高时会拉偏耗时。 */
+    async function settle(ctx: MediaDownloadContext) {
+      const written: Uint8Array[] = [];
+      vi.spyOn(fs, 'mkdtemp').mockResolvedValue('/nonexistent/cindy-media-download');
+      vi.spyOn(fs, 'rm').mockResolvedValue();
+      vi.spyOn(fs, 'open').mockResolvedValue({
+        writeFile: async (chunk: Uint8Array) => { written.push(chunk); }, close: async () => {},
+      } as never);
+      const startedAt = Date.now();
+      let settled = false;
+      const outcome = download(ctx).then(
+        (result) => ({ result, error: undefined }), (error: unknown) => ({ result: undefined, error }),
+      ).finally(() => { settled = true; });
+      while (!settled && Date.now() - startedAt < 600_000) await vi.advanceTimersByTimeAsync(1_000);
+      expect(settled).toBe(true);
+      return { ...(await outcome), written, elapsedMs: Date.now() - startedAt };
+    }
+
+    it('finishes while bytes keep arriving past the response budget', async () => {
+      drip(15);
+      const { error, written } = await settle(context());
+      expect(error).toBeUndefined();
+      expect(written).toHaveLength(15);
+      expect(mocks.fetch).toHaveBeenCalledOnce();
+    });
+
+    it.each([
+      ['a stall after the response budget', 8, 190_000],
+      ['the total transfer cap', Infinity, 540_000],
+    ])('stops at %s without restarting the transfer', async (_name, chunks, expectedMs) => {
+      drip(chunks, 'stall');
+      const { error, elapsedMs } = await settle(context());
+      expect(error).toMatchObject({ code: 'MEDIA_DOWNLOAD_FAILED' });
+      expect(elapsedMs).toBeGreaterThanOrEqual(expectedMs);
+      expect(elapsedMs).toBeLessThanOrEqual(expectedMs + 2_000);
+      expect(mocks.fetch).toHaveBeenCalledOnce();
+    });
+  });
+
   it('cancelled approval cannot dispatch, even if a late response allows it', async () => {
     const ctx = context();
     const controller = new AbortController();

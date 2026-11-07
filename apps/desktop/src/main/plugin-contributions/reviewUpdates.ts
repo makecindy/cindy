@@ -2,7 +2,7 @@ import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 import { z } from 'zod';
-import type { AuthorHistoryEvent, MyPluginSummary, SubmissionView } from '../../shared/pluginContributionContract.js';
+import type { ContributionChanges, AuthorHistoryEvent, MyPluginSummary, SubmissionView } from '../../shared/pluginContributionContract.js';
 import type { PluginReviewUpdate } from '../../shared/pluginContributions.js';
 import { ownerScopedUserDataPath } from '../appSessionState.js';
 import { isPassiveSharedUserDataInstance } from '../authManager.js';
@@ -11,7 +11,8 @@ import { ContributionApi } from './api.js';
 import { assertContributionOwner, contributionAccountKey } from './prepared.js';
 
 type Decision = Omit<PluginReviewUpdate, 'unread'>;
-let cache: { owner: string; entries: Map<string, { fingerprint: string; decision: Decision | null }> } | null = null;
+type ReviewCache = { owner: string; token: Pick<ContributionChanges, 'changedAt' | 'eventCount'>; entries: Map<string, Decision | null> };
+let cache: ReviewCache | null = null;
 let inFlight: { owner: string; task: Promise<PluginReviewUpdate[]> } | null = null;
 const readSchema = z.object({ version: z.literal(1), read: z.record(z.string(), z.string()) });
 
@@ -30,6 +31,12 @@ function decision(pluginId: string, value: SubmissionView | AuthorHistoryEvent):
   const status = 'reviewStatus' in value ? value.reviewStatus : value.type;
   const at = 'decidedAt' in value ? value.decidedAt : value.at;
   const revision = value.revision;
+  if (!('reviewStatus' in value) && (status === 'disabled' || status === 'revoked' || status === 'enabled') && at) {
+    const marketStatus = value.pluginStatus === 'archived' ? 'archived' : status as 'disabled' | 'revoked' | 'enabled';
+    return { pluginId, key: JSON.stringify([value.eventId, marketStatus, at]), status: marketStatus, decidedAt: at,
+      releaseId: value.releaseId, version: value.version, sha256: revision?.sha256 ?? null,
+      revision: revision?.displayUpdatedAt ?? null };
+  }
   if ((status !== 'approved' && status !== 'rejected') || !at || !revision || !value.version) return null;
   const key = JSON.stringify([revision.releaseId, revision.sha256, revision.displayUpdatedAt, status, at]);
   return { pluginId, key, releaseId: revision.releaseId, version: value.version, sha256: revision.sha256,
@@ -37,17 +44,17 @@ function decision(pluginId: string, value: SubmissionView | AuthorHistoryEvent):
 }
 async function latestDecision(api: ContributionApi, plugin: MyPluginSummary): Promise<Decision | null> {
   const current = plugin.latestSubmission && decision(plugin.pluginId, plugin.latestSubmission);
-  if (current) return current;
-  // A newer pending/cancelled version must not hide an older unread decision.
+  // Compare server events with the latest review: either can be the newest result.
+  // A pending/cancelled version must not hide an older unread decision.
   const detail = await api.detail(plugin.pluginId);
   let history = detail.history;
   const cursors = new Set<string>();
   for (;;) {
     for (const event of history.events) {
       const result = decision(plugin.pluginId, event);
-      if (result) return result;
+      if (result) return !current || Date.parse(result.decidedAt) >= Date.parse(current.decidedAt) ? result : current;
     }
-    if (!history.nextCursor) return null;
+    if (!history.nextCursor) return current || null;
     if (cursors.has(history.nextCursor)) throwIpcError('PRECONDITION_FAILED', 'Review history pagination did not advance');
     cursors.add(history.nextCursor);
     history = await api.history(plugin.pluginId, history.nextCursor);
@@ -55,22 +62,21 @@ async function latestDecision(api: ContributionApi, plugin: MyPluginSummary): Pr
 }
 async function refresh(api: ContributionApi): Promise<PluginReviewUpdate[]> {
   const owner = api.owner;
-  if (cache?.owner !== owner) cache = { owner, entries: new Map() };
-  const held = cache;
-  const visible = new Set<string>();
+  const token = await api.changes();
+  assertContributionOwner(owner);
+  const previous = cache?.owner === owner ? cache : null;
+  if (previous && previous.token.changedAt === token.changedAt && previous.token.eventCount === token.eventCount)
+    return updatesFromCache(previous);
+  const held: ReviewCache = { owner, token: { changedAt: token.changedAt, eventCount: token.eventCount }, entries: new Map() };
   const cursors = new Set<string>();
   let cursor: string | undefined;
   do {
     const page = await api.list({ query: '', filter: 'all', ...(cursor ? { cursor } : {}) });
     assertContributionOwner(owner);
     for (const plugin of page.plugins) {
-      visible.add(plugin.pluginId);
-      const fingerprint = JSON.stringify([plugin.updatedAt, plugin.latestSubmission]);
-      if (held.entries.get(plugin.pluginId)?.fingerprint !== fingerprint) {
-        const result = await latestDecision(api, plugin);
-        assertContributionOwner(owner);
-        held.entries.set(plugin.pluginId, { fingerprint, decision: result });
-      }
+      const result = await latestDecision(api, plugin);
+      assertContributionOwner(owner);
+      held.entries.set(plugin.pluginId, result);
     }
     cursor = page.nextCursor ?? undefined;
     if (cursor) {
@@ -79,10 +85,13 @@ async function refresh(api: ContributionApi): Promise<PluginReviewUpdate[]> {
     }
   } while (cursor);
   assertContributionOwner(owner);
-  for (const pluginId of held.entries.keys()) if (!visible.has(pluginId)) held.entries.delete(pluginId);
+  cache = held;
+  return updatesFromCache(held);
+}
+function updatesFromCache(held: ReviewCache): PluginReviewUpdate[] {
   const markers = readMarkers(readFile());
-  assertContributionOwner(owner);
-  return [...held.entries.values()].flatMap(({ decision: value }) => value
+  assertContributionOwner(held.owner);
+  return [...held.entries.values()].flatMap(value => value
     ? [{ ...value, unread: markers[value.pluginId] !== value.key }] : []);
 }
 
@@ -98,7 +107,7 @@ export function markReviewRead(pluginId: string, key: string): void {
   const api = new ContributionApi();
   assertContributionOwner(api.owner);
   if (isPassiveSharedUserDataInstance()) throwIpcError('PRECONDITION_FAILED', 'Use the active Cindy instance');
-  if (cache?.owner !== api.owner || cache.entries.get(pluginId)?.decision?.key !== key)
+  if (cache?.owner !== api.owner || cache.entries.get(pluginId)?.key !== key)
     throwIpcError('PRECONDITION_FAILED', 'Refresh the review result before marking it read');
   const file = readFile();
   const read = readMarkers(file);

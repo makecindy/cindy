@@ -35,6 +35,7 @@ import {
 } from '../../shared/providerErrors.js';
 import { getActiveCatalog } from './active-catalog.js';
 import { withOpenCodeGoSessionHeader } from './opencode-go-session.js';
+import { withProviderAppAttribution } from './provider-app-attribution.js';
 import { createMakerLogger } from './logger-adapter.js';
 import { outboundFetch } from './outbound-fetch.js';
 import { hostCredentialEndpointAllowed, invocationModelRecord, probePiProvider, requiresNativeProviderAuth } from './pi-provider-transport.js';
@@ -125,9 +126,9 @@ export function buildProbeRequest(spec: ProviderProbeSpec): { url: string; init:
   const mustStripCredentialHeaders =
     !!spec.apiKey || spec.authMethod === 'none' || spec.authMethod === 'oauth';
   const headers = withOpenCodeGoSessionHeader(
-    mustStripCredentialHeaders
+    withProviderAppAttribution(spec.baseUrl, mustStripCredentialHeaders
       ? withoutCredentialHeaders(spec.headers)
-      : normalizedHeaders(spec.headers),
+      : normalizedHeaders(spec.headers)),
     { providerId: spec.catalogPresetId ?? '', catalogPresetId: spec.catalogPresetId, upstream: spec.baseUrl },
   ) ?? {};
   headers['content-type'] = 'application/json';

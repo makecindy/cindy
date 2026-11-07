@@ -38,6 +38,15 @@ describe('Ghost account-boundary teardown ordering', () => {
     expect(wait).toBeLessThan(suspend);
   });
 
+  // Cross-file security wiring: virtual-server/Electron tests exercise this
+  // revoker; keep both account boundary hooks attached before owner leases drain.
+  it.each(['interruptGhostCallsForAccountBoundary', 'suspendAllGhosts'])('awaits plugin page teardown in %s', name => {
+    const start = ghostIndex.indexOf(`export async function ${name}(): Promise<void> {`);
+    const end = ghostIndex.indexOf('\n}', start);
+    expect(start).toBeGreaterThan(-1);
+    expect(ghostIndex.slice(start, end)).toMatch(/await\s+revokePluginAppServers\(\);/);
+  });
+
   it('replaces the terminal Node broker after an owner boundary', () => {
     const helperStart = ghostIndex.indexOf(
       'function resetNodeRuntimeBrokerForAccountBoundary(): void {',

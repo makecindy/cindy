@@ -6,7 +6,7 @@ import { BrowserBackendHealthService } from '../health-service.js';
 function controller() {
   return {
     getCurrentBackendKind: vi.fn(
-      (): 'external' | 'rsb-webview' => 'rsb-webview',
+      (): 'external' | 'rsb-webview' | 'user-browser' => 'rsb-webview',
     ),
     call: vi.fn(
       async (request: BrowserControlRequest): Promise<BrowserControlResult> => ({
@@ -214,5 +214,24 @@ describe('BrowserBackendHealthService', () => {
       },
     });
     expect(ctl.call).not.toHaveBeenCalled();
+  });
+
+  it('reports the user browser as ready only while an extension is connected and never offers recovery', async () => {
+    const ctl = controller();
+    ctl.getCurrentBackendKind.mockReturnValue('user-browser');
+    ctl.call.mockResolvedValueOnce({ ok: true, action: 'status', status: 200, data: { ready: true, connected: true } });
+    const service = new BrowserBackendHealthService(ctl, logger());
+    await expect(service.getHealth()).resolves.toEqual({ active: 'user-browser', status: 'ready', canRecover: false });
+    ctl.call.mockResolvedValueOnce({ ok: true, action: 'status', status: 200, data: { ready: false, connected: false } });
+    await expect(service.getHealth()).resolves.toEqual({
+      active: 'user-browser', status: 'error', canRecover: false, reason: 'extension-disconnected',
+    });
+    // No plugin provides page control: the settings page guides the user to install one first.
+    ctl.call.mockResolvedValueOnce({ ok: true, action: 'status', status: 200, data: { ready: false, configured: false } });
+    await expect(service.getHealth()).resolves.toEqual({
+      active: 'user-browser', status: 'error', canRecover: false, reason: 'plugin-missing',
+    });
+    expect(ctl.restartEmbedded).not.toHaveBeenCalled();
+    expect(ctl.probeActiveControl).not.toHaveBeenCalled();
   });
 });

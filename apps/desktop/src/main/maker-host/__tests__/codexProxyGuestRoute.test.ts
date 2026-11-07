@@ -35,6 +35,7 @@ import { CODEX_CUSTOM_PROVIDER_ROUTE_ROOT, deriveCodexCustomProviderRoutes } fro
 import { captureGuestRequestUsage, registerGuestProviderRoute, resetGuestProviderRoutesForTest } from '../guest-provider-route-store';
 import { bindHostedSessionProvider, clearAllSessionProviders, setSessionProvider } from '../session-provider-store';
 import { setCustomProviderKeyReader } from '../provider-route';
+import { createUsagePricingObserver } from '../model-usage-pricing';
 
 function ctx(url: string, headers: Record<string, string> = {}, method = 'POST') {
   return { reqId: 1, method, url, headers } as never;
@@ -50,6 +51,30 @@ async function statusOf(input: RoutingDecision | null | undefined | Promise<Rout
 }
 
 describe('Codex proxy guard for shared-provider guests', () => {
+  // A missing MIME header must not drop the only token source in receipt mode.
+  // The actual guest binding/receipt parser must also count a duplicate terminal
+  // frame only once, and reject a response belonging to a replaced binding.
+  it('meters an untyped Codex SSE response once and isolates replaced guest bindings', () => {
+    const record = vi.fn();
+    const binding = registerGuestProviderRoute('guest-session', 'shared-a', undefined, undefined, undefined, record);
+    const receipt = captureGuestRequestUsage('guest-session', 'shared-model')!;
+    const sink = createUsagePricingObserver('', receipt);
+    const wire = 'event: response.completed\ndata: ' + JSON.stringify({ type: 'response.completed', response: {
+      usage: { input_tokens: 120, output_tokens: 7, input_tokens_details: { cached_tokens: 100 } },
+    } }) + '\n\n';
+    for (const byte of Buffer.from(wire)) sink.onData?.(Buffer.from([byte]));
+    expect(record).toHaveBeenCalledExactlyOnceWith({ model: 'shared-model', inputTokens: 20,
+      outputTokens: 7, cacheReadTokens: 100, cacheCreateTokens: 0 });
+    sink.onData?.(Buffer.from(wire));
+    sink.onEnd?.();
+    expect(record).toHaveBeenCalledTimes(1);
+    const late = createUsagePricingObserver('', captureGuestRequestUsage('guest-session', 'shared-model')!);
+    registerGuestProviderRoute('guest-session', 'shared-a', undefined, undefined, undefined, record);
+    binding.release();
+    late.onData?.(Buffer.from(wire));
+    late.onEnd?.();
+    expect(record).toHaveBeenCalledTimes(1);
+  });
   it('returns an identifiable member-budget refusal and never meters unbound owner requests', async () => {
     const code = 'REMOTE_AGENT_MEMBER_BUDGET_PAUSED';
     registerGuestProviderRoute('budget-guest', 'openai', () => false, () => true, () => ({ code, message: `[${code}] Choose another model.` }));

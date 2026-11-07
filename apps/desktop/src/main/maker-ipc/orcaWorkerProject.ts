@@ -1,3 +1,4 @@
+import { getNewMakerWorktreeBranchPreference } from '../maker-host/newMakerWorktreeBranchPreferenceCache';
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import { app } from 'electron';
@@ -12,7 +13,11 @@ import {
 } from '../git-context/sessionDirResolver';
 import { gitExec } from '../worktree/gitExec';
 import * as WorktreeManager from '../worktree/WorktreeManager';
-import type { WorkerProjectContext, WorkerOwnedWorktree } from '../../shared/orca-worker-project';
+import type {
+  WorkerProjectContext,
+  WorkerOwnedWorktree,
+  WorkerWorktreeSourceSelection,
+} from '../../shared/orca-worker-project';
 
 const log = createLogger('orca-worker-project');
 const stripEol = (value: string) => value.replace(/[\r\n]+$/, '');
@@ -244,21 +249,78 @@ export async function readWorkerProjectContext(
   };
 }
 
+function validateWorktreeSource(sourceBranch: string | undefined): void {
+  if (
+    sourceBranch !== undefined &&
+    (typeof sourceBranch !== 'string' ||
+      !sourceBranch.trim() ||
+      sourceBranch.length > 1024 ||
+      sourceBranch.startsWith('-') ||
+      Array.from(sourceBranch).some((character) => character.charCodeAt(0) < 32))
+  ) {
+    throw new Error('Worktree source_branch must be a valid branch or commit');
+  }
+}
+
 /** Resolve the optional tool revision before reserving a slot or creating a checkout. */
-export async function resolveWorkerWorktreeSource(
+export async function resolveWorkerWorktreeSourceSelection(
   directory: string,
   sourceBranch?: string,
   probe: (directory: string) => Promise<WorkerProjectProbe> = probeWorkerProject,
-): Promise<string> {
-  if (sourceBranch !== undefined && (typeof sourceBranch !== 'string' || !sourceBranch.trim()
-    || sourceBranch.length > 1024 || sourceBranch.startsWith('-')
-    || Array.from(sourceBranch).some((character) => character.charCodeAt(0) < 32))) {
-    throw new Error('Worktree source_branch must be a valid branch or commit');
-  }
+  leadDirectory?: string | null,
+  readPreference = getNewMakerWorktreeBranchPreference,
+): Promise<WorkerWorktreeSourceSelection> {
+  validateWorktreeSource(sourceBranch);
   const info = await probe(directory);
   if (!info.exists) throw new Error('Worker worktree directory does not exist');
   if (!info.baseRepo) throw new Error('Worker worktree requires a Git repository');
-  if (sourceBranch !== undefined) {
+  let source: WorkerWorktreeSourceSelection['source'] =
+    sourceBranch === undefined ? 'current' : 'explicit';
+  let fallbackReason: string | undefined;
+  if (sourceBranch === undefined && leadDirectory !== undefined) {
+    const [target, lead] = await Promise.all([
+      projectPathIdentity(directory, fs.realpath),
+      leadDirectory ? projectPathIdentity(leadDirectory, fs.realpath) : Promise.resolve(null),
+    ]);
+    let sameRepository = target === lead;
+    if (!sameRepository && leadDirectory) {
+      const leadProject = await probe(leadDirectory);
+      if (leadProject.baseRepo) {
+        const [targetRepo, leadRepo] = await Promise.all([
+          projectPathIdentity(info.baseRepo, fs.realpath),
+          projectPathIdentity(leadProject.baseRepo, fs.realpath),
+        ]);
+        sameRepository = targetRepo === leadRepo;
+      }
+    }
+    if (!sameRepository) {
+      try {
+        sourceBranch = readPreference(info.baseRepo)?.sourceBranch;
+      } catch {
+        fallbackReason =
+          'Could not read the remembered source branch; used the current checkout branch.';
+      }
+      if (sourceBranch !== undefined) {
+        try {
+          validateWorktreeSource(sourceBranch);
+          await gitExec(
+            ['rev-parse', '--verify', '--quiet', '--end-of-options', `${sourceBranch}^{commit}`],
+            directory,
+            { timeoutMs: 5000 },
+          );
+          source = 'memory';
+        } catch {
+          sourceBranch = undefined;
+          fallbackReason =
+            'The remembered source branch no longer exists or cannot be verified; used the current checkout branch.';
+        }
+      } else if (!fallbackReason) {
+        fallbackReason = 'No remembered source branch; used the current checkout branch.';
+      }
+    }
+  }
+  validateWorktreeSource(sourceBranch);
+  if (sourceBranch !== undefined && source === 'explicit') {
     try {
       await gitExec(
         ['rev-parse', '--verify', '--quiet', '--end-of-options', `${sourceBranch}^{commit}`],
@@ -268,17 +330,26 @@ export async function resolveWorkerWorktreeSource(
     } catch {
       throw new Error('Worktree source_branch must reference an existing commit');
     }
-    return sourceBranch;
   }
+  if (sourceBranch !== undefined) return { sourceBranch, source };
   if (info.headState === 'unborn' || !info.branch) {
     throw new Error('Worker worktree requires a repository with a commit');
   }
-  return info.branch;
+  return { sourceBranch: info.branch, source, ...(fallbackReason ? { fallbackReason } : {}) };
+}
+
+/** Compatibility reader for callers that only need the resolved revision. */
+export async function resolveWorkerWorktreeSource(
+  directory: string,
+  sourceBranch?: string,
+  probe: (directory: string) => Promise<WorkerProjectProbe> = probeWorkerProject,
+): Promise<string> {
+  return (await resolveWorkerWorktreeSourceSelection(directory, sourceBranch, probe)).sourceBranch;
 }
 
 export function getWorkerOwnedWorktree(sessionId: string): WorkerOwnedWorktree | undefined {
   const meta = WorktreeManager.getForSession(sessionId);
-  return meta ? {path: meta.path, branch: meta.branch} : undefined;
+  return meta ? { path: meta.path, branch: meta.branch } : undefined;
 }
 
 export async function createWorkerWorktree(

@@ -670,9 +670,13 @@ describe('pi auto-review dispatch & spawn config (mocked pi process)', () => {
       ]),
     );
     const noProxy = (captured.env.NO_PROXY ?? '').split(',');
-    for (const entry of ['corp.internal', '127.0.0.1', 'localhost', '::1', '[::1]']) {
+    for (const entry of ['corp.internal', '127.0.0.1', 'localhost', '::1']) {
       expect(noProxy).toContain(entry);
     }
+    // #7632 unit regression: PiAgent.startSession's spawned env must omit [::1], or default
+    // Python httpx.Client() fails. Existing coverage checked only presence; the smallest
+    // failing input is NO_PROXY=corp.internal, to which Pi previously appended [::1].
+    expect(noProxy).not.toContain('[::1]');
     expect(captured.env.no_proxy).toBeUndefined();
   });
 
@@ -974,7 +978,9 @@ describe('pi auto-review dispatch & spawn config (mocked pi process)', () => {
       expect.objectContaining({ data: expect.objectContaining({ isTerminal: true }) }),
     ]);
     expect(seen.filter((event) => event.type === 'done')).toEqual(stopped ? [
-      expect.objectContaining({ data: { status: 'cancelled' } }),
+      expect.objectContaining({ data: expect.objectContaining({ status: 'cancelled',
+        usage: expect.objectContaining({ receipts: [], settlementId: expect.any(String) }),
+      }) }),
     ] : []);
     expect(captured.requests.filter((request) => request.type === 'prompt')).toHaveLength(1);
     await handle.close();

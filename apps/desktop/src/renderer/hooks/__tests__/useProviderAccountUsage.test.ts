@@ -117,3 +117,63 @@ it('discards a pending result after the query becomes unsupported', async () => 
   expect(hook.result.current.result).toBeNull();
   expect(hook.result.current.busy).toBe(false);
 });
+
+const kimiProvider = {
+  ...provider, id: 'kimi-test', connected: true,
+  auth: { method: 'oauth', oauth: { tokenUrl: 'https://auth.kimi.com/api/oauth/token' } },
+  routing: { pi: { upstream: 'https://api.kimi.com/coding/v1' } },
+} as ProviderView;
+const kimiReady: ProviderAccountUsageResult = {
+  status: 'ready', stale: false, snapshot: { kind: 'kimi-coding-quota', fetchedAt: 10, windows: [{ id: 'limit_5h', usedPercent: 20, resetsAt: null }] },
+};
+const opencodeGoProvider = {
+  ...provider, id: 'opencode-go', source: 'user', connected: true,
+  auth: { method: 'apiKey' },
+  routing: { codex: { upstream: 'https://opencode.ai/zen/go/v1' } },
+} as ProviderView;
+const opencodeGoReady: ProviderAccountUsageResult = {
+  status: 'ready', stale: false, snapshot: { kind: 'opencode-go-quota', fetchedAt: 10,
+    windows: [{ id: 'weekly', usedPercent: 35, limited: false, resetsAt: null }] },
+};
+// Unit/jsdom: same provider id on two computers must not borrow local quota or trust
+// malformed remote values. No live network or credentials are used.
+it('reads only the selected remote Kimi account and rejects malformed remote quota', async () => {
+  const invoke = vi.fn().mockResolvedValueOnce(kimiReady).mockResolvedValueOnce({ status: 'ready', stale: false, snapshot: { kind: 'kimi-coding-quota', fetchedAt: 10, windows: [{ id: 'limit_5h', usedPercent: 'bad' }] } });
+  Object.assign(window.electronAPI, { deviceLink: { invoke } });
+  const remoteProvider = { ...kimiProvider, routing: { pi: {} }, kimiCodingUsageAgents: ['pi'] } as unknown as ProviderView;
+  const hook = renderHook(({ device }) => useProviderAccountUsage(remoteProvider, 'pi', device), { initialProps: { device: 'mac-a' } });
+  await act(async () => {});
+  expect(hook.result.current.result).toEqual(kimiReady);
+  expect(invoke).toHaveBeenCalledWith('mac-a', 'maker:usage:kimi-coding', [{ providerId: 'kimi-test', agent: 'pi', forceRefresh: false }]);
+  expect(fetchUsage).not.toHaveBeenCalled();
+  hook.rerender({ device: 'mac-b' });
+  expect(hook.result.current.result).toBeNull();
+  await act(async () => {});
+  expect(hook.result.current.result).toEqual({ status: 'unavailable', error: 'invalid-response' });
+  hook.rerender({ device: 'share:guest' });
+  expect(hook.result.current.supported).toBe(false);
+  expect(invoke).toHaveBeenCalledTimes(2);
+});
+
+it('reads OpenCode Go quota from the selected computer on its own allowlisted channel', async () => {
+  const invoke = vi.fn().mockResolvedValueOnce(opencodeGoReady);
+  Object.assign(window.electronAPI, { deviceLink: { invoke } });
+  const remoteProvider = { ...opencodeGoProvider, routing: {}, opencodeGoUsageAgents: ['codex'] } as unknown as ProviderView;
+  const hook = renderHook(() => useProviderAccountUsage(remoteProvider, 'codex', 'mac-a'));
+  await act(async () => {});
+  expect(hook.result.current.result).toEqual(opencodeGoReady);
+  expect(invoke).toHaveBeenCalledWith('mac-a', 'maker:usage:opencode-go', [{ providerId: 'opencode-go', agent: 'codex', forceRefresh: false }]);
+  expect(fetchUsage).not.toHaveBeenCalled();
+});
+
+it('clears Kimi quota when the host broadcasts a credential change on the same connection', async () => {
+  let changed!: () => void;
+  Object.assign(window.electronAPI.maker, { onProvidersChanged: (callback: () => void) => { changed = callback; return () => {}; } });
+  fetchUsage.mockResolvedValueOnce(kimiReady).mockImplementationOnce(() => new Promise(() => {}));
+  const hook = renderHook(() => useProviderAccountUsage(kimiProvider, 'pi'));
+  await act(async () => {});
+  expect(hook.result.current.result).toEqual(kimiReady);
+  act(() => changed());
+  expect(hook.result.current.result).toBeNull();
+  expect(fetchUsage).toHaveBeenCalledTimes(2);
+});

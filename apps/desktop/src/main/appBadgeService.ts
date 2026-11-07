@@ -19,8 +19,10 @@ const MAX_SNAPSHOT_SESSION_IDS = 10_000;
 const MAX_SESSION_ID_LENGTH = 512;
 const MAX_RETAINED_SESSION_IDS = 100_000;
 const attentionSessionIds = new Set<string>();
-// 侧栏就绪后目录内任务按当前状态计数；事件集合补齐伙伴等目录外任务，并服务灵动岛。
-// 首份投影前保留事件计数，避免 renderer 尚未挂载时漏掉后台提醒。
+// 侧栏就绪后目录内任务按当前状态计数；目录外的 id 既不在界面上出现，也没有
+// 「读到 / 删除」这类清除入口，计入只会让角标停在用户点不掉的数字上，因此只在
+// 首份投影前用事件集合兜底，避免 renderer 尚未挂载时漏掉后台提醒。事件集合本身
+// 不随投影收缩：灵动岛靠 hasSessionAttention() 水合未读，目录外的 id 也要留着。
 let projectedAttentionCount: number | null = null;
 const projectedSessionIds = new Set<string>();
 
@@ -151,19 +153,17 @@ function broadcastSessionAttentionCleared(
 
 export function clearAllSessionAttention(): void {
   attentionSessionIds.clear();
-  projectedAttentionCount = 0;
+  // 回到「尚无投影」状态：新 owner / 退出后 renderer 还没推快照，这段窗口里
+  // 逐任务通知必须还能自己撑起角标（写成 0 会让 mark 永远算成空投影）。
+  projectedAttentionCount = null;
   projectedSessionIds.clear();
   applyBadge();
 }
 
 export function getAttentionCount(): number {
+  // 首份投影前只有事件集合可用；此后目录就是界面的权威清单，逐任务通知不再叠加。
   if (projectedAttentionCount === null) return attentionSessionIds.size;
-  let count = projectedAttentionCount;
-  // 伙伴等不在普通目录中的任务沿用逐任务通知；目录内的任务只按投影计数。
-  for (const sessionId of attentionSessionIds) {
-    if (!projectedSessionIds.has(sessionId)) count += 1;
-  }
-  return count;
+  return projectedAttentionCount;
 }
 
 export function hasSessionAttention(sessionId: string): boolean {

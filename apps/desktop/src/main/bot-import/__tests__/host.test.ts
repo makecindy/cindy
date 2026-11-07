@@ -174,10 +174,10 @@ it('recovers a failed native knowledge write using the same receipt without copy
   expect(createBotProfile).toHaveBeenCalledTimes(1);
   expect(h.importDocument).toHaveBeenCalledTimes(2);
 });
-const olderInstall = async (requestId: string) => {
+const olderInstall = async (requestId: string, packageVersion = '0.5.0') => {
   const file = path.join(h.root, 'companion-imports', `${requestId}.json`);
   const receipt = JSON.parse(await fs.readFile(file, 'utf8'));
-  receipt.nativePackage.packageVersion = '0.5.0';
+  receipt.nativePackage.packageVersion = packageVersion;
   receipt.nativePackage.packageHash = fingerprint('older package');
   receipt.nativePackage.opening.welcome = 'Older package welcome';
   await fs.writeFile(file, JSON.stringify(receipt));
@@ -190,13 +190,15 @@ const olderInstall = async (requestId: string) => {
   }
   return receipt.nativePackage;
 };
-it('resumes an unfinished save of an older installed version from its stored checkpoint, as the same request', async () => {
+// PR #8210: 0.5.1 receipts must resume after translated manifests change their hash.
+// Unit: exercise admission and durable checkpoint recovery, preserving identity and opening.
+it('resumes an unfinished 0.5.1 save from its stored checkpoint after a bundled package upgrade', async () => {
   h.native = true;
   h.importDocument.mockRejectedValueOnce(new Error('fixture disk failure'));
   const entry = (await listNativeBotPackages())[0]!;
   const partial = await nativeFinished(await inviteNativeBotPackage(entry, 'renderer:1'));
   expect(partial.status).toBe('needs-attention');
-  const originalPackage = await olderInstall(partial.requestId);
+  const originalPackage = await olderInstall(partial.requestId, '0.5.1');
   const complete = await nativeFinished(await inviteNativeBotPackage(entry, 'renderer:2'));
   expect(complete.status).toBe('complete'); expect(complete.requestId).toBe(partial.requestId); expect(complete.botId).toBe(partial.botId);
   expect(createBotProfile).toHaveBeenCalledTimes(1);

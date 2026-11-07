@@ -140,7 +140,7 @@ describe("session operation layout", () => {
     expect(composerDisabledReasonI18nKey("caller-provided")).toBeNull();
     expect(composerDisabledReasonI18nKey(null)).toBeNull();
 
-    for (const lang of ["zh-CN", "zh-TW", "en", "ja", "ko"]) {
+    for (const lang of ["zh-CN", "zh-TW", "en", "ja", "ko", "es", "fr", "de", "pt-PT", "pt-BR"]) {
       const session = JSON.parse(
         readFileSync(
           resolve(process.cwd(), `src/i18n/locales/${lang}/session.json`),

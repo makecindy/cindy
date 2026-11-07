@@ -1,0 +1,55 @@
+{
+  "settings": {
+    "sectionTitle": "中转服务",
+    "currentLabel": "中转服务",
+    "official": "{{appName}} 官方中转",
+    "switchToOfficial": "切回官方中转",
+    "officialHint": "设备之间经 {{appName}} 官方中转连接。要改用自建中转，在中转所在的电脑上显示加入二维码，用手机相机扫码加入。",
+    "selfHostedHint": "设备之间经自建中转 {{address}} 连接；登录、模型和共享任务等仍使用 {{appName}} 官方服务。",
+    "removedHint": "这台手机已被移出中转，或中转已停用。可以切回官方中转，或在电脑上重新加入。",
+    "credentialMissingHint": "这台手机上找不到中转凭证。请在电脑上重新加入，或切回官方中转。",
+    "confirmTitle": "切回官方中转？",
+    "confirmBody": "这台手机会退出「{{name}}」，改用 {{appName}} 官方中转。之后要再用这个中转，需要在电脑上重新加入。",
+    "confirmAction": "切回",
+    "switchFailed": "没能切回官方中转，请稍后重试。",
+    "pushUnavailable": "使用自建中转时，电脑上的任务通知不会推送到这台手机。"
+  },
+  "issue": {
+    "removedTitle": "已移出中转",
+    "removedHint": "这台手机已被移出中转，或中转已停用。可以在设置里切回官方中转。"
+  },
+  "join": {
+    "title": "加入中转",
+    "checking": "正在连接中转…",
+    "body": "加入后，这台手机经这个中转连接你的电脑；登录、模型和共享任务等仍使用 {{appName}} 官方服务。使用自建中转时，这台手机收不到电脑上的任务通知。",
+    "switchNote": "加入后会从「{{current}}」切换到这个中转。",
+    "action": "加入",
+    "pairingCodeLabel": "配对码",
+    "verifyHint": "请在中转所在的电脑上核对这串数字并点同意。",
+    "waiting": "正在等待同意…",
+    "cancel": "取消",
+    "joinedTitle": "已加入中转",
+    "joinedBody": "这台手机现在经「{{name}}」连接你的电脑。",
+    "done": "完成",
+    "retry": "重试",
+    "signedOut": "请先登录 {{appName}}，再加入这个中转。",
+    "signIn": "去登录",
+    "invalidLink": "加入链接无效或已失效，请在电脑上重新生成。",
+    "cancelled": "已取消加入。要加入这个中转，请在电脑上重新生成加入链接。"
+  },
+  "errors": {
+    "unreachable": "连不上这个中转。请确认手机和电脑在同一网络，或手机能访问这个地址。",
+    "insecureUnreachable": "连不上这个中转。手机只能通过 https 加入中转，请在电脑上为中转配置证书后重新生成加入链接。",
+    "notRelay": "这个地址不是 {{appName}} 中转，请检查加入链接。",
+    "incompatible": "这个中转与当前版本的 {{appName}} 不兼容，请把中转和 {{appName}} 都更新到最新版本。",
+    "accountMismatch": "这个中转属于另一个 {{appName}} 账号。",
+    "codeInvalid": "加入链接已失效，请在电脑上重新生成。",
+    "rateLimited": "尝试次数太多，请稍后再试。",
+    "rejected": "电脑上拒绝了这次加入。",
+    "expired": "等待同意超时，请在电脑上重新生成加入链接。",
+    "ownerMismatch": "中转返回的证书不是加入链接里的主人签发的，可能连到了别人伪造的中转，已停止加入。",
+    "failed": "没能加入中转，请稍后重试。",
+    "saveFailed": "已获同意，但没能在这台手机上保存中转凭证。请在电脑上重新生成加入链接后再试。",
+    "credentialUnavailable": "这台手机没有可用的中转凭证。请重新加入，或在设置里切回官方中转。"
+  }
+}

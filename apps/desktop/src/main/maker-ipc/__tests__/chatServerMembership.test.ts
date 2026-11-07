@@ -97,9 +97,34 @@ describe('Chat Server membership notices', () => {
     expect(before.ok && before.group.serverUnread).toEqual({ count: 1, mentioned: false });
     expect(before.ok && before.group.lastMessage?.preview).toBe('Hello team');
     expect(await service.chatServer!.manage({ groupId: roomId, action: { type: 'read', messageId: messages[0]!.id } })).toEqual({ ok: true });
-    expect(fixture.handle).toHaveBeenCalledWith(`/conversations/${roomId}/read`, 'POST', { operationId: `read-main:${seq}`, readSeq: seq });
+    expect(fixture.handle).toHaveBeenCalledWith(`/conversations/${roomId}/read`, 'POST', { operationId: `read-main:${roomId}:${seq}`, readSeq: seq });
     const after = await service.getGroup(roomId);
     expect(after.ok && after.group.serverUnread).toEqual({ count: 0, mentioned: false });
+  });
+
+  it('keys a main read by group as well as position, so the same position in two groups does not collide', async () => {
+    const other = '10000000-0000-4000-8000-000000000002';
+    // Server positions are numbered per group: both groups' newest message is 5.
+    const post = (id: string) => ({ ...joined(), id: `40000000-0000-4000-8000-00000000000${id.slice(-1)}`, origin: 'human', seq: '5' });
+    const bodies: Record<string, ReturnType<typeof post>> = { [roomId]: post(roomId), [other]: post(other) };
+    const original = fixture.handle.getMockImplementation()!;
+    fixture.handle.mockImplementation((route, method, body) => {
+      if (route === '/conversations?limit=100') return { body: [{ id: roomId, kind: 'group', state: 'joined' }, { id: other, kind: 'group', state: 'joined' }] };
+      const room = /^\/conversations\/([^/?]+)/.exec(route)?.[1];
+      if (room && bodies[room]) {
+        if (route.endsWith('/read')) return { body: { readSeq: body.readSeq } };
+        if (route.endsWith('/snapshot')) return { body: { ...original(route, method, body).body, room: { ...original(route, method, body).body.room, id: room },
+          reads: [{ thread_key: 'main', read_seq: '0' }], messages: [bodies[room]] } };
+        if (route.includes('/messages?')) return { body: [bodies[room]] };
+      }
+      return original(route, method, body);
+    });
+    for (const room of [roomId, other]) {
+      expect(await service.chatServer!.manage({ groupId: room, action: { type: 'read', messageId: bodies[room]!.id } })).toEqual({ ok: true });
+    }
+    const operations = fixture.handle.mock.calls.filter(([route]) => String(route).endsWith('/read')).map(([, , body]) => body.operationId);
+    expect(operations).toEqual([`read-main:${roomId}:5`, `read-main:${other}:5`]);
+    expect(new Set(operations).size).toBe(2);
   });
 
   it('reads a persisted join into the main timeline and sidebar using its name snapshot', async () => {

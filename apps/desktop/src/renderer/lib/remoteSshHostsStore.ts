@@ -86,6 +86,7 @@ export const remoteSshHostsStore = {
 if (typeof window !== 'undefined') {
   const api = window.electronAPI?.remoteSsh;
   if (api) {
+    api.onHostsChanged?.((result) => remoteSshHostsStore.replace(result.hosts));
     api.onStatusChanged((snapshot) => {
       if (cache === null) return;
       const index = cache.findIndex((host) => host.config.id === snapshot.config.id);

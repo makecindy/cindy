@@ -103,6 +103,13 @@ describe('BotModelChainEditor', () => {
   const firstFallback = { ...primary, model: 'first-fallback' };
   const secondFallback = { ...primary, model: 'second-fallback' };
 
+  it.each(['inline', 'settings'] as const)('keeps the caller setting ID on the %s editor', (layout) => {
+    render(<BotModelChainEditor data-setting-id="general.botModelChain" layout={layout}
+      settingsRows={{ primaryLabel: 'Primary', primaryHint: 'Preferred model' }}
+      value={[primary]} onChange={vi.fn()} />);
+    expect(screen.getByTestId('bot-model-chain-editor').getAttribute('data-setting-id')).toBe('general.botModelChain');
+  });
+
   function fallbackList(container: HTMLElement) {
     return within(container.querySelector('[data-testid="bot-model-fallbacks"]')!);
   }

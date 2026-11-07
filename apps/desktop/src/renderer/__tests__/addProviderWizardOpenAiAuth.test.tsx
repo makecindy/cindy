@@ -602,8 +602,13 @@ it('wizard focuses search, contains Tab, restores its opener and lets a top dial
   const search = screen.getByPlaceholderText('settings.providers.wizard.searchPlaceholder');
   const cancel = screen.getByRole('button', { name: 'settings.providers.wizard.cancel' });
   expect(document.activeElement).toBe(search);
+  const custom = screen.getByRole('button', { name: 'settings.providers.wizard.customAction' });
+  await user.tab({ shift: true });
+  expect(document.activeElement).toBe(custom);
   await user.tab({ shift: true });
   expect(document.activeElement).toBe(cancel);
+  await user.tab();
+  expect(document.activeElement).toBe(custom);
   await user.tab();
   expect(document.activeElement).toBe(search);
   // Open a second Radix layer without moving focus outside the first modal.

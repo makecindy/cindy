@@ -309,8 +309,8 @@ describe('interaction shared model', () => {
       name: 'browser', args: { action: 'recipe', recipeId: 'post-reply', site: 'x.com', text: 'hello' },
     }).preview).toBe('recipe {"recipeId":"post-reply","site":"x.com","text":"hello"}');
     // MCP names parse by plain string scan: both separators work and hostile names stay linear (CodeQL ReDoS).
-    expect(describePermissionAction('mcp__cindy_orca__create_workers', { n: 1 })).toMatchObject({ kind: 'plugin', subject: 'cindy_orca', preview: 'create_workers {"n":1}' });
-    expect(describePermissionAction('mcp:my-server:do_it', {})).toMatchObject({ kind: 'plugin', subject: 'my-server', preview: 'do_it' });
+    expect(describePermissionAction('mcp__cindy_orca__create_workers', { n: 1 })).toMatchObject({ kind: 'mcp', subject: 'cindy_orca', preview: 'create_workers {"n":1}' });
+    expect(describePermissionAction('mcp:my-server:do_it', {})).toMatchObject({ kind: 'mcp', subject: 'my-server', preview: 'do_it' });
     expect(describePermissionAction('mcp__', {}).kind).toBe('tool');
     const hostile = `mcp:9${'-9'.repeat(50_000)}`;
     const started = Date.now();
@@ -342,6 +342,17 @@ describe('interaction shared model', () => {
       toolName: 'Bash',
       metadata: { autoReviewUnavailable: true, autoReviewReason: 'stale' },
     }).autoReviewReason).toBeNull();
+  });
+
+  // Regression: ordinary MCP servers were labeled plugins and hid the Host's own title.
+  // Public presentation entry; unit tier; direct and progressive calls cover both preview paths.
+  it.each([
+    ['mcp__cindy_scheduler__schedule_delete', { id: 'completed-followup' }, '确认任务操作', '确认任务操作', 'schedule_delete {"id":"completed-followup"}'],
+    ['mcp:external-service:call_tool', { name: 'update_item', args: { id: 'item' } }, undefined, '允许使用 external-service?', 'update_item {"id":"item"}'],
+  ])('presents %s as an MCP tool without replacing an explicit title', (toolName, input, title, expectedTitle, code) => {
+    expect(buildPermissionReviewPresentation({
+      kind: 'permission', requestId: 'mcp-confirmation', toolName, input, title,
+    })).toMatchObject({ title: expectedTitle, code });
   });
 
   it('marks auto-review unavailable handoffs so mobile can localize the confirmation copy', () => {

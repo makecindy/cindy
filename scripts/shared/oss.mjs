@@ -42,7 +42,7 @@ export function resolveReleaseRegion(region) {
   return normalized;
 }
 
-const OSS_ENV_NAMES_BY_REGION = Object.freeze({
+export const OSS_ENV_NAMES_BY_REGION = Object.freeze({
   cn: {
     cdnBase: 'XDT_CDN_BASE_URL',
     bucket: 'XDT_OSS_BUCKET',

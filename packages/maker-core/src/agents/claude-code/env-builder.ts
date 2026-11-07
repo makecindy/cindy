@@ -196,16 +196,17 @@ export const REMOTE_ROUTE_OVERRIDE_ENV_KEYS = [
 ] as const;
 
 /**
- * 对齐 Claude Desktop Code 的入口标记,覆盖从终端继承或路由注入的旧身份。
- * 本机登录、API Key 与远端会话共用此规则;不以是否注入 OAuth token 区分入口。
+ * 按认证形态固定真实入口,覆盖从终端继承或路由注入的旧身份。
  *
- * claude-desktop 也在 CLI 的 OAuth 刷新回调白名单内,并启用原生 desktop-host
- * 配置过滤(项目级设置不能改写上游 / 鉴权)。凭证来源仍由 nativeCliAuth /
- * CLAUDE_CODE_PROVIDER_MANAGED_BY_HOST 决定,不因此注入凭证或改变认证路由。
- * 远端路由 materialization 后再次调用,避免 route.env 覆盖入口。
+ * 本机登录与 OAuth 保留 claude-desktop 的配置过滤和刷新回调白名单。API Key
+ * 使用 SDK 原生 sdk-ts:Anthropic Individual API 额度可能拒绝 Desktop 身份
+ * (anthropics/claude-code#106458)。API 路由仍由 host-managed 标记锁定,不改
+ * 凭证、上游或项目普通设置。远端 route materialization 后须重新按最终认证判定。
  */
-export function applyClaudeDesktopEntrypoint(env: Record<string, string>): void {
-  env.CLAUDE_CODE_ENTRYPOINT = 'claude-desktop';
+export function applyClaudeEntrypoint(env: Record<string, string>, nativeCliAuth = false): void {
+  env.CLAUDE_CODE_ENTRYPOINT = nativeCliAuth || env.CLAUDE_CODE_OAUTH_TOKEN
+    ? 'claude-desktop'
+    : 'sdk-ts';
 }
 
 /**
@@ -544,7 +545,7 @@ export async function buildClaudeEnv(
     env.CLAUDE_CODE_PROVIDER_MANAGED_BY_HOST = '1';
   }
 
-  applyClaudeDesktopEntrypoint(env);
+  applyClaudeEntrypoint(env, nativeCliAuth);
 
   // xdt-maker 自己托管会话生命周期和自动任务。Claude Code 原生 cron 会读取
   // workdir/.claude/scheduled_tasks.json，并把到期任务作为隐藏 meta prompt 注入

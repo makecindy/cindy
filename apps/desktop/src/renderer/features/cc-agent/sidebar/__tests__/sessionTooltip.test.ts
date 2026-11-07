@@ -128,6 +128,36 @@ describe('SessionTooltip', () => {
     expect(screen.queryByRole('tooltip')).toBeNull();
   });
 
+  it.each([
+    ['source', { prRefs: [], sourceLabel: 'XDMaker' }],
+    ['automation', { prRefs: [], isAutomationSession: true }],
+  ])('forwards close requests only, never Radix open requests (%s variant)', async (_label, variant) => {
+    // 行的 onPointerOver 谓词独占打开逻辑,进入内嵌动作按钮时会写 false。Radix Trigger
+    // 随后请求打开,若回灌给行就会绕过该谓词,让行级浮层压在动作 Tip 上。
+    const onOpenChange = vi.fn();
+
+    render(
+      createElement(
+        SessionTooltip,
+        {
+          sessionId: 'session-1',
+          ...variant,
+          controlledOpen: false,
+          onOpenChange,
+        } as unknown as ComponentProps<typeof SessionTooltip>,
+        createElement('div', null, 'Session row'),
+      ),
+    );
+
+    fireEvent.pointerMove(screen.getByText('Session row'), { pointerType: 'mouse' });
+    await act(() => new Promise((resolve) => setTimeout(resolve, 30)));
+    expect(onOpenChange.mock.calls).toEqual([]);
+
+    // 关闭请求仍要传出去,否则受控 open 在窗口失活 / 点别处后永远关不掉。
+    fireEvent.blur(window);
+    expect(onOpenChange.mock.calls).toEqual([[false]]);
+  });
+
   it('lets a long repository label shrink without pushing the PR status outside the tooltip', async () => {
     const longRepoRef = {
       ...prRef,

@@ -51,6 +51,7 @@ import { decodeLaneUserId, decodeMessageId, encodeLaneUserId, encodeMessageId } 
 import { buildCardPayload, hasLiveCallbackToken, parseCallbackQuery } from './components.js';
 import {
   collectGroupHistoryMedia,
+  fetchTelegramFileBytes,
   detectGroupTrigger,
   displayNameOf,
   groupWindowEntryOf,
@@ -1612,6 +1613,18 @@ export class TelegramIM extends BaseIM implements ChannelIM {
       if (oldest === undefined) break;
       this.groupMediaPool.delete(oldest);
     }
+  }
+
+  /** Host calls this only after resolving an exact, authorized history row. */
+  async readGroupHistoryImage(fileId: string): Promise<Buffer | null> {
+    const api = this.api;
+    if (!api || this.disposing) return null;
+    const generation = this.configVersion;
+    const bytes = await fetchTelegramFileBytes(
+      { api, contextId: String(this.botId), history: true },
+      fileId,
+    );
+    return !this.disposing && generation === this.configVersion ? bytes : null;
   }
 
   /**

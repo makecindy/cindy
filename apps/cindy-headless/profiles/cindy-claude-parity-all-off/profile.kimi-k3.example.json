@@ -5,7 +5,7 @@
   "changedDimensions": ["makerMemory", "projectContext", "compaction", "systemPrompt"],
   "agentBackend": "claude-code",
   "agentBinaryPath": "/opt/cindy-headless/bin/claude",
-  "agentBinaryVersion": "2.1.296",
+  "agentBinaryVersion": "2.1.312",
   "supportedModelIds": ["moonshot/kimi-k3"],
   "model": {
     "provider": "moonshot",
