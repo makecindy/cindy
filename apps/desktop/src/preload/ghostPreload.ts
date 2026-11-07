@@ -1,10 +1,5 @@
 import { contextBridge, ipcRenderer } from 'electron';
-import { exposePluginPageModelPicker } from './ghostPageModelPickerBridge';
 import type { PluginModelPickerOptions, PluginModelPickerResult } from '../shared/pluginModelPicker';
-import type { CindyPluginUi, PluginUiContributionHandler, PluginUiCommandHandler, PluginUiCapabilities } from '@cindy/maker-shared/plugin-ui';
-import type { PluginUiHostMessage } from '@cindy/maker-shared';
-import type { CindyPluginTabView, PluginUiTabViewSnapshot } from '@cindy/maker-shared/plugin-ui';
-import { PLUGIN_TAB_VIEW_READ, PLUGIN_TAB_VIEW_CHANGED, PLUGIN_TAB_VIEW_RECEIVED } from '../shared/pluginUi';
 
 /**
  * 意识电子脑的最小管子桥(脑机接口;docs/dev-rules/plugin-security-and-authoring.md)。
@@ -55,126 +50,7 @@ ipcRenderer.on('ghost-pipe:message', (_event, payload: unknown) => {
   listeners.forEach((listener) => listener(payload));
 });
 
-// This adapter only owns callbacks and request pairing. Main owns every binding
-// and permission; authors never receive transport or Host metadata requirements.
-const uiHandlers = new Map<string, PluginUiContributionHandler>();
-const uiCommandHandlers = new Map<string, PluginUiCommandHandler>();
-const uiReads = new Map<string, PluginUiContributionHandler>();
-const uiSend = (message: unknown) => { void ipcRenderer.invoke('ghost-pipe:send', message).catch(() => {}); };
-const uiListener: HostMessageListener = raw => {
-  if (!raw || typeof raw !== 'object') return;
-  const message = raw as PluginUiHostMessage;
-  if (message.type === 'ui-view-cancel') { uiReads.delete(message.requestId); return; }
-  if (message.type === 'ui-view-request') {
-    const handler = uiHandlers.get(message.contributionId);
-    if (!handler) return;
-    uiReads.set(message.requestId, handler);
-    void Promise.resolve().then(() => handler.render(message.context)).then(content => {
-      if (uiReads.get(message.requestId) !== handler || uiHandlers.get(message.contributionId) !== handler) return;
-      uiSend({ type: 'ui-view-result', requestId: message.requestId, viewId: message.viewId, content });
-    }, () => {
-      if (uiReads.get(message.requestId) === handler && uiHandlers.get(message.contributionId) === handler)
-        uiSend({ type: 'ui-view-result', requestId: message.requestId, viewId: message.viewId, content: null });
-    }).finally(() => { if (uiReads.get(message.requestId) === handler) uiReads.delete(message.requestId); });
-  } else if (message.type === 'event' && message.name === 'ui-command') {
-    const handler = uiCommandHandlers.get(message.commandId);
-    if (!handler) return;
-    const reply = (result: unknown) => {
-      if (uiCommandHandlers.get(message.commandId) === handler)
-        uiSend({ type: 'ui-action-result', invocationId: message.invocationId, viewId: message.viewId, result });
-    };
-    void Promise.resolve().then(() => handler(message.context)).then(reply, () => reply({ status: 'outcome-unknown' }));
-  } else if (message.type === 'event' && message.name === 'ui-action') {
-    const handler = uiHandlers.get(message.contributionId);
-    if (!handler) return;
-    const reply = (result: unknown) => {
-      if (uiHandlers.get(message.contributionId) === handler)
-        uiSend({ type: 'ui-action-result', invocationId: message.invocationId, viewId: message.viewId, result });
-    };
-    void Promise.resolve().then(() => handler.onAction?.({ actionId: message.actionId, values: message.values,
-      ...(message.data !== undefined ? { data: message.data } : {}), context: message.context }) ?? { status: 'rejected', reason: 'ACTION_UNAVAILABLE' })
-      .then(reply, () => reply({ status: 'outcome-unknown' }));
-  }
-};
-const ui: CindyPluginUi = {
-  appearance: {
-    async read() { return appearanceRequest({ kind: 'read' }); },
-    async set(patch, options) { return appearanceRequest({ kind: 'set', patch, ...options }); },
-    async reset(fields, options) { return appearanceRequest({ kind: 'reset', fields, ...options }); },
-  },
-  visibility: {
-    async read() { return visibilityRequest({ kind: 'read' }); },
-    async set(patch) { return visibilityRequest({ kind: 'set', patch }); },
-  },
-  contribute(id, handler) {
-    if (!/^[a-zA-Z0-9_-]{1,64}$/.test(id) || !handler || typeof handler.render !== 'function' ||
-        (handler.onAction !== undefined && typeof handler.onAction !== 'function')) throw new TypeError('Invalid UI contribution');
-    if (uiHandlers.has(id)) throw new TypeError('UI contribution is already registered');
-    uiHandlers.set(id, handler); listeners.add(uiListener);
-    uiSend({ type: 'ui-register', contributionId: id });
-    return () => {
-      if (uiHandlers.get(id) !== handler) return;
-      uiHandlers.delete(id); uiSend({ type: 'ui-unregister', contributionId: id });
-      if (!uiHandlers.size && !uiCommandHandlers.size) { listeners.delete(uiListener); uiReads.clear(); }
-    };
-  },
-  registerCommand(id, handler) {
-    if (!/^[a-zA-Z0-9_-]{1,64}$/.test(id) || typeof handler !== 'function') throw new TypeError('Invalid UI command');
-    if (uiCommandHandlers.has(id)) throw new TypeError('UI command is already registered');
-    uiCommandHandlers.set(id, handler); listeners.add(uiListener);
-    uiSend({ type: 'ui-command-register', commandId: id });
-    return () => {
-      if (uiCommandHandlers.get(id) !== handler) return;
-      uiCommandHandlers.delete(id); uiSend({ type: 'ui-command-unregister', commandId: id });
-      if (!uiHandlers.size && !uiCommandHandlers.size) { listeners.delete(uiListener); uiReads.clear(); }
-    };
-  },
-  invalidate(input) { uiSend({ type: 'ui-update', contributionId: input.contributionId, scope: input.scope }); },
-  async capabilities() {
-    const requestId = crypto.randomUUID();
-    const reply = await ipcRenderer.invoke('ghost-pipe:send', { type: 'ui-capabilities-request', requestId });
-    if (reply?.requestId !== requestId || reply.capabilities?.version !== 1) throw new Error('UI capabilities unavailable');
-    return reply.capabilities as PluginUiCapabilities;
-  },
-  dispose() { uiHandlers.clear(); uiCommandHandlers.clear(); uiReads.clear(); listeners.delete(uiListener); uiSend({ type: 'ui-dispose' }); },
-};
-
-async function appearanceRequest<T>(request: Record<string, unknown>): Promise<T> {
-  const reply = await ipcRenderer.invoke('ghost-pipe:send', { ...request, type: 'ui-appearance-request' });
-  if (reply?.ok === true) return reply.data as T;
-  throw Object.assign(new Error(reply?.error?.message ?? 'Appearance unavailable'), { code: reply?.error?.code ?? 'APPEARANCE_UNAVAILABLE' });
-}
-
-async function visibilityRequest<T>(request: Record<string, unknown>): Promise<T> {
-  const reply = await ipcRenderer.invoke('ghost-pipe:send', { ...request, type: 'ui-visibility-request' });
-  if (reply?.ok === true) return reply.data as T;
-  throw Object.assign(new Error(reply?.error?.message ?? 'Visibility unavailable'), { code: reply?.error?.code ?? 'VISIBILITY_UNAVAILABLE' });
-}
-
-if (process.argv.includes('--cindy-plugin-tab-view')) {
-  exposePluginPageModelPicker();
-  const changed = new Set<(snapshot: PluginUiTabViewSnapshot) => void>();
-  let latest: { snapshot: PluginUiTabViewSnapshot; sequence: number } | undefined;
-  const received = (value: { snapshot: PluginUiTabViewSnapshot; sequence: number }) => {
-    void ipcRenderer.invoke(PLUGIN_TAB_VIEW_RECEIVED, { generation: value.snapshot.generation, sequence: value.sequence }).catch(() => {});
-  };
-  ipcRenderer.on(PLUGIN_TAB_VIEW_CHANGED, (_event, value: { snapshot: PluginUiTabViewSnapshot; sequence: number }) => {
-    if (latest && value.sequence < latest.sequence) return;
-    latest = value;
-    for (const listener of changed) { try { listener(value.snapshot); } catch { /* plugin owns rendering errors */ } }
-    if (changed.size) received(value);
-  });
-  const view: CindyPluginTabView = {
-    read: async () => {
-      const result = await ipcRenderer.invoke(PLUGIN_TAB_VIEW_READ) as { snapshot: PluginUiTabViewSnapshot; sequence: number };
-      if (!latest || latest.sequence <= result.sequence) latest = result;
-      received(latest); return latest.snapshot;
-    },
-    onChanged: listener => { changed.add(listener); return () => { changed.delete(listener); }; },
-  };
-  contextBridge.exposeInMainWorld('cindy', { ui: { view } });
-} else contextBridge.exposeInMainWorld('cindy', {
-  ui,
+contextBridge.exposeInMainWorld('cindy', {
   ping: (): Promise<{ ok: true; id: string }> => ipcRenderer.invoke('ghost-pipe:ping'),
   onHostMessage: (cb: HostMessageListener): (() => void) => {
     listeners.add(cb);

@@ -3,7 +3,7 @@ import { FORWARDED_REQUEST_RECEIPT, verifiedOwnerRequestText, type ForwardedRequ
 import { AUTO_REVIEW_SOURCE_CONTENT, AUTO_REVIEW_USER_INTENT } from '@cindy/maker-core';
 import { getDeviceLinkInvokeContext } from '../device-link/invoke-context.js';
 import { assertSharedTaskQueueMutation } from './sharedTaskInput.js';
-import { assertTaskActionCurrent, combineInputGuards, hasTaskActionAuthorization, taskActionRevocationCode, taskActionInputGuard, TASK_ACTION_INPUT_GUARD } from './taskActionAuthorization.js';
+import { acceptTaskActionRecoveryCopy, assertTaskActionCurrent, combineInputGuards, hasTaskActionAuthorization, taskActionRevocationCode, taskActionInputGuard, TASK_ACTION_INPUT_GUARD } from './taskActionAuthorization.js';
 import { isBotGroupClientId } from '../../shared/botGroupChat.js';
 import { SchedulerQueuedPreparationError } from './schedulerQueuedPreparation.js';
 import { ProviderGroupUsageLimitError } from '../provider-group/failurePolicy.js';
@@ -3525,7 +3525,7 @@ export class AgentInputCoordinator {
           }
         }
         const clientId = crypto.randomUUID();
-        continueItem = {
+        continueItem = acceptTaskActionRecoveryCopy(recovery.item, {
           ...recovery.item,
           clientId,
           text: continueText,
@@ -3556,7 +3556,7 @@ export class AgentInputCoordinator {
             content: continueText,
             createdAt: new Date().toISOString(),
           },
-        };
+        });
       }
     }
     // Only the verified group quota rejection can arm a queue-head wait: selection failed
@@ -3610,7 +3610,7 @@ export class AgentInputCoordinator {
       let item = continueItem;
       if (!item) {
         const clientId = crypto.randomUUID();
-        item = {
+        item = acceptTaskActionRecoveryCopy(recovery.item, {
           ...(retryItem ?? recovery.item),
           clientId,
           autoResume: automatic ? true : undefined,
@@ -3624,7 +3624,7 @@ export class AgentInputCoordinator {
             clientId,
             createdAt: new Date().toISOString(),
           },
-        };
+        });
       }
       if ((opts?.auto && attemptToken !== null) || usageWait) {
         this.pendingAutoResumeRecoveries.set(item.clientId, {

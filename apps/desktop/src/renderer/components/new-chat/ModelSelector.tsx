@@ -742,6 +742,9 @@ export type ModelSelectorSource =
 export type ModelSelectorProps = ModelSelectorBaseProps & ModelSelectorSource;
 
 export interface ModelSelectorBaseProps {
+  /** Nonzero request from a terminal-error recovery action; selection still uses the normal transaction. */
+  openRequest?: number;
+  onOpenRequestConsumed?: (nonce: number) => void;
   'data-setting-id'?: string;
   /** 语义同 ModelSelectorContentProps.pluginModels。 */
   pluginModels?: PluginModelsPickerProps;
@@ -4089,6 +4092,8 @@ function ModelSelectorContentView({
 }
 
 export function ModelSelector({
+  openRequest = 0,
+  onOpenRequestConsumed,
   pluginModels,
   providersOverride,
   providersOverrideState,
@@ -4217,6 +4222,14 @@ export function ModelSelector({
     },
     [deviceId, disabled, discovery, resetDiscoveryPresentation, providersOverride, providersOverrideState, sshCodexRefresh],
   );
+
+  const consumedOpenRequest = useRef(0);
+  useEffect(() => {
+    if (!openRequest || consumedOpenRequest.current === openRequest || disabled) return;
+    consumedOpenRequest.current = openRequest;
+    handleOpenChange(true);
+    onOpenRequestConsumed?.(openRequest);
+  }, [openRequest, disabled, handleOpenChange, onOpenRequestConsumed]);
 
   // AlertDialog 打开时会被 Popover 视作外部交互并请求关闭。Agent 分段确认期间
   // 强制保留已展开的模型面板；确认结束后把底层 open 恢复为 true，避免弹窗关闭
@@ -5066,9 +5079,8 @@ export function ModelSelector({
         collisionPadding={8}
         className={cn(
           // field 形态面板宽度绑定 trigger(DESIGN.md §4 Select & Dropdown 宽度铁则,
-          // 与隔壁权限字段同规则),且压掉共享 PopoverContent 的 shadow-md(§4 面板无
-          // 阴影);toolbar 等非 field 的 Radix 分支维持既有视觉不动。
-          isFieldTrigger ? 'w-[var(--radix-popover-trigger-width)] shadow-none' : 'w-auto',
+          // 与隔壁权限字段同规则);toolbar 等非 field 的 Radix 分支维持既有视觉不动。
+          isFieldTrigger ? 'w-[var(--radix-popover-trigger-width)]' : 'w-auto',
           'flex min-h-0 max-h-[var(--radix-popover-content-available-height)] flex-col overflow-hidden rounded-[12px] p-0',
           'bg-[var(--model-dropdown-bg)]',
           'border border-[var(--model-dropdown-border)]',

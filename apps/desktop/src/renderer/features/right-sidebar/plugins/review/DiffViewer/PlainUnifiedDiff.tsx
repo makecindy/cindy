@@ -94,7 +94,7 @@ function HunkActionPill({
       <span
         data-review-action-reveal="hunk"
         className={cn(
-          'pointer-events-auto sticky right-2 flex shrink-0 items-center gap-1 rounded-full border border-[var(--border-default)] bg-[color-mix(in_srgb,var(--surface-elevated)_90%,transparent)] p-1 text-[var(--text-primary)] shadow-[var(--shadow-menu)] backdrop-blur-sm',
+          'pointer-events-auto sticky right-2 flex shrink-0 items-center gap-1 rounded-full border border-[var(--border-default)] bg-[color-mix(in_srgb,var(--surface-elevated)_90%,transparent)] p-1 text-[var(--text-primary)] shadow-[shadow:var(--shadow-menu)] backdrop-blur-sm',
           hunkActionRevealClass(hasPendingAction),
         )}
       >

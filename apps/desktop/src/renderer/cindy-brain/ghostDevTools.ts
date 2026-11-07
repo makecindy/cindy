@@ -1,5 +1,4 @@
 import type { InstalledGhost } from '../../shared/ghost';
-import { inspectPluginUiSubscriptions } from './usePluginUiContributions';
 
 /**
  * 意识仓库 dev 调试工具—— dev UI 的黑盒验证通道。
@@ -31,7 +30,6 @@ interface GhostDevToolsApi {
   stopRun: (id: string) => Promise<string>;
   crash: (id: string) => Promise<string>;
   call: (id: string, tool: string, args?: Record<string, unknown>) => Promise<unknown>;
-  ui: { inspect: () => Promise<{ host: unknown; subscriptions: ReturnType<typeof inspectPluginUiSubscriptions> }> };
 }
 
 declare global {
@@ -76,6 +74,5 @@ export function installGhostDevTools(): void {
     },
     call: (id: string, tool: string, args: Record<string, unknown> = {}) =>
       window.electronAPI.ghosts.devCall(id, tool, args),
-    ui: { inspect: async () => ({ host: await window.electronAPI.ghosts.ui.inspect(), subscriptions: inspectPluginUiSubscriptions() }) },
   };
 }

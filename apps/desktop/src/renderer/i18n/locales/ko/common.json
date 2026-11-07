@@ -1,14 +1,33 @@
 {
-  "pluginUi": {
-    "renderer": "표시 방식",
-    "original": "원본 내용",
-    "unavailable": "플러그인 화면을 사용할 수 없어 작업이 비활성화되었습니다.",
-    "outcome-unknown": "작업 결과가 확인되지 않았습니다. 플러그인의 최신 상태를 확인하세요.",
-    "rejected": "플러그인이 이 작업을 실행하지 않았습니다. 입력 내용은 유지됩니다.",
-    "draftChanged": "입력이 변경되어 플러그인의 입력 수정이 적용되지 않았습니다.",
-    "editorUnavailable": "현재 입력란을 사용할 수 없어 플러그인의 입력 수정이 적용되지 않았습니다.",
-    "more": "더 보기",
-    "close": "닫기"
+  "sharedTaskRecovery": {
+    "title": "원래 컴퓨터에서 세션을 재개할 수 없습니다",
+    "description": "다른 컴퓨터나 제공자를 선택하여 컨텍스트를 인계하고 계속할 수 있습니다. 메시지는 보존되지만 원래 컴퓨터의 전체 실행 상태가 이전되지는 않습니다.",
+    "choose": "다른 컴퓨터 선택",
+    "cancel": "여기에 머무르기",
+    "stage": {
+      "owner": "공유 컴퓨터에 연결하는 중 실패했습니다.",
+      "allocation": "원래 실행 컴퓨터에 권한을 할당하는 중 실패했습니다.",
+      "executor": "실행 컴퓨터의 device-link 연결을 확인하는 중 실패했습니다.",
+      "capability": "실행 컴퓨터의 기능을 확인하는 중 실패했습니다.",
+      "authorization": "실행 권한을 설정하는 중 실패했습니다.",
+      "unknown": "실패한 단계가 보고되지 않았습니다."
+    },
+    "reason": {
+      "offline": "이 단계에서 연결하려던 컴퓨터가 오프라인으로 보고되었습니다. 다른 작업은 다른 컴퓨터에서 실행 중일 수 있습니다.",
+      "timeout": "요청 시간이 초과되었습니다. 연결하려던 서비스는 실패 단계를 확인해 주세요. 직접 연결과 릴레이 중 어디에 문제가 있는지는 확인되지 않았습니다.",
+      "relay": "device-link 연결이 준비되지 않았거나 종료되었습니다. 직접 연결만 실패하면 보통 릴레이로 자동 전환됩니다.",
+      "denied": "접근이 거부되었거나 원격 제어가 꺼져 있습니다. 재시도로 이 제한을 우회할 수 없습니다.",
+      "model": "이 세션에서는 공유 제공자 또는 모델이 허용되지 않습니다.",
+      "budget": "제공자가 사용량 한도 또는 할당량 부족을 보고했습니다. 컴퓨터를 바꿔도 같은 할당량을 사용할 수 있습니다.",
+      "capacity": "세션 또는 연결 리소스가 한도에 도달했습니다. 사용하지 않는 세션을 닫거나 다른 컴퓨터를 선택하세요.",
+      "unsupported": "실행 컴퓨터가 필요한 공유 세션 기능을 지원하지 않습니다.",
+      "authorization": "실행 권한을 설정할 수 없습니다. 실행 컴퓨터가 오프라인이라는 뜻은 아닙니다.",
+      "history": "원래 세션 위치를 사용할 수 없습니다. 네이티브 기록을 다른 컴퓨터에서 바로 열 수 없습니다.",
+      "policy": "공유 사용량 규칙은 공유 컴퓨터에서 실시간 확인이 필요하며 직접 실행으로 적용할 수 없습니다. 잔액 소진을 뜻하지는 않습니다.",
+      "unknown": "공유 컴퓨터가 구체적인 원인을 제공하지 않았습니다. 오프라인, 할당량, 직접 연결 및 릴레이 상태는 확인되지 않았습니다.",
+      "rate": "서비스가 요청을 제한하거나 혼잡한 상태입니다. 제한이 해제될 때까지 기다려 주세요. 다른 컴퓨터에도 같은 제한이 적용될 수 있습니다.",
+      "service": "공유 권한 서비스에 연결하지 못했거나 서비스가 실패를 반환했습니다. 실행 컴퓨터의 오프라인 상태는 확인되지 않았습니다."
+    }
   },
   "providerAccountUsage": {
     "kimi": {
@@ -144,7 +163,7 @@
   "taskActionConfirmation": {
     "title": "세션 작업 확인",
     "once": "아래 대상, 작업과 전체 내용을 확인하세요. 허용은 이번 작업에 한 번만 적용됩니다.",
-    "remove": "자동화를 삭제합니다. 대상을 확인하세요. 허용은 이번 작업에만 적용됩니다.",
+    "remove": "자동화의 수신 주소를 해제합니다. 대상을 확인하세요. 허용은 이번 작업에만 적용됩니다.",
     "permission": "다른 작업의 권한 요청에 사용자를 대신해 답합니다. 내용을 확인하세요. 허용은 이번 작업에만 적용됩니다.",
     "resume": "일시 중지된 실행을 재개합니다. 대상을 확인하세요. 허용은 이번 작업에만 적용됩니다.",
     "command": "에이전트의 도구 승인 없이 컴퓨터에서 명령을 저장하거나 실행합니다. 명령과 작업 폴더를 확인하세요. 승인은 이번 한 번만 적용됩니다.",
@@ -1079,6 +1098,14 @@
     "cancel": "연결 유지",
     "disconnect": "연결 끊기"
   },
+  "awayGuard": {
+    "status": "Cindy가 작업 중입니다",
+    "hint": "아무 키나 누르면 잠깁니다. Touch ID나 암호로 잠금 해제하세요.",
+    "lockFailed": {
+      "status": "Cindy가 이 Mac을 잠그지 못했습니다",
+      "hint": "Control-Command-Q를 눌러 잠그세요. 잠시 후 시스템도 자동으로 잠급니다."
+    }
+  },
   "appBadge": {
     "attentionCount": "확인이 필요한 세션: {{count}}"
   },
@@ -1402,13 +1429,19 @@
       "actionFailed": "작업을 완료하지 못했습니다. 알림은 유지됩니다. 다시 시도해 주세요.",
       "newConversationTitle": "새 세션",
       "newConversationHint": "새 세션 시작",
-      "muteSound": "Agent Island 소리 끄기",
-      "enableSound": "Agent Island 소리 켜기",
-      "settings": "Agent Island 설정",
+      "muteSound": "Agent Notch 소리 끄기",
+      "enableSound": "Agent Notch 소리 켜기",
+      "settings": "Agent Notch 설정",
       "newMessage": "새 메시지",
       "review": "확인",
       "needsInput": "입력이 필요함",
       "completed": "완료됨",
+      "liveActivityRunning_one": "작업 {{count}}개 실행 중",
+      "liveActivityRunning_other": "작업 {{count}}개 실행 중",
+      "liveActivityAlsoRunning_one": "작업 {{count}}개 더 실행 중",
+      "liveActivityAlsoRunning_other": "작업 {{count}}개 더 실행 중",
+      "liveActivityWaiting_one": "응답이 필요한 작업 {{count}}개",
+      "liveActivityWaiting_other": "응답이 필요한 작업 {{count}}개",
       "error": "오류",
       "input": "입력",
       "done": "완료",
@@ -1427,6 +1460,13 @@
     }
   },
   "menubar": {
+    "shared": {
+      "label": "공유",
+      "note": "계정 전체가 함께 사용하는 한도이며, 나에게만 배정된 한도가 아닙니다.",
+      "highestWeekly": "공유 · 주간 잔여 최대",
+      "highestWeeklyNote": "조회 가능한 계정 중 주간 잔여량이 가장 많은 계정입니다. 합산하거나 개인에게 할당한 한도가 아닌 계정 공용 한도입니다.",
+      "from": "{{name}}님의 공유"
+    },
     "balance": {
       "name": "Cindy 잔액",
       "quotaName": "Cindy 이번 기간 할당량",
@@ -1748,7 +1788,7 @@
       "apiKeys": "도구 키",
       "voiceInput": "음성 입력",
       "shortcuts": "키보드 단축키",
-      "agentIsland": "Agent Island",
+      "agentIsland": "Dynamic Island",
       "import": "세션 가져오기",
       "connections": "서드파티 플랫폼",
       "providers": "제공자",
@@ -1770,7 +1810,7 @@
       "billing": "사용량 및 결제",
       "appearance": "외관",
       "notifications": "알림",
-      "agentIsland": "Agent Island",
+      "agentIsland": "Dynamic Island",
       "collaboration": "협업",
       "agentResource": "Agent 리소스 사용량",
       "gitSafety": "Git 안전",
@@ -2070,6 +2110,17 @@
     "appearance": {
       "title": "외관",
       "modeLabel": "표시 모드",
+      "appIcon": {
+        "label": "Dock 아이콘",
+        "description": "Dock에 표시할 앱 아이콘을 선택합니다",
+        "saveFailed": "Dock 아이콘을 저장하지 못했습니다. 다시 시도해 주세요",
+        "options": {
+          "default": "기본",
+          "cat": "검은 고양이",
+          "wordmark": "Cindy 워드마크",
+          "mark": "Cindy 심볼"
+        }
+      },
       "sidebarAndPanels": "사이드바 및 패널",
       "themeLabel": "테마",
       "themeAriaLabel": "테마 선택",
@@ -2235,7 +2286,7 @@
     "notifications": {
       "title": "알림",
       "sessionDoneLabel": "시스템 알림",
-      "sessionDoneHint": "세션이 완료되거나 오류가 발생하거나 답변이 필요할 때 알립니다. 일반 세션은 창이 뒤에 있을 때만 알립니다. Agent Island를 켜면 대신 그곳에 알림을 표시합니다.",
+      "sessionDoneHint": "세션이 완료되거나 오류가 발생하거나 답변이 필요할 때 알립니다. 일반 세션은 창이 뒤에 있을 때만 알립니다. Agent Notch나 Dynamic Island를 켜면 대신 그곳에서 알립니다. Dynamic Island만 켠 경우 오류는 시스템 알림으로 알립니다.",
       "sessionDoneAria": "세션 시스템 알림 전환",
       "feishuLabel": "세션 완료 또는 응답 필요 시 Feishu / Lark 메시지 전송",
       "feishuHint": "연동된 Feishu 또는 Lark 봇을 통해 개인 메시지를 보냅니다. 창이 비활성 상태일 때만 전송됩니다.",
@@ -2327,31 +2378,51 @@
       "swallowActivationClickLabel": "창으로 돌아올 때 잘못 누르지 않기",
       "swallowActivationClickHint": "뒤에 있는 창을 왼쪽 클릭하면 창을 앞으로 가져오기만 합니다. 끄면 클릭한 항목도 함께 실행되어 잘못 누를 수 있습니다.",
       "swallowActivationClickAria": "창으로 돌아올 때 실수로 클릭 방지 전환",
-      "macRestartNote": "macOS에서는 변경 사항을 적용하려면 앱을 다시 시작해야 합니다."
+      "macRestartNote": "macOS에서는 변경 사항을 적용하려면 앱을 다시 시작해야 합니다.",
+      "awayGuard": {
+        "label": "자리를 비워도 작업 계속하기",
+        "hint": "켜면 이 Mac은 아무 조작이 없어도 화면이 꺼지거나 잠기지 않아 AI가 언제든 사용할 수 있습니다. 한동안 자리를 비우면 검은 화면이 화면을 가리고 AI는 그 뒤에서 작업을 계속합니다. 키를 누르거나 클릭하면 즉시 잠기며 Touch ID나 암호로 잠금 해제할 수 있습니다.",
+        "permission": "누군가 이 Mac을 건드릴 때 즉시 잠그려면 '시스템 설정 > 개인정보 보호 및 보안 > 손쉬운 사용'에서 Cindy를 허용하세요. 허용하기 전에는 평소처럼 화면이 꺼지고 잠깁니다.",
+        "preview": "지금 사용해 보기",
+        "previewStarting": "마우스와 키보드에서 손을 떼세요. 3초 후 화면이 가려지며, 아무 키나 누르면 잠깁니다. 그다음 잠금을 해제해 보세요.",
+        "previewUnavailable": "화면을 가리지 못했습니다. Cindy를 다시 시작한 후 다시 시도하세요.",
+        "delay": {
+          "label": "화면을 가리기까지",
+          "hint": "키보드와 마우스를 이 시간 동안 건드리지 않으면 가림 화면이 나타납니다. 기본값은 디스플레이 끄기 시간과 같습니다.",
+          "30": "30초",
+          "60": "1분",
+          "120": "2분",
+          "300": "5분",
+          "system": "시스템"
+        }
+      }
     },
     "agentIsland": {
-      "title": "Agent Island",
-      "unsupported": "Agent Island를 사용하려면 macOS 14 이상이 필요합니다.",
+      "title": "Dynamic Island",
+      "unsupported": "Agent Notch를 사용하려면 macOS 14 이상이 필요합니다.",
       "subtleRemindersLabel": "은은한 알림",
-      "subtleRemindersHint": "새 메시지, 응답이 필요한 항목, 오류가 있으면 아일랜드 아래로 알림 카드를 띄우지 않고 아이콘의 변화로 알려줍니다. 아일랜드를 클릭하면 전체 작업 목록을 볼 수 있습니다.",
+      "subtleRemindersHint": "새 메시지, 응답이 필요한 항목, 오류가 있으면 Agent Notch 아래로 알림 카드를 띄우지 않고 아이콘의 변화로 알려줍니다. Agent Notch를 클릭하면 전체 작업 목록을 볼 수 있습니다.",
       "subtleRemindersFailed": "알림 설정을 저장하지 못했습니다. 다시 시도해 주세요.",
-      "enableLabel": "Agent Island 표시",
-      "enableHint": "실행 중, 응답 필요, 읽지 않은 완료 작업을 화면 상단에 표시합니다. 사용 설정 시 동종의 시스템 알림을 억제해 이중 알림을 방지합니다.",
-      "enableAria": "Agent Island 전환",
+      "liveActivityLabel": "Dynamic Island에 작업 표시",
+      "liveActivityHint": "새 MacBook Pro의 Dynamic Island에 작업 진행 상황을 표시하고, 확인이 필요하거나 완료되면 펼쳐집니다. 다른 Mac에서는 메뉴 막대에 표시됩니다. Agent Notch와 별개로 동작합니다.",
+      "liveActivityFailed": "실시간 현황 설정을 저장하지 못했습니다. 다시 시도해 주세요.",
+      "enableLabel": "Agent Notch 표시",
+      "enableHint": "화면 상단에 작업 진행 상황을 표시하고, 확인이 필요하거나 결과가 나오면 알려 줍니다. 켜 두면 이런 알림은 시스템 알림으로 따로 오지 않습니다.",
+      "enableAria": "Agent Notch 전환",
       "displayLabel": "표시 위치",
-      "displayHint": "Agent Island를 표시할 디스플레이를 선택합니다. 모두를 선택하면 각 디스플레이에 표시됩니다.",
-      "displaySelectAria": "Agent Island 디스플레이 선택",
+      "displayHint": "Agent Notch를 표시할 디스플레이를 선택합니다. 모두를 선택하면 각 디스플레이에 표시됩니다.",
+      "displaySelectAria": "Agent Notch 디스플레이 선택",
       "displayAll": "모든 디스플레이",
       "displayOption": "{{name}} · {{resolution}}",
       "displayNameFallback": "디스플레이 {{index}}",
       "displayPrimary": "주 디스플레이",
       "displayInternal": "내장",
       "displayMissing": "연결 해제된 디스플레이 {{id}}",
-      "skinLabel": "아이콘 스킨",
-      "skinHint": "실행 중 아이콘에 사용할 캐릭터 스킨을 선택합니다.",
+      "skinLabel": "캐릭터",
+      "skinHint": "Agent Notch와 Dynamic Island에 표시할 캐릭터입니다.",
       "soundLabel": "이벤트 사운드",
-      "soundHint": "Agent Island 이벤트별 8-bit 사운드를 선택합니다.",
-      "soundAria": "Agent Island 사운드 전환",
+      "soundHint": "알림마다 8-bit 효과음을 고를 수 있으며 Agent Notch와 Dynamic Island에서 함께 사용합니다. 탭 소리는 Agent Notch를 탭할 때만 재생됩니다.",
+      "soundAria": "Agent Notch 사운드 전환",
       "soundSelectAria": "{{event}} 사운드",
       "soundPreviewAria": "{{event}} 사운드 미리 듣기",
       "skinAnimationAria": "{{skin}} 미리보기 애니메이션 전환",
@@ -2374,7 +2445,7 @@
         },
         "boli": {
           "name": "Boli",
-          "description": "가볍게 통통 뛰는 분홍 Boli. Agent Island를 더 부드럽고 경쾌한 분위기로 만듭니다."
+          "description": "가볍게 통통 뛰는 분홍 Boli. Agent Notch를 더 부드럽고 경쾌한 분위기로 만듭니다."
         },
         "whitesnow": {
           "name": "Apple Girl",
@@ -3896,6 +3967,8 @@
         "disabledGroup": "비활성화됨",
         "enableAllModels": "모두 활성화",
         "priceOverride": {
+          "resetShort": "초기화",
+          "referenceDetails": "참고 가격 상세",
           "menu": "API 가격 추정치 편집",
           "title": "{{model}} API 가격 추정치",
           "description": "내 API 또는 구독 경로의 사용량을 추정할 때만 사용되며 제공자의 실제 청구 금액은 변경하지 않습니다.",
@@ -5061,7 +5134,7 @@
         "ariaLabel": "두 번째 대체 보조 모델 선택"
       },
       "emptySlot": "선택 안 함",
-      "customHint": "선택한 순서대로 시도하며, 내장 모델을 사용할 수 없을 때는 자동 리뷰에도 사용합니다. 선택한 제공자에게 메시지와 참조 콘텐츠, 작업·동작의 상세 정보(차단된 동작 포함), 요청자의 신원과 권한, 파일 경로, 운영 체제를 포함한 리뷰 맥락이 전송됩니다.",
+      "customHint": "선택한 순서대로 시도하며, 내장 모델을 사용할 수 없을 때는 자동 리뷰에도 사용합니다. 선택한 제공자에게 메시지와 참조 콘텐츠, Agent의 공개 텍스트(참고용), 작업·동작의 상세 정보(차단된 동작 포함), 요청자의 신원과 권한, 파일 경로, 운영 체제를 포함한 리뷰 맥락이 전송됩니다.",
       "signInHint": "Cindy에 로그인하면 자동 추천을 사용할 수 있습니다. 로그인하지 않은 상태에서는 「사용자 지정」에서 설정된 다른 제공자의 모델을 선택하세요.",
       "chooseAgent": "Agent 선택",
       "backToAgents": "Agent 선택으로 돌아가기",
@@ -5484,12 +5557,17 @@
         "userBrowserSetup": {
           "installPluginTitle": "Cindy Chrome 플러그인 설치",
           "enablePluginTitle": "Cindy Chrome 플러그인 켜기",
-          "installExtensionTitle": "브라우저에 Cindy 확장 추가",
+          "connectExtensionTitle": "브라우저 확장이 연결되지 않음",
           "pluginBody": "내 브라우저는 Cindy Chrome 플러그인과 그 브라우저 확장을 통해 Chrome / Edge에 연결됩니다. 먼저 Cindy에서 플러그인을 설치한 뒤 안내에 따라 확장을 추가하세요.",
-          "extensionBody": "‘브라우저 확장 추가’를 누르면 사용 중인 브라우저에서 Cindy 확장의 스토어 페이지가 열립니다. ‘추가’를 누르면 이곳이 자동으로 연결됨으로 바뀝니다. 이미 추가했다면 브라우저의 확장 관리에서 켜세요.",
+          "connectionBody": "Cindy와 브라우저를 실행한 상태에서 Cindy 확장이 활성화되어 있는지 확인하세요. 연결되지 않았다고 재설치가 필요한 것은 아닙니다. 다시 연결되면 상태가 자동으로 업데이트됩니다.",
           "installPlugin": "플러그인 설치",
           "enablePlugin": "켜러 가기",
-          "installExtension": "브라우저 확장 추가",
+          "openExtensionStore": "확장 스토어 열기",
+          "updatingTitle": "브라우저 연결 업데이트 중",
+          "updatingBody": "업데이트가 끝나면 자동으로 다시 연결됩니다.",
+          "selectPluginTitle": "브라우저 확장 프로그램 선택",
+          "selectPluginBody": "플러그인 상세 정보에서 “이 브라우저 확장 프로그램 사용”을 선택하여 Cindy가 사용할 확장 프로그램을 확인하세요.",
+          "selectPlugin": "플러그인 열기",
           "updatePluginTitle": "Cindy Chrome 플러그인 업데이트",
           "updatePluginBody": "설치된 Cindy Chrome 플러그인이 오래되어 내 브라우저를 지원하지 않습니다. 최신 버전으로 업데이트한 뒤 안내에 따라 확장을 추가하세요.",
           "updatePlugin": "업데이트하러 가기",
@@ -6076,7 +6154,7 @@
         "hook": "Cindy IM 봇"
       },
       "hook": {
-        "description": "Slack과 Telegram을 하나의 Cindy에 연결합니다. 메시지는 이 기기로 전달되며 프로젝트 목록과 세션 실행기를 공유합니다. 계정 연동과 설정은 제공자별로 분리됩니다.",
+        "description": "Slack, Telegram, Feishu / Lark 등을 하나의 Cindy에 연결합니다. 메시지는 이 기기로 전달되며 프로젝트 목록과 세션 실행기를 공유합니다. 계정 연동과 설정은 제공자별로 분리됩니다.",
         "slackDescription": "Slack 워크스페이스를 연결하고 Slack에서 Cindy에게 작업을 맡기세요.",
         "slackDisabledHint": "스위치를 켜면 Slack 인증이 시작됩니다. 연결이 완료되면 Slack에서 작업을 맡길 수 있습니다.",
         "slackBoundHint": "연결이 완료되었습니다. 스위치를 끄면 연결이 해제되며 다시 켜려면 재인증이 필요합니다.",
@@ -6297,6 +6375,45 @@
             "revoked": "연결이 해제되었습니다",
             "superseded": "다른 기기에서 연결됨"
           }
+        },
+        "feishu": {
+          "description": "Feishu 메시지를 작업 컴퓨터에서 처리합니다.",
+          "disabledHint": "스위치를 켠 뒤 브라우저에서 Feishu / Lark 계정을 인증하거나 연동 코드를 bot에게 보내세요.",
+          "toggleAria": "Feishu / Lark 연결 전환",
+          "connect": "Feishu / Lark 연결",
+          "openApp": "인증 페이지 열기",
+          "cancel": "연결 취소",
+          "retry": "다시 연결",
+          "openBot": "봇 열기",
+          "unlink": "Feishu / Lark 연결 해제",
+          "unlinkConfirmTitle": "Feishu / Lark 연결을 해제할까요?",
+          "unlinkConfirmDescription": "이 컴퓨터만 연결 해제합니다.",
+          "unavailableHint": "소속 조직에서 아직 Feishu / Lark bot을 설정하지 않았습니다. 조직 관리자에게 문의하세요.",
+          "unavailableHintPersonal": "Feishu / Lark bot은 아직 개인 계정에서 사용할 수 없습니다.",
+          "status": {
+            "checking": "서버 지원 확인 중…",
+            "unavailable": "조직에서 설정되지 않음",
+            "unavailablePersonal": "아직 사용할 수 없음",
+            "disabled": "비활성화됨",
+            "none": "연결되지 않음",
+            "pending": "브라우저에서 인증하거나 연동 코드를 bot에게 보내세요",
+            "awaiting_confirmation": "Feishu / Lark에서 이 컴퓨터에 연결된 계정 변경을 확인하세요",
+            "confirmed": "{{user}} 님이 Feishu / Lark bot과 연결됨",
+            "denied": "인증이 거부되었습니다",
+            "expired": "인증이 만료되었습니다",
+            "failed": "연결에 실패했습니다",
+            "revoked": "연결이 해제되었습니다",
+            "superseded": "이 컴퓨터는 다른 Feishu / Lark 계정에 연결되어 있습니다",
+            "appChanged": "Feishu / Lark bot이 변경되었습니다. 다시 연결하세요."
+          },
+          "bindCode": {
+            "label": "연동 코드",
+            "copy": "코드 복사",
+            "copied": "연동 코드를 복사했습니다",
+            "hint": "또는 Feishu / Lark에서 Cindy bot에게 이 코드를 개인 메시지로 보내세요"
+          },
+          "setWorkingDevice": "작업 컴퓨터로 설정",
+          "workingDeviceSet": "작업 컴퓨터로 설정했습니다"
         }
       },
       "summary": {
@@ -6315,7 +6432,7 @@
     "tina": {
       "chat": {
         "title": "대화",
-        "description": "저장소에 연결되지 않은 대화입니다. Slack, Telegram 또는 X에서 \"chat\"을 선택하면 대화 lane마다 세션을 사용할 수 있습니다."
+        "description": "저장소에 연결되지 않은 대화입니다. Slack, Telegram, X 또는 Feishu / Lark에서 \"chat\"을 선택하면 대화 lane마다 세션을 사용할 수 있습니다."
       },
       "prefs": {
         "agentLabel": "Agent",
@@ -6325,6 +6442,7 @@
         "providerSlack": "Slack",
         "providerTelegram": "Telegram",
         "providerX": "X",
+        "providerFeishu": "Feishu / Lark",
         "requireConnected": "{{provider}} 연결 후 편집할 수 있습니다(위의 스위치를 켜고 연결을 기다려 주세요).",
         "offlineLocal": "{{provider}}에 연결되지 않은 동안 변경 사항은 이 컴퓨터에 저장되며, 다시 연결되면 채팅의 모델 카드로 동기화됩니다.",
         "requireBinding": "먼저 {{provider}} 계정 연결을 완료해 주세요.",
@@ -7683,8 +7801,6 @@
         "skill": "AI 어시스턴트에 스킬 \"{{name}}\"을(를) 추가합니다",
         "skillDetail": "스킬은 AI가 자신의 지시로 읽어들여 실행하는 지시 파일입니다. 사용자의 전체 권한으로 Claude Code와 Codex의 모든 프로젝트에 적용되며, 이 플러그인의 샌드박스에 제한되지 않습니다. 플러그인이 활성화된 동안 계속 사용 가능하며, 비활성화하거나 제거하면 삭제됩니다. 특정 폴더에서만 플러그인을 끄더라도 숨겨지지 않습니다. 여기서는 스킬 전문을 미리 볼 수 없습니다 — 신뢰할 수 있는 플러그인만 설치하세요.",
         "routineEvents": "루틴 이벤트",
-        "nativeUi": "작업에 컨트롤 추가",
-        "nativeTabView": "독립 보기 ‘{{title}}’ 열기",
         "mcpUi": "대화에 인터랙티브 페이지 표시",
         "mcpUiDomains": "페이지 연결 도메인: {{domains}}",
         "mcpAppOnly": "페이지 전용",
@@ -8351,6 +8467,26 @@
         "title": "\"{{name}}\"을(를) 삭제할까요?",
         "message": "삭제하면 새 세션에서 이 MCP가 더 이상 로드되지 않습니다.",
         "confirm": "삭제"
+      },
+      "duplicates": {
+        "title": "중복이 의심되는 MCP 연결",
+        "description": "Cindy와 Claude Code 사용자 설정에 같거나 비슷한 연결이 있어 도구가 두 번 로드될 수 있습니다. 유지할 연결을 선택하세요. 확실하지 않으면 둘 다 유지할 수 있습니다.",
+        "scope": "이 컴퓨터의 Cindy에서 실행하는 일반 Claude Code 작업에만 다음 에이전트 세션부터 적용됩니다. Claude Code 설정은 변경되지 않습니다. 서로 연관된 중복 연결에는 같은 선택이 적용됩니다.",
+        "unavailable": "일부 설정을 읽지 못했습니다. 연결은 변경되지 않았습니다. 이 페이지를 다시 열면 재확인합니다.",
+        "endpoint": "같은 연결 주소",
+        "similar": "비슷한 연결 주소",
+        "keep": {
+          "both": "이 그룹의 양쪽 모두 유지"
+        },
+        "selected": {
+          "cindy": "Cindy 연결 선택됨",
+          "claude": "Claude Code 연결 선택됨",
+          "both": "이 그룹의 양쪽 연결을 모두 유지합니다"
+        },
+        "reset": "다시 선택",
+        "saveFailed": "저장하지 못했습니다. 연결이 변경되었을 수 있습니다. 현재 목록에서 다시 선택하세요.",
+        "keepThis": "이 연결 유지",
+        "keepThese": "이 연결들 유지"
       }
     },
     "remotePermission": {
@@ -12569,6 +12705,10 @@
       "defer": "나중에 다운로드"
     },
     "permissionPrompt": {
+      "titleStdin": "터미널 입력을 허용할까요?",
+      "titleMcpUrl": "{{server}} 요청 완료",
+      "mcpComplete": "완료",
+      "mcpCancel": "취소",
       "alwaysAllowScoped": "이 세션에서 {{scope}} 항상 허용",
       "alwaysAllowScopedHint": "이 세션 전체에 적용되며, 여기에 표시된 범위에만 해당합니다.",
       "alwaysAllowSessionHint": "이번 요청 한 번이 아니라 이 세션 전체에 적용됩니다.",
@@ -12833,7 +12973,13 @@
       "sendAndContinue": "보내고 계속",
       "close": "닫기",
       "customAnswer": "다른 답변 입력…",
-      "answerPlaceholder": "답변을 입력하세요…"
+      "answerPlaceholder": "답변을 입력하세요…",
+      "validation": {
+        "required": "이 필수 항목을 입력하세요.",
+        "choice": "목록의 옵션 중 하나를 선택하세요.",
+        "tooShort": "{{count}}자 이상 입력하세요.",
+        "tooLong": "{{count}}자 이하로 입력하세요."
+      }
     },
     "planReviewBubble": {
       "title": "계획 검토",
@@ -13915,7 +14061,13 @@
       "mailAttach": "첨부 파일 추가",
       "mailRemoveAttachment": "{{name}} 삭제",
       "mailUpdated": "업데이트된 초안 (읽기 전용)",
-      "mailLegacy": "초안 기록 (읽기 전용)"
+      "mailLegacy": "초안 기록 (읽기 전용)",
+      "taskAutoArchived": "\"{{title}}\"을(를) 보관했습니다",
+      "taskAutoArchivedUndo": "실행 취소",
+      "taskAutoArchivePending": "이 작업을 나가면 자동으로 보관됩니다",
+      "taskAutoArchiveCancel": "취소",
+      "taskAutoArchiveCancelled": "이번에는 자동으로 보관하지 않습니다",
+      "taskArchiveNow": "지금 보관"
     },
     "ghostHook": {
       "blockedFallback": "메시지가 플러그인에 의해 차단되어 전송되지 않았습니다",
@@ -13951,6 +14103,8 @@
       "updateHost": "작업을 실행하는 컴퓨터를 업데이트한 후 다시 시도해 주세요.",
       "failed": "사이드 채팅을 열지 못했습니다. 다시 시도해 주세요.",
       "mainTaskOnly": "메인 작업에서 사이드 채팅을 열어 주세요.",
+      "sharedTaskUnavailable": "공유 작업에서는 사이드 채팅을 사용할 수 없습니다.",
+      "archivedTask": "이 작업의 보관을 취소한 후 사이드 채팅을 열어 주세요.",
       "closeTitle": "사이드 채팅을 닫을까요?",
       "closeDescription": "이 채팅을 중지하고 삭제합니다. 메인 작업에는 영향을 주지 않습니다.",
       "closeConfirm": "닫고 삭제",
@@ -15194,7 +15348,8 @@
         "resume": "재개",
         "pause": "일시 중지",
         "deleteAutomation": "자동화 삭제"
-      }
+      },
+      "tagWebhook": "Webhook"
     },
     "detail": {
       "manualTrigger": "수동 트리거",
@@ -15269,7 +15424,7 @@
         "titleCreate": "자동화 만들기",
         "titleProjectCreate": "새 프로젝트 자동화",
         "titleProjectEdit": "프로젝트 자동화 편집",
-        "subtitle": "Claude, Codex 또는 Pi로 프롬프트를 일정에 따라 실행합니다.",
+        "subtitle": "AI 작업이나 스크립트의 실행 조건을 선택하세요.",
         "subtitleFromGhost": "\"{{name}}\"에서 자동화 만들기를 요청했습니다. 모델을 고르고 저장하면 적용됩니다.",
         "save": "저장",
         "create": "만들기",
@@ -15317,7 +15472,7 @@
       },
       "fields": {
         "title": "제목",
-        "schedule": "일정",
+        "schedule": "작동 방식",
         "notify": "알림",
         "prompt": "프롬프트",
         "once": "1회",
@@ -15433,7 +15588,87 @@
         "preRunPluginRequired": "사전 검사에 쓸 플러그인을 선택하세요",
         "templateParamRequired": "{{label}}을(를) 입력하세요",
         "templateApplyFailed": "템플릿을 적용할 수 없습니다. 매개변수를 확인한 후 다시 시도하세요."
-      }
+      },
+      "layout": {
+        "content": "실행 내용",
+        "notifications": "알림 및 조용한 실행",
+        "contentTab": "내용 및 작동 방식",
+        "optionsTab": "실행 옵션",
+        "sections": "자동화 설정"
+      },
+      "webhook": {
+        "quotaHint": "Webhook 수신 횟수에는 일일 한도가 있으며 여기서 필터링해도 횟수는 줄지 않습니다. 발신 측(예: GitHub)에서 필요한 이벤트만 선택하세요.",
+        "sourceLabel": "보내는 곳",
+        "sourceCustom": "사용자 지정",
+        "customLabel": "형식(JSON)",
+        "customHint": "서명 방식과 이벤트 이름, 전송 ID의 위치를 JSON으로 설명합니다.",
+        "customInvalid": "사용자 지정 형식이 올바르지 않습니다. JSON을 확인하세요.",
+        "signedLabel": "서명 확인",
+        "signedHint": "시크릿을 가진 보내는 곳의 요청만 받습니다.",
+        "unsignedWarning": "서명을 끄면 주소를 아는 사람은 누구나 이 작업을 실행할 수 있고, 매일의 Webhook 수신 횟수도 소모됩니다. 주소가 유출되면 작업 세부 정보에서 주소를 변경하세요.",
+        "eventPicker": {
+          "label": "응답할 이벤트",
+          "choose": "이벤트 선택",
+          "selected": "{{count}}개 선택됨",
+          "all": "모든 이벤트",
+          "search": "이벤트 검색",
+          "customGroup": "기타 선택한 이벤트",
+          "noResults": "일치하는 이벤트가 없습니다. 고급 옵션에서 추가할 수 있습니다.",
+          "noPresets": "이 소스에는 고정된 이벤트 목록이 없습니다. 모두 수신하거나 고급 옵션에서 이벤트 이름을 추가하세요.",
+          "custom": "사용자 지정 이벤트 (고급)",
+          "customLabel": "이벤트 이름",
+          "invalid": "영문, 숫자 또는 _ . : -를 1~100자로 입력하고 한 번에 하나씩 추가하세요.",
+          "add": "추가",
+          "limit": "최대 32개까지 선택할 수 있습니다.",
+          "chooseOne": "이벤트를 하나 이상 선택하거나 모든 이벤트를 선택하세요.",
+          "cancel": "취소",
+          "apply": "적용",
+          "remove": "{{name}} 제거",
+          "groups": {
+            "issues": "Issue",
+            "pullRequests": "PR",
+            "issueComments": "Issue / PR 댓글",
+            "reviews": "PR 리뷰",
+            "checks": "검사 모음",
+            "workflows": "워크플로 실행",
+            "repository": "저장소",
+            "releases": "릴리스",
+            "mergeRequests": "병합 요청",
+            "comments": "댓글",
+            "pipelines": "파이프라인",
+            "projects": "프로젝트",
+            "payments": "결제",
+            "checkout": "체크아웃",
+            "invoices": "청구서",
+            "subscriptions": "구독"
+          },
+          "actions": {
+            "all": "모든 변경",
+            "created": "생성",
+            "closed": "닫힘",
+            "reopened": "다시 열림",
+            "edited": "편집",
+            "commitsUpdated": "커밋 업데이트",
+            "submitted": "리뷰 제출",
+            "completed": "완료",
+            "pushed": "코드 푸시",
+            "published": "게시",
+            "merged": "병합",
+            "updated": "업데이트",
+            "tagsChanged": "태그 푸시",
+            "declined": "거절",
+            "deleted": "삭제",
+            "succeeded": "성공",
+            "failed": "실패",
+            "paid": "결제됨"
+          }
+        }
+      },
+      "trigger": {
+        "label": "트리거 방식",
+        "timed": "예약 실행"
+      },
+      "runSettings": "실행 설정"
     },
     "chips": {
       "selectProject": "프로젝트 선택",
@@ -15632,6 +15867,91 @@
           "description": "매월 문서를 점검해 오래된 내용과 모순 찾기",
           "prompt": "작업 디렉터리의 문서를 점검하고 업데이트가 필요한 내용을 찾으세요.\n제약 사항:\n- 오래된 정보(지난 날짜, 끊어진 링크, 폐기된 절차나 도구), 모순, 중복 내용을 확인합니다\n- 각 문제의 파일 경로와 구체적인 위치를 표시하고 판단 근거를 설명합니다\n- \"업데이트 권장 / 병합 권장 / 삭제 권장\"으로 분류하고 수정 체크리스트를 작성합니다\n- 점검 보고서만 출력하고 문서 자체는 수정하지 않습니다"
         }
+      }
+    },
+    "deadline": {
+      "label": "종료 날짜 및 시간",
+      "clear": "지우기",
+      "hint": "비워 두면 제한이 없습니다. 시간은 {{timezone}} 기준입니다. 종료 시간 이후에는 자동 실행을 시작하지 않으며, 이미 시작한 실행은 완료됩니다.",
+      "invalid": "올바른 날짜와 시간을 입력하세요",
+      "expired": "만료됨"
+    },
+    "webhook": {
+      "title": "Webhook 트리거",
+      "url": "수신 주소",
+      "secret": "시크릿",
+      "copy": "복사",
+      "copied": "{{label}}을(를) 복사했습니다",
+      "copyFailed": "{{label}}을(를) 복사하지 못했습니다. 선택하여 직접 복사해 주세요.",
+      "urlUnavailable": "수신 주소를 지금 사용할 수 없습니다.",
+      "quotaNotifyTitle": "Webhook 수신 횟수를 모두 사용했습니다",
+      "quotaExhausted": "오늘의 Webhook 수신 횟수 {{limit}}회를 모두 사용했습니다. {{time}}에 다시 시작됩니다. 그때까지 외부 이벤트로 작업이 실행되지 않습니다. 예약 실행과 모델 사용량에는 영향이 없습니다.",
+      "signedOut": "Cindy 계정에 로그인하면 수신이 다시 시작됩니다. 설정은 유지됩니다.",
+      "serviceUnavailable": "이 환경에서는 Webhook 수신을 사용할 수 없습니다.",
+      "suspended": "이 계정의 Webhook이 비활성화되었습니다.",
+      "endpointLimit": "수신 URL 한도에 도달했습니다. 사용하지 않는 URL을 해제해 주세요.",
+      "offline": "이 컴퓨터가 현재 서버에 연결되어 있지 않습니다. 이벤트는 보관되었다가 다시 연결되면 전달됩니다.",
+      "localOnlyHint": "이 주소는 이 컴퓨터에서만 작동합니다. 공개 이벤트는 gh webhook forward 등으로 전달하세요.",
+      "eventsSummary": "이벤트: {{events}}",
+      "lastReceived": "최근 이벤트: {{time}}",
+      "neverReceived": "아직 받은 이벤트가 없습니다",
+      "ignored": "{{count}}개 무시됨",
+      "generateSecret": "시크릿 생성",
+      "rotateSecret": "시크릿 다시 생성",
+      "secretOnce": "지금 이 시크릿을 복사하세요. 다시 표시되지 않습니다.",
+      "secretMissing": "시크릿을 생성하기 전까지 이벤트가 거부됩니다.",
+      "rotateFailed": "시크릿을 생성하지 못했습니다. 시크릿은 이 작업을 실행하는 컴퓨터에서만 관리할 수 있습니다.",
+      "genericSender": "보내는 곳",
+      "secretFillHint": "{{sender}}의 \"{{field}}\"에 입력하세요.",
+      "secretPastePlaceholder": "{{sender}}의 \"{{field}}\" 붙여넣기",
+      "secretSave": "시크릿 저장",
+      "secretSaved": "시크릿을 저장했습니다.",
+      "secretSaveFailed": "시크릿을 저장할 수 없습니다. 시크릿은 이 작업을 실행하는 컴퓨터에서만 관리할 수 있습니다.",
+      "secretInvalid": "시크릿 형식이 올바르지 않습니다. 보내는 곳에서 다시 복사하세요.",
+      "secretPasteMissing": "보내는 곳의 시크릿을 붙여넣기 전까지 이벤트는 거부됩니다.",
+      "unsignedNotice": "서명이 꺼져 있습니다. 주소를 아는 사람은 누구나 이 작업을 실행할 수 있습니다. 주소가 유출되면 변경하세요.",
+      "rotateUrl": "주소 변경",
+      "rotateUrlConfirmTitle": "수신 주소를 변경할까요?",
+      "rotateUrlConfirmBody": "이전 주소는 바로 사용할 수 없게 되므로 새 주소를 보내는 곳에 입력하세요. 설정과 시크릿은 그대로입니다.",
+      "rotateUrlFailed": "주소를 변경할 수 없습니다. 잠시 후 다시 시도하세요.",
+      "addressHint": "{{sender}}의 Webhook 설정에 이 URL을 입력하세요.",
+      "testHint": "{{sender}}에서 필터와 일치하는 이벤트를 발생시키세요. 실행 결과가 아래에 표시됩니다.",
+      "waitingEvent": "이벤트 대기 중",
+      "manageConnection": "연결 설정",
+      "preparing": "수신 URL 준비 중…",
+      "noRunsHint": "필터와 일치하는 Webhook 이벤트가 도착하면 여기에 실행 결과가 표시됩니다.",
+      "account": {
+        "title": "수신 주소",
+        "manage": "관리",
+        "usage": "수신 주소 {{used}} / {{limit}}",
+        "description": "모든 컴퓨터의 수신 주소가 이 계정의 한도를 공유합니다. 이전 컴퓨터가 오프라인이어도 주소를 해제할 수 있습니다.",
+        "remaining": "{{count}}개 사용 가능",
+        "unavailable": "현재 서비스는 계정별 주소 관리를 지원하지 않습니다. 서비스 업데이트를 기다려 주세요.",
+        "loadFailed": "주소 목록을 불러오지 못했습니다. 연결을 확인하고 새로고침해 주세요.",
+        "releaseFailed": "해제 결과를 확인하지 못했습니다. 다시 시도하기 전에 목록을 새로고침해 확인해 주세요.",
+        "retry": "새로고침",
+        "loading": "주소 불러오는 중…",
+        "empty": "사용 중인 수신 주소가 없습니다",
+        "thisDevice": "이 컴퓨터",
+        "unnamed": "자동화 {{id}}",
+        "unnamedDevice": "기기 {{id}}",
+        "suspended": "비활성화됨, 한도에 포함",
+        "lastReceived": "최근 수신: {{time}}",
+        "neverReceived": "수신한 이벤트 없음",
+        "open": "자동화 보기",
+        "release": "해제",
+        "confirm": "{{device}}의 “{{name}}” 수신 주소를 해제할까요?",
+        "confirmHint": "기존 주소, 비밀 키 및 서버에 저장된 이벤트가 무효화됩니다. 이전 컴퓨터가 다시 연결되어도 자동으로 복구되지 않습니다. 자동화와 실행 기록은 유지되며, 이미 시작된 실행에는 영향을 주지 않습니다.",
+        "cancel": "취소",
+        "confirmRelease": "주소 해제",
+        "viewAddress": "주소 보기",
+        "done": "완료",
+        "released": "“{{name}}”의 주소를 해제했습니다.",
+        "releasedHint": "이 주소는 해제되어 더 이상 한도를 차지하지 않습니다. 다시 연결하면 새 주소가 생성되므로 발신 측 설정을 업데이트해 주세요.",
+        "reconnect": "다시 연결",
+        "reconnectConfirm": "Webhook을 다시 연결할까요?",
+        "reconnectConfirmHint": "한 자리의 한도를 사용하여 새 수신 주소를 만듭니다. 발신 측에 새 주소와 비밀 키를 설정해 주세요.",
+        "reconnectFailed": "다시 연결하지 못했습니다. 남은 한도를 확인하고 다시 시도해 주세요."
       }
     }
   },
@@ -18900,6 +19220,9 @@
     "pendingApprovals": "승인 대기 {{count}}개"
   },
   "richAnswer": {
+    "invalidImageReference": "이미지 참조가 올바르지 않아 표시할 수 없습니다.",
+    "requestImageAgain": "이미지 다시 표시 요청",
+    "requestImageAgainMessage": "이 기존 이미지({{name}}, 참조: {{source}})를 다시 표시해 주세요. 원래 도구 결과나 파일을 확인하고 실제 주소를 사용해 주세요. 이미지를 새로 생성하지 말고, 어떤 이미지인지 확인할 수 없다면 먼저 저에게 물어봐 주세요.",
     "send": "메시지 보내기",
     "sending": "보내는 중…",
     "sent": "제출됨",
@@ -19331,5 +19654,33 @@
     "rendered": "문서 보기",
     "wrap": "자동 줄 바꿈",
     "lineNumbers": "줄 번호"
+  },
+  "subscriptionAccounts": {
+    "signIn": {
+      "checking": "로컬 계정 확인 중…",
+      "detected": "로그인된 계정을 찾았습니다",
+      "useAccount": "이 계정 사용",
+      "anotherAccount": "다른 계정으로 로그인",
+      "keepExisting": "새 계정은 이 공급업체에 추가됩니다. 기존 로그인은 유지됩니다.",
+      "checkFailed": "로컬 계정을 확인하지 못했습니다. 다시 시도해 주세요.",
+      "retry": "다시 시도",
+      "useCodex": "Codex로 로그인"
+    },
+    "title": "구독 계정",
+    "note": "첫 계정은 CLI 기본 폴더를 사용합니다. 추가 계정은 별도로 로그인합니다. 새 작업은 계정에 분산되고 기존 작업은 원래 계정을 유지합니다.",
+    "strategy": "부하 분산",
+    "add": "계정 추가",
+    "default": "기본 폴더",
+    "ready": "연결됨",
+    "signedOut": "로그인 필요",
+    "unavailable": "상태를 확인할 수 없음",
+    "limited": "사용 한도 도달",
+    "remove": "계정 제거",
+    "removeTitle": "{{name}} 계정을 제거할까요?",
+    "removeDescription": "Cindy가 이 계정에 작업을 배정하지 않습니다. CLI 로그인과 대화 기록은 이 컴퓨터에 유지됩니다.",
+    "failed": "계정을 읽거나 업데이트하지 못했습니다. CLI 로그인과 네트워크 연결을 확인한 후 다시 시도하세요.",
+    "directory": "계정 폴더",
+    "loginAgain": "다시 로그인",
+    "login": "로그인"
   }
 }

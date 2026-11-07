@@ -1295,7 +1295,7 @@ describe('provider catalog realm reload', () => {
     const images = () => getActiveCatalog().providers.find((provider) => provider.id === 'openai')!.imageModels!;
     const expectMode = (hasKey: boolean) => {
       expect(images().map((model) => model.id)).toEqual(hasKey
-        ? ['openai/gpt-image-2.5-sunburst', 'openai/gpt-image-2.5-flare', 'openai/gpt-image-2']
+        ? ['openai/gpt-image-2.6-sunburst', 'openai/gpt-image-2.6-flare', 'openai/gpt-image-2.5-sunburst', 'openai/gpt-image-2.5-flare', 'openai/gpt-image-2']
         : ['openai/gpt-image-2']);
       expect(images().find((model) => model.id === 'openai/gpt-image-2')?.name)
         .toBe(hasKey ? 'GPT Image 2' : 'GPT Image Gen');

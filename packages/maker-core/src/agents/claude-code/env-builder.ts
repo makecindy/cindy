@@ -12,7 +12,7 @@
  * Anthropic,host 不接管连接,见 ClaudeEnvBuildOptions.nativeCliAuth。
  */
 
-import type { AgentCredentialMode, AuthAdapter } from '../../interfaces/auth-adapter.js';
+import type { AgentCredentialMode, AuthAdapter, NativeSubscriptionAccount } from '../../interfaces/auth-adapter.js';
 import type { AgentRuntimeConfig } from '../../interfaces/runtime-config.js';
 import { applyPlainTextTerminalEnv } from '../shared/terminal-output.js';
 
@@ -31,6 +31,7 @@ interface ModelContextWindowSource {
 }
 
 interface ClaudeEnvBuildOptions {
+  nativeSubscriptionAccount?: NativeSubscriptionAccount;
   /**
    * Host-provided model context windows for provider-routed models.
    *
@@ -477,7 +478,11 @@ export async function buildClaudeEnv(
     : options.authModel
       ? { model: options.authModel }
       : undefined;
-  const authEnv = { ...(await auth.getAuthEnv(authOptions)) };
+  const authEnv = { ...(await auth.getAuthEnv({
+    ...authOptions,
+    ...(mode === 'local' && nativeCliAuth && options.nativeSubscriptionAccount
+      ? { nativeSubscriptionAccount: options.nativeSubscriptionAccount } : {}),
+  })) };
   if (mode === 'remote') {
     // CLAUDE_CONFIG_DIR is a host-local path. If an auth adapter injects one
     // (older Desktop dev sandboxes used a userData path), forwarding that

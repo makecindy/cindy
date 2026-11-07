@@ -36,6 +36,8 @@ import { captureProviderManagementScope } from './managementScope.js';
 import { createProviderGroupRouter, type ProviderGroupRouter } from './router.js';
 import type { ProviderGroupRemoteGroups } from './service.js';
 import { readProviderGroup } from './store.js';
+import { readSubscriptionPoolUsage } from '../subscription-accounts/runtime.js';
+import { isSubscriptionProvider } from '../../shared/subscriptionAccounts.js';
 import { createGroupContinuityClient } from './continuityClient.js';
 import { createProviderGroupUsageReader, providerGroupUsageSnapshot, providerGroupCodexUsageSnapshot, providerGroupCodexUsageFromReads, type ProviderGroupCodexUsageSnapshot } from './usage.js';
 
@@ -59,10 +61,37 @@ let codexRateLimitsReader: ((providerId: string) => Promise<unknown>) | null = n
 function runtimeForActiveOwner(): OwnerRuntime {
   const owner = activeOwnerScopeKey();
   if (current?.owner === owner) return current;
+  type PoolQuota = Awaited<ReturnType<typeof readSubscriptionPoolUsage>>;
+  const poolQuotaReads = new Map<string, { at: number; result: Promise<PoolQuota> }>();
+  const readPoolQuota = async (providerId: string, deviceId?: string) => {
+    if (!isSubscriptionProvider(providerId)) return undefined;
+    if (!deviceId) return readSubscriptionPoolUsage(providerId);
+    const key = `${deviceId}:${providerId}`;
+    const cached = poolQuotaReads.get(key);
+    if (cached && Date.now() - cached.at < 30_000) return cached.result;
+    const resultPromise = (async (): Promise<PoolQuota> => {
+    const result = await remoteBackgroundInvoke(deviceId, 'maker:subscription-pool:quota', [providerId], {
+      preSend: () => { if (activeOwnerScopeKey() !== owner) throw new Error('provider group account changed'); },
+    }).catch(() => null);
+    const raw = result?.ok ? result.result as { providerId?: string; pooled?: boolean; usage?: Record<string, unknown> | null } : null;
+    if (raw?.providerId !== providerId || raw.pooled !== true) return undefined;
+    return raw.usage ? {
+      claudeUsage: providerGroupUsageSnapshot(raw.usage.claudeUsage, Date.now()),
+      codexUsage: providerGroupCodexUsageSnapshot(raw.usage.codexUsage),
+    } : null;
+    })();
+    poolQuotaReads.set(key, { at: Date.now(), result: resultPromise });
+    return resultPromise;
+  };
   const usage = createProviderGroupUsageReader({
     parseSnapshot: providerGroupUsageSnapshot,
-    readLocal: (providerId) => claudeUsageReader?.(providerId) ?? Promise.resolve(null),
+    readLocal: async (providerId) => {
+      const pooled = await readPoolQuota(providerId);
+      return pooled !== undefined ? pooled?.claudeUsage ?? null : claudeUsageReader?.(providerId) ?? null;
+    },
     readRemote: async (deviceId, providerId) => {
+      const pooled = await readPoolQuota(providerId, deviceId);
+      if (pooled !== undefined) return pooled?.claudeUsage ?? null;
       const result = await remoteBackgroundInvoke(deviceId, 'maker:usage:claude-subscription', [providerId], {
         preSend: () => {
           if (activeOwnerScopeKey() !== owner) throw new Error('provider group account changed');
@@ -80,6 +109,8 @@ function runtimeForActiveOwner(): OwnerRuntime {
     now: () => Date.now(),
   });
   const readRemoteCodexUsage = async (deviceId: string, providerId: string, channel: string, args: unknown[]) => {
+    const pooled = await readPoolQuota(providerId, deviceId);
+    if (pooled !== undefined) return channel === 'maker:usage:account' ? pooled?.codexUsage ?? null : null;
     const result = await remoteBackgroundInvoke(deviceId, channel, args, {
       preSend: () => {
         if (activeOwnerScopeKey() !== owner) throw new Error('provider group account changed');
@@ -96,7 +127,10 @@ function runtimeForActiveOwner(): OwnerRuntime {
   const codexUsage = createProviderGroupUsageReader({
     parseSnapshot: providerGroupCodexUsageSnapshot,
     cacheLocal: true,
-    readLocal: (providerId) => codexUsageReader?.(providerId) ?? Promise.resolve(null),
+    readLocal: async (providerId) => {
+      const pooled = await readPoolQuota(providerId);
+      return pooled !== undefined ? pooled?.codexUsage ?? null : codexUsageReader?.(providerId) ?? null;
+    },
     readRemote: (deviceId, providerId) => readRemoteCodexUsage(deviceId, providerId, 'maker:usage:account', ['codex', providerId]),
     isCurrent: () => activeOwnerScopeKey() === owner,
     now: () => Date.now(),
@@ -104,7 +138,10 @@ function runtimeForActiveOwner(): OwnerRuntime {
   const codexLimits = createProviderGroupUsageReader({
     parseSnapshot: providerGroupCodexUsageSnapshot,
     cacheLocal: true,
-    readLocal: async (providerId) => providerGroupCodexUsageFromReads(null, await codexRateLimitsReader?.(providerId), Date.now()),
+    readLocal: async (providerId) => {
+      const pooled = await readPoolQuota(providerId);
+      return pooled !== undefined ? pooled?.codexUsage ?? null : providerGroupCodexUsageFromReads(null, await codexRateLimitsReader?.(providerId), Date.now());
+    },
     readRemote: async (deviceId, providerId) => providerGroupCodexUsageFromReads(null,
       await readRemoteCodexUsage(deviceId, providerId, 'maker:usage:codex-rate-limits', [providerId]), Date.now()),
     isCurrent: () => activeOwnerScopeKey() === owner,
@@ -115,6 +152,7 @@ function runtimeForActiveOwner(): OwnerRuntime {
     return providerGroupCodexUsageSnapshot({
       appServerBuckets: limits?.appServerBuckets ?? account?.appServerBuckets,
       webSnapshot: account?.webSnapshot,
+      nativeAccountPool: account?.nativeAccountPool || limits?.nativeAccountPool,
     });
   };
   const directory = createProviderGroupDirectory({

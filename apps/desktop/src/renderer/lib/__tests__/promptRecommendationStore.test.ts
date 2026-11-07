@@ -2,6 +2,10 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 const h = vi.hoisted(() => ({
   enabled: true,
+  remote: new Map<string, string>(),
+  running: new Map<string, { isRunning: boolean }>(),
+  onRunning: (() => undefined) as () => void,
+  onRemotePush: ((_push: unknown) => undefined) as (push: unknown) => void,
   startedAtBySession: new Map<string, number>(),
   statusBySession: new Map<
     string,
@@ -25,11 +29,17 @@ vi.mock('@/hooks/usePromptRecommendationPreference', () => ({
 vi.mock('@/contexts/dataOwnerGeneration', () => ({
   isDataOwnerPushCurrent: () => true,
 }));
+vi.mock('@/features/device-link/stickySessionOrigin', () => ({
+  getStickySessionDeviceId: (id: string) => h.remote.get(id),
+}));
+vi.mock('@/lib/remoteDataOwnerPushFence', () => ({
+  isDeviceLinkRemotePushCurrent: () => true,
+}));
 
 vi.mock('@/lib/makerChatStore', () => ({
   makerChatStore: {
-    getRunningSnapshot: () => new Map(),
-    subscribeAll: () => () => undefined,
+    getRunningSnapshot: () => h.running,
+    subscribeAll: (listener: () => void) => { h.onRunning = listener; return () => undefined; },
     getPromptRecommendationRunStartedAt: (sessionId: string) =>
       h.startedAtBySession.get(sessionId) ?? null,
     getPromptRecommendationCompletionStatus: (sessionId: string) =>
@@ -39,6 +49,7 @@ vi.mock('@/lib/makerChatStore', () => ({
 
 import {
   __testing,
+  initializePromptRecommendationStore,
   beginPromptRecommendationPrediction,
   dismissPromptRecommendation,
   resolvePromptRecommendationPrediction,
@@ -63,6 +74,8 @@ function complete(sessionId: string, revision: number): void {
 beforeEach(() => {
   vi.useFakeTimers();
   h.enabled = true;
+  h.remote.clear();
+  h.running.clear();
   h.startedAtBySession.clear();
   h.statusBySession.clear();
   __testing.reset();
@@ -71,6 +84,134 @@ beforeEach(() => {
 afterEach(() => {
   __testing.reset();
   vi.useRealTimers();
+  vi.unstubAllGlobals();
+});
+
+// Regression: A's clock and push arrival order must not decide B's completion.
+// Existing cases inject ordered local edges only. Unit: drive the production bridge
+// subscription with B revision 200, skewed A start, and reordered/duplicate frames.
+describe('remote completion ingress', () => {
+  function setup(startedAt: number) {
+    h.remote.set('remote', 'host-b');
+    h.startedAtBySession.set('remote', startedAt);
+    h.statusBySession.set('remote', ELIGIBLE);
+    vi.stubGlobal('window', {
+      electronAPI: { deviceLink: { onRemotePush: (listener: typeof h.onRemotePush) => {
+        h.onRemotePush = listener;
+        return () => undefined;
+      } } },
+      addEventListener: () => undefined, removeEventListener: () => undefined,
+    });
+    initializePromptRecommendationStore();
+    return {
+      running(value: boolean) {
+        h.running = value ? new Map([['remote', { isRunning: true }]]) : new Map();
+        h.onRunning();
+      },
+      ended(revision = 200) {
+        h.onRemotePush({ deviceId: 'host-b', channel: 'local-db:sessions:patched',
+          payload: { sessionId: 'remote', patch: { lastTurnEndedAt: revision } } });
+      },
+    };
+  }
+
+  it.each([50, 50_000])('uses B completion when A recorded start at %d', (startedAt) => {
+    const ingress = setup(startedAt);
+    ingress.running(true);
+    ingress.ended();
+    ingress.running(false);
+    vi.advanceTimersByTime(500);
+    expect(__testing.getSessionSnapshot('remote')?.revision).toBe(200);
+  });
+
+  it('buffers completion received before the running stream, without predicting historical navigation', () => {
+    const ingress = setup(50_000);
+    ingress.ended();
+    vi.advanceTimersByTime(500);
+    expect(__testing.getSessionSnapshot('remote')).toBeUndefined();
+    ingress.running(true);
+    ingress.running(false);
+    vi.advanceTimersByTime(500);
+    expect(__testing.getSessionSnapshot('remote')?.phase).toBe('candidate');
+  });
+
+  it('discards A clock evidence captured before the remote origin was resolved', () => {
+    const ingress = setup(50_000);
+    h.remote.delete('remote');
+    ingress.running(true);
+    h.remote.set('remote', 'host-b');
+    ingress.ended();
+    ingress.running(false);
+    vi.advanceTimersByTime(500);
+    expect(__testing.getSessionSnapshot('remote')?.revision).toBe(200);
+  });
+
+  // Unit regression: an existing ready/consumed recommendation used to drop the
+  // next B completion before its running stream arrived. Exercise both ingress
+  // subscriptions; a higher revision alone must still not trigger generation.
+  it.each(['ready', 'consumed'])('buffers the next B completion after %s until its delayed running arrives', (previous) => {
+    const ingress = setup(50_000);
+    ingress.running(true);
+    ingress.ended();
+    ingress.running(false);
+    vi.advanceTimersByTime(500);
+    const first = beginPromptRecommendationPrediction('remote', 200)!;
+    resolvePromptRecommendationPrediction('remote', 200, first, 'first result');
+    if (previous === 'consumed') dismissPromptRecommendation('remote');
+
+    ingress.ended(300);
+    expect(__testing.getSessionSnapshot('remote')).toBeUndefined();
+    // A stale UI event for the old visible recommendation cannot consume 300.
+    dismissPromptRecommendation('remote', 200);
+    vi.advanceTimersByTime(500);
+    expect(beginPromptRecommendationPrediction('remote', 300)).toBeNull();
+    ingress.running(true);
+    ingress.ended(200); // An old duplicate must not replace the buffered turn.
+    ingress.running(false);
+    vi.advanceTimersByTime(500);
+    const second = beginPromptRecommendationPrediction('remote', 300);
+    expect(second).not.toBeNull();
+    resolvePromptRecommendationPrediction('remote', 300, second!, 'next result');
+    expect(__testing.getSessionSnapshot('remote')?.prompt).toBe('next result');
+  });
+
+  it('recovers the same host revision after a delayed running snapshot hides a received result', () => {
+    const ingress = setup(100);
+    ingress.running(true);
+    ingress.ended();
+    ingress.running(false);
+    vi.advanceTimersByTime(500);
+    const first = beginPromptRecommendationPrediction('remote', 200)!;
+    resolvePromptRecommendationPrediction('remote', 200, first, 'host result');
+    ingress.running(true);
+    ingress.running(false);
+    vi.advanceTimersByTime(500);
+    const second = beginPromptRecommendationPrediction('remote', 200);
+    expect(second).not.toBeNull();
+    resolvePromptRecommendationPrediction('remote', 200, second!, 'host result');
+    expect(__testing.getSessionSnapshot('remote')?.prompt).toBe('host result');
+    dismissPromptRecommendation('remote');
+    ingress.ended();
+    ingress.running(true);
+    ingress.ended();
+    ingress.running(false);
+    vi.advanceTimersByTime(500);
+    expect(__testing.getSessionSnapshot('remote')).toBeUndefined();
+  });
+
+  it('keeps a completion while a queue projection is temporarily busy', () => {
+    const ingress = setup(100);
+    ingress.running(true);
+    ingress.ended();
+    h.statusBySession.set('remote', { ...ELIGIBLE, hasAutoDrainingQueue: true });
+    ingress.running(false);
+    vi.advanceTimersByTime(500);
+    expect(__testing.getSessionSnapshot('remote')).toBeUndefined();
+    h.statusBySession.set('remote', ELIGIBLE);
+    h.onRunning();
+    vi.advanceTimersByTime(500);
+    expect(__testing.getSessionSnapshot('remote')?.revision).toBe(200);
+  });
 });
 
 describe('promptRecommendationStore', () => {

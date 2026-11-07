@@ -124,6 +124,15 @@ describe('settings discoverability regressions', () => {
       }
     }
   });
+  // Character and sounds also serve the Live Activity, so they stay findable when it is the
+  // only surface on; display and subtle reminders belong to Agent Notch alone. Unit tier.
+  it('keeps shared island settings searchable with only the Live Activity on', () => {
+    const agentIsland = { supported: true, enabled: false, soundEnabled: true, liveActivitySupported: true, liveActivity: true };
+    const ids = new Set(buildSettingsSearchDocuments(searchI18n.t, TAB_IDS, { ...searchContext, platform: 'darwin', agentIsland })
+      .map(({ entry }) => entry.id));
+    expect(['settings.agentIsland.skinLabel', 'settings.agentIsland.soundLabel'].every((id) => ids.has(id))).toBe(true);
+    expect(['settings.agentIsland.displayLabel', 'settings.agentIsland.subtleRemindersLabel'].some((id) => ids.has(id))).toBe(false);
+  });
   // Unit regression (#8481): hidden motion selectors must not advertise options.
   it.each([false, true])('filters wallpaper motion labels with selector visible=%s', (wallpaperMotionAvailable) => {
     const documents = buildSettingsSearchDocuments(searchI18n.t, TAB_IDS, { ...searchContext, wallpaperMotionAvailable });
@@ -352,6 +361,12 @@ describe('settings discoverability regressions', () => {
 });
 
 describe('settings search catalog', () => {
+  // PR #9055 CI regression: discover the dynamic MCP notice even before a group is mounted.
+  it('finds MCP duplicate choices and resolves their notice anchor', () => {
+    const matches = searchSettings(buildSettingsSearchDocuments(t, ['builtin-tools']), 'MCP');
+    expect(matches.some(match => match.entry.id === 'mcp.duplicates')).toBe(true);
+    expect(resolveSettingsSearchTarget('builtin-tools', 'mcp.duplicates')).toBe('settings-mcp-duplicates');
+  });
   it('normalizes mixed-width and repeated whitespace', () => {
     expect(normalizeSettingsSearchText('  Ａppearance\u00a0  ')).toBe('appearance');
   });
@@ -515,6 +530,7 @@ describe('settings search catalog', () => {
       expect(visible).toContain('imBot.cindy');
       expect(visible).toContain('imBot.cindy.telegram');
       expect(visible).toContain('imBot.cindy.x');
+      expect(visible).toContain('imBot.cindy.feishu');
       expect(visible).toContain('imBot.discord');
       expect(visible).toContain('imBot.telegram');
       expect(visible).toContain('imBot.feishu');

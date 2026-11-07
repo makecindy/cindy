@@ -656,6 +656,7 @@ function BotGroupOutboxStatus({ entry, readOnly }: { entry: BotGroupOutboxEntry;
   const { t } = useTranslation();
   const sending = entry.status === 'sending';
   const [slow, setSlow] = useState(false);
+  const [editing, setEditing] = useState(false);
   useEffect(() => {
     if (!sending) {
       setSlow(false);
@@ -684,15 +685,19 @@ function BotGroupOutboxStatus({ entry, readOnly }: { entry: BotGroupOutboxEntry;
             size="sm"
             compact
             type="button"
-            disabled={readOnly}
-            onClick={() => {
-              if (!editBotGroupSend(entry.input.groupId, entry.input.clientId)) toast.warning(t('bots.groupChat.outbox.editBlocked'));
+            disabled={readOnly || editing}
+            onClick={async () => {
+              setEditing(true);
+              try {
+                if (!await editBotGroupSend(entry.input.groupId, entry.input.clientId)) toast.warning(t('bots.groupChat.outbox.editBlocked'));
+              } catch { toast.error(t('bots.groupChat.composer.sendFailed')); }
+              finally { setEditing(false); }
             }}
           >
             {t('bots.groupChat.outbox.edit')}
           </Button>
           {entry.retryable !== false ? (
-            <Button variant="secondary" size="sm" compact type="button" disabled={readOnly} onClick={() => retryBotGroupSend(entry.input.groupId, entry.input.clientId)}>
+            <Button variant="secondary" size="sm" compact type="button" disabled={readOnly || editing} onClick={() => retryBotGroupSend(entry.input.groupId, entry.input.clientId)}>
               <RefreshCcw size={13} />
               {t('bots.retry')}
             </Button>

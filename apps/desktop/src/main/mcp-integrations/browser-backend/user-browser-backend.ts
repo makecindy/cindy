@@ -42,6 +42,7 @@ export interface UserBrowserPageControl {
 export interface UserBrowserBackendOptions {
   /** 声明 browserExtension.pageControl 的插件桥接;null = 没有这样的插件(或未启用)。 */
   getPageControl(): UserBrowserPageControl | null;
+  getUnavailableReason?(): 'plugin-missing' | 'plugin-updating' | 'plugin-selection-required';
   /** 上传可读取的本地目录(按会话);没有则上传不可用。 */
   resolveUploadRoots?(sessionId: string): Promise<string[]>;
   logger: {
@@ -224,7 +225,7 @@ const TAB_ACTION_LABEL: Partial<Record<BackendRequest['action'], string>> = {
 const NOT_CONFIGURED_MESSAGE =
   '没有已启用的浏览器扩展插件提供页面控制(安装并启用 Cindy Chrome 插件后再选择「我的浏览器」)。';
 const DISCONNECTED_MESSAGE =
-  '浏览器扩展未连接:请在用户的 Chrome / Edge 中安装并启用 Cindy 扩展,保持 Cindy 运行;连接后重新查询 status。';
+  '浏览器扩展尚未连接:保持 Cindy 和 Chrome / Edge 运行,检查 Cindy 扩展是否启用;未连接不代表未安装。';
 
 const UNPAIRED_MESSAGE =
   '浏览器扩展已连到 Cindy,但还没完成配对或授权:请让用户在 Cindy Chrome 插件页确认这个浏览器,或重新启用插件后再查询 status。';
@@ -347,6 +348,18 @@ export class UserBrowserBackend implements BrowserBackend {
 
   // ── 连接解析 ────────────────────────────────────────────────────────────
 
+  private unavailable() {
+    const reason = this.opts.getUnavailableReason?.() ?? 'plugin-missing';
+    return {
+      reason,
+      message: reason === 'plugin-updating'
+        ? '浏览器连接正在更新，完成后会自动恢复。'
+        : reason === 'plugin-selection-required'
+          ? '请在插件详情中选择「使用此浏览器扩展」。'
+          : NOT_CONFIGURED_MESSAGE,
+    };
+  }
+
   private control(
     action: BackendRequest['action'],
   ): { ok: true; control: UserBrowserPageControl } | { ok: false; result: BackendResult } {
@@ -354,7 +367,7 @@ export class UserBrowserBackend implements BrowserBackend {
     if (!control)
       return {
         ok: false,
-        result: actionFailed(action, NOT_CONFIGURED_MESSAGE, 'BROWSER_RUNTIME_NOT_CONFIGURED'),
+        result: actionFailed(action, this.unavailable().message, 'BROWSER_RUNTIME_NOT_CONFIGURED'),
       };
     return { ok: true, control };
   }
@@ -651,7 +664,7 @@ export class UserBrowserBackend implements BrowserBackend {
         backend: this.kind,
         running: false,
         configured: false,
-        message: NOT_CONFIGURED_MESSAGE,
+        ...this.unavailable(),
         capabilities: userBrowserCapabilities(null),
       });
     }
@@ -659,13 +672,14 @@ export class UserBrowserBackend implements BrowserBackend {
     // Right after an extension reload or update it reconnects within seconds: wait briefly before
     // reporting "not connected", so the agent does not give up on a browser that is coming back.
     const deadline = (this.opts.now ?? Date.now)() + (this.opts.reconnectWaitMs ?? 8000);
-    // Only an extension that was connected before (now dropped) is worth waiting for. One that never
-    // finished connecting, such as an unpaired install, is reported at once with its own reason.
+    // Expired clients are omitted from status.clients. Remember a successful connection independently
+    // so the reconnect grace still applies, including on the first status read after expiry.
+    // An install that has never connected (including an unpaired install) does not wait.
     if (status.ok) for (const c of status.clients) if (c.connected) this.everReady.add(c.id);
     while (
       status.ok &&
-      status.clients.some((c) => this.everReady.has(c.id)) &&
-      !status.clients.some((c) => c.connected) &&
+      (status.hadConnectedClient === true || this.everReady.size > 0) &&
+      !status.clients.some((c) => c.connected || c.trusted === false) &&
       (this.opts.now ?? Date.now)() < deadline
     ) {
       await sleep(500);
@@ -712,7 +726,7 @@ export class UserBrowserBackend implements BrowserBackend {
           }
         : {}),
       capabilities: userBrowserCapabilities(control),
-      note: '用户自己的浏览器:新页面开在 Cindy 的后台窗口里,不抢焦点;不要关闭、重排或切换用户自己的标签页,除非任务需要。',
+      note: '用户自己的浏览器:用 open 在 Cindy 的后台窗口里开自己的页面,和用户共用登录态,不抢焦点;不要在用户自己的标签页上操作,也不要关闭、重排或切换它们。',
       ...(doctor
         ? {
             port: status.port,
@@ -783,6 +797,8 @@ export class UserBrowserBackend implements BrowserBackend {
     // budget) would otherwise turn a tab the agent just opened into an unknown targetId.
     const complete = new Set<string>();
     for (const client of clients) {
+      // 新版扩展标出 Cindy 自己窗口里的页签,其余都是用户的;旧版不标,就不猜归属。
+      const knowsOwner = this.parity(gate.control, client.id);
       const listed = await gate.control.bridge.act('tabs', {
         browser: client.id,
         limit: Math.min(100, Math.max(1, req.limit ?? 50)),
@@ -813,6 +829,7 @@ export class UserBrowserBackend implements BrowserBackend {
         seen.add(record.targetId);
         tabs.push({
           ...this.describe(record),
+          ...(knowsOwner ? { owner: tab.cindyWindow === true ? 'cindy' : 'user' } : {}),
           active: tab.active === true,
           ...(tab.status ? { status: tab.status } : {}),
         });
@@ -825,7 +842,7 @@ export class UserBrowserBackend implements BrowserBackend {
     return actionOk(req.action, {
       backend: this.kind,
       tabs,
-      note: '这些是用户浏览器里当前打开的标签页;只在需要时操作,不要关闭或重排它们。',
+      note: '这些是用户浏览器里当前打开的标签页。owner:"user" 是用户自己的页签:不要在上面点击、输入或跳转,也不要关闭或重排;要用同一网站就 open 一个新页面(和用户共用登录态),需要它的账号或位置时把它的 url 传给 open。只有用户明确让你看这一页时才读取它。owner:"cindy" 是 Cindy 窗口里的页面,可以直接复用。',
     });
   }
 

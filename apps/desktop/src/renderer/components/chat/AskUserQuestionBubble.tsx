@@ -71,7 +71,7 @@ function buildQuestionAnswerPairs(message: ChatMessage): QuestionAnswerPair[] {
 
   if (questions && questions.length > 0) {
     return questions.map((q) => {
-      const rawAnswer = answersMap?.[q.question] ?? '';
+      const rawAnswer = (q.id ? answersMap?.[q.id] : undefined) ?? answersMap?.[q.question] ?? '';
       const answerItems = parseAnswerItems(rawAnswer);
       return {
         question: q.question,

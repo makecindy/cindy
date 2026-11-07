@@ -9,6 +9,7 @@
  */
 
 import { useCallback, useRef, useState } from 'react';
+import { formatScheduleDeadline, parseScheduleDeadline } from '@cindy/maker-shared/schedule-form';
 import type { CreateScheduleInput, Schedule, ScheduleTemplate, ScheduleWorkspaceKind } from '@cindy/maker-scheduler';
 import { effectiveSourceIdForModel, type ProviderView } from '@cindy/model-providers';
 import { getDraft, getPersistedVendorModel } from '@/state/newMakerDraft';
@@ -27,6 +28,8 @@ import {
   resolveTemplateAgentFields,
 } from '../lib/scheduleFormLogic';
 import type { ScheduleFormState, RunMode, RememberedBinding } from '../lib/scheduleFormLogic';
+import { parseWebhookFormatText, webhookSourceFormFields } from '../lib/scheduleFormLogic';
+import { DEFAULT_SCHEDULE_WEBHOOK_PRESET } from '@cindy/maker-scheduler/webhook-formats';
 
 // 类型与 effort 白名单已迁入 lib/scheduleFormLogic(纯函数层,node 环境可测);
 // 原处 re-export 保持既有 import 路径不变(ScheduleChips / projectAutomationConfig 等)。
@@ -46,6 +49,11 @@ const DEFAULT_FORM: ScheduleFormState = {
   timezone: 'Asia/Shanghai',
   recurring: true,
   manual: false,
+  webhookEnabled: false,
+  webhookEvents: '',
+  webhookPreset: DEFAULT_SCHEDULE_WEBHOOK_PRESET,
+  webhookSigned: true,
+  webhookFormat: '',
   agentKind: 'claude-code',
   model: '',
   providerId: '',
@@ -279,8 +287,13 @@ export function makeFormFromSchedule(s: Schedule | null): ScheduleFormState {
     cronExpr: s.cronExpr,
     intervalMs: s.intervalMs,
     timezone: s.timezone,
+    deadline: formatScheduleDeadline(s.expireAt),
+    sourceExpireAt: s.expireAt,
     recurring: s.recurring,
     manual: s.manual,
+    webhookEnabled: Boolean(s.webhookTrigger),
+    webhookEvents: (s.webhookTrigger?.events ?? []).join(', '),
+    ...webhookSourceFormFields(s.webhookTrigger?.source),
     agentKind: s.modelAgentKind ?? s.agentKind,
     modelAgentKind: s.modelAgentKind,
     modelAgentDeviceId: s.modelAgentDeviceId,
@@ -471,6 +484,9 @@ export function useScheduleForm(initial: Schedule | null = null): UseScheduleFor
   }, []);
 
   const validate = useCallback((): { key: string; values?: Record<string, string> } | null => {
+    if (Number.isNaN(parseScheduleDeadline(form.deadline ?? '', form.sourceExpireAt))) {
+      return { key: 'scheduler.deadline.invalid' };
+    }
     if (!form.name.trim()) return { key: 'scheduler.editor.validation.nameRequired' };
     if ((form.executionMode ?? 'agent') === 'agent' && !form.prompt.trim()) {
       return { key: 'scheduler.editor.validation.promptRequired' };
@@ -506,6 +522,9 @@ export function useScheduleForm(initial: Schedule | null = null): UseScheduleFor
     }
     if (form.executionMode !== 'script' && form.preRunHookEnabled && form.preRunSource !== 'plugin' && !form.preRunHookCommand.trim()) {
       return { key: 'scheduler.editor.validation.preRunHookCommandRequired' };
+    }
+    if (form.webhookEnabled && form.webhookPreset === 'custom' && !parseWebhookFormatText(form.webhookFormat)) {
+      return { key: 'scheduler.editor.webhook.customInvalid' };
     }
     return null;
   }, [form]);
