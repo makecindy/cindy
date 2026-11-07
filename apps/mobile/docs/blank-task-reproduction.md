@@ -138,10 +138,14 @@ distinction when reporting confidence.
 
 ### Remaining validation caveats
 
-The repository-wide `check:test-hygiene` command stops on an existing baseline
-increase for `packages/maker-core/src/agents/pi/__tests__/pi-extra-dirs-prompt.test.ts`
-(`sourceReads: 0 -> 1`). That file and the baseline are unchanged in this fix.
-This command is not reported as passing.
+The initial repository-wide `check:test-hygiene` run stopped on an existing
+baseline increase for
+`packages/maker-core/src/agents/pi/__tests__/pi-extra-dirs-prompt.test.ts`
+(`sourceReads: 0 -> 1`). After merging the updated main branch, the command passed
+(351 files within baseline); this fix does not edit that test or its baseline.
+The post-merge mobile checks also passed: the original 116 tests, 19 plugin-card
+tests covering the incoming main change, and TypeScript. Standalone wall times
+were 4.68 s for `messageSourceLabelsRender` and 1.68 s for `messageFollowGesture`.
 
 One final development launch exited before its replay completed. Its native
 crash report records `ExpoFabricView.swift:197: The app context has been lost`,
