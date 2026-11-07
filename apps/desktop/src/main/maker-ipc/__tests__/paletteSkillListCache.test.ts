@@ -6,6 +6,7 @@ vi.mock('../../appSessionState.js', () => ({
 
 import {
   type PaletteSkillListCacheFacts,
+  isPalettePreviewRead,
   paletteSkillListReuseKey,
   shouldCachePaletteSkillListing,
 } from '../paletteSkillListCache.js';
@@ -52,5 +53,17 @@ describe('palette Skill listing cache key', () => {
   it('does not reuse a roster across a live runtime and no live runtime', () => {
     expect(paletteSkillListReuseKey({ ...base, runtimeGeneration: 2 }))
       .not.toBe(paletteSkillListReuseKey(base));
+  });
+});
+
+describe('palette preview read', () => {
+  it('lets a plain read reuse the warm package inspection', () => {
+    expect(isPalettePreviewRead(undefined)).toBe(true);
+    expect(isPalettePreviewRead(false)).toBe(true);
+  });
+
+  it('keeps a forced reload off the warm package inspection', () => {
+    expect(isPalettePreviewRead(true)).toBe(false);
+    expect(isPalettePreviewRead('true')).toBe(false);
   });
 });

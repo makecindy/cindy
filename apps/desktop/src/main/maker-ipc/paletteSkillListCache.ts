@@ -89,3 +89,16 @@ export function shouldCachePaletteSkillListing(facts: PaletteSkillListCacheFacts
     && !facts.readOnlyRemote
   );
 }
+
+/**
+ * Whether this read may reuse a warm Pi package inspection.
+ *
+ * Only a plain preview read may: it renders an ephemeral catalog and keeps
+ * nothing. A forced reload asks for fresh data — Bot Settings refreshes its
+ * capability catalog that way and shows what the user then grants — so it must
+ * re-inspect instead of inheriting a warm entry that predates a `pi install`.
+ */
+export function isPalettePreviewRead(forceReload: unknown): boolean {
+  // Any truthy force request asks for fresh data, not just the boolean `true`.
+  return !forceReload;
+}

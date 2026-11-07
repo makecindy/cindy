@@ -1467,7 +1467,7 @@ import {
   createProjectSkillPreparation,
   toAgentSkillListFailure,
 } from './agentSkillListIpcBoundary.js';
-import { paletteSkillListReuse, paletteSkillListReuseKey, shouldCachePaletteSkillListing } from './paletteSkillListCache.js';
+import { isPalettePreviewRead, paletteSkillListReuse, paletteSkillListReuseKey, shouldCachePaletteSkillListing } from './paletteSkillListCache.js';
 import {
   captureDataOwnerBroadcastScope,
   isDataOwnerBroadcastScopeCurrent,
@@ -8479,14 +8479,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       });
       try {
         const kind = requireAgentKind(agentKind);
-        const skillParams = {
-          ...(params ?? {}) as Record<string, unknown>,
-          // Host-owned preview marker: this channel renders an ephemeral catalog
-          // only, so it may reuse a warm package inspection. A runtime read that
-          // keeps its result — session startup, Bot hydration — stays on the short
-          // window and must not inherit that reuse.
-          palettePreview: true,
-        } as {
+        const skillParams = (params ?? {}) as {
           workingDir?: string;
           remoteHostId?: string;
           forceReload?: boolean;
@@ -8528,6 +8521,12 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
         if (kind === 'codex' && projectLinks.changed) {
           skillParams.forceReload = true;
         }
+        // Host-owned preview marker: this channel renders an ephemeral catalog, so
+        // a plain read may reuse a warm package inspection. A forced reload asks
+        // for fresh data — Bot Settings refreshes its capability catalog that way,
+        // and it shows what the user then grants — so it re-inspects instead of
+        // inheriting an entry that predates a `pi install`.
+        skillParams.palettePreview = isPalettePreviewRead(skillParams.forceReload);
         // A preparation that warned or failed can leave its Skills out of a scan that
         // reports no errors, so its roster must not be cached.
         let preparationClean = projectLinks.clean;
