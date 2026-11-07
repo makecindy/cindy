@@ -38,6 +38,7 @@ import { type OrcaTeamService } from './orcaTeamService.js';
 import {
   createContextOverflowRollover,
   isContextOverflowErrorData,
+  isPiRequestBodyTooLarge,
   isOversizedHistoryErrorData,
   isUnsupportedRequestOptionErrorData,
 } from './contextOverflowRollover.js';
@@ -317,6 +318,7 @@ export function finishSessionTerminalEvent(
             instanceId: event.sessionInstanceId,
             generation: event.sessionTurnGeneration,
           }, isContextOverflowErrorData(attributedEvent.data)
+            || (session.agentKind === 'pi' && isPiRequestBodyTooLarge(attributedEvent.data))
             || isOversizedHistoryErrorData(attributedEvent.data)
             || isUnsupportedRequestOptionErrorData(attributedEvent.data)) ?? 'idle')
         : 'idle';
@@ -381,7 +383,7 @@ export function finishSessionTerminalEvent(
         ?.tryRecover(session.id, overflowErrorData, {
           instanceId: event.sessionInstanceId,
           generation: event.sessionTurnGeneration,
-        })
+        }, surfaceOverflowFailure)
         .then((recovered) => {
           if (recovered) {
             if (deps.overflowSuppressedBroadcasts.get(session.id)?.event === broadcastEvent) {
