@@ -1352,7 +1352,8 @@
     "REMOTE_AGENT_SHARE_REMOVED": "模型未易：此分享已不可用（彼已刪分享，或君已退出）。請易一模型。",
     "REMOTE_AGENT_SHARE_UNAVAILABLE": "模型未易：所分享之供方暫不可用（彼機不在線，或彼暫閉分享）。請稍後再試，或易一模型。",
     "SSH_HOST_KEY_MISMATCH": "SSH 主機金鑰已易",
-    "DEVICE_LINK_MEDIA_ACCESS_DENIED": "Cindy 不能讀來源附件，訊未遣。請將檔案另存至「下載」或他可存取之卷匣，移除原附件，再以附件按鈕納其副本而後遣之。"
+    "DEVICE_LINK_MEDIA_ACCESS_DENIED": "Cindy 不能讀來源附件，訊未遣。請將檔案另存至「下載」或他可存取之卷匣，移除原附件，再以附件按鈕納其副本而後遣之。",
+    "PI_IMAGE_CAPABILITY_REFRESH_FAILED": "無法套用圖片輸入能力的變更。變更已回復或將再試一次；請重試該操作，若持續失敗請重新開啟該任務。"
   },
   "providerError": {
     "AUTH_INVALID": "今介面驗證未成，請察位址、金鑰與驗證方式",
@@ -2387,12 +2388,12 @@
         "previewStarting": "請釋滑鼠與鍵盤，三秒後屏將覆；按任一鍵即鎖屏，再解之以試。",
         "previewUnavailable": "未能覆屏，請重啟 Cindy 再試。",
         "delay": {
-          "label": "離座幾時而覆屏",
-          "hint": "鍵盤滑鼠無人觸及逾此時，即覆以玄幕。預設同系統熄屏之時。",
           "30": "三十秒",
           "60": "一分",
           "120": "二分",
           "300": "五分",
+          "label": "離座幾時而覆屏",
+          "hint": "鍵盤滑鼠無人觸及逾此時，即覆以玄幕。預設同系統熄屏之時。",
           "system": "從系統"
         }
       }
@@ -4098,7 +4099,28 @@
           },
           "codexContextUnknown": "未讀得 CLI 之設",
           "codexContextValues": "全窗 {{total}} · 可用 {{usable}} · 自縮於 {{compact}} tokens",
-          "contextLimitGptHint": "GPT 預設至多用 272K；可於此自訂為 1M。Codex 將同套視窗與自動壓縮門檻，留 5% 餘量；實際容量受模型服務所限。"
+          "contextLimitGptHint": "GPT 預設至多用 272K；可於此自訂為 1M。Codex 將同套視窗與自動壓縮門檻，留 5% 餘量；實際容量受模型服務所限。",
+          "imageInputOverride": {
+            "label": "圖片輸入能力",
+            "inherit": "跟隨供應商",
+            "declaredTrue": "支援圖片輸入",
+            "declaredFalse": "不支援圖片輸入",
+            "saveFailed": "無法儲存圖片輸入能力",
+            "saveFailedWithReason": "無法儲存圖片輸入能力：{{message}}"
+          },
+          "thinking": "思考",
+          "thinkingCapability": {
+            "on": "支援思考",
+            "off": "不支援思考"
+          },
+          "thinkingOverride": {
+            "label": "宣告思考檔位",
+            "inherit": "跟隨供應商",
+            "declared": "已宣告",
+            "sourceHint": "目錄未宣告思考檔位；若該模型確實會推理，可在此宣告",
+            "saveFailed": "無法儲存思考宣告",
+            "saveFailedWithReason": "無法儲存思考宣告：{{reason}}"
+          }
         },
         "kindFilter": {
           "all": "全",
@@ -4478,7 +4500,8 @@
         "custom": "續自訂之設，可取模型清單或親增之。",
         "configure": "往設之",
         "keepCustom": "續自訂"
-      }
+      },
+      "advanced": {}
     },
     "experimental": {
       "title": "試行之術",

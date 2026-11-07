@@ -623,8 +623,9 @@ describe('model advanced editor', () => {
     );
     draw();
     const input = screen.getByRole('textbox') as HTMLInputElement;
-    expect(input.value).toBe('400');
-    fireEvent.change(input, { target: { value: '500' } });
+    // 输入框显示精确 token 数（不再缩写成 K）；单位后缀仍可输入，提交时按同一口径解析。
+    expect(input.value).toBe('400000');
+    fireEvent.change(input, { target: { value: '500000' } });
     fireEvent.blur(input);
     expect(mocks.setLimit).toHaveBeenLastCalledWith(500_000);
     // 写入在途：说明行必须继续显示刚输入的值。
@@ -672,7 +673,7 @@ describe('model advanced editor', () => {
     draw(withoutCapacity());
     // 这一行只报「容量未声明」：不再把工作默认值（200K 兜底，或目录给的 1M）当成容量塞进这一格。
     expect(
-      screen.getAllByText('settings.providers.models.advanced.undeclared').length,
+      screen.getAllByText('settings.providers.models.advanced.catalogMissing').length,
     ).toBeGreaterThan(0);
     expect(screen.queryByText('200,000')).toBeNull();
     expect(screen.queryByText('settings.providers.models.advanced.tokensApprox')).toBeNull();

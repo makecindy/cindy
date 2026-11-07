@@ -459,15 +459,6 @@ export function ModelAdvancedDrawer({
       ?? (primaryModel?.contextWindowVerified === true ? primaryModel.contextWindow : 0);
   // Without a declared capacity, compare working defaults across engines only.
   const engineWindowReference = routeWindow > 0 ? routeWindow : (primaryModel?.contextWindow ?? 0);
-  // 「上游最大上下文」这一行只印上游确实下发过的窗口：contextWindowMax →
-  // contextWindowVerified === true 的 contextWindow → 未声明（排除 200K 展示兜底）。
-  const declaredCapacity = (contextModel ?? primaryModel)?.contextWindowMax ?? 0;
-  const declaredWindow =
-    declaredCapacity > 0
-      ? declaredCapacity
-      : primaryModel?.contextWindowVerified === true
-        ? (primaryModel.contextWindow ?? 0)
-        : 0;
   const effectiveLimit = ctx.limit ?? (defaultWindow > 0 ? defaultWindow : null);
   useEffect(() => {
     ctxDirtyRef.current = false;
@@ -1163,18 +1154,18 @@ export function ModelAdvancedDrawer({
 
                   <Section title={t('settings.providers.models.advanced.spec')}>
                     <Row label={t('settings.providers.models.advanced.contextWindow')}>
-                      {declaredWindow > 0 ? (
+                      {routeWindow > 0 ? (
                         <>
-                          {formatExactTokens(declaredWindow, locale)}
+                          {formatExactTokens(routeWindow, locale)}
                           <span className="ml-1 text-11 text-[var(--text-tertiary)]">
                             {t('settings.providers.models.advanced.tokensApprox', {
-                              approx: approxTokens(declaredWindow),
+                              approx: approxTokens(routeWindow),
                             })}
                           </span>
                         </>
                       ) : (
                         <span className="text-[var(--text-tertiary)]">
-                          {t('settings.providers.models.advanced.undeclared')}
+                          {t('settings.providers.models.advanced.catalogMissing')}
                         </span>
                       )}
                     </Row>
@@ -1314,6 +1305,9 @@ export function ModelAdvancedDrawer({
                               isOrganizationManagedProvider(provider)
                             }
                             aria-label={t('settings.providers.models.advanced.thinkingOverride.label')}
+                            // 下拉触发器是动作入口（档位勾选项才是设置本体）：登记操作说明，
+                            // 让设置搜索能解释这个控件，而不是把它当设置控件本身。
+                            data-settings-search-action="Declare the thinking tiers for this model"
                             title={
                               (primaryModel.efforts?.length ?? 0) > 0
                                 ? t('settings.providers.models.advanced.catalogCapabilities')
