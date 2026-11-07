@@ -93,6 +93,15 @@ export interface ListAgentSkillsOptions {
   forceReload?: boolean;
   /** Host-owned Pi boundary; renderer input must never set this directly. */
   includeManagedPiPackages?: boolean;
+  /**
+   * Host-owned: omit Claude Code plugin Skills from the result.
+   *
+   * Partner (bot) sessions start Claude with `settingSources: []` and mount only
+   * their own plugin roots, so they never load the user's `~/.claude/plugins`.
+   * Listing those Skills in a partner's capability catalog would offer choices
+   * that silently do nothing. Normal `/` palette discovery keeps them.
+   */
+  excludePluginSkills?: boolean;
 }
 
 /** Host-only runtime discovery inputs used for security decisions about the live task. */

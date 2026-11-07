@@ -170,4 +170,57 @@ describe('scanClaudeSlashCommands', () => {
       await rm(root, { recursive: true, force: true });
     }
   });
+
+  it('includes enabled Claude Code plugin Skills with the plugin namespace', async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), 'xdt-palette-plugin-'));
+    const home = path.join(root, 'home');
+    const plugin = path.join(home, '.claude', 'plugins', 'cache', 'alpha', '1.0.0');
+    const skillDir = path.join(plugin, 'skills', 'browser');
+
+    vi.stubEnv('HOME', home);
+    vi.stubEnv('USERPROFILE', home);
+    try {
+      await mkdir(path.join(plugin, '.claude-plugin'), { recursive: true });
+      await writeFile(
+        path.join(plugin, '.claude-plugin', 'plugin.json'),
+        JSON.stringify({ name: 'alpha' }),
+        'utf8',
+      );
+      await mkdir(skillDir, { recursive: true });
+      await writeFile(
+        path.join(skillDir, 'SKILL.md'),
+        '---\ndescription: plugin skill\n---\n\nbody\n',
+        'utf8',
+      );
+      await writeFile(
+        path.join(home, '.claude', 'plugins', 'installed_plugins.json'),
+        JSON.stringify({ plugins: { 'alpha@market': [{ installPath: plugin }] } }),
+        'utf8',
+      );
+      await writeFile(
+        path.join(home, '.claude', 'settings.json'),
+        JSON.stringify({ enabledPlugins: { 'alpha@market': true } }),
+        'utf8',
+      );
+
+      const commands = await scanClaudeSlashCommands();
+
+      expect(commands).toContainEqual(expect.objectContaining({
+        name: 'alpha:browser',
+        description: 'plugin skill',
+        source: 'skill',
+        scope: 'global',
+      }));
+
+      // 伙伴会话不加载用户安装的插件，catalog 必须排除这些条目，
+      // 否则用户勾选后只会得到「显示已启用但并不生效」。
+      const partnerCommands = await scanClaudeSlashCommands(undefined, {
+        excludePluginSkills: true,
+      });
+      expect(partnerCommands.some((cmd) => cmd.name === 'alpha:browser')).toBe(false);
+    } finally {
+      vi.unstubAllEnvs();
+      await rm(root, { recursive: true, force: true });
+    }
+  });
 });

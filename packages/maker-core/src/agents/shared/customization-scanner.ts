@@ -25,6 +25,8 @@ export interface SourceDef {
   runtimeStatus?: AgentCustomization['runtimeStatus'];
   /** Optional physical root that the skill source, folder, and SKILL.md must stay inside. */
   skillContainWithin?: string;
+  /** Optional namespace prefix; plugin Skills surface as `<prefix>:<folder-name>`. */
+  namePrefix?: string;
 }
 
 export function parseFrontmatter(raw: string): {
@@ -61,8 +63,9 @@ function readChildKind(parent: string, dirent: fs.Dirent): AgentCustomizationFil
   }
 }
 
-function readFolderSkill(source: SourceDef, folder: string, mdPath: string): AgentCustomization {
-  const name = path.basename(folder);
+export function readFolderSkill(source: SourceDef, folder: string, mdPath: string): AgentCustomization {
+  const leafName = path.basename(folder);
+  const name = source.namePrefix ? `${source.namePrefix}:${leafName}` : leafName;
 
   let description: string | undefined;
   let frontmatter: Record<string, unknown> | undefined;
@@ -93,6 +96,7 @@ function readFolderSkill(source: SourceDef, folder: string, mdPath: string): Age
     kind: source.kind,
     scope: source.scope,
     name,
+    ...(source.namePrefix ? { pluginName: source.namePrefix } : {}),
     description,
     absolutePath: folder,
     mdPath,

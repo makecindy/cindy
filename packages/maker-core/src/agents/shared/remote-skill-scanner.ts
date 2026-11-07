@@ -6,6 +6,32 @@ import { shouldPruneSkillScanDirectory } from './skill-scan-limits.js';
 
 const SKILL_READ_LIMIT = 1_048_576;
 
+/**
+ * Each remote probe is a separate SSH exec, so walking a plugin's Skills one at
+ * a time costs two sequential round trips per Skill — a 55-Skill plugin spends
+ * 110 round trips before the palette can render. Probe in bounded batches
+ * instead; the result order is preserved.
+ */
+const REMOTE_PROBE_CONCURRENCY = 8;
+
+async function mapLimit<T, R>(
+  items: readonly T[],
+  limit: number,
+  run: (item: T) => Promise<R>,
+): Promise<R[]> {
+  const results: R[] = new Array(items.length);
+  let cursor = 0;
+  const workers = Array.from({ length: Math.min(limit, items.length) }, async () => {
+    while (cursor < items.length) {
+      const index = cursor;
+      cursor += 1;
+      results[index] = await run(items[index]!);
+    }
+  });
+  await Promise.all(workers);
+  return results;
+}
+
 function stripYamlQuotes(value: string): string {
   const trimmed = value.trim();
   if (
@@ -166,9 +192,194 @@ async function scanClaudeCommands(
   return found;
 }
 
+function asRecord(value: unknown): Record<string, unknown> | null {
+  return value && typeof value === 'object' && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : null;
+}
+
+async function readRemoteJson(fileOps: RemoteAgentFileOps, file: string): Promise<unknown> {
+  try {
+    return JSON.parse(await fileOps.readFile(file, SKILL_READ_LIMIT));
+  } catch {
+    return null;
+  }
+}
+
+function remoteManifestSkillRoots(manifest: Record<string, unknown> | null): string[] {
+  // Same rule as the local scanner: a declared `skills` path supplements the
+  // conventional `skills/` directory instead of replacing it.
+  const roots = ['skills'];
+  const declared = manifest?.skills;
+  if (typeof declared === 'string' && declared.trim()) {
+    roots.push(declared.trim());
+  } else if (Array.isArray(declared)) {
+    for (const item of declared) {
+      if (typeof item === 'string' && item.trim()) roots.push(item.trim());
+    }
+  }
+  return [...new Set(roots)];
+}
+
+async function remoteDirectoryExists(
+  fileOps: RemoteAgentFileOps,
+  dir: string,
+): Promise<boolean> {
+  try {
+    const stat = await fileOps.stat(dir);
+    return !!stat && !stat.isFile;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Directory marketplaces keep the plugin in a local checkout; every other
+ * marketplace location is resolved from `installed_plugins.json`. Remote paths
+ * may start with `$HOME`, so they are joined rather than resolved as host paths.
+ */
+async function resolveRemoteDirectoryPluginDir(
+  fileOps: RemoteAgentFileOps,
+  pluginKey: string,
+  marketplaces: Record<string, unknown> | null,
+): Promise<string | null> {
+  const [pluginName, marketplaceName] = pluginKey.split('@');
+  if (!pluginName || !marketplaceName) return null;
+
+  const marketplace = asRecord(marketplaces?.[marketplaceName]);
+  if (asRecord(marketplace?.source)?.source !== 'directory') return null;
+
+  const installLocation = marketplace?.installLocation;
+  if (typeof installLocation !== 'string' || !installLocation) return null;
+
+  const manifest = asRecord(await readRemoteJson(
+    fileOps,
+    path.posix.join(installLocation, '.claude-plugin/marketplace.json'),
+  ));
+  const entries = manifest?.plugins;
+  if (!Array.isArray(entries)) return null;
+
+  for (const entry of entries) {
+    const record = asRecord(entry);
+    if (record?.name !== pluginName) continue;
+    const relative = record.source;
+    if (typeof relative !== 'string' || !relative.trim()) return null;
+    const resolved = path.posix.join(installLocation, relative.trim());
+    return (await remoteDirectoryExists(fileOps, resolved)) ? resolved : null;
+  }
+  return null;
+}
+
+async function scanRemotePluginSkillRoot(
+  fileOps: RemoteAgentFileOps,
+  root: string,
+  pluginName: string,
+): Promise<AgentSkillCommand[]> {
+  // A declared root can itself be a single Skill folder (`skills: "./x/skill"`).
+  // The local scanner recognizes that shape; the remote one has to as well or
+  // the SSH palette silently drops such plugins.
+  const rootSkillFile = await existingSkillFile(fileOps, root);
+  if (rootSkillFile) {
+    return [{
+      kind: 'agent-skill',
+      name: `${pluginName}:${path.posix.basename(root)}`,
+      description: await readDescription(fileOps, rootSkillFile),
+      source: 'skill',
+      path: rootSkillFile,
+      scope: 'global',
+      enabled: true,
+    }];
+  }
+
+  const names = (await fileOps.listDir(root))
+    .filter((name) => name && !name.startsWith('.') && !name.includes('/')
+      && !/\.bak\.\d+$/.test(name))
+    .sort((a, b) => a.localeCompare(b));
+
+  const probed = await mapLimit(
+    names,
+    REMOTE_PROBE_CONCURRENCY,
+    async (name): Promise<AgentSkillCommand | null> => {
+      const skillFile = await existingSkillFile(fileOps, path.posix.join(root, name));
+      // Prune names only apply to namespaces; a directory that is itself a
+      // Skill keeps its name (`build/SKILL.md` is `/plugin:build`).
+      if (!skillFile) return null;
+      return {
+        kind: 'agent-skill',
+        name: `${pluginName}:${name}`,
+        description: await readDescription(fileOps, skillFile),
+        source: 'skill',
+        path: skillFile,
+        scope: 'global',
+        enabled: true,
+      };
+    },
+  );
+  return probed.filter((skill): skill is AgentSkillCommand => skill !== null);
+}
+
+/** Enabled, user-scoped Claude Code plugin Skills on the remote host. */
+export async function scanRemoteClaudePluginSkills(
+  fileOps: RemoteAgentFileOps,
+): Promise<AgentSkillCommand[]> {
+  const configDir = '$HOME/.claude';
+  const installed = asRecord(
+    await readRemoteJson(fileOps, `${configDir}/plugins/installed_plugins.json`),
+  );
+  const plugins = asRecord(installed?.plugins);
+  if (!plugins) return [];
+
+  const settings = asRecord(await readRemoteJson(fileOps, `${configDir}/settings.json`));
+  const enabledPlugins = asRecord(settings?.enabledPlugins) ?? {};
+  const marketplaces = asRecord(
+    await readRemoteJson(fileOps, `${configDir}/plugins/known_marketplaces.json`),
+  );
+
+  const out = new Map<string, AgentSkillCommand>();
+  for (const [pluginKey, installs] of Object.entries(plugins)) {
+    if (enabledPlugins[pluginKey] === false) continue;
+    if (!Array.isArray(installs)) continue;
+
+    // Project / local scoped plugins only exist inside that project; a global
+    // Skill list must not advertise commands the remote session cannot resolve.
+    const userInstalls = installs
+      .map((install) => asRecord(install))
+      .filter((record) => record && (typeof record.scope !== 'string' || record.scope === 'user'));
+    if (userInstalls.length === 0) continue;
+
+    const directoryDir = await resolveRemoteDirectoryPluginDir(fileOps, pluginKey, marketplaces);
+    const pluginDirs = directoryDir
+      ? [directoryDir]
+      : userInstalls
+          .map((record) => record?.installPath)
+          .filter((value): value is string => typeof value === 'string' && value.length > 0);
+
+    for (const installPath of pluginDirs) {
+      const manifest = asRecord(
+        await readRemoteJson(fileOps, path.posix.join(installPath, '.claude-plugin/plugin.json')),
+      ) as Record<string, unknown> | null;
+      const manifestName = manifest?.name;
+      const pluginName = typeof manifestName === 'string' && manifestName.trim()
+        ? manifestName.trim()
+        : (pluginKey.split('@')[0] || pluginKey);
+
+      for (const root of remoteManifestSkillRoots(manifest)) {
+        const absolute = root.startsWith('/') ? root : path.posix.join(installPath, root);
+        for (const skill of await scanRemotePluginSkillRoot(fileOps, absolute, pluginName)) {
+          if (!out.has(skill.name)) out.set(skill.name, skill);
+        }
+      }
+    }
+  }
+
+  return [...out.values()].sort((a, b) => a.name.localeCompare(b.name));
+}
+
 export async function scanRemoteClaudeSkills(input: {
   fileOps: RemoteAgentFileOps;
   workingDir?: string;
+  /** Partner sessions never load the user's plugins; see ListAgentSkillsOptions. */
+  excludePluginSkills?: boolean;
 }): Promise<ListAgentSkillsResult> {
   const merged = new Map<string, AgentSkillCommand>();
   const sources = [
@@ -178,6 +389,7 @@ export async function scanRemoteClaudeSkills(input: {
       root: '$HOME/.claude/skills',
       scope: 'global',
     })),
+    ...(input.excludePluginSkills ? [] : await scanRemoteClaudePluginSkills(input.fileOps)),
   ];
   if (input.workingDir && path.posix.isAbsolute(input.workingDir)) {
     sources.push(

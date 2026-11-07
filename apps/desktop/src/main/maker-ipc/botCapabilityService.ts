@@ -146,6 +146,10 @@ async function catalog(input: { callerSessionId: string; kind: Kind }, ctx: Pick
     const result = await getMaker().listAgentSkills(agentKind, {
       workingDir,
       remoteHostId: ctx.remoteHostId ?? undefined,
+      // Partner sessions start Claude with `settingSources: []` and mount only
+      // their own plugin roots, so user-installed Claude Code plugins never
+      // load. Listing them here would offer choices that silently do nothing.
+      excludePluginSkills: true,
       ...(options?.forceReload ? { forceReload: true } : {}),
     });
     items = result.skills.map((skill) => ({

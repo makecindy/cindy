@@ -1,7 +1,11 @@
 import { describe, expect, it } from 'vitest';
 
 import type { RemoteAgentFileOps } from '../base-agent.js';
-import { scanRemoteClaudeSkills, scanRemotePiSkills } from './remote-skill-scanner.js';
+import {
+  scanRemoteClaudePluginSkills,
+  scanRemoteClaudeSkills,
+  scanRemotePiSkills,
+} from './remote-skill-scanner.js';
 
 function fakeRemoteFiles(files: Record<string, string>): RemoteAgentFileOps {
   const fileNames = new Set(Object.keys(files));
@@ -41,6 +45,23 @@ function fakeRemoteFiles(files: Record<string, string>): RemoteAgentFileOps {
   };
 }
 
+/**
+ * 测试价值（engineering-conventions §3.2）
+ *
+ * 保护的行为：SSH 会话的 Skill 清单必须与远端运行时实际加载的一致。
+ * `scanRemoteClaudeSkills` 要同时给出 commands 与 skills 两类来源、project 覆盖
+ * global；`scanRemotePiSkills` 只能在 Git 边界内向上回溯。插件三条用例额外保护
+ * 「远端只暴露 user scope 插件」「manifest 声明的 skills 路径补充而非替换
+ * `skills/`」「声明的 root 本身就是一个 Skill 目录时仍被发现」——任一条走错，
+ * `/` 菜单都会与远端运行时对不上，或者给出远端无法解析的命令。
+ *
+ * 最小失败输入：`installed_plugins.json` 里放一条 `scope: 'project'` 记录；
+ * manifest 声明 `skills: './extra'` 且只铺 `skills/`；manifest 把 root 指到
+ * 一个直接含 `SKILL.md` 的目录。旧实现分别会误报、漏报、返回空列表。
+ *
+ * tier：unit —— 进程内 fake `RemoteAgentFileOps`，无网络、无真实远端主机。
+ * 单跑耗时：~8ms（9 个用例），远低于 10s 上限。
+ */
 describe('remote Skill scanners', () => {
   it('discovers Claude global and project resources with project precedence', async () => {
     const fileOps = fakeRemoteFiles({
@@ -141,5 +162,102 @@ describe('remote Skill scanners', () => {
       expect.objectContaining({ name: 'global', scope: 'user', runtimeCommandName: 'skill:global' }),
       expect.objectContaining({ name: 'repo', scope: 'repo', runtimeCommandName: 'skill:repo' }),
     ]));
+  });
+
+  it('discovers enabled user-scoped Claude plugin Skills on the remote host', async () => {
+    const fileOps = fakeRemoteFiles({
+      '$HOME/.claude/plugins/installed_plugins.json': JSON.stringify({
+        plugins: {
+          'alpha@market': [{ scope: 'user', installPath: '$HOME/.claude/plugins/cache/alpha/1.0.0' }],
+          'beta@market': [{ scope: 'project', installPath: '$HOME/work/repo/.claude/plugins/beta' }],
+        },
+      }),
+      '$HOME/.claude/plugins/cache/alpha/1.0.0/.claude-plugin/plugin.json': JSON.stringify({ name: 'alpha' }),
+      '$HOME/.claude/plugins/cache/alpha/1.0.0/skills/browser/SKILL.md': '---\ndescription: Browser skill\n---',
+      '$HOME/work/repo/.claude/plugins/beta/.claude-plugin/plugin.json': JSON.stringify({ name: 'beta' }),
+      '$HOME/work/repo/.claude/plugins/beta/skills/hidden/SKILL.md': '---\ndescription: Project plugin\n---',
+    });
+
+    const skills = await scanRemoteClaudePluginSkills(fileOps);
+
+    // 远端会话同样只应看到 user scope 的插件；project scope 的 beta 属于
+    // 那个项目自己的运行时，不该出现在全局 `/` 菜单。
+    expect(skills).toEqual([
+      expect.objectContaining({
+        name: 'alpha:browser',
+        scope: 'global',
+        source: 'skill',
+        description: 'Browser skill',
+      }),
+    ]);
+  });
+
+  it('keeps the conventional skills/ root when a remote manifest declares extra paths', async () => {
+    const fileOps = fakeRemoteFiles({
+      '$HOME/.claude/plugins/installed_plugins.json': JSON.stringify({
+        plugins: { 'delta@market': [{ scope: 'user', installPath: '$HOME/plugins/delta' }] },
+      }),
+      '$HOME/plugins/delta/.claude-plugin/plugin.json': JSON.stringify({
+        name: 'delta',
+        skills: './extra',
+      }),
+      '$HOME/plugins/delta/skills/conventional/SKILL.md': 'Conventional skill',
+      '$HOME/plugins/delta/extra/declared/SKILL.md': 'Declared skill',
+    });
+
+    const skills = await scanRemoteClaudePluginSkills(fileOps);
+
+    expect(skills.map((skill) => skill.name)).toEqual(['delta:conventional', 'delta:declared']);
+  });
+
+  it('recognizes a remote manifest root that is itself a Skill', async () => {
+    const fileOps = fakeRemoteFiles({
+      '$HOME/.claude/plugins/installed_plugins.json': JSON.stringify({
+        plugins: { 'solo@market': [{ scope: 'user', installPath: '$HOME/plugins/solo' }] },
+      }),
+      '$HOME/plugins/solo/.claude-plugin/plugin.json': JSON.stringify({
+        name: 'solo',
+        skills: './custom/browser',
+      }),
+      '$HOME/plugins/solo/custom/browser/SKILL.md': '---\ndescription: Single skill\n---',
+    });
+
+    const skills = await scanRemoteClaudePluginSkills(fileOps);
+
+    expect(skills).toEqual([
+      expect.objectContaining({ name: 'solo:browser', description: 'Single skill' }),
+    ]);
+  });
+
+  it('keeps a remote direct Skill whose folder name looks like a build output', async () => {
+    const fileOps = fakeRemoteFiles({
+      '$HOME/.claude/plugins/installed_plugins.json': JSON.stringify({
+        plugins: { 'buildy@market': [{ scope: 'user', installPath: '$HOME/plugins/buildy' }] },
+      }),
+      '$HOME/plugins/buildy/.claude-plugin/plugin.json': JSON.stringify({ name: 'buildy' }),
+      '$HOME/plugins/buildy/skills/build/SKILL.md': 'Build skill',
+    });
+
+    const skills = await scanRemoteClaudePluginSkills(fileOps);
+
+    expect(skills.map((skill) => skill.name)).toEqual(['buildy:build']);
+  });
+
+  it('probes a multi-Skill plugin without dropping or reordering entries', async () => {
+    const files: Record<string, string> = {
+      '$HOME/.claude/plugins/installed_plugins.json': JSON.stringify({
+        plugins: { 'bulk@market': [{ scope: 'user', installPath: '$HOME/plugins/bulk' }] },
+      }),
+      '$HOME/plugins/bulk/.claude-plugin/plugin.json': JSON.stringify({ name: 'bulk' }),
+    };
+    const names = Array.from({ length: 20 }, (_, index) => `s${String(index).padStart(2, '0')}`);
+    for (const name of names) {
+      files[`$HOME/plugins/bulk/skills/${name}/SKILL.md`] = `---\ndescription: ${name}\n---`;
+    }
+
+    // 并发批量探测不能丢条目或打乱顺序：菜单顺序必须稳定。
+    const skills = await scanRemoteClaudePluginSkills(fakeRemoteFiles(files));
+
+    expect(skills.map((skill) => skill.name)).toEqual(names.map((name) => `bulk:${name}`));
   });
 });

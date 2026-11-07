@@ -8484,6 +8484,8 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
           remoteHostId?: string;
           forceReload?: boolean;
           sessionId?: string;
+          /** Partner catalogs exclude Claude Code plugin Skills; see ListAgentSkillsOptions. */
+          excludePluginSkills?: boolean;
         };
         const linksChanged = skillParams.remoteHostId
           ? false

@@ -1165,9 +1165,15 @@ export class ClaudeCodeAgent extends BaseAgent {
     if (opts.remoteHostId) {
       const fileOps = this.deps.getRemoteAgentFileOps?.(opts.remoteHostId);
       if (!fileOps) throw new Error('Claude Code remote Skill discovery requires remote file operations');
-      return scanRemoteClaudeSkills({ fileOps, workingDir: opts.workingDir });
+      return scanRemoteClaudeSkills({
+        fileOps,
+        workingDir: opts.workingDir,
+        excludePluginSkills: opts.excludePluginSkills,
+      });
     }
-    const raw = await scanClaudeSlashCommands(opts.workingDir);
+    const raw = await scanClaudeSlashCommands(opts.workingDir, {
+      excludePluginSkills: opts.excludePluginSkills,
+    });
     return {
       skills: [...await this.managedSkillCommands(raw.map((item) => item.name)), ...raw.map((c) => ({
         kind: 'agent-skill' as const,

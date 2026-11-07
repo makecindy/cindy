@@ -171,7 +171,12 @@ export function buildSkillList(input: SkillListProjectionInput): ScanResult {
     const realKey = realPathOrNormalized(c.absolutePath);
     const normalizedScope = normalizeScope(c.engine, c.scope);
     const project = normalizedScope === 'project' ? projectForWorkingDir(c.workingDir) : undefined;
-    const dedupeKey = project ? `${realKey}\0project:${project.hash}` : realKey;
+    // 插件 Skill 的去重身份必须带命名空间和条目名：两个插件可以把各自的 Skill
+    // 目录软链到同一份物理文件（alpha:browser / beta:browser），同一个插件也可以
+    // 把同一目录挂成两个名字（alpha:browser / alpha:browse）。运行时这些名字都
+    // 独立可调用，只按 realPath 合并会让 SkillHub 少条目而 `/` 菜单多条目。
+    const pluginKey = c.pluginName ? `\0plugin:${c.pluginName}\0name:${c.name}` : '';
+    const dedupeKey = (project ? `${realKey}\0project:${project.hash}` : realKey) + pluginKey;
     const existing = seenItems.get(dedupeKey);
     if (existing) {
       existing.all.push(c);
@@ -191,7 +196,14 @@ export function buildSkillList(input: SkillListProjectionInput): ScanResult {
     const projectHash = project?.hash;
     // skill 类型的 identity 始终是目录名（= market slug），不依赖 frontmatter name。
     // Codex RPC 可能从 frontmatter 取 name 导致与目录名不一致，统一用 basename(realPath)。
-    const canonicalName = c.kind === 'skill' ? path.basename(realPath) : c.name;
+    // Claude Code 插件 Skill 例外：可调用名是扫描阶段算好的 `<plugin>:<skill>`。
+    // 直接用它而不是 realPath 的 basename —— 插件里的 Skill 目录可以是软链
+    // （`skills/browser -> ../shared/browser-skill`），realPath 会指向目标目录，
+    // 用 basename 重拼会得到 `alpha:browser-skill`，与 `/` 菜单的 `alpha:browser`
+    // 对不上，管理页条目也就找不到对应的运行命令。
+    const canonicalName = c.kind === 'skill'
+      ? (c.pluginName ? c.name : path.basename(realPath))
+      : c.name;
     // Codex RPC may return 'repo' scope for user-level skills when homedir is
     // used as fallback cwd. If the workingDir doesn't map to a tracked project,
     // treat the skill as global — it's effectively user-level.
@@ -267,10 +279,14 @@ export function buildSkillList(input: SkillListProjectionInput): ScanResult {
       ...(c.kind === 'skill' ? (() => {
         const discoveryPaths = [...new Set(all.map((item) => item.absolutePath))];
         const target = inspectLocalSkillTarget(realPath, discoveryPaths, managedSkillRoots);
+        const pluginManaged = c.pluginName !== undefined;
         return { cindyEnabled: !disabledPaths.includes(activationKey(realPath, userDataDir, appDataDir)), discoveryPaths,
           ...(builtIn ? { builtIn: true } : {}),
-          managedByPlugin: isPluginManagedSkillPath(realPath, managedSkillRoots),
-          canUninstall: !builtIn && target !== null, uninstallLinkOnly: target?.linkOnly ?? false };
+          // Claude 忽略插件 Skill 的 skillOverrides，启停开关对它无效；插件目录也
+          // 不归 Cindy 管，不能当普通 Skill 卸载。两种情况都归入 managedByPlugin，
+          // 由 UI 禁用开关并提示到所属插件页管理。
+          managedByPlugin: pluginManaged || isPluginManagedSkillPath(realPath, managedSkillRoots),
+          canUninstall: !builtIn && !pluginManaged && target !== null, uninstallLinkOnly: target?.linkOnly ?? false };
       })() : {}),
       ...(project ? { projectRoot: project.projectRoot } : {}),
       ...(projectHash ? { projectHash } : {}),
