@@ -46,6 +46,8 @@ function parsePayload(result: unknown): Record<string, unknown> {
 
 describe("cindy_helper MCP server", () => {
   // Unit through real MCP wire. Shared-task mode requires an authoritative current
+  // task, never a selected window or caller-supplied target.
+  // Unit through real MCP wire. Shared-task mode requires an authoritative current
   // task, never a selected window or caller-supplied target. Existing control tests
   // did not cover invitation discovery, live context loss or transferable receipts.
   it.each(['codex', 'claude-code', 'pi'] as const)('offers native current-task invitations to %s with live context and restricted-surface checks', async (agentKind) => {
@@ -1545,6 +1547,34 @@ it('discovers native app settings in all three harnesses and rejects invalid or 
       expect(settings).toHaveBeenCalledTimes(1);
     } finally { await client.close(); await server.close(); }
   }
+});
+
+// Regression: a settings section may reject a mutually exclusive patch with a
+// field-level action. Keep that code/message at the MCP boundary instead of
+// replacing it with SETTINGS_OPERATION_FAILED.
+it('returns actionable memory conflict details from update_app_settings', async () => {
+  const settings = vi.fn(async () => ({
+    ok: false,
+    errorCode: 'MEMORY_SETTINGS_CONFLICT',
+    message: 'Cindy 记忆开启时不能同时修改 Claude Code 或 Codex 原生记忆。请先将 maker 设为 false。',
+    conflictingFields: ['claudeCode', 'codex'],
+    requires: { maker: false },
+  }));
+  const server = createXdtHelperMcpServer({ appSettings: { call: settings } },
+    { agentKind: 'codex', workingDir: '/fixture', sessionId: 'memory-settings-owner' });
+  const [ct, st] = InMemoryTransport.createLinkedPair();
+  const client = new Client({ name: 'memory-conflict-test', version: '1' });
+  await Promise.all([server.connect(st), client.connect(ct)]);
+  try {
+    const payload = parsePayload(await client.callTool({ name: 'call_tool', arguments: {
+      name: 'update_app_settings', args: { section: 'memory', patch: { maker: true, claudeCode: true, codex: true } },
+    } }));
+    expect(payload).toMatchObject({ ok: false, errorCode: 'MEMORY_SETTINGS_CONFLICT', data: {
+      conflictingFields: ['claudeCode', 'codex'], requires: { maker: false },
+    } });
+    expect((payload.data as { hint: string }).hint).toContain('maker');
+    expect(JSON.stringify(payload)).not.toContain('SETTINGS_OPERATION_FAILED');
+  } finally { await client.close(); await server.close(); }
 });
 
 // #9276, unit real MCP: cancellation previously stopped the caller but left Main
