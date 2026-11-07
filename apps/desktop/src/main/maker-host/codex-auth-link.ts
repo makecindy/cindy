@@ -80,7 +80,7 @@ async function healWindowsAuthAcl(
 
 /**
  * relinkSharedCodexAuth 的结果分类:
- *   - linked              成功:POSIX symlink / Windows hardlink 指向 systemAuth
+ *   - linked              成功:symlink 指向 systemAuth(含 Windows;不再建 hardlink,#9277)
  *   - link-unsupported    连 sidecar 共享链接都建不出 → myAuth 一字未动
  *   - swap-failed-intact  替换失败但 myAuth 仍在 (多半是并发的另一次 reconcile 已抢先放好)
  *   - recovered           替换中途 myAuth 一度丢失, 已从 systemAuth 重建共享链接
@@ -128,13 +128,12 @@ export async function relinkSharedCodexAuth(
   // 唯一 sidecar 名 (pid + 自增计数): 同进程内并发 reconcile 各用各的, 不再撞 EEXIST / ENOENT。
   const sidecar = `${myAuth}.${process.pid}.${sidecarCounter++}.linktmp`;
 
-  const linkType = platform === 'win32' ? 'hardlink' : 'symlink';
-  // Codex 0.145.0 实测会原位写 auth.json：POSIX symlink 会保留并穿透写目标。
-  // Windows 普通用户无法稳定创建 symlink，继续用 hardlink。
+  // Codex 0.165+ 拒绝写入 nlink>1 的 auth.json(#9277)。文件 symlink 会被跟随,
+  // 原子替换只落在单一目标上。Windows 无开发者模式时 symlink 会 EPERM:这里不退回
+  // hardlink(那会把 Codex 登录再次卡死),交给 syncIndependentCodexAuth 做独立副本。
   try {
     await fsp.stat(systemAuth);
-    if (linkType === 'symlink') await fsp.symlink(systemAuth, sidecar, 'file');
-    else await fsp.link(systemAuth, sidecar);
+    await fsp.symlink(systemAuth, sidecar, 'file');
   } catch (error) {
     return { kind: 'link-unsupported', error: error as Error };
   }
@@ -157,7 +156,7 @@ export async function relinkSharedCodexAuth(
     await fsp.rename(sidecar, myAuth);
     // 顺手清掉可能残留的 sidecar，避免并发下 .linktmp 堆积。
     await fsp.rm(sidecar, { force: true }).catch(() => undefined);
-    return { kind: 'linked', linkType };
+    return { kind: 'linked', linkType: 'symlink' };
   } catch (error) {
     // 替换失败: 先清掉 sidecar, 再判断 myAuth 是否还在。
     await fsp.rm(sidecar, { force: true }).catch(() => undefined);
@@ -180,15 +179,22 @@ export async function recoverCodexAuth(
   systemAuth: string,
   myAuth: string,
   platform: NodeJS.Platform = process.platform,
+  execFileImpl: typeof execFileP = execFileP,
 ): Promise<boolean> {
   try {
     await fsp.stat(systemAuth);
-    if (platform === 'win32') await fsp.link(systemAuth, myAuth);
-    else await fsp.symlink(systemAuth, myAuth, 'file');
+  } catch {
+    return false;
+  }
+  try {
+    await fsp.symlink(systemAuth, myAuth, 'file');
     return true;
   } catch {
-    // 不再 copy token 兜底：可写副本会变成 refresh-token 孤岛。
-    return false;
+    // POSIX 失败不复制:可写副本会变成 refresh-token 孤岛。Windows 不能再退回
+    // hardlink(nlink>1 会让 Codex 0.165+ 拒绝写入),只能留一份独立副本(#9277)。
+    if (platform !== 'win32') return false;
+    const copied = await copyCodexAuthSnapshot(systemAuth, myAuth, platform, execFileImpl);
+    return copied.kind === 'copied';
   }
 }
 
@@ -237,6 +243,119 @@ export async function copyCodexAuthSnapshot(
     }
     return { kind: 'lost', error: error as Error };
   }
+}
+
+export type CodexAuthCopySyncKind =
+  | 'copied-from-system'
+  | 'copied-from-local'
+  | 'unchanged'
+  | 'skipped'
+  | 'failed';
+
+export interface CodexAuthCopySyncOutcome {
+  kind: CodexAuthCopySyncKind;
+  error?: Error;
+}
+
+async function sameCodexAuthInode(a: string, b: string): Promise<boolean> {
+  try {
+    const left = await fsp.stat(a, { bigint: true });
+    const right = await fsp.stat(b, { bigint: true });
+    return left.ino !== 0n && left.dev === right.dev && left.ino === right.ino;
+  } catch {
+    return false;
+  }
+}
+
+async function sameCodexAuthContent(a: string, b: string): Promise<boolean> {
+  try {
+    const [left, right] = await Promise.all([fsp.readFile(a), fsp.readFile(b)]);
+    return left.equals(right);
+  } catch {
+    return false;
+  }
+}
+
+/** 复制后保留源 mtime,避免下一次按 mtime 反向对拷(两侧内容其实没变)。 */
+async function preserveSourceMtime(source: string, target: string): Promise<void> {
+  try {
+    const stat = await fsp.stat(source);
+    await fsp.utimes(target, stat.atime, stat.mtime);
+  } catch {
+    // best effort: content already matches; mtime drift only costs one extra copy
+  }
+}
+
+/**
+ * Windows 建不出文件 symlink 时的降级(#9277):两侧各持独立副本,按较新 mtime 对齐;
+ * mtime 相同但内容不同时按 `allowLocalToSystem` 挑确定权威端(不是「未变化」)。
+ * 存量 hardlink(nlink>1)会被拆开,系统 auth.json 恢复为单一链接,Codex 才能原子写入。
+ * 不创建 hardlink。已是 symlink 的路径跳过,避免把活链接拍成副本。
+ *
+ * `allowLocalToSystem` 默认 false:本地副本绝不写回 `~/.codex/auth.json`。只有调用方
+ * 已证明两侧是同一账号时才允许,避免旧账号覆盖系统登录。
+ * 两端各自刷新时较旧的 refresh token 可能已失效。
+ */
+export async function syncIndependentCodexAuth(
+  systemAuth: string,
+  myAuth: string,
+  platform: NodeJS.Platform = process.platform,
+  execFileImpl: typeof execFileP = execFileP,
+  opts: { allowLocalToSystem?: boolean } = {},
+): Promise<CodexAuthCopySyncOutcome> {
+  let local: Awaited<ReturnType<typeof fsp.lstat>> | null = null;
+  try {
+    local = await fsp.lstat(myAuth);
+  } catch {
+    local = null;
+  }
+  if (local?.isSymbolicLink()) return { kind: 'skipped' };
+  try {
+    await fsp.stat(systemAuth);
+  } catch (error) {
+    return { kind: 'failed', error: error as Error };
+  }
+
+  const publish = async (
+    from: string,
+    to: string,
+    successKind: CodexAuthCopySyncKind,
+  ): Promise<CodexAuthCopySyncOutcome> => {
+    const copied = await copyCodexAuthSnapshot(from, to, platform, execFileImpl);
+    if (copied.kind === 'copied') {
+      await preserveSourceMtime(from, to);
+      return { kind: successKind };
+    }
+    if (copied.kind === 'lost') {
+      // Windows 先删目标再 rename:删除成功后 rename 失败会把 to 弄丢。
+      // 源还在,立刻重建,绝不能让 ~/.codex/auth.json 空窗留存。
+      const restore = await copyCodexAuthSnapshot(from, to, platform, execFileImpl);
+      if (restore.kind === 'copied') {
+        await preserveSourceMtime(from, to);
+        return { kind: successKind };
+      }
+      return { kind: 'failed', error: copied.error };
+    }
+    return { kind: 'failed', error: copied.error };
+  };
+
+  if (!local || await sameCodexAuthInode(systemAuth, myAuth)) {
+    return publish(systemAuth, myAuth, 'copied-from-system');
+  }
+  // 内容一致就停:copy 不保留 mtime 时,只比 mtime 会两侧来回覆盖。
+  if (await sameCodexAuthContent(systemAuth, myAuth)) return { kind: 'unchanged' };
+
+  const systemStat = await fsp.stat(systemAuth);
+  const localStat = await fsp.stat(myAuth);
+  // 两侧 mtime 相同但内容不同(备份恢复、时间精度)不是「未变化」:必须挑一个确定
+  // 的权威端,否则 reconcile 会把旧 token/旧账号当成已对齐,永不自愈。
+  // 权威端由调用方授权决定:允许回写且本地不比系统旧 → 本地赢;否则系统凭证获胜。
+  const localWins = opts.allowLocalToSystem === true;
+  if (localWins && localStat.mtimeMs >= systemStat.mtimeMs) {
+    return publish(myAuth, systemAuth, 'copied-from-local');
+  }
+  // 账号未证明一致、或系统更新:系统凭证单向获胜,只把系统内容刷到本地。
+  return publish(systemAuth, myAuth, 'copied-from-system');
 }
 
 async function pathEntryExists(file: string): Promise<boolean> {
