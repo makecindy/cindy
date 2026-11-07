@@ -9,7 +9,7 @@
  * 条目只改该子目录自身 mtime,漏盯哪层就在哪层漏检。
  */
 
-import { mkdirSync, mkdtempSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, realpathSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
@@ -224,6 +224,22 @@ describe('piProjectResourcesDrifted', () => {
     // 子目录自己 git init:枚举链截断,outer skill 不再属于本项目边界
     mkdirSync(path.join(nested, '.git'), { recursive: true });
     expect(piProjectResourcesDrifted(baseline)).toBe(true);
+  });
+
+  it('does not recycle for a git boundary change that excludes no resources', () => {
+    mkdirSync(path.join(project, 'outer'), { recursive: true });
+    writeFileSync(path.join(project, 'outer', '.git'), '');
+    const nested = path.join(project, 'outer', 'sub');
+    mkdirSync(path.join(nested, '.pi', 'skills', 'alpha'), { recursive: true });
+    writeFileSync(path.join(nested, '.pi', 'skills', 'alpha', 'SKILL.md'), '---\nname: alpha\ndescription: t\n---\n');
+    const baseline = snapshotPiProjectResourceLaunch(
+      nested, collectPiProjectResourceCliPaths(nested), collectPiProjectResourceWatchRootMtimes(nested));
+    // 嵌套目录 git init:被截断的上层链没有任何项目资源,集合不变,不应触发回收
+    mkdirSync(path.join(nested, '.git'), { recursive: true });
+    expect(piProjectResourcesDrifted(baseline)).toBe(false);
+    // 边界持有者已就地更新:后续快检恢复零扫描,不再重复重扫判定
+    expect(baseline.state.repoRoot).toBe(realpathSync(nested));
+    expect(piProjectResourcesDrifted(baseline)).toBe(false);
   });
 
   it('missing directories baseline as -1 and compare against real mtimes', () => {

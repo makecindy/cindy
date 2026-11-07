@@ -214,9 +214,11 @@ export interface PiProjectResourceLaunchSnapshot {
    * 路径集合与 paths 一样保持启动口径不变。
    */
   readonly watchRootMtimes: Map<string, number>;
-  /** 启动时认定的 git root:更近的 .git 出现/消失会改变 collector 的枚举链
-   * (.agents 向上走到 repoRoot),而任何被盯目录的 mtime 都不动,必须单独核对。 */
-  readonly repoRoot: string;
+  /** 启动时认定的 git root 可变持有器:更近的 .git 出现/消失会改变 collector 的枚举链
+   * (.agents 向上走到 repoRoot),而任何被盯目录的 mtime 都不动,必须单独核对。边界
+   * 变化只作重扫信号(见 piProjectResourcesDrifted),确认集合未变后就地更新,避免
+   * 嵌套目录 git init 在无实际资源变化时多余回收。 */
+  readonly state: { repoRoot: string };
 }
 
 /**
@@ -307,7 +309,7 @@ export function snapshotPiProjectResourceLaunch(
     workingDir,
     paths,
     watchRootMtimes,
-    repoRoot: resolvePiResourceRepoRoot(workingDir),
+    state: { repoRoot: resolvePiResourceRepoRoot(workingDir) },
   });
 }
 
@@ -318,35 +320,47 @@ function samePiResourceList(left: readonly string[], right: readonly string[]): 
 /**
  * 盘上项目资源相对启动快照是否已漂移(argv 重算后会不同)。三级判定:
  * 1. git 边界核对:更近的 .git 出现/消失会改变 collector 的枚举链(.agents 向上
- *    走到 repoRoot),而任何被盯目录的 mtime 都不动,必须单独比较;
- * 2. stat 快检:所有 watch root 的 mtime 与基线一致(含缺失态 -1) → 无漂移;
- * 3. mtime 有变化才全量重扫(每次调用至多一次),按最终路径集合判定 —— 集合相同
- *    (如触碰无关目录)不算漂移,且就地重建整张基线(新建的空 namespace / 空扩展
- *    目录也要纳入盯视,否则后续其内部增删无人盯),让下一次快检恢复零扫描;
+ *    走到 repoRoot),而任何被盯目录的 mtime 都不动 —— 但边界变化只作重扫信号,
+ *    不直接判漂移:被截断的上层可能没有任何项目资源,集合相同就不该回收;
+ * 2. stat 快检:所有 watch root 的 mtime 与基线一致(含缺失态 -1)且边界未变 → 无漂移;
+ * 3. 有重扫信号才全量重扫(每次调用至多一次),按最终路径集合判定 —— 集合相同
+ *    (如触碰无关目录)不算漂移,且就地重建基线并更新边界持有者(新建的空 namespace /
+ *    空扩展目录也要纳入盯视,否则后续其内部增删无人盯),让下一次快检恢复零扫描;
  *    集合相同不要求内容相同(路径集合才是 argv 的输入)。判定漂移时不动基线:
  *    调用方将回收运行时并重建新快照。
  */
 export function piProjectResourcesDrifted(snapshot: PiProjectResourceLaunchSnapshot): boolean {
-  if (resolvePiResourceRepoRoot(snapshot.workingDir) !== snapshot.repoRoot) return true;
-  let changed = false;
-  let freshPaths: PiProjectResourceCliPaths | null = null;
+  const boundaryChanged = resolvePiResourceRepoRoot(snapshot.workingDir) !== snapshot.state.repoRoot;
+  let rescanDone = false;
+  let needsRebuild = false;
+  const comparePaths = (): boolean => {
+    rescanDone = true;
+    const fresh = collectPiProjectResourceCliPaths(snapshot.workingDir);
+    return !(
+      samePiResourceList(fresh.skills, snapshot.paths.skills)
+      && samePiResourceList(fresh.promptTemplates, snapshot.paths.promptTemplates)
+      && samePiResourceList(fresh.extensions, snapshot.paths.extensions)
+    );
+  };
   for (const [dir, mtimeAtLaunch] of snapshot.watchRootMtimes) {
     const mtimeNow = statMtimeMs(dir);
     if (mtimeNow === mtimeAtLaunch) continue;
-    changed = true;
-    freshPaths ??= collectPiProjectResourceCliPaths(snapshot.workingDir);
-    const driftedNow = !(
-      samePiResourceList(freshPaths.skills, snapshot.paths.skills)
-      && samePiResourceList(freshPaths.promptTemplates, snapshot.paths.promptTemplates)
-      && samePiResourceList(freshPaths.extensions, snapshot.paths.extensions)
-    );
-    if (driftedNow) return true;
+    needsRebuild = true;
+    if (comparePaths()) return true;
   }
-  if (changed) {
-    // mtime 变了但集合相同:重建整张基线,下一次快检恢复零扫描。
+  if (boundaryChanged) {
+    // 边界变化只作重扫信号:被截断/扩展的上层链可能没有任何项目资源,
+    // 集合相同就不该回收(嵌套目录 git init 不应触发多余冷启动)。
+    needsRebuild = true;
+    if (!rescanDone && comparePaths()) return true;
+  }
+  if (needsRebuild) {
+    // 有重扫信号但集合未变:重建整张基线(新建的空目录纳入盯视)并更新边界持有者,
+    // 下一次快检恢复零扫描。
     const freshRoots = collectPiProjectResourceWatchRootMtimes(snapshot.workingDir);
     snapshot.watchRootMtimes.clear();
     for (const [dir, mtime] of freshRoots) snapshot.watchRootMtimes.set(dir, mtime);
+    snapshot.state.repoRoot = resolvePiResourceRepoRoot(snapshot.workingDir);
   }
   return false;
 }
