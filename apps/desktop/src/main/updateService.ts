@@ -353,6 +353,17 @@ async function hasBusyTasks(): Promise<boolean> {
   }
 }
 
+/**
+ * Linux 只有 .deb 安装要走 pkexec 输密码；家目录用户安装直接替换文件，可以无人值守。
+ * 已判定当前安装不支持自更新时同样不自动装，避免空闲轮询反复尝试。
+ */
+function linuxUpdateRequiresInteractiveAuth(): boolean {
+  if (process.platform !== 'linux') return false;
+  if (lastErrorCode === 'linux_installation_unsupported') return true;
+  const installation = findLinuxUserInstallation(app.getPath('exe'), os.homedir(), process.getuid?.() ?? -1);
+  return !installation || installation.region !== CURRENT_CINDY_REGION;
+}
+
 async function getAutoRelaunchBlockReasonForCurrentState(): Promise<AutoRelaunchBlockReason | null> {
   if (!readAutoUpdateSettings().autoRelaunchOnIdle) return 'disabled';
   if (isDev()) return 'dev';
@@ -382,7 +393,7 @@ async function getAutoRelaunchBlockReasonForCurrentState(): Promise<AutoRelaunch
     nowMs,
     lastBusyAtMs,
     lastResumeAtMs,
-    requiresInteractiveAuth: process.platform === 'linux',
+    requiresInteractiveAuth: linuxUpdateRequiresInteractiveAuth(),
   });
 }
 
@@ -407,8 +418,8 @@ async function getStartupRelaunchBlockReason(): Promise<AutoRelaunchBlockReason 
   if (currentStatus !== 'ready') return 'not-ready';
   if (lastErrorCode === WINDOWS_UPDATER_RUNTIME_MISSING_ERROR_CODE) return 'not-ready';
   if (isRelaunching || autoRelaunchInProgress) return 'relaunching';
-  // pkexec 必须用户在场输入密码，启动时不能自己装。
-  if (process.platform === 'linux') return 'interactive-auth';
+  // .deb 安装要 pkexec 输密码，启动时不能自己装；家目录用户安装可以。
+  if (linuxUpdateRequiresInteractiveAuth()) return 'interactive-auth';
   return null;
 }
 
@@ -597,8 +608,8 @@ export function isUpdateRelaunchImminent(): boolean {
   // A missing VC++ Runtime requires an explicit user install. Treating that
   // indefinite wait as imminent would keep startup side-effects disabled.
   if (lastErrorCode === WINDOWS_UPDATER_RUNTIME_MISSING_ERROR_CODE) return false;
-  // Linux 安装要 pkexec 密码，不会在空闲/启动时自己装。
-  if (process.platform === 'linux') return false;
+  // .deb 安装要 pkexec 密码，不会在空闲/启动时自己装；家目录用户安装会。
+  if (linuxUpdateRequiresInteractiveAuth()) return false;
   // Respecting the user's switch: with auto-relaunch off the patch just sits
   // there until they click the banner, which is not "imminent".
   return readAutoUpdateSettings().autoRelaunchOnIdle;
