@@ -14045,8 +14045,10 @@
       "mailLegacy": "旧稿（唯读）",
       "taskAutoArchived": "「{{title}}」已封存",
       "taskAutoArchivedUndo": "撤",
-      "taskAutoArchivePending": "去则自封存",
-      "taskAutoArchiveCancel": "此番不封"
+      "taskAutoArchivePending": "离此任务后自封存",
+      "taskAutoArchiveCancel": "取消",
+      "taskAutoArchiveCancelled": "此番不自封存",
+      "taskArchiveNow": "即封存"
     },
     "ghostHook": {
       "blockedFallback": "讯为法器所拦，未遣",

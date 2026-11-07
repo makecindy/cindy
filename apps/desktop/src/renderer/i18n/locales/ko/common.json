@@ -14054,8 +14054,10 @@
       "mailLegacy": "초안 기록 (읽기 전용)",
       "taskAutoArchived": "\"{{title}}\"을(를) 보관했습니다",
       "taskAutoArchivedUndo": "실행 취소",
-      "taskAutoArchivePending": "나가면 자동 보관",
-      "taskAutoArchiveCancel": "이번에는 보관 안 함"
+      "taskAutoArchivePending": "이 작업을 나가면 자동으로 보관됩니다",
+      "taskAutoArchiveCancel": "취소",
+      "taskAutoArchiveCancelled": "이번에는 자동으로 보관하지 않습니다",
+      "taskArchiveNow": "지금 보관"
     },
     "ghostHook": {
       "blockedFallback": "메시지가 플러그인에 의해 차단되어 전송되지 않았습니다",

@@ -14085,8 +14085,10 @@
       "mailLegacy": "Entwurfsverlauf (schreibgeschützt)",
       "taskAutoArchived": "„{{title}}“ archiviert",
       "taskAutoArchivedUndo": "Rückgängig",
-      "taskAutoArchivePending": "Wird beim Verlassen archiviert",
-      "taskAutoArchiveCancel": "Diesmal behalten"
+      "taskAutoArchivePending": "Wird beim Verlassen dieser Aufgabe archiviert",
+      "taskAutoArchiveCancel": "Abbrechen",
+      "taskAutoArchiveCancelled": "Diesmal keine automatische Archivierung",
+      "taskArchiveNow": "Jetzt archivieren"
     },
     "ghostHook": {
       "blockedFallback": "Nachricht von einem Plugin blockiert; nicht gesendet",

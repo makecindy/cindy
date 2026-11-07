@@ -14216,8 +14216,10 @@
       "mailLegacy": "Historial de borradores (solo lectura)",
       "taskAutoArchived": "Se archivó «{{title}}»",
       "taskAutoArchivedUndo": "Deshacer",
-      "taskAutoArchivePending": "Se archiva al salir",
-      "taskAutoArchiveCancel": "Conservar esta vez"
+      "taskAutoArchivePending": "Se archivará al salir de esta tarea",
+      "taskAutoArchiveCancel": "Cancelar",
+      "taskAutoArchiveCancelled": "No se archivará automáticamente esta vez",
+      "taskArchiveNow": "Archivar ahora"
     },
     "ghostHook": {
       "blockedFallback": "Mensaje bloqueado por un complemento; no se envió",

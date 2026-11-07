@@ -14120,8 +14120,10 @@
       "mailLegacy": "Draft history (read-only)",
       "taskAutoArchived": "Archived \"{{title}}\"",
       "taskAutoArchivedUndo": "Undo",
-      "taskAutoArchivePending": "Archives when you leave",
-      "taskAutoArchiveCancel": "Keep this time"
+      "taskAutoArchivePending": "Will archive when you leave this task",
+      "taskAutoArchiveCancel": "Cancel",
+      "taskAutoArchiveCancelled": "Will not auto-archive this time",
+      "taskArchiveNow": "Archive now"
     },
     "ghostHook": {
       "blockedFallback": "Message blocked by a plugin; not sent",
