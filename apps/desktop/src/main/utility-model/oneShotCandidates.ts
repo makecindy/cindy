@@ -1045,6 +1045,7 @@ async function requestExplicitProviderText(
       validateResponse: opts.validateResponse,
       beforeDispatch: opts.beforeDispatch,
       routeStillCurrent,
+      audit: opts.audit,
     });
   }
 

@@ -2,6 +2,19 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 const localReady = vi.hoisted(() => vi.fn(async () => {}));
 vi.mock('../../local-model-runtime/preflight.js', () => ({ ensureManagedOllamaReadyForSession: localReady }));
 
+const logSpy = vi.hoisted(() => ({
+  info: vi.fn(),
+  warn: vi.fn(),
+  debug: vi.fn(),
+  error: vi.fn(),
+  trace: vi.fn(),
+  fatal: vi.fn(),
+}));
+vi.mock('../../logger.js', async (importOriginal) => ({
+  ...await importOriginal<typeof import('../../logger.js')>(),
+  createLogger: () => logSpy,
+}));
+
 vi.mock('electron', () => ({
   app: {
     getPath: vi.fn(() => '/tmp/xdt-maker-test'),
@@ -3119,7 +3132,7 @@ describe('utility one-shot candidates', () => {
     expect(DEDICATED_AUTO_REVIEW_CANDIDATES.map((candidate) => candidate.providerId)).not.toContain('anthropic');
   });
 
-  it('accepts caller audit context on dedicated auto-review requests', async () => {
+  it('accepts caller audit context on dedicated auto-review requests and logs attribution', async () => {
     readKey.mockReturnValue('xd-key');
     activeCatalog.mockReturnValue({ providers: [] } as never);
     fetchMock.mockResolvedValueOnce({
@@ -3141,6 +3154,41 @@ describe('utility one-shot candidates', () => {
       providerId: 'xd',
       model: 'cindy/auto-review',
     });
+    expect(logSpy.info).toHaveBeenCalledWith(
+      'explicit utility text provider succeeded',
+      expect.objectContaining({
+        feature: 'auto-review',
+        sessionId: 'sess-test-audit-123',
+      }),
+    );
+  });
+
+  it('logs audit attribution when candidate execution fails', async () => {
+    readKey.mockReturnValue('xd-key');
+    activeCatalog.mockReturnValue({ providers: [] } as never);
+    fetchMock.mockResolvedValueOnce({
+      ok: false,
+      status: 402,
+      text: async () => 'insufficient credits',
+    } as never);
+
+    const audit = { feature: 'auto-review', sessionId: 'sess-fail-audit-456' };
+    const result = await requestDedicatedAutoReviewCandidateText(
+      'classify',
+      DEDICATED_AUTO_REVIEW_CANDIDATES[0],
+      { timeoutMs: 8_000, audit },
+    );
+
+    expect(result.ok).toBe(false);
+    expect(logSpy.warn).toHaveBeenCalledWith(
+      'explicit utility text provider failed',
+      expect.objectContaining({
+        feature: 'auto-review',
+        sessionId: 'sess-fail-audit-456',
+        reason: 'http_error',
+        httpStatus: 402,
+      }),
+    );
   });
 
   it('never dispatches through a retired independent Claude account', async () => {
