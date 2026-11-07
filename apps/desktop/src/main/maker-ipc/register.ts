@@ -8479,11 +8479,19 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       });
       try {
         const kind = requireAgentKind(agentKind);
-        const skillParams = (params ?? {}) as {
+        const skillParams = {
+          ...(params ?? {}) as Record<string, unknown>,
+          // Host-owned preview marker: this channel renders an ephemeral catalog
+          // only, so it may reuse a warm package inspection. A runtime read that
+          // keeps its result — session startup, Bot hydration — stays on the short
+          // window and must not inherit that reuse.
+          palettePreview: true,
+        } as {
           workingDir?: string;
           remoteHostId?: string;
           forceReload?: boolean;
           sessionId?: string;
+          palettePreview?: boolean;
         };
         const reuseKey = paletteSkillListReuseKey({
           agentKind: kind,

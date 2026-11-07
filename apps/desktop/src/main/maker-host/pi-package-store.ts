@@ -2523,6 +2523,13 @@ export async function resolveManagedPiPackageResources(
     snapshotRoot?: string;
     snapshotLimits?: PiPackageSnapshotLimits;
     startupTraceId?: string;
+    /**
+     * Only an explicit palette preview may reuse a warm inspection. Every other
+     * read — session startup, Bot hydration, the Bot capability catalog — keeps
+     * the short window, because its result can be stored and a warm entry would
+     * hide a package that was installed a moment earlier.
+     */
+    palettePreview?: boolean;
   },
 ): Promise<PiManagedPackageResources> {
   const startupTiming = createPiPackageStartupTiming(options?.startupTraceId);
@@ -2534,15 +2541,16 @@ export async function resolveManagedPiPackageResources(
     const resolveResources = async (forceFresh = false): Promise<PiManagedPackageResources> => {
       const inspected = forceFresh
         ? await inspectAllPackagesFreshUnderMutationLock({ startupTiming })
-        // A following snapshot copy verifies approved extensions against these
-        // fingerprints, so it keeps the short window instead of a palette reuse one.
-        // Session startup (`startupTiming`) freezes this list into the task's
-        // capability manifest, which outlives any reuse window, so a warm palette
-        // entry would hide a package installed a moment earlier for the whole task.
-        // Only palette previews — no snapshot, no startup — take the long window.
+        // The long window belongs to palette previews alone: they render an
+        // ephemeral catalog and nothing keeps their result. A snapshot copy
+        // verifies approved extensions against these fingerprints, and session
+        // startup freezes this list into the task's capability manifest, so both
+        // stay on the short window. The same goes for every other caller — a
+        // Bot hydration or capability catalog that kept a warm palette entry
+        // would persist a Skill as unavailable after `pi install`.
         : await inspectAllPackages(
             startupTiming,
-            snapshotRoot || startupTiming ? INSPECTION_CACHE_MS : PALETTE_INSPECTION_REUSE_MS,
+            options?.palettePreview ? PALETTE_INSPECTION_REUSE_MS : INSPECTION_CACHE_MS,
           );
       if (snapshotRoot) {
         const staleApprovals = inspected

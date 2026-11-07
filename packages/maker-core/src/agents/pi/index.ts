@@ -9028,7 +9028,7 @@ export class PiAgent extends BaseAgent {
       // `null` means the host could not read packages at all; `undefined` means this
       // host has no managed package source. Only the former can hide recoverable Skills.
       opts.includeManagedPiPackages && this.deps.resolvePiManagedPackageResources
-        ? this.deps.resolvePiManagedPackageResources().catch(() => null)
+        ? this.deps.resolvePiManagedPackageResources({ palettePreview: opts.palettePreview }).catch(() => null)
         : undefined,
     ]);
     const out: ListAgentSkillsResult = {

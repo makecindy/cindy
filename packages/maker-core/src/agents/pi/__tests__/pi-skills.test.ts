@@ -107,6 +107,19 @@ describe('PiAgent.listAgentSkills (filesystem discovery, no binary spawn)', () =
     expect(resolver).toHaveBeenCalledOnce();
   });
 
+  it('passes the host preview marker on to the package resolver', async () => {
+    const resolver = vi.fn(async (_options?: { palettePreview?: boolean }) => ({
+      extensions: [], skills: [], promptTemplates: [], packageRoots: [],
+    }));
+    const agent = new PiAgent({ ...buildDeps(), resolvePiManagedPackageResources: resolver });
+
+    await agent.listAgentSkills({ workingDir, includeManagedPiPackages: true });
+    expect(resolver.mock.calls[0]?.[0]?.palettePreview).toBeUndefined();
+
+    await agent.listAgentSkills({ workingDir, includeManagedPiPackages: true, palettePreview: true });
+    expect(resolver.mock.calls[1]?.[0]?.palettePreview).toBe(true);
+  });
+
   it('reports a managed package source that could not be read in full', async () => {
     const incomplete = new PiAgent({
       ...buildDeps(),
