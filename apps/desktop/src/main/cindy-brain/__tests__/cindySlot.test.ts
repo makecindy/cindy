@@ -2068,6 +2068,21 @@ describe('快问快答(oneshot_text)', () => {
     expect(await slot.handleModelRequest('art', ONESHOT)).toMatchObject({ ok: false, errorCode });
   });
 
+  // #7730 review:插件钉在停用的非 Cindy 供应商上,requestUtilityText 对显式选择 fail closed、
+  // 不回落 Cindy;凭证下发窗口救不回这条路由,不能改报临时失败。钉在 xd 上则仍是临时口径。
+  it.each([
+    ['byo', 'NO_CANDIDATE'],
+    ['xd', 'INTERNAL'],
+  ] as const)('凭证暂时不可用时钉在 %s 上链上无候选 → %s', async (providerId, errorCode) => {
+    const { slot } = withText({
+      oneshotText: vi.fn(async () => ({ ok: false as const, reason: 'no_candidate' as const, message: '不行' })),
+      getOneshotModelSelection: () => ({ providerId, agentKind: 'codex' as const, model: 'm' }),
+      isModelAccessReady: () => false,
+      isModelAccessTransientlyUnavailable: () => true,
+    });
+    expect(await slot.handleModelRequest('art', ONESHOT)).toMatchObject({ ok: false, errorCode });
+  });
+
   it('expectJson:剥围栏后可解析 → 返回清洗后的 JSON 文本;不可解析 → BAD_MODEL_OUTPUT', async () => {
     const good = withText({
       oneshotText: vi.fn(async () => ({

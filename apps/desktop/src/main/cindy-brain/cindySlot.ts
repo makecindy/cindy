@@ -1678,8 +1678,14 @@ export class GhostCindySlot {
           reason: outcome.reason,
         });
         // 链上无候选可能只是 Cindy 凭证还没写入:按链路失败(INTERNAL,重试由调方决定)
-        // 回复,与账号切换期间的口径一致。
-        if (outcome.reason === 'no_candidate' && this.isModelAccessTransient()) {
+        // 回复,与账号切换期间的口径一致。显式钉在非 Cindy(xd)供应商上的路由不回落
+        // Cindy,凭证下发好了也救不回来,无候选就是终态,保留 NO_CANDIDATE。
+        const pinnedOutsideCindy = route?.providerId !== undefined && route.providerId !== 'xd';
+        if (
+          outcome.reason === 'no_candidate' &&
+          (this.deps.isOwnerBoundaryPending() ||
+            (!pinnedOutsideCindy && this.isModelAccessTransient()))
+        ) {
           return {
             ok: false,
             message: MODEL_ACCESS_TRANSIENT_MESSAGE,
