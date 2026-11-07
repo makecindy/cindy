@@ -101,12 +101,16 @@ describe('home navigation drawer', () => {
   const gesture = (name: string, translationX = 0, velocityX = 0, success = true) =>
     driver.gestures[name]({ translationX, velocityX }, success);
 
-  it('keeps the user first with a default letter avatar and only a small organization image', async () => {
+  it('shows the uploaded avatar, falls back to the letter, and keeps the organization image small (#7887)', async () => {
     await act(async () => root.render(<HomeChromeDrawer {...props} />));
     const account = container.querySelector('[data-testid="home.chromeDrawer.account"]')!;
+    expect(account.textContent).toBe('Kirokiro@example.comExample Company');
+    expect([...account.querySelectorAll('img')].map(image => image.src))
+      .toEqual([props.user.avatar, props.user.orgLogoUrl]);
+    await act(async () => root.render(<HomeChromeDrawer {...props} user={{ ...props.user, avatar: null }} />));
     expect(account.textContent).toBe('KKirokiro@example.comExample Company');
     expect([...account.querySelectorAll('img')].map(image => image.src)).toEqual([props.user.orgLogoUrl]);
-    await act(async () => root.render(<HomeChromeDrawer {...props} user={{ ...props.user, membershipKind: 'personal' }} />));
+    await act(async () => root.render(<HomeChromeDrawer {...props} user={{ ...props.user, avatar: null, membershipKind: 'personal' }} />));
     expect(account.textContent).not.toContain('Example Company');
     expect(account.querySelector('img')).toBeNull();
   });
