@@ -64,6 +64,12 @@ importers:
       '@types/ws':
         specifier: ^8.18.1
         version: 8.18.1
+      react:
+        specifier: 19.2.3
+        version: 19.2.3
+      react-dom:
+        specifier: 19.2.3
+        version: 19.2.3(react@19.2.3)
       spdx-expression-parse:
         specifier: 3.0.1
         version: 3.0.1
