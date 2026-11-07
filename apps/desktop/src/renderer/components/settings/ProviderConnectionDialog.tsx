@@ -1638,7 +1638,7 @@ export function ProviderConnectionDialog({
         return;
       if (requestId) connectionTestRef.current = null;
       const ipc = extractIpcError(e);
-      setTest((prev) => ({ ...prev, [agent]: { status: 'fail', code: 'UNKNOWN' } }));
+      setTest((prev) => ({ ...prev, [agent]: { status: 'fail', code: 'UNKNOWN', modelId: firstModel } }));
       if (ipc?.message) toast.error(ipc.message);
     }
   }, [activeTab, authMode, rt, t, savedBaselineFor, initial, presets, matchesEndpointTemplate, catalogModels, simpleAdding, setRtSynced, picker, draft]);

@@ -653,11 +653,25 @@ describe('ProviderConnectionDialog accessibility', () => {
   });
 
 
-  // #8679: the failure line alone ("upstream 5xx") never said which model the probe used.
-  it('测试连接失败时标明被测模型', async () => {
+  // #8679: the failure line alone ("upstream 5xx") never said which model the probe used. The saved
+  // provider's probe model is chosen by Main, so the label must follow the result, not the form's first row.
+  it('测试连接失败时标明主进程返回的被测模型', async () => {
     window.electronAPI.maker.testProviderConnection = vi.fn(async () => ({
-      ok: false, code: 'UNKNOWN' as const, latencyMs: 1, modelId: 'chat',
+      ok: false, code: 'UNKNOWN' as const, latencyMs: 1, modelId: 'probed-by-main',
     }));
+    await openFailingTest();
+    expect(await screen.findByText('settings.providers.custom.test.model:probed-by-main')).toBeTruthy();
+  });
+
+  // The probe can throw after the response headers (first stream frame lost); Main rethrows unchanged and
+  // the IPC rejection carries no result, so the dialog falls back to the model it asked to test.
+  it('探测抛错(无结果)时仍标明被测模型', async () => {
+    window.electronAPI.maker.testProviderConnection = vi.fn(async () => { throw new Error('first frame interrupted'); });
+    await openFailingTest();
+    expect(await screen.findByText('settings.providers.custom.test.model:chat')).toBeTruthy();
+  });
+
+  async function openFailingTest() {
     const route = { baseUrl: 'https://host.example/v1', wireProtocol: 'openai-chat' as const };
     const initial: CustomProviderConfig = {
       id: 'test-model-label', name: 'Test model label', auth: { method: 'apiKey' },
@@ -668,9 +682,8 @@ describe('ProviderConnectionDialog accessibility', () => {
     render(<ProviderConnectionDialog initial={initial} focusAgent="pi" onSaved={vi.fn()} onClose={vi.fn()} />);
     await waitForInitialDialogFocus();
     await user.click(screen.getByRole('button', { name: 'settings.providers.custom.test.button' }));
-    expect(await screen.findByText('providerError.UNKNOWN', { exact: false })).toBeTruthy();
-    expect(screen.getByText('settings.providers.custom.test.model:chat')).toBeTruthy();
-  });
+  }
+
   it('probes the rebased route instead of the saved route after filling only models', async () => {
     const chat = { id: 'chat', name: 'Chat', route: {
       baseUrl: 'https://host.example/v1', wireProtocol: 'openai-chat' as const,
