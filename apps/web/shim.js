@@ -817,6 +817,7 @@
     'workLouderCodex.publishTasks': () => undefined,
     'notificationClearSessionAttention': () => undefined,
     'notificationMarkSessionAttention': () => undefined,
+    'maker.autoTitle': async () => ({ applied: false, done: false }),
     'notificationSetAppAttentionCount': () => undefined,
     'localDb.orcaWorkflows.getCollaborationSettings': () => ({ enabled: false }),
     'maker.agentResourceSettingsGet': () => ({ maxProcesses: 4, memoryLimitMb: 4096 }),
