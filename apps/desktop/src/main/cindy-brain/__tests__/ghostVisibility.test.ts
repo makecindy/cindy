@@ -76,6 +76,16 @@ describe('classifyGhostVisibility namespace', () => {
     },
   );
 
+  // ghost_list shows only discoverable copies; a bare name must pick among the same set,
+  // or a newer panel-only local copy hides the listed public one from ghost_info.
+  it('does not let a newer undiscoverable local copy win a bare name', () => {
+    const local = ghost('helper', 'local');
+    local.manifest.version = '2.0.0';
+    const pairDeps = { ...deps, listGhosts: () => [local, root], isDiscoverable: (g: InstalledGhost) => g !== local };
+    expect(classifyGhostVisibility('helper', null, pairDeps)).toMatchObject({ ok: true, ghost: root });
+    expect(classifyGhostVisibility('_ns__local__helper', null, pairDeps)).toMatchObject({ ok: true, ghost: local });
+  });
+
   it.each(['legacy', 'pending', 'unconfirmed', 'invalid-version', 'organization'] as const)(
     'keeps %s identities explicit instead of guessing a version winner', (reason) => {
       const local = ghost('helper', 'local');

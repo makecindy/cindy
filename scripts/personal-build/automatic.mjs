@@ -299,7 +299,7 @@ export async function supervise(file, bootstrapFile) {
         const pid = await waitReady(c, s.good, launched, c.runtime.dataDir, s.good.monitorProtocol === 1);
         if (s.phase === 'recovering') store.finishRecovery(true);
         current = { launched, pid };
-      } catch (e) { if (s.phase === 'recovering') store.finishRecovery(false); throw e; }
+      } catch (e) { if (s.phase === 'recovering') store.finishRecovery(false); await stopLaunch(c, s.good, launched); throw e; }
     }
     let nextCheck = 0;
     const pluginRequests = new Set();
@@ -338,7 +338,8 @@ export async function supervise(file, bootstrapFile) {
         fs.rmSync(path.join(current.launched.dir, 'request.json'), { force: true });
         if (stopped && config(file).automatic.enabled !== true) {
           const launched = start(c, s.good);
-          current = { launched, pid: await waitReady(c, s.good, launched, c.runtime.dataDir, s.good.monitorProtocol === 1) };
+          try { current = { launched, pid: await waitReady(c, s.good, launched, c.runtime.dataDir, s.good.monitorProtocol === 1) }; }
+          catch (e) { await stopLaunch(c, s.good, launched); throw e; }
           continue;
         }
         if (stopped) {
@@ -350,7 +351,7 @@ export async function supervise(file, bootstrapFile) {
             const old = store.read().good; verifyRelease(old);
             const launched = start(c, old);
             try { const pid = await waitReady(c, old, launched, c.runtime.dataDir, old.monitorProtocol === 1); store.finishRecovery(true); current = { launched, pid }; }
-            catch (recoveryError) { store.finishRecovery(false); throw recoveryError; }
+            catch (recoveryError) { store.finishRecovery(false); await stopLaunch(c, old, launched); throw recoveryError; }
           }
         }
       }

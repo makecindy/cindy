@@ -37,6 +37,12 @@ export interface GhostVisibilityDeps {
   findInstalledInstance?: (instanceKey: string) => InstalledGhost | undefined;
   isAvailableForActiveSession: (ghostId: string) => boolean;
   isDisabledForWorkdir: (ghostId: string, workdir: string | null) => boolean;
+  /**
+   * Whether discovery lists this copy for the Agent (for example it has tools or
+   * a manual). A bare name must pick its version among the same candidates that
+   * `ghost_list` shows, so a panel-only copy cannot win over a listed one.
+   */
+  isDiscoverable?: (ghost: InstalledGhost) => boolean;
 }
 
 /** Discovery policy only: never merge installation identity, credentials or state.
@@ -89,7 +95,10 @@ export function classifyGhostVisibility(
   // A bare name follows daily discovery. Explicit namespace/storage identity
   // remains exact for developer tools, existing pages and in-flight operations.
   const candidates = namespace === undefined && byName
-    ? preferLatestLocalOrPublicGhosts(listed, (ghost) => classifyGhostAvailability(ghost, workdir, deps).ok)
+    ? preferLatestLocalOrPublicGhosts(
+        listed,
+        (ghost) => classifyGhostAvailability(ghost, workdir, deps).ok && (deps.isDiscoverable?.(ghost) ?? true),
+      )
     : listed;
   const resolved = byName
     ? resolveInstalledGhost(candidates, ghostId, namespace)

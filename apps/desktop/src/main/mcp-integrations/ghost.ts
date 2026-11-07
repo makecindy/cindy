@@ -1806,6 +1806,11 @@ export function collectCindyMediaUrls(
   }
 }
 
+/** The Agent-facing discovery surface: chips that expose tools or a manual. */
+function isGhostDiscoverable(ghost: InstalledGhost): boolean {
+  return ghost.manifest.kind === 'chip' && (ghostHasTools(ghost) || ghostHasManual(ghost));
+}
+
 function visibleChipGhosts(
   workdir: string | null,
   installed = getGhostManager().list(),
@@ -1816,8 +1821,7 @@ function visibleChipGhosts(
         ghost.enabled &&
         !ghost.retirement &&
         isGhostAvailableForActiveSession(installedGhostStoragePart(ghost)) &&
-        ghost.manifest.kind === 'chip' &&
-        (ghostHasTools(ghost) || ghostHasManual(ghost)) &&
+        isGhostDiscoverable(ghost) &&
         !isGhostDisabledForWorkdir(installedGhostStoragePart(ghost), workdir),
     );
   return preferLatest ? preferLatestLocalOrPublicGhosts(visible) : visible;
@@ -1828,6 +1832,7 @@ const ghostVisibilityDeps = {
   findInstalledInstance: (id: string) => getGhostManager().findInstalledInstance(id),
   isAvailableForActiveSession: isGhostAvailableForActiveSession,
   isDisabledForWorkdir: isGhostDisabledForWorkdir,
+  isDiscoverable: isGhostDiscoverable,
 };
 
 /**
@@ -2257,7 +2262,9 @@ export function getCindyGhostsMcpDeps(
       const installed = await listInstalledGhostsAsync();
       const visibility = classifyGhostVisibility(ghostId, workdir, { ...ghostVisibilityDeps, listGhosts: () => installed }, namespace);
       if (!visibility.ok) return visibility;
-      const visible = visibleChipGhosts(workdir, installed, namespace === undefined).some(
+      // classifyGhostVisibility already picked the version among discoverable
+      // copies; here only check the winner (or an exact instance) is listed.
+      const visible = visibleChipGhosts(workdir, installed, false).some(
         (ghost) => ghost === visibility.ghost || ghost.dir === visibility.ghost.dir,
       );
       if (visible) {

@@ -13,7 +13,6 @@ REQ="$UPD/request"
 STATUS="$UPD/status"
 LOG="$UPD/launcher.log"
 ELECTRON_RE="${PERSONAL_ELECTRON_RE:?}"
-IDLE_MAX_MIN="${PERSONAL_IDLE_MINUTES:-120}"
 CONSOLE="$UPD/app-console.log"
 JUST="$UPD/.just-applied"      # 引擎 apply 成功后写入：prev=<旧提交> target=<新提交> db=<0|1>
 EOK="$UPD/electron-ok"         # 上一次成功就绪时的 Electron 版本
@@ -128,43 +127,14 @@ kill_tree() {
   kill -TERM "$p" 2>/dev/null
 }
 
-busy_turns() { # 本次启动以来开始、尚未收尾的任务轮次数（只读查询）
-  local since=$1 total=0 n db
-  [ -n "${ZSH_VERSION:-}" ] && setopt NULL_GLOB
-  for db in "$DATA"/cindy-*.db; do
-    n=$(sqlite3 -readonly "$db" "SELECT count(*) FROM sessions WHERE active_turn_started_at > $since AND active_turn_started_at > coalesce(last_turn_ended_at,0) AND active_turn_started_at > coalesce(cleared_at,0);" 2>/dev/null)
-    case "$n" in ''|*[!0-9]*) echo unknown; return 0 ;; esac
-    total=$((total + n))
-  done
-  echo $total
-}
-
-# 等任务空闲后正常退出个人版（向 Electron 主进程发 SIGTERM，等同菜单「退出」）
-restart_when_idle() {
-  local app_pid=$1 since=$2 waited=0 busy
+# The legacy launcher has no complete host activity handshake (scheduler scripts, plugin card
+# actions, background Bash). A session-turn count alone would interrupt such work, so a queued
+# restart never terminates the app: the update installs at the next normal quit and launch.
+defer_update_to_next_launch() {
+  local app_pid=$1
   touch "$UPD/.apply"
-  while kill -0 "$app_pid" 2>/dev/null; do
-    busy=$(busy_turns "$since")
-    [ "$busy" = 0 ] && break
-    if [ $waited -ge $((IDLE_MAX_MIN * 60)) ]; then
-      note "==> 等了 $IDLE_MAX_MIN 分钟仍有任务在跑，本次不重启；新版本会在下次启动时安装"
-      set_status "running app=$app_pid (update deferred: busy)"
-      return 0
-    fi
-    set_status "waiting-idle busy=$busy waited=${waited}s"
-    sleep 15; waited=$((waited + 15))
-  done
-  kill -0 "$app_pid" 2>/dev/null || return 0
-  touch "$UPD/.relaunch"
-  note "==> 任务都已空闲：正在退出个人版以安装新版本…"
-  set_status "restarting"
-  for e in $(electron_pids); do kill -TERM "$e" 2>/dev/null; done
-  waited=0
-  while kill -0 "$app_pid" 2>/dev/null && [ $waited -lt 60 ]; do sleep 2; waited=$((waited + 2)); done
-  if kill -0 "$app_pid" 2>/dev/null; then
-    note "==> 退出超过 60 秒，收掉剩余的启动进程"
-    kill_tree "$app_pid"
-  fi
+  note "==> 新版本已排队：个人版不会被强制退出，会在下次正常退出并重新打开时安装"
+  set_status "running app=$app_pid (update deferred: next launch)"
 }
 
 startup_verdict() { # 本次启动的结论：ready / failed / 空（还没出结论）
@@ -177,7 +147,7 @@ mark_started() { # 新版本已就绪：不再需要退回；记下这次能正�
 }
 
 watch_requests() {
-  local app_pid=$1 since=$2 req alive=0 marked=0 v
+  local app_pid=$1 req alive=0 marked=0 v
   while kill -0 "$app_pid" 2>/dev/null; do
     sleep 5; alive=$((alive + 5))
     if [ $marked = 0 ]; then
@@ -197,7 +167,7 @@ watch_requests() {
         set_status "staging"
         if run_engine stage; then
           note "==> 预备校验通过"
-          if [ "$req" = stage-restart ]; then restart_when_idle "$app_pid" "$since"; [ -f "$UPD/.relaunch" ] && return 0; fi
+          if [ "$req" = stage-restart ]; then defer_update_to_next_launch "$app_pid"; fi
         else
           note "==> 预备校验未通过（详见 stage-result），不切换"
         fi
@@ -205,7 +175,7 @@ watch_requests() {
         ;;
       restart)
         note "==> 收到 restart"
-        restart_when_idle "$app_pid" "$since"; [ -f "$UPD/.relaunch" ] && return 0
+        defer_update_to_next_launch "$app_pid"
         ;;
       *) note "==> 忽略未知请求：$req" ;;
     esac
@@ -220,7 +190,6 @@ on_signal() {
 }
 trap on_signal HUP INT TERM
 
-rm -f "$UPD/.relaunch"
 while true; do
   [ ! -f "$UPD/.database-transition" ] || { note "==> 数据库升级尚未完成，请先检查 apply-result"; pause_exit 1; }
   apply_pending
@@ -256,8 +225,6 @@ while true; do
   fi
 
   echo "==> 个人版就运行在这个终端窗口里：可以最小化，关掉窗口个人版就会退出。"
-  rm -f "$UPD/.relaunch"
-  SINCE_MS=$(( $(date +%s) * 1000 ))
   STARTED=$(date +%s)
   : > "$CONSOLE"
   if [ "$(uname)" = Darwin ] && [ -x /usr/bin/script ]; then
@@ -268,18 +235,13 @@ while true; do
   fi
   APP_PID=$!
   set_status "running launcher=$$ app=$APP_PID head=$(git rev-parse HEAD 2>/dev/null)"
-  watch_requests "$APP_PID" "$SINCE_MS" &
+  watch_requests "$APP_PID" &
   WATCH_PID=$!
   wait "$APP_PID"
   rc=$?
   APP_PID=""
   kill "$WATCH_PID" 2>/dev/null; wait "$WATCH_PID" 2>/dev/null
 
-  if [ -f "$UPD/.relaunch" ]; then
-    rm -f "$UPD/.relaunch"
-    note "==> 个人版已退出，安装新版本后重新打开"
-    continue
-  fi
   VERDICT=$(startup_verdict)
   [ "$VERDICT" = failed ] && [ $rc -eq 0 ] && rc=1
   if [ $rc -ne 0 ]; then

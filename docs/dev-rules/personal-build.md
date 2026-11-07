@@ -200,8 +200,8 @@ source/client worktrees, so process cleanup cannot confuse them with a checkout'
 | `launch --config FILE` | Opens the configured client, synchronizes plugin seeds, checks migration policy and watches update requests. If already running, leaves it alone. |
 | `select --config FILE --report FILE` | Verifies a prepared build and selects its commit in `manifest.json`; does not switch code. |
 | `request --config FILE --action stage` | Asks the running launcher to check the selected version in staging. |
-| `request --config FILE --action stage-restart` | Stages, then waits for active tasks to finish before switching and relaunching. |
-| `request --config FILE --action restart` | Queues the selected version for a coordinated idle restart. |
+| `request --config FILE --action stage-restart` | Stages, then queues the update for the next normal quit and launch; the running app is never terminated. |
+| `request --config FILE --action restart` | Queues the selected version to install at the next normal quit and launch. |
 | `stage --config FILE` | Direct staging checks while the active application continues. |
 | `apply --config FILE` | Applies while the managed application is stopped; saves the prior commit. |
 | `rollback --config FILE` | Restores the prior commit only if database history is compatible. |
