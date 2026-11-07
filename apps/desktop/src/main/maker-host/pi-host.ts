@@ -869,6 +869,12 @@ export function composePiSystemPrompt(hostPrompt: string, agentPrompt: string, a
     .join('\n\n');
 }
 
+// Desktop Pi 会话的真实 system prompt（共享身份/归属段 + Pi 行为段 + 追加在末尾的计划书写规范）。
+// 独立导出供测试走生产入口断言，不必复制 ?raw 源文本。
+export function desktopPiSystemPrompt(): string {
+  return composePiSystemPrompt(`${hostSystemPrompt.trim()}\n\n${businessOwnershipPrompt.trim()}`, piSystemPrompt, userFacingPlansPrompt);
+}
+
 function buildDesktopPiRuntimeConfig(): AgentRuntimeConfig {
   const ripgrepPath = getRipgrepBinaryPath();
   const config: AgentRuntimeConfig = {
@@ -878,7 +884,7 @@ function buildDesktopPiRuntimeConfig(): AgentRuntimeConfig {
     // 保留 host 共用身份段,再追加 Pi 专属行为段；maker-core 会整体追加到 Pi 原生 prompt。
     // 计划书写规范追加在末尾（vendor-neutral，Claude/Codex 同款）：追加不改既有字节，
     // 升级后既有会话的前缀 [身份段, 业务归属, Pi 行为] 照常命中缓存（§3.1）。
-    systemPrompt: composePiSystemPrompt(`${hostSystemPrompt.trim()}\n\n${businessOwnershipPrompt.trim()}`, piSystemPrompt, userFacingPlansPrompt),
+    systemPrompt: desktopPiSystemPrompt(),
     answerDeliveryPrompt: PI_ANSWER_DELIVERY_PROMPT,
     // Pi 的 grep 以及 Cindy 覆盖的 find 都固定复用随 Desktop 校验、打包的 rg。
     // 下发绝对路径而非 PATH，避免 Windows 从不受信工作目录优先命中同名 rg.exe。
