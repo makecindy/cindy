@@ -2578,7 +2578,10 @@ setEnsureHostForBackend((sessionId) => rsbWindowController.ensureOpenForAutomati
 setIsDetachedForBackend(() => readRsbWindowSettings().detached);
 // 「我的浏览器」后端经 browserExtension 插件槽拿页面控制桥接;槽归 cindy-brain,
 // 这里倒置依赖,browser.ts 不反向 import 插件基座。
-setUserBrowserPageControlProvider(() => getGhostBrowserExtensionSlot().getPageControl());
+setUserBrowserPageControlProvider(
+  () => getGhostBrowserExtensionSlot().getPageControl(),
+  () => getGhostBrowserExtensionSlot().getPageControlUnavailableReason(),
+);
 // The plugin providing "My browser" hides its own page tools from agents: one way to drive the user's browser.
 setPageControlGhostProvider(() => getGhostBrowserExtensionSlot().getPageControl()?.instanceId ?? null);
 setBrowserSessionUploadRootResolver(async (sessionId) => {

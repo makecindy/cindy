@@ -231,6 +231,11 @@ describe('BrowserBackendHealthService', () => {
     await expect(service.getHealth()).resolves.toEqual({
       active: 'user-browser', status: 'error', canRecover: false, reason: 'plugin-missing',
     });
+    // Preserve the actual reason through the settings health projection (2026-11-07 regression).
+    for (const reason of ['plugin-updating', 'plugin-selection-required']) {
+      ctl.call.mockResolvedValueOnce({ ok: true, action: 'status', status: 200, data: { configured: false, reason } });
+      await expect(service.getHealth()).resolves.toMatchObject({ reason, canRecover: false });
+    }
     expect(ctl.restartEmbedded).not.toHaveBeenCalled();
     expect(ctl.probeActiveControl).not.toHaveBeenCalled();
   });

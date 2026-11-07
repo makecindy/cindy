@@ -7913,6 +7913,7 @@ async function updateLocalGhostPackageLocked(
       '任务权限已变化，这次插件安装授权已失效。请用当前任务权限重试。',
     );
   }
+  const mutationOwner = captureGhostMutationOwner();
   const runtime = getGhostRuntime();
   const marketLedger = getPluginMarketLedger().bind(
     ownerScopedUserDataPath('plugin-market', 'ledger.v1.json'),
@@ -7935,7 +7936,12 @@ async function updateLocalGhostPackageLocked(
   if (sourceChanged) assertGhostRelocationIdle(instanceId);
   rejectUnauthorizedTokenBroker(inspected.canonicalManifest, authorizationOverrides);
   const releaseSync = pluginDeviceSync.beginMutation(instanceId);
+  let releaseBrowserUpdate: (() => void) | undefined;
   try {
+    releaseBrowserUpdate = await getGhostBrowserExtensionSlot().prepareUpdate(instanceId);
+    const recheckOwner = beginGhostMutation(mutationOwner);
+    recheckOwner();
+    if (isCurrent?.() === false) throwIpcError('PRECONDITION_FAILED', 'Plugin install authorization changed');
     runtime.stop(instanceId);
     // 等待失败表示旧进程仍可能存活；此时不能恢复 resident，否则会产生
     // 两份后台进程。仅在确认退出后的更新阶段失败时恢复旧版本。
@@ -8036,7 +8042,9 @@ async function updateLocalGhostPackageLocked(
     spawnIfResident(result.ghost);
     return result.ghost;
   } finally {
-    releaseSync();
+    releaseBrowserUpdate?.();
+    try { broadcastGhostsChanged(manager.list()); }
+    finally { releaseSync(); }
   }
 }
 
@@ -8322,6 +8330,7 @@ async function installOrUpdateMarketGhostPackageLocked(
 ): Promise<InstalledGhost> {
   const mutationOwner = captureGhostMutationOwner();
   let releaseMutation: (() => void) | null = null;
+  let releaseBrowserUpdate: (() => void) | undefined;
   let releaseSync: (() => void) | undefined;
   try {
     const manager = getGhostManager();
@@ -8458,6 +8467,10 @@ async function installOrUpdateMarketGhostPackageLocked(
 
     expected.beforeCommitInLock?.();
     if (expected.sourceChanged) assertGhostRelocationIdle(installedGhostStoragePart(installed));
+    releaseBrowserUpdate = await getGhostBrowserExtensionSlot().prepareUpdate(installedGhostStoragePart(installed));
+    const recheckOwner = beginGhostMutation(mutationOwner);
+    recheckOwner();
+    expected.assertCurrent?.();
     const runtime = getGhostRuntime();
     releaseSync = pluginDeviceSync.beginMutation(installedGhostStoragePart(installed));
     runtime.stop(installedGhostStoragePart(installed));
@@ -8536,13 +8549,19 @@ async function installOrUpdateMarketGhostPackageLocked(
       throwInstallError(result.rejection);
     }
     runtime.resetFuse(installedGhostStoragePart(result.ghost));
-    spawnIfResident(result.ghost);
     await expected.afterCommitInLock?.(result.ghost, commitEvidence);
+    spawnIfResident(result.ghost);
     await bindPluginUsage(result.ghost);
     return result.ghost;
   } finally {
-    releaseSync?.();
-    releaseMutation?.();
+    releaseBrowserUpdate?.();
+    // The manager's package-change event precedes the provenance ledger commit.
+    // Publish the completed facts, including failures/rollback, while the owner lease is held.
+    try { if (releaseMutation) broadcastGhostsChanged(getGhostManager().list()); }
+    finally {
+      releaseSync?.();
+      releaseMutation?.();
+    }
   }
 }
 

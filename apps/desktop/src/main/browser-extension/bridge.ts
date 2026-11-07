@@ -1171,8 +1171,31 @@ export class BrowserExtensionBridge {
     return this.connected().map((c) => this.publicClient(c));
   }
 
+  private updatePaused = false;
+  private readonly activeActions = new Set<Promise<BrowserExtensionJobResult>>();
+
+  /** Drain accepted operations using their existing timeout/result, never resend them. */
+  pauseForUpdate(): { settled: Promise<unknown>; release: () => void } {
+    this.updatePaused = true;
+    return {
+      settled: Promise.allSettled([...this.activeActions]),
+      release: () => { this.updatePaused = false; },
+    };
+  }
+
   /** 向扩展投递一个页面作业;按策略守门、绑定连接、一次送达、超时即 unknown。 */
   async act(action: unknown, payloadInput: unknown = {}): Promise<BrowserExtensionJobResult> {
+    if (this.updatePaused) return {
+      ...failure('BRIDGE_UPDATING', 'The browser connection is updating. This operation was not sent.'),
+      execution: 'not_executed',
+    };
+    const pending = this.actAccepted(action, payloadInput);
+    this.activeActions.add(pending);
+    try { return await pending; }
+    finally { this.activeActions.delete(pending); }
+  }
+
+  private async actAccepted(action: unknown, payloadInput: unknown): Promise<BrowserExtensionJobResult> {
     try {
       await this.start();
     } catch (e) {

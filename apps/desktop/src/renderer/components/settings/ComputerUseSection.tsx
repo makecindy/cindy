@@ -1594,6 +1594,7 @@ export function ComputerUseSection({ workingDir }: ComputerUseSectionProps) {
                   ? 'enabled'
                   : 'disabled'
             }
+            userBrowserPluginSupportsControl={userBrowserPlugin?.manifest.browserExtension?.pageControl === true}
             userBrowserSetupBusy={userBrowserSetupBusy}
             onSetUpUserBrowser={() => void handleSetUpUserBrowser()}
           />

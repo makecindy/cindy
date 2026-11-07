@@ -425,6 +425,32 @@ describe('bridge · 连接与身份', () => {
 });
 
 describe('bridge · 作业生命周期', () => {
+  // Update regression: accepted click completes once; new work is not dispatched while draining.
+  // Existing lifecycle cases cover disconnection, but not the plugin replacement boundary (integration).
+  it('drains an accepted action before update without replaying or accepting another click', async () => {
+    const { bridge, ready } = await fixture();
+    const c = await ready();
+    const pending = bridge.act('click', { url: 'https://example.test', selector: 'button' });
+    const update = bridge.pauseForUpdate();
+    let settled = false;
+    void update.settled.then(() => { settled = true; });
+    expect(await bridge.act('click', { url: 'https://example.test', selector: 'button' }))
+      .toMatchObject({ ok: false, execution: 'not_executed', error: 'BRIDGE_UPDATING' });
+    const { job } = await c.request('/poll');
+    expect(settled).toBe(false);
+    await c.request('/ack', { id: job.id });
+    await c.request('/result', { id: job.id, result: { ok: true, execution: 'executed' } });
+    expect(await pending).toMatchObject({ ok: true, execution: 'executed' });
+    await update.settled;
+    expect((await c.request('/poll')).job).toBeNull();
+    update.release();
+    const next = bridge.act('text', { url: 'https://example.test' });
+    const delivered = (await c.request('/poll')).job;
+    await c.request('/ack', { id: delivered.id });
+    await c.request('/result', { id: delivered.id, result: { ok: true, text: 'resumed' } });
+    expect(await next).toMatchObject({ ok: true, text: 'resumed' });
+  });
+
   it('poll/ack/result 真实往返;重复 ack 被拒', async () => {
     const { bridge, ready } = await fixture();
     const c = await ready();
