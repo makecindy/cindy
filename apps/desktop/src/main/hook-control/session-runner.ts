@@ -993,6 +993,20 @@ export function createMakerHookSessionRunner(deps: {
         // 保持原样投递
       }
 
+      // 运行时来源注入(路由层经 session-provider-store 决定上游与钥匙)必须先于
+      // 取消探针:新建任务的行已落库但 providerId 未写(DesktopSessionStorage.create
+      // 不写、freezeSessionProviderAtStart 只写内存),取消早返回若跳过这里,应用重启
+      // 后复用会读到空来源,改走默认供应商或因模型不可用而失败。
+      // 新建显式 set(与 scheduler 4.4.2 的显式 providerId 分支同款); 复用走
+      // hydrate —— 仅内存无条目时写入, 不覆盖运行中会话刚在聊天里切的更新值。
+      if (req.isNew) {
+        if (sessionProviderId && accountStillCurrent()) {
+          setSessionProvider(session.id, sessionProviderId);
+        }
+      } else {
+        hydrateSessionProvider(session.id, rowProviderId);
+      }
+
       // 取消探针:回收/重建是异步窗口,期间 task.cancel 的 abort 对旧实例无目标、
       // 对新实例未登记 —— 喊停后不得把消息投给新进程执行。此处尚未发送,提前以
       // error 收口;execute 收口会按取消账本把状态统一改写为 cancelled。
@@ -1036,17 +1050,6 @@ export function createMakerHookSessionRunner(deps: {
         return fail(
           '这个任务正在一个已不在工作目录映射里的目录中运行，本条消息没有执行。把该目录加进 设置 → 远程连接 → 工作目录映射，或在桌面端关掉这个任务后重发。',
         );
-      }
-
-      // 运行时来源注入(路由层经 session-provider-store 决定上游与钥匙):
-      // 新建显式 set(与 scheduler 4.4.2 的显式 providerId 分支同款); 复用走
-      // hydrate —— 仅内存无条目时写入, 不覆盖运行中会话刚在聊天里切的更新值。
-      if (req.isNew) {
-        if (sessionProviderId && accountStillCurrent()) {
-          setSessionProvider(session.id, sessionProviderId);
-        }
-      } else {
-        hydrateSessionProvider(session.id, rowProviderId);
       }
 
       // renderer 可见性: 不 wire 则消息不落库、UI 空白(scheduler Phase 6 老坑)
