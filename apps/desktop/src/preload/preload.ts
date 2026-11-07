@@ -6030,6 +6030,18 @@ contextBridge.exposeInMainWorld('electronAPI', {
         ipcRenderer.invoke('database-size-warning:measure'),
       onChanged: (callback: () => void) => fanOutDatabaseSizeWarningChanged(callback),
     },
+    // Automatic cleanup of soft-deleted history (#8730). Separate from
+    // `databaseSizeWarning` and from the manual `maintenance.scan` filter on
+    // purpose: one is a lifecycle policy, the other is a scan window.
+    dbAutoCleanup: {
+      getSettings: (): Promise<
+        import('../shared/localDbMaintenance').DbAutoCleanupSettingsView
+      > => ipcRenderer.invoke('db-auto-cleanup:get-settings'),
+      setSettings: (
+        patch: import('../shared/localDbMaintenance').DbAutoCleanupSettingsPatch,
+      ): Promise<import('../shared/localDbMaintenance').DbAutoCleanupSettingsView> =>
+        ipcRenderer.invoke('db-auto-cleanup:set-settings', patch),
+    },
     maintenance: {
       scan: (
         input: import('../shared/localDbMaintenance').DbSlimmingScanInput,

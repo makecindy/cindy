@@ -119,6 +119,18 @@ function databaseSizeWarningApi() {
   };
 }
 
+function dbAutoCleanupApi() {
+  return {
+    getSettings: vi.fn(async () => ({ enabled: true, retentionDays: 30 as const })),
+    setSettings: vi.fn(
+      async (patch: { enabled?: boolean; retentionDays?: 7 | 30 | 90 | 180 }) => ({
+        enabled: patch.enabled ?? true,
+        retentionDays: patch.retentionDays ?? (30 as const),
+      }),
+    ),
+  };
+}
+
 beforeEach(() => {
   toast.success.mockReset();
   toast.error.mockReset();
@@ -127,7 +139,11 @@ beforeEach(() => {
     configurable: true,
     value: {
       cindyMediaStorage: storageApi(),
-      localDb: { maintenance: maintenanceApi(), databaseSizeWarning: databaseSizeWarningApi() },
+      localDb: {
+        maintenance: maintenanceApi(),
+        databaseSizeWarning: databaseSizeWarningApi(),
+        dbAutoCleanup: dbAutoCleanupApi(),
+      },
     },
   });
 });
@@ -223,7 +239,11 @@ describe('StorageManagementCard fixed cache directories', () => {
       configurable: true,
       value: {
         cindyMediaStorage: api,
-        localDb: { maintenance: maintenanceApi(), databaseSizeWarning: databaseSizeWarningApi() },
+        localDb: {
+        maintenance: maintenanceApi(),
+        databaseSizeWarning: databaseSizeWarningApi(),
+        dbAutoCleanup: dbAutoCleanupApi(),
+      },
       },
     });
     render(<StorageManagementCard />);
@@ -244,7 +264,11 @@ describe('StorageManagementCard fixed cache directories', () => {
       configurable: true,
       value: {
         cindyMediaStorage: api,
-        localDb: { maintenance: maintenanceApi(), databaseSizeWarning: databaseSizeWarningApi() },
+        localDb: {
+        maintenance: maintenanceApi(),
+        databaseSizeWarning: databaseSizeWarningApi(),
+        dbAutoCleanup: dbAutoCleanupApi(),
+      },
       },
     });
     render(<StorageManagementCard />);
@@ -282,7 +306,11 @@ describe('StorageManagementCard fixed cache directories', () => {
       configurable: true,
       value: {
         cindyMediaStorage: api,
-        localDb: { maintenance: maintenanceApi(), databaseSizeWarning: databaseSizeWarningApi() },
+        localDb: {
+        maintenance: maintenanceApi(),
+        databaseSizeWarning: databaseSizeWarningApi(),
+        dbAutoCleanup: dbAutoCleanupApi(),
+      },
       },
     });
     render(<StorageManagementCard />);
@@ -712,10 +740,56 @@ describe('StorageManagementCard database cleanup', () => {
     );
   });
 
+  it('persists the automatic cleanup switch and reflects the saved value', async () => {
+    const api = window.electronAPI.localDb.dbAutoCleanup;
+    // Start from the opposite of the shipped default so the rendered state can
+    // only come from Main, not from a hardcoded initial value.
+    vi.mocked(api.getSettings).mockResolvedValue({ enabled: false, retentionDays: 7 });
+    render(<StorageManagementCard />);
+
+    const toggle = screen.getByRole('switch', {
+      name: 'settings.about.storage.dbAutoCleanupEnableLabel',
+    });
+    const retention = screen.getByRole('combobox', {
+      name: 'settings.about.storage.dbAutoCleanupRetentionLabel',
+    });
+    await waitFor(() => expect(toggle.getAttribute('aria-checked')).toBe('false'));
+    expect(retention.hasAttribute('disabled')).toBe(true);
+
+    vi.mocked(api.setSettings).mockResolvedValue({ enabled: true, retentionDays: 7 });
+    fireEvent.click(toggle);
+
+    await waitFor(() => expect(api.setSettings).toHaveBeenCalledWith({ enabled: true }));
+    await waitFor(() => expect(toggle.getAttribute('aria-checked')).toBe('true'));
+    // The retention period is editable again once automatic runs are on.
+    expect(retention.hasAttribute('disabled')).toBe(false);
+    expect(retention.textContent).toContain('settings.about.storage.dbAutoCleanupRetentionDays');
+  });
+
+  it('persists the automatic cleanup retention period', async () => {
+    const api = window.electronAPI.localDb.dbAutoCleanup;
+    render(<StorageManagementCard />);
+
+    const retention = screen.getByRole('combobox', {
+      name: 'settings.about.storage.dbAutoCleanupRetentionLabel',
+    });
+    await waitFor(() => expect(retention.hasAttribute('disabled')).toBe(false));
+    fireEvent.click(retention);
+    const options = screen.getAllByRole('option');
+    expect(options).toHaveLength(4);
+    fireEvent.click(options[2]!);
+
+    await waitFor(() => expect(api.setSettings).toHaveBeenCalledWith({ retentionDays: 90 }));
+  });
+
   it('offers only 7 days, 1 month, 3 months, and 6 months, defaulting to 7 days', async () => {
     render(<StorageManagementCard />);
 
-    const threshold = screen.getByRole('combobox');
+    // The card has two selects now: the manual scan window and the automatic
+    // cleanup retention period. This assertion is about the scan window.
+    const threshold = screen.getByRole('combobox', {
+      name: 'settings.about.storage.dbSlimmingArchiveAgeLabel',
+    });
     expect(threshold.textContent).toContain(
       'settings.about.storage.dbSlimmingArchiveAgeOption7Days',
     );

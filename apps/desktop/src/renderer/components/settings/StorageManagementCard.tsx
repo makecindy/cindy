@@ -39,8 +39,12 @@ import { DefaultOverrideControls } from './DefaultOverrideControls';
 import { DialogueDirectorySection } from './DialogueDirectorySection';
 import { ProjectsRootSection } from './ProjectsRootSection';
 import {
+  DB_AUTO_CLEANUP_RETENTION_DAYS_OPTIONS,
   DB_SLIMMING_ARCHIVE_AGE_OPTIONS,
   DB_SLIMMING_DEFAULT_ARCHIVE_AGE,
+  type DbAutoCleanupRetentionDays,
+  type DbAutoCleanupSettingsPatch,
+  type DbAutoCleanupSettingsView,
   type DbSlimmingArchiveAge,
   type DbSlimmingBackupDirectorySelection,
   type DbSlimmingResult,
@@ -622,6 +626,9 @@ function DatabaseSlimmingSection({
   const [warningThresholdInvalid, setWarningThresholdInvalid] = useState(false);
   const warningThresholdDirtyRef = useRef(false);
   const warningThresholdEditVersionRef = useRef(0);
+  const [autoCleanup, setAutoCleanup] = useState<DbAutoCleanupSettingsView | null>(null);
+  const [autoCleanupSaving, setAutoCleanupSaving] = useState(false);
+  const autoCleanupQueueRef = useRef(Promise.resolve());
   const [archiveAge, setArchiveAge] = useState<DbSlimmingArchiveAge>(
     DB_SLIMMING_DEFAULT_ARCHIVE_AGE,
   );
@@ -675,6 +682,42 @@ function DatabaseSlimmingSection({
       unsubscribe();
     };
   }, []);
+
+  // Automatic cleanup settings live in their own file because they are read
+  // before the database opens. They are a lifecycle policy, not a scan filter,
+  // so they deliberately do not share state with the controls above (#8730).
+  useEffect(() => {
+    const api = window.electronAPI?.localDb?.dbAutoCleanup;
+    if (!api) return undefined;
+    let cancelled = false;
+    void api.getSettings().then(
+      (settings) => {
+        if (!cancelled) setAutoCleanup(settings);
+      },
+      () => {
+        // Keep the block inert when the optional read is unavailable.
+      },
+    );
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  const persistAutoCleanupSettings = (patch: DbAutoCleanupSettingsPatch) => {
+    const pending = autoCleanupQueueRef.current.then(async () => {
+      setAutoCleanupSaving(true);
+      try {
+        const saved = await window.electronAPI.localDb.dbAutoCleanup.setSettings(patch);
+        setAutoCleanup(saved);
+      } catch (err) {
+        toast.error(t(mapIpcErrorToI18nKey(err)));
+      } finally {
+        setAutoCleanupSaving(false);
+      }
+    });
+    autoCleanupQueueRef.current = pending;
+    return pending;
+  };
 
   // Blur-save may precede a reset click. Keep that user action order through persistence.
   const persistWarningSettings = (
@@ -766,6 +809,14 @@ function DatabaseSlimmingSection({
     if (!DB_SLIMMING_ARCHIVE_AGE_OPTIONS.includes(parsed as DbSlimmingArchiveAge)) return;
     setArchiveAge(parsed as DbSlimmingArchiveAge);
     invalidateScan();
+  };
+
+  const handleAutoCleanupRetentionChange = (raw: string) => {
+    const parsed = Number(raw);
+    if (!DB_AUTO_CLEANUP_RETENTION_DAYS_OPTIONS.includes(parsed as DbAutoCleanupRetentionDays)) {
+      return;
+    }
+    void persistAutoCleanupSettings({ retentionDays: parsed as DbAutoCleanupRetentionDays });
   };
 
   const handleIncludeActiveTasksChange = async (checked: boolean) => {
@@ -1147,6 +1198,117 @@ function DatabaseSlimmingSection({
             disabled={warningSaving}
             onReset={() => void persistWarningSettings()}
           />
+        </div>
+      </div>
+
+      <div
+        id={storageManagementCardSettings.aboutStorageDbAutoCleanupTitle.targetId}
+        className="grid grid-cols-[minmax(0,1fr)_auto] items-center gap-x-3 gap-y-2 rounded-lg border border-[var(--settings-theme-card-border)] px-3 py-2.5"
+      >
+        <div className="col-span-2 flex min-w-0 flex-col gap-0.5">
+          <span
+            className="text-12 font-medium text-[var(--settings-section-sublabel)]"
+            data-setting-id={storageManagementCardSettings.aboutStorageDbAutoCleanupTitle.id}
+          >
+            {t(storageManagementCardSettings.aboutStorageDbAutoCleanupTitle.titleKey)}
+          </span>
+          <span className="text-11 leading-[1.4] text-[var(--text-secondary)]">
+            {t(storageManagementCardSettings.aboutStorageDbAutoCleanupTitle.descriptionKey)}
+          </span>
+        </div>
+
+        <label
+          htmlFor="db-auto-cleanup-enabled"
+          className="flex min-w-0 cursor-pointer flex-col gap-0.5"
+        >
+          <span
+            id={storageManagementCardSettings.aboutStorageDbAutoCleanupEnableLabel.targetId}
+            data-setting-id={storageManagementCardSettings.aboutStorageDbAutoCleanupEnableLabel.id}
+            className="text-12 text-[var(--settings-section-sublabel)]"
+          >
+            {t(storageManagementCardSettings.aboutStorageDbAutoCleanupEnableLabel.titleKey)}
+          </span>
+        </label>
+        <Switch
+          id="db-auto-cleanup-enabled"
+          data-setting-id={storageManagementCardSettings.aboutStorageDbAutoCleanupEnableLabel.id}
+          checked={autoCleanup?.enabled ?? false}
+          disabled={autoCleanup === null || autoCleanupSaving}
+          onCheckedChange={(checked) => void persistAutoCleanupSettings({ enabled: checked })}
+          aria-label={t(storageManagementCardSettings.aboutStorageDbAutoCleanupEnableLabel.titleKey)}
+        />
+
+        <label
+          htmlFor="db-auto-cleanup-retention"
+          id={storageManagementCardSettings.aboutStorageDbAutoCleanupRetentionLabel.targetId}
+          data-setting-id={storageManagementCardSettings.aboutStorageDbAutoCleanupRetentionLabel.id}
+          className="text-12 text-[var(--settings-section-sublabel)]"
+        >
+          {t(storageManagementCardSettings.aboutStorageDbAutoCleanupRetentionLabel.titleKey)}
+        </label>
+        <div className="flex items-center">
+          <Select.Root
+            value={String(autoCleanup?.retentionDays ?? DB_AUTO_CLEANUP_RETENTION_DAYS_OPTIONS[1])}
+            onValueChange={handleAutoCleanupRetentionChange}
+            disabled={autoCleanup === null || autoCleanupSaving || autoCleanup.enabled !== true}
+          >
+            <Select.Trigger
+              id="db-auto-cleanup-retention"
+              data-setting-id={storageManagementCardSettings.aboutStorageDbAutoCleanupRetentionLabel.id}
+              aria-label={t(storageManagementCardSettings.aboutStorageDbAutoCleanupRetentionLabel.titleKey)}
+              className={cn(
+                'flex h-8 min-w-[104px] items-center justify-between gap-2 rounded-full border px-3 text-12 outline-none transition-colors',
+                'border-[var(--settings-input-border)] bg-[var(--settings-input-bg)] text-[var(--settings-input-text)]',
+                'hover:bg-[var(--settings-menu-bg-hover)] focus-visible:ring-2 focus-visible:ring-[var(--focus-ring-soft)]',
+                'disabled:cursor-not-allowed disabled:opacity-50',
+              )}
+            >
+              <Select.Value />
+              <Select.Icon asChild>
+                <ChevronDown
+                  size={13}
+                  className="shrink-0 text-[var(--settings-eye-icon)]"
+                  aria-hidden="true"
+                />
+              </Select.Icon>
+            </Select.Trigger>
+            <Select.Portal>
+              <Select.Content
+                position="popper"
+                side="bottom"
+                align="end"
+                sideOffset={6}
+                className={cn(
+                  'z-[10010] w-[var(--radix-select-trigger-width)] rounded-xl p-1.5',
+                  'border border-[var(--settings-input-border)] bg-[var(--settings-theme-card-bg)]',
+                )}
+              >
+                <Select.Viewport className="flex flex-col gap-0.5">
+                  {DB_AUTO_CLEANUP_RETENTION_DAYS_OPTIONS.map((days) => (
+                    <Select.Item
+                      key={days}
+                      value={String(days)}
+                      className={cn(
+                        'flex h-8 cursor-pointer select-none items-center justify-between gap-2 rounded-lg px-2.5 text-12 outline-none transition-colors',
+                        'text-[var(--settings-input-text)]',
+                        'data-[state=checked]:font-medium data-[state=checked]:text-[var(--settings-menu-text-selected)]',
+                      )}
+                    >
+                      <Select.ItemText>
+                        {t('settings.about.storage.dbAutoCleanupRetentionDays', { days })}
+                      </Select.ItemText>
+                      <Select.ItemIndicator>
+                        <Check
+                          size={14}
+                          className="shrink-0 text-[var(--settings-theme-icon-active)]"
+                        />
+                      </Select.ItemIndicator>
+                    </Select.Item>
+                  ))}
+                </Select.Viewport>
+              </Select.Content>
+            </Select.Portal>
+          </Select.Root>
         </div>
       </div>
     </div>
