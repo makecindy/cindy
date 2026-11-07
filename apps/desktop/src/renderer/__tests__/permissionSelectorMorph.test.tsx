@@ -249,6 +249,7 @@ describe('PermissionSelector triggerVariant', () => {
     // DESIGN.md §4:下拉面板带登记的浮层阴影(2026-11-07 用户裁决,取代曾压掉阴影的旧规则)。
     const content = popperWrapper?.firstElementChild as HTMLElement;
     expect(content.className).toContain('shadow-[shadow:var(--shadow-menu)]');
+    expect(content.className).not.toContain('shadow-none');
     expect(screen.getAllByRole('option')).toHaveLength(4);
   });
 
