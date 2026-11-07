@@ -43,6 +43,8 @@ import {
 } from './types';
 
 const DEFAULT_DEBOUNCE_MS = 150;
+/** waiting(等会话外事件)安全网重检间隔:事件丢失时的兜底重检节奏。 */
+const DEFAULT_WAITING_RECHECK_MS = 30 * 60 * 1000;
 const DISPATCH_REJECTION_BASE_DELAY_MS = 500;
 const DISPATCH_REJECTION_MAX_DELAY_MS = 4_000;
 const DISPATCH_REJECTION_MAX_ATTEMPTS = 4;
@@ -326,6 +328,20 @@ export function decideNextGoalState(prev: GoalCounters, outcome: TurnOutcome): G
       shouldFire: false,
     };
   }
+
+  // 模型自报 waiting(本轮无可做之事,进展取决于会话外事件)→ 保持 active 但不立即
+  // 续跑:由 intervention(worker 回报 / 用户消息)、手动 resume 或安全网重检轮唤醒。
+  // 放在预算/轮数护栏之后:撞上限的目标照样停,waiting 不能越过护栏。
+  if (outcome.verdict?.status === 'waiting') {
+    return {
+      status: 'active',
+      lastReason: `waiting: ${outcome.verdict.reason || 'waiting for external events'}`,
+      turnsUsed,
+      tokensUsed,
+      noProgressStreak,
+      shouldFire: false,
+    };
+  }
   if (prev.noProgressLimit != null && noProgressStreak >= prev.noProgressLimit) {
     return {
       status: 'paused',
@@ -463,8 +479,17 @@ export class GoalController {
    * 动 schema。有产出的一轮(或手动 resume)即清零。
    */
   private readonly consecutiveOverloadTurns = new Map<string, number>();
+  /**
+   * 模型吐 waiting 裁决、正在等会话外事件的会话(内存态,不落库)。
+   *
+   * waiting = active 的子态:不排立即续跑,由 intervention(worker 回报 / 用户消息)、
+   * 手动 resume、打开会话(resume-on-open)或安全网重检轮唤醒。重启后丢失 → 目标
+   * 按普通 active-dormant 处理,打开会话即补检一轮,语义自洽。
+   */
+  private readonly waitingSessions = new Map<string, { sinceMs: number }>();
   private readonly now: () => number;
   private readonly debounceMs: number;
+  private readonly waitingRecheckMs: number;
   private disposed = false;
   /** Disposal is two-phase: detach synchronously, then drain old-owner writes. */
   private disposing = false;
@@ -479,11 +504,34 @@ export class GoalController {
   constructor(private readonly deps: GoalControllerDeps) {
     this.now = deps.now ?? (() => Date.now());
     this.debounceMs = deps.continuationDebounceMs ?? DEFAULT_DEBOUNCE_MS;
+    this.waitingRecheckMs = deps.waitingRecheckMs ?? DEFAULT_WAITING_RECHECK_MS;
     this.unsubscribeIntervention = onUiSessionIntervention((sessionId) => {
       // 新消息（包括同轮插话）撤销旧轮豁免；按真实来源结算后继续目标。
       const turn = this.turns.get(sessionId);
       if (turn) turn.precedingTurn = null;
+      // waiting 中的目标:新输入(worker 回报进队 / 用户消息 / 同轮 steer) = 等的事件
+      // 发生了,立即唤醒(清等待态 + 防抖续跑;fireTurn 自会校验 busy / status)。
+      this.wakeWaitingGoal(sessionId);
     });
+  }
+
+  /** 唤醒 waiting 目标:清等待态、排防抖续跑,并立即刷新 payload(chip 不等 finalize)。 */
+  private wakeWaitingGoal(sessionId: string): void {
+    if (!this.waitingSessions.has(sessionId)) return;
+    // busy-wake 走 deferred 重试时,boundary 是 cancelled 且等待标记就是重试识别唤醒的
+    // 唯一凭据 —— 此刻的新输入(worker 回报 / 用户消息 / 打开会话)不能删标记改排普通
+    // 续跑:那发不出轮(cancelled boundary),还会让 deferred 重试失去唤醒意图而取消,
+    // 目标卡死。让 deferred resume 兑现唤醒即可,这里保持沉默。
+    if (this.deferredManualResumes.has(sessionId)) return;
+    this.waitingSessions.delete(sessionId);
+    this.scheduleContinuation(sessionId);
+    void this.deps.storage
+      .get(sessionId)
+      .then((state) => {
+        // 期间可能已重新进入 waiting(重检轮又是 waiting)——那种情况不覆盖新等待态。
+        if (state && !this.waitingSessions.has(sessionId)) this.emit(state);
+      })
+      .catch(() => {});
   }
 
   // ── 公开 API ───────────────────────────────────────────────────────────────
@@ -986,6 +1034,13 @@ export class GoalController {
         await this.resumeGoal(sessionId);
         return reconcileLifecycleChange();
       }
+      if (objectiveChanged && changed.status === 'active' && this.waitingSessions.has(sessionId)) {
+        // 编辑等待中目标的目标文本 = 新指令:等待判定是针对旧目标给的,必须立刻结束等待。
+        // 否则旧等待标记 + 30 分钟安全网会把新目标一起按住,idle 兜底又因等待标记早退,
+        // 目标永远不跑。用与 intervention / resume-on-open 同一个唤醒原语:清等待态 +
+        // 排防抖续跑(发轮时从存储读新目标)。
+        this.wakeWaitingGoal(sessionId);
+      }
       this.emit(next, state.status);
       if (
         next.status === 'active' &&
@@ -1213,9 +1268,16 @@ export class GoalController {
       // Stop 持久化失败时保留 fail-closed 边界；读取失败也不能据此放行恢复。
       state = await this.deps.storage.get(sessionId);
       if (this.turns.get(sessionId) !== existingBoundary) return;
+      // 唤醒等待目标的重试也走这里(deferred boundary 是 cancelled):等待标记仍在
+      // 说明唤醒意图还没兑现,放行,否则目标停在 active 却无任何后续调度。
+      const wakingRetry =
+        state?.status === 'active' && this.waitingSessions.has(state.sessionId);
       if (
         !state ||
-        (state.status !== 'paused' && state.status !== 'blocked' && state.status !== 'usageLimited')
+        (state.status !== 'paused' &&
+          state.status !== 'blocked' &&
+          state.status !== 'usageLimited' &&
+          !wakingRetry)
       ) {
         this.cancelDeferredManualResume(sessionId);
         return;
@@ -1247,9 +1309,17 @@ export class GoalController {
       }
     }
     if (this.turns.get(sessionId) !== lookupBoundary) return;
+    // waiting(active 子态)也允许 resume:手动「唤醒」= 立即补检一轮。先只探测不清态 ——
+    // busy 时会走 deferManualResumeUntilIdle(内部 stopSession 会清等待标记),那之后
+    // deferred 重试会重新走到这里完成真正的唤醒;提前删掉会让重试拒绝、目标卡死。
+    const wakingTargeted =
+      state?.status === 'active' && this.waitingSessions.has(state.sessionId);
     if (
       !state ||
-      (state.status !== 'paused' && state.status !== 'blocked' && state.status !== 'usageLimited')
+      (state.status !== 'paused' &&
+        state.status !== 'blocked' &&
+        state.status !== 'usageLimited' &&
+        !wakingTargeted)
     ) {
       if (!opts?.auto) this.cancelDeferredManualResume(sessionId);
       if (ownsLookupBoundary && this.turns.get(sessionId) === lookupBoundary) {
@@ -1259,8 +1329,12 @@ export class GoalController {
     }
     if (!opts?.auto && this.isBusy(sessionId)) {
       this.deferManualResumeUntilIdle(sessionId, lookupBoundary, state);
+      // defer 内部 stopSession 清掉了等待标记;恢复它,让 deferred 重试完成唤醒。
+      if (wakingTargeted) this.waitingSessions.set(sessionId, { sinceMs: this.now() });
       return;
     }
+    // 真正唤醒:清等待态(下方更新把 lastReason 清空,chip 回到进行中)。
+    if (wakingTargeted) this.waitingSessions.delete(state.sessionId);
     if (!opts?.auto) this.claimDeferredManualResume(sessionId, lookupBoundary);
     // 用户显式恢复 = 给一次干净的重来机会,连续过载计数清零(否则上次被过载掐停
     // 的目标一恢复就立刻又撞上限)。
@@ -1271,15 +1345,26 @@ export class GoalController {
       this.dispatchRejectionRetries.delete(sessionId);
     }
     const budgetAlreadyExhausted = exceedsGoalBudget(state);
+    // 唤醒失败路径的换代判据:boundary 被换、或原地 bump(setGoal/update 换代)都算失去归属。
+    const adoptedGeneration = lookupBoundary.generation;
     if (!budgetAlreadyExhausted) {
       let ensured: SessionLike | undefined;
       try {
         ensured = await this.deps.ensureSession(sessionId);
       } catch (error) {
+        // 唤醒在 ensureSession 期间失败:仅当本请求仍拥有边界时,恢复等待标记并保留边界
+        // —— 安全网 timer 与事件唤醒都要靠它发轮,删了就永远醒不来;并发 setGoal 换代后
+        // 不得给新目标误挂等待态,旧请求只默默退出。
+        const stillOwner =
+          this.turns.get(sessionId) === lookupBoundary && lookupBoundary.generation === adoptedGeneration;
+        if (wakingTargeted && stillOwner) {
+          this.waitingSessions.set(sessionId, { sinceMs: this.now() });
+        } else if (stillOwner) {
+          this.turns.delete(sessionId);
+        }
         if (!opts?.auto) {
           this.cancelDeferredManualResume(sessionId, { restoreUsageResume: true });
         }
-        if (this.turns.get(sessionId) === lookupBoundary) this.turns.delete(sessionId);
         throw new GoalSessionRestoreError(error);
       }
       if (this.turns.get(sessionId) !== lookupBoundary) return;
@@ -1300,6 +1385,9 @@ export class GoalController {
       }
       if (!opts?.auto && this.isBusy(sessionId)) {
         this.deferManualResumeUntilIdle(sessionId, lookupBoundary, state);
+        // ensureSession await 期间来了新输入:这里已过第一处 busy 检查、等待标记已删,
+        // 同样要恢复,否则 deferred 重试认不出唤醒意图,目标卡死。
+        if (wakingTargeted) this.waitingSessions.set(sessionId, { sinceMs: this.now() });
         return;
       }
     }
@@ -1316,11 +1404,17 @@ export class GoalController {
         }),
       );
     } catch (error) {
+      // 与 ensureSession 失败同理:仅在本请求仍拥有边界(generation 未变)时恢复等待态并
+      // 保留边界;并发换界后不得给新目标误挂等待态,也不删新 owner 的边界。
+      const stillOwner =
+        this.turns.get(sessionId) === lookupBoundary && lookupBoundary.generation === adoptedGeneration;
+      if (wakingTargeted && stillOwner) {
+        this.waitingSessions.set(sessionId, { sinceMs: this.now() });
+      } else if (stillOwner && ownsLookupBoundary) {
+        this.turns.delete(sessionId);
+      }
       if (!opts?.auto) {
         this.cancelDeferredManualResume(sessionId, { restoreUsageResume: true });
-      }
-      if (ownsLookupBoundary && this.turns.get(sessionId) === lookupBoundary) {
-        this.turns.delete(sessionId);
       }
       throw error;
     }
@@ -1369,6 +1463,10 @@ export class GoalController {
       this.scheduleDeferredManualResume(sessionId);
       return;
     }
+    // waiting 中的目标不归 idle 兜底:队列展开/收起等无新输入的投影收尾也会走到这里,
+    // 不能把 30 分钟安全网换成 150ms 续跑(否则等待形同虚设)。真新输入会先经
+    // intervention 唤醒(届时已不在 waiting),这里保持沉默。
+    if (this.waitingSessions.has(sessionId)) return;
     if (!this.unsubscribers.has(sessionId)) return;
     if (this.firing.has(sessionId)) return;
     const state = await this.deps.storage.get(sessionId);
@@ -1412,7 +1510,7 @@ export class GoalController {
     if (this.disposed || this.disposing) return null;
     const state = await this.deps.storage.get(sessionId);
     if (this.disposed) return null;
-    return state ? toPayload(state) : null;
+    return state ? toPayload(state, this.waitingSessions.get(sessionId)?.sinceMs ?? null) : null;
   }
 
   /**
@@ -1440,7 +1538,12 @@ export class GoalController {
       if (!persisted) throw new GoalSessionRestoreError();
       return;
     }
-    if (this.unsubscribers.has(sessionId) || this.turns.has(sessionId)) return; // 已在管或正在 Stop
+    if (this.unsubscribers.has(sessionId) || this.turns.has(sessionId)) {
+      // 仍在管的 waiting 目标也归这里:打开会话 = 用户注意力到场,唤醒补检一轮
+      // (waiting 保有 listener,不走下方 dormant 恢复路径)。
+      if (this.waitingSessions.has(sessionId)) this.wakeWaitingGoal(sessionId);
+      return; // 已在管或正在 Stop
+    }
     const lifecycleBoundary = freshTurn();
     this.turns.set(sessionId, lifecycleBoundary);
     let state: GoalState | null;
@@ -1620,6 +1723,7 @@ export class GoalController {
     for (const sessionId of [...this.usageResumeTimers.keys()]) {
       this.cancelUsageResume(sessionId);
     }
+    this.waitingSessions.clear();
     for (const sessionId of [...this.deferredManualResumeTimers.keys()]) {
       this.cancelDeferredManualResume(sessionId);
     }
@@ -1650,6 +1754,7 @@ export class GoalController {
       clearTimeout(timer);
       this.timers.delete(sessionId);
     }
+    this.waitingSessions.delete(sessionId);
     const pendingDispatch = this.goalDispatchAbortControllers.get(sessionId);
     if (pendingDispatch) {
       this.goalDispatchAbortControllers.delete(sessionId);
@@ -1766,7 +1871,10 @@ export class GoalController {
 
   private emit(state: GoalState, previousStatus?: GoalState['status']): void {
     if (this.disposed || this.disposing) return;
-    this.deps.emitStatus({ sessionId: state.sessionId, goal: toPayload(state) });
+    this.deps.emitStatus({
+      sessionId: state.sessionId,
+      goal: toPayload(state, this.waitingSessions.get(state.sessionId)?.sinceMs ?? null),
+    });
     if (previousStatus === 'active' && state.status !== 'active') {
       this.deps.onGoalStopped?.(state.sessionId, state.updatedAt);
     }
@@ -2077,31 +2185,55 @@ export class GoalController {
         ? refined
         : null;
 
+    // waiting 入口:模型吐 waiting 裁决且未被改判(仍 active、不续跑)。在 persist 前
+    // 登记内存态,让本次 emit 的 payload 已带 waitingSince(chip 立即显示等待中)。
+    const waitingEntry =
+      !shouldFire && status === 'active' && outcome.verdict?.status === 'waiting';
+    if (waitingEntry) this.waitingSessions.set(sessionId, { sinceMs: this.now() });
     if (!isCurrentTurn()) return;
-    const updated = await this.trackPersistence(
-      turn,
-      this.deps.storage.update(sessionId, {
-        // active 是保持态，不是 transition；省略它可让迟到 continuation 写在任何
-        // 防线失效时仍只能补计数，绝不能把显式 Stop 的 paused 改回 active。
-        ...(status === 'active' ? {} : { status }),
-        lastReason,
-        turnsUsed: decision.turnsUsed,
-        tokensUsed: decision.tokensUsed,
-        noProgressStreak: decision.noProgressStreak,
-        usageResetAt: status === 'usageLimited' ? usageResetAt : null,
-        ...(objectiveRewrite ? { objective: objectiveRewrite } : {}),
-        updatedAt: this.now(),
-      }),
-      async (persisted) => {
-        // objective 与对应 marker 是同一个可观察提交；Stop 必须等二者都 settle，
-        // 不能留下“文案已改但更新标记缺失”的半提交。
-        if (objectiveRewrite && persisted) {
-          await this.deps.persistUserMessage?.(sessionId, objectiveRewrite, {
-            goalObjective: { updated: true },
-          });
-        }
-      },
-    );
+    let updated: GoalState | null;
+    try {
+      updated = await this.trackPersistence(
+        turn,
+        this.deps.storage.update(sessionId, {
+          // active 是保持态，不是 transition；省略它可让迟到 continuation 写在任何
+          // 防线失效时仍只能补计数，绝不能把显式 Stop 的 paused 改回 active。
+          ...(status === 'active' ? {} : { status }),
+          lastReason,
+          turnsUsed: decision.turnsUsed,
+          tokensUsed: decision.tokensUsed,
+          noProgressStreak: decision.noProgressStreak,
+          usageResetAt: status === 'usageLimited' ? usageResetAt : null,
+          ...(objectiveRewrite ? { objective: objectiveRewrite } : {}),
+          updatedAt: this.now(),
+        }),
+        async (persisted) => {
+          // objective 与对应 marker 是同一个可观察提交；Stop 必须等二者都 settle，
+          // 不能留下“文案已改但更新标记缺失”的半提交。
+          if (objectiveRewrite && persisted) {
+            await this.deps.persistUserMessage?.(sessionId, objectiveRewrite, {
+              goalObjective: { updated: true },
+            });
+          }
+        },
+      );
+    } catch (error) {
+      // finalize 由 onEvent 以 void 调用,rejection 无人接会变成 unhandled error
+      // 打红整个分片。就地收口:日志 + 补排安全网 + 提前返回(边界保留,安全网
+      // 到点时 fireTurn 照常发轮)。等待标记仍在 —— idle 兜底被它挡住,安全网是
+      // 唯一的自动自愈通道(intervention / 打开会话 / 手动唤醒也仍可用);唤醒
+      // 窗口内标记已被删的情况不补:短 timer 已由唤醒方排好。
+      if (waitingEntry && this.waitingSessions.has(sessionId)) {
+        this.scheduleContinuation(sessionId, this.waitingRecheckMs);
+      }
+      this.deps.logger.error('[goal] failed to persist goal turn state', {
+        sessionId,
+        waiting: waitingEntry,
+        error: String(error),
+      });
+      return;
+
+    }
     if (!isCurrentTurn()) return;
     if (updated) this.emit(updated, state.status);
 
@@ -2109,6 +2241,14 @@ export class GoalController {
 
     if (shouldFire && updated?.status === 'active') {
       this.scheduleContinuation(sessionId);
+    } else if (waitingEntry) {
+      // waiting:不 detach(listener 保留,用户轮 finalize / idle observer 才能唤醒),
+      // 只排安全网重检轮;事件唤醒会把这条长 timer 换成防抖续跑。
+      // 若 persist 期间已被唤醒(resume-on-open / intervention 抢先删了标记并排了
+      // 短 timer),这里不得用 30 分钟 timer 覆盖它 —— 否则打开会话的立即唤醒被延后。
+      if (this.waitingSessions.has(sessionId)) {
+        this.scheduleContinuation(sessionId, this.waitingRecheckMs);
+      }
     } else {
       // 停:budgetLimited(终态)/ blocked / paused / usageLimited 都 detach。
       this.stopSession(sessionId);
@@ -2159,14 +2299,17 @@ export class GoalController {
     return true;
   }
 
-  private scheduleContinuation(sessionId: string): void {
+  private scheduleContinuation(sessionId: string, minDelayMs = 0): void {
     if (this.disposed) return;
     const existing = this.timers.get(sessionId);
     if (existing) clearTimeout(existing);
     const rejectionRetry = this.dispatchRejectionRetries.get(sessionId);
-    const delayMs = rejectionRetry
-      ? Math.max(this.debounceMs, rejectionRetry.retryNotBefore - this.now())
-      : this.debounceMs;
+    const delayMs = Math.max(
+      minDelayMs,
+      rejectionRetry
+        ? Math.max(this.debounceMs, rejectionRetry.retryNotBefore - this.now())
+        : this.debounceMs,
+    );
     const timer = setTimeout(() => {
       this.timers.delete(sessionId);
       void this.fireTurn(sessionId).catch((error) => {
@@ -2454,6 +2597,10 @@ export class GoalController {
       return;
     }
     if (this.firing.has(sessionId)) return;
+    // 真正要发轮了:waiting 态就此结束(模型每轮重新裁决;上一次的等待已由本次发轮取代)。
+    // 推一次状态把 chip 从「等待中」切回「进行中」(useGoalStatus 之后只靠 push 刷新,
+    // 不推的话重检/唤醒轮全程仍显示等待)。
+    if (this.waitingSessions.delete(sessionId)) this.emit(state);
     // FIFO, approvals, recovery and explicit input holds own dispatch priority.
     // Queue projections/terminal observers wake us when that boundary releases.
     try {
@@ -2704,7 +2851,7 @@ export class GoalController {
   }
 }
 
-function toPayload(state: GoalState): GoalStatusPayload {
+function toPayload(state: GoalState, waitingSince: number | null = null): GoalStatusPayload {
   return {
     sessionId: state.sessionId,
     status: state.status,
@@ -2717,6 +2864,7 @@ function toPayload(state: GoalState): GoalStatusPayload {
     usageResetAt: state.usageResetAt,
     startedAt: state.startedAt,
     lastReason: state.lastReason,
+    waitingSince,
   };
 }
 
