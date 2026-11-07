@@ -281,6 +281,42 @@ async function checkProcessDisclosure(page, ui) {
     });
     await ui.capture('thread-send-restores-follow');
   }
+  // A real stationary click on the scroller's empty padding must not unpin the
+  // next resize. This target also owns native scrollbar pointer gestures.
+  await timeline.click({ position: { x: ui.data.threadPanel ? 12 : 2, y: box.height / 2 } });
+  await timeline.evaluate(el => {
+    const last = el.querySelector('article:last-of-type');
+    last.style.minHeight = `${last.getBoundingClientRect().height + 120}px`;
+  });
+  await page.waitForFunction(() => {
+    const el = document.querySelector('[data-process-scroll-check]');
+    return el.scrollHeight - el.scrollTop - el.clientHeight < 2;
+  });
+  await ui.capture('stationary-pointer-keeps-follow');
+  // Deliver the native scroll input boundary in the problematic order: layout
+  // already moved the real range by 10px, click enters inspection, then the old
+  // notification arrives. jsdom alone cannot run the actual resize/animation.
+  const inspected = await timeline.evaluate(el => {
+    el.dispatchEvent(new Event('scroll', { bubbles: true }));
+    const last = el.querySelector('article:last-of-type');
+    last.style.minHeight = `${last.getBoundingClientRect().height + 10}px`;
+    el.scrollTop = el.scrollHeight;
+    el.querySelector('[data-teammate-process] > button').click();
+    const position = { top: el.scrollTop, reserve: el.firstElementChild.style.minHeight };
+    el.dispatchEvent(new Event('scroll', { bubbles: true }));
+    return position;
+  });
+  assert.ok(inspected.reserve, 'inspection starts with a reserved range');
+  await page.evaluate(async () => { for (let i = 0; i < 24; i++) await new Promise(requestAnimationFrame); });
+  assert.deepEqual(await timeline.evaluate(el => ({ top: el.scrollTop, reserve: el.firstElementChild.style.minHeight })), inspected,
+    'queued auto-follow notification must preserve inspection through real layout');
+  await ui.capture('queued-scroll-keeps-inspection');
+  await page.mouse.move(box.x + 24, box.y + box.height / 2);
+  await page.mouse.wheel(0, 10000);
+  await page.waitForFunction(() => {
+    const el = document.querySelector('[data-process-scroll-check]');
+    return el.scrollHeight - el.scrollTop - el.clientHeight < 2 && !el.firstElementChild.style.minHeight;
+  });
   // Native keys act while the content changes in the same input turn. A later
   // ResizeObserver must respect the reader; wheel navigation then returns to the tail.
   for (const key of ['PageUp', 'Home']) {
@@ -298,11 +334,22 @@ async function checkProcessDisclosure(page, ui) {
     });
     await assertBrowsingSurvivesResize(timeline);
     await ui.capture(`growth-${key}`);
+    await timeline.evaluate(el => {
+      window.lastNavigationWheel = null;
+      el.addEventListener('wheel', event => {
+        window.lastNavigationWheel = { deltaY: event.deltaY, target: event.target.outerHTML.slice(0, 160),
+          top: el.scrollTop, height: el.scrollHeight, viewport: el.clientHeight };
+      }, { once: true, capture: true });
+    });
     await page.mouse.move(box.x + 24, box.y + box.height / 2);
     await page.mouse.wheel(0, 10000);
     await page.waitForFunction(() => {
       const el = document.querySelector('[data-process-scroll-check]');
       return el.scrollHeight - el.scrollTop - el.clientHeight < 2;
+    }).catch(async error => {
+      const state = await timeline.evaluate(el => ({ wheel: window.lastNavigationWheel,
+        top: el.scrollTop, height: el.scrollHeight, viewport: el.clientHeight }));
+      throw new Error(`${key} wheel reset failed: ${JSON.stringify(state)}; ${error.message}`);
     });
   }
   // Drive the scrollbar input boundary against the real native scroll range;

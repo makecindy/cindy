@@ -149,6 +149,12 @@ it.each(['PageUp', 'Home', 'scrollbar'])('keeps explicit %s browsing while conte
   height = 1410; scroller.scrollTop = 200; fireEvent.scroll(scroller);
   act(() => observed.get(scroller)!([], {} as ResizeObserver));
   expect(scroller.scrollTop).toBe(200);
+  if (action === 'scrollbar') {
+    fireEvent.pointerUp(scroller);
+    height = 1420;
+    act(() => observed.get(scroller)!([], {} as ResizeObserver));
+    expect(scroller.scrollTop).toBe(200);
+  }
 });
 
 function msg(overrides: Partial<BotGroupMessageView>): BotGroupMessageView {
@@ -3880,6 +3886,74 @@ describe('thread previews and posting to the main chat', () => {
     return detail({ serverBacked: true, messages });
   }
   beforeEach(() => { vi.stubGlobal('ResizeObserver', class { observe() {} disconnect() {} }); });
+
+  async function renderProcessScroller(context: string) {
+    const root = msg({ id: 'root', content: 'Root' });
+    const answer = msg({ id: 'process-answer', sequence: 2, authorKind: 'bot', authorBotId: 'mimi', content: 'Process result',
+      process: { groupId: 'g1', executionId: 'scroll-work', sessionId: 'work', clientId: 'note', deviceId: 'home' } });
+    const data = detail({ serverBacked: true, messages: context === 'topic' ? [root] : [answer] });
+    data.members[0] = { ...data.members[0]!, isOwned: true, homeDeviceId: 'home' };
+    mocks.getBotGroup.mockResolvedValue({ ok: true, group: data });
+    mocks.remoteInvoke.mockResolvedValue([]);
+    mocks.thread.mockResolvedValue({ ok: true, root, replies: [answer], hasMore: false });
+    renderView();
+    if (context === 'topic') fireEvent.click((await screen.findAllByRole('button', { name: 'bots.groupChat.server.startTopic' }))[0]!);
+    const surface = context === 'topic' ? screen.getByRole('complementary') : await screen.findByTestId('bot-group-timeline');
+    await within(surface).findByText('Process result');
+    return (context === 'topic' ? surface.querySelector('div.overflow-y-auto') : surface) as HTMLDivElement;
+  }
+
+  // Unit / #9249 r4500670651: a root-padding/scrollbar press temporarily pauses
+  // resize following, but releasing without upward movement must not unpin it.
+  it.each(['main', 'topic'])('restores %s follow after a stationary pointer press', async context => {
+    const observed = new Map<Element, ResizeObserverCallback>();
+    vi.stubGlobal('ResizeObserver', class {
+      constructor(private callback: ResizeObserverCallback) {}
+      observe(element: Element) { observed.set(element, this.callback); }
+      disconnect() {}
+    });
+    const scroller = await renderProcessScroller(context);
+    let height = 1400;
+    Object.defineProperties(scroller, {
+      scrollHeight: { configurable: true, get: () => height }, clientHeight: { configurable: true, value: 600 },
+    });
+    scroller.scrollTop = 800; fireEvent.scroll(scroller);
+    fireEvent.pointerDown(scroller);
+    height = 1500;
+    act(() => observed.get(scroller)!([], {} as ResizeObserver));
+    expect(scroller.scrollTop).toBe(800);
+    fireEvent.pointerUp(scroller);
+    height = 1600;
+    act(() => observed.get(scroller)!([], {} as ResizeObserver));
+    expect(scroller.scrollTop).toBe(1600);
+  });
+
+  // Unit / #9249 r4500670656: layout already followed 800 -> 810 before the
+  // reader clicks, but its native scroll notification is delivered afterwards.
+  it.each(['main', 'topic'])('keeps %s inspection through a queued auto-follow notification', async context => {
+    const observed = new Map<Element, ResizeObserverCallback>();
+    vi.stubGlobal('ResizeObserver', class {
+      constructor(private callback: ResizeObserverCallback) {}
+      observe(element: Element) { observed.set(element, this.callback); }
+      disconnect() {}
+    });
+    const scroller = await renderProcessScroller(context);
+    let height = 1400;
+    Object.defineProperties(scroller, {
+      scrollHeight: { configurable: true, get: () => height }, clientHeight: { configurable: true, value: 600 },
+    });
+    const content = scroller.firstElementChild as HTMLElement;
+    vi.spyOn(content, 'getBoundingClientRect').mockImplementation(() => ({ height }) as DOMRect);
+    scroller.scrollTop = 800; fireEvent.scroll(scroller);
+    height = 1410; scroller.scrollTop = 810;
+    await act(async () => fireEvent.click(scroller.querySelector('button[data-scroll-disclosure-header]')!));
+    expect(content.style.minHeight).toBe('1410px');
+    fireEvent.scroll(scroller);
+    expect(content.style.minHeight).toBe('1410px');
+    height = 1600;
+    act(() => observed.get(scroller)!([], {} as ResizeObserver));
+    expect(scroller.scrollTop).toBe(810);
+  });
 
   // Unit / #9249 r4500619897: actual portalled previews bubble React wheel
   // events through the real main/topic scroller. Existing preview cases only cover Escape.

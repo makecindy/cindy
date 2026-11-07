@@ -11,13 +11,17 @@ export function useProcessDisclosureScroll(
   const inspecting = useRef(false);
   const previousTop = useRef(0);
   const previousSize = useRef({ height: 0, viewport: 0 });
-  const draggingScrollbar = useRef(false);
+  const draggingScrollbar = useRef<{ following: boolean; top: number; movedUp: boolean } | null>(null);
   const resumeFollow = useCallback(() => {
     inspecting.current = false;
     if (contentRef.current) contentRef.current.style.minHeight = '';
     stickToBottom.current = true;
   }, [contentRef, stickToBottom]);
   const atBottom = (element: HTMLDivElement) => element.scrollHeight - element.scrollTop - element.clientHeight < bottomThreshold;
+  const rememberPosition = (element: HTMLDivElement) => {
+    previousTop.current = element.scrollTop;
+    previousSize.current = { height: element.scrollHeight, viewport: element.clientHeight };
+  };
   const viewportContentHeight = (element: HTMLDivElement, content: HTMLDivElement) => {
     const outsideContent = element.scrollHeight - content.getBoundingClientRect().height;
     return Math.max(0, element.scrollTop + element.clientHeight - outsideContent);
@@ -27,14 +31,29 @@ export function useProcessDisclosureScroll(
     resumeFollow,
     onPointerDown(event: PointerEvent<HTMLDivElement>) {
       // Native scrollbar input targets the scroller itself, unlike its content.
-      draggingScrollbar.current = event.target === event.currentTarget;
-      if (draggingScrollbar.current) stickToBottom.current = false;
+      draggingScrollbar.current = event.target === event.currentTarget
+        ? { following: stickToBottom.current, top: event.currentTarget.scrollTop, movedUp: false } : null;
+      if (draggingScrollbar.current) {
+        rememberPosition(event.currentTarget);
+        stickToBottom.current = false;
+      }
     },
-    onPointerUp() { draggingScrollbar.current = false; },
+    onPointerUp(event: PointerEvent<HTMLDivElement>) {
+      const gesture = draggingScrollbar.current;
+      draggingScrollbar.current = null;
+      // A press on the scrollbar or empty padding only pauses follow. Keep a
+      // genuine upward browse, including one whose scroll event is still queued.
+      if (!gesture?.following || gesture.movedUp || inspecting.current || event.currentTarget.scrollTop < gesture.top) return;
+      stickToBottom.current = true;
+      event.currentTarget.scrollTop = event.currentTarget.scrollHeight;
+    },
     onClickCapture(event: MouseEvent<HTMLDivElement>) {
       if (!(event.target instanceof Element) || !event.target.closest('button[data-scroll-disclosure-header]')) return;
       const content = contentRef.current;
       if (!content || !content.contains(event.target)) return;
+      // Auto-follow may already have moved before its queued scroll notice.
+      // Inspection starts at this position, so that notice is not reader input.
+      rememberPosition(event.currentTarget);
       inspecting.current = true;
       stickToBottom.current = false;
       // A shrinking scroll range clamps scrollTop before any observer can fix
@@ -66,16 +85,16 @@ export function useProcessDisclosureScroll(
       // has grown the content. Being away from the new bottom is not an upward
       // reading gesture. Keep following until the reader actually moves up.
       const movedUp = element.scrollTop < previousTop.current
-        && (draggingScrollbar.current || (element.scrollHeight === previousSize.current.height
+        && (draggingScrollbar.current !== null || (element.scrollHeight === previousSize.current.height
           && element.clientHeight === previousSize.current.viewport));
+      if (draggingScrollbar.current && movedUp) draggingScrollbar.current.movedUp = true;
       const keepFollowing = stickToBottom.current && previousSize.current.height > 0 && !movedUp;
       const content = contentRef.current;
       if (inspecting.current && content?.style.minHeight && element.scrollTop < previousTop.current) {
         content.style.minHeight = `${Math.min(parseFloat(content.style.minHeight), viewportContentHeight(element, content))}px`;
       }
       if (inspecting.current && atBottom(element) && element.scrollTop > previousTop.current) resumeFollow();
-      previousTop.current = element.scrollTop;
-      previousSize.current = { height: element.scrollHeight, viewport: element.clientHeight };
+      rememberPosition(element);
       return !inspecting.current && (keepFollowing || atBottom(element));
     },
   };
