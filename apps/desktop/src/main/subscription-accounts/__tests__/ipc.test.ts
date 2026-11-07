@@ -11,6 +11,7 @@ const h = vi.hoisted(() => ({
   execute: vi.fn(),
   owner: 'owner-a',
   generation: 1,
+  bindings: {} as Record<string, { providerId: 'anthropic' | 'openai'; accountId: string }>,
 }));
 vi.mock('electron', () => ({
   ipcMain: {
@@ -34,7 +35,7 @@ vi.mock('../../appSessionState.js', () => ({
 }));
 vi.mock('../../maker-host/logger-adapter.js', () => ({ desktopMakerLogger: {} }));
 vi.mock('../../maker-host/override-settings-file.js', () => ({
-  createOverrideSettingsFile: () => ({}),
+  createOverrideSettingsFile: () => ({ read: () => ({ bindings: h.bindings }) }),
 }));
 vi.mock('../service.js', () => ({ executeSubscriptionAccountCommand: h.execute }));
 vi.mock('../runtime.js', () => ({
@@ -42,7 +43,7 @@ vi.mock('../runtime.js', () => ({
   readSubscriptionPoolUsage: vi.fn(async () => undefined),
 }));
 import { registerSubscriptionAccountsIpc } from '../ipc.js';
-import { accountDirectory, accountOwnerPrefix } from '../store.js';
+import { accountDirectory, accountOwnerPrefix, readBoundClaudeConfigDir } from '../store.js';
 import { SUBSCRIPTION_ACCOUNTS_CHANNEL } from '../../../shared/subscriptionAccounts.js';
 registerSubscriptionAccountsIpc();
 const invoke = (command: unknown) => h.handlers.get(SUBSCRIPTION_ACCOUNTS_CHANNEL)!({}, command);
@@ -51,6 +52,7 @@ beforeEach(() => {
   h.trusted = true;
   h.owner = 'owner-a';
   h.generation = 1;
+  h.bindings = {};
   h.execute.mockReset().mockResolvedValue({ accounts: [] });
 });
 describe('subscription management boundary', () => {
@@ -81,12 +83,22 @@ describe('subscription management boundary', () => {
   it('derives stable directories from the owner, refusing another owner’s account id', () => {
     const id = `cindy-${accountOwnerPrefix()}-12345678-1234-4123-8123-123456789abc`;
     const directory = accountDirectory('anthropic', id);
+    h.bindings = {
+      'anthropic:native:secondary': { providerId: 'anthropic', accountId: id },
+      'anthropic:native:default': { providerId: 'anthropic', accountId: 'default' },
+      'openai:native:codex': { providerId: 'openai', accountId: id },
+    };
+    expect(readBoundClaudeConfigDir('secondary')).toBe(directory);
+    expect(readBoundClaudeConfigDir('default')).toBeUndefined();
+    expect(readBoundClaudeConfigDir('unbound')).toBeUndefined();
+    expect(readBoundClaudeConfigDir('codex')).toBeUndefined();
     expect(accountDirectory('anthropic', 'default')).toBe(path.join(homedir(), '.claude'));
     expect(accountDirectory('openai', 'default')).toBe(path.join(homedir(), '.codex'));
     expect(directory).toBe(path.join(homedir(), `.claude-${id}`));
     h.generation++;
     expect(accountDirectory('anthropic', id)).toBe(directory);
     h.owner = 'owner-b';
+    expect(() => readBoundClaudeConfigDir('secondary')).toThrow('unavailable');
     expect(() => accountDirectory('anthropic', id)).toThrow('unavailable');
     expect(() => accountDirectory('openai', '../../other')).toThrow('unavailable');
   });

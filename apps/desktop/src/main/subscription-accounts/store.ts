@@ -103,6 +103,13 @@ export function readAccountBinding(key: string, provider: SubscriptionProvider) 
   const binding = bindings[`${provider}:${key}`] ?? bindings[key];
   return binding?.providerId === provider ? binding : undefined;
 }
+/** Read-only history lookup: only additional profiles override the legacy/default search. */
+export function readBoundClaudeConfigDir(sdkSessionId: string): string | undefined {
+  const binding = readAccountBinding(`native:${sdkSessionId}`, 'anthropic');
+  return binding && binding.accountId !== 'default'
+    ? accountDirectory('anthropic', binding.accountId)
+    : undefined;
+}
 export async function writeAccountBindings(
   keys: string[],
   providerId: SubscriptionProvider,
