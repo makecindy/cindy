@@ -138,6 +138,11 @@ export interface BrowserExtensionBridgeOptions {
   pollTimeout?: number;
   connectWait?: number;
   jobTimeout?: number;
+  /**
+   * 作业到期的调度器:到点调用 `expire`,返回取消函数。缺省是真实定时器;
+   * 测试注入手动调度器,把「作业何时过期」从墙钟里拿出来。
+   */
+  scheduleJobDeadline?: (expire: () => void, delayMs: number) => () => void;
   now?: () => number;
   log?: {
     info: (msg: string, meta?: Record<string, unknown>) => void;
@@ -171,8 +176,13 @@ interface Job {
   state: JobState;
   resolve: (result: BrowserExtensionJobResult) => void;
   created: number;
-  timer?: ReturnType<typeof setTimeout>;
+  cancelDeadline?: () => void;
 }
+
+const realJobDeadline = (expire: () => void, delayMs: number): (() => void) => {
+  const timer = setTimeout(expire, delayMs);
+  return () => clearTimeout(timer);
+};
 
 interface RelayItem {
   id: string;
@@ -440,7 +450,7 @@ export class BrowserExtensionBridge {
 
   private finish(job: Job, result: Record<string, unknown>): void {
     if (!this.jobs.has(job.id)) return;
-    clearTimeout(job.timer);
+    job.cancelDeadline?.();
     this.jobs.delete(job.id);
     const safe = this.boundResult(result, job.payload.maxChars || 6000);
     const timing = (safe.timing && typeof safe.timing === 'object' ? safe.timing : {}) as Record<
@@ -1241,7 +1251,7 @@ export class BrowserExtensionBridge {
         resolve,
         created: this.now(),
       };
-      job.timer = setTimeout(
+      job.cancelDeadline = (this.options.scheduleJobDeadline ?? realJobDeadline)(
         () =>
           this.finish(
             job,

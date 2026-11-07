@@ -12700,6 +12700,10 @@
       "defer": "暂不下载"
     },
     "permissionPrompt": {
+      "titleStdin": "允许向终端发送输入？",
+      "titleMcpUrl": "完成 {{server}} 的请求",
+      "mcpComplete": "已完成",
+      "mcpCancel": "取消",
       "alwaysAllowScoped": "本任务都允许 {{scope}}",
       "alwaysAllowScopedHint": "作用于整个任务，且只限这里列出的范围。",
       "alwaysAllowSessionHint": "作用于整个任务，不只是这一次请求。",
@@ -12964,7 +12968,13 @@
       "sendAndContinue": "发送并继续",
       "close": "关闭",
       "customAnswer": "输入其他回答…",
-      "answerPlaceholder": "请输入回答…"
+      "answerPlaceholder": "请输入回答…",
+      "validation": {
+        "required": "请填写此必填项。",
+        "choice": "请选择列出的选项。",
+        "tooShort": "请至少输入 {{count}} 个字符。",
+        "tooLong": "请最多输入 {{count}} 个字符。"
+      }
     },
     "planReviewBubble": {
       "title": "计划审阅",
@@ -19662,8 +19672,8 @@
     "removeTitle": "移出 {{name}}？",
     "removeDescription": "Cindy 将不再给这个账号分配任务。CLI 登录和对话历史仍保留在本机。",
     "failed": "无法读取或更新账号。请检查 CLI 登录和网络连接后重试。",
-    "used": "已用 {{percent}}%",
     "directory": "账号目录",
+    "loginAgain": "重新登录",
     "login": "登录"
   }
 }

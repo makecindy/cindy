@@ -130,7 +130,10 @@ describe('Telegram group history access scope', () => {
   });
 
   it('explains an unsupported permission mode without exposing the internal error code', () => {
-    const message = ui.error.permissionModeUnsupported;
+    const message = ui.error.permissionModeUnsupported('bypassPermissions');
+    expect(message).toContain('其他群成员');
+    expect(message).toContain('机器人绑定的用户');
+    expect(message).toContain('尚未执行');
     expect(message).toContain('自动审批');
     expect(message).toContain('/permission');
     expect(message).not.toContain('TURN_PERMISSION_POLICY_UNSUPPORTED');

@@ -32,6 +32,21 @@ const snapshot = {
 };
 const refreshControl = { defer: false, pending: false, release: (): void => {} };
 const keySaveControl = { pending: false, release: (): void => {} };
+// Example quota snapshots in the host's own formats: 5 hours, weekly and one model-specific window.
+const accountUsage = (providerId: string, [session, week, model]: number[]) => {
+  const now = Date.now();
+  const window = (utilization: number, hours: number) => ({ utilization, resetsAt: Math.floor(now / 1000) + hours * 3600 });
+  if (providerId === 'anthropic') return { claude: {
+    source: 'oauth-endpoint' as const, updatedAt: now, fiveHour: window(session, 4), sevenDay: window(week, 121),
+    scoped: [{ modelId: 'claude-fable', modelDisplayName: 'Fable', ...window(model, 121) }],
+  } };
+  const bucket = (usedPercent: number, windowMinutes: number, hours: number) =>
+    ({ usedPercent, windowMinutes, resetsAt: Math.floor(now / 1000) + hours * 3600 });
+  return { codex: {
+    buckets: { codex: { limitId: 'codex', limitName: null, updatedAt: now, primary: bucket(session, 300, 4), secondary: bucket(week, 10_080, 121) } },
+    credits: null,
+  } };
+};
 const subscriptionControl = { connected: false, commands: [] as { action?: string; providerId: string; loginKey?: string }[], cancel: (): void => {} };
 const received = [{
   shareId: 'fixture-received', memberId: 'fixture-member', providerId: 'anthropic',
@@ -74,8 +89,9 @@ mountPage({
             plan: command.providerId === 'anthropic' ? 'Max' : 'Plus', status: 'ready', directory,
             running: 0, paused: false, limit: 4, weight: 1 };
           return { providerId: command.providerId, configured, strategy: 'least', accounts: configured ? [
-            defaultAccount,
-            { ...defaultAccount, id: 'second', identity: 'work@example.com', plan: 'Pro', directory: directory + '-cindy-account', limit: 2 },
+            { ...defaultAccount, usage: accountUsage(command.providerId, [2, 86, 16]) },
+            { ...defaultAccount, id: 'second', identity: 'work@example.com', plan: 'Pro', directory: directory + '-cindy-account', limit: 2,
+              usage: accountUsage(command.providerId, [30, 40, 5]) },
           ] : command.action === 'preview' ? [defaultAccount] : [] };
         },
         onChanged: subscription('subscriptionAccountsChanged'),

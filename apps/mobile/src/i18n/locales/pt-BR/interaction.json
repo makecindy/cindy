@@ -1,5 +1,7 @@
 {
   "permission": {
+    "mcpComplete": "Concluído",
+    "mcpCancel": "Cancelar",
     "mode": {
       "default": "Permissões padrão",
       "acceptEdits": "Permitir edições",
@@ -98,7 +100,14 @@
     "planFeedbackPlaceholder": "Diga ao Claude o que fazer",
     "planFeedbackRequired": "Digite seu feedback antes de enviar.",
     "planFeedbackSubmit": "Enviar feedback do plano",
-    "planFeedbackAccessibility": "Dar feedback para alterar o plano"
+    "planFeedbackAccessibility": "Dar feedback para alterar o plano",
+    "validation": {
+      "required": "Preencha este campo obrigatório.",
+      "choice": "Escolha uma das opções da lista.",
+      "tooShort": "Digite pelo menos {{count}} caracteres.",
+      "tooLong": "Digite no máximo {{count}} caracteres."
+    },
+    "askRestrictedMetaCaption": "{{options}} · {{mode}}"
   },
   "kinds": {
     "permission": {
@@ -389,6 +398,8 @@
       "submitting": "Enviando"
     },
     "permission": {
+      "titleStdin": "Permitir entrada neste terminal?",
+      "titleMcpUrl": "Concluir a solicitação de {{server}}",
       "highRiskTitle": "Permissão de alto risco exige confirmação",
       "highRiskDetail": "Revise o comando e confirme novamente para permiti-lo. Negue se não tiver certeza.",
       "sessionAllowTitle": "Permitir uma vez ou sempre permitir nesta tarefa",
