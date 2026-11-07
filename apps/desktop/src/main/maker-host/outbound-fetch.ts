@@ -50,7 +50,10 @@ import {
   TunnelingHttpsAgent,
   type OutboundProxyTarget,
 } from '@cindy/anthropic-compat-proxy';
-import { fetchSingleHopWithSsrFGuard } from '@cindy/browser-control-runtime/ssrf-runtime';
+import {
+  fetchSingleHopWithSsrFGuard,
+  type SsrFPolicy,
+} from '@cindy/browser-control-runtime/ssrf-runtime';
 
 import { createMakerLogger } from './logger-adapter.js';
 import { resolveDesktopOutboundProxy } from './outbound-proxy-resolver.js';
@@ -603,7 +606,12 @@ export async function guardedOutboundFetch(
   url: string,
   init: RequestInit,
   beforeDispatch: () => void | Promise<void>,
-  approval?: { targetUrl: string; allowHttp?: boolean; allowPrivateNetwork?: boolean },
+  approval?: {
+    targetUrl: string;
+    allowHttp?: boolean;
+    allowPrivateNetwork?: boolean;
+    policy?: SsrFPolicy;
+  },
 ): Promise<{ response: Response; release: () => Promise<void> }> {
   const upstream = new URL(url);
   // Host-owned, single-target exception. Never inherit it across a redirect.
@@ -612,14 +620,21 @@ export async function guardedOutboundFetch(
   }
   const signal = init.signal ?? undefined;
   const proxy = await resolveProxyTarget(upstream, signal);
+  const policy = approval?.allowPrivateNetwork
+    ? {
+        ...approval.policy,
+        dangerouslyAllowPrivateNetwork: true,
+        hostnameAllowlist: Array.from(
+          new Set([...(approval.policy?.hostnameAllowlist ?? []), upstream.hostname]),
+        ),
+      }
+    : approval?.policy;
   return fetchSingleHopWithSsrFGuard({
     url,
     init,
     signal,
     requireHttps: !approval?.allowHttp,
-    ...(approval?.allowPrivateNetwork
-      ? { policy: { dangerouslyAllowPrivateNetwork: true, hostnameAllowlist: [upstream.hostname] } }
-      : {}),
+    ...(policy ? { policy } : {}),
     ...(proxy
       ? {
           dispatcherFactory: ({ url: guardedUrl, pinned }) =>

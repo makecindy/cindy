@@ -9,6 +9,7 @@ const m = vi.hoisted(() => ({
   version: '1.0.0',
   download: vi.fn(),
   endpoint: vi.fn(),
+  guardedFetch: vi.fn(),
   recycle: vi.fn(),
   hash: 'ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad',
 }));
@@ -35,7 +36,7 @@ vi.mock('../../shared/wallpaper-video-manifest.json', () => ({
 }));
 vi.mock('../downloader/index.js', () => ({ createDownloader: () => m.download }));
 vi.mock('../clientEndpointsService.js', () => ({ getClientEndpoint: m.endpoint }));
-vi.mock('../maker-host/outbound-fetch.js', () => ({ guardedOutboundFetch: vi.fn() }));
+vi.mock('../maker-host/outbound-fetch.js', () => ({ guardedOutboundFetch: m.guardedFetch }));
 vi.mock('../cindy-media/ingest.js', async () => {
   const { writeBlob } = await import('../cindy-media/blobStore');
   return {
@@ -60,6 +61,10 @@ beforeEach(() => {
   m.download.mockImplementation(async ({ targetPath }: { targetPath: string }) => {
     fs.writeFileSync(targetPath, 'abc');
     return { path: targetPath };
+  });
+  m.guardedFetch.mockResolvedValue({
+    response: new Response(null, { status: 200 }),
+    release: vi.fn(async () => undefined),
   });
   m.recycle.mockResolvedValue(undefined);
 });
@@ -107,6 +112,20 @@ describe('official wallpaper downloads', () => {
     expect((await readClientWallpaperFile(url(ext))).buffer.toString()).toBe('abc');
     expect(fs.existsSync(path.dirname(options.targetPath))).toBe(false);
     expect(m.recycle).toHaveBeenCalledWith([url('.mp4'), url('.webp')], ext);
+    await options.request(options.url, {});
+    expect(m.guardedFetch).toHaveBeenCalledWith(
+      options.url,
+      expect.any(Object),
+      expect.any(Function),
+      {
+        targetUrl: options.url,
+        policy: {
+          allowRfc2544BenchmarkRange: true,
+          allowIpv6BenchmarkingRange: true,
+          hostnameAllowlist: ['cdn.example'],
+        },
+      },
+    );
   });
   it('reuses a still-only image offline and never requests a video for it', async () => {
     expect(await ensureWallpaperVideo('cindy-whisper')).toBeNull();

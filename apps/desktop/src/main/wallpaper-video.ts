@@ -89,7 +89,22 @@ async function ensureWallpaperAsset(
           redirect: 'error',
           isUrlAllowed: (candidate) => candidate === source.href,
           request: (url, init) =>
-            guardedOutboundFetch(url, { ...init, credentials: 'omit' }, () => {}),
+            guardedOutboundFetch(
+              url,
+              { ...init, credentials: 'omit' },
+              () => {},
+              {
+                targetUrl: source.href,
+                policy: {
+                  // Clash Verge and similar TUN fake-IP modes use reserved
+                  // benchmark ranges for the exact CDN hostname. Keep the
+                  // exemption scoped to this verified official host.
+                  allowRfc2544BenchmarkRange: true,
+                  allowIpv6BenchmarkingRange: true,
+                  hostnameAllowlist: [source.hostname],
+                },
+              },
+            ),
           resume: false,
           retry: { maxAttempts: 3 },
           timeout: { totalMs: 120_000 },
@@ -113,8 +128,10 @@ async function ensureWallpaperAsset(
         });
         report(asset.bytes);
         return published;
-      } catch {
-        log.warn('Wallpaper unavailable; keeping the preview');
+      } catch (error) {
+        log.warn('Wallpaper unavailable; keeping the preview', {
+          error: error instanceof Error ? error.message : String(error),
+        });
         return null;
       } finally {
         if (temporaryDirectory)

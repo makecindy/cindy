@@ -248,6 +248,52 @@ function header(srcLabel) {
  * that can live at the adapter boundary.
  */
 const LOCAL_PATCHES = {
+  'packages/net-policy/ip.ts': [
+    {
+      desc: 'allow IPv6 benchmarking addresses for explicitly approved fake-IP proxy lookups',
+      transform: (source) => applyExactReplacements(source, [
+        [
+          'type BlockedIpv6Range = Ipv6Range | "discard";',
+          'type BlockedIpv6Range = Ipv6Range | "discard" | "benchmarking" | "orchid2";',
+        ],
+        [
+          '  allowUniqueLocalRange?: boolean;\n};',
+          '  allowUniqueLocalRange?: boolean;\n  /** Permit IPv6 benchmarking addresses (2001:2::/48) used by fake-IP DNS. */\n  allowBenchmarkingRange?: boolean;\n};',
+        ],
+        [
+          'const RFC2544_BENCHMARK_PREFIX: [ipaddr.IPv4, number] = [ipaddr.IPv4.parse("198.18.0.0"), 15];',
+          'const RFC2544_BENCHMARK_PREFIX: [ipaddr.IPv4, number] = [ipaddr.IPv4.parse("198.18.0.0"), 15];\nconst IPV6_BENCHMARK_PREFIX: [ipaddr.IPv6, number] = [ipaddr.IPv6.parse("2001:2::"), 48];',
+        ],
+        [
+          '  if (BLOCKED_IPV6_SPECIAL_USE_RANGES.has(range)) {',
+          '  const inBenchmarkingRange = address.match(IPV6_BENCHMARK_PREFIX);\n  if (inBenchmarkingRange && options.allowBenchmarkingRange === true) {\n    // RFC 4727 reserves 2001:2::/48 for documentation/benchmarking. Some\n    // TUN fake-IP stacks use it for the IPv6 side of hostname interception.\n    return false;\n  }\n  if (inBenchmarkingRange || BLOCKED_IPV6_SPECIAL_USE_RANGES.has(range)) {',
+        ],
+      ]),
+    },
+  ],
+  'leaf/src/infra/net/ssrf.ts': [
+    {
+      desc: 'carry the IPv6 benchmarking fake-IP exemption through SSRF policy evaluation',
+      transform: (source) => applyExactReplacements(source, [
+        [
+          '  allowIpv6UniqueLocalRange?: boolean;\n  allowedHostnames?: string[];',
+          '  allowIpv6UniqueLocalRange?: boolean;\n  allowIpv6BenchmarkingRange?: boolean;\n  allowedHostnames?: string[];',
+        ],
+        [
+          '    allowIpv6UniqueLocalRange: policy.allowIpv6UniqueLocalRange === true,\n    allowedHostnames:',
+          '    allowIpv6UniqueLocalRange: policy.allowIpv6UniqueLocalRange === true,\n    allowIpv6BenchmarkingRange: policy.allowIpv6BenchmarkingRange === true,\n    allowedHostnames:',
+        ],
+        [
+          '    if (policy.allowIpv6UniqueLocalRange) {\n      merged.allowIpv6UniqueLocalRange = true;\n    }\n    if (policy.allowedHostnames?.length) {',
+          '    if (policy.allowIpv6UniqueLocalRange) {\n      merged.allowIpv6UniqueLocalRange = true;\n    }\n    if (policy.allowIpv6BenchmarkingRange) {\n      merged.allowIpv6BenchmarkingRange = true;\n    }\n    if (policy.allowedHostnames?.length) {',
+        ],
+        [
+          '    allowUniqueLocalRange: policy?.allowIpv6UniqueLocalRange === true,\n  };',
+          '    allowUniqueLocalRange: policy?.allowIpv6UniqueLocalRange === true,\n    allowBenchmarkingRange: policy?.allowIpv6BenchmarkingRange === true,\n  };',
+        ],
+      ]),
+    },
+  ],
   'extension/src/browser/navigation-guard.ts': [
     {
       desc: 'allow explicit browser proxies only for public hostnames named in the strict hostname allowlist',
