@@ -382,6 +382,57 @@ describe('syncIndependentCodexAuth (#9277)', () => {
     expect(fs.readFileSync(myAuth, 'utf8')).toBe(MY_CONTENT);
   });
 
+  // 测试价值(#9316 review): 同机另一个升级前的 profile 也建过硬链时,只拆当前
+  // 这一份,系统 auth.json 的 nlink 仍 > 1 —— Codex 0.165+ 照样拒绝写它。
+  it('把系统凭证上残留的硬链一并清掉(同机另一个 profile 的旧链接)', async () => {
+    fs.writeFileSync(systemAuth, SYSTEM_CONTENT);
+    const otherProfile = path.join(tmpRoot, 'other-profile', 'auth.json');
+    fs.mkdirSync(path.dirname(otherProfile), { recursive: true });
+    fs.linkSync(systemAuth, myAuth);
+    fs.linkSync(systemAuth, otherProfile);
+    expect(fs.statSync(systemAuth).nlink).toBe(3);
+
+    const out = await syncIndependentCodexAuth(systemAuth, myAuth, 'win32');
+
+    expect(out.kind).toBe('copied-from-system');
+    // 当前这一份已拆开,系统路径的 nlink 也回到 1。
+    expect(fs.statSync(systemAuth).nlink).toBe(1);
+    expect(fs.readFileSync(systemAuth, 'utf8')).toBe(SYSTEM_CONTENT);
+    expect(fs.readFileSync(myAuth, 'utf8')).toBe(SYSTEM_CONTENT);
+  });
+
+  // 测试价值(#9316 review): Cindy 与本机 Codex 是两个 writer。方向判定用的是
+  // 过期快照时,本机 Codex 刚刷新的系统凭证会被旧本地副本覆盖(refresh token
+  // 轮换后两端都登不上)。发布前必须复核目标代次。
+  it('发布前复核目标代次:本机 Codex 刚刷新过的系统凭证不被旧本地副本覆盖', async () => {
+    fs.writeFileSync(systemAuth, SYSTEM_CONTENT);
+    fs.writeFileSync(myAuth, MY_CONTENT);
+    const newer = new Date(Date.now() + 60_000);
+    fs.utimesSync(myAuth, newer, newer);
+    const REFRESHED_CONTENT = JSON.stringify({ tokens: { access_token: 'zhbgr-lpvos-kmkzj' } });
+    const originalCopyFile = fs.promises.copyFile.bind(fs.promises);
+    let refreshed = false;
+    vi.spyOn(fs.promises, 'copyFile').mockImplementation(async (from, to, options) => {
+      // 复制途中本机 Codex 把系统凭证刷新到新一代。
+      if (!refreshed) {
+        refreshed = true;
+        fs.writeFileSync(systemAuth, REFRESHED_CONTENT);
+        const refreshedMtime = new Date(Date.now() + 120_000);
+        fs.utimesSync(systemAuth, refreshedMtime, refreshedMtime);
+      }
+      return originalCopyFile(from as never, to as never, options as never);
+    });
+
+    const out = await syncIndependentCodexAuth(systemAuth, myAuth, 'win32', undefined, {
+      allowLocalToSystem: true,
+    });
+
+    // 复核发现目标换代 → 重新对账 → 系统凭证获胜,旧本地副本不再覆盖它。
+    expect(out.kind).toBe('copied-from-system');
+    expect(fs.readFileSync(systemAuth, 'utf8')).toBe(REFRESHED_CONTENT);
+    expect(fs.readFileSync(myAuth, 'utf8')).toBe(REFRESHED_CONTENT);
+  });
+
   it('写回系统文件时 rename 失败会从仍存在的本地源恢复,不留空窗', async () => {
     fs.writeFileSync(systemAuth, SYSTEM_CONTENT);
     fs.writeFileSync(myAuth, MY_CONTENT);

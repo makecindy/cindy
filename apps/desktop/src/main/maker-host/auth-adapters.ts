@@ -56,6 +56,7 @@ import {
 } from './built-in-skills.js';
 import {
   copyCodexAuthSnapshot,
+  breakResidualSystemCodexHardlinks,
   inspectCodexAuthLink,
   relinkSharedCodexAuth,
   syncIndependentCodexAuth,
@@ -1341,6 +1342,9 @@ export class DesktopCodexAuthAdapter implements AuthAdapter {
     switch (kind) {
       case 'linked':
         this.lastKnownCodexCredentialScope = 'system-shared';
+        // 同机另一个升级前的 profile 可能还留着指向系统 auth.json 的旧硬链:
+        // 系统路径 nlink 仍 > 1 时 Codex 0.165+ 拒绝写它, 换到新 inode(#9316 review)。
+        await breakResidualSystemCodexHardlinks(systemAuth, process.platform);
         log.info('codex auth.json linked with shared OpenAI login', { linkType });
         break;
       case 'link-unsupported':
@@ -1998,6 +2002,8 @@ export class DesktopCodexAuthAdapter implements AuthAdapter {
             } else if (!pathsReferToSameFileSync(localAuth, systemAuth)) {
               throw new Error('Local auth link failed');
             }
+            // 系统路径上还挂着别的 profile 的旧硬链时 nlink 仍 > 1,Codex 拒绝写它。
+            await breakResidualSystemCodexHardlinks(systemAuth, process.platform);
           }
         }
         if (!stillCurrent()) {
