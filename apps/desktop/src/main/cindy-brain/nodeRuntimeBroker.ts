@@ -118,6 +118,11 @@ export interface NodeWorkerProcess {
   onControl?(listener: (message: unknown) => void): void;
   /** 给 worker 引导层下行一条控制帧(代启结果/子进程输出等;可选)。 */
   sendControl?(message: unknown): boolean;
+  /**
+   * 进程环境里随宿主透传、属于凭据的明文（如带 userinfo 的代理 URL）。broker 把它们
+   * 登记为 exposedSecretValues，让 stderr 与退出诊断走既有脱敏；缺省表示没有。
+   */
+  inheritedSecretValues?: readonly string[];
 }
 
 export type NodeWorkerStartupStage = 'utility-process-spawned' | 'parent-port-ready';
@@ -467,6 +472,24 @@ function sanitizePathsInHint(hint: string): string {
 
 type UtilityFork = typeof utilityProcess.fork;
 
+/** 插件 Node 进程透传的出站代理变量名（大写；匹配时不区分大小写）。 */
+const inheritedProxyKeys: ReadonlySet<string> = new Set([
+  'HTTP_PROXY',
+  'HTTPS_PROXY',
+  'ALL_PROXY',
+  'NO_PROXY',
+]);
+
+/** 代理 URL 的 userinfo（`user:pass@`）是凭据：返回需要脱敏的明文（整条值与 userinfo）。 */
+function proxyCredentialSecrets(value: string): string[] {
+  // 首尾空白不改变 URL 解析结果（new URL 会忽略），检测在去空白的副本上做；
+  // 原值与去空白后的值都登记，传给进程的值不变。
+  const trimmed = value.trim();
+  const authority = trimmed.replace(/^[a-z][a-z0-9+.-]*:\/\//i, '').split(/[/?#]/, 1)[0];
+  const at = authority.lastIndexOf('@');
+  return at > 0 ? [...new Set([value, trimmed, authority.slice(0, at)])] : [];
+}
+
 /**
  * 用 Electron 官方 utilityProcess 承载第三方 Node 代码。
  *
@@ -516,6 +539,17 @@ export function createUtilityNodeWorkerProcess(
   };
   for (const key of inheritedKeys) {
     if (process.env[key] !== undefined) env[key] = process.env[key];
+  }
+  // 出站代理变量原样透传，与 Agent 侧子进程一致。插件自带的 CLI（如 Go 编写的
+  // gog）只认环境变量代理、不读系统代理；缺了它们，代理网络下直连境外服务只会
+  // 等到超时。按大小写不敏感匹配并保留原写法：Windows 的环境变量名不分大小写，
+  // 固定列出大小写两套名字会把同一个变量重复写进子进程环境。代理 URL 可能带
+  // userinfo：值原样透传，同时登记给 broker 走既有的 stderr / 退出诊断脱敏。
+  const inheritedSecretValues: string[] = [];
+  for (const [key, value] of Object.entries(process.env)) {
+    if (value === undefined || !inheritedProxyKeys.has(key.toUpperCase())) continue;
+    env[key] = value;
+    inheritedSecretValues.push(...proxyCredentialSecrets(value));
   }
   const workerEntry = path.join(__dirname, 'nodeRuntimeWorkerProcess.js');
   const forkArgs = isChild
@@ -635,6 +669,7 @@ export function createUtilityNodeWorkerProcess(
     },
     stdout,
     stderr,
+    inheritedSecretValues,
     readStartupState(): NodeWorkerStartupState {
       return { messageCount, readySeen, adapterReady: ready };
     },
@@ -1915,7 +1950,7 @@ export class GhostNodeRuntimeBroker {
       hardKillTimer: null,
       mcpInitPromise: null,
       stopping: false,
-      exposedSecretValues: new Set(),
+      exposedSecretValues: new Set(child.inheritedSecretValues),
       privateSecretValues: new Set(),
       exitDrain: null,
     };

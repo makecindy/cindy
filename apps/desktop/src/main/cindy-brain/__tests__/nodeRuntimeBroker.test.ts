@@ -161,6 +161,34 @@ function rpcRequest(method = 'echo', params: unknown = { value: 1 }) {
   return { type: 'node-request', method, params };
 }
 
+const PROXY_ENV_NAMES = ['HTTP_PROXY', 'HTTPS_PROXY', 'ALL_PROXY', 'NO_PROXY'];
+const isProxyEnvName = (name: string): boolean => PROXY_ENV_NAMES.includes(name.toUpperCase());
+
+/** 清掉宿主里已有的代理变量（任一大小写写法），用例只看自己设置的。 */
+function clearProxyEnv(): void {
+  for (const name of PROXY_ENV_NAMES) {
+    vi.stubEnv(name, undefined);
+    vi.stubEnv(name.toLowerCase(), undefined);
+  }
+}
+
+/** 用假 utilityProcess 调一次 createUtilityNodeWorkerProcess，返回交给 fork 的 env。 */
+function forkedWorkerEnv(): Record<string, string> {
+  const fork = vi.fn((modulePath: unknown, entryArgs: unknown, options: unknown) => {
+    void modulePath;
+    void entryArgs;
+    void options;
+    return new FakeUtilityProcess();
+  });
+  createUtilityNodeWorkerProcess(
+    '/plugins/demo/node/worker.cjs',
+    '/plugins/demo',
+    'demo',
+    fork as never,
+  );
+  return (fork.mock.calls[0][2] as { env: Record<string, string> }).env;
+}
+
 describe('nodeRuntimeBroker owner boundary races', () => {
   it('does not spawn a worker for an instance the host holds stopped until restart', async () => {
     const ghost = fakeGhost();
@@ -540,6 +568,52 @@ describe('nodeRuntimeBroker · Electron utilityProcess 适配', () => {
     );
     expect(worker.kill('SIGTERM')).toBe(true);
     expect(child.kill).toHaveBeenCalledTimes(1);
+  });
+
+  // #8441：Go 编写的 CLI（gog）只认环境变量代理；白名单漏掉代理变量时，代理网络下
+  // 插件里的调用会直连并等到超时。
+  it('透传出站代理变量并保留原写法，其余宿主秘密仍被过滤', () => {
+    clearProxyEnv();
+    vi.stubEnv('HTTPS_PROXY', 'http://user:pass@127.0.0.1:7890');
+    vi.stubEnv('http_proxy', 'http://127.0.0.1:7891');
+    vi.stubEnv('all_proxy', 'socks5://127.0.0.1:7892');
+    vi.stubEnv('NO_PROXY', 'localhost,127.0.0.1');
+    vi.stubEnv('ANTHROPIC_API_KEY', 'secret');
+
+    const env = forkedWorkerEnv();
+    // 期望值取自 process.env 里实际存在的写法：Windows 上变量名不分大小写，枚举到的
+    // 写法以进程里实际存在的为准。转发的变量名必须与之逐个一致，不重不漏，值不变。
+    const present = Object.keys(process.env).filter(isProxyEnvName).sort();
+    expect(present).toHaveLength(4);
+    expect(Object.keys(env).filter(isProxyEnvName).sort()).toEqual(present);
+    for (const name of present) expect(env[name]).toBe(process.env[name]);
+    expect(env).not.toHaveProperty('ANTHROPIC_API_KEY');
+  });
+
+  it('区分大小写的环境里两种写法同时存在、取值不同时，各按原写法转发', () => {
+    const hostEnv = process.env;
+    // 替换成普通对象来模拟 POSIX 的区分大小写（Windows 的 process.env 做不到）。
+    process.env = {
+      PATH: '/usr/bin',
+      HTTPS_PROXY: 'http://127.0.0.1:7890',
+      https_proxy: 'http://127.0.0.1:7891',
+      no_proxy: 'localhost',
+    };
+    let env: Record<string, string>;
+    try {
+      env = forkedWorkerEnv();
+    } finally {
+      process.env = hostEnv;
+    }
+
+    expect(Object.keys(env).filter(isProxyEnvName).sort()).toEqual([
+      'HTTPS_PROXY',
+      'https_proxy',
+      'no_proxy',
+    ]);
+    expect(env.HTTPS_PROXY).toBe('http://127.0.0.1:7890');
+    expect(env.https_proxy).toBe('http://127.0.0.1:7891');
+    expect(env.no_proxy).toBe('localhost');
   });
 
   it('native observation 只在正整数 PID 回放或真实 spawn 时发布一次', () => {
@@ -1963,6 +2037,66 @@ describe('nodeRuntimeBroker · 意外死亡诊断(2026-07-26)', () => {
     expect(message).toContain('[REDACTED]');
     expect(message).not.toContain('sk-secret-token-12345');
     expect(JSON.stringify(warn.mock.calls)).not.toContain('sk-secret-token-12345');
+  });
+
+  // #8441 评审：透传的代理 URL 可能带 userinfo，插件进程把它打到 stderr 时不能进主日志与
+  // 退出诊断；不带 userinfo 的代理没有凭据，stderr 诊断照常保留。
+  describe('透传的代理 URL 与 stderr 脱敏', () => {
+    async function runWorkerThatPrintsProxy(proxy: string) {
+      clearProxyEnv();
+      vi.stubEnv('HTTPS_PROXY', proxy);
+      const child = new FakeUtilityProcess();
+      const fork = vi.fn((modulePath: unknown, entryArgs: unknown, options: unknown) => {
+        void modulePath;
+        void entryArgs;
+        void options;
+        queueMicrotask(() => child.emit('message', { type: 'ready' }));
+        return child;
+      });
+      const warn = vi.fn();
+      const broker = new GhostNodeRuntimeBroker({
+        getGhost: () => fakeGhost(),
+        // 真实适配器 + 假 utilityProcess：env 到 stderr 脱敏走完整生产路径。
+        spawnProcess: (entryPath, cwd, ghostId) =>
+          createUtilityNodeWorkerProcess(entryPath, cwd, ghostId, fork as never),
+        log: { info: vi.fn(), warn },
+      });
+      try {
+        const pending = broker.handleRequest('node-ghost', rpcRequest('slow'));
+        await vi.waitFor(() => expect(child.postMessage).toHaveBeenCalled());
+        child.stderr.write(`proxyconnect failed via ${proxy}\n`);
+        await vi.waitFor(() => expect(warn).toHaveBeenCalledWith('ghost node stderr', expect.anything()));
+        child.emit('exit', 1, null);
+        child.stderr.end();
+        const message = ((await pending) as { message?: string }).message ?? '';
+        const forwarded = (fork.mock.calls[0][2] as { env: Record<string, string> }).env.HTTPS_PROXY;
+        return { message, logged: JSON.stringify(warn.mock.calls), forwarded };
+      } finally {
+        broker.destroyAll();
+      }
+    }
+
+    it.each([
+      ['标准写法', 'http://proxy-user:proxy-pass-123@127.0.0.1:7890'],
+      ['带首尾空白', '  http://proxy-user:proxy-pass-123@127.0.0.1:7890 '],
+    ])('带 userinfo 的代理 URL（%s）不出现在日志与退出诊断里，传给进程的值不变', async (_label, proxy) => {
+      const { message, logged, forwarded } = await runWorkerThatPrintsProxy(proxy);
+
+      expect(forwarded).toBe(proxy);
+      expect(logged).not.toContain('proxy-pass-123');
+      expect(message).not.toContain('proxy-pass-123');
+      expect(message).toContain('[REDACTED]');
+    });
+
+    it('不带 userinfo 的代理 URL 没有凭据，stderr 诊断照常保留', async () => {
+      const proxy = 'http://127.0.0.1:7890';
+      const { message, logged, forwarded } = await runWorkerThatPrintsProxy(proxy);
+
+      expect(forwarded).toBe(proxy);
+      expect(logged).toContain('proxyconnect failed');
+      expect(message).toContain('proxyconnect failed');
+      expect(message).not.toContain('[REDACTED]');
+    });
   });
 
   it.each([
