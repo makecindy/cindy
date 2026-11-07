@@ -1,3 +1,4 @@
+import { SKILL_CARD_GRID_CLASS } from './lib/cardLayout';
 import { buildMarketSkillRoute } from './lib/detailRoutes';
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { useLocation, useNavigate } from 'react-router-dom';
@@ -360,6 +361,7 @@ function SkillhubMarketListViewInner({ active }: { active: boolean }) {
             </div>
           ) : (
             <div
+              className="plugin-management-content-frame"
               style={marketHasVerticalOverflow
                 ? { padding: '16px 12px 24px 36px' }
                 : { padding: '16px 24px 24px 24px' }}
@@ -380,12 +382,7 @@ function SkillhubMarketListViewInner({ active }: { active: boolean }) {
                         </span>
                       </div>
                       <div
-                        style={{
-                          display: 'grid',
-                          gridTemplateColumns: 'repeat(3, minmax(0, 1fr))',
-                          columnGap: '16px',
-                          rowGap: '16px',
-                        }}
+                        className={SKILL_CARD_GRID_CLASS}
                       >
                         {group.skills.map(renderCard)}
                       </div>
@@ -394,12 +391,7 @@ function SkillhubMarketListViewInner({ active }: { active: boolean }) {
                 </div>
               ) : (
                 <div
-                  style={{
-                    display: 'grid',
-                    gridTemplateColumns: 'repeat(3, minmax(0, 1fr))',
-                    columnGap: '16px',
-                    rowGap: '16px',
-                  }}
+                  className={SKILL_CARD_GRID_CLASS}
                 >
                   {items.map(renderCard)}
                 </div>

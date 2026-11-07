@@ -23,6 +23,7 @@ import { marketLocalCopies } from './lib/marketLocalCopies';
 export function SkillhubDetailRoute() {
   const { t } = useTranslation();
   const navigate = useNavigate();
+  const location = useLocation();
   const [search] = useSearchParams();
   const { user } = useAuth();
   const identity = useSkillhubIdentityPolicy(user);
@@ -79,11 +80,11 @@ export function SkillhubDetailRoute() {
     }
     if (action) query.set('action', action);
     route = `/skillhub/detail?${query}`;
-    navigate(route, { replace: true });
+    navigate(route, { replace: true, state: location.state });
   };
   const management = useMarketManagement({
     active: !!info?.canManage, reload, onClone: () => setPickerOpen(true),
-    onDeleted: () => selected ? selectSource('local') : navigate(returnTo),
+    onDeleted: () => selected ? selectSource('local') : navigate(returnTo, { state: location.state }),
   });
 
   const navigation = (beforeLeave: () => Promise<boolean> = async () => true, disabled = false) => (
@@ -109,16 +110,16 @@ export function SkillhubDetailRoute() {
   return <>
     {!showingMarket && selected ? (
       <SkillhubDetailView key={`${owner.generation}:${selected.id}`} entryOverride={selected} renderNavigation={navigation}
-        onUninstalled={() => info ? selectSource('market', null) : navigate(returnTo)} />
+        onUninstalled={() => info ? selectSource('market', null) : navigate(returnTo, { state: location.state })} />
     ) : showingMarket && market ? (
-      <SkillhubMarketDetailView key={`${owner.generation}:${remoteName}:${catalogScope}`} skill={market} onClose={() => navigate(returnTo)}
+      <SkillhubMarketDetailView key={`${owner.generation}:${remoteName}:${catalogScope}`} skill={market} onClose={() => navigate(returnTo, { state: location.state })}
         navigation={navigation()} primaryAction={user ? info?.canManage && identity.canWrite ? 'manage' : 'clone' : 'none'}
         onClone={() => setPickerOpen(true)} onManageAction={management.handleManageAction} learnSkillEnabled={learnSkillEnabled}
         onUpdate={user ? marketUpdate.update : undefined} updating={marketUpdate.updatingNames.has(market.name)}
         localActions={selected ? <LocalSkillControls key={selected.id} skill={selected} disabled={marketUpdate.updatingNames.has(market.name)} /> : null} />
     ) : (
       <SkillDetailPage>
-        <SkillDetailHeader title={remoteName ?? t('skillhub.home.title')} backLabel={t('skillhub.detail.backToSkillhub')} onBack={() => navigate(returnTo)} />
+        <SkillDetailHeader title={remoteName ?? t('skillhub.home.title')} backLabel={t('skillhub.detail.backToSkillhub')} onBack={() => navigate(returnTo, { state: location.state })} />
         {navigation()}
         <div className="flex flex-1 flex-col items-center justify-center gap-3 text-sm text-[var(--text-secondary)]">
           {!bootstrapped || loading || (showingMarket && remoteName && remote?.key !== targetKey)

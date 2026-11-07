@@ -150,3 +150,15 @@ describe('mapHubSkillInfoToDesktopInfo', () => {
     expect(info.folderHash).toBeUndefined();
   });
 });
+
+// Availability is additive: old numeric consumers keep a compatibility zero,
+// while updated consumers can distinguish it from a real count of zero.
+it.each([undefined, NaN, Infinity, -1, 0, 42])('preserves download availability for %s', (downloads) => {
+  const result = mapHubSkillInfoToDesktopInfo({
+    slug: 'test', version: '1', owner: { slug: 'owner', name: 'Owner' },
+    visibility: 'public', updatedAt: '2026-10-13', stats: { downloads },
+  });
+  const available = typeof downloads === 'number' && Number.isFinite(downloads) && downloads >= 0;
+  expect(result.downloadsAvailable).toBe(available);
+  expect(result.downloads).toBe(available ? downloads : 0);
+});

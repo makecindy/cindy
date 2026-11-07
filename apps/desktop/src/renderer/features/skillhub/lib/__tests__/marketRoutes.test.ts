@@ -94,7 +94,7 @@ describe('market route scope', () => {
     expect(homeSource).toContain('plugin-management-action-trigger');
     expect(homeSource).toContain('<HomeMarketCard');
     const homeCardSource = readFileSync(resolve(skillhubDir, 'components/HomeMarketCard.tsx'), 'utf8');
-    expect(homeCardSource).toContain('<SkillIcon url={s.icon} />');
+    expect(homeCardSource).toContain('<SkillIcon url={s.icon} categories={s.categories} tags={s.tags} />');
     expect(homeSource).not.toContain('<SkillSectionHeading');
     expect(homeSource).not.toContain("label={t('skillhub.home.globalScope')}");
   });

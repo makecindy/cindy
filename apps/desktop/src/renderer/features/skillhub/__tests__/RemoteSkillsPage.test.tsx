@@ -123,6 +123,13 @@ const page = (id = 'B', online = true, active = true) => (
   </MemoryRouter>
 );
 beforeEach(() => {
+  // jsdom does not implement the browser scrolling APIs used by the real category bar.
+  Object.defineProperty(HTMLElement.prototype, 'scrollTo', {
+    configurable: true, writable: true, value: vi.fn(),
+  });
+  Object.defineProperty(HTMLElement.prototype, 'scrollIntoView', {
+    configurable: true, writable: true, value: vi.fn(),
+  });
   vi.clearAllMocks();
   setDataOwnerGeneration('owner');
   window.matchMedia = vi

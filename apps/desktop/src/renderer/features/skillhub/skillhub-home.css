@@ -1,3 +1,15 @@
+.skillhub-compact-page {
+  padding-top: var(--space-4);
+}
+
+.skillhub-heading-copy {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  column-gap: var(--space-4);
+  row-gap: var(--space-2);
+}
+
 .skill-catalog-source-tabs.cindy-segmented {
   flex-shrink: 1;
   gap: var(--space-6);

@@ -48,9 +48,10 @@ const local = (id: string, scope: 'global' | 'project', catalogScope: 'market' |
   absolutePath: `/skills/${id}`, projectRoot: scope === 'project' ? `/projects/${id}` : undefined,
   registryEntry: { version: '1.0.0', catalogScope },
 }) as SkillhubSkill;
-function Location() { const location = useLocation(); return <div data-testid="location">{location.pathname}{location.search}</div>; }
-function mount(path: string) {
-  return render(<MemoryRouter initialEntries={[path]}><Location /><Routes>
+function Location() { const location = useLocation(); return <><div data-testid="location">{location.pathname}{location.search}</div><output data-testid="history-state">{JSON.stringify(location.state)}</output></>; }
+function mount(path: string, navigationState: unknown = null) {
+  const [pathname, search = ''] = path.split('?');
+  return render(<MemoryRouter initialEntries={[{ pathname, search: search ? '?' + search : '', state: navigationState }]}><Location /><Routes>
     <Route path="/skillhub/detail" element={<SkillhubDetailRoute />} />
     <Route path="/skillhub/local/:kind/project/:projectHash/:name" element={<LegacySkillDetailRedirect />} />
     <Route path="/skillhub/market/:name" element={<LegacySkillDetailRedirect market />} />
@@ -69,6 +70,20 @@ beforeEach(() => {
 afterEach(() => { cleanup(); vi.unstubAllGlobals(); });
 
 describe('unified Skill details', () => {
+  // Review 4321140102: returning through the real market-detail route must keep
+  // both catalogs, including after changing the selected installed copy (unit).
+  it.each([false, true])('preserves both catalog filters on market detail return (switch copy=%s)', async (switchCopy) => {
+    const skillhubHome = { catalogTab: 'public', query: 'demo', sort: 'updated_at', category: 'public-only',
+      categoriesByCatalog: { public: 'public-only', organization: 'team-only' } };
+    mount(buildMarketSkillRoute({ name: 'demo', catalogScope: 'market' }, '/skillhub/market'), { skillhubHome });
+    await screen.findByTestId('market');
+    if (switchCopy) {
+      fireEvent.change(screen.getByLabelText('copy'), { target: { value: 'project' } });
+      await waitFor(() => expect(screen.getByTestId('controls').textContent).toBe('project'));
+    }
+    fireEvent.click(screen.getByText('back'));
+    expect(JSON.parse(screen.getByTestId('history-state').textContent!)).toEqual({ skillhubHome });
+  });
   it('resolves a direct market link, excludes same-slug other catalogs and retains return filters', async () => {
     const returnTo = '/skillhub/market?q=demo&sort=trending&visibility=mine';
     mount(buildMarketSkillRoute({ name: 'demo', catalogScope: 'market' }, returnTo));
