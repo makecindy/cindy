@@ -1,3 +1,6 @@
+import { createPersonalBuildMonitor } from './personalBuildMonitor.js';
+import { updatePersonalLocalPlugins } from './cindy-brain/index.js';
+import { observeDesktopStartupResult } from './devStartupStatus.js';
 import { registerRuntimeSettingsSection } from './app-settings/runtime.js';
 import { z as settingsSchema } from 'zod';
 import { deliverRoutineResult, listRoutineDeliveryTargets } from './routines/delivery.js';
@@ -2784,7 +2787,10 @@ setEnsureHostForBackend((sessionId) => rsbWindowController.ensureOpenForAutomati
 setIsDetachedForBackend(() => readRsbWindowSettings().detached);
 // 「我的浏览器」后端经 browserExtension 插件槽拿页面控制桥接;槽归 cindy-brain,
 // 这里倒置依赖,browser.ts 不反向 import 插件基座。
-setUserBrowserPageControlProvider(() => getGhostBrowserExtensionSlot().getPageControl());
+setUserBrowserPageControlProvider(
+  () => getGhostBrowserExtensionSlot().getPageControl(),
+  () => getGhostBrowserExtensionSlot().getPageControlUnavailableReason(),
+);
 // The plugin providing "My browser" hides its own page tools from agents: one way to drive the user's browser.
 setPageControlGhostProvider(() => getGhostBrowserExtensionSlot().getPageControl()?.instanceId ?? null);
 setBrowserSessionUploadRootResolver(async (sessionId) => {
@@ -6795,6 +6801,32 @@ const registerIpcHandlers = () => {
       //
       // 不进 device-link allowlist:updater 类 channel 按 allowlist 顶部注释属「永不放行」,
       // 且远程控制端不会代替用户点被控端的更新重启。
+      // Only the explicitly configured developer supervisor receives this handshake.
+      // Packaged apps and ordinary dev launches retain their existing lifecycle.
+      if (process.platform === 'darwin' && !app.isPackaged && process.env.CINDY_PERSONAL_MONITOR_DIR && process.env.CINDY_PERSONAL_GENERATION) {
+        let personalReady = false;
+        const stopObserving = observeDesktopStartupResult((ready) => { personalReady = ready; });
+        const tick = createPersonalBuildMonitor({
+          directory: process.env.CINDY_PERSONAL_MONITOR_DIR,
+          generation: process.env.CINDY_PERSONAL_GENERATION,
+          pid: process.pid, now: Date.now,
+          ready: () => personalReady && !!mainWindowRef && !mainWindowRef.isDestroyed()
+            && !mainWindowRef.webContents.isDestroyed() && !mainWindowRef.webContents.isCrashed(),
+          remoteReady: () => getDeviceLinkStatus() === 'online',
+          idle: () => powerMonitor.getSystemIdleTime() >= 120,
+          busy: () => hasUpdateRelaunchBusyActivity({
+            readSynchronousBusy: () => isAppSessionBoundaryPending() || authManager.isAuthFlowBusy()
+              || getUpdateRelaunchControllers().length > 0 || hasInFlightRemoteInvokes(),
+            readScheduleBusy: async () => (await evaluateRelaunchBusyActivity(readRelaunchActivitySources())).busy,
+          }),
+          quitting: () => isQuitting,
+          quit: () => app.quit(),
+          updateLocalPlugins: updatePersonalLocalPlugins,
+        });
+        const monitorTimer = setInterval(() => { void tick().catch(() => {}); }, 2_000);
+        monitorTimer.unref();
+        app.once('will-quit', () => { clearInterval(monitorTimer); stopObserving(); });
+      }
       registerRelaunchBusyActivityIpc(readRelaunchActivitySources, {
         describeTurns: () => describeRelaunchTurns(() => listInTurnSessionIds(getMakerIfReady())),
       });

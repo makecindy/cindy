@@ -82,8 +82,7 @@
             "enableShrinkResourcesInReleaseBuilds": true
           },
           "ios": {
-            "buildReactNativeFromSource": true,
-            "enableSceneSupport": true
+            "buildReactNativeFromSource": true
           }
         }
       ],

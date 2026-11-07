@@ -5557,12 +5557,17 @@
         "userBrowserSetup": {
           "installPluginTitle": "Cindy Chrome プラグインをインストール",
           "enablePluginTitle": "Cindy Chrome プラグインを有効にする",
-          "installExtensionTitle": "ブラウザに Cindy 拡張機能を追加",
+          "connectExtensionTitle": "ブラウザー拡張機能が未接続です",
           "pluginBody": "「自分のブラウザ」は Cindy Chrome プラグインとそのブラウザ拡張機能を通じて Chrome / Edge に接続します。まず Cindy でプラグインをインストールし、案内に従って拡張機能を追加してください。",
-          "extensionBody": "「ブラウザ拡張機能を追加」を押すと、使用中のブラウザで Cindy 拡張機能のストアページが開きます。「追加」を押すと、ここは自動的に「接続済み」になります。追加済みの場合は、ブラウザの拡張機能管理で有効にしてください。",
+          "connectionBody": "Cindy とブラウザーを起動したまま、Cindy 拡張機能が有効になっているか確認してください。未接続でも再インストールが必要とは限りません。再接続すると表示が自動で更新されます。",
           "installPlugin": "プラグインをインストール",
           "enablePlugin": "有効にする",
-          "installExtension": "ブラウザ拡張機能を追加",
+          "openExtensionStore": "拡張機能ストアを開く",
+          "updatingTitle": "ブラウザー接続を更新中",
+          "updatingBody": "更新が完了すると自動的に再接続します。",
+          "selectPluginTitle": "ブラウザー拡張機能を選択",
+          "selectPluginBody": "プラグインの詳細を開き、「このブラウザー拡張機能を使用」を選択して、Cindy が使用する拡張機能を確認してください。",
+          "selectPlugin": "プラグインを開く",
           "updatePluginTitle": "Cindy Chrome プラグインを更新",
           "updatePluginBody": "インストール済みの Cindy Chrome プラグインは古く、「自分のブラウザ」に対応していません。最新版に更新してから、案内に従って拡張機能を追加してください。",
           "updatePlugin": "更新する",
@@ -14054,8 +14059,10 @@
       "mailLegacy": "下書きの履歴（読み取り専用）",
       "taskAutoArchived": "「{{title}}」をアーカイブしました",
       "taskAutoArchivedUndo": "元に戻す",
-      "taskAutoArchivePending": "離れると自動でアーカイブ",
-      "taskAutoArchiveCancel": "今回はしない"
+      "taskAutoArchivePending": "このタスクを離れると自動アーカイブします",
+      "taskAutoArchiveCancel": "キャンセル",
+      "taskAutoArchiveCancelled": "今回は自動アーカイブしません",
+      "taskArchiveNow": "今すぐアーカイブ"
     },
     "ghostHook": {
       "blockedFallback": "メッセージはプラグインによりブロックされました(未送信)",

@@ -284,8 +284,8 @@ it('measures mounted shareable messages for manual sharing sticky selection', ()
     expect(readerEnd).toBeGreaterThan(readerStart);
     const readerSource = source.slice(readerStart, readerEnd);
 
-    expect(source).toContain('shareableMessageViewsRef = useRef(new Map<string, View>())');
-    expect(source).toContain('onShareableMessageViewChange?: (clientId: string, view: View | null) => void');
+    expect(source).toContain('shareableMessageViewsRef = useRef(new Map<string, ViewInstance>())');
+    expect(source).toContain('onShareableMessageViewChange?: (clientId: string, view: ViewInstance | null) => void');
     expect(source).toContain('ref={shareableMessage ? handleShareableMessageViewChange : undefined}');
     expect(readerSource).toContain('shareableMessageViewsRef.current.entries()');
     expect(readerSource).not.toContain("token.item.type !== 'message'");
