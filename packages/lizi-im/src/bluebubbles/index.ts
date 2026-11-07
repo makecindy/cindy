@@ -67,6 +67,8 @@ export class BlueBubblesIM extends BaseIM implements TextChannelIM {
   private lastWebhookAt: number | null = null;
   private readonly activeDispatches = new Set<string>();
   private readonly activeSends = new Set<string>();
+  // Prepared inputs retain chat order until actual acceptance, including the
+  // asynchronous interval before a handler reports busy or persists the message.
   private readonly deferredEvents = new Map<string, IMMessageEvent>();
   private readonly cancelledEvents = new WeakSet<IMMessageEvent>();
   private readonly eventSentAt = new WeakMap<IMMessageEvent, number>();
@@ -86,7 +88,10 @@ export class BlueBubblesIM extends BaseIM implements TextChannelIM {
   onMessage(callback: Handler): () => void { this.messages.add(callback); return () => this.messages.delete(callback); }
   acknowledgeIncoming(guid: string): void {
     // Called only by the host's persisted-user-message hook during this dispatch.
-    if (this.activeDispatches.has(guid)) this.receipts?.mark(guid, 'accepted');
+    if (this.activeDispatches.has(guid)) {
+      this.receipts?.mark(guid, 'accepted');
+      this.deferredEvents.delete(guid);
+    }
   }
   get botContextId(): string { return this.config ? createHash('sha256').update(this.config.serverUrl).digest('hex').slice(0, 24) : ''; }
   getOwnerUserId(): string | null {
@@ -315,8 +320,6 @@ export class BlueBubblesIM extends BaseIM implements TextChannelIM {
               ...(stored.url ? { url: stored.url } : {}) });
           }
         }
-        // An interrupted dispatch is visible as uncertain; never blindly repeat model side effects.
-        receipts.mark(guid, 'dispatching');
         const pending = this.pendingReplies.get(event.chatId);
         const command = event.text.trim().toLowerCase();
         const stop = event.attachments.length === 0 && event.unsupported.length === 0
@@ -328,9 +331,27 @@ export class BlueBubblesIM extends BaseIM implements TextChannelIM {
         // Both the first observation and the verified send time must follow this request.
         // Deferred retries and delayed historical delivery are never confirmation answers.
         if (!stop && pending && receipts.receivedAfter(guid, pending.createdAt)
-          && (this.eventSentAt.get(event) ?? 0) > pending.createdAt && pending.accept(event.text)) {
-          receipts.mark(guid, 'accepted'); continue;
+          && (this.eventSentAt.get(event) ?? 0) > pending.createdAt) {
+          receipts.mark(guid, 'dispatching');
+          if (pending.accept(event.text)) {
+            receipts.mark(guid, 'accepted'); continue;
+          }
+          receipts.mark(guid, 'pending');
         }
+        let blocked = false;
+        for (const [id, earlier] of this.deferredEvents) {
+          if (id === guid) break;
+          if (earlier.chatId === event.chatId) { blocked = true; break; }
+        }
+        this.deferredEvents.set(guid, event);
+        if (!stop && blocked) {
+          // Replies above and stop commands bypass ordinary work; another chat
+          // can still progress while this chat waits for its oldest input.
+          this.retryDeferred(generation);
+          continue;
+        }
+        // An interrupted dispatch is visible as uncertain; never blindly repeat model side effects.
+        receipts.mark(guid, 'dispatching');
         this.activeDispatches.add(guid);
         let awaitPersistence = false, deferred = false;
         event.delivery = {
@@ -355,14 +376,23 @@ export class BlueBubblesIM extends BaseIM implements TextChannelIM {
             this.deferredEvents.set(guid, event!);
             deferred = true;
           },
-          accept: () => { this.assertLive(generation); if (!this.cancelledEvents.has(event!)) receipts.mark(guid, 'accepted'); },
+          accept: () => {
+            this.assertLive(generation);
+            if (!this.cancelledEvents.has(event!)) {
+              receipts.mark(guid, 'accepted');
+              this.deferredEvents.delete(guid);
+            }
+          },
         };
         // Do not block ingress on a model turn: its confirmation reply arrives on this same receiver.
         void Promise.all([...this.messages].map(callback => Promise.resolve().then(() => {
           this.assertLive(generation);
           return callback(event!);
         }))).then(() => {
-          if (this.live(generation) && !awaitPersistence && !deferred && !this.cancelledEvents.has(event!)) receipts.mark(guid, 'accepted');
+          if (this.live(generation) && !awaitPersistence && !deferred && !this.cancelledEvents.has(event!)) {
+            receipts.mark(guid, 'accepted');
+            this.deferredEvents.delete(guid);
+          }
         }).catch(() => this.fail(generation)).finally(() => {
           if (this.live(generation)) {
             this.activeDispatches.delete(guid);
@@ -458,28 +488,31 @@ export class BlueBubblesIM extends BaseIM implements TextChannelIM {
     const result = new Promise<T>((yes, no) => { resolve = yes; reject = no; });
     // Attach a rejection consumer before sending (disconnect may race the send).
     void result.catch(() => {});
+    const retire = () => {
+      clearTimeout(timer);
+      if (this.pendingReplies.get(chatId) === pending) this.pendingReplies.delete(chatId);
+    };
     const pending = { requestId, createdAt: this.now(), accept: (text: string) => {
       const value = parse(text); if (value === null) return false;
-      if (shared) shared.decide(value); else resolve(value);
+      if (shared) shared.decide(value);
+      else { retire(); resolve(value); }
       return true;
-    }, cancel: () => { clearTimeout(timer); reject(new Error('BLUEBUBBLES_INTERACTION_CANCELLED')); } };
+    }, cancel: () => { retire(); reject(new Error('BLUEBUBBLES_INTERACTION_CANCELLED')); } };
     const timer = setTimeout(pending.cancel, timeoutMs);
     this.pendingReplies.set(chatId, pending);
-    if (shared) void shared.result.then(resolve, reject);
+    if (shared) void shared.result.then(value => { retire(); resolve(value); }, error => { retire(); reject(error); });
     try {
       try { await this.sendText(chatId, prompt); }
       catch (error) {
         if (!shared) throw error;
         // A failed presentation is not a denial. The shared Desktop/Mobile
         // request owns its lifecycle; remove this failed channel waiter.
-        clearTimeout(timer);
-        if (this.pendingReplies.get(chatId) === pending) this.pendingReplies.delete(chatId);
+        retire();
       }
       return await result;
     }
     finally {
-      clearTimeout(timer);
-      if (this.pendingReplies.get(chatId) === pending) this.pendingReplies.delete(chatId);
+      retire();
     }
   }
 }

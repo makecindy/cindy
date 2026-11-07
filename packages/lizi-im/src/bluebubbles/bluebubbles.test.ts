@@ -233,6 +233,64 @@ describe('BlueBubbles local ingress', () => {
     expect(f.received.map(row => row.messageId)).toEqual(['question']);
   });
 
+  // Tier 1, #9250/r4501143428: delivery can precede the prompt's HTTP response.
+  // The existing reply test completes send immediately and cannot detect a stale parser.
+  it.each([false, true])('retires an answered text waiter before its prompt HTTP response (shared=%s)', async useShared => {
+    const f = await fixture();
+    let finishSend!: (value: { guid: string }) => void;
+    f.send.mockImplementationOnce(() => new Promise(resolve => { finishSend = resolve; }));
+    const parse = vi.fn((text: string) => text.trim() || null);
+    let finishShared!: (value: string) => void;
+    const shared = useShared ? { result: new Promise<string>(resolve => { finishShared = resolve; }),
+      decide: (value: string) => { finishShared(value); return true; } } : undefined;
+    const reply = f.im.requestTextReply(f.chat.guid, 'What should I do?', parse, undefined, shared);
+    try {
+      f.message('first-answer', { text: 'answer' });
+      await f.webhook('first-answer');
+      await f.im.reconcile();
+      f.message('new-work', { text: 'do another task' });
+      await f.webhook('new-work');
+      await f.im.reconcile();
+      expect(f.received.map(event => event.messageId)).toEqual(['new-work']);
+      expect(f.state().inbox['new-work'].state).toBe('accepted');
+      expect(parse).toHaveBeenCalledTimes(1);
+    } finally {
+      finishSend({ guid: 'delivered-prompt' });
+      await expect(reply).resolves.toBe('answer');
+    }
+  });
+
+  // Tier 1, #9250/r4501143430: a busy result followed by a free session in one
+  // catch-up batch must not let a newer instruction overtake the durable pending input.
+  it.each([false, true])('keeps newer chat inputs behind a deferred input (restart=%s)', async restart => {
+    const f = await fixture(null, undefined, true);
+    let busy = true;
+    const executed: string[] = [];
+    f.im.onMessage(event => {
+      event.delivery!.awaitPersistence();
+      if (event.messageId === 'older' && busy) {
+        event.delivery!.defer();
+        busy = false; // The preceding model turn finishes before the next dispatch.
+        return;
+      }
+      executed.push(event.messageId);
+      f.im.acknowledgeIncoming(event.messageId);
+    });
+    f.message('older');
+    f.message('newer');
+    f.message('other-chat-progress', { chats: [f.otherChat] });
+    await f.im.reconcile();
+    expect(executed).toEqual(['other-chat-progress']);
+    expect(f.state().inbox.older.state).toBe('pending');
+    expect(f.state().inbox.newer.state).toBe('pending');
+    if (restart) { await f.im.dispose(); await f.im.init(); }
+    else await f.im.reconcile();
+    await f.im.reconcile();
+    expect(executed).toEqual(['other-chat-progress', 'older', 'newer']);
+    expect(f.state().inbox.older.state).toBe('accepted');
+    expect(f.state().inbox.newer.state).toBe('accepted');
+  });
+
   // Tier 1, #9250: queued text cannot authorize a question created after its arrival.
   // Existing confirmation test only covers a new reply following the prompt.
   it('does not consume a deferred yes as permission for a later request', async () => {
