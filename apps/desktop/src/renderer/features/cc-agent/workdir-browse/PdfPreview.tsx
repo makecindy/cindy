@@ -398,7 +398,19 @@ export function PdfPreview({ workdir, relPath, size, mtimeMs }: PdfPreviewProps)
     const found: number[] = [];
     const needle = query.toLocaleLowerCase();
     for (let page = 1; needle && page <= pdfDoc.numPages; page++) {
-      const content = await (await pdfDoc.getPage(page)).getTextContent();
+      // 文档可能在本页 await 期间被 destroy(unmount/文件变更/retry 触发
+      // loadingTask.destroy()),getPage/getTextContent 会 reject("Transport
+      // destroyed");generation 守卫只在成功路径上,不接住就是 unhandled
+      // rejection。已被取代的搜索静默终止;仍是当前搜索的失败留下日志再终止。
+      let content: Awaited<ReturnType<Awaited<ReturnType<typeof pdfDoc.getPage>>['getTextContent']>>;
+      try {
+        content = await (await pdfDoc.getPage(page)).getTextContent();
+      } catch (err) {
+        if (generation === searchGeneration.current) {
+          log.warn('pdf search page read failed', { relPath, page, error: String(err) });
+        }
+        return;
+      }
       if (generation !== searchGeneration.current) return;
       if (
         content.items
