@@ -1,0 +1,13 @@
+{
+  "sharedTaskReadOnly": "Qu' lo'wI' neH bejvam vanglaH.",
+  "retry": "chu'qa'",
+  "loadFailed": "app chu'laHbe'lu'. rar yIbej, chu'qa'.",
+  "updateRequired": "janvam MCP Apps Qapbe' DaH. janvetlhDaq Cindy yIchoH, yIvangqa'.",
+  "appName": "MCP App",
+  "cardTitle": "{{title}} · $t(mcpApps.appName)",
+  "messageSource": "$t(mcpApps.appName) \"{{name}}\" ngeHlu'.",
+  "serverId": "MCP server ID: {{id}}",
+  "exitFullscreen": "naQ bej mej",
+  "mobileUpdateRequired": "choHqa' Cindy chu' this wabwI' to poSmoH this card.",
+  "filesOnExecutionComputer": "Seng janDaq nav naQ yIbej"
+}

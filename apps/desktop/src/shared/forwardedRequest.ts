@@ -11,6 +11,7 @@ import ja from '../renderer/i18n/locales/ja/common.json';
 import ko from '../renderer/i18n/locales/ko/common.json';
 import zhHantLzh from '../renderer/i18n/locales/zh-Hant-x-lzh/common.json';
 import zhHansLzh from '../renderer/i18n/locales/zh-Hans-x-lzh/common.json';
+import tlh from '../renderer/i18n/locales/tlh/common.json';
 export { verifiedOwnerRequestText } from '@cindy/maker-shared/auto-review-intent';
 
 // Keep every historical dialect readable: persisted receipts are verified byte-for-byte.
@@ -27,6 +28,7 @@ const FORWARDED_REQUEST_COPY = {
   ko: ko.forwardedRequest,
   'zh-Hant-x-lzh': zhHantLzh.forwardedRequest,
   'zh-Hans-x-lzh': zhHansLzh.forwardedRequest,
+  tlh: tlh.forwardedRequest,
 } satisfies Record<SupportedLocale, typeof en.forwardedRequest>;
 
 /** Host-owned source evidence. It describes authorship, never execution permission. */
@@ -82,7 +84,7 @@ export function formatForwardedRequest(source: ForwardedRequestSource, supplemen
   if (source.plainBody) return supplement;
   // New UI languages must also reach receivers released before those catalogs.
   // Until the wire negotiates dialect support, emit an existing English envelope.
-  const wireLocale = locale === 'es' || locale === 'fr' || locale === 'de' || locale === 'pt-PT' || locale === 'pt-BR'
+  const wireLocale = locale === 'es' || locale === 'fr' || locale === 'de' || locale === 'pt-PT' || locale === 'pt-BR' || locale === 'tlh'
     ? 'en' : locale;
   return formatReceiptDialect(source, supplement, wireLocale);
 }

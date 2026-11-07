@@ -21,6 +21,15 @@ export interface EditableContextMenuLabels {
 }
 
 export const EDITABLE_CONTEXT_MENU_LABELS: Record<SupportedLocale, EditableContextMenuLabels> = {
+  tlh: {
+    undo: "ghangHa'",
+    redo: "ghangqa'",
+    cut: "pe'",
+    copy: "nIb",
+    paste: "qem",
+    pasteAsPlainText: "qem Hol nIt",
+    selectAll: "Hoch wuq",
+  },
   'zh-CN': {
     undo: '撤销',
     redo: '重做',

@@ -1,0 +1,55 @@
+{
+  "settings": {
+    "sectionTitle": "Relay Service",
+    "currentLabel": "Relay Service",
+    "official": "{{appName}} Official Relay",
+    "switchToOfficial": "Switch chegh to Official Relay",
+    "officialHint": "Your janmey connect through the {{appName}} official relay. To use your own relay, tu' its poS QR code chu' the De'wI' SengtaH it and scan the code with your wabwI'’s camera.",
+    "selfHostedHint": "Your janmey connect through your own relay at {{address}}. Sign-in, modelmey, shared Qu'mey, and other services still use {{appName}}.",
+    "removedHint": "This wabwI' was removed from the relay, or the relay was turned SoQlu'. Switch chegh to the official relay, or poS again from your De'wI'.",
+    "credentialMissingHint": "The relay credential isn’t chu' this wabwI' anymore. poS again from your De'wI', or switch chegh to the official relay.",
+    "confirmTitle": "Switch chegh to Official Relay?",
+    "confirmBody": "This wabwI' will mej “{{name}}” and use the {{appName}} official relay. To use that relay again, poS it again from your De'wI'.",
+    "confirmAction": "Switch chegh",
+    "switchFailed": "Couldn’t switch chegh to the official relay. Try again in a moment.",
+    "pushUnavailable": "While you use your own relay, Qu' jachmey from your De'wI'mey aren’t sent to this wabwI'."
+  },
+  "issue": {
+    "removedTitle": "Removed from Relay",
+    "removedHint": "This wabwI' was removed from the relay, or the relay was turned SoQlu'. You can switch chegh to the official relay in SeHlaw'."
+  },
+  "join": {
+    "title": "poS Relay",
+    "checking": "Connecting to the relay…",
+    "body": "After you poS, this wabwI' connects to your De'wI'mey through this relay. Sign-in, modelmey, shared Qu'mey, and other services still use {{appName}}. While you use your own relay, Qu' jachmey from your De'wI'mey aren’t sent to this wabwI'.",
+    "switchNote": "Joining switches this wabwI' from “{{current}}” to this relay.",
+    "action": "poS",
+    "pairingCodeLabel": "Pairing code",
+    "verifyHint": "chu' the De'wI' SengtaH the relay, check that it shows these digits, then approve.",
+    "waiting": "Waiting for approval…",
+    "cancel": "mev",
+    "joinedTitle": "Joined the Relay",
+    "joinedBody": "This wabwI' DaH connects to your De'wI'mey through “{{name}}”.",
+    "done": "rIn",
+    "retry": "Try Again",
+    "signedOut": "Hotlh in to {{appName}} first, then poS this relay.",
+    "signIn": "Hotlh In",
+    "invalidLink": "This poS He isn’t valid or has expired. chenmoH a chu' one chu' your De'wI'.",
+    "cancelled": "Joining was canceled. To poS this relay, chenmoH a chu' poS He chu' your De'wI'."
+  },
+  "errors": {
+    "unreachable": "Can’t reach this relay. Make sure your wabwI' and De'wI' are chu' the same Web, or that your wabwI' can poSmoH this address.",
+    "insecureUnreachable": "Can’t reach this relay. Phones can poS a relay only over HTTPS. Set up a certificate for the relay chu' your De'wI', then chenmoH a chu' poS He.",
+    "notRelay": "This address isn’t a {{appName}} relay. Check the poS He.",
+    "incompatible": "This relay doesn’t work with this juv of {{appName}}. choHqa' both the relay and {{appName}}.",
+    "accountMismatch": "This relay belongs to a different {{appName}} account.",
+    "codeInvalid": "This poS He has expired. chenmoH a chu' one chu' your De'wI'.",
+    "rateLimited": "Too many attempts. Try again later.",
+    "rejected": "The poS request was declined chu' the De'wI'.",
+    "expired": "The request timed out while waiting for approval. chenmoH a chu' poS He chu' your De'wI'.",
+    "ownerMismatch": "The relay returned a certificate that the owner in the poS He didn’t Issue. You may be rarta' to a fake relay, so joining mevlu'.",
+    "failed": "Couldn’t poS the relay. Try again later.",
+    "saveFailed": "The request was approved, but the relay credential couldn’t be qonlu' chu' this wabwI'. chenmoH a chu' poS He chu' your De'wI' and try again.",
+    "credentialUnavailable": "This wabwI' doesn’t have a usable relay credential. poS again, or switch chegh to the official relay in SeHlaw'."
+  }
+}

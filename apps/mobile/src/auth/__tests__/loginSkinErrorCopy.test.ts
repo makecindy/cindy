@@ -38,9 +38,11 @@ const LOCALE_TAGS: Record<LoginLocale, string> = {
   // 文言只能手动选择:系统 tag 解析到 zh-TW / zh-CN,由 selectLocale 走手动 override。
   "zh-Hant-x-lzh": "zh-Hant-TW",
   "zh-Hans-x-lzh": "zh-Hans-CN",
+  // 克林贡语只能手动选择:系统语言标签永不为 tlh。
+  tlh: "tlh",
 };
 const LOCALES = Object.keys(LOCALE_TAGS) as LoginLocale[];
-const MANUAL_ONLY_LOCALES: readonly LoginLocale[] = ["zh-Hant-x-lzh", "zh-Hans-x-lzh"];
+const MANUAL_ONLY_LOCALES: readonly LoginLocale[] = ["zh-Hant-x-lzh", "zh-Hans-x-lzh", "tlh"];
 
 /** 切换生效语言:常规 locale 走系统 tag,仅手动可选的 locale 走 override。 */
 function selectLocale(locale: LoginLocale) {

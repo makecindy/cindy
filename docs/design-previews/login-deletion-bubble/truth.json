@@ -1,2279 +1,2403 @@
 {
-  "supportedLocales": [
-    {
-      "value": "zh-CN",
+  "adaptive": {
+    "oracle": {
       "provenance": {
-        "source": "../../../apps/desktop/src/shared/locale.ts",
-        "locator": "SUPPORTED_LOCALES[0]",
-        "hash": "sha256:4fdab9d79466d01f3876806e1f0fed4e36670d0c5ced911d72cbba5917c3854b"
-      }
-    },
-    {
-      "value": "zh-TW",
-      "provenance": {
-        "source": "../../../apps/desktop/src/shared/locale.ts",
-        "locator": "SUPPORTED_LOCALES[1]",
-        "hash": "sha256:4fdab9d79466d01f3876806e1f0fed4e36670d0c5ced911d72cbba5917c3854b"
-      }
-    },
-    {
-      "value": "en",
-      "provenance": {
-        "source": "../../../apps/desktop/src/shared/locale.ts",
-        "locator": "SUPPORTED_LOCALES[2]",
-        "hash": "sha256:4fdab9d79466d01f3876806e1f0fed4e36670d0c5ced911d72cbba5917c3854b"
-      }
-    },
-    {
-      "value": "ja",
-      "provenance": {
-        "source": "../../../apps/desktop/src/shared/locale.ts",
-        "locator": "SUPPORTED_LOCALES[3]",
-        "hash": "sha256:4fdab9d79466d01f3876806e1f0fed4e36670d0c5ced911d72cbba5917c3854b"
-      }
-    },
-    {
-      "value": "ko",
-      "provenance": {
-        "source": "../../../apps/desktop/src/shared/locale.ts",
-        "locator": "SUPPORTED_LOCALES[4]",
-        "hash": "sha256:4fdab9d79466d01f3876806e1f0fed4e36670d0c5ced911d72cbba5917c3854b"
-      }
-    },
-    {
-      "value": "es",
-      "provenance": {
-        "source": "../../../apps/desktop/src/shared/locale.ts",
-        "locator": "SUPPORTED_LOCALES[5]",
-        "hash": "sha256:4fdab9d79466d01f3876806e1f0fed4e36670d0c5ced911d72cbba5917c3854b"
-      }
-    },
-    {
-      "value": "fr",
-      "provenance": {
-        "source": "../../../apps/desktop/src/shared/locale.ts",
-        "locator": "SUPPORTED_LOCALES[6]",
-        "hash": "sha256:4fdab9d79466d01f3876806e1f0fed4e36670d0c5ced911d72cbba5917c3854b"
-      }
-    },
-    {
-      "value": "de",
-      "provenance": {
-        "source": "../../../apps/desktop/src/shared/locale.ts",
-        "locator": "SUPPORTED_LOCALES[7]",
-        "hash": "sha256:4fdab9d79466d01f3876806e1f0fed4e36670d0c5ced911d72cbba5917c3854b"
-      }
-    },
-    {
-      "value": "pt-PT",
-      "provenance": {
-        "source": "../../../apps/desktop/src/shared/locale.ts",
-        "locator": "SUPPORTED_LOCALES[8]",
-        "hash": "sha256:4fdab9d79466d01f3876806e1f0fed4e36670d0c5ced911d72cbba5917c3854b"
-      }
-    },
-    {
-      "value": "pt-BR",
-      "provenance": {
-        "source": "../../../apps/desktop/src/shared/locale.ts",
-        "locator": "SUPPORTED_LOCALES[9]",
-        "hash": "sha256:4fdab9d79466d01f3876806e1f0fed4e36670d0c5ced911d72cbba5917c3854b"
-      }
-    },
-    {
-      "value": "zh-Hant-x-lzh",
-      "provenance": {
-        "source": "../../../apps/desktop/src/shared/locale.ts",
-        "locator": "SUPPORTED_LOCALES[10]",
-        "hash": "sha256:4fdab9d79466d01f3876806e1f0fed4e36670d0c5ced911d72cbba5917c3854b"
-      }
-    },
-    {
-      "value": "zh-Hans-x-lzh",
-      "provenance": {
-        "source": "../../../apps/desktop/src/shared/locale.ts",
-        "locator": "SUPPORTED_LOCALES[11]",
-        "hash": "sha256:4fdab9d79466d01f3876806e1f0fed4e36670d0c5ced911d72cbba5917c3854b"
-      }
-    }
-  ],
-  "structure": {
-    "desktop": {
-      "renderPosition": {
-        "value": "LoginPage 根层(</LoginStage> 之后),不在 stage 文档流;absolute z-30 浮层",
-        "provenance": {
-          "source": "../../../apps/desktop/src/renderer/components/login/LoginPage.tsx",
-          "locator": "LoginPage.tsx </LoginStage> 之后的 AccountDeletionStatusPanel 渲染点",
-          "hash": "sha256:fd80ac6b6de8cf59ce9cf76dc67be96a923a145a529b0b9e1c74862a3c277a65"
-        }
+        "hash": "sha256:b2ee100cd0bdc8cb629dbf83cf2ba495780d36f9dbcffad5f6fcb9e7971be649",
+        "locator": "loginSkinLayout.ts:302 resolveLoginSurface / :486 resolveDeletionBubbleFrame",
+        "source": "../../../apps/mobile/src/auth/loginSkinLayout.ts"
       },
-      "dismissGate": {
-        "value": "仅 completed 态传入 onDismiss(「我知道了」);pending/processing 无按钮",
-        "provenance": {
-          "source": "../../../apps/desktop/src/renderer/components/login/LoginPage.tsx",
-          "locator": "LoginPage.tsx accountDeletionStatus.status === 'completed' ? onDismiss : undefined",
-          "hash": "sha256:fd80ac6b6de8cf59ce9cf76dc67be96a923a145a529b0b9e1c74862a3c277a65"
-        }
-      },
-      "bubbleClass": {
-        "value": "w-full break-words border border-[var(--login-deletion-bubble-border)] bg-[var(--login-deletion-bubble-bg)] text-center",
-        "provenance": {
-          "source": "../../../apps/desktop/src/renderer/components/login/LoginPage.tsx",
-          "locator": "AccountDeletionStatusPanel section className 全串",
-          "hash": "sha256:fd80ac6b6de8cf59ce9cf76dc67be96a923a145a529b0b9e1c74862a3c277a65"
-        }
-      },
-      "wrapperClass": {
-        "value": "absolute left-1/2 z-30",
-        "provenance": {
-          "source": "../../../apps/desktop/src/renderer/components/login/LoginPage.tsx",
-          "locator": "wrapper(定位+缩放层)className,几何走 inline style",
-          "hash": "sha256:fd80ac6b6de8cf59ce9cf76dc67be96a923a145a529b0b9e1c74862a3c277a65"
-        }
-      },
-      "scaleContract": {
-        "value": "几何为设计单位,wrapper 施加 translateX(-50%) scale(0.5) + transformOrigin top center;渲染值 = 设计单位 × 0.5(宽 335 / 顶距 36 CSS px)",
-        "provenance": {
-          "source": "../../../apps/desktop/src/renderer/components/login/LoginPage.tsx",
-          "locator": "wrapper style: top/width/transform/transformOrigin",
-          "hash": "sha256:fd80ac6b6de8cf59ce9cf76dc67be96a923a145a529b0b9e1c74862a3c277a65"
-        }
-      },
-      "dismissHitArea": {
-        "value": "上下各 11 设计单位 padding 撑热区 + 等量负 margin 抵消(视觉间距仍 上 22 / 下 20);缩放后约 22.5 CSS px 高(桌面鼠标指针)",
-        "provenance": {
-          "source": "../../../apps/desktop/src/renderer/components/login/LoginPage.tsx",
-          "locator": "dismiss inline style marginTop/marginBottom/paddingTop/paddingBottom",
-          "hash": "sha256:fd80ac6b6de8cf59ce9cf76dc67be96a923a145a529b0b9e1c74862a3c277a65"
-        }
-      }
+      "value": "resolveLoginSurface + resolveDeletionBubbleFrame(esbuild 编译 loginSkinLayout.ts 后 import,产品纯函数)"
     },
-    "mobile": {
-      "renderPosition": {
-        "value": "position:absolute,left/top/width 由 resolveDeletionBubbleFrame(stage, insets.top) 行内注入;不参与布局流",
-        "provenance": {
-          "source": "../../../apps/mobile/app/(auth)/login.tsx",
-          "locator": "login.tsx:1140-1197 deletionBubbleFrame + AccountDeletionStatusPanel frame prop",
-          "hash": "sha256:d31895bfd48f934fada24b5dd2ccfd10821208032c4dcd37de513ddb835cde4f"
-        }
+    "safeTop": {
+      "provenance": {
+        "hash": "sha256:d31895bfd48f934fada24b5dd2ccfd10821208032c4dcd37de513ddb835cde4f",
+        "locator": "demo chrome:safe-area 顶仿真常量(产品运行时 = insets.top)",
+        "source": "../../../apps/mobile/app/(auth)/login.tsx"
       },
-      "styleFacts": {
-        "value": "不透明底+1px 描边;无 shadow/elevation/固定高(样式块守护断言)",
-        "provenance": {
-          "source": "../../../apps/mobile/app/(auth)/login.tsx",
-          "locator": "login.tsx:1439-1449 makeStyles.deletionBubble",
-          "hash": "sha256:d31895bfd48f934fada24b5dd2ccfd10821208032c4dcd37de513ddb835cde4f"
-        }
+      "value": 59
+    },
+    "samples": {
+      "provenance": {
+        "hash": "sha256:b2ee100cd0bdc8cb629dbf83cf2ba495780d36f9dbcffad5f6fcb9e7971be649",
+        "locator": "产品纯函数对 spec.adaptive.sampleSizes 预计算(oracle 输出,非手算)",
+        "source": "../../../apps/mobile/src/auth/loginSkinLayout.ts"
       },
-      "dismissHitSlop": {
-        "value": "hitSlop 按气泡内可用空间钳制:top=min(18, bodyLinkGap×scale)、bottom=min(18, padding×scale)、左右 20——RN hitSlop 不越父边界,虚标无效(PR #494 codex);热区随整个登录 stage 同步缩放(320pt 窗口下主按钮本身 ≈34pt),不追未缩放 44pt 绝对值",
-        "provenance": {
-          "source": "../../../apps/mobile/src/auth/loginSkinLayout.ts",
-          "locator": "resolveDeletionBubbleLinkHitSlop(scale)",
-          "hash": "sha256:b2ee100cd0bdc8cb629dbf83cf2ba495780d36f9dbcffad5f6fcb9e7971be649"
+      "value": [
+        {
+          "h": 844,
+          "probes": {
+            "bubble": {
+              "w": 348.40000000000003,
+              "x": 20.8,
+              "y": 59
+            },
+            "surfaceMode": "phone"
+          },
+          "w": 390
+        },
+        {
+          "h": 812,
+          "probes": {
+            "bubble": {
+              "w": 335,
+              "x": 20,
+              "y": 59
+            },
+            "surfaceMode": "phone"
+          },
+          "w": 375
+        },
+        {
+          "h": 812,
+          "probes": {
+            "bubble": {
+              "w": 334.1066666666666,
+              "x": 19.946666666666665,
+              "y": 59
+            },
+            "surfaceMode": "phone"
+          },
+          "w": 374
+        },
+        {
+          "h": 700,
+          "probes": {
+            "bubble": {
+              "w": 299.26666666666665,
+              "x": 17.866666666666667,
+              "y": 59
+            },
+            "surfaceMode": "phone"
+          },
+          "w": 335
+        },
+        {
+          "h": 680,
+          "probes": {
+            "bubble": {
+              "w": 285.8666666666667,
+              "x": 17.066666666666666,
+              "y": 59
+            },
+            "surfaceMode": "phone"
+          },
+          "w": 320
+        },
+        {
+          "h": 1000,
+          "probes": {
+            "bubble": {
+              "w": 444.83671668137686,
+              "x": 127.58164165931157,
+              "y": 63.54810238305384
+            },
+            "surfaceMode": "pad-portrait"
+          },
+          "w": 700
+        },
+        {
+          "h": 1000,
+          "probes": {
+            "bubble": {
+              "w": 624.44,
+              "x": 37.28,
+              "y": 59
+            },
+            "surfaceMode": "phone"
+          },
+          "w": 699
+        },
+        {
+          "h": 1133,
+          "probes": {
+            "bubble": {
+              "w": 504,
+              "x": 120,
+              "y": 72
+            },
+            "surfaceMode": "pad-portrait"
+          },
+          "w": 744
+        },
+        {
+          "h": 690,
+          "probes": {
+            "bubble": {
+              "w": 472.59999999999997,
+              "x": 514.4499999999999,
+              "y": 57.699999999999996
+            },
+            "surfaceMode": "pad-landscape"
+          },
+          "w": 1000
+        },
+        {
+          "h": 690,
+          "probes": {
+            "bubble": {
+              "w": 394.4,
+              "x": 552.05,
+              "y": 59
+            },
+            "surfaceMode": "compact-wide"
+          },
+          "w": 999
+        },
+        {
+          "h": 689,
+          "probes": {
+            "bubble": {
+              "w": 394.4,
+              "x": 552.8,
+              "y": 59
+            },
+            "surfaceMode": "compact-wide"
+          },
+          "w": 1000
+        },
+        {
+          "h": 820,
+          "probes": {
+            "bubble": {
+              "w": 556,
+              "x": 607,
+              "y": 72
+            },
+            "surfaceMode": "pad-landscape"
+          },
+          "w": 1180
+        },
+        {
+          "h": 900,
+          "probes": {
+            "bubble": {
+              "w": 610.2439024390244,
+              "x": 738.6585365853658,
+              "y": 79.02439024390239
+            },
+            "surfaceMode": "pad-landscape"
+          },
+          "w": 1440
         }
-      },
-      "dismissGate": {
-        "value": "仅 completed 态渲染 dismiss Pressable(onDismiss 仅 completed 传入)",
-        "provenance": {
-          "source": "../../../apps/mobile/app/(auth)/login.tsx",
-          "locator": "login.tsx:1315-1327 {onDismiss ? <Pressable/> : null}",
-          "hash": "sha256:d31895bfd48f934fada24b5dd2ccfd10821208032c4dcd37de513ddb835cde4f"
-        }
-      },
-      "entranceGate": {
-        "value": "Animated.View 包装:opacity=panelEntrance.opacity(与登录组同一 Animated 值);pointerEvents 仅 handoffPhase==='done' 放行且取 box-none(全屏包装层不作触摸目标,避免挡住下方登录组命中;入场完成前 none = 不可见不可点)(PR #464 review)",
-        "provenance": {
-          "source": "../../../apps/mobile/app/(auth)/login.tsx",
-          "locator": "login.tsx 气泡渲染点 Animated.View pointerEvents/style",
-          "hash": "sha256:d31895bfd48f934fada24b5dd2ccfd10821208032c4dcd37de513ddb835cde4f"
-        }
-      },
-      "a11yModalGate": {
-        "value": "气泡对读屏隐藏 = 协议弹窗打开 || 区域确认打开 || 入场未完成;iOS accessibilityElementsHidden + Android importantForAccessibility 双端都给(opacity/pointerEvents 不影响读屏,不隐藏则会念出不可见的注销状态)(PR #464 codex)",
-        "provenance": {
-          "source": "../../../apps/mobile/app/(auth)/login.tsx",
-          "locator": "login.tsx 气泡渲染点 Animated.View importantForAccessibility",
-          "hash": "sha256:d31895bfd48f934fada24b5dd2ccfd10821208032c4dcd37de513ddb835cde4f"
-        }
-      }
+      ]
     }
   },
   "desktop": {
-    "geometry": {
-      "scale": {
-        "value": 0.5,
-        "provenance": {
-          "source": "../../../apps/desktop/src/renderer/components/login/loginDesignTokens.ts",
-          "locator": "loginScale.ts PANEL_FIXED_SCALE=0.5(面板恒定缩放,气泡同乘)",
-          "hash": "sha256:ad4a0f2c06d950773c61ed2f08d3c2f4551f28d947ea50eecf621dab4ea38a5b"
-        }
-      },
-      "top": {
-        "value": 72,
-        "provenance": {
-          "source": "../../../apps/desktop/src/renderer/components/login/loginDesignTokens.ts",
-          "locator": "LOGIN_DELETION_BUBBLE(设计单位).top",
-          "hash": "sha256:ad4a0f2c06d950773c61ed2f08d3c2f4551f28d947ea50eecf621dab4ea38a5b"
-        }
-      },
-      "width": {
-        "value": 670,
-        "provenance": {
-          "source": "../../../apps/desktop/src/renderer/components/login/loginDesignTokens.ts",
-          "locator": "LOGIN_DELETION_BUBBLE(设计单位).width",
-          "hash": "sha256:ad4a0f2c06d950773c61ed2f08d3c2f4551f28d947ea50eecf621dab4ea38a5b"
-        }
-      },
-      "radius": {
-        "value": 22,
-        "provenance": {
-          "source": "../../../apps/desktop/src/renderer/components/login/loginDesignTokens.ts",
-          "locator": "LOGIN_DELETION_BUBBLE(设计单位).radius",
-          "hash": "sha256:ad4a0f2c06d950773c61ed2f08d3c2f4551f28d947ea50eecf621dab4ea38a5b"
-        }
-      },
-      "padding": {
-        "value": 20,
-        "provenance": {
-          "source": "../../../apps/desktop/src/renderer/components/login/loginDesignTokens.ts",
-          "locator": "LOGIN_DELETION_BUBBLE(设计单位).padding",
-          "hash": "sha256:ad4a0f2c06d950773c61ed2f08d3c2f4551f28d947ea50eecf621dab4ea38a5b"
-        }
-      },
-      "fontSize": {
-        "value": 20,
-        "provenance": {
-          "source": "../../../apps/desktop/src/renderer/components/login/loginDesignTokens.ts",
-          "locator": "LOGIN_DELETION_BUBBLE(设计单位).fontSize",
-          "hash": "sha256:ad4a0f2c06d950773c61ed2f08d3c2f4551f28d947ea50eecf621dab4ea38a5b"
-        }
-      },
-      "lineHeight": {
-        "value": 23,
-        "provenance": {
-          "source": "../../../apps/desktop/src/renderer/components/login/loginDesignTokens.ts",
-          "locator": "LOGIN_DELETION_BUBBLE(设计单位).lineHeight",
-          "hash": "sha256:ad4a0f2c06d950773c61ed2f08d3c2f4551f28d947ea50eecf621dab4ea38a5b"
-        }
-      },
-      "titleBodyGap": {
-        "value": 5,
-        "provenance": {
-          "source": "../../../apps/desktop/src/renderer/components/login/loginDesignTokens.ts",
-          "locator": "LOGIN_DELETION_BUBBLE(设计单位).titleBodyGap",
-          "hash": "sha256:ad4a0f2c06d950773c61ed2f08d3c2f4551f28d947ea50eecf621dab4ea38a5b"
-        }
-      },
-      "bodyLinkGap": {
-        "value": 22,
-        "provenance": {
-          "source": "../../../apps/desktop/src/renderer/components/login/loginDesignTokens.ts",
-          "locator": "LOGIN_DELETION_BUBBLE(设计单位).bodyLinkGap",
-          "hash": "sha256:ad4a0f2c06d950773c61ed2f08d3c2f4551f28d947ea50eecf621dab4ea38a5b"
-        }
-      },
-      "linkHitPadding": {
-        "value": 11,
-        "provenance": {
-          "source": "../../../apps/desktop/src/renderer/components/login/loginDesignTokens.ts",
-          "locator": "LOGIN_DELETION_BUBBLE(设计单位).linkHitPadding",
-          "hash": "sha256:ad4a0f2c06d950773c61ed2f08d3c2f4551f28d947ea50eecf621dab4ea38a5b"
-        }
-      },
-      "borderWidth": {
-        "value": 1,
-        "provenance": {
-          "source": "../../../apps/desktop/src/renderer/components/login/loginDesignTokens.ts",
-          "locator": "LoginPage.tsx section style borderWidth=1/PANEL_FIXED_SCALE 设计单位(缩放补偿,渲染恰 1 物理 px;DESIGN.md §16.4)",
-          "hash": "sha256:ad4a0f2c06d950773c61ed2f08d3c2f4551f28d947ea50eecf621dab4ea38a5b"
-        }
-      },
-      "fontWeight": {
-        "value": 400,
-        "provenance": {
-          "source": "../../../apps/desktop/src/renderer/components/login/loginDesignTokens.ts",
-          "locator": "LoginPage.tsx font-normal=400",
-          "hash": "sha256:ad4a0f2c06d950773c61ed2f08d3c2f4551f28d947ea50eecf621dab4ea38a5b"
-        }
-      },
-      "zIndex": {
-        "value": 30,
-        "provenance": {
-          "source": "../../../apps/desktop/src/renderer/components/login/loginDesignTokens.ts",
-          "locator": "LoginPage.tsx wrapper z-30",
-          "hash": "sha256:ad4a0f2c06d950773c61ed2f08d3c2f4551f28d947ea50eecf621dab4ea38a5b"
-        }
-      }
-    },
     "colors": {
-      "bubbleBg": {
-        "light": {
-          "value": "#FDFDF8",
-          "provenance": {
-            "source": "../../../apps/desktop/src/renderer/themes/colors.ts",
-            "locator": "registerColor('login-deletion-bubble-bg').light(固定值,Fix A 弃 alias)",
-            "hash": "sha256:479a7cf32ea6c9bf4715cfff912139aec735554c01599007f754e917c2b4b87f"
-          }
-        },
+      "bgBase": {
         "dark": {
-          "value": "#1F1F1F",
           "provenance": {
-            "source": "../../../apps/desktop/src/renderer/themes/colors.ts",
+            "hash": "sha256:479a7cf32ea6c9bf4715cfff912139aec735554c01599007f754e917c2b4b87f",
+            "locator": "registerColor('login-bg-base').dark",
+            "source": "../../../apps/desktop/src/renderer/themes/colors.ts"
+          },
+          "value": "#181818"
+        },
+        "light": {
+          "provenance": {
+            "hash": "sha256:479a7cf32ea6c9bf4715cfff912139aec735554c01599007f754e917c2b4b87f",
+            "locator": "registerColor('login-bg-base').light",
+            "source": "../../../apps/desktop/src/renderer/themes/colors.ts"
+          },
+          "value": "#F2F2ED"
+        }
+      },
+      "bubbleBg": {
+        "dark": {
+          "provenance": {
+            "hash": "sha256:479a7cf32ea6c9bf4715cfff912139aec735554c01599007f754e917c2b4b87f",
             "locator": "registerColor('login-deletion-bubble-bg').dark(固定值)",
-            "hash": "sha256:479a7cf32ea6c9bf4715cfff912139aec735554c01599007f754e917c2b4b87f"
-          }
+            "source": "../../../apps/desktop/src/renderer/themes/colors.ts"
+          },
+          "value": "#1F1F1F"
+        },
+        "light": {
+          "provenance": {
+            "hash": "sha256:479a7cf32ea6c9bf4715cfff912139aec735554c01599007f754e917c2b4b87f",
+            "locator": "registerColor('login-deletion-bubble-bg').light(固定值,Fix A 弃 alias)",
+            "source": "../../../apps/desktop/src/renderer/themes/colors.ts"
+          },
+          "value": "#FDFDF8"
         }
       },
       "bubbleBorder": {
-        "light": {
-          "value": "rgba(0, 0, 0, 0.08)",
-          "provenance": {
-            "source": "../../../apps/desktop/src/renderer/themes/colors.ts",
-            "locator": "registerColor('login-deletion-bubble-border').light(Fix A 新增 token)",
-            "hash": "sha256:479a7cf32ea6c9bf4715cfff912139aec735554c01599007f754e917c2b4b87f"
-          }
-        },
         "dark": {
-          "value": "rgba(255, 255, 255, 0.10)",
           "provenance": {
-            "source": "../../../apps/desktop/src/renderer/themes/colors.ts",
+            "hash": "sha256:479a7cf32ea6c9bf4715cfff912139aec735554c01599007f754e917c2b4b87f",
             "locator": "registerColor('login-deletion-bubble-border').dark",
-            "hash": "sha256:479a7cf32ea6c9bf4715cfff912139aec735554c01599007f754e917c2b4b87f"
-          }
-        }
-      },
-      "titleText": {
-        "light": {
-          "value": "rgba(0, 0, 0, 0.88)",
-          "provenance": {
-            "source": "../../../apps/desktop/src/renderer/themes/colors.ts",
-            "locator": "registerColor('login-control-text').light",
-            "hash": "sha256:479a7cf32ea6c9bf4715cfff912139aec735554c01599007f754e917c2b4b87f"
-          }
+            "source": "../../../apps/desktop/src/renderer/themes/colors.ts"
+          },
+          "value": "rgba(255, 255, 255, 0.10)"
         },
-        "dark": {
-          "value": "rgba(255, 255, 255, 0.82)",
+        "light": {
           "provenance": {
-            "source": "../../../apps/desktop/src/renderer/themes/colors.ts",
-            "locator": "registerColor('login-control-text').dark",
-            "hash": "sha256:479a7cf32ea6c9bf4715cfff912139aec735554c01599007f754e917c2b4b87f"
-          }
+            "hash": "sha256:479a7cf32ea6c9bf4715cfff912139aec735554c01599007f754e917c2b4b87f",
+            "locator": "registerColor('login-deletion-bubble-border').light(Fix A 新增 token)",
+            "source": "../../../apps/desktop/src/renderer/themes/colors.ts"
+          },
+          "value": "rgba(0, 0, 0, 0.08)"
         }
       },
       "copyText": {
-        "light": {
-          "value": "rgba(0, 0, 0, 0.56)",
-          "provenance": {
-            "source": "../../../apps/desktop/src/renderer/themes/colors.ts",
-            "locator": "registerColor('login-secondary-text').light",
-            "hash": "sha256:479a7cf32ea6c9bf4715cfff912139aec735554c01599007f754e917c2b4b87f"
-          }
-        },
         "dark": {
-          "value": "rgba(255, 255, 255, 0.55)",
           "provenance": {
-            "source": "../../../apps/desktop/src/renderer/themes/colors.ts",
+            "hash": "sha256:479a7cf32ea6c9bf4715cfff912139aec735554c01599007f754e917c2b4b87f",
             "locator": "registerColor('login-secondary-text').dark",
-            "hash": "sha256:479a7cf32ea6c9bf4715cfff912139aec735554c01599007f754e917c2b4b87f"
-          }
+            "source": "../../../apps/desktop/src/renderer/themes/colors.ts"
+          },
+          "value": "rgba(255, 255, 255, 0.55)"
+        },
+        "light": {
+          "provenance": {
+            "hash": "sha256:479a7cf32ea6c9bf4715cfff912139aec735554c01599007f754e917c2b4b87f",
+            "locator": "registerColor('login-secondary-text').light",
+            "source": "../../../apps/desktop/src/renderer/themes/colors.ts"
+          },
+          "value": "rgba(0, 0, 0, 0.56)"
         }
       },
-      "bgBase": {
-        "light": {
-          "value": "#F2F2ED",
-          "provenance": {
-            "source": "../../../apps/desktop/src/renderer/themes/colors.ts",
-            "locator": "registerColor('login-bg-base').light",
-            "hash": "sha256:479a7cf32ea6c9bf4715cfff912139aec735554c01599007f754e917c2b4b87f"
-          }
-        },
+      "titleText": {
         "dark": {
-          "value": "#181818",
           "provenance": {
-            "source": "../../../apps/desktop/src/renderer/themes/colors.ts",
-            "locator": "registerColor('login-bg-base').dark",
-            "hash": "sha256:479a7cf32ea6c9bf4715cfff912139aec735554c01599007f754e917c2b4b87f"
-          }
+            "hash": "sha256:479a7cf32ea6c9bf4715cfff912139aec735554c01599007f754e917c2b4b87f",
+            "locator": "registerColor('login-control-text').dark",
+            "source": "../../../apps/desktop/src/renderer/themes/colors.ts"
+          },
+          "value": "rgba(255, 255, 255, 0.82)"
+        },
+        "light": {
+          "provenance": {
+            "hash": "sha256:479a7cf32ea6c9bf4715cfff912139aec735554c01599007f754e917c2b4b87f",
+            "locator": "registerColor('login-control-text').light",
+            "source": "../../../apps/desktop/src/renderer/themes/colors.ts"
+          },
+          "value": "rgba(0, 0, 0, 0.88)"
         }
       }
     },
     "copy": {
-      "zh-CN": {
-        "pendingTitle": {
-          "value": "账号正在等待注销",
+      "de": {
+        "completedCopy": {
           "provenance": {
-            "source": "../../../apps/desktop/src/renderer/i18n/locales/zh-CN/common.json",
-            "locator": "accountDeletion.status(zh-CN).pendingTitle",
-            "hash": "sha256:4db39ff69a6e95c55721ec8054b8d404050d67ece0e3c08a9c19462b43e4c2ee"
-          }
-        },
-        "pendingCopy": {
-          "value": "账号计划于 {{date}} 永久删除。在此之前重新登录可取消注销。",
-          "provenance": {
-            "source": "../../../apps/desktop/src/renderer/i18n/locales/zh-CN/common.json",
-            "locator": "accountDeletion.status(zh-CN).pendingCopy",
-            "hash": "sha256:4db39ff69a6e95c55721ec8054b8d404050d67ece0e3c08a9c19462b43e4c2ee"
-          }
-        },
-        "processingTitle": {
-          "value": "账号正在注销",
-          "provenance": {
-            "source": "../../../apps/desktop/src/renderer/i18n/locales/zh-CN/common.json",
-            "locator": "accountDeletion.status(zh-CN).processingTitle",
-            "hash": "sha256:4db39ff69a6e95c55721ec8054b8d404050d67ece0e3c08a9c19462b43e4c2ee"
-          }
-        },
-        "processingCopy": {
-          "value": "等待期已结束，Cindy 登录账号正在删除。",
-          "provenance": {
-            "source": "../../../apps/desktop/src/renderer/i18n/locales/zh-CN/common.json",
-            "locator": "accountDeletion.status(zh-CN).processingCopy",
-            "hash": "sha256:4db39ff69a6e95c55721ec8054b8d404050d67ece0e3c08a9c19462b43e4c2ee"
-          }
+            "hash": "sha256:9aa0e09c2f4cbaa9aa2b1a8a94c2f2a4d9ec5ff8381fc8491a754f76bb035e23",
+            "locator": "accountDeletion.status(de).completedCopy",
+            "source": "../../../apps/desktop/src/renderer/i18n/locales/de/common.json"
+          },
+          "value": "Dein Cindy-Anmeldekonto wurde gelöscht."
         },
         "completedTitle": {
-          "value": "账号已注销",
           "provenance": {
-            "source": "../../../apps/desktop/src/renderer/i18n/locales/zh-CN/common.json",
-            "locator": "accountDeletion.status(zh-CN).completedTitle",
-            "hash": "sha256:4db39ff69a6e95c55721ec8054b8d404050d67ece0e3c08a9c19462b43e4c2ee"
-          }
-        },
-        "completedCopy": {
-          "value": "Cindy 登录账号已删除。",
-          "provenance": {
-            "source": "../../../apps/desktop/src/renderer/i18n/locales/zh-CN/common.json",
-            "locator": "accountDeletion.status(zh-CN).completedCopy",
-            "hash": "sha256:4db39ff69a6e95c55721ec8054b8d404050d67ece0e3c08a9c19462b43e4c2ee"
-          }
+            "hash": "sha256:9aa0e09c2f4cbaa9aa2b1a8a94c2f2a4d9ec5ff8381fc8491a754f76bb035e23",
+            "locator": "accountDeletion.status(de).completedTitle",
+            "source": "../../../apps/desktop/src/renderer/i18n/locales/de/common.json"
+          },
+          "value": "Konto gelöscht"
         },
         "dismissButton": {
-          "value": "我知道了",
           "provenance": {
-            "source": "../../../apps/desktop/src/renderer/i18n/locales/zh-CN/common.json",
-            "locator": "accountDeletion.status(zh-CN).dismissButton",
-            "hash": "sha256:4db39ff69a6e95c55721ec8054b8d404050d67ece0e3c08a9c19462b43e4c2ee"
-          }
-        }
-      },
-      "zh-TW": {
-        "pendingTitle": {
-          "value": "帳號正在等待刪除",
-          "provenance": {
-            "source": "../../../apps/desktop/src/renderer/i18n/locales/zh-TW/common.json",
-            "locator": "accountDeletion.status(zh-TW).pendingTitle",
-            "hash": "sha256:150078a168dd44c33887a3a50f8f538b146fd5af2c3dcae73e54bb1d25615333"
-          }
+            "hash": "sha256:9aa0e09c2f4cbaa9aa2b1a8a94c2f2a4d9ec5ff8381fc8491a754f76bb035e23",
+            "locator": "accountDeletion.status(de).dismissButton",
+            "source": "../../../apps/desktop/src/renderer/i18n/locales/de/common.json"
+          },
+          "value": "Verstanden"
         },
         "pendingCopy": {
-          "value": "帳號計劃於 {{date}} 永久刪除。在此之前重新登入可取消刪除。",
           "provenance": {
-            "source": "../../../apps/desktop/src/renderer/i18n/locales/zh-TW/common.json",
-            "locator": "accountDeletion.status(zh-TW).pendingCopy",
-            "hash": "sha256:150078a168dd44c33887a3a50f8f538b146fd5af2c3dcae73e54bb1d25615333"
-          }
+            "hash": "sha256:9aa0e09c2f4cbaa9aa2b1a8a94c2f2a4d9ec5ff8381fc8491a754f76bb035e23",
+            "locator": "accountDeletion.status(de).pendingCopy",
+            "source": "../../../apps/desktop/src/renderer/i18n/locales/de/common.json"
+          },
+          "value": "Zur endgültigen Löschung am {{date}} vorgemerkt. Melde dich vorher an, um die Löschung abzubrechen."
         },
-        "processingTitle": {
-          "value": "帳號正在刪除",
+        "pendingTitle": {
           "provenance": {
-            "source": "../../../apps/desktop/src/renderer/i18n/locales/zh-TW/common.json",
-            "locator": "accountDeletion.status(zh-TW).processingTitle",
-            "hash": "sha256:150078a168dd44c33887a3a50f8f538b146fd5af2c3dcae73e54bb1d25615333"
-          }
+            "hash": "sha256:9aa0e09c2f4cbaa9aa2b1a8a94c2f2a4d9ec5ff8381fc8491a754f76bb035e23",
+            "locator": "accountDeletion.status(de).pendingTitle",
+            "source": "../../../apps/desktop/src/renderer/i18n/locales/de/common.json"
+          },
+          "value": "Kontolöschung vorgemerkt"
         },
         "processingCopy": {
-          "value": "等待期已結束，Cindy 登入帳號正在刪除。",
           "provenance": {
-            "source": "../../../apps/desktop/src/renderer/i18n/locales/zh-TW/common.json",
-            "locator": "accountDeletion.status(zh-TW).processingCopy",
-            "hash": "sha256:150078a168dd44c33887a3a50f8f538b146fd5af2c3dcae73e54bb1d25615333"
-          }
+            "hash": "sha256:9aa0e09c2f4cbaa9aa2b1a8a94c2f2a4d9ec5ff8381fc8491a754f76bb035e23",
+            "locator": "accountDeletion.status(de).processingCopy",
+            "source": "../../../apps/desktop/src/renderer/i18n/locales/de/common.json"
+          },
+          "value": "Die Wartezeit ist abgelaufen. Dein Cindy-Anmeldekonto wird gelöscht."
         },
-        "completedTitle": {
-          "value": "帳號已刪除",
+        "processingTitle": {
           "provenance": {
-            "source": "../../../apps/desktop/src/renderer/i18n/locales/zh-TW/common.json",
-            "locator": "accountDeletion.status(zh-TW).completedTitle",
-            "hash": "sha256:150078a168dd44c33887a3a50f8f538b146fd5af2c3dcae73e54bb1d25615333"
-          }
-        },
-        "completedCopy": {
-          "value": "Cindy 登入帳號已刪除。",
-          "provenance": {
-            "source": "../../../apps/desktop/src/renderer/i18n/locales/zh-TW/common.json",
-            "locator": "accountDeletion.status(zh-TW).completedCopy",
-            "hash": "sha256:150078a168dd44c33887a3a50f8f538b146fd5af2c3dcae73e54bb1d25615333"
-          }
-        },
-        "dismissButton": {
-          "value": "我知道了",
-          "provenance": {
-            "source": "../../../apps/desktop/src/renderer/i18n/locales/zh-TW/common.json",
-            "locator": "accountDeletion.status(zh-TW).dismissButton",
-            "hash": "sha256:150078a168dd44c33887a3a50f8f538b146fd5af2c3dcae73e54bb1d25615333"
-          }
+            "hash": "sha256:9aa0e09c2f4cbaa9aa2b1a8a94c2f2a4d9ec5ff8381fc8491a754f76bb035e23",
+            "locator": "accountDeletion.status(de).processingTitle",
+            "source": "../../../apps/desktop/src/renderer/i18n/locales/de/common.json"
+          },
+          "value": "Kontolöschung läuft"
         }
       },
       "en": {
-        "pendingTitle": {
-          "value": "Account scheduled for deletion",
-          "provenance": {
-            "source": "../../../apps/desktop/src/renderer/i18n/locales/en/common.json",
-            "locator": "accountDeletion.status(en).pendingTitle",
-            "hash": "sha256:8b15bad4b06d5b8ad926e2d028ed6e248e2774972d17813f45f1abd99080282d"
-          }
-        },
-        "pendingCopy": {
-          "value": "Scheduled for permanent deletion on {{date}}. Sign in before then to cancel deletion.",
-          "provenance": {
-            "source": "../../../apps/desktop/src/renderer/i18n/locales/en/common.json",
-            "locator": "accountDeletion.status(en).pendingCopy",
-            "hash": "sha256:8b15bad4b06d5b8ad926e2d028ed6e248e2774972d17813f45f1abd99080282d"
-          }
-        },
-        "processingTitle": {
-          "value": "Account deletion in progress",
-          "provenance": {
-            "source": "../../../apps/desktop/src/renderer/i18n/locales/en/common.json",
-            "locator": "accountDeletion.status(en).processingTitle",
-            "hash": "sha256:8b15bad4b06d5b8ad926e2d028ed6e248e2774972d17813f45f1abd99080282d"
-          }
-        },
-        "processingCopy": {
-          "value": "The waiting period ended. Your Cindy sign-in account is being removed.",
-          "provenance": {
-            "source": "../../../apps/desktop/src/renderer/i18n/locales/en/common.json",
-            "locator": "accountDeletion.status(en).processingCopy",
-            "hash": "sha256:8b15bad4b06d5b8ad926e2d028ed6e248e2774972d17813f45f1abd99080282d"
-          }
-        },
-        "completedTitle": {
-          "value": "Account deleted",
-          "provenance": {
-            "source": "../../../apps/desktop/src/renderer/i18n/locales/en/common.json",
-            "locator": "accountDeletion.status(en).completedTitle",
-            "hash": "sha256:8b15bad4b06d5b8ad926e2d028ed6e248e2774972d17813f45f1abd99080282d"
-          }
-        },
         "completedCopy": {
-          "value": "Your Cindy sign-in account has been removed.",
           "provenance": {
-            "source": "../../../apps/desktop/src/renderer/i18n/locales/en/common.json",
+            "hash": "sha256:66171f9226a36ded22501eaf5168a77adc907c8b2fd076b1f9affdf11d85849c",
             "locator": "accountDeletion.status(en).completedCopy",
-            "hash": "sha256:8b15bad4b06d5b8ad926e2d028ed6e248e2774972d17813f45f1abd99080282d"
-          }
+            "source": "../../../apps/desktop/src/renderer/i18n/locales/en/common.json"
+          },
+          "value": "Your Cindy sign-in account has been removed."
+        },
+        "completedTitle": {
+          "provenance": {
+            "hash": "sha256:66171f9226a36ded22501eaf5168a77adc907c8b2fd076b1f9affdf11d85849c",
+            "locator": "accountDeletion.status(en).completedTitle",
+            "source": "../../../apps/desktop/src/renderer/i18n/locales/en/common.json"
+          },
+          "value": "Account deleted"
         },
         "dismissButton": {
-          "value": "Got it",
           "provenance": {
-            "source": "../../../apps/desktop/src/renderer/i18n/locales/en/common.json",
+            "hash": "sha256:66171f9226a36ded22501eaf5168a77adc907c8b2fd076b1f9affdf11d85849c",
             "locator": "accountDeletion.status(en).dismissButton",
-            "hash": "sha256:8b15bad4b06d5b8ad926e2d028ed6e248e2774972d17813f45f1abd99080282d"
-          }
-        }
-      },
-      "ja": {
-        "pendingTitle": {
-          "value": "アカウントは削除待ちです",
-          "provenance": {
-            "source": "../../../apps/desktop/src/renderer/i18n/locales/ja/common.json",
-            "locator": "accountDeletion.status(ja).pendingTitle",
-            "hash": "sha256:62d0f07e9a0c948323a9e83f923702f065986df2214e4241ddefd872aeffde4b"
-          }
+            "source": "../../../apps/desktop/src/renderer/i18n/locales/en/common.json"
+          },
+          "value": "Got it"
         },
         "pendingCopy": {
-          "value": "{{date}} に完全削除される予定です。それまでにログインすると削除を取り消せます。",
           "provenance": {
-            "source": "../../../apps/desktop/src/renderer/i18n/locales/ja/common.json",
-            "locator": "accountDeletion.status(ja).pendingCopy",
-            "hash": "sha256:62d0f07e9a0c948323a9e83f923702f065986df2214e4241ddefd872aeffde4b"
-          }
+            "hash": "sha256:66171f9226a36ded22501eaf5168a77adc907c8b2fd076b1f9affdf11d85849c",
+            "locator": "accountDeletion.status(en).pendingCopy",
+            "source": "../../../apps/desktop/src/renderer/i18n/locales/en/common.json"
+          },
+          "value": "Scheduled for permanent deletion on {{date}}. Sign in before then to cancel deletion."
         },
-        "processingTitle": {
-          "value": "アカウントを削除しています",
-          "provenance": {
-            "source": "../../../apps/desktop/src/renderer/i18n/locales/ja/common.json",
-            "locator": "accountDeletion.status(ja).processingTitle",
-            "hash": "sha256:62d0f07e9a0c948323a9e83f923702f065986df2214e4241ddefd872aeffde4b"
-          }
-        },
-        "processingCopy": {
-          "value": "待機期間が終了し、Cindy のログインアカウントを削除しています。",
-          "provenance": {
-            "source": "../../../apps/desktop/src/renderer/i18n/locales/ja/common.json",
-            "locator": "accountDeletion.status(ja).processingCopy",
-            "hash": "sha256:62d0f07e9a0c948323a9e83f923702f065986df2214e4241ddefd872aeffde4b"
-          }
-        },
-        "completedTitle": {
-          "value": "アカウントを削除しました",
-          "provenance": {
-            "source": "../../../apps/desktop/src/renderer/i18n/locales/ja/common.json",
-            "locator": "accountDeletion.status(ja).completedTitle",
-            "hash": "sha256:62d0f07e9a0c948323a9e83f923702f065986df2214e4241ddefd872aeffde4b"
-          }
-        },
-        "completedCopy": {
-          "value": "Cindy のログインアカウントを削除しました。",
-          "provenance": {
-            "source": "../../../apps/desktop/src/renderer/i18n/locales/ja/common.json",
-            "locator": "accountDeletion.status(ja).completedCopy",
-            "hash": "sha256:62d0f07e9a0c948323a9e83f923702f065986df2214e4241ddefd872aeffde4b"
-          }
-        },
-        "dismissButton": {
-          "value": "確認",
-          "provenance": {
-            "source": "../../../apps/desktop/src/renderer/i18n/locales/ja/common.json",
-            "locator": "accountDeletion.status(ja).dismissButton",
-            "hash": "sha256:62d0f07e9a0c948323a9e83f923702f065986df2214e4241ddefd872aeffde4b"
-          }
-        }
-      },
-      "ko": {
         "pendingTitle": {
-          "value": "계정 삭제 대기 중",
           "provenance": {
-            "source": "../../../apps/desktop/src/renderer/i18n/locales/ko/common.json",
-            "locator": "accountDeletion.status(ko).pendingTitle",
-            "hash": "sha256:2d15e19ea88409f3930aaf1d0d65d21f58f789d958ef2aac9c96424996e1c89a"
-          }
-        },
-        "pendingCopy": {
-          "value": "{{date}}에 영구 삭제될 예정입니다. 그 전에 로그인하면 삭제를 취소할 수 있습니다.",
-          "provenance": {
-            "source": "../../../apps/desktop/src/renderer/i18n/locales/ko/common.json",
-            "locator": "accountDeletion.status(ko).pendingCopy",
-            "hash": "sha256:2d15e19ea88409f3930aaf1d0d65d21f58f789d958ef2aac9c96424996e1c89a"
-          }
-        },
-        "processingTitle": {
-          "value": "계정 삭제 진행 중",
-          "provenance": {
-            "source": "../../../apps/desktop/src/renderer/i18n/locales/ko/common.json",
-            "locator": "accountDeletion.status(ko).processingTitle",
-            "hash": "sha256:2d15e19ea88409f3930aaf1d0d65d21f58f789d958ef2aac9c96424996e1c89a"
-          }
+            "hash": "sha256:66171f9226a36ded22501eaf5168a77adc907c8b2fd076b1f9affdf11d85849c",
+            "locator": "accountDeletion.status(en).pendingTitle",
+            "source": "../../../apps/desktop/src/renderer/i18n/locales/en/common.json"
+          },
+          "value": "Account scheduled for deletion"
         },
         "processingCopy": {
-          "value": "대기 기간이 끝나 Cindy 로그인 계정을 삭제하고 있습니다.",
           "provenance": {
-            "source": "../../../apps/desktop/src/renderer/i18n/locales/ko/common.json",
-            "locator": "accountDeletion.status(ko).processingCopy",
-            "hash": "sha256:2d15e19ea88409f3930aaf1d0d65d21f58f789d958ef2aac9c96424996e1c89a"
-          }
+            "hash": "sha256:66171f9226a36ded22501eaf5168a77adc907c8b2fd076b1f9affdf11d85849c",
+            "locator": "accountDeletion.status(en).processingCopy",
+            "source": "../../../apps/desktop/src/renderer/i18n/locales/en/common.json"
+          },
+          "value": "The waiting period ended. Your Cindy sign-in account is being removed."
         },
-        "completedTitle": {
-          "value": "계정 삭제 완료",
+        "processingTitle": {
           "provenance": {
-            "source": "../../../apps/desktop/src/renderer/i18n/locales/ko/common.json",
-            "locator": "accountDeletion.status(ko).completedTitle",
-            "hash": "sha256:2d15e19ea88409f3930aaf1d0d65d21f58f789d958ef2aac9c96424996e1c89a"
-          }
-        },
-        "completedCopy": {
-          "value": "Cindy 로그인 계정이 삭제되었습니다.",
-          "provenance": {
-            "source": "../../../apps/desktop/src/renderer/i18n/locales/ko/common.json",
-            "locator": "accountDeletion.status(ko).completedCopy",
-            "hash": "sha256:2d15e19ea88409f3930aaf1d0d65d21f58f789d958ef2aac9c96424996e1c89a"
-          }
-        },
-        "dismissButton": {
-          "value": "확인",
-          "provenance": {
-            "source": "../../../apps/desktop/src/renderer/i18n/locales/ko/common.json",
-            "locator": "accountDeletion.status(ko).dismissButton",
-            "hash": "sha256:2d15e19ea88409f3930aaf1d0d65d21f58f789d958ef2aac9c96424996e1c89a"
-          }
+            "hash": "sha256:66171f9226a36ded22501eaf5168a77adc907c8b2fd076b1f9affdf11d85849c",
+            "locator": "accountDeletion.status(en).processingTitle",
+            "source": "../../../apps/desktop/src/renderer/i18n/locales/en/common.json"
+          },
+          "value": "Account deletion in progress"
         }
       },
       "es": {
-        "pendingTitle": {
-          "value": "Eliminación de cuenta programada",
+        "completedCopy": {
           "provenance": {
-            "source": "../../../apps/desktop/src/renderer/i18n/locales/es/common.json",
-            "locator": "accountDeletion.status(es).pendingTitle",
-            "hash": "sha256:0f68754a3effbb4f0fee0101f9b9b780a7d1d2193836b4a0eeaaf2932706df49"
-          }
-        },
-        "pendingCopy": {
-          "value": "Eliminación permanente programada para el {{date}}. Inicia sesión antes de esa fecha para cancelar la eliminación.",
-          "provenance": {
-            "source": "../../../apps/desktop/src/renderer/i18n/locales/es/common.json",
-            "locator": "accountDeletion.status(es).pendingCopy",
-            "hash": "sha256:0f68754a3effbb4f0fee0101f9b9b780a7d1d2193836b4a0eeaaf2932706df49"
-          }
-        },
-        "processingTitle": {
-          "value": "Eliminación de cuenta en curso",
-          "provenance": {
-            "source": "../../../apps/desktop/src/renderer/i18n/locales/es/common.json",
-            "locator": "accountDeletion.status(es).processingTitle",
-            "hash": "sha256:0f68754a3effbb4f0fee0101f9b9b780a7d1d2193836b4a0eeaaf2932706df49"
-          }
-        },
-        "processingCopy": {
-          "value": "El período de espera terminó. Se está eliminando tu cuenta de inicio de sesión de Cindy.",
-          "provenance": {
-            "source": "../../../apps/desktop/src/renderer/i18n/locales/es/common.json",
-            "locator": "accountDeletion.status(es).processingCopy",
-            "hash": "sha256:0f68754a3effbb4f0fee0101f9b9b780a7d1d2193836b4a0eeaaf2932706df49"
-          }
+            "hash": "sha256:dbc6998306a37860d830fa3b699bfebfb08ea59c46844740f1c34244338cbc9e",
+            "locator": "accountDeletion.status(es).completedCopy",
+            "source": "../../../apps/desktop/src/renderer/i18n/locales/es/common.json"
+          },
+          "value": "Tu cuenta de inicio de sesión de Cindy se eliminó."
         },
         "completedTitle": {
-          "value": "Cuenta eliminada",
           "provenance": {
-            "source": "../../../apps/desktop/src/renderer/i18n/locales/es/common.json",
+            "hash": "sha256:dbc6998306a37860d830fa3b699bfebfb08ea59c46844740f1c34244338cbc9e",
             "locator": "accountDeletion.status(es).completedTitle",
-            "hash": "sha256:0f68754a3effbb4f0fee0101f9b9b780a7d1d2193836b4a0eeaaf2932706df49"
-          }
-        },
-        "completedCopy": {
-          "value": "Tu cuenta de inicio de sesión de Cindy se eliminó.",
-          "provenance": {
-            "source": "../../../apps/desktop/src/renderer/i18n/locales/es/common.json",
-            "locator": "accountDeletion.status(es).completedCopy",
-            "hash": "sha256:0f68754a3effbb4f0fee0101f9b9b780a7d1d2193836b4a0eeaaf2932706df49"
-          }
+            "source": "../../../apps/desktop/src/renderer/i18n/locales/es/common.json"
+          },
+          "value": "Cuenta eliminada"
         },
         "dismissButton": {
-          "value": "Entendido",
           "provenance": {
-            "source": "../../../apps/desktop/src/renderer/i18n/locales/es/common.json",
+            "hash": "sha256:dbc6998306a37860d830fa3b699bfebfb08ea59c46844740f1c34244338cbc9e",
             "locator": "accountDeletion.status(es).dismissButton",
-            "hash": "sha256:0f68754a3effbb4f0fee0101f9b9b780a7d1d2193836b4a0eeaaf2932706df49"
-          }
+            "source": "../../../apps/desktop/src/renderer/i18n/locales/es/common.json"
+          },
+          "value": "Entendido"
+        },
+        "pendingCopy": {
+          "provenance": {
+            "hash": "sha256:dbc6998306a37860d830fa3b699bfebfb08ea59c46844740f1c34244338cbc9e",
+            "locator": "accountDeletion.status(es).pendingCopy",
+            "source": "../../../apps/desktop/src/renderer/i18n/locales/es/common.json"
+          },
+          "value": "Eliminación permanente programada para el {{date}}. Inicia sesión antes de esa fecha para cancelar la eliminación."
+        },
+        "pendingTitle": {
+          "provenance": {
+            "hash": "sha256:dbc6998306a37860d830fa3b699bfebfb08ea59c46844740f1c34244338cbc9e",
+            "locator": "accountDeletion.status(es).pendingTitle",
+            "source": "../../../apps/desktop/src/renderer/i18n/locales/es/common.json"
+          },
+          "value": "Eliminación de cuenta programada"
+        },
+        "processingCopy": {
+          "provenance": {
+            "hash": "sha256:dbc6998306a37860d830fa3b699bfebfb08ea59c46844740f1c34244338cbc9e",
+            "locator": "accountDeletion.status(es).processingCopy",
+            "source": "../../../apps/desktop/src/renderer/i18n/locales/es/common.json"
+          },
+          "value": "El período de espera terminó. Se está eliminando tu cuenta de inicio de sesión de Cindy."
+        },
+        "processingTitle": {
+          "provenance": {
+            "hash": "sha256:dbc6998306a37860d830fa3b699bfebfb08ea59c46844740f1c34244338cbc9e",
+            "locator": "accountDeletion.status(es).processingTitle",
+            "source": "../../../apps/desktop/src/renderer/i18n/locales/es/common.json"
+          },
+          "value": "Eliminación de cuenta en curso"
         }
       },
       "fr": {
-        "pendingTitle": {
-          "value": "Suppression du compte programmée",
-          "provenance": {
-            "source": "../../../apps/desktop/src/renderer/i18n/locales/fr/common.json",
-            "locator": "accountDeletion.status(fr).pendingTitle",
-            "hash": "sha256:e87c04ffdd4c59a49e9b0f0b2d454b40b0bf8afc2e469ee2d9f311c51bff38ad"
-          }
-        },
-        "pendingCopy": {
-          "value": "Suppression définitive programmée le {{date}}. Connectez-vous avant cette date pour l'annuler.",
-          "provenance": {
-            "source": "../../../apps/desktop/src/renderer/i18n/locales/fr/common.json",
-            "locator": "accountDeletion.status(fr).pendingCopy",
-            "hash": "sha256:e87c04ffdd4c59a49e9b0f0b2d454b40b0bf8afc2e469ee2d9f311c51bff38ad"
-          }
-        },
-        "processingTitle": {
-          "value": "Suppression du compte en cours",
-          "provenance": {
-            "source": "../../../apps/desktop/src/renderer/i18n/locales/fr/common.json",
-            "locator": "accountDeletion.status(fr).processingTitle",
-            "hash": "sha256:e87c04ffdd4c59a49e9b0f0b2d454b40b0bf8afc2e469ee2d9f311c51bff38ad"
-          }
-        },
-        "processingCopy": {
-          "value": "La période d'attente est terminée. Votre compte de connexion Cindy est en cours de suppression.",
-          "provenance": {
-            "source": "../../../apps/desktop/src/renderer/i18n/locales/fr/common.json",
-            "locator": "accountDeletion.status(fr).processingCopy",
-            "hash": "sha256:e87c04ffdd4c59a49e9b0f0b2d454b40b0bf8afc2e469ee2d9f311c51bff38ad"
-          }
-        },
-        "completedTitle": {
-          "value": "Compte supprimé",
-          "provenance": {
-            "source": "../../../apps/desktop/src/renderer/i18n/locales/fr/common.json",
-            "locator": "accountDeletion.status(fr).completedTitle",
-            "hash": "sha256:e87c04ffdd4c59a49e9b0f0b2d454b40b0bf8afc2e469ee2d9f311c51bff38ad"
-          }
-        },
         "completedCopy": {
-          "value": "Votre compte de connexion Cindy a été supprimé.",
           "provenance": {
-            "source": "../../../apps/desktop/src/renderer/i18n/locales/fr/common.json",
+            "hash": "sha256:f177ca6e1d1eef92050b64bf337bc300a01c7caa26aefc5445195135f8ed2f0c",
             "locator": "accountDeletion.status(fr).completedCopy",
-            "hash": "sha256:e87c04ffdd4c59a49e9b0f0b2d454b40b0bf8afc2e469ee2d9f311c51bff38ad"
-          }
+            "source": "../../../apps/desktop/src/renderer/i18n/locales/fr/common.json"
+          },
+          "value": "Votre compte de connexion Cindy a été supprimé."
+        },
+        "completedTitle": {
+          "provenance": {
+            "hash": "sha256:f177ca6e1d1eef92050b64bf337bc300a01c7caa26aefc5445195135f8ed2f0c",
+            "locator": "accountDeletion.status(fr).completedTitle",
+            "source": "../../../apps/desktop/src/renderer/i18n/locales/fr/common.json"
+          },
+          "value": "Compte supprimé"
         },
         "dismissButton": {
-          "value": "Compris",
           "provenance": {
-            "source": "../../../apps/desktop/src/renderer/i18n/locales/fr/common.json",
+            "hash": "sha256:f177ca6e1d1eef92050b64bf337bc300a01c7caa26aefc5445195135f8ed2f0c",
             "locator": "accountDeletion.status(fr).dismissButton",
-            "hash": "sha256:e87c04ffdd4c59a49e9b0f0b2d454b40b0bf8afc2e469ee2d9f311c51bff38ad"
-          }
-        }
-      },
-      "de": {
-        "pendingTitle": {
-          "value": "Kontolöschung vorgemerkt",
-          "provenance": {
-            "source": "../../../apps/desktop/src/renderer/i18n/locales/de/common.json",
-            "locator": "accountDeletion.status(de).pendingTitle",
-            "hash": "sha256:afe6ed7ca646618874d6a9c57006d66b2c5295afb8dff2c8fb79b223996f0094"
-          }
+            "source": "../../../apps/desktop/src/renderer/i18n/locales/fr/common.json"
+          },
+          "value": "Compris"
         },
         "pendingCopy": {
-          "value": "Zur endgültigen Löschung am {{date}} vorgemerkt. Melde dich vorher an, um die Löschung abzubrechen.",
           "provenance": {
-            "source": "../../../apps/desktop/src/renderer/i18n/locales/de/common.json",
-            "locator": "accountDeletion.status(de).pendingCopy",
-            "hash": "sha256:afe6ed7ca646618874d6a9c57006d66b2c5295afb8dff2c8fb79b223996f0094"
-          }
+            "hash": "sha256:f177ca6e1d1eef92050b64bf337bc300a01c7caa26aefc5445195135f8ed2f0c",
+            "locator": "accountDeletion.status(fr).pendingCopy",
+            "source": "../../../apps/desktop/src/renderer/i18n/locales/fr/common.json"
+          },
+          "value": "Suppression définitive programmée le {{date}}. Connectez-vous avant cette date pour l'annuler."
         },
-        "processingTitle": {
-          "value": "Kontolöschung läuft",
+        "pendingTitle": {
           "provenance": {
-            "source": "../../../apps/desktop/src/renderer/i18n/locales/de/common.json",
-            "locator": "accountDeletion.status(de).processingTitle",
-            "hash": "sha256:afe6ed7ca646618874d6a9c57006d66b2c5295afb8dff2c8fb79b223996f0094"
-          }
+            "hash": "sha256:f177ca6e1d1eef92050b64bf337bc300a01c7caa26aefc5445195135f8ed2f0c",
+            "locator": "accountDeletion.status(fr).pendingTitle",
+            "source": "../../../apps/desktop/src/renderer/i18n/locales/fr/common.json"
+          },
+          "value": "Suppression du compte programmée"
         },
         "processingCopy": {
-          "value": "Die Wartezeit ist abgelaufen. Dein Cindy-Anmeldekonto wird gelöscht.",
           "provenance": {
-            "source": "../../../apps/desktop/src/renderer/i18n/locales/de/common.json",
-            "locator": "accountDeletion.status(de).processingCopy",
-            "hash": "sha256:afe6ed7ca646618874d6a9c57006d66b2c5295afb8dff2c8fb79b223996f0094"
-          }
+            "hash": "sha256:f177ca6e1d1eef92050b64bf337bc300a01c7caa26aefc5445195135f8ed2f0c",
+            "locator": "accountDeletion.status(fr).processingCopy",
+            "source": "../../../apps/desktop/src/renderer/i18n/locales/fr/common.json"
+          },
+          "value": "La période d'attente est terminée. Votre compte de connexion Cindy est en cours de suppression."
         },
-        "completedTitle": {
-          "value": "Konto gelöscht",
+        "processingTitle": {
           "provenance": {
-            "source": "../../../apps/desktop/src/renderer/i18n/locales/de/common.json",
-            "locator": "accountDeletion.status(de).completedTitle",
-            "hash": "sha256:afe6ed7ca646618874d6a9c57006d66b2c5295afb8dff2c8fb79b223996f0094"
-          }
-        },
-        "completedCopy": {
-          "value": "Dein Cindy-Anmeldekonto wurde gelöscht.",
-          "provenance": {
-            "source": "../../../apps/desktop/src/renderer/i18n/locales/de/common.json",
-            "locator": "accountDeletion.status(de).completedCopy",
-            "hash": "sha256:afe6ed7ca646618874d6a9c57006d66b2c5295afb8dff2c8fb79b223996f0094"
-          }
-        },
-        "dismissButton": {
-          "value": "Verstanden",
-          "provenance": {
-            "source": "../../../apps/desktop/src/renderer/i18n/locales/de/common.json",
-            "locator": "accountDeletion.status(de).dismissButton",
-            "hash": "sha256:afe6ed7ca646618874d6a9c57006d66b2c5295afb8dff2c8fb79b223996f0094"
-          }
+            "hash": "sha256:f177ca6e1d1eef92050b64bf337bc300a01c7caa26aefc5445195135f8ed2f0c",
+            "locator": "accountDeletion.status(fr).processingTitle",
+            "source": "../../../apps/desktop/src/renderer/i18n/locales/fr/common.json"
+          },
+          "value": "Suppression du compte en cours"
         }
       },
-      "pt-PT": {
-        "pendingTitle": {
-          "value": "Eliminação da conta agendada",
+      "ja": {
+        "completedCopy": {
           "provenance": {
-            "source": "../../../apps/desktop/src/renderer/i18n/locales/pt-PT/common.json",
-            "locator": "accountDeletion.status(pt-PT).pendingTitle",
-            "hash": "sha256:ff2601ef7c0a5c564617c71aa0627516456b8b736ed4dc92e89161e5fb63c336"
-          }
-        },
-        "pendingCopy": {
-          "value": "Eliminação permanente agendada para {{date}}. Inicie sessão antes dessa data para cancelar a eliminação.",
-          "provenance": {
-            "source": "../../../apps/desktop/src/renderer/i18n/locales/pt-PT/common.json",
-            "locator": "accountDeletion.status(pt-PT).pendingCopy",
-            "hash": "sha256:ff2601ef7c0a5c564617c71aa0627516456b8b736ed4dc92e89161e5fb63c336"
-          }
-        },
-        "processingTitle": {
-          "value": "Eliminação da conta em curso",
-          "provenance": {
-            "source": "../../../apps/desktop/src/renderer/i18n/locales/pt-PT/common.json",
-            "locator": "accountDeletion.status(pt-PT).processingTitle",
-            "hash": "sha256:ff2601ef7c0a5c564617c71aa0627516456b8b736ed4dc92e89161e5fb63c336"
-          }
-        },
-        "processingCopy": {
-          "value": "O período de espera terminou. A sua conta de acesso a Cindy está a ser removida.",
-          "provenance": {
-            "source": "../../../apps/desktop/src/renderer/i18n/locales/pt-PT/common.json",
-            "locator": "accountDeletion.status(pt-PT).processingCopy",
-            "hash": "sha256:ff2601ef7c0a5c564617c71aa0627516456b8b736ed4dc92e89161e5fb63c336"
-          }
+            "hash": "sha256:03bea4f2e18426133667f522a0017d0f8e5790baaa3b008bb855dbcfd6feb8f6",
+            "locator": "accountDeletion.status(ja).completedCopy",
+            "source": "../../../apps/desktop/src/renderer/i18n/locales/ja/common.json"
+          },
+          "value": "Cindy のログインアカウントを削除しました。"
         },
         "completedTitle": {
-          "value": "Conta eliminada",
           "provenance": {
-            "source": "../../../apps/desktop/src/renderer/i18n/locales/pt-PT/common.json",
-            "locator": "accountDeletion.status(pt-PT).completedTitle",
-            "hash": "sha256:ff2601ef7c0a5c564617c71aa0627516456b8b736ed4dc92e89161e5fb63c336"
-          }
-        },
-        "completedCopy": {
-          "value": "A sua conta de acesso a Cindy foi removida.",
-          "provenance": {
-            "source": "../../../apps/desktop/src/renderer/i18n/locales/pt-PT/common.json",
-            "locator": "accountDeletion.status(pt-PT).completedCopy",
-            "hash": "sha256:ff2601ef7c0a5c564617c71aa0627516456b8b736ed4dc92e89161e5fb63c336"
-          }
+            "hash": "sha256:03bea4f2e18426133667f522a0017d0f8e5790baaa3b008bb855dbcfd6feb8f6",
+            "locator": "accountDeletion.status(ja).completedTitle",
+            "source": "../../../apps/desktop/src/renderer/i18n/locales/ja/common.json"
+          },
+          "value": "アカウントを削除しました"
         },
         "dismissButton": {
-          "value": "Compreendido",
           "provenance": {
-            "source": "../../../apps/desktop/src/renderer/i18n/locales/pt-PT/common.json",
-            "locator": "accountDeletion.status(pt-PT).dismissButton",
-            "hash": "sha256:ff2601ef7c0a5c564617c71aa0627516456b8b736ed4dc92e89161e5fb63c336"
-          }
+            "hash": "sha256:03bea4f2e18426133667f522a0017d0f8e5790baaa3b008bb855dbcfd6feb8f6",
+            "locator": "accountDeletion.status(ja).dismissButton",
+            "source": "../../../apps/desktop/src/renderer/i18n/locales/ja/common.json"
+          },
+          "value": "確認"
+        },
+        "pendingCopy": {
+          "provenance": {
+            "hash": "sha256:03bea4f2e18426133667f522a0017d0f8e5790baaa3b008bb855dbcfd6feb8f6",
+            "locator": "accountDeletion.status(ja).pendingCopy",
+            "source": "../../../apps/desktop/src/renderer/i18n/locales/ja/common.json"
+          },
+          "value": "{{date}} に完全削除される予定です。それまでにログインすると削除を取り消せます。"
+        },
+        "pendingTitle": {
+          "provenance": {
+            "hash": "sha256:03bea4f2e18426133667f522a0017d0f8e5790baaa3b008bb855dbcfd6feb8f6",
+            "locator": "accountDeletion.status(ja).pendingTitle",
+            "source": "../../../apps/desktop/src/renderer/i18n/locales/ja/common.json"
+          },
+          "value": "アカウントは削除待ちです"
+        },
+        "processingCopy": {
+          "provenance": {
+            "hash": "sha256:03bea4f2e18426133667f522a0017d0f8e5790baaa3b008bb855dbcfd6feb8f6",
+            "locator": "accountDeletion.status(ja).processingCopy",
+            "source": "../../../apps/desktop/src/renderer/i18n/locales/ja/common.json"
+          },
+          "value": "待機期間が終了し、Cindy のログインアカウントを削除しています。"
+        },
+        "processingTitle": {
+          "provenance": {
+            "hash": "sha256:03bea4f2e18426133667f522a0017d0f8e5790baaa3b008bb855dbcfd6feb8f6",
+            "locator": "accountDeletion.status(ja).processingTitle",
+            "source": "../../../apps/desktop/src/renderer/i18n/locales/ja/common.json"
+          },
+          "value": "アカウントを削除しています"
+        }
+      },
+      "ko": {
+        "completedCopy": {
+          "provenance": {
+            "hash": "sha256:3216637e1521b11a6b808514f9511de008ce830a879af1998d73dd6dde0b13df",
+            "locator": "accountDeletion.status(ko).completedCopy",
+            "source": "../../../apps/desktop/src/renderer/i18n/locales/ko/common.json"
+          },
+          "value": "Cindy 로그인 계정이 삭제되었습니다."
+        },
+        "completedTitle": {
+          "provenance": {
+            "hash": "sha256:3216637e1521b11a6b808514f9511de008ce830a879af1998d73dd6dde0b13df",
+            "locator": "accountDeletion.status(ko).completedTitle",
+            "source": "../../../apps/desktop/src/renderer/i18n/locales/ko/common.json"
+          },
+          "value": "계정 삭제 완료"
+        },
+        "dismissButton": {
+          "provenance": {
+            "hash": "sha256:3216637e1521b11a6b808514f9511de008ce830a879af1998d73dd6dde0b13df",
+            "locator": "accountDeletion.status(ko).dismissButton",
+            "source": "../../../apps/desktop/src/renderer/i18n/locales/ko/common.json"
+          },
+          "value": "확인"
+        },
+        "pendingCopy": {
+          "provenance": {
+            "hash": "sha256:3216637e1521b11a6b808514f9511de008ce830a879af1998d73dd6dde0b13df",
+            "locator": "accountDeletion.status(ko).pendingCopy",
+            "source": "../../../apps/desktop/src/renderer/i18n/locales/ko/common.json"
+          },
+          "value": "{{date}}에 영구 삭제될 예정입니다. 그 전에 로그인하면 삭제를 취소할 수 있습니다."
+        },
+        "pendingTitle": {
+          "provenance": {
+            "hash": "sha256:3216637e1521b11a6b808514f9511de008ce830a879af1998d73dd6dde0b13df",
+            "locator": "accountDeletion.status(ko).pendingTitle",
+            "source": "../../../apps/desktop/src/renderer/i18n/locales/ko/common.json"
+          },
+          "value": "계정 삭제 대기 중"
+        },
+        "processingCopy": {
+          "provenance": {
+            "hash": "sha256:3216637e1521b11a6b808514f9511de008ce830a879af1998d73dd6dde0b13df",
+            "locator": "accountDeletion.status(ko).processingCopy",
+            "source": "../../../apps/desktop/src/renderer/i18n/locales/ko/common.json"
+          },
+          "value": "대기 기간이 끝나 Cindy 로그인 계정을 삭제하고 있습니다."
+        },
+        "processingTitle": {
+          "provenance": {
+            "hash": "sha256:3216637e1521b11a6b808514f9511de008ce830a879af1998d73dd6dde0b13df",
+            "locator": "accountDeletion.status(ko).processingTitle",
+            "source": "../../../apps/desktop/src/renderer/i18n/locales/ko/common.json"
+          },
+          "value": "계정 삭제 진행 중"
         }
       },
       "pt-BR": {
-        "pendingTitle": {
-          "value": "Exclusão da conta agendada",
+        "completedCopy": {
           "provenance": {
-            "source": "../../../apps/desktop/src/renderer/i18n/locales/pt-BR/common.json",
-            "locator": "accountDeletion.status(pt-BR).pendingTitle",
-            "hash": "sha256:f8d285531bb9c402e94754d5affb1a10bd38dfc115298ac782eab382bcd77808"
-          }
-        },
-        "pendingCopy": {
-          "value": "Exclusão permanente agendada para {{date}}. Entre antes dessa data para cancelar a exclusão.",
-          "provenance": {
-            "source": "../../../apps/desktop/src/renderer/i18n/locales/pt-BR/common.json",
-            "locator": "accountDeletion.status(pt-BR).pendingCopy",
-            "hash": "sha256:f8d285531bb9c402e94754d5affb1a10bd38dfc115298ac782eab382bcd77808"
-          }
-        },
-        "processingTitle": {
-          "value": "Exclusão da conta em andamento",
-          "provenance": {
-            "source": "../../../apps/desktop/src/renderer/i18n/locales/pt-BR/common.json",
-            "locator": "accountDeletion.status(pt-BR).processingTitle",
-            "hash": "sha256:f8d285531bb9c402e94754d5affb1a10bd38dfc115298ac782eab382bcd77808"
-          }
-        },
-        "processingCopy": {
-          "value": "O período de espera terminou. Sua conta de login do Cindy está sendo removida.",
-          "provenance": {
-            "source": "../../../apps/desktop/src/renderer/i18n/locales/pt-BR/common.json",
-            "locator": "accountDeletion.status(pt-BR).processingCopy",
-            "hash": "sha256:f8d285531bb9c402e94754d5affb1a10bd38dfc115298ac782eab382bcd77808"
-          }
+            "hash": "sha256:9decc3b0b8f606afc80aae5b049e1e9a96eb96bb01cbcb5a9e81e9b1e91d3064",
+            "locator": "accountDeletion.status(pt-BR).completedCopy",
+            "source": "../../../apps/desktop/src/renderer/i18n/locales/pt-BR/common.json"
+          },
+          "value": "Sua conta de login do Cindy foi removida."
         },
         "completedTitle": {
-          "value": "Conta excluída",
           "provenance": {
-            "source": "../../../apps/desktop/src/renderer/i18n/locales/pt-BR/common.json",
+            "hash": "sha256:9decc3b0b8f606afc80aae5b049e1e9a96eb96bb01cbcb5a9e81e9b1e91d3064",
             "locator": "accountDeletion.status(pt-BR).completedTitle",
-            "hash": "sha256:f8d285531bb9c402e94754d5affb1a10bd38dfc115298ac782eab382bcd77808"
-          }
-        },
-        "completedCopy": {
-          "value": "Sua conta de login do Cindy foi removida.",
-          "provenance": {
-            "source": "../../../apps/desktop/src/renderer/i18n/locales/pt-BR/common.json",
-            "locator": "accountDeletion.status(pt-BR).completedCopy",
-            "hash": "sha256:f8d285531bb9c402e94754d5affb1a10bd38dfc115298ac782eab382bcd77808"
-          }
+            "source": "../../../apps/desktop/src/renderer/i18n/locales/pt-BR/common.json"
+          },
+          "value": "Conta excluída"
         },
         "dismissButton": {
-          "value": "Entendi",
           "provenance": {
-            "source": "../../../apps/desktop/src/renderer/i18n/locales/pt-BR/common.json",
+            "hash": "sha256:9decc3b0b8f606afc80aae5b049e1e9a96eb96bb01cbcb5a9e81e9b1e91d3064",
             "locator": "accountDeletion.status(pt-BR).dismissButton",
-            "hash": "sha256:f8d285531bb9c402e94754d5affb1a10bd38dfc115298ac782eab382bcd77808"
-          }
+            "source": "../../../apps/desktop/src/renderer/i18n/locales/pt-BR/common.json"
+          },
+          "value": "Entendi"
+        },
+        "pendingCopy": {
+          "provenance": {
+            "hash": "sha256:9decc3b0b8f606afc80aae5b049e1e9a96eb96bb01cbcb5a9e81e9b1e91d3064",
+            "locator": "accountDeletion.status(pt-BR).pendingCopy",
+            "source": "../../../apps/desktop/src/renderer/i18n/locales/pt-BR/common.json"
+          },
+          "value": "Exclusão permanente agendada para {{date}}. Entre antes dessa data para cancelar a exclusão."
+        },
+        "pendingTitle": {
+          "provenance": {
+            "hash": "sha256:9decc3b0b8f606afc80aae5b049e1e9a96eb96bb01cbcb5a9e81e9b1e91d3064",
+            "locator": "accountDeletion.status(pt-BR).pendingTitle",
+            "source": "../../../apps/desktop/src/renderer/i18n/locales/pt-BR/common.json"
+          },
+          "value": "Exclusão da conta agendada"
+        },
+        "processingCopy": {
+          "provenance": {
+            "hash": "sha256:9decc3b0b8f606afc80aae5b049e1e9a96eb96bb01cbcb5a9e81e9b1e91d3064",
+            "locator": "accountDeletion.status(pt-BR).processingCopy",
+            "source": "../../../apps/desktop/src/renderer/i18n/locales/pt-BR/common.json"
+          },
+          "value": "O período de espera terminou. Sua conta de login do Cindy está sendo removida."
+        },
+        "processingTitle": {
+          "provenance": {
+            "hash": "sha256:9decc3b0b8f606afc80aae5b049e1e9a96eb96bb01cbcb5a9e81e9b1e91d3064",
+            "locator": "accountDeletion.status(pt-BR).processingTitle",
+            "source": "../../../apps/desktop/src/renderer/i18n/locales/pt-BR/common.json"
+          },
+          "value": "Exclusão da conta em andamento"
         }
       },
-      "zh-Hant-x-lzh": {
-        "pendingTitle": {
-          "value": "名籍待刪",
+      "pt-PT": {
+        "completedCopy": {
           "provenance": {
-            "source": "../../../apps/desktop/src/renderer/i18n/locales/zh-Hant-x-lzh/common.json",
-            "locator": "accountDeletion.status(zh-Hant-x-lzh).pendingTitle",
-            "hash": "sha256:7b937ce63f3026b384dbb9f8e9316fca3639a891c379e51b31d353d1e0b0ffbf"
-          }
-        },
-        "pendingCopy": {
-          "value": "名籍定於 {{date}} 永久刪除。此前重新登入，可罷刪除。",
-          "provenance": {
-            "source": "../../../apps/desktop/src/renderer/i18n/locales/zh-Hant-x-lzh/common.json",
-            "locator": "accountDeletion.status(zh-Hant-x-lzh).pendingCopy",
-            "hash": "sha256:7b937ce63f3026b384dbb9f8e9316fca3639a891c379e51b31d353d1e0b0ffbf"
-          }
-        },
-        "processingTitle": {
-          "value": "名籍方刪",
-          "provenance": {
-            "source": "../../../apps/desktop/src/renderer/i18n/locales/zh-Hant-x-lzh/common.json",
-            "locator": "accountDeletion.status(zh-Hant-x-lzh).processingTitle",
-            "hash": "sha256:7b937ce63f3026b384dbb9f8e9316fca3639a891c379e51b31d353d1e0b0ffbf"
-          }
-        },
-        "processingCopy": {
-          "value": "等待期已滿，Cindy 登入帳號方在刪除。",
-          "provenance": {
-            "source": "../../../apps/desktop/src/renderer/i18n/locales/zh-Hant-x-lzh/common.json",
-            "locator": "accountDeletion.status(zh-Hant-x-lzh).processingCopy",
-            "hash": "sha256:7b937ce63f3026b384dbb9f8e9316fca3639a891c379e51b31d353d1e0b0ffbf"
-          }
+            "hash": "sha256:d0f186a2801fea3ba2dc4ab3a79375f074240a7873b583caba707722c8dc6d06",
+            "locator": "accountDeletion.status(pt-PT).completedCopy",
+            "source": "../../../apps/desktop/src/renderer/i18n/locales/pt-PT/common.json"
+          },
+          "value": "A sua conta de acesso a Cindy foi removida."
         },
         "completedTitle": {
-          "value": "名籍已刪",
           "provenance": {
-            "source": "../../../apps/desktop/src/renderer/i18n/locales/zh-Hant-x-lzh/common.json",
-            "locator": "accountDeletion.status(zh-Hant-x-lzh).completedTitle",
-            "hash": "sha256:7b937ce63f3026b384dbb9f8e9316fca3639a891c379e51b31d353d1e0b0ffbf"
-          }
-        },
-        "completedCopy": {
-          "value": "Cindy 登入名籍已刪除。",
-          "provenance": {
-            "source": "../../../apps/desktop/src/renderer/i18n/locales/zh-Hant-x-lzh/common.json",
-            "locator": "accountDeletion.status(zh-Hant-x-lzh).completedCopy",
-            "hash": "sha256:7b937ce63f3026b384dbb9f8e9316fca3639a891c379e51b31d353d1e0b0ffbf"
-          }
+            "hash": "sha256:d0f186a2801fea3ba2dc4ab3a79375f074240a7873b583caba707722c8dc6d06",
+            "locator": "accountDeletion.status(pt-PT).completedTitle",
+            "source": "../../../apps/desktop/src/renderer/i18n/locales/pt-PT/common.json"
+          },
+          "value": "Conta eliminada"
         },
         "dismissButton": {
-          "value": "知之矣",
           "provenance": {
-            "source": "../../../apps/desktop/src/renderer/i18n/locales/zh-Hant-x-lzh/common.json",
-            "locator": "accountDeletion.status(zh-Hant-x-lzh).dismissButton",
-            "hash": "sha256:7b937ce63f3026b384dbb9f8e9316fca3639a891c379e51b31d353d1e0b0ffbf"
-          }
+            "hash": "sha256:d0f186a2801fea3ba2dc4ab3a79375f074240a7873b583caba707722c8dc6d06",
+            "locator": "accountDeletion.status(pt-PT).dismissButton",
+            "source": "../../../apps/desktop/src/renderer/i18n/locales/pt-PT/common.json"
+          },
+          "value": "Compreendido"
+        },
+        "pendingCopy": {
+          "provenance": {
+            "hash": "sha256:d0f186a2801fea3ba2dc4ab3a79375f074240a7873b583caba707722c8dc6d06",
+            "locator": "accountDeletion.status(pt-PT).pendingCopy",
+            "source": "../../../apps/desktop/src/renderer/i18n/locales/pt-PT/common.json"
+          },
+          "value": "Eliminação permanente agendada para {{date}}. Inicie sessão antes dessa data para cancelar a eliminação."
+        },
+        "pendingTitle": {
+          "provenance": {
+            "hash": "sha256:d0f186a2801fea3ba2dc4ab3a79375f074240a7873b583caba707722c8dc6d06",
+            "locator": "accountDeletion.status(pt-PT).pendingTitle",
+            "source": "../../../apps/desktop/src/renderer/i18n/locales/pt-PT/common.json"
+          },
+          "value": "Eliminação da conta agendada"
+        },
+        "processingCopy": {
+          "provenance": {
+            "hash": "sha256:d0f186a2801fea3ba2dc4ab3a79375f074240a7873b583caba707722c8dc6d06",
+            "locator": "accountDeletion.status(pt-PT).processingCopy",
+            "source": "../../../apps/desktop/src/renderer/i18n/locales/pt-PT/common.json"
+          },
+          "value": "O período de espera terminou. A sua conta de acesso a Cindy está a ser removida."
+        },
+        "processingTitle": {
+          "provenance": {
+            "hash": "sha256:d0f186a2801fea3ba2dc4ab3a79375f074240a7873b583caba707722c8dc6d06",
+            "locator": "accountDeletion.status(pt-PT).processingTitle",
+            "source": "../../../apps/desktop/src/renderer/i18n/locales/pt-PT/common.json"
+          },
+          "value": "Eliminação da conta em curso"
+        }
+      },
+      "tlh": {
+        "completedCopy": {
+          "provenance": {
+            "hash": "sha256:49db053c59f79f541ba54f1bae42cf6e3358c7518444a11bf75d2a668839aea7",
+            "locator": "accountDeletion.status(tlh).completedCopy",
+            "source": "../../../apps/desktop/src/renderer/i18n/locales/tlh/common.json"
+          },
+          "value": "Cindy Hotlh pong teqlu'pu'."
+        },
+        "completedTitle": {
+          "provenance": {
+            "hash": "sha256:49db053c59f79f541ba54f1bae42cf6e3358c7518444a11bf75d2a668839aea7",
+            "locator": "accountDeletion.status(tlh).completedTitle",
+            "source": "../../../apps/desktop/src/renderer/i18n/locales/tlh/common.json"
+          },
+          "value": "pong teqlu'"
+        },
+        "dismissButton": {
+          "provenance": {
+            "hash": "sha256:49db053c59f79f541ba54f1bae42cf6e3358c7518444a11bf75d2a668839aea7",
+            "locator": "accountDeletion.status(tlh).dismissButton",
+            "source": "../../../apps/desktop/src/renderer/i18n/locales/tlh/common.json"
+          },
+          "value": "jIyaj'"
+        },
+        "pendingCopy": {
+          "provenance": {
+            "hash": "sha256:49db053c59f79f541ba54f1bae42cf6e3358c7518444a11bf75d2a668839aea7",
+            "locator": "accountDeletion.status(tlh).pendingCopy",
+            "source": "../../../apps/desktop/src/renderer/i18n/locales/tlh/common.json"
+          },
+          "value": "{{date}}mey beQ teq qonlu'. paS Hotlhchugh — teq mev."
+        },
+        "pendingTitle": {
+          "provenance": {
+            "hash": "sha256:49db053c59f79f541ba54f1bae42cf6e3358c7518444a11bf75d2a668839aea7",
+            "locator": "accountDeletion.status(tlh).pendingTitle",
+            "source": "../../../apps/desktop/src/renderer/i18n/locales/tlh/common.json"
+          },
+          "value": "pong teq qonlu'"
+        },
+        "processingCopy": {
+          "provenance": {
+            "hash": "sha256:49db053c59f79f541ba54f1bae42cf6e3358c7518444a11bf75d2a668839aea7",
+            "locator": "accountDeletion.status(tlh).processingCopy",
+            "source": "../../../apps/desktop/src/renderer/i18n/locales/tlh/common.json"
+          },
+          "value": "loS rIn. Cindy Hotlh pong teqlu'taH."
+        },
+        "processingTitle": {
+          "provenance": {
+            "hash": "sha256:49db053c59f79f541ba54f1bae42cf6e3358c7518444a11bf75d2a668839aea7",
+            "locator": "accountDeletion.status(tlh).processingTitle",
+            "source": "../../../apps/desktop/src/renderer/i18n/locales/tlh/common.json"
+          },
+          "value": "pong teq SengtaH"
+        }
+      },
+      "zh-CN": {
+        "completedCopy": {
+          "provenance": {
+            "hash": "sha256:be9a0d2c74c32acbcb626f3cbb0da9759312ba5a8fc1a405c4d00a09703a4f56",
+            "locator": "accountDeletion.status(zh-CN).completedCopy",
+            "source": "../../../apps/desktop/src/renderer/i18n/locales/zh-CN/common.json"
+          },
+          "value": "Cindy 登录账号已删除。"
+        },
+        "completedTitle": {
+          "provenance": {
+            "hash": "sha256:be9a0d2c74c32acbcb626f3cbb0da9759312ba5a8fc1a405c4d00a09703a4f56",
+            "locator": "accountDeletion.status(zh-CN).completedTitle",
+            "source": "../../../apps/desktop/src/renderer/i18n/locales/zh-CN/common.json"
+          },
+          "value": "账号已注销"
+        },
+        "dismissButton": {
+          "provenance": {
+            "hash": "sha256:be9a0d2c74c32acbcb626f3cbb0da9759312ba5a8fc1a405c4d00a09703a4f56",
+            "locator": "accountDeletion.status(zh-CN).dismissButton",
+            "source": "../../../apps/desktop/src/renderer/i18n/locales/zh-CN/common.json"
+          },
+          "value": "我知道了"
+        },
+        "pendingCopy": {
+          "provenance": {
+            "hash": "sha256:be9a0d2c74c32acbcb626f3cbb0da9759312ba5a8fc1a405c4d00a09703a4f56",
+            "locator": "accountDeletion.status(zh-CN).pendingCopy",
+            "source": "../../../apps/desktop/src/renderer/i18n/locales/zh-CN/common.json"
+          },
+          "value": "账号计划于 {{date}} 永久删除。在此之前重新登录可取消注销。"
+        },
+        "pendingTitle": {
+          "provenance": {
+            "hash": "sha256:be9a0d2c74c32acbcb626f3cbb0da9759312ba5a8fc1a405c4d00a09703a4f56",
+            "locator": "accountDeletion.status(zh-CN).pendingTitle",
+            "source": "../../../apps/desktop/src/renderer/i18n/locales/zh-CN/common.json"
+          },
+          "value": "账号正在等待注销"
+        },
+        "processingCopy": {
+          "provenance": {
+            "hash": "sha256:be9a0d2c74c32acbcb626f3cbb0da9759312ba5a8fc1a405c4d00a09703a4f56",
+            "locator": "accountDeletion.status(zh-CN).processingCopy",
+            "source": "../../../apps/desktop/src/renderer/i18n/locales/zh-CN/common.json"
+          },
+          "value": "等待期已结束，Cindy 登录账号正在删除。"
+        },
+        "processingTitle": {
+          "provenance": {
+            "hash": "sha256:be9a0d2c74c32acbcb626f3cbb0da9759312ba5a8fc1a405c4d00a09703a4f56",
+            "locator": "accountDeletion.status(zh-CN).processingTitle",
+            "source": "../../../apps/desktop/src/renderer/i18n/locales/zh-CN/common.json"
+          },
+          "value": "账号正在注销"
         }
       },
       "zh-Hans-x-lzh": {
-        "pendingTitle": {
-          "value": "名籍待删",
+        "completedCopy": {
           "provenance": {
-            "source": "../../../apps/desktop/src/renderer/i18n/locales/zh-Hans-x-lzh/common.json",
-            "locator": "accountDeletion.status(zh-Hans-x-lzh).pendingTitle",
-            "hash": "sha256:80ac523f1f14b66091ef266c9082f9c5fcfa46c19a83d4395dcf50019dd2637f"
-          }
-        },
-        "pendingCopy": {
-          "value": "名籍定于 {{date}} 永久删除。此前重新登录，可罢删除。",
-          "provenance": {
-            "source": "../../../apps/desktop/src/renderer/i18n/locales/zh-Hans-x-lzh/common.json",
-            "locator": "accountDeletion.status(zh-Hans-x-lzh).pendingCopy",
-            "hash": "sha256:80ac523f1f14b66091ef266c9082f9c5fcfa46c19a83d4395dcf50019dd2637f"
-          }
-        },
-        "processingTitle": {
-          "value": "名籍方删",
-          "provenance": {
-            "source": "../../../apps/desktop/src/renderer/i18n/locales/zh-Hans-x-lzh/common.json",
-            "locator": "accountDeletion.status(zh-Hans-x-lzh).processingTitle",
-            "hash": "sha256:80ac523f1f14b66091ef266c9082f9c5fcfa46c19a83d4395dcf50019dd2637f"
-          }
-        },
-        "processingCopy": {
-          "value": "等待期已满，Cindy 登录帐号方在删除。",
-          "provenance": {
-            "source": "../../../apps/desktop/src/renderer/i18n/locales/zh-Hans-x-lzh/common.json",
-            "locator": "accountDeletion.status(zh-Hans-x-lzh).processingCopy",
-            "hash": "sha256:80ac523f1f14b66091ef266c9082f9c5fcfa46c19a83d4395dcf50019dd2637f"
-          }
+            "hash": "sha256:ecb24c18742dc03c4f0ab4ef3f0873505ec6eaf5c622ce55269be9f00f66cb93",
+            "locator": "accountDeletion.status(zh-Hans-x-lzh).completedCopy",
+            "source": "../../../apps/desktop/src/renderer/i18n/locales/zh-Hans-x-lzh/common.json"
+          },
+          "value": "Cindy 登录名籍已删除。"
         },
         "completedTitle": {
-          "value": "名籍已删",
           "provenance": {
-            "source": "../../../apps/desktop/src/renderer/i18n/locales/zh-Hans-x-lzh/common.json",
+            "hash": "sha256:ecb24c18742dc03c4f0ab4ef3f0873505ec6eaf5c622ce55269be9f00f66cb93",
             "locator": "accountDeletion.status(zh-Hans-x-lzh).completedTitle",
-            "hash": "sha256:80ac523f1f14b66091ef266c9082f9c5fcfa46c19a83d4395dcf50019dd2637f"
-          }
-        },
-        "completedCopy": {
-          "value": "Cindy 登录名籍已删除。",
-          "provenance": {
-            "source": "../../../apps/desktop/src/renderer/i18n/locales/zh-Hans-x-lzh/common.json",
-            "locator": "accountDeletion.status(zh-Hans-x-lzh).completedCopy",
-            "hash": "sha256:80ac523f1f14b66091ef266c9082f9c5fcfa46c19a83d4395dcf50019dd2637f"
-          }
+            "source": "../../../apps/desktop/src/renderer/i18n/locales/zh-Hans-x-lzh/common.json"
+          },
+          "value": "名籍已删"
         },
         "dismissButton": {
-          "value": "知之矣",
           "provenance": {
-            "source": "../../../apps/desktop/src/renderer/i18n/locales/zh-Hans-x-lzh/common.json",
+            "hash": "sha256:ecb24c18742dc03c4f0ab4ef3f0873505ec6eaf5c622ce55269be9f00f66cb93",
             "locator": "accountDeletion.status(zh-Hans-x-lzh).dismissButton",
-            "hash": "sha256:80ac523f1f14b66091ef266c9082f9c5fcfa46c19a83d4395dcf50019dd2637f"
-          }
+            "source": "../../../apps/desktop/src/renderer/i18n/locales/zh-Hans-x-lzh/common.json"
+          },
+          "value": "知之矣"
+        },
+        "pendingCopy": {
+          "provenance": {
+            "hash": "sha256:ecb24c18742dc03c4f0ab4ef3f0873505ec6eaf5c622ce55269be9f00f66cb93",
+            "locator": "accountDeletion.status(zh-Hans-x-lzh).pendingCopy",
+            "source": "../../../apps/desktop/src/renderer/i18n/locales/zh-Hans-x-lzh/common.json"
+          },
+          "value": "名籍定于 {{date}} 永久删除。此前重新登录，可罢删除。"
+        },
+        "pendingTitle": {
+          "provenance": {
+            "hash": "sha256:ecb24c18742dc03c4f0ab4ef3f0873505ec6eaf5c622ce55269be9f00f66cb93",
+            "locator": "accountDeletion.status(zh-Hans-x-lzh).pendingTitle",
+            "source": "../../../apps/desktop/src/renderer/i18n/locales/zh-Hans-x-lzh/common.json"
+          },
+          "value": "名籍待删"
+        },
+        "processingCopy": {
+          "provenance": {
+            "hash": "sha256:ecb24c18742dc03c4f0ab4ef3f0873505ec6eaf5c622ce55269be9f00f66cb93",
+            "locator": "accountDeletion.status(zh-Hans-x-lzh).processingCopy",
+            "source": "../../../apps/desktop/src/renderer/i18n/locales/zh-Hans-x-lzh/common.json"
+          },
+          "value": "等待期已满，Cindy 登录帐号方在删除。"
+        },
+        "processingTitle": {
+          "provenance": {
+            "hash": "sha256:ecb24c18742dc03c4f0ab4ef3f0873505ec6eaf5c622ce55269be9f00f66cb93",
+            "locator": "accountDeletion.status(zh-Hans-x-lzh).processingTitle",
+            "source": "../../../apps/desktop/src/renderer/i18n/locales/zh-Hans-x-lzh/common.json"
+          },
+          "value": "名籍方删"
         }
+      },
+      "zh-Hant-x-lzh": {
+        "completedCopy": {
+          "provenance": {
+            "hash": "sha256:d7e5da035e7d18824df9df5b378e5ceac5286485ff98a623b70d7869e296ab8a",
+            "locator": "accountDeletion.status(zh-Hant-x-lzh).completedCopy",
+            "source": "../../../apps/desktop/src/renderer/i18n/locales/zh-Hant-x-lzh/common.json"
+          },
+          "value": "Cindy 登入名籍已刪除。"
+        },
+        "completedTitle": {
+          "provenance": {
+            "hash": "sha256:d7e5da035e7d18824df9df5b378e5ceac5286485ff98a623b70d7869e296ab8a",
+            "locator": "accountDeletion.status(zh-Hant-x-lzh).completedTitle",
+            "source": "../../../apps/desktop/src/renderer/i18n/locales/zh-Hant-x-lzh/common.json"
+          },
+          "value": "名籍已刪"
+        },
+        "dismissButton": {
+          "provenance": {
+            "hash": "sha256:d7e5da035e7d18824df9df5b378e5ceac5286485ff98a623b70d7869e296ab8a",
+            "locator": "accountDeletion.status(zh-Hant-x-lzh).dismissButton",
+            "source": "../../../apps/desktop/src/renderer/i18n/locales/zh-Hant-x-lzh/common.json"
+          },
+          "value": "知之矣"
+        },
+        "pendingCopy": {
+          "provenance": {
+            "hash": "sha256:d7e5da035e7d18824df9df5b378e5ceac5286485ff98a623b70d7869e296ab8a",
+            "locator": "accountDeletion.status(zh-Hant-x-lzh).pendingCopy",
+            "source": "../../../apps/desktop/src/renderer/i18n/locales/zh-Hant-x-lzh/common.json"
+          },
+          "value": "名籍定於 {{date}} 永久刪除。此前重新登入，可罷刪除。"
+        },
+        "pendingTitle": {
+          "provenance": {
+            "hash": "sha256:d7e5da035e7d18824df9df5b378e5ceac5286485ff98a623b70d7869e296ab8a",
+            "locator": "accountDeletion.status(zh-Hant-x-lzh).pendingTitle",
+            "source": "../../../apps/desktop/src/renderer/i18n/locales/zh-Hant-x-lzh/common.json"
+          },
+          "value": "名籍待刪"
+        },
+        "processingCopy": {
+          "provenance": {
+            "hash": "sha256:d7e5da035e7d18824df9df5b378e5ceac5286485ff98a623b70d7869e296ab8a",
+            "locator": "accountDeletion.status(zh-Hant-x-lzh).processingCopy",
+            "source": "../../../apps/desktop/src/renderer/i18n/locales/zh-Hant-x-lzh/common.json"
+          },
+          "value": "等待期已滿，Cindy 登入帳號方在刪除。"
+        },
+        "processingTitle": {
+          "provenance": {
+            "hash": "sha256:d7e5da035e7d18824df9df5b378e5ceac5286485ff98a623b70d7869e296ab8a",
+            "locator": "accountDeletion.status(zh-Hant-x-lzh).processingTitle",
+            "source": "../../../apps/desktop/src/renderer/i18n/locales/zh-Hant-x-lzh/common.json"
+          },
+          "value": "名籍方刪"
+        }
+      },
+      "zh-TW": {
+        "completedCopy": {
+          "provenance": {
+            "hash": "sha256:ff6079e690c1c82364e6589c17ca78e899e3eb269fa6149ecec19f90f23e8310",
+            "locator": "accountDeletion.status(zh-TW).completedCopy",
+            "source": "../../../apps/desktop/src/renderer/i18n/locales/zh-TW/common.json"
+          },
+          "value": "Cindy 登入帳號已刪除。"
+        },
+        "completedTitle": {
+          "provenance": {
+            "hash": "sha256:ff6079e690c1c82364e6589c17ca78e899e3eb269fa6149ecec19f90f23e8310",
+            "locator": "accountDeletion.status(zh-TW).completedTitle",
+            "source": "../../../apps/desktop/src/renderer/i18n/locales/zh-TW/common.json"
+          },
+          "value": "帳號已刪除"
+        },
+        "dismissButton": {
+          "provenance": {
+            "hash": "sha256:ff6079e690c1c82364e6589c17ca78e899e3eb269fa6149ecec19f90f23e8310",
+            "locator": "accountDeletion.status(zh-TW).dismissButton",
+            "source": "../../../apps/desktop/src/renderer/i18n/locales/zh-TW/common.json"
+          },
+          "value": "我知道了"
+        },
+        "pendingCopy": {
+          "provenance": {
+            "hash": "sha256:ff6079e690c1c82364e6589c17ca78e899e3eb269fa6149ecec19f90f23e8310",
+            "locator": "accountDeletion.status(zh-TW).pendingCopy",
+            "source": "../../../apps/desktop/src/renderer/i18n/locales/zh-TW/common.json"
+          },
+          "value": "帳號計劃於 {{date}} 永久刪除。在此之前重新登入可取消刪除。"
+        },
+        "pendingTitle": {
+          "provenance": {
+            "hash": "sha256:ff6079e690c1c82364e6589c17ca78e899e3eb269fa6149ecec19f90f23e8310",
+            "locator": "accountDeletion.status(zh-TW).pendingTitle",
+            "source": "../../../apps/desktop/src/renderer/i18n/locales/zh-TW/common.json"
+          },
+          "value": "帳號正在等待刪除"
+        },
+        "processingCopy": {
+          "provenance": {
+            "hash": "sha256:ff6079e690c1c82364e6589c17ca78e899e3eb269fa6149ecec19f90f23e8310",
+            "locator": "accountDeletion.status(zh-TW).processingCopy",
+            "source": "../../../apps/desktop/src/renderer/i18n/locales/zh-TW/common.json"
+          },
+          "value": "等待期已結束，Cindy 登入帳號正在刪除。"
+        },
+        "processingTitle": {
+          "provenance": {
+            "hash": "sha256:ff6079e690c1c82364e6589c17ca78e899e3eb269fa6149ecec19f90f23e8310",
+            "locator": "accountDeletion.status(zh-TW).processingTitle",
+            "source": "../../../apps/desktop/src/renderer/i18n/locales/zh-TW/common.json"
+          },
+          "value": "帳號正在刪除"
+        }
+      }
+    },
+    "geometry": {
+      "bodyLinkGap": {
+        "provenance": {
+          "hash": "sha256:ad4a0f2c06d950773c61ed2f08d3c2f4551f28d947ea50eecf621dab4ea38a5b",
+          "locator": "LOGIN_DELETION_BUBBLE(设计单位).bodyLinkGap",
+          "source": "../../../apps/desktop/src/renderer/components/login/loginDesignTokens.ts"
+        },
+        "value": 22
+      },
+      "borderWidth": {
+        "provenance": {
+          "hash": "sha256:ad4a0f2c06d950773c61ed2f08d3c2f4551f28d947ea50eecf621dab4ea38a5b",
+          "locator": "LoginPage.tsx section style borderWidth=1/PANEL_FIXED_SCALE 设计单位(缩放补偿,渲染恰 1 物理 px;DESIGN.md §16.4)",
+          "source": "../../../apps/desktop/src/renderer/components/login/loginDesignTokens.ts"
+        },
+        "value": 1
+      },
+      "fontSize": {
+        "provenance": {
+          "hash": "sha256:ad4a0f2c06d950773c61ed2f08d3c2f4551f28d947ea50eecf621dab4ea38a5b",
+          "locator": "LOGIN_DELETION_BUBBLE(设计单位).fontSize",
+          "source": "../../../apps/desktop/src/renderer/components/login/loginDesignTokens.ts"
+        },
+        "value": 20
+      },
+      "fontWeight": {
+        "provenance": {
+          "hash": "sha256:ad4a0f2c06d950773c61ed2f08d3c2f4551f28d947ea50eecf621dab4ea38a5b",
+          "locator": "LoginPage.tsx font-normal=400",
+          "source": "../../../apps/desktop/src/renderer/components/login/loginDesignTokens.ts"
+        },
+        "value": 400
+      },
+      "lineHeight": {
+        "provenance": {
+          "hash": "sha256:ad4a0f2c06d950773c61ed2f08d3c2f4551f28d947ea50eecf621dab4ea38a5b",
+          "locator": "LOGIN_DELETION_BUBBLE(设计单位).lineHeight",
+          "source": "../../../apps/desktop/src/renderer/components/login/loginDesignTokens.ts"
+        },
+        "value": 23
+      },
+      "linkHitPadding": {
+        "provenance": {
+          "hash": "sha256:ad4a0f2c06d950773c61ed2f08d3c2f4551f28d947ea50eecf621dab4ea38a5b",
+          "locator": "LOGIN_DELETION_BUBBLE(设计单位).linkHitPadding",
+          "source": "../../../apps/desktop/src/renderer/components/login/loginDesignTokens.ts"
+        },
+        "value": 11
+      },
+      "padding": {
+        "provenance": {
+          "hash": "sha256:ad4a0f2c06d950773c61ed2f08d3c2f4551f28d947ea50eecf621dab4ea38a5b",
+          "locator": "LOGIN_DELETION_BUBBLE(设计单位).padding",
+          "source": "../../../apps/desktop/src/renderer/components/login/loginDesignTokens.ts"
+        },
+        "value": 20
+      },
+      "radius": {
+        "provenance": {
+          "hash": "sha256:ad4a0f2c06d950773c61ed2f08d3c2f4551f28d947ea50eecf621dab4ea38a5b",
+          "locator": "LOGIN_DELETION_BUBBLE(设计单位).radius",
+          "source": "../../../apps/desktop/src/renderer/components/login/loginDesignTokens.ts"
+        },
+        "value": 22
+      },
+      "scale": {
+        "provenance": {
+          "hash": "sha256:ad4a0f2c06d950773c61ed2f08d3c2f4551f28d947ea50eecf621dab4ea38a5b",
+          "locator": "loginScale.ts PANEL_FIXED_SCALE=0.5(面板恒定缩放,气泡同乘)",
+          "source": "../../../apps/desktop/src/renderer/components/login/loginDesignTokens.ts"
+        },
+        "value": 0.5
+      },
+      "titleBodyGap": {
+        "provenance": {
+          "hash": "sha256:ad4a0f2c06d950773c61ed2f08d3c2f4551f28d947ea50eecf621dab4ea38a5b",
+          "locator": "LOGIN_DELETION_BUBBLE(设计单位).titleBodyGap",
+          "source": "../../../apps/desktop/src/renderer/components/login/loginDesignTokens.ts"
+        },
+        "value": 5
+      },
+      "top": {
+        "provenance": {
+          "hash": "sha256:ad4a0f2c06d950773c61ed2f08d3c2f4551f28d947ea50eecf621dab4ea38a5b",
+          "locator": "LOGIN_DELETION_BUBBLE(设计单位).top",
+          "source": "../../../apps/desktop/src/renderer/components/login/loginDesignTokens.ts"
+        },
+        "value": 72
+      },
+      "width": {
+        "provenance": {
+          "hash": "sha256:ad4a0f2c06d950773c61ed2f08d3c2f4551f28d947ea50eecf621dab4ea38a5b",
+          "locator": "LOGIN_DELETION_BUBBLE(设计单位).width",
+          "source": "../../../apps/desktop/src/renderer/components/login/loginDesignTokens.ts"
+        },
+        "value": 670
+      },
+      "zIndex": {
+        "provenance": {
+          "hash": "sha256:ad4a0f2c06d950773c61ed2f08d3c2f4551f28d947ea50eecf621dab4ea38a5b",
+          "locator": "LoginPage.tsx wrapper z-30",
+          "source": "../../../apps/desktop/src/renderer/components/login/loginDesignTokens.ts"
+        },
+        "value": 30
       }
     }
   },
   "mobile": {
-    "geometry": {
-      "radius": {
-        "value": 22,
-        "provenance": {
-          "source": "../../../apps/mobile/src/auth/loginSkinLayout.ts",
-          "locator": "LOGIN_DELETION_BUBBLE(stage 设计单位).radius",
-          "hash": "sha256:b2ee100cd0bdc8cb629dbf83cf2ba495780d36f9dbcffad5f6fcb9e7971be649"
-        }
-      },
-      "padding": {
-        "value": 20,
-        "provenance": {
-          "source": "../../../apps/mobile/src/auth/loginSkinLayout.ts",
-          "locator": "LOGIN_DELETION_BUBBLE(stage 设计单位).padding",
-          "hash": "sha256:b2ee100cd0bdc8cb629dbf83cf2ba495780d36f9dbcffad5f6fcb9e7971be649"
-        }
-      },
-      "borderWidth": {
-        "value": 1,
-        "provenance": {
-          "source": "../../../apps/mobile/src/auth/loginSkinLayout.ts",
-          "locator": "LOGIN_DELETION_BUBBLE(stage 设计单位).borderWidth",
-          "hash": "sha256:b2ee100cd0bdc8cb629dbf83cf2ba495780d36f9dbcffad5f6fcb9e7971be649"
-        }
-      },
-      "fontSize": {
-        "value": 20,
-        "provenance": {
-          "source": "../../../apps/mobile/src/auth/loginSkinLayout.ts",
-          "locator": "LOGIN_DELETION_BUBBLE(stage 设计单位).fontSize",
-          "hash": "sha256:b2ee100cd0bdc8cb629dbf83cf2ba495780d36f9dbcffad5f6fcb9e7971be649"
-        }
-      },
-      "lineHeight": {
-        "value": 23,
-        "provenance": {
-          "source": "../../../apps/mobile/src/auth/loginSkinLayout.ts",
-          "locator": "LOGIN_DELETION_BUBBLE.lineHeight=LOGIN_COPY_LINE_HEIGHT",
-          "hash": "sha256:b2ee100cd0bdc8cb629dbf83cf2ba495780d36f9dbcffad5f6fcb9e7971be649"
-        }
-      },
-      "titleBodyGap": {
-        "value": 5,
-        "provenance": {
-          "source": "../../../apps/mobile/src/auth/loginSkinLayout.ts",
-          "locator": "LOGIN_DELETION_BUBBLE(stage 设计单位).titleBodyGap",
-          "hash": "sha256:b2ee100cd0bdc8cb629dbf83cf2ba495780d36f9dbcffad5f6fcb9e7971be649"
-        }
-      },
-      "bodyLinkGap": {
-        "value": 22,
-        "provenance": {
-          "source": "../../../apps/mobile/src/auth/loginSkinLayout.ts",
-          "locator": "LOGIN_DELETION_BUBBLE(stage 设计单位).bodyLinkGap",
-          "hash": "sha256:b2ee100cd0bdc8cb629dbf83cf2ba495780d36f9dbcffad5f6fcb9e7971be649"
-        }
-      },
-      "linkHitSlopMax": {
-        "value": 18,
-        "provenance": {
-          "source": "../../../apps/mobile/src/auth/loginSkinLayout.ts",
-          "locator": "resolveDeletionBubbleLinkHitSlop 的 18 上限(物理 pt)",
-          "hash": "sha256:b2ee100cd0bdc8cb629dbf83cf2ba495780d36f9dbcffad5f6fcb9e7971be649"
-        }
-      },
-      "linkHitSlopX": {
-        "value": 20,
-        "provenance": {
-          "source": "../../../apps/mobile/src/auth/loginSkinLayout.ts",
-          "locator": "resolveDeletionBubbleLinkHitSlop left/right=20(物理 pt)",
-          "hash": "sha256:b2ee100cd0bdc8cb629dbf83cf2ba495780d36f9dbcffad5f6fcb9e7971be649"
-        }
-      },
-      "phoneWidth": {
-        "value": 670,
-        "provenance": {
-          "source": "../../../apps/mobile/src/auth/loginSkinLayout.ts",
-          "locator": "LOGIN_DELETION_BUBBLE.phone.width",
-          "hash": "sha256:b2ee100cd0bdc8cb629dbf83cf2ba495780d36f9dbcffad5f6fcb9e7971be649"
-        }
-      },
-      "phoneX": {
-        "value": 40,
-        "provenance": {
-          "source": "../../../apps/mobile/src/auth/loginSkinLayout.ts",
-          "locator": "LOGIN_DELETION_BUBBLE.phone.x",
-          "hash": "sha256:b2ee100cd0bdc8cb629dbf83cf2ba495780d36f9dbcffad5f6fcb9e7971be649"
-        }
-      },
-      "padLandscapeWidth": {
-        "value": 556,
-        "provenance": {
-          "source": "../../../apps/mobile/src/auth/loginSkinLayout.ts",
-          "locator": "LOGIN_DELETION_BUBBLE.padLandscape.width(= WORD_MARK 框宽)",
-          "hash": "sha256:b2ee100cd0bdc8cb629dbf83cf2ba495780d36f9dbcffad5f6fcb9e7971be649"
-        }
-      },
-      "padLandscapeX": {
-        "value": 607,
-        "provenance": {
-          "source": "../../../apps/mobile/src/auth/loginSkinLayout.ts",
-          "locator": "LOGIN_DELETION_BUBBLE.padLandscape.x",
-          "hash": "sha256:b2ee100cd0bdc8cb629dbf83cf2ba495780d36f9dbcffad5f6fcb9e7971be649"
-        }
-      },
-      "padPortraitWidth": {
-        "value": 504,
-        "provenance": {
-          "source": "../../../apps/mobile/src/auth/loginSkinLayout.ts",
-          "locator": "LOGIN_DELETION_BUBBLE.padPortrait.width",
-          "hash": "sha256:b2ee100cd0bdc8cb629dbf83cf2ba495780d36f9dbcffad5f6fcb9e7971be649"
-        }
-      },
-      "padTop": {
-        "value": 72,
-        "provenance": {
-          "source": "../../../apps/mobile/src/auth/loginSkinLayout.ts",
-          "locator": "LOGIN_DELETION_BUBBLE.padLandscape.top / padPortrait.top",
-          "hash": "sha256:b2ee100cd0bdc8cb629dbf83cf2ba495780d36f9dbcffad5f6fcb9e7971be649"
-        }
-      }
-    },
     "colors": {
-      "deletionBubbleBg": {
-        "light": {
-          "value": "#FFFFFF",
-          "provenance": {
-            "source": "../../../apps/mobile/src/theme/tokens.ts",
-            "locator": "loginPalettes.light.deletionBubbleBg",
-            "hash": "sha256:49aaa50ad7cd5ac7bc0f483e6ba6a1651c660b425ddc63a95b26ab7e438df4ca"
-          }
-        },
+      "bgBase": {
         "dark": {
-          "value": "#1F1F1E",
           "provenance": {
-            "source": "../../../apps/mobile/src/theme/tokens.ts",
-            "locator": "loginPalettes.dark.deletionBubbleBg",
-            "hash": "sha256:49aaa50ad7cd5ac7bc0f483e6ba6a1651c660b425ddc63a95b26ab7e438df4ca"
-          }
-        }
-      },
-      "deletionBubbleBorder": {
-        "light": {
-          "value": "#D7D7D4",
-          "provenance": {
-            "source": "../../../apps/mobile/src/theme/tokens.ts",
-            "locator": "loginPalettes.light.deletionBubbleBorder",
-            "hash": "sha256:49aaa50ad7cd5ac7bc0f483e6ba6a1651c660b425ddc63a95b26ab7e438df4ca"
-          }
+            "hash": "sha256:b16be7897dad60a965feea445bdf1251ab73d41cc877590f48aaf91a4dea5e6f",
+            "locator": "loginPalettes.dark.bgBase",
+            "source": "../../../apps/mobile/src/theme/tokens.ts"
+          },
+          "value": "#1F1F1E"
         },
-        "dark": {
-          "value": "#3C3C3A",
+        "light": {
           "provenance": {
-            "source": "../../../apps/mobile/src/theme/tokens.ts",
-            "locator": "loginPalettes.dark.deletionBubbleBorder",
-            "hash": "sha256:49aaa50ad7cd5ac7bc0f483e6ba6a1651c660b425ddc63a95b26ab7e438df4ca"
-          }
+            "hash": "sha256:b16be7897dad60a965feea445bdf1251ab73d41cc877590f48aaf91a4dea5e6f",
+            "locator": "loginPalettes.light.bgBase",
+            "source": "../../../apps/mobile/src/theme/tokens.ts"
+          },
+          "value": "#EDEDED"
         }
       },
       "controlText": {
-        "light": {
-          "value": "#252222",
-          "provenance": {
-            "source": "../../../apps/mobile/src/theme/tokens.ts",
-            "locator": "loginPalettes.light.controlText",
-            "hash": "sha256:49aaa50ad7cd5ac7bc0f483e6ba6a1651c660b425ddc63a95b26ab7e438df4ca"
-          }
-        },
         "dark": {
-          "value": "#EEEEEE",
           "provenance": {
-            "source": "../../../apps/mobile/src/theme/tokens.ts",
+            "hash": "sha256:b16be7897dad60a965feea445bdf1251ab73d41cc877590f48aaf91a4dea5e6f",
             "locator": "loginPalettes.dark.controlText",
-            "hash": "sha256:49aaa50ad7cd5ac7bc0f483e6ba6a1651c660b425ddc63a95b26ab7e438df4ca"
-          }
+            "source": "../../../apps/mobile/src/theme/tokens.ts"
+          },
+          "value": "#EEEEEE"
+        },
+        "light": {
+          "provenance": {
+            "hash": "sha256:b16be7897dad60a965feea445bdf1251ab73d41cc877590f48aaf91a4dea5e6f",
+            "locator": "loginPalettes.light.controlText",
+            "source": "../../../apps/mobile/src/theme/tokens.ts"
+          },
+          "value": "#252222"
+        }
+      },
+      "deletionBubbleBg": {
+        "dark": {
+          "provenance": {
+            "hash": "sha256:b16be7897dad60a965feea445bdf1251ab73d41cc877590f48aaf91a4dea5e6f",
+            "locator": "loginPalettes.dark.deletionBubbleBg",
+            "source": "../../../apps/mobile/src/theme/tokens.ts"
+          },
+          "value": "#1F1F1E"
+        },
+        "light": {
+          "provenance": {
+            "hash": "sha256:b16be7897dad60a965feea445bdf1251ab73d41cc877590f48aaf91a4dea5e6f",
+            "locator": "loginPalettes.light.deletionBubbleBg",
+            "source": "../../../apps/mobile/src/theme/tokens.ts"
+          },
+          "value": "#FFFFFF"
+        }
+      },
+      "deletionBubbleBorder": {
+        "dark": {
+          "provenance": {
+            "hash": "sha256:b16be7897dad60a965feea445bdf1251ab73d41cc877590f48aaf91a4dea5e6f",
+            "locator": "loginPalettes.dark.deletionBubbleBorder",
+            "source": "../../../apps/mobile/src/theme/tokens.ts"
+          },
+          "value": "#3C3C3A"
+        },
+        "light": {
+          "provenance": {
+            "hash": "sha256:b16be7897dad60a965feea445bdf1251ab73d41cc877590f48aaf91a4dea5e6f",
+            "locator": "loginPalettes.light.deletionBubbleBorder",
+            "source": "../../../apps/mobile/src/theme/tokens.ts"
+          },
+          "value": "#D7D7D4"
         }
       },
       "secondaryText": {
-        "light": {
-          "value": "#6F6F6F",
-          "provenance": {
-            "source": "../../../apps/mobile/src/theme/tokens.ts",
-            "locator": "loginPalettes.light.secondaryText",
-            "hash": "sha256:49aaa50ad7cd5ac7bc0f483e6ba6a1651c660b425ddc63a95b26ab7e438df4ca"
-          }
-        },
         "dark": {
-          "value": "#6F6F6F",
           "provenance": {
-            "source": "../../../apps/mobile/src/theme/tokens.ts",
+            "hash": "sha256:b16be7897dad60a965feea445bdf1251ab73d41cc877590f48aaf91a4dea5e6f",
             "locator": "loginPalettes.dark.secondaryText",
-            "hash": "sha256:49aaa50ad7cd5ac7bc0f483e6ba6a1651c660b425ddc63a95b26ab7e438df4ca"
-          }
-        }
-      },
-      "bgBase": {
-        "light": {
-          "value": "#EDEDED",
-          "provenance": {
-            "source": "../../../apps/mobile/src/theme/tokens.ts",
-            "locator": "loginPalettes.light.bgBase",
-            "hash": "sha256:49aaa50ad7cd5ac7bc0f483e6ba6a1651c660b425ddc63a95b26ab7e438df4ca"
-          }
+            "source": "../../../apps/mobile/src/theme/tokens.ts"
+          },
+          "value": "#6F6F6F"
         },
-        "dark": {
-          "value": "#1F1F1E",
+        "light": {
           "provenance": {
-            "source": "../../../apps/mobile/src/theme/tokens.ts",
-            "locator": "loginPalettes.dark.bgBase",
-            "hash": "sha256:49aaa50ad7cd5ac7bc0f483e6ba6a1651c660b425ddc63a95b26ab7e438df4ca"
-          }
-        }
-      }
-    },
-    "surface": {
-      "phoneStageWidth": {
-        "value": 750,
-        "provenance": {
-          "source": "../../../apps/mobile/src/auth/loginSkinLayout.ts",
-          "locator": "surface 断点/stage 规格.phoneStageWidth",
-          "hash": "sha256:b2ee100cd0bdc8cb629dbf83cf2ba495780d36f9dbcffad5f6fcb9e7971be649"
-        }
-      },
-      "padLandscapeMinWidth": {
-        "value": 1000,
-        "provenance": {
-          "source": "../../../apps/mobile/src/auth/loginSkinLayout.ts",
-          "locator": "PAD_LANDSCAPE_MIN_WIDTH",
-          "hash": "sha256:b2ee100cd0bdc8cb629dbf83cf2ba495780d36f9dbcffad5f6fcb9e7971be649"
-        }
-      },
-      "padLandscapeMinHeight": {
-        "value": 690,
-        "provenance": {
-          "source": "../../../apps/mobile/src/auth/loginSkinLayout.ts",
-          "locator": "PAD_LANDSCAPE_MIN_HEIGHT",
-          "hash": "sha256:b2ee100cd0bdc8cb629dbf83cf2ba495780d36f9dbcffad5f6fcb9e7971be649"
-        }
-      },
-      "padPortraitMinWidth": {
-        "value": 700,
-        "provenance": {
-          "source": "../../../apps/mobile/src/auth/loginSkinLayout.ts",
-          "locator": "PAD_PORTRAIT_MIN_WIDTH",
-          "hash": "sha256:b2ee100cd0bdc8cb629dbf83cf2ba495780d36f9dbcffad5f6fcb9e7971be649"
-        }
-      },
-      "padLandscapeMinScale": {
-        "value": 0.85,
-        "provenance": {
-          "source": "../../../apps/mobile/src/auth/loginSkinLayout.ts",
-          "locator": "PAD_LANDSCAPE_MIN_SCALE",
-          "hash": "sha256:b2ee100cd0bdc8cb629dbf83cf2ba495780d36f9dbcffad5f6fcb9e7971be649"
-        }
-      },
-      "padPortraitStageWidth": {
-        "value": 744,
-        "provenance": {
-          "source": "../../../apps/mobile/src/auth/loginSkinLayout.ts",
-          "locator": "LOGIN_PAD_PORTRAIT_STAGE.width",
-          "hash": "sha256:b2ee100cd0bdc8cb629dbf83cf2ba495780d36f9dbcffad5f6fcb9e7971be649"
-        }
-      },
-      "padPortraitStageHeight": {
-        "value": 1133,
-        "provenance": {
-          "source": "../../../apps/mobile/src/auth/loginSkinLayout.ts",
-          "locator": "LOGIN_PAD_PORTRAIT_STAGE.height",
-          "hash": "sha256:b2ee100cd0bdc8cb629dbf83cf2ba495780d36f9dbcffad5f6fcb9e7971be649"
-        }
-      },
-      "padLandscapeStageWidth": {
-        "value": 1180,
-        "provenance": {
-          "source": "../../../apps/mobile/src/auth/loginSkinLayout.ts",
-          "locator": "LOGIN_PAD_LANDSCAPE_STAGE.width",
-          "hash": "sha256:b2ee100cd0bdc8cb629dbf83cf2ba495780d36f9dbcffad5f6fcb9e7971be649"
-        }
-      },
-      "padLandscapeStageHeight": {
-        "value": 820,
-        "provenance": {
-          "source": "../../../apps/mobile/src/auth/loginSkinLayout.ts",
-          "locator": "LOGIN_PAD_LANDSCAPE_STAGE.height",
-          "hash": "sha256:b2ee100cd0bdc8cb629dbf83cf2ba495780d36f9dbcffad5f6fcb9e7971be649"
-        }
-      },
-      "stageWidth": {
-        "value": 750,
-        "provenance": {
-          "source": "../../../apps/mobile/src/auth/loginSkinLayout.ts",
-          "locator": "LOGIN_STAGE_WIDTH",
-          "hash": "sha256:b2ee100cd0bdc8cb629dbf83cf2ba495780d36f9dbcffad5f6fcb9e7971be649"
+            "hash": "sha256:b16be7897dad60a965feea445bdf1251ab73d41cc877590f48aaf91a4dea5e6f",
+            "locator": "loginPalettes.light.secondaryText",
+            "source": "../../../apps/mobile/src/theme/tokens.ts"
+          },
+          "value": "#6F6F6F"
         }
       }
     },
     "copy": {
-      "zh-CN": {
-        "pendingTitle": {
-          "value": "账号正在等待注销",
+      "de": {
+        "completedCopy": {
           "provenance": {
-            "source": "../../../apps/mobile/src/auth/loginMessages.ts",
-            "locator": "accountDeletion*(zh-CN).pendingTitle",
-            "hash": "sha256:9b8df0b2fe477f836e05b6310119de880e43cff5511d1eccaf8e5a23bdd65c8f"
-          }
-        },
-        "pendingCopy": {
-          "value": "预计于 {date} 永久删除。现在重新登录即可取消注销。",
-          "provenance": {
-            "source": "../../../apps/mobile/src/auth/loginMessages.ts",
-            "locator": "accountDeletion*(zh-CN).pendingCopy",
-            "hash": "sha256:9b8df0b2fe477f836e05b6310119de880e43cff5511d1eccaf8e5a23bdd65c8f"
-          }
-        },
-        "processingTitle": {
-          "value": "账号正在注销",
-          "provenance": {
-            "source": "../../../apps/mobile/src/auth/loginMessages.ts",
-            "locator": "accountDeletion*(zh-CN).processingTitle",
-            "hash": "sha256:9b8df0b2fe477f836e05b6310119de880e43cff5511d1eccaf8e5a23bdd65c8f"
-          }
-        },
-        "processingCopy": {
-          "value": "Cindy 登录账号正在删除，处理完成后将永久注销。",
-          "provenance": {
-            "source": "../../../apps/mobile/src/auth/loginMessages.ts",
-            "locator": "accountDeletion*(zh-CN).processingCopy",
-            "hash": "sha256:9b8df0b2fe477f836e05b6310119de880e43cff5511d1eccaf8e5a23bdd65c8f"
-          }
+            "hash": "sha256:2ea4170bf83709c83132ba4d99691259b9b57651b1b9b2a26180003e933813b5",
+            "locator": "accountDeletion*(de).completedCopy",
+            "source": "../../../apps/mobile/src/auth/loginMessages.ts"
+          },
+          "value": "Dein Cindy-Anmeldekonto wurde gelöscht."
         },
         "completedTitle": {
-          "value": "账号已注销",
           "provenance": {
-            "source": "../../../apps/mobile/src/auth/loginMessages.ts",
-            "locator": "accountDeletion*(zh-CN).completedTitle",
-            "hash": "sha256:9b8df0b2fe477f836e05b6310119de880e43cff5511d1eccaf8e5a23bdd65c8f"
-          }
-        },
-        "completedCopy": {
-          "value": "Cindy 登录账号已删除。",
-          "provenance": {
-            "source": "../../../apps/mobile/src/auth/loginMessages.ts",
-            "locator": "accountDeletion*(zh-CN).completedCopy",
-            "hash": "sha256:9b8df0b2fe477f836e05b6310119de880e43cff5511d1eccaf8e5a23bdd65c8f"
-          }
+            "hash": "sha256:2ea4170bf83709c83132ba4d99691259b9b57651b1b9b2a26180003e933813b5",
+            "locator": "accountDeletion*(de).completedTitle",
+            "source": "../../../apps/mobile/src/auth/loginMessages.ts"
+          },
+          "value": "Konto gelöscht"
         },
         "dismissButton": {
-          "value": "我知道了",
           "provenance": {
-            "source": "../../../apps/mobile/src/auth/loginMessages.ts",
-            "locator": "accountDeletion*(zh-CN).dismissButton",
-            "hash": "sha256:9b8df0b2fe477f836e05b6310119de880e43cff5511d1eccaf8e5a23bdd65c8f"
-          }
-        }
-      },
-      "zh-TW": {
-        "pendingTitle": {
-          "value": "帳號正在等待刪除",
-          "provenance": {
-            "source": "../../../apps/mobile/src/auth/loginMessages.ts",
-            "locator": "accountDeletion*(zh-TW).pendingTitle",
-            "hash": "sha256:9b8df0b2fe477f836e05b6310119de880e43cff5511d1eccaf8e5a23bdd65c8f"
-          }
+            "hash": "sha256:2ea4170bf83709c83132ba4d99691259b9b57651b1b9b2a26180003e933813b5",
+            "locator": "accountDeletion*(de).dismissButton",
+            "source": "../../../apps/mobile/src/auth/loginMessages.ts"
+          },
+          "value": "Verstanden"
         },
         "pendingCopy": {
-          "value": "預計於 {date} 永久刪除。現在重新登入即可取消刪除。",
           "provenance": {
-            "source": "../../../apps/mobile/src/auth/loginMessages.ts",
-            "locator": "accountDeletion*(zh-TW).pendingCopy",
-            "hash": "sha256:9b8df0b2fe477f836e05b6310119de880e43cff5511d1eccaf8e5a23bdd65c8f"
-          }
+            "hash": "sha256:2ea4170bf83709c83132ba4d99691259b9b57651b1b9b2a26180003e933813b5",
+            "locator": "accountDeletion*(de).pendingCopy",
+            "source": "../../../apps/mobile/src/auth/loginMessages.ts"
+          },
+          "value": "Das Konto wird am {date} endgültig gelöscht. Melde dich jetzt an, um die Löschung abzubrechen."
         },
-        "processingTitle": {
-          "value": "帳號正在刪除",
+        "pendingTitle": {
           "provenance": {
-            "source": "../../../apps/mobile/src/auth/loginMessages.ts",
-            "locator": "accountDeletion*(zh-TW).processingTitle",
-            "hash": "sha256:9b8df0b2fe477f836e05b6310119de880e43cff5511d1eccaf8e5a23bdd65c8f"
-          }
+            "hash": "sha256:2ea4170bf83709c83132ba4d99691259b9b57651b1b9b2a26180003e933813b5",
+            "locator": "accountDeletion*(de).pendingTitle",
+            "source": "../../../apps/mobile/src/auth/loginMessages.ts"
+          },
+          "value": "Kontolöschung vorgemerkt"
         },
         "processingCopy": {
-          "value": "Cindy 登入帳號正在刪除，處理完成後將永久刪除。",
           "provenance": {
-            "source": "../../../apps/mobile/src/auth/loginMessages.ts",
-            "locator": "accountDeletion*(zh-TW).processingCopy",
-            "hash": "sha256:9b8df0b2fe477f836e05b6310119de880e43cff5511d1eccaf8e5a23bdd65c8f"
-          }
+            "hash": "sha256:2ea4170bf83709c83132ba4d99691259b9b57651b1b9b2a26180003e933813b5",
+            "locator": "accountDeletion*(de).processingCopy",
+            "source": "../../../apps/mobile/src/auth/loginMessages.ts"
+          },
+          "value": "Dein Cindy-Anmeldekonto wird gerade gelöscht. Nach Abschluss der Verarbeitung ist es endgültig gelöscht."
         },
-        "completedTitle": {
-          "value": "帳號已刪除",
+        "processingTitle": {
           "provenance": {
-            "source": "../../../apps/mobile/src/auth/loginMessages.ts",
-            "locator": "accountDeletion*(zh-TW).completedTitle",
-            "hash": "sha256:9b8df0b2fe477f836e05b6310119de880e43cff5511d1eccaf8e5a23bdd65c8f"
-          }
-        },
-        "completedCopy": {
-          "value": "Cindy 登入帳號已刪除。",
-          "provenance": {
-            "source": "../../../apps/mobile/src/auth/loginMessages.ts",
-            "locator": "accountDeletion*(zh-TW).completedCopy",
-            "hash": "sha256:9b8df0b2fe477f836e05b6310119de880e43cff5511d1eccaf8e5a23bdd65c8f"
-          }
-        },
-        "dismissButton": {
-          "value": "我知道了",
-          "provenance": {
-            "source": "../../../apps/mobile/src/auth/loginMessages.ts",
-            "locator": "accountDeletion*(zh-TW).dismissButton",
-            "hash": "sha256:9b8df0b2fe477f836e05b6310119de880e43cff5511d1eccaf8e5a23bdd65c8f"
-          }
+            "hash": "sha256:2ea4170bf83709c83132ba4d99691259b9b57651b1b9b2a26180003e933813b5",
+            "locator": "accountDeletion*(de).processingTitle",
+            "source": "../../../apps/mobile/src/auth/loginMessages.ts"
+          },
+          "value": "Kontolöschung läuft"
         }
       },
       "en": {
-        "pendingTitle": {
-          "value": "Account scheduled for deletion",
-          "provenance": {
-            "source": "../../../apps/mobile/src/auth/loginMessages.ts",
-            "locator": "accountDeletion*(en).pendingTitle",
-            "hash": "sha256:9b8df0b2fe477f836e05b6310119de880e43cff5511d1eccaf8e5a23bdd65c8f"
-          }
-        },
-        "pendingCopy": {
-          "value": "Scheduled for permanent deletion on {date}. Sign in now to cancel deletion.",
-          "provenance": {
-            "source": "../../../apps/mobile/src/auth/loginMessages.ts",
-            "locator": "accountDeletion*(en).pendingCopy",
-            "hash": "sha256:9b8df0b2fe477f836e05b6310119de880e43cff5511d1eccaf8e5a23bdd65c8f"
-          }
-        },
-        "processingTitle": {
-          "value": "Account deletion in progress",
-          "provenance": {
-            "source": "../../../apps/mobile/src/auth/loginMessages.ts",
-            "locator": "accountDeletion*(en).processingTitle",
-            "hash": "sha256:9b8df0b2fe477f836e05b6310119de880e43cff5511d1eccaf8e5a23bdd65c8f"
-          }
-        },
-        "processingCopy": {
-          "value": "Your Cindy sign-in account is being deleted and will be permanently deleted when processing is complete.",
-          "provenance": {
-            "source": "../../../apps/mobile/src/auth/loginMessages.ts",
-            "locator": "accountDeletion*(en).processingCopy",
-            "hash": "sha256:9b8df0b2fe477f836e05b6310119de880e43cff5511d1eccaf8e5a23bdd65c8f"
-          }
-        },
-        "completedTitle": {
-          "value": "Account deleted",
-          "provenance": {
-            "source": "../../../apps/mobile/src/auth/loginMessages.ts",
-            "locator": "accountDeletion*(en).completedTitle",
-            "hash": "sha256:9b8df0b2fe477f836e05b6310119de880e43cff5511d1eccaf8e5a23bdd65c8f"
-          }
-        },
         "completedCopy": {
-          "value": "Your Cindy sign-in account has been deleted.",
           "provenance": {
-            "source": "../../../apps/mobile/src/auth/loginMessages.ts",
+            "hash": "sha256:2ea4170bf83709c83132ba4d99691259b9b57651b1b9b2a26180003e933813b5",
             "locator": "accountDeletion*(en).completedCopy",
-            "hash": "sha256:9b8df0b2fe477f836e05b6310119de880e43cff5511d1eccaf8e5a23bdd65c8f"
-          }
+            "source": "../../../apps/mobile/src/auth/loginMessages.ts"
+          },
+          "value": "Your Cindy sign-in account has been deleted."
+        },
+        "completedTitle": {
+          "provenance": {
+            "hash": "sha256:2ea4170bf83709c83132ba4d99691259b9b57651b1b9b2a26180003e933813b5",
+            "locator": "accountDeletion*(en).completedTitle",
+            "source": "../../../apps/mobile/src/auth/loginMessages.ts"
+          },
+          "value": "Account deleted"
         },
         "dismissButton": {
-          "value": "Got it",
           "provenance": {
-            "source": "../../../apps/mobile/src/auth/loginMessages.ts",
+            "hash": "sha256:2ea4170bf83709c83132ba4d99691259b9b57651b1b9b2a26180003e933813b5",
             "locator": "accountDeletion*(en).dismissButton",
-            "hash": "sha256:9b8df0b2fe477f836e05b6310119de880e43cff5511d1eccaf8e5a23bdd65c8f"
-          }
-        }
-      },
-      "ja": {
-        "pendingTitle": {
-          "value": "アカウントは削除待機中です",
-          "provenance": {
-            "source": "../../../apps/mobile/src/auth/loginMessages.ts",
-            "locator": "accountDeletion*(ja).pendingTitle",
-            "hash": "sha256:9b8df0b2fe477f836e05b6310119de880e43cff5511d1eccaf8e5a23bdd65c8f"
-          }
+            "source": "../../../apps/mobile/src/auth/loginMessages.ts"
+          },
+          "value": "Got it"
         },
         "pendingCopy": {
-          "value": "{date} に完全に削除される予定です。今すぐ再ログインすると削除を取り消せます。",
           "provenance": {
-            "source": "../../../apps/mobile/src/auth/loginMessages.ts",
-            "locator": "accountDeletion*(ja).pendingCopy",
-            "hash": "sha256:9b8df0b2fe477f836e05b6310119de880e43cff5511d1eccaf8e5a23bdd65c8f"
-          }
+            "hash": "sha256:2ea4170bf83709c83132ba4d99691259b9b57651b1b9b2a26180003e933813b5",
+            "locator": "accountDeletion*(en).pendingCopy",
+            "source": "../../../apps/mobile/src/auth/loginMessages.ts"
+          },
+          "value": "Scheduled for permanent deletion on {date}. Sign in now to cancel deletion."
         },
-        "processingTitle": {
-          "value": "アカウントを削除処理中です",
-          "provenance": {
-            "source": "../../../apps/mobile/src/auth/loginMessages.ts",
-            "locator": "accountDeletion*(ja).processingTitle",
-            "hash": "sha256:9b8df0b2fe477f836e05b6310119de880e43cff5511d1eccaf8e5a23bdd65c8f"
-          }
-        },
-        "processingCopy": {
-          "value": "Cindy ログインアカウントを削除しています。処理が完了すると完全に削除されます。",
-          "provenance": {
-            "source": "../../../apps/mobile/src/auth/loginMessages.ts",
-            "locator": "accountDeletion*(ja).processingCopy",
-            "hash": "sha256:9b8df0b2fe477f836e05b6310119de880e43cff5511d1eccaf8e5a23bdd65c8f"
-          }
-        },
-        "completedTitle": {
-          "value": "アカウントを削除しました",
-          "provenance": {
-            "source": "../../../apps/mobile/src/auth/loginMessages.ts",
-            "locator": "accountDeletion*(ja).completedTitle",
-            "hash": "sha256:9b8df0b2fe477f836e05b6310119de880e43cff5511d1eccaf8e5a23bdd65c8f"
-          }
-        },
-        "completedCopy": {
-          "value": "Cindy ログインアカウントは削除されました。",
-          "provenance": {
-            "source": "../../../apps/mobile/src/auth/loginMessages.ts",
-            "locator": "accountDeletion*(ja).completedCopy",
-            "hash": "sha256:9b8df0b2fe477f836e05b6310119de880e43cff5511d1eccaf8e5a23bdd65c8f"
-          }
-        },
-        "dismissButton": {
-          "value": "了解しました",
-          "provenance": {
-            "source": "../../../apps/mobile/src/auth/loginMessages.ts",
-            "locator": "accountDeletion*(ja).dismissButton",
-            "hash": "sha256:9b8df0b2fe477f836e05b6310119de880e43cff5511d1eccaf8e5a23bdd65c8f"
-          }
-        }
-      },
-      "ko": {
         "pendingTitle": {
-          "value": "계정이 삭제 대기 중입니다",
           "provenance": {
-            "source": "../../../apps/mobile/src/auth/loginMessages.ts",
-            "locator": "accountDeletion*(ko).pendingTitle",
-            "hash": "sha256:9b8df0b2fe477f836e05b6310119de880e43cff5511d1eccaf8e5a23bdd65c8f"
-          }
-        },
-        "pendingCopy": {
-          "value": "{date}에 영구 삭제될 예정입니다. 지금 다시 로그인하면 삭제를 취소할 수 있습니다.",
-          "provenance": {
-            "source": "../../../apps/mobile/src/auth/loginMessages.ts",
-            "locator": "accountDeletion*(ko).pendingCopy",
-            "hash": "sha256:9b8df0b2fe477f836e05b6310119de880e43cff5511d1eccaf8e5a23bdd65c8f"
-          }
-        },
-        "processingTitle": {
-          "value": "계정을 삭제하는 중입니다",
-          "provenance": {
-            "source": "../../../apps/mobile/src/auth/loginMessages.ts",
-            "locator": "accountDeletion*(ko).processingTitle",
-            "hash": "sha256:9b8df0b2fe477f836e05b6310119de880e43cff5511d1eccaf8e5a23bdd65c8f"
-          }
+            "hash": "sha256:2ea4170bf83709c83132ba4d99691259b9b57651b1b9b2a26180003e933813b5",
+            "locator": "accountDeletion*(en).pendingTitle",
+            "source": "../../../apps/mobile/src/auth/loginMessages.ts"
+          },
+          "value": "Account scheduled for deletion"
         },
         "processingCopy": {
-          "value": "Cindy 로그인 계정을 삭제하고 있습니다. 처리가 완료되면 영구적으로 삭제됩니다.",
           "provenance": {
-            "source": "../../../apps/mobile/src/auth/loginMessages.ts",
-            "locator": "accountDeletion*(ko).processingCopy",
-            "hash": "sha256:9b8df0b2fe477f836e05b6310119de880e43cff5511d1eccaf8e5a23bdd65c8f"
-          }
+            "hash": "sha256:2ea4170bf83709c83132ba4d99691259b9b57651b1b9b2a26180003e933813b5",
+            "locator": "accountDeletion*(en).processingCopy",
+            "source": "../../../apps/mobile/src/auth/loginMessages.ts"
+          },
+          "value": "Your Cindy sign-in account is being deleted and will be permanently deleted when processing is complete."
         },
-        "completedTitle": {
-          "value": "계정이 삭제되었습니다",
+        "processingTitle": {
           "provenance": {
-            "source": "../../../apps/mobile/src/auth/loginMessages.ts",
-            "locator": "accountDeletion*(ko).completedTitle",
-            "hash": "sha256:9b8df0b2fe477f836e05b6310119de880e43cff5511d1eccaf8e5a23bdd65c8f"
-          }
-        },
-        "completedCopy": {
-          "value": "Cindy 로그인 계정이 삭제되었습니다.",
-          "provenance": {
-            "source": "../../../apps/mobile/src/auth/loginMessages.ts",
-            "locator": "accountDeletion*(ko).completedCopy",
-            "hash": "sha256:9b8df0b2fe477f836e05b6310119de880e43cff5511d1eccaf8e5a23bdd65c8f"
-          }
-        },
-        "dismissButton": {
-          "value": "확인",
-          "provenance": {
-            "source": "../../../apps/mobile/src/auth/loginMessages.ts",
-            "locator": "accountDeletion*(ko).dismissButton",
-            "hash": "sha256:9b8df0b2fe477f836e05b6310119de880e43cff5511d1eccaf8e5a23bdd65c8f"
-          }
+            "hash": "sha256:2ea4170bf83709c83132ba4d99691259b9b57651b1b9b2a26180003e933813b5",
+            "locator": "accountDeletion*(en).processingTitle",
+            "source": "../../../apps/mobile/src/auth/loginMessages.ts"
+          },
+          "value": "Account deletion in progress"
         }
       },
       "es": {
-        "pendingTitle": {
-          "value": "Cuenta programada para eliminación",
+        "completedCopy": {
           "provenance": {
-            "source": "../../../apps/mobile/src/auth/loginMessages.ts",
-            "locator": "accountDeletion*(es).pendingTitle",
-            "hash": "sha256:9b8df0b2fe477f836e05b6310119de880e43cff5511d1eccaf8e5a23bdd65c8f"
-          }
-        },
-        "pendingCopy": {
-          "value": "La cuenta se eliminará permanentemente el {date}. Inicia sesión ahora para cancelar la eliminación.",
-          "provenance": {
-            "source": "../../../apps/mobile/src/auth/loginMessages.ts",
-            "locator": "accountDeletion*(es).pendingCopy",
-            "hash": "sha256:9b8df0b2fe477f836e05b6310119de880e43cff5511d1eccaf8e5a23bdd65c8f"
-          }
-        },
-        "processingTitle": {
-          "value": "Eliminación de cuenta en curso",
-          "provenance": {
-            "source": "../../../apps/mobile/src/auth/loginMessages.ts",
-            "locator": "accountDeletion*(es).processingTitle",
-            "hash": "sha256:9b8df0b2fe477f836e05b6310119de880e43cff5511d1eccaf8e5a23bdd65c8f"
-          }
-        },
-        "processingCopy": {
-          "value": "Tu cuenta de inicio de sesión de Cindy se está eliminando. La eliminación será permanente cuando finalice el proceso.",
-          "provenance": {
-            "source": "../../../apps/mobile/src/auth/loginMessages.ts",
-            "locator": "accountDeletion*(es).processingCopy",
-            "hash": "sha256:9b8df0b2fe477f836e05b6310119de880e43cff5511d1eccaf8e5a23bdd65c8f"
-          }
+            "hash": "sha256:2ea4170bf83709c83132ba4d99691259b9b57651b1b9b2a26180003e933813b5",
+            "locator": "accountDeletion*(es).completedCopy",
+            "source": "../../../apps/mobile/src/auth/loginMessages.ts"
+          },
+          "value": "Se eliminó tu cuenta de inicio de sesión de Cindy."
         },
         "completedTitle": {
-          "value": "Cuenta eliminada",
           "provenance": {
-            "source": "../../../apps/mobile/src/auth/loginMessages.ts",
+            "hash": "sha256:2ea4170bf83709c83132ba4d99691259b9b57651b1b9b2a26180003e933813b5",
             "locator": "accountDeletion*(es).completedTitle",
-            "hash": "sha256:9b8df0b2fe477f836e05b6310119de880e43cff5511d1eccaf8e5a23bdd65c8f"
-          }
-        },
-        "completedCopy": {
-          "value": "Se eliminó tu cuenta de inicio de sesión de Cindy.",
-          "provenance": {
-            "source": "../../../apps/mobile/src/auth/loginMessages.ts",
-            "locator": "accountDeletion*(es).completedCopy",
-            "hash": "sha256:9b8df0b2fe477f836e05b6310119de880e43cff5511d1eccaf8e5a23bdd65c8f"
-          }
+            "source": "../../../apps/mobile/src/auth/loginMessages.ts"
+          },
+          "value": "Cuenta eliminada"
         },
         "dismissButton": {
-          "value": "Entendido",
           "provenance": {
-            "source": "../../../apps/mobile/src/auth/loginMessages.ts",
+            "hash": "sha256:2ea4170bf83709c83132ba4d99691259b9b57651b1b9b2a26180003e933813b5",
             "locator": "accountDeletion*(es).dismissButton",
-            "hash": "sha256:9b8df0b2fe477f836e05b6310119de880e43cff5511d1eccaf8e5a23bdd65c8f"
-          }
+            "source": "../../../apps/mobile/src/auth/loginMessages.ts"
+          },
+          "value": "Entendido"
+        },
+        "pendingCopy": {
+          "provenance": {
+            "hash": "sha256:2ea4170bf83709c83132ba4d99691259b9b57651b1b9b2a26180003e933813b5",
+            "locator": "accountDeletion*(es).pendingCopy",
+            "source": "../../../apps/mobile/src/auth/loginMessages.ts"
+          },
+          "value": "La cuenta se eliminará permanentemente el {date}. Inicia sesión ahora para cancelar la eliminación."
+        },
+        "pendingTitle": {
+          "provenance": {
+            "hash": "sha256:2ea4170bf83709c83132ba4d99691259b9b57651b1b9b2a26180003e933813b5",
+            "locator": "accountDeletion*(es).pendingTitle",
+            "source": "../../../apps/mobile/src/auth/loginMessages.ts"
+          },
+          "value": "Cuenta programada para eliminación"
+        },
+        "processingCopy": {
+          "provenance": {
+            "hash": "sha256:2ea4170bf83709c83132ba4d99691259b9b57651b1b9b2a26180003e933813b5",
+            "locator": "accountDeletion*(es).processingCopy",
+            "source": "../../../apps/mobile/src/auth/loginMessages.ts"
+          },
+          "value": "Tu cuenta de inicio de sesión de Cindy se está eliminando. La eliminación será permanente cuando finalice el proceso."
+        },
+        "processingTitle": {
+          "provenance": {
+            "hash": "sha256:2ea4170bf83709c83132ba4d99691259b9b57651b1b9b2a26180003e933813b5",
+            "locator": "accountDeletion*(es).processingTitle",
+            "source": "../../../apps/mobile/src/auth/loginMessages.ts"
+          },
+          "value": "Eliminación de cuenta en curso"
         }
       },
       "fr": {
-        "pendingTitle": {
-          "value": "Suppression du compte programmée",
-          "provenance": {
-            "source": "../../../apps/mobile/src/auth/loginMessages.ts",
-            "locator": "accountDeletion*(fr).pendingTitle",
-            "hash": "sha256:9b8df0b2fe477f836e05b6310119de880e43cff5511d1eccaf8e5a23bdd65c8f"
-          }
-        },
-        "pendingCopy": {
-          "value": "Suppression définitive programmée le {date}. Connectez-vous maintenant pour annuler la suppression.",
-          "provenance": {
-            "source": "../../../apps/mobile/src/auth/loginMessages.ts",
-            "locator": "accountDeletion*(fr).pendingCopy",
-            "hash": "sha256:9b8df0b2fe477f836e05b6310119de880e43cff5511d1eccaf8e5a23bdd65c8f"
-          }
-        },
-        "processingTitle": {
-          "value": "Suppression du compte en cours",
-          "provenance": {
-            "source": "../../../apps/mobile/src/auth/loginMessages.ts",
-            "locator": "accountDeletion*(fr).processingTitle",
-            "hash": "sha256:9b8df0b2fe477f836e05b6310119de880e43cff5511d1eccaf8e5a23bdd65c8f"
-          }
-        },
-        "processingCopy": {
-          "value": "Votre compte de connexion Cindy est en cours de suppression et sera définitivement supprimé à la fin du traitement.",
-          "provenance": {
-            "source": "../../../apps/mobile/src/auth/loginMessages.ts",
-            "locator": "accountDeletion*(fr).processingCopy",
-            "hash": "sha256:9b8df0b2fe477f836e05b6310119de880e43cff5511d1eccaf8e5a23bdd65c8f"
-          }
-        },
-        "completedTitle": {
-          "value": "Compte supprimé",
-          "provenance": {
-            "source": "../../../apps/mobile/src/auth/loginMessages.ts",
-            "locator": "accountDeletion*(fr).completedTitle",
-            "hash": "sha256:9b8df0b2fe477f836e05b6310119de880e43cff5511d1eccaf8e5a23bdd65c8f"
-          }
-        },
         "completedCopy": {
-          "value": "Votre compte de connexion Cindy a été supprimé.",
           "provenance": {
-            "source": "../../../apps/mobile/src/auth/loginMessages.ts",
+            "hash": "sha256:2ea4170bf83709c83132ba4d99691259b9b57651b1b9b2a26180003e933813b5",
             "locator": "accountDeletion*(fr).completedCopy",
-            "hash": "sha256:9b8df0b2fe477f836e05b6310119de880e43cff5511d1eccaf8e5a23bdd65c8f"
-          }
+            "source": "../../../apps/mobile/src/auth/loginMessages.ts"
+          },
+          "value": "Votre compte de connexion Cindy a été supprimé."
+        },
+        "completedTitle": {
+          "provenance": {
+            "hash": "sha256:2ea4170bf83709c83132ba4d99691259b9b57651b1b9b2a26180003e933813b5",
+            "locator": "accountDeletion*(fr).completedTitle",
+            "source": "../../../apps/mobile/src/auth/loginMessages.ts"
+          },
+          "value": "Compte supprimé"
         },
         "dismissButton": {
-          "value": "Compris",
           "provenance": {
-            "source": "../../../apps/mobile/src/auth/loginMessages.ts",
+            "hash": "sha256:2ea4170bf83709c83132ba4d99691259b9b57651b1b9b2a26180003e933813b5",
             "locator": "accountDeletion*(fr).dismissButton",
-            "hash": "sha256:9b8df0b2fe477f836e05b6310119de880e43cff5511d1eccaf8e5a23bdd65c8f"
-          }
-        }
-      },
-      "de": {
-        "pendingTitle": {
-          "value": "Kontolöschung vorgemerkt",
-          "provenance": {
-            "source": "../../../apps/mobile/src/auth/loginMessages.ts",
-            "locator": "accountDeletion*(de).pendingTitle",
-            "hash": "sha256:9b8df0b2fe477f836e05b6310119de880e43cff5511d1eccaf8e5a23bdd65c8f"
-          }
+            "source": "../../../apps/mobile/src/auth/loginMessages.ts"
+          },
+          "value": "Compris"
         },
         "pendingCopy": {
-          "value": "Das Konto wird am {date} endgültig gelöscht. Melde dich jetzt an, um die Löschung abzubrechen.",
           "provenance": {
-            "source": "../../../apps/mobile/src/auth/loginMessages.ts",
-            "locator": "accountDeletion*(de).pendingCopy",
-            "hash": "sha256:9b8df0b2fe477f836e05b6310119de880e43cff5511d1eccaf8e5a23bdd65c8f"
-          }
+            "hash": "sha256:2ea4170bf83709c83132ba4d99691259b9b57651b1b9b2a26180003e933813b5",
+            "locator": "accountDeletion*(fr).pendingCopy",
+            "source": "../../../apps/mobile/src/auth/loginMessages.ts"
+          },
+          "value": "Suppression définitive programmée le {date}. Connectez-vous maintenant pour annuler la suppression."
         },
-        "processingTitle": {
-          "value": "Kontolöschung läuft",
+        "pendingTitle": {
           "provenance": {
-            "source": "../../../apps/mobile/src/auth/loginMessages.ts",
-            "locator": "accountDeletion*(de).processingTitle",
-            "hash": "sha256:9b8df0b2fe477f836e05b6310119de880e43cff5511d1eccaf8e5a23bdd65c8f"
-          }
+            "hash": "sha256:2ea4170bf83709c83132ba4d99691259b9b57651b1b9b2a26180003e933813b5",
+            "locator": "accountDeletion*(fr).pendingTitle",
+            "source": "../../../apps/mobile/src/auth/loginMessages.ts"
+          },
+          "value": "Suppression du compte programmée"
         },
         "processingCopy": {
-          "value": "Dein Cindy-Anmeldekonto wird gerade gelöscht. Nach Abschluss der Verarbeitung ist es endgültig gelöscht.",
           "provenance": {
-            "source": "../../../apps/mobile/src/auth/loginMessages.ts",
-            "locator": "accountDeletion*(de).processingCopy",
-            "hash": "sha256:9b8df0b2fe477f836e05b6310119de880e43cff5511d1eccaf8e5a23bdd65c8f"
-          }
+            "hash": "sha256:2ea4170bf83709c83132ba4d99691259b9b57651b1b9b2a26180003e933813b5",
+            "locator": "accountDeletion*(fr).processingCopy",
+            "source": "../../../apps/mobile/src/auth/loginMessages.ts"
+          },
+          "value": "Votre compte de connexion Cindy est en cours de suppression et sera définitivement supprimé à la fin du traitement."
         },
-        "completedTitle": {
-          "value": "Konto gelöscht",
+        "processingTitle": {
           "provenance": {
-            "source": "../../../apps/mobile/src/auth/loginMessages.ts",
-            "locator": "accountDeletion*(de).completedTitle",
-            "hash": "sha256:9b8df0b2fe477f836e05b6310119de880e43cff5511d1eccaf8e5a23bdd65c8f"
-          }
-        },
-        "completedCopy": {
-          "value": "Dein Cindy-Anmeldekonto wurde gelöscht.",
-          "provenance": {
-            "source": "../../../apps/mobile/src/auth/loginMessages.ts",
-            "locator": "accountDeletion*(de).completedCopy",
-            "hash": "sha256:9b8df0b2fe477f836e05b6310119de880e43cff5511d1eccaf8e5a23bdd65c8f"
-          }
-        },
-        "dismissButton": {
-          "value": "Verstanden",
-          "provenance": {
-            "source": "../../../apps/mobile/src/auth/loginMessages.ts",
-            "locator": "accountDeletion*(de).dismissButton",
-            "hash": "sha256:9b8df0b2fe477f836e05b6310119de880e43cff5511d1eccaf8e5a23bdd65c8f"
-          }
+            "hash": "sha256:2ea4170bf83709c83132ba4d99691259b9b57651b1b9b2a26180003e933813b5",
+            "locator": "accountDeletion*(fr).processingTitle",
+            "source": "../../../apps/mobile/src/auth/loginMessages.ts"
+          },
+          "value": "Suppression du compte en cours"
         }
       },
-      "pt-PT": {
-        "pendingTitle": {
-          "value": "Eliminação da conta agendada",
+      "ja": {
+        "completedCopy": {
           "provenance": {
-            "source": "../../../apps/mobile/src/auth/loginMessages.ts",
-            "locator": "accountDeletion*(pt-PT).pendingTitle",
-            "hash": "sha256:9b8df0b2fe477f836e05b6310119de880e43cff5511d1eccaf8e5a23bdd65c8f"
-          }
-        },
-        "pendingCopy": {
-          "value": "A eliminação permanente está agendada para {date}. Inicie sessão agora para a cancelar.",
-          "provenance": {
-            "source": "../../../apps/mobile/src/auth/loginMessages.ts",
-            "locator": "accountDeletion*(pt-PT).pendingCopy",
-            "hash": "sha256:9b8df0b2fe477f836e05b6310119de880e43cff5511d1eccaf8e5a23bdd65c8f"
-          }
-        },
-        "processingTitle": {
-          "value": "Eliminação da conta em curso",
-          "provenance": {
-            "source": "../../../apps/mobile/src/auth/loginMessages.ts",
-            "locator": "accountDeletion*(pt-PT).processingTitle",
-            "hash": "sha256:9b8df0b2fe477f836e05b6310119de880e43cff5511d1eccaf8e5a23bdd65c8f"
-          }
-        },
-        "processingCopy": {
-          "value": "A sua conta de acesso à Cindy está a ser eliminada. Será eliminada permanentemente quando o processo terminar.",
-          "provenance": {
-            "source": "../../../apps/mobile/src/auth/loginMessages.ts",
-            "locator": "accountDeletion*(pt-PT).processingCopy",
-            "hash": "sha256:9b8df0b2fe477f836e05b6310119de880e43cff5511d1eccaf8e5a23bdd65c8f"
-          }
+            "hash": "sha256:2ea4170bf83709c83132ba4d99691259b9b57651b1b9b2a26180003e933813b5",
+            "locator": "accountDeletion*(ja).completedCopy",
+            "source": "../../../apps/mobile/src/auth/loginMessages.ts"
+          },
+          "value": "Cindy ログインアカウントは削除されました。"
         },
         "completedTitle": {
-          "value": "Conta eliminada",
           "provenance": {
-            "source": "../../../apps/mobile/src/auth/loginMessages.ts",
-            "locator": "accountDeletion*(pt-PT).completedTitle",
-            "hash": "sha256:9b8df0b2fe477f836e05b6310119de880e43cff5511d1eccaf8e5a23bdd65c8f"
-          }
-        },
-        "completedCopy": {
-          "value": "A sua conta de acesso à Cindy foi eliminada.",
-          "provenance": {
-            "source": "../../../apps/mobile/src/auth/loginMessages.ts",
-            "locator": "accountDeletion*(pt-PT).completedCopy",
-            "hash": "sha256:9b8df0b2fe477f836e05b6310119de880e43cff5511d1eccaf8e5a23bdd65c8f"
-          }
+            "hash": "sha256:2ea4170bf83709c83132ba4d99691259b9b57651b1b9b2a26180003e933813b5",
+            "locator": "accountDeletion*(ja).completedTitle",
+            "source": "../../../apps/mobile/src/auth/loginMessages.ts"
+          },
+          "value": "アカウントを削除しました"
         },
         "dismissButton": {
-          "value": "Compreendido",
           "provenance": {
-            "source": "../../../apps/mobile/src/auth/loginMessages.ts",
-            "locator": "accountDeletion*(pt-PT).dismissButton",
-            "hash": "sha256:9b8df0b2fe477f836e05b6310119de880e43cff5511d1eccaf8e5a23bdd65c8f"
-          }
+            "hash": "sha256:2ea4170bf83709c83132ba4d99691259b9b57651b1b9b2a26180003e933813b5",
+            "locator": "accountDeletion*(ja).dismissButton",
+            "source": "../../../apps/mobile/src/auth/loginMessages.ts"
+          },
+          "value": "了解しました"
+        },
+        "pendingCopy": {
+          "provenance": {
+            "hash": "sha256:2ea4170bf83709c83132ba4d99691259b9b57651b1b9b2a26180003e933813b5",
+            "locator": "accountDeletion*(ja).pendingCopy",
+            "source": "../../../apps/mobile/src/auth/loginMessages.ts"
+          },
+          "value": "{date} に完全に削除される予定です。今すぐ再ログインすると削除を取り消せます。"
+        },
+        "pendingTitle": {
+          "provenance": {
+            "hash": "sha256:2ea4170bf83709c83132ba4d99691259b9b57651b1b9b2a26180003e933813b5",
+            "locator": "accountDeletion*(ja).pendingTitle",
+            "source": "../../../apps/mobile/src/auth/loginMessages.ts"
+          },
+          "value": "アカウントは削除待機中です"
+        },
+        "processingCopy": {
+          "provenance": {
+            "hash": "sha256:2ea4170bf83709c83132ba4d99691259b9b57651b1b9b2a26180003e933813b5",
+            "locator": "accountDeletion*(ja).processingCopy",
+            "source": "../../../apps/mobile/src/auth/loginMessages.ts"
+          },
+          "value": "Cindy ログインアカウントを削除しています。処理が完了すると完全に削除されます。"
+        },
+        "processingTitle": {
+          "provenance": {
+            "hash": "sha256:2ea4170bf83709c83132ba4d99691259b9b57651b1b9b2a26180003e933813b5",
+            "locator": "accountDeletion*(ja).processingTitle",
+            "source": "../../../apps/mobile/src/auth/loginMessages.ts"
+          },
+          "value": "アカウントを削除処理中です"
+        }
+      },
+      "ko": {
+        "completedCopy": {
+          "provenance": {
+            "hash": "sha256:2ea4170bf83709c83132ba4d99691259b9b57651b1b9b2a26180003e933813b5",
+            "locator": "accountDeletion*(ko).completedCopy",
+            "source": "../../../apps/mobile/src/auth/loginMessages.ts"
+          },
+          "value": "Cindy 로그인 계정이 삭제되었습니다."
+        },
+        "completedTitle": {
+          "provenance": {
+            "hash": "sha256:2ea4170bf83709c83132ba4d99691259b9b57651b1b9b2a26180003e933813b5",
+            "locator": "accountDeletion*(ko).completedTitle",
+            "source": "../../../apps/mobile/src/auth/loginMessages.ts"
+          },
+          "value": "계정이 삭제되었습니다"
+        },
+        "dismissButton": {
+          "provenance": {
+            "hash": "sha256:2ea4170bf83709c83132ba4d99691259b9b57651b1b9b2a26180003e933813b5",
+            "locator": "accountDeletion*(ko).dismissButton",
+            "source": "../../../apps/mobile/src/auth/loginMessages.ts"
+          },
+          "value": "확인"
+        },
+        "pendingCopy": {
+          "provenance": {
+            "hash": "sha256:2ea4170bf83709c83132ba4d99691259b9b57651b1b9b2a26180003e933813b5",
+            "locator": "accountDeletion*(ko).pendingCopy",
+            "source": "../../../apps/mobile/src/auth/loginMessages.ts"
+          },
+          "value": "{date}에 영구 삭제될 예정입니다. 지금 다시 로그인하면 삭제를 취소할 수 있습니다."
+        },
+        "pendingTitle": {
+          "provenance": {
+            "hash": "sha256:2ea4170bf83709c83132ba4d99691259b9b57651b1b9b2a26180003e933813b5",
+            "locator": "accountDeletion*(ko).pendingTitle",
+            "source": "../../../apps/mobile/src/auth/loginMessages.ts"
+          },
+          "value": "계정이 삭제 대기 중입니다"
+        },
+        "processingCopy": {
+          "provenance": {
+            "hash": "sha256:2ea4170bf83709c83132ba4d99691259b9b57651b1b9b2a26180003e933813b5",
+            "locator": "accountDeletion*(ko).processingCopy",
+            "source": "../../../apps/mobile/src/auth/loginMessages.ts"
+          },
+          "value": "Cindy 로그인 계정을 삭제하고 있습니다. 처리가 완료되면 영구적으로 삭제됩니다."
+        },
+        "processingTitle": {
+          "provenance": {
+            "hash": "sha256:2ea4170bf83709c83132ba4d99691259b9b57651b1b9b2a26180003e933813b5",
+            "locator": "accountDeletion*(ko).processingTitle",
+            "source": "../../../apps/mobile/src/auth/loginMessages.ts"
+          },
+          "value": "계정을 삭제하는 중입니다"
         }
       },
       "pt-BR": {
-        "pendingTitle": {
-          "value": "Exclusão da conta agendada",
+        "completedCopy": {
           "provenance": {
-            "source": "../../../apps/mobile/src/auth/loginMessages.ts",
-            "locator": "accountDeletion*(pt-BR).pendingTitle",
-            "hash": "sha256:9b8df0b2fe477f836e05b6310119de880e43cff5511d1eccaf8e5a23bdd65c8f"
-          }
-        },
-        "pendingCopy": {
-          "value": "A exclusão permanente está agendada para {date}. Entre agora para cancelar a exclusão.",
-          "provenance": {
-            "source": "../../../apps/mobile/src/auth/loginMessages.ts",
-            "locator": "accountDeletion*(pt-BR).pendingCopy",
-            "hash": "sha256:9b8df0b2fe477f836e05b6310119de880e43cff5511d1eccaf8e5a23bdd65c8f"
-          }
-        },
-        "processingTitle": {
-          "value": "Exclusão da conta em andamento",
-          "provenance": {
-            "source": "../../../apps/mobile/src/auth/loginMessages.ts",
-            "locator": "accountDeletion*(pt-BR).processingTitle",
-            "hash": "sha256:9b8df0b2fe477f836e05b6310119de880e43cff5511d1eccaf8e5a23bdd65c8f"
-          }
-        },
-        "processingCopy": {
-          "value": "Sua conta de acesso à Cindy está sendo excluída. Ela será excluída permanentemente quando o processo terminar.",
-          "provenance": {
-            "source": "../../../apps/mobile/src/auth/loginMessages.ts",
-            "locator": "accountDeletion*(pt-BR).processingCopy",
-            "hash": "sha256:9b8df0b2fe477f836e05b6310119de880e43cff5511d1eccaf8e5a23bdd65c8f"
-          }
+            "hash": "sha256:2ea4170bf83709c83132ba4d99691259b9b57651b1b9b2a26180003e933813b5",
+            "locator": "accountDeletion*(pt-BR).completedCopy",
+            "source": "../../../apps/mobile/src/auth/loginMessages.ts"
+          },
+          "value": "Sua conta de acesso à Cindy foi excluída."
         },
         "completedTitle": {
-          "value": "Conta excluída",
           "provenance": {
-            "source": "../../../apps/mobile/src/auth/loginMessages.ts",
+            "hash": "sha256:2ea4170bf83709c83132ba4d99691259b9b57651b1b9b2a26180003e933813b5",
             "locator": "accountDeletion*(pt-BR).completedTitle",
-            "hash": "sha256:9b8df0b2fe477f836e05b6310119de880e43cff5511d1eccaf8e5a23bdd65c8f"
-          }
-        },
-        "completedCopy": {
-          "value": "Sua conta de acesso à Cindy foi excluída.",
-          "provenance": {
-            "source": "../../../apps/mobile/src/auth/loginMessages.ts",
-            "locator": "accountDeletion*(pt-BR).completedCopy",
-            "hash": "sha256:9b8df0b2fe477f836e05b6310119de880e43cff5511d1eccaf8e5a23bdd65c8f"
-          }
+            "source": "../../../apps/mobile/src/auth/loginMessages.ts"
+          },
+          "value": "Conta excluída"
         },
         "dismissButton": {
-          "value": "Entendi",
           "provenance": {
-            "source": "../../../apps/mobile/src/auth/loginMessages.ts",
+            "hash": "sha256:2ea4170bf83709c83132ba4d99691259b9b57651b1b9b2a26180003e933813b5",
             "locator": "accountDeletion*(pt-BR).dismissButton",
-            "hash": "sha256:9b8df0b2fe477f836e05b6310119de880e43cff5511d1eccaf8e5a23bdd65c8f"
-          }
+            "source": "../../../apps/mobile/src/auth/loginMessages.ts"
+          },
+          "value": "Entendi"
+        },
+        "pendingCopy": {
+          "provenance": {
+            "hash": "sha256:2ea4170bf83709c83132ba4d99691259b9b57651b1b9b2a26180003e933813b5",
+            "locator": "accountDeletion*(pt-BR).pendingCopy",
+            "source": "../../../apps/mobile/src/auth/loginMessages.ts"
+          },
+          "value": "A exclusão permanente está agendada para {date}. Entre agora para cancelar a exclusão."
+        },
+        "pendingTitle": {
+          "provenance": {
+            "hash": "sha256:2ea4170bf83709c83132ba4d99691259b9b57651b1b9b2a26180003e933813b5",
+            "locator": "accountDeletion*(pt-BR).pendingTitle",
+            "source": "../../../apps/mobile/src/auth/loginMessages.ts"
+          },
+          "value": "Exclusão da conta agendada"
+        },
+        "processingCopy": {
+          "provenance": {
+            "hash": "sha256:2ea4170bf83709c83132ba4d99691259b9b57651b1b9b2a26180003e933813b5",
+            "locator": "accountDeletion*(pt-BR).processingCopy",
+            "source": "../../../apps/mobile/src/auth/loginMessages.ts"
+          },
+          "value": "Sua conta de acesso à Cindy está sendo excluída. Ela será excluída permanentemente quando o processo terminar."
+        },
+        "processingTitle": {
+          "provenance": {
+            "hash": "sha256:2ea4170bf83709c83132ba4d99691259b9b57651b1b9b2a26180003e933813b5",
+            "locator": "accountDeletion*(pt-BR).processingTitle",
+            "source": "../../../apps/mobile/src/auth/loginMessages.ts"
+          },
+          "value": "Exclusão da conta em andamento"
         }
       },
-      "zh-Hant-x-lzh": {
-        "pendingTitle": {
-          "value": "名籍待刪",
+      "pt-PT": {
+        "completedCopy": {
           "provenance": {
-            "source": "../../../apps/mobile/src/auth/loginMessages.ts",
-            "locator": "accountDeletion*(zh-Hant-x-lzh).pendingTitle",
-            "hash": "sha256:9b8df0b2fe477f836e05b6310119de880e43cff5511d1eccaf8e5a23bdd65c8f"
-          }
-        },
-        "pendingCopy": {
-          "value": "預定 {date} 永久刪除。今重新登門，即可撤銷刪除。",
-          "provenance": {
-            "source": "../../../apps/mobile/src/auth/loginMessages.ts",
-            "locator": "accountDeletion*(zh-Hant-x-lzh).pendingCopy",
-            "hash": "sha256:9b8df0b2fe477f836e05b6310119de880e43cff5511d1eccaf8e5a23bdd65c8f"
-          }
-        },
-        "processingTitle": {
-          "value": "名籍刪除中",
-          "provenance": {
-            "source": "../../../apps/mobile/src/auth/loginMessages.ts",
-            "locator": "accountDeletion*(zh-Hant-x-lzh).processingTitle",
-            "hash": "sha256:9b8df0b2fe477f836e05b6310119de880e43cff5511d1eccaf8e5a23bdd65c8f"
-          }
-        },
-        "processingCopy": {
-          "value": "Cindy 登門名籍正在刪除，事畢則永久刪除。",
-          "provenance": {
-            "source": "../../../apps/mobile/src/auth/loginMessages.ts",
-            "locator": "accountDeletion*(zh-Hant-x-lzh).processingCopy",
-            "hash": "sha256:9b8df0b2fe477f836e05b6310119de880e43cff5511d1eccaf8e5a23bdd65c8f"
-          }
+            "hash": "sha256:2ea4170bf83709c83132ba4d99691259b9b57651b1b9b2a26180003e933813b5",
+            "locator": "accountDeletion*(pt-PT).completedCopy",
+            "source": "../../../apps/mobile/src/auth/loginMessages.ts"
+          },
+          "value": "A sua conta de acesso à Cindy foi eliminada."
         },
         "completedTitle": {
-          "value": "名籍已刪",
           "provenance": {
-            "source": "../../../apps/mobile/src/auth/loginMessages.ts",
-            "locator": "accountDeletion*(zh-Hant-x-lzh).completedTitle",
-            "hash": "sha256:9b8df0b2fe477f836e05b6310119de880e43cff5511d1eccaf8e5a23bdd65c8f"
-          }
-        },
-        "completedCopy": {
-          "value": "Cindy 登門名籍已刪。",
-          "provenance": {
-            "source": "../../../apps/mobile/src/auth/loginMessages.ts",
-            "locator": "accountDeletion*(zh-Hant-x-lzh).completedCopy",
-            "hash": "sha256:9b8df0b2fe477f836e05b6310119de880e43cff5511d1eccaf8e5a23bdd65c8f"
-          }
+            "hash": "sha256:2ea4170bf83709c83132ba4d99691259b9b57651b1b9b2a26180003e933813b5",
+            "locator": "accountDeletion*(pt-PT).completedTitle",
+            "source": "../../../apps/mobile/src/auth/loginMessages.ts"
+          },
+          "value": "Conta eliminada"
         },
         "dismissButton": {
-          "value": "知之矣",
           "provenance": {
-            "source": "../../../apps/mobile/src/auth/loginMessages.ts",
-            "locator": "accountDeletion*(zh-Hant-x-lzh).dismissButton",
-            "hash": "sha256:9b8df0b2fe477f836e05b6310119de880e43cff5511d1eccaf8e5a23bdd65c8f"
-          }
+            "hash": "sha256:2ea4170bf83709c83132ba4d99691259b9b57651b1b9b2a26180003e933813b5",
+            "locator": "accountDeletion*(pt-PT).dismissButton",
+            "source": "../../../apps/mobile/src/auth/loginMessages.ts"
+          },
+          "value": "Compreendido"
+        },
+        "pendingCopy": {
+          "provenance": {
+            "hash": "sha256:2ea4170bf83709c83132ba4d99691259b9b57651b1b9b2a26180003e933813b5",
+            "locator": "accountDeletion*(pt-PT).pendingCopy",
+            "source": "../../../apps/mobile/src/auth/loginMessages.ts"
+          },
+          "value": "A eliminação permanente está agendada para {date}. Inicie sessão agora para a cancelar."
+        },
+        "pendingTitle": {
+          "provenance": {
+            "hash": "sha256:2ea4170bf83709c83132ba4d99691259b9b57651b1b9b2a26180003e933813b5",
+            "locator": "accountDeletion*(pt-PT).pendingTitle",
+            "source": "../../../apps/mobile/src/auth/loginMessages.ts"
+          },
+          "value": "Eliminação da conta agendada"
+        },
+        "processingCopy": {
+          "provenance": {
+            "hash": "sha256:2ea4170bf83709c83132ba4d99691259b9b57651b1b9b2a26180003e933813b5",
+            "locator": "accountDeletion*(pt-PT).processingCopy",
+            "source": "../../../apps/mobile/src/auth/loginMessages.ts"
+          },
+          "value": "A sua conta de acesso à Cindy está a ser eliminada. Será eliminada permanentemente quando o processo terminar."
+        },
+        "processingTitle": {
+          "provenance": {
+            "hash": "sha256:2ea4170bf83709c83132ba4d99691259b9b57651b1b9b2a26180003e933813b5",
+            "locator": "accountDeletion*(pt-PT).processingTitle",
+            "source": "../../../apps/mobile/src/auth/loginMessages.ts"
+          },
+          "value": "Eliminação da conta em curso"
+        }
+      },
+      "tlh": {
+        "completedCopy": {
+          "provenance": {
+            "hash": "sha256:2ea4170bf83709c83132ba4d99691259b9b57651b1b9b2a26180003e933813b5",
+            "locator": "accountDeletion*(tlh).completedCopy",
+            "source": "../../../apps/mobile/src/auth/loginMessages.ts"
+          },
+          "value": "Cindy Hotlh pong teqlu'pu'."
+        },
+        "completedTitle": {
+          "provenance": {
+            "hash": "sha256:2ea4170bf83709c83132ba4d99691259b9b57651b1b9b2a26180003e933813b5",
+            "locator": "accountDeletion*(tlh).completedTitle",
+            "source": "../../../apps/mobile/src/auth/loginMessages.ts"
+          },
+          "value": "pong teqlu'pu'"
+        },
+        "dismissButton": {
+          "provenance": {
+            "hash": "sha256:2ea4170bf83709c83132ba4d99691259b9b57651b1b9b2a26180003e933813b5",
+            "locator": "accountDeletion*(tlh).dismissButton",
+            "source": "../../../apps/mobile/src/auth/loginMessages.ts"
+          },
+          "value": "jIyaj'"
+        },
+        "pendingCopy": {
+          "provenance": {
+            "hash": "sha256:2ea4170bf83709c83132ba4d99691259b9b57651b1b9b2a26180003e933813b5",
+            "locator": "accountDeletion*(tlh).pendingCopy",
+            "source": "../../../apps/mobile/src/auth/loginMessages.ts"
+          },
+          "value": "{date} teq qonlu'. DaH Hotlhchugh teq mevlu'."
+        },
+        "pendingTitle": {
+          "provenance": {
+            "hash": "sha256:2ea4170bf83709c83132ba4d99691259b9b57651b1b9b2a26180003e933813b5",
+            "locator": "accountDeletion*(tlh).pendingTitle",
+            "source": "../../../apps/mobile/src/auth/loginMessages.ts"
+          },
+          "value": "pong teq qonlu'"
+        },
+        "processingCopy": {
+          "provenance": {
+            "hash": "sha256:2ea4170bf83709c83132ba4d99691259b9b57651b1b9b2a26180003e933813b5",
+            "locator": "accountDeletion*(tlh).processingCopy",
+            "source": "../../../apps/mobile/src/auth/loginMessages.ts"
+          },
+          "value": "Cindy Hotlh pong teqlu'taH. rInchugh beQ teqlu'."
+        },
+        "processingTitle": {
+          "provenance": {
+            "hash": "sha256:2ea4170bf83709c83132ba4d99691259b9b57651b1b9b2a26180003e933813b5",
+            "locator": "accountDeletion*(tlh).processingTitle",
+            "source": "../../../apps/mobile/src/auth/loginMessages.ts"
+          },
+          "value": "pong teq SengtaH"
+        }
+      },
+      "zh-CN": {
+        "completedCopy": {
+          "provenance": {
+            "hash": "sha256:2ea4170bf83709c83132ba4d99691259b9b57651b1b9b2a26180003e933813b5",
+            "locator": "accountDeletion*(zh-CN).completedCopy",
+            "source": "../../../apps/mobile/src/auth/loginMessages.ts"
+          },
+          "value": "Cindy 登录账号已删除。"
+        },
+        "completedTitle": {
+          "provenance": {
+            "hash": "sha256:2ea4170bf83709c83132ba4d99691259b9b57651b1b9b2a26180003e933813b5",
+            "locator": "accountDeletion*(zh-CN).completedTitle",
+            "source": "../../../apps/mobile/src/auth/loginMessages.ts"
+          },
+          "value": "账号已注销"
+        },
+        "dismissButton": {
+          "provenance": {
+            "hash": "sha256:2ea4170bf83709c83132ba4d99691259b9b57651b1b9b2a26180003e933813b5",
+            "locator": "accountDeletion*(zh-CN).dismissButton",
+            "source": "../../../apps/mobile/src/auth/loginMessages.ts"
+          },
+          "value": "我知道了"
+        },
+        "pendingCopy": {
+          "provenance": {
+            "hash": "sha256:2ea4170bf83709c83132ba4d99691259b9b57651b1b9b2a26180003e933813b5",
+            "locator": "accountDeletion*(zh-CN).pendingCopy",
+            "source": "../../../apps/mobile/src/auth/loginMessages.ts"
+          },
+          "value": "预计于 {date} 永久删除。现在重新登录即可取消注销。"
+        },
+        "pendingTitle": {
+          "provenance": {
+            "hash": "sha256:2ea4170bf83709c83132ba4d99691259b9b57651b1b9b2a26180003e933813b5",
+            "locator": "accountDeletion*(zh-CN).pendingTitle",
+            "source": "../../../apps/mobile/src/auth/loginMessages.ts"
+          },
+          "value": "账号正在等待注销"
+        },
+        "processingCopy": {
+          "provenance": {
+            "hash": "sha256:2ea4170bf83709c83132ba4d99691259b9b57651b1b9b2a26180003e933813b5",
+            "locator": "accountDeletion*(zh-CN).processingCopy",
+            "source": "../../../apps/mobile/src/auth/loginMessages.ts"
+          },
+          "value": "Cindy 登录账号正在删除，处理完成后将永久注销。"
+        },
+        "processingTitle": {
+          "provenance": {
+            "hash": "sha256:2ea4170bf83709c83132ba4d99691259b9b57651b1b9b2a26180003e933813b5",
+            "locator": "accountDeletion*(zh-CN).processingTitle",
+            "source": "../../../apps/mobile/src/auth/loginMessages.ts"
+          },
+          "value": "账号正在注销"
         }
       },
       "zh-Hans-x-lzh": {
-        "pendingTitle": {
-          "value": "名籍待删",
+        "completedCopy": {
           "provenance": {
-            "source": "../../../apps/mobile/src/auth/loginMessages.ts",
-            "locator": "accountDeletion*(zh-Hans-x-lzh).pendingTitle",
-            "hash": "sha256:9b8df0b2fe477f836e05b6310119de880e43cff5511d1eccaf8e5a23bdd65c8f"
-          }
-        },
-        "pendingCopy": {
-          "value": "预定 {date} 永久删除。今重新登门，即可撤销删除。",
-          "provenance": {
-            "source": "../../../apps/mobile/src/auth/loginMessages.ts",
-            "locator": "accountDeletion*(zh-Hans-x-lzh).pendingCopy",
-            "hash": "sha256:9b8df0b2fe477f836e05b6310119de880e43cff5511d1eccaf8e5a23bdd65c8f"
-          }
-        },
-        "processingTitle": {
-          "value": "名籍删除中",
-          "provenance": {
-            "source": "../../../apps/mobile/src/auth/loginMessages.ts",
-            "locator": "accountDeletion*(zh-Hans-x-lzh).processingTitle",
-            "hash": "sha256:9b8df0b2fe477f836e05b6310119de880e43cff5511d1eccaf8e5a23bdd65c8f"
-          }
-        },
-        "processingCopy": {
-          "value": "Cindy 登门名籍正在删除，事毕则永久删除。",
-          "provenance": {
-            "source": "../../../apps/mobile/src/auth/loginMessages.ts",
-            "locator": "accountDeletion*(zh-Hans-x-lzh).processingCopy",
-            "hash": "sha256:9b8df0b2fe477f836e05b6310119de880e43cff5511d1eccaf8e5a23bdd65c8f"
-          }
+            "hash": "sha256:2ea4170bf83709c83132ba4d99691259b9b57651b1b9b2a26180003e933813b5",
+            "locator": "accountDeletion*(zh-Hans-x-lzh).completedCopy",
+            "source": "../../../apps/mobile/src/auth/loginMessages.ts"
+          },
+          "value": "Cindy 登门名籍已删。"
         },
         "completedTitle": {
-          "value": "名籍已删",
           "provenance": {
-            "source": "../../../apps/mobile/src/auth/loginMessages.ts",
+            "hash": "sha256:2ea4170bf83709c83132ba4d99691259b9b57651b1b9b2a26180003e933813b5",
             "locator": "accountDeletion*(zh-Hans-x-lzh).completedTitle",
-            "hash": "sha256:9b8df0b2fe477f836e05b6310119de880e43cff5511d1eccaf8e5a23bdd65c8f"
-          }
-        },
-        "completedCopy": {
-          "value": "Cindy 登门名籍已删。",
-          "provenance": {
-            "source": "../../../apps/mobile/src/auth/loginMessages.ts",
-            "locator": "accountDeletion*(zh-Hans-x-lzh).completedCopy",
-            "hash": "sha256:9b8df0b2fe477f836e05b6310119de880e43cff5511d1eccaf8e5a23bdd65c8f"
-          }
+            "source": "../../../apps/mobile/src/auth/loginMessages.ts"
+          },
+          "value": "名籍已删"
         },
         "dismissButton": {
-          "value": "知之矣",
           "provenance": {
-            "source": "../../../apps/mobile/src/auth/loginMessages.ts",
+            "hash": "sha256:2ea4170bf83709c83132ba4d99691259b9b57651b1b9b2a26180003e933813b5",
             "locator": "accountDeletion*(zh-Hans-x-lzh).dismissButton",
-            "hash": "sha256:9b8df0b2fe477f836e05b6310119de880e43cff5511d1eccaf8e5a23bdd65c8f"
-          }
+            "source": "../../../apps/mobile/src/auth/loginMessages.ts"
+          },
+          "value": "知之矣"
+        },
+        "pendingCopy": {
+          "provenance": {
+            "hash": "sha256:2ea4170bf83709c83132ba4d99691259b9b57651b1b9b2a26180003e933813b5",
+            "locator": "accountDeletion*(zh-Hans-x-lzh).pendingCopy",
+            "source": "../../../apps/mobile/src/auth/loginMessages.ts"
+          },
+          "value": "预定 {date} 永久删除。今重新登门，即可撤销删除。"
+        },
+        "pendingTitle": {
+          "provenance": {
+            "hash": "sha256:2ea4170bf83709c83132ba4d99691259b9b57651b1b9b2a26180003e933813b5",
+            "locator": "accountDeletion*(zh-Hans-x-lzh).pendingTitle",
+            "source": "../../../apps/mobile/src/auth/loginMessages.ts"
+          },
+          "value": "名籍待删"
+        },
+        "processingCopy": {
+          "provenance": {
+            "hash": "sha256:2ea4170bf83709c83132ba4d99691259b9b57651b1b9b2a26180003e933813b5",
+            "locator": "accountDeletion*(zh-Hans-x-lzh).processingCopy",
+            "source": "../../../apps/mobile/src/auth/loginMessages.ts"
+          },
+          "value": "Cindy 登门名籍正在删除，事毕则永久删除。"
+        },
+        "processingTitle": {
+          "provenance": {
+            "hash": "sha256:2ea4170bf83709c83132ba4d99691259b9b57651b1b9b2a26180003e933813b5",
+            "locator": "accountDeletion*(zh-Hans-x-lzh).processingTitle",
+            "source": "../../../apps/mobile/src/auth/loginMessages.ts"
+          },
+          "value": "名籍删除中"
         }
+      },
+      "zh-Hant-x-lzh": {
+        "completedCopy": {
+          "provenance": {
+            "hash": "sha256:2ea4170bf83709c83132ba4d99691259b9b57651b1b9b2a26180003e933813b5",
+            "locator": "accountDeletion*(zh-Hant-x-lzh).completedCopy",
+            "source": "../../../apps/mobile/src/auth/loginMessages.ts"
+          },
+          "value": "Cindy 登門名籍已刪。"
+        },
+        "completedTitle": {
+          "provenance": {
+            "hash": "sha256:2ea4170bf83709c83132ba4d99691259b9b57651b1b9b2a26180003e933813b5",
+            "locator": "accountDeletion*(zh-Hant-x-lzh).completedTitle",
+            "source": "../../../apps/mobile/src/auth/loginMessages.ts"
+          },
+          "value": "名籍已刪"
+        },
+        "dismissButton": {
+          "provenance": {
+            "hash": "sha256:2ea4170bf83709c83132ba4d99691259b9b57651b1b9b2a26180003e933813b5",
+            "locator": "accountDeletion*(zh-Hant-x-lzh).dismissButton",
+            "source": "../../../apps/mobile/src/auth/loginMessages.ts"
+          },
+          "value": "知之矣"
+        },
+        "pendingCopy": {
+          "provenance": {
+            "hash": "sha256:2ea4170bf83709c83132ba4d99691259b9b57651b1b9b2a26180003e933813b5",
+            "locator": "accountDeletion*(zh-Hant-x-lzh).pendingCopy",
+            "source": "../../../apps/mobile/src/auth/loginMessages.ts"
+          },
+          "value": "預定 {date} 永久刪除。今重新登門，即可撤銷刪除。"
+        },
+        "pendingTitle": {
+          "provenance": {
+            "hash": "sha256:2ea4170bf83709c83132ba4d99691259b9b57651b1b9b2a26180003e933813b5",
+            "locator": "accountDeletion*(zh-Hant-x-lzh).pendingTitle",
+            "source": "../../../apps/mobile/src/auth/loginMessages.ts"
+          },
+          "value": "名籍待刪"
+        },
+        "processingCopy": {
+          "provenance": {
+            "hash": "sha256:2ea4170bf83709c83132ba4d99691259b9b57651b1b9b2a26180003e933813b5",
+            "locator": "accountDeletion*(zh-Hant-x-lzh).processingCopy",
+            "source": "../../../apps/mobile/src/auth/loginMessages.ts"
+          },
+          "value": "Cindy 登門名籍正在刪除，事畢則永久刪除。"
+        },
+        "processingTitle": {
+          "provenance": {
+            "hash": "sha256:2ea4170bf83709c83132ba4d99691259b9b57651b1b9b2a26180003e933813b5",
+            "locator": "accountDeletion*(zh-Hant-x-lzh).processingTitle",
+            "source": "../../../apps/mobile/src/auth/loginMessages.ts"
+          },
+          "value": "名籍刪除中"
+        }
+      },
+      "zh-TW": {
+        "completedCopy": {
+          "provenance": {
+            "hash": "sha256:2ea4170bf83709c83132ba4d99691259b9b57651b1b9b2a26180003e933813b5",
+            "locator": "accountDeletion*(zh-TW).completedCopy",
+            "source": "../../../apps/mobile/src/auth/loginMessages.ts"
+          },
+          "value": "Cindy 登入帳號已刪除。"
+        },
+        "completedTitle": {
+          "provenance": {
+            "hash": "sha256:2ea4170bf83709c83132ba4d99691259b9b57651b1b9b2a26180003e933813b5",
+            "locator": "accountDeletion*(zh-TW).completedTitle",
+            "source": "../../../apps/mobile/src/auth/loginMessages.ts"
+          },
+          "value": "帳號已刪除"
+        },
+        "dismissButton": {
+          "provenance": {
+            "hash": "sha256:2ea4170bf83709c83132ba4d99691259b9b57651b1b9b2a26180003e933813b5",
+            "locator": "accountDeletion*(zh-TW).dismissButton",
+            "source": "../../../apps/mobile/src/auth/loginMessages.ts"
+          },
+          "value": "我知道了"
+        },
+        "pendingCopy": {
+          "provenance": {
+            "hash": "sha256:2ea4170bf83709c83132ba4d99691259b9b57651b1b9b2a26180003e933813b5",
+            "locator": "accountDeletion*(zh-TW).pendingCopy",
+            "source": "../../../apps/mobile/src/auth/loginMessages.ts"
+          },
+          "value": "預計於 {date} 永久刪除。現在重新登入即可取消刪除。"
+        },
+        "pendingTitle": {
+          "provenance": {
+            "hash": "sha256:2ea4170bf83709c83132ba4d99691259b9b57651b1b9b2a26180003e933813b5",
+            "locator": "accountDeletion*(zh-TW).pendingTitle",
+            "source": "../../../apps/mobile/src/auth/loginMessages.ts"
+          },
+          "value": "帳號正在等待刪除"
+        },
+        "processingCopy": {
+          "provenance": {
+            "hash": "sha256:2ea4170bf83709c83132ba4d99691259b9b57651b1b9b2a26180003e933813b5",
+            "locator": "accountDeletion*(zh-TW).processingCopy",
+            "source": "../../../apps/mobile/src/auth/loginMessages.ts"
+          },
+          "value": "Cindy 登入帳號正在刪除，處理完成後將永久刪除。"
+        },
+        "processingTitle": {
+          "provenance": {
+            "hash": "sha256:2ea4170bf83709c83132ba4d99691259b9b57651b1b9b2a26180003e933813b5",
+            "locator": "accountDeletion*(zh-TW).processingTitle",
+            "source": "../../../apps/mobile/src/auth/loginMessages.ts"
+          },
+          "value": "帳號正在刪除"
+        }
+      }
+    },
+    "geometry": {
+      "bodyLinkGap": {
+        "provenance": {
+          "hash": "sha256:b2ee100cd0bdc8cb629dbf83cf2ba495780d36f9dbcffad5f6fcb9e7971be649",
+          "locator": "LOGIN_DELETION_BUBBLE(stage 设计单位).bodyLinkGap",
+          "source": "../../../apps/mobile/src/auth/loginSkinLayout.ts"
+        },
+        "value": 22
+      },
+      "borderWidth": {
+        "provenance": {
+          "hash": "sha256:b2ee100cd0bdc8cb629dbf83cf2ba495780d36f9dbcffad5f6fcb9e7971be649",
+          "locator": "LOGIN_DELETION_BUBBLE(stage 设计单位).borderWidth",
+          "source": "../../../apps/mobile/src/auth/loginSkinLayout.ts"
+        },
+        "value": 1
+      },
+      "fontSize": {
+        "provenance": {
+          "hash": "sha256:b2ee100cd0bdc8cb629dbf83cf2ba495780d36f9dbcffad5f6fcb9e7971be649",
+          "locator": "LOGIN_DELETION_BUBBLE(stage 设计单位).fontSize",
+          "source": "../../../apps/mobile/src/auth/loginSkinLayout.ts"
+        },
+        "value": 20
+      },
+      "lineHeight": {
+        "provenance": {
+          "hash": "sha256:b2ee100cd0bdc8cb629dbf83cf2ba495780d36f9dbcffad5f6fcb9e7971be649",
+          "locator": "LOGIN_DELETION_BUBBLE.lineHeight=LOGIN_COPY_LINE_HEIGHT",
+          "source": "../../../apps/mobile/src/auth/loginSkinLayout.ts"
+        },
+        "value": 23
+      },
+      "linkHitSlopMax": {
+        "provenance": {
+          "hash": "sha256:b2ee100cd0bdc8cb629dbf83cf2ba495780d36f9dbcffad5f6fcb9e7971be649",
+          "locator": "resolveDeletionBubbleLinkHitSlop 的 18 上限(物理 pt)",
+          "source": "../../../apps/mobile/src/auth/loginSkinLayout.ts"
+        },
+        "value": 18
+      },
+      "linkHitSlopX": {
+        "provenance": {
+          "hash": "sha256:b2ee100cd0bdc8cb629dbf83cf2ba495780d36f9dbcffad5f6fcb9e7971be649",
+          "locator": "resolveDeletionBubbleLinkHitSlop left/right=20(物理 pt)",
+          "source": "../../../apps/mobile/src/auth/loginSkinLayout.ts"
+        },
+        "value": 20
+      },
+      "padLandscapeWidth": {
+        "provenance": {
+          "hash": "sha256:b2ee100cd0bdc8cb629dbf83cf2ba495780d36f9dbcffad5f6fcb9e7971be649",
+          "locator": "LOGIN_DELETION_BUBBLE.padLandscape.width(= WORD_MARK 框宽)",
+          "source": "../../../apps/mobile/src/auth/loginSkinLayout.ts"
+        },
+        "value": 556
+      },
+      "padLandscapeX": {
+        "provenance": {
+          "hash": "sha256:b2ee100cd0bdc8cb629dbf83cf2ba495780d36f9dbcffad5f6fcb9e7971be649",
+          "locator": "LOGIN_DELETION_BUBBLE.padLandscape.x",
+          "source": "../../../apps/mobile/src/auth/loginSkinLayout.ts"
+        },
+        "value": 607
+      },
+      "padPortraitWidth": {
+        "provenance": {
+          "hash": "sha256:b2ee100cd0bdc8cb629dbf83cf2ba495780d36f9dbcffad5f6fcb9e7971be649",
+          "locator": "LOGIN_DELETION_BUBBLE.padPortrait.width",
+          "source": "../../../apps/mobile/src/auth/loginSkinLayout.ts"
+        },
+        "value": 504
+      },
+      "padTop": {
+        "provenance": {
+          "hash": "sha256:b2ee100cd0bdc8cb629dbf83cf2ba495780d36f9dbcffad5f6fcb9e7971be649",
+          "locator": "LOGIN_DELETION_BUBBLE.padLandscape.top / padPortrait.top",
+          "source": "../../../apps/mobile/src/auth/loginSkinLayout.ts"
+        },
+        "value": 72
+      },
+      "padding": {
+        "provenance": {
+          "hash": "sha256:b2ee100cd0bdc8cb629dbf83cf2ba495780d36f9dbcffad5f6fcb9e7971be649",
+          "locator": "LOGIN_DELETION_BUBBLE(stage 设计单位).padding",
+          "source": "../../../apps/mobile/src/auth/loginSkinLayout.ts"
+        },
+        "value": 20
+      },
+      "phoneWidth": {
+        "provenance": {
+          "hash": "sha256:b2ee100cd0bdc8cb629dbf83cf2ba495780d36f9dbcffad5f6fcb9e7971be649",
+          "locator": "LOGIN_DELETION_BUBBLE.phone.width",
+          "source": "../../../apps/mobile/src/auth/loginSkinLayout.ts"
+        },
+        "value": 670
+      },
+      "phoneX": {
+        "provenance": {
+          "hash": "sha256:b2ee100cd0bdc8cb629dbf83cf2ba495780d36f9dbcffad5f6fcb9e7971be649",
+          "locator": "LOGIN_DELETION_BUBBLE.phone.x",
+          "source": "../../../apps/mobile/src/auth/loginSkinLayout.ts"
+        },
+        "value": 40
+      },
+      "radius": {
+        "provenance": {
+          "hash": "sha256:b2ee100cd0bdc8cb629dbf83cf2ba495780d36f9dbcffad5f6fcb9e7971be649",
+          "locator": "LOGIN_DELETION_BUBBLE(stage 设计单位).radius",
+          "source": "../../../apps/mobile/src/auth/loginSkinLayout.ts"
+        },
+        "value": 22
+      },
+      "titleBodyGap": {
+        "provenance": {
+          "hash": "sha256:b2ee100cd0bdc8cb629dbf83cf2ba495780d36f9dbcffad5f6fcb9e7971be649",
+          "locator": "LOGIN_DELETION_BUBBLE(stage 设计单位).titleBodyGap",
+          "source": "../../../apps/mobile/src/auth/loginSkinLayout.ts"
+        },
+        "value": 5
+      }
+    },
+    "surface": {
+      "padLandscapeMinHeight": {
+        "provenance": {
+          "hash": "sha256:b2ee100cd0bdc8cb629dbf83cf2ba495780d36f9dbcffad5f6fcb9e7971be649",
+          "locator": "PAD_LANDSCAPE_MIN_HEIGHT",
+          "source": "../../../apps/mobile/src/auth/loginSkinLayout.ts"
+        },
+        "value": 690
+      },
+      "padLandscapeMinScale": {
+        "provenance": {
+          "hash": "sha256:b2ee100cd0bdc8cb629dbf83cf2ba495780d36f9dbcffad5f6fcb9e7971be649",
+          "locator": "PAD_LANDSCAPE_MIN_SCALE",
+          "source": "../../../apps/mobile/src/auth/loginSkinLayout.ts"
+        },
+        "value": 0.85
+      },
+      "padLandscapeMinWidth": {
+        "provenance": {
+          "hash": "sha256:b2ee100cd0bdc8cb629dbf83cf2ba495780d36f9dbcffad5f6fcb9e7971be649",
+          "locator": "PAD_LANDSCAPE_MIN_WIDTH",
+          "source": "../../../apps/mobile/src/auth/loginSkinLayout.ts"
+        },
+        "value": 1000
+      },
+      "padLandscapeStageHeight": {
+        "provenance": {
+          "hash": "sha256:b2ee100cd0bdc8cb629dbf83cf2ba495780d36f9dbcffad5f6fcb9e7971be649",
+          "locator": "LOGIN_PAD_LANDSCAPE_STAGE.height",
+          "source": "../../../apps/mobile/src/auth/loginSkinLayout.ts"
+        },
+        "value": 820
+      },
+      "padLandscapeStageWidth": {
+        "provenance": {
+          "hash": "sha256:b2ee100cd0bdc8cb629dbf83cf2ba495780d36f9dbcffad5f6fcb9e7971be649",
+          "locator": "LOGIN_PAD_LANDSCAPE_STAGE.width",
+          "source": "../../../apps/mobile/src/auth/loginSkinLayout.ts"
+        },
+        "value": 1180
+      },
+      "padPortraitMinWidth": {
+        "provenance": {
+          "hash": "sha256:b2ee100cd0bdc8cb629dbf83cf2ba495780d36f9dbcffad5f6fcb9e7971be649",
+          "locator": "PAD_PORTRAIT_MIN_WIDTH",
+          "source": "../../../apps/mobile/src/auth/loginSkinLayout.ts"
+        },
+        "value": 700
+      },
+      "padPortraitStageHeight": {
+        "provenance": {
+          "hash": "sha256:b2ee100cd0bdc8cb629dbf83cf2ba495780d36f9dbcffad5f6fcb9e7971be649",
+          "locator": "LOGIN_PAD_PORTRAIT_STAGE.height",
+          "source": "../../../apps/mobile/src/auth/loginSkinLayout.ts"
+        },
+        "value": 1133
+      },
+      "padPortraitStageWidth": {
+        "provenance": {
+          "hash": "sha256:b2ee100cd0bdc8cb629dbf83cf2ba495780d36f9dbcffad5f6fcb9e7971be649",
+          "locator": "LOGIN_PAD_PORTRAIT_STAGE.width",
+          "source": "../../../apps/mobile/src/auth/loginSkinLayout.ts"
+        },
+        "value": 744
+      },
+      "phoneStageWidth": {
+        "provenance": {
+          "hash": "sha256:b2ee100cd0bdc8cb629dbf83cf2ba495780d36f9dbcffad5f6fcb9e7971be649",
+          "locator": "surface 断点/stage 规格.phoneStageWidth",
+          "source": "../../../apps/mobile/src/auth/loginSkinLayout.ts"
+        },
+        "value": 750
+      },
+      "stageWidth": {
+        "provenance": {
+          "hash": "sha256:b2ee100cd0bdc8cb629dbf83cf2ba495780d36f9dbcffad5f6fcb9e7971be649",
+          "locator": "LOGIN_STAGE_WIDTH",
+          "source": "../../../apps/mobile/src/auth/loginSkinLayout.ts"
+        },
+        "value": 750
       }
     }
   },
-  "adaptive": {
-    "safeTop": {
-      "value": 59,
-      "provenance": {
-        "source": "../../../apps/mobile/app/(auth)/login.tsx",
-        "locator": "demo chrome:safe-area 顶仿真常量(产品运行时 = insets.top)",
-        "hash": "sha256:d31895bfd48f934fada24b5dd2ccfd10821208032c4dcd37de513ddb835cde4f"
+  "structure": {
+    "desktop": {
+      "bubbleClass": {
+        "provenance": {
+          "hash": "sha256:fd80ac6b6de8cf59ce9cf76dc67be96a923a145a529b0b9e1c74862a3c277a65",
+          "locator": "AccountDeletionStatusPanel section className 全串",
+          "source": "../../../apps/desktop/src/renderer/components/login/LoginPage.tsx"
+        },
+        "value": "w-full break-words border border-[var(--login-deletion-bubble-border)] bg-[var(--login-deletion-bubble-bg)] text-center"
+      },
+      "dismissGate": {
+        "provenance": {
+          "hash": "sha256:fd80ac6b6de8cf59ce9cf76dc67be96a923a145a529b0b9e1c74862a3c277a65",
+          "locator": "LoginPage.tsx accountDeletionStatus.status === 'completed' ? onDismiss : undefined",
+          "source": "../../../apps/desktop/src/renderer/components/login/LoginPage.tsx"
+        },
+        "value": "仅 completed 态传入 onDismiss(「我知道了」);pending/processing 无按钮"
+      },
+      "dismissHitArea": {
+        "provenance": {
+          "hash": "sha256:fd80ac6b6de8cf59ce9cf76dc67be96a923a145a529b0b9e1c74862a3c277a65",
+          "locator": "dismiss inline style marginTop/marginBottom/paddingTop/paddingBottom",
+          "source": "../../../apps/desktop/src/renderer/components/login/LoginPage.tsx"
+        },
+        "value": "上下各 11 设计单位 padding 撑热区 + 等量负 margin 抵消(视觉间距仍 上 22 / 下 20);缩放后约 22.5 CSS px 高(桌面鼠标指针)"
+      },
+      "renderPosition": {
+        "provenance": {
+          "hash": "sha256:fd80ac6b6de8cf59ce9cf76dc67be96a923a145a529b0b9e1c74862a3c277a65",
+          "locator": "LoginPage.tsx </LoginStage> 之后的 AccountDeletionStatusPanel 渲染点",
+          "source": "../../../apps/desktop/src/renderer/components/login/LoginPage.tsx"
+        },
+        "value": "LoginPage 根层(</LoginStage> 之后),不在 stage 文档流;absolute z-30 浮层"
+      },
+      "scaleContract": {
+        "provenance": {
+          "hash": "sha256:fd80ac6b6de8cf59ce9cf76dc67be96a923a145a529b0b9e1c74862a3c277a65",
+          "locator": "wrapper style: top/width/transform/transformOrigin",
+          "source": "../../../apps/desktop/src/renderer/components/login/LoginPage.tsx"
+        },
+        "value": "几何为设计单位,wrapper 施加 translateX(-50%) scale(0.5) + transformOrigin top center;渲染值 = 设计单位 × 0.5(宽 335 / 顶距 36 CSS px)"
+      },
+      "wrapperClass": {
+        "provenance": {
+          "hash": "sha256:fd80ac6b6de8cf59ce9cf76dc67be96a923a145a529b0b9e1c74862a3c277a65",
+          "locator": "wrapper(定位+缩放层)className,几何走 inline style",
+          "source": "../../../apps/desktop/src/renderer/components/login/LoginPage.tsx"
+        },
+        "value": "absolute left-1/2 z-30"
       }
     },
-    "oracle": {
-      "value": "resolveLoginSurface + resolveDeletionBubbleFrame(esbuild 编译 loginSkinLayout.ts 后 import,产品纯函数)",
-      "provenance": {
-        "source": "../../../apps/mobile/src/auth/loginSkinLayout.ts",
-        "locator": "loginSkinLayout.ts:302 resolveLoginSurface / :486 resolveDeletionBubbleFrame",
-        "hash": "sha256:b2ee100cd0bdc8cb629dbf83cf2ba495780d36f9dbcffad5f6fcb9e7971be649"
-      }
-    },
-    "samples": {
-      "value": [
-        {
-          "w": 390,
-          "h": 844,
-          "probes": {
-            "bubble": {
-              "x": 20.8,
-              "y": 59,
-              "w": 348.40000000000003
-            },
-            "surfaceMode": "phone"
-          }
+    "mobile": {
+      "a11yModalGate": {
+        "provenance": {
+          "hash": "sha256:d31895bfd48f934fada24b5dd2ccfd10821208032c4dcd37de513ddb835cde4f",
+          "locator": "login.tsx 气泡渲染点 Animated.View importantForAccessibility",
+          "source": "../../../apps/mobile/app/(auth)/login.tsx"
         },
-        {
-          "w": 375,
-          "h": 812,
-          "probes": {
-            "bubble": {
-              "x": 20,
-              "y": 59,
-              "w": 335
-            },
-            "surfaceMode": "phone"
-          }
+        "value": "气泡对读屏隐藏 = 协议弹窗打开 || 区域确认打开 || 入场未完成;iOS accessibilityElementsHidden + Android importantForAccessibility 双端都给(opacity/pointerEvents 不影响读屏,不隐藏则会念出不可见的注销状态)(PR #464 codex)"
+      },
+      "dismissGate": {
+        "provenance": {
+          "hash": "sha256:d31895bfd48f934fada24b5dd2ccfd10821208032c4dcd37de513ddb835cde4f",
+          "locator": "login.tsx:1315-1327 {onDismiss ? <Pressable/> : null}",
+          "source": "../../../apps/mobile/app/(auth)/login.tsx"
         },
-        {
-          "w": 374,
-          "h": 812,
-          "probes": {
-            "bubble": {
-              "x": 19.946666666666665,
-              "y": 59,
-              "w": 334.1066666666666
-            },
-            "surfaceMode": "phone"
-          }
+        "value": "仅 completed 态渲染 dismiss Pressable(onDismiss 仅 completed 传入)"
+      },
+      "dismissHitSlop": {
+        "provenance": {
+          "hash": "sha256:b2ee100cd0bdc8cb629dbf83cf2ba495780d36f9dbcffad5f6fcb9e7971be649",
+          "locator": "resolveDeletionBubbleLinkHitSlop(scale)",
+          "source": "../../../apps/mobile/src/auth/loginSkinLayout.ts"
         },
-        {
-          "w": 335,
-          "h": 700,
-          "probes": {
-            "bubble": {
-              "x": 17.866666666666667,
-              "y": 59,
-              "w": 299.26666666666665
-            },
-            "surfaceMode": "phone"
-          }
+        "value": "hitSlop 按气泡内可用空间钳制:top=min(18, bodyLinkGap×scale)、bottom=min(18, padding×scale)、左右 20——RN hitSlop 不越父边界,虚标无效(PR #494 codex);热区随整个登录 stage 同步缩放(320pt 窗口下主按钮本身 ≈34pt),不追未缩放 44pt 绝对值"
+      },
+      "entranceGate": {
+        "provenance": {
+          "hash": "sha256:d31895bfd48f934fada24b5dd2ccfd10821208032c4dcd37de513ddb835cde4f",
+          "locator": "login.tsx 气泡渲染点 Animated.View pointerEvents/style",
+          "source": "../../../apps/mobile/app/(auth)/login.tsx"
         },
-        {
-          "w": 320,
-          "h": 680,
-          "probes": {
-            "bubble": {
-              "x": 17.066666666666666,
-              "y": 59,
-              "w": 285.8666666666667
-            },
-            "surfaceMode": "phone"
-          }
+        "value": "Animated.View 包装:opacity=panelEntrance.opacity(与登录组同一 Animated 值);pointerEvents 仅 handoffPhase==='done' 放行且取 box-none(全屏包装层不作触摸目标,避免挡住下方登录组命中;入场完成前 none = 不可见不可点)(PR #464 review)"
+      },
+      "renderPosition": {
+        "provenance": {
+          "hash": "sha256:d31895bfd48f934fada24b5dd2ccfd10821208032c4dcd37de513ddb835cde4f",
+          "locator": "login.tsx:1140-1197 deletionBubbleFrame + AccountDeletionStatusPanel frame prop",
+          "source": "../../../apps/mobile/app/(auth)/login.tsx"
         },
-        {
-          "w": 700,
-          "h": 1000,
-          "probes": {
-            "bubble": {
-              "x": 127.58164165931157,
-              "y": 63.54810238305384,
-              "w": 444.83671668137686
-            },
-            "surfaceMode": "pad-portrait"
-          }
+        "value": "position:absolute,left/top/width 由 resolveDeletionBubbleFrame(stage, insets.top) 行内注入;不参与布局流"
+      },
+      "styleFacts": {
+        "provenance": {
+          "hash": "sha256:d31895bfd48f934fada24b5dd2ccfd10821208032c4dcd37de513ddb835cde4f",
+          "locator": "login.tsx:1439-1449 makeStyles.deletionBubble",
+          "source": "../../../apps/mobile/app/(auth)/login.tsx"
         },
-        {
-          "w": 699,
-          "h": 1000,
-          "probes": {
-            "bubble": {
-              "x": 37.28,
-              "y": 59,
-              "w": 624.44
-            },
-            "surfaceMode": "phone"
-          }
-        },
-        {
-          "w": 744,
-          "h": 1133,
-          "probes": {
-            "bubble": {
-              "x": 120,
-              "y": 72,
-              "w": 504
-            },
-            "surfaceMode": "pad-portrait"
-          }
-        },
-        {
-          "w": 1000,
-          "h": 690,
-          "probes": {
-            "bubble": {
-              "x": 514.4499999999999,
-              "y": 57.699999999999996,
-              "w": 472.59999999999997
-            },
-            "surfaceMode": "pad-landscape"
-          }
-        },
-        {
-          "w": 999,
-          "h": 690,
-          "probes": {
-            "bubble": {
-              "x": 552.05,
-              "y": 59,
-              "w": 394.4
-            },
-            "surfaceMode": "compact-wide"
-          }
-        },
-        {
-          "w": 1000,
-          "h": 689,
-          "probes": {
-            "bubble": {
-              "x": 552.8,
-              "y": 59,
-              "w": 394.4
-            },
-            "surfaceMode": "compact-wide"
-          }
-        },
-        {
-          "w": 1180,
-          "h": 820,
-          "probes": {
-            "bubble": {
-              "x": 607,
-              "y": 72,
-              "w": 556
-            },
-            "surfaceMode": "pad-landscape"
-          }
-        },
-        {
-          "w": 1440,
-          "h": 900,
-          "probes": {
-            "bubble": {
-              "x": 738.6585365853658,
-              "y": 79.02439024390239,
-              "w": 610.2439024390244
-            },
-            "surfaceMode": "pad-landscape"
-          }
-        }
-      ],
-      "provenance": {
-        "source": "../../../apps/mobile/src/auth/loginSkinLayout.ts",
-        "locator": "产品纯函数对 spec.adaptive.sampleSizes 预计算(oracle 输出,非手算)",
-        "hash": "sha256:b2ee100cd0bdc8cb629dbf83cf2ba495780d36f9dbcffad5f6fcb9e7971be649"
+        "value": "不透明底+1px 描边;无 shadow/elevation/固定高(样式块守护断言)"
       }
     }
-  }
+  },
+  "supportedLocales": [
+    {
+      "provenance": {
+        "hash": "sha256:77a2bddf9c131b3b19f59e0bf0975c697fb3ca277959bdf4fca0b551f80fcf1e",
+        "locator": "SUPPORTED_LOCALES[0]",
+        "source": "../../../apps/desktop/src/shared/locale.ts"
+      },
+      "value": "zh-CN"
+    },
+    {
+      "provenance": {
+        "hash": "sha256:77a2bddf9c131b3b19f59e0bf0975c697fb3ca277959bdf4fca0b551f80fcf1e",
+        "locator": "SUPPORTED_LOCALES[1]",
+        "source": "../../../apps/desktop/src/shared/locale.ts"
+      },
+      "value": "zh-TW"
+    },
+    {
+      "provenance": {
+        "hash": "sha256:77a2bddf9c131b3b19f59e0bf0975c697fb3ca277959bdf4fca0b551f80fcf1e",
+        "locator": "SUPPORTED_LOCALES[2]",
+        "source": "../../../apps/desktop/src/shared/locale.ts"
+      },
+      "value": "en"
+    },
+    {
+      "provenance": {
+        "hash": "sha256:77a2bddf9c131b3b19f59e0bf0975c697fb3ca277959bdf4fca0b551f80fcf1e",
+        "locator": "SUPPORTED_LOCALES[3]",
+        "source": "../../../apps/desktop/src/shared/locale.ts"
+      },
+      "value": "ja"
+    },
+    {
+      "provenance": {
+        "hash": "sha256:77a2bddf9c131b3b19f59e0bf0975c697fb3ca277959bdf4fca0b551f80fcf1e",
+        "locator": "SUPPORTED_LOCALES[4]",
+        "source": "../../../apps/desktop/src/shared/locale.ts"
+      },
+      "value": "ko"
+    },
+    {
+      "provenance": {
+        "hash": "sha256:77a2bddf9c131b3b19f59e0bf0975c697fb3ca277959bdf4fca0b551f80fcf1e",
+        "locator": "SUPPORTED_LOCALES[5]",
+        "source": "../../../apps/desktop/src/shared/locale.ts"
+      },
+      "value": "es"
+    },
+    {
+      "provenance": {
+        "hash": "sha256:77a2bddf9c131b3b19f59e0bf0975c697fb3ca277959bdf4fca0b551f80fcf1e",
+        "locator": "SUPPORTED_LOCALES[6]",
+        "source": "../../../apps/desktop/src/shared/locale.ts"
+      },
+      "value": "fr"
+    },
+    {
+      "provenance": {
+        "hash": "sha256:77a2bddf9c131b3b19f59e0bf0975c697fb3ca277959bdf4fca0b551f80fcf1e",
+        "locator": "SUPPORTED_LOCALES[7]",
+        "source": "../../../apps/desktop/src/shared/locale.ts"
+      },
+      "value": "de"
+    },
+    {
+      "provenance": {
+        "hash": "sha256:77a2bddf9c131b3b19f59e0bf0975c697fb3ca277959bdf4fca0b551f80fcf1e",
+        "locator": "SUPPORTED_LOCALES[8]",
+        "source": "../../../apps/desktop/src/shared/locale.ts"
+      },
+      "value": "pt-PT"
+    },
+    {
+      "provenance": {
+        "hash": "sha256:77a2bddf9c131b3b19f59e0bf0975c697fb3ca277959bdf4fca0b551f80fcf1e",
+        "locator": "SUPPORTED_LOCALES[9]",
+        "source": "../../../apps/desktop/src/shared/locale.ts"
+      },
+      "value": "pt-BR"
+    },
+    {
+      "provenance": {
+        "hash": "sha256:77a2bddf9c131b3b19f59e0bf0975c697fb3ca277959bdf4fca0b551f80fcf1e",
+        "locator": "SUPPORTED_LOCALES[10]",
+        "source": "../../../apps/desktop/src/shared/locale.ts"
+      },
+      "value": "zh-Hant-x-lzh"
+    },
+    {
+      "provenance": {
+        "hash": "sha256:77a2bddf9c131b3b19f59e0bf0975c697fb3ca277959bdf4fca0b551f80fcf1e",
+        "locator": "SUPPORTED_LOCALES[11]",
+        "source": "../../../apps/desktop/src/shared/locale.ts"
+      },
+      "value": "zh-Hans-x-lzh"
+    },
+    {
+      "provenance": {
+        "hash": "sha256:77a2bddf9c131b3b19f59e0bf0975c697fb3ca277959bdf4fca0b551f80fcf1e",
+        "locator": "SUPPORTED_LOCALES[12]",
+        "source": "../../../apps/desktop/src/shared/locale.ts"
+      },
+      "value": "tlh"
+    }
+  ]
 }

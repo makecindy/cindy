@@ -81,6 +81,7 @@ const LOCALE_NAME: Record<HelpLocale, string> = {
   "pt-BR": "Brazilian Portuguese",
   "zh-Hant-x-lzh": "Classical Chinese (文言) in Traditional characters, keeping UI names exactly as shown in the app",
   "zh-Hans-x-lzh": "Classical Chinese (文言) in Simplified characters, keeping UI names exactly as shown in the app",
+  tlh: "Klingon (tlhIngan Hol)",
 };
 
 type HelpOneShotTarget = {

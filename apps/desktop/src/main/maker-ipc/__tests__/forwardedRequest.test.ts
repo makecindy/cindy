@@ -53,7 +53,7 @@ describe('host-owned forwarded request', () => {
   // against today's English formatter would miss catalog drift on both sides.
   // Minimal failure: change an English prefix, then send from a French host to an old host.
   // Windows run: 4.93s wall time (Vitest reports 3.61s), 2026-10-31.
-  it.each(['fr', 'es', 'de', 'pt-PT', 'pt-BR'] as const)('sends %s receipts in the legacy English dialect', locale => {
+  it.each(['fr', 'es', 'de', 'pt-PT', 'pt-BR', 'tlh'] as const)('sends %s receipts in the legacy English dialect', locale => {
     const source = { userText: 'Review only; do not publish.' };
     const supplement = 'Inspect the changes.';
     expect(formatForwardedRequest(source, supplement, locale)).toBe([

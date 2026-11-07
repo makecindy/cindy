@@ -23,6 +23,8 @@ import lzhCommon from './locales/zh-Hant-x-lzh/common.json';
 import lzhAiRename from './locales/zh-Hant-x-lzh/aiRename.json';
 import lzhHansCommon from './locales/zh-Hans-x-lzh/common.json';
 import lzhHansAiRename from './locales/zh-Hans-x-lzh/aiRename.json';
+import tlhCommon from './locales/tlh/common.json';
+import tlhAiRename from './locales/tlh/aiRename.json';
 import i18n from 'i18next';
 import { initReactI18next } from 'react-i18next';
 import { BRAND_NAME } from '@cindy/maker-shared/branding';
@@ -76,6 +78,16 @@ const resources = {
       },
     },
     aiRename: lzhHansAiRename,
+  },
+  tlh: {
+    common: {
+      ...tlhCommon,
+      chatgptAuthRecovery: {
+        ...tlhCommon.chatgptAuthRecovery,
+        devWriteBlocked: "chenmoH copy janvam ChatGPT Hotlh laD-neH lo'taH — OAuth qavbe'chu'meH joq ngItlh choHbe'meH. OAuth testmeH, ghItlh vam yIlo': pnpm restart:desktop:remote -- --isolated-auth --isolated. restart script sandbox bev 'e' ghIq neH writes poSmoH.",
+      },
+    },
+    aiRename: tlhAiRename,
   },
   en: {
     common: {

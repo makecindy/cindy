@@ -1,0 +1,1000 @@
+{
+  "management": {
+    "title": "jan Management",
+    "openDevice": "View De' for {{name}}",
+    "details": "jan De'",
+    "retry": "vangqa'",
+    "unknown": "Not DuH",
+    "notFound": "This jan is Qo' longer in your account.",
+    "deleteDevice": "teq jan",
+    "deleteTitle": "teq {{name}}?",
+    "deleteMessage": "teq this jan from your account and disconnect nov access. Its Qu'mey and navmey are kept. Hotlh in again chu' that jan to rejoin.",
+    "deleteFailed": "Could not teq the jan.",
+    "deleteOnline": "This server does not yet support removing Web janmey. vangqa' after the service is upgraded.",
+    "deleteRejectedWhileOffline": "Couldn’t teq the jan: the server still lists it as Web, although it shows as Web Hur here.",
+    "currentlyOnline": "Currently Web",
+    "availableSection": "Web",
+    "offlineSection": "Web Hur",
+    "showAllOffline": "tu' naQ ({{count}})",
+    "showFewerOffline": "puS bej",
+    "nameTooLong": "jan names must be {{limit}} characters or fewer.",
+    "fields": {
+      "name": "pong",
+      "status": "ghu'",
+      "platform": "Platform",
+      "model": "model",
+      "systemVersion": "System juv",
+      "appVersion": "Cindy juv",
+      "cpu": "Processor",
+      "memory": "qon",
+      "lastSeen": "Last Web",
+      "deviceId": "jan ID"
+    }
+  },
+  "common": {
+    "cancel": "mev",
+    "save": "qon",
+    "delete": "teq",
+    "create": "chu'"
+  },
+  "resources": {
+    "connectionUnknown": "rar Sovbe'",
+    "hostOffline": "Web Hur",
+    "titleFallback": "Resources",
+    "loading": "loSlu'…",
+    "emptyTitle": "Nothing here yet",
+    "emptyCopy": "This De'wI' has not provided any items here yet.",
+    "loadFailed": "Couldn’t load these items",
+    "noHosts": "Qo' compatible De'wI' is DuH.",
+    "noConversation": "This item does not currently have a Qu' to poSmoH.",
+    "openFailed": "Couldn’t poSmoH the Qu'",
+    "resolving": "Opening the latest Qu'…",
+    "retry": "Try again",
+    "hostCount": "{{count}} De'wI'mey",
+    "stale": "These items may be outdated. Unable to chu'qa'."
+  },
+  "presentation": {
+    "deviceList": {
+      "headerAvailable": "{{count}} controllable De'wI'mey",
+      "headerUnavailable": "{{count}} De'wI'mey currently DuHbe'",
+      "waitingForDesktop": "Waiting for a De'wI' to come Web",
+      "filterAvailable": "Controllable janmey",
+      "filterEmpty": "Qo' controllable janmey",
+      "filterMeta": "{{available}} DuH",
+      "filterMetaWithUnavailable": "{{available}} DuH · {{unavailable}} need attention",
+      "showUnavailableReason": "chenmoH a jan to see why it is DuHbe'",
+      "emptyCopy": "Hotlh in to the same account chu' your De'wI', then enable “chaw same-account janmey to control this De'wI'” under SeHlaw' → nov rar.",
+      "emptyTitle": "Qo' De'wI'mey to tu' yet",
+      "hideUnavailableA11y": "So' DuHbe' De'wI'mey",
+      "showUnavailableA11y": "tu' DuHbe' De'wI'mey",
+      "availableOnly": "DuH only",
+      "unavailableCount": "DuHbe' {{count}}",
+      "status": {
+        "ready": "Controllable",
+        "busy": "SengtaH",
+        "offline": "Web Hur",
+        "remoteDisabled": "nov control SoQlu'",
+        "accessRevoked": "Access revoked",
+        "self": "This jan"
+      },
+      "detail": {
+        "accessRevoked": "Restore this wabwI'’s access chu' the De'wI'",
+        "remoteDisabled": "Enable nov control in the De'wI'’s SeHlaw'",
+        "self": "Current wabwI'",
+        "busy": "The De'wI' is SengtaH chu' a Qu'",
+        "ready": "nov control is allowed"
+      },
+      "lastSeen": {
+        "never": "qaSbe' Web",
+        "unknown": "Last Web poH Sovbe'",
+        "justNow": "Web just DaH",
+        "minutesAgo": "Web {{count}} tupmey ago",
+        "hoursAgo": "Web {{count}} poHmey ago",
+        "daysAgo": "Web {{count}} jupmey ago",
+        "onDate": "Last Web {{date}}"
+      }
+    },
+    "sessionList": {
+      "section": {
+        "pinned": "Pinned",
+        "dialogue": "Chat"
+      },
+      "filterWithCount": "{{label}} {{count}}",
+      "controlsSummary": "{{filter}} · Grouped by {{group}}",
+      "automation": "Automation",
+      "sessionCount": "{{count}} Qu'mey",
+      "messageCount": "{{count}} QInmey",
+      "status": {
+        "archived": "Archived",
+        "deleted": "Deleted"
+      },
+      "preview": {
+        "permission": "Waiting for chaw",
+        "planReview": "Waiting for plan bej",
+        "answer": "Waiting for your jang",
+        "attention": "Waiting for you",
+        "automationRunning": "Automation SengtaH",
+        "running": "SengtaH"
+      },
+      "context": {
+        "matchingTasks": "{{count}} matching Qu'mey",
+        "tasks": "{{count}} Qu'mey",
+        "noMatchingTasks": "Qo' matching Qu'mey",
+        "noResults": "Qo' results for this filter",
+        "rows": " · {{count}} rows",
+        "detail": "{{result}}{{rows}} · {{filter}} · Grouped by {{group}}",
+        "searchResults": "nej Results",
+        "title": {
+          "active": "QaptaH Qu'mey",
+          "waiting": "loS Qu'mey",
+          "automation": "Automation Qu'mey",
+          "archived": "Archived Qu'mey",
+          "all": "naQ Qu'mey"
+        },
+        "hint": {
+          "search": "nej includes titles, project paths, modelmey, automation names, and QIn previews.",
+          "active": "poSmoH a Qu' to taH controlling it, or touch and hold to wuq multiple Qu'mey.",
+          "waiting": "chawmey, plan reviews, and questions that need confirmation chu' your wabwI' appear here.",
+          "automation": "Automation Qu'mey are grouped by Qu'; chenmoH a ghun to poSmoH an individual run.",
+          "archived": "Touch and hold an archived Qu' to unarchive or teq it in bulk.",
+          "all": "QaptaH, archived, and automation Qu'mey are shown together for quick lookup."
+        }
+      },
+      "empty": {
+        "search": {
+          "title": "Qo' matching Qu'mey",
+          "copy": "Try another bop, project path, model, or QIn keyword."
+        },
+        "waiting": {
+          "title": "Qo' loS requests",
+          "copy": "chaw prompts, plan reviews, and questions will appear here."
+        },
+        "automation": {
+          "title": "Qo' automation Qu'mey",
+          "copy": "Qu'mey created by automations will be grouped here after a run."
+        },
+        "archived": {
+          "title": "Qo' archived Qu'mey",
+          "copy": "Touch and hold a Qu' to qon or teq it in bulk."
+        },
+        "active": {
+          "title": "Qo' QaptaH Qu'mey chu' this De'wI'",
+          "copy": "chenmoH or taH a Qu' chu' your De'wI' and it will appear here."
+        }
+      },
+      "time": {
+        "unknown": "Recent activity poH Sovbe'",
+        "justNow": "Just DaH",
+        "minutesAgo_one": "{{count}} tup ago",
+        "minutesAgo_other": "{{count}} tupmey ago",
+        "hoursAgo_one": "{{count}} poH ago",
+        "hoursAgo_other": "{{count}} poHmey ago",
+        "daysAgo_one": "{{count}} jup ago",
+        "daysAgo_other": "{{count}} jupmey ago",
+        "minutes": "{{count}} min",
+        "hours": "{{count}} hr",
+        "days": "{{count}} d",
+        "weeks": "{{count}} wk",
+        "months": "{{count}} mo",
+        "years": "{{count}} yr"
+      }
+    },
+    "home": {
+      "allDevices": "naQ",
+      "allComputers": "naQ janmey",
+      "waitingCount": "{{count}} loS",
+      "synced": "Synced",
+      "unknownComputer": "Sovbe' jan",
+      "uncategorizedProject": "Uncategorized project",
+      "cindyMake": "Cindy Make",
+      "empty": {
+        "search": {
+          "title": "Qo' matches",
+          "copy": "Try another project pong, Qu' bop, De'wI' pong, or QIn keyword."
+        },
+        "waiting": {
+          "title": "Qo' loS requests",
+          "copy": "chaw prompts, plan reviews, and questions will appear here."
+        },
+        "automation": {
+          "title": "Qo' automation Qu'mey",
+          "copy": "Qu'mey created by automations will be grouped here by project."
+        },
+        "archived": {
+          "title": "Qo' archived Qu'mey",
+          "copy": "Switch to naQ or QaptaH to qon browsing your current projectmey and Qu'mey."
+        },
+        "noSession": {
+          "title": "Qo' Qu'mey yet",
+          "copy": "chenmoH or taH a Qu' chu' your De'wI' and its project will appear here."
+        }
+      },
+      "noDevice": {
+        "accessRevoked": {
+          "title": "Access revoked",
+          "copy": "{{names}} revoked this wabwI'’s nov access. vangqa' access, or chaw it again chu' the De'wI' to reconnect automatically."
+        },
+        "remoteDisabled": {
+          "title": "chaw nov control chu' your De'wI'",
+          "copy": "{{names}} is Web. One step remains: enable wabwI' control chu' the De'wI'."
+        },
+        "offline": {
+          "title": "poSmoH Cindy chu' your De'wI'",
+          "copy": "Your rarta' De'wI'mey are Web Hur. poSmoH Cindy and stay Hotlhlu' in; your wabwI' will reconnect automatically."
+        },
+        "firstRun": {
+          "title": "Connect Cindy chu' your De'wI'",
+          "copy": "Cindy currently runs chu' your De'wI'. The mobile app uses nov access so you can work with the Agentmey chu' that De'wI'."
+        }
+      }
+    },
+    "bulk": {
+      "action": {
+        "archive": "qon",
+        "delete": "teq",
+        "pin": "poS",
+        "restore": "Unarchive",
+        "unpin": "poS Ha'"
+      },
+      "title": "{{action}} {{count}} Qu'mey",
+      "description": "lo' {{action}} to the {{count}} selected Qu'mey.",
+      "descriptionWithSkipped": "lo' {{action}} to {{count}} selected Qu'mey; {{skippedCount}} inapplicable Qu'mey will be skipped."
+    }
+  },
+  "list": {
+    "projectActions": {
+      "newTask": "chu' Qu'",
+      "allTasks": "naQ Qu'mey",
+      "search": "nej"
+    },
+    "taskSuggestions": {
+      "connected": "De'wI' rarta'",
+      "title": "Away from your De'wI'?\nYou can still get qavlu'.",
+      "copy": "Ask Cindy to work chu' your De'wI', and check progress from your wabwI'.",
+      "footerTitle": "What can your De'wI' QaH with ghIq?",
+      "footerCopy": "qav a chu' Qu' and follow its progress here.",
+      "newTask": "chu' Qu'",
+      "tryThese": "Try a chu' Qu'",
+      "shuffle": "tu' latlh ideas",
+      "syncHint": "Qu'mey qavlu' chu' your De'wI' will appear here too.",
+      "items": {
+        "findFile": {
+          "label": "Find a nav chu' your De'wI'",
+          "hint": "Qo' need to go chegh and look for it",
+          "prompt": "QaH me find a nav chu' this De'wI'. First ask for keywords in its pong, its type, or roughly when it was modified, then nej and list possible matches."
+        },
+        "computerStatus": {
+          "label": "See how busy your De'wI' is",
+          "hint": "Check activity and resource lo'",
+          "prompt": "Check the CPU, qon, and disk lo' chu' this De'wI', identify resource-heavy programs, and summarize in plain Hol."
+        },
+        "projectProgress": {
+          "label": "Catch up chu' a project",
+          "hint": "bej recent choHmey and loS work",
+          "prompt": "QaH me catch up chu' a project chu' this De'wI'. First let me choose the project, then bej recent choHmey and outstanding work and give me a short qon."
+        },
+        "downloads": {
+          "label": "See what is in Downloads",
+          "hint": "Take stock before organizing",
+          "prompt": "bej the navmey in this De'wI'’s Downloads mIch, summarize them by type and jup, and suggest how to organize them. Do not move or teq navmey yet."
+        },
+        "summarizeDocument": {
+          "label": "Summarize a long document",
+          "hint": "Get the ngItlh points chu' your wabwI'",
+          "prompt": "Summarize a document chu' this De'wI'. First ask for its nav pong or location, then extract the ngItlh points, conclusions, and action items."
+        },
+        "storageUsage": {
+          "label": "Find what is using disk space",
+          "hint": "Locate large navmey and michmey",
+          "prompt": "Analyze disk lo' chu' this De'wI', list the largest michmey and navmey, and suggest ways to organize them. Do not teq anything yet."
+        }
+      }
+    },
+    "thisComputer": "This jan",
+    "allConversations": "naQ Qu'mey",
+    "syncFailed": "Sync Qagh",
+    "requestFailed": "Request Qagh",
+    "loading": "loSlu' DuH janmey",
+    "untitled": "Untitled Qu'",
+    "connection": {
+      "connecting": "Connecting",
+      "disconnected": "rarHa'lu'"
+    },
+    "error": {
+      "sessionDeviceNotFound": "Can't find the jan this Qu' belongs to. Sync again and vangqa'.",
+      "taskDeviceNotFound": "Can't find the jan this Qu' belongs to. Sync again and vangqa'.",
+      "noDevice": "Qo' jan DuH. Turn chu' nov control chu' the desktop, then sync again."
+    },
+    "alert": {
+      "cacheSaveFailed": "Could not qon Web Hur cache",
+      "cacheSaveFailedDetail": "Check the DuH storage chu' your wabwI'. You can taH Web, but some content may be DuHbe' Web Hur.",
+      "actionFailed": "Action Qagh",
+      "renameFailed": "Rename Qagh",
+      "deleteTitle": "teq Qu'?",
+      "deleteMessage": "This deletes \"{{title}}\" and can't be undone."
+    },
+    "a11y": {
+      "selectScope": "wuq Qu' scope",
+      "openMenu": "poSmoH tetlh",
+      "closeMenu": "SoQmoH tetlh",
+      "openDisplaySettings": "poSmoH bej SeHlaw'",
+      "openDisplaySettingsWithStatus": "poSmoH bej SeHlaw' (showing: {{status}})",
+      "openSearch": "nej",
+      "openSettings": "poSmoH SeHlaw'",
+      "syncing": "Syncing",
+      "sync": "Sync again",
+      "pinnedConversations": "{{count}} pinned Qu'mey",
+      "newRemoteConversation": "chu' Qu'",
+      "renameDevice": "Rename {{label}}",
+      "project": "project {{title}}",
+      "dialogue": "Chat",
+      "openAutomationLatest": "poSmoH the latest Qu' of automation {{title}}",
+      "automationTask": "Automation {{title}}",
+      "openConversation": "poSmoH Qu' {{title}}",
+      "followedBy": ", looked after by {{names}}",
+      "collapse": "ghup {{title}}",
+      "expand": "chenmoH {{title}}",
+      "taskError": "Qu' Qagh",
+      "awaitingYou": "Waiting for you",
+      "doneUnread": "Completed, unread",
+      "running": "SengtaH",
+      "close": "SoQmoH",
+      "cancelRename": "mev rename",
+      "createdBy": "Created by {{name}}",
+      "ownedBy": "Belongs to {{name}}"
+    },
+    "accounts": {
+      "title": "Switch account",
+      "add": "Hotlh in to another account",
+      "syncFailed": "account information could not be updated",
+      "runningTitle": "Switch account?",
+      "runningMessage": "Some Qu'mey are still SengtaH. They will taH chu' your De'wI', but this wabwI' will mev receiving and controlling them after you switch.",
+      "switchConfirm": "taH"
+    },
+    "menu": {
+      "groupDialogue": "Chat",
+      "dialogueFolder": "Chat",
+      "search": "nej",
+      "settings": "SeHlaw'",
+      "remoteSettings": "nov rar SeHlaw'",
+      "displaySettings": "bej SeHlaw'",
+      "groupHeading": "ghun",
+      "sortHeading": "Qu' sort",
+      "projectOrderHeading": "project sorting",
+      "projectOrderManualTip": "Touch and hold a project row, then drag to reorder. Qu'mey inside still follow the sort above.",
+      "statusHeading": "Qu' ghu'",
+      "showDeviceTasks": "tu' Qu'mey",
+      "openDevice": "poSmoH",
+      "renameDevice": "Rename",
+      "groupProject": "project",
+      "sortBy": {
+        "priority": "Priority",
+        "recency": "Recent Activity",
+        "created": "Creation poH"
+      },
+      "sortByPriorityTip": "Waiting chu' you first, then unread, then SengtaH, then by poH",
+      "projectOrder": {
+        "activity": "Follow Qu'mey",
+        "custom": "Manual"
+      },
+      "status": {
+        "active": "QaptaH",
+        "archived": "Archived",
+        "all": "naQ"
+      },
+      "filterHeading": "Filters",
+      "filterSummaryActive": "{{count}} QaptaH",
+      "filterReset": "chegh filters",
+      "filterAll": "naQ",
+      "filterProjectsHeading": "projectmey",
+      "filterAllProjects": "naQ projectmey",
+      "filterSelectedProjects": "{{count}} selected",
+      "filterVendorHeading": "Harness",
+      "filterVendor": {
+        "all": "naQ",
+        "cc": "Claude code",
+        "codex": "Codex",
+        "pi": "Pi"
+      },
+      "filterLastActivityHeading": "Last activity",
+      "filterLastActivity": {
+        "1d": "1d",
+        "3d": "3d",
+        "7d": "7d",
+        "30d": "30d",
+        "all": "naQ"
+      },
+      "showCollapsedTeammateAvatars": "tu' avatars when collapsed",
+      "displayHeading": "bej",
+      "view": {
+        "text": "Hol",
+        "list": "List"
+      },
+      "taskInfoHeading": "Qu' info",
+      "taskInfo": {
+        "time": "poH",
+        "pr": "PR ghu'",
+        "tokens": "tokenmey",
+        "cost": "Huch"
+      },
+      "summaryNone": "chIch",
+      "summarySeparator": ", ",
+      "filterEmptyCopy": "Adjust or chegh Filters in bej SeHlaw'.",
+      "filterTeammatesHeading": "Teammates",
+      "filterAnySource": "naQ",
+      "filterHideAllTeammates": "So' naQ",
+      "filterSelectedTeammates": "{{count}} selected"
+    },
+    "search": {
+      "placeholder": "nej titles or content…",
+      "filterA11y": "nej filters",
+      "filterAria": "nej filters and sort (Sort: {{sort}}, ghu': {{status}}, Agent: {{agent}}, Last activity: {{lastActivity}}, projectmey: {{projects}})",
+      "filter": {
+        "label": "nej criteria",
+        "reset": "chegh",
+        "sortHeading": "Sort by",
+        "statusHeading": "ghu'",
+        "projectsHeading": "projectmey",
+        "agentHeading": "Agent",
+        "lastActivityHeading": "Last activity",
+        "allProjects": "naQ projectmey",
+        "selectedProjects": "{{count}} selected",
+        "sort": {
+          "relevance": "Relevance",
+          "activityDesc": "Recently QaptaH",
+          "activityAsc": "Oldest QaptaH"
+        },
+        "status": {
+          "active": "QaptaH",
+          "archived": "Archived",
+          "all": "naQ"
+        },
+        "agent": {
+          "all": "naQ",
+          "cc": "Claude code",
+          "codex": "Codex",
+          "pi": "Pi"
+        },
+        "lastActivity": {
+          "1d": "1d",
+          "3d": "3d",
+          "7d": "7d",
+          "30d": "30d",
+          "all": "naQ"
+        }
+      }
+    },
+    "renameDevice": {
+      "title": "Rename jan",
+      "placeholder": "jan pong",
+      "savingA11y": "qonlu' jan pong",
+      "saveA11y": "qon jan pong"
+    },
+    "renameSession": {
+      "title": "Rename Qu'",
+      "placeholder": "Qu' bop",
+      "savingA11y": "qonlu' Qu' bop",
+      "saveA11y": "qon Qu' bop"
+    },
+    "revoked": {
+      "title": "Access revoked",
+      "body": "\"{{deviceName}}\" revoked this device's nov access. Re-authorize this jan in {{appName}} SeHlaw' chu' that De'wI', then tap \"vangqa' Access.\"",
+      "retry": "vangqa' Access"
+    },
+    "viewAllConversations": "View naQ {{count}} Qu'mey",
+    "viewAllRuns": "View naQ {{count}} runs",
+    "preview": {
+      "needAttention": "{{count}} need attention",
+      "waiting": "{{count}} waiting",
+      "automationRunning": "Automation SengtaH",
+      "totalRuns": "{{count}} runs naQ",
+      "runCount": "{{count}} runs",
+      "nextRunMinutes": "Runs in {{count}}m",
+      "nextRunHours": "Runs in {{count}}h",
+      "nextRunDays": "Runs in {{count}}d",
+      "imminent": "SengtaH soon",
+      "stopped": "mevlu'"
+    }
+  },
+  "detail": {
+    "filter": {
+      "active": "QaptaH",
+      "waiting": "loS",
+      "automation": "Automation",
+      "archived": "Archived",
+      "all": "naQ",
+      "a11y": "Filter {{label}} Qu'mey"
+    },
+    "group": {
+      "project": "project",
+      "date": "jup",
+      "label": "ghun",
+      "a11y": "ghun by {{label}}"
+    },
+    "metric": {
+      "active": "QaptaH",
+      "waiting": "loS",
+      "automation": "Automation",
+      "activeA11y": "Filter QaptaH Qu'mey",
+      "waitingA11y": "Filter loS Qu'mey",
+      "automationA11y": "Filter automation Qu'mey"
+    },
+    "search": {
+      "openA11y": "nej nov Qu'mey",
+      "closeA11y": "SoQmoH nov Qu' nej",
+      "label": "nej",
+      "placeholder": "nej titles or content…",
+      "clearA11y": "Clear nej",
+      "closeInputA11y": "SoQmoH nej",
+      "clear": "Clear",
+      "close": "SoQmoH"
+    },
+    "filters": {
+      "collapseA11y": "ghup Qu' filters",
+      "expandA11y": "chenmoH Qu' filters",
+      "label": "Filter"
+    },
+    "selection": {
+      "count": "{{count}} Qu'mey selected",
+      "canAct": "Actions DuH",
+      "cannotAct": "Qo' actions DuH",
+      "clearA11y": "Clear Qu' selection"
+    },
+    "bulk": {
+      "pinning": "Pinning",
+      "unpinning": "Unpinning",
+      "archiving": "Archiving",
+      "restoring": "Unarchiving",
+      "deleting": "Deleting",
+      "pinA11y": "poS selected Qu'mey",
+      "unpinA11y": "poS Ha' selected Qu'mey",
+      "archiveA11y": "qon selected Qu'mey",
+      "restoreA11y": "Unarchive selected Qu'mey",
+      "deleteA11y": "teq selected Qu'mey",
+      "cancelA11y": "mev bulk action",
+      "partialFailure": "Processed {{done}}, {{failed}} Qagh (restored, you can vangqa').",
+      "noArchivable": "Qo' archivable QaptaH Qu'mey in the selection.",
+      "noPinnable": "Qo' pinnable QaptaH Qu'mey in the selection.",
+      "noRestorable": "Qo' archived Qu'mey in the selection to unarchive.",
+      "noUnpinnable": "Qo' pinned Qu'mey in the selection.",
+      "noDeletable": "Qo' deletable Qu'mey in the selection.",
+      "noneModifiable": "chIch of the selected Qu'mey can be changed."
+    },
+    "automationScope": {
+      "eyebrow": "Automation",
+      "title": "Automation",
+      "emptyCopy": "After the Qu' runs, each run's Qu' shows up here.",
+      "emptyTitle": "This Qu' has Qo' run history yet"
+    },
+    "projectScope": {
+      "eyebrow": "project",
+      "emptyCopy": "qav a chu' Qu' in this project.",
+      "emptyTitle": "This project has Qo' Qu'mey yet"
+    },
+    "subtitle": {
+      "deviceActive": "{{deviceName}} · {{count}} QaptaH Qu'mey",
+      "activeAndProjects": "{{count}} QaptaH Qu'mey · {{projects}} projectmey"
+    },
+    "row": {
+      "a11yAutomationGroup": "Automation ghun {{title}}",
+      "a11ySession": "Qu' {{title}}",
+      "a11yCollapse": "ghup {{title}}",
+      "a11yExpand": "chenmoH {{title}}",
+      "collapse": "ghup",
+      "expand": "chenmoH"
+    },
+    "badge": {
+      "waiting": "loS {{count}}",
+      "automationPrefix": "Automation",
+      "sessionCount": "{{count}} Qu'mey",
+      "aggregate": "Grouped",
+      "running": "SengtaH",
+      "unread": "Unread {{count}}"
+    },
+    "child": {
+      "openA11y": "poSmoH automation Qu' {{title}}"
+    },
+    "viewAllRuns": "View naQ {{count}} runs"
+  },
+  "companions": {
+    "section": {
+      "showAll": "tu' naQ",
+      "showAllA11y": "tu' naQ {{count}}",
+      "showLess": "puS bej"
+    },
+    "noCreateHosts": "Qo' compatible De'wI' is DuH. poSmoH Cindy chu' a De'wI' and Hotlh in with the same account to chenmoH a teammate.",
+    "messageSent": "QIn sent to background Qu'",
+    "sentTo": "Sent a QIn to {{name}}",
+    "receivedFrom": "QIn from {{name}}",
+    "backgroundTask": "Background Qu'",
+    "openTask": "poSmoH Qu'",
+    "viewPr": "View PR",
+    "stale": "De' may be outdated. Unable to chu'qa'.",
+    "artifactCount": "{{count}} navmey",
+    "prCount": "{{count}} PRs",
+    "artifactCount_one": "{{count}} nav",
+    "artifactCount_other": "{{count}} navmey",
+    "prCount_one": "{{count}} PR",
+    "prCount_other": "{{count}} PRs",
+    "duration": {
+      "seconds": "{{n}}s",
+      "minutes": "{{n}} min",
+      "hoursMinutes": "{{h}} h {{m}} min"
+    },
+    "retrying": "Hasn't qavlu' yet — retrying…",
+    "stopTask": "mev Qu'",
+    "actionFailed": "Unable to load or complete this action",
+    "messages": "QInmey",
+    "readOnly": "Read only",
+    "directEmpty": "There are Qo' QInmey to view yet.",
+    "directLimitReached": "This teammate conversation reached its juv; both teammates returned to their main Qu'mey",
+    "directUnavailable": "This teammate conversation is Qo' longer DuH.",
+    "unread": "chu' jang",
+    "status": {
+      "queued": "Getting qavlu'",
+      "running": "SengtaH",
+      "waiting": "Waiting for input",
+      "completed": "Completed",
+      "failed": "Qagh",
+      "cancelled": "mevlu'",
+      "timed-out": "Timed out",
+      "unknown": "Sovbe' ghu'"
+    },
+    "title": "Teammates",
+    "search": "nej Teammates",
+    "startChat": "qav the conversation",
+    "automation": {
+      "unsavedTitle": "wuH choHmey?",
+      "unsavedBody": "Your choHmey haven’t been qonlu'.",
+      "discard": "wuH choHmey"
+    },
+    "openProfile": "View {{name}}'s qon",
+    "switchCompanion": "Switch teammate",
+    "activity": {
+      "thinking": "QubtaH",
+      "typing": "Typing",
+      "helping": "SengtaH chu' it"
+    },
+    "working": {
+      "thinking": "QubtaH…",
+      "replying": "Replying…",
+      "processing": "SengtaH…",
+      "compacting": "Organizing the conversation…",
+      "reading-memory": "Reading qon…",
+      "saving-memory": "qonlu' qon…",
+      "deleting-memory": "Deleting qon…",
+      "organizing-memory": "Organizing qon…",
+      "reading-file": "Reading navmey…",
+      "saving-file": "Updating navmey…",
+      "searching": "Searching the web…",
+      "reading-web": "Reading web pages…",
+      "searching-files": "Searching navmey…",
+      "testing": "SengtaH tormey…",
+      "checking": "Checking code…",
+      "reviewing-memory": "Checking qon…",
+      "reviewing-files": "Reviewing navmey…",
+      "reviewing-sources": "Checking web sources…",
+      "reviewing-checks": "Reviewing check results…"
+    },
+    "invitation": {
+      "title": "Getting ready to meet",
+      "waiting": "See you soon, {{name}}",
+      "background": "Feel free to step away. Preparation continues in the background.",
+      "profile": "Writing a personal story",
+      "skills": "Preparing a De'wI' for {{name}}",
+      "avatar": "{{name}} is choosing a chu' portrait",
+      "welcome": "Getting a first hello ready",
+      "failed": "Preparation loSlu'. Everything completed so far is qonlu'. You can try again.",
+      "retryFailed": "Couldn’t vangqa' just DaH. Please try again shortly.",
+      "leave": "Step away",
+      "avatarSkipped": "Using the qav portrait for DaH. You can choH it anytime."
+    },
+    "viewResult": "View Result",
+    "noWrittenResult": "Qo' written result.",
+    "errorDetails": "Qagh De'",
+    "createTeammate": "chu' teammate",
+    "createMenu": "chu'",
+    "awaiting": "Needs your OK",
+    "taskResult": "Qu' result",
+    "collapseResult": "So' result",
+    "avatarStatus": {
+      "awaiting": "Needs your confirmation",
+      "error": "Needs attention",
+      "running": "SengtaH",
+      "done": "Completed",
+      "unread": "Unread"
+    },
+    "viewMr": "View MR",
+    "viewPrMr": "View PR",
+    "mrCount": "{{count}} MRs",
+    "prMrCount": "{{count}} PRs",
+    "mrCount_one": "{{count}} MR",
+    "prMrCount_one": "{{count}} PR",
+    "mrCount_other": "{{count}} MRs",
+    "prMrCount_other": "{{count}} PRs"
+  },
+  "companionProfile": {
+    "avatar": "Avatar",
+    "emptyEditor": "Nothing here yet.",
+    "searchOptions": "nej",
+    "changed": "Changed elsewhere. Your unsaved edits are retained.",
+    "discardAndReload": "wuH edits and chu'qa'",
+    "memoryEntries": "qonlu' Memories",
+    "memorySearch": "nej memories",
+    "memoryEmpty": "Qo' memories yet",
+    "memoryNoResults": "Qo' matching memories",
+    "memoryDisabled": "qon is SoQlu'. Your teammate won’t read or qon memories; qonlu' ones can still be viewed and deleted.",
+    "memoryLoadFailed": "Memories couldn’t be loaded",
+    "memoryToday": "DaH",
+    "memoryUpdated": "Updated {{time}}",
+    "memoryEdit": "choH",
+    "memoryDone": "rIn",
+    "memoryTooLong": "Too long. Shorten it to qon.",
+    "memoryRequired": "A bop and content are poQqu'.",
+    "memoryChanged": "{{name}} just updated this qon",
+    "memoryUseLatest": "Use latest",
+    "memoryKeepMine": "qon my choHmey",
+    "memorySaved": "qonlu'",
+    "memorySaveFailed": "Not qonlu'. Your edits are retained.",
+    "memoryMissing": "This qon Qo' longer exists.",
+    "memoryDeleteFailed": "The qon couldn’t be deleted",
+    "create": "chu' Teammate",
+    "createFailed": "Creation is not confirmed yet. vangqa' to check.",
+    "title": "Teammate",
+    "profile": "qon & Personality",
+    "memory": "qon",
+    "skills": "Skillmey & rarmey",
+    "artifacts": "Artifacts",
+    "direct": "Teammate QInmey",
+    "settings": "modelmey & chawmey",
+    "search": "nej QInmey",
+    "models": "model Chain",
+    "permissions": "Operation chawmey",
+    "personalSkills": "Skillmey",
+    "connections": "Referenced Skillmey & rarmey",
+    "save": "qon choHmey",
+    "offline": "Reconnect to {{deviceName}} to taH. Your edits are retained.",
+    "hostUpgrade": "choHqa' Cindy chu' {{deviceName}} and vangqa', or choH this teammate’s SeHlaw' there.",
+    "readFailed": "Couldn’t vang the latest state. chu'qa' before retrying; the action may already have completed. Your edits are retained.",
+    "deleteFailed": "The teammate was not deleted.",
+    "artifactsEmpty": "Qo' artifacts yet. Ask your teammate to chenmoH something.",
+    "openSourceTask": "poSmoH Source Qu'",
+    "modelFollowsDefault": "Follow the qav model chain",
+    "taskModel": "Qu' model",
+    "taskInheritsPrimary": "Inherit Primary model",
+    "modelOverride": "Using this teammate’s own model chain",
+    "modelsUnavailable": "Qo' usable modelmey. Check this teammate’s model SeHlaw' chu' your De'wI', then chu'qa'.",
+    "artifactsRecovery": "poSmoH navmey from the QIn cards, or browse them chu' {{deviceName}}.",
+    "directRecovery": "Couldn’t load teammate QInmey. choHqa' Cindy chu' {{deviceName}} and vangqa'.",
+    "directEmpty": "Qo' teammate QInmey yet.",
+    "skillsEmpty": "Qo' personal Skillmey yet. Ask your teammate to remember a way of SengtaH.",
+    "connectionsEmpty": "Qo' Skillmey or rarmey selected.",
+    "largeProfileRecovery": "This qon is too long to choH here. choH the full qon chu' {{deviceName}}.",
+    "addModel": "chel fallback model",
+    "removeModel": "teq model",
+    "moveModelUp": "Move model up",
+    "backupModels": "Backup modelmey ({{count}})",
+    "settingsTitle": "Teammate SeHlaw'",
+    "name": "pong",
+    "portraitNumber": "Portrait {{number}}",
+    "uploadAvatar": "ngeH Avatar",
+    "avatarFailed": "Could not poSmoH this bej'. Try another.",
+    "nameTaken": "That pong is already in use. Choose another.",
+    "home": "Main De'wI'",
+    "chat": "Chat",
+    "showReplyTarget": "tu' which QIn a jang answers",
+    "showReplyTargetHint": "Above a teammate’s jang, tu' which of your QInmey it answers. Applies to naQ teammates. Older replies don’t tu' this.",
+    "channels": "Messaging platforms",
+    "channelsEmpty": "Qo' messaging platforms rarta'",
+    "channelTasksEmpty": "Qo' Qu'mey yet",
+    "channelPlatforms": {
+      "telegram": "Telegram",
+      "feishu": "Feishu",
+      "lark": "Lark",
+      "wecom": "WeCom",
+      "dingtalk": "DingTalk",
+      "discord": "Discord"
+    }
+  },
+  "companionImport": {
+    "title": "ngeb a teammate",
+    "entry": "ngeb an Agent",
+    "description": "Choose what to bring from Hermes or OpenClaw.",
+    "empty": "Qo' installed Agent was found chu' this De'wI'.",
+    "personality": "Personality and habits",
+    "memory": "Memories",
+    "skills": "Skillmey",
+    "connections": "Environment and rarmey",
+    "automations": "Automations",
+    "paused": "qon loSlu'",
+    "itemAttention": "Needs attention",
+    "takeover": "Check and take over automations after ngeb",
+    "takeoverNote": "Source Qu'mey loS only after their data rarmey are verified. Unselected dependencies qon the source Qu' SengtaH.",
+    "submit": "ngeb",
+    "back": "chegh",
+    "open": "poSmoH teammate",
+    "running": "Importing and checking rarmey…",
+    "complete": "ngeb qonlu'",
+    "attention": "Some items need attention. See the De' below.",
+    "error": "ngeb could not finish. vangqa' with the same selection.",
+    "keptAtSource": "Takeover is not complete",
+    "retry": "vangqa' checks",
+    "missingSelection": "A poQqu' item was not selected.",
+    "authRefresh": "The original authorization needs a compatible chu'qa' rar.",
+    "toolMapping": "The original tool restrictions need to be mapped before takeover.",
+    "modelMapping": "The original model configuration needs to be mapped.",
+    "contextMapping": "The original SengtaH Dav needs to be mapped.",
+    "deliveryFailed": "The original delivery destination has not been verified.",
+    "sourceChanged": "The source Qu' changed. chu'qa' its preview.",
+    "credentialFailed": "Credentials could not be qonlu' securely.",
+    "scriptMissing": "A poQqu' script is missing.",
+    "sourceCommand": "The original Agent command is DuHbe'.",
+    "readFailed": "The poQqu' data query has not been verified.",
+    "search": "nej",
+    "selectAll": "wuq naQ",
+    "previous": "qav",
+    "next": "ghIq",
+    "chatSetup": "Your imported information is qonlu'. We can qav talking. Some items still need a login or a check; we can finish those whenever you are ready. Source automations stay unchanged until takeover.",
+    "chatReady": "Your information has been imported. We can qav talking.",
+    "partial": "Some content was not fully imported",
+    "details": "View ngeb De'",
+    "partlySaved": "Partially qonlu'",
+    "savedNeedsSetup": "qonlu'; setup or activation remains",
+    "notSaved": "Not qonlu'",
+    "databaseDriver": "The database driver could not load. choHqa' or repair Cindy, then vangqa'.",
+    "databaseUnavailable": "The source database could not be read. Original data is unchanged; vangqa' after repair.",
+    "fileTooLarge": "A nav or this ngeb exceeds the read juv. Content was not truncated.",
+    "memoryMetadata": "The qon qon or bop exceeds storage requirements.",
+    "memoryWrite": "qon writing or integrity verification Qagh. You can vangqa'.",
+    "memoryChanged": "The qonlu' qon was changed and has not been overwritten.",
+    "attachmentUnsupported": "This attachment format is not supported yet. The original remains at the source.",
+    "diskFull": "Disk space is insufficient. Free space, then vangqa'.",
+    "permissionDenied": "chaw to read or qon this item is missing. Fix chawmey, then vangqa'.",
+    "setupDeferred": "taH sign-in and verification in the teammate chat.",
+    "automationInvalid": "The automation definition could not be converted; it was not created.",
+    "itemFailed": "This item is unfinished. vangqa' or view ngeb De'.",
+    "chatPartial": "Your teammate is created, but some content was not fully qonlu'. The items below still need attention; other content and chat remain DuH.",
+    "imBotOwnerMissing": "Qo' owner lo'wI' ID was found. Finish connecting this bot chu' the teammate’s Messaging platforms page.",
+    "imBotGatewayRunning": "The original gateway is still using this bot. mev it, then connect the bot chu' Messaging platforms.",
+    "imBotInUse": "This bot is already rarta' chu' this De'wI', in SeHlaw' → IM bots or chu' another teammate.",
+    "imBotConnectFailed": "Couldn’t connect this bot. Try again chu' the teammate’s Messaging platforms page.",
+    "imBotSourceStopUnconfirmed": "The original bot hasn’t mevlu' yet, so it wasn’t handed to the teammate. You can connect it later chu' the teammate’s Messaging platforms page.",
+    "imBotSourceChanged": "The original bot changed after the preview, so it wasn’t mevlu'. chu'qa' the preview and ngeb again.",
+    "bots": "Messaging bots",
+    "botsNote": "After ngeb, these bots mev in {{source}} and the teammate takes them over.",
+    "sourceDisabled": "Already SoQlu'",
+    "botOwner": "Owner ID {{id}}"
+  },
+  "glance": {
+    "open": "{{name}} at a glance",
+    "dueUnseen": "A todo is due",
+    "computers": "De'wI'mey",
+    "runningHere": "SengtaH here",
+    "online": "Web",
+    "offline": "Web Hur",
+    "current": "Current",
+    "offlineCount_one": "{{count}} Web Hur",
+    "offlineCount_other": "{{count}} Web Hur",
+    "todos": "Todos",
+    "showMore": "latlh bej",
+    "showLess": "puS bej",
+    "doneCount_one": "{{count}} rIn",
+    "doneCount_other": "{{count}} rIn",
+    "delete": "teq",
+    "deleted": "Deleted. It won't be added again.",
+    "undo": "ghangHa'",
+    "undoFailed": "Couldn't ghangHa'. Try again.",
+    "deleteFailed": "Couldn't teq. Try again.",
+    "check": "Check for me",
+    "checkMeta": "Look for chu' todos in rarta' mail and chats",
+    "checkPrompt": "Check my rarta' sources, like mail and QInmey, for anything chu' I need to handle, and chel it to my todos.",
+    "dailyCheck": "Check every jup",
+    "dailyCheckMeta": "Weekdays at 9:00, quiet when nothing is chu'",
+    "recentTasks": "Recent Qu'mey",
+    "unread": "Unread result",
+    "stopDailyCheck": "mev daily checking",
+    "openFailed": "Couldn’t poSmoH this He",
+    "dailyCheckFailed": "Couldn't qon. Try again.",
+    "loadFailed": "Couldn't load todos",
+    "outputs": "Outputs",
+    "outputMeta": "{{time}} · {{task}}",
+    "source": {
+      "conversation": "You asked",
+      "mail": "From email",
+      "feishu": "From Feishu",
+      "github": "From GitHub",
+      "community": "From the community",
+      "task": "From a Qu'"
+    }
+  },
+  "cloudCompanion": {
+    "homeOffline": "Main De'wI' “{{device}}” is Web Hur",
+    "switchAction": "taH chu' another De'wI'",
+    "composerHint": "Main De'wI' is Web Hur. Switch to another De'wI' to taH.",
+    "readOnlyNote": "This conversation is qonlu' in the cloud and is read only.",
+    "empty": "Qo' conversation in the cloud yet.",
+    "loadFailed": "Can’t load the cloud conversation right DaH.",
+    "loadOlder": "Load earlier QInmey",
+    "noTargets": "Qo' other De'wI' is DuH. poSmoH Cindy chu' another De'wI', Hotlh in to the same account, and turn chu' “chaw same-account janmey to control this De'wI'”, then try again.",
+    "devicesFailed": "Can’t load your De'wI'mey right DaH. Try again later.",
+    "preparing": "Getting ready chu' “{{device}}”…",
+    "preparingHint": "That De'wI' takes over the teammate from its cloud qon and opens it when ready.",
+    "timeout": "“{{device}}” isn’t ready yet. Make sure Cindy is poSmoH and Web chu' that De'wI', then try again.",
+    "conflict": "{{name}} has already moved to “{{device}}”.",
+    "switchFailed": "Can’t choH the main De'wI' right DaH. Try again later.",
+    "unknownDevice": "latlh jan",
+    "runsOn": "Runs chu' “{{device}}”",
+    "homeTitle": "Main De'wI'",
+    "moveTo": "Move to “{{device}}”",
+    "moveTitle": "Run {{name}} chu' “{{device}}”?",
+    "moveDescription": "From DaH chu' {{name}} runs chu' “{{device}}”, and the chat history comes along. SengtaH Hemey, rarmey and local navmey stay chu' the De'wI' they are chu'.",
+    "moveAction": "Move to “{{device}}”",
+    "moving": "Moving {{name}} to “{{device}}”…",
+    "busyTitle": "{{name}} is still replying",
+    "busyDescription": "Move it to “{{device}}” once this jang finishes, or mev the jang and move it DaH.",
+    "busyWait": "Move When rIn",
+    "busyStop": "mev and Move",
+    "transferBusy": "{{name}} is still SengtaH chu' a jang. Move it after the jang finishes",
+    "switchConflict": "{{name}}’s main De'wI' has already changed, so it wasn’t moved",
+    "homeOutdated": "The main De'wI' “{{device}}” runs an older Cindy. choHqa' it, or choH the main De'wI' there",
+    "homeUnreachable": "Can’t reach “{{device}}”. It must be Web with “chaw same-account janmey to control this machine” turned chu'",
+    "sendUnreachable": "Your QIn hasn’t reached the main De'wI' “{{device}}”; it may be Web Hur. You can taH chu' another De'wI'."
+  },
+  "sessionImport": {
+    "entry": "ngeb from Other Tools",
+    "title": "ngeb from Other Tools",
+    "found_one": "Found {{count}} Qu' chu' {{device}}",
+    "found_other": "Found {{count}} Qu'mey chu' {{device}}",
+    "search": "nej Qu'mey or michmey",
+    "scanning": "Looking for Qu'mey chu' the De'wI'…",
+    "loadFailed": "Couldn’t read Qu'mey chu' the De'wI'. Try again.",
+    "retry": "vangqa'",
+    "rescan": "Scan Again",
+    "emptyTitle": "Qo' Qu'mey to ngeb chu' the De'wI'",
+    "emptyDescription": "Cindy can ngeb Qu'mey from these tools. After you use one of them, come chegh and scan again.",
+    "noMatch": "Qo' matching Qu'mey",
+    "dialogue": "Chat",
+    "folderMissing": "mIch missing",
+    "groupTasks_one": "{{count}} Qu'",
+    "groupTasks_other": "{{count}} Qu'mey",
+    "archived": "Archived",
+    "unsupported": "Format not supported yet",
+    "selected_one": "{{count}} selected · {{size}}",
+    "selected_other": "{{count}} selected · {{size}}",
+    "confirmBody_one": "This imports {{count}} Qu' and uses up to {{size}} of disk space. It runs in the background chu' the De'wI'; you can mev at any poH. Tap again to qav.",
+    "confirmBody_other": "This imports {{count}} Qu'mey and uses up to {{size}} of disk space. It runs in the background chu' the De'wI'; you can mev at any poH. Tap again to qav.",
+    "importCount_one": "ngeb {{count}} Qu'",
+    "importCount_other": "ngeb {{count}} Qu'mey",
+    "import": "ngeb",
+    "progressTitle_one": "Importing {{count}} Qu'",
+    "progressTitle_other": "Importing {{count}} Qu'mey",
+    "background": "You can SoQmoH this panel. Importing continues chu' the De'wI'.",
+    "stop": "mev",
+    "done": "rIn",
+    "queued": "Waiting",
+    "copy": "Copying the original history",
+    "messages_one": "qonlu' {{count}} QIn",
+    "messages_other": "qonlu' {{count}} QInmey",
+    "verify": "Checking it can taH",
+    "resultTitle_one": "Imported {{count}} Qu'",
+    "resultTitle_other": "Imported {{count}} Qu'mey",
+    "sumReady_one": "{{count}} ready to taH",
+    "sumReady_other": "{{count}} ready to taH",
+    "sumAction_one": "{{count}} needs your attention",
+    "sumAction_other": "{{count}} need your attention",
+    "sumFailed_one": "{{count}} Qagh",
+    "sumFailed_other": "{{count}} Qagh",
+    "readyNative": "Ready to taH in {{harness}}",
+    "readyHandoff": "Ready — {{harness}} picks it up; switch any poH",
+    "missingDir": "The original mIch Qo' longer exists. Choose a mIch chu' the De'wI' to taH.",
+    "cancelled": "mevlu' before importing",
+    "failure": {
+      "read-failed": "Couldn’t ngeb: the original history can’t be read",
+      "unsupported-version": "Couldn’t ngeb: this juv’s history format isn’t supported yet",
+      "empty": "Couldn’t ngeb: the original history has Qo' QInmey",
+      "not-found": "Couldn’t ngeb: the original history is gone",
+      "disk-full": "Couldn’t ngeb: not enough disk space",
+      "native-unloadable": "Couldn’t ngeb: the original history can’t be loaded"
+    }
+  }
+}

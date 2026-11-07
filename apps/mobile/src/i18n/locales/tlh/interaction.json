@@ -1,0 +1,443 @@
+{
+  "permission": {
+    "mode": {
+      "default": "qav chawmey",
+      "acceptEdits": "chaw edits",
+      "plan": "plan mode",
+      "auto": "Auto approve",
+      "bypass": "Full access"
+    },
+    "pickerSelect": "wuq chaw mode {{mode}}",
+    "armedRiskWarning": "The decision is sent to your De'wI' only after you vang.",
+    "armedHighRiskTitle": "vang high-risk action",
+    "kind": "chaw",
+    "deny": "Qo'",
+    "denyAccessibility": "Qo' chaw request",
+    "alwaysAllow": "reH chaw this Qu'",
+    "alwaysAllowAccessibility": "reH chaw chaw requests this Qu'",
+    "alwaysAllowConfirm": "vang chaw this Qu'",
+    "allowOnce": "chaw once",
+    "allowOnceAccessibility": "chaw chaw request once",
+    "allowOnceConfirm": "vang chaw once",
+    "highRisk": "High risk",
+    "autoReviewUnavailable": "Automatic bej could not finish. vang whether to chaw this action.",
+    "autoReviewReason": "Auto bej needs your decision: {{reason}}",
+    "fullAccessConfirm": {
+      "title": "Enable Full access?",
+      "description": "Full access disables the juH mIch sandbox and skips routine approvals. {{appName}} can modify navmey outside the juH mIch and run Web commands without asking; built-in high-risk operations will still require confirmation.",
+      "confirm": "Enable Full access",
+      "cancel": "qon current chawmey"
+    }
+  },
+  "planMode": {
+    "label": "plan mode",
+    "exit": "Exit plan mode"
+  },
+  "panel": {
+    "readOnlyKind": "loS",
+    "readOnlyTitle": "Waiting for confirmation chu' your De'wI'",
+    "pendingRequests": "loS requests",
+    "queueSwitchTo": "Switch to {{position}} loS request: {{label}}",
+    "queueSwitchGeneric": "Switch loS request",
+    "queuePositionCurrent": "current",
+    "queuePositionNext": "ghIq",
+    "queuePositionNth": "Qo'. {{index}}",
+    "composerBlockedByPending": "Handle the loS request from your De'wI' before typing again.",
+    "missingRequestId": "This nov interaction has Qo' requestId, so the decision can't be sent chegh.",
+    "desktopConfirmUnsupported": "This confirmation is handled only chu' the nov De'wI'. Go chegh to the desktop app to taH.",
+    "unsupportedType": "This nov interaction type isn't supported chu' mobile yet.",
+    "unsupportedKind": "Unsupported",
+    "desktopOnlyKind": "chu' De'wI'",
+    "cancelRequest": "mev This Request",
+    "cancelRequestAccessibility": "mev this nov request",
+    "awaitingAnswer": "Awaiting jang",
+    "continueAccessibility": "taH the nov mI'",
+    "continue": "taH",
+    "askOptionCount": "{{count}} options",
+    "askFreeInput": "Free Hol",
+    "askModeMulti": "Multi-select",
+    "askModeSingle": "Single wuq",
+    "askMetaCaption": "{{options}} · {{mode}} · Other answers allowed",
+    "collapse": "ghup",
+    "collapsePendingCard": "ghup the loS request to read your computer's output first",
+    "expandPendingCard": "chenmoH the loS request to jang: {{title}}",
+    "collapsedHint": "Tap to jang",
+    "selectAnswer": "wuq jang {{label}}",
+    "submittingHint": "Sending the decision to your De'wI'. Don't submit again.",
+    "decisionNotAccepted": "Your response was not accepted. Please try again.",
+    "customAnswerInputAccessibility": "Enter a custom jang",
+    "customAnswerPlaceholder": "Enter another jang",
+    "customAnswerButtonText": "Enter another jang…",
+    "answerInput": "Enter an jang",
+    "previous": "chegh",
+    "skipAccessibility": "Skip mI'",
+    "skip": "Skip",
+    "submitAnswerAccessibility": "Submit jang",
+    "next": "ghIq",
+    "answerRequired": "wuq or enter an jang to taH.",
+    "submit": "Submit",
+    "sendAndContinue": "ngeH and taH",
+    "closeAnswer": "SoQmoH",
+    "planReviewTitle": "bej Claude's plan",
+    "planExpand": "chenmoH plan",
+    "planEditHint": "Use choH mode to adjust the plan",
+    "planBrowseHint": "Tap a section to jump to it",
+    "planEditToggle": "choH plan",
+    "planEditExit": "Exit plan editing",
+    "planCollapse": "ghup plan",
+    "planExpandArea": "chenmoH plan browser",
+    "planHalf": "Switch to half-screen plan",
+    "planEditorAccessibility": "plan editor",
+    "planEditorPlaceholder": "choH the plan",
+    "planOutline": "Outline",
+    "planJumpTo": "Jump to plan section {{title}}",
+    "planEmpty": "The plan is chIch.",
+    "planApproveAccessibility": "Approve and run the plan",
+    "planApprove": "Approve Claude's plan and qav coding",
+    "planFeedbackLabel": "plan feedback",
+    "planFeedbackPlaceholder": "Tell Claude what to do",
+    "planFeedbackRequired": "Enter feedback before submitting.",
+    "planFeedbackSubmit": "Submit plan feedback",
+    "planFeedbackAccessibility": "Give feedback to choH the plan"
+  },
+  "kinds": {
+    "permission": {
+      "title": "chaw Needed chu' Your De'wI'",
+      "label": "chaw"
+    },
+    "ask_user_question": {
+      "title": "Agent Needs an jang",
+      "label": "mI'"
+    },
+    "plan_review": {
+      "title": "plan Needs Your bej",
+      "label": "plan"
+    },
+    "issue_confirm": {
+      "title": "Issue Needs Confirmation",
+      "label": "Issue"
+    },
+    "rename_sessions_confirm": {
+      "title": "Qu' Names Need Confirmation",
+      "label": "Rename"
+    },
+    "ghost_grant_confirm": {
+      "title": "nav Access Needs Confirmation",
+      "label": "nav Access"
+    },
+    "plugin_setup": {
+      "title": "Plugin Setup Needed chu' Your De'wI'",
+      "label": "Plugin"
+    },
+    "fallback": {
+      "title": "nov Request Needs Attention",
+      "label": "Request"
+    },
+    "input_handoff": {
+      "title": "Input Handoff Needed",
+      "label": "Input Handoff"
+    }
+  },
+  "rewind": {
+    "readError": "Couldn't read the rewind preview. Sync again and vangqa'.",
+    "noFilesNote": "Qo' project nav choHmey were detected after this QIn. Continuing will teq the later chat.",
+    "conversationOnlyNote": "project navmey cannot be restored because Qo' Git savepoint is DuH. Continuing will teq the chat after this QIn; navmey will not return to their earlier state.",
+    "gitSafetyDisabledNote": "Git safety savepoints are SoQlu', so project navmey cannot be restored. Enable them in SeHlaw' chu' your De'wI'; continuing will teq the chat after this QIn.",
+    "moreFiles": "{{count}} latlh navmey",
+    "stats": "{{count}} navmey · +{{insertions}} / -{{deletions}} lines",
+    "gotIt": "Got it",
+    "cancel": "mev",
+    "cancelAccessibility": "mev rewind",
+    "confirm": "vang rewind",
+    "confirming": "Rewinding",
+    "titleLoading": "Checking rewind impact",
+    "titleDefault": "Rewind to this QIn?",
+    "titleEmpty": "Rewind chat only",
+    "titleError": "Can't rewind",
+    "detailLoading": "Reading the nav rewind preview from your De'wI'.",
+    "detailDefault": "This rolls chegh the navmey below and truncates the chat after this QIn.",
+    "detailEmpty": "Qo' project nav choHmey were detected after this QIn.",
+    "detailConversationOnly": "project navmey will not return to their earlier state.",
+    "detailError": "Your De'wI' declined this rewind."
+  },
+  "collab": {
+    "dispatchSummaryItem": "{{label}}: {{task}}",
+    "batchTitle": "Dispatched to {{count}} Workermey",
+    "batchTitleGeneric": "Dispatched to multiple Workermey",
+    "batchBodyFallback": "chenmoH Workermey",
+    "dispatchTitle": "Dispatched to Worker {{who}}",
+    "dispatchRole": "Role {{meta}}",
+    "dispatchBodyFallback": "chenmoH Worker",
+    "sendTitle": "QIn to Worker",
+    "sendBodyFallback": "ngeH QIn",
+    "fromLead": "QIn from Lead",
+    "fromWorkerNamed": "QIn from Worker “{{role}}”",
+    "fromWorker": "QIn from Worker",
+    "emptyMessageBody": "(chIch QIn)"
+  },
+  "contextSheet": {
+    "backAccessibility": "chegh to the Dav panel",
+    "goalStatus": {
+      "active": "In progress",
+      "paused": "loSlu'",
+      "blocked": "loS",
+      "complete": "Completed",
+      "budgetLimited": "juv reached",
+      "usageLimited": "lo' limited",
+      "capacityLimited": "model service busy"
+    },
+    "goalLabel": "Goal",
+    "goalObjectiveAccessibility": "Goal content",
+    "goalPlaceholder": "What do you want to achieve? The Agent keeps SengtaH toward this goal until it's rIn or hits a juv.",
+    "advancedSettings": "Advanced SeHlaw'",
+    "limitsHint": "When unchanged, follows the nov computer's qav limits; the goal stops automatically when any juv is reached and can be mevlu' manually anytime; \"Unlimited\" means Qo' juv is set.",
+    "maxTurns": "Max turns",
+    "tokenBudget": "token budget",
+    "noProgressLimit": "No-progress juv",
+    "startGoal": "qav goal",
+    "goalMeta": "{{turns}} turns · {{tokens}} tokenmey",
+    "goalCapacityHint": "The upstream has Qo' capacity right DaH — retrying automatically",
+    "pause": "loS",
+    "resume": "hu'qa'",
+    "clearGoal": "mev goal",
+    "unlimited": "Unlimited",
+    "noScreenshots": "Qo' screenshots found.",
+    "mediaRemove": "teq photo attachment {{name}}",
+    "mediaDeselect": "Deselect photo {{name}}",
+    "mediaSelect": "wuq photo {{name}}",
+    "photoPermissionHint": "Photo access is SoQlu'. Turn it chu' to quickly chel recent photos.",
+    "enablePhotoPermission": "Turn chu' photo access",
+    "enable": "Turn chu'",
+    "icloudTimeout": "The photo is still downloading from iCloud and timed out. Check your Web and vangqa'.",
+    "photoNotReadable": "This photo can't be read right DaH (it may not have finished downloading from iCloud). Try again later."
+  },
+  "pluginSetup": {
+    "remoteDesktop": "poSmoH Desktop",
+    "completeOnDesktop": "Use nov desktop to complete setup chu' the De'wI'. Login, authorization and credentials stay chu' that De'wI'; this card updates automatically.",
+    "chooseOne": "Choose one setup method",
+    "progress": "{{satisfied}}/{{total}} completed",
+    "desktopActionHint": "chu' your De'wI': {{action}}",
+    "a11ySeparator": ", ",
+    "phase": {
+      "pending": "loS",
+      "action_running": "In progress…",
+      "waiting_external": "Waiting for authorization…",
+      "verifying": "Verifying…",
+      "satisfied": "Completed",
+      "failed": "Qagh",
+      "cancelled": "Cancelled"
+    },
+    "error": {
+      "ACTION_FAILED": "Couldn't complete this setup action. Try again.",
+      "ACTION_STALE": "This setup changed. Choose the setup action again.",
+      "AUTH_CANCELLED": "Authorization was cancelled. Authorize the account again when ready.",
+      "AUTH_FAILED": "Couldn't authorize the account. Try again.",
+      "AUTH_NETWORK": "Couldn't reach the authorization service. Check your Web and try again.",
+      "AUTH_SERVICE_UNAVAILABLE": "The authorization service is temporarily DuHbe'. Try again later.",
+      "INLINE_INVALID": "This configuration is invalid. Check it and try again.",
+      "INLINE_UNAVAILABLE": "This Cindy juv can't qon this configuration in chat. choHqa' Cindy and try again.",
+      "SAVE_FAILED": "Couldn't qon this configuration. Try again.",
+      "WINDOW_CLOSED": "The Qorwagh that qavlu' setup was closed. Return to the Qu' and try again.",
+      "TARGET_UNAVAILABLE": "This Plugin is SoQlu', uninstalled, or DuHbe'. Check the Plugin and try again.",
+      "ASSESSMENT_FAILED": "Couldn't chu'qa' the setup ghu'. Try again.",
+      "TIMEOUT": "Setup timed out. Try again."
+    },
+    "action": {
+      "oauth_connect": "Authorize",
+      "open_plugin_settings": "poSmoH SeHlaw'",
+      "manage_connection": "Manage rarmey",
+      "open_client_settings": "poSmoH model SeHlaw'"
+    },
+    "inlineFormAction": "Enter {{label}} chu' your De'wI'",
+    "inlineFormActionGeneric": "Enter one setting chu' your De'wI'"
+  },
+  "inputHandoff": {
+    "originWarning": {
+      "insecure": "This page doesn't use a secure rar. What you enter could be read by others.",
+      "ip-address": "This page uses an IP address instead of a domain. Make sure it's the site you expect.",
+      "local-host": "This page comes from a service chu' this De'wI'. Make sure it's the app you expect.",
+      "local-file": "This page is a local nav. Make sure it's what you expect.",
+      "punycode": "This address contains unusual characters and may imitate another site. Check it carefully.",
+      "embedded-frame": "These fields are inside another site embedded in the page. Make sure the source is trusted."
+    },
+    "agentControlled": "The Agent opened this bej. Make sure it's really where you want to Hotlh in before filling it.",
+    "agentPicture": "This code is from a screenshot the Agent took, so Cindy can't see the original bej or tell when you're rIn. Check that it Leads to the site you mean to Hotlh in to, and choose Hand chegh to Agent after scanning.",
+    "error": {
+      "decision": "That didn't go through. Try again.",
+      "stale": "The bej has changed. Use the latest juv.",
+      "submit": "Your input didn't go through. Try again."
+    },
+    "terminal": {
+      "succeeded": "Handed chegh to the Agent.",
+      "cancelled": "Input handoff canceled.",
+      "failed": "Input handoff ended.",
+      "expired": "Input handoff ended after waiting too long."
+    },
+    "failure": {
+      "permission": "Cindy can't read this computer's bej. chaw Cindy under Accessibility in System SeHlaw'.",
+      "target_gone": "The target Qorwagh was closed.",
+      "unreadable": "This bej can't be read. You can finish it chu' the host De'wI', then hand chegh to the Agent.",
+      "action_failed": "That action didn't take effect. Check the bej and try again.",
+      "timeout": "Input handoff ended after waiting too long.",
+      "unsupported": "This De'wI' doesn't support input handoff yet.",
+      "origin_changed": "The page changed before Cindy could fill it, so nothing was entered. Check the current page, then try again.",
+      "picture_unavailable": "Couldn't tu' this step as a picture. chaw Cindy to record the bej in System SeHlaw', and make sure the Qorwagh isn't minimized.",
+      "screen_locked": "This computer's bej is locked (a bej going to sleep locks it too). Wake and unlock it, then ask the Agent to try again.",
+      "nothing_to_fill": "Nothing chu' this bej needs typing, so the Agent carries chu' by itself."
+    },
+    "phase": {
+      "reading": "Reading the bej…",
+      "working": "Filling in…",
+      "finishing": "Looks complete. Handing chegh to the Agent in {{count}}s.",
+      "finishingNow": "Looks complete. Handing chegh to the Agent…"
+    },
+    "action": {
+      "stay": "Not rIn Yet",
+      "done": "Hand chegh to Agent",
+      "cancel": "mev Handoff",
+      "claim": "Handle Here",
+      "picture": "tu' bej",
+      "backToForm": "chegh to form",
+      "liveView": "Live View",
+      "fill": "Fill In",
+      "skip": "Skip",
+      "continue": "taH",
+      "close": "mev",
+      "showPassword": "tu' ngItlh",
+      "hidePassword": "So' ngItlh",
+      "scan": "Scan",
+      "openRemoteDesktop": "remote desktop poSmoH",
+      "useForm": "form yIlo'"
+    },
+    "remoteUnavailable": "This De'wI' can't receive input remotely. Finish this step chu' the host De'wI', then hand chegh to the Agent.",
+    "unnamedField": "Field",
+    "passwordField": "ngItlh",
+    "codeField": "Verification code",
+    "filledHint": "Already has content. mej chIch to qon it.",
+    "record": {
+      "doneOn_one": "Owner finished {{count}} input step chu' {{device}}",
+      "doneOn_other": "Owner finished {{count}} input steps chu' {{device}}",
+      "doneHost_one": "Owner finished {{count}} input step chu' the host De'wI'",
+      "doneHost_other": "Owner finished {{count}} input steps chu' the host De'wI'",
+      "donePhone_one": "Owner finished {{count}} input step chu' a wabwI'",
+      "donePhone_other": "Owner finished {{count}} input steps chu' a wabwI'",
+      "doneElsewhere_one": "Owner finished {{count}} input step chu' another jan",
+      "doneElsewhere_other": "Owner finished {{count}} input steps chu' another jan",
+      "done": "Input handoff finished",
+      "nothingToFill": "Nothing to type; handed chegh to the Agent",
+      "cancelled": "Input handoff cancelled",
+      "expired": "Input handoff timed out",
+      "failed": "Input handoff didn't finish"
+    },
+    "holder": {
+      "elsewhere": "Being handled chu' {{device}}. You can take it over here.",
+      "host": "the host De'wI'",
+      "phone": "a wabwI'",
+      "otherDevice": "another jan"
+    },
+    "agentNote": "QIn from the Agent: {{note}}",
+    "picture": {
+      "hint": "Tap a spot in the picture and Cindy taps the same spot chu' the host De'wI'.",
+      "open": "tu' this step",
+      "openHint": "This step can't be shown as a form. The picture is sent encrypted to this jan only and isn't qonlu'.",
+      "alt": "Picture of the target Qorwagh",
+      "loading": "Getting the picture…",
+      "error": "Couldn't get the picture. Try again.",
+      "field": "Focused field",
+      "type": "Type",
+      "typeEnter": "Type and press Return"
+    },
+    "liveViewHint": "See just this Qorwagh live from here. Clicks and typing stay inside it.",
+    "deviceCode": {
+      "prompt": "Hotlh in with this code",
+      "copy": "nIb code",
+      "copied": "code copied",
+      "copyFailed": "Couldn't nIb the code",
+      "open": "poSmoH chu' This jan",
+      "openFailed": "Couldn't poSmoH the He",
+      "then": "Enter the code chu' that page and finish signing in, then choose Hand chegh to Agent."
+    },
+    "sheetNote": "Only entered here chu' the De'wI'. Not shared with the Agent, and not qonlu'.",
+    "nothingLeft": "Nothing here needs you to type.",
+    "qr": {
+      "open": "poSmoH {{site}} Here",
+      "openApp": "poSmoH {{site}} He Here",
+      "share": "qon or Share bej'",
+      "copyLink": "nIb He",
+      "copyText": "nIb Hol",
+      "copied": "Copied.",
+      "copyFailed": "Couldn't nIb. Try again.",
+      "openFailed": "This jan can't poSmoH the He. qon the bej' and pick it from Photos in the app's scanner.",
+      "shareFailed": "Couldn't poSmoH sharing. Try again.",
+      "hintLink": "Opening it here hands the sign-in to the app that handles the He. Or qon the bej' and pick it from Photos in the app's scanner. Cindy continues once you're Hotlhlu' in.",
+      "hint": "qon the bej' and pick it from Photos in the app's scanner, or scan this code from another jan. Cindy continues once you're Hotlhlu' in.",
+      "alt": "QR code chu' the De'wI'. Tapping it taps the code chu' the De'wI'.",
+      "loading": "Getting the QR code…",
+      "failed": "Couldn't get the QR code. Tap to try again.",
+      "scanned": "Scanned. vang chu' your wabwI'; Cindy continues once you do."
+    },
+    "directSignIn": {
+      "hint": "windowDaq Hotlh. bIghItlhchugh Cindy nIteb taH."
+    }
+  },
+  "presentation": {
+    "action": {
+      "submitting": "Submitting"
+    },
+    "permission": {
+      "highRiskTitle": "High-risk chaw needs confirmation",
+      "highRiskDetail": "bej the command, then vang again to chaw it. Qo' it if you're unsure.",
+      "sessionAllowTitle": "chaw once or reH chaw for this Qu'",
+      "allowTitle": "The De'wI' will taH after you chaw this",
+      "tool": "Tool: {{tool}}",
+      "title": "chaw {{tool}}?",
+      "risk": "This command may choH the system, qon, or an external service. Before allowing it, vang that you trust the current Qu' and command.",
+      "titleCommand": "chaw this command to run?",
+      "titleFileRead": "chaw reading navmey?",
+      "titleFileWrite": "chaw changing navmey?",
+      "titleBrowser": "chaw this browser step?",
+      "titlePlugin": "chaw the {{plugin}} Plugin?"
+    },
+    "ask": {
+      "progress": "mI' {{current}} of {{total}}",
+      "multiSelect": "You can wuq multiple answers or enter another jang.",
+      "singleSelect": "wuq an jang or enter another jang.",
+      "emptyTitle": "Qo' specific mI'",
+      "emptyDetail": "You can submit an chIch jang so the De'wI' can taH.",
+      "waiting": "Agent is waiting for confirmation"
+    },
+    "plan": {
+      "outlineCount": "{{count}} sections",
+      "noOutline": "Qo' outline",
+      "hasFile": "plan nav DuH",
+      "noFile": "Qo' plan nav path",
+      "editedTitle": "plan edited; approval runs the current juv",
+      "approveTitle": "After approval, the De'wI' continues with this plan"
+    },
+    "queue": {
+      "count": "{{count}} requests",
+      "empty": "Qo' loS requests",
+      "hint": {
+        "plan_review": "bej the plan and request choHmey if needed. The De'wI' continues only after approval.",
+        "permission": "Only this decision is sent chegh to the current Qu' chu' the De'wI'.",
+        "ask_user_question": "Answers are qonlu' as a draft; the De'wI' continues after submission.",
+        "issue_confirm": "vang the bop and body before submitting.",
+        "plugin_setup": "Setup must be completed chu' the De'wI'; you can mev this request here.",
+        "fallback": "Mobile handles nov requests in the order sent by the desktop."
+      }
+    }
+  },
+  "companion": {
+    "permissionRequest": "{{name}} needs your go-ahead",
+    "operation": "Operation",
+    "details": "De'",
+    "fields": {
+      "path": "nav",
+      "file_path": "nav",
+      "url": "Address",
+      "command": "Command",
+      "ghost_id": "Plugin",
+      "tool": "Tool"
+    }
+  }
+}

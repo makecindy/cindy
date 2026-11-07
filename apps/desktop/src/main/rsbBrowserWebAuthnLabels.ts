@@ -132,4 +132,13 @@ export const RSB_BROWSER_WEBAUTHN_LABELS: Record<
     unknownRelyingParty: '此网站',
     touchIdPromptReason: '于 $1 验君之身份',
   },
+  tlh: {
+    title: "wIv qan paq",
+    message: "{{relyingPartyId}}vaD qan paq yIwuq",
+    detail: "Cindy — lIj wuq neH ngu'moHwI'vaD ngeH; qan paq pe'ghach ngu'moHwI'Daq qontaH.",
+    cancel: "qan paq Hotlh mev",
+    unknownAccount: "qan paq {{index}}",
+    unknownRelyingParty: "Websitevam",
+    touchIdPromptReason: "$1Daq SoH yIngu'",
+  },
 };

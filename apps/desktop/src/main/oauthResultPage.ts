@@ -41,6 +41,7 @@ export function getRemoteOAuthCallbackCopy(lang: OAuthResultPageLang): { title: 
   },
     'zh-Hant-x-lzh': { title: '授權回呼已至', body: '請歸 Cindy，察遠端裝置之授權結果。' },
     'zh-Hans-x-lzh': { title: '授权回调已至', body: '请归 Cindy，察远程设备之授权结果。' },
+    tlh: { title: "vang jav luhoS'", body: "CindyDaq yIchegh. jan novDaq vang ghu' yISam." },
 }[lang];
 }
 export type OAuthResultPageVariant = 'success' | 'warning' | 'error';
@@ -102,6 +103,7 @@ export const OAUTH_RESULT_HTML_LANG: Record<OAuthResultPageLang, string> = {
   "pt-BR": "pt-BR",
   'zh-Hant-x-lzh': 'zh-Hant-x-lzh',
   'zh-Hans-x-lzh': 'zh-Hans-x-lzh',
+  tlh: "tlh",
 };
 
 /** Selects the first supported language in browser preference order. */
@@ -157,6 +159,8 @@ function returnLabel(lang: OAuthResultPageLang, brandName: string): string {
       return `${brandName} に戻る`;
     case 'ko':
       return `${brandName}(으)로 돌아가기`;
+    case 'tlh':
+      return `chegh ${brandName}Daq`;
   }
 }
 
@@ -287,6 +291,15 @@ export function getProviderOAuthResultCopy(
         invalidStateBody: `인증 검증에 실패했습니다. ${brandName}(으)로 돌아가 연결을 다시 시작하세요.`,
         exchangeFailedBody: `${providerName} 연결 중 오류가 발생했습니다. ${brandName}(으)로 돌아가 다시 시도하세요.`,
       };
+    case 'tlh':
+      return {
+        successTitle: 'pItlh',
+        successBody: `${providerName} ${brandName}Daq rarta\'. appDaq cheghlaH lo\'wI\'.`,
+        errorTitle: 'pItlhbe\'',
+        missingCodeBody: `${providerName} code ngeHHa\'be\'. ${brandName}Daq yIchegh, yIvangqa\'.`,
+        invalidStateBody: `vang vuQ Qagh. ${brandName}Daq yIchegh, rarqa\'.`,
+        exchangeFailedBody: `${providerName} rar Qagh. ${brandName}Daq yIchegh, yIvangqa\'.`,
+      };
     default:
       return {
         successTitle: 'Authorization complete',
@@ -317,6 +330,16 @@ interface GhostOAuthResultCopy {
  * 防止两处各维护一份翻译产生漂移。
  */
 const GHOST_OAUTH_PAGE_STRINGS: Record<OAuthResultPageLang, GhostOAuthResultCopy> = {
+  tlh: {
+    successTitle: "pItlh",
+    successBody: "naDev yISoQmoHlaH. {brand}Daq yIchegh.",
+    errorTitle: 'pItlhbe\'',
+    errors: {
+      'provider-error': "chaw' De'wI' Qagh: {detail}",
+      'invalid-callback': "jav ghu' vuQbe'. {brand}Daq yIchegh, yIvangqa'.",
+      internal: "jav ghaj Qagh. {brand}Daq yIchegh, yIvangqa'.",
+    },
+  },
   zh: {
     successTitle: '授权成功',
     successBody: '你可以关闭此页面，回到 {brand} 继续。',
@@ -369,7 +392,7 @@ const GHOST_OAUTH_PAGE_STRINGS: Record<OAuthResultPageLang, GhostOAuthResultCopy
       'invalid-callback':
         '콜백 매개변수가 불완전하거나 검증에 실패했습니다. {brand}(으)로 돌아가 다시 시도하세요.',
       internal: '콜백 처리 중 오류가 발생했습니다. {brand}(으)로 돌아가 다시 시도하세요.',
-    },
+  },
   },
 
   "es": {
@@ -504,6 +527,11 @@ export function getOAuthNeutralResultCopy(
       return {
         title: '추가 작업 필요',
         body: `${brandName}로 돌아가 현재 워크스페이스 설치를 완료하세요.`,
+      };
+    case 'tlh':
+      return {
+        title: 'vang poQlu\'',
+        body: `${brandName}Daq yIchegh. pa\' mIchDaq chagh rInmoHlu\' poQ.`,
       };
     default:
       return {

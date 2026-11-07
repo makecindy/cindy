@@ -1,7 +1,7 @@
 {
   "$schema": "./glossary.schema.json",
   "version": 1,
-  "locales": ["en", "zh-CN", "zh-TW", "ja", "ko", "fr", "es", "de", "pt-PT", "pt-BR", "zh-Hant-x-lzh", "zh-Hans-x-lzh"],
+  "locales": ["en", "zh-CN", "zh-TW", "ja", "ko", "fr", "es", "de", "pt-PT", "pt-BR", "zh-Hant-x-lzh", "zh-Hans-x-lzh", "tlh"],
   "sourceLocale": "en",
   "punctuationExempt": ["desktop:settings.help.qnaFeedbackBodyTemplate"],
   "terms": [
@@ -465,7 +465,8 @@
         "fr": "actif",
         "de": "Aktiv",
         "pt-PT": "Ativo",
-        "pt-BR": "Ativo", "zh-Hant-x-lzh": "活躍", "zh-Hans-x-lzh": "活跃"
+        "pt-BR": "Ativo", "zh-Hant-x-lzh": "活躍", "zh-Hans-x-lzh": "活跃",
+        "tlh": "QaptaH"
       }, "minorityByDesign": {"zh-Hant-x-lzh": "文言版按语境分译：状态标签用「活躍」，运行中用「方行」，订阅/规则生效用「生效」；三者各有专义，不强求统一。", "zh-Hans-x-lzh": "文言版按语境分译：状态标签用「活躍」，运行中用「方行」，订阅/规则生效用「生效」；三者各有专义，不强求统一。"},
       "checkCase": false,
       "alsoAllowed": {
@@ -802,7 +803,8 @@
         "zh-CN": "Agent",
         "zh-TW": "Agent",
         "ja": "Agent",
-        "ko": "Agent", "es": "Agent", "fr": "Agent", "de": "Agent", "pt-PT": "Agent", "pt-BR": "Agent", "zh-Hant-x-lzh": "Agent", "zh-Hans-x-lzh": "Agent"},
+        "ko": "Agent", "es": "Agent", "fr": "Agent", "de": "Agent", "pt-PT": "Agent", "pt-BR": "Agent", "zh-Hant-x-lzh": "Agent", "zh-Hans-x-lzh": "Agent",
+        "tlh": "Agent"},
       "forbidden": {
         "zh-CN": [
           "智能体",
@@ -835,7 +837,8 @@
         "fr": "auteur",
         "de": "Autor",
         "pt-PT": "Autor",
-        "pt-BR": "Autor", "zh-Hant-x-lzh": "作者", "zh-Hans-x-lzh": "作者"
+        "pt-BR": "Autor", "zh-Hant-x-lzh": "作者", "zh-Hans-x-lzh": "作者",
+        "tlh": "qen"
       },
       "checkCase": false,
       "forbidden": {
@@ -880,7 +883,8 @@
             "when": "句中使用小写首字母；标题仍可使用大写首字母。"
           }
         ]
-      }
+      },
+      "minorityByDesign": {"tlh":"Klingon 没有与英文 author 一对一的词：qen（创作/著作者）用在署名与归属语境；Issue 列表里的 Author 列与筛选器按「创建者」语义另有取词（chenmoHwI'），避免与 qen 的著作语义混淆。全词命中的 23 处因此只有署名类落到 qen，占比低于主流线是语境分译的结果。"}
     },
     {
       "id": "automation",
@@ -895,7 +899,8 @@
         "fr": "automatisation",
         "de": "Automatisierung",
         "pt-PT": "Automatização",
-        "pt-BR": "Automação", "zh-Hant-x-lzh": "自運", "zh-Hans-x-lzh": "自运"
+        "pt-BR": "Automação", "zh-Hant-x-lzh": "自運", "zh-Hans-x-lzh": "自运",
+        "tlh": "qaplI'"
       },
       "alsoAllowed": {
         "zh-CN": [
@@ -941,7 +946,8 @@
       "exempt": [
         "desktop:settings.contacts.import.permissionDenied",
         "desktop:settings.contacts.ipcError.PERMISSION_DENIED"
-      ]
+      ],
+      "minorityByDesign": {"tlh":"Klingon 里 automation 既指「自动化能力」也指「一条自动任务」：前者用 qaplI'（自动行为），后者在任务列表与运行记录里用 Qu'（任务）+ 上下文词表达，避免把一条自动任务说成「自动化」。全词命中的 113 处里大量是单条实例文案，因此 qaplI' 的占比自然低于主流线。"}
     },
     {
       "id": "balance",
@@ -956,7 +962,8 @@
         "fr": "solde",
         "de": "Guthaben",
         "pt-PT": "Saldo",
-        "pt-BR": "Saldo", "zh-Hant-x-lzh": "餘資", "zh-Hans-x-lzh": "余资"
+        "pt-BR": "Saldo", "zh-Hant-x-lzh": "餘資", "zh-Hans-x-lzh": "余资",
+        "tlh": "Huch"
       },
       "checkCase": false,
       "forbidden": {
@@ -996,7 +1003,8 @@
         "fr": "conversation",
         "de": "Chat",
         "pt-PT": "Conversa",
-        "pt-BR": "Conversa", "zh-Hant-x-lzh": "言談", "zh-Hans-x-lzh": "言谈"
+        "pt-BR": "Conversa", "zh-Hant-x-lzh": "言談", "zh-Hans-x-lzh": "言谈",
+        "tlh": "Sutlh"
       },
       "checkCase": false,
       "forbidden": {
@@ -1046,7 +1054,8 @@
         "fr": "collaboration",
         "de": "Zusammenarbeit",
         "pt-PT": "Colaboração",
-        "pt-BR": "Colaboração", "zh-Hant-x-lzh": "協同", "zh-Hans-x-lzh": "协同"
+        "pt-BR": "Colaboração", "zh-Hant-x-lzh": "協同", "zh-Hans-x-lzh": "协同",
+        "tlh": "vang"
       },
       "checkCase": false,
       "forbidden": {
@@ -1101,7 +1110,8 @@
         "fr": "Réduire",
         "de": "Einklappen",
         "pt-PT": "Recolher",
-        "pt-BR": "Recolher", "zh-Hant-x-lzh": "收", "zh-Hans-x-lzh": "收"
+        "pt-BR": "Recolher", "zh-Hant-x-lzh": "收", "zh-Hans-x-lzh": "收",
+        "tlh": "ghup"
       },
       "checkCase": false,
       "forbidden": {
@@ -1152,8 +1162,9 @@
         "fr": "crédits",
         "de": "Credits",
         "pt-PT": "Créditos",
-        "pt-BR": "Créditos", "zh-Hant-x-lzh": "籌", "zh-Hans-x-lzh": "筹"
-      }, "minorityByDesign": {"zh-Hant-x-lzh": "文言版里多数命中是第三方服务自身的 credits（Codex / ChatGPT 等），按 zh-TW 惯例保留原名；Cindy 自家点数用「籌」。", "zh-Hans-x-lzh": "文言版里多数命中是第三方服务自身的 credits（Codex / ChatGPT 等），按 zh-TW 惯例保留原名；Cindy 自家点数用「籌」。"},
+        "pt-BR": "Créditos", "zh-Hant-x-lzh": "籌", "zh-Hans-x-lzh": "筹",
+        "tlh": "bIQ"
+      }, "minorityByDesign": {"zh-Hant-x-lzh": "文言版里多数命中是第三方服务自身的 credits（Codex / ChatGPT 等），按 zh-TW 惯例保留原名；Cindy 自家点数用「籌」。", "zh-Hans-x-lzh": "文言版里多数命中是第三方服务自身的 credits（Codex / ChatGPT 等），按 zh-TW 惯例保留原名；Cindy 自家点数用「籌」。", "tlh": "Klingon 的 bIQ 译自 credit（信用/额度），但这 10 处命中绝大多数是第三方服务（Codex / ChatGPT / xAI）自身的 credits 点数，与 Cindy 自家的 Huch（余额）不是同一概念；按 zh-TW / 文言版的同一处理，第三方 credits 一律保留英文原词。若强行统一成 bIQ，反而会与 Balance 的 Huch 撞车并让用户误以为可用 Cindy 余额结算。"},
       "checkCase": false,
       "alsoAllowed": {
         "zh-CN": [
@@ -1280,7 +1291,8 @@
         "fr": "répertoire",
         "de": "Verzeichnis",
         "pt-PT": "Diretório",
-        "pt-BR": "Diretório", "zh-Hant-x-lzh": "目錄", "zh-Hans-x-lzh": "目录"
+        "pt-BR": "Diretório", "zh-Hant-x-lzh": "目錄", "zh-Hans-x-lzh": "目录",
+        "tlh": "He"
       },
       "checkCase": false,
       "forbidden": {},
@@ -1314,7 +1326,8 @@
         "zh-CN": "关闭",
         "zh-TW": "關閉",
         "ja": "閉じる",
-        "ko": "닫기", "es": "Cerrar", "fr": "Fermer", "de": "Schließen", "pt-PT": "Fechar", "pt-BR": "Fechar", "zh-Hant-x-lzh": "闔", "zh-Hans-x-lzh": "阖"},
+        "ko": "닫기", "es": "Cerrar", "fr": "Fermer", "de": "Schließen", "pt-PT": "Fechar", "pt-BR": "Fechar", "zh-Hant-x-lzh": "闔", "zh-Hans-x-lzh": "阖",
+        "tlh": "SoQmoH"},
       "checkCase": false,
       "forbidden": {
         "zh-CN": [
@@ -1353,7 +1366,8 @@
         "fr": "effort de raisonnement",
         "de": "Denkintensität",
         "pt-PT": "Esforço de raciocínio",
-        "pt-BR": "Esforço de raciocínio", "zh-Hant-x-lzh": "思之深淺", "zh-Hans-x-lzh": "思之深浅"
+        "pt-BR": "Esforço de raciocínio", "zh-Hant-x-lzh": "思之深淺", "zh-Hans-x-lzh": "思之深浅",
+        "tlh": "naQ"
       },
       "forbidden": {
         "zh-CN": [
@@ -1410,7 +1424,8 @@
         "fr": "issue",
         "de": "Issue",
         "pt-PT": "Issue",
-        "pt-BR": "Issue", "zh-Hant-x-lzh": "Issue", "zh-Hans-x-lzh": "Issue"
+        "pt-BR": "Issue", "zh-Hant-x-lzh": "Issue", "zh-Hans-x-lzh": "Issue",
+        "tlh": "Issue"
       },
       "checkCase": false,
       "forbidden": {
@@ -1518,7 +1533,8 @@
         "zh-CN": "隐私政策",
         "zh-TW": "隱私政策",
         "ja": "プライバシーポリシー",
-        "ko": "개인정보 처리방침", "es": "Política de privacidad", "fr": "Politique de confidentialité", "de": "Datenschutzerklärung", "pt-PT": "Política de Privacidade", "pt-BR": "Política de Privacidade", "zh-Hant-x-lzh": "隱私政策", "zh-Hans-x-lzh": "隐私政策"},
+        "ko": "개인정보 처리방침", "es": "Política de privacidad", "fr": "Politique de confidentialité", "de": "Datenschutzerklärung", "pt-PT": "Política de Privacidade", "pt-BR": "Política de Privacidade", "zh-Hant-x-lzh": "隱私政策", "zh-Hans-x-lzh": "隐私政策",
+        "tlh": "SeH chut"},
       "checkCase": false,
       "forbidden": {
         "zh-TW": [
@@ -1573,7 +1589,8 @@
         "fr": "plugin",
         "de": "Plugin",
         "pt-PT": "plugin",
-        "pt-BR": "plugin", "zh-Hant-x-lzh": "法器", "zh-Hans-x-lzh": "法器"
+        "pt-BR": "plugin", "zh-Hant-x-lzh": "法器", "zh-Hans-x-lzh": "法器",
+        "tlh": "Plugin"
       },
       "forbidden": {
         "zh-CN": [
@@ -1624,7 +1641,8 @@
         "fr": "projet",
         "de": "Projekt",
         "pt-PT": "Projeto",
-        "pt-BR": "Projeto", "zh-Hant-x-lzh": "案", "zh-Hans-x-lzh": "案"
+        "pt-BR": "Projeto", "zh-Hant-x-lzh": "案", "zh-Hans-x-lzh": "案",
+        "tlh": "project"
       },
       "forbidden": {
         "zh-CN": [
@@ -1670,7 +1688,8 @@
         "fr": "fournisseur",
         "de": "Anbieter",
         "pt-PT": "Fornecedor",
-        "pt-BR": "Provedor", "zh-Hant-x-lzh": "供方", "zh-Hans-x-lzh": "供方"
+        "pt-BR": "Provedor", "zh-Hant-x-lzh": "供方", "zh-Hans-x-lzh": "供方",
+        "tlh": "provider"
       },
       "alsoAllowed": {
         "zh-CN": [
@@ -1742,7 +1761,8 @@
         "zh-CN": "Proxy",
         "zh-TW": "Proxy",
         "ja": "プロキシ",
-        "ko": "프록시", "es": "proxy", "fr": "proxy", "de": "Proxy", "pt-PT": "proxy", "pt-BR": "proxy", "zh-Hant-x-lzh": "Proxy", "zh-Hans-x-lzh": "Proxy"},
+        "ko": "프록시", "es": "proxy", "fr": "proxy", "de": "Proxy", "pt-PT": "proxy", "pt-BR": "proxy", "zh-Hant-x-lzh": "Proxy", "zh-Hans-x-lzh": "Proxy",
+        "tlh": "Proxy"},
       "forbidden": {
         "zh-CN": [
           {
@@ -1772,7 +1792,8 @@
         "fr": "quota",
         "de": "Kontingent",
         "pt-PT": "Quota",
-        "pt-BR": "Cota", "zh-Hant-x-lzh": "限額", "zh-Hans-x-lzh": "限额"
+        "pt-BR": "Cota", "zh-Hant-x-lzh": "限額", "zh-Hans-x-lzh": "限额",
+        "tlh": "quota"
       },
       "checkCase": false,
       "forbidden": {
@@ -1831,7 +1852,8 @@
         "fr": "en cours d'exécution",
         "de": "Wird ausgeführt",
         "pt-PT": "Em execução",
-        "pt-BR": "Em execução", "zh-Hant-x-lzh": "方行", "zh-Hans-x-lzh": "方行"
+        "pt-BR": "Em execução", "zh-Hant-x-lzh": "方行", "zh-Hans-x-lzh": "方行",
+        "tlh": "SengtaH"
       },
       "checkCase": false,
       "alsoAllowed": {
@@ -1889,7 +1911,8 @@
         ]
       },
       "minorityByDesign": {
-        "zh-TW": "狀態標籤統一用「執行中」；「進行中」保留給 Active / In Progress 等其他英文語境，避免同一詞跨概念混用。"
+        "zh-TW": "狀態標籤統一用「執行中」；「進行中」保留給 Active / In Progress 等其他英文語境，避免同一詞跨概念混用。",
+        "tlh": "Klingon 里状态标签统一用 SengtaH（运行中），而 Active / In Progress 等其他英文语境另有取词，避免同一词跨概念混用；因此英文 Running 的全词命中里只有真正的运行态文案落到 SengtaH，占比低于主流线是语境分译的必然结果。"
       },
       "forbidden": {
         "zh-CN": [
@@ -1924,7 +1947,8 @@
         "fr": "session",
         "de": "Sitzung",
         "pt-PT": "Sessão",
-        "pt-BR": "Sessão", "zh-Hant-x-lzh": "差事", "zh-Hans-x-lzh": "差事"
+        "pt-BR": "Sessão", "zh-Hant-x-lzh": "差事", "zh-Hans-x-lzh": "差事",
+        "tlh": "Qu'"
       },
       "checkCase": false,
       "forbidden": {
@@ -2031,7 +2055,8 @@
         "fr": "session Agent",
         "de": "Agent-Sitzung",
         "pt-PT": "Sessão do Agent",
-        "pt-BR": "Sessão do Agent", "zh-Hant-x-lzh": "Agent 會話", "zh-Hans-x-lzh": "Agent 会话"
+        "pt-BR": "Sessão do Agent", "zh-Hant-x-lzh": "Agent 會話", "zh-Hans-x-lzh": "Agent 会话",
+        "tlh": "Agent Qu'"
       },
       "checkCase": false,
       "forbidden": {
@@ -2154,7 +2179,8 @@
         "fr": "skill",
         "de": "Skill",
         "pt-PT": "Skill",
-        "pt-BR": "Skill", "zh-Hant-x-lzh": "技藝", "zh-Hans-x-lzh": "技艺"
+        "pt-BR": "Skill", "zh-Hant-x-lzh": "技藝", "zh-Hans-x-lzh": "技艺",
+        "tlh": "Skill"
       },
       "alsoAllowed": {
         "zh-CN": [
@@ -2199,7 +2225,8 @@
         "zh-CN": "SkillHub",
         "zh-TW": "SkillHub",
         "ja": "SkillHub",
-        "ko": "SkillHub", "es": "SkillHub", "fr": "SkillHub", "de": "SkillHub", "pt-PT": "SkillHub", "pt-BR": "SkillHub", "zh-Hant-x-lzh": "SkillHub", "zh-Hans-x-lzh": "SkillHub"},
+        "ko": "SkillHub", "es": "SkillHub", "fr": "SkillHub", "de": "SkillHub", "pt-PT": "SkillHub", "pt-BR": "SkillHub", "zh-Hant-x-lzh": "SkillHub", "zh-Hans-x-lzh": "SkillHub",
+        "tlh": "SkillHub"},
       "forbidden": {
         "ja": ["スキルハブ"],
         "ko": ["스킬 허브"]
@@ -2226,7 +2253,8 @@
         "zh-CN": "Subagent",
         "zh-TW": "Subagent",
         "ja": "サブエージェント",
-        "ko": "하위 에이전트", "es": "Subagent", "fr": "sous-Agent", "de": "Subagent", "pt-PT": "Subagent", "pt-BR": "Subagent", "zh-Hant-x-lzh": "Subagent", "zh-Hans-x-lzh": "Subagent"},
+        "ko": "하위 에이전트", "es": "Subagent", "fr": "sous-Agent", "de": "Subagent", "pt-PT": "Subagent", "pt-BR": "Subagent", "zh-Hant-x-lzh": "Subagent", "zh-Hans-x-lzh": "Subagent",
+        "tlh": "Subagent"},
       "forbidden": {
         "zh-CN": [
           {
@@ -2256,7 +2284,8 @@
         "fr": "fil",
         "de": "Thread",
         "pt-PT": "Tópico",
-        "pt-BR": "Tópico", "zh-Hant-x-lzh": "話題", "zh-Hans-x-lzh": "话题"
+        "pt-BR": "Tópico", "zh-Hant-x-lzh": "話題", "zh-Hans-x-lzh": "话题",
+        "tlh": "thread"
       },
       "checkCase": false,
       "alsoAllowed": {
@@ -2310,7 +2339,8 @@
       "note": "按语境分四类：①指产品内那个条目 → 跟随 session 叫「任务」（2026-07-31 随 session 改名一并更新）；②Codex 外部概念 → 保留 thread；③GitHub PR review thread →「review 评论」；④比喻用法 \"persistent work thread\" → 改写为「持续推进的工作」。「线程」一律禁用。",
       "minorityByDesign": {
         "zh-CN": "英文 thread 还用于伙伴群聊里挂在消息下的子讨论，那是另一个概念，中文叫「话题」（见 group-thread，proposed），不是本条的「任务」。群聊文案增多后，「任务」在全部 thread 文案里的占比自然低于主流线；本条裁决不变。",
-        "zh-TW": "英文 thread 還用於夥伴群聊裡掛在訊息下的子討論，那是另一個概念，中文叫「話題」（見 group-thread，proposed），不是本條的「任務」。群聊文案增多後，「任務」在全部 thread 文案裡的佔比自然低於主流線；本條裁決不變。"
+        "zh-TW": "英文 thread 還用於夥伴群聊裡掛在訊息下的子討論，那是另一個概念，中文叫「話題」（見 group-thread，proposed），不是本條的「任務」。群聊文案增多後，「任務」在全部 thread 文案裡的佔比自然低於主流線；本條裁決不變。",
+        "tlh": "英文 thread 还用于伙伴群聊里挂在消息下的子讨论（群聊话题），那是另一个概念，与本条「任务（Qu'）」不是一回事；Klingon 沿用 thread 保留英文。群聊文案增多后，「任务」在全部 thread 文案里的占比自然低于主流线；本条裁决不变。"
       }
     },
     {
@@ -2326,7 +2356,8 @@
         "fr": "consommation",
         "de": "Nutzung",
         "pt-PT": "Utilização",
-        "pt-BR": "Uso", "zh-Hant-x-lzh": "耗用", "zh-Hans-x-lzh": "耗用"
+        "pt-BR": "Uso", "zh-Hant-x-lzh": "耗用", "zh-Hans-x-lzh": "耗用",
+        "tlh": "lo'"
       },
       "forbidden": {
         "zh-CN": [
@@ -2437,7 +2468,8 @@
         "zh-CN": "Worker",
         "zh-TW": "Worker",
         "ja": "Worker",
-        "ko": "Worker", "es": "Worker", "fr": "Worker", "de": "Worker", "pt-PT": "Worker", "pt-BR": "Worker", "zh-Hant-x-lzh": "Worker", "zh-Hans-x-lzh": "Worker"},
+        "ko": "Worker", "es": "Worker", "fr": "Worker", "de": "Worker", "pt-PT": "Worker", "pt-BR": "Worker", "zh-Hant-x-lzh": "Worker", "zh-Hans-x-lzh": "Worker",
+        "tlh": "Worker"},
       "forbidden": {},
       "note": "Orca 协同角色名，五语统一保留英文。这里只钉大小写形态：首字母大写 Worker。小写 worker 由 guard 的大小写规则单独覆盖（desktop 26:13 混用、mobile 一律小写）。"
     },
@@ -2467,7 +2499,8 @@
         "fr": "répertoire de travail",
         "de": "Arbeitsverzeichnis",
         "pt-PT": "Diretório de trabalho",
-        "pt-BR": "Diretório de trabalho", "zh-Hant-x-lzh": "工作目錄", "zh-Hans-x-lzh": "工作目录"
+        "pt-BR": "Diretório de trabalho", "zh-Hant-x-lzh": "工作目錄", "zh-Hans-x-lzh": "工作目录",
+        "tlh": "juH mIch"
       },
       "checkCase": false,
       "forbidden": {
@@ -2515,7 +2548,8 @@
         "fr": "worktree",
         "de": "Worktree",
         "pt-PT": "Worktree",
-        "pt-BR": "Worktree", "zh-Hant-x-lzh": "worktree", "zh-Hans-x-lzh": "worktree"
+        "pt-BR": "Worktree", "zh-Hant-x-lzh": "worktree", "zh-Hans-x-lzh": "worktree",
+        "tlh": "worktree"
       },
       "checkCase": false,
       "forbidden": {
@@ -2673,7 +2707,8 @@
         "fr": "tâche",
         "de": "Aufgabe",
         "pt-PT": "Tarefa",
-        "pt-BR": "Tarefa", "zh-Hant-x-lzh": "差事", "zh-Hans-x-lzh": "差事"
+        "pt-BR": "Tarefa", "zh-Hant-x-lzh": "差事", "zh-Hans-x-lzh": "差事",
+        "tlh": "Qu'"
       },
       "checkCase": false,
       "note": "指 Agent 正在执行的一件活，与 Session（也叫「任务」）同名。**同一句里同时出现两者时必须消解歧义**：task 一侧优先动词化（\"当前任务正在运行\" / \"执行完成\"），确需名词时用「执行」或「作业」——\"当前任务正在执行任务\" 这类写法一律不可接受。不同句、语境清晰时沿用「任务」（现状 104 处）。定时任务（Schedule）与后台作业各有限定词，不歧义。判定规则见 docs/product-rules/task-and-conversation-naming.md §3。",
@@ -2711,7 +2746,8 @@
         "fr": "message",
         "de": "Nachricht",
         "pt-PT": "Mensagem",
-        "pt-BR": "Mensagem", "zh-Hant-x-lzh": "訊", "zh-Hans-x-lzh": "讯"
+        "pt-BR": "Mensagem", "zh-Hant-x-lzh": "訊", "zh-Hans-x-lzh": "讯",
+        "tlh": "QIn"
       },
       "checkCase": false,
       "forbidden": {
@@ -2763,7 +2799,8 @@
         "fr": "tour",
         "de": "Runde",
         "pt-PT": "Turno",
-        "pt-BR": "Turno", "zh-Hant-x-lzh": "輪", "zh-Hans-x-lzh": "轮"
+        "pt-BR": "Turno", "zh-Hant-x-lzh": "輪", "zh-Hans-x-lzh": "轮",
+        "tlh": "loS"
       },
       "checkCase": false,
       "note": "一次提问到一次回答结束。**内部概念，不作为界面术语**：面向用户一律说「消息」，只在确实要强调一次完整往返时说「一轮」（如「上一轮」）。不要引入「轮次」作为界面用词。",
@@ -2797,7 +2834,8 @@
         "ko": "英文 Turn 的全词统计还包含大量 turn on/off（启用/关闭），录屏音频错误提示中的 turn it off / turn off audio 也属此义，不应译成表示完整问答往返的 턴。韩语按实际语境表达开关动作；不为提高占比改写开关文案。",
         "de": "英文 Turn 的全词统计还包含大量 turn on/off（启用/关闭），这些不是完整问答往返，不应译成此处术语。仅完整往返使用 Runde，普通界面沿用消息；不为提高占比改写开关文案。",
         "pt-PT": "英文 Turn 的全词统计还包含大量 turn on/off（启用/关闭），这些不是完整问答往返，不应译成此处术语。仅完整往返使用 turno，普通界面沿用消息；不为提高占比改写开关文案。",
-        "pt-BR": "英文 Turn 的全词统计还包含大量 turn on/off（启用/关闭），这些不是完整问答往返，不应译成此处术语。仅完整往返使用 turno，普通界面沿用消息；不为提高占比改写开关文案。"
+        "pt-BR": "英文 Turn 的全词统计还包含大量 turn on/off（启用/关闭），这些不是完整问答往返，不应译成此处术语。仅完整往返使用 turno，普通界面沿用消息；不为提高占比改写开关文案。",
+        "tlh": "英文 Turn 的全词统计还包含大量 turn on/off（启用/关闭），这些不是完整问答往返，不应译成此处术语。仅完整往返使用 loS（轮），普通界面沿用消息；不为提高占比改写开关文案。"
       }
     },
     {

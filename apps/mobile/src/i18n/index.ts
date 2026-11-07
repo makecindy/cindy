@@ -17,6 +17,7 @@ import ptPTCommon from "./locales/pt-PT";
 import ptBRCommon from "./locales/pt-BR";
 import lzhCommon from "./locales/zh-Hant-x-lzh";
 import lzhHansCommon from "./locales/zh-Hans-x-lzh";
+import tlhCommon from "./locales/tlh";
 import i18n from "i18next";
 import { initReactI18next } from "react-i18next";
 import { BRAND_NAME } from "@cindy/maker-shared/branding";
@@ -47,6 +48,7 @@ const resources = {
   "pt-BR": { common: ptBRCommon },
   "zh-Hant-x-lzh": { common: lzhCommon },
   "zh-Hans-x-lzh": { common: lzhHansCommon },
+  tlh: { common: tlhCommon },
   en: { common: enCommon },
   "zh-CN": { common: zhCNCommon },
   "zh-TW": { common: zhTWCommon },
