@@ -348,6 +348,8 @@ describe("composer attachment tray overlay foreground", () => {
     expect(host.querySelector('[data-testid="lightbox"]')).toBeNull();
   });
 
+  // Completed uploads remain identifiable after the preview action finishes;
+  // the remove control must stay a separate, explicit action.
   it("keeps completed file names visible and separates preview from removal", () => {
     const preview = vi.fn();
     const remove = vi.fn();
