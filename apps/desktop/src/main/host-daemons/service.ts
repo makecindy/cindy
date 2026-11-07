@@ -107,15 +107,16 @@ export function createHostDaemonsService(deps: HostDaemonsServiceDeps): HostDaem
 
   async function traceOwner(
     task: RawScheduledTask,
-  ): Promise<{ sessionId: string; title: string | null } | null> {
+  ): Promise<{ sessionId: string; title: string | null } | null | undefined> {
     if (!task.definitionMtimeMs) return null;
     const fromMs = task.definitionMtimeMs - ATTRIBUTION_WINDOW_MS;
     const toMs = task.definitionMtimeMs + ATTRIBUTION_WINDOW_MS;
     // 追溯要读消息库（跨 await）：切号期间读到的可能已是另一个账号的库。
     const scopeBefore = deps.ownerScopeKey?.();
     const rows = await deps.readToolMessages(fromMs, toMs);
-    // 切号后作废在途查询：旧账号的结果不能写进新账号的台账。
-    if (scopeBefore !== undefined && scopeBefore !== deps.ownerScopeKey?.()) return null;
+    // 切号后作废在途查询：旧账号的结果不能写进新账号的台账。undefined ≠ null ——
+    // null 是「查无此人」（可写负缓存），undefined 是「结果不可信」（不得写任何台账）。
+    if (scopeBefore !== undefined && scopeBefore !== deps.ownerScopeKey?.()) return undefined;
     const picked = pickOwnerSession(rows, [task.name]);
     return picked ? { sessionId: picked.sessionId, title: picked.title } : null;
   }
@@ -186,12 +187,18 @@ export function createHostDaemonsService(deps: HostDaemonsServiceDeps): HostDaem
             continue;
           }
           traces += 1;
-          let traced: { sessionId: string; title: string | null } | null = null;
+          let traced: { sessionId: string; title: string | null } | null | undefined = null;
           try {
             traced = await traceOwner(task);
           } catch {
             // 查询失败（库忙 / 正在切账号）≠ 查无此人：不能写负缓存，否则一次失败就
             // 让这条任务永远隐身。本次按「无关」计数，下次扫描重试。
+            unrelatedCount += 1;
+            continue;
+          }
+          if (traced === undefined) {
+            // 切号作废：既不写 owner 也不写 miss 负缓存，本次按「无关」计数，
+            // 下次扫描按新账号重新归属。
             unrelatedCount += 1;
             continue;
           }

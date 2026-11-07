@@ -354,6 +354,8 @@ describe('hostDaemons service', () => {
     const snapshot = await service.list();
     expect(snapshot.entries).toEqual([]);
     expect(ledger.owners.has('\\airlink-autopm')).toBe(false);
+    // 作废 ≠ 查无此人：不得写 miss 负缓存，否则窗口过去后这条任务永远隐身。
+    expect(ledger.getMissMtime('\\airlink-autopm')).toBeNull();
   });
 
   it('drops the whole snapshot when the account switched during the scan', async () => {
