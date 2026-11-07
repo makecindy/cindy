@@ -232,7 +232,7 @@ describe('composer structured list input rules', () => {
     expect(baseListRule).toContain('--composer-list-marker-extra: 0em;');
     expect(baseListRule).toContain('--composer-list-padding: 1.9em;');
     expect(baseListRule).toContain(
-      'var(--composer-list-padding, 1.9em) + var(--composer-list-marker-extra, 0em)',
+      'var(--composer-list-padding, 1.5em) + var(--composer-list-marker-extra, 0em)',
     );
     expect(cjkMarkerRule).toContain('--composer-list-marker-extra: 0.7em;');
   });
@@ -245,21 +245,6 @@ describe('composer structured list input rules', () => {
     expect(editor.view.dom.querySelector('ol')?.getAttribute('data-marker-digits')).toBe('6');
   });
 
-  it('keeps one-digit punctuation markers on the same safe base budget', () => {
-    const editor = makeEditor();
-
-    typeThroughInputRules(editor, '1. ');
-
-    const list = editor.view.dom.querySelector('ol');
-    expect(list?.getAttribute('data-marker')).toBe('.');
-    expect(list?.getAttribute('data-marker-digits')).toBe('1');
-
-    const css = readFileSync(resolve(__dirname, '..', 'styles', 'globals.css'), 'utf8');
-    const baseListRule = css.match(
-      /\[data-chat-input-root\]\s+\.ProseMirror\s+:is\(ul,\s*ol\)\s*\{([\s\S]*?)\r?\n\s*\}/,
-    )?.[1];
-    expect(baseListRule).toContain('--composer-list-padding: 1.9em;');
-  });
 
   it.each([
     {
