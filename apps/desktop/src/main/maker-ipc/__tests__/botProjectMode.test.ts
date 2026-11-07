@@ -23,7 +23,7 @@ describe('ensureBotProjectAutomations', () => {
     expect(loader.upsertSchedule).toHaveBeenCalledWith('/w', expect.objectContaining({
       id: BOT_PROJECT_MEMORY_REVIEW_ID, agentKind: 'pi', model: 'm1', providerId: 'p1',
       name: 'Mimi · Review memory', persistentSession: true, silentWhenIdle: true,
-      prompt: expect.stringContaining('teammate_id=bot-1'),
+      prompt: expect.stringContaining('teammate id bot-1'),
     }));
 
     loader.loadProjectSchedules.mockResolvedValueOnce([{ id: BOT_PROJECT_MEMORY_REVIEW_ID }]);

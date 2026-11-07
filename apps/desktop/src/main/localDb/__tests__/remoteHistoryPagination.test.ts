@@ -310,6 +310,8 @@ describe.each(modes)('%s remote history visibility', (mode) => {
     // Teammate V2 (2026-11-06): main chats only leaves out its topics, channels and routines.
     const main = await invokeHistory('list_sessions', { teammate_id: 'visible', teammate_main_only: true }) as any;
     expect(main.sessions.map((row: any) => row.id)).toEqual(['visible']);
+    // Without the teammate id the filter would silently widen; refuse so the caller adds it.
+    expect(await invokeHistory('list_sessions', { teammate_main_only: true })).toMatchObject({ errorCode: 'INVALID_ARGS' });
     const restricted = await listSessionsForHistory({ ...listArgs, teammateId: 'visible', sessionIds: ['ordinary'] });
     expect(restricted.items).toEqual([]);
     const search = await searchChatHistoryHybrid({ ...searchArgs, teammateId: 'visible', sessionIds: ['ordinary'] });

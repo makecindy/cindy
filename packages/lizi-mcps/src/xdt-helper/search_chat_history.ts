@@ -127,6 +127,7 @@ export function registerSearchChatHistoryTool(
     handler: async (args) => {
       if (args.device !== 'local') return queryHistoryDevices(registry, deps, 'search_chat_history', args);
       if (args.session_ids?.some((id) => id.includes('::'))) return errorPayload('INVALID_ARGS', '远程 session_ids 必须指定对应 device，不能作为本机 ID 查询。');
+      if (args.teammate_main_only && !args.teammate_id) return errorPayload('INVALID_ARGS', 'teammate_main_only 需要同时传 teammate_id（get_teammate_state 的 profile.id）。');
       const {
         query,
         session_ids,

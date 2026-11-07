@@ -770,12 +770,13 @@ export async function hydrateBotProfileRuntime(
   if (!chatOnly && deps.listOwnSkills && !opts.remoteHostId) {
     try {
       const own = await deps.listOwnSkills({ botId: row.botId });
-      // V2: the teammate's learned Skills live in its project and load natively;
-      // only the host-provided core Skill is mounted here.
+      // V2: the teammate's Skills live in its project and load natively, and it
+      // works like an ordinary task, so the teammate core Skill is not mounted.
       const learned = projectContext ? [] : own.skills;
-      ownSkills = [...(own.baseline && fullLane ? [own.baseline.skill] : []), ...learned];
+      const core = own.baseline && fullLane && !projectContext ? own.baseline : null;
+      ownSkills = [...(core ? [core.skill] : []), ...learned];
       ownSkillPluginRoots = [
-        ...(own.baseline && fullLane ? [own.baseline.pluginRoot] : []),
+        ...(core ? [core.pluginRoot] : []),
         ...(learned.length > 0 ? [own.pluginRoot] : []),
       ];
     } catch {
@@ -1011,7 +1012,8 @@ export async function hydrateBotProfileRuntime(
       // Hermes-style Bot Mode is a property of the owner's Bot Chat (the permanent
       // Chat and its private topics). Delegation children keep Cindy's normal
       // Session prompt plus their narrow task context.
-      ...(fullLane
+      // V2 works like an ordinary task: its tools describe themselves.
+      ...(fullLane && !projectContext
         ? [buildBotCapabilityContextPrompt({ helperAvailable, cindyAvailable,
           ownSkillsEnabled: promptCapabilities.ownSkillsEnabled,
           systemSkillsOff,

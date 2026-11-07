@@ -151,14 +151,6 @@ const TASK_AND_TEAMMATE_GUIDANCE = [
   '后台任务负责独立工作并回传结果；伙伴消息只负责沟通，不保证对方执行或交付。它们都不是命令对方，也不会改变对方是谁。用户如果要求"让某个伙伴听话",说明这条边界,然后直接给出可以协作的做法。',
 ].join('\n');
 
-/** 伙伴 V2:开任务就是普通任务,结果自动回到这里;伙伴消息照旧。 */
-const PROJECT_TASK_AND_TEAMMATE_GUIDANCE = [
-  '## 你可以开任务，也可以给伙伴发消息',
-  '- 能在这里清楚做完的事就在这里做。需要独立执行、并行或单独跟踪时，用 handoff 类的 `send_to_session` 新建普通任务：不传项目就开在你自己的项目里，要在别的项目做就传 project_path。把目标、背景、相关文件和验收要求写清楚，新任务看不到这里的聊天。',
-  '- 任务做完的结果会自动送回这里，不用轮询；卡住、等主人或出错时宿主会叫醒你。要看进度用 `get_task_digest`，要补充或停止就用同一套任务工具操作那条任务。',
-  '- `list_agents` / `send_to_agent` 只给名册里明确存在的伙伴发一条异步消息，不启动任务，也不保证对方执行。收到 `[Direct message from Cindy Bot ...]` 时在这里处理，确有答案才用消息头里的 Bot id 回一条，不要只为确认互相回复。',
-].join('\n');
-
 /**
  * 与普通任务共用 session 能力及权限档；提示词说明能力与实际回执的关系。
  */
@@ -177,15 +169,6 @@ const WORKBENCH_RESPONSIBILITY_GUIDANCE =
 const AUTOMATION_GUIDANCE = [
   '## 你能建普通自动化',
   '主人要你给某个项目或任务设定时执行时，用 cindy_scheduler 建普通自动化（先 `list_tools`，再 `call_tool` 调 `schedule_create` 等）；只和你自己有关的提醒仍用例行任务。操作沿用当前任务的权限档。建完读回核实名称、时间和是否启用，成功才说已安排。',
-].join('\n');
-
-/** 伙伴 V2:定时和重复的事都用普通自动化,没有另一套例行任务。 */
-const PROJECT_AUTOMATION_GUIDANCE = [
-  '## 你能建自动化',
-  '定时、重复或提醒类的事都用 cindy_scheduler 建普通自动化（先 `list_tools`，再 `call_tool` 调 `schedule_create` 等），操作沿用当前任务的权限档。',
-  '- 提醒和轻量的事：用 bindToCurrentSession 绑在这里跑，到点你在这里直接说，主人回话你接得上。',
-  '- 较重的活：workingDir 用你的项目、persistentSession=true，固定用一条任务跑；有值得主人知道的结果再用 `send_to_session` 发回这里。',
-  '建完读回核实名称、时间、绑定位置和是否启用，成功才说已安排。',
 ].join('\n');
 
 const BOT_CREATION_GUIDANCE = [
@@ -221,10 +204,11 @@ export function buildBotTeammateRoster(
     })
     .filter(Boolean);
   if (rows.length === 0) return '';
+  if (options.projectMode) return ['## 你的队友', ...rows].join('\n');
   return [
     '## 你的队友',
     ...rows,
-    `只有明确要联系某个伙伴时，才把上面或 \`list_agents\` 返回的 id 传给 \`send_to_agent\`。开任务用 \`${options.projectMode ? 'send_to_session' : 'start_session_task'}\`，不要从名册挑人。不确定该找谁就别猜，问用户一句。`,
+    '只有明确要联系某个伙伴时，才把上面或 `list_agents` 返回的 id 传给 `send_to_agent`。开任务用 `start_session_task`，不要从名册挑人。不确定该找谁就别猜，问用户一句。',
   ].join('\n');
 }
 
@@ -247,14 +231,11 @@ function buildHomeGuidance(homeDir: string): string {
   ].join('\n');
 }
 
-/** 伙伴 V2:伙伴就是一个项目。只说清身份放在哪、项目在哪,其余与普通任务一致。 */
+/** 伙伴 V2:伙伴就是一个项目;做事方式与普通任务相同,只说清项目和身份在哪。 */
 function buildProjectHomeGuidance(homeDir: string): string {
   return [
     '## 你的项目',
-    `\`${homeDir}/workspace\` 是你的项目，也是默认工作目录。它和 Cindy 里的其他项目一样：AGENTS.md 是你的做事规则，项目记忆和 \`.agents/skills/\` 里的技能就是你的记忆和技能，改动都会留下版本、主人可以撤销。`,
-    '这些都可以按需要自己改。只有身份（SOUL.md、system_prompt.md、memories/USER.md）由主人维护，你不要改写。',
-    '记忆只用 cindy_memory 读写。开场带的记忆索引是这一轮开始时的快照，新写的记忆下一轮才出现在索引里，不代表没存上；Home 下 memories/ 里其它文件是开启项目模式前的旧记录，不要再改。',
-    '要翻你以前和主人的主聊天（包括重置前的），用 history 类的 `list_sessions` 或 `search_chat_history`，带 teammate_id（`get_teammate_state` 的 profile.id）和 teammate_main_only=true。',
+    `\`${homeDir}/workspace\` 是你的项目，也是默认工作目录。项目里的 AGENTS.md、记忆和 \`.agents/skills/\` 都是你自己的。你的身份（SOUL.md 等）在项目外，由主人维护。`,
   ].join('\n');
 }
 
@@ -273,14 +254,20 @@ export function buildBotStableTier(input: BotSystemPromptInput): string {
   const botModeEnabled = input.capabilities.botModeEnabled !== false;
   const identity = input.identity.trim();
   if (identity) parts.push(identity);
+  const homeDir = input.homeDir?.trim();
+  // V2: an ordinary project task with an identity. How to work comes from the
+  // ordinary task prompt and each tool's own description, not teammate guidance.
+  if (input.projectMode) {
+    if (homeDir) parts.push(buildProjectHomeGuidance(homeDir));
+    return parts.filter(Boolean).join('\n\n');
+  }
   parts.push(TASK_COMPLETION_GUIDANCE);
 
   // 能力说明按「这个伙伴真的挂了什么」注入 —— 没挂的能力一个字都不提,
   // 免得模型去调一个不存在的工具(Hermes 同款 valid_tool_names 门)。
   const capabilityParts: string[] = [];
   // 家排在最前:它不是某个工具的用法,是「你有身份、有积累、能改自己」这件事本身。
-  const homeDir = input.homeDir?.trim();
-  if (homeDir) capabilityParts.push(input.projectMode ? buildProjectHomeGuidance(homeDir) : buildHomeGuidance(homeDir));
+  if (homeDir) capabilityParts.push(buildHomeGuidance(homeDir));
   if (has(input.capabilities, 'docs')) capabilityParts.push(DOCS_GUIDANCE);
   if (input.capabilities.memoryEnabled) capabilityParts.push(MEMORY_GUIDANCE);
   // Routines are the `routine` system Skill: the core lists it and read_teammate_skill has its text.
@@ -289,13 +276,13 @@ export function buildBotStableTier(input: BotSystemPromptInput): string {
     input.capabilities.botCreationEnabled ?? input.capabilities.partnerActionsEnabled;
   if (botModeEnabled && botCreationEnabled) capabilityParts.push(BOT_CREATION_GUIDANCE);
   if (botModeEnabled && input.capabilities.partnerActionsEnabled) {
-    capabilityParts.push(input.projectMode ? PROJECT_TASK_AND_TEAMMATE_GUIDANCE : TASK_AND_TEAMMATE_GUIDANCE);
+    capabilityParts.push(TASK_AND_TEAMMATE_GUIDANCE);
   }
   if (botModeEnabled && input.capabilities.sessionControlEnabled) {
     capabilityParts.push(input.capabilities.followEnabled === false
       ? SESSION_CONTROL_GUIDANCE
       : `${SESSION_CONTROL_GUIDANCE}\n${WORKBENCH_RESPONSIBILITY_GUIDANCE}`);
-    if (input.capabilities.automationEnabled) capabilityParts.push(input.projectMode ? PROJECT_AUTOMATION_GUIDANCE : AUTOMATION_GUIDANCE);
+    if (input.capabilities.automationEnabled) capabilityParts.push(AUTOMATION_GUIDANCE);
   }
   if (capabilityParts.length > 0) {
     parts.push(['# 你会做什么', ...capabilityParts].join('\n\n'));

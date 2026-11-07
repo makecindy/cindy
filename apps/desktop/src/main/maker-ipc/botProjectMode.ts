@@ -139,13 +139,8 @@ export function botProjectMemoryReview(input: {
   return {
     id: BOT_PROJECT_MEMORY_REVIEW_ID,
     name: input.title.replace('{{name}}', name),
-    prompt: [
-      `Review ${name}'s main chats with the owner from the last 24 hours and keep what is worth remembering.`,
-      `- Read them with the cindy_helper history tools: list_sessions or search_chat_history with teammate_id=${input.botId}, teammate_main_only=true, time_field=activity, then get_chat_history.`,
-      `- Save durable facts, owner preferences and corrections into this project's memory with cindy_memory. Quote the owner's words as evidence, update an existing record instead of adding a duplicate, and skip one-off progress or temporary state.`,
-      `- When the same way of working came up repeatedly and worked, write or update a skill in .agents/skills/<name>/SKILL.md. Never edit SOUL.md, system_prompt.md or memories/USER.md.`,
-      '- If nothing new is worth keeping, finish quietly.',
-    ].join('\n'),
+    // A goal, not a procedure: the task picks its own tools and material.
+    prompt: `Look back at ${name}'s conversations from the last day (teammate id ${input.botId}) and keep what is worth remembering in this project's memory and skills. If nothing new is worth keeping, finish quietly.`,
     cronExpr: '30 3 * * *',
     timezone: input.timezone,
     recurring: true,

@@ -98,6 +98,7 @@ export function registerListSessionsTool(
     handler: async (args) => {
       if (args.device !== 'local') return queryHistoryDevices(registry, deps, 'list_sessions', args);
       const { workdir, from, to, agent_kind, include_deleted, limit, cursor, order, teammate_id, teammate_main_only, source, time_field } = args;
+      if (teammate_main_only && !teammate_id) return errorPayload('INVALID_ARGS', 'teammate_main_only 需要同时传 teammate_id（get_teammate_state 的 profile.id）。');
       const scope = await resolveHistoryScope(deps.history, deps.getSessionContext, null);
       if (!scope.ok) return errorPayload(scope.errorCode, scope.message);
       const fromMs = parseIsoMs(from);

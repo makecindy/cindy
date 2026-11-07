@@ -198,6 +198,9 @@ describe('IM channel lanes hydrate the full Bot profile', () => {
     expect(snapshot?.disabledToolsets).toEqual([]);
     expect(main.extraDirs).toEqual(['/code/app']);
     expect(main.botProfileContextPrompt).toContain('/bots/bot/workspace');
+    // It works like an ordinary task: no teammate how-to guidance on top.
+    expect(main.botProfileContextPrompt).not.toContain('# 你会做什么');
+    expect(main.botProfileContextPrompt).not.toContain('teammate-guide');
 
     seed('canonical', null, { ...narrow, projectMode: true });
     const elsewhere = { id: 'plan', agentKind: 'pi', workingDir: '/code/app', model: 'm' } as MakerSessionCreateOpts;
