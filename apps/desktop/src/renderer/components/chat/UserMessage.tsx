@@ -7,7 +7,6 @@ import { useBotDmThreadForMessage } from '@/features/bots/botDmThreadsContext';
 import { FileTypeIcon } from '@/components/ui/file-type-icon';
 import type { ImMessageSource } from '../../../shared/imMessageSource';
 import { isSharedTaskPeer } from '@cindy/device-link';
-import { PluginUiRendererView } from '@/cindy-brain/PluginUiRendererView';
 import { hasEmbeddedImPrompt } from './userMessageDisplayText';
 /**
  * UserMessage
@@ -1289,7 +1288,6 @@ export function UserMessage({
   // Attachments belong to the user message independently of its visual shell.
   const messageActions = (
     <MessageActionBar
-      pluginUiTarget={!sharedGuest && !isBlocked && sessionId && messageClientId ? { sessionId, id: messageClientId } : undefined}
       createdAt={createdAt}
       copyText={copyText}
       copyLinkText={messageDeepLink}
@@ -1597,9 +1595,6 @@ export function UserMessage({
                         {collapseMeasureBody}
                       </div>
                     )}
-                    <PluginUiRendererView sessionId={sessionId ?? ''} point="message.body"
-                      target={{ kind: 'message', id: messageClientId ?? '' }}
-                      active={Boolean(sourcePlugin && !hookSource && !orcaCommunication && !isBlocked && sessionFileCtx.localConfirmed && sessionId && messageClientId && !sharedGuest)}>
                     {inlineQuoteCount > 0 ? (
                       <div
                         className={cn(
@@ -1762,7 +1757,6 @@ export function UserMessage({
                         )}
                       </button>
                     )}
-                    </PluginUiRendererView>
                     {attachmentsInBubble && (
                       <div className={cn('flex flex-col items-start gap-2', (inlineQuoteCount > 0 || displayBubbleBody.trim() || ghostChipDisplay) && 'mt-2')}>
                         {imageAttachmentNodes}

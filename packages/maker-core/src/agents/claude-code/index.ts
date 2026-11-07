@@ -163,6 +163,8 @@ import {
   appendAutoReviewUserIntent,
   normalizeAutoReviewUserIntent,
   createAutoReviewActionContext,
+  createAutoReviewAgentTextTracker,
+  isAutoReviewNewUserInput,
   type AutoReviewUserIntent,
   isAutoReviewUnavailableMetadata,
   isSystemPermissionDenialReason,
@@ -2686,6 +2688,8 @@ export class ClaudeCodeAgent extends BaseAgent {
           hosted ? hosted.platform : opts.remoteHostId ? 'linux' : process.platform,
           mcpApprovalPolicy === 'auto-approve' && !turnPolicyForcePrompt,
           reviewPermissionMode !== 'auto',
+          // A subagent's call must not borrow the main agent's explanation.
+          { toolDescription: (input as { description?: unknown } | null)?.description, mainScope: !options.agentID },
         );
         // 热切换收口:reviewAutoAction 是 async,期间 setPermissionMode 可能收紧(Auto→Ask)
         // 或放宽(→Full)。必须按**最新**档位决策,否则进入审查前的旧 auto 档 allow 会绕过用户
@@ -3005,6 +3009,7 @@ export class ClaudeCodeAgent extends BaseAgent {
     let currentAutoReviewIntent: AutoReviewUserIntent = '';
     let autoReviewIntentInitialized = false;
     const autoReviewActionContext = createAutoReviewActionContext();
+    const autoReviewAgentText = createAutoReviewAgentTextTracker();
     const autoReviewContext = () => activeTurnPermissionPolicy?.autoReviewContext
       ?? (activeTurnPermissionPolicy?.origin.kind === 'im'
         ? { requesterAuthority: 'unknown' as const, source: 'direct' as const }
@@ -3028,8 +3033,10 @@ export class ClaudeCodeAgent extends BaseAgent {
       // bypasses canUseTool. Use the scope frozen into the active Query: after revoke,
       // that Query still carries its broader directory allowlist.
       && !activeQueryHasDirectoryGrants;
-    const setAutoReviewIntent = (content: AutoReviewUserIntent, source = { authority: currentAutoReviewAuthority }): void => {
+    // A synthetic continuation is not new user input, so it must not move the reply the user answered.
+    const setAutoReviewIntent = (content: AutoReviewUserIntent, source = { authority: currentAutoReviewAuthority }, newUserInput = true): void => {
       autoReviewActionContext.advance(typeof content !== 'string' && JSON.stringify(currentAutoReviewAuthority ?? null) === JSON.stringify(source.authority ?? null));
+      if (newUserInput) autoReviewAgentText.beginUserInput();
       currentAutoReviewIntent = normalizeAutoReviewUserIntent(content);
       autoReviewIntentInitialized = true;
       currentAutoReviewAuthority = source.authority && { ...source.authority };
@@ -3073,8 +3080,10 @@ export class ClaudeCodeAgent extends BaseAgent {
       platform: NodeJS.Platform,
       hostAutoApprove = false,
       hostShortcutOnly = false,
+      purpose: { toolDescription?: unknown; mainScope?: boolean } = {},
     ): Promise<AutoReviewDecision> => {
       const directoryGeneration = autoReviewDirectoryGeneration;
+      const agentContext = autoReviewAgentText.snapshot(purpose.toolDescription, purpose.mainScope ?? true);
       const request = {
         sessionId: opts.sessionId,
         agentKind: 'claude-code' as const,
@@ -3082,6 +3091,7 @@ export class ClaudeCodeAgent extends BaseAgent {
         model: mutableModel,
         userIntent: currentAutoReviewIntent,
         precedingBlockedActions: autoReviewActionContext.precedingBlockedActions,
+        ...(agentContext ? { agentContext } : {}),
         ...(currentAutoReviewAuthority ? { authorizationContext: currentAutoReviewAuthority } : {}),
         action,
         workspaceRoots,
@@ -4141,6 +4151,7 @@ export class ClaudeCodeAgent extends BaseAgent {
                 'linux',
                 remoteMcpPolicy === 'auto-approve' && !remoteTurnPolicyForcePrompt,
                 reviewPermissionMode !== 'auto',
+                { toolDescription: (params.input as { description?: unknown } | undefined)?.description, mainScope: !params.metadata?.agentID },
               );
               const modeAfterReview = mutablePermissionMode as PermissionMode;
               if (isPlanToolBlocked(remoteToolName)) {
@@ -5510,6 +5521,9 @@ export class ClaudeCodeAgent extends BaseAgent {
         if (isContinuationTerminalDone) {
           continuationTerminalBoundaryEvents.add(e);
           pendingContinuationTerminalBoundaries += 1;
+        }
+        if (e.type === 'tool_use' || (e.type === 'text' && turnInFlight && !turnState.interruptRequested)) {
+          autoReviewAgentText.observe(e);
         }
         if (e.type === 'text' && turnInFlight && !turnState.interruptRequested) {
           const data = e.data as { text?: unknown; isFinal?: unknown } | undefined;
@@ -6936,7 +6950,7 @@ export class ClaudeCodeAgent extends BaseAgent {
             }
           }
           activeCapabilitySelectionText = userMessageTextForCapabilityRouting(message.content);
-          setAutoReviewIntent(appendAutoReviewUserIntent(priorAutoReviewIntent(), message.content, sendOpts), { authority: autoReviewContext() });
+          setAutoReviewIntent(appendAutoReviewUserIntent(priorAutoReviewIntent(), message.content, sendOpts), { authority: autoReviewContext() }, isAutoReviewNewUserInput(sendOpts));
           replayableUserInput = sdkInput;
           sendInAcceptPhase = false;
           // upstream-response-idle watchdog 起表 — 放在 inputQueue.push 之后, 避免把
@@ -7029,7 +7043,7 @@ export class ClaudeCodeAgent extends BaseAgent {
         appendActiveCapabilitySelectionText(
           userMessageTextForCapabilityRouting(message.content),
         );
-        setAutoReviewIntent(appendAutoReviewUserIntent(priorAutoReviewIntent(), message.content, sendOpts));
+        setAutoReviewIntent(appendAutoReviewUserIntent(priorAutoReviewIntent(), message.content, sendOpts), undefined, isAutoReviewNewUserInput(sendOpts));
         armUpstreamResponseIdle();
       },
 

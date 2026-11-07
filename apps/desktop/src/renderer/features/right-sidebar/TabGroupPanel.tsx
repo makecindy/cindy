@@ -10,7 +10,7 @@
  * 聊天列里的上下组填满父格(PaneFillContext)。
  */
 
-import { useSyncExternalStore, type CSSProperties, type ReactNode } from 'react';
+import type { CSSProperties, ReactNode } from 'react';
 import { useTranslation } from 'react-i18next';
 
 import { tabGroupPanelKind, type TabGroupId } from '../../../shared/layoutTree';
@@ -18,7 +18,7 @@ import { CHROME_ACTIONS_GEOMETRY } from '@/components/layout/chromeActionsGeomet
 import { usePanelMaximize } from '@/layout/panelMaximize';
 import { usePaneAtWindowLeft, usePaneAtWindowTop, usePaneFill } from '@/layout/panePlacement';
 import { usePanelWidth } from '@/layout/paneWidths';
-import { isPanelKindParked, subscribePanelRegistry, type PanelComponentProps } from '@/panels/registry';
+import type { PanelComponentProps } from '@/panels/registry';
 import { RightSidebarShell } from './RightSidebarShell';
 import { useTabGroupHost } from './tabGroupHost';
 import { tabGroupLabelKey } from './tabGroups';
@@ -31,7 +31,6 @@ function TabGroupPanelBody({ groupId }: { groupId: TabGroupId }): ReactNode {
   const atWindowLeft = usePaneAtWindowLeft();
   const maximize = usePanelMaximize();
   const kind = tabGroupPanelKind(groupId);
-  const shellVisible = useSyncExternalStore(subscribePanelRegistry, () => !isPanelKindParked(kind));
   const engineWidth = usePanelWidth(kind);
   if (!host) return null;
   const isMaximized = maximize?.maximizedKind === kind;
@@ -73,7 +72,6 @@ function TabGroupPanelBody({ groupId }: { groupId: TabGroupId }): ReactNode {
       )}
       <RightSidebarShell
         groupId={groupId}
-        shellVisible={shellVisible}
         sessionId={host.sessionId}
         workdir={host.workdir}
         remoteHostId={host.remoteHostId}

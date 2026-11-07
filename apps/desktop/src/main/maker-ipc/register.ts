@@ -37,6 +37,7 @@ import { openSession, setSessionOpeningModelAdmission } from '../localDb/session
 import { createPluginTaskReviewResolver } from './pluginTaskReviewContext.js';
 import { createPluginTargetReviewLoader } from '../cindy-brain/pluginTargetReview.js';
 import { isPluginTaskPermissionAllowed, assertPluginTaskResult, createPluginTaskService, PluginTaskError, type PluginTaskService } from './pluginTaskService.js';
+import { resolveRemotePluginTaskRoute } from './pluginTaskModelRoute.js';
 import { resolvePluginWorkerDirectory } from './pluginWorkerDirectory.js';
 import { PluginWriteAccessGate } from './pluginWriteAccessGate.js';
 import { pluginWorkerCompletedAt } from './pluginWorkerCompletion.js';
@@ -260,7 +261,10 @@ import { recoverRenamedSessionModelBeforeSend } from './renamedSessionModelRecov
 import { recordTurnModelChange, type TurnModelIdentity } from './turnModelChange';
 import { app, BrowserWindow, dialog, ipcMain, shell, type IpcMainInvokeEvent } from 'electron';
 import { accessChatDisplayCache } from './chatDisplayCache.js';
-import { accessBotGroupOutbox } from './botGroupOutboxStorage.js';
+import { accessBotGroupOutbox, commandBotGroupOutbox, sendCoordinatedBotGroupMessage, setBotGroupOutboxPublisher } from './botGroupOutboxStorage.js';
+import { createBotReadStateIpc, createBotWindowAccess } from './botReadStateLocalIpc.js';
+import { isSecondaryAppWindow } from '../secondary-windows.js';
+import { createBotGroupOutboxIpc } from './botGroupOutboxIpc.js';
 import {
   activeOwnerScopeKey,
   onAppSessionInvalidated,
@@ -353,6 +357,7 @@ import {
 import {
   assertTrustedAppRendererEvent,
   isTrustedAppRendererEvent,
+  isTrustedAppRendererWindow,
 } from '../security/trustedAppRenderer.js';
 import {
   initRenameSessionsConfirm,
@@ -1459,6 +1464,7 @@ import {
 } from './agentCommandListIpcBoundary.js';
 import {
   assertAgentSkillListIpcCaller,
+  createProjectSkillPreparation,
   toAgentSkillListFailure,
 } from './agentSkillListIpcBoundary.js';
 import {
@@ -1632,6 +1638,13 @@ async function prepareProjectSkillLinksFailSoft(workingDir: unknown): Promise<bo
     });
     return false;
   }
+}
+const sharedProjectSkillLinkPreparation = createProjectSkillPreparation(prepareProjectSkillLinksFailSoft);
+/** Opening a task asks the / and @ palettes together; both prepare the same links. */
+function preparePaletteProjectSkillLinks(workingDir: unknown): Promise<boolean> {
+  // Remote invokes never prepare links, so they never join a local preparation.
+  if (isDeviceLinkInvoke() || typeof workingDir !== 'string' || !workingDir) return Promise.resolve(false);
+  return sharedProjectSkillLinkPreparation(JSON.stringify(captureDataOwnerBroadcastScope()), workingDir);
 }
 const workerTurnStartSequencer = createWorkerTurnStartSequencer(log);
 // session event wiring 是模块级函数；service 在 registerMakerIpc 内构造后注入给事件回调。
@@ -3730,7 +3743,7 @@ initGhostSetupCoordinator({
       return {
         ok: false,
         errorCode: 'TOOL_NOT_FOUND',
-        message: toolNotFoundMessage(ghostId, tool, ghost.manifest.tools),
+        message: toolNotFoundMessage(ghostId, tool, ghost.manifest),
       };
     }
     return { ok: true };
@@ -7590,6 +7603,8 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       // Full scheduled model selection, including bound Harness changes and template overrides.
       supportsScheduleModelSelection: true,
       supportsScheduleAgentDeviceSelection: true,
+      // Older hosts keep only known columns and would report success while dropping the trigger.
+      supportsScheduleWebhookTrigger: true,
       // Remote schedule_create checks workingDir on this computer before insert.
       // Older peers accept maker:schedule:create without that check; callers must
       // see this flag or refuse instead of storing a missing path.
@@ -8457,7 +8472,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
         const linksChanged = skillParams.remoteHostId
           ? false
           : await measureTraceOperation('maker:list-agent-skills:project-links',
-            () => prepareProjectSkillLinksFailSoft(skillParams.workingDir));
+            () => preparePaletteProjectSkillLinks(skillParams.workingDir));
         if (kind === 'codex' && linksChanged) {
           skillParams.forceReload = true;
         }
@@ -8623,7 +8638,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     async (_e, agentKind: unknown, params: unknown) => {
       try {
         const resourceParams = params as { workingDir: string; cap?: number; query?: string };
-        await prepareProjectSkillLinksFailSoft(resourceParams?.workingDir);
+        await preparePaletteProjectSkillLinks(resourceParams?.workingDir);
         const kind = requireAgentKind(agentKind);
         const includeProjectAgents = supportsAtProjectAgentResources(kind);
         const [result, customizationResult] = await Promise.all([
@@ -14312,18 +14327,46 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     assertTrustedAppRendererEvent(event);
     return botGroupChatServiceHolder ? botGroupChatServiceHolder.deleteGroup(groupId) : botGroupNotReady;
   });
-  ipcMain.handle(MAKER_INVOKE.BOT_GROUP_SEND, async (event, input: unknown) => {
-    assertTrustedAppRendererEvent(event);
-    return botGroupChatServiceHolder ? botGroupChatServiceHolder.sendMessage(input) : botGroupNotReady;
-  });
   ipcMain.handle(MAKER_INVOKE.CHAT_DISPLAY_CACHE, (event, input: unknown) => {
     assertTrustedAppRendererEvent(event);
     return accessChatDisplayCache(input);
   });
+  const botWindowAccess = createBotWindowAccess({
+    mainWindow: getDeepLinkMainWindow, isSecondary: isSecondaryAppWindow,
+    isTrustedWindow: isTrustedAppRendererWindow, assertTrustedSender: assertTrustedAppRendererEvent,
+    windowFromSender: sender => BrowserWindow.fromWebContents(sender),
+  });
+  // These events stay local: the generic broadcaster also taps Device Link and utility windows.
+  const publishBotWindowState = (channel: string, payload: { owner: { dataOwnerId: string | null; generation: number } }) => {
+    const scope = captureDataOwnerBroadcastScope();
+    const active = getActiveAppSession();
+    if (!isDataOwnerBroadcastScopeCurrent(scope) || active.dataOwnerId !== payload.owner.dataOwnerId
+      || active.generation !== payload.owner.generation) return;
+    for (const win of BrowserWindow.getAllWindows()) {
+      if (!botWindowAccess.accepts(win)) continue;
+      try { win.webContents.send(channel, payload, scope.ownerStamp); }
+      catch { log.warn('Bot window state notification could not be delivered'); }
+    }
+  };
+  ipcMain.handle(MAKER_INVOKE.BOT_READ_STATE, createBotReadStateIpc({
+    assertTrustedSender: botWindowAccess.assertSender,
+    currentOwner: getActiveAppSession,
+    boundaryPending: isAppSessionBoundaryPending,
+    ownerRoot: () => ownerScopedUserDataPath('bot-read-state'),
+    publish: event => publishBotWindowState(MAKER_PUSH.BOT_READ_STATE_CHANGED, event),
+  }));
+  const outboxIpc = createBotGroupOutboxIpc({
+    assertCommandSender: botWindowAccess.assertSender, assertSendSender: assertTrustedAppRendererEvent,
+    command: commandBotGroupOutbox, send: sendCoordinatedBotGroupMessage,
+    service: savedInput => botGroupChatServiceHolder ? botGroupChatServiceHolder.sendMessage(savedInput) : Promise.resolve(botGroupNotReady),
+  });
+  ipcMain.handle(MAKER_INVOKE.BOT_GROUP_SEND, outboxIpc.send);
+  setBotGroupOutboxPublisher(event => publishBotWindowState(MAKER_PUSH.BOT_GROUP_OUTBOX_CHANGED, event));
   ipcMain.handle(MAKER_INVOKE.BOT_GROUP_OUTBOX, async (event, input: unknown) => {
     assertTrustedAppRendererEvent(event);
     return accessBotGroupOutbox(input);
   });
+  ipcMain.handle(MAKER_INVOKE.BOT_GROUP_OUTBOX_COMMAND, outboxIpc.command);
   ipcMain.handle(MAKER_INVOKE.BOT_GROUP_CONTINUE, async (event, groupId: unknown) => {
     assertTrustedAppRendererEvent(event);
     return botGroupChatServiceHolder ? botGroupChatServiceHolder.continueRound(groupId) : botGroupNotReady;
@@ -14663,6 +14706,12 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     const routeUnavailable = (): never => { throw new PluginTaskError('ROUTE_UNAVAILABLE', 'The selected provider, model or effort is unavailable'); };
     const resolveRoute = async (pluginId: string, requested?: PluginTaskRoute, callId?: string): Promise<PluginTaskRoute> => {
       assertPlugin(pluginId);
+      if (requested?.agentDeviceId) {
+        return resolveRemotePluginTaskRoute(requested, {
+          readProviders: deviceId => readDeviceProviderViews(remoteBackgroundInvoke, deviceId),
+          assertCurrent: () => assertPlugin(pluginId),
+        });
+      }
       const selection = { ...getPluginTaskDefaults(pluginId), ...requested };
       const sourceSessionId = getPluginTaskSourceSessionId(pluginId, callId);
       if (callId && !sourceSessionId && !(selection.agentKind && selection.model && selection.providerId)) throw new PluginTaskError('ROUTE_UNAVAILABLE', '发起任务已不可用，请重新调用，或在面板选择模型后创建任务');
@@ -14725,12 +14774,16 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
         await assertUnchanged();
         const targetAgent = route.agentKind === 'cc' ? 'claude-code' : route.agentKind;
         const pendingAgent = current.runtime.pendingMutation?.profile.agentKind;
+        const location = route.agentDeviceId ?? null;
+        const selectedLocation = (current.runtime.pendingMutation?.profile ?? current.runtime.effectiveProfile).agentDeviceId ?? null;
+        const selectLocation = location !== selectedLocation || location !== (current.runtime.effectiveProfile.agentDeviceId ?? null);
         const selectHarness = current.runtime.effectiveProfile.agentKind !== targetAgent
-          || (pendingAgent !== undefined && pendingAgent !== targetAgent);
+          || (pendingAgent !== undefined && pendingAgent !== targetAgent) || selectLocation || !!location;
         const result = await sessionControlService.setSessionRuntime({ targetSessionId: taskId,
           expectedGeneration: current.runtime.runtimeGeneration,
           beforeMutation: assertUnchanged,
           patch: { ...(selectHarness ? { harness: targetAgent } : {}),
+            ...(selectLocation || location ? { agentDeviceId: location } : {}),
             model: route.model, providerId: route.providerId, effort: (route.effort || null) as Effort | null,
             fastMode: route.fastMode } });
         if (!result.ok) throw new PluginTaskError(result.errorCode, result.message);
@@ -14829,12 +14882,36 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
         // A queued input will execute the accepted next-send route. Keep its
         // receipt stable as a deferred model/Harness switch reaches that boundary.
         const selected = runtime?.pendingMutation?.profile ?? runtime?.effective;
-        const resolvedConfig: PluginTaskRoute = selected
+        let resolvedConfig: PluginTaskRoute = selected
           ? { agentKind: selected.agentKind === 'claude-code' ? 'cc' : selected.agentKind,
+            ...(selected.agentDeviceId ? { agentDeviceId: selected.agentDeviceId } : {}),
             providerId: selected.providerId ?? '', model: selected.model,
             effort: selected.effort ?? '', fastMode: selected.fastMode }
-          : { agentKind: row.agentKind as PluginTaskRoute['agentKind'], providerId: row.providerId ?? '', model: row.model, effort: row.effort, fastMode: row.fastMode };
-        const revision = Number.parseInt(pluginTaskConfigHash('sha256').update(JSON.stringify([resolvedConfig, row.permissionMode, row.planModeEnabled, row.workingDir, row.status, row.orcaRole])).digest('hex').slice(0, 12), 16);
+          : { agentKind: row.agentKind as PluginTaskRoute['agentKind'], providerId: row.providerId ?? '', model: row.model, effort: row.effort, fastMode: row.fastMode,
+            ...(row.agentDeviceId ? { agentDeviceId: row.agentDeviceId } : {}) };
+        // A group may assign this task to a different executor before input acceptance.
+        // Keep the chosen source stable only while the ordinary group service verifies
+        // that the task's actual location still belongs to that exact binding.
+        let group: { groupDeviceId: string | null; providerId: string } | null | undefined;
+        try {
+          group = !runtime?.pendingMutation && readProviderGroupBinding(taskId)
+            ? await providerGroupService?.sessionGroup(taskId) : null;
+        } catch {
+          // Unavailable group metadata cannot hide local history or prevent stopping
+          // an already running proxy. Without verification, expose the actual route.
+        }
+        assertCurrent();
+        if (group) {
+          const { agentDeviceId: _executor, ...configuration } = resolvedConfig;
+          resolvedConfig = { ...configuration, providerId: group.providerId,
+            ...(group.groupDeviceId ? { agentDeviceId: group.groupDeviceId } : {}) };
+        }
+        // Preserve the historic local-field order while hashing remote identity
+        // in one position, regardless of pending/runtime/group object assembly.
+        const revisionConfig = { agentKind: resolvedConfig.agentKind, providerId: resolvedConfig.providerId,
+          model: resolvedConfig.model, effort: resolvedConfig.effort, fastMode: resolvedConfig.fastMode,
+          ...(resolvedConfig.agentDeviceId ? { agentDeviceId: resolvedConfig.agentDeviceId } : {}) };
+        const revision = Number.parseInt(pluginTaskConfigHash('sha256').update(JSON.stringify([revisionConfig, row.permissionMode, row.planModeEnabled, row.workingDir, row.status, row.orcaRole])).digest('hex').slice(0, 12), 16);
         return { taskId, title: row.title, status: row.status, revision, resolvedConfig, workingDir: row.workingDir ?? undefined, permissionMode: row.permissionMode, planModeEnabled: !!row.planModeEnabled, hidden: row.hiddenAt != null };
       },
       scheduleAutoTitle: schedulePluginAutoTitle,
@@ -17327,7 +17404,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
         (getSessionEffort(sessionId) as SessionRuntimeProfile['effort']) ?? meta.effort ?? null,
       fastMode: live ? getSessionFastMode(sessionId) : (meta.fastMode ?? false),
     };
-    const pendingMutation = pendingHarnessRuntimeMutation(agentSwitchPending.get(sessionId), control.generation)
+    const pendingMutation = pendingHarnessRuntimeMutation(agentSwitchPending.get(sessionId), control.generation, effective.agentDeviceId)
       ?? control.pending;
     return { baseline, effective, control, pendingMutation };
   };
@@ -18036,7 +18113,9 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       };
     },
     setSessionRuntime: async ({ targetSessionId, expectedGeneration, patch, beforeMutation }) => {
-      if (patch.harness !== undefined) {
+      if (patch.harness !== undefined || patch.agentDeviceId !== undefined) {
+        const harness = patch.harness ?? (await readSessionRuntimeProfiles(targetSessionId))?.effective.agentKind;
+        if (!harness) return { ok: false, errorCode: 'NOT_FOUND', message: 'Task runtime is unavailable' };
         return setSessionRuntimeHarness({
           withSessionLock: withSendToSessionLock,
           ownerEpoch: captureSessionRuntimeControlOwnerEpoch,
@@ -18045,10 +18124,11 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
           pending: (id) => agentSwitchPending.get(id),
           read: async (id) => (await readSessionRuntimeProfiles(id))?.effective ?? null,
           resolve: async (profile, explicit) => {
-            const reroute = await assertModelRouteUsable(profile.agentKind, profile.model, profile.providerId);
-            const providers = await getDesktopProviderService().listProviders({
-              allowSideEffects: false, catalog: getActiveCatalog(),
-            });
+            const reroute = profile.agentDeviceId ? undefined
+              : await assertModelRouteUsable(profile.agentKind, profile.model, profile.providerId);
+            const providers = profile.agentDeviceId
+              ? await readUsableAgentDeviceProviders(profile.agentDeviceId, profile.agentKind, profile.model, profile.providerId)
+              : await getDesktopProviderService().listProviders({ allowSideEffects: false, catalog: getActiveCatalog() });
             const providerId = reroute && shouldApplyExclusiveProviderRerouteLive(profile.providerId)
               ? reroute
               : profile.providerId ?? effectiveSourceIdForModel(providers, null, profile.model, profile.agentKind);
@@ -18068,10 +18148,11 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
             return performSessionAgentSwitch(agentSwitchDeps, {
               sessionId: id, targetAgentKind: profile.agentKind, model: profile.model,
               providerId: profile.providerId, effort: profile.effort, fastMode: profile.fastMode,
+              ...(profile.agentDeviceId !== undefined ? { agentDeviceId: profile.agentDeviceId } : {}),
               runtimeSource: 'agent', assertSelectionCurrent, beforeMutation,
             });
           },
-        }, { targetSessionId, expectedGeneration, beforeMutation, patch: { ...patch, harness: patch.harness } });
+        }, { targetSessionId, expectedGeneration, beforeMutation, patch: { ...patch, harness } });
       }
       const profiles = await readSessionRuntimeProfiles(targetSessionId);
       if (beforeMutation) await beforeMutation();

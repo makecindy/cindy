@@ -1,4 +1,4 @@
-import { teammateSelectionStyle } from './teammateSelection';
+import { SIDEBAR_LIST_ROW_ACTIVE_CLASS, SIDEBAR_LIST_ROW_HEIGHT_CLASS } from '@/features/cc-agent/sidebar/listRowStyle';
 import type { KeyboardEventHandler, MouseEventHandler, ReactNode } from 'react';
 import { Pin } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
@@ -44,11 +44,11 @@ export function CindyDeviceRow({
   return (
     <div
       data-testid="cindy-device-row"
-      style={teammateSelectionStyle}
       className={cn(
-        'group relative flex w-full items-center gap-2.5 rounded-xl px-2.5 py-2 transition-colors',
+        'group relative flex w-full items-center gap-2.5 rounded-lg px-2.5 transition-colors',
+        SIDEBAR_LIST_ROW_HEIGHT_CLASS,
         selected
-          ? 'bg-sidebar-item-active text-sidebar-item-active-foreground'
+          ? SIDEBAR_LIST_ROW_ACTIVE_CLASS
           : 'text-[var(--sidebar-nav-text)] hover:bg-sidebar-item-hover',
       )}
     >
@@ -58,7 +58,7 @@ export function CindyDeviceRow({
         aria-current={selected ? 'page' : undefined}
         onContextMenu={onContextMenu}
         onKeyDown={onKeyDown}
-        className="absolute inset-0 rounded-xl outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring"
+        className="absolute inset-0 rounded-lg outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring"
         aria-label={`${bot.name} · ${current.label}`}
       />
       <span className="pointer-events-none relative flex shrink-0">

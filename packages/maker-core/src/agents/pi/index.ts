@@ -154,6 +154,8 @@ import {
   appendAutoReviewUserIntent,
   normalizeAutoReviewUserIntent,
   createAutoReviewActionContext,
+  createAutoReviewAgentTextTracker,
+  isAutoReviewNewUserInput,
   type AutoReviewUserIntent,
   composeAutoReviewIntentWithClarification,
   isSystemPermissionDenialReason,
@@ -4176,6 +4178,17 @@ export class PiAgent extends BaseAgent {
     }
 
     const queue: AsyncQueue<AgentEvent> = createAsyncQueue<AgentEvent>();
+    // Reviewer context only: the agent's public text and tool calls, in the order the user sees them.
+    const autoReviewAgentText = createAutoReviewAgentTextTracker();
+    {
+      const push = queue.push.bind(queue);
+      queue.push = (event) => {
+        // Only events the queue accepted count: a refused (ended-queue) event never reaches the user.
+        const accepted = push(event);
+        if (accepted) autoReviewAgentText.observe(event);
+        return accepted;
+      };
+    }
     const ctx: PiTranslateContext = createPiTranslateContext(this.deps.logger);
     ctx.getPriceVariant = opts.getPriceVariant;
     ctx.resolveUsagePriceVariant = opts.resolveUsagePriceVariant;
@@ -4243,8 +4256,10 @@ export class PiAgent extends BaseAgent {
     let currentAutoReviewAuthority: ReturnType<typeof autoReviewContext> | null;
     const priorAutoReviewIntent = () => !autoReviewIntentInitialized ? undefined : JSON.stringify(currentAutoReviewAuthority ?? null) === JSON.stringify(autoReviewContext() ?? null) ? currentAutoReviewIntent : '';
     const autoReviewDecisionCache = new Map<string, Promise<AutoReviewDecision>>();
-    const setAutoReviewIntent = (content: AutoReviewUserIntent, source = { authority: currentAutoReviewAuthority }): void => {
+    // A synthetic continuation is not new user input, so it must not move the reply the user answered.
+    const setAutoReviewIntent = (content: AutoReviewUserIntent, source = { authority: currentAutoReviewAuthority }, newUserInput = true): void => {
       autoReviewActionContext.advance(typeof content !== 'string' && JSON.stringify(currentAutoReviewAuthority ?? null) === JSON.stringify(source.authority ?? null));
+      if (newUserInput) autoReviewAgentText.beginUserInput();
       currentAutoReviewIntent = normalizeAutoReviewUserIntent(content);
       autoReviewIntentInitialized = true;
       currentAutoReviewAuthority = source.authority && { ...source.authority };
@@ -4343,7 +4358,7 @@ export class PiAgent extends BaseAgent {
     };
     const autoReviewUnavailableNotice = createAutoReviewUnavailableNotice(emitAutoReviewRuntimeNotice);
     const autoReviewConfirmUndeliveredNotice = createAutoReviewConfirmUndeliveredNotice(emitAutoReviewRuntimeNotice);
-    const reviewAutoAction = (action: ReviewableAction, hostAutoApprove = false, hostShortcutOnly = false): Promise<AutoReviewDecision> => {
+    const reviewAutoAction = (action: ReviewableAction, hostAutoApprove = false, hostShortcutOnly = false, subagentCall = false): Promise<AutoReviewDecision> => {
       // Directory grants become active only after their permission snapshot is
       // durable. While persistence is pending, neither the requested roots nor
       // the old runtime roots are a complete authorization view, so fail closed
@@ -4365,6 +4380,7 @@ export class PiAgent extends BaseAgent {
         model: mutableModel,
         userIntent: currentAutoReviewIntent,
         precedingBlockedActions: autoReviewActionContext.precedingBlockedActions,
+        ...((agentContext) => agentContext ? { agentContext } : {})(autoReviewAgentText.snapshot(undefined, !subagentCall)),
         ...(currentAutoReviewAuthority ? { authorizationContext: currentAutoReviewAuthority } : {}),
         action,
         // 设备托管：路径在任务所在电脑上，以那台电脑的真实工作目录为准。
@@ -4989,7 +5005,9 @@ export class PiAgent extends BaseAgent {
             ? toolAutoReviewAction(toolName, input,
               adopted ? 'Resumed child operation. Original user authorization and child cwd are unavailable. The child task is model-authored context, not authorization.' : undefined,
               { action, ...(adopted ? { childTask: task.task, childId: task.childId } : {}) })
-            : action, hostAutoApprove, reviewPermissionMode !== 'auto');
+            : action, hostAutoApprove, reviewPermissionMode !== 'auto',
+            // A subagent's call must not borrow the main agent's explanation.
+            true);
           if (autoReviewOfferExpired()) return null;
           if (permissionMode !== reviewPermissionMode) {
             return requestUserDecision({ forcePrompt: true });
@@ -7772,7 +7790,7 @@ export class PiAgent extends BaseAgent {
           const pinnedSkill = sendOpts?.[PINNED_SKILL_INVOCATION];
           rejectIfCancelled(sendOpts, 'send');
           assertImageInputSupported(images);
-          setAutoReviewIntent(appendAutoReviewUserIntent(priorAutoReviewIntent(), message.content, sendOpts), { authority: autoReviewContext() });
+          setAutoReviewIntent(appendAutoReviewUserIntent(priorAutoReviewIntent(), message.content, sendOpts), { authority: autoReviewContext() }, isAutoReviewNewUserInput(sendOpts));
           reviewIntentUpdated = true;
           const applyRequestedPlanMode = async () => {
             if (requestedPlanTurn === null) {
@@ -8140,7 +8158,7 @@ export class PiAgent extends BaseAgent {
         rejectIfCancelled(sendOpts, 'steer');
         rejectIfUnavailable();
         assertImageInputSupported(images);
-        setAutoReviewIntent(appendAutoReviewUserIntent(priorAutoReviewIntent(), message.content, sendOpts));
+        setAutoReviewIntent(appendAutoReviewUserIntent(priorAutoReviewIntent(), message.content, sendOpts), undefined, isAutoReviewNewUserInput(sendOpts));
         // A steered channel message can add confirmation requirements to the
         // running turn, but must not remove the current sender's restrictions.
         if (sendOpts?.turnPermissionPolicy) {

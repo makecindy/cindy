@@ -6,6 +6,7 @@ import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 const h = vi.hoisted(() => ({
   dark: false, frameWidth: 390, naturalWidth: null as number | null,
   detachedHeader: false, options: {} as any, loops: new Set<object>(), appListeners: new Set<() => void>(),
+  menuFrame: null as [number, number] | null, detachedToolbar: false, toolbarItems: [] as any[],
 }));
 vi.mock('react-native', () => ({
   AppState: { currentState: 'active', addEventListener: (_event: string, listener: () => void) => {
@@ -24,12 +25,23 @@ vi.mock('react-native', () => ({
   Easing: { linear: (value: number) => value },
   StyleSheet: { create: (value: unknown) => value },
   Image: () => null,
-  Pressable: ({ children }: any) => el('div', null, typeof children === 'function' ? children({ pressed: false }) : children),
-  View: ({ children, onLayout, style }: any) => {
-    // The hidden measuring row reports the title's natural width, as on device.
-    useEffect(() => { if (onLayout && h.naturalWidth != null) onLayout({ nativeEvent: { layout: { width: h.naturalWidth } } }); }, [onLayout]);
+  Pressable: ({ children, style }: any) => {
+    const flat = [typeof style === 'function' ? style({ pressed: false }) : style].flat(Infinity);
+    const pick = (key: string) => flat.reduce((found: unknown, s: any) => s?.[key] ?? found, undefined);
+    return el('div', { 'data-title-hit': true, 'data-padding-left': pick('paddingLeft'), 'data-margin-left': pick('marginLeft') },
+      typeof children === 'function' ? children({ pressed: false }) : children);
+  },
+  View: ({ children, onLayout, style, ref }: any) => {
     const width = [style].flat(Infinity).reduce((found: unknown, s: any) => s?.width ?? found, undefined);
-    return el('div', { 'data-width': typeof width === 'number' ? width : undefined }, children);
+    // The hidden measuring row reports the title's natural width, as on device; a sized view
+    // reports the width it asked for, as UIKit grants a trailing item that fits.
+    const reported = typeof width === 'number' ? width : h.naturalWidth;
+    useEffect(() => { if (onLayout && reported != null) onLayout({ nativeEvent: { layout: { width: reported } } }); }, [onLayout, reported]);
+    // The settled window frame of the kept top-left menu, as measureInWindow reports it.
+    const attach = (node: any) => {
+      if (ref && node) ref.current = Object.assign(node, { measureInWindow: (cb: any) => cb(h.menuFrame?.[0] ?? 0, 0, h.menuFrame?.[1] ?? 0, 44) });
+    };
+    return el('div', { 'data-width': typeof width === 'number' ? width : undefined, ref: attach }, children);
   },
 }));
 vi.mock('react-native-safe-area-context', () => ({
@@ -40,7 +52,11 @@ vi.mock('expo-router', () => ({ Stack: {
   Screen: ({ options }: any) => { h.options = options; return h.detachedHeader ? null : options.headerTitle(); },
   Header: () => null,
   Toolbar: Object.assign(({ children }: any) => children, {
-    View: ({ children }: any) => children,
+    // A detached toolbar item is rendered by the native bar outside the route's providers.
+    View: ({ children }: any) => {
+      if (h.detachedToolbar) { h.toolbarItems.push(children); return null; }
+      return el('div', { 'data-testid': 'custom-toolbar-item' }, children);
+    },
     Button: () => null,
     Menu: ({ icon, iconRenderingMode, accessibilityLabel }: any) => el('div', {
       'data-testid': 'display-menu', 'data-icon': icon, 'data-rendering': iconRenderingMode, 'aria-label': accessibilityLabel,
@@ -85,6 +101,9 @@ beforeEach(() => {
   h.dark = false;
   h.frameWidth = 390;
   h.naturalWidth = null;
+  h.menuFrame = null;
+  h.detachedToolbar = false;
+  h.toolbarItems = [];
   h.detachedHeader = false;
   h.options = {};
   node = document.createElement('div');
@@ -119,11 +138,12 @@ it.each([
   expect(menu.getAttribute('aria-label')).toBe('Display settings');
 });
 
-async function renderTitleWidth(props: { statusRowReserve?: number; remoteDesktop: boolean }) {
+async function renderTitleWidth(props: { statusRowReserve?: number; remoteDesktop: boolean; keepMenuTopLeft?: boolean }) {
   await act(async () => root.render(el(HomeNativeStackHeader, {
     displayA11y: 'Display settings', displayActions: [], displayBadge: false, menuA11y: 'Open menu',
     onDisplayAction: vi.fn(), onOpenDeviceMenu: vi.fn(), onOpenMenu: vi.fn(), remoteDesktopA11y: 'Remote desktop',
     onOpenRemoteDesktop: props.remoteDesktop ? vi.fn() : undefined, statusRowReserve: props.statusRowReserve,
+    keepMenuTopLeft: props.keepMenuTopLeft,
     onSelectScope: vi.fn(), scopeActions: [], showRemoteGuide: false, title: 'Dash MacBook Pro', titleA11y: 'Select scope',
   })));
   // The outermost sized view is the title frame handed to the native bar.
@@ -189,5 +209,87 @@ it('carries visibility into a native title rendered outside the home route', asy
     expect(h.loops.size).toBe(0);
   } finally {
     await act(async () => headerRoot.unmount());
+  }
+});
+
+// The Duo title rides in a trailing custom item; render it and let the menu's settled frame arrive
+// (it is read 250ms after layout), then return the item that holds the title.
+async function renderSideTitle(natural: number, menuFrame: [number, number] | null, frameWidth = 382) {
+  vi.useFakeTimers();
+  try {
+    h.frameWidth = frameWidth;
+    h.naturalWidth = natural;
+    h.menuFrame = menuFrame;
+    await renderTitleWidth({ remoteDesktop: true, keepMenuTopLeft: true });
+    await act(async () => { vi.advanceTimersByTime(300); });
+    const item = [...node.querySelectorAll('[data-testid="custom-toolbar-item"]')]
+      .find((candidate) => candidate.textContent?.includes('Dash MacBook Pro'))!;
+    // The item's sized frame is the title view handed to the native bar; the menu sits in its own item.
+    return { width: Number(item.querySelector('[data-width]')!.getAttribute('data-width')), hit: item.querySelector('[data-title-hit]')! };
+  } finally {
+    vi.useRealTimers();
+  }
+}
+
+// Regression: Duo cover screen home (2026-11-06). The vertical system bar takes the trailing items,
+// and UIKit caps a title view to the mirrored space around its center, so "Dash的Mac Studio" was cut
+// with the row's trailing side empty. The title now rides in a custom trailing item spanning the gap
+// after the menu (382 - 44 - 64 - 4 = 270pt, from 112pt). Like the phone, a name that fits is
+// centered (over the 382pt column, 191pt); a longer one sits against the tight side, here the menu
+// (22 + 44 + 12 = 78pt), and grows toward the trailing side, starting left of the item if needed.
+it.each([
+  // [natural title width, menu frame, expected leading margin, expected leading padding]
+  // First: the settled menu frame is kept for later mounts.
+  [300, null, 0, 4], // menu not settled yet: stays inside the item
+  [92, [22, 44], 0, 33], // 100pt with hit padding: centered at 141pt, 29pt into the item
+  [300, [22, 44], -34, 4], // too wide to center: starts right after the menu, 34pt left of the item
+] as const)('Duo vertical system bar natural=%s menu=%j starts the title at margin %s padding %s',
+  async (natural, menu, margin, padding) => {
+    const { width, hit } = await renderSideTitle(natural, menu as [number, number] | null);
+    expect(width).toBe(270);
+    expect(Number(hit.getAttribute('data-margin-left'))).toBe(margin);
+    expect(Number(hit.getAttribute('data-padding-left'))).toBe(padding);
+  });
+
+// A wide landscape window (900pt, trailing item capped at 360pt from x=540) centers a 100pt title at
+// x=350–450, entirely left of the item where nothing takes taps; one tap target (44pt) of it, the
+// chevron included, stays inside: it starts 56pt left of the item.
+it('Duo wide window keeps a tap target of a centered short title inside the trailing item', async () => {
+  const { width, hit } = await renderSideTitle(92, [22, 44], 900);
+  expect(width).toBe(360);
+  expect(Number(hit.getAttribute('data-margin-left'))).toBe(-56);
+  expect(Number(hit.getAttribute('data-padding-left'))).toBe(4);
+});
+
+// Same hidden-animation gap as the nav title above: the Duo title lives in a trailing toolbar item,
+// which the native bar also renders outside the route's providers. Minimal failure: pending sync,
+// then hide home while the app stays active; the item's sync glyph must stop its native loop.
+it('carries visibility into the Duo trailing title item rendered outside the home route', async () => {
+  h.detachedToolbar = true;
+  const itemNode = document.createElement('div');
+  const itemRoot = createRoot(itemNode);
+  const props = {
+    displayA11y: 'Display settings', displayActions: [], displayBadge: false, menuA11y: 'Open menu',
+    onDisplayAction: vi.fn(), onOpenDeviceMenu: vi.fn(), onOpenMenu: vi.fn(), remoteDesktopA11y: 'Remote desktop',
+    onSelectScope: vi.fn(), scopeActions: [], showRemoteGuide: false, title: 'All tasks', titleA11y: 'Select scope',
+    keepMenuTopLeft: true, syncing: true,
+  };
+  const syncingHeader = el(HomeNativeStackHeader, props);
+  const render = async (visible: boolean) => {
+    h.toolbarItems = [];
+    await act(async () => root.render(el(AnimationVisibilityProvider, { visible, children: syncingHeader })));
+    // The bar's last item is the trailing one that holds the title; the menu's comes first.
+    await act(async () => itemRoot.render(h.toolbarItems.at(-1)));
+  };
+  try {
+    await render(true);
+    expect(h.loops.size).toBe(1);
+    await render(false);
+    expect(h.loops.size).toBe(0);
+    expect(itemNode.textContent).toContain('All tasks');
+    await render(true);
+    expect(h.loops.size).toBe(1);
+  } finally {
+    await act(async () => itemRoot.unmount());
   }
 });

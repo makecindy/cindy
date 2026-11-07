@@ -13,6 +13,17 @@
 官方及自建 relay 均只透传已有 invoke/push 帧，无需服务端协议变更。原生手机目前没有本机
 供应商连接设置页；执行和远控通道复用上述协议，浏览器登录仍在执行电脑完成。
 
+## 插件自有任务远程模型（2026-11-06，未发布）
+
+插件管子的 `tasks.create / setModel` 在原 route 上增加可选 `agentDeviceId`；
+`tasks.capabilities()` 追加 `remoteRoutes:true`。同账号电脑和 `share:<shareId>` 的语义
+与统一模型选择器一致，缺省保持插件宿主。旧 Host 缺标记时只提供本机选模，不能剥掉来源后重试。
+新 Host 保持所有旧 route、批准记录、幂等摘要及任务回执兼容；位置只在选择远程时出现。
+任务 resolvedConfig、run.acceptedConfig 和改模 pending profile 保留位置；无 DB schema 迁移。
+仅复用既有远程 Agent 的目录、open/send/poll/stop 通道，任务和历史仍归插件电脑，
+不添加 device-link allowlist、帧、relay 能力或服务端请求。官方与自建中转继续透传既有协议，无需升级。
+同账号与跨账号授权仍由原通道及执行电脑核验，来源不可用不回落本机、不重放付费输入。
+
 ## 插件详细介绍 `manifest.readme`（2026-11-06，未发布）
 
 `ghost.json` 新增可选 `readme`：语言到包内 `.md` 文件的映射，必须提供 `en`，规则正本在
@@ -112,6 +123,39 @@ remote-resource invoke，无需服务端或中转升级。
 `{method:"text-heuristic",items:[{source,tokens}]}`。它是文字粗估，独立于原生总量；
 Desktop 与 Mobile 明确标注估算和排除项。旧端忽略可选字段，新端收到缺字段或未知 method
 时只显示原有总量，不要求双端同时升级。返回值不含模型上下文正文或工具定义正文。
+
+## 官方飞书 / Lark 渠道的协议增量（2026-11-04）
+
+两仓 `slack-hook-protocol` 同步追加，全部是可选新增：
+
+- `HOOK_PROVIDERS` 追加 `'feishu'`（飞书与 Lark 共用），能力位 `provider:feishu`。与 Telegram／X
+  相同，由服务端 welcome 宣告、桌面 hello 声明，双方都有才启用。
+- `provider.bind.update`／`state` 新增可选 `bindCode`：一次性短关联码（4–32 位大写字母或数字，
+  可含中间连字符），只允许在 `pending` 时非空，缺省等同 `null`；新增 UI 动作提示 `copy_bind_code`。
+  `pending` 仍要求 `connectUrl`（飞书为网页授权地址），关联码只是网页授权不可用时的兜底。
+- `query.request` 新增可选 `recipient = { scopeId, principalId }`：多个组织共用的服务（官方飞书）发出的查询
+  代表哪个应用的哪个账号；带上时两项都须是非空字符串。其它服务不发，旧桌面端忽略。
+- 客户端端点清单新增 `feishuHookWsUrl`（`wss:`），登记为跨区域端点：服务只在海外部署一套，
+  两份区域清单都指向 `cindy.app`。服务部署前正式清单不写该字段，入口不显示。
+
+飞书群上下文由服务端组装进 `task.dispatch.prompt`（含 `<thread_context>`、引用与当前发言人）；`source.threadContext` 同时供来源卡展示，客户端继续保留服务端完整 prompt，不再从展示元数据重复注入。X 的客户端 prompt 组装只作用于 X，不能据此推断其它渠道丢失上下文。
+
+多设备（2026-11-07）：同一应用下，同一飞书账号可同时保留多个设备的 `confirmed` 绑定；新绑定默认成为工作电脑，重连不改变选择。工作电脑通过机器人菜单 `device` / `/device` 或已绑定电脑的「设为工作电脑」按钮选择，绑定成功后机器人私聊说明用法。服务端内部会话代次、工作目录与偏好按设备绑定隔离，外部 lane 格式仍相同（设备各自存本地任务）。选择仅影响后续消息，运行中任务沿原设备继续；离线 / 繁忙时拒绝，不改派、不补发。`superseded/rebound` 仅表示同一设备的旧账号绑定被替换；其它电脑的绑定不失效。桌面解绑只影响本机。
+
+桌面选择是可选增量：本机 `confirmed` 快照的 `actions` 提供 `select_device` 时，客户端才显示按钮。客户端发 `provider.bind.select { requestId, provider, bindingId }`，服务端按已认证连接的设备核对本机绑定、应用和归属，回 `provider.bind.selection { requestId, provider, bindingId, ok }`；只有匹配的成功回执才能提示「已设为工作电脑」。请求不能创建绑定，不改变其它电脑的绑定状态；服务端从收到请求起限制处理时间，不依赖客户端时钟。断线、解绑、切账号及超时让在途请求失败，不补发。旧服务端不提供动作时隐藏按钮；客户端不缓存可能被其它设备切换而过时的「当前工作电脑」标签。
+
+客户端接线：desktop 的飞书线 hello 只声明 `provider-bind-v1`、`provider-prefs-v1` 与 `provider:feishu`
+（不声明 `msg-op-v1` 及 `telegram-*`），welcome 同样须含这三项才启用。不声明 `session-picker-v1`：飞书服务由多个组织
+共用；会话列表查询要双方都声明才回答，服务端单方面宣告不算。飞书线的工作目录 / 模型查询必须带 `recipient`，且与
+这条连接上服务端确认过的绑定（`scopeId` / `principalId`，等到绑定快照之后）一致才回答，否则回 `ok:false`。`pending` 的
+`connectUrl` 与 `remediationUrl` 在进入设置页快照前按飞书 / Lark 精确主机白名单校验（`feishuDeepLink.ts`），且授权页 `client_id` 必须与当前宣告的 `scopeId` 一致；不一致时转为 `failed/invalid-connect-url`，清除链接与关联码，不向 Renderer 暴露或自动打开；
+「打开机器人」的 AppLink 还须指向绑定的应用（`appId` 等于 `scopeId`），否则连同 `open_provider` 一起去掉。
+
+兼容：旧校验器不读取 `bindCode`；不认识 `feishu` 的旧端按未知 provider 拒绝该帧但不断连，也不会
+协商到 `provider:feishu`；新客户端连旧服务端收不到飞书帧，连不发 `recipient` 的旧飞书服务端时 `/project`、`/model`
+查询失败（两端都未发布，飞书服务端须先于客户端上线）。客户端里协议渠道值进入本地类型的
+回调（`onHookReadyForPrefsMirror`）按客户端支持集收窄。没有服务端部署、数据库、环境变量、
+Device Link 或自建中转变化；协议包改动会触发服务端全部服务的 CI。
 
 ## 群内能力提示（非执行终态）
 
@@ -261,6 +305,43 @@ Mobile `historyViewProvider.test.tsx` 的 offline mask / explicit-off 用例。
 旧受邀者仍按本机那一份隐藏；新受邀者对组里一台都不能用的分享会在发送时收到既有的
 `REMOTE_AGENT_UNAVAILABLE`。手机经新版被控电脑代读即生效，手机自身解析同样走该函数。
 官方与自建中转只透传既有 invoke，无需改动。
+
+## 自动化任务 Webhook 触发（2026-11-02）
+
+账号地址管理（2026-11-04）纯增同账号 invoke `maker:schedule:webhook-account`、
+`maker:schedule:webhook-release`、`maker:schedule:webhook-restore`；共享任务和供应商访客不放行。
+新控制端遇到旧宿主的未知通道按不可用处理，不伪造空清单。既有密钥与地址轮换接口仍仅本机。
+官方和自建中转沿用通用 invoke，无帧或鉴权变化；白名单校验与同账号控制授权保持不变。
+
+REST 纯增 `/account/endpoints` 清单及按 ID 释放、设备范围 `/endpoints/released` 和
+`/endpoints/by-schedule/:scheduleId/restore`。设备清单可选增加名称，旧客户端忽略；旧服务返回
+404 时新客户端沿用原接收行为、账号管理提示等待更新。`webhook-status.problem` 纯增 `released`，
+WS 纯增 `endpoints-changed` 失效通知，旧客户端忽略。释放必须先部署服务端新增迁移与接口；
+数据库插入触发器阻止旧服务副本自动重建，不能通过回滚历史迁移撤销。恢复使用最新 releaseId，
+并发旧恢复不能撤销后一次释放。账号删除同时清理释放记录。
+
+`Schedule` 新增可选字段 `webhookTrigger`，`ScheduleRun` 新增可选字段 `triggerSource`，对应追加列
+`schedules.webhook_trigger` 与 `schedule_runs.trigger_source`（迁移
+[`0148_schedule_webhook_trigger`](../../apps/desktop/drizzle/scripts/0148_schedule_webhook_trigger.ts)）。沿用既有
+`maker:schedule:create/update/get` 通道：缺 key 表示不修改，`null` 清空，旧客户端整表单保存不会清掉配置。
+旧主机只保留已知列，会报告成功却丢掉配置，所以能力新增 `supportsScheduleWebhookTrigger`；Agent 工具的
+跨设备设置／清空先检查此标记，不支持则不发送写入；开启时再通过目标电脑的
+`maker:schedule:webhook-receiver` 确认有接收服务。清空不要求接收服务可用，省略字段仍表示不修改。
+同账号 invoke 新增只读的 `maker:schedule:webhook-status`。
+`maker:schedule:webhook-set-secret` 携带密钥明文，`maker:schedule:webhook-rotate-url` 更换接收地址，都不进 Device Link
+白名单。官方及自建中转沿用通用 invoke 转发，没有帧、鉴权或重连协议变化，无需修改中转内核。
+
+`webhookTrigger` 新增可选字段 `source`（发送方预设与是否签名，或自定义格式），存在既有 JSON 列里，不加 migration。
+缺 key 表示不修改，旧客户端和手机的编辑不会把它改回 GitHub；本机认不出的预设原样保留，不按 GitHub 同步。服务器
+REST 的地址保存请求新增必填 `format`，密钥改为客户端生成或粘贴后 `PUT /endpoints/:id/secret`，新增
+`POST /endpoints/:id/rotate`；功能尚未发布，两端同批上线，没有存量调用方。
+
+接收改走 webhook-server 后，端点清单纯增可选字段 `webhookApiBaseUrl`，不 bump schemaVersion：老客户端忽略，
+缺失或留空时隐藏入口，也是灰度开关；该字段按区域锁定，不进 `CROSS_REGION_ENDPOINT_KEYS`。REST、长连接帧和
+关闭码的合同正本是 cindy-server 的 `docs/webhook-server.md`，双方忽略不认识的帧 `type`。同账号 invoke 新增只读的
+`maker:schedule:webhook-receiver`；`webhook-status` 的返回增加 `receiver`、`connected`、`problem`、`quotaLimit`、
+`quotaResetAt`。长连接新增 `quota` 帧，只在接收次数用完时出现，没有恢复帧，客户端按 `resetAt` 自行解除。功能尚未发布，
+没有存量客户端。服务端先部署并验证，再把清单字段填上。
 
 ## 仓库自动任务导入确认（2026-11-01）
 
@@ -4124,6 +4205,13 @@ Claude 原生 `user` 范围投影为 `global`；控制端读取早期 Host 的 `
 
 ## 云端伙伴：从任意电脑更换主力电脑
 
+2026-11-06：修复版将既有 `maker:companion-cloud:caps` 的 `companionCloud` 声明升至 3，
+表示接收端已能读取伙伴大内容存储。交出方仍要求目标 ≥ 3 才允许交出仅存于该存储的值；
+目标 < 3、服务器未提供存储或上传不完整时仍拒绝交出并保留原主力电脑。0.1.127 虽已实现读取，
+但仍声明 2，因而会被按旧接收端处理。小内容交出、远程发起交出的 ≥ 2 门槛保持不变。
+不新增 channel、参数、帧或服务端接口，官方和自建中转均透传既有能力回包；手机仍只负责发起，
+不充当资料接收电脑，不改 Mobile 原生指纹。
+
 `maker:companion-cloud:caps` 的 `companionCloud` 从 1 升到 2，新增两个同账号 device-link channel：只读的
 `maker:companion-cloud:targets`（主力电脑视角下可接手的电脑）与写入的 `maker:companion-cloud:hand-over`
 （`[botId, targetDeviceId, options?]`，在主力电脑上走原有交出流程；`options.whenBusy` 为 `wait` / `stop`，老主力电脑忽略；隧道超时 7 分钟），以及合并 Cindy 的 `maker:companion-cloud:merge`（`[keepBotId, fromBotIds]`，只在本机运行保留的 Cindy 时执行，隧道超时 10 分钟）和合并前请来源 Cindy 的主力电脑先同步的 `maker:companion-cloud:flush`（`[botId]`，只在本机是它的主力电脑时执行、不改主力电脑，忙碌时 `BUSY`，隧道超时 7 分钟；版本 < 2 或连不上的主力电脑不请求，合并按云端已有内容进行）。接手方仍只要求版本 ≥ 1，
@@ -4971,6 +5059,23 @@ Chat Server 请求复用既有消息 `content` 的 media 块及 `threadRootId`�
 电脑端藏起这些元素，手机投影在宿主侧把它们连同文字、`live` 与按钮一起去掉，所以新旧手机都无需改动；查不到状态时照常显示。
 手机只对含 PR 状态位或 PR 链接的卡片定时重读，带该标记的卡片需保留其中之一（GitHub 插件的 PR 卡片标题始终链接到 PR）。旧宿主的净化器丢掉这个属性，卡片维持原快照。不改握手、白名单、relay 或服务端，无数据库迁移。
 回归入口：`cardSanitizer.test.ts`、`cardRemoteResource.test.ts`、`ghostCardPrStatus.test.ts`。
+
+插件卡片可放一颗归档任务按钮：`button` 上标 `data-ghost-task-archive="owner/repo#N"`（不得同时带 `data-ghost-action`
+或 `data-ghost-link`，否则净化器丢掉这个标记），可选 `data-ghost-task-archive-state="merged|closed"`（插件读到的状态快照）
+与空值 `data-ghost-task-archive-auto`（用户开了「合并后自动归档」）。插件把它写成 `display:none`，文字放在 `aria-label`
+并用自己的 `::before` 画出来。新电脑端按标题栏同源状态在 PR 已合并或已关闭时以 `inline-flex` 露出（查不到状态时按快照），
+点击不回传插件，由任务页走与标题栏归档相同的流程，只作用于卡片所在任务。带 `-auto`、宿主自己查到已合并，且任务页满足静态资格（`canAutoArchiveOnLeave`：普通任务页、本机任务、任务还是活跃的、没有被远程写入拦截）时，
+自动归档待生效：宿主在按钮左边插入自己的「离开后自动归档 · 本次不归档」（文字与点击都归宿主），卡片在可见、聚焦的窗口里
+进入视野记为「看过」（只在内存）。用户点「本次不归档」，或待生效之后任务里出现用户发的消息（本机发送立即取消，但只取消已经待生效的，合并前发的消息不算；
+手机、IM、共享成员的消息在历史加载完成后按最后一条用户消息比较；官方 IM Hook 的渠道消息虽然复用 scheduler 形态的 origin，但是真人发的，要算；真正的自动化与插件代发的不算），本次就取消，直到任务里不再有符合条件
+的卡片才重新开始。同一任务可以有多张卡片，按卡片登记资格，任一张符合就待生效，只有符合条件的那张卡片在眼前显示才记「看过」。
+提示只在静态资格成立时显示，离开时用同一个判断（IM 接管状态只能在任务所在电脑上查，远程任务没有确认框兜底就不静默收走，卡片上的归档按钮照旧可用），所以提示不会承诺一次不会发生的归档。
+离开普通任务页（包括直接切到另一个任务，按离开那个任务最后一次渲染的信息处理）时，看过、没取消、任务没在运行、没被接管、
+确认没有绑定活跃定时任务（读取失败、超时、上次刷新失败后留下的旧缓存，都算不确认，保留任务）、输入框没有草稿、worktree 确认干净且用户没有
+回到它，才静默归档并给可撤销提示，否则不归档也不弹确认。旧电脑端的净化器丢掉这些属性，按钮一直藏着；
+手机投影不含无动作的按钮且按钮内没有文字，新旧手机都不显示、也不计「看过」。不给插件新增运行期能力，不改 manifest、
+批准记录、握手、白名单、relay 或服务端，无数据库迁移。
+回归入口：`cardSanitizer.test.ts`、`ghostCardPrStatus.test.ts`、`useGhostCardTaskArchive.test.tsx`。
 
 ## 插件卡片的手机原生呈现（`plugin-card-rich`）
 

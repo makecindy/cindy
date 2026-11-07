@@ -29,17 +29,6 @@
       "service": "Não foi possível contactar o serviço de autorização da partilha ou este devolveu uma falha. O executor não foi confirmado como offline."
     }
   },
-  "pluginUi": {
-    "renderer": "Apresentação",
-    "original": "Original",
-    "unavailable": "Os controlos da extensão estão indisponíveis. As ações estão desativadas.",
-    "outcome-unknown": "O resultado não foi confirmado. Consulte o estado atual da extensão.",
-    "rejected": "A extensão não executou esta ação. O conteúdo introduzido foi mantido.",
-    "draftChanged": "O conteúdo introduzido mudou. A alteração da extensão não foi aplicada.",
-    "editorUnavailable": "Este campo está indisponível. A alteração da extensão não foi aplicada.",
-    "more": "Mais",
-    "close": "Fechar"
-  },
   "providerAccountUsage": {
     "kimi": {
       "refresh": "Atualizar quota",
@@ -176,7 +165,7 @@
   "taskActionConfirmation": {
     "title": "Confirmar ação da sessão",
     "once": "Reveja o destino, a ação e o conteúdo completo abaixo. A permissão aplica-se apenas a esta ação, uma vez.",
-    "remove": "Esta ação elimina a automatização. Reveja o destino; a aprovação aplica-se apenas uma vez.",
+    "remove": "O endereço de receção da automatização será libertado. Verifica o destino; a autorização aplica-se apenas a esta ação.",
     "permission": "Esta ação responde a um pedido de permissão noutra tarefa em seu nome. Reveja a ação; a aprovação aplica-se apenas uma vez.",
     "resume": "Esta ação retoma a execução em pausa. Reveja o destino; a aprovação aplica-se apenas uma vez.",
     "command": "Esta ação guarda ou executa um comando no seu computador fora da aprovação de ferramentas do Agent. Reveja o comando e a pasta de trabalho; a aprovação aplica-se apenas uma vez.",
@@ -1137,6 +1126,14 @@
     "detail": "Isto terminará o controlo remoto e restaurará o ecrã deste computador. O computador será bloqueado se a opção de bloquear ao sair estiver ativada.",
     "cancel": "Manter ligação",
     "disconnect": "Desligar"
+  },
+  "awayGuard": {
+    "status": "O Cindy está a trabalhar",
+    "hint": "Prima qualquer tecla para bloquear e desbloqueie com Touch ID ou a sua palavra-passe.",
+    "lockFailed": {
+      "status": "O Cindy não conseguiu bloquear este Mac",
+      "hint": "Prima Control-Comando-Q para o bloquear. O ecrã também bloqueia sozinho passado algum tempo."
+    }
   },
   "appBadge": {
     "attentionCount": "Tarefas que precisam de atenção: {{count}}"
@@ -2165,6 +2162,17 @@
     "appearance": {
       "title": "Aspeto",
       "modeLabel": "Modo de aspeto",
+      "appIcon": {
+        "label": "Ícone da Dock",
+        "description": "Escolha o ícone que a app utiliza na Dock",
+        "saveFailed": "Não foi possível guardar o ícone da Dock. Tente novamente.",
+        "options": {
+          "default": "Predefinido",
+          "cat": "Gato preto",
+          "wordmark": "Logótipo da Cindy",
+          "mark": "Símbolo da Cindy"
+        }
+      },
       "sidebarAndPanels": "Barra lateral e painéis",
       "themeLabel": "Tema",
       "themeAriaLabel": "Seleção de tema",
@@ -2422,7 +2430,24 @@
       "swallowActivationClickLabel": "Evitar cliques acidentais ao regressar",
       "swallowActivationClickHint": "Quando ativado, um clique com o botão esquerdo numa janela em segundo plano apenas a traz para primeiro plano. Quando desativado, também atua sobre o item clicado, o que pode causar cliques acidentais.",
       "swallowActivationClickAria": "Ativar ou desativar a proteção contra cliques acidentais ao regressar à janela",
-      "macRestartNote": "No macOS, reinicie a aplicação para aplicar as alterações."
+      "macRestartNote": "No macOS, reinicie a aplicação para aplicar as alterações.",
+      "awayGuard": {
+        "label": "Continuar a trabalhar quando se ausenta",
+        "hint": "Quando ativado, este Mac não desliga o ecrã nem bloqueia sozinho, para que a IA o possa usar a qualquer momento. Depois de algum tempo ausente, uma camada preta tapa o ecrã e a IA continua a trabalhar por trás. Premir uma tecla ou clicar bloqueia-o de imediato; desbloqueie com Touch ID ou a sua palavra-passe.",
+        "permission": "Permita o Cindy em Definições do Sistema > Privacidade e segurança > Acessibilidade para que possa bloquear o ecrã assim que alguém tocar neste Mac. Até lá, o ecrã desliga-se e bloqueia como habitualmente.",
+        "preview": "Experimentar agora",
+        "previewStarting": "Largue o rato e o teclado. O ecrã fica tapado dentro de 3 segundos; prima qualquer tecla para o bloquear e, depois, desbloqueie-o.",
+        "previewUnavailable": "Não foi possível tapar o ecrã. Reinicie o Cindy e tente novamente.",
+        "delay": {
+          "label": "Tapar o ecrã após",
+          "hint": "Tempo sem tocar no teclado nem no rato até a camada aparecer. Por predefinição, igual ao repouso do ecrã.",
+          "30": "30 s",
+          "60": "1 min",
+          "120": "2 min",
+          "300": "5 min",
+          "system": "Sistema"
+        }
+      }
     },
     "agentIsland": {
       "title": "Agent Island",
@@ -4019,6 +4044,8 @@
         "disabledGroup": "Desativado",
         "enableAllModels": "Ativar todos",
         "priceOverride": {
+          "resetShort": "Repor",
+          "referenceDetails": "Detalhes do preço de referência",
           "menu": "Editar estimativa de preços da API",
           "title": "Estimativa de preços da API de {{model}}",
           "description": "Usada apenas para estimar a utilização na sua própria API ou via de subscrição. Não altera a faturação do fornecedor.",
@@ -5189,7 +5216,7 @@
         "ariaLabel": "Escolher o segundo modelo auxiliar alternativo"
       },
       "emptySlot": "Não selecionado",
-      "customHint": "Os modelos são experimentados pela ordem escolhida e também servem de alternativa à revisão automática quando os modelos integrados estão indisponíveis. Os fornecedores selecionados recebem o contexto da revisão: mensagens e referências, detalhes das tarefas e ações (incluindo ações bloqueadas), identidade e permissões, caminhos de ficheiros e sistema operativo.",
+      "customHint": "Os modelos são experimentados pela ordem escolhida e também servem de alternativa à revisão automática quando os modelos integrados estão indisponíveis. Os fornecedores selecionados recebem o contexto da revisão: mensagens e referências, texto público do Agent (apenas referência), detalhes das tarefas e ações (incluindo ações bloqueadas), identidade e permissões, caminhos de ficheiros e sistema operativo.",
       "signInHint": "Inicie sessão na Cindy para utilizar as recomendações automáticas. Sem sessão iniciada, escolha um modelo configurado de outro fornecedor em Personalizado.",
       "chooseAgent": "Escolher um Agent",
       "backToAgents": "Voltar à seleção de Agent",
@@ -6207,7 +6234,7 @@
         "hook": "Bots de mensagens instantâneas da Cindy"
       },
       "hook": {
-        "description": "Ligue o Slack e o Telegram à mesma Cindy. As mensagens são encaminhadas para este dispositivo e partilham a sua lista de projetos e o executor de sessões; cada fornecedor mantém a sua própria conta e preferências.",
+        "description": "Ligue o Slack, o Telegram, o Feishu / Lark e outros canais à mesma Cindy. As mensagens são encaminhadas para este dispositivo e partilham a sua lista de projetos e o executor de sessões; cada fornecedor mantém a sua própria conta e preferências.",
         "slackDescription": "Associe espaços de trabalho do Slack e atribua tarefas à Cindy a partir do Slack.",
         "slackDisabledHint": "Ative o interruptor para iniciar a autorização do Slack; após a associação, pode enviar tarefas a partir do Slack.",
         "slackBoundHint": "Associação concluída. Desativar o interruptor desassocia este dispositivo; voltar a ativá-lo exige nova autorização.",
@@ -6432,6 +6459,45 @@
             "revoked": "Desassociado",
             "superseded": "Associado noutro dispositivo"
           }
+        },
+        "feishu": {
+          "description": "Envia mensagens do Feishu para o teu computador de trabalho.",
+          "disabledHint": "Ative o interruptor e autorize a sua conta Feishu / Lark no navegador ou envie o código de associação ao bot.",
+          "toggleAria": "Alternar ligação ao Feishu / Lark",
+          "connect": "Associar Feishu / Lark",
+          "openApp": "Abrir página de autorização",
+          "cancel": "Cancelar associação",
+          "retry": "Tentar associar novamente",
+          "openBot": "Abrir bot",
+          "unlink": "Desassociar Feishu / Lark",
+          "unlinkConfirmTitle": "Desassociar Feishu / Lark?",
+          "unlinkConfirmDescription": "Desassociar apenas este computador.",
+          "unavailableHint": "A sua organização ainda não configurou o bot Feishu / Lark. Contacte o administrador da sua organização.",
+          "unavailableHintPersonal": "O bot Feishu / Lark ainda não está disponível para contas pessoais.",
+          "status": {
+            "checking": "A verificar o suporte do servidor…",
+            "unavailable": "Não configurado pela sua organização",
+            "unavailablePersonal": "Ainda não disponível",
+            "disabled": "Desativado",
+            "none": "Não associado",
+            "pending": "Autorize no navegador ou envie o código de associação ao bot",
+            "awaiting_confirmation": "Confirma a alteração de conta deste computador no Feishu / Lark",
+            "confirmed": "{{user}} associado ao bot Feishu / Lark",
+            "denied": "Autorização recusada",
+            "expired": "Autorização expirada",
+            "failed": "Falha na associação",
+            "revoked": "Desassociado",
+            "superseded": "Este computador está associado a outra conta Feishu / Lark",
+            "appChanged": "O bot Feishu / Lark foi alterado. Associe novamente."
+          },
+          "bindCode": {
+            "label": "Código de associação",
+            "copy": "Copiar código",
+            "copied": "Código de associação copiado",
+            "hint": "Ou envie este código ao bot Cindy por mensagem direta no Feishu / Lark"
+          },
+          "setWorkingDevice": "Definir como computador de trabalho",
+          "workingDeviceSet": "Computador de trabalho definido"
         }
       },
       "summary": {
@@ -6450,7 +6516,7 @@
     "tina": {
       "chat": {
         "title": "Conversa",
-        "description": "Conversas simples sem qualquer repositório; selecione \"chat\" no Slack, Telegram ou X, com uma sessão por fluxo de conversa."
+        "description": "Conversas simples sem qualquer repositório; selecione \"chat\" no Slack, Telegram, X ou Feishu / Lark, com uma sessão por fluxo de conversa."
       },
       "prefs": {
         "agentLabel": "Agent",
@@ -6460,6 +6526,7 @@
         "providerSlack": "Slack",
         "providerTelegram": "Telegram",
         "providerX": "X",
+        "providerFeishu": "Feishu / Lark",
         "requireConnected": "Editável assim que {{provider}} estiver ligado (ative o respetivo interruptor acima e aguarde a ligação).",
         "offlineLocal": "{{provider}} está offline. As alterações são guardadas neste computador e sincronizadas com o cartão de modelo da conversa quando voltar a ligar-se.",
         "requireBinding": "Conclua primeiro a associação da conta {{provider}}.",
@@ -7823,8 +7890,6 @@
         "skill": "Adiciona a Skill \"{{name}}\" aos seus assistentes de IA",
         "skillDetail": "Uma Skill é um ficheiro de instruções que a IA carrega e segue como suas, com todas as suas permissões, no Claude Code e no Codex, em todos os projetos — não está limitada à sandbox deste plugin. Permanece disponível enquanto o plugin está ativo e é removida quando o plugin é desativado ou desinstalado; desativar o plugin para uma única pasta não a oculta. Não é possível pré-visualizar aqui o texto completo da Skill — instale apenas plugins em que confia.",
         "routineEvents": "Eventos de rotina",
-        "nativeUi": "Adicionar controlos às tarefas",
-        "nativeTabView": "Abrir a vista «{{title}}»",
         "mcpUi": "Apresentar páginas interativas na conversa",
         "mcpUiDomains": "Domínios de rede da página: {{domains}}",
         "mcpAppOnly": "Apenas a página",
@@ -14119,7 +14184,11 @@
       "mailAttach": "Adicionar anexo",
       "mailRemoveAttachment": "Remover {{name}}",
       "mailUpdated": "Rascunho atualizado (só de leitura)",
-      "mailLegacy": "Histórico de rascunhos (só de leitura)"
+      "mailLegacy": "Histórico de rascunhos (só de leitura)",
+      "taskAutoArchived": "\"{{title}}\" arquivada",
+      "taskAutoArchivedUndo": "Desfazer",
+      "taskAutoArchivePending": "Arquiva ao sair",
+      "taskAutoArchiveCancel": "Manter desta vez"
     },
     "ghostHook": {
       "blockedFallback": "Mensagem bloqueada por um plugin; não enviada",
@@ -14155,6 +14224,8 @@
       "updateHost": "Atualize o computador que executa esta tarefa para abrir uma conversa paralela.",
       "failed": "Não foi possível abrir a conversa paralela. Tente novamente.",
       "mainTaskOnly": "Abra uma conversa paralela a partir da tarefa principal.",
+      "sharedTaskUnavailable": "As conversas paralelas não estão disponíveis em tarefas partilhadas.",
+      "archivedTask": "Desarquive esta tarefa para abrir uma conversa paralela.",
       "closeTitle": "Fechar conversa paralela?",
       "closeDescription": "Este seguimento será interrompido e o respetivo histórico será eliminado. A tarefa principal continua em execução.",
       "closeConfirm": "Fechar e eliminar",
@@ -15448,7 +15519,8 @@
         "resume": "Retomar",
         "pause": "Pausar",
         "deleteAutomation": "Eliminar automatização"
-      }
+      },
+      "tagWebhook": "Webhook"
     },
     "detail": {
       "manualTrigger": "Acionamento manual",
@@ -15523,7 +15595,7 @@
         "titleCreate": "Criar automatização",
         "titleProjectCreate": "Nova automatização do projeto",
         "titleProjectEdit": "Editar automatização do projeto",
-        "subtitle": "Executar um prompt de forma agendada com Claude, Codex ou Pi.",
+        "subtitle": "Escolha quando executar uma sessão de IA ou um script.",
         "subtitleFromGhost": "\"{{name}}\" está a pedir-lhe para criar uma automatização. Escolha um modelo e guarde para a ativar.",
         "save": "Guardar",
         "create": "Criar",
@@ -15694,7 +15766,80 @@
         "contentTab": "Conteúdo e ativação",
         "optionsTab": "Opções de execução",
         "sections": "Definições de automação"
-      }
+      },
+      "webhook": {
+        "quotaHint": "As receções de Webhook têm um limite diário e filtrar aqui não reduz a contagem. No remetente, como o GitHub, selecione apenas os eventos necessários.",
+        "sourceLabel": "Remetente",
+        "sourceCustom": "Personalizado",
+        "customLabel": "Formato (JSON)",
+        "customHint": "Descreva em JSON como os pedidos são assinados e onde estão o nome do evento e o ID de entrega.",
+        "customInvalid": "O formato personalizado não é válido. Verifique o JSON.",
+        "signedLabel": "Verificar assinaturas",
+        "signedHint": "Aceitar apenas pedidos de um remetente que tenha o segredo.",
+        "unsignedWarning": "Sem assinaturas, qualquer pessoa com o endereço pode acionar esta tarefa e gastar as suas receções diárias de Webhook. Se o endereço for divulgado, altere-o nos detalhes da tarefa.",
+        "eventPicker": {
+          "label": "Eventos a que responder",
+          "choose": "Escolher eventos",
+          "selected": "{{count}} selecionados",
+          "all": "Todos os eventos",
+          "search": "Pesquisar eventos",
+          "customGroup": "Outros eventos selecionados",
+          "noResults": "Nenhum evento correspondente. Adicione um nas opções avançadas.",
+          "noPresets": "Esta origem não tem um catálogo fixo. Receba todos os eventos ou adicione nomes nas opções avançadas.",
+          "custom": "Evento personalizado (avançado)",
+          "customLabel": "Nome do evento",
+          "invalid": "Use 1–100 letras, algarismos ou _ . : -; adicione um evento de cada vez.",
+          "add": "Adicionar",
+          "limit": "Selecione até 32 eventos.",
+          "chooseOne": "Selecione pelo menos um evento ou escolha Todos os eventos.",
+          "cancel": "Cancelar",
+          "apply": "Aplicar",
+          "remove": "Remover {{name}}",
+          "groups": {
+            "issues": "Issues",
+            "pullRequests": "Pull requests",
+            "issueComments": "Comentários de Issue / PR",
+            "reviews": "Revisões de PR",
+            "checks": "Conjuntos de verificações",
+            "workflows": "Execuções de fluxos",
+            "repository": "Repositório",
+            "releases": "Versões",
+            "mergeRequests": "Pedidos de integração",
+            "comments": "Comentários",
+            "pipelines": "Pipelines",
+            "projects": "Projetos",
+            "payments": "Pagamentos",
+            "checkout": "Finalização da compra",
+            "invoices": "Faturas",
+            "subscriptions": "Subscrições"
+          },
+          "actions": {
+            "all": "Todas as alterações",
+            "created": "Criação",
+            "closed": "Fecho",
+            "reopened": "Reabertura",
+            "edited": "Edição",
+            "commitsUpdated": "Commits atualizados",
+            "submitted": "Revisão submetida",
+            "completed": "Conclusão",
+            "pushed": "Código enviado",
+            "published": "Publicação",
+            "merged": "Integração",
+            "updated": "Atualização",
+            "tagsChanged": "Etiquetas enviadas",
+            "declined": "Recusa",
+            "deleted": "Eliminação",
+            "succeeded": "Sucesso",
+            "failed": "Falha",
+            "paid": "Pago"
+          }
+        }
+      },
+      "trigger": {
+        "label": "Modo de acionamento",
+        "timed": "Agendado"
+      },
+      "runSettings": "Definições de execução"
     },
     "chips": {
       "selectProject": "Selecionar projeto",
@@ -15901,6 +16046,84 @@
       "hint": "Deixe vazio para não limitar. Fuso horário: {{timezone}}. Depois não se iniciam execuções automáticas; as já iniciadas podem terminar.",
       "invalid": "Introduza uma data e hora válidas",
       "expired": "Expirado"
+    },
+    "webhook": {
+      "title": "Acionador de webhook",
+      "url": "Endereço de receção",
+      "secret": "Segredo",
+      "copy": "Copiar",
+      "copied": "{{label}} copiado",
+      "copyFailed": "Não foi possível copiar {{label}}. Selecione o conteúdo e copie-o manualmente.",
+      "urlUnavailable": "O endereço de receção não está disponível de momento.",
+      "quotaNotifyTitle": "Limite de receções de Webhook atingido",
+      "quotaExhausted": "As {{limit}} receções de Webhook de hoje esgotaram-se e são retomadas às {{time}}. Até lá, os eventos externos não acionam tarefas. As execuções agendadas e a utilização do modelo não são afetadas.",
+      "signedOut": "Inicie sessão na sua conta Cindy para retomar a receção. As suas definições foram mantidas.",
+      "serviceUnavailable": "A receção de Webhook não está disponível neste ambiente.",
+      "suspended": "Os Webhooks estão desativados para esta conta.",
+      "endpointLimit": "Foi atingido o limite de URLs de receção. Liberte um URL que já não utiliza.",
+      "offline": "Este computador não está ligado ao servidor de momento. Os eventos ficam guardados e são entregues ao restabelecer a ligação.",
+      "localOnlyHint": "Este endereço só funciona neste computador. Reencaminhe os eventos públicos para ele, por exemplo com gh webhook forward.",
+      "eventsSummary": "Eventos: {{events}}",
+      "lastReceived": "Último evento: {{time}}",
+      "neverReceived": "Ainda não foram recebidos eventos",
+      "ignored": "{{count}} ignorados",
+      "generateSecret": "Gerar segredo",
+      "rotateSecret": "Gerar segredo novamente",
+      "secretOnce": "Copie este segredo agora. Não voltará a ser apresentado.",
+      "secretMissing": "Os eventos são recusados até ser gerado um segredo.",
+      "rotateFailed": "Não foi possível gerar o segredo. Os segredos só podem ser geridos no computador que executa esta tarefa.",
+      "genericSender": "o remetente",
+      "secretFillHint": "Introduza-o em \"{{field}}\" no {{sender}}.",
+      "secretPastePlaceholder": "Cole \"{{field}}\" do {{sender}}",
+      "secretSave": "Guardar segredo",
+      "secretSaved": "Segredo guardado.",
+      "secretSaveFailed": "Não foi possível guardar o segredo. Os segredos só podem ser geridos no computador que executa esta tarefa.",
+      "secretInvalid": "Este segredo não está no formato esperado. Copie-o novamente do remetente.",
+      "secretPasteMissing": "Os eventos são recusados até colar o segredo do remetente.",
+      "unsignedNotice": "As assinaturas estão desativadas: qualquer pessoa com o endereço pode acionar esta tarefa. Se o endereço for divulgado, altere-o.",
+      "rotateUrl": "Alterar endereço",
+      "rotateUrlConfirmTitle": "Alterar o endereço de receção?",
+      "rotateUrlConfirmBody": "O endereço antigo deixa de funcionar de imediato, por isso introduza o novo no remetente. As definições e o segredo mantêm-se.",
+      "rotateUrlFailed": "Não foi possível alterar o endereço. Tente novamente mais tarde.",
+      "addressHint": "Introduza este URL nas definições de Webhook de {{sender}}.",
+      "testHint": "Gere em {{sender}} um evento que corresponda aos filtros. Os resultados da execução aparecem abaixo.",
+      "waitingEvent": "A aguardar eventos",
+      "manageConnection": "Definições de ligação",
+      "preparing": "A preparar o URL de receção…",
+      "noRunsHint": "Os resultados aparecem aqui após a receção de um evento Webhook que corresponda aos filtros.",
+      "account": {
+        "title": "Endereços de receção",
+        "manage": "Gerir",
+        "usage": "Endereços de receção {{used}} / {{limit}}",
+        "description": "Os endereços de todos os computadores partilham o limite da conta. Pode libertar um endereço mesmo com o computador desligado.",
+        "remaining": "{{count}} disponíveis",
+        "unavailable": "Este serviço ainda não permite gerir os endereços da conta. Aguarde uma atualização do serviço.",
+        "loadFailed": "Não foi possível carregar os endereços. Verifique a ligação e atualize.",
+        "releaseFailed": "Não foi possível confirmar a libertação. Atualize a lista para verificar antes de tentar novamente.",
+        "retry": "Atualizar",
+        "loading": "A carregar endereços…",
+        "empty": "Nenhum endereço de receção em utilização",
+        "thisDevice": "Este computador",
+        "unnamed": "Automação {{id}}",
+        "unnamedDevice": "Dispositivo {{id}}",
+        "suspended": "Desativado; continua a ocupar uma vaga",
+        "lastReceived": "Última receção: {{time}}",
+        "neverReceived": "Ainda não foram recebidos eventos",
+        "open": "Ver automação",
+        "release": "Libertar",
+        "confirm": "Libertar o endereço de «{{name}}» em {{device}}?",
+        "confirmHint": "O endereço antigo, o segredo e os eventos guardados no servidor serão invalidados. Voltar a ligar o computador antigo não os restaura. A automação e o histórico são mantidos; as execuções já iniciadas não são afetadas.",
+        "cancel": "Cancelar",
+        "confirmRelease": "Libertar endereço",
+        "viewAddress": "Ver endereço",
+        "done": "Concluído",
+        "released": "O endereço de «{{name}}» foi libertado.",
+        "releasedHint": "Este endereço foi libertado e já não ocupa uma vaga. Voltar a ligar cria um novo endereço; atualize depois a configuração do remetente.",
+        "reconnect": "Voltar a ligar",
+        "reconnectConfirm": "Voltar a ligar o Webhook?",
+        "reconnectConfirmHint": "Será usada uma vaga e criado um novo endereço de receção. Atualize o endereço e o segredo no remetente.",
+        "reconnectFailed": "Não foi possível voltar a ligar. Verifique as vagas disponíveis antes de tentar novamente."
+      }
     }
   },
   "issueTracker": {
@@ -19202,6 +19425,9 @@
     "pendingApprovals": "{{count}} aprovações pendentes"
   },
   "richAnswer": {
+    "invalidImageReference": "A referência desta imagem é inválida.",
+    "requestImageAgain": "Pedir para mostrar novamente",
+    "requestImageAgainMessage": "Mostra novamente esta imagem existente ({{name}}, referência: {{source}}). Verifica o resultado original da ferramenta ou o ficheiro e usa o endereço real. Não cries uma nova imagem; pergunta-me primeiro se não conseguires identificar a imagem.",
     "send": "Enviar mensagem",
     "sending": "A enviar…",
     "sent": "Enviado",

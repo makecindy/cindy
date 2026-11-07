@@ -346,7 +346,6 @@ function SettingsViewContent() {
       <div className="flex h-full min-h-0 w-full justify-start pb-5">
         {/* Inner sidebar mirrors the main sidebar width for a stable route transition. */}
         <aside
-          data-plugin-ui-element="sidebar"
           className="flex h-full min-h-0 shrink-0 flex-col gap-2 overflow-y-auto pl-6 pr-4 pt-7"
           style={{ width: menuWidth }}
           aria-label={t('settings.title')}

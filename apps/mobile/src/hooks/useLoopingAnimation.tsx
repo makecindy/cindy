@@ -11,6 +11,12 @@ export function AnimationVisibilityProvider({ visible, children }: { visible: bo
   return <AnimationVisibility.Provider value={parentVisible && visible}>{children}</AnimationVisibility.Provider>;
 }
 
+/** Whether the surface this hook renders in is visible, for content that a native bar renders
+ * outside the route's providers and so must carry the answer with it. */
+export function useAnimationVisibility(): boolean {
+  return useContext(AnimationVisibility);
+}
+
 /** Native header callbacks render outside the route's provider subtree. Capture
  * its visibility here and carry it with the content into the navigation header. */
 export function useAnimationVisibilityBridge(children: ReactNode): ReactNode {

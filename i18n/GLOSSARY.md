@@ -350,6 +350,10 @@ Anthropic Messages API / wire protocol 的用户可见名称。四语统一保�
 
 远程桌面操作菜单的安全设置；仅用于可选的本机保存密码自动解锁。
 
+### Trigger mode
+
+自动化何时运行的选择：定时、手动或 Webhook。独立于执行方式（AI 任务或脚本），用户于 2026-11-04 选择此交互方向。
+
 ### At a glance
 
 伙伴聊天头部网格按钮打开的浮层：电脑、待办、输出内容三块（docs/product-rules/cindy-bots-runtime.md「伙伴近况」）。取代已下线的右侧栏「工作台」标签；只指这个伙伴浮层，不泛指任务列表或其它面板。先登记为 proposed，待 Chris 实机试用后再定。
@@ -497,6 +501,10 @@ Irreversible group termination, distinct from archive, leave and personal list r
 ### Face ID verification
 
 远程桌面操作菜单的安全设置；仅用于可选的本机保存密码自动解锁。
+
+### Link code
+
+官方飞书 / Lark 机器人关联时的一次性短码：网页授权不可用的用户把它私聊发给机器人完成关联，只在关联进行中出现，过期作废，不是密钥。与供应商分享的「配对码」(Pairing Code)、本机应用的「连接码」(Connection code) 是不同概念；ko 取「연동 코드」以免与「연결 코드」(Connection code) 撞名。
 
 ### Follow Up on All Sessions
 
@@ -665,6 +673,10 @@ issue #882：模型管理/新对话选择器的分类标签，对应 Gateway mod
 ### Not signed in
 
 跳过登录后应用内的账号状态名（侧边栏账号胶囊、设置页资料卡、语音服务提示，以及 main 侧不走 locale 的 model-visible 文案——已知 mcp-integrations/ghost.ts 的 GHOST_NOT_FOUND tool result，它会被模型读到并可能回显进对话，#907 review 补上）。**约束范围不限于 locale JSON**：guard 只扫 locale 文件，这类硬编码文案要人工找（见 engineering-conventions §5.1「Slack / IM 侧的文案不在任何 locale 文件里」同类问题）。2026-07-29 产品口径：面向用户只说「未登录」，不再叫「本地模式」——后者听起来像另一种服务端连接方式，实际只是没有登录 Cindy 账号。「本地」仅用于描述数据落在本机（如资料卡副文案「数据仅保存在本机」），不作为状态名。代码内部标识（AuthState mode='local'、authEnterLocal IPC、data owner）不受本条约束，仍用 local。en 侧统一走 not signed in 一种说法（含 settings.userProfile.local 的 exit / exitFailed 两条当前无引用的文案：the not-signed-in state），不与 unauthenticated 混用——PR #907 review 指出过同一状态两种英文说法会让日后启用这些文案时 UI 自相矛盾。status 仍为 proposed：Not signed in 作为状态名尚未与设计侧正式过一遍。
+
+### Working computer
+
+官方飞书 / Lark 机器人中接收新消息的已关联电脑；每个应用和飞书账号独立选择，默认最新关联的电脑。
 
 ### Chat Completions
 
