@@ -17521,7 +17521,8 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
           effort: (live ? getSessionEffort(sessionId) : row.effort) ?? null,
           fastMode: live ? getSessionFastMode(sessionId) : (row.fastMode ?? false),
         },
-        hasRuntimeOverride: row.role !== 'routine' && (control.effectiveOverride !== null || control.pending !== null || !!intent),
+        // The task owns its model: a manual change sticks until the configured route itself changes.
+        hasRuntimeOverride: control.effectiveOverride !== null || control.pending !== null || !!intent,
         next: intent ? { agentDeviceId: intent.targetAgentDeviceId === undefined ? row.agentDeviceId : intent.targetAgentDeviceId, agentKind: intent.targetAgentKind, model: intent.model,
           providerId: intent.providerId ?? null, effort: intent.effort ?? null, fastMode: intent.fastMode ?? false }
           : control.pending?.profile ?? control.effectiveOverride ?? undefined,
