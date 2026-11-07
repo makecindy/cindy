@@ -409,7 +409,7 @@ export interface BotGroupPlanStepView {
   botName: string;
   task: string;
   status: BotGroupPlanStepStatus;
-  /** The step's latest hand-off message (a redo replaces it); absent where the host does not report it. */
+  /** Published reply or hand-off ID (a redo replaces it). Null means no result; omission means unknown. */
   resultMessageId?: string | null;
   /** Current server attempt, absent on older servers and completed turns. */
   executionId?: string;

@@ -241,10 +241,15 @@ export function currentBotGroupPlanStep(plan: BotGroupPlanView): BotGroupPlanSte
   return plan.steps.find((step) => step.position === plan.currentStep) ?? null;
 }
 
-/** Assignment and device admission are different states; stopped plans override stale step state. */
+/** Display state only. A finished discussion turn can complete without publishing a reply. */
 export function botGroupPlanStepState(plan: BotGroupPlanView, step: BotGroupPlanStepView) {
-  if (plan.kind === 'talk' && step.status === 'running' && plan.status === 'stopped') return 'stopped';
-  if (plan.kind === 'talk' && step.status === 'running' && step.executionStatus === 'queued') return 'queued';
+  if (plan.kind !== 'talk') return step.status;
+  if (step.status === 'running' && plan.status === 'stopped') return 'stopped';
+  if (step.status === 'running' && step.executionStatus === 'queued') return 'queued';
+  if (step.status === 'done') {
+    if (step.resultMessageId === null) return 'skipped';
+    if (typeof step.resultMessageId === 'string' && step.resultMessageId.trim()) return 'spoken';
+  }
   return step.status;
 }
 

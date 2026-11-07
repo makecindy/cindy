@@ -347,6 +347,20 @@ describe('group body component display', () => {
 
 // An assigned talk turn may still be waiting for its device. Both UIs use these facts.
 describe('unclaimed talk turn controls', () => {
+  it('separates published, silent and unknown talk outcomes without changing queue completion', () => {
+    const value = plan({ kind: 'talk' });
+    const completed = value.steps[0];
+    expect(botGroupPlanStepState(value, { ...completed, resultMessageId: 'published' })).toBe('spoken');
+    expect(botGroupPlanStepState(value, completed)).toBe('done');
+    expect(botGroupPlanStepState(value, { ...completed, resultMessageId: '' })).toBe('done');
+
+    const silent = { ...completed, resultMessageId: null };
+    const silentQueue = { ...value, steps: [silent, value.steps[1]] };
+    expect(botGroupPlanStepState(silentQueue, silent)).toBe('skipped');
+    expect(botGroupPlanFollowUp(silentQueue)?.kind).toBe('continue');
+    expect(botGroupPlanStepState({ ...silentQueue, kind: 'work' }, silent)).toBe('done');
+  });
+
   it('allows future pending turns only on capable hosts and leaves running turns protected', () => {
     const current = { position: 0, botId: 'a', botName: 'A', task: '', status: 'running' as const, executionId: 'run', executionStatus: 'running' };
     const future = { position: 1, botId: 'b', botName: 'B', task: '', status: 'pending' as const };

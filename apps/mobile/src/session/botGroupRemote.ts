@@ -278,7 +278,9 @@ function parseStep(value: unknown): BotGroupPlanStepView | null {
   const status = enumOf(record?.status, STEP_STATUSES);
   const task = text(record?.task, 4_096);
   if (!record || position === null || !botId || !status || task === null) return null;
+  const resultMessageId = id(record.resultMessageId);
   return { position, botId, botName: text(record.botName, MAX_NAME) ?? '', task, status,
+    ...(record.resultMessageId === null ? { resultMessageId: null } : resultMessageId?.trim() ? { resultMessageId } : {}),
     ...(id(record.executionId) ? { executionId: id(record.executionId)! } : {}),
     ...(typeof record.executionStatus === 'string' ? { executionStatus: record.executionStatus } : {}) };
 }

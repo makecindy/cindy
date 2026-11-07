@@ -62,6 +62,17 @@ describe('parseBotGroupChatData', () => {
     expect(legacy.plans[0].canManage).toBeUndefined();
     expect(legacy.plans[0].supportsPendingSkip).toBe(false);
   });
+  // #9100: explicit absence of a reply and legacy missing metadata are different on the card.
+  it('preserves reported reply IDs and explicit null without inventing missing results', () => {
+    const base = chatData().plans[0];
+    const input = ['reply-id', null, undefined, '', ' ', 7];
+    const parsed = parseBotGroupChatData(chatData({ plans: [{ ...base, kind: 'talk', steps: input.map((resultMessageId, position) => ({
+      ...base.steps[0], position, ...(resultMessageId !== undefined ? { resultMessageId } : {}),
+    })) }] }))!;
+    expect(parsed.plans[0]!.steps.map(step => step.resultMessageId)).toEqual(['reply-id', null, undefined, undefined, undefined, undefined]);
+    expect(parsed.plans[0]!.steps.slice(2).some(step => 'resultMessageId' in step)).toBe(false);
+  });
+
   // The remote resource must preserve the queue semantics before choosing composer copy.
   it.each([
     ['all', 'talk', true, { kind: 'running', botName: '咪咪', talk: true }],

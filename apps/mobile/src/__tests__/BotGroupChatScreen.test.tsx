@@ -1230,6 +1230,26 @@ describe('group timeline', () => {
     expect(byId('botGroup.plan.start')).toBeNull();
   });
 
+  // #9100: a completed turn is only spoken when the host reports its reply.
+  it('distinguishes silent, spoken and unreported discussion results on the queue card', async () => {
+    const data = group({ openPlan: null });
+    const plan = data.plans[0]!;
+    data.plans[0] = {
+      ...plan, kind: 'talk', status: 'done', currentStep: 3,
+      steps: [
+        { ...plan.steps[0]!, status: 'done', resultMessageId: 'm2' },
+        { ...plan.steps[1]!, status: 'done', resultMessageId: null },
+        { ...plan.steps[0]!, position: 2, status: 'done' },
+        { ...plan.steps[1]!, position: 3, status: 'skipped' },
+      ],
+    };
+    await render(data);
+    const rows = [...byId('botGroup.plan')!.querySelectorAll('[data-testid="botGroup.plan.step"]')];
+    const labels = ['stepSpoken', 'stepSkipped', 'stepDone', 'stepSkipped'];
+    expect(rows).toHaveLength(labels.length);
+    labels.forEach((label, index) => expect(rows[index]?.textContent).toContain(`groupChat.plan.${label}`));
+  });
+
   // The real card folds the queue, sends future positions without an execution, and protects running turns (unit).
   it('folds a talk queue and sends the exact queued turn when skipping', async () => {
     const data = group();
