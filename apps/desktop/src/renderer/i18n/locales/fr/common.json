@@ -19886,6 +19886,16 @@
     "lineNumbers": "Numéros de ligne"
   },
   "subscriptionAccounts": {
+    "signIn": {
+      "checking": "Vérification du compte local…",
+      "detected": "Compte connecté détecté",
+      "useAccount": "Utiliser ce compte",
+      "anotherAccount": "Se connecter à un autre compte",
+      "keepExisting": "Le nouveau compte rejoint ce fournisseur. Les connexions existantes sont conservées.",
+      "checkFailed": "Impossible de vérifier le compte local. Réessayez.",
+      "retry": "Réessayer",
+      "useCodex": "Se connecter avec Codex"
+    },
     "title": "Comptes d’abonnement",
     "note": "Le premier compte utilise le dossier par défaut de la CLI. Les comptes ajoutés se connectent séparément. Les nouvelles tâches sont réparties ; les tâches existantes conservent leur compte.",
     "strategy": "Répartition de charge",

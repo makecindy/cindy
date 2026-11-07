@@ -1,6 +1,7 @@
 import { BUNDLED_CATALOG } from '@cindy/model-providers';
 import { ProvidersSection } from '../../../src/renderer/components/settings/ProvidersSection';
 import { mountPage, subscription, forbid } from '../../ui-page/harness';
+import type { SubscriptionAccountCommand } from '../../../src/shared/subscriptionAccounts';
 
 // The isolated HTTP fixture lacks secure-context randomUUID. These are only
 // correlation IDs for mock login/cancel commands; no credential is generated.
@@ -58,20 +59,24 @@ mountPage({
     });
     return {
       subscriptionAccounts: {
-        command: async (command: { action?: string; providerId: string; loginKey?: string }) => {
+        command: async (command: SubscriptionAccountCommand) => {
           subscriptionControl.commands.push(command);
           if (command.action === 'cancel') subscriptionControl.cancel();
-          if (command.action === 'add') {
+          if (command.action === 'add' || command.action === 'connect') {
             if (ctx.case === 'subscription-cancel') await new Promise<void>((_resolve, reject) => {
               subscriptionControl.cancel = () => reject(new Error('SUBSCRIPTION_LOGIN_CANCELLED'));
             });
             subscriptionControl.connected = true;
           }
-          const configured = ctx.case === 'subscription-pool' || (command.providerId === 'openai' && subscriptionControl.connected);
+          const configured = ctx.case === 'subscription-pool' || subscriptionControl.connected;
+          const directory = command.providerId === 'anthropic' ? '/Users/alex/.claude' : '/Users/alex/.codex';
+          const defaultAccount = { id: 'default', identity: 'alex@example.com',
+            plan: command.providerId === 'anthropic' ? 'Max' : 'Plus', status: 'ready', directory,
+            running: 0, paused: false, limit: 4, weight: 1 };
           return { providerId: command.providerId, configured, strategy: 'least', accounts: configured ? [
-          { id: 'default', identity: 'alex@example.com', plan: 'Max', status: 'ready', directory: '/Users/alex/.claude', running: 1, paused: false, limit: 4, weight: 1 },
-          { id: 'second', identity: 'work@example.com', plan: 'Pro', status: 'ready', directory: '/Users/alex/.claude-cindy-account', running: 0, paused: false, limit: 2, weight: 1 },
-        ] : [] };
+            defaultAccount,
+            { ...defaultAccount, id: 'second', identity: 'work@example.com', plan: 'Pro', directory: directory + '-cindy-account', limit: 2 },
+          ] : command.action === 'preview' ? [defaultAccount] : [] };
         },
         onChanged: subscription('subscriptionAccountsChanged'),
       },

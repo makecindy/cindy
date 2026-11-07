@@ -19699,6 +19699,16 @@
     "lineNumbers": "Line numbers"
   },
   "subscriptionAccounts": {
+    "signIn": {
+      "checking": "Checking local account…",
+      "detected": "Signed-in account found",
+      "useAccount": "Use this account",
+      "anotherAccount": "Sign in to another account",
+      "keepExisting": "The new account joins this provider. Existing sign-ins stay unchanged.",
+      "checkFailed": "Couldn't check the local account. Please retry.",
+      "retry": "Retry",
+      "useCodex": "Sign in with Codex"
+    },
     "title": "Subscription accounts",
     "note": "The first account uses the CLI’s default folder. Additional accounts sign in separately. New tasks are balanced across accounts; existing tasks keep their account.",
     "strategy": "Load balancing",

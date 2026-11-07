@@ -19627,6 +19627,16 @@
     "lineNumbers": "行号"
   },
   "subscriptionAccounts": {
+    "signIn": {
+      "checking": "正在检测本机账号…",
+      "detected": "检测到已登录账号",
+      "useAccount": "使用此账号",
+      "anotherAccount": "登录另一个账号",
+      "keepExisting": "新账号会添加到此供应商，现有账号的登录保持不变。",
+      "checkFailed": "无法读取本机账号状态，请重试。",
+      "retry": "重试",
+      "useCodex": "使用 Codex 登录"
+    },
     "title": "订阅账号",
     "note": "首个账号沿用 CLI 默认目录，新增账号独立登录。新任务按策略分配，已有任务保留原账号。",
     "strategy": "负载均衡",

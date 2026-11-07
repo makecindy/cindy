@@ -19627,6 +19627,16 @@
     }
   },
   "subscriptionAccounts": {
+    "signIn": {
+      "checking": "正察本机账号…",
+      "detected": "已有账号登录",
+      "useAccount": "用此账号",
+      "anotherAccount": "另登一号",
+      "keepExisting": "新号归于此供应商，原号登录如故。",
+      "checkFailed": "未能读取本机账号，请重试。",
+      "retry": "重试",
+      "useCodex": "以 Codex 登录"
+    },
     "title": "订阅账号",
     "note": "首号沿用 CLI 默认目录，增号各自登录。新务依策分派，旧务仍用原号。",
     "strategy": "负载均衡",
