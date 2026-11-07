@@ -8,7 +8,7 @@ import { useBotGroupList } from './botGroupStore';
 import { filterBotRoster, sortBotRoster } from './botRosterDisplay';
 import { useBotProfiles } from './botStore';
 import { useCompanionCloud } from './companionCloudStore';
-import { cloudRemoteBots, withoutShadowedBots } from './companionCloudPresentation';
+import { cloudRemoteBots, recoveryCompanionRows, isLocalRecoveryRow, withoutShadowedBots } from './companionCloudPresentation';
 import { useRemoteBots } from './useRemoteBots';
 
 export interface TeammateSearchMatch {
@@ -32,12 +32,16 @@ export function useTeammateSearchMatches(
   rawQuery: string,
   lockedSessionGroupName: string | null,
 ): TeammateSearchMatch[] {
+  const { t } = useTranslation();
   const cloud = useCompanionCloud();
   const allBots = useBotProfiles();
   const rosterRemoteBots = useRemoteBots();
   // 与伙伴段同一份名册:隐藏已交给别的电脑的本机副本,每个云端伙伴只在主力电脑上列一行。
   const bots = useMemo(() => withoutShadowedBots(allBots, cloud), [allBots, cloud]);
-  const remoteBots = useMemo(() => cloudRemoteBots(cloud, rosterRemoteBots), [rosterRemoteBots, cloud]);
+  const remoteBots = useMemo(() => {
+    const rows = cloudRemoteBots(cloud, rosterRemoteBots).filter(bot => !cloud.enabled || bot.deviceId !== cloud.selfDeviceId || !cloud.demotedBotIds.includes(bot.id));
+    return [...rows, ...recoveryCompanionRows(cloud, rows)];
+  }, [rosterRemoteBots, cloud]);
   const { groups } = useBotGroupList();
   return useMemo(() => {
     const query = rawQuery.trim().toLocaleLowerCase();
@@ -61,7 +65,7 @@ export function useTeammateSearchMatches(
         key: `remote:${bot.deviceId}:${bot.id}`,
         kind: 'bot',
         name: bot.name,
-        detail: bot.deviceName,
+        detail: isLocalRecoveryRow(cloud, bot) ? t('bots.cloud.recoveryNotReady') : bot.deviceName,
         route: `/bots/remote/${encodeURIComponent(bot.deviceId)}/${encodeURIComponent(bot.id)}`,
         avatar: bot,
       }));
@@ -77,7 +81,7 @@ export function useTeammateSearchMatches(
         avatar: group.members[0] ?? null,
       }));
     return [...local, ...remote, ...groupMatches];
-  }, [bots, remoteBots, groups, rawQuery, lockedSessionGroupName]);
+  }, [bots, remoteBots, groups, rawQuery, lockedSessionGroupName, cloud, t]);
 }
 
 /** 与会话结果行同几何(rounded-lg、px-3 py-2.5、20px 标记、13 号标题、类型小标签)。 */

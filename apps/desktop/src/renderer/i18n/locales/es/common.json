@@ -11521,6 +11521,7 @@
     "cloud": {
       "homeLabel": "Computadora principal",
       "thisComputer": "esta computadora",
+      "recoveryNotReady": "Aún no está disponible en esta computadora",
       "homeOffline": "La computadora principal “{{device}}” está fuera de línea",
       "homeControlOff": "La computadora principal “{{device}}” no permite el control remoto",
       "continueHere": "Continuar en esta computadora",

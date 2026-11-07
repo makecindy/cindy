@@ -11379,6 +11379,7 @@
     "cloud": {
       "homeLabel": "主机",
       "thisComputer": "此机",
+      "recoveryNotReady": "此机尚未就绪",
       "homeOffline": "主机「{{device}}」脱机",
       "homeControlOff": "主机「{{device}}」未开远程控制",
       "continueHere": "于此机续之",

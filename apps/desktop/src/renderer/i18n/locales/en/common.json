@@ -11424,6 +11424,7 @@
     "cloud": {
       "homeLabel": "Main Computer",
       "thisComputer": "This computer",
+      "recoveryNotReady": "Not ready on this computer",
       "homeOffline": "Main computer “{{device}}” is offline",
       "homeControlOff": "Main computer “{{device}}” doesn’t allow remote control",
       "continueHere": "Continue on This Computer",

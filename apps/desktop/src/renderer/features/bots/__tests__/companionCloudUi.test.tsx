@@ -34,7 +34,7 @@ vi.mock('@/lib/toast', () => ({ toast: { info: h.toast, error: h.toast } }));
 import { CLOUD_ATTACHMENT_LOADS, CloudCompanionOfflineView } from '../CloudCompanionOfflineView';
 import { BotHomeComputerSetting, companionArrivedHere } from '../BotHomeComputerSetting';
 import { resetCompanionCloudStoreForTests, useCompanionCloud } from '../companionCloudStore';
-import { cloudOnlyRemoteBots, cloudRemoteBots, isCloudCompanionRemote, withoutCloudCompanions, withoutShadowedBots } from '../companionCloudPresentation';
+import { cloudOnlyRemoteBots, cloudRemoteBots, recoveryCompanionRows, isCloudCompanionRemote, withoutCloudCompanions, withoutShadowedBots } from '../companionCloudPresentation';
 import { BotConnectionStatus } from '../BotConnectionStatus';
 
 const maker = {
@@ -90,6 +90,16 @@ describe('presentation helpers', () => {
     expect(isCloudCompanionRemote(snapshot('desk'), { id: 'mia', deviceId: 'desk' })).toBe(false);
   });
 
+  it('adds only demoted local homes as recovery rows, deduplicated and disabled with the feature', () => {
+    const cloud = { ...snapshot('desk'), demotedBotIds: ['mia'] };
+    const rows = recoveryCompanionRows(cloud, []);
+    expect(rows).toMatchObject([{ id: 'mia', deviceId: 'desk' }]);
+    expect(recoveryCompanionRows(cloud, rows)).toEqual([]);
+    expect(recoveryCompanionRows({ ...cloud, enabled: false }, [])).toEqual([]);
+    expect(recoveryCompanionRows({ ...cloud, demotedBotIds: [] }, [])).toEqual([]);
+    expect(recoveryCompanionRows({ ...snapshot('laptop'), demotedBotIds: ['mia'] }, [])).toEqual([]);
+  });
+
   it('hides a local copy as soon as its main computer is known to be elsewhere', () => {
     expect(withoutShadowedBots([{ id: 'mia' }, { id: 'ada' }], snapshot('laptop'))).toEqual([{ id: 'ada' }]);
     expect(withoutShadowedBots([{ id: 'mia' }], snapshot('desk'))).toEqual([{ id: 'mia' }]);
@@ -129,6 +139,20 @@ describe('CloudCompanionOfflineView', () => {
     { id: 'm2', seq: '2', role: 'assistant', text: 'hi there', createdAt: 2 },
   ] };
   const renderView = () => render(<CloudCompanionOfflineView botId="mia" deviceId="laptop" name="Mia" deviceName="Laptop" />);
+
+  it('shows read-only history and model settings while local recovery is incomplete', async () => {
+    maker.getCompanionTranscript.mockResolvedValue(page);
+    render(<CloudCompanionOfflineView botId="mia" deviceId="desk" name="Mia" deviceName="Desk" recovery />);
+    expect(screen.getByText('bots.cloud.recoveryNotReady')).toBeTruthy();
+    expect(screen.getByText('bots.globalSettings.defaultModelHint')).toBeTruthy();
+    expect(await screen.findByText('hi there')).toBeTruthy();
+    expect(screen.getByText('bots.cloud.readOnlyNote')).toBeTruthy();
+    expect(screen.queryByText('bots.retry')).toBeNull();
+    expect(screen.queryByText('bots.cloud.continueHere')).toBeNull();
+    fireEvent.click(screen.getByText('bots.globalSettings.defaultModel'));
+    expect(h.navigate).toHaveBeenCalledWith('/settings?tab=general&section=general.botModel');
+    expect(maker.takeOverCompanion).not.toHaveBeenCalled();
+  });
 
   it('shows the banner and the read-only cloud conversation, oldest first', async () => {
     maker.getCompanionTranscript.mockResolvedValue(page);

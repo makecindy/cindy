@@ -19,8 +19,13 @@ const h = vi.hoisted(() => ({
   devices: null as Array<{ deviceId: string; online: boolean; remoteControlEnabled: boolean }> | null,
   cloud: { enabled: false, selfDeviceId: null, humanActorId: null, actors: [], demotedBotIds: [] } as import('../../../../shared/companionCloud').CompanionCloudSnapshot,
   cloudView: vi.fn(),
+  profiles: [] as Array<{ id: string; name: string }>,
+  current: true,
+  refreshRecovered: vi.fn(async () => true),
 }));
 vi.mock('../companionCloudStore', () => ({ useCompanionCloud: () => h.cloud }));
+vi.mock('../botStore', () => ({ useBotProfiles: () => h.profiles,
+  captureBotRecovery: () => () => h.current, refreshRecoveredBot: h.refreshRecovered }));
 vi.mock('@/features/device-link/useDeviceLinkDeviceList', () => ({ useDeviceLinkDeviceList: () => h.devices }));
 vi.mock('../CloudCompanionOfflineView', () => ({
   CloudCompanionOfflineView: (props: unknown) => { h.cloudView(props); return <div>cloud-offline-view</div>; },
@@ -74,6 +79,9 @@ beforeEach(() => {
   h.cloud = { enabled: false, selfDeviceId: null, humanActorId: null, actors: [], demotedBotIds: [] };
   h.devices = null;
   h.cloudView.mockReset();
+  h.profiles = [];
+  h.current = true;
+  h.refreshRecovered.mockReset().mockResolvedValue(true);
   h.pin.mockReset();
   h.merge.mockReset();
   h.view.mockReset();
@@ -93,6 +101,67 @@ beforeEach(() => {
   window.electronAPI = { deviceLink: { invoke: h.invoke } } as unknown as Window['electronAPI'];
 });
 afterEach(cleanup);
+it('waits for the recovered profile and refuses navigation after deletion', async () => {
+  h.profiles = [{ id: 'writer', name: 'Old' }];
+  h.cloud = { enabled: true, selfDeviceId: 'home', humanActorId: 'human', demotedBotIds: [], actors: [
+    { id: 'a-writer', externalId: 'writer', name: 'Writer', avatar: null, homeDeviceId: 'home' }] };
+  let finish!: (ok: boolean) => void;
+  h.refreshRecovered.mockReturnValue(new Promise(resolve => { finish = resolve; }));
+  const { rerender } = render(<RemoteBotSessionView />);
+  expect(h.navigate).not.toHaveBeenCalled();
+  h.current = false;
+  await act(async () => finish(true));
+  rerender(<RemoteBotSessionView />);
+  expect(h.navigate).not.toHaveBeenCalled();
+  expect(screen.getByText('bots.retry')).toBeTruthy();
+});
+
+it('opens the local companion only after the recovered profile is available', async () => {
+  h.profiles = [{ id: 'writer', name: 'Old' }];
+  h.cloud = { enabled: true, selfDeviceId: 'home', humanActorId: 'human', demotedBotIds: [], actors: [
+    { id: 'a-writer', externalId: 'writer', name: 'Writer', avatar: null, homeDeviceId: 'home' }] };
+  let finish!: (ok: boolean) => void;
+  h.refreshRecovered.mockReturnValue(new Promise(resolve => { finish = resolve; }));
+  render(<RemoteBotSessionView />);
+  expect(h.navigate).not.toHaveBeenCalled();
+  await act(async () => finish(true));
+  expect(h.navigate).toHaveBeenCalledWith({ to: '/bots/writer', replace: true });
+});
+
+// Unit: a previous success cannot navigate after demotion while a new confirmation is pending.
+it('reconfirms after the local companion is demoted and becomes ready again', async () => {
+  h.cloud = { enabled: true, selfDeviceId: 'home', humanActorId: 'human', demotedBotIds: [], actors: [
+    { id: 'a-writer', externalId: 'writer', name: 'Writer', avatar: null, homeDeviceId: 'home' }] };
+  let finish!: (ok: boolean) => void;
+  h.refreshRecovered.mockResolvedValueOnce(true).mockReturnValueOnce(new Promise(resolve => { finish = resolve; }));
+  const { rerender } = render(<RemoteBotSessionView />);
+  await waitFor(() => expect(h.navigate).toHaveBeenCalled());
+  h.cloud = { ...h.cloud, demotedBotIds: ['writer'] };
+  rerender(<RemoteBotSessionView />);
+  h.navigate.mockClear();
+  h.cloud = { ...h.cloud, demotedBotIds: [] };
+  rerender(<RemoteBotSessionView />);
+  expect(h.navigate).not.toHaveBeenCalled();
+  await act(async () => finish(true));
+  expect(h.navigate).toHaveBeenCalled();
+});
+
+// Unit: a replacement cloud actor must be confirmed before its local route opens.
+it('does not reuse a confirmation for a replacement actor', async () => {
+  h.cloud = { enabled: true, selfDeviceId: 'home', humanActorId: 'human', demotedBotIds: [], actors: [
+    { id: 'a-writer', externalId: 'writer', name: 'Writer', avatar: null, homeDeviceId: 'home' }] };
+  let finish!: (ok: boolean) => void;
+  h.refreshRecovered.mockResolvedValueOnce(true).mockReturnValueOnce(new Promise(resolve => { finish = resolve; }));
+  const { rerender } = render(<RemoteBotSessionView />);
+  await waitFor(() => expect(h.navigate).toHaveBeenCalled());
+  h.navigate.mockClear();
+  h.cloud = { ...h.cloud, actors: [{ ...h.cloud.actors[0]!, id: 'replacement' }] };
+  rerender(<RemoteBotSessionView />);
+  expect(h.navigate).not.toHaveBeenCalled();
+  await act(async () => finish(true));
+  expect(h.navigate).toHaveBeenCalled();
+});
+
 // Unit regression: an exact notification link must retain its task, host and anchor
 // when the canonical link changed, its host is offline, or the companion lookup fails.
 it.each(['changed', 'offline', 'failed'] as const)('preserves the original task when the companion is %s', async (reason) => {
