@@ -29,6 +29,20 @@ import {
   type ScheduleWebhookSource,
 } from '@cindy/maker-scheduler/webhook-formats';
 import { parseScheduleDeadline } from '@cindy/maker-shared/schedule-form';
+import { nextCronOrMonthlyFire } from '@cindy/maker-scheduler/timing';
+
+/** Preview a new schedule using the engine's cron/month-end rules and first interval delay. */
+export function previewScheduleFirstFire(
+  form: Pick<ScheduleFormState, 'cronExpr' | 'timezone' | 'intervalMs' | 'manual' | 'deadline' | 'sourceExpireAt'>,
+  now: number,
+): number | undefined {
+  const expireAt = parseScheduleDeadline(form.deadline ?? '', form.sourceExpireAt);
+  if (Number.isNaN(expireAt)) throw new Error('Invalid deadline');
+  const cronFireAt = nextCronOrMonthlyFire(form.cronExpr, now, form.timezone);
+  if (form.manual || (expireAt != null && expireAt <= now)) return undefined;
+  const next = form.intervalMs === undefined ? cronFireAt : now + form.intervalMs;
+  return expireAt != null && next >= expireAt ? undefined : next;
+}
 
 /** Effort 白名单 — 与 Phase 2 mapper enum 一致;UI 提交前的最后一道关卡。 */
 export const EFFORT_VALUES = ['minimal', 'low', 'medium', 'high', 'xhigh', 'max', 'ultra'] as const;

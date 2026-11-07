@@ -18,7 +18,7 @@ import type { ScheduleTemplate, TemplateCategory } from './types.js';
  * - 每个分类固定 2 条：desktop 模板网格是两列，超过 2 条会折行（2026-07-24）。
  */
 
-const DEFAULT_TIMEZONE = 'Asia/Shanghai';
+// Built-in templates inherit the new form's system timezone; user templates may pin one.
 const DEFAULT_NOTIFY = { desktop: true, feishu: false } as const;
 
 export const TEMPLATE_CATEGORIES: TemplateCategory[] = [
@@ -42,7 +42,6 @@ export const BUILTIN_TEMPLATES: ScheduleTemplate[] = [
 - 按仓库工作流交付修复（如创建分支并开 PR），不要直接改动主分支
 - 无法安全修复的失败项，输出失败原因、疑点文件和建议的排查步骤`,
     cronExpr: '0 2 * * *',
-    timezone: DEFAULT_TIMEZONE,
     recurring: true,
     agentKind: 'claude-code',
     useWorktree: true,
@@ -62,7 +61,6 @@ export const BUILTIN_TEMPLATES: ScheduleTemplate[] = [
 - 只报告有证据支撑的问题，说明失败场景，不要凭风格偏好挑刺
 - 除非用户明确授权，只输出审查结论，不要直接在 PR 上留言或改动代码`,
     cronExpr: '0 10 * * 1-5',
-    timezone: DEFAULT_TIMEZONE,
     recurring: true,
     agentKind: 'claude-code',
     useWorktree: false,
@@ -82,7 +80,6 @@ export const BUILTIN_TEMPLATES: ScheduleTemplate[] = [
 - 对每条动态给出一句"为什么值得关注"的判断，而不是罗列链接
 - 信息不足或来源存疑时如实说明，不要臆造`,
     cronExpr: '0 9 * * 1-5',
-    timezone: DEFAULT_TIMEZONE,
     recurring: true,
     agentKind: 'claude-code',
     useWorktree: false,
@@ -111,7 +108,6 @@ export const BUILTIN_TEMPLATES: ScheduleTemplate[] = [
 - 对每条重要动态给出"对我们意味着什么"的分析和建议
 - 没有实质动态时如实说明，不要凑数`,
     cronExpr: '0 9 * * 1',
-    timezone: DEFAULT_TIMEZONE,
     recurring: true,
     agentKind: 'claude-code',
     useWorktree: false,
@@ -140,7 +136,6 @@ export const BUILTIN_TEMPLATES: ScheduleTemplate[] = [
 - 区分实质进展和例行事务，突出有价值的产出
 - 材料不足以判断的部分留出占位并说明，方便用户补充`,
     cronExpr: '0 16 * * 5',
-    timezone: DEFAULT_TIMEZONE,
     recurring: true,
     agentKind: 'claude-code',
     useWorktree: false,
@@ -159,7 +154,6 @@ export const BUILTIN_TEMPLATES: ScheduleTemplate[] = [
 - 按"建议更新 / 建议合并 / 建议删除"分类，给出修订建议清单
 - 只输出体检报告，不要直接修改文档`,
     cronExpr: '0 10 1 * *',
-    timezone: DEFAULT_TIMEZONE,
     recurring: true,
     agentKind: 'claude-code',
     useWorktree: false,

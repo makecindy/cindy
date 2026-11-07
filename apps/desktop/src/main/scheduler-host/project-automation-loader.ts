@@ -3,6 +3,7 @@ import * as path from 'node:path';
 import { createHash, randomUUID } from 'node:crypto';
 
 import { and, eq, isNotNull } from 'drizzle-orm';
+import { getDefaultScheduleTimezone } from '@cindy/maker-shared/schedule-form';
 
 import type {
   CreateScheduleInput,
@@ -224,7 +225,7 @@ export class ProjectAutomationLoader {
       if (schedulesDiffer(current, config, workingDir)) {
         await this.deps.scheduler.update(
           current.id,
-          scheduleConfigToUpdateInput(config, workingDir) as ProjectUpdateScheduleInput,
+          scheduleConfigToUpdateInput(config, workingDir, current.timezone) as ProjectUpdateScheduleInput,
         );
         updated += 1;
       }
@@ -283,7 +284,7 @@ export class ProjectAutomationLoader {
     const inserted = current ? 0 : 1;
     const updated = current && schedulesDiffer(current, config, workingDir) ? 1 : 0;
     if (!current) await this.deps.scheduler.create(scheduleConfigToCreateInput(config, workingDir));
-    else if (updated) await this.deps.scheduler.update(current.id, scheduleConfigToUpdateInput(config, workingDir));
+    else if (updated) await this.deps.scheduler.update(current.id, scheduleConfigToUpdateInput(config, workingDir, current.timezone));
     this.emit({ type: 'reconciled', workingDir, inserted, updated, deleted: 0,
       isFirstTime: !current, hashChanged: true });
     return { workingDir, inserted, updated, deleted: 0, skipped: null };
@@ -469,7 +470,7 @@ function scheduleConfigToCreateInput(
     projectConfigId: config.id,
     kind: 'cron',
     cronExpr: config.cronExpr,
-    timezone: config.timezone ?? 'Asia/Shanghai',
+    timezone: config.timezone ?? getDefaultScheduleTimezone(),
     recurring: config.recurring ?? true,
     manual: config.manual ?? false,
     intervalMs: config.intervalMs,
@@ -501,8 +502,11 @@ function scheduleConfigToCreateInput(
 function scheduleConfigToUpdateInput(
   config: ProjectScheduleConfig,
   workingDir: string,
+  savedTimezone: string = getDefaultScheduleTimezone(),
 ): ProjectUpdateScheduleInput {
-  return scheduleConfigToCreateInput(config, workingDir);
+  // An omitted timezone only defaults on first import. Changing the system zone
+  // or an unrelated project field must not reschedule an existing automation.
+  return scheduleConfigToCreateInput({ ...config, timezone: config.timezone ?? savedTimezone }, workingDir);
 }
 
 export function schedulesDiffer(
@@ -510,7 +514,7 @@ export function schedulesDiffer(
   config: ProjectScheduleConfig,
   workingDir: string,
 ): boolean {
-  const expected = scheduleConfigToUpdateInput(config, workingDir);
+  const expected = scheduleConfigToUpdateInput(config, workingDir, schedule.timezone);
   return (
     schedule.name !== expected.name ||
     schedule.prompt !== expected.prompt ||

@@ -47,6 +47,29 @@ function schedule(patch: Partial<RemoteSchedule> = {}): RemoteSchedule {
 }
 
 describe('mobile schedule form model', () => {
+  // System-timezone regression / unit: creation used a fixed Shanghai default.
+  // Existing cases only edited explicit zones; verify the submitted draft after
+  // a system-zone change and preserve explicit schedule/template choices.
+  it('reads the current system timezone for each new draft and preserves explicit zones', () => {
+    const options = Intl.DateTimeFormat().resolvedOptions();
+    const zone = vi.spyOn(Intl.DateTimeFormat.prototype, 'resolvedOptions');
+    try {
+      zone.mockReturnValue({ ...options, timeZone: 'America/New_York' });
+      expect(buildMobileScheduleInput(createMobileScheduleDraft()).timezone).toBe('America/New_York');
+      zone.mockReturnValue({ ...options, timeZone: 'Europe/Berlin' });
+      const draft = createMobileScheduleDraft();
+      expect(buildMobileScheduleInput(draft).timezone).toBe('Europe/Berlin');
+      expect(buildMobileScheduleInput(createMobileScheduleDraft(schedule())).timezone).toBe('Asia/Shanghai');
+      expect(applyTemplateToMobileScheduleDraft(draft, {
+        id: 'explicit', name: 'Explicit', description: '', category: 'custom', source: 'user', timezone: 'UTC',
+      }).timezone).toBe('UTC');
+      zone.mockImplementation(() => { throw new Error('Timezone unavailable'); });
+      expect(buildMobileScheduleInput(createMobileScheduleDraft()).timezone).toBe('UTC');
+    } finally {
+      zone.mockRestore();
+    }
+  });
+
   // #8886 / unit: desktop form conversion must preserve an absolute deadline,
   // reject impossible local dates and explicitly clear empty input.
   it('round-trips and clears the deadline without losing timestamp precision', () => {
@@ -103,7 +126,7 @@ describe('mobile schedule form model', () => {
       prompt: '每天检查 PR 状态',
       kind: 'cron',
       cronExpr: '*/15 * * * *',
-      timezone: 'Asia/Shanghai',
+      timezone: Intl.DateTimeFormat().resolvedOptions().timeZone,
       recurring: true,
       manual: false,
       intervalMs: 900_000,

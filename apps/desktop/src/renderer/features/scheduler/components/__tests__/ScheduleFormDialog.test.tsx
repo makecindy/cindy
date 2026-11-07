@@ -3,6 +3,7 @@ import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/re
 import type { ReactNode } from 'react';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import type { Schedule, ScheduleTemplate } from '@cindy/maker-scheduler';
+import { BUILTIN_TEMPLATES } from '@cindy/maker-scheduler/templates';
 import type { ProviderView } from '@cindy/model-providers';
 import { __resetForTest as resetDraft } from '@/state/newMakerDraft';
 
@@ -145,6 +146,35 @@ beforeEach(() => {
 });
 afterEach(cleanup);
 afterEach(() => vi.unstubAllGlobals());
+
+// System-timezone regression / unit: real new dialog + template application +
+// submit. Existing edit-only timing cases missed the fixed default and had no
+// preview; a New York system zone must produce and save a New York schedule.
+it.each([undefined, BUILTIN_TEMPLATES.find((template) => template.id === 'weekly-work-draft')])(
+  'previews and submits the system timezone for new forms with template %j', async (template) => {
+    const options = Intl.DateTimeFormat().resolvedOptions();
+    const zone = vi.spyOn(Intl.DateTimeFormat.prototype, 'resolvedOptions')
+      .mockReturnValue({ ...options, timeZone: 'America/New_York' });
+    const clock = vi.spyOn(Date, 'now').mockReturnValue(Date.parse('2026-11-08T00:00:00Z'));
+    try {
+      const onSubmit = vi.fn(async () => {});
+      const view = render(<ScheduleFormDialog open initial={null} initialTemplate={template}
+        initialValues={{ name: 'New', prompt: 'Check work', agentKind: 'codex' }}
+        onOpenChange={() => {}} onSubmit={onSubmit} />);
+      const expected = template ? '2026-11-13T21:00:00.000Z' : '2026-11-08T14:00:00.000Z';
+      expect(view.container.querySelector('time')?.dateTime).toBe(expected);
+      fireEvent.click(screen.getByRole('button', { name: 'scheduler.editor.promptDialog.createAria' }));
+      await waitFor(() => expect(onSubmit).toHaveBeenCalledWith(expect.objectContaining({
+        timezone: 'America/New_York', cronExpr: template?.cronExpr ?? '0 9 * * *',
+      }), false));
+      fireEvent.click(screen.getByRole('radio', { name: 'scheduler.editor.fields.manually' }));
+      expect(view.container.querySelector('time')).toBeNull();
+    } finally {
+      zone.mockRestore();
+      clock.mockRestore();
+    }
+  },
+);
 
 // User-requested form grouping / unit: inactive tabs unmount their fields. Existing
 // model tests do not protect configured options during a save from another tab.
