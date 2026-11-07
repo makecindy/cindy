@@ -11,6 +11,7 @@ import { kimiAdapter } from './kimi.js';
 import { opencodeAdapter } from './opencode.js';
 import { piAdapter } from './pi.js';
 import { qwenAdapter } from './qwen.js';
+import { traeAdapter } from './trae.js';
 import { workbuddyAdapter } from './workbuddy.js';
 
 export const SOURCE_ADAPTERS: SourceAdapter[] = [
@@ -25,6 +26,7 @@ export const SOURCE_ADAPTERS: SourceAdapter[] = [
   factoryAdapter,
   workbuddyAdapter,
   deepseekAdapter,
+  traeAdapter,
 ];
 
 export function adapterFor(id: ImportSourceId): SourceAdapter | undefined {
