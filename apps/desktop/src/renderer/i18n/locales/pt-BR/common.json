@@ -891,6 +891,7 @@
         "pausedLocal": "Não está aceitando novas tarefas de outros computadores",
         "cooling": "Em espera",
         "coolingUntil": "Em espera · volta por volta de {{time}}",
+        "quotaExhausted": "Cota esgotada",
         "offline": "Offline",
         "unreachableHere": "Não é possível acessá-lo deste computador",
         "unavailable": {
