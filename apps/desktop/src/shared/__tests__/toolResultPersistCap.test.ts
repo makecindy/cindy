@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { extractToolResultDiagnostics } from '@cindy/maker-shared/tool-result-compaction';
+import { extractPayloadToolResultFiles } from '@cindy/maker-shared/payload-summary';
 
 import {
   TOOL_RESULT_PERSIST_CONTENT_LIMIT,
@@ -9,6 +10,142 @@ import {
 } from '../toolResultPersistCap';
 
 describe('capToolResultTextForPersist', () => {
+  // #5930: cutting the body leaves invalid JSON, so the reopen/device-link scan
+  // finds no declared file and the card disappears. Declarations survive as references.
+  it('keeps declared files as valid bounded JSON when the body is oversized', () => {
+    const body = 'x'.repeat(TOOL_RESULT_PERSIST_CONTENT_LIMIT * 2);
+    const text = JSON.stringify({
+      ok: true,
+      _xdt_model_files: [{ url: 'xdt-file:///out/report.pdf', name: 'report.pdf' }],
+      body,
+    });
+    const stored = capToolResultTextForPersist(text);
+    expect(stored.length).toBeLessThanOrEqual(TOOL_RESULT_PERSIST_CONTENT_LIMIT);
+    expect(stored).not.toContain(TOOL_RESULT_PERSIST_TRUNCATION_SUFFIX);
+    const payload = JSON.parse(stored);
+    expect(payload._xdt_model_files).toEqual([{ url: 'xdt-file:///out/report.pdf', name: 'report.pdf' }]);
+    expect(payload.ok).toBe(true);
+    expect(payload.truncated).toBe(true);
+    expect(payload.preview.length).toBeGreaterThan(0);
+    expect(capToolResultTextForPersist(stored)).toBe(stored);
+  });
+
+  it('keeps produced .glb references and drops URLs outside the file alphabet', () => {
+    const glb = `cindy-media://blobs/${'a'.repeat(64)}.glb`;
+    const text = JSON.stringify({ xdt_media_produced: [glb, 'https://example.com/x.zip'], body: 'y'.repeat(20000) });
+    const stored = capToolResultTextForPersist(text);
+    expect(JSON.parse(stored).xdt_media_produced).toEqual([glb]);
+  });
+
+  it('dedupes declarations and keeps a declaration-only payload capped', () => {
+    const url = 'xdt-file:///out/a.zip';
+    const text = JSON.stringify({ xdt_media_produced: [url, url], _xdt_model_files: [{ url }], body: 'z'.repeat(20000) });
+    const payload = JSON.parse(capToolResultTextForPersist(text));
+    const kept = [...(payload._xdt_model_files ?? []).map((f: { url: string }) => f.url), ...(payload.xdt_media_produced ?? [])];
+    expect(kept).toEqual([url]);
+  });
+
+  // 整链路：落库截断后的正文，必须仍能被消费方解析出文件声明。
+  it('keeps the file visible to extractPayloadToolResultFiles end to end', () => {
+    const url = 'xdt-file:///out/report.pdf';
+    const text = JSON.stringify({ ok: true, _xdt_model_files: [{ url, name: 'report.pdf' }], body: 'q'.repeat(20000) });
+    const stored = capToolResultTextForPersist(text);
+    expect(extractPayloadToolResultFiles(stored).map((file) => file.url)).toEqual([url]);
+    // 旧行为（纯文本截断）下同一份正文解析不出文件，这正是 #5930。
+    expect(extractPayloadToolResultFiles(text.slice(0, TOOL_RESULT_PERSIST_CONTENT_LIMIT))).toEqual([]);
+  });
+
+  // ghost_call 信封：消费方会展开成功的 result，摘要必须按同一规则读取。
+  it('reads declarations inside the documented ghost_call envelope', () => {
+    const url = 'xdt-file:///out/nested.pdf';
+    const text = JSON.stringify({ ok: true, result: { _xdt_model_files: [{ url, name: 'nested.pdf' }] }, body: 'n'.repeat(20000) });
+    const stored = capToolResultTextForPersist(text);
+    expect(extractPayloadToolResultFiles(stored).map((file) => file.url)).toEqual([url]);
+  });
+
+  it('keeps a suppressed file card suppressed after truncation', () => {
+    const glb = `cindy-media://blobs/${'b'.repeat(64)}.glb`;
+    const hidden = JSON.stringify({ _xdt_render_image: false, xdt_media_produced: [glb], body: 'h'.repeat(20000) });
+    expect(extractPayloadToolResultFiles(hidden)).toEqual([]);
+    const stored = capToolResultTextForPersist(hidden);
+    expect(JSON.parse(stored)._xdt_render_image).toBe(false);
+    expect(extractPayloadToolResultFiles(stored)).toEqual([]);
+
+    const innerHidden = JSON.stringify({ ok: true, result: { _xdt_render_image: false, xdt_media_produced: [glb] }, body: 'h'.repeat(20000) });
+    expect(extractPayloadToolResultFiles(innerHidden)).toEqual([]);
+    expect(extractPayloadToolResultFiles(capToolResultTextForPersist(innerHidden))).toEqual([]);
+  });
+
+  // 授权回路：失败/隐藏的结果不能借摘要拿到交付字段（sharedTaskFileReferences 用落库内容判权）。
+  it('drops declared files for a failed result and keeps the denial signal', () => {
+    const url = 'xdt-file:///out/secret.pdf';
+    const failed = JSON.stringify({ ok: false, status: 'FAILED', _xdt_model_files: [{ url }], body: 'f'.repeat(20000) });
+    const payload = JSON.parse(capToolResultTextForPersist(failed));
+    expect(payload._xdt_model_files).toBeUndefined();
+    expect(payload.xdt_media_produced).toBeUndefined();
+    expect(payload.ok).toBe(false);
+    expect(payload.status).toBe('failed');
+  });
+
+  it('drops declared files when only the envelope reports failure', () => {
+    const url = 'xdt-file:///out/secret.pdf';
+    const text = JSON.stringify({ ok: true, result: { ok: false, _xdt_model_files: [{ url }] }, body: 'g'.repeat(20000) });
+    const payload = JSON.parse(capToolResultTextForPersist(text));
+    expect(payload._xdt_model_files).toBeUndefined();
+    expect(payload.ok).toBe(false);
+  });
+
+  // 字节预算：文件装不下时退回卡片摘要，不能把父提交能保留的 card id 一起丢掉。
+  it('keeps the card reference when declared files cannot fit the budget', () => {
+    const files = Array.from({ length: 50 }, (_, index) => ({
+      url: `xdt-file:///out/${'x'.repeat(180)}-${index}.pdf`,
+      name: 'n'.repeat(200),
+    }));
+    const text = JSON.stringify({ ok: true, xdt_card_id: 'card_keep', _xdt_model_files: files, body: 'b'.repeat(20000) });
+    const stored = capToolResultTextForPersist(text);
+    expect(stored.length).toBeLessThanOrEqual(TOOL_RESULT_PERSIST_CONTENT_LIMIT);
+    const payload = JSON.parse(stored);
+    expect(payload.xdt_card_id).toBe('card_keep');
+    expect((payload._xdt_model_files ?? []).length).toBeLessThan(files.length);
+  });
+
+  // 诊断保留：纯文件摘要没有 card id，归档时也必须能读回它的 diagnostics。
+  it('keeps diagnostics readable for a summary that only declares files', () => {
+    const url = 'xdt-file:///out/report.pdf';
+    const text = JSON.stringify({ ok: true, _xdt_model_files: [{ url }],
+      afterSnapshot: { ok: false, errorCode: 'ACT_INVALID_REQUEST', message: 'PRIVATE' }, body: 'd'.repeat(20000) });
+    const stored = capToolResultTextForPersist(text);
+    expect(extractPayloadToolResultFiles(stored).map((file) => file.url)).toEqual([url]);
+    expect(extractToolResultDiagnostics(stored))
+      .toEqual({ ok: true, afterSnapshotOk: false, afterSnapshotErrorCode: 'ACT_INVALID_REQUEST' });
+  });
+
+  // `ok` 只是附带字段：没有卡片、文件或否决信号时，普通结果必须保留原有的前 8KB。
+  it('keeps the first 8KB for an ordinary oversized result that only reports ok', () => {
+    const text = JSON.stringify({ ok: true, body: 'k'.repeat(20000) });
+    const stored = capToolResultTextForPersist(text);
+    expect(stored.length).toBe(TOOL_RESULT_PERSIST_CONTENT_LIMIT);
+    expect(stored.endsWith(TOOL_RESULT_PERSIST_TRUNCATION_SUFFIX)).toBe(true);
+    expect(stored.startsWith('{"ok":true,"body":"kkk')).toBe(true);
+  });
+
+  it('keeps the first 8KB when the body only mentions a declaration field', () => {
+    const text = JSON.stringify({ ok: true, body: `${'m'.repeat(9000)} xdt_media_produced` });
+    expect(capToolResultTextForPersist(text).endsWith(TOOL_RESULT_PERSIST_TRUNCATION_SUFFIX)).toBe(true);
+  });
+
+  it('keeps the first 8KB when the declared file arrays are empty', () => {
+    const text = JSON.stringify({ ok: true, xdt_media_produced: [], _xdt_model_files: [], body: 'e'.repeat(20000) });
+    expect(capToolResultTextForPersist(text).endsWith(TOOL_RESULT_PERSIST_TRUNCATION_SUFFIX)).toBe(true);
+  });
+
+  it('still truncates payloads that declare nothing', () => {
+    const text = JSON.stringify({ body: 'w'.repeat(20000) });
+    const stored = capToolResultTextForPersist(text);
+    expect(stored.length).toBe(TOOL_RESULT_PERSIST_CONTENT_LIMIT);
+    expect(stored.endsWith(TOOL_RESULT_PERSIST_TRUNCATION_SUFFIX)).toBe(true);
+  });
+
   it('returns short text unchanged', () => {
     expect(capToolResultTextForPersist('hello')).toBe('hello');
     const exact = 'x'.repeat(TOOL_RESULT_PERSIST_CONTENT_LIMIT);
