@@ -377,6 +377,18 @@ describe('messageHandler ambient gate', () => {
     expect(h.runAgentTurn).not.toHaveBeenCalled();
   });
 
+  // Tier 1, #9250: mention-only filtering must run before unsupported-only and mixed notices.
+  it.each(['', 'background text'])('silences uninvoked unsupported attachments with text=%s', async text => {
+    const gate = vi.fn(async () => 'skip' as const);
+    const h = wire({ withPrepare: true, ambientTurnGate: gate, channel: 'imessage' });
+    await h.deliver(makeEvent({ channelName: 'imessage', text, ambient: true, invoked: false,
+      unsupported: [{ type: 'unsupported', label: 'photo.heic' }] }));
+    expect(gate).toHaveBeenCalledOnce();
+    expect(h.sendText).not.toHaveBeenCalled();
+    expect(h.runAgentTurn).not.toHaveBeenCalled();
+    expect(h.prepareAgentTurnText).not.toHaveBeenCalled();
+  });
+
   it('runs the normal turn when the judge says proceed, and when it throws', async () => {
     for (const gate of [vi.fn(async () => 'proceed' as const), vi.fn(async () => { throw new Error('judge down'); })]) {
       const h = wire({ withPrepare: true, ambientTurnGate: gate as never });

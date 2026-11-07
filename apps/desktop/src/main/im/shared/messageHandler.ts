@@ -299,6 +299,31 @@ export function createMessageHandler(
       return;
     }
 
+    // ── 全响应(ambient)前置判定: 辅助模型先说该不该插话 ───────────────────
+    // 放在 ack / 提前落库之前: 判成 SKIP 的消息不留任何痕迹(不落专线、不起轮次、
+    // 群窗口游标不动)。判不出来按原路径起轮次, 由主模型自己 NO_REPLY。
+    const skipAmbient = async (): Promise<boolean> => {
+      if (event.ambient !== true || !adapter.ambientTurnGate) return false;
+      let verdict: 'proceed' | 'skip' = 'proceed';
+      try {
+        verdict = await adapter.ambientTurnGate(event);
+      } catch (err) {
+        if (isImAccountScopeClosedError(err)) throw err;
+        const msg = err instanceof Error ? err.message : String(err);
+        log.warn(`ambientTurnGate failed (proceeding): ${msg}`);
+      }
+      if (verdict === 'skip') {
+        log.info(
+          `ambient skipped by judge sender=...${event.senderId.slice(-8)} msg=...${event.messageId.slice(-8)}`,
+        );
+        return true;
+      }
+      return false;
+    };
+
+    // iMessage participation mode applies before any attachment notice.
+    if (channel === 'imessage' && await skipAmbient()) return;
+
     const hasContent = event.text.length > 0 || event.attachments.length > 0;
 
     // ── pure-unsupported: reply directly, do NOT invoke agent ───────────────
@@ -343,25 +368,7 @@ export function createMessageHandler(
     };
     if (!event.delivery) await notifyUnsupported();
 
-    // ── 全响应(ambient)前置判定: 辅助模型先说该不该插话 ───────────────────
-    // 放在 ack / 提前落库之前: 判成 SKIP 的消息不留任何痕迹(不落专线、不起轮次、
-    // 群窗口游标不动)。判不出来按原路径起轮次, 由主模型自己 NO_REPLY。
-    if (event.ambient === true && adapter.ambientTurnGate) {
-      let verdict: 'proceed' | 'skip' = 'proceed';
-      try {
-        verdict = await adapter.ambientTurnGate(event);
-      } catch (err) {
-        if (isImAccountScopeClosedError(err)) throw err;
-        const msg = err instanceof Error ? err.message : String(err);
-        log.warn(`ambientTurnGate failed (proceeding): ${msg}`);
-      }
-      if (verdict === 'skip') {
-        log.info(
-          `ambient skipped by judge sender=...${event.senderId.slice(-8)} msg=...${event.messageId.slice(-8)}`,
-        );
-        return;
-      }
-    }
+    if (channel !== 'imessage' && await skipAmbient()) return;
 
     // ── invoke agent ────────────────────────────────────────────────────────
     // 本条的渠道来源事实(只进模型正文); 取不到按"不写说明"降级, 不阻断消息。与下面的

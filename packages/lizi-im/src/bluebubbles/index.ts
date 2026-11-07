@@ -69,7 +69,8 @@ export class BlueBubblesIM extends BaseIM implements TextChannelIM {
   private readonly activeSends = new Set<string>();
   private readonly deferredEvents = new Map<string, IMMessageEvent>();
   private readonly cancelledEvents = new WeakSet<IMMessageEvent>();
-  private readonly pendingReplies = new Map<string, { accept(text: string): boolean; cancel(): void }>();
+  private readonly eventSentAt = new WeakMap<IMMessageEvent, number>();
+  private readonly pendingReplies = new Map<string, { createdAt: number; accept(text: string): boolean; cancel(): void }>();
 
   constructor(host: IMHost, private readonly options: BlueBubblesOptions) { super('imessage', host); }
   registerIpc(): void { /* Partner connection IPC is owned by the host. */ }
@@ -289,6 +290,7 @@ export class BlueBubblesIM extends BaseIM implements TextChannelIM {
             interactionSource: { chatName: chat.displayName, senderName: sender },
             ...(this.isGroup(chat.guid) ? { ambient: !this.isGroupInvocation(message.text ?? ''),
               invoked: this.isGroupInvocation(message.text ?? '') } : {}) };
+          this.eventSentAt.set(event, message.dateCreated);
           for (const attachment of message.attachments ?? []) {
             const name = attachment.transferName || attachment.guid;
             if ((attachment.totalBytes ?? 0) > BLUEBUBBLES_MAX_BYTES) { event.unsupported.push({ type: 'oversize', label: name }); continue; }
@@ -316,7 +318,17 @@ export class BlueBubblesIM extends BaseIM implements TextChannelIM {
         // An interrupted dispatch is visible as uncertain; never blindly repeat model side effects.
         receipts.mark(guid, 'dispatching');
         const pending = this.pendingReplies.get(event.chatId);
-        if (pending?.accept(event.text)) {
+        const command = event.text.trim().toLowerCase();
+        const stop = event.attachments.length === 0 && event.unsupported.length === 0
+          && ['/stop', '!stop', '！stop'].includes(command);
+        if (pending && stop && event.speaker?.isOwner) {
+          this.pendingReplies.delete(event.chatId);
+          pending.cancel();
+        }
+        // Both the first observation and the verified send time must follow this request.
+        // Deferred retries and delayed historical delivery are never confirmation answers.
+        if (!stop && pending && receipts.receivedAfter(guid, pending.createdAt)
+          && (this.eventSentAt.get(event) ?? 0) > pending.createdAt && pending.accept(event.text)) {
           receipts.mark(guid, 'accepted'); continue;
         }
         this.activeDispatches.add(guid);
@@ -434,7 +446,7 @@ export class BlueBubblesIM extends BaseIM implements TextChannelIM {
     const result = new Promise<T>((yes, no) => { resolve = yes; reject = no; });
     // Attach a rejection consumer before sending (disconnect may race the send).
     void result.catch(() => {});
-    const pending = { accept: (text: string) => {
+    const pending = { createdAt: this.now(), accept: (text: string) => {
       const value = parse(text); if (value === null) return false;
       if (shared) shared.decide(value); else resolve(value);
       return true;

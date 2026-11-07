@@ -233,6 +233,52 @@ describe('BlueBubbles local ingress', () => {
     expect(f.received.map(row => row.messageId)).toEqual(['question']);
   });
 
+  // Tier 1, #9250: queued text cannot authorize a question created after its arrival.
+  // Existing confirmation test only covers a new reply following the prompt.
+  it('does not consume a deferred yes as permission for a later request', async () => {
+    const f = await fixture();
+    f.im.onMessage(event => { event.delivery!.awaitPersistence(); event.delivery!.defer(); });
+    f.message('old-yes', { text: 'yes' });
+    await f.webhook('old-yes');
+    await f.im.reconcile();
+    expect(f.state().inbox['old-yes'].state).toBe('pending');
+    let resolve!: (answer: string) => void;
+    const shared = { result: new Promise<string>(done => { resolve = done; }),
+      decide: vi.fn((answer: string) => { resolve(answer); return true; }) };
+    const reply = f.im.requestTextReply(f.chat.guid, 'Allow this new action?', text => text === 'yes' ? text : null, undefined, shared);
+    await f.im.reconcile();
+    expect(shared.decide).not.toHaveBeenCalled();
+    expect(f.state().inbox['old-yes'].state).toBe('pending');
+    // Even a late first delivery of a historical message is not a new answer.
+    f.message('delayed-yes', { text: 'yes', dateCreated: 1000 });
+    await f.webhook('delayed-yes');
+    await f.im.reconcile();
+    expect(shared.decide).not.toHaveBeenCalled();
+    f.message('new-yes', { text: 'yes' });
+    await f.webhook('new-yes');
+    await expect(reply).resolves.toBe('yes');
+    expect(shared.decide).toHaveBeenCalledOnce();
+    expect(f.state().inbox['new-yes'].state).toBe('accepted');
+  });
+
+  // Tier 1, #9250: arbitrary-text question parsers must not swallow control commands.
+  it.each(['/stop', '!stop'])('passes owner %s to the handler and cancels its waiting question', async text => {
+    const f = await fixture();
+    const parse = vi.fn((value: string) => value.trim() || null);
+    const reply = f.im.requestTextReply(f.chat.guid, 'What should I do?', parse);
+    const rejected = expect(reply).rejects.toThrow('BLUEBUBBLES_INTERACTION_CANCELLED');
+    f.message('stop-question', { text });
+    await f.webhook('stop-question');
+    await f.im.reconcile();
+    await rejected;
+    expect(parse).not.toHaveBeenCalled();
+    expect(f.received.map(event => event.messageId)).toContain('stop-question');
+    const next = f.im.requestTextReply(f.chat.guid, 'Next question?', value => value === 'fresh' ? value : null);
+    f.message('fresh-answer', { text: 'fresh' });
+    await f.webhook('fresh-answer');
+    await expect(next).resolves.toBe('fresh');
+  });
+
   it('delivers later messages when an earlier download fails, then recovers that pending receipt', async () => {
     const f = await fixture();
     f.message('broken', { attachments: [{ guid: 'unavailable', transferName: 'file.txt' }] });
