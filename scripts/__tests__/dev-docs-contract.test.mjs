@@ -4,6 +4,8 @@ import fs from "node:fs";
 import path from "node:path";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
+import testManifest from "../test-workspaces.config.mjs";
+import { filterRunsByWorkspace, parseCliOptions, planRuns } from "../test-workspaces.mjs";
 
 const ROOT = path.resolve(fileURLToPath(new URL("../..", import.meta.url)));
 const CANONICAL_DOCS = [
@@ -331,7 +333,19 @@ test("client CI keeps the complete sharded unit gate on Windows", () => {
 	assert.ok(shards, "client CI must define Windows unit shards");
 	assert.match(shards, /^    runs-on: windows-latest$/m);
 	assertCompleteShardMatrix(shards);
-	assert.match(shards, /^        run: pnpm run test:workspaces --tier unit$/m);
+	assert.match(shards, /^        run: pnpm run test:workspaces --tier unit \$\{\{ matrix\.group\.args \}\}$/m);
+	const groupArgs = [...shards.matchAll(/^            args: (.+)$/gm)].map((match) => match[1]);
+	assert.equal(groupArgs.length, 2, "Windows separates Desktop from the remaining workspaces");
+	const runs = planRuns(testManifest.workspaces, { tier: "unit" });
+	const groups = groupArgs.map((args) => filterRunsByWorkspace(
+		runs,
+		parseCliOptions(["--tier", "unit", ...args.split(/\s+/)]),
+	));
+	assert.ok(groups.every((group) => group.length > 0), "each Windows group must run tests");
+	assert.equal(new Set(groups.flat()).size, groups.flat().length, "Windows groups must not repeat workspaces");
+	assert.deepEqual(new Set(groups.flat()), new Set(runs), "Windows groups must cover the entire unit plan");
+	assert.ok(groups.some((group) => group.length === 1 && group[0].workspace.name === "desktop"),
+		"Desktop must run independently of the remaining workspaces");
 	assert.doesNotMatch(shards, /pnpm test:unit(?:\s|$)/);
 	assert.doesNotMatch(shards, /pnpm test:runner/);
 
