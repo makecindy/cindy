@@ -30,14 +30,17 @@ import {
 import { getActiveControllers } from '../device-link/dispatch.js';
 import { getReceivedShares, onProviderShareReceivedChanged, providerShareAccessEpoch } from '../device-link/providerShareGuest.js';
 import { readReceivedProviderShareQuota } from '../device-link/providerShareRuntime.js';
-import { getResolvedMainLocale, rawMainString } from '../i18n.js';
+import { getResolvedMainLocale, mainStringKeysUnder, rawMainString } from '../i18n.js';
 import { createLogger } from '../logger.js';
 import { inspectAppDefaultModel } from '../maker-ipc/appDefaultModelControl.js';
 import { applyNewMakerDraftRoute } from '../maker-ipc/register.js';
 import { getDesktopNotificationsEnabled } from '../notificationService.js';
+import { emptyMenubarInputs } from '../menubar/collect.js';
+import { MENUBAR_HARNESS_LOGOS } from '../menubar/logos.js';
 import { buildMenubarActivities } from '../menubar/activity.js';
 import { buildMenubarView, isLowOnEverything, type MenubarBuildInput, type MenubarSubscriptionInput } from '../menubar/snapshot.js';
-import { createMenubarTranslate } from '../menubar/strings.js';
+import { buildMenubarUiStrings, createMenubarTranslate } from '../menubar/strings.js';
+import { currentLedgerCurrency } from '../usage/ledgerCurrency.js';
 import { getQuotaOverviewService, type QuotaOverviewBuild, type QuotaOverviewService } from './service.js';
 
 import { SharedQuotaReader } from '../menubar/sharedSubscriptions.js';
@@ -230,10 +233,30 @@ export class QuotaPanelController {
         const owner = getActiveAppSession();
         this.sharedScope = `${owner.dataOwnerId}:${owner.generation}`;
         const build = this.overview.latest();
-        if (this.started && build) this.publish(build);
+        if (this.started) {
+          if (build) this.publish(build);
+          else this.publishUnavailableOverview();
+        }
       },
     });
     this.sharedReader.setOpen(this.started && this.panelOpen);
+  }
+
+  /** Identity invalidation cannot wait for an overview still collecting the old owner's data. */
+  private publishUnavailableOverview(): void {
+    const nowMs = Date.now();
+    const locale = getResolvedMainLocale();
+    const raw = (key: string) => rawMainString(key, locale);
+    const view = buildMenubarView({
+      ...emptyMenubarInputs(nowMs, ''), nowMs, locale,
+      moneySymbol: currentLedgerCurrency() === 'CNY' ? '¥' : '$', settings: this.settings,
+      harnessLogos: MENUBAR_HARNESS_LOGOS,
+      uiStrings: buildMenubarUiStrings(mainStringKeysUnder('menubar.ui'), raw, locale),
+      t: createMenubarTranslate(locale, raw),
+      ...(!getActiveAppSession().dataOwnerId ? { gate: 'sign-in' as const } : {}),
+    });
+    this.wasLow = null;
+    this.show({ ...view, ...this.taskOverview('sign-in'), ...controlState('sign-in') });
   }
 
   /** Unread changes must not wait for quota/history/network reads to finish. */
