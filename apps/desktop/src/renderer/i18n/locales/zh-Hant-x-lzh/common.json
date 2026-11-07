@@ -12030,12 +12030,6 @@
         "ASSESSMENT_FAILED": "暫不能重整配置之狀，請再試。",
         "TIMEOUT": "待設逾時，請再試。"
       },
-      "hostRequirements": {
-        "modelProvider": {
-          "label": "AI 模型服務",
-          "description": "用法器所宣之圖或影之能前，須先連可用之模型服務"
-        }
-      },
       "form": {
         "placeholder": "請輸入{{label}}",
         "required": "請書{{label}}",

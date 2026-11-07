@@ -498,6 +498,36 @@ describe('Cindy Web Search', () => {
     expect(switching.settlePipeCallClaim).not.toHaveBeenCalled();
   });
 
+  // #7730 review:首次登录凭证还在下发或同步暂时失败时,搜索服务因缺 key 回
+  // NOT_CONFIGURED。这是马上会好的临时状态,按账号切换同一口径回 UPSTREAM_UNAVAILABLE,
+  // 且未出网,binding 仍可重试。已就绪时的 NOT_CONFIGURED(服务端未配置)原样透传。
+  it.each([
+    [false, true, 'UPSTREAM_UNAVAILABLE'],
+    [false, false, 'NOT_CONFIGURED'],
+    [true, true, 'NOT_CONFIGURED'],
+  ] as const)('搜索未就绪 NOT_CONFIGURED、模型服务就绪=%s、凭证暂时不可用=%s → %s', async (ready, transient, errorCode) => {
+    const { slot, settlePipeCallClaim } = makeSlot({
+      getGhost: searchGhost,
+      searchWeb: vi.fn(async () => ({
+        ok: false as const,
+        errorCode: 'NOT_CONFIGURED' as const,
+        message: '搜索尚未就绪',
+        requestStarted: false,
+      })),
+      isModelAccessReady: () => ready,
+      isModelAccessTransientlyUnavailable: () => transient,
+    });
+    expect(await slot.handleModelRequest('art', SEARCH_REQ)).toMatchObject({ ok: false, errorCode });
+    expect(settlePipeCallClaim).toHaveBeenLastCalledWith(
+      'art',
+      'call-search-1',
+      'research',
+      'cindy.search.web',
+      expect.stringMatching(/^[a-f0-9]{64}$/),
+      true,
+    );
+  });
+
   it('仅明确未出网的失败允许重试；已出网错误保留错误码并消费 binding', async () => {
     const notStartedSearch = vi.fn(async () => ({
       ok: false as const,
@@ -785,6 +815,32 @@ describe('目录空清单 = 能力暂不可用', () => {
     expect(editImage).not.toHaveBeenCalled();
   });
 
+  // #7581:模型服务不再是插件级前置门禁,未登录时媒体代办要在调用这一刻给出对因的错误,
+  // 而不是"目录暂时取不到、重启试试"。已登录但目录为空仍是旧口径的临时状态。
+  // 账号切换期间网关能力暂时为否:仍按临时状态回复,不能误判为未登录。
+  // 首次登录凭证还在下发(key 未写入)或同步暂时失败(同账号可重试)同理。
+  it.each([
+    [false, false, false, 'NO_CANDIDATE', 'Cindy 模型服务未登录'],
+    [true, false, false, undefined, '模型目录暂时取不到'],
+    [false, true, false, undefined, '模型目录暂时取不到'],
+    [false, false, true, undefined, '模型目录暂时取不到'],
+  ] as const)('图像清单空、模型服务就绪=%s、账号切换中=%s、凭证暂时不可用=%s → 对因的拒单', async (ready, switching, provisioning, errorCode, text) => {
+    const { slot, generateImage } = makeSlot({
+      getImageConfig: vi.fn(() => EMPTY_CONFIG) as unknown as CindySlotDeps['getImageConfig'],
+      isModelAccessReady: () => ready,
+      isModelAccessTransientlyUnavailable: () => provisioning,
+      isOwnerBoundaryPending: () => switching,
+    });
+    const result = (await slot.handleModelRequest('art', REQ)) as {
+      ok: boolean;
+      message: string;
+      errorCode?: string;
+    };
+    expect(result).toMatchObject({ ok: false });
+    expect(result.errorCode).toBe(errorCode);
+    expect(result.message).toContain(text);
+    expect(generateImage).not.toHaveBeenCalled();
+  });
 });
 
 describe('媒体选型没有逐插件覆盖(2026-10 起只走系统默认)', () => {
@@ -1996,6 +2052,37 @@ describe('快问快答(oneshot_text)', () => {
     }
   });
 
+  // #7730 review:插件级的模型服务门禁拿掉后,首次登录凭证还在下发、或同步暂时失败
+  // (同账号可重试)时,插件会在 key 写入前打到链上无候选。这是马上会好的临时状态,
+  // 不能报 NO_CANDIDATE(手册要求插件对它不重试、直接让用户去登录)。
+  it.each([
+    [false, false, 'NO_CANDIDATE'],
+    [false, true, 'INTERNAL'],
+    [true, true, 'NO_CANDIDATE'],
+  ] as const)('链上无候选、模型服务就绪=%s、凭证暂时不可用=%s → %s', async (ready, transient, errorCode) => {
+    const { slot } = withText({
+      oneshotText: vi.fn(async () => ({ ok: false as const, reason: 'no_candidate' as const, message: '不行' })),
+      isModelAccessReady: () => ready,
+      isModelAccessTransientlyUnavailable: () => transient,
+    });
+    expect(await slot.handleModelRequest('art', ONESHOT)).toMatchObject({ ok: false, errorCode });
+  });
+
+  // #7730 review:插件钉在停用的非 Cindy 供应商上,requestUtilityText 对显式选择 fail closed、
+  // 不回落 Cindy;凭证下发窗口救不回这条路由,不能改报临时失败。钉在 xd 上则仍是临时口径。
+  it.each([
+    ['byo', 'NO_CANDIDATE'],
+    ['xd', 'INTERNAL'],
+  ] as const)('凭证暂时不可用时钉在 %s 上链上无候选 → %s', async (providerId, errorCode) => {
+    const { slot } = withText({
+      oneshotText: vi.fn(async () => ({ ok: false as const, reason: 'no_candidate' as const, message: '不行' })),
+      getOneshotModelSelection: () => ({ providerId, agentKind: 'codex' as const, model: 'm' }),
+      isModelAccessReady: () => false,
+      isModelAccessTransientlyUnavailable: () => true,
+    });
+    expect(await slot.handleModelRequest('art', ONESHOT)).toMatchObject({ ok: false, errorCode });
+  });
+
   it('expectJson:剥围栏后可解析 → 返回清洗后的 JSON 文本;不可解析 → BAD_MODEL_OUTPUT', async () => {
     const good = withText({
       oneshotText: vi.fn(async () => ({
@@ -2313,6 +2400,30 @@ describe('文本转向量(embed_text)', () => {
       errorCode: 'NO_CANDIDATE',
     });
     expect(embedText).not.toHaveBeenCalled();
+  });
+
+  // #7730 review:向量目录来自网关,凭证还在下发或同步暂时失败时目录为空、执行层
+  // 报 AUTH_FAILED,都是马上会好的临时状态,不能报 NO_CANDIDATE。
+  it.each([
+    ['目录为空', { getEmbedConfig: vi.fn(() => ({ models: [], defaults: null })) }],
+    [
+      '执行层 AUTH_FAILED',
+      {
+        embedText: vi.fn(async () => {
+          throw Object.assign(new Error('no key'), { code: 'AUTH_FAILED' });
+        }),
+      },
+    ],
+  ] as const)('%s + 凭证暂时不可用 → INTERNAL', async (_label, deps) => {
+    const { slot } = withEmbed({
+      ...deps,
+      isModelAccessReady: () => false,
+      isModelAccessTransientlyUnavailable: () => true,
+    } as unknown as Partial<CindySlotDeps>);
+    expect(await slot.handleModelRequest('art', EMBED)).toMatchObject({
+      ok: false,
+      errorCode: 'INTERNAL',
+    });
   });
 
   it('能力未接线(deps 缺 embedText / getEmbedConfig)→ 结构化拒绝,fail closed', async () => {

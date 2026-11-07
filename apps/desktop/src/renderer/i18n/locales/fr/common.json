@@ -12174,12 +12174,6 @@
         "ASSESSMENT_FAILED": "Impossible d'actualiser l'état de la configuration. Réessayez.",
         "TIMEOUT": "Délai de configuration dépassé. Réessayez."
       },
-      "hostRequirements": {
-        "modelProvider": {
-          "label": "Service de modèles d'IA",
-          "description": "Connectez un service de modèles disponible avant d'utiliser les fonctionnalités d'image ou de vidéo déclarées par ce plugin."
-        }
-      },
       "form": {
         "placeholder": "Saisissez {{label}}",
         "required": "Saisissez {{label}}",

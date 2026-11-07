@@ -292,6 +292,20 @@ export interface CindySlotDeps {
    */
   searchWeb?: CindyProxySearchService['search'];
   /**
+   * Cindy 托管模型服务是否就绪(已登录且有网关凭证)。只用于在媒体目录为空时
+   * 给出对因的错误:未登录时空目录说明没有任何可用型号,而不是目录暂时取不到。
+   * 它不代表其他供应商的状态,文案也不对其他供应商的连接状态下结论。
+   * 模型服务不再作为插件级的前置门禁(#7581):没用到模型的工具不受影响。
+   * 可选依赖:不注入 = 按旧口径回"目录暂时取不到"。
+   */
+  isModelAccessReady?(): boolean;
+  /**
+   * 网关凭证暂时取不到但同账号下会恢复(首次登录的 key 写入窗口,或同步暂时失败、
+   * 可重试)。此时 isModelAccessReady() 仍为 false:各模型能力按临时状态回复,
+   * 不报 NO_CANDIDATE。可选依赖:不注入 = 视为不在这段窗口里。
+   */
+  isModelAccessTransientlyUnavailable?(): boolean;
+  /**
    * 快问快答(text.oneshot,2026-07-31):把 prompt 交给主机的轻量任务
    * 模型链直答一次。注入实现包装 utility-model/oneShotCandidates 的
    * requestUtilityText(动态 import,保持本模块纯 node 可测)。可选依赖:
@@ -506,6 +520,11 @@ const KIND_INFO: Record<string, CindyKindInfo> = {
 
 const CATEGORY_LABEL: Record<CindyKindInfo['category'], string> = { image: '图像', video: '视频' };
 
+/** 模型服务凭证暂时取不到(账号切换 / 下发中 / 同步暂时失败)时给插件的统一文案。 */
+const MODEL_ACCESS_TRANSIENT_MESSAGE =
+  'Cindy 模型服务正在准备凭证(账号切换、登录后下发或同步暂时失败),这是主机侧临时状态,' +
+  '不是本插件的问题;请如实告知用户稍后再试,不要频繁重试。';
+
 /**
  * ── 图像能力的选型解析(2026-07-11 设计定案)──────────────────────────
  * 意识只表达意图(tier 档位)或透传用户显式点名(model);"用谁干"由主机
@@ -583,6 +602,19 @@ export class GhostCindySlot {
   private readonly depositBuckets = new Map<string, { tokens: number; at: number }>();
 
   constructor(private readonly deps: CindySlotDeps) {}
+
+  /**
+   * Cindy 模型服务暂时不可用、但同账号下马上会好:账号切换中,或未就绪且凭证在下发 /
+   * 同步暂时失败。插件级门禁拿掉后(#7581),这段窗口里的"没有可用模型 / 未配置"
+   * 不能当终态报给插件(NO_CANDIDATE 的作者契约是不重试),各能力改回各自的临时口径。
+   */
+  private isModelAccessTransient(): boolean {
+    if (this.deps.isOwnerBoundaryPending()) return true;
+    return (
+      this.deps.isModelAccessReady?.() === false &&
+      this.deps.isModelAccessTransientlyUnavailable?.() === true
+    );
+  }
 
   /**
    * 处理一条 cindy-request(ghost-pipe:send 的 invoke 返回值即本结果)。
@@ -672,7 +704,15 @@ export class GhostCindySlot {
         // 而不是一律压成 INTERNAL(PR #1707 review):INTERNAL 对插件的含义是"主机
         // 内部炸了,你改参数也没用",可 400 维度不支持要它改参数、429 要它退避重试。
         // 压平之后这三种在协议上长得一模一样,插件只能瞎猜。
-        const errorCode = embeddingErrorCode(err);
+        let errorCode = embeddingErrorCode(err);
+        // 执行层 AUTH_FAILED 在凭证下发 / 同步暂时失败窗口里同样是临时状态;
+        // DISABLED 是用户停用,不受影响。
+        if (
+          (err as { code?: unknown } | null)?.code === 'AUTH_FAILED' &&
+          this.isModelAccessTransient()
+        ) {
+          errorCode = 'INTERNAL';
+        }
         this.deps.log?.warn('ghost cindy-request embed_text unexpected failure', {
           ghostId,
           error: message,
@@ -830,6 +870,17 @@ export class GhostCindySlot {
     // (说明见 cindyMediaCatalog.ts;详情页对应的那几行同时显示为灰字不可选)。
     if (cfg.models.length === 0 || cfg.defaults === null) {
       const category = CATEGORY_LABEL[info.category];
+      // 账号切换、凭证下发或同步暂时失败期间目录也会为空，都是可重试的临时状态，
+      // 不能当成"未登录"下结论，交给下面的临时口径。
+      if (this.deps.isModelAccessReady?.() === false && !this.isModelAccessTransient()) {
+        return {
+          ok: false,
+          message:
+            `当前没有可用的${category}模型：Cindy 模型服务未登录，其他已连接的供应商也没有可用的${category}模型。` +
+            `请如实告知用户：登录 Cindy，或在设置中连接或启用支持${category}的模型后再试。`,
+          errorCode: 'NO_CANDIDATE',
+        };
+      }
       return {
         ok: false,
         message:
@@ -1459,6 +1510,19 @@ export class GhostCindySlot {
             ...(outcome.status !== undefined ? { status: outcome.status } : {}),
             ...(outcome.requestId ? { requestId: outcome.requestId } : {}),
           });
+          // 未出网的 NOT_CONFIGURED 在凭证下发 / 同步暂时失败窗口里只是 key 还没写入:
+          // 与账号切换同一口径回 UPSTREAM_UNAVAILABLE,binding 照常允许重试。
+          if (
+            outcome.errorCode === 'NOT_CONFIGURED' &&
+            outcome.requestStarted === false &&
+            this.isModelAccessTransient()
+          ) {
+            return {
+              ok: false,
+              message: MODEL_ACCESS_TRANSIENT_MESSAGE,
+              errorCode: 'UPSTREAM_UNAVAILABLE',
+            };
+          }
           return {
             ok: false,
             message: outcome.message,
@@ -1608,17 +1672,32 @@ export class GhostCindySlot {
         route,
       });
       if (!outcome.ok) {
+        this.deps.log?.warn('ghost cindy-request oneshot_text failed', {
+          ghostId,
+          callId,
+          reason: outcome.reason,
+        });
+        // 链上无候选可能只是 Cindy 凭证还没写入:按链路失败(INTERNAL,重试由调方决定)
+        // 回复,与账号切换期间的口径一致。显式钉在非 Cindy(xd)供应商上的路由不回落
+        // Cindy,凭证下发好了也救不回来,无候选就是终态,保留 NO_CANDIDATE。
+        const pinnedOutsideCindy = route?.providerId !== undefined && route.providerId !== 'xd';
+        if (
+          outcome.reason === 'no_candidate' &&
+          (this.deps.isOwnerBoundaryPending() ||
+            (!pinnedOutsideCindy && this.isModelAccessTransient()))
+        ) {
+          return {
+            ok: false,
+            message: MODEL_ACCESS_TRANSIENT_MESSAGE,
+            errorCode: 'INTERNAL',
+          };
+        }
         const errorCode =
           outcome.reason === 'no_candidate'
             ? 'NO_CANDIDATE'
             : outcome.reason === 'timeout'
               ? 'TIMEOUT'
               : 'INTERNAL';
-        this.deps.log?.warn('ghost cindy-request oneshot_text failed', {
-          ghostId,
-          callId,
-          reason: outcome.reason,
-        });
         return { ok: false, message: outcome.message, errorCode };
       }
       let text = outcome.text;
@@ -1814,6 +1893,10 @@ export class GhostCindySlot {
     // NO_CANDIDATE(与 oneshot 的"链上无候选"同语义:不是参数错,是主机没得选)。
     const cfg = getConfig();
     if (cfg.models.length === 0 || cfg.defaults === null) {
+      // 向量目录来自网关:凭证还没写入时目录为空是临时状态,不报 NO_CANDIDATE。
+      if (this.isModelAccessTransient()) {
+        return { ok: false, message: MODEL_ACCESS_TRANSIENT_MESSAGE, errorCode: 'INTERNAL' };
+      }
       return {
         ok: false,
         message: '当前没有可用的向量模型(可能已在设置里停用,或该版本未提供该能力)',
