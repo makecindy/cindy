@@ -35,8 +35,8 @@ describe('companionHasLocalData', () => {
   });
 
   it('throws on a read error other than a missing directory', async () => {
-    await fs.writeFile(path.join(root, 'file'), '');
-    await expect(check({ directory: path.join(root, 'file', 'bot') })).rejects.toMatchObject({ code: 'ENOTDIR' });
+    const lstat = async () => { throw Object.assign(new Error('denied'), { code: 'EACCES' }); };
+    await expect(check({ lstat })).rejects.toMatchObject({ code: 'EACCES' });
   });
 
   it('throws when the owner changes during the check', async () => {

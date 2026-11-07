@@ -8,11 +8,12 @@ export async function companionHasLocalData(input: {
   hasTaskLink: () => Promise<boolean>;
   directory: string;
   owner: () => string;
+  lstat?: (target: string) => Promise<unknown>;
 }): Promise<boolean> {
   const owner = input.owner();
   if (await input.hasProfile() || await input.hasTaskLink()) return true;
   try {
-    await fs.lstat(input.directory); // Even an empty directory or broken symlink needs inspection.
+    await (input.lstat ?? fs.lstat)(input.directory); // Even an empty directory or broken symlink needs inspection.
     return true;
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
