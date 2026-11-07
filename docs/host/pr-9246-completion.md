@@ -91,3 +91,41 @@
 | 未接线的 Device Link 原型 | 不提供此执行入口 | 删除闲置服务及仅测该原型的测试，避免无条件接受远端控制；正式桌面 Device Link 不变 |
 
 验证为定向回归与 Host 套件，不等同于三平台实机或完整桌面功能验收。
+
+### 本轮验证记录
+
+- Host 全部 87 项通过（约 4.45 秒）；共享 Host 通道 6 项通过。
+- 合入 main 后，21 个相关桌面测试文件共 581 项通过（整次命令约 20.87 秒）。
+- 文档合同 10 项通过；测试规范检查通过，未提高违规基线。
+- 已复现的 CI 代码失败来自未注入新宿主端口的旧夹具；补齐测试初始化，不改变生产权限判据。
+- 旧 CI 的 Linux 分片 3 在 pnpm 安装期报 ENOENT，Windows 备份测试报 ENOSPC；等待新提交的干净 runner 复验。
+- 本轮没有使用真实账号、运行收费模型、启动/重启正式 Cindy，也没有新增三平台实机验收结论。
+
+测试价值：新增回归覆盖直接聊天的原生上下文、冷启动权限设置、本地写入后快照、
+显式 Host 客户端 owner、账号不匹配时拒绝打开存储，以及运行期不支持设置的错误传播。
+其余修改修复已有测试的依赖注入；保留原有账号撤销、隔离、模型目录和数据库行为断言。
+桌面文件执行耗时如下（同一轮定向命令的逐文件结果，不含共享收集耗时）：
+
+| 测试文件 | 用例数 | 执行耗时 |
+| --- | ---: | ---: |
+| `src/main/__tests__/invokeCaptureHealthOrdering.test.ts` | 3 | 2 ms |
+| `src/main/__tests__/authCredentialStoreHealth.test.ts` | 10 | 4 ms |
+| `src/main/__tests__/authRefreshBackoff.test.ts` | 20 | 9 ms |
+| `src/main/__tests__/authPostCommitStartup.test.ts` | 6 | 146 ms |
+| `src/main/__tests__/hostDelegation.test.ts` | 16 | 309 ms |
+| `src/main/__tests__/authLoginFlowReset.contract.test.ts` | 34 | 13 ms |
+| `src/main/__tests__/authColdStartRecovery.test.ts` | 27 | 59 ms |
+| `src/main/mcp-apps/__tests__/protocol.test.ts` | 24 | 31 ms |
+| `src/main/maker-host/__tests__/codexModelDiscovery.test.ts` | 34 | 6 ms |
+| `src/main/__tests__/hostClientMode.test.ts` | 2 | 3 ms |
+| `src/main/localDb/client/__tests__/DbClient.inproc.test.ts` | 1 | 6231 ms |
+| `src/main/maker-host/__tests__/model-context-limit-store.test.ts` | 22 | 4763 ms |
+| `src/main/cindy-brain/__tests__/skillSlot.test.ts` | 43 | 3214 ms |
+| `src/main/maker-host/__tests__/piRosterAssembly.test.ts` | 3 | 328 ms |
+| `src/main/maker-host/__tests__/codexAuthBindingClaim.test.ts` | 9 | 400 ms |
+| `src/main/maker-host/__tests__/providerCatalogRealmReload.test.ts` | 31 | 1579 ms |
+| `src/main/maker-host/__tests__/codexAuthIsolatedSandbox.test.ts` | 45 | 3330 ms |
+| `src/main/maker-host/__tests__/modelContextSettings.sessionBudget.test.ts` | 21 | 28 ms |
+| `src/main/maker-host/__tests__/codexAuthInvalidation.test.ts` | 72 | 2215 ms |
+| `src/main/mcp-integrations/__tests__/piEnvironment.test.ts` | 28 | 178 ms |
+| `src/main/localDb/ipc/__tests__/sessionsUpdate.test.ts` | 130 | 7824 ms |
