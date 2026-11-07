@@ -85,3 +85,20 @@ bundle id 投递打开链接事件，外部链接会落到 Cindy 的实例。采
 （`excludedSites` / `excludedCommands`），`scripts/check-opencli-recipes.mjs` 校验被排除的条目没有
 泄漏进产品目录；后续同步上游时不能自动恢复已排除的条目。保留上游署名与许可证，不把引入的
 第三方实现说成原创。
+
+## 插件更新时的浏览器连接（2026-11-07）
+
+市场与本地插件更新在替换包之前暂停接收新的浏览器作业，等待已接受作业按原有结果或超时结束，
+再关闭旧桥接。更新中的清单广播不创建新桥接；安装来源账本提交结束后重新发布完整清单。
+来源变化属于桥接签名的一部分；来源信息补齐也必须触发刷新，不依赖重启应用。
+不得把更新中间态写成新的配对来源，或自动重放点击、发送、提交等结果可能未知的操作。
+真正换源仍按原来源隔离配对，不能自动改写用户选择的控制端。
+
+设置页和 Browser Use 状态区分 `plugin-updating`、`plugin-selection-required` 与 `plugin-missing`。
+前两者分别显示更新等待和插件选择入口；只有已安装插件未声明页面控制能力时才提示更新版本。
+这些状态仅影响「我的浏览器」的宿主连接，不关闭用户浏览器、不修改用户页签或登录态；
+侧边栏和专用浏览器不经过插件桥接，因此不适用这一更新流程。
+
+回归位于 `browserExtensionSlot.test.ts`、`bridge.test.ts`、`user-browser-backend.test.ts`、
+`health-service.test.ts` 和 `BrowserBackendSubsection.test.tsx`；界面场景为
+`automation-settings/browser-updating` 与 `automation-settings/browser-selection`。

@@ -259,7 +259,7 @@ export function WallpaperSection() {
                           aria-hidden="true"
                           className="pointer-events-none absolute inset-0 flex items-center justify-center"
                         >
-                          <span className="flex size-7 items-center justify-center rounded-full bg-[var(--surface-elevated)] text-[var(--text-primary)] shadow-sm">
+                          <span className="flex size-7 items-center justify-center rounded-full bg-[var(--surface-elevated)] text-[var(--text-primary)] shadow-[shadow:var(--shadow-menu)]">
                             <RotateCcw size={14} />
                           </span>
                         </span>
