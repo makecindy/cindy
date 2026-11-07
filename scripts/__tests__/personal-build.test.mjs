@@ -66,6 +66,9 @@ test('external local source registry keeps legacy config compatible and rejects 
   put(file, config);
   put(registry, { version: 1, plugins: { sample: { source: 'repository' }, custom: '../source' } });
   assert.deepEqual(configFrom(file).localPlugins, { sample: { source: 'repository' }, custom: fs.realpathSync(checkout) });
+  const snapshot = path.join(root, 'snapshot.json');
+  put(snapshot, configFrom(file));
+  assert.deepEqual(configFrom(snapshot).localPlugins, configFrom(file).localPlugins);
   assert.deepEqual(JSON.parse(fs.readFileSync(file)).localPlugins, {});
   put(file, { ...config, localPlugins: { sample: checkout } });
   assert.throws(() => configFrom(file), /Duplicate local plugin source/);

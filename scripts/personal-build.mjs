@@ -45,6 +45,9 @@ export function configFrom(file) {
       invariant(!Object.hasOwn(c.localPlugins, id), `Duplicate local plugin source: ${id}`);
       c.localPlugins[id] = typeof source === 'string' ? path.resolve(path.dirname(c.localPluginSources), source) : source;
     }
+    // Resolved build snapshots are self-contained. Re-reading a saved config
+    // must not merge the same registry twice or adopt later source edits.
+    delete c.localPluginSources;
   }
   for (const [id, source] of Object.entries(c.localPlugins)) {
     invariant(/^[a-z0-9][a-z0-9-]*$/.test(id), 'Invalid local plugin id');
