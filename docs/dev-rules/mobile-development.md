@@ -513,6 +513,23 @@ SharedPreferences `cindy-usage-widgets`。「订阅余量」的设置页另有�
 -n <applicationId>/app.cindy.usagewidgets.QuotaWidgetProvider`，把示例数据下的全部版式与深浅色写到 `cache/widget-previews`；
 选择器预览图 `res/drawable*/cindy_*_widget_preview.png` 由它生成。Kotlin 与资源改动进入 Android runtime fingerprint，需要新原生包。
 
+#### Android 锁屏
+
+两个组件的 `widgetCategory` 为 `home_screen|keyguard`。Android 没有 iOS 那种锁屏专用的圆形、矩形、单行组件：Android 16 QPR2
+（API 36.1）起的原生锁屏组件页直接放这两个组件，系统按锁屏格子的尺寸通知重绘，沿用桌面的版式、账号排序与数据来源设置页，不另做版式；
+从锁屏点组件打开 App 时由系统先要求解锁，组件不声明 `showWhenLocked`。读数照常显示：Android 锁屏没有对应 iOS
+`privacySensitive()` 的系统遮盖，这是有意的两端差异。三星 One UI 8.5 的原生锁屏组件列表只放行三星自家组件，
+实测声明 `keyguard` 或三星私有类别（2048、4096、8192）的第三方组件都不出现；三星用户需经 Good Lock 的 LockStar 放到锁屏。
+
+模拟器验证：36.1 的 Google Play 镜像不能 root，且系统默认关闭锁屏组件（`config_glanceableHubEnabled=false`），需用
+`system-images;android-36.1;google_apis` 镜像：`adb root` 后以 `cmd overlay fabricate` 把 `android:bool/config_glanceableHubEnabled`、
+`android:bool/config_glanceableHubEnabledByDefault` 与 `com.android.systemui:bool/config_communalServiceEnabled` 置真并
+`cmd overlay enable`，再 `settings put secure glanceable_hub_enabled 1`、设置锁屏 PIN、重启 SystemUI。解锁后
+`am start -n com.android.systemui/.communal.widgets.EditWidgetsActivity` 打开锁屏组件编辑页，从「Browse」添加。
+锁定状态的组件页要模拟充电直立：`dumpsys battery set ac 1`、`cmd statusbar device-postured true`，停在锁屏上时把
+`when_to_start_glanceable_hub` 先设 0 再设 2；SystemUI 的 `keyguardState` 变为 `GLANCEABLE_HUB` 即已进入，不要再按电源键。
+点组件后进入 `PRIMARY_BOUNCER`（解锁界面截图为黑屏），输入 PIN 后 App 到前台。模拟器重启后运行时覆盖会失效，需重新启用。
+
 Mobile 用 `runtimeVersion.policy: "fingerprint"`:OTA 热更只在**指纹一致**的装机上生效,
 指纹一旦变化就必须**冷更出包**(新商店包 / 自建重装),存量装机拿不到该次热更。
 
