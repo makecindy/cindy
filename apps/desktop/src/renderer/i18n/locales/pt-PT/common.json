@@ -19794,6 +19794,11 @@
     "saveImageFailed": "Não foi possível guardar a imagem. Tente guardá-la novamente.",
     "previewFailed": "Não foi possível apresentar a pré-visualização da imagem. Pode continuar a copiar a ligação."
   },
+  "subscriptionUltraPolicy": {
+    "label": "Permitir Ultra",
+    "providerHint": "Quando ativado, os modelos compatíveis mostram Ultra na intensidade de raciocínio. Quando desativado, Ultra fica oculto e os restantes níveis continuam disponíveis.",
+    "saveFailed": "Não foi possível guardar. Tente novamente."
+  },
   "subscriptionFastPolicy": {
     "label": "Permitir Fast",
     "providerHint": "Quando desativado, esta conta de subscrição usa a velocidade padrão nas suas tarefas e nas partilhadas, incluindo Ultrafast.",

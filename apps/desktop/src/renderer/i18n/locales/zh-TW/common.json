@@ -19538,6 +19538,11 @@
     "saveImageFailed": "無法儲存圖片，可再次儲存",
     "previewFailed": "無法顯示圖片預覽，仍可複製連結"
   },
+  "subscriptionUltraPolicy": {
+    "label": "允許使用「極致」推理強度",
+    "providerHint": "開啟後，支援此推理強度的模型會在對話的推理強度選項中顯示「極致」；關閉後「極致」隱藏，其他推理檔位不受影響。",
+    "saveFailed": "儲存失敗，請重試。"
+  },
   "subscriptionFastPolicy": {
     "label": "允許使用 Fast",
     "providerHint": "關閉後，此訂閱帳號使用普通模式，包括自己使用和分享使用。也適用於 Ultrafast。",

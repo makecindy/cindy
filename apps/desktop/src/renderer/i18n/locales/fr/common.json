@@ -19794,6 +19794,11 @@
     "saveImageFailed": "Impossible d'enregistrer l'image. Essayez de l'enregistrer à nouveau.",
     "previewFailed": "Impossible d'afficher l'aperçu de l'image. Vous pouvez toujours copier le lien."
   },
+  "subscriptionUltraPolicy": {
+    "label": "Autoriser Ultra",
+    "providerHint": "Lorsque cette option est activée, les modèles compatibles affichent Ultra dans l'intensité de raisonnement. Sinon, Ultra est masqué et les autres niveaux restent disponibles.",
+    "saveFailed": "Échec de l'enregistrement. Réessayez."
+  },
   "subscriptionFastPolicy": {
     "label": "Autoriser Fast",
     "providerHint": "Si désactivé, ce compte d'abonnement utilise la vitesse standard pour vos tâches et les tâches partagées, y compris Ultrafast.",

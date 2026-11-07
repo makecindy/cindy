@@ -19538,6 +19538,11 @@
     "saveImageFailed": "画像を保存できません。もう一度保存してください。",
     "previewFailed": "画像のプレビューを表示できません。リンクはコピーできます。"
   },
+  "subscriptionUltraPolicy": {
+    "label": "究極を許可",
+    "providerHint": "オンにすると、この推論強度に対応するモデルの推論強度の選択肢に「究極」が表示されます。オフにすると「究極」は非表示になり、ほかの強度はそのまま使えます。",
+    "saveFailed": "保存に失敗しました。もう一度お試しください。"
+  },
   "subscriptionFastPolicy": {
     "label": "Fast を許可",
     "providerHint": "オフにすると、このサブスクリプションの自分用・共有タスクは通常速度になります。Ultrafast も対象です。",

@@ -19538,6 +19538,11 @@
     "saveImageFailed": "未能保存图片，可再次保存",
     "previewFailed": "图片预览未能显示，仍可复制链接"
   },
+  "subscriptionUltraPolicy": {
+    "label": "允许使用「极致」推理强度",
+    "providerHint": "开启后，支持此推理强度的模型会在对话的推理强度选项中显示「极致」；关闭后「极致」隐藏，其他推理档位不受影响。",
+    "saveFailed": "保存失败，请重试。"
+  },
   "subscriptionFastPolicy": {
     "label": "允许使用 Fast",
     "providerHint": "关闭后，此订阅账号使用普通模式，包括自己使用和分享使用。也适用于 Ultrafast。",

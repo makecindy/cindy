@@ -19610,6 +19610,11 @@
     "saveImageFailed": "Bild konnte nicht gespeichert werden. Versuche erneut, es zu speichern.",
     "previewFailed": "Bildvorschau konnte nicht angezeigt werden. Du kannst den Link trotzdem kopieren."
   },
+  "subscriptionUltraPolicy": {
+    "label": "Ultra zulassen",
+    "providerHint": "Wenn aktiviert, zeigen Modelle, die Ultra unterstützen, Ultra in der Auswahl der Denkintensität. Wenn deaktiviert, wird Ultra ausgeblendet; andere Stufen bleiben verfügbar.",
+    "saveFailed": "Speichern fehlgeschlagen. Bitte erneut versuchen."
+  },
   "subscriptionFastPolicy": {
     "label": "Fast erlauben",
     "providerHint": "Wenn deaktiviert, verwendet dieses Abonnementkonto die Standardgeschwindigkeit für deine eigenen und geteilten Aufgaben, auch für Ultrafast.",

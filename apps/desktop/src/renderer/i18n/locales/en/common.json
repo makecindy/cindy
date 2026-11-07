@@ -19610,6 +19610,11 @@
     "saveImageFailed": "Could not save the image. Try saving it again.",
     "previewFailed": "Could not display the image preview. You can still copy the link."
   },
+  "subscriptionUltraPolicy": {
+    "label": "Allow Ultra",
+    "providerHint": "When on, models that support Ultra show it in the reasoning effort picker. When off, Ultra is hidden and other levels stay available.",
+    "saveFailed": "Couldn't save. Try again."
+  },
   "subscriptionFastPolicy": {
     "label": "Allow Fast",
     "providerHint": "When off, this subscription account uses standard speed for your own and shared tasks, including Ultrafast.",

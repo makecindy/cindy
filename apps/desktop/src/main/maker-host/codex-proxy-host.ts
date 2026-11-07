@@ -3,7 +3,9 @@ import { captureUsagePricing, createUsagePricingObserver } from './model-usage-p
 import { rewriteFastModel } from './model-fast-mode.js';
 import { createAttachmentRecovery } from './oversized-attachment-recovery.js';
 import { clearCodexTextOnlyPolicies, codexTextOnlyRequestGuard, codexTextOnlyWebSocketTransforms, isCodexTextOnly } from './codex-text-only-policy.js';
-import { restrictSubscriptionRequest, withSubscriptionFastRequestPolicy } from './subscription-fast-request-policy.js';
+import { applyCodexWebSocketSubscriptionPolicies } from './codex-websocket-request-policy.js';
+import { withSubscriptionFastRequestPolicy } from './subscription-fast-request-policy.js';
+import { applySubscriptionUltraPolicy } from './subscription-ultra-policy.js';
 import {
   resolveConversationSessionHeaders,
   withChatBridgeUserAgent,
@@ -3471,6 +3473,22 @@ async function createCodexProxyHandle(
     }
     : modelRoute;
   const frozenReasoning = createCustomProviderReasoningTransform(frozenCustomProviderRoutes);
+  const subscriptionUltraTransform: RequestTransform = (body, ctx) => {
+    const model = isPlainObject(body) && typeof body.model === 'string' ? body.model : '';
+    const context = providerContextForRequest(ctx.headers, model);
+    const customPath = parseCodexCustomProviderPath(ctx.url);
+    const customProviderId =
+      customPath.kind === 'route'
+        ? customProviderRouteSnapshot(customPath.routeId, frozenCustomProviderRoutes)?.providerId
+        : null;
+    const providerId =
+      customProviderId ??
+      gatewayProviderIdForRewrittenModel(model) ??
+      context.providerId ??
+      guestProviderId ??
+      ((frozenAuthInjection ?? getCodexProxyAuthInjection()) === 'oauth-bearer' ? 'openai' : null);
+    return applySubscriptionUltraPolicy(body, providerId);
+  };
   const routeWithUsageEncoding: RoutingTransform = (body, ctx) => {
     const uncompressed = (decision: RoutingDecision | null): RoutingDecision | null => {
       const model = isPlainObject(body) && typeof body.model === 'string' ? body.model : '';
@@ -3536,7 +3554,10 @@ async function createCodexProxyHandle(
         scoped.onRequestSettled = transform.onRequestSettled;
         return scoped;
       },
-    ).concat((body, ctx) => crossProviderRequests.has(ctx.headers) ? null : frozenReasoning(body, ctx)),
+    ).concat(
+      (body, ctx) => crossProviderRequests.has(ctx.headers) ? null : frozenReasoning(body, ctx),
+      subscriptionUltraTransform,
+    ),
     routeOpaqueRequestBody: (ctx) => isCodexCustomProviderNamespacePath(ctx.url),
     bypassRequestTransforms: (_body, ctx) => {
       const path = parseCodexCustomProviderPath(ctx.url);
@@ -3548,9 +3569,16 @@ async function createCodexProxyHandle(
     // Accepted WebSockets route exclusively to CODEX_OAUTH_UPSTREAM (see resolver below).
     webSocketTransforms: ctx => codexTextOnlyWebSocketTransforms(() => isCodexTextOnly(selectedThreadIdFromHeaders(ctx.headers)), true, (message, signal) => {
       const body: unknown = JSON.parse(message.toString('utf8'));
-      const context = providerContextForRequest(ctx.headers, isPlainObject(body) && typeof body.model === 'string' ? body.model : '');
-      const next = restrictSubscriptionRequest(body, context.sessionId ?? guestSessionId, context.providerId ?? guestProviderId ?? 'openai');
-      const request = next ? Buffer.from(JSON.stringify(next)) : message;
+      const model = isPlainObject(body) && typeof body.model === 'string' ? body.model : '';
+      const context = providerContextForRequest(ctx.headers, model);
+      const providerId =
+        gatewayProviderIdForRewrittenModel(model) ?? context.providerId ?? guestProviderId ?? 'openai';
+      const requestBody = applyCodexWebSocketSubscriptionPolicies(
+        body,
+        providerId,
+        context.sessionId ?? guestSessionId,
+      );
+      const request = requestBody ? Buffer.from(JSON.stringify(requestBody)) : message;
       return request.length > CODEX_WEBSOCKET_MESSAGE_LIMIT_BYTES ? fitWebSocketRequest(request, ctx, signal) : request;
     }),
     transformResponse: (ctx) => {

@@ -19247,6 +19247,11 @@
     "saveImageFailed": "無法存圖，可再存之",
     "previewFailed": "無法示圖之先覽，仍可錄連結"
   },
+  "subscriptionUltraPolicy": {
+    "label": "許用窮極",
+    "providerHint": "啟之則支援此推理強度之模型，於對話推理強度選項中見此檔；闔之則窮極隱，餘檔如故。",
+    "saveFailed": "儲存失敗，請重試。"
+  },
   "subscriptionFastPolicy": {
     "label": "許用 Fast",
     "providerHint": "闔之則此訂閱名籍用普通模式，自用與分享皆然。Ultrafast 亦同。",

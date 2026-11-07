@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { isLocalOnlyProviderForAgent, isOpenAiSubscriptionProvider, providerCatalogId, isCustomRoutedProvider, isOrganizationManagedProvider, supportsSubscriptionFastPolicy } from '../provider-identity.js';
+import { isLocalOnlyProviderForAgent, isOpenAiSubscriptionProvider, providerCatalogId, isCustomRoutedProvider, isOrganizationManagedProvider, supportsSubscriptionFastPolicy, supportsSubscriptionUltraPolicy } from '../provider-identity.js';
 import type { Provider } from '../types.js';
 
 describe('connection identity vs public catalog identity', () => {
@@ -26,6 +26,13 @@ describe('connection identity vs public catalog identity', () => {
     )).toEqual(expected);
     const api = { ...provider, auth: { method: 'apiKey' as const } };
     expect(isLocalOnlyProviderForAgent(api, 'pi')).toBe(false);
+  });
+  it('offers Ultra controls only for OpenAI subscription connections', () => {
+    expect(supportsSubscriptionUltraPolicy({ id: 'openai', auth: { method: 'oauth' } })).toBe(true);
+    expect(supportsSubscriptionUltraPolicy({ id: 'account-1', auth: { method: 'oauth', native: 'codex' } })).toBe(true);
+    expect(supportsSubscriptionUltraPolicy({ id: 'anthropic', auth: { method: 'oauth' } })).toBe(false);
+    expect(supportsSubscriptionUltraPolicy({ id: 'openai', auth: { method: 'apiKey' } })).toBe(false);
+    expect(supportsSubscriptionUltraPolicy(null)).toBe(false);
   });
   it('aliases only native OpenAI subscription metadata', () => {
     for (const provider of [
