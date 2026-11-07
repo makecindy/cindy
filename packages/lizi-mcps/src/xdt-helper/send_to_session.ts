@@ -2,6 +2,7 @@ import { BRAND_NAME } from "@cindy/maker-shared/branding";
 import { z } from "zod";
 
 import type { XdtHelperToolRegistry } from "../lizi_xdtHelperToolRegistry.js";
+import { toHostAgentDeviceId } from "./create_worker.js";
 import type {
   ControlResult,
   ControlWorkerAgent,
@@ -38,6 +39,8 @@ export type SendToSessionCallback = (params: {
   effort?: "minimal" | "low" | "medium" | "high" | "xhigh" | "max" | "ultra";
   /** create 模式可选:显式 Fast 开关；缺省继承 dispatcher。jump 忽略。 */
   fast?: boolean | 'ultrafast';
+  /** create 模式可选:新任务的 Agent 所在电脑；null = 本机，缺省继承 dispatcher。jump 不传。 */
+  agentDeviceId?: string | null;
 }) => Promise<
   ControlResult<
     {
@@ -131,6 +134,8 @@ const DESCRIPTION = [
   "",
   "【执行配置(仅 create 模式)】agent_kind 可选 claude-code / codex / pi；model 使用宿主模型目录返回的精确 id；effort / fast 按目标模型能力校验。只改 Agent 却留下不属于目标 Agent 的继承模型会返 INVALID_ARGS，不会自动挑列表第一项。跨 Agent/model 时模型来源交给 host 既有默认路由解析。完全不传这些字段时保持原有 dispatcher 继承行为。jump 模式忽略这些字段，不修改既有 session。",
   "",
+  "【agent_device_id(仅 create 模式)】新任务的 Agent 使用哪台电脑的远程供应商，与 create_worker 同一含义：取 list_available_models 的 locations[].agent_device_id；\"local\" 或本机设备 id 表示本机。缺省继承当前任务的位置。位置与当前任务不同且没传 model 时沿用当前任务的模型 id，按那台电脑的供应商重新解析来源；那台没有这个模型、离线、未开启远程控制或分享不可用 → PROVIDER_ROUTE_UNAVAILABLE；格式不对，或当前任务是 SSH 任务 → INVALID_ARGS。失败时不创建任务、不自动换电脑，由调用方决定换哪一台重试。jump 模式忽略。",
+  "",
   "【working_dir(仅 create 模式)】可选执行目录，缺省为选中或继承的项目目录；不绑项目时分配独立的托管目录。可以指定已有仓库、子目录或临时 worktree；必须为存在的绝对目录。它不改变项目归属，也不登记项目。不绑项目且 use_worktree=true 时必须显式指定 working_dir 作为 Git 仓库。jump 模式忽略。",
   "",
   "【use_worktree(仅 create 模式)】use_worktree=true 时,host 会先从**新 session 的 workingDir**(即 working_dir 覆盖后的目录;未覆盖时为选中或继承的项目目录)解析出 base git 仓库,为新 session 预建一个正规 session worktree(<baseRepo>/.cindy-worktrees/<自动名> + cindy/<自动名> 分支,UI 有徽标,session 关闭时自动 stash 未提交改动后回收),新 session 的 workingDir 即该 worktree 路径,返回里带 worktree_path，项目归属保持不变，包括不绑项目的任务。历史 xdt/<自动名> 分支仍可恢复与回收。适用:新 session 要改代码 / checkout 分支,不能污染当前工作树时(如 PR 修复跟进)。workingDir 不是 git 仓库 / git 未装 / worktree 创建失败 → 返 WORKTREE_UNAVAILABLE(不静默降级);调用方可视情况去掉该参数重试(新 session 将直接使用 working_dir 或默认执行目录)。jump 模式忽略此参数。",
@@ -149,6 +154,8 @@ const DESCRIPTION = [
   "- AGENT_NOT_READY: 目标 session 恢复或投递时 agent 未能启动。skill 应告知用户稍后重试。",
   "- UNSUPPORTED_CAPABILITY: 目标 session 不接受跨任务投递（例如 host 管理的隔离 Review）。skill 不应重试或改走其它输入入口。",
   "- HOST_NOT_READY: 主进程服务尚未就绪。skill 应告知用户稍等几秒后重试。",
+  "- PROVIDER_ROUTE_UNAVAILABLE: 仅 create:目标位置(agent_device_id 或继承的位置)没有提供所需模型的已连接供应商，或指定的电脑读不到供应商(离线 / 未开启远程控制 / 分享不可用)。没有创建任务；可换一台电脑或换模型重试。",
+  "- INVALID_ARGS: 参数不合法(含 agent_device_id 格式不对、SSH 任务指定 agent_device_id)。没有创建任务。",
   "- REMOTE_DEVICE_OFFLINE / REMOTE_DISABLED / REMOTE_UNAVAILABLE: 目标电脑离线、未开启远程控制或暂时连不上,消息没有发出。",
   "- REMOTE_UNSUPPORTED: 目标电脑的版本不支持接收其它电脑的任务消息,消息没有发出;需要对方升级。",
   "- DELIVERY_UNKNOWN: 请求已发往目标电脑但没有收到可信回执(含对方 Agent 没能启动),可能已送达。重发前先用 get_chat_history(deviceId::sessionId) 确认,避免重复。",
@@ -247,6 +254,15 @@ export function registerSendToSessionTool(
         .describe(
           "仅 create 模式可选:Fast 模式开关。目标 Agent/provider/model 不支持时创建前失败；jump 模式忽略。",
         ),
+      agent_device_id: z
+        .string()
+        .trim()
+        .min(1)
+        .max(128)
+        .optional()
+        .describe(
+          '仅 create 模式可选:新任务的 Agent 位置，取 list_available_models 的 locations[].agent_device_id；"local" 为本机。缺省继承当前任务。那台没有所需模型或连不上 → PROVIDER_ROUTE_UNAVAILABLE；jump 模式忽略。',
+        ),
     },
     handler: async ({
       target_session_id,
@@ -260,6 +276,7 @@ export function registerSendToSessionTool(
       model,
       effort,
       fast,
+      agent_device_id,
     }) => {
       const ctx = deps.getSessionContext();
       const qualified = parseQualifiedSessionId(target_session_id);
@@ -307,6 +324,8 @@ export function registerSendToSessionTool(
         ...(model !== undefined ? { model } : {}),
         ...(effort !== undefined ? { effort } : {}),
         ...(fast !== undefined ? { fast } : {}),
+        // jump 不改既有任务的位置：只在 create 时传。
+        ...(localTargetId === undefined ? toHostAgentDeviceId(agent_device_id) : {}),
       });
 
       if (!result.ok) {

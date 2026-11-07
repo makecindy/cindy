@@ -1460,6 +1460,13 @@
     }
   },
   "menubar": {
+    "shared": {
+      "label": "分享",
+      "note": "這是帳號共用額度，不是分配給你的專屬額度。",
+      "highestWeekly": "分享 · 週剩餘最多",
+      "highestWeeklyNote": "顯示可讀取帳號中週剩餘最多的一項，額度不相加。帳號共用，非個人專屬。",
+      "from": "來自 {{name}} 的分享"
+    },
     "balance": {
       "name": "Cindy 餘額",
       "quotaName": "Cindy 本期配額",
@@ -5550,12 +5557,17 @@
         "userBrowserSetup": {
           "installPluginTitle": "安裝 Cindy Chrome 插件",
           "enablePluginTitle": "啟用 Cindy Chrome 插件",
-          "installExtensionTitle": "把 Cindy 擴充功能裝進瀏覽器",
+          "connectExtensionTitle": "瀏覽器擴充功能尚未連線",
           "pluginBody": "「我的瀏覽器」透過 Cindy Chrome 插件和它的瀏覽器擴充功能連接你的 Chrome / Edge。先在 Cindy 裡裝好插件，再依提示把擴充功能裝進瀏覽器。",
-          "extensionBody": "點「安裝瀏覽器擴充功能」會在你的瀏覽器裡開啟 Cindy 擴充功能的商店頁面，點「新增」後這裡會自動變成已連線。已經裝過？在瀏覽器的擴充功能管理裡啟用它。",
+          "connectionBody": "保持 Cindy 和瀏覽器執行，並檢查 Cindy 擴充功能是否啟用。未連線不代表需要重新安裝；連線恢復後，這裡會自動更新。",
           "installPlugin": "安裝插件",
           "enablePlugin": "前往啟用",
-          "installExtension": "安裝瀏覽器擴充功能",
+          "openExtensionStore": "開啟擴充功能商店",
+          "updatingTitle": "正在更新瀏覽器連線",
+          "updatingBody": "更新完成後會自動恢復連線。",
+          "selectPluginTitle": "選擇瀏覽器擴充功能",
+          "selectPluginBody": "請開啟插件詳情，選擇「使用此瀏覽器擴充功能」，確認 Cindy 使用的擴充功能。",
+          "selectPlugin": "開啟插件",
           "updatePluginTitle": "更新 Cindy Chrome 插件",
           "updatePluginBody": "已安裝的 Cindy Chrome 插件版本較舊，還不支援「我的瀏覽器」。更新到最新版後，再依提示把擴充功能裝進瀏覽器。",
           "updatePlugin": "前往更新",
@@ -12688,6 +12700,10 @@
       "defer": "暫不下載"
     },
     "permissionPrompt": {
+      "titleStdin": "允許向終端傳送輸入？",
+      "titleMcpUrl": "完成 {{server}} 的請求",
+      "mcpComplete": "已完成",
+      "mcpCancel": "取消",
       "alwaysAllowScoped": "本任務都允許 {{scope}}",
       "alwaysAllowScopedHint": "作用於整個任務，且只限這裡列出的範圍。",
       "alwaysAllowSessionHint": "作用於整個任務，不只是這一次請求。",
@@ -12951,7 +12967,13 @@
       "sendAndContinue": "傳送並繼續",
       "close": "關閉",
       "customAnswer": "輸入其他回答…",
-      "answerPlaceholder": "請輸入回答…"
+      "answerPlaceholder": "請輸入回答…",
+      "validation": {
+        "required": "請填寫此必填項目。",
+        "choice": "請選擇列出的選項。",
+        "tooShort": "請至少輸入 {{count}} 個字元。",
+        "tooLong": "請最多輸入 {{count}} 個字元。"
+      }
     },
     "planReviewBubble": {
       "title": "計劃審閱",
@@ -14036,8 +14058,10 @@
       "mailLegacy": "歷史草稿（唯讀）",
       "taskAutoArchived": "已歸檔「{{title}}」",
       "taskAutoArchivedUndo": "撤銷",
-      "taskAutoArchivePending": "離開後自動歸檔",
-      "taskAutoArchiveCancel": "這次不歸檔"
+      "taskAutoArchivePending": "離開此任務後將自動封存",
+      "taskAutoArchiveCancel": "取消",
+      "taskAutoArchiveCancelled": "本次不會自動封存",
+      "taskArchiveNow": "立即封存"
     },
     "ghostHook": {
       "blockedFallback": "訊息被插件攔下，未傳送",
@@ -19625,5 +19649,33 @@
     "rendered": "查看文件",
     "wrap": "自動換行",
     "lineNumbers": "行號"
+  },
+  "subscriptionAccounts": {
+    "signIn": {
+      "checking": "正在偵測本機帳號…",
+      "detected": "偵測到已登入帳號",
+      "useAccount": "使用此帳號",
+      "anotherAccount": "登入另一個帳號",
+      "keepExisting": "新帳號會加入此供應商，現有帳號的登入保持不變。",
+      "checkFailed": "無法讀取本機帳號狀態，請重試。",
+      "retry": "重試",
+      "useCodex": "使用 Codex 登入"
+    },
+    "title": "訂閱帳號",
+    "note": "首個帳號沿用 CLI 預設目錄，新增帳號獨立登入。新任務按策略分配，已有任務保留原帳號。",
+    "strategy": "負載平衡",
+    "add": "新增帳號",
+    "default": "預設目錄",
+    "ready": "已連線",
+    "signedOut": "需要登入",
+    "unavailable": "暫時讀不到狀態",
+    "limited": "配額已用完",
+    "remove": "移出帳號",
+    "removeTitle": "移出 {{name}}？",
+    "removeDescription": "Cindy 將不再給這個帳號分配任務。CLI 登入和對話歷史仍保留在本機。",
+    "failed": "無法讀取或更新帳號。請檢查 CLI 登入和網路連線後重試。",
+    "directory": "帳號目錄",
+    "loginAgain": "重新登入",
+    "login": "登入"
   }
 }

@@ -345,3 +345,75 @@ function normalizePositiveDimension(value: number, fallback: number): number {
 function normalizeNonNegativeDimension(value: number, fallback: number): number {
   return Number.isFinite(value) && value >= 0 ? value : fallback;
 }
+
+/** 输入框文字当前滚到了哪一端；编辑器没有上报时为 null。 */
+export interface ComposerTextScrollEdge {
+  atTop: boolean;
+  atBottom: boolean;
+}
+
+/** 按在卡片任意处拖动调高：手指移出这段距离才判定，之内仍可能是点按。 */
+export const COMPOSER_BODY_DRAG_SLOP = 8;
+/** 按住超过这么久才开始移动视为长按（选字 / 拖光标），交给编辑器。 */
+export const COMPOSER_BODY_DRAG_LONG_PRESS_MS = 350;
+
+export type ComposerBodyDragDecision = 'pending' | 'claim' | 'reject';
+
+export interface ResolveComposerBodyDragInput {
+  /** 输入框处于收起的单行态：只认往上拖（拉开），往下拖不接管。 */
+  collapsed?: boolean;
+  /** 起手点在文字区内（而不是工具排、附件或卡片留白）。 */
+  inText: boolean;
+  /** 编辑器上报的滚动端点；null 时退回 measuredOverflow。 */
+  edge: ComposerTextScrollEdge | null;
+  /** 测得的内容高度超出文字区可视高度。 */
+  measuredOverflow: boolean;
+  dx: number;
+  /** 向下为正。 */
+  dy: number;
+  /** 从按下到这次移动经过的时间。 */
+  elapsedMs: number;
+}
+
+/**
+ * 按在卡片任意处上下拖动时，这次拖动归调高还是归编辑器。
+ *
+ * 卡片留白、工具排、附件上的竖直拖动一律调高。文字区里，文字看得全时上下拖都调高；
+ * 文字需要滚动时先滚动，只有已在最上面还往下拖（拖矮）、已在最下面还往上拖（拉高）
+ * 才调高。编辑器没上报滚动端点、测量又显示溢出时保守交给滚动。横向滑动和长按后的
+ * 拖动（选字、拖光标）留给编辑器。
+ */
+export function resolveComposerBodyDrag(input: ResolveComposerBodyDragInput): ComposerBodyDragDecision {
+  'worklet';
+  const ax = Math.abs(input.dx);
+  const ay = Math.abs(input.dy);
+  if (input.elapsedMs >= COMPOSER_BODY_DRAG_LONG_PRESS_MS) return 'reject';
+  if (ax < COMPOSER_BODY_DRAG_SLOP && ay < COMPOSER_BODY_DRAG_SLOP) return 'pending';
+  if (ax >= ay) return 'reject';
+  if (input.collapsed === true) return input.dy < 0 ? 'claim' : 'reject';
+  if (!input.inText) return 'claim';
+  const edge = input.edge;
+  if (edge === null) return input.measuredOverflow ? 'reject' : 'claim';
+  return (input.dy > 0 ? edge.atTop : edge.atBottom) ? 'claim' : 'reject';
+}
+
+/**
+ * 从收起态往上拖拉开：与「拖到一行再折叠工具排」对称，先用这段距离展开工具排，
+ * 之后的位移才拉高输入区。返回调高用的位移（向下为正）。
+ */
+export function composerOpenDragTranslation(translationY: number): number {
+  'worklet';
+  return translationY + COMPOSER_RESIZE_DISMISS_PULL_THRESHOLD;
+}
+
+/** 拉开途中工具排的折叠进度：1 为全折叠（刚起手），0 为完全展开。 */
+export function composerOpenCollapseProgress(translationY: number): number {
+  'worklet';
+  return clamp(1 + translationY / COMPOSER_RESIZE_DISMISS_PULL_THRESHOLD, 0, 1);
+}
+
+/** 松手时工具排已完全展开才算拉开；不够就收回单行。 */
+export function shouldCommitComposerOpenDrag(translationY: number): boolean {
+  'worklet';
+  return translationY <= -COMPOSER_RESIZE_DISMISS_PULL_THRESHOLD;
+}

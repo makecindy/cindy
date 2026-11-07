@@ -1581,6 +1581,48 @@ describe('花名册 / ghost_list 过滤', () => {
     await expect(deps.getAwakeGhost('art')).resolves.toMatchObject({ ok: false, errorCode: 'GHOST_AMBIGUOUS' });
   });
 
+  // Regression: an older local simulator hid working device connectivity behind
+  // duplicate discovery. Exercise the real roster/list/info/call entry points;
+  // earlier namespace tests only covered organizations, not local/public pairs.
+  // Minimal input: two enabled chip instances with the same id (unit tier).
+  it.each([
+    ['0.3.38', '0.3.42', null],
+    ['0.3.43', '0.3.42', 'local'],
+    ['0.3.42', '0.3.42', null],
+    ['0.3.100', '0.3.42', 'local'],
+    ['0.3.42-beta.2', '0.3.42', null],
+    ['0.3.43-beta.2', '0.3.42', 'local'],
+    ['0.3.42+dev', '0.3.42+market', null],
+  ])('selects newest local=%s public=%s in everyday discovery and dispatch', async (localVersion, publicVersion, winner) => {
+    const base = chipGhost('art') as InstalledGhost;
+    const local = { ...base, namespace: 'local', namespaceState: 'confirmed' as const,
+      manifest: { ...base.manifest, version: localVersion! }, dir: path.join(tmpUserData, '_ns', 'local', 'art') };
+    const published = { ...base, namespace: null, namespaceState: 'confirmed' as const,
+      manifest: { ...base.manifest, version: publicVersion! }, dir: path.join(tmpUserData, '_ns', '_root', 'art') };
+    listMock.mockReturnValue([local, published]);
+    const deps = makeDeps();
+    expect(await deps.listAwakeGhosts()).toMatchObject([{ id: 'art', namespace: winner }]);
+    expect(await deps.listAwakeGhosts()).toHaveLength(1);
+    expect(deps.getRosterItems?.()).toMatchObject([{ id: 'art', namespace: winner }]);
+    const roster = getGhostRosterPrompt({ workingDir: WORKDIR });
+    expect(roster).toContain(`"namespace":${JSON.stringify(winner)}`);
+    expect(roster).not.toContain(`"namespace":${JSON.stringify(winner === null ? 'local' : null)}`);
+    expect(await deps.getAwakeGhost('art')).toMatchObject({ ok: true, ghost: { namespace: winner } });
+    expect(await deps.callGhostTool({ ghostId: 'art', tool: 'run', args: {} })).toMatchObject({ ok: true });
+    expect(dispatchMock).toHaveBeenLastCalledWith(expect.objectContaining({
+      ghostId: winner === 'local' ? '_ns__local__art' : '_root__art',
+    }));
+    // The next query sees updates without cached selection or rewriting installs.
+    local.manifest.version = '9.0.0';
+    expect(await deps.getAwakeGhost('art')).toMatchObject({ ok: true, ghost: { namespace: 'local' } });
+    expect(await deps.listAwakeGhosts()).toMatchObject([{ id: 'art', namespace: 'local' }]);
+    // Explicit addresses keep developer requests exact even when not listed.
+    expect(await deps.getAwakeGhost('art', null)).toMatchObject({ ok: true, ghost: { namespace: null } });
+    local.enabled = false;
+    expect(await deps.listAwakeGhosts()).toMatchObject([{ id: 'art', namespace: null }]);
+    expect(await deps.getAwakeGhost('art')).toMatchObject({ ok: true, ghost: { namespace: null } });
+  });
+
   it('被禁用的意识不进花名册与现查清单;其余照常', async () => {
     setGhostDisabledForWorkdir(WORKDIR, 'art', true);
     const deps = makeDeps();

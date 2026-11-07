@@ -59,7 +59,7 @@ vi.mock('expo-file-system', () => ({
     get exists() { return true; }
     async base64() { return 'aGVsbG8='; }
     async text() { return ''; }
-    write(value: string | Uint8Array) { io.sizes.set(this.uri, value.length); }
+    writeSync(value: string | Uint8Array) { io.sizes.set(this.uri, value.length); }
     moveSync(target: { uri: string }) {
       io.sizes.set(target.uri, this.size);
       io.sizes.delete(this.uri);

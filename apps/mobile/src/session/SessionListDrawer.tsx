@@ -1,11 +1,12 @@
+import type { ViewInstance } from 'react-native';
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type MutableRefObject } from 'react';
-import { AccessibilityInfo, BackHandler, findNodeHandle, Pressable, StyleSheet, View } from 'react-native';
+import { AccessibilityInfo, BackHandler, findNodeHandle, Modal, Pressable, StyleSheet, View } from 'react-native';
 import Animated, {
   cancelAnimation, Easing, runOnJS, useAnimatedReaction, useAnimatedStyle, useSharedValue, withTiming, type SharedValue,
 } from 'react-native-reanimated';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useTranslation } from 'react-i18next';
-import { Gesture, GestureDetector } from '@/platform/gestureHandler';
+import { Gesture, GestureDetector, GestureHandlerRootView } from '@/platform/gestureHandler';
 import { useReduceMotionEnabled } from '@/hooks/useReduceMotion';
 import { useTheme, useThemedStyles, type ThemeColors } from '@/theme';
 import { motionDuration, motionEasing } from '@/theme/tokens';
@@ -100,7 +101,7 @@ export function useSessionListDrawerOpenGesture({ motion, enabled, width, onOpen
 }
 
 /** Container only: Home owns every list row, search, group, menu and subscription. */
-export function SessionListDrawer({ currentSessionId, persistent = false, newSessionInSystemBar = false,
+export function SessionListDrawer({ currentSessionId, persistent = false, newSessionInSystemBar = false, aboveSystemBar = false,
   onClose, onClosed, onSelectSession, runNavigation, newSessionActionRef, open, width, topInset, resize, motion,
 }: {
   currentSessionId: string;
@@ -108,6 +109,10 @@ export function SessionListDrawer({ currentSessionId, persistent = false, newSes
   topInset?: number;
   persistent?: boolean;
   newSessionInSystemBar?: boolean;
+  /** Floating drawer only: present it in its own window, over the task's
+   * system bar, so the bar stays in place under the scrim. Popovers the list
+   * opens are presented from that window and stay on top of it. */
+  aboveSystemBar?: boolean;
   onClose(): void;
   onClosed?(): void;
   /** Without an override, Home uses its normal navigation and task history. */
@@ -188,7 +193,7 @@ export function SessionListDrawer({ currentSessionId, persistent = false, newSes
   }, [mounted]);
   // 打开后把读屏焦点移进主页内容区域:背后内容已按模态摘出读屏树,不移焦
   // VoiceOver/TalkBack 会停在已隐藏的节点上。延到入场动画结束再移,避免读出滑动中的几何。
-  const homeContentRef = useRef<View>(null);
+  const homeContentRef = useRef<ViewInstance>(null);
   useEffect(() => {
     if (!open || persistent) return;
     const timer = setTimeout(() => {
@@ -361,7 +366,7 @@ export function SessionListDrawer({ currentSessionId, persistent = false, newSes
 
 
   if (!mounted) return null;
-  return <View accessibilityViewIsModal={mounted && !persistent} pointerEvents="auto"
+  const overlay = <View accessibilityViewIsModal={mounted && !persistent} pointerEvents="auto"
     style={[styles.overlay, persistent && { width: panelWidth }]} testID="sessionDrawer.overlay">
     {!persistent ? <GestureDetector gesture={gestures.scrim}>
       <Animated.View style={[styles.scrim, scrimStyle]}>
@@ -392,6 +397,13 @@ export function SessionListDrawer({ currentSessionId, persistent = false, newSes
         elastic={{ onStretch: stretchTo, onSettle: settleStretch }} />
     </Animated.View> : null}
   </View>;
+  if (persistent || !aboveSystemBar) return overlay;
+  // Not FullWindowOverlay: a Modal opened inside that layer has no controller to
+  // present from, so the list's own menus and dialogs would never show above it.
+  return <Modal animationType="none" transparent visible onRequestClose={onClose}
+    supportedOrientations={['portrait', 'portrait-upside-down', 'landscape-left', 'landscape-right']}>
+    <GestureHandlerRootView style={styles.window}>{overlay}</GestureHandlerRootView>
+  </Modal>;
 }
 
 const makeStyles = (colors: ThemeColors) => StyleSheet.create({
@@ -402,4 +414,5 @@ const makeStyles = (colors: ThemeColors) => StyleSheet.create({
     position: 'absolute', top: 0, bottom: 0, left: 0 },
   content: { flex: 1, minHeight: 0 },
   edge: { ...StyleSheet.absoluteFill },
+  window: { flex: 1 },
 });

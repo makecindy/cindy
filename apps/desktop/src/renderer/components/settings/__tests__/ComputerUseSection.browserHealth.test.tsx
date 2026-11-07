@@ -559,7 +559,7 @@ describe('ComputerUseSection browser backend health loading', () => {
     );
 
     expect(
-      await screen.findByText('settings.computerUse.browserBackend.userBrowserSetup.installExtensionTitle'),
+      await screen.findByText('settings.computerUse.browserBackend.userBrowserSetup.connectExtensionTitle'),
     ).toBeTruthy();
     expect(install).toHaveBeenCalledWith('market-opaque-id', {
       expectedReleaseId: 'release-1',
@@ -596,7 +596,7 @@ describe('ComputerUseSection browser backend health loading', () => {
 
   // The extension step finishes in Settings: the store page opens in the user's browser rather
   // than routing through the plugin page.
-  it('opens the extension store from Settings when only the extension is missing', async () => {
+  it('offers the store as an optional action when the extension is disconnected', async () => {
     const openExtensionStore = vi.fn().mockResolvedValue({ ok: true });
     Object.assign(window.electronAPI.browserBackend, { openExtensionStore });
     api.getBackendState.mockResolvedValue({ active: 'user-browser' });
@@ -610,7 +610,7 @@ describe('ComputerUseSection browser backend health loading', () => {
     render(<ComputerUseSection workingDir="/tmp/project" />);
     fireEvent.click(
       await screen.findByRole('button', {
-        name: 'settings.computerUse.browserBackend.userBrowserSetup.installExtension',
+        name: 'settings.computerUse.browserBackend.userBrowserSetup.openExtensionStore',
       }),
     );
 
@@ -618,5 +618,7 @@ describe('ComputerUseSection browser backend health loading', () => {
     expect(api.successToast).toHaveBeenCalledWith(
       'settings.computerUse.browserBackend.userBrowserSetup.storeOpened',
     );
+    expect(screen.getByText('settings.computerUse.browserBackend.userBrowserSetup.connectExtensionTitle')).toBeTruthy();
+    expect(screen.queryByText('settings.computerUse.browserBackend.userBrowserSetup.installExtensionTitle')).toBeNull();
   });
 });

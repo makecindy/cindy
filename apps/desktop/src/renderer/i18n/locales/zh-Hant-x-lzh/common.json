@@ -1460,6 +1460,13 @@
     }
   },
   "menubar": {
+    "shared": {
+      "label": "共用",
+      "note": "此乃名籍共用之額度，非專分予君者。",
+      "highestWeekly": "共享 · 週餘最多",
+      "highestWeeklyNote": "取可閱諸號週餘最多者，不相加。此為號共用，非君專享。",
+      "from": "{{name}} 所享"
+    },
     "balance": {
       "name": "Cindy 餘資",
       "quotaName": "Cindy 本期限額",
@@ -5550,12 +5557,17 @@
         "userBrowserSetup": {
           "installPluginTitle": "納 Cindy Chrome 法器",
           "enablePluginTitle": "啟 Cindy Chrome 法器",
-          "installExtensionTitle": "將 Cindy 擴充裝入瀏覽器",
+          "connectExtensionTitle": "瀏覽器擴充尚未連",
           "pluginBody": "「我之瀏覽器」藉 Cindy Chrome 法器及其瀏覽器擴充，連君之 Chrome / Edge。先於 Cindy 中納法器，再依提示將擴充裝入瀏覽器。",
-          "extensionBody": "點「納瀏覽器擴充」，將於君之瀏覽器開 Cindy 擴充之商店頁，點「新增」後此處自轉為已連。早已裝過？請於瀏覽器之擴充功能管理中啟之。",
+          "connectionBody": "請保持 Cindy 與瀏覽器運行，並查 Cindy 擴充是否已啟。未連非須重裝；復連後，此處自更。",
           "installPlugin": "納法器",
           "enablePlugin": "往啟",
-          "installExtension": "納瀏覽器擴充",
+          "openExtensionStore": "開擴充商店",
+          "updatingTitle": "正更新瀏覽器連線",
+          "updatingBody": "更新既畢，連線自復。",
+          "selectPluginTitle": "擇瀏覽器擴充功能",
+          "selectPluginBody": "請啟法器詳情，擇「使用此瀏覽器擴充功能」，以定 Cindy 所用。",
+          "selectPlugin": "啟法器",
           "updatePluginTitle": "更新 Cindy Chrome 法器",
           "updatePluginBody": "所納 Cindy Chrome 法器版本較舊，尚不支援「我之瀏覽器」。更新至最新版後，再依提示將擴充裝入瀏覽器。",
           "updatePlugin": "往更新",
@@ -12688,6 +12700,10 @@
       "defer": "暫不取"
     },
     "permissionPrompt": {
+      "titleStdin": "可向終端輸入乎？",
+      "titleMcpUrl": "應 {{server}} 之請",
+      "mcpComplete": "已畢",
+      "mcpCancel": "取消",
       "alwaysAllowScoped": "此差事恆許 {{scope}}",
       "alwaysAllowScopedHint": "及於整個差事，且僅限此處所列之範圍。",
       "alwaysAllowSessionHint": "及於整個差事，不止此一請求。",
@@ -12943,7 +12959,13 @@
       "sendAndContinue": "遣而續之",
       "close": "闔",
       "customAnswer": "另書他答…",
-      "answerPlaceholder": "請書君答…"
+      "answerPlaceholder": "請書君答…",
+      "validation": {
+        "required": "此項必填。",
+        "choice": "請擇所列之項。",
+        "tooShort": "所填須足 {{count}} 字。",
+        "tooLong": "所填勿逾 {{count}} 字。"
+      }
     },
     "planReviewBubble": {
       "title": "審方略",
@@ -14028,8 +14050,10 @@
       "mailLegacy": "舊稿（唯讀）",
       "taskAutoArchived": "「{{title}}」已封存",
       "taskAutoArchivedUndo": "撤",
-      "taskAutoArchivePending": "去則自封存",
-      "taskAutoArchiveCancel": "此番不封"
+      "taskAutoArchivePending": "離此任務後自封存",
+      "taskAutoArchiveCancel": "取消",
+      "taskAutoArchiveCancelled": "此番不自封存",
+      "taskArchiveNow": "即封存"
     },
     "ghostHook": {
       "blockedFallback": "訊為法器所攔，未遣",
@@ -19625,5 +19649,33 @@
         "deny": "拒絕"
       }
     }
+  },
+  "subscriptionAccounts": {
+    "signIn": {
+      "checking": "正察本機帳號…",
+      "detected": "已有帳號登入",
+      "useAccount": "用此帳號",
+      "anotherAccount": "另登一號",
+      "keepExisting": "新號歸於此供應商，原號登入如故。",
+      "checkFailed": "未能讀取本機帳號，請重試。",
+      "retry": "重試",
+      "useCodex": "以 Codex 登入"
+    },
+    "title": "訂閱帳號",
+    "note": "首號沿用 CLI 預設目錄，增號各自登入。新務依策分派，舊務仍用原號。",
+    "strategy": "負載平衡",
+    "add": "新增帳號",
+    "default": "預設目錄",
+    "ready": "已連線",
+    "signedOut": "須登入",
+    "unavailable": "狀態暫不可得",
+    "limited": "配額已盡",
+    "remove": "移出帳號",
+    "removeTitle": "移出 {{name}}？",
+    "removeDescription": "Cindy 將不再給這個帳號分配任務。CLI 登入和對話歷史仍保留在本機。",
+    "failed": "無法讀取或更新帳號。請檢查 CLI 登入和網路連線後重試。",
+    "directory": "帳號目錄",
+    "loginAgain": "重登",
+    "login": "登入"
   }
 }

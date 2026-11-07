@@ -1,3 +1,4 @@
+import type { ScrollViewInstance } from 'react-native';
 import { useContext, useEffect, useMemo } from 'react';
 import { NativeSheetContext } from './NativeSheetContext';
 import { FloatingSheetContext, usePaneViewport } from '@/platform/AdaptiveWindowContext';
@@ -47,7 +48,7 @@ export interface SheetSurfaceProps {
   /** 固定在面板底部(滚动区之外)的操作区。 */
   footer?: ReactNode;
   /** 暴露内容 ScrollView(打开时滚动到选中行用);不传则内部自管。 */
-  scrollRef?: RefObject<ScrollView | null>;
+  scrollRef?: RefObject<ScrollViewInstance | null>;
   /** 档位三件套(受控):heights 由调用方 useMemo computeContextSheetSnapHeights 保持身份稳定。 */
   heights: ContextSheetSnapHeights;
   snap: ContextSheetSnap;

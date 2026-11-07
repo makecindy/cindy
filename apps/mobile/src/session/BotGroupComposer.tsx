@@ -1,3 +1,4 @@
+import type { TextInputInstance } from 'react-native';
 /**
  * 群聊输入框（对照桌面 BotGroupComposer.tsx，docs/product-rules/bot-group-chat.md §4.1 / §7.2 / §8）。
  *
@@ -16,7 +17,7 @@
  * 占位文字跟随未结束的安排。
  */
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { Alert, Keyboard, Platform, Pressable, ScrollView, StyleSheet, View, type TextInput as NativeTextInput } from 'react-native';
+import { Alert, Keyboard, Platform, Pressable, ScrollView, StyleSheet, View } from 'react-native';
 import { randomUUID } from 'expo-crypto';
 import { Camera, Circle, CircleCheck, Folder, Image as ImageIcon, Plus, Square, Users, X } from 'lucide-react-native';
 import { useTranslation } from 'react-i18next';
@@ -116,7 +117,7 @@ export function BotGroupComposer({
   const [waitingUploads, setWaitingUploads] = useState(false);
   const waitForLeaveDecision = useConfirmLeaveWhileUploading(waitingUploads);
   const [stopping, setStopping] = useState(false);
-  const inputRef = useRef<NativeTextInput>(null);
+  const inputRef = useRef<TextInputInstance>(null);
   useEffect(() => {
     const input = inputRef.current;
     if (!focusRequest || !input) return;

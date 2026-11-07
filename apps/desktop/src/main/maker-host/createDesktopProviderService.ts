@@ -28,6 +28,8 @@ import { createHash, randomUUID } from 'node:crypto';
 import { promises as fsp } from 'node:fs';
 import path from 'node:path';
 
+import { hasConnectedSubscriptionPool, refreshSubscriptionPool } from '../subscription-accounts/runtime.js';
+import { readPool } from '../subscription-accounts/store.js';
 import {
   BUNDLED_CATALOG,
   compareModelRegistryRevisions,
@@ -552,7 +554,8 @@ export function ensureActiveCatalogLoaded(): Promise<Catalog> {
         // 让首次 maker 构建的 availableModels 派生就包含它。gate 读的是 CLI 登录态:只有
         // 已连接 Claude 订阅的用户才等一次 `claude auth status`(约 0.1–0.3s),其余用户的
         // 启动不等 CLI 进程(未绑定时缓存加载本就早退)。此后由会话 init 的 SDK 捕获刷新。
-        if (isNativeProviderAuthBound('anthropic')) {
+        if (readPool('anthropic')) await refreshSubscriptionPool('anthropic');
+        if (isNativeProviderAuthBound('anthropic') || hasConnectedSubscriptionPool('anthropic')) {
           await readClaudeCliLoginStatus();
           await loadAnthropicModelsFromDiskCache();
         }
@@ -1029,6 +1032,10 @@ export function getDesktopProviderService(options: { allowSideEffects?: boolean 
       // Claude/Codex 是原生 Harness，可继承本机 CLI 凭证；xAI 是下游 provider，
       // 只能读取已经由 Cindy OAuth 明确绑定的 token，禁止在连接态读取时自动认领。
       anthropic: async ({ allowSideEffects, waitForDiscovery, snapshotOnly }) => {
+        if (readPool('anthropic')) {
+          if (!snapshotOnly) await refreshSubscriptionPool('anthropic');
+          return hasConnectedSubscriptionPool('anthropic');
+        }
         if (snapshotOnly) return hasClaudeNativeLogin();
         // 自愈会写绑定文件、读凭证作用域缓存并发起带凭证的上游请求。listProviders 这条通道
         // 同时服务 device-link 与可能不受信的渲染上下文,所以副作用只在本机主页面发起时
@@ -1060,10 +1067,13 @@ export function getDesktopProviderService(options: { allowSideEffects?: boolean 
       // hasCodexOAuthLogin() 经 getAccessToken 触发 reconcileWithSystemCodex,它会把本机 CLI
       // 凭证硬链进 codex-home 并为首个 owner 补写绑定 —— 判据不是「有没有发上游请求」,而是
       // 「不受信 sender 能不能引发特权状态变更」,建硬链和写绑定都在其内(PR #548 review)。
-      openai: ({ allowSideEffects }) =>
-        allowSideEffects
-          ? desktopCodexAuthAdapter.hasCodexOAuthLogin()
-          : desktopCodexAuthAdapter.hasCodexOAuthLoginReadOnly(),
+      openai: async ({ allowSideEffects, snapshotOnly }) => {
+        if (readPool('openai')) {
+          if (!snapshotOnly) await refreshSubscriptionPool('openai');
+          return hasConnectedSubscriptionPool('openai');
+        }
+        return allowSideEffects ? desktopCodexAuthAdapter.hasCodexOAuthLogin() : desktopCodexAuthAdapter.hasCodexOAuthLoginReadOnly();
+      },
       // xAI is a downstream provider, not a native Harness. Its connection state
       // only reflects a Cindy OAuth binding (or the explicit legacy migration above);
       // reading the provider list must never auto-claim an arbitrary local token.

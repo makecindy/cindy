@@ -218,6 +218,8 @@ function harness(
     captureGhostMutationOwner: () => ({ ...session }),
     beginGhostMutation: () => release,
     pluginDeviceSync: { beginMutation: vi.fn(() => vi.fn()) },
+    getGhostBrowserExtensionSlot: () => ({ prepareUpdate: vi.fn(async () => () => undefined) }),
+    broadcastGhostsChanged: vi.fn(),
     getActiveAppSession: () => session,
     isAppSessionBoundaryPending: () => false,
     isSameAppSession: (left: typeof session, right: typeof session) =>
@@ -340,7 +342,8 @@ describe('local file recovery and source gates through production IPC callbacks'
         '/local.cindy',
         expect.objectContaining({ sourceStateArchiveId: '_ns__cindy-archive-test__filo-local' }),
       );
-      expect(target.release).toHaveBeenCalledOnce();
+      // The operation lease, plus the short owner recheck taken after the browser bridge drains.
+      expect(target.release).toHaveBeenCalledTimes(2);
     },
   );
   it('treats missing approved receipt as source replacement, not inherited approval', async () => {

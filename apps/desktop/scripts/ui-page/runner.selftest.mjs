@@ -105,6 +105,10 @@ mountPage({ render: () => <div>Worker finished</div> });`);
 // worker's message round trip through the CLI.
 // Minimal input: pdfjs-dist's ?url import. Explicit Electron integration tier.
 test('loads PDF URL assets as real workers and tracks URL asset changes', async () => {
+  // Regression: GhostToolCard uses CSS ?inline for its sandbox. Scan/build must
+  // track the real file, and the imported value must remain a string.
+  const inlineCss = path.join(dir, 'card.css');
+  await writeFile(inlineCss, '.card { display: flex; }');
   const asset = path.join(dir, 'url-asset.mjs');
   const original = 'export const value = 17; self.onmessage = () => self.postMessage(value);';
   const changed = 'export const value = 18; self.onmessage = () => self.postMessage(value);';
@@ -122,7 +126,9 @@ test('loads PDF URL assets as real workers and tracks URL asset changes', async 
   }
   const xref = pdf.length;
   pdf += `xref\n0 4\n0000000000 65535 f \n${offsets.slice(1).map(offset => `${String(offset).padStart(10, '0')} 00000 n \n`).join('')}trailer\n<< /Size 4 /Root 1 0 R >>\nstartxref\n${xref}\n%%EOF\n`;
-  const file = await entry('pdf-url', `import * as pdfjs from 'pdfjs-dist';
+  const file = await entry('pdf-url', `import css from './card.css?inline';
+if (css !== '.card { display: flex; }') throw new Error('Inline CSS was not preserved');
+import * as pdfjs from 'pdfjs-dist';
 import workerUrl from 'pdfjs-dist/build/pdf.worker.min.mjs?url';
 import assetUrl from './url-asset.mjs?url';
 if ((await import(assetUrl)).value !== 17) throw new Error('URL asset failed to load');
@@ -154,6 +160,7 @@ mountPage({ render: () => <div>PDF worker finished</div> });`);
   const definition = adhocPage(file);
   const scanned = await scanPage(definition);
   assert.ok(scanned.inputs.includes(asset));
+  assert.ok(scanned.inputs.includes(inlineCss));
   assert.ok(scanned.inputs.some(input => input.endsWith('pdf.worker.min.mjs')));
   const bundle = await buildPage(definition);
   const emitted = [...bundle.files].filter(([url]) => url.endsWith('.mjs'));
