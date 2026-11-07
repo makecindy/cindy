@@ -90,6 +90,7 @@ import { removeLegacyClipboardInvitationHistory } from '@/device-link/legacyClip
 import { useHomeStartupSplashRelease } from '@/session/useHomeMode';
 import { RemoteDesktopHost } from '@/remote-desktop/RemoteDesktopHost';
 import { ChatInviteHost } from '@/chat/ChatInviteHost';
+import { TaskArchiveUndoHost } from '@/session/TaskArchiveUndoNotice';
 
 const holdSplash = () => undefined;
 
@@ -222,6 +223,7 @@ function NavigationGate() {
         </RecentMessageHistoriesProvider>
         </McpAppViewsProvider>
       </RemoteDesktopHost>
+      <TaskArchiveUndoHost />
       <ChatInviteHost ready={auth.initialized && auth.isAuthenticated
         && segments[0] !== '(auth)' && segments[0] !== 'add-account'} />
     </NavigationThemeProvider>

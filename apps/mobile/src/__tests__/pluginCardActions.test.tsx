@@ -168,6 +168,39 @@ describe("rich plugin card hints", () => {
     expect(container.textContent).not.toContain('Follow-up model');
   });
 
+  // Bug (2026-11-08): after a merge the phone card had no archive button, no auto-archive notice and no way to
+  // cancel it, unlike Desktop. Minimal input: a card whose host says the task is done, with and without auto.
+  it('offers the archive button and the cancellable auto-archive notice the host allows', async () => {
+    const { taskAutoArchive } = await import('../plugins/taskAutoArchive');
+    const requested = vi.fn();
+    const offRequest = taskAutoArchive.onArchiveRequest(requested);
+    const disable = taskAutoArchive.enable('s-archive');
+    const container = document.createElement('div'), root = createRoot(container);
+    unmount = () => { act(() => root.unmount()); disable(); offRequest(); };
+    const card = (taskArchive?: { auto: boolean }) => act(async () => root.render(createElement(PluginCardActions, {
+      deviceId: 'device', sessionId: 's-archive', callId: 'c', text: '#9 Fix login',
+      data: { pluginId: 'cindy-github', revision: '1', items: [], ...(taskArchive ? { taskArchive } : {}) } })));
+    await card({ auto: true });
+    expect(container.textContent).toContain('plugins.taskArchive.pending');
+    await act(async () => container.querySelector<HTMLButtonElement>('[aria-label="plugins.taskArchive.now"]')!.click());
+    expect(requested).toHaveBeenCalledWith('s-archive');
+    // Shown in the focused task page: leaving would archive. Cancelling keeps the result visible and the button usable.
+    expect(taskAutoArchive.takeSeen('s-archive')).toBe(true);
+    await act(async () => container.querySelector<HTMLButtonElement>('[aria-label="plugins.taskArchive.cancel"]')!.click());
+    expect(container.textContent).toContain('plugins.taskArchive.cancelled');
+    expect(container.querySelector('[aria-label="plugins.taskArchive.cancel"]')).toBeNull();
+    expect(container.querySelector('[aria-label="plugins.taskArchive.now"]')).not.toBeNull();
+    expect(taskAutoArchive.takeSeen('s-archive')).toBe(false);
+    // The host no longer says done (e.g. a PR reopened): no button, and the cancellation is forgotten.
+    await card();
+    expect(container.querySelector('[aria-label="plugins.taskArchive.now"]')).toBeNull();
+    expect(taskAutoArchive.getState('s-archive')).toBe('inactive');
+    // Without auto (or with an IM channel attached) only the manual button shows.
+    await card({ auto: false });
+    expect(container.querySelector('[aria-label="plugins.taskArchive.now"]')).not.toBeNull();
+    expect(container.textContent).not.toContain('plugins.taskArchive.pending');
+  });
+
   it('draws PR checks, a live state, a primary action, a link by its host and settings as switches', async () => {
     const dispatch = vi.fn(async (_input: unknown) => ({ effects: [] }));
     h.invoke.mockImplementation(async (_d: string, _c: string, args: any[]) => {

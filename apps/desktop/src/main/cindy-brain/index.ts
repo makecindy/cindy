@@ -9047,7 +9047,11 @@ export function registerGhostIpc(): void {
       mobilePluginPages.assertInteraction(pageId, ghostId, controllerId);
       return (await getGhostCardActionDispatcher().dispatch(callId, actionId, prompt, pageId, formValues, formChange, mailUpload)).ok;
     },
-  }, async (sessionId, key) => (await import('../git-context/ipc.js')).readSessionPrStatus(sessionId, key));
+  }, async (sessionId, key) => (await import('../git-context/ipc.js')).readSessionPrStatus(sessionId, key), async (sessionId) => {
+    const [{ readSessionPrsAllMerged }, { bindingStore }] = await Promise.all([import('../git-context/ipc.js'), import('../im/binding.js')]);
+    const allMerged = await readSessionPrsAllMerged(sessionId);
+    return { allMerged, attached: !!bindingStore.findByTarget(sessionId) };
+  });
   if (ipcRegistered) return;
   ipcRegistered = true;
   // 插件工具审批按真实已装实例与 receipt 判定，调用参数里的名字只用来定位。

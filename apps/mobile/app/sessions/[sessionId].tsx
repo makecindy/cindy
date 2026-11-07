@@ -652,6 +652,7 @@ import {
 import { deferScheduleIndexHydration } from '@/session/scheduleIndexDefer';
 import { sessionMayHaveScheduleRuns } from '@/session/scheduleIndex';
 import { confirmArchiveWithSchedules, loadActiveBoundScheduleNames } from '@/session/archiveScheduleConfirm';
+import { useTaskAutoArchive } from '@/session/useTaskAutoArchive';
 import { useSessionListActions } from '@/session/useSessionListActions';
 import { markSessionScheduleRunsRead, unreadRunIdFromProjection } from '@/session/scheduleRunRead';
 import { useRemoteScheduleEventSnapshot } from '@/scheduler/remoteScheduleEvents';
@@ -9996,6 +9997,28 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
       }
     })();
   }, [currentSession, deviceId, goBackToHome, invoke, maker, patchSessionFromList, sessionId, sessionSubscriptionIdentity, t]);
+
+  // 插件卡片「立即归档」走与菜单相同的流程;合并后自动归档在离开任务页时进行(与电脑端同一规则)。
+  const archiveFromCard = useCallback(() => {
+    void patchSessionMeta({ status: 'archived' }, async (isCurrent) => {
+      const names = deviceId
+        ? await loadActiveBoundScheduleNames({ deviceId, invoke, sessionId, source: sessionSourceForSchedule })
+        : [];
+      return isCurrent() && confirmArchiveWithSchedules(t, names);
+    });
+  }, [deviceId, invoke, patchSessionMeta, sessionId, sessionSourceForSchedule, t]);
+  useTaskAutoArchive({
+    session: currentSession?.id === sessionId ? currentSession : null,
+    deviceId,
+    invoke,
+    // 普通任务页才自动收走:主机托管、协同成员、伙伴与侧聊不算(与电脑端一致)。
+    enabled: !sessionManagedByHost && currentSession?.orcaRole !== 'worker'
+      && currentSession?.source !== 'bot' && currentSession?.source !== 'side-chat',
+    historyLoaded: readAckSyncedKey === `${sessionId}:${connectionEpoch}`,
+    messages,
+    archive: archiveFromCard,
+    patchSession: patchSessionFromList,
+  });
 
   const previewRewindAtMessage = useCallback(async (clientId: string, draft: MobileMessageDraft) => {
     if (messageActionBusy) return;
