@@ -112,17 +112,26 @@ export function createInputQueue(deps) {
       }).catch(() => {});
     }
 
-    const session = maker.getSession(sessionId) ?? await maker.createSession({
-      id: sessionId,
-      agentKind: makerKind,
-      workingDir: next.workingDir || stored.workingDir,
-      // The composer owns the route for this message; the row only supplies the
-      // fallback when the item does not name one.
-      model: next.model || stored.model,
-      effort: next.effort || undefined,
-      permissionMode: next.permissionMode || undefined,
-      providerId: stored.providerId ?? undefined,
-    });
+    let session = maker.getSession(sessionId);
+    if (session && session.agentKind && session.agentKind !== makerKind) {
+      if (typeof maker.closeSession === 'function') {
+        await maker.closeSession(sessionId);
+      }
+      session = null;
+    }
+    if (!session) {
+      session = await maker.createSession({
+        id: sessionId,
+        agentKind: makerKind,
+        workingDir: next.workingDir || stored.workingDir,
+        // The composer owns the route for this message; the row only supplies the
+        // fallback when the item does not name one.
+        model: next.model || stored.model,
+        effort: next.effort || undefined,
+        permissionMode: next.permissionMode || undefined,
+        providerId: stored.providerId ?? undefined,
+      });
+    }
 
     // Permission prompts and questions must reach a client before the turn can
     // continue; the broker owns that handshake.

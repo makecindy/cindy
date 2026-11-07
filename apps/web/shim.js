@@ -401,6 +401,23 @@
       if (selection?.fastMode !== undefined) patch.fastMode = selection.fastMode;
       return rpc('/sessions/update', { sessionId, patch }).then(() => ({ deferred: false }));
     },
+    'maker.switchSessionAgent': async (args) => {
+      const [sessionId, targetAgentKind, model, providerId, effort, fastMode] = args ?? [];
+      if (!sessionId) return { switched: false, agentKind: targetAgentKind, model, engineReady: true };
+      const patch = {};
+      if (targetAgentKind) patch.agentKind = targetAgentKind;
+      if (model) patch.model = model;
+      if (providerId !== undefined) patch.providerId = providerId;
+      if (effort) patch.effort = effort;
+      if (fastMode !== undefined) patch.fastMode = fastMode;
+      await rpc('/sessions/update', { sessionId, patch });
+      return {
+        switched: true,
+        agentKind: targetAgentKind,
+        model,
+        engineReady: true,
+      };
+    },
     'maker.setEffort': (args) => {
       const sessionId = args?.[0];
       const effort = args?.[1];

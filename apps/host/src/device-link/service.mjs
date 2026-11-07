@@ -193,12 +193,21 @@ export function createDeviceLinkService(deps) {
       } else if (channel === 'maker:set-extra-dirs') {
         result = await deps.updateSession(String(args[0]), { extraDirs: args[1] ?? [] });
       } else if (channel === 'maker:switch-session-agent') {
-        const [sessionId, agentKind, model, providerId] = args;
-        result = await deps.updateSession(String(sessionId), {
-          agentKind: String(agentKind),
+        const [sessionId, agentKind, model, providerId, effort, fastMode] = args;
+        const patch = {
+          ...(agentKind ? { agentKind: String(agentKind) } : {}),
           ...(model ? { model: String(model) } : {}),
           ...(providerId !== undefined ? { providerId } : {}),
-        });
+          ...(effort ? { effort: String(effort) } : {}),
+          ...(fastMode !== undefined ? { fastMode } : {}),
+        };
+        await deps.updateSession(String(sessionId), patch);
+        result = {
+          switched: true,
+          agentKind: String(agentKind || ''),
+          model: String(model || ''),
+          engineReady: true,
+        };
       } else if (channel === 'maker:close-session') {
         const sessionId = String(args[0]);
         if (deps.inputQueue?.stop) await deps.inputQueue.stop(sessionId);

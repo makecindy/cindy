@@ -659,7 +659,7 @@ const serverDeps = {
     if (typeof patch.fastMode === 'boolean' || patch.fastMode === 'ultrafast') update.fastMode = patch.fastMode;
     if (typeof patch.planModeEnabled === 'boolean') update.planModeEnabled = patch.planModeEnabled;
     if (patch.providerId === null || typeof patch.providerId === 'string') update.providerId = patch.providerId;
-    if (typeof patch.agentKind === 'string') update.agentKind = patch.agentKind;
+    if (typeof patch.agentKind === 'string') update.agentKind = patch.agentKind === 'claude-code' ? 'cc' : patch.agentKind;
     await getDbClient().drizzle.update(sessionTable).set(update).where(eq(sessionTable.id, sessionId));
     const rows = await getDbClient().drizzle.select().from(sessionTable)
       .where(eq(sessionTable.id, sessionId)).limit(1);
