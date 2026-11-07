@@ -937,9 +937,13 @@
       "description": "Para utilizar la cuota de cada cuenta de manera uniforme, envíe este mensaje desde {{label}} ({{quota}}). Los últimos mensajes y un resumen se conservan; Es posible que se pierdan detalles más antiguos.",
       "quota": "{{left}}% restante",
       "quotaReset": "{{left}}% restante · {{reset}}",
-      "confirm": "Cambiar",
-      "cancel": "Cancelar",
-      "remember": "Cambiar automáticamente a partir de ahora (solo esta tarea)"
+      "confirm": "Cambiar solo esta vez",
+      "cancel": "Ahora no",
+      "remember": "Cambiar automáticamente sin volver a preguntar",
+      "disable": "No cambiar automáticamente ni volver a preguntar",
+      "disableFailed": "No se pudo confirmar si se guardó tu elección. Comprueba la conexión y que Cindy esté actualizado en el ordenador donde está la tarea, e inténtalo de nuevo. Este mensaje se enviará con normalidad.",
+      "choiceLabel": "Cambio de ordenador (solo esta tarea)",
+      "send": "Enviar mensaje"
     },
     "deleteConfirm": {
       "title": "¿Eliminar el grupo de proveedores {{provider}}?",

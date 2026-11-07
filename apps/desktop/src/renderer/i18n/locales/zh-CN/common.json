@@ -912,9 +912,13 @@
       "description": "为了均匀用完各账号的配额，建议这条消息换到 {{label}} 发送（{{quota}}）。换过去会带上最近几轮对话和摘要，更早的细节可能记不全。",
       "quota": "还剩 {{left}}%",
       "quotaReset": "还剩 {{left}}%，{{reset}}",
-      "confirm": "换过去",
-      "cancel": "取消",
-      "remember": "以后自动换，不再询问（仅本任务）"
+      "confirm": "仅这次换过去",
+      "cancel": "暂不切换",
+      "remember": "以后自动切换，不再询问",
+      "disable": "不自动切换，不再询问",
+      "disableFailed": "未能确认选择是否已保存。请检查连接，并确认任务所在电脑上的 Cindy 已更新后重试。这条消息仍照常发送。",
+      "choiceLabel": "切换方式（仅本任务）",
+      "send": "继续发送"
     },
     "deleteConfirm": {
       "title": "删除 {{provider}} 的供应商组？",

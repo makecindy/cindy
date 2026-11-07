@@ -937,9 +937,13 @@
       "description": "Pour consommer le quota de chaque compte de façon équilibrée, envoyez ce message depuis {{label}} ({{quota}}). Les derniers messages et un résumé sont repris ; des détails plus anciens peuvent être perdus.",
       "quota": "{{left}} % restant",
       "quotaReset": "{{left}} % restant · {{reset}}",
-      "confirm": "Changer",
-      "cancel": "Annuler",
-      "remember": "Changer automatiquement à l'avenir (pour cette tâche uniquement)"
+      "confirm": "Changer cette fois uniquement",
+      "cancel": "Pas maintenant",
+      "remember": "Changer automatiquement sans redemander",
+      "disable": "Ne pas changer automatiquement ni redemander",
+      "disableFailed": "Impossible de confirmer si votre choix a été enregistré. Vérifiez la connexion et que Cindy est à jour sur l’ordinateur où se trouve la tâche, puis réessayez. Ce message sera envoyé normalement.",
+      "choiceLabel": "Changement d’ordinateur (cette tâche uniquement)",
+      "send": "Envoyer le message"
     },
     "deleteConfirm": {
       "title": "Supprimer le groupe de fournisseurs {{provider}} ?",

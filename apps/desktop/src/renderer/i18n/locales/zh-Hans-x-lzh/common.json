@@ -912,9 +912,13 @@
       "description": "为均用各名籍之限额，宜将此讯易至 {{label}} 遣之（{{quota}}）。易后携近数轮言谈与摘要，更早之细节或记不全。",
       "quota": "尚余 {{left}}%",
       "quotaReset": "尚余 {{left}}%，{{reset}}",
-      "confirm": "易之",
-      "cancel": "罢",
-      "remember": "此后自动易之，不复询问（仅此差事）"
+      "confirm": "惟此次换之",
+      "cancel": "暂不换",
+      "remember": "此后自动切换，不复问",
+      "disable": "勿自动切换，亦不复问",
+      "disableFailed": "未能确认此选择已存。请查连线，并确认任务所在电脑之 Cindy 已更新，再试。此讯仍照常送出。",
+      "choiceLabel": "切换之法（仅此任务）",
+      "send": "续发此讯"
     },
     "deleteConfirm": {
       "title": "删 {{provider}} 之供方组乎？",
