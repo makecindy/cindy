@@ -1725,6 +1725,20 @@ describe('recipe on-use maintenance', () => {
       expect(saved).toEqual([{ site: 'example.com', recipe: { ...legacy, validation: { site: 'example.com', state: 'suspended' } } }]);
     } finally { await h.cleanup(); }
   });
+  it('persists failure of a legacy recipe listed in several guides under its first match host', async () => {
+    const saved: unknown[] = [];
+    const legacy = { id: 'multi-guide-flow', match: ['api.example.com', 'example.com'], steps: [{ action: 'extract' as const, extract: { fields: { title: 'h1' } } }] };
+    const h = await makeHarness({
+      getUserRecipes: async () => ({ version: 'multi-guide-flow-v1', recipes: new Map([[legacy.id, legacy]]),
+        siteGuides: new Map([['example.com', { site: 'example.com', recipes: [legacy.id] }],
+          ['api.example.com', { site: 'api.example.com', recipes: [legacy.id] }]]) }),
+      saveUserRecipe: async (x) => { saved.push(x); return { ok: true }; },
+    }, () => ({ result: { ok: false, error: 'invalid selector' } }));
+    try {
+      expect((await invoke(h, { action: 'recipe', recipeId: legacy.id })).ok).toBe(false);
+      expect(saved).toEqual([{ site: 'api.example.com', recipe: { ...legacy, validation: { site: 'api.example.com', state: 'suspended' } } }]);
+    } finally { await h.cleanup(); }
+  });
   it('reports a failed suspension write and still prevents this session from rerunning it', async () => {
     const stored = { ...draft, validation: { site: 'example.com', state: 'active' as const } };
     const h = await makeHarness({

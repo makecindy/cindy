@@ -968,9 +968,13 @@ export function registerBrowserTools(registry: BrowserToolRegistry, deps: Browse
               try {
                 // Bundled recipes predate validation metadata; their guide
                 // supplies the owning site. Never guess from a host substring.
-                const sites = persisted.validation ? [persisted.validation.site] :
+                // A recipe listed under several guides for discovery keeps its
+                // first `match` host as the single persistence owner.
+                let sites = persisted.validation ? [persisted.validation.site] :
                   [...siteGuideRegistryFrom(await resolveUserLayer(deps)).values()]
                     .filter((g) => g.guide.recipes?.includes(id)).map((g) => g.guide.site);
+                const owner = persisted.match?.[0];
+                if (sites.length > 1 && owner && sites.includes(owner)) sites = [owner];
                 if (sites.length === 1) {
                   const saved = await deps.saveUserRecipe({ site: sites[0],
                     recipe: { ...persisted, validation: { ...persisted.validation, site: sites[0], state: 'suspended' } } });
