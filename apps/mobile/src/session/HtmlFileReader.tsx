@@ -44,17 +44,33 @@ import { interceptHtmlNavigation, interceptSnapshotNavigation } from '@/session/
 import { withHtmlPreviewCsp } from '@/session/htmlPreviewCsp';
 import type { MobileHtmlPreview } from '@/session/mobileHtmlPreview';
 import { useHtmlBrowserViewport } from '@/session/useHtmlBrowserViewport';
-import { browserViewportScrollScript } from '@/session/htmlBrowserViewport';
+import { browserScrollRestoreScript, browserViewportScrollScript } from '@/session/htmlBrowserViewport';
+import type { HtmlReadingPosition } from '@/session/useHtmlSnapshot';
 import { useTheme } from '@/theme';
 
+/** Same-origin document to return to, or null when the loaded document is already the one being read. */
+function restoreTarget(loaded: string | undefined, path: string): string | null {
+  if (!path || !loaded) return null;
+  try {
+    const here = new URL(loaded);
+    const target = new URL(path, here.origin);
+    if (target.origin !== here.origin || target.pathname + target.search === here.pathname + here.search) return null;
+    return target.href;
+  } catch { return null; }
+}
+
 /** The server serves only the downloaded manifest; every HTML has the same CSP and device guard. */
-export function HtmlSnapshotReader({ preview, onError, webViewRef, viewportInsets, onNavigationStateChange, loading }: {
+export function HtmlSnapshotReader({ preview, onError, webViewRef, viewportInsets, onNavigationStateChange, onScroll, restore, loading }: {
   preview?: MobileHtmlPreview;
   onError(): void;
   loading?: ReactNode;
   webViewRef?: RefObject<WebView | null>;
   viewportInsets?: WebViewProps['contentInset'];
   onNavigationStateChange?(preview: MobileHtmlPreview, state: WebViewNavigation): void;
+  /** Page scroll in CSS pixels, for reopening a rebuilt snapshot at the same place. */
+  onScroll?(preview: MobileHtmlPreview, x: number, y: number): void;
+  /** Where to reopen this preview (after returning from the background or a delayed update). */
+  restore?: HtmlReadingPosition;
 }) {
   const { colors } = useTheme();
   const url = preview?.url;
@@ -73,6 +89,15 @@ export function HtmlSnapshotReader({ preview, onError, webViewRef, viewportInset
     currentPreview.current = preview;
     return () => { currentPreview.current = null; };
   }, [preview]);
+  // A rebuilt snapshot stays behind the loading view until it is back at the reader's place.
+  const restoring = useRef<{ preview: MobileHtmlPreview; position: HtmlReadingPosition; navigated: boolean } | null>(null);
+  useEffect(() => {
+    restoring.current = preview && restore && (restore.path || restore.x > 0 || restore.y > 0)
+      ? { preview, position: restore, navigated: false } : null;
+  }, [preview, restore]);
+  const reveal = (target: MobileHtmlPreview, delay: number) => {
+    setTimeout(() => { if (currentPreview.current === target) setPaintedPreview(target); }, delay);
+  };
   // Diagnostics only: load outcome and timing per mounted snapshot; the URL carries the snapshot token.
   const mountedAt = useMemo(() => Date.now(), [preview]);
   const failed = (event: string, detail: Record<string, unknown>) => {
@@ -96,12 +121,35 @@ export function HtmlSnapshotReader({ preview, onError, webViewRef, viewportInset
     injectedJavaScript={script}
     onLoadEnd={(event) => {
       if (currentPreview.current !== preview) return;
-      setPaintedPreview(preview);
       mobileDebugLog('debug', 'files', 'html page load end', { ms: Date.now() - mountedAt, loading: event?.nativeEvent?.loading });
       if (script) readerRef.current?.injectJavaScript(script);
+      const pending = restoring.current?.preview === preview ? restoring.current : null;
+      if (!pending) { setPaintedPreview(preview); return; }
+      const target = pending.navigated ? null : restoreTarget(event?.nativeEvent?.url, pending.position.path);
+      if (target) {
+        // Return to the inner document first; the navigation policy still decides.
+        // If it never loads, reveal the entry rather than keep the loading view.
+        pending.navigated = true;
+        readerRef.current?.injectJavaScript(`location.replace(${JSON.stringify(target)}); true;`);
+        setTimeout(() => {
+          if (restoring.current !== pending) return;
+          restoring.current = null;
+          if (currentPreview.current === preview) setPaintedPreview(preview);
+        }, 3000);
+        return;
+      }
+      restoring.current = null;
+      readerRef.current?.injectJavaScript(browserScrollRestoreScript(pending.position.x, pending.position.y));
+      // One beat for the first scrollTo to land, so the page does not flash at its top.
+      reveal(preview, 100);
     }}
-    onScroll={({ nativeEvent: { contentOffset } }) => {
-      if (currentPreview.current === preview) readerRef.current?.injectJavaScript(browserViewportScrollScript(contentOffset.x, contentOffset.y));
+    onScroll={({ nativeEvent: { contentOffset, zoomScale } }) => {
+      if (currentPreview.current !== preview) return;
+      readerRef.current?.injectJavaScript(browserViewportScrollScript(contentOffset.x, contentOffset.y));
+      // UIKit offsets include the obscured inset and zoom; report what window.scrollTo expects.
+      const zoom = zoomScale && zoomScale > 0 ? zoomScale : 1;
+      onScroll?.(preview, (contentOffset.x + (obscuredContentInsets?.left ?? 0)) / zoom,
+        (contentOffset.y + (obscuredContentInsets?.top ?? 0)) / zoom);
     }}
     onNavigationStateChange={(state) => {
       if (currentPreview.current === preview) onNavigationStateChange?.(preview, state);
