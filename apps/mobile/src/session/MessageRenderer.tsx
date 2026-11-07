@@ -2339,7 +2339,7 @@ export function MessageRenderer({
       viewportHeight: event.nativeEvent.layoutMeasurement.height,
     };
     const previousOffsetY = scrollMetricsRef.current.offsetY;
-    processViewport.scroll(metrics.offsetY, previousOffsetY, isDragSample || isMomentumScrollingRef.current,
+    const resumedProcessFollow = processViewport.scroll(metrics.offsetY, previousOffsetY, isDragSample || isMomentumScrollingRef.current,
       metrics.contentHeight - metrics.offsetY - metrics.viewportHeight <= 1);
     scrollMetricsRef.current = metrics;
     // A native acknowledgment ends reopening, not merely its reveal animation.
@@ -2417,7 +2417,7 @@ export function MessageRenderer({
       const preserveFollowIntent = nearBottomRef.current && !isMomentumScrollingRef.current;
       const nearBottom = preserveHistoryBrowseIntent || processViewport.inspecting.current
         ? false
-        : preserveFollowIntent || resolveMobileNearBottomOnScroll({
+        : resumedProcessFollow || preserveFollowIntent || resolveMobileNearBottomOnScroll({
           wasNearBottom: nearBottomRef.current,
           metrics,
           programmaticScrollInFlight: programmaticScrollInFlightRef.current,

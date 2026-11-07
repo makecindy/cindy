@@ -30,7 +30,10 @@ export function useProcessDisclosureViewport(read: () => {
   const scroll = useCallback((offsetY: number, previousY: number, userScrolling: boolean, atBottom: boolean) => {
     if (!inspecting.current || !userScrolling) return;
     if (offsetY < previousY) setReserve(Math.max(0, reserve.current - (previousY - offsetY)));
-    else if (offsetY > previousY && atBottom) resume();
+    else if (offsetY > previousY && atBottom) {
+      resume();
+      return true;
+    }
   }, [resume, setReserve]);
   return { inspect, inspecting, footerHeight, resume, scroll };
 }
