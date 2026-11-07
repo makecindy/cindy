@@ -1422,6 +1422,8 @@ function TextPreviewPage({
               loading={<HtmlPreviewLoading progress={htmlSnapshot.progress} />}
               webViewRef={browserRef}
               viewportInsets={{ ...browserContentInset, left: insets.left, right: insets.right }}
+              restore={htmlSnapshot.restore}
+              onScroll={htmlSnapshot.onScroll}
               onNavigationStateChange={(preview, state) => {
                 htmlSnapshot.onNavigationStateChange(preview, state);
                 setBrowserNavigation({ preview, state });
