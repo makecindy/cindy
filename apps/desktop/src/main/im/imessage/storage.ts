@@ -13,6 +13,7 @@ export function blueBubblesStateStorage(connectionId: string): BlueBubblesStateS
   const journal = `${file}.journal`;
   let state: BlueBubblesState | null = null;
   let entries = 0;
+  let appendBlocked = false;
   const checkpoint = () => {
     if (!state) return;
     atomicWriteFileSync(file, JSON.stringify(state));
@@ -27,6 +28,7 @@ export function blueBubblesStateStorage(connectionId: string): BlueBubblesStateS
     // Replaying the old journal after a crash here is safe: updates are assignments, not increments.
     atomicWriteFileSync(journal, '');
     entries = 0;
+    appendBlocked = false;
   };
   return {
     read: () => {
@@ -42,17 +44,32 @@ export function blueBubblesStateStorage(connectionId: string): BlueBubblesStateS
           entries += 1;
         }
         // A partial last record was never acknowledged; preserve all earlier durable records.
-        if (end + 1 !== pending.length) checkpoint();
+        if (appendBlocked || end + 1 !== pending.length) checkpoint();
       }
       return state && structuredClone(state);
     },
     write: next => { state = structuredClone(next); checkpoint(); },
     update: update => {
       if (!state) throw new Error('BLUEBUBBLES_RECEIPTS_NOT_LOADED');
+      if (appendBlocked) throw new Error('BLUEBUBBLES_RECEIPT_JOURNAL_NEEDS_REPAIR');
       const fd = fs.openSync(journal, 'a', 0o600);
       try {
-        fs.writeFileSync(fd, `${JSON.stringify(update)}\n`);
-        fs.fsyncSync(fd);
+        const length = fs.fstatSync(fd).size;
+        try {
+          fs.writeFileSync(fd, `${JSON.stringify(update)}\n`);
+          fs.fsyncSync(fd);
+        } catch (error) {
+          // A failed write can leave bytes behind. Never join the next record
+          // onto that unacknowledged prefix; flush the rollback before reuse.
+          try {
+            fs.ftruncateSync(fd, length);
+            fs.fsyncSync(fd);
+          } catch {
+            // Explicit reload/checkpoint must repair the journal before reuse.
+            appendBlocked = true;
+          }
+          throw error;
+        }
       } finally { fs.closeSync(fd); }
       applyBlueBubblesReceiptUpdate(state, update);
       entries += 1;

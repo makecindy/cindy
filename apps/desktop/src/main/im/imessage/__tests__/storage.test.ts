@@ -31,3 +31,42 @@ it('preserves 11002 existing receipts, new confirmations and uncertain sends acr
   reopened.update!({ kind: 'inbox', id: 'new', value: { receivedAt: 12000, state: 'accepted' } });
   expect(blueBubblesStateStorage('0123456789ab').read()!.inbox.new.state).toBe('accepted');
 });
+
+// Tier 1, #9250 review4503403200: a failed append followed by a successful
+// append used to turn a recoverable torn tail into an unreadable complete line.
+// Existing restart coverage never continued writing after the partial failure.
+it.each([false, true])('recovers from partial ENOSPC before accepting another append (rollback fails: %s)', rollbackFails => {
+  const id = rollbackFails ? '0123456789ad' : '0123456789ac';
+  const storage = blueBubblesStateStorage(id);
+  storage.write({ version: 1, activatedAt: 1, cursors: { owner: 500 }, inbox: {
+    previous: { receivedAt: 1, state: 'accepted' },
+  }, outbox: {} });
+  const journal = path.join(h.directory, 'imessage', `${id}.json.journal`);
+  const before = fs.readFileSync(journal, 'utf8');
+  const write = fs.writeFileSync;
+  const diskFull = Object.assign(new Error('test disk full'), { code: 'ENOSPC' });
+  const append = vi.spyOn(fs, 'writeFileSync').mockImplementationOnce((file, data) => {
+    write(file, Buffer.from(String(data)).subarray(0, 12));
+    throw diskFull;
+  });
+  const truncate = rollbackFails ? vi.spyOn(fs, 'ftruncateSync').mockImplementationOnce(() => {
+    throw Object.assign(new Error('test rollback failed'), { code: 'EIO' });
+  }) : undefined;
+  const next = { kind: 'inbox' as const, id: 'next', value: { receivedAt: 3, state: 'pending' as const } };
+  try {
+    expect(() => storage.update!({ kind: 'inbox', id: 'failed', value: { receivedAt: 2, state: 'pending' } })).toThrow(diskFull);
+    if (rollbackFails) {
+      const broken = fs.readFileSync(journal, 'utf8');
+      expect(() => storage.update!(next)).toThrow('BLUEBUBBLES_RECEIPT_JOURNAL_NEEDS_REPAIR');
+      expect(fs.readFileSync(journal, 'utf8')).toBe(broken);
+      // Explicit reload repairs the torn tail before this instance can append.
+      expect(storage.read()!.inbox.failed).toBeUndefined();
+    } else {
+      expect(fs.readFileSync(journal, 'utf8')).toBe(before);
+    }
+    storage.update!(next);
+    const restored = blueBubblesStateStorage(id).read()!;
+    expect(restored.inbox).toEqual({ previous: { receivedAt: 1, state: 'accepted' }, next: next.value });
+    expect(restored.cursors).toEqual({ owner: 500 });
+  } finally { append.mockRestore(); truncate?.mockRestore(); }
+});
