@@ -826,6 +826,10 @@ export function registerProviderHandlers(
   };
   const providerConfigMutationCounts = new Map<string, number>();
   const providerConfigMutationTails = new Map<string, Promise<void>>();
+  const assertProviderConfigStable = (providerId: string): void => {
+    if (providerConfigMutationCounts.has(storedCustomProviderId(providerId)))
+      throwIpcError('PRECONDITION_FAILED', 'Connection is changing');
+  };
   const beginProviderConfigMutation = (providerId: string): void => {
     providerConfigMutationCounts.set(
       providerId,
@@ -2644,6 +2648,7 @@ export function registerProviderHandlers(
     }
     const parsed = parseTestInput(input);
     if (!parsed) throwIpcError('INVALID_PARAMS', 'invalid test-connection input');
+    if (parsed.kind === 'saved') assertProviderConfigStable(parsed.providerId);
     // Old callers retain their single-test contract; new operations are owned by the sender.
     if (!parsed.requestId) {
       try { return await deps.testConnection(parsed); }
@@ -2710,6 +2715,7 @@ export function registerProviderHandlers(
     assertTrustedProviderMutationSender(event);
     const parsed = parseModelsFetchInput(input);
     if (!parsed) throwIpcError('INVALID_PARAMS', 'invalid models-fetch input');
+    if (parsed.savedProviderId) assertProviderConfigStable(parsed.savedProviderId);
     // 已保存供应商:main 侧按 (id, agent) 并入 main-only 鉴权请求头,无需 renderer 回读
     // 明文头。安全边界在 main —— renderer 传的 baseUrl/modelsUrl **不可信**(被注入 / 误用
     // 的顶层 Renderer 只要提交一个已知 savedProviderId + 攻击者控制的 baseUrl,就能把
@@ -3081,6 +3087,9 @@ export function registerProviderHandlers(
         deleteProviderFromInput(MAIN_PROCESS_SENDER, config.id, undefined,
           { source: 'manual-settings', ...(interrupt ? { codexImageGenerationRestartPolicy: 'interrupt' } : {}) }, guard, config),
       async fetch(config: CustomProviderConfig, agent: AgentKind) {
+        // No await between this fence, credential reads and dispatch: staged keys must never
+        // be combined with the old active-catalog route during a Settings transaction.
+        assertProviderConfigStable(config.id);
         const runtime = config.runtimes[agent];
         if (!runtime) throwIpcError('INVALID_PARAMS', 'runtime unavailable');
         const key = deps.readCustomProviderKeyForMutation(config.id, agent);
@@ -3090,7 +3099,10 @@ export function registerProviderHandlers(
           wireProtocol: runtime.wireProtocol, authMethod: config.auth?.method ?? 'apiKey', apiKey: key,
         });
       },
-      test: (providerId: string, agent: AgentKind) => deps.testConnection({ kind: 'saved', providerId, agent }),
+      test: (providerId: string, agent: AgentKind) => {
+        assertProviderConfigStable(providerId);
+        return deps.testConnection({ kind: 'saved', providerId, agent });
+      },
     },
   };
 

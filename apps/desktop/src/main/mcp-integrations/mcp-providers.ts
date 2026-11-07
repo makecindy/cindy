@@ -1383,7 +1383,7 @@ export function createDesktopMcpProviders(deps: DesktopMcpProvidersDeps): LiziMc
       },
       // 伙伴自己沉淀的真技能。归属同样由 callerSessionId 反查,工具面不收 botId。
       modelSettings: {
-        call: ({ callerSessionId, ...input }) => withAccountDataAccess(callerSessionId, async (assertCurrent) => {
+        call: ({ callerSessionId, ...input }, signal) => withAccountDataAccess(callerSessionId, async (assertCurrent) => {
           const surface = await resolveHelperSurface(tryGetDbClient()!, callerSessionId);
           const botGuard = surface === 'bot' || surface === 'bot-main'
             ? await captureBotSettingsAccess(callerSessionId)
@@ -1393,7 +1393,7 @@ export function createDesktopMcpProviders(deps: DesktopMcpProvidersDeps): LiziMc
             if (botGuard) await botGuard();
             if (input.operation === 'set' || input.operation === 'provider' || input.operation === 'connection') await assertTaskActionCurrent();
           };
-          return manageAppModels(input, guard, async (name, endpoints) => {
+          return manageAppModels(input, guard, async (name, endpoints, lifetime) => {
             await guard();
             if (await isInputHandoffDisabledForSession(callerSessionId)) throw new Error('DISABLED_BY_OWNER');
             await guard();
@@ -1402,6 +1402,7 @@ export function createDesktopMcpProviders(deps: DesktopMcpProvidersDeps): LiziMc
             return new Promise<string | null>((resolve, reject) => {
               const started = service.startHostSecretPrompt({
                 sessionId: callerSessionId,
+                ...lifetime,
                 step: {
                   purpose: `${name.slice(0, 128)} · API key${endpoints[1] ? ` · ${new URL(endpoints[1]).origin}` : ''}`,
                   source: { app: 'Cindy', ...classifyOrigin(endpoints[0], true) },
@@ -1411,7 +1412,7 @@ export function createDesktopMcpProviders(deps: DesktopMcpProvidersDeps): LiziMc
               });
               if (!started.ok) reject(new Error(started.errorCode));
             });
-          });
+          }, signal);
         }),
       },
       piRuntime: {

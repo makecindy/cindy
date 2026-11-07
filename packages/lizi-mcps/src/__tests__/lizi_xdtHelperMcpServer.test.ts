@@ -1535,12 +1535,43 @@ it('discovers native app settings in all three harnesses and rejects invalid or 
       } }))).toMatchObject({ ok: false, errorCode: 'CODEX_CALLER_WOULD_STOP' });
       expect(models).not.toHaveBeenCalled();
       await call('configure_model_connection', { change: { action: 'presets' } });
-      expect(models).toHaveBeenCalledExactlyOnceWith({ callerSessionId: 'settings-owner', operation: 'connection', change: { action: 'presets' } });
+      expect(models).toHaveBeenCalledExactlyOnceWith({ callerSessionId: 'settings-owner', operation: 'connection', change: { action: 'presets' } }, expect.any(AbortSignal));
       restricted = true;
       expect(parsePayload(await call('configure_model_connection', { change: { action: 'presets' } })).ok).toBe(false);
       expect(models).toHaveBeenCalledTimes(1);
       expect(parsePayload(await call('update_app_settings', { section: 'appearance', patch: { uiSize: 17 } })).ok).toBe(false);
       expect(settings).toHaveBeenCalledTimes(1);
+    } finally { await client.close(); await server.close(); }
+  }
+});
+
+// #9276, unit real MCP: cancellation previously stopped the caller but left Main
+// waiting for a key. Existing discovery tests never cancelled an in-flight call.
+it('forwards connection tool cancellation to the host in all three harnesses', async () => {
+  for (const agentKind of ['codex', 'claude-code', 'pi'] as const) {
+    let entered!: () => void;
+    let cancelled!: () => void;
+    const waiting = new Promise<void>(resolve => { entered = resolve; });
+    const aborted = new Promise<void>(resolve => { cancelled = resolve; });
+    const server = createXdtHelperMcpServer({ modelSettings: { call: async (_input, signal) => {
+      expect(signal).toBeDefined();
+      signal!.addEventListener('abort', cancelled, { once: true });
+      entered();
+      await aborted;
+      return { saved: false };
+    } } }, { agentKind, workingDir: '/fixture', sessionId: 'owner' });
+    const [ct, st] = InMemoryTransport.createLinkedPair();
+    const client = new Client({ name: 'model-cancel-test', version: '1' });
+    await Promise.all([server.connect(st), client.connect(ct)]);
+    try {
+      const controller = new AbortController();
+      const pending = client.callTool({ name: 'call_tool', arguments: { name: 'configure_model_connection',
+        args: { change: { action: 'setKey', providerId: 'example', agent: 'pi' } } } }, undefined, { signal: controller.signal });
+      const rejected = expect(pending).rejects.toBeDefined();
+      await waiting;
+      controller.abort();
+      await rejected;
+      await aborted;
     } finally { await client.close(); await server.close(); }
   }
 });

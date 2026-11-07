@@ -382,7 +382,7 @@ function registerCallToolEntry(
     'call_tool',
     D_CALL_TOOL,
     CALL_TOOL_INPUT,
-    async ({ name, args }) => {
+    async ({ name, args }, extra) => {
       const allowed = await allowedSurface();
       const definition = registry.get(name);
       if (definition && !toolAllowed(allowed, definition)) {
@@ -395,7 +395,7 @@ function registerCallToolEntry(
         ? await withToolCallAuthority(
           telemetry.authorizeCall,
           { sessionId: telemetry.getSessionId(), server: 'cindy_helper', tool: name, args },
-          () => registry.call(name, args),
+          () => registry.call(name, args, extra?.signal),
         )
         : errorPayload('UNKNOWN_TOOL', 'Unknown helper tool.', {
             available: registry.list().filter((tool) => toolAllowed(allowed, tool)).map((tool) => tool.name),

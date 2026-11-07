@@ -12,7 +12,14 @@ import { validateCustomProviderConfig } from '../maker-host/custom-provider-stor
 
 type Change = Extract<AppModelsRequest, { operation: 'connection' }>['change'];
 type Actions = ReturnType<typeof registerProviderHandlers>['connections'];
-export type RequestProviderSecret = (name: string, endpoints: string[]) => Promise<string | null>;
+export type RequestProviderSecret = (
+  name: string,
+  endpoints: string[],
+  lifetime: {
+    signal?: AbortSignal;
+    deadline: number;
+  },
+) => Promise<string | null>;
 
 function publicEndpoint(raw: string): string {
   const url = new URL(raw);
@@ -48,7 +55,7 @@ export async function manageProviderConnection(
   change: Change,
   api: Actions,
   guard: () => Promise<void>,
-  requestSecret: RequestProviderSecret,
+  requestSecret: (name: string, endpoints: string[]) => Promise<string | null>,
 ) {
   await guard();
   if (change.action === 'presets')
@@ -92,6 +99,7 @@ export async function manageProviderConnection(
         models: runtime.models.map((model: { id: string; name?: string }) => ({
           ...model,
           name: model.name ?? model.id,
+          ...(!preset && model.name !== undefined ? { nameExplicit: true } : {}),
         })),
       };
     }
@@ -175,6 +183,7 @@ export async function manageProviderConnection(
             models: change.runtime.models.map((model) => ({
               ...model,
               name: model.name ?? model.id,
+              ...(model.name !== undefined ? { nameExplicit: true } : {}),
             })),
           }
         : config.runtimes[change.agent]!;
@@ -241,6 +250,7 @@ export async function manageProviderConnection(
             ...runtime.models.find((old) => old.id === model.id),
             ...model,
             name: model.name ?? runtime.models.find((old) => old.id === model.id)?.name ?? model.id,
+            ...(model.name !== undefined ? { nameExplicit: true } : {}),
           }))
         : mergeDiscoveredRuntimeModels(runtime.models, fetched?.models ?? []);
     return {

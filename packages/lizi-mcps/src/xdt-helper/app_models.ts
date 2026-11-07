@@ -67,18 +67,20 @@ export type AppModelsRequest =
   | { operation: 'set'; target: z.infer<typeof target>; change: z.infer<typeof appModelConfiguration> }
   | { operation: 'provider'; change: z.infer<typeof appProviderChange> };
 export interface AppModelsCallbacks {
-  call(input: AppModelsRequest & { callerSessionId: string }): Promise<Record<string, unknown>>;
+  call(input: AppModelsRequest & { callerSessionId: string }, signal?: AbortSignal): Promise<Record<string, unknown>>;
 }
 
 export function registerAppModelsTools(registry: XdtHelperToolRegistry, callbacks: AppModelsCallbacks,
   context: () => LiziMcpSessionContext): void {
-  const invoke = async (input: AppModelsRequest) => {
+  const invoke = async (input: AppModelsRequest, signal?: AbortSignal) => {
     const ctx = context();
     if (!ctx.sessionId || ctx.remoteHostId) return errorPayload('CAPABILITY_NOT_AVAILABLE', '请在目标电脑的本机任务中管理模型设置。');
     if (input.operation === 'connection' && 'interruptCodex' in input.change && input.change.interruptCodex && ctx.agentKind === 'codex')
       return errorPayload('CODEX_CALLER_WOULD_STOP', '此操作会中断当前 Codex 执行。请用 Claude Code 或 Pi 执行这次连接修改。');
     try {
-      const result = await callbacks.call({ ...input, callerSessionId: ctx.sessionId });
+      signal?.throwIfAborted();
+      const request = { ...input, callerSessionId: ctx.sessionId };
+      const result = await (signal ? callbacks.call(request, signal) : callbacks.call(request));
       return result.ok === false ? errorPayload(String(result.errorCode ?? 'MODEL_SETTINGS_FAILED'),
         '操作未完成，请读取当前配置后处理返回的原因。', result) : okPayload(result);
     } catch { return errorPayload('MODEL_SETTINGS_FAILED', '模型设置操作未确认完成。请重新查询；账号变化、组织管理策略或型号已不可用时不能保存。'); }
@@ -97,5 +99,5 @@ export function registerAppModelsTools(registry: XdtHelperToolRegistry, callback
     inputShape: { change: appProviderChange }, handler: input => invoke({ operation: 'provider', ...input }) });
   registry.register({ name: 'configure_model_connection', category: 'settings',
     description: '直接配置这台电脑的 API 模型连接，无需 Computer Use。presets 查看模板；create 使用 presetId 或显式 runtimes（模型可先为空），返回新连接 ID；read 查看连接。API key 只由主人通过 Cindy 安全输入卡交给宿主，禁止在参数、对话或文件中传密钥；不同端点分别填写。none 仅用于免密本机服务。setKey 更换指定引擎密钥；setRuntime 设置一个引擎的端点、协议与型号，变更端点时重新安全输入密钥，保留其它引擎；remove 删除该连接及专属凭证，不删历史。refreshModels 获取并合并型号、保留用户覆盖；setModels 设置型号名单；test 经保存路线发最小推理请求，可能计费。保存、目录发现、推理验证分别报告。需要重载且 Codex 正忙时返回 confirmationRequired，不写入；主人同意中断后可从 Claude Code/Pi 使用 interruptCodex=true，不能中断调用工具的 Codex 自己。不支持 SSH；手机可经原有加密代输入卡填写密钥。',
-    inputShape: { change: providerConnectionChange }, handler: input => invoke({ operation: 'connection', ...input }) });
+    inputShape: { change: providerConnectionChange }, handler: (input, signal) => invoke({ operation: 'connection', ...input }, signal) });
 }

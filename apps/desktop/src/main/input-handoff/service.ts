@@ -365,16 +365,29 @@ export class InputHandoffService {
   startHostSecretPrompt(request: {
     sessionId: string;
     step: TerminalPromptStep;
+    signal?: AbortSignal;
+    deadline?: number;
     answer(value: string | null): void;
   }): StartResult {
+    request.signal?.throwIfAborted();
+    const remaining = request.deadline === undefined ? timeoutMs(undefined) : request.deadline - Date.now();
+    if (remaining <= 0) throw new Error('SECRET_INPUT_EXPIRED');
     const refused = this.admit(request.sessionId);
     if (refused) return refused;
-    return this.launch(request.sessionId, true, (requestId, entry) => new TerminalPromptSession({
-      requestId, step: request.step, timeoutMs: timeoutMs(undefined),
-      remoteInput: this.deps.remoteInputAvailable(), answer: request.answer,
-      publish: snapshot => this.publish(entry, snapshot),
-      finish: result => this.finish(entry, result),
-    }));
+    return this.launch(request.sessionId, true, (requestId, entry) => {
+      const cancel = () => run.cancel('cancelled');
+      const run = new TerminalPromptSession({
+        requestId, step: request.step, timeoutMs: remaining,
+        remoteInput: this.deps.remoteInputAvailable(), answer: request.answer,
+        publish: snapshot => this.publish(entry, snapshot),
+        finish: result => {
+          request.signal?.removeEventListener('abort', cancel);
+          this.finish(entry, result);
+        },
+      });
+      request.signal?.addEventListener('abort', cancel, { once: true });
+      return run;
+    });
   }
 
   private admit(sessionId: string): Extract<StartResult, { ok: false }> | null {

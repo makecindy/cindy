@@ -177,6 +177,8 @@ Windows 暂不支持 askpass。
 结果；填写完成不代表保存或验证成功。取消、到期和任务清理不保存，保存前复核账号、任务权限
 及原连接配置，防止等待时换号或改端点。跨端 payload 与签名输入桥不变，旧控制端沿用已有表单。
 相同端点集合的引擎共用一次输入，不同端点分别填写；不从其他连接读取或复制密钥。
+一次工具调用中的所有输入与排队写入共用九分钟期限（短于 Codex 的十分钟工具上限），
+不会随下一张卡重置；MCP 调用取消会关闭等待中的输入卡，迟到提交不能保存。
 实现与回归见 `main/app-settings/connections.ts`、`providerHandlers.test.ts`、`terminalPrompt.test.ts`。
 
 - 读取与执行依赖 macOS 辅助功能；其它平台返回 `UNSUPPORTED`。
