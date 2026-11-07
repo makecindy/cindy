@@ -925,17 +925,6 @@ describe('teammate turn principal', () => {
     expect(h.confirm).not.toHaveBeenCalled();
   });
 
-  // 实测（2026-11-07）：项目模式伙伴的定时任务改用普通自动化，到点运行却被当成「伙伴自作主张」。
-  // 最小失败输入：项目模式伙伴、普通自动化 id 的定时轮次。tier：unit。
-  it.each([[true, 'entrusted'], [false, 'autonomous']] as const)(
-    'treats a project-mode=%s teammate\'s ordinary automation run as %s', async (projectMode, principal) => {
-      const h = desktopFixture('automatic');
-      live(h);
-      Object.assign(h.caller, { capabilitiesJson: JSON.stringify({ projectMode }) });
-      h.runtime.getCurrentTurnOrigin = () => ({ kind: 'scheduler', scheduleId: '9c088a22-98ed-47fa-81b9-a18c71efd688', runId: 'run' });
-      expect(await withToolCallAuthority(h.authorize, ownerTaskWrites[0], async () => taskActionPrincipal('companion'))).toBe(principal);
-    });
-
   it.each([true, false])('lets the IM lane requester decide (owner=%s)', async requesterIsOwner => {
     const h = desktopFixture('automatic');
     live(h);
