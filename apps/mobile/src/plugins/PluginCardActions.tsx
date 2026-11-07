@@ -64,7 +64,7 @@ import { pickMobileMailAttachment } from "./mobileMailAttachment";
 import { PluginCardRecipients } from "./PluginCardRecipients";
 import { invokePlugin } from "./pluginClient";
 import { FileTypeIcon } from '@/components/FileTypeIcon';
-import { Check, CircleMinus, CircleX, Clock, ExternalLink } from 'lucide-react-native';
+import { Check, CircleMinus, CircleX, Clock, ExternalLink, Settings, ChevronDown } from 'lucide-react-native';
 import { prStatusVisual } from '@/session/prStatusVisual';
 import { formatByteSize } from '@cindy/maker-shared/file-preview';
 
@@ -239,14 +239,28 @@ function CardControls({
   // Non-mail cards read like Desktop's: a title (the card's own link when it has one), quiet
   // detail lines, and compact buttons. Mail cards keep their editor layout.
   const compact = !mail && !legacyMail;
-  const lines = compact && text ? text.split("\n").map((line) => line.trim()).filter(Boolean) : [];
+  const projectedLines = compact && text ? text.split("\n").map((line) => line.trim()).filter(Boolean) : [];
+  // The GitHub card has a stable action vocabulary. Keep its settings controls together
+  // instead of mixing them into the footer. Unknown/legacy cards retain the generic layout.
+  const hasLegacySettings = items.some(action => ['prset:rename', 'prset:follow', 'prset:archive'].includes(action.id) && !action.toggle);
+  const settingsAction = compact && !hasLegacySettings && projectedLines.length > 0 && pluginId === 'cindy-github'
+    ? items.find(action => action.id === 'prui:settings') : undefined;
+  const settingsOpen = !!settingsAction && items.some(action => action.toggle);
+  const modelChoices = settingsOpen ? items.filter(action => ['prset:modelTask', 'prset:model'].includes(action.id)) : [];
+  const modelPicker = settingsOpen ? items.find(action => action.id === 'prset:modelPick') : undefined;
+  // Rich projection removes control text but retains the panel heading and model description,
+  // in document order after the PR summary. Keep the host's language, including older hosts.
+  const settingsLineCount = settingsOpen ? 1 + (modelChoices.length === 2 ? (modelPicker ? 1 : 2) : 0) : 0;
+  const settingsLines = settingsLineCount && projectedLines.length > settingsLineCount
+    ? projectedLines.slice(-settingsLineCount) : [];
+  const lines = settingsLines.length ? projectedLines.slice(0, -settingsLineCount) : projectedLines;
   const titleLink = lines.length ? items.find((action) => action.url && !action.disabled && action.label === lines[0]) : undefined;
   const titleHost = titleLink?.url ? linkHost(titleLink.url) : undefined;
   // A PR link leads with the app's own PR icon in its status colour (as on the home task row);
   // other links end with a quiet external-link mark.
   const titlePr = titleLink?.url && /^https:\/\/(?:www\.)?github\.com\/[^/]+\/[^/]+\/pull\/\d+/.test(titleLink.url)
     ? prStatusVisual(titleLink.prState ?? prStatus.find((slot) => slot.key === githubPrKeyOfUrl(titleLink.url!))?.status?.status ?? null, colors) : undefined;
-  const buttons = (history ? [] : items).filter((action) => !action.toggle && action !== titleLink);
+  const buttons = (history ? [] : items).filter((action) => !action.toggle && action !== titleLink && action !== settingsAction && !modelChoices.includes(action) && action !== modelPicker);
   const { getAccessToken } = useAuth();
   const readonly = history || ['sent', 'sending', 'unconfirmed', 'deleting', 'deleted'].includes(mail?.state ?? '');
   const [countdownNow, setCountdownNow] = useState(Date.now);
@@ -584,7 +598,8 @@ function CardControls({
   return (
     <View style={[styles.root, mail && !history && styles.mailCard]}>
       {lines.length ? (
-        <View style={styles.cardHeader}>
+        <View style={styles.headerRow}>
+        <View style={[styles.cardHeader, styles.headerContent]}>
           {titleLink && titleHost ? (
             <Pressable
               accessibilityRole="link"
@@ -605,6 +620,19 @@ function CardControls({
           {lines.slice(1).map((line, index) => (
             <Text key={index} selectable style={styles.note}>{line}</Text>
           ))}
+        </View>
+        {settingsAction ? <Pressable
+          accessibilityRole="button"
+          accessibilityLabel={settingsAction.label}
+          accessibilityState={{ expanded: settingsOpen }}
+          disabled={settingsAction.disabled || busy || unknown || status !== "online"}
+          onPress={() => choose(settingsAction)}
+          hitSlop={6}
+          style={({ pressed }) => [styles.settingsButton, pressed && styles.pressed]}
+        >
+          {settingsOpen ? <View pointerEvents="none" style={styles.settingsButtonActive} /> : null}
+          <Settings size={iconSize.md} strokeWidth={iconStroke.regular} color={settingsOpen ? colors.textPrimary : colors.textTertiary} />
+        </Pressable> : null}
         </View>
       ) : null}
       {history ? <Pressable accessibilityRole="button" accessibilityState={{ expanded: historyExpanded }} onPress={() => setHistoryExpanded(!historyExpanded)}>
@@ -717,8 +745,10 @@ function CardControls({
           </View>
         ) : null}
         {prStatus.map((slot) => <PrStatusRow key={slot.key} slot={slot} />)}
+        {items.some(action => action.toggle) || modelChoices.length ? <View style={settingsOpen ? styles.settingsPanel : styles.root}>
+        {settingsLines[0] ? <Text style={styles.sectionLabel}>{settingsLines[0]}</Text> : null}
         {(history ? [] : items).filter((action) => action.toggle).map((action) => (
-          <View key={action.id} style={styles.toggleRow}>
+          <View key={action.id} style={[styles.toggleRow, settingsOpen && styles.settingRow]}>
             <View style={styles.toggleText}>
               <Text style={styles.label}>{action.toggle!.title}</Text>
               {action.toggle!.hint ? <Text style={styles.note}>{action.toggle!.hint}</Text> : null}
@@ -731,6 +761,30 @@ function CardControls({
             />
           </View>
         ))}
+        {modelChoices.length ? <View style={styles.modelSection}>
+          {settingsLines[1] ? <Text style={styles.settingLabel}>{settingsLines[1]}</Text> : null}
+          {settingsLines[2] ? <Text style={styles.note}>{settingsLines[2]}</Text> : null}
+          <View style={styles.modelChoices}>
+            {modelChoices.map(action => {
+              const selected = action.id === (modelPicker ? 'prset:model' : 'prset:modelTask');
+              return <Pressable key={action.id} accessibilityRole="radio"
+                accessibilityLabel={action.label} accessibilityState={{ checked: selected }}
+                disabled={action.disabled || busy || unknown || status !== 'online'}
+                onPress={() => choose(action)}
+                style={({ pressed }) => [styles.modelChoice, selected && styles.modelChoiceSelected, pressed && styles.pressed]}>
+                <Text style={[styles.settingLabel, !selected && styles.quietLabel]}>{action.label}</Text>
+              </Pressable>;
+            })}
+          </View>
+          {modelPicker ? <Pressable accessibilityRole="button" accessibilityLabel={modelPicker.label}
+            disabled={modelPicker.disabled || busy || unknown || status !== 'online'}
+            onPress={() => choose(modelPicker)}
+            style={({ pressed }) => [styles.modelPicker, pressed && styles.pressed]}>
+            <Text style={[styles.settingLabel, styles.headerContent]}>{modelPicker.label}</Text>
+            <ChevronDown size={iconSize.sm} strokeWidth={iconStroke.regular} color={colors.textSecondary} />
+          </Pressable> : null}
+        </View> : null}
+        </View> : null}
         {buttons.length || live ? <View style={[styles.actions, compact && styles.compactActions]}>
           {buttons.map((action) => {
             const sendNow = !!mail?.pendingSend && action.id === `mail:now:${mail.key}`;
@@ -966,7 +1020,21 @@ const makeStyles = (c: ThemeColors) =>
     compactLabel: { fontSize: typeScale.bodySmall, lineHeight: lineHeight.bodySmall },
     liveEnd: { marginLeft: "auto" },
     compactFooter: { gap: spacing.xs },
-    cardHeader: { gap: 2 },
+    headerRow: { flexDirection: 'row', alignItems: 'flex-start', gap: spacing.sm },
+    headerContent: { flex: 1, minWidth: 0 },
+    cardHeader: { gap: spacing.xs },
+    // Match Desktop's 32px gear frame; hitSlop keeps a 44px touch target.
+    settingsButton: { width: 32, height: 32, borderRadius: radius.pill, alignItems: 'center', justifyContent: 'center' },
+    settingsButtonActive: { position: 'absolute', top: 0, right: 0, bottom: 0, left: 0, borderRadius: radius.pill, backgroundColor: c.textPrimary, opacity: 0.07 },
+    settingsPanel: { borderTopWidth: StyleSheet.hairlineWidth, borderColor: c.border, marginTop: spacing.sm, paddingTop: spacing.md },
+    sectionLabel: { color: c.textTertiary, fontSize: typeScale.footnote, lineHeight: lineHeight.caption, fontWeight: fontWeight.semibold, marginBottom: spacing.xs },
+    settingRow: { paddingVertical: spacing.md, alignItems: 'flex-start', borderBottomWidth: StyleSheet.hairlineWidth, borderColor: c.border },
+    settingLabel: { color: c.textPrimary, fontSize: typeScale.bodySmall, lineHeight: lineHeight.bodySmall, fontWeight: fontWeight.medium },
+    modelSection: { gap: spacing.sm, paddingTop: spacing.md },
+    modelChoices: { flexDirection: 'row', padding: spacing.xs, gap: spacing.xs, backgroundColor: c.surfaceChip, borderRadius: radius.pill },
+    modelChoice: { flex: 1, minWidth: 0, minHeight: 44, padding: spacing.sm, alignItems: 'center', justifyContent: 'center', borderRadius: radius.pill },
+    modelChoiceSelected: { backgroundColor: c.surfaceElevated },
+    modelPicker: { flexDirection: 'row', alignItems: 'center', gap: spacing.sm, minHeight: 44, padding: spacing.md, borderWidth: StyleSheet.hairlineWidth, borderColor: c.border, borderRadius: radius.pill },
     cardTitle: { color: c.textPrimary, fontSize: typeScale.body, lineHeight: lineHeight.body, fontWeight: fontWeight.semibold },
     titleRow: { flexDirection: "row", alignItems: "flex-start", alignSelf: "flex-start", maxWidth: "100%", gap: 6 },
     titleText: { flexShrink: 1 },

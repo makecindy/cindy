@@ -19,7 +19,7 @@ vi.mock('@/components/FileTypeIcon', () => ({ FileTypeIcon: () => null }));
 vi.mock('lucide-react-native', async () => {
   const { createElement: el } = await import('react');
   const icon = (name: string) => () => el('i', { 'data-icon': name });
-  return Object.fromEntries(['ExternalLink', 'GitPullRequest', 'GitMerge', 'GitPullRequestClosed', 'GitPullRequestDraft', 'Check', 'CircleMinus', 'CircleX', 'Clock'].map((name) => [name, icon(name)]));
+  return Object.fromEntries(['Settings', 'ChevronDown', 'ExternalLink', 'GitPullRequest', 'GitMerge', 'GitPullRequestClosed', 'GitPullRequestDraft', 'Check', 'CircleMinus', 'CircleX', 'Clock'].map((name) => [name, icon(name)]));
 });
 
 const h = vi.hoisted(() => ({ invoke: vi.fn(), pick: vi.fn(), resolve: vi.fn(), inject: vi.fn(), web: {} as any, mode: 'light' }));
@@ -33,11 +33,18 @@ vi.mock("react-native", () => {
       children,
       onPress,
       disabled,
+      accessibilityLabel,
+      accessibilityRole,
+      accessibilityState,
     }: {
       children?: ReactNode;
       onPress(): void;
       disabled: boolean;
-    }) => createElement("button", { onClick: onPress, disabled }, children),
+      accessibilityLabel?: string;
+      accessibilityRole?: string;
+      accessibilityState?: { checked?: boolean; expanded?: boolean };
+    }) => createElement("button", { onClick: onPress, disabled, 'aria-label': accessibilityLabel,
+      role: accessibilityRole, 'aria-checked': accessibilityState?.checked, 'aria-expanded': accessibilityState?.expanded }, children),
     Modal: ({
       children,
       visible,
@@ -122,6 +129,45 @@ it('shows desktop card text as plain text without its Markdown escapes', () => {
 });
 
 describe("rich plugin card hints", () => {
+  // Unit regression: the merged PR settings were flattened into the summary/footer. Existing
+  // tests cover switches but not model choice state or the settings disclosure. Render the real
+  // component with a rich merged card and verify accessible state + unchanged remote actions.
+  it('groups merged PR settings and routes the model and disclosure controls to the host', async () => {
+    h.invoke.mockImplementation(async (_d: string, _c: string, args: any[]) => {
+      if (args[0].collectionId === 'plugin-results') return { effects: [] };
+      return { result: { confirms: [] } };
+    });
+    const container = document.createElement('div'), root = createRoot(container);
+    unmount = () => act(() => root.unmount());
+    const data = { pluginId: 'cindy-github', revision: '1', items: [
+      { id: 'prui:settings', label: 'Hide PR settings', disabled: false },
+      { id: 'prset:archive', label: 'Archive', disabled: false, toggle: { on: true, title: 'Archive after merge' } },
+      { id: 'prset:modelTask', label: 'Follow task', disabled: false },
+      { id: 'prset:model', label: 'Custom (current)', disabled: false },
+      { id: 'prset:modelPick', label: 'Change model: Sonnet', disabled: false },
+    ] };
+    await act(async () => root.render(createElement(PluginCardActions, { deviceId: 'device', sessionId: 's', callId: 'c',
+      text: '#42 Fix layout\no/r · Merged\nfeature → main\nPR settings\nFollow-up model', data })));
+    expect(container.querySelector('[aria-expanded=true]')?.getAttribute('aria-label')).toBe('Hide PR settings');
+    expect(container.querySelector('[role=radio][aria-checked=true]')?.textContent).toBe('Custom (current)');
+    expect(container.textContent?.indexOf('Archive after merge')).toBeLessThan(container.textContent!.indexOf('Follow-up model'));
+    for (const [label, actionId] of [['Change model: Sonnet', 'prset:modelPick'], ['Hide PR settings', 'prui:settings']]) {
+      await act(async () => container.querySelector<HTMLButtonElement>(`[aria-label="${label}"]`)!.click());
+      expect(h.invoke).toHaveBeenCalledWith('device', expect.any(String), [expect.objectContaining({ actionId })], expect.any(Object));
+    }
+    await act(async () => root.render(createElement(PluginCardActions, { deviceId: 'device', sessionId: 's', callId: 'c',
+      text: '#42 Fix layout\no/r · Merged\nPR settings\nFollow-up model\nUses the task model',
+      data: { ...data, revision: '2', items: data.items.filter(item => item.id !== 'prset:modelPick') } })));
+    expect(container.querySelector('[role=radio][aria-checked=true]')?.textContent).toBe('Follow task');
+    expect(container.textContent?.indexOf('Archive after merge')).toBeLessThan(container.textContent!.indexOf('Uses the task model'));
+    await act(async () => root.render(createElement(PluginCardActions, { deviceId: 'device', sessionId: 's', callId: 'c',
+      text: '#42 Fix layout\no/r · Merged',
+      data: { ...data, revision: '3', items: [{ id: 'prui:settings', label: 'PR settings', disabled: false }] } })));
+    expect(container.querySelector('[aria-expanded=false]')?.getAttribute('aria-label')).toBe('PR settings');
+    expect(container.querySelector('[role=radio]')).toBeNull();
+    expect(container.textContent).not.toContain('Follow-up model');
+  });
+
   it('draws PR checks, a live state, a primary action, a link by its host and settings as switches', async () => {
     const dispatch = vi.fn(async (_input: unknown) => ({ effects: [] }));
     h.invoke.mockImplementation(async (_d: string, _c: string, args: any[]) => {
