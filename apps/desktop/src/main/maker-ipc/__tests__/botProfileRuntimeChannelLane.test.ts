@@ -9,6 +9,7 @@ vi.mock('../../localDb/client/current.js', () => ({ getDbClient: () => ({ drizzl
 } } }) }));
 
 import { hydrateBotProfileRuntime } from '../botProfileRuntime';
+import { resolveMemoryScopeKey } from '@cindy/maker-core';
 import type { MakerSessionCreateOpts } from '../sessionRequest';
 import { BOT_IM_CHANNELS_VENDOR_KEY, type BotImChannel } from '../../../shared/botImConnection';
 
@@ -214,6 +215,10 @@ describe('IM channel lanes hydrate the full Bot profile', () => {
     const groupSnapshot = await hydrateBotProfileRuntime(group, deps, { persistSnapshot: false });
     expect(group.botRuntimeProfile?.projectContext).toBeUndefined();
     expect(groupSnapshot?.disabledToolsets).toEqual(['browser', 'docs']);
+    // ...but shares the teammate's one project memory, not the old teammate store.
+    expect(group.makerMemoryEnabled).toBe(true);
+    expect(group.makerMemoryScopeKey).toBe(await resolveMemoryScopeKey('/bots/bot/workspace'));
+    expect(deps.readMemoryIndex).not.toHaveBeenCalled();
 
     seed('canonical', null, narrow);
     const classic = { id: 'main', agentKind: 'pi', workingDir: '/bots/bot/workspace', model: 'm' } as MakerSessionCreateOpts;

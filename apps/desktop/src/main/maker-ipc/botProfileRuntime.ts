@@ -3,7 +3,7 @@ import { buildTeammateGuide as buildBotCapabilityContextPrompt } from './teammat
 import { BOT_DENIED_TOOLS_VENDOR_KEY, effectiveBotSystemSkillsOff } from '../../shared/botSystemSkills.js';
 import { teammateDeniedTools } from '@cindy/mcps';
 import { and, desc, eq, inArray } from 'drizzle-orm';
-import { buildBotMemoryScopeKey } from '@cindy/maker-core';
+import { buildBotMemoryScopeKey, resolveMemoryScopeKey } from '@cindy/maker-core';
 import { createHash, randomUUID } from 'node:crypto';
 import path from 'node:path';
 
@@ -621,11 +621,16 @@ export async function hydrateBotProfileRuntime(
   // Maker Memory switch. The profile can still explicitly disable its own memory.
   // A V2 teammate uses its project's memory like an ordinary task, still switched
   // by the teammate's own memory setting rather than the global one.
-  if (projectContext && opts.id) botLearningTracker.markProjectTeammate(opts.id);
-  const memoryEngineEnabled = !projectContext && config.memory !== false;
-  opts.makerMemoryEnabled = projectContext ? config.memory !== false : memoryEngineEnabled;
+  // Every V2 lane (group and plan lanes too, wherever they run) shares that one project memory.
+  const projectMode = !!workspaceDir && readBotProjectMode(config);
+  if (projectMode && opts.id) botLearningTracker.markProjectTeammate(opts.id);
+  const memoryEngineEnabled = !projectMode && config.memory !== false;
+  opts.makerMemoryEnabled = projectMode ? config.memory !== false : memoryEngineEnabled;
   const botMemoryScopeKey = buildBotMemoryScopeKey(row.botId);
   if (memoryEngineEnabled) opts.makerMemoryScopeKey = botMemoryScopeKey;
+  else if (projectMode && !projectContext && opts.makerMemoryEnabled) {
+    opts.makerMemoryScopeKey = await resolveMemoryScopeKey(workspaceDir);
+  }
   const memoryActive = memoryEngineEnabled;
   let botMemoryIndex: string | null = '';
   if (memoryActive && deps.readMemoryIndex) {
