@@ -13,18 +13,22 @@ import { BotSessionTaskResultCard } from '@/features/bots/BotSessionTaskResultCa
 
 import { BotAuthorizationCardView } from '@/features/bots/BotAuthorizationCard';
 import { useState, type ReactNode } from 'react';
+import type { PluginModelRouteNote } from '@/lib/ccAgent.types';
 import {
   ArrowLeftRight,
   ArrowRight,
   Check,
   ChevronDown,
   ChevronRight,
+  Info,
   Layers,
+  Plug,
   RefreshCw,
   Target,
   X,
 } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
+import { summarizeContextTextEstimate } from '@cindy/maker-shared/session-controls';
 import { useNavigate } from 'react-router-dom';
 
 import {
@@ -61,6 +65,7 @@ import { getSessionDeviceId } from '@/features/device-link/remoteProjectsStore';
 
 interface SystemCardProps {
   cardType:
+    | 'plugin-model-route'
     | 'voice-call'
     | 'voice-call-task'
     | 'mcp-app'
@@ -236,6 +241,9 @@ function ContextCard({ data }: { data?: Record<string, unknown> }) {
   }
 
   const categories = Array.isArray(usage.categories) ? usage.categories : [];
+  const estimateRows = summarizeContextTextEstimate(usage.textEstimate, {
+    translate: (key, fallback, params) => t(key.replace('session.presentation.controls.context.', 'chat.systemCard.context.'), { defaultValue: fallback, ...params }),
+  });
   const mcpTools = Array.isArray(usage.mcpTools) ? usage.mcpTools : [];
   const memoryFiles = Array.isArray(usage.memoryFiles) ? usage.memoryFiles : [];
   const agents = Array.isArray(usage.agents) ? usage.agents : [];
@@ -403,6 +411,9 @@ function ContextCard({ data }: { data?: Record<string, unknown> }) {
         className="mt-2 flex h-[7px] w-full overflow-hidden rounded-full bg-[var(--msg-tool-card-bg)]"
         aria-label={t('chat.systemCard.context.barAria')}
       >
+        {visibleCategories.length === 0 && totalTokens > 0 && (
+          <div className="h-full bg-[var(--msg-tool-text)]" style={{ width: `${pct}%` }} />
+        )}
         {visibleCategories
           .filter((cat) => !cat.isDeferred)
           .map((cat) => (
@@ -496,6 +507,24 @@ function ContextCard({ data }: { data?: Record<string, unknown> }) {
             </div>
           )}
 
+          {estimateRows.length > 0 && (
+            <div className="mt-3 space-y-1.5 border-t border-[var(--msg-tool-card-border)] pt-3">
+              {estimateRows.map((row, index) => (
+                index === 0 ? (
+                  <div key={row.label} className="space-y-1">
+                    <div className={labelClass}>{row.label}</div>
+                    <p className="text-12 text-[var(--msg-tool-text)]">{row.value}</p>
+                  </div>
+                ) : (
+                  <div key={row.label} className="flex items-start justify-between gap-3 text-12 text-[var(--msg-tool-text)]">
+                    <span className="min-w-0 break-words">{row.label}</span>
+                    <span className="shrink-0 tabular-nums">{row.value}</span>
+                  </div>
+                )
+              ))}
+            </div>
+          )}
+
           {(usage.messageBreakdown || usage.apiUsage) && (
             <div className="mt-3 space-y-3 border-t border-[var(--msg-tool-card-border)] pt-3">
               {usage.messageBreakdown && (
@@ -558,6 +587,7 @@ interface ContextDetailRow {
 }
 
 interface ContextUsageData {
+  textEstimate?: unknown;
   categories: Array<{ name: string; tokens: number; color: string; isDeferred?: boolean }>;
   totalTokens: number;
   maxTokens: number;
@@ -836,6 +866,36 @@ function GoalCompleteCard({ data }: { data?: Record<string, unknown> }) {
         <span>{label}</span>
       </div>
       <div className="h-px flex-1 bg-[var(--msg-tool-card-border)]" />
+    </div>
+  );
+}
+
+/**
+ * 新任务「让插件选」的结果：第一条消息下方一行，左对齐、次级小字(设计稿 2026-10-31 r1)。
+ * routed 说插件为这个任务选了什么；kept 说明插件没给可用结果、沿用了原来的模型。
+ */
+function PluginModelRouteCard({ data }: { data?: Partial<PluginModelRouteNote> }) {
+  const { t } = useTranslation();
+  if (!data?.pluginName || !data.modelName) return null;
+  const model = data.effort
+    ? `${data.modelName} · ${t(`effortLevels.${data.effort}`, { defaultValue: data.effort })}`
+    : data.modelName;
+  const strong = (text: string) => <span className="font-medium text-[var(--text-secondary)]">{text}</span>;
+  return (
+    <div className="flex items-start gap-2 py-0.5 text-12 leading-[1.5] text-[var(--text-tertiary)]">
+      {data.outcome === 'routed' ? <Plug size={13} className="mt-[3px] shrink-0" aria-hidden /> : <Info size={13} className="mt-[3px] shrink-0" aria-hidden />}
+      <span className="min-w-0">
+        {data.outcome === 'routed' ? (
+          <>
+            {strong(data.pluginName)} {t('chat.pluginModelRoute.routed')} {strong(model)}
+            {data.reason ? ` · ${data.reason}` : ''}
+          </>
+        ) : (
+          <>
+            {t(`chat.pluginModelRoute.kept.${data.why ?? 'no-opinion'}`, { plugin: data.pluginName })} {strong(model)}
+          </>
+        )}
+      </span>
     </div>
   );
 }
@@ -1500,6 +1560,8 @@ export function SystemCard({
       return <GoalCompleteCard data={data} />;
     case 'goal-resumed':
       return <GoalResumedCard data={data as { kind?: string } | undefined} />;
+    case 'plugin-model-route':
+      return <PluginModelRouteCard data={data as Partial<PluginModelRouteNote> | undefined} />;
     case 'auto-resume': {
       // 同一个卡类型承载两套自愈:带中断上下文的是本份的「重连」记录,没有的是 silent-stop
       // 的「已自动继续」分隔条 —— 后者保持原形态原文案,不被重连三态改写(copilot review)。

@@ -7,6 +7,7 @@ const env = vi.hoisted(() => ({
   generation: 1,
   root: '',
   active: true,
+  capabilities: null as string | null,
   pending: false,
   notify: vi.fn(),
   cancel: vi.fn(async () => true),
@@ -22,14 +23,20 @@ vi.mock('../../localDb/client/current.js', () => ({
     drizzle: {
       select: () => ({
         from: () => ({
+          leftJoin: () => ({
+            where: () => ({
+              limit: async () => [
+                {
+                  id: 'bot-one',
+                  status: env.active ? 'active' : 'deleted',
+                  sessionId: 'canonical-one',
+                  capabilities: env.capabilities,
+                },
+              ],
+            }),
+          }),
           where: () => ({
-            limit: async () => [
-              {
-                id: 'bot-one',
-                status: env.active ? 'active' : 'deleted',
-                sessionId: 'canonical-one',
-              },
-            ],
+            limit: async () => [{ id: 'bot-one', sessionId: 'canonical-one' }],
           }),
         }),
       }),
@@ -69,6 +76,7 @@ beforeEach(async () => {
   env.owner = 'owner-one';
   env.generation = 1;
   env.active = true;
+  env.capabilities = null;
   env.pending = false;
   env.notify.mockClear();
   env.cancel.mockReset().mockResolvedValue(true);
@@ -152,6 +160,18 @@ describe('Todo public access', () => {
       sessionId: 'canonical-one',
       requestId: 'request-first',
     });
+  });
+  // cindy-bots-runtime.md §6「伙伴技能分层」: with the Todos system Skill off, an owner click must not hand the Todo to the
+  // teammate (its prompt and tools are gone too). Before this, act() dispatched as usual. Data stays editable.
+  it('refuses to dispatch a Todo action while the Todos system Skill is off, keeping the Todo editable', async () => {
+    const send = vi.fn(async () => ({ ok: true }));
+    configureBotTodoDispatch(send);
+    env.capabilities = JSON.stringify({ systemSkillsOff: ['todo'] });
+    const access = await todoAccess('bot-one'),
+      todo = await access.patch(patch);
+    await expect(access.act(todo.id, todo.revision, 'request-off')).rejects.toMatchObject({ code: 'SYSTEM_SKILL_OFF' });
+    expect(send).not.toHaveBeenCalled();
+    expect((await access.list()).items[0]).toMatchObject({ id: todo.id, revision: todo.revision, action: null });
   });
   it('does not blindly replay an uncertain dispatch', async () => {
     const send = vi.fn(async () => {

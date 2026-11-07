@@ -4,6 +4,10 @@ export default {
   real: 'RegionScreenshotOverlay, ScrollCaptureOverlay, LiveCapturePanel, ScrollCapture, CaptureRecorder, real Chromium canvas/MediaRecorder and GIF encoding',
   notCovered: 'Native screen acquisition, global keyboard sampling, macOS permissions and native save dialogs; frame source is synthetic.',
   cases: {
+    locale: { about: 'An open capture updates its translation label and export after the Main locale changes, retaining annotations' },
+    'locale-editor': { about: 'An open editor follows the Main locale without replacing its document or annotations' },
+    translation: { about: 'Follow UI language, choose a remembered target, recover from save failure, and export the chosen language' },
+    'translation-editor': { about: 'The independent image editor uses the same translation controls and export language' },
     snapping: { about: 'Correct a transparent window guess, hover adjacent elements, cycle hierarchy and click to select' },
     default: { about: 'Scroll overlapping text, finish, export the actual stitched pixels' },
     idle: { about: 'Repainting before the first scroll keeps the gesture hint, then scrolling still exports a long image' },
@@ -11,10 +15,105 @@ export default {
     inactive: { about: 'Only the display under the pointer shows capture controls' },
     drag: { about: 'Move the top toolbar horizontally without selecting pixels or leaving screen bounds' },
     video: { about: 'Record, annotate, pause/resume, save and decode a WebM' },
+    'audio-options': { about: 'Speaker and microphone default off and toggle independently by mouse and keyboard, in every UI language' },
+    'silent-video': { about: 'Start with default options and verify no audio is sampled or included in playback' },
     gif: { about: 'Record, annotate, pause/resume, save and decode an animated GIF' },
   },
   async ready(page) { await page.locator('canvas').first().waitFor(); },
   async check(page, ui) {
+    if (ui.case.startsWith('locale')) {
+      const editor = ui.case.endsWith('-editor');
+      if (!editor) {
+        await page.mouse.move(100, 100); await page.mouse.down();
+        await page.mouse.move(580, 340, { steps: 5 }); await page.mouse.up();
+      }
+      await page.getByRole('button', { name: `${await ui.t('regionScreenshot.tools.text')} (T)`, exact: true }).click();
+      const box = await page.locator('canvas').first().boundingBox();
+      await page.mouse.click(editor ? box.x + 30 : 200, editor ? box.y + 30 : 200);
+      await page.locator('textarea').fill('Keep this annotation');
+      await page.getByRole('button', { name: await ui.t('regionScreenshot.cindy') }).click();
+      const name = (locale, language) => new Intl.DisplayNames([locale], { type: 'language' }).of(language);
+      const oldLabel = await ui.t('regionScreenshot.translation.action', { language: name(ui.locale, ui.locale) });
+      await page.evaluate(() => window.captureLocaleChanged({ token: 'stale', locale: 'ja' }));
+      await page.getByRole('menuitem', { name: oldLabel, exact: true }).waitFor();
+      await page.evaluate(token => window.captureLocaleChanged({ token, locale: 'ja' }), editor ? 'editor' : 'fixture');
+      const label = await ui.t('regionScreenshot.translation.action', { lng: 'ja', language: name('ja', 'ja') });
+      const action = page.getByRole('menuitem', { name: label, exact: true });
+      await action.waitFor();
+      assert.equal(await page.locator('textarea').inputValue(), 'Keep this annotation');
+      await ui.capture('locale-synchronized');
+      await action.click();
+      assert.equal(await page.evaluate(() => window.captureQa.exportedLanguage), 'ja');
+      return;
+    }
+    if (ui.case.startsWith('translation')) {
+      if (ui.case === 'translation') {
+        await page.mouse.move(100, 100); await page.mouse.down();
+        await page.mouse.move(580, 340, { steps: 5 }); await page.mouse.up();
+      }
+      // Review regression: closing Cindy must let the current text annotation
+      // continue receiving actual keystrokes in both capture and editor.
+      await page.getByRole('button', { name: `${await ui.t('regionScreenshot.tools.text')} (T)`, exact: true }).click();
+      const canvasBounds = await page.locator('canvas').first().boundingBox();
+      await page.mouse.click(ui.case === 'translation' ? 200 : canvasBounds.x + 30,
+        ui.case === 'translation' ? 200 : canvasBounds.y + 30);
+      const text = page.locator('textarea');
+      await text.fill('Before');
+      await page.getByRole('button', { name: await ui.t('regionScreenshot.cindy') }).click();
+      await page.getByRole('menu').waitFor();
+      await page.keyboard.press('Escape');
+      assert.ok(await text.evaluate(el => document.activeElement === el), 'closing Cindy restores the text annotation focus');
+      await page.keyboard.type(' after');
+      assert.equal(await text.inputValue(), 'Before after');
+      const trigger = page.getByRole('button', { name: await ui.t('regionScreenshot.cindy') });
+      await trigger.focus();
+      await page.keyboard.press('Enter');
+      await page.getByRole('menu').waitFor();
+      await page.keyboard.press('Escape');
+      assert.ok(await trigger.evaluate(el => document.activeElement === el), 'keyboard dismissal returns to Cindy');
+      const languageName = (tag) => new Intl.DisplayNames([ui.locale], { type: 'language' }).of(tag);
+      const uiTag = ['zh-CN', 'zh-Hans-x-lzh'].includes(ui.locale) ? 'zh-Hans' : ['zh-TW', 'zh-Hant-x-lzh'].includes(ui.locale) ? 'zh-Hant' : ui.locale;
+      const action = async (tag) => page.getByRole('menuitem', { name: await ui.t('regionScreenshot.translation.action', { language: languageName(tag) }), exact: true });
+      const openPicker = async () => page.getByRole('menuitem', { name: await ui.t('regionScreenshot.translation.targetLanguage'), exact: true }).click();
+      await page.getByRole('button', { name: await ui.t('regionScreenshot.cindy') }).click();
+      await (await action(uiTag)).waitFor();
+      await ui.capture('translation-default');
+      await openPicker();
+      const menuBounds = await page.getByRole('menu', { name: await ui.t('regionScreenshot.cindy') }).boundingBox();
+      const viewportWidth = await page.evaluate(() => window.innerWidth);
+      assert.ok(menuBounds && menuBounds.x >= 0 && menuBounds.x + menuBounds.width <= viewportWidth,
+        'the language menu stays inside the editor after translated controls wrap');
+      await ui.capture('translation-languages');
+      await page.getByRole('menuitemradio', { name: languageName('fr'), exact: true }).click();
+      await (await action('fr')).waitFor();
+      assert.equal(await page.evaluate(() => window.captureQa.translationPreference), 'fr');
+      assert.equal(await page.evaluate(() => window.captureQa.exportedAction), '', 'changing language never sends');
+      await openPicker();
+      await page.getByRole('menuitemradio', { name: await ui.t('regionScreenshot.translation.followUi'), exact: true }).click();
+      await (await action(uiTag)).waitFor();
+      await openPicker();
+      await page.evaluate(() => { window.captureQa.translationSaveFails = true; });
+      await page.getByRole('menuitemradio', { name: languageName('de'), exact: true }).click();
+      await page.getByRole('alert').waitFor();
+      assert.equal(await page.evaluate(() => window.captureQa.translationPreference), 'ui');
+      await ui.capture('translation-save-error');
+      await page.evaluate(() => { window.captureQa.translationSaveFails = false; });
+      await page.getByRole('menuitemradio', { name: languageName('de'), exact: true }).click();
+      await (await action('de')).waitFor();
+      await openPicker();
+      await page.keyboard.press('Escape');
+      await (await action('de')).waitFor();
+      assert.equal(await page.evaluate(() => window.captureQa.exportedAction), '');
+      await ui.capture('translation-selected');
+      await page.evaluate(() => window.translationChanged({ token: 'previous', preference: 'fr' }));
+      await (await action('de')).waitFor();
+      await page.evaluate(token => window.translationChanged({ token, preference: 'fr' }),
+        ui.case === 'translation' ? 'fixture' : 'editor');
+      await (await action('fr')).click();
+      assert.equal(await page.evaluate(() => window.captureQa.exportedAction), 'translate');
+      assert.equal(await page.evaluate(() => window.captureQa.exportedLanguage), 'fr');
+      return;
+    }
     if (ui.case === 'snapping') {
       await page.getByText('180 × 140', { exact: true }).waitFor();
       await ui.capture('first-element');
@@ -66,6 +165,15 @@ export default {
       await (await button('regionScreenshot.live.scroll')).click();
       assert.equal(await (await button('regionScreenshot.live.startScroll')).count(), 0, 'dragging the toolbar does not create a capture selection');
       assert.equal(await page.evaluate(() => window.captureQa.frames), 0);
+      // The live capture mode bar retains all modes at the left edge.
+      await (await button('regionScreenshot.live.image')).click();
+      await page.mouse.move(100, 100); await page.mouse.down();
+      await page.mouse.move(580, 340, { steps: 5 }); await page.mouse.up();
+      await (await button('regionScreenshot.cindy')).click();
+      await page.getByRole('menuitem', { name: await ui.t('regionScreenshot.translation.targetLanguage'), exact: true }).click();
+      const menu = await page.getByRole('menu').boundingBox();
+      assert.ok(menu && menu.x >= 0 && menu.x + menu.width <= ui.viewport.width,
+        `language menu stays on screen at the left toolbar limit: ${JSON.stringify(menu)}`);
       await ui.capture('dragged');
       return;
     }
@@ -88,13 +196,45 @@ export default {
       await page.mouse.move(100, 80); await page.mouse.down();
       await page.mouse.move(580, 320, { steps: 8 }); await page.mouse.up();
       if (ui.case === 'gif') await page.getByRole('button', { name: 'GIF', exact: true }).click();
+      else {
+        assert.equal(await (await button('regionScreenshot.live.systemAudio')).getAttribute('aria-pressed'), 'false');
+        assert.equal(await (await button('regionScreenshot.live.microphone')).getAttribute('aria-pressed'), 'false');
+        if (ui.case === 'video') {
+          await (await button('regionScreenshot.live.systemAudio')).click();
+          await (await button('regionScreenshot.live.microphone')).click();
+        }
+      }
       assert.equal(await page.getByRole('checkbox').count(), 0, 'recording needs no pointer or keystroke settings');
       assert.equal(await page.evaluate(() => window.captureQa.frames), 0);
       await ui.capture('prepare');
+      if (ui.case === 'audio-options') {
+        // User regression: a muted speaker looked unavailable. Exercise the real
+        // button, retain separate microphone state and capture both visual states.
+        const speaker = await button('regionScreenshot.live.systemAudio');
+        const microphone = await button('regionScreenshot.live.microphone');
+        assert.equal(await speaker.isEnabled(), true);
+        const mutedColor = await speaker.evaluate(el => getComputedStyle(el).color);
+        await speaker.click();
+        assert.equal(await speaker.getAttribute('aria-pressed'), 'true');
+        assert.equal(await microphone.getAttribute('aria-pressed'), 'false');
+        assert.notEqual(await speaker.evaluate(el => getComputedStyle(el).color), mutedColor, 'enabling speaker visibly changes its state');
+        await ui.capture('speaker-on');
+        await speaker.click();
+        await microphone.focus(); await page.keyboard.press('Space');
+        assert.equal(await speaker.getAttribute('aria-pressed'), 'false');
+        assert.equal(await microphone.getAttribute('aria-pressed'), 'true');
+        assert.equal(await page.evaluate(() => window.captureAudioQa.options), null, 'selecting sources never starts recording');
+        await ui.capture('microphone-on');
+        await page.keyboard.press('Space');
+        assert.equal(await microphone.getAttribute('aria-pressed'), 'false');
+        return;
+      }
       await (await button('regionScreenshot.live.start')).click();
       await ui.capture('countdown');
       assert.equal(await page.evaluate(() => window.captureQa.frames), 0, 'countdown is not recorded');
       await page.waitForFunction(() => window.captureQa.frames >= 3);
+      assert.deepEqual(await page.evaluate(() => window.captureAudioQa.options), ui.case === 'gif' ? null : { system: ui.case === 'video', microphone: ui.case === 'video' });
+      if (ui.case === 'silent-video') assert.equal(await page.evaluate(() => window.captureAudioQa.reads), 0, 'default recording never reads audio');
       assert.equal(await page.evaluate(() => window.captureQa.keysRequested), false, 'recording does not request keyboard input');
       assert.equal(await page.locator('canvas').count(), 0, 'recording has no permanent thumbnail');
       await ui.capture('compact-controls');
@@ -233,9 +373,12 @@ export default {
     pausedAt = await page.evaluate(() => performance.now());
     await (await button('regionScreenshot.live.pause')).click();
     const frames = await page.evaluate(() => window.captureQa.frames);
+    if (ui.case === 'video') await page.waitForFunction(() => window.captureAudioQa.stopped);
+    const audioReads = await page.evaluate(() => window.captureAudioQa.reads);
     // e2e: cross a real capture tick to prove that the user-visible pause stops sampling.
     await page.waitForTimeout(ui.case === 'video' ? 1600 : 400);
     assert.equal(await page.evaluate(() => window.captureQa.frames), frames);
+    assert.equal(await page.evaluate(() => window.captureAudioQa.reads), audioReads, 'pause stops PCM polling as well as video sampling');
     await ui.capture('paused');
     if (!isScroll) {
       await (await button('regionScreenshot.live.annotate')).click();
@@ -249,6 +392,10 @@ export default {
     await (await button('regionScreenshot.live.resume')).click();
     resumedAt = await page.evaluate(() => performance.now());
     await page.waitForFunction((previous) => window.captureQa.frames >= previous + 3, frames);
+    if (ui.case === 'video') {
+      assert.equal(await page.evaluate(() => window.captureAudioQa.starts), 2, 'resume reacquires the selected audio sources once');
+      assert.ok(await page.evaluate(previous => !window.captureAudioQa.stopped && window.captureAudioQa.reads > previous, audioReads), 'audio resumes with video');
+    }
     await ui.capture('capturing');
     }
     const sampledDuration = await page.evaluate(() => performance.now() - window.captureQa.firstFrameAt) - (resumedAt - pausedAt);
@@ -295,7 +442,7 @@ export default {
       await (await button('regionScreenshot.copy')).click();
       await page.waitForFunction(() => window.captureQa.copied);
       await page.getByRole('status').filter({ hasText: await ui.t('regionScreenshot.live.copied') }).waitFor();
-      if (ui.case === 'video') {
+      if (ui.case === 'video' || ui.case === 'silent-video') {
         await page.waitForFunction(() => document.querySelector('video')?.readyState >= 2);
         assert.ok(await page.locator('video').evaluate(video => Number.isFinite(video.duration) && video.duration > 0), 'finished WebM has a usable timeline');
         const initial = await page.locator('video').evaluate(video => ({ time: video.currentTime, duration: video.duration, paused: video.paused }));
@@ -304,6 +451,15 @@ export default {
         assert.ok(Math.abs(initial.duration * 1000 - sampledDuration) < 750, 'duration excludes countdown and paused time');
         await page.locator('video').evaluate(video => video.play());
         await page.waitForFunction(() => document.querySelector('video').currentTime > 0);
+        if (ui.case === 'silent-video') {
+          const tracks = await page.locator('video').evaluate(video => {
+            const stream = video.captureStream();
+            const count = stream.getAudioTracks().length;
+            stream.getTracks().forEach(track => track.stop());
+            return count;
+          });
+          assert.equal(tracks, 0, 'default recording contains no audio track');
+        }
         await page.locator('video').evaluate(video => { video.pause(); video.currentTime = video.duration / 2; });
         await page.waitForFunction(() => { const video = document.querySelector('video'); return !video.seeking && Math.abs(video.currentTime - video.duration / 2) < 0.05; });
         await page.locator('video').evaluate(video => { video.currentTime = 0; });
@@ -324,6 +480,27 @@ export default {
       await (await button('regionScreenshot.save')).click();
       await page.waitForFunction(() => window.captureQa.saved?.length > 0);
       const clip = await page.evaluate(() => ({ saved: Array.from(window.captureQa.saved), format: window.captureQa.format }));
+      if (ui.case === 'video') {
+        // E2E: exercise the production PCM stream, MediaRecorder, pause and saved
+        // bytes. Previously videos had no audio; recorder fakes cannot prove muxing.
+        const sound = await page.evaluate(async saved => {
+          const context = new AudioContext();
+          try {
+            const decoded = await context.decodeAudioData(new Uint8Array(saved).buffer);
+            const samples = decoded.getChannelData(0);
+            let energy = 0;
+            for (const sample of samples) energy += sample * sample;
+            const tail = samples.subarray(Math.max(0, samples.length - Math.round(decoded.sampleRate * 0.2)));
+            let tailEnergy = 0;
+            for (const sample of tail) tailEnergy += sample * sample;
+            return { rms: Math.sqrt(energy / samples.length), tailRms: Math.sqrt(tailEnergy / tail.length), duration: decoded.duration, stopped: window.captureAudioQa.stopped };
+          } finally { await context.close(); }
+        }, clip.saved);
+        assert.ok(sound.rms > 0.02, 'saved video contains audible PCM');
+        assert.ok(sound.tailRms > 0.02, 'audio captured after resume reaches the saved video');
+        assert.ok(Math.abs(sound.duration * 1000 - sampledDuration) < 750, 'audio excludes countdown and paused time');
+        assert.equal(sound.stopped, true, 'playback releases audio capture');
+      }
       // Decode the saved bytes with a fresh image/video element and Blob URL,
       // independently of the preview's URL, element and decoded state. Electron
       // contexts cannot create browser tabs through Target.createTarget.

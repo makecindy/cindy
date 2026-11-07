@@ -17,7 +17,8 @@
  */
 import { useNavigation } from 'expo-router';
 import { Image } from 'expo-image';
-import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
+import { memo, useCallback,
+  useContext, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import {
   ActivityIndicator,
@@ -33,7 +34,10 @@ import {
 } from 'react-native';
 import { Text } from '@/components/AppText';
 import { ErrorNotice, ErrorNoticeAction } from '@/components/ErrorNotice';
-import { MessageSquarePlus, Pen, Share as ShareIcon, Undo2, X } from 'lucide-react-native';
+import { Download, MessageSquarePlus, Pen, Share as ShareIcon, Undo2,
+  Redo2,
+  X,
+} from 'lucide-react-native';
 import Svg, { Path } from 'react-native-svg';
 import { fontWeight, iconSize, iconStroke, lineHeight, motionDuration, radius, typeScale } from '@/theme';
 import { Gesture, GestureDetector, GestureHandlerRootView } from '@/platform/gestureHandler';
@@ -55,6 +59,15 @@ import type { MobileMediaPlayerStatus } from '@/session/mediaPlayerWebViewHtml';
 import { NativeVideoPlayer } from '@/session/NativeVideoPlayer';
 import { VideoDownloadButton } from '@/session/VideoDownloadButton';
 import {
+  PreviewHeader,
+  PreviewFooter,
+  PreviewIconButton,
+  PREVIEW_FOOTER_ROW_HEIGHT,
+  PREVIEW_HEADER_HEIGHT,
+} from "./PreviewChrome";
+import { previewSourceName } from "@cindy/maker-shared/attachment-preview";
+import { useTheme, useThemedStyles, type ThemeColors } from "@/theme";
+import {
   isDesktopLocalMediaUrl,
   mediaLoadFailureKey,
   type MobileResolvedRemoteMedia,
@@ -73,7 +86,6 @@ import {
   lightboxImageLayers,
   lightboxInitialIndex,
   lightboxPageIndex,
-  lightboxPageLabel,
   lightboxPanRelease,
   lightboxPinchAnchor,
   lightboxPinchOrigin,
@@ -124,7 +136,8 @@ type PageResolveState =
 export interface ImageLightboxAction {
   key: string;
   label: string;
-  icon: React.ComponentType<{ color?: string; size?: number; strokeWidth?: number }>;
+  icon: React.ComponentType<{ color?: string; size?: number; strokeWidth?: number;
+  }>;
   onPress: (image: MobileMessageGalleryImage) => void;
 }
 
@@ -154,7 +167,8 @@ export interface ImageLightboxAnnotationConfig {
     displayUri: string,
     strokes: AnnotationStroke[],
     /** naturalWidth / naturalHeight:查看器已解码的图片尺寸(未加载完成时缺省)。 */
-    context: { mimeType?: string; naturalWidth?: number; naturalHeight?: number },
+    context: { mimeType?: string; naturalWidth?: number; naturalHeight?: number;
+    },
   ) => void | Promise<void>;
   /**
    * 某页的既有笔迹(托盘带标注图再编辑):打开/翻页时叠加显示,进入标注模式
@@ -179,6 +193,8 @@ export interface ImageLightboxProps {
   /** Same-content attachment slots can share a URL; prefer the clicked attachment's identity. */
   initialImageKey?: string;
   onClose(): void;
+  /** The caller owns authorization for an opaque attachment identity. */
+  resolveOpaqueSource?: boolean;
   onResolveRemoteMedia?: ResolveRemoteMediaFn;
   /** 关闭时逐出本次取过的视频(与通用查看器一致;图片缩略图常驻列表不逐出)。 */
   onReleaseRemoteMedia?: (sourceUrl: string, media: MobileResolvedRemoteMedia) => void;
@@ -220,17 +236,32 @@ export const ImageLightbox = memo(function ImageLightbox({
   initialImageKey,
   onClose,
   onResolveRemoteMedia,
+  resolveOpaqueSource = false,
   onReleaseRemoteMedia,
   onShareImage,
   extraActions,
-  showFileHeader,
   annotation,
   autoAnnotate = false,
 }: ImageLightboxProps) {
   const { t } = useTranslation();
+  const styles = useThemedStyles(makeStyles);
   const { width, height } = useWindowDimensions();
   const insets = useSafeAreaInsets();
-  const [videoToolbarHeight, setVideoToolbarHeight] = useState(64);
+  // 图片页铺满整屏,顶栏 / 底栏浮在图上(单击可收起),放大拖动时不被工具栏的位置裁掉。
+  // 只有视频页让出浮动 chrome 的高度,系统播放控件不被底栏压住。
+  const chromeTop = insets.top + PREVIEW_HEADER_HEIGHT;
+  const chromeBottom = insets.bottom + PREVIEW_FOOTER_ROW_HEIGHT;
+  const [zoomCommand, setZoomCommand] = useState<{
+    id: number;
+    action: "fit" | "actual";
+    imageKey?: string;
+  }>({ id: 0, action: "fit" });
+  const requestZoom = (action: "fit" | "actual") =>
+    setZoomCommand((previous) => ({
+      id: previous.id + 1,
+      action,
+      imageKey: images[activeIndex]?.key,
+    }));
   const urls = useMemo(() => images.map((image) => image.url), [images]);
   const initialKeyIndex = initialImageKey ? images.findIndex((image) => image.key === initialImageKey) : -1;
   const initialIndex = initialKeyIndex >= 0 ? initialKeyIndex : lightboxInitialIndex(urls, initialUrl);
@@ -305,6 +336,7 @@ export const ImageLightbox = memo(function ImageLightbox({
     if (images.length === 0) onCloseRef.current();
   }, [images.length]);
   const [strokes, setStrokes] = useState<AnnotationStroke[]>([]);
+  const [redoStrokes, setRedoStrokes] = useState<AnnotationStroke[]>([]);
   // 取消 / 返回回调经 ref 读最新笔迹与文案:它们进入手势 deps(onRequestClose),
   // 不能因每次作画 / 父层重渲染而让整张手势图重建。
   const strokesRef = useRef(strokes);
@@ -320,7 +352,8 @@ export const ImageLightbox = memo(function ImageLightbox({
   const draftLastScreenPointRef = useRef<{ x: number; y: number } | null>(null);
   const discardConfirmOpenRef = useRef(false);
   const activeImageForDraw = images[activeIndex] ?? null;
-  const activeNaturalSize = activeImageForDraw ? naturalSizes[activeImageForDraw.key] ?? null : null;
+  const activeNaturalSize = activeImageForDraw ? (naturalSizes[activeImageForDraw.key] ?? null)
+    : null;
 
   const handleNaturalSize = useCallback((imageKey: string, size: { width: number; height: number }) => {
     setNaturalSizes((prev) => {
@@ -341,6 +374,7 @@ export const ImageLightbox = memo(function ImageLightbox({
     const image = imagesRef.current.find((entry) => entry.key === activeImageKeyForStrokes);
     const initial = image ? annotation?.initialStrokesFor?.(image) : undefined;
     setStrokes(initial ? [...initial] : []);
+    setRedoStrokes([]);
     draftStrokeRef.current = null;
     draftLastScreenPointRef.current = null;
     draftScreenLengthRef.current = 0;
@@ -372,7 +406,8 @@ export const ImageLightbox = memo(function ImageLightbox({
       draftScreenLengthRef.current = 0;
       setDraftStroke(null);
       if (draft && draft.points.length > 0 && !shouldDiscardInterruptedStroke(gestureSucceeded, screenLength)) {
-        setStrokes((prev) => [...prev, draft]);
+          setRedoStrokes([]);
+          setStrokes((prev) => [...prev, draft]);
       }
       return;
     }
@@ -404,7 +439,11 @@ export const ImageLightbox = memo(function ImageLightbox({
   }, [activeNaturalSize, width, height]);
 
   const undoLastStroke = useCallback(() => {
-    setStrokes((prev) => prev.slice(0, -1));
+    const last = strokesRef.current.at(-1);
+    if (last) {
+      setRedoStrokes((previous) => [...previous, last]);
+      setStrokes(strokesRef.current.slice(0, -1));
+    }
     draftStrokeRef.current = null;
     draftLastScreenPointRef.current = null;
     draftScreenLengthRef.current = 0;
@@ -423,6 +462,7 @@ export const ImageLightbox = memo(function ImageLightbox({
     const image = images[activeIndex];
     const initial = image ? annotation?.initialStrokesFor?.(image) : undefined;
     setStrokes(initial ? [...initial] : []);
+    setRedoStrokes([]);
     draftStrokeRef.current = null;
     draftLastScreenPointRef.current = null;
     draftScreenLengthRef.current = 0;
@@ -493,14 +533,15 @@ export const ImageLightbox = memo(function ImageLightbox({
   ) => {
     if (!onResolveRemoteMedia) return;
     const media = image.payload.media;
-    if (media.previewable || !isDesktopLocalMediaUrl(media.url)) return;
+    if (media.previewable ||
+        (!resolveOpaqueSource && !isDesktopLocalMediaUrl(media.url))) return;
     // resolveMap 一律以 gallery 的 trimmed url(image.url)为键:media.url 未 trim,
     // 带空白时会和 renderItem / handleShare 的查键错位。取件请求仍传原始 media.url,
     // 与缩略图路径的队列缓存键保持一致(不产生重复上传)。
     const key = image.url;
     const current = resolveMapRef.current[key];
     if (resolvingImagesRef.current.has(key)) {
-      if (front && !forceRefresh) {
+      if (front && !forceRefresh && !resolveOpaqueSource) {
         // 翻到预取页时仍须提升已有取件;cachedOnly 保证不会新建下载,
         // 不带队列的文件浏览解析器也只读缓存。结果仍由首次请求回填。
         void onResolveRemoteMedia(
@@ -535,19 +576,20 @@ export const ImageLightbox = memo(function ImageLightbox({
     // thumbnail 请求会回落成整张原图下载,装饰性垫底叠加原图主取件就是双下载。
     // forceRefresh 是坏对象自愈路径,不垫可能同源的旧缩略图;取不到缩略图退回
     // spinner(lightboxImageLayers 兜底),不影响原图路径。
-    if (!forceRefresh) {
+    if (!forceRefresh && !resolveOpaqueSource) {
       void onResolveRemoteMedia(
         { kind: media.kind, url: media.url, previewable: media.previewable, thumbnail: true },
         { front: false, cachedOnly: true },
       )
         .then((thumb) => {
           if (!thumb.previewable || !thumb.url) return;
-          setPreviewMap((prev) => (prev[key] ? prev : { ...prev, [key]: thumb.url }));
+          setPreviewMap((prev) =>
+              prev[key] ? prev : { ...prev, [key]: thumb.url });
         })
         .catch(() => undefined);
     }
     // 在途请求按图片合并;error 态由重试按钮显式再调。
-  }, [onResolveRemoteMedia]);
+  }, [onResolveRemoteMedia, resolveOpaqueSource]);
 
   // 重试按钮:显式 forceRefresh 穿透负缓存。稳定引用(带 image 参数)让
   // LightboxPage 的 memo 在父层重渲染时不被内联闭包击穿。
@@ -632,18 +674,6 @@ export const ImageLightbox = memo(function ImageLightbox({
   const activeIsVideo = activeImage?.payload.media.kind === 'video';
   // 视频页没有单击切换(单击交给系统播放控件),标注态的操作栏不能藏:两者 chrome 常驻。
   const chromeShown = chromeToggledVisible || isAnnotating || activeIsVideo;
-  const chromeToggleHidden = useSharedValue(0);
-  useEffect(() => {
-    chromeToggleHidden.value = withTiming(chromeShown ? 0 : 1, { duration: motionDuration.fast });
-    // 共享值引用恒定
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [chromeShown]);
-  const chromeStyle = useAnimatedStyle(() => ({
-    opacity: lightboxBackgroundOpacity(dismissY.value, height)
-      * (1 - chromeHidden.value)
-      * (1 - chromeToggleHidden.value),
-  }));
-
   const activeUri = activeImage ? displayUriFor(activeImage) : null;
   const activeResolveState = activeImage ? resolveMap[activeImage.url] : undefined;
   // Expo can display library handles, but sharing/annotation need the file or remote
@@ -651,12 +681,12 @@ export const ImageLightbox = memo(function ImageLightbox({
   const activeActionsReady = !!activeUri && !/^(?:ph|content|assets-library):\/\//.test(activeUri)
     && (activeImage?.payload.media.previewable
       || (activeResolveState?.status === 'ready' && !!activeImage && loadedImageKeys.has(activeImage.key)));
-  const pageLabel = lightboxPageLabel(activeIndex, images.length);
   // 原图还在取件或解码:底栏整条换成载入提示,不摆一排点不动的按钮。失败(含取件
   // 结果不可预览)不算载入,仍是置灰按钮 + 页内重试;相册句柄等不靠取件的图不进这里。
   const activeMedia = activeImage?.payload.media;
   const activeLoading = !!activeMedia && !activeIsVideo && !activeActionsReady
-    && !!onResolveRemoteMedia && !activeMedia.previewable && isDesktopLocalMediaUrl(activeMedia.url)
+    && !!onResolveRemoteMedia && !activeMedia.previewable &&
+    (resolveOpaqueSource || isDesktopLocalMediaUrl(activeMedia.url))
     && activeResolveState?.status !== 'error'
     && !(activeResolveState?.status === 'ready' && !activeResolveState.media.previewable);
   // 分享取件结果是 data: 等不可分享地址时才收起。
@@ -753,14 +783,59 @@ export const ImageLightbox = memo(function ImageLightbox({
   // isAnnotating 禁用覆盖(review 发现:会绕开"标注模式中关闭均禁用"保护
   // 直接整体关闭 lightbox,未保存笔迹丢失)。标注中改为退出标注模式(有改动
   // 先确认;autoAnnotate 放弃即关闭),提交中忽略返回键,非标注态才走原始关闭。
-  const handleRequestClose = useCallback(() => {
-    if (submittingRef.current) return;
-    if (isAnnotating) {
-      exitAnnotationMode();
+  const requestCloseImpl = () => {
+    if (submittingRef.current || discardConfirmOpenRef.current) return;
+    const baseline =
+      (activeImage
+        ? annotation?.initialStrokesFor?.(activeImage)
+        : undefined) ?? EMPTY_STROKES;
+    const changed =
+      !!draftStrokeRef.current?.points.length ||
+      !annotationStrokesEqual(strokesRef.current, baseline);
+    if (!changed) {
+      onCloseRef.current();
       return;
     }
-    onCloseRef.current();
-  }, [isAnnotating, exitAnnotationMode]);
+    discardConfirmOpenRef.current = true;
+    const settle = () => {
+      discardConfirmOpenRef.current = false;
+    };
+    Alert.alert(
+      t("message.lightbox.discardAnnotationTitle"),
+      t("message.lightbox.discardAnnotationBody"),
+      [
+        {
+          text: t("message.lightbox.continueAnnotating"),
+          style: "cancel",
+          onPress: settle,
+        },
+        {
+          text: t("message.lightbox.discardAnnotation"),
+          style: "destructive",
+          onPress: () => {
+            settle();
+            discardAnnotation();
+            if (!autoAnnotateActive) onCloseRef.current();
+  },
+        },
+        ...(annotation
+          ? [
+              {
+                text: annotation.submitLabel,
+                onPress: () => {
+                  settle();
+                  handleSubmitAnnotation();
+                },
+              },
+            ]
+          : []),
+      ],
+      { cancelable: true, onDismiss: settle },
+    );
+  };
+  const requestCloseRef = useRef(requestCloseImpl);
+  requestCloseRef.current = requestCloseImpl;
+  const handleRequestClose = useCallback(() => requestCloseRef.current(), []);
 
   // iOS 沉浸式隐藏状态栏:经宿主屏的 screen option 走 VC-based 通道(iOS 27 起
   // RN StatusBar 全局 API 失效;transparent Modal 不接管状态栏,穿透到宿主屏)。
@@ -792,6 +867,7 @@ export const ImageLightbox = memo(function ImageLightbox({
       >
         <Animated.View pointerEvents="none" style={[styles.backdrop, backdropStyle]} />
         <FlatList
+          style={{ height, flexGrow: 0 }}
           data={images}
           decelerationRate="fast"
           getItemLayout={(_, index) => ({ length: width, offset: width * index, index })}
@@ -806,20 +882,21 @@ export const ImageLightbox = memo(function ImageLightbox({
           }}
           pagingEnabled
           ref={listRef}
-          renderItem={({ item, index }) => (item.payload.media.kind === 'video' ? (
+          renderItem={({ item, index }) =>
+            item.payload.media.kind === 'video' ? (
             <LightboxVideoPage
               active={index === activeIndex}
               height={height}
               image={item}
-              // Keep native transport controls above the shared viewer toolbar,
-              // including wrapped actions and larger accessibility text.
-              insetBottom={insets.bottom + videoToolbarHeight + 24}
-              // 让出顶部关闭 / 页码一行,系统播放控件不被压住。
-              insetTop={insets.top + 64}
+              // 视频页 chrome 常驻:让出顶栏与底栏,系统播放控件不被压住。
+              insetBottom={chromeBottom}
+              insetTop={chromeTop}
               onRetry={handleRetryPage}
               onToggleChrome={toggleChrome}
               previewUri={previewUriFor(item)}
-              resolveState={item.payload.media.previewable ? null : resolveMap[item.url] ?? null}
+                resolveOpaqueSource={resolveOpaqueSource}
+              resolveState={item.payload.media.previewable ? null : (resolveMap[item.url] ?? null)
+                }
               uri={displayUriFor(item)}
               width={width}
             />
@@ -832,7 +909,8 @@ export const ImageLightbox = memo(function ImageLightbox({
               annotationDraftStroke={index === activeIndex ? draftStroke : null}
               annotationStrokes={index === activeIndex
                 ? strokes
-                : annotation?.initialStrokesFor?.(item) ?? EMPTY_STROKES}
+                : (annotation?.initialStrokesFor?.(item) ?? EMPTY_STROKES)
+                }
               chromeHidden={chromeHidden}
               chromeVisible={chromeShown && chromeInteractive}
               dismissY={dismissY}
@@ -849,307 +927,192 @@ export const ImageLightbox = memo(function ImageLightbox({
               onRetry={handleRetryPage}
               onToggleChrome={toggleChrome}
               onZoomChange={setZoomed}
-              previewUri={previewUriFor(item)}
-              resolveState={item.payload.media.previewable ? null : resolveMap[item.url] ?? null}
+                zoomCommand={
+                  index === activeIndex && item.key === zoomCommand.imageKey
+                    ? zoomCommand
+                    : undefined
+                }
+                previewUri={previewUriFor(item)}
+                resolveOpaqueSource={resolveOpaqueSource}
+              resolveState={item.payload.media.previewable ? null : (resolveMap[item.url] ?? null)
+                }
               uri={displayUriFor(item)}
               width={width}
             />
-          ))}
+            )}
           // 单图同样开启:iOS 横向拖到边缘有系统回弹,与多图首尾页手感一致。
           scrollEnabled={!zoomed && !isAnnotating && !annotationSubmitting}
           showsHorizontalScrollIndicator={false}
           windowSize={3}
         />
-        <Animated.View
-          pointerEvents={chromeInteractive && chromeShown ? 'box-none' : 'none'}
-          // 整个操作层避开横屏两侧切口,让关闭、文件标题和所有底栏共用安全边界。
-          style={[styles.chrome, chromeStyle, {
-            left: insets.left,
-            right: insets.right,
-            paddingBottom: insets.bottom + 16,
-            paddingTop: insets.top + 8,
-          }]}
-          testID="message.imageLightboxChrome"
-        >
-          {!isAnnotating && !showFileHeader ? (
-            <Pressable
-              accessibilityLabel={t('message.lightbox.closeImage')}
-              accessibilityRole="button"
-              disabled={annotationSubmitting}
-              onPress={handleRequestClose}
-              style={[styles.closeButton, { top: insets.top + 8 }]}
-              testID="message.imageLightboxCloseButton"
-            >
-              <X color="#ffffff" size={iconSize.action} strokeWidth={iconStroke.regular} />
-            </Pressable>
-          ) : null}
-          {isAnnotating ? (
-            // 标注模式 chrome(对齐桌面):底部工具栏切换为 取消 / 撤销 / 提交
-            // 三项;翻页/下滑/单击关闭均已在手势层禁用,页码与分享隐藏。
-            <View pointerEvents="box-none" style={[styles.actionBar, { bottom: insets.bottom + 12 }]}>
-              <View style={styles.actionBarPill}>
-                <Pressable
-                  accessibilityLabel={t('message.lightbox.cancelAnnotation')}
-                  disabled={annotationSubmitting}
-                  hitSlop={8}
-                  onPress={exitAnnotationMode}
-                  style={styles.actionItem}
-                  testID="message.imageLightboxAnnotationCancel"
-                >
-                  <X color="#ffffff" size={iconSize.action} strokeWidth={iconStroke.regular} />
-                  <Text style={styles.actionLabel}>{t('message.lightbox.cancel')}</Text>
-                </Pressable>
-                <Pressable
-                  accessibilityLabel={t('message.lightbox.undoLastStroke')}
-                  disabled={strokes.length === 0 || annotationSubmitting}
-                  hitSlop={8}
-                  onPress={undoLastStroke}
-                  style={styles.actionItem}
-                  testID="message.imageLightboxAnnotationUndo"
-                >
-                  <Undo2
-                    color={strokes.length > 0 ? '#ffffff' : DISABLED_ICON_COLOR}
-                    size={iconSize.action}
-                    strokeWidth={iconStroke.regular}
+        {/* 单击收起顶栏与底栏(与系统相册一致),再点一下出来;视频与标注时常驻。 */}
+        {chromeShown ? (
+          <PreviewHeader
+            name={
+              activeImage?.title ||
+              previewSourceName(
+                activeImage?.url ?? "",
+                t(
+                  activeIsVideo
+                    ? "message.attachmentPreview.video"
+                    : "message.attachmentPreview.image",
+                ),
+              )
+            }
+            detail={activeImage?.subtitle}
+            onClose={handleRequestClose}
+            closeDisabled={annotationSubmitting}
+            closeTestID="message.imageLightboxCloseButton"
+            actions={[
+              ...(!activeIsVideo
+                ? [
+                    {
+                      key: "actual",
+                      label: t("message.attachmentPreview.actualSize"),
+                      onPress: () => requestZoom("actual"),
+                    },
+                  ]
+                : []),
+              ...(shareVisible
+                ? [
+                    {
+                      key: "share",
+                      label: t("message.attachmentPreview.share"),
+                      onPress: handleShare,
+                      disabled: !shareEnabled || sharing,
+                    },
+                  ]
+                : []),
+              ...(directSubmitVisible
+                ? [
+                    {
+                      key: "draft",
+                      label:
+                        annotation?.submitLabel ??
+                        t("message.lightbox.sendToChat"),
+                      onPress: handleSubmitAnnotation,
+                      disabled: !directSubmitEnabled || annotationSubmitting,
+                    },
+                  ]
+                : []),
+              ...(extraActions ?? []).map((action) => ({
+                key: action.key,
+                label: action.label,
+                onPress: () => {
+                  if (activeImage) action.onPress(activeImage);
+                },
+              })),
+            ]}
+          />
+        ) : null}
+        {chromeShown ? (
+          <PreviewFooter
+            // 原图还在取件或解码:整条工具换成载入胶囊,不摆一排点不动的按钮。
+            loading={activeLoading ? t("message.lightbox.loadingOriginal") : undefined}
+            loadingTestID="message.imageLightboxLoadingBar"
+          >
+            {/* 手机缩放靠捏合与双击,不放放大 / 缩小 / 适应按钮;原始尺寸在「更多」里。 */}
+            {activeIsVideo ? (
+              <VideoDownloadButton key={activeImage?.key} source={activeUri} mimeType={activeMimeType}
+                render={({ busy, progress, disabled, download }) => (
+                  <PreviewIconButton
+                    icon={Download}
+                    systemImage="arrow.down.to.line"
+                    label={t("message.richAnswer.downloadVideo")}
+                    title={busy ? progress || t("message.renderer.loading") : t("message.richAnswer.downloadVideo")}
+                    disabled={disabled}
+                    onPress={() => { void download(); }}
+                    testID="message.videoDownload"
                   />
-                  <Text style={[styles.actionLabel, strokes.length === 0 && styles.actionLabelDisabled]}>{t('message.lightbox.undo')}</Text>
-                </Pressable>
-                <Pressable
-                  accessibilityLabel={annotation?.submitLabel ?? t('message.lightbox.done')}
-                  disabled={annotationSubmitting}
-                  hitSlop={8}
-                  onPress={handleSubmitAnnotation}
-                  style={styles.actionItem}
+                )}
+              />
+                ) : null}
+                {isAnnotating ? (
+              <>
+                <PreviewIconButton
+                  testID="message.imageLightboxAnnotationCancel"
+                  label={t("message.lightbox.cancelAnnotation")}
+                  icon={X}
+                  systemImage="xmark"
+                  onPress={exitAnnotationMode}
+                    disabled={annotationSubmitting}
+                />
+                <PreviewIconButton
+                  testID="message.imageLightboxAnnotationUndo"
+                  label={t("message.lightbox.undoLastStroke")}
+                  icon={Undo2}
+                  systemImage="arrow.uturn.backward"
+                  onPress={undoLastStroke}
+                  disabled={!strokes.length || annotationSubmitting}
+                />
+                <PreviewIconButton
+                  label={t("message.attachmentPreview.redo")}
+                  icon={Redo2}
+                  systemImage="arrow.uturn.forward"
+                    onPress={() => {
+                    const last = redoStrokes.at(-1);
+                    if (last) {
+                      setStrokes((previous) => [...previous, last]);
+                      setRedoStrokes((previous) => previous.slice(0, -1));
+                    }
+                  }}
+                    disabled={!redoStrokes.length || annotationSubmitting}
+                />
+                <PreviewIconButton
                   testID="message.imageLightboxAnnotationSubmit"
-                >
-                  {annotationSubmitting ? (
-                    <ActivityIndicator color="#ffffff" size="small" />
-                  ) : (
-                    <MessageSquarePlus color="#ffffff" size={iconSize.action} strokeWidth={iconStroke.regular} />
-                  )}
-                  <Text style={styles.actionLabel}>{annotation?.submitLabel ?? t('message.lightbox.done')}</Text>
-                </Pressable>
-              </View>
-            </View>
-          ) : showFileHeader ? (
-            <View pointerEvents="box-none" style={styles.fileHeader}>
-              <Pressable accessibilityLabel={t('message.lightbox.done')}
-                accessibilityRole="button"
-                disabled={annotationSubmitting}
-                hitSlop={10} onPress={handleRequestClose} testID="message.imageLightboxDone">
-                <Text style={styles.fileHeaderDone}>{t('message.lightbox.done')}</Text>
-              </Pressable>
-              <View pointerEvents="none" style={styles.fileHeaderTitleCol}>
-                <Text numberOfLines={1} style={styles.fileHeaderTitle} testID="message.imageLightboxTitle">
-                  {activeImage?.title ?? ''}
-                </Text>
-                <Text numberOfLines={1} style={styles.fileHeaderMeta}>
-                  {[pageLabel, activeImage?.subtitle].filter(Boolean).join(' · ')}
-                </Text>
-              </View>
-              {shareVisible ? (
-                <Pressable
-                  accessibilityLabel={t('message.lightbox.shareImage')}
-                  accessibilityRole="button"
-                  accessibilityState={{ busy: sharing }}
-                  disabled={!shareEnabled || sharing || annotationSubmitting}
-                  hitSlop={10}
-                  onPress={handleShare}
-                  testID="message.imageLightboxShareButton"
-                >
-                  {sharing ? (
-                    <ActivityIndicator color="#ffffff" size="small" />
-                  ) : <ShareIcon color={shareEnabled ? '#ffffff' : DISABLED_ICON_COLOR} size={iconSize.action} strokeWidth={iconStroke.regular} />}
-                </Pressable>
-              ) : (
-                <View style={styles.fileHeaderShareSpacer} />
-              )}
-            </View>
-          ) : pageLabel ? (
-            <Text style={styles.pageLabel} testID="message.imageLightboxPageLabel">{pageLabel}</Text>
-          ) : null}
-          {isAnnotating ? null : activeIsVideo && !extraActions?.length ? (
-            <View pointerEvents="box-none" style={[styles.actionBar, { bottom: insets.bottom + 12 }]}
-              testID="message.imageLightboxVideoActions"
-              onLayout={event => setVideoToolbarHeight(event.nativeEvent.layout.height)}>
-              <View style={styles.actionBarPill}>
-                <VideoDownloadButton key={activeImage?.key} source={activeUri} mimeType={activeMimeType} immersive />
-              </View>
-            </View>
-          ) : extraActions && extraActions.length > 0 ? (
-            <View pointerEvents="box-none" style={[styles.actionBar, { bottom: insets.bottom + 12 }]}
-              testID={activeIsVideo ? 'message.imageLightboxVideoActions' : undefined}
-              onLayout={activeIsVideo ? event => setVideoToolbarHeight(event.nativeEvent.layout.height) : undefined}>
-              <View style={styles.actionBarPill}>
-                {annotateVisible ? (
-                  <Pressable
-                    accessibilityHint={annotateBlockedReason}
-                    accessibilityLabel={annotateBlockedReason
-                      ? t('message.lightbox.annotateImageUnavailable')
-                      : t('message.lightbox.annotateImage')}
-                    accessibilityState={{ disabled: !annotateReady }}
-                    disabled={annotationSubmitting || sharing || !annotateReady}
-                    hitSlop={8}
-                    onPress={enterAnnotationMode}
-                    style={styles.actionItem}
-                    testID="message.imageLightboxAnnotateButton"
-                  >
-                    <Pen
-                      color={annotateEnabled ? '#ffffff' : DISABLED_ICON_COLOR}
-                      size={iconSize.action}
-                      strokeWidth={iconStroke.regular}
-                    />
-                    <Text style={[styles.actionLabel, !annotateEnabled && styles.actionLabelDisabled]}>{t('message.lightbox.annotate')}</Text>
-                  </Pressable>
-                ) : null}
-                {extraActions.map((action) => (
-                  <Pressable
-                    accessibilityLabel={action.label}
-                    disabled={annotationSubmitting || sharing}
-                    hitSlop={8}
-                    key={action.key}
-                    onPress={() => activeImage && action.onPress(activeImage)}
-                    style={styles.actionItem}
-                    testID={`message.imageLightboxAction.${action.key}`}
-                  >
-                    <action.icon color="#ffffff" size={iconSize.action} strokeWidth={iconStroke.regular} />
-                    <Text style={styles.actionLabel}>{action.label}</Text>
-                  </Pressable>
-                ))}
-                {activeIsVideo ? <VideoDownloadButton key={activeImage?.key} source={activeUri} mimeType={activeMimeType} immersive /> : null}
-                {shareVisible && !showFileHeader ? (
-                  <Pressable
-                    accessibilityLabel={t('message.lightbox.shareImage')}
-                    accessibilityRole="button"
-                    accessibilityState={{ busy: sharing }}
-                    disabled={!shareEnabled || sharing || annotationSubmitting}
-                    hitSlop={8}
-                    onPress={handleShare}
-                    style={styles.actionItem}
-                    testID="message.imageLightboxShareButton"
-                  >
-                    {sharing ? (
-                      <ActivityIndicator color="#ffffff" size="small" />
+                  label={annotation?.submitLabel ?? t("message.lightbox.done")}
+                  icon={MessageSquarePlus}
+                  systemImage="plus.bubble"
+                    onPress={handleSubmitAnnotation}
+                  disabled={annotationSubmitting}
+                />
+              </>
                     ) : (
-                      <ShareIcon
-                        color={shareEnabled ? '#ffffff' : DISABLED_ICON_COLOR}
-                        size={iconSize.action}
-                        strokeWidth={iconStroke.regular}
-                      />
-                    )}
-                    <Text style={[styles.actionLabel, !shareEnabled && styles.actionLabelDisabled]}>
-                      {t('message.lightbox.exportShare')}
-                    </Text>
-                  </Pressable>
-                ) : null}
-              </View>
-            </View>
-          ) : activeLoading && (shareVisible || annotateVisible || directSubmitVisible) ? (
-            <View pointerEvents="box-none" style={[styles.actionBar, { bottom: insets.bottom + 12 }]}>
-              <View
-                accessibilityLabel={t('message.lightbox.loadingOriginal')}
-                accessibilityLiveRegion="polite"
-                accessibilityRole="progressbar"
-                accessible
-                style={[styles.actionBarPill, styles.loadingBar]}
-                testID="message.imageLightboxLoadingBar"
-              >
-                <ActivityIndicator color="#ffffff" size="small" />
-                <Text style={styles.pageLabel}>{t('message.lightbox.loadingOriginal')}</Text>
-              </View>
-            </View>
-          ) : shareVisible || annotateVisible || directSubmitVisible ? (
-            // 聊天 chrome(对齐桌面):底部工具栏 [标注][发送到对话] | [导出/分享]。
-            // 分享覆盖桌面「复制/另存为/打开」的能力面(系统分享单),分隔线左侧
-            // 是「进对话」组、右侧是「出 app」组。
-            <View pointerEvents="box-none" style={[styles.actionBar, { bottom: insets.bottom + 12 }]}>
-              <View style={styles.actionBarPill}>
+                      <>
                 {annotateVisible ? (
-                  <Pressable
-                    accessibilityHint={annotateBlockedReason}
-                    accessibilityLabel={annotateBlockedReason
-                      ? t('message.lightbox.annotateImageUnavailable')
-                      : t('message.lightbox.annotateImage')}
-                    accessibilityState={{ disabled: !annotateReady }}
-                    disabled={annotationSubmitting || sharing || !annotateReady}
-                    hitSlop={8}
-                    onPress={enterAnnotationMode}
-                    style={styles.actionItem}
+                  <PreviewIconButton
                     testID="message.imageLightboxAnnotateButton"
-                  >
-                    <Pen
-                      color={annotateEnabled ? '#ffffff' : DISABLED_ICON_COLOR}
-                      size={iconSize.action}
-                      strokeWidth={iconStroke.regular}
-                    />
-                    <Text style={[styles.actionLabel, !annotateEnabled && styles.actionLabelDisabled]}>
-                      {t('message.lightbox.annotate')}
-                    </Text>
-                  </Pressable>
+                    label={t(
+                      annotateBlockedReason
+                        ? "message.lightbox.annotateImageUnavailable"
+                        : "message.lightbox.annotateImage",
+                    )}
+                    hint={annotateBlockedReason}
+                    icon={Pen}
+                    systemImage="pencil"
+                    onPress={enterAnnotationMode}
+                    disabled={!annotateReady || sharing}
+                  />
                 ) : null}
                 {directSubmitVisible ? (
-                  <Pressable
-                    accessibilityLabel={annotation?.submitLabel ?? t('message.lightbox.sendToChat')}
-                    accessibilityState={{ disabled: !directSubmitEnabled }}
-                    disabled={!directSubmitEnabled || annotationSubmitting || sharing}
-                    hitSlop={8}
-                    onPress={handleSubmitAnnotation}
-                    style={styles.actionItem}
+                  <PreviewIconButton
                     testID="message.imageLightboxSendToChatButton"
-                  >
-                    {annotationSubmitting ? (
-                      <ActivityIndicator color="#ffffff" size="small" />
-                    ) : (
-                      <MessageSquarePlus
-                        color={directSubmitEnabled ? '#ffffff' : DISABLED_ICON_COLOR}
-                        size={iconSize.action}
-                        strokeWidth={iconStroke.regular}
-                      />
-                    )}
-                    <Text style={[styles.actionLabel, !directSubmitEnabled && styles.actionLabelDisabled]}>
-                      {annotation?.submitLabel ?? t('message.lightbox.sendToChat')}
-                    </Text>
-                  </Pressable>
-                ) : null}
-                {shareVisible && (annotateVisible || directSubmitVisible) ? (
-                  <View style={styles.actionDivider} />
+                    label={annotation?.submitLabel ?? t('message.lightbox.sendToChat')}
+                    icon={MessageSquarePlus}
+                    systemImage="plus.bubble"
+                    onPress={handleSubmitAnnotation}
+                    disabled={!directSubmitEnabled || annotationSubmitting} />
                 ) : null}
                 {shareVisible ? (
-                  <Pressable
-                    accessibilityLabel={t('message.lightbox.shareImage')}
-                    accessibilityRole="button"
-                    accessibilityState={{ busy: sharing }}
-                    disabled={!shareEnabled || sharing || annotationSubmitting}
-                    hitSlop={8}
-                    onPress={handleShare}
-                    style={styles.actionItem}
+                  <PreviewIconButton
                     testID="message.imageLightboxShareButton"
-                  >
-                    {sharing ? (
-                      <ActivityIndicator color="#ffffff" size="small" />
-                    ) : (
-                      <ShareIcon
-                        color={shareEnabled ? '#ffffff' : DISABLED_ICON_COLOR}
-                        size={iconSize.action}
-                        strokeWidth={iconStroke.regular}
-                      />
-                    )}
-                    <Text style={[styles.actionLabel, !shareEnabled && styles.actionLabelDisabled]}>
-                      {t('message.lightbox.exportShare')}
-                    </Text>
-                  </Pressable>
+                    label={t("message.attachmentPreview.share")}
+                    icon={ShareIcon}
+                    systemImage="square.and.arrow.up"
+                    onPress={handleShare}
+                    disabled={!shareEnabled || sharing}
+                  />
                 ) : null}
-              </View>
-            </View>
-          ) : null}
-        </Animated.View>
+              </>
+            )}
+        </PreviewFooter>
+        ) : null}
       </GestureHandlerRootView>
     </Modal>
   );
 });
 
 /** 置灰操作的图标色(与 actionLabelDisabled 同值)。 */
-const DISABLED_ICON_COLOR = 'rgba(255,255,255,0.35)';
 
 /** 空笔迹常量:非活跃页无既有笔迹时复用同一引用,保住 LightboxPage 的 memo。 */
 const EMPTY_STROKES: readonly AnnotationStroke[] = [];
@@ -1176,8 +1139,10 @@ const LightboxPage = memo(function LightboxPage({
   onRetry,
   onToggleChrome,
   onZoomChange,
+  zoomCommand,
   previewUri,
   resolveState,
+  resolveOpaqueSource,
   uri,
   width,
 }: {
@@ -1219,13 +1184,21 @@ const LightboxPage = memo(function LightboxPage({
   /** 单击:隐藏 / 显示 chrome。 */
   onToggleChrome(): void;
   onZoomChange(zoomed: boolean): void;
+  zoomCommand?: {
+    id: number;
+    action: "fit" | "actual";
+    imageKey?: string;
+  };
   /** 列表缩略图(渐进出图的垫底层);无则退 spinner。见 lightboxImageLayers。 */
   previewUri: string | null;
   resolveState: PageResolveState | null;
+  resolveOpaqueSource?: boolean;
   uri: string | null;
   width: number;
 }) {
+  const { colors } = useTheme();
   const { t } = useTranslation();
+  const styles = useThemedStyles(makeStyles);
   const scale = useSharedValue(1);
   const savedScale = useSharedValue(1);
   const translateX = useSharedValue(0);
@@ -1281,11 +1254,13 @@ const LightboxPage = memo(function LightboxPage({
    * 垫底缩略图的像素尺寸:原图未到时用它的宽高比算 contain 显示尺寸,
    * 让缩放 / 平移的边界从打开起就对(缩略图与原图同比例)。
    */
-  const [previewSize, setPreviewSize] = useState<{ uri: string; width: number; height: number } | null>(null);
+  const [previewSize, setPreviewSize] = useState<{ uri: string; width: number; height: number;
+  } | null>(null);
   const layoutSize = naturalSize ?? (previewSize && previewSize.uri === previewUri ? previewSize : null);
   const media = image.payload.media;
   // 桌面取件图可 forceRefresh;直连图重试只重新挂载原 URI,不走桌面取件。
-  const retryable = !media.previewable && isDesktopLocalMediaUrl(media.url);
+  const retryable = !media.previewable &&
+    (resolveOpaqueSource || isDesktopLocalMediaUrl(media.url));
   const fullFailed = !!uri && failedFullUri === uri
     && (!retryable || failedFullMedia === resolveState?.media);
   const resolvedUnsupported = resolveState?.status === 'ready' && !resolveState.media.previewable;
@@ -1358,7 +1333,40 @@ const LightboxPage = memo(function LightboxPage({
     }
     // 共享值引用恒定,只随 reportZoomed 重建
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [reportZoomed]);
+  }, [reportZoomed],
+  );
+
+  useEffect(() => {
+    if (!active || !zoomCommand?.id) return;
+    cancelAnimation(scale);
+    cancelAnimation(translateX);
+    cancelAnimation(translateY);
+    originX.value = 0;
+    originY.value = 0;
+    const target =
+      zoomCommand.action === "actual" && naturalSize
+        ? Math.max(
+            1,
+            naturalSize.width /
+              Math.max(
+                1,
+                annotationBaseRect(
+                  width,
+                  height,
+                  naturalSize.width,
+                  naturalSize.height,
+                )?.width ?? width,
+              ),
+          )
+        : 1;
+    springToTransform({
+      scale: target,
+      x: target === 1 ? 0 : translateX.value,
+      y: target === 1 ? 0 : translateY.value,
+    });
+    // Commands are edge-triggered; returning to an earlier page must not replay one.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [zoomCommand?.id]);
 
   useEffect(() => {
     const size = lightboxContainedSize(
@@ -1860,7 +1868,8 @@ const LightboxPage = memo(function LightboxPage({
   // 标注 overlay 的锚定矩形(contain 1x):其中心恒等于容器中心,与图片层共用
   // 同一 translate/scale transform 时缩放中心一致,视觉完全跟随(纯函数,可单测)。
   const annotationBase = useMemo(
-    () => (naturalSize ? annotationBaseRect(width, height, naturalSize.width, naturalSize.height) : null),
+    () =>
+      naturalSize ? annotationBaseRect(width, height, naturalSize.width, naturalSize.height) : null,
     [naturalSize, width, height],
   );
   const overlayVisible = !!uri && !!annotationBase && !!naturalSize
@@ -1871,7 +1880,8 @@ const LightboxPage = memo(function LightboxPage({
   const overlayOutlineWidth = annotationOutlineWidth(overlayStrokeWidth);
   // 已落笔迹的两层 path 元素按(笔迹, 尺寸)记忆:作画时每个 move 只重算进行中
   // 那一笔,已有笔迹的 path 字符串与元素引用不变,React 直接跳过它们。
-  const committedOutlinePaths = useMemo(() => (naturalSize
+  const committedOutlinePaths = useMemo(() =>
+      naturalSize
     ? annotationStrokes.map((stroke, index) => (
       <Path
         d={annotationStrokeToSvgPath(stroke, naturalSize.width, naturalSize.height)}
@@ -1883,8 +1893,9 @@ const LightboxPage = memo(function LightboxPage({
         strokeWidth={overlayOutlineWidth}
       />
     ))
-    : null), [annotationStrokes, naturalSize, overlayOutlineWidth]);
-  const committedStrokePaths = useMemo(() => (naturalSize
+    : null, [annotationStrokes, naturalSize, overlayOutlineWidth]);
+  const committedStrokePaths = useMemo(() =>
+      naturalSize
     ? annotationStrokes.map((stroke, index) => (
       <Path
         d={annotationStrokeToSvgPath(stroke, naturalSize.width, naturalSize.height)}
@@ -1896,7 +1907,7 @@ const LightboxPage = memo(function LightboxPage({
         strokeWidth={overlayStrokeWidth}
       />
     ))
-    : null), [annotationStrokes, naturalSize, overlayStrokeWidth]);
+    : null, [annotationStrokes, naturalSize, overlayStrokeWidth]);
   const draftPathD = naturalSize && annotationDraftStroke
     ? annotationStrokeToSvgPath(annotationDraftStroke, naturalSize.width, naturalSize.height)
     : null;
@@ -1935,7 +1946,8 @@ const LightboxPage = memo(function LightboxPage({
                 testID="message.imageLightboxPreviewLayer"
               />
             ) : null}
-            {uri && !fullFailed ? <AnimatedImage
+            {uri && !fullFailed ? (
+              <AnimatedImage
               // 两条失败路径都要接:可重取的图交父层做一次 forceRefresh 自愈(再失败
               // 落父层 error 态给重试按钮);直连图在本页落失败态,提供原地重试。
               onError={() => {
@@ -1958,11 +1970,13 @@ const LightboxPage = memo(function LightboxPage({
               recyclingKey={uri}
               source={{ uri }}
               style={[styles.pageFill, imageStyle]}
-            /> : null}
+            />
+            ) : null}
             {/* 连缩略图都没有(直连 http 图 / 缓存未命中):至少给转圈,不留纯黑无反馈。 */}
             {layers.showSpinner ? (
               <View pointerEvents="none" style={styles.pageSpinnerLayer}>
-                <ActivityIndicator color="#ffffff" testID="message.imageLightboxLoading" />
+                <ActivityIndicator color={colors.textSecondary}
+                  testID="message.imageLightboxLoading" />
               </View>
             ) : null}
             {overlayVisible ? (
@@ -2088,6 +2102,7 @@ const LightboxVideoPage = memo(function LightboxVideoPage({
   onToggleChrome,
   previewUri,
   resolveState,
+  resolveOpaqueSource,
   uri,
   width,
 }: {
@@ -2100,16 +2115,20 @@ const LightboxVideoPage = memo(function LightboxVideoPage({
   onToggleChrome(): void;
   previewUri: string | null;
   resolveState: PageResolveState | null;
+  resolveOpaqueSource?: boolean;
   uri: string | null;
   width: number;
 }) {
+  const { colors } = useTheme();
   const { t } = useTranslation();
+  const styles = useThemedStyles(makeStyles);
   /** 原生播放失败的地址(换地址天然失效):退到 WebView 播放器,与文件预览一致。 */
   const [nativeFailedUri, setNativeFailedUri] = useState<string | null>(null);
   /** WebView 兜底也播不了的地址:落失败态给重试,不能停在黑屏播放器上。 */
   const [webFailedUri, setWebFailedUri] = useState<string | null>(null);
   const media = image.payload.media;
-  const retryable = !media.previewable && isDesktopLocalMediaUrl(media.url);
+  const retryable = !media.previewable &&
+    (resolveOpaqueSource || isDesktopLocalMediaUrl(media.url));
   const resolvedUnsupported = resolveState?.status === 'ready' && !resolveState.media.previewable;
   const playbackFailed = !!uri && webFailedUri === uri;
   const failed = playbackFailed || (!uri && (
@@ -2178,7 +2197,10 @@ const LightboxVideoPage = memo(function LightboxVideoPage({
         {previewUri ? (
           <Image contentFit="contain" source={{ uri: previewUri }} style={StyleSheet.absoluteFill} />
         ) : null}
-        {active ? <ActivityIndicator color="#ffffff" testID="message.imageLightboxLoading" /> : null}
+        {active ? (
+          <ActivityIndicator color={colors.textSecondary}
+            testID="message.imageLightboxLoading" />
+        ) : null}
       </View>
     );
   }
@@ -2192,97 +2214,24 @@ const LightboxVideoPage = memo(function LightboxVideoPage({
 
 const absoluteFill = { bottom: 0, left: 0, position: 'absolute', right: 0, top: 0 } as const;
 
-const styles = StyleSheet.create({
+const makeStyles = (colors: ThemeColors) =>
+  StyleSheet.create({
   root: { flex: 1 },
-  backdrop: { backgroundColor: '#000000', ...absoluteFill },
-  chrome: { ...absoluteFill, alignItems: 'center' },
-  closeButton: {
-    alignItems: 'center',
-    backgroundColor: 'rgba(0, 0, 0, 0.6)',
-    borderRadius: radius.pill,
-    height: 48,
-    justifyContent: 'center',
-    left: 16,
-    position: 'absolute',
-    width: 48,
-  },
+  backdrop: { backgroundColor: colors.surface, ...absoluteFill },
   pageFill: { flex: 1, height: '100%', width: '100%' },
   pageCenter: { alignItems: 'center', gap: 16, justifyContent: 'center' },
   // 垫底缩略图 / 转圈都脱离 flex 流:与原图同为 flex 子节点会被各分一半高度。
   pagePreviewLayer: { ...absoluteFill },
   pageSpinnerLayer: { ...absoluteFill, alignItems: 'center', justifyContent: 'center' },
   originalNotice: { position: 'absolute' },
-  pageLabel: {
-    color: 'rgba(255, 255, 255, 0.85)',
-    fontSize: typeScale.footnote,
-    lineHeight: lineHeight.caption,
-    fontVariant: ['tabular-nums'],
-  },
-  fileHeader: {
-    alignItems: 'center',
-    flexDirection: 'row',
-    gap: 12,
-    paddingHorizontal: 20,
-    width: '100%',
-  },
-  fileHeaderDone: { color: '#ffffff', fontSize: typeScale.bodyLarge, lineHeight: lineHeight.bodyLarge, fontWeight: fontWeight.medium },
-  fileHeaderTitleCol: { alignItems: 'center', flex: 1, gap: 2, minWidth: 0 },
-  fileHeaderTitle: { color: '#ffffff', fontSize: typeScale.body, lineHeight: lineHeight.body, fontWeight: fontWeight.semibold },
-  fileHeaderMeta: { color: 'rgba(255,255,255,0.64)', fontSize: typeScale.caption, lineHeight: lineHeight.caption },
-  fileHeaderShareSpacer: { width: 20 },
-  actionBar: {
-    alignItems: 'center',
-    paddingHorizontal: 16,
-    left: 0,
-    position: 'absolute',
-    right: 0,
-  },
-  // 胶囊底(对齐桌面 LightboxToolbar:黑色半透明 + 白描边 + backdrop 感):
-  // 按钮不再裸浮在图片上,图片内容再花也不与工具栏图标混叠。
-  actionBarPill: {
-    alignItems: 'center',
-    backgroundColor: 'rgba(0, 0, 0, 0.6)',
-    borderColor: 'rgba(255, 255, 255, 0.22)',
-    borderRadius: radius.pill, // 胶囊语义用 pill(RN 截半)
-    borderWidth: StyleSheet.hairlineWidth,
-    flexDirection: 'row',
-    flexWrap: 'wrap',
-    justifyContent: 'center',
-    maxWidth: '100%',
-    gap: 16,
-    paddingHorizontal: 16,
-    paddingVertical: 9,
-  },
-  actionItem: {
-    alignItems: 'center',
-    flexShrink: 1,
-    gap: 4,
-    justifyContent: 'center',
-    minHeight: 48,
-    minWidth: 48,
-  },
-  actionLabel: {
-    color: 'rgba(255,255,255,0.72)',
-    fontSize: typeScale.micro,
-    lineHeight: lineHeight.micro,
-    textAlign: 'center',
-  },
-  actionDivider: {
-    backgroundColor: 'rgba(255, 255, 255, 0.25)',
-    height: 22,
-    width: StyleSheet.hairlineWidth,
-  },
-  actionLabelDisabled: { color: DISABLED_ICON_COLOR },
-  // 与按钮栏同高(按钮 48 + 上下留白),载入完成换回按钮时胶囊不跳。
-  loadingBar: { gap: 8, minHeight: 66 },
-  stateText: { color: 'rgba(255, 255, 255, 0.85)', fontSize: typeScale.bodySmall, lineHeight: lineHeight.bodySmall },
+    stateText: { color: colors.textSecondary, fontSize: typeScale.bodySmall, lineHeight: lineHeight.bodySmall },
   retryButton: {
-    borderColor: 'rgba(255, 255, 255, 0.5)',
+    borderColor: colors.border,
     borderRadius: radius.pill, // 圆形按钮语义用 pill(胶囊,RN 截半)
 
     borderWidth: StyleSheet.hairlineWidth,
     paddingHorizontal: 20,
     paddingVertical: 8,
   },
-  retryText: { color: '#ffffff', fontSize: typeScale.bodySmall, lineHeight: lineHeight.bodySmall },
+  retryText: { color: colors.textPrimary, fontSize: typeScale.bodySmall, lineHeight: lineHeight.bodySmall },
 });

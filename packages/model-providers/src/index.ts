@@ -259,6 +259,7 @@ export {
   normalizeModelIdForClassification,
   catalogModelIdCandidates,
   findCatalogModel,
+  uniqueRenamedSessionModelId,
   resolveWireModelId,
   candidateAgentsForModel,
   nativeAgentForProviderModel,
@@ -266,6 +267,8 @@ export {
   recommendedAgentForModel,
   resolveAgentCapability,
   unifiedModelEntries,
+  resolveStoredModelEntry,
+  displayNameOfStoredModelId,
   partitionEntriesByNativeAgent,
   sortEntriesForAgent,
 } from "./unifiedSelection.js";
@@ -331,7 +334,7 @@ export { PROVIDER_MEDIA_FIELDS, providerMediaField, projectProviderMediaModels }
 
 export { PROVIDER_MODEL_CATALOG, providerModelRecord, providerModelGenerationRecord, providerModelAdapterId, providerPresetModelRecord, providerModelMetadata, providerCatalogForPi, providerModelsForRoute } from "./providerModelCatalog.js";
 
-export { parseModelsListResponse, isOpenRouterModelsUrl } from "./modelDiscovery.js";
+export { parseModelsListResponse, isOpenRouterModelsUrl, isOpenHubsModelsUrl } from "./modelDiscovery.js";
 
 export type { ProviderModelRecord } from "./providerModelCatalog.js";
 
@@ -344,3 +347,10 @@ export { alignModelApiRoute, providerWireProtocolForApi, providerBaseUrlForApi }
 
 export { availableModelInterfaces, modelWithInterface, MODEL_INTERFACE_CAPABILITIES } from './providerInterfaceRoutes.js';
 export * from './providerDetection.js';
+
+export { validDiscoveredModelSource, modelSupplierLabel } from './modelSource.js';
+export type { DiscoveredModelSource } from './modelSource.js';
+export {
+  markedSelectionAliasGroups, projectSelectionAliases, inheritSelectionAliasPreferences,
+  selectionAliasTargets, type SelectionAliasGroup, type SelectionAliasPreferences,
+} from './selectionAliasGroups.js';

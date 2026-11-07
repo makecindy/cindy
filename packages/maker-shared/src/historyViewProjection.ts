@@ -179,7 +179,7 @@ function projectHistorySourceView<T extends HistoryMessageSource>(
     ));
     const plainAssistant = !nested && row.role === 'assistant' && typeof row.content === 'string'
       && !meta?.botCollaboration && !meta?.botDirectMessage
-      && !meta?.systemCardType && !meta?.goalCompletion && !meta?.goalNotice && !meta?.reviewRun;
+      && !meta?.systemCardType && !meta?.goalCompletion && !meta?.goalNotice && !meta?.reviewRun && !meta?.pluginModelRoute;
     return { type: 'source', row, activity, archivable: activity || (
       plainAssistant && !isDeliveryProseText(row.content as string)
     ) };

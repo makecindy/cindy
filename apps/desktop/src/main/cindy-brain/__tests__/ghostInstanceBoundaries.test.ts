@@ -61,7 +61,7 @@ function harness() {
     sendToGhostLogic: send, getGhostAgentSlot: () => ({ issueUserActionToken: () => null, clearGhost: vi.fn() }),
     getGhostSessionActivityTracker: () => ({ begin: vi.fn() }), ghostOwnerScope: undefined,
     ghostInstallApprovalToken, log: { info: vi.fn(), warn: vi.fn() },
-    getGhostPreviewGate: () => preview, prepareMailAttachmentUpload,
+    getGhostPreviewGate: () => preview, prepareMailAttachmentUpload, isPluginModelRouteAvailableNow: async () => false,
   });
   return { ...api, root, organization, ghosts, send, setEnabled, stop, cancelModelPicker, ghostCanRead, setStoredId: (id: string) => { storedId = id; } };
 }

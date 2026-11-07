@@ -66,7 +66,7 @@
     "pasteTimeout": "贴图处理逾时，请再试。",
     "clipboardReadFailed": "剪贴板之图读取未成，请重录后再贴。",
     "maxAttachments": "至多加 {{count}} 个附件。",
-    "simulatorNoCamera": "模拟器无相机，请用「照片」自相册择之。",
+    "simulatorNoCamera": "模拟器无相机。请由「照片与视频」择取。",
     "cameraPermission": "相机权限未开，请于系统设置中允许 {{appName}} 使用相机。",
     "photoPermission": "照片权限未开，请于系统设置中允许 {{appName}} 访问照片。",
     "noFileRead": "未读得可上传之卷。"
@@ -99,6 +99,7 @@
     "incomplete": "声之输入未毕，请再试。",
     "missingRefinerTargetProvider": "声之润色暂不可用，请重新登门 {{appName}} 后再试。",
     "emptyTranscript": "语音辨识未返文字，请重新录音。",
+    "speakerFiltered": "他人之声已略",
     "connectionInterrupted": "声之连接已断，请察网络后再试。",
     "recognitionStalled": "语音识别未续返结果，请再试。",
     "transcriptKept": "{{message}}（所识之文字已存，可径修之）",
@@ -118,6 +119,9 @@
     "unavailable": "暂不能收分享",
     "noCompanions": "尚无同僚",
     "noTasks": "尚无差事",
-    "retry": "部分内容未能读取，点此再试。"
+    "retry": "部分内容未能读取，点此再试。",
+    "noMatches": "无相合之去向",
+    "clearSearch": "清除寻文",
+    "loadingDevices": "方读机录…"
   }
 }

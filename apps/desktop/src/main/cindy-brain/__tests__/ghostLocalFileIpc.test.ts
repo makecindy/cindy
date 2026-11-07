@@ -364,14 +364,14 @@ describe('local file recovery and source gates through production IPC callbacks'
       expect(target.runtime.stop).not.toHaveBeenCalled();
     },
   );
-  it('inspects an exact same-source legacy Broker package for the selected receiver', async () => {
+  it('rejects a root Broker package even with an exact same-source legacy receipt', async () => {
     const target = harness({ broker: true });
     await expect(
       target.callbacks['ghosts:inspect']({}, '/local.cindy', target.target),
-    ).resolves.toMatchObject({ packageSha256 });
+    ).rejects.toMatchObject({ code: 'PERMISSION_DENIED' });
   });
   it('inspects a verified update signed by the previously pinned publisher', async () => {
-    const target = harness({ broker: true });
+    const target = harness();
     target.receipts.get('filo-local')!.trust = signed;
     target.replacePackage({ trust: signed, packageSha256: 'b'.repeat(64) });
     await expect(
@@ -402,10 +402,10 @@ describe('local file recovery and source gates through production IPC callbacks'
       packageSha256,
     });
   });
-  it('exports the source-qualified legacy snapshot instead of treating it as a fresh install', async () => {
+  it('rejects root Broker export even when the legacy receipt qualifies its source', async () => {
     const target = harness({ broker: true });
-    await expect(target.callbacks['ghosts:export']({}, 'filo-local')).resolves.toMatchObject({
-      status: 'saved',
+    await expect(target.callbacks['ghosts:export']({}, 'filo-local')).rejects.toMatchObject({
+      code: 'INTERNAL',
     });
   });
   // Unit: real export IPC must validate the existing snapshot as stored data.

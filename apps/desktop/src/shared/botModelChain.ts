@@ -144,6 +144,11 @@ export function normalizeBotProfileModelChain(
       next.harness = primary.harness;
       next.model = primary.model;
       next.providerId = primary.providerId;
+      // The scalar fields mirror the first route, including returning to this
+      // computer. Do not introduce a new field into untouched legacy local profiles.
+      if (primary.agentDeviceId || Object.prototype.hasOwnProperty.call(next, 'agentDeviceId')) {
+        next.agentDeviceId = primary.agentDeviceId ?? null;
+      }
       next.effort = primary.effort;
       next.fastMode = primary.fastMode;
     }

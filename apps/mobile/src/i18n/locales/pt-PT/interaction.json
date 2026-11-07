@@ -299,6 +299,8 @@
       "picture": "Mostrar ecrã",
       "backToForm": "Voltar ao formulário",
       "liveView": "Vista em direto",
+      "openRemoteDesktop": "Abrir ambiente de trabalho remoto",
+      "useForm": "Usar o formulário",
       "fill": "Preencher",
       "skip": "Ignorar",
       "continue": "Continuar",
@@ -306,6 +308,9 @@
       "showPassword": "Mostrar palavra-passe",
       "hidePassword": "Ocultar palavra-passe",
       "scan": "Ler código"
+    },
+    "directSignIn": {
+      "hint": "Inicie sessão diretamente na janela. Ao terminar, tudo continua automaticamente."
     },
     "remoteUnavailable": "Este computador não pode receber dados remotamente. Conclua este passo no computador anfitrião e depois devolva o controlo ao Agent.",
     "unnamedField": "Campo",

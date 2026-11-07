@@ -130,6 +130,9 @@
   "detail": {
     "useItIn": "Use it in",
     "openPlugin": "Open plugin",
+    "readme": "About",
+    "readmeLoadFailed": "The introduction could not be loaded. Try again.",
+    "readmeUnavailable": "No introduction is available.",
     "computerSettings": "To configure this plugin, open its details in Cindy → Plugins on your computer.",
     "runtimeIssue": "The plugin stopped unexpectedly. Try opening it again or using it in a task.",
     "runtimeFused": "The plugin stopped after repeated failures. Turn it off and on to try again.",
@@ -284,6 +287,8 @@
       "workspaceDetail": "When it asks, you either pick the folder yourself or see the full path on a confirmation card before deciding; while it is handling a call you started, subfolders inside the current session's working directory are used directly without an extra prompt. Folders that already have a session are reused, and what gets created is an empty session — nothing starts running on its own.",
       "sessionContext": "Can learn which project folder the current session is working in",
       "sessionContextDetail": "Shares only location facts (session ID and project folder path) while it works for the current session — no file contents, and no file access is granted.",
+      "liveScreen": "View and control device screens on your phone",
+      "liveScreenDetail": "Through remote desktop, your phone can show the device screens it provides (such as simulators) and send touches, buttons and text to them. It connects only when you open it from your phone and shows nothing else on this computer.",
       "preview": "Can open preview pages from the sites below in the sidebar browser",
       "previewDetail": "Only the sites listed below can be opened; every page it opens is attributed to this plugin.",
       "nodeChildSpawn": "Its Node program can ask the host to start declared sub-processes from its package",
@@ -341,5 +346,23 @@
     "purpose": "Review interactive page permissions",
     "updateHost": "Update Cindy on the execution computer to confirm here. Text tools remain available.",
     "failed": "Could not enable interactive pages. Check the connection and plugin version, then try again."
+  },
+  "openLinkHost": "Open {{host}}",
+  "prStatus": {
+    "checksFailed": "Failed",
+    "checksPending": "Pending",
+    "checksPassed": "Passed",
+    "checksSkipped": "Skipped or neutral",
+    "threadsOpen": "Unresolved review threads: {{count}}",
+    "threadsNone": "No open review threads",
+    "mergeReady": "Ready to merge",
+    "mergeConflict": "Has conflicts",
+    "mergeBehind": "Behind the base branch",
+    "mergeApproval": "Waiting for approval",
+    "mergeChanges": "Changes requested",
+    "mergeWaiting": "Waiting to merge",
+    "merged": "Merged",
+    "closed": "Closed",
+    "draft": "Draft"
   }
 }

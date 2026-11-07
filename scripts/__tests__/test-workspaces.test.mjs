@@ -3,7 +3,7 @@ import fs from "node:fs";
 import net from "node:net";
 import os from "node:os";
 import path from "node:path";
-import { spawn } from "node:child_process";
+import { execFileSync, spawn } from "node:child_process";
 import { EventEmitter } from "node:events";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
@@ -36,6 +36,7 @@ import {
 	filterRunsByWorkspace,
 	findDependencyInstallIssues,
 	selectionNeedsElectron,
+	stripAgentEnvPollutants,
 	isIgnoredFile,
 	mapWithConcurrency,
 	normalizeRelPath,
@@ -60,8 +61,185 @@ import {
 	usablePnpmExecPath,
 } from "../shared/pnpm-invocation.mjs";
 import { findSymlinkPlatformSkips } from "../shared/symlink-test-guard.mjs";
+import {
+	assertMigrationReplayRan,
+	databaseEntrypoints,
+	databaseTestRuns,
+	detectDatabaseChanges,
+	needsDatabaseTests,
+	requireDatabasePlatform,
+} from "../ci-database-tests.mjs";
 
 const ROOT = path.resolve(fileURLToPath(new URL("../..", import.meta.url)));
+
+// Runner tier regression: db:validate is static and Linux silently skips replay.
+// The CI entry must select real DB tests for sensitive changes, preserve event
+// boundaries, and reject missing/skipped replay evidence. Existing runner tests
+// only covered manual tier selection; these minimal inputs cover the CI gap.
+test("database CI distinguishes database/runtime inputs from unrelated PRs", () => {
+	for (const file of [
+		"apps/desktop/drizzle/0145_example.sql",
+		"apps/desktop/drizzle/scripts/0145_example.ts",
+		"apps/desktop/drizzle/meta/_journal.json",
+		"apps/desktop/src/main/localDb/schema.ts",
+		"apps/desktop/src/main/localDb/ipc/conversationSearch.ts",
+		"apps/desktop/src/main/localDb/__tests__/fixtures/v39.sql",
+		"apps/desktop/src/main/__tests__/schemaDriftRepair.test.ts",
+		"apps/desktop/src/main/scheduler-host/store.ts",
+		"apps/desktop/native/sqlite-vec/win32-x64/vec0.dll",
+		"apps/desktop/package.json", "pnpm-lock.yaml", ".github/workflows/ci.yml",
+		"scripts/ci-database-tests.mjs", "scripts/test-workspaces.config.mjs",
+		"scripts/vitest-database-ci.config.mjs",
+	]) assert.equal(needsDatabaseTests([file]), true, file);
+	assert.equal(needsDatabaseTests([
+		"README.md", "docs/dev-rules/database-and-migrations.md",
+		"apps/mobile/app/index.tsx", "apps/desktop/src/renderer/main.tsx",
+		"packages/maker-core/src/agents/codex/translator.ts",
+		"apps/desktop/src/main/localDbOther/example.ts",
+	]), false);
+});
+
+test("database CI gates sources outside localDb that DB-tier tests import directly", () => {
+	const files = readAllFiles(path.join(ROOT, "apps/desktop")).map(file => `apps/desktop/${file}`);
+	const entrypoints = databaseEntrypoints(files, ROOT);
+	const changed = "apps/desktop/src/main/git-context/prRefsStore.ts";
+	assert.equal(needsDatabaseTests([changed]), false);
+	assert.equal(needsDatabaseTests([changed], entrypoints), true);
+	assert.equal(needsDatabaseTests(["apps/desktop/src/renderer/main.tsx"], entrypoints), false);
+	const runs = databaseTestRuns(ROOT, files, os.tmpdir(), [changed]);
+	assert.deepEqual(runs.map(run => run.tier), ["migration", "db", "db-related"]);
+	assert.ok(runs[2].pnpmArgs.includes("src/main/git-context/prRefsStore.ts"));
+});
+
+test("database CI compares each event base to the checked-out head and preserves removed paths", () => {
+	const base = "a".repeat(40);
+	const head = "b".repeat(40);
+	for (const [eventName, event] of [
+		["pull_request", { pull_request: { base: { sha: base } } }],
+		["merge_group", { merge_group: { base_sha: base } }],
+		["push", { before: base }],
+	]) {
+		const result = detectDatabaseChanges({ eventName, event, head, git(command, args) {
+			assert.equal(command, "git");
+			assert.deepEqual(args, ["diff", "--name-only", "--no-renames", "-z", base, head, "--"]);
+			return "apps/desktop/src/main/localDb/removed.ts\0docs/moved file\nname.ts\0";
+		} });
+		assert.equal(result.required, true);
+		assert.deepEqual(result.files, ["apps/desktop/src/main/localDb/removed.ts", "docs/moved file\nname.ts"]);
+	}
+	assert.equal(detectDatabaseChanges({ eventName: "push", event: { before: base }, head, git: () => "README.md\0" }).required, false);
+});
+
+test("database CI runs conservatively without a base and fails on unusable Git evidence", () => {
+	for (const [eventName, event] of [["workflow_dispatch", {}], ["pull_request", {}], ["push", { before: "0".repeat(40) }]]) {
+		assert.equal(detectDatabaseChanges({ eventName, event, git() { assert.fail("must not compare an absent base"); } }).required, true);
+	}
+	assert.throws(() => detectDatabaseChanges({ eventName: "push", event: { before: "bad" }, head: "b".repeat(40) }), /complete event base\/head/);
+	assert.throws(() => detectDatabaseChanges({ eventName: "push", event: { before: "a".repeat(40) }, head: "b".repeat(40), git() { throw new Error("missing commit"); } }), /missing commit/);
+});
+
+test("database CI detects a real rename out of the DB tree and writes the Actions output", () => {
+	const root = fs.mkdtempSync(path.join(os.tmpdir(), "cindy-db-ci-git-"));
+	try {
+		const git = (...args) => execFileSync("git", args, { cwd: root, encoding: "utf8" }).trim();
+		git("init", "--quiet");
+		const oldFile = path.join(root, "apps/desktop/src/main/localDb/example.ts");
+		fs.mkdirSync(path.dirname(oldFile), { recursive: true });
+		fs.writeFileSync(oldFile, "export const fixture = true;\n");
+		git("add", ".");
+		const commit = () => git("-c", "user.name=CI Fixture", "-c", "user.email=ci-fixture@example.invalid", "-c", "commit.gpgsign=false", "commit", "--quiet", "--no-verify", "-m", "fixture");
+		commit();
+		const base = git("rev-parse", "HEAD");
+		fs.renameSync(oldFile, path.join(root, "renamed.ts"));
+		git("add", "--all");
+		commit();
+		const result = detectDatabaseChanges({ root, eventName: "push", event: { before: base }, head: git("rev-parse", "HEAD") });
+		assert.equal(result.required, true);
+		assert.ok(result.files.includes("apps/desktop/src/main/localDb/example.ts"));
+		assert.ok(result.files.includes("renamed.ts"));
+		const eventFile = path.join(root, "event.json");
+		const outputFile = path.join(root, "output.txt");
+		fs.writeFileSync(eventFile, "{}");
+		execFileSync(process.execPath, [path.join(ROOT, "scripts/ci-database-tests.mjs"), "detect"], {
+			env: { ...process.env, GITHUB_EVENT_NAME: "workflow_dispatch", GITHUB_EVENT_PATH: eventFile, GITHUB_OUTPUT: outputFile },
+		});
+		assert.equal(fs.readFileSync(outputFile, "utf8"), "required=true\n");
+	} finally {
+		fs.rmSync(root, { recursive: true, force: true });
+	}
+});
+
+test("database CI selects core DB for infrastructure, related DB for sources, and full DB for unknown or removed inputs", () => {
+	const files = readAllFiles(path.join(ROOT, "apps/desktop")).map(file => `apps/desktop/${file}`);
+	const runs = databaseTestRuns(ROOT, files, os.tmpdir());
+	assert.deepEqual(runs.map(run => run.tier), ["migration", "db"]);
+	const desktop = manifest.workspaces.find(workspace => workspace.name === "desktop");
+	for (const run of runs) {
+		assert.deepEqual(run.selected, selectFilesForTier(desktop, desktop.tiers[run.tier], files));
+		assert.ok(run.pnpmArgs.includes("--maxWorkers=2"));
+		assert.ok(run.pnpmArgs.includes("--reporter=json"));
+		assert.equal(run.pnpmArgs.includes("--passWithNoTests"), false);
+		assert.equal(run.selected.some(file => file.endsWith("drizzle-proxy-perf.test.ts")), false);
+		assert.equal(run.pnpmArgs[2], "exec");
+		assert.equal(run.pnpmArgs[3], "vitest");
+	}
+	assert.ok(runs[0].selected.some(file => file.endsWith("/migrationReplay.test.ts")));
+	const migrationFiles = runs[0].selected;
+	const fullDbFiles = runs[1].selected;
+	for (const changed of [[".github/workflows/ci.yml"], ["pnpm-lock.yaml"], ["apps/desktop/drizzle/0145_example.sql"]]) {
+		const core = databaseTestRuns(ROOT, files, os.tmpdir(), changed);
+		assert.deepEqual(core.map(run => run.tier), ["migration", "db"]);
+		assert.deepEqual(core[0].selected, migrationFiles);
+		assert.ok(core[1].selected.length < fullDbFiles.length);
+		assert.ok(core[1].selected.every(file => fullDbFiles.includes(file)));
+		assert.ok(core[1].selected.includes("apps/desktop/src/main/localDb/__tests__/migrationCompatibility.test.ts"));
+		assert.ok(core[1].selected.includes("apps/desktop/src/main/__tests__/betterSqliteFactory.test.ts"));
+		assert.equal(core[1].selected.some(file => file.endsWith("/migrationReplay.test.ts")), false);
+	}
+	for (const changed of [
+		"apps/desktop/src/main/localDb/sessionQueries.ts",
+		"apps/desktop/src/main/localDb/__tests__/sessionListPagination.test.ts",
+	]) {
+		const related = databaseTestRuns(ROOT, files, os.tmpdir(), [changed]);
+		assert.deepEqual(related.map(run => run.tier), ["migration", "db", "db-related"]);
+		assert.deepEqual(related[0].selected, migrationFiles);
+		assert.deepEqual(related[2].selected, fullDbFiles);
+		const args = related[2].pnpmArgs;
+		assert.equal(args[4], "related");
+		assert.ok(args.includes(changed.slice("apps/desktop/".length)));
+		assert.equal(args[args.indexOf("--config") + 1], path.join(ROOT, "scripts/vitest-database-ci.config.mjs"));
+		assert.ok(args.includes("--exclude"));
+		assert.ok(args.includes("src/main/localDb/__tests__/drizzle-proxy-perf.test.ts"));
+	}
+	for (const changed of [
+		"apps/desktop/src/main/localDb/removed-source.ts",
+		"apps/desktop/src/main/localDb/__tests__/fixtures/schema-v39-orca-workflow.sql",
+		"apps/desktop/src/main/localDb/__tests__/fixtures/schemaLeaseChild.ts",
+	]) {
+		const full = databaseTestRuns(ROOT, files, os.tmpdir(), [changed]);
+		assert.deepEqual(full.map(run => run.tier), ["migration", "db"]);
+		assert.deepEqual(full[0].selected, migrationFiles);
+		assert.deepEqual(full[1].selected, fullDbFiles);
+	}
+	assert.throws(() => databaseTestRuns(ROOT, [], os.tmpdir()), /matched no tests/);
+});
+
+test("database CI requires a supported platform and actual replay evidence, not other passing migrations", () => {
+	for (const platform of ["darwin", "win32"]) assert.doesNotThrow(() => requireDatabasePlatform(platform));
+	assert.throws(() => requireDatabasePlatform("linux"), /skips on linux/);
+	const replay = {
+		name: path.join(ROOT, "apps/desktop/src/main/localDb/__tests__/migrationReplay.test.ts"),
+		status: "passed", assertionResults: [{ status: "passed" }],
+	};
+	assert.doesNotThrow(() => assertMigrationReplayRan({ success: true, testResults: [replay] }));
+	for (const report of [
+		{}, { success: true, testResults: [] },
+		{ success: true, testResults: [{ ...replay, name: "otherMigration.test.ts" }] },
+		{ success: false, testResults: [replay] },
+		{ success: true, testResults: [{ ...replay, assertionResults: [] }] },
+		...['pending', 'skipped', 'todo', 'failed'].map(status => ({ success: true, testResults: [{ ...replay, assertionResults: [{ status: "passed" }, { status }] }] })),
+	]) assert.throws(() => assertMigrationReplayRan(report), /Migration replay/);
+});
 
 function readRootScripts() {
 	return JSON.parse(fs.readFileSync(path.join(ROOT, "package.json"), "utf8"))
@@ -745,11 +923,6 @@ test("manifest reasons use current local-test terminology", () => {
 	assert.doesNotMatch(manifestText, /Phase 1/);
 	assert.doesNotMatch(manifestText, /uses Electron and DB worker setup/);
 
-	const desktop = manifest.workspaces.find(
-		(workspace) => workspace.cwd === "apps/desktop",
-	);
-	assert.match(desktop.tiers.db.reason, /explicit DB tier/);
-	assert.match(desktop.tiers.migration.reason, /explicit DB tier/);
 });
 
 test("desktop DB tiers are explicit manual tiers outside test:all", () => {
@@ -2458,4 +2631,14 @@ test("only selections that include Desktop need the Electron binary", () => {
 	assert.equal(selectionNeedsElectron(workspaces, { workspaces: ["packages/auth-client"] }), false);
 	assert.equal(selectionNeedsElectron(workspaces, { excludeWorkspaces: ["desktop"] }), false);
 	assert.equal(selectionNeedsElectron([{ name: "sample", cwd: "packages/sample" }]), false);
+});
+
+// Unit: suites run inside an agent session failed on variables the agent shell carried (#880:
+// CLAUDE_CODE_IDE_SKIP_AUTO_INSTALL; a remotely controlled Cindy task's CINDY_INPUT_HANDOFF_ROUTE),
+// though nothing in the code under test changed. Children inherit the runner's env.
+test("the runner drops agent-shell variables that change test results, and nothing else", () => {
+	const env = { NODE_ENV: "production", CINDY_INPUT_HANDOFF_ROUTE: "route-1", CLAUDE_CODE_IDE_SKIP_AUTO_INSTALL: "1", PATH: "/bin", CI: "true" };
+	assert.deepEqual(stripAgentEnvPollutants(env), ["NODE_ENV", "CLAUDE_CODE_IDE_SKIP_AUTO_INSTALL", "CINDY_INPUT_HANDOFF_ROUTE"]);
+	assert.deepEqual(env, { PATH: "/bin", CI: "true" });
+	assert.deepEqual(stripAgentEnvPollutants(env), []);
 });

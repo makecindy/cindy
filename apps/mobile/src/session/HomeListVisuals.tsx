@@ -2,7 +2,7 @@ import { useEffect, useRef, type ReactNode } from 'react';
 import { Animated, Easing, StyleSheet, View } from 'react-native';
 import { Archive, UsersRound, RadioTower, Pencil } from 'lucide-react-native';
 import { MobileVendorIcon } from '@/components/MobileVendorIcon';
-import { useReduceMotionEnabled } from '@/hooks/useReduceMotion';
+import { useLoopingAnimation } from '@/hooks/useLoopingAnimation';
 import { useTheme, useThemedStyles, type ThemeColors } from '@/theme';
 import { spacing, typeScale, lineHeight, fontWeight, iconSize, iconStroke } from '@/theme/tokens';
 import { sessionAgentRunsOnOtherComputer } from './sessionAgentSwitch';
@@ -74,8 +74,7 @@ const RUNNING_BREATH_HALF_CYCLE_MS = 750;
 const RUNNING_BREATH_MIN_OPACITY = 0.3;
 
 export function SessionStatusPulse({ children, running }: { children: ReactNode; running: boolean }) {
-  const reduceMotion = useReduceMotionEnabled();
-  const animate = running && reduceMotion === false;
+  const animate = useLoopingAnimation(running);
   const opacity = useRef(new Animated.Value(animate ? RUNNING_BREATH_MIN_OPACITY : 1)).current;
   useEffect(() => {
     opacity.stopAnimation();

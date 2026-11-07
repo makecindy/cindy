@@ -13,6 +13,9 @@ import {
   resolveSimMetroHandoff,
   resolveSimulatorDeviceSets,
   selectBootedSimulator,
+  simulatorBackendNotice,
+  cindySimulatorAvailable,
+  inspectTargetNativeIdentity,
   findSimulatorDeviceSet,
   simctlArgs,
 } from '../../scripts/lib/sim-whoami.mjs';
@@ -303,6 +306,7 @@ describe('mobile:sim simulator choice', () => {
     expect(resolve('system')).toEqual([system]);
     expect(resolve('cindy')).toEqual([cindy]);
     expect(resolve('/tmp/devices')).toEqual([{ name: '/tmp/devices', path: '/tmp/devices' }]);
+    expect(resolve(cindy.path)).toEqual([cindy]);
     expect(() => resolve('cindy', settings('{"enabled":false,"idleMinutes":15}'))).toThrow(/关闭了运行/);
     expect(() => resolve('cindy', settings(), () => false)).toThrow(/没有找到 Cindy 模拟器/);
     expect(() => resolve('relative/devices')).toThrow(/绝对路径/);
@@ -318,7 +322,7 @@ describe('mobile:sim simulator choice', () => {
     expect(run).toHaveBeenCalledWith('xcrun', ['simctl', '--set', cindy.path, 'get_app_container', 'booted', 'com.xd.cindy', 'app']);
   });
 
-  it('uses Cindy first, falls back to the system set, and follows an exact UDID', () => {
+  it('stays on Cindy while it is idle and only leaves it for an exact UDID', () => {
     const otherUdid = '11111111-2222-4333-8444-555555555555';
     const listing = { cindy: `iPhone A (${SIMULATOR_UDID}) (Booted)`, system: `iPhone B (${otherUdid}) (Booted)` };
     const listBooted = (set: { name: 'cindy' | 'system' }) => listing[set.name];
@@ -326,18 +330,56 @@ describe('mobile:sim simulator choice', () => {
     expect(selectBootedSimulator([cindy, system], listBooted, null)).toMatchObject({ deviceSet: cindy, targetBooted: [listing.cindy] });
     expect(selectBootedSimulator([cindy, system], listBooted, otherUdid)).toMatchObject({ deviceSet: system, targetBooted: [listing.system] });
     expect(selectBootedSimulator([cindy, system], (set: { name: 'cindy' | 'system' }) => (set.name === 'cindy' ? '' : listing.system), null))
-      .toMatchObject({ deviceSet: system });
+      .toEqual({ deviceSet: cindy, booted: [], targetBooted: [] });
+    expect(selectBootedSimulator([cindy, system], (set: { name: 'cindy' | 'system' }) => (set.name === 'cindy' ? '' : listing.system), otherUdid))
+      .toMatchObject({ deviceSet: system, targetBooted: [listing.system] });
+    expect(selectBootedSimulator([system], () => listing.system, null)).toMatchObject({ deviceSet: system, targetBooted: [listing.system] });
     expect(selectBootedSimulator([cindy, system], () => '', null)).toEqual({ deviceSet: cindy, booted: [], targetBooted: [] });
   });
 
-  it('skips an unreadable Cindy set in auto mode but still reports a pinned set', () => {
+  it('fails closed when Cindy cannot be listed, unless an exact UDID may live elsewhere', () => {
     const line = `iPhone B (${SIMULATOR_UDID}) (Booted)`;
     const listBooted = (set: { name: string }) => {
       if (set.name === 'cindy') throw new Error('cannot read device set');
       return line;
     };
-    expect(selectBootedSimulator([cindy, system], listBooted, null)).toMatchObject({ deviceSet: system, targetBooted: [line] });
+    expect(() => selectBootedSimulator([cindy, system], listBooted, null)).toThrow(/cannot read.*不改用其他模拟器/);
+    expect(selectBootedSimulator([cindy, system], listBooted, SIMULATOR_UDID)).toMatchObject({ deviceSet: system, targetBooted: [line] });
     expect(() => selectBootedSimulator([cindy], listBooted, null)).toThrow(/cannot read/);
+  });
+
+  it('points an idle Cindy simulator at the plugin and lists reusable devices', () => {
+    const shutdown = `iPhone Air (${SIMULATOR_UDID}) (Shutdown)`;
+    const listDevices = () => `== Devices ==\n    ${shutdown}\n    iPhone B (11111111-2222-4333-8444-555555555555) (Booted)`;
+    const idle = { deviceSet: cindy, booted: [], simulatorUdid: null, listDevices, cindyAvailable: true };
+
+    expect(simulatorBackendNotice(idle)).toMatchObject({ code: 'cindy-idle', reusable: [shutdown] });
+    expect(simulatorBackendNotice({ ...idle, listDevices: () => { throw new Error('no list'); } }))
+      .toMatchObject({ code: 'cindy-idle', reusable: [] });
+    expect(simulatorBackendNotice({ ...idle, booted: ['iPhone'] })).toBeNull();
+    expect(simulatorBackendNotice({ ...idle, simulatorUdid: SIMULATOR_UDID })).toBeNull();
+  });
+
+  it('flags the system simulator only while Cindy is available', () => {
+    const selection = { deviceSet: system, booted: ['iPhone'], simulatorUdid: SIMULATOR_UDID, listDevices: () => '' };
+    expect(simulatorBackendNotice({ ...selection, cindyAvailable: true })).toMatchObject({ code: 'system-while-cindy-available' });
+    expect(simulatorBackendNotice({ ...selection, cindyAvailable: false })).toBeNull();
+    expect(cindySimulatorAvailable({ root, exists: () => true, readFile: settings('{"enabled":false}') })).toBe(false);
+    expect(cindySimulatorAvailable({ root, exists: () => false, readFile: settings() })).toBe(false);
+    expect(cindySimulatorAvailable({ root, exists: () => true, readFile: settings() })).toBe(true);
+  });
+
+  it('does not report a missing app when no exact target was probed', () => {
+    const inspect = vi.fn(() => ({ healthy: true, code: 'native-matched' }));
+    const unknown = { healthy: false, code: 'native-unknown' };
+    expect(inspectTargetNativeIdentity({ targetBooted: ['a', 'b'], probeFailed: false, inspect }))
+      .toMatchObject({ ...unknown, reason: 'target-not-unique' });
+    expect(inspectTargetNativeIdentity({ targetBooted: [], probeFailed: false, inspect }))
+      .toMatchObject({ ...unknown, reason: 'target-not-unique' });
+    expect(inspectTargetNativeIdentity({ targetBooted: [], probeFailed: true, inspect }))
+      .toMatchObject({ ...unknown, reason: 'probe-timeout' });
+    expect(inspect).not.toHaveBeenCalled();
+    expect(inspectTargetNativeIdentity({ targetBooted: ['a'], probeFailed: false, inspect })).toMatchObject({ code: 'native-matched' });
   });
 
   it('finds the owning device set for a UDID in any state', () => {

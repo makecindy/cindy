@@ -724,7 +724,7 @@ export function RemotePluginPage({
             onUpdateFromFile={() => {
               void installFile(ghost);
             }}
-            remoteFileUpdate={ghost.namespace === null && !ghost.builtin}
+            remoteFileUpdate={(ghost.namespace === null || ghost.namespace === 'local') && !ghost.builtin}
             onUninstall={() => {
               void uninstall(ghost);
             }}

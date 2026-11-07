@@ -1708,6 +1708,11 @@ export async function quarantineTargetWithoutClosing(opts: {
   ],
   'extension/src/browser/chrome.ts': [
     {
+      desc: 'read the selected managed Chrome profile for silent macOS startup',
+      find: `import path from "node:path";`,
+      replace: `import path from "node:path";\nimport { loadJsonFile } from "../../../../shim/json-store.js";`,
+    },
+    {
       desc: 'reuse the bounded CDP command helper for graceful Windows Chrome shutdown',
       find: `  openCdpWebSocket,\n} from "./cdp.helpers.js";`,
       replace: `  openCdpWebSocket,\n  withCdpSocket,\n} from "./cdp.helpers.js";`,
@@ -1774,9 +1779,26 @@ export async function quarantineTargetWithoutClosing(opts: {
       if (remainingMs <= 0) break;`,
     },
     {
-      desc: 'start headed automation Chrome without an empty foreground window',
+      desc: 'start headed automation Chrome without a foreground window while preserving macOS Quit',
       find: `  if (headlessMode.headless) {\n    args.push("--headless=new");\n    args.push("--disable-gpu");\n  }`,
-      replace: `  if (headlessMode.headless) {\n    args.push("--headless=new");\n    args.push("--disable-gpu");\n  } else {\n    args.push("--no-startup-window");\n  }`,
+      replace: `  if (headlessMode.headless) {
+    args.push("--headless=new");
+    args.push("--disable-gpu");
+  } else if ((params.platform ?? process.platform) === "darwin") {
+    // macOS already keeps a windowless app alive. --no-startup-window with CDP
+    // adds a REMOTE_DEBUGGING keep-alive that survives normal application Quit.
+    // Explicitly select the existing profile too: otherwise Chrome defers its
+    // startup profile activation until the first background tab is created.
+    const localState = loadJsonFile<{ profile?: { last_used?: unknown } }>(
+      path.join(userDataDir, "Local State"),
+    );
+    const lastUsed = localState?.profile?.last_used;
+    const profileDirectory =
+      typeof lastUsed === "string" && lastUsed.trim() ? lastUsed.trim() : "Default";
+    args.push("--silent-launch", "--profile-directory=" + profileDirectory);
+  } else {
+    args.push("--no-startup-window");
+  }`,
     },
     {
       desc: 'expose managed-profile PID lookup so the host can confirm process exit from the OS, not from CDP endpoint silence (a stalled Chrome stops answering while still alive)',

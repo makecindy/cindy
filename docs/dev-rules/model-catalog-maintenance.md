@@ -437,6 +437,11 @@ app-server 的完整 `model/list`，不使用控制端 OpenAI 登录或网关目
 新任务从远端清单解析默认模型及推理强度／Fast；已有任务保留原模型和历史，由用户改选。
 设置页及普通 SSH 创建入口不继承控制端草稿的模型、推理强度或 Fast 记忆，即使型号同名；
 采用远端默认模型及推荐推理强度，Fast 初始关闭，创建后可在任务内手动改选。
+SSH 项目的新任务草稿允许在发送前改选，模型、档位与 Fast 只保留在按主机和账号隔离的
+本次草稿状态中。草稿校准、模型选择器与发送共用同一份远端清单及重试入口；Codex 清单
+只替换 Codex 行，Claude Code / Pi 沿用其既有本机目录与 SSH 准入规则。
+当前引擎不是 Codex 时，打开模型选择器才按需读取 Codex 清单。实现见
+`NewMakerDraftRoute.tsx`、`useSshCodexDraftSelection.ts`，回归见 `sshCodexModels.test.tsx`。
 原样恢复只有在持久化的主机、原生线程、引擎、模型及来源均匹配时才豁免新建目录校验，
 允许恢复后来被隐藏的原模型；模型是否仍可推理由远端 Codex 决定。SSH 模型及档位选择不写入控制端本地模型偏好。
 首次连接成功会补偿挂载时因尚未就绪而失败的目录读取；重复 ready 快照不清空已成功读取的目录。
@@ -470,6 +475,7 @@ app-server 的完整 `model/list`，不使用控制端 OpenAI 登录或网关目
 每组 `prices` 沿用原价格结构与官方证据：币种、每百万 tokens 单价、缓存读/写及 1h 写入、
 标准/Fast 等变体、输入区间 `[minInputTokens, maxInputTokens)`、生效日期区间。
 缺字段保持未知，明确的 0 才表示零单价；缓存存储每小时费用不能写成缓存写入单价。
+客户端估价时按请求拆分缓存写入：上游报告 1h TTL 写入量（Anthropic `cache_creation.ephemeral_1h_input_tokens`）时这部分按 1h 写入价计；报价没有 1h 写入价（如 Gateway）时沿用缓存写入价。设置里的自定义缓存写入价按参考价的 1h/5m 倍率带动 1h 价。
 
 `resolveBaseModelReferencePrice` 按公共 ID/唯一 alias 读取，不依赖供应商名单。
 多市场/币种必须明确选择到唯一有效价格；无匹配或有歧义返回未知。

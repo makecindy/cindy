@@ -71,7 +71,9 @@ import {
   type GhostSourceLabels,
 } from './GhostCommandDecoration';
 import {
+  commandPaletteReplacementNames,
   replaceSlashCommandRunWithText,
+  resolveSlashCommandRunEnd,
   setSlashCommandRoster,
   SlashCommandDecoration,
 } from './SlashCommandDecoration';
@@ -139,6 +141,7 @@ import {
   type RemoteAgentSelectorOptions,
   type UnifiedSelectionAgentDevice,
 } from './ModelSelector';
+import type { PluginModelsPickerProps } from './PluginModelsSection';
 import {
   enqueueEffortChange,
   getEffortChangeCoordinator,
@@ -159,6 +162,7 @@ import {
   confirmAgentSwitchRisk,
   isAgentSwitchEchoConfigConsistent,
   isAgentSwitchResponseFresh,
+  relocationDescriptionKey,
   resolveAgentSwitchAckAction,
 } from './agentSwitchConfirmation';
 import {
@@ -200,7 +204,7 @@ import {
 import { PendingQueuePanel } from './PendingQueuePanel';
 import { resolveSoleSteerableQueuedMessage } from './pendingQueueRowPresentation';
 import { SendButton } from './SendButton';
-import { FolderPickerPopover, addRecentFolder } from './FolderPickerPopover';
+import { FolderPickerPopover, addRecentFolder, type FolderPickerOption } from './FolderPickerPopover';
 import { SlashCommandPalette } from './SlashCommandPalette';
 import {
   expandGhostCommand,
@@ -209,7 +213,7 @@ import {
   parseGhostCommandToken,
 } from '@/cindy-brain/ghostCommand';
 import { findInstalledGhostByInstanceId, installedGhostStoragePart } from '../../../shared/pluginIdentity';
-import { filterGhostsForWorkdir, getWorkdirDisabledGhostIds } from '@/cindy-brain/ghostWorkdirFilter';
+import { filterGhostsForWorkdir, useWorkdirDisabledGhostIds } from '@/cindy-brain/ghostWorkdirFilter';
 import { useInstalledGhosts } from '@/cindy-brain/useInstalledGhosts';
 import { useRemoteComposerGhosts } from '@/cindy-brain/useRemoteComposerGhosts';
 import { projectGhostComposerEntries, type GhostCommandSource } from '../../../shared/ghostComposer';
@@ -267,6 +271,7 @@ import {
 } from '@/components/cindy-make/CindyMakePreflightDialog';
 import { getModelById, getModelsForVendor } from '@/lib/modelDefinitions';
 import {
+  addPluginSkillSetupCommands,
   beginSlashCommandRosterLoad,
   EMPTY_SLASH_COMMANDS,
   failSlashCommandRosterLoad,
@@ -279,9 +284,11 @@ import {
   loadAllCommands,
   nextAvailableSlashCommandIndex,
   PI_RUNTIME_SKILL_RETRY_DELAYS_MS,
+  pluginSkillSetupName,
   rewriteBuiltInSkillDraftForSend,
   leadingSlashInvocation,
   rebaseInlineRangesAfterSlashCommandRewrite,
+  type PluginSkillSetupPaletteEntry,
   type SlashCommandRosterState,
   type UnifiedCommand,
 } from '@/lib/slashCommands';
@@ -303,7 +310,13 @@ import {
   type ComposerSuggestionAction,
   type ComposerSuggestionEntry,
 } from '@/lib/composerSuggestion';
-import { countUserExtraDirs, MAX_EXTRA_DIRS, pickAndAddExtraDir } from './extraDirsActions';
+import {
+  addRecentWritableDir,
+  countUserExtraDirs,
+  MAX_EXTRA_DIRS,
+  pickAndAddExtraDir,
+} from './extraDirsActions';
+import { AddDirectoryPanel } from './AddDirectoryPanel';
 import { applyListBackspace } from '@/lib/composerListContinuation';
 import type { Effort, PermissionMode } from '@/lib/userPreferences.types';
 import { getAppShortcutCombos } from '@/lib/appShortcutStore';
@@ -351,6 +364,7 @@ import { useAvailableAgents } from '@/hooks/useAvailableAgents';
 import { useConnectedSource } from '@/hooks/useConnectedSource';
 import { useProviders } from '@/hooks/useProviders';
 import { useSshCodexProviders } from '@/hooks/useSshCodexProviders';
+import { mergeSshCodexCatalog, type SshCodexCatalog } from '@/lib/sshCodexCatalog';
 import { useDeviceProviders } from '@/hooks/useDeviceProviders';
 import { chatEligibleSourcesForModel, effectiveSourceIdForModel } from '@cindy/model-providers';
 import { resolveDraftEffectiveProviderId } from '@/lib/draftModelCalibration';
@@ -365,7 +379,7 @@ import {
 } from '@/lib/providerModels';
 import {
   clearProviderModelEffort,
-  clearProviderModelFast,
+  clearProviderModelFast, editProviderModelMemoryBatch,
   getProviderModelEffort,
   setProviderModelChoice,
   setProviderModelEffort,
@@ -409,7 +423,7 @@ import {
   shouldBlockLegacyRemotePiModelWindowSwitch,
 } from '../../../shared/modelSwitchAssessment';
 import { useVoiceInput } from '@/voice-input/useVoiceInput';
-import { getTextPreviewSearchHost } from '@/components/find-in-page/findInPageOwnership';
+import { getTextPreviewHost } from '@/components/find-in-page/findInPageOwnership';
 import { useVoiceInputSettings } from '@/hooks/useVoiceInputSettings';
 import { VoiceInputStatusNotice } from '@/voice-input/VoiceInputStatusNotice';
 import type { VoiceInputState } from '@cindy/voice-input-core';
@@ -500,6 +514,8 @@ function isPointInsideElement(
 }
 
 interface ChatInputProps {
+  modelPickerRequest?: number;
+  onModelPickerRequestConsumed?: (nonce: number) => void;
   onSend: (
     message: string,
     model: string,
@@ -572,6 +588,8 @@ interface ChatInputProps {
    * desktop + agent-builtin 命令、关闭 @ 文件面板。null/undefined = 本地。
    */
   remoteHostId?: string | null;
+  /** Draft route shares discovery with model calibration and submission. */
+  sshCodexCatalogOverride?: SshCodexCatalog;
   /**
    * device-link 远程会话所属被控端 id(与 SSH remoteHostId 互斥)。非空 = 控制端在远程操控,
    * 此时模型 / fast / effort / 权限档 等**能力全部从被控端读**(经隧道),控制端"忘掉"本地能力。
@@ -628,6 +646,14 @@ interface ChatInputProps {
    * 草稿 patchVendorPrefs)。未提供 = 不显示计划模式入口。
    */
   onPlanModeChange?: (enabled: boolean) => void | Promise<void>;
+  /**
+   * Plugin Skills the `/` palette offers while their plugin is missing or disabled
+   * here. Picking one clears the typed `/query` and calls onSelect; nothing is inserted.
+   */
+  pluginSkillSetup?: {
+    entries: readonly PluginSkillSetupPaletteEntry[];
+    onSelect: (skillName: string) => void;
+  };
   /** Current Fast Mode state from the session store. */
   fastMode?: boolean | 'ultrafast';
   /** Called when the Fast Mode toggle changes. Captured device ID pins remote routing. */
@@ -654,6 +680,8 @@ interface ChatInputProps {
   /** Optional local companion call action, separate from one-shot dictation. */
   onStartVoiceConversation?: () => void;
   voiceConversationDisabled?: boolean;
+  /** Why the voice button is unavailable, when the reason is a call elsewhere. */
+  voiceConversationDisabledReason?: string;
   voiceConversationActive?: boolean;
   /**
    * F-QUEUE-DEFER: un-dispatched messages (rendered above the input by
@@ -904,6 +932,8 @@ interface ChatInputProps {
   collaboration?: CollaborationMenuConfig;
   /** Persistent teammates available as structured message targets in this task. */
   botMentions?: readonly ComposerBotMention[];
+  /** 新任务的「让插件选」(只有新任务草稿传)。 */
+  pluginModels?: PluginModelsPickerProps;
   /**
    * 新会话统一模型选择器(model-selector-unified M5)的**选中直通**。
    *
@@ -943,6 +973,7 @@ interface ChatInputProps {
 
 /** 本机模型全局预设的读写器(本机目录的选择器共用一份,引用稳定)。 */
 const LOCAL_MODEL_MEMORY: ModelMemoryAccessors = {
+  editMany: editProviderModelMemoryBatch,
   getEffort: getProviderModelEffort,
   setEffort: setProviderModelEffort,
   setChoice: setProviderModelChoice,
@@ -955,6 +986,41 @@ const LOCAL_MODEL_MEMORY: ModelMemoryAccessors = {
   clearEffort: clearProviderModelEffort,
   clearFast: clearProviderModelFast,
 };
+
+/**
+ * SSH 项目的本机预设:Codex 的档位跟着远端清单走,不读写本机预设(同名模型的本机记忆
+ * 属于本机来源);Claude Code / Pi 仍用本机目录,照常读写。
+ */
+const SSH_PROJECT_MODEL_MEMORY: ModelMemoryAccessors = (() => {
+  const local = (agent: AgentKind) => agent !== 'codex';
+  return {
+    supportsAgent: local,
+    getEffort: (agent, providerId, modelId) =>
+      local(agent) ? getProviderModelEffort(agent, providerId, modelId) : undefined,
+    setEffort: (agent, providerId, modelId, effort) => {
+      if (local(agent)) setProviderModelEffort(agent, providerId, modelId, effort);
+    },
+    setChoice: (agent, providerId, modelId, effort) => {
+      if (local(agent)) setProviderModelChoice(agent, providerId, modelId, effort);
+    },
+    getFast: (agent, providerId, modelId) =>
+      local(agent) ? getProviderModelFast(agent, providerId, modelId) : undefined,
+    setFast: (agent, providerId, modelId, enabled) => {
+      if (local(agent)) setProviderModelFast(agent, providerId, modelId, enabled);
+    },
+    getThinking: (agent, providerId, modelId) =>
+      local(agent) ? getProviderModelThinking(agent, providerId, modelId) : undefined,
+    setThinking: (agent, providerId, modelId, enabled) => {
+      if (local(agent)) setProviderModelThinking(agent, providerId, modelId, enabled);
+    },
+    clearEffort: (agent, providerId, modelId) => {
+      if (local(agent)) clearProviderModelEffort(agent, providerId, modelId);
+    },
+    clearFast: (agent, providerId, modelId) => {
+      if (local(agent)) clearProviderModelFast(agent, providerId, modelId);
+    },
+  };
+})();
 
 /**
  * 把已有任务里选定的档位 / Fast 记进**这个模型所在目录**的那份记忆:deviceId = null 写任务所在电脑
@@ -1249,6 +1315,8 @@ function resolveModelThinkingIntent(input: {
 }
 
 export function ChatInput({
+  modelPickerRequest,
+  onModelPickerRequestConsumed,
   onSend,
   onComposerTyping,
   onComposerVoiceBusyChange,
@@ -1262,6 +1330,7 @@ export function ChatInput({
   sessionOrcaRemoteWorker,
   initialWorkingDir,
   remoteHostId,
+  sshCodexCatalogOverride,
   deviceLinkDeviceId: _deviceLinkDeviceId,
   deviceLinkDeviceName = null,
   agentDeviceId: _agentDeviceId,
@@ -1276,6 +1345,7 @@ export function ChatInput({
   initialPermissionMode,
   planModeEnabled = false,
   onPlanModeChange,
+  pluginSkillSetup,
   fastMode = false,
   onFastModeChange,
   onWorkingDirChange,
@@ -1288,6 +1358,7 @@ export function ChatInput({
   onBeforeVoiceInputStart,
   onStartVoiceConversation,
   voiceConversationDisabled = false,
+  voiceConversationDisabledReason,
   voiceConversationActive = false,
   pendingQueue,
   queueExpanded = false,
@@ -1346,6 +1417,7 @@ export function ChatInput({
   collaboration,
   botMentions = [],
   onUnifiedDraftSelect,
+  pluginModels,
   selectedFavoriteUid = null,
 }: ChatInputProps) {
   // Keep the existing draft/editor mounted during a companion call, but reuse
@@ -1553,7 +1625,9 @@ export function ChatInput({
     if (turnStarting) {
       turnGenRef.current += 1;
       showRecommendationRef.current = false;
-      if (sessionId) dismissPromptRecommendation(sessionId);
+      // The session store owns turn invalidation. A mounted/reused composer can
+      // see a delayed busy projection; treating it as explicit consumption would
+      // erase B's buffered completion before the streams converge.
     }
   });
   useEffect(() => {
@@ -1733,6 +1807,9 @@ export function ChatInput({
   // 合成「+」面板自带搜索框（「+」面板浮在输入框上方、盖住了输入框,在看不见的
   // 输入框里盲打是死路）。面板形态下查询词只认这个框。
   const [atPanelSearch, setAtPanelSearch] = useState('');
+  // 「+」面板当前显示「添加目录」二级页(只在面板打开期间有效，面板一关就复位)。
+  const [addDirViewOpen, setAddDirViewOpen] = useState(false);
+  const openAddDirectoryViewRef = useRef<() => void>(() => {});
   const setSyntheticAtAnchor = useCallback((next: number | null) => {
     const previous = syntheticAtAnchorRef.current;
     syntheticAtAnchorRef.current = next;
@@ -1992,6 +2069,11 @@ export function ChatInput({
   const remoteAtomicModelSelectionSupported =
     hostCcCaps.capabilities?.supportsSessionAgentSwitchCas === true ||
     hostCodexCaps.capabilities?.supportsSessionAgentSwitchCas === true;
+  // 被控电脑上的协同 Lead / 本机 Worker 能不能换 Agent 所在电脑，由被控端声明(host 级能力，两个
+  // 引擎的快照都带)。v0.1.104–v0.1.110 的被控端会拒绝，缺这一位时不列其他电脑与分享。
+  const hostSupportsOrcaAgentRelocation =
+    hostCcCaps.capabilities?.supportsOrcaAgentRelocation === true ||
+    hostCodexCaps.capabilities?.supportsOrcaAgentRelocation === true;
   // Orca Lead/Worker keeps its workflow identity in the session row and vendor
   // options; it can therefore use the same deferred handoff transaction as a
   // normal session. Remote sessions remain gated by their host capabilities.
@@ -2092,12 +2174,38 @@ export function ChatInput({
   }, [activeModel, agentKind, runtimeEffective, composerSelection.pending, composerSelection.display.agentKind, ccCaps.capabilities, codexCaps.capabilities, piCaps.capabilities]);
   // 供应商连接态。effectiveSourceId / sendProviderId / dispatchSend 预检用它。device-link 远程会话 /
   // 草稿用**被控端**供应商目录(隧道),否则用本机(两 hook 都无条件调用,按 deviceLinkDeviceId 取)。
-  const sshCodexHostId = currentModelAgentKind === 'codex' && !deviceLinkDeviceId ? remoteHostId : null;
-  const sshCodexProviders = useSshCodexProviders(sshCodexHostId);
+  // SSH 项目:Codex 只走远端主机的原生连接,模型清单读远端;Claude Code / Pi 仍用本机目录。
+  // 读远端清单前会确保远端装好 Codex,所以当前不是 Codex 时等用户打开模型选择器再读;
+  // 读过一次后保持,换到别的引擎也不丢 Codex 那一组。
+  const sshHostId = !deviceLinkDeviceId ? remoteHostId ?? null : null;
+  const sshCodexHostId = currentModelAgentKind === 'codex' ? sshHostId : null;
+  const [sshCodexRequestedHostId, setSshCodexRequestedHostId] = useState<string | null>(null);
+  useEffect(() => {
+    if (sshCodexHostId) setSshCodexRequestedHostId(sshCodexHostId);
+  }, [sshCodexHostId]);
+  const sshCodexCatalogHostId =
+    sshHostId && (sshCodexHostId || sshCodexRequestedHostId === sshHostId) ? sshHostId : null;
+  const ownSshCodexProviders = useSshCodexProviders(sshCodexCatalogOverride ? null : sshCodexCatalogHostId);
+  const sshCodexProviders = sshCodexCatalogOverride ?? ownSshCodexProviders;
+  const requestSshCodexCatalog = useCallback(() => {
+    if (sshHostId) setSshCodexRequestedHostId(sshHostId);
+  }, [sshHostId]);
+  const sshCodexCatalog = useMemo<SshCodexCatalog | undefined>(
+    () => sshCodexCatalogOverride ?? (sshHostId
+      ? sshCodexCatalogHostId
+        ? sshCodexProviders
+        : { providers: sshCodexProviders.providers, status: 'idle', refresh: requestSshCodexCatalog }
+      : undefined),
+    [sshCodexCatalogOverride, sshHostId, sshCodexCatalogHostId, sshCodexProviders, requestSshCodexCatalog],
+  );
   const localProviders = useProviders();
   const remoteProviders = useDeviceProviders(catalogDeviceId);
+  const sshCatalogProviders = useMemo(
+    () => sshHostId ? mergeSshCodexCatalog(localProviders.providers, sshCodexProviders.providers) : null,
+    [sshHostId, localProviders.providers, sshCodexProviders.providers],
+  );
   const providers = catalogDeviceId ? remoteProviders.providers
-    : sshCodexHostId ? sshCodexProviders.providers : localProviders.providers;
+    : sshCatalogProviders ?? localProviders.providers;
   const sendProviders = filterChatBridgedCodexProviders(
     providers,
     currentModelAgentKind ?? 'codex',
@@ -2164,11 +2272,15 @@ export function ChatInput({
   // (sessionId 在)按实际路由口径判(includeDisabled):运行中的会话不因停用打断,
   // 请求仍走原路由,把停用当「无来源」会误禁 Send(PR #744 review 第十轮)。草稿是
   // 新路由选择,保持准入口径(停用拷贝不算可发送来源)。
+  // SSH Codex 只接受远端原生连接(main 的 assertSshCodexModel):草稿里残留的本机来源
+  // (如网关)即使远端也有同名模型,发出去也会被拒(LAZY_CREATE_FAILED),这里先拦下。
+  const sshCodexSourceUnsupported =
+    !!sshCodexHostId && !!activeProviderId && activeProviderId !== 'openai';
   const hasConnectedSendSource = currentModelAgentKind
     ? chatEligibleSourcesForModel(sendProviders, activeModel, currentModelAgentKind, {
         onlyConnected: true,
         includeDisabled: !!sessionId,
-      }).length > 0
+      }).length > 0 && !sshCodexSourceUnsupported
     : false;
   const noConnectedSource =
     enforceConnectedSourceGate &&
@@ -2232,7 +2344,7 @@ export function ChatInput({
   useProviderModelMemoryVersion();
   useAgentDeviceModelMemoryVersion();
   const modelMemory = useMemo<ModelMemoryAccessors | undefined>(() => {
-    if (sshCodexHostId) return undefined;
+    if (sshHostId) return SSH_PROJECT_MODEL_MEMORY;
     // 模型目录在运行 Agent 的另一台电脑(那台的来源 id 与本机、被控电脑的都不是一回事)。
     if (effectiveAgentDeviceId) return agentDeviceModelMemoryAccessors(effectiveAgentDeviceId);
     // device-link 远程草稿 / 会话:用纯显示镜像 override(读被控端全局预设、写穿被控端)。
@@ -2240,7 +2352,7 @@ export function ChatInput({
     // 旧被控端拿不到镜像:宁可无记忆,也不掺控制端本机。
     if (deviceLinkDeviceId) return undefined;
     return LOCAL_MODEL_MEMORY;
-  }, [effectiveAgentDeviceId, deviceLinkDeviceId, modelMemoryOverride, sshCodexHostId]);
+  }, [effectiveAgentDeviceId, deviceLinkDeviceId, modelMemoryOverride, sshHostId]);
   /**
    * 任务所在电脑那份目录的档位记忆:本机任务 = 本机预设;被控电脑上的任务 = 被控电脑的镜像
    * (写穿过去,旧被控端没有镜像时不记)。Agent 在别的电脑时浏览 / 换回任务所在电脑都用它。
@@ -3243,13 +3355,14 @@ export function ChatInput({
       (trigger.kind === 'slash' && trigger.sigil === '$'),
     remoteReconnectEpoch,
   );
+  const localDisabledGhostIds = useWorkdirDisabledGhostIds(workingDir, installedGhosts, deviceLinkDeviceId === null);
   const pluginsForMenu = useMemo(
     () => deviceLinkDeviceId
       ? remoteComposerGhosts.ghosts
-      : deviceLinkDeviceId === null
-        ? projectGhostComposerEntries(installedGhosts, [...getWorkdirDisabledGhostIds(workingDir)])
+      : deviceLinkDeviceId === null && localDisabledGhostIds
+        ? projectGhostComposerEntries(installedGhosts, [...localDisabledGhostIds])
         : [],
-    [deviceLinkDeviceId, remoteComposerGhosts.ghosts, installedGhosts, workingDir],
+    [deviceLinkDeviceId, remoteComposerGhosts.ghosts, installedGhosts, localDisabledGhostIds],
   );
   const composerGhostsRef = useRef(pluginsForMenu);
   composerGhostsRef.current = pluginsForMenu;
@@ -3421,6 +3534,8 @@ export function ChatInput({
     currentStorageKey: storageKeyForDraftRef.current,
   });
   const composerMutationLocked = composerEditorLocked || voiceBusyOnCurrentComposer;
+  // Only the composer that owns the run explains why someone else's words are missing.
+  const showSpeakerFilteredNotice = voiceInput.speakerFiltered && voiceBusyOnCurrentComposer;
   useEffect(() => {
     onComposerVoiceBusyChange?.(voiceBusyOnCurrentComposer);
   }, [onComposerVoiceBusyChange, voiceBusyOnCurrentComposer]);
@@ -3585,7 +3700,7 @@ export function ChatInput({
       // 注册在 document 或组件层，晚于本 window capture handler 执行。
       if (
         event.key === 'Escape' &&
-        (getTextPreviewSearchHost() || (
+        (getTextPreviewHost() || (
           event.target instanceof Element &&
           event.target.closest('[role="alertdialog"], [data-morph-side]')
         ))
@@ -4735,8 +4850,17 @@ export function ChatInput({
         } as UnifiedCommand;
       });
   }, [ghostSourceLabels, ghostsForCommand, isGhostSigil, t]);
+  // 插件技能的安装/启用入口只进 / 面板,不进胶囊 roster 与发送期分派。
+  const pluginSkillSetupEntries = pluginSkillSetup?.entries;
+  const slashPaletteCommands = useMemo(
+    () =>
+      slashCommandsReady && pluginSkillSetupEntries
+        ? addPluginSkillSetupCommands(composerSlashCommands, pluginSkillSetupEntries)
+        : composerSlashCommands,
+    [composerSlashCommands, pluginSkillSetupEntries, slashCommandsReady],
+  );
   // 面板显示与键盘导航共用同一份命令源:$ 只列意识,/ 只列技能/命令。
-  const paletteCommands = isGhostSigil ? ghostCommandItems : composerSlashCommands;
+  const paletteCommands = isGhostSigil ? ghostCommandItems : slashPaletteCommands;
   const filteredCommands = useMemo(
     () => (trigger.kind === 'slash' ? filterSlashCommands(paletteCommands, trigger.query) : []),
     [paletteCommands, trigger],
@@ -4948,22 +5072,9 @@ export function ChatInput({
             ? t('extraDirs.atLimit', { max: MAX_EXTRA_DIRS })
             : t('extraDirs.add'),
         disabled: composerMutationLocked || totalDirs >= MAX_EXTRA_DIRS,
-        run: () => {
-          void pickAndAddExtraDir({
-            extraDirs: currentWritableDirs,
-            otherDirs: currentExtraDirs,
-            workingDir,
-            writableGrantScope,
-            onChange: onWritableDirsChange,
-            confirm: confirmDialog,
-            parentDirectoryConfirm: {
-              title: t('extraDirs.writableParentConfirmTitle'),
-              description: (path) => t('extraDirs.writableParentConfirmDescription', { path }),
-              confirmText: t('extraDirs.parentConfirmAccept'),
-              cancelText: t('extraDirs.parentConfirmCancel'),
-            },
-          });
-        },
+        // 先进「添加目录」二级页选最近目录，二级页底部再开系统选择器。
+        opensPanelPage: true,
+        run: () => openAddDirectoryViewRef.current(),
       });
     }
     if (remoteComposerGhosts.failed) {
@@ -4977,7 +5088,6 @@ export function ChatInput({
   }, [
     collaboration,
     composerMutationLocked,
-    confirmDialog,
     extraDirs,
     inSessionGoalEnabled,
     localAttachmentPickerEnabled,
@@ -4993,7 +5103,6 @@ export function ChatInput({
     deviceLinkDeviceId,
     writableDirs,
     writableGrantScope,
-    workingDir,
   ]);
 
   const atResources = useMemo(
@@ -5246,31 +5355,27 @@ export function ChatInput({
         return;
       }
       const { from } = trigger;
-      // Replace the WHOLE slash-run, not just up-to-caret: the user may
-      // have moved the caret back inside the run (e.g. `/compa|ct`) and
-      // still hit Enter. Extend `to` to the first whitespace / end of
-      // paragraph after the `/`.
-      const $from = editor.state.doc.resolve(from);
-      const parent = $from.parent;
-      const parentStart = $from.start();
-      let runEnd = from + 1; // skip the `/` itself
-      // Walk forward through inline nodes until whitespace / chip boundary
-      const offset = from - parentStart + 1;
-      parent.forEach((child, childOffset) => {
-        // childOffset is relative to parentStart
-        if (childOffset + child.nodeSize <= offset) return;
-        if (child.type.name === 'mentionChip') return; // chip boundary
-        if (!child.isText) return;
-        const localStart = Math.max(0, offset - childOffset);
-        const text = child.text ?? '';
-        for (let i = localStart; i < text.length; i++) {
-          if (/\s/.test(text[i])) {
-            runEnd = parentStart + childOffset + i;
-            return;
-          }
-        }
-        runEnd = parentStart + childOffset + text.length;
-      });
+      // Preserve any draft after the caret. Only consume a suffix when it
+      // completes this exact command (e.g. `/compa|ct`) at a real boundary.
+      const runEnd = resolveSlashCommandRunEnd(
+        editor.state.doc,
+        from,
+        trigger.query,
+        commandPaletteReplacementNames(cmd),
+      );
+      const setupSkillName = pluginSkillSetupName(cmd);
+      if (setupSkillName) {
+        if (trigger.sigil !== '/' || !pluginSkillSetup) return;
+        // 安装/启用入口:删掉已键入的 `/query`、先落草稿再交给父组件走安装引导,
+        // 装好后由父组件把 `/技能 ` 填回这个输入框。
+        editor.chain().command(({ tr }) => {
+          tr.delete(from, runEnd);
+          return true;
+        }).run();
+        draftSaveSchedulerRef.current?.flush();
+        pluginSkillSetup.onSelect(setupSkillName);
+        return;
+      }
       let planModeCommandConsumed = false;
       const applied = editor
         .chain()
@@ -5299,7 +5404,7 @@ export function ChatInput({
         planModeEntry?.onToggle(!planModeEntry.enabled);
       }
     },
-    [editor, planModeCommandAvailable, planModeEntry, trigger],
+    [editor, planModeCommandAvailable, planModeEntry, pluginSkillSetup, trigger],
   );
 
   const resolveEffectiveAtRange = useCallback((): { from: number; to: number } | null => {
@@ -5457,9 +5562,10 @@ export function ChatInput({
       if (!editor) return;
       const range = resolveEffectiveAtRange();
       if (!range) return;
-      editor
-        .chain()
-        .focus()
+      // 打开面板下一级页面的动作不把焦点还给编辑器：TipTap 的 focus 延后执行，焦点落回
+      // 编辑器时「+」弹层按焦点离开收起，刚打开的下一级页面会随之关掉。
+      const chain = entry.action.opensPanelPage ? editor.chain() : editor.chain().focus();
+      chain
         .command(({ tr }) => {
           tr.delete(range.from, range.to);
           return true;
@@ -5508,6 +5614,57 @@ export function ChatInput({
     if (!editor || editor.isDestroyed) return null;
     return editor.view.dom;
   }, [editor]);
+
+  useEffect(() => {
+    if (!syntheticAtOpen) setAddDirViewOpen(false);
+  }, [syntheticAtOpen]);
+  // 「添加目录…」从 @ 或「+」触发都落到「+」面板的二级页：选中动作已收起原面板，这里在同一轮重新打开。
+  openAddDirectoryViewRef.current = () => {
+    handleComposerSuggestionOpenChange(true);
+    setAddDirViewOpen(true);
+  };
+  const handleAddRecentDir = useCallback(
+    async (option: FolderPickerOption) => {
+      if (!onWritableDirsChange || !writableGrantScope) return;
+      await addRecentWritableDir({
+        path: option.path,
+        writableDirs: writableDirs ?? [],
+        otherDirs: extraDirs ?? [],
+        writableGrantScope,
+        onChange: onWritableDirsChange,
+      });
+      closeComposerSuggestionPanel();
+    },
+    [closeComposerSuggestionPanel, extraDirs, onWritableDirsChange, writableDirs, writableGrantScope],
+  );
+  const handleBrowseExtraDir = useCallback(async () => {
+    if (!onWritableDirsChange || !writableGrantScope) return;
+    const added = await pickAndAddExtraDir({
+      extraDirs: writableDirs ?? [],
+      otherDirs: extraDirs ?? [],
+      workingDir,
+      writableGrantScope,
+      onChange: onWritableDirsChange,
+      confirm: confirmDialog,
+      parentDirectoryConfirm: {
+        title: t('extraDirs.writableParentConfirmTitle'),
+        description: (path) => t('extraDirs.writableParentConfirmDescription', { path }),
+        confirmText: t('extraDirs.parentConfirmAccept'),
+        cancelText: t('extraDirs.parentConfirmCancel'),
+      },
+    });
+    // 取消或未加入时留在二级页，用户可以改选最近目录。
+    if (added) closeComposerSuggestionPanel();
+  }, [
+    closeComposerSuggestionPanel,
+    confirmDialog,
+    extraDirs,
+    onWritableDirsChange,
+    t,
+    workingDir,
+    writableDirs,
+    writableGrantScope,
+  ]);
 
   // ── Send / Stop wiring ─────────────────────────────────────────────
   const dispatchSendInFlightKeysRef = useRef(new Set<string>());
@@ -5844,6 +6001,11 @@ export function ChatInput({
             autoFocusConfirm: true,
           });
           if (goConnect) navigate('/settings?tab=providers');
+          return;
+        }
+
+        if (sshCodexSourceUnsupported && enforceConnectedSourceGate && !canAttemptBaselineRecovery) {
+          toast.error(t('settings.remote.startSession.unsupportedCodexSource'));
           return;
         }
 
@@ -6405,6 +6567,7 @@ export function ChatInput({
       remoteModelListStatus,
       sshCodexHostId,
       sshCodexProviders.status,
+      sshCodexSourceUnsupported,
       confirmDialog,
       navigate,
       planModeEntry,
@@ -7731,12 +7894,13 @@ export function ChatInput({
   ]);
 
   // ── 远程 Agent · 已建任务:选另一台电脑(或本机)目录里的模型 = 把 Agent 挪过去 ──────────
-  // 与跨引擎同一套事务(performAgentSwitch:意图在下一条消息发送时落地,交接摘要接续)。换电脑
-  // 同样续接不了原生会话,复用同一份风险确认与「不再提示」偏好,只换说明文案。选回任务当前
+  // 与跨引擎同一套事务(performAgentSwitch:意图在下一条消息发送时落地)。同引擎优先复制原生记录,
+  // 跨引擎或分享来源走交接摘要;复用同一份风险确认与「不再提示」偏好,只换说明文案。选回任务当前
   // 所在电脑(撤销挂着的换位置)或已确认过的同一目标不再问。被控电脑上的任务改回被控电脑时,
   // 标题写那台电脑的名字(「这台电脑」在控制端看来是本机,会读错)。
+  const relocationSourceAgent = sessionEngineFilter?.currentAgent;
   const confirmAgentRelocation = useCallback(
-    (target: UnifiedSelectionAgentDevice) =>
+    (target: UnifiedSelectionAgentDevice, targetAgent: string) =>
       confirmAgentSwitchRisk({
         hasSwitchIntent:
           (target?.deviceId ?? null) === agentDeviceId ||
@@ -7750,19 +7914,26 @@ export function ChatInput({
                   device: deviceDisplayName(deviceLinkDeviceId, deviceLinkDeviceName),
                 })
               : t('newChat.chatInput.agentRelocation.titleLocal'),
-          description: t('newChat.chatInput.agentRelocation.description'),
+          description: t(relocationDescriptionKey({
+            fromAgent: relocationSourceAgent,
+            toAgent: targetAgent,
+            fromAgentDeviceId: agentDeviceId,
+            toAgentDeviceId: target?.deviceId,
+          })),
           confirmText: t('newChat.chatInput.agentRelocation.confirm'),
           cancelText: t('newChat.chatInput.agentRelocation.cancel'),
           dontShowAgainLabel: t('newChat.chatInput.agentSwitch.confirmation.dontShowAgain'),
         },
       }),
-    [agentDeviceId, intentAgentDeviceId, deviceLinkDeviceId, deviceLinkDeviceName, confirmDialog, t],
+    [agentDeviceId, intentAgentDeviceId, deviceLinkDeviceId, deviceLinkDeviceName, relocationSourceAgent, confirmDialog, t],
   );
   const sessionRemoteAgentOptions = useMemo<RemoteAgentSelectorOptions | undefined>(() => {
     // 本机或能力已确认的被控端任务可换电脑；SSH 与运行设备 Worker 不开放位置选择。协同的 Lead / Worker
-    // 任务在本机，换 Agent 位置与普通任务同一套(2026-10-16)；被控电脑上的协同任务旧版会拒绝，先不开放。
+    // 任务在本机，换 Agent 位置与普通任务同一套(2026-10-16)；被控电脑上的协同任务要被控端声明
+    // supportsOrcaAgentRelocation 才开放(旧版被控端会拒绝)。
     if (!sessionId || !agentLocationAware || remoteHostId || !sessionEngineFilter ||
-        sessionOrcaRole === undefined || (sessionOrcaRole !== null && deviceLinkDeviceId) ||
+        sessionOrcaRole === undefined ||
+        (sessionOrcaRole !== null && deviceLinkDeviceId && !hostSupportsOrcaAgentRelocation) ||
         sessionOrcaRemoteWorker) return undefined;
     if (!remoteAgentDevices || (remoteAgentDevices.length === 0 && !effectiveAgentDeviceId)) {
       return undefined;
@@ -7783,7 +7954,7 @@ export function ChatInput({
         ? { readProviderGroup: () => readSessionProviderGroup(sessionId, deviceLinkDeviceId || undefined) }
         : {}),
       onRelocate: async (selection) => {
-        if (!(await confirmAgentRelocation(selection.agentDevice))) return false;
+        if (!(await confirmAgentRelocation(selection.agentDevice, selection.agent))) return false;
         return performAgentSwitchRef.current(selection.agent, selection.modelId, selection.providerId, {
           ...(selection.effort ? { effort: selection.effort } : {}),
           fastMode: selection.fast,
@@ -7802,6 +7973,7 @@ export function ChatInput({
     sessionEngineFilter,
     sessionOrcaRole,
     sessionOrcaRemoteWorker,
+    hostSupportsOrcaAgentRelocation,
     remoteAgentDevices,
     catalogHostDeviceId,
     effectiveAgentDeviceId,
@@ -9081,7 +9253,7 @@ export function ChatInput({
     hasAttachments: hasPreparedOrPendingAttachments,
     hasBrowserComments: browserComments.length > 0,
     hasVoiceDraftText,
-    mutationLocked: composerMutationLocked,
+    mutationLocked: composerMutationLocked || showStopButton,
   };
   const recommendationComposerReady = isComposerReadyForPromptRecommendation(recommendationComposerState);
   usePromptRecommendationPrediction({
@@ -9091,7 +9263,7 @@ export function ChatInput({
       recommendationComposerReady && !!editor && !editor.isDestroyed &&
       deviceLinkDeviceId !== undefined && runtimeAgentKind != null &&
       hasPredictionMessages && !remoteHostId,
-    predict: async (revision) => {
+    predict: async (revision, isCurrent) => {
       if (!sessionId || runtimeAgentKind == null) return null;
       // 素材仍由 Main 从 DB 读取；远程任务经 sticky 路由交给被控电脑。
       const result = await predictPromptUntilDisabled(makerApiForSticky(sessionId), {
@@ -9101,7 +9273,7 @@ export function ChatInput({
         workingDir: workingDirRef.current ?? undefined,
         turnGen: turnGenRef.current,
         completionRevision: revision,
-      });
+      }, isCurrent);
       return result?.prompt ?? null;
     },
   });
@@ -9311,16 +9483,20 @@ export function ChatInput({
           />
         </div>
       )}
-      {/* Voice-input error + attachment rejections (oversize / blocked /
+      {/* Voice-input error (or the voiceprint filter notice) + attachment rejections (oversize / blocked /
           read-failed) share ONE floating slot above the input card — so they
           don't shrink the typing area and are clearly visible. They MUST live
           in a single flex-col container: two separate same-position absolute
           divs would overlap, and the later one in the DOM would hide the other.
           Stacked here (voice error on top, rejections below) so both stay
           visible when present simultaneously. */}
-      {(voiceInput.lastError || rejections.length > 0) && (
+      {(voiceInput.lastError || showSpeakerFilteredNotice || rejections.length > 0) && (
         <div className="pointer-events-none absolute bottom-full left-0 right-0 z-20 mb-2 flex flex-col items-center gap-1 px-3">
-          {voiceInput.lastError && <VoiceInputStatusNotice message={voiceInput.lastError} />}
+          {voiceInput.lastError ? (
+            <VoiceInputStatusNotice message={voiceInput.lastError} />
+          ) : showSpeakerFilteredNotice ? (
+            <VoiceInputStatusNotice tone="info" message={t('voiceInputOverlay.speakerFiltered')} />
+          ) : null}
           {rejections.length > 0 && (
             <AttachmentRejectionStrip rejections={rejections} onDismiss={dismissRejection} />
           )}
@@ -9803,48 +9979,59 @@ export function ChatInput({
                   open={syntheticAtOpen}
                   onOpenChange={handleComposerSuggestionOpenChange}
                   panel={
-                    <AtMentionPanel
-                      embedded
-                      searchValue={atPanelSearch}
-                      onSearchChange={setAtPanelSearch}
-                      query={atQuery}
-                      state={atState}
-                      entries={filteredAt}
-                      focusedIndex={atFocus}
-                      onFocusedIndexChange={setAtFocus}
-                      onSelect={handleComposerSuggestionSelect}
-                      onClose={closeComposerSuggestionPanel}
-                      onRetry={() => runAtScan(atQuery)}
-                      referenceDirs={
-                        !settingsLocked && onExtraDirsChange
-                          ? {
-                              dirs: extraDirs ?? [],
-                              onRemove: (path) => {
-                                void onExtraDirsChange(
-                                  (extraDirs ?? []).filter((item) => item !== path),
-                                );
-                              },
-                            }
-                          : null
-                      }
-                      writableDirs={
-                        !settingsLocked && onWritableDirsChange
-                          ? {
-                              dirs: writableDirs ?? [],
-                              onRemove: (path) => {
-                                if (onWritableDirRemove) {
-                                  void onWritableDirRemove(path);
-                                } else {
-                                  void onWritableDirsChange(
-                                    (writableDirs ?? []).filter((item) => item !== path),
+                    addDirViewOpen ? (
+                      <AddDirectoryPanel
+                        addedDirs={[...(extraDirs ?? []), ...(writableDirs ?? [])]}
+                        workingDir={workingDir}
+                        onBack={() => setAddDirViewOpen(false)}
+                        onSelectRecent={handleAddRecentDir}
+                        onBrowse={handleBrowseExtraDir}
+                        maxHeight={paletteMaxHeight}
+                      />
+                    ) : (
+                      <AtMentionPanel
+                        embedded
+                        searchValue={atPanelSearch}
+                        onSearchChange={setAtPanelSearch}
+                        query={atQuery}
+                        state={atState}
+                        entries={filteredAt}
+                        focusedIndex={atFocus}
+                        onFocusedIndexChange={setAtFocus}
+                        onSelect={handleComposerSuggestionSelect}
+                        onClose={closeComposerSuggestionPanel}
+                        onRetry={() => runAtScan(atQuery)}
+                        referenceDirs={
+                          !settingsLocked && onExtraDirsChange
+                            ? {
+                                dirs: extraDirs ?? [],
+                                onRemove: (path) => {
+                                  void onExtraDirsChange(
+                                    (extraDirs ?? []).filter((item) => item !== path),
                                   );
-                                }
-                              },
-                            }
-                          : null
-                      }
-                      maxHeight={paletteMaxHeight}
-                    />
+                                },
+                              }
+                            : null
+                        }
+                        writableDirs={
+                          !settingsLocked && onWritableDirsChange
+                            ? {
+                                dirs: writableDirs ?? [],
+                                onRemove: (path) => {
+                                  if (onWritableDirRemove) {
+                                    void onWritableDirRemove(path);
+                                  } else {
+                                    void onWritableDirsChange(
+                                      (writableDirs ?? []).filter((item) => item !== path),
+                                    );
+                                  }
+                                },
+                              }
+                            : null
+                        }
+                        maxHeight={paletteMaxHeight}
+                      />
+                    )
                   }
                   disabled={composerMutationLocked}
                   dense={effectiveDenseToolbar}
@@ -9900,8 +10087,9 @@ export function ChatInput({
                     : useNarrowToolbar ? 'min-w-0 shrink' : undefined}
                 >
                   {!sessionModelLoading && <ModelSelector
-                    providersOverride={sshCodexHostId ? sshCodexProviders.providers : undefined}
-                    providersOverrideState={sshCodexHostId ? sshCodexProviders : undefined}
+                    openRequest={modelPickerRequest}
+                    onOpenRequestConsumed={onModelPickerRequestConsumed}
+                    sshCodex={sshCodexCatalog}
                     // 选中态一律是会话 / 草稿持有的 **wire model id**(sessions.model 或
                     // lastByVendor.model)。面板行的归一化 id 只活在面板内部 —— 从这里递进去
                     // 会让"当前选中的那一行"在合并行上错位,也会把归一化 id 顺着
@@ -10012,6 +10200,7 @@ export function ChatInput({
                         ? handleUnifiedDraftSelect
                         : undefined
                     }
+                    {...(!sessionId && unifiedPanelActive && pluginModels ? { pluginModels } : {})}
                     // 草稿取调用方持有的锚点,会话取本组件的内存态(见 effectiveSelectedFavoriteUid)。
                     selectedFavoriteUid={effectiveSelectedFavoriteUid}
                     // 会话内同引擎选中一行后回传该行的收藏锚点(跨引擎那一路在
@@ -10046,11 +10235,11 @@ export function ChatInput({
                     deviceId={catalogDeviceId}
                     // 远程 Agent:面板同时列出其他电脑上的供应商。草稿选中即换 Agent 落点;已建任务
                     // 选中另一台电脑的模型 = 把 Agent 挪过去(下一条消息生效)。
-                    {...(remoteAgentOptions && unifiedPanelActive && onUnifiedDraftSelect
-                      ? { remoteAgent: remoteAgentOptions }
+                    remoteAgent={remoteAgentOptions && unifiedPanelActive && onUnifiedDraftSelect
+                      ? remoteAgentOptions
                       : sessionRemoteAgentOptions && unifiedPanelActive
-                        ? { remoteAgent: sessionRemoteAgentOptions }
-                        : {})}
+                        ? sessionRemoteAgentOptions
+                        : undefined}
                     // Agent 在另一台电脑运行(草稿或已建任务;意图期按下一条消息时的位置):
                     // trigger 用带信号波纹的远程 Logo。
                     agentDevice={
@@ -10192,7 +10381,7 @@ export function ChatInput({
                       <Tip
                         text={
                           mainSlotIsVoice
-                            ? t('bots.voiceMode.startConversation')
+                            ? (voiceConversationDisabledReason ?? t('bots.voiceMode.startConversation'))
                             : queueEditActive
                             ? t('newChat.pendingQueue.editSaveAria')
                             : voiceReleaseToSendActive

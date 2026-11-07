@@ -27,8 +27,8 @@ Mac confirmation dialog. Successful native password verification stores the secr
 and exact Mac public key together. Later connections require the stored key before
 any saved-secret read. A changed key fails closed; no silent replacement is allowed.
 
-This follows the existing Cindy contacts-sync trust pattern in
-`apps/desktop/src/main/contacts-sync/driver.ts` and `keyStore.ts`: first keys arrive
+This follows the existing Cindy device-sync trust pattern in
+`apps/desktop/src/main/device-sync-keys/keyStore.ts` (used by plugin device sync): first keys arrive
 only over the authenticated account route, with persistent key continuity afterward.
 It deliberately trusts the account service and relay at first setup. It does not
 claim protection against a malicious relay substituting the very first key, or
@@ -179,6 +179,15 @@ background resets the optional automatic-unlock attempt. Media recovery and iOS
 `inactive` overlays retain suppression, so a cancelled Face ID request is not
 repeated by network retries. This changes only the local phone attempt flag, not
 any Device Link transport or other controller.
+
+Returning to the app, or to the remote desktop screen after it released the lease,
+still reconnects with `resume` so the host can refuse it (for example after an idle
+lock). On macOS that return may nevertheless use the saved password: unlocking waits
+for the first frame, which only follows the host accepting the start. Previously the
+resume flag alone suppressed unlocking, so a Mac that locked while the phone was away
+stayed locked after the return. Linux prepares unlocking before the start request
+and therefore keeps suppressing it for every resume. The return marker is cleared as
+soon as a lease starts, so later network recovery remains automatic and does not unlock.
 
 Phone-native failures distinguish inactive application, concurrent authentication,
 missing saved password, changed saved binding, and fixed Keychain read failure

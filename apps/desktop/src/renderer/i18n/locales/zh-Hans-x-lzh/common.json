@@ -1,4 +1,34 @@
 {
+  "sharedTaskRecovery": {
+    "title": "无法在原电脑上恢复任务",
+    "description": "可以选择其他电脑或供应商，通过上下文交接继续。原消息保留，但切换不会迁移原电脑上的完整运行状态。",
+    "choose": "选择其他电脑",
+    "cancel": "留在这里",
+    "stage": {
+      "owner": "失败环节：联系分享所在电脑。",
+      "allocation": "失败环节：为原执行电脑重新分配授权。",
+      "executor": "失败环节：确认执行电脑的 device-link 连接。",
+      "capability": "失败环节：检查执行电脑的能力。",
+      "authorization": "失败环节：安装执行授权。",
+      "unknown": "未收到具体失败环节。"
+    },
+    "reason": {
+      "offline": "本次联系的电脑被报告为离线。其他任务可能运行在不同电脑上。",
+      "timeout": "请求超时；具体正在联系哪个服务请看失败环节。尚不能确定是直连还是中继出了问题。",
+      "relay": "device-link 连接尚未就绪或已关闭。仅直连失败时，通常会自动改走中继。",
+      "denied": "访问被拒绝或远程控制已关闭，重试不能绕过此限制。",
+      "model": "此任务不允许使用该分享供应商或模型。",
+      "budget": "供应商报告了用量上限或配额不足。切换电脑后也可能使用同一份配额。",
+      "capacity": "任务或连接资源已达容量上限。可以关闭闲置任务或选择其他电脑。",
+      "unsupported": "执行电脑不支持此分享任务所需的能力。",
+      "authorization": "无法安装执行授权。这不能证明执行电脑已离线。",
+      "history": "原任务位置无法使用，不能把原生历史直接放到另一台电脑上打开。",
+      "policy": "分享用量规则要求经分享所在电脑实时核验，直连执行无法落实此规则；这不代表余额耗尽。",
+      "unknown": "分享所在电脑未提供具体原因，尚不能确认离线、配额或直连/中继的状态。",
+      "rate": "服务正限流或拥塞，需要等待冷却。切换电脑也可能受到同一个限制。",
+      "service": "连接分享授权服务失败，或服务返回了失败；尚未确认执行电脑离线。"
+    }
+  },
   "providerAccountUsage": {
     "kimi": {
       "refresh": "重察限额",
@@ -133,7 +163,7 @@
   "taskActionConfirmation": {
     "title": "确认差事操作",
     "once": "请核下方之目标、动作与全文。所许仅及此一操作。",
-    "remove": "此举将删自运。请核其目标，仅许此一次。",
+    "remove": "此将释自动化之接收址。请核其目标，仅许此次。",
     "permission": "此举将代君答他差事之授权请求。请核其操作，仅许此一次。",
     "resume": "此举将复已暂停之运行。请核其目标，仅许此一次。",
     "command": "此举将于机上存或行命令，运行时不经 Agent 之工具审批。请核命令与工作目录，仅许此一次。",
@@ -996,7 +1026,7 @@
     "saveFileName": "截图",
     "saveFailed": "不能存截屏",
     "prompt": {
-      "translate": "请辨此截屏中之文字，译为繁体中文，保留原有段落与清单结构，唯输出译文。若原文已是中文，则译为英文。",
+      "translate": "辨图中文字之语，译为{{language}}，仍其段落、条目与表格。已有目标语言者不改；诸语杂陈，仅译其余。若全文已是目标语言，简言告之，勿另译他语；否则仅出译文。",
       "explain": "请释此截屏之内容。若为错误消息，述其原因与解法；若为图表、代码或界面，述其所表何意、要点为何。",
       "extract": "请将此截屏中之文字照原样撷出，保留原有换行、段落与清单；表格以 Markdown 表格输出。唯输出所撷之文字。"
     },
@@ -1018,11 +1048,19 @@
       "copied": "已录",
       "copyFailed": "录之未成，可再试或存盘。",
       "scrollHint": "于所选范围内上下卷动，亦可点击自动卷动",
-      "recordHint": "于先览上绘标注，标注将现于录像中。不录声",
+      "recordHint": "于先览上绘标注，标注将现于录像中。",
       "format": "式",
       "videoFormat": "影 (WebM)",
-      "prepareHint": "点始之后倒数 3 秒，不录声。",
+      "prepareHint": "点始之后倒数 3 秒。",
       "countdown": "{{count}} 秒后始录",
+      "systemAudio": "扬声器",
+      "microphone": "麦克风",
+      "audioHint": "择声源而录，可兼取二者",
+      "preparingAudio": "正在准备声音…",
+      "systemAudioFailed": "无法录入扬声器声音，请检查系统权限或关闭此声源",
+      "microphoneFailed": "无法使用麦克风，请检查权限和输入设备或关闭此声源",
+      "audioFailed": "无法开始录音，请检查设备或关闭声音后录制",
+      "audioInterrupted": "声音已中断，请结束录制以保存已录内容",
       "countdownHint": "蓄势将发，按 Esc 可罢。",
       "annotate": "批注",
       "finishing": "方收尾…",
@@ -1044,6 +1082,12 @@
       "edit": "修",
       "autoUnavailable": "自动卷动已止，可于所选范围内手动卷动",
       "autoPermission": "自动卷动须「辅助使用」权限。请于系统设置中许 Cindy 而后再试，亦可于所选范围内手动卷动"
+    },
+    "translation": {
+      "action": "译为{{language}}",
+      "targetLanguage": "译文语言",
+      "followUi": "随界面之语",
+      "saveFailed": "语言未存，请重选。"
     }
   },
   "privacyExit": {
@@ -1053,6 +1097,14 @@
     "detail": "此举将终远程控制，并复此机屏幕。若已启结束时锁定屏幕，此机亦将锁定。",
     "cancel": "保连接",
     "disconnect": "断连"
+  },
+  "awayGuard": {
+    "status": "Cindy 正劳作",
+    "hint": "按任一键即锁屏，以 Touch ID 或密码解之",
+    "lockFailed": {
+      "status": "Cindy 未能锁此机",
+      "hint": "按 Control-Command-Q 锁屏，稍候系统亦自锁"
+    }
   },
   "appBadge": {
     "attentionCount": "待察之差事：{{count}}"
@@ -1216,7 +1268,6 @@
     "clipboardSyncSkipped": "此格式暂不支持剪贴板同步，已略之",
     "clipboardSyncTooLarge": "内容逾剪贴板同步之大小上限，已略之",
     "clipboardSyncPermission": "剪贴板同步须粘贴之权，授之后归此窗口即复",
-    "clipboardSyncWaiting": "远方之机的剪贴板暂不能访问（或已锁定屏幕），解锁后将自动续同步。",
     "lockingOnExit": "方锁定此机…",
     "idleLock": "闲置后断连并锁定屏幕",
     "idleNever": "永不",
@@ -1335,6 +1386,20 @@
       "lock-unreadable": "不能读存此机数据之维护锁。请察数据目录之访问权限；复访问后重启。若仍未成，请联系支持人员。",
       "recovery-busy": "另一 Cindy 运行个体方察此机数据之维护锁。请稍后重启。"
     },
+    "passiveCorrupt": {
+      "title": "共享数据库不可复原",
+      "description": "今以只读／共享之式运行，Cindy 不自行复原或改动此共享数据库。若另有实例共用同一 userData，请先关闭而重试，或改以 --isolated 启动。"
+    },
+    "corrupt": {
+      "title": "本地数据库不可开",
+      "description": "本地数据库或已损毁，或为共用同一数据之他 Cindy 实例所占。若他实例已开，请先关闭而重试；仍不可，则无可用备份能自动复原，请复制技术细节告知团队，以求协助复原数据。",
+      "copy": "复制技术细节"
+    },
+    "initFailed": {
+      "title": "本地数据库启动失败",
+      "description": "本地数据库未能启动。请先重试；若仍失败，请将下列技术细节告知团队。",
+      "retry": "重试启动数据库"
+    },
     "databaseCleanup": {
       "interruptedTitle": "数据库清理中辍",
       "interruptedDescription": "数据库清理异常中断。请重启 Cindy，系统将依维护纪录安全复原。",
@@ -1364,13 +1429,19 @@
       "actionFailed": "操作未竟，提醒已留，请再试。",
       "newConversationTitle": "新开差事",
       "newConversationHint": "另启新差事，再展鸿图",
-      "muteSound": "灵动岛静音",
-      "enableSound": "启灵动岛之声",
-      "settings": "灵动岛规制",
+      "muteSound": "任务胶囊静音",
+      "enableSound": "启任务胶囊之声",
+      "settings": "任务胶囊规制",
       "newMessage": "新讯",
       "review": "览之",
       "needsInput": "待输入",
       "completed": "已毕",
+      "liveActivityRunning_one": "{{count}} 事方行",
+      "liveActivityRunning_other": "{{count}} 事方行",
+      "liveActivityAlsoRunning_one": "另 {{count}} 事方行",
+      "liveActivityAlsoRunning_other": "另 {{count}} 事方行",
+      "liveActivityWaiting_one": "{{count}} 事待汝处",
+      "liveActivityWaiting_other": "{{count}} 事待汝处",
       "error": "谬",
       "input": "书",
       "done": "毕",
@@ -1888,6 +1959,8 @@
       "add": {
         "title": "增一台远方之机",
         "alias": "别号",
+        "aliasHint": "限 1–128 字元，惟英文字母、数字及 . _ @ : - 可用；中文名请填于「显示之名」。",
+        "aliasInvalid": "别名含不支持字元，或逾 128 字元，请依上例改之。",
         "displayName": "显示之名",
         "displayNamePlaceholder": "可不填，仅于 Cindy 中显",
         "hostname": "主机名",
@@ -2030,6 +2103,17 @@
     "appearance": {
       "title": "仪容",
       "modeLabel": "显示之式",
+      "appIcon": {
+        "label": "Dock 之标",
+        "description": "择应用于 Dock 所用之标",
+        "saveFailed": "Dock 之标未能存，请稍后再试",
+        "options": {
+          "default": "本然",
+          "cat": "玄猫",
+          "wordmark": "Cindy 字标",
+          "mark": "Cindy 符记"
+        }
+      },
       "sidebarAndPanels": "侧栏与面板",
       "themeLabel": "格调",
       "themeAriaLabel": "择主题",
@@ -2195,7 +2279,7 @@
     "notifications": {
       "title": "告",
       "sessionDoneLabel": "系统之告",
-      "sessionDoneHint": "差事毕、生谬或待回复时提醒。寻常差事唯窗口退居背景时告之；启灵动岛，则改由灵动岛提醒。",
+      "sessionDoneHint": "差事毕、生谬或待回复时提醒。寻常差事唯窗口退居背景时告之；启任务胶囊或于灵动岛显任务，则改由其提醒；唯启灵动岛者，生谬仍发系统之告。",
       "sessionDoneAria": "切换差事系统之告",
       "feishuLabel": "差事毕或待回复时遣飞书 / Lark 讯",
       "feishuHint": "经已系之飞书或 Lark 机器人，私遣一讯于君；唯窗口失焦时遣之。",
@@ -2287,28 +2371,51 @@
       "swallowActivationClickLabel": "归时防误触",
       "swallowActivationClickHint": "左键点回背景窗口时，唯唤起窗口。阖之，则兼行点击处之操作，或致误触。",
       "swallowActivationClickAria": "切换归窗口时之误触防护",
-      "macRestartNote": "macOS 上须重启应用方生效。"
+      "macRestartNote": "macOS 上须重启应用方生效。",
+      "awayGuard": {
+        "label": "离席续作",
+        "hint": "开之，此机无人操作亦不熄屏、不自锁，AI 可随时用之。君离座稍久，玄幕覆屏，AI 于其后续作；有人按键或点按即锁屏，以 Touch ID 或密码解之。",
+        "permission": "须于「系统设置 → 隐私与安全性 → 辅助功能」许 Cindy，方能于有人触机时即锁屏。未许之前，屏照常熄而锁。",
+        "preview": "即试之",
+        "previewStarting": "请释鼠标与键盘，三秒后屏将覆；按任一键即锁屏，再解之以试。",
+        "previewUnavailable": "未能覆屏，请重启 Cindy 再试。",
+        "delay": {
+          "label": "离座几时而覆屏",
+          "hint": "键盘鼠标无人触及逾此时，即覆以玄幕。默认同系统熄屏之时。",
+          "30": "三十秒",
+          "60": "一分",
+          "120": "二分",
+          "300": "五分",
+          "system": "从系统"
+        }
+      }
     },
     "agentIsland": {
       "title": "灵动岛",
-      "unsupported": "灵动岛须 macOS 14 或更高之版。",
-      "enableLabel": "显灵动岛",
-      "enableHint": "于屏幕之巅显方行、待应及未读已毕之差事。启之则抑同类系统之告，免重复相扰。",
-      "enableAria": "启闭灵动岛",
+      "unsupported": "任务胶囊须 macOS 14 或更高之版。",
+      "subtleRemindersLabel": "轻提醒",
+      "subtleRemindersHint": "新讯至、待答或有误时，不向下弹出通知卡片，以图示变化相告。点任务胶囊可阅任务全表。",
+      "subtleRemindersFailed": "提醒设定未存，请重试。",
+      "liveActivityLabel": "于灵动岛显任务",
+      "liveActivityHint": "于新款 MacBook Pro 之灵动岛显差事进展，待君处置或事毕时自展；余 Mac 显于菜单栏之右。与任务胶囊各不相扰。",
+      "liveActivityFailed": "实时活动设定未存，请重试。",
+      "enableLabel": "显任务胶囊",
+      "enableHint": "于屏幕之巅显差事进展，待君处置或有新果时即告。启之，则此类提醒不复另发系统之告。",
+      "enableAria": "启闭任务胶囊",
       "displayLabel": "显示之处",
-      "displayHint": "择灵动岛显于何显示器；择全部，则每显示器各显一份。",
-      "displaySelectAria": "择灵动岛显示器",
+      "displayHint": "择任务胶囊显于何显示器；择全部，则每显示器各显一份。",
+      "displaySelectAria": "择任务胶囊显示器",
       "displayAll": "诸显示器",
       "displayOption": "{{name}} · {{resolution}}",
       "displayNameFallback": "显示器 {{index}}",
       "displayPrimary": "主屏",
       "displayInternal": "本具",
       "displayMissing": "已断之显示器 {{id}}",
-      "skinLabel": "图标之皮",
-      "skinHint": "择灵动岛中示方行之态所用角色之皮。",
+      "skinLabel": "角色",
+      "skinHint": "任务胶囊与灵动岛中所显之角色。",
       "soundLabel": "事之音",
-      "soundHint": "为灵动岛各类事择 8-bit 之音。",
-      "soundAria": "切换灵动岛之音",
+      "soundHint": "为诸类提醒择 8-bit 之音，任务胶囊与灵动岛共之；点按之音唯触任务胶囊时鸣。",
+      "soundAria": "切换任务胶囊之音",
       "soundSelectAria": "{{event}}之音",
       "soundPreviewAria": "先听{{event}}之音",
       "skinAnimationAria": "切换{{skin}}之先览动画",
@@ -2331,7 +2438,7 @@
         },
         "boli": {
           "name": "波利",
-          "description": "粉色波利，轻跃于键盘之侧；欲令灵动岛更添软萌，择之可也。"
+          "description": "粉色波利，轻跃不息；欲令任务胶囊更添软萌，择之可也。"
         },
         "whitesnow": {
           "name": "苹果妹",
@@ -2605,6 +2712,13 @@
       "storage": {
         "dialogueDirectoryTitle": "言谈工作区",
         "dialogueDirectoryDescription": "仅用于新开差事，旧卷仍居原处。",
+        "projectsRootTitle": "新案存放处",
+        "projectsRootInferred": "荐",
+        "projectsRootDefault": "常例",
+        "projectsRootChoose": "易目录",
+        "projectsRootReset": "复荐处",
+        "projectsRootDescription": "于差事中立新案时，案之卷匣置于此。未设则依汝旧案所在荐之。",
+        "projectsRootFailed": "新案存放处更之未成",
         "dialogueDirectoryOpen": "启目录",
         "dialogueDirectoryChoose": "易目录",
         "dialogueDirectoryReset": "复预设处",
@@ -3711,7 +3825,12 @@
           "stop": "止试"
         },
         "fetch": {
-          "button": "取模型清单",
+          "selectedCount": "已选 {{count}} 模型",
+          "availableCount": "已得 {{count}} 可选模型",
+          "notFetched": "尚未取模型清单",
+          "failedRetry": "取模型清单未成，请重试",
+          "retryFailed": "此番未成，请重试",
+          "button": "取并选模型",
           "fetching": "方取模型…",
           "needBaseUrl": "请先填基础 URL",
           "failed": "模型清单取之未成",
@@ -3811,7 +3930,9 @@
           "modelsBusy": "请先毕方行之模型清单截取或选择，再填入他 Runtime",
           "noCompatibleFields": "他 Runtime 不支持今 Runtime 中可复用之字段",
           "filledToast": "已填入 {{targets}}；各 Runtime 仍各自独立"
-        }
+        },
+        "nameSearchHint": "亦可仍用此名，续设自定端点。",
+        "nameSearchUnavailable": "此供方今不可用，可续设自定端点，或重寻之。"
       },
       "models": {
         "search": "寻模型",
@@ -3839,6 +3960,8 @@
         "disabledGroup": "已停",
         "enableAllModels": "尽启",
         "priceOverride": {
+          "resetShort": "重置",
+          "referenceDetails": "参考价详目",
           "menu": "修 API 估价",
           "title": "{{model}} API 估价",
           "description": "仅用以估君自有 API 或订阅通道之耗用，不易供方之实际帐单。",
@@ -3890,6 +4013,7 @@
             "hint": "施于 {{agent}} 之图连接。唯宣界面实所支持之能，存后重启 Art 详情。"
           },
           "capabilityHint": "先用今供方所宣之能；未宣者，图之能参酌模型之名。",
+          "imageInputDefault": "{{value}}（默认）",
           "imageInput": "图输入",
           "imageInputMixed": "诸引擎各异",
           "supported": "可",
@@ -4847,9 +4971,6 @@
         "title": "群议参与之式",
         "hint": "bot 曾入之群列于此。「全响应」= 每讯皆览，bot 自度是否插言（每讯皆耗 token）。",
         "empty": "庭前尚寂，未见群聚。引 bot 入群，待有人发言，便现于此。",
-        "contactsOn": "群中发言者，将自记入智能通信录（总开关已启）。",
-        "contactsOff": "智能通信录未启，群中发言者不自记之。",
-        "contactsEnable": "启",
         "error": {
           "load": "未能读 Telegram 群列，请察连接后再试。",
           "save": "群参与之式未存，已复上回确认之式。",
@@ -5006,7 +5127,7 @@
         "ariaLabel": "择第二备选辅佐模型"
       },
       "emptySlot": "未择",
-      "customHint": "轻简文字依所择之序试之；内置审核不可用时，亦充自动审核之备。所择供方将收审核上下文，含讯与引用内容、差事与操作详情及拦截之录、身分与权柄、卷之路径及操作系统。",
+      "customHint": "轻简文字依所择之序试之；内置审核不可用时，亦充自动审核之备。所择供方将收审核上下文，含讯与引用内容、Agent 之公开文字（仅作参考）、差事与操作详情及拦截之录、身分与权柄、卷之路径及操作系统。",
       "signInHint": "登门 Cindy 后方可用自荐；未登门时，请于自订中择已设之他供方模型。",
       "chooseAgent": "择 Agent",
       "backToAgents": "归择 Agent",
@@ -5375,7 +5496,6 @@
         "title": "用我之浏览器登录态",
         "description": "Agent 将以君于 Chrome、Edge 或 Brave 中已登录之身分造访网站。",
         "toggleAria": "用我之浏览器登录态",
-        "unavailableEmbedded": "仅于独立浏览器生效。关之则删已拷贝之登录档。",
         "confirmTitle": "许 Agent 用君之浏览器登录态乎？",
         "confirmDescription": "Agent 将能以君已登录之身分开网页，信箱、云端硬盘与公司后台皆在其列。可随时关之，拷贝即删。",
         "confirmDescriptionMac": "Agent 将能以君已登录之身分开网页，信箱、云端硬盘与公司后台皆在其列。读 Chrome 登录档另需「完全磁盘访问权」。可随时关之，拷贝即删。",
@@ -5594,6 +5714,7 @@
           "checking": "方察更新…",
           "upToDate": "已是最新",
           "checkFailed": "察更新未成",
+          "rateLimited": "GitHub 更源已限流，稍遲再察",
           "lastChecked": "前番察于 {{time}}",
           "check": "察更新",
           "retry": "再试",
@@ -5707,10 +5828,6 @@
         "ssh": {
           "name": "SSH 远方命令",
           "description": "借此机所设 SSH 连接，于远方之机上运行命令。"
-        },
-        "contacts": {
-          "name": "慧通信录",
-          "description": "查找、整理联系人数据与往来之录。"
         }
       }
     },
@@ -6004,8 +6121,10 @@
       "accessRevokedByPeer": "访问之权已遭撤销，须对方于选项中恢复",
       "deviceControlToggleAria": "切换是否操控 {{name}}",
       "myDevices": {
-        "controlIt": "我控之",
-        "allowInbound": "许其控此机",
+        "iCan": "吾可",
+        "itCan": "彼可",
+        "controlIt": "控之",
+        "controlThisDevice": "控此机",
         "allowInboundAria": "切换是否许 {{name}} 控此机",
         "peerControlOff": "对方未许远程操控",
         "masterOffHint": "须先开上方总开关",
@@ -6023,7 +6142,7 @@
         "hook": "Cindy IM 使者"
       },
       "hook": {
-        "description": "将 Slack 与 Telegram 接入同一 Cindy：讯皆派至此台设备，共享案之清单与 session 运行链；名籍绑定与运行偏好依渠道各自隔离。",
+        "description": "将 Slack、Telegram、飞书 / Lark 诸渠道接入同一 Cindy：讯皆派至此台设备，共用此间案之清单与差事；名籍绑定与运行偏好依渠道各自隔离。",
         "slackDescription": "绑定 Slack workspace，于 Slack 中 @Cindy 派差事。",
         "slackDisabledHint": "开此开关即发起 Slack 授权，绑定毕即可于 Slack 中派活。",
         "slackBoundHint": "绑定已毕。关此开关将解除绑定，重开须再授权。",
@@ -6196,9 +6315,6 @@
             "title": "群议参与之式",
             "hint": "官方 bot 所见之群，皆列于此。「尽应」仅于已绑定名籍之每则发言生效；他成员唯入此机群议上下文，不触发差事。",
             "empty": "群中尚无踪迹。将 bot 拉入群中，以已绑定之名籍发一则讯，即见于此。",
-            "contactsOn": "群中他发言者，将自记入慧通信录。",
-            "contactsOff": "慧通信录未开，群中他成员不会自被记住。",
-            "contactsEnable": "启",
             "error": {
               "load": "未能读 Telegram 群列表，请察连接后再试。",
               "save": "群参与之式未存，已复前番所确认之式。",
@@ -6247,6 +6363,45 @@
             "revoked": "关联已解",
             "superseded": "已关联至他台设备"
           }
+        },
+        "feishu": {
+          "description": "由飞书发讯，交工作电脑处理。",
+          "disabledHint": "开此开关后，或于浏览器中授权飞书名籍，或将关联码遣予飞书机器人。",
+          "toggleAria": "启闭飞书 / Lark 连接",
+          "connect": "结飞书",
+          "openApp": "开授权页",
+          "cancel": "罢关联",
+          "retry": "重关联",
+          "openBot": "开飞书机器人",
+          "unlink": "解飞书",
+          "unlinkConfirmTitle": "解绑飞书乎？",
+          "unlinkConfirmDescription": "仅解此机之系。",
+          "unavailableHint": "君所属之组织尚未设飞书机器人，请洽组织管理员。",
+          "unavailableHintPersonal": "飞书机器人尚未向个人账号开放。",
+          "status": {
+            "checking": "方察服务器支持…",
+            "unavailable": "组织未设",
+            "unavailablePersonal": "尚未开放",
+            "disabled": "已停",
+            "none": "未绑",
+            "pending": "于浏览器中授权，或将关联码遣予飞书机器人",
+            "awaiting_confirmation": "请于飞书 / Lark 确认更换此机所系账号",
+            "confirmed": "{{user}} 已结飞书机器人",
+            "denied": "授权已拒",
+            "expired": "授权已逾期",
+            "failed": "关联未成",
+            "revoked": "关联已解",
+            "superseded": "此机已系另一飞书 / Lark 账号",
+            "appChanged": "飞书机器人已更易，请重为关联"
+          },
+          "bindCode": {
+            "label": "关联码",
+            "copy": "录关联码",
+            "copied": "关联码已录",
+            "hint": "或于飞书中将关联码私遣予 Cindy 机器人"
+          },
+          "setWorkingDevice": "设为工作电脑",
+          "workingDeviceSet": "已设为工作电脑"
         }
       },
       "summary": {
@@ -6265,7 +6420,7 @@
     "tina": {
       "chat": {
         "title": "言谈",
-        "description": "不落任何仓库之纯言谈；于 Slack、Telegram 或 X 中选 chat 即可用之，每条言谈 lane 各对应一差事。"
+        "description": "不落任何仓库之纯言谈；于 Slack、Telegram、X 或飞书 / Lark 中选 chat 即可用之，每条言谈 lane 各对应一差事。"
       },
       "prefs": {
         "agentLabel": "Agent",
@@ -6275,6 +6430,7 @@
         "providerSlack": "Slack",
         "providerTelegram": "Telegram",
         "providerX": "X",
+        "providerFeishu": "飞书 / Lark",
         "requireConnected": "连上 {{provider}} 后方可修（先于上方打开相应开关，候其连接成功）。",
         "offlineLocal": "{{provider}} 暂连不上，变更存于此机；连上后同步至言谈中之模型卡。",
         "requireBinding": "须先完成 {{provider}} 名籍关联，方可修。",
@@ -6662,8 +6818,6 @@
             "task": "差事键",
             "action": "动作键"
           },
-          "lightingLimit": "固件至多令板上次第前 6 颗差事键各自亮灯。余下之差事键仍可切换差事。",
-          "unlitKey": "此键列于前 6 颗之后，无独立状态灯。",
           "taskHint": "宜用透明键帽，差事之状自有异色流光示之。"
         },
         "commandKeys": {
@@ -7466,6 +7620,8 @@
         "cancel": "罢",
         "updateNeedsConsent": "新权柄须确认",
         "targetIdentity": "纳于：{{name}}",
+        "localTarget": "本地开发版",
+        "localOidcUnavailable": "此开发副本不得企业身份。欲自测，请以 Forge 明确装入当前企业。",
         "personalTarget": "私",
         "sourceChanged": "此次更新将改为此机来源。旧名籍与数据隔离保留，须重新连接名籍。",
         "otherCopies": "已有同名法器 {{count}} 份；彼等不被覆盖或禁用。另纳之法器须各自连接名籍。"
@@ -7521,6 +7677,9 @@
         "agentObserve": "可观此机案中差事之目与其状",
         "agentObserveDetail": "可观已登记之此机案中差事之题、Agent 之类、归档与否及其状（方行、待理、近动之时），并于主窗启某差事。不能读讯、谋划与文件，亦不能遣讯或改差事。",
         "agentObserveRequest": "确认观差事之权柄",
+        "agentCompanions": "可观同僚、其状与近谈",
+        "agentCompanionsDetail": "可观诸同僚（含行于君他机者）之名、简介、像与其状（方行、待君理、闲、离线），各同僚所行何类之事（如思虑、施器），待君理之请之文（问、将行之令、策，与对谈所见同），及其主对谈之近语（至多五十条，君之言与同僚之复，不含施器之程），并于主窗启同僚之对谈。兼得遣讯之许者，可将君于法器所予之答转致同僚：答问、却请、议策；许其行事，仍须君于 Cindy 自有之确框亲点。不能读卷，亦不见施器之程与思虑之文。",
+        "agentCompanionsRequest": "确认观同僚之权柄",
         "agentHiddenTasks": "可立不见于差事录之背后差事",
         "agentHiddenTasksDetail": "本法器所立之差事，可不现于差事录、搜索与告中。君可随时于法器详情之「背后差事」中观之、启之，或令显于差事录；卸除法器时，此等差事将复显示。",
         "agentErrand": "可立差事、行事并读结果",
@@ -7535,6 +7694,8 @@
         "nodeResident": "Node 程序可常驻背后",
         "nodeResidentDetail": "法器激活期间持续运行；禁用、更新、卸除或退出 Cindy 时即阖。",
         "tool": "器「{{name}}」",
+        "toolAutoApprove": "Agent 用器「{{name}}」无须相询",
+        "toolAutoApproveDetail": "Agent 每用此器，即行之，不复逐次相询或审阅。",
         "command": "言谈指令 ${{command}}",
         "panelLeft": "面板「{{title}}」· 现于侧栏",
         "panelTab": "面板「{{title}}」· 于法器页内启之",
@@ -7594,9 +7755,13 @@
         "workspaceDetail": "其发请求时，或由君亲择卷匣，或于确认卡上观完整路径后再决；其处置君所发之调用时，当前差事工作目录内之子卷匣可径用，不另确认。卷匣已有差事者径复用之，不重立。所立仅为空差事，不自行运行。",
         "sessionContext": "可知当前差事所用之案卷匣位置",
         "sessionContextDetail": "仅于其为当前差事效力时告以位置(差事编号与案卷匣路径)，不含文件内容，亦不因此得文件访问之权。",
+        "liveScreen": "于手机观并操器物之画面",
+        "liveScreenDetail": "借远端桌面，手机可观其所供器物之画面(如模拟器)，并触之、按之、书文字于其上。唯自手机开启时方连，不示此电脑他物。",
         "preview": "可于右侧栏浏览器中启下列网站之预览页",
         "previewDetail": "仅能启下方所列网站；每启一页，皆示为何法器所启。",
         "browserExtension": "可令其自带之浏览器扩充功能连 Cindy",
+        "browserNativeHost": "可注册浏览连接“{{name}}”",
+        "browserNativeHostDetail": "所注册程序行于沙箱之外，依系统账号与授权访问本机。",
         "browserExtensionDetail": "仅下方所列扩充功能可连；连接经此机回环地址，由 Cindy 将扩充功能所发之请求转交此法器。",
         "browserExtensionPageControlDetail": "仅下方所列扩充功能可连。此扩充功能兼行页面控制：择「我的浏览器」后，Agent 可经其读取并操作君正用之浏览器页面。",
         "nodeChildSpawn": "Node 程序可请宿主再启包内已申报之子处理程序",
@@ -7611,7 +7776,9 @@
         "subscribeRoutineRun": "可于君所择之同僚例行差事运行前行检",
         "subscribeRoutineRunDetail": "凡于「预检」择之之例行差事，每番触发必先询之。其可见差事之指令与触发事件之内容，可令此番略过或止之，不能代君准允。",
         "subscribeScheduleRun": "可于君所择之自动化运行前行检",
-        "subscribeScheduleRunDetail": "凡于「预检」择之之自动化，运行前必先询之。其可见此自动化之名与指令，可令此番略过或止之，不能代君准允。"
+        "subscribeScheduleRunDetail": "凡于「预检」择之之自动化，运行前必先询之。其可见此自动化之名与指令，可令此番略过或止之，不能代君准允。",
+        "subscribeStartTask": "可为新差事择模型",
+        "subscribeStartTaskDetail": "新任务择其所供之模型时，彼阅首条消息，于汝已连之模型中择一。唯择一次，任务中途不易模型。"
       },
       "connections": {
         "confirmTitle": "增连接地址",
@@ -7683,6 +7850,7 @@
         "customSlotAsleep": "法器未生效；生效后，此处将示其设置界面。",
         "descriptionExpand": "展",
         "descriptionCollapse": "收",
+        "readmeTitle": "介绍",
         "useAction": "用",
         "chatAction": "言谈",
         "enabledLabel": "已启",
@@ -7695,6 +7863,18 @@
         "settingsTitle": "{{name}} 之设",
         "settingsUnavailableUntilRestore": "复法器后，此设可续用。",
         "oauthScopeStale": "当前授权未含法器添加之权柄，请重新连接补足。",
+        "localDevelopment": "本地开发版",
+        "publicInstall": "公开市场",
+        "organizationInstall": "企业：{{name}}",
+        "browserUse": "用此浏览扩展",
+        "browserActivated": "已择此扩展",
+        "browserActivationFailed": "未能择此扩展，请启扩展并确认切换。",
+        "browserSwitchTitle": "切换浏览扩展连接？",
+        "browserSwitchMessage": "以“{{name}}”承此连接？",
+        "browserSwitchDetail": "实例：{{instance}}\n注册名：{{host}}\n将替今之注册，扩展转连此扩展。",
+        "portReclaimTitle": "结束占用回调端口之程序？",
+        "portReclaimMessage": "“{{name}}”须用端口 {{port}}，可结束下列程序乎？",
+        "portReclaimDetail": "结束或中断其事、失其未存之数据。亦可取消，自行关闭占用程序。",
         "configurationTitle": "设置",
         "sidebarEntryTitle": "导览入口",
         "showInSidebar": "现于左侧导览",
@@ -8216,10 +8396,14 @@
         "inactive": "尚不可用。更新或重装此法器时许之即可。",
         "points": {
           "will-routine-run": "同僚例行差事运行前",
-          "will-schedule-run": "自动化运行前"
+          "will-schedule-run": "自动化运行前",
+          "will-start-task": "开新差事时"
         },
         "title": "行前检查",
-        "usage": "用法：编辑自动化或例行差事时，于「预检」择之。"
+        "usage": "用法：编辑自动化或例行差事时，于「预检」择之。",
+        "descriptionWithStartTask": "仅于君所择之差事介入：运行前仅能略过或止此番，开新差事时仅为首言择模型一次。皆不能代君准允。",
+        "titleWithStartTask": "法器介入之时",
+        "usageStartTask": "用法：于新任务之模型择器中，择其所供之模型。"
       }
     },
     "mcp": {
@@ -8236,7 +8420,8 @@
       "dialog": {
         "createTitle": "增 MCP 服务器",
         "editTitle": "修 MCP 服务器",
-        "desc": "仅支持远程 http / sse 型 MCP。存后新开或重启之 Agent 差事即可调用，方行之 Agent 差事不受影响。"
+        "desc": "仅支持远程 http / sse 型 MCP。存后新开或重启之 Agent 差事即可调用，方行之 Agent 差事不受影响。",
+        "teammateDesc": "仅支持远程 http / sse 型 MCP。存后同僚自纳为己用，于此言谈下一则讯息起即可用之，毋须新开差事。"
       },
       "fields": {
         "name": "显名",
@@ -8270,186 +8455,26 @@
         "title": "删 “{{name}}” 乎？",
         "message": "删之，则新开或重启之 Agent 差事不再载此 MCP。",
         "confirm": "删"
-      }
-    },
-    "contacts": {
-      "title": "智通名录",
-      "description": "为 Agent 所立之人物与组织文件库：跨平台身份反查(电子邮件 / 飞书 / Slack / GitHub id → 此为何人)、关系背景及带日期之事件记录。Agent 于工作中自动积存，低置信条目入待确认队列，由君裁决。数据预设仅存此机，亦可由君打开设备间同步；查找与整理经君自有之模型处理。",
-      "enable": {
-        "label": "启智能通信录",
-        "description": "启之，则 Agent 可查找并自动采集人物信息(未确之条目入待确认)。关之，不碍于此浏览与管理既有数据。",
-        "toggleAria": "启闭智通名录"
       },
-      "sync": {
-        "label": "于吾诸设备间同步",
-        "description": "于每台欲参与之桌面设备上各启一次。设备在线时自动同步；同一局域网优先直连，否则传端到端加密之中转数据。纯程序比对，不调用模型，亦不耗 token。",
-        "toggleAria": "启闭名录诸器同步",
-        "syncNow": "即刻同步",
-        "onlineDevices_other": "{{count}} 台他机在线",
-        "route": {
-          "lan": "近网直连",
-          "relay": "密传中转"
+      "duplicates": {
+        "title": "疑似重复的 MCP 连接",
+        "description": "Cindy 与 Claude Code 的用户配置中有相同或相近的连接，可能重复加载工具。请选择保留的来源；不确定时可以都保留。",
+        "scope": "仅影响这台电脑上 Cindy 的普通 Claude Code 任务，下次 Agent 启动时生效。不会修改 Claude Code 配置。相互关联的重复连接共用选择。",
+        "unavailable": "未能完整读取配置，暂未更改连接。返回此页面时会重新检查。",
+        "endpoint": "连接地址相同",
+        "similar": "连接地址相近",
+        "keep": {
+          "both": "本组皆留"
         },
-        "status": {
-          "loading": "方读同步之状…",
-          "signInRequired": "登门 Cindy 名籍后，可于设备间同步",
-          "off": "同步已关",
-          "waiting": "候他台已启同步之桌面设备上线",
-          "syncing": "方安全同步…",
-          "ready": "万事俱备，只待设备上线，即自同步",
-          "lastSuccess": "{{device}} · {{time}} · {{route}}"
+        "selected": {
+          "cindy": "已选择保留 Cindy 连接",
+          "claude": "已选择保留 Claude Code 连接",
+          "both": "本组两侧连接皆已保留"
         },
-        "error": {
-          "secure-storage-unavailable": "系统安全保存不可用，无从保护设备私钥",
-          "peer-identity-changed": "设备身份有变，已暂停同步以护数据",
-          "sync-failed": "同步未成，将于设备下次在线时再试"
-        },
-        "toast": {
-          "enabled": "设备同步已启",
-          "disabled": "设备同步已关"
-        }
-      },
-      "stats": "{{people}} 人 / {{orgs}} 组织 / {{groups}} 组",
-      "kind": {
-        "person": "人物",
-        "org": "组织"
-      },
-      "filters": {
-        "all": "全",
-        "person": "人物",
-        "org": "组织",
-        "pending": "待确"
-      },
-      "list": {
-        "searchPlaceholder": "寻姓名 / 电子邮件 / 关键词",
-        "newAria": "新立联系人",
-        "newNamePlaceholder": "姓名或组织名",
-        "newKindAria": "易类(人物 / 组织)",
-        "newConfirm": "立",
-        "groupFilterAria": "依分组筛选",
-        "groupFilterAll": "全分组",
-        "loadMore": "载更多",
-        "noResults": "无相合之联系人",
-        "empty": "通信录犹一卷素纸。启之，Agent 将于工作中自动积存；亦可点右上角 + 亲手增之。"
-      },
-      "detail": {
-        "empty": "于左侧择一联系人，以观其档",
-        "pendingBanner": "此乃 Agent 低置信采集之条目，请确认是否入册。",
-        "pendingConfirm": "准入册",
-        "pendingDiscard": "弃之",
-        "nameAria": "显名",
-        "deleteAria": "删档",
-        "summaryPlaceholder": "一行简介",
-        "identities": "名分",
-        "identityRemoveAria": "除身份 {{value}}",
-        "identityPlatformAria": "台",
-        "identityValuePlaceholder": "邮箱 / 平台 id / handle",
-        "identityAddAria": "增身份",
-        "narrative": "交谊与来历",
-        "narrativePlaceholder": "与君之关系、协作旧事、背景信息(Markdown)",
-        "agentNotes": "予 Agent 之令",
-        "agentNotesPlaceholder": "如：此乃老板之私人电子邮件，勿群发",
-        "events": "事件录",
-        "eventsEmpty": "尚无往事",
-        "eventDeleteAria": "删事件",
-        "eventDatePlaceholder": "2026-07-07",
-        "eventTextPlaceholder": "所发何事",
-        "eventAddAria": "增事件",
-        "groups": "组别",
-        "groupRemoveAria": "自分组 {{name}} 移除",
-        "groupAddAria": "入分组",
-        "groupAddPlaceholder": "入分组…",
-        "discardChanges": "弃修改",
-        "save": "存之",
-        "identitiesEmpty": "身份未详",
-        "relations": "牵连",
-        "relationsEmpty": "尚无关联(所属组织 / 相关人物)",
-        "relationAddAria": "增关联",
-        "relationRemoveAria": "除与 {{name}} 之关联",
-        "relationVerbPlaceholder": "任职 / 家人…",
-        "relationTargetAria": "择关联之对象",
-        "relationTargetPlaceholder": "择人或组织…",
-        "relationNotePlaceholder": "备注(职位…)"
-      },
-      "deleteConfirm": {
-        "title": "删「{{name}}」乎？",
-        "description": "将并删其全部身份、事件记录与分组关系，不可复原。",
-        "confirm": "删",
-        "cancel": "罢"
-      },
-      "toast": {
-        "enabled": "智能通信录已启",
-        "disabled": "智能通信录已关",
-        "codexRefreshDeferred": "开关已存，然 Codex 正忙：将于重启应用后，对 Codex 差事生效",
-        "toggleFailed": "切换智能通信录未成",
-        "created": "已立「{{name}}」",
-        "createFailed": "立之未成",
-        "deleted": "已删「{{name}}」",
-        "deleteFailed": "删之未成",
-        "saved": "已存",
-        "saveFailed": "存之未成",
-        "confirmFailed": "确认入册未成",
-        "identityAddFailed": "增身份未成",
-        "identityRemoveFailed": "除身份未成",
-        "eventAddFailed": "增事件未成",
-        "eventDeleteFailed": "删事件未成",
-        "groupAddFailed": "入分组未成",
-        "groupRemoveFailed": "出分组未成",
-        "relationAddFailed": "增关联未成",
-        "relationRemoveFailed": "除关联未成"
-      },
-      "manage": "理",
-      "manager": {
-        "title": "智通名录",
-        "closeAria": "阖"
-      },
-      "merge": {
-        "button": "并重复之档",
-        "buttonAria": "并重复之档",
-        "hint": "择一份重复之档，将其身份、事件、关联并入「{{target}}」，而后删之。",
-        "searchPlaceholder": "寻重复之档…",
-        "confirmTitle": "以「{{source}}」并入「{{target}}」乎？",
-        "confirmDescription": "「{{source}}」之身份、事件、关联、分组将尽数迁入，其档随即删除，不可复原。",
-        "confirm": "并",
-        "success": "已以「{{source}}」并入「{{target}}」",
-        "failed": "合并未成"
-      },
-      "import": {
-        "title": "纳联系人",
-        "button": "纳",
-        "pickHint": "自外部来源批量导入。电子邮件/电话与既有文件相同者自动并入(不生重复)；名字相似者列入待人工确认之单。",
-        "sourceSystem": "系统通讯录",
-        "sourceSystemDesc": "唯读拉取，首次需系统授权",
-        "sourceVcf": "vCard 卷",
-        "sourceVcfDesc": ".vcf(通信录导出之通用格式)",
-        "emptySource": "此源之中，未见可纳之联系人。",
-        "permissionDenied": "未获通信录授权：请于 系统设置 → 隐私与安全性 → 自动化 中允许访问",
-        "systemReadFailed": "读取系统通信录未成",
-        "vcfParseFailed": "解析 vCard 卷未成",
-        "selectedCount": "已择 {{checked}} / {{total}}",
-        "groupPlaceholder": "导入后归入分组(可选，无则立之)",
-        "run": "纳 {{count}} 条",
-        "running": "方纳…",
-        "failed": "导入未成",
-        "doneSummary": "导入既毕：新立 {{created}} 人，并入既有文件 {{enriched}} 条，新立组织 {{orgs}} 个。济济一堂矣。",
-        "needsReview": "{{count}} 条与现存盘案名似，未自纳，请亲察：{{names}}",
-        "identityConflicts": "{{count}} 条记录之部分身份已属他人（{{names}}），未并入——请于管理界面确认是否同一人，再行合并",
-        "relationErrors": "{{count}} 条任职之系未能立（{{names}}）",
-        "skipped": "{{count}} 条见略(无效或出错)。"
-      },
-      "ipcError": {
-        "IDENTITY_CONFLICT": "此身份已属另一联系人，请改为更新既有文件，或先合并",
-        "PERMISSION_DENIED": "系统通信录访问未获授权，请于 系统设置 > 隐私与安全性 > 自动化 中允许",
-        "UNSUPPORTED_CAPABILITY": "此平台不支持此操作",
-        "NOT_FOUND": "目标不存，或已删除",
-        "ALREADY_EXISTS": "已有同名或同内容之条目",
-        "INVALID_PARAMS": "输入无效，请检查后再试",
-        "INTERNAL": "操作未成，请稍后再试"
-      },
-      "guide": {
-        "hint": "交由 AI 代君补全联系人之档、处置待确认者、汰除重复，省君案牍之劳。",
-        "cta": "令 AI 助君理通信录",
-        "managementPrompt": "助吾理智能通信录。先查当前之状与既有工具，再引吾补联系人、整顿重复者与待确认者；凡写入、合并或删除，皆先请吾确认。"
+        "reset": "重新选择",
+        "saveFailed": "未能保存，连接可能已变化。请根据当前列表重新选择。",
+        "keepThis": "保留此连接",
+        "keepThese": "保留这些连接"
       }
     },
     "remotePermission": {
@@ -10354,6 +10379,7 @@
       "continueEditing": "续修"
     },
     "profileSaveFailed": "同僚之设未能存，变更未生效。",
+    "profileSaveOffline": "同僚所在之电脑未能连通，请复连后再存。",
     "modelLabel": "模型",
     "modelUnavailable": "{{model}}（今不可用）",
     "codexAutomaticCompact": "Codex 同僚自能压缩上下文，/new 亦存当前差事。唯确须从头始之，方新开差事。",
@@ -10684,6 +10710,11 @@
           "NETWORK_ERROR": "{{name}}不能回复：网络连接未成。\n请察网络或 Proxy，再遣之。",
           "RUNTIME_TIMEOUT": "{{name}}此番回复逾时。\n请再遣讯，或择他可用模型。",
           "RUNTIME_ERROR": "{{name}}此番未能回复。\n请再遣讯；若仍未成，请察记录并回报其事。"
+        },
+        "capability": {
+          "GROUP_AUTHORIZATION_REQUIRED": "{{name}} 的工具调用未执行：群内授权已失效或不允许此操作。请由伙伴主人在当前群重新发起。",
+          "GROUP_AUTHORIZATION_UNAVAILABLE": "暂时无法核验 {{name}} 的群聊授权，这次工具调用未执行。请在连接恢复后重试。",
+          "ATTACHMENTS_UNAVAILABLE": "部分附件未交给 {{name}}（下载失败或数量限制）。请重新发送本次需要的附件。"
         }
       },
       "settings": {
@@ -10753,7 +10784,8 @@
         "lifecycleUnavailable": "当前服务器或电脑尚不支此操作。",
         "groupDissolved": "群议已散，仍可览有权访问之旧讯。",
         "lastOwner": "请先转让群主或解散群议，再退出。",
-        "allBotsMentionDisabled": "群主尚未启 @诸同僚。"
+        "allBotsMentionDisabled": "群主尚未启 @诸同僚。",
+        "turnAlreadyStarted": "此同伴已启，不可略过"
       },
       "organizer": "主事",
       "plan": {
@@ -10784,7 +10816,17 @@
         "stepSpoken": "言毕",
         "allTurns_one": "凡 {{count}} 位",
         "allTurns_other": "凡 {{count}} 位",
-        "foldTurns": "收"
+        "foldTurns": "收",
+        "stepQueued": "待启",
+        "stepExecuting": "行中",
+        "stepSkipped": "已略",
+        "skippingTurn": "略过中…",
+        "queueWaiting": "待君续行",
+        "skipTurnLabel": "略过 {{name}}",
+        "queueEnded": "此轮已终",
+        "talkTitle": "依次陈议",
+        "talkPending": "未始",
+        "skipTurn": "略过"
       },
       "speaking": {
         "planning": "方筹划…"
@@ -10875,6 +10917,18 @@
         "reactorFormer": "{{name}}（已不在群中）",
         "reactorsUnavailable_one": "另有 {{count}} 位成员之信息暂不可得",
         "reactorsUnavailable_other": "另有 {{count}} 位成员之信息暂不可得",
+        "readStatusSent": "已发",
+        "readStatusRead": "已阅",
+        "readersCount_one": "{{count}} 人已阅",
+        "readersCount_other": "{{count}} 人已阅",
+        "readersView": "观谁已阅",
+        "readersTooLarge": "群众过多，不列已阅名单",
+        "readersNone": "无人已阅",
+        "readersLoading": "载入中…",
+        "readersFailed": "未能载入阅者",
+        "readersHeading": "已阅",
+        "readersOfTotal": "已阅 {{read}}/{{total}}",
+        "readerUnknown": "不明成员",
         "invite": "邀入群议",
         "groupCreated": "群议已立",
         "inviteFriends": "邀友同入，共役同僚",
@@ -11015,7 +11069,18 @@
           "accessToolsTitle": "可用工具与数据",
           "accessToolsHint": "可用 {{name}} 已有之工具与君之私人数据，结果全群可见。原有操作审批照常；撤回之后，已成之操作不可撤销。",
           "capabilitiesRow": "{{name}} 之工具与授权",
-          "accessMenu": "于本群之权柄"
+          "accessMenu": "于本群之权柄",
+          "notifications": {
+            "title": "消息告知",
+            "all": "凡讯皆告",
+            "mentions": "惟提及吾",
+            "none": "不告",
+            "allHint": "群讯及所关注话题之新答，皆告之。",
+            "mentionsHint": "提及吾或 @全体时告之，分职之进展仍告。",
+            "noneHint": "止本群一切系统告知，未读之讯仍存。",
+            "saving": "正存之…",
+            "saveFailed": "告知之设未能存，请再试。"
+          }
         }
       },
       "lifecycle": {
@@ -11080,22 +11145,112 @@
       "skill": "技艺",
       "mcp": "MCP",
       "toolset": "内置器具",
-      "unavailable": "不可用",
       "empty": "无相符之才能",
-      "accessHint": "逐项择同僚可用之内置器具、MCP 与技艺。所改自下次请求起生效，已授权之群内请求亦然。",
-      "inheritedHint": "今从此机已启之器具。阖其一项，此单即只用君所择者。",
-      "selectedHint": "此单之中，同僚只用已选之项。",
-      "personalHint": "同僚自习之技艺，随同僚自载。",
       "unavailableHint": "此机或今之运行环境暂不可用，请先设连接或系统授权。",
       "notOnThisComputer": "此机不可用",
-      "configure": "往设之",
       "empty_toolset": "今之运行环境无可用之内置器具。",
       "empty_mcp": "尚未增自订 MCP 服务。",
       "empty_skill": "暂无可选之技艺。",
       "inputHandoff": {
         "title": "代书",
         "description": "遇须君亲书之登录信息、密码或验证码，许此同僚请君于任一设备填之。君所填者不交予它。"
-      }
+      },
+      "intro": "择此伴可用之技艺、器具与 MCP，自下一言始行。",
+      "alwaysOn": "常开",
+      "core": {
+        "group": "本技",
+        "name": "伙伴本技",
+        "hint": "开任务、联同伴、易模型、用器具与法器、记事。随 Cindy 更。",
+        "meta": "诸伴共之 · 常开 · 随 Cindy 更",
+        "note": "诸伴皆有之调度之能，不可关，不可改。欲其易法，于言谈中告之，彼自记为己之技艺。",
+        "covers": "所含",
+        "raw": "观原文",
+        "items": {
+          "tasks": {
+            "title": "任务",
+            "body": "知可掌之任务与可用之机，依汝之命布置、跟进，携其果归；跨机行事前，先查所能。"
+          },
+          "teammates": {
+            "title": "联同伴",
+            "body": "致书他伴，或为汝新立一伴。"
+          },
+          "models": {
+            "title": "模型与器具",
+            "body": "依汝之命易模型，因需寻用器具与法器。"
+          },
+          "memory": {
+            "title": "记事",
+            "body": "记汝所好与所历，用前先查，有变则更。"
+          },
+          "self": {
+            "title": "知与设 Cindy",
+            "body": "知 Cindy 之能与用法，依汝之命查改设置；须汝填写或确认者，于任务中请汝亲为。"
+          }
+        }
+      },
+      "system": {
+        "group": "系统技艺",
+        "meta": "已开 {{on}} / 共 {{total}}",
+        "pageMeta": "系统技艺 · 随 Cindy 更",
+        "use": "为此伴开之",
+        "whenOff": "关后",
+        "items": {
+          "todo": {
+            "name": "待办",
+            "hint": "记汝所嘱与彼所察之事，期至则告汝。",
+            "off": "不复记、理、告待办；旧有待办存焉，复开则续。"
+          },
+          "routine": {
+            "name": "常例",
+            "hint": "为汝立而守按时而行之常例。",
+            "off": "不复立、改常例；旧有常例照行，汝犹可于「常例」页理之。"
+          },
+          "follow": {
+            "name": "案头与督促",
+            "hint": "察汝诸任务之近况，督汝所托之任务。",
+            "off": "不复自察、自督汝之任务；汝犹可于言谈中问之。"
+          }
+        }
+      },
+      "learned": {
+        "group": "所习技艺",
+        "empty": "尚无所习之技艺。夜习将屡用之法辑为技艺，汝亦可于言谈中令其记之。",
+        "meta": "自习而得 · 更于 {{date}}",
+        "metaUndated": "自习而得",
+        "missing": "此技艺已不存。",
+        "use": "用此技艺",
+        "useHint": "关之则存其文，此伴暂不用之。",
+        "edit": "改",
+        "delete": "删",
+        "cancel": "罢",
+        "save": "存",
+        "saveFailed": "未能存，稍后再试。",
+        "deleteFailed": "未能删，稍后再试。",
+        "deleteTitle": "删「{{name}}」乎？",
+        "deleteBody": "删后此伴不复用此技艺，其文不可复。后若需之，可于言谈中令其复记。",
+        "unsavedTitle": "尚有未存之修改",
+        "unsavedDescription": "离去则舍此番于技艺之修改。",
+        "discard": "弃其修改",
+        "continueEditing": "续修",
+        "descriptionLabel": "何时用之",
+        "bodyLabel": "行法"
+      },
+      "local": {
+        "group": "本机技艺"
+      },
+      "followMeta": "随本机 · {{count}} 项",
+      "selectedMeta": "已择 {{count}} / 共 {{total}}",
+      "showRest": "示余 {{count}} 项",
+      "showLess": "收",
+      "manage": "理",
+      "toolSettings": "器具之设",
+      "notTurnedOn": "此机尚未开",
+      "turnOn": "往开",
+      "permissions": "权"
+    },
+    "systemSkills": {
+      "followOffHint": "{{name}} 之系统技艺「案头与督促」已关，于才能页复开之乃可用。",
+      "offHint": "系统技艺「{{skill}}」已关，于才能页复开之乃行。"
     },
     "guided": {
       "title": "立同僚",
@@ -11487,6 +11642,8 @@
       }
     },
     "voiceMode": {
+      "openConversation": "启对话",
+      "inCallWith": "正与 {{name}} 通话",
       "showDetails": "展通话录",
       "hideDetails": "收通话录",
       "transcriptTitle": "今所辨之文",
@@ -11555,6 +11712,7 @@
       "unsent": "尚未遣 · 可选文录之",
       "hint": "稍顿即自遣，回复由 AI 之声朗读。随时开口即可插话。",
       "status": {
+        "questionElsewhere": "任务有问待答 · 通话如故",
         "idle": "君备则始",
         "connecting": "方接语音辨识…",
         "listening": "方聆",
@@ -11570,6 +11728,7 @@
         "muted": "麦克风已阖 · 仍可聆听"
       },
       "errors": {
+        "busy": "语音为他事所占，请毕之再试。",
         "connection": "语音连接中断，未遣之文已留。",
         "microphone": "麦克风已止，请查权柄与设备连接后再续。",
         "send": "此讯未获接收，文已留。",
@@ -12456,6 +12615,7 @@
         "titleLocal": "改回此机运行 Agent？",
         "titleOther": "改于「{{device}}」运行 Agent？",
         "description": "原机之言谈录不能携来，将撰为交接摘要以续，思考内容等不保其完美承续。下则讯遣出时生效。",
+        "descriptionNativeHistory": "全本言谈录将抄录而往以续；若不能复原，则改撰交接摘要以续，思考内容等不保其完美承续。下则讯遣出时生效。",
         "confirm": "换机运行",
         "cancel": "一仍其旧"
       }
@@ -12693,6 +12853,7 @@
     "cindyServiceUnavailable": "Cindy 官方声服暂不可用，请察网络，或易其服源。",
     "asrServiceUnavailable": "识声之服连接未成，请察网络，或稍后再试。",
     "emptyTranscript": "已闻其声，而未识一字，请再试。",
+    "speakerFiltered": "他人之声已略",
     "connectionInterrupted": "声之连接中断，请察网络后再试。",
     "recognitionStalled": "识声不复有所回，请再试。",
     "transcriptKept": "{{message}}（所识之文已存，可径修之）",
@@ -13055,6 +13216,12 @@
       "text": "前有自运未成。",
       "precheck": "自动查验暂受阻。",
       "rateLimited": "自动查验暂受阻：请求限流。",
+      "pluginMissing": "自动查验暂受阻：「{{name}}」法器未装，装毕自复。",
+      "pluginMissingUnnamed": "自动查验暂受阻：所需法器未装，装毕自复。",
+      "pluginDisabled": "自动查验暂受阻：「{{name}}」法器未启，启之自复。",
+      "pluginDisabledUnnamed": "自动查验暂受阻：所需法器未启，启之自复。",
+      "installPlugin": "装法器",
+      "openPlugin": "观法器",
       "dismissTitle": "阖往昔未成之示"
     },
     "worktreeRestoreBanner": {
@@ -13403,6 +13570,24 @@
           "autocompactBuffer": "自动压缩缓冲",
           "compactBuffer": "压缩缓冲",
           "freeSpace": "余地"
+        },
+        "estimate": {
+          "title": "文字估数",
+          "delivery": "答复呈式",
+          "host": "Cindy 规约",
+          "plugins": "法器目录",
+          "memoryRules": "记忆规约",
+          "memoryIndex": "记忆索引",
+          "profile": "同伴资料",
+          "user": "主人指令",
+          "directories": "附加目录",
+          "native": "Pi 原生规约",
+          "skills": "技艺目录",
+          "project": "项目指令",
+          "tools": "工具定义",
+          "messages": "交谈正文",
+          "other": "其余指令",
+          "note": "依当前文字粗估，非模型分词之数。不计图片与供方格式耗用，分项之和不等于原生总数。"
         }
       },
       "compact": {
@@ -13699,7 +13884,7 @@
       "REMOTE_PROVIDER_UPDATING": "此模型供方之凭证方更新。请稍后再试。",
       "REMOTE_WORKDIR_UNAVAILABLE": "远程工作目录今不可用。请确认彼机上之目录犹在，然后再试。",
       "REMOTE_OPTIMISTIC_SESSION_STATE_UNAVAILABLE": "机端暂不能确知此讯已遣否。请稍后再试，勿重遣同一讯。",
-      "REMOTE_AGENT_UNAVAILABLE": "暂不能连行 Agent 之机。请确认彼机在线且许远程控制，然后再试。",
+      "REMOTE_AGENT_UNAVAILABLE": "与行 Agent 之机断连。请再试；若屡见，再确认彼机在线且许远程控制。",
       "REMOTE_AGENT_PEER_TOO_OLD": "彼机之 Cindy 版本过旧，暂不支持此举。请先于彼机更新 Cindy。",
       "REMOTE_AGENT_EXPIRED": "此差事于行 Agent 之机上已终。请再遣。",
       "REMOTE_AGENT_NOT_FOUND": "此差事于行 Agent 之机上已终。请再遣。",
@@ -13808,6 +13993,18 @@
       "cancelTitle": "罢候并除此讯"
     },
     "ghostCall": {
+      "prStatus": {
+        "threadsNone": "无待理之意见",
+        "mergeReady": "可合并",
+        "mergeConflict": "有冲突",
+        "mergeBehind": "须同步目标分支",
+        "mergeApproval": "待批",
+        "mergeChanges": "须修改",
+        "mergeWaiting": "待合并",
+        "merged": "已合并",
+        "closed": "已闭",
+        "draft": "草稿"
+      },
       "verb": "呼法器",
       "cardRunning": "法器绘制",
       "cardDone": "已毕",
@@ -13821,13 +14018,18 @@
       "collapseFields": "收",
       "formSyncFailed": "卡之修改尚未同步，请察连接后续修；讯尚未遣。",
       "linkOpenFailed": "链接未能启",
+      "modelSelectFailed": "模型未易，请复择",
       "mailPreview": "邮件先览",
       "mailEnlarge": "放大览",
       "mailInsertImage": "插入文中",
       "mailAttach": "增附件",
       "mailRemoveAttachment": "除 {{name}}",
       "mailUpdated": "草稿已更（唯读）",
-      "mailLegacy": "旧稿（唯读）"
+      "mailLegacy": "旧稿（唯读）",
+      "taskAutoArchived": "「{{title}}」已封存",
+      "taskAutoArchivedUndo": "撤",
+      "taskAutoArchivePending": "去则自封存",
+      "taskAutoArchiveCancel": "此番不封"
     },
     "ghostHook": {
       "blockedFallback": "讯为法器所拦，未遣",
@@ -13864,10 +14066,20 @@
       "updateHost": "请先更新行差事之机，再开旁问。",
       "failed": "旁问未能开，请稍后再试。",
       "mainTaskOnly": "请自主差事开旁问。",
+      "sharedTaskUnavailable": "共事不可开旁问。",
+      "archivedTask": "请先解封存，再开旁问。",
       "closeTitle": "阖旁问？",
       "closeDescription": "将止而删此番追问，主差事不受其扰。",
       "closeConfirm": "阖而删之",
       "closeFailed": "删追问未成，请稍后再试。"
+    },
+    "pluginModelRoute": {
+      "kept": {
+        "failed": "{{plugin}} 未及回应，此差事用",
+        "no-opinion": "{{plugin}} 此番未改模型，此差事用",
+        "unavailable-route": "{{plugin}} 所择之模型今不可用，此差事用"
+      },
+      "routed": "为此差事择用"
     }
   },
   "ccAgent": {
@@ -14416,6 +14628,26 @@
           "cancel": "罢"
         }
       },
+      "newProjectDialog": {
+        "title": "立新案",
+        "description": "立一新案之卷匣，并移此差事入新案。",
+        "descriptionMoveFiles": "立一新案之卷匣，徙此差事之档入内，并移差事入新案。",
+        "nameLabel": "案名",
+        "namePlaceholder": "如 my-app",
+        "targetPath": "将立 {{path}}",
+        "location": "所在",
+        "locationInferred": "依汝旧案所在荐之",
+        "locationWillCreate": "此卷匣尚无，允之即立",
+        "changeLocation": "易…",
+        "remember": "后立新案皆置于此",
+        "cancel": "罢",
+        "create": "立案",
+        "nameTaken": "已有同名卷匣，另择一名",
+        "nameInvalid": "名中不可含 \\ / : * ? \" < > |，亦不可以句点或空格收尾",
+        "loadFailed": "案之所在读之未成",
+        "failed": "立案未成",
+        "done": "新案已立，差事已移入"
+      },
       "sessionMenu": {
         "moreActions": "余者",
         "rename": "易名",
@@ -14429,6 +14661,7 @@
         "moveToProject": "移差事",
         "moveToProjectHeading": "此机之案",
         "browseProjectFolder": "择案之卷匣",
+        "newProject": "立新案…",
         "moveToDialogue": "移至言谈",
         "noProjects": "近无案",
         "moveToProjectDone": "已移至案",
@@ -14659,8 +14892,9 @@
         "manage": {
           "title": "掌 PR 链接",
           "hint": "顶列至多示 3 个，固定之 PR 居先",
-          "empty": "贴 GitHub PR 链接即可增之",
+          "empty": "贴 GitHub PR 或 GitLab MR 链接即可增之",
           "removed": "已除 {{count}} 个",
+          "legacy": "待认旧引：{{count}}",
           "addLabel": "增 PR 链接",
           "add": "增 PR",
           "loading": "方读…",
@@ -14669,18 +14903,29 @@
           "unpin": "解固",
           "pinLimit": "至多固 3 个 PR",
           "reorderHint": "按 Alt+↑/↓ 于已固或未固之组内调序。",
-          "dragHandle": "拖而排序 {{repo}} #{{number}}",
+          "dragHandle": "拖而排序 {{repo}} {{numberLabel}}",
           "remove": "除 PR",
           "errors": {
             "duplicate": "此 PR 已关联；已除之链接可于清单中复之",
             "notFound": "寻此 PR 不得，或无访问之权柄",
-            "invalidUrl": "请输有效之 GitHub PR 链接",
+            "invalidUrl": "请输入有效之 GitHub PR 或 GitLab MR 链接",
             "reorderFailed": "顺序未存，请再试",
-            "verifyFailed": "不能验 PR，请察 GitHub 登录与访问权柄",
+            "verifyFailed": "不能验 PR，请察 GitHub 或 GitLab 登录与访问权柄",
             "unsupported": "此机之版本暂不支持掌 PR 链接",
             "failed": "不能更 PR 链接"
           }
-        }
+        },
+        "gitlab": {
+          "missing": "未见 GitLab CLI（glab），故无 MR 状态。装 glab 并登录乃可见。",
+          "notLoggedIn": "本机 glab 未登录 {{host}}，故无 MR 状态。于终端行 glab auth login，登录乃可见。",
+          "unsupported": "此机尚不支持 GitLab MR 状态",
+          "openAria": "于浏览器开 MR !{{number}}",
+          "summaryAria": "MR !{{number}} 概览",
+          "urlPlaceholder": "GitHub PR 或 GitLab MR 链接",
+          "notFound": "MR 不存，或今之名籍无权柄览之"
+        },
+        "merge": "合并",
+        "conflicts": "有冲突"
       }
     },
     "schedule": {
@@ -14990,6 +15235,14 @@
       }
     },
     "projectAutomation": {
+      "import": {
+        "found": "项目「{{projectName}}」中发现待导入的自动任务",
+        "review": "查看导入内容",
+        "title": "导入仓库自动任务",
+        "description": "来源：{{workingDir}}。请检查下方配置。导入会应用这些变更并启用新增自动任务，它们可以执行命令、启动完全访问权限的 Agent。请仅导入你信任的内容。",
+        "accept": "确认导入",
+        "removed": "将删除：{{names}}"
+      },
       "toast": {
         "summary": "增 {{inserted}} · 更 {{updated}} · 删 {{deleted}}",
         "installed": "案「{{projectName}}」之自运已装（{{summary}}）",
@@ -15066,7 +15319,8 @@
         "resume": "复行",
         "pause": "暂止",
         "deleteAutomation": "删自运"
-      }
+      },
+      "tagWebhook": "Webhook"
     },
     "detail": {
       "manualTrigger": "手触",
@@ -15141,7 +15395,7 @@
         "titleCreate": "立自运",
         "titleProjectCreate": "立案之自运",
         "titleProjectEdit": "修案之自运",
-        "subtitle": "以 Claude、Codex 或 Pi 依期行 Prompt。",
+        "subtitle": "择触发方式，执行 AI 任务或脚本。",
         "subtitleFromGhost": "「{{name}}」请君立一自运。择定模型而存之，即生效。",
         "save": "存之",
         "create": "立",
@@ -15164,6 +15418,7 @@
         "timeout": "时限（秒，可略）",
         "timeoutPlaceholder": "不限",
         "capabilities": {
+          "github_read": "读 GitHub",
           "jira_read": "读 Jira",
           "jira_comment": "评 Jira",
           "sessions_dispatch": "派差事",
@@ -15175,6 +15430,7 @@
         "capabilitiesSearch": "寻能",
         "capabilitiesEmpty": "无相合之能",
         "capabilityDescs": {
+          "github_read": "读 PR、CI、评议及所见之变；查询不系任务",
           "jira_read": "查读 Jira 单（依 key 读 / JQL 寻）",
           "jira_comment": "于 Jira 单增评",
           "sessions_dispatch": "立或唤 {{appName}} 差事，并递讯",
@@ -15187,7 +15443,7 @@
       },
       "fields": {
         "title": "题",
-        "schedule": "期程",
+        "schedule": "触发之式",
         "notify": "告",
         "prompt": "提示词",
         "once": "一次",
@@ -15303,7 +15559,87 @@
         "tooltip": "每番运行前先询君所择之法器：可放行、略此番或止此番运行，不能代君准允须君确认之事。",
         "unavailable": "法器不可用",
         "unavailableHint": "此法器已不可用。未改择他器前，运行时依「法器有失时」之设处置。"
-      }
+      },
+      "layout": {
+        "content": "所行之事",
+        "notifications": "告知与静行",
+        "contentTab": "内容与触发",
+        "optionsTab": "执行之设",
+        "sections": "自动之设"
+      },
+      "webhook": {
+        "quotaHint": "Webhook 受信之数日有其限，此处之筛不减其数。请于发信之方（如 GitHub）唯选所需之事。",
+        "sourceLabel": "发信之方",
+        "sourceCustom": "自定",
+        "customLabel": "格式之述（JSON）",
+        "customHint": "以 JSON 述验签之法，及事名、投递 ID 之所在。",
+        "customInvalid": "自定之格式不合，请察其 JSON。",
+        "signedLabel": "验其签名",
+        "signedHint": "唯受持钥之发信方所请。",
+        "unsignedWarning": "既去签名，凡得此址者皆可触此务，且耗每日 Webhook 受信之数。址若外泄，请于务详中更其址。",
+        "eventPicker": {
+          "label": "所应事件",
+          "choose": "择事件",
+          "selected": "已择 {{count}} 项",
+          "all": "全部事件",
+          "search": "寻事件",
+          "customGroup": "其余已择事件",
+          "noResults": "未得其事，可于进阶处增之。",
+          "noPresets": "此源无定目。可收全部事件，或于进阶处增事件名。",
+          "custom": "自订事件（进阶）",
+          "customLabel": "事件名",
+          "invalid": "请用 1–100 个字母、数字或 _ . : -，每次新增一个事件。",
+          "add": "增",
+          "limit": "至多择 32 项。",
+          "chooseOne": "请至少择一项，或明择「全部事件」。",
+          "cancel": "罢",
+          "apply": "用之",
+          "remove": "移除 {{name}}",
+          "groups": {
+            "issues": "Issue",
+            "pullRequests": "PR",
+            "issueComments": "Issue / PR 留言",
+            "reviews": "PR 审查",
+            "checks": "检查集",
+            "workflows": "流程执行",
+            "repository": "储库",
+            "releases": "版本发布",
+            "mergeRequests": "合并请求",
+            "comments": "留言",
+            "pipelines": "管线",
+            "projects": "案",
+            "payments": "付款",
+            "checkout": "結账",
+            "invoices": "账单",
+            "subscriptions": "订阅"
+          },
+          "actions": {
+            "all": "全部變化",
+            "created": "新立",
+            "closed": "关闭",
+            "reopened": "重開",
+            "edited": "编修",
+            "commitsUpdated": "提交更新",
+            "submitted": "提交审查",
+            "completed": "已畢",
+            "pushed": "程式码推送",
+            "published": "发布",
+            "merged": "合并",
+            "updated": "更新",
+            "tagsChanged": "标签推送",
+            "declined": "拒绝",
+            "deleted": "删除",
+            "succeeded": "成功",
+            "failed": "失败",
+            "paid": "已付款"
+          }
+        }
+      },
+      "trigger": {
+        "label": "触发方式",
+        "timed": "定时"
+      },
+      "runSettings": "运行设置"
     },
     "chips": {
       "selectProject": "择案",
@@ -15502,6 +15838,91 @@
           "description": "每月体检工作目录之文档，寻过时与矛盾之处",
           "prompt": "体检工作目录中之文档，寻须更新之处。\n约束：\n- 察过时之信息（旧日期、失效链接、已废之流程或工具）、前后矛盾与重复之文\n- 每一患皆注卷之路径与确切所在，述其所据\n- 依「宜更新 / 宜合并 / 宜删除」分类，出修订建议清单\n- 唯出体检报告，勿径改文档"
         }
+      }
+    },
+    "deadline": {
+      "label": "截止时刻",
+      "clear": "清除",
+      "hint": "留空则不限。时依 {{timezone}}；届期不再自动运行，已启者仍可完成。",
+      "invalid": "请填有效日期与时刻",
+      "expired": "已届期"
+    },
+    "webhook": {
+      "title": "Webhook 触发",
+      "url": "受信之址",
+      "secret": "密钥",
+      "copy": "复制",
+      "copied": "{{label}}已录",
+      "copyFailed": "未能录{{label}}，请自选而复制。",
+      "urlUnavailable": "受信之址暂不可用。",
+      "quotaNotifyTitle": "Webhook 受信之数已尽",
+      "quotaExhausted": "今日 Webhook 受信之数 {{limit}} 次已尽，{{time}} 乃复。未复之时，外事不触任务；定时之行与模型之额皆不受影响。",
+      "signedOut": "登 Cindy 之籍，则复受之，所设皆存。",
+      "serviceUnavailable": "此境暂无 Webhook 受信之服务。",
+      "suspended": "此籍之 Webhook 已停。",
+      "endpointLimit": "接收地址名额已满，请释放不再使用的地址。",
+      "offline": "此机暂未连服务器。事暂存之，复连乃达。",
+      "localOnlyHint": "此址唯于此机有效。公网之事须转来，如用 gh webhook forward。",
+      "eventsSummary": "诸事：{{events}}",
+      "lastReceived": "近事：{{time}}",
+      "neverReceived": "未有所受",
+      "ignored": "已略 {{count}} 事",
+      "generateSecret": "生成密钥",
+      "rotateSecret": "更生密钥",
+      "secretOnce": "请即复制此钥，后不复示。",
+      "secretMissing": "未生密钥之前，诸事皆拒。",
+      "rotateFailed": "密钥未能生成。密钥唯可于行此务之机管理。",
+      "genericSender": "发信之方",
+      "secretFillHint": "请填于 {{sender}} 之「{{field}}」。",
+      "secretPastePlaceholder": "贴 {{sender}} 之「{{field}}」",
+      "secretSave": "存其密钥",
+      "secretSaved": "密钥已存。",
+      "secretSaveFailed": "密钥未能存。密钥唯可于行此务之机管理。",
+      "secretInvalid": "密钥之式不合，请自发信方复取。",
+      "secretPasteMissing": "未贴发信方之钥以前，诸事皆拒。",
+      "unsignedNotice": "未启签名：凡得此址者皆可触此务。址若外泄，请更其址。",
+      "rotateUrl": "更其址",
+      "rotateUrlConfirmTitle": "更受信之址乎？",
+      "rotateUrlConfirmBody": "旧址即刻失效，须以新址填于发信方。设置与密钥如故。",
+      "rotateUrlFailed": "未能更址，请稍后再试。",
+      "addressHint": "将此位址填入 {{sender}} 的 Webhook 设定。",
+      "testHint": "于 {{sender}} 触发符合筛选条件之事件，执行结果列于下方。",
+      "waitingEvent": "候事件",
+      "manageConnection": "连线设置",
+      "preparing": "方备接收位址…",
+      "noRunsHint": "收到符合筛选条件之 Webhook 事件后，执行结果列于此处。",
+      "account": {
+        "title": "接收地址",
+        "manage": "管理",
+        "usage": "接收地址 {{used}} / {{limit}}",
+        "description": "此账号在所有电脑上的接收地址共用名额。旧电脑不在线，也可以释放。",
+        "remaining": "剩余 {{count}} 个",
+        "unavailable": "当前服务暂不支持账号地址管理，请等待服务更新。",
+        "loadFailed": "无法获取地址列表，请检查连接后刷新。",
+        "releaseFailed": "未能确认释放结果，请刷新列表核对后再试。",
+        "retry": "刷新",
+        "loading": "正在读取接收地址…",
+        "empty": "还没有使用接收地址",
+        "thisDevice": "本机",
+        "unnamed": "自动化 {{id}}",
+        "unnamedDevice": "设备 {{id}}",
+        "suspended": "已停用，仍占用名额",
+        "lastReceived": "最近接收：{{time}}",
+        "neverReceived": "尚未接收事件",
+        "open": "查看自动化",
+        "release": "释放",
+        "confirm": "释放 {{device}} 上「{{name}}」的接收地址？",
+        "confirmHint": "旧地址、密钥和服务器暂存事件将失效，旧电脑重新上线也不会自动恢复。自动化及运行记录保留，已开始的运行不受影响。",
+        "cancel": "取消",
+        "confirmRelease": "释放地址",
+        "viewAddress": "查看地址",
+        "done": "完成",
+        "released": "已释放「{{name}}」的接收地址。",
+        "releasedHint": "该接收地址已释放，不再占用名额。重新连接会生成新地址，需要重新配置发送方。",
+        "reconnect": "重新连接",
+        "reconnectConfirm": "重新连接 Webhook？",
+        "reconnectConfirmHint": "将占用一个名额并生成新的接收地址。请把新地址和密钥更新到发送方。",
+        "reconnectFailed": "暂时无法重新连接，请检查剩余名额后重试。"
       }
     }
   },
@@ -15818,6 +16239,7 @@
     "agentControlled": "此界面乃 Agent 所启。填写之前，请确认此处确为君欲登录之所。",
     "agentPicture": "此 QR 码出自 Agent 之截屏，Cindy 不见原画面，扫毕亦不自续。请确认其所指之网站确为君欲登录之所，扫毕点「交还 Agent」。",
     "error": {
+      "raise": "窗不能启，请于电脑切至之。",
       "decision": "操作未达，请再试。",
       "stale": "界面已变，请依最新内容操作。",
       "submit": "所输入者未达，请再试。"
@@ -15853,6 +16275,9 @@
       "picture": "观画面",
       "backToForm": "归表单",
       "liveView": "即景",
+      "openWindow": "启登录之窗",
+      "openRemoteDesktop": "启远程桌面",
+      "useForm": "改以表单填写",
       "fill": "填",
       "skip": "略",
       "continue": "续",
@@ -15860,6 +16285,9 @@
       "showPassword": "示密码",
       "hidePassword": "隐密码",
       "scan": "扫码"
+    },
+    "directSignIn": {
+      "hint": "请径于窗中登录，毕则自续。"
     },
     "remoteUnavailable": "此机不能自远方受输入。请于主机之机上完成此步，再交还 Agent。",
     "unnamedField": "书栏",
@@ -15928,7 +16356,17 @@
   },
   "commandPalette": {
     "viewSkillDetails": "观技艺之详",
-    "projectSkillNotLoaded": "今之 Pi 差事尚未载此案之 Skill，新差事将自试载之"
+    "projectSkillNotLoaded": "今之 Pi 差事尚未载此案之 Skill，新差事将自试载之",
+    "pluginSkillSetup": {
+      "install": "未纳",
+      "enable": "未启"
+    },
+    "pluginSkills": {
+      "pr": {
+        "install": "发 PR、修 CI 与评审、随至合并 · 须先纳 GitHub 法器",
+        "enable": "发 PR、修 CI 与评审、随至合并 · 须先启 GitHub 法器"
+      }
+    }
   },
   "skillhub": {
     "remote": {
@@ -16692,7 +17130,10 @@
       "registrationFailed": "立之未成，请稍后再试",
       "silentStopExhausted": "模型屡返空答，自动续行已暂止。点「继续」以复差事。",
       "executionResultUnavailable": "未得行之结果，自动接续已止。可请助手察既有之结果。",
-      "outputLimit": "模型已达输出长度之限，此轮之答或有不全。径遣下一讯即可续之。",
+      "outputLimit": "模型已达输出之限，此答或有不全。可遣新讯以续；若屡至此限，宜降推理强度，或先压缩对话记录。",
+      "outputLimitReasoning": "思考已耗本次输出预算之大半，此答或有不全。宜降推理强度，或先压缩对话记录，而后续之。",
+      "outputLimitUsage": "本次模型请求已输出 {{outputTokens}} tokens，其中 {{reasoningTokens}} tokens 用于思考。",
+      "outputLimitOutputUsage": "本次模型请求已输出 {{outputTokens}} tokens。",
       "permissionTightenInterruptFailed": "收紧权柄时未能止方行之差事，其或将免确认而行至终；如有需要，请手止之。",
       "codexAutoReviewUnavailable": "自动审批暂不可用，此举已阻，权柄已改为预设。请再试，需时当问于君。",
       "hostShellCommandBlocked": "Cindy 已阻此 Shell 命令。请察其命令，改用可用之工具或命令续之。",
@@ -16916,7 +17357,14 @@
     "sectionTitle": "目录",
     "empty": "尚无引用之目录",
     "add": "增目录…",
-    "addReadOnly": "增唯读目录…",
+    "back": "归",
+    "addTitle": "增目录",
+    "writableHint": "Agent 可读写",
+    "writableHintDetail": "Agent 能读取、创建、修改并删除此诸目录中之卷",
+    "searchRecent": "寻目录",
+    "noRecent": "尚无近用之目录",
+    "noMatchingRecent": "无相符之目录",
+    "addFailed": "此目录未能增，请再试，或择他卷匣。",
     "atLimit": "已满 {{max}} 之限",
     "remove": "除 {{name}}",
     "writableParentConfirmTitle": "许读写上层目录乎？",
@@ -17168,6 +17616,7 @@
     "sidebar": "余资与订阅",
     "settings": {
       "title": "耗用与计费",
+      "supportHint": "若有所困，可致函 {{email}} 求助。",
       "subscriptionCard": {
         "title": "今之套餐",
         "empty": "今无生效之订阅",
@@ -17242,14 +17691,38 @@
     },
     "orders": {
       "title": "订单录",
-      "description": "唯示于 Cindy 内所发之储值与订阅订单。待付之订单逾时则自罢。",
+      "description": "显示已付款的储值订单与已结清的订阅账单。",
+      "history": {
+        "loadFailed": "订单记录未能加载",
+        "retry": "重新加载订单",
+        "unknownPaidAt": "付款时间未知",
+        "unknownAmount": "金额未知",
+        "refundedAmount": "已退 {{amount}}",
+        "refunded": "已退款",
+        "partiallyRefunded": "部分退款",
+        "noPayment": "无需付款",
+        "page": "第 {{page}} 页",
+        "previous": "上一页",
+        "next": "下一页"
+      },
       "count": "{{count}} 笔",
-      "incomplete": "订单之记甚多，今唯示最近 {{count}} 笔。",
       "orderId": "NO. {{id}}",
       "copy": {
         "action": "录订单 ID {{id}}",
         "success": "订单 ID 已录",
         "failed": "录订单 ID 未成，请再试"
+      },
+      "refund": {
+        "action": "请退款",
+        "title": "请退款",
+        "description": "请将下列信息寄至客服信箱 {{email}}，以请退款。",
+        "emailSubject": "Cindy 退款之请 - {{orderId}}",
+        "sendAction": "寄退款之请",
+        "gmailFallbackDescription": "退款之请含订单信息。开 Gmail 则此信息将分享予 Google，续乎？",
+        "emailBody": "您好，欲请退还下列订单款项，烦请协助。\n\n订单号：{{orderId}}\n渠道交易号：{{providerTransactionId}}\n应用：{{application}}\n支付方式：{{paymentMethod}}\n实付金额：{{amount}}\n\n所遇之事：\n（请略述所遇之情）\n\n谨谢。",
+        "fields": {
+          "amount": "实付金额"
+        }
       },
       "invoice": {
         "action": "请开票",
@@ -17259,7 +17732,7 @@
         "emailSubject": "请开订单 {{orderId}} 之发票",
         "personalInvoicePolicy": "Cindy 个人版储值，预设开立<strong>个人抬头发票</strong>，抬头可书姓名或「个人」。如需企业抬头发票以供公司报销，请具<strong>加盖公司公章之报销说明</strong>，并于说明中注明开票抬头。",
         "invoiceTitleHint": "填写说明：个人抬头请书姓名或「个人」；如需企业抬头以供公司报销，请随邮件附加盖公司公章、注明开票抬头之报销说明。",
-        "emailBody": "敬启者：\n\n欲请开立下列订单之发票：\n\n────────────────────\n订单号：{{orderId}}\n应用程序：{{application}}\n付款方式：{{paymentMethod}}\n开票金额：{{amount}}\n发票抬头：\n{{invoiceTitleHint}}\n\n联系人：\n联系电话：\n信箱：\n────────────────────\n\n谨谢。",
+        "emailBody": "敬启者：\n\n欲请开立下列订单之发票：\n\n────────────────────\n订单号：{{orderId}}\n渠道交易号：{{providerTransactionId}}\n应用程序：{{application}}\n付款方式：{{paymentMethod}}\n开票金额：{{amount}}\n发票抬头：\n{{invoiceTitleHint}}\n\n联系人：\n联系电话：\n信箱：\n────────────────────\n\n谨谢。",
         "sendAction": "寄开票之请",
         "emailCopied": "客服信箱已录",
         "emailCopyFailed": "录客服信箱未成，请再试",
@@ -17270,6 +17743,7 @@
         "notAvailable": "暂无其资",
         "fields": {
           "orderId": "订单号",
+          "providerTransactionId": "渠道交易号",
           "application": "应用",
           "paymentMethod": "支付方式",
           "amount": "开票金额",
@@ -18625,6 +19099,21 @@
     "autoDetail": "主差事与 Worker 之操作，将交 Cindy 自动审批。需人工确认或遭拒时仍会暂停；此非完全访问。此择存于法器 AI 规制，不改他差事之全域权柄。",
     "autoTaskDetail": "主差事与 Worker 之操作，将交 Cindy 自动审批。需人工确认或遭拒时仍会暂停；此非完全访问。仅改目前差事之权柄，不改法器预设规制。"
   },
+  "pluginCompanionAnswer": {
+    "title": "确许",
+    "planMessage": "令{{companion}}依此策而行乎？",
+    "permissionMessage": {
+      "command": "许{{companion}}行此令乎？",
+      "file-read": "许{{companion}}读此诸卷乎？",
+      "file-write": "许{{companion}}改此诸卷乎？",
+      "browser": "许{{companion}}于览器行此一步乎？",
+      "plugin": "许{{companion}}用「{{tool}}」乎？",
+      "tool": "许{{companion}}用 {{tool}} 乎？"
+    },
+    "source": "君于法器「{{plugin}}」择许，{{appName}} 于此再询之；许之则同僚续行。",
+    "allow": "许",
+    "cancel": "罢"
+  },
   "groupTools": {
     "authorizationRequired": "群授权已失效或不许此操作，请由同僚之主于本群重新发起。",
     "localPeersOnly": "群内私讯仅可遣予此机同名籍之同僚。",
@@ -18702,6 +19191,9 @@
     "pendingApprovals": "{{count}} 项待确"
   },
   "richAnswer": {
+    "invalidImageReference": "图之引用无效，未能示之。",
+    "requestImageAgain": "请重示此图",
+    "requestImageAgainMessage": "请重示此既有之图（{{name}}，引用：{{source}}）。核原工具之果或原档，以实址示之，勿另生新图；若未能辨其所指，先问于我。",
     "send": "遣讯",
     "sending": "方遣…",
     "sent": "已呈",
@@ -18812,5 +19304,326 @@
     "unavailable": "此版未设报告上传之址。可启此机之卷，交予支持人员。",
     "consent": "请先于规制中同意隐私权政策，再呈报告。此机之卷仍存。",
     "failed": "操作未毕，请再试或览此机之卷。"
+  },
+  "attachmentPreview": {
+    "fitWidth": "适宽",
+    "fitPage": "适页",
+    "pageNumber": "页码",
+    "more": "更多操作",
+    "retry": "重试",
+    "image": "图",
+    "video": "影片",
+    "file": "档案",
+    "close": "关闭",
+    "reset": "复原视角",
+    "open": "开启预览",
+    "zoomIn": "放大",
+    "zoomOut": "缩小",
+    "fit": "适于视窗",
+    "actualSize": "原始尺寸（1:1）",
+    "save": "存原件",
+    "share": "分享",
+    "previous": "上一附件",
+    "next": "下一附件",
+    "password": "请输入 PDF 密钥",
+    "find": "查此文",
+    "matches": "合者 {{count}} 页",
+    "previousPage": "前页",
+    "nextPage": "后页",
+    "source": "观原码",
+    "rendered": "观文",
+    "wrap": "折行",
+    "lineNumbers": "行数"
+  },
+  "setupMigration": {
+    "title": "迁移助理",
+    "back": "← 归",
+    "cancel": "罢",
+    "listSeparator": "、",
+    "steps": {
+      "label": "迁移步序",
+      "source": "来源",
+      "review": "内容",
+      "apply": "迁移"
+    },
+    "source": {
+      "description": "选一台登录了同一帐号的电脑。它的法器、技艺、设置和连接会照原样装到这台电脑；密钥只在你在那台电脑上点「允许」后拷贝，登录状态不会离开那台电脑。",
+      "loading": "方寻其余之机…",
+      "empty": "没有找到这个账号的其他电脑。在另一台电脑上登录 Cindy 后再打开这里",
+      "loadFailed": "未能读取机目",
+      "reload": "重读机目",
+      "ready": "在线，可迁移",
+      "next": "读取规制",
+      "readAgain": "重读",
+      "unavailable": {
+        "offline": "离线。打开那台电脑上的 Cindy 后可以迁移",
+        "remote-control-off": "需要先在那台电脑开启「允许同账号设备控制本机」",
+        "control-disabled": "这台电脑已关闭对它的控制，可在「远程连接」中重新打开"
+      }
+    },
+    "reading": "方读「{{name}}」之规制…",
+    "errors": {
+      "SETUP_SOURCE_OUTDATED": "「{{name}}」上的 Cindy 版本较旧，不支持迁移。更新那台电脑上的 Cindy 后再试",
+      "SETUP_SOURCE_UNAVAILABLE": "未能读取「{{name}}」上的设置。迁移需要那台电脑在线，并开启「允许同账号设备控制本机」",
+      "SETUP_SNAPSHOT_INVALID": "「{{name}}」返回的设置无法识别。两台电脑的 Cindy 版本不同时会出现这种情况，更新到同一版本后再试",
+      "SETUP_PLAN_EXPIRED": "迁移清单已过期，需要重新读取「{{name}}」上的设置",
+      "GENERIC": "未能读取「{{name}}」上的设置"
+    },
+    "review": {
+      "description": "勾选要从「{{name}}」迁移到这台电脑的内容。这台电脑上已经改过的设置会保留，不会被覆盖。",
+      "partial": "那台电脑上有部分内容这次没能读取，下面只列出读到的内容。",
+      "groupCount": "已选 {{selected}} / {{total}} 项",
+      "present_one": "另 {{count}} 项，此机已有",
+      "present_other": "另 {{count}} 项，此机已有",
+      "start_one": "迁移 {{count}} 项",
+      "start_other": "迁移 {{count}} 项",
+      "continue": "续行",
+      "version": "版本 {{version}}",
+      "pluginDisabled": "原机已停用，此机亦停用",
+      "pluginConsentLater": "来自法器坊「{{market}}」，安装时单独确认权限",
+      "skillTeam": "团队技艺",
+      "settingsChanges_one": "{{count}} 项规制",
+      "settingsChanges_other": "{{count}} 项规制",
+      "settingsKept_one": "保留此机 {{count}} 项规制",
+      "settingsKept_other": "保留此机 {{count}} 项规制",
+      "settingsChangesKept_one": "{{count}} 项规制，保留此机 {{kept}} 项",
+      "settingsChangesKept_other": "{{count}} 项规制，保留此机 {{kept}} 项",
+      "kept": "保留此机规制",
+      "rendererPrefs": "界面偏好",
+      "rendererPrefsHint": "主题、语言、通知与言谈显示",
+      "toolOn": "开启内置工具「{{name}}」",
+      "toolOff": "关闭内置工具「{{name}}」",
+      "mcp": "MCP · {{url}}",
+      "mcpToken": "MCP · {{url}} · 访问凭证需要在这台电脑上重新填写",
+      "checklistTitle": "尚须此机办理",
+      "checklistDescription": "登录状态、密钥和系统权限不会离开原来的电脑。迁移完成后，可以按这份清单逐项补上。",
+      "groups": {
+        "plugins": "法器",
+        "skills": "技艺",
+        "settings": "规制",
+        "connections": "供方与 MCP",
+        "access": "这台电脑的访问",
+        "secrets": "密钥",
+        "ssh": "SSH 服务器"
+      },
+      "reason": {
+        "not-in-catalog": "这台电脑的法器坊里没有它",
+        "source-not-added": "来自这台电脑读不到的法器坊",
+        "local-only": "只存在于那台电脑，需要手动处理",
+        "needs-sign-in": "需要先登录",
+        "platform": "只适用于另一种系统",
+        "invalid": "这台电脑无法识别"
+      },
+      "providerAuth": {
+        "apiKey": "API Key 需要在这台电脑上重新填写",
+        "oauth": "需要在这台电脑上重新登录",
+        "native": "需要在这台电脑上登录订阅账号",
+        "none": "无需密钥",
+        "apiKeyCopy": "API Key 可随「密钥」一起复制"
+      },
+      "access": {
+        "remote-control": "允许同账号设备控制本机",
+        "remote-controlHint": "与「{{name}}」上的设置相同，可随时在「远程连接」中关闭",
+        "keep-awake": "保持电脑唤醒",
+        "keep-awakeHint": "与「{{name}}」上的设置相同，这台电脑不会进入休眠"
+      },
+      "secrets": {
+        "title_one": "复制 {{count}} 项的密钥",
+        "title_other": "复制 {{count}} 项的密钥",
+        "description": "需要在「{{name}}」上点「允许」后才会复制，只用这一次请求加密传给这台电脑。账号登录不会复制，迁移后可在清单里依次登录。"
+      },
+      "sshDescription": "这台电脑会生成一把新的 SSH 密钥，由「{{name}}」加到这些服务器上（同样需要在那台电脑上允许），再逐台测试连接。私钥不会离开各自的电脑。",
+      "sshHost": "{{user}}@{{host}}:{{port}}",
+      "mcpTokenCopy": "MCP · {{url}} · 访问凭证可随「密钥」一起复制",
+      "checklistDescriptionWithKeys": "登录状态和系统权限不会离开原来的电脑；密钥在「{{name}}」允许后才会复制。迁移完成后，可以按这份清单逐项补上。"
+    },
+    "permissions": {
+      "title": "确认法器权限",
+      "description_one": "下面 {{count}} 个法器安装后会取得这些权限。确认后会一起安装。",
+      "description_other": "下面 {{count}} 个法器安装后会取得这些权限。确认后会一起安装。",
+      "pluginTitle": "{{name}} · 版本 {{version}}",
+      "confirm_one": "允许并安装 {{count}} 个法器",
+      "confirm_other": "允许并安装 {{count}} 个法器"
+    },
+    "running": {
+      "progress": "方迁移，已毕 {{completed}} / {{total}} 项",
+      "label": "方迁移…",
+      "confirm": "请在「{{name}}」上点「允许」。",
+      "confirmCode": "两台电脑显示的校验码应一致："
+    },
+    "done": {
+      "summary_one": "已自「{{name}}」迁入 {{count}} 项",
+      "summary_other": "已自「{{name}}」迁入 {{count}} 项",
+      "applyFailed": "法器、技艺与规制未能尽迁",
+      "failedTitle_one": "{{count}} 项未能迁移",
+      "failedTitle_other": "{{count}} 项未能迁移",
+      "checklistTitle": "此机尚有待办",
+      "checklistEmpty": "此机已无待办",
+      "checklistDescription": "这份清单之后也可以在「设置 → 通用」中查看。",
+      "restartHint": "部分设置在重新打开 Cindy 后生效。",
+      "finish": "毕",
+      "finishReload": "完成并重载"
+    },
+    "failure": {
+      "generic": "未能迁移（{{code}}）",
+      "SOURCE_NOT_ADDED": "未能添加它所在的法器坊",
+      "MUTATION_CANCELLED": "已取消安装",
+      "PRECONDITION_FAILED": "迁移时法器或这台电脑的状态发生了变化",
+      "PERMISSION_DENIED": "当前账号无权安装",
+      "NOT_FOUND": "在这台电脑的法器坊里找不到它",
+      "ALREADY_EXISTS": "这台电脑上已有同名项目",
+      "SETUP_PLAN_EXPIRED": "迁移清单已过期",
+      "SETUP_TRANSFER_DECLINED": "那台电脑上没有点「允许」，或 2 分钟内没有回应",
+      "SETUP_TRANSFER_BUSY": "那台电脑正在处理另一个迁移请求，请稍后重试",
+      "SETUP_TRANSFER_INVALID": "那台电脑的回复无法识别",
+      "SETUP_SOURCE_OUTDATED": "那台电脑的 Cindy 版本过旧，更新后才能复制",
+      "SETUP_SOURCE_UNAVAILABLE": "那台电脑现在没有回应",
+      "SSH_AUTHORIZE_FAILED": "那台电脑没能把新密钥加到这台服务器上",
+      "SSH_KEYGEN_FAILED": "这台电脑没能生成 SSH 密钥（需要系统自带的 ssh-keygen）",
+      "SSH_HOST_NOT_FOUND": "那台电脑上已经没有这台服务器",
+      "SSH_AUTH_FAILED": "新密钥已加好，但服务器拒绝了这台电脑的连接",
+      "SSH_CONNECT_FAILED": "这台电脑连不上这台服务器，它可能只在那台电脑的网络里可达",
+      "SSH_KEY_FILE_NOT_FOUND": "找不到这台电脑上的新密钥文件"
+    },
+    "checklist": {
+      "done": "已毕",
+      "markDone": "记为已毕",
+      "needs": "尚需：{{items}}",
+      "voiceAsrName": "语音识别",
+      "plugin-setup": {
+        "title": "连接「{{name}}」的账号",
+        "action": "去连接"
+      },
+      "plugin-manual": {
+        "title": "手动安装法器「{{name}}」",
+        "detail": "它是在那台电脑上直接导入的法器。在那台电脑的法器详情中导出安装包，再在这台电脑导入",
+        "action": "打开法器"
+      },
+      "market-source": {
+        "title": "添加法器坊「{{name}}」",
+        "detail": "这个市场的地址只保存在那台电脑上，添加后可以安装其中的法器",
+        "action": "打开法器"
+      },
+      "skill-manual": {
+        "title": "拷贝技艺「{{name}}」",
+        "detail": "它不是从 SkillHub 安装的，只存在于那台电脑",
+        "action": "打开技艺"
+      },
+      "provider-key": {
+        "title": "为「{{name}}」填写 API Key",
+        "action": "去填写"
+      },
+      "provider-connection": {
+        "title": "为「{{name}}」重新填写连接地址",
+        "detail": "原地址里的账号信息或查询参数可能含有凭证，没有一起迁移",
+        "action": "去填写"
+      },
+      "provider-sign-in": {
+        "title": "登录「{{name}}」",
+        "action": "去登录"
+      },
+      "local-model": {
+        "title": "在这台电脑上准备本地模型「{{name}}」",
+        "detail": "本地模型运行在原来的电脑上，这台电脑需要单独安装",
+        "action": "打开供方"
+      },
+      "mcp-token": {
+        "title": "为 MCP「{{name}}」填写访问凭证",
+        "action": "去填写"
+      },
+      "builtin-key": {
+        "title": "填写「{{name}}」的 API Key",
+        "action": "去填写"
+      },
+      "im-channel": {
+        "title": "连接「{{name}}」",
+        "detail": "同一个机器人同时只在一台电脑上接收消息，连接前先确认由哪台电脑接收",
+        "action": "去连接"
+      },
+      "computer-use": {
+        "title": "开启自动操作",
+        "detail": "需要在这台电脑上授予辅助功能与屏幕录制权限",
+        "action": "去开启"
+      },
+      "remote-desktop": {
+        "title": "开启远程桌面",
+        "detail": "需要在这台电脑上单独开启，并授予屏幕录制权限",
+        "action": "去开启"
+      },
+      "ssh": {
+        "title_one": "复制 {{count}} 台远程主机的 SSH 密钥与配置",
+        "title_other": "复制 {{count}} 台远程主机的 SSH 密钥与配置",
+        "detail": "~/.ssh 中的密钥与配置不会自动迁移，需要复制到这台电脑",
+        "action": "打开远程连接"
+      },
+      "ssh-host": {
+        "title": "配置 SSH 服务器「{{name}}」",
+        "detail": "没能自动配好。可以在 SSH 设置里为它选择密钥并测试连接",
+        "action": "打开远程连接"
+      },
+      "startAll_one": "依次办理 {{count}} 项",
+      "startAll_other": "依次办理 {{count}} 项"
+    },
+    "settingsGroups": {
+      "appearance": "外观",
+      "windowBehavior": "应用行为",
+      "menubar": "菜单栏余量",
+      "collaboration": "协同",
+      "agentResource": "Agent 资源占用",
+      "gitSafety": "Git 安全",
+      "goal": "目标模式",
+      "memory": "记忆",
+      "compaction": "上下文压缩",
+      "silentEncryptedRetry": "静默丢弃协议加密内容并重试",
+      "silentStopAutoResume": "意外停止后自动继续",
+      "sessionRuntimeFallback": "差事模型自动降级",
+      "subagentModels": "Subagent",
+      "auxiliaryModels": "辅助模型",
+      "visionBridge": "视觉桥",
+      "modelVisibility": "模型显示与隐藏",
+      "providerOrder": "供方顺序",
+      "modelCatalogOverrides": "模型参数调整",
+      "modelPriceOverrides": "模型单价",
+      "autoUpdate": "空闲时自动安装更新",
+      "updateChannel": "Beta 测试渠道"
+    },
+    "settings": {
+      "title": "迁移助理",
+      "description": "在一台新电脑上，把其他旧机器上 Cindy 所有接入的功能、法器和设置拷贝过来，成为成品能用。",
+      "start": "打开迁移助理",
+      "pending_one": "此机尚有 {{count}} 项待办",
+      "pending_other": "此机尚有 {{count}} 项待办",
+      "allDone": "此机待办已毕",
+      "from": "迁自「{{name}}」",
+      "closeChecklist": "阖清单"
+    },
+    "suggestion": {
+      "title": "用迁移助理从「{{name}}」迁移？",
+      "description": "可以把那台电脑上的法器、技艺、设置和连接搬到这台电脑。需要在这台电脑上重新登录或授权的内容会列成清单。之后也可以在「设置 → 通用 → 迁移助理」中打开。",
+      "confirm": "打开迁移助理",
+      "later": "暂缓"
+    },
+    "walkthrough": {
+      "progress": "办理清单 {{current}} / {{total}}",
+      "open": "打开",
+      "skip": "跳过",
+      "next": "已毕，次之",
+      "stop": "结束",
+      "allDone": "清单已毕"
+    },
+    "transfer": {
+      "prompt": {
+        "title": "迁移助理",
+        "message": "「{{name}}」请求从这台电脑复制以下内容",
+        "secrets": "密钥（只复制到这一台电脑，这台电脑上的密钥保持不变）：",
+        "ssh": "把那台电脑的新 SSH 公钥加到这些服务器：",
+        "sshKey": "公钥指纹：{{fingerprint}}",
+        "code": "校验码：{{code}}。只有和那台电脑上显示的一致时才允许。",
+        "notice": "如果不是你自己在设置新电脑，请拒绝。",
+        "more": "以及另外 {{count}} 项",
+        "allow": "允许",
+        "deny": "拒绝"
+      }
+    }
   }
 }

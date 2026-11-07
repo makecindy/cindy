@@ -9,7 +9,7 @@ import {
 
 /** Managed, versioned source shared by every local Bot; never lives on a Bot's learned shelf. */
 export async function collectTeammateGuideMount(userDataDir: string) {
-  const source = `---\nname: ${TEAMMATE_GUIDE_NAME}\ndescription: ${JSON.stringify(TEAMMATE_GUIDE_DESCRIPTION)}\n---\n\n${buildTeammateGuide()}\n`;
+  const source = `---\nname: ${TEAMMATE_GUIDE_NAME}\ndescription: ${JSON.stringify(TEAMMATE_GUIDE_DESCRIPTION)}\n---\n\n${buildTeammateGuide({ shared: true })}\n`;
   const version = createHash('sha256').update(source).digest('hex');
   const pluginRoot = path.join(userDataDir, 'managed-teammate-skills', version);
   const skillPath = path.join(pluginRoot, 'skills', TEAMMATE_GUIDE_NAME);

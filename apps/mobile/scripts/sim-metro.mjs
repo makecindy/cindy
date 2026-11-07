@@ -112,7 +112,7 @@ export function clearMetroOwner(port, pid) {
   }
 }
 
-function readMetroOwner(port) {
+export function readMetroOwner(port) {
   try {
     const file = metroOwnerPath(port);
     return { ...JSON.parse(readFileSync(file, 'utf8')), recordedAtMs: statSync(file).mtimeMs };

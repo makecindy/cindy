@@ -116,6 +116,31 @@ describe('RoutedDeviceLinkClient', () => {
     h.client.stop();
   });
 
+  // New read channel must negotiate support, stay on the selected self-hosted route,
+  // and return the host result without exposing it to the official connection.
+  it('negotiates GitHub reads and completes them on the self-hosted relay', async () => {
+    const h = await onlineSelfHosted();
+    const peer = 'same-account-device';
+    const payload = { channel: 'git-context:github-read', args: [{ method: 'get_pr_status', args: { pr: { repo: 'o/r', number: 1 } } }] };
+    expect(await h.client.invoke(peer, payload)).toMatchObject({ ok: false, error: { message: expect.stringContaining('GITHUB_READ_UNSUPPORTED') } });
+    const socket = h.socketTo(RELAY);
+    const opening = h.client.openLink(peer, { controllerName: 'Test', protocolVersion: 1, appVersion: '1' });
+    await h.tick();
+    const request = socket.sent.filter(frame => frame.kind === 'link-open').at(-1)!;
+    socket.push({ v: PROTOCOL_VERSION, kind: 'link-accept', id: request.id, src: peer,
+      payload: { appVersion: '1', allowlistHash: 'hash', capabilities: ['github-read-v1'] } });
+    await opening;
+    const result = h.client.invoke(peer, payload);
+    await h.tick();
+    const invoke = socket.sent.filter(frame => frame.kind === 'invoke').at(-1)!;
+    expect(invoke.payload).toMatchObject(payload);
+    socket.push({ v: PROTOCOL_VERSION, kind: 'invoke-result', id: invoke.id, src: peer,
+      payload: { ok: true, result: { head_sha: 'current', source_device: peer } } });
+    expect(await result).toMatchObject({ ok: true, result: { head_sha: 'current' } });
+    expect(h.socketTo(OFFICIAL).sent.some(frame => frame.kind === 'invoke')).toBe(false);
+    h.client.stop();
+  });
+
   it('never lets a same-account peer reach this device through the official connection', async () => {
     const h = await onlineSelfHosted();
     const frames: Envelope[] = [];

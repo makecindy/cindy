@@ -299,6 +299,8 @@
       "picture": "Bildschirm anzeigen",
       "backToForm": "Zurück zum Formular",
       "liveView": "Live-Ansicht",
+      "openRemoteDesktop": "Remote-Desktop öffnen",
+      "useForm": "Stattdessen Formular verwenden",
       "fill": "Ausfüllen",
       "skip": "Überspringen",
       "continue": "Weiter",
@@ -306,6 +308,9 @@
       "showPassword": "Passwort anzeigen",
       "hidePassword": "Passwort ausblenden",
       "scan": "Scannen"
+    },
+    "directSignIn": {
+      "hint": "Melde dich direkt im Fenster an. Danach geht es automatisch weiter."
     },
     "remoteUnavailable": "Dieser Computer kann keine Remote-Eingaben empfangen. Schließe diesen Schritt auf dem Host-Computer ab und gib dann an den Agent zurück.",
     "unnamedField": "Feld",

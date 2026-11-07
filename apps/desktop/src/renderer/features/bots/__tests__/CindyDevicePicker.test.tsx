@@ -120,7 +120,7 @@ it.each([
         const row = within(screen.getByTestId('cindy-device-row'));
         expect(row.queryByLabelText(en.bots.devicePicker.unread)).toBeNull();
         if (unreadCount > 1) {
-          expect(row.getByLabelText(i18n.t('bots.list.unread', { count: unreadCount }))).toBeTruthy();
+          expect(view.container.querySelectorAll('[data-teammate-status]')).toHaveLength(1);
         }
         expect(
           view.container.querySelector('[data-teammate-status="error"]') !==

@@ -71,14 +71,16 @@ import {
   favoriteMatchesSelection,
   engineOfAgentKind,
   entryMatchesModelId,
-  wireModelIdOf,
+  wireModelIdOf, entryWireIds, entryModelIds, readEntryPreference,
   buildUnifiedListSections,
   buildUnifiedRail,
   computeSelectedRowScrollTop,
+  enginePreferenceModelIds,
   priceTierOf,
   railItemKey,
   resolveFavoriteRowConfig,
   resolveUnifiedRowConfig,
+  resolveStoredModelEntry,
   sameAnchor,
   unavailableFavoriteEntry,
   type ForeignFavoriteRow,
@@ -121,6 +123,10 @@ export interface UnifiedSelectedRow {
 }
 
 export interface UnifiedModelPanelProps {
+  /** 「全部」视图且没有搜索词时，列表最上方额外渲染的内容(新任务的「让插件选」)。 */
+  pinnedTop?: ReactNode;
+  /** pinnedTop 当前有内容：搜索只命中它时不显示空结果。 */
+  pinnedTopHasRows?: boolean;
   providers: readonly ProviderView[];
   /**
    * 供应商分组的显示顺序(设置 → 模型供应商的拖动序);缺省 = 目录首见序。
@@ -376,6 +382,8 @@ export interface UnifiedModelPanelProps {
  * 可见性 / 排除谓词。本组件**不自己判定候选引擎或能力**,只做合成与呈现。
  */
 export function UnifiedModelPanel({
+  pinnedTop,
+  pinnedTopHasRows = false,
   providers,
   providerOrder,
   agents,
@@ -432,10 +440,11 @@ export function UnifiedModelPanel({
     ? remoteSources.favoritesDeviceId
     : isSharedProvider ? undefined : deviceId;
   const remoteFavorites = useRemoteModelFavorites(favoritesListDeviceId);
+  // Request-local drafts still pass through the normal execution-source projections.
   const sharedFavorites = useProviderShareFavorites(
     deviceId,
     storedFavorites,
-    remoteSources?.favoritesDeviceId ? remoteFavorites : undefined,
+    preferenceStore?.favorites ?? (remoteSources?.favoritesDeviceId ? remoteFavorites : undefined),
     remoteSources?.shareFavoriteSources,
   );
   const sharedFavoriteSources = useProviderShareFavoriteSources(remoteSources?.shareFavoriteSources);
@@ -444,9 +453,9 @@ export function UnifiedModelPanel({
   const agentDeviceFavorites = useAgentDeviceFavorites({
     deviceId: remoteSources?.active && !isSharedProvider ? deviceId : undefined,
     homeDeviceId: favoritesHomeDeviceId,
-    home: remoteSources?.favoritesDeviceId
+    home: preferenceStore?.favorites ?? (remoteSources?.favoritesDeviceId
       ? remoteFavorites
-      : { items: storedFavorites, store: LOCAL_MODEL_FAVORITE_STORE },
+      : { items: storedFavorites, store: LOCAL_MODEL_FAVORITE_STORE }),
   });
   useEffect(() => {
     if (isSharedProvider || hasRemoteSources) ensureProviderShareReceivedStarted();
@@ -457,9 +466,9 @@ export function UnifiedModelPanel({
     if (homeFavoriteItems) requestProviderShareFavoriteRegions(providerShareFavoriteRegionsOf(homeFavoriteItems));
   }, [homeFavoriteItems]);
   const favorites = selectionPolicy === 'official' ? NO_FAVORITES
-    : preferenceStore ? preferenceStore.favorites.items
     : isSharedProvider ? sharedFavorites.items
     : remoteSources ? agentDeviceFavorites.items
+    : preferenceStore ? preferenceStore.favorites.items
     : deviceId ? remoteFavorites.items : storedFavorites;
   const storedRecentModels = useRecentModels();
   // official 入口(设置页 / create-agent)刻意不展示「最近」:那里的选择动作不记录(见
@@ -540,6 +549,14 @@ export function UnifiedModelPanel({
     () =>
       unifiedModelEntries({
         providers,
+        ...(!preferenceStore && (modelMemory?.editMany || configurationEnabled === false) ? { aliasPreferences: (providerId: string, agent: AgentKind, modelId: string) => ({
+          engine: selectionPolicy === 'personalized' ? getEngineOverride(providerId, modelId) : undefined,
+          customThinking: modelMemory?.getThinking?.(agent, providerId, modelId) !== undefined,
+          customPrice: (() => { const p = priceOf(providerId, modelId, agent); return p?.kind === 'priced' && p.current.source === 'user-override'; })(),
+          effort: modelMemory?.getEffort(agent, providerId, modelId),
+          fast: modelMemory?.getFast(agent, providerId, modelId),
+          visible: predicatesRef.current.isVisible(providerId, providers.find((p) => p.id === providerId)!.models[agent]!.find((m) => m.id === modelId)!, agent),
+        }) } : {}),
         ...(agents ? { agents } : {}),
         isVisible: (providerId, model, agent) =>
           predicatesRef.current.isVisible(providerId, model, agent),
@@ -555,7 +572,7 @@ export function UnifiedModelPanel({
         ...(keepModel ? { keepModel } : {}),
       }),
     // biome-ignore lint/correctness/useExhaustiveDependencies: 谓词经 ref 读取,刷新信号是 sourceVersion(见其注释);agents 以 agentsKey 表达身份;keepModel 以 keepModelKey 表达身份。
-    [providers, agentsKey, scope, sourceVersion, keepModelKey, includePaymentRequired],
+    [providers, agentsKey, scope, sourceVersion, keepModelKey, includePaymentRequired, enginePrefsVersion, memoryVersion, modelMemory, selectionPolicy, configurationEnabled, priceOf, preferenceStore, getEngineOverride],
   );
 
   const localRailItems = remoteSources?.localRailItems;
@@ -628,10 +645,7 @@ export function UnifiedModelPanel({
   const activeFavoriteUid = useMemo(() => {
     const item = favorites.find((favorite) => favorite.uid === selectedFavoriteUid);
     if (!item) return null;
-    const entry = entries.find(
-      (candidate) =>
-        candidate.providerId === item.providerId && entryMatchesModelId(candidate, item.modelId),
-    );
+    const entry = resolveStoredModelEntry(entries, item.providerId, item.modelId);
     return entry &&
       favoriteMatchesSelection({
         entry,
@@ -685,15 +699,15 @@ export function UnifiedModelPanel({
       const base = resolveUnifiedRowConfig({
         entry,
         ...(personalized
-          ? { engineOverride: getEngineOverride(entry.providerId, entry.modelId) }
+          ? { engineOverride: entry.aliasEntries ? readEntryPreference(entry, entryModelIds(entry), getEngineOverride) : enginePreferenceModelIds(entry).map(id => getEngineOverride(entry.providerId, id)).find(value => value !== undefined) }
           : {}),
         // ★ 记忆表按 **wire id** 存取(既有消费方的口径),不是行的归一化身份。
         ...(personalized
           ? {
               memoryEffort: (agent: AgentKind) =>
-                modelMemory?.getEffort(agent, entry.providerId, wireModelIdOf(entry, agent)),
+                readEntryPreference(entry, entryWireIds(entry, agent), (pid, id) => modelMemory?.getEffort(agent, pid, id)),
               memoryFast: (agent: AgentKind) =>
-                modelMemory?.getFast(agent, entry.providerId, wireModelIdOf(entry, agent)),
+                readEntryPreference(entry, entryWireIds(entry, agent), (pid, id) => modelMemory?.getFast(agent, pid, id)),
             }
           : {}),
         agentFastModeCapable,
@@ -782,7 +796,7 @@ export function UnifiedModelPanel({
       return resolveUnifiedRowConfig({
         entry,
         ...(selectionPolicy === 'personalized'
-          ? { engineOverride: getEngineOverride(entry.providerId, entry.modelId) }
+          ? { engineOverride: entry.aliasEntries ? readEntryPreference(entry, entryModelIds(entry), getEngineOverride) : enginePreferenceModelIds(entry).map(id => getEngineOverride(entry.providerId, id)).find(value => value !== undefined) }
           : {}),
         ...(sessionAgent ? { pinnedEngine: engineOfAgentKind(sessionAgent) } : {}),
         ...(isSelectedModelRow && liveEngineAgent
@@ -824,9 +838,7 @@ export function UnifiedModelPanel({
       const group = deviceFavoriteGroups?.find((candidate) => candidate.deviceId === source.deviceId);
       if (group) {
         const ofProvider = group.entries.filter((candidate) => candidate.providerId === source.providerId);
-        const entry =
-          ofProvider.find((candidate) => candidate.modelId === item.modelId) ??
-          ofProvider.find((candidate) => entryMatchesModelId(candidate, item.modelId));
+        const entry = resolveStoredModelEntry(ofProvider, source.providerId, item.modelId);
         return entry ? { entry, favorite, agentDeviceId: source.deviceId } : null;
       }
       return unavailableDeviceIds?.includes(source.deviceId)
@@ -1053,9 +1065,9 @@ export function UnifiedModelPanel({
     runExternal,
   } = useUnifiedRowActions({
     engineStore: preferenceStore?.engines,
-    favoriteStore: preferenceStore ? preferenceStore.favorites.store : isSharedProvider
+    favoriteStore: isSharedProvider
       ? sharedFavorites.store
-      : remoteSources ? agentDeviceFavorites.store : deviceId ? remoteFavorites.store : undefined,
+      : remoteSources ? agentDeviceFavorites.store : preferenceStore ? preferenceStore.favorites.store : deviceId ? remoteFavorites.store : undefined,
     onFavoriteError: () => toast.error(t('newChat.modelSelector.unified.favoritesSaveFailed')),
     interactionDisabled,
     recordRecentUsage,
@@ -1079,9 +1091,9 @@ export function UnifiedModelPanel({
         entry,
         engineOverride: engine,
         memoryEffort: (agent) =>
-          modelMemory?.getEffort(agent, entry.providerId, wireModelIdOf(entry, agent)),
+          readEntryPreference(entry, entryWireIds(entry, agent), (pid, id) => modelMemory?.getEffort(agent, pid, id)),
         memoryFast: (agent) =>
-          modelMemory?.getFast(agent, entry.providerId, wireModelIdOf(entry, agent)),
+          readEntryPreference(entry, entryWireIds(entry, agent), (pid, id) => modelMemory?.getFast(agent, pid, id)),
         agentFastModeCapable,
       }),
     // 「按这份收藏副本解析该行」——与收藏行渲染(configOf 的 favorite 分支)走**同一个**
@@ -1099,7 +1111,7 @@ export function UnifiedModelPanel({
       resolveUnifiedRowConfig({
         entry,
         ...(selectionPolicy === 'personalized'
-          ? { engineOverride: getEngineOverride(entry.providerId, entry.modelId) }
+          ? { engineOverride: entry.aliasEntries ? readEntryPreference(entry, entryModelIds(entry), getEngineOverride) : enginePreferenceModelIds(entry).map(id => getEngineOverride(entry.providerId, id)).find(value => value !== undefined) }
           : {}),
         agentFastModeCapable,
         ...(sessionAgent ? { pinnedEngine: engineOfAgentKind(sessionAgent) } : {}),
@@ -1470,6 +1482,7 @@ export function UnifiedModelPanel({
             </div>
           )}
           {favoritesListDeviceId && remoteFavorites.error ? <div role="status" className="px-3 py-2 text-13 text-[var(--text-secondary)]">{t(favoritesSyncFailureI18nKey(remoteFavorites.errorCode))}</div> : null}
+          {pinnedTop && effectiveRail.kind === 'all' ? pinnedTop : null}
           {remoteListPending ? (
             remoteSources?.failure ?? (
               <div
@@ -1482,7 +1495,7 @@ export function UnifiedModelPanel({
             )
           ) : catalogNotice ? (
             catalogNotice
-          ) : !hasRows ? (
+          ) : !hasRows && !(pinnedTopHasRows && effectiveRail.kind === 'all') ? (
             <div className="px-3 py-6 text-center text-13 text-[var(--text-tertiary)]">
               {/* 最近 / ★ 视图的空态是引导语,不是「没有匹配」(设计稿 favEmpty;两格常驻后必经)。 */}
               {!query.trim() && effectiveRail.kind === 'favorites'
@@ -1528,7 +1541,7 @@ export function UnifiedModelPanel({
                   const matchingFavorite = row.recent
                     ? favorites.find((favorite) => {
                         if (favorite.providerId !== row.entry.providerId) return false;
-                        if (!entryMatchesModelId(row.entry, favorite.modelId)) return false;
+                        if (resolveStoredModelEntry(entries, favorite.providerId, favorite.modelId) !== row.entry) return false;
                         const favoriteConfig = resolveFavoriteRowConfig({
                           entry: row.entry,
                           item: favorite,

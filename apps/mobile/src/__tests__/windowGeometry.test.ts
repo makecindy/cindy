@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { keyboardControlRegion, controlRegion, floatingTopRow, sharedStatusRowDrawerTop, windowDivision, type WindowGeometry } from '@/platform/windowGeometry';
+import { keyboardControlRegion, controlRegion, floatingTopRow, sharedStatusRowDrawerTop, sharedStatusRowTrailingReserve, windowDivision, type WindowGeometry } from '@/platform/windowGeometry';
 import { foldDesktopLayout } from '@/remote-desktop/foldDesktopLayout';
 import { sessionPaneLayout } from '@/session/sessionPaneLayout';
 
@@ -157,5 +157,24 @@ describe('floating top row beside the Duo status area', () => {
   });
   it('keeps a margin from the top edge beside a vertical system bar', () => {
     expect(floatingTopRow(window(), 44)).toEqual({ top: 12, left: 12, right: 72, sharedStatusRow: false });
+  });
+});
+
+// Regression: Duo portrait home (2026-11-03). The native bar moved its trailing items left of the
+// status area (wider with a Live Activity), but the title view kept the full-bar width and the
+// device name ran under the remote-desktop / display pill.
+describe('native bar trailing reserve beside the Duo status area', () => {
+  const portrait = (statusX: number, patch: Partial<WindowGeometry> = {}) => window({ width: 662, height: 942, barEdge: 'none',
+    insets: { top: 82, left: 0, right: 0, bottom: 20 },
+    regions: [{ kind: 'occlusion', x: statusX, y: 0, width: 662 - statusX, height: 82 }], ...patch });
+  it('follows the reported status area plus the bar item spacing', () => {
+    expect(sharedStatusRowTrailingReserve(portrait(520))).toBe(158);
+    expect(sharedStatusRowTrailingReserve(portrait(440))).toBe(238);
+  });
+  it('reserves nothing for ordinary bars, a centered island or a vertical rail', () => {
+    expect(sharedStatusRowTrailingReserve(portrait(520, { regions: [] }))).toBe(0);
+    expect(sharedStatusRowTrailingReserve(portrait(520, { reservedRegionsSupported: false }))).toBe(0);
+    expect(sharedStatusRowTrailingReserve(portrait(520, { regions: [{ kind: 'occlusion', x: 270, y: 0, width: 120, height: 37 }] }))).toBe(0);
+    expect(sharedStatusRowTrailingReserve(window())).toBe(0);
   });
 });

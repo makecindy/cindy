@@ -102,7 +102,7 @@ it.each([false, true])('uninstall cannot delete private data before MCP exits (f
     ownerScopedUserDataPath: (...parts: string[]) => '/owner/' + parts.join('/'), activeOwnerScopeKey: () => 'owner',
     pluginTaskUninstaller: async (_id: string, run: () => Promise<void>) => run(), currentPluginUsageService: () => null,
     pluginDownloads: { removePlugin: async () => {} }, removeGhostSecrets: noop,
-    removeGhostKvBestEffort: noop, createGhostKvStore: () => ({}), log: { warn: noop, info: noop },
+    removeGhostKvBestEffort: noop, createGhostKvStore: () => ({}), publishedModelsStore: () => ({}), log: { warn: noop, info: noop },
     fs: { promises: { rm: vi.fn(async (dir: string) => { expect(dir).toBe('/owner/ghost-fs/fixture'); events.push('data-removed'); }) } },
     getGhostHandoffStore: () => ({ removeInstance: async (id: string) => { expect(id).toBe('fixture'); events.push('handoff-removed'); } }),
     getGhostLibrarySlot: () => { throw new Error('no library'); },

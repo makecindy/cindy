@@ -19,6 +19,7 @@ import chatCards from '../../../resources/system-skills/cindy-plugin-creator/ref
 import eventSubscriptions from '../../../resources/system-skills/cindy-plugin-creator/references/plugin-event-subscriptions.md?raw';
 import messageHooks from '../../../resources/system-skills/cindy-plugin-creator/references/plugin-message-hooks.md?raw';
 import controlPoints from '../../../resources/system-skills/cindy-plugin-creator/references/plugin-control-points.md?raw';
+import pluginModels from '../../../resources/system-skills/cindy-plugin-creator/references/plugin-models.md?raw';
 import network from '../../../resources/system-skills/cindy-plugin-creator/references/plugin-network.md?raw';
 import settings from '../../../resources/system-skills/cindy-plugin-creator/references/plugin-settings.md?raw';
 import notifications from '../../../resources/system-skills/cindy-plugin-creator/references/plugin-notifications.md?raw';
@@ -30,7 +31,7 @@ import sessionContext from '../../../resources/system-skills/cindy-plugin-creato
 import directoryPicker from '../../../resources/system-skills/cindy-plugin-creator/references/plugin-directory-picker.md?raw';
 import panelPreview from '../../../resources/system-skills/cindy-plugin-creator/references/plugin-panel-preview.md?raw';
 import browserExtension from '../../../resources/system-skills/cindy-plugin-creator/references/plugin-browser-extension.md?raw';
-import bundledSkillsLegacy from '../../../resources/system-skills/cindy-plugin-creator/references/plugin-bundled-skills-legacy.md?raw';
+import bundledSkills from '../../../resources/system-skills/cindy-plugin-creator/references/plugin-bundled-skills.md?raw';
 import workspaceSessions from '../../../resources/system-skills/cindy-plugin-creator/references/plugin-workspace-sessions.md?raw';
 import confirmDialog from '../../../resources/system-skills/cindy-plugin-creator/references/plugin-confirm-dialog.md?raw';
 import mainView from '../../../resources/system-skills/cindy-plugin-creator/references/plugin-main-view.md?raw';
@@ -42,6 +43,7 @@ import sandbox from '../../../resources/system-skills/cindy-plugin-creator/refer
 import packaging from '../../../resources/system-skills/cindy-plugin-creator/references/plugin-packaging.md?raw';
 import publishing from '../../../resources/system-skills/cindy-plugin-creator/references/plugin-publishing.md?raw';
 import compatibility from '../../../resources/system-skills/cindy-plugin-creator/references/plugin-compatibility.md?raw';
+import pageGeneration from '../../../resources/system-skills/cindy-plugin-creator/references/examples/interactive-pages/PAGE-GENERATION.md?raw';
 
 export const FORGE_GUIDE = [
   overview,
@@ -62,6 +64,7 @@ export const FORGE_GUIDE = [
   eventSubscriptions,
   messageHooks,
   controlPoints,
+  pluginModels,
   network,
   settings,
   notifications,
@@ -72,7 +75,7 @@ export const FORGE_GUIDE = [
   directoryPicker,
   panelPreview,
   browserExtension,
-  bundledSkillsLegacy,
+  bundledSkills,
   workspaceSessions,
   confirmDialog,
   mainView,
@@ -86,3 +89,6 @@ export const FORGE_GUIDE = [
   publishing,
   compatibility,
 ].join('\n');
+
+/** ghost_forge_guide section "pages": the same PAGE-GENERATION.md the MCP Apps manual header hashes. */
+export const FORGE_PAGE_MANUAL = pageGeneration;

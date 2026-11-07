@@ -6444,6 +6444,9 @@ function useSessionMessageCacheSync(
 ): void {
   const hydratedKeyRef = useRef<string | null>(null);
   const persistTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // Set when the debounce was skipped because a reply was still streaming: there is no timer,
+  // but the latest snapshot is still unsaved, so unmount must flush it like a pending timer.
+  const persistDeferredWhileStreamingRef = useRef(false);
   const retention = useSyncExternalStore(
     remoteSessionStore.subscribe,
     () => remoteSessionStore.getSessionRetention(sessionId),
@@ -6502,11 +6505,20 @@ function useSessionMessageCacheSync(
   useEffect(() => {
     if (persistTimerRef.current) clearTimeout(persistTimerRef.current);
     persistTimerRef.current = null;
+    persistDeferredWhileStreamingRef.current = false;
     if (!deviceId || !sessionId || retention !== 'regular') return;
     const key = `${deviceId}::${sessionId}`;
     // 空内存可能只是 regular LRU 淘汰，绝不能据此删除磁盘缓存。真正的远端
     // 删除由 removeMessages / 权威空窗显式处理。
     if (messages.length === 0) return;
+    // A streaming reply rewrites this snapshot every flush, and each write re-reads, normalizes
+    // and stringifies the whole window on the JS thread. Wait for the final flush (the row loses
+    // isStreaming), which changes `messages` again and schedules the write; unmount flushes the
+    // deferred snapshot via the ref below.
+    if (messages.some((message) => message.agentMeta?.isStreaming === true)) {
+      persistDeferredWhileStreamingRef.current = true;
+      return;
+    }
     const cacheAuthority = captureSessionMessageCacheWriteAuthority(deviceId, sessionId);
     persistTimerRef.current = setTimeout(() => {
       persistTimerRef.current = null;
@@ -6520,9 +6532,10 @@ function useSessionMessageCacheSync(
 
   // 卸载时把尚未落盘的最新快照立即 flush(防止快速返回导致最后一次更新丢失)。
   useEffect(() => () => {
-    if (!persistTimerRef.current) return;
-    clearTimeout(persistTimerRef.current);
+    if (!persistTimerRef.current && !persistDeferredWhileStreamingRef.current) return;
+    if (persistTimerRef.current) clearTimeout(persistTimerRef.current);
     persistTimerRef.current = null;
+    persistDeferredWhileStreamingRef.current = false;
     const ctx = ctxRef.current;
     if (!ctx.deviceId || !ctx.sessionId) return;
     if (remoteSessionStore.getSessionRetention(ctx.sessionId) !== 'regular') return;

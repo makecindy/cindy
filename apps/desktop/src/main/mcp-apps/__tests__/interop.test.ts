@@ -4,10 +4,13 @@ import { App } from '@modelcontextprotocol/ext-apps';
 import type { Transport } from '@modelcontextprotocol/sdk/shared/transport.js';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
+import type { RequestHandlerExtra } from '@modelcontextprotocol/sdk/shared/protocol.js';
 import {
   CallToolResultSchema,
   type CallToolResult,
   type JSONRPCMessage,
+  type ServerRequest,
+  type ServerNotification,
 } from '@modelcontextprotocol/sdk/types.js';
 import {
   createMockAppServer,
@@ -92,11 +95,13 @@ async function fixture(
     appModes?: ('inline' | 'fullscreen')[];
     duringResource?: 'result' | 'cancelled' | 'clear' | 'server';
     revisionKey?: () => string;
+    source?: typeof endpoint;
   } = {},
 ) {
   const config = {
     id: 'example',
-    url: transport === 'http' ? endpoint.url : endpoint.sseUrl,
+    url:
+      transport === 'http' ? (options.source ?? endpoint).url : (options.source ?? endpoint).sseUrl,
     transport,
   };
   let owner: object = {};
@@ -188,14 +193,16 @@ async function fixture(
   app.onteardown = teardown;
   const viewTransport = new TestViewTransport(host, document.viewId, 'renderer:1', openLink);
   await app.connect(viewTransport);
+  const apps = [app];
   cleanups.push(async () => {
     await host.reset();
-    await app.close();
+    await Promise.all(apps.map((view) => view.close()));
     await connection.close();
   });
   return {
     host,
     app,
+    apps,
     viewTransport,
     client,
     card,
@@ -222,7 +229,199 @@ async function fixture(
   };
 }
 
+/** Real SDK requests with server completion controlled independently of the Host clock. */
+async function controlledToolFixture(transport: 'http' | 'sse' = 'http') {
+  const calls: {
+    extra: RequestHandlerExtra<ServerRequest, ServerNotification>;
+    resolve(result: CallToolResult): void;
+  }[] = [];
+  const source = await startMockAppServer({
+    createServer: () => {
+      const server = createMockAppServer();
+      server.registerTool(
+        'controlled_tool',
+        { inputSchema: {}, _meta: { ui: { visibility: ['app'] } } },
+        async (_args, extra) =>
+          new Promise<CallToolResult>((resolve) => calls.push({ extra, resolve })),
+      );
+      return server;
+    },
+  });
+  cleanups.push(async () => {
+    calls.forEach(({ resolve }) => resolve({ content: [] }));
+    await source.close();
+  });
+  return { f: await fixture(transport, { source }), calls };
+}
+
 describe('official MCP Apps interoperability', () => {
+  it.each(['http', 'sse'] as const)(
+    'routes concurrent %s View progress by request, preserving its values',
+    async (transport) => {
+      const { f, calls } = await controlledToolFixture(transport);
+      const document = await f.host.open('renderer:2', 'task', 'card', { platform: 'desktop' });
+      const second = new App({ name: 'Second View', version: '1' }, {}, { autoResize: false });
+      second.onteardown = async () => ({});
+      f.apps.push(second);
+      await second.connect(new TestViewTransport(f.host, document.viewId, 'renderer:2'));
+      const firstProgress = vi.fn(),
+        secondProgress = vi.fn();
+      const firstResult = f.app.callServerTool(
+        { name: 'controlled_tool', arguments: {}, _meta: { requestLabel: 'first' } },
+        { onprogress: firstProgress },
+      );
+      const secondResult = second.callServerTool(
+        { name: 'controlled_tool', arguments: {}, _meta: { requestLabel: 'second' } },
+        { onprogress: secondProgress },
+      );
+      const results = Promise.allSettled([firstResult, secondResult]);
+      await vi.waitFor(() => expect(calls).toHaveLength(2));
+      const first = calls.find((call) => call.extra._meta?.requestLabel === 'first')!;
+      const other = calls.find((call) => call.extra._meta?.requestLabel === 'second')!;
+      expect(first.extra._meta?.progressToken).not.toBe(other.extra._meta?.progressToken);
+      await other.extra.sendNotification({
+        method: 'notifications/progress',
+        params: {
+          progressToken: other.extra._meta!.progressToken!,
+          progress: 2.5,
+          total: 10,
+          message: 'second',
+        },
+      });
+      await vi.waitFor(() =>
+        expect(secondProgress).toHaveBeenCalledWith({
+          progress: 2.5,
+          total: 10,
+          message: 'second',
+        }),
+      );
+      expect(firstProgress).not.toHaveBeenCalled();
+      first.resolve({ content: [{ type: 'text', text: 'first' }] });
+      other.resolve({ content: [{ type: 'text', text: 'second' }] });
+      expect(await results).toEqual([
+        { status: 'fulfilled', value: { content: [{ type: 'text', text: 'first' }] } },
+        { status: 'fulfilled', value: { content: [{ type: 'text', text: 'second' }] } },
+      ]);
+    },
+  );
+
+  it.each([true, false])(
+    'finishes a 90-second tool with progress=%s under the View request budget',
+    async (withProgress) => {
+      const { f, calls } = await controlledToolFixture();
+      await vi.waitFor(() => expect(f.inputs).toHaveLength(1));
+      vi.useFakeTimers({
+        toFake: ['setTimeout', 'clearTimeout', 'Date'],
+        shouldClearNativeTimers: true,
+      });
+      const progress = vi.fn();
+      let settled = false;
+      const result = f.app
+        .callServerTool(
+          { name: 'controlled_tool', arguments: {} },
+          {
+            ...(withProgress ? {} : { timeout: 120_000 }),
+            onprogress: progress,
+          },
+        )
+        .finally(() => {
+          settled = true;
+        });
+      const outcome = result.then(
+        (value) => ({ value }),
+        (error) => ({ error }),
+      );
+      try {
+        await vi.waitFor(() => expect(calls).toHaveLength(1));
+        for (let step = 1; step <= 3; step++) {
+          await vi.advanceTimersByTimeAsync(30_000);
+          if (withProgress) {
+            await calls[0].extra.sendNotification({
+              method: 'notifications/progress',
+              params: {
+                progressToken: calls[0].extra._meta!.progressToken!,
+                progress: step,
+                total: 3,
+              },
+            });
+            await vi.waitFor(() => expect(progress).toHaveBeenCalledTimes(step));
+          }
+        }
+        expect(settled).toBe(false);
+        calls[0].resolve({ content: [{ type: 'text', text: 'complete' }] });
+        expect(await outcome).toEqual({ value: { content: [{ type: 'text', text: 'complete' }] } });
+      } finally {
+        vi.useRealTimers();
+      }
+    },
+  );
+
+  it('honors a shorter View timeout without replaying the tool or cancelling a later call', async () => {
+    const { f, calls } = await controlledToolFixture();
+    await vi.waitFor(() => expect(f.inputs).toHaveLength(1));
+    vi.useFakeTimers({
+      toFake: ['setTimeout', 'clearTimeout', 'Date'],
+      shouldClearNativeTimers: true,
+    });
+    const cancelled = f.app.callServerTool(
+      { name: 'controlled_tool', arguments: {} },
+      { timeout: 500 },
+    );
+    const outcome = cancelled.then(
+      (value) => ({ value }),
+      (error) => ({ error }),
+    );
+    try {
+      await vi.waitFor(() => expect(calls).toHaveLength(1));
+      await vi.advanceTimersByTimeAsync(501);
+      expect(await outcome).toMatchObject({ error: { code: -32001 } });
+      await vi.waitFor(() => expect(calls[0].extra.signal.aborted).toBe(true));
+      const next = f.app.callServerTool({ name: 'controlled_tool', arguments: {} });
+      await vi.waitFor(() => expect(calls).toHaveLength(2));
+      calls[1].resolve({ content: [{ type: 'text', text: 'next call' }] });
+      expect((await next).content).toEqual([{ type: 'text', text: 'next call' }]);
+      expect(calls).toHaveLength(2);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+  it('bounds total tool time even when server progress renews the View timer', async () => {
+    const { f, calls } = await controlledToolFixture();
+    await vi.waitFor(() => expect(f.inputs).toHaveLength(1));
+    vi.useFakeTimers({
+      toFake: ['setTimeout', 'clearTimeout', 'Date'],
+      shouldClearNativeTimers: true,
+    });
+    const progress = vi.fn();
+    let settled = false;
+    const result = f.app.callServerTool(
+      { name: 'controlled_tool', arguments: {} },
+      { timeout: 2 * 60 * 60_000, onprogress: progress },
+    );
+    const outcome = result
+      .then(
+        (value) => ({ value }),
+        (error) => ({ error }),
+      )
+      .finally(() => {
+        settled = true;
+      });
+    try {
+      await vi.waitFor(() => expect(calls).toHaveLength(1));
+      await vi.advanceTimersByTimeAsync(29 * 60_000);
+      expect(settled).toBe(false);
+      await calls[0].extra.sendNotification({
+        method: 'notifications/progress',
+        params: { progressToken: calls[0].extra._meta!.progressToken!, progress: 1 },
+      });
+      await vi.waitFor(() => expect(progress).toHaveBeenCalledOnce());
+      await vi.advanceTimersByTimeAsync(60_001);
+      expect(await outcome).toMatchObject({ error: { code: -32001 } });
+      await vi.waitFor(() => expect(calls[0].extra.signal.aborted).toBe(true));
+    } finally {
+      vi.useRealTimers();
+    }
+  });
   it.each(['http', 'sse'] as const)('cancels a %s App resource request waiting for reconnect without disturbing a peer', async (transport) => {
     const f = await fixture(transport);
     await vi.waitFor(() => expect(f.inputs).toHaveLength(1));

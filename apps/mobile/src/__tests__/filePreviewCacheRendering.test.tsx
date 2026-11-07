@@ -18,7 +18,7 @@ vi.mock('react-native', async () => {
   const { createElement, forwardRef, useImperativeHandle } = await import('react');
   const View = ({ children }: { children?: ReactNode }) => createElement('div', null, children);
   return {
-    View, Text: View, Pressable: View, ActivityIndicator: () => null, Alert: {},
+    View, Text: View, Pressable: View, ActivityIndicator: () => null, Alert: {}, Platform: { OS: 'ios' },
     StyleSheet: { create: (styles: unknown) => styles, hairlineWidth: 1 },
     useWindowDimensions: () => ({ width: 390, height: 844 }),
     FlatList: forwardRef((props: any, ref) => {
@@ -119,8 +119,11 @@ function expectVisiblePage(relPath: string, meta: string) {
   }) as PageProps[];
   const visiblePages = pages.filter(page => page.visible);
   expect(visiblePages).toHaveLength(1);
+  const [position, count] = meta.split(' · ')[0]!.split(' / ').map(Number);
+  expect(pages).toHaveLength(count!);
+  expect(pages.findIndex(page => page.visible)).toBe(position! - 1);
   expect(visiblePages[0]).toMatchObject({
-    active: true, item: { name: relPath, relPath }, htmlBrowserActions: { meta },
+    active: true, item: { name: relPath, relPath }, htmlBrowserActions: { meta: meta.split(' · ')[1] ?? '' },
   });
 }
 describe('cached file preview presentation', () => {
@@ -168,3 +171,9 @@ describe('cached file preview presentation', () => {
     expect(state.scroll).toHaveBeenCalledExactlyOnceWith({ animated: false, offset: 2 * 390 });
   });
 });
+
+vi.mock('expo-file-system', () => ({ File: class {} }));
+vi.mock('@/session/TextDocumentPreview', () => ({ TextDocumentPreview: () => null }));
+vi.mock('@/session/PdfDocumentPreview', () => ({ PdfDocumentPreview: () => null }));
+vi.mock('@/session/ModelDocumentPreview', () => ({ ModelDocumentPreview: () => null }));
+vi.mock('@/session/DiagramDocumentPreview', () => ({ DiagramDocumentPreview: () => null }));

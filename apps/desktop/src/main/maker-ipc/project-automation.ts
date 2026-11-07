@@ -19,6 +19,7 @@ const log = createLogger('maker-ipc:project-automation');
 
 const PROJECT_AUTOMATION_INVOKE_CHANNELS: readonly string[] = [
   MAKER_INVOKE.PROJECT_AUTOMATION_RECONCILE,
+  MAKER_INVOKE.PROJECT_AUTOMATION_PENDING_IMPORTS,
   MAKER_INVOKE.PROJECT_AUTOMATION_LIST_CONSENTS,
   MAKER_INVOKE.PROJECT_AUTOMATION_REVOKE_CONSENT,
   MAKER_INVOKE.PROJECT_AUTOMATION_UPSERT_SCHEDULE,
@@ -73,12 +74,21 @@ export function registerProjectAutomationIpc(
       const body = requireObject(payload, 'payload');
       const workingDir = requireString(body.workingDir, 'workingDir');
       try {
-        return await loader.reconcile(workingDir);
+        const approvedHash = body.approvedHash === undefined ? undefined : requireString(body.approvedHash, 'approvedHash');
+        return await loader.reconcile(workingDir, approvedHash);
       } catch (err) {
         rewrapProjectAutomationError(err);
       }
     },
   );
+
+  ipcMain.handle(MAKER_INVOKE.PROJECT_AUTOMATION_PENDING_IMPORTS, async () => {
+    try {
+      return await loader.listPendingImports();
+    } catch (err) {
+      rewrapProjectAutomationError(err);
+    }
+  });
 
   ipcMain.handle(MAKER_INVOKE.PROJECT_AUTOMATION_LIST_CONSENTS, async () => {
     try {

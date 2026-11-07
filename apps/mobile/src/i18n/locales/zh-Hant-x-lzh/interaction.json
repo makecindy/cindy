@@ -299,6 +299,8 @@
       "picture": "觀畫面",
       "backToForm": "歸表單",
       "liveView": "即景",
+      "openRemoteDesktop": "啟遠端桌面",
+      "useForm": "改以表單填寫",
       "fill": "填",
       "skip": "略",
       "continue": "續",
@@ -306,6 +308,9 @@
       "showPassword": "顯密碼",
       "hidePassword": "隱密碼",
       "scan": "掃碼"
+    },
+    "directSignIn": {
+      "hint": "請逕於窗中登入，畢則自續。"
     },
     "remoteUnavailable": "此機不能自遠端受書。請於主機之上竟此步，再交還 Agent。",
     "unnamedField": "輸入處",

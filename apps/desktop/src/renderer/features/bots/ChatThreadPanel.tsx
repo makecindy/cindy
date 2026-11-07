@@ -608,6 +608,7 @@ export function ChatThreadPanel({ group, rootId, quoteSources = group.messages, 
         shareScope={shareScope}
         sharing={sharing}
         reactionGroupId={group.id}
+        readersEnabled={group.supportsMessageReaders === true}
         reactionRevision={messageReactionRevision(group, message.id)}
         // A 话题 root may itself be a 引用回复; its original lives in the main timeline.
         quoteDisplay={message.quote ? resolveBotGroupQuote(message.quote, quoteSources) : undefined}

@@ -2,6 +2,33 @@
 
 状态：实验接口，尚未发布。入口为插件逻辑页 `cindy.tasks`，声明 `agent.tasks: true` 后由既有插件权限流程确认。存量 `errand` 声明不自动获得此权限。
 
+## 插件任务使用远程模型（2026-11-06，未发布）
+
+`tasks.capabilities().remoteRoutes:true` 声明 `create / setModel` 可接受含 `agentDeviceId` 的完整 route。
+同账号其他电脑与 `share:<shareId>` 均沿普通远程 Agent 通道执行，任务/文件/权限/历史/插件回执仍在插件电脑。
+旧 Host 缺字段时作者保持本机选模，不把远程配置去掉来源后重试；旧本机 route、批准与回执摘要保持兼容。
+不用新增 manifest 权限、数据迁移、device-link channel 或 relay 帧，也不接管其他电脑上的任意任务。
+
+`taskSlot` 校验可选位置；`resolveRemotePluginTaskRoute` 每次复用授权远程目录核对完整模型配置，
+不用插件电脑的 Harness 或同名供应商兜底。创建落 `sessions.agent_device_id`，改模复用普通 runtime
+controller 与 Agent 切换意图，pending/effective 快照包含位置；来源参与 revision、幂等和接受前配置比较。
+组分配用 `providerGroupService.sessionGroup` 核对当前成员，核验成功时投影所选组来源，避免正常分配
+被误判成用户改来源；已离组的真实位置仍参与比较，不能借旧绑定通过。
+revision 使用固定字段顺序，pending 来源与组分配后的同一配置不因对象字段顺序而冲突。
+
+远程目录读取、Session 创建及 runtime 改模不占用跨插件的回执写队列；返回后进入队列重读归属、
+批准、Plan、任务配置和回执，已经取消或结算的输入不能再被接受。创建、改模与卸载按插件实例串行，
+维持原有安装归属和幂等保证，同时允许同插件及其他插件的取消、终态写入继续进行。
+账号切换的 drain 等待上述完整在途操作；未开始落 Session 的回执仅能在原捕获数据库内精确回滚。
+
+发送沿 `sendToSessionInternal` / InputCoordinator，接受前复核插件归属、权限、Plan、完整来源配置及当前目录。
+远程 proxy 的输出与终态走普通 Session 持久化和 `settlePluginTaskTerminal`，run 保留 acceptedConfig；
+getRun/listRuns/readMessages 复用本机回执和历史、按原插件/账号隔离。取消仍用原输入 alias 与执行实例/轮次
+经普通 `stopSessionTurn` 停止远程 proxy，不停止别的输入，断线结果未知按 reconciling，不重放付费输入。
+
+回归：`taskSlot.test.ts`、`pluginTaskSnapshot.test.ts`、`pluginTaskService.test.ts`、
+`sessionRuntimeHarnessSelection.test.ts`；同时运行原远程往返和 Session 控制回归。
+
 ## 新建任务、继续任务与读取结果
 
 插件调用的是 Cindy 普通任务（Session）能力。界面、工具说明和文档统一使用「新建任务」「打开任务」「继续任务」，不另设 AI 代办或插件专属任务概念。
@@ -196,7 +223,7 @@ Claude Code 适配层 `toSdkModelString` 会按目录窗口自动追加 `[1m]`�
 - 回执独立落库，区分任务、输入执行及原生执行代次；原生终态按 instanceId + generation 结算，不以 idle 或最后一条 assistant 消息猜测完成。
 - send 回执写入后，进入宿主派发前的检查拒绝可确定未发送，结算为 failed；进入派发后的异常仍为 reconciling，明确拒绝仍为 failed，已有原生进展优先。同 requestKey 只读取旧回执，权限恢复后需新 key 显式提交。若账号、归属或存储条件不再允许结算，调用仍拒绝并保留回执，不绕过权限门补写终态。
 - 读取限定于本插件创建的任务；返回消息 clientId。list/listRuns 按 (createdAt, id) 排序，现有回执 ID 游标在同插件与目标内解析，不再只按随机 UUID 排序。列表是分页查询，不是增量订阅；刷新应从首页重扫，不能把游标当永久同步水位（同毫秒追加、系统时钟回退或既有回执终态更新均需刷新）。
-- 插件创建的任务及其 Orca Worker 使用普通任务的 `cindy_helper` 能力面；`cindy_memory`（含 `session_search`）、`cindy_contacts`、`cindy_scheduler` 和 `cindy_slack` 也按普通任务的账号、对象归属及工具权限检查。任务创建来源不参与 Agent 工具授权；插件消息标签不额外收窄任务权限，原本要求用户当场输入的操作仍按通用规则判断。个人插件投稿同样沿当前任务权限档与账号身份检查。插件直接调用的 `cindy.tasks` 仍只能管理自己的任务，不能凭此接口读取或控制其他任务。
+- 插件创建的任务及其 Orca Worker 使用普通任务的 `cindy_helper` 能力面；`cindy_memory`（含 `session_search`）、`cindy_scheduler` 和 `cindy_slack` 也按普通任务的账号、对象归属及工具权限检查。任务创建来源不参与 Agent 工具授权；插件消息标签不额外收窄任务权限，原本要求用户当场输入的操作仍按通用规则判断。个人插件投稿同样沿当前任务权限档与账号身份检查。插件直接调用的 `cindy.tasks` 仍只能管理自己的任务，不能凭此接口读取或控制其他任务。
 - 账号数据工具仍在访问前和返回前复核任务与账号，缺少任务、账号变化或查询失败时拒绝，不伪装为空结果，也不回滚已经接受的外部写入。插件卸载或创建回执损坏只撤销插件继续调用自有任务接口的资格，不收窄保留任务内 Agent 的工具面，也不保证停止已接受执行。
 - 取消只撤回自己的排队输入或其原生重试别名；停止前在 Session 锁内再次核对执行身份与插件权限。
 - 请求跨账号切换后不能继续操作新账号数据库。禁用插件后不能继续发送或停止。
@@ -217,8 +244,8 @@ Claude Code 适配层 `toSdkModelString` 会按目录窗口自动追加 `[1m]`�
 - **写入口**：创建时由 `openSession({hiddenAt})` 在同一次 INSERT 落库，不发「新建」推送；切换与用户
   显示统一走 `localDb/ipc/sessionHidden.setSessionHidden`：隐藏广播 `sessions:patched {hiddenAt}`
   （renderer 从各桶移除并重拉、灵动岛收起），显示清列并刷新 updatedAt、广播 patched 后再发
-  `sessions:created` 让侧栏与控制端整体重拉。归属复用 `ownTask`（创建回执 + 账号/批准复核），远程任务
-  与 Worker 没有创建回执，`readSession` 不认，不支持 setHidden。
+  `sessions:created` 让侧栏与控制端整体重拉。归属复用 `ownTask`（创建回执 + 账号/批准复核）；
+  只把 Agent 放到远程的自有任务照常支持，其他电脑上的任务、SSH 工作区与 Worker 不因远程路由获得创建回执。
 - **可见性口径**：`local-db:sessions:list`、会话搜索（conversationSearch）、未结束提示两条腿
   （sessionActiveTurn）、hook-control 最近任务排除隐藏任务；用量统计等全量口径不排除。灵动岛/菜单栏
   运行态与系统通知经 `sessionFlagRegistry` 同步判定跳过（首次 list 时按账号库预热，加载前按可见处理）；
@@ -357,6 +384,38 @@ DB 中下一条输入的 armed 值为 false 不代表原生执行已退出 Plan�
 - 首次确认被拒后插件不能自动重弹；插件详情页对未批准的 `agent.observe` 提供独立确认按钮（`ghosts:request-task-approval` 的 `capability:'observe'`）。
 - `openTask` 只校验这一条任务可见且属于已登记项目，再复核批准后以 `openMainWindowSession(..., { focus: 'if-active' })` 打开。
 - 每次请求固定 owner generation、逻辑页与批准 revision，读取后复核；变化返回 `PERMISSION_DENIED` 并丢弃结果。
+  仅本机 Desktop 逻辑页，Mobile 页面返回 `UNSUPPORTED_CAPABILITY`，不新增 device-link 透传。
+
+## 查看伙伴和状态（增量接口，尚未发布）
+
+`cindy.companions` 的作者契约见 `FORGE_GUIDE` §4.11.9。入口 `companions-request` 在 `cindy-brain/index.ts` 守门，
+请求解析与推送合并在 `pluginCompanionSlot.ts`，数据在 `maker-ipc/pluginCompanionHost.ts`。
+- 要求 `agent.companions: true`，单列 `agent:companions`，需 Host receipt 的 `companionsCapabilityApproved`（`hasPluginCompanionsApproval`）。
+  安装/更新只记录实际展示的确认；首次调用经 `requestPluginTaskApproval(..., 'companions')` 复用既有确认，
+  插件详情页对未批准的 `agent.companions` 提供独立确认按钮（`capability:'companions'`），被拒后插件不能自动重弹。
+- 名单与状态复用侧边栏与手机的读模型：`listBotRemoteResourceSources` → `visibleBotRemoteResourceSources`，按 `companionHomes.isHomeHere` 只取本机伙伴，
+  活动来自 `rosterBotActivities`（主任务与在跑的委派），状态经 `resolveTeammateStatus` 投影。
+- 主力电脑在别处的伙伴（`companionHomes.snapshot()` 的 actor）向那台电脑读取 `COMPANION_LIVE_CHANNEL`（`maker:companion-live:read`），
+  对方返回它本机伙伴的同一份插件视图（含 ref→任务、伙伴→对话的映射，后者不交给插件），查看端只覆盖 `home`。
+  设备范围与侧边栏一致：在线、对方开启远程控制、本机未禁用；用 `remoteBackgroundInvoke`（旧版主力电脑不支持后台链接时退回普通 invoke），
+  每台主力电脑 800 ms 内的重复读取共用一次结果，4 秒未答视为连不上。旧版主力电脑返回 `CHANNEL_NOT_ALLOWED` 时退回 teammates 列表，
+  只有状态与工作阶段；连不上时 `status:'offline'`。`open` 以
+  `openMainWindowSession(sessionId, { deviceId })` 打开远程对话。
+- 状态取 `rosterBotActivityCandidates` 里优先级最高的会话（与侧栏一致），待处理请求汇总该伙伴全部活跃会话（主对话与委派任务）。
+- 名单里的待处理请求只给 `summarizeInteraction` 的标题与归一后的 kind（`companionInteractionKind`：question / permission / plan / other），`ref` 为 `sha256(sessionId\nrequestId)` 前 32 位，不暴露宿主请求 id、工具输入、计划正文或 `compactDetail`；
+  主人在宿主步骤（input handoff）里输入的值不出宿主。`open` 只接受能重新列出的伙伴/请求，以 `openMainWindowSession(..., { focus: 'if-active' })` 打开。
+- `interaction` / `answer` 每次按 ref 重新从 `getPendingInteractionsForSession`（远程：主力电脑的 `maker:get-pending-interactions`）找回请求；`companionInteractionDetail` 用 `describePermissionAction` 投影，
+  `companionInteractionDecision` 用 `normalizeAskQuestions` / `encodeMultiSelectAnswer` / `answerKey` 生成与原生卡片相同的 decision，不接受 `updatedInput` / `permissionUpdates`。
+  `hostOwnedConfirmation`、`OWNER_ONLY_HOST_CONFIRMATION_TOOL_NAMES` 与插件发布工具一律归为 other。`answer` 另要求 `agent.targets`（index.ts 依次确认 companions / tasks / targets，并在每个 await 后复核 target revision）。
+  允许先看 `allowHere`（`permissionShownWhole` + 长度 ≤ `PLUGIN_COMPANION_CONFIRM_MAX` 1200）：command / file-read 摘要即全部；browser / plugin / tool 仅当整个输入缩进 JSON ≤500（`describePermissionAction` 不截断的上界）；file-write 恒为 false；不满足返回 `ALLOW_IN_CINDY`，不弹框。
+  允许经 `confirmAllow`（`dialog.showMessageBox`，挂主窗口，不截断正文，`allowHere` 为 false 时直接拒绝）：同一时间只开一个框（`TASK_BUSY`），框前快照请求 JSON，框后重读并比对 requestId 与快照，不同则 `TARGET_UNAVAILABLE`。
+  本机经 `resolvePendingInteraction` 落定（shared permission 先到先得、暂停执行时拒收）；远程经 `invokeBotPeer`（`remoteInvoke`）调主力电脑的 `maker:resolve-interaction`，沿用对方的来源闸门（桌面独占确认在那边拒收）。
+- 回复读取先 `drainPersistQueue`，从新到旧按页（100 行，`readLatestMirrorRows` → `readMirrorRowsBefore`）读到第一条经 `mirrorMessageText(..., { placeholders: false })` 投影非空的 assistant 行，或到 `clearedAt` / 读完为止，≤8000 字；工具过程、进度说明再多也不会漏掉上一条回复。
+- `history` 同样先 `drainPersistQueue`，按同样的分页从新到旧取 `mirrorMessageText` 非空的 user/assistant 行（附件保留占位），到 `clearedAt` 截断，收集到 `limit`（默认 20，≤50）后翻成从旧到新，单条 ≤2000 字；
+  收满 `limit` 后还有可见消息时 `more=true`，到清空边界或读完为 false。远程伙伴经 `COMPANION_LIVE_CHANNEL` 的 `kind:'history'` 读取，对方返回 `INVALID_PARAMS` / `CHANNEL_NOT_ALLOWED` 时视为旧版，返回 null。
+- 推送 `companions-changed` 只带 subscriptionId 与 seq，不带内容；来源为灵动岛 `subscribeSessionActivity`、`companionHomes.onChange`、主力电脑经侧边栏 sessions 订阅推来的 `maker:remote-resources:changed` / `local-db:sessions:activity`（main 经 `onRemotePushChannel` 只看来源与 channel）与 5 秒心跳，每插件合并到最快 1 秒一次。
+  发送失败或批准失效的订阅被丢弃。
+- 每次请求固定 owner generation、逻辑页与批准 revision，每个 await 后复核；变化返回 `PERMISSION_DENIED` 并丢弃结果。
   仅本机 Desktop 逻辑页，Mobile 页面返回 `UNSUPPORTED_CAPABILITY`，不新增 device-link 透传。
 
 ### 消息图片附件

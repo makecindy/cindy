@@ -538,6 +538,141 @@ describe('resolvePiCindyGatewayModelApi', () => {
 });
 
 describe('buildPiNativeProvidersFromConfigs', () => {
+  it('gives a Messages model its own root when an OpenAI /v1 provider also serves Chat models', () => {
+    const { providers } = buildPiNativeProvidersFromConfigs([{
+      id: 'mixed-gateway', name: 'Mixed Gateway', auth: { method: 'none' },
+      runtimes: { pi: piRuntime({
+        baseUrl: 'http://127.0.0.1:8765/v1', wireProtocol: 'openai-chat',
+        models: [
+          { id: 'chat-model', name: 'Chat Model' },
+          { id: 'messages-model', name: 'Messages Model', piApi: 'anthropic-messages' },
+          { id: 'routed-messages', name: 'Routed Messages',
+            api: 'anthropic-messages', piApi: 'anthropic-messages',
+            route: { baseUrl: 'http://127.0.0.1:8765/custom-anthropic', wireProtocol: 'anthropic-messages' } },
+        ],
+      }) },
+    }], () => null);
+
+    expect(providers[0]).toMatchObject({ baseUrl: 'http://127.0.0.1:8765/v1', api: 'openai-completions' });
+    expect(providers[0].models).toMatchObject([
+      { id: 'chat-model' },
+      { id: 'messages-model', api: 'anthropic-messages', baseUrl: 'http://127.0.0.1:8765' },
+      { id: 'routed-messages', api: 'anthropic-messages', baseUrl: 'http://127.0.0.1:8765/custom-anthropic' },
+    ]);
+    expect(providers[0].models[0]).not.toHaveProperty('baseUrl');
+  });
+
+  it('preserves an old same-endpoint Messages route whose source cannot be identified', () => {
+    const baseUrl = 'http://127.0.0.1:8765/v1';
+    const { providers } = buildPiNativeProvidersFromConfigs([{
+      id: 'ui-selected-gateway', name: 'UI Selected Gateway', auth: { method: 'none' },
+      runtimes: { pi: piRuntime({
+        baseUrl, wireProtocol: 'openai-chat',
+        models: [
+          { id: 'chat-model', name: 'Chat Model' },
+          { id: 'messages-model', name: 'Messages Model',
+            api: 'anthropic-messages', piApi: 'anthropic-messages',
+            route: { baseUrl, wireProtocol: 'anthropic-messages' } },
+        ],
+      }) },
+    }], () => null);
+
+    expect(providers[0].baseUrl).toBe(baseUrl);
+    expect(providers[0].models[0]).not.toHaveProperty('baseUrl');
+    expect(providers[0].models[1]).toMatchObject({ api: 'anthropic-messages' });
+    expect(providers[0].models[1]).not.toHaveProperty('baseUrl');
+  });
+
+  // Tier 2: the launch mapper must retain a proxy prefix while removing the
+  // inherited /v1 that the Anthropic SDK itself appends; saved routes stay authoritative.
+  it('keeps a proxy prefix for Messages without an effective route and preserves matching saved routes', () => {
+    const baseUrl = 'https://proxy.example/custom/v1';
+    const { providers } = buildPiNativeProvidersFromConfigs([{
+      id: 'custom-proxy', name: 'Custom Proxy', auth: { method: 'none' },
+      runtimes: { pi: piRuntime({
+        baseUrl, wireProtocol: 'openai-chat',
+        models: [
+          { id: 'messages-model', name: 'Messages Model', piApi: 'anthropic-messages' },
+          { id: 'selected-messages', name: 'Selected Messages',
+            api: 'anthropic-messages', piApi: 'anthropic-messages',
+            route: { baseUrl, wireProtocol: 'anthropic-messages' } },
+          { id: 'stale-api-route', name: 'Stale API Route',
+            api: 'anthropic-messages', piApi: 'anthropic-messages',
+            route: { baseUrl, wireProtocol: 'openai-responses' } },
+          { id: 'stale-pi-api-route', name: 'Stale Pi API Route',
+            piApi: 'anthropic-messages',
+            route: { baseUrl, wireProtocol: 'openai-responses' } },
+        ],
+      }) },
+    }], () => null);
+
+    expect(providers[0].baseUrl).toBe(baseUrl);
+    expect(providers[0].models[0]).toMatchObject({
+      api: 'anthropic-messages', baseUrl: 'https://proxy.example/custom',
+    });
+    expect(providers[0].models[1]).toMatchObject({ api: 'anthropic-messages' });
+    expect(providers[0].models[1]).not.toHaveProperty('baseUrl');
+    for (const model of providers[0].models.slice(2)) {
+      expect(model).toMatchObject({ api: 'anthropic-messages', baseUrl: 'https://proxy.example/custom' });
+    }
+  });
+
+  it('removes inherited /v1 for route-free Anthropic models on Anthropic or Google runtimes', () => {
+    const baseUrl = 'https://proxy.example/custom/v1';
+    const { providers } = buildPiNativeProvidersFromConfigs([
+      {
+        id: 'anthropic-proxy', name: 'Anthropic Proxy', auth: { method: 'none' },
+        runtimes: { pi: piRuntime({
+          baseUrl, wireProtocol: 'anthropic-messages',
+          models: [{ id: 'messages-model', name: 'Messages Model' }],
+        }) },
+      },
+      {
+        id: 'custom-path-proxy', name: 'Custom Path Proxy', auth: { method: 'none' },
+        runtimes: { pi: piRuntime({
+          baseUrl, wireProtocol: 'anthropic-messages', requestPath: '/custom/messages',
+          models: [{ id: 'custom-path-model', name: 'Custom Path Model' }],
+        }) },
+      },
+      {
+        id: 'google-proxy', name: 'Google Proxy', auth: { method: 'none' },
+        runtimes: { pi: piRuntime({
+          baseUrl, wireProtocol: 'google-generative-ai',
+          models: [{ id: 'messages-model', name: 'Messages Model', piApi: 'anthropic-messages' }],
+        }) },
+      },
+    ], () => null);
+
+    expect(providers[0]).toMatchObject({ baseUrl, api: 'anthropic-messages' });
+    expect(providers[0].models[0]).toMatchObject({
+      id: 'messages-model', baseUrl: 'https://proxy.example/custom',
+    });
+    expect(providers[1]).toMatchObject({ baseUrl, api: 'anthropic-messages' });
+    expect(providers[1].models[0]).not.toHaveProperty('baseUrl');
+    expect(providers[2]).toMatchObject({ baseUrl, api: 'google-generative-ai' });
+    expect(providers[2].models[0]).toMatchObject({
+      id: 'messages-model', api: 'anthropic-messages', baseUrl: 'https://proxy.example/custom',
+    });
+  });
+
+  // Tier 2: native SDK APIs have no HTTP-bridge route resolution, but their
+  // explicitly configured model endpoint still belongs in the Pi launch spec.
+  it('keeps an explicit model endpoint for a native SDK API', () => {
+    const { providers } = buildPiNativeProvidersFromConfigs([{
+      id: 'azure-routed', name: 'Azure Routed', auth: { method: 'none' },
+      runtimes: { pi: piRuntime({
+        baseUrl: 'https://primary.openai.azure.com/openai/v1', wireProtocol: 'openai-responses',
+        models: [{ id: 'azure-deployment', api: 'azure-openai-responses',
+          route: { baseUrl: 'https://secondary.openai.azure.com/openai/v1', wireProtocol: 'openai-responses' } }],
+      }) },
+    }], () => null);
+
+    expect(providers[0].models[0]).toMatchObject({
+      id: 'azure-deployment', api: 'azure-openai-responses',
+      baseUrl: 'https://secondary.openai.azure.com/openai/v1',
+    });
+  });
+
   // Tier 2: the actual launch builder must carry a user's V6 selection, including
   // protocol limits, instead of reverting to the connection's Messages default.
   it.each(['anthropic-messages', 'openai-completions', 'openai-responses'] as const)(
@@ -581,11 +716,9 @@ describe('buildPiNativeProvidersFromConfigs', () => {
     expect(providers[0].models[0].baseUrl ?? providers[0].baseUrl).toBe(baseUrl);
   });
 
-  it('strips an inherited /v1 suffix for a model-level Anthropic route (#7258)', () => {
-    // Test value: the production launch mapper materializes models.json. Existing coverage only
-    // protects Google's endpoint rewrite; this same-provider cross-API route was missing.
-    // The minimum failure input is one Anthropic API override on an OpenAI provider /v1 URL;
-    // without a model baseUrl Pi appends /v1/messages to /v1 and gets /v1/v1/messages. Unit tier.
+  it('strips inherited /v1 only for an Anthropic model without its own route (#7258)', () => {
+    // The production launch mapper materializes models.json. A same-address model route may be
+    // intentional, so only the API-only override may inherit a corrected Anthropic SDK root.
     const baseUrl = 'http://127.0.0.1:8000/v1';
     const { providers } = buildPiNativeProvidersFromConfigs([{
       id: 'mixed-api',
@@ -623,12 +756,13 @@ describe('buildPiNativeProvidersFromConfigs', () => {
       api: 'openai-completions',
       models: [
         { id: 'anthropic-api-override', api: 'anthropic-messages', baseUrl: 'http://127.0.0.1:8000' },
-        { id: 'anthropic-route-override', api: 'anthropic-messages', baseUrl: 'http://127.0.0.1:8000' },
+        { id: 'anthropic-route-override', api: 'anthropic-messages' },
         { id: 'anthropic-custom-route', api: 'anthropic-messages', baseUrl: 'https://gateway.example/proxy/v1' },
         { id: 'anthropic-request-path', api: 'anthropic-messages' },
         { id: 'openai-model' },
       ],
     });
+    expect(providers[0]?.models?.[1]).not.toHaveProperty('baseUrl');
     expect(providers[0]?.models?.[3]).not.toHaveProperty('baseUrl');
     expect(providers[0]?.models?.[4]).not.toHaveProperty('baseUrl');
   });
@@ -2971,6 +3105,25 @@ describe('server metadata reaches every native Pi transport', () => {
 });
 
 
+it.each([true, false, undefined])('preserves configured image input %s against a same-id built-in catalog', (supportsImageInput) => {
+  const cfg: Cfg = { id: 'xai', name: 'My gateway', runtimes: { pi: piRuntime({
+    baseUrl: 'https://user.example/v1', catalogPresetId: 'xai',
+    models: [{ id: 'same-model', supportsImageInput }],
+  }) } };
+  const catalog: Catalog = { ...BUNDLED_CATALOG, providers: [{ ...BUNDLED_CATALOG.providers[0]!,
+    id: 'xai', models: { pi: [{ id: 'same-model', name: 'Builtin', contextWindow: 123456,
+      efforts: [], defaultEffort: null, supportsImageInput: supportsImageInput === undefined ? true : !supportsImageInput,
+    }] } }] };
+  const launch = () => buildPiNativeProvidersFromConfigs([cfg], () => 'fixture-key', undefined, undefined, catalog)
+    .providers[0]!.models[0]!;
+  expect(launch().input).toEqual(supportsImageInput === false ? ['text'] : ['text', 'image']);
+  // The custom runtime identity owns the fully resolved local override layer.
+  catalog.providers.push({ ...catalog.providers[0]!, id: 'custom:xai', source: 'user', models: { pi: [{
+    ...catalog.providers[0]!.models.pi![0]!, supportsImageInput: supportsImageInput === false,
+  }] } });
+  expect(launch().input).toEqual(supportsImageInput === false ? ['text', 'image'] : ['text']);
+});
+
 it('uses the resolved BYOM catalog without borrowing its route or credentials', () => {
   const cfg: Cfg = { id: 'my-api', name: 'My API', auth: { method: 'apiKey' },
     runtimes: { pi: piRuntime({ baseUrl: 'https://user.example/v1', models: [{ id: 'same-model' }] }) } };
@@ -2985,6 +3138,42 @@ it('uses the resolved BYOM catalog without borrowing its route or credentials', 
       reasoning: true, input: ['text', 'image'], cost: { input: 5, output: 6, cacheRead: 0, cacheWrite: 0 } })] });
   expect(result.providers[0]!.models[0]!.baseUrl).toBeUndefined();
   expect(result.env[result.providers[0]!.apiKeyEnvVar!]).toBe('fixture-key');
+});
+
+it.each(['field', 'model'] as const)('inherits a text-only default when the user projection lacks the %s', (missing) => {
+  const cfg: Cfg = { id: 'xai', name: 'My gateway', runtimes: { pi: piRuntime({
+    baseUrl: 'https://user.example/v1', catalogPresetId: 'xai', models: [{ id: 'same-model' }],
+  }) } };
+  const model = { id: 'same-model', name: 'Builtin', contextWindow: 123456,
+    efforts: [], defaultEffort: null };
+  const catalog: Catalog = { ...BUNDLED_CATALOG, providers: [
+    { ...BUNDLED_CATALOG.providers[0]!, id: 'xai',
+      models: { pi: [{ ...model, supportsImageInput: false }] } },
+    { ...BUNDLED_CATALOG.providers[0]!, id: 'custom:xai', source: 'user',
+      models: { pi: missing === 'model' ? [] : [model] } },
+  ] };
+  const result = buildPiNativeProvidersFromConfigs([cfg], () => 'fixture-key', undefined, undefined, catalog);
+  expect(result.providers[0]!.models[0]!.input).toEqual(['text']);
+});
+
+it.each([true, false])('keeps local image override %s above the custom connection form', (supportsImageInput) => {
+  const cfg = { id: 'xai', name: 'My gateway', runtimes: { pi: {
+    baseUrl: 'https://user.example/v1', wireProtocol: 'openai-chat' as const,
+    models: [{ id: 'same-model', name: 'My model', supportsImageInput: !supportsImageInput }],
+  } } };
+  setActiveCatalog(BUNDLED_CATALOG);
+  setCustomProviderConfigs([cfg]);
+  const parsed = sanitizeModelCatalogOverrides({ patches: {
+    'custom%3Axai:same-model': { perAgent: { pi: { supportsImageInput } } },
+  } });
+  setLocalCatalogOverrides(parsed.overrides);
+  try {
+    const result = buildPiNativeProvidersFromConfigs([cfg], () => 'fixture-key', undefined, undefined, getActiveCatalog());
+    expect(result.providers[0]?.models[0]?.input).toEqual(supportsImageInput ? ['text', 'image'] : ['text']);
+  } finally {
+    setLocalCatalogOverrides(EMPTY_MODEL_CATALOG_OVERRIDES);
+    setCustomProviders([]);
+  }
 });
 
 // Check the actual Pi launch descriptor, not just the settings/catalog projection.

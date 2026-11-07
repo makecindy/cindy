@@ -4,6 +4,7 @@ import { drizzle } from 'drizzle-orm/better-sqlite3';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { zstdCompressSync, zstdDecompressSync } from 'node:zlib';
 
 const electronMock = vi.hoisted(() => ({ userData: '', region: 'global' as 'global' | 'cn' }));
 const dbMock = vi.hoisted(() => ({ current: null as Database.Database | null }));
@@ -36,6 +37,7 @@ vi.mock('../logger.js', () => ({
 import {
   prepareExternalCodexSessionForResume,
   readCodexThreadStorageForArchive,
+  readCodexThreadStorageForArchiveAsync,
   dumpCodexThreadStateRows,
   classifyCodexHistoryOversized,
   repairCodexRolloutPath,
@@ -303,6 +305,32 @@ afterEach(() => {
 });
 
 describe('Codex local session import', () => {
+  // KFJS unit regression: missing-index discovery must locate the newest exact
+  // thread without blocking on unrelated files or mutating/importing history.
+  // Prior archive tests only used synchronous lookup and indexed state DBs.
+  it('async fallback finds the newest matching rollout without stat-ing unrelated history', async () => {
+    const home = path.join(targetUserData, 'codex-home');
+    const older = path.join(home, 'sessions', `rollout-2026-05-12-${threadId}.jsonl`);
+    const newer = path.join(home, 'archived_sessions', `rollout-2026-05-13-${threadId}.jsonl`);
+    const unrelated = path.join(home, 'sessions', `rollout-2026-05-13-${execThreadId}.jsonl`);
+    const content = JSON.stringify({ type: 'session_meta', payload: { id: threadId, source: 'cli' } }) + '\n';
+    for (const file of [older, newer, unrelated]) {
+      fs.mkdirSync(path.dirname(file), { recursive: true });
+      fs.writeFileSync(file, content);
+    }
+    fs.utimesSync(older, 1000, 1000);
+    fs.utimesSync(newer, 2000, 2000);
+    const stat = vi.spyOn(fs.promises, 'stat');
+    try {
+      await expect(readCodexThreadStorageForArchiveAsync(threadId)).resolves.toEqual({
+        historyHome: home, sqliteHome: home, rolloutPath: newer,
+      });
+      expect(stat.mock.calls.some(([file]) => file === unrelated)).toBe(false);
+      expect(fs.readFileSync(newer, 'utf8')).toBe(content);
+      expect(currentTestDb().prepare('SELECT COUNT(*) AS n FROM sessions').get()).toEqual({ n: 0 });
+      await expect(readCodexThreadStorageForArchiveAsync('not-a-thread')).resolves.toBeUndefined();
+    } finally { stat.mockRestore(); }
+  });
   it('locates archive storage in the known state DB after sqlite_home changes', () => {
     const dbPath = createStateDb(externalHome);
     const newHome = path.join(rootDir, 'new-state');
@@ -471,17 +499,20 @@ describe('paginated Codex rollout adoption (#7436)', () => {
   // #7436 review: root-only native fixtures missed history_base dependencies.
   // Unit tier drives the same preparation used by indexed resume, observing
   // files and pointers on invalid lineage, interrupted publication and retries.
-  function ancestorHistory() {
+  function ancestorHistory(compressedParent = false) {
     const f = brokenHistory();
-    const filename = `rollout-2026-10-13T10-13-41-${execThreadId}.jsonl`;
+    const filename = `rollout-2026-10-13T10-13-41-${execThreadId}.jsonl${compressedParent ? '.zst' : ''}`;
     const relative = path.join('archived_sessions', filename);
     const parent = path.join(externalHome, relative);
     const localParent = path.join(f.home, relative);
+    const historyText = compressedParent ? 'parent history '.repeat(5000) : 'parent history';
     const parentContents = `${JSON.stringify({ ordinal: 0, type: 'session_meta', payload: {
       id: execThreadId, history_mode: 'paginated',
-    } })}\n${JSON.stringify({ ordinal: 1, type: 'response_item', payload: { text: 'parent history' } })}\n`;
+    } })}\n${JSON.stringify({ ordinal: 1, type: 'response_item', payload: { text: historyText } })}\n`;
     fs.mkdirSync(path.dirname(parent), { recursive: true });
-    fs.writeFileSync(parent, parentContents);
+    fs.writeFileSync(parent, compressedParent
+      ? zstdCompressSync(Buffer.from(parentContents))
+      : parentContents);
     const rootRecord = JSON.parse(f.contents);
     rootRecord.payload.history_base = {
       thread_id: execThreadId, end_ordinal_exclusive: 2, end_byte_offset: Buffer.byteLength(parentContents),
@@ -522,6 +553,34 @@ describe('paginated Codex rollout adoption (#7436)', () => {
     expect(fs.readFileSync(sourceChild, 'utf8')).toBe(f.childContents);
     expect(fs.readFileSync(parent, 'utf8')).toBe(f.parentContents);
     expect(fs.readFileSync(prepared!, 'utf8')).toContain('new local turn');
+  });
+
+  it('imports a paginated ancestor stored as .jsonl.zst using its uncompressed byte offset', async () => {
+    const f = ancestorHistory(true);
+    const dbPath = createStateDb(path.join(targetUserData, 'codex-home'));
+    insertThread(dbPath, threadId, f.sourceChild, { updatedAt: 2000 });
+
+    const prepared = await prepareExternalCodexSessionForResume(threadId);
+
+    expect(path.basename(f.parent)).toMatch(/\.jsonl\.zst$/);
+    expect(fs.statSync(f.parent).size).toBeLessThan(Buffer.byteLength(f.parentContents));
+    const importedParent = path.join(targetUserData, 'codex-home', 'archived_sessions', path.basename(f.parent));
+    expect(zstdDecompressSync(fs.readFileSync(importedParent)).toString('utf8')).toBe(f.parentContents);
+    expect(fs.readFileSync(importedParent)).toHaveLength(fs.statSync(f.parent).size);
+    expect(await prepareExternalCodexSessionForResume(threadId)).toBe(prepared);
+  });
+
+  it('prefers a plaintext ancestor when the same rollout also exists as .jsonl.zst', async () => {
+    const f = ancestorHistory(true);
+    const plainParent = f.parent.replace(/\.zst$/, '');
+    fs.writeFileSync(plainParent, f.parentContents);
+    const dbPath = createStateDb(path.join(targetUserData, 'codex-home'));
+    insertThread(dbPath, threadId, f.sourceChild, { updatedAt: 2000 });
+
+    await expect(prepareExternalCodexSessionForResume(threadId)).resolves.toBeTruthy();
+
+    const importedParent = path.join(targetUserData, 'codex-home', 'archived_sessions', path.basename(plainParent));
+    expect(fs.readFileSync(importedParent, 'utf8')).toBe(f.parentContents);
   });
 
   it.each(['missing', 'truncated', 'cycle', 'conflict'] as const)(

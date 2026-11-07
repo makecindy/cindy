@@ -8,7 +8,7 @@
   android:targetCellHeight="2"
   android:updatePeriodMillis="1800000"
   android:resizeMode="horizontal|vertical"
-  android:widgetCategory="home_screen"
+  android:widgetCategory="home_screen|keyguard"
   android:widgetFeatures="reconfigurable"
   android:configure="app.cindy.usagewidgets.ComputerConfigActivity"
   android:previewImage="@drawable/cindy_quota_widget_preview"

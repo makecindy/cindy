@@ -5,7 +5,7 @@ import type { AgentRuntimeConfig } from '../../../interfaces/runtime-config.js';
 import {
   EXPLORE_INHERIT_CAP_DISABLE_ENV,
   SENSITIVE_ANTHROPIC_ENV_KEYS,
-  applyClaudeDesktopEntrypoint,
+  applyClaudeEntrypoint,
   applyExploreInheritCapEnv,
   applySubagentModelEnv,
   buildClaudeEnv,
@@ -71,20 +71,27 @@ describe('buildClaudeEnv', () => {
     expect(env.CLAUDE_CODE_DISABLE_CRON).toBe('1');
   });
 
-  it.each(['local', 'remote'] as const)('pins the Desktop entrypoint after auth and behavior flags in %s mode', async (mode) => {
+  // Anthropic #106458: API credits can be rejected when an SDK request claims a
+  // Desktop entrypoint. Assert the actual spawn env; OAuth/native-login cases below
+  // retain the Desktop filtering and refresh contract. Tier: unit.
+  it.each(['local', 'remote'] as const)('pins the SDK entrypoint for API keys after auth and behavior flags in %s mode', async (mode) => {
     const env = await buildClaudeEnv(
       createAuthAdapter({ ANTHROPIC_API_KEY: 'session-key', CLAUDE_CODE_ENTRYPOINT: 'cli' }),
-      { behaviorFlags: { CLAUDE_CODE_ENTRYPOINT: 'sdk-ts' } },
+      { behaviorFlags: { CLAUDE_CODE_ENTRYPOINT: 'claude-desktop' } },
       { mode },
     );
-    expect(env.CLAUDE_CODE_ENTRYPOINT).toBe('claude-desktop');
+    expect(env.CLAUDE_CODE_ENTRYPOINT).toBe('sdk-ts');
     expect(env.ANTHROPIC_API_KEY).toBe('session-key');
+    expect(env.CLAUDE_CODE_PROVIDER_MANAGED_BY_HOST).toBe('1');
   });
 
-  it('reapplies the Desktop entrypoint after remote route materialization without changing credentials', () => {
-    const env = { CLAUDE_CODE_ENTRYPOINT: 'sdk-ts', ANTHROPIC_AUTH_TOKEN: 'route-token' };
-    applyClaudeDesktopEntrypoint(env);
-    expect(env).toEqual({ CLAUDE_CODE_ENTRYPOINT: 'claude-desktop', ANTHROPIC_AUTH_TOKEN: 'route-token' });
+  it.each([
+    ['ANTHROPIC_AUTH_TOKEN', 'sdk-ts'],
+    ['CLAUDE_CODE_OAUTH_TOKEN', 'claude-desktop'],
+  ])('reselects the entrypoint after a remote %s route without changing credentials', (credential, entrypoint) => {
+    const env = { CLAUDE_CODE_ENTRYPOINT: 'stale-entrypoint', [credential]: 'route-token' };
+    applyClaudeEntrypoint(env);
+    expect(env).toEqual({ CLAUDE_CODE_ENTRYPOINT: entrypoint, [credential]: 'route-token' });
   });
 
   it('pins ANTHROPIC_SMALL_FAST_MODEL to the session wire model when provided (#3557)', async () => {
@@ -682,14 +689,14 @@ describe('buildClaudeEnv', () => {
       expect(env.CLAUDE_CODE_PROVIDER_MANAGED_BY_HOST).toBe('1');
     });
 
-    it('gateway-key: uses the same Desktop entrypoint without OAuth or IDE defaults', async () => {
+    it('gateway-key: uses the SDK entrypoint without OAuth or IDE defaults', async () => {
       delete process.env.CLAUDE_CODE_ENTRYPOINT;
       // 宿主环境(如 Claude Code IDE 会话)可能自带 IDE_SKIP=1,不清会经 process.env
       // 继承进 buildClaudeEnv 输出,让下面的 toBeUndefined 断言只在特定环境失败。
       delete process.env.CLAUDE_CODE_IDE_SKIP_AUTO_INSTALL;
       const env = await buildClaudeEnv(createAuthAdapter({ ANTHROPIC_API_KEY: 'sk-gw' }), {});
       expect(env.CLAUDE_CODE_OAUTH_TOKEN).toBeUndefined();
-      expect(env.CLAUDE_CODE_ENTRYPOINT).toBe('claude-desktop');
+      expect(env.CLAUDE_CODE_ENTRYPOINT).toBe('sdk-ts');
       expect(env.CLAUDE_CODE_IDE_SKIP_AUTO_INSTALL).toBeUndefined();
     });
 

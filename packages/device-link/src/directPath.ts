@@ -73,3 +73,6 @@ export interface DeviceLinkPeerPathChanged {
 export const DIRECT_PATH_HIGH_WATER_BYTES = 1024 * 1024;
 /** An established provider-share direct path may outlive the relay only for this long. */
 export const PROVIDER_SHARE_DIRECT_LEASE_MS = 30 * 60_000;
+
+/** Maximum retention of an authenticated same-account data path after signaling loss. */
+export const DIRECT_PATH_SIGNALING_GRACE_MS = 30 * 60_000;

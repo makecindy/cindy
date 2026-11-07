@@ -37,7 +37,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 // package next to other sqlite tests, and Defender can make that synchronous
 // work exceed Vitest's default 5s — the learned-prefix case then times out
 // and afterEach unlinks fts.db while the handle is still closing (EBUSY).
-// Same bounded Windows allowance as maker-core memory/contacts sqlite tests;
+// Same bounded Windows allowance as maker-core memory sqlite tests;
 // assertions stay unchanged.
 vi.setConfig({
   testTimeout: process.platform === 'win32' ? 30_000 : 5_000,

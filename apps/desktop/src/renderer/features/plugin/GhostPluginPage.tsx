@@ -49,11 +49,14 @@ import { useConfirmDialog } from '@/components/ui/confirm-dialog-provider';
 import { toast } from '@/lib/toast';
 import { extractIpcError } from '@/utils/ipcError';
 import { useAuth } from '@/contexts/AuthContext';
+import { isDataOwnerPushCurrent } from '@/contexts/dataOwnerGeneration';
 import { usePluginReviewUpdates } from '@/contexts/PluginReviewUpdatesContext';
 import { readInstalledGhostsSnapshot, useInstalledGhosts } from '@/cindy-brain/useInstalledGhosts';
 import {
   cancelPendingPluginSuggestion,
   getPendingPluginSuggestion,
+  pendingPluginSuggestionReturnPath,
+  pendingSuggestionIsForGhost,
   readyPendingPluginSuggestion,
   subscribePendingPluginSuggestion,
 } from '@/features/cc-agent/pendingPluginSuggestion';
@@ -83,7 +86,6 @@ import { useGlobalTabs } from '@/features/right-sidebar/globalTabs';
 import { resolveSystemLocale } from '../../../shared/locale';
 import {
   ghostInstallApprovalToken,
-  isUserInstallReservedGhostId,
   type GhostSetupStatus,
   type InstalledGhost,
 } from '../../../shared/ghost';
@@ -514,7 +516,7 @@ function LocalGhostPluginPage({
     };
   }, [dataOwnerId, recommendationNonce]);
   const continueRecommendation = useCallback(
-    (nonce: string | undefined, ghostId: string) => {
+    async (nonce: string | undefined, ghostId: string) => {
       if (!recommendationPageMounted.current || !nonce) return false;
       const snapshot = readPluginRecommendationSnapshot();
       if (
@@ -522,9 +524,31 @@ function LocalGhostPluginPage({
         !snapshot.sources.some((s) => s.ghostId === ghostId && s.enabled)
       )
         return false;
+      const early = getPendingPluginSuggestion();
+      // Another plugin being installed or enabled while this request is open must not touch its project state.
+      if (!early || early.nonce !== nonce || !pendingSuggestionIsForGhost(early, ghostId)) return false;
+      // A plugin Skill is only usable in the task's project if the plugin is not disabled there: a
+      // project-level "off" outlives an uninstall, so a fresh install would still not offer the Skill.
+      // Do this before the request leaves the setup phase, so a failure here leaves it resumable.
+      if (early.skillName && early.workingDir) {
+        try {
+          const dir = early.workingDir;
+          if (window.electronAPI.ghosts.workdirPrefsSync(dir).disabled.includes(ghostId)) {
+            await window.electronAPI.ghosts.setWorkdirDisabled(dir, ghostId, false);
+          }
+        } catch {
+          return false;
+        }
+        if (!recommendationPageMounted.current || getPendingPluginSuggestion()?.nonce !== nonce) return false;
+      }
       const ready = readyPendingPluginSuggestion(nonce, dataOwnerId, ghostId);
-      if (!ready) return false;
-      navigate('/cc-agent/new', { state: { pluginSuggestionNonce: ready }, flushSync: true });
+      const pending = getPendingPluginSuggestion();
+      if (!ready || !pending) return false;
+      // Back to where the user asked: the new-task draft or the task they were in.
+      navigate(pendingPluginSuggestionReturnPath(pending), {
+        state: { pluginSuggestionNonce: ready },
+        flushSync: true,
+      });
       return true;
     },
     [dataOwnerId, navigate],
@@ -687,16 +711,21 @@ function LocalGhostPluginPage({
   const recentWorkdirs = usePluginRecentWorkdirs();
   const [scopeDir, setScopeDir] = useState<string | null>(null);
   const scopeDirRef = useRef<string | null>(scopeDir);
+  const scopeKeyRef = useRef<string | undefined>(undefined);
   scopeDirRef.current = scopeDir;
   const [projectDisabled, setProjectDisabled] = useState<Set<string>>(() => new Set());
   const handlePickScope = useCallback((dir: string | null) => {
     setScopeDir(dir);
+    scopeDirRef.current = dir;
+    scopeKeyRef.current = undefined;
     if (!dir) {
       setProjectDisabled(new Set());
       return;
     }
     try {
-      setProjectDisabled(new Set(window.electronAPI.ghosts.workdirPrefsSync(dir).disabled));
+      const policy = window.electronAPI.ghosts.workdirPrefsSync(dir);
+      scopeKeyRef.current = policy.workdirKey;
+      setProjectDisabled(new Set(policy.disabled));
     } catch {
       setProjectDisabled(new Set());
     }
@@ -716,13 +745,20 @@ function LocalGhostPluginPage({
   const [recentGhostIds, setRecentGhostIds] = useState(
     () => window.electronAPI.ghosts.recentUsageSync().ids,
   );
+  useEffect(() => window.electronAPI.ghosts.onWorkdirPrefsChanged?.((policy, ownerStamp) => {
+    if (!scopeDirRef.current || !isDataOwnerPushCurrent(ownerStamp)) return;
+    if (scopeKeyRef.current === undefined) { handlePickScope(scopeDirRef.current); return; }
+    if (scopeKeyRef.current === policy.workdirKey) setProjectDisabled(new Set(policy.disabled));
+  }), [handlePickScope]);
   useEffect(
     () =>
       window.electronAPI.ghosts.onChanged(() => {
         const dir = scopeDirRef.current;
         if (dir) {
           try {
-            setProjectDisabled(new Set(window.electronAPI.ghosts.workdirPrefsSync(dir).disabled));
+            const policy = window.electronAPI.ghosts.workdirPrefsSync(dir);
+            scopeKeyRef.current = policy.workdirKey;
+            setProjectDisabled(new Set(policy.disabled));
           } catch {
             // Keep the current project snapshot if another window races the read.
           }
@@ -1076,7 +1112,7 @@ function LocalGhostPluginPage({
         } else {
           await window.electronAPI.ghosts.setEnabled(id, enabled);
         }
-        if (enabled) continueRecommendation(pendingNonce, id);
+        if (enabled) await continueRecommendation(pendingNonce, id);
       } catch (error) {
         toast.error(t(ghostInstallErrorKey(extractIpcError(error)?.code)));
       }
@@ -1576,7 +1612,7 @@ function LocalGhostPluginPage({
           isStillActive: () => isMarketBusyLeaseActive(marketBusyLease),
         });
         if (!ghost || !isMarketBusyLeaseActive(marketBusyLease)) return;
-        if (continueRecommendation(pendingNonce, installedGhostStoragePart(ghost))) return;
+        if (await continueRecommendation(pendingNonce, installedGhostStoragePart(ghost))) return;
         // 市场首装装完即开(2026-07-26 定案),toast 用"已安装";更新路径如实
         // 用"已更新"(生效状态未被改变),并留在当前页方便连续更新多个插件。
         toast.success(
@@ -1880,7 +1916,7 @@ function LocalGhostPluginPage({
               updateBusy={(selectedMarketUpdate !== null && marketBusyId !== null) || batchRunning}
               onUninstall={() => void handleUninstall()}
               onExport={
-                selectedGhost && !isUserInstallReservedGhostId(selectedDetail.ghostId)
+                selectedGhost
                   ? () => void handleExport()
                   : undefined
               }
@@ -2600,6 +2636,8 @@ export function GhostPluginCard({
 }) {
   const { t } = useTranslation();
   const metadataId = useId();
+  const installationLabel = item.installationLabelKey
+    ? t(`settings.ghosts.detail.${item.installationLabelKey}`, { name: item.installationNamespace }) : sourceLabel;
   const enabled = effectiveEnabled ?? item.enabled;
   // 远程列表不投影本机同名插件的未读状态。
   const localUnread = useGhostUnread(item.id);
@@ -2693,10 +2731,10 @@ export function GhostPluginCard({
           id={metadataId}
           className="mt-1 flex min-w-0 flex-wrap items-center gap-x-1.5 gap-y-1 text-11 text-[var(--text-tertiary)]"
         >
-          {sourceLabel ? <span className="shrink-0">{sourceLabel}</span> : null}
+          {installationLabel ? <span className="min-w-0 break-words">{installationLabel}</span> : null}
           {author ? (
             <>
-              {sourceLabel ? <span aria-hidden="true">·</span> : null}
+              {installationLabel ? <span aria-hidden="true">·</span> : null}
               <span className="min-w-0 max-w-[120px] truncate">{author}</span>
             </>
           ) : null}

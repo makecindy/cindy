@@ -69,9 +69,9 @@ export function JumpToBottomChip({
           'text-12 font-medium leading-none text-[var(--msg-tool-text)]',
           'transition-colors duration-150 ease-out',
           // hover:用项目通用 list-item hover token(与 SlashCommandPalette /
-          // ModelSelector 等同源)。不用 content-area + alpha,alpha 会让下方
-          // 文字透过来。
-          'hover:bg-[var(--cmd-palette-item-hover)] active:scale-[0.98]',
+          // ModelSelector 等同源)。该 token 可能带 alpha,所以叠在实色底之上,
+          // 不替换 background-color,否则悬浮在正文上时下方文字会透过来。
+          'hover:[background-image:linear-gradient(var(--cmd-palette-item-hover),var(--cmd-palette-item-hover))] active:scale-[0.98]',
           'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[hsl(var(--ring))]',
         )}
       >

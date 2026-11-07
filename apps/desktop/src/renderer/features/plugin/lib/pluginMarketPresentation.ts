@@ -5,7 +5,7 @@
  * public Plugin is installed by default is an installation policy, not a source.
  * An installed Ghost without a matching market record remains local.
  */
-import { isCindyAccountGhostId, type GhostInstallApproval } from '../../../../shared/ghost';
+import type { GhostInstallApproval } from '../../../../shared/ghost';
 import {
   createPluginLogicalIdentity,
   findInstalledGhostByIdentity,
@@ -172,11 +172,11 @@ export function orderPluginCatalogItems<TInstalled extends { id: string }>(
   return ordered;
 }
 
-/** 浏览可看公开目录；安装只在当前会话真能跑这个插件时露出。 */
+/** 目录不按名字推测账号依赖；包确认和运行时根据真实声明处理。 */
 export function canOfferMarketInstall(
   mode: 'signed-out' | 'local' | 'cloud',
-  ghostId: string,
+  _ghostId: string,
 ): boolean {
   if (mode === 'signed-out') return false;
-  return mode === 'cloud' || !isCindyAccountGhostId(ghostId);
+  return true;
 }

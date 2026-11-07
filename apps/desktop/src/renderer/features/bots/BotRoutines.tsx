@@ -52,6 +52,7 @@ export function BotRoutines({
   embedded = false,
   header,
   inheritedRoute,
+  systemSkillsOff = [],
 }: {
   embedded?: boolean;
   inheritedRoute?: BotModelRoute;
@@ -61,6 +62,8 @@ export function BotRoutines({
   beforeLeaveRef?: { current: (() => Promise<boolean>) | null };
   /** Host back button: steps from the editor to the list first (the inline back button is then omitted). */
   backRef?: { current: (() => Promise<boolean>) | null };
+  /** System Skills the owner turned off: their built-in routines do not run and cannot be turned on here. */
+  systemSkillsOff?: readonly string[];
 }) {
   const { confirm } = useConfirmDialog();
   const settingsTarget = useBotSettingsTarget();
@@ -68,6 +71,14 @@ export function BotRoutines({
   const primaryRoute = inheritedRoute ?? (settingsTarget.kind === 'local'
     ? localBots.find((bot) => bot.id === botId)?.capabilities.modelChain[0] : undefined);
   const routinesApi = settingsTarget.routines;
+  // Follow-up and the daily todo check belong to system Skills; off, the host skips them.
+  const skillOffFor = (routine: Routine): 'follow' | 'todo' | null =>
+    routine.builtin === 'follow-up' && systemSkillsOff.includes('follow') ? 'follow'
+      : routine.id.startsWith(TODO_CHECK_ROUTINE_PREFIX) && systemSkillsOff.includes('todo') ? 'todo' : null;
+  const skillOffHint = (routine: Routine) => {
+    const skill = skillOffFor(routine);
+    return skill ? t('bots.systemSkills.offHint', { skill: t(`bots.capabilities.system.items.${skill}.name`) }) : undefined;
+  };
   const navigate = useNavigate();
   const supportsModels = settingsTarget.kind === 'local' || settingsTarget.routineModels === true;
   const supportsDelivery = settingsTarget.kind === 'local' || settingsTarget.routineDelivery === true;
@@ -351,13 +362,14 @@ export function BotRoutines({
             <BuiltinRoutineRow
               key={routine.id}
               routine={routine}
-              disabled={busy}
+              disabled={busy || skillOffFor(routine) !== null}
               onOpen={supportsModels && routine.builtin !== 'nightly-learning' ? () => {
                 setSelected(routine.id);
                 setDraft(structuredClone(routine));
               } : undefined}
-              hint={routine.builtin === 'nightly-learning' && nightly.view?.frequency === 'weekly'
-                ? t('routines.builtinNightlyLearning.hintWeekly') : undefined}
+              hint={skillOffHint(routine)
+                ?? (routine.builtin === 'nightly-learning' && nightly.view?.frequency === 'weekly'
+                  ? t('routines.builtinNightlyLearning.hintWeekly') : undefined)}
               extra={routine.builtin === 'nightly-learning' && nightlyLocal
                 ? <NightlyLearningStatus routine={routine} view={nightly.view} onOpen={() => setNightlyOpen(true)} />
                 : null}
@@ -385,7 +397,7 @@ export function BotRoutines({
                   aria-label={routine.name}
                   className="mt-0.5 shrink-0"
                   checked={routine.enabled}
-                  disabled={busy}
+                  disabled={busy || skillOffFor(routine) !== null}
                   onCheckedChange={(enabled) => void act(() =>
                     // 每天查待办与近况开关走同一个入口，切换后近况跟着刷新。
                     // 远程伙伴没有这个入口，按普通例行任务在伙伴所在的电脑上切换。
@@ -397,6 +409,7 @@ export function BotRoutines({
               </div>
               <RoutineState routine={routine} />
               <RoutineSchedule summaries={routine.triggers.map(triggerSummary)} />
+              {skillOffHint(routine) ? <p className="mt-1 text-12 leading-5 text-[var(--text-secondary)]">{skillOffHint(routine)}</p> : null}
             </div>
           ))}
         </div>

@@ -27,11 +27,13 @@ export type SchedulerRemoteOp =
   | "list"
   | "get"
   | "list-runs"
+  | "create"
   | "update"
   | "pause"
   | "resume"
   | "delete"
-  | "run-now";
+  | "run-now"
+  | "webhook-restore";
 
 export type SchedulerRemoteResult =
   { ok: true; data: unknown } | { ok: false; code: string; message: string };

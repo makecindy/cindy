@@ -261,6 +261,8 @@ export interface PriorUserRoundCost {
   money: RegionalMoney | null;
   costUsd: number;
   hasEstimatedValue: boolean;
+  /** 本轮是该任务（或 /clear 之后）第一条真实用户请求。 */
+  isFirstUserRound?: boolean;
 }
 
 const VALID_ROLES: ReadonlySet<MessageRole> = new Set([
@@ -383,6 +385,8 @@ export function registerMessageIpc(
 
   const historyView = createHistoryViewReader({
     list: readMessagesList,
+    // readMessagesList skips paged imports only for device-link callers (#318).
+    shareScope: () => (isDeviceLinkInvoke() ? 'device-link' : 'local'),
     revision: async () => {
       const current = getCurrentDbClientSnapshot();
       if (!current) throw new Error('DbClient not ready');
@@ -1132,6 +1136,7 @@ export async function commitMessageDeletion(
       error: cleanup.reason instanceof Error ? cleanup.reason.message : String(cleanup.reason),
     });
   }
+
   void recomputePrRefsForSession(sessionId).catch(() => undefined);
 
   // sessions:patched 的消费者只做 shallow merge，不会主动重拉。删除后同步带出 canonical
@@ -1302,6 +1307,7 @@ export function broadcastMessageDeleted(
 export async function rewindPersistedUserMessageAfterClear(
   sessionId: string,
   clientId: string,
+  options?: { discard?: boolean },
 ): Promise<void> {
   const ownerScope = captureOwnerBroadcastScope();
   if (!isOwnerBroadcastScopeCurrent(ownerScope)) return;
@@ -1327,6 +1333,7 @@ export async function rewindPersistedUserMessageAfterClear(
     sessionId,
     clientId,
     rewoundAt,
+    ...(options?.discard ? { discard: true } : {}),
   });
   if (!isOwnerBroadcastScopeCurrent(ownerScope)) return;
   if (updated.changes === 0) return;
@@ -1364,6 +1371,14 @@ export async function rewindPersistedUserMessageAfterClear(
   void recomputePrRefsForSession(sessionId).catch(() => undefined);
 }
 
+export async function purgeRewoundSchedulerPrompts(
+  limit = 100,
+  cursor = 0,
+): Promise<{ deleted: number; sessionIds: string[]; cursor: number | null }> {
+  const ownerScope = captureOwnerBroadcastScope();
+  if (!isOwnerBroadcastScopeCurrent(ownerScope)) return { deleted: 0, sessionIds: [], cursor: null };
+  return getDbClient().tx('message.purgeRewoundSchedulerPrompts', { limit, cursor });
+}
 export async function dismissErrorMessage(
   sessionId: string,
   clientId: string,
@@ -1647,6 +1662,10 @@ export async function updateMessageContent(
   // The correction already committed: settle its original publication even if
   // clear/owner changed or another deletion removed the row during readback.
   if (original) await reconcileAssistantDerivedState(original, dbClient, isCurrent, ownerScope, false);
+  else if (row && (row.role === 'user' || row.role === 'assistant')) {
+    await pendingPrRefWrites.get(dbClient)?.get(row.id);
+    if (isCurrent()) await recomputePrRefsForSession(sessionId, { dbClient, isCurrent });
+  }
   return row ? messageToCamel(row) : null;
 }
 
@@ -2115,7 +2134,9 @@ export async function patchMessageAgentMetaWithResult(
   // 损坏的 JSON 以 {} 为底重建(补丁字段仍写入,旧字段无法挽救)。
   const previous = parseAgentMetaRecord(rows[0].agentMeta) ?? {};
   const next = { ...previous, ...patch };
-  await updateAgentMeta(sessionId, clientId, JSON.stringify(next));
+  // Keep the read and write on the same owner even if login changes across await.
+  await db.update(messages).set({ agentMeta: JSON.stringify(next) })
+    .where(and(eq(messages.sessionId, sessionId), eq(messages.clientId, clientId)));
   return { previous, next };
 }
 
@@ -2248,8 +2269,13 @@ export async function readPriorUserRoundCost(
       ),
     )
     .orderBy(desc(messages.createdAt), desc(messageRowid));
-  const boundary = userRows.find((row) => !isAutoResumeUserMessage(row.agentMeta));
+  const realUserRows = userRows.filter((row) => !isAutoResumeUserMessage(row.agentMeta));
+  const boundary = realUserRows[0];
   if (!boundary) return { money: null, costUsd: 0, hasEstimatedValue: false };
+  // 运行中插话（delivery: 'steer'）与界面一样归在同一轮，不算新的用户请求。
+  const isFirstUserRound =
+    realUserRows.filter((row) => parseAgentMetaRecord(row.agentMeta)?.delivery !== 'steer')
+      .length === 1;
 
   const afterBoundary = or(
     gt(messages.createdAt, boundary.createdAt),
@@ -2309,6 +2335,7 @@ export async function readPriorUserRoundCost(
     costUsd: money?.currency === 'USD' ? money.amount : 0,
     hasEstimatedValue,
     ...(additionalCosts.length ? { additionalCosts } : {}),
+    ...(isFirstUserRound ? { isFirstUserRound } : {}),
   };
 }
 

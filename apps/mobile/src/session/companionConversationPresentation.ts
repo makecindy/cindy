@@ -7,6 +7,18 @@ import type { MobileMessageRenderItem, MobileWorkGroupItem, MobileWorkChildItem 
 const expandWorkGroups = (items: readonly MobileMessageRenderItem[]): MobileMessageRenderItem[] =>
   items.flatMap(item => item.type === 'work_group' ? expandWorkGroups(item.children) : [item]);
 
+/** Match Desktop: keep internal model prose in storage, with traces and work still accessible. */
+function withoutPrivateProse<T extends MobileMessageRenderItem>(items: readonly T[]): T[] {
+  return items.filter(item => !(item.type === 'message' && item.message.kind === 'assistant'
+    && !item.message.systemCardType && !item.message.companion
+    && item.message.source.agentMeta?.botPrivateReply === true)).map(item => {
+    if (item.type !== 'work_group') return item;
+    const children = withoutPrivateProse(item.children);
+    return children.length === item.children.length && children.every((child, index) => child === item.children[index])
+      ? item : { ...item, children };
+  });
+}
+
 /** Lift addressed replies without destroying the process tree or its lazy loader. */
 function liftReplies(group: MobileWorkGroupItem, isReply: (item: MobileMessageRenderItem) => boolean): MobileMessageRenderItem[] {
   if (!group.children.some(isReply)) return [group];
@@ -42,6 +54,7 @@ function liftReplies(group: MobileWorkGroupItem, isReply: (item: MobileMessageRe
 
 /** Presentation only. The host's persisted messages and lazy history remain intact. */
 export function companionConversationItems(items: readonly MobileMessageRenderItem[]): MobileMessageRenderItem[] {
+  items = withoutPrivateProse(items);
   // The main timeline folds earlier background-wake seals into work groups; teammate chats
   // still show every sealed reply, so find sealed runs with tools/thinking as boundaries.
   const sealed = new Set<string>();

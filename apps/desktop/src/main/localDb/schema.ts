@@ -1107,6 +1107,10 @@ export const sessionPrRefs = sqliteTable(
     sessionId: text('session_id')
       .notNull()
       .references(() => sessions.id, { onDelete: 'cascade' }),
+    provider: text('provider', { enum: ['github', 'gitlab'] })
+      .notNull()
+      .default('github'),
+    host: text('host').notNull().default('github.com'),
     owner: text('owner').notNull(),
     repo: text('repo').notNull(),
     prNumber: integer('pr_number').notNull(),
@@ -1116,10 +1120,19 @@ export const sessionPrRefs = sqliteTable(
     pinned: integer('pinned', { mode: 'boolean' }).notNull().default(false),
     priority: integer('priority').notNull().default(0),
     manuallyAdded: integer('manually_added', { mode: 'boolean' }).notNull().default(false),
+    associationSource: text('association_source').notNull().default('legacy'),
+    associationOrigin: text('association_origin'),
     removedAt: integer('removed_at'),
   },
   (t) => ({
-    uniqRef: uniqueIndex('uniq_session_pr_refs').on(t.sessionId, t.owner, t.repo, t.prNumber),
+    uniqRef: uniqueIndex('uniq_session_pr_refs').on(
+      t.sessionId,
+      t.provider,
+      t.host,
+      t.owner,
+      t.repo,
+      t.prNumber,
+    ),
     idxSessionLastSeen: index('idx_session_pr_refs_session_last_seen').on(
       t.sessionId,
       t.lastSeenAt,
@@ -1458,6 +1471,8 @@ export const schedules = sqliteTable(
       .notNull()
       .default('agent'),
     scriptConfig: text('script_config'),
+    /** JSON ScheduleWebhookTrigger；NULL = 未开启。签名密钥不进数据库。 */
+    webhookTrigger: text('webhook_trigger'),
     source: text('source').default('user'),
     projectConfigId: text('project_config_id'),
     /**
@@ -1723,6 +1738,8 @@ export const scheduleRuns = sqliteTable(
     resultText: text('result_text'),
     /** 前置检查一次执行的结构化 JSON 结果；NULL 表示本轮未配置/未执行检查。 */
     preRunHookResult: text('pre_run_hook_result'),
+    /** 本轮触发来源；NULL = 定时或手动。 */
+    triggerSource: text('trigger_source'),
     readAt: integer('read_at'),
     /**
      * In-flight 心跳时间戳（毫秒）——跨实例的"仍有活实例在跑"租约信号。
@@ -1898,6 +1915,19 @@ export const dailySpend = sqliteTable(
   }),
 );
 
+/** Immutable request receipts; insertion and aggregate increments share one transaction. */
+export const piUsageReceipts = sqliteTable('pi_usage_receipts', {
+  sessionId: text('session_id').notNull(),
+  settlementId: text('settlement_id').notNull(),
+  receiptId: text('receipt_id').notNull(),
+  recordedAt: integer('recorded_at').notNull(),
+  priced: integer('priced', { mode: 'boolean' }).notNull().default(false),
+  pricingPayload: text('pricing_payload'),
+}, t => ({
+  pk: primaryKey({ columns: [t.sessionId, t.settlementId, t.receiptId] }),
+  pending: index('pi_usage_receipts_pending_idx').on(t.priced),
+}));
+
 /**
  * 每日按模型用量聚合表 (daily_model_usage) — 支撑首页用量仪表盘的"按模型拆分"。
  *
@@ -1906,7 +1936,7 @@ export const dailySpend = sqliteTable(
  *     costUsd 为 SDK 实报美元。
  *   - codex: done.data.usage 的 per-turn token 数 (SDK 不报 cost, costUsd 恒 0,
  *     美元在读取时用 modelPricing 价格表估算 — 价格会变, 不在写入时冻结)。
- *   - pi: done.data.usage 的 per-turn token/cache 数；订阅路由读时估值，API 路由写时记费。
+ *   - pi: 每个请求的 usage 回执增量入账，终态重放补漏；旧事件仍按 turn 入账。
  *
  * 与 daily_spend 的关系: daily_spend 仍是日总额 canonical 来源 (热力图 / streak 用它);
  * 本表只做按模型的拆分展示, 两边求和因舍入可能有微小差异 — 设计取舍。
@@ -2481,3 +2511,10 @@ export const pluginTaskRequests = sqliteTable('plugin_task_requests', {
   uniqueIndex('plugin_task_request_key').on(table.pluginId, table.operation, table.targetId, table.requestKey),
   index('plugin_task_target').on(table.targetId, table.pluginId),
 ]);
+
+/** Account-local observed facts and independent consumer cursors, never credentials. */
+export const githubObservations = sqliteTable('github_observations', {
+  key: text('key').primaryKey(),
+  state: text('state').notNull(),
+  updatedAt: integer('updated_at').notNull(),
+});

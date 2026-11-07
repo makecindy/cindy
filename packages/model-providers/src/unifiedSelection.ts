@@ -63,6 +63,7 @@ import {
 import { deriveModelList } from './modelList.js';
 import { modelProtocolComparison } from './modelProtocol.js';
 import { effortRank } from './effortResolution.js';
+import { markedSelectionAliasGroups, type SelectionAliasPreferences } from './selectionAliasGroups.js';
 import {
   CHATGPT_MODEL_PREFIX,
   XAI_MODEL_PREFIX,
@@ -193,6 +194,18 @@ export function findCatalogModel(
     if (found) return found;
   }
   return undefined;
+}
+
+/** Resolve one renamed bridge ID for a saved session. Ambiguous catalogs stay unchanged. */
+export function uniqueRenamedSessionModelId(
+  provider: Provider | ProviderView | undefined,
+  savedModelId: string,
+  agent: AgentKind,
+): string | null {
+  if (!provider || getModel(provider, savedModelId, agent)) return null;
+  const matches = (provider.models[agent] ?? []).filter(candidate =>
+    candidate.id !== savedModelId && unifiedModelKeyId(candidate.id) === savedModelId);
+  return matches.length === 1 ? matches[0]!.id : null;
 }
 
 /**
@@ -444,6 +457,7 @@ export interface UnifiedAgentCapability extends Pick<CatalogModel, 'displayPrici
    * 一律用它,不要用行的归一化 `modelId`。
    */
   wireModelId: string;
+  discoveredSource?: import("./modelSource.js").DiscoveredModelSource;
   /** 该 (provider, agent) 条目声明的思考档;空数组 = 不可调。 */
   efforts: readonly Effort[];
   /**
@@ -506,6 +520,7 @@ function capabilityOf(
   return {
     agent,
     wireModelId: model.id,
+    ...(model.discoveredSource ? { discoveredSource: model.discoveredSource } : {}),
     ...(model.displayPricing && model.currency ? {
       displayPricing: model.displayPricing, currency: model.currency, costDiscount: model.costDiscount,
     } : {}),
@@ -543,6 +558,11 @@ export function resolveAgentCapability(
 
 /** 联合列表的一行:一个逻辑模型 (provider, 归一化 modelId),横跨它能用的所有引擎。 */
 export interface UnifiedModelEntry {
+  /** Scoped preference key keeps ambiguous legacy bridge preferences off another route. */
+  enginePreferenceId?: string;
+  legacyEnginePreferenceId?: string;
+  /** Exact original rows, retained for history, favorite targets and preference read/write keys. */
+  aliasEntries?: readonly UnifiedModelEntry[];
   providerId: string;
   /** ★**归一化 id**(行的稳定身份 / override / 收藏 key)。发请求请用 `capabilities[agent].wireModelId`。 */
   modelId: string;
@@ -572,6 +592,8 @@ export interface UnifiedModelEntry {
 }
 
 export interface UnifiedModelEntriesOptions {
+  /** Omitted = preserve separate alias rows; no caller may discard uninspected preferences. */
+  aliasPreferences?: (providerId: string, agent: AgentKind, modelId: string) => SelectionAliasPreferences;
   providers: readonly ProviderView[];
   /** 参与联合的引擎;缺省 = 全部三个。 */
   agents?: readonly AgentKind[];
@@ -682,6 +704,21 @@ export function unifiedModelEntries(opts: UnifiedModelEntriesOptions): UnifiedMo
      */
     kept: boolean;
   }
+  const magpieProviders = new Set<string>();
+  const legacyMagpieIds = new Map<string, Map<string, Set<string>>>();
+  for (const provider of providers) {
+    const models = Object.values(provider.models).flatMap(models => models ?? []);
+    if (!models.some(model => model.opaqueModelId || model.discoveredSource?.kind === 'magpie')) continue;
+    magpieProviders.add(provider.id);
+    const aliases = new Map<string, Set<string>>();
+    for (const model of models) {
+      const legacyId = unifiedModelKeyId(model.id);
+      const ids = aliases.get(legacyId) ?? new Set<string>();
+      ids.add(model.id);
+      aliases.set(legacyId, ids);
+    }
+    legacyMagpieIds.set(provider.id, aliases);
+  }
   const drafts = new Map<string, Draft>();
   const order: string[] = [];
 
@@ -760,7 +797,8 @@ export function unifiedModelEntries(opts: UnifiedModelEntriesOptions): UnifiedMo
       includePaymentRequired,
     });
     for (const row of rows) {
-      const keyModelId = unifiedModelKeyId(row.id);
+      // Gateway prefixes identify distinct routes, not Cindy bridge wrappers.
+      const keyModelId = magpieProviders.has(row.sourceProviderId) ? row.id : unifiedModelKeyId(row.id);
       const key = entryKey(row.sourceProviderId, keyModelId);
       const kept = isKeptRow(agent, row.sourceProviderId, row.id);
       const hit = drafts.get(key);
@@ -830,6 +868,11 @@ export function unifiedModelEntries(opts: UnifiedModelEntriesOptions): UnifiedMo
     out.push({
       providerId: draft.providerId,
       modelId: draft.keyModelId,
+      ...(magpieProviders.has(draft.providerId) ? {
+        enginePreferenceId: JSON.stringify(['magpie-route', draft.keyModelId]),
+        ...(legacyMagpieIds.get(draft.providerId)?.get(unifiedModelKeyId(draft.keyModelId))?.size === 1
+          ? { legacyEnginePreferenceId: unifiedModelKeyId(draft.keyModelId) } : {}),
+      } : {}),
       displayName: display?.name ?? draft.keyModelId,
       ...(display?.description !== undefined ? { description: display.description } : {}),
       ...(display?.group !== undefined ? { group: display.group } : {}),
@@ -842,7 +885,35 @@ export function unifiedModelEntries(opts: UnifiedModelEntriesOptions): UnifiedMo
       capabilities,
     });
   }
-  return out;
+  return mergeAliasEntries(out, opts);
+}
+
+function mergeAliasEntries(entries: UnifiedModelEntry[], options: UnifiedModelEntriesOptions): UnifiedModelEntry[] {
+  if (!options.aliasPreferences) return entries;
+  const groups = options.providers.flatMap((provider) => markedSelectionAliasGroups(provider,
+    (agent, modelId) => options.aliasPreferences!(provider.id, agent, modelId)));
+  const emitted = new Set<string>();
+  return entries.flatMap((entry) => {
+    const group = groups.find((g) => g.providerId === entry.providerId &&
+      Object.values(g.members).some((models) => models?.some((m) => m.id === entry.modelId)));
+    if (!group) return [entry];
+    const key = `${group.providerId}:${group.keyModelId}`;
+    if (emitted.has(key)) return [];
+    emitted.add(key);
+    const aliases = entries.filter((candidate) => candidate.providerId === group.providerId &&
+      Object.values(group.members).some((models) => models?.some((m) => m.id === candidate.modelId)));
+    if (aliases.length < 2) return aliases;
+    const preferred = aliases.find((a) => a.modelId === group.keyModelId) ?? aliases[0];
+    const capabilities: UnifiedModelEntry['capabilities'] = {};
+    for (const agent of UNIFIED_AGENT_PRIORITY) {
+      const kept = options.keepModel?.agent === agent && options.keepModel.providerId === group.providerId
+        ? aliases.find((a) => a.capabilities[agent]?.wireModelId === options.keepModel!.modelId) : undefined;
+      const source = kept ?? (preferred.capabilities[agent] ? preferred : aliases.find((a) => a.capabilities[agent]));
+      if (source?.capabilities[agent]) capabilities[agent] = source.capabilities[agent];
+    }
+    const candidates = UNIFIED_AGENT_PRIORITY.filter((agent) => capabilities[agent]);
+    return [{ ...preferred, modelId: group.keyModelId, candidates, capabilities, aliasEntries: aliases }];
+  });
 }
 
 /**
@@ -883,4 +954,33 @@ export function sortEntriesForAgent(
 ): UnifiedModelEntry[] {
   const { native, compatible } = partitionEntriesByNativeAgent(entries, targetAgent);
   return [...native, ...compatible];
+}
+
+/** Restore stored shortcuts only when the catalog proves their exact route.
+ * Legacy normalized gateway IDs may collide with a hidden sibling. */
+export function resolveStoredModelEntry(
+  entries: readonly UnifiedModelEntry[], providerId: string, modelId: string,
+): UnifiedModelEntry | undefined {
+  const candidates = entries.filter(entry => entry.providerId === providerId);
+  const explicit = candidates.find(entry => entry.enginePreferenceId === modelId);
+  if (explicit) return explicit;
+  const legacy = candidates.filter(entry => entry.enginePreferenceId
+    && unifiedModelKeyId(entry.modelId) === modelId);
+  if (legacy.length) return legacy.length === 1 && legacy[0].legacyEnginePreferenceId === modelId
+    ? legacy[0] : undefined;
+  return candidates.find(entry => entry.modelId === modelId)
+    ?? candidates.find(entry => Object.values(entry.capabilities).some(capability => capability?.wireModelId === modelId))
+    // Stored shortcuts still name real members, even when a new pick uses the preferred ID.
+    ?? candidates.find(entry => entry.aliasEntries &&
+      resolveStoredModelEntry(entry.aliasEntries, providerId, modelId) !== undefined);
+}
+
+/** Display an offline shortcut without exposing its storage namespace. */
+export function displayNameOfStoredModelId(modelId: string): string {
+  try {
+    const parts: unknown = JSON.parse(modelId);
+    if (Array.isArray(parts) && parts.length === 2 && parts[0] === 'magpie-route'
+      && typeof parts[1] === 'string' && parts[1]) return parts[1];
+  } catch { /* Ordinary model IDs are already displayable. */ }
+  return modelId;
 }
