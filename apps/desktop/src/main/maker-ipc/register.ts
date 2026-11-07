@@ -1467,7 +1467,7 @@ import {
   createProjectSkillPreparation,
   toAgentSkillListFailure,
 } from './agentSkillListIpcBoundary.js';
-import { paletteSkillListReuse } from './paletteSkillListCache.js';
+import { paletteSkillListReuse, shouldCachePaletteSkillListing } from './paletteSkillListCache.js';
 import {
   captureDataOwnerBroadcastScope,
   isDataOwnerBroadcastScopeCurrent,
@@ -8492,6 +8492,9 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
           skillParams.remoteHostId ?? null,
         ]);
         const ownerScope = activeOwnerScopeKey();
+        // A Device Link caller reads a roster that skipped local project-link
+        // preparation, so neither direction of the cache may mix with a local palette.
+        const readOnlyRemote = isDeviceLinkInvoke();
         // During an owner transition `activeOwnerScopeKey()` still reports the
         // outgoing owner, so a hit here would hand its plugin Skills to the next one
         // without the ownership check a rescan performs. Fail closed and rescan.
@@ -8500,7 +8503,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
           // A forced reload drops every context's entry, not only this caller's:
           // another session would otherwise keep serving the pre-change roster.
           paletteSkillListReuse.clear();
-        } else if (!boundaryPending) {
+        } else if (!boundaryPending && !readOnlyRemote) {
           const reused = paletteSkillListReuse.read(reuseKey);
           if (reused) return reused;
         }
@@ -8540,15 +8543,16 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
             (source) => !disabled.has(skillActivationKey(source)),
           ),
         };
-        // A listing assembled across an owner switch, or by a scan that started
-        // before a `forceReload` cleared the snapshot, must not repopulate it; a
-        // partial scan stays uncached so the unreadable root is retried on the
-        // next open instead of staying missing for the whole window.
+        // `write` also drops a scan that started before a `forceReload` cleared the
+        // snapshot, so a stale scan cannot repopulate it.
         if (
-          preparationClean
-          && !isAppSessionBoundaryPending()
-          && activeOwnerScopeKey() === ownerScope
-          && !result.errors?.length
+          shouldCachePaletteSkillListing({
+            preparationClean,
+            scanClean: !result.errors?.length,
+            ownerStable: activeOwnerScopeKey() === ownerScope,
+            boundaryPending: isAppSessionBoundaryPending(),
+            readOnlyRemote,
+          })
         ) {
           paletteSkillListReuse.write(reuseKey, listing, scanGeneration);
         }
