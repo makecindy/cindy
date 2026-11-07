@@ -96,8 +96,16 @@ export function extractToolResultDiagnostics(content: unknown, unwrapMcp = true)
       });
     }
   }
-  // Truncated card results remain valid JSON so presentation references survive.
-  if (root.truncated === true && (typeof root.xdt_card_id === 'string' || typeof root.xdt_anchor_card_id === 'string')) {
+  // Truncated persist summaries remain valid JSON so presentation references survive.
+  // File-only summaries carry no card id, so the shape decides the branch: reading
+  // only card summaries dropped their diagnostics when the result was archived.
+  if (root.truncated === true && (
+    typeof root.xdt_card_id === 'string'
+    || typeof root.xdt_anchor_card_id === 'string'
+    || root.diagnostics !== undefined
+    || Array.isArray(root._xdt_model_files)
+    || Array.isArray(root.xdt_media_produced)
+  )) {
     return sanitizeToolResultDiagnostics(root.diagnostics) ?? sanitizeToolResultDiagnostics({ ok: root.ok });
   }
   const data = root.tool !== undefined || root.errorCode !== undefined ? object(root.data) : root;

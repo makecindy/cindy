@@ -109,6 +109,36 @@ describe('capToolResultTextForPersist', () => {
     expect((payload._xdt_model_files ?? []).length).toBeLessThan(files.length);
   });
 
+  // 诊断保留：纯文件摘要没有 card id，归档时也必须能读回它的 diagnostics。
+  it('keeps diagnostics readable for a summary that only declares files', () => {
+    const url = 'xdt-file:///out/report.pdf';
+    const text = JSON.stringify({ ok: true, _xdt_model_files: [{ url }],
+      afterSnapshot: { ok: false, errorCode: 'ACT_INVALID_REQUEST', message: 'PRIVATE' }, body: 'd'.repeat(20000) });
+    const stored = capToolResultTextForPersist(text);
+    expect(extractPayloadToolResultFiles(stored).map((file) => file.url)).toEqual([url]);
+    expect(extractToolResultDiagnostics(stored))
+      .toEqual({ ok: true, afterSnapshotOk: false, afterSnapshotErrorCode: 'ACT_INVALID_REQUEST' });
+  });
+
+  // `ok` 只是附带字段：没有卡片、文件或否决信号时，普通结果必须保留原有的前 8KB。
+  it('keeps the first 8KB for an ordinary oversized result that only reports ok', () => {
+    const text = JSON.stringify({ ok: true, body: 'k'.repeat(20000) });
+    const stored = capToolResultTextForPersist(text);
+    expect(stored.length).toBe(TOOL_RESULT_PERSIST_CONTENT_LIMIT);
+    expect(stored.endsWith(TOOL_RESULT_PERSIST_TRUNCATION_SUFFIX)).toBe(true);
+    expect(stored.startsWith('{"ok":true,"body":"kkk')).toBe(true);
+  });
+
+  it('keeps the first 8KB when the body only mentions a declaration field', () => {
+    const text = JSON.stringify({ ok: true, body: `${'m'.repeat(9000)} xdt_media_produced` });
+    expect(capToolResultTextForPersist(text).endsWith(TOOL_RESULT_PERSIST_TRUNCATION_SUFFIX)).toBe(true);
+  });
+
+  it('keeps the first 8KB when the declared file arrays are empty', () => {
+    const text = JSON.stringify({ ok: true, xdt_media_produced: [], _xdt_model_files: [], body: 'e'.repeat(20000) });
+    expect(capToolResultTextForPersist(text).endsWith(TOOL_RESULT_PERSIST_TRUNCATION_SUFFIX)).toBe(true);
+  });
+
   it('still truncates payloads that declare nothing', () => {
     const text = JSON.stringify({ body: 'w'.repeat(20000) });
     const stored = capToolResultTextForPersist(text);
