@@ -1,4 +1,7 @@
 import { fileURLToPath } from 'node:url';
+import { createRequire } from 'node:module';
+import { dirname } from 'node:path';
+const require = createRequire(import.meta.url);
 
 import { defineConfig } from 'vitest/config';
 
@@ -24,7 +27,13 @@ export default defineConfig({
     },
   ],
   resolve: {
+    dedupe: ['react', 'react-dom'],
     alias: {
+      // Resolve shared dependencies against the mobile React pair, as Metro does.
+      react: dirname(require.resolve('react/package.json')),
+      'react-dom': dirname(require.resolve('react-dom/package.json')),
+      'use-sync-external-store/shim': require.resolve('react'),
+      '@testing-library/react': require.resolve('@testing-library/react/dist/@testing-library/react.esm.js'),
       // fileURLToPath 而非 URL.pathname:后者会把路径里的空格等字符百分号编码
       // (checkout 路径含空格时 alias 指向不存在的 %20 路径,255 个测试文件整体
       // TEST_COLLECT_FAILED);无空格路径下两者逐字节一致,CI 行为零变化。
@@ -39,6 +48,7 @@ export default defineConfig({
     },
   },
   test: {
+    server: { deps: { inline: ['react-i18next', '@testing-library/react'] } },
     environment: 'node',
     // The release-script tests spawn a real bash + shell script + curl/python
     // shims; on Windows (Git Bash) that process churn is slow and, under the

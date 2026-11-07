@@ -1,3 +1,4 @@
+import type { ScrollViewInstance } from 'react-native';
 import { deviceDisplayName } from '@/device-link/deviceName';
 import { PluginSetupNativeActions } from '@/plugins/PluginSetupNativeActions';
 import { sha256 } from '@noble/hashes/sha256';
@@ -1484,7 +1485,7 @@ function PlanReviewCard({
   const [feedback, setFeedback] = useState(() => readPlanReviewDraft(requestId)?.feedback ?? '');
   const [feedbackOpen, setFeedbackOpen] = useState(() => readPlanReviewDraft(requestId)?.feedbackOpen ?? false);
   const [activeOutlineId, setActiveOutlineId] = useState<string | null>(null);
-  const previewScrollRef = useRef<ScrollView | null>(null);
+  const previewScrollRef = useRef<ScrollViewInstance | null>(null);
   const skipNextPlanDraftSaveRef = useRef(false);
   const filePath = planReviewFilePath(item.request);
   const originalPlan = planReviewPlan(item.request);

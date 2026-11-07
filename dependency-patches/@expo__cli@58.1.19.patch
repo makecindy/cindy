@@ -1,5 +1,5 @@
 diff --git a/build/src/start/doctor/apple/SimulatorAppPrerequisite.js b/build/src/start/doctor/apple/SimulatorAppPrerequisite.js
-index 6d9de9f08cc0fda6b828ecdf996785b331a3880c..cd41a0595b5f10b25284b6dbc0e5779f69d5702d 100644
+index 012d13d..bc8a39c 100644
 --- a/build/src/start/doctor/apple/SimulatorAppPrerequisite.js
 +++ b/build/src/start/doctor/apple/SimulatorAppPrerequisite.js
 @@ -8,13 +8,7 @@ Object.defineProperty(exports, "SimulatorAppPrerequisite", {
@@ -17,9 +17,9 @@ index 6d9de9f08cc0fda6b828ecdf996785b331a3880c..cd41a0595b5f10b25284b6dbc0e5779f
  function _spawnasync() {
      const data = /*#__PURE__*/ _interop_require_default(require("@expo/spawn-async"));
      _spawnasync = function() {
-@@ -43,27 +37,7 @@ const XCODE_SIMULATOR_PATH = './Applications/Simulator.app/Contents/Info.plist';
+@@ -43,29 +37,7 @@ const XCODE_SIMULATOR_PATH = './Applications/Simulator.app/Contents/Info.plist';
  class SimulatorAppPrerequisite extends _Prerequisite.Prerequisite {
-     static #_ = this.instance = new SimulatorAppPrerequisite();
+     static instance = new SimulatorAppPrerequisite();
      async assertImplementation() {
 -        // Xcode 27 replaces Simulator with DeviceHub
 -        // See: https://developer.apple.com/documentation/xcode/device-hub
@@ -29,7 +29,9 @@ index 6d9de9f08cc0fda6b828ecdf996785b331a3880c..cd41a0595b5f10b25284b6dbc0e5779f
 -        });
 -        if (!appId) {
 -            const xcodePath = await getXcodeSelectPath();
--            debug('Xcode select path: %s', xcodePath);
+-            (0, _events.debugEvent)('simulator_xcode_select_path', {
+-                path: xcodePath
+-            });
 -            if (xcodePath) {
 -                appId = await getXcodeInfoPlistBundleId(_nodepath().default.join(xcodePath, XCODE_SIMULATOR_PATH)).then((appId)=>{
 -                    return appId || getXcodeInfoPlistBundleId(_nodepath().default.join(xcodePath, XCODE_DEVICE_HUB_PATH));
@@ -43,10 +45,10 @@ index 6d9de9f08cc0fda6b828ecdf996785b331a3880c..cd41a0595b5f10b25284b6dbc0e5779f
 -            throw new _Prerequisite.PrerequisiteCommandError('SIMULATOR_APP', `Device Hub or Simulator is installed but is identified as '${appId}'; don't know what that is.`);
 -        }
 +        const { appId } = await getSimulatorAppAsync();
-         debug('Xcode simulator app id: %s', appId);
-         try {
-             // make sure we can run simctl
-@@ -77,15 +51,21 @@ class SimulatorAppPrerequisite extends _Prerequisite.Prerequisite {
+         (0, _events.debugEvent)('simulator_app_id', {
+             appId
+         });
+@@ -81,15 +53,21 @@ class SimulatorAppPrerequisite extends _Prerequisite.Prerequisite {
          }
      }
  }
@@ -77,10 +79,10 @@ index 6d9de9f08cc0fda6b828ecdf996785b331a3880c..cd41a0595b5f10b25284b6dbc0e5779f
  /**
   * Read the Info.plist of an app within Xcode and return the bundle ID.
 diff --git a/build/src/start/platforms/ios/AppleDeviceManager.js b/build/src/start/platforms/ios/AppleDeviceManager.js
-index 21085b0d87f2e04e06f2e3d5b023a5f10f9f06a5..fb9e0d110bebb386cf057f1c82f894297b97fbf4 100644
+index 840d0ce..8824852 100644
 --- a/build/src/start/platforms/ios/AppleDeviceManager.js
 +++ b/build/src/start/platforms/ios/AppleDeviceManager.js
-@@ -272,14 +272,7 @@ class AppleDeviceManager extends _DeviceManager.DeviceManager {
+@@ -278,14 +278,7 @@ class AppleDeviceManager extends _DeviceManager.DeviceManager {
          // If we're in interactive mode, we can attempt to focus the Simulator app.
          // In non-interactive mode, we should assume this is an agent and not attempt to focus the Simulator app since it doesn't need focus.
          if ((0, _interactive.isInteractive)()) {
@@ -97,7 +99,7 @@ index 21085b0d87f2e04e06f2e3d5b023a5f10f9f06a5..fb9e0d110bebb386cf057f1c82f89429
      }
      getExpoGoAppId() {
 diff --git a/build/src/start/platforms/ios/ensureSimulatorAppRunning.js b/build/src/start/platforms/ios/ensureSimulatorAppRunning.js
-index 0391f6caac7cc00de8993eeee133f54d3b57e08e..fb160713e1f33a76032c8360f44e50a107347905 100644
+index 1ab473e..fb16071 100644
 --- a/build/src/start/platforms/ios/ensureSimulatorAppRunning.js
 +++ b/build/src/start/platforms/ios/ensureSimulatorAppRunning.js
 @@ -25,6 +25,8 @@ function _spawnasync() {

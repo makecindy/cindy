@@ -1,3 +1,4 @@
+import type { ViewInstance } from 'react-native';
 /**
  * HomeChromeDrawer —— 首页左上角系统菜单。
  *
@@ -142,7 +143,7 @@ export function HomeChromeDrawer({
     onClosedRef.current?.();
   }, [mounted]);
 
-  const settingsButtonRef = useRef<View>(null);
+  const settingsButtonRef = useRef<ViewInstance>(null);
   useEffect(() => {
     if (!open) return;
     const timer = setTimeout(() => {

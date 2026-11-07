@@ -453,7 +453,7 @@ describe('mobile session composer desktop-first surface', () => {
     expect(source).toContain('testID="session.voiceMicCaret"');
     expect(sharedSource).toContain('export function VoiceMicWaveCaret');
     expect(source).toContain('const composerInputRef = useRef<ComposerRichInputHandle | null>(null);');
-    expect(source).toContain('const voiceDraftScrollRef = useRef<ScrollView>(null);');
+    expect(source).toContain('const voiceDraftScrollRef = useRef<ScrollViewInstance>(null);');
     expect(composerInputSource).toContain('ref={composerInputRef}');
     expect(composerInputSource).not.toContain('inputRef={composerInputRef}');
     expect(sharedSource).toContain('ref={inputRef as never}');

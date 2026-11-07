@@ -62,15 +62,14 @@
       "harmonyos-sans-sc-webfont-splitted": "dependency-patches/harmonyos-sans-sc-webfont-splitted.patch",
       "react-native@0.85.3": "dependency-patches/react-native@0.85.3.patch",
       "react-native-uitextview@2.2.0": "dependency-patches/react-native-uitextview@2.2.0.patch",
-      "react-native-webview@13.16.1": "dependency-patches/react-native-webview@13.16.1.patch",
-      "expo-image-manipulator@57.0.14": "dependency-patches/expo-image-manipulator@57.0.14.patch",
       "expo-paste-input@0.2.2": "dependency-patches/expo-paste-input@0.2.2.patch",
       "rollup@4.62.2": "dependency-patches/rollup@4.62.2.patch",
-      "@expo/cli@57.0.25": "dependency-patches/@expo__cli@57.0.25.patch",
-      "react-native-screens@4.26.2": "dependency-patches/react-native-screens@4.26.2.patch",
-      "expo-router@57.0.17": "dependency-patches/expo-router@57.0.17.patch",
-      "react-native-gesture-handler@2.32.0": "dependency-patches/react-native-gesture-handler@2.32.0.patch",
-      "expo-modules-core@57.0.18": "dependency-patches/expo-modules-core@57.0.18.patch"
+      "react-native-webview@14.0.1": "dependency-patches/react-native-webview@14.0.1.patch",
+      "@expo/cli@58.1.19": "dependency-patches/@expo__cli@58.1.19.patch",
+      "react-native-screens@4.30.1": "dependency-patches/react-native-screens@4.30.1.patch",
+      "expo-router@58.0.30": "dependency-patches/expo-router@58.0.30.patch",
+      "react-native-gesture-handler@3.3.0": "dependency-patches/react-native-gesture-handler@3.3.0.patch",
+      "expo-modules-core@58.0.30": "dependency-patches/expo-modules-core@58.0.30.patch"
     },
     "allowUnusedPatches": true
   },
