@@ -454,7 +454,17 @@ export class BlueBubblesIM extends BaseIM implements TextChannelIM {
     const timer = setTimeout(pending.cancel, timeoutMs);
     this.pendingReplies.set(chatId, pending);
     if (shared) void shared.result.then(resolve, reject);
-    try { await this.sendText(chatId, prompt); return await result; }
+    try {
+      try { await this.sendText(chatId, prompt); }
+      catch (error) {
+        if (!shared) throw error;
+        // A failed presentation is not a denial. The shared Desktop/Mobile
+        // request owns its lifecycle; remove this failed channel waiter.
+        clearTimeout(timer);
+        if (this.pendingReplies.get(chatId) === pending) this.pendingReplies.delete(chatId);
+      }
+      return await result;
+    }
     finally {
       clearTimeout(timer);
       if (this.pendingReplies.get(chatId) === pending) this.pendingReplies.delete(chatId);

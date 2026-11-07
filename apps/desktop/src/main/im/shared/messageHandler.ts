@@ -322,7 +322,7 @@ export function createMessageHandler(
     };
 
     // iMessage participation mode applies before any attachment notice.
-    if (channel === 'imessage' && await skipAmbient()) return;
+    if (channel === 'imessage' && event.ambient === true && adapter.ambientTurnGate && await skipAmbient()) return;
 
     const hasContent = event.text.length > 0 || event.attachments.length > 0;
 
@@ -368,7 +368,7 @@ export function createMessageHandler(
     };
     if (!event.delivery) await notifyUnsupported();
 
-    if (channel !== 'imessage' && await skipAmbient()) return;
+    if (channel !== 'imessage' && event.ambient === true && adapter.ambientTurnGate && await skipAmbient()) return;
 
     // ── invoke agent ────────────────────────────────────────────────────────
     // 本条的渠道来源事实(只进模型正文); 取不到按"不写说明"降级, 不阻断消息。与下面的

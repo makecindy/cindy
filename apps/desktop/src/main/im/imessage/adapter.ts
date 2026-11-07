@@ -91,7 +91,8 @@ export function wireIMessageOrchestrator(im: BlueBubblesIM, config: ImOrchestrat
     handleTextInteraction: (userId, request, interactionOptions) => {
       // Only the configured owner can answer permissions, including member-originated turns.
       const target = request.kind === 'permission' ? im.getOwnerUserId() : userId;
-      if (!target) return Promise.resolve({ kind: 'permission', behavior: 'deny', reason: 'imessage_owner_not_connected' });
+      if (!target) return interactionOptions?.sharedPermission?.result
+        ?? Promise.resolve({ kind: 'permission', behavior: 'deny', reason: 'imessage_owner_not_connected' });
       return handleDingTalkTextInteraction(im, target, request, interactionOptions);
     },
   };
