@@ -31,6 +31,16 @@ function config(file) {
   check(typeof c.automatic.mock === 'boolean' && (!c.automatic.mock || c.runtime.mode === 'isolated' && !c.automatic.requireRemote), 'Mock acceptance requires an isolated profile with requireRemote=false');
   return c;
 }
+/** Release identity of the bundled local plugins: stable plugin identity and content only.
+ * index.json also records where each bundle was prepared (temporary checkouts, PR list), which
+ * differs between preparations of identical plugin bytes and must not change the release. */
+export function localPluginsIdentity(dir) {
+  const index = JSON.parse(fs.readFileSync(path.join(dir, 'index.json'), 'utf8'));
+  const entries = (index.plugins ?? []).map(p => [p.id, p.namespace ?? null, p.version]).sort(([a], [b]) => a < b ? -1 : a > b ? 1 : 0);
+  const onDisk = fs.readdirSync(dir, { withFileTypes: true }).filter(e => e.isDirectory()).map(e => e.name).sort();
+  check(JSON.stringify(onDisk) === JSON.stringify(entries.map(([id]) => id)), 'Personal plugin inventory differs from its index');
+  return hash(entries.map(([id, namespace, version]) => [id, namespace, version, packageHash(path.join(dir, id))]));
+}
 export function releaseDescriptor(directory) {
   checkCheckout(directory);
   const head = git(directory, 'rev-parse', 'HEAD');
@@ -38,7 +48,7 @@ export function releaseDescriptor(directory) {
   const seeds = path.join(directory, 'apps/desktop/resources/builtin-ghosts');
   const plugins = fs.existsSync(seeds) ? packageHash(seeds) : hash([]);
   const personalDir = path.join(directory, 'apps/desktop/resources/personal-plugins');
-  const localPlugins = fs.existsSync(personalDir) ? packageHash(personalDir) : null;
+  const localPlugins = fs.existsSync(path.join(personalDir, 'index.json')) ? localPluginsIdentity(personalDir) : null;
   // Git subtree IDs cover every descendant without emitting multi-megabyte file inventories.
   const fingerprint = paths => hash(git(directory, 'ls-tree', 'HEAD', '--', ...paths));
   const migrations = fingerprint(['apps/desktop/drizzle']);

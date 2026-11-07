@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
+import { localPluginsIdentity } from '../personal-build/automatic.mjs';
 import { exportBuild, parseManifest, syncPlugins } from '../personal-build/managed.mjs';
 import { auditPlugins, configFrom, copyPlugin, discover, packageHash, prepare, prepareLocalPlugins, run, verifyReport } from '../personal-build.mjs';
 
@@ -110,8 +111,10 @@ test('prepare creates an immutable composition and report, preserving dirty sour
   const report = prepare(f.config, out, f.exec);
   assert.equal(report.state, 'prepared'); assert.equal(report.author, 'somebody');
   assert.equal(report.app.prs.length, 2);
-  assert.equal(fs.readFileSync(path.join(report.directory, 'file'), 'utf8'), 'first\n');
-  assert.equal(fs.readFileSync(path.join(report.directory, 'second'), 'utf8'), 'second\n');
+  // Git may check out CRLF on Windows runners (core.autocrlf); the content, not the EOL, is under test.
+  const checkedOut = name => fs.readFileSync(path.join(report.directory, name), 'utf8').replace(/\r\n/g, '\n');
+  assert.equal(checkedOut('file'), 'first\n');
+  assert.equal(checkedOut('second'), 'second\n');
   assert.equal(fs.readFileSync(path.join(f.checkout, 'file'), 'utf8'), 'user dirty content\n');
   assert.equal(run('git', ['rev-parse', 'HEAD'], f.checkout), f.baseSha);
   assert.throws(() => prepare(f.config, out, f.exec), /Output already exists/);
@@ -186,4 +189,20 @@ test('registered repository sources use the composed tree and keep provenance an
   assert.equal(entries[0].provenance.commit, 'a'.repeat(40));
   assert.equal(entries[0].namespace, 'local');
   assert.equal(JSON.parse(fs.readFileSync(path.join(destination, 'index.json'))).plugins[0].sha256, packageHash(path.join(destination, 'sample')));
+});
+
+test('local plugin release identity ignores where and when a bundle was prepared', t => {
+  const root = tmp(t), prepared = name => {
+    const checkout = path.join(root, `checkout-${name}`);
+    put(path.join(checkout, 'sample/ghost.json'), { id: 'sample', version: '1.0.0' });
+    put(path.join(checkout, 'sample/main.js'), 'same bytes');
+    const destination = path.join(root, `bundle-${name}`);
+    prepareLocalPlugins({ localPlugins: { sample: { source: 'repository' } } }, checkout, destination, { repository: 'example/plugins', commit: name.repeat(40) });
+    return destination;
+  };
+  const a = prepared('a'), b = prepared('b');
+  assert.notEqual(packageHash(a), packageHash(b));
+  assert.equal(localPluginsIdentity(a), localPluginsIdentity(b));
+  put(path.join(b, 'sample/main.js'), 'changed bytes');
+  assert.notEqual(localPluginsIdentity(a), localPluginsIdentity(b));
 });
