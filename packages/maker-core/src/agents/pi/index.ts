@@ -9034,7 +9034,11 @@ export class PiAgent extends BaseAgent {
       scanPiCustomizations({
         workingDirs: opts.workingDir ? [opts.workingDir] : [],
       }),
-      opts.includeManagedPiPackages ? this.deps.resolvePiManagedPackageResources?.().catch(() => undefined) : undefined,
+      // `null` means the host could not read packages at all; `undefined` means this
+      // host has no managed package source. Only the former can hide recoverable Skills.
+      opts.includeManagedPiPackages && this.deps.resolvePiManagedPackageResources
+        ? this.deps.resolvePiManagedPackageResources({ palettePreview: opts.palettePreview }).catch(() => null)
+        : undefined,
     ]);
     const out: ListAgentSkillsResult = {
       skills: [
@@ -9070,6 +9074,7 @@ export class PiAgent extends BaseAgent {
       ].sort((a, b) => a.name.localeCompare(b.name)),
     };
     if (errors.length > 0) out.errors = errors;
+    if (managedPackages === null || managedPackages?.incomplete) out.incomplete = true;
     return out;
   }
 

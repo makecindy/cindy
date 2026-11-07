@@ -1428,7 +1428,11 @@ interface ElectronAPI {
     /** 双击 .cindy 的待装路径，原子取走（取即清空；无则 null）。 */
     takePendingInstall: () => Promise<{ filePath: string | null }>;
     onChanged: (
-      callback: (payload: { ghosts: import('../shared/ghost').InstalledGhost[] }) => void,
+      callback: (payload: {
+        ghosts: import('../shared/ghost').InstalledGhost[];
+        /** false on projection-only pushes (an OAuth badge), where the Skill roster did not move. */
+        rosterChanged?: boolean;
+      }) => void,
     ) => () => void;
     /** Host 校验 setup action 后请求打开固定的本地配置入口。 */
     onSetupNavigate: (

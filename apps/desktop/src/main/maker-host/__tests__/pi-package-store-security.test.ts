@@ -709,7 +709,9 @@ describe('Pi package executable-code boundary', () => {
     const store = await import('../pi-package-store.js');
     lockRuntime.nextStatus = { held: false, reason };
     await expect(store.resolveManagedPiPackageResources({ startupTraceId: '0123456789abcdef' }))
-      .resolves.toEqual({ extensions: [], skills: [], promptTemplates: [], packageRoots: [] });
+      .resolves.toEqual({
+        extensions: [], skills: [], promptTemplates: [], packageRoots: [], incomplete: true,
+      });
     await store.listPiPackages();
     expect(lockRuntime.calls).toHaveLength(1);
     expect(lockRuntime.calls[0]?.waitMs).toBe(0);
@@ -730,6 +732,94 @@ describe('Pi package executable-code boundary', () => {
     expect(runtime.spawns.filter(({ args }) => args.includes('list'))).toHaveLength(1);
     await store.resolveManagedPiPackageResources({ startupTraceId: '1111111111111111' });
     expect(runtime.spawns.filter(({ args }) => args.includes('list'))).toHaveLength(1);
+  });
+
+  it('reuses a warm inspection only for an explicit palette preview', async () => {
+    const { root } = await createSkillOnlyPackage('npm:palette-warm-startup');
+    const store = await import('../pi-package-store.js');
+    const canonicalRoot = await fs.realpath(root);
+    const listSpawns = () => runtime.spawns.filter(({ args }) => args.includes('list')).length;
+    const now = Date.now();
+    const clock = vi.spyOn(Date, 'now').mockReturnValue(now);
+    try {
+      await expect(store.resolveManagedPiPackageResources({ palettePreview: true })).resolves.toMatchObject({
+        packageRoots: [canonicalRoot],
+      });
+      expect(listSpawns()).toBe(1);
+      // A palette preview may reuse the finished inspection past the short window.
+      clock.mockReturnValue(now + 5_000);
+      await expect(store.resolveManagedPiPackageResources({ palettePreview: true })).resolves.toMatchObject({
+        packageRoots: [canonicalRoot],
+      });
+      expect(listSpawns()).toBe(1);
+      // A runtime read keeps what it finds — a Bot hydration persists the Skill
+      // list it resolved — so it must re-inspect instead of inheriting the warm
+      // preview entry and reporting a just-installed package as unavailable.
+      clock.mockReturnValue(now + 6_000);
+      await expect(store.resolveManagedPiPackageResources()).resolves.toMatchObject({
+        packageRoots: [canonicalRoot],
+      });
+      expect(listSpawns()).toBe(2);
+    } finally {
+      clock.mockRestore();
+    }
+  });
+
+  it('keeps the palette reuse window out of session startup metadata', async () => {
+    const { root } = await createSkillOnlyPackage('npm:palette-warm-startup-metadata');
+    const store = await import('../pi-package-store.js');
+    const canonicalRoot = await fs.realpath(root);
+    const listSpawns = () => runtime.spawns.filter(({ args }) => args.includes('list')).length;
+    const now = Date.now();
+    const clock = vi.spyOn(Date, 'now').mockReturnValue(now);
+    try {
+      await expect(store.resolveManagedPiPackageResources({ palettePreview: true })).resolves.toMatchObject({
+        packageRoots: [canonicalRoot],
+      });
+      expect(listSpawns()).toBe(1);
+      // Startup metadata is frozen into the task capability manifest, so it must
+      // not inherit that reuse and hide a package installed after the palette read.
+      clock.mockReturnValue(now + 5_000);
+      await store.resolveManagedPiPackageResources({ startupTraceId: '0123456789abcdef' });
+      expect(listSpawns()).toBe(2);
+    } finally {
+      clock.mockRestore();
+    }
+  });
+
+  it('keeps a duration-limited package out of the palette inspection cache', async () => {
+    const { root } = await createSkillOnlyPackage('npm:palette-duration-limit');
+    const store = await import('../pi-package-store.js');
+    const canonicalRoot = await fs.realpath(root);
+    const listSpawns = () => runtime.spawns.filter(({ args }) => args.includes('list')).length;
+    let now = Date.now();
+    const clock = vi.spyOn(Date, 'now').mockImplementation(() => now);
+    const originalReaddir = fs.readdir.bind(fs);
+    let stretched = false;
+    const readdirSpy = vi.spyOn(fs, 'readdir').mockImplementation(((target: never, options: never) => {
+      const resolved = path.resolve(String(target));
+      if (!stretched
+        && (resolved === canonicalRoot || resolved.startsWith(`${canonicalRoot}${path.sep}`))) {
+        stretched = true;
+        // Cross the per-package budget so this read degrades to `inspection-limit`.
+        now += 3_000;
+      }
+      return originalReaddir(target, options);
+    }) as never);
+    try {
+      await expect(store.resolveManagedPiPackageResources())
+        .resolves.toMatchObject({ skills: [], incomplete: true });
+      expect(listSpawns()).toBe(1);
+      // Same clock, far inside the reuse window: the degraded roster must retry
+      // instead of keeping this package's Skill missing.
+      const retried = await store.resolveManagedPiPackageResources();
+      expect(retried.skills).toHaveLength(1);
+      expect(retried.incomplete).toBeUndefined();
+      expect(listSpawns()).toBe(2);
+    } finally {
+      readdirSpy.mockRestore();
+      clock.mockRestore();
+    }
   });
 
   it('records in-flight inspection wait separately for each startup and skips completed-cache hits', async () => {
@@ -2310,6 +2400,9 @@ describe('Pi package executable-code boundary', () => {
       skills: [],
       promptTemplates: [],
       packageRoots: [],
+      // A snapshot omits transiently skipped roots on its own path; a read-only
+      // roster names the gap so the palette does not cache it.
+      ...(mode === 'metadata' ? { incomplete: true } : {}),
     });
 
     await store.listPiPackages(); // Wait for the optional background cache write.
@@ -2431,9 +2524,11 @@ describe('Pi package executable-code boundary', () => {
       await expect(store.resolveManagedPiPackageResources({
         snapshotRoot: path.join(runtime.userData, 'inspection-duration-first-snapshot'),
       })).resolves.toMatchObject({ packageRoots: [] });
-      await expect(store.listPiPackages()).resolves.toMatchObject({
-        packages: [{ source, enabled: true, warning: 'inspection-limit' }],
-      });
+      // A degraded roster is never reused, so this read re-inspects instead of
+      // echoing the timed-out projection.
+      const listed = await store.listPiPackages();
+      expect(listed.packages).toMatchObject([{ source, enabled: true }]);
+      expect(listed.packages[0]?.warning).toBeUndefined();
 
       const stateFile = await fs.readFile(
         path.join(runtime.userData, 'pi-package-home', 'cindy-package-state.json'),
@@ -3517,7 +3612,7 @@ describe('Pi package executable-code boundary', () => {
       await expect(store.listPiPackages()).rejects.toThrow('state is unavailable');
       await expect(store.resolveManagedPiNativePackagePaths()).rejects.toThrow('state is unavailable');
       await expect(store.resolveManagedPiPackageResources()).resolves.toEqual({
-        extensions: [], skills: [], promptTemplates: [], packageRoots: [],
+        extensions: [], skills: [], promptTemplates: [], packageRoots: [], incomplete: true,
       });
       await expect(store.mutatePiPackage({
         action: 'set-enabled',
@@ -3548,7 +3643,7 @@ describe('Pi package executable-code boundary', () => {
     await expect(store.resolveManagedPiPackageResources({
       snapshotRoot: path.join(runtime.userData, 'corrupt-state-snapshot'),
     })).resolves.toEqual({
-      extensions: [], skills: [], promptTemplates: [], packageRoots: [],
+      extensions: [], skills: [], promptTemplates: [], packageRoots: [], incomplete: true,
     });
     await expect(store.mutatePiPackage({
       action: 'set-enabled',

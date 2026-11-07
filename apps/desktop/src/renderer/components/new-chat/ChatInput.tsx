@@ -4817,6 +4817,16 @@ export function ChatInput({
       }),
     [reloadSlashCommands],
   );
+  useEffect(
+    () =>
+      window.electronAPI.ghosts.onChanged(({ rosterChanged }) => {
+        // A roster change must bypass a pending read, or this reload would show the
+        // list from before the change. Projection-only pushes (an OAuth badge) keep
+        // a normal reload and stay a cache hit in Main.
+        reloadSlashCommands(rosterChanged ? { forceReload: true } : undefined);
+      }),
+    [reloadSlashCommands],
+  );
   // Slash 指令与 $意识一致:doc 保持可逐字编辑的普通文本,完整命中当前 roster
   // 时才由 decoration 显示确认胶囊。异步 roster 刷新不进入 keystroke 热路径。
   useEffect(() => {
@@ -5227,7 +5237,10 @@ export function ChatInput({
 
   useEffect(() => {
     if (!slashOpen) return;
-    reloadSlashCommands({ forceReload: true });
+    // Opening the panel reuses the roster that is already on screen; forcing a
+    // reload here made every `/` repay the whole discovery chain. Change events
+    // (SkillHub activation, Pi packages, runtime retry) still force.
+    reloadSlashCommands();
   }, [slashOpen, reloadSlashCommands]);
   useEffect(() => {
     if (!slashOpen) {

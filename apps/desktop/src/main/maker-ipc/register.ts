@@ -1467,6 +1467,7 @@ import {
   createProjectSkillPreparation,
   toAgentSkillListFailure,
 } from './agentSkillListIpcBoundary.js';
+import { isPalettePreviewRead, paletteSkillListReuse, paletteSkillListReuseKey, shouldCachePaletteSkillListing } from './paletteSkillListCache.js';
 import {
   captureDataOwnerBroadcastScope,
   isDataOwnerBroadcastScopeCurrent,
@@ -1615,35 +1616,47 @@ import { installSessionTurnObserver } from './sessionTurnObserver.js';
 
 const log = createLogger('maker-ipc');
 const workdirLog = createLogger('workdir-diagnostics');
+
 const workingDirectoryRecovery = createWorkingDirectoryRecovery({ stat: statWorkingDirectory, mkdir: mkdirWorkingDirectory, realpath: realpathWorkingDirectory, requiredRoot: requiredDialogueRecoveryRoot, findFallback: findDialogueRecoveryWorkspace }, allocateDialogueRecoveryWorkspace, workdirLog);
 
 function localModelWindowSwitchErrorCode(code: IpcErrorCode): IpcErrorCode {
   return isDeviceLinkInvoke() ? 'PRECONDITION_FAILED' : code;
 }
 
-async function prepareProjectSkillLinksFailSoft(workingDir: unknown): Promise<boolean> {
+type ProjectSkillLinkPreparation = {
+  /** Any link changed, so a Codex session must reload its commands. */
+  changed: boolean;
+  /** No warning and no failure: the roster is not knowingly missing a project Skill. */
+  clean: boolean;
+};
+
+async function prepareProjectSkillLinksFailSoft(workingDir: unknown): Promise<ProjectSkillLinkPreparation> {
   // Slash/@ palettes are read-only device-link surfaces. Their remote invokes must not
   // create or remove compatibility links in the controlled project's filesystem.
-  if (isDeviceLinkInvoke() || typeof workingDir !== 'string' || !workingDir) return false;
+  if (isDeviceLinkInvoke() || typeof workingDir !== 'string' || !workingDir) {
+    return { changed: false, clean: true };
+  }
   try {
     const result = await prepareSharedProjectSkillLinks({ workingDir });
     for (const warning of result.warnings) {
       log.warn('shared project skill link warning', { workingDir, warning });
     }
-    return result.changed;
+    return { changed: result.changed, clean: result.warnings.length === 0 };
   } catch (err) {
     log.warn('prepare shared project skill links failed', {
       workingDir,
       error: err instanceof Error ? err.message : String(err),
     });
-    return false;
+    return { changed: false, clean: false };
   }
 }
 const sharedProjectSkillLinkPreparation = createProjectSkillPreparation(prepareProjectSkillLinksFailSoft);
 /** Opening a task asks the / and @ palettes together; both prepare the same links. */
-function preparePaletteProjectSkillLinks(workingDir: unknown): Promise<boolean> {
+function preparePaletteProjectSkillLinks(workingDir: unknown): Promise<ProjectSkillLinkPreparation> {
   // Remote invokes never prepare links, so they never join a local preparation.
-  if (isDeviceLinkInvoke() || typeof workingDir !== 'string' || !workingDir) return Promise.resolve(false);
+  if (isDeviceLinkInvoke() || typeof workingDir !== 'string' || !workingDir) {
+    return Promise.resolve({ changed: false, clean: true });
+  }
   return sharedProjectSkillLinkPreparation(JSON.stringify(captureDataOwnerBroadcastScope()), workingDir);
 }
 const workerTurnStartSequencer = createWorkerTurnStartSequencer(log);
@@ -7140,6 +7153,9 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
         win.webContents.send(MAKER_PUSH.PI_PACKAGES_CHANGED);
       }
     }
+    // A Pi package change rewrites the Skills the palette lists; drop the snapshot
+    // here because the announcement above cannot reach an unmounted composer.
+    paletteSkillListReuse.clear();
   });
   getAgentIslandService()?.setPermissionResolver(resolvePendingPermissionFromAgentIsland);
   sessionTurnActivityTracker.setTurnKeepaliveChangeListener(
@@ -8484,23 +8500,60 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
           remoteHostId?: string;
           forceReload?: boolean;
           sessionId?: string;
+          palettePreview?: boolean;
         };
-        const linksChanged = skillParams.remoteHostId
-          ? false
+        const reuseKey = paletteSkillListReuseKey({
+          agentKind: kind,
+          workingDir: skillParams.workingDir,
+          sessionId: skillParams.sessionId,
+          remoteHostId: skillParams.remoteHostId,
+          // Pi merges the live runtime catalog into this roster, and a fork replaces
+          // that catalog in place. Reuse must follow the catalog it was merged from.
+          runtimeGeneration: kind === 'pi' && skillParams.sessionId
+            ? maker.getSessionRuntimeCapabilities(skillParams.sessionId)?.generation
+            : undefined,
+        });
+        const ownerScope = activeOwnerScopeKey();
+        // A Device Link caller reads a roster that skipped local project-link
+        // preparation, so neither direction of the cache may mix with a local palette.
+        const readOnlyRemote = isDeviceLinkInvoke();
+        // During an owner transition `activeOwnerScopeKey()` still reports the
+        // outgoing owner, so a hit here would hand its plugin Skills to the next one
+        // without the ownership check a rescan performs. Fail closed and rescan.
+        const boundaryPending = isAppSessionBoundaryPending();
+        if (skillParams.forceReload === true) {
+          // A forced reload drops every context's entry, not only this caller's:
+          // another session would otherwise keep serving the pre-change roster.
+          paletteSkillListReuse.clear();
+        } else if (!boundaryPending && !readOnlyRemote) {
+          const reused = paletteSkillListReuse.read(reuseKey);
+          if (reused) return reused;
+        }
+        const scanGeneration = paletteSkillListReuse.generation();
+        const projectLinks: ProjectSkillLinkPreparation = skillParams.remoteHostId
+          ? { changed: false, clean: true }
           : await measureTraceOperation('maker:list-agent-skills:project-links',
             () => preparePaletteProjectSkillLinks(skillParams.workingDir));
-        if (kind === 'codex' && linksChanged) {
+        if (kind === 'codex' && projectLinks.changed) {
           skillParams.forceReload = true;
         }
+        // Host-owned preview marker: this channel renders an ephemeral catalog, so
+        // a plain read may reuse a warm package inspection. A forced reload asks
+        // for fresh data — Bot Settings refreshes its capability catalog that way,
+        // and it shows what the user then grants — so it re-inspects instead of
+        // inheriting an entry that predates a `pi install`.
+        skillParams.palettePreview = isPalettePreviewRead(skillParams.forceReload);
+        // A preparation that warned or failed can leave its Skills out of a scan that
+        // reports no errors, so its roster must not be cached.
+        let preparationClean = projectLinks.clean;
         await measureTraceOperation('maker:list-agent-skills:global-assets', async () => {
-          if (kind === 'codex' && !skillParams.remoteHostId) {
-            await desktopCodexAuthAdapter.ensureGlobalCodexAssets();
-          } else {
-            // Pi scans ~/.agents/skills directly. Refresh the managed projection here so a
-            // Codex-only skill added after Cindy startup is visible without using another agent
-            // or restarting the app first. Claude keeps the same shared-root refresh semantics.
-            await desktopClaudeAuthAdapter.ensureSharedGlobalSkills();
-          }
+          const globalAssetsClean = kind === 'codex' && !skillParams.remoteHostId
+            ? await desktopCodexAuthAdapter.ensureGlobalCodexAssets()
+            : // Pi scans ~/.agents/skills directly. Refresh the managed projection here so a
+              // Codex-only skill added after Cindy startup is visible without using another agent
+              // or restarting the app first. Claude keeps the same shared-root refresh semantics.
+              await desktopClaudeAuthAdapter.ensureSharedGlobalSkills();
+          preparationClean = preparationClean && globalAssetsClean;
         });
         const result = await measureTraceOperation('maker:list-agent-skills:scan',
           () => maker.listAgentSkills(kind, skillParams));
@@ -8509,8 +8562,8 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
         const descriptors = await measureTraceOperation('maker:list-agent-skills:identity',
           () => builtInSkillDescriptorsAsync(app.getPath('userData'), app.getPath('appData')));
         const disabled = new Set(readDisabledSkillPaths(descriptors));
-        return {
-          success: true,
+        const listing = {
+          success: true as const,
           ...result,
           skills: activeCindyBuiltInAgentSkills(
             result.skills,
@@ -8518,6 +8571,21 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
             (source) => !disabled.has(skillActivationKey(source)),
           ),
         };
+        // `write` also drops a scan that started before a `forceReload` cleared the
+        // snapshot, so a stale scan cannot repopulate it.
+        if (
+          shouldCachePaletteSkillListing({
+            preparationClean,
+            scanClean: !result.errors?.length,
+            scanComplete: result.incomplete !== true,
+            ownerStable: activeOwnerScopeKey() === ownerScope,
+            boundaryPending: isAppSessionBoundaryPending(),
+            readOnlyRemote,
+          })
+        ) {
+          paletteSkillListReuse.write(reuseKey, listing, scanGeneration);
+        }
+        return listing;
       } catch (err) {
         return toAgentSkillListFailure(err, {
           reportError: (error) => {

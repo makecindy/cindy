@@ -753,6 +753,7 @@ import { sniffMediaMime } from '../cindy-media/sniffMediaMime.js';
 import { recordGhostCallMedia } from './ghostMediaLedger.js';
 import { resolveGhostMediaHandoverTarget } from './ghostMediaHandoverTargetTracker.js';
 import { MAKER_PUSH } from '../maker-ipc/channels.js';
+import { paletteSkillListReuse } from '../maker-ipc/paletteSkillListCache.js';
 import { ghostSetupNavigationForAction } from './ghostSetupNavigation.js';
 import { assessGhostHostSetupRequirements } from './ghostHostSetupRequirements.js';
 import { isModelAccessReady } from '../model-access/readiness.js';
@@ -11547,7 +11548,9 @@ function broadcastGhostsChanged(
   const visible = ghosts
     .filter((ghost) => isGhostAvailableForActiveSession(installedGhostStoragePart(ghost)))
     .map(projectGhostForRenderer);
-  broadcastGhostWindowPush('ghosts:changed', { ghosts: visible });
+  // `rosterChanged` lets the composer skip a pending Skill read only when the
+  // roster it lists really moved; projection-only pushes stay a cheap cache hit.
+  broadcastGhostWindowPush('ghosts:changed', { ghosts: visible, rosterChanged: !opts?.projectionOnly });
   notifyMobilePluginsChanged();
   // 与 renderer 同一份可见清单喂给观察者(独立窗口 controller reconcile 等);
   // 观察者异常不拖垮广播本体。
@@ -11563,7 +11566,12 @@ function broadcastGhostsChanged(
   // skill 槽共享链接对账:装/卸/启停/换版全走本广播,一处挂接全覆盖。
   // 异步合并执行,不阻塞广播;用全量 list() 而非 per-session 过滤后的 visible
   // (链接对账关心"装了什么",与当前会话可见性无关)。
-  if (!opts?.projectionOnly) scheduleGhostSkillReconcile();
+  if (!opts?.projectionOnly) {
+    scheduleGhostSkillReconcile();
+    // Ghosts expose their Skills through `listCindyManagedSkills`; the announcement
+    // above misses an unmounted composer, so drop the palette snapshot here too.
+    paletteSkillListReuse.clear();
+  }
 }
 
 // —— skill 槽链接对账调度:合并突发广播(in-flight + pending 双标志),

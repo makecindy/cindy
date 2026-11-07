@@ -272,7 +272,10 @@ describe('built-in Skills', () => {
 
     const conflicting = await prepareBuiltInSkills({ ...input, bundleVersion: 2 });
     expect(fs.readFileSync(path.join(descriptor.absolutePath, 'SKILL.md'), 'utf8')).toBe(installed);
-    expect(conflicting.warnings.join('\n')).toContain('bundle version 2 was reused');
+    // The reused-version conflict is a stable fact about these bytes, not a failure to
+    // retry: hosts hold their preparation cache past it instead of re-running every request.
+    expect(conflicting.warnings.join('\n')).not.toContain('bundle version 2 was reused');
+    expect(conflicting.persistentWarnings.join('\n')).toContain('bundle version 2 was reused');
   });
 
   it('fails closed when an existing bundle manifest is corrupt', async () => {

@@ -765,11 +765,15 @@ export interface AgentDeps {
     snapshotRoot?: string;
     /** Redacted per-start correlation id for structured startup timing logs. */
     startupTraceId?: string;
+    /** Only a palette preview may reuse a warm package inspection. */
+    palettePreview?: boolean;
   }) => Promise<{
     extensions: string[];
     skills: Array<{ path: string; name: string; description?: string }>;
     promptTemplates: string[];
     packageRoots: string[];
+    /** A package that can recover was skipped, so this list may be missing resources. */
+    incomplete?: boolean;
   }>;
 
   /**

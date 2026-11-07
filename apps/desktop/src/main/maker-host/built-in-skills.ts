@@ -51,6 +51,12 @@ export interface PrepareBuiltInSkillsResult {
   projectionSafe: boolean;
   changed: boolean;
   warnings: string[];
+  /**
+   * Stable state facts that stay true until the inputs in the preparation cache key
+   * change. Hosts hold their completion cache past these instead of re-running the
+   * whole projection on every request; retryable failures stay in `warnings`.
+   */
+  persistentWarnings: string[];
 }
 
 export interface RefreshBuiltInClaudeSkillLinksOptions {
@@ -1044,6 +1050,7 @@ export async function prepareBuiltInSkills(
     ? sharedBuiltInSkillsRoot(options.appDataDir)
     : builtInSkillsRoot(options.userDataDir);
   const warnings: string[] = [];
+  const persistentWarnings: string[] = [];
   let changed = false;
   let projectionSafe = false;
   const bundleVersion = options.bundleVersion ?? BUILT_IN_SKILLS_BUNDLE_VERSION;
@@ -1191,7 +1198,10 @@ export async function prepareBuiltInSkills(
           recordedFingerprint !== undefined &&
           recordedFingerprint !== fingerprint;
         if (sameVersionConflict) {
-          warnings.push(
+          // Deterministic for as long as this build ships these bytes: a later build
+          // that bumps the version changes the preparation cache key. Never treat it
+          // as a retryable failure, or every palette load repays the whole preparation.
+          persistentWarnings.push(
             `kept built-in Skill ${descriptor.name} because bundle version ${bundleVersion} was reused for different bytes`,
           );
           continue;
@@ -1303,5 +1313,6 @@ export async function prepareBuiltInSkills(
     projectionSafe,
     changed,
     warnings,
+    persistentWarnings,
   };
 }

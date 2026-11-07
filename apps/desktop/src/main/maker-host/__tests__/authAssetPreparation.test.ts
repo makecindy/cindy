@@ -7,6 +7,7 @@ const state = vi.hoisted(() => ({
   bridge: vi.fn(),
   links: vi.fn(),
   fingerprint: 'fp-1',
+  builtInPersistent: [] as string[],
   logs: [] as Array<{ level: string; scope: string; warning?: unknown }>,
 }));
 vi.mock('electron', () => ({ app: { getPath: () => '', getAppPath: () => '', isPackaged: true }, safeStorage: {} }));
@@ -25,7 +26,8 @@ vi.mock('../shared-global-skills.js', async (original) => ({
 vi.mock('../built-in-skills.js', async (original) => ({
   ...await original<typeof import('../built-in-skills.js')>(),
   resolveBundledSystemSkillsRoot: () => 'unused-bundle',
-  prepareBuiltInSkills: async () => ({ descriptors: [], projectionSafe: false, warnings: [] }),
+  prepareBuiltInSkills: async () => ({ descriptors: [], projectionSafe: false, warnings: [],
+    persistentWarnings: state.builtInPersistent }),
 }));
 vi.mock('../../authBoundaryQuarantine.js', async (original) => ({
   ...await original<typeof import('../../authBoundaryQuarantine.js')>(),
@@ -52,6 +54,7 @@ beforeEach(() => {
   state.bridge.mockReset().mockResolvedValue({ warnings: [], routingFailures: [] });
   state.links.mockReset();
   state.fingerprint = 'fp-1';
+  state.builtInPersistent = [];
   state.logs = [];
 });
 
@@ -88,6 +91,19 @@ describe('asset preparation boundaries', () => {
     state.boundary = false; state.owner.generation++;
     await adapter.ensureSharedGlobalSkills();
     expect(prepare).toHaveBeenCalledTimes(4);
+  });
+
+  it('caches past a reused built-in Skill bundle version instead of reprojecting every palette load', async () => {
+    const conflict = 'kept built-in Skill cindy-skill-creator because bundle version 85 was reused for different bytes';
+    state.builtInPersistent = [conflict];
+    state.links.mockResolvedValue({ warnings: [], persistentWarnings: [] });
+    const adapter = new DesktopClaudeAuthAdapter();
+    await adapter.ensureSharedGlobalSkills();
+    await adapter.ensureSharedGlobalSkills();
+    expect(state.links).toHaveBeenCalledTimes(1);
+    expect(state.logs.filter((entry) => entry.warning === conflict)).toEqual([
+      { level: 'warn', scope: 'auth-adapters:asset-prep', warning: conflict },
+    ]);
   });
 
   // Regression (idle CPU): the default sync opt-out and user-owned conflicting paths were
