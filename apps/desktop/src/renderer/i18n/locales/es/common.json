@@ -2448,12 +2448,12 @@
         "previewStarting": "Suelta el mouse y el teclado. La pantalla se cubrirá en 3 segundos; pulsa cualquier tecla para bloquearla y luego desbloquéala.",
         "previewUnavailable": "No se pudo cubrir la pantalla. Reinicia Cindy e inténtalo de nuevo.",
         "delay": {
-          "label": "Cubrir la pantalla tras",
-          "hint": "Tiempo sin tocar el teclado ni el mouse antes de que aparezca la capa. Por omisión, el mismo que el reposo de la pantalla.",
           "30": "30 s",
           "60": "1 min",
           "120": "2 min",
           "300": "5 min",
+          "label": "Cubrir la pantalla tras",
+          "hint": "Tiempo sin tocar el teclado ni el mouse antes de que aparezca la capa. Por omisión, el mismo que el reposo de la pantalla.",
           "system": "Sistema"
         }
       }
@@ -4129,8 +4129,10 @@
           "compaction": {
             "title": "Compactación automática",
             "hint": "Contexto compacto en el porcentaje de uso seleccionado. Los valores más bajos se compactan antes; Los límites del motor aún se aplican.",
-            "default": "{{pct}}% (predeterminado)",
-            "timing": "Se aplica a todos los motores disponibles para este modelo y se genera en ejecuciones posteriores, sin interrumpir una respuesta."
+            "timing": "Se aplica a todos los motores disponibles para este modelo y se genera en ejecuciones posteriores, sin interrumpir una respuesta.",
+            "defaultBadge": "Predeterminado",
+            "sliderAria": "Ajustar el umbral de compactación automática",
+            "restoreAria": "Restaurar la proporción de compactación automática predeterminada"
           },
           "contextLimitRoute": "Tokens {{tokens}} actuales",
           "contextLimitOverWindow": "Por encima de la ventana declarada por el proveedor; las solicitudes pueden fallar.",

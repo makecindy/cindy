@@ -2448,12 +2448,12 @@
         "previewStarting": "Solte o mouse e o teclado. A tela será coberta em 3 segundos; pressione qualquer tecla para bloqueá-la e depois desbloqueie.",
         "previewUnavailable": "Não foi possível cobrir a tela. Reinicie o Cindy e tente novamente.",
         "delay": {
-          "label": "Cobrir a tela após",
-          "hint": "Tempo sem tocar no teclado e no mouse até a camada aparecer. Por padrão, o mesmo do repouso da tela.",
           "30": "30 s",
           "60": "1 min",
           "120": "2 min",
           "300": "5 min",
+          "label": "Cobrir a tela após",
+          "hint": "Tempo sem tocar no teclado e no mouse até a camada aparecer. Por padrão, o mesmo do repouso da tela.",
           "system": "Sistema"
         }
       }
@@ -4129,8 +4129,10 @@
           "compaction": {
             "title": "Compactação automática",
             "hint": "Compacta o contexto no percentual de uso selecionado. Valores menores compactam mais cedo; os limites do mecanismo continuam valendo.",
-            "default": "{{pct}}% (Padrão)",
-            "timing": "Aplica-se a todos os mecanismos disponíveis para este modelo e fonte nas próximas execuções, sem interromper uma resposta."
+            "timing": "Aplica-se a todos os mecanismos disponíveis para este modelo e fonte nas próximas execuções, sem interromper uma resposta.",
+            "defaultBadge": "Padrão",
+            "sliderAria": "Ajustar o limite de compactação automática",
+            "restoreAria": "Restaurar a proporção padrão de compactação automática"
           },
           "contextLimitRoute": "Atual: {{tokens}} tokens",
           "contextLimitOverWindow": "Acima da janela declarada pelo provedor; as requisições podem falhar.",
