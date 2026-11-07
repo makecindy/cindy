@@ -27,7 +27,7 @@ import { randomUUID } from 'node:crypto';
 
 import type { Logger } from '../../../interfaces/logger.js';
 import type { CodexSessionMcpConfigInput, CodexSubagentRoutingProfile } from '../../base-agent.js';
-import { AppServerClient, type RequestProgressDeadline } from './client.js';
+import { AppServerClient, type OversizedNotification, type RequestProgressDeadline } from './client.js';
 import { CODEX_EXTERNAL_AUTH_REFRESH, CodexExternalAuthSession, assertCodexEphemeralAuth, type CodexExternalAuth } from './external-auth.js';
 import type { Transport } from './transport.js';
 import {
@@ -61,6 +61,7 @@ import {
   type TurnCompletedNotification,
   type TurnDiffUpdatedNotification,
   type TurnStartedNotification,
+  type TurnStatus,
   type ReasoningSummaryTextDeltaNotification,
   type ReasoningSummaryPartAddedNotification,
   type ReasoningTextDeltaNotification,
@@ -122,6 +123,23 @@ const NOTIFICATIONS_TO_OPT_OUT = [
 
 const DEFAULT_THREAD_UNSUBSCRIBE_TIMEOUT_MS = 5_000;
 
+const TURN_STATUSES: ReadonlySet<string> = new Set<TurnStatus>(['completed', 'interrupted', 'failed', 'inProgress']);
+
+/**
+ * Cindy 本地合成的通知, app-server 不会发送: 一条 item/* 通知超过单行上限, 正文已丢弃。
+ * 被丢弃的条目仍是这一轮真实发生过的工作 (常见是写过大文件), 订阅方要据此维护产出与
+ * 工具生命周期, 不能当它没发生过。
+ */
+export const ITEM_OMITTED_METHOD = 'cindy/item/omitted';
+
+export interface ItemOmittedParams {
+  threadId: string;
+  turnId: string;
+  phase: 'started' | 'updated' | 'completed';
+  /** item 里排在大字段之前的标量, 读不到时为空。 */
+  item: { id?: string; type?: string };
+}
+
 /** thread/started 之外的 notification 都直接 params.threadId; thread/started 走 params.thread.id。 */
 function extractThreadId(method: string, params: unknown): string | null {
   if (!params || typeof params !== 'object') return null;
@@ -154,6 +172,8 @@ export interface ThreadEventHandlers {
   itemStarted?: (params: ItemStartedNotification['params']) => void;
   itemUpdated?: (params: ItemUpdatedNotification['params']) => void;
   itemCompleted?: (params: ItemCompletedNotification['params']) => void;
+  /** item/* 通知因超过单行上限被丢弃正文, 见 ITEM_OMITTED_METHOD。 */
+  itemOmitted?: (params: ItemOmittedParams) => void;
   /** 正文的逐段增量；item/completed 仍会下发最终全文做权威校准。 */
   agentMessageDelta?: (params: AgentMessageDeltaNotification['params']) => void;
   /** Codex native update_plan snapshots. */
@@ -685,6 +705,11 @@ export class AppServerHost {
         // Keep the shared startPromise while recovering this one pre-protocol
         // failure. Every other transport error retains the normal host lifecycle.
         if (!client.nativeSqliteInitializationFailed()) this.handleTransportError(err);
+      },
+      onOversizedNotification: (notification) => {
+        const handled = this.handleOversizedNotification(notification);
+        if (handled) this.writerCandidates.add(client);
+        return handled;
       },
       onAuthInvalidated: this.opts.onAuthInvalidated,
       captureCredentialGeneration: this.opts.captureCredentialGeneration,
@@ -1690,6 +1715,7 @@ export class AppServerHost {
       case 'item/started': fn = handlers.itemStarted as (p: never) => void; break;
       case 'item/updated': fn = handlers.itemUpdated as (p: never) => void; break;
       case 'item/completed': fn = handlers.itemCompleted as (p: never) => void; break;
+      case ITEM_OMITTED_METHOD: fn = handlers.itemOmitted as (p: never) => void; break;
       case 'item/agentMessage/delta': fn = handlers.agentMessageDelta as (p: never) => void; break;
       case 'turn/plan/updated': fn = handlers.turnPlanUpdated as (p: never) => void; break;
       case 'item/reasoning/summaryTextDelta': fn = handlers.reasoningSummaryTextDelta as (p: never) => void; break;
@@ -1735,6 +1761,60 @@ export class AppServerHost {
         this.buffered.set(threadId, remaining);
       }
     }, this.bufferTtlMs).unref?.();
+  }
+
+  /**
+   * 已订阅的通知超过单行上限 (正文已由 client 丢弃) 时, 判断能否只降级这一条, 不退役整个 host:
+   *  - turn/diff/updated 是累计快照: 转成「该线程本轮 diff 未知」照常路由, 订阅方据此标记
+   *    改动过大, 而不是继续把上一份快照当成完整结果。拿不到 threadId / turnId 时无法路由, 不降级;
+   *  - item/started|updated|completed 的条目本身 (例如整文件内容的 FileChange) 不再展示, 但它
+   *    代表这一轮真实发生过的工作: 改投 ITEM_OMITTED_METHOD, 订阅方据此记产出 (拦住容量 /
+   *    429 后的整轮重放) 并收口工具生命周期。拿不到 threadId / turnId 时无法路由, 不降级;
+   *  - turn/completed 是终态, 可能因 turn.items 里的同一个大条目再次超限。实时处理不读 items
+   *    (那是持久化历史的副本), 读到 id 与合法 status 时按原样合成一条 items 为空的终态照常
+   *    路由; 读不到就不降级, 不能凭猜测给任务收口;
+   *  - 其余通知驱动 turn / thread 状态机, 丢了任务会卡住, 不降级。
+   */
+  private handleOversizedNotification(notification: OversizedNotification): boolean {
+    const { method, threadId, turnId, itemId, itemType, turn } = notification;
+    switch (method) {
+      case 'turn/completed': {
+        const status = turn?.status;
+        if (!threadId || !turnId || typeof status !== 'string' || !TURN_STATUSES.has(status)) return false;
+        const params: TurnCompletedNotification['params'] = {
+          threadId,
+          turn: { ...turn, id: turnId, status: status as TurnStatus, items: [], itemsView: 'notLoaded' },
+        };
+        this.routeNotification(method, params);
+        return true;
+      }
+      case 'turn/diff/updated': {
+        if (!threadId || !turnId) return false;
+        const params: TurnDiffUpdatedNotification['params'] = {
+          threadId,
+          turnId,
+          diff: '',
+          cindyOmitted: 'oversized',
+        };
+        this.routeNotification(method, params);
+        return true;
+      }
+      case 'item/started':
+      case 'item/updated':
+      case 'item/completed': {
+        if (!threadId || !turnId) return false;
+        const params: ItemOmittedParams = {
+          threadId,
+          turnId,
+          phase: method === 'item/started' ? 'started' : method === 'item/updated' ? 'updated' : 'completed',
+          item: { id: itemId, type: itemType },
+        };
+        this.routeNotification(ITEM_OMITTED_METHOD, params);
+        return true;
+      }
+      default:
+        return false;
+    }
   }
 
   /**

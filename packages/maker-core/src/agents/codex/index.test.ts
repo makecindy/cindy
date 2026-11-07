@@ -12702,6 +12702,52 @@ describe('CodexAgent MCP thread context hooks', () => {
       }
     });
 
+    it.each([
+      // 不重投: 等满 40s 也只有最初那一次 turn/start。
+      ['a file change', { id: 'patch-1', type: 'fileChange' }, 1, 40_000],
+      ['an item of unknown type', {}, 1, 40_000],
+      // 用户输入的回声不是产出: 首档退避 (1.5-2.5s) 内照常重投。
+      ['the userMessage echo', { id: 'item-echo', type: 'userMessage' }, 2, 3_000],
+    ])('counts %s dropped at the line limit as produced output only when it is model work', async (
+      _case,
+      item,
+      expectedTurnStarts,
+      advanceMs,
+    ) => {
+      vi.useFakeTimers();
+      try {
+        const agent = new CodexAgent(createDeps());
+        const host = installCapacityHost(agent);
+        const handle = await agent.startSession({
+          sessionId: 'session-overload-omitted-item',
+          model: 'gpt-5.4',
+          workingDir: '/repo',
+        });
+        await handle.send({ type: 'user', content: 'hello' });
+
+        const handlers = host.getThreadHandlers();
+        if (!handlers?.error || !handlers.turnStarted || !handlers.itemOmitted) throw new Error('expected handlers');
+        handlers.turnStarted({ turn: { id: 'turn-1' } } as never);
+        // 宿主只留下「这一轮有个条目被丢了」的标记; 文件其实早已写入磁盘, 整轮重放会再写一遍。
+        handlers.itemOmitted({ threadId: 'start-thread-id', turnId: 'turn-1', phase: 'completed', item });
+        await vi.advanceTimersByTimeAsync(0);
+
+        handlers.error({
+          threadId: 'start-thread-id',
+          turnId: 'turn-1',
+          willRetry: false,
+          error: { message: CAPACITY_MESSAGE },
+        });
+        await vi.advanceTimersByTimeAsync(advanceMs);
+
+        expect(turnStartCount(host)).toBe(expectedTurnStarts);
+
+        await handle.close();
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
     it('cancels a pending overload retry when the user stops the turn', async () => {
       vi.useFakeTimers();
       try {
@@ -33983,6 +34029,108 @@ describe('CodexAgent context window reporting', () => {
     expect((lastDiff?.data as { diff: string }).diff).toContain('root.txt');
     expect((lastDiff?.data as { diff: string }).diff).toContain('child.txt');
     expect((lastDiff?.data as { diff: string }).diff).toContain('grandchild.txt');
+
+    await handle.close();
+  });
+
+  it('publishes an omitted turn diff while any thread snapshot was dropped as oversized', async () => {
+    const agent = new CodexAgent(createDeps());
+    const host = installFakeHost(agent);
+    const handle = await agent.startSession({
+      sessionId: 'session-oversized-diff',
+      model: 'gpt-5.4',
+      workingDir: '/repo',
+    });
+    const events: AgentEvent[] = [];
+    void (async () => {
+      for await (const event of handle.events()) events.push(event);
+    })();
+    const handlers = host.getThreadHandlers();
+    if (!handlers?.descendantThreadStarted || !handlers.descendantNotification) {
+      throw new Error('expected descendant handlers');
+    }
+    const lastDiff = () => events.filter((event) => event.type === 'turn_diff').at(-1)?.data as
+      | { diff?: string; omitted?: string }
+      | undefined;
+    const rootDiff = 'diff --git a/root.txt b/root.txt\n--- a/root.txt\n+++ b/root.txt\n@@ -1 +1 @@\n-old\n+root\n';
+    const childDiff = 'diff --git a/child.txt b/child.txt\n--- a/child.txt\n+++ b/child.txt\n@@ -1 +1 @@\n-old\n+child\n';
+
+    handlers.turnStarted?.({ threadId: 'start-thread-id', turn: { id: 'turn-oversized' } });
+    handlers.descendantThreadStarted({
+      thread: { id: 'child-oversized-thread', parentThreadId: 'start-thread-id' },
+    });
+    handlers.descendantNotification('child-oversized-thread', 'turn/diff/updated', {
+      threadId: 'child-oversized-thread',
+      turnId: 'child-turn',
+      diff: '',
+      cindyOmitted: 'oversized',
+    });
+    handlers.turnDiffUpdated?.({ threadId: 'start-thread-id', turnId: 'turn-oversized', diff: rootDiff });
+
+    // 另一个线程的新快照不能把「未知」的那部分当成已完整覆盖。
+    await vi.waitFor(() => expect(lastDiff()).toMatchObject({ diff: '', omitted: 'oversized' }));
+
+    handlers.descendantNotification('child-oversized-thread', 'turn/diff/updated', {
+      threadId: 'child-oversized-thread',
+      turnId: 'child-turn',
+      diff: childDiff,
+    });
+
+    await vi.waitFor(() => {
+      const last = lastDiff();
+      expect(last?.omitted).toBeUndefined();
+      expect(last?.diff).toContain('+root');
+      expect(last?.diff).toContain('+child');
+    });
+
+    await handle.close();
+  });
+
+  it('closes a started tool whose completion was dropped at the line limit without inventing cards', async () => {
+    const agent = new CodexAgent(createDeps());
+    const host = installFakeHost(agent);
+    const handle = await agent.startSession({
+      sessionId: 'session-omitted-tool',
+      model: 'gpt-5.4',
+      workingDir: '/repo',
+    });
+    const events: AgentEvent[] = [];
+    void (async () => {
+      for await (const event of handle.events()) events.push(event);
+    })();
+    const handlers = host.getThreadHandlers();
+    if (!handlers?.itemStarted || !handlers.itemOmitted) throw new Error('expected item handlers');
+    const closes = (id: string) => events.some((event) =>
+      event.type === 'tool_result'
+      && ((event.data as { toolUseIds?: string[] }).toolUseIds ?? []).includes(id));
+
+    handlers.turnStarted?.({ threadId: 'start-thread-id', turn: { id: 'turn-omitted-tool' } });
+    handlers.itemStarted({
+      threadId: 'start-thread-id',
+      turnId: 'turn-omitted-tool',
+      item: { id: 'cmd-1', type: 'commandExecution', command: 'cat big.log', cwd: '/repo', status: 'inProgress' },
+    } as never);
+    await vi.waitFor(() => expect(events.some((event) =>
+      event.type === 'tool_use' && (event.data as { toolUseId?: string }).toolUseId === 'cmd-1')).toBe(true));
+
+    // 命令开始时消息很小, 结束时输出超限, 只剩省略标记: 会话里这条命令必须收尾,
+    // 否则 activeToolIds 一直留着它, 优雅停止停在 waiting-for-safe-point。
+    handlers.itemOmitted({
+      threadId: 'start-thread-id',
+      turnId: 'turn-omitted-tool',
+      phase: 'completed',
+      item: { id: 'cmd-1', type: 'commandExecution' },
+    });
+    // completion-only 的文件变更从没出过 tool_use, 不凭空补一张卡。
+    handlers.itemOmitted({
+      threadId: 'start-thread-id',
+      turnId: 'turn-omitted-tool',
+      phase: 'completed',
+      item: { id: 'patch-1', type: 'fileChange' },
+    });
+
+    await vi.waitFor(() => expect(closes('cmd-1')).toBe(true));
+    expect(events.filter((event) => JSON.stringify(event.data ?? null).includes('"patch-1"'))).toEqual([]);
 
     await handle.close();
   });

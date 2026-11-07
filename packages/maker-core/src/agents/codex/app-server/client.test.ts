@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 
-import { AppServerClient, detectAuthInvalidationReason } from './client.js';
+import { AppServerClient, detectAuthInvalidationReason, type OversizedNotification } from './client.js';
 import type { Logger } from '../../../interfaces/logger.js';
 import type { Transport, LineHandler, StderrHandler, CloseHandler } from './transport.js';
 import { Method } from './protocol.js';
@@ -519,5 +519,203 @@ describe('AppServerClient server requests', () => {
       id: 'server-req-1',
       result: { answers: { q1: { answers: ['A'] } } },
     });
+  });
+});
+
+describe('AppServerClient oversized lines', () => {
+  const LIMIT = 256;
+  // 大字段要比信封读取窗口 (行首 / 行尾各 4 KiB) 更长, 才是真实超限行的形态。
+  const bulk = 'x'.repeat(8 * 1024);
+
+  function setup(onOversizedNotification?: (notification: OversizedNotification) => boolean) {
+    const transport = new FakeTransport();
+    const onTransportError = vi.fn();
+    const client = new AppServerClient({
+      createTransport: () => transport,
+      logger,
+      maxLineBytes: LIMIT,
+      onTransportError,
+      onOversizedNotification,
+    });
+    return { transport, client, onTransportError };
+  }
+
+  it('fails only the request whose response is oversized and keeps the connection usable', async () => {
+    const { transport, client, onTransportError } = setup();
+    client.start();
+
+    const oversized = client.request('thread/resume');
+    const normal = client.request('model/list');
+    transport.emitLine({ id: 1, result: { history: bulk } });
+    transport.emitLine({ id: 2, result: { data: [] } });
+
+    await expect(oversized).rejects.toMatchObject({
+      name: 'AppServerMessageTooLargeError',
+      method: 'thread/resume',
+      limit: LIMIT,
+    });
+    await expect(normal).resolves.toEqual({ data: [] });
+    expect(onTransportError).not.toHaveBeenCalled();
+  });
+
+  it('answers an oversized server request with an error instead of invoking its handler', async () => {
+    const { transport, client, onTransportError } = setup();
+    const handler = vi.fn(async () => ({ decision: 'accept' }));
+    client.setRequestHandler('item/fileChange/requestApproval', handler);
+    client.start();
+
+    transport.emitLine({ id: 'server-req-1', method: 'item/fileChange/requestApproval', params: { bulk } });
+
+    await vi.waitFor(() => expect(transport.lines).toHaveLength(1));
+    expect(JSON.parse(transport.lines[0] ?? '')).toMatchObject({
+      id: 'server-req-1',
+      error: { code: -32600 },
+    });
+    expect(handler).not.toHaveBeenCalled();
+    expect(onTransportError).not.toHaveBeenCalled();
+  });
+
+  it('drops an oversized notification nobody subscribed to without asking the host', () => {
+    const onOversizedNotification = vi.fn<(notification: OversizedNotification) => boolean>(() => false);
+    const { transport, client, onTransportError } = setup(onOversizedNotification);
+    client.start();
+
+    transport.emitLine({ method: 'item/commandExecution/outputDelta', params: { delta: bulk } });
+
+    expect(onOversizedNotification).not.toHaveBeenCalled();
+    expect(onTransportError).not.toHaveBeenCalled();
+  });
+
+  it('lets the host degrade a subscribed oversized notification and keeps delivering later ones', () => {
+    const onOversizedNotification = vi.fn<(notification: OversizedNotification) => boolean>(() => true);
+    const { transport, client, onTransportError } = setup(onOversizedNotification);
+    const turnDiffUpdated = vi.fn();
+    client.onNotification('turn/diff/updated', turnDiffUpdated);
+    client.start();
+
+    const line = JSON.stringify({
+      method: 'turn/diff/updated',
+      params: { threadId: 'thread-1', turnId: 'turn-1', diff: bulk },
+    });
+    transport.emitLine(line);
+    transport.emitLine({ method: 'turn/diff/updated', params: { threadId: 'thread-1', turnId: 'turn-1', diff: 'small' } });
+
+    expect(onOversizedNotification).toHaveBeenCalledWith({
+      method: 'turn/diff/updated',
+      threadId: 'thread-1',
+      turnId: 'turn-1',
+      length: line.length,
+    });
+    expect(turnDiffUpdated).toHaveBeenCalledTimes(1);
+    expect(turnDiffUpdated).toHaveBeenCalledWith({ threadId: 'thread-1', turnId: 'turn-1', diff: 'small' });
+    expect(onTransportError).not.toHaveBeenCalled();
+  });
+
+  it('reads item identity before the bulky value and its routing after it', () => {
+    const onOversizedNotification = vi.fn<(notification: OversizedNotification) => boolean>(() => true);
+    const { transport, client } = setup(onOversizedNotification);
+    client.onNotification('item/completed', vi.fn());
+    client.start();
+
+    const line = JSON.stringify({
+      method: 'item/completed',
+      params: {
+        item: {
+          type: 'fileChange',
+          id: 'patch-1',
+          // 大字段之后、item 内部的同名字段不能被当成路由。
+          changes: [{ path: 'data.json', diff: bulk, meta: { kind: 'add', threadId: 'nested-thread' } }],
+          status: 'completed',
+        },
+        threadId: 'thread-1',
+        turnId: 'turn-1',
+        completedAtMs: 5,
+      },
+    });
+    transport.emitLine(line);
+
+    expect(onOversizedNotification).toHaveBeenCalledWith({
+      method: 'item/completed',
+      threadId: 'thread-1',
+      turnId: 'turn-1',
+      itemId: 'patch-1',
+      itemType: 'fileChange',
+      length: line.length,
+    });
+  });
+
+  it('leaves routing empty when the trailing members are not at the params level', () => {
+    const onOversizedNotification = vi.fn<(notification: OversizedNotification) => boolean>(() => true);
+    const { transport, client } = setup(onOversizedNotification);
+    client.onNotification('item/completed', vi.fn());
+    client.start();
+
+    // params 后面还有顶层成员: 行尾的层级对不上, 宁可读不到也不猜。
+    transport.emitLine({
+      method: 'item/completed',
+      params: { item: { type: 'fileChange', content: bulk }, threadId: 'thread-1', turnId: 'turn-1' },
+      extra: 1,
+    });
+
+    expect(onOversizedNotification).toHaveBeenCalledWith(
+      expect.not.objectContaining({ threadId: expect.anything() }),
+    );
+    expect(onOversizedNotification.mock.calls[0]?.[0]).toMatchObject({ method: 'item/completed' });
+  });
+
+  it('recovers a terminal turn from both ends, including a nested error after the items', () => {
+    const onOversizedNotification = vi.fn<(notification: OversizedNotification) => boolean>(() => true);
+    const { transport, client } = setup(onOversizedNotification);
+    client.onNotification('turn/completed', vi.fn());
+    client.start();
+
+    // 与 Codex 0.159.2 的 Turn 字段顺序一致: id, items, itemsView, status, error, ...
+    const line = JSON.stringify({
+      method: 'turn/completed',
+      params: {
+        threadId: 'thread-1',
+        turn: {
+          id: 'turn-1',
+          items: [{ type: 'fileChange', id: 'patch-1', changes: [{ path: 'data.json', diff: bulk }] }],
+          itemsView: 'full',
+          status: 'failed',
+          error: { message: 'boom', codexErrorInfo: null, additionalDetails: null },
+          startedAt: 1,
+          completedAt: 2,
+          durationMs: 1000,
+        },
+      },
+    });
+    transport.emitLine(line);
+
+    expect(onOversizedNotification).toHaveBeenCalledWith({
+      method: 'turn/completed',
+      threadId: 'thread-1',
+      turnId: 'turn-1',
+      turn: {
+        itemsView: 'full',
+        status: 'failed',
+        error: { message: 'boom', codexErrorInfo: null, additionalDetails: null },
+        startedAt: 1,
+        completedAt: 2,
+        durationMs: 1000,
+      },
+      length: line.length,
+    });
+  });
+
+  it.each([
+    ['the host cannot degrade the notification', { method: 'turn/completed', params: { bulk } }, () => false],
+    ['the envelope is unrecognizable', { params: { bulk }, method: 'turn/completed' }, () => true],
+  ])('retires the connection when %s', (_case, message, onOversizedNotification) => {
+    const { transport, client, onTransportError } = setup(onOversizedNotification);
+    client.onNotification('turn/completed', vi.fn());
+    client.start();
+
+    transport.emitLine(message);
+
+    expect(onTransportError).toHaveBeenCalledTimes(1);
+    expect(onTransportError.mock.calls[0]?.[0]).toBeInstanceOf(Error);
+    expect((onTransportError.mock.calls[0]?.[0] as Error).message).toMatch(/exceeds maxLineBytes/);
   });
 });
