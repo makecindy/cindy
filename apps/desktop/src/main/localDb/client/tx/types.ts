@@ -781,6 +781,18 @@ export interface BotsFinishRuntimeArgs {
 export interface BotsFinishDelegationArgs {
   expectedRunSequence?: number;
   expectedExecution?: { instanceId: string; generation: number };
+  /**
+   * Adopt a settlement for a run the Session layer resumed outside
+   * message_session_task (#9307): the row is already terminal, so instead of
+   * an active→terminal transition the transaction bumps run_sequence, keeps
+   * the frozen snapshot match as its only race guard, and records the resumed
+   * run's receipts. `expectedRunSequence` is required in this mode.
+   */
+  adoptedRun?: {
+    expectedStatus: 'failed' | 'timed-out';
+    expectedSnapshotJson: string;
+    permissionSnapshotJson: string;
+  };
   delegationId: string;
   status: 'completed' | 'failed' | 'cancelled' | 'timed-out';
   resultSummary: string | null;

@@ -7486,6 +7486,57 @@ describe('Bot Session task end-to-end runtime', () => {
     } finally { runtime.dispose(); }
   });
 
+  // Issue #9307: the Session layer can resume a delegated task without
+  // message_session_task (usage-limit auto-continue, send_to_session, direct UI
+  // input). The delegation row already settled failed, but the resumed run's
+  // result is real delivery — it must be adopted as a new run, not dropped.
+  it.each(['done', 'error'] as const)('adopts a session-resumed %s settlement after a terminal delegation', async outcome => {
+    await seedPair();
+    let execution = { instanceId: 'native-resumed-settle', generation: 1 };
+    const runtime = createDelegationRuntime({ readSessionExecution: () => execution });
+    try {
+      const task = await runtime.delegation.startSessionTask({ callerSessionId: 'session-1', objective: 'Finish the delegated work.' });
+      if (!task.ok) throw new Error('missing task');
+      const settledExecution = { ...execution };
+      // A usage-limit turn error fails the delegation; the Session keeps the
+      // armed resume and later runs a new turn with a new execution identity.
+      await runtime.delegation.settleSession({ childSessionId: task.childSessionId, outcome: 'error', execution,
+        error: 'Usage limit reached.', pendingInputClientIds: [], hadPendingInputAtTerminal: false });
+      expect(await runtime.delegation.getSessionTask('session-1', task.delegationId))
+        .toMatchObject({ task: { status: 'failed' } });
+      // A late settlement for the already-failed run is still dropped: the old
+      // run must never settle twice (same invariant as the test above).
+      await runtime.delegation.settleSession({ childSessionId: task.childSessionId, outcome, execution: settledExecution,
+        resultText: 'Late duplicate result.', pendingInputClientIds: [], hadPendingInputAtTerminal: false });
+      expect(await runtime.delegation.getSessionTask('session-1', task.delegationId))
+        .toMatchObject({ task: { status: 'failed' } });
+      // The resumed turn finishes with the session's current execution.
+      execution = { ...execution, generation: 2 };
+      await runtime.delegation.settleSession({ childSessionId: task.childSessionId, outcome, execution,
+        resultText: outcome === 'done' ? 'Resumed result.' : undefined,
+        error: outcome === 'error' ? 'Resumed run failed.' : undefined,
+        pendingInputClientIds: [], hadPendingInputAtTerminal: false });
+      const settled = await runtime.delegation.getSessionTask('session-1', task.delegationId);
+      expect(settled).toMatchObject({ task: { status: outcome === 'done' ? 'completed' : 'failed' } });
+      if (outcome === 'done') expect(settled).toMatchObject({ task: { result: 'Resumed result.' } });
+      const saved = h.sqlite!.prepare('SELECT run_sequence AS runSequence, permission_snapshot_json AS snapshot FROM bot_delegations WHERE id = ?')
+        .get(task.delegationId) as { runSequence: number; snapshot: string };
+      expect(saved.runSequence).toBe(2);
+      const snapshot = JSON.parse(saved.snapshot);
+      expect(snapshot.taskTerminal).toMatchObject({ runSequence: 2, execution, outcome });
+      expect(snapshot.taskExecution).toMatchObject({ ...execution, runSequence: 2 });
+      // The adopted run delivers its own completion receipt once.
+      const completions = runtime.dispatch.mock.calls.filter(([params]) => params.clientId?.startsWith(`bot-delegation-completion:${task.delegationId}`));
+      expect(completions).toHaveLength(2);
+      expect(completions.at(-1)![0].clientId).toBe(`bot-delegation-completion:${task.delegationId}:2`);
+      // A later duplicate settle for the same adopted run does not settle twice.
+      await runtime.delegation.settleSession({ childSessionId: task.childSessionId, outcome: 'done', execution,
+        resultText: 'Duplicate resumed result.', pendingInputClientIds: [], hadPendingInputAtTerminal: false });
+      expect(await runtime.delegation.getSessionTask('session-1', task.delegationId))
+        .toMatchObject({ task: { status: outcome === 'done' ? 'completed' : 'failed' } });
+    } finally { runtime.dispose(); }
+  });
+
   // Integration, PR #8026: a same-bot routine can reopen private work. Existing continuation
   // tests used the original caller, hiding the mutable parent destination bug.
   it('keeps private completion in the original chat when a routine reopens the task', async () => {
