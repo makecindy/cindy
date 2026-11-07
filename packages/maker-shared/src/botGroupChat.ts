@@ -216,7 +216,7 @@ export interface BotGroupMessageView {
   /** A main-chat message that re-posts an existing thread reply by reference. */
   threadShare?: BotGroupThreadShareView;
   /**
-   * Your own message in a group whose server reports read receipts: another human member has
+   * Your own message in a group whose server reports read receipts: another member (a person, or a teammate whose computer took the execution up) has
    * read it (the double check). Omitted otherwise; never set on other people's messages.
    */
   readByOthers?: boolean;
@@ -332,6 +332,8 @@ export interface BotGroupThreadShareView {
   authorName: string;
   /** The sharer wrote the reply themselves (sent to the thread and the main chat). */
   sharedByAuthor: boolean;
+  /** Original reply's targets, paired with its content. Older projections omit this. */
+  mentions?: BotGroupMention;
   content: string;
   attachments: BotGroupAttachment[];
   createdAt: number | null;
@@ -398,7 +400,7 @@ export type BotGroupPlanStatus =
   | 'stopped'
   | 'dismissed'
   | 'superseded';
-export type BotGroupPlanStepStatus = 'pending' | 'running' | 'done' | 'failed';
+export type BotGroupPlanStepStatus = 'pending' | 'running' | 'done' | 'failed' | 'skipped';
 
 export interface BotGroupPlanStepView {
   position: number;
@@ -409,6 +411,9 @@ export interface BotGroupPlanStepView {
   status: BotGroupPlanStepStatus;
   /** The step's latest hand-off message (a redo replaces it); absent where the host does not report it. */
   resultMessageId?: string | null;
+  /** Current server attempt, absent on older servers and completed turns. */
+  executionId?: string;
+  executionStatus?: string;
 }
 
 export interface BotGroupPlanView {
@@ -428,6 +433,8 @@ export interface BotGroupPlanView {
   kind?: 'talk' | 'work';
   /** Server groups: the viewer may continue or stop it (creator, owner or admin). */
   canManage?: boolean;
+  /** Server supports marking future talk turns skipped; absent on older hosts. */
+  supportsPendingSkip?: boolean;
   /** Server groups: what the viewer sends without naming anyone goes to the step under way (creator, or a human owner/admin). */
   canAdd?: boolean;
   /**
@@ -627,6 +634,7 @@ export type BotGroupErrorCode =
   | 'PLAN_OPEN'
   /** The plan already ended, was replaced, or is in a state that does not allow the action. */
   | 'PLAN_CLOSED'
+  | 'TURN_ALREADY_STARTED'
   /** The quoted message was deleted, moved out of reach or never belonged to this timeline. */
   | 'QUOTE_UNAVAILABLE'
   | 'INTERNAL';
@@ -696,9 +704,10 @@ export type BotGroupPlanAction = 'start' | 'dismiss' | 'continue' | 'retry';
 
 export interface BotGroupPlanEditInput extends BotGroupPlanActionInput {
   position: number;
-  /** `reassign` needs `botId`; `remove` keeps at least one step. Proposed plans only. */
-  action: 'reassign' | 'remove';
+  /** `skip` targets an exact unclaimed execution or a future pending position in a server discussion. */
+  action: 'reassign' | 'remove' | 'skip';
   botId?: string;
+  executionId?: string;
 }
 
 export interface BotGroupGetOptions {
@@ -791,6 +800,11 @@ export interface BotGroupRemoteChatData extends BotGroupDetail {
   projectDirName: string | null;
   /** Host forwards a measured main-timeline read to the chat server. Older hosts omit it. */
   supportsReadReceipts?: boolean;
+  /**
+   * Early local group: the host keeps its read position and accepts `read` with `{ at }`
+   * (host time of the newest message shown), so reading on the phone clears the computer's badge.
+   */
+  supportsLocalReadSync?: boolean;
   supportsPersonalMask?: boolean;
   /**
    * The computer accepts attachments on `send` (absent on older computers, which would
@@ -907,7 +921,7 @@ export interface BotGroupMessageReader { actorId: string; name: string | null; r
 /** Who has read one message of a group (bot-group-chat.md「消息已读」). Only the readers are listed, never who has not. */
 export interface BotGroupMessageReaders {
   messageId: string;
-  /** Human members other than the author who can see the message. */
+  /** Members other than the author who can see the message: people and teammates. */
   eligibleCount: number;
   /** How many of them have read it; matches `readers` when the list is given. */
   readCount: number;

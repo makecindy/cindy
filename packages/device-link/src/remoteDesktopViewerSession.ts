@@ -410,6 +410,7 @@ export function liveScreenCapabilities(
 export function viewerDisplaySize(
   width: number,
   height: number,
+  longEdge = 1920,
 ): { width: number; height: number } | null {
   if (
     !Number.isFinite(width) ||
@@ -418,7 +419,7 @@ export function viewerDisplaySize(
     height <= 0
   )
     return null;
-  const scale = 1920 / Math.max(width, height);
+  const scale = longEdge / Math.max(width, height);
   const result = {
     width: Math.round((width * scale) / 2) * 2,
     height: Math.round((height * scale) / 2) * 2,

@@ -33,13 +33,14 @@ const ghostNamespaceInput = z
   .union([z.string().min(1).max(128), z.null()])
   .optional()
   .describe(
-    '插件企业身份。字符串为企业 orgSlug。JSON null（不带引号）表示已确认 root；字符串 "null" 表示名为 null 的企业，不是 root。按发现结果保留类型，不要把 null 转成字符串。候选里没有 namespace 字段的待迁移旧安装也会标成 null，旁边还有另一个同名实例且没有已确认 root 时，传 null 会选中那份旧安装。省略时仅当同名实例唯一才兼容解析；多个同名实例返回 GHOST_AMBIGUOUS 并列出候选。',
+    '插件身份。local 为本地开发副本，其它字符串为企业 orgSlug。JSON null（不带引号）表示已确认 root；字符串 "null" 是企业名。按发现结果保留类型。省略时，同名 public/local 副本选择可用的较新版本，同版本选 public；其它同名多实例仍返回 GHOST_AMBIGUOUS。显式 namespace 精确寻址，不自动换源。候选里未提供 namespace 的待迁移旧安装也会标成 null；没有已确认 root 且存在同名实例时，null 可选择该待迁移安装。',
   );
 
 const D_GHOST_LIST = [
   "列出用户当前已安装并启用、提供工具或手册的插件(Ghost)。",
   "插件是扩展 Cindy 能力的 .cindy 能力包,可能由 Cindy 内置或由用户安装;",
   "清单是实时的:用户随时可能安装/卸载/启用/停用插件。",
+  "同名 public/local 副本只列可用的较新版本，同版本列 public；企业与身份未确认的旧安装保持独立。",
   "完全没有目标 id/名称/指令/花名册命中时才用本工具获取全量清单;它的保底价值是实时性,能发现会话中途的插件变动,system 段快照看不到的以本工具为准。",
   "已经从花名册、用户点名或上文知道 ghost_id、但没有现成工具清单时,直接用 ghost_info 精准查询,不要先拉全量清单。",
   "若用户消息的[插件指令]已附带目标插件工具清单,可直接 ghost_call 免查。",
@@ -61,7 +62,7 @@ const D_GHOST_INFO = [
   "按 ghost_id 精准查询单个当前可用插件的完整详情,包括工具说明/参数 schema、setup 与召回线索。花名册命中即满足已知目标条件。",
   "已经从花名册、用户点名或上文知道目标插件、但没有现成工具清单时直接用本工具;完全没有目标线索时才用 ghost_list。",
   "若用户消息的[插件指令]已附带目标插件工具清单,可直接 ghost_call 免查。",
-  "返回单条完整形态:id、namespace(null=root，字符串=企业 orgSlug)、name、command、recall、setup、tools 与可选 manual 轻量索引。示例:ghost_info({ghost_id:\"helper\", namespace:\"acme\"})；省略 namespace 仅当同名实例唯一。拿到目标工具后用 ghost_call,需要长文时用 ghost_manual。",
+  "返回单条完整形态:id、namespace(null=root，local=本地，其它字符串=企业 orgSlug)、name、command、recall、setup、tools 与可选 manual 轻量索引。示例:ghost_info({ghost_id:\"helper\", namespace:\"acme\"})；省略 namespace 时，同名 public/local 选可用的较新版本，同版本选 public；其它多实例须明确身份。拿到目标工具后用 ghost_call,需要长文时用 ghost_manual。",
   "tools 可能为空:Manual-only 插件仍返回完整详情与 manual 索引,通过 ghost_manual 读取;这不授予任何 ghost_call 工具能力。",
   "查询实时反映安装、启用、账号与当前工作目录状态,不要缓存或依赖会话早前的结果。",
   "GHOST_NAMESPACE_MISMATCH 表示插件已安装但 namespace 不匹配；按返回身份核对并修正参数，保留 JSON 类型，不能据此判断插件已卸载或自动改选其他实例。",
@@ -153,6 +154,7 @@ const D_GHOST_FORGE_SCAFFOLD = [
   "template 可选:plain(普通沙箱工具)、agent-action(卡片点击后让 Agent 继续/分叉/新建)、",
   "node-json-rpc(普通随包 Node 服务)、node-mcp(随包 stdio MCP)。Node 模板只写零依赖示例",
   "源码，不会执行 npm install / npx / postinstall。生成后按需求修改，再调用 ghost_forge_pack。",
+  "骨架不生成占位图或预填 icon；请用户提供图标，或经用户同意后生成，见手册 §7.1。",
   "四种模板均可叠加 withUi:true，生成标准 MCP Apps 交互页面和 main.js 工具；不需要页面构建。参见 §4.23。",
   "骨架不自动填写 ghost.json.releaseNotes；首次上架可省略，后续更新须补写相对上一已上架版本完整变化的纯文本说明，见 ghost_forge_guide 的第 2、7.3 章。",
   "会话工作目录内直接生成；工作目录外(例如相邻 worktree)走当前会话权限:",
@@ -162,13 +164,13 @@ const D_GHOST_FORGE_SCAFFOLD = [
 const D_GHOST_FORGE_PACK = [
   "把一个插件源码目录校验并打包成 .cindy。只生成产物，不安装或更新插件。",
   "缺省只打包并返回产物路径；intent=publish 时额外返回一次性 publishToken。",
-  "intent=publish 仅企业组织成员可用；个人账号仍可使用缺省的纯打包模式。",
+  "intent=publish 仅企业组织成员可用，用于发布到当前组织；公开市场投稿走 §7.3，个人账号仍可使用缺省的纯打包模式。",
   "releaseNotes 若填写须为 ghost.json 顶层纯文本；缺字段仍可打包、安装；首次上架可省略，曾上架插件的后续提审必须非空。打包成功不代表通过发布预检，个人发布从已安装实例走 ghost_contribution_prepare，见手册 §7.3。",
   "dir 传源码目录的绝对路径(目录里须有 ghost.json;打包自动跳过 .git / node_modules /",
   "隐藏文件 / *.cindy)。会话工作目录内直接打包；工作目录外走当前会话权限",
   "(本地 Full Access 自动放行,Auto 交审阅,Ask 向用户确认),不要因此改换目录或空转重试。",
   "仅当用户明确选择 AI 生成图标时,可把图片工具结果的",
-  "xdt_image_url 取单张地址；若只有 xdt_image_urls 则取数组第一项，再把得到的 cindy-media:// 地址传给 icon_source;主机会 best-effort 嵌入,失败保留默认图标继续打包。",
+  "xdt_image_url 取单张地址；若只有 xdt_image_urls 则取数组第一项，再把得到的 cindy-media:// 地址传给 icon_source;主机会 best-effort 嵌入，失败时保留原图标或缺省状态继续打包，不制作占位图。",
   "失败返回结构化错误(MANIFEST_INVALID 等,message 带具体原因),",
   "按 message 修正源码后重新打包即可。成功只表示 cindyPath 对应的产物已经生成；",
   "只有用户明确发起安装后，插件才会进入 Cindy。publish 同样不会触发装入。",
@@ -1508,13 +1510,13 @@ export function createCindyGhostsMcpServer(
         .string()
         .optional()
         .describe(
-          "可选；仅当用户明确选择 AI 生成图标时，传图片工具结果的 xdt_image_url，或 xdt_image_urls 数组第一项(cindy-media:// 地址)；失败会保留默认图标继续打包",
+          "可选；仅当用户明确选择 AI 生成图标时，传图片工具结果的 xdt_image_url，或 xdt_image_urls 数组第一项(cindy-media:// 地址)；失败时保留原图标或缺省状态继续打包，不制作占位图",
         ),
       intent: z
         .enum(["publish"])
         .optional()
         .describe(
-          "缺省不传:只打包并返回产物路径；publish:额外返回一次性发布票据。publish 仅企业组织成员可用，个人账号仍可使用缺省的纯打包模式",
+          "缺省不传:只打包并返回产物路径；publish:为发布到当前组织返回一次性发布票据。publish 仅企业组织成员可用，个人账号仍可使用缺省的纯打包模式；公开市场投稿走贡献流程",
         ),
     },
     async (input) => handleForgePack(deps, input),
@@ -1532,7 +1534,7 @@ export function createCindyGhostsMcpServer(
         .string()
         .optional()
         .describe(
-          "可选；仅当用户明确选择 AI 生成图标时，传图片工具结果的 cindy-media:// 地址；失败会保留默认图标继续安装",
+          "可选；仅当用户明确选择 AI 生成图标时，传图片工具结果的 cindy-media:// 地址；失败时保留原图标或缺省状态继续安装，不制作占位图",
         ),
     },
     async (input) => handleForgeInstall(deps, input),

@@ -50,10 +50,13 @@ import type {
   RunStatus,
   AgentKind as SchedulerAgentKind,
   ScriptExecutionConfig,
+  ScheduleWebhookTrigger,
   ScriptCapability,
   PreRunHookRunResult,
   PreRunPluginFailureAction,
 } from '@cindy/maker-scheduler';
+// 子路径只加载这一份无依赖的格式校验，不引入引擎。
+import { normalizeScheduleWebhookSource, type ScheduleWebhookSource } from '@cindy/maker-scheduler/webhook-formats';
 import { normalizeSessionSource } from '../../shared/sessionSource.js';
 import type { SessionSource } from '../../shared/sessionSource.js';
 import { normalizeWorkingDirForStorage } from '../../shared/workingDir.js';
@@ -734,6 +737,33 @@ function parsePreRunHookResult(raw: string | null): PreRunHookRunResult | undefi
   }
 }
 
+/**
+ * 更新版本写入的预设本机可能不认识：原样保留，不当作 GitHub，否则下次同步会覆盖服务器上的格式。
+ */
+function parseWebhookSource(value: unknown): Pick<ScheduleWebhookTrigger, 'source'> {
+  if (value === undefined) return {};
+  try {
+    return { source: normalizeScheduleWebhookSource(value) };
+  } catch {
+    const preset = (value as { preset?: unknown } | null)?.preset;
+    return typeof preset === 'string' && preset ? { source: value as ScheduleWebhookSource } : {};
+  }
+}
+
+function parseWebhookTrigger(raw: string | null): ScheduleWebhookTrigger | undefined {
+  if (!raw) return undefined;
+  try {
+    const value = JSON.parse(raw) as Record<string, unknown>;
+    if (typeof value.endpointId !== 'string' || !value.endpointId) return undefined;
+    const events = Array.isArray(value.events)
+      ? value.events.filter((event): event is string => typeof event === 'string')
+      : [];
+    return { endpointId: value.endpointId, ...(events.length ? { events } : {}), ...parseWebhookSource(value.source) };
+  } catch {
+    return undefined;
+  }
+}
+
 function serializeScriptConfig(config: ScriptExecutionConfig | undefined): string | null {
   return config ? JSON.stringify(config) : null;
 }
@@ -748,6 +778,7 @@ export function scheduleToCamel(row: ScheduleRow): Schedule {
     jobConfig: row.jobConfig ?? undefined,
     executionMode: row.executionMode === 'script' ? 'script' : 'agent',
     scriptConfig: parseScriptConfig(row.scriptConfig),
+    webhookTrigger: parseWebhookTrigger(row.webhookTrigger),
     source: row.source === 'project' ? 'project' : row.source === 'bot' ? 'bot' : 'user',
     projectConfigId: row.projectConfigId ?? undefined,
     kind: row.kind,
@@ -808,6 +839,7 @@ export function scheduleCreateToRow(s: Schedule): ScheduleInsert {
     jobConfig: s.jobConfig ?? null,
     executionMode: s.executionMode ?? 'agent',
     scriptConfig: serializeScriptConfig(s.scriptConfig),
+    webhookTrigger: s.webhookTrigger ? JSON.stringify(s.webhookTrigger) : null,
     source: s.source ?? 'user',
     projectConfigId: s.projectConfigId ?? null,
     kind: s.kind,
@@ -866,6 +898,7 @@ export function schedulePatchToRow(patch: Partial<Schedule>): Partial<ScheduleIn
   if (hasKey(patch, 'jobConfig')) out.jobConfig = patch.jobConfig ?? null;
   if (hasKey(patch, 'executionMode')) out.executionMode = patch.executionMode ?? 'agent';
   if (hasKey(patch, 'scriptConfig')) out.scriptConfig = serializeScriptConfig(patch.scriptConfig);
+  if (hasKey(patch, 'webhookTrigger')) out.webhookTrigger = patch.webhookTrigger ? JSON.stringify(patch.webhookTrigger) : null;
   if (hasKey(patch, 'source')) out.source = patch.source ?? 'user';
   if (hasKey(patch, 'projectConfigId')) out.projectConfigId = patch.projectConfigId ?? null;
   if (hasKey(patch, 'kind')) out.kind = patch.kind as ScheduleInsert['kind'];
@@ -1001,6 +1034,7 @@ export function scheduleRunToCamel(row: ScheduleRunRow): ScheduleRun {
     costAttribution: row.costAttribution,
     resultText: row.resultText ?? undefined,
     preRunHookResult: parsePreRunHookResult(row.preRunHookResult),
+    triggerSource: row.triggerSource === 'webhook' ? 'webhook' : undefined,
     readAt: row.readAt ?? undefined,
     heartbeatAt: row.heartbeatAt ?? undefined,
   };
@@ -1026,6 +1060,7 @@ export function scheduleRunCreateToRow(r: ScheduleRun): ScheduleRunInsert {
     costAttribution: r.costAttribution ?? 'exact',
     resultText: r.resultText ?? null,
     preRunHookResult: r.preRunHookResult ? JSON.stringify(r.preRunHookResult) : null,
+    triggerSource: r.triggerSource ?? null,
     readAt: r.readAt ?? null,
     heartbeatAt: r.heartbeatAt ?? null,
   };

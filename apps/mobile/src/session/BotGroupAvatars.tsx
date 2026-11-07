@@ -36,6 +36,8 @@ export const BOT_GROUP_MESSAGE_AVATAR_SIZE = 28;
 export const BOT_GROUP_STEP_AVATAR_SIZE = 24;
 export const BOT_GROUP_INLINE_AVATAR_SIZE = 20;
 export const BOT_GROUP_ROW_AVATAR_SIZE = 32;
+/** Existing 48pt portrait geometry in the compact mention identity popover. */
+export const BOT_GROUP_MENTION_AVATAR_SIZE = 48;
 /** List rows (44 box, two 30 avatars), the task home's avatar strip (36, two 26) and chat headers (32, two 22). */
 const DUO_SIZES = { row: { box: TEAMMATE_AVATAR.row, avatar: 30 }, strip: { box: TEAMMATE_AVATAR.strip, avatar: 26 }, header: { box: 32, avatar: 22 } } as const;
 /** Separates overlapped avatars; the same 2pt ring as the teammate connection dot. */

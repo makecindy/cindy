@@ -50,7 +50,9 @@ vi.mock('@/cindy-brain/OneshotModelPinPicker', () => ({
     options,
     onChange,
     ariaLabel,
+    'data-setting-id': settingId,
   }: {
+    'data-setting-id'?: string;
     value?: string;
     ariaLabel: string;
     disabled?: boolean;
@@ -71,6 +73,7 @@ vi.mock('@/cindy-brain/OneshotModelPinPicker', () => ({
         ))}
         <button
           type="button"
+          data-setting-id={settingId}
           aria-label={`${ariaLabel}:select`}
           disabled={disabled}
           onClick={() => onChange(PREFERRED_PIN)}
@@ -282,6 +285,11 @@ describe('AuxiliaryModelSection', () => {
     await selectMode('settings.auxiliaryModels.customize');
 
     expect(await screen.findByText('settings.auxiliaryModels.preferred.label')).toBeTruthy();
+    // Unit protocol regression (#8481): custom slots must pass their own search ID.
+    for (const slot of ['preferred', 'fallback1', 'fallback2']) {
+      expect(screen.getByRole('button', { name: 'settings.auxiliaryModels.' + slot + '.ariaLabel:select' })
+        .getAttribute('data-setting-id')).toBe('settings.auxiliaryModels.' + slot + '.label');
+    }
     expect(screen.getByText('settings.auxiliaryModels.fallback1.label')).toBeTruthy();
     expect(screen.getByText('settings.auxiliaryModels.fallback2.label')).toBeTruthy();
     expect(

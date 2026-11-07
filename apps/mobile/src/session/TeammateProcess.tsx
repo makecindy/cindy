@@ -8,6 +8,7 @@ import { useTheme, useThemedStyles, type ThemeColors } from '@/theme';
 import { spacing, typeScale, lineHeight, listDisclosureMotion, iconSize } from '@/theme/tokens';
 import { useReduceMotionEnabled } from '@/hooks/useReduceMotion';
 import { useFoldableExpandedState } from './expandedBlockMemory';
+import { ProcessDisclosureViewport } from './useProcessDisclosureViewport';
 
 const InspectProcess = createContext<(() => void) | null>(null);
 const ProcessRailEnd = createContext<((inset: number) => void) | null>(null);
@@ -50,6 +51,8 @@ export function TeammateProcess({ id, title, running = false, children, secondar
 }) {
   const { colors } = useTheme();
   const inspectParent = useContext(InspectProcess);
+  const inspectViewport = useContext(ProcessDisclosureViewport);
+  const visibleHeight = useRef(0);
   const reduceMotion = useReduceMotionEnabled();
   const styles = useThemedStyles(makeStyles);
   const [stored, toggleStored] = useFoldableExpandedState(id, false);
@@ -76,6 +79,7 @@ export function TeammateProcess({ id, title, running = false, children, secondar
     inspectParent?.();
   };
   const toggle = () => {
+    inspectViewport?.(expanded ? visibleHeight.current : 0);
     inspectParent?.();
     if (stored !== !expanded) toggleStored();
     if (!manual) toggleManual();
@@ -102,6 +106,7 @@ export function TeammateProcess({ id, title, running = false, children, secondar
         </Animated.View>
       </Pressable>
       {(expanded || mounted) && <Animated.View style={{ height, overflow: 'hidden' }}
+        onLayout={event => { visibleHeight.current = event.nativeEvent.layout.height; }}
         accessibilityElementsHidden={!expanded} importantForAccessibility={expanded ? 'auto' : 'no-hide-descendants'}>
         <View style={styles.measuredBody} onLayout={event => setContentHeight(event.nativeEvent.layout.height)}>
           <View style={secondary ? styles.records : styles.guide}>

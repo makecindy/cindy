@@ -1,11 +1,11 @@
 import { useEffect, useState } from 'react';
-import { isSharedTaskPeer } from '@cindy/device-link';
+import { isSharedTaskPeer, readProviderMetadataContinuity } from '@cindy/device-link';
 import { withTransientRemoteRetry } from '@cindy/maker-shared/device-link-contract';
-import { CONTROLLED_MODEL_CATALOG_CHANNEL, CONTROLLED_MODEL_CATALOG_CHANGED, readControlledFavoriteSource, type ControlledModelLocation } from '../../shared/controlledModelCatalog';
+import { CONTROLLED_MODEL_CATALOG_CHANNEL, CONTROLLED_MODEL_CATALOG_CHANGED, modelCatalogKey, readControlledFavoriteSource, type ControlledModelLocation } from '../../shared/controlledModelCatalog';
 import { getDataOwnerGeneration, isDataOwnerGenerationCurrent } from '@/contexts/dataOwnerGeneration';
 import { extractIpcError } from '@/utils/ipcError';
-import { evictControlledDeviceProviders, refreshControlledDeviceProviders } from './useDeviceProviders';
-import { evictControlledDeviceCapabilities, refreshControlledDeviceCapabilities } from './useAgentCapabilities';
+import { evictControlledDeviceProviders, evictDeviceProviders, refreshControlledDeviceProviders } from './useDeviceProviders';
+import { evictControlledDeviceCapabilities, evictDeviceCapabilities, refreshControlledDeviceCapabilities } from './useAgentCapabilities';
 import { refreshControlledAvailableAgents } from './useAvailableAgents';
 import { isProviderShareAgentDeviceId } from '../../shared/providerShare';
 
@@ -98,8 +98,11 @@ export function useControlledModelLocations(deviceId: string | null | undefined,
       if (pending) queued = true;
       else void refresh();
     };
-    const offStatus = link.onStatusChanged?.(({ status }) => {
-      available = status === 'online';
+    const offStatus = link.onStatusChanged?.(({ status, directDataDeviceIds }) => {
+      const nextAvailable = status === 'online'
+        || directDataDeviceIds?.includes(deviceId) === true;
+      if (available === nextAvailable) return;
+      available = nextAvailable;
       reload();
     });
     const offPresence = link.onPresenceChanged?.(presence => {
@@ -118,6 +121,22 @@ export function useControlledModelLocations(deviceId: string | null | undefined,
       if (event.deviceId === deviceId) { available = event.enabled; reload(); }
     });
     const offPush = link.onRemotePush?.(event => {
+      if (readProviderMetadataContinuity(event.payload)?.remainingMs === 0) {
+        // A definitive denial/expiry is terminal for this metadata source.
+        // Retire only the affected direct key or routed alias; never reload the
+        // host, reopen the denied target or clear its healthy neighbors.
+        if (event.deviceId === deviceId) {
+          evictDeviceProviders(deviceId, { directOnly: true });
+          evictDeviceCapabilities(deviceId, { directOnly: true });
+        } else if (sourceIds.has(event.deviceId)) {
+          const route = modelCatalogKey(event.deviceId, deviceId);
+          if (route) {
+            evictDeviceProviders(route);
+            evictDeviceCapabilities(route);
+          }
+        }
+        return;
+      }
       if (((event.channel === 'maker:provider:changed' || event.channel === 'maker:agents:changed')
         && (event.deviceId === deviceId || sourceIds.has(event.deviceId)))
         || (event.deviceId === deviceId && event.channel === CONTROLLED_MODEL_CATALOG_CHANGED)) reload();

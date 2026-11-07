@@ -65,7 +65,7 @@ function syncClassicalStyle(style: ClassicalReplyStyleId): void {
 }
 
 function applyLocale(loc: SupportedLocale): void {
-  // i18next 自带 isInitialized 检查；同步资源 + 同步 init 下永远是 true。
+  // 目标语言包已加载时立即切换；否则先按需加载，加载完成才切换并触发重渲染。
   void i18n.changeLanguage(loc);
   if (typeof document !== 'undefined') {
     document.documentElement.lang = loc;
@@ -76,9 +76,10 @@ function applyLocale(loc: SupportedLocale): void {
 /**
  * Apply the persisted locale before the first React render.
  *
- * Lightweight windows render their error boundary outside the provider tree;
- * initializing i18next synchronously here keeps even an early render failure
- * in the user's selected language.
+ * Lightweight windows render their error boundary outside the provider tree.
+ * The renderer dispatcher (index.tsx) waits for `i18nReady` before loading any
+ * window, so the selected language is already loaded here and applying it is
+ * synchronous; even an early render failure stays in the user's language.
  */
 export function bootstrapInitialLocale(): SupportedLocale {
   const effectiveLocale = getEffectiveLocale();

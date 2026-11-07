@@ -197,7 +197,21 @@
     "awaitingStart": "候君發令",
     "progressRunning": "方為 {{current}} / {{total}}",
     "progressDone": "已畢 {{done}} / {{total}}",
-    "allDone": "皆畢矣"
+    "allDone": "皆畢矣",
+    "stepQueued": "待啟",
+    "stepExecuting": "行中",
+    "stepSkipped": "已略",
+    "skippingTurn": "略過中…",
+    "queueWaiting": "待君續行",
+    "skipTurnLabel": "略過 {{name}}",
+    "stepSpoken": "言畢",
+    "allTurns_one": "凡 {{count}} 位",
+    "allTurns_other": "凡 {{count}} 位",
+    "foldTurns": "收",
+    "talkTitle": "依次陳議",
+    "talkPending": "未始",
+    "skipTurn": "略過",
+    "queueEnded": "此輪已終"
   },
   "speaking": {
     "queued": "待次",
@@ -309,7 +323,8 @@
     "lifecycleUnavailable": "今之伺服器或機尚不支援此舉。",
     "groupDissolved": "群議已散，仍可觀有權存取之舊訊。",
     "lastOwner": "請先讓渡群主或解散群議，然後退出。",
-    "allBotsMentionDisabled": "群主未啟 @所有夥伴。"
+    "allBotsMentionDisabled": "群主未啟 @所有夥伴。",
+    "turnAlreadyStarted": "此同伴已啟，不可略過"
   },
   "followUp": {
     "next": "分職 · 次步",
@@ -505,6 +520,7 @@
     "searchMembers": "尋成員",
     "membersNoMatch": "尋不得「{{query}}」",
     "you": "君",
+    "companionOf": "{{name}} 之同僚",
     "teammateTag": "同僚",
     "paused": "已暫止",
     "accessNone": "唯主人可用",

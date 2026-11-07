@@ -207,6 +207,32 @@ describe('Chat Server result delivery and refresh', () => {
   });
   afterEach(() => { service.dispose(); vi.useRealTimers(); vi.unstubAllEnvs(); fixture.config = ''; vi.clearAllMocks(); });
 
+  it('keeps the displayed talk execution identity across a refreshed plan revision', async () => {
+    const planId = '60000000-0000-4000-8000-000000000001';
+    const plan = { id: planId, revision: 4, kind: 'talk', source_message_id: execution.source_message_id,
+      request_text: 'Take turns', organizer_id: botId, creator_id: selfId, status: 'running', current_step: 0,
+      created_at: '2026-10-03T00:00:00Z', updated_at: '2026-10-03T00:00:00Z',
+      activeExecution: { id: execution.id, status: 'queued' }, supportsPendingSkip: true,
+      steps: [{ position: 0, botId, botName: 'Bot', task: '', status: 'running' },
+        { position: 1, botId, botName: 'Next', task: '', status: 'pending' }] };
+    fixture.handle.mockImplementation((route, method) => route.includes('/plans')
+      ? { body: method === 'POST' ? {} : [plan] } : response(route));
+    const result = await service.getGroup(roomId);
+    if (!result.ok) throw new Error(result.errorCode);
+    expect(result.group.plans?.[0].steps[0]).toMatchObject({ executionId: execution.id, executionStatus: 'queued' });
+    expect(result.group.plans?.[0].supportsPendingSkip).toBe(true);
+    // A replacement at the same position must not be substituted for the displayed attempt.
+    plan.activeExecution.id = '40000000-0000-4000-8000-000000000002';
+    const edited = await service.editPlanStep({ groupId: roomId, planId, position: 0, action: 'skip', executionId: execution.id });
+    expect(edited.ok).toBe(true);
+    const post = fixture.handle.mock.calls.find(([route, method]) => route === `/conversations/${roomId}/plans/${planId}` && method === 'POST');
+    expect(post?.[2]).toMatchObject({ action: 'skip', position: 0, executionId: execution.id, expectedRevision: 4 });
+    expect((await service.editPlanStep({ groupId: roomId, planId, position: 1, action: 'skip' })).ok).toBe(true);
+    const futurePost = fixture.handle.mock.calls.filter(([route, method]) => route === `/conversations/${roomId}/plans/${planId}` && method === 'POST').at(-1);
+    expect(futurePost?.[2]).toMatchObject({ action: 'skip', position: 1, expectedRevision: 4 });
+    expect(futurePost?.[2]).not.toHaveProperty('executionId');
+  });
+
   it('uses the personal mask grant without requiring bot membership or elevating a peer to owner', async () => {
     let downgraded = false;
     const peer = '30000000-0000-4000-8000-000000000002';
@@ -843,13 +869,13 @@ describe('Chat Server result delivery and refresh', () => {
       if (!group.ok) throw new Error(group.errorCode);
       expect(group.group.messages.map(m => m.readByOthers)).toEqual([false, false, undefined]);
     });
-    it('lists human readers by actor ID, caches them per message and drops them on a receipt', async () => {
+    it('lists readers, teammates among them, by actor ID in the server\'s order, caches them per message and drops them on a receipt', async () => {
       serve(snapshot([{ thread_key: 'main', read_seq: '5' }]));
       const bot = botId, former = '30000000-0000-4000-8000-000000000003';
       const target = message('7').id;
       fixture.handle.mockImplementation(((previous) => (route: string, method: string, body: unknown) => {
         if (route === `/conversations/${roomId}/messages/${target}/readers`) return { body: { messageId: target, eligibleCount: 3,
-          readers: [{ actorId: peer, readAt: '2026-10-03T00:00:05Z' }, { actorId: bot, readAt: '2026-10-03T00:00:06Z' }, { actorId: former, readAt: null }],
+          readers: [{ actorId: peer, readAt: '2026-10-03T00:00:05Z' }, { actorId: bot, readAt: null }, { actorId: former, readAt: null }],
           unread: [{ actorId: bot }, { actorId: selfId }] } };
         if (route === `/conversations/${roomId}/members`) return { body: [...members, { id: bot, kind: 'bot', name: 'Cindy', ownerName: 'Me', state: 'joined' },
           { id: former, kind: 'human', name: 'Ada', ownerName: 'Ada', state: 'left' }] };
@@ -858,9 +884,10 @@ describe('Chat Server result delivery and refresh', () => {
       const { socket } = await open();
       const result = await service.chatServer!.readers({ groupId: roomId, messageId: target });
       if (!result.ok) throw new Error(result.errorCode);
-      // Only readers are given on; the server's unread list is ignored, and a bot is never a reader.
-      expect(result.readers).toEqual({ messageId: target, eligibleCount: 3, readCount: 2, listed: true,
+      // Only readers are given; the server's unread list is ignored. A teammate is a reader like anyone (it has no time).
+      expect(result.readers).toEqual({ messageId: target, eligibleCount: 3, readCount: 3, listed: true,
         readers: [{ actorId: peer, name: 'Peer', readAt: Date.parse('2026-10-03T00:00:05Z'), formerMember: false },
+          { actorId: bot, name: 'Cindy (Me)', readAt: null, formerMember: false },
           { actorId: former, name: 'Ada', readAt: null, formerMember: true }] });
       const reads = () => fixture.handle.mock.calls.filter(([route]) => String(route).endsWith('/readers')).length;
       await service.chatServer!.readers({ groupId: roomId, messageId: target });
@@ -3083,9 +3110,24 @@ describe('Chat Server result delivery and refresh', () => {
       expect(stops.map(r => [Object.entries(ids).find(([, id]) => r.url.includes(id))![0], r.actor || undefined])).toEqual(expected);
     });
 
+    // A manager's human identity can stop everyone on the server. Missing metadata
+    // must not turn the default own-only action into the explicit all action.
+    it.each([
+      ['owner', undefined], ['admin', undefined], ['owner', 'all'], ['admin', 'all'],
+    ] as const)('keeps missing-requester work in the requested scope: %s %s', async (role, scope) => {
+      singleSpeaker(route => route === `/conversations/${roomId}/executions` ? { body: [
+        { ...execution, status: 'queued', bot_id: foreignBot, requester_id: undefined },
+      ] } : undefined, role);
+      const from = fixture.requests.length;
+      expect(await service.stopRound(roomId, scope)).toMatchObject(scope === 'all'
+        ? { ok: true } : { ok: false, errorCode: 'STOP_OWNERSHIP_UNKNOWN' });
+      const stops = fixture.requests.slice(from).filter(request => request.url.endsWith('/control'));
+      expect(stops).toHaveLength(scope === 'all' ? 1 : 0);
+      if (scope === 'all') expect(stops[0].actor).toBeUndefined();
+    });
+
     // #8045: exercise the production stop entry point, including server refusals and races.
     it.each([
-      ['missing requester', undefined, 'STOP_OWNERSHIP_UNKNOWN'],
       ['another requester', otherHuman, 'PERMISSION_DENIED'],
       ['no active work', null, 'NOTHING_TO_STOP'],
     ])('does not report a successful stop with %s', async (_label, requester, errorCode) => {
@@ -3094,6 +3136,33 @@ describe('Chat Server result delivery and refresh', () => {
       const from = fixture.requests.length;
       expect(await service.stopRound(roomId)).toMatchObject({ ok: false, errorCode });
       expect(fixture.requests.slice(from).filter(r => r.url.endsWith('/control'))).toEqual([]);
+    });
+
+    // #8045: production /executions omits requester_id. Source authors are not
+    // authority; stop as the signed-in human and observe the server's decision.
+    // Unit: the existing scope matrix only used complete execution metadata.
+    it.each([
+      ['accepted', 200, 'cancelled', true, 'member'],
+      ['denied', 403, 'queued', false, 'member'],
+      ['member with an admin teammate', 200, 'cancelled', true, 'admin'],
+    ] as const)('lets the server authorize missing-requester work: %s', async (_label, status, nextStatus, ok, botRole) => {
+      let controlled = false;
+      singleSpeaker(route => {
+        if (route.endsWith('/control')) {
+          controlled = true;
+          return status === 200 ? { body: {} } : { status, body: { error: { code: 'ROLE_REQUIRED' } } };
+        }
+        if (route === `/conversations/${roomId}/executions`) return { body: [
+          { ...execution, bot_id: foreignBot, requester_id: undefined, status: controlled ? nextStatus : 'queued' },
+        ] };
+      }, 'member', botRole);
+      const from = fixture.requests.length;
+      expect(await service.stopRound(roomId)).toMatchObject(ok ? { ok: true } : { ok: false, errorCode: 'PERMISSION_DENIED' });
+      const stops = fixture.requests.slice(from).filter(request => request.url.endsWith('/control'));
+      expect(stops).toHaveLength(1);
+      expect(stops[0].actor).toBeUndefined();
+      const detail = await service.getGroup(roomId);
+      expect(detail.ok && detail.group.round.status).toBe(ok ? 'idle' : 'running');
     });
 
     it.each([

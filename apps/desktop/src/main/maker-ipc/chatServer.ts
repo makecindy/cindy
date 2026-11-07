@@ -88,7 +88,7 @@ interface Room {
 }
 /**
  * `reads`: this reader's read position per Thread (`thread_key` = root ID, `main` for the main timeline); older servers omit it.
- * `othersRead`: per Thread, the highest read position among the other human members; only servers
+ * `othersRead`: per Thread, the highest read position among the other members, teammates included; only servers
  * that report message readers (`capabilities.messageReaders`) send it.
  */
 interface Snapshot { room: Room; members: Member[]; messages: Message[]; cursor: string; mentionReadIds?: string[]; reads?: Array<{ thread_key: string; read_seq: string; following?: boolean; muted?: boolean; notification_scope?: 'all' | 'mentions' | null }>; othersRead?: Array<{ thread_key: string; read_seq: string }> }
@@ -113,6 +113,8 @@ interface Execution {
   context_seq: string; attachment_after_seq?: string; epoch: number; status: string; access_mode: 'owner' | 'chat' | 'tools'; access_revision: number;
 }
 interface ServerPlan {
+  activeExecution?: { id: string; status: string };
+  supportsPendingSkip?: boolean;
   id: string; revision: number; source_message_id: string; request_text: string; organizer_id: string; creator_id: string;
   note_message_ids?: string[];
   status: BotGroupPlanView['status']; current_step: number | null; steps: Array<BotGroupPlanView['steps'][number] & { resultMessageId?: string | null }>;
@@ -426,6 +428,8 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
   // Cloud companions (cloud-companions.md): inert unless the server announces homes.
   let selfDeviceId: string | null = null;
   let companionHome = false;
+  /** The server keeps companion values too large for preferences (`capabilities.companionStore`). */
+  let companionStore = false;
   let directRoomClaims = false;
   let workAvailability = false;
   let workNotifications = false;
@@ -1006,6 +1010,7 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
       if (!workNotifications) workPolling.shortenIdle();
       selfDeviceId = typeof me.deviceId === 'string' && me.deviceId ? me.deviceId : null;
       companionHome = !!deps.companionCloud && me.capabilities?.companionHome === true && !!selfDeviceId;
+      companionStore = (me.capabilities as { companionStore?: number } | undefined)?.companionStore === 1;
       // Work in a 1:1 room is only claimed by a copy that hands it to the companion's main task;
       // a server without the capability never sees the field (its strict contract would reject it).
       directRoomClaims = companionHome && me.capabilities?.directRoomClaim === true;
@@ -1105,7 +1110,8 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
         // The conversation mirror is not a file backup: large files stay a name in the room.
         for (const file of files) if (file.path && (await fsp.stat(file.path)).size > MIRROR_ATTACHMENT_MAX_BYTES) throw new Error('ATTACHMENT_TOO_LARGE');
         return media.upload(room, source, files, author);
-      }, download: (room, mediaId) => media.download(room, mediaId) } });
+      }, download: (room, mediaId) => media.download(room, mediaId) },
+      store: { enabled: () => companionStore, transfer: media.companionTransfer } });
     const runtime = companion;
     await registerCompanionHomes({ api: request, selfDeviceId: self, actors, log: deps.log,
       botIds: profiles.filter(p => p.status === 'active').map(p => p.id), isDemoted: botId => runtime.state.isDemoted(botId) });
@@ -1849,7 +1855,7 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
     const executionFailures = summaryOnly || direct ? undefined : await failureSnapshot(roomId, s.members, [...(o.sourceMessageIds ?? []), ...page.map(m => m.id)], executions);
     const serverPlans = await plansRead;
     const workspace = workspaces().read(roomId);
-    const plans = serverPlans.map(plan => planView(plan, s.members, workspace));
+    const plans = serverPlans.map(plan => planView(plan, s.members, workspace, Boolean(s.room.archived || s.room.dissolved_at)));
     const open = plans.find(p => ['proposed', 'running', 'waiting'].includes(p.status));
     // Keep execution identity across computers and concurrent threads. Only the executing
     // computer resolves a lane; authenticated peers retrieve it through the group resource.
@@ -1926,13 +1932,15 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
         othersActive: executions.some(e => ['queued', 'running', 'needs_input'].includes(e.status) && e.requester_id !== selfId
           && !localBot(e.bot_id) && !s.members.some(m => m.id === e.bot_id && m.ownerActorId === selfId)), canContinue: !open && !planning.has(roomId) && (executions.some(e => !e.plan_id && ordinaryExecution(e)) || s.messages.some(discussionSource)) && !executions.some(e => ['queued','running','stopping'].includes(e.status)) } };
   }
-  function planView(plan: ServerPlan, members: Member[], workspace: ReturnType<ReturnType<typeof chatServerWorkspaces>['read']>): BotGroupPlanView {
+  function planView(plan: ServerPlan, members: Member[], workspace: ReturnType<ReturnType<typeof chatServerWorkspaces>['read']>, readOnly = false): BotGroupPlanView {
     return { id: plan.id, status: plan.status, organizerBotId: localBot(plan.organizer_id)?.id ?? plan.organizer_id,
       organizerName: members.find(m => m.id === plan.organizer_id)?.name ?? '',
-      steps: plan.steps.map(s => ({ ...s, botId: localBot(s.botId)?.id ?? s.botId })), currentStep: plan.current_step,
+      supportsPendingSkip: plan.supportsPendingSkip === true,
+      steps: plan.steps.map(s => ({ ...s, botId: localBot(s.botId)?.id ?? s.botId,
+        ...(s.position === plan.current_step && plan.activeExecution ? { executionId: plan.activeExecution.id, executionStatus: plan.activeExecution.status } : {}) })), currentStep: plan.current_step,
       workDir: workspace?.plans[plan.id]?.workDir ?? null, branch: workspace?.plans[plan.id]?.branch ?? null,
       ...(plan.kind ? { kind: plan.kind,
-        canManage: plan.creator_id === selfId || members.some(m => m.ownerActorId === selfId && m.state === 'joined' && ['owner', 'admin'].includes(m.role)),
+        canManage: !readOnly && (plan.creator_id === selfId || members.some(m => m.ownerActorId === selfId && m.state === 'joined' && ['owner', 'admin'].includes(m.role))),
         // Same rule as sendMessage's commentPlan: additions are written as the human, so a teammate's role does not count.
         canAdd: plan.creator_id === selfId || members.some(m => m.id === selfId && ['owner', 'admin'].includes(m.role)) } : {}),
       // Only a 分工 started here follows this computer's choice; its 继续 is pressed from here.
@@ -1941,7 +1949,7 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
   }
   async function actPlan(input: unknown, action: string) {
     const i = z.object({ groupId: id, planId: id, position: z.number().int().min(0).max(11).optional(),
-      action: z.enum(['remove','reassign']).optional(), botId: z.string().optional() }).parse(input);
+      action: z.enum(['remove','reassign','skip']).optional(), botId: z.string().optional(), executionId: id.optional() }).parse(input);
     const room = await groupRoom(i.groupId);
     await replacePlanIntent(room);
     const plans = await api<ServerPlan[]>(`/conversations/${room}/plans?ids=${i.planId}`);
@@ -1954,7 +1962,7 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
     const manager = plan.creator_id === selfId ? undefined : managementActor(await recentSnapshot(room));
     const asManager = manager === selfId ? undefined : manager;
     await api(`/conversations/${room}/plans/${plan.id}`, 'POST', { operationId: randomUUID(), expectedRevision: plan.revision,
-      action: serverAction, position: i.position, botId }, asManager);
+      action: serverAction, position: i.position, botId, ...(serverAction === 'skip' ? { executionId: i.executionId } : {}) }, asManager);
     changed(room); return { ok: true as const };
   }
   /**
@@ -3490,7 +3498,7 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
         readCount: z.number().int().min(0).optional(), listed: z.boolean().optional(),
         readers: z.array(z.object({ actorId: id, readAt: z.string().nullable() })),
       }), await api(`/conversations/${room}/messages/${i.messageId}/readers`));
-      // Former members stay on the list under their group name; a bot is never a reader.
+      // Former members stay on the list under their group name; a teammate is a reader like anyone once its computer took the execution up.
       const members = await api<Member[]>(`/conversations/${room}/members`);
       const nameOf = (actorId: string) => { const member = members.find(m => m.id === actorId); return member ? memberName(member, members) : null; };
       const value = projectMessageReaders(reply, members, nameOf);
@@ -3809,6 +3817,7 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
       const s = await recentSnapshot(room);
       // Owners and admins may be the account's own teammate; that member acts for everyone's work.
       const manager = managementActor(s);
+      const humanIsManager = s.members.some(m => m.id === selfId && m.state === 'joined' && ['owner', 'admin'].includes(m.role));
       const everything = scopeInput === 'all' && !!manager;
       const asManager = manager === selfId ? undefined : manager;
       const ownBot = (botId: string) => !!localBot(botId) || s.members.some(m => m.id === botId && m.ownerActorId === selfId);
@@ -3829,10 +3838,13 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
           // Your own teammate stops its work for others as itself; a request you made, as you.
           const asBot = !everything && e.requester_id !== selfId && ownBot(e.bot_id);
           if (!everything && !asBot && e.requester_id !== selfId) {
-            // A source message author is not proof of who requested this execution.
-            if (!e.requester_id) unknownRequester = true;
-            continue;
+            if (e.requester_id) continue;
+            // A manager's human identity could stop anyone on the server. Without
+            // ownership metadata, only an explicit all action may use that power.
+            if (humanIsManager) { unknownRequester = true; continue; }
           }
+          // Some servers omit requester_id. For an ordinary human, ask the server
+          // to authorize the stop; never infer ownership or use a foreign teammate.
           try { await api(`/conversations/${room}/executions/${e.id}/control`, 'POST', { operationId: randomUUID(), action: 'stop' }, asBot ? e.bot_id : everything && e.requester_id !== selfId ? asManager : undefined); }
           catch (error) { if (refused(error)) { refusedExecutions.set(e.id, error); continue; } throw error; }
           stopped = true;

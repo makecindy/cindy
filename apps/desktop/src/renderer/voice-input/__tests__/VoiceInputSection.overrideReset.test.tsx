@@ -5,7 +5,9 @@ import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-li
 import { MemoryRouter } from 'react-router-dom';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-import { VoiceInputSection } from '../../components/settings/VoiceInputSection';
+import { VoiceInputSection as VoiceInputSectionComponent } from '../../components/settings/VoiceInputSection';
+import { useVoiceInputModelSelection } from '@/hooks/useVoiceInputModelSelection';
+import { voiceInputSettings } from '../../components/settings/VoiceInputSection.settings-search';
 import { toast } from '@/lib/toast';
 import { getDefaultVoiceInputSettings, type VoiceInputSettings } from '../../../shared/voiceInputData';
 
@@ -27,6 +29,9 @@ vi.mock('@/hooks/useVoiceInputModelSelection', () => ({
 }));
 
 const defaults = getDefaultVoiceInputSettings('win32');
+function VoiceInputSection() {
+  return <VoiceInputSectionComponent modelSelection={useVoiceInputModelSelection()} />;
+}
 const restoreLabel = 'settings.defaults.restore';
 let settings: VoiceInputSettings;
 const updateSettings = vi.fn();
@@ -93,6 +98,36 @@ const cases = [
   { field: 'dictionarySyncEnabled', override: 'dictionarySyncEnabledOverride',
     label: 'settings.voiceInput.refinement.dictionary.deviceSync.ariaLabel' },
 ] as const;
+
+// Unit regression: the shared select discarded caller IDs, so the runtime search
+// fixture matched every select to the page entry. Verify real triggers and portals.
+it('keeps each voice select and its options bound to its own search definition', async () => {
+  serviceModel.current = {
+    ready: true, asrProfiles: [{ id: 'custom-realtime-asr', mode: 'realtime', auth: 'api-key', model: 'test' }],
+    selection: {
+      serviceMode: 'byok', asrProvider: 'custom-realtime-asr',
+      customAsr: { protocol: 'openai-realtime', websocketUrl: 'wss://voice.example/realtime', model: 'test' },
+    },
+  };
+  render(<MemoryRouter><VoiceInputSection /></MemoryRouter>);
+  for (const [name, definition] of [
+    ['settings.voiceInput.serviceSource.ariaLabel', voiceInputSettings.serviceSource],
+    ['settings.voiceInput.serviceSource.asr.ariaLabel', voiceInputSettings.asr],
+    ['settings.voiceInput.serviceSource.customAsr.protocol.ariaLabel', voiceInputSettings.customAsrProtocol],
+    ['settings.voiceInput.language.ariaLabel', voiceInputSettings.languageLabel],
+    ['settings.voiceInput.microphone.ariaLabel', voiceInputSettings.microphoneLabel],
+  ] as const) {
+    const trigger = await screen.findByRole('button', { name });
+    expect(trigger.getAttribute('data-setting-id')).toBe(definition.id);
+    fireEvent.click(trigger);
+    const listbox = await screen.findByRole('listbox', { name });
+    for (const option of within(listbox).getAllByRole('option')) {
+      expect(option.getAttribute('data-setting-id')).toBe(definition.id);
+    }
+    fireEvent.keyDown(listbox, { key: 'Escape' });
+    await waitFor(() => expect(screen.queryByRole('listbox', { name })).toBeNull());
+  }
+});
 
 /**
  * Test value: the real settings page must expose each override's restore action, send its null

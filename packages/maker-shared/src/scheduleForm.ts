@@ -134,6 +134,32 @@ export function localizeTemplateParamValidation(
 const DEFAULT_CRON = '0 9 * * *';
 const DEFAULT_TIMEZONE = 'Asia/Shanghai';
 
+function deadlineTimestamp(value: number | string | null | undefined): number | undefined {
+  if (value == null) return undefined;
+  const ms = typeof value === 'number' ? value : /^\d+$/.test(value) ? Number(value) : Date.parse(value);
+  return Number.isFinite(ms) ? ms : undefined;
+}
+
+/** The label must name the editing client's timezone, not the execution host's. */
+export function formatScheduleDeadline(value: number | string | null | undefined): string {
+  const ms = deadlineTimestamp(value);
+  if (ms === undefined) return '';
+  const d = new Date(ms);
+  if (!Number.isFinite(d.getTime())) return '';
+  const pad = (n: number) => String(n).padStart(2, '0');
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
+}
+
+/** null explicitly clears; NaN is invalid. Preserve original sub-minute precision. */
+export function parseScheduleDeadline(value: string, original?: number): number | null {
+  if (!value.trim()) return null;
+  const local = value.trim().replace(' ', 'T');
+  if (!/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}$/.test(local)) return NaN;
+  const ms = new Date(local).getTime();
+  if (!Number.isFinite(ms) || formatScheduleDeadline(ms) !== local) return NaN;
+  return original !== undefined && formatScheduleDeadline(original) === local ? original : ms;
+}
+
 export function createMobileScheduleDraft(
   schedule?: RemoteSchedule | null,
   opts: { fallbackWorkingDir?: string | null } = {},

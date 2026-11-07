@@ -6,6 +6,8 @@ import type { LiziMcpSessionContext } from '@cindy/mcps';
 // triggered from a Desktop session.
 const NON_DESKTOP_SETUP_SOURCES = new Set([
   'feishu',
+  // 官方飞书 / Lark hook(与个人飞书 'feishu' 区分的 vendorOptions.source)。
+  'feishu-hook',
   'discord',
   'slack-hook',
   'telegram',

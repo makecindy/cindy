@@ -90,6 +90,7 @@ function makeDeps(
     money: RegionalMoney | null;
     costUsd: number;
     hasEstimatedValue: boolean;
+    isFirstUserRound?: boolean;
   } | Error = {
     money: null,
     costUsd: 0,
@@ -443,6 +444,24 @@ describe('recordTurnCostOnMessage', () => {
     await expect(recordTurnCostOnMessage(ARGS, deps)).resolves.toBe(false);
     expect(patchCalls).toHaveLength(0);
     expect(broadcasts).toHaveLength(0);
+  });
+});
+
+// Unit: the first user round has no prompt cache to reuse. Both writers must
+// persist that fact with the details, or the tooltip shows a misleading
+// "low cache hit rate" suggestion on every new task's first reply.
+describe('first user round marker', () => {
+  const firstRound = { money: null, costUsd: 0, hasEstimatedValue: false, isFirstUserRound: true };
+  it.each([
+    ['recordTurnCostOnMessage', (deps: TurnCostDeps) =>
+      recordTurnCostOnMessage({ ...ARGS, turnUsageDetails: DETAILS }, deps)],
+    ['recordTurnUsageOnMessage', (deps: TurnCostDeps) =>
+      recordTurnUsageOnMessage({ sessionId: 's1', clientId: 'm1', turnUsageDetails: DETAILS }, deps)],
+  ])('%s persists and broadcasts firstUserRound', async (_name, record) => {
+    const { deps, broadcasts, patchCalls } = makeDeps(true, firstRound);
+    await expect(record(deps)).resolves.toBe(true);
+    expect(patchCalls[0].patch.turnUsageDetails).toEqual({ ...DETAILS, firstUserRound: true });
+    expect(broadcasts[0].turnUsageDetails).toEqual({ ...DETAILS, firstUserRound: true });
   });
 });
 

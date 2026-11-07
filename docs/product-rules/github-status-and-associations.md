@@ -14,6 +14,8 @@
 
 三个 Harness 共用 `cindy_helper` 的 `github` 类目。Codex / Claude Code 沿原 MCP 装配，Pi 沿原 MCP 网关；不修改引擎内核。类目总览提供用途和范围，详细参数按需发现。
 
+交互式查询时 Agent 可以直接用 gh / glab 等命令行；github 类目主要服务定时任务和脚本的增量读取，以及任务关联的管理，不替代命令行。
+
 | 工具 | 作用 |
 | --- | --- |
 | `get_pr_status` | 状态、当前 head 的 CI 汇总、评审汇总、采集时间、版本、来源电脑和完整性 |
@@ -48,6 +50,39 @@ PR 选择器只能是完整 GitHub PR URL，或 `{repo:"owner/repo",number:123}`
 
 私人 PR 跟进适配只替换读取来源，保留原 owner、频率、停止条件、CI 重试与评审判断。新宿主支持且一次 live run 验证成功后，才去掉旧 preRunHook，避免双读或监控空档。旧宿主继续原通道，不能宣称迁移完成。私人脚本、路径和运行回执不提交客户端仓。
 
+## 宿主与 GitHub 插件的分工（2026-11-06）
+
+按[核心产品原则](core-product-principles.md#清楚的分工让能力持续生长)，宿主只做所有任务都用得上的通用能力，
+具体流程留在插件和 Skill：
+
+- **宿主**：本机 GitHub 登录与登录引导、PR 状态汇总与缓存（标题栏、侧栏、手机、卡片状态位共用一份）、
+  PR 关联、`github` 读取入口、定时任务与前置检查的执行、插件卡片的净化与投影。这些不懂「怎么跟进一个 PR」。
+- **GitHub 插件**（`cindy-github`，`/pr` 技能）：何时开 PR、怎么跟进、节奏、等待哪些评审机器人、何时叫醒
+  Agent、卡片长什么样。规则写在插件的技能和脚本里，改规则不改宿主。
+- **新的第三方服务**沿「插件声明、宿主跑通用流程」：插件在清单里声明凭证、连接和设置，宿主提供统一的连接卡、
+  保险库和出网注入，不为单个服务写专属入口。GitHub 是早于这套机制的存量集成，登录与状态仍由宿主提供，
+  装没装插件看到的标题栏 PR 状态、任务列表 PR 信息（含手机）完全一样；整体收进插件只是长期方向，
+  不在没有等价体验前迁移。
+
+宿主为 PR 跟进补的三个通用能力：
+
+- **状态变化即时触发**：`PrFollowWatch` 只消费已有的状态刷新（前台标题栏、侧栏、卡片状态位），不新增后台
+  轮询。同一 PR 的汇总（状态、head、检查计数、未解决数、合并状态、冲突、审批）与上次不同时，立刻运行
+  前置检查命令里写着该 PR 链接、按计划重复的 active 定时任务（一次性和仅手动任务不会被提前用掉），并在前置检查 stdin 里带
+  `trigger: {kind:'watch', source:'pr-status', detail:<PR 链接>}`。第一次看到某个 PR 只记基线；只认成功结果；
+  正在运行的任务不触发，同一任务两次触发至少间隔 60 秒。宿主不判断要不要叫醒 Agent，仍由前置检查决定。
+- **只在 PR 开着时成立的卡片部分**：卡片元素标 `data-ghost-pr-open-only="owner/repo#N"`，标题栏同源状态为已合并或
+  已关闭时，电脑端藏起，手机投影在宿主侧去掉（文字、`live` 状态与按钮一起），新旧手机都不用改；查不到状态照常显示。
+- **PR 结束后归档任务**：卡片按钮标 `data-ghost-task-archive="owner/repo#N"`，宿主确认任务所有关联 PR 都已合并时电脑端露出，点击由宿主走与
+  标题栏相同的归档流程（插件拿不到归档能力）。用户在卡片设置里开了「合并后自动归档」时，宿主自己确认已合并、用户在电脑上
+  看过卡片并离开这个任务（包括直接切到另一个任务），且任务没在运行、没被接管、确认没绑定定时任务（没读到绑定列表就保留）、输入框没有草稿、
+  worktree 干净，才静默归档并提示可撤销；
+  仍有未合并 PR 时不显示归档按钮；在另一台电脑上的任务不自动归档。待生效时卡片上显示「离开此任务后将自动归档」与独立描边按钮「取消」；点「取消」，或之后用户
+  在这个任务里发了消息（电脑、手机、IM 都算，自动化与插件代发的不算），本次就不自动归档，提示改为「本次不会自动归档」，「立即归档」按钮照旧可用。手机这一版不显示按钮、也不算看过。协议细节见 `protocol-compatibility.md`。
+- **从对话里引导登录**：任务对声明 `gh-cli` 凭证的插件调用 `connect_account` 时，本机 GitHub 登录可用（gh 或插件保存的
+  备用 Token）就回报 ready；不可用或明确要求重新连接时，在用户正看着的窗口（否则主窗口）打开 Cindy 自己的 GitHub
+  登录框，返回 `GITHUB_SIGN_IN_REQUIRED`，不在对话里索要凭证，不夺焦点。
+
 ## 远程和兼容性
 
 `git-context:github-read` 是同账号公共入口，以 `github-read-v1` 能力协商。旧电脑未声明能力时明确返回不支持；原 PR 链接和旧关联状态接口仍可用。共享任务访客不获得这个任意 PR 读取/管理入口，旧 `pr-status` 远程关联过滤保持原边界。
@@ -56,4 +91,72 @@ PR 选择器只能是完整 GitHub PR URL，或 `{repo:"owner/repo",number:123}`
 
 ## 回归重点
 
+PR 状态变化只触发引用该 PR 的定时任务、首见不触发、失败不算变化、在途与 60 秒内不重复（`gitContextPrStatusService.test.ts`），
+触发信息到达前置检查 stdin（`runnerPreRunHookCwd.test.ts`、`scheduler.test.ts`）；open-only 部分在合并或关闭后
+电脑端藏起、手机端不投影（`ghostCardPrStatus.test.ts`、`cardRemoteResource.test.ts`）；gh-cli 插件的连接请求打开
+GitHub 登录框或回报 ready（`ghostWorkdirGate.test.ts`、`githubSetupIpc.test.ts`）。
+
 真实工具发现和调用、读无关联副作用；明确管理及移除优先；非空旧库升级并再次启动；消息写入、导入和故障期间的历史补扫能关联，清空、rewind 与助手校正重算且保留手动关系；head 不匹配和分页失败显式未知；多读取者、重启、游标过期；账号切换与在途失效；固定批次重试、消息持久化后回执；同账号远程与共享任务权限；iOS/Android 历史引用恢复。
+
+## GitLab MR 的界面状态与关联
+
+任务顶栏、悬停面板、管理弹窗、侧栏和伙伴卡片同时支持 GitHub PR 与 GitLab MR。
+Mobile 只扩展现有状态展示与网页跳转，不增加原生功能。GitLab 使用 `!N` / MR，
+HTTPS 链接 `https://host/group/subgroup/project/-/merge_requests/N` 沿既有消息提取、
+导入、补扫、重算与手动添加入口关联；识别不依赖登录。任意域名可识别，多级 namespace
+完整保存在 owner，repo 保存项目名；不支持 HTTP。子路径部署的链接会被识别为多级
+分组，部署前缀也会计入项目路径，因项目路径不正确而查不到状态。
+
+0145 为旧关联补上 `provider=github`、`host=github.com`，唯一索引及状态身份包含
+provider / host / owner / repo / number。不同 GitLab 实例上的同名项目不会串用缓存。
+迁移由 Drizzle 生成；配套脚本逐列检查后添加，兼容部分字段已存在的库。
+
+执行电脑按 MR 自身 host 调用 `glab config get token --host <host>`，令牌只用于该
+HTTPS origin，重定向不得跨 origin 或降级 HTTP。没有令牌不请求 API；未安装 glab、
+未登录分别提示，401 视为未登录。令牌及 CLI stdout 不写日志，不返回客户端。
+窗口恢复焦点时只清除 glab 令牌负缓存和 GitLab 认证失败结果，保留成功缓存与在途
+请求；终端登录后无需额外刷新按钮。
+远程、SSH 和只读任务不展示本机登录引导；GitLab 不使用 GitHub 安装登录窗口。
+
+每个 MR 一次 GraphQL 汇总读取，复用 60 秒缓存、并发合并和前台 90 秒刷新。
+未解决数为 resolvableDiscussionsCount 减 resolvedDiscussionsCount。缺少 diffHeadSha、
+headPipeline 字段缺失、作业未完整返回或出现未知状态时 checks 不可用，不能算通过。
+headPipeline 由 GitLab 按当前 diff head 匹配，包含合并结果流水线和合并队列：这些流水线
+的 SHA 是临时合并提交，GitLab 使用 source_sha 关联当前 diff head，Cindy 不再自行比对 SHA。
+已知 diff head 但 headPipeline 为 null 时记为 0 项检查，与 GitHub 无检查一致。推送后、
+新流水线创建前也可能短暂显示 0 项，后续刷新拿到流水线后再显示进行中等实际状态。
+作业使用 `jobs(retried: false)` 只读取最新尝试，不计已被重试替换的旧作业。
+SUCCESS 为通过，SKIPPED 为跳过；MANUAL 仅在 `allowFailure === true` 时计入跳过，
+否则（包括字段缺失或不是布尔值）仍为进行中。等待、准备、排队、运行、定时状态
+也为进行中。FAILED / CANCELED 仍为失败，即使允许失败也不改计数。
+
+实现见 [gitlabPrSummary.ts](../../apps/desktop/src/main/git-context/gitlabPrSummary.ts)，
+回归见 [gitContextPrStatusService.test.ts](../../apps/desktop/src/main/__tests__/gitContextPrStatusService.test.ts)。
+
+GitHub Agent 工具与脚本 `github.read` 仍只支持 GitHub。GitHub 管理工具 list 跳过
+GitLab 关联，显式 GitLab 选择器沿用现有校验拒绝；包含 GitLab 的整组排序也明确拒绝，
+避免 GitHub 工具误改不完整的排序。UI 管理和任务摘要支持两者，不新增后台跟进。
+
+
+## PR 只读引用卡片与任务导航
+
+同一 PR 可以在多个任务中显示卡片，没有任务跟进时由用户选择在哪个任务点击「自动跟进到合并」。只有其他
+任务正在跟进（或正在开启／停止）时，本任务卡片显示只读状态，并说明「其他任务正在跟进」，
+唯一入口为卡内「打开跟进任务」。链接不在卡片外重复。停止并核实定时任务已删除后，用户
+可以选择其他任务重新开启；不永久归属最早展示卡片的任务。
+
+跟进归属在插件刷新卡片或处理点击时核对；不绕过宿主同任务更新限制去修改其他任务中已结束
+的卡片。旧卡片刷新前可能仍显示旧入口，但插件会拦住过时的重复跟进点击。PR 检查状态继续
+沿用实时状态槽；跨任务跟进关系的即时同步尚未实现。
+
+宿主卡片链接白名单除原有 HTTP(S)，仅新增 `cindy://session/<id>`（1–128 位
+ASCII 字母、数字、下划线和连字符，无参数、片段或子路径），仍需声明 `card.externalLinks`。
+净化器、桌面点击桥和手机消费端独立校验。电脑复用普通任务引用的导航与嵌入窗口行为，
+手机复用消息已有的任务链接回调；均不调用插件动作、Agent 或系统浏览器。
+旧客户端不具备此导航能力，配套插件需在宿主发布后再锁定兼容版本发布。
+
+
+本次开发验证：净化与手机投影、桌面任务导航共 122 项测试通过；手机卡片 19 项、共享卡片
+解析 18 项通过；Desktop/Mobile 类型检查通过。只读卡片 Light/Dark 定向渲染通过。
+全页面 `ui:check --changed --theme all` 在依赖扫描阶段耗时超过三分钟，已停止，未取得
+全页面验证结果。上述证据不替代真实账号下跨任务导航和旧版客户端兼容验收。

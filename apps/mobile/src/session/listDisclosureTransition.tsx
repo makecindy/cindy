@@ -1,5 +1,5 @@
 import { createContext, useCallback, useContext, useEffect, useLayoutEffect, useRef, useState, type ComponentProps, type ReactNode } from 'react';
-import { StyleSheet, type LayoutChangeEvent, type StyleProp, type ViewStyle } from 'react-native';
+import { StyleSheet, type NativeSyntheticEvent, type TargetedEvent, type LayoutChangeEvent, type StyleProp, type ViewStyle } from 'react-native';
 import Reanimated, { Easing, withTiming, type LayoutAnimationsValues } from 'react-native-reanimated';
 
 import { getCachedReduceMotionEnabled } from '@/hooks/useReduceMotion';
@@ -143,7 +143,7 @@ export function createDisclosureListCell() {
     style,
   }: {
     children?: ReactNode;
-    onFocusCapture?: ((event: FocusEvent) => void) | undefined;
+    onFocusCapture?: ((event: NativeSyntheticEvent<TargetedEvent>) => void) | undefined;
     onLayout?: ((event: LayoutChangeEvent) => void) | undefined;
     style?: StyleProp<ViewStyle>;
   }) {

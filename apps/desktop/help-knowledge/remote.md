@@ -21,7 +21,7 @@ tab: remote-control
 - **No manual pairing** — every device signed into the **same Cindy account** appears automatically (this is how the phone app connects to your computer). If none appear, sign in with the same account on the other device.
 - The **top card is this device**: rename it, see its connection status, and the master switch **"Allow same-account devices to control this machine"** (no per-connection approval; a visible indicator shows while it's being controlled, and you can disconnect at any time).
 - Below it, **Allow remote desktop** lets your signed-in devices view and operate all apps on this computer (device control must also be on). On macOS this needs Screen Recording and Accessibility permission; on Windows, **Lock screen control** additionally needs administrator authorization.
-- Each **other device** has two independent switches: **I control it** and **Let it control this device**, plus rename and delete. Desktops also have a **Remote desktop** button to open their screen. Phones can control this computer but can't be controlled.
+- Each **other device** shows what each side may do as two rows of toggle buttons: **I can — Control it** (you control that device) and **It can — Control this device** (it controls this computer). Each is independent; tap to turn it on or off. Rename and delete are on the card too. Desktops also have a **Remote desktop** button to open their screen. Phones can control this computer but can't be controlled.
 - While another device is connected, a "<device> is connected to Cindy" notice appears on this computer with a **Revoke** button (with several devices, **View** opens this page). A revoked device can't reconnect until you restore its access here.
 
 **Using another computer:**

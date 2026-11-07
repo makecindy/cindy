@@ -12,6 +12,7 @@ import {
   clampAppearanceTerminalSize,
   clampAppearanceUiSize,
   clampAppearanceWindowZoom,
+  isAppIcon,
   type AppearanceOverrides,
   type AppearanceSettings,
   type WallpaperId,
@@ -30,6 +31,7 @@ import {
   updateAppearanceSettingsAtomic,
   writeAppearanceSettingsPatch,
 } from './appearance-settings-store.js';
+import { applyDockIcon } from './app-icon.js';
 
 export { writeAppearanceSettingsPatch } from './appearance-settings-store.js';
 
@@ -45,11 +47,7 @@ export function registerAppearanceSettingsIpc(): void {
   // repeatedly applying an already matching scale. Only app-content windows
   // participate; embedded webpages and utility windows keep their own zoom.
   app.on('browser-window-focus', function restoreFocusedWindowZoom(_event, win) {
-    if (!isAppContentWindow(win) || win.webContents.isDestroyed()) return;
-    const settings = readAppearanceSettings();
-    if (Math.abs(win.webContents.getZoomFactor() - settings.windowZoom) > 0.000001) {
-      applyAppearanceToWindow(win, settings);
-    }
+    restoreWindowZoom(win);
   });
 
   // Must be registered before BrowserWindow creation: preload reads this on
@@ -141,6 +139,37 @@ export function applyAppearanceToWindows(settings = readAppearanceSettings()): v
   }
 }
 
+/**
+ * Re-asserts the persisted window zoom only when the live zoom has drifted.
+ *
+ * Chromium persists a zoom level per URL. A window that navigates to a URL with
+ * a stale record silently keeps that record instead of the saved preference
+ * (#7486). Callers invoke this at points where Chromium can override the zoom.
+ */
+export function restoreWindowZoom(win: BrowserWindow): void {
+  if (!isAppContentWindow(win) || win.webContents.isDestroyed()) return;
+  const settings = readAppearanceSettings();
+  if (Math.abs(win.webContents.getZoomFactor() - settings.windowZoom) > 0.000001) {
+    applyAppearanceToWindow(win, settings);
+  }
+}
+
+/**
+ * Keeps the persisted zoom across in-page navigations.
+ *
+ * The renderer routes conversations through the URL hash, so `did-finish-load`
+ * never fires when the user switches pages. Chromium then restores whatever
+ * zoom level it recorded for the new URL, which makes the window shrink or grow
+ * until the next full load. Re-assert the preference on every in-page
+ * navigation so the saved scale wins.
+ */
+export function installWindowZoomRestoration(win: BrowserWindow): void {
+  win.webContents.on('did-navigate-in-page', (_event, _url, isMainFrame) => {
+    if (!isMainFrame || win.isDestroyed() || win.webContents.isDestroyed()) return;
+    restoreWindowZoom(win);
+  });
+}
+
 export function getPersistedWindowZoom(): number {
   return readAppearanceSettings().windowZoom;
 }
@@ -197,6 +226,7 @@ function parsePatch(rawPatch: unknown): AppearanceOverrides {
     'wallpaperVisibility',
     'wallpaperBlur',
     'wallpaperMotion',
+    'appIcon',
   ]);
   for (const key of Object.keys(raw)) {
     if (!allowed.has(key)) throwIpcError('INVALID_PARAMS', `unknown appearance field: ${key}`);
@@ -280,6 +310,10 @@ function parsePatch(rawPatch: unknown): AppearanceOverrides {
             APPEARANCE_LIMITS.wallpaperBlur,
           );
   }
+  if ('appIcon' in raw) {
+    if (!isAppIcon(raw.appIcon)) throwIpcError('INVALID_PARAMS', 'appIcon is not supported');
+    patch.appIcon = raw.appIcon;
+  }
   return patch;
 }
 
@@ -313,12 +347,14 @@ export const __testing = { parsePatch };
 export async function updateAppearanceFromSettings(rawPatch: unknown) {
   const settings = await writeAppearanceSettingsPatch(parsePatch(rawPatch));
   applyAppearanceToWindows(settings);
+  applyDockIcon(settings);
   broadcast(settings);
   return settings;
 }
 export async function resetAppearanceFromSettings() {
   const settings = await resetAppearanceSettings();
   applyAppearanceToWindows(settings);
+  applyDockIcon(settings);
   broadcast(settings);
   return settings;
 }

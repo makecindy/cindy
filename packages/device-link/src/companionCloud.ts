@@ -3,10 +3,11 @@
  * Cindy 支持接手云端伙伴。只读能力探测，返回 `{ companionCloud: <版本> }`；老版本没有该 channel →
  * CHANNEL_NOT_ALLOWED，交出方据此拒绝目标（不把伙伴交给接不住它的电脑）。
  *
- * 版本：1 = 能接手伙伴；2 = 另外接受其他电脑发来的「换主力电脑」、合并 Cindy 与合并前同步的请求（下面几个 channel）。
+ * 版本：1 = 能接手伙伴；2 = 另外接受其他电脑发来的「换主力电脑」、合并 Cindy 与合并前同步的请求（下面几个 channel）；
+ * 3 = 另外能从伙伴大内容存储恢复资料，允许主力电脑交出超过偏好上限的值。
  */
 export const COMPANION_CLOUD_CAPS_CHANNEL = 'maker:companion-cloud:caps';
-export const COMPANION_CLOUD_VERSION = 2;
+export const COMPANION_CLOUD_VERSION = 3;
 /** 能接手伙伴的最低版本。 */
 export const COMPANION_CLOUD_RECEIVE_VERSION = 1;
 /** 主力电脑接受其他电脑发起换主力电脑的最低版本。 */

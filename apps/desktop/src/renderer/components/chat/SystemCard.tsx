@@ -28,6 +28,7 @@ import {
   X,
 } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
+import { summarizeContextTextEstimate } from '@cindy/maker-shared/session-controls';
 import { useNavigate } from 'react-router-dom';
 
 import {
@@ -240,6 +241,9 @@ function ContextCard({ data }: { data?: Record<string, unknown> }) {
   }
 
   const categories = Array.isArray(usage.categories) ? usage.categories : [];
+  const estimateRows = summarizeContextTextEstimate(usage.textEstimate, {
+    translate: (key, fallback, params) => t(key.replace('session.presentation.controls.context.', 'chat.systemCard.context.'), { defaultValue: fallback, ...params }),
+  });
   const mcpTools = Array.isArray(usage.mcpTools) ? usage.mcpTools : [];
   const memoryFiles = Array.isArray(usage.memoryFiles) ? usage.memoryFiles : [];
   const agents = Array.isArray(usage.agents) ? usage.agents : [];
@@ -407,6 +411,9 @@ function ContextCard({ data }: { data?: Record<string, unknown> }) {
         className="mt-2 flex h-[7px] w-full overflow-hidden rounded-full bg-[var(--msg-tool-card-bg)]"
         aria-label={t('chat.systemCard.context.barAria')}
       >
+        {visibleCategories.length === 0 && totalTokens > 0 && (
+          <div className="h-full bg-[var(--msg-tool-text)]" style={{ width: `${pct}%` }} />
+        )}
         {visibleCategories
           .filter((cat) => !cat.isDeferred)
           .map((cat) => (
@@ -500,6 +507,24 @@ function ContextCard({ data }: { data?: Record<string, unknown> }) {
             </div>
           )}
 
+          {estimateRows.length > 0 && (
+            <div className="mt-3 space-y-1.5 border-t border-[var(--msg-tool-card-border)] pt-3">
+              {estimateRows.map((row, index) => (
+                index === 0 ? (
+                  <div key={row.label} className="space-y-1">
+                    <div className={labelClass}>{row.label}</div>
+                    <p className="text-12 text-[var(--msg-tool-text)]">{row.value}</p>
+                  </div>
+                ) : (
+                  <div key={row.label} className="flex items-start justify-between gap-3 text-12 text-[var(--msg-tool-text)]">
+                    <span className="min-w-0 break-words">{row.label}</span>
+                    <span className="shrink-0 tabular-nums">{row.value}</span>
+                  </div>
+                )
+              ))}
+            </div>
+          )}
+
           {(usage.messageBreakdown || usage.apiUsage) && (
             <div className="mt-3 space-y-3 border-t border-[var(--msg-tool-card-border)] pt-3">
               {usage.messageBreakdown && (
@@ -562,6 +587,7 @@ interface ContextDetailRow {
 }
 
 interface ContextUsageData {
+  textEstimate?: unknown;
   categories: Array<{ name: string; tokens: number; color: string; isDeferred?: boolean }>;
   totalTokens: number;
   maxTokens: number;

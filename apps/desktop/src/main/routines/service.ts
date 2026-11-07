@@ -252,7 +252,9 @@ async function execute(scope: string, routine: Routine, run: RoutineRun, signal:
       const send = getRoutineHost().deliverResult;
       if (!send) throw new Error('Routine delivery is unavailable');
       await send({ routine, runId: run.id, sessionId, targetSessionId: bot.canonicalSessionId!, text,
-        assertCurrent: () => { assertScope(scope); if (signal.aborted || !canDispatch()) throw new Error('Routine delivery cancelled'); },
+        // Delivery follows a finished result, not a pending prompt: editing the routine
+        // only invalidates dispatch. Pause/delete/stop all abort the run signal.
+        assertCurrent: () => { assertScope(scope); if (signal.aborted) throw new Error('Routine delivery cancelled'); },
       });
       delivery = { status: 'delivered' };
     } catch (error) {

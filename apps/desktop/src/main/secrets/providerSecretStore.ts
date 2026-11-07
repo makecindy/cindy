@@ -395,6 +395,19 @@ export function createProviderSecretStore(
   };
 }
 
+/** Setup consent only: check the current owner's standard slot without opening the keychain. */
+export function providerSecretSavedForSetup(id: ProviderSecretId): boolean {
+  const physicalKey = resolveOwnerScopedSecretStorageKey(providerSecretStorageKey(id));
+  if (!physicalKey) return false;
+  try {
+    fs.statSync(path.join(secretDir(), `${physicalKey}.enc`));
+    return true;
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return false;
+    throw error;
+  }
+}
+
 let singleton: ProviderSecretStore | null = null;
 
 /** 进程内单例(默认 Electron IO)。 */
@@ -708,6 +721,46 @@ export function readCustomMcpToken(mcpId: string): string | null {
       'read custom mcp token failed',
     );
     return null;
+  }
+}
+
+/** Writes a custom MCP access token under the same key the settings page uses (main-only callers). */
+export function storeCustomMcpToken(mcpId: string, value: string): boolean {
+  try {
+    const scopedKey = resolveOwnerScopedSecretStorageKey(customMcpSecretStorageKey(mcpId));
+    if (!scopedKey || !safeStorage.isEncryptionAvailable()) return false;
+    // Freeze the owner and directory before encryption. Keep the existing base64 format.
+    const directory = secretDir();
+    const target = path.join(directory, `${scopedKey}.enc`);
+    const encrypted = safeStorage.encryptString(value).toString('base64');
+    fs.mkdirSync(directory, { recursive: true });
+    const temporary = `${target}.${randomBytes(16).toString('hex')}.tmp`;
+    // Open outside the cleanup block: an exclusive-open collision is not our file.
+    const fd = fs.openSync(temporary, 'wx', 0o600);
+    try {
+      try {
+        fs.writeFileSync(fd, encrypted, 'utf-8');
+      } finally {
+        fs.closeSync(fd);
+      }
+      // Never delete the old target first, including when replacement is refused.
+      fs.renameSync(temporary, target);
+      return true;
+    } finally {
+      try {
+        fs.unlinkSync(temporary);
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code !== 'ENOENT') {
+          log.warn('custom mcp token temporary ciphertext cleanup failed');
+        }
+      }
+    }
+  } catch (err) {
+    log.warn(
+      { mcpId, err: err instanceof Error ? err.message : String(err) },
+      'write custom mcp token failed',
+    );
+    return false;
   }
 }
 

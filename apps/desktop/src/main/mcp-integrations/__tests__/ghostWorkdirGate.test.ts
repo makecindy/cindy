@@ -13,6 +13,7 @@
  */
 
 import { describe, it, expect, vi, beforeEach, afterEach, afterAll } from 'vitest';
+import type { MockInstance } from 'vitest';
 import { createHash } from 'node:crypto';
 import { AsyncResource } from 'node:async_hooks';
 import { withPluginPageTicket, consumePluginPageTicket, restorePluginPageSession } from '../../mcp-apps/pluginPageCall.js';
@@ -121,6 +122,11 @@ const cardRegisterMock = vi.hoisted(() => vi.fn());
 const resolvedAttachmentOrigins: Array<'user' | 'tool' | undefined> = [];
 
 vi.mock('electron', () => ({ app: { getPath: () => tmpUserData } }));
+const githubSignIn = vi.hoisted(() => ({ read: vi.fn(), open: vi.fn(() => true) }));
+vi.mock('../../git-context/githubSetupIpc.js', () => ({
+  readGithubConnection: githubSignIn.read,
+  openGithubSignIn: githubSignIn.open,
+}));
 vi.mock('../../appSessionState.js', () => ({
   ownerScopedUserDataPath: (...parts: string[]) => path.join(tmpUserData, ...parts),
   getActiveAppSession: () => ({ mode: 'cloud', dataOwnerId: 'member-1', generation: 7 }),
@@ -1343,6 +1349,30 @@ describe('connect_account ordinary task entry', () => {
     expect(dispatchMock).not.toHaveBeenCalled();
     expect(grantAttachmentsMock).not.toHaveBeenCalled();
   });
+  // Rule (Dash, 2026-11-06, plan D): when this computer is not signed in to GitHub, connecting the
+  // GitHub plugin from a task should lead to Cindy's own GitHub sign-in instead of "no setup action".
+  // Minimal input: a gh-cli plugin, signed out → signed in → explicit reconnect (unit).
+  it('opens Cindy\'s GitHub sign-in for a gh-cli plugin and reports ready once signed in', async () => {
+    listMock.mockReturnValue([chipGhost('cindy-github', ['tool'], {
+      network: { secrets: [{ key: 'my_token', label: 'GitHub', source: 'gh-cli' }] },
+    })]);
+    githubSignIn.read.mockResolvedValueOnce({ status: 'missing' });
+    expect(await makeDeps().connectAccount!({ kind: 'plugin', id: 'cindy-github' }))
+      .toMatchObject({ ok: false, errorCode: 'GITHUB_SIGN_IN_REQUIRED', signInOpened: true, connection: 'missing' });
+    expect(githubSignIn.open).toHaveBeenCalledTimes(1);
+    // Review (Codex P2 / Greptile P1 on #9022): readiness must use the fallback token this plugin's own
+    // requests read (its instance and declared key), not the GitHub plugin's.
+    expect(githubSignIn.read).toHaveBeenCalledWith({ instanceId: 'cindy-github', key: 'my_token' });
+    githubSignIn.read.mockResolvedValue({ status: 'connected', login: 'octo', source: 'gh-cli' });
+    expect(await makeDeps().connectAccount!({ kind: 'plugin', id: 'cindy-github' }))
+      .toMatchObject({ ok: true, status: 'ready', login: 'octo' });
+    expect(githubSignIn.open).toHaveBeenCalledTimes(1);
+    expect(await makeDeps().connectAccount!({ kind: 'plugin', id: 'cindy-github', reauthorize: true }))
+      .toMatchObject({ ok: false, errorCode: 'GITHUB_SIGN_IN_REQUIRED', signInOpened: true });
+    expect(githubSignIn.open).toHaveBeenCalledTimes(2);
+    expect(ensureReadyMock).not.toHaveBeenCalled();
+    expect(dispatchMock).not.toHaveBeenCalled();
+  });
   it('blocks disabled GitHub before offering its existing connection method', async () => {
     listMock.mockReturnValue([chipGhost('cindy-github')]);
     setGhostDisabledForWorkdir(WORKDIR, 'cindy-github', true);
@@ -1549,6 +1579,48 @@ describe('花名册 / ghost_list 过滤', () => {
     expect(dispatchMock).toHaveBeenNthCalledWith(1, expect.objectContaining({ ghostId: '_root__art' }));
     expect(dispatchMock).toHaveBeenNthCalledWith(2, expect.objectContaining({ ghostId: '_ns__acme__art' }));
     await expect(deps.getAwakeGhost('art')).resolves.toMatchObject({ ok: false, errorCode: 'GHOST_AMBIGUOUS' });
+  });
+
+  // Regression: an older local simulator hid working device connectivity behind
+  // duplicate discovery. Exercise the real roster/list/info/call entry points;
+  // earlier namespace tests only covered organizations, not local/public pairs.
+  // Minimal input: two enabled chip instances with the same id (unit tier).
+  it.each([
+    ['0.3.38', '0.3.42', null],
+    ['0.3.43', '0.3.42', 'local'],
+    ['0.3.42', '0.3.42', null],
+    ['0.3.100', '0.3.42', 'local'],
+    ['0.3.42-beta.2', '0.3.42', null],
+    ['0.3.43-beta.2', '0.3.42', 'local'],
+    ['0.3.42+dev', '0.3.42+market', null],
+  ])('selects newest local=%s public=%s in everyday discovery and dispatch', async (localVersion, publicVersion, winner) => {
+    const base = chipGhost('art') as InstalledGhost;
+    const local = { ...base, namespace: 'local', namespaceState: 'confirmed' as const,
+      manifest: { ...base.manifest, version: localVersion! }, dir: path.join(tmpUserData, '_ns', 'local', 'art') };
+    const published = { ...base, namespace: null, namespaceState: 'confirmed' as const,
+      manifest: { ...base.manifest, version: publicVersion! }, dir: path.join(tmpUserData, '_ns', '_root', 'art') };
+    listMock.mockReturnValue([local, published]);
+    const deps = makeDeps();
+    expect(await deps.listAwakeGhosts()).toMatchObject([{ id: 'art', namespace: winner }]);
+    expect(await deps.listAwakeGhosts()).toHaveLength(1);
+    expect(deps.getRosterItems?.()).toMatchObject([{ id: 'art', namespace: winner }]);
+    const roster = getGhostRosterPrompt({ workingDir: WORKDIR });
+    expect(roster).toContain(`"namespace":${JSON.stringify(winner)}`);
+    expect(roster).not.toContain(`"namespace":${JSON.stringify(winner === null ? 'local' : null)}`);
+    expect(await deps.getAwakeGhost('art')).toMatchObject({ ok: true, ghost: { namespace: winner } });
+    expect(await deps.callGhostTool({ ghostId: 'art', tool: 'run', args: {} })).toMatchObject({ ok: true });
+    expect(dispatchMock).toHaveBeenLastCalledWith(expect.objectContaining({
+      ghostId: winner === 'local' ? '_ns__local__art' : '_root__art',
+    }));
+    // The next query sees updates without cached selection or rewriting installs.
+    local.manifest.version = '9.0.0';
+    expect(await deps.getAwakeGhost('art')).toMatchObject({ ok: true, ghost: { namespace: 'local' } });
+    expect(await deps.listAwakeGhosts()).toMatchObject([{ id: 'art', namespace: 'local' }]);
+    // Explicit addresses keep developer requests exact even when not listed.
+    expect(await deps.getAwakeGhost('art', null)).toMatchObject({ ok: true, ghost: { namespace: null } });
+    local.enabled = false;
+    expect(await deps.listAwakeGhosts()).toMatchObject([{ id: 'art', namespace: null }]);
+    expect(await deps.getAwakeGhost('art')).toMatchObject({ ok: true, ghost: { namespace: null } });
   });
 
   it('被禁用的意识不进花名册与现查清单;其余照常', async () => {
@@ -3816,7 +3888,32 @@ describe('plugin page audience and shared tool execution', () => {
     const info = await deps.getAwakeGhost('art');
     expect(info).toMatchObject({ ok: true, ghost: { tools: [] } });
     const result = await deps.callGhostTool({ ghostId: 'art', tool: 'run', args: {} });
+    expect(result).toMatchObject({ ok: false, errorCode: 'TOOL_NOT_FOUND',
+      message: expect.stringContaining('只供插件页面调用') });
+    expect(result).toHaveProperty('message', expect.stringContaining('模型可见的工具: (无)'));
+    expect(dispatchMock).not.toHaveBeenCalled();
+  });
+  // The real ghost_call entry used to mistake an
+  // app-only tool for a missing capability. Existing case checked only the code.
+  // Minimal input: one app-only tool + one model opener; unit, no sandbox/network.
+  it.each(['run', 'missing', 'nested_operation'])('guides model calls to %s without dispatching', async tool => {
+    const ghost = pageGhost();
+    ghost.manifest.tools!.push({ name: 'open_view', description: '打开页面' });
+    ghost.manifest.mcpApps = { ui: {
+      resources: [{ uri: 'ui://records', file: 'ui/page.html' }],
+      tools: { run: { visibility: ['app'] }, open_view: { resourceUri: 'ui://records', visibility: ['model'] } },
+    } };
+    if (tool === 'nested_operation') ghost.manifest.tools!.push({ name: 'call_tool', description: '分派' });
+    listMock.mockReturnValue([ghost]);
+    const result = await makeDeps().callGhostTool({ ghostId: 'art', tool, args: {} });
     expect(result).toMatchObject({ ok: false, errorCode: 'TOOL_NOT_FOUND' });
+    if (tool === 'run') {
+      expect(result).toHaveProperty('message', '插件 art 已声明工具 run，但它只供插件页面调用，模型不能直接 ghost_call。请先通过 ghost_call 调用模型可见的开页面工具: open_view，再由页面调用 run。不要据此判定插件缺少该能力。');
+    } else if (tool === 'missing') {
+      expect(result).toHaveProperty('message', '插件 art 没有工具 missing;可用工具: open_view');
+    } else {
+      expect(result).toHaveProperty('message', expect.stringContaining('tool:"call_tool",args:{name:"nested_operation"'));
+    }
     expect(dispatchMock).not.toHaveBeenCalled();
   });
   // #4421074557, unit: real ghost_call entry must strip page-private metadata even
@@ -4012,20 +4109,56 @@ describe('对话文件交接(cindy_handoff_files)', async () => {
     expect(await store.list('art')).toEqual([]);
   });
 
-  // A path swapped for a link after classification is not read (no confirmation bypass).
+  // Unit: preserve the post-classification redirect rejection on Windows without symlink
+  // privileges (§3.3). Follow the native-approval attachment fixture above: a real parent
+  // junction redirects a regular file. Keep the file-link variant where privileges allow it.
   it('refuses a classified path that became a link before reading', async () => {
-    const target = csv('outside-target.csv', 'secret');
-    const link = path.join(outsideDir, 'swapped.csv');
-    fs.rmSync(link, { force: true });
-    fs.symlinkSync(target, link);
+    const sourceDir = fs.mkdtempSync(path.join(outsideDir, 'classified-'));
+    const targetDir = fs.mkdtempSync(path.join(outsideDir, 'redirected-'));
+    const source = path.join(sourceDir, 'swapped.csv');
+    const target = path.join(targetDir, 'swapped.csv');
+    fs.writeFileSync(source, 'original');
+    fs.writeFileSync(target, 'secret');
+    let redirected = false;
+    let classifiedPath = '';
     classifyLocalAttachmentPathMock.mockImplementation((...args: Parameters<typeof realClassify>) => {
       const result = realClassify(...args);
-      return result.kind === 'outside-workdir' ? { ...result, kind: 'inside-workdir', absPath: link } : result;
+      if (result.kind !== 'outside-workdir') return result;
+      classifiedPath = result.absPath;
+      fs.unlinkSync(source);
+      try {
+        fs.symlinkSync(target, source);
+      } catch (error) {
+        if (process.platform !== 'win32' || (error as NodeJS.ErrnoException).code !== 'EPERM') throw error;
+        // A parent junction needs no file-symlink privilege and still redirects a regular
+        // file to different bytes. The opened file must fail identity / realpath validation.
+        fs.rmdirSync(sourceDir);
+        fs.symlinkSync(targetDir, sourceDir, 'junction');
+      }
+      expect(fs.realpathSync.native(source)).toBe(fs.realpathSync.native(target));
+      redirected = true;
+      return { ...result, kind: 'inside-workdir' };
     });
-    const result = await makeDeps().callGhostTool({ ghostId: 'art', tool: 'run', args: {}, attachments: [link] });
-    expect(result).toMatchObject({ ok: false, errorCode: 'ATTACHMENT_INVALID' });
-    expect(confirmRequestMock).not.toHaveBeenCalled();
-    expect(await store.list('art')).toEqual([]);
+    const realOpen = fs.promises.open.bind(fs.promises);
+    const reads: MockInstance[] = [];
+    const open = vi.spyOn(fs.promises, 'open').mockImplementation(async (...args) => {
+      const handle = await realOpen(...args);
+      if (args[0] === classifiedPath) reads.push(vi.spyOn(handle, 'read'));
+      return handle;
+    });
+    try {
+      const result = await makeDeps().callGhostTool({ ghostId: 'art', tool: 'run', args: {}, attachments: [source] });
+      expect(redirected).toBe(true);
+      expect(result).toMatchObject({ ok: false, errorCode: 'ATTACHMENT_INVALID', message: '附件读取失败:swapped.csv(文件不可读或已被移动)' });
+      expect(open).toHaveBeenCalledWith(classifiedPath, expect.any(Number));
+      for (const read of reads) expect(read).not.toHaveBeenCalled();
+      expect(dispatchMock).not.toHaveBeenCalled();
+      expect(confirmRequestMock).not.toHaveBeenCalled();
+      expect(await store.list('art')).toEqual([]);
+    } finally {
+      open.mockRestore();
+      for (const read of reads) read.mockRestore();
+    }
   });
 
   // An approval that lapses while the copies are written is re-checked before dispatch.

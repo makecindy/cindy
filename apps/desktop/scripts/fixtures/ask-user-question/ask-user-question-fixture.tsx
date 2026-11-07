@@ -6,12 +6,14 @@ import type { AskUserDraft, AskUserViewerState } from '../../../src/renderer/lib
 import type { VoiceQuestionTarget } from '../../../src/renderer/components/new-chat/voiceQuestionSelection';
 import { CompanionVoiceToolbar } from '../../../src/renderer/features/bots/voice/CompanionVoiceToolbar';
 
-function Fixture({ question, voice, multi, speakerFiltered = false }: {
+function Fixture({ question, voice, multi, form = false, speakerFiltered = false }: {
   question: string;
   voice?: boolean;
   multi?: boolean;
+  form?: boolean;
   speakerFiltered?: boolean;
 }) {
+  const [receipt, setReceipt] = useState<Record<string, string> | null>(null);
   const [draft, setDraft] = useState<AskUserDraft | null>(null);
   const [viewerState, setViewerState] = useState<AskUserViewerState>('expanded');
   const bridge = useRef<VoiceQuestionTarget | null>(null);
@@ -30,11 +32,16 @@ function Fixture({ question, voice, multi, speakerFiltered = false }: {
       onConfigure={forbid('configure')} /></div> : null}
     <AskUserQuestionPrompt sessionId="question-evidence" workingDir="/project"
       voiceBridge={voice ? bridge : undefined}
-      pending={{ requestId: 'review', questions: [{ header: '确认原型', question, multiSelect: multi, options: [
+      pending={{ requestId: 'review', questions: form ? [
+        { id: 'name', header: '确认原型', question: 'Name', answerConstraints: { required: true, minLength: 3, maxLength: 5 } },
+        { id: 'kind', header: '确认原型', question: 'Kind', options: [{ label: 'Personal' }, { label: 'Other' }],
+          answerConstraints: { required: true, choices: ['Personal', 'Other'] } },
+      ] : [{ header: '确认原型', question, multiSelect: multi, options: [
         { label: '可以，按这版实现' }, { label: '还需要调整' },
       ] }] }}
-      onAnswer={forbid('answer question')}
+      onAnswer={form ? (_id, answers) => setReceipt(answers) : forbid('answer question')}
       draft={draft} onDraftChange={setDraft} viewerState={viewerState} onViewerStateChange={setViewerState} />
+    {receipt && <output data-testid="mcp-form-receipt">{JSON.stringify(receipt)}</output>}
   </main>;
 }
 
@@ -59,5 +66,5 @@ void mountPage({
     ])),
   },
   render: (ctx) => <Fixture question={String(ctx.data.question)} voice={ctx.data.voice === true} multi={ctx.data.multi === true}
-    speakerFiltered={ctx.data.speakerFiltered === true} />,
+    speakerFiltered={ctx.data.speakerFiltered === true} form={ctx.data.form === true} />,
 });
