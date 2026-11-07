@@ -94,7 +94,7 @@ import {
   resolveMicrophonePermissionSnapshot,
   type VoiceInputMicrophonePermissionCache,
 } from './permissions.js';
-import { systemAudioMuteGuard } from './SystemAudioMuteGuard.js';
+import { registerSystemAudioMuteShutdown, systemAudioMuteGuard } from './SystemAudioMuteGuard.js';
 import {
   awaitGlobalOverlayPasteContext,
   getVoiceInputAccessibilityPermissionSnapshot,
@@ -1888,6 +1888,7 @@ export async function transcribeVoiceInputAudioFile(
  * state transitions, and timeline logging.
  */
 export function registerVoiceInputIpc(): void {
+  registerSystemAudioMuteShutdown();
   registerVoiceInputDataStoreIpc();
   registerVoiceSpeakerFilterIpc();
   let pendingDictationStarts = 0;
