@@ -1666,6 +1666,19 @@ export function createTurnRunner(
         log.warn('im send: resource-drift recycle failed, sending as-is',
           err instanceof Error ? err.message : String(err));
       }
+      // 回收+重建是异步窗口:/stop 可能恰好落在其中;喊停后不得再开始执行,
+      // 与上方 aborted 检查同口径收尾(此时尚未发送,无 chunked 终态章要补)。
+      // 经函数读取:上方检查已把控制流收窄到 'done'|'error',但运行时值在回收
+      // 窗口内仍可变为 'aborted',需要绕开 CFA 的新鲜读取。
+      const turnTerminalNow = (): 'done' | 'aborted' | 'error' => item.turn.terminalKind;
+      if (turnTerminalNow() === 'aborted') {
+        const index = state.queue.indexOf(item.turn);
+        if (index >= 0) state.queue.splice(index, 1);
+        await completeTurnCallbackAfterAck(item.turn);
+        settleTurnTerminal(item.turn);
+        if (!finishDeferredDetachIfIdle(state)) armDispatchRetry(state, userId);
+        return { kind: 'rejected', reason: 'aborted' };
+      }
 
       const sendResult = await state.makerSession.send(outgoingMessage as typeof item.userMessage, {
         planMode: false,
