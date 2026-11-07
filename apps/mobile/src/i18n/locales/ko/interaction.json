@@ -1,5 +1,7 @@
 {
   "permission": {
+    "mcpComplete": "완료",
+    "mcpCancel": "취소",
     "mode": {
       "default": "기본 권한",
       "acceptEdits": "편집 허용",
@@ -98,7 +100,14 @@
     "planFeedbackPlaceholder": "Claude에게 무엇을 해야 할지 알려주세요",
     "planFeedbackRequired": "제출하기 전에 피드백을 입력하세요.",
     "planFeedbackSubmit": "플랜 피드백 제출",
-    "planFeedbackAccessibility": "플랜을 변경할 피드백"
+    "planFeedbackAccessibility": "플랜을 변경할 피드백",
+    "validation": {
+      "required": "이 필수 항목을 입력하세요.",
+      "choice": "목록의 옵션 중 하나를 선택하세요.",
+      "tooShort": "{{count}}자 이상 입력하세요.",
+      "tooLong": "{{count}}자 이하로 입력하세요."
+    },
+    "askRestrictedMetaCaption": "{{options}} · {{mode}}"
   },
   "kinds": {
     "permission": {
@@ -385,6 +394,8 @@
       "submitting": "제출 중"
     },
     "permission": {
+      "titleStdin": "터미널 입력을 허용할까요?",
+      "titleMcpUrl": "{{server}} 요청 완료",
       "highRiskTitle": "고위험 권한은 한 번 더 확인해야 합니다",
       "highRiskDetail": "명령 내용을 확인한 뒤 허용을 다시 누르세요. 확실하지 않으면 거부하세요.",
       "sessionAllowTitle": "한 번만 허용하거나 이 작업에서 항상 허용할 수 있습니다",

@@ -1,3 +1,4 @@
+import { normalizeAskQuestions, answerKey } from "@cindy/maker-shared/interaction";
 import { readChatReplyQuote, type ChatReplyQuote } from '@cindy/maker-shared/chat-reply-quote';
 import { forwardedRequestDisplayText } from '@cindy/maker-shared/message-source';
 import { formatDuration } from '@cindy/maker-shared/message-render';
@@ -883,10 +884,10 @@ function normalizeAskUser(message: RemoteMessage): NormalizedRemoteMessage | nul
   if (!content) return null;
   if (content.status !== 'answered') return null;
 
-  const questions = readQuestionTexts(content.questions);
+  const questions = normalizeAskQuestions(content.questions);
   const answers = readStringRecord(content.answers);
   const pairs = questions.length > 0
-    ? questions.map((question) => ({ question, answer: answers?.[question] ?? '' }))
+    ? questions.map((question) => ({ question: question.question, answer: answers?.[answerKey(question)] ?? answers?.[question.question] ?? '' }))
     : [{
         question: readString(content.question) ?? contentToPreview(message.content),
         answer: readString(content.reply) ?? '',
@@ -982,13 +983,6 @@ function buildToolDiff(toolName: string, input: unknown): NormalizedToolDiff | u
 
 export function extractToolResultMedia(toolResult: string): NormalizedToolMedia[] {
   return extractPayloadToolResultMedia(toolResult);
-}
-
-function readQuestionTexts(value: unknown): string[] {
-  if (!Array.isArray(value)) return [];
-  return value
-    .map((item) => readString(readRecord(item)?.question))
-    .filter((item): item is string => !!item);
 }
 
 function readStringRecord(value: unknown): Record<string, string> | null {
