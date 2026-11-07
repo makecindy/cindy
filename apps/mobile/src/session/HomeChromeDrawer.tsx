@@ -307,8 +307,7 @@ export function HomeChromeDrawer({
             paddingTop: insets.top + spacing.xl,
           }]}>
             <View style={styles.accountRow} testID="home.chromeDrawer.account">
-              {/* Default letter avatar; the organisation logo is only the small icon below. */}
-              <MobileUserAvatar name={accountName} />
+              <MobileUserAvatar imageUrl={user?.avatar} name={accountName} />
               <View style={styles.accountTexts}>
                 <Text numberOfLines={1} style={styles.accountName}>{accountName}</Text>
                 {accountEmail && accountEmail !== accountName ? (
