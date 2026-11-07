@@ -20,28 +20,33 @@ export function createPaletteDiscoveryReuse<T>(
     ttlMs: number;
     maxEntries?: number;
     now?: () => number;
+    /** Data owner the entries belong to; another owner must never read them. */
+    scope?: () => string;
   },
 ): PaletteDiscoveryReuse<T> {
   const maxEntries = options.maxEntries ?? 16;
   const now = options.now ?? Date.now;
   const entries = new Map<string, { at: number; value: T }>();
+  const scopedKey = (key: string) => (options.scope ? `${options.scope()}\u0000${key}` : key);
   return {
     read(key) {
-      const entry = entries.get(key);
+      const scoped = scopedKey(key);
+      const entry = entries.get(scoped);
       if (!entry) return undefined;
       if (now() - entry.at >= options.ttlMs) {
-        entries.delete(key);
+        entries.delete(scoped);
         return undefined;
       }
       // Touch so eviction follows the entry a session keeps coming back to.
-      entries.delete(key);
-      entries.set(key, entry);
+      entries.delete(scoped);
+      entries.set(scoped, entry);
       return entry.value;
     },
     write(key, value) {
+      const scoped = scopedKey(key);
       // Re-insert so the eviction order follows the most recent use.
-      entries.delete(key);
-      entries.set(key, { at: now(), value });
+      entries.delete(scoped);
+      entries.set(scoped, { at: now(), value });
       while (entries.size > maxEntries) {
         const oldest = entries.keys().next();
         if (oldest.done) break;

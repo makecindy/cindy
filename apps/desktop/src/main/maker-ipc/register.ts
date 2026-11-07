@@ -1621,12 +1621,15 @@ const workdirLog = createLogger('workdir-diagnostics');
 /**
  * `/` palette Skill listings are discovery snapshots, so a repeat load inside the
  * window may read the previous answer. Every Cindy-side change (SkillHub activation,
- * Pi package install/update, the Pi runtime catalog retry) already passes
- * `forceReload`, which refreshes this snapshot instead of reading it.
+ * Pi package install/update, the Pi runtime catalog retry, a Ghost install/toggle)
+ * passes `forceReload`, which clears the snapshot for every context instead of only
+ * refreshing the caller's: other sessions would otherwise keep serving the old
+ * roster. Entries are scoped to the active data owner so a switch never leaks one
+ * owner's plugin Skills to the next.
  */
 const SKILL_LIST_REUSE_MS = 30_000;
 const skillListReuse = createPaletteDiscoveryReuse<{ success: true; skills: AgentSkillCommand[] }>(
-  { ttlMs: SKILL_LIST_REUSE_MS },
+  { ttlMs: SKILL_LIST_REUSE_MS, scope: activeOwnerScopeKey },
 );
 const workingDirectoryRecovery = createWorkingDirectoryRecovery({ stat: statWorkingDirectory, mkdir: mkdirWorkingDirectory, realpath: realpathWorkingDirectory, requiredRoot: requiredDialogueRecoveryRoot, findFallback: findDialogueRecoveryWorkspace }, allocateDialogueRecoveryWorkspace, workdirLog);
 
@@ -8488,7 +8491,10 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
           skillParams.sessionId ?? null,
           skillParams.remoteHostId ?? null,
         ]);
-        if (skillParams.forceReload !== true) {
+        const ownerScope = activeOwnerScopeKey();
+        if (skillParams.forceReload === true) {
+          skillListReuse.clear();
+        } else {
           const reused = skillListReuse.read(reuseKey);
           if (reused) return reused;
         }
@@ -8525,7 +8531,8 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
             (source) => !disabled.has(skillActivationKey(source)),
           ),
         };
-        skillListReuse.write(reuseKey, listing);
+        // Never publish a listing that may have been assembled across an owner switch.
+        if (activeOwnerScopeKey() === ownerScope) skillListReuse.write(reuseKey, listing);
         return listing;
       } catch (err) {
         return toAgentSkillListFailure(err, {

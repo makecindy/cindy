@@ -25,4 +25,15 @@ describe('palette discovery reuse', () => {
     expect(reuse.read('a')).toBe('A');
     expect(reuse.read('c')).toBe('C');
   });
+
+  it('never serves one data owner the entry cached for another', () => {
+    let owner = 'owner-a';
+    const reuse = createPaletteDiscoveryReuse<string>({ ttlMs: 30_000, scope: () => owner });
+    reuse.write('k', 'from-a');
+    expect(reuse.read('k')).toBe('from-a');
+    owner = 'owner-b';
+    expect(reuse.read('k')).toBeUndefined();
+    owner = 'owner-a';
+    expect(reuse.read('k')).toBe('from-a');
+  });
 });
