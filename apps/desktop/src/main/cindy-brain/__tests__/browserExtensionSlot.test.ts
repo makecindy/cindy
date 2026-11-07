@@ -320,6 +320,21 @@ describe('browserExtensionSlot · 更新来源收敛', () => {
     await h.slot.dispose();
   });
 
+  it('keeps the legacy official control end paused during its update instead of falling back to another plugin', async () => {
+    const ghosts = [extGhost({ nativeHost: false }), extGhost({ id: 'other-browser', nativeHost: false })];
+    const h = await makeSlot({}, ghosts);
+    h.slot.reconcile(ghosts);
+    await h.settle();
+    expect(h.slot.getPageControl()?.ghostId).toBe('my-browser');
+    const complete = await h.slot.prepareUpdate('_root__my-browser');
+    expect(h.slot.getPageControl()).toBeNull();
+    complete();
+    h.slot.reconcile(ghosts);
+    await h.settle();
+    expect(h.slot.getPageControl()?.ghostId).toBe('my-browser');
+    await h.slot.dispose();
+  });
+
   it('does not reuse control or pairings when only the source changes', async () => {
     const ghosts = [extGhost({ nativeHost: false })];
     ghosts[0].publishingSource = { kind: 'public-market', pluginId: 'market-browser' };

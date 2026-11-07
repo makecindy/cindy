@@ -564,8 +564,22 @@ export class GhostBrowserExtensionSlot {
       if ((error as NodeJS.ErrnoException).code !== 'ENOENT') return null;
       // Preserve the pre-upgrade execution end; it is migration compatibility,
       // not eligibility for new declarations. Other multiple candidates need a choice.
-      selected = candidates.length === 1 ? candidates[0] : candidates.find(entry =>
-        entry.ghost.manifest.id === 'my-browser' && entry.ghost.namespace == null && this.deps.isVerifiedOfficial(entry.ghost));
+      // A plugin being updated has no live entry, but it still owns the legacy choice: resolve over
+      // it too and pause, instead of letting the remaining candidate take over.
+      const updatingIds = new Set<string>();
+      const pool: InstalledGhost[] = candidates.map(entry => entry.ghost);
+      for (const ghost of this.roster) {
+        const id = installedGhostStoragePart(ghost);
+        if (this.updating.has(id) && ghost.enabled && mayProvidePageControl(ghost) &&
+          !candidates.some(entry => entry.instanceId === id)) {
+          updatingIds.add(id);
+          pool.push(ghost);
+        }
+      }
+      const legacy = pool.length === 1 ? pool[0] : pool.find(ghost =>
+        ghost.manifest.id === 'my-browser' && ghost.namespace == null && this.deps.isVerifiedOfficial(ghost));
+      if (legacy && updatingIds.has(installedGhostStoragePart(legacy))) return null;
+      selected = legacy && candidates.find(entry => entry.ghost === legacy);
     }
     return selected ? { bridge: selected.bridge, ghostId: selected.ghost.manifest.id,
       instanceId: selected.instanceId, pluginName: selected.ghost.manifest.name } : null;

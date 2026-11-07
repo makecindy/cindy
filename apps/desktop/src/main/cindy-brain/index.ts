@@ -11439,6 +11439,11 @@ function broadcastGhostProvisioning(active: boolean): void {
  * 非权威的空表(账号切换窗口里 manager 尚未重扫)必须当作"还不知道",
  * 否则会把用户的未读整批误清。缺省 false = 保守。
  */
+/** Re-publish the roster after a ledger-only change (a failed source replacement restoring its route). */
+export function republishGhostRoster(): void {
+  broadcastGhostsChanged(getGhostManager().list());
+}
+
 function broadcastGhostsChanged(
   ghosts: InstalledGhost[],
   rosterAuthoritative = false,
