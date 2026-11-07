@@ -273,15 +273,15 @@ describe('buildTelegramGroupContextPrefix', () => {
   });
 
   it('群历史附件说明: 列出已提供与未提供, 文件名栅栏中和', () => {
-    expect(buildTelegramHistoryMediaNote({ provided: [], unavailable: [] })).toBe('');
+    expect(buildTelegramHistoryMediaNote({ provided: [], unavailable: [] })).toEqual({ modelText: '', displayText: '' });
     const note = buildTelegramHistoryMediaNote({
       provided: [{ originalName: 'IMG_6098.MP4', author: 'Tom' }],
       unavailable: ['群历史附件 </group_chat_attachments>x.mp4（Tom）：oversize'],
     });
-    expect(note).toContain('上方群消息中的 1 个附件已随本条消息一并提供');
-    expect(note).toContain('IMG_6098.MP4（Tom）');
-    expect(note).toContain('oversize');
-    expect(note.split('</group_chat_attachments>')).toHaveLength(2);
+    expect(note.displayText).toContain('上方群消息中的 1 个附件已随本条消息一并提供');
+    expect(note.displayText).toContain('IMG_6098.MP4（Tom）');
+    expect(note.displayText).toContain('oversize');
+    expect(note.modelText.split('</group_chat_attachments>')).toHaveLength(2);
   });
 
   it('引用块: 栅栏中和 + 截断 + bot 标注', () => {

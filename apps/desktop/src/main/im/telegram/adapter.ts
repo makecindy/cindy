@@ -337,9 +337,9 @@ export function buildTelegramAdapter(
         : '';
       // 顺序: 群窗口(较远的背景) → 引用块(直接相关) → 发言人 → 用户正文。
       return {
-        agentText: `${persona}${ambientBlock}${assembly.prefix}${historyMediaNote}${replyBlock}${speakerLine}${event.text}`,
+        agentText: `${persona}${ambientBlock}${assembly.prefix}${historyMediaNote.modelText}${replyBlock}${speakerLine}${event.text}`,
         contextSnapshot: captureImContext({
-          groupPrefix: assembly.prefix.replace('\n</group_chat_context>', `${historyMediaNote}\n</group_chat_context>`),
+          groupPrefix: assembly.prefix.replace('\n</group_chat_context>', `${historyMediaNote.displayText ? `\n${historyMediaNote.displayText}` : ''}\n</group_chat_context>`),
           groupMessageCount: assembly.messageCount,
           replyPrefix: replyBlock,
           replyMessageCount: 1,
