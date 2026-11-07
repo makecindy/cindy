@@ -31,6 +31,7 @@
     "./device-list": "./src/deviceList.ts",
     "./device-link-contract": "./src/deviceLinkContract.ts",
     "./device-responsiveness": "./src/deviceResponsiveness.ts",
+    "./context-overflow-error": "./src/contextOverflowError.ts",
     "./error-redaction": "./src/errorRedaction.ts",
     "./expanded-block-memory": "./src/expandedBlockMemory.ts",
     "./file-browser": "./src/fileBrowser.ts",

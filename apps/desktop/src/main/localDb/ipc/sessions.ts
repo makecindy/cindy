@@ -1056,6 +1056,8 @@ export interface SessionRowSnapshot {
   source?: string | null;
   /** 会话当前模型;限额判定据此只看该模型的额度窗口。 */
   model?: string | null;
+  /** Native id used by the execution host to resolve the task's subscription account. */
+  sdkSessionId?: string | null;
   /** Authoritative `/clear` visibility boundary (unix ms). */
   clearedAt?: number | null;
 }
@@ -1083,6 +1085,7 @@ async function selectSessionRowSnapshot(id: string): Promise<SessionRowSnapshot 
       agentKind: sessions.agentKind,
       source: sessions.source,
       model: sessions.model,
+      sdkSessionId: sessions.sdkSessionId,
     })
     .from(sessions)
     .where(eq(sessions.id, id))

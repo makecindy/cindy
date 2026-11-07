@@ -5664,6 +5664,11 @@
           "installPlugin": "Installer le plugin",
           "enablePlugin": "Activer",
           "installExtension": "Ajouter l'extension",
+          "updatingTitle": "Mise à jour de la connexion au navigateur",
+          "updatingBody": "La connexion sera rétablie automatiquement après la mise à jour.",
+          "selectPluginTitle": "Choisir une extension de navigateur",
+          "selectPluginBody": "Ouvrez les détails du plugin et choisissez « Utiliser cette extension de navigateur » pour confirmer celle que Cindy utilisera.",
+          "selectPlugin": "Ouvrir le plugin",
           "updatePluginTitle": "Mettre à jour le plugin Cindy Chrome",
           "updatePluginBody": "Le plugin Cindy Chrome installé est trop ancien pour « Mon navigateur ». Mettez-le à jour vers la dernière version, puis suivez ses indications pour ajouter l'extension.",
           "updatePlugin": "Mettre à jour",
@@ -14216,8 +14221,10 @@
       "mailLegacy": "Historique du brouillon (lecture seule)",
       "taskAutoArchived": "« {{title}} » archivée",
       "taskAutoArchivedUndo": "Annuler",
-      "taskAutoArchivePending": "Archivée à la sortie",
-      "taskAutoArchiveCancel": "Garder cette fois"
+      "taskAutoArchivePending": "Archivage automatique en quittant cette tâche",
+      "taskAutoArchiveCancel": "Annuler",
+      "taskAutoArchiveCancelled": "Pas d’archivage automatique cette fois",
+      "taskArchiveNow": "Archiver maintenant"
     },
     "ghostHook": {
       "blockedFallback": "Message bloqué par un plugin ; non envoyé",
