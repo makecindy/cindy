@@ -36,6 +36,7 @@ import { readCustomProviderKey } from '../secrets/providerSecretStore.js';
 import { MANAGED_OLLAMA_PROVIDER_ID, isManagedSidecarProviderId } from '../../shared/localModelRuntime.js';
 import { ensureManagedOllamaReadyForSession } from '../local-model-runtime/preflight.js';
 import { parseAuxiliaryModelRef, type ParsedAuxiliaryModelRef } from '../../shared/auxiliaryModelChain.js';
+import { matchesDeterministicUsageExhaustionText } from '@cindy/maker-shared/error-redaction';
 import { getUtilityModelChainProfiles } from './UtilityModelSelection.js';
 import { getEffectiveAuxiliaryModelChain } from './resolveAuxiliaryModelChain.js';
 import { requestUtilityTextWithinTimeout } from './utilityTextTimeout.js';
@@ -168,7 +169,7 @@ type UtilityTextCandidateResolution =
 
 /** Credential-safe failure raised by a concrete utility transport. */
 type UtilityTextExecutionFailure =
-  | { reason: 'http_error'; httpStatus: number }
+  | { reason: 'http_error'; httpStatus: number; quotaExhausted?: boolean }
   | {
     reason: Extract<UtilityTextAttemptReason, 'timeout' | 'empty_response' | 'request_failed'>;
     httpStatus?: never;
@@ -1686,10 +1687,8 @@ async function requestLiteLlmText(input: {
     if (!response.ok) {
       // This path always carries the Cindy AI key to the Cindy gateway.
       if (response.status === 401) reportCindyGatewayKeyRejected(input.apiKey);
-      // Do not retain or log upstream response bodies: gateways may echo request
-      // metadata, while the HTTP status is sufficient for user recovery.
-      await response.body?.cancel().catch(() => undefined);
-      throw new UtilityTextExecutionError({ reason: 'http_error', httpStatus: response.status });
+      const quotaExhausted = await responseIndicatesQuotaExhaustion(response);
+      throw new UtilityTextExecutionError({ reason: 'http_error', httpStatus: response.status, quotaExhausted });
     }
     let parsed = await response.json() as ChatCompletionBody;
     let text = chatCompletionChoicesText(parsed);
@@ -1710,7 +1709,10 @@ async function requestLiteLlmText(input: {
         text = chatCompletionChoicesText(parsed);
       } else {
         if (budgeted.status === 401) reportCindyGatewayKeyRejected(input.apiKey);
-        await budgeted.body?.cancel().catch(() => undefined);
+        const quotaExhausted = await responseIndicatesQuotaExhaustion(budgeted);
+        if (quotaExhausted) {
+          throw new UtilityTextExecutionError({ reason: 'http_error', httpStatus: budgeted.status, quotaExhausted: true });
+        }
       }
     }
     if (!text) {
@@ -2026,8 +2028,8 @@ async function requestProviderHttpText(input: {
     }
     if (!response.ok) {
       if (response.status === 401) input.onUnauthorized?.();
-      await response.body?.cancel().catch(() => undefined);
-      throw new UtilityTextExecutionError({ reason: 'http_error', httpStatus: response.status });
+      const quotaExhausted = await responseIndicatesQuotaExhaustion(response);
+      throw new UtilityTextExecutionError({ reason: 'http_error', httpStatus: response.status, quotaExhausted });
     }
 
     let raw = await readUtilityTextStream(response, input.onText);
@@ -2057,7 +2059,10 @@ async function requestProviderHttpText(input: {
         text = wireResponseText(step.wire, raw);
       } else {
         if (budgeted.status === 401) input.onUnauthorized?.();
-        await budgeted.body?.cancel().catch(() => undefined);
+        const quotaExhausted = await responseIndicatesQuotaExhaustion(budgeted);
+        if (quotaExhausted) {
+          throw new UtilityTextExecutionError({ reason: 'http_error', httpStatus: budgeted.status, quotaExhausted: true });
+        }
       }
     }
     // The step was accepted by the provider; remember it even when the model
@@ -2511,8 +2516,21 @@ function failedAttempt(
     status: 'failed' as const,
   };
   return failure.reason === 'http_error'
-    ? { ...base, reason: failure.reason, httpStatus: failure.httpStatus }
+    ? { ...base, reason: failure.reason, httpStatus: failure.httpStatus, ...(failure.quotaExhausted ? { quotaExhausted: true } : {}) }
     : { ...base, reason: failure.reason };
+}
+
+/** Inspect only the bounded provider error body, then discard it. */
+async function responseIndicatesQuotaExhaustion(
+  response: { text(): Promise<string>; body?: { cancel(): Promise<unknown> } | null },
+): Promise<boolean> {
+  try {
+    const body = await response.text();
+    return matchesDeterministicUsageExhaustionText(body.slice(0, 4096));
+  } catch {
+    await response.body?.cancel().catch(() => undefined);
+    return false;
+  }
 }
 
 /** Collapse homogeneous terminal failures while preserving per-candidate attempts. */

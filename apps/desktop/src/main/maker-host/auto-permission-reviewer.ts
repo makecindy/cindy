@@ -18,6 +18,7 @@ import { splitAutoReviewUserReferences } from '@cindy/maker-shared/auto-review-i
 import { redactSensitiveText } from '@cindy/maker-shared/error-redaction';
 
 import { untrustedJsonBlock } from '../../shared/untrustedPrompt.js';
+import type { AutoReviewModelFailure } from './auto-review-model-router.js';
 
 interface AutoPermissionReviewerLogger {
   debug(message: string, fields?: Record<string, unknown>): void;
@@ -29,7 +30,7 @@ export interface AutoPermissionReviewerDeps {
     request: AutoReviewRequest,
     prompt: string,
     context: { signal: AbortSignal },
-  ): Promise<string | null>;
+  ): Promise<string | AutoReviewModelFailure | null>;
   logger: AutoPermissionReviewerLogger;
   /**
    * `true` when requestText owns candidate fallback and transient retries. The reviewer then
@@ -81,7 +82,7 @@ const RETRY_BACKOFF_MS = AUTO_REVIEW_RETRY_BACKOFF_MS;
 const RETRY_SCHEDULING_SLACK_MS = AUTO_REVIEW_RETRY_SCHEDULING_SLACK_MS;
 
 /** 单次尝试的失败形态。区分它们决定了「该不该再试一次」。 */
-type AttemptFailure = 'timeout' | 'empty' | 'malformed' | 'error';
+type AttemptFailure = 'timeout' | 'empty' | 'malformed' | 'error' | 'quota_exhausted';
 
 /**
  * 只有基础设施性的失败才值得重试。
@@ -328,7 +329,11 @@ async function attemptReview(
       }),
     ]);
     if (text === REVIEW_TIMEOUT) return { failure: 'timeout' };
+    if (typeof text === 'object' && text?.kind === 'auto-review-model-failure') {
+      return { failure: text.reason };
+    }
     if (!text) return { failure: 'empty' };
+    if (typeof text !== 'string') return { failure: 'error' };
     const decision = parseAutoPermissionReviewDecision(text);
     if (!decision) return { failure: 'malformed' };
     return { decision };
@@ -468,6 +473,13 @@ export function createAutoPermissionReviewer(
       failure: lastFailure,
       durationMs: Date.now() - startedAt,
     });
+    if (lastFailure === 'quota_exhausted') {
+      return {
+        verdict: 'ask',
+        reason: 'The automatic review model gateway quota is exhausted. Check usage or billing, then confirm this action.',
+        unavailable: true,
+      };
+    }
     return null;
   };
 }

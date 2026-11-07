@@ -297,6 +297,25 @@ describe('parseAutoPermissionReviewDecision', () => {
 });
 
 describe('createAutoPermissionReviewer', () => {
+  it('hands deterministic gateway quota exhaustion to the user with a useful reason', async () => {
+    const logger = { debug: vi.fn(), warn: vi.fn() };
+    const reviewer = createAutoPermissionReviewer({
+      requestText: vi.fn(async () => ({ kind: 'auto-review-model-failure' as const, reason: 'quota_exhausted' as const })),
+      logger,
+      managesRetries: true,
+    });
+
+    await expect(reviewer(request())).resolves.toEqual(expect.objectContaining({
+      verdict: 'ask',
+      unavailable: true,
+      reason: expect.stringContaining('quota is exhausted'),
+    }));
+    expect(logger.warn).toHaveBeenCalledWith(
+      'auto permission reviewer attempt failed',
+      expect.objectContaining({ failure: 'quota_exhausted' }),
+    );
+  });
+
   it('returns the parsed lightweight decision and logs no action payload', async () => {
     const requestText = vi.fn(async () => '{"verdict":"allow","reason":"Routine test"}');
     const logger = { debug: vi.fn(), warn: vi.fn() };

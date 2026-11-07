@@ -7,6 +7,7 @@ import {
   AUTO_REVIEW_CONFIRM_UNDELIVERED_CODE,
   AUTO_REVIEW_UNAVAILABLE_CODE,
   AUTO_REVIEW_UNAVAILABLE_METADATA_KEY,
+  AUTO_REVIEW_REASON_METADATA_KEY,
   AUTO_REVIEW_UNAVAILABLE_PROMPT_TEXT,
   AUTO_REVIEW_MAX_REQUEST_TIMEOUT_MS,
   AUTO_REVIEW_RETRY_ATTEMPTS,
@@ -414,6 +415,24 @@ describe('host evidence guard', () => {
 });
 
 describe('annotatePermissionRequestForUnavailableReview', () => {
+  it('keeps a deterministic quota reason on the handoff card without exposing gateway details', () => {
+    const annotated = annotatePermissionRequestForUnavailableReview({
+      kind: 'permission',
+      requestId: 'req-quota',
+      toolName: 'exec',
+      input: { command: 'npm test' },
+      description: undefined,
+      metadata: undefined,
+    }, 'The automatic review model gateway quota is exhausted. Check usage or billing.');
+
+    expect(annotated.description).toContain('The automatic review model gateway quota is exhausted.');
+    expect(annotated.metadata).toMatchObject({
+      [AUTO_REVIEW_UNAVAILABLE_METADATA_KEY]: true,
+      [AUTO_REVIEW_REASON_METADATA_KEY]: expect.stringContaining('quota is exhausted'),
+    });
+    expect(annotated.description).not.toContain('response body');
+  });
+
   it('marks the confirmation card as an auto-review handoff without re-reviewing', () => {
     const annotated = annotatePermissionRequestForUnavailableReview({
       kind: 'permission',
