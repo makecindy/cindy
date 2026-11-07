@@ -725,6 +725,30 @@ function applyMacPackagedDisplayName(buildPath: string, platform: string): void 
   }
 }
 
+/**
+ * macOS Live Activity (Agent Island in the system Dynamic Island). `build.mjs` skips
+ * every step unless the macOS 27.3 SDK and Apple silicon are available, so older
+ * toolchains still package the app without it. The widget extension needs its own
+ * App Sandbox entitlements: release signing must sign
+ * `Contents/PlugIns/CindyAgentActivity.appex` with
+ * `native/agent-island/live-activity/extension.entitlements` before the app.
+ */
+function runAgentActivityBuild(args: string[]): void {
+  const result = spawnSync(
+    process.execPath,
+    [path.join(__dirname, 'native/agent-island/live-activity/build.mjs'), ...args],
+    { stdio: 'inherit' },
+  );
+  if (result.error || result.status !== 0) throw new Error('macOS Live Activity build failed');
+}
+
+function installMacAgentActivityExtension(buildPath: string, platform: string, arch: string): void {
+  if (platform !== 'darwin' || process.platform !== 'darwin') return;
+  for (const appDir of fs.readdirSync(buildPath).filter((n) => n.endsWith('.app'))) {
+    runAgentActivityBuild(['extension', path.join(buildPath, appDir), arch]);
+  }
+}
+
 function targetPlatformKey(targetPlatform: string, targetArch: string): string {
   return `${targetPlatform}-${targetArch}`;
 }
@@ -831,6 +855,8 @@ function extraResourcesForTarget(targetPlatform: string): string[] {
   // 仅 darwin 有此功能,其它平台不打进包。exec 位由 git 跟踪,extraResource 拷贝时保留。
   if (targetPlatform === 'darwin') {
     base.push('resources/cli');
+    // 「设置 → 外观 → Dock 图标」运行期交给 app.dock.setIcon 的圆角 PNG。
+    base.push('resources/icon-dock.png', 'resources/app-icons');
   }
   if (targetPlatform === 'linux') base.push('resources/linux');
 
@@ -1215,8 +1241,30 @@ function buildRemoteDesktopInput(platform: ForgePlatform, arch: ForgeArch): void
     if (arch !== 'x64' && arch !== 'arm64')
       throw new Error('Unsupported Windows desktop architecture');
     const target = arch === 'arm64' ? 'aarch64-pc-windows-msvc' : 'x86_64-pc-windows-msvc';
-    for (const helper of ['windows-input', 'windows-host']) {
+    // The host EXE and cdylib otherwise compete for the same PDB filename.
+    // Match source-mode builds by isolating their Cargo output directories.
+    for (const [helper, buildTarget, artifact, destination] of [
+      [
+        'windows-input',
+        '--bin',
+        'cindy-windows-desktop-input.exe',
+        'cindy-windows-desktop-input.exe',
+      ],
+      [
+        'windows-host',
+        '--bin',
+        'cindy-windows-desktop-host.exe',
+        'cindy-windows-desktop-host.exe',
+      ],
+      [
+        'windows-host',
+        '--lib',
+        'cindy_windows_desktop_host.dll',
+        'cindy-windows-desktop-host.node',
+      ],
+    ] as const) {
       const root = path.join(__dirname, 'native', 'remote-desktop', helper);
+      const targetDir = path.join(root, 'target', buildTarget === '--lib' ? 'addon' : 'bin');
       const result = spawnSync(
         'cargo',
         [
@@ -1225,21 +1273,21 @@ function buildRemoteDesktopInput(platform: ForgePlatform, arch: ForgeArch): void
           '--locked',
           '--target',
           target,
+          '--config',
+          path.join(__dirname, 'native', 'remote-desktop', '.cargo', 'config.toml'),
           '--manifest-path',
           path.join(root, 'Cargo.toml'),
+          '--target-dir',
+          targetDir,
+          buildTarget,
+          ...(buildTarget === '--bin' ? [path.parse(artifact).name] : []),
         ],
         { stdio: 'inherit' },
       );
       if (result.error || result.status !== 0)
         throw new Error(`Remote desktop ${helper} build failed`);
-      const output = path.join(root, 'target', target, 'release');
-      const name = `cindy-windows-desktop-${helper === 'windows-input' ? 'input' : 'host'}`;
-      fs.copyFileSync(path.join(output, `${name}.exe`), path.join(destDir, `${name}.exe`));
-      if (helper === 'windows-host')
-        fs.copyFileSync(
-          path.join(output, 'cindy_windows_desktop_host.dll'),
-          path.join(destDir, `${name}.node`),
-        );
+      const output = path.join(targetDir, target, 'release');
+      fs.copyFileSync(path.join(output, artifact), path.join(destDir, destination));
     }
   }
 }
@@ -1886,8 +1934,8 @@ const config: ForgeConfig = {
     //
     //   Windows / Linux 完全忽略此字段。
     extendInfo: {
-      NSMicrophoneUsageDescription: 'This app needs access to the microphone for voice input.',
-      NSAudioCaptureUsageDescription: 'Share computer audio with your connected remote desktop.',
+      NSMicrophoneUsageDescription: 'Cindy uses the microphone for voice input and screen recordings.',
+      NSAudioCaptureUsageDescription: 'Cindy captures computer audio for screen recordings and your connected remote desktop.',
       // agent 会话中访问受 TCC 保护的目录(桌面/文稿/下载)时，macOS 需要这些声明才能向
       // 用户展示授权弹窗；缺失时系统直接静默拒绝，不弹窗。
       NSDesktopFolderUsageDescription:
@@ -1896,14 +1944,15 @@ const config: ForgeConfig = {
         "Cindy's AI agent needs access to read and write files in your Documents folder.",
       NSDownloadsFolderUsageDescription:
         "Cindy's AI agent needs access to read and write files in your Downloads folder.",
-      // 智能通讯录导入: 经 osascript 向"通讯录"发 Apple Events(只读拉取)。
-      // 缺这条声明 macOS 会不弹授权窗直接拒绝(-1743), 用户只看到静默失败。
+      // 通讯录插件(cindy-contacts)的 Node 工作进程经 osascript 向"通讯录"发 Apple Events
+      // 导入名片; macOS 按 Cindy 应用授权。缺这条声明会不弹授权窗直接拒绝(-1743)。
       NSAppleEventsUsageDescription:
         'Cindy uses Apple Events to read Contacts you import and to add or update Contacts you explicitly export.',
       NSContactsUsageDescription:
         'Cindy accesses Contacts only when you import them or explicitly export additions or updates.',
+      // Device Link 局域网直连(direct-link-v1)。
       NSLocalNetworkUsageDescription:
-        'Cindy uses your local network to sync end-to-end encrypted Smart Contacts directly between your online desktop devices.',
+        'Cindy uses your local network to connect directly, with encryption, to your other devices signed in to the same account.',
       CFBundleDocumentTypes: [
         {
           CFBundleTypeName: 'Folder',
@@ -1955,8 +2004,8 @@ const config: ForgeConfig = {
     // helper bundles also need the usage description for macOS TCC to register
     // the packaged app correctly in Privacy & Security > Microphone.
     extendHelperInfo: {
-      NSMicrophoneUsageDescription: 'This app needs access to the microphone for voice input.',
-      NSAudioCaptureUsageDescription: 'Share computer audio with your connected remote desktop.',
+      NSMicrophoneUsageDescription: 'Cindy uses the microphone for voice input and screen recordings.',
+      NSAudioCaptureUsageDescription: 'Cindy captures computer audio for screen recordings and your connected remote desktop.',
       NSDesktopFolderUsageDescription:
         "Cindy's AI agent needs access to read and write files on your Desktop.",
       NSDocumentsFolderUsageDescription:
@@ -2050,6 +2099,11 @@ const config: ForgeConfig = {
         );
         if (trackpadBuild.error || trackpadBuild.status !== 0)
           throw new Error('Native trackpad build failed');
+        runAgentActivityBuild([
+          'addon',
+          path.join(__dirname, 'resources/tools/agent-island/cindy-agent-activity.node'),
+          arch,
+        ]);
       }
       buildMacVoiceInputModifierShortcutListener(platform, arch);
       buildMacAgentIslandHelper(platform, arch);
@@ -2076,6 +2130,7 @@ const config: ForgeConfig = {
           console.log(`[forge:postPackage] staged ${noticeName} + restricted component disclosure`);
           signPackagedExes(buildPath);
           applyMacPackagedDisplayName(buildPath, opts.platform);
+          installMacAgentActivityExtension(buildPath, opts.platform, opts.arch);
         }
       } finally {
         removeCindySourceMetadata();
@@ -2132,19 +2187,18 @@ const config: ForgeConfig = {
           target: 'preload',
         },
         {
-          entry: 'src/main/contacts-sync/contactsSyncCodecWorker.ts',
-          config: 'vite.contacts-sync-codec-worker.config.ts',
-          // 大通讯录 JSON/gzip/crypto 隔离在线程中，避免阻塞 Electron main。
+          entry: 'src/main/bot-import/openclawCronWorker.ts',
+          config: 'vite.node-worker.config.ts',
           target: 'preload',
         },
         {
-          entry: 'src/main/bot-import/openclawCronWorker.ts',
-          config: 'vite.contacts-sync-codec-worker.config.ts',
+          entry: 'src/main/maker-host/claudeCliStatusWorker.ts',
+          config: 'vite.node-worker.config.ts',
           target: 'preload',
         },
         {
           entry: 'src/main/performance-trace/traceRedactionWorker.ts',
-          config: 'vite.contacts-sync-codec-worker.config.ts',
+          config: 'vite.node-worker.config.ts',
           target: 'preload',
         },
         {
@@ -2183,7 +2237,7 @@ const config: ForgeConfig = {
         },
         {
           entry: 'src/main/skillhub/customizationScanProcess.ts',
-          config: 'vite.contacts-sync-codec-worker.config.ts',
+          config: 'vite.node-worker.config.ts',
           // File approvals can stall native scandir indefinitely. Keep discovery
           // in a killable utility process so Main can time out and recover.
           target: 'preload',
@@ -2287,8 +2341,12 @@ const config: ForgeConfig = {
           target: 'preload',
         },
         {
-          // 意识电子脑管子桥(离屏沙箱逻辑页专用;面板 webview 无 preload,
-          // hardener 亦强制 delete。见 brain/runtime/electronSandboxAdapter)。
+          entry: 'src/preload/ghostPagePreload.ts',
+          config: 'vite.ghost-preload.config.ts',
+          target: 'preload',
+        },
+        {
+          // 意识电子脑管子桥，独立于插件可见页面的最小选模桥。
           entry: 'src/preload/ghostPreload.ts',
           config: 'vite.ghost-preload.config.ts',
           target: 'preload',

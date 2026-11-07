@@ -81,7 +81,7 @@ async function adoptOne(row: LegacyRow): Promise<void> {
       await sink.push(message);
     }
     await sink.flush();
-    void recordPrRefsForImportedMessages(row.id, sink.prCandidates).catch(() => undefined);
+    void recordPrRefsForImportedMessages(row.id).catch(() => undefined);
   }
   if (source === 'claude' && nativeSessionId && !continued && nativeSessionId !== row.sdkSessionId) {
     await runImportTx({ action: 'commit', sessionId: row.id, now: Date.now(), status: 'ready', issue: null, unhide: false, sessionPatch: { sdkSessionId: nativeSessionId } });

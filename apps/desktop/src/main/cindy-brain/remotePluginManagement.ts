@@ -8,6 +8,7 @@ import {
   type InstalledGhost,
 } from '../../shared/ghost.js';
 import { installedGhostStoragePart } from '../../shared/pluginIdentity.js';
+import { projectPluginUiConsent } from '../../shared/pluginUiConsent.js';
 import type {
   PluginMarketDetail,
   PluginMarketInstallOptions,
@@ -121,6 +122,7 @@ export function projectManagedGhost(g: InstalledGhost): InstalledGhost {
     targetCapabilityApproved: g.targetCapabilityApproved,
     delegationCapabilityApproved: g.delegationCapabilityApproved,
     observeCapabilityApproved: g.observeCapabilityApproved,
+    companionsCapabilityApproved: g.companionsCapabilityApproved,
     oauthScopeStale: g.oauthScopeStale,
     oauthAuthorizationExpired: g.oauthAuthorizationExpired,
   };
@@ -192,6 +194,15 @@ export class RemotePluginManagement {
     this.prune();
     const input = request.input ?? {};
     const result = (value: unknown): RemoteActionInvokeResponse => ({ effects: [], result: value });
+    if (request.actionId === 'management:ui-consent') {
+      if (Object.keys(input).length) return invalid();
+      const current = this.deps.capture(peer);
+      if (!current()) return unavailable();
+      const snapshot = projectPluginUiConsent(this.deps.list(), !!this.deps.ui,
+        ghost => this.deps.ui?.suppressed(ghost) === true);
+      if (!current()) return unavailable();
+      return result(snapshot);
+    }
     if (request.actionId === 'management:snapshot') {
       if (Object.keys(input).length) return invalid();
       const current = this.deps.capture(peer);

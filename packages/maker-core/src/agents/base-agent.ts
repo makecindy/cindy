@@ -43,7 +43,7 @@ import type {
 import type { CapabilityRoutingPolicy } from '../types/capability-routing.js';
 import { NotSupportedError } from '../types/capabilities.js';
 import type { AgentCredentialMode, AuthLoginOptions } from '../interfaces/auth-adapter.js';
-import type { ContactsPromptState } from '../contacts/system-prompt.js';
+import { NATIVE_SUBSCRIPTION_ACCOUNT, type NativeSubscriptionAccount } from '../interfaces/auth-adapter.js';
 import type {
   MemoryStatus,
   MemorySetResult,
@@ -154,6 +154,8 @@ export interface PiExtraSpawnConfig {
     servers: PiMcpServerRef[];
     /** Bot-scoped memory is exposed as one typed Pi tool instead of nested discovery. */
     botMemoryFacade?: boolean;
+    /** Direct teammate tools left out because a system Skill is turned off; the helper also denies calls. */
+    deniedTools?: string[];
   } | null;
   /** 外部 MCP header 真值；只进 Pi 父进程 env，并在 bash spawn 边界剥离。 */
   mcpEnv?: Record<string, string>;
@@ -472,6 +474,7 @@ export interface CodexLocalCredentialModeSwitchContext {
 }
 
 export interface RefreshLocalModelsOptions {
+  [NATIVE_SUBSCRIPTION_ACCOUNT]?: NativeSubscriptionAccount;
   providerId?: string;
   /**
    * Bind model discovery to a specific local credential route.
@@ -484,6 +487,8 @@ export interface RefreshLocalModelsOptions {
    * 捕获监听器,让调用方按发起时的登录代际决定是否采用。
    */
   onSupportedModels?: (models: unknown[]) => void;
+  /** Codex: route a complete live snapshot to this caller instead of OAuth discovery. */
+  onModelsListed?: (models: readonly CodexModelListItem[]) => void | Promise<void>;
 }
 
 export interface ClaudeSubagentTaskRegistration {
@@ -733,6 +738,14 @@ export interface AgentDeps {
    */
   mcpProviders?: McpProvider[];
 
+  /** Explicit local user choices only; never used by Bots, SSH or hosted runtimes. */
+  resolveLocalMcpDuplicateChoices?: (input: { workingDir: string; env: NodeJS.ProcessEnv }) => Promise<{
+    skipHostServers: string[];
+    denyNativeServers: string[];
+    /** Confirm these native connections in the live CLI before omitting any host. */
+    nativeServersToKeep?: string[];
+  }>;
+
   /**
    * pi 专用:pi 配置目录(PI_CODING_AGENT_DIR,内含 models.json / sessions/ 等)
    * 的解析器(host 注入)。文件落盘位置归 host 管;PiAgent 只在返回的目录里生成
@@ -845,7 +858,7 @@ export interface AgentDeps {
     sessionId: string,
     token: string,
     resolveProviderId: () => string | null,
-    options?: { scope?: 'session' | 'subagent-route' },
+    options?: { scope?: 'session' | 'subagent-route'; nativeSubscriptionAccount?: NativeSubscriptionAccount },
   ) => (() => void) | void;
 
   /**
@@ -1317,24 +1330,6 @@ export interface AgentDeps {
    * 视为禁用), agent 走原 system prompt 拼接路径。
    */
   makerMemory?: MakerMemoryManager;
-
-  /**
-   * 智能通讯录「本会话有效状态」(host 注入)。决定注入哪段 contacts prompt
-   * (enabled = 使用规范, disabled = 可选功能告示, unavailable = 不注入, 语义见
-   * contacts/system-prompt.ts 的 ContactsPromptState)。host 必须按**有效策略**
-   * 计算, 不能只读全局开关: desktop 侧 = 全局开关 ∧ PluginRegistry 的
-   * 工作区/用户覆盖(workingDir 传入即为此), codex 侧还要与实际应用到 running
-   * app-server 的 spawn 快照对齐(失效失败时 stale 配置里没有新工具面)。
-   * 求值时机与 MCP 工具注册对齐, 保证 prompt 状态与工具可用性不分叉:
-   *  - claude-code: 每次 buildQuery(含 rewind/fresh 重建)与 buildMcpServers
-   *    同点求值, enabled 还会与本次 build 实际注册的 server 集合取交;
-   *    单次 build 内恒定, 前缀缓存不受影响。
-   *  - codex: session 启动求值一次(MCP flags 冻结在 spawn 配置)。
-   * remote 会话两端都不注入(cindy_contacts 不随远端转发)。
-   *
-   * 缺省 / undefined → 两段都不注入 (host 未接线, 与改造前行为一致)。
-   */
-  getContactsPromptState?: (ctx: { workingDir?: string }) => ContactsPromptState;
 
   /** Session 装配时求值一次的插件花名册 system/developer 段；空清单返回空串。 */
   getGhostRosterPrompt?: (ctx: { workingDir?: string }) => string;
@@ -1844,6 +1839,13 @@ export interface DeviceHostedSession {
    */
   guestProvider?: DeviceHostedGuestProvider;
   /**
+   * 任务所在电脑提供了这个任务的 Cindy 托管 Skill(内置与插件带的，已按那台的启用状态与伙伴授权过滤)。
+   * 存在时 Agent 不再加载本机的托管 Skill，受邀者也一样；缺省(旧控制端)时沿用原规则。
+   *  - claudePluginRoots：Claude Code 以本地插件挂载的目录(在影子目录里，保持 `cindy:` 等命名)；
+   *    Codex / Pi 的托管 Skill 已作为项目 Skill 放在影子目录，这里为空。
+   */
+  controllerManagedSkills?: { claudePluginRoots: string[] };
+  /**
    * 任务隧道的往来记录。托管会话里 Codex 每读一个项目文件都要过一次设备互联，慢链路下线程启动会
    * 合法地超过关键 RPC 的固定上限(#5764)：链路上还有往来就顺延等待，超时时把这里的计数写进错误说明。
    * 不提供时按固定上限。
@@ -1908,6 +1910,7 @@ export interface LocalAgentClient {
 }
 
 export interface StartSessionOptions {
+  [NATIVE_SUBSCRIPTION_ACCOUNT]?: NativeSubscriptionAccount;
   [LOCAL_AGENT_CLIENT]?: LocalAgentClient;
   /**
    * Business 层 session id (host 调用 maker.createSession 时传的 opts.id, 由
@@ -2045,6 +2048,11 @@ export interface StartSessionOptions {
    * can observe different memory generations.
    */
   makerMemoryIndexSnapshot?: string;
+  /**
+   * 设备托管：任务所在电脑在打开任务时按真实工作目录生成的插件花名册段。插件工具经隧道
+   * 回到那台电脑，花名册也必须来自那台；Agent 所在电脑不读自己的已装插件。
+   */
+  ghostRosterSnapshot?: string;
   /**
    * Host-owned Cindy Review policy. This is not a user permission preset:
    * adapters must keep the session local, fresh, memory-free and hard
@@ -2531,6 +2539,8 @@ export interface AgentSessionHandle {
 
   /** 当前 usage 快照 */
   getUsageSnapshot(): UsageSnapshot;
+  /** Replayable authoritative usage for Host-synthesized terminal events. */
+  getPendingTurnUsage?(): Record<string, unknown> | undefined;
 
   /** Structured context usage breakdown. Only Claude Code implements this today. */
   getContextUsage?(): Promise<ContextUsageData>;

@@ -25,6 +25,7 @@ import {
 } from '@cindy/maker-core';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
+import { managedSkillDigest } from '../managedSkillDigest';
 import { createRemoteAgentHost, hostSessionIdFor, type HostedStartInput } from '../host/runHost';
 import { TunnelLinkActivity } from '../host/linkActivity';
 import * as runTunnel from '../host/tunnel';
@@ -64,6 +65,7 @@ function makeHost(
     bindGuestProviderRoute?: false | Parameters<typeof createRemoteAgentHost>[0]['bindGuestProviderRoute'];
     /** 会话是否正在运行一轮(缺省不提供，同旧 Agent)。 */
     isTurnRunning?: (input: HostedStartInput) => boolean;
+    managedSkills?: Parameters<typeof createRemoteAgentHost>[0]['managedSkills'];
   } = {},
 ) {
   const bindGuestProviderRoute = options.bindGuestProviderRoute === false
@@ -124,6 +126,7 @@ function makeHost(
     ...(options.recordGuestUsage ? { recordGuestUsage: options.recordGuestUsage } : {}),
     ...(options.recordOwnerUsage ? { recordOwnerUsage: options.recordOwnerUsage } : {}),
     ...(bindGuestProviderRoute ? { bindGuestProviderRoute } : {}),
+    ...(options.managedSkills ? { managedSkills: options.managedSkills } : {}),
     captureOwner: () => 'owner',
     isOwnerCurrent: () => options.ownerCurrent?.() ?? true,
     runsRoot,
@@ -291,6 +294,91 @@ describe('imported instruction files', () => {
 });
 
 describe('guest agents', () => {
+  // 受邀者只看到 Cindy 内置 Skill 的指纹(不透露这台装了哪些插件)；报「与你那份一样」的复制这台自己的，
+  // 指纹对不上的不带。
+  // 不变量：同一份内容，复用提供者自己那份与受邀者传输过来，落到任务里的结果逐字节相同——复用不能成为绕过
+  // Markdown 检查与落地改写的入口(`!` 预执行、越界 `@` 导入、带 hooks 的文件)。
+  it.each([
+    ['a Skill with shell syntax, outside imports and a hooked reference', {
+      'SKILL.md': '---\nname: pr\n---\nRun !`whoami` and read @~/.ssh/config',
+      'references/hooked.md': '---\nname: h\nhooks: {}\n---\n',
+      'references/ok.md': 'Hello',
+      'run.mjs': 'console.log(1)',
+    }],
+    ['a Skill whose entry declares hooks', { 'SKILL.md': '---\nname: pr\nhooks: {}\n---\nBody', 'run.mjs': 'console.log(1)' }],
+  ])('lands %s the same whether the guest reuses it or sends it', async (_label, content) => {
+    const own = path.join(root, 'own', 'pr');
+    for (const [file, data] of Object.entries(content)) {
+      fs.mkdirSync(path.dirname(path.join(own, file)), { recursive: true });
+      fs.writeFileSync(path.join(own, file), data);
+    }
+    const digest = await managedSkillDigest(own);
+    const started: Started[] = [];
+    const host = makeHost(started, { managedSkills: async () => [{ command: 'cindy:pr', dir: own }] });
+    const dir = '.claude/skills/cindy-pr';
+    const open = async (runId: string, task: string, personal: Record<string, unknown>) => {
+      await host.handle(GUEST, { op: 'open', runId, agentKind: 'claude-code', payload: { json: openPayload(task, { personal }) } });
+      await waitForStarted(host, GUEST, runId);
+      const skill = path.join(shadowDir(GUEST, task), '.cindy', 'managed-skills', 'cindy', 'skills', 'pr');
+      return fs.existsSync(skill)
+        ? Object.fromEntries((fs.readdirSync(skill, { recursive: true }) as string[]).filter((f) => fs.statSync(path.join(skill, f)).isFile())
+            .map((f) => [f, fs.readFileSync(path.join(skill, f), 'utf8')]))
+        : null;
+    };
+    const reused = await open(RUN_1, 'task-1', { files: [], managedSkills: [{ command: 'cindy:pr', dir, digest, reuse: true }] });
+    const sent = await open(RUN_2, 'task-2', {
+      files: [],
+      managedSkills: [{ command: 'cindy:pr', dir, digest }],
+      managedFiles: Object.entries(content).map(([file, data]) => ({ path: `${dir}/${file}`, data: b64(data) })),
+    });
+    expect(reused).toEqual(sent);
+    // 检查确实生效了：没有留下带 hooks 的文件，也没有原样的 `!` 预执行与越界 `@`。
+    expect(JSON.stringify(reused)).not.toContain('hooks: {}');
+    if (reused) {
+      expect(reused['SKILL.md']).not.toMatch(/!`whoami`/);
+      // 越界的 `@` 导入改成代码样式，不再是导入。
+      expect(reused['SKILL.md']).toContain('`@~/.ssh/config`');
+    }
+    host.dispose();
+  });
+
+  it('reuses only matching built-in managed skills for a guest', async () => {
+    const write = (dir: string, text: string) => {
+      fs.mkdirSync(dir, { recursive: true });
+      fs.writeFileSync(path.join(dir, 'SKILL.md'), text);
+      return dir;
+    };
+    const pr = write(path.join(root, 'own', 'pr'), 'own pr');
+    const learn = write(path.join(root, 'own', 'learn'), 'own learn');
+    const secret = write(path.join(root, 'own', 'secret'), 'plugin');
+    const started: Started[] = [];
+    const host = makeHost(started, { managedSkills: async () => [
+      { command: 'cindy:pr', dir: pr }, { command: 'cindy:learn', dir: learn }, { command: 'cindy-plugin-x:secret', dir: secret },
+    ] });
+    const digest = await managedSkillDigest(pr);
+    const guestCaps = await host.handle(GUEST, { op: 'caps' }) as { managedSkills: { digests: Record<string, string> } };
+    const ownerCaps = await host.handle(OWNER, { op: 'caps' }) as { managedSkills: { digests: Record<string, string> } };
+    expect(Object.keys(guestCaps.managedSkills.digests).sort()).toEqual(['cindy:learn', 'cindy:pr']);
+    expect(Object.keys(ownerCaps.managedSkills.digests)).toContain('cindy-plugin-x:secret');
+    await host.handle(GUEST, {
+      op: 'open', runId: RUN_1, agentKind: 'claude-code',
+      payload: { json: openPayload('task-1', { personal: { files: [], managedSkills: [
+        { command: 'cindy:pr', dir: '.claude/skills/cindy-pr', digest, reuse: true },
+        { command: 'cindy:learn', dir: '.claude/skills/cindy-learn', digest: '0'.repeat(64), reuse: true },
+        // 受邀者点名提供者装的插件 Skill(指纹它是知道不了的，但不能因此靠猜就复制进它的任务)。
+        { command: 'cindy-plugin-x:secret', dir: '.claude/skills/cindy-plugin-x-secret-00000000', digest: await managedSkillDigest(secret), reuse: true },
+      ] } }) },
+    });
+    await waitForStarted(host, GUEST, RUN_1);
+    const plugin = path.join(shadowDir(GUEST, 'task-1'), '.cindy', 'managed-skills', 'cindy');
+    expect(started[0].input.controllerManagedSkills).toEqual({ claudePluginRoots: [plugin] });
+    expect(fs.readFileSync(path.join(plugin, 'skills', 'pr', 'SKILL.md'), 'utf8')).toBe('own pr');
+    expect(fs.existsSync(path.join(plugin, 'skills', 'learn'))).toBe(false);
+    expect(fs.existsSync(path.join(shadowDir(GUEST, 'task-1'), '.cindy', 'managed-skills', 'cindy-plugin-x'))).toBe(false);
+    expect(JSON.stringify(fs.readdirSync(sessionRoot(GUEST, 'task-1'), { recursive: true }))).not.toContain('secret');
+    host.dispose();
+  });
+
   it('offers every isolated agent to a guest, the same as same-account', async () => {
     const host = makeHost([]);
     const guestCaps = await host.handle(GUEST, { op: 'caps' }) as { agents: Array<{ kind: string; available: boolean }> };

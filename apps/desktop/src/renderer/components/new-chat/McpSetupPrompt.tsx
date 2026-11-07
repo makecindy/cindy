@@ -40,7 +40,7 @@ export function useMcpSetupRequest(sessionId: string | null, enabled: boolean): 
   return enabled && state?.sessionId === sessionId && isDataOwnerGenerationCurrent(state.owner) ? state.request : null;
 }
 
-export function McpSetupPrompt({ request }: { request: McpSetupRequest }) {
+export function McpSetupPrompt({ request, teammate }: { request: McpSetupRequest; teammate?: boolean }) {
   const { t } = useTranslation();
   const [ids, setIds] = useState<string[] | null>(null);
   const [failedResult, setFailedResult] = useState<{ serverId?: string } | null>(null);
@@ -90,6 +90,6 @@ export function McpSetupPrompt({ request }: { request: McpSetupRequest }) {
     </div>
   </section>;
   if (!ids) return null;
-  return <McpServerDialog embedded proposal={request.proposal} existingIds={ids}
+  return <McpServerDialog embedded teammate={teammate} proposal={request.proposal} existingIds={ids}
     onSaved={serverId => { void finish(serverId); }} onClose={() => { void finish(); }} />;
 }

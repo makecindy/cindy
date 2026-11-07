@@ -229,8 +229,8 @@ function StatusProbe() {
   const { statuses, successfulStatuses, fetchStatusesForSession } = usePrStatuses('remote-child');
   const { registerPrConsumer } = usePrActions();
   useEffect(() => registerPrConsumer('remote-child', 'home'), [registerPrConsumer]);
-  const latest = statuses.get('a/b#1');
-  const confirmed = successfulStatuses.get('a/b#1');
+  const latest = statuses.get('github:github.com/a/b#1');
+  const confirmed = successfulStatuses.get('github:github.com/a/b#1');
   return (
     <button onClick={() => fetchStatusesForSession('remote-child')}>
       {confirmed?.ok ? confirmed.status : 'unknown'}:{latest?.ok === false ? 'stale' : 'fresh'}

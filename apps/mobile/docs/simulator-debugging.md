@@ -30,16 +30,19 @@ request still requires fresh bundle logs and visible page verification.
 ### Which iOS Simulator
 
 The repository does not pin a simulator; each developer chooses locally. By default
-(`CINDY_MOBILE_SIMULATOR=auto`) `whoami`, `rebuild` and `open` first use a booted device in
-Cindy's own simulator — the official Baguette plugin's private device set at
-`~/Library/Application Support/BaguetteCindy/devices`, shown in Cindy's sidebar — and fall
-back to the system (Xcode) simulator when Cindy's has no booted device, is not installed, or
-its plugin setting has paused running. `--udid` uses whichever of those sets holds that
-device. Keep a personal choice outside the repository, e.g. in your shell profile:
+(`CINDY_MOBILE_SIMULATOR=auto`) `whoami`, `rebuild` and `open` use Cindy's own simulator — the
+official Baguette plugin's private device set at
+`~/Library/Application Support/BaguetteCindy/devices`, shown in Cindy's sidebar — and fall back
+to the system (Xcode) simulator only when Cindy's is not installed or its plugin setting has
+paused running. With nothing booted in Cindy's simulator they report `cindy-idle` with its
+reusable devices instead of picking a system device; boot one through the plugin. `--udid` uses
+whichever of those sets holds that device. Using the system simulator while Cindy's is available
+reports `system-while-cindy-available` (`simulatorNotice` in `whoami --json`). Keep a personal
+choice outside the repository, e.g. in your shell profile:
 
 | `CINDY_MOBILE_SIMULATOR` | Effect |
 |---|---|
-| `auto` (default) | Cindy first, then system |
+| `auto` (default) | Cindy while it is available, otherwise system |
 | `cindy` | Only Cindy's simulator; error when unavailable |
 | `system` | Only the system simulator |
 | absolute path | Only that CoreSimulator device set |
@@ -65,6 +68,27 @@ explicitly leaves visible-window acceptance to a screenshot/manual check. Withou
 
 ## 截图与当前版本测试
 
+**默认入口：`pnpm mobile:sim:up`（只看界面加 `-- --mock`）。** 它按下面的流程完成第 1–6 步中除目检外的
+部分，并遵守同样的授权范围：不 `--clean`、不卸载、不新建或删除设备，不停止其他任务的 Metro（`--takeover`
+除外）。
+
+| 选择 | 规则 |
+|---|---|
+| 设备 | `--udid` → `--device <名称>` 或个人设置的 `CINDY_MOBILE_SIM_DEVICE` → 连着本 worktree Metro 的已开机 iPhone → 唯一一台候选（装了 App 且没有 Metro 在服务的已开机 iPhone，或装了 App 的关机 iPhone）。候选有多台时不猜，报 `DEVICE_CHOICE_NEEDED` 并列出候选，由用户指定；一台都没有时报 `NO_REUSABLE_DEVICE`，由 `next` 给出新建方法 |
+| Metro | 复用本 worktree 身份一致的 Metro；身份过期就重启自己的；`8081` 属于其他任务时用 `8082`–`8086` 的空闲端口，并把设备指过去 |
+| 原生包 | `native-matched` 就复用，否则运行 `rebuild`（先查缓存）；探测失败报 `NATIVE_PROBE_FAILED`，不当作需要重装 |
+| App | 启动后等 Metro 日志出现这次的 `iOS Bundled`，没等到就重新启动。`bundleVerified: false` 表示这个 Metro 没有日志（例如在日志功能之前启动），无法确认 |
+| 前台 | 读设备日志里 App 最新的运行状态，不在前台就切回前台（开机后系统偶尔会把它挤到后台）。`foreground: null` 表示日志里没有状态，未确认 |
+
+失败时结果 JSON 的 `code` 说明原因，`next` 说明下一步：`UNSUPPORTED_PLATFORM`、`BAD_ARGS`、
+`SIMULATOR_UNAVAILABLE`、`UNKNOWN_DEVICE`、`DEVICE_CHOICE_NEEDED`、`NO_REUSABLE_DEVICE`、`BOOT_FAILED`、`METRO_PROBE_FAILED`、
+`METRO_PORTS_BUSY`、`METRO_START_FAILED`、`NATIVE_PROBE_FAILED`、`IOS_BUILD_TOOLS_UNAVAILABLE`、
+`REBUILD_FAILED`、`LAUNCH_FAILED`、`BUNDLE_FAILED`、`BUNDLE_NOT_SEEN`、`APP_NOT_FOREGROUND`、`IDENTITY_FAILED`。Metro 日志由
+`mobile:sim:start` 写在系统临时目录（结果的 `metroLog`），验证后照常运行 `next` 里给出的 `mobile:sim:logcheck`；
+编译失败时，编译日志的路径在 `next` 里。
+
+只有 `up` 失败、或需要单独控制某一步时，才手动执行下面的流程。
+
 “给我看这次手机改动的截图”与启动当前版本测试共用此流程。本节是 Agent 做手机模拟器测试的
 唯一流程正本，不另设个人 Skill；开发者个人只保留常用机型、模拟器后端等偏好。
 
@@ -87,11 +111,16 @@ explicitly leaves visible-window acceptance to a screenshot/manual check. Withou
    机型要求，不能因另一型号已经启动就把它当作目标，也不使用已知被其他任务占用的设备。机型
    和个人选择都没有时可复用唯一已启动设备，否则询问。后续命令保持相同 region、UDID、模拟器
    后端和 mock 开关。
-   Cindy 模拟器经已安装的 `baguette-simulator` 插件操作：先查实时详情和 `devices`，按精确 UDID
-   操作，只用 `environment` 列出的已安装 runtime，同机型有可复用设备时不重复创建。`auto` 在
+   Cindy 模拟器经已安装的 `cindy-simulator` 插件操作：先查实时详情和 `devices`，按精确 UDID
+   操作，只用 `environment` 列出的已安装 runtime，同机型有可复用设备时不重复创建。`auto` 只在
    插件未安装或 `RUNTIME_DISABLED` 时回退系统模拟器；固定 `cindy` 时报告不可用，不替用户重新
-   启用插件。
+   启用插件。Cindy 模拟器的设备全部关机或都被其他任务占用，不是回退理由：通过插件复用或新建
+   一台。Agent 不自行设置 `CINDY_MOBILE_SIMULATOR=system`，也不用 `simctl create` 在系统模拟器
+   里建设备，除非用户明确要求或插件不可用。任务跨回合、rebase 或换提交后继续测试时，按当前
+   流程和个人选择重新选设备，不因上次用过就沿用。
 2. 先运行 `mobile:sim:whoami`，再决定是否需要启动设备、接管 Metro 或准备原生包。
+   `simulatorNotice` 非空时先按其提示处理；`native.reason` 为 `target-not-unique` 表示还没有
+   唯一目标、未检查安装情况，先确定 `--udid`，不要因此 `rebuild`。
    只检查 UI 时对 `whoami/start/rebuild` 都加 `--mock`。命令保留退出码；`pnpm` 的前后日志
    不属于 JSON，解析时从 stdout 末尾向前找最后一行合法 JSON 对象，不用 `grep | tail` 吞掉失败。
 3. 若 `native-matched`，复用已安装包；缺包、不兼容或包本身无可验证指纹时运行普通
@@ -115,8 +144,9 @@ explicitly leaves visible-window acceptance to a screenshot/manual check. Withou
    `mobile:sim:open` 并以 `whoami --viewer` 检查；两者都需要实际截图/目检页面，窗口进程不等于画面。
 
 截图和 `mobile-identity.json`、本次 bundle 日志放进同一任务产物目录，记录页面/场景、设备
-UDID、方向、主题及未验证项。交付时简要说明设备/方向/主题、区域与 bundle ID、worktree/分支、
-是否复用 Metro、身份与页面验证结果，并附实际图片；失败时指出具体失败层级和下一步，不把
+UDID、方向、主题及未验证项。交付时简要说明模拟器后端（Cindy 或系统）与机型、设备/方向/主题、
+区域与 bundle ID、worktree/分支、是否复用 Metro、身份与页面验证结果，并附实际图片；后端或机型
+不是默认选择时写明原因；失败时指出具体失败层级和下一步，不把
 device-link 故障说成模拟器故障。旧 checkout 缺少本流程所需入口（`--udid`、`--mock`、
 `--takeover`、原生身份检查、查看器）时报告具体差距，不手工绕过。布局问题按本次要求覆盖横竖屏与深浅色；截图必须来自目标
 版本的实际界面。身份未通过就报告未完成；仅缺目检则报告“版本及 bundle 已验证，画面未目检”。
@@ -158,6 +188,8 @@ apply". Treat the following as a contract, not optional steps:
      not read the device's `RCT_jsLocation`, so the label is what proves which
      Metro the app actually used.
   3. The Metro terminal printed a fresh `iOS Bundled …` after your edit.
+  4. After exercising the path, `pnpm mobile:sim:logcheck` passes or its findings
+     are reported. See [Logs](#logs).
 
 ### Tools (use these instead of ad-hoc `lsof`/`PlistBuddy`/deep-link dances)
 
@@ -169,6 +201,7 @@ pnpm mobile:sim:start -- --region=cn # 中国大陆版 JS region；先 rebuild �
 pnpm mobile:sim:whoami     # doctor: booted install + which port = which worktree
 pnpm mobile:sim:whoami -- --region=cn # inspect the cn native app + Metro ownership
 pnpm mobile:sim:rebuild    # install a compatible cached dev app, or build it on a cache miss
+pnpm mobile:sim:logcheck   # errors and new warnings since the latest bundle (--port for others)
 ```
 
 `mobile:sim:start` and `mobile:sim:rebuild` default to `global`; the China
@@ -250,9 +283,12 @@ Consequences:
 When `8081` serves another task and you are not authorized to take it over, give
 this task its own device and port instead of waiting or taking over:
 
-1. Use a device no other task is using: create one with `xcrun simctl create`,
-   or `xcrun simctl clone` a shut-down device to keep its login. One device
-   follows one Metro; never repoint a device another task is testing on.
+1. Use a device no other task is using, in the backend this task already selected:
+   for Cindy's simulator create or reuse one through the `cindy-simulator` plugin;
+   only for the system simulator use `xcrun simctl create`. Either set can
+   `xcrun simctl clone` a shut-down device to keep its login (for Cindy's, add the
+   `--set` below). One device follows one Metro; never repoint a device another task
+   is testing on.
 2. Boot it and wait until ready: `xcrun simctl boot <UDID> && xcrun simctl bootstatus <UDID> -b`
    (for a device in Cindy's simulator, add `--set "$HOME/Library/Application Support/BaguetteCindy/devices"`
    after `simctl`). `rebuild` only accepts a booted device and exits before
@@ -454,14 +490,42 @@ errors, auth errors, and Expo runtime warnings:
 pnpm --filter mobile start -- --dev-client --host lan
 ```
 
+`mobile:sim:start` also writes Metro's output to a new private directory under the
+system temp directory for each launch (the path is printed at start and recorded
+with that Metro's port ownership), and deletes it when that Metro exits. The raw
+output can contain credentials, so it never goes into the worktree and is not kept
+after the run. Every simulator verification ends with:
+
+```bash
+pnpm mobile:sim:logcheck   # add -- --port 8082 for a parallel device
+```
+
+It reads only the output after the latest entry bundle, so reload the app and
+exercise the path first.
+
+| Exit | Meaning | Required action |
+| ---- | ------- | --------------- |
+| `0` | No errors. New warnings may be listed. | Include every listed warning in your report. |
+| `1` | An `ERROR` or failed bundle. | Fix it, or report why it is unrelated to your change. Never claim a clean verification. |
+| `2` | Cannot tell: Metro belongs to another worktree or stopped, this launch has no usable log, or nothing bundled. | Fix the setup and rerun. This is not a pass. |
+
+`scripts/sim-logcheck-known-warnings.json` lists warnings we are not fixing now,
+each with a reason. Add an entry only with that reason, and remove it once the
+warning is fixed. Errors cannot be listed. One Metro's log mixes every device
+connected to it, so give each task its own device and port (see
+[Parallel devices](#parallel-devices-another-task-owns-8081)).
+
 Use the simulator system log for native crashes or native auth/session issues:
 
 ```bash
 xcrun simctl spawn booted log stream --style compact --predicate 'process == "Cindy"'
 ```
 
-The in-app "Open debugger to view warnings" banner means a JavaScript warning is
-active. Read Metro before changing UI code.
+React Native shows no per-warning banner here: without a debugger attached, the
+first warning only triggers a fixed "Open debugger to view warnings" banner.
+`src/debug/quietDevLogs.ts` hides that banner because it covers the UI, so a clean
+screen does not mean there are no warnings. Warnings still reach Metro and the
+debugger, and error banners still appear. Read Metro before changing UI code.
 
 For device-link network symptoms, collect:
 
@@ -656,4 +720,5 @@ Run this checklist:
 - Run `pnpm --filter mobile typecheck` when TypeScript changed.
 - Run the narrow relevant test when there is one.
 - Manually touch the exact path that regressed in the simulator.
+- Run `pnpm mobile:sim:logcheck` afterward and report its result.
 - Tell the tester which simulator/device, runtime, and build were used.

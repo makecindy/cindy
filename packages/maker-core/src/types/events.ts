@@ -9,6 +9,9 @@
  * 与现有 ccAgent.types StreamEvent 接近，但精简了未启用字段。
  */
 
+import type { OutputLimitDetails } from '@cindy/maker-shared';
+import { NATIVE_SUBSCRIPTION_ACCOUNT, type NativeSubscriptionAccount } from '../interfaces/auth-adapter.js';
+
 import type { WorkflowProgressEntry } from '@cindy/maker-shared/agent-task';
 import type { TokenSpeedSnapshot } from '@cindy/maker-shared/usage-format';
 import type { SubagentObservation } from '@cindy/maker-shared/subagent-observation';
@@ -92,6 +95,8 @@ export interface AgentErrorEventData {
   usageResetAt?: number;
   /** Structured details for reason='tool_use_loop_detected'. */
   toolLoop?: ToolLoopErrorDetails;
+  /** Bounded usage of the request that ended with reason='output-limit'. */
+  outputLimit?: OutputLimitDetails;
   [key: string]: unknown;
 }
 
@@ -215,6 +220,13 @@ export interface AgentEvent {
    * Session delivers it on `onRuntimeRecovery`, never on product `onEvent`.
    */
   runtimeRecovery?: true;
+  /**
+   * Host-only. Session fans this out after a listener-requested stream hold
+   * (`Session.holdEventStream`); the requesting host already persisted and
+   * published it. Translators never produce it, and it never crosses a
+   * renderer or device boundary.
+   */
+  hostProjection?: true;
   /**
    * A complete extension notice, independent of model text assembly and turn
    * settlement. Hosts deliver it as its own durable message, never as a delta
@@ -533,6 +545,7 @@ export interface RewindCommitResult {
 }
 
 export interface ForkSdkSessionOptions {
+  [NATIVE_SUBSCRIPTION_ACCOUNT]?: NativeSubscriptionAccount;
   /** Host-resolved shared-provider storage. Never accepted directly from a remote caller. */
   hostedGuestHome?: string;
   /** 源 session 的 SDK sessionId (从 sessions.sdk_session_id 取)。 */

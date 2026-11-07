@@ -1,3 +1,5 @@
+import { registerRuntimeSettingsSection } from '../app-settings/runtime.js';
+import { z } from 'zod';
 /** Settings IPC for the shared auxiliary-model chain. */
 
 import { ipcMain } from 'electron';
@@ -201,8 +203,7 @@ export function registerAuxiliaryModelSettingsIpc(): void {
     }
   });
 
-  ipcMain.handle(MAKER_INVOKE.AUXILIARY_MODEL_SETTINGS_SET, async (event, rawPatch: unknown) => {
-    assertTrustedAppRendererEvent(event);
+  const updateAuxiliarySettings = async (rawPatch: unknown) => {
     try {
       // Persisted intent ignores transient credential readiness, while execution
       // still validates credentials and fails closed immediately before dispatch.
@@ -227,5 +228,12 @@ export function registerAuxiliaryModelSettingsIpc(): void {
       log.warn('failed to write auxiliary model settings', { error });
       throwIpcError('INTERNAL', 'Failed to save auxiliary model settings');
     }
+  };
+  ipcMain.handle(MAKER_INVOKE.AUXILIARY_MODEL_SETTINGS_SET, async (event, rawPatch: unknown) => { assertTrustedAppRendererEvent(event); return updateAuxiliarySettings(rawPatch); });
+  registerRuntimeSettingsSection({
+    id: 'auxiliary-models', title: '辅助模型', description: '辅助任务的模型候选顺序。models 使用当前 options 的 id；空数组恢复自动选择。',
+    effective: 'next-request', schema: z.strictObject({ models: z.array(z.string().min(1).max(1024)).max(3).optional() }),
+    read: settingsWire, update: updateAuxiliarySettings, reset: () => updateAuxiliarySettings({ models: [] }),
   });
+
 }

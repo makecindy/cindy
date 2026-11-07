@@ -79,7 +79,7 @@ import {
 } from './sim-metro.mjs';
 
 import { applySimMockArg, readSimEnvironment } from './lib/sim-environment.mjs';
-import { extractSimWhoamiUdidArgs, resolveMobileSimulatorBundleId, classifySimMetroListener, validateSimMetroIdentity, resolveSimulatorDeviceSets, selectBootedSimulator, findSimulatorDeviceSet, simctlArgs } from './lib/sim-whoami.mjs';
+import { extractSimWhoamiUdidArgs, resolveMobileSimulatorBundleId, classifySimMetroListener, validateSimMetroIdentity, resolveSimulatorDeviceSets, selectBootedSimulator, findSimulatorDeviceSet, simctlArgs, simulatorBackendNotice } from './lib/sim-whoami.mjs';
 
 const mobileDir = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const worktreeRoot = resolve(mobileDir, '../..');
@@ -150,8 +150,8 @@ if (process.platform === 'win32') {
   process.exit(process.exitCode ?? 0);
 }
 
-// 必须有一台 booted 模拟器(--build-only 不装机,无此要求)。默认先找 Cindy 模拟器,
-// 没有再找系统模拟器;CINDY_MOBILE_SIMULATOR 可固定其一。
+// 必须有一台 booted 模拟器(--build-only 不装机,无此要求)。默认用 Cindy 模拟器,
+// 不可用时才找系统模拟器;CINDY_MOBILE_SIMULATOR 可固定其一。
 let deviceSet = null;
 if (!buildOnly) {
   let selected;
@@ -161,6 +161,14 @@ if (!buildOnly) {
   } catch (error) {
     console.error(`✗ ${error.message}`);
     process.exit(1);
+  }
+  const backendNotice = simulatorBackendNotice({
+    ...selected, simulatorUdid,
+    listDevices: (set) => capture('xcrun', simctlArgs(set, ['list', 'devices'])),
+  });
+  if (backendNotice) {
+    console.log(`⚠️ ${backendNotice.message}`);
+    backendNotice.reusable?.forEach((line) => console.log(`   ${line}`));
   }
   if (selected.targetBooted.length !== 1) {
     console.error('✗ 需要唯一的已启动模拟器；多设备时传 --udid，指定设备必须已启动。');

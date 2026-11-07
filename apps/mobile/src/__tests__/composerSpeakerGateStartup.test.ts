@@ -51,6 +51,7 @@ describe.each(['new.tsx', '[sessionId].tsx'])('%s speaker gate startup', page =>
       voicePendingSelectionEchoesRef: { current: [] },
       deviceId: 'fixture-host', selectedDeviceId: 'fixture-host',
       setVoiceError, setVoiceState: vi.fn(), setVoiceReleaseToSendActive: vi.fn(),
+      clearVoiceSpeakerFiltered: vi.fn(), showVoiceSpeakerFiltered: vi.fn(),
       isMobileRealtimeAudioAvailable: () => true,
       AppState: { currentState: 'active' },
       getRecordingPermissionsAsync: vi.fn(), requestRecordingPermissionsAsync: vi.fn(),

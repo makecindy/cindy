@@ -11,6 +11,7 @@ const h = vi.hoisted(() => ({ auth: { user: null as { id: string } | null }, pus
 vi.mock('expo-router', () => ({ useRouter: () => ({ push: h.push }),
   useNavigationContainerRef: () => ({ getRootState: () => ({ index: 0, routes: [{ name: 'devices/index', key: 'home' }] }) }),
 }));
+vi.mock('@/chat/chatInviteShare', () => ({ resolveChatInviteShare: async () => 'A'.repeat(43) }));
 vi.mock('expo-crypto', () => ({ randomUUID: () => `operation-${++h.sequence}` }));
 vi.mock('@/auth/AuthContext', () => ({ useAuth: () => h.auth }));
 vi.mock('expo-clipboard', () => ({ hasStringAsync: async () => true, getStringAsync: h.clipboard }));
@@ -66,7 +67,7 @@ it('waits for login and native dismissal before navigating an explicitly accepte
   expect(h.push).toHaveBeenCalledExactlyOnceWith({ pathname: '/companions/groups/[groupId]', params: { groupId } });
 });
 it('previews a copied invitation through the real Host and accepts only after confirmation', async () => {
-  h.clipboard.mockResolvedValue(`https://invite.example.test/chat-invite/join#${token}`);
+  h.clipboard.mockResolvedValue(`https://invite.example.test/chat-invite/${'s'.repeat(32)}`);
   await account('owner'); ready = true; await render();
   expect(h.preview).toHaveBeenCalledOnce();
   expect(h.view.model.phase).toBe('preview');

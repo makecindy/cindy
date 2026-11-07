@@ -370,7 +370,7 @@
         "update-btn-border": "#3C3F43",
         "update-btn-bg": "#3C3F43",
         "update-btn-text": "#FCFCFC",
-        "update-btn-hover": "#2E3237",
+        "update-btn-hover": "oklch(from var(--update-btn-bg) calc(sign(max(0, l - 0.25)) * (l - 0.045) + (1 - sign(max(0, l - 0.25))) * 0.27) c h)",
         "accent-foreground": "0.0 0.0% 0.0% / 0.88",
         "panel-bg": "#F2F2ED",
         "primary": "214.3 5.5% 24.9%",
@@ -400,8 +400,6 @@
         "send-btn-icon": "#FCFCFC",
         "send-btn-disabled-bg": "#444242",
         "send-btn-disabled-icon": "#585555",
-        "send-btn-hover-bg": "#2E3237",
-        "send-btn-pressed-bg": "#25282C",
         "ask-badge-bg": "rgba(0, 0, 0, 0.05)",
         "ask-header-chip-bg": "rgba(0, 0, 0, 0.08)",
         "cmd-palette-item-hover": "rgba(0, 0, 0, 0.05)",
@@ -438,7 +436,8 @@
         "segmented-selected-bg": "#FDFDF8",
         "segmented-selected-border": "#F0F0EB",
         "segmented-option-fg": "#6B6B67",
-        "segmented-hover-bg": "#E4E4DF"
+        "segmented-hover-bg": "#E4E4DF",
+        "update-btn-pressed": "oklch(from var(--update-btn-bg) calc(sign(max(0, l - 0.25)) * (l - 0.085) + (1 - sign(max(0, l - 0.25))) * 0.355) c h)"
       }
     },
     "cindy-dark": {
@@ -558,7 +557,7 @@
         "update-btn-border": "#EEEEEE",
         "update-btn-bg": "#EEEEEE",
         "update-btn-text": "#151515",
-        "update-btn-hover": "#E2E2E2",
+        "update-btn-hover": "oklch(from var(--update-btn-bg) calc(sign(max(0, l - 0.25)) * (l - 0.045) + (1 - sign(max(0, l - 0.25))) * 0.27) c h)",
         "accent-foreground": "0.0 0.0% 100.0% / 0.82",
         "panel-bg": "#181818",
         "primary": "0.0 0.0% 93.3%",
@@ -588,8 +587,6 @@
         "send-btn-icon": "#151515",
         "send-btn-disabled-bg": "#323232",
         "send-btn-disabled-icon": "#464646",
-        "send-btn-hover-bg": "#E2E2E2",
-        "send-btn-pressed-bg": "#D4D4D4",
         "completion-badge-fg": "#121212",
         "create-agent-control-bg": "#272727",
         "create-agent-control-bg-hover": "rgba(255, 255, 255, 0.06)",
@@ -623,7 +620,8 @@
         "segmented-selected-bg": "#353535",
         "segmented-selected-border": "#3B3B3B",
         "segmented-option-fg": "#AAAAAA",
-        "segmented-hover-bg": "#292929"
+        "segmented-hover-bg": "#292929",
+        "update-btn-pressed": "oklch(from var(--update-btn-bg) calc(sign(max(0, l - 0.25)) * (l - 0.085) + (1 - sign(max(0, l - 0.25))) * 0.355) c h)"
       }
     },
     "default-dark": {

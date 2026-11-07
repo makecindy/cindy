@@ -33,7 +33,8 @@ import {
   useState,
   type ReactNode,
 } from 'react';
-import { ChevronRight, Layers, Sparkles, CircleAlert, Terminal } from 'lucide-react';
+import { ChevronRight, Layers, Sparkles, Terminal } from 'lucide-react';
+import { TOOL_ROW_VERB_I18N_KEY, INTENT_ROW_VERB_KEY, UPDATED_VERB_I18N_KEY, FILE_CHANGE_FILES_I18N_KEY } from '../../../shared/agentActionVerbKeys';
 import { useStableTranslation as useTranslation } from '@/hooks/useStableTranslation';
 
 import { cn } from '@/lib/utils';
@@ -434,15 +435,19 @@ export function TeammateWorkSegment({ blockId, childItems, active = false, onIns
   const projection = useMemo(() => projectWorkActivities(childItems, active, true), [childItems, active]);
   const summary = useMemo(() => ({ ...summarizeTeammateWork(projection.activities),
     thinking: childItems.some(child => child.kind === 'thinking') }), [projection, childItems]);
-  const title = teammateWorkSummaryText(summary, active, t);
+  const title = teammateWorkSummaryText(summary, active, t, {
+    verb: key => t(TOOL_ROW_VERB_I18N_KEY[key]),
+    intentVerb: action => t(INTENT_ROW_VERB_KEY[action]),
+    updateFilesLabel: count => `${t(UPDATED_VERB_I18N_KEY)} ${t(FILE_CHANGE_FILES_I18N_KEY, { count })}`,
+  });
   const tools = childItems.filter(child => child.kind === 'tools');
   const icon = active && (summary.running || !summary.toolCount) ? <Spinner size={14} />
-    : summary.failedCount ? <CircleAlert size={14} /> : summary.toolCount ? <Terminal size={14} /> : <Sparkles size={14} />;
+    : summary.toolCount ? <Terminal size={14} /> : <Sparkles size={14} />;
   const content = <><span aria-hidden className="inline-flex w-4 shrink-0 items-center justify-center">{icon}</span><span className="min-w-0 break-words">{title}</span></>;
   return <div className="min-w-0" data-teammate-segment="">
     {tools.length ? <button type="button" aria-expanded={memory.expanded} data-scroll-disclosure-header=""
       onClick={() => { memory.setExpanded(value => !value); (onInspect ?? inspectParent)?.(); }}
-      className={cn('flex min-h-7 w-fit max-w-full items-center gap-2 rounded-none text-left text-14 focus-ring', summary.failedCount ? 'text-[var(--text-danger)]' : 'text-[var(--text-secondary)]')}>
+      className="flex min-h-7 w-fit max-w-full items-center gap-2 rounded-none text-left text-14 text-[var(--text-secondary)] focus-ring">
       {content}<ChevronRight size={12} className={cn(CHAT_CHEVRON_TRANSITION_CLASS, 'shrink-0', memory.expanded && 'rotate-90')} />
     </button> : <div className="flex min-h-7 items-center gap-2 text-14 text-[var(--text-secondary)]">{content}</div>}
     {tools.length > 0 && <Collapse open={memory.expanded}><div className="mt-1 ml-6 flex min-w-0 flex-col gap-1">

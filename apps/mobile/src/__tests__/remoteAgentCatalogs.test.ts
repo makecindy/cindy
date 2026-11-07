@@ -178,6 +178,14 @@ describe('provider shares in the remote Agent catalogs', () => {
       .map((item) => item.deviceId)).toEqual(['share:two']);
     expect(build({ shares: [share('one')], keepOnly: true })).toEqual([]);
   });
+  it('keeps an active share with a host-verified bounded catalog visible while signaling is offline, but never a paused share', () => {
+    const cached = { providers, providerContinuity: { stale: true, remainingMs: 60_000 } };
+    const catalogs = build({ shares: [share('cached', { hostOnline: false, payload: cached }),
+      share('paused', { status: 'paused', hostOnline: false, payload: cached })] });
+    expect(catalogs.map(row => row.deviceId)).toEqual(['share:cached']);
+    expect(catalogs[0].offline).not.toBe(true);
+    expect(build({ shares: [share('expired', { hostOnline: false, payload: null })] })).toEqual([]);
+  });
 
   it('keeps a removed share the task still points at, once the list is authoritative', () => {
     expect(build({ shares: [], keepDeviceIds: ['share:gone'], loaded: false })).toEqual([]);

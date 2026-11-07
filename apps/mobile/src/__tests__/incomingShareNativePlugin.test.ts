@@ -92,7 +92,7 @@ describe("incoming share native file ownership", () => {
     expect(patched).toContain(
       "guard !shareClosed else { return }\n      if !payload.isEmpty",
     );
-    expect(patched).toContain("override func didSelectCancel()");
+    expect(patched).toContain("func didSelectCancel()");
     // Invalid input, an empty parsed payload and a failed persistent write all
     // report reception failure, not "received" or silent completeRequest.
     expect(patched.match(/showShareFeedback\(received: false\)/g)).toHaveLength(
@@ -122,11 +122,13 @@ describe("incoming share native file ownership", () => {
       Record<string, string>
     >) {
       expect(Object.keys(values).sort()).toEqual([
+        "cancel",
         "done",
         "failedMessage",
         "failedTitle",
         "receivedMessage",
         "receivedTitle",
+        "receiving",
         "tooManyMessage",
         "tooManyTitle",
       ]);

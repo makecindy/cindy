@@ -6,7 +6,7 @@
  * 2026-07-05「必须和内容面板长得一样」的口径已更新:纯动作菜单在 iOS 交给系统。
  *
  * 动作语义对齐桌面 chip 右键菜单(useFileChipContextMenu)的手机等价物:
- *   - 快速预览 / 打开文件浏览器:与 chip 点击同路;
+ *   - 快速预览 / 打开文件浏览器:与 chip 点击同路(安卓 PDF 无应用内预览,不给此项);
  *   - 在文件浏览器中查看(仅文件):定位到父目录(桌面「打开文件所在目录」);
  *   - 发送到会话:@ 引用合入 composer 草稿(与文件浏览器同一实现);
  *   - 复制路径:远端原始绝对路径(桌面「复制文件路径」同语义);
@@ -22,6 +22,7 @@ import {
 } from "lucide-react-native";
 import { useRef } from "react";
 import { useTranslation } from "react-i18next";
+import { Platform } from "react-native";
 
 import {
   ContextSheet,
@@ -104,7 +105,7 @@ export function ChatFileChipMenuSheet({
             : t("composer.attachments.fileMenu.file")
         }
       >
-        {chatFileChipMenuRows(renderTarget).map((row) => (
+        {chatFileChipMenuRows(renderTarget, Platform.OS).map((row) => (
           <ContextSheetRow
             busy={row.key === "share" && shareBusy}
             icon={iconOf(row.key)}

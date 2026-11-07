@@ -899,12 +899,12 @@ describe('db worker tx handlers', () => {
           ['m1', 'c1', 's1', 'user', 'before', 100, 'm2', 'c2', 's1', 'assistant', 'after', 200],
         );
 
-        await client.tx('rewind.commit', {
+        await expect(client.tx('rewind.commit', {
           sessionId: 's1',
           targetCreatedAt: 200,
           sdkSessionId: 'sdk-after-rewind',
           now: 999,
-        });
+        })).resolves.toEqual(['c2']);
 
         await expect(client.query('SELECT id, rewind_at FROM messages ORDER BY id')).resolves.toEqual(
           [
@@ -1073,13 +1073,14 @@ describe('db worker tx handlers', () => {
         ],
       );
 
-      await client.tx('rewind.commit', {
+      const rewoundClientIds = await client.tx('rewind.commit', {
         sessionId: 's1',
         targetCreatedAt: 200,
         targetMessageId: 'target',
         targetClientId: 'target-client',
         now: 999,
       });
+      expect(rewoundClientIds.sort()).toEqual(['c-after', 'target-client']);
 
       await expect(client.query('SELECT id, rewind_at FROM messages ORDER BY id')).resolves.toEqual(
         [
@@ -1598,6 +1599,9 @@ describe('db worker tx handlers', () => {
     async (useInlineWorker) => {
       await withClient(
         async (client) => {
+          await client.exec(
+            'CREATE TABLE IF NOT EXISTS bot_session_links (id TEXT PRIMARY KEY, bot_id TEXT NOT NULL, session_id TEXT NOT NULL, role TEXT NOT NULL, route_key TEXT, created_at INTEGER NOT NULL, archived_at INTEGER)',
+          );
           await seedSession(client, 'regular');
           await seedSession(client, 'bot', { source: 'bot' });
 
@@ -1612,6 +1616,41 @@ describe('db worker tx handlers', () => {
           ).resolves.toEqual([
             { id: 'bot', status: 'active' },
             { id: 'regular', status: 'active' },
+          ]);
+        },
+        { useInlineWorker },
+      );
+    },
+  );
+
+  it.each([false, true])(
+    'sessions.setStatus archives listed routine/channel lanes but rejects private Bot chats atomically (inline=%s)',
+    async (useInlineWorker) => {
+      await withClient(
+        async (client) => {
+          await client.exec(
+            'CREATE TABLE IF NOT EXISTS bot_session_links (id TEXT PRIMARY KEY, bot_id TEXT NOT NULL, session_id TEXT NOT NULL, role TEXT NOT NULL, route_key TEXT, created_at INTEGER NOT NULL, archived_at INTEGER)',
+          );
+          for (const [id, role] of [['routine-lane', 'routine'], ['channel-lane', 'channel'], ['bot-chat', 'canonical']] as const) {
+            await seedSession(client, id, { source: 'bot' });
+            await client.exec(
+              'INSERT INTO bot_session_links (id, bot_id, session_id, role, created_at) VALUES (?, ?, ?, ?, ?)',
+              [`link-${id}`, 'bot-1', id, role, Date.now()],
+            );
+          }
+          await expect(client.tx('sessions.setStatus', { sessionIds: ['routine-lane', 'channel-lane'], status: 'archived' }))
+            .resolves.toEqual([
+              expect.objectContaining({ sessionId: 'routine-lane', source: 'bot', status: 'archived' }),
+              expect.objectContaining({ sessionId: 'channel-lane', source: 'bot', status: 'archived' }),
+            ]);
+          // 一条专线 + 一条私人主对话：整批回滚，专线也保持原状态。
+          await client.exec("UPDATE sessions SET status = 'active' WHERE id IN ('routine-lane', 'channel-lane')");
+          await expect(client.tx('sessions.setStatus', { sessionIds: ['routine-lane', 'bot-chat'], status: 'archived' }))
+            .rejects.toMatchObject({ code: 'PRECONDITION_FAILED' });
+          await expect(client.query('SELECT id, status FROM sessions ORDER BY id')).resolves.toEqual([
+            { id: 'bot-chat', status: 'active' },
+            { id: 'channel-lane', status: 'active' },
+            { id: 'routine-lane', status: 'active' },
           ]);
         },
         { useInlineWorker },

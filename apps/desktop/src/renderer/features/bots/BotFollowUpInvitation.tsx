@@ -5,15 +5,17 @@ import { Button } from '@/components/ui/button';
 import { useConfirmDialog } from '@/components/ui/confirm-dialog-provider';
 import { getDataOwnerGeneration, isDataOwnerGenerationCurrent, isDataOwnerIdCurrent } from '@/contexts/dataOwnerGeneration';
 import { toast } from '@/lib/toast';
-import { setBotSchedulerBotId, useBotAutonomySettings } from './botStore';
+import { setBotSchedulerBotId, useBotAutonomySettings, useBotProfiles } from './botStore';
 
 /** A local invitation after a user sends a message; showing it never runs a model or reads tasks. */
 export function BotFollowUpInvitation({ botId, engaged }: { botId: string; engaged: boolean }) {
   const { t } = useTranslation();
   const settings = useBotAutonomySettings();
+  // Following every task is the follow system Skill; the host refuses it while that Skill is off.
+  const followOff = useBotProfiles().find((bot) => bot.id === botId)?.capabilities?.systemSkillsOff?.includes('follow') === true;
   const [pending, setPending] = useState(false);
   const saving = useRef(false);
-  if (!engaged || !settings || settings.isCustomized || settings.schedulerBotId !== null) return null;
+  if (!engaged || followOff || !settings || settings.isCustomized || settings.schedulerBotId !== null) return null;
 
   const choose = async (enable: boolean) => {
     if (saving.current) return;

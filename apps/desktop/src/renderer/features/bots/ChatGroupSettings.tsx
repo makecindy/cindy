@@ -25,6 +25,7 @@ import type { BotGroupMemberView, BotGroupSummary, ChatGroupAction } from '../..
 import { GroupMaskAvatar, useOpenGroupMask } from './GroupMaskControls';
 import { useGroupMask } from './groupMaskPresentation';
 import { ChatBotAccessField } from './ChatBotAccessField';
+import { ChatGroupNotificationSettings } from './ChatGroupNotificationSettings';
 import { ChatGroupInviteMenu } from './ChatGroupInviteMenu';
 import { ACCESS_LABELS, ChatGroupMembersTab, type MemberActions } from './ChatGroupMembersTab';
 import { SETTINGS_HINT, SettingsCard, SettingsNotice, SettingsRow, SettingsRowIcon, SettingsSection } from './ChatGroupSettingsRows';
@@ -365,6 +366,8 @@ export function ChatGroupSettings({ group }: { group: BotGroupSummary }) {
                     : <SettingsRowIcon><Reply size={16} aria-hidden /></SettingsRowIcon>}
                   title={t('bots.groupChat.mask.title')} hint={t(key('maskHint'))} value={t(`bots.groupChat.mask.status.${mask.status}`)} chevron
                   onClick={() => { if (scroller.current) homeScroll.current = scroller.current.scrollTop; openMask(); }} />}
+                {group.supportsNotificationSettings && group.notificationMode && <ChatGroupNotificationSettings key={group.id}
+                  groupId={group.id} mode={group.notificationMode} disabled={busy || !!group.archived} />}
               </SettingsCard>
             </SettingsSection>}
             {!dissolved && !group.archived && ownBots.length > 0 && <SettingsSection title={t(key('myTeammates'))} caption={t(key('myTeammatesCaption'))}>

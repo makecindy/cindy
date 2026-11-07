@@ -63,6 +63,7 @@ export * from './urlTextBoundary.js';
 export * from './workActivityProjection.js';
 export * from './worktreePaths.js';
 export * from './sessionPrRefs.js';
+export * from './githubRead.js';
 export * from './taskTags';
 
 export * from './workingStatus.js';
@@ -70,3 +71,5 @@ export * from './runningTokenRateHistory.js';
 export * from './userBubbleAppearance.js';
 
 export type { BotDmThreadSummary } from './botDmThread.js';
+
+export { parseOutputLimitDetails, isReasoningDominatedOutputLimit, type OutputLimitDetails } from './outputLimitError.js';

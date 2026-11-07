@@ -65,11 +65,11 @@ authoritative inventory」的现行表述一致（该句本身也限定在颜色
 ### 2.1 台账 schema（现行生成与人工维护合同）
 
 - 单一文件 `docs/design-rules/design-inventory.md`，不建立第二份迁移台账；
-- 机器事实与人工决策物理分开：
+- 登记事实与人工决策物理分开：
 
 ```text
 <!-- BEGIN GENERATED: surface-facts -->
-脚本生成：稳定 surface ID、平台、生产入口、可达组件、样式来源、Token/裸值统计
+脚本生成：稳定 surface ID、平台、标题、生产入口，以及 Desktop 路由 / Mobile 文件路由覆盖
 <!-- END GENERATED: surface-facts -->
 
 人工维护：按 surface ID 记录 owner、迁移状态（legacy / pilot / migrated）、
@@ -77,6 +77,17 @@ protected 标签、目标道路、下一动作
 ```
 
 - 生成器只允许重写 GENERATED 区块，不得覆盖人工状态；连续两次生成结果必须字节一致；
+- GENERATED 只放登记事实，它们只在新增、删除、改名 surface 或更换入口时变化。可达组件、
+  样式来源与 Token / 裸颜色 / 裸圆角统计**不入库**：它们随任意样式改动漂移，每个 surface
+  又只占一行，入库会让碰到同一 surface 的 PR 必然在同一行冲突，且只能重跑生成器解决；
+  这道“数字是否最新”的检查也不阻断欠账增加（拦新增裸色的是 `check:design-colors`）。
+  需要时运行 `pnpm design:inventory:report`，输出到 gitignore 的
+  `tmp/design-inventory-report.md`；要看某次提交时的数字，在该提交上重跑。不得把这些列
+  加回台账；
+- `pnpm check:design-inventory` 是阻断的登记检查：新增或删除的 Desktop 路由、`?view=`
+  分支、renderer 入口参数、Mobile 文件路由未登记，入口组件与 catalog 不符，styleRoot
+  路径失效，或 GENERATED 与 catalog 不一致时失败；人工区出现已不存在的 surface ID 时
+  报告孤儿行；
 - `protected` 是与迁移阶段**正交**的独立标签（一个 surface 可以同时 `legacy + protected`，
   也可以 `migrated + protected`），表示其视觉或交互合同被有意保护——例如 `DESIGN.md §10`
   的语义豁免色族、`§15` CINDY 皮肤族、外部主题导入保护 Token；
@@ -215,6 +226,19 @@ Primitive 与 Pattern 默认只绑定 semantic 角色。只有品牌表达、兼
 3. 没有标准替代道路时不上阻断级门禁——先报告模式运行并用历史 PR 回放验证误报率，
    再升级阻断；门禁错误信息必须包含文件、行号与推荐改法。
 
+### 门禁加固（2026-10-30）
+
+审计发现「规则写了但没人守」，本批只调门禁，不改任何界面；存量违规不在本批修，按页面另作有意可见 PR。回放与反例见 [证据](../design-evidence/2026-10-30/design-gates-hardening.md)。
+
+| 改动 | 方式 | 存量处理 |
+| --- | --- | --- |
+| 颜色豁免表 | 43 条早已不生效的整文件记录移入 `scripts/hardcoded-color-exemptions.archive.json`（审计不读，只作回归样例）；窄豁免 `reviewDate` 过期即不再放行新增行，CI 输出列出过期条目 | 用户 2026-10-30 决定：Toast 四色、hljs 提亮、灵动岛素材色、实体键盘复刻色续期到 2027-04-30；composer 兜底色一条按原定「集成收口删」不续期 |
+| Desktop 规范外圆角 | 新增行在确认的样式语境（class 属性、`cn()` 等调用、纯类名字符串、样式对象、CSS 文件）里解析为 0 / 2 / 4 / 8 / 12px / pill 以外的值即 block；普通文案里的字样只 report（`rounded-md` 6px、`rounded-2xl` / `3xl`、`rounded-[6px]` 等任意值、字面 `border-radius` / `borderRadius`）；`var()` / `calc()` / % 仍 report；内容自身形状用 `design: intrinsic-geometry — <理由>` 注释声明后降为 report | 约 200 处存量是债，改到哪行修哪行，或按页面分批迁移 |
+| Mobile 五档字色与占位字 | `textColorDiscipline.test.ts`（登记在 mobile guard 层）两条全仓扫描：文字色只能是五档中性色或已登记语义色；`placeholderTextColor` 只能是 `textPlaceholder`（登录画布除外） | 存量名单按次数登记、只许减少（共 17 次，逐条清单见证据文档第 3 节）：光标蓝与 `cta` 文字、额度 / 未读计数 / 错误状态色 / 警告 / 就绪 / 录制状态色被当作文字色、共享任务危险文字借用确认钮红、ContextSheet 占位字三级色，待设计裁决或有意可见 PR |
+| PR 设计依据检查 | `apps/mobile/src/**/*.tsx` 计入 UI 路径；设计依据按现行规范确切文件名（含 `mobile-design-guide`）且区分大小写，任意 `*-design.md` 不再误过；补 workflow ↔ 检查名 ↔ 脚本一致性测试 | 无存量 |
+
+UI 路径与 design-inventory 共用唯一来源（§11）本批未做。行高 `leading-4/5/6` 是否随字号缩放尚未核实，未纳入。回退：撤回本批脚本、测试与豁免表改动即可，不影响 DS-7 / DS-10 既有接线；续期的 4 条豁免回退后恢复为过期前的放行行为。
+
 ### DS-10 报告准确性与维护（提交候选已验证）
 
 沿用 DS-7 的颜色增量阻断、inventory 新鲜度和 Token unit tier 生成保护，不新增 CI 步骤、required 或豁免。`design-layer-report.mjs` 从 Token `desktop-bindings.json` 的 foundations.spacing/css 读取真实变量：例如 `--space-4` 已登记，`--spacing-4` 未登记，不能凭命名猜测合法性。审计结果的 scriptHashes 同时绑定这份输入。
@@ -239,7 +263,7 @@ DS-7 已合并 [#4215](https://github.com/makecindy/cindy/pull/4215)，最终 he
 | Desktop renderer 消费者新增 HEX 字面颜色、样式语境中的 RGB/HSL/OKLCH 等字面颜色函数与字面 fallback | block；准确新增行、列、原因、建议；已验证范围见证据 | 语义角色入口为 `themes/colors.ts`；不能机械替换为随意 Token。数值颜色函数要求位于样式属性、CSS 声明/函数或任意值语境——普通文案字符串里的颜色函数文本不算设计变化。不清洗已有存量 |
 | 颜色来源、测试 fixture、已正式批准的具体角色/值 | allowed，输出仍保留 | 来源由现有冻结测试保护；消费者只读窄 `matches`，旧 glob 记录不再整文件放行；窄规则可经 `object` 绑定获批对象路径（如 `VARIANT_MAP.info`、`MASCOT_PREVIEW_CONFIGS.cindy`），同文件其它对象/变体复用批准色即违规；原批准值/上下文和新违规均有反例 |
 | Mobile 及非上述生产消费者、素材/文档中的字面颜色 | report（是否违规仍需判断） | Mobile 既有 designTokenDiscipline / typographyTokenDiscipline 继续阻断；新增 diff 规则不冒充覆盖所有平台 |
-| 已注册可见层圆角、命中层/指示层、未知几何与任意间距 | report | 识别范围与未知分类分开；keycap 4px、已登记图元 2px，不能从 button 标签推出 pill；未决命中方案不自动批准 |
+| 已注册可见层圆角、命中层/指示层、未知几何与任意间距 | report（规范外圆角值自 2026-10-30 起 block，见上「门禁加固」） | 识别范围与未知分类分开；keycap 4px、已登记图元 2px，不能从 button 标签推出 pill；未决命中方案不自动批准 |
 | 广泛表单采用、焦点/secret/保存行为 | 采用建议 report，现有 DS-6 行为测试保留 | G2 独立试用未完成；不以类名检查取代行为测试，不将全部确认改 CTA |
 | Desktop/Mobile 入口台账新鲜度 | block | 入口发现不等于迁移；人工 owner/pilot/legacy/下一动作不由生成器重写 |
 
@@ -262,10 +286,11 @@ commit 模式不覆盖未提交内容。正式 CI 比较事件 base 与当前候
 文档中出现的任何统计数字（Token 数、主题数、违规数）都是**当日快照**，必须标注统计
 日期与可重复执行的生成命令，不作为长期人工维护数据。
 
-设计台账中标记为 `GENERATED` 的源码事实区块是例外：它随源码提交维护，不写生成日期，
-保证同一源码树跨日重新生成字节一致；保留 `pnpm design:inventory` 与
-`pnpm check:design-inventory` 命令，事实变化时间以 Git 提交历史为准。人工区与其他文档中的
-快照统计仍须标注日期和生成命令。
+设计台账中标记为 `GENERATED` 的登记区块是例外：它只含登记事实、不含统计，随源码提交维护，
+不写生成日期，保证同一源码树跨日重新生成字节一致；保留 `pnpm design:inventory` 与
+`pnpm check:design-inventory` 命令。逐 surface 的 Token / 裸值统计不入库（见 §2.1），
+由 `pnpm design:inventory:report` 按需生成；同一源码树重跑结果一致，某次提交的数字在该
+提交上重跑即得。人工区与其他文档中的快照统计仍须标注日期和生成命令。
 
 人工快照示例：
 
@@ -324,7 +349,7 @@ DS-4/4b 尚有公开附件交接与完整设置页/部分状态证据缺口，DS
 | `docs/design-rules/token-decision-table.md` | 登录改版 token 决策记录（其自身已声明非现行清单） | 维持决策档案定位，非数值真相 |
 | `docs/design-rules/design-decision-log.md` | 全局设计决策史台账 | 维持只增不改；治理裁决（含 §10 待裁决项）关闭后在此归档 |
 | `DESIGN.md §10` Tier-1 slot 表 | DS-8 GENERATED 精确值摘要（用途与规则人工维护） | DS-8 同一 Terrazzo 流程生成，不再人工编辑表中数值 |
-| `DESIGN.md §16.1` 登录 token 表 | 登录域现行 token 清单（DS-8 起由 `packages/design-tokens` 生成，用途说明来自 `desktop-bindings.json`） | 同上，不再人工编辑表中数值；品牌保护项 `--login-brand-accent*` 在表外保留 |
+| `login-flow.md §16.1` 登录 token 表 | 登录域现行 token 清单（DS-8 起由 `packages/design-tokens` 生成，用途说明来自 `desktop-bindings.json`） | 同上，不再人工编辑表中数值；品牌保护项 `--login-brand-accent*` 在表外保留 |
 | UI 设计哨兵（插件仓） | SSR 抽取式扫描工具 | 仅用于发现组件、统计硬编码、定位代码与观察迁移进度；其样张不得充当视觉证据（§2 视觉真相行） |
 
 ## 12. 公开实施路线与目标验收

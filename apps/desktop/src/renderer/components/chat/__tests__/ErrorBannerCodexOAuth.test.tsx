@@ -1415,3 +1415,12 @@ describe('ErrorBanner OpenAI connection recovery', () => {
     expect(screen.queryByText(/Failed to authenticate/)).toBeNull();
   });
 });
+
+
+describe('output-limit guidance', () => {
+  it.each([131064, 1000])('renders reasoning-aware usage and guidance (%s)', (reasoningTokens) => {
+    render(<ErrorBanner error="limit" errorReason="output-limit" outputLimit={{ outputTokens: 131072, reasoningTokens }} onRetry={vi.fn()} />);
+    const expected = reasoningTokens === 131064 ? 'logic.errors.outputLimitReasoning' : 'logic.errors.outputLimit';
+    expect(screen.getByText(`logic.errors.outputLimitUsage ${expected}`)).toBeTruthy();
+  });
+});

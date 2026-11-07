@@ -594,7 +594,7 @@ function registerGhostProtocol(
         } catch { return new Response(null, { status: 400, headers }); }
         // Page authors cannot choose a different phone or impersonate a logic request.
         if (!options || typeof options !== 'object' || Array.isArray(options) ||
-            Object.keys(options).some(key => key !== 'initial')) return new Response(null, { status: 400, headers });
+            Object.keys(options).some(key => !['initial', 'allowRemote'].includes(key))) return new Response(null, { status: 400, headers });
         const result = await ghostModelPickerProvider(storagePart, options, isRegistrationCurrent, request.signal);
         if (!isRegistrationCurrent()) return new Response(null, { status: 403, headers });
         return new Response(JSON.stringify(result), { status: 200, headers });

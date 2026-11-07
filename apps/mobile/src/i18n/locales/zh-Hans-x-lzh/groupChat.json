@@ -1,4 +1,13 @@
 {
+  "progress": {
+    "stop": "止"
+  },
+  "work": {
+    "queued": "待次 {{count}}",
+    "active": "行事中 {{count}}",
+    "expand": "展伙伴所事",
+    "collapse": "敛伙伴所事"
+  },
   "title": "群议",
   "memberSeparator": "、",
   "memberCount_one": "成员 {{count}} 位",
@@ -152,7 +161,12 @@
         "details": "请再遣讯；若仍未成，请察记录并回报其事。"
       }
     },
-    "runtimeFailureSetupHint": "如须调模型或设置，请于同僚所属之机上为之。"
+    "runtimeFailureSetupHint": "如须调模型或设置，请于同僚所属之机上为之。",
+    "capability": {
+      "GROUP_AUTHORIZATION_REQUIRED": "{{name}} 的工具调用未执行：群内授权已失效或不允许此操作。请由伙伴主人在当前群重新发起。",
+      "GROUP_AUTHORIZATION_UNAVAILABLE": "暂时无法核验 {{name}} 的群聊授权，这次工具调用未执行。请在连接恢复后重试。",
+      "ATTACHMENTS_UNAVAILABLE": "部分附件未交给 {{name}}（下载失败或数量限制）。请重新发送本次需要的附件。"
+    }
   },
   "plan": {
     "intro_one": "此事分 {{count}} 步，吾如是分职：",
@@ -183,9 +197,24 @@
     "awaitingStart": "候君发令",
     "progressRunning": "方为 {{current}} / {{total}}",
     "progressDone": "已毕 {{done}} / {{total}}",
-    "allDone": "皆毕矣"
+    "allDone": "皆毕矣",
+    "stepQueued": "待启",
+    "stepExecuting": "行中",
+    "stepSkipped": "已略",
+    "skippingTurn": "略过中…",
+    "queueWaiting": "待君续行",
+    "skipTurnLabel": "略过 {{name}}",
+    "stepSpoken": "言毕",
+    "allTurns_one": "凡 {{count}} 位",
+    "allTurns_other": "凡 {{count}} 位",
+    "foldTurns": "收",
+    "talkTitle": "依次陈议",
+    "talkPending": "未始",
+    "skipTurn": "略过",
+    "queueEnded": "此轮已终"
   },
   "speaking": {
+    "queued": "待次",
     "stopping": "方止…",
     "planning": "方分职…",
     "step": "方为之…"
@@ -258,7 +287,18 @@
       "unavailable": "群之设置读取未成，请再试"
     },
     "allowMentionAllBots": "许 @所有伙伴",
-    "allowMentionAllBotsHint": "唯群主可改。同僚或皆作覆，大群慎启之。此开关不涉 AI 代答。"
+    "allowMentionAllBotsHint": "唯群主可改。同僚或皆作覆，大群慎启之。此开关不涉 AI 代答。",
+    "notifications": {
+      "title": "消息告知",
+      "all": "凡讯皆告",
+      "mentions": "惟提及吾",
+      "none": "不告",
+      "allHint": "群讯及所关注话题之新答，皆告之。",
+      "mentionsHint": "提及吾或 @全体时告之，分职之进展仍告。",
+      "noneHint": "止本群一切系统告知，未读之讯仍存。",
+      "saving": "正存之…",
+      "saveFailed": "告知之设未能存，请再试。"
+    }
   },
   "errors": {
     "memberLimit": "一群议须同僚 2–6 位",
@@ -283,7 +323,8 @@
     "lifecycleUnavailable": "今之服务器或机尚不支持此举。",
     "groupDissolved": "群议已散，仍可观有权访问之旧讯。",
     "lastOwner": "请先让渡群主或解散群议，然后退出。",
-    "allBotsMentionDisabled": "群主未启 @所有伙伴。"
+    "allBotsMentionDisabled": "群主未启 @所有伙伴。",
+    "turnAlreadyStarted": "此同伴已启，不可略过"
   },
   "followUp": {
     "next": "分职 · 次步",
@@ -479,6 +520,7 @@
     "searchMembers": "寻成员",
     "membersNoMatch": "寻不得「{{query}}」",
     "you": "君",
+    "companionOf": "{{name}} 之同僚",
     "teammateTag": "同僚",
     "paused": "已暂止",
     "accessNone": "唯主人可用",

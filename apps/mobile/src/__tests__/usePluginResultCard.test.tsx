@@ -56,6 +56,77 @@ describe('plugin card lifecycle on Mobile', () => {
     await act(async () => { h.push?.('mac', { collectionId: 'plugin-results', resourceRefs: [{ kind: 'card', id: '["s","new"]' }] }); await vi.advanceTimersByTimeAsync(250); });
     expect(current.callId).toBe('latest'); expect(current.hidden).toBe(false);
   });
+  // The card's PR status only changes on the Host when the card is saved or the phone reads it again,
+  // so a card left open on a PR would show a stale "CI running" after it passed or merged.
+  it('reads a card that shows PR status again every minute, and stops with the card', async () => {
+    vi.useFakeTimers();
+    const live = { display: { title: 'GitHub' }, blocks: [{ id: 'actions', primitive: 'plugin-card-actions', fallbackMarkdown: '', data: { prStatus: [{ key: 'o/r#1', fallback: [] }] } }] };
+    h.get.mockResolvedValue(live);
+    await render();
+    expect(h.get).toHaveBeenCalledTimes(1);
+    await act(async () => { await vi.advanceTimersByTimeAsync(60_000); });
+    expect(h.get).toHaveBeenCalledTimes(2);
+    await act(async () => { await vi.advanceTimersByTimeAsync(60_000); });
+    expect(h.get).toHaveBeenCalledTimes(3);
+    act(() => root?.unmount()); root = undefined;
+    await vi.advanceTimersByTimeAsync(120_000);
+    expect(h.get).toHaveBeenCalledTimes(3);
+  });
+  it('does not keep refreshing a hidden card that moved, even though it still carries PR status', async () => {
+    vi.useFakeTimers();
+    h.get.mockResolvedValue({ display: { title: 'GitHub' }, blocks: [{ id: 'actions', primitive: 'plugin-card-actions', fallbackMarkdown: '', data: { supersededBy: 'new', prStatus: [{ key: 'o/r#1', fallback: [] }] } }] });
+    await render();
+    expect(current.hidden).toBe(true);
+    await act(async () => { await vi.advanceTimersByTimeAsync(120_000); });
+    expect(h.get).toHaveBeenCalledTimes(1);
+  });
+  it('keeps refreshing PR status after one read fails, and stops once the card is gone', async () => {
+    vi.useFakeTimers();
+    const live = { display: { title: 'GitHub' }, blocks: [{ id: 'actions', primitive: 'plugin-card-actions', fallbackMarkdown: '', data: { prStatus: [{ key: 'o/r#1', fallback: [] }] } }] };
+    h.get.mockResolvedValueOnce(live).mockRejectedValueOnce(new Error('network down')).mockResolvedValueOnce(live).mockRejectedValue(Object.assign(new Error('NOT_FOUND'), { code: 'NOT_FOUND' }));
+    await render();
+    await act(async () => { await vi.advanceTimersByTimeAsync(60_000); });
+    expect(h.get).toHaveBeenCalledTimes(2);
+    await act(async () => { await vi.advanceTimersByTimeAsync(60_000); });
+    expect(h.get).toHaveBeenCalledTimes(3);
+    await act(async () => { await vi.advanceTimersByTimeAsync(60_000); });
+    expect(h.get).toHaveBeenCalledTimes(4);
+    await act(async () => { await vi.advanceTimersByTimeAsync(180_000); });
+    expect(h.get).toHaveBeenCalledTimes(4);
+  });
+  it('also refreshes a card whose PR state appears only on a link', async () => {
+    vi.useFakeTimers();
+    h.get.mockResolvedValue({ display: { title: 'GitHub' }, blocks: [{ id: 'actions', primitive: 'plugin-card-actions', fallbackMarkdown: '', data: { items: [{ id: 'link:0', label: '#9', url: 'https://github.com/o/r/pull/9', disabled: false, prState: 'open' }] } }] });
+    await render();
+    await act(async () => { await vi.advanceTimersByTimeAsync(60_000); });
+    expect(h.get).toHaveBeenCalledTimes(2);
+  });
+  it('keeps retrying a PR link whose first status lookup failed, so it has no prState yet', async () => {
+    vi.useFakeTimers();
+    h.get.mockResolvedValue({ display: { title: 'GitHub' }, blocks: [{ id: 'actions', primitive: 'plugin-card-actions', fallbackMarkdown: '', data: { items: [{ id: 'link:0', label: '#9', url: 'https://github.com/o/r/pull/9', disabled: false }] } }] });
+    await render();
+    await act(async () => { await vi.advanceTimersByTimeAsync(60_000); });
+    expect(h.get).toHaveBeenCalledTimes(2);
+  });
+  it('a stale failure from an overtaken read does not stop the refresh the newer read started', async () => {
+    vi.useFakeTimers();
+    const live = { display: { title: 'GitHub' }, blocks: [{ id: 'actions', primitive: 'plugin-card-actions', fallbackMarkdown: '', data: { prStatus: [{ key: 'o/r#1', fallback: [] }] } }] };
+    let failOld!: (error: unknown) => void;
+    h.get.mockImplementationOnce(() => new Promise((_resolve, reject) => { failOld = reject; })).mockResolvedValue(live);
+    await render();
+    // A push starts a newer read that succeeds while the first is still pending.
+    await act(async () => { h.push?.('mac', { collectionId: 'plugin-results' }); await vi.advanceTimersByTimeAsync(250); });
+    expect(h.get).toHaveBeenCalledTimes(2);
+    await act(async () => failOld(Object.assign(new Error('NOT_FOUND'), { code: 'NOT_FOUND' })));
+    await act(async () => { await vi.advanceTimersByTimeAsync(60_000); });
+    expect(h.get).toHaveBeenCalledTimes(3);
+  });
+  it('does not poll a card without PR status', async () => {
+    vi.useFakeTimers();
+    await render();
+    await act(async () => { await vi.advanceTimersByTimeAsync(180_000); });
+    expect(h.get).toHaveBeenCalledTimes(1);
+  });
   it.each(['plugin', 'account', 'draft', 'cycle', 'missing'])('rejects a %s replacement instead of exposing another draft', async boundary => {
     const replacement = draft(undefined, boundary === 'account' ? { accountId: 'other' } : boundary === 'draft' ? { draftId: 'other' } : {});
     if (boundary === 'plugin') replacement.blocks[0].data.pluginId = 'other';
@@ -91,6 +162,13 @@ describe('plugin card lifecycle on Mobile', () => {
     expect(current.blocks).toHaveLength(1);
     await render({ card: 'old-history' }); expect(current.hidden).toBe(true);
     h.get.mockResolvedValue(card()); await render({ card: 'new' }); expect(current.hidden).toBe(false);
+  });
+  it('hides a plugin card that moved to a newer call', async () => {
+    h.get.mockResolvedValue({ display: { title: 'PR' }, blocks: [
+      { id: 'text', primitive: 'markdown', fallbackMarkdown: 'octo/repo · Latest status is below' },
+      { id: 'actions', primitive: 'plugin-card-actions', fallbackMarkdown: '', data: { pluginId: 'cindy-github', supersededBy: 'new', items: [] } },
+    ] });
+    await render(); expect(current.hidden).toBe(true);
   });
   it('loads history and refreshes on card change, foreground and reconnect', async () => {
     vi.useFakeTimers(); await render();

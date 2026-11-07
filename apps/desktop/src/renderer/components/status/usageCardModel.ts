@@ -9,6 +9,7 @@ import type {
   DeepSeekAccountUsageSnapshot,
   ZhipuCodingPlanQuotaSnapshot,
 } from '../../../shared/providerAccountUsage';
+import type { OpenCodeGoUsageSnapshot } from '../../../shared/opencodeGoUsage';
 import {
   isXaiWeeklyUsageCurrent,
   type XaiSubscriptionUsageSnapshot,
@@ -397,5 +398,28 @@ export function buildKimiUsageCard(snapshot: KimiCodingUsageSnapshot | null, t: 
     })) ?? [],
     updatedAt: snapshot?.fetchedAt,
     emptyText: snapshot?.windows.length ? undefined : t(snapshot ? 'quotaCard.noWindows' : 'quotaCard.waiting'),
+  };
+}
+
+/** OpenCode Go exposes independent rolling, weekly, and monthly used meters. */
+export function buildOpenCodeGoUsageCard(snapshot: OpenCodeGoUsageSnapshot | null, t: TFunction): UsageCardAccount {
+  const labels = {
+    rolling: 'providerAccountUsage.kimi.limit_5h',
+    weekly: 'providerAccountUsage.kimi.limit_7d',
+    monthly: 'providerAccountUsage.kimi.limit_month_total',
+  } as const;
+  const windows: UsageCardWindow[] = snapshot?.windows.map(window => ({
+    key: window.id,
+    title: t(labels[window.id]),
+    showRemaining: true,
+    window: { utilization: window.usedPercent, resetsAt: window.resetsAt === null ? null : window.resetsAt / 1000 },
+    paceWindowMinutes: window.id === 'rolling' ? 300 : window.id === 'weekly' ? 10_080 : undefined,
+  })) ?? [];
+  return {
+    title: 'OpenCode Go',
+    windows,
+    updatedAt: snapshot?.fetchedAt,
+    emptyText: windows.length ? undefined : t(snapshot ? 'quotaCard.noWindows' : 'quotaCard.waiting'),
+    notices: snapshot?.windows.some(window => window.limited) ? [{ text: t('quotaCard.limitRejected'), tone: 'crit' }] : [],
   };
 }

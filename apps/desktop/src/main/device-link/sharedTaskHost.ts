@@ -45,6 +45,7 @@ export class SharedTaskHost {
   private readonly created: SharedTaskCreationState['identities'];
   private readonly entries = new Map<string, HostedSharedTask>();
   private readonly closed = new Set<string>();
+  private readonly managementClosures = new Map<string, number>();
   private readonly chains = new Map<string, Promise<unknown>>();
   // Keep failed writes too: disposal must not report durability after a disk error.
   private readonly closeWrites = new Map<string, Promise<void>>();
@@ -140,7 +141,7 @@ export class SharedTaskHost {
       entry.detail = detail;
       if (snapshot.status === 'closed') {
         entry.access.close();
-        this.closed.add(snapshot.sharedTaskId);
+        this.markClosed(snapshot.sharedTaskId, snapshot.sessionId);
         this.options.revoke(snapshot.sharedTaskId);
       }
       this.options.changed(snapshot.sharedTaskId);
@@ -208,9 +209,15 @@ export class SharedTaskHost {
     return created.sharedTaskId;
   }
 
-  private revokeLocally(sharedTaskId: string): void {
+  private markClosed(sharedTaskId: string, sessionId: string): void {
+    if (!this.closed.has(sharedTaskId)) {
+      this.managementClosures.set(sessionId, (this.managementClosures.get(sessionId) ?? 0) + 1);
+      this.closed.add(sharedTaskId);
+    }
+  }
+  private revokeLocally(sharedTaskId: string, sessionId: string): void {
     const alreadyClosed = this.closed.has(sharedTaskId);
-    this.closed.add(sharedTaskId);
+    this.markClosed(sharedTaskId, sessionId);
     const entry = this.entries.get(sharedTaskId);
     entry?.access.close();
     if (entry?.detail) entry.detail = Object.freeze({ ...entry.detail, status: 'closed' });
@@ -239,7 +246,7 @@ export class SharedTaskHost {
     this.journalIds = journal.map((item) => item.sharedTaskId);
     // Shared profile writers hand off terminal changes through the journal.
     // Close access objects as well as the index so existing captures also expire.
-    for (const item of journal) if (item.terminal) this.revokeLocally(item.sharedTaskId);
+    for (const item of journal) if (item.terminal) this.revokeLocally(item.sharedTaskId, item.sessionId);
     const sessions = new Set([...this.entries.values()].map((entry) => entry.identity.sessionId));
     for (const identity of this.created.values()) sessions.add(identity.sessionId);
     for (const sessionId of this.creating.values()) sessions.add(sessionId);
@@ -265,9 +272,9 @@ export class SharedTaskHost {
     this.assertCurrent();
     const owned = active.filter((item) => item.ownerAccountId === this.options.ownerAccountId && item.hostDeviceId === this.options.hostDeviceId);
     for (const item of journal) {
-      if (item.terminal) this.closed.add(item.sharedTaskId);
+      if (item.terminal) this.markClosed(item.sharedTaskId, item.sessionId);
       else if (item.snapshot && !owned.some((sharedTask) => sharedTask.sharedTaskId === item.sharedTaskId)) {
-        this.closed.add(item.sharedTaskId);
+        this.markClosed(item.sharedTaskId, item.sessionId);
         this.entries.get(item.sharedTaskId)?.access.close();
         this.options.revoke(item.sharedTaskId);
         await this.options.journal.close(item.snapshot);
@@ -286,7 +293,7 @@ export class SharedTaskHost {
       const session = await this.options.readSession(item.sessionId);
       this.assertCurrent();
       if (!session || session.status !== 'active' || !CINDY_MAKE_ENABLED && isCindyMakeSource(session.source)) {
-        this.revokeLocally(item.sharedTaskId);
+        this.revokeLocally(item.sharedTaskId, item.sessionId);
         await this.options.journal.close(item);
         this.assertCurrent();
       }
@@ -299,6 +306,45 @@ export class SharedTaskHost {
     }
     // The owned list above included any orphan of those failed creates.
     this.listedAfterFailedCreates = failedCreates;
+  }
+
+  /** A tool invocation cannot reopen sharing after an intervening owner closure.
+   * Separate from native lifecycle generations: this fence only affects captured tools. */
+  captureManagementScope(sessionId: string): () => void {
+    this.assertCurrent();
+    const generation = this.sessionGenerations.get(sessionId) ?? 0;
+    const closures = this.managementClosures.get(sessionId) ?? 0;
+    return () => {
+      this.assertSessionGeneration(sessionId, generation);
+      if ((this.managementClosures.get(sessionId) ?? 0) !== closures) throw new Error('Shared task management changed');
+    };
+  }
+
+  /** Explicit tool queries also find server-side creates whose response was lost.
+   * Never use restore(): that reconciler may close shares, whereas this is read-only. */
+  async readState(sessionId: string): Promise<SharedTaskDetail | null> {
+    this.assertCurrent();
+    const generation = this.sessionGenerations.get(sessionId) ?? 0;
+    const session = await this.options.readSession(sessionId);
+    this.assertSessionGeneration(sessionId, generation);
+    if (!session || session.id !== sessionId || session.status !== 'active'
+        || !CINDY_MAKE_ENABLED && isCindyMakeSource(session.source)) throw new Error('SharedTask task is unavailable');
+    const owned = (await this.options.api.list()).filter(item => item.sessionId === sessionId &&
+      item.ownerAccountId === this.options.ownerAccountId && item.hostDeviceId === this.options.hostDeviceId);
+    this.assertSessionGeneration(sessionId, generation);
+    if (owned.length > 1) throw new Error('SharedTask identity is ambiguous');
+    const sharedTaskId = owned[0]?.sharedTaskId;
+    if (!sharedTaskId) return null;
+    if (this.closed.has(sharedTaskId)) throw new Error('SharedTask changed during state query');
+    if (this.closedSessions.has(sessionId)) return null;
+    await this.refresh(sharedTaskId);
+    this.assertSessionGeneration(sessionId, generation);
+    const detail = this.detail(sharedTaskId);
+    if (detail?.sessionId !== sessionId) throw new Error('SharedTask task does not match');
+    // The fresh list advertised an active share. A close while fetching its
+    // detail is an inconsistent read, not permission for this call to reopen it.
+    if (this.closed.has(sharedTaskId) || detail.status !== 'active') throw new Error('SharedTask changed during state query');
+    return detail;
   }
 
   detail(sharedTaskId: string): SharedTaskDetail | null {
@@ -358,7 +404,7 @@ export class SharedTaskHost {
     this.assertCurrent();
     const entry = this.entries.get(sharedTaskId);
     if (!entry) throw new Error('SharedTask is not hosted here');
-    this.closed.add(sharedTaskId);
+    this.markClosed(sharedTaskId, entry.identity.sessionId);
     entry.access.close();
     if (entry.detail) entry.detail = Object.freeze({ ...entry.detail, status: 'closed' });
     // Start the profile-bound write before callbacks can dispose this host. It
@@ -439,7 +485,7 @@ export class SharedTaskHost {
     for (const [id, entry] of this.entries) {
       if (sessionId && entry.identity.sessionId !== sessionId) continue;
       identities.set(id, entry.identity);
-      this.closed.add(id);
+      this.markClosed(id, entry.identity.sessionId);
       entry.access.close();
       if (entry.detail) entry.detail = Object.freeze({ ...entry.detail, status: 'closed' });
       this.options.revoke(id);
@@ -452,14 +498,14 @@ export class SharedTaskHost {
     for (const [id, identity] of this.created) {
       if (sessionId && identity.sessionId !== sessionId) continue;
       identities.set(id, identity);
-      this.closed.add(id);
+      this.markClosed(id, identity.sessionId);
     }
     // Also close sharedTasks not restored yet (e.g. logout during authority fetch).
     for (const item of await this.options.journal.latest()) {
       if (item.terminal || !item.snapshot || sessionId && item.sessionId !== sessionId) continue;
       if (item.snapshot.ownerAccountId !== this.options.ownerAccountId || item.snapshot.hostDeviceId !== this.options.hostDeviceId) continue;
       identities.set(item.sharedTaskId, item.snapshot);
-      this.closed.add(item.sharedTaskId);
+      this.markClosed(item.sharedTaskId, item.sessionId);
     }
     for (const [id, identity] of identities) {
       const write = this.options.journal.close(identity);
