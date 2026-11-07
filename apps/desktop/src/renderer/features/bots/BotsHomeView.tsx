@@ -42,7 +42,7 @@ import { BotRosterView } from './BotRosterView';
 import { BotAvatar } from './BotAvatar';
 import { BotBasicProfileFields } from './BotBasicProfileFields';
 import { normalizeBotName } from '../../../shared/botCreation';
-import { withBotSystemSkill } from '../../../shared/botSystemSkills';
+import { effectiveBotSystemSkillsOff, withBotSystemSkill } from '../../../shared/botSystemSkills';
 import {
   botEntryTarget,
   createBotCanonicalSessionWithRetry,
@@ -810,8 +810,9 @@ export function BotSettings({
             inheritedRoute={displayedModelChain[0]}
             beforeLeaveRef={routineLeaveRef}
             backRef={routineBackRef}
-            systemSkillsOff={capabilities.systemSkillsOff ?? []}
-            header={
+            systemSkillsOff={effectiveBotSystemSkillsOff(capabilities)}
+            // A V2 teammate has no follow-up of its own, so there is nothing to switch here.
+            header={capabilities.projectMode === true ? undefined : (
               <BotAutonomySettings
                 botId={bot.id}
                 botName={displayName}
@@ -819,7 +820,7 @@ export function BotSettings({
                 onAllowSchedulerFollowChange={(value) => updateCapability('allowSchedulerFollow', value)}
                 followOff={capabilities.systemSkillsOff?.includes('follow') === true}
               />
-            }
+            )}
           />
         ) : null}
       </div>

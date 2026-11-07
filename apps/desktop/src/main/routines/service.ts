@@ -691,11 +691,13 @@ export const routineTools = {
   }),
   list: (botId: string) => withBot(botId, async (engine, scope) => {
     const routines = engine.list(botId);
-    // V2: nightly learning never runs (the project's memory-review automation does it), so don't show it.
-    if (!routines.some((routine) => routine.builtin === 'nightly-learning')) return routines;
+    // V2 has no built-in routines: follow-up and nightly learning never run there
+    // (ordinary tasks and the project's own automations do that work), so don't show them.
+    const hidden = (routine: Routine) => routine.builtin === 'nightly-learning' || routine.builtin === 'follow-up';
+    if (!routines.some(hidden)) return routines;
     const projectMode = await readBotProjectModeFor(botId);
     assertScope(scope);
-    return projectMode ? routines.filter((routine) => routine.builtin !== 'nightly-learning') : routines;
+    return projectMode ? routines.filter((routine) => !hidden(routine)) : routines;
   }),
   createOnce: (botId: string, input: RoutineInput, creationId: string) =>
     withBot(botId, async (engine, scope) => {

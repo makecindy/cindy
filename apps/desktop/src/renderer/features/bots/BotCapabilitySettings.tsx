@@ -7,7 +7,7 @@ import { toast } from '@/components/ui/toast';
 import { cn } from '@/lib/utils';
 import { ChevronDown, ChevronRight, Search } from 'lucide-react';
 import { useCallback, useEffect, useRef, useState, type MutableRefObject, type ReactNode } from 'react';
-import { BOT_SYSTEM_SKILL_IDS, isBotSystemSkillOn, type BotSystemSkillId } from '../../../shared/botSystemSkills';
+import { botSystemSkillIdsFor, isBotSystemSkillOn, type BotSystemSkillId } from '../../../shared/botSystemSkills';
 import { useBotTranslation } from './botPronounContext';
 import type { BotCapabilities, BotProfile } from './botStore';
 import type { BotCapabilityEntry as Entry, BotCapabilityKind as Kind } from './botSettingsTarget';
@@ -244,13 +244,15 @@ export function BotCapabilitySettings({
   }
 
   // System Skills: on unless this teammate turned one off.
-  const systemRows = BOT_SYSTEM_SKILL_IDS.filter((id) =>
+  // A V2 teammate has only the ones that apply to it (no routines or follow-up of its own).
+  const systemIds = botSystemSkillIdsFor(capabilities);
+  const systemRows = systemIds.filter((id) =>
     matches(t(`bots.capabilities.system.items.${id}.name`), t(`bots.capabilities.system.items.${id}.hint`), id));
   if (systemRows.length) {
-    const onCount = BOT_SYSTEM_SKILL_IDS.filter((id) => isBotSystemSkillOn(capabilities, id)).length;
+    const onCount = systemIds.filter((id) => isBotSystemSkillOn(capabilities, id)).length;
     groups.push(
       <Group key="system" title={t('bots.capabilities.system.group')}
-        meta={t('bots.capabilities.system.meta', { on: onCount, total: BOT_SYSTEM_SKILL_IDS.length })}>
+        meta={t('bots.capabilities.system.meta', { on: onCount, total: systemIds.length })}>
         {systemRows.map((id) => {
           const on = isBotSystemSkillOn(capabilities, id);
           const name = t(`bots.capabilities.system.items.${id}.name`);

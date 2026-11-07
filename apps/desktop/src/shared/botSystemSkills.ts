@@ -30,10 +30,18 @@ export function readBotSystemSkillsOff(raw: unknown): BotSystemSkillId[] {
  * The ids in effect for a profile. A project-mode teammate (V2) manages automations with the
  * ordinary scheduler, so its own routine Skill is off; built-in routines keep running.
  */
-export function effectiveBotSystemSkillsOff(config: Record<string, unknown>): BotSystemSkillId[] {
-  const off = readBotSystemSkillsOff(config.systemSkillsOff);
-  if (!readBotProjectMode(config) || off.includes('routine')) return off;
-  return BOT_SYSTEM_SKILL_IDS.filter((id) => id === 'routine' || off.includes(id));
+/** A V2 teammate has no routines or follow-up of its own: it uses ordinary automations and tasks. */
+const PROJECT_MODE_SYSTEM_SKILL_IDS: readonly BotSystemSkillId[] = ['todo'];
+
+/** The system Skills that exist for this teammate at all. */
+export function botSystemSkillIdsFor(config: Record<string, unknown> | { projectMode?: unknown }): readonly BotSystemSkillId[] {
+  return readBotProjectMode(config) ? PROJECT_MODE_SYSTEM_SKILL_IDS : BOT_SYSTEM_SKILL_IDS;
+}
+
+export function effectiveBotSystemSkillsOff(config: Record<string, unknown> | { projectMode?: unknown; systemSkillsOff?: unknown }): BotSystemSkillId[] {
+  const off = readBotSystemSkillsOff('systemSkillsOff' in config ? config.systemSkillsOff : undefined);
+  const present = botSystemSkillIdsFor(config);
+  return BOT_SYSTEM_SKILL_IDS.filter((id) => off.includes(id) || !present.includes(id));
 }
 
 export function isBotSystemSkillOn(capabilities: { systemSkillsOff?: unknown } | null | undefined, id: BotSystemSkillId): boolean {
