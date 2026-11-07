@@ -315,11 +315,15 @@ function BotGroupChatContent({ deviceId, deviceName, groupId, messageId, notific
   const processUserScrolling = useRef(false);
   const processLeading = useRef(0);
   const [processLeadingSpace, setProcessLeadingSpace] = useState<number | null>(null);
+  const [processResumeRequest, setProcessResumeRequest] = useState(0);
   const processViewport = useProcessDisclosureViewport(() => viewport.current, () => {
     setProcessLeadingSpace(previous => previous ?? processLeading.current);
     jumpingToBottom.current = false;
     stickToBottom.current = false;
-  }, () => setProcessLeadingSpace(null));
+  }, () => {
+    setProcessLeadingSpace(null);
+    setProcessResumeRequest(request => request + 1);
+  });
   if (viewport.current.owner !== viewportOwner) {
     processViewport.resume();
     viewport.current = { owner: viewportOwner, group, measuredGroup: null, contentHeight: 0, viewportHeight: 0, offsetY: 0 };
@@ -774,6 +778,7 @@ function BotGroupChatContent({ deviceId, deviceName, groupId, messageId, notific
           onEditStep={(planId, step, action, botId, revision) => void editPlanStep(planId, step, action, botId, revision)}
           />
       {!imageSelectionActive && !threadRootId ? <BotGroupWorkArea onStop={stop} stopping={stopping} group={group} deviceId={deviceId} online={chat.online} identityFor={identityFor}
+        resumeRequest={processResumeRequest}
         onError={message => { if (message) Alert.alert(message); }} /> : null}
       {processViewport.footerHeight > 0 && <View style={{ height: processViewport.footerHeight, marginTop: -spacing.sm }} />}
       </ScrollView>

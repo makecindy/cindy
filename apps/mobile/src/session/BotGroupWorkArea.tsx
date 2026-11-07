@@ -18,11 +18,12 @@ import { fontWeight, iconSize, lineHeight, radius, spacing, typeScale } from '@/
 
 /** Live work is separate from messages. Only an owned companion's computer can
  * resolve its execution to a task; another member's private task is never queried. */
-export function BotGroupWorkArea({ group, deviceId, online, identityFor, onStop, stopping = false, onError }: {
+export function BotGroupWorkArea({ group, deviceId, online, identityFor, onStop, stopping = false, onError, resumeRequest = 0 }: {
   group: BotGroupRemoteChatData; deviceId: string; online: boolean;
   identityFor(botId: string, name: string): BotGroupIdentity;
   onStop?(): Promise<void>;
   stopping?: boolean;
+  resumeRequest?: number;
   onError(message: string | null): void;
 }) {
   const { accountGeneration } = useAuth();
@@ -36,6 +37,9 @@ export function BotGroupWorkArea({ group, deviceId, online, identityFor, onStop,
   const detailMetrics = useRef({ offsetY: 0, viewportHeight: 0, contentHeight: 0 });
   const detailDragging = useRef(false);
   const detailViewport = useProcessDisclosureViewport(() => detailMetrics.current, () => inspectParentViewport?.(0));
+  // Returning to the outer tail also releases the nested list's reserved range.
+  // Keep the current work area and its subscriptions mounted through navigation.
+  useEffect(detailViewport.resume, [resumeRequest, detailViewport.resume]);
   useEffect(() => {
     setExpandedScope(null);
   }, [disclosureScope, group.round.status]);
