@@ -73,6 +73,15 @@ export interface HistoryWorkSummary extends HistoryWorkReference {
   /** Original activity anchor; stable when its body has not been read yet. */
   anchorClientId?: string;
   artifacts?: HistoryFileArtifact[];
+  /** Minimal root-plugin ownership facts; no tool arguments or result bodies. */
+  ghostCalls?: {
+    clientId: string;
+    createdAt: string;
+    rowid?: number;
+    replyToClientId?: string;
+    ghostId: string;
+    namespace?: string | null;
+  }[];
   /** Actual child model from persisted metadata; not the requested model. */
   model?: string;
   /** Existing detail endpoint can read just the visible desktop tail. */

@@ -47,7 +47,7 @@ vi.mock('@/lib/composerDraftStore', () => ({
   }),
 }));
 
-import { makerChatStore, getRemoteHistoryView, type HistoryChatMessage } from '@/lib/makerChatStore';
+import { makerChatStore, getRemoteHistoryView, handleStreamEvent, type HistoryChatMessage } from '@/lib/makerChatStore';
 import {
   HistoryViewHandoff,
   historyViewLeaves,
@@ -55,6 +55,8 @@ import {
   renderHistoryView,
 } from '@cindy/maker-shared/message-window';
 import { projectRemoteUsers } from '@/lib/remoteUserHandoff';
+import { collectGhostCallsByUserTurn } from '../components/chat/MessageStream';
+import { historyWorkSummaries } from '@cindy/maker-shared/message-window';
 
 const OWNER_STAMP = { dataOwnerId: 'test-owner', ownerGeneration: 0 } as const;
 const WD = 'C:\\workspace';
@@ -119,7 +121,7 @@ function installElectronApi(): void {
             // 最新一页：按行截尾再投影（prose 行会合成单个 messages 叶子，
             // 直接 slice items 截不掉旧行，测试就无法把旧行挤出快照）。
             const rows = (rowsBySession.get(sessionId) ?? []).slice(-20);
-            return { version: 1, items: projectHistoryView(rows, false), hasMore: false, nextCursor: null };
+            return { version: 1, items: projectHistoryView(rows, false, true), hasMore: false, nextCursor: null };
           }),
           workDetails: vi.fn(async () => ({ version: 1, messages: [], hasMore: false, nextCursor: null })),
         },
@@ -193,6 +195,53 @@ afterEach(() => {
 });
 
 describe('local history view keeps command cards', () => {
+  it.each(['pending', 'reserved'] as const)('keeps plugin fulfillment on a new %s send followed by the production steer path', async (mode) => {
+    // #8296, unit: send → steer → stream, before the history mirror owns the send.
+    const s = sid();
+    await openSession(s);
+    await makerChatStore.sendMessage(s, 'new question', 'claude', '', 'default', WD);
+    const sent = enqueue.mock.calls[0][1];
+    if (mode === 'reserved') persistQueued(s, sent, '2026-09-27T00:00:00Z');
+    await makerChatStore.steerMessage(s, 'use plugin', 'claude', '', 'default', WD);
+    const input = steer.mock.calls[0][1];
+    persist({ ...dbMessage(s, input.clientId, input.text, new Date(Date.now() + 1000).toISOString(), 'user'),
+      agentMeta: { delivery: 'steer' } });
+    const state = handleStreamEvent(makerChatStore.getSnapshot(s), {
+      sessionId: s, type: 'tool_use', persistId: 'call',
+      data: { toolUseId: 't', toolName: 'mcp__cindy__ghost_call', input: { ghost_id: 'art', tool: 'run' } },
+      agentMeta: { replyToClientId: input.clientId },
+    });
+    expect([...collectGhostCallsByUserTurn(projectRemoteUsers(state.messages, new Set(['old-user', 'old-answer'])))])
+      .toEqual([[sent.clientId, new Set(['art'])]]);
+    makerChatStore.purgeSession(s);
+  });
+
+  it('fulfills a mention after reopening while settled plugin details remain collapsed', async () => {
+    // #8296 review, unit: mapper-only coverage omitted the lazy view/mirror path.
+    const s = sid();
+    const call = dbMessage(s, 'call', '', '2026-09-28T00:00:02Z', 'tool_use');
+    call.content = { toolName: 'mcp__cindy__ghost_call', toolUseId: 'tool', input: { ghost_id: 'art', tool: 'run' } };
+    call.toolUseId = 'tool';
+    call.agentMeta = { replyToClientId: 'old-user' };
+    rowsBySession.set(s, [
+      dbMessage(s, 'old-user', 'question', '2026-09-28T00:00:00Z', 'user'), call,
+      { ...dbMessage(s, 'result', 'ok', '2026-09-28T00:00:03Z', 'tool_result'), toolUseId: 'tool' },
+      { ...dbMessage(s, 'answer', 'Done', '2026-09-28T00:00:04Z', 'assistant'), agentMeta: { turnCompleted: true } },
+    ]);
+    makerChatStore.enterView(s);
+    makerChatStore.ensureInitialMessages(s);
+    await flush(); await flush();
+    const snapshot = getRemoteHistoryView(s)!.getSnapshot();
+    expect(snapshot.items.some(item => item.type === 'work')).toBe(true);
+    expect(snapshot.details.size).toBe(0);
+    expect(window.electronAPI.localDb.messages.historyView).toHaveBeenCalledWith(s, { before: undefined, lazyDetails: true });
+    const messages = makerChatStore.getSnapshot(s).messages;
+    expect(messages.some(m => m.clientId === 'call')).toBe(false);
+    expect([...collectGhostCallsByUserTurn(messages, historyWorkSummaries(snapshot.items))])
+      .toEqual([['old-user', new Set(['art'])]]);
+    expect(window.electronAPI.localDb.messages.workDetails).not.toHaveBeenCalled();
+    makerChatStore.purgeSession(s);
+  });
   it('shows help immediately and retains its position through history refresh and later messages', async () => {
     const s = sid();
     await openSession(s);

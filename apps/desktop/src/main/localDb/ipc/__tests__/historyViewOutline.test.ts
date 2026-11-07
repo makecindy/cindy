@@ -2,6 +2,7 @@ import { DatabaseSync } from 'node:sqlite';
 import { SQLiteSyncDialect } from 'drizzle-orm/sqlite-core';
 import { describe, expect, it } from 'vitest';
 import { historyOutlineContent, historyOutlineContentStamp, withHistoryArtifacts } from '../historyViewOutline';
+import { projectHistoryView, historyWorkSummaries } from '@cindy/maker-shared/message-window';
 
 function outline(role: string, content: unknown, agentMeta: unknown = null, raw = false) {
   const db = new DatabaseSync(':memory:');
@@ -34,6 +35,47 @@ function legacyStamp(content: string | null): string | null {
 }
 
 describe('SQLite history outline', () => {
+  it.each(['mcp__other__ghost_call', 'mcp:other:ghost_call', 'ghost_call', 'cindy_mcp_call_tool'])(
+    'omits plugin attribution for another server tool %s', (toolName) => {
+      // #8296 review, unit: real SQLite outline must not retain foreign plugin facts.
+      const input = { ghost_id: 'art', namespace: 'acme' };
+      const content = outline('tool_use', { toolName, toolUseId: 't',
+        input: toolName === 'cindy_mcp_call_tool'
+          ? { server: 'other', tool: 'ghost_call', args: input } : input });
+      const call = withHistoryArtifacts({ id: 'call', clientId: 'call', role: 'tool_use', content,
+        createdAt: '2026-01-01T00:00:01Z', agentMeta: { replyToClientId: 'user' } });
+      expect(content.input).not.toHaveProperty('ghost_id');
+      expect(content.input).not.toHaveProperty('namespace');
+      expect(call.agentMeta).not.toHaveProperty('replyToClientId');
+      const items = projectHistoryView([call, { id: 'result', clientId: 'result', role: 'tool_result',
+        content: 'ok', toolUseId: 't', createdAt: '2026-01-01T00:00:02Z' }], false, true);
+      expect(historyWorkSummaries(items).flatMap(summary => summary.ghostCalls ?? [])).toEqual([]);
+    },
+  );
+  it.each([
+    ['native', undefined], ['native', null], ['native', 'acme'],
+    ['cindy', undefined], ['cindy', null], ['cindy', 'acme'],
+    ['cindy_ghosts', undefined], ['cindy_ghosts', null], ['cindy_ghosts', 'acme'],
+  ] as const)('keeps folded plugin ownership for %s with namespace=%s through SQLite outlining', (gateway, namespace) => {
+    // #8296 review, unit: lazy history never hydrates the hidden call. Exercise
+    // the SQL outline and grouping, including absent versus explicit root scope.
+    const scope = namespace === undefined ? {} : { namespace };
+    const input = { ghost_id: 'art', ...scope, tool: 'run', args: { secret: 'private arguments' } };
+    const content = outline('tool_use', gateway === 'native'
+      ? { toolName: 'mcp__cindy__ghost_call', toolUseId: 't', input }
+      : { toolName: 'cindy_mcp_call_tool', toolUseId: 't',
+        input: { server: gateway, tool: 'ghost_call', args: input } });
+    const call = withHistoryArtifacts({ id: 'call', clientId: 'call', role: 'tool_use', content,
+      createdAt: '2026-01-01T00:00:01Z', agentMeta: { replyToClientId: 'user', uuid: 'sdk' } });
+    const items = projectHistoryView([call, { id: 'result', clientId: 'result', role: 'tool_result',
+      content: 'ok', toolUseId: 't', createdAt: '2026-01-01T00:00:02Z' }], false, true);
+    const summaries = historyWorkSummaries(items);
+    expect(summaries.flatMap(summary => summary.ghostCalls ?? [])).toEqual([{
+      clientId: 'call', createdAt: call.createdAt, replyToClientId: 'user', ghostId: 'art', ...scope,
+    }]);
+    expect(JSON.stringify(items)).not.toContain('private arguments');
+    expect(JSON.stringify(items)).not.toContain('sdk');
+  });
   // 2026-10-25: repeated SDK bookkeeping exhausted the 8 MiB scan before
   // a long child-agent range could reach its header. This is an outline only;
   // grouping metadata and unknown fields must survive, full hydration is unchanged.

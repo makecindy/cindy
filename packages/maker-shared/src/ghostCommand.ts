@@ -19,6 +19,21 @@
  * 追加文本对用户可见(气泡里如实显示),不做暗改。
  */
 
+/** Cindy MCP tool names, including the pre-2026-07-12 server alias.
+ * Claude uses mcp__server__tool; Codex/Pi use mcp:server:tool.
+ * Keep live rendering and folded history on the same exact server whitelist.
+ */
+export const GHOST_CALL_TOOL_NAMES: readonly string[] = [
+  'mcp__cindy__ghost_call',
+  'mcp__cindy_ghosts__ghost_call',
+  'mcp:cindy:ghost_call',
+  'mcp:cindy_ghosts:ghost_call',
+];
+
+export function isGhostCallToolName(name: string | undefined | null): boolean {
+  return typeof name === 'string' && GHOST_CALL_TOOL_NAMES.includes(name);
+}
+
 export interface GhostToolDecl {
   name: string;
   description: string;

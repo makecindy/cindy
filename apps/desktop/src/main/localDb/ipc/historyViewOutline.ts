@@ -1,6 +1,7 @@
 import { sql, type SQL } from 'drizzle-orm';
 import { describeToolUse, createdPathsFromDescriptor } from '@cindy/maker-shared/tool-use-descriptor';
 import { parseMessageToolUse } from '@cindy/maker-shared/message-normalize';
+import { GHOST_CALL_TOOL_NAMES, isGhostCallToolName } from '@cindy/maker-shared/ghost-command';
 import type { HistoryMessageSource } from '@cindy/maker-shared/message-window';
 import { extractCommandOutputPathCandidates } from '../../../shared/commandOutputPaths';
 import { messages } from '../schema';
@@ -16,6 +17,15 @@ import { messages } from '../schema';
  */
 export function historyOutlineContent(): SQL<string> {
   const body = messages.content;
+  const rawToolName = sql`json_extract(${body}, '$.toolName')`;
+  // Older Pi rows wrap the MCP identity and arguments. Normalize only this
+  // header, retaining the same exact tool whitelist as full-history parsing.
+  const ghostToolName = sql`CASE WHEN ${rawToolName} = 'cindy_mcp_call_tool'
+    AND json_type(${body}, '$.input.args') = 'object'
+    THEN 'mcp:' || json_extract(${body}, '$.input.server') || ':' || json_extract(${body}, '$.input.tool')
+    ELSE ${rawToolName} END`;
+  const ghostInputPath = sql`CASE WHEN ${rawToolName} = 'cindy_mcp_call_tool'
+    THEN '$.input.args' ELSE '$.input' END`;
   return sql<string>`CASE
     WHEN ${messages.role} = 'tool_result' AND NOT json_valid(${body})
       AND NOT (length(${body}) <= 16384
@@ -33,6 +43,13 @@ export function historyOutlineContent(): SQL<string> {
         json_extract(${body}, '$.input.args.outPath'), json_extract(${body}, '$.input.args.out_path'),
         json_extract(${body}, '$.input.args.outputPath'), json_extract(${body}, '$.input.args.output_path')) IS NOT NULL
       ) THEN ${body}
+    WHEN ${messages.role} = 'tool_use' AND ${ghostToolName} IN (${sql.join(GHOST_CALL_TOOL_NAMES.map(name => sql`${name}`), sql`, `)})
+      THEN json_object('toolName', ${ghostToolName},
+        'toolUseId', json_extract(${body}, '$.toolUseId'),
+        'input', json(CASE WHEN json_type(${body}, ${ghostInputPath} || '.namespace') IS NULL
+          THEN json_object('ghost_id', json_extract(${body}, ${ghostInputPath} || '.ghost_id'))
+          ELSE json_object('ghost_id', json_extract(${body}, ${ghostInputPath} || '.ghost_id'),
+            'namespace', json_extract(${body}, ${ghostInputPath} || '.namespace')) END))
     WHEN ${messages.role} = 'tool_use' THEN json_object(
       'toolName', json_extract(${body}, '$.toolName'),
       'toolUseId', json_extract(${body}, '$.toolUseId'),
@@ -137,6 +154,11 @@ export function withHistoryArtifacts<T extends HistoryMessageSource>(row: T): T 
     const { uuid: _uuid, sdkSessionId: _sdkSessionId, requestId: _requestId,
       replyToClientId: _replyToClientId, usage: _usage, ...agentMeta } = row.agentMeta as Record<string, unknown>;
     row = { ...row, agentMeta };
+    // Folded plugin rows are not hydrated until expanded. Preserve only the
+    // ownership link needed by their summary, alongside the small outline input.
+    if (row.role === 'tool_use' && isGhostCallToolName(parseMessageToolUse(row).toolName) && _replyToClientId) {
+      row = { ...row, agentMeta: { ...agentMeta, replyToClientId: _replyToClientId } };
+    }
   }
   if (row.role !== 'tool_use') return row;
   const tool = parseMessageToolUse(row);

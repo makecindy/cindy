@@ -10,6 +10,8 @@
 import { describe, expect, it } from 'vitest';
 import { collectGhostCallsByUserTurn, ghostCallMapsEqual } from '../components/chat/MessageStream';
 import type { ChatMessage } from '@/lib/makerChatStore';
+import { EMPTY_SESSION_STATE, handleStreamEvent, makerChatStore } from '@/lib/makerChatStore';
+import { projectRemoteUsers, reserveRemoteUser } from '@/lib/remoteUserHandoff';
 
 const user = (clientId: string, extra: Partial<ChatMessage> = {}): ChatMessage =>
   ({ clientId, role: 'user', content: clientId, isStreaming: false, ...extra }) as ChatMessage;
@@ -17,7 +19,7 @@ const user = (clientId: string, extra: Partial<ChatMessage> = {}): ChatMessage =
 const ghostCall = (clientId: string, ghostId: string, toolName = 'mcp__cindy__ghost_call'): ChatMessage =>
   ({
     clientId,
-    role: 'assistant',
+    role: 'tool_use',
     content: '',
     isStreaming: false,
     toolName,
@@ -25,6 +27,128 @@ const ghostCall = (clientId: string, ghostId: string, toolName = 'mcp__cindy__gh
   }) as ChatMessage;
 
 describe('collectGhostCallsByUserTurn', () => {
+  it.each(['pending', 'reserved'] as const)('assigns a new continuation after a %s remote send using its reserved position', (mode) => {
+    // #8296, unit: historical clock fallback must not steal a new live steer.
+    const old = user('old', { createdAt: '2026-01-01T00:00:10Z' });
+    const next = user('new', { createdAt: '2026-01-01T00:00:00Z', isPendingPersist: mode === 'pending' });
+    const remote = mode === 'reserved' ? reserveRemoteUser(next, [old]) : next;
+    const continuation = user('steer', { delivery: 'steer', createdAt: '2026-01-01T00:00:11Z' });
+    const state = handleStreamEvent({ ...EMPTY_SESSION_STATE, messages: [old, remote, continuation] }, {
+      sessionId: 's1', type: 'tool_use', persistId: 'call',
+      data: { toolUseId: 'tool', toolName: 'mcp__cindy__ghost_call', input: { ghost_id: 'art', tool: 'run' } },
+      agentMeta: { replyToClientId: 'steer' },
+    });
+    const projected = projectRemoteUsers(state.messages, new Set(['old']));
+    expect([...collectGhostCallsByUserTurn(projected)]).toEqual([['new', new Set(['art'])]]);
+  });
+
+  it.each(['pending', 'reserved'] as const)('ignores %s remote clock timestamps when attributing historical calls', (mode) => {
+    // #8296 review, unit: remote projection reserves the new bubble after history,
+    // even when its controller clock predates an old continuation. Previous
+    // tests only used persisted users and missed this false fulfillment.
+    const history = makerChatStore.__mapServerMessagesForTest([
+      { id: 'u1', sessionId: 's1', clientId: 'u1', role: 'user', content: 'old',
+        toolUseId: null, agentMeta: null, createdAt: '2026-01-01T00:00:00.000Z' },
+      { id: 'c', sessionId: 's1', clientId: 'c', role: 'user', content: 'continue',
+        toolUseId: null, agentMeta: { delivery: 'steer' }, createdAt: '2026-01-01T00:00:02.000Z' },
+      { id: 't1', sessionId: 's1', clientId: 't1', role: 'tool_use',
+        content: { toolUseId: 't1', toolName: 'mcp__cindy__ghost_call', input: { ghost_id: 'art', tool: 'run' } },
+        toolUseId: 't1', agentMeta: { replyToClientId: 'c' }, createdAt: '2026-01-01T00:00:03.000Z' },
+    ]);
+    const next = user('u2', { createdAt: '2026-01-01T00:00:01.000Z', isPendingPersist: mode === 'pending' });
+    const remote = mode === 'reserved' ? reserveRemoteUser(next, history) : next;
+    const projected = projectRemoteUsers([...history, remote], new Set(history.map(m => m.clientId)));
+    expect(projected.at(-1)?.clientId).toBe('u2');
+    expect([...collectGhostCallsByUserTurn(projected)]).toEqual([['u1', new Set(['art'])]]);
+    // Old records without reply metadata must use the same persisted candidates.
+    const legacy = projected.map(m => m.clientId === 't1' ? { ...m, replyToClientId: undefined } : m);
+    expect([...collectGhostCallsByUserTurn(legacy)]).toEqual([['u1', new Set(['art'])]]);
+    // A truncated window with no persisted visible user must stay unowned;
+    // an explicit reply to the new user can still belong to that user.
+    const truncated = projected.filter(m => m.clientId !== 'u1');
+    expect(collectGhostCallsByUserTurn(truncated).size).toBe(0);
+    expect(collectGhostCallsByUserTurn(legacy.filter(m => m.clientId !== 'u1')).size).toBe(0);
+    expect([...collectGhostCallsByUserTurn([
+      remote, { ...ghostCall('new-call', 'art'), replyToClientId: 'u2' },
+    ])]).toEqual([['u2', new Set(['art'])]]);
+  });
+
+  it.each(['live', 'history'] as const)('preserves tool ownership through the %s production projection', (source) => {
+    const data = { toolUseId: 'tool-1', toolName: 'mcp__cindy__ghost_call', input: { ghost_id: 'art', tool: 'run' } };
+    const agentMeta = { replyToClientId: 'u1' };
+    const calls = source === 'live'
+      ? handleStreamEvent({ ...EMPTY_SESSION_STATE, messages: [] }, {
+          sessionId: 's1', type: 'tool_use', persistId: 'call', data, agentMeta,
+        }).messages
+      : makerChatStore.__mapServerMessagesForTest([{
+          id: 'tool-row', sessionId: 's1', clientId: 'call', role: 'tool_use',
+          content: data, toolUseId: 'tool-1', agentMeta,
+          createdAt: '2026-01-01T00:00:03.000Z',
+        }]);
+    const users = [
+      user('u0', { createdAt: '2026-01-01T00:00:00.000Z' }),
+      user('u1', { createdAt: '2026-01-01T00:00:01.000Z' }),
+      user('u2', { createdAt: '2026-01-01T00:00:02.000Z' }),
+    ];
+    expect([...collectGhostCallsByUserTurn([...users, ...calls])])
+      .toEqual([['u1', new Set(['art'])]]);
+    // A known owner outside the loaded window must not fall back to u0 or u2.
+    expect(collectGhostCallsByUserTurn([...users.filter(m => m.clientId !== 'u1'), ...calls]).size)
+      .toBe(0);
+  });
+
+  it('keeps explicit ownership across display reordering and unloaded inputs', () => {
+    const call = { ...ghostCall('t1', 'art'), replyToClientId: 'u1' };
+    const map = collectGhostCallsByUserTurn([user('u1'), user('u2'), call]);
+    expect([...(map.get('u1') ?? [])]).toEqual(['art']);
+    expect(map.has('u2')).toBe(false);
+    expect(collectGhostCallsByUserTurn([user('u2'), call]).size).toBe(0);
+  });
+
+  it.each([
+    ['live', 'steer'], ['history', 'steer'],
+    ['live', 'synthetic'], ['history', 'synthetic'],
+  ] as const)('attributes a %s call replying to a %s input to its visible turn', (source, kind) => {
+    const data = { toolUseId: 'tool-1', toolName: 'mcp__cindy__ghost_call', input: { ghost_id: 'art', tool: 'run' } };
+    const agentMeta = { replyToClientId: 'continuation' };
+    const calls = source === 'live'
+      ? handleStreamEvent({ ...EMPTY_SESSION_STATE, messages: [] }, {
+          sessionId: 's1', type: 'tool_use', persistId: 'call', data, agentMeta,
+        }).messages
+      : makerChatStore.__mapServerMessagesForTest([{
+          id: 'tool-row', sessionId: 's1', clientId: 'call', role: 'tool_use',
+          content: data, toolUseId: 'tool-1', agentMeta,
+          createdAt: '2026-01-01T00:00:03.000Z',
+        }]);
+    const original = user('u1', { createdAt: '2026-01-01T00:00:00.000Z' });
+    const continuation = user('continuation', {
+      ...(kind === 'steer' ? { delivery: 'steer' } : { isSyntheticTrigger: true }),
+      createdAt: '2026-01-01T00:00:01.000Z',
+    });
+    const next = user('u2', { createdAt: '2026-01-01T00:00:02.000Z' });
+    // The late call must retain the continuation's turn even after a new user.
+    expect([...collectGhostCallsByUserTurn([original, continuation, next, ...calls])])
+      .toEqual([['u1', new Set(['art'])]]);
+    expect([...collectGhostCallsByUserTurn([original, next, continuation, ...calls])])
+      .toEqual([['u1', new Set(['art'])]]);
+    expect(collectGhostCallsByUserTurn([next, continuation, ...calls]).size).toBe(0);
+    // Legacy untimed inputs still belong to their preceding visible boundary.
+    expect([...collectGhostCallsByUserTurn([
+      user('u1'), { ...continuation, createdAt: undefined }, user('u2'), ...calls,
+    ])]).toEqual([['u1', new Set(['art'])]]);
+  });
+
+  it('uses persisted chronology for legacy calls reordered behind a newer user', () => {
+    const at = (seconds: number) => new Date(seconds * 1000).toISOString();
+    const oldUser = user('u1', { createdAt: at(1), rowid: 1 });
+    const newUser = user('u2', { createdAt: at(2), rowid: 3 });
+    const call = { ...ghostCall('t1', 'art'), createdAt: at(2), rowid: 2 };
+    const map = collectGhostCallsByUserTurn([oldUser, newUser, call]);
+    expect([...(map.get('u1') ?? [])]).toEqual(['art']);
+    expect(map.has('u2')).toBe(false);
+    expect(collectGhostCallsByUserTurn([newUser, call]).size).toBe(0);
+  });
+
   it('does not merge root and organization calls with the same ghost id', () => {
     const root = { ...ghostCall('t1', 'helper'), toolInput: { ghost_id: 'helper', namespace: null, tool: 'run' } };
     const organization = { ...ghostCall('t2', 'helper'), toolInput: { ghost_id: 'helper', namespace: 'acme', tool: 'run' } };

@@ -9,6 +9,21 @@ function row(id: number, role: string, content: unknown): HistoryMessageSource {
 }
 
 describe('history reading projection', () => {
+  // #8296 review: another MCP server's same-named tool must not fulfill a
+  // Cindy plugin mention after folding. Exercise production projection, not names alone.
+  it.each([
+    ['mcp__cindy__ghost_call', true], ['mcp__cindy_ghosts__ghost_call', true],
+    ['mcp:cindy:ghost_call', true], ['mcp:cindy_ghosts:ghost_call', true],
+    ['mcp__other__ghost_call', false], ['mcp:other:ghost_call', false],
+    ['ghost_call', false],
+  ] as const)('retains only Cindy plugin ownership for %s', (toolName, retained) => {
+    const call = row(1, 'tool_use', { toolName, toolUseId: 't', input: { ghost_id: 'art' } });
+    call.agentMeta = { replyToClientId: 'user' };
+    const items = projectHistoryView([call, { ...row(2, 'tool_result', 'ok'), toolUseId: 't' }], false, true);
+    expect(historyWorkSummaries(items).flatMap(summary => summary.ghostCalls ?? []))
+      .toEqual(retained ? [{ clientId: call.clientId, createdAt: call.createdAt,
+        replyToClientId: 'user', ghostId: 'art' }] : []);
+  });
   it.each(['pending', 'card', 'media', 'app'] as const)('keeps a plugin %s available outside deferred work', (kind) => {
     const call = row(1, 'tool_use', { toolName: 'mcp__cindy__ghost_call', toolUseId: 'plugin', input: {} });
     if (kind === 'app') call.agentMeta = { mcpApp: true };
