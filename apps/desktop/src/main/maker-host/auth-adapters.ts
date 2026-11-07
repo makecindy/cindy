@@ -1345,12 +1345,21 @@ export class DesktopCodexAuthAdapter implements AuthAdapter {
         break;
       case 'link-unsupported':
         if (process.platform === 'win32') {
-          const synced = await syncIndependentCodexAuth(systemAuth, myAuth);
-          if (synced.kind === 'copied-from-system' || synced.kind === 'copied-from-local') {
+          // 账号未证明一致时绝不把本地副本写回 ~/.codex(旧账号不能覆盖系统登录)。
+          const accountsMatch = !!myAccount && !!sysAccount && myAccount === sysAccount;
+          const synced = await syncIndependentCodexAuth(systemAuth, myAuth, process.platform, undefined, {
+            allowLocalToSystem: accountsMatch,
+          });
+          const syncedOk =
+            synced.kind === 'copied-from-system' ||
+            synced.kind === 'copied-from-local' ||
+            synced.kind === 'unchanged';
+          if (syncedOk) {
             if (hasLocalEntry && !topology.healthy) this.lastOrphanRepair = 'relinked';
             this.lastKnownCodexCredentialScope = 'system-shared';
             credPathLog.warn('Windows file symlink unavailable; synced an independent Codex auth copy', {
               direction: synced.kind,
+              accountsMatch,
               error: error?.message,
             });
             break;
@@ -1966,8 +1975,22 @@ export class DesktopCodexAuthAdapter implements AuthAdapter {
             const result = await copyCodexAuthSnapshot(systemAuth, localAuth);
             if (result.kind !== 'copied') throw new Error('Local auth snapshot failed');
           } else {
-            await relinkSharedCodexAuth(systemAuth, localAuth);
-            if (!pathsReferToSameFileSync(localAuth, systemAuth)) throw new Error('Local auth link failed');
+            const relink = await relinkSharedCodexAuth(systemAuth, localAuth);
+            if (relink.kind !== 'linked') {
+              // Windows 无 symlink 权限时接受独立副本降级(#9277),不再要求同 inode。
+              if (process.platform !== 'win32') throw new Error('Local auth link failed');
+              const synced = await syncIndependentCodexAuth(systemAuth, localAuth, process.platform, undefined, {
+                // 登录刚从系统凭证读出,两侧是同一账号。
+                allowLocalToSystem: true,
+              });
+              const syncedOk =
+                synced.kind === 'copied-from-system' ||
+                synced.kind === 'copied-from-local' ||
+                synced.kind === 'unchanged';
+              if (!syncedOk) throw new Error('Local auth link failed');
+            } else if (!pathsReferToSameFileSync(localAuth, systemAuth)) {
+              throw new Error('Local auth link failed');
+            }
           }
         }
         if (!stillCurrent()) {

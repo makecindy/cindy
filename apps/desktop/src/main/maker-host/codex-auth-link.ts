@@ -267,17 +267,40 @@ async function sameCodexAuthInode(a: string, b: string): Promise<boolean> {
   }
 }
 
+async function sameCodexAuthContent(a: string, b: string): Promise<boolean> {
+  try {
+    const [left, right] = await Promise.all([fsp.readFile(a), fsp.readFile(b)]);
+    return left.equals(right);
+  } catch {
+    return false;
+  }
+}
+
+/** 复制后保留源 mtime,避免下一次按 mtime 反向对拷(两侧内容其实没变)。 */
+async function preserveSourceMtime(source: string, target: string): Promise<void> {
+  try {
+    const stat = await fsp.stat(source);
+    await fsp.utimes(target, stat.atime, stat.mtime);
+  } catch {
+    // best effort: content already matches; mtime drift only costs one extra copy
+  }
+}
+
 /**
  * Windows 建不出文件 symlink 时的降级(#9277):两侧各持独立副本,按较新 mtime 对齐。
  * 存量 hardlink(nlink>1)会被拆开,系统 auth.json 恢复为单一链接,Codex 才能原子写入。
  * 不创建 hardlink。已是 symlink 的路径跳过,避免把活链接拍成副本。
- * 调用方须已确认两侧是同一账号;两端各自刷新时较旧的 refresh token 可能已失效。
+ *
+ * `allowLocalToSystem` 默认 false:本地副本绝不写回 `~/.codex/auth.json`。只有调用方
+ * 已证明两侧是同一账号时才允许,避免旧账号覆盖系统登录。
+ * 两端各自刷新时较旧的 refresh token 可能已失效。
  */
 export async function syncIndependentCodexAuth(
   systemAuth: string,
   myAuth: string,
   platform: NodeJS.Platform = process.platform,
   execFileImpl: typeof execFileP = execFileP,
+  opts: { allowLocalToSystem?: boolean } = {},
 ): Promise<CodexAuthCopySyncOutcome> {
   let local: Awaited<ReturnType<typeof fsp.lstat>> | null = null;
   try {
@@ -292,21 +315,46 @@ export async function syncIndependentCodexAuth(
     return { kind: 'failed', error: error as Error };
   }
 
-  const publish = async (from: string, to: string): Promise<CodexAuthCopySyncOutcome> => {
+  const publish = async (
+    from: string,
+    to: string,
+    successKind: CodexAuthCopySyncKind,
+  ): Promise<CodexAuthCopySyncOutcome> => {
     const copied = await copyCodexAuthSnapshot(from, to, platform, execFileImpl);
-    if (copied.kind !== 'copied') return { kind: 'failed', error: copied.error };
-    return { kind: from === systemAuth ? 'copied-from-system' : 'copied-from-local' };
+    if (copied.kind === 'copied') {
+      await preserveSourceMtime(from, to);
+      return { kind: successKind };
+    }
+    if (copied.kind === 'lost') {
+      // Windows 先删目标再 rename:删除成功后 rename 失败会把 to 弄丢。
+      // 源还在,立刻重建,绝不能让 ~/.codex/auth.json 空窗留存。
+      const restore = await copyCodexAuthSnapshot(from, to, platform, execFileImpl);
+      if (restore.kind === 'copied') {
+        await preserveSourceMtime(from, to);
+        return { kind: successKind };
+      }
+      return { kind: 'failed', error: copied.error };
+    }
+    return { kind: 'failed', error: copied.error };
   };
 
   if (!local || await sameCodexAuthInode(systemAuth, myAuth)) {
-    return publish(systemAuth, myAuth);
+    return publish(systemAuth, myAuth, 'copied-from-system');
   }
+  // 内容一致就停:copy 不保留 mtime 时,只比 mtime 会两侧来回覆盖。
+  if (await sameCodexAuthContent(systemAuth, myAuth)) return { kind: 'unchanged' };
 
   const systemStat = await fsp.stat(systemAuth);
   const localStat = await fsp.stat(myAuth);
+  if (localStat.mtimeMs > systemStat.mtimeMs) {
+    if (!opts.allowLocalToSystem) {
+      // 账号未证明一致:系统凭证单向获胜,只把系统内容刷到本地。
+      return publish(systemAuth, myAuth, 'copied-from-system');
+    }
+    return publish(myAuth, systemAuth, 'copied-from-local');
+  }
   if (localStat.mtimeMs === systemStat.mtimeMs) return { kind: 'unchanged' };
-  if (localStat.mtimeMs > systemStat.mtimeMs) return publish(myAuth, systemAuth);
-  return publish(systemAuth, myAuth);
+  return publish(systemAuth, myAuth, 'copied-from-system');
 }
 
 async function pathEntryExists(file: string): Promise<boolean> {

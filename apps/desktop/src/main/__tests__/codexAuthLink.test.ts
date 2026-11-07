@@ -290,7 +290,25 @@ describe('syncIndependentCodexAuth (#9277)', () => {
     expect(fs.readFileSync(systemAuth, 'utf8')).toBe(SYSTEM_CONTENT);
   });
 
-  it('独立副本按较新 mtime 从本地同步回系统文件', async () => {
+  it('独立副本按较新 mtime 从本地同步回系统文件(已证明同账号)', async () => {
+    fs.writeFileSync(systemAuth, SYSTEM_CONTENT);
+    fs.writeFileSync(myAuth, MY_CONTENT);
+    const newer = new Date(Date.now() + 60_000);
+    fs.utimesSync(myAuth, newer, newer);
+
+    const out = await syncIndependentCodexAuth(systemAuth, myAuth, 'win32', undefined, {
+      allowLocalToSystem: true,
+    });
+
+    expect(out.kind).toBe('copied-from-local');
+    expect(fs.readFileSync(systemAuth, 'utf8')).toBe(MY_CONTENT);
+    expect(fs.statSync(systemAuth).nlink).toBe(1);
+    expect(sameInode(systemAuth, myAuth)).toBe(false);
+    // 保留源 mtime,下一次按 mtime 的对账不会反向再拷。
+    expect(fs.statSync(systemAuth).mtimeMs).toBeCloseTo(fs.statSync(myAuth).mtimeMs, 0);
+  });
+
+  it('账号未证明一致时,较新的本地副本绝不写回系统登录', async () => {
     fs.writeFileSync(systemAuth, SYSTEM_CONTENT);
     fs.writeFileSync(myAuth, MY_CONTENT);
     const newer = new Date(Date.now() + 60_000);
@@ -298,10 +316,54 @@ describe('syncIndependentCodexAuth (#9277)', () => {
 
     const out = await syncIndependentCodexAuth(systemAuth, myAuth, 'win32');
 
+    expect(out.kind).toBe('copied-from-system');
+    expect(fs.readFileSync(systemAuth, 'utf8')).toBe(SYSTEM_CONTENT);
+    expect(fs.readFileSync(myAuth, 'utf8')).toBe(SYSTEM_CONTENT);
+  });
+
+  it('内容一致时不反复复制(防止 mtime 来回覆盖)', async () => {
+    fs.writeFileSync(systemAuth, SYSTEM_CONTENT);
+    fs.writeFileSync(myAuth, SYSTEM_CONTENT);
+    const newer = new Date(Date.now() + 60_000);
+    fs.utimesSync(myAuth, newer, newer);
+    const systemMtimeBefore = fs.statSync(systemAuth).mtimeMs;
+
+    const first = await syncIndependentCodexAuth(systemAuth, myAuth, 'win32');
+    const second = await syncIndependentCodexAuth(systemAuth, myAuth, 'win32');
+
+    expect(first.kind).toBe('unchanged');
+    expect(second.kind).toBe('unchanged');
+    expect(fs.statSync(systemAuth).mtimeMs).toBe(systemMtimeBefore);
+  });
+
+  it('写回系统文件时 rename 失败会从仍存在的本地源恢复,不留空窗', async () => {
+    fs.writeFileSync(systemAuth, SYSTEM_CONTENT);
+    fs.writeFileSync(myAuth, MY_CONTENT);
+    const newer = new Date(Date.now() + 60_000);
+    fs.utimesSync(myAuth, newer, newer);
+    const originalRename = fs.promises.rename.bind(fs.promises);
+    let renameCalls = 0;
+    vi.spyOn(fs.promises, 'rename').mockImplementation(async (from, to) => {
+      // 第一次写回系统:rm 成功后 rename 失败(copyCodexAuthSnapshot 的 lost)。
+      if (String(to) === systemAuth && renameCalls === 0) {
+        renameCalls += 1;
+        const err = new Error('EBUSY: resource busy') as NodeJS.ErrnoException;
+        err.code = 'EBUSY';
+        throw err;
+      }
+      return originalRename(from as never, to as never);
+    });
+
+    const out = await syncIndependentCodexAuth(systemAuth, myAuth, 'win32', undefined, {
+      allowLocalToSystem: true,
+    });
+
     expect(out.kind).toBe('copied-from-local');
+    expect(renameCalls).toBeGreaterThanOrEqual(1);
+    // 系统登录文件不能被删掉后不还回来。
+    expect(fs.existsSync(systemAuth)).toBe(true);
     expect(fs.readFileSync(systemAuth, 'utf8')).toBe(MY_CONTENT);
     expect(fs.statSync(systemAuth).nlink).toBe(1);
-    expect(sameInode(systemAuth, myAuth)).toBe(false);
   });
 
   it.skipIf(!canLinkFile)('已是 symlink 时不拍成副本', async () => {
