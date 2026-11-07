@@ -375,6 +375,7 @@ describe('mapCodexAppServerModelsToCatalog', () => {
         defaultReasoningEffort: 'xhigh',
         additionalSpeedTiers: [],
         serviceTiers: [{ id: 'priority', name: 'Fast', description: '' }],
+        inputModalities: ['text', 'image'],
         isDefault: true,
       },
       {
@@ -411,6 +412,7 @@ describe('mapCodexAppServerModelsToCatalog', () => {
         defaultReasoningEffort: 'high',
         additionalSpeedTiers: [],
         serviceTiers: [],
+        inputModalities: ['text'],
         isDefault: false,
       },
     ] as CodexModelListItem[]);
@@ -421,8 +423,10 @@ describe('mapCodexAppServerModelsToCatalog', () => {
       efforts: ['low', 'xhigh'],
       defaultEffort: 'xhigh',
       supportsFastMode: true,
+      supportsImageInput: true,
       sortOrder: 0,
     });
+    expect(out[1]).toMatchObject({ supportsImageInput: false });
     expect(out[1].defaultEnabled).toBe(true);
     expect(out[1].sortOrder).toBe(3);
     // live 协议不给 context_window,这 272k 是统一兜底 → 一律不得标记为已核实。
