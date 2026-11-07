@@ -572,6 +572,8 @@ describe('forkSessionAtMessage', () => {
     // maker 入参: 用最近一条带 uuid 的 assistant
     expect(forkSdkSessionMock).toHaveBeenCalledWith('claude-code', {
       sourceSdkSessionId: 'sdk-uuid-source',
+      model: 'claude-sonnet-4-6',
+      providerId: 'xd',
       upToMessageId: 'sdk-msg-uuid-1',
       title: '[Fork] Project A',
       workingDir: '/work',
@@ -951,6 +953,8 @@ describe('forkSessionAtMessage', () => {
     expect(forkSdkSessionMock).toHaveBeenCalledOnce();
     expect(forkSdkSessionMock).toHaveBeenCalledWith('pi', {
       sourceSdkSessionId: 'pi-session-source',
+      model: 'chatgpt/gpt-5.5',
+      providerId: 'openai',
       upToMessageId: undefined,
       tailTurnsToDrop: 2,
       title: '[Fork] Project A',
@@ -1841,6 +1845,8 @@ describe('forkSessionAtMessage', () => {
 
     expect(forkSdkSessionMock).toHaveBeenCalledWith('claude-code', {
       sourceSdkSessionId: 'parked-claude-session',
+      model: 'claude-sonnet-4-6',
+      providerId: null,
       upToMessageId: 'historical-claude-uuid',
       title: '[Fork] Project A',
       workingDir: '/work',
@@ -2346,6 +2352,8 @@ describe('forkSessionAtMessage', () => {
     // 而不是 target 本身 (turn 中间截断会留 dangling tool_use)。
     expect(forkSdkSessionMock).toHaveBeenCalledWith('claude-code', {
       sourceSdkSessionId: 'sdk-uuid-source',
+      model: 'claude-sonnet-4-6',
+      providerId: 'xd',
       upToMessageId: 'uuid-a2',
       title: '[Fork] Project A',
       workingDir: '/work',
@@ -2404,6 +2412,8 @@ describe('forkSessionAtMessage', () => {
 
     expect(forkSdkSessionMock).toHaveBeenCalledWith('claude-code', {
       sourceSdkSessionId: 'sdk-uuid-source',
+      model: 'claude-sonnet-4-6',
+      providerId: 'xd',
       upToMessageId: '4652fd61-a4df-411a-87e7-cdc0b311cc39',
       title: '[Fork] Project A',
       workingDir: '/work',
@@ -2473,6 +2483,8 @@ describe('forkSessionAtMessage', () => {
 
     expect(forkSdkSessionMock).toHaveBeenCalledWith('claude-code', {
       sourceSdkSessionId: 'sdk-uuid-source',
+      model: 'claude-sonnet-4-6',
+      providerId: 'xd',
       upToMessageId: 'real-imported-assistant-uuid',
       title: '[Fork] Project A',
       workingDir: '/work',
@@ -2531,6 +2543,8 @@ describe('forkSessionAtMessage', () => {
 
     expect(forkSdkSessionMock).toHaveBeenCalledWith('claude-code', {
       sourceSdkSessionId: 'sdk-uuid-source',
+      model: 'claude-sonnet-4-6',
+      providerId: 'xd',
       upToMessageId: 'isolated-real-assistant-uuid',
       title: '[Fork] Project A',
       workingDir: '/work',
@@ -2585,6 +2599,8 @@ describe('forkSessionAtMessage', () => {
 
     expect(forkSdkSessionMock).toHaveBeenCalledWith('claude-code', {
       sourceSdkSessionId: 'sdk-uuid-source',
+      model: 'claude-sonnet-4-6',
+      providerId: 'xd',
       upToMessageId: 'top-level-assistant-uuid',
       title: '[Fork] Project A',
       workingDir: '/work',
@@ -2618,6 +2634,8 @@ describe('forkSessionAtMessage', () => {
 
     expect(forkSdkSessionMock).toHaveBeenCalledWith('claude-code', {
       sourceSdkSessionId: 'sdk-uuid-source',
+      model: 'claude-sonnet-4-6',
+      providerId: 'xd',
       upToMessageId: 'uuid-last',
       title: '[Fork] Project A',
       workingDir: '/work',

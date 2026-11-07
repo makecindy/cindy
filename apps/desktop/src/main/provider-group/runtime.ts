@@ -152,6 +152,7 @@ function runtimeForActiveOwner(): OwnerRuntime {
     return providerGroupCodexUsageSnapshot({
       appServerBuckets: limits?.appServerBuckets ?? account?.appServerBuckets,
       webSnapshot: account?.webSnapshot,
+      nativeAccountPool: account?.nativeAccountPool || limits?.nativeAccountPool,
     });
   };
   const directory = createProviderGroupDirectory({

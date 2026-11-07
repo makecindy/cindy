@@ -931,8 +931,9 @@ function DetailHeader({
 // Anthropic —— OAuth(Claude.ai 订阅),复用 maker.claudeOAuth*。
 // ---------------------------------------------------------------------------
 
-function NativeSubscriptionHeader({ provider, onChanged, children, providerId }: {
+function NativeSubscriptionHeader({ provider, onChanged, children, providerId, onPoolConnectionChange }: {
   provider?: ProviderView; onChanged: () => void; children?: ReactNode; providerId: SubscriptionProvider;
+  onPoolConnectionChange?: (connected: boolean | null) => void;
 }) {
   const { t } = useTranslation();
   const { confirm } = useConfirmDialog();
@@ -944,16 +945,19 @@ function NativeSubscriptionHeader({ provider, onChanged, children, providerId }:
     let current = true;
     const refresh = () => void window.electronAPI.subscriptionAccounts.command({ action: 'read', providerId })
       .then(view => { if (current) {
+        const connected = view.accounts.some(account => account.status === 'ready' || account.status === 'limited');
         setPooled(view.configured);
-        setPoolConnected(view.accounts.some(account => account.status === 'ready' || account.status === 'limited'));
+        setPoolConnected(connected);
+        onPoolConnectionChange?.(view.configured ? connected : null);
       } }).catch(() => {});
     refresh();
     const off = window.electronAPI.subscriptionAccounts.onChanged(event => { if (event.providerId === providerId) refresh(); });
     return () => {
       current = false; off();
+      onPoolConnectionChange?.(null);
       if (login.current) void window.electronAPI.subscriptionAccounts.command({ action: 'cancel', providerId, loginKey: login.current }).catch(() => {});
     };
-  }, [providerId]);
+  }, [providerId, onPoolConnectionChange]);
   if (!pooled) return providerId === 'anthropic'
     ? <AnthropicHeader provider={provider} onChanged={onChanged}>{children}</AnthropicHeader>
     : <OpenAiHeader provider={provider} onChanged={onChanged}>{children}</OpenAiHeader>;
@@ -2507,6 +2511,10 @@ export function ProvidersSection() {
   // OpenAI 的 reconnect-required 是 useCodexAuth 独有状态(目录 connected 此时为 false):
   // 该状态下 OpenAI 行必须留在左栏,否则「重新连接」入口不可达,用户被迫从向导重发现。
   const codexAuth = useCodexAuth();
+  const [openaiPoolState, setOpenaiPoolState] = useState<{ dataOwnerId: string | null; connected: boolean } | null>(null);
+  const onOpenaiPoolConnectionChange = useCallback((connected: boolean | null) => {
+    setOpenaiPoolState(connected === null ? null : { dataOwnerId, connected });
+  }, [dataOwnerId]);
   const remoteControlEnabled = useRemoteControlEnabled();
   // 供应商分享：入口提示点读待审批申请与待处理的转分享请求；管理页是本页的子页面(返回回到供应商详情)。
   // 带 hostDeviceId 的申请在另一台电脑的分享里(那台的供应商 id 可能与本机重名)，只计入那台的组入口。
@@ -2946,10 +2954,12 @@ export function ProvidersSection() {
     return selected?.id === 'openai'
       ? {
           ...selected,
-          connected: selected.connected || isChatGptConnectionConnected(codexAuth.state, selected.connected),
+          connected: openaiPoolState && openaiPoolState.dataOwnerId === dataOwnerId
+            ? openaiPoolState.connected
+            : isChatGptConnectionConnected(codexAuth.state, selected.connected),
         }
       : selected;
-  }, [selectedId, listProviders, codexAuth.state]);
+  }, [selectedId, listProviders, codexAuth.state, openaiPoolState, dataOwnerId]);
 
   const handleDelete = useCallback(
     async (p: ProviderView) => {
@@ -3132,7 +3142,7 @@ export function ProvidersSection() {
     if (p.id === 'anthropic')
       return <NativeSubscriptionHeader key={p.id} children={children} provider={p} providerId="anthropic" onChanged={refetch} />;
     if (p.id === 'openai')
-      return <NativeSubscriptionHeader key={p.id} children={children} provider={p} providerId="openai" onChanged={refetch} />;
+      return <NativeSubscriptionHeader key={p.id} children={children} provider={p} providerId="openai" onChanged={refetch} onPoolConnectionChange={onOpenaiPoolConnectionChange} />;
     if (p.id === 'xai') return <XaiHeader children={children} provider={p} onChanged={refetch} />;
     if (p.source === 'builtin' && p.auth.method === 'apiKey' && isBuiltinApiKeyProviderId(p.id)) {
       return (

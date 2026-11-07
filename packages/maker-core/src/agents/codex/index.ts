@@ -15100,7 +15100,9 @@ assertRouteCurrent();
       }
       // Source history inspection must not depend on the credentials we are leaving.
       let preparedSourcePath = opts.stripEncryptedReasoning && !guestCodexHome
-        ? await this.deps.prepareCodexResumeSession?.(opts.sourceSdkSessionId, nativeSubscriptionAccount ? { codexHome: nativeSubscriptionAccount.configDir } : undefined)
+        ? nativeSubscriptionAccount
+          ? await this.deps.prepareCodexResumeSession?.(opts.sourceSdkSessionId, { codexHome: nativeSubscriptionAccount.configDir })
+          : await this.deps.prepareCodexResumeSession?.(opts.sourceSdkSessionId)
         : undefined;
       let historyChecked = false;
       if (opts.stripEncryptedReasoning && (preparedSourcePath || this.codexHome)) {
@@ -15156,7 +15158,9 @@ assertRouteCurrent();
             // fork app-server cannot resolve a freshly imported thread.
             // A first host may have just created the managed state DB needed for imports.
             stage = 'source-prepare';
-            if (!guestCodexHome) preparedSourcePath ??= await this.deps.prepareCodexResumeSession?.(opts.sourceSdkSessionId, nativeSubscriptionAccount ? { codexHome: forkCodexHome ?? nativeSubscriptionAccount.configDir } : undefined);
+            if (!guestCodexHome) preparedSourcePath ??= nativeSubscriptionAccount
+              ? await this.deps.prepareCodexResumeSession?.(opts.sourceSdkSessionId, { codexHome: forkCodexHome ?? nativeSubscriptionAccount.configDir })
+              : await this.deps.prepareCodexResumeSession?.(opts.sourceSdkSessionId);
             if (opts.stripEncryptedReasoning && !historyChecked) {
               // Check before allocating a child: indexed native history must go through
               // Cindy's handoff recovery, never a file rewrite that invalidates Codex's DB.

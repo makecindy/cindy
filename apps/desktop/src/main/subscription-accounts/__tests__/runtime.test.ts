@@ -5,9 +5,11 @@ import type {
 } from '../../../shared/subscriptionAccounts.js';
 import {
   NATIVE_SUBSCRIPTION_ACCOUNT,
+  AgentStartupStoppedError,
   type BaseAgent,
   type AgentSessionHandle,
   type StartSessionOptions,
+  type ForkSdkSessionOptions,
 } from '@cindy/maker-core';
 const h = vi.hoisted(() => ({
   owner: 'owner-a:1',
@@ -48,7 +50,7 @@ vi.mock('../store.js', () => ({
     accounts: [{ id: 'default', paused: false, limit: 4, weight: 1 }],
   }),
   accountDirectory: (p: string, id: string) => [p, id].join('/'),
-  accountOwnerPrefix: () => h.owner,
+  accountOwnerPrefix: () => h.owner.replaceAll(':', '-'),
   readAccountBinding: (key: string) => h.bindings.get(key),
   writeAccountBindings: async (
     keys: string[],
@@ -75,7 +77,9 @@ import {
   disconnectSubscriptionPool,
   readSubscriptionPoolUsage,
   runSubscriptionAccountCommand,
+  observeSubscriptionAccountUsage,
 } from '../runtime.js';
+import { providerGroupMemberUsageState } from '../../provider-group/usage.js';
 import { withSubscriptionAccounts } from '../agent.js';
 import { getSessionSubscriptionAccount } from '../session.js';
 const account = (id: string) => ({ id, paused: false, limit: 1, weight: 1 });
@@ -89,17 +93,93 @@ beforeEach(() => {
   h.read.mockReset().mockResolvedValue({ authenticated: true, identity: 'account' });
   h.usage.mockReset().mockResolvedValue({});
   h.login.mockReset().mockResolvedValue(undefined);
-  h.legacyRead
-    .mockReset()
-    .mockResolvedValue({
-      authenticated: true,
-      identity: 'original@example.com',
-      authSource: 'oauth',
-    });
+  h.legacyRead.mockReset().mockResolvedValue({
+    authenticated: true,
+    identity: 'original@example.com',
+    authSource: 'oauth',
+  });
   h.legacyLogin.mockReset().mockResolvedValue(undefined);
 });
 
 describe('native account assignment on the executing computer', () => {
+  // PR review: selection happens before any process exists, so Maker must release startup resources.
+  it('classifies an unavailable pool as a stopped startup without calling the native agent', async () => {
+    h.pools.anthropic!.disconnected = true;
+    const start = vi.fn();
+    const agent = withSubscriptionAccounts({
+      kind: 'claude-code',
+      startSession: start,
+    } as unknown as BaseAgent);
+    await expect(
+      agent.startSession({ providerId: 'anthropic' } as StartSessionOptions),
+    ).rejects.toBeInstanceOf(AgentStartupStoppedError);
+    expect(start).not.toHaveBeenCalled();
+  });
+  it('forks and binds a secondary Claude profile without moving to the default account', async () => {
+    h.bindings.set('native:source-second', { providerId: 'anthropic', accountId: 'second' });
+    const fork = vi.fn(async (options: ForkSdkSessionOptions) => {
+      expect(options[NATIVE_SUBSCRIPTION_ACCOUNT]?.configDir).toBe('anthropic/second');
+      return { newSdkSessionId: 'fork-second', uuidMap: new Map() };
+    });
+    const agent = withSubscriptionAccounts({
+      kind: 'claude-code',
+      forkSdkSession: fork,
+    } as unknown as BaseAgent);
+    await agent.forkSdkSession({
+      providerId: 'anthropic',
+      sourceSdkSessionId: 'source-second',
+      upToMessageId: 'message-second',
+      workingDir: '/work',
+    });
+    expect(fork).toHaveBeenCalledOnce();
+    expect(h.bindings.get('native:fork-second')?.accountId).toBe('second');
+  });
+  it('merges direct Codex quota events by bucket and keeps exhausted pools ineligible for every engine', async () => {
+    h.pools.openai = { strategy: 'order', accounts: [account('default')] };
+    const window = (usedPercent: number) => ({
+      usedPercent,
+      windowMinutes: 300,
+      resetsAt: Date.now() / 1000 + 7200,
+    });
+    h.usage.mockResolvedValue({
+      codexUsage: {
+        appServerBuckets: {
+          codex: {
+            limitId: 'codex',
+            limitName: 'Codex',
+            updatedAt: Date.now(),
+            primary: window(10),
+            secondary: null,
+          },
+          spark: {
+            limitId: 'spark',
+            limitName: 'special-model',
+            updatedAt: Date.now(),
+            primary: window(20),
+            secondary: null,
+          },
+        },
+        webSnapshot: null,
+      },
+    });
+    const lease = await acquireSubscriptionAccount('openai', 'gpt-6', []);
+    observeSubscriptionAccountUsage(lease!.account, { limitId: 'codex', primary: window(100) });
+    const pooled = await readSubscriptionPoolUsage('openai');
+    expect(pooled?.codexUsage?.appServerBuckets?.spark.primary?.usedPercent).toBe(20);
+    expect(pooled?.codexUsage?.appServerBuckets?.codex.limitName).toBe('Codex');
+    for (const kind of ['codex', 'pi', 'claude-code']) {
+      expect(
+        providerGroupMemberUsageState(pooled!, 'chatgpt/gpt-6', Date.now(), kind).limited,
+      ).toBe(true);
+      expect(
+        providerGroupMemberUsageState(pooled!, 'chatgpt/special-model', Date.now(), kind).limited,
+      ).toBe(false);
+    }
+    await expect(acquireSubscriptionAccount('openai', 'gpt-6', [])).rejects.toThrow(
+      'No subscription account',
+    );
+    lease?.release();
+  });
   // Upgrade regression: existing authorizations must not be rewritten by installing or opening the new UI.
   it('passes existing single-account sessions through unchanged until a pool is configured', async () => {
     h.pools = {};

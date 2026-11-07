@@ -1,5 +1,6 @@
 import {
   NATIVE_SUBSCRIPTION_ACCOUNT,
+  AgentStartupStoppedError,
   isTerminalTurnEvent,
   type BaseAgent,
   type AgentSessionHandle,
@@ -165,22 +166,30 @@ export function withSubscriptionAccounts<T extends BaseAgent>(agent: T): T {
         };
       if (property === 'startSession')
         return async (options: StartSessionOptions) => {
-          const provider = providerFor(target, options);
           const startLegacy = async () =>
             guardAccountSwitch(await target.startSession(options), target, options);
-          if (!provider || !readPool(provider)) return startLegacy();
           const keys = [
             options.sessionId ? `task:${options.sessionId}` : '',
             options.resumeSessionId ? `native:${options.resumeSessionId}` : '',
           ].filter(Boolean);
-          if (options.resumeSessionId && !keys.some((key) => readAccountBinding(key, provider))) {
-            // Legacy Codex may use Cindy's private home, not ~/.codex. Keep that route.
-            if (provider === 'openai') return startLegacy();
-            await writeAccountBindings(keys, provider, 'default');
+          let lease: SubscriptionAccountLease | null = null;
+          let unregister = () => {};
+          try {
+            const provider = providerFor(target, options);
+            if (!provider || !readPool(provider)) return startLegacy();
+            if (options.resumeSessionId && !keys.some((key) => readAccountBinding(key, provider))) {
+              // Legacy Codex may use Cindy's private home, not ~/.codex. Keep that route.
+              if (provider === 'openai') return startLegacy();
+              await writeAccountBindings(keys, provider, 'default');
+            }
+            lease = await acquireSubscriptionAccount(provider, options.model, keys);
+            if (!lease) return startLegacy();
+            unregister = registerSessionSubscriptionAccount(options.sessionId, lease.account);
+          } catch (error) {
+            lease?.release();
+            // No underlying runtime has been started; Maker may release its worktree lease.
+            throw new AgentStartupStoppedError(error);
           }
-          const lease = await acquireSubscriptionAccount(provider, options.model, keys);
-          if (!lease) return startLegacy();
-          const unregister = registerSessionSubscriptionAccount(options.sessionId, lease.account);
           let handle: AgentSessionHandle | undefined;
           try {
             handle = await target.startSession({
@@ -192,7 +201,10 @@ export function withSubscriptionAccounts<T extends BaseAgent>(agent: T): T {
             return guardAccountSwitch(wrapHandle(handle, lease, unregister), target, options);
           } catch (error) {
             try {
-              await handle?.close();
+              if (handle) {
+                await handle.close();
+                throw new AgentStartupStoppedError(error);
+              }
             } finally {
               unregister();
               lease.release();

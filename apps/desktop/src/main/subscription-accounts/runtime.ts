@@ -12,6 +12,8 @@ import {
 import { pickProviderGroupMember } from '../provider-group/scheduler.js';
 import { providerGroupMemberUsageState } from '../provider-group/usage.js';
 import { providerGroupCodexUsageFromReads } from '../provider-group/usage.js';
+import { providerGroupCodexUsageSnapshot } from '../provider-group/usage.js';
+import { codexLimitBucketKey } from '@cindy/maker-shared/codex-usage-buckets';
 import {
   mergeClaudeSubscriptionUsageSnapshot,
   parseClaudeSdkRateLimitInfo,
@@ -156,6 +158,30 @@ export function observeSubscriptionAccountUsage(
   if (!cached) return;
   const provider = key.startsWith('anthropic:') ? 'anthropic' : 'openai';
   const incoming = provider === 'anthropic' ? parseClaudeSdkRateLimitInfo(raw, Date.now()) : null;
+  const codexEvent =
+    provider === 'openai' && raw && typeof raw === 'object' && !Array.isArray(raw)
+      ? (raw as Record<string, unknown>)
+      : null;
+  const previousCodex = cached.usage?.codexUsage;
+  const bucketKey = codexLimitBucketKey({
+    limitId: typeof codexEvent?.limitId === 'string' ? codexEvent.limitId : null,
+  });
+  // Notifications contain one bucket directly. Merge it before sanitizing, retaining
+  // omitted fields and unrelated model buckets instead of treating it as an RPC reply.
+  const codexUsage =
+    codexEvent && ('primary' in codexEvent || 'secondary' in codexEvent)
+      ? providerGroupCodexUsageSnapshot({
+          appServerBuckets: {
+            ...previousCodex?.appServerBuckets,
+            [bucketKey]: {
+              ...previousCodex?.appServerBuckets?.[bucketKey],
+              ...codexEvent,
+              updatedAt: Date.now(),
+            },
+          },
+          webSnapshot: previousCodex?.webSnapshot,
+        })
+      : previousCodex;
   const usage: Usage =
     provider === 'anthropic'
       ? {
@@ -163,7 +189,7 @@ export function observeSubscriptionAccountUsage(
             ? mergeClaudeSubscriptionUsageSnapshot(cached.usage?.claudeUsage ?? null, incoming)
             : cached.usage?.claudeUsage,
         }
-      : { codexUsage: providerGroupCodexUsageFromReads(null, raw, Date.now()) };
+      : { codexUsage };
   state.cache.set(key, { ...cached, usage, at: Date.now() });
   changed(provider);
 }
@@ -239,7 +265,8 @@ export function hasConnectedSubscriptionPool(provider: SubscriptionProvider): bo
   return pool.accounts.some((a) => state.cache.get(keyOf(provider, a.id))?.auth.authenticated);
 }
 export async function disconnectSubscriptionPool(provider: SubscriptionProvider): Promise<void> {
-  if (!readPool(provider)) return;
+  const pool = readPool(provider);
+  if (!pool || pool.disconnected) return;
   const state = currentRuntime();
   for (const [key, login] of state.logins) if (key.startsWith(provider + ':')) login.abort.abort();
   await updatePool(provider, (pool) => ({ ...pool, disconnected: true }));
@@ -336,7 +363,13 @@ export async function readSubscriptionPoolUsage(
       return bucket ? [[key, bucket]] : [];
     }),
   );
-  return { codexUsage: { appServerBuckets: buckets, webSnapshot: null } };
+  return {
+    codexUsage: {
+      appServerBuckets: buckets,
+      webSnapshot: buckets.codex ?? buckets.__default__ ?? null,
+      nativeAccountPool: true,
+    },
+  };
 }
 export async function readSubscriptionPool(
   provider: SubscriptionProvider,

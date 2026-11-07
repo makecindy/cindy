@@ -1006,7 +1006,8 @@ export async function forkSessionAtMessage(
     const sourceSdkSessionId = forkSource.sdkSessionId;
     const forkOptions = {
       sourceSdkSessionId,
-      ...(isCodex ? { model: forkSource.model, providerId: forkSource.providerId } : {}),
+      model: forkSource.model,
+      providerId: forkSource.providerId,
       upToMessageId: assistantUuid,
       ...(lastTurnId ? { lastTurnId } : {}),
       ...(forkAtTimestampMs !== undefined ? { forkAtTimestampMs } : {}),

@@ -2326,10 +2326,16 @@ export class DesktopCodexAuthAdapter implements AuthAdapter {
     const operation = intent.devReadOnly
       ? this.runDevReadOnlyLogout(intent)
       : this.runLogout(intent);
-    const run = operation.finally(() => {
-      if (this.logoutOperation === run) {
-        this.logoutOperation = null;
-        this.logoutIntent = null;
+    const run = operation.finally(async () => {
+      try {
+        // An explicit logout can arrive while invalidation cleanup is already waiting.
+        if (intent.explicitRequested && this.isCodexDisconnectCurrent(intent))
+          await disconnectSubscriptionPool('openai');
+      } finally {
+        if (this.logoutOperation === run) {
+          this.logoutOperation = null;
+          this.logoutIntent = null;
+        }
       }
     });
     this.logoutOperation = run;
@@ -2338,12 +2344,13 @@ export class DesktopCodexAuthAdapter implements AuthAdapter {
 
   private async runLogout(intent: CodexDisconnectIntent): Promise<void> {
     if (!this.isCodexDisconnectCurrent(intent)) return;
+    // Capture before any await: a later login waits on this logout and must not be awaited here.
+    const pendingLogin = this.pendingLogin?.promise;
+    if (pendingLogin) this.cancelLogin();
     if (intent.explicitRequested) await disconnectSubscriptionPool('openai');
     this.ensureInvalidationMarkerLoaded();
     // 登出与在途登录串行：先取消并等它完全收口，防迟到的 auth.json 在登出后复活账号。
-    const pendingLogin = this.pendingLogin?.promise;
     if (pendingLogin) {
-      this.cancelLogin();
       await pendingLogin.catch(() => undefined);
     }
     if (!this.isCodexDisconnectCurrent(intent)) return;
@@ -2352,10 +2359,10 @@ export class DesktopCodexAuthAdapter implements AuthAdapter {
 
   private async runDevReadOnlyLogout(intent: CodexDisconnectIntent): Promise<void> {
     if (!this.isCodexDisconnectCurrent(intent)) return;
-    if (intent.explicitRequested) await disconnectSubscriptionPool('openai');
     const pendingLogin = this.pendingLogin?.promise;
+    if (pendingLogin) this.cancelLogin();
+    if (intent.explicitRequested) await disconnectSubscriptionPool('openai');
     if (pendingLogin) {
-      this.cancelLogin();
       await pendingLogin.catch(() => undefined);
     }
     if (!this.isCodexDisconnectCurrent(intent)) return;
