@@ -22,6 +22,7 @@ const mocks = vi.hoisted(() => ({
   running: new Map<string, { isRunning: boolean }>(),
   chat: { historyLoaded: true, messages: [] as Msg[] },
   chatListeners: new Set<() => void>(),
+  eligible: true,
   attached: false,
   schedules: [] as string[],
   schedulesKnown: true,
@@ -29,6 +30,10 @@ const mocks = vi.hoisted(() => ({
   routeCurrent: false,
   draft: false,
   toastSuccess: vi.fn(),
+}));
+
+vi.mock('@/contexts/PrRefsContext', () => ({
+  useTaskPrArchiveEligibility: () => ({ eligible: mocks.eligible, checkEligibility: () => mocks.eligible }),
 }));
 
 vi.mock('react-i18next', () => ({ useTranslation: () => ({ t: (key: string) => key }) }));
@@ -66,7 +71,7 @@ describe('useGhostCardTaskArchive', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     session = { id: `task-${++n}`, title: '#12 Fix it', status: 'active' } as Session;
-    Object.assign(mocks, { attached: false, schedules: [], schedulesKnown: true, preflight: 'clean', routeCurrent: false, draft: false });
+    Object.assign(mocks, { eligible: true, attached: false, schedules: [], schedulesKnown: true, preflight: 'clean', routeCurrent: false, draft: false });
     mocks.chat = { historyLoaded: true, messages: [{ role: 'user', clientId: 'u1' }] };
     mocks.running.clear();
     mocks.chatListeners.clear();
@@ -96,6 +101,16 @@ describe('useGhostCardTaskArchive', () => {
     expect(mocks.unarchiveSession).toHaveBeenCalledWith(session.id);
   });
 
+  // Regression: refs/statuses can change while the asynchronous preflight is running.
+  it('rechecks all PRs after the archive preflight', async () => {
+    mocks.runSessionAction.mockImplementation(async (_id, _action, options) => {
+      mocks.eligible = false;
+      return await options.prepareArchive(() => true) ? true : undefined;
+    });
+    await visit();
+    expect(mocks.toastSuccess).not.toHaveBeenCalled();
+  });
+
   it('still archives when only automations or plugins wrote, or older history loads first', async () => {
     mocks.chat = { historyLoaded: false, messages: [] };
     await visit({ during: () => {
@@ -118,6 +133,7 @@ describe('useGhostCardTaskArchive', () => {
   });
 
   it.each([
+    ['another PR is unfinished or unknown', () => { mocks.eligible = false; }],
     ['dirty worktree', () => { mocks.preflight = 'dirty'; }],
     ['unknown worktree state', () => { mocks.preflight = 'unknown'; }],
     ['bound automation', () => { mocks.schedules = ['PR #12']; }],
