@@ -646,7 +646,7 @@ describe('收藏 / 全部聚合来源，供应商只筛自己的收藏', () => {
   });
 });
 
-describe('Cindy AI(xd)第二行：保留分享与电脑来源，原简介行显示供应商', () => {
+describe('Cindy AI(xd)来源行：只有本机自己的 Cindy AI 保留简介(#6110)', () => {
   const DESCRIPTION = '用于内容写作、编程与问题分析。';
   /** 分享者真实电脑名：界面任何位置都不能出现(provider-sharing.md §6)。 */
   const HOST_DEVICE_NAME = 'Magi-Secret-MacBook-Pro';
@@ -671,12 +671,9 @@ describe('Cindy AI(xd)第二行：保留分享与电脑来源，原简介行显�
   const sourceOf = (row: HTMLElement) => row.querySelector('[data-model-source-details]')?.textContent ?? null;
   const rowsOf = (scope: HTMLElement, name: string) =>
     within(scope).getAllByText(name).map((node) => node.closest('[data-unified-anchor]') as HTMLElement);
-  const expectSupplier = (row: HTMLElement) => {
+  const expectDescription = (row: HTMLElement) => {
     expect(sourceOf(row)).toBeNull();
-    const supplier = within(row).getByText('Cindy AI');
-    expect(supplier.getAttribute('title')).toBe('Cindy AI');
-    expect(supplier.className).toContain('truncate');
-    expect(within(row).queryByText(DESCRIPTION)).toBeNull();
+    expect(within(row).getByText(DESCRIPTION)).toBeTruthy();
   };
   const expectSource = (row: HTMLElement, label: string) => {
     expect(sourceOf(row)).toBe(label);
@@ -715,24 +712,24 @@ describe('Cindy AI(xd)第二行：保留分享与电脑来源，原简介行显�
     Object.assign(catalogs.byDevice, saved.byDevice);
   });
 
-  it.each(['favorites', 'all'])('「%s」：分享来的与其他电脑上的 Cindy AI 显示来源，本机 Cindy AI 原描述行显示供应商', async (rail) => {
+  it.each(['favorites', 'all'])('「%s」：分享来的与其他电脑上的 Cindy AI 显示来源，本机 Cindy AI 保留简介', async (rail) => {
     renderPanel({ devices: xdDevices });
     await clickRail(rail);
     expectSource(rowOf(favoritesGroup(), SHARED), SHARED_LABEL);
     expectSource(rowOf(favoritesGroup(), REMOTE), REMOTE_LABEL);
-    // 本机 Cindy AI：收藏区与「全部」均复用原描述容器显示供应商。
-    for (const row of rowsOf(list(), LOCAL)) expectSupplier(row);
+    // 本机 Cindy AI：收藏区与「全部」里的供应商分组都只显示简介。
+    for (const row of rowsOf(list(), LOCAL)) expectDescription(row);
     expect(document.body.textContent).not.toContain(HOST_DEVICE_NAME);
   });
 
-  it('单供应商分栏复用原描述行显示供应商', async () => {
+  it('单供应商分栏保持现有简介写法', async () => {
     renderPanel({ devices: xdDevices });
     await clickRail('remote:share:magi:xd');
-    for (const row of rowsOf(list(), SHARED)) expectSupplier(row);
+    for (const row of rowsOf(list(), SHARED)) expectDescription(row);
     await clickRail('remote:device-c:xd');
-    for (const row of rowsOf(list(), REMOTE)) expectSupplier(row);
+    for (const row of rowsOf(list(), REMOTE)) expectDescription(row);
     await clickRail('provider:xd');
-    for (const row of rowsOf(list(), LOCAL)) expectSupplier(row);
+    for (const row of rowsOf(list(), LOCAL)) expectDescription(row);
   });
 
   it('定宽测量行与可见行同一判断', async () => {
@@ -742,7 +739,7 @@ describe('Cindy AI(xd)第二行：保留分享与电脑来源，原简介行显�
     expect(sizer).toBeTruthy();
     for (const row of rowsOf(sizer, SHARED)) expectSource(row, SHARED_LABEL);
     for (const row of rowsOf(sizer, REMOTE)) expectSource(row, REMOTE_LABEL);
-    for (const row of rowsOf(sizer, LOCAL)) expectSupplier(row);
+    for (const row of rowsOf(sizer, LOCAL)) expectDescription(row);
     expect(sizer.textContent).not.toContain(HOST_DEVICE_NAME);
   });
 
@@ -750,7 +747,7 @@ describe('Cindy AI(xd)第二行：保留分享与电脑来源，原简介行显�
     renderPanel({ devices: xdDevices });
     const sizer = () => document.querySelector('[data-width-sizer]') as HTMLElement;
     await clickRail('remote:share:magi:xd');
-    for (const row of rowsOf(list(), SHARED)) expectSupplier(row);
+    for (const row of rowsOf(list(), SHARED)) expectDescription(row);
     for (const row of rowsOf(sizer(), SHARED)) expectSource(row, SHARED_LABEL);
     await clickRail('remote:device-c:xd');
     for (const row of rowsOf(sizer(), REMOTE)) expectSource(row, REMOTE_LABEL);
@@ -777,7 +774,7 @@ describe('Cindy AI(xd)第二行：保留分享与电脑来源，原简介行显�
     expect(document.body.textContent).not.toContain(HOST_DEVICE_NAME);
   });
 
-  it('远程控制被控电脑时，那台自己的 Cindy AI 仍按任务所在电脑的目录显示供应商', async () => {
+  it('远程控制被控电脑时，那台自己的 Cindy AI 仍按任务所在电脑的目录显示简介', async () => {
     catalogs.byDevice['device-b'] = [xdProvider([['glm-5.3-flash', LOCAL]])];
     render(
       React.createElement(ModelSelectorContent, {
@@ -793,6 +790,6 @@ describe('Cindy AI(xd)第二行：保留分享与电脑来源，原简介行显�
       }),
     );
     await act(async () => {});
-    for (const row of rowsOf(list(), LOCAL)) expectSupplier(row);
+    for (const row of rowsOf(list(), LOCAL)) expectDescription(row);
   });
 });

@@ -30,6 +30,29 @@ function props(modelId = 'gpt-5.5', source = 'Supplier A') {
 }
 
 describe('supplier text occupies only the existing model second line', () => {
+  it.each(['xd', 'openai', 'custom-provider', 'magpie-row'])(
+    'keeps the original description for %s without confirmed Magpie provenance', (providerId) => {
+      const common = props();
+      delete common.entry.capabilities.pi!.discoveredSource;
+      common.entry.providerId = providerId;
+      common.providers[0].id = providerId;
+      common.anchor.providerId = providerId;
+      const result = render(<UnifiedModelRow {...common}/>);
+      const description = result.getByText('modelDescriptions.coding');
+      expect(description.getAttribute('title')).toBe('modelDescriptions.coding');
+      expect(result.container.firstElementChild!.children).toHaveLength(2);
+      expect(result.container.querySelector('[data-model-source-details]')).toBeNull();
+    },
+  );
+  it('keeps a non-Magpie connection and account in an existing source row', () => {
+    const common = props();
+    delete common.entry.capabilities.pi!.discoveredSource;
+    common.entry.providerId = common.providers[0].id = common.anchor.providerId = 'openai';
+    common.providers[0].name = 'OpenAI';
+    const result = render(<UnifiedModelRow {...common} sourceLabel="OpenAI"/>);
+    expect(result.container.querySelector('[data-model-source-details]')!.textContent)
+      .toBe('OpenAI · account-A');
+  });
   it.each(['all', 'favorites', 'sizer'])('replaces the connection label in %s without removing account identity', () => {
     const common = props();
     const result = render(<UnifiedModelRow {...common} sourceLabel="Magpie"/>);

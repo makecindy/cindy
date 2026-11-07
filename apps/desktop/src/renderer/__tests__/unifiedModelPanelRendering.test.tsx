@@ -3633,15 +3633,14 @@ describe('统一面板 · 合并行与 wire id', () => {
     expect(getEffort.mock.calls).not.toContainEqual(['claude-code', 'openai', 'gpt-5.6']);
   });
 
-  it('全部模型保留来源，Cindy AI 在原描述行显示供应商', () => {
+  it('全部模型优先显示来源，Cindy AI 保留单行本地简介', () => {
     renderPanel();
     const row = rowFor('GPT-5.6');
     expect(row.textContent).not.toContain('A very long English');
     expect(row.querySelector('[data-model-source-details]')?.textContent).toBe('OpenAI');
     expect(within(row).queryByText('用于编写代码、排查错误与改进程序。')).toBeNull();
-    const desc = within(rowFor('GPT-5.5')).getByText('Cindy AI');
-    expect(within(rowFor('GPT-5.5')).queryByText('用于编写代码、排查错误与改进程序。')).toBeNull();
-    expect(desc.getAttribute('title')).toBe('Cindy AI');
+    const desc = within(rowFor('GPT-5.5')).getByText('用于编写代码、排查错误与改进程序。');
+    expect(desc.getAttribute('title')).toBe('用于编写代码、排查错误与改进程序。');
     expect(desc).toBeTruthy();
     expect(desc.className).toContain('truncate');
     const name = within(row).getByText('GPT-5.6');
@@ -3676,7 +3675,7 @@ describe('统一面板 · 合并行与 wire id', () => {
     }
   });
 
-  it('收藏保持来源第二行，单供应商分栏在原描述行显示供应商', () => {
+  it('收藏保持来源第二行，切到单供应商分栏恢复简介', () => {
     renderPanel();
     fireEvent.click(within(rowFor('GPT-5.6')).getByRole('button', { name: '存为收藏' }));
     fireEvent.click(document.querySelector('[data-rail-item="favorites"]')!);
@@ -3686,8 +3685,7 @@ describe('统一面板 · 合并行与 wire id', () => {
     for (const name of providerRows) {
       const row = name.closest('[data-unified-anchor]') as HTMLElement;
       expect(row.querySelector('[data-model-source-details]')).toBeNull();
-      expect(within(row).getByText('OpenAI')).toBeTruthy();
-      expect(within(row).queryByText('用于编写代码、排查错误与改进程序。')).toBeNull();
+      expect(within(row).getByText('用于编写代码、排查错误与改进程序。')).toBeTruthy();
     }
   });
 
