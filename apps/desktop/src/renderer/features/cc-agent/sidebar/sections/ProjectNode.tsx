@@ -130,6 +130,9 @@ export interface ProjectNodeProps {
   onBrowseFiles: (project: ProjectNodeData) => void;
   /** 右键菜单 → 归档该 project 下所有非执行中的 session（带二次确认）。 */
   onArchiveAll: (project: ProjectNodeData) => void;
+  manualSessionOrder?: readonly string[];
+  initialSessionOrder?: readonly string[];
+  onSessionReorder?: (orderedIds: string[]) => void;
 }
 
 export const ProjectNode = memo(function ProjectNode({
@@ -168,6 +171,9 @@ export const ProjectNode = memo(function ProjectNode({
   onImportFromTools,
   onBrowseFiles,
   onArchiveAll,
+  manualSessionOrder,
+  initialSessionOrder,
+  onSessionReorder,
 }: ProjectNodeProps) {
   return (
     // 两个 data 属性各自服务不同消费者:
@@ -205,9 +211,12 @@ export const ProjectNode = memo(function ProjectNode({
           data-no-drag: 拦截 SortableList 默认 filter,阻止"鼠标落在子 session 上按下"
           被父层 ProjectsSection SortableList 当成"拖动整个 ProjectNode"的起点。
           SessionItem 的 root 是 role="button" 而非 <button> 标签,默认 filter 拦不下来。 */}
+
       <SectionCollapse collapsed={isCollapsed} data-no-drag>
         {/* 组间留白由外层树的 4px gap 承担，组内任务保持 2px 间隔。 */}
+>>>>>>> origin/main
         <div
+          data-no-drag={onSessionReorder ? undefined : 'true'}
           className={cn(
             'flex flex-col gap-0.5 pt-0.5 pr-0',
             sessionVariant === 'list' ? 'pl-2' : 'pl-0',
@@ -235,6 +244,9 @@ export const ProjectNode = memo(function ProjectNode({
             onScheduleAction={onScheduleAction}
             indented
             sessionVariant={sessionVariant}
+            manualOrder={manualSessionOrder}
+            initialOrder={initialSessionOrder}
+            onReorder={onSessionReorder}
           />
         </div>
       </SectionCollapse>
