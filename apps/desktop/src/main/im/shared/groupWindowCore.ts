@@ -472,24 +472,38 @@ export async function assembleGroupWindowContext(args: {
 
   const rows = [...primaryRows, ...fallbackRows].sort((a, b) => a.id - b.id);
   const maxId = rows.reduce((max, row) => Math.max(max, row.id), cursor);
-  const selected = selectChannelHistory(rows.filter((row) =>
-    row.messageId !== args.triggerMessageId && row.messageId !== args.replyMessageId), {
-    id: (row) => row.messageId,
-    maxChars: CONTEXT_MAX_CHARS - (args.reservedChars ?? 0),
-    maxMessages: CHANNEL_HISTORY_MAX_MESSAGES - (args.reservedMessages ?? 0),
-    render: (row) => {
-      let fileNote = '';
-      if (row.fileNames !== null) {
-        try {
-          const names = JSON.parse(row.fileNames) as string[];
-          if (names.length) fileNote = ` (附件: ${names.join(', ')}；仅历史记录，是否提供文件以本轮实际附件为准)`;
-        } catch { fileNote = ' (附件信息不可读)'; }
-      }
-      return args.neutralize(`[${row.author}] ${formatImHistoryTime(row.sentAt)} ${truncateChannelHistory(row.text + fileNote)}`);
-    },
+  const eligible = (row: GroupWindowRow) =>
+    row.messageId !== args.triggerMessageId && row.messageId !== args.replyMessageId;
+  const render = (row: GroupWindowRow): string => {
+    let fileNote = '';
+    if (row.fileNames !== null) {
+      try {
+        const names = JSON.parse(row.fileNames) as string[];
+        if (names.length) fileNote = ` (附件: ${names.join(', ')}；仅历史记录，是否提供文件以本轮实际附件为准)`;
+      } catch { fileNote = ' (附件信息不可读)'; }
+    }
+    return args.neutralize(`[${row.author}] ${formatImHistoryTime(row.sentAt)} ${truncateChannelHistory(row.text + fileNote)}`);
+  };
+  const maxChars = CONTEXT_MAX_CHARS - (args.reservedChars ?? 0);
+  const maxMessages = CHANNEL_HISTORY_MAX_MESSAGES - (args.reservedMessages ?? 0);
+  // The primary lane owns the budget. Newer fallback-topic traffic must not
+  // displace General messages before the shared cursor commits past them.
+  const primary = selectChannelHistory(primaryRows.filter(eligible).sort((a, b) => a.id - b.id), {
+    id: (row) => row.messageId, render, maxChars, maxMessages,
   });
-  const picked = selected.entries.map(({ item, text }) => ({ ...item, line: text }));
-  const truncated = selected.truncated || primaryRows.length >= CONTEXT_READ_LIMIT || fallbackRows.length >= CONTEXT_READ_LIMIT;
+  const primaryIds = new Set(primaryRows.map((row) => row.messageId));
+  const fallback = selectChannelHistory(fallbackRows.filter((row) =>
+    eligible(row) && !primaryIds.has(row.messageId)).sort((a, b) => a.id - b.id), {
+    id: (row) => row.messageId,
+    render,
+    maxChars: maxChars - primary.entries.reduce((total, entry) => total + entry.text.length + 1, 0),
+    maxMessages: maxMessages - primary.entries.length,
+  });
+  const picked = [...primary.entries, ...fallback.entries]
+    .map(({ item, text }) => ({ ...item, line: text }))
+    .sort((a, b) => a.id - b.id);
+  const truncated = primary.truncated || fallback.truncated ||
+    primaryRows.length >= CONTEXT_READ_LIMIT || fallbackRows.length >= CONTEXT_READ_LIMIT;
   const lines = picked.map(({ line }) => line);
 
   const commit =
