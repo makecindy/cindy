@@ -1079,6 +1079,39 @@ describe('MakerScheduleRunner model selection', () => {
       expect(h.setModel).not.toHaveBeenCalled();
     });
 
+    // #6709, unit: exercise fire's idle path, absent from local identity cases.
+    // An execution-only subscription must not close local sessions or lose its provider.
+    it.each([false, true])('syncs the idle remote route and fails closed on rejection (%s)', async (reject) => {
+      const h = createSessionHarness();
+      Object.assign(h.session, {
+        agentKind: 'codex', agentDeviceId: 'execution-computer', model: 'remote-model',
+        codexProxyActive: true, codexThreadModelProviderId: 'cindy_openai',
+        requiresModelSwitchRebuild: vi.fn(async () => false),
+      });
+      mocks.getSessionProvider.mockReturnValue('remote-account');
+      if (reject) h.setModel.mockRejectedValue(new Error('provider unavailable'));
+      const checkModelRoute = vi.fn(async () => ({ kind: 'reject' as const, reason: 'explicit-source-unavailable' as const }));
+      const harness = createRunnerHarness(h, {
+        model: 'remote-model', workDir: '/work', sdkSessionId: 'remote-thread',
+      }, { sessionAlive: true, isAgentOnOtherDevice: async () => true, checkModelRoute,
+        resolveModelSelection: async (choice) => choice,
+      });
+      const schedule = baseSchedule({
+        agentKind: 'codex', model: 'remote-model', providerId: 'remote-account',
+        targetSessionId: 'scheduler-session',
+      });
+      if (reject) {
+        await expect(harness.runner.fire(schedule, createFireContext())).rejects.toThrow('remote route sync failed');
+        expect(h.send).not.toHaveBeenCalled();
+        expect(mocks.setSessionProvider).not.toHaveBeenCalled();
+      } else {
+        await fireToCompletion(harness, h, schedule);
+      }
+      expect(harness.closeSession).not.toHaveBeenCalled();
+      expect(checkModelRoute).not.toHaveBeenCalled();
+      expect(h.setModel).toHaveBeenCalledWith('remote-model', { providerId: 'remote-account' });
+    });
+
     it('复用 Codex 的 context Host 身份变化时先关闭旧 handle，再 cold resume', async () => {
       mocks.getSessionProvider.mockReturnValue('mygpt');
       const h = createSessionHarness();
