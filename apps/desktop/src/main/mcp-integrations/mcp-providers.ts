@@ -1,3 +1,5 @@
+import { createTeammateGroupHistoryProvider } from './teammateGroupHistory.js';
+import { authorizeGroupTool } from '../maker-ipc/botGroupToolAuthorization.js';
 import { getPiKernelManager } from '../agent-binaries/index.js';
 import { PiKernelError } from '../agent-binaries/pi-kernel-manager.js';
 import { manageAppSettings } from '../app-settings/sections.js';
@@ -84,6 +86,7 @@ import { readLspModeSettings } from '../maker-host/lsp-mode-store.js';
 import {
   tryGetBotDelegationService,
   tryGetBotDirectMessageService,
+  tryGetBotGroupHistoryReader,
   tryGetOrcaCollabService,
   isSessionInTurn,
   getTaskActionInputState,
@@ -107,7 +110,7 @@ import {
   getCurrentDbClientSnapshot,
 } from '../localDb/client/current.js';
 import { searchChatHistoryHybrid } from '../localDb/chatHistorySearch.js';
-import { resolveBotHistorySessionIds } from '../localDb/botHistoryScope.js';
+import { resolveBotHistoryScope, resolveBotHistorySessionIds } from '../localDb/botHistoryScope.js';
 import {
   listBotSkillsForSession,
   saveBotSkillForSession,
@@ -992,6 +995,10 @@ export function createDesktopMcpProviders(deps: DesktopMcpProvidersDeps): LiziMc
           };
         }
       },
+      teammateGroupHistory: createTeammateGroupHistoryProvider({
+        getDbClient, activeOwnerScopeKey, isAppSessionBoundaryPending, resolveBotHistoryScope,
+        authorizeGroupTool, getReader: tryGetBotGroupHistoryReader,
+      }),
       // 共用任务与账号有效性检查；操作权限由当前 Agent 的权限档处理。
       authorizeCall: authorizeTaskToolCall,
       resolveSurface: async ({ sessionId }) => {

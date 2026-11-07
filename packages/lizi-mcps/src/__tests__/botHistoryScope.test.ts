@@ -1,3 +1,4 @@
+import { registerTeammateGroupHistoryTool } from '../xdt-helper/teammate_group_history.js';
 import { describe, expect, it, vi } from 'vitest';
 
 import { XdtHelperToolRegistry } from '../lizi_xdtHelperToolRegistry.js';
@@ -96,5 +97,32 @@ describe('Bot history tool scope', () => {
     expect(listSessions).toHaveBeenCalledWith(
       expect.objectContaining({ sessionIds: ['bot-main', 'bot-route'] }),
     );
+  });
+});
+
+// Unit: group history has a different authority from task history. The registry
+// must use the host-owned caller and preserve incomplete search/error semantics.
+describe('companion group history tool', () => {
+  it('discovers group history and preserves an incomplete empty search page', async () => {
+    const registry = new XdtHelperToolRegistry();
+    const read = vi.fn(async () => ({ ok: true as const, data: { messages: [], hasMore: true, nextCursor: '80' } }));
+    registerTeammateGroupHistoryTool(registry, { read, getSessionContext: () => ({ sessionId: 'real-caller', agentKind: 'codex', workingDir: '/w' }) });
+    expect(registry.list('history').some(tool => tool.name === 'get_teammate_group_history')).toBe(true);
+    expect((await registry.call('get_teammate_group_history', { callerSessionId: 'spoofed' })).isError).toBe(true);
+    expect(read).not.toHaveBeenCalled();
+    const result = payload(await registry.call('get_teammate_group_history', {
+      group_id: '10000000-0000-4000-8000-000000000001', query: 'proposal', before: '100', limit: 5,
+    }));
+    expect(read).toHaveBeenCalledWith({ callerSessionId: 'real-caller', groupId: '10000000-0000-4000-8000-000000000001', query: 'proposal', before: '100', limit: 5 });
+    expect(result).toMatchObject({ ok: true, untrustedHistory: true, messages: [], hasMore: true, nextCursor: '80' });
+  });
+  it.each([undefined, 'caller'])('reports missing caller or revoked membership as an error (%s)', async sessionId => {
+    const registry = new XdtHelperToolRegistry();
+    const read = vi.fn(async () => ({ ok: false as const, errorCode: 'PERMISSION_DENIED' }));
+    registerTeammateGroupHistoryTool(registry, { read, getSessionContext: () => ({ sessionId, agentKind: 'codex', workingDir: '/w' }) });
+    const result = await registry.call('get_teammate_group_history', {});
+    expect(result.isError).toBe(true);
+    expect(payload(result)).toMatchObject({ ok: false, errorCode: sessionId ? 'PERMISSION_DENIED' : 'CALLER_UNAVAILABLE' });
+    if (!sessionId) expect(read).not.toHaveBeenCalled();
   });
 });
