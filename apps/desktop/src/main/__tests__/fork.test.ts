@@ -47,9 +47,13 @@ const UUID_V4_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9
 // maker.forkSdkSession 内部已包含 SDK 调用 + uuidMap 构建; 业务测试只关心其入参
 // (确认 fork 把对的 sourceSdkSessionId / upToMessageId / title / workingDir 传下去)
 // 和返回值 (uuidMap 决定 messages.agentMeta remap 结果)。
-const { ipcHandlers, sessionCreatedMock } = vi.hoisted(() => ({
+const { ipcHandlers, sessionCreatedMock, readBoundClaudeConfigDirMock } = vi.hoisted(() => ({
   ipcHandlers: new Map<string, (event: unknown, ...args: unknown[]) => Promise<unknown>>(),
   sessionCreatedMock: vi.fn(),
+  readBoundClaudeConfigDirMock: vi.fn<(_sdkSessionId: string) => string | undefined>(),
+}));
+vi.mock('../subscription-accounts/store.js', () => ({
+  readBoundClaudeConfigDir: readBoundClaudeConfigDirMock,
 }));
 vi.mock('electron', () => ({
   ipcMain: {
@@ -166,6 +170,7 @@ const tempDirs: string[] = [];
 const userDataDirRef: { current: string } = { current: '' };
 
 beforeEach(async () => {
+  readBoundClaudeConfigDirMock.mockReset();
   ipcHandlers.clear();
   sessionCreatedMock.mockClear();
   if (originalClaudeConfigDir === undefined) delete process.env.CLAUDE_CONFIG_DIR;
@@ -572,6 +577,8 @@ describe('forkSessionAtMessage', () => {
     // maker 入参: 用最近一条带 uuid 的 assistant
     expect(forkSdkSessionMock).toHaveBeenCalledWith('claude-code', {
       sourceSdkSessionId: 'sdk-uuid-source',
+      model: 'claude-sonnet-4-6',
+      providerId: 'xd',
       upToMessageId: 'sdk-msg-uuid-1',
       title: '[Fork] Project A',
       workingDir: '/work',
@@ -951,6 +958,8 @@ describe('forkSessionAtMessage', () => {
     expect(forkSdkSessionMock).toHaveBeenCalledOnce();
     expect(forkSdkSessionMock).toHaveBeenCalledWith('pi', {
       sourceSdkSessionId: 'pi-session-source',
+      model: 'chatgpt/gpt-5.5',
+      providerId: 'openai',
       upToMessageId: undefined,
       tailTurnsToDrop: 2,
       title: '[Fork] Project A',
@@ -1841,6 +1850,8 @@ describe('forkSessionAtMessage', () => {
 
     expect(forkSdkSessionMock).toHaveBeenCalledWith('claude-code', {
       sourceSdkSessionId: 'parked-claude-session',
+      model: 'claude-sonnet-4-6',
+      providerId: null,
       upToMessageId: 'historical-claude-uuid',
       title: '[Fork] Project A',
       workingDir: '/work',
@@ -2346,6 +2357,8 @@ describe('forkSessionAtMessage', () => {
     // 而不是 target 本身 (turn 中间截断会留 dangling tool_use)。
     expect(forkSdkSessionMock).toHaveBeenCalledWith('claude-code', {
       sourceSdkSessionId: 'sdk-uuid-source',
+      model: 'claude-sonnet-4-6',
+      providerId: 'xd',
       upToMessageId: 'uuid-a2',
       title: '[Fork] Project A',
       workingDir: '/work',
@@ -2366,7 +2379,9 @@ describe('forkSessionAtMessage', () => {
     expect(txArgs.newSession.forkedAtMessageId).toBe('asst-mid-cid');
   });
 
-  it('assistant target (claude): resolves synthetic block uuid through JSONL request id', async () => {
+  // Standard regression: the same synthetic reply must fork from a secondary profile,
+  // even when default/legacy homes have no copy of its native JSONL.
+  it.each([false, true])('assistant target (claude): resolves synthetic block uuid through JSONL request id (secondary=%s)', async (secondary) => {
     const jsonlPath = await writeClaudeJsonl('sdk-uuid-source', '/work', [
       {
         type: 'assistant',
@@ -2377,6 +2392,14 @@ describe('forkSessionAtMessage', () => {
       },
     ]);
     await fs.appendFile(jsonlPath, '{not-json\n');
+    if (secondary) {
+      const configDir = process.env.CLAUDE_CONFIG_DIR!;
+      readBoundClaudeConfigDirMock.mockImplementation((id) => id === 'sdk-uuid-source' ? configDir : undefined);
+      delete process.env.CLAUDE_CONFIG_DIR;
+      delete process.env.XDT_USER_DATA_DIR;
+      vi.spyOn(os, 'homedir').mockReturnValue(userDataDirRef.current);
+    }
+    const providerId = secondary ? 'anthropic' : 'xd';
     const target = makeMessageRow({
       id: 'asst-synthetic',
       clientId: 'asst-synthetic-cid',
@@ -2394,7 +2417,7 @@ describe('forkSessionAtMessage', () => {
       uuidMap: new Map([['4652fd61-a4df-411a-87e7-cdc0b311cc39', 'new-real-assistant-uuid']]),
     });
 
-    selectQueue.push([makeSourceRow()]);
+    selectQueue.push([makeSourceRow({ providerId })]);
     selectQueue.push([target]);
     selectQueue.push([]);
     selectQueue.push([priorUser, target]);
@@ -2404,6 +2427,8 @@ describe('forkSessionAtMessage', () => {
 
     expect(forkSdkSessionMock).toHaveBeenCalledWith('claude-code', {
       sourceSdkSessionId: 'sdk-uuid-source',
+      model: 'claude-sonnet-4-6',
+      providerId,
       upToMessageId: '4652fd61-a4df-411a-87e7-cdc0b311cc39',
       title: '[Fork] Project A',
       workingDir: '/work',
@@ -2473,6 +2498,8 @@ describe('forkSessionAtMessage', () => {
 
     expect(forkSdkSessionMock).toHaveBeenCalledWith('claude-code', {
       sourceSdkSessionId: 'sdk-uuid-source',
+      model: 'claude-sonnet-4-6',
+      providerId: 'xd',
       upToMessageId: 'real-imported-assistant-uuid',
       title: '[Fork] Project A',
       workingDir: '/work',
@@ -2531,6 +2558,8 @@ describe('forkSessionAtMessage', () => {
 
     expect(forkSdkSessionMock).toHaveBeenCalledWith('claude-code', {
       sourceSdkSessionId: 'sdk-uuid-source',
+      model: 'claude-sonnet-4-6',
+      providerId: 'xd',
       upToMessageId: 'isolated-real-assistant-uuid',
       title: '[Fork] Project A',
       workingDir: '/work',
@@ -2585,6 +2614,8 @@ describe('forkSessionAtMessage', () => {
 
     expect(forkSdkSessionMock).toHaveBeenCalledWith('claude-code', {
       sourceSdkSessionId: 'sdk-uuid-source',
+      model: 'claude-sonnet-4-6',
+      providerId: 'xd',
       upToMessageId: 'top-level-assistant-uuid',
       title: '[Fork] Project A',
       workingDir: '/work',
@@ -2618,6 +2649,8 @@ describe('forkSessionAtMessage', () => {
 
     expect(forkSdkSessionMock).toHaveBeenCalledWith('claude-code', {
       sourceSdkSessionId: 'sdk-uuid-source',
+      model: 'claude-sonnet-4-6',
+      providerId: 'xd',
       upToMessageId: 'uuid-last',
       title: '[Fork] Project A',
       workingDir: '/work',

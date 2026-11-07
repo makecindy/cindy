@@ -19697,5 +19697,23 @@
     "rendered": "View document",
     "wrap": "Wrap lines",
     "lineNumbers": "Line numbers"
+  },
+  "subscriptionAccounts": {
+    "title": "Subscription accounts",
+    "note": "The first account uses the CLI’s default folder. Additional accounts sign in separately. New tasks are balanced across accounts; existing tasks keep their account.",
+    "strategy": "Load balancing",
+    "add": "Add account",
+    "default": "Default folder",
+    "ready": "Connected",
+    "signedOut": "Sign in required",
+    "unavailable": "Status unavailable",
+    "limited": "Quota reached",
+    "remove": "Remove account",
+    "removeTitle": "Remove {{name}}?",
+    "removeDescription": "Cindy will stop assigning tasks to this account. Its CLI login and conversation history remain on this computer.",
+    "failed": "Could not read or update this account. Check the CLI login and connection, then try again.",
+    "used": "{{percent}}% used",
+    "directory": "Account folder",
+    "login": "Sign in"
   }
 }

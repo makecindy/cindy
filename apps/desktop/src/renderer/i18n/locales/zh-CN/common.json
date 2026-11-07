@@ -19625,5 +19625,23 @@
     "rendered": "查看文稿",
     "wrap": "自动换行",
     "lineNumbers": "行号"
+  },
+  "subscriptionAccounts": {
+    "title": "订阅账号",
+    "note": "首个账号沿用 CLI 默认目录，新增账号独立登录。新任务按策略分配，已有任务保留原账号。",
+    "strategy": "负载均衡",
+    "add": "添加账号",
+    "default": "默认目录",
+    "ready": "已连接",
+    "signedOut": "需要登录",
+    "unavailable": "暂时读不到状态",
+    "limited": "配额已用完",
+    "remove": "移出账号",
+    "removeTitle": "移出 {{name}}？",
+    "removeDescription": "Cindy 将不再给这个账号分配任务。CLI 登录和对话历史仍保留在本机。",
+    "failed": "无法读取或更新账号。请检查 CLI 登录和网络连接后重试。",
+    "used": "已用 {{percent}}%",
+    "directory": "账号目录",
+    "login": "登录"
   }
 }

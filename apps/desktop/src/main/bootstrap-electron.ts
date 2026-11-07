@@ -653,6 +653,8 @@ import { registerSharedTaskIpc } from './device-link/sharedTaskIpc.js';
 import { registerProviderShareIpc } from './device-link/providerShareRuntime.js';
 import { registerSelfHostedRelayIpc } from './device-link/selfHostedRelayRuntime.js';
 import { registerProviderGroupIpc } from './provider-group/ipc.js';
+import { registerSubscriptionAccountsIpc } from './subscription-accounts/ipc.js';
+import { attachDefaultSubscriptionPool, disconnectSubscriptionPool } from './subscription-accounts/runtime.js';
 import { registerProviderGroupRemoteHandler } from './provider-group/remoteRegistration.js';
 import { providerGroupReshare, registerProviderGroupReshare } from './provider-group/reshareRuntime.js';
 import {
@@ -5504,6 +5506,7 @@ const registerIpcHandlers = () => {
     resetProviderModelAutoRefreshCooldowns('anthropic');
     // Binding is the commit point; auxiliary refresh must not prolong the cancellable login.
     connectClaudeNativeLogin();
+    await attachDefaultSubscriptionPool('anthropic');
     // CLI 登录态变化的监听先于绑定触发,那次探测会因尚未绑定而跳过;绑定后再请求一次。
     requestAnthropicModelProbe();
     void broadcastClaudeAuthStateChanged();
@@ -5527,6 +5530,7 @@ const registerIpcHandlers = () => {
       // Cancel a pending CLI login before revoking the binding; keep the CLI's own login.
       try {
         cancelClaudeCliLogin();
+        await disconnectSubscriptionPool('anthropic');
         await disconnectClaudeNativeLogin();
         if (owner !== activeOwnerScopeKey() || isAppSessionBoundaryPending())
           return { authorized: false };
@@ -10230,6 +10234,7 @@ app.on('ready', async () => {
   // 自建中转服务(docs/self-hosted-relay-plan.md):本机中转与加入别的中转。
   registerSelfHostedRelayIpc();
   registerProviderGroupIpc({ reshare: providerGroupReshare });
+  registerSubscriptionAccountsIpc();
   registerProviderGroupRemoteHandler({ onGroupChanged: () => providerGroupReshare.kick('group') });
   registerProviderGroupReshare();
   registerFilePeerIpc();

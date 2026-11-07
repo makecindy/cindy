@@ -19884,5 +19884,23 @@
     "rendered": "Afficher le document",
     "wrap": "Retour à la ligne",
     "lineNumbers": "Numéros de ligne"
+  },
+  "subscriptionAccounts": {
+    "title": "Comptes d’abonnement",
+    "note": "Le premier compte utilise le dossier par défaut de la CLI. Les comptes ajoutés se connectent séparément. Les nouvelles tâches sont réparties ; les tâches existantes conservent leur compte.",
+    "strategy": "Répartition de charge",
+    "add": "Ajouter un compte",
+    "default": "Dossier par défaut",
+    "ready": "Connecté",
+    "signedOut": "Connexion requise",
+    "unavailable": "État indisponible",
+    "limited": "Quota atteint",
+    "remove": "Retirer le compte",
+    "removeTitle": "Retirer {{name}} ?",
+    "removeDescription": "Cindy n’attribuera plus de tâches à ce compte. La connexion CLI et l’historique des conversations restent sur cet ordinateur.",
+    "failed": "Impossible de lire ou de mettre à jour le compte. Vérifiez la connexion CLI et le réseau, puis réessayez.",
+    "used": "{{percent}}% utilisé",
+    "directory": "Dossier du compte",
+    "login": "Se connecter"
   }
 }

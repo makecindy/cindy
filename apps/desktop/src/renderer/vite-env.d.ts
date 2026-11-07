@@ -4198,6 +4198,10 @@ interface ElectronAPI {
     /** 有人请求把这里分享的供应商经他的供应商组转给别人用(转分享)。 */
     onReshareRequested(cb: () => void): () => void;
   };
+  subscriptionAccounts: {
+    onChanged(cb: (event: { providerId: import('../shared/subscriptionAccounts').SubscriptionProvider }) => void): () => void;
+    command(command: import('../shared/subscriptionAccounts').SubscriptionAccountCommand): Promise<import('../shared/subscriptionAccounts').SubscriptionPoolView>;
+  };
   providerGroup: {
     command<C extends import('../shared/providerGroup').ProviderGroupCommand>(
       command: C,
