@@ -173,6 +173,7 @@ const desktopGuardInclude = [
   'src/renderer/__tests__/promptRecommendationBadge.test.ts',
   'src/renderer/__tests__/sessionHeaderMenuParity.test.ts',
   'src/renderer/__tests__/typographyDiscipline.test.ts',
+  'src/renderer/__tests__/designEffectsDiscipline.test.ts',
   'src/renderer/__tests__/windowBackdropAcrylic.test.ts',
   // Existing credential/permission/protocol contracts, separated from runtime units.
   'src/main/__tests__/analyticsConsentMigrationGuards.test.ts',

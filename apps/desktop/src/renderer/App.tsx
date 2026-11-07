@@ -1,4 +1,5 @@
 import { AppPreferenceControl } from './components/AppPreferenceControl';
+import { AppWindowSync } from './components/layout/AppWindowSync';
 import { readLocalWorkerCreationSelection } from './state/workerCreationPrefs';
 import { useModelFavoritesHost } from './state/useModelFavoritesHost';
 import { getDataOwnerGeneration } from './contexts/dataOwnerGeneration';
@@ -467,6 +468,7 @@ export function App() {
                             {!isSecondaryWindow() && !isSidebarWindow() && <SplashScreen />}
                             <EnvCheckGuard>
                               <MakerBootstrap />
+                              <AppWindowSync />
                               {!isSecondaryWindow() && !isSidebarWindow() && <RemoteDesktopHost />}
                               <ProjectAutomationNotifyBridge />
                               {/* confirm 槽:插件请主机弹确认框。必须在 ConfirmDialogProvider

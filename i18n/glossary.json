@@ -599,6 +599,19 @@
       "note": "Lark 国际版 IM 服务的官方品牌名，四语统一保留原品牌写法；先登记为 proposed，待产品术语评审后再决定是否固化。"
     },
     {
+      "id": "feishu-link-code",
+      "status": "proposed",
+      "en": "Link code",
+      "translations": {
+        "zh-CN": "关联码",
+        "zh-TW": "關聯碼",
+        "ja": "連携コード",
+        "ko": "연동 코드"
+      },
+      "checkCase": false,
+      "note": "官方飞书 / Lark 机器人关联时的一次性短码：网页授权不可用的用户把它私聊发给机器人完成关联，只在关联进行中出现，过期作废，不是密钥。与供应商分享的「配对码」(Pairing Code)、本机应用的「连接码」(Connection code) 是不同概念；ko 取「연동 코드」以免与「연결 코드」(Connection code) 撞名。"
+    },
+    {
       "id": "personal-wechat",
       "status": "proposed",
       "en": "Personal WeChat",
@@ -3486,6 +3499,72 @@
       },
       "checkCase": false,
       "note": "GitHub PR / GitLab MR 的合并冲突。数据行标签为 Merge / 合并，状态值为 Conflicts / 有冲突；与检查失败及应用崩溃区分。"
+    },
+    {
+      "id": "macos-dynamic-island",
+      "status": "proposed",
+      "en": "Dynamic Island",
+      "translations": {
+        "zh-CN": "灵动岛",
+        "zh-TW": "動態島",
+        "ja": "Dynamic Island",
+        "ko": "Dynamic Island"
+      },
+      "checkCase": false,
+      "note": "Apple 的灵动岛（新款 MacBook Pro 摄像头挖孔处），沿用 Apple 各地区用语，繁中按 Apple 台湾用语作「動態島」。Cindy 自己的顶部任务面板已改名为任务胶囊 / Agent Notch（见 agent-notch），「灵动岛」只指 Apple 的；设置页分区标题也用这个词，统称两者所在的一页。"
+    },
+    {
+      "id": "agent-notch",
+      "status": "proposed",
+      "en": "Agent Notch",
+      "translations": {
+        "zh-CN": "任务胶囊",
+        "zh-TW": "任務膠囊",
+        "ja": "Agent Notch",
+        "ko": "Agent Notch",
+        "fr": "Agent Notch",
+        "es": "Agent Notch",
+        "de": "Agent Notch",
+        "pt-PT": "Agent Notch",
+        "pt-BR": "Agent Notch",
+        "zh-Hans-x-lzh": "任务胶囊",
+        "zh-Hant-x-lzh": "任務膠囊"
+      },
+      "checkCase": false,
+      "note": "Cindy 在屏幕顶部显示任务的面板（原名灵动岛 / Agent Island）。苹果在新款 MacBook Pro 上推出灵动岛后改名，避免与 Apple 的灵动岛混同；中文不直译 notch（「刘海」易联想发型），用户于 2026-11-07 选定。设置页搜索保留旧名作别名。"
+    },
+    {
+      "id": "macos-live-activities",
+      "status": "proposed",
+      "en": "Live Activities",
+      "translations": {
+        "zh-CN": "实时活动",
+        "zh-TW": "即時動態",
+        "ja": "ライブアクティビティ",
+        "ko": "실시간 현황"
+      },
+      "checkCase": false,
+      "note": "Apple 的实时活动（ActivityKit）。沿用 Apple 各地区官方译名；Cindy 只以此展示任务状态，不作为自有功能名。"
+    },
+    {
+      "id": "official-feishu-working-computer",
+      "status": "proposed",
+      "en": "Working computer",
+      "translations": {
+        "zh-CN": "工作电脑",
+        "zh-TW": "工作電腦",
+        "ja": "作業用パソコン",
+        "ko": "작업 컴퓨터",
+        "fr": "Ordinateur de travail",
+        "es": "Ordenador de trabajo",
+        "de": "Arbeitscomputer",
+        "pt-PT": "Computador de trabalho",
+        "pt-BR": "Computador de trabalho",
+        "zh-Hant-x-lzh": "工作電腦",
+        "zh-Hans-x-lzh": "工作电脑"
+      },
+      "checkCase": false,
+      "note": "官方飞书 / Lark 机器人中接收新消息的已关联电脑；每个应用和飞书账号独立选择，默认最新关联的电脑。"
     }
   ]
 }

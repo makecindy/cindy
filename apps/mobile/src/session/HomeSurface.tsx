@@ -1,3 +1,4 @@
+import type { ViewInstance } from 'react-native';
 import { useCloudCompanionHome } from '@/chat/useCloudCompanion';
 import { cloudCompanionRows } from '@/chat/cloudCompanion';
 import { normalizeTaskTeammateSelection, taskTeammateKey, taskTeammateOptions } from './teammateTaskSource';
@@ -22,6 +23,7 @@ import { countHomeSuggestionSessions, remoteTaskSuggestionsMode, type RemoteTask
 import { cacheRemoteResourceHome, readRemoteResourceSnapshot } from '@/device-link/remoteResourceCache';
 import { canBrowseMobileHomeDevice } from '@/session/mobileHome';
 import { useFocusEffect, useIsFocused, useRouter } from 'expo-router';
+import { useHandheldVoiceKey } from '@/handheld/handheldMode';
 import { createContext, useContext, Fragment, memo, useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type MutableRefObject, type ReactNode } from 'react';
 import {
   ActivityIndicator,
@@ -773,8 +775,8 @@ function HomeScreenContent({ active = true, width, newSessionInSystemBar = false
   const [hostProjectOrders, setHostProjectOrders] = useState<ReadonlyMap<string, SyncedProjectOrderSnapshot>>(() => new Map());
   const projectOrderFetchFenceRef = useRef(createProjectOrderFetchFence());
   const visualProjectKeysRef = useRef<string[]>([]);
-  const homeRootRef = useRef<View>(null);
-  const projectHeaderRefs = useRef(new Map<string, View>());
+  const homeRootRef = useRef<ViewInstance>(null);
+  const projectHeaderRefs = useRef(new Map<string, ViewInstance>());
   const projectDragRef = useRef<ProjectDragSession | null>(null);
   const projectDragEpochRef = useRef(0);
   const [projectDrag, setProjectDrag] = useState<ProjectDragSession | null>(null);
@@ -2620,6 +2622,12 @@ function HomeScreenContent({ active = true, width, newSessionInSystemBar = false
     return () => { if (newSessionActionRef.current === action) newSessionActionRef.current = null; };
   }, [newSessionActionRef, openNewSession]);
 
+  // 掌机模式:首页长按语音键直接开新任务并开始说话(新建页聚焦后接手这次按住)。
+  useHandheldVoiceKey({
+    start: () => openNewSession(),
+    end: () => undefined,
+  }, active && !embedded);
+
   const openSuggestedSession = useCallback((suggestion?: RemoteTaskSuggestionId) => {
     openNewSession(undefined, suggestion, taskSuggestionsDeviceId);
   }, [openNewSession, taskSuggestionsDeviceId]);
@@ -3314,7 +3322,7 @@ function HomeScreenContent({ active = true, width, newSessionInSystemBar = false
             <View style={styles.pinnedFooter} testID="home.pinnedFooter" />
           ) : null}
         ListEmptyComponent={
-          sharedRows.length > 0 ? null : initialHomeLoading || taskSuggestionsPending ? (
+          (sharedRows.length > 0 ? null : initialHomeLoading || taskSuggestionsPending ? (
             <HomeInitialLoadingState
               style={{
                 marginTop: spacing.xxl,
@@ -3371,12 +3379,12 @@ function HomeScreenContent({ active = true, width, newSessionInSystemBar = false
               testID={initialHomeError ? 'home.syncError' : 'home.empty'}
               title={emptyStateTitle}
             />
-          )
+          )) ?? undefined
         }
-        ListFooterComponent={taskSuggestionsMode === 'footer' ? (
+        ListFooterComponent={(taskSuggestionsMode === 'footer' ? (
           <RemoteTaskSuggestions mode="footer" onNewSession={() => openSuggestedSession()}
             onSelect={openSuggestedSession} />
-        ) : null}
+        ) : null) ?? undefined}
         renderItem={renderHomeRow}
       />
     </ListDisclosureScope>
@@ -3984,7 +3992,7 @@ function HomeProjectWindowAnchorTracker({
   onAnchorChange(anchor: number): void;
   projectHeaderHeight: SharedValue<number>;
   projectLayoutRevision: SharedValue<number>;
-  projectRef: AnimatedRef<View>;
+  projectRef: AnimatedRef<ViewInstance>;
   scrollY: SharedValue<number>;
   viewportHeight: number;
 }) {
@@ -4048,7 +4056,7 @@ function ProjectRow({
   collapsed: boolean;
   dragging?: boolean;
   expandedAutomationGroups: readonly string[];
-  headerRefs?: MutableRefObject<Map<string, View>>;
+  headerRefs?: MutableRefObject<Map<string, ViewInstance>>;
   kind?: 'project' | 'dialogue' | 'cindy-make';
   machineIdentity?: HomeProjectMachineIdentity;
   onDragEnd?: () => void;
@@ -4112,7 +4120,7 @@ function ProjectRow({
   ].filter(Boolean).join(', ');
   const projectHeaderHeight = useSharedValue(HOME_PROJECT_HEADER_HEIGHT);
   const textMode = useHomeRowDisplay().viewMode === 'text';
-  const projectRef = useAnimatedRef<View>();
+  const projectRef = useAnimatedRef<ViewInstance>();
   const prepareDisclosure = useDisclosurePrepare();
   const [windowAnchor, setWindowAnchor] = useState(0);
   const projectLayoutRevision = useSharedValue(0);
@@ -4455,7 +4463,7 @@ function HomeListRowInner({
   prevIsBlock: boolean;
   projectCollapsed: boolean;
   projectDragging: boolean;
-  projectHeaderRefs: MutableRefObject<Map<string, View>>;
+  projectHeaderRefs: MutableRefObject<Map<string, ViewInstance>>;
   homeScrollY?: SharedValue<number>;
   viewportHeight: number;
   registry: ReturnType<typeof createSwipeRowRegistry>;
@@ -4958,7 +4966,7 @@ function AutomationGroupChildren({
   });
   const hasViewAllRow = hiddenCount > 0 && !!onOpenGroup;
   const viewport = useContext(HomeListViewportContext);
-  const childrenRef = useAnimatedRef<View>();
+  const childrenRef = useAnimatedRef<ViewInstance>();
   const layoutRevision = useSharedValue(0);
   const headerHeight = useSharedValue(0);
   // A project can retain many expanded automation groups. Preload nearby runs

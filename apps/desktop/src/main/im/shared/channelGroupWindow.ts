@@ -56,6 +56,9 @@ export interface ChannelGroupContextArgs {
   cursorScope?: string;
   /** 触发消息的渠道原生 message id —— 从上下文中精确剔除「当前消息」。 */
   triggerMessageId: string;
+  replyMessageId?: string;
+  reservedChars?: number;
+  reservedMessages?: number;
 }
 
 export interface ChannelGroupWindow {
@@ -126,6 +129,9 @@ export function createChannelGroupWindow(options: {
         cursors: contextCursors,
         cursorKey,
         triggerMessageId: args.triggerMessageId,
+        replyMessageId: args.replyMessageId,
+        reservedChars: args.reservedChars,
+        reservedMessages: args.reservedMessages,
         neutralize: neutralizeFenceTags,
         log,
       });

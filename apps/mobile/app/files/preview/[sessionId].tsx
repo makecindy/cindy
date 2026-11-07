@@ -1,8 +1,4 @@
 import { TextDocumentPreview } from "@/session/TextDocumentPreview";
-import {
-  PreviewFooter,
-  PreviewCollectionContext,
-} from "@/session/PreviewChrome";
 import { ModelDocumentPreview } from "@/session/ModelDocumentPreview";
 import { DiagramDocumentPreview } from "@/session/DiagramDocumentPreview";
 import { File } from "expo-file-system";
@@ -807,36 +803,7 @@ function RemoteFilePreviewContent() {
         windowSize={3}
       />
 
-      {!lightboxUrl ? (
-        <PreviewFooter
-          collection={{
-            index: pageIndex,
-            names: siblings.map((item) => item.name),
-            onSelect: (next) => {
-              setPageIndex(next);
-              pagerRef.current?.scrollToOffset({
-                animated: false,
-                offset: next * pageWidth,
-              });
-            },
-          }}
-        />
-      ) : null}
       {lightboxImages.length > 0 ? (
-        <PreviewCollectionContext.Provider
-          value={{
-            index: pageIndex,
-            names: siblings.map((item) => item.name),
-            onSelect: (next) => {
-              setLightboxUrl(null);
-              setPageIndex(next);
-              pagerRef.current?.scrollToOffset({
-                animated: false,
-                offset: next * pageWidth,
-              });
-            },
-          }}
-        >
           <ImageLightbox
           images={lightboxImages}
           initialUrl={lightboxImages[0].url}
@@ -846,7 +813,6 @@ function RemoteFilePreviewContent() {
               goBackGuarded(router);
             }}
           />
-        </PreviewCollectionContext.Provider>
       ) : null}
     </SafeAreaView>
   );

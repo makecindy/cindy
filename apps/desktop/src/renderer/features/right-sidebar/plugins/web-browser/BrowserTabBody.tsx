@@ -527,7 +527,7 @@ export function BrowserTabBody({ state, ctx, active, shellVisible }: BrowserTabB
             className={cn(
               'absolute left-1/2 top-2 z-10 flex -translate-x-1/2 items-center gap-2',
               'rounded-full border border-[var(--border-default)] bg-[var(--surface-elevated)]',
-              'py-1 pl-3 pr-1 text-11 text-[var(--text-secondary)] shadow-sm',
+              'py-1 pl-3 pr-1 text-11 text-[var(--text-secondary)] shadow-[shadow:var(--shadow-menu)]',
             )}
           >
             <Gauge size={12} strokeWidth={2} className="shrink-0 text-[var(--warning-fg)]" />

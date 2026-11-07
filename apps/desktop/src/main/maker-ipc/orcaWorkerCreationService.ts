@@ -736,6 +736,27 @@ function leadAgentDeviceId(lead: OrcaLeadSessionSnapshot): string | null {
 }
 
 /**
+ * 新任务 / Worker 的 Agent 所在位置(null = 任务所在电脑)。不指定时用来源的位置；本机设备 id 等于本机；
+ * SSH 来源的 Agent 在 SSH 主机上，不能指定到另一台电脑。Worker 与 send_to_session create 共用。
+ */
+export function resolveRequestedAgentDeviceId(params: {
+  requested: string | null | undefined;
+  inherited: string | null;
+  sourceIsSsh: boolean;
+  /** 不传 = 不把本机设备 id 当本机(运行设备 Worker 的位置相对运行设备)。 */
+  isSelfDeviceId?: (deviceId: string) => boolean;
+}): { ok: true; agentDeviceId: string | null } | { ok: false; reason: 'invalid_format' | 'ssh_source' } {
+  const { requested } = params;
+  if (requested === undefined) return { ok: true, agentDeviceId: params.inherited };
+  if (requested === null) return { ok: true, agentDeviceId: null };
+  const deviceId = typeof requested === 'string' ? requested.trim() : '';
+  if (!AGENT_DEVICE_ID_PATTERN.test(deviceId)) return { ok: false, reason: 'invalid_format' };
+  if (params.isSelfDeviceId?.(deviceId)) return { ok: true, agentDeviceId: null };
+  if (params.sourceIsSsh) return { ok: false, reason: 'ssh_source' };
+  return { ok: true, agentDeviceId: deviceId };
+}
+
+/**
  * 解析 Worker 的 Agent 所在位置(null = 任务所在电脑)。不指定时跟 Lead；SSH Lead 与运行设备 Worker
  * 不能把 Agent 放到另一台电脑。
  */
@@ -744,20 +765,21 @@ function resolveWorkerAgentDeviceId(
   lead: OrcaLeadSessionSnapshot,
   isSelfDeviceId: ((deviceId: string) => boolean) | undefined,
 ): { ok: true; agentDeviceId: string | null } | { ok: false; message: string } {
-  const requested = params.agentDeviceId;
-  if (requested === undefined) return { ok: true, agentDeviceId: leadAgentDeviceId(lead) };
-  if (requested === null) return { ok: true, agentDeviceId: null };
-  const deviceId = typeof requested === 'string' ? requested.trim() : '';
-  if (!AGENT_DEVICE_ID_PATTERN.test(deviceId)) {
-    return { ok: false, message: 'agent_device_id must be a device id or a shared provider id' };
-  }
-  // For an execution-device Worker, an explicit id names a model computer
-  // relative to that execution host; the Lead’s own id is not its local route.
-  if (params.executionDeviceId === undefined && isSelfDeviceId?.(deviceId)) return { ok: true, agentDeviceId: null };
-  if (lead.remoteHostId) {
-    return { ok: false, message: 'Workers of an SSH Lead run their Agent on the SSH host; agent_device_id is not supported' };
-  }
-  return { ok: true, agentDeviceId: deviceId };
+  const resolved = resolveRequestedAgentDeviceId({
+    requested: params.agentDeviceId,
+    inherited: leadAgentDeviceId(lead),
+    sourceIsSsh: Boolean(lead.remoteHostId),
+    // For an execution-device Worker, an explicit id names a model computer
+    // relative to that execution host; the Lead’s own id is not its local route.
+    ...(params.executionDeviceId === undefined && isSelfDeviceId ? { isSelfDeviceId } : {}),
+  });
+  if (resolved.ok) return resolved;
+  return {
+    ok: false,
+    message: resolved.reason === 'invalid_format'
+      ? 'agent_device_id must be a device id or a shared provider id'
+      : 'Workers of an SSH Lead run their Agent on the SSH host; agent_device_id is not supported',
+  };
 }
 
 /**

@@ -369,6 +369,8 @@ export async function readAgentTodayUsage(agentKind: AgentKind): Promise<AgentTo
  * 后两者都是加性字段, 旧消费者(mobile 防御解析)忽略即退化为原行为。
  */
 export interface CodexAccountUsagePayload extends RateLimitSnapshot {
+  /** An exact task-bound account read uses native quota for every supported engine. */
+  nativeAccountPool?: boolean;
   webSnapshot?: RateLimitSnapshot | null;
   appServerBuckets?: Record<string, RateLimitSnapshot> | null;
 }
