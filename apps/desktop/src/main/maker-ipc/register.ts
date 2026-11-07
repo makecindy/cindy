@@ -3405,9 +3405,9 @@ function summarizeIpcUserMessage(message: IpcUserMessage): Record<string, unknow
 
 /**
  * 待解决的 interaction 请求(permission/ask/plan 三合一)—— 用 promise 跨 IPC 边界。
- * key: requestId, value: resolver + owning session. ask/plan intentionally do
- * not use a timeout because they represent explicit product decisions, not a
- * transient permission prompt.
+ * key: requestId, value: resolver + owning session. Blocking ask/plan decisions
+ * do not expire. Native optional RPC questions have an idle timeout which stops
+ * permanently when the user begins answering.
  */
 const PERMISSION_INTERACTION_TIMEOUT_MS = 10 * 60 * 1000;
 
@@ -3429,6 +3429,7 @@ interface PendingInteractionEntry {
   timeoutId?: ReturnType<typeof setTimeout>;
   timeoutDeadlineAt?: number;
   timeoutRemainingMs?: number;
+  questionTimerSnoozed?: boolean;
   /** IM owns presentation/timeouts; Host retains the execution and cancellation boundary. */
   migrated?: boolean;
   deferredDecision?: InteractionDecision;
@@ -3796,10 +3797,10 @@ function clearPendingInteraction(requestId: string): PendingInteractionEntry | n
 
 /** Permission safety time counts only while its owning task can accept input. */
 function schedulePendingPermissionTimeout(requestId: string, entry: PendingInteractionEntry): void {
-  if (entry.migrated || entry.sharedPermission || entry.kind !== 'permission' || entry.timeoutId !== undefined
+  if (entry.migrated || entry.sharedPermission || (entry.kind !== 'permission' && !(entry.request.kind === 'ask_user_question' && entry.request.isBlocking === false && !entry.questionTimerSnoozed)) || entry.timeoutId !== undefined
     || pendingInteractionResolvers.get(requestId) !== entry
     || agentInputCoordinatorHolder?.isExecutionPaused(entry.sessionId)) return;
-  const remaining = entry.timeoutRemainingMs ?? PERMISSION_INTERACTION_TIMEOUT_MS;
+  const remaining = entry.timeoutRemainingMs ?? (entry.kind === 'ask_user_question' ? 120_000 : PERMISSION_INTERACTION_TIMEOUT_MS);
   entry.timeoutDeadlineAt = Date.now() + remaining;
   entry.timeoutId = setTimeout(() => {
     if (pendingInteractionResolvers.get(requestId) !== entry) return;
@@ -3811,7 +3812,9 @@ function schedulePendingPermissionTimeout(requestId: string, entry: PendingInter
     const pending = clearPendingInteraction(requestId);
     if (!pending) return;
     handleAgentIslandInteractionDismissed(entry.sessionId, requestId);
-    pending.resolve({ kind: 'permission', behavior: 'deny', reason: 'timeout' });
+    pending.resolve(entry.kind === 'ask_user_question'
+      ? { kind: 'ask_user_question', answers: {}, dismissed: true }
+      : { kind: 'permission', behavior: 'deny', reason: 'timeout' });
     dismissRendererInteraction(pending, requestId, 'timeout', 'deny');
   }, remaining);
 }
@@ -3824,7 +3827,7 @@ function setPendingInteractionTimeoutsPaused(sessionId: string, paused: boolean)
       if (resolvePendingInteraction(requestId, entry.deferredDecision, !!entry.sharedPermission)) applied.push(requestId);
       continue;
     }
-    if (entry.kind !== 'permission') continue;
+    if (entry.kind !== 'permission' && !(entry.request.kind === 'ask_user_question' && entry.request.isBlocking === false)) continue;
     if (paused) {
       if (entry.timeoutId === undefined) continue;
       clearTimeout(entry.timeoutId);
@@ -4058,6 +4061,14 @@ export function allowBotWorkbenchPendingPermission(botId: string, sessionId: str
 function resolvePendingInteraction(requestId: string, decision: InteractionDecision, fromShared = false): boolean {
   const resolver = pendingInteractionResolvers.get(requestId);
   if (!resolver || (!fromShared && agentInputCoordinatorHolder?.isExecutionPaused(resolver.sessionId))) return false;
+  if (decision.kind === 'ask_user_question' && decision.inProgress === true) {
+    if (resolver.request.kind !== 'ask_user_question' || resolver.request.isBlocking !== false) return false;
+    resolver.questionTimerSnoozed = true;
+    if (resolver.timeoutId) clearTimeout(resolver.timeoutId);
+    resolver.timeoutId = undefined;
+    resolver.timeoutDeadlineAt = undefined;
+    return true;
+  }
   if (resolver.sharedPermission && !fromShared) return resolver.sharedPermission.decide(decision);
   clearPendingInteraction(requestId);
   handleAgentIslandInteractionDismissed(resolver.sessionId, requestId);
