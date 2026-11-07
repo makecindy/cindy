@@ -4,7 +4,8 @@
  * 只有一个点击目标。名称 13/500、说明 12、当前值 13；文字行高用无单位比例，跟随
  * 「外观 → UI 字号」放大（DESIGN.md §3）。
  *
- * 设置页直接用；窄抽屉包在 SettingsDrawerScope 里，组名和行高收紧一档（行高 48，带头像 52）。
+ * 设置页直接用；窄抽屉包在 SettingsDrawerScope 里，组名和行高收紧一档（行高 48，带头像 52），
+ * 见 §4 Narrow drawer exception。
  */
 import { createContext, useContext, type ButtonHTMLAttributes, type HTMLAttributes, type ReactNode } from 'react';
 import { ChevronRight, Info } from 'lucide-react';
