@@ -15921,6 +15921,16 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     getSessionMeta: (sessionId) => maker.getSessionMeta(sessionId).catch(() => null),
     getSessionRowSnapshot,
     getLiveSession: (sessionId) => maker.getSession(sessionId),
+    recycleProjectResourceRuntime: async (sessionId) => {
+      const current = maker.getSession(sessionId);
+      if (current?.agentKind !== 'pi' || current.hasRecyclableProjectResourceDrift() !== true) return false;
+      // 与发送事务 deps.closeSessionIfCurrent 同一「重建窗口」:抑制窗口内关闭,
+      // 否则 close 广播 abort 在途派发边界(2026-11-08 自鲨实报);后续 queued/lazy
+      // 路径用重建后的 runtime 投递。
+      await withRehydrateCloseSuppressed(sessionId, () =>
+        maker.closeSessionIfCurrent(current, 'runtime-refresh'));
+      return true;
+    },
     validateImageAttachments: async (paths) => {
       // 图片来源两类: 会话受管地址(cindy-media:// / xdt-image://)与任意本机绝对路径。
       const images: Array<{ path: string; name: string; ext: string; size: number; mimeType: string }> = [];

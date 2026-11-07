@@ -191,6 +191,11 @@ export interface OrcaInterAgentDispatcherDeps<TSessionMeta> {
   /** 直发前与 sendToSessionInternal 共用同一套满窗 / compact 失败换窗预检。 */
   prepareUnhealthySession?: (sessionId: string) => Promise<boolean | void>;
   /**
+   * 项目资源漂移时的 runtime 回收(空闲口径, pi only)。true=已按 runtime-refresh
+   * 关闭旧 runtime,调用方应转 queued/lazy 路径重建投递,不拿旧 argv 跑这一轮。
+   */
+  recycleProjectResourceRuntime?: (sessionId: string) => Promise<boolean>;
+  /**
    * 校验 imagePaths(存在性 + 图片扩展名), 返回逐张附件元数据或错误消息。
    * fs 属 host 边界, dispatcher 不直接碰文件系统。
    */
@@ -681,6 +686,11 @@ export function createOrcaInterAgentDispatcher<TSessionMeta>(
         await deps.prepareUnhealthySession?.(params.targetSessionId);
         const live = deps.getLiveSession(params.targetSessionId);
         if (!live) return null;
+        // 项目资源漂移:回收旧 runtime 后转 queued/lazy 路径(sendToSessionInternal
+        // 的 lazy-resume 会重扫重算 argv 重建),不在旧 argv 上跑这一轮。
+        if (await deps.recycleProjectResourceRuntime?.(params.targetSessionId) === true) {
+          return null;
+        }
         const origin = await resolveOrigin();
         const result = await sendPersistedUserMessageToSession(deps, {
           session: live,

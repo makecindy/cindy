@@ -9,7 +9,7 @@
  * 条目只改该子目录自身 mtime,漏盯哪层就在哪层漏检。
  */
 
-import { mkdirSync, mkdtempSync, realpathSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, realpathSync, rmSync, statSync, symlinkSync, utimesSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
@@ -43,6 +43,14 @@ function statMtime(target: string): number {
   return statSync(target).mtimeMs;
 }
 
+// Windows 文件时间戳有粒度(最粗 ~15.6ms):同一 tick 内的连续 mkdir/write 不改
+// 父目录 mtime,快检判不出漂移就不触发重扫 —— 断言依赖漂移判定的步骤必须显式
+// 推 mtime,否则 Windows CI 会偶发假失败(2026-11-08 run 42406651024 实报)。
+function bumpMtime(target: string): void {
+  const t = new Date(statSync(target).mtimeMs + 50);
+  utimesSync(target, t, t);
+}
+
 function snapshot() {
   // 与生产调用点同序:基线先采样,路径后收集(见 snapshotPiProjectResourceLaunch)。
   const watchRootMtimes = collectPiProjectResourceWatchRootMtimes(project);
@@ -59,6 +67,7 @@ describe('piProjectResourcesDrifted', () => {
     writeSkill(path.join('.pi', 'skills'), 'alpha');
     const baseline = snapshot();
     writeSkill(path.join('.pi', 'skills'), 'beta');
+    bumpMtime(path.join(project, '.pi', 'skills'));
     expect(piProjectResourcesDrifted(baseline)).toBe(true);
   });
 
@@ -66,8 +75,10 @@ describe('piProjectResourcesDrifted', () => {
     writeSkill(path.join('.pi', 'skills'), 'alpha');
     const baseline = snapshot();
     writeSkill(path.join('.pi', 'skills'), 'beta');
+    bumpMtime(path.join(project, '.pi', 'skills'));
     expect(piProjectResourcesDrifted(baseline)).toBe(true);
     rmSync(path.join(project, '.pi', 'skills', 'beta'), { recursive: true, force: true });
+    bumpMtime(path.join(project, '.pi', 'skills'));
     expect(piProjectResourcesDrifted(baseline)).toBe(false);
   });
 
@@ -209,10 +220,12 @@ describe('piProjectResourcesDrifted', () => {
     const baseline = snapshot();
     // 重扫窗口内新建的空扩展目录:集合未变,但必须从此纳入盯视
     mkdirSync(path.join(project, '.pi', 'extensions', 'newext'), { recursive: true });
+    bumpMtime(path.join(project, '.pi', 'extensions'));
     expect(piProjectResourcesDrifted(baseline)).toBe(false);
     expect(baseline.watchRootMtimes.has(path.join(project, '.pi', 'extensions', 'newext'))).toBe(true);
     // 若不重建基线,这里的 index.ts 只改未盯视的新子目录 mtime,永远检不出
     writeFileSync(path.join(project, '.pi', 'extensions', 'newext', 'index.ts'), 'export {};\n');
+    bumpMtime(path.join(project, '.pi', 'extensions', 'newext'));
     expect(piProjectResourcesDrifted(baseline)).toBe(true);
   });
 
@@ -227,6 +240,7 @@ describe('piProjectResourcesDrifted', () => {
     expect(piProjectResourcesDrifted(baseline)).toBe(false);
     // 子目录自己 git init:枚举链截断,outer skill 不再属于本项目边界
     mkdirSync(path.join(nested, '.git'), { recursive: true });
+    bumpMtime(nested);
     expect(piProjectResourcesDrifted(baseline)).toBe(true);
   });
 
