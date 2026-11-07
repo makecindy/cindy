@@ -19,6 +19,7 @@ import {
   isolateTaskActionAuthorizer,
   createTaskActionAuthorizer,
   DELEGATED_TASK_ACTIONS,
+  taskActionChangesOtherTask,
   taskActionRisk,
   taskActionStartsIndependentAgent,
   taskActionCreatesFullAccessTask,
@@ -402,8 +403,12 @@ export function createDesktopTaskActionAuthorizer(deps: {
         // risks on autonomous turns need an exact, visible owner decision. The decision
         // keeps the caller principal and admits only this invocation. Reviewed active
         // routine instructions can become the standing grant for later routine runs.
+        // Changing how another task runs is the owner's call on any task, not only a teammate's:
+        // a turn started by another task or a plugin shows the same card.
+        const othersTurn = !caller.botId && input.automatic === true && !scheduled && !input.ownerContinuation;
         const risk = principal === 'autonomous' ? taskActionRisk(call, { routineEnabled: routine?.enabled, routinePrompt: routine?.prompt,
-          routineBuiltin: routine?.builtin, routinePreRunCommand: routine?.preRunCommand, schedule }) : undefined;
+          routineBuiltin: routine?.builtin, routinePreRunCommand: routine?.preRunCommand, schedule, callerSessionId: sessionId })
+          : othersTurn && taskActionChangesOtherTask(call, sessionId) ? 'other-task' as const : undefined;
         const scheduleForConfirmation = schedule
           ? (({ mutationGuard: _mutationGuard, ...display }) => display)(schedule)
           : undefined;

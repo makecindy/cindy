@@ -167,7 +167,8 @@
     "permission": "Dadurch wird in deinem Namen eine Berechtigungsanfrage in einer anderen Aufgabe beantwortet. Prüfe die Aktion; die Genehmigung gilt nur einmal.",
     "resume": "Dadurch wird eine pausierte Ausführung fortgesetzt. Prüfe das Ziel; die Genehmigung gilt nur einmal.",
     "command": "Dadurch wird ein Befehl auf deinem Computer außerhalb der Tool-Genehmigung des Agent gespeichert oder ausgeführt. Prüfe den Befehl und den Arbeitsordner; die Genehmigung gilt nur einmal.",
-    "authority": "Dadurch werden Automatisierungsanweisungen erstellt oder geändert, die bei künftigen Ausführungen als dauerhafte Autorisierung gelten. Prüfe die vollständigen Anweisungen; die Genehmigung gilt für diesen Speichervorgang."
+    "authority": "Dadurch werden Automatisierungsanweisungen erstellt oder geändert, die bei künftigen Ausführungen als dauerhafte Autorisierung gelten. Prüfe die vollständigen Anweisungen; die Genehmigung gilt für diesen Speichervorgang.",
+    "other-task": "Dies ändert, wie eine andere Aufgabe läuft: ihr Modell wechseln, ihren Durchlauf lenken oder stoppen oder das Modell einer neuen Aufgabe festlegen. Prüfe das Ziel; die Freigabe gilt nur für diese Aktion."
   },
   "logSupport": {
     "title": "Protokolle und Feedback",

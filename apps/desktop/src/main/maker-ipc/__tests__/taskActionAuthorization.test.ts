@@ -859,9 +859,6 @@ describe('teammate turn principal', () => {
   });
   const ownerTaskWrites = [
     helper('send_to_session', { target_session_id: 'owner-task', message: 'Add a requirement' }),
-    helper('steer_session', { session_id: 'owner-task', message: 'Change course' }),
-    helper('stop_session_turn', { session_id: 'owner-task' }),
-    helper('set_session_runtime', { session_id: 'owner-task', model: 'other' }),
     helper('start_session_task', { message: 'New work' }),
     helper('archive_sessions', { session_ids: ['owner-task'] }),
     helper('set_workbench_task_responsibility', { task_id: 'owner-task', responsible: true }),
@@ -889,7 +886,6 @@ describe('teammate turn principal', () => {
     expect(await admitted(helper('continue_workbench_task', { task_id: 'handed', message: 'Carry on' }))).toBe('changed');
     expect(await admitted(helper('set_workbench_task_responsibility', { task_id: 'handed', responsible: false }))).toBe('changed');
     expect(await admitted(helper('set_session_runtime', { model: 'self' }))).toBe('changed');
-    expect(await admitted(helper('set_session_runtime', { session_id: 'handed', model: 'next' }))).toBe('changed');
     h.rows.delegation = { status: 'completed', runSequence: 1, permissionSnapshotJson: '{}' };
     expect(await admitted(helper('message_session_task', { task_id: 'own', message: 'Fill the gap' }))).toBe('changed');
     expect(await admitted(helper('message_session_task', { task_id: 'own', answers: { q: 'a' } }))).toBe('changed');
@@ -899,6 +895,45 @@ describe('teammate turn principal', () => {
     for (const args of [{ task_id: 'own', decision: 'approve' }, { task_id: 'own', mode: 'resume' }])
       expect(await admitted(helper('message_session_task', args))).toBe('changed');
     expect(h.confirm).toHaveBeenCalledTimes(2);
+  });
+
+  // 依据：2026-11-07 Chris 裁决——主人没提时，伙伴不能自己去改别的任务怎么跑（换模型、插话、打断、
+  // 给新任务指定模型），但也不能默默拒绝：给主人一张一次性确认卡。缺口：这些调用原本直接放行。
+  // 最小失败输入：自主轮对另一个任务调 set_session_runtime。tier：unit。
+  it('asks the owner once before a turn the owner did not start changes how another task runs', async () => {
+    const h = desktopFixture('automatic');
+    live(h);
+    const changes = [
+      helper('steer_session', { session_id: 'owner-task', message: 'Change course' }),
+      helper('stop_session_turn', { session_id: 'owner-task' }),
+      helper('set_session_runtime', { session_id: 'owner-task', model: 'other' }),
+      helper('send_to_session', { message: 'New work', working_dir: '/w', model: 'pricey' }),
+    ];
+    for (const request of changes) {
+      h.confirm.mockClear();
+      expect(await withToolCallAuthority(h.authorize, request, async () => 'changed')).toBe('changed');
+      expect(h.confirm).toHaveBeenCalledWith('companion', request.tool, request.args,
+        expect.objectContaining({ risk: 'other-task' }));
+    }
+    h.confirm.mockResolvedValueOnce(false);
+    const effect = vi.fn(async () => 'changed');
+    expect(JSON.stringify(await withToolCallAuthority(h.authorize, changes[2]!, effect))).toContain('USER_CANCELLED');
+    expect(effect).not.toHaveBeenCalled();
+    // Its own task, and a turn the owner started, stay ordinary.
+    h.confirm.mockClear();
+    expect(await withToolCallAuthority(h.authorize, helper('set_session_runtime', { model: 'self' }), async () => 'changed')).toBe('changed');
+    h.activeInput.ownerInput = true;
+    h.activeInput.automatic = false;
+    expect(await withToolCallAuthority(h.authorize, changes[2]!, async () => 'changed')).toBe('changed');
+    expect(h.confirm).not.toHaveBeenCalled();
+    // An ordinary task woken by another task's message gets the same card.
+    h.caller.botId = null;
+    h.caller.source = 'desktop';
+    h.activeInput.ownerInput = false;
+    h.activeInput.automatic = true;
+    expect(await withToolCallAuthority(h.authorize, { ...changes[0]!, sessionId: 'ordinary' }, async () => 'changed')).toBe('changed');
+    expect(h.confirm).toHaveBeenCalledWith('ordinary', 'steer_session', changes[0]!.args,
+      expect.objectContaining({ risk: 'other-task' }));
   });
 
   it('uses normal permissions for Orca writes without a second team allowlist', async () => {

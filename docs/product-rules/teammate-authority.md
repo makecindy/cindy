@@ -24,6 +24,7 @@
 | 授予常驻指令 | `routine_save` 新建启用的自定义规则或改写启用规则的指令；禁用草稿和不改指令的编辑沿原权限 |
 | 删除自动化或释放接收地址 | `routine_delete`、`schedule_delete`、`schedule_webhook_release`（可释放同账号旧电脑的地址） |
 | 代用户回答权限请求 | `message_session_task` 携带 `decision` |
+| 改别的任务怎么跑（2026-11-07） | 目标不是自己的 `set_session_runtime`、`steer_session`、`stop_session_turn`，以及 `send_to_session` 新建任务时指定 `agent_kind` / `model` / `effort` / `fast`。普通任务被别的任务或插件唤起的轮次同样弹这张卡；给别的任务发消息、开新任务仍是普通操作 |
 | 恢复暂停执行 | `message_session_task(mode=resume)`、`schedule_resume`、`schedule_webhook_restore`（重新申请已释放的接收地址），以及 `routine_save` 将已有停用规则保存为启用（含内置规则），以及 `routine_run_now` 手动执行停用规则；`set_teammate_capability(kind=feature, joined=true)` 重新打开主人关掉的记忆或系统技能 |
 
 其余操作不命中风险表就继续现有权限流程。新增普通工具不需要另开“自主解锁”例外。

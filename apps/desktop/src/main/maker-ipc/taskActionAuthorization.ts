@@ -129,7 +129,7 @@ export const SCHEDULER_TASK_ACTION_TOOLS: ReadonlySet<string> = new Set([
   'schedule_webhook_release', 'schedule_webhook_restore',
 ]);
 
-export type TaskActionRisk = 'remove' | 'permission' | 'resume' | 'command' | 'authority';
+export type TaskActionRisk = 'remove' | 'permission' | 'resume' | 'command' | 'authority' | 'other-task';
 export type TaskActionScheduleDefinition = Pick<Schedule,
   'id' | 'name' | 'prompt' | 'persistentSession' | 'useWorktree' | 'executionMode' | 'scriptConfig' | 'preRunHook' | 'workingDir' | 'targetSessionId'> & {
   hookInstallation?: { workingDir?: string; fallbackDir: string };
@@ -181,12 +181,27 @@ export function taskActionCreatesFullAccessTask(call: Pick<Call, 'server' | 'too
     !args?.target_session_id && args?.working_dir === undefined;
 }
 
+/**
+ * Changing how another task runs: its model, interrupting or steering its turn, or picking the
+ * model of a task being opened. Messaging and opening tasks stay ordinary work.
+ */
+export function taskActionChangesOtherTask(call: Pick<Call, 'server' | 'tool' | 'args'>, callerSessionId: string): boolean {
+  if (call.server !== 'cindy_helper') return false;
+  const args = call.args && typeof call.args === 'object' && !Array.isArray(call.args)
+    ? call.args as Record<string, unknown> : {};
+  const target = typeof args.session_id === 'string' && args.session_id ? args.session_id : callerSessionId;
+  if (['set_session_runtime', 'steer_session', 'stop_session_turn'].includes(call.tool)) return target !== callerSessionId;
+  return call.tool === 'send_to_session' && !args.target_session_id &&
+    ['agent_kind', 'model', 'effort', 'fast'].some(key => args[key] !== undefined);
+}
+
 /** A small, explicit risk list. Everything else follows the task's normal permissions. */
 export function taskActionRisk(call: Pick<Call, 'server' | 'tool' | 'args'>,
-  facts?: { routineEnabled?: boolean; routinePrompt?: string; routineBuiltin?: boolean; routinePreRunCommand?: string; schedule?: TaskActionScheduleDefinition | null }): TaskActionRisk | undefined {
+  facts?: { routineEnabled?: boolean; routinePrompt?: string; routineBuiltin?: boolean; routinePreRunCommand?: string; schedule?: TaskActionScheduleDefinition | null; callerSessionId?: string }): TaskActionRisk | undefined {
   const args = call.args && typeof call.args === 'object' && !Array.isArray(call.args)
     ? call.args as Record<string, unknown> : {};
   if (taskActionCreatesFullAccessTask(call)) return 'command';
+  if (facts?.callerSessionId && taskActionChangesOtherTask(call, facts.callerSessionId)) return 'other-task';
   // The local scheduler is a trusted MCP, but its script runner bypasses the
   // harness's shell approval. Classify the command effect, not all scheduler writes.
   if ((call.server === 'cindy_helper' || call.server === 'cindy_scheduler') &&
