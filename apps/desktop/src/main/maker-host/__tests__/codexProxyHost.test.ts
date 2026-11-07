@@ -3440,6 +3440,22 @@ describe('codex proxy host', () => {
     }
   });
 
+  it('marks plain collaboration calls as unencrypted when the provider omits the marker (#9183)', async () => {
+    const { repairCodexCollaborationFunctionCall } = await import('../codex-proxy-host.js');
+    expect(repairCodexCollaborationFunctionCall({
+      type: 'function_call', namespace: 'collaboration', name: 'spawn_agent', arguments: '{}',
+    })).toEqual(expect.objectContaining({ encrypted_function_args: [] }));
+    expect(repairCodexCollaborationFunctionCall({
+      type: 'function_call', namespace: 'collaboration', name: 'spawn_agent', encrypted_function_args: ['sig'],
+    })).toBeNull();
+    expect(repairCodexCollaborationFunctionCall({
+      type: 'function_call', namespace: 'other', name: 'spawn_agent', arguments: '{}',
+    })).toBeNull();
+    expect(repairCodexCollaborationFunctionCall({
+      type: 'function_call', namespace: 'collaboration', name: 'close_agent', arguments: '{}',
+    })).toBeNull();
+  });
+
   it('repairs null array fields in passthrough Responses SSE before Codex parses them (#4251)', async () => {
     const host = await freshCodexProxyHost();
     // Minimal reproduction from #4251: a third-party model behind the Responses passthrough
@@ -3448,12 +3464,13 @@ describe('codex proxy host', () => {
       { type: 'response.output_item.added', output_index: 0, item: { id: 'rs_1', type: 'reasoning', status: 'in_progress', summary: null } },
       { type: 'response.output_item.added', output_index: 1, item: { id: 'msg_2', type: 'message', status: 'in_progress', role: 'assistant', content: null } },
       { type: 'response.output_text.delta', item_id: 'msg_2', output_index: 1, content_index: 0, delta: '我查一下' },
-      { type: 'response.output_item.added', output_index: 2, item: { id: 'fc_3', type: 'function_call', status: 'in_progress', call_id: 'call_3', name: 'exec', arguments: '' } },
+      { type: 'response.output_item.added', output_index: 2, item: { id: 'fc_3', type: 'function_call', status: 'in_progress', call_id: 'call_3', namespace: 'collaboration', name: 'spawn_agent', arguments: '{}' } },
       { type: 'response.function_call_arguments.done', item_id: 'fc_3', output_index: 2, arguments: JSON.stringify({ input: 'ls' }) },
-      { type: 'response.output_item.done', output_index: 2, item: { id: 'fc_3', type: 'function_call', status: 'completed', call_id: 'call_3', name: 'exec', arguments: JSON.stringify({ input: 'ls' }) } },
+      { type: 'response.output_item.done', output_index: 2, item: { id: 'fc_3', type: 'function_call', status: 'completed', call_id: 'call_3', namespace: 'collaboration', name: 'spawn_agent', arguments: '{}' } },
       { type: 'response.completed', response: { id: 'resp_1', output: [
         { id: 'rs_1', type: 'reasoning', summary: null },
         { id: 'msg_2', type: 'message', role: 'assistant', content: null },
+        { id: 'fc_3', type: 'function_call', call_id: 'call_3', namespace: 'collaboration', name: 'spawn_agent', arguments: '{}' },
       ], usage: { input_tokens: 1, output_tokens: 1 } } },
     ];
     const upstream = createServer(async (req, res) => {
@@ -3496,10 +3513,12 @@ describe('codex proxy host', () => {
       expect(plain.map(event => event.type)).toEqual(upstreamEvents.map(event => event.type));
       expect(plain[0]?.item).toEqual({ id: 'rs_1', type: 'reasoning', status: 'in_progress', summary: [] });
       expect(plain[1]?.item).toEqual({ id: 'msg_2', type: 'message', status: 'in_progress', role: 'assistant', content: [] });
-      expect(plain[3]?.item).toEqual(upstreamEvents[3]!.item); // function_call passes through untouched
+      expect(plain[3]?.item).toEqual(expect.objectContaining({ namespace: 'collaboration', name: 'spawn_agent', encrypted_function_args: [] }));
+      expect(plain[5]?.item).toEqual(expect.objectContaining({ namespace: 'collaboration', name: 'spawn_agent', encrypted_function_args: [] }));
       expect(plain[6]?.response?.output).toEqual([
         { id: 'rs_1', type: 'reasoning', summary: [] },
         { id: 'msg_2', type: 'message', role: 'assistant', content: [] },
+        { id: 'fc_3', type: 'function_call', call_id: 'call_3', namespace: 'collaboration', name: 'spawn_agent', arguments: '{}', encrypted_function_args: [] },
       ]);
 
       // Wiring: the proxy-level transformResponse only wraps plain SSE bodies. Chaining with the

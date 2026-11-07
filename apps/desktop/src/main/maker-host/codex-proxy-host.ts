@@ -92,6 +92,7 @@ import { createResponsesAnthropicHandler } from '@cindy/responses-anthropic-brid
 import { randomUUID } from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
+import { Transform, type TransformCallback } from 'node:stream';
 
 import {
   buildCodexGatewayBaseUrl,
@@ -2297,6 +2298,102 @@ function isPlainObject(v: unknown): v is Record<string, unknown> {
   return typeof v === 'object' && v !== null && !Array.isArray(v);
 }
 
+const CODEX_COLLABORATION_NAMESPACES = new Set(['collaboration', 'multi_agent_v1', 'multi_agent_v2']);
+const CODEX_COLLABORATION_TOOLS = new Set(['spawn_agent', 'send_message', 'followup_task']);
+
+/**
+ * Codex's multi-agent protocol uses an explicit empty encrypted-function-args
+ * array to distinguish a plain tool invocation from an encrypted one. Some
+ * Responses providers omit that marker even though their arguments are ordinary
+ * JSON, so the native router classifies the invocation as encrypted.
+ */
+export function repairCodexCollaborationFunctionCall(item: unknown): Record<string, unknown> | null {
+  if (!isPlainObject(item) || item.type !== 'function_call') return null;
+  if (typeof item.namespace !== 'string' || !CODEX_COLLABORATION_NAMESPACES.has(item.namespace)) return null;
+  if (typeof item.name !== 'string' || !CODEX_COLLABORATION_TOOLS.has(item.name)) return null;
+  if (Array.isArray(item.encrypted_function_args)) return null;
+  return { ...item, encrypted_function_args: [] };
+}
+
+function repairCodexCollaborationEvent(event: unknown): Record<string, unknown> | null {
+  if (!isPlainObject(event) || typeof event.type !== 'string') return null;
+  if (event.type === 'response.output_item.added' || event.type === 'response.output_item.done') {
+    const repaired = repairCodexCollaborationFunctionCall(event.item);
+    return repaired ? { ...event, item: repaired } : null;
+  }
+  if (!isPlainObject(event.response) || !Array.isArray(event.response.output)) return null;
+  let changed = false;
+  const output = event.response.output.map(item => {
+    const repaired = repairCodexCollaborationFunctionCall(item);
+    if (!repaired) return item;
+    changed = true;
+    return repaired;
+  });
+  return changed ? { ...event, response: { ...event.response, output } } : null;
+}
+
+/** Best-effort SSE repair; non-Responses and compressed bodies remain untouched. */
+class CodexCollaborationMarkerTransform extends Transform {
+  private readonly decoder = new TextDecoder();
+  private pending = '';
+
+  private rewriteFrame(frame: string, delimiter: string): string {
+    const dataLines = frame.split(/\r?\n/)
+      .filter(line => line.startsWith('data:'))
+      .map(line => line.slice(5).trimStart());
+    const data = dataLines.join('\n').trim();
+    if (!data || data === '[DONE]') return frame + delimiter;
+    let parsed: unknown;
+    try { parsed = JSON.parse(data); } catch { return frame + delimiter; }
+    const repaired = repairCodexCollaborationEvent(parsed);
+    if (!repaired) return frame + delimiter;
+    let first = true;
+    return frame.replace(/^data:[^\r\n]*/gm, () => {
+      if (!first) return 'data:';
+      first = false;
+      return `data: ${JSON.stringify(repaired)}`;
+    }) + delimiter;
+  }
+
+  private drain(): void {
+    for (;;) {
+      const match = /\r?\n\r?\n/.exec(this.pending);
+      if (!match || match.index === undefined) return;
+      const delimiter = match[0];
+      this.push(this.rewriteFrame(this.pending.slice(0, match.index), delimiter));
+      this.pending = this.pending.slice(match.index + delimiter.length);
+    }
+  }
+
+  override _transform(chunk: Buffer, _encoding: string, callback: TransformCallback): void {
+    this.pending += this.decoder.decode(chunk, { stream: true });
+    this.drain();
+    if (Buffer.byteLength(this.pending, 'utf8') > 16 * 1024 * 1024) {
+      this.push(this.pending);
+      this.pending = '';
+    }
+    callback();
+  }
+
+  override _flush(callback: TransformCallback): void {
+    this.pending += this.decoder.decode();
+    this.drain();
+    if (this.pending) this.push(this.rewriteFrame(this.pending, ''));
+    this.pending = '';
+    callback();
+  }
+}
+
+function createCodexCollaborationMarkerTransform(response: {
+  contentType: string;
+  contentEncoding: string;
+}): Transform | null {
+  const encoding = response.contentEncoding.trim().toLowerCase();
+  if (encoding && encoding !== 'identity') return null;
+  if (!response.contentType.trim().toLowerCase().startsWith('text/event-stream')) return null;
+  return new CodexCollaborationMarkerTransform();
+}
+
 function responseStringField(body: Record<string, unknown>, key: string): string | null {
   const value = body[key];
   return typeof value === 'string' && value.length > 0 ? value : null;
@@ -3562,6 +3659,7 @@ async function createCodexProxyHandle(
       // as valid ResponseItems (#4251). The adapter keeps its own compressed/MIME rejections.
       return chainResponseTransforms(
         createResponsesNullArrayRepairTransform(response),
+        createCodexCollaborationMarkerTransform(response),
         execAdapter.createResponseTransform(ctx.reqId, response),
       );
     },
