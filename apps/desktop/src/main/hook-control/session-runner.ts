@@ -993,6 +993,18 @@ export function createMakerHookSessionRunner(deps: {
         // 保持原样投递
       }
 
+      // 取消探针:回收/重建是异步窗口,期间 task.cancel 的 abort 对旧实例无目标、
+      // 对新实例未登记 —— 喊停后不得把消息投给新进程执行。此处尚未发送,提前以
+      // error 收口;execute 收口会按取消账本把状态统一改写为 cancelled。
+      if (req.isCancelRequested?.()) {
+        return {
+          status: 'error',
+          finalText: '',
+          errorMessage: '任务已被用户喊停，本条消息没有执行。',
+          durationMs: Date.now() - startedAt,
+        };
+      }
+
       /**
        * 拿到的可能是**进程里早就活着的那个实例**: maker.createSession 对已在
        * activeSessions 里的 id 直接返回它, 忽略上面传的 workingDir。侧边栏
