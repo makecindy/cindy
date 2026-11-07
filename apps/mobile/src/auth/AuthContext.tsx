@@ -1908,7 +1908,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   // SSO returns through cindycn://auth or cindy://auth. The pending PKCE verifier
   // lives in SecureStore so a browser-triggered app restart can still finish safely.
   useEffect(() => {
-    const handleDeepLink = (url: string | null) => {
+    const handleDeepLink = (url: string | null | undefined) => {
       if (!url || !matchesOAuthCallbackUrl(url, MOBILE_REDIRECT_URL)) return;
       void completeOAuthCallback(url).catch(() => undefined);
     };

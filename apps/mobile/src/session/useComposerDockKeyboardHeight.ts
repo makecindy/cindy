@@ -34,7 +34,7 @@ export function useComposerDockKeyboardHeight() {
       !frame || frame.screenY === 0 ? 0 : iosKeyboardOverlap(frame, viewport);
     let shown = Keyboard.isVisible();
     let lastFrame: KeyboardMetrics | undefined = shown
-      ? Keyboard.metrics()
+      ? Keyboard.metrics() ?? undefined
       : undefined;
     settledHeight.value = shown ? overlap(lastFrame) : 0;
     const settle = (event: KeyboardEvent) => {

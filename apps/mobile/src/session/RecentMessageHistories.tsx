@@ -1,3 +1,4 @@
+import type { ViewInstance } from 'react-native';
 import { createContext, useCallback, useContext, useId, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore, type ReactNode } from 'react';
 import { StyleSheet, View } from 'react-native';
 import { useGlobalSearchParams, useSegments } from 'expo-router';
@@ -16,7 +17,7 @@ type Frame = { left: number; top: number; width: number; height: number };
 type Entry = { key: string; owner: string; children: ReactNode; frame: Frame;
   focused: boolean; ready: boolean; topInset: number; bottomInset: number; interactive: boolean };
 const Context = createContext<{
-  host: React.RefObject<View | null>;
+  host: React.RefObject<ViewInstance | null>;
   namespace: string;
   publish(entry: Entry): void;
   release(owner: string): void;
@@ -28,7 +29,7 @@ const Context = createContext<{
  * native content container docks into the route without moving React ownership. */
 export function RecentMessageHistoriesProvider({ children }: { children: ReactNode }) {
   const { colors } = useTheme();
-  const host = useRef<View>(null);
+  const host = useRef<ViewInstance>(null);
   const namespace = useId();
   const [overlays, setOverlays] = useState<Map<string, ReactNode>>(() => new Map());
   const setOverlay = useCallback((owner: string, content: ReactNode) => {
@@ -132,7 +133,7 @@ export function RecentMessageHistories({ activeKey, children, topInset = 0, bott
   const navigation = useContext(NavigationContext);
   const route = useContext(NavigationRouteContext);
   const viewport = usePaneViewport();
-  const anchor = useRef<View>(null);
+  const anchor = useRef<ViewInstance>(null);
   const [frame, setFrame] = useState<Frame | null>(null);
   const revision = useRef(0);
   const measure = useCallback(() => {
