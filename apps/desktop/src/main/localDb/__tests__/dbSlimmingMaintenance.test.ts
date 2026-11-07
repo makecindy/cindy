@@ -392,6 +392,57 @@ describe('runDbSlimmingMaintenance', () => {
     }
   });
 
+  it('purges only the statuses a request names, so a retention cutoff never reaches archived tasks', async () => {
+    createCleanupFixture();
+
+    const outcome = await runDbSlimmingMaintenance({
+      userDataDir: tmpDir,
+      dbFilePath,
+      request: request({
+        archivedBeforeMs: 2_000,
+        // An automatic retention run: soft-deleted history only, never archived
+        // or active tasks, even though all three share `archivedBeforeMs`.
+        targetStatuses: ['deleted'],
+        includeActiveTasks: false,
+        beforeBytes: estimateDbFilesBytes(dbFilePath),
+      }),
+      now: () => 3_000,
+      log,
+    });
+
+    expect(outcome.result).toMatchObject({
+      status: 'completed',
+      activeTaskCount: 0,
+      deletedTaskCount: 2,
+      archivedTaskCount: 0,
+      messageCount: 2,
+    });
+
+    const db = createBetterSqliteDatabase(dbFilePath, { fileMustExist: true });
+    try {
+      expect(
+        db.prepare('SELECT id FROM messages ORDER BY id').all().map((row) => (row as { id: string }).id),
+      ).toEqual([
+        'message-active-old',
+        'message-active-recent',
+        'message-active-updated-after-scan',
+        'message-archived-boundary',
+        'message-archived-new',
+        'message-deleted-new',
+      ]);
+      // archived-boundary sits exactly on the cutoff. Without `targetStatuses`
+      // it is purged and stamped; an automatic run must leave it untouched.
+      expect(
+        db.prepare("SELECT status, cleared_at FROM sessions WHERE id = 'archived-boundary'").get(),
+      ).toEqual({ status: 'archived', cleared_at: null });
+      expect(
+        db.prepare("SELECT status, cleared_at FROM sessions WHERE id = 'deleted-old'").get(),
+      ).toEqual({ status: 'deleted', cleared_at: null });
+    } finally {
+      db.close();
+    }
+  });
+
   it('stamps cleared_at on archived tasks whose history was purged (#3709)', async () => {
     createCleanupFixture();
 
