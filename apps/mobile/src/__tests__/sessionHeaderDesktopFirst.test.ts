@@ -102,11 +102,9 @@ describe('mobile session header desktop-first surface', () => {
     expect(source).toContain('testID="session.composerFrost"');
     expect(source).toContain('<View ref={topOverlayRef} onLayout={handleTopOverlayLayout} pointerEvents="box-none" style={styles.sessionChrome} testID="session.chrome">');
     expect(source).toContain('<View style={[styles.sessionChromeContent, { paddingTop: horizontalSystemHeader ? nativeHeaderHeight : insets.top + (paneLayout.persistent ? spacing.lg : 0) }, companionChat && Platform.OS !== \'ios\' && { backgroundColor: colors.surface }]}>');
-    // 临时任务列表抽屉在树内,盖不住 iOS 系统栏:抽屉存续期间收起系统栏,内容区沿用打开前的顶栏高度。
-    expect(source).toContain(']), sessionListDrawerOverlayMounted);');
-    expect(source).toContain('systemBarHidden={sessionListDrawerOverlayMounted}');
-    // Stack.Toolbar 左右栏会强制 headerShown: true,收起期间整组不渲染。
-    expect(source).toContain('if (systemBarHidden) return <Stack.Screen options={{ headerShown: false }} />;');
+    // iOS 临时任务列表抽屉放进独立窗口盖住系统栏;系统栏不随抽屉开合收起。
+    expect(source).toContain("aboveSystemBar={Platform.OS === 'ios'}");
+    expect(source).not.toContain('systemBarHidden');
     expect(chromeStyle).toContain("position: 'absolute'");
     // Let native glass press feedback extend beyond the 44pt iOS header.
     expect(chromeStyle).toContain("overflow: Platform.OS === 'ios' ? 'visible' : 'hidden'");

@@ -1,3 +1,5 @@
+import { GhostCardSessionLink } from './GhostCardSessionLink';
+import { ghostCardSessionLinkId } from '@cindy/maker-shared/ghost-card-form';
 import { createRoot } from 'react-dom/client';
 import { MediaScrubber } from '@/components/ui/media-scrubber';
 import { GhostMailHistory } from './GhostMailHistory';
@@ -74,7 +76,7 @@ import {
   setGhostCardTaskAutoArchiveArmed,
 } from '@/cindy-brain/ghostCardTaskArchive';
 import { fillGhostCardIcons } from '@/cindy-brain/ghostCardIcons';
-import { usePrStatuses } from '@/contexts/PrRefsContext';
+import { usePrStatuses, useTaskPrArchiveEligibility } from '@/contexts/PrRefsContext';
 import {
   extractGhostCardGallerySrcs,
   ghostCardGalleryId,
@@ -307,6 +309,7 @@ function GhostCardCanvas({
   // openExternal。链接文案归意识,跳转链路由宿主独占——与 action/prompt 同一
   // 信任模型。值 = 待确认的 URL。
   const [linkAsk, setLinkAsk] = useState<string | null>(null);
+  const [sessionLinks, setSessionLinks] = useState<HTMLElement[]>([]);
   const openCardLink = (url: string): void => {
     void window.electronAPI.openExternal(url).then((res) => {
       if (!res.success) toast.error(t('chat.ghostCall.linkOpenFailed'));
@@ -341,6 +344,7 @@ function GhostCardCanvas({
   const prSlotKey = useMemo(() => readPrStatusSlotKey(renderedCardHtml), [renderedCardHtml]);
   // 卡片可以声明多个 PR 的状态位:订阅会话的整张状态表,每个位各取各的。
   const { statuses: prStatuses } = usePrStatuses(prSlotKey ? (sessionId ?? '') : '');
+  const { eligible: taskArchiveEligible } = useTaskPrArchiveEligibility(prSlotKey ? (sessionId ?? '') : '');
   const prStatusesRef = useRef(prStatuses);
   prStatusesRef.current = prStatuses;
   // 卡上有已合并、可在看过后自动归档的 PR(宿主自己查到的状态,见 applyTaskArchive)。
@@ -351,12 +355,12 @@ function GhostCardCanvas({
   autoArchivePendingRef.current = autoArchivePending;
   const fillPrStatus = useCallback((doc: Document) => {
     if (!prSlotKey) return;
-    setTaskAutoArchive(fillGhostCardPrStatus(doc, (key) => prStatusesRef.current.get(key), t));
-    fillGhostCardTaskAutoArchiveHint(doc, autoArchivePendingRef.current, {
+    setTaskAutoArchive(fillGhostCardPrStatus(doc, (key) => prStatusesRef.current.get(key), t, taskArchiveEligible));
+    fillGhostCardTaskAutoArchiveHint(doc, autoArchivePendingRef.current && taskArchiveEligible, {
       pending: t('chat.ghostCall.taskAutoArchivePending'),
       cancel: t('chat.ghostCall.taskAutoArchiveCancel'),
     }, () => { if (sessionId) cancelGhostCardTaskAutoArchive(sessionId); });
-  }, [prSlotKey, sessionId, t]);
+  }, [prSlotKey, sessionId, t, taskArchiveEligible]);
   // 卡片被原地换成不含任何 PR 标记的内容(card-update):这张卡自己不再有自动归档声明,资格随之撤销。
   useEffect(() => {
     if (!prSlotKey) setTaskAutoArchive(false);
@@ -380,7 +384,7 @@ function GhostCardCanvas({
   // 「看过」= 这张符合条件、待生效的卡片在可见、聚焦的窗口里进入视野(别的卡片进入视野不算:
   // 用户没看到已合并那张卡及其取消提示);用户离开任务时任务页据此决定是否归档。
   useEffect(() => {
-    if (!sessionId || !autoArchivePending || !taskAutoArchive) return;
+    if (!sessionId || !autoArchivePending || !taskAutoArchive || !taskArchiveEligible) return;
     const el = anchorRef.current;
     if (!el || typeof IntersectionObserver === 'undefined') return;
     let inView = false;
@@ -399,7 +403,7 @@ function GhostCardCanvas({
       window.removeEventListener('focus', check);
       document.removeEventListener('visibilitychange', check);
     };
-  }, [sessionId, autoArchivePending, taskAutoArchive]);
+  }, [sessionId, autoArchivePending, taskAutoArchive, taskArchiveEligible]);
   const gallerySrcs = useMemo(
     () => extractGhostCardGallerySrcs(renderedCardHtml),
     [renderedCardHtml],
@@ -733,10 +737,18 @@ function GhostCardCanvas({
       });
     });
     // 卡内外链(v3):data-ghost-link 元素点击 → 宿主确认框 → openExternal。
-    // 净化器已白名单校验(整串 http/https);此处再验协议一次作纵深,并让
+    // 净化器已白名单校验(整串 http/https 或导航专用任务链接);此处再验协议一次作纵深,并让
     // 动作声明优先(净化器已互斥,同为纵深)。
     // 须声明 card.externalLinks 才激活(未声明的插件属性保留但不挂桥)。
+    const taskLinks: HTMLElement[] = [];
     if (allowExternalLinks) doc.querySelectorAll<HTMLElement>('[data-ghost-link]').forEach((el) => {
+      if (ghostCardSessionLinkId(el.dataset.ghostLink ?? '') && !el.dataset.ghostAction) {
+        el.style.cursor = 'pointer';
+        el.setAttribute('tabindex', '0');
+        el.setAttribute('role', 'link');
+        taskLinks.push(el);
+        return;
+      }
       if (el.dataset.xdtLinkBridged === '1') return;
       el.dataset.xdtLinkBridged = '1';
       if (el.dataset.ghostAction) return;
@@ -762,6 +774,7 @@ function GhostCardCanvas({
         }
       });
     });
+    setSessionLinks(previous => previous.length === taskLinks.length && previous.every((el, i) => el === taskLinks[i]) ? previous : taskLinks);
     measureHeight();
   }, [measureHeight, callId, lockActionEl, bindAudioSlot, allowExternalLinks, html, sessionId, fillPrStatus]);
 
@@ -921,6 +934,7 @@ function GhostCardCanvas({
           </div>
         ) : null}
       </div>
+      {sessionLinks.map((element, index) => <GhostCardSessionLink key={index} element={element} />)}
       {/* iframe 子文档不在宿主 querySelector 范围内。镜像零尺寸标记让既有
           DOM 位置映射仍看到完整顺序，避免相同 URL 的普通附件被错定位到
           插件图片；真正的图片和点击处理仍留在沙箱 iframe 内。 */}

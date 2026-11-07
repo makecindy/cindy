@@ -23,6 +23,12 @@ export const appProviderChange = z.discriminatedUnion('action', [
   z.strictObject({ action: z.literal('rediscover'), providerId: id }),
   z.strictObject({ action: z.literal('remove'), providerId: id }),
   z.strictObject({ action: z.literal('restore'), providerId: id }),
+  z.strictObject({ action: z.literal('subscriptionAccounts'), providerId: z.enum(['anthropic', 'openai']),
+    command: z.strictObject({ action: z.enum(['read', 'add', 'login', 'cancel', 'remove', 'configure']),
+      accountId: id.optional(), loginKey: z.string().regex(/^[A-Za-z0-9_-]{1,100}$/).optional(),
+      strategy: z.enum(['least', 'round', 'order', 'weight', 'usage']).optional(),
+      paused: z.boolean().optional(), limit: z.number().int().min(1).max(16).optional(), weight: z.number().int().min(1).max(100).optional(),
+    }) }),
 ]);
 export type AppModelsRequest =
   | { operation: 'list'; providerId?: string }
@@ -54,6 +60,6 @@ export function registerAppModelsTools(registry: XdtHelperToolRegistry, callback
     description: '修改用户指定模型的一项高级配置；visible 控制是否在选择器显示，不等于停用；value=null 删除该项覆盖并跟随默认，不影响其它配置。价格只影响本地用量估算，不改供应商实际账单。复用设置页校验与生效逻辑。',
     inputShape: { target, change: appModelConfiguration }, handler: input => invoke({ operation: 'set', ...input }) });
   registry.register({ name: 'configure_model_provider', category: 'settings',
-    description: '管理供应商名称、显示顺序、供应商或指定型号开关、恢复默认开关、重新发现模型。remove/restore 只管理已断开内置来源的显示；不会删除自定义连接或凭证。身份与参数来自 list_model_providers。',
+    description: '管理这台电脑的供应商名称、顺序、开关与模型发现。subscriptionAccounts 管 Anthropic/OpenAI 订阅账号：command.action=read 查看账号状态；add/login 使用官方 CLI 浏览器登录（需唯一 loginKey），cancel 用同一 loginKey；configure 设置策略或账号暂停、并发上限、权重；remove 移出非默认账号，保留 CLI 文件。账号 id 来自 read，不收凭证或自定义路径。供应商 remove/restore 只管理已断开内置来源的显示。',
     inputShape: { change: appProviderChange }, handler: input => invoke({ operation: 'provider', ...input }) });
 }

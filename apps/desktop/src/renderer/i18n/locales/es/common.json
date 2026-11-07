@@ -19884,5 +19884,23 @@
     "rendered": "Ver documento",
     "wrap": "Ajustar líneas",
     "lineNumbers": "Números de línea"
+  },
+  "subscriptionAccounts": {
+    "title": "Cuentas de suscripción",
+    "note": "La primera cuenta usa la carpeta predeterminada de la CLI. Las cuentas adicionales inician sesión por separado. Las tareas nuevas se distribuyen; las existentes conservan su cuenta.",
+    "strategy": "Equilibrio de carga",
+    "add": "Añadir cuenta",
+    "default": "Carpeta predeterminada",
+    "ready": "Conectada",
+    "signedOut": "Requiere iniciar sesión",
+    "unavailable": "Estado no disponible",
+    "limited": "Cuota agotada",
+    "remove": "Quitar cuenta",
+    "removeTitle": "¿Quitar {{name}}?",
+    "removeDescription": "Cindy dejará de asignar tareas a esta cuenta. La sesión de la CLI y el historial de conversaciones permanecerán en este equipo.",
+    "failed": "No se pudo leer o actualizar la cuenta. Comprueba el inicio de sesión de la CLI y la conexión, e inténtalo de nuevo.",
+    "used": "{{percent}}% utilizado",
+    "directory": "Carpeta de la cuenta",
+    "login": "Iniciar sesión"
   }
 }
