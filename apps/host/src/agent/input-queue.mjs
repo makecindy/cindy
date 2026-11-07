@@ -100,6 +100,18 @@ export function createInputQueue(deps) {
     const maker = deps.getMaker();
     const makerKind = toMakerAgentKind(next.agentKind || stored.agentKind);
     const dbKind = toDbAgentKind(next.agentKind || stored.agentKind);
+
+    // Persist user message immediately so both browser SSE and device-link see it
+    if (deps.persistMessage) {
+      await deps.persistMessage(sessionId, {
+        clientId: next.clientId,
+        role: 'user',
+        content: next.persistedContent || next.text,
+        createdAt: next.createdAt,
+        agentKind: dbKind,
+      }).catch(() => {});
+    }
+
     const session = maker.getSession(sessionId) ?? await maker.createSession({
       id: sessionId,
       agentKind: makerKind,
@@ -121,6 +133,8 @@ export function createInputQueue(deps) {
 
     state.unsubscribe?.();
     let finished = false;
+    let turnAssistantClientId = `${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
+
     const finish = () => {
       if (finished) return;
       finished = true;
@@ -132,7 +146,7 @@ export function createInputQueue(deps) {
       // A turn stopped before its final event still leaves what the user saw.
       if (!finalTextPersisted && assistantText.trim() && deps.persistMessage) {
         void deps.persistMessage(sessionId, {
-          clientId: `partial-${Date.now()}`,
+          clientId: turnAssistantClientId,
           role: 'assistant',
           content: assistantText,
           agentKind: dbKind,
@@ -146,13 +160,22 @@ export function createInputQueue(deps) {
     let assistantText = '';
     let finalTextPersisted = false;
     state.unsubscribe = session.onEvent((event) => {
-      deps.hub.publish({ sessionId, event, ...event });
+      if (!finalTextPersisted && event.agentMeta?.uuid && typeof event.agentMeta.uuid === 'string') {
+        turnAssistantClientId = event.agentMeta.uuid;
+      }
+      deps.hub.publish({
+        type: 'agent_event',
+        sessionId,
+        event,
+        persistId: turnAssistantClientId,
+        ...event,
+      });
       if (event.type === 'text' && typeof event.data?.text === 'string') {
         if (event.data.isFinal) {
           // Final text carries the complete assistant answer for this turn.
           if (deps.persistMessage) {
             void deps.persistMessage(sessionId, {
-              clientId: event.agentMeta?.uuid ?? `${Date.now()}-assistant`,
+              clientId: turnAssistantClientId,
               role: 'assistant',
               content: event.data.text,
               agentMeta: event.agentMeta ?? null,
@@ -184,15 +207,6 @@ export function createInputQueue(deps) {
         return;
       }
       deps.sent(sessionId);
-      if (deps.persistMessage) {
-        await deps.persistMessage(sessionId, {
-          clientId: next.clientId,
-          role: 'user',
-          content: next.persistedContent || next.text,
-          createdAt: next.createdAt,
-          agentKind: dbKind,
-        }).catch(() => {});
-      }
     } catch (error) {
       deps.hub.publish({
         type: 'error',

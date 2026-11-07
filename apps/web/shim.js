@@ -1130,10 +1130,12 @@
                 } else if (parsed.type === 'session_changed') {
                   if (parsed.action === 'create') {
                     emit('localDb.sessions.onCreated', parsed.session);
-                  } else if (parsed.action === 'update') {
+                  } else if (parsed.action === 'update' || parsed.patch) {
                     emit('localDb.sessions.onPatched', { sessionId: parsed.sessionId, patch: parsed.patch });
-                  } else if (parsed.action === 'discard_provisional') {
+                  } else if (parsed.action === 'discard_provisional' || parsed.status === 'deleted') {
                     emit('localDb.sessions.onPatched', { sessionId: parsed.sessionId, patch: { status: 'deleted' } });
+                  } else if (parsed.status) {
+                    emit('localDb.sessions.onPatched', { sessionId: parsed.sessionId, patch: { status: parsed.status } });
                   }
                 } else if (parsed.type === 'message_created') {
                   emit('localDb.messages.onCreated', { sessionId: parsed.sessionId, message: parsed.message });

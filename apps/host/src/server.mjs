@@ -272,12 +272,15 @@ export function createHostServer(deps) {
           send(response, 401, { error: 'unauthorized' });
           return;
         }
+        request.socket?.setNoDelay(true);
         response.writeHead(200, {
           'content-type': 'text/event-stream; charset=utf-8',
-          'cache-control': 'no-store',
+          'cache-control': 'no-store, no-transform',
+          'x-accel-buffering': 'no',
           connection: 'keep-alive',
         });
         response.write(': connected\n\n');
+        response.flush?.();
 
         const sinceHeader = request.headers['last-event-id'];
         const sinceQuery = url.searchParams.get('since') ?? url.searchParams.get('lastEventId') ?? url.searchParams.get('after');
@@ -290,6 +293,7 @@ export function createHostServer(deps) {
               const idLine = item.seq != null ? `id: ${item.seq}\n` : '';
               response.write(`${idLine}data: ${JSON.stringify(item)}\n\n`);
             }
+            response.flush?.();
           }
         }
 
@@ -297,6 +301,7 @@ export function createHostServer(deps) {
           if (response.writableEnded) return;
           const idLine = event.seq != null ? `id: ${event.seq}\n` : '';
           response.write(`${idLine}data: ${JSON.stringify(event)}\n\n`);
+          response.flush?.();
         });
         const keepAlive = setInterval(() => {
           if (response.writableEnded) return;

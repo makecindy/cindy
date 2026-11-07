@@ -147,3 +147,95 @@ test('device-link invokes local-db:sessions:list with normalized body', async ()
 
   service.stop();
 });
+
+test('device-link forwards eventHub events to subscribed controllers', async () => {
+  const pushes = [];
+  let hubCallback = null;
+
+  const mockDeps = {
+    realm: 'global',
+    deviceId: 'test-device-id',
+    getAccessToken: async () => 'token',
+    listSessions: async () => [],
+    getSession: async () => ({}),
+    updateSession: async () => ({}),
+    createSession: async () => ({}),
+    listMessages: async () => [],
+    historyView: async () => ({ items: [] }),
+    listProviders: async () => ({ providers: [] }),
+    listAvailableAgents: async () => [],
+    getCapabilities: async () => ({}),
+    listProjectAliases: async () => [],
+    listRecentWorkdirs: async () => [],
+    inputQueue: {
+      enqueue: async () => ({}),
+      stop: async () => ({}),
+      steer: async () => ({}),
+      resume: async () => ({}),
+      remove: async () => ({}),
+      getProjection: async () => ({}),
+    },
+    eventHub: {
+      subscribe: (cb) => {
+        hubCallback = cb;
+        return () => {};
+      },
+    },
+  };
+
+  const service = createDeviceLinkService(mockDeps);
+  service.start();
+  const client = service.getClient();
+  client.getStatus = () => 'online';
+  client.sendPush = (dst, channel, payload) => {
+    pushes.push({ dst, channel, payload });
+  };
+
+  const listener = [...(client.frameHandlers ?? [])][0];
+  assert.ok(listener);
+
+  // Subscribe controller-1 with object format { topics: [...] }
+  await listener({
+    kind: 'invoke',
+    src: 'controller-1',
+    id: 'sub-1',
+    payload: { channel: 'device-link:topic-subscribe', args: [{ topics: ['session:task-1', 'sessions'] }] },
+  });
+
+  // 1. Agent event text delta
+  hubCallback({
+    type: 'agent_event',
+    sessionId: 'task-1',
+    event: { type: 'text', data: { text: 'Hello world', isFinal: false } },
+    persistId: 'turn-1',
+  });
+
+  // 2. Persisted message created
+  hubCallback({
+    type: 'message_created',
+    sessionId: 'task-1',
+    message: { clientId: 'c1', role: 'user', content: 'hi' },
+  });
+
+  // 3. Session status patched
+  hubCallback({
+    type: 'session_changed',
+    sessionId: 'task-1',
+    patch: { title: 'Updated Title' },
+  });
+
+  // 4. Input queue projection
+  hubCallback({
+    type: 'input_projection',
+    sessionId: 'task-1',
+    projection: { sessionId: 'task-1', turnInProgress: true, pendingQueue: [] },
+  });
+
+  // Verify all 4 pushes were received by controller-1
+  assert.ok(pushes.some((p) => p.dst === 'controller-1' && p.channel === 'maker:event' && p.payload.persistId === 'turn-1'));
+  assert.ok(pushes.some((p) => p.dst === 'controller-1' && p.channel === 'local-db:messages:created' && p.payload.message?.content === 'hi'));
+  assert.ok(pushes.some((p) => p.dst === 'controller-1' && p.channel === 'local-db:sessions:patched' && p.payload.patch?.title === 'Updated Title'));
+  assert.ok(pushes.some((p) => p.dst === 'controller-1' && p.channel === 'maker:input:projection' && p.payload.sessionId === 'task-1'));
+
+  service.stop();
+});

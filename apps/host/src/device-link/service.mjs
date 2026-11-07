@@ -21,8 +21,18 @@ import {
   DEVICE_LINK_CAPABILITY_GITHUB_READ_V1,
   DL_SUBSCRIBE_CHANNEL,
   DL_UNSUBSCRIBE_CHANNEL,
+  topicForPush,
 } from '@cindy/device-link';
 import { compressGzipSync, gunzipBase64TextBounded } from '@cindy/device-link/node-compression';
+
+function extractTopics(raw) {
+  if (Array.isArray(raw)) return raw.map(String);
+  if (raw && typeof raw === 'object' && Array.isArray(raw.topics)) {
+    return raw.topics.map(String);
+  }
+  if (typeof raw === 'string') return [raw];
+  return [];
+}
 
 export function createDeviceLinkService(deps) {
   const subscriptions = new Map(); // controllerDeviceId -> Set<string> of topics
@@ -173,9 +183,8 @@ export function createDeviceLinkService(deps) {
         result = await deps.listProjectAliases();
       } else if (channel === 'local-db:recent-workdirs:list') {
         result = await deps.listRecentWorkdirs();
-      } else if (channel === 'device-link:subscribe' || channel === DL_SUBSCRIBE_CHANNEL) {
-        const req = args[0] ?? {};
-        const topics = req.topics ?? [];
+      } else if (channel === 'device-link:subscribe' || channel === DL_SUBSCRIBE_CHANNEL || channel === 'device-link:topic-subscribe') {
+        const topics = extractTopics(args[0]);
         let set = subscriptions.get(src);
         if (!set) {
           set = new Set();
@@ -183,9 +192,8 @@ export function createDeviceLinkService(deps) {
         }
         for (const t of topics) set.add(t);
         result = { subscribed: true };
-      } else if (channel === 'device-link:unsubscribe' || channel === DL_UNSUBSCRIBE_CHANNEL) {
-        const req = args[0] ?? {};
-        const topics = req.topics ?? [];
+      } else if (channel === 'device-link:unsubscribe' || channel === DL_UNSUBSCRIBE_CHANNEL || channel === 'device-link:topic-unsubscribe') {
+        const topics = extractTopics(args[0]);
         const set = subscriptions.get(src);
         if (set) {
           for (const t of topics) set.delete(t);
@@ -344,27 +352,74 @@ export function createDeviceLinkService(deps) {
       console.log(`[host:device-link] status -> ${status}`);
     });
 
+    const pushToSubscribers = (channel, payload) => {
+      if (!client || client.getStatus() !== 'online' || !payload) return;
+      const topic = topicForPush(channel, payload);
+      for (const [controllerId, topics] of subscriptions.entries()) {
+        const matches = !topic
+          || topics.has(topic)
+          || topics.has('*');
+        if (matches) {
+          try {
+            client.sendPush(controllerId, channel, payload);
+          } catch (_) {}
+        }
+      }
+    };
+
     if (deps.eventHub?.subscribe) {
       eventUnsubscribe = deps.eventHub.subscribe((evt) => {
-        if (!client || client.getStatus() !== 'online') return;
+        if (!client || client.getStatus() !== 'online' || !evt) return;
 
-        if (evt.type === 'agent_event') {
-          const { sessionId, event } = evt;
-          for (const [controllerId, topics] of subscriptions.entries()) {
-            if (topics.has(`session:${sessionId}`) || topics.has('sessions') || topics.has('*')) {
-              try {
-                client.sendPush(controllerId, 'maker:event', { sessionId, event });
-              } catch (_) {}
+        // 1. Agent live event stream: text deltas, tools, status, done
+        if (evt.type === 'agent_event' || evt.event) {
+          const { sessionId, event, persistId } = evt;
+          if (sessionId && event) {
+            pushToSubscribers('maker:event', { sessionId, event, persistId });
+            if (event.type === 'status') {
+              const status = event.data?.status ?? (event.data?.isRunning ? 'running' : 'idle');
+              pushToSubscribers('maker:status-changed', { sessionId, status });
             }
           }
-        } else if (evt.type === 'session_created' || evt.type === 'session_updated') {
-          for (const [controllerId, topics] of subscriptions.entries()) {
-            if (topics.has('sessions') || topics.has('*')) {
-              try {
-                client.sendPush(controllerId, 'sessions:patched', evt);
-              } catch (_) {}
-            }
-          }
+        }
+
+        // 2. Input queue projection
+        if (evt.type === 'input_projection' && evt.projection) {
+          pushToSubscribers('maker:input:projection', evt.projection);
+        }
+
+        // 3. Persisted message created
+        if (evt.type === 'message_created' && evt.sessionId && evt.message) {
+          pushToSubscribers('local-db:messages:created', {
+            sessionId: evt.sessionId,
+            message: evt.message,
+          });
+        }
+
+        // 4. Session status / metadata patched
+        if (evt.type === 'session_changed' && evt.sessionId) {
+          const patch = evt.patch ?? (evt.status ? { status: evt.status } : {});
+          pushToSubscribers('local-db:sessions:patched', {
+            sessionId: evt.sessionId,
+            patch,
+          });
+        }
+
+        // 5. Interaction requests (approvals / questions)
+        if (evt.type === 'interaction_request' && evt.sessionId && evt.request) {
+          pushToSubscribers('maker:interaction-request', {
+            sessionId: evt.sessionId,
+            request: evt.request,
+          });
+        }
+
+        // 6. Interaction dismissed
+        if (evt.type === 'interaction_dismissed' && evt.sessionId && evt.requestId) {
+          pushToSubscribers('maker:interaction-dismissed', {
+            sessionId: evt.sessionId,
+            requestId: evt.requestId,
+            reason: evt.reason,
+          });
         }
       });
     }
