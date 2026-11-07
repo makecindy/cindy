@@ -68,6 +68,12 @@ function findNearestGitRoot(workingDir: string): string | null {
   }
 }
 
+/** collector 与漂移快检共用的 git 边界解析(同输入必同输出,才能恒等比较)。 */
+function resolvePiResourceRepoRoot(workingDir: string): string {
+  const scanRoot = realpathOrNull(workingDir) ?? path.resolve(workingDir);
+  return findNearestGitRoot(scanRoot) ?? scanRoot;
+}
+
 function isWithinRoot(root: string, candidate: string): boolean {
   const relative = path.relative(root, candidate);
   return relative === '' || (!relative.startsWith(`..${path.sep}`) && relative !== '..' && !path.isAbsolute(relative));
@@ -137,7 +143,7 @@ export function collectPiProjectResourceCliPaths(workingDir: string): PiProjectR
     return emptyPiProjectResourceCliPaths();
   }
   const scanRoot = realpathOrNull(workingDir) ?? path.resolve(workingDir);
-  const repoRoot = findNearestGitRoot(scanRoot) ?? scanRoot;
+  const repoRoot = resolvePiResourceRepoRoot(workingDir);
   const skills = new Set<string>();
   const promptTemplates = new Set<string>();
   const extensions = new Set<string>();
@@ -203,11 +209,14 @@ export interface PiProjectResourceLaunchSnapshot {
   readonly workingDir: string;
   readonly paths: PiProjectResourceCliPaths;
   /**
-   * watch root 的 mtime 基线。Map 值可在重扫确认路径集合未变后就地刷新(见
+   * watch root 的 mtime 基线。Map 值可在重扫确认路径集合未变后就地重建(见
    * piProjectResourcesDrifted),避免 mtime 变化来自无关文件时每条消息重复全量重扫;
    * 路径集合与 paths 一样保持启动口径不变。
    */
   readonly watchRootMtimes: Map<string, number>;
+  /** 启动时认定的 git root:更近的 .git 出现/消失会改变 collector 的枚举链
+   * (.agents 向上走到 repoRoot),而任何被盯目录的 mtime 都不动,必须单独核对。 */
+  readonly repoRoot: string;
 }
 
 /**
@@ -294,7 +303,12 @@ export function snapshotPiProjectResourceLaunch(
   paths: PiProjectResourceCliPaths,
   watchRootMtimes: Map<string, number>,
 ): PiProjectResourceLaunchSnapshot {
-  return Object.freeze({ workingDir, paths, watchRootMtimes });
+  return Object.freeze({
+    workingDir,
+    paths,
+    watchRootMtimes,
+    repoRoot: resolvePiResourceRepoRoot(workingDir),
+  });
 }
 
 function samePiResourceList(left: readonly string[], right: readonly string[]): boolean {
@@ -302,18 +316,24 @@ function samePiResourceList(left: readonly string[], right: readonly string[]): 
 }
 
 /**
- * 盘上项目资源相对启动快照是否已漂移(argv 重算后会不同)。两级判定:
- * 1. stat 快检:所有 watch root 的 mtime 与基线一致(含缺失态 -1) → 无漂移;
- * 2. mtime 有变化才全量重扫(每次调用至多一次),按最终路径集合判定 —— 集合相同
- *    (如触碰无关目录)不算漂移,且就地刷新该 root 的基线,让下一次快检恢复零扫描;
+ * 盘上项目资源相对启动快照是否已漂移(argv 重算后会不同)。三级判定:
+ * 1. git 边界核对:更近的 .git 出现/消失会改变 collector 的枚举链(.agents 向上
+ *    走到 repoRoot),而任何被盯目录的 mtime 都不动,必须单独比较;
+ * 2. stat 快检:所有 watch root 的 mtime 与基线一致(含缺失态 -1) → 无漂移;
+ * 3. mtime 有变化才全量重扫(每次调用至多一次),按最终路径集合判定 —— 集合相同
+ *    (如触碰无关目录)不算漂移,且就地重建整张基线(新建的空 namespace / 空扩展
+ *    目录也要纳入盯视,否则后续其内部增删无人盯),让下一次快检恢复零扫描;
  *    集合相同不要求内容相同(路径集合才是 argv 的输入)。判定漂移时不动基线:
  *    调用方将回收运行时并重建新快照。
  */
 export function piProjectResourcesDrifted(snapshot: PiProjectResourceLaunchSnapshot): boolean {
+  if (resolvePiResourceRepoRoot(snapshot.workingDir) !== snapshot.repoRoot) return true;
+  let changed = false;
   let freshPaths: PiProjectResourceCliPaths | null = null;
   for (const [dir, mtimeAtLaunch] of snapshot.watchRootMtimes) {
     const mtimeNow = statMtimeMs(dir);
     if (mtimeNow === mtimeAtLaunch) continue;
+    changed = true;
     freshPaths ??= collectPiProjectResourceCliPaths(snapshot.workingDir);
     const driftedNow = !(
       samePiResourceList(freshPaths.skills, snapshot.paths.skills)
@@ -321,7 +341,12 @@ export function piProjectResourcesDrifted(snapshot: PiProjectResourceLaunchSnaps
       && samePiResourceList(freshPaths.extensions, snapshot.paths.extensions)
     );
     if (driftedNow) return true;
-    snapshot.watchRootMtimes.set(dir, mtimeNow);
+  }
+  if (changed) {
+    // mtime 变了但集合相同:重建整张基线,下一次快检恢复零扫描。
+    const freshRoots = collectPiProjectResourceWatchRootMtimes(snapshot.workingDir);
+    snapshot.watchRootMtimes.clear();
+    for (const [dir, mtime] of freshRoots) snapshot.watchRootMtimes.set(dir, mtime);
   }
   return false;
 }

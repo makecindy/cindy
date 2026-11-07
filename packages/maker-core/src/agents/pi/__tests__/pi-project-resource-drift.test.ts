@@ -200,6 +200,32 @@ describe('piProjectResourcesDrifted', () => {
       .toBe(statMtime(path.join(project, '.pi', 'skills')));
   });
 
+  it('rebuilds the watch map after an unchanged rescan so new child dirs are watched', () => {
+    mkdirSync(path.join(project, '.pi', 'extensions'), { recursive: true });
+    const baseline = snapshot();
+    // 重扫窗口内新建的空扩展目录:集合未变,但必须从此纳入盯视
+    mkdirSync(path.join(project, '.pi', 'extensions', 'newext'), { recursive: true });
+    expect(piProjectResourcesDrifted(baseline)).toBe(false);
+    expect(baseline.watchRootMtimes.has(path.join(project, '.pi', 'extensions', 'newext'))).toBe(true);
+    // 若不重建基线,这里的 index.ts 只改未盯视的新子目录 mtime,永远检不出
+    writeFileSync(path.join(project, '.pi', 'extensions', 'newext', 'index.ts'), 'export {};\n');
+    expect(piProjectResourcesDrifted(baseline)).toBe(true);
+  });
+
+  it('detects a nearer git boundary appearing after launch (repo root identity)', () => {
+    mkdirSync(path.join(project, 'outer', '.agents', 'skills'), { recursive: true });
+    writeFileSync(path.join(project, 'outer', '.git'), '');
+    writeSkill(path.join('outer', '.agents', 'skills'), 'outer-skill');
+    const nested = path.join(project, 'outer', 'sub');
+    mkdirSync(nested, { recursive: true });
+    const baseline = snapshotPiProjectResourceLaunch(
+      nested, collectPiProjectResourceCliPaths(nested), collectPiProjectResourceWatchRootMtimes(nested));
+    expect(piProjectResourcesDrifted(baseline)).toBe(false);
+    // 子目录自己 git init:枚举链截断,outer skill 不再属于本项目边界
+    mkdirSync(path.join(nested, '.git'), { recursive: true });
+    expect(piProjectResourcesDrifted(baseline)).toBe(true);
+  });
+
   it('missing directories baseline as -1 and compare against real mtimes', () => {
     const roots = collectPiProjectResourceWatchRootMtimes(project);
     expect(roots.get(path.join(project, '.pi'))).toBe(-1);
