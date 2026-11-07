@@ -19739,8 +19739,8 @@
     "removeTitle": "Remove {{name}}?",
     "removeDescription": "Cindy will stop assigning tasks to this account. Its CLI login and conversation history remain on this computer.",
     "failed": "Could not read or update this account. Check the CLI login and connection, then try again.",
-    "used": "{{percent}}% used",
     "directory": "Account folder",
+    "loginAgain": "Sign in again",
     "login": "Sign in"
   }
 }

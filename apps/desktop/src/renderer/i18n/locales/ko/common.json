@@ -19667,8 +19667,8 @@
     "removeTitle": "{{name}} 계정을 제거할까요?",
     "removeDescription": "Cindy가 이 계정에 작업을 배정하지 않습니다. CLI 로그인과 대화 기록은 이 컴퓨터에 유지됩니다.",
     "failed": "계정을 읽거나 업데이트하지 못했습니다. CLI 로그인과 네트워크 연결을 확인한 후 다시 시도하세요.",
-    "used": "{{percent}}% 사용",
     "directory": "계정 폴더",
+    "loginAgain": "다시 로그인",
     "login": "로그인"
   }
 }

@@ -78,6 +78,7 @@ import {
   readSubscriptionPool,
   disconnectSubscriptionPool,
   readSubscriptionPoolUsage,
+  readSubscriptionPoolAccountUsages,
   runSubscriptionAccountCommand,
   observeSubscriptionAccountUsage,
 } from '../runtime.js';
@@ -674,6 +675,72 @@ describe('native account assignment on the executing computer', () => {
     const quota = (await readSubscriptionPoolUsage('openai'))?.codexUsage?.appServerBuckets;
     expect(quota?.codex.primary?.usedPercent).toBe(15);
     expect(quota?.special.primary?.usedPercent).toBe(5);
+  });
+  // Regression: settings showed one weekly bar per account. Each account must carry every
+  // window of its own snapshot, and sharing must list only accounts that can serve tasks.
+  it('reports every usage window per account and lists only assignable accounts for sharing', async () => {
+    h.pools.anthropic!.accounts.push({ ...account('paused'), paused: true }, account('signed-out'));
+    h.read.mockImplementation(async (_provider: string, dir: string) => ({
+      authenticated: !dir.endsWith('signed-out'),
+      identity: dir,
+    }));
+    const window = (utilization: number) => ({ utilization, resetsAt: Date.now() / 1000 + 3600 });
+    h.usage.mockImplementation(async (_provider: string, dir: string) => ({
+      claudeUsage: {
+        updatedAt: Date.now(),
+        fiveHour: window(dir.endsWith('default') ? 2 : 30),
+        sevenDay: window(dir.endsWith('default') ? 86 : 40),
+        scoped: [{ modelId: 'claude-fable', modelDisplayName: 'Fable', ...window(16) }],
+      },
+    }));
+    const view = await readSubscriptionPool('anthropic');
+    expect(view.accounts.map((a) => a.usage?.claude?.sevenDay?.utilization)).toEqual([
+      86,
+      40,
+      40,
+      undefined,
+    ]);
+    expect(view.accounts[1].usage?.claude).toMatchObject({
+      fiveHour: { utilization: 30 },
+      scoped: [{ modelDisplayName: 'Fable', utilization: 16 }],
+    });
+    const shared = await readSubscriptionPoolAccountUsages('anthropic');
+    expect(shared?.map((a) => [a.isDefault, a.usage?.claudeUsage?.sevenDay?.utilization])).toEqual([
+      [true, 86],
+      [false, 40],
+    ]);
+    expect(JSON.stringify(shared)).not.toContain('anthropic/');
+    h.pools.anthropic!.disconnected = true;
+    expect(await readSubscriptionPoolAccountUsages('anthropic')).toBeUndefined();
+    expect((await readSubscriptionPool('anthropic')).accounts.every((a) => !a.usage)).toBe(true);
+  });
+  it('keeps Codex credits for the account card when quota events update its buckets', async () => {
+    h.pools.openai = { strategy: 'order', accounts: [account('default')] };
+    h.usage.mockResolvedValue({
+      codexUsage: {
+        appServerBuckets: {
+          codex: {
+            limitId: 'codex',
+            limitName: null,
+            updatedAt: Date.now(),
+            primary: { usedPercent: 10, windowMinutes: 300, resetsAt: Date.now() / 1000 + 600 },
+            secondary: null,
+          },
+        },
+        webSnapshot: null,
+      },
+      codexCredits: { hasCredits: true, unlimited: false, balance: '12.50' },
+    });
+    const lease = await acquireSubscriptionAccount('openai', 'gpt-6', []);
+    observeSubscriptionAccountUsage(lease!.account, {
+      limitId: 'codex',
+      primary: { usedPercent: 55, windowMinutes: 300, resetsAt: Date.now() / 1000 + 600 },
+    });
+    lease!.release();
+    expect((await readSubscriptionPool('openai')).accounts[0].usage?.codex).toMatchObject({
+      buckets: { codex: { primary: { usedPercent: 55 } } },
+      credits: { balance: '12.50' },
+    });
   });
   it('reserves login before asynchronous writes, and an early cancellation never launches the CLI', async () => {
     const pending = runSubscriptionAccountCommand({
