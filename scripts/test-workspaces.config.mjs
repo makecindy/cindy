@@ -375,6 +375,8 @@ export default {
             'src/main/__tests__/*LocalSessions.test.ts',
             'src/main/__tests__/codexHistoryPromptInit.test.ts',
             'src/main/__tests__/orcaStaleIndexCleanup.test.ts',
+            // Real PowerShell regression runs separately in windows-runner-checks.
+            'src/main/__tests__/windowsPackagedInstanceBarrier.test.ts',
             'src/main/scheduler-host/__tests__/*.db.test.ts',
             'src/main/__tests__/directSessionSendGuard.test.ts',
             'src/main/__tests__/makerSendToSessionOrdering.test.ts',

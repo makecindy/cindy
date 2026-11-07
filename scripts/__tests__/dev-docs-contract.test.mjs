@@ -342,6 +342,10 @@ test("client CI keeps the complete sharded unit gate on Windows", () => {
 	assert.doesNotMatch(runnerChecks, /^    needs:/m);
 	assert.doesNotMatch(runnerChecks, /^    strategy:/m);
 	assert.equal([...runnerChecks.matchAll(/^        run: pnpm test:runner$/gm)].length, 1);
+	assert.match(
+		runnerChecks,
+		/^      - name: Run Windows packaged-instance barrier regression\r?\n        run: pnpm --filter desktop exec vitest run src\/main\/__tests__\/windowsPackagedInstanceBarrier\.test\.ts --maxWorkers=1$/m,
+	);
 	assert.match(runnerChecks, /botCanonicalSession\.test\.ts/);
 	// Database safety gate: Linux skips the bundled sqlite-vec replay. Keep the
 	// conditional real-upgrade job on a supported runner behind the required check.
