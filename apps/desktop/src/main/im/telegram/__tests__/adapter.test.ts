@@ -83,6 +83,9 @@ describe('Telegram group history access scope', () => {
     expect(ownerPolicy).toBeDefined();
     expect(adapter.turnPolicyOptionalForMode?.('bypassPermissions', guestPolicy!)).toBe(false);
     expect(adapter.turnPolicyOptionalForMode?.('bypassPermissions', ownerPolicy!)).toBe(true);
+    expect(adapter.turnPolicyAutoFallbackForMode?.('bypassPermissions', guestPolicy!)).toBe(true);
+    expect(adapter.turnPolicyAutoFallbackForMode?.('bypassPermissions', ownerPolicy!)).toBe(false);
+    expect(adapter.turnPolicyAutoFallbackForMode?.('ask', guestPolicy!)).toBe(false);
     expect(adapter.turnPolicyOptionalForMode?.('auto', ownerPolicy!)).toBe(false);
     expect(adapter.turnPolicyOptionalForMode?.('ask', ownerPolicy!)).toBe(false);
   });
@@ -112,6 +115,7 @@ describe('Telegram group history access scope', () => {
     // The teammate's permission setting is the only switch: Full access drops the guest policy
     // instead of rejecting the turn; Auto / Ask keep it.
     expect(teammate.turnPolicyOptionalForMode?.('bypassPermissions', guestPolicy!)).toBe(true);
+    expect(teammate.turnPolicyAutoFallbackForMode?.('bypassPermissions', guestPolicy!)).toBe(false);
     expect(teammate.turnPolicyOptionalForMode?.('auto', guestPolicy!)).toBe(false);
     expect(teammate.turnPolicyOptionalForMode?.('ask', guestPolicy!)).toBe(false);
   });
@@ -130,7 +134,10 @@ describe('Telegram group history access scope', () => {
   });
 
   it('explains an unsupported permission mode without exposing the internal error code', () => {
-    const message = ui.error.permissionModeUnsupported;
+    const message = ui.error.permissionModeUnsupported('bypassPermissions');
+    expect(message).toContain('其他群成员');
+    expect(message).toContain('机器人绑定的用户');
+    expect(message).toContain('尚未执行');
     expect(message).toContain('自动审批');
     expect(message).toContain('/permission');
     expect(message).not.toContain('TURN_PERMISSION_POLICY_UNSUPPORTED');

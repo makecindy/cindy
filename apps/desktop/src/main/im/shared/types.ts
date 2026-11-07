@@ -287,6 +287,11 @@ export interface ImChannelAdapter {
     permissionMode: PermissionMode,
     turnPermissionPolicy: TurnPermissionPolicy,
   ): boolean;
+  /** Keep the policy, but temporarily use Auto for this turn. Never persists the mode. */
+  turnPolicyAutoFallbackForMode?(
+    permissionMode: PermissionMode,
+    turnPermissionPolicy: TurnPermissionPolicy,
+  ): boolean;
   /** Telegram 每轮的群历史检索授权；其它渠道不实现即 fail closed。 */
   groupHistoryAccessFor?(event: IMMessageEvent): GroupHistoryAccessScope | undefined;
   /**
