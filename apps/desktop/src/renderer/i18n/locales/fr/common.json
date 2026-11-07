@@ -2455,12 +2455,12 @@
         "previewStarting": "Lâchez la souris et le clavier. L'écran est masqué dans 3 secondes ; appuyez sur une touche pour le verrouiller, puis déverrouillez-le.",
         "previewUnavailable": "Impossible de masquer l'écran. Redémarrez Cindy et réessayez.",
         "delay": {
-          "label": "Masquer l'écran après",
-          "hint": "Durée sans toucher le clavier ni la souris avant que le cache n'apparaisse. Par défaut, la même que la mise en veille de l'écran.",
           "30": "30 s",
           "60": "1 min",
           "120": "2 min",
           "300": "5 min",
+          "label": "Masquer l'écran après",
+          "hint": "Durée sans toucher le clavier ni la souris avant que le cache n'apparaisse. Par défaut, la même que la mise en veille de l'écran.",
           "system": "Système"
         }
       }
@@ -10024,7 +10024,48 @@
       "terminated": "Processus {{name}} arrêté",
       "terminateFailed": "Impossible d'arrêter ce processus : il s'est peut-être déjà terminé. La liste sera actualisée au prochain relevé.",
       "sessionDetail": "Tâche : {{title}}",
-      "processCount_many": "Arborescence : {{count}} processus"
+      "processCount_many": "Arborescence : {{count}} processus",
+      "tabs": {
+        "label": "Vue des ressources",
+        "processes": "Processus",
+        "hostDaemons": "Éléments en arrière-plan"
+      }
+    },
+    "hostDaemons": {
+      "scanning": "Analyse des éléments en arrière-plan…",
+      "refresh": "Actualiser",
+      "loadFailed": "Impossible de lire les éléments en arrière-plan",
+      "refreshFailed": "Échec de l’actualisation ; cette liste peut être obsolète",
+      "unsupported": "Les éléments en arrière-plan ne sont disponibles que sous Windows",
+      "empty": "Aucun élément en arrière-plan créé par des tâches pour le moment",
+      "owner": "Créé par : {{title}}",
+      "ownerUnknown": "Inconnu",
+      "state": {
+        "running": "En cours",
+        "ready": "Inactif",
+        "disabled": "Désactivé",
+        "unknown": "Inconnu"
+      },
+      "trigger": {
+        "logon": "À la connexion",
+        "startup": "Au démarrage",
+        "schedule": "Selon la planification",
+        "other": "Autre déclencheur"
+      },
+      "stop": "Arrêter",
+      "delete": "Supprimer",
+      "run": "Démarrer",
+      "started": "{{name}} démarré",
+      "stopTitle": "Arrêter « {{name}} » ?",
+      "stopBody": "Met fin uniquement à l’exécution en cours. La tâche redémarrera selon sa planification.",
+      "deleteTitle": "Supprimer « {{name}} » ?",
+      "deleteBody": "Supprime définitivement cette tâche planifiée de cet ordinateur ; elle ne se lancera donc plus automatiquement. Les enregistrements de tâches dans Cindy ne sont pas affectés.",
+      "stopped": "{{name}} arrêté",
+      "deleted": "{{name}} supprimé",
+      "actionFailed": "Échec de l’action. Réessayez.",
+      "unrelated_one": "{{count}} élément en arrière-plan sans rapport est masqué",
+      "unrelated_other": "{{count}} éléments en arrière-plan sans rapport sont masqués",
+      "unrelated_many": "{{count}} élément en arrière-plan sans rapport est masqué"
     }
   },
   "update": {
