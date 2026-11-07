@@ -12483,7 +12483,12 @@
       "editSaveAria": "儲存編輯（Enter）",
       "editCancelAria": "取消編輯（Esc）",
       "syntheticContinueLabel": "繼續未完成的任務（系統指令）",
-      "syntheticTriggerLabel": "系統指令"
+      "syntheticTriggerLabel": "系統指令",
+      "holdAria": "暫停此則",
+      "holdTip": "暫停這一則及其之後的排隊訊息",
+      "heldRowAria": "停點：這一則及之後的排隊訊息不會自動送出；目前工作照常執行完",
+      "releaseHoldTip": "已停在這裡，恢復後繼續送出",
+      "releaseHoldAria": "恢復此則的自動送出"
     },
     "newChatView": {
       "missing": {

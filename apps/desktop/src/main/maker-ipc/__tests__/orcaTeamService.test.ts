@@ -481,6 +481,7 @@ function createDeps(overrides: Partial<OrcaTeamServiceDeps> = {}) {
       queuePaused: false,
     })),
     getWorkerQueuePaused: vi.fn(() => false),
+    getWorkerQueueHeld: vi.fn(() => false),
     sendAutoBridgeToLead: vi.fn(async () => ({ accepted: true })),
     getSessionQueueSnapshot: vi.fn(async () => ({
       pendingQueue: [],
@@ -978,6 +979,7 @@ describe('OrcaTeamService', () => {
         throw new Error('stop rejected');
       }),
       getWorkerQueuePaused: vi.fn(() => true),
+      getWorkerQueueHeld: vi.fn(() => false),
     });
 
     await expect(
@@ -3532,6 +3534,7 @@ describe('OrcaTeamService worker queued message control', () => {
         source: 'lead',
         content: '原始任务',
         consuming: false,
+        held: false,
       },
       {
         queuedMessageId: 'q-user',
@@ -3539,6 +3542,7 @@ describe('OrcaTeamService worker queued message control', () => {
         source: 'user',
         content: 'text-q-user',
         consuming: true,
+        held: false,
       },
       {
         queuedMessageId: 'q-sched',
@@ -3546,6 +3550,7 @@ describe('OrcaTeamService worker queued message control', () => {
         source: 'scheduler',
         content: 'text-q-sched',
         consuming: false,
+        held: false,
       },
     ]);
     expect(deps.getSessionQueueSnapshot).toHaveBeenCalledWith('worker-session-1');
@@ -3582,6 +3587,7 @@ describe('OrcaTeamService worker queued message control', () => {
             source: 'lead' as const,
             content: 'active dispatch',
             consuming: true,
+            held: false,
           },
           {
             queuedMessageId: 'pending',
@@ -3589,6 +3595,7 @@ describe('OrcaTeamService worker queued message control', () => {
             source: 'lead' as const,
             content: 'pending',
             consuming: false,
+            held: false,
           },
         ],
         isWorking: true,
@@ -3998,6 +4005,266 @@ it('release closes under its own send fence and fails closed on close error',asy
  vi.mocked(deps.archiveWorkerSession).mockClear();vi.mocked(deps.closeWorkerSessionIfIdle).mockRejectedValue(new Error('close failed'));
  expect((await service.archiveWorker({callerLeadSessionId:'lead-1',workerId:'worker-1',onlyIfIdle:true})).ok).toBe(false);
  expect(deps.archiveWorkerSession).not.toHaveBeenCalled();
+});
+
+describe('Orca worker queue stop point', () => {
+  const leadOrigin = { kind: 'orca' as const, senderLabel: 'Lead', displayText: '原始任务' };
+
+  function queuedItem(clientId: string, origin?: AgentInputQueuedMessage['origin']) {
+    const text = `text-${clientId}`;
+    return {
+      clientId,
+      text,
+      persistedContent: text,
+      model: 'gpt-5.4',
+      effort: 'medium',
+      permissionMode: 'bypassPermissions',
+      workingDir: '/repo',
+      chatMessage: { clientId, role: 'user' as const, content: text, createdAt: '2026-07-21T00:00:00.000Z' },
+      createOpts: { agentKind: 'codex' as const, workingDir: '/repo', model: 'gpt-5.4' },
+      ...(origin ? { origin } : {}),
+    } satisfies AgentInputQueuedMessage;
+  }
+
+  function heldItem(clientId: string, origin?: AgentInputQueuedMessage['origin']) {
+    return { ...queuedItem(clientId, origin), held: true as const };
+  }
+
+  it('reports held rows and queue_held without changing the queue count', async () => {
+    const { service } = createDeps({
+      getSessionQueueSnapshot: vi.fn(async () => ({
+        pendingQueue: [heldItem('q-held', leadOrigin), queuedItem('q-after', leadOrigin)],
+        steeringClientIds: [],
+        consumingClientIds: [],
+        isWorking: false,
+        willQueue: true,
+        queuePaused: false,
+        queueHeld: true,
+      })),
+    });
+
+    const result = await service.listWorkerQueuedMessages({
+      callerLeadSessionId: 'lead-1',
+      workerRef: 'worker-1',
+    });
+
+    expect(result).toMatchObject({ ok: true, queueHeld: true });
+    if (!result.ok) throw new Error('unreachable');
+    expect(result.messages.map((entry) => [entry.queuedMessageId, entry.held])).toEqual([
+      ['q-held', true],
+      ['q-after', false],
+    ]);
+  });
+
+  it('refuses to steer or merge across the stop point', async () => {
+    const steerStoredQueuedMessage = vi.fn(async () => ({ kind: 'steered' as const }));
+    const mergeQueuedMessages = vi.fn(() => true);
+    const queue = [heldItem('q-held', leadOrigin), queuedItem('q-next', leadOrigin)];
+    const { service } = createDeps({
+      getSessionQueueSnapshot: vi.fn(async () => ({
+        pendingQueue: queue,
+        steeringClientIds: [],
+        consumingClientIds: [],
+        isWorking: false,
+        willQueue: true,
+        queuePaused: false,
+      })),
+      steerStoredQueuedMessage,
+      mergeQueuedMessages,
+      ensureWorkerQueueRestored: vi.fn(async () => true),
+    });
+
+    await expect(
+      service.steerWorkerQueuedMessage({
+        callerLeadSessionId: 'lead-1',
+        workerRef: 'worker-1',
+        queuedMessageId: 'q-held',
+      }),
+    ).resolves.toMatchObject({ ok: false, errorCode: 'MESSAGE_HELD' });
+    expect(steerStoredQueuedMessage).not.toHaveBeenCalled();
+
+    await expect(
+      service.mergeWorkerQueuedMessages({
+        callerLeadSessionId: 'lead-1',
+        workerRef: 'worker-1',
+        queuedMessageIds: ['q-held', 'q-next'],
+        message: '合并后',
+      }),
+    ).resolves.toMatchObject({ ok: false, errorCode: 'QUEUE_HAS_HELD' });
+    expect(mergeQueuedMessages).not.toHaveBeenCalled();
+  });
+
+  it('stops a merge that discovers the stop point inside the synchronous replacement', async () => {
+    // 权限复核前的快照里还没有停点;等复核回来时用户已经挂了停点。
+    // 合并必须在同一个无 await 临界区里按最新条目再判一次,否则会把停点删掉并当场发出。
+    let heldAtCheck = false;
+    const mergeQueuedMessages = vi.fn(
+      (_sessionId: string, _ids: string[], build: (targets: AgentInputQueuedMessage[]) => AgentInputQueuedMessage | null) =>
+        build([
+          queuedItem('q-a', leadOrigin),
+          { ...queuedItem('q-b', leadOrigin), held: true as const },
+        ]) !== null,
+    );
+    const { service } = createDeps({
+      getSessionQueueSnapshot: vi.fn(async () => ({
+        pendingQueue: [queuedItem('q-a', leadOrigin), queuedItem('q-b', leadOrigin)],
+        steeringClientIds: [],
+        consumingClientIds: [],
+        isWorking: false,
+        willQueue: true,
+        queuePaused: false,
+      })),
+      captureControlAuthority: async () => async () => {
+        heldAtCheck = true;
+      },
+      mergeQueuedMessages,
+    });
+
+    const result = await service.mergeWorkerQueuedMessages({
+      callerLeadSessionId: 'lead-1',
+      workerRef: 'worker-1',
+      queuedMessageIds: ['q-a', 'q-b'],
+      message: '合并后',
+    });
+
+    expect(heldAtCheck).toBe(true);
+    expect(mergeQueuedMessages).toHaveBeenCalledOnce();
+    expect(result.ok).toBe(false);
+  });
+
+  it('rejects moves across the stop point but keeps ordering on each side', async () => {
+    const moveQueuedMessage = vi.fn(() => 2);
+    const { service } = createDeps({
+      getSessionQueueSnapshot: vi.fn(async () => ({
+        pendingQueue: [
+          queuedItem('q-first', leadOrigin),
+          heldItem('q-held', leadOrigin),
+          queuedItem('q-after', leadOrigin),
+          queuedItem('q-last', leadOrigin),
+        ],
+        steeringClientIds: [],
+        consumingClientIds: [],
+        isWorking: false,
+        willQueue: true,
+        queuePaused: false,
+      })),
+      moveQueuedMessage,
+    });
+    const move = (queuedMessageId: string, position: number) =>
+      service.moveWorkerQueuedMessage({
+        callerLeadSessionId: 'lead-1',
+        workerRef: 'worker-1',
+        queuedMessageId,
+        position,
+      });
+
+    // position 是移动后的最终下标:[first, held, after, last] 里把 first 移到 1,
+    // 落点是 [held, first, after, last] —— first 跑到停点之后,拒绝。
+    await expect(move('q-first', 1)).resolves.toMatchObject({
+      ok: false,
+      errorCode: 'QUEUE_HELD_BOUNDARY',
+    });
+    // 从停点之后移到停点之前:同样跨侧。
+    await expect(move('q-after', 0)).resolves.toMatchObject({
+      ok: false,
+      errorCode: 'QUEUE_HELD_BOUNDARY',
+    });
+    expect(moveQueuedMessage).not.toHaveBeenCalled();
+
+    // 停点之后区间内的排序不受影响(在停点后的两条之间互换)。
+    await expect(move('q-last', 2)).resolves.toMatchObject({ ok: true });
+    // 停点条目自身可以移动。
+    await expect(move('q-held', 3)).resolves.toMatchObject({ ok: true, position: 2 });
+  });
+
+  it('keeps prefix ordering that does not cross the stop point', async () => {
+    const moveQueuedMessage = vi.fn(() => 0);
+    const { service } = createDeps({
+      getSessionQueueSnapshot: vi.fn(async () => ({
+        pendingQueue: [
+          queuedItem('q-first', leadOrigin),
+          queuedItem('q-second', leadOrigin),
+          heldItem('q-held', leadOrigin),
+        ],
+        steeringClientIds: [],
+        consumingClientIds: [],
+        isWorking: false,
+        willQueue: true,
+        queuePaused: false,
+      })),
+      moveQueuedMessage,
+    });
+
+    // [first, second, held] 里把 second 移到 0:仍在停点之前,不跨侧。
+    await expect(
+      service.moveWorkerQueuedMessage({
+        callerLeadSessionId: 'lead-1',
+        workerRef: 'worker-1',
+        queuedMessageId: 'q-second',
+        position: 0,
+      }),
+    ).resolves.toMatchObject({ ok: true });
+    expect(moveQueuedMessage).toHaveBeenCalledOnce();
+  });
+
+  it('rejects a move that would cross a stop point set during the authority check', async () => {
+    let settled = false;
+    const moveQueuedMessage = vi.fn(() => 0);
+    const { service } = createDeps({
+      // 复核前的快照还没有停点;复核返回时用户已经挂起了 q-second。
+      getSessionQueueSnapshot: vi.fn(async () => ({
+        pendingQueue: settled
+          ? [queuedItem('q-first', leadOrigin), heldItem('q-second', leadOrigin), queuedItem('q-third', leadOrigin)]
+          : [queuedItem('q-first', leadOrigin), queuedItem('q-second', leadOrigin), queuedItem('q-third', leadOrigin)],
+        steeringClientIds: [],
+        consumingClientIds: [],
+        isWorking: false,
+        willQueue: true,
+        queuePaused: false,
+      })),
+      captureControlAuthority: async () => async () => {
+        settled = true;
+      },
+      moveQueuedMessage,
+    });
+
+    await expect(
+      service.moveWorkerQueuedMessage({
+        callerLeadSessionId: 'lead-1',
+        workerRef: 'worker-1',
+        queuedMessageId: 'q-third',
+        position: 0,
+      }),
+    ).resolves.toMatchObject({ ok: false, errorCode: 'QUEUE_HELD_BOUNDARY' });
+    expect(moveQueuedMessage).not.toHaveBeenCalled();
+  });
+
+  it('marks a queued dispatch receipt when the target queue has a stop point', async () => {
+    const { deps, service } = createDeps({
+      getWorkerQueueHeld: vi.fn(() => true),
+    });
+    vi.mocked(deps.dispatchWorkerMessage).mockImplementationOnce(async (params) => ({
+      ok: true,
+      mode: 'queued',
+      clientId: 'q-receipt',
+      dispatchOutcome: {
+        kind: 'session-dispatch',
+        source: params.dispatchMeta.source,
+        dispatched: true,
+        wakeKind: 'queued',
+      },
+      targetTitle: 'Worker',
+      targetLastUserSendAt: null,
+    }));
+
+    const result = await service.sendToWorker({
+      callerLeadSessionId: 'lead-1',
+      targetSessionId: 'worker-session-1',
+      message: '任务',
+    });
+
+    expect(result).toMatchObject({ ok: true, wakeKind: 'queued', queueHeld: true });
+  });
 });
 
 describe('Orca delivery scope', () => {

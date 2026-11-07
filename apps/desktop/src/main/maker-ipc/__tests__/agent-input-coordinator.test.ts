@@ -1,4 +1,5 @@
 import { createInputEnqueueHarness } from './inputEnqueueHarness.js';
+import { applyQueueHold } from '../queueHoldHandler.js';
 import { FORWARDED_REQUEST_RECEIPT } from '../../../shared/forwardedRequest.js';
 import { BOT_GROUP_CLIENT_ID } from '../../../shared/botGroupChat.js';
 import { authorizeGroupTool, registerGroupToolAuthority } from '../botGroupToolAuthorization.js';
@@ -1286,6 +1287,7 @@ describe('AgentInputCoordinator Orca priority queue transactions', () => {
         return { stopOutcome: 'requested' as const, queuePaused: false };
       },
       getWorkerQueuePaused: () => h.coordinator.isQueuePaused(sid),
+      getWorkerQueueHeld: () => h.coordinator.getProjection(sid).pendingQueue.some((item) => item.held === true),
       sendAutoBridgeToLead: vi.fn(async () => ({ accepted: true })),
       getSessionQueueSnapshot: async () => ({
         pendingQueue: h.coordinator.getQueueControlSnapshot(sid).pendingQueue,
@@ -16434,5 +16436,296 @@ describe('teammate relay review intent', () => {
     await flush();
     expect(h.sendToAgent).toHaveBeenCalledTimes(1);
     expect(h.sendToAgent.mock.calls[0][3][AUTO_REVIEW_SOURCE_CONTENT]).toBe(expected);
+  });
+});
+
+// 停点(held): 队列里至多一条被挂起的消息, 它和它之后的条目都不自动派发。
+describe('queue message hold (stop point)', () => {
+  const heldIds = (h: ReturnType<typeof createHarness>, sid: string) =>
+    h.coordinator
+      .getProjection(sid)
+      .pendingQueue.filter((item) => item.held === true)
+      .map((item) => item.clientId);
+  const queuedIds = (h: ReturnType<typeof createHarness>, sid: string) =>
+    h.coordinator.getProjection(sid).pendingQueue.map((item) => item.clientId);
+
+  /** 当前轮在跑: 入队的消息都留在队列里,没有被派发过。 */
+  async function withQueued(ids: readonly string[]) {
+    const h = createHarness();
+    const sid = `hold-${ids.join('-')}`;
+    await h.coordinator.ensureQueueRestored(sid);
+    h.setRunning(true);
+    for (const id of ids) h.coordinator.enqueue(sid, makeItem(id, `message ${id}`));
+    await flush();
+    expect(queuedIds(h, sid)).toEqual([...ids]);
+    expect(h.sendToAgent).not.toHaveBeenCalled();
+    return { h, sid };
+  }
+
+  function finishTurn(h: ReturnType<typeof createHarness>, sid: string) {
+    h.setRunning(false);
+    h.coordinator.wakeSession(sid, 'turn-done');
+  }
+
+  it('keeps exactly one stop point and clears the previous one', async () => {
+    const { h, sid } = await withQueued(['a', 'b', 'c']);
+
+    h.coordinator.hold(sid, 'b');
+    expect(heldIds(h, sid)).toEqual(['b']);
+    h.coordinator.hold(sid, 'c');
+    expect(heldIds(h, sid)).toEqual(['c']);
+    expect(queuedIds(h, sid)).toEqual(['a', 'b', 'c']);
+  });
+
+  it('ignores an unknown clientId without touching the queue', async () => {
+    const { h, sid } = await withQueued(['a', 'b']);
+    h.coordinator.hold(sid, 'b');
+    const before = h.coordinator.getProjection(sid);
+
+    h.coordinator.hold(sid, 'missing');
+
+    expect(h.coordinator.getProjection(sid).pendingQueue).toEqual(before.pendingQueue);
+    expect(heldIds(h, sid)).toEqual(['b']);
+  });
+
+  it('stops dispatch at the stop point and resumes the head on release', async () => {
+    const { h, sid } = await withQueued(['a', 'b']);
+    h.coordinator.hold(sid, 'a');
+
+    finishTurn(h, sid);
+    await flush();
+    expect(h.sendToAgent).not.toHaveBeenCalled();
+
+    h.coordinator.releaseHold(sid);
+    await flush();
+    expect(h.sendToAgent).toHaveBeenCalledOnce();
+    expect(h.sendToAgent.mock.calls[0]![3].persistUserMessage?.clientId).toBe('a');
+    expect(queuedIds(h, sid)).toEqual(['b']);
+  });
+
+  it('still dispatches the head when the stop point sits behind it', async () => {
+    const { h, sid } = await withQueued(['a', 'b']);
+    h.coordinator.hold(sid, 'b');
+
+    finishTurn(h, sid);
+    await flush();
+
+    expect(h.sendToAgent).toHaveBeenCalledOnce();
+    expect(h.sendToAgent.mock.calls[0]![3].persistUserMessage?.clientId).toBe('a');
+    expect(queuedIds(h, sid)).toEqual(['b']);
+    expect(heldIds(h, sid)).toEqual(['b']);
+  });
+
+  it('holds a queued compact request behind the stop point', async () => {
+    const { h, sid } = await withQueued(['a']);
+    h.coordinator.hold(sid, 'a');
+
+    await h.coordinator.compact(sid, makeItem('q-compact', 'ignored').createOpts);
+    finishTurn(h, sid);
+    await flush();
+    // 停点挡住整个队列: 连排队的 /compact 也不能越过它。
+    expect(h.sendToAgent).not.toHaveBeenCalled();
+
+    h.coordinator.releaseHold(sid);
+    await flush();
+    expect(h.sendToAgent.mock.calls[0]![1]).toEqual({ type: 'user', content: 'message a' });
+  });
+
+  it('moves the stop point to the next row when the held row is removed', async () => {
+    const { h, sid } = await withQueued(['a', 'b', 'c']);
+    h.coordinator.hold(sid, 'b');
+
+    h.coordinator.remove(sid, 'b');
+    expect(heldIds(h, sid)).toEqual(['c']);
+
+    finishTurn(h, sid);
+    await flush();
+    // 停点之前的条目照常跑,停点之后的不动。
+    expect(h.sendToAgent).toHaveBeenCalledOnce();
+    expect(h.sendToAgent.mock.calls[0]![3].persistUserMessage?.clientId).toBe('a');
+    expect(queuedIds(h, sid)).toEqual(['c']);
+  });
+
+  it('clears the stop point with the queue and lets later messages run', async () => {
+    const { h, sid } = await withQueued(['a']);
+    h.coordinator.hold(sid, 'a');
+
+    h.coordinator.remove(sid, 'a');
+    expect(queuedIds(h, sid)).toEqual([]);
+    h.setRunning(false);
+    h.coordinator.enqueue(sid, makeItem('later', 'later'));
+    await flush();
+
+    expect(h.sendToAgent).toHaveBeenCalledOnce();
+    expect(h.sendToAgent.mock.calls[0]![3].persistUserMessage?.clientId).toBe('later');
+  });
+
+  it('keeps the stop point across Stop that preserves the queue', async () => {
+    const { h, sid } = await withQueued(['a', 'b']);
+    h.coordinator.hold(sid, 'a');
+
+    h.coordinator.stop(sid, { keepQueue: true, pauseQueue: true });
+
+    expect(heldIds(h, sid)).toEqual(['a']);
+    expect(h.coordinator.getProjection(sid).queuePaused).toBe(true);
+  });
+
+  it('keeps queue-head recovery intact across hold and release', async () => {
+    const h = createHarness();
+    const sid = 'hold-recovery';
+    h.sendToAgent.mockImplementationOnce(async () => {
+      throw new Error('hook failed');
+    });
+    h.coordinator.enqueue(sid, makeItem('a', 'first'));
+    await flush();
+    expect(h.coordinator.getProjection(sid).recovery).toEqual({
+      kind: 'queue-head',
+      clientId: 'a',
+    });
+
+    h.coordinator.hold(sid, 'a');
+    h.coordinator.releaseHold(sid);
+
+    expect(h.coordinator.getProjection(sid).recovery).toEqual({
+      kind: 'queue-head',
+      clientId: 'a',
+    });
+    await h.coordinator.retryLastError(sid);
+    await flush();
+    expect(h.sendToAgent).toHaveBeenCalledTimes(2);
+    expect(h.sendToAgent.mock.calls[1]![3].persistUserMessage?.clientId).toBe('a');
+  });
+
+  it('keeps the stop point behind a reserved head insertion', async () => {
+    const { h, sid } = await withQueued(['a', 'b']);
+    h.coordinator.hold(sid, 'a');
+
+    const reserved = h.coordinator.reserveNextInput(sid, makeItem('interrupt', 'interrupt'));
+
+    expect(reserved.reserved).toBe(true);
+    expect(queuedIds(h, sid)).toEqual(['interrupt', 'a', 'b']);
+    expect(heldIds(h, sid)).toEqual(['a']);
+  });
+
+  it('keeps the restored-snapshot provenance of untouched rows across hold', async () => {
+    // 恢复队列里的条目带着 restoredFromSnapshot 标记(派发时据此补持久执行凭证)。
+    // 一次 hold 不能让其它条目丢掉它,否则伙伴委派会报“没有执行凭证”。
+    const h = createHarness();
+    const sid = 'hold-restored-provenance';
+    h.setLoadQueueSnapshot(async () => [makeItem('a', 'restored first')]);
+    await h.coordinator.ensureQueueRestored(sid);
+    expect(h.coordinator.getProjection(sid).pendingQueue.map((item) => item.clientId)).toEqual(['a']);
+
+    const before = h.coordinator.getQueueControlSnapshot(sid).pendingQueue[0]!;
+    h.coordinator.hold(sid, 'a');
+    const held = h.coordinator.getQueueControlSnapshot(sid).pendingQueue[0]!;
+    h.coordinator.releaseHold(sid);
+    const released = h.coordinator.getQueueControlSnapshot(sid).pendingQueue[0]!;
+    // 只有被挂起的那条换成新对象,恢复后它仍然记得自己来自快照。
+    expect(held).not.toBe(before);
+    expect(released).not.toBe(held);
+
+    // 恢复出来的队列原本是暂停的,点「继续」后才真正派发。
+    h.coordinator.resume(sid);
+    await flush();
+    expect(h.onAcceptedQueuedMessage).toHaveBeenCalledWith(
+      sid,
+      expect.objectContaining({ clientId: 'a' }),
+      true,
+    );
+  });
+
+  it('does not recreate untouched rows when a stop point moves', async () => {
+    const { h, sid } = await withQueued(['a', 'b', 'c']);
+    const rowsBefore = h.coordinator.getQueueControlSnapshot(sid).pendingQueue;
+
+    h.coordinator.hold(sid, 'b');
+    const rowsAfter = h.coordinator.getQueueControlSnapshot(sid).pendingQueue;
+
+    // 未变化的行保持对象身份:恢复标记、去重窗口等按对象记账的状态都不会被冲掉。
+    expect(rowsAfter[0]).toBe(rowsBefore[0]);
+    expect(rowsAfter[2]).toBe(rowsBefore[2]);
+    expect(rowsAfter[1]).not.toBe(rowsBefore[1]);
+  });
+
+  it('moves the stop point without recreating the adopting row', async () => {
+    const { h, sid } = await withQueued(['a', 'b', 'c']);
+    h.coordinator.hold(sid, 'a');
+    const adoptingRow = h.coordinator.getQueueControlSnapshot(sid).pendingQueue[1]!;
+
+    h.coordinator.remove(sid, 'a');
+
+    expect(h.coordinator.getQueueControlSnapshot(sid).pendingQueue[0]).not.toBe(adoptingRow);
+  });
+
+  it('keeps the stop point behind a UI continue inserted at the head', async () => {
+    const { h, sid } = await withQueued(['a', 'b']);
+    h.coordinator.hold(sid, 'a');
+
+    h.coordinator.enqueue(sid, makeItem('q-continue', CONTINUE_AFTER_APP_EXIT_PROMPT), {
+      resumeRestorePausedQueue: true,
+    });
+
+    expect(queuedIds(h, sid)).toEqual(['q-continue', 'a', 'b']);
+    expect(heldIds(h, sid)).toEqual(['a']);
+  });
+
+  it('never steers a queued row that is already the stop point', async () => {
+    const h = createHarness();
+    const sid = 'hold-steer-held';
+    h.setRunning(true);
+    await h.coordinator.ensureQueueRestored(sid);
+    h.coordinator.enqueue(sid, makeItem('report', 'worker report'));
+    await flush();
+    h.coordinator.hold(sid, 'report');
+
+    const outcome = await h.coordinator.steerControlInput(
+      sid,
+      { queuedClientId: 'report' },
+      { session: h.getTurnSessionIdentity(), turnGeneration: 0 },
+    );
+
+    expect(outcome).toBe('not-attempted');
+    expect(h.steerToAgent).not.toHaveBeenCalled();
+    expect(h.coordinator.hasPendingQueueItem(sid, 'report')).toBe(true);
+  });
+
+  it('refuses to hold a row that is already being steered', async () => {
+    // 这条互斥是停点并发窗口的另一半:delivery 一旦开始,用户就不能再把它挂起,
+    // 于是「挂起中的条目被送进当前轮」不可能发生。
+    const h = createHarness();
+    const sid = 'hold-while-steering';
+    h.setRunning(true);
+    await h.coordinator.ensureQueueRestored(sid);
+    h.coordinator.enqueue(sid, makeItem('report', 'worker report'));
+    await flush();
+    let rejected = false;
+    h.steerToAgent.mockImplementationOnce(async () => {
+      h.coordinator.hold(sid, 'report');
+      rejected = h.coordinator.getProjection(sid).pendingQueue.every((item) => item.held !== true);
+    });
+
+    await expect(
+      h.coordinator.steerControlInput(sid, { queuedClientId: 'report' }, {
+        session: h.getTurnSessionIdentity(),
+        turnGeneration: 0,
+      }),
+    ).resolves.toBe('steered');
+
+    expect(rejected).toBe(true);
+  });
+
+  it('restores a cold queue before writing the stop point', async () => {
+    const h = createHarness();
+    const sid = 'hold-cold-restore';
+    h.setLoadQueueSnapshot(async () => [
+      makeItem('a', 'first'),
+      makeItem('b', 'second', { held: true }),
+    ]);
+    const projection = await applyQueueHold(h.coordinator, sid, 'a');
+
+    // 快照里的旧停点已经被新的原子覆盖, 且恢复结果没有被丢。
+    expect(projection.pendingQueue.map((item) => item.clientId)).toEqual(['a', 'b']);
+    expect(heldIds(h, sid)).toEqual(['a']);
   });
 });

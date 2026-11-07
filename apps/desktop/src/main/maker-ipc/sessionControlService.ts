@@ -33,6 +33,8 @@ export type SessionQueuedMessageControlResult =
       | 'NOT_FOUND'
       | 'QUEUED_MESSAGE_NOT_FOUND'
       | 'MESSAGE_CONSUMING'
+      | 'MESSAGE_HELD'
+      | 'QUEUE_HELD_BOUNDARY'
       | 'NOT_AUTHORIZED'
       | 'INVALID_ARGS'
       | 'DELEGATION_NOT_AUTHORIZED'

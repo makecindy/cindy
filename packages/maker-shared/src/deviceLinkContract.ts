@@ -516,6 +516,7 @@ export const MOBILE_REMOTE_INVOKE_CHANNELS = [
   'maker:input:set-expanded',
   'maker:input:set-interaction-lock',
   'maker:input:set-edit-lock',
+  'maker:input:set-hold',
   'maker:input:clear-session',
   'fs:list-dir',
   'fs:stat-path',

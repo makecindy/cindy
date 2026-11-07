@@ -40,6 +40,8 @@ export interface SendToWorkerDeps {
         queuedMessageId?: string;
         /** 请求了 steer 但消息进了队列时的原因;空闲直发不带。 */
         steerFallbackReason?: SteerFallbackReason;
+        /** 目标队列里有用户停点:本条只是入队,不会被自动执行。 */
+        queueHeld?: boolean;
       },
       'NOT_FOUND' | 'ARCHIVED' | 'DELETED' | 'BUSY' | 'AGENT_NOT_READY' | 'INVALID_ARGS'
     >
@@ -75,6 +77,8 @@ const DESCRIPTION =
   '用户在对话里贴的图, 把上下文 <cindy-host-image-references> 里的 uri 原样传入即可。' +
   '没插成时照常直发或排队,排队时附 steer_fallback_reason。' +
   '需要替换 worker 当前任务时改用 interrupt_worker。' +
+  '回执带 queue_held=true 表示目标队列被用户挂了停点(held):本条只是入队,不会自动执行,' +
+  '要先让用户在任务里恢复停点或改用 interrupt_worker。' +
   '失败码: LEAD_NOT_SUPPORTED / NOT_FOUND / ARCHIVED / DELETED / BUSY / AGENT_NOT_READY。';
 
 export function registerSendToWorkerTool(
@@ -133,6 +137,7 @@ export function registerSendToWorkerTool(
         target_last_user_send_at: result.targetLastUserSendAt,
         ...(result.queuedMessageId ? { queued_message_id: result.queuedMessageId } : {}),
         ...(result.steerFallbackReason ? { steer_fallback_reason: result.steerFallbackReason } : {}),
+        ...(result.queueHeld ? { queue_held: true } : {}),
       });
     },
   });

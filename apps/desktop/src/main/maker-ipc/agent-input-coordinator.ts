@@ -2407,6 +2407,7 @@ export class AgentInputCoordinator {
       (state.activeTurn !== null && !isActiveTurnDispatched(state.activeTurn)) ||
       (opts.fromQueue &&
         (state.queueEditLocks.includes(clientId) ||
+          state.pendingQueue.find((queued) => queued.clientId === clientId)?.held === true ||
           !state.pendingQueue.some((queued) => queued.clientId === clientId)))
     );
   }
@@ -3237,6 +3238,78 @@ export class AgentInputCoordinator {
     return this.getProjection(sessionId);
   }
 
+  /**
+   * 设置停点: 这一条及其之后的排队消息不再自动派发,当前轮照常执行完。
+   * 队列里至多一个停点 —— 新停点必须在同一个同步临界区内清掉旧停点,并且只
+   * emit 一次;不存在的条目、正在插话中的条目不修改队列。
+   */
+  hold(sessionId: string, clientId: string): AgentInputProjection {
+    const state = this.getState(sessionId);
+    const target = state.pendingQueue.find((item) => item.clientId === clientId);
+    assertSharedTaskQueueMutation(
+      getDeviceLinkInvokeContext()?.sharedTask,
+      sessionId,
+      'input.withdraw',
+      target,
+    );
+    // 正在投递(插话中 / 未跨过 accepted 边界的 active turn)的条目不接受停点:
+    // 它已经不属于可编排的队列内容。
+    const consuming =
+      state.steeringQueueClientIds.includes(clientId) ||
+      state.directSteeringItems.some((item) => item.clientId === clientId) ||
+      (state.activeTurn?.item?.clientId === clientId && !isActiveTurnDispatched(state.activeTurn));
+    if (!target || target.held === true || consuming) {
+      return this.getProjection(sessionId);
+    }
+    // 只替换真正变化的条目:其余条目保持对象身份,恢复快照的 provenance
+    // (restoredQueueItems)不会因为一次 hold 而丢;被替换的那条显式迁移标记。
+    state.pendingQueue = this.mapQueueRows(state.pendingQueue, (item) => {
+      if (item.clientId !== clientId) return item.held === true ? this.withoutHold(item) : item;
+      return this.preserveRestoredQueueProvenance(item, { ...this.withoutHold(item), held: true });
+    });
+    this.emit(sessionId);
+    return this.getProjection(sessionId);
+  }
+
+  /** 清除停点;空闲且没有其它闸门挡住时,队列首条会被立即派发。 */
+  releaseHold(sessionId: string): AgentInputProjection {
+    assertSharedTaskQueueMutation(getDeviceLinkInvokeContext()?.sharedTask, sessionId, 'input.withdraw');
+    const state = this.getState(sessionId);
+    if (!state.pendingQueue.some((item) => item.held === true)) {
+      return this.getProjection(sessionId);
+    }
+    state.pendingQueue = this.mapQueueRows(state.pendingQueue, (item) =>
+      item.held === true
+        ? this.preserveRestoredQueueProvenance(item, this.withoutHold(item))
+        : item,
+    );
+    this.emit(sessionId);
+    this.scheduleDrain(sessionId, 'hold-released');
+    this.scheduleExternalTurnRetryIfNeeded(sessionId, state, 'hold-released');
+    return this.getProjection(sessionId);
+  }
+
+  /** 代价最小的去 held:未挂起的条目原样返回,避免无意义地丢对象身份。 */
+  private withoutHold(item: AgentInputQueuedMessage): AgentInputQueuedMessage {
+    if (item.held !== true) return item;
+    const { held: _held, ...rest } = item;
+    return rest;
+  }
+
+  /** 只在真发生替换时新建数组,不改队列顺序。 */
+  private mapQueueRows(
+    queue: readonly AgentInputQueuedMessage[],
+    map: (item: AgentInputQueuedMessage) => AgentInputQueuedMessage,
+  ): AgentInputQueuedMessage[] {
+    let changed = false;
+    const next = queue.map((item) => {
+      const mapped = map(item);
+      if (mapped !== item) changed = true;
+      return mapped;
+    });
+    return changed ? next : [...queue];
+  }
+
   /** 用户点「重试 / 继续任务」。行为见 performRetryLastError。 */
   async retryLastError(sessionId: string): Promise<AgentInputProjection> {
     const { projection } = await this.performRetryLastError(sessionId);
@@ -3622,8 +3695,21 @@ export class AgentInputCoordinator {
     assertSharedTaskQueueMutation(getDeviceLinkInvokeContext()?.sharedTask, sessionId, 'input.withdraw', state.pendingQueue.find((item) => item.clientId === clientId));
     if (state.steeringQueueClientIds.includes(clientId)) return this.getProjection(sessionId);
     const before = state.pendingQueue.length;
-    const removed = state.pendingQueue.find((q) => q.clientId === clientId);
+    const removedIndex = state.pendingQueue.findIndex((q) => q.clientId === clientId);
+    const removed = removedIndex >= 0 ? state.pendingQueue[removedIndex] : undefined;
     state.pendingQueue = state.pendingQueue.filter((q) => q.clientId !== clientId);
+    // 停点被删掉时把停点交给原位置的下一条:删除不等于恢复自动发送。
+    // filter 保序,removedIndex 现在正好指向原位置的下一项。
+    if (removed?.held === true) {
+      const next = state.pendingQueue[removedIndex];
+      // 继承停点的条目也是被替换的对象:同样要迁移恢复标记与重试谱系。
+      if (next) {
+        state.pendingQueue[removedIndex] = this.preserveRestoredQueueProvenance(next, {
+          ...next,
+          held: true,
+        });
+      }
+    }
     if (removed) this.deps.onDiscardedQueuedMessage?.(sessionId, removed);
     // 显式移除的消息从未派发:该 clientId 允许被合法地重新入队(重排/再发都是
     // 既有产品流),必须从弱网重发幂等窗口里遗忘,否则再入队会被误吞。
@@ -5014,6 +5100,8 @@ export class AgentInputCoordinator {
     if (state.pendingQueue.length === 0) return 'queue-empty';
     if (state.queuePaused && !(state.queuePausedByRestore && this.restoredUsageLimitRetryItems.has(state.pendingQueue[0])))
       return state.queuePausedByRestore ? 'queue-paused-by-restore' : 'queue-paused';
+    // 用户停点: 到这一条为止不再自动派发,后面的条目也不能越队。
+    if (state.pendingQueue[0]?.held === true) return 'queue-head-held';
     if (state.queueAbortPending) return 'abort-pending';
     if (state.queueInteractionLocks.length > 0) return 'interaction-lock';
     if (state.steeringQueueClientIds.length > 0) return 'steering-in-flight';
@@ -5046,6 +5134,8 @@ export class AgentInputCoordinator {
     if (!first) return null;
     if (first.waitForClientIds.length > 0) return null;
     if (state.queuePaused) return null;
+    // 停点在队首时,同一队列里的 /compact 也必须等它被恢复。
+    if (state.pendingQueue[0]?.held === true) return null;
     if (state.queueAbortPending) return null;
     if (state.queueInteractionLocks.length > 0) return null;
     if (state.steeringQueueClientIds.length > 0) return null;

@@ -835,6 +835,9 @@ export function createOrcaRemoteWorkers(deps: OrcaRemoteWorkersDeps) {
       },
       getWorkerQueuePaused: (sessionId) =>
         remote(sessionId) ? false : base.getWorkerQueuePaused(sessionId),
+      // 远端 Worker 的队列本机不可编辑,也没有本机停点:一律当未挂起。
+      getWorkerQueueHeld: (sessionId) =>
+        remote(sessionId) ? false : base.getWorkerQueueHeld(sessionId),
       getSessionQueueSnapshot: async (sessionId) =>
         (await isRemoteWorker(sessionId))
           ? {

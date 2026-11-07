@@ -933,6 +933,7 @@ import { normalizeSessionContextWindowBoundsRoute } from '../../shared/sessionCo
 import { readWorkflowProgressForSession } from '../workflow-progress/reader.js';
 import { readSessionBackgroundTaskOutputTail } from '../background-task-output/reader.js';
 import { AgentInputCoordinator, markManualSchedulerContinuation } from './agent-input-coordinator.js';
+import { applyQueueHold } from './queueHoldHandler.js';
 import { createAutomaticContinueEligibility, isActiveCompanionFailoverSession } from './automaticContinueEligibility.js';
 import { bindSilentStopContinuationGeneration } from './silentStopContinuationBinding.js';
 import { notePromptPredictionSessionStopped } from './promptPredictionStopLedger.js';
@@ -2688,6 +2689,8 @@ interface OrcaCollabService {
           | 'NOT_FOUND'
           | 'QUEUED_MESSAGE_NOT_FOUND'
           | 'MESSAGE_CONSUMING'
+          | 'MESSAGE_HELD'
+          | 'QUEUE_HELD_BOUNDARY'
           | 'NOT_AUTHORIZED'
           | 'INVALID_ARGS'
           | 'DELEGATION_NOT_AUTHORIZED'
@@ -2708,6 +2711,8 @@ interface OrcaCollabService {
           | 'NOT_FOUND'
           | 'QUEUED_MESSAGE_NOT_FOUND'
           | 'MESSAGE_CONSUMING'
+          | 'MESSAGE_HELD'
+          | 'QUEUE_HELD_BOUNDARY'
           | 'NOT_AUTHORIZED'
           | 'INVALID_ARGS'
           | 'DELEGATION_NOT_AUTHORIZED'
@@ -16684,6 +16689,8 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       };
     },
     getWorkerQueuePaused: (sessionId) => inputCoordinator.isQueuePaused(sessionId),
+    getWorkerQueueHeld: (sessionId) =>
+      inputCoordinator.getProjection(sessionId).pendingQueue.some((item) => item.held === true),
     getSessionQueueSnapshot: async (sessionId) => {
       // 先补崩溃恢复,保证重启后 lead 仍能看到快照恢复出的排队消息。
       await inputCoordinator.ensureQueueRestored(sessionId).catch(() => undefined);
@@ -16706,6 +16713,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
                 : ('user' as const),
           content: entry.content,
           consuming: entry.consuming,
+          held: entry.held,
         })),
         isWorking: isSessionTurnDispatchBoundaryBusy(
           sessionTurnActivityTracker,
@@ -16715,6 +16723,9 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
         willQueue:
           inputCoordinator.shouldQueueNewTurn(sessionId) || sendToSessionLocks.has(sessionId),
         queuePaused: inputCoordinator.getProjection(sessionId).queuePaused,
+        queueHeld: inputCoordinator
+          .getProjection(sessionId)
+          .pendingQueue.some((item) => item.held === true),
       };
     },
     ensureWorkerQueueRestored: async (sessionId) => {
@@ -22976,6 +22987,19 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
         }
         throw err;
       }
+    },
+  );
+
+  ipcMain.handle(
+    MAKER_INVOKE.INPUT_SET_HOLD,
+    async (_e, sessionId: unknown, clientId: unknown, opts?: unknown) => {
+      const sid = requireSessionId(sessionId);
+      await assertRemoteInputControlBoundary(sid, isDeviceLinkInvoke(), opts);
+      return applyQueueHold(
+        inputCoordinator,
+        sid,
+        clientId === null ? null : requireClientId(clientId),
+      );
     },
   );
 

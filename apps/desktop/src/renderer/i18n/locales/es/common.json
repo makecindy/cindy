@@ -12628,7 +12628,12 @@
       "editCancelAria": "Cancelar edición (Esc)",
       "syntheticContinueLabel": "Continuar la tarea inconclusa (instrucción del sistema)",
       "syntheticTriggerLabel": "Instrucción del sistema",
-      "showMore_many": "{{count}} más"
+      "showMore_many": "{{count}} más",
+      "holdAria": "Pausar aquí",
+      "holdTip": "Suspender este mensaje y los siguientes",
+      "heldRowAria": "Punto de parada: este mensaje y los siguientes no se enviarán automáticamente. La tarea actual termina con normalidad.",
+      "releaseHoldTip": "En pausa aquí: reanuda para seguir enviando",
+      "releaseHoldAria": "Reanudar el envío automático desde este mensaje"
     },
     "newChatView": {
       "missing": {

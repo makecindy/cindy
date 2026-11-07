@@ -1940,6 +1940,7 @@ function CCAgentSessionContent({
     queueExpanded,
     setQueueExpanded,
     resumeQueue,
+    setQueueHold,
     moveQueueItem,
     setQueueInteractionLock,
     setQueueEditLock,
@@ -6217,6 +6218,8 @@ function CCAgentSessionContent({
                   queueExpanded={queueExpanded}
                   onQueueExpandedChange={setQueueExpanded}
                   onQueueResume={resumeQueue}
+                  onQueueHold={setQueueHold}
+                  onQueueReleaseHold={() => setQueueHold(null)}
                   onQueueRemove={removeFromQueue}
                   queueEditingClientId={activeQueueComposerEdit?.clientId ?? null}
                   onQueueEditBegin={beginQueueComposerEdit}

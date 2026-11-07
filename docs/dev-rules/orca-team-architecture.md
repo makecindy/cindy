@@ -462,7 +462,28 @@ Worker turn 被 vendor 报终止型 error，但 interrupted-turn auto-resume 仍
    释放该 clientId 排队时登记的 Orca 回调（不运行，理由见 1b）。排序同样遵守编辑锁：
    用户正在编辑的行不可移动（`MESSAGE_CONSUMING`）。
 
-10. **轮次结束后才落地的 accepted 只能用交付级凭证（状态：不变量，2026-10-24）**<br>
+10. **停点(held)是用户独占的队列闸门（状态：不变量，2026-10-31）**<br>
+   用户在会话队列里可以把某一条挂起为停点：`AgentInputQueuedMessage.held === true`，
+   队列里至多一条，由 `AgentInputCoordinator.hold/releaseHold` 原子维护（新停点清旧停点、
+   单次 emit），随队列快照持久化。它和 `queuePaused`（Stop／崩溃恢复）是两个独立闸门：
+   队首被 held 时 `explainDrainBlockGate` 返回 `queue-head-held`，同一队列里的排队
+   `/compact` 也一起停；Stop 不清除停点，恢复停点后队首立即派发。删除停点条目时停点
+   后移到原位置的下一条（删除不等于恢复自动发送），编辑保留停点。FIFO 之下停点之后
+   的条目同样不派发，也不提供第二个停点按钮；停点条目不接受插话
+   （`MESSAGE_HELD`）。协同侧可观测：`get_worker_queue_status` 每条返回 `held` 并在
+   顶层返回 `queue_held`；`send_to_worker` 的排队回执带 `queue_held`（说明本条只是
+   入队、不会自动执行，否则 Lead 会等一个不会到来的回报）；`merge_queued_messages`
+   区间含停点返回 `QUEUE_HAS_HELD`（整次零修改）；合并还会在同步替换回调里按最新条目
+   再判一次，避免异步权限复核期间刚设的停点被合并删除。`move_queued_message` 拒绝把
+   其它条目**跨过**停点（`QUEUE_HELD_BOUNDARY`，前后两侧各自区间内的排序仍可用），
+   停点条目自身可以移动。转插话在 `isControlSteerBlocked`（预检与 provider 前复核共用）
+   里读最新 `held`，而 `hold` 拒绝已在投递中的条目，两侧互斥封住「挂起条目被送进当前轮」。实现指针：
+   `agent-input-coordinator.ts` 的 `hold`／`releaseHold` 与 `explainDrainBlockGate`、
+   `sessionQueueControl.ts` 的 steer/move 校验、`orcaTeamService.ts` 的
+   `listWorkerQueuedMessages` / `mergeWorkerQueuedMessages`、`register.ts` 的
+   `maker:input:set-hold` handler。
+
+11. **轮次结束后才落地的 accepted 只能用交付级凭证（状态：不变量，2026-10-24）**<br>
     排队消息的 accepted 回调要等目标排空队列才跑，此时发起它的那一轮早已结束；因此它只能复核
     交付级不变量（账号 epoch、会话行未 `deleted` 且 `cleared_at` 未变、权限档未被撤销、
     Worker 仍属于该 Lead 的活跃团队），不能复用轮次级凭证（本轮输入来源、`turnOrigin`）。
