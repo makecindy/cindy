@@ -19884,5 +19884,23 @@
     "rendered": "Ver documento",
     "wrap": "Quebra de linha",
     "lineNumbers": "Números de linha"
+  },
+  "subscriptionAccounts": {
+    "title": "Contas de assinatura",
+    "note": "A primeira conta usa a pasta padrão da CLI. As contas adicionais fazem login separadamente. Novas tarefas são distribuídas; as existentes mantêm sua conta.",
+    "strategy": "Balanceamento de carga",
+    "add": "Adicionar conta",
+    "default": "Pasta padrão",
+    "ready": "Conectada",
+    "signedOut": "Login necessário",
+    "unavailable": "Status indisponível",
+    "limited": "Cota esgotada",
+    "remove": "Remover conta",
+    "removeTitle": "Remover {{name}}?",
+    "removeDescription": "A Cindy deixará de atribuir tarefas a esta conta. O login da CLI e o histórico de conversas permanecerão neste computador.",
+    "failed": "Não foi possível ler ou atualizar a conta. Verifique o login da CLI e a conexão de rede e tente novamente.",
+    "used": "{{percent}}% usado",
+    "directory": "Pasta da conta",
+    "login": "Entrar"
   }
 }

@@ -667,6 +667,27 @@ describe('provider group runtime quota account selection', () => {
     return { read, config, localId };
   }
 
+  // PR review: pooled native quota must survive both remote parsing and source merging for bridge engines.
+  it('uses remote pool buckets for Pi and Claude Code while retaining model-specific capacity', async () => {
+    const h = harness('openai', 'codex');
+    const bucket = (limitName: string, usedPercent: number) => ({ limitName, updatedAt: Date.now(),
+      primary: { usedPercent, windowMinutes: 300, resetsAt: Date.now() / 1000 + 7200 } });
+    io.invoke.mockImplementation(async (_device, channel) => {
+      if (channel !== 'maker:subscription-pool:quota') throw new Error('Unexpected legacy quota fallback');
+      return { ok: true, result: { providerId: 'openai', pooled: true, usage: { codexUsage: {
+        nativeAccountPool: true, webSnapshot: null,
+        appServerBuckets: { codex: bucket('Codex', 100), special: bucket('special-model', 20) },
+      } } } };
+    });
+    const resolved = await h.read();
+    expect(resolved[1].codexUsage?.nativeAccountPool).toBe(true);
+    for (const kind of ['pi', 'claude-code']) {
+      expect(providerGroupMemberUsageState(resolved[1], 'chatgpt/gpt-6', Date.now(), kind).limited).toBe(true);
+      expect(providerGroupMemberUsageState(resolved[1], 'chatgpt/special-model', Date.now(), kind).limited).toBe(false);
+    }
+    expect(io.invoke).toHaveBeenCalledTimes(1);
+  });
+
   it('uses each member’s provider ID through the injected reader and existing same-account channel', async () => {
     const h = harness();
     const local = vi.fn(async () => usage());
@@ -727,7 +748,8 @@ describe('provider group runtime quota account selection', () => {
     expect(resolved[0].codexUsage?.appServerBuckets?.__default__?.primary?.usedPercent).toBe(30);
     expect(resolved[1].codexUsage !== null).toBe(accepted);
     await h.read();
-    expect(io.invoke).toHaveBeenCalledTimes(2);
+    // Built-in OpenAI probes account-pool support once, shared by its two quota sources.
+    expect(io.invoke).toHaveBeenCalledTimes(id === 'openai' ? 3 : 2);
     expect(local).toHaveBeenCalledTimes(1);
     expect(localLimits).toHaveBeenCalledTimes(1);
   });
