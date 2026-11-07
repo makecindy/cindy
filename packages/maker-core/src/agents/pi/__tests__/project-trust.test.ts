@@ -584,6 +584,23 @@ describe('Pi project trust contract', () => {
     expect(result.eligibleSettingsPaths).toEqual([projection.sourcePath]);
   });
 
+  it('keeps a zero reserve token because pi allows non-negative safe integers', () => {
+    // pi 契约:reserveTokens / keepRecentTokens 都是「非负安全整数」。拒 0 会把用户已批准的
+    // 项目设置整份丢掉,连同合法的 keepRecentTokens 一起失效。
+    const result = evaluatePiProjectTrust({
+      identity,
+      approval: approval(),
+      discovered,
+      capabilities: provenSettingsCapabilities,
+      settingsProjection: {
+        sourcePath: '/repo/.pi/settings.json',
+        values: { compaction: { reserveTokens: 0, keepRecentTokens: 8_192 } },
+      },
+    });
+    expect(result.resources.settings).toBe('eligible');
+    expect(result.settingsProjection?.values).toEqual({ compaction: { reserveTokens: 0, keepRecentTokens: 8_192 } });
+  });
+
   it.each([
     ['undefined-only values', { compaction: { reserveTokens: undefined } }],
     ['empty values', {}],

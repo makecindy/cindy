@@ -205,13 +205,14 @@ function cloneAllowedSettings(values: unknown): Readonly<PiProjectSettingsValues
   const reserveTokens = compaction.reserveTokens;
   const keepRecentTokens = compaction.keepRecentTokens;
   // 信任边界:项目 settings 是不可信内容,上界防不可信仓库把保留量写到天文数字让自动压缩永不触发。
-  // 下界按字段分开:reserveTokens 由本仓生成侧 Math.max(1,…) 产出,0 会让切模恒判「需全新运行时」;
-  // keepRecentTokens 不来自生成侧,pi 的契约是「非负安全整数」(settings.md),0 合法,不能拒。
-  const plausible = (tokens: unknown, min: number): tokens is number =>
-    typeof tokens === 'number' && Number.isSafeInteger(tokens) && tokens >= min && tokens <= 100_000_000;
+  // 下界按 pi 契约取 0:两个字段都是「非负安全整数」(pinned pi 的 settings 契约),
+  // 0 合法 —— 拒了会把用户已批准的项目设置整份丢掉,连同合法的 keepRecentTokens 一起失效。
+  // 本仓生成侧的 Math.max(1,…) 是运行时保留量,与这里的项目白名单不是一回事。
+  const plausible = (tokens: unknown): tokens is number =>
+    typeof tokens === 'number' && Number.isSafeInteger(tokens) && tokens >= 0 && tokens <= 100_000_000;
   if (
-    (reserveTokens !== undefined && !plausible(reserveTokens, 1)) ||
-    (keepRecentTokens !== undefined && !plausible(keepRecentTokens, 0))
+    (reserveTokens !== undefined && !plausible(reserveTokens)) ||
+    (keepRecentTokens !== undefined && !plausible(keepRecentTokens))
   ) return null;
   const clone = {
     ...(reserveTokens === undefined ? {} : { reserveTokens }),
