@@ -129,6 +129,8 @@
  * Env knobs (upstream-compatible): SPINE_MIN_TOKENS, SPINE_SHADOW_DIR, SPINE_SHADOW_MAX_BYTES,
  * SPINE_ENGINE (cloud|local), SPINE_KEEP_ROUNDS, SPINE_KEEP_ROUND_TOKENS, SPINE_POINTER_TOKENS,
  * SPINE_SHADOW_MAX_SESSIONS;本仓另有 SPINE_CARD_BUDGET(只用于对照上游固定预算,默认不设)。
+ * 阈值不随模型窗口缩放:MIN_PRESSURE 仍是 20000,窗口比它小的模型(例如 16K 的本地小模型)
+ * 永远到不了门槛,Live Compact 不会介入。上游常量按大窗口调,这里保持一致。
  *
  * 卡片字符预算(唯一一处有意的数值偏离,2026-11-05 实测):上游固定 8000,本仓按
  * min(max(8000, 0.9×span), 32000) 放大。内核是 buildCard 的 `ok = missing.length === 0`:
@@ -1661,7 +1663,9 @@ const REDACT_RULES: Array<[RegExp, string]> = [
   // 小写/驼峰/连字符键名没有统一后缀(apiKey、refresh-token),保留显式小列表。
   // 值里允许 `[`(密码可能含方括号),只豁免「已经是替换标记」的情况,否则会把标记再啃一口。
   [/((?:api[_-]?key|access[_-]?key|access[_-]?token|auth[_-]?token|session[_-]?token|refresh[_-]?token|id[_-]?token|client[_-]?secret|secret[_-]?key|private[_-]?key|password|passwd|secret)["'`]?\s*[=:]\s*)(["'`]?)(?!\[REDACTED)([^\s"'`]{8,})/gi, "$1$2[REDACTED]"],
-  [/(?<![A-Za-z0-9])Bearer\s+[A-Za-z0-9._-]{16,}/gi, "Bearer [REDACTED]"],
+  // RFC 6750 的 b64token 还允许 `~ + /` 和结尾的 `=`:只认 `._-` 时,以 `/` 或 `+` 开头的
+  // base64 凭证第一个字符就被排除,整条 token 原样留下。
+  [/(?<![A-Za-z0-9])Bearer\s+[A-Za-z0-9._~+/-]{16,}={0,2}/gi, "Bearer [REDACTED]"],
   [/(?<![A-Za-z0-9])sk-[A-Za-z0-9_-]{16,}/g, "[REDACTED]"],
   // Stripe 形态是 `sk_live_...` / `rk_test_...`:前缀分段,上一条的 `sk-` 匹配不到。
   [/(?<![A-Za-z0-9])(?:sk|rk)_(?:live|test)_[0-9A-Za-z]{16,}/g, "[REDACTED]"],

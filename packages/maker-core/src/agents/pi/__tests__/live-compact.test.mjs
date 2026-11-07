@@ -291,6 +291,9 @@ describe('live compact spine selection', () => {
     expect(redactSecrets(legacy)).toBe('[REDACTED PRIVATE KEY]');
     const legacyCut = [pemEdge('BEGIN RSA'), 'Proc-Type: 4,ENCRYPTED', '', 'b3BlbnNzaC1rZXk'].join(String.fromCharCode(10));
     expect(redactSecrets(legacyCut)).toBe('[REDACTED PRIVATE KEY]');
+    // RFC 6750 的 b64token 可以以 `/` 或 `+` 开头、以 `=` 结尾;只认 ._- 会整条漏掉。
+    const bearerEdge = ['/fixture', 'bearer', '0123456789+', '=='].join('');
+    expect(redactSecrets('Bearer ' + bearerEdge)).toBe('Bearer [REDACTED]');
     // 口令键名同样按「后缀类」命中:`SSH_KEY_PASSPHRASE=` 不能只靠 PASSPHRASE 之外的键名。
     const passphraseKey = ['SSH', 'KEY', 'PASSPHRASE'].join('_');
     expect(redactSecrets(passphraseKey + '=' + FAKE_PASSPHRASE)).not.toContain(FAKE_PASSPHRASE);
