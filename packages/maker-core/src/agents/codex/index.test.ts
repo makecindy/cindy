@@ -2125,7 +2125,7 @@ describe('CodexAgent permissions', () => {
 
   it.each([false, true])('keeps goal continuation owned by Cindy on thread startup (resume=%s)', async (resume) => {
     const agent = new CodexAgent(createDeps());
-    const host = installFakeHost(agent);
+    installFakeHost(agent);
     const handle = await agent.startSession({
       sessionId: 'host-owned-goal',
       model: 'gpt-6-astra',
@@ -16942,6 +16942,32 @@ describe('CodexAgent MCP thread context hooks', () => {
     expect(startParams).toMatchObject({
       approvalPolicy: 'on-request',
       approvalsReviewer: 'auto_review',
+    });
+    await handle.close();
+  });
+
+  it('registers the host reviewer route on startup and model changes', async () => {
+    const registerCodexReviewerRouteContext = vi.fn();
+    const agent = new CodexAgent(createDeps({}, { registerCodexReviewerRouteContext }));
+    const host = installFakeHost(agent);
+    const handle = await agent.startSession({
+      sessionId: 'session-reviewer-route-context',
+      model: 'gpt-5.4',
+      providerId: 'openai',
+      workingDir: '/repo',
+      permissionMode: 'auto',
+    });
+
+    expect(registerCodexReviewerRouteContext).toHaveBeenLastCalledWith({
+      sessionId: 'session-reviewer-route-context',
+      threadId: handle.id,
+      model: 'gpt-5.4',
+    });
+    await handle.setModel?.('gpt-5.5');
+    expect(registerCodexReviewerRouteContext).toHaveBeenLastCalledWith({
+      sessionId: 'session-reviewer-route-context',
+      threadId: handle.id,
+      model: 'gpt-5.5',
     });
     await handle.close();
   });

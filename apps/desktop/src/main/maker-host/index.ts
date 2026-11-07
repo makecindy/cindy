@@ -296,6 +296,7 @@ import {
   setCodexSubagentOAuthReader,
   registerComposed as registerCodexProxyComposed,
   registerChildThread as registerCodexProxyChildThread,
+  registerReviewerRouteContext as registerCodexReviewerRouteContext,
   setCodexAppliedCustomProviderRoutes,
   unregister as unregisterCodexProxyPrompt,
 } from './codex-proxy-host.js';
@@ -2329,6 +2330,9 @@ export function getMaker(): Maker {
           ...(subagentRoute ? { subagentRoute } : {}),
           ...(smartSubagentRoutes ? { smartSubagentRoutes } : {}),
         }),
+      registerCodexReviewerRouteContext: ({ sessionId, threadId, model }) => {
+        registerCodexReviewerRouteContext(sessionId, threadId, model);
+      },
       getCodexSubagentIdentity: ({ childThreadId }) =>
         getObservedCodexSubagentIdentity(childThreadId),
       armCodexHttpRecovery,
