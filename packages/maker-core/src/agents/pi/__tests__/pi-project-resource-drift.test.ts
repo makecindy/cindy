@@ -304,7 +304,8 @@ describe('piProjectResourcesDrifted', () => {
     rmSync(path.join(project, 'real-skill', 'SKILL.md'));
     symlinkSync(path.join(project, 'targets', 'real.md'), path.join(project, 'real-skill', 'SKILL.md'));
     const baseline = snapshot();
-    rmSync(path.join(project, 'targets', 'real.md'));
+    // 目标落地(悬空链的本体已入盯视,写入后 stat 由 -1 变实值)→ 判漂移
+    writeFileSync(path.join(project, 'targets', 'real.md'), '---\nname: foo\ndescription: t\n---\n');
     expect(piProjectResourcesDrifted(baseline)).toBe(true);
   });
 
