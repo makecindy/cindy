@@ -214,7 +214,6 @@ import { AUTO_REVIEW_DELEGATED_CONTINUATION, readAutoReviewUserText, restoreAuto
 import type {
   AgentEvent,
   AgentKind,
-  AgentSkillCommand,
   Effort,
   ContextUsageData,
   InteractionDecision,
@@ -1468,7 +1467,7 @@ import {
   createProjectSkillPreparation,
   toAgentSkillListFailure,
 } from './agentSkillListIpcBoundary.js';
-import { createPaletteDiscoveryReuse } from './paletteDiscoveryReuse.js';
+import { paletteSkillListReuse } from './paletteSkillListCache.js';
 import {
   captureDataOwnerBroadcastScope,
   isDataOwnerBroadcastScopeCurrent,
@@ -1618,19 +1617,6 @@ import { installSessionTurnObserver } from './sessionTurnObserver.js';
 const log = createLogger('maker-ipc');
 const workdirLog = createLogger('workdir-diagnostics');
 
-/**
- * `/` palette Skill listings are discovery snapshots, so a repeat load inside the
- * window may read the previous answer. Every Cindy-side change (SkillHub activation,
- * Pi package install/update, the Pi runtime catalog retry, a Ghost install/toggle)
- * passes `forceReload`, which clears the snapshot for every context instead of only
- * refreshing the caller's: other sessions would otherwise keep serving the old
- * roster. Entries are scoped to the active data owner so a switch never leaks one
- * owner's plugin Skills to the next.
- */
-const SKILL_LIST_REUSE_MS = 30_000;
-const skillListReuse = createPaletteDiscoveryReuse<{ success: true; skills: AgentSkillCommand[] }>(
-  { ttlMs: SKILL_LIST_REUSE_MS, scope: activeOwnerScopeKey },
-);
 const workingDirectoryRecovery = createWorkingDirectoryRecovery({ stat: statWorkingDirectory, mkdir: mkdirWorkingDirectory, realpath: realpathWorkingDirectory, requiredRoot: requiredDialogueRecoveryRoot, findFallback: findDialogueRecoveryWorkspace }, allocateDialogueRecoveryWorkspace, workdirLog);
 
 function localModelWindowSwitchErrorCode(code: IpcErrorCode): IpcErrorCode {
@@ -7140,6 +7126,9 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
         win.webContents.send(MAKER_PUSH.PI_PACKAGES_CHANGED);
       }
     }
+    // A Pi package change rewrites the Skills the palette lists; drop the snapshot
+    // here because the announcement above cannot reach an unmounted composer.
+    paletteSkillListReuse.clear();
   });
   getAgentIslandService()?.setPermissionResolver(resolvePendingPermissionFromAgentIsland);
   sessionTurnActivityTracker.setTurnKeepaliveChangeListener(
@@ -8493,12 +8482,14 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
         ]);
         const ownerScope = activeOwnerScopeKey();
         if (skillParams.forceReload === true) {
-          skillListReuse.clear();
+          // A forced reload drops every context's entry, not only this caller's:
+          // another session would otherwise keep serving the pre-change roster.
+          paletteSkillListReuse.clear();
         } else {
-          const reused = skillListReuse.read(reuseKey);
+          const reused = paletteSkillListReuse.read(reuseKey);
           if (reused) return reused;
         }
-        const scanGeneration = skillListReuse.generation();
+        const scanGeneration = paletteSkillListReuse.generation();
         const linksChanged = skillParams.remoteHostId
           ? false
           : await measureTraceOperation('maker:list-agent-skills:project-links',
@@ -8540,7 +8531,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
           activeOwnerScopeKey() === ownerScope
           && !result.errors?.length
         ) {
-          skillListReuse.write(reuseKey, listing, scanGeneration);
+          paletteSkillListReuse.write(reuseKey, listing, scanGeneration);
         }
         return listing;
       } catch (err) {
