@@ -69,15 +69,11 @@ type MascotAnimationMode = typeof MASCOT_ANIMATION_MODES[number];
 type MascotAnimationSteps = Record<AgentIslandMascotSkin, number>;
 const MASCOT_PREVIEW_VIEWBOX_SIZE = 16;
 /** 键帽圆角:原 SVG rect rx=0.12(键帽 1.8x0.7),换算成 CSS 双轴百分比。 */
-const MASCOT_KEY_BORDER_RADIUS = `${(0.12 / 1.8) * 100}% / ${(0.12 / 0.7) * 100}%`;
-const MASCOT_KEY_RECTS = Array.from({ length: 12 }, (_, index) => index);
 
 // 眼睛几何与配色必须与原生侧 SpriteMascotConfig 保持一致
 // (native/agent-island/macos-agent-island-helper.swift)，否则设置页预览和灵动岛实际渲染会不一样。
 const MASCOT_PREVIEW_CONFIGS: Record<Exclude<AgentIslandMascotSkin, 'pululu'>, MascotPreviewConfig> = {
   cindy: {
-    keyboardBase: 'rgb(38 43 69)',
-    keyboardKey: 'rgb(103 118 240)',
     eyeColor: 'rgb(107 61 50)',
     eyeLeftX: 6.71,
     eyeRightX: 9.3,
@@ -86,8 +82,6 @@ const MASCOT_PREVIEW_CONFIGS: Record<Exclude<AgentIslandMascotSkin, 'pululu'>, M
     eyeRy: 0.98,
   },
   blackcat: {
-    keyboardBase: 'rgb(31 36 41)',
-    keyboardKey: 'rgb(103 118 240)',
     eyeColor: 'rgb(253 207 69)',
     eyeLeftX: 5.95,
     eyeRightX: 10.05,
@@ -96,8 +90,6 @@ const MASCOT_PREVIEW_CONFIGS: Record<Exclude<AgentIslandMascotSkin, 'pululu'>, M
     eyeRy: 0.98,
   },
   erika: {
-    keyboardBase: 'rgb(51 71 77)',
-    keyboardKey: 'rgb(90 156 170)',
     eyeColor: 'rgb(135 93 66)',
     eyeLeftX: 6.84,
     eyeRightX: 9.16,
@@ -106,8 +98,6 @@ const MASCOT_PREVIEW_CONFIGS: Record<Exclude<AgentIslandMascotSkin, 'pululu'>, M
     eyeRy: 0.98,
   },
   tarara: {
-    keyboardBase: '#00615c',
-    keyboardKey: '#00d9c5',
     eyeColor: 'rgb(61 114 228)',
     eyeLeftX: 6.9,
     eyeRightX: 9.7,
@@ -116,8 +106,6 @@ const MASCOT_PREVIEW_CONFIGS: Record<Exclude<AgentIslandMascotSkin, 'pululu'>, M
     eyeRy: 0.98,
   },
   boli: {
-    keyboardBase: '#292e3a',
-    keyboardKey: '#707d94',
     eyeColor: 'black',
     eyeLeftX: 5.63,
     eyeRightX: 10.63,
@@ -127,8 +115,6 @@ const MASCOT_PREVIEW_CONFIGS: Record<Exclude<AgentIslandMascotSkin, 'pululu'>, M
     imageScale: 0.8,
   },
   whitesnow: {
-    keyboardBase: '#292e3a',
-    keyboardKey: '#707d94',
     eyeColor: 'black',
     eyeLeftX: 6.86,
     eyeRightX: 9.5,
@@ -137,8 +123,6 @@ const MASCOT_PREVIEW_CONFIGS: Record<Exclude<AgentIslandMascotSkin, 'pululu'>, M
     eyeRy: 1.02,
   },
   annie: {
-    keyboardBase: '#2e6b8f',
-    keyboardKey: '#77c4ea',
     eyeColor: 'rgb(174 33 70)',
     eyeLeftX: 6.31,
     eyeRightX: 9.56,
@@ -147,8 +131,6 @@ const MASCOT_PREVIEW_CONFIGS: Record<Exclude<AgentIslandMascotSkin, 'pululu'>, M
     eyeRy: 0.98,
   },
   chaku: {
-    keyboardBase: 'rgb(115 82 8)',
-    keyboardKey: 'rgb(253 207 69)',
     eyeColor: 'rgb(253 207 69)',
     eyeLeftX: 6.19,
     eyeRightX: 9.69,
@@ -157,8 +139,6 @@ const MASCOT_PREVIEW_CONFIGS: Record<Exclude<AgentIslandMascotSkin, 'pululu'>, M
     eyeRy: 0.98,
   },
   muffin: {
-    keyboardBase: 'rgb(48 61 97)',
-    keyboardKey: 'rgb(125 153 213)',
     eyeColor: 'black',
     eyeLeftX: 5.56,
     eyeRightX: 10.56,
@@ -174,8 +154,6 @@ const DEFAULT_MASCOT_ANIMATION_STEPS: MascotAnimationSteps = Object.fromEntries(
 ) as MascotAnimationSteps;
 
 interface MascotPreviewConfig {
-  keyboardBase: string;
-  keyboardKey: string;
   eyeColor: string;
   eyeLeftX: number;
   eyeRightX: number;
@@ -476,7 +454,7 @@ export function AgentIslandSection() {
               </span>
               <span className="flex shrink-0 items-center gap-2">
                 {/* The list's own preview, scaled down: sprite PNGs carry no eyes on their own. */}
-                <span className="relative h-8 w-9 overflow-hidden rounded-md" aria-hidden="true">
+                <span className="relative h-8 w-9 overflow-hidden rounded-lg" aria-hidden="true">
                   <span className="absolute left-0 top-0 origin-top-left scale-[0.64]">
                     <MascotPreview skin={mascotSkin} mode={animationModeForStep(animationSteps[mascotSkin])} />
                   </span>
@@ -707,8 +685,8 @@ function MascotPreviewImage({
 }
 
 /**
- * Sprite 皮肤预览:键盘与眼睛全部用绝对定位 HTML 元素表达(原为内联 SVG),
- * 让 keyboard-tap / key-flash / eye-focus 常驻动画挂在 HTML 上(规则 7)。
+ * Sprite 皮肤预览:影子与眼睛用绝对定位 HTML 元素表达(原为内联 SVG),
+ * 让 eye-focus 等常驻动画挂在 HTML 上(规则 7)。
  * props(src / config)均为模块常量,memo 让 1.7s 轮播 tick 不再重渲此子树
  * (动画模式切换走父级 data-motion 属性,不经过本组件)。
  */
@@ -722,42 +700,14 @@ const SpriteMascotPreview = memo(function SpriteMascotPreview({
   const eyesBox = getMascotEyesBox(config);
   return (
     <div className="relative h-10 w-10">
-      <div
-        className="agent-island-mascot-keyboard pointer-events-none absolute inset-0"
+      <span
+        className="pointer-events-none absolute block rounded-[50%] bg-black"
+        style={{
+          ...mascotViewBoxStyle(8 - 4.2, 14.3 - 0.48, 4.2 * 2, 0.48 * 2),
+          opacity: 0.28,
+        }}
         aria-hidden="true"
-      >
-        <span
-          className="absolute block rounded-[50%] bg-black"
-          style={{
-            ...mascotViewBoxStyle(8 - 4.2, 14.3 - 0.48, 4.2 * 2, 0.48 * 2),
-            opacity: 0.28,
-          }}
-        />
-        <span
-          className="absolute block"
-          style={{
-            ...mascotViewBoxStyle(0.5, 13, 15, 3),
-            backgroundColor: config.keyboardBase,
-          }}
-        />
-        {MASCOT_KEY_RECTS.map((index) => {
-          const row = Math.floor(index / 6);
-          const col = index % 6;
-          return (
-            <span
-              key={index}
-              className="agent-island-mascot-key absolute block"
-              style={{
-                ...mascotViewBoxStyle(1 + col * 2.4, 13.5 + row * 1.2, 1.8, 0.7),
-                '--agent-island-key-delay': `${index * 38}ms`,
-                backgroundColor: index === 2 ? 'white' : config.keyboardKey,
-                borderRadius: MASCOT_KEY_BORDER_RADIUS,
-                opacity: index === 2 ? 0.9 : 1,
-              } as CSSProperties}
-            />
-          );
-        })}
-      </div>
+      />
       <div
         className="agent-island-mascot-character absolute inset-0 flex items-center justify-center"
         style={{ '--agent-island-mascot-scale': config.imageScale ?? 1 } as CSSProperties}

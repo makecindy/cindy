@@ -146,9 +146,6 @@ struct PululuMascotView: View {
   private static let eyeC = Color(red: 0.96, green: 0.97, blue: 1.0)
   private static let alertC = Color(red: 0.0, green: 0.85, blue: 0.77)
   private static let approvalGlowC = Color(red: 1.0, green: 0.72, blue: 0.20)
-  private static let kbBase = Color(red: 0.16, green: 0.18, blue: 0.23)
-  private static let kbKey = Color(red: 0.44, green: 0.49, blue: 0.58)
-  private static let kbHi = Color.white
   private static let idleCycleDuration: Double = 4.8
   private static let idleSleepStart: Double = 1.15
 
@@ -315,23 +312,6 @@ struct PululuMascotView: View {
     c.fill(rounded(right, radius: radius), with: .color(color.opacity(opacity)))
   }
 
-  private func drawKeyboard(_ c: GraphicsContext, v: V, phase: Int, dy: CGFloat) {
-    c.fill(Path(v.rect(0.5, 12.0, 15, 3, dy: dy)), with: .color(Self.kbBase))
-    for row in 0..<2 {
-      let ky = 12.5 + CGFloat(row) * 1.2
-      for col in 0..<6 {
-        let kx = 1.0 + CGFloat(col) * 2.4
-        c.fill(Path(v.rect(kx, ky, 1.8, 0.7, dy: dy)), with: .color(Self.kbKey))
-      }
-    }
-
-    let flashRow = phase / 3
-    let flashCol = phase % 6
-    let fkx = 1.0 + CGFloat(flashCol) * 2.4
-    let fky = 12.5 + CGFloat(flashRow) * 1.2
-    c.fill(Path(v.rect(fkx, fky, 1.8, 0.7, dy: dy)), with: .color(Self.kbHi.opacity(0.9)))
-  }
-
   private func drawBang(_ c: GraphicsContext, v: V, pct: CGFloat, jumpY: CGFloat) {
     let opacity = agentIslandMascotLerp([
       (0, 0), (0.03, 1), (0.10, 1), (0.55, 1), (0.62, 0), (1, 0),
@@ -462,7 +442,6 @@ struct PululuMascotView: View {
   private func workCanvas(t: Double) -> some View {
     let bounce = sin(t * 2 * .pi / 0.38) * 0.75
     let breathe = sin(t * 2 * .pi / 2.6)
-    let keyPhase = Int(t / 0.1) % 6
     let blinkPhase = t.truncatingRemainder(dividingBy: 3.2)
     let eyeScale: CGFloat = blinkPhase > 1.15 && blinkPhase < 1.26 ? 0.0 : 1.0
     let headTurn = CGFloat(sin(t * 2 * .pi / 0.86)) * 0.26
@@ -473,8 +452,6 @@ struct PululuMascotView: View {
       let squashY: CGFloat = dy > 0.25 ? 0.98 : 1.0
 
       drawShadow(c, v: v, width: 8.1 - abs(dy) * 0.32, opacity: 0.30)
-      // 键盘先画：角色要挡在键盘前面，而不是被键盘条横切。
-      drawKeyboard(c, v: v, phase: keyPhase, dy: -0.05)
       drawPululu(
         c,
         v: v,
@@ -611,8 +588,6 @@ struct SpriteMascotConfig {
   let completionBadgeColor: Color
   let eyeColor: Color
   let approvalGlowColor: Color
-  let keyboardBaseColor: Color
-  let keyboardKeyColor: Color
   let bodyScale: CGFloat
   let eyeLeftX: CGFloat
   let eyeRightX: CGFloat
@@ -630,8 +605,6 @@ struct SpriteMascotConfig {
     completionBadgeColor: Color(red: 0.0, green: 0.85, blue: 0.77),
     eyeColor: Color(red: 0.239, green: 0.447, blue: 0.894),
     approvalGlowColor: Color(red: 0.0, green: 0.85, blue: 0.77),
-    keyboardBaseColor: Color(red: 0.00, green: 0.38, blue: 0.34),
-    keyboardKeyColor: Color(red: 0.00, green: 0.85, blue: 0.77),
     bodyScale: 1.0,
     eyeLeftX: 6.9,
     eyeRightX: 9.7,
@@ -650,8 +623,6 @@ struct SpriteMascotConfig {
     completionBadgeColor: Color(red: 0.620, green: 0.761, blue: 0.961),
     eyeColor: .black,
     approvalGlowColor: Color(red: 0.949, green: 0.988, blue: 0.463),
-    keyboardBaseColor: Color(red: 0.16, green: 0.18, blue: 0.23),
-    keyboardKeyColor: Color(red: 0.44, green: 0.49, blue: 0.58),
     bodyScale: 0.80,
     eyeLeftX: 5.63,
     eyeRightX: 10.63,
@@ -670,8 +641,6 @@ struct SpriteMascotConfig {
     completionBadgeColor: Color(red: 0.569, green: 0.682, blue: 0.373),
     eyeColor: .black,
     approvalGlowColor: Color(red: 0.976, green: 0.882, blue: 0.345),
-    keyboardBaseColor: Color(red: 0.16, green: 0.18, blue: 0.23),
-    keyboardKeyColor: Color(red: 0.44, green: 0.49, blue: 0.58),
     bodyScale: 1.0,
     eyeLeftX: 6.86,
     eyeRightX: 9.50,
@@ -690,8 +659,6 @@ struct SpriteMascotConfig {
     completionBadgeColor: Color(red: 0.467, green: 0.769, blue: 0.918),
     eyeColor: Color(red: 0.682, green: 0.129, blue: 0.275),
     approvalGlowColor: Color(red: 0.992, green: 0.388, blue: 0.549),
-    keyboardBaseColor: Color(red: 0.18, green: 0.42, blue: 0.56),
-    keyboardKeyColor: Color(red: 0.467, green: 0.769, blue: 0.918),
     bodyScale: 1.0,
     eyeLeftX: 6.31,
     eyeRightX: 9.56,
@@ -710,8 +677,6 @@ struct SpriteMascotConfig {
     completionBadgeColor: Color(red: 0.129, green: 0.741, blue: 0.682),
     eyeColor: Color(red: 0.992, green: 0.812, blue: 0.271),
     approvalGlowColor: Color(red: 0.992, green: 0.812, blue: 0.271),
-    keyboardBaseColor: Color(red: 0.45, green: 0.32, blue: 0.03),
-    keyboardKeyColor: Color(red: 0.992, green: 0.812, blue: 0.271),
     bodyScale: 1.0,
     eyeLeftX: 6.19,
     eyeRightX: 9.69,
@@ -730,8 +695,6 @@ struct SpriteMascotConfig {
     completionBadgeColor: Color(red: 0.490, green: 0.600, blue: 0.835),
     eyeColor: .black,
     approvalGlowColor: Color(red: 1.0, green: 0.306, blue: 0.192),
-    keyboardBaseColor: Color(red: 0.19, green: 0.24, blue: 0.38),
-    keyboardKeyColor: Color(red: 0.490, green: 0.600, blue: 0.835),
     bodyScale: 1.0,
     eyeLeftX: 5.56,
     eyeRightX: 10.56,
@@ -755,8 +718,6 @@ struct SpriteMascotConfig {
     completionBadgeColor: Color(red: 0.404, green: 0.463, blue: 0.941),
     eyeColor: Color(red: 0.420, green: 0.239, blue: 0.196),
     approvalGlowColor: Color(red: 0.875, green: 0.180, blue: 0.153),
-    keyboardBaseColor: Color(red: 0.149, green: 0.169, blue: 0.271),
-    keyboardKeyColor: Color(red: 0.404, green: 0.463, blue: 0.941),
     bodyScale: 1.0,
     eyeLeftX: 6.71,
     eyeRightX: 9.30,
@@ -778,8 +739,6 @@ struct SpriteMascotConfig {
     completionBadgeColor: Color(red: 0.404, green: 0.463, blue: 0.941),
     eyeColor: Color(red: 0.992, green: 0.812, blue: 0.271),
     approvalGlowColor: Color(red: 0.875, green: 0.180, blue: 0.153),
-    keyboardBaseColor: Color(red: 0.122, green: 0.141, blue: 0.161),
-    keyboardKeyColor: Color(red: 0.404, green: 0.463, blue: 0.941),
     bodyScale: 1.0,
     eyeLeftX: 5.95,
     eyeRightX: 10.05,
@@ -799,8 +758,6 @@ struct SpriteMascotConfig {
     completionBadgeColor: Color(red: 0.353, green: 0.612, blue: 0.667),
     eyeColor: Color(red: 0.529, green: 0.365, blue: 0.259),
     approvalGlowColor: Color(red: 0.953, green: 0.796, blue: 0.314),
-    keyboardBaseColor: Color(red: 0.200, green: 0.278, blue: 0.302),
-    keyboardKeyColor: Color(red: 0.353, green: 0.612, blue: 0.667),
     bodyScale: 1.0,
     eyeLeftX: 6.84,
     eyeRightX: 9.16,
@@ -858,7 +815,6 @@ struct SpriteMascotView: View {
   @State private var timelineStart = Date().timeIntervalSinceReferenceDate
   @Environment(\.agentIslandMascotAnimationsActive) private var animationsActive
   @Environment(\.agentIslandMascotAnimationEpoch) private var animationEpoch
-  private static let keyboardHighlightColor = Color.white
   private static let idleCycleDuration: Double = 4.9
   private static let idleSleepStart: Double = 1.15
 
@@ -1003,21 +959,6 @@ struct SpriteMascotView: View {
     )
   }
 
-  private func drawKeyboard(_ c: GraphicsContext, v: V, phase: Int, dy: CGFloat) {
-    c.fill(Path(v.rect(0.5, 13.0, 15, 3, dy: dy)), with: .color(config.keyboardBaseColor))
-    for row in 0..<2 {
-      let ky = 13.5 + CGFloat(row) * 1.2
-      for col in 0..<6 {
-        let kx = 1.0 + CGFloat(col) * 2.4
-        c.fill(Path(v.rect(kx, ky, 1.8, 0.7, dy: dy)), with: .color(config.keyboardKeyColor))
-      }
-    }
-    c.fill(
-      Path(v.rect(1.0 + CGFloat(phase % 6) * 2.4, 13.5 + CGFloat(phase / 3) * 1.2, 1.8, 0.7, dy: dy)),
-      with: .color(Self.keyboardHighlightColor.opacity(0.9))
-    )
-  }
-
   private func drawBang(_ c: GraphicsContext, v: V, pct: CGFloat, jumpY: CGFloat) {
     let opacity = agentIslandMascotLerp([
       (0, 0), (0.03, 1), (0.10, 1), (0.55, 1), (0.62, 0), (1, 0),
@@ -1148,7 +1089,6 @@ struct SpriteMascotView: View {
   private func workCanvas(t: Double) -> some View {
     let bounce = sin(t * 2 * .pi / 0.38) * 0.72
     let breathe = sin(t * 2 * .pi / 2.5)
-    let keyPhase = Int(t / 0.1) % 6
     let blinkPhase = t.truncatingRemainder(dividingBy: 3.1)
     let eyeScale: CGFloat = blinkPhase > 1.12 && blinkPhase < 1.23 ? 0.0 : 1.0
     let headTurn = CGFloat(sin(t * 2 * .pi / 0.84)) * 0.22
@@ -1158,8 +1098,6 @@ struct SpriteMascotView: View {
       let v = V(sz)
       let dy = bounce - 0.25
       drawShadow(c, v: v, width: 8.4 - abs(dy) * 0.32, opacity: 0.30)
-      // 键盘先画：角色要挡在键盘前面，而不是被键盘条横切。
-      drawKeyboard(c, v: v, phase: keyPhase, dy: -0.05)
       drawSprite(
         c,
         v: v,
