@@ -40,6 +40,8 @@ export function DefaultOverrideControls({
           onClick={onReset}
           disabled={resetDisabled}
           aria-label={label ?? t('settings.defaults.restore')}
+          // 还原是普通动作（不是设置控件本身）：登记操作说明，让设置搜索能解释这个按钮。
+          data-settings-search-action="Restore the default value for this setting"
           className={cn(
             'flex h-[30px] w-[30px] shrink-0 items-center justify-center rounded-lg',
             'text-[var(--settings-section-desc)] transition-colors',

@@ -12,6 +12,8 @@ import {
   type ModelContextLimitView,
 } from '../../../shared/modelContextLimit';
 import { DefaultOverrideControls } from './DefaultOverrideControls';
+import { providersSettings } from './ProvidersSection.settings-search';
+import { useSettingDefinition } from './useSettingDefinition';
 
 /** 连续提交（键盘连按）的合并窗口：一次按键风暴最多落一次盘。 */
 const COMMIT_DEBOUNCE_MS = 300;
@@ -28,6 +30,8 @@ export function ModelCompactionSettings({
 }) {
   const { t } = useTranslation();
   const key = 'settings.providers.models.advanced.compaction';
+  // 设置搜索索引：滑杆本体是设置控件，必须挂 controlProps（可被搜索命中并聚焦）。
+  const setting = useSettingDefinition(providersSettings.modelCompaction);
   // Drag preview stays local; only the released value is persisted.
   const [draft, setDraft] = useState<number | null>(null);
   const pending = useRef<{
@@ -115,6 +119,7 @@ export function ModelCompactionSettings({
       <div className="mt-2 flex items-center gap-[14px]">
         <div className="flex min-w-0 flex-1 flex-col gap-1.5">
           <Slider
+            {...setting.controlProps}
             value={[value]}
             min={MIN_MODEL_COMPACTION_PCT}
             max={MAX_MODEL_COMPACTION_PCT}
