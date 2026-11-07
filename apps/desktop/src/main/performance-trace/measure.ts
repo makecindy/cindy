@@ -12,6 +12,16 @@ export const TRACE_OPERATIONS = new Set([
   'maker:list-agent-skills:scan',
   'maker:list-agent-skills:identity',
   'maker:list-customizations',
+  // Screenshot backend/fallback diagnostics: static labels, no screen contents,
+  // window titles, display identifiers or raw color profiles.
+  'region-screenshot:windows',
+  'region-screenshot:native',
+  'region-screenshot:electron:platform',
+  'region-screenshot:electron:helper-missing',
+  'region-screenshot:electron:color-space',
+  'region-screenshot:electron:native-frame-unavailable',
+  'region-screenshot:electron:native-size-mismatch',
+  'region-screenshot:electron:native-image-empty',
 ]);
 let observer: ((event: PerformanceTraceEvent) => void) | null = null;
 export function setTraceOperationObserver(next: typeof observer): void {

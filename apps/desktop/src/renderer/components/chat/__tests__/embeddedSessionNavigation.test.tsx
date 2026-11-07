@@ -1,3 +1,4 @@
+import { GhostCardSessionLink } from '../GhostCardSessionLink';
 // @vitest-environment jsdom
 
 import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
@@ -667,4 +668,26 @@ describe('session navigation interaction policy', () => {
   ] as const)('%s interactive=%s', (mode, expected) => {
     expect(isInteractiveSessionNavigationMode(mode)).toBe(expected);
   });
+});
+
+
+it('opens the original task from an inert card link and removes handlers when the card leaves', async () => {
+  const element = document.createElement('a');
+  element.dataset.ghostLink = 'cindy://session/original-task';
+  const view = render(<GhostCardSessionLink element={element} />);
+  fireEvent.click(element);
+  await waitFor(() => expect(mocks.navigate).toHaveBeenCalledWith('/cc-agent/original-task', undefined));
+  mocks.navigate.mockClear();
+  fireEvent.keyDown(element, { key: 'Enter' });
+  await waitFor(() => expect(mocks.navigate).toHaveBeenCalledOnce());
+  mocks.navigate.mockClear();
+  fireEvent(element, new MouseEvent('auxclick', { bubbles: true, cancelable: true, button: 2 }));
+  expect(mocks.openSessionInNewWindow).not.toHaveBeenCalled();
+  fireEvent(element, new MouseEvent('auxclick', { bubbles: true, cancelable: true, button: 1 }));
+  await waitFor(() => expect(mocks.openSessionInNewWindow).toHaveBeenCalledWith('original-task', undefined, null));
+  expect(mocks.navigate).not.toHaveBeenCalled();
+  view.unmount();
+  mocks.navigate.mockClear();
+  fireEvent.click(element);
+  expect(mocks.navigate).not.toHaveBeenCalled();
 });

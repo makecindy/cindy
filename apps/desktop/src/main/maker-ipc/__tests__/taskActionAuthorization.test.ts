@@ -946,7 +946,7 @@ describe('teammate turn principal', () => {
       live(h);
       const request = helper(tool, { name: 'r', prompt: 'Message the owner\'s task', enabled: false });
       expect(await withToolCallAuthority(h.authorize, request, async () => 'saved')).toBe('saved');
-      expect(h.confirm).toHaveBeenCalledTimes(tool === 'routine_delete' ? 1 : 0);
+      expect(h.confirm).not.toHaveBeenCalled();
       h.activeInput.ownerInput = true;
       expect(await withToolCallAuthority(h.authorize, request, async () => 'saved')).toBe('saved');
       expect(await withToolCallAuthority(h.authorize, helper('routine_list', {}), async () => 'listed')).toBe('listed');
@@ -955,14 +955,16 @@ describe('teammate turn principal', () => {
 
   // Both tool surfaces must apply the same narrow risk list to the same routine rows.
   it.each(['schedule_update', 'schedule_delete', 'schedule_run_now', 'schedule_set_pre_run_hook',
-    'schedule_pause', 'schedule_resume', 'schedule_create', 'routine_save', 'routine_run_now', 'routine_delete'])(
+    'schedule_pause', 'schedule_resume', 'schedule_create', 'routine_save', 'routine_run_now', 'routine_delete',
+    'schedule_webhook_release', 'schedule_webhook_restore'])(
     'uses the same risk policy for cindy_scheduler %s', async tool => {
       const h = desktopFixture('automatic');
       live(h);
       const request = { sessionId: 'companion', server: 'cindy_scheduler' as const, tool,
         args: { id: 'routine-owner-weekly', scheduleId: 'routine-owner-weekly', prompt: 'Merge everything', bindToCurrentSession: true } };
       expect(await withToolCallAuthority(h.authorize, request, async () => 'changed')).toBe('changed');
-      expect(h.confirm).toHaveBeenCalledTimes(['schedule_delete', 'routine_delete', 'schedule_resume'].includes(tool) ? 1 : 0);
+      expect(h.confirm).toHaveBeenCalledTimes(['schedule_resume',
+        'schedule_webhook_release', 'schedule_webhook_restore'].includes(tool) ? 1 : 0);
       h.activeInput.ownerInput = true;
       expect(await withToolCallAuthority(h.authorize, request, async () => 'changed')).toBe('changed');
     },
@@ -1023,21 +1025,21 @@ describe('teammate turn principal', () => {
 
   // 2026-10-29: a missing owner marker must not silently deny ordinary work.
   // Risk decisions are visible, single-use, and invalidated by a new input.
-  // Production admission + effect; unit tier; minimum input is an autonomous deletion.
+  // Production admission + effect; unit tier; minimum input is an autonomous resume.
   it('waits for the exact decision, executes once, and rejects a second consumption', async () => {
     const h = desktopFixture('automatic');
     live(h);
     let decide!: (value: boolean) => void;
     h.confirm.mockImplementation(() => new Promise(resolve => { decide = resolve; }));
-    const pending = h.authorize(helper('routine_delete', { id: 'test-routine' }));
+    const pending = h.authorize({ sessionId: 'companion', server: 'cindy_scheduler', tool: 'schedule_resume', args: { id: 'paused' } });
     await vi.waitFor(() => expect(h.confirm).toHaveBeenCalledTimes(1));
-    expect(h.confirm).toHaveBeenCalledWith('companion', 'routine_delete',
-      { id: 'test-routine' }, { server: 'cindy_helper', risk: 'remove' });
+    expect(h.confirm).toHaveBeenCalledWith('companion', 'schedule_resume',
+      { id: 'paused' }, { server: 'cindy_scheduler', risk: 'resume' });
     decide(true);
     const admission = await pending;
     if (!admission.ok || !admission.run) throw new Error('missing admission');
-    const effect = vi.fn(async () => 'deleted');
-    expect(await admission.run(effect)).toBe('deleted');
+    const effect = vi.fn(async () => 'resumed');
+    expect(await admission.run(effect)).toBe('resumed');
     await expect(admission.run(effect)).rejects.toThrow('AUTHORIZATION_EXPIRED');
     expect(effect).toHaveBeenCalledTimes(1);
   });
@@ -1518,9 +1520,9 @@ describe('teammate turn principal', () => {
         if (change === 'permission-changed') h.activeInput.permission!.isCurrent = () => false;
         return change !== 'deny';
       });
-      const effect = vi.fn(async () => 'deleted');
+      const effect = vi.fn(async () => 'resumed');
       const result = await withToolCallAuthority(h.authorize,
-        helper('routine_delete', { id: 'test-routine' }), effect);
+        { sessionId: 'companion', server: 'cindy_scheduler', tool: 'schedule_resume', args: { id: 'paused' } }, effect);
       expect(JSON.stringify(result)).toContain(change === 'deny' ? 'USER_CANCELLED' : 'AUTHORIZATION_EXPIRED');
       expect(effect).not.toHaveBeenCalled();
     });

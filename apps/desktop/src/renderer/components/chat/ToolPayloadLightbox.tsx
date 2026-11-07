@@ -46,7 +46,6 @@ import { isRemoteFileOrigin } from '@/lib/sessionFileOrigin';
 import { resolveToolFilePath } from '@/lib/localPathResolver';
 import { downloadRemoteChatEntry } from '@/lib/remoteFileOpen';
 import { useChatSessionFile } from './ChatSessionFileContext';
-import { PluginUiRendererView } from '@/cindy-brain/PluginUiRendererView';
 
 export type ToolDiffSegment =
   | {
@@ -103,7 +102,6 @@ export interface ToolPayloadTextEditConfig {
 
 interface ToolPayloadLightboxProps {
   payload: ToolPayloadMode;
-  renderer?: { sessionId: string; toolUseId: string };
   /** Focus return target — usually the chip / chevron that opened us. */
   triggerRef?: React.RefObject<HTMLElement | null>;
   /** Opt-in editor for text payloads. Diff / JSON and ordinary text stay read-only. */
@@ -113,7 +111,6 @@ interface ToolPayloadLightboxProps {
 
 export function ToolPayloadLightbox({
   payload,
-  renderer,
   triggerRef,
   textEdit,
   onClose,
@@ -336,8 +333,6 @@ export function ToolPayloadLightbox({
             'text-[var(--msg-tool-card-text)]',
           )}
         >
-          <PluginUiRendererView sessionId={renderer?.sessionId ?? ''} point="tool.body"
-            target={{ kind: 'tool', id: renderer?.toolUseId ?? '' }} active={!!renderer && payload.kind !== 'text'}>
           {payload.kind === 'diff' && (
             <div className="flex flex-col gap-3">
               {payload.files.map((file) => (
@@ -455,7 +450,6 @@ export function ToolPayloadLightbox({
               )}
             </div>
           )}
-          </PluginUiRendererView>
         </div>
 
         {isEditingText && textEdit && (

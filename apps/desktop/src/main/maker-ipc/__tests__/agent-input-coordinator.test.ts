@@ -9,7 +9,7 @@ import { AUTO_REVIEW_SOURCE_CONTENT, AUTO_REVIEW_USER_INTENT, appendAutoReviewUs
 import { REPLY_QUOTE_SOURCE_CONTENT } from '../chatReplyQuoteNote';
 import { AUTO_REVIEW_DELEGATED_CONTINUATION, restoreAutoReviewUserIntent, type AutoReviewHistoryMessage } from '../autoReviewUserIntent.js';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { admitTaskAction, bindTaskActionInput, taskActionInputGuard } from '../taskActionAuthorization.js';
+import { admitTaskAction, bindTaskActionInput, settleTaskActionInput, taskActionInputGuard } from '../taskActionAuthorization.js';
 import { AgentInputCoordinator } from '../agent-input-coordinator.js';
 import { ProviderGroupUsageLimitError, providerGroupSwitchCause } from '../../provider-group/failurePolicy.js';
 import type { Session } from '@cindy/maker-core';
@@ -198,6 +198,74 @@ describe('task action dispatch authorization', () => {
     }
     // No outcome may leave a persisted user row with a failed reply behind.
     expect(h.onUndispatchedUserTurn).not.toHaveBeenCalled();
+  });
+
+  // The guard is judged only before the first persist. A recovery copy of an accepted turn
+  // (automatic or manual "continue", zero-output resend) has a new clientId and text, so it must
+  // not inherit the original delivery guard, the "requires authorization" mark or the
+  // teammate-origin heuristic; it runs under the receiving task's own permissions.
+  describe('recovery of an accepted task action turn', () => {
+    const TAKEOVER = { error: 'API Error: Connection closed mid-response.', attempt: 1, maxAttempts: 5, sessionTotal: 1 } as const;
+
+    const settled = vi.fn(async () => {});
+    async function failAcceptedTurn(mode: 'auto' | 'manual', progress: boolean) {
+      const h = createHarness(), sid = `accepted-task-action-${mode}-${progress}`;
+      const queued = makeItem('teammate-sent', 'Please fix the build', {
+        origin: { kind: 'session', senderSessionId: 'sender', senderBotId: 'bot', displayText: 'Please fix the build' },
+        autoReviewUserText: { kind: 'agent-request', request: { userText: 'Fix the build' } },
+      });
+      bindTaskActionInput(sid, queued, Object.assign(async () => {}, { onSettled: settled }));
+      if (mode === 'auto') h.setResumableTurnErrorTakeover(TAKEOVER);
+      h.setHasAssistantProgressAfter(async () => progress);
+      h.coordinator.enqueue(sid, queued);
+      await flush();
+      expect(h.sendToAgent).toHaveBeenCalledTimes(1);
+      h.setRunning(false);
+      h.coordinator.onTurnEvent(sid, 'error', TAKEOVER.error, { sdkError: 'server_error' });
+      await flush();
+      expect(h.coordinator.getProjection(sid).recovery?.kind).toBe('active-turn');
+      return { h, sid };
+    }
+
+    it.each([
+      ['auto', true], ['auto', false], ['manual', true], ['manual', false],
+    ] as const)('dispatches the %s recovery copy (progress: %s) instead of discarding it', async (mode, progress) => {
+      const { h, sid } = await failAcceptedTurn(mode, progress);
+      if (mode === 'auto') await expect(h.coordinator.autoRetryLastError(sid, TAKEOVER.sessionTotal)).resolves.toBe('resumed');
+      else await h.coordinator.retryLastError(sid);
+      await flush();
+      expect(h.sendToAgent).toHaveBeenCalledTimes(2);
+      expect(h.onDiscardedQueuedMessage).not.toHaveBeenCalled();
+      expect(h.sendToAgent.mock.calls[1]![1]).toEqual({
+        type: 'user', content: progress ? CONTINUE_AFTER_ERROR_PROMPT : 'Please fix the build',
+      });
+      // Attribution survives; only the delivery guard is gone.
+      expect(h.onDispatchedUserTurn.mock.calls[1]![1]).toMatchObject({
+        origin: { senderBotId: 'bot' },
+        autoReviewUserText: { kind: 'agent-request', request: { userText: 'Fix the build' } },
+      });
+      // The original's settle callback (receiver claim / sender receipt) still runs for the copy.
+      await settleTaskActionInput(h.onDispatchedUserTurn.mock.calls[1]![1]);
+      expect(settled).toHaveBeenCalledOnce();
+    });
+
+    it('still judges a never-persisted queue head when its retry follows a failed check', async () => {
+      const h = createHarness(), sid = 'task-action-queue-head-retry';
+      let revoked = false;
+      const queued = makeItem('teammate-sent', 'Please fix the build', {
+        origin: { kind: 'session', senderSessionId: 'sender', senderBotId: 'bot', displayText: 'Please fix the build' },
+      });
+      bindTaskActionInput(sid, queued, async () => {
+        throw revoked ? new Error('TASK_ACTION_AUTHORIZATION_EXPIRED')
+          : Object.assign(new Error('verification unavailable'), { code: 'GROUP_AUTHORIZATION_UNAVAILABLE' });
+      });
+      h.coordinator.enqueue(sid, queued);
+      await vi.waitFor(() => expect(h.coordinator.getProjection(sid).recovery).toEqual({ kind: 'queue-head', clientId: 'teammate-sent' }));
+      revoked = true;
+      await h.coordinator.retryLastError(sid);
+      await vi.waitFor(() => expect(h.onDiscardedQueuedMessage).toHaveBeenCalledWith(sid, expect.objectContaining({ clientId: 'teammate-sent' })));
+      expect(h.sendToAgent).not.toHaveBeenCalled();
+    });
   });
 });
 

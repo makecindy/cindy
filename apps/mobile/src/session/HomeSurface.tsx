@@ -12,6 +12,7 @@ import { SwipeableProjectHeader } from './SwipeableProjectHeader';
 import { useRetainedHomeState, getHomeViewSession } from './homeViewSession';
 import { rememberRecentTask } from './recentTasks';
 import { homeListStyles, SESSION_ROW_LONG_PRESS_MS, SessionStatusMark, SessionStatusPulse } from '@/session/HomeListVisuals';
+import { AnimationVisibilityProvider } from '@/hooks/useLoopingAnimation';
 import { useOptionalHeaderHeight } from '@/session/useOptionalHeaderHeight';
 import { rememberComposerEntry } from './composerMorph';
 import type { ComposerMorphOrigin } from './composerGeometry';
@@ -21,6 +22,7 @@ import { countHomeSuggestionSessions, remoteTaskSuggestionsMode, type RemoteTask
 import { cacheRemoteResourceHome, readRemoteResourceSnapshot } from '@/device-link/remoteResourceCache';
 import { canBrowseMobileHomeDevice } from '@/session/mobileHome';
 import { useFocusEffect, useIsFocused, useRouter } from 'expo-router';
+import { useHandheldVoiceKey } from '@/handheld/handheldMode';
 import { createContext, useContext, Fragment, memo, useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type MutableRefObject, type ReactNode } from 'react';
 import {
   ActivityIndicator,
@@ -472,13 +474,15 @@ function useHomeFilterClock(enabled: boolean): number {
 export function MobileHome(props: MobileHomeProps) {
   const screenFocused = useIsFocused();
   const { accountGeneration } = useAuth();
-  return <RemoteSessionStoreSubscriptionGate enabled={screenFocused}>
-    <ActiveHomeSession.Provider value={props.currentSessionId}>
-      <HomeRosterProvider key={accountGeneration}>
-        <HomeScreenContent {...props} />
-      </HomeRosterProvider>
-    </ActiveHomeSession.Provider>
-  </RemoteSessionStoreSubscriptionGate>;
+  return <AnimationVisibilityProvider visible={screenFocused && props.active !== false}>
+    <RemoteSessionStoreSubscriptionGate enabled={screenFocused}>
+      <ActiveHomeSession.Provider value={props.currentSessionId}>
+        <HomeRosterProvider key={accountGeneration}>
+          <HomeScreenContent {...props} />
+        </HomeRosterProvider>
+      </ActiveHomeSession.Provider>
+    </RemoteSessionStoreSubscriptionGate>
+  </AnimationVisibilityProvider>;
 }
 
 function HomeScreenContent({ active = true, width, newSessionInSystemBar = false, newSessionInHeader = false, onSelectSession, runNavigation, newSessionActionRef }: MobileHomeProps) {
@@ -2616,6 +2620,12 @@ function HomeScreenContent({ active = true, width, newSessionInSystemBar = false
     newSessionActionRef.current = action;
     return () => { if (newSessionActionRef.current === action) newSessionActionRef.current = null; };
   }, [newSessionActionRef, openNewSession]);
+
+  // 掌机模式:首页长按语音键直接开新任务并开始说话(新建页聚焦后接手这次按住)。
+  useHandheldVoiceKey({
+    start: () => openNewSession(),
+    end: () => undefined,
+  }, active && !embedded);
 
   const openSuggestedSession = useCallback((suggestion?: RemoteTaskSuggestionId) => {
     openNewSession(undefined, suggestion, taskSuggestionsDeviceId);

@@ -2,6 +2,7 @@ import { parseOutputLimitDetails, type OutputLimitDetails } from '@cindy/maker-s
 import { pendingGhostCardFormDelivery } from '@cindy/maker-shared/ghost-card-form';
 import { isVoiceCallTaskMessage } from '../../shared/voiceConversation';
 import { remoteAgentLimitErrorKey } from '../../shared/remoteAgentLimits';
+import { sharedTaskRecoveryReason } from '../../shared/sharedTaskRecovery';
 import { readBotTaskResults } from '@cindy/maker-shared/botCollaboration';
 import { asyncQuestionNeedsSupplement, formatAsyncQuestionSupplement } from '@cindy/maker-shared/interaction';
 import { isComposerTypingRecently } from './composerTypingActivity';
@@ -91,6 +92,7 @@ import { parseToolLoopErrorDetails } from '@cindy/maker-shared/tool-loop-error';
 import type { ToolLoopErrorDetails } from '@cindy/maker-core';
 import type { AgentMeta, MessageRole, Message, MessageAutomationOrigin } from '@/lib/ccAgent.types';
 import { toMessageAutomationOrigin } from '@/lib/messageAutomationOrigin';
+import { cancelPendingGhostCardTaskAutoArchive } from '@/cindy-brain/ghostCardTaskArchive';
 import {
   readMessageSourceDevice,
   readMessageSourceGroup,
@@ -366,6 +368,8 @@ function resolveEstimatedTurnCostUsd(
 /** Translation candidate only; callers must check their active i18n resources.
  * Unknown-code fallback text is diagnostic content, not curated guidance. */
 export function remoteErrorI18nKey(msg: string): string | undefined {
+  const recovery = sharedTaskRecoveryReason(msg);
+  if (recovery) return `sharedTaskRecovery.reason.${recovery}`;
   const limitKey = remoteAgentLimitErrorKey(msg);
   if (limitKey) return limitKey;
   const parsed = parseAgentErrorCode(msg);
@@ -373,6 +377,8 @@ export function remoteErrorI18nKey(msg: string): string | undefined {
 }
 
 export function decodeRemoteErrorMessage(msg: string): string {
+  const recovery = sharedTaskRecoveryReason(msg);
+  if (recovery) return i18n.t(`sharedTaskRecovery.reason.${recovery}`);
   const limitKey = remoteAgentLimitErrorKey(msg);
   if (limitKey) return i18n.t(limitKey);
   const parsed = parseAgentErrorCode(msg);
@@ -2614,6 +2620,8 @@ export interface SessionChatState {
   /** A task with an explicit product title must not be auto-renamed from its first message. */
   autoTitleDisabled?: boolean;
   error: string | null;
+  /** Renderer-only acknowledgement survives route unmounts with this task slice. */
+  sharedTaskRecoveryAcknowledged?: string;
   /** 当前 terminal error 是否为可恢复的账号用量限制，以及可识别的重置时刻。 */
   usageLimitRecovery?: UsageLimitRecoveryHint | null;
   /**
@@ -4508,6 +4516,9 @@ function setState(
     next = { ...next, errorCanContinue: false };
   }
   if (prev.error !== next.error) {
+    // Live -> persisted tail remains the same episode; a new terminal error
+    // after retry must be offered again, including when its text is identical.
+    if (next.error) next = { ...next, sharedTaskRecoveryAcknowledged: undefined };
     _liveErrorEpoch.set(sessionId, (_liveErrorEpoch.get(sessionId) ?? 0) + 1);
   }
   if (_disposedLiveErrorIntents.size > 0) {
@@ -15301,6 +15312,8 @@ function sendMessage(
   if ((!text.trim() && (!files || files.length === 0)) || !workingDir)
     return Promise.resolve(false);
   if (isRemoteDeletedSessionSendBlocked(sessionId)) return Promise.resolve(false);
+  // 用户在任务里发了消息:已经待生效的合并后自动归档本次不再进行(卡片上的提示随之消失)。
+  cancelPendingGhostCardTaskAutoArchive(sessionId);
   const formDelivery = pendingGhostCardFormDelivery(sessionId);
   if (formDelivery) {
     const beforeEnqueue = opts?.beforeEnqueue;
@@ -15648,8 +15661,9 @@ async function sendMessageCore(
     })
     .catch((err) => {
       // 远端 lazy-create/startSession 抛的 [REMOTE_*] 不可恢复错误走 IPC reject 落这里
-      // (不经 stream error event reducer),同样要解码成 i18n 文案,别裸显 bracket code。
-      const message = decodeRemoteErrorMessage(err instanceof Error ? err.message : String(err));
+      // (不经 stream error event reducer)。保留已知 code 的 wrapper，让 ErrorBanner
+      // 选择可操作的 provider 指引；未知 code 仍由 helper 解码为通用本地化摘要。
+      const message = remoteErrorMessageForBanner(err instanceof Error ? err.message : String(err));
       setState(sessionId, (s) => ({
         ...s,
         error: message,
@@ -15701,7 +15715,7 @@ function compactSession(
       // RPC 已执行成功时保留既有返回语义；origin 漂移只丢控制端镜像回写。
       .then(({ projection }) => projection.error === null)
       .catch((err) => {
-        const message = decodeRemoteErrorMessage(err instanceof Error ? err.message : String(err));
+        const message = remoteErrorMessageForBanner(err instanceof Error ? err.message : String(err));
         setState(sessionId, (s) => ({
           ...s,
           error: message,
@@ -16034,8 +16048,9 @@ async function steerMessageCore(
     })
     .catch((err) => {
       // 远端 lazy-create/startSession 抛的 [REMOTE_*] 不可恢复错误走 IPC reject 落这里
-      // (不经 stream error event reducer),同样要解码成 i18n 文案,别裸显 bracket code。
-      const message = decodeRemoteErrorMessage(err instanceof Error ? err.message : String(err));
+      // (不经 stream error event reducer)。保留已知 code 的 wrapper，让 ErrorBanner
+      // 选择可操作的 provider 指引；未知 code 仍由 helper 解码为通用本地化摘要。
+      const message = remoteErrorMessageForBanner(err instanceof Error ? err.message : String(err));
       rollbackOptimisticSteer();
       setState(sessionId, (s) => ({
         ...s,
@@ -16185,7 +16200,7 @@ function steerQueuedMessage(sessionId: string, clientId: string): Promise<boolea
           unmarkLocalSentUserMessage(sessionId, clientId);
           // 远端 lazy-create/startSession 抛的 [REMOTE_*] 不可恢复错误走 IPC reject 落这里
           // (不经 stream error event reducer),同样要解码成 i18n 文案,别裸显 bracket code。
-          const message = decodeRemoteErrorMessage(
+          const message = remoteErrorMessageForBanner(
             err instanceof Error ? err.message : String(err),
           );
           setState(sessionId, (s) => ({
@@ -18479,6 +18494,9 @@ export const makerChatStore = {
   subscribe,
   subscribeLight,
   getSnapshot,
+  acknowledgeSharedTaskRecovery(sessionId: string, episode: string) {
+    setState(sessionId, state => ({ ...state, sharedTaskRecoveryAcknowledged: episode }));
+  },
   getLightSnapshot,
   /** Non-creating read: session has a paused, non-empty pending queue (sidebar indicator). */
   hasPausedQueue,

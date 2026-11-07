@@ -39,7 +39,7 @@ export const CONTROL_CATALOG: readonly Control[] = [
   setting('models.subagents', 'models', '子代理模型', '子代理模型与 Codex 智能调配。', 'subagent-models', ['subagent', '子代理', '智能调配']),
   setting('models.auxiliary', 'models', '辅助模型', '辅助模型优先与备用。', 'auxiliary-models', ['auxiliary', '辅助模型']),
   setting('models.vision', 'models', '视觉桥', '视觉桥开关、目标模型与主备用视觉模型。', 'vision-bridge', ['vision', '视觉桥']),
-  helper('models.configuration', 'models', '模型与供应商配置', '型号参数、上下文、压缩、价格估算和供应商展示/启停。', ['list_model_providers', 'get_model_configuration', 'set_model_configuration', 'configure_model_provider'], ['model', 'provider', '模型', '供应商', '上下文', '压缩', '价格']),
+  helper('models.configuration', 'models', '模型与供应商配置', '本机型号参数、上下文、价格、供应商启停，以及 Claude/Codex 多订阅账号登录、状态与负载均衡。', ['list_model_providers', 'get_model_configuration', 'set_model_configuration', 'configure_model_provider'], ['model', 'provider', '模型', '供应商', '上下文', '压缩', '价格', '订阅', '账号', 'Claude', 'Codex', '负载均衡']),
   helper('models.default', 'models', '默认模型', '普通任务的新任务默认选择；伙伴调用时依其原默认模型语义。', ['get_app_default_model', 'set_app_default_model'], ['default model', '默认模型'], '单个伙伴覆盖请查 teammates.profile；不要把新任务默认和伙伴默认混为同一设置。'),
   helper('teammates.profile', 'teammates', '当前伙伴资料与模型', '修改当前调用任务绑定的伙伴资料和模型链。', ['get_teammate_state', 'update_teammate_profile'], ['teammate', 'companion', 'bot', '伙伴', '人设', '伙伴模型', '伙伴默认模型'], '仅绑定该伙伴的任务可用；不是任意 botId 管理接口。使用 expectedVersion；运行中切模遵循原安全边界。'),
   helper('teammates.capabilities', 'teammates', '伙伴能力与技能', '查询并选择当前伙伴的 Skill、MCP、工具和特性。', ['find_teammate_capabilities', 'set_teammate_capability', 'list_teammate_skills', 'read_teammate_skill', 'save_teammate_skill'], ['伙伴能力', '伙伴技能', 'capability']),

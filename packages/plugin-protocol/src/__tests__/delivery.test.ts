@@ -47,6 +47,37 @@ const oidcManifest = {
 } as const;
 
 describe('plugin delivery contract', () => {
+  // #7408 P1: published schemas can exceed UTF-8 16KB while satisfying the old
+  // UTF-16 limit. Unit: read through the real release parser, retaining old bounds.
+  it('reads historical parameter sizes without accepting invalid release manifests', () => {
+    const schema = (description: string) => ({ type: 'object', description });
+    const overhead = JSON.stringify(schema('')).length;
+    const parameters = schema('汉'.repeat(6_000));
+    expect(JSON.stringify(parameters).length).toBeLessThan(16_384);
+    expect(new TextEncoder().encode(JSON.stringify(parameters)).length).toBeGreaterThan(16_384);
+    const read = (manifest: unknown) => parseGetPluginResponse({
+      schemaVersion: 2,
+      plugin: {
+        id: pluginId, ghostId: validManifest.id, name: validManifest.name,
+        description: null, author: null, scope: 'public', organizationId: null,
+        defaultInstall: false,
+        currentRelease: {
+          id: 'release-1', version: validManifest.version, sha256: 'a'.repeat(64),
+          sizeBytes: 60_000, publishedAt: '2026-07-19T00:00:00.000Z', icon: null, manifest,
+        },
+      },
+    }).plugin.currentRelease.manifest;
+    const withParameters = (value: unknown) => ({
+      ...validManifest, tools: [{ name: 'help', description: 'Help', parameters: value }],
+    });
+    for (const accepted of [parameters, schema('汉'.repeat(16_384 - overhead))]) {
+      expect(read(withParameters(accepted)).tools?.[0]?.parameters).toEqual(accepted);
+    }
+    expect(() => read(withParameters(schema('a'.repeat(16_385 - overhead))))).toThrow('16KB');
+    expect(() => read(withParameters([]))).toThrow('JSON Schema');
+    expect(() => read({ ...withParameters(parameters), entry: '../main.js' })).toThrow();
+  });
+
   it('preserves optional cumulative download statistics in list and detail without conflating installs', () => {
     const plugin = {
       id: pluginId, ghostId: validManifest.id, name: validManifest.name,

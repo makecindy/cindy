@@ -19,6 +19,9 @@ export default {
     'src/renderer/features/provider-share/providerShareStore': { partial: 'export const useProviderShareReceived = () => window.providerSourcesFixture.received;' },
   },
   cases: {
+    'subscription-login': { about: 'OpenAI browser login adds an account inside the existing provider' },
+    'subscription-cancel': { about: 'Closing OpenAI login cancels its owned CLI operation without creating another provider' },
+    'subscription-pool': { about: 'The real local provider detail shows both subscription accounts under one provider header' },
     default: { about: 'Local and remote outgoing shares appear together, separately from ordinary providers' },
     'shared-sources': { about: 'Local and remote outgoing shares appear together, separately from ordinary providers' },
     'no-outgoing-shares': { about: 'The outgoing section disappears without established shares' },
@@ -29,6 +32,30 @@ export default {
     await page.getByTestId('provider-share-received').waitFor();
   },
   async check(page, ui) {
+    if (ui.case === 'subscription-login' || ui.case === 'subscription-cancel') {
+      await page.getByRole('button', { name: await ui.t('settings.providers.addProvider'), exact: true }).click();
+      const dialog = page.getByRole('dialog');
+      await dialog.getByRole('button', { name: /^OpenAI/ }).first().click();
+      await dialog.getByRole('button', { name: await ui.t('subscriptionAccounts.add'), exact: true }).click();
+      await page.waitForFunction(() => window.providerSourcesFixture.subscriptionControl.commands.some(c => c.action === 'add'));
+      if (ui.case === 'subscription-cancel') {
+        await dialog.getByRole('button', { name: await ui.t('settings.providers.wizard.cancel'), exact: true }).last().click();
+        await page.waitForFunction(() => window.providerSourcesFixture.subscriptionControl.commands.some(c => c.action === 'cancel'));
+      } else {
+        await page.getByTestId('subscription-accounts').getByText('alex@example.com', { exact: true }).waitFor();
+      }
+      await dialog.waitFor({ state: 'hidden' });
+      assert.equal(await page.evaluate(() => window.providerSourcesFixture.snapshot.providers.filter(p => p.id.startsWith('openai')).length), 1);
+      assert.equal(await page.getByText(await ui.t('settings.providers.wizard.authorizeFailed', { name: 'OpenAI' }), { exact: true }).count(), 0);
+      return;
+    }
+    if (ui.case === 'subscription-pool') {
+      const accounts = page.getByTestId('subscription-accounts');
+      await accounts.getByText('alex@example.com', { exact: true }).waitFor();
+      assert.equal(await accounts.getByText('work@example.com', { exact: true }).count(), 1);
+      assert.equal(await accounts.getByRole('switch').count(), 2);
+      return;
+    }
     if (ui.case === 'builtin-save-guard') {
       await page.getByRole('button', { name: await ui.t('settings.providers.addProvider'), exact: true }).click();
       await page.getByRole('button', { name: await ui.t('settings.providers.wizard.customAction'), exact: true }).click();

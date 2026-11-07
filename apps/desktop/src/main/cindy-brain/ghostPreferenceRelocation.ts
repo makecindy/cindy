@@ -55,7 +55,6 @@ export async function relocateGhostPreferenceMaps(
   from: string,
   to: string,
   onSettled?: () => void,
-  extraPatch?: (raw: Record<string, unknown>) => Record<string, unknown>,
 ): Promise<void> {
   if (from === to) return;
   await updateGhostPrefsForRelocation(fileName, (raw) => {
@@ -68,11 +67,13 @@ export async function relocateGhostPreferenceMaps(
     });
     const matches = (name: string, key: string, id: string) =>
       key === id || (name === 'sessions' && key.startsWith(`${id}#`));
-    const hasSource = maps.some(({ name, value }) => Object.keys(value).some((key) => matches(name, key, from)));
-    if (hasSource && maps.some(({ name, value }) => Object.keys(value).some((key) => matches(name, key, to)))) {
+    if (!maps.some(({ name, value }) => Object.keys(value).some((key) => matches(name, key, from)))) {
+      return {};
+    }
+    if (maps.some(({ name, value }) => Object.keys(value).some((key) => matches(name, key, to)))) {
       throw new Error(`${fileName} relocation destination collision`);
     }
-    const patch: Record<string, unknown> = extraPatch?.(raw) ?? {};
+    const patch: Record<string, unknown> = {};
     for (const { name, value } of maps) {
       const next = { ...value };
       for (const key of Object.keys(value)) {

@@ -466,9 +466,9 @@ export const DEFAULT_AGENT_ISLAND_STRINGS: AgentIslandStrings = {
   appName: BRAND_NAME,
   newConversationTitle: 'New Session',
   newConversationHint: 'Start a new session',
-  muteSound: 'Mute Agent Island',
-  enableSound: 'Enable Agent Island sound',
-  settings: 'Agent Island settings',
+  muteSound: 'Mute Agent Notch',
+  enableSound: 'Enable Agent Notch sound',
+  settings: 'Agent Notch settings',
   newMessage: 'New message',
   review: 'Review',
   needsInput: 'Needs input',
@@ -540,6 +540,26 @@ export const AGENT_ISLAND_EXPANDED_LIST_VERTICAL_CHROME = 60;
 export const AGENT_ISLAND_EXPANDED_MEASURED_HEIGHT_OFFSET = 8;
 export const AGENT_ISLAND_EXPANDED_HARDWARE_NOTCH_SIDE_WIDTH = 96;
 export const AGENT_ISLAND_EXPANDED_HARDWARE_NOTCH_HORIZONTAL_PADDING = 36;
+
+/**
+ * Half width of the macOS Dynamic Island at its largest (an opened Live Activity,
+ * ~261pt wide, measured on macOS 27.3). It draws above our panel and passes clicks
+ * through, so our island starts clear of it on those displays.
+ */
+export const AGENT_ISLAND_SYSTEM_ISLAND_EXPANDED_HALF_WIDTH = 131;
+export const AGENT_ISLAND_SYSTEM_ISLAND_GAP = 12;
+
+/**
+ * Default compact center on a Dynamic Island display: right of the system island,
+ * far enough that an active compact island (the widest compact state) stays clear.
+ */
+export function computeAgentIslandSystemIslandDefaultCenterXRatio(displayWidth: number): number {
+  if (!(displayWidth > 0)) return 0.5;
+  const offset = AGENT_ISLAND_SYSTEM_ISLAND_EXPANDED_HALF_WIDTH
+    + AGENT_ISLAND_SYSTEM_ISLAND_GAP
+    + AGENT_ISLAND_COMPACT_ACTIVE_WIDTH / 2;
+  return Math.min(1, 0.5 + offset / displayWidth);
+}
 
 export interface AgentIslandScreenLayoutMetrics {
   hasNotch: boolean;
@@ -869,6 +889,10 @@ export const AGENT_ISLAND_CONSUME_ENTRY_ALERT_CHANNEL = 'agent-island:consume-en
 export const AGENT_ISLAND_SET_ENABLED_CHANNEL = 'agent-island:set-enabled';
 export const AGENT_ISLAND_SET_SOUND_SETTINGS_CHANNEL = 'agent-island:set-sound-settings';
 export const AGENT_ISLAND_SET_MASCOT_SKIN_CHANNEL = 'agent-island:set-mascot-skin';
+/** Show task status as a macOS Live Activity (system Dynamic Island / menu bar). */
+export const AGENT_ISLAND_SET_LIVE_ACTIVITY_CHANNEL = 'agent-island:set-live-activity';
+export const AGENT_ISLAND_GET_LIVE_ACTIVITY_SUPPORT_CHANNEL = 'agent-island:get-live-activity-support';
+export const DEFAULT_AGENT_ISLAND_LIVE_ACTIVITY = true;
 export const AGENT_ISLAND_SET_SUBTLE_REMINDERS_CHANNEL = 'agent-island:set-subtle-reminders';
 export const AGENT_ISLAND_SET_DISPLAY_TARGET_CHANNEL = 'agent-island:set-display-target';
 export const AGENT_ISLAND_GET_DISPLAY_OPTIONS_CHANNEL = 'agent-island:get-display-options';
