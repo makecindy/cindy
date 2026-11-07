@@ -458,6 +458,7 @@ import {
 import { readFileThumbnail } from './fileThumbnail';
 import { createOpenWithHandlers, decodeRegOutput, parseChcpCodepage } from './openWithApps';
 import { resolveShellOpenPathTarget } from './shellOpenPath';
+import { posixDrivePathToWin32 } from '../shared/pathText';
 import { handleOpenFileInBrowser } from './openFileInBrowser';
 import { createWindowsFileUrlOpener } from './windowsFileUrlOpener';
 import { cindyGhostSchemePrivilege } from './cindy-brain/runtime/electronSandboxAdapter';
@@ -3248,14 +3249,12 @@ ipcMain.handle('app-menu:set-locale', (_event, locale: unknown): { ok: true } =>
  * paths natively and `fs` can read them as-is. On Windows the SDK frequently
  * emits `/x/...` style paths in tool args (Read/Write/Edit `file_path`); the
  * Node `fs` API on Windows treats those as ENOENT, surfacing in the
- * TextLightbox as "File not found".
+ * TextLightbox as "File not found". The `/D:/x` URI-pathname spelling of a
+ * drive path (#8726) is converted by the same helper.
  */
 function posixToWin32(p: string): string {
   if (process.platform !== 'win32' || !p) return p;
-  // `/x/rest` → `X:\rest`. Single drive letter only; deeper segments preserved.
-  const m = /^\/([a-zA-Z])\/(.*)$/.exec(p);
-  if (m) return `${m[1].toUpperCase()}:\\${m[2].replace(/\//g, '\\')}`;
-  return p;
+  return posixDrivePathToWin32(p);
 }
 
 function isPathAllowed(filePath: string): boolean {
