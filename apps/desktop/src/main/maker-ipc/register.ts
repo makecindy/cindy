@@ -13208,7 +13208,12 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       // 'runtime-refresh' 回收运行时(直接 Session.close 会丢 Maker 原因,IM 侧按
       // unexpected 清排队回合),lazy resume 重扫重建
       if (live?.agentKind === 'pi' && live.hasRecyclableProjectResourceDrift()) {
-        await maker.closeSessionIfCurrent(live, 'runtime-refresh');
+        // 同 makerSendTransaction 的漂移回收:关闭包在抑制窗口内(保留重建窗口,
+        // 不 abort 本通道在途的派发边界,不释放 worktree/临时附件),下面的
+        // lazy resume 随即重扫重建再投递。
+        const driftedLive = live;
+        await withRehydrateCloseSuppressed(targetSessionId, () =>
+          maker.closeSessionIfCurrent(driftedLive, 'runtime-refresh'));
         live = undefined;
       }
       if (live) {
@@ -18850,7 +18855,14 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     closeSession: (sessionId) => maker.closeSession(sessionId),
     closeSessionIfCurrent: async (sessionId) => {
       const current = maker.getSession(sessionId);
-      if (current) await maker.closeSessionIfCurrent(current, 'runtime-refresh');
+      if (!current) return;
+      // 漂移回收是「重建窗口」,不是生命周期终止:本次发送事务随即 lazy bootstrap
+      // 重建并投递。必须在抑制窗口内关闭 —— 否则 onSessionClosed 会 abort 正在
+      // 驱动这次回收的发送边界,首条消息被标成 cancelled-before-dispatch,用户
+      // 手动重试才过(2026-11-08 实报)。副作用语义同 closeIdleSessionForMove
+      // (任务移动):跳过 worktree 释放与临时附件清理,交给重建后的 runtime。
+      await withRehydrateCloseSuppressed(sessionId, () =>
+        maker.closeSessionIfCurrent(current, 'runtime-refresh'));
     },
     getSessionMeta: (sessionId) => maker.getSessionMeta(sessionId),
     ensureRemoteReadyForSessionStart: async (params) => {
