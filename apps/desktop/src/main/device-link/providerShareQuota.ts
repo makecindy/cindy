@@ -1,4 +1,5 @@
 import type { ProviderView } from '@cindy/model-providers';
+import { MAX_PROVIDER_SHARE_QUOTA_ACCOUNTS } from '../../shared/providerShareInsights.js';
 import type {
   ProviderShareQuotaAccount,
   ProviderShareQuotaAccountResult,
@@ -257,7 +258,14 @@ async function readGroupQuota(providerId: string) {
   assertCurrent();
   if (JSON.stringify(group) !== JSON.stringify(readProviderGroup(providerId)))
     throwIpcError('PRECONDITION_FAILED', 'Provider group changed');
-  return { group: true, partial: ownMembers.length !== group.members.length, accounts };
+  // Keep the existing v1 receiver limit, including for older recipients.
+  return {
+    group: true,
+    partial:
+      ownMembers.length !== group.members.length ||
+      accounts.length > MAX_PROVIDER_SHARE_QUOTA_ACCOUNTS,
+    accounts: accounts.slice(0, MAX_PROVIDER_SHARE_QUOTA_ACCOUNTS),
+  };
 }
 
 /** Group owners read this from member computers. The first account stays at the top level so

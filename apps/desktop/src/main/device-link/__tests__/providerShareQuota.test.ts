@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { parseProviderShareInsights } from '../../../shared/providerShareInsights';
 const state = vi.hoisted(() => ({
   owner: 0,
   group: null as unknown,
@@ -198,6 +199,27 @@ describe('share quota projection', () => {
     state.group = { members: [{ kind: 'device', agentDeviceId: 'new-device', providerId: 'anthropic' }] };
     remote.mockResolvedValue({ ...ready, accounts: Array.from({ length: 33 }, () => second) });
     expect((await readProviderShareQuota('anthropic')).accounts).toHaveLength(32);
+  });
+  // Unit regression: existing tests cover one member's pool, not the v1 wire limit.
+  // Sixteen full pools fit; a seventeenth used to invalidate the entire insights response.
+  it.each([16, 17])('keeps %i full member pools readable within the existing wire contract', async (members) => {
+    state.group = {
+      members: Array.from({ length: members }, (_, index) => ({
+        kind: 'device', agentDeviceId: `device-${index}`, providerId: 'anthropic',
+      })),
+    };
+    remote.mockResolvedValue({ ...ready, accounts: Array.from({ length: 32 }, () => ready) });
+    const quota = await readProviderShareQuota('anthropic');
+    const response = {
+      version: 1,
+      capabilities: { quota: true, usage: true },
+      status: { quota: 'ready', usage: 'ready' },
+      quota,
+      usage: { todayKey: '2026-11-07', coverageStart: null, parties: [] },
+    };
+    expect(parseProviderShareInsights(response)).toEqual(response);
+    expect(quota.accounts).toHaveLength(512);
+    expect(quota.partial).toBe(members > 16);
   });
   it('excludes borrowed accounts and strips remote identity fields while coalescing repeated queries', async () => {
     state.group = {
