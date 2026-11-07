@@ -93,6 +93,31 @@ function pushEmptyThinkingMessage(queue: ReturnType<typeof createAsyncQueue<Agen
   );
 }
 
+function pushWorkerDispatchResult(
+  queue: ReturnType<typeof createAsyncQueue<AgentEvent>>,
+  ctx: ReturnType<typeof createCtx>,
+  isError = false,
+): void {
+  translateSdkMessage(
+    {
+      type: 'assistant',
+      message: { content: [{ type: 'tool_use', id: 'worker-1', name: 'mcp__cindy_orca__create_worker', input: { label: 'worker' } }] },
+    },
+    queue,
+    ctx,
+  );
+  translateSdkMessage(
+    {
+      type: 'user',
+      message: {
+        content: [{ type: 'tool_result', tool_use_id: 'worker-1', content: JSON.stringify({ dispatched: !isError }), is_error: isError }],
+      },
+    },
+    queue,
+    ctx,
+  );
+}
+
 const NON_EMPTY_USAGE = { input_tokens: 1000, output_tokens: 2 };
 
 describe('Claude Code translator silent-stop observation (log only)', () => {
@@ -201,6 +226,42 @@ describe('Claude Code translator silent-stop observation (log only)', () => {
 
     await drain(queue);
     expect(silentStopWarned(ctx)).toBe(false);
+  });
+
+  it('does NOT mark a successful Worker dispatch as a silent stop', async () => {
+    const tracker = new UsageTracker();
+    const queue = createAsyncQueue<AgentEvent>();
+    const ctx = createCtx(tracker);
+
+    pushWorkerDispatchResult(queue, ctx);
+    pushEmptyThinkingMessage(queue, ctx);
+    translateSdkMessage(
+      { type: 'result', stop_reason: 'end_turn', total_cost_usd: 0.1, usage: NON_EMPTY_USAGE },
+      queue,
+      ctx,
+    );
+
+    const events = await drain(queue);
+    expect(silentStopWarned(ctx)).toBe(false);
+    expect(doneSilentStopFlag(events)).toBeUndefined();
+  });
+
+  it('keeps silent-stop detection for a failed Worker dispatch', async () => {
+    const tracker = new UsageTracker();
+    const queue = createAsyncQueue<AgentEvent>();
+    const ctx = createCtx(tracker);
+
+    pushWorkerDispatchResult(queue, ctx, true);
+    pushEmptyThinkingMessage(queue, ctx);
+    translateSdkMessage(
+      { type: 'result', stop_reason: 'end_turn', total_cost_usd: 0.1, usage: NON_EMPTY_USAGE },
+      queue,
+      ctx,
+    );
+
+    const events = await drain(queue);
+    expect(silentStopWarned(ctx)).toBe(true);
+    expect(doneSilentStopFlag(events)).toBe(true);
   });
 
   it('does NOT log on an is_error result (error path owns that turn)', async () => {
