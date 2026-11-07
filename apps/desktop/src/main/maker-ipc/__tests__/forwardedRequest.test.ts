@@ -1,7 +1,7 @@
 import { forwardedRequestDisplayText } from '@cindy/maker-shared/message-source';
 import { setMainLocale } from '../../i18n.js';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { captureAgentRequest, ownerChannelInputEvidence } from '../forwardedRequest.js';
+import { captureAgentRequest, delegationReviewTarget, ownerChannelInputEvidence } from '../forwardedRequest.js';
 import { beginChannelToolScope, readChannelToolScope } from '../../im/shared/channelToolScope.js';
 import { formatForwardedRequest, matchesForwardedRequest, readForwardedRequestSource, verifiedOwnerRequestText } from '../../../shared/forwardedRequest.js';
 import { restoreAutoReviewUserIntent } from '../autoReviewUserIntent.js';
@@ -232,5 +232,23 @@ describe('forwarded request display', () => {
       'literal \\n and C:\\new', body.replace('用户原话：', 'Other:'), body.replace(JSON.stringify(supplement), '42')]) {
       expect(forwardedRequestDisplayText(text)).toBe(text);
     }
+  });
+});
+
+// #9198: the sender review described a cross-device teammate as "a new task", contradicting the
+// recipient the owner confirmed and refusing an authorized hand-off. Unit: the real payload
+// builder that feeds the review action, for each target shape the host can produce.
+describe('delegation review target', () => {
+  it('names the confirmed remote teammate instead of a new task', () => {
+    expect(delegationReviewTarget({ targetTeammate: { name: 'Mimi', id: 'right::bot-b' } }))
+      .toEqual({ targetTeammate: { name: 'Mimi', id: 'right::bot-b' } });
+  });
+  it('keeps a local target session id', () => {
+    expect(delegationReviewTarget({ sessionId: 'b-main', targetTeammate: { name: 'Mimi', id: 'right::bot-b' } }))
+      .toEqual({ targetSessionId: 'b-main' });
+  });
+  it('falls back to a new task only when the hand-off has no target identity', () => {
+    expect(delegationReviewTarget()).toEqual({ targetSessionId: 'a new task' });
+    expect(delegationReviewTarget({})).toEqual({ targetSessionId: 'a new task' });
   });
 });

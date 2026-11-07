@@ -1,7 +1,8 @@
 // @vitest-environment jsdom
 import { describe, expect, it, vi } from 'vitest';
 
-import type { PrStatusResult } from '@/lib/gitContext.types';
+import { areAllTaskPrsMerged, prStatusKey } from '@/lib/prStatus';
+import type { SessionPrRef, PrStatusResult } from '@/lib/gitContext.types';
 import { fillGhostCardPrStatus, fillGhostCardTaskAutoArchiveHint, readPrStatusSlotKey } from '../ghostCardPrStatus';
 
 // Unit: the PR card's check strip was a snapshot from the agent's last pr_card call and could
@@ -60,28 +61,40 @@ describe('fillGhostCardPrStatus', () => {
     expect(el.style.display).toBe('none');
   });
 
-  // Rule (2026-11-06): the archive-task button shows once the PR ended. The host's own status wins
-  // over the plugin snapshot; auto-archive is offered only for a PR the host itself saw merged.
-  it('reveals the archive-task button for an ended PR and reports auto-archive only for a live merge', () => {
+  // Regression: one merged card must not offer to archive a task with another unfinished PR.
+  // Unit: the second PR need not have a mounted card; missing/failed status is not completion.
+  it('requires every task PR to be confirmed merged before revealing archive', () => {
     document.body.innerHTML = '<button data-ghost-task-archive="Octo/Repo#9" data-ghost-task-archive-state="merged" data-ghost-task-archive-auto style="display:none"></button>';
     const el = document.querySelector('button')!;
-    expect(readPrStatusSlotKey(document.body.innerHTML)).toBe('octo/repo#9');
-    expect(fillGhostCardPrStatus(document, () => undefined, t)).toBe(false);
-    expect(el.style.display).toBe('inline-flex');
-    expect(fillGhostCardPrStatus(document, () => status(), t)).toBe(false);
+    const refs = [9, 10].map(prNumber => ({ owner: 'octo', repo: 'repo', prNumber }) as SessionPrRef);
+    const merged = status({ status: 'merged' });
+    const statuses = new Map([[prStatusKey(refs[0]), merged]]);
+    const render = (error = false) => fillGhostCardPrStatus(document, () => merged, t, areAllTaskPrsMerged(refs, statuses, error));
+    expect(render()).toBe(false);
     expect(el.style.display).toBe('none');
-    expect(fillGhostCardPrStatus(document, () => status({ status: 'closed' }), t)).toBe(false);
+    for (const other of [status(), status({ status: 'closed' }), { ok: false } as PrStatusResult]) {
+      statuses.set(prStatusKey(refs[1]), other);
+      expect(render()).toBe(false);
+      expect(el.style.display).toBe('none');
+    }
+    statuses.set(prStatusKey(refs[1]), status({ prNumber: 10, status: 'merged' }));
+    expect(render()).toBe(true);
     expect(el.style.display).toBe('inline-flex');
-    expect(fillGhostCardPrStatus(document, () => status({ status: 'merged' }), t)).toBe(true);
+    expect(render(true)).toBe(false);
+    expect(el.style.display).toBe('none');
+    expect(areAllTaskPrsMerged([], statuses, false)).toBe(false);
+    expect(fillGhostCardPrStatus(document, () => undefined, t, true)).toBe(false);
+    expect(el.style.display).toBe('none');
     el.removeAttribute('data-ghost-task-archive-auto');
-    expect(fillGhostCardPrStatus(document, () => status({ status: 'merged' }), t)).toBe(false);
+    expect(render()).toBe(false);
+    expect(el.style.display).toBe('inline-flex');
   });
 
   // Rule (2026-11-06): while auto-archive is pending the card says so next to the revealed button and
   // offers a host-owned cancel; once it is no longer pending the hint goes away.
   it('shows the pending auto-archive hint with a cancel next to the revealed archive button', () => {
     document.body.innerHTML = '<div><button data-ghost-task-archive="Octo/Repo#9" data-ghost-task-archive-auto style="display:none"></button></div>';
-    fillGhostCardPrStatus(document, () => status({ status: 'merged' }), t);
+    fillGhostCardPrStatus(document, () => status({ status: 'merged' }), t, true);
     const onCancel = vi.fn();
     const labels = { pending: 'Archives when you leave', cancel: 'Keep this time' };
     fillGhostCardTaskAutoArchiveHint(document, true, labels, onCancel);

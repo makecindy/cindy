@@ -862,6 +862,7 @@ interface CCAgentAskUserQuestionOption {
 }
 
 interface CCAgentAskUserQuestionItem {
+  id?: string;
   question: string;
   header?: string;
   options?: CCAgentAskUserQuestionOption[];
@@ -1184,6 +1185,8 @@ interface ElectronAPI {
   getDeviceId: () => Promise<string>;
   windowMinimize: () => void;
   windowMaximize: () => void;
+  windowSidebarExpansion?: (width: number, shrink?: number, adopt?: boolean) => Promise<number | void>;
+  onSidebarWindowUserResize?: (callback: () => void) => () => void;
   windowExitFullscreen: () => void;
   windowClose: () => void;
   /**

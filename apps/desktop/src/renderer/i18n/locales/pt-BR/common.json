@@ -1494,6 +1494,13 @@
     }
   },
   "menubar": {
+    "shared": {
+      "label": "Compartilhado",
+      "note": "Esta cota é compartilhada pela conta, não reservada para você.",
+      "highestWeekly": "Compartilhado · maior saldo semanal",
+      "highestWeeklyNote": "Maior cota semanal restante entre as contas consultáveis. Compartilhada pela conta, sem soma nem reserva pessoal.",
+      "from": "Compartilhado por {{name}}"
+    },
     "balance": {
       "name": "Saldo do Cindy",
       "quotaName": "Cota do Cindy",
@@ -12833,6 +12840,10 @@
       "defer": "Agora não"
     },
     "permissionPrompt": {
+      "titleStdin": "Permitir entrada neste terminal?",
+      "titleMcpUrl": "Concluir a solicitação de {{server}}",
+      "mcpComplete": "Concluído",
+      "mcpCancel": "Cancelar",
       "alwaysAllowScoped": "Sempre permitir {{scope}} nesta sessão",
       "alwaysAllowScopedHint": "Aplica-se à sessão inteira e apenas ao que está listado aqui.",
       "alwaysAllowSessionHint": "Aplica-se à sessão inteira, não apenas a esta solicitação.",
@@ -13075,7 +13086,13 @@
       "sendAndContinue": "Enviar e continuar",
       "close": "Fechar",
       "customAnswer": "Digite outra coisa…",
-      "answerPlaceholder": "Digite sua resposta…"
+      "answerPlaceholder": "Digite sua resposta…",
+      "validation": {
+        "required": "Preencha este campo obrigatório.",
+        "choice": "Escolha uma das opções da lista.",
+        "tooShort": "Digite pelo menos {{count}} caracteres.",
+        "tooLong": "Digite no máximo {{count}} caracteres."
+      }
     },
     "planReviewBubble": {
       "title": "Revisão do plano",
@@ -19886,6 +19903,16 @@
     "lineNumbers": "Números de linha"
   },
   "subscriptionAccounts": {
+    "signIn": {
+      "checking": "Verificando a conta local…",
+      "detected": "Conta conectada encontrada",
+      "useAccount": "Usar esta conta",
+      "anotherAccount": "Entrar com outra conta",
+      "keepExisting": "A nova conta será adicionada a este provedor. Os acessos existentes serão mantidos.",
+      "checkFailed": "Não foi possível verificar a conta local. Tente novamente.",
+      "retry": "Tentar novamente",
+      "useCodex": "Entrar com o Codex"
+    },
     "title": "Contas de assinatura",
     "note": "A primeira conta usa a pasta padrão da CLI. As contas adicionais fazem login separadamente. Novas tarefas são distribuídas; as existentes mantêm sua conta.",
     "strategy": "Balanceamento de carga",
@@ -19899,8 +19926,8 @@
     "removeTitle": "Remover {{name}}?",
     "removeDescription": "A Cindy deixará de atribuir tarefas a esta conta. O login da CLI e o histórico de conversas permanecerão neste computador.",
     "failed": "Não foi possível ler ou atualizar a conta. Verifique o login da CLI e a conexão de rede e tente novamente.",
-    "used": "{{percent}}% usado",
     "directory": "Pasta da conta",
+    "loginAgain": "Entrar novamente",
     "login": "Entrar"
   }
 }

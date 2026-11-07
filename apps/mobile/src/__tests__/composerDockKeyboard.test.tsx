@@ -159,6 +159,8 @@ it("does not lift the page for floating, hidden, or cross-fade frames", () => {
   mount();
   native.keyboard.state.value = 2;
   native.keyboard.height.value = 300;
+  emit("keyboardDidShow");
+  expect(result.value).toBe(350);
   for (const metrics of [
     frame(300, 544, 250),
     frame(300, 300),
@@ -200,4 +202,23 @@ it("removes all subscriptions on unmount", () => {
   expect(
     [...native.listeners.values()].every((listeners) => listeners.size === 0),
   ).toBe(true);
+});
+
+// 2026-11-07: a hidden iPhone keyboard can still emit a zero-width frame.
+// The hook's public height drives both the composer and message viewport. The
+// existing dismissal case had no trailing frame; this unit sequence must stay at 0.
+it("does not restore the keyboard reservation from frame events after dismissal", () => {
+  mount();
+  native.keyboard.state.value = 2;
+  emit("keyboardDidShow");
+  expect(result.value).toBe(350);
+  emit("keyboardWillHide");
+  native.keyboard.state.value = 4;
+  emit("keyboardDidHide");
+  emit("keyboardDidChangeFrame", frame(0, 844, 0));
+  expect(result.value).toBe(0);
+  emit("keyboardWillShow");
+  native.keyboard.state.value = 2;
+  emit("keyboardDidShow");
+  expect(result.value).toBe(350);
 });

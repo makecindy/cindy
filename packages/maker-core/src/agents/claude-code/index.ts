@@ -4901,6 +4901,12 @@ export class ClaudeCodeAgent extends BaseAgent {
       activeContinuationId === null
         ? null
         : continuationClaims.get(activeContinuationId) ?? null;
+    // 「有产品 turn 仍在执行」的单一判据:isTurnRunning() 与崩溃收尾共用。
+    // 只凭 turnInFlight 会把 SDK 段间续 turn claim 与已入队未派发的边界误当空闲。
+    const isAnyProductTurnActive = (): boolean =>
+      turnInFlight ||
+      activeContinuationClaim()?.state === 'awaiting' ||
+      pendingContinuationTerminalBoundaries > 0;
     // A foreground result can leave the same product waiting on background work.
     // Its live SDK input queue still accepts corrections during that interval.
     const hasSteerableTurn = (): boolean =>
@@ -6088,23 +6094,43 @@ export class ClaudeCodeAgent extends BaseAgent {
             // 此前只推 error + 清 turnInFlight, 不置 closed / 不 end inputQueue → handle
             // 对外装活, 下次 send 进无消费者的 inputQueue 黑洞 (2026-07-05 fork resume 实踩),
             // 现在与 U2 同款走 teardownDeadHandle 全套收尾。
-            log.error('event loop crashed', { error: String(e) });
-            // teardownDeadHandle 会清 turnInFlight, 先快照: turn 是否还没收尾
-            // (translator 已 drain 过 result 正常收尾时为 false, 不重复补收尾事件)。
+            // teardownDeadHandle 会清 turnInFlight, 先快照。补终态的判据不是
+            // isAnyProductTurnActive() 的 busy 语义,而是「轮次仍在执行且还缺终态」:
+            // pendingContinuationTerminalBoundaries > 0 表示终态 done 已入队、
+            // Session 尚未消费 —— 与纯空闲同义,再补 emitTurnBoundary 会向 Session
+            // 发同一轮的第二个 done,再推 error 会把已收口的轮次标成失败(#8831)。
             const turnWasInFlight = turnInFlight;
-            eventQueue.push({
-              type: 'error',
-              data: { message: String(e), isTerminal: true, reason: 'sdk_stream_crashed' },
-              source: 'claude-code',
-            });
-            if (turnWasInFlight) {
-              // turn 中途崩 (没有 result 走 translator 收尾) → 补齐与 translator 失败
-              // 序列同构的收尾 (error → status Done → done), renderer 的 running 态和
-              // main 的 turn 终止链路才能闭合。done 不带 usage 字段, 记账 sink 读不到
-              // 数不会双计 (与 U2 的 done data 同款语义)。
-              emitTurnBoundary('sdk_stream_crashed');
+            const continuationAwaitingSegment = activeContinuationClaim()?.state === 'awaiting';
+            if (
+              (!turnWasInFlight && !continuationAwaitingSegment) ||
+              pendingContinuationTerminalBoundaries > 0
+            ) {
+              // 空闲期进程被强杀(典型: app 退出时 reap-claude-children 先 taskkill
+              // 全部 claude.exe, #8831): 没有任何轮次缺终态,派发终态错误只会落
+              // 一条伪造的 role:'error' 记录,重启后被误读成「上一轮未完成」并注入
+              // 续跑提示。只回收死句柄,已入队的事件照常交付,Session 走
+              // runEventLoop 自然结束兜底。
+              log.warn('event loop crashed while idle; skipping terminal error', {
+                error: String(e),
+              });
+              teardownDeadHandle('idle crash teardown');
+            } else {
+              log.error('event loop crashed', { error: String(e) });
+              eventQueue.push({
+                type: 'error',
+                data: { message: String(e), isTerminal: true, reason: 'sdk_stream_crashed' },
+                source: 'claude-code',
+              });
+              if (turnWasInFlight) {
+                // turn 中途崩 (没有 result 走 translator 收尾) → 补齐与 translator 失败
+                // 序列同构的收尾 (error → status Done → done), renderer 的 running 态和
+                // main 的 turn 终止链路才能闭合。done 不带 usage 字段, 记账 sink 读不到
+                // 数不会双计 (与 U2 的 done data 同款语义)。续跑 claim 的边界早已
+                // 派发,只补 error 让 host 释放 continuation lease,不重复发 done。
+                emitTurnBoundary('sdk_stream_crashed');
+              }
+              teardownDeadHandle('crash teardown');
             }
-            teardownDeadHandle('crash teardown');
           }
         } finally {
           if (closed || isCurrentQuery(currentQ)) {
@@ -7933,11 +7959,7 @@ export class ClaudeCodeAgent extends BaseAgent {
         // turnInFlight 清成 false，但从产品/Session 视角 Agent 仍未执行结束。
         // 把 provider 已锁存的 continuation claim 纳入权威 busy 判据，统一阻止
         // 新 send、rewind 与 closeIfIdle 插入该窗口。
-        return (
-          turnInFlight ||
-          activeContinuationClaim()?.state === 'awaiting' ||
-          pendingContinuationTerminalBoundaries > 0
-        );
+        return isAnyProductTurnActive();
       },
 
       async previewRewindFiles(userUuid: string): Promise<RewindFilesResult> {

@@ -76,7 +76,7 @@ import {
   setGhostCardTaskAutoArchiveArmed,
 } from '@/cindy-brain/ghostCardTaskArchive';
 import { fillGhostCardIcons } from '@/cindy-brain/ghostCardIcons';
-import { usePrStatuses } from '@/contexts/PrRefsContext';
+import { usePrStatuses, useTaskPrArchiveEligibility } from '@/contexts/PrRefsContext';
 import {
   extractGhostCardGallerySrcs,
   ghostCardGalleryId,
@@ -344,6 +344,7 @@ function GhostCardCanvas({
   const prSlotKey = useMemo(() => readPrStatusSlotKey(renderedCardHtml), [renderedCardHtml]);
   // 卡片可以声明多个 PR 的状态位:订阅会话的整张状态表,每个位各取各的。
   const { statuses: prStatuses } = usePrStatuses(prSlotKey ? (sessionId ?? '') : '');
+  const { eligible: taskArchiveEligible } = useTaskPrArchiveEligibility(prSlotKey ? (sessionId ?? '') : '');
   const prStatusesRef = useRef(prStatuses);
   prStatusesRef.current = prStatuses;
   // 卡上有已合并、可在看过后自动归档的 PR(宿主自己查到的状态,见 applyTaskArchive)。
@@ -354,12 +355,12 @@ function GhostCardCanvas({
   autoArchivePendingRef.current = autoArchivePending;
   const fillPrStatus = useCallback((doc: Document) => {
     if (!prSlotKey) return;
-    setTaskAutoArchive(fillGhostCardPrStatus(doc, (key) => prStatusesRef.current.get(key), t));
-    fillGhostCardTaskAutoArchiveHint(doc, autoArchivePendingRef.current, {
+    setTaskAutoArchive(fillGhostCardPrStatus(doc, (key) => prStatusesRef.current.get(key), t, taskArchiveEligible));
+    fillGhostCardTaskAutoArchiveHint(doc, autoArchivePendingRef.current && taskArchiveEligible, {
       pending: t('chat.ghostCall.taskAutoArchivePending'),
       cancel: t('chat.ghostCall.taskAutoArchiveCancel'),
     }, () => { if (sessionId) cancelGhostCardTaskAutoArchive(sessionId); });
-  }, [prSlotKey, sessionId, t]);
+  }, [prSlotKey, sessionId, t, taskArchiveEligible]);
   // 卡片被原地换成不含任何 PR 标记的内容(card-update):这张卡自己不再有自动归档声明,资格随之撤销。
   useEffect(() => {
     if (!prSlotKey) setTaskAutoArchive(false);
@@ -383,7 +384,7 @@ function GhostCardCanvas({
   // 「看过」= 这张符合条件、待生效的卡片在可见、聚焦的窗口里进入视野(别的卡片进入视野不算:
   // 用户没看到已合并那张卡及其取消提示);用户离开任务时任务页据此决定是否归档。
   useEffect(() => {
-    if (!sessionId || !autoArchivePending || !taskAutoArchive) return;
+    if (!sessionId || !autoArchivePending || !taskAutoArchive || !taskArchiveEligible) return;
     const el = anchorRef.current;
     if (!el || typeof IntersectionObserver === 'undefined') return;
     let inView = false;
@@ -402,7 +403,7 @@ function GhostCardCanvas({
       window.removeEventListener('focus', check);
       document.removeEventListener('visibilitychange', check);
     };
-  }, [sessionId, autoArchivePending, taskAutoArchive]);
+  }, [sessionId, autoArchivePending, taskAutoArchive, taskArchiveEligible]);
   const gallerySrcs = useMemo(
     () => extractGhostCardGallerySrcs(renderedCardHtml),
     [renderedCardHtml],

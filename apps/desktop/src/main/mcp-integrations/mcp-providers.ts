@@ -2,6 +2,7 @@ import { getPiKernelManager } from '../agent-binaries/index.js';
 import { PiKernelError } from '../agent-binaries/pi-kernel-manager.js';
 import { manageAppSettings } from '../app-settings/sections.js';
 import { manageAppModels } from '../app-settings/models.js';
+import { classifyOrigin } from '../input-handoff/originPolicy.js';
 import { captureBotSettingsAccess } from '../maker-ipc/botCapabilityService.js';
 import { inspectAppDefaultModel, changeAppDefaultModel } from '../maker-ipc/appDefaultModelControl.js';
 import { hostname } from 'node:os';
@@ -1102,6 +1103,7 @@ export function createDesktopMcpProviders(deps: DesktopMcpProvidersDeps): LiziMc
         model,
         effort,
         fast,
+        agentDeviceId,
       }) => {
         // deviceId::sessionId → 目标在另一台电脑:交给那台电脑按它本机的同一条通路投递。
         const svc = tryGetOrcaCollabService();
@@ -1134,6 +1136,7 @@ export function createDesktopMcpProviders(deps: DesktopMcpProvidersDeps): LiziMc
                   },
                 }
               : {}),
+            ...(agentDeviceId !== undefined ? { agentDeviceId } : {}),
           });
           if (result.ok && result.wakeKind === 'created' && recordCreation) {
             try { await recordCreation(result.targetSessionId); }
@@ -1382,16 +1385,36 @@ export function createDesktopMcpProviders(deps: DesktopMcpProvidersDeps): LiziMc
       },
       // 伙伴自己沉淀的真技能。归属同样由 callerSessionId 反查,工具面不收 botId。
       modelSettings: {
-        call: ({ callerSessionId, ...input }) => withAccountDataAccess(callerSessionId, async (assertCurrent) => {
+        call: ({ callerSessionId, ...input }, signal) => withAccountDataAccess(callerSessionId, async (assertCurrent) => {
           const surface = await resolveHelperSurface(tryGetDbClient()!, callerSessionId);
           const botGuard = surface === 'bot' || surface === 'bot-main'
             ? await captureBotSettingsAccess(callerSessionId)
             : undefined;
-          return manageAppModels(input, async () => {
+          const guard = async () => {
             await assertCurrent();
             if (botGuard) await botGuard();
-            if (input.operation === 'set' || input.operation === 'provider') await assertTaskActionCurrent();
-          });
+            if (input.operation === 'set' || input.operation === 'provider' || input.operation === 'connection') await assertTaskActionCurrent();
+          };
+          return manageAppModels(input, guard, async (name, endpoints, lifetime) => {
+            await guard();
+            if (await isInputHandoffDisabledForSession(callerSessionId)) throw new Error('DISABLED_BY_OWNER');
+            await guard();
+            const service = getInputHandoffService();
+            if (!service) throw new Error('SECRET_INPUT_UNAVAILABLE');
+            return new Promise<string | null>((resolve, reject) => {
+              const started = service.startHostSecretPrompt({
+                sessionId: callerSessionId,
+                ...lifetime,
+                step: {
+                  purpose: `${name.slice(0, 128)} · API key${endpoints[1] ? ` · ${new URL(endpoints[1]).origin}` : ''}`,
+                  source: { app: 'Cindy', ...classifyOrigin(endpoints[0], true) },
+                  controls: [{ id: 'answer', kind: 'text', label: 'API key', contentType: 'password' }],
+                },
+                answer: resolve,
+              });
+              if (!started.ok) reject(new Error(started.errorCode));
+            });
+          }, signal);
         }),
       },
       piRuntime: {

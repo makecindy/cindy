@@ -1460,6 +1460,13 @@
     }
   },
   "menubar": {
+    "shared": {
+      "label": "共用",
+      "note": "此乃名籍共用之額度，非專分予君者。",
+      "highestWeekly": "共享 · 週餘最多",
+      "highestWeeklyNote": "取可閱諸號週餘最多者，不相加。此為號共用，非君專享。",
+      "from": "{{name}} 所享"
+    },
     "balance": {
       "name": "Cindy 餘資",
       "quotaName": "Cindy 本期限額",
@@ -12688,6 +12695,10 @@
       "defer": "暫不取"
     },
     "permissionPrompt": {
+      "titleStdin": "可向終端輸入乎？",
+      "titleMcpUrl": "應 {{server}} 之請",
+      "mcpComplete": "已畢",
+      "mcpCancel": "取消",
       "alwaysAllowScoped": "此差事恆許 {{scope}}",
       "alwaysAllowScopedHint": "及於整個差事，且僅限此處所列之範圍。",
       "alwaysAllowSessionHint": "及於整個差事，不止此一請求。",
@@ -12943,7 +12954,13 @@
       "sendAndContinue": "遣而續之",
       "close": "闔",
       "customAnswer": "另書他答…",
-      "answerPlaceholder": "請書君答…"
+      "answerPlaceholder": "請書君答…",
+      "validation": {
+        "required": "此項必填。",
+        "choice": "請擇所列之項。",
+        "tooShort": "所填須足 {{count}} 字。",
+        "tooLong": "所填勿逾 {{count}} 字。"
+      }
     },
     "planReviewBubble": {
       "title": "審方略",
@@ -19627,6 +19644,16 @@
     }
   },
   "subscriptionAccounts": {
+    "signIn": {
+      "checking": "正察本機帳號…",
+      "detected": "已有帳號登入",
+      "useAccount": "用此帳號",
+      "anotherAccount": "另登一號",
+      "keepExisting": "新號歸於此供應商，原號登入如故。",
+      "checkFailed": "未能讀取本機帳號，請重試。",
+      "retry": "重試",
+      "useCodex": "以 Codex 登入"
+    },
     "title": "訂閱帳號",
     "note": "首號沿用 CLI 預設目錄，增號各自登入。新務依策分派，舊務仍用原號。",
     "strategy": "負載平衡",
@@ -19640,8 +19667,8 @@
     "removeTitle": "移出 {{name}}？",
     "removeDescription": "Cindy 將不再給這個帳號分配任務。CLI 登入和對話歷史仍保留在本機。",
     "failed": "無法讀取或更新帳號。請檢查 CLI 登入和網路連線後重試。",
-    "used": "已用 {{percent}}%",
     "directory": "帳號目錄",
+    "loginAgain": "重登",
     "login": "登入"
   }
 }

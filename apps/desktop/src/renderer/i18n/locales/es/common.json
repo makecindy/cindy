@@ -1494,6 +1494,13 @@
     }
   },
   "menubar": {
+    "shared": {
+      "label": "Compartido",
+      "note": "Esta asignación es compartida por la cuenta, no reservada para usted.",
+      "highestWeekly": "Compartido · mayor saldo semanal",
+      "highestWeeklyNote": "Mayor cuota semanal restante entre las cuentas consultables. Es compartida por la cuenta, no una suma ni una cuota personal.",
+      "from": "Compartido por {{name}}"
+    },
     "balance": {
       "name": "balanza Cindy",
       "quotaName": "Cuota Cindy",
@@ -12833,6 +12840,10 @@
       "defer": "Ahora no"
     },
     "permissionPrompt": {
+      "titleStdin": "¿Permitir entrada en este terminal?",
+      "titleMcpUrl": "Completar la solicitud de {{server}}",
+      "mcpComplete": "Listo",
+      "mcpCancel": "Cancelar",
       "alwaysAllowScoped": "Permitir siempre {{scope}} durante esta sesión",
       "alwaysAllowScopedHint": "Se aplica a toda la sesión y solo a lo que se indica aquí.",
       "alwaysAllowSessionHint": "Se aplica a toda la sesión, no solo a esta solicitud.",
@@ -13075,7 +13086,13 @@
       "sendAndContinue": "Enviar y continuar",
       "close": "Cerrar",
       "customAnswer": "Escribe algo más…",
-      "answerPlaceholder": "Escribe tu respuesta…"
+      "answerPlaceholder": "Escribe tu respuesta…",
+      "validation": {
+        "required": "Completa este campo obligatorio.",
+        "choice": "Elige una de las opciones de la lista.",
+        "tooShort": "Introduce al menos {{count}} caracteres.",
+        "tooLong": "Introduce como máximo {{count}} caracteres."
+      }
     },
     "planReviewBubble": {
       "title": "Revisión del plan",
@@ -19886,6 +19903,16 @@
     "lineNumbers": "Números de línea"
   },
   "subscriptionAccounts": {
+    "signIn": {
+      "checking": "Comprobando la cuenta local…",
+      "detected": "Se encontró una cuenta conectada",
+      "useAccount": "Usar esta cuenta",
+      "anotherAccount": "Iniciar sesión con otra cuenta",
+      "keepExisting": "La cuenta nueva se añade a este proveedor. Las sesiones existentes se conservan.",
+      "checkFailed": "No se pudo comprobar la cuenta local. Inténtalo de nuevo.",
+      "retry": "Reintentar",
+      "useCodex": "Iniciar sesión con Codex"
+    },
     "title": "Cuentas de suscripción",
     "note": "La primera cuenta usa la carpeta predeterminada de la CLI. Las cuentas adicionales inician sesión por separado. Las tareas nuevas se distribuyen; las existentes conservan su cuenta.",
     "strategy": "Equilibrio de carga",
@@ -19899,8 +19926,8 @@
     "removeTitle": "¿Quitar {{name}}?",
     "removeDescription": "Cindy dejará de asignar tareas a esta cuenta. La sesión de la CLI y el historial de conversaciones permanecerán en este equipo.",
     "failed": "No se pudo leer o actualizar la cuenta. Comprueba el inicio de sesión de la CLI y la conexión, e inténtalo de nuevo.",
-    "used": "{{percent}}% utilizado",
     "directory": "Carpeta de la cuenta",
+    "loginAgain": "Iniciar sesión nuevamente",
     "login": "Iniciar sesión"
   }
 }

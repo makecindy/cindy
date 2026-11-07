@@ -101,14 +101,21 @@ describe('home navigation drawer', () => {
   const gesture = (name: string, translationX = 0, velocityX = 0, success = true) =>
     driver.gestures[name]({ translationX, velocityX }, success);
 
-  it('keeps the user first with a default letter avatar and only a small organization image', async () => {
+  // Regression: the drawer received the same avatar as Settings but discarded it.
+  // Render the real drawer/avatar with a photo, then clear it to cover the letter fallback (unit).
+  it('shows the user photo separately from the organization logo and falls back only without a photo', async () => {
     await act(async () => root.render(<HomeChromeDrawer {...props} />));
     const account = container.querySelector('[data-testid="home.chromeDrawer.account"]')!;
-    expect(account.textContent).toBe('KKirokiro@example.comExample Company');
-    expect([...account.querySelectorAll('img')].map(image => image.src)).toEqual([props.user.orgLogoUrl]);
+    expect(account.textContent).toBe('Kirokiro@example.comExample Company');
+    expect([...account.querySelectorAll('img')].map(image => image.src)).toEqual([props.user.avatar, props.user.orgLogoUrl]);
     await act(async () => root.render(<HomeChromeDrawer {...props} user={{ ...props.user, membershipKind: 'personal' }} />));
     expect(account.textContent).not.toContain('Example Company');
+    expect([...account.querySelectorAll('img')].map(image => image.src)).toEqual([props.user.avatar]);
+    await act(async () => root.render(<HomeChromeDrawer {...props} user={{ ...props.user, membershipKind: 'personal', avatar: null }} />));
+    expect(account.textContent).toBe('KKirokiro@example.com');
     expect(account.querySelector('img')).toBeNull();
+    await act(async () => root.render(<HomeChromeDrawer {...props} user={{ ...props.user, avatar: 'https://example.com/new-person.png' }} />));
+    expect([...account.querySelectorAll('img')].map(image => image.src)).toEqual(['https://example.com/new-person.png', props.user.orgLogoUrl]);
   });
 
   it('waits for native layout before entrance and ignores stale close completion after reopening', async () => {
