@@ -420,13 +420,27 @@ async function linkEntriesIntoRoot(
 /**
  * #9282：是否允许主动创建/写入 `~/.claude` 下的 Skill 投影。
  *
- * 显式 opt-in（`crossAgentSyncEnabled`，#2930）或本地已存在 `~/.claude` 配置时才
- * 创建目录与链接；两者皆无时不创建（多引擎隔离的最小权限）。这里只决定「要不要
+ * 显式 opt-in（`crossAgentSyncEnabled`，#2930）、本地已存在 `~/.claude`，或本进程
+ * 已在拉起 Claude（`markClaudeSessionObserved`，首次会话不等 CLI 自己建目录）时才
+ * 创建目录与链接；三者皆无时不创建（多引擎隔离的最小权限）。这里只决定「要不要
  * 主动建」——存量目录与链接一律不删。
  */
+let claudeSessionObserved = false;
+
+/** Cindy 即将/已经拉起 Claude Code CLI：视为用户在用 Claude，打开投影门。 */
+export function markClaudeSessionObserved(): void {
+  claudeSessionObserved = true;
+}
+
+/** 仅测试用：回到「未观察到 Claude 会话」的初始门状态。 */
+export function resetClaudeSessionObservedForTest(): void {
+  claudeSessionObserved = false;
+}
+
 export async function shouldProjectToClaudeSkills(
   opts: { homeDir?: string; isCrossAgentSyncEnabled?: () => boolean } = {},
 ): Promise<boolean> {
+  if (claudeSessionObserved) return true;
   const homeDir = opts.homeDir ?? os.homedir();
   if (fs.existsSync(path.join(homeDir, '.claude'))) return true;
   if (opts.isCrossAgentSyncEnabled) return opts.isCrossAgentSyncEnabled();
@@ -462,6 +476,7 @@ export async function prepareSharedGlobalSkillLinks(
       (await import('./shared-global-skills-settings.js'))
         .readSharedGlobalSkillsSettings().crossAgentSyncEnabled;
   const claudeProjectionEnabled = crossAgentSyncEnabled
+    || claudeSessionObserved
     || fs.existsSync(path.join(paths.homeDir, '.claude'));
   opts.assertOwnerStable?.();
   await fsp.mkdir(paths.sharedSkillsDir, { recursive: true });
@@ -572,8 +587,10 @@ export async function prepareSharedGlobalSkillLinks(
 
 /**
  * Cheap inputs of `prepareSharedGlobalSkillLinks` for completion caches: the opt-in
- * setting plus each global root's mtime (adding, removing or renaming a top-level skill
- * entry bumps it). A cached run must not hide a settings toggle or a new/removed skill.
+ * setting, whether Claude projection is currently allowed (setting / observed Claude
+ * session / existing `~/.claude`), plus each global root's mtime (adding, removing or
+ * renaming a top-level skill entry bumps it). A cached run must not hide a settings
+ * toggle, a first Claude launch, or a new/removed skill.
  */
 export async function sharedGlobalSkillLinksFingerprint(
   opts: Pick<PrepareOptions, 'homeDir' | 'isCrossAgentSyncEnabled'> = {},
@@ -587,12 +604,16 @@ export async function sharedGlobalSkillLinksFingerprint(
   } catch {
     crossAgentSyncEnabled = null;
   }
+  const claudeProjectionAllowed =
+    claudeSessionObserved ||
+    crossAgentSyncEnabled === true ||
+    fs.existsSync(path.join(paths.homeDir, '.claude'));
   const mtimes = await Promise.all(
     [paths.sharedSkillsDir, paths.claudeSkillsDir, paths.codexSkillsDir].map(async (dir) => {
       try { return (await fsp.stat(dir)).mtimeMs; } catch { return null; }
     }),
   );
-  return JSON.stringify([crossAgentSyncEnabled, ...mtimes]);
+  return JSON.stringify([crossAgentSyncEnabled, claudeProjectionAllowed, ...mtimes]);
 }
 
 /**

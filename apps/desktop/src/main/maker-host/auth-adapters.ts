@@ -45,6 +45,7 @@ import { prepareCodexGlobalPluginsBridge } from './codex-global-plugins.js';
 import { DESKTOP_CAPABILITY_ROUTING_POLICY } from './capability-routing.js';
 import {
   prepareSharedGlobalSkillLinks,
+  markClaudeSessionObserved,
   SHARED_GLOBAL_SKILL_SYNC_DISABLED_NOTICE,
   sharedGlobalSkillLinksFingerprint,
 } from './shared-global-skills.js';
@@ -715,6 +716,9 @@ export class DesktopClaudeAuthAdapter implements AuthAdapter {
   }
 
   async getAuthEnv(options?: AuthAdapterOptions): Promise<Record<string, string>> {
+    // 即将拉起 Claude CLI = 用户在用 Claude：打开 #9282 的投影门（含首次、
+    // ~/.claude 尚不存在的会话），再走共享 skills 预热。
+    markClaudeSessionObserved();
     if (options?.nativeSubscriptionAccount) {
       const account = options.nativeSubscriptionAccount;
       account.assertCurrent();

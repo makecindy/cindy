@@ -14,6 +14,8 @@ import {
   prepareSharedProjectSkillLinks,
   projectWorkingDirFromSkillPath,
   shouldProjectToClaudeSkills,
+  markClaudeSessionObserved,
+  resetClaudeSessionObservedForTest,
   sharedGlobalSkillLinksFingerprint,
   sharedGlobalSkillsPaths,
   sharedProjectSkillsPaths,
@@ -47,6 +49,7 @@ async function sameRealPath(a: string, b: string): Promise<boolean> {
 
 afterEach(async () => {
   vi.restoreAllMocks();
+  resetClaudeSessionObservedForTest();
   const dirs = tmpDirs;
   tmpDirs = [];
   await Promise.all(dirs.map((dir) => fs.rm(dir, { recursive: true, force: true })));
@@ -85,6 +88,8 @@ describe('shared Skill projection mutations', () => {
     const name = randomUUID();
     const alias = randomUUID();
     const source = await writeSkill(path.join(root, 'external'), name);
+    // 打开 Claude 投影门，否则整个链接循环被 #9282 跳过，租约断言变成空跑。
+    await fs.mkdir(path.join(root, '.claude'), { recursive: true });
     await fs.mkdir(paths.sharedSkillsDir, { recursive: true });
     await fs.symlink(source, path.join(paths.sharedSkillsDir, alias), process.platform === 'win32' ? 'junction' : 'dir');
     const lease = (await acquireSharedSkillMutationLease([name]))!;
@@ -93,6 +98,10 @@ describe('shared Skill projection mutations', () => {
       expect(result.changed).toBe(false);
       await expect(fs.lstat(path.join(paths.claudeSkillsDir, alias))).rejects.toMatchObject({ code: 'ENOENT' });
     } finally { await lease(); }
+    // 租约释放后，按物理 basename 的锁不再挡投影。
+    const after = await prepareSharedGlobalSkillLinks({ homeDir: root, isCrossAgentSyncEnabled: () => false });
+    expect(after.changed).toBe(true);
+    expect(await sameRealPath(path.join(paths.claudeSkillsDir, alias), source)).toBe(true);
   });
 
   it('revalidates the source after the final awaited mkdir before linking', async () => {
@@ -140,12 +149,45 @@ describe('shared Skill projection mutations', () => {
 });
 
 describe('shouldProjectToClaudeSkills (#9282)', () => {
-  it('opens only for opt-in or a pre-existing ~/.claude', async () => {
+  it('opens only for opt-in, a pre-existing ~/.claude, or an observed Claude session', async () => {
     const root = await makeTmpDir();
     expect(await shouldProjectToClaudeSkills({ homeDir: root, isCrossAgentSyncEnabled: () => false })).toBe(false);
     expect(await shouldProjectToClaudeSkills({ homeDir: root, isCrossAgentSyncEnabled: () => true })).toBe(true);
     await fs.mkdir(path.join(root, '.claude'));
     expect(await shouldProjectToClaudeSkills({ homeDir: root, isCrossAgentSyncEnabled: () => false })).toBe(true);
+    resetClaudeSessionObservedForTest();
+    const clean = await makeTmpDir();
+    expect(await shouldProjectToClaudeSkills({ homeDir: clean, isCrossAgentSyncEnabled: () => false })).toBe(false);
+    markClaudeSessionObserved();
+    expect(await shouldProjectToClaudeSkills({ homeDir: clean, isCrossAgentSyncEnabled: () => false })).toBe(true);
+  });
+
+  it('projects on the first Claude launch even before ~/.claude exists', async () => {
+    const root = await makeTmpDir();
+    const paths = sharedGlobalSkillsPaths(root);
+    const sharedSkill = await writeSkill(paths.sharedSkillsDir, 'first-launch');
+
+    markClaudeSessionObserved();
+    const result = await prepareSharedGlobalSkillLinks({ homeDir: root, isCrossAgentSyncEnabled: () => false });
+
+    expect(result.changed).toBe(true);
+    expect(nodeFs.existsSync(path.join(root, '.claude'))).toBe(true);
+    expect(await sameRealPath(path.join(paths.claudeSkillsDir, 'first-launch'), sharedSkill)).toBe(true);
+  });
+
+  it('bumps the preparation fingerprint when Claude projection first becomes allowed', async () => {
+    const root = await makeTmpDir();
+    const homeDir = path.join(root, 'home');
+    const before = await sharedGlobalSkillLinksFingerprint({
+      homeDir,
+      isCrossAgentSyncEnabled: () => false,
+    });
+    markClaudeSessionObserved();
+    const after = await sharedGlobalSkillLinksFingerprint({
+      homeDir,
+      isCrossAgentSyncEnabled: () => false,
+    });
+    expect(after).not.toBe(before);
   });
 });
 
