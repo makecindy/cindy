@@ -3795,6 +3795,8 @@
           "removeRow": "Zeile entfernen"
         },
         "wireProtocol": {
+          "defaultLabel": "Standardprotokoll der Verbindung",
+          "precedenceHelp": "Modelle können ein eigenes Protokoll aus individuellen Einstellungen oder dem Modellkatalog verwenden. In den Modelldetails können Sie die Quelle ansehen oder das Standardprotokoll und die Standardadresse wiederherstellen.",
           "responses": "OpenAI Responses (nativ)",
           "chat": "Chat Completions (Cindy-Bridge)",
           "anthropic": "Anthropic Messages (Cindy-Bridge)",
@@ -4119,6 +4121,11 @@
           },
           "effortMixed": "Die Denkintensität unterscheidet sich je nach Engine. Deine Auswahl gilt für Engines, die diese Stufe unterstützen.",
           "protocol": {
+            "sourceConnection": "Verbindungsstandard",
+            "sourceModel": "Modellspezifische Einstellung",
+            "sourceCatalog": "Modellkatalog",
+            "connectionDefault": "Verbindungsstandard: {{protocol}}",
+            "restoreRoute": "Standardprotokoll und -adresse wiederherstellen",
             "reference": "Native API",
             "compatibility": "Kompatibilitätsmodus",
             "compatibilityHint": "Cindy wandelt Anfragen lokal um. Das kann instabil sein oder unerwartet reagieren. Für erfahrene Nutzer empfohlen.",

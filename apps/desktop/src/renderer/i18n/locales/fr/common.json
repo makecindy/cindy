@@ -3844,6 +3844,8 @@
           "removeRow": "Retirer la ligne"
         },
         "wireProtocol": {
+          "defaultLabel": "Protocole par défaut de la connexion",
+          "precedenceHelp": "Les modèles peuvent utiliser un protocole propre, défini dans leurs paramètres individuels ou dans le catalogue de modèles. Consultez la source ou rétablissez le protocole et l’adresse par défaut dans les détails du modèle.",
           "responses": "OpenAI Responses (natif)",
           "chat": "Chat Completions (passerelle Cindy)",
           "anthropic": "Anthropic Messages (passerelle Cindy)",
@@ -4173,6 +4175,11 @@
           },
           "effortMixed": "L'effort diffère selon le moteur. Une sélection s'applique aux moteurs qui prennent en charge ce niveau.",
           "protocol": {
+            "sourceConnection": "Valeur par défaut de la connexion",
+            "sourceModel": "Paramètre propre au modèle",
+            "sourceCatalog": "Catalogue de modèles",
+            "connectionDefault": "Valeur par défaut de la connexion : {{protocol}}",
+            "restoreRoute": "Rétablir le protocole et l’adresse par défaut",
             "reference": "API native",
             "compatibility": "Mode de compatibilité",
             "compatibilityHint": "Cindy convertit les requêtes localement. Cela peut être instable ou entraîner un comportement inattendu. Recommandé aux utilisateurs expérimentés.",

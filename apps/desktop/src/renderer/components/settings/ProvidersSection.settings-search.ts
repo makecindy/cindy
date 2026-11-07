@@ -3,6 +3,22 @@ import { defineSettings, type SettingsSearchModule } from './settingsSearchTypes
 
 /** Static search metadata owned by this settings module; no component mounting or IPC. */
 export const providersSettings = defineSettings({
+  protocol: {
+    id: 'providers.protocol',
+    tab: 'providers',
+    // Connections and their models are selected from runtime data on this page.
+    targetId: 'settings-panel-providers',
+    titleKey: 'settings.providers.custom.wireProtocol.defaultLabel',
+    descriptionKey: 'settings.providers.custom.wireProtocol.precedenceHelp',
+    sectionKey: 'settings.tabs.providers',
+    keywordKeys: [
+      'settings.providers.models.advanced.protocol.sourceConnection',
+      'settings.providers.models.advanced.protocol.sourceModel',
+      'settings.providers.models.advanced.protocol.sourceCatalog',
+      'settings.providers.models.advanced.protocol.connectionDefault',
+      'settings.providers.models.advanced.protocol.restoreRoute',
+    ],
+  },
   subscriptionAccounts: {
     id: 'providers.subscriptionAccounts',
     tab: 'providers',

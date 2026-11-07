@@ -3752,6 +3752,8 @@
           "removeRow": "删此行"
         },
         "wireProtocol": {
+          "defaultLabel": "连接常例协定",
+          "precedenceHelp": "模型另设或模型目录所定之协定为先。可于模型详情察其来源，或恢复协定与地址之常例。",
           "responses": "OpenAI Responses（原生）",
           "chat": "Chat Completions（Cindy 桥接）",
           "anthropic": "Anthropic Messages（Cindy 桥接）",
@@ -4077,6 +4079,11 @@
           },
           "effortMixed": "诸引擎之档各异；所择者施于支持该档之引擎。",
           "protocol": {
+            "sourceConnection": "依连接常例",
+            "sourceModel": "模型另设",
+            "sourceCatalog": "模型目录所定",
+            "connectionDefault": "连接常例：{{protocol}}",
+            "restoreRoute": "恢复默认协议与地址",
             "reference": "本然协定",
             "compatibility": "兼容之式",
             "compatibilityHint": "由 Cindy 于此机转换请求格式，或致运行不稳、功能异常，宜由熟手用之。",

@@ -3844,6 +3844,8 @@
           "removeRow": "Remover linha"
         },
         "wireProtocol": {
+          "defaultLabel": "Protocolo predefinido da ligação",
+          "precedenceHelp": "Os modelos podem usar um protocolo próprio, definido nas configurações individuais ou no catálogo de modelos. Consulte a origem ou reponha o protocolo e o endereço predefinidos nos detalhes do modelo.",
           "responses": "OpenAI Responses (nativo)",
           "chat": "Chat Completions (ponte Cindy)",
           "anthropic": "Anthropic Messages (ponte Cindy)",
@@ -4173,6 +4175,11 @@
           },
           "effortMixed": "O esforço difere consoante o motor. A seleção aplica-se aos motores que suportam esse nível.",
           "protocol": {
+            "sourceConnection": "Predefinição da ligação",
+            "sourceModel": "Configuração específica do modelo",
+            "sourceCatalog": "Catálogo de modelos",
+            "connectionDefault": "Predefinição da ligação: {{protocol}}",
+            "restoreRoute": "Repor protocolo e endereço predefinidos",
             "reference": "API nativa",
             "compatibility": "Modo de compatibilidade",
             "compatibilityHint": "A Cindy converte os pedidos localmente. Isto pode causar instabilidade ou comportamentos inesperados. Recomendado para utilizadores experientes.",
