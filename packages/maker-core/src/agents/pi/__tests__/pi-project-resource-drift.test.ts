@@ -9,7 +9,7 @@
  * 条目只改该子目录自身 mtime,漏盯哪层就在哪层漏检。
  */
 
-import { mkdirSync, mkdtempSync, realpathSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, realpathSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
@@ -21,6 +21,9 @@ import {
 } from '../project-resource-cli.js';
 
 let project = '';
+
+// Windows CI 无符号链接特权:软链相关用例仅在 POSIX 跑。
+const itPosixOnly = process.platform === 'win32' ? it.skip : it;
 
 beforeEach(() => {
   project = mkdtempSync(path.join(tmpdir(), 'pi-resource-drift-'));
@@ -240,6 +243,19 @@ describe('piProjectResourcesDrifted', () => {
     // 边界持有者已就地更新:后续快检恢复零扫描,不再重复重扫判定
     expect(baseline.state.repoRoot).toBe(realpathSync(nested));
     expect(piProjectResourcesDrifted(baseline)).toBe(false);
+  });
+
+  itPosixOnly('detects the resolved symlink target of a prompt template moved away', () => {
+    // Windows CI 无符号链接特权,本用例仅在 POSIX 跑(见 itPosixOnly)。
+    mkdirSync(path.join(project, 'targets'), { recursive: true });
+    mkdirSync(path.join(project, '.pi', 'prompts'), { recursive: true });
+    writeFileSync(path.join(project, 'targets', 'opsx.md'), '---\ndescription: t\n---\n');
+    symlinkSync(path.join(project, 'targets', 'opsx.md'), path.join(project, '.pi', 'prompts', 'foo.md'));
+    const baseline = snapshot();
+    expect(piProjectResourcesDrifted(baseline)).toBe(false);
+    // 目标移动/删除不改变 .pi/prompts 自身的 mtime,只有盯住解析后的文件本体才能检出
+    rmSync(path.join(project, 'targets', 'opsx.md'));
+    expect(piProjectResourcesDrifted(baseline)).toBe(true);
   });
 
   it('missing directories baseline as -1 and compare against real mtimes', () => {

@@ -241,7 +241,7 @@ export function collectPiProjectResourceWatchRootMtimes(workingDir: string): Map
   const piDir = path.join(scanRoot, '.pi');
   roots.set(piDir, statMtimeMs(piDir));
   watchPiSkillTreeMtimes(roots, path.join(piDir, 'skills'));
-  roots.set(path.join(piDir, 'prompts'), statMtimeMs(path.join(piDir, 'prompts')));
+  watchPiPromptTargets(roots, path.join(piDir, 'prompts'), repoRoot);
   watchPiExtensionChildMtimes(roots, path.join(piDir, 'extensions'));
   let current = scanRoot;
   while (true) {
@@ -292,6 +292,28 @@ function watchPiExtensionChildMtimes(roots: Map<string, number>, extDir: string)
     if (!entry.isDirectory() && !entry.isSymbolicLink()) continue;
     const childPath = path.join(extDir, entry.name);
     roots.set(childPath, statMtimeMs(childPath));
+    const realChild = realpathOrNull(childPath);
+    if (!realChild || !isDir(realChild)) continue;
+    // 软链 index.ts 的目标增删只改目标处,collector 按解析路径收集,盯住解析后的本体。
+    const realIndex = path.join(realChild, 'index.ts');
+    roots.set(realIndex, statMtimeMs(realIndex));
+  }
+}
+
+/**
+ * stat 一个 prompts 根及其中 collector 实际接受的每个模板文件的**解析后目标**:
+ * `.pi/prompts/foo.md` 为仓内符号链接时,链接自身的增删由 prompts 根 mtime 捕获,
+ * 但目标文件的移动/删除只改目标处。statSync 跟随软链,目标缺失时为 -1,与
+ * realpath 收集口径一致。枚举条件与 collector 逐条对应(隐藏/非 .md 跳过)。
+ */
+function watchPiPromptTargets(roots: Map<string, number>, promptsDir: string, repoRoot: string): void {
+  roots.set(promptsDir, statMtimeMs(promptsDir));
+  if (!isDir(promptsDir)) return;
+  for (const entry of listDir(promptsDir)) {
+    if (entry.name.startsWith('.') || !entry.name.endsWith('.md')) continue;
+    const realFile = realpathOrNull(path.join(promptsDir, entry.name));
+    if (!realFile || !isFile(realFile) || !isWithinRoot(repoRoot, realFile)) continue;
+    roots.set(realFile, statMtimeMs(realFile));
   }
 }
 
@@ -343,6 +365,11 @@ export function piProjectResourcesDrifted(snapshot: PiProjectResourceLaunchSnaps
   }
   if (!boundaryChanged && !mtimeChanged) return false;
 
+  // 重扫与启动同序:先采样 watch 基线,再收集路径 —— 重扫窗口内新增的资源落在
+  // 基线之后,下次快检仍会检出;反序(先路径后基线)会把新 mtime 与旧集合固化在
+  // 一起,静默漏检。
+  const freshRoots = collectPiProjectResourceWatchRootMtimes(snapshot.workingDir);
+  const freshBoundary = resolvePiResourceRepoRoot(snapshot.workingDir);
   const fresh = collectPiProjectResourceCliPaths(snapshot.workingDir);
   if (!(
     samePiResourceList(fresh.skills, snapshot.paths.skills)
@@ -352,12 +379,11 @@ export function piProjectResourcesDrifted(snapshot: PiProjectResourceLaunchSnaps
     return true;
   }
 
-  // 有信号但集合未变:重建整张基线(新建的空目录纳入盯视)并更新边界持有者,
-  // 下一次快检恢复零收集。
-  const freshRoots = collectPiProjectResourceWatchRootMtimes(snapshot.workingDir);
+  // 有信号但集合未变:整表重建(新建的空目录/解析后的 prompt 目标纳入盯视)
+  // 并更新边界持有者,下一次快检恢复零收集。
   snapshot.watchRootMtimes.clear();
   for (const [dir, mtime] of freshRoots) snapshot.watchRootMtimes.set(dir, mtime);
-  snapshot.state.repoRoot = resolvePiResourceRepoRoot(snapshot.workingDir);
+  snapshot.state.repoRoot = freshBoundary;
   return false;
 }
 
