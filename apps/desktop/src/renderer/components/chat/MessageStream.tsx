@@ -6616,7 +6616,7 @@ export function MessageStream({
                     }
 
                     if (item.type === 'agent_plan') {
-                      return (
+                      const block = (
                         <div
                           key={item.key}
                           data-render-item-key={item.key}
@@ -6749,6 +6749,7 @@ export function MessageStream({
                           ) : null}
                         </div>
                       );
+                      return botReplyColumnSpacer ? withAssistantAvatar(botReplyColumnSpacer, block) : block;
                     }
 
                     if (item.type === 'tool_media') {
