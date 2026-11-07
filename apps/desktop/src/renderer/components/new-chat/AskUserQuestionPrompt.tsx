@@ -1,4 +1,4 @@
-import { answerKey } from "@cindy/maker-shared";
+import { askAnswerError, askQuestionOptions, answerKey } from "@cindy/maker-shared";
 import { Button } from '@/components/ui/button';
 import { Spinner } from '@/components/ui/spinner';
 /**
@@ -27,7 +27,6 @@ import {
 } from 'react';
 import { useTranslation } from 'react-i18next';
 import { ArrowRight, Mic, Square } from 'lucide-react';
-import { visibleAskOptions } from '@cindy/maker-shared';
 
 import { InteractionPromptCardShell } from '@/components/interaction-portal';
 import { ChatSessionFileProvider, useChatSessionFile, useChatSessionFileValue } from '@/components/chat/ChatSessionFileContext';
@@ -206,6 +205,7 @@ export function AskUserQuestionPrompt({
     question.question,
     question.header,
     question.multiSelect,
+    question.answerConstraints,
     (question.options ?? []).map((option) => [option.label, option.description]),
   ]);
   const formKey = JSON.stringify([sessionId, props.pending.requestId, questionsIdentity]);
@@ -257,6 +257,7 @@ function AskUserQuestionForm({
   // Custom input
   const [customInput, setCustomInput] = useState(draft?.customInput ?? '');
   const [showCustomInput, setShowCustomInput] = useState(draft?.showCustomInput ?? false);
+  const [validationError, setValidationError] = useState<string | null>(null);
   const startedRef = useRef(draft?.started === true);
   const draftRef = useRef<AskUserDraft>({ requestId, currentIndex, answers });
   draftRef.current = { requestId, currentIndex, answers, customInput, showCustomInput,
@@ -353,7 +354,7 @@ function AskUserQuestionForm({
   const currentQ = questions[currentIndex];
   const isMultiSelect = currentQ?.multiSelect === true;
   const isLastQuestion = currentIndex === totalQuestions - 1;
-  const options = visibleAskOptions(currentQ?.options);
+  const options = askQuestionOptions(currentQ);
   const pageIndicator = totalQuestions > 1 ? `${currentIndex + 1}/${totalQuestions}` : undefined;
 
   // Check if this question was already answered (revisiting via Back)
@@ -369,7 +370,7 @@ function AskUserQuestionForm({
 
       const ans = answersSnapshot[answerKey(q)];
       const isMulti = q.multiSelect === true;
-      const opts = visibleAskOptions(q.options);
+      const opts = askQuestionOptions(q);
 
       if (isMulti && ans) {
         try {
@@ -459,6 +460,12 @@ function AskUserQuestionForm({
   // ── Advance to next question or submit all ──
   const advance = useCallback(
     (answer: string) => {
+      const error = askAnswerError(currentQ, answer);
+      if (error) {
+        setValidationError(t(`chat.askUserQuestion.validation.${error.key}`, { count: error.count }));
+        return;
+      }
+      setValidationError(null);
       // Invalidate ASR captured before a manual/voice answer immediately, including
       // the animation interval and the host's asynchronous submission receipt.
       ++voiceRevision.current;
@@ -497,6 +504,7 @@ function AskUserQuestionForm({
       onAnswer,
       computeSelectionForIndex,
       snapshotButtons,
+      t,
     ],
   );
 
@@ -558,6 +566,7 @@ function AskUserQuestionForm({
     if (voiceSubmitRef.current || currentIndex === 0) return;
     ++voiceRevision.current;
     setVoiceFeedback('hint');
+    setValidationError(null);
     snapshotButtons();
     setSlideDirection('right');
     setIsAnimating(true);
@@ -583,13 +592,13 @@ function AskUserQuestionForm({
 
   // ── Custom input toggle ──
   const handleCustomOptionClick = useCallback(() => {
-    if (voiceSubmitRef.current) return;
+    if (voiceSubmitRef.current || currentQ?.answerConstraints?.choices) return;
     setShowCustomInput(true);
     setTimeout(() => inputRef.current?.focus(), 0);
-  }, []);
+  }, [currentQ]);
 
   const beginVoiceInput = useCallback(() => {
-    if (voiceBridge) return;
+    if (voiceBridge || currentQ?.answerConstraints?.choices) return;
     if (voiceSubmitRef.current) return;
     const session = dictationRef.current;
     if (session.isBusy) {
@@ -603,7 +612,7 @@ function AskUserQuestionForm({
     }
     inputRef.current?.focus();
     session.start();
-  }, [options.length, showCustomInput, voiceBridge]);
+  }, [options.length, showCustomInput, voiceBridge, currentQ]);
 
   useEffect(() => {
     if (voiceBridge || !showCustomInput || !pendingVoiceStartRef.current) return;
@@ -866,6 +875,10 @@ function AskUserQuestionForm({
 
   const footerActions = (
     <div className="flex gap-2.5">
+      {currentQ?.answerConstraints && (
+        <Button variant="secondary" palette="confirmation" size="lg" compact type="button" disabled={voiceLocked}
+          onClick={() => onAnswer(requestId, {})}>{t('newChat.permissionPrompt.mcpCancel')}</Button>
+      )}
       {pending.delivery === 'async' && startedRef.current && (
         <Button variant="secondary" palette="confirmation" size="lg" compact
           type="button" disabled={voiceLocked} onClick={() => { if (!voiceSubmitRef.current) onAnswer(requestId, {}); }}>
@@ -943,7 +956,7 @@ function AskUserQuestionForm({
   // long option list can never push the user's only free-text escape out of
   // view (DESIGN.md §4: permanent entries pin below the scroll region).
   const customAnswerEntry =
-    options.length > 0 ? (
+    options.length > 0 && !currentQ?.answerConstraints?.choices ? (
       <div className="overflow-hidden rounded-[12px] border border-[var(--ask-option-border)] bg-[var(--ask-option-list-bg)]">
         {showCustomInput ? (
           <div className="flex items-start gap-2 px-[16px] py-[14px]">
@@ -1208,6 +1221,8 @@ function AskUserQuestionForm({
             ))}
           </div>
         )}
+
+        {validationError && <p role="alert" className="text-13 text-[var(--text-danger)]">{validationError}</p>}
 
         {/* Free-text input when no options */}
         {options.length === 0 && (

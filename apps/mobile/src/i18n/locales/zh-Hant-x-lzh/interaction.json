@@ -100,7 +100,14 @@
     "planFeedbackPlaceholder": "告 Claude 當如何為之",
     "planFeedbackRequired": "書回饋方可呈。",
     "planFeedbackSubmit": "呈謀之回饋",
-    "planFeedbackAccessibility": "以回饋改其謀"
+    "planFeedbackAccessibility": "以回饋改其謀",
+    "validation": {
+      "required": "此項必填。",
+      "choice": "請擇所列之項。",
+      "tooShort": "所填須足 {{count}} 字。",
+      "tooLong": "所填勿逾 {{count}} 字。"
+    },
+    "askRestrictedMetaCaption": "{{options}} · {{mode}}"
   },
   "kinds": {
     "permission": {

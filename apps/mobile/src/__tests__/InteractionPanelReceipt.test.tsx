@@ -1118,3 +1118,44 @@ it('persistent setup cancellation waits for a host terminal update and allows re
   expect(cancel()).toBeNull();
   expect(host.textContent).toContain('interaction.pluginSetup.phase.cancelled');
 });
+
+// PR #9271 review, unit: actual mobile form + transport boundary. Invalid input
+// must leave both the card and previous field draft intact; enum Other is data.
+it('keeps MCP form validation local and preserves an exact Other enum', async () => {
+  remoteSessionStore.setPendingInteractions('s1', [{ request: { kind: 'ask_user_question', requestId, questions: [
+    { id: 'name', question: 'Name', answerConstraints: { required: true, minLength: 3, maxLength: 5 } },
+    { id: 'kind', question: 'Kind', options: [{ label: 'Personal' }, { label: 'Other' }],
+      answerConstraints: { required: true, choices: ['Personal', 'Other'] } },
+  ] } }]);
+  await act(async () => root.render(<Harness />));
+  await click('interaction.ask.skipButton');
+  expect(host.textContent).toContain('interaction.panel.validation.required');
+  await type('interaction.ask.textInput', 'ab');
+  await click('interaction.ask.submitButton');
+  expect(host.textContent).toContain('interaction.panel.validation.tooShort');
+  expect(host.querySelector<HTMLInputElement>('[data-testid="interaction.ask.textInput"]')!.value).toBe('ab');
+  await type('interaction.ask.textInput', 'abcdef');
+  await click('interaction.ask.submitButton');
+  expect(host.textContent).toContain('interaction.panel.validation.tooLong');
+  expect(resolveInteraction).not.toHaveBeenCalled();
+  await type('interaction.ask.textInput', 'Orbit');
+  await click('interaction.ask.submitButton');
+  expect(host.textContent).toContain('Other');
+  expect(host.querySelector('[data-testid="interaction.ask.showCustomButton"]')).toBeNull();
+  await click('interaction.ask.skipButton');
+  expect(resolveInteraction).not.toHaveBeenCalled();
+  await click('interaction.ask.option.2');
+  await click('interaction.ask.submitButton');
+  expect(resolveInteraction).toHaveBeenCalledWith(requestId,
+    { kind: 'ask_user_question', answers: { name: 'Orbit', kind: 'Other' } });
+});
+
+it('cancels an MCP form explicitly without submitting a partial draft', async () => {
+  remoteSessionStore.setPendingInteractions('s1', [{ request: { kind: 'ask_user_question', requestId, questions: [
+    { id: 'name', question: 'Name', answerConstraints: { required: true } },
+  ] } }]);
+  await act(async () => root.render(<Harness />));
+  await type('interaction.ask.textInput', 'unfinished');
+  await click('interaction.ask.cancelButton');
+  expect(resolveInteraction).toHaveBeenCalledWith(requestId, { kind: 'ask_user_question', answers: {} });
+});

@@ -12963,7 +12963,13 @@
       "sendAndContinue": "送信して続行",
       "close": "閉じる",
       "customAnswer": "別の回答を入力…",
-      "answerPlaceholder": "回答を入力…"
+      "answerPlaceholder": "回答を入力…",
+      "validation": {
+        "required": "この必須項目を入力してください。",
+        "choice": "一覧の選択肢から選んでください。",
+        "tooShort": "{{count}}文字以上で入力してください。",
+        "tooLong": "{{count}}文字以内で入力してください。"
+      }
     },
     "planReviewBubble": {
       "title": "計画レビュー",

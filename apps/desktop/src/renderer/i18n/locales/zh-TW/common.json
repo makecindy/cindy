@@ -12962,7 +12962,13 @@
       "sendAndContinue": "傳送並繼續",
       "close": "關閉",
       "customAnswer": "輸入其他回答…",
-      "answerPlaceholder": "請輸入回答…"
+      "answerPlaceholder": "請輸入回答…",
+      "validation": {
+        "required": "請填寫此必填項目。",
+        "choice": "請選擇列出的選項。",
+        "tooShort": "請至少輸入 {{count}} 個字元。",
+        "tooLong": "請最多輸入 {{count}} 個字元。"
+      }
     },
     "planReviewBubble": {
       "title": "計劃審閱",

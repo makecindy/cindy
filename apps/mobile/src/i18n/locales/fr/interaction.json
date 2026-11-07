@@ -100,7 +100,14 @@
     "planFeedbackPlaceholder": "Indiquez à Claude quoi faire",
     "planFeedbackRequired": "Saisissez un retour avant d'envoyer.",
     "planFeedbackSubmit": "Envoyer le retour sur le plan",
-    "planFeedbackAccessibility": "Donner un retour pour modifier le plan"
+    "planFeedbackAccessibility": "Donner un retour pour modifier le plan",
+    "validation": {
+      "required": "Renseignez ce champ obligatoire.",
+      "choice": "Choisissez une des options proposées.",
+      "tooShort": "Saisissez au moins {{count}} caractères.",
+      "tooLong": "Saisissez au maximum {{count}} caractères."
+    },
+    "askRestrictedMetaCaption": "{{options}} · {{mode}}"
   },
   "kinds": {
     "permission": {

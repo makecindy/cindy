@@ -18900,6 +18900,31 @@ describe('CodexAgent MCP thread context hooks', () => {
     await handle.close();
   });
 
+  // PR #9271 review: schema restrictions must reach actual cards and the final
+  // protocol response; unsupported validators must never produce accept.
+  it('preserves MCP field constraints and rejects unsupported string validators', async () => {
+    const agent = new CodexAgent(createDeps());
+    const host = installFakeHost(agent);
+    const handle = await agent.startSession({ sessionId: 'mcp-form-validation', model: 'gpt-5.4', workingDir: '/repo' });
+    const handler = host.getThreadHandlers()!.mcpServerElicitation!;
+    const resolver = vi.fn(async (_request: InteractionRequest): Promise<InteractionDecision> => ({ kind: 'ask_user_question', answers: { value: 'Other' } }));
+    handle.setInteractionResolver(resolver);
+    const base = { threadId: 'start-thread-id', turnId: 'turn-1', serverName: 'example', _meta: null, message: 'Details', mode: 'form' as const };
+    const request = (property: Record<string, unknown>, id: number) => handler({ ...base, requestedSchema: { type: 'object', required: ['value'], properties: { value: property } } }, { requestId: id });
+    await expect(request({ type: 'string', enum: ['Personal', 'Other'] }, 501)).resolves.toEqual({ action: 'accept', content: { value: 'Other' }, _meta: null });
+    expect(resolver.mock.calls[0]![0]).toMatchObject({ questions: [{ answerConstraints: { required: true, choices: ['Personal', 'Other'] } }] });
+    resolver.mockResolvedValue({ kind: 'ask_user_question', answers: { value: 'ab' } });
+    await expect(request({ type: 'string', minLength: 3, maxLength: 5 }, 502)).resolves.toMatchObject({ action: 'cancel' });
+    expect(resolver.mock.calls[1]![0]).toMatchObject({ questions: [{ answerConstraints: { required: true, minLength: 3, maxLength: 5 } }] });
+    resolver.mockResolvedValue({ kind: 'ask_user_question', answers: { value: '😀😀😀' } });
+    await expect(request({ type: 'string', minLength: 3, maxLength: 3 }, 503)).resolves.toMatchObject({ action: 'accept', content: { value: '😀😀😀' } });
+    for (const [i, validator] of [{ format: 'email' }, { pattern: '^a+$' }, { const: 'fixed' }].entries()) {
+      await expect(request({ type: 'string', ...validator }, 510 + i)).resolves.toMatchObject({ action: 'cancel' });
+    }
+    expect(resolver).toHaveBeenCalledTimes(3);
+    await handle.close();
+  });
+
   it('routes untrusted MCP server elicitations through approval UI', async () => {
     const agent = new CodexAgent(createDeps());
     const host = installFakeHost(agent);

@@ -100,7 +100,14 @@
     "planFeedbackPlaceholder": "Claude にどうすべきか伝える",
     "planFeedbackRequired": "送信前にフィードバックを入力してください。",
     "planFeedbackSubmit": "プランのフィードバックを送信",
-    "planFeedbackAccessibility": "プランを変更するフィードバック"
+    "planFeedbackAccessibility": "プランを変更するフィードバック",
+    "validation": {
+      "required": "この必須項目を入力してください。",
+      "choice": "一覧の選択肢から選んでください。",
+      "tooShort": "{{count}}文字以上で入力してください。",
+      "tooLong": "{{count}}文字以内で入力してください。"
+    },
+    "askRestrictedMetaCaption": "{{options}} · {{mode}}"
   },
   "kinds": {
     "permission": {

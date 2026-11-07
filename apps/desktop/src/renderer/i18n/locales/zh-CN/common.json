@@ -12963,7 +12963,13 @@
       "sendAndContinue": "发送并继续",
       "close": "关闭",
       "customAnswer": "输入其他回答…",
-      "answerPlaceholder": "请输入回答…"
+      "answerPlaceholder": "请输入回答…",
+      "validation": {
+        "required": "请填写此必填项。",
+        "choice": "请选择列出的选项。",
+        "tooShort": "请至少输入 {{count}} 个字符。",
+        "tooLong": "请最多输入 {{count}} 个字符。"
+      }
     },
     "planReviewBubble": {
       "title": "计划审阅",

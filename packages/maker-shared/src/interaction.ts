@@ -14,6 +14,14 @@ export interface PendingInteractionLike {
   persistId?: string;
 }
 
+/** Only server-authored form fields carry these restrictions. */
+export interface AskAnswerConstraints {
+  required: boolean;
+  choices?: string[];
+  minLength?: number;
+  maxLength?: number;
+}
+
 export interface AskQuestion {
   /** Stable provider identity; absent on legacy questions. */
   id?: string;
@@ -21,6 +29,7 @@ export interface AskQuestion {
   header?: string;
   options?: Array<{ label: string; description?: string }>;
   multiSelect?: boolean;
+  answerConstraints?: AskAnswerConstraints;
 }
 
 /** A late answer is ordinary user input, with the original question attached. */
@@ -1135,10 +1144,11 @@ export function normalizeAskQuestions(value: unknown): AskQuestion[] {
     if (!isRecord(item)) return [];
     const question = readString(item.question);
     if (!question) return [];
+    const answerConstraints = normalizeAskAnswerConstraints(item.answerConstraints);
     const options = Array.isArray(item.options)
       ? item.options.flatMap((option) => {
         if (!isRecord(option)) return [];
-        const label = readString(option.label);
+        const label = answerConstraints?.choices && typeof option.label === 'string' ? option.label : readString(option.label);
         if (!label) return [];
         const description = readString(option.description);
         return [{ label, ...(description ? { description } : {}) }];
@@ -1150,8 +1160,35 @@ export function normalizeAskQuestions(value: unknown): AskQuestion[] {
       header: readString(item.header) ?? undefined,
       options,
       multiSelect: item.multiSelect === true,
+      ...(answerConstraints ? { answerConstraints } : {}),
     }];
   });
+}
+
+function normalizeAskAnswerConstraints(value: unknown): AskAnswerConstraints | undefined {
+  if (!isRecord(value) || typeof value.required !== 'boolean') return undefined;
+  return {
+    required: value.required,
+    ...(Array.isArray(value.choices) && value.choices.every((v) => typeof v === 'string')
+      ? { choices: value.choices as string[] } : {}),
+    ...(Number.isSafeInteger(value.minLength) && Number(value.minLength) >= 0 ? { minLength: Number(value.minLength) } : {}),
+    ...(Number.isSafeInteger(value.maxLength) && Number(value.maxLength) >= 0 ? { maxLength: Number(value.maxLength) } : {}),
+  };
+}
+
+export function askQuestionOptions(question: AskQuestion | undefined): Array<{ label: string; description?: string }> {
+  return question?.answerConstraints?.choices ? [...(question.options ?? [])] : visibleAskOptions(question?.options);
+}
+
+export function askAnswerError(question: AskQuestion, answer: string): { key: 'required' | 'choice' | 'tooShort' | 'tooLong'; count?: number } | undefined {
+  const rules = question.answerConstraints;
+  if (!rules) return undefined;
+  if (!answer.trim()) return rules.required ? { key: 'required' } : undefined;
+  if (rules.choices && !rules.choices.includes(answer)) return { key: 'choice' };
+  const length = Array.from(answer).length;
+  if (rules.minLength !== undefined && length < rules.minLength) return { key: 'tooShort', count: rules.minLength };
+  if (rules.maxLength !== undefined && length > rules.maxLength) return { key: 'tooLong', count: rules.maxLength };
+  return undefined;
 }
 
 export function answerKey(question: AskQuestion): string {

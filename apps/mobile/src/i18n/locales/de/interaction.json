@@ -100,7 +100,14 @@
     "planFeedbackPlaceholder": "Sag Claude, was zu tun ist",
     "planFeedbackRequired": "Gib vor dem Senden Feedback ein.",
     "planFeedbackSubmit": "Feedback zum Plan senden",
-    "planFeedbackAccessibility": "Gib Feedback, um den Plan zu ändern"
+    "planFeedbackAccessibility": "Gib Feedback, um den Plan zu ändern",
+    "validation": {
+      "required": "Füllen Sie dieses Pflichtfeld aus.",
+      "choice": "Wählen Sie eine der aufgeführten Optionen.",
+      "tooShort": "Geben Sie mindestens {{count}} Zeichen ein.",
+      "tooLong": "Geben Sie höchstens {{count}} Zeichen ein."
+    },
+    "askRestrictedMetaCaption": "{{options}} · {{mode}}"
   },
   "kinds": {
     "permission": {

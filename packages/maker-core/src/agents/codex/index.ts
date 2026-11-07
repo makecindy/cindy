@@ -9488,7 +9488,7 @@ assertRouteCurrent();
         const url = params.mode === 'url' ? mcpElicitationUrl(params.url) : undefined;
         if (!form && !url) {
           eventQueue.push({ type: 'error', data: {
-            message: `Cindy cannot display this MCP request from ${params.serverName} (${params.mode}). Ask the server to use an ordinary non-secret text, boolean or single-choice form, or an HTTP(S) link.`,
+            message: `Cindy cannot display this MCP request from ${params.serverName} (${params.mode}). Ask the server to use an ordinary non-secret text, boolean or single-choice form, or an HTTP(S) link. Unsupported schema constraints (including pattern/format) cannot be accepted.`,
             isTerminal: false,
           }, source: 'codex' });
           return cancelledElicitation();

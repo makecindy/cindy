@@ -328,6 +328,7 @@ export interface AskUserQuestionItem {
   header?: string;
   options?: Array<{ label: string; description?: string }>;
   multiSelect?: boolean;
+  answerConstraints?: import('@cindy/maker-shared').AskAnswerConstraints;
 }
 
 type InteractionRequestBase = {

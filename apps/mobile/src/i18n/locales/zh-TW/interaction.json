@@ -100,7 +100,14 @@
     "planFeedbackPlaceholder": "告訴 Claude 應該怎麼做",
     "planFeedbackRequired": "輸入反饋後才能提交。",
     "planFeedbackSubmit": "提交計劃反饋",
-    "planFeedbackAccessibility": "反饋修改計劃"
+    "planFeedbackAccessibility": "反饋修改計劃",
+    "validation": {
+      "required": "請填寫此必填項目。",
+      "choice": "請選擇列出的選項。",
+      "tooShort": "請至少輸入 {{count}} 個字元。",
+      "tooLong": "請最多輸入 {{count}} 個字元。"
+    },
+    "askRestrictedMetaCaption": "{{options}} · {{mode}}"
   },
   "kinds": {
     "permission": {

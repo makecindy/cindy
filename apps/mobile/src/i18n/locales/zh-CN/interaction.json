@@ -100,7 +100,14 @@
     "planFeedbackPlaceholder": "告诉 Claude 应该怎么做",
     "planFeedbackRequired": "输入反馈后才能提交。",
     "planFeedbackSubmit": "提交计划反馈",
-    "planFeedbackAccessibility": "反馈修改计划"
+    "planFeedbackAccessibility": "反馈修改计划",
+    "validation": {
+      "required": "请填写此必填项。",
+      "choice": "请选择列出的选项。",
+      "tooShort": "请至少输入 {{count}} 个字符。",
+      "tooLong": "请最多输入 {{count}} 个字符。"
+    },
+    "askRestrictedMetaCaption": "{{options}} · {{mode}}"
   },
   "kinds": {
     "permission": {

@@ -100,7 +100,14 @@
     "planFeedbackPlaceholder": "Tell Claude what to do",
     "planFeedbackRequired": "Enter feedback before submitting.",
     "planFeedbackSubmit": "Submit plan feedback",
-    "planFeedbackAccessibility": "Give feedback to change the plan"
+    "planFeedbackAccessibility": "Give feedback to change the plan",
+    "validation": {
+      "required": "Complete this required field.",
+      "choice": "Choose one of the listed options.",
+      "tooShort": "Enter at least {{count}} characters.",
+      "tooLong": "Enter no more than {{count}} characters."
+    },
+    "askRestrictedMetaCaption": "{{options}} · {{mode}}"
   },
   "kinds": {
     "permission": {

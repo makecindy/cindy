@@ -13086,7 +13086,13 @@
       "sendAndContinue": "Envoyer et continuer",
       "close": "Fermer",
       "customAnswer": "Saisir autre chose…",
-      "answerPlaceholder": "Saisissez votre réponse…"
+      "answerPlaceholder": "Saisissez votre réponse…",
+      "validation": {
+        "required": "Renseignez ce champ obligatoire.",
+        "choice": "Choisissez une des options proposées.",
+        "tooShort": "Saisissez au moins {{count}} caractères.",
+        "tooLong": "Saisissez au maximum {{count}} caractères."
+      }
     },
     "planReviewBubble": {
       "title": "Revue du plan",

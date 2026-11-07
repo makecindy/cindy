@@ -1,3 +1,4 @@
+import { askAnswerError, askQuestionOptions } from '@cindy/maker-shared/interaction';
 import { deviceDisplayName } from '@/device-link/deviceName';
 import { PluginSetupNativeActions } from '@/plugins/PluginSetupNativeActions';
 import { sha256 } from '@noble/hashes/sha256';
@@ -76,7 +77,6 @@ import {
   selectionFromAnswer,
   sessionScopedPermissionSuggestions,
   sortPendingInteractions,
-  visibleAskOptions,
   type AskQuestion,
   type PermissionReviewPresentation,
   type PlanReviewEvidencePresentation,
@@ -1072,6 +1072,7 @@ function AskUserQuestionForm({
   const [answers, setAnswers] = useState<Record<string, string>>(() => initialDraft?.answers ?? {});
   const [selectedLabels, setSelectedLabels] = useState<Set<string>>(() => new Set(initialDraft?.selectedLabels ?? []));
   const [customInput, setCustomInput] = useState(() => initialDraft?.customInput ?? '');
+  const [validationError, setValidationError] = useState<string | null>(null);
   const [showCustomInput, setShowCustomInput] = useState(() => initialDraft?.showCustomInput ?? false);
   const answerTextRef = useRef(customInput);
   answerTextRef.current = customInput;
@@ -1121,7 +1122,7 @@ function AskUserQuestionForm({
     if (!current || syncedIndexRef.current === currentIndex) return;
     syncedIndexRef.current = currentIndex;
     const next = selectionFromAnswer(
-      { ...current, options: visibleAskOptions(current.options) },
+      { ...current, options: askQuestionOptions(current) },
       answers[answerKey(current)],
     );
     setSelectedLabels(next.selectedLabels);
@@ -1169,7 +1170,7 @@ function AskUserQuestionForm({
   if (!current) return null;
 
   const isLast = currentIndex === questions.length - 1;
-  const options = visibleAskOptions(current.options);
+  const options = askQuestionOptions(current);
   optionsLengthRef.current = options.length;
   const isMulti = current.multiSelect === true;
   const currentAnswerKey = answerKey(current);
@@ -1182,12 +1183,18 @@ function AskUserQuestionForm({
   const optionsCaption = options.length > 0
     ? t('interaction.panel.askOptionCount', { count: options.length })
     : t('interaction.panel.askFreeInput');
-  const metaCaption = t('interaction.panel.askMetaCaption', {
+  const metaCaption = t(current.answerConstraints?.choices ? 'interaction.panel.askRestrictedMetaCaption' : 'interaction.panel.askMetaCaption', {
     options: optionsCaption,
     mode: isMulti ? t('interaction.panel.askModeMulti') : t('interaction.panel.askModeSingle'),
   });
 
   const advance = (answer: string) => {
+    const error = askAnswerError(current, answer);
+    if (error) {
+      setValidationError(t(`interaction.panel.validation.${error.key}`, { count: error.count }));
+      return;
+    }
+    setValidationError(null);
     const nextAnswers = { ...answers, [currentAnswerKey]: answer };
     setAnswers(nextAnswers);
     if (isLast) {
@@ -1319,7 +1326,7 @@ function AskUserQuestionForm({
               </InteractionTouchButton>
             );
           })}
-          {showCustomInput ? (
+          {!current.answerConstraints?.choices && (showCustomInput ? (
             <View style={[
               styles.customInputRow,
               { gap: touchLayout.actionGap },
@@ -1371,7 +1378,7 @@ function AskUserQuestionForm({
               </InteractionTouchButton>
               <AskCardVoiceButton listening={voice.listening} starting={voice.starting} stopping={voice.stopping} disabled={busy || voice.stopping || voiceSubmitting} onPress={beginVoice} />
             </View>
-          )}
+          ))}
         </View>
       ) : (
         <View style={[
@@ -1400,12 +1407,19 @@ function AskUserQuestionForm({
         </View>
       )}
 
+      {validationError ? <Text accessibilityRole="alert" style={styles.voiceNotice} testID="interaction.ask.validationError">{validationError}</Text> : null}
+
       {/* Shown for both layouts: the option-less card has a microphone too. */}
       {voice.error ? <Text testID="interaction.ask.voiceError">{voice.error}</Text>
         : voice.speakerFiltered ? <Text style={styles.voiceNotice} testID="interaction.ask.voiceNotice">{t('composer.voice.speakerFiltered')}</Text>
         : null}
 
       <InteractionActions touchLayout={touchLayout}>
+        {current.answerConstraints ? <ResolveButton busy={busy} disabled={voiceLocked}
+          label={t('interaction.permission.mcpCancel')} accessibilityLabel={t('interaction.permission.mcpCancel')}
+          onPress={() => onDecision(buildAskUserQuestionDecision({}))} requestId={requestId}
+          touchStyle={resolveButtonLayoutStyle(touchLayout, 'secondary', companion)}
+          testID="interaction.ask.cancelButton" variant="secondary" /> : null}
         {item.retainedDraft ? (
           <ResolveButton busy={busy} label={t('interaction.panel.closeAnswer')}
             accessibilityLabel={t('interaction.panel.closeAnswer')}
@@ -1421,6 +1435,7 @@ function AskUserQuestionForm({
               const answer = isMulti
                 ? encodeMultiSelectAnswer(options, selectedLabels, customInput)
                 : customModeActive ? customInput : existingAnswer ?? '';
+              setValidationError(null);
               setAnswers((prev) => ({ ...prev, [currentAnswerKey]: answer }));
               setCurrentIndex((idx) => Math.max(0, idx - 1));
             }}

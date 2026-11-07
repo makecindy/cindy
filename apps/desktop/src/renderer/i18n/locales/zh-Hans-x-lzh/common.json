@@ -12954,7 +12954,13 @@
       "sendAndContinue": "遣而续之",
       "close": "阖",
       "customAnswer": "另书他答…",
-      "answerPlaceholder": "请书君答…"
+      "answerPlaceholder": "请书君答…",
+      "validation": {
+        "required": "此项必填。",
+        "choice": "请择所列之项。",
+        "tooShort": "所填须足 {{count}} 字。",
+        "tooLong": "所填勿逾 {{count}} 字。"
+      }
     },
     "planReviewBubble": {
       "title": "审方略",

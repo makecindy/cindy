@@ -450,6 +450,7 @@ export interface AskUserQuestionItem {
   header?: string;
   options?: Array<{ label: string; description?: string }>;
   multiSelect?: boolean;
+  answerConstraints?: import('@cindy/maker-shared').AskAnswerConstraints;
 }
 
 export interface ChatMessage {
@@ -6936,6 +6937,7 @@ export function handleStreamEvent(
           return question.id === next.id && question.question === next.question &&
             question.header === next.header &&
             question.multiSelect === next.multiSelect &&
+            JSON.stringify(question.answerConstraints) === JSON.stringify(next.answerConstraints) &&
             (question.options?.length ?? 0) === (next.options?.length ?? 0) &&
             (question.options ?? []).every((option, optionIndex) =>
               option.label === next.options?.[optionIndex]?.label &&

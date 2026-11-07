@@ -535,7 +535,9 @@ sessionRunningRetry 就停。每次因 replacement 关闭而重新入队都计�
   `send_user_message_question_reply` 格式携带 questionItemId。RPC `isBlocking=false`
   保留两分钟未操作自动空答，开始输入后宿主停止计时；活动回执只停表，不持久化答案。
   审批按 JSON-RPC requestId 撤回，与 tool itemId 分离；终端输入、网络和环境上下文
-  同时保留给用户与审查器。普通 MCP form 支持非私密字符串、布尔和单选枚举；URL
+  同时保留给用户与审查器。普通 MCP form 支持非私密字符串、布尔和单选枚举，保留精确 choices 及必填/字符长度限制；
+  填写错误留在原卡片并保留草稿，独立取消才表示用户取消；pattern/format 等未支持的
+  验证约束在展示前明确拒绝，不生成无效 accept。URL
   由用户主动打开并完成，Full access/Auto 不代答。不支持的模式或私密字段明确提示并
   返回 cancel，不冒充用户 decline，不把私密输入改接普通问答。
   协议与前缀稳定性实测见 `agents/codex/async-user-input.native.test.ts`，
