@@ -8,6 +8,7 @@ import { sharedTaskHostPeer } from '@cindy/device-link';
 
 import { ErrorBanner } from '../ErrorBanner';
 import { ErrorTailErrorBanner } from '../InterruptedTurnBanner';
+import { ErrorMessageCard } from '../ErrorMessageCard';
 import { useCodexAuth } from '@/hooks/useCodexAuth';
 import { useCodexSessionExpiredPrompt } from '@/hooks/useCodexSessionExpiredPrompt';
 import {
@@ -71,6 +72,12 @@ function deferred<T>() {
   });
   return { promise, resolve, reject };
 }
+
+vi.mock('@/lib/makerChatStore', () => ({
+  decodeRemoteErrorMessage: (message: string) => message,
+  remoteErrorI18nKey: () => undefined,
+  remoteErrorMessageForBanner: (message: string) => message,
+}));
 
 vi.mock('react-i18next', () => ({
   useTranslation: () => ({
@@ -995,10 +1002,12 @@ describe('ErrorBanner OpenAI connection recovery', () => {
     });
     const onInlineRecoveryRequired = vi.fn();
     const onPromptClosed = vi.fn();
-    const prompt = renderHook(() => useCodexSessionExpiredPrompt({
-      onInlineRecoveryRequired,
-      onPromptClosed,
-    }));
+    const prompt = renderHook(() =>
+      useCodexSessionExpiredPrompt({
+        onInlineRecoveryRequired,
+        onPromptClosed,
+      }),
+    );
 
     act(() => {
       expect(prompt.result.current('token_revoked')).toBe(true);
@@ -1063,6 +1072,18 @@ describe('ErrorBanner OpenAI connection recovery', () => {
     );
     await waitFor(() => expect(mocks.openChatGPTApp).toHaveBeenCalledOnce());
     expect(mocks.triggerLogin).not.toHaveBeenCalled();
+  });
+
+  it('localizes malformed tool markup in live and historical errors', () => {
+    const message = '模型输出了格式错误的工具调用块';
+    render(
+      <>
+        <ErrorBanner error={message} errorReason="malformed-tool-markup" onRetry={vi.fn()} />
+        <ErrorMessageCard message={message} reason="malformed-tool-markup" />
+      </>,
+    );
+    expect(screen.getAllByText('logic.errors.malformedToolMarkup')).toHaveLength(2);
+    expect(screen.queryByText(message)).toBeNull();
   });
 
   it('localizes event-loop terminal errors from the stable reason key', () => {
@@ -1402,15 +1423,17 @@ describe('ErrorBanner OpenAI connection recovery', () => {
   });
 
   it('shows model access guidance instead of authentication advice for a custom provider', () => {
-    render(<ErrorBanner
-      error="Failed to authenticate. API Error: 403 user not allowed to access model"
-      errorReason="user_model_access_denied"
-      agentKind="cc"
-      providerId="custom-provider"
-      modelId="claude-opus-5"
-      retryText="retry after changing access"
-      onRetry={vi.fn()}
-    />);
+    render(
+      <ErrorBanner
+        error="Failed to authenticate. API Error: 403 user not allowed to access model"
+        errorReason="user_model_access_denied"
+        agentKind="cc"
+        providerId="custom-provider"
+        modelId="claude-opus-5"
+        retryText="retry after changing access"
+        onRetry={vi.fn()}
+      />,
+    );
     expect(screen.getByText('chat.errorBanner.modelAccessDenied')).toBeTruthy();
     expect(screen.queryByText(/Failed to authenticate/)).toBeNull();
   });
