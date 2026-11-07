@@ -633,8 +633,13 @@ function replyTarget(messageId: string, wantInThread: boolean): SendTarget {
  * 记住被飞书拒过 reply_in_thread 的回复根: 该根再出站时直接普通回复, 不必
  * 每次先失败一次再降级(聚合消息 / 不支持话题的单聊是确定性的拒绝)。
  * 账号替换时随账号态一起清掉。
+ *
+ * 账号在途被替换时不能写: 旧账号的拒绝结论进了新账号的缓存, 新账号对同一条
+ * 消息就会莫名丢掉 reply_in_thread, 话题回复落进群主流(#9313 review)。
  */
 function markThreadReplyUnsupported(messageId: string): void {
+  const pin = pinnedAccount.getStore();
+  if (pin && pin.epoch !== S().accountEpoch) return;
   S().threadReplyUnsupported.add(messageId);
 }
 

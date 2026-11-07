@@ -1124,4 +1124,33 @@ describe('private notification topic output', () => {
     expect(larkMocks.reply).toHaveBeenCalledTimes(1);
     expect(larkMocks.create).not.toHaveBeenCalled();
   });
+
+  // 测试价值(#9313 review): 账号在途被替换时,旧账号的 230072 不能写进新账号的
+  // 「这个根不支持话题回复」缓存 —— 否则新账号对同一条消息会莫名丢掉
+  // reply_in_thread, 话题回复落进群主流。最小失败输入: 旧账号的回复被拒时
+  // 账号被换掉, 随后新账号对同一个根出站。
+  it('does not let a replaced account poison the new account root cache (#9313)', async () => {
+    larkMocks.reply.mockImplementationOnce(async (payload) => {
+      const data = payload.data as { reply_in_thread?: boolean };
+      if (data.reply_in_thread) {
+        outbound.unbindClient();
+        outbound.bindClient(otherCreds);
+        return { code: 230072, msg: 'reply in thread not supported', data: { message_id: '' } };
+      }
+      return { data: { message_id: 'om_should_not_send' } };
+    });
+    larkMocks.reply.mockResolvedValue({ data: { message_id: 'om_new_account_reply' } });
+
+    await expect(
+      outbound.sendText('ou_owner', '旧账号的消息', { threadTs: 'om_merge_root' }),
+    ).rejects.toThrow(/account was replaced/);
+
+    larkMocks.reply.mockClear();
+    await outbound.sendText('ou_owner', '新账号的消息', { threadTs: 'om_merge_root' });
+
+    // 新账号仍按 reply_in_thread 回这个根:旧账号的拒绝结论没进新账号的缓存。
+    expect(larkMocks.reply).toHaveBeenCalledTimes(1);
+    expect(larkMocks.reply.mock.calls[0]?.[0].data).toEqual(expect.objectContaining({ reply_in_thread: true }));
+    expect(larkMocks.create).not.toHaveBeenCalled();
+  });
 });
