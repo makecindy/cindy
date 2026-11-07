@@ -21,7 +21,7 @@ import lzhCommon from '../renderer/i18n/locales/zh-Hant-x-lzh/common.json';
 import lzhHansCommon from '../renderer/i18n/locales/zh-Hans-x-lzh/common.json';
 import { app } from 'electron';
 import { BRAND_NAME } from '@cindy/maker-shared/branding';
-import { DEFAULT_CLASSICAL_REPLY_STYLE, type ClassicalReplyStyleId } from '@cindy/maker-shared/classical-reply';
+import { defaultClassicalReplyStyleFor, type ClassicalReplyStyleId } from '@cindy/maker-shared/classical-reply';
 
 import {
   DEFAULT_LOCALE,
@@ -107,18 +107,19 @@ export function setMainLocale(locale: SupportedLocale): void {
   cachedLocale = locale;
 }
 
-let classicalStyle: ClassicalReplyStyleId = DEFAULT_CLASSICAL_REPLY_STYLE;
+let classicalStyle: ClassicalReplyStyleId | null = null;
 
 /**
  * This computer's classical output style, mirrored from the renderer next to the
- * language. Remote clients send their own with each turn.
+ * language. Remote clients send their own with each turn. Until the renderer reports
+ * one, the interface language decides (see defaultClassicalReplyStyleFor).
  */
 export function setMainClassicalStyle(style: ClassicalReplyStyleId): void {
   classicalStyle = style;
 }
 
 export function getMainClassicalStyle(): ClassicalReplyStyleId {
-  return classicalStyle;
+  return classicalStyle ?? defaultClassicalReplyStyleFor(getMainLocale());
 }
 
 /**

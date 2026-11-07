@@ -4,11 +4,12 @@
  * 语言选项使用单个下拉菜单，避免未来增加语言后设置卡片被横向选项撑开。
  * 文言（及以后其它古典版本）在菜单里只占一项；选中后同一张卡片下方多出一行，
  * 选择字形（简体 / 繁體）与 AI 作答的输出风格。
+ * 简体中文 / 繁體中文界面另有一行只有文风：界面保持现代中文，回答可选文言文风。
  */
 
 import { useTranslation } from 'react-i18next';
 import { Check, ChevronDown } from 'lucide-react';
-import type { ClassicalReplyStyleId } from '@cindy/maker-shared/classical-reply';
+import { replyStyleFamilyOf, type ClassicalReplyStyleId } from '@cindy/maker-shared/classical-reply';
 import { classicalStyleOptions, languageSettings } from './LanguageSection.settings-search';
 import { SelectParts as Select } from '@/components/ui/select';
 
@@ -103,6 +104,7 @@ export function LanguageSection() {
   const { t } = useTranslation();
   const { locale, effectiveLocale, setLocale, classicalStyle, setClassicalStyle } = useLocale();
   const classical = isClassicalLocale(locale) ? locale : null;
+  const replyStyleOnly = !classical && replyStyleFamilyOf(effectiveLocale) !== null;
 
   const chooseLanguage = (option: LanguageOption) => {
     if (option !== CLASSICAL_OPTION) {
@@ -195,6 +197,29 @@ export function LanguageSection() {
                 className="min-w-0 flex-1"
               />
             </div>
+          </div>
+        ) : replyStyleOnly ? (
+          <div
+            id={languageSettings.replyStyle.targetId}
+            className="flex flex-row items-center justify-between gap-6 border-t border-[var(--settings-theme-card-border)] py-4"
+          >
+            <p
+              className="min-w-0 flex-1 text-13 font-medium text-[var(--settings-section-sublabel)]"
+              style={{ letterSpacing: '0.12px' }}
+            >
+              {t('settings.language.classical.styleAriaLabel')}
+            </p>
+            <PillSelect<ClassicalReplyStyleId>
+              data-setting-id={languageSettings.replyStyle.id}
+              value={classicalStyle}
+              options={classicalStyleOptions.map((style) => ({
+                value: style.value,
+                label: t(style.labelKey),
+              }))}
+              onChange={setClassicalStyle}
+              ariaLabel={t('settings.language.classical.styleAriaLabel')}
+              className="w-[320px]"
+            />
           </div>
         ) : null}
       </div>
