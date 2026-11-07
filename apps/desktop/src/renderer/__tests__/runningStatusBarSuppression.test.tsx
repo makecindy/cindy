@@ -6,6 +6,7 @@ import { cleanup, fireEvent, render, screen } from '@testing-library/react';
 import ts from 'typescript';
 import { afterEach, expect, it, vi } from 'vitest';
 import { formatSessionDuration } from '@/lib/sessionDurationFormat';
+import { RunningTokenCount } from '@/features/cc-agent/RunningTokenCount';
 import {
   RunningTokenRatePopover,
   useRunningTokenRateHistory,
@@ -46,7 +47,7 @@ const deps = {
   useState,
   useTranslation: () => ({ t: (key: string) => key }),
   useReducedMotion: () => true,
-  useAnimatedNumber: (value: number) => value,
+  RunningTokenCount,
   localizeAgentStatus: (status: string) => status,
   cn: (...classes: unknown[]) => classes.filter(Boolean).join(' '),
   Check: Icon,
