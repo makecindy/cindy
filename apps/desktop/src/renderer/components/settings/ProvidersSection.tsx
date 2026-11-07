@@ -728,6 +728,41 @@ function DetailHeader({
         })
       : null;
 
+  const subscriptionPool = provider && isSubscriptionProvider(provider.id) ? provider.id : null;
+  const usageCard = subscription ? (
+    <QuotaHoverCard
+      key={JSON.stringify([
+        provider?.id,
+        provider?.connected,
+        provider?.subscriptionAccount?.source,
+        provider?.subscriptionAccount?.identity,
+        provider?.openAiAccount?.source,
+        provider?.openAiAccount?.identity,
+      ])}
+      variant="embedded"
+      hideIdentity={Boolean(subscriptionProduct)}
+      account={subscription}
+      dashboardLabel={
+        provider?.id === 'anthropic' || provider?.auth.native === 'claude'
+          ? t('settings.providers.usage.openClaudeUsage')
+          : provider?.id === 'xai' || provider?.auth.native === 'xai'
+            ? t('settings.providers.xai.asset.openUsage')
+            : undefined
+      }
+      onOpenDashboard={
+        provider?.id === 'anthropic' || provider?.auth.native === 'claude'
+          ? () => void window.electronAPI.openExternal('https://claude.ai/settings/usage')
+          : provider?.id === 'xai' || provider?.auth.native === 'xai'
+            ? () => void window.electronAPI.openExternal('https://grok.com')
+            : undefined
+      }
+    >
+      {resetEnabled ? (
+        <CodexResetCredits providerId={provider?.id} onChanged={refreshResets} key={provider?.id} variant="embedded" snapshot={resetSnapshot} busy={manualReset.busy} canReset={manualReset.canReset} canRetry={manualReset.canRetry} onReset={(credit) => void manualReset.reset(credit)} />
+      ) : null}
+    </QuotaHoverCard>
+  ) : null;
+
   return (
     <div className="flex min-h-0 flex-1 flex-col">
       <div className="shrink-0 px-5 py-4">
@@ -878,45 +913,22 @@ function DetailHeader({
       >
         {detail && <div className="px-5 pb-4">{detail}</div>}
         {provider?.subscriptionFastPolicy && <div className="px-5 pb-4"><SubscriptionFastSetting key={provider.id} provider={provider} /></div>}
-        {provider && isSubscriptionProvider(provider.id) && <SubscriptionAccountsSection key={provider.id} providerId={provider.id} />}
+        {/* Pooled subscription accounts show the provider card in the default account's row. */}
+        {subscriptionPool && (
+          <SubscriptionAccountsSection
+            key={subscriptionPool}
+            providerId={subscriptionPool}
+            defaultUsage={usageCard}
+          />
+        )}
         {assetModule ??
-          (subscription ? (
+          (subscriptionPool ? null : usageCard ? (
             <div
               data-testid="provider-usage-module"
               className="border-t px-1 py-2"
               style={{ borderColor: 'var(--settings-theme-card-border)' }}
             >
-              <QuotaHoverCard
-                key={JSON.stringify([
-                  provider?.id,
-                  provider?.connected,
-                  provider?.subscriptionAccount?.source,
-                  provider?.subscriptionAccount?.identity,
-                  provider?.openAiAccount?.source,
-                  provider?.openAiAccount?.identity,
-                ])}
-                variant="embedded"
-                hideIdentity={Boolean(subscriptionProduct)}
-                account={subscription}
-                dashboardLabel={
-                  provider?.id === 'anthropic' || provider?.auth.native === 'claude'
-                    ? t('settings.providers.usage.openClaudeUsage')
-                    : provider?.id === 'xai' || provider?.auth.native === 'xai'
-                      ? t('settings.providers.xai.asset.openUsage')
-                      : undefined
-                }
-                onOpenDashboard={
-                  provider?.id === 'anthropic' || provider?.auth.native === 'claude'
-                    ? () => void window.electronAPI.openExternal('https://claude.ai/settings/usage')
-                    : provider?.id === 'xai' || provider?.auth.native === 'xai'
-                      ? () => void window.electronAPI.openExternal('https://grok.com')
-                      : undefined
-                }
-              >
-                {resetEnabled ? (
-                  <CodexResetCredits providerId={provider?.id} onChanged={refreshResets} key={provider?.id} variant="embedded" snapshot={resetSnapshot} busy={manualReset.busy} canReset={manualReset.canReset} canRetry={manualReset.canRetry} onReset={(credit) => void manualReset.reset(credit)} />
-                ) : null}
-              </QuotaHoverCard>
+              {usageCard}
             </div>
           ) : (
             <ProviderAccountUsageModule provider={provider} />

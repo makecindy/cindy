@@ -19933,8 +19933,8 @@
     "removeTitle": "Remover {{name}}?",
     "removeDescription": "A Cindy deixará de atribuir tarefas a esta conta. A sessão da CLI e o histórico de conversas permanecem neste computador.",
     "failed": "Não foi possível ler ou atualizar a conta. Verifique a sessão da CLI e a ligação à rede e tente novamente.",
-    "used": "{{percent}}% utilizado",
     "directory": "Pasta da conta",
+    "loginAgain": "Iniciar sessão novamente",
     "login": "Iniciar sessão"
   }
 }

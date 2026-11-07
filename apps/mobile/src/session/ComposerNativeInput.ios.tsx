@@ -230,10 +230,9 @@ export const ComposerNativeInput = forwardRef<
         }}
         onPasteImages={({ nativeEvent }) => {
           const images = nativeEvent.images;
-          if (!images.length) {
-            props.onPasteImagesLoadFailed?.();
-            return;
-          }
+          // No placeholder belongs to an empty/rejected batch. Reporting its
+          // failure could release another accepted paste's FIFO placeholder.
+          if (!images.length || !props.onPasteImages) return;
           props.onPasteImagesLoading?.(images.length);
           void (async () => {
             const uris: string[] = [];

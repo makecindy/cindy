@@ -279,6 +279,8 @@ export interface IMMessageEvent {
    * 不支持引用语义的渠道恒 undefined。
    */
   replyContext?: {
+    /** Original send time, in epoch milliseconds when the platform supplies it. */
+    sentAt?: number;
     /** Original message ID, distinct from the current trigger message. */
     messageId?: string;
     author: string;
@@ -289,7 +291,7 @@ export interface IMMessageEvent {
     /** Referenced media that was not supplied to this turn. */
     unavailableAttachments?: string[];
   };
-  /** Feishu quote resources; host downloads only after screening the quote. */
+  /** Feishu quote resources; host downloads after accepting the inbound turn. */
   feishuReplyAttachments?: AttachmentRef[];
   /** Native private topic metadata. Root message id and thread id are distinct. */
   replyThread?: { rootMessageId: string; threadId: string };

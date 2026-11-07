@@ -19674,8 +19674,8 @@
     "removeTitle": "移出 {{name}}？",
     "removeDescription": "Cindy 将不再给这个账号分配任务。CLI 登录和对话历史仍保留在本机。",
     "failed": "无法读取或更新账号。请检查 CLI 登录和网络连接后重试。",
-    "used": "已用 {{percent}}%",
     "directory": "账号目录",
+    "loginAgain": "重新登录",
     "login": "登录"
   }
 }
