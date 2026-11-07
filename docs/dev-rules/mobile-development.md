@@ -154,8 +154,9 @@ pnpm --filter mobile test:smoke
 
 普通任务与伙伴私聊点击发送时保持编辑器可编辑、保留焦点与软键盘；发送防重由提交锁和发送按钮负责，
 不通过 `editable=false` 锁住原生输入框（iOS 会因此收起键盘）。异步发送只清除与已捕获快照相同的草稿，
-后续输入不能被完成回调覆盖。附件调整与语音操作仍沿用发送期间的禁用规则。
-回归：`sessionComposerLayout.test.ts`、共享 `sessionOperation.test.ts`。
+后续输入不能被完成回调覆盖。排队消息保存成功后，将等待期间的新输入（含引用等结构化节点）
+接在编辑前暂存草稿之后再持久保存；放弃编辑仍只恢复原草稿。附件调整与语音操作仍沿用发送期间的禁用规则。
+回归：`sessionComposerLayout.test.ts`、`composerRichInputLifecycle.test.tsx`、共享 `sessionOperation.test.ts`。
 
 WebView 输入框把屏幕可见的组字文本同步为草稿；React Native 接受本地编辑的回传时不重写
 DOM，保留输入法组字与光标。点击发送后，在发送防重锁内等待编辑器返回当前完整

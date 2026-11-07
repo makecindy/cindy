@@ -7,7 +7,7 @@ import ts from 'typescript';
 import { afterEach, expect, it, vi } from 'vitest';
 import { Platform } from 'react-native';
 import { ComposerRichInput, type ComposerRichInputHandle } from '@/session/ComposerRichInput';
-import { composerDocumentProjectedText, textComposerDocument, type ComposerDocument } from '@/session/composerDocument';
+import { composerDocumentProjectedText, composerDocumentHasContent, normalizeComposerDocument, textComposerDocument, type ComposerDocument } from '@/session/composerDocument';
 import { createComposerDraftSource } from '@/session/composerDraftSource';
 
 // Execute the page's real cancellation/persistence callbacks with the mounted
@@ -15,7 +15,7 @@ import { createComposerDraftSource } from '@/session/composerDraftSource';
 const pageSource = ts.createSourceFile('session.tsx', readFileSync('app/sessions/[sessionId].tsx', 'utf8'), ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX);
 const pageCallbacks = new Map<string, string>();
 function collectPageCallbacks(node: ts.Node) {
-  if (ts.isVariableDeclaration(node) && ['cancelQueueEdit', 'applyComposerDocument', 'applyRichComposerChange'].includes(node.name.getText(pageSource))
+  if (ts.isVariableDeclaration(node) && ['exitQueueEdit', 'cancelQueueEdit', 'finishQueueEditSave', 'applyComposerDocument', 'applyRichComposerChange'].includes(node.name.getText(pageSource))
     && node.initializer && ts.isCallExpression(node.initializer)) {
     pageCallbacks.set(node.name.getText(pageSource), ts.transpileModule(`(${node.initializer.arguments[0].getText(pageSource)})`, {
       compilerOptions: { target: ts.ScriptTarget.ES2022 },
@@ -188,16 +188,24 @@ it('rejects an invalidated send scope before a late snapshot can overwrite the r
   unsubscribe();
 });
 
+// PR #9242 review: after the sent snapshot is cleared, text/quote atoms typed
+// while updateContent waits must join the stashed draft on success. Existing
+// cancellation coverage had no successful-save/new-draft branch (unit).
 // #7536 review, unit: a queued IME change can arrive after cancelQueueEdit but
 // before its scheduled React frame. Snapshot guards do not cover this unsolicited
 // message; the restored personal draft must survive in memory and persistence.
-it('cancels queue edit before a late change can overwrite the restored personal draft', () => {
+it.each([false, true])('restores queue-edit draft without losing later typing or accepting stale IME events (saved=%s)', (saved) => {
   vi.useFakeTimers();
   Platform.OS = 'android';
   const { ref, page, send, onChangeDocument, renderDocument } = mount();
   send({ type: 'ready' });
-  const edited = textComposerDocument('edited queued message');
+  const edited: ComposerDocument = saved
+    ? { version: 1, nodes: [{ type: 'text', text: 'next message' }, { type: 'quote', quote: { text: 'next quote' } }] }
+    : textComposerDocument('edited queued message');
   const stashed = textComposerDocument('unsent personal draft');
+  const restored: ComposerDocument = saved
+    ? { version: 1, nodes: [{ type: 'text', text: 'unsent personal draft\n\nnext message' }, { type: 'quote', quote: { text: 'next quote' } }] }
+    : stashed;
   renderDocument(edited);
   const oldId = page.id;
   const source = createComposerDraftSource(edited);
@@ -213,22 +221,24 @@ it('cancels queue edit before a late change can overwrite the restored personal 
     voiceDictionaryLearningTrackerRef: { current: null }, saveComposerDocumentDraft, saveComposerDraft,
   });
   onChangeDocument.mockImplementation(pageCallback('applyRichComposerChange', { applyComposerDocument, queueEditingRef, messageEditingRef: { current: null } }));
-  const cancel = pageCallback('cancelQueueEdit', {
-    queueEditingRef, composerInputRef: ref, composerDocumentProjectedText,
+  const exitQueueEdit = pageCallback('exitQueueEdit', {
+    queueEditingRef, composerInputRef: ref, composerDocumentRef, composerDocumentProjectedText,
+    composerDocumentHasContent, normalizeComposerDocument,
     setQueueEditing: vi.fn(), queueEditLockOwnerRef: { current: null },
     queueEditSaveOwnerRef: { current: null }, queueEditSaveInFlightRef: { current: null },
     discardQueueEditTransientAttachments: vi.fn(), applyComposerDocument,
     attachmentsRef: { current: [] }, setAttachments: vi.fn(),
   });
+  const exit = pageCallback(saved ? 'finishQueueEditSave' : 'cancelQueueEdit', { exitQueueEdit });
   try {
-    act(() => cancel());
+    act(() => exit());
     // Do not render the restored props or advance the scheduled frame.
     send({ type: 'change', documentId: oldId, document: edited });
     expect(onChangeDocument).not.toHaveBeenCalled();
-    expect(composerDocumentRef.current).toEqual(stashed);
-    expect(source.getSnapshot().document).toEqual(stashed);
-    expect(saveComposerDocumentDraft).toHaveBeenCalledExactlyOnceWith('task', stashed);
-    expect(saveComposerDraft).toHaveBeenCalledExactlyOnceWith('task', 'unsent personal draft');
+    expect(composerDocumentRef.current).toEqual(restored);
+    expect(source.getSnapshot().document).toEqual(restored);
+    expect(saveComposerDocumentDraft).toHaveBeenCalledExactlyOnceWith('task', restored);
+    expect(saveComposerDraft).toHaveBeenCalledExactlyOnceWith('task', composerDocumentProjectedText(restored));
     expect(publish).not.toHaveBeenCalled();
     expect(bridge.requestFocus).not.toHaveBeenCalled();
     expect(page.applyDocument.mock.lastCall?.[1]).toBe(false);
