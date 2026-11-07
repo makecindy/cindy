@@ -6,7 +6,7 @@ import { readFileSync } from 'node:fs';
 import ts from 'typescript';
 import { afterEach, expect, it, vi } from 'vitest';
 import { Platform } from 'react-native';
-import { ComposerRichInput, type ComposerRichInputHandle } from '@/session/ComposerRichInput';
+import { ComposerRichInput, type ComposerRichInputHandle, type ComposerRichInputProps } from '@/session/ComposerRichInput';
 import { composerDocumentProjectedText, composerDocumentHasContent, normalizeComposerDocument, textComposerDocument, type ComposerDocument } from '@/session/composerDocument';
 import { createComposerDraftSource } from '@/session/composerDraftSource';
 
@@ -15,7 +15,7 @@ import { createComposerDraftSource } from '@/session/composerDraftSource';
 const pageSource = ts.createSourceFile('session.tsx', readFileSync('app/sessions/[sessionId].tsx', 'utf8'), ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX);
 const pageCallbacks = new Map<string, string>();
 function collectPageCallbacks(node: ts.Node) {
-  if (ts.isVariableDeclaration(node) && ['exitQueueEdit', 'cancelQueueEdit', 'finishQueueEditSave', 'applyComposerDocument', 'applyRichComposerChange'].includes(node.name.getText(pageSource))
+  if (ts.isVariableDeclaration(node) && ['composerImagePasteHandlers', 'exitQueueEdit', 'cancelQueueEdit', 'finishQueueEditSave', 'applyComposerDocument', 'applyRichComposerChange'].includes(node.name.getText(pageSource))
     && node.initializer && ts.isCallExpression(node.initializer)) {
     pageCallbacks.set(node.name.getText(pageSource), ts.transpileModule(`(${node.initializer.arguments[0].getText(pageSource)})`, {
       compilerOptions: { target: ts.ScriptTarget.ES2022 },
@@ -40,6 +40,8 @@ const bridge = vi.hoisted(() => ({
   clipboard: vi.fn<() => Promise<string>>(),
   inject: vi.fn(),
   requestFocus: vi.fn(),
+  writeImage: vi.fn(),
+  deleteImage: vi.fn(),
 }));
 vi.mock('react-native', () => ({
   Platform: { OS: 'ios' }, StyleSheet: { create: (styles: unknown) => styles },
@@ -66,14 +68,22 @@ vi.mock('react-native-reanimated', () => ({
   default: { View: ({ children }: { children: unknown }) => children },
   useAnimatedStyle: (factory: () => unknown) => factory(),
 }));
-vi.mock('expo-file-system', () => ({ File: class {}, Paths: { cache: '/unused' } }));
+vi.mock('expo-file-system', () => ({
+  File: class { uri: string; constructor(_directory: string, name: string) { this.uri = `file:///cache/${name}`; } },
+  Paths: { cache: '/unused' },
+}));
+vi.mock('expo-file-system/legacy', () => ({
+  EncodingType: { Base64: 'base64' },
+  writeAsStringAsync: bridge.writeImage,
+  deleteAsync: bridge.deleteImage,
+}));
 vi.mock('expo-clipboard', () => ({ getStringAsync: bridge.clipboard }));
 
 Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
 let root: Root | undefined;
 afterEach(() => {
   act(() => root?.unmount()); root = undefined; bridge.inject.mockReset();
-  bridge.requestFocus.mockReset(); bridge.state = 'active'; bridge.mounts = 0; bridge.clipboard.mockReset(); vi.useRealTimers();
+  bridge.requestFocus.mockReset(); bridge.writeImage.mockReset(); bridge.deleteImage.mockReset(); bridge.state = 'active'; bridge.mounts = 0; bridge.clipboard.mockReset(); vi.useRealTimers();
   Platform.OS = 'ios';
   expect(bridge.listeners.size).toBe(0);
 });
@@ -82,7 +92,7 @@ function appState(state: string) {
   act(() => { bridge.state = state; bridge.listeners.forEach(listener => listener(state)); });
 }
 
-function mount(hidden = false) {
+function mount(hidden = false, pasteHandlers: Pick<ComposerRichInputProps, 'onPasteImages' | 'onPasteImagesLoading'> = {}) {
   const ref = createRef<ComposerRichInputHandle>();
   const onChangeDocument = vi.fn();
   const onPasteImagesLoadFailed = vi.fn();
@@ -103,7 +113,7 @@ function mount(hidden = false) {
   bridge.inject.mockImplementation((script: string) => runInNewContext(script, { window: { cindyComposer: page } }));
   root = createRoot(document.createElement('div'));
   const renderDocument = (document: ComposerDocument) => act(() => root!.render(createElement(ComposerRichInput, {
-    ref, document, hidden, onChangeDocument, onPasteImagesLoadFailed,
+    ref, document, hidden, onChangeDocument, onPasteImagesLoadFailed, ...pasteHandlers,
     accessibilityLabel: 'input', placeholder: '', height: 40, maxHeight: 264,
     theme: { background: '#fff', border: '#aaa', chip: '#ddd', focus: '#555', placeholder: '#777', text: '#111', textSecondary: '#333' },
   })));
@@ -497,4 +507,35 @@ it('restores a hidden dictation draft without focusing or losing its saved inser
   expect(page.focus).not.toHaveBeenCalled();
   send({ type: 'selection', documentId: page.id, before: { textLength: 0, atomCount: 0 }, through: { textLength: 0, atomCount: 0 } });
   expect(ref.current?.getSelection('voice suffix')).toEqual({ start: 5, end: 5 });
+});
+
+// PR #9242 review: sending still accepts text, but a newly pasted image must
+// never reach the current send's attachment handoff. The previous suite tested
+// paste cancellation, not the page's sending-time attachment entry (unit).
+it.each([false, true])('keeps image paste behind the sending lock while text remains editable (sending=%s)', async (sending) => {
+  bridge.writeImage.mockResolvedValue(undefined);
+  bridge.deleteImage.mockResolvedValue(undefined);
+  const addAttachments = vi.fn();
+  const beginPlaceholders = vi.fn();
+  const pasteHandlers = pageCallback('composerImagePasteHandlers', {
+    sending, onPasteImages: addAttachments,
+    beginPastePlaceholders: beginPlaceholders, failPastePlaceholders: vi.fn(),
+  })();
+  const { send, page, onChangeDocument } = mount(false, pasteHandlers);
+  send({ type: 'ready' });
+  const nextDraft = textComposerDocument('next draft while sending');
+  send({ type: 'change', documentId: page.id, document: nextDraft });
+  expect(onChangeDocument).toHaveBeenLastCalledWith(nextDraft);
+  send({ type: 'paste-images-start', requestId: 'next-image', count: 1 });
+  await act(async () => {
+    send({ type: 'paste-image', requestId: 'next-image', index: 0, mimeType: 'image/png', name: 'next.png', base64: 'eA==' });
+  });
+  if (sending) {
+    expect(beginPlaceholders).not.toHaveBeenCalled();
+    expect(addAttachments).not.toHaveBeenCalled();
+    expect(bridge.deleteImage).toHaveBeenCalled();
+  } else {
+    expect(beginPlaceholders).toHaveBeenCalledWith(1);
+    expect(addAttachments).toHaveBeenCalledWith([expect.stringContaining('file:///cache/')]);
+  }
 });

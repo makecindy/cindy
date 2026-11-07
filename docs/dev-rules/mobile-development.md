@@ -156,6 +156,7 @@ pnpm --filter mobile test:smoke
 不通过 `editable=false` 锁住原生输入框（iOS 会因此收起键盘）。异步发送只清除与已捕获快照相同的草稿，
 后续输入不能被完成回调覆盖。排队消息保存成功后，将等待期间的新输入（含引用等结构化节点）
 接在编辑前暂存草稿之后再持久保存；放弃编辑仍只恢复原草稿。附件调整与语音操作仍沿用发送期间的禁用规则。
+发送期间的图片粘贴与附件按钮同样关闭，不能把后粘贴的图片交给已点击发送的消息；文字粘贴仍可用。
 回归：`sessionComposerLayout.test.ts`、`composerRichInputLifecycle.test.tsx`、共享 `sessionOperation.test.ts`。
 
 WebView 输入框把屏幕可见的组字文本同步为草稿；React Native 接受本地编辑的回传时不重写

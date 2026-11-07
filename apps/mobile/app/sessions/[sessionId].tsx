@@ -12705,6 +12705,13 @@ function SessionComposerInput({
     sending,
     voiceState,
   ]);
+  // 图片粘贴是附件入口：发送期间只保留文字编辑，不接收新的图片或占位。
+  // 失败回调始终保留，确保此前已开始的粘贴仍可清理占位。
+  const composerImagePasteHandlers = useMemo(() => ({
+    onPasteImages: sending ? undefined : onPasteImages,
+    onPasteImagesLoading: sending ? undefined : beginPastePlaceholders,
+    onPasteImagesLoadFailed: failPastePlaceholders,
+  }), [beginPastePlaceholders, failPastePlaceholders, onPasteImages, sending]);
   const compactComposer = composerLayout.density === 'compact';
   // 发送槽双语义(对齐桌面 ChatInput 的主槽判定,voice busy = listening|submitting|refining):
   // 任务执行中且发送不可用、又没有语音在进行时,停止任务顶替发送位;语音一旦开始,
@@ -13089,9 +13096,7 @@ function SessionComposerInput({
                         onChangeDocument={applyRichComposerChange}
                         onFocus={() => setComposerFocused(true)}
                         onHeightChange={handleComposerRichInputHeight}
-                        onPasteImages={onPasteImages}
-                        onPasteImagesLoading={beginPastePlaceholders}
-                        onPasteImagesLoadFailed={failPastePlaceholders}
+                        {...composerImagePasteHandlers}
                         placeholder={voiceIsListening ? '' : composerLayout.input.placeholder}
                         resolveSessionLinkLabel={resolvePastedSessionLinkLabel}
                         testID="session.composerRichInput"
@@ -13123,9 +13128,7 @@ function SessionComposerInput({
                       setComposerFocused(true);
                       handleComposerInputPressIn();
                     }}
-                    onPasteImages={onPasteImages}
-                    onPasteImagesLoading={beginPastePlaceholders}
-                    onPasteImagesLoadFailed={failPastePlaceholders}
+                    {...composerImagePasteHandlers}
                     onPressIn={handleComposerInputPressIn}
                     placeholder={voiceIsListening ? '' : composerLayout.input.placeholder}
                     placeholderTextColor={colors.textPlaceholder}
