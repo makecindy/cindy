@@ -19697,5 +19697,23 @@
     "rendered": "Dokument anzeigen",
     "wrap": "Zeilenumbruch",
     "lineNumbers": "Zeilennummern"
+  },
+  "subscriptionAccounts": {
+    "title": "Abonnementkonten",
+    "note": "Das erste Konto verwendet den Standardordner der CLI. Weitere Konten melden sich separat an. Neue Aufgaben werden verteilt; bestehende Aufgaben behalten ihr Konto.",
+    "strategy": "Lastverteilung",
+    "add": "Konto hinzufügen",
+    "default": "Standardordner",
+    "ready": "Verbunden",
+    "signedOut": "Anmeldung erforderlich",
+    "unavailable": "Status nicht verfügbar",
+    "limited": "Kontingent ausgeschöpft",
+    "remove": "Konto entfernen",
+    "removeTitle": "{{name}} entfernen?",
+    "removeDescription": "Cindy weist diesem Konto keine Aufgaben mehr zu. Die CLI-Anmeldung und der Gesprächsverlauf bleiben auf diesem Computer erhalten.",
+    "failed": "Das Konto konnte nicht gelesen oder aktualisiert werden. Prüfe die CLI-Anmeldung und die Netzwerkverbindung und versuche es erneut.",
+    "used": "{{percent}}% verbraucht",
+    "directory": "Kontoordner",
+    "login": "Anmelden"
   }
 }
