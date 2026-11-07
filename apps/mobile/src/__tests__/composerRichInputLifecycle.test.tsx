@@ -7,7 +7,7 @@ import ts from 'typescript';
 import { afterEach, expect, it, vi } from 'vitest';
 import { Platform } from 'react-native';
 import { ComposerRichInput, type ComposerRichInputHandle, type ComposerRichInputProps } from '@/session/ComposerRichInput';
-import { composerDocumentProjectedText, composerDocumentHasContent, normalizeComposerDocument, textComposerDocument, type ComposerDocument } from '@/session/composerDocument';
+import { composerDocumentProjectedText, composerDocumentQuotes, composerDocumentsEqual, composerDocumentHasContent, normalizeComposerDocument, textComposerDocument, type ComposerDocument } from '@/session/composerDocument';
 import { createComposerDraftSource } from '@/session/composerDraftSource';
 
 // Execute the page's real cancellation/persistence callbacks with the mounted
@@ -15,9 +15,10 @@ import { createComposerDraftSource } from '@/session/composerDraftSource';
 const pageSource = ts.createSourceFile('session.tsx', readFileSync('app/sessions/[sessionId].tsx', 'utf8'), ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX);
 const pageCallbacks = new Map<string, string>();
 function collectPageCallbacks(node: ts.Node) {
-  if (ts.isVariableDeclaration(node) && ['composerImagePasteHandlers', 'exitQueueEdit', 'cancelQueueEdit', 'finishQueueEditSave', 'applyComposerDocument', 'applyRichComposerChange'].includes(node.name.getText(pageSource))
-    && node.initializer && ts.isCallExpression(node.initializer)) {
-    pageCallbacks.set(node.name.getText(pageSource), ts.transpileModule(`(${node.initializer.arguments[0].getText(pageSource)})`, {
+  if (ts.isVariableDeclaration(node) && ['restoreDraftAfterFailure', 'composerImagePasteHandlers', 'exitQueueEdit', 'cancelQueueEdit', 'finishQueueEditSave', 'applyComposerDocument', 'applyRichComposerChange'].includes(node.name.getText(pageSource))
+    && node.initializer && (ts.isCallExpression(node.initializer) || ts.isArrowFunction(node.initializer))) {
+    const callback = ts.isCallExpression(node.initializer) ? node.initializer.arguments[0] : node.initializer;
+    pageCallbacks.set(node.name.getText(pageSource), ts.transpileModule(`(${callback.getText(pageSource)})`, {
       compilerOptions: { target: ts.ScriptTarget.ES2022 },
     }).outputText);
   }
@@ -574,4 +575,56 @@ it.each([true, false])('keeps the image batch acceptance from its start across a
     expect(bridge.deleteImage).toHaveBeenCalled();
   }
   expect(onPasteImagesLoadFailed).not.toHaveBeenCalled();
+});
+
+// PR #9242 r4500630852, unit: queue-save rejection after a subsequent edit must
+// recover the captured edit exactly once, including quote atoms, without taking
+// over a cancelled edit. Previous coverage only exercised successful queue saves.
+it.each(['empty', 'follow-up', 'not-cleared', 'cancelled'] as const)('preserves queue-save failure drafts without duplicate recovery (%s)', (scenario) => {
+  const submitted: ComposerDocument = { version: 1, nodes: [
+    { type: 'text', text: 'submitted change' }, { type: 'quote', quote: { text: 'submitted quote' } },
+  ] };
+  const later: ComposerDocument = scenario === 'follow-up'
+    ? { version: 1, nodes: [{ type: 'text', text: 'later text' }, { type: 'quote', quote: { text: 'later quote' } }] }
+    : textComposerDocument(scenario === 'empty' ? '' : 'current draft');
+  const { ref, page, send, renderDocument, onChangeDocument } = mount();
+  send({ type: 'ready' });
+  renderDocument(later);
+  const oldId = page.id;
+  const source = createComposerDraftSource(later);
+  const composerDocumentRef = { current: later };
+  const saveComposerDocumentDraft = vi.fn();
+  const applyComposerDocument = pageCallback('applyComposerDocument', {
+    composerDocumentRef, draftRef: { current: '' }, pendingSkillSelectionRef: { current: null },
+    composerDocumentProjectedText, composerDraftSource: source, sessionId: 'task',
+    voiceDictionaryLearningTrackerRef: { current: null }, saveComposerDocumentDraft, saveComposerDraft: vi.fn(),
+  });
+  const editing = { clientId: 'queue-1' };
+  const restore = pageCallback('restoreDraftAfterFailure', {
+    independent: false, documentBeforeSend: submitted, documentAfterOptimisticClear: textComposerDocument(''),
+    queueEditAtSendStart: editing,
+    queueEditingRef: { current: scenario === 'cancelled' ? null : editing },
+    directDraftCleared: scenario !== 'not-cleared', queueEditDraftRestored: false,
+    composerDocumentRef, composerInputRef: ref, composerDocumentsEqual, composerDocumentHasContent,
+    composerDocumentProjectedText, normalizeComposerDocument, applyComposerDocument,
+  });
+  act(() => { restore(); restore(); }); // update rejection and outer catch can both restore.
+  const restored = source.getSnapshot().document;
+  expect(composerDocumentRef.current).toEqual(restored);
+  if (scenario === 'empty' || scenario === 'follow-up') {
+    expect(composerDocumentProjectedText(restored)).toBe(scenario === 'empty' ? 'submitted change' : 'submitted change\n\nlater text');
+    expect(composerDocumentQuotes(restored).map((quote) => quote.text)).toEqual(scenario === 'empty' ? ['submitted quote'] : ['submitted quote', 'later quote']);
+  } else {
+    expect(restored).toEqual(later);
+  }
+  if (scenario === 'cancelled') {
+    expect(saveComposerDocumentDraft).not.toHaveBeenCalled();
+  } else {
+    expect(saveComposerDocumentDraft).toHaveBeenCalledExactlyOnceWith('task', restored);
+    expect(page.document).toEqual(restored);
+    if (scenario !== 'not-cleared') {
+      send({ type: 'change', documentId: oldId, document: later });
+      expect(onChangeDocument).not.toHaveBeenCalled();
+    }
+  }
 });

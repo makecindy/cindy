@@ -6913,8 +6913,34 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
       pastedTextRanges: pastedTextRangesAtSend,
       slashCommandRanges: slashCommandRangesAtSend ?? [],
     });
+    let directDraftCleared = false;
+    let queueEditDraftRestored = false;
     const restoreDraftAfterFailure = () => {
       if (independent) return;
+      if (queueEditAtSendStart) {
+        // 同一失败可能经过内外两层 catch。只恢复一次，且不能接管已取消/切换的编辑。
+        if (queueEditDraftRestored
+          || queueEditingRef.current !== queueEditAtSendStart) return;
+        queueEditDraftRestored = true;
+        let restoredDocument = composerDocumentRef.current;
+        if (directDraftCleared) {
+          restoredDocument = normalizeComposerDocument({
+            version: 1,
+            nodes: [
+              ...documentBeforeSend.nodes,
+              ...(composerDocumentHasContent(documentBeforeSend) && composerDocumentHasContent(restoredDocument)
+                ? [{ type: 'text' as const, text: '\n\n' }] : []),
+              ...restoredDocument.nodes,
+            ],
+          });
+          composerInputRef.current?.applyDocumentAndSetSelection(
+            restoredDocument, composerDocumentProjectedText(restoredDocument).length,
+          );
+        }
+        // 未清空时保留完整新编辑；已清空时合并提交快照与后续输入。两者都持久保存。
+        applyComposerDocument(restoredDocument);
+        return;
+      }
       // 走持久化写回(setComposerDraft 而非 restoreComposerDraft):乐观清空那拍已把
       // 草稿库删除并打了 cleared 标,只回内存的话 remount 后草稿读到 null、原文丢失
       // (codex review R16)。restoreComposerDraft 的 persist:false 语义只适用于
@@ -6956,6 +6982,7 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
     if (!independent && text && !useDurableOutbox
       && composerDocumentsEqual(composerDocumentRef.current, documentBeforeSend)) {
       applyComposerDocument(documentAfterOptimisticClear);
+      directDraftCleared = true;
     }
     // A pasted message link is committed to the editor synchronously, while
     // its readable body is fetched from the source device asynchronously.
