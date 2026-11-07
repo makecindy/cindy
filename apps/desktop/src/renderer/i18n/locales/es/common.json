@@ -1494,6 +1494,13 @@
     }
   },
   "menubar": {
+    "shared": {
+      "label": "Compartido",
+      "note": "Esta asignación es compartida por la cuenta, no reservada para usted.",
+      "highestWeekly": "Compartido · mayor saldo semanal",
+      "highestWeeklyNote": "Mayor cuota semanal restante entre las cuentas consultables. Es compartida por la cuenta, no una suma ni una cuota personal.",
+      "from": "Compartido por {{name}}"
+    },
     "balance": {
       "name": "balanza Cindy",
       "quotaName": "Cuota Cindy",
@@ -19886,6 +19893,16 @@
     "lineNumbers": "Números de línea"
   },
   "subscriptionAccounts": {
+    "signIn": {
+      "checking": "Comprobando la cuenta local…",
+      "detected": "Se encontró una cuenta conectada",
+      "useAccount": "Usar esta cuenta",
+      "anotherAccount": "Iniciar sesión con otra cuenta",
+      "keepExisting": "La cuenta nueva se añade a este proveedor. Las sesiones existentes se conservan.",
+      "checkFailed": "No se pudo comprobar la cuenta local. Inténtalo de nuevo.",
+      "retry": "Reintentar",
+      "useCodex": "Iniciar sesión con Codex"
+    },
     "title": "Cuentas de suscripción",
     "note": "La primera cuenta usa la carpeta predeterminada de la CLI. Las cuentas adicionales inician sesión por separado. Las tareas nuevas se distribuyen; las existentes conservan su cuenta.",
     "strategy": "Equilibrio de carga",

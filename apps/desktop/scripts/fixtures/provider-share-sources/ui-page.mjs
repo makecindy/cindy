@@ -19,6 +19,8 @@ export default {
     'src/renderer/features/provider-share/providerShareStore': { partial: 'export const useProviderShareReceived = () => window.providerSourcesFixture.received;' },
   },
   cases: {
+    'subscription-claude-choice': { about: 'An existing Claude Code login is shown before choosing it or another account' },
+    'subscription-codex-choice': { about: 'An existing Codex login is shown before choosing it or another account' },
     'subscription-login': { about: 'OpenAI browser login adds an account inside the existing provider' },
     'subscription-cancel': { about: 'Closing OpenAI login cancels its owned CLI operation without creating another provider' },
     'subscription-pool': { about: 'The real local provider detail shows both subscription accounts under one provider header' },
@@ -32,12 +34,23 @@ export default {
     await page.getByTestId('provider-share-received').waitFor();
   },
   async check(page, ui) {
+    if (ui.case === 'subscription-claude-choice' || ui.case === 'subscription-codex-choice') {
+      await page.getByRole('button', { name: await ui.t('settings.providers.addProvider'), exact: true }).click();
+      const dialog = page.getByRole('dialog');
+      const brand = ui.case === 'subscription-claude-choice' ? /^Anthropic/ : /^OpenAI/;
+      await dialog.getByRole('button', { name: brand }).first().click();
+      await dialog.getByText('alex@example.com', { exact: true }).waitFor();
+      await dialog.getByRole('button', { name: await ui.t('subscriptionAccounts.signIn.useAccount'), exact: true }).waitFor();
+      await dialog.getByRole('button', { name: await ui.t('subscriptionAccounts.signIn.anotherAccount'), exact: true }).waitFor();
+      assert.equal(await page.evaluate(() => window.providerSourcesFixture.subscriptionControl.commands.some(c => c.action === 'connect')), false);
+      return;
+    }
     if (ui.case === 'subscription-login' || ui.case === 'subscription-cancel') {
       await page.getByRole('button', { name: await ui.t('settings.providers.addProvider'), exact: true }).click();
       const dialog = page.getByRole('dialog');
       await dialog.getByRole('button', { name: /^OpenAI/ }).first().click();
-      await dialog.getByRole('button', { name: await ui.t('subscriptionAccounts.add'), exact: true }).click();
-      await page.waitForFunction(() => window.providerSourcesFixture.subscriptionControl.commands.some(c => c.action === 'add'));
+      await dialog.getByRole('button', { name: await ui.t('subscriptionAccounts.signIn.anotherAccount'), exact: true }).click();
+      await page.waitForFunction(() => window.providerSourcesFixture.subscriptionControl.commands.some(c => c.action === 'connect' && c.target === 'new'));
       if (ui.case === 'subscription-cancel') {
         await dialog.getByRole('button', { name: await ui.t('settings.providers.wizard.cancel'), exact: true }).last().click();
         await page.waitForFunction(() => window.providerSourcesFixture.subscriptionControl.commands.some(c => c.action === 'cancel'));

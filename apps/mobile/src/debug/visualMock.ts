@@ -1,3 +1,4 @@
+import { findRemoteHistoryView } from '@/session/remoteHistoryViews';
 import { attachmentPreviewFixture } from "./attachmentPreviewFixture";
 import { githubPrVisualFixture } from './githubPrVisualFixture';
 import { groupMaskVisualFixture } from './groupMaskVisualFixture';
@@ -57,6 +58,33 @@ interface VisualRealDataSnapshot {
   projectionsBySession?: Record<string, InputProjection>;
 }
 
+// Explicit DEV mock replay: empty history first, then a delayed first row.
+// Changing the suffix varies delivery around the native transition/reveal window.
+const entryReplayCounts = new Map<string, number>();
+function entryReplayMessages(sessionId: string): RemoteMessage[] {
+  if (!entryReplayCounts.has(sessionId)) {
+    entryReplayCounts.set(sessionId, 0);
+    const index = Number(sessionId.split('-').at(-1)) || 0;
+    const delay = index >= 60 ? 10_000 : [0, 16, 100, 299, 301, 1200][index % 6];
+    for (const [count, at] of [[1, delay], [2, delay + 400], [3, delay + 800]] as const) {
+      setTimeout(() => {
+        entryReplayCounts.set(sessionId, count);
+        findRemoteHistoryView(VISUAL_MOCK_DEVICE_ID, sessionId)?.invalidate();
+      }, at);
+    }
+    if (index >= 20) setTimeout(() => {
+      // Explicit test-only CPU stall overlaps initial reveal. Never runs for regular mock tasks.
+      const until = performance.now() + 900;
+      while (performance.now() < until) { /* simulate a busy JS thread */ }
+    }, delay + 550);
+    return [];
+  }
+  return [
+    message(sessionId, 'replay-user', 'user', 'First message after an empty task', -3000),
+    message(sessionId, 'replay-progress', 'assistant', 'The task is running.', -2000),
+    message(sessionId, 'replay-result', 'assistant', `Completed replay ${sessionId.split('-').at(-1)}. This result must be visible.`, -1000),
+  ].slice(0, entryReplayCounts.get(sessionId));
+}
 const NOW = Date.parse('2026-07-18T08:00:00.000Z');
 const ISO_NOW = new Date(NOW).toISOString();
 // Built on first use: this module is imported by production code, and only the dev mock reads it.
@@ -608,6 +636,7 @@ function catalogSession(row: UiMockSessionRow): RemoteSession {
 }
 
 function visualMockSession(id: string): RemoteSession {
+  if (id.startsWith('visual-entry-replay-')) return { ...visualMockSession('ui-mock-rich-answer'), id, title: id, _count: { messages: 0 } };
   if (id === 'visual-teammate-b2b') return { ...visualMockSession('ui-mock-rich-answer'), id, source: 'bot', title: 'Cindy · 内部通讯',
     companion: { id: 'visual-bot-b2b', role: 'canonical' } };
   if (id === 'visual-teammate-process') return { ...visualMockSession('ui-mock-rich-answer'), id, source: 'bot', title: 'Cindy', companion: { id: 'cindy-default', role: 'canonical' } };
@@ -640,6 +669,7 @@ function sessionFromShared(
 }
 
 function visualMockMessages(sessionId: string): RemoteMessage[] {
+  if (sessionId.startsWith('visual-entry-replay-')) return entryReplayMessages(sessionId);
   if (sessionId === 'visual-teammate-b2b') {
     const trace = (direction: 'received' | 'sent', sequence: number) => ({ botDirectMessage: {
       v: 1, threadId: 'visual-b2b-thread', viewerBotId: 'visual-bot-b2b', peerBotId: 'visual-bot-lizi',
