@@ -16,13 +16,15 @@ import { describe, expect, it, vi } from 'vitest';
 import type { Effort } from '@cindy/model-providers';
 
 const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'model-catalog-thinking-test-'));
-const owner = { current: 'owner-a' };
+const owner = { current: 'owner-a', generation: 1 };
 
 vi.mock('electron', () => ({ app: { getPath: () => '/tmp/never-used-here' } }));
 vi.mock('../logger-adapter.js', () => ({
   desktopMakerLogger: { child: () => ({ info: () => {}, warn: () => {}, error: () => {} }) },
 }));
 vi.mock('../../appSessionState.js', () => ({
+  // 上游的 store 按会话代次分文件（账号切换换文件），测试里给一个固定代次。
+  getActiveAppSession: () => ({ generation: owner.generation }),
   ownerScopedUserDataPath: (name: string) => path.join(tmpDir, owner.current, name),
 }));
 
