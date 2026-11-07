@@ -33,9 +33,11 @@ vi.mock('../providerShareQuota.js', () => ({ readProviderShareQuota: vi.fn(), re
 const visibility = vi.hoisted(() => ({ read: vi.fn(), set: vi.fn() }));
 const modelAccess = vi.hoisted(() => ({ read: vi.fn(), set: vi.fn(), allows: vi.fn() }));
 const fastPolicy = vi.hoisted(() => ({ allows: vi.fn(), set: vi.fn(), changed: vi.fn(), publish: vi.fn() }));
+const creditsPolicy = vi.hoisted(() => ({ autoUses: vi.fn(), set: vi.fn() }));
 const localBroadcast = vi.hoisted(() => vi.fn());
 vi.mock('../index.js', () => ({ broadcast: localBroadcast }));
 vi.mock('../../maker-host/provider-fast-policy-store.js', () => ({ providerFastPolicy: fastPolicy }));
+vi.mock('../../maker-host/provider-credits-policy-store.js', () => ({ providerCreditsPolicy: creditsPolicy }));
 vi.mock('../../maker-host/subscription-fast-policy.js', () => ({ notifySubscriptionFastPolicyChanged: fastPolicy.changed }));
 vi.mock('../remoteModelAccess.js', () => ({ remoteModelAccess: modelAccess }));
 vi.mock('../providerShareVisibility.js', () => ({ providerShareVisibility: visibility }));
@@ -897,6 +899,39 @@ describe('share visibility management and guest query', () => {
   });
 });
 
+describe('subscription credits management through the owner command', () => {
+  const command = { action: 'set-credits-policy', providerId: 'openai', autoUseCredits: false } as const;
+  const subscription = { id: 'openai', auth: { method: 'oauth', native: 'codex' } };
+
+  it('persists an opt-out and publishes the provider catalog', async () => {
+    listProviders.mockResolvedValue([subscription]);
+    creditsPolicy.autoUses.mockReturnValue(false);
+    await expect(executeProviderShareManagementCommand(command)).resolves.toEqual({
+      supported: true,
+      autoUseCredits: false,
+    });
+    expect(creditsPolicy.set).toHaveBeenCalledWith('openai', false, expect.any(Function));
+    expect(localBroadcast).toHaveBeenCalledWith('maker:provider:changed', {});
+  });
+
+  it('rejects a custom API named openai and requires a real boolean', async () => {
+    listProviders.mockResolvedValue([{ ...subscription, auth: { method: 'apiKey' } }]);
+    await expect(executeProviderShareManagementCommand(command)).rejects.toThrow('INVALID_PARAMS');
+    expect(creditsPolicy.set).not.toHaveBeenCalled();
+    expect(() => parseProviderShareCommand({ ...command, autoUseCredits: 'false' })).toThrow(
+      'INVALID_PARAMS',
+    );
+  });
+
+  it('does not persist after the owner changes during catalog lookup', async () => {
+    listProviders.mockImplementation(async () => {
+      state.owner = 'owner-b';
+      return [subscription];
+    });
+    await expect(executeProviderShareManagementCommand(command)).rejects.toThrow('PRECONDITION_FAILED');
+    expect(creditsPolicy.set).not.toHaveBeenCalled();
+  });
+});
 describe('subscription Fast management through the owner command', () => {
   const command = { action: 'set-fast-policy', providerId: 'openai', allowFast: false } as const;
   const subscription = { id: 'openai', auth: { method: 'oauth', native: 'codex' } };

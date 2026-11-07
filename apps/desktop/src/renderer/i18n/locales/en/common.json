@@ -19619,6 +19619,11 @@
     "saveImageFailed": "Could not save the image. Try saving it again.",
     "previewFailed": "Could not display the image preview. You can still copy the link."
   },
+  "subscriptionCreditsPolicy": {
+    "label": "Use credits after limit",
+    "providerHint": "When on, Cindy keeps using available credits after the weekly limit is reached. When off, it stops instead of spending credits automatically.",
+    "saveFailed": "Couldn't save. Try again."
+  },
   "subscriptionFastPolicy": {
     "label": "Allow Fast",
     "providerHint": "When off, this subscription account uses standard speed for your own and shared tasks, including Ultrafast.",

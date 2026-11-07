@@ -19547,6 +19547,11 @@
     "saveImageFailed": "画像を保存できません。もう一度保存してください。",
     "previewFailed": "画像のプレビューを表示できません。リンクはコピーできます。"
   },
+  "subscriptionCreditsPolicy": {
+    "label": "上限到達後に credits を自動使用",
+    "providerHint": "オンにすると、週間上限に達した後も利用可能な credits を使って続行します。オフにすると自動消費しません。",
+    "saveFailed": "保存に失敗しました。もう一度お試しください。"
+  },
   "subscriptionFastPolicy": {
     "label": "Fast を許可",
     "providerHint": "オフにすると、このサブスクリプションの自分用・共有タスクは通常速度になります。Ultrafast も対象です。",

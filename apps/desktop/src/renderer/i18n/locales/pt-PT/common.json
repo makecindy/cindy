@@ -19806,6 +19806,11 @@
     "saveImageFailed": "Não foi possível guardar a imagem. Tente guardá-la novamente.",
     "previewFailed": "Não foi possível apresentar a pré-visualização da imagem. Pode continuar a copiar a ligação."
   },
+  "subscriptionCreditsPolicy": {
+    "label": "Usar credits após o limite",
+    "providerHint": "Quando ativado, o Cindy continua a usar os credits disponíveis após o limite semanal. Quando desativado, não consome credits automaticamente.",
+    "saveFailed": "Não foi possível guardar. Tente novamente."
+  },
   "subscriptionFastPolicy": {
     "label": "Permitir Fast",
     "providerHint": "Quando desativado, esta conta de subscrição usa a velocidade padrão nas suas tarefas e nas partilhadas, incluindo Ultrafast.",

@@ -2,8 +2,9 @@ import { isProviderShareMemberBudget } from '../../shared/providerShareBudget.js
 import { CONTROLLED_MODEL_CATALOG_CHANGED } from '../../shared/controlledModelCatalog.js';
 import { readMemberBudgetStatus, supportsMemberBudget } from './providerShareBudgetRuntime.js';
 import { isRemoteAgentLimitsPatch } from '../../shared/remoteAgentLimits.js';
-import { supportsSubscriptionFastPolicy, unifiedModelKeyId } from '@cindy/model-providers';
+import { supportsSubscriptionCreditsPolicy, supportsSubscriptionFastPolicy, unifiedModelKeyId } from '@cindy/model-providers';
 import { providerFastPolicy } from '../maker-host/provider-fast-policy-store.js';
+import { providerCreditsPolicy } from '../maker-host/provider-credits-policy-store.js';
 import { notifySubscriptionFastPolicyChanged } from '../maker-host/subscription-fast-policy.js';
 import { notifyProviderShareCatalogChanged } from './dispatch.js';
 import { DEVICE_LINK_PUSH } from '../../shared/deviceLinkIpc.js';
@@ -491,6 +492,19 @@ export function parseProviderShareCommand(raw: unknown): ProviderShareCommand {
       if (typeof value.allowFast !== 'boolean') throwIpcError('INVALID_PARAMS', 'allowFast must be a boolean');
       return { action: value.action, providerId: value.providerId, allowFast: value.allowFast };
     }
+    case 'get-credits-policy':
+    case 'set-credits-policy': {
+      if (!isProviderGroupProviderId(value.providerId)) throwIpcError('INVALID_PARAMS', 'Invalid providerId');
+      if (value.action === 'get-credits-policy') return { action: value.action, providerId: value.providerId };
+      if (typeof value.autoUseCredits !== 'boolean') {
+        throwIpcError('INVALID_PARAMS', 'autoUseCredits must be a boolean');
+      }
+      return {
+        action: value.action,
+        providerId: value.providerId,
+        autoUseCredits: value.autoUseCredits,
+      };
+    }
     case 'get-model-access':
     case 'set-model-access': {
       if (!isProviderGroupProviderId(value.providerId)) throwIpcError('INVALID_PARAMS', 'Invalid providerId');
@@ -942,6 +956,34 @@ async function execute(command: ProviderShareCommand, assertCurrent: () => void 
         assertScope();
       }
       return { supported, allowFast: supported ? providerFastPolicy.allows(command.providerId) : true };
+    }
+    case 'get-credits-policy':
+    case 'set-credits-policy': {
+      const assertOwner = captureProviderManagementScope();
+      const assertScope = () => { assertCurrent(); assertOwner(); };
+      const providers = await getDesktopProviderService().listProviders({ allowSideEffects: false });
+      assertScope();
+      const provider = providers.find(entry => entry.id === command.providerId);
+      const supported = supportsSubscriptionCreditsPolicy(provider);
+      if (command.action === 'set-credits-policy') {
+        if (!supported) {
+          throwIpcError('INVALID_PARAMS', 'Credits policy is available only for OpenAI subscription accounts');
+        }
+        await providerCreditsPolicy.set(
+          command.providerId,
+          command.autoUseCredits,
+          assertScope,
+        );
+        emit(PROVIDER_SHARE_IPC.OWNED_CHANGED, null);
+        broadcastLocal(MAKER_PUSH.PROVIDER_CHANGED, {});
+        tapWindowBroadcast(MAKER_PUSH.PROVIDER_CHANGED, {});
+        notifyProviderShareCatalogChanged(command.providerId);
+        assertScope();
+      }
+      return {
+        supported,
+        autoUseCredits: supported ? providerCreditsPolicy.autoUses(command.providerId) : true,
+      };
     }
     case 'get-model-access':
     case 'set-model-access': {

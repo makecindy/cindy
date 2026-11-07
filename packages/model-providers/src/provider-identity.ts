@@ -30,6 +30,13 @@ export function supportsSubscriptionFastPolicy(provider: Pick<Provider, 'id' | '
     && (provider.id === 'anthropic' || provider.auth.native === 'claude');
 }
 
+/** ChatGPT subscriptions can spend available credits after their included usage is exhausted. */
+export function supportsSubscriptionCreditsPolicy(
+  provider: Pick<Provider, 'id' | 'auth'> | null | undefined,
+): boolean {
+  return isOpenAiSubscriptionProvider(provider);
+}
+
 /** Public catalog identity; never use this key to look up credentials or preferences. */
 export function providerCatalogId(provider: Pick<Provider, 'id' | 'auth'>): string {
   return provider.auth.native === 'claude' ? 'anthropic'

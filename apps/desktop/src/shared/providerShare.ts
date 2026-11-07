@@ -215,6 +215,8 @@ export interface ProviderShareSettledEvent {
 export type ProviderShareCommand =
   | { action: 'get-fast-policy'; providerId: string }
   | { action: 'set-fast-policy'; providerId: string; allowFast: boolean }
+  | { action: 'get-credits-policy'; providerId: string }
+  | { action: 'set-credits-policy'; providerId: string; autoUseCredits: boolean }
   | { action: 'get-model-access'; providerId: string; memberId?: string }
   | { action: 'set-model-access'; providerId: string; memberId?: string; models: RemoteModelSelection; memberBudget?: ProviderShareMemberBudget | null }
   | { action: 'get-visibility'; providerId: string }
@@ -256,6 +258,8 @@ export interface ProviderShareCredentialConsentView {
 export interface ProviderShareCommandResult {
   'get-fast-policy': { supported: boolean; allowFast: boolean };
   'set-fast-policy': { supported: boolean; allowFast: boolean };
+  'get-credits-policy': { supported: boolean; autoUseCredits: boolean };
+  'set-credits-policy': { supported: boolean; autoUseCredits: boolean };
   'get-model-access': RemoteModelAccessView;
   'set-model-access': RemoteModelAccessView;
   'get-visibility': ProviderShareVisibility;

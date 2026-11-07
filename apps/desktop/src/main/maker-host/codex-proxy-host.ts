@@ -4,6 +4,7 @@ import { rewriteFastModel } from './model-fast-mode.js';
 import { createAttachmentRecovery } from './oversized-attachment-recovery.js';
 import { clearCodexTextOnlyPolicies, codexTextOnlyRequestGuard, codexTextOnlyWebSocketTransforms, isCodexTextOnly } from './codex-text-only-policy.js';
 import { restrictSubscriptionRequest, withSubscriptionFastRequestPolicy } from './subscription-fast-request-policy.js';
+import { subscriptionCreditsRequestBlocked } from './subscription-credits-policy.js';
 import {
   resolveConversationSessionHeaders,
   withChatBridgeUserAgent,
@@ -3472,6 +3473,38 @@ async function createCodexProxyHandle(
     : modelRoute;
   const frozenReasoning = createCustomProviderReasoningTransform(frozenCustomProviderRoutes);
   const routeWithUsageEncoding: RoutingTransform = (body, ctx) => {
+    const requestModel = isPlainObject(body) && typeof body.model === 'string' ? body.model : '';
+    const requestContext = providerContextForRequest(ctx.headers, requestModel);
+    const requestProviderId =
+      requestContext.providerId ??
+      guestProviderId ??
+      ((frozenAuthInjection ?? getCodexProxyAuthInjection()) === 'oauth-bearer' ? 'openai' : null);
+    if (
+      ctx.method === 'POST' &&
+      ctx.url.split('?', 1)[0]?.includes('/responses') &&
+      requestProviderId &&
+      isOpenAiSubscriptionProviderId(requestProviderId) &&
+      subscriptionCreditsRequestBlocked(requestProviderId)
+    ) {
+      return {
+        localHandler: async ({ res }) => {
+          res.writeHead(429, {
+            'content-type': 'application/json; charset=utf-8',
+            'cache-control': 'no-store',
+          });
+          res.end(
+            JSON.stringify({
+              error: {
+                type: 'usage_limit_reached',
+                code: 'credits_auto_use_disabled',
+                message:
+                  'ChatGPT usage limit reached. Automatic credit use is disabled in Cindy. Enable "Use credits after limit" in Settings -> Model providers to continue.',
+              },
+            }),
+          );
+        },
+      };
+    }
     const uncompressed = (decision: RoutingDecision | null): RoutingDecision | null => {
       const model = isPlainObject(body) && typeof body.model === 'string' ? body.model : '';
       const context = providerContextForRequest(ctx.headers, model);
@@ -3546,13 +3579,44 @@ async function createCodexProxyHandle(
     },
     requestGuard: ctx => codexTextOnlyRequestGuard(isCodexTextOnly(selectedThreadIdFromHeaders(ctx.headers)), ctx, isChatGptUpstreamBase),
     // Accepted WebSockets route exclusively to CODEX_OAUTH_UPSTREAM (see resolver below).
-    webSocketTransforms: ctx => codexTextOnlyWebSocketTransforms(() => isCodexTextOnly(selectedThreadIdFromHeaders(ctx.headers)), true, (message, signal) => {
-      const body: unknown = JSON.parse(message.toString('utf8'));
-      const context = providerContextForRequest(ctx.headers, isPlainObject(body) && typeof body.model === 'string' ? body.model : '');
-      const next = restrictSubscriptionRequest(body, context.sessionId ?? guestSessionId, context.providerId ?? guestProviderId ?? 'openai');
-      const request = next ? Buffer.from(JSON.stringify(next)) : message;
-      return request.length > CODEX_WEBSOCKET_MESSAGE_LIMIT_BYTES ? fitWebSocketRequest(request, ctx, signal) : request;
-    }),
+    webSocketTransforms: ctx => {
+      const sessionId = sessionIdFromHeaders(ctx.headers);
+      const upgradeProviderId =
+        (sessionId ? getSessionProvider(sessionId) : null) ??
+        guestProviderId ??
+        ((frozenAuthInjection ?? getCodexProxyAuthInjection()) === 'oauth-bearer' ? 'openai' : null);
+      if (
+        upgradeProviderId &&
+        isOpenAiSubscriptionProviderId(upgradeProviderId) &&
+        subscriptionCreditsRequestBlocked(upgradeProviderId)
+      ) {
+        throw new Error('credits_auto_use_disabled');
+      }
+      return codexTextOnlyWebSocketTransforms(
+        () => isCodexTextOnly(selectedThreadIdFromHeaders(ctx.headers)),
+        true,
+        (message, signal) => {
+          const body: unknown = JSON.parse(message.toString('utf8'));
+          const context = providerContextForRequest(ctx.headers, isPlainObject(body) && typeof body.model === 'string' ? body.model : '');
+          const providerId = context.providerId ?? guestProviderId ?? 'openai';
+          if (
+            isOpenAiSubscriptionProviderId(providerId) &&
+            subscriptionCreditsRequestBlocked(providerId)
+          ) {
+            throw new Error('credits_auto_use_disabled');
+          }
+          const next = restrictSubscriptionRequest(
+            body,
+            context.sessionId ?? guestSessionId,
+            providerId,
+          );
+          const request = next ? Buffer.from(JSON.stringify(next)) : message;
+          return request.length > CODEX_WEBSOCKET_MESSAGE_LIMIT_BYTES
+            ? fitWebSocketRequest(request, ctx, signal)
+            : request;
+        },
+      );
+    },
     transformResponse: (ctx) => {
       const response = {
         contentType: ctx.responseHeaders['content-type'] ?? '',

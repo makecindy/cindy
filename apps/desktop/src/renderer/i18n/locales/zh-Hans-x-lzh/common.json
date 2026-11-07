@@ -19256,6 +19256,11 @@
     "saveImageFailed": "无法存图，可再存之",
     "previewFailed": "无法示图之先览，仍可录链接"
   },
+  "subscriptionCreditsPolicy": {
+    "label": "額度用盡後自動使用 credits",
+    "providerHint": "開啟後，週額度用盡時會繼續使用可用 credits，避免任務中斷；關閉後不會自動消耗 credits。",
+    "saveFailed": "儲存失敗，請重試。"
+  },
   "subscriptionFastPolicy": {
     "label": "许用 Fast",
     "providerHint": "阖之则此订阅名籍用普通模式，自用与分享皆然。Ultrafast 亦同。",

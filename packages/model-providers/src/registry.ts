@@ -97,6 +97,8 @@ export type ModelDiscoveryFailureState = Partial<
 export interface ProviderView extends Provider {
   /** Host-owned subscription speed policy; absence means an unrelated provider or older host. */
   subscriptionFastPolicy?: { allowFast: boolean; groupAllowsFast: boolean };
+  /** Host-owned opt-out for spending purchased credits after the included usage limit. */
+  subscriptionCreditsPolicy?: { autoUseCredits: boolean };
   /** 本机是否允许同账号另一台电脑调用该供应商；缺省等同关闭。 */
   remoteInvocationEnabled?: boolean;
   /** Exact model IDs offered to remote Agents. Absent preserves the legacy unrestricted scope. */

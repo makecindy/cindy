@@ -19547,6 +19547,11 @@
     "saveImageFailed": "無法儲存圖片，可再次儲存",
     "previewFailed": "無法顯示圖片預覽，仍可複製連結"
   },
+  "subscriptionCreditsPolicy": {
+    "label": "額度用盡後自動使用 credits",
+    "providerHint": "開啟後，週額度用盡時會繼續使用可用 credits，避免任務中斷；關閉後不會自動消耗 credits。",
+    "saveFailed": "儲存失敗，請重試。"
+  },
   "subscriptionFastPolicy": {
     "label": "允許使用 Fast",
     "providerHint": "關閉後，此訂閱帳號使用普通模式，包括自己使用和分享使用。也適用於 Ultrafast。",
