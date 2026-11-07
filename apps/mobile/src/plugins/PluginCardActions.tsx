@@ -304,7 +304,9 @@ function CardControls({
   // task's other PRs are merged and the plugin asked for it. Unmounting does not disarm: leaving the task unmounts cards,
   // which is exactly when the task page archives.
   const autoArchive = !history && !!taskArchive?.auto;
-  const armedRef = useRef(false);
+  // undefined: nothing reported yet. Every mount reports once, even `false`, so a cancellation kept from an earlier visit
+  // is forgotten when the host no longer allows auto-archive.
+  const armedRef = useRef<boolean | undefined>(undefined);
   useEffect(() => {
     if (armedRef.current === autoArchive) return;
     armedRef.current = autoArchive;

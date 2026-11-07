@@ -37,27 +37,36 @@ afterEach(() => {
   vi.clearAllMocks();
 });
 
+const patches: Array<{ session: Record<string, unknown>; patch: { status: string } }> = [];
+const session = { id: 's', status: 'active', title: 'Fix login', source: 'cc', deviceLinkDeviceId: 'mac' };
+
+/** Like the real list transaction: an archived task leaves the phone's active list. */
+const patchSession = vi.fn(async (target: Record<string, unknown>, patch: { status: string }) => {
+  patches.push({ session: target, patch });
+  h.sessions = patch.status === 'active' ? [{ ...target, status: 'active' }] : [];
+});
+const invoke = vi.fn(async (_d: string, channel: string) => {
+  if (channel === 'worktree:removal-preview') return h.preview;
+  throw new Error(`unexpected ${channel}`);
+});
+const Page = ({ id }: { id: string }) => {
+  useTaskAutoArchive({ session: { ...session, id } as never, deviceId: 'mac', invoke: invoke as never, enabled: true,
+    historyLoaded: true, messages: [], archive: () => {}, patchSession: patchSession as never });
+  return null;
+};
+const settle = () => act(async () => { await new Promise((resolve) => setTimeout(resolve, 0)); });
+
 /** Opens the task page with the merged card on screen, then leaves it. Returns the archive writes. */
 async function leaveAfterSeeing(): Promise<unknown[]> {
-  const session = { id: 's', status: 'active', title: 'Fix login', source: 'cc' };
+  patches.length = 0;
   h.sessions = [session];
-  const patchSession = vi.fn(async (_s: unknown, patch: { status: string }) => { h.sessions = [{ ...session, status: patch.status }]; });
-  const invoke = vi.fn(async (_d: string, channel: string) => {
-    if (channel === 'worktree:removal-preview') return h.preview;
-    throw new Error(`unexpected ${channel}`);
-  });
-  const Page = () => {
-    useTaskAutoArchive({ session: session as never, deviceId: 'mac', invoke: invoke as never, enabled: true,
-      historyLoaded: true, messages: [], archive: () => {}, patchSession: patchSession as never });
-    return null;
-  };
   const root = createRoot(document.createElement('div'));
-  await act(async () => root.render(createElement(Page)));
+  await act(async () => root.render(createElement(Page, { id: 's' })));
   taskAutoArchive.setArmed('s', 'card', true);
   taskAutoArchive.markSeen('s');
   await act(async () => root.unmount());
-  await act(async () => { await new Promise((resolve) => setTimeout(resolve, 0)); });
-  return patchSession.mock.calls.map(([, patch]) => patch);
+  await settle();
+  return patches.map(({ patch }) => patch);
 }
 
 describe('auto-archive when leaving the phone task page', () => {
@@ -65,9 +74,25 @@ describe('auto-archive when leaving the phone task page', () => {
   it('archives silently and offers undo once the host still allows it and nothing would be lost', async () => {
     expect(await leaveAfterSeeing()).toEqual([{ status: 'archived' }]);
     expect(h.undo).toHaveBeenCalledWith('Fix login', expect.any(Function));
-    // Undo restores the task.
+    // The archived task already left the list; undo restores it from the snapshot taken before archiving.
+    expect(h.sessions).toEqual([]);
     h.undo.mock.calls[0][1]();
-    expect(h.sessions[0].status).toBe('active');
+    expect(patches[1]).toMatchObject({ session: { id: 's' }, patch: { status: 'active' } });
+  });
+
+  // Bug (review of #9325): the task drawer switches A to B inside one mounted page; B's render ran before A's cleanup,
+  // so A was never archived. Minimal input: re-render the same page with another task id.
+  it('archives the task left by an in-place switch to another task', async () => {
+    patches.length = 0;
+    h.sessions = [session];
+    const root = createRoot(document.createElement('div'));
+    await act(async () => root.render(createElement(Page, { id: 's' })));
+    taskAutoArchive.setArmed('s', 'card', true);
+    taskAutoArchive.markSeen('s');
+    await act(async () => root.render(createElement(Page, { id: 'other' })));
+    await settle();
+    expect(patches.map(({ session: target, patch }) => [target.id, patch.status])).toEqual([['s', 'archived']]);
+    await act(async () => root.unmount());
   });
 
   it.each([

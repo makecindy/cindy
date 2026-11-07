@@ -199,6 +199,18 @@ describe("rich plugin card hints", () => {
     await card({ auto: false });
     expect(container.querySelector('[aria-label="plugins.taskArchive.now"]')).not.toBeNull();
     expect(container.textContent).not.toContain('plugins.taskArchive.pending');
+    // Bug (review of #9325): a cancellation kept from an earlier visit survived a card that mounts without auto.
+    taskAutoArchive.setArmed('s-archive', 'c', true);
+    taskAutoArchive.cancel('s-archive');
+    act(() => root.unmount());
+    const remount = createRoot(container);
+    unmount = () => { act(() => remount.unmount()); disable(); offRequest(); };
+    await act(async () => remount.render(createElement(PluginCardActions, { deviceId: 'device', sessionId: 's-archive', callId: 'c', text: '#9 Fix login',
+      data: { pluginId: 'cindy-github', revision: '1', items: [] } })));
+    expect(taskAutoArchive.getState('s-archive')).toBe('inactive');
+    await act(async () => remount.render(createElement(PluginCardActions, { deviceId: 'device', sessionId: 's-archive', callId: 'c', text: '#9 Fix login',
+      data: { pluginId: 'cindy-github', revision: '2', items: [], taskArchive: { auto: true } } })));
+    expect(container.textContent).toContain('plugins.taskArchive.pending');
   });
 
   it('draws PR checks, a live state, a primary action, a link by its host and settings as switches', async () => {

@@ -59,9 +59,18 @@ export function useTaskAutoArchive({
     });
   }, [sessionId]);
 
-  // 离开时读的是离开那个任务最后一次渲染时的信息。
-  const latest = useRef({ session, deviceId, invoke, patchSession, t });
-  latest.current = { session, deviceId, invoke, patchSession, t };
+  // 离开时读的是离开那个任务最后一次渲染时的信息。按任务保存:任务抽屉从 A 原地切到 B 时,
+  // 新一轮渲染先于 A 的清理函数,只留一份「最新」会读到 B。
+  const latest = useRef(new Map<string, LeaveSnapshot>());
+  if (session && deviceId) {
+    latest.current.delete(session.id);
+    latest.current.set(session.id, { session, deviceId, invoke, patchSession, t });
+    // 视图可能连续换很多任务:只留最近几个。
+    for (const key of latest.current.keys()) {
+      if (latest.current.size <= LEAVE_SNAPSHOTS_KEPT) break;
+      latest.current.delete(key);
+    }
+  }
   const canAutoArchive = enabled && !!deviceId && session?.status === 'active';
   useEffect(() => {
     if (!sessionId || !canAutoArchive) return;
@@ -72,10 +81,8 @@ export function useTaskAutoArchive({
       const seen = taskAutoArchive.takeSeen(sessionId);
       const cards = taskAutoArchive.armedCards(sessionId);
       disable();
-      const snapshot = latest.current;
-      if (seen && snapshot.session?.id === sessionId && snapshot.deviceId) {
-        void autoArchiveLeftTask({ ...snapshot, session: snapshot.session, deviceId: snapshot.deviceId, cards, owner });
-      }
+      const snapshot = latest.current.get(sessionId);
+      if (seen && snapshot) void autoArchiveLeftTask({ ...snapshot, cards, owner });
     };
   }, [sessionId, canAutoArchive]);
 
@@ -85,6 +92,16 @@ export function useTaskAutoArchive({
     if (sessionId && lastUserMessage !== undefined) taskAutoArchive.noteUserMessage(sessionId, lastUserMessage);
   }, [sessionId, lastUserMessage]);
 }
+
+interface LeaveSnapshot {
+  session: RemoteSession;
+  deviceId: string;
+  invoke: RemoteInvoke;
+  patchSession: PatchSession;
+  t: (key: string, options?: Record<string, unknown>) => string;
+}
+
+const LEAVE_SNAPSHOTS_KEPT = 4;
 
 const CARD_PRIMITIVES = ['plugin-card-actions', 'plugin-card-forms', 'plugin-card-rich'];
 
@@ -121,12 +138,7 @@ async function hasComposerDraft(sessionId: string): Promise<boolean> {
   return !!text?.trim() || !!document;
 }
 
-async function autoArchiveLeftTask({ session, deviceId, invoke, patchSession, t, cards, owner }: {
-  session: RemoteSession;
-  deviceId: string;
-  invoke: RemoteInvoke;
-  patchSession: PatchSession;
-  t: (key: string, options?: Record<string, unknown>) => string;
+async function autoArchiveLeftTask({ session, deviceId, invoke, patchSession, t, cards, owner }: LeaveSnapshot & {
   cards: readonly string[];
   owner: ReturnType<typeof getMobileAuthOwner>;
 }): Promise<void> {
@@ -142,17 +154,18 @@ async function autoArchiveLeftTask({ session, deviceId, invoke, patchSession, t,
   if (!bound || bound.length > 0 || !ok()) return;
   if (await hasComposerDraft(sessionId) || !ok()) return;
   if (!await worktreeConfirmedClean(invoke, deviceId, sessionId) || !ok()) return;
+  // 归档成功后任务会从手机的活跃列表里移走,所以撤销用归档前取到的任务快照,不再读列表。
+  const target = current() ?? session;
   try {
-    await patchSession(current() ?? session, { status: 'archived' });
+    await patchSession(target, { status: 'archived' });
   } catch {
     // 失败已由列表事务恢复;静默归档不弹错误。
     return;
   }
-  const archived = current();
-  if (archived?.status !== 'archived' || !isMobileAuthOwnerCurrent(owner)) return;
+  // 写入被后来的操作取代时(任务仍在活跃列表里)没有归档,不提示。
+  if (current()?.status === 'active' || !isMobileAuthOwnerCurrent(owner)) return;
   const title = projectDraftSessionTitle(session.title, t('session.menu.unnamedTitle')).trim() || t('devices.list.untitled');
   showTaskArchiveUndo(title, () => {
-    const now = current();
-    if (now?.status === 'archived' && isMobileAuthOwnerCurrent(owner)) void patchSession(now, { status: 'active' }).catch(() => {});
+    if (isMobileAuthOwnerCurrent(owner)) void patchSession({ ...target, status: 'archived' }, { status: 'active' }).catch(() => {});
   });
 }
