@@ -26,6 +26,10 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { enqueueGitRepoWrite } from '../git-snapshot/gitRepoWriteQueue';
 import { setBroadcastTapListener } from '../device-link/broadcast-tap.js';
 const attemptJournal = vi.hoisted(() => ({ read: vi.fn<() => Promise<Array<{ id: string; anchor?: string }> | null>>() }));
+const readBoundClaudeConfigDirMock = vi.hoisted(() => vi.fn<(_sdkSessionId: string) => string | undefined>());
+vi.mock('../subscription-accounts/store.js', () => ({
+  readBoundClaudeConfigDir: readBoundClaudeConfigDirMock,
+}));
 vi.mock('../git-snapshot/snapshotAttemptStore', () => ({ SnapshotAttemptStore: class { read = attemptJournal.read; } }));
 
 // ── mock(在被测模块 import 前 hoist) ─────────────────────────────────────
@@ -192,6 +196,7 @@ const originalClaudeConfigDir = process.env.CLAUDE_CONFIG_DIR;
 const tempDirs: string[] = [];
 
 beforeEach(() => {
+  readBoundClaudeConfigDirMock.mockReset();
   attemptJournal.read.mockReset().mockResolvedValue([]);
   if (originalClaudeConfigDir === undefined) delete process.env.CLAUDE_CONFIG_DIR;
   else process.env.CLAUDE_CONFIG_DIR = originalClaudeConfigDir;
@@ -259,6 +264,8 @@ beforeEach(() => {
 });
 
 afterEach(async () => {
+  if (vi.isMockFunction(os.homedir)) vi.mocked(os.homedir).mockRestore();
+  vi.unstubAllEnvs();
   setBroadcastTapListener(null);
   if (originalClaudeConfigDir === undefined) delete process.env.CLAUDE_CONFIG_DIR;
   else process.env.CLAUDE_CONFIG_DIR = originalClaudeConfigDir;
@@ -477,7 +484,8 @@ describe('commitRewindAtMessage', () => {
     });
   });
 
-  it('uses JSONL parent chain instead of stale target transcriptParentUuid', async () => {
+  // Standard regression: a secondary account's real transcript must also beat stale DB ancestry.
+  it.each([false, true])('uses JSONL parent chain instead of stale target transcriptParentUuid (secondary=%s)', async (secondary) => {
     await writeClaudeJsonl('sdk-uuid-old', '/repo', [
       {
         type: 'assistant',
@@ -500,6 +508,15 @@ describe('commitRewindAtMessage', () => {
         message: { content: 'next' },
       },
     ]);
+    if (secondary) {
+      const configDir = process.env.CLAUDE_CONFIG_DIR!;
+      readBoundClaudeConfigDirMock.mockImplementation((id) => id === 'sdk-uuid-old' ? configDir : undefined);
+      const emptyHome = await fs.mkdtemp(path.join(os.tmpdir(), 'cindy-rewind-empty-home-'));
+      tempDirs.push(emptyHome);
+      vi.spyOn(os, 'homedir').mockReturnValue(emptyHome);
+      vi.stubEnv('CLAUDE_CONFIG_DIR', undefined);
+      vi.stubEnv('XDT_USER_DATA_DIR', undefined);
+    }
     selectQueue.push([
       makeUserMessageRow({
         agentMeta: JSON.stringify({

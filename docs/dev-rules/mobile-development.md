@@ -459,7 +459,7 @@ Swift 源码和打包头像显式进入 fingerprint。首次发布需要原生�
 服务端须先支持可选发送者透传和 `aps.mutable-content = 1`，未升级双方保持普通推送。
 这不是 OTA 可独立交付的功能，仍受下述冷更审核门约束。
 
-### iOS 桌面小组件
+### iOS 桌面与锁屏小组件
 
 `plugins/with-usage-widgets.js` 生成 `CindyHomeWidgets` WidgetKit 扩展（订阅余量、每日用量，iOS 17+），
 与 expo-sharing 共用 `group.<bundle id>` App Group，并向 EAS 登记扩展签名。App 内
@@ -474,6 +474,20 @@ App Group 里存每台电脑最近一次的快照和「自动」所选电脑（�
 这些选择只存在系统的组件配置里，不写 App Group；改尺寸会保留。
 切换或退出账号时清空。组件只读快照，回满倒计时按 `resetsAtMs` 在本机推进。Swift 源码、图标资源与数字字体
 显式进入 fingerprint；旧包没有该原生模块时 JS 侧静默跳过。真机测试包若签名缺少 App Group，组件只会显示空状态。
+
+锁屏同时支持圆形、矩形与日期旁的单行组件，复用同一份快照、电脑选择和打开 App 的深链。
+锁屏余量沿用安卓紧凑版的选取规则：先放用户固定的账号，其余优先订阅，没有订阅时才用余额类账号。
+一格圆形单行并排 2 个账号，两格矩形单行并排最多 4 个；日期旁单行从未隐藏的订阅中按剩余比例升序最多显示两个账号，同余量保持原顺序；使用单个 Text 内嵌各供应商图标，ViewThatFits 在文字过长时退回最低余量的一个账号（Credits 储备按订阅耗尽处理），不把美元余额与百分比比较；无订阅时才回退余额。固定账号上限分别为 2 / 4 / 1，固定顺序不覆盖单行最低余量规则。
+锁屏余量每个账号由上方供应商图标、中间数字和下方横向细进度条组成；优先用户固定的账号，不把多个账号余量平均。
+进度条沿用桌面组件的内胆裁切：从描边内缘计算的最多 2 个物理像素间隙（2× 强调条缩为 1px，保证内胆至少 2px）、轻圆角液面和独立外壳描边（普通 1px、强调 2px）；填充从左向右，满格仍保留留白。
+账号作为紧凑组居中排列，少于满额时保留两侧留白，不拉开间距或改变字号。一格 / 两格分别使用 24pt / 28pt 长、4pt 高的进度条，数字 11pt / 13pt、图标 13pt / 14pt；百分号缩小到 6pt / 7pt，数字采用常规字重。每组内部纵向间距 4pt，账号组间距 6pt / 10pt。
+日期旁单行使用各自供应商图标加余量，以间隔点分开。内嵌图标使用专用 `inline-logo-*` 模板（20pt 画布、16pt 图形、顶部 4pt 光学留白），保持文字与系统日期的基线一致；系统会忽略内嵌图片的 Text 基线修饰，不用加高图片画布去移动图标，以免把整行数字带偏。账号名和重置时间不在视觉版式里挤占空间，保留在辅助朗读中；
+完整信息通过现有深链打开 App 查看。按系统实际尺寸复核留白和可读性，不以放大的局部截图替代整屏检查。
+Credits / 余额用斜纹柱而非百分比液面；过期读数减淡液面并用时钟标记，保留更新时间供辅助朗读。
+每日用量一格上下排列：上方近 7 条日数据的趋势柱，下方 tokens 数字与单位；当天数据省略「今天」，只有跨日数据才在底部标小字日期，过期快照在读数旁保留时钟，避免横排挤压读数；两格保留左侧趋势柱、右侧日期与 tokens。最后一柱强调，按窗口峰值归一化，不表示额度百分比；日期旁单行用同一份日数据绘制迷你趋势图并附最近一日的数字摘要。日期和读数配对后按日期排序；只画实际收到的数据，不补造缺失日期，零用量保持零高度。
+每日用量显示最后一个有数据日期的 tokens；跨日快照标实际日期，不能继续写「今天」。
+锁屏使用系统单色样式，个人读数标记 `privacySensitive()`，由系统锁屏隐私设置决定遮盖。
+这三种 family 的注册及 Swift 版式属于原生扩展，必须随新 iOS 包发布，不能仅 OTA。
 
 ### Android 桌面小组件
 
@@ -498,6 +512,23 @@ SharedPreferences `cindy-usage-widgets`。「订阅余量」的设置页另有�
 调试：debug 包响应 `adb shell am broadcast -a app.cindy.usagewidgets.RENDER_PREVIEWS --es variant multi|single|stale|offline|empty
 -n <applicationId>/app.cindy.usagewidgets.QuotaWidgetProvider`，把示例数据下的全部版式与深浅色写到 `cache/widget-previews`；
 选择器预览图 `res/drawable*/cindy_*_widget_preview.png` 由它生成。Kotlin 与资源改动进入 Android runtime fingerprint，需要新原生包。
+
+#### Android 锁屏
+
+两个组件的 `widgetCategory` 为 `home_screen|keyguard`。Android 没有 iOS 那种锁屏专用的圆形、矩形、单行组件：Android 16 QPR2
+（API 36.1）起的原生锁屏组件页直接放这两个组件，系统按锁屏格子的尺寸通知重绘，沿用桌面的版式、账号排序与数据来源设置页，不另做版式；
+从锁屏点组件打开 App 时由系统先要求解锁，组件不声明 `showWhenLocked`。读数照常显示：Android 锁屏没有对应 iOS
+`privacySensitive()` 的系统遮盖，这是有意的两端差异。三星 One UI 8.5 的原生锁屏组件列表只放行三星自家组件，
+实测声明 `keyguard` 或三星私有类别（2048、4096、8192）的第三方组件都不出现；三星用户需经 Good Lock 的 LockStar 放到锁屏。
+
+模拟器验证：36.1 的 Google Play 镜像不能 root，且系统默认关闭锁屏组件（`config_glanceableHubEnabled=false`），需用
+`system-images;android-36.1;google_apis` 镜像：`adb root` 后以 `cmd overlay fabricate` 把 `android:bool/config_glanceableHubEnabled`、
+`android:bool/config_glanceableHubEnabledByDefault` 与 `com.android.systemui:bool/config_communalServiceEnabled` 置真并
+`cmd overlay enable`，再 `settings put secure glanceable_hub_enabled 1`、设置锁屏 PIN、重启 SystemUI。解锁后
+`am start -n com.android.systemui/.communal.widgets.EditWidgetsActivity` 打开锁屏组件编辑页，从「Browse」添加。
+锁定状态的组件页要模拟充电直立：`dumpsys battery set ac 1`、`cmd statusbar device-postured true`，停在锁屏上时把
+`when_to_start_glanceable_hub` 先设 0 再设 2；SystemUI 的 `keyguardState` 变为 `GLANCEABLE_HUB` 即已进入，不要再按电源键。
+点组件后进入 `PRIMARY_BOUNCER`（解锁界面截图为黑屏），输入 PIN 后 App 到前台。模拟器重启后运行时覆盖会失效，需重新启用。
 
 Mobile 用 `runtimeVersion.policy: "fingerprint"`:OTA 热更只在**指纹一致**的装机上生效,
 指纹一旦变化就必须**冷更出包**(新商店包 / 自建重装),存量装机拿不到该次热更。

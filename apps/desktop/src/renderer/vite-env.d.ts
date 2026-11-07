@@ -2179,6 +2179,8 @@ interface ElectronAPI {
     setSoundSettings: (settings: AgentIslandSoundSettings) => Promise<{ ok: true }>;
     setMascotSkin: (skin: AgentIslandMascotSkin) => Promise<{ ok: true }>;
     setSubtleReminders: (enabled: boolean) => Promise<{ ok: true }>;
+    setLiveActivity?: (enabled: boolean) => Promise<{ ok: true }>;
+    getLiveActivitySupport?: () => Promise<{ ok: true; supported: boolean }>;
     setDisplayTarget: (target: AgentIslandDisplayTarget) => Promise<{ ok: true }>;
     getDisplayOptions: () => Promise<{
       ok: true;
@@ -4197,6 +4199,10 @@ interface ElectronAPI {
     onOpenManage(cb: (event: { providerId: string }) => void): () => void;
     /** 有人请求把这里分享的供应商经他的供应商组转给别人用(转分享)。 */
     onReshareRequested(cb: () => void): () => void;
+  };
+  subscriptionAccounts: {
+    onChanged(cb: (event: { providerId: import('../shared/subscriptionAccounts').SubscriptionProvider }) => void): () => void;
+    command(command: import('../shared/subscriptionAccounts').SubscriptionAccountCommand): Promise<import('../shared/subscriptionAccounts').SubscriptionPoolView>;
   };
   providerGroup: {
     command<C extends import('../shared/providerGroup').ProviderGroupCommand>(

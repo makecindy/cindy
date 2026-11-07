@@ -31,6 +31,7 @@ import {
   type TurnPermissionPolicy,
 } from '../base-agent.js';
 import type { AuthAdapter } from '../../interfaces/auth-adapter.js';
+import { NATIVE_SUBSCRIPTION_ACCOUNT, type NativeSubscriptionAccount } from '../../interfaces/auth-adapter.js';
 import type { AgentEvent as CoreAgentEvent, InteractionDecision, InteractionRequest } from '../../types/events.js';
 import type { Logger } from '../../interfaces/logger.js';
 import {
@@ -8941,6 +8942,23 @@ describe('CodexAgent MCP thread context hooks', () => {
     expect(createdTransports[1].closed).toBe(false);
     await b.close();
     await agent.dispose();
+  });
+
+  it('keeps two subscription profiles of the same OpenAI provider on separate native hosts', async () => {
+    const profile = (id: string): NativeSubscriptionAccount => ({ id, configDir: `/fixture/.codex-${id}`,
+      assertCurrent() {}, readState: async () => ({ authenticated: true }) });
+    const aProfile = profile('a'); const bProfile = profile('b');
+    const deps = createDeps();
+    deps.auth.getAuthEnv = async options => ({ CODEX_HOME: options?.nativeSubscriptionAccount?.configDir ?? '/fixture/legacy' });
+    const agent = new CodexAgent(deps);
+    const a = await agent.startSession({ sessionId: 'pooled-a', providerId: 'openai', model: 'gpt-5.4', workingDir: '/repo', [NATIVE_SUBSCRIPTION_ACCOUNT]: aProfile });
+    const b = await agent.startSession({ sessionId: 'pooled-b', providerId: 'openai', model: 'gpt-5.4', workingDir: '/repo', [NATIVE_SUBSCRIPTION_ACCOUNT]: bProfile });
+    expect(createdStdioOptions.map(options => options.env?.CODEX_HOME)).toEqual([aProfile.configDir, bProfile.configDir]);
+    expect(await a.requiresModelSwitchRebuild?.('gpt-5.4', { providerId: 'custom' })).toBe(true);
+    await a.close();
+    expect(createdTransports[0].closed).toBe(true);
+    expect(createdTransports[1].closed).toBe(false);
+    await b.close(); await agent.dispose();
   });
 
   it('propagates account host shutdown failure before another account can resume its rollout', async () => {
