@@ -30,8 +30,8 @@ export function readBotSystemSkillsOff(raw: unknown): BotSystemSkillId[] {
  * The ids in effect for a profile. A project-mode teammate (V2) manages automations with the
  * ordinary scheduler, so its own routine Skill is off; built-in routines keep running.
  */
-/** A V2 teammate has no routines or follow-up of its own: it uses ordinary automations and tasks. */
-const PROJECT_MODE_SYSTEM_SKILL_IDS: readonly BotSystemSkillId[] = ['todo'];
+/** A V2 teammate has no system Skills: ordinary automations, tasks and project files do that work. */
+const PROJECT_MODE_SYSTEM_SKILL_IDS: readonly BotSystemSkillId[] = [];
 
 /** The system Skills that exist for this teammate at all. */
 export function botSystemSkillIdsFor(config: Record<string, unknown> | { projectMode?: unknown }): readonly BotSystemSkillId[] {

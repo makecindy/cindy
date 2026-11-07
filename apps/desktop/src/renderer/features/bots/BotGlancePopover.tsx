@@ -802,9 +802,11 @@ export function BotGlanceButton({ bot, cloudHome }: { bot: BotChatIdentity; clou
   const homeSwitch = useCompanionHomeSwitch({ id: bot.id, name: bot.name }, 'toast');
   const sessionId = bot.sessionId ?? '';
   const host = useMemo<GlanceTodoHost>(() => ({ botId: bot.id, deviceId: bot.deviceId }), [bot.deviceId, bot.id]);
-  const todos = useGlanceTodos(host, Boolean(sessionId));
   // 只有本机伙伴的资料在这里；远程伙伴由它所在的电脑在关掉「待办」时不下发每天检查的状态。
   const localProfile = useBotProfiles().find((profile) => !bot.deviceId && profile.id === bot.id);
+  // V2 伙伴没有待办，近况里不显示这一块。
+  const noTodos = localProfile?.capabilities?.projectMode === true;
+  const todos = useGlanceTodos(host, Boolean(sessionId) && !noTodos);
   const todoOff = localProfile?.capabilities?.systemSkillsOff?.includes('todo') === true;
   const due = dueTodos(todos.todos);
   const [unseen, setUnseen] = useState(false);
@@ -865,7 +867,7 @@ export function BotGlanceButton({ bot, cloudHome }: { bot: BotChatIdentity; clou
             onClose={() => setOpen(false)}
           />
         </Section>
-        <Todos host={host} sessionId={sessionId} todos={todos} todoOff={todoOff} onClose={() => setOpen(false)} />
+        {noTodos ? null : <Todos host={host} sessionId={sessionId} todos={todos} todoOff={todoOff} onClose={() => setOpen(false)} />}
         <Activity bot={bot} onClose={() => setOpen(false)} />
       </PopoverContent>
     </Popover>

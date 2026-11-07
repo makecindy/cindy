@@ -693,7 +693,8 @@ export const routineTools = {
     const routines = engine.list(botId);
     // V2 has no built-in routines: follow-up and nightly learning never run there
     // (ordinary tasks and the project's own automations do that work), so don't show them.
-    const hidden = (routine: Routine) => routine.builtin === 'nightly-learning' || routine.builtin === 'follow-up';
+    const hidden = (routine: Routine) => routine.builtin === 'nightly-learning' || routine.builtin === 'follow-up'
+      || routine.id === todoCheckRoutineId(botId);
     if (!routines.some(hidden)) return routines;
     const projectMode = await readBotProjectModeFor(botId);
     assertScope(scope);

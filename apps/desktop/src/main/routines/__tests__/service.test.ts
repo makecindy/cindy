@@ -344,13 +344,14 @@ it('skips follow-up and daily todo check runs while their system Skill is off, a
 
 // 依据：项目模式下夜间学习由项目自己的「整理记忆」自动化接替，原条目永远跳过；缺口：设置页仍列出可开关的夜间学习。
 // 最小失败输入：一条内置夜间学习 + 项目模式。tier：unit。
-it('hides and skips nightly learning and follow-up for a project-mode teammate', async () => {
+it('hides the built-in routines of a project-mode teammate and skips nightly learning', async () => {
   const engine = await getRoutineEngine();
   await engine.ensureBuiltin('bot', 'nightly-learning', { name: 'Nightly', prompt: 'Learn', enabled: true,
     triggers: [{ id: 'tick', kind: 'interval', intervalMs: 60000 }] }, 'builtin-nightly-learning-bot');
   await engine.ensureBuiltin('bot', 'follow-up', { name: 'Follow up', prompt: 'Follow', enabled: true,
     triggers: [{ id: 'tick', kind: 'interval', intervalMs: 60000 }] }, 'builtin-follow-up-bot');
-  expect((await routineTools.list('bot')).map((routine) => routine.builtin).sort()).toEqual(['follow-up', 'nightly-learning']);
+  await routineTools.setTodoCheck('bot', true);
+  expect((await routineTools.list('bot')).length).toBe(3);
   mock.projectMode = true;
   expect(await routineTools.list('bot')).toEqual([]);
   await routineTools.runNow('bot', 'builtin-nightly-learning-bot');
