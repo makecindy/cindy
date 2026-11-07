@@ -1011,7 +1011,7 @@ import {
 } from './orcaInterAgentDispatcher.js';
 import { resolveOrcaImageAttachmentInput } from './orcaImageAttachments.js';
 import { OrcaWorkerPermissionConfirmBridge } from './orcaWorkerPermissionConfirmBridge.js';
-import { assertTaskActionCurrent, captureTaskActionGuard, bindTaskActionInput, hasTaskActionAuthorization, taskActionInputGuard, taskActionPrincipal, settleTaskActionInput, TaskActionAuthorizationError, type TaskActionDeliveryGuard, type TaskActionConfirmation } from './taskActionAuthorization.js';
+import { assertTaskActionCurrent, runTaskActionRequest, captureTaskActionGuard, bindTaskActionInput, hasTaskActionAuthorization, taskActionInputGuard, taskActionPrincipal, settleTaskActionInput, TaskActionAuthorizationError, type TaskActionDeliveryGuard, type TaskActionConfirmation } from './taskActionAuthorization.js';
 import {
   getOrcaWorkspaceInfoReadOnly,
   getOrcaWorkerDiagnosticStatusReadOnly,
@@ -3137,7 +3137,12 @@ function taskCompletionDeliveryForOwner(): TaskCompletionDeliveryHost | null {
     input => taskResultDeliverer
       ? taskResultDeliverer(input)
       : Promise.resolve({ ok: false, errorCode: 'HOST_NOT_READY', retryable: true }));
-    void taskCompletionDeliveryHolder.restore().catch(() => log.warn('Task delivery restore deferred'));
+    const holder = taskCompletionDeliveryHolder;
+    const restore = () => void holder.restore().catch(() => {
+      log.warn('Task delivery restore deferred');
+      if (taskCompletionDeliveryHolder === holder) setTimeout(restore, 15_000).unref?.();
+    });
+    restore();
   }
   return taskCompletionDeliveryHolder;
 }
@@ -13532,9 +13537,10 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     const [delivered] = await getDbClient().drizzle.select({ id: messages.id }).from(messages)
       .where(and(eq(messages.sessionId, targetSessionId), eq(messages.clientId, clientId))).limit(1);
     if (delivered) return { ok: true };
-    const result = await sendToSessionInternal({
+    // Host delivery, not part of whichever tool call happened to settle the turn.
+    const result = await runTaskActionRequest(() => sendToSessionInternal({
       targetSessionId, message: text, clientId, dispatcherSessionId: fromSessionId, forceQueue: true,
-    });
+    }));
     if (result.ok) return { ok: true };
     return { ok: false, errorCode: result.errorCode,
       retryable: !['NOT_FOUND', 'DELETED', 'ARCHIVED', 'INVALID_ARGS', 'UNSUPPORTED_CAPABILITY'].includes(result.errorCode) };

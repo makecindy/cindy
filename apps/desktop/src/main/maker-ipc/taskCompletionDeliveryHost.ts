@@ -5,7 +5,7 @@ import { and, eq, isNull } from 'drizzle-orm';
 import { z } from 'zod';
 import { activeOwnerScopeKey, isAppSessionBoundaryPending, ownerScopedUserDataPath } from '../appSessionState.js';
 import { withCrossProcessLock } from '../device-link/crossProcessLock.js';
-import { getDbClient } from '../localDb/client/current.js';
+import { getDbClient, tryGetDbClient } from '../localDb/client/current.js';
 import { botProfiles, botSessionLinks, messages, sessions } from '../localDb/schema.js';
 import { createMessage } from '../localDb/ipc/messages.js';
 import { visibleMessageText } from '../localDb/conversationSearch.pure.js';
@@ -123,7 +123,11 @@ export function createTaskCompletionDeliveryHost(
           const record = recordSchema.parse(JSON.parse(await fs.readFile(path.join(directory, file), 'utf8')));
           if (!await taskExists(record.sessionId)) { await pruneDeleted(record.sessionId); continue; }
           if (record.receipts.some(receipt => receipt.status === 'pending' || (receipt.status === 'failed' && !receipt.failureShown))) ids.push(record.sessionId);
-        } catch { log.warn('task delivery record unreadable'); }
+        } catch (error) {
+          // Startup can run before the database opens: retry the whole restore, never skip a result.
+          if (!tryGetDbClient()) throw error;
+          log.warn('task delivery record unreadable', { error: error instanceof Error ? error.message : String(error) });
+        }
       }
       assertCurrent();
       return ids;
@@ -157,7 +161,7 @@ export function createTaskCompletionDeliveryHost(
       { beforePublish: async () => assertCurrent() });
     },
     isCurrent,
-    log: () => log.warn('task completion delivery deferred'),
+    log: (error) => log.warn('task completion delivery deferred', { error: error instanceof Error ? error.message : String(error) }),
   });
   return {
     ...delivery,
