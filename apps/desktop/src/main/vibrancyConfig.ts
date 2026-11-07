@@ -75,10 +75,12 @@ function isWindows11(options?: ResolveVibrancyConfigOptions): boolean {
 
 function resolveBackdropMaterial(): WindowsBackdropMaterial {
   const raw = process.env.XDT_BACKDROP_MATERIAL;
-  if (!raw) return 'acrylic';
+  // Mica samples the desktop wallpaper. Acrylic also samples other windows,
+  // making the task list change color along their edges as they move behind us.
+  if (!raw) return 'mica';
   if (isWindowsBackdropMaterial(raw)) return raw;
-  log.warn(`Invalid XDT_BACKDROP_MATERIAL '${raw}', falling back to acrylic.`);
-  return 'acrylic';
+  log.warn(`Invalid XDT_BACKDROP_MATERIAL '${raw}', falling back to mica.`);
+  return 'mica';
 }
 
 function resolveWindowsBackdropColor(material: WindowsBackdropMaterial, isDark: boolean): string {
@@ -108,7 +110,8 @@ export function resolveVibrancyConfig(
       const backgroundMaterial = resolveBackdropMaterial();
       return {
         vibrancy: null,
-        // Acrylic 的原生 backing 直接带侧栏染色，左栏稳态不再重复叠 CSS tint。
+        // Mica 保持透明 backing，由 CSS 铺侧栏染色。显式 Acrylic 的原生
+        // backing 直接带侧栏染色，左栏稳态不再重复叠 CSS tint。
         // live resize 全程保持同一材质；连续尺寸变化交给 Renderer 的 CSS 布局处理。
         backgroundColor: resolveWindowsBackdropColor(backgroundMaterial, isDark),
         backgroundMaterial,
