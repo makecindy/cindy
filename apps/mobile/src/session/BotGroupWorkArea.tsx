@@ -1,5 +1,6 @@
-import { useCallback, useEffect, useState } from 'react';
-import { Pressable, ScrollView, StyleSheet, View } from 'react-native';
+import { ProcessDisclosureViewport, useProcessDisclosureViewport } from './useProcessDisclosureViewport';
+import { useCallback, useContext, useEffect, useRef, useState } from 'react';
+import { Pressable, ScrollView, StyleSheet, View, type NativeScrollEvent, type NativeSyntheticEvent } from 'react-native';
 import { ChevronDown, ChevronUp } from 'lucide-react-native';
 import { useFocusEffect } from 'expo-router';
 import { useTranslation } from 'react-i18next';
@@ -17,11 +18,12 @@ import { fontWeight, iconSize, lineHeight, radius, spacing, typeScale } from '@/
 
 /** Live work is separate from messages. Only an owned companion's computer can
  * resolve its execution to a task; another member's private task is never queried. */
-export function BotGroupWorkArea({ group, deviceId, online, identityFor, onStop, stopping = false, onError }: {
+export function BotGroupWorkArea({ group, deviceId, online, identityFor, onStop, stopping = false, onError, resumeRequest = 0 }: {
   group: BotGroupRemoteChatData; deviceId: string; online: boolean;
   identityFor(botId: string, name: string): BotGroupIdentity;
   onStop?(): Promise<void>;
   stopping?: boolean;
+  resumeRequest?: number;
   onError(message: string | null): void;
 }) {
   const { accountGeneration } = useAuth();
@@ -31,9 +33,17 @@ export function BotGroupWorkArea({ group, deviceId, online, identityFor, onStop,
   const disclosureScope = JSON.stringify([accountGeneration, group.id, deviceId]);
   const [expandedScope, setExpandedScope] = useState<string | null>(null);
   const expanded = expandedScope === disclosureScope;
+  const inspectParentViewport = useContext(ProcessDisclosureViewport);
+  const detailMetrics = useRef({ offsetY: 0, viewportHeight: 0, contentHeight: 0 });
+  const detailDragging = useRef(false);
+  const detailViewport = useProcessDisclosureViewport(() => detailMetrics.current, () => inspectParentViewport?.(0));
+  // Returning to the outer tail also releases the nested list's reserved range.
+  // Keep the current work area and its subscriptions mounted through navigation.
+  useEffect(detailViewport.resume, [resumeRequest, detailViewport.resume]);
   useEffect(() => {
+    detailViewport.resume();
     setExpandedScope(null);
-  }, [disclosureScope, group.round.status]);
+  }, [disclosureScope, group.round.status, detailViewport.resume]);
   const { invoke, openLink, connectionEpoch, presenceVersion, getPresenceAvailability, subscribe, unsubscribe, onRemoteResourceChanged } = useDeviceLink();
   const candidates = group.round.speakers.flatMap(speaker => {
     const member = group.members.find(member => member.botId === speaker.botId);
@@ -78,6 +88,12 @@ export function BotGroupWorkArea({ group, deviceId, online, identityFor, onStop,
     void read();
     return () => { cancelled = true; off(); topics.forEach(offTopic => offTopic()); };
   }, [scope, online, connectionEpoch, presenceVersion, invoke, openLink, subscribe, unsubscribe, onRemoteResourceChanged, getPresenceAvailability, i18n.language]));
+  const onDetailScroll = (event: NativeSyntheticEvent<NativeScrollEvent>) => {
+    const { contentOffset, contentSize, layoutMeasurement } = event.nativeEvent;
+    detailViewport.scroll(contentOffset.y, detailMetrics.current.offsetY, detailDragging.current,
+      contentSize.height - contentOffset.y - layoutMeasurement.height <= 1);
+    detailMetrics.current = { offsetY: contentOffset.y, contentHeight: contentSize.height, viewportHeight: layoutMeasurement.height };
+  };
   if (group.round.status !== 'running' || !group.round.speakers.length) return null;
   // Count teammates, not executions; a teammate with active work and a queued
   // follow-up belongs to the active count only.
@@ -97,7 +113,10 @@ export function BotGroupWorkArea({ group, deviceId, online, identityFor, onStop,
   return <View testID="botGroup.work" style={styles.container}>
     <View style={styles.summaryRow}>
       <Pressable testID="botGroup.work.toggle" accessibilityRole="button" accessibilityState={{ expanded }}
-        accessibilityLabel={`${summary}, ${disclosure}`} onPress={() => setExpandedScope(expanded ? null : disclosureScope)}
+        accessibilityLabel={`${summary}, ${disclosure}`} onPress={() => {
+          detailViewport.resume();
+          setExpandedScope(expanded ? null : disclosureScope);
+        }}
         style={({ pressed }) => [styles.summary, pressed && styles.pressed]}>
         <Text numberOfLines={1} style={styles.summaryText}>{summary}</Text>
         <Chevron size={iconSize.sm} strokeWidth={iconStroke.regular} color={colors.textSecondary} />
@@ -110,7 +129,15 @@ export function BotGroupWorkArea({ group, deviceId, online, identityFor, onStop,
     </View>
     {/* Keep rows mounted while collapsed: their existing subscriptions discover
         prompts raised after the last group snapshot, and reveal those inline. */}
-    <ScrollView testID="botGroup.work.details" style={styles.details} contentContainerStyle={styles.rows} keyboardShouldPersistTaps="handled">
+    <ProcessDisclosureViewport.Provider value={detailViewport.inspect}>
+    <ScrollView testID="botGroup.work.details" nestedScrollEnabled style={styles.details} contentContainerStyle={styles.rows} keyboardShouldPersistTaps="handled"
+      onLayout={event => { detailMetrics.current.viewportHeight = event.nativeEvent.layout.height; }}
+      onContentSizeChange={(_width, height) => { detailMetrics.current.contentHeight = height; }}
+      onScrollBeginDrag={() => { detailDragging.current = true; }}
+      onScrollEndDrag={event => { onDetailScroll(event); detailDragging.current = false; }}
+      onMomentumScrollBegin={() => { detailDragging.current = true; }}
+      onMomentumScrollEnd={event => { onDetailScroll(event); detailDragging.current = false; }}
+      onScroll={onDetailScroll} scrollEventThrottle={16}>
       {speakers.map((speaker, index) => {
         const member = group.members.find(member => member.botId === speaker.botId);
         if (!member) return null;
@@ -124,7 +151,9 @@ export function BotGroupWorkArea({ group, deviceId, online, identityFor, onStop,
           collapsed={!expanded} revealWaiting={member.isOwned !== false}
           activity={speaker.activity} executionStatus={speaker.executionStatus} stopping={speaker.stopping} onError={onError} />;
       })}
+      {detailViewport.footerHeight > 0 && <View style={{ height: detailViewport.footerHeight }} />}
     </ScrollView>
+    </ProcessDisclosureViewport.Provider>
   </View>;
 }
 
