@@ -152,6 +152,11 @@ pnpm --filter mobile test:smoke
 
 ### Android 组字与发送快照
 
+普通任务与伙伴私聊点击发送时保持编辑器可编辑、保留焦点与软键盘；发送防重由提交锁和发送按钮负责，
+不通过 `editable=false` 锁住原生输入框（iOS 会因此收起键盘）。异步发送只清除与已捕获快照相同的草稿，
+后续输入不能被完成回调覆盖。附件调整与语音操作仍沿用发送期间的禁用规则。
+回归：`sessionComposerLayout.test.ts`、共享 `sessionOperation.test.ts`。
+
 WebView 输入框把屏幕可见的组字文本同步为草稿；React Native 接受本地编辑的回传时不重写
 DOM，保留输入法组字与光标。点击发送后，在发送防重锁内等待编辑器返回当前完整
 `ComposerDocument`，再做空内容判断、命令解析和入队，不依赖失焦或 `compositionend` 的顺序。
@@ -185,6 +190,10 @@ iPhone Duo（iOS 27）在远程桌面返回并进入画中画后，系统发来�
 看 Debug 日志里 `frame received` 的 `frame` 是否整宽贴底。输入卡片（`useMobileKeyboardState`）与浮动输入框（新建任务页的 `useComposerDockKeyboardHeight`）必须共用这一判据，
 只修一条会出现「任务页正常、新建页仍被盖住」。RN 自带 `KeyboardAvoidingView`（群聊、共享任务、部分弹窗）
 在这种状态下会抬得过高，尚未处理。回归：`composerKeyboard.test.tsx`、`composerDockKeyboard.test.tsx`。
+
+浮动输入框仅在键盘显示期间采纳 `keyboardDidChangeFrame`：隐藏结束后仍可能收到零尺寸或异屏坐标，
+不能把它送入上述异常坐标补偿，否则会重新抬起输入框并压缩消息列表，留下没有键盘的大片空白。
+`willHide` 后的交互式收起继续跟随原生动画；`didHide` 将最终占位归零，下次 `willShow/didShow` 才重新启用。
 
 ### 相册选图与 iCloud 原图
 

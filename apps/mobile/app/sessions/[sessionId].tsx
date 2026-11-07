@@ -6954,7 +6954,10 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
       // 直接按捕获的发送快照合并回 A 的草稿库，并保留 A 期间新输入的后续文字。
       restoreRecoverableItemsToDraft(sessionId, [capturedDraftRecoveryItem()]);
     };
-    if (!independent && text && !useDurableOutbox) applyComposerDocument(documentAfterOptimisticClear);
+    if (!independent && text && !useDurableOutbox
+      && composerDocumentsEqual(composerDocumentRef.current, documentBeforeSend)) {
+      applyComposerDocument(documentAfterOptimisticClear);
+    }
     // A pasted message link is committed to the editor synchronously, while
     // its readable body is fetched from the source device asynchronously.
     // The optimistic clear above preserves the existing "tap sends this
