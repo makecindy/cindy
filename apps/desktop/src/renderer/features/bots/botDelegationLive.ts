@@ -1,14 +1,21 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useSyncExternalStore } from 'react';
 
 import {
   getDataOwnerGeneration,
   isDataOwnerGenerationCurrent,
   isDataOwnerPushCurrent,
+  type DataOwnerGeneration,
 } from '@/contexts/dataOwnerGeneration';
+import { useOptionalDataOwnerGeneration } from '@/contexts/AuthContext';
 import { makerApiForSticky } from '@/lib/makerTransport';
 import { remoteProjectsStore } from '@/features/device-link/remoteProjectsStore';
 import { isDeviceLinkRemotePushCurrent } from '@/lib/remoteDataOwnerPushFence';
-import type { BotDelegationStatus, BotDelegationView } from '../../../shared/botDelegation';
+import { createCoalescedRefresh } from '@/lib/coalescedRefresh';
+import type {
+  BotDelegationListResult,
+  BotDelegationStatus,
+  BotDelegationView,
+} from '../../../shared/botDelegation';
 
 /** 未落终态的后台任务：任务卡按这个集合决定是否仍在执行。 */
 const ACTIVE_STATUSES = new Set<BotDelegationStatus>(['queued', 'waiting', 'running']);
@@ -17,20 +24,22 @@ export function isActiveDelegationStatus(status: BotDelegationStatus): boolean {
   return ACTIVE_STATUSES.has(status);
 }
 
-interface SessionEntry {
-  rows: BotDelegationView[];
-  /**
-   * 首次拉取是否已经**落地**（成功或失败都算）。
-   *
-   * 「还没读到」和「读完了但没有这一行」是两回事：前者该继续显示进行中的样子，
-   * 后者说明这条任务我们暂时核实不了（例如列表拉取失败）。
-   * 不区分的话，第二种情况会被当成第一种，卡片就永远停在带呼吸点的「正在开始」。
-   */
+interface DelegationSnapshot {
+  rows: readonly BotDelegationView[];
   resolved: boolean;
   stale: boolean;
+}
+
+const EMPTY_SNAPSHOT: DelegationSnapshot = { rows: [], resolved: false, stale: false };
+
+interface SessionEntry {
+  snapshot: DelegationSnapshot;
   listeners: Set<() => void>;
   unsubscribe: (() => void) | null;
   reloadGeneration: number;
+  requesterWideListeners: Map<string, number>;
+  requesterWideDirty: boolean;
+  scheduleLocalReload?: (read: () => Promise<void>) => Promise<void>;
 }
 
 /**
@@ -40,58 +49,81 @@ interface SessionEntry {
  * + 订阅推送的话，一条状态变更会引发 N 次全量拉取。这里把「一个会话一次订阅、一次
  * 拉取、广播给所有卡」收在一处；组件侧只按 delegationId 取自己那行。
  *
- * 数据主人切换（登出 / 切账号）沿用既有 dataOwnerGeneration 守卫丢弃旧结果。
+ * 缓存按数据主人、代次及会话隔离；异步读取继续用 generation 守卫丢弃旧结果。
  */
 const sessions = new Map<string, SessionEntry>();
 
-function ensureEntry(sessionId: string): SessionEntry {
-  const existing = sessions.get(sessionId);
+function sessionKey(sessionId: string, owner: DataOwnerGeneration): string {
+  return JSON.stringify([owner.dataOwnerId, owner.generation, sessionId]);
+}
+
+function useDelegationKey(sessionId: string | null): string | null {
+  // A same-owner recommit does not remount the route. Observe the auth update
+  // so an already-open list also switches to the newly published generation.
+  useOptionalDataOwnerGeneration();
+  return sessionId ? sessionKey(sessionId, getDataOwnerGeneration()) : null;
+}
+
+function ensureEntry(key: string): SessionEntry {
+  const existing = sessions.get(key);
   if (existing) return existing;
   const entry: SessionEntry = {
-    rows: [],
-    resolved: false,
-    stale: false,
+    snapshot: EMPTY_SNAPSHOT,
     listeners: new Set(),
     unsubscribe: null,
     reloadGeneration: 0,
+    requesterWideListeners: new Map(),
+    requesterWideDirty: false,
   };
-  sessions.set(sessionId, entry);
+  sessions.set(key, entry);
   return entry;
 }
 
-function emit(entry: SessionEntry): void {
+function publish(entry: SessionEntry, snapshot: DelegationSnapshot): void {
+  entry.snapshot = snapshot;
   for (const listener of [...entry.listeners]) listener();
 }
 
-async function reload(sessionId: string): Promise<void> {
-  const entry = sessions.get(sessionId);
-  if (!entry) return;
+async function reload(sessionId: string, key: string): Promise<void> {
+  const entry = sessions.get(key);
   const owner = getDataOwnerGeneration();
+  if (!entry || key !== sessionKey(sessionId, owner)) return;
   const generation = ++entry.reloadGeneration;
-  try {
-    const result = await makerApiForSticky(sessionId).listBotDelegations(sessionId);
-    if (!isDataOwnerGenerationCurrent(owner)) return;
-    if (sessions.get(sessionId) !== entry || entry.reloadGeneration !== generation) return;
-    // 短暂读取失败不能把已经显示的持久任务卡抹掉。成功时才替换快照；失败时
-    // 保留上一次可核实的状态，并让卡片继续可见。
-    if (result.ok) entry.rows = result.delegations;
-    entry.stale = !result.ok;
-    entry.resolved = true;
-    emit(entry);
-  } catch {
-    if (!isDataOwnerGenerationCurrent(owner)) return;
-    if (sessions.get(sessionId) !== entry || entry.reloadGeneration !== generation) return;
-    entry.resolved = true;
-    entry.stale = true;
-    emit(entry);
-  }
+  entry.requesterWideDirty = false;
+  const current = () => isDataOwnerGenerationCurrent(owner)
+    && sessions.get(key) === entry && entry.reloadGeneration === generation;
+  const read = async () => {
+    if (!current()) return;
+    let result: BotDelegationListResult | null = null;
+    try {
+      result = await makerApiForSticky(sessionId).listBotDelegations(sessionId);
+    } catch {
+      // Keep the last confirmed rows on a transient read failure.
+    }
+    if (!current()) return;
+    publish(entry, {
+      rows: result?.ok ? result.delegations : entry.snapshot.rows,
+      resolved: true,
+      stale: !result?.ok,
+    });
+  };
+  return entry.scheduleLocalReload ? entry.scheduleLocalReload(read) : read();
 }
 
-function subscribe(sessionId: string, listener: () => void): () => void {
-  const entry = ensureEntry(sessionId);
+function subscribe(
+  sessionId: string,
+  key: string,
+  listener: () => void,
+  requestingBotId?: string,
+): () => void {
+  const entry = ensureEntry(key);
   entry.listeners.add(listener);
+  if (requestingBotId) {
+    entry.requesterWideListeners.set(requestingBotId, (entry.requesterWideListeners.get(requestingBotId) ?? 0) + 1);
+  }
   if (!entry.unsubscribe) {
     const deviceId = remoteProjectsStore.getSessionDeviceId(sessionId);
+    if (!deviceId) entry.scheduleLocalReload = createCoalescedRefresh<void>();
     const offPush = deviceId
       ? window.electronAPI.deviceLink.onRemotePush((push, stamp) => {
           if (
@@ -101,19 +133,26 @@ function subscribe(sessionId: string, listener: () => void): () => void {
           )
             return;
           const payload = push.payload as { parentSessionId?: string };
-          if (payload?.parentSessionId === sessionId) void reload(sessionId);
+          if (payload?.parentSessionId === sessionId) void reload(sessionId, key);
         })
       : window.electronAPI.maker.onBotDelegationChanged((payload, ownerStamp) => {
-          if (!isDataOwnerPushCurrent(ownerStamp) || payload.parentSessionId !== sessionId) return;
-          void reload(sessionId);
+          if (!isDataOwnerPushCurrent(ownerStamp)) return;
+          // Older pushes omit the requester. Keep their broad invalidation for open lists.
+          const requesterListOpen = payload.requestingBotId
+            ? entry.requesterWideListeners.has(payload.requestingBotId)
+            : entry.requesterWideListeners.size > 0;
+          if (payload.parentSessionId === sessionId || requesterListOpen) {
+            void reload(sessionId, key);
+          } else {
+            entry.requesterWideDirty = true;
+          }
         });
     const offStatus = deviceId
       ? window.electronAPI.deviceLink.onStatusChanged((state) => {
-          if (state.status === 'online') void reload(sessionId);
+          if (state.status === 'online') void reload(sessionId, key);
           else {
             entry.reloadGeneration += 1;
-            entry.stale = true;
-            emit(entry);
+            publish(entry, { ...entry.snapshot, stale: true });
           }
         })
       : () => {};
@@ -121,14 +160,37 @@ function subscribe(sessionId: string, listener: () => void): () => void {
       offPush();
       offStatus();
     };
-    void reload(sessionId);
+    void reload(sessionId, key);
+  } else if (requestingBotId && entry.requesterWideDirty) {
+    void reload(sessionId, key);
   }
   return () => {
     entry.listeners.delete(listener);
+    if (requestingBotId) {
+      const count = entry.requesterWideListeners.get(requestingBotId) ?? 0;
+      if (count > 1) entry.requesterWideListeners.set(requestingBotId, count - 1);
+      else entry.requesterWideListeners.delete(requestingBotId);
+    }
     if (entry.listeners.size > 0) return;
     entry.unsubscribe?.();
-    sessions.delete(sessionId);
+    if (sessions.get(key) === entry) sessions.delete(key);
   };
+}
+
+function useDelegationSnapshot(
+  sessionId: string | null,
+  key: string | null,
+  requestingBotId?: string,
+): DelegationSnapshot {
+  const subscribeSnapshot = useCallback((listener: () => void) => {
+    if (!sessionId || !key) return () => {};
+    return subscribe(sessionId, key, listener, requestingBotId);
+  }, [sessionId, key, requestingBotId]);
+  const read = useCallback(() => {
+    if (!sessionId || !key || key !== sessionKey(sessionId, getDataOwnerGeneration())) return EMPTY_SNAPSHOT;
+    return sessions.get(key)?.snapshot ?? EMPTY_SNAPSHOT;
+  }, [sessionId, key]);
+  return useSyncExternalStore(subscribeSnapshot, read, read);
 }
 
 export interface BotDelegationLive {
@@ -149,42 +211,25 @@ export function useBotDelegation(
   sessionId: string | null,
   delegationId: string,
 ): BotDelegationLive {
-  const [live, setLive] = useState<BotDelegationLive>({ row: null, resolved: false, stale: false });
-  const read = useCallback((): BotDelegationLive => {
-    if (!sessionId) return { row: null, resolved: false, stale: false };
-    const entry = sessions.get(sessionId);
-    return {
-      row: entry?.rows.find((item) => item.id === delegationId) ?? null,
-      resolved: entry?.resolved ?? false,
-      stale: entry?.stale ?? false,
-    };
-  }, [delegationId, sessionId]);
-
-  useEffect(() => {
-    if (!sessionId) {
-      setLive({ row: null, resolved: false, stale: false });
-      return;
-    }
-    setLive(read());
-    return subscribe(sessionId, () => setLive(read()));
-  }, [read, sessionId]);
-
-  return live;
+  const key = useDelegationKey(sessionId);
+  const { rows, resolved, stale } = useDelegationSnapshot(sessionId, key);
+  return { row: rows.find((item) => item.id === delegationId) ?? null, resolved, stale };
 }
 
 /** 本会话发起的全部委派（伙伴工作台的进度卡用），与协作卡共用同一份订阅。 */
 export function useBotDelegations(sessionId: string | null): readonly BotDelegationView[] {
-  const [rows, setRows] = useState<readonly BotDelegationView[]>([]);
-  useEffect(() => {
-    if (!sessionId) {
-      setRows([]);
-      return;
-    }
-    const read = () => setRows(sessions.get(sessionId)?.rows ?? []);
-    read();
-    return subscribe(sessionId, read);
-  }, [sessionId]);
-  return rows;
+  const key = useDelegationKey(sessionId);
+  return useDelegationSnapshot(sessionId, key).rows;
+}
+
+/** 本机伙伴主聊天的后台任务列表，与原协作卡共享快照和订阅。 */
+export function useBotDelegationList(sessionId: string | null, requestingBotId: string): DelegationSnapshot & { retry: () => void } {
+  const key = useDelegationKey(sessionId);
+  const snapshot = useDelegationSnapshot(sessionId, key, requestingBotId);
+  const retry = useCallback(() => {
+    if (sessionId && key) void reload(sessionId, key);
+  }, [sessionId, key]);
+  return { ...snapshot, retry };
 }
 
 /** 测试用：清掉进程内缓存，避免用例之间互相看到对方的订阅。 */

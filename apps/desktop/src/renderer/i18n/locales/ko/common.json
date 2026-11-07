@@ -10119,6 +10119,19 @@
       "followingMark": "이 세션 담당: {{names}}"
     },
     "glance": {
+      "background": {
+        "back": "뒤로",
+        "title": "백그라운드 작업",
+        "filter": "작업 상태로 필터링",
+        "all": "전체",
+        "failedOrStopped": "실패 또는 중지",
+        "waiting": "대기 중",
+        "empty": "아직 백그라운드 작업이 없습니다.",
+        "emptyFiltered": "이 상태에 해당하는 백그라운드 작업이 없습니다.",
+        "loadFailed": "백그라운드 작업을 불러오지 못했습니다.",
+        "openFailed": "이 백그라운드 작업을 열지 못했습니다.",
+        "updatedAt": "{{time}}에 업데이트됨"
+      },
       "open": "{{name}}의 근황",
       "dueUnseen": "기한이 된 할 일이 있습니다",
       "computers": "컴퓨터",

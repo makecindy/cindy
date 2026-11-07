@@ -2,35 +2,73 @@ import assert from 'node:assert/strict';
 
 const data = 'window.__uiPage.ctx';
 const now = Date.now();
+const backgroundTasks = [
+  ['running', '整理试用反馈'],
+  ['waiting', '确认发布说明'],
+  ['completed', '汇总回归测试结果'],
+  ['failed', '校验数据导出'],
+  ['cancelled', '核对已撤回的需求'],
+  ['running', '另一位伙伴的任务'],
+].map(([status, title], index) => {
+  const updatedAt = now - (index + 1) * 60_000;
+  return {
+    id: `background-${index}`,
+    requestingBotId: index === 5 ? 'another-teammate' : 'cindy-default',
+    targetBotId: null,
+    targetBotName: '',
+    targetProfileVersion: null,
+    parentSessionId: 'chat-1',
+    childSessionId: `background-session-${index}`,
+    title,
+    status,
+    updatedAt,
+    pendingInteraction: status === 'waiting'
+      ? { requestId: 'example-approval', kind: 'plan_review', summary: '确认示例发布说明', raisedAt: updatedAt }
+      : null,
+    artifacts: [],
+  };
+});
 
 /** 伙伴近况浮层（docs/product-rules/cindy-bots-runtime.md 6.3.4）。 */
 export default {
   name: 'teammate-glance',
   entry: './glance-fixture.tsx',
   viewport: { width: 1040, height: 760 },
-  real: 'BotSessionContentHeader, BotGlancePopover (computers, todos, outputs, due dots, context menu), Radix popover/menu, theme and translations',
+  real: 'BotSessionContentHeader, BotGlancePopover (computers, todos, background tasks, outputs, due dots, context menu), Radix popover/menu, theme and translations',
   notCovered:
-    'Live todo/delegation data, cloud companion home switching, remote teammates over device-link, sending the quoted todo or 帮我查查, toggling the daily check, opening files',
+    'Live todo/delegation data, full task page after navigation, cloud companion home switching, remote teammates over device-link, sending the quoted todo or 帮我查查, toggling the daily check, opening files',
   stubs: {
     'src/renderer/features/device-link/refreshRemoteSessions': `export const refreshRemoteDeviceSessions=async()=> 'done';`,
-    'src/renderer/hooks/useCCSessions': `const tasks=[{id:'task-1',title:'整理项目反馈',status:'active',updatedAt:'2026-10-28T10:00:00Z'}, {id:'task-2',title:'完善手机任务入口',status:'active',updatedAt:'2026-10-28T09:00:00Z'}];export const useCCSessions=()=>({sessions:${data}.case==='new'?[]:tasks});`,
+    'src/renderer/hooks/useCCSessions': `const tasks=[{id:'task-1',title:'整理项目反馈',status:'active',updatedAt:'2026-10-28T10:00:00Z'}, {id:'task-2',title:'完善手机任务入口',status:'active',updatedAt:'2026-10-28T09:00:00Z'}];export const useCCSessions=()=>({sessions:['new', 'background-tasks'].includes(${data}.case)?[]:tasks});`,
     'src/renderer/features/bots/botFollowScopes': { partial: `export const useTaskCreatorIndex=()=>new Map(['task-1','task-2'].map(id=>[JSON.stringify([null,id]),new Set([JSON.stringify(['teammate','cindy'])])]));` },
     'src/renderer/contexts/PrRefsContext': { partial: `export const usePrRefsForSessions=ids=>ids.length?[{sessionId:'task-1',owner:'example',repo:'app',prNumber:42,lastSeenAt:${now + 1}}]:[]; export const usePrStatuses=()=>({statuses:new Map([['example/app#42',{ok:true,status:'merged',title:'修复伙伴任务的跨设备入口'}]]),successfulStatuses:new Map()});` },
     'src/renderer/lib/sessionAttentionStore': { partial: `export const useSessionAttentionKind=id=>id==='task-1'?'done':undefined;` },
     'src/renderer/features/bots/botStore': {
       partial: `export const useBotProfiles=()=>${data}.case==='new'?[]:[{id:'cindy-default',name:'Cindy',templateId:'cindy',status:'active',sessionId:'chat-1'}];export const useBotUnreadCounts=()=>({});`,
     },
-    'src/renderer/features/bots/useRemoteBots': `export const useRemoteCindyIds=()=>new Set(); export const useRemoteBots=()=>${data}.case==='new'?[]:[
+    'src/renderer/features/bots/useRemoteBots': `export const useRemoteCindyIds=()=>new Set(); export const useRemoteBots=()=>['new', 'background-tasks'].includes(${data}.case)?[]:[
       {id:'cindy-default',name:'Cindy',deviceId:'mini',deviceName:'Mac-mini',online:true,sessionId:'r1',avatar:'',status:'active',lastReplyAt:20,readAt:10},
       {id:'cindy-default',name:'Cindy',deviceId:'mbp',deviceName:'Chris-MBP-M5',online:false,sessionId:'r2',avatar:'',status:'active'},
       {id:'cindy-default',name:'Cindy',deviceId:'imac',deviceName:'Office iMac',online:false,sessionId:'r3',avatar:'',status:'active'}];`,
     'src/renderer/features/device-link/useDeviceLinkDeviceList':
-      "export const useDeviceLinkDeviceList=()=>[{deviceId:'self',name:'Mac-Studio',isSelf:true}];",
-    'src/renderer/features/bots/botDelegationLive': `export const useBotDelegations=()=>${data}.case==='new'?[]:[
+      `export const useDeviceLinkDeviceList=()=>[{deviceId:'self',name:${data}.case==='background-tasks'?'Example computer':'Mac-Studio',isSelf:true}];`,
+    'src/renderer/lib/sessionService': {
+      partial: `const tasks = ${JSON.stringify(backgroundTasks)};
+        export const get = async (id) => {
+          const task = tasks.find((item) => item.childSessionId === id);
+          return task ? { id, title: task.title, status: 'active' } : null;
+        };`,
+    },
+    'src/renderer/features/bots/botDelegationLive': `export const useBotDelegations=()=>['new', 'background-tasks'].includes(${data}.case)?[]:[
       {id:'d1',requestingBotId:'cindy-default',status:'completed',title:'October growth report',childSessionId:'c1',completedAt:${now},updatedAt:${now},
        artifacts:[{path:'reports/October growth report.docx',absolutePath:'/w/reports/October growth report.docx',status:'added'},{path:'src/app.ts',status:'modified'}]},
       {id:'d2',requestingBotId:'cindy-default',status:'completed',title:'Studio local capabilities',childSessionId:'c2',completedAt:${now - 86_400_000},updatedAt:${now - 86_400_000},
-       artifacts:[{path:'Studio capabilities.pdf',absolutePath:'/w/Studio capabilities.pdf',status:'added'},{path:'feedback.xlsx',absolutePath:'/w/feedback.xlsx',status:'added'},{path:'tray.png',absolutePath:'/w/tray.png',status:'added'}]}];`,
+       artifacts:[{path:'Studio capabilities.pdf',absolutePath:'/w/Studio capabilities.pdf',status:'added'},{path:'feedback.xlsx',absolutePath:'/w/feedback.xlsx',status:'added'},{path:'tray.png',absolutePath:'/w/tray.png',status:'added'}]}];
+      const backgroundTasks = ${JSON.stringify(backgroundTasks)};
+      export const useBotDelegationList = (sessionId) => ({
+        rows: sessionId === 'chat-1' && ${data}.case === 'background-tasks' ? backgroundTasks : [],
+        resolved: true, stale: false, retry() {},
+      });`,
   },
   cases: {
     default: { about: 'Cindy on several computers, todos with one due today, finished deliverables' },
@@ -38,13 +76,14 @@ export default {
     new: { about: 'Empty teammate: only Computers; no todo suggestions or outputs' },
     activity: { about: 'No todos, attributed recent tasks, unread result and true PR title' },
     routines: { about: 'Never-run and paused routines mixed with ordinary tasks; direct timer icons in one list' },
+    'background-tasks': { about: 'Fixed entry for this teammate’s background tasks, with execution states and latest activity' },
   },
   async ready(page) {
     await page.getByTestId('bot-glance-button').waitFor();
   },
   async check(page, ui) {
     const button = page.getByTestId('bot-glance-button');
-    if (ui.case !== 'new' && ui.case !== 'activity' && ui.case !== 'routines') {
+    if (ui.case === 'default' || ui.case === 'menu') {
       await page.waitForFunction(() =>
         document.querySelector('[data-testid="bot-glance-button"] span[aria-hidden]') !== null,
       );
@@ -53,6 +92,38 @@ export default {
     await button.click();
     const popover = page.getByTestId('bot-glance-popover');
     await popover.waitFor();
+    if (ui.case === 'background-tasks') {
+      const entry = popover.getByTestId('bot-glance-background-tasks');
+      await entry.waitFor();
+      await ui.capture('background-task-entry');
+      await entry.click();
+      const list = popover.getByTestId('bot-glance-background-list');
+      await list.waitFor();
+      const rows = list.getByTestId('bot-glance-background-task');
+      assert.equal(await rows.count(), 5, 'only the current teammate’s five tasks are shown');
+      for (const [index, task] of backgroundTasks.slice(0, 5).entries()) {
+        const row = rows.nth(index);
+        assert.equal(await row.getByText(task.title, { exact: true }).count(), 1, 'tasks use latest activity order');
+        const status = await ui.t(`bots.collab.status.${task.status}`);
+        assert.equal(await row.getByText(`${status} ·`).count(), 1, 'row shows its status and latest update');
+      }
+      await ui.capture('background-task-list');
+      const filter = list.getByRole('combobox', { name: await ui.t('bots.glance.background.filter') });
+      await filter.click();
+      await page.getByRole('option', { name: await ui.t('bots.glance.background.waiting'), exact: true }).click();
+      assert.equal(await rows.count(), 1, 'waiting filter excludes other statuses');
+      assert.equal(await rows.first().getByText(backgroundTasks[1].title, { exact: true }).count(), 1);
+      await rows.first().click();
+      await page.waitForFunction((expected) =>
+        document.querySelector('[data-testid="glance-fixture-route"]')?.textContent === expected,
+        `/cc-agent/${backgroundTasks[1].childSessionId}`,
+      );
+      await popover.waitFor({ state: 'hidden' });
+      await button.click();
+      await entry.click();
+      assert.equal(await rows.count(), 5, 'reopening the view shows all five tasks');
+      return;
+    }
     if (ui.case !== 'new') {
       const unread = page.getByTestId('bot-glance-computer').getByLabel(await ui.t('bots.devicePicker.unread'));
       assert.equal(await unread.count(), 1, 'remote computer exposes one unread indicator');

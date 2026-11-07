@@ -10242,6 +10242,19 @@
       "followingMark": "Esta tarefa está ao cuidado de {{names}}"
     },
     "glance": {
+      "background": {
+        "back": "Voltar",
+        "title": "Tarefas em segundo plano",
+        "filter": "Filtrar por estado da tarefa",
+        "all": "Todas",
+        "failedOrStopped": "Falhas ou paragens",
+        "waiting": "Em espera",
+        "empty": "Ainda não há tarefas em segundo plano.",
+        "emptyFiltered": "Não há tarefas em segundo plano com este estado.",
+        "loadFailed": "Não foi possível carregar as tarefas em segundo plano.",
+        "openFailed": "Não foi possível abrir esta tarefa em segundo plano.",
+        "updatedAt": "Última atualização: {{time}}"
+      },
       "open": "{{name}} em resumo",
       "dueUnseen": "Um afazer está a vencer",
       "computers": "Computadores",

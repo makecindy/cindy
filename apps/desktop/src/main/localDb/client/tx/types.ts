@@ -792,6 +792,7 @@ export interface BotsFinishDelegationArgs {
 
 export interface BotsFinishDelegationResult {
   id: string;
+  requestingBotId: string;
   targetBotId: string | null;
   runSequence: number;
   parentSessionId: string | null;

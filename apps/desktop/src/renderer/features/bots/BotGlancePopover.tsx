@@ -1,7 +1,7 @@
 /** Partner glance: existing computer controls, nonempty owner todos, attributed tasks and outputs.
  * Task attention and PR state are read-only projections of the ordinary task list stores.
  */
-import { useEffect, useMemo, useRef, useState, type KeyboardEvent, type MouseEvent, type ReactNode } from 'react';
+import { useEffect, useMemo, useRef, useState, useSyncExternalStore, type KeyboardEvent, type MouseEvent, type ReactNode } from 'react';
 import { Check, ChevronDown, CircleAlert, LayoutGrid, Monitor, ScanSearch, MessageCircle, GitPullRequest, X } from 'lucide-react';
 import type { Routine } from '@cindy/maker-scheduler';
 import { REMOTE_RESOURCE_CHANGED_CHANNEL, parseRemoteResourceChangedPayload } from '@cindy/device-link';
@@ -12,6 +12,7 @@ import { buildTodoReferenceHref } from '@cindy/maker-shared/agent-input-projecti
 import { todoDateLabel, todoDue, todoDueSoon, type TeammateTodo } from '@cindy/maker-shared/teammate-todo';
 
 import { WINDOW_NO_DRAG_STYLE } from '@/components/layout/windowDrag';
+import { Button } from '@/components/ui/button';
 import { FileTypeIcon } from '@/components/ui/file-type-icon';
 import {
   DropdownMenu,
@@ -20,12 +21,15 @@ import {
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu';
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
+import { Select } from '@/components/ui/select';
+import { Spinner } from '@/components/ui/spinner';
 import { AttentionDot } from '@/components/sidebar/AttentionDot';
 import { useSessionAttentionKind } from '@/lib/sessionAttentionStore';
 import { useCCSessions } from '@/hooks/useCCSessions';
 import { usePrActions, usePrRefsForSessions, usePrStatuses } from '@/contexts/PrRefsContext';
 import { prStatusKey, sessionPrUrl, type SessionPrRef } from '@cindy/maker-shared';
 import { PR_STATUS_ICON, prStatusColor } from '@/features/cc-agent/gitContextPrVisuals';
+import { useSessionDisplayRunningState } from '@/features/cc-agent/hooks/useSessionDisplayRunningState';
 import { sessionActivityMs } from '@/features/cc-agent/lib/dateSessionGrouping';
 import { AutomationTimerIcon } from '@/features/cc-agent/sidebar/AutomationTimerIcon';
 import { isDeviceLinkRemotePushCurrent } from '@/lib/remoteDataOwnerPushFence';
@@ -46,7 +50,7 @@ import { BotAvatar } from './BotAvatar';
 import { isBotKnownOffline } from './BotConnectionStatus';
 import { HomeSwitchConfirm, useCompanionHomeSwitch, type HomeSwitch } from './BotHomeComputerSetting';
 import type { BotChatIdentity } from './BotSessionContentHeader';
-import { useBotDelegations } from './botDelegationLive';
+import { useBotDelegationList, useBotDelegations } from './botDelegationLive';
 import { isBotPrimaryGeneratedFile } from './botGeneratedArtifacts';
 import { useBotProfiles, useBotUnreadCounts } from './botStore';
 import { cloudRemoteBots, withoutCloudCompanions, withoutShadowedBots } from './companionCloudPresentation';
@@ -70,6 +74,9 @@ const TODO_PREVIEW = 2;
 const TASK_PREVIEW = 5;
 const OUTPUT_PREVIEW = 3;
 const OUTPUT_LIMIT = 30;
+const BACKGROUND_TASK_PAGE_SIZE = 30;
+const BACKGROUND_TASK_FILTERS = ['all', 'running', 'waiting', 'completed', 'unsuccessful'] as const;
+type BackgroundTaskFilter = (typeof BACKGROUND_TASK_FILTERS)[number];
 
 function useToggle(): [boolean, () => void] {
   const [open, setOpen] = useState(false);
@@ -678,6 +685,132 @@ function useGlanceRoutines(botId: string, deviceId?: string) {
   return { routines, failed, retry: () => setReload(value => value + 1) };
 }
 
+function BackgroundTasks({ botId, sessionId, onBack, onClose }: {
+  botId: string;
+  sessionId: string;
+  onBack(): void;
+  onClose(): void;
+}) {
+  const { t, i18n } = useTranslation();
+  const navigate = useNavigate();
+  const { rows, resolved, stale, retry } = useBotDelegationList(sessionId, botId);
+  const running = useSyncExternalStore(makerChatStore.subscribeAll, makerChatStore.getRunningSnapshot);
+  const { sessions: localSessions } = useCCSessions({ includeArchived: 'all' });
+  const [filter, setFilter] = useState<BackgroundTaskFilter>('all');
+  const [limit, setLimit] = useState(BACKGROUND_TASK_PAGE_SIZE);
+  const backButton = useRef<HTMLButtonElement>(null);
+  const openRequest = useRef(0);
+  useEffect(() => {
+    backButton.current?.focus({ preventScroll: true });
+    return () => { openRequest.current += 1; };
+  }, []);
+
+  const dateFormat = useMemo(() => new Intl.DateTimeFormat(i18n.language, {
+    dateStyle: 'medium', timeStyle: 'short',
+  }), [i18n.language]);
+  const sessionsById = useMemo(() => new Map(localSessions.map(task => [task.id, task])), [localSessions]);
+  const delegations = useMemo(() => rows.flatMap(row => {
+    const taskId = row.childSessionId;
+    // targetProfileVersion survives deletion of a recipient teammate.
+    if (row.requestingBotId !== botId || row.targetBotId !== null || row.targetProfileVersion !== null || !taskId) return [];
+    const session = sessionsById.get(taskId);
+    if (session?.status === 'deleted') return [];
+    return [{ row, taskId, session }];
+  }), [rows, botId, sessionsById]);
+  const taskSessions = useMemo(() => delegations.flatMap(({ session }) => session ? [session] : []), [delegations]);
+  const runningSessionIds = useMemo(() => new Set(
+    [...running].filter(([, status]) => status.isRunning).map(([id]) => id),
+  ), [running]);
+  const { displayRunningSessionIds } = useSessionDisplayRunningState(taskSessions, runningSessionIds);
+
+  const tasks = useMemo(() => delegations.map(({ row, taskId, session }) => {
+    const runtime = running.get(taskId);
+    const needsInput = Boolean(row.pendingInteraction || runtime?.hasPendingAskUser || runtime?.hasPendingPermission
+      || runtime?.hasPendingPlanReview || runtime?.hasPendingPluginSetup || runtime?.hasActionableInputHandoff);
+    const status = needsInput || row.status === 'waiting' ? 'waiting'
+      : displayRunningSessionIds.has(taskId) ? 'running' : row.status;
+    const updatedAt = Math.max(row.updatedAt, session ? sessionActivityMs(session) : 0);
+    return { row, taskId, title: session?.title || row.title, status, needsInput, updatedAt };
+  }).sort((a, b) => b.updatedAt - a.updatedAt || a.row.id.localeCompare(b.row.id)), [delegations, running, displayRunningSessionIds]);
+
+  const visible = tasks.filter(({ status }) => {
+    switch (filter) {
+      case 'all': return true;
+      case 'running': return status === 'running' || status === 'queued';
+      case 'unsuccessful': return status === 'failed' || status === 'cancelled' || status === 'timed-out';
+      default: return status === filter;
+    }
+  });
+  const allVisible = visible.length <= limit;
+
+  const openTask = async (taskId: string) => {
+    const request = ++openRequest.current;
+    const owner = getDataOwnerGeneration();
+    const current = () => request === openRequest.current && isDataOwnerGenerationCurrent(owner);
+    try {
+      if (remoteProjectsStore.getSessionDeviceId(taskId)) throw new Error('Task origin conflict');
+      const task = await sessionService.get(taskId);
+      if (!current()) return;
+      if (!task || task.id !== taskId || task.status === 'deleted' || remoteProjectsStore.getSessionDeviceId(taskId)) {
+        throw new Error('Task unavailable');
+      }
+      const route = await resolveSessionRoute(taskId, task);
+      if (!current()) return;
+      if (remoteProjectsStore.getSessionDeviceId(taskId)) throw new Error('Task origin conflict');
+      onClose();
+      navigate(route);
+    } catch {
+      if (current()) toast.error(t('bots.glance.background.openFailed'));
+    }
+  };
+
+  return (
+    <section data-testid="bot-glance-background-list" aria-label={t('bots.glance.background.title')} className="px-2 py-2">
+      <div className="flex flex-wrap items-center justify-between gap-2 px-2 pb-2">
+        <Button ref={backButton} variant="secondary" size="md" compact onClick={onBack}>{t('bots.glance.background.back')}</Button>
+        <h3 className="min-w-0 flex-1 text-13 font-medium text-[var(--text-primary)]">{t('bots.glance.background.title')}</h3>
+      </div>
+      <div className="px-2 pb-2">
+        <Select
+          label={t('bots.glance.background.filter')}
+          className="w-full"
+          value={filter}
+          options={[
+            { value: 'all', label: t('bots.glance.background.all') },
+            { value: 'running', label: t('bots.collab.status.running') },
+            { value: 'waiting', label: t('bots.glance.background.waiting') },
+            { value: 'completed', label: t('bots.collab.status.completed') },
+            { value: 'unsuccessful', label: t('bots.glance.background.failedOrStopped') },
+          ]}
+          onValueChange={value => {
+            const next = BACKGROUND_TASK_FILTERS.find(option => option === value);
+            if (!next) return;
+            setFilter(next);
+            setLimit(BACKGROUND_TASK_PAGE_SIZE);
+          }}
+        />
+      </div>
+      {!resolved ? <div className="flex justify-center py-4"><Spinner size={16} role="status" aria-label={t('ccAgent.common.loading')} /></div> : null}
+      {stale ? <Row icon={<CircleAlert size={16} />} title={t(tasks.length ? 'bots.collab.stale' : 'bots.glance.background.loadFailed')}
+        trailing={t('commonUi.retry')} onClick={retry} /> : null}
+      {resolved && !stale && visible.length === 0 ? <Row muted title={t(tasks.length ? 'bots.glance.background.emptyFiltered' : 'bots.glance.background.empty')} /> : null}
+      {visible.slice(0, limit).map(({ row, taskId, title, status, needsInput, updatedAt }) => {
+        const label = t(status === 'waiting' && !needsInput ? 'bots.glance.background.waiting' : `bots.collab.status.${status}`);
+        const updated = t('bots.glance.background.updatedAt', { time: dateFormat.format(updatedAt) });
+        return <Row key={row.id} testId="bot-glance-background-task" title={title} meta={`${label} · ${updated}`} onClick={() => void openTask(taskId)} />;
+      })}
+      {visible.length > BACKGROUND_TASK_PAGE_SIZE ? (
+        <div className="flex justify-center pt-2">
+          <Button variant="secondary" size="md" tone="quiet" compact
+            onClick={() => setLimit(count => allVisible ? BACKGROUND_TASK_PAGE_SIZE : count + BACKGROUND_TASK_PAGE_SIZE)}>
+            {t(allVisible ? 'bots.glance.showLess' : 'bots.glance.showMore')}
+          </Button>
+        </div>
+      ) : null}
+    </section>
+  );
+}
+
 // ---------------------------------------------------------------- 近期任务（含未运行的例行任务）与 PR。
 function Activity({ bot, onClose }: { bot: BotChatIdentity; onClose(): void }) {
   const { t } = useTranslation();
@@ -799,8 +932,19 @@ function PrOutput({ pr }: { pr: SessionPrRef }) {
 export function BotGlanceButton({ bot, cloudHome }: { bot: BotChatIdentity; cloudHome: boolean }) {
   const { t } = useTranslation();
   const [open, setOpen] = useState(false);
+  const [backgroundSessionId, setBackgroundSessionId] = useState<string | null>(null);
+  const backgroundEntry = useRef<HTMLButtonElement>(null);
+  const restoreEntryFocus = useRef(false);
   const homeSwitch = useCompanionHomeSwitch({ id: bot.id, name: bot.name }, 'toast');
   const sessionId = bot.sessionId ?? '';
+  const backgroundOpen = !bot.deviceId && backgroundSessionId === sessionId;
+  useEffect(() => setBackgroundSessionId(null), [bot.deviceId, sessionId]);
+  useEffect(() => {
+    if (!backgroundOpen && restoreEntryFocus.current) {
+      restoreEntryFocus.current = false;
+      backgroundEntry.current?.focus({ preventScroll: true });
+    }
+  }, [backgroundOpen]);
   const host = useMemo<GlanceTodoHost>(() => ({ botId: bot.id, deviceId: bot.deviceId }), [bot.deviceId, bot.id]);
   const todos = useGlanceTodos(host, Boolean(sessionId));
   // 只有本机伙伴的资料在这里；远程伙伴由它所在的电脑在关掉「待办」时不下发每天检查的状态。
@@ -817,6 +961,7 @@ export function BotGlanceButton({ bot, cloudHome }: { bot: BotChatIdentity; clou
 
   const changeOpen = (next: boolean) => {
     setOpen(next);
+    setBackgroundSessionId(null);
     if (next) {
       void todos.refresh();
       markDueSeen(bot.id, due);
@@ -852,21 +997,40 @@ export function BotGlanceButton({ bot, cloudHome }: { bot: BotChatIdentity; clou
         className="w-[360px] max-w-[calc(100vw-24px)] overflow-y-auto p-0"
         style={{ maxHeight: 'var(--radix-popover-content-available-height, calc(100dvh - 24px))', ...WINDOW_NO_DRAG_STYLE }}
       >
-        <div className="flex items-center gap-3 px-4 pb-1 pt-3">
-          <BotAvatar bot={bot} size="md" />
-          <span className="min-w-0 truncate text-15 font-medium text-[var(--text-primary)]">{bot.name}</span>
-        </div>
-        <Section label={t('bots.glance.computers')} divided={false}>
-          <Computers
-            bot={bot}
-            open={open}
-            cloudHome={cloudHome}
-            homeSwitch={homeSwitch}
-            onClose={() => setOpen(false)}
-          />
-        </Section>
-        <Todos host={host} sessionId={sessionId} todos={todos} todoOff={todoOff} onClose={() => setOpen(false)} />
-        <Activity bot={bot} onClose={() => setOpen(false)} />
+        {backgroundOpen ? <BackgroundTasks
+          key={sessionId}
+          botId={bot.id}
+          sessionId={sessionId}
+          onBack={() => {
+            restoreEntryFocus.current = true;
+            setBackgroundSessionId(null);
+          }}
+          onClose={() => changeOpen(false)}
+        /> : (
+          <>
+            <div className="flex items-center gap-3 px-4 pb-1 pt-3">
+              <BotAvatar bot={bot} size="md" />
+              <span className="min-w-0 flex-1 truncate text-15 font-medium text-[var(--text-primary)]">{bot.name}</span>
+              {!bot.deviceId ? (
+                <Button ref={backgroundEntry} data-testid="bot-glance-background-tasks" variant="secondary" size="md" compact
+                  className="min-w-0 max-w-[60%]" onClick={() => setBackgroundSessionId(sessionId)}>
+                  <span className="truncate">{t('bots.glance.background.title')}</span>
+                </Button>
+              ) : null}
+            </div>
+            <Section label={t('bots.glance.computers')} divided={false}>
+              <Computers
+                bot={bot}
+                open={open}
+                cloudHome={cloudHome}
+                homeSwitch={homeSwitch}
+                onClose={() => setOpen(false)}
+              />
+            </Section>
+            <Todos host={host} sessionId={sessionId} todos={todos} todoOff={todoOff} onClose={() => setOpen(false)} />
+            <Activity bot={bot} onClose={() => setOpen(false)} />
+          </>
+        )}
       </PopoverContent>
     </Popover>
     {cloudHome ? <HomeSwitchConfirm bot={{ id: bot.id, name: bot.name }} state={homeSwitch} /> : null}

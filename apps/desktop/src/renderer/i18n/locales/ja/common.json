@@ -10119,6 +10119,19 @@
       "followingMark": "このセッションの担当: {{names}}"
     },
     "glance": {
+      "background": {
+        "back": "戻る",
+        "title": "バックグラウンドタスク",
+        "filter": "タスクの状態で絞り込む",
+        "all": "すべて",
+        "failedOrStopped": "失敗または停止",
+        "waiting": "待機中",
+        "empty": "バックグラウンドタスクはまだありません。",
+        "emptyFiltered": "この状態のバックグラウンドタスクはありません。",
+        "loadFailed": "バックグラウンドタスクを読み込めませんでした。",
+        "openFailed": "このバックグラウンドタスクを開けませんでした。",
+        "updatedAt": "最終更新：{{time}}"
+      },
       "open": "{{name}}の近況",
       "dueUnseen": "期限が来た Todo があります",
       "computers": "コンピュータ",

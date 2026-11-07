@@ -10162,6 +10162,19 @@
       "followingMark": "This task is looked after by {{names}}"
     },
     "glance": {
+      "background": {
+        "back": "Back",
+        "title": "Background Tasks",
+        "filter": "Filter by Task Status",
+        "all": "All",
+        "failedOrStopped": "Failed or Stopped",
+        "waiting": "Waiting",
+        "empty": "No background tasks yet.",
+        "emptyFiltered": "No background tasks match this status.",
+        "loadFailed": "Couldn’t load background tasks.",
+        "openFailed": "Couldn’t open this background task.",
+        "updatedAt": "Updated {{time}}"
+      },
       "open": "{{name}} at a glance",
       "dueUnseen": "A todo is due",
       "computers": "Computers",

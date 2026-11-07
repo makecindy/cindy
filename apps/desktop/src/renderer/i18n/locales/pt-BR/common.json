@@ -10242,6 +10242,19 @@
       "followingMark": "Esta tarefa é acompanhada por {{names}}"
     },
     "glance": {
+      "background": {
+        "back": "Voltar",
+        "title": "Tarefas em segundo plano",
+        "filter": "Filtrar por status da tarefa",
+        "all": "Todas",
+        "failedOrStopped": "Falhas ou interrupções",
+        "waiting": "Aguardando",
+        "empty": "Ainda não há tarefas em segundo plano.",
+        "emptyFiltered": "Não há tarefas em segundo plano com esse status.",
+        "loadFailed": "Não foi possível carregar as tarefas em segundo plano.",
+        "openFailed": "Não foi possível abrir esta tarefa em segundo plano.",
+        "updatedAt": "Última atualização: {{time}}"
+      },
       "open": "Visão geral de {{name}}",
       "dueUnseen": "Uma pendência está vencendo",
       "computers": "Computadores",

@@ -10242,6 +10242,19 @@
       "followingMark": "Cette tâche est suivie par {{names}}"
     },
     "glance": {
+      "background": {
+        "back": "Retour",
+        "title": "Tâches en arrière-plan",
+        "filter": "Filtrer par état de la tâche",
+        "all": "Toutes",
+        "failedOrStopped": "En échec ou arrêtées",
+        "waiting": "En attente",
+        "empty": "Aucune tâche en arrière-plan pour le moment.",
+        "emptyFiltered": "Aucune tâche en arrière-plan ne correspond à cet état.",
+        "loadFailed": "Impossible de charger les tâches en arrière-plan.",
+        "openFailed": "Impossible d’ouvrir cette tâche en arrière-plan.",
+        "updatedAt": "Mise à jour : {{time}}"
+      },
       "open": "{{name}} en un coup d'œil",
       "dueUnseen": "Une tâche à faire arrive à échéance",
       "computers": "Ordinateurs",
