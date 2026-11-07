@@ -55,7 +55,7 @@ export interface RoutineHostDeps {
   finishImportedAutomation?: typeof import('../bot-import/automationRuntime.js').finishImportedAutomation;
   recoverImports?: () => Promise<void>;
   getBot(botId: string): Promise<{ status: string; canonicalSessionId?: string | null }>;
-  ensureRoutineSession(input: { botId: string; routineId: string; title: string; modelOverride?: RoutineModel | null }): Promise<{ ok: true; sessionId: string; created: boolean } | { ok: false; message: string }>;
+  ensureRoutineSession(input: { botId: string; routineId: string; title: string; modelOverride?: RoutineModel | null; hidden?: boolean }): Promise<{ ok: true; sessionId: string; created: boolean } | { ok: false; message: string }>;
   closeRoutineSession?(sessionId: string): Promise<void>;
   /**
    * Fresh 任务未被派发给模型时回收：它与普通任务一样出现在任务列表里，
@@ -260,12 +260,14 @@ async function execute(scope: string, routine: Routine, run: RoutineRun, signal:
   }
   const persistent = routine.sessionMode !== 'fresh';
   // Fresh mode still creates a host-owned lane so it inherits the same bot
-  // permissions and model route; the lane is closed after this trigger.
+  // permissions and model route; the lane is closed after this trigger. It is a
+  // hidden task: results reach the teammate chat, and run history opens the task.
   const lane = await getRoutineHost().ensureRoutineSession({
     botId: routine.botId,
     routineId: persistent ? routine.id : `${routine.id}:${randomUUID()}`,
     title: routine.name,
     modelOverride: routine.modelOverride,
+    ...(persistent ? {} : { hidden: true }),
   });
   assertScope(scope);
   if (!lane.ok) throw new Error(lane.message);

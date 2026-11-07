@@ -122,6 +122,7 @@ it('dispatches into the routine lane and records its task for inspection', async
   // persistent 专线承载上下文，永不自动删（只归档）。
   expect(mock.deleteRoutineSession).not.toHaveBeenCalled();
   expect(mock.ensureRoutineSession).toHaveBeenCalledWith(expect.objectContaining({ botId: 'bot', routineId: routine.id }));
+  expect(mock.ensureRoutineSession.mock.calls[0][0]).not.toHaveProperty('hidden');
 });
 
 it('rebinds a stored canonical backing schedule to its independent lane before running', async () => {
@@ -149,8 +150,9 @@ it('creates and closes an isolated lane for each fresh routine trigger', async (
   });
   await routineTools.runNow('bot', routine.id);
   await vi.waitFor(async () => expect((await routineTools.history('bot', routine.id))[0].status).toBe('success'));
+  // Each trigger's lane is a hidden task: the result reaches the teammate chat and run history.
   expect(mock.ensureRoutineSession).toHaveBeenCalledWith(expect.objectContaining({
-    routineId: expect.stringMatching(new RegExp(`^${routine.id}:`)),
+    routineId: expect.stringMatching(new RegExp(`^${routine.id}:`)), hidden: true,
   }));
   expect(mock.closeRoutineSession).toHaveBeenCalledWith(expect.stringMatching(new RegExp(`^lane-${routine.id}:`)));
   // 真实跑过的 fresh 任务保留：自动化文件夹和「查看任务」要能回放完整过程。
