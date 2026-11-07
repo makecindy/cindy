@@ -13,6 +13,12 @@ export default {
   },
   notCovered: 'PDF/Drawio previews, real network, sending and native input; actual group layout and wheel navigation use synthetic host data.',
   cases: {
+    'thread-process': { about: 'A process in the actual topic sidebar uses the same stable disclosure behavior as the main group',
+      data: { ...group.cases['process-history'].data, processDisclosure: true, threadPanel: true } },
+    'live-process': { about: 'Running process disclosure keeps its heading still through each animation frame',
+      data: { ...group.cases['work-thinking'].data, sidebar: false, messages: 40, processDisclosure: true } },
+    'history-process': { about: 'Historical process disclosure keeps the reading position and allows returning to live follow',
+      data: { ...group.cases['process-history'].data, processDisclosure: true } },
     'short-growth': { about: 'A located short chat keeps its reading position and reveals unread navigation when content grows',
       data: { ...group.cases['long-thread'].data, messages: 2, sidebar: false, shortGrowth: true, controlled: true } },
     default: { about: 'History navigation temporarily replaces topic hints without changing scroll geometry',
@@ -30,6 +36,7 @@ export default {
     }
   },
   async check(page, ui) {
+    if (ui.data.processDisclosure) return checkProcessDisclosure(page, ui);
     const timeline = page.getByTestId('bot-group-timeline');
     const composer = page.locator('[data-chat-composer-stack]');
     const bubbles = page.locator('[data-group-bottom-bubbles]');
@@ -117,3 +124,113 @@ export default {
     await ui.capture('returned-to-bottom');
   },
 };
+
+// Regression: the actual group timeline used to pin to bottom on every disclosure
+// resize (109px live / 156px history). Sample animation frames, not just endpoints.
+async function checkProcessDisclosure(page, ui) {
+  await page.emulateMedia({ reducedMotion: 'no-preference' });
+  let surface = page;
+  if (ui.data.threadPanel) {
+    await page.evaluate(async () => {
+      const { group } = await window.electronAPI.maker.getBotGroup('fixture-group');
+      const answer = { ...group.messages[0], replyCount: 30 };
+      group.messages = [answer];
+      const replies = Array.from({ length: 30 }, (_, i) => ({ ...answer, id: `reply-${i}`,
+        threadRootId: answer.id, sequence: i + 2, content: `Reply ${i + 1}`,
+        process: i === 29 ? answer.process : undefined }));
+      window.electronAPI.maker.chatServer.thread = async () => ({ ok: true,
+        root: { ...answer, process: undefined }, replies: [...replies], hasMore: false });
+      window.electronAPI.maker.chatServer.reply = async input => {
+        replies.push({ ...answer, id: 'sent-reply', clientId: input.clientId,
+          threadRootId: answer.id, sequence: 32, authorKind: 'user', authorBotId: null,
+          isSelf: true, content: input.text, process: undefined });
+        return { ok: true, messageId: 'sent-reply' };
+      };
+      window.__uiPage.emit('botGroupChanged', { groupId: group.id, change: 'messages' });
+    });
+    await page.locator('[data-thread-preview]').first().click();
+    surface = page.locator('aside.thread-panel');
+  }
+  const heading = surface.locator('[data-teammate-process] > button').last();
+  await heading.waitFor();
+  if (ui.data.processRecord && !ui.data.threadPanel) {
+    await page.evaluate(async () => {
+      const { group } = await window.electronAPI.maker.getBotGroup('fixture-group');
+      const answer = group.messages[0];
+      group.messages = [...Array.from({ length: 30 }, (_, i) => ({ ...answer,
+        id: `history-${i}`, sequence: i + 1, content: `Checked record ${i + 1}`, process: undefined,
+      })), { ...answer, sequence: 31 }];
+      window.__uiPage.emit('botGroupChanged', { groupId: group.id, change: 'messages' });
+    });
+    await page.locator('[data-bot-group-message-id="history-29"]').waitFor();
+  } else if (!ui.data.processRecord) {
+    assert.equal(await page.locator('[data-teammate-process]').last().locator('.animate-spinner').count(), 1,
+      'the header already communicates working; no extra loading row after notes');
+  }
+  const timeline = ui.data.threadPanel ? surface.locator('div.overflow-y-auto').first() : page.getByTestId('bot-group-timeline');
+  await timeline.evaluate(el => { el.dataset.processScrollCheck = ''; });
+  await timeline.evaluate(el => { el.scrollTop = el.scrollHeight; });
+  await page.waitForFunction(() => {
+    const el = document.querySelector('[data-process-scroll-check]');
+    return el.scrollHeight > el.clientHeight && Math.abs(el.scrollHeight - el.scrollTop - el.clientHeight) < 2;
+  });
+  const composerElement = ui.data.threadPanel ? surface.locator('textarea') : surface.locator('[data-chat-composer-stack]');
+  const composer = await composerElement.boundingBox();
+  for (let cycle = 0; cycle < 4; cycle++) {
+    await heading.evaluate(button => {
+      window.disclosureFrames = new Promise(resolve => button.addEventListener('click', () => {
+        const start = performance.now(), positions = [button.getBoundingClientRect().y];
+        const tick = () => {
+          positions.push(button.getBoundingClientRect().y);
+          if (performance.now() - start < 650) requestAnimationFrame(tick);
+          else resolve(positions);
+        };
+        requestAnimationFrame(tick);
+      }, { once: true }));
+    });
+    if (cycle < 2) await heading.click();
+    else { await heading.focus(); await heading.press('Enter'); }
+    const positions = await page.evaluate(() => window.disclosureFrames);
+    const drift = Math.max(...positions) - Math.min(...positions);
+    assert.ok(drift <= 1, `process heading moved ${drift}px during toggle ${cycle}`);
+    assert.deepEqual(await composerElement.boundingBox(), composer);
+    await ui.capture(`process-toggle-${cycle}`);
+  }
+  const reserve = await timeline.evaluate(el => parseFloat(el.firstElementChild.style.minHeight));
+  const box = await timeline.boundingBox();
+  await page.mouse.move(box.x + 24, box.y + box.height / 2);
+  await page.mouse.wheel(0, -400);
+  await page.waitForFunction(oldReserve => {
+    const content = document.querySelector('[data-process-scroll-check]').firstElementChild;
+    return parseFloat(content.style.minHeight) < oldReserve;
+  }, reserve);
+  await page.mouse.wheel(0, 8000);
+  await page.waitForFunction(() => {
+    const el = document.querySelector('[data-process-scroll-check]');
+    return el.scrollHeight - el.scrollTop - el.clientHeight < 2 && !el.firstElementChild.style.minHeight;
+  });
+  // A subsequent real layout change must follow the tail again.
+  await timeline.evaluate(el => {
+    el.querySelector('article:last-of-type').style.minHeight = '500px';
+    // Deliver the previous scroll notification before ResizeObserver, as can
+    // happen when sending while the process is still animating open.
+    el.dispatchEvent(new Event('scroll', { bubbles: true }));
+  });
+  await page.waitForFunction(() => {
+    const el = document.querySelector('[data-process-scroll-check]');
+    return el.scrollHeight - el.scrollTop - el.clientHeight < 2;
+  });
+  await ui.capture('process-follow-restored');
+  if (ui.data.threadPanel) {
+    await heading.click();
+    const input = surface.locator('textarea');
+    await input.fill('Continue after inspecting the process');
+    await input.press('Enter');
+    await surface.locator('[data-bot-group-message-id="sent-reply"]').waitFor();
+    await page.waitForFunction(() => {
+      const el = document.querySelector('[data-process-scroll-check]');
+      return el.scrollHeight - el.scrollTop - el.clientHeight < 2 && !el.firstElementChild.style.minHeight;
+    });
+    await ui.capture('thread-send-restores-follow');
+  }
+}

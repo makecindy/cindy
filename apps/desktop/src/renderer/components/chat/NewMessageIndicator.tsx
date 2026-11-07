@@ -24,6 +24,7 @@
  */
 
 import { ArrowDown } from 'lucide-react';
+import { useRef } from 'react';
 import { useTranslation } from 'react-i18next';
 
 import { cn } from '@/lib/utils';
@@ -31,7 +32,7 @@ import { cn } from '@/lib/utils';
 export interface NewMessageIndicatorProps {
   /** 显隐开关——由父组件根据 `!isNearBottom && unreadCount > 0` 决定。 */
   visible: boolean;
-  /** 未读消息条数。count <= 0 时按钮内容仍然渲染但父组件会传 visible=false。 */
+  /** 未读消息条数。隐藏动画保留最后显示的数值，不闪出 0 条。 */
   count: number;
   /** 点击回调——父组件 `scrollToBottomSmooth`。 */
   onClick: () => void;
@@ -46,12 +47,15 @@ export function NewMessageIndicator({
   bottomOffset,
 }: NewMessageIndicatorProps) {
   const { t } = useTranslation();
-  const label = t('chat.newMessageIndicator.aria', { count });
+  const displayedCount = useRef(count);
+  if (visible && count > 0) displayedCount.current = count;
+  const label = t('chat.newMessageIndicator.aria', { count: displayedCount.current });
 
   return (
     <div
       aria-live="polite"
       aria-atomic="true"
+      aria-hidden={!visible}
       style={{ bottom: bottomOffset }}
       className={cn(
         // 定位容器：absolute + 水平居中 + 底部偏移由 style 控制
@@ -66,6 +70,7 @@ export function NewMessageIndicator({
       <button
         type="button"
         aria-label={label}
+        tabIndex={visible ? 0 : -1}
         onClick={onClick}
         className={cn(
           // 布局：pill 外形 + 32px 高 + 图标/文字水平排列
@@ -90,7 +95,7 @@ export function NewMessageIndicator({
             icon 视觉中心偏上,微调让文字与箭头中线对齐。两个 chip 共用同款 pill,
             必须同时修。 */}
         <span className="translate-y-[0.5px]">
-          {t('chat.newMessageIndicator.label', { count })}
+          {t('chat.newMessageIndicator.label', { count: displayedCount.current })}
         </span>
       </button>
     </div>

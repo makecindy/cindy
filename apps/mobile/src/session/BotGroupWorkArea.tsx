@@ -1,4 +1,5 @@
-import { useCallback, useEffect, useState } from 'react';
+import { ProcessDisclosureViewport, useProcessDisclosureViewport } from './useProcessDisclosureViewport';
+import { useCallback, useContext, useEffect, useRef, useState } from 'react';
 import { Pressable, ScrollView, StyleSheet, View } from 'react-native';
 import { ChevronDown, ChevronUp } from 'lucide-react-native';
 import { useFocusEffect } from 'expo-router';
@@ -31,6 +32,10 @@ export function BotGroupWorkArea({ group, deviceId, online, identityFor, onStop,
   const disclosureScope = JSON.stringify([accountGeneration, group.id, deviceId]);
   const [expandedScope, setExpandedScope] = useState<string | null>(null);
   const expanded = expandedScope === disclosureScope;
+  const inspectParentViewport = useContext(ProcessDisclosureViewport);
+  const detailMetrics = useRef({ offsetY: 0, viewportHeight: 0, contentHeight: 0 });
+  const detailDragging = useRef(false);
+  const detailViewport = useProcessDisclosureViewport(() => detailMetrics.current, () => inspectParentViewport?.(0));
   useEffect(() => {
     setExpandedScope(null);
   }, [disclosureScope, group.round.status]);
@@ -97,7 +102,10 @@ export function BotGroupWorkArea({ group, deviceId, online, identityFor, onStop,
   return <View testID="botGroup.work" style={styles.container}>
     <View style={styles.summaryRow}>
       <Pressable testID="botGroup.work.toggle" accessibilityRole="button" accessibilityState={{ expanded }}
-        accessibilityLabel={`${summary}, ${disclosure}`} onPress={() => setExpandedScope(expanded ? null : disclosureScope)}
+        accessibilityLabel={`${summary}, ${disclosure}`} onPress={() => {
+          detailViewport.resume();
+          setExpandedScope(expanded ? null : disclosureScope);
+        }}
         style={({ pressed }) => [styles.summary, pressed && styles.pressed]}>
         <Text numberOfLines={1} style={styles.summaryText}>{summary}</Text>
         <Chevron size={iconSize.sm} strokeWidth={iconStroke.regular} color={colors.textSecondary} />
@@ -110,7 +118,20 @@ export function BotGroupWorkArea({ group, deviceId, online, identityFor, onStop,
     </View>
     {/* Keep rows mounted while collapsed: their existing subscriptions discover
         prompts raised after the last group snapshot, and reveal those inline. */}
-    <ScrollView testID="botGroup.work.details" style={styles.details} contentContainerStyle={styles.rows} keyboardShouldPersistTaps="handled">
+    <ProcessDisclosureViewport.Provider value={detailViewport.inspect}>
+    <ScrollView testID="botGroup.work.details" style={styles.details} contentContainerStyle={styles.rows} keyboardShouldPersistTaps="handled"
+      onLayout={event => { detailMetrics.current.viewportHeight = event.nativeEvent.layout.height; }}
+      onContentSizeChange={(_width, height) => { detailMetrics.current.contentHeight = height; }}
+      onScrollBeginDrag={() => { detailDragging.current = true; }}
+      onScrollEndDrag={() => { detailDragging.current = false; }}
+      onMomentumScrollBegin={() => { detailDragging.current = true; }}
+      onMomentumScrollEnd={() => { detailDragging.current = false; }}
+      onScroll={event => {
+        const { contentOffset, contentSize, layoutMeasurement } = event.nativeEvent;
+        detailViewport.scroll(contentOffset.y, detailMetrics.current.offsetY, detailDragging.current,
+          contentSize.height - contentOffset.y - layoutMeasurement.height <= 1);
+        detailMetrics.current = { offsetY: contentOffset.y, contentHeight: contentSize.height, viewportHeight: layoutMeasurement.height };
+      }} scrollEventThrottle={16}>
       {speakers.map((speaker, index) => {
         const member = group.members.find(member => member.botId === speaker.botId);
         if (!member) return null;
@@ -124,7 +145,9 @@ export function BotGroupWorkArea({ group, deviceId, online, identityFor, onStop,
           collapsed={!expanded} revealWaiting={member.isOwned !== false}
           activity={speaker.activity} executionStatus={speaker.executionStatus} stopping={speaker.stopping} onError={onError} />;
       })}
+      {detailViewport.footerHeight > 0 && <View style={{ height: detailViewport.footerHeight }} />}
     </ScrollView>
+    </ProcessDisclosureViewport.Provider>
   </View>;
 }
 

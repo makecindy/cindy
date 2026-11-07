@@ -235,7 +235,7 @@ export function teammateVisualFixture(channel: string, args: unknown[], now = FI
     revision: 'process-1', display: { title: 'Design review' }, actions: [], links: [],
     blocks: [{ id: 'chat', primitive: BOT_GROUP_CHAT_PRIMITIVE, fallbackMarkdown: 'Design review', data: {
       id: request.ref.id, name: 'Design review', members: [{ botId: 'cindy-default', name: 'Cindy', status: 'active', isOwned: true, homeDeviceId: 'cindy-visual-mock-mac' }],
-      messages: [{ id: 'fixture-group-answer', sequence: 1, kind: 'message', authorKind: 'bot', authorBotId: 'cindy-default', authorName: 'Cindy',
+      messages: [...Array.from({ length: 12 }, (_, index) => ({ id: `fixture-history-${index}`, sequence: index + 1, kind: 'message', authorKind: 'user', authorName: '演示用户', content: `第 ${index + 1} 项进展已核对。`, createdAt: now - (13 - index) * MINUTE })), { id: 'fixture-group-answer', sequence: 13, kind: 'message', authorKind: 'bot', authorBotId: 'cindy-default', authorName: 'Cindy',
         content: '任务与 PR 的进展已整理，需要跟进的两项工作已列出。', createdAt: now,
         process: { groupId: request.ref.id, executionId: 'fixture-process-execution', sessionId: 'visual-teammate-process', clientId: 'fixture-process-source', durationMs: 60000 } }],
       plans: [], createdAt: now, updatedAt: now, round: { status: 'idle', canContinue: false, speakers: [] },

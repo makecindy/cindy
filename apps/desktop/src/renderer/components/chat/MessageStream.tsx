@@ -2983,7 +2983,6 @@ export const WorkGroupRenderItemView = memo(function WorkGroupRenderItemView({
     }
     return {
       kind: 'rendered',
-      prose: child.type === 'message' && child.message.role === 'assistant' && !child.message.systemCardType,
       key: child.key,
       renderNode: () => renderWorkGroupChild(child, context),
     };
@@ -4713,6 +4712,7 @@ export function MessageStream({
     restoringRef.current = false;
     if (!windowCoversEndRef.current) return;
     if (isNearBottomRef.current) return;
+    if (contentRef.current) contentRef.current.style.minHeight = '';
     isNearBottomRef.current = true;
     setIsNearBottom(true);
     setUnreadKeys(NO_UNREAD_KEYS);
@@ -5188,6 +5188,7 @@ export function MessageStream({
     isNearBottomRef.current = true;
     setIsNearBottom(true);
     setUnreadKeys(NO_UNREAD_KEYS);
+    if (contentRef.current) contentRef.current.style.minHeight = '';
     pinToBottom(true);
   }, [cancelFocusJump, finishChipJump, followLatestRequestKey, pinToBottom]);
 
@@ -5199,6 +5200,7 @@ export function MessageStream({
   const scrollToBottomSmooth = useCallback(() => {
     const el = scrollRef.current;
     if (!el) return;
+    if (contentRef.current) contentRef.current.style.minHeight = '';
     restoringRef.current = false;
     // 显式的新导航取代尚未落定的搜索 focus；自身的底部落点会消费此前延期的删除补偿。
     cancelFocusJump({ consumeDeferredDelete: true });
@@ -5484,8 +5486,8 @@ export function MessageStream({
   // 例外:卡片内用户点击"展开详情"(CARD_EXPAND_TOGGLE_EVENT 冒泡上来)。
   // 这是"就地看内容"的意图,贴底时若照常 pin-to-bottom,展开区的高度会把
   // 卡片头部顶出视口上方,看起来像"往上展开"。收到事件后开一个短抑制窗口,
-  // 窗口内保持被点击的标题位置(也抵消浏览器自己的 anchoring);窗口一过
-  // auto-follow 原样恢复,流式跟随不受影响。
+  // 窗口内保持被点击的标题位置(也抵消浏览器自己的 anchoring)。固定标题的
+  // 详情进入阅读态；用户回到底部或发送后恢复跟随，不用定时器抢回阅读位置。
   useEffect(() => {
     const content = contentRef.current;
     if (!content) return;
@@ -5495,6 +5497,15 @@ export function MessageStream({
       const header =
         preserveHeader && event.target instanceof Element ? event.target.closest('button') : null;
       const container = scrollRef.current;
+      if (header && container) {
+        // Inspecting a disclosure owns the reading position, including in the
+        // virtualized rows. A later token must not re-pin the inspected header.
+        unpinAutoFollowForUserUpIntent();
+        // At the tail, a shrinking scroll range clamps scrollTop before any
+        // observer can restore the header. Keep just enough trailing space to
+        // preserve this viewport; scrolling up reclaims it without moving text.
+        content.style.minHeight = `${container.scrollTop + container.clientHeight}px`;
+      }
       disclosureAnchorRef.current =
         header && container
           ? {
@@ -5549,6 +5560,7 @@ export function MessageStream({
       refreshHiddenChildViewportAnchor();
     });
     ro.observe(content);
+    if (itemsRef.current) ro.observe(itemsRef.current);
     return () => {
       content.removeEventListener(CARD_EXPAND_TOGGLE_EVENT, onCardExpandToggle);
       content.removeEventListener('click', onDisclosureClick, true);
@@ -5561,6 +5573,7 @@ export function MessageStream({
     compensateMessageHeight,
     beginProgrammaticScroll,
     finishProgrammaticScroll,
+    unpinAutoFollowForUserUpIntent,
   ]);
 
   // 折叠动画末帧可能已是 0fr，再卸载时内容高度几乎不变，ResizeObserver 不一定
@@ -5909,6 +5922,10 @@ export function MessageStream({
     if (!el) return;
 
     const currentScrollTop = el.scrollTop;
+    const content = contentRef.current;
+    if (content?.style.minHeight && performance.now() >= suppressHeightCompensationUntilRef.current) {
+      content.style.minHeight = `${Math.min(parseFloat(content.style.minHeight), currentScrollTop + el.clientHeight)}px`;
+    }
     const distanceFromBottom = el.scrollHeight - currentScrollTop - el.clientHeight;
     const threshold = 100;
 

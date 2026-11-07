@@ -6,6 +6,7 @@ import {
 import { RemoteAttachmentPreview } from "./RemoteAttachmentPreview";
 import { segmentTeammateWork, summarizeTeammateWork, teammateWorkSummaryText } from '@cindy/maker-shared/work-activity-projection';
 import { TeammateProcess, TeammateWorkSegment, useTeammateElapsedTitle } from './TeammateProcess';
+import { ProcessDisclosureViewport, useProcessDisclosureViewport } from './useProcessDisclosureViewport';
 import { VideoSitePreview } from './VideoSitePreview';
 import { InlineVideoPlayer } from './InlineVideoPlayer';
 import { youtubeVideo } from '@cindy/maker-shared/rich-answer';
@@ -928,6 +929,24 @@ export function MessageRenderer({
     viewportHeight: 0,
   });
   const tailFollowerRef = useRef<MobileTailFollower | null>(null);
+  const [processLeadingSpace, setProcessLeadingSpace] = useState<number | null>(null);
+  const processViewport = useProcessDisclosureViewport(() => scrollMetricsRef.current, () => {
+    // Short lists normally align to the bottom. Freeze that existing leading space while
+    // inspecting; otherwise opening a fold removes it a frame at a time and lifts the header.
+    const listState = listRef.current?.getState();
+    // LegendList removes its last row gap with a negative container margin. In a short
+    // bottom-aligned list, flex-end turns that gap into additional leading space.
+    const trailingGapSpace = !conversationHeader && listState
+      && listState.contentLength <= listState.scrollLength + 1 ? spacing.lg : 0;
+    const leading = trailingGapSpace + Math.max(0, getCurrentHistoryTopOffsetAdjustment()
+      - listTopPaddingRef.current - listMetricsRef.current.headerSize);
+    setProcessLeadingSpace(previous => previous ?? leading);
+    nearBottomRef.current = false;
+    tailFollowerRef.current?.reset();
+    clearProgrammaticScroll();
+    userScrollForOlderRef.current = true;
+    setIsAwayFromBottom(true);
+  }, () => setProcessLeadingSpace(null));
   // 实际定位完成就直接显示；UI 线程只负责 300ms 兜底，不让繁忙 JS 无限延长隐藏。
   // 揭示沿用唯一 tail follower 的位置校验，不再额外等待或对旧消息做淡入。
   const initialAnchorDoneRef = useRef(false);
@@ -960,6 +979,7 @@ export function MessageRenderer({
   const prevScrollResetKeyRef = useRef(scrollResetKey);
   if (prevScrollResetKeyRef.current !== scrollResetKey) {
     prevScrollResetKeyRef.current = scrollResetKey;
+    processViewport.resume();
     visibleCompanionReplyKeysRef.current.clear();
     listMetricsRef.current = { footerSize: 0, headerSize: 0 };
     nearBottomRef.current = reopeningPosition?.atEnd ?? true;
@@ -1206,12 +1226,13 @@ export function MessageRenderer({
   ) => {
     // Only an explicit destination supersedes a pending final drag sample.
     if (intent === 'explicit') {
+      processViewport.resume();
       reopeningAnchorRef.current = null;
       dragStartOffsetYRef.current = null;
       readingPosition?.write({ anchor: null, atEnd: true });
     }
     getTailFollower().requestEnd(animated, intent === 'explicit');
-  }, [getTailFollower, readingPosition]);
+  }, [getTailFollower, readingPosition, processViewport.resume]);
 
   const scrollToOffsetProgrammatically = useCallback((offset: number, animated: boolean) => {
     markProgrammaticScroll(animated);
@@ -2310,6 +2331,8 @@ export function MessageRenderer({
       viewportHeight: event.nativeEvent.layoutMeasurement.height,
     };
     const previousOffsetY = scrollMetricsRef.current.offsetY;
+    processViewport.scroll(metrics.offsetY, previousOffsetY, isDragSample || isMomentumScrollingRef.current,
+      metrics.contentHeight - metrics.offsetY - metrics.viewportHeight <= 1);
     scrollMetricsRef.current = metrics;
     // A native acknowledgment ends reopening, not merely its reveal animation.
     // Otherwise later measurements keep replaying the old bookmark after the
@@ -2375,7 +2398,7 @@ export function MessageRenderer({
       const preserveHistoryBrowseIntent = shouldPreserveMobileHistoryBrowseIntent({
         // Only preserve an actual unpin. A dead-zone drag also enables pagination, but its
         // final native event must not turn a temporary follow suspension into an unpin.
-        historyBrowseIntent: userScrollForOlderRef.current && !nearBottomRef.current,
+        historyBrowseIntent: (userScrollForOlderRef.current || processViewport.inspecting.current) && !nearBottomRef.current,
         userControllingScroll: isDragSample
           || isMomentumScrollingRef.current
           || historyTouchStartYRef.current !== null,
@@ -2384,7 +2407,7 @@ export function MessageRenderer({
       // Outside a drag, layout/MVCP corrections cannot prove user intent. Preserve follow;
       // actual momentum retains the existing direction/distance fallback.
       const preserveFollowIntent = nearBottomRef.current && !isMomentumScrollingRef.current;
-      const nearBottom = preserveHistoryBrowseIntent
+      const nearBottom = preserveHistoryBrowseIntent || processViewport.inspecting.current
         ? false
         : preserveFollowIntent || resolveMobileNearBottomOnScroll({
           wasNearBottom: nearBottomRef.current,
@@ -2427,6 +2450,8 @@ export function MessageRenderer({
     handoffHistoryPrependToUser,
     scheduleStickyShareCheck,
     richContent,
+    processViewport.scroll,
+    processViewport.inspecting,
   ]);
 
   const handleHistoryTouchStart = useCallback((event: GestureResponderEvent) => {
@@ -2868,6 +2893,7 @@ export function MessageRenderer({
     // chat-text-quote:Provider 恒挂载(值可为 null),避免启用态翻转时整棵消息树
     // 因 Provider 增删而重挂;value 稳定(useMemo),不触发订阅方重渲。
     <SelectionQuoteContext.Provider value={selectionQuoteContextValue}>
+    <ProcessDisclosureViewport.Provider value={processViewport.inspect}>
     <RichContentContext.Provider value={richContent}>
     <MessageListVisibilityContext.Provider value={messageListVisibility}>
     <MarkdownRemoteMediaContext.Provider value={onResolveRemoteMedia}>
@@ -2897,7 +2923,7 @@ export function MessageRenderer({
         // 内容形态下会与布局结算互相触发,形成无限 onScroll 风暴把 JS 线程打满——表现为
         // 冷开会话消息区空白、无 loading、返回键无响应,只能杀 App(2026-07 模拟器逐项
         // 二分实锤,3.3.2 / 3.3.3 均复现)。
-        alignItemsAtEnd={!conversationHeader}
+        alignItemsAtEnd={!conversationHeader && processLeadingSpace === null}
         maintainScrollAtEnd={false}
         // iOS uses LegendList/RN's atomic data/size anchoring while reading history. Android history
         // prepends temporarily disable the whole prop because RN exposes one native switch: leaving
@@ -2907,7 +2933,7 @@ export function MessageRenderer({
           : { data: anchorVisibleRowsOnDataChange, size: true }}
         contentContainerStyle={[
           styles.messages,
-          conversationHeader ? styles.messagesWithRoot : undefined,
+          conversationHeader || processLeadingSpace !== null ? styles.messagesWithRoot : undefined,
           { paddingBottom: bottomPadding, paddingTop: topPadding },
           viewportLayout.wideViewport && styles.messagesWide,
           viewportLayout.wideViewport && { maxWidth: viewportLayout.contentMaxWidth },
@@ -2920,6 +2946,7 @@ export function MessageRenderer({
                       )
                     }
         ListHeaderComponent={<>
+          {processLeadingSpace !== null && processLeadingSpace > 0 && <View style={{ height: processLeadingSpace }} />}
           {conversationHeader}
           {loadEarlierAction.visible ? (
             <MessageListActionButton
@@ -2933,7 +2960,8 @@ export function MessageRenderer({
             </MessageListActionButton>
           ) : null}
         </>}
-        ListFooterComponent={queueFooter ? <>{queueFooter}</> : null}
+        ListFooterComponent={queueFooter || processViewport.footerHeight > 0
+          ? <>{queueFooter}{processViewport.footerHeight > 0 && <View style={{ height: processViewport.footerHeight }} />}</> : null}
         onLayout={handleListLayout}
         onMetricsChange={handleListMetricsChange}
         onContentSizeChange={handleContentSize}
@@ -3022,6 +3050,7 @@ export function MessageRenderer({
     </MarkdownRemoteMediaContext.Provider>
     </MessageListVisibilityContext.Provider>
     </RichContentContext.Provider>
+    </ProcessDisclosureViewport.Provider>
     </SelectionQuoteContext.Provider>
   );
 }
@@ -5014,9 +5043,6 @@ function TeammateProcessContents({ item, actions }: { item: MobileWorkGroupItem;
     {flattened.loaders.filter((loader) => loader.failed).map((loader) => (
           <Pressable key={loader.key} accessibilityRole="button"
       onPress={loader.retry} style={{ minHeight: 44, justifyContent: 'center' }}><Text style={{ color: colors.textSecondary }}>{t('message.renderer.retryPreview')}</Text></Pressable>))}
-    {item.isStreaming && segments.at(-1)?.kind === 'content' && (
-        <TeammateWorkSegment id={`${item.key}:pending`} title={t('chat.teammateProcess.thinking')} running hasTools={false} />
-      )}
   </>
   );
 }
