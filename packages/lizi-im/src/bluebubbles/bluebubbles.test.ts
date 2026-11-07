@@ -233,12 +233,13 @@ describe('BlueBubbles local ingress', () => {
     expect(f.received.map(row => row.messageId)).toEqual(['question']);
   });
 
-  // Tier 1, #9250/r4501143428: delivery can precede the prompt's HTTP response.
-  // The existing reply test completes send immediately and cannot detect a stale parser.
-  it.each([false, true])('retires an answered text waiter before its prompt HTTP response (shared=%s)', async useShared => {
+  // Tier 1, #9250/r4501143428/r4501238066: delivery can precede the prompt's
+  // HTTP response or timeout. Immediate sends cannot expose lost accepted answers.
+  it.each([[false, false], [true, false], [false, true]])('preserves an answered waiter before its prompt HTTP response (shared=%s, sendFails=%s)', async (useShared, sendFails) => {
     const f = await fixture();
     let finishSend!: (value: { guid: string }) => void;
-    f.send.mockImplementationOnce(() => new Promise(resolve => { finishSend = resolve; }));
+    let failSend!: (error: Error) => void;
+    f.send.mockImplementationOnce(() => new Promise((resolve, reject) => { finishSend = resolve; failSend = reject; }));
     const parse = vi.fn((text: string) => text.trim() || null);
     let finishShared!: (value: string) => void;
     const shared = useShared ? { result: new Promise<string>(resolve => { finishShared = resolve; }),
@@ -255,9 +256,51 @@ describe('BlueBubbles local ingress', () => {
       expect(f.state().inbox['new-work'].state).toBe('accepted');
       expect(parse).toHaveBeenCalledTimes(1);
     } finally {
-      finishSend({ guid: 'delivered-prompt' });
+      if (sendFails) failSend(new Error('response timed out after delivery'));
+      else finishSend({ guid: 'delivered-prompt' });
       await expect(reply).resolves.toBe('answer');
+      expect(f.state().inbox['first-answer'].state).toBe('accepted');
+      if (sendFails) expect(f.im.health().uncertainSends).toBe(1);
     }
+  });
+
+  // Tier 1, #9250/r4501238061: async preparation holds the per-chat handler lock
+  // while stop and later work arrive. Existing stop cases only queue work before stop.
+  it('cancels work preceding stop without losing a later request after restart', async () => {
+    const f = await fixture();
+    let finishPreparation!: () => void;
+    const preparing = new Promise<void>(resolve => { finishPreparation = resolve; });
+    let tail = Promise.resolve(), dropped = 0;
+    const executed: string[] = [];
+    f.im.onMessage(event => {
+      event.delivery!.awaitPersistence();
+      tail = tail.then(async () => {
+        if (event.messageId === 'old-work') {
+          await preparing;
+          event.delivery!.defer();
+        } else if (event.text === '/stop') {
+          dropped = event.delivery!.cancelPending!();
+          event.delivery!.accept();
+        } else {
+          executed.push(event.messageId);
+          f.im.acknowledgeIncoming(event.messageId);
+        }
+      });
+      return tail;
+    });
+    f.message('old-work');
+    f.message('stop-boundary', { text: '/stop' });
+    f.message('work-after-stop');
+    try { await f.im.reconcile(); }
+    finally { finishPreparation(); await tail; }
+    expect(dropped).toBe(1);
+    expect(f.state().inbox['old-work'].state).toBe('ignored');
+    expect(f.state().inbox['work-after-stop'].state).toBe('pending');
+    await f.im.dispose();
+    await f.im.init();
+    await tail;
+    expect(executed).toEqual(['work-after-stop']);
+    expect(f.state().inbox['work-after-stop'].state).toBe('accepted');
   });
 
   // Tier 1, #9250/r4501143430: a busy result followed by a free session in one

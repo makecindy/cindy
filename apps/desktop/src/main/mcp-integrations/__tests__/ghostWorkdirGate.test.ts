@@ -1299,13 +1299,14 @@ describe('connect_account shares Host live plugin policy', () => {
     const release = beginHeadlessGhostSetupTurn('bot-session');
     try {
       isAuthorizationSessionMock.mockResolvedValueOnce(true);
-      const result = await makeDeps('codex', 'bot-session', 'bot-instance').connectAccount!({ kind: 'host', id: 'im-imessage' });
+      const result = await makeDeps('codex', 'bot-session', 'bot-instance', { source: 'imessage' }).connectAccount!({ kind: 'host', id: 'im-imessage' });
       expect(result).not.toMatchObject({ errorCode: 'NO_SESSION_CONTEXT' });
       expect(authorizationRequestMock).toHaveBeenCalledWith('bot-session', { kind: 'host', id: 'im-imessage' });
-      isAuthorizationSessionMock.mockResolvedValueOnce(false);
-      expect(await makeDeps('codex', 'bot-session', 'bot-instance').connectAccount!({ kind: 'plugin', id: 'art' }))
-        .toMatchObject({ errorCode: 'NO_SESSION_CONTEXT' });
     } finally { release(); }
+    // The ordinary channel lane lacks a transient marker but remains headless.
+    isAuthorizationSessionMock.mockResolvedValueOnce(false);
+    expect(await makeDeps('codex', 'bot-session', 'bot-instance', { source: 'imessage' }).connectAccount!({ kind: 'plugin', id: 'art' }))
+      .toMatchObject({ errorCode: 'NO_SESSION_CONTEXT' });
   });
   it('passes dynamically discovered plugins to Host without treating builtin toolsets as plugin grants', async () => {
     isAuthorizationSessionMock.mockResolvedValueOnce(true);

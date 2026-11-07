@@ -360,7 +360,10 @@ export class BlueBubblesIM extends BaseIM implements TextChannelIM {
             this.assertLive(generation);
             let count = 0;
             for (const [id, queued] of this.deferredEvents) {
-              if (queued.chatId !== event!.chatId || id === guid) continue;
+              // Only withdraw inputs preceding this command. Preparation may
+              // hold the chat lock while later work is already being received.
+              if (id === guid) break;
+              if (queued.chatId !== event!.chatId) continue;
               receipts.mark(id, 'ignored');
               this.cancelledEvents.add(queued);
               this.deferredEvents.delete(id);
@@ -485,6 +488,7 @@ export class BlueBubblesIM extends BaseIM implements TextChannelIM {
     }
     let resolve!: (value: T) => void;
     let reject!: (error: Error) => void;
+    let answered = false;
     const result = new Promise<T>((yes, no) => { resolve = yes; reject = no; });
     // Attach a rejection consumer before sending (disconnect may race the send).
     void result.catch(() => {});
@@ -495,7 +499,7 @@ export class BlueBubblesIM extends BaseIM implements TextChannelIM {
     const pending = { requestId, createdAt: this.now(), accept: (text: string) => {
       const value = parse(text); if (value === null) return false;
       if (shared) shared.decide(value);
-      else { retire(); resolve(value); }
+      else { answered = true; retire(); resolve(value); }
       return true;
     }, cancel: () => { retire(); reject(new Error('BLUEBUBBLES_INTERACTION_CANCELLED')); } };
     const timer = setTimeout(pending.cancel, timeoutMs);
@@ -504,9 +508,11 @@ export class BlueBubblesIM extends BaseIM implements TextChannelIM {
     try {
       try { await this.sendText(chatId, prompt); }
       catch (error) {
-        if (!shared) throw error;
-        // A failed presentation is not a denial. The shared Desktop/Mobile
-        // request owns its lifecycle; remove this failed channel waiter.
+        if (!shared && !answered) throw error;
+        // A reply can arrive after prompt delivery but before its HTTP response.
+        // Keep that accepted answer even if the presentation request fails late.
+        // Shared Desktop/Mobile permissions also keep their own lifecycle;
+        // a failed presentation is not a denial. Remove only this waiter.
         retire();
       }
       return await result;
