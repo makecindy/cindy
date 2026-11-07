@@ -38,6 +38,9 @@ vi.mock('@/hooks/useModelContextLimit', () => ({
     };
   },
 }));
+vi.mock('@/lib/toast', () => ({
+  toast: { error: vi.fn(), success: vi.fn() },
+}));
 vi.mock('@/hooks/useModelImageInputOverride', () => ({
   useModelImageInputOverride: (target: unknown) => {
     mocks.imageTarget(target);
@@ -306,6 +309,94 @@ describe('model advanced editor', () => {
       .toBe('Chat Completions');
   });
 
+  it('keeps the thinking declaration disabled until the first read lands', async () => {
+    // 首次读回前 value 是空占位：此时能点开菜单并勾一档，就会把「只有这一档」当成完整
+    // 集合写盘，覆盖本机已声明的档位与默认档。
+    let release!: (view: unknown) => void;
+    const pending = new Promise((resolve) => {
+      release = resolve;
+    });
+    const setTiers = vi.fn(async () => undefined);
+    const previous = window.electronAPI;
+    Object.defineProperty(window, 'electronAPI', { configurable: true, value: { maker: {
+      updateCustomProvider: vi.fn(async () => ({ ok: true })),
+      getModelCatalogThinking: vi.fn(() => pending),
+      setModelCatalogThinking: setTiers,
+    } } });
+    const source = { ...buildUserProvider({ id: 'fixture', name: 'Fixture', runtimes: {
+      codex: { baseUrl: 'https://supplier.example/v1', wireProtocol: 'openai-responses', requestPath: '/custom/chat',
+        models: [{ id: 'gpt-6', name: 'GPT-6', efforts: [] as never, route: { baseUrl: 'https://supplier.example/v1', wireProtocol: 'openai-responses', requestPath: '/custom/chat' } }] },
+    } }), connected: true } as ProviderView;
+    try {
+      render(drawer(source.models.codex![0], 'high', ['high'], source));
+      const trigger = screen.getByRole('button', { name: 'settings.providers.models.advanced.thinkingOverride.label' });
+      expect((trigger as HTMLButtonElement).disabled).toBe(true);
+      release({ value: ['low', 'high', 'max'], defaultEffort: 'max', isCustomized: true });
+      await waitFor(() => expect((trigger as HTMLButtonElement).disabled).toBe(false));
+      expect(setTiers).not.toHaveBeenCalled();
+    } finally { Object.defineProperty(window, 'electronAPI', { configurable: true, value: previous }); }
+  });
+
+  it('disables the thinking declaration for organization-managed providers', () => {
+    // 企业托管：能力由管理员下发，本机 override 是最高优先级，必须在控件上就拦住。
+    // （按钮禁用挡不住受信 renderer 直调，IPC 侧另有 PERMISSION_DENIED 兜底。）
+    const previous = window.electronAPI;
+    Object.defineProperty(window, 'electronAPI', { configurable: true, value: { maker: {
+      updateCustomProvider: vi.fn(async () => ({ ok: true })),
+      getModelCatalogThinking: vi.fn(async () => ({ value: null, isCustomized: false })),
+      setModelCatalogThinking: vi.fn(async () => undefined),
+    } } });
+    // 企业托管的判定口径是 source === 'organization'（isOrganizationManagedProvider）。
+    const managed = { ...buildUserProvider({ id: 'corp', name: 'Corp', runtimes: {
+      codex: { baseUrl: 'https://corp.example/v1', wireProtocol: 'openai-responses', requestPath: '/custom/chat',
+        models: [{ id: 'corp-model', name: 'Corp Model', route: { baseUrl: 'https://corp.example/v1', wireProtocol: 'openai-responses', requestPath: '/custom/chat' } }] },
+    } }), connected: true, source: 'organization' } as ProviderView;
+    try {
+      render(drawer(managed.models.codex![0], 'high', ['high'], managed));
+      const trigger = screen.getByRole('button', { name: 'settings.providers.models.advanced.thinkingOverride.label' });
+      expect((trigger as HTMLButtonElement).disabled).toBe(true);
+    } finally { Object.defineProperty(window, 'electronAPI', { configurable: true, value: previous }); }
+  });
+
+  it('declares thinking tiers as a local catalog override instead of editing the connection', async () => {
+    // 目录把该模型声明成零档位（不支持思考），用户从高级设置里补上真实档位。
+    const setTiers = vi.fn(async () => undefined);
+    const getView = vi.fn(async () => ({ value: null, isCustomized: false }));
+    const previous = window.electronAPI;
+    Object.defineProperty(window, 'electronAPI', { configurable: true, value: { maker: {
+      updateCustomProvider: vi.fn(async () => ({ ok: true })),
+      getModelCatalogThinking: getView,
+      setModelCatalogThinking: setTiers,
+    } } });
+    const source = { ...buildUserProvider({ id: 'fixture', name: 'Fixture', runtimes: {
+      codex: { baseUrl: 'https://supplier.example/v1', wireProtocol: 'openai-responses', requestPath: '/custom/chat',
+        models: [{ id: 'gpt-6', name: 'GPT-6', efforts: [] as never, route: { baseUrl: 'https://supplier.example/v1', wireProtocol: 'openai-responses', requestPath: '/custom/chat' } }] },
+    } }), connected: true } as ProviderView;
+    try {
+      render(drawer(source.models.codex![0], 'high', ['high'], source));
+      fireEvent.keyDown(
+        screen.getByRole('button', { name: 'settings.providers.models.advanced.thinkingOverride.label' }),
+        { key: 'ArrowDown' },
+      );
+      // 档位名走既有正本 effortLevels.*：与「默认推理强度」选择器逐字一致。
+      const high = await screen.findByRole('menuitemcheckbox', { name: 'effortLevels.high' });
+      fireEvent.click(high);
+      await waitFor(() => expect(setTiers).toHaveBeenCalledTimes(1));
+      // 写入的是目录 override（不是连接配置），且带上目标行全部引擎的 id。
+      const [target, tiers, defaultTier] = setTiers.mock.calls[0]! as unknown as [
+        { providerId: string; modelId: string; relatedTargets?: unknown[] }, string[] | null, string | null,
+      ];
+      expect(target.providerId).toBe('fixture');
+      expect(target.modelId).toBe('gpt-6');
+      expect(tiers).toEqual(['high']);
+      // 首次声明没有既有默认档可沿用 → 留 null 让运行期按目录默认回退，
+      // 而不是猜「排序第一档」（那会把厂商默认如 max 静默改成 high）。
+      expect(defaultTier).toBeNull();
+      // 连接配置不得被这条路径改写。
+      expect(window.electronAPI.maker.updateCustomProvider).not.toHaveBeenCalled();
+    } finally { Object.defineProperty(window, 'electronAPI', { configurable: true, value: previous }); }
+  });
+
   it('saves protocol selection to the selected engine and model without writing derived model limits', async () => {
     const update = vi.fn(async (...args: unknown[]) => {
       void args;
@@ -519,6 +610,34 @@ describe('model advanced editor', () => {
     expect(mocks.setLimit).toHaveBeenCalledTimes(1);
   });
 
+  it('keeps the trailing token readout on the typed value until the write lands', async () => {
+    // 提交后写入是异步的（hook 先 loading、仍持有旧 limit）。修复前抽屉在 blur 瞬间丢掉草稿，
+    // 说明行会先退回旧的 400,000、等回声到了再跳 500,000 —— 用户实测到的「闪一下旧值」。
+    mocks.limit = 400_000;
+    let release: () => void = () => {};
+    mocks.setLimit.mockImplementationOnce(
+      () =>
+        new Promise<void>((resolve) => {
+          release = resolve;
+        }),
+    );
+    draw();
+    const input = screen.getByRole('textbox') as HTMLInputElement;
+    // 输入框显示精确 token 数（不再缩写成 K）；单位后缀仍可输入，提交时按同一口径解析。
+    expect(input.value).toBe('400000');
+    fireEvent.change(input, { target: { value: '500000' } });
+    fireEvent.blur(input);
+    expect(mocks.setLimit).toHaveBeenLastCalledWith(500_000);
+    // 写入在途：说明行必须继续显示刚输入的值。
+    expect(screen.getByText(/advanced\.contextLimitRoute 500,000/)).toBeTruthy();
+    expect(screen.queryByText(/advanced\.contextLimitRoute 400,000/)).toBeNull();
+    // 回声落地（hook 此时已持有新值）后再收口：仍然是新值，不回退。
+    mocks.limit = 500_000;
+    release();
+    await waitFor(() => expect(screen.getByText(/advanced\.contextLimitRoute 500,000/)).toBeTruthy());
+    expect(screen.queryByText(/advanced\.contextLimitRoute 400,000/)).toBeNull();
+  });
+
   it.each(['cindy-local-ollama', 'ollama', 'cindy-local-lmstudio'])('keeps %s editable at 1K even when the catalog advertises a large window', (id) => {
     render(drawer(model, model.defaultEffort, model.efforts, { ...provider, id, source: 'user' }));
     const input = screen.getByRole('textbox');
@@ -542,6 +661,61 @@ describe('model advanced editor', () => {
     expect(mocks.setLimit).toHaveBeenCalledWith(floor * 1000);
   });
 
+
+  // 上游未声明容量时不能把「工作默认值」印成「上游最大上下文」：自定义连接的 200K 是兜底，
+  // 而运行期窗口其实取模型级上下文上限（用户实测报障：圆环 1.0M / 这里 200K）。
+  function withoutCapacity(over: Partial<CatalogModel> = {}): CatalogModel {
+    const { contextWindowMax: _omit, ...rest } = model;
+    return { ...rest, contextWindow: 200_000, ...over };
+  }
+
+  it('shows "not declared" instead of the working default when the provider declares no capacity', () => {
+    draw(withoutCapacity());
+    // 这一行只报「容量未声明」：不再把工作默认值（200K 兜底，或目录给的 1M）当成容量塞进这一格。
+    expect(
+      screen.getAllByText('settings.providers.models.advanced.catalogMissing').length,
+    ).toBeGreaterThan(0);
+    expect(screen.queryByText('200,000')).toBeNull();
+    expect(screen.queryByText('settings.providers.models.advanced.tokensApprox')).toBeNull();
+    // 工作窗口仍然可见 —— 在「上下文上限」那行的说明里（未设上限时取目录默认值）。
+    // 那行带插值（t 的 mock 会拼上 tokens），所以用正则而非精确匹配。
+    expect(screen.getByText(/advanced\.contextLimitRoute/)).toBeTruthy();
+  });
+
+  it('shows the window upstream handed down even when no capacity is declared', () => {
+    // opencode-go 的 deepseek-v4.1-flash 就是这种：没有 contextWindowMax，但预设/服务端目录
+    // 下发了窗口（buildUserProvider 会带上 contextWindowVerified）→ 这行要显示该窗口，而不是「未声明」。
+    draw({ ...withoutCapacity(), contextWindow: 1_048_576, contextWindowVerified: true });
+    expect(screen.getByText('1,048,576')).toBeTruthy();
+    // 「约 X」只由规格那一行渲染（「未声明」这个 key 在抽屉里另有多处，不能拿它判负）。
+    expect(screen.getByText('settings.providers.models.advanced.tokensApprox')).toBeTruthy();
+  });
+
+
+
+
+
+
+
+
+
+
+  it('warns when the limit exceeds a verified upstream window without a declared max', () => {
+    // 「已验证窗口但无 contextWindowMax」的模型此前不会告警：填到窗口以上也静默接受。
+    mocks.limit = 1_200_000;
+    draw({ ...withoutCapacity(), contextWindow: 1_048_576, contextWindowVerified: true });
+    expect(
+      screen.getByText('settings.providers.models.advanced.contextLimitOverWindow'),
+    ).toBeTruthy();
+  });
+
+
+  it('does not warn about the limit exceeding an undeclared capacity', () => {
+    // 未声明容量时拿 200K 工作默认值当告警基线会误报「已超出当前显示的窗口」。
+    mocks.limit = 1_200_000;
+    draw(withoutCapacity());
+    expect(screen.queryByText('settings.providers.models.advanced.contextLimitOverWindow')).toBeNull();
+  });
 
   it('keeps useful identity fields without exposing internal defaults, normal lifecycle or raw descriptions', () => {
     draw({ ...model, status: 'active', defaultEnabled: false, description: 'GPT for coding tasks' });

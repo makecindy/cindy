@@ -70,6 +70,15 @@ export const providersSettings = defineSettings({
     sectionKey: 'settings.tabs.providers',
     aliases: ['compaction', '上下文压缩', '压缩比例'],
   },
+  modelThinking: {
+    id: 'model-thinking',
+    tab: 'providers',
+    targetId: 'settings-panel-providers',
+    titleKey: 'settings.providers.models.advanced.thinkingOverride.label',
+    sectionKey: 'settings.tabs.providers',
+    keywordKeys: ['settings.providers.models.advanced.thinkingOverride.sourceHint'],
+    aliases: ['thinking', '思考', '思考档位', '推理档位'],
+  },
   providers: {
     id: 'providers',
     tab: 'providers',

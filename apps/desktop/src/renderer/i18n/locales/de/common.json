@@ -1365,7 +1365,8 @@
     "REMOTE_AGENT_SHARE_REMOVED": "Modell nicht geändert: Diese Freigabe ist nicht mehr verfügbar (der Eigentümer hat sie entfernt oder du hast sie verlassen). Wähle ein anderes Modell.",
     "REMOTE_AGENT_SHARE_UNAVAILABLE": "Modell nicht geändert: Der geteilte Anbieter ist vorübergehend nicht verfügbar (der Computer des Eigentümers ist offline oder die Freigabe ist derzeit deaktiviert). Versuch es später erneut oder wähle ein anderes Modell.",
     "SSH_HOST_KEY_MISMATCH": "SSH-Hostschlüssel geändert",
-    "DEVICE_LINK_MEDIA_ACCESS_DENIED": "Cindy kann den ursprünglichen Anhang nicht lesen; die Nachricht wurde nicht gesendet. Speichere eine Kopie im Ordner Downloads oder einem anderen zugänglichen Ordner, entferne den ursprünglichen Anhang und füge die Kopie über die Anhang-Schaltfläche hinzu, bevor du erneut sendest."
+    "DEVICE_LINK_MEDIA_ACCESS_DENIED": "Cindy kann den ursprünglichen Anhang nicht lesen; die Nachricht wurde nicht gesendet. Speichere eine Kopie im Ordner Downloads oder einem anderen zugänglichen Ordner, entferne den ursprünglichen Anhang und füge die Kopie über die Anhang-Schaltfläche hinzu, bevor du erneut sendest.",
+    "PI_IMAGE_CAPABILITY_REFRESH_FAILED": "Die Änderung der Bild-Eingabe-Fähigkeit konnte nicht angewendet werden. Die Änderung wurde zurückgerollt oder wird erneut versucht; wiederholen Sie die Aktion und öffnen Sie die Aufgabe neu, wenn der Fehler bleibt."
   },
   "providerError": {
     "AUTH_INVALID": "Authentifizierung für diese Schnittstelle fehlgeschlagen. Prüfe Adresse, Schlüssel und Authentifizierungsmethode.",
@@ -2417,12 +2418,12 @@
         "previewStarting": "Nimm die Hände von Maus und Tastatur. In 3 Sekunden wird der Bildschirm verdeckt; drücke eine Taste, um ihn zu sperren, und entsperre ihn dann.",
         "previewUnavailable": "Der Bildschirm konnte nicht verdeckt werden. Starte Cindy neu und versuche es erneut.",
         "delay": {
-          "label": "Bildschirm verdecken nach",
-          "hint": "So lange bleiben Tastatur und Maus unberührt, bevor die Abdeckung erscheint. Standardmäßig wie der Ruhezustand des Displays.",
           "30": "30 s",
           "60": "1 Min.",
           "120": "2 Min.",
           "300": "5 Min.",
+          "label": "Bildschirm verdecken nach",
+          "hint": "So lange bleiben Tastatur und Maus unberührt, bevor die Abdeckung erscheint. Standardmäßig wie der Ruhezustand des Displays.",
           "system": "System"
         }
       }
@@ -4140,7 +4141,28 @@
           },
           "codexContextUnknown": "CLI-Konfiguration nicht verfügbar",
           "codexContextValues": "Gesamt {{total}} · Nutzbar {{usable}} · Automatische Komprimierung {{compact}} Tokens",
-          "contextLimitGptHint": "GPT verwendet standardmäßig höchstens 272K; hier kannst du 1M einstellen. Codex wendet das Kontextfenster und den Schwellenwert für die automatische Komprimierung gemeinsam an und hält dabei 5 % Reserve frei. Die tatsächliche Kapazität hängt vom Modelldienst ab."
+          "contextLimitGptHint": "GPT verwendet standardmäßig höchstens 272K; hier kannst du 1M einstellen. Codex wendet das Kontextfenster und den Schwellenwert für die automatische Komprimierung gemeinsam an und hält dabei 5 % Reserve frei. Die tatsächliche Kapazität hängt vom Modelldienst ab.",
+          "imageInputOverride": {
+            "label": "Fähigkeit für Bildeingabe",
+            "inherit": "Dem Anbieter folgen",
+            "declaredTrue": "Unterstützt Bild-Eingabe",
+            "declaredFalse": "Keine Bild-Eingabe",
+            "saveFailed": "Bild-Eingabe-Fähigkeit konnte nicht gespeichert werden",
+            "saveFailedWithReason": "Bild-Eingabe-Fähigkeit konnte nicht gespeichert werden: {{message}}"
+          },
+          "thinking": "Denken",
+          "thinkingCapability": {
+            "on": "Unterstützt Denken",
+            "off": "Kein Denken"
+          },
+          "thinkingOverride": {
+            "label": "Denkstufen deklarieren",
+            "inherit": "Dem Anbieter folgen",
+            "declared": "Deklariert",
+            "sourceHint": "Der Katalog nennt keine Denkstufen; deklarieren Sie sie hier, wenn das Modell tatsächlich denkt",
+            "saveFailed": "Denk-Deklaration konnte nicht gespeichert werden",
+            "saveFailedWithReason": "Denk-Deklaration konnte nicht gespeichert werden: {{reason}}"
+          }
         },
         "kindFilter": {
           "all": "Alle",
@@ -4521,7 +4543,8 @@
         "custom": "Fahre mit benutzerdefinierten Einstellungen fort. Du kannst Modelle abrufen oder manuell hinzufügen.",
         "configure": "Anbieter konfigurieren",
         "keepCustom": "Mit benutzerdefinierten Einstellungen fortfahren"
-      }
+      },
+      "advanced": {}
     },
     "experimental": {
       "title": "Experimentell",
