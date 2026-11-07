@@ -99,13 +99,21 @@
  * 被吞掉,宿主会话不受影响,语义已覆盖。
  * 图片屏障与指针刀:指针段是从「超大结果」回溯到「发起调用」,中间可以夹着别的结果。
  * 卡片与原文快照只存文本,所以这个范围内只要出现图片屏障就整刀拒绝(上游没有图片屏障这一类)。
+ * 指针核不上时的兜底:原文快照的 meta 缺失或损坏时,指针不可用,卡片里就没有任何可回查的路径。
+ * 这时把主 shadow 的路径挂上(那一段的正文在里面)—— 上游的指针指向会话事件号,DSH 随时能回查,
+ * 本仓的指针指向本地文件,核不上就真的没了下文。
  *
  * 与上游 1.1.0 行为一致、但和上游文档各说各话的两点(已向上游提问,未单方面改):
- *   - 上游 README 说「同一次收尾可以连切」;1.1.0 把卡片当地板之后,收尾第一刀落在保留区
- *     前面,卡片正好贴着保留区,第二刀算出的切点就是这张卡片本身,于是本次收尾只切一刀。
+ *   - 上游 README 说「同一次收尾可以连切」;1.1.0 把卡片当地板之后,普通切法的第一刀落在
+ *     保留区前面,卡片正好贴着保留区,第二刀算出的切点就是这张卡片本身,于是本次收尾只切一刀
+ *     (上游代码同理)。长 read / 指针刀落在历史中间时,卡片右边还有一段,收尾能接着切。
  *   - 1.1.1 说「长 read 这一轮切不下来,才按原来的规则切更早的轮」;但卡片贴着保留区时,
  *     保留区分支先按地板返回 null,长 read 那一轮(在卡片右边、比保留区新)根本没被试切。
  *     本仓逐字复刻这两处,等上游裁决后再决定改不改。
+ * 收尾的选段几何与上游一致:上游的卡片是原地替换(surfaceOp replace),所以卡片左边是已进缓存
+ * 的前缀(不能切),卡片右边、保留区之前还能切。本仓的卡片实际落在尾巴上(pi 的 custom_message
+ * 只能追加),但收尾内部选段时把卡片放回被切掉那一段的位置 —— 否则新卡片当地板会把整段历史
+ * 锁死,第二刀永远选不出来。
  *
  * Mapping notes (DSH -> pi):
  *   - agent/status idle + turn/end completed  -> pi.on("agent_before_settle", outcome === "completed")
@@ -2767,7 +2775,13 @@ export function selectNewestChunk(
     if (!cutOk(() => pairStart <= 0 || prefixBalanced[pairStart - 1])) return warn(`prefix not balanced at pointer start=${pairStart}`);
     start = pairStart;
     tokens = spanTokens(items, start, spanEnd);
-    card = { ok: true, hardCount: 0, omittedHard: 0, deferred: 0, missing: [], needsBackup: false, rawPaths: [], text: pointerOnlyText(spanPieces(start, spanEnd)) };
+    const pointerPieces = spanPieces(start, spanEnd);
+    // 指针核不上时(原文快照的 meta 缺失或损坏),卡片里就没有任何可回查的路径。
+    // 主 shadow 里存着这一段的正文,把它挂上 —— 切走之后模型还能找回原文。
+    const pointerMissing = pointerPieces.some(
+      (piece) => normalizeRole(piece.role) === "tool" && !(piece.raw?.ok && piece.raw?.path),
+    );
+    card = { ok: true, hardCount: 0, omittedHard: 0, deferred: 0, missing: [], needsBackup: pointerMissing, rawPaths: [], text: pointerOnlyText(pointerPieces) };
   } else {
     card = buildCard(spanText(start, spanEnd), liveText(start, spanEnd), cardBudgetFor(spanText(start, spanEnd)), spanPieces(start, spanEnd), extras);
     if (card.ok !== true) {
@@ -3075,9 +3089,12 @@ function attemptCut(options: {
     // est.: pi 扩展拿不到切割后的实测 token,这里只是 before - chunk + framed 的推算。
     logLine(state, `spine cut ${Date.now() - started}ms ${before} -> est.${estimatedAfter} chunk=${chunk.tokens} span=${chunk.start}..${chunk.end}/${entries.length} saved=${saved} total=${stats ? stats.savedTokens : "unknown"}${drain ? " (drain)" : ""}`);
 
+    // 上游的卡片是原地替换(切掉的那一段变成卡片),所以它在上下文里的位置就是那一段的位置:
+    // 卡片左边是已进缓存的前缀(不能切),卡片右边、保留区之前还能切。下一刀要按上游的
+    // 几何来选,所以这里把卡片放回被切掉的那一段的位置。
+    // pi 的 custom_message 只能追加到尾巴上(落点仍在尾巴上),这是 pi 的能力边界。
     const simulatedEntries: SpineEntry[] = [
       ...entries.slice(0, chunk.start),
-      ...entries.slice(chunk.end + 1),
       {
         id: `spine-card-${spanEntries[0].id}`,
         entryType: "custom",
@@ -3092,6 +3109,7 @@ function attemptCut(options: {
         callMeta: new Map(),
         turn: entries[entries.length - 1]?.turn ?? 0,
       },
+      ...entries.slice(chunk.end + 1),
     ];
     return { drafts, entries: simulatedEntries, after: estimatedAfter };
   } catch (error) {

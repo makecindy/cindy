@@ -55,7 +55,7 @@ const FAKE_BRACKET_PASSWORD = ['abc', '[defghijklmnop'].join('');
 
 const extensionModule = await import('../../../../extensions/live-compact/index.ts');
 const registerLiveCompact = extensionModule.default;
-const { selectNewestChunk, balanceIndexes, buildCard, redactSecrets, attachBackupHint, isToolFailure, rotateShadow, pruneShadowSessions, spineRoot, keptToolRounds, chooseKeptSpan, reservedCutEnd, toolEvidenceLine, pointerFor, captureToolResult, planRawEntry, commitRawEntry, verifiedRaw, resolveEngine, resolveSpineEngine, selectCutIndexes, pointerSpanAllowed, pointerOnlyText, spineEntries, longReadResults, writeOwner, orderedDrainDrafts, withBackupHint, withoutFullBackupClaim, backupHint, discardRawSnapshots, saveShadow, lastCompactionEntry, inCooldown, resolveCooldownMs, providerURLFromPatch, resolveProviderBaseURL, spanHidesCallArgs, callArgsHidden } = extensionModule;
+const { selectNewestChunk, balanceIndexes, buildCard, redactSecrets, attachBackupHint, isToolFailure, rotateShadow, pruneShadowSessions, spineRoot, keptToolRounds, chooseKeptSpan, reservedCutEnd, toolEvidenceLine, pointerFor, captureToolResult, planRawEntry, commitRawEntry, verifiedRaw, resolveEngine, resolveSpineEngine, selectCutIndexes, pointerSpanAllowed, pointerOnlyText, spineEntries, longReadResults, writeOwner, orderedDrainDrafts, withBackupHint, withoutFullBackupClaim, backupHint, discardRawSnapshots, saveShadow, lastCompactionEntry, inCooldown, resolveCooldownMs, providerURLFromPatch, resolveProviderBaseURL, spanHidesCallArgs, callArgsHidden, rawName } = extensionModule;
 
 let seq = 0;
 function entry(role, text, extra = {}) {
@@ -1361,6 +1361,100 @@ describe('live compact 1.1.x: 轮换不改写已有备份', () => {
       else process.env.SPINE_SHADOW_DIR = previousRoot;
       if (previousCap === undefined) delete process.env.SPINE_SHADOW_MAX_BYTES;
       else process.env.SPINE_SHADOW_MAX_BYTES = previousCap;
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+});
+
+describe('live compact 1.1.x: 收尾多刀与指针兜底', () => {
+  const toolCall = (id, name = 'bash', args = {}) => ({
+    messages: [{ role: 'assistant', content: [{ type: 'toolCall', id, name, arguments: args }] }],
+    sourceEntry: { id: `${id}-a` },
+  });
+  const toolResult = (id, text) => ({
+    messages: [{ role: 'toolResult', toolCallId: id, content: [{ type: 'text', text }] }],
+    sourceEntry: { id: `${id}-r` },
+  });
+  const small = (id) => [toolCall(id), toolResult(id, 'ok '.repeat(20))];
+  const settle = (root, sessionId, contextEntries, tokens = 200000) => {
+    let handler = null;
+    registerLiveCompact({ on: (name, fn) => { if (name === 'agent_before_settle') handler = fn; } });
+    const event = { outcome: 'completed', context: { contextEntries } };
+    const ctx = {
+      sessionManager: { getSessionId: () => sessionId },
+      getContextUsage: () => ({ tokens }),
+    };
+    return handler(event, ctx);
+  };
+
+  it('keeps draining after a long-read cut, like upstream does', () => {
+    // 上游的卡片是原地替换,所以卡片右边、保留区之前还有一段能切;
+    // pi 的卡片只能追加到尾巴上 —— 选段时若把新卡片当地板,第二刀就永远选不出来。
+    const root = mkdtempSync(join(tmpdir(), 'spine-drain-'));
+    const previousRoot = process.env.SPINE_SHADOW_DIR;
+    process.env.SPINE_SHADOW_DIR = root;
+    try {
+      const contextEntries = [
+        { messages: [{ role: 'system', content: 'sys', provider: 'minimax' }], sourceEntry: { id: 's1' } },
+        { messages: [{ role: 'user', content: 'go', provider: 'minimax' }], sourceEntry: { id: 'u1' } },
+        toolCall('cOld'), toolResult('cOld', 'mid '.repeat(2000)),
+        toolCall('cLong', 'read'), toolResult('cLong', 'x'.repeat(200000)),
+        toolCall('cMid'), toolResult('cMid', 'tail '.repeat(2000)),
+        ...small('c1'),
+        ...small('c2'),
+        ...small('c3'),
+      ];
+      const result = settle(root, 'session-drain', contextEntries);
+      expect(result).toBeTruthy();
+      const cards = result.entries.filter((draft) => draft.type === 'custom_message');
+      // 第一刀是长 read 的指针刀,第二刀切掉卡片与保留区之间的那一段。
+      expect(cards.length).toBe(2);
+      const log = readFileSync(join(root, 'spine.log'), 'utf8');
+      expect(log.match(/spine cut /g) || []).toHaveLength(2);
+    } finally {
+      if (previousRoot === undefined) delete process.env.SPINE_SHADOW_DIR;
+      else process.env.SPINE_SHADOW_DIR = previousRoot;
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it('points a pointer-only card at the main shadow when the raw pointer cannot be verified', () => {
+    // 原文快照写了一半就崩(meta 缺失)时,卡片里核不出指针。
+    // 这时切走的结果就彻底没了下文 —— 主 shadow 里还有这一段的正文,必须挂上。
+    const root = mkdtempSync(join(tmpdir(), 'spine-pointer-'));
+    const previousRoot = process.env.SPINE_SHADOW_DIR;
+    process.env.SPINE_SHADOW_DIR = root;
+    try {
+      const sessionId = 'session-pointer';
+      const dir = join(root, 'shadow', sessionId);
+      mkdirSync(dir, { recursive: true });
+      // 原文文件在、meta 不在:核不出哈希与字节数,指针不可用。
+      writeFileSync(join(dir, rawName('cBig')), 'x'.repeat(1000));
+
+      const contextEntries = [
+        { messages: [{ role: 'system', content: 'sys', provider: 'minimax' }], sourceEntry: { id: 's1' } },
+        { messages: [{ role: 'user', content: 'go', provider: 'minimax' }], sourceEntry: { id: 'u1' } },
+        toolCall('cBig', 'bash', { command: 'cat big.log' }), toolResult('cBig', 'y'.repeat(200000)),
+        ...small('c1'),
+        ...small('c2'),
+        ...small('c3'),
+      ];
+      const result = settle(root, sessionId, contextEntries);
+      expect(result).toBeTruthy();
+      const card = result.entries.find((draft) => draft.type === 'custom_message');
+      expect(card).toBeTruthy();
+      const cardText = card.content.map((block) => block.text || '').join(String.fromCharCode(10));
+      // 指针核不上 → 卡片说没有可核的指针,但必须给出主 shadow 的路径。
+      expect(cardText).toContain('无完整备份');
+      expect(cardText).toContain('省略的工具原文在');
+      // 主 shadow 里确实有这一段的正文。
+      const shadowDir = join(root, 'shadow', sessionId);
+      const shadows = readdirSync(shadowDir).filter((name) => name.endsWith('.txt') && !name.startsWith('raw-'));
+      expect(shadows.length).toBeGreaterThan(0);
+      expect(readFileSync(join(shadowDir, shadows[0]), 'utf8')).toContain('y'.repeat(100));
+    } finally {
+      if (previousRoot === undefined) delete process.env.SPINE_SHADOW_DIR;
+      else process.env.SPINE_SHADOW_DIR = previousRoot;
       rmSync(root, { recursive: true, force: true });
     }
   });
