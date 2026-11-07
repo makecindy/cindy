@@ -1291,6 +1291,8 @@ export function createRemoteAgentHost(deps: RemoteAgentHostDeps) {
       ? ['workspace', ...Array.from({ length: MAX_ANCESTOR_LEVELS }, () => 'p')]
       : mirrorSegments(payload.workspace.workingDir);
     const shadowDir = path.join(mirrorRoot, ...segments);
+    // A replacement may follow immediately after a stop. On Windows the old
+    // Agent can still be releasing files inside this deep shadow workspace.
     await fsp.rm(sessionRoot, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 });
     await fsp.mkdir(shadowDir, { recursive: true });
     if (payload.virtualWorkspace) await Promise.all(['home', 'tmp'].map((name) => fsp.mkdir(path.join(mirrorRoot, name), { recursive: true })));
@@ -2589,7 +2591,9 @@ export function createRemoteAgentHost(deps: RemoteAgentHostDeps) {
       for (const other of runs.values()) {
         if (other !== run && other.controller === run.controller && other.hostSessionId === hostSessionId) return;
       }
-      await fsp.rm(workspaceDir, { recursive: true, force: true }).catch(() => undefined);
+      // Windows can retain a just-stopped Agent's handle briefly. Retrying keeps
+      // a replacement run from failing while it rebuilds the same shadow tree.
+      await fsp.rm(workspaceDir, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 }).catch(() => undefined);
     });
   }
 

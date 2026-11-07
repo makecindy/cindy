@@ -3,7 +3,8 @@
  *
  * 一位伙伴可以挂多个平台的机器人(Telegram、飞书 / Lark、企业微信、钉钉、Discord), 凭证由用户自己在平台申请,
  * 在伙伴设置「消息平台」页直接填; 与 设置 → IM 机器人 里那份个人 bot 各用各的凭证, 也可以把个人 bot
- * 一次性移过来(个人 bot 随之清空, 不共用)。
+ * 一次性移过来(个人 bot 随之清空)。飞书可由主人在私聊显式开启共享, 复用同一实例给本账号
+ * 的普通任务和伙伴通知主人; 群与访客仍归原伙伴, 私聊选择不改 botId。
  * 主人私聊进伙伴主任务, 群 / 话题 / 外部用户私聊各一条隐藏专线。
  * 正本与语义见 main/im/shared/botImConnectionStore.ts 与 botImConnectionRuntime.ts。
  */
@@ -76,6 +77,8 @@ export interface BotImConnectionRecord {
   service?: BotImFeishuService;
   /** 平台身份(Telegram bot id / 飞书 app id / 企业微信 bot id / 钉钉 AppKey / Discord 应用 id), 首次连上后记下, 用于专线 route key。 */
   botContextId: string | null;
+  /** Explicit owner opt-in. Bound to this exact app and its TOFU owner; never shared with groups. */
+  sharedFeishu?: { appId: string; ownerOpenId: string; selectedBotId: string | null };
   /**
    * 群参与模式覆写(Telegram 连接): chatId → 'always' = 全响应·自主判断(每条群消息都进
    * 专线, 伙伴用 NO_REPLY 决定插不插话)。缺省 = 仅 @ / 回复触发。与 设置 → IM 机器人 那份

@@ -59,7 +59,8 @@ export interface CreateImOrchestratorOptions {
    * 这条连接属于哪位伙伴: 主人私聊进伙伴主任务, 群 / 话题 / 外部私聊进伙伴的隐藏
    * 专线(需 adapter.companionLane)。缺省 = 渠道自己的路由。
    */
-  companionBotId?: string | (() => string | null);
+  companionBotId?: string | ((botContextId: string, userId?: string) => string | null);
+  companionFailClosed?: boolean | ((userId?: string) => boolean);
 }
 
 /**
@@ -171,7 +172,7 @@ export function createImOrchestrator(
     prepareUnhealthySession: (sessionId) => prepareUnhealthySessionForSend(sessionId),
     // 伙伴自有连接: 消息落在伙伴的主任务 / 隐藏专线上。
     ...(options.companionBotId
-      ? { companion: createImCompanionRouteDeps(options.companionBotId) }
+      ? { companion: { ...createImCompanionRouteDeps(options.companionBotId), failClosed: options.companionFailClosed } }
       : {}),
   });
   // 切换引擎重建会话时补回本渠道的 vendorOptions(bot 专属工具依赖它)。

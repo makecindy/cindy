@@ -4593,7 +4593,18 @@
         "hint": "经已系之飞书或 Lark 机器人，私遣君一讯；唯于窗口失焦时遣之。",
         "disabledHint": "须先设 Bot，并遣之一讯以成其系。"
       },
-      "bind": "系之"
+      "bind": "系之",
+      "sharing": {
+        "help": "共享此连接：/share on 开启共享；/share off 恢复专属伙伴。随后可用 /bot 列出伙伴、/bot 名称或 ID 切换，或用 /bot cindy 返回 Cindy。本账号的普通差事、自动化和伙伴都可通过此连接通知你。",
+        "alreadyShared": "已有其他连接处于共享状态。请先在其私聊中发送 /share off。",
+        "enabled": "连接已共享。你正在与 Cindy 对话。用 /bot 选择伙伴，或用 /share off 恢复原来的专属伙伴。",
+        "disabled": "已关闭共享，原来的专属伙伴已恢复。",
+        "list": "请从下方选择伙伴。名称相同时请使用完整 ID。",
+        "unknown": "未找到唯一的活跃伙伴。请用 /bot 列出伙伴并选择完整 ID。",
+        "switched": "当前伙伴：",
+        "controlBusy": "切换伙伴前，请先完成或关闭当前差事选择器。",
+        "unavailable": "所选伙伴不可用。请在 Cindy 中恢复它，或用 /bot 选择其他伙伴。"
+      }
     },
     "wechatBot": {
       "title": "个人微信",

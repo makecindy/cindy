@@ -30,6 +30,7 @@
  * 启动/构建守护脚本和 Node 测试互相踩 ABI。
  */
 import fs from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { spawnSync } from 'node:child_process';
@@ -718,16 +719,45 @@ function runBetterSqliteNodeInstall() {
   });
 }
 
+/** Windows CreateProcess cannot use a long native-module cwd, even when fs can
+ * read it. Keep the final cache location, but build in an isolated short stage. */
+export function withElectronNativeBuildDirectory(cacheDir, rebuild, {
+  platform = process.platform,
+  prebuildInstallDir = path.join(ROOT, 'node_modules', 'prebuild-install'),
+} = {}) {
+  const moduleDir = path.join(cacheDir, 'node_modules', ELECTRON_NATIVE_MODULE);
+  if (platform !== 'win32' || moduleDir.length < 240) return rebuild(cacheDir);
+  const stage = fs.mkdtempSync(path.join(os.tmpdir(), 'cindy-native-build-'));
+  try {
+    fs.cpSync(cacheDir, stage, { recursive: true });
+    if (fs.existsSync(prebuildInstallDir)) {
+      fs.symlinkSync(prebuildInstallDir, path.join(stage, 'node_modules', 'prebuild-install'),
+        process.platform === 'win32' ? 'junction' : 'dir');
+    }
+    const result = rebuild(stage);
+    fs.cpSync(path.join(stage, 'node_modules', ELECTRON_NATIVE_MODULE, 'build'),
+      path.join(moduleDir, 'build'), { recursive: true });
+    return result;
+  } finally {
+    // stage is created by mkdtemp under the OS temp directory, never from input.
+    if (!path.resolve(stage).startsWith(path.resolve(os.tmpdir()) + path.sep)) throw new Error('Unexpected native build stage');
+    fs.rmSync(stage, { recursive: true, force: true });
+  }
+}
+
 function rebuildElectronNativeCache(electronVersion, electronArch, cacheDir) {
   log(`编译 Electron ${electronVersion} (${electronArch}) 专用 ${ELECTRON_NATIVE_MODULE} native binding`);
-  runNodeTool('electron-rebuild', path.join(ROOT, 'node_modules', '@electron', 'rebuild', 'lib', 'cli.js'), [
-    '-f',
-    '-o',
-    ELECTRON_NATIVE_MODULE,
-    `--arch=${electronArch}`,
-    `--version=${electronVersion}`,
-    `--module-dir=${cacheDir}`,
-  ]);
+  withElectronNativeBuildDirectory(cacheDir, (buildDir) => {
+    const ok = runNodeTool('electron-rebuild', path.join(ROOT, 'node_modules', '@electron', 'rebuild', 'lib', 'cli.js'), [
+      '-f',
+      '-o',
+      ELECTRON_NATIVE_MODULE,
+      `--arch=${electronArch}`,
+      `--version=${electronVersion}`,
+      `--module-dir=${buildDir}`,
+    ], { allowFailure: true });
+    if (!ok) throw new Error('electron-rebuild failed');
+  });
 }
 
 function ensureElectronNativeBinding(electronVersion, electronArch) {

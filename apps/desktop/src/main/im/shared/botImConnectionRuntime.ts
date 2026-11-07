@@ -305,6 +305,26 @@ export function getBotFeishuTransport(botId: string, ownerOpenId?: string): Feis
   return null;
 }
 
+/** Exactly one explicitly shared connection in this account. No recipient is borrowed across apps. */
+export function isSharedFeishuTransport(im: object): boolean {
+  return listBotImConnections().some((record) => record.channel === 'feishu' && record.sharedFeishu
+    && instances.get(record.id)?.transport.im === im);
+}
+
+export function getSharedFeishuTransport(ownerOpenId?: string): FeishuIM | null {
+  const records = listBotImConnections().filter((r) => r.channel === 'feishu' && r.sharedFeishu);
+  if (!records.length) return null;
+  if (records.length !== 1) throw new Error('Feishu shared connection is ambiguous');
+  const record = records[0];
+  const live = instances.get(record.id);
+  if (live?.transport.kind !== 'feishu') throw new Error('Feishu shared connection unavailable');
+  const im = live.transport.im;
+  const shared = record.sharedFeishu!;
+  if (im.getStatus().kind !== 'connected' || im.getBotAppId() !== shared.appId
+    || im.getOwnerOpenId() !== shared.ownerOpenId || (ownerOpenId && ownerOpenId !== shared.ownerOpenId)) throw new Error('Feishu shared connection unavailable');
+  return im;
+}
+
 async function readBotProfileStatus(botId: string): Promise<string | null> {
   const [row] = await getDbClient()
     .drizzle.select({ status: botProfiles.status })

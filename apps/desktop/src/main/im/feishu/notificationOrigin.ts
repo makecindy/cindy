@@ -2,7 +2,7 @@
 import { and, eq } from 'drizzle-orm';
 import type { FeishuIM, IMMessageEvent } from '@cindy/im';
 import { getDbClient } from '../../localDb/client/current';
-import { imNotificationOrigins, sessions } from '../../localDb/schema';
+import { botProfiles, botSessionLinks, imNotificationOrigins, sessions } from '../../localDb/schema';
 import { createLogger } from '../../logger';
 import {
   captureImAccountGeneration,
@@ -19,7 +19,7 @@ function sendingKey(generation: number, appId: string, userId: string): string {
 }
 
 export function sendFeishuSessionNotification(
-  im: FeishuIM, sessionId: string, text: string,
+  im: Pick<FeishuIM, 'getStatus' | 'getOwnerOpenId' | 'sendNotification'>, sessionId: string, text: string,
 ): Promise<{ messageId: string; chatId?: string; sessionLinked: boolean }> {
   const generation = captureImAccountGeneration();
   const status = im.getStatus();
@@ -112,7 +112,13 @@ export async function resolveFeishuNotificationReply(im: FeishuIM, event: IMMess
     }
   }
   if (!origin) return null;
-  const [row] = await db.drizzle.select({ workingDir: sessions.workingDir, status: sessions.status, orcaRole: sessions.orcaRole }).from(sessions).where(eq(sessions.id, origin.sessionId)).limit(1);
+  const [row] = await db.drizzle.select({ workingDir: sessions.workingDir, status: sessions.status, orcaRole: sessions.orcaRole, source: sessions.source }).from(sessions).where(eq(sessions.id, origin.sessionId)).limit(1);
+  if (row?.source === 'bot') {
+    const [profile] = await db.drizzle.select({ status: botProfiles.status }).from(botSessionLinks)
+      .innerJoin(botProfiles, eq(botProfiles.id, botSessionLinks.botId))
+      .where(eq(botSessionLinks.sessionId, origin.sessionId)).limit(1);
+    if (profile?.status !== 'active') throw new Error('Notification companion is unavailable');
+  }
   if (!isImAccountGenerationCurrent(generation)) throw new ImAccountScopeClosedError();
   const current = im.getStatus();
   if (current.kind !== 'connected' || current.appId !== event.contextId || im.getOwnerOpenId() !== event.senderId) {

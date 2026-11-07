@@ -4692,7 +4692,18 @@
         "hint": "Envia uma mensagem privada pelo bot vinculado do Feishu ou Lark; apenas quando a janela está sem foco.",
         "disabledHint": "Primeiro configure o bot e envie uma mensagem privada a ele para concluir o vínculo."
       },
-      "bind": "Vincular"
+      "bind": "Vincular",
+      "sharing": {
+        "help": "Compartilhe esta conexão: /share on ativa o compartilhamento; /share off restaura o colega dedicado. Use /bot para listar colegas, /bot nome-ou-ID para trocar ou /bot cindy para voltar à Cindy. Sessões comuns, automações e colegas desta conta podem avisar você por esta conexão.",
+        "alreadyShared": "Outra conexão já está compartilhada. Envie /share off no chat privado dela primeiro.",
+        "enabled": "Conexão compartilhada. Você está falando com a Cindy. Use /bot para escolher um colega ou /share off para restaurar o colega dedicado original.",
+        "disabled": "Compartilhamento desativado. O colega dedicado original foi restaurado.",
+        "list": "Escolha um colega abaixo. Use o ID completo se houver nomes iguais.",
+        "unknown": "Nenhum colega ativo exclusivo foi encontrado. Use /bot para listar colegas e selecione um ID completo.",
+        "switched": "Colega atual: ",
+        "controlBusy": "Conclua ou feche o seletor de sessão atual antes de trocar de colega.",
+        "unavailable": "O colega selecionado não está disponível. Retome-o na Cindy ou use /bot para escolher outro colega."
+      }
     },
     "wechatBot": {
       "title": "WeChat pessoal",

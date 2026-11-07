@@ -4692,7 +4692,18 @@
         "hint": "Envoie un message privé via le bot Feishu ou Lark associé ; uniquement lorsque la fenêtre n'est pas au premier plan.",
         "disabledHint": "Configurez d'abord le bot et envoyez-lui un message privé une fois pour finaliser la liaison."
       },
-      "bind": "Lier"
+      "bind": "Lier",
+      "sharing": {
+        "help": "Partager cette connexion : /share on active le partage ; /share off rétablit le coéquipier dédié. Utilisez ensuite /bot pour lister les coéquipiers, /bot nom-ou-ID pour changer, ou /bot cindy pour revenir à Cindy. Les sessions ordinaires, automatisations et coéquipiers de ce compte peuvent vous notifier via cette connexion.",
+        "alreadyShared": "Une autre connexion est déjà partagée. Envoyez d'abord /share off dans sa conversation privée.",
+        "enabled": "Connexion partagée. Vous parlez à Cindy. Utilisez /bot pour choisir un coéquipier, ou /share off pour rétablir le coéquipier dédié d'origine.",
+        "disabled": "Partage désactivé. Le coéquipier dédié d'origine a été rétabli.",
+        "list": "Choisissez un coéquipier ci-dessous. Utilisez l'ID complet si des noms se ressemblent.",
+        "unknown": "Aucun coéquipier actif et unique n'a été trouvé. Utilisez /bot pour afficher les coéquipiers et sélectionnez un ID complet.",
+        "switched": "Coéquipier actuel : ",
+        "controlBusy": "Terminez ou fermez le sélecteur de session actuel avant de changer de coéquipier.",
+        "unavailable": "Le coéquipier sélectionné n'est pas disponible. Reprenez-le dans Cindy ou utilisez /bot pour en choisir un autre."
+      }
     },
     "wechatBot": {
       "title": "WeChat personnel",

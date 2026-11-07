@@ -4636,7 +4636,18 @@
         "hint": "Sendet eine private Nachricht über den verknüpften Feishu- oder Lark-Bot; nur, wenn das Fenster nicht fokussiert ist.",
         "disabledHint": "Richte zuerst den Bot ein und sende ihm einmal eine Direktnachricht, um die Verknüpfung abzuschließen."
       },
-      "bind": "Verknüpfen"
+      "bind": "Verknüpfen",
+      "sharing": {
+        "help": "Diese Verbindung teilen: /share on aktiviert die Freigabe; /share off stellt das dedizierte Teammitglied wieder her. Nutze anschließend /bot, um Teammitglieder aufzulisten, /bot Name-oder-ID zum Wechseln oder /bot cindy, um zu Cindy zurückzukehren. Normale Sitzungen, Automatisierungen und Teammitglieder dieses Kontos können dich über diese Verbindung benachrichtigen.",
+        "alreadyShared": "Eine andere Verbindung ist bereits geteilt. Sende zuerst /share off in ihrem privaten Chat.",
+        "enabled": "Verbindung geteilt. Du sprichst mit Cindy. Nutze /bot, um ein Teammitglied auszuwählen, oder /share off, um das ursprüngliche dedizierte Teammitglied wiederherzustellen.",
+        "disabled": "Freigabe deaktiviert. Das ursprüngliche dedizierte Teammitglied wurde wiederhergestellt.",
+        "list": "Wähle unten ein Teammitglied aus. Nutze die vollständige ID, wenn Namen übereinstimmen.",
+        "unknown": "Kein eindeutiges Teammitglied mit dem Status „Aktiv“ gefunden. Nutze /bot, um Teammitglieder aufzulisten, und wähle eine vollständige ID.",
+        "switched": "Aktuelles Teammitglied: ",
+        "controlBusy": "Schließe oder beende zuerst die aktuelle Sitzungsauswahl, bevor du das Teammitglied wechselst.",
+        "unavailable": "Das ausgewählte Teammitglied ist nicht verfügbar. Setze es in Cindy fort oder nutze /bot, um ein anderes auszuwählen."
+      }
     },
     "wechatBot": {
       "title": "Persönliches WeChat",

@@ -5,7 +5,8 @@
  *
  * 一条记录 = 一位伙伴在某个平台上的一个机器人(渠道 + 连接 id)。凭证(Telegram token /
  * 飞书 app secret 等)不在这里: 传输层按 `secretKeyPrefixFor(id)` 的前缀写进本机安全存储,
- * 多份实例各管各的键。记录是账号级 JSON override 文件(与 im-default-settings 同模式)。
+ * 多份实例各管各的键。飞书 sharedFeishu 只增加主人私聊的共享选择, 不复制凭证或实例。
+ * 记录是账号级 JSON override 文件(与 im-default-settings 同模式)。
  */
 
 import { randomBytes } from 'node:crypto';
@@ -63,16 +64,27 @@ function normalizeRecord(id: string, raw: unknown): Omit<BotImConnectionRecord, 
   const groupActivation = normalizeGroupActivation(r.groupActivation);
   const archivedTaskRows = normalizeArchivedTaskRows(r.archivedTaskRows);
   const archivedTaskActivity = normalizeArchivedTaskActivity(r.archivedTaskActivity, archivedTaskRows);
+  const sharedFeishu = r.channel === 'feishu' ? normalizeSharedFeishu(r.sharedFeishu) : undefined;
   return {
     botId: r.botId,
     channel: r.channel,
     createdAt,
     ...(service ? { service } : {}),
     botContextId,
+    ...(sharedFeishu ? { sharedFeishu } : {}),
     ...(groupActivation ? { groupActivation } : {}),
     ...(archivedTaskRows ? { archivedTaskRows } : {}),
     ...(archivedTaskActivity ? { archivedTaskActivity } : {}),
   };
+}
+
+function normalizeSharedFeishu(raw: unknown): BotImConnectionRecord['sharedFeishu'] {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return undefined;
+  const value = raw as Record<string, unknown>;
+  const validId = (id: unknown): id is string => typeof id === 'string' && !!id.trim() && id.length <= 256;
+  if (!validId(value.appId) || !validId(value.ownerOpenId)
+    || (value.selectedBotId !== null && !validId(value.selectedBotId))) return undefined;
+  return { appId: value.appId, ownerOpenId: value.ownerOpenId, selectedBotId: value.selectedBotId as string | null };
 }
 
 /** Presentation state only: malformed cutoffs cannot hide a row. */
@@ -169,6 +181,13 @@ export function listBotImConnectionsForBot(botId: string): BotImConnectionRecord
   return listBotImConnections().filter((record) => record.botId === botId);
 }
 
+/** Tool discovery for owner chats; actual recipients and native APIs still require runtime scopes. */
+export function listBotImToolChannels(botId: string): BotImChannel[] {
+  return [...new Set(listBotImConnections()
+    .filter((record) => record.botId === botId || (record.channel === 'feishu' && record.sharedFeishu))
+    .map((record) => record.channel))];
+}
+
 export async function addBotImConnectionRecord(
   input: { botId: string; channel: BotImChannel; service?: BotImFeishuService },
   deps: { now?: () => number; id?: () => string } = {},
@@ -191,12 +210,18 @@ export async function addBotImConnectionRecord(
 
 export async function updateBotImConnectionRecord(
   id: string,
-  patch: Partial<Pick<BotImConnectionRecord, 'botContextId' | 'groupActivation'>>,
+  patch: Partial<Pick<BotImConnectionRecord, 'botContextId' | 'groupActivation' | 'sharedFeishu'>>,
+  assertCurrent?: () => void,
 ): Promise<BotImConnectionRecord | null> {
   if (!isBotImConnectionId(id)) return null;
+  const owner = activeOwnerScopeKey();
   let next: BotImConnectionRecord | null = null;
   await file.updateAtomic(
     (current) => {
+      if (isAppSessionBoundaryPending() || activeOwnerScopeKey() !== owner) throw new Error('OWNER_CHANGED');
+      assertCurrent?.();
+      if (patch.sharedFeishu && Object.entries(current.value.connections)
+        .some(([key, record]) => key !== id && record.sharedFeishu)) throw new Error('FEISHU_ALREADY_SHARED');
       const existing = current.value.connections[id];
       if (!existing) return current.value;
       const merged = { ...existing, ...patch };
@@ -205,6 +230,7 @@ export async function updateBotImConnectionRecord(
     },
     { preserveDefaults: true },
   );
+  if (isAppSessionBoundaryPending() || activeOwnerScopeKey() !== owner) throw new Error('OWNER_CHANGED');
   return next;
 }
 

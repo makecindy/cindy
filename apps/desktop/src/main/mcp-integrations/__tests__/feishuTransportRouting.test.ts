@@ -20,14 +20,16 @@ const companion = { getOwnerOpenId: () => 'ou_companion' } as FeishuToolTranspor
 const lane = { getOwnerOpenId: () => 'ou_lane' } as FeishuToolTransport;
 const readTurnScope = vi.fn<() => { im: FeishuToolTransport } | null>(() => null);
 const getCompanionTransport = vi.fn((): FeishuToolTransport | null => companion);
-const resolve = createFeishuTransportResolver({ readTurnScope, getCompanionTransport, personalIm: personal });
+const shared = { getOwnerOpenId: () => 'ou_shared', getBotAppId: () => 'cli_shared' } as FeishuToolTransport;
+const getSharedTransport = vi.fn((): FeishuToolTransport | null => null);
+const resolve = createFeishuTransportResolver({ readTurnScope, getCompanionTransport, getSharedTransport, personalIm: personal });
 
 beforeAll(async () => {
   client = await createDbClient({ transport: 'worker-thread', useInlineWorker: true });
   await client.exec('CREATE TABLE sessions (id TEXT PRIMARY KEY, source TEXT)');
   await client.exec('CREATE TABLE bot_session_links (session_id TEXT, bot_id TEXT, role TEXT)');
-  await client.exec('CREATE TABLE bot_profiles (id TEXT PRIMARY KEY, status TEXT)');
-  await client.exec("INSERT INTO bot_profiles VALUES ('bot-a', 'active')");
+  await client.exec('CREATE TABLE bot_profiles (id TEXT PRIMARY KEY, status TEXT, display_name TEXT)');
+  await client.exec("INSERT INTO bot_profiles VALUES ('bot-a', 'active', 'A'), ('bot-b', 'active', 'B')");
   await client.exec("INSERT INTO sessions VALUES ('canonical', 'bot'), ('desktop', 'desktop'), ('late', 'bot')");
   await client.exec("INSERT INTO bot_session_links VALUES ('canonical', 'bot-a', 'canonical')");
 });
@@ -36,6 +38,7 @@ beforeEach(() => {
   setCurrentDbClient(client, 'account-a');
   readTurnScope.mockReturnValue(null);
   getCompanionTransport.mockReturnValue(companion);
+  getSharedTransport.mockReset().mockReturnValue(null);
 });
 afterAll(async () => {
   commitVolatileAppSession('signed-out');
@@ -44,6 +47,50 @@ afterAll(async () => {
 });
 
 describe('Feishu transport with worker database', () => {
+  // Sharing regression: ordinary/scheduler sessions and multiple companions had
+  // disjoint credentials. Real resolver, one transport, host-derived identities.
+  // Minimal input: shared connection + canonical link without inbound scope; unit.
+  it('shares one transport across Cindy, two companions and a standalone scheduler session', async () => {
+    await client.exec("INSERT INTO sessions VALUES ('canonical-b', 'bot'), ('scheduler', 'scheduler')");
+    await client.exec("INSERT INTO bot_session_links VALUES ('canonical-b', 'bot-b', 'canonical')");
+    getSharedTransport.mockReturnValue(shared);
+    getCompanionTransport.mockClear();
+    for (const [sessionId, label] of [['desktop', 'Cindy'], ['canonical', 'A · bot-a'], ['canonical-b', 'B · bot-b'], ['scheduler', 'Cindy']]) {
+      const result = await resolve({ sessionId });
+      expect(result.im).toBe(shared);
+      expect(result.sourceLabel).toBe(label);
+      result.assertCurrent();
+    }
+    expect(getCompanionTransport).not.toHaveBeenCalled();
+  });
+
+  it('rejects unavailable sharing and a revoked shared connection between lookup and send', async () => {
+    getSharedTransport.mockImplementation(() => { throw new Error('Shared offline'); });
+    await expect(resolve({ sessionId: 'desktop' })).rejects.toThrow('Shared offline');
+    getSharedTransport.mockReturnValue(shared);
+    const result = await resolve({ sessionId: 'canonical' });
+    getSharedTransport.mockReturnValue(null);
+    expect(result.assertCurrent).toThrow('Feishu shared connection changed');
+  });
+
+  it('refuses another app recipient and keeps a group inbound scope ahead of sharing', async () => {
+    getSharedTransport.mockReturnValue(shared);
+    await expect(resolve({ sessionId: 'desktop' }, 'ou_other_app')).rejects.toThrow('Feishu shared connection changed');
+    readTurnScope.mockReturnValue({ im: lane });
+    expect((await resolve({ sessionId: 'desktop' })).im).toBe(lane);
+  });
+
+  it('labels owner DM tool sends from the calling companion rather than the latest selected companion', async () => {
+    getSharedTransport.mockReturnValue(shared);
+    const resolveInbound = createFeishuTransportResolver({
+      personalIm: personal, getCompanionTransport, getSharedTransport,
+      readTurnScope: () => ({ im: shared, chatKind: 'direct', requesterIsOwner: true }),
+      isSharedTransport: (im) => im === shared,
+    });
+    expect((await resolveInbound({ sessionId: 'canonical' }, 'ou_shared')).sourceLabel).toBe('A · bot-a');
+    getSharedTransport.mockReturnValue(null);
+    await expect(resolveInbound({ sessionId: 'canonical' })).rejects.toThrow('Feishu shared connection changed');
+  });
   it('resolves a canonical companion without an inbound scope', async () => {
     const { im } = await resolve({ sessionId: 'canonical' });
     expect(im.getOwnerOpenId()).toBe('ou_companion');
