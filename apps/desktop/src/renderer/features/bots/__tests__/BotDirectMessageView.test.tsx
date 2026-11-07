@@ -85,6 +85,7 @@ beforeEach(() => {
           recipientBotName: 'Planner',
           content: 'Can you check this?',
           createdAt: 1,
+          deliveryStatus: 'delivered',
         },
         {
           id: 'message-2',
@@ -95,6 +96,18 @@ beforeEach(() => {
           recipientBotName: 'Cindy',
           content: 'Checked.',
           createdAt: 2,
+          deliveryStatus: 'delivered',
+        },
+        {
+          id: 'message-3',
+          sequence: 3,
+          senderBotId: 'bot-a',
+          senderBotName: 'Cindy',
+          recipientBotId: 'bot-b',
+          recipientBotName: 'Planner',
+          content: 'Please check the queue issue.',
+          createdAt: 3,
+          deliveryStatus: 'failed',
         },
       ],
     },
@@ -117,6 +130,8 @@ describe('BotDirectMessageView', () => {
     render(<TestPage />, { reactStrictMode: true });
     expect(await screen.findByText('Can you check this?')).toBeTruthy();
     expect(screen.getByText('Checked.')).toBeTruthy();
+    expect(screen.getByText('Please check the queue issue.')).toBeTruthy();
+    expect(screen.getByText('bots.directMessage.notDelivered')).toBeTruthy();
     // Messages render as Markdown, never with privileged links.
     expect(screen.getByText('Checked.').getAttribute('data-markdown')).toBe('false');
     expect(screen.queryByRole('textbox')).toBeNull();
@@ -124,6 +139,25 @@ describe('BotDirectMessageView', () => {
     fireEvent.click(screen.getByRole('button', { name: 'bots.directMessage.close' }));
     expect(mocks.navigate).toHaveBeenCalledWith('/bots/bot-a/session/a-main', { replace: true });
     expect(screen.getByTestId('content-header').textContent).toContain('Cindy');
+  });
+
+  it('shows a message that is still owned by the recipient queue', async () => {
+    mocks.getThread.mockResolvedValue({
+      ok: true,
+      thread: {
+        id: 'dm-1', botAId: 'bot-a', botAName: 'Cindy', botBId: 'bot-b', botBName: 'Planner',
+        status: 'active', closeReason: null, messageCount: 1, maxMessages: 12,
+        createdAt: 1, updatedAt: 2, closedAt: null,
+        messages: [{
+          id: 'queued-1', sequence: 1, senderBotId: 'bot-a', senderBotName: 'Cindy',
+          recipientBotId: 'bot-b', recipientBotName: 'Planner', content: 'Still waiting.',
+          createdAt: 1, deliveryStatus: 'queued',
+        }],
+      },
+    });
+    render(<TestPage />, { reactStrictMode: true });
+    expect(await screen.findByText('Still waiting.')).toBeTruthy();
+    expect(screen.getByText('bots.directMessage.queued')).toBeTruthy();
   });
 
   it('fails closed when the thread is unavailable', async () => {

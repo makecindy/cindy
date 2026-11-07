@@ -3142,6 +3142,16 @@ function taskCompletionDeliveryForOwner(): TaskCompletionDeliveryHost | null {
   return taskCompletionDeliveryHolder;
 }
 let botDirectMessageServiceHolder: BotDirectMessageService | null = null;
+const settleDiscardedBotDirectMessage = (sessionId: string, clientId: string): void => {
+  if (!clientId.startsWith('bot-dm:')) return;
+  void botDirectMessageServiceHolder?.settleDiscardedQueuedDelivery(sessionId, clientId).catch((error) => {
+    log.warn('Bot DM queued delivery discard settlement failed', {
+      sessionId,
+      clientId,
+      error: error instanceof Error ? error.message : String(error),
+    });
+  });
+};
 let botGroupChatServiceHolder: BotGroupChatService | null = null;
 /**
  * Settle a pending account / endpoint switch before using the companion runtime: the lazy Chat
@@ -12624,6 +12634,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     /** Host-managed images; attachment callers always use the durable queue. */
     files?: AgentInputQueuedMessage['files'];
     clientId?: string;
+    durableDelivery?: true;
     dispatcherSessionId?: string;
     title?: string;
     useWorktree?: boolean;
@@ -12973,6 +12984,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
           await enqueueSendToSessionMessage({ targetSessionId: session.id, message,
             persistedContent: persistedContent ?? message, clientId, meta, dbRow,
             origin: queuedOrigin, sourcePlugin, autoReviewUserText: params.autoReviewUserText,
+            durableDelivery: params.durableDelivery,
             onAccepted: async () => { broadcastSessionCreated(session.id); },
             taskActionDeliveryGuard: params.taskActionDeliveryGuard,
           });
@@ -13150,6 +13162,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
           sourcePlugin,
           autoReviewUserText: params.autoReviewUserText,
           botTaskCoordination: params.botTaskCoordination,
+          durableDelivery: params.durableDelivery,
           authorizationGuard: params.authorizationGuard,
           files: params.files,
           pastedTextRanges: params.pastedTextRanges,
@@ -13221,6 +13234,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
             sourcePlugin,
             autoReviewUserText: params.autoReviewUserText,
             botTaskCoordination: params.botTaskCoordination,
+            durableDelivery: params.durableDelivery,
           });
           return {
             ok: true as const,
@@ -13357,6 +13371,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
               sourcePlugin,
               autoReviewUserText: params.autoReviewUserText,
               botTaskCoordination: params.botTaskCoordination,
+              durableDelivery: params.durableDelivery,
             });
             return {
               ok: true as const,
@@ -13490,6 +13505,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
             sourcePlugin,
             autoReviewUserText: params.autoReviewUserText,
             botTaskCoordination: params.botTaskCoordination,
+            durableDelivery: params.durableDelivery,
           });
           return {
             ok: true as const,
@@ -13535,6 +13551,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     message: string;
     persistedContent?: string;
     clientId?: string;
+    durableDelivery?: true;
     files?: AgentInputQueuedMessage['files'];
     onAccepted?: (replayed?: boolean) => void | Promise<void>;
     onAcceptedRollback?: () => void | Promise<void>;
@@ -13722,8 +13739,12 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     },
     hasQueuedDelivery: async (sessionId, clientId) => {
       await inputCoordinator.ensureQueueRestored(sessionId);
-      return inputCoordinator.hasKnownClientId(sessionId, clientId);
+      if (!inputCoordinator.isQueueRestored(sessionId)) {
+        throw new Error('Bot DM queue restoration is incomplete');
+      }
+      return inputCoordinator.hasQueuedItemWhere(sessionId, (item) => item.clientId === clientId, { includeRecovery: true });
     },
+    sealDiscardedDelivery: (sessionId, clientId) => saveCancelledInputDelivery(sessionId, clientId),
     dispatch: ({
       autoReviewUserText,
       targetSessionId,
@@ -13731,6 +13752,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       message,
       persistedContent,
       clientId,
+      durableDelivery,
       onAccepted,
       onAcceptedRollback,
     }) =>
@@ -13741,6 +13763,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
         message,
         persistedContent,
         clientId,
+        durableDelivery,
         onAccepted: onAccepted
           ? async () => {
               try {
@@ -13770,6 +13793,9 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       if (ownerScope && !isDataOwnerBroadcastScopeCurrent(ownerScope)) return;
       broadcastToAllWindows(MAKER_PUSH.BOT_DIRECT_MESSAGE_CHANGED, payload, ownerScope);
     },
+  });
+  void botDirectMessageServiceHolder.restore().catch(() => {
+    log.warn('Bot DM delivery restore deferred');
   });
   setBotRemoteMessageService(botDirectMessageServiceHolder);
   botGroupChatServiceHolder?.dispose();
@@ -15772,6 +15798,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     pastedTextRanges?: AgentInputQueuedMessage['chatMessage']['pastedTextRanges'];
     files?: AgentInputQueuedMessage['files'];
     clientId: string;
+    durableDelivery?: true;
     meta: NonNullable<Awaited<ReturnType<typeof maker.getSessionMeta>>>;
     dbRow: NonNullable<Awaited<ReturnType<typeof getSessionRowSnapshot>>>;
     onAccepted?: SchedulerQueuedPromptRequest['onAccepted'];
@@ -15821,6 +15848,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     persistedContent: string;
     pastedTextRanges?: AgentInputQueuedMessage['chatMessage']['pastedTextRanges'];
     clientId: string;
+    durableDelivery?: true;
     meta: NonNullable<Awaited<ReturnType<typeof maker.getSessionMeta>>>;
     files?: AgentInputQueuedMessage['files'];
     origin?: AgentInputQueuedMessage['origin'];
@@ -15870,6 +15898,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       && params.persistedContent !== `${UI_ACTION_TRIGGER_PREFIX}${params.message}`;
     const queued: AgentInputQueuedMessage = {
       clientId: params.clientId,
+      ...(params.durableDelivery === true ? { durableDelivery: true } : {}),
       text: modelOnlyEnvelope ? params.persistedContent
         : hiddenTriggerForAgent ? `${UI_ACTION_TRIGGER_PREFIX}${params.message}` : params.message,
       ...(modelOnlyEnvelope ? { [HOST_ONLY_AGENT_PREFIX]: params.message.slice(0, params.message.length - params.persistedContent.slice(UI_ACTION_TRIGGER_PREFIX.length).length) } : {}),
@@ -21113,6 +21142,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     },
     // 队列项未派发即被丢弃(stop/remove/clearSession) → 释放暂存的 accepted 副作用, 防回调表泄漏。
     onDiscardedQueuedMessage: (sessionId, item) => {
+      settleDiscardedBotDirectMessage(sessionId, item.clientId);
       void settleTaskActionInput(item).catch(() => undefined);
       void settleTodoDispatch(sessionId, item.clientId, false);
       notePluginTaskLifecycle(service => service.discard(sessionId, item, 'cancelled'));
@@ -21212,6 +21242,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       await gitSnapshotCoordinator?.onTurnStart(sessionId, signal);
     },
     onUndispatchedUserTurn: (sessionId, item, disposition) => {
+      settleDiscardedBotDirectMessage(sessionId, item.clientId);
       void settleTodoDispatch(sessionId, item.clientId, false);
       welcomeDispatchReceipts.settle(sessionId, item.clientId, false);
       // 目标轮落库了却没能 dispatch(取消 / 失败): 记账该立刻还回去, 而不是等超时。
