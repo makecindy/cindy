@@ -1,9 +1,5 @@
-import { usePluginUiVisibilityValues } from '@/cindy-brain/usePluginUiVisibility';
 import { McpAppPermissionPrompt } from '@/components/chat/McpAppPermissionPrompt';
 import { PluginUiEnablePrompt } from '@/components/new-chat/PluginUiEnablePrompt';
-import { PluginUiContributionControls } from '@/cindy-brain/PluginUiControls';
-import { PluginUiCommandShortcuts } from '@/cindy-brain/PluginUiCommandShortcuts';
-import { PluginUiStatusBar } from '@/cindy-brain/PluginUiStatusBar';
 import { McpSetupPrompt, useMcpSetupRequest } from '@/components/new-chat/McpSetupPrompt';
 import { deviceDisplayName } from '@/lib/deviceName';
 import { VoiceCallComposerSlot } from '../bots/voice/GlobalVoiceCall';
@@ -108,7 +104,7 @@ import { CindyMakeEditingActions } from '@/components/cindy-make/CindyMakeEditin
 import { useCindyMakeEditing } from '@/components/cindy-make/useCindyMakeEditing';
 import { useCindyMakeState } from '@/lib/cindyMakeState';
 import { resolveLearnDesktopCommandFeedback } from '@/features/learn/desktopCommandFeedback';
-import { openSideChatTab, watchSideChatTabs } from '@/features/right-sidebar/lib/openSideChatTab';
+import { openSideChatTab, sideChatUnavailableKey, watchSideChatTabs } from '@/features/right-sidebar/lib/openSideChatTab';
 import { GoalIndicator } from '@/components/new-chat/GoalIndicator';
 import { PinnedPlanPanel } from '@/components/new-chat/PinnedPlanPanel';
 import { sessionsStore } from '@/lib/sessionsStore';
@@ -146,6 +142,7 @@ import {
   useShareSelectionActive,
 } from '@/components/chat/shareSelectionStore';
 import { ErrorBanner } from '@/components/chat/ErrorBanner';
+import { useSharedTaskRecovery } from '@/hooks/useSharedTaskRecovery';
 import {
   ErrorTailErrorBanner,
   InterruptedTurnBanner,
@@ -318,6 +315,7 @@ import {
   forkCurrentTaskFromKeyboard,
 } from '@/lib/workLouderCodexTaskActions';
 import { useSessionHardwareTaskActions } from './lib/sessionHardwareTaskActions';
+import { useGhostCardTaskArchive } from './hooks/useGhostCardTaskArchive';
 import { isRemoteSessionWriteBlocked } from './lib/remoteSessionWriteGuard';
 import { getModelById, getDefaultModelForVendor } from '@/lib/modelDefinitions';
 import { resolveDisplayContextWindow } from '@/lib/contextWindow';
@@ -866,7 +864,6 @@ function CCAgentSessionContent({
   botUnreadBoundaryAt,
   onBotReadThrough,
 }: CCAgentSessionViewProps = {}) {
-  const pluginVisibility = usePluginUiVisibilityValues();
   const { t } = useTranslation();
   const { sessionId: paramSessionId } = useParams<{ sessionId: string }>();
   const sessionId = sessionIdProp ?? paramSessionId;
@@ -1175,6 +1172,11 @@ function CCAgentSessionContent({
   // 冷启动 / bootstrap 竞态期间宁可暂时禁用系统文件打开，也不能把被控端 file:// 交给控制端。
   const rightSidebarDeviceLinkDeviceId =
     remoteDeviceId ?? session?.deviceLinkDeviceId ?? (session ? null : undefined);
+  // Every side chat entry uses the sidebar menu's gate, with the resolved origin
+  // so shared-task guests fail it before the list snapshot carries it (#9136).
+  // null = available; otherwise the reason shown by /side.
+  const sideChatBlockedKey = sideChatUnavailableKey(session, rightSidebarDeviceLinkDeviceId)
+    ?? (canNavigateSession ? null : 'chat.sideChat.mainTaskOnly');
   // Durable Subagent status for the chat cards. Wait until ownership resolves:
   // an unresolved task must not read this machine's store for a remote task.
   const subagentRunStatuses = useSubagentRunStatusIndex({
@@ -1268,6 +1270,9 @@ function CCAgentSessionContent({
     onRemoteWriteBlocked: showRemoteWriteBlockedToast,
     patchLocal: patchLocalSession,
   });
+  // 插件卡片上的归档任务按钮,以及 PR 合并后「看过并离开」的自动归档(只在普通任务页,
+  // Orca 分屏里的成员任务和伙伴会话不自动收走)。
+  useGhostCardTaskArchive({ session, archive, remoteWritesBlocked, autoArchive: !isOrcaMode && !botChatIdentity });
   // 列表级 activity 在重 topic 的 maker status 之前就可用。远程 turn 正在执行 / 等待
   // 交互时,session 行天然是 startedAt > endedAt,不能把这个正常在飞窗口误判成
   // 「应用退出中断」。直接门控首帧,再锁存本次视图,避免 activity 终态与 ended patch
@@ -1873,6 +1878,7 @@ function CCAgentSessionContent({
     continueAfterSilentStop,
     errorReason,
     toolLoop,
+    outputLimit,
     insertSystemCard,
     updateSystemCardData,
     error,
@@ -2549,6 +2555,16 @@ function CCAgentSessionContent({
     if (!errorTailMsg || errorTailKind !== 'error') return '';
     return remoteErrorMessageForBanner(errorTailMsg.content);
   }, [errorTailKind, errorTailMsg]);
+  const sharedTaskRecovery = useSharedTaskRecovery({
+    sessionId: sessionId ?? undefined,
+    agentDeviceId: session?.agentDeviceId,
+    error: error || errorTailText,
+    handledUsageLimit: usageLimitRecovery?.isAccountUsageLimit === true,
+    agentKind: session?.agentKind,
+    active: viewVisible && ownsHardwareTaskActions && !readOnly && !botChatIdentity
+      && !isStreaming && !agentStatus.isRunning && !errorIsRecoverable
+      && !syntheticContinuationPending && !usageLimitWait,
+  });
   // 本地隐藏态:点主按钮后立即隐藏,不等新消息入流(视觉连续性,规则 7)。
   // 「忽略/关闭」走 store 的乐观 errorDismissed 更新,无需本地态。
   // 按错误行 clientId 归属(不是 sessionId,review P2):续跑后同一会话再次以
@@ -2876,15 +2892,9 @@ function CCAgentSessionContent({
   const sessionHandoffPreparing = worktreePreparing || remoteHandoffPreparing;
 
   // ---------------------------------------------------------------------------
-  // F-AUQ-MIN-1 / F-AUQ-MIN-5 验收第 4 条：会话切换后 askUserViewerState 重置为 'expanded'。
-  // makerChatStore 按 sessionId 分片存储，A(minimized)→B→A 回到 A 时如果不重置，
-  // store 里 A 的状态仍是 'minimized'。
-  // setAskUserViewerState 来自 useCCAgentChat，依赖 [sessionId]，与 sessionId 同步变化，
-  // 因此该 effect 实质上只在 sessionId 变更时触发一次（单会话内不会误触发）。
-  // ---------------------------------------------------------------------------
+  // Preserve each task's question editor state when switching tasks.
   useEffect(() => {
     if (!sessionId) return;
-    setAskUserViewerState('expanded');
     setPluginSetupViewerState('expanded');
   }, [sessionId, setAskUserViewerState, setPluginSetupViewerState]);
 
@@ -2940,8 +2950,8 @@ function CCAgentSessionContent({
         return;
       }
       if (payload.command === 'side') {
-        if (!sessionId || !canNavigateSession || session?.source === 'side-chat' || session?.source === 'bot') {
-          toast.info(t('chat.sideChat.mainTaskOnly'));
+        if (!sessionId || sideChatBlockedKey) {
+          toast.info(t(sideChatBlockedKey ?? 'chat.sideChat.mainTaskOnly'));
           return;
         }
         void openSideChatTab(sessionId, { prompt: payload.args });
@@ -2995,7 +3005,7 @@ function CCAgentSessionContent({
       // 'issue' 命令由下方独立 effect 处理(需要 handleSend,其声明在本 effect 之后)。
     });
     return unsub;
-  }, [clearSession, insertHelpCard, insertSystemCard, readOnly, sessionId, session?.source, canNavigateSession, navigate, t]);
+  }, [clearSession, insertHelpCard, insertSystemCard, readOnly, sessionId, session?.source, canNavigateSession, sideChatBlockedKey, navigate, t]);
 
   // F-COLLAB: 协同模式真实状态。enabled 来自 session.orcaRole === 'lead';
   // worker(显示用)从 active workflow 的 Worker session 列表查到 agentKind。
@@ -3630,8 +3640,8 @@ function CCAgentSessionContent({
       // Await child creation in the composer's send transaction. The UI push
       // cannot acknowledge success or carry this invocation's attachments.
       if (hit.name === 'side') {
-        if (!sessionId || !canNavigateSession || ['side-chat', 'bot', 'review'].includes(session?.source ?? '')) {
-          toast.info(t('chat.sideChat.mainTaskOnly'));
+        if (!sessionId || sideChatBlockedKey) {
+          toast.info(t(sideChatBlockedKey ?? 'chat.sideChat.mainTaskOnly'));
           return { handled: true, accepted: false, message };
         }
         const accepted = await openSideChatTab(sessionId, {
@@ -3709,6 +3719,7 @@ function CCAgentSessionContent({
       rightSidebarDeviceLinkDeviceId,
       canNavigateSession,
       session?.source,
+      sideChatBlockedKey,
       navigate,
       t,
     ],
@@ -5359,7 +5370,7 @@ function CCAgentSessionContent({
       activeErrorClientId={!readOnly && error ? errorPersistId : null}
       activeVoiceCallId={activeVoiceCallId}
       historyVisibleAfter={session?.source === 'side-chat' ? new Date(session.createdAt).getTime() : undefined}
-      onAskInSideChat={!readOnly && canNavigateSession && sessionId && session?.source !== 'side-chat' && session?.source !== 'bot'
+      onAskInSideChat={!readOnly && sessionId && !sideChatBlockedKey
         ? (quote) => openSideChatTab(sessionId, { quote }) : undefined}
       cindyMakeSessionId={session?.source === 'cindy-make' ? sessionId : undefined}
       cindyMakeCompletionInComposer={session?.source === 'cindy-make' && (remoteMakeCards.supported || (!remoteDeviceId && !readOnly && typeof window.electronAPI.cindyMakeTest === 'function'))}
@@ -5626,7 +5637,6 @@ function CCAgentSessionContent({
            key={sessionId}: force a full remount on session switch so scroll state,
            refs, and ResizeObservers are fresh — guarantees per-session isolation. */}
         <div
-          data-plugin-ui-element="messages"
           className="wallpaper-message-viewport relative min-h-0 flex-1"
           style={{ '--wallpaper-composer-height': `${overlayHeight}px` } as CSSProperties}
         >
@@ -5798,10 +5808,12 @@ function CCAgentSessionContent({
                 />
               ) : (
                 <ErrorTailErrorBanner
+                  onChooseComputer={sharedTaskRecovery.askAgain}
                   errorText={errorTailText}
                   dismissOnEscape={viewVisible && ownsHardwareTaskActions}
                   errorReason={errorTailMsg?.errorReason}
                   toolLoop={errorTailMsg?.toolLoop}
+                  outputLimit={errorTailMsg?.outputLimit}
                   onContinue={handleErrorTailContinue}
                   onDismiss={handleErrorTailDismiss}
                   onSilentStopContinue={handleSilentStopContinue}
@@ -5872,10 +5884,12 @@ function CCAgentSessionContent({
               continuationTurnClientId,
             }) && (
               <ErrorBanner
+                onChooseComputer={sharedTaskRecovery.askAgain}
                 error={error}
                 dismissOnEscape={viewVisible && ownsHardwareTaskActions}
                 errorReason={errorReason}
                 toolLoop={toolLoop}
+                outputLimit={outputLimit}
                 isRecoverable={errorIsRecoverable}
                 retryText={errorRetryText}
                 onRetry={handleRetry}
@@ -5948,12 +5962,10 @@ function CCAgentSessionContent({
               style={{ width: inputWidth }}
               data-chat-composer-stack
             >
-              <div className="contents" data-plugin-ui-keep-visible>
-                {!readOnly && sessionId && <McpAppPermissionPrompt sessionId={sessionId} floating />}
-                {!readOnly && !session?.remoteHostId && (
-                  <PluginUiEnablePrompt key={`${sessionId}:${remoteDeviceId ?? agentDeviceId ?? 'local'}`} deviceId={remoteDeviceId ?? agentDeviceId ?? undefined} />
-                )}
-              </div>
+              {!readOnly && sessionId && <McpAppPermissionPrompt sessionId={sessionId} floating />}
+              {!readOnly && !session?.remoteHostId && (
+                <PluginUiEnablePrompt key={`${sessionId}:${remoteDeviceId ?? agentDeviceId ?? 'local'}`} deviceId={remoteDeviceId ?? agentDeviceId ?? undefined} />
+              )}
               {/* FP-7 / F-PERM-2 / F7.4: mutually exclusive prompts.
                  Plan review takes precedence — the SDK won't interleave it with
                  other tool calls, but explicit priority guards against layout
@@ -5970,10 +5982,9 @@ function CCAgentSessionContent({
                   ? <RemoteBotFollowUpInvitation key={`${remoteDeviceId}:${sessionId}`} deviceId={remoteDeviceId} botId={botChatIdentity.id} />
                   : <BotFollowUpInvitation key={`follow-up-invitation:${sessionId}`} botId={botChatIdentity.id} engaged />
               )}
-              <div className="contents" data-plugin-ui-keep-visible>
               <InteractionPromptHost
                 hasInteraction={
-                  pluginVisibility.workspace && pluginVisibility.tools && !!(
+                  !!(
                     pendingPlanReview ||
                     pendingPermission ||
                     pendingAskUser ||
@@ -6078,7 +6089,6 @@ function CCAgentSessionContent({
                   />
                 ) : null}
               </InteractionPromptHost>
-              </div>
               {/* 会话内 /goal 进行中状态条(composer 上方);无 goal 时返回 null 不占位。 */}
               {!isSharedTaskPeer(remoteDeviceId ?? '') && <GoalIndicator sessionId={sessionId} />}
               {/* Only the compact bar reserves composer space; its transcript is a
@@ -6098,7 +6108,7 @@ function CCAgentSessionContent({
                  接管与 worktree 创建继续使用 90px 状态框。 */}
               {!isSharedTaskPeer(remoteDeviceId ?? '') && (pendingPlanReview ||
               pendingPermission ||
-              pendingAskUser ||
+              (pendingAskUser && askUserViewerState !== 'minimized') ||
               pendingPluginSetup ||
               pendingIssueConfirm ||
               pendingRenameSessionsConfirm ||
@@ -6143,17 +6153,8 @@ function CCAgentSessionContent({
                   aria-hidden={voiceModeOpen && voiceSurfaceAvailable ? true : undefined}
                 >
                 <ChatInput
-                  middleToolbarSlot={sessionId ? <>
-                    <PluginUiContributionControls sessionId={sessionId}
-                      point="composer.tools" deviceId={remoteDeviceId}
-                      connected={!remoteDeviceId || remoteConn === 'connected'}
-                      active={chatRealtime && !!session && session.status === 'active'}
-                      readOnly={readOnly} />
-                    <PluginUiCommandShortcuts sessionId={sessionId} entry="session" deviceId={remoteDeviceId}
-                      connected={!remoteDeviceId || remoteConn === 'connected'}
-                      active={chatRealtime && !!session && session.status === 'active'}
-                      readOnly={readOnly} />
-                  </> : undefined}
+                  modelPickerRequest={sharedTaskRecovery.modelPickerRequest}
+                  onModelPickerRequestConsumed={sharedTaskRecovery.consumeModelPickerRequest}
                   topSlot={cindyMakeRecoveryId && session ? (
                     <CindyMakeEditingActions
                       key={`${session.id}:${cindyMakeRecoveryId}`}
@@ -6406,10 +6407,6 @@ function CCAgentSessionContent({
                     </WorkingDirectoryTip>
                   )}
 
-                  <PluginUiStatusBar sessionId={sessionId}
-                    deviceId={remoteDeviceId ?? agentDeviceId ?? undefined} readOnly={readOnly}
-                    active={Boolean(session?.workingDir || worktreeCreation)} />
-
                   {/* Right: Context capacity indicator */}
                   <div className="flex shrink-0 items-center gap-3">
                     {session?.usedProjectContext && (
@@ -6505,7 +6502,6 @@ function CCAgentSessionContent({
     // WorkdirBrowseRoute)本身也挂这个类,主会话内层再挂一层是冗余但无害(CSS 规则幂等)。
     <div
       ref={containerRef}
-      data-plugin-ui-session={sessionId}
       className={cn('relative h-full w-full', isCompact && 'chat-rail-compact')}
     >
       {/* TopRightChipStackProvider 必须包住 MessageStream(消费 slot 的后代)

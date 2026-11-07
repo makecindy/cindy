@@ -800,6 +800,11 @@ export interface BotGroupRemoteChatData extends BotGroupDetail {
   projectDirName: string | null;
   /** Host forwards a measured main-timeline read to the chat server. Older hosts omit it. */
   supportsReadReceipts?: boolean;
+  /**
+   * Early local group: the host keeps its read position and accepts `read` with `{ at }`
+   * (host time of the newest message shown), so reading on the phone clears the computer's badge.
+   */
+  supportsLocalReadSync?: boolean;
   supportsPersonalMask?: boolean;
   /**
    * The computer accepts attachments on `send` (absent on older computers, which would

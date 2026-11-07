@@ -252,7 +252,7 @@ describe('normalizeUserMessage — device-link 出方向 OSS 引用物化', () =
     expect(downloadToFile).toHaveBeenCalledTimes(1);
     const [ossKeyArg, destArg] = downloadToFile.mock.calls[0] as unknown as [string, string];
     expect(ossKeyArg).toBe('cindy/device-link/u/x.png');
-    expect(destArg).toMatch(/cindy-attachments[\\/]v2-[^\\/]+[\\/]sess-1[\\/].+\.png$/);
+    expect(destArg).toMatch(/cindy-attachments(?:-\d+)?[\\/]v2-[^\\/]+[\\/]sess-1[\\/].+\.png$/);
     const block = (out as {
       content: Array<{ type: string; path?: string; mimeType?: string; pathOrigin?: string }>;
     })

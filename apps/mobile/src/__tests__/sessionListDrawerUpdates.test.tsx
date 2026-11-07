@@ -5,11 +5,11 @@ vi.mock('@/auth/AuthContext', () => ({ useAuth: () => ({ user: { id: 'test-owner
 import { act, type ReactNode } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { SessionListDrawer } from '@/session/SessionListDrawer';
+import { rubberBand, SessionListDrawer, useSessionListDrawerMotion, useSessionListDrawerOpenGesture } from '@/session/SessionListDrawer';
 import { motionDuration } from '@/theme/tokens';
 import type { MobileHomeProps } from '@/session/HomeSurface';
 const native = vi.hoisted(() => ({ home: null as MobileHomeProps | null, mounts: 0, unmounts: 0, reduceMotion: true,
-  values: [] as { value: number }[], gesture: {} as Record<string, (event?: any) => void>, cancel: vi.fn() }));
+  values: [] as { value: any }[], divider: null as any, pans: {} as Record<string, Record<string, (event?: any) => void>>, gesture: {} as Record<string, (event?: any) => void>, cancel: vi.fn() }));
 vi.mock('@/session/HomeSurface', async () => {
   const { useEffect } = await import('react');
   return { MobileHome: (props: MobileHomeProps) => {
@@ -18,6 +18,10 @@ vi.mock('@/session/HomeSurface', async () => {
     return null;
   } };
 });
+vi.mock('@/session/SessionPaneDivider', () => ({ SessionPaneDivider: (props: any) => {
+  native.divider = props;
+  return <div data-testid="session.paneDivider" />;
+} }));
 vi.mock('react-i18next', () => ({ useTranslation: () => ({ t: (key: string) => key }) }));
 vi.mock("react-native", async () => {
   const { createElement } = await import("react");
@@ -88,6 +92,7 @@ vi.mock("react-native-reanimated", async () => {
       return ref.current;
     },
     useAnimatedStyle: () => ({}),
+    useAnimatedReaction: () => undefined,
     Easing: { bezier: () => undefined },
     cancelAnimation: native.cancel,
     runOnJS: (fn: unknown) => fn,
@@ -98,15 +103,22 @@ vi.mock("react-native-reanimated", async () => {
 vi.mock("@/platform/gestureHandler", () => ({
   GestureDetector: ({ children }: { children: ReactNode }) => children,
   Gesture: {
+    // panel: activeOffsetX(-16); dimmed area: activeOffsetX([-16, 16]); task pull-out: activeOffsetX(16).
     Pan: () => {
+      const handlers: Record<string, (event?: any) => void> = {};
       const chain = {
         enabled: () => chain,
-        activeOffsetX: () => chain,
+        activeOffsetX: (offset: number | number[]) => {
+          const kind = Array.isArray(offset) ? 'scrim' : offset < 0 ? 'panel' : 'open';
+          if (kind === 'panel') native.gesture = handlers; else native.pans[kind] = handlers;
+          return chain;
+        },
         failOffsetX: () => chain,
         failOffsetY: () => chain,
-        onStart: (callback: () => void) => { native.gesture.start = callback; return chain; },
-        onUpdate: (callback: (event: any) => void) => { native.gesture.update = callback; return chain; },
-        onEnd: (callback: (event: any) => void) => { native.gesture.end = callback; return chain; },
+        onStart: (callback: (event?: any) => void) => { handlers.start = callback; return chain; },
+        onUpdate: (callback: (event: any) => void) => { handlers.update = callback; return chain; },
+        onEnd: (callback: (event: any) => void) => { handlers.end = callback; return chain; },
+        onFinalize: (callback: () => void) => { handlers.finalize = callback; return chain; },
       };
       return chain;
     },
@@ -140,7 +152,7 @@ describe('shared Home drawer host', () => {
   beforeEach(() => {
     Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
     native.home = null; native.mounts = 0; native.unmounts = 0;
-    native.values = []; native.gesture = {};
+    native.values = []; native.gesture = {}; native.divider = null; native.pans = {};
     native.reduceMotion = true;
     vi.clearAllMocks();
     vi.useFakeTimers();
@@ -196,6 +208,93 @@ describe('shared Home drawer host', () => {
       expect(progress!.value).toBe(1);
       expect(dragX!.value).toBe(0);
     }
+  });
+  // User request 2026-11-06: the floating drawer's edge drags the shared width like the
+  // side column, without showing a grip. The handle is a sibling of the panel, never the close gesture's child.
+  it('resizes the floating drawer from its edge and drops the handle when docked or closing', async () => {
+    native.reduceMotion = false;
+    const onResize = vi.fn();
+    const resize = { bounds: { min: 300, max: 648 }, onResize };
+    await act(async () => root.render(<SessionListDrawer {...props} resize={resize} />));
+    const divider = container.querySelector('[data-testid="session.paneDivider"]');
+    expect(divider).not.toBeNull();
+    expect(container.querySelector('[data-testid="sessionDrawer.panel"]')?.contains(divider)).toBe(false);
+    expect(native.divider).toMatchObject({ width: 320, left: 320, bounds: resize.bounds, grip: false });
+    native.divider.onResize(480);
+    expect(onResize).toHaveBeenCalledWith(480);
+    expect(divider?.parentElement?.getAttribute('data-pointer-events')).toBe('box-none');
+    // Mid-exit the drawer is still mounted; its edge must not take a new drag.
+    await act(async () => root.render(<SessionListDrawer {...props} resize={resize} open={false} />));
+    expect(container.querySelector('[data-testid="session.paneDivider"]')?.parentElement
+      ?.getAttribute('data-pointer-events')).toBe('none');
+    await act(async () => root.render(<SessionListDrawer {...props} resize={resize} persistent />));
+    expect(container.querySelector('[data-testid="session.paneDivider"]')).toBeNull();
+  });
+  // User request 2026-11-06 (revised): the edge only resizes, elastic past its bounds;
+  // the dimmed area takes the leaving gestures. Right stretches, then becomes Home mid-drag.
+  it('stretches elastically from the edge and springs back without leaving', async () => {
+    const resize = { bounds: { min: 300, max: 529 }, onResize: vi.fn(), home: { width: 669, open: vi.fn() } };
+    await act(async () => root.render(<SessionListDrawer {...props} resize={resize} />));
+    const stretch = native.values[3]!;
+    native.divider.elastic.onStretch(60);
+    expect(stretch.value).toBeCloseTo(rubberBand(60));
+    expect(rubberBand(60)).toBeGreaterThan(0);
+    expect(rubberBand(60)).toBeLessThan(60);
+    expect(rubberBand(10_000)).toBeLessThan(120);
+    expect(rubberBand(-60)).toBeCloseTo(-rubberBand(60));
+    native.divider.elastic.onSettle();
+    expect(stretch.value).toBe(0);
+    expect(resize.home.open).not.toHaveBeenCalled();
+  });
+  it('turns the list into Home mid-drag on the dimmed area, without a slide-out', async () => {
+    native.reduceMotion = false;
+    const openHome = vi.fn();
+    const resize = { bounds: { min: 300, max: 529 }, onResize: vi.fn(), home: { width: 669, open: openHome } };
+    await act(async () => root.render(<SessionListDrawer {...props} resize={resize} />));
+    const [progress, dragX, , stretch] = native.values;
+    const scrim = native.pans.scrim!;
+    scrim.start!({ absoluteX: 400, translationX: 0 });
+    scrim.update!({ translationX: 40 });
+    expect(stretch!.value).toBeCloseTo(rubberBand(40));
+    expect(dragX!.value).toBe(0);
+    expect(openHome).not.toHaveBeenCalled();
+    await act(async () => scrim.update!({ translationX: 100 }));
+    expect(openHome).toHaveBeenCalledOnce();
+    expect(native.home?.width).toBe(669);
+    scrim.update!({ translationX: 140 });
+    scrim.end!({ translationX: 140, velocityX: 0 });
+    expect(openHome).toHaveBeenCalledOnce();
+    expect(progress!.value).toBe(1);
+    await act(async () => root.render(<SessionListDrawer {...props} resize={resize} open={false} />));
+    expect(container.querySelector('[data-testid="sessionDrawer.overlay"]')).toBeNull();
+    // Reopening starts from the stored width and animates normally again.
+    await act(async () => root.render(<SessionListDrawer {...props} resize={resize} />));
+    expect(native.home?.width).toBe(320);
+    await act(async () => root.render(<SessionListDrawer {...props} resize={resize} open={false} />));
+    expect(container.querySelector('[data-testid="sessionDrawer.overlay"]')).not.toBeNull();
+  });
+  it('slides away left on the dimmed area and settles back after a short drag either way', async () => {
+    const resize = { bounds: { min: 300, max: 529 }, onResize: vi.fn(), home: { width: 669, open: vi.fn() } };
+    await act(async () => root.render(<SessionListDrawer {...props} resize={resize} />));
+    const [progress, dragX, , stretch] = native.values;
+    const scrim = native.pans.scrim!;
+    scrim.start!({ absoluteX: 600, translationX: 0 });
+    scrim.update!({ translationX: -20 });
+    expect(dragX!.value).toBe(-20);
+    scrim.end!({ translationX: -20, velocityX: 0 });
+    expect(props.onClose).not.toHaveBeenCalled();
+    expect(progress!.value).toBe(1);
+    expect(dragX!.value).toBe(0);
+    // Starting near the screen edge, Home sits closer: 0.6 of the 69pt of room.
+    scrim.start!({ absoluteX: 600, translationX: 0 });
+    scrim.update!({ translationX: 30 });
+    scrim.end!({ translationX: 30, velocityX: 0 });
+    expect(stretch!.value).toBe(0);
+    expect(resize.home.open).not.toHaveBeenCalled();
+    scrim.start!({ absoluteX: 600, translationX: 0 });
+    scrim.update!({ translationX: -150 });
+    scrim.end!({ translationX: -150, velocityX: 0 });
+    expect(props.onClose).toHaveBeenCalledOnce();
   });
   it('unmounts the invisible blocker even when the animation never calls completion', async () => {
     native.reduceMotion = false;
@@ -269,5 +368,48 @@ describe('shared Home drawer host', () => {
     expect(native.unmounts).toBe(1);
     expect(props.onClosed).toHaveBeenCalledTimes(1);
     expect(container.querySelector('[data-testid="sessionDrawer.overlay"]')).toBeNull();
+  });
+});
+
+// User request 2026-11-06: in floating mode a rightward swipe on the task pulls the
+// list out under the finger instead of going back; too short a pull settles back.
+describe('pulling the floating list out from the task', () => {
+  it('follows the finger, opens past a third or a flick, and otherwise cancels', async () => {
+    Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
+    native.values = []; native.pans = {};
+    const onOpen = vi.fn(), onCancel = vi.fn(), onSettle = vi.fn();
+    let motion: ReturnType<typeof useSessionListDrawerMotion>;
+    function Probe() {
+      motion = useSessionListDrawerMotion();
+      useSessionListDrawerOpenGesture({ motion, enabled: true, width: 320, onOpen, onCancel, onSettle });
+      return null;
+    }
+    const host = document.createElement('div'), probeRoot = createRoot(host);
+    await act(async () => probeRoot.render(<Probe />));
+    const pull = native.pans.open!;
+    pull.start!();
+    expect(onOpen).toHaveBeenCalledOnce();
+    expect(motion!.tracking.value).toBe(true);
+    pull.update!({ translationX: 96 });
+    expect(motion!.progress.value).toBeCloseTo(0.3);
+    pull.end!({ translationX: 96, velocityX: 0 });
+    pull.finalize!();
+    expect(onCancel).toHaveBeenCalledOnce();
+    expect(onSettle).toHaveBeenCalledOnce();
+    pull.start!();
+    pull.update!({ translationX: 200 });
+    pull.end!({ translationX: 200, velocityX: 0 });
+    expect(motion!.progress.value).toBe(1);
+    expect(onCancel).toHaveBeenCalledOnce();
+    pull.start!();
+    pull.update!({ translationX: 40 });
+    pull.end!({ translationX: 40, velocityX: 1200 });
+    expect(motion!.progress.value).toBe(1);
+    // A gesture cancelled by the system while pulling lets the list go.
+    pull.start!();
+    pull.finalize!();
+    expect(onCancel).toHaveBeenCalledTimes(2);
+    expect(onSettle).toHaveBeenCalledTimes(4);
+    await act(async () => probeRoot.unmount());
   });
 });

@@ -38,6 +38,14 @@ export default {
         .map(span => span.textContent)));
     assert.deepEqual(clipped, [], 'Model text must fit without ellipsis or clipping');
     assert.equal(await pickers.count(), expected, 'Backups are immediately visible');
+    if (ui.case === 'default') {
+      await pickers.first().click();
+      const panel = page.locator('[data-radix-popper-content-wrapper] > *').first();
+      await panel.waitFor();
+      assert.ok(await panel.evaluate((el) => getComputedStyle(el).boxShadow.includes('16px')), 'Field panel carries --shadow-menu');
+      await page.keyboard.press('Escape');
+      await panel.waitFor({ state: 'hidden' });
+    }
     const status = await ui.t('settings.auxiliaryModels.unavailable');
     if (ui.case.startsWith('shared-')) {
       for (let index = 0; index < 3; index++) {

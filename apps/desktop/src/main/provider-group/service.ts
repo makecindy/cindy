@@ -153,6 +153,11 @@ export interface ProviderGroupRemoteGroups {
   invalidate(ownerDeviceId: string): void;
 }
 
+export type ProviderGroupEligibilityContext =
+  | { kind: 'failure'; token: number; lease?: object | null; reason?: InterruptedTurnErrorSignals['reason'] }
+  | { kind: 'before-send'; clientId?: string; scheduled?: boolean }
+  | { kind: 'rebalance' | 'reconnect' | 'restart' };
+
 export interface ProviderGroupServiceDeps {
   router: ProviderGroupRouter;
   directory: ProviderGroupDirectory;
@@ -179,10 +184,11 @@ export interface ProviderGroupServiceDeps {
   hasAssistantHistory(sessionId: string): Promise<boolean>;
 
   /**
-   * 是否由本机制接管这次失败(排除目标模式、伙伴、共享中的任务等)。协同的 Lead 与 Worker 都可以换电脑：
+   * 按用途确认恢复负责人：伙伴仅开放输入协调器持有的主聊天 / 话题故障，不扩大均衡、重连与定时恢复。
+   * 仍排除目标模式、共享中的任务等。协同的 Lead 与 Worker 都可以换电脑：
    * Worker 换成了照常把这一轮的结果回报给 Lead，只是不做「等额度恢复后自动继续」(那仍交给 Lead)。
    */
-  isFailoverEligible(sessionId: string): Promise<boolean>;
+  isFailoverEligible(sessionId: string, context: ProviderGroupEligibilityContext): Promise<boolean>;
   /**
    * 用终态错误下发的令牌取得这次错误的重试入口；null = 用户已接手或错误已不是当前状态。
    * 交接会关闭旧会话并撤销限额等待，所以先拿句柄，交接后凭它重新挂上。
@@ -1038,7 +1044,7 @@ export function createProviderGroupService(deps: ProviderGroupServiceDeps): Prov
   async function rebalanceContext(sessionId: string) {
     if (!deps.readBinding(sessionId) || deps.isTurnRunning(sessionId)) return null;
     const bound = await withTimeout(loadBound(sessionId), PROVIDER_GROUP_BEFORE_SEND_TIMEOUT_MS);
-    if (!bound?.config || !(await deps.isFailoverEligible(sessionId))) return null;
+    if (!bound?.config || !(await deps.isFailoverEligible(sessionId, { kind: 'rebalance' }))) return null;
     const { binding, source, config } = bound;
     const row = await deps.readSessionRow(sessionId);
     if (!row?.model || row.remoteHostId) return null;
@@ -1191,10 +1197,10 @@ export function createProviderGroupService(deps: ProviderGroupServiceDeps): Prov
   }
 
   /** 出错时还没归组：老任务正用着组那一项时先纳入组，再照常换电脑(一直开着的老任务不用等重新打开)。 */
-  async function adoptOnFailure(sessionId: string): Promise<boolean> {
+  async function adoptOnFailure(sessionId: string, token: number, lease: object | null, reason: InterruptedTurnErrorSignals['reason']): Promise<boolean> {
     const row = await deps.readSessionRow(sessionId);
     if (!row?.model || row.remoteHostId || isProviderShareAgentDeviceId(row.agentDeviceId)) return false;
-    if (!(await deps.isFailoverEligible(sessionId))) return false;
+    if (!(await deps.isFailoverEligible(sessionId, { kind: 'failure', token, lease, reason }))) return false;
     return (await withTimeout(adoptRunningTask(sessionId, row), PROVIDER_GROUP_ADOPT_TIMEOUT_MS)) === true;
   }
 
@@ -1247,7 +1253,7 @@ export function createProviderGroupService(deps: ProviderGroupServiceDeps): Prov
         // A missing run after a supplier restart is not a reason to move the task.
         // Reuse the existing recovery lease, bounded wait, cancellation and UI trail
         // even for suppliers that do not belong to a group.
-        if (!(await deps.isFailoverEligible(sessionId))) return false;
+        if (!(await deps.isFailoverEligible(sessionId, { kind: 'restart' }))) return false;
         const row = await deps.readSessionRow(sessionId);
         if (!row?.agentDeviceId || !row.providerId || row.remoteHostId) return false;
         if (!lease) return true;
@@ -1291,7 +1297,7 @@ export function createProviderGroupService(deps: ProviderGroupServiceDeps): Prov
     run: { superseded: boolean },
   ): Promise<boolean> {
     const { cause } = decision;
-    if (!deps.readBinding(sessionId) && !(await adoptOnFailure(sessionId))) {
+    if (!deps.readBinding(sessionId) && !(await adoptOnFailure(sessionId, token, lease, signals.reason))) {
       return guestFailover(sessionId, signals, token, lease, run, cause, hooks);
     }
     const bound = await withTimeout(loadBound(sessionId), PROVIDER_GROUP_ADOPT_TIMEOUT_MS);
@@ -1304,7 +1310,7 @@ export function createProviderGroupService(deps: ProviderGroupServiceDeps): Prov
       return false;
     }
     if (!config.autoSwitch) return false;
-    if (!(await deps.isFailoverEligible(sessionId))) return false;
+    if (!(await deps.isFailoverEligible(sessionId, { kind: 'failure', token, lease, reason: signals.reason }))) return false;
     const row = await deps.readSessionRow(sessionId);
     if (!row?.model || row.remoteHostId) return false;
     const current = await verifyBinding(sessionId, source, binding, config, row);
@@ -1379,7 +1385,7 @@ export function createProviderGroupService(deps: ProviderGroupServiceDeps): Prov
   ): Promise<boolean> {
     const binding = deps.readBinding(sessionId);
     if (!binding?.groupDeviceId || !deps.remote) return false;
-    if (!(await deps.isFailoverEligible(sessionId))) return false;
+    if (!(await deps.isFailoverEligible(sessionId, { kind: 'reconnect' }))) return false;
     const row = await deps.readSessionRow(sessionId);
     if (!row?.model || row.remoteHostId || !row.agentDeviceId || !row.providerId) return false;
     const route = { agentDeviceId: row.agentDeviceId, providerId: row.providerId };
@@ -1434,7 +1440,7 @@ export function createProviderGroupService(deps: ProviderGroupServiceDeps): Prov
   ): Promise<void> {
     const binding = deps.readBinding(sessionId);
     if (!binding?.groupDeviceId || !deps.remote || deps.hasLiveSession?.(sessionId) !== false) return;
-    if (!(await deps.isFailoverEligible(sessionId))) return;
+    if (!(await deps.isFailoverEligible(sessionId, { kind: 'reconnect' }))) return;
     const row = await deps.readSessionRow(sessionId).catch(() => null);
     if (!row?.agentDeviceId || !row.providerId || row.remoteHostId) return;
     const route = { agentDeviceId: row.agentDeviceId, providerId: row.providerId };
@@ -1468,7 +1474,7 @@ export function createProviderGroupService(deps: ProviderGroupServiceDeps): Prov
     const row = await deps.readSessionRow(sessionId);
     const shareRoute = row?.agentDeviceId;
     if (!row?.model || row.remoteHostId || !shareRoute || !isProviderShareAgentDeviceId(shareRoute)) return false;
-    if (!(await deps.isFailoverEligible(sessionId))) return false;
+    if (!(await deps.isFailoverEligible(sessionId, { kind: 'failure', token, lease, reason: signals.reason }))) return false;
     if (!guestSwitch.claim(sessionId)) {
       const direct = deps.directGuestSession?.(sessionId);
       if (!direct || direct.ownerRoute !== shareRoute || !lease || run.superseded
@@ -2009,7 +2015,7 @@ export function createProviderGroupService(deps: ProviderGroupServiceDeps): Prov
         return;
       }
       if (!config.autoSwitch && !accepted) return;
-      if (!(await deps.isFailoverEligible(sessionId))) return;
+      if (!(await deps.isFailoverEligible(sessionId, { kind: 'before-send', clientId: options?.clientId, scheduled: options?.scheduled }))) return;
       const row = await deps.readSessionRow(sessionId);
       if (!row?.model || row.remoteHostId) return;
       const current = await verifyBinding(sessionId, source, binding, config, row);
@@ -2019,7 +2025,8 @@ export function createProviderGroupService(deps: ProviderGroupServiceDeps): Prov
       const cached = await source.shouldMoveAway(binding.providerId, config, current.key, row.model, row.agentKind);
       if (cached === null) return;
       // 用户确认过换号、这台也没出问题：换到确认的那台。那台出了问题时交给下面出问题换电脑的流程。
-      if (cached === false && accepted && config.members.some((m) => m.key === accepted.memberKey)
+      if (cached === false && accepted && await deps.isFailoverEligible(sessionId, { kind: 'rebalance' })
+        && config.members.some((m) => m.key === accepted.memberKey)
         && !switchExclusion(config, current, new Set()).has(accepted.memberKey)) {
         const moved = await rebalanceBeforeSend(
           sessionId, source, binding.providerId, config, current, { ...row, model: row.model }, accepted.memberKey, options,

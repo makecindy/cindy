@@ -244,7 +244,7 @@ export function createDesktopTaskActionAuthorizer(deps: {
         const scheduleDevice = call.server === 'cindy_scheduler' && typeof args.device === 'string' ? args.device : undefined;
         const scheduleId = principal === 'autonomous' && runtimePermissionApplies &&
           (hookInstallation || call.server === 'cindy_scheduler' &&
-            ['schedule_update', 'schedule_run_now', 'schedule_resume'].includes(call.tool)) && typeof scheduleIdArg === 'string'
+            ['schedule_update', 'schedule_run_now', 'schedule_resume', 'schedule_webhook_restore'].includes(call.tool)) && typeof scheduleIdArg === 'string'
           ? scheduleIdArg : undefined;
         const schedule = scheduleId ? await deps.getScheduleDefinition(scheduleId, hookInstallation, scheduleDevice) : undefined;
         const scheduleSignature = JSON.stringify(schedule);

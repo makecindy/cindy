@@ -199,9 +199,12 @@ describe('group continuity Main wiring', () => {
     expect(await f.runtime.handle('C', request)).toMatchObject({ id: grant!.id, running: 2 });
     expect(io.received).toHaveBeenCalledWith('O', 'openai');
     expect(io.receive).toHaveBeenCalledExactlyOnceWith('O', { group: 'openai', revision: 7, allowFast: false,
-      binding: { sessionId: 'new-task', controllerDeviceId: 'C' } }, 'M', expect.any(Function));
+      binding: { sessionId: 'new-task', controllerDeviceId: 'C' } }, 'M', expect.any(Function), undefined, true);
     io.received.mockReturnValue(undefined);
-    await expect(f.runtime.handle('C', { ...request, sessionId: 'without-policy' })).rejects.toThrow('ACCESS_REVOKED');
+    await expect(f.runtime.handle('C', { ...request, sessionId: 'without-policy' }))
+      .resolves.toMatchObject({ id: grant!.id });
+    expect(io.receive).toHaveBeenLastCalledWith('O', { group: 'openai', revision: 0, allowFast: false,
+      binding: { sessionId: 'without-policy', controllerDeviceId: 'C' } }, 'M', expect.any(Function), undefined, true);
   });
   it('deducts capability-probe time from the executor grant instead of starting a fresh window at M', async () => {
     const clock = { wall: 0, mono: 0 };

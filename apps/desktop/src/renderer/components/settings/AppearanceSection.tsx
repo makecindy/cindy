@@ -37,6 +37,7 @@ import { Button } from '@/components/ui/button';
 import { Tip } from '@/components/ui/tooltip';
 import { Slider } from '@/components/ui/slider';
 import { extractIpcError } from '@/utils/ipcError';
+import { DockIconPicker } from './DockIconPicker';
 import { FontFamilyPicker } from './FontFamilyPicker';
 import { LayoutResetControl } from './LayoutResetControl';
 import {
@@ -684,6 +685,27 @@ export function AppearanceSection() {
                 />
               </div>
             </div>
+
+            {window.electronAPI?.platform === 'darwin' ? (
+              <>
+                <div className={SETTINGS_ROW_DIVIDER_CLASS} />
+                <div className="cindy-segmented-row px-4 py-4">
+                  <div className="flex min-w-0 flex-col gap-1">
+                    <p
+                      id={appearanceSettings.appIcon.targetId}
+                      className={SETTINGS_ROW_LABEL_CLASS}
+                      style={{ letterSpacing: '0.12px' }}
+                    >
+                      {t(appearanceSettings.appIcon.titleKey)}
+                    </p>
+                    <p className={SETTINGS_ROW_HINT_CLASS}>
+                      {t(appearanceSettings.appIcon.descriptionKey)}
+                    </p>
+                  </div>
+                  <DockIconPicker />
+                </div>
+              </>
+            ) : null}
 
             <div className={SETTINGS_ROW_DIVIDER_CLASS} />
 

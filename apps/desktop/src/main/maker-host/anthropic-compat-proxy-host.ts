@@ -17,6 +17,7 @@
  */
 
 import { createAttachmentRecovery } from './oversized-attachment-recovery.js';
+import { getSessionSubscriptionAccount } from '../subscription-accounts/session.js';
 import {
   createAnthropicCompatProxy,
   createActiveStripTransform,
@@ -138,6 +139,7 @@ import {
 import {
   authenticatePiProxySession,
   getPiProxySessionProvider,
+  getPiProxySubscriptionAccount,
   isPiProxySubagentRoute,
 } from './pi-proxy-session-auth.js';
 import { createXdToolResultImageNoticeTransform } from './xd-tool-result-image-notice.js';
@@ -745,7 +747,8 @@ export function createModelRoutingTransform(): RoutingTransform {
         // PI has already built the provider-native request. The local handler
         // authenticates and forwards it; the xAI forwarder also restores its
         // provider server tools, but no Claude protocol bridge runs.
-        localHandler: getPiNativeSubscriptionHandler(piProviderId, piSessionId),
+        localHandler: getPiNativeSubscriptionHandler(piProviderId, piSessionId, undefined,
+          getPiProxySubscriptionAccount(piSessionId, claimedPiSessionToken)),
       };
     }
     const isPiGatewayRequest = Boolean(
@@ -838,7 +841,8 @@ export function createModelRoutingTransform(): RoutingTransform {
       fastIdentities.set(ctx.headers, { sessionId, providerId: bridgeProviderId });
       const denied = authorizeClaudeRoute(bridgeProviderId, bridgedSubscriptionModel(wireModel));
       if (denied) return denied;
-      const bridgeHandler = getResponsesBridgeHandler((isOpenAiSubscriptionProviderId(selectedProviderId) || isXaiSubscriptionProviderId(selectedProviderId)) ? selectedProviderId! : undefined);
+      const bridgeHandler = getResponsesBridgeHandler((isOpenAiSubscriptionProviderId(selectedProviderId) || isXaiSubscriptionProviderId(selectedProviderId)) ? selectedProviderId! : undefined,
+        bridgeProviderId === 'openai' ? getSessionSubscriptionAccount(sessionId) : undefined);
       if (!bridgeHandler) {
         if (isExclusiveXaiModelId(wireModel)) {
           log.warn('exclusive xAI model but responses handler unavailable; refusing default gateway', {

@@ -1128,7 +1128,7 @@ describe('maker:event hot path ordering', () => {
 
   it('pi subscription turns estimate value from the shared reference-price helper', () => {
     const wireSessionSource = readEventModule('sessionPiTurnUsage');
-    const piDoneIndex = wireSessionSource.indexOf("event.type === 'done' && event.source === 'pi'");
+    const piDoneIndex = wireSessionSource.indexOf("if ((event.type === 'done' || (identified && isTerminalAgentErrorEvent(event))) && event.source === 'pi')");
     expect(piDoneIndex).toBeGreaterThanOrEqual(0);
     const piDoneSource = wireSessionSource.slice(piDoneIndex);
     expect(piDoneSource).toContain(
@@ -1142,7 +1142,7 @@ describe('maker:event hot path ordering', () => {
     expect(piDoneSource).toContain(': getReferenceModelPricing();');
     expect(piDoneSource).toContain("getSubscriptionValuePriceFor('pi', model, pricing)");
     expect(piDoneSource).toContain(
-      'const pricingSegments = piSegmentsReliable ? group.segments : [];',
+      "? group.segments.filter(segment => !segment.id?.startsWith('pi-unattributed:')) : [];",
     );
     expect(piDoneSource).toContain('money = resolveTurnCost({');
     expect(piDoneSource).toContain('segments: pricingSegments,');
@@ -1151,19 +1151,19 @@ describe('maker:event hot path ordering', () => {
     );
     expect(piDoneSource).toContain('money ?? unpricedSubscriptionValueMarker()');
     expect(piDoneSource).toContain('money: modelRowMoney,');
-    expect(piDoneSource).toContain('if (actualMoney)');
+    expect(piDoneSource).toContain('if (actualMoney && !identified)');
     expect(piDoneSource).toContain('await recordSchedulerTurnCost({');
     // 消息 / 调度落库失败同样落进 catch:兜底只补写正常分支尚未发起的模型组,
     // 不重放已写过的用量(否则任务与模型用量翻倍)。
-    expectOrder(piDoneSource, 'recordedModels.add(model);', 'modelWrites.push(');
+    expectOrder(piDoneSource, 'recordedModels.add(model);', 'if (!identified) modelWrites.push(');
     expect(piDoneSource).toMatch(
-      /\[\.\.\.groupedSegments\]\s*\.filter\(\(\[model\]\) => !recordedModels\.has\(model\)\)\s*\.map\(/,
+      /\(identified \? \[\] : \[\.\.\.groupedSegments\]\)\s*\.filter\(\(\[model\]\) => !recordedModels\.has\(model\)\)\s*\.map\(/,
     );
   });
 
   it('records Claude subscription quota events only while the native login is connected', () => {
     const listenerSource = usageSource.match(
-      /setClaudeRateLimitInfoListener\(\(info\) => \{[\s\S]*?\n {2}\}\);/,
+      /setClaudeRateLimitInfoListener\(\(info, account\) => \{[\s\S]*?\n {2}\}\);/,
     )?.[0];
     expect(listenerSource).toBeTruthy();
     if (!listenerSource) return;

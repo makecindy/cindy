@@ -3,6 +3,51 @@ import { defineSettings, type SettingsSearchModule } from './settingsSearchTypes
 
 /** Static search metadata owned by this settings module; no component mounting or IPC. */
 export const providersSettings = defineSettings({
+  subscriptionAccounts: {
+    id: 'providers.subscriptionAccounts',
+    tab: 'providers',
+    targetId: 'settings-provider-subscription-accounts',
+    fallbackTargetId: 'settings-panel-providers',
+    titleKey: 'subscriptionAccounts.title',
+    sectionKey: 'settings.tabs.providers',
+    keywordKeys: [
+      'subscriptionAccounts.add',
+      'subscriptionAccounts.strategy',
+      'subscriptionAccounts.note',
+    ],
+    aliases: [
+      '多账号',
+      '订阅账号',
+      '并发上限',
+      '权重',
+      '暂停分配',
+      'Claude Code',
+      'ChatGPT',
+      'Codex',
+      'multiple accounts',
+      'load balancing',
+      'concurrency',
+      'weight',
+    ],
+  },
+  modelPricing: {
+    id: 'providers.modelPricing',
+    tab: 'providers',
+    targetId: 'settings-model-pricing',
+    fallbackTargetId: 'settings-panel-providers',
+    titleKey: 'settings.providers.models.advanced.pricing',
+    descriptionKey: 'settings.providers.models.priceOverride.description',
+    sectionKey: 'settings.tabs.providers',
+    keywordKeys: [
+      'settings.providers.models.priceOverride.input',
+      'settings.providers.models.priceOverride.output',
+      'settings.providers.models.priceOverride.cacheRead',
+      'settings.providers.models.priceOverride.cacheWrite',
+      'settings.providers.models.priceOverride.currency',
+      'settings.providers.models.priceOverride.resetShort',
+      'settings.providers.models.priceOverride.referenceDetails',
+    ],
+  },
   sharing: {
     id: 'providers.sharing',
     tab: 'providers',

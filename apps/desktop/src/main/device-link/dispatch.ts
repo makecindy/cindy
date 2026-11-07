@@ -1,5 +1,6 @@
 import { parseKimiUsageRequest, isKimiCodingProvider } from '../../shared/kimiCodingUsage.js';
-import { readKimiCodingAccountUsage } from '../maker-host/provider-account-usage.js';
+import { isOpenCodeGoProvider, parseOpenCodeGoUsageRequest } from '../../shared/opencodeGoUsage.js';
+import { readKimiCodingAccountUsage, readOpenCodeGoAccountUsage } from '../maker-host/provider-account-usage.js';
 import { PROVIDER_SHARE_INSIGHTS_CHANNEL } from '../../shared/providerShareInsights.js';
 import { hasRichAnswer, compactRichAnswer, richAnswerText } from '@cindy/maker-shared/rich-answer';
 import type { RemoteAgentLimitUsage } from '../../shared/remoteAgentLimits.js';
@@ -57,7 +58,8 @@ import { compactToolCardResult } from '../../shared/toolResultPersistCap.js';
  * 本地 settings(第二道),server 缓存陈旧 / 被绕过时兜底。
  */
 
-import { RemoteInvokeTiming } from './remoteInvokeTiming.js';
+import { StallDiagnostics, diagnosticChannel, diagnosticRef, diagnosticOperation } from '@cindy/device-link';
+import { RemoteInvokeTiming, observeRemoteInvoke } from './remoteInvokeTiming.js';
 import { delegatedProviderShareGuestAccess } from './providerShareDelegatedAccess.js';
 import { observeRemoteSendPush } from './remoteSendTrace.js';
 import {
@@ -176,6 +178,8 @@ import {
 } from './remote-workdir-guard';
 
 const log = createLogger('device-link-dispatch');
+const executionDiagnosticLog = createLogger('device-link:execution-diagnostics');
+const executionDiagnostics = new StallDiagnostics(message => executionDiagnosticLog.info(message));
 const pushFailures = createPushFailureLog((summary) => log.warn('push delivery failures', summary));
 function reportPushFailure(dst: string, channel: string, error: unknown): void {
   pushFailures.record(shortId(dst), channel, error instanceof DeviceLinkError ? error.code : 'UNKNOWN');
@@ -547,6 +551,11 @@ export function setRemoteTurnChangeAction(handler: RemoteTurnChangeAction): void
 type RemoteSubscriptionUsageReader = (providerId?: string, options?: { fresh?: boolean }) => Promise<unknown | null>;
 let remoteXaiSubscriptionUsageReader: RemoteSubscriptionUsageReader | null = null;
 let remoteClaudeSubscriptionUsageReader: RemoteSubscriptionUsageReader | null = null;
+type RemoteSubscriptionPoolQuotaReader = (channel: string, args: unknown[]) => Promise<unknown | undefined>;
+let remoteSubscriptionPoolQuotaReader: RemoteSubscriptionPoolQuotaReader | null = null;
+export function setRemoteSubscriptionPoolQuotaReader(reader: RemoteSubscriptionPoolQuotaReader | null): void {
+  remoteSubscriptionPoolQuotaReader = reader;
+}
 export function setRemoteClaudeSubscriptionUsageReader(reader: RemoteSubscriptionUsageReader | null): void {
   remoteClaudeSubscriptionUsageReader = reader;
 }
@@ -905,6 +914,10 @@ function projectInvokeResultForTunnel(
     const kimiAgents = (['claude-code', 'codex', 'pi'] as const)
       .filter(agent => isKimiCodingProvider(p as unknown as import('@cindy/model-providers').Provider, agent));
     if (kimiAgents.length) rest.kimiCodingUsageAgents = kimiAgents;
+    delete rest.opencodeGoUsageAgents;
+    const opencodeGoAgents = (['claude-code', 'codex', 'pi'] as const)
+      .filter(agent => isOpenCodeGoProvider(p as unknown as import('@cindy/model-providers').Provider, agent));
+    if (opencodeGoAgents.length) rest.opencodeGoUsageAgents = opencodeGoAgents;
     rest.routing = projectRoutingForDisplay(p.routing);
     return rest;
   });
@@ -3235,6 +3248,10 @@ async function handleInvoke(
     : () => undefined;
   const handlerStartedAt = performance.now();
   const timing = new RemoteInvokeTiming();
+  const finishDiagnostic = observeRemoteInvoke(timing, fields => executionDiagnostics.record('execution', {
+    request: diagnosticRef(requestId), src: diagnosticRef(src), channel: diagnosticChannel(payload?.channel ?? 'unknown'),
+    operation: payload ? diagnosticOperation(payload) : 'unknown', ...fields,
+  }));
   const executionPromise = Promise.resolve()
     .then(() => executeInvoke(src, payload, timing))
     .catch((err): InvokeResultPayload => {
@@ -3250,7 +3267,7 @@ async function handleInvoke(
           message,
         },
       };
-    });
+    }).finally(finishDiagnostic);
   const resultPromise = settleRemoteInvokeWithOrphanDeadline(
     executionPromise,
     src,
@@ -4834,6 +4851,21 @@ async function executeRemoteInvoke(src: string, payload: InvokePayload | undefin
     if (!request) return { ok: false, error: { code: 'IPC_ERROR', message: '[INVALID_PARAMS] invalid Kimi usage query' } };
     return { ok: true, result: await readKimiCodingAccountUsage(request) };
   }
+  if (payload.channel === 'maker:usage:opencode-go') {
+    const request = parseOpenCodeGoUsageRequest((payload.args ?? [])[0]);
+    if (!request) return { ok: false, error: { code: 'IPC_ERROR', message: '[INVALID_PARAMS] invalid OpenCode Go usage query' } };
+    return { ok: true, result: await readOpenCodeGoAccountUsage(request) };
+  }
+  // Legacy controllers know only the provider, not its account pool. Keep their
+  // existing channels usable without widening either guest's authorization.
+  if (remoteSubscriptionPoolQuotaReader && isSameAccountController(src)) {
+    try {
+      const quota = await remoteSubscriptionPoolQuotaReader(payload.channel, payload.args ?? []);
+      if (quota !== undefined) return { ok: true, result: quota };
+    } catch {
+      return { ok: false, error: { code: 'IPC_ERROR', message: 'subscription quota read failed' } };
+    }
+  }
   if (payload.channel === 'maker:usage:xai-subscription' || payload.channel === 'maker:usage:claude-subscription') {
     const reader = payload.channel === 'maker:usage:xai-subscription'
       ? remoteXaiSubscriptionUsageReader : remoteClaudeSubscriptionUsageReader;
@@ -5161,6 +5193,7 @@ export const __testing = {
     remoteTurnChangeAction = null;
     remoteXaiSubscriptionUsageReader = null;
     remoteClaudeSubscriptionUsageReader = null;
+    remoteSubscriptionPoolQuotaReader = null;
   },
   getActiveControllers,
   getUpdateRelaunchControllers,

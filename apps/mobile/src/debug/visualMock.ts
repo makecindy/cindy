@@ -1,3 +1,4 @@
+import { findRemoteHistoryView } from '@/session/remoteHistoryViews';
 import { attachmentPreviewFixture } from "./attachmentPreviewFixture";
 import { githubPrVisualFixture } from './githubPrVisualFixture';
 import { groupMaskVisualFixture } from './groupMaskVisualFixture';
@@ -57,6 +58,48 @@ interface VisualRealDataSnapshot {
   projectionsBySession?: Record<string, InputProjection>;
 }
 
+// Explicit DEV mock replay: empty history first, then a delayed first row.
+// Changing the suffix varies delivery around the native transition/reveal window.
+const entryReplayCounts = new Map<string, number>();
+function entryReplayMessages(sessionId: string): RemoteMessage[] {
+  if (!entryReplayCounts.has(sessionId)) {
+    entryReplayCounts.set(sessionId, 0);
+    const index = Number(sessionId.split('-').at(-1)) || 0;
+    const delay = index >= 60 ? 10_000 : [0, 16, 100, 299, 301, 1200][index % 6];
+    for (const [count, at] of [[1, delay], [2, delay + 400], [3, delay + 800]] as const) {
+      setTimeout(() => {
+        entryReplayCounts.set(sessionId, count);
+        findRemoteHistoryView(VISUAL_MOCK_DEVICE_ID, sessionId)?.invalidate();
+      }, at);
+    }
+    if (index >= 20) setTimeout(() => {
+      // Explicit test-only CPU stall overlaps initial reveal. Never runs for regular mock tasks.
+      const until = performance.now() + 900;
+      while (performance.now() < until) { /* simulate a busy JS thread */ }
+    }, delay + 550);
+    return [];
+  }
+  return [
+    message(sessionId, 'replay-user', 'user', 'First message after an empty task', -3000),
+    message(sessionId, 'replay-progress', 'assistant', 'The task is running.', -2000),
+    message(sessionId, 'replay-result', 'assistant', `Completed replay ${sessionId.split('-').at(-1)}. This result must be visible.`, -1000),
+  ].slice(0, entryReplayCounts.get(sessionId));
+}
+// Synthetic Codex interaction replay for the native mobile acceptance loop.
+// Uses real cards/stores; only the remote host receipt is supplied by this fixture.
+const codexQuestionSession = 'visual-codex-questions';
+const codexUrlSession = 'visual-codex-url';
+const codexFormSession = 'visual-codex-form';
+let codexFormAnswers: Record<string, string> | null = null;
+const codexFormQuestions = () => [
+  { id: 'name', question: 'Name', answerConstraints: { required: true, minLength: 3, maxLength: 5 } },
+  { id: 'kind', question: 'Kind', options: [{ label: 'Personal' }, { label: 'Other' }],
+    answerConstraints: { required: true, choices: ['Personal', 'Other'] } },
+];
+const codexQuestionIds = [0, 1].map((i) => JSON.stringify(['request_user_input_async', 'visual-codex', i]));
+let codexQuestionAnswers: Record<string, string> | null = null;
+let codexUrlCompleted = false;
+const codexQuestions = () => codexQuestionIds.map((id) => ({ id, question: '验收结果？', options: [{ label: 'A' }, { label: 'B' }] }));
 const NOW = Date.parse('2026-07-18T08:00:00.000Z');
 const ISO_NOW = new Date(NOW).toISOString();
 // Built on first use: this module is imported by production code, and only the dev mock reads it.
@@ -271,6 +314,17 @@ async function visualMockInvoke<T = unknown>(
       String((args[0] as { url?: string })?.url ?? ""),
     );
     if (fixture) return fixture as T;
+  }
+  if (channel === 'maker:resolve-interaction' && ['visual-codex-question-request', 'visual-codex-url-request', 'visual-codex-form-request'].includes(String(args[0]))) {
+    const decision = args[1] as { kind?: string; answers?: Record<string, string>; behavior?: string; inProgress?: boolean };
+    if (decision.inProgress) return { accepted: true } as T;
+    const id = args[0] === 'visual-codex-form-request' ? codexFormSession : args[0] === 'visual-codex-question-request' ? codexQuestionSession : codexUrlSession;
+    if (id === codexFormSession) codexFormAnswers = decision.answers ?? {};
+    else if (id === codexQuestionSession) codexQuestionAnswers = decision.answers ?? {};
+    else codexUrlCompleted = true;
+    remoteSessionStore.setPendingInteractions(id, []);
+    findRemoteHistoryView(VISUAL_MOCK_DEVICE_ID, id)?.invalidate();
+    return { accepted: true } as T;
   }
   const realData = await loadVisualRealDataSnapshot();
   const mailResult = realData ? undefined : (mailVisualFixture(channel, args) ?? mailDraftCardFixture(channel, args));
@@ -561,6 +615,7 @@ function visualMockSessions(statusFilter?: string): RemoteSession[] {
   const catalog = getUiMockRows().sessions.map(catalogSession);
   if (statusFilter === 'archived') return catalog.filter((session) => session.status === 'archived');
   const sessions = [
+    { ...catalog.find(session => session.id === 'ui-mock-rich-answer')!, id: 'visual-teammate-process', source: 'bot' as const, title: 'Cindy', companion: { id: 'cindy-default', role: 'canonical' as const } },
     ...catalog.filter((session) => statusFilter === 'all' || session.status === 'active'),
     sessionFromShared(SHARED_REMOTE_CONTROL_FIXTURE.sessions.primary, {
       preview: '请检查手机版远程控制的 shared core 迁移。',
@@ -607,9 +662,12 @@ function catalogSession(row: UiMockSessionRow): RemoteSession {
 }
 
 function visualMockSession(id: string): RemoteSession {
+  if (id === codexQuestionSession || id === codexUrlSession || id === codexFormSession) return { ...visualMockSession('ui-mock-rich-answer'), id,
+    title: id === codexFormSession ? 'Codex 表单验收' : id === codexQuestionSession ? 'Codex 提问验收' : 'Codex 链接确认验收', agentKind: 'codex', _count: { messages: 3 } };
+  if (id.startsWith('visual-entry-replay-')) return { ...visualMockSession('ui-mock-rich-answer'), id, title: id, _count: { messages: 0 } };
   if (id === 'visual-teammate-b2b') return { ...visualMockSession('ui-mock-rich-answer'), id, source: 'bot', title: 'Cindy · 内部通讯',
     companion: { id: 'visual-bot-b2b', role: 'canonical' } };
-  if (id === 'visual-teammate-process') return { ...visualMockSession('ui-mock-rich-answer'), id, source: 'bot', title: 'Cindy' };
+  if (id === 'visual-teammate-process') return { ...visualMockSession('ui-mock-rich-answer'), id, source: 'bot', title: 'Cindy', companion: { id: 'cindy-default', role: 'canonical' } };
   if (id === VISUAL_MAIL_DRAFT_SESSION_ID) return { ...visualMockSession('ui-mock-rich-answer'), id, title: '回复试玩反馈' };
   if (id === VISUAL_TEAMMATE_SESSION_ID || id.startsWith(`${VISUAL_TEAMMATE_SESSION_ID}:`)
     || [...visualTeammateThreads.values()].some(
@@ -639,6 +697,19 @@ function sessionFromShared(
 }
 
 function visualMockMessages(sessionId: string): RemoteMessage[] {
+  if (sessionId === codexFormSession) return [
+    message(sessionId, 'codex-form-context', 'assistant', 'MCP 表单验收：必填、长度限制和精确枚举。', -3000),
+    ...(codexFormAnswers === null ? [] : [message(sessionId, 'codex-form-result', 'assistant', JSON.stringify(codexFormAnswers), -1000)]),
+  ];
+  if (sessionId === codexQuestionSession) return [
+    message(sessionId, 'codex-user', 'user', '请分别核对文字与文件的结果。', -3000),
+    message(sessionId, 'codex-context', 'assistant', '文字与文件需要分别确认。两道题的标题相同，请第一题选 A，第二题选 B。你可以先收起回答区，继续阅读或输入消息。', -2000),
+    message(sessionId, 'codex-ask', 'ask_user', { requestId: 'visual-codex-question-request', questions: codexQuestions(),
+      status: codexQuestionAnswers === null ? 'pending' : 'answered', answers: codexQuestionAnswers }, -1000),
+  ];
+  if (sessionId === codexUrlSession) return [message(sessionId, 'codex-url-context', 'assistant',
+    codexUrlCompleted ? '链接请求已回传。' : '服务请求你打开链接，完成后再确认。', -1000)];
+  if (sessionId.startsWith('visual-entry-replay-')) return entryReplayMessages(sessionId);
   if (sessionId === 'visual-teammate-b2b') {
     const trace = (direction: 'received' | 'sent', sequence: number) => ({ botDirectMessage: {
       v: 1, threadId: 'visual-b2b-thread', viewerBotId: 'visual-bot-b2b', peerBotId: 'visual-bot-lizi',
@@ -772,6 +843,16 @@ function message(
 }
 
 function visualMockPendingInteractions(sessionId: string): PendingInteraction[] {
+  if (sessionId === codexFormSession) return codexFormAnswers === null ? [{ request: {
+    kind: 'ask_user_question', requestId: 'visual-codex-form-request', questions: codexFormQuestions(),
+  } }] : [];
+  if (sessionId === codexQuestionSession) return codexQuestionAnswers === null ? [{ persistId: 'codex-ask', request: {
+    kind: 'ask_user_question', requestId: 'visual-codex-question-request', delivery: 'async', questions: codexQuestions(),
+  } }] : [];
+  if (sessionId === codexUrlSession) return codexUrlCompleted ? [] : [{ request: {
+    kind: 'permission', requestId: 'visual-codex-url-request', toolName: 'mcp_url',
+    description: '在网页完成操作后返回并确认。', input: { url: 'https://example.com/connect', serverName: 'Example' },
+  } }];
   if (sessionId !== 'visual-pending') return [];
   return [
     {

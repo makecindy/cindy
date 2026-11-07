@@ -12,7 +12,7 @@
 import { additionalSettings } from './AdditionalSettings.settings-search';
 import { useSettingDefinition } from './useSettingDefinition';
 import { useTranslation } from 'react-i18next';
-import { AlertTriangle, CheckCircle2, Download, Puzzle, RefreshCw } from 'lucide-react';
+import { AlertTriangle, CheckCircle2, Puzzle, RefreshCw } from 'lucide-react';
 
 import { cn } from '@/lib/utils';
 import { SegmentedControl } from '@/components/ui/segmented-control';
@@ -33,8 +33,9 @@ interface BrowserBackendSubsectionProps {
   onRecover: () => void;
   /**
    * 推荐的页面控制插件在本机的状态,决定第 1 步写「安装」「启用」还是「更新」:
-   * 已启用却仍报缺插件,说明装的版本还不支持「我的浏览器」。
+   * 只在未声明页面控制能力时提示更新。
    */
+  userBrowserPluginSupportsControl?: boolean;
   userBrowserPluginState?: 'not-installed' | 'disabled' | 'enabled';
   /** 第 1 步就地安装或启用推荐插件;第 2 步打开插件详情,里面有装浏览器扩展的入口。 */
   onSetUpUserBrowser?: () => void;
@@ -88,6 +89,7 @@ export function BrowserBackendSubsection({
   health,
   onSelect,
   onRecover,
+  userBrowserPluginSupportsControl = false,
   userBrowserPluginState = 'not-installed',
   onSetUpUserBrowser,
   userBrowserSetupBusy = false,
@@ -100,6 +102,14 @@ export function BrowserBackendSubsection({
   // 「我的浏览器」只有连接状态可报,没有可恢复的宿主侧控制连接。
   const userBrowserHealth =
     active === 'user-browser' && health?.active === 'user-browser' ? health : null;
+  const setupKeys = userBrowserHealth?.reason === 'plugin-updating'
+    ? { title: `${SETUP_KEY}.updatingTitle`, body: `${SETUP_KEY}.updatingBody`, action: '' }
+    : userBrowserHealth?.reason === 'plugin-selection-required' ||
+      (userBrowserHealth?.reason === 'plugin-missing' && userBrowserPluginState === 'enabled' && userBrowserPluginSupportsControl)
+      ? { title: `${SETUP_KEY}.selectPluginTitle`, body: `${SETUP_KEY}.selectPluginBody`, action: `${SETUP_KEY}.selectPlugin` }
+      : userBrowserHealth?.reason === 'plugin-missing'
+        ? PLUGIN_STEP_KEYS[userBrowserPluginState]
+        : { title: `${SETUP_KEY}.connectExtensionTitle`, body: `${SETUP_KEY}.connectionBody`, action: `${SETUP_KEY}.openExtensionStore` };
   return (
     <div {...setting.anchorProps} className="border-t border-[var(--settings-theme-card-border)]">
       <div className="cindy-segmented-row px-4 py-[14px]">
@@ -162,7 +172,9 @@ export function BrowserBackendSubsection({
       ) : null}
       {userBrowserHealth &&
       userBrowserHealth.status === 'error' &&
-      (userBrowserHealth.reason === 'plugin-missing' ||
+      (userBrowserHealth.reason === 'plugin-updating' ||
+        userBrowserHealth.reason === 'plugin-selection-required' ||
+        userBrowserHealth.reason === 'plugin-missing' ||
         userBrowserHealth.reason === 'extension-disconnected') ? (
         // 「我的浏览器」还差一步:说清缺的是哪一步,并给出直接去做的按钮;连上后父组件轮询会自动变绿。
         <div className="flex flex-wrap items-center justify-between gap-3 border-t border-[var(--settings-theme-card-border)] px-4 py-[14px]">
@@ -170,29 +182,21 @@ export function BrowserBackendSubsection({
             className="flex min-w-0 flex-1 basis-[280px] items-start gap-2 text-12 leading-[1.5]"
             role="status"
           >
-            {userBrowserHealth.reason === 'plugin-missing' ? (
+            {userBrowserHealth.reason !== 'extension-disconnected' ? (
               <Puzzle size={14} className="mt-0.5 shrink-0 text-[var(--settings-section-desc)]" />
             ) : (
-              <Download size={14} className="mt-0.5 shrink-0 text-[var(--settings-section-desc)]" />
+              <RefreshCw size={14} className="mt-0.5 shrink-0 text-[var(--settings-section-desc)]" />
             )}
             <div className="flex min-w-0 flex-col gap-0.5">
               <span className="font-medium text-[var(--settings-section-title)]">
-                {t(
-                  userBrowserHealth.reason === 'plugin-missing'
-                    ? PLUGIN_STEP_KEYS[userBrowserPluginState].title
-                    : 'settings.computerUse.browserBackend.userBrowserSetup.installExtensionTitle',
-                )}
+                {t(setupKeys.title)}
               </span>
               <span className="text-[var(--settings-section-desc)]">
-                {t(
-                  userBrowserHealth.reason === 'plugin-missing'
-                    ? PLUGIN_STEP_KEYS[userBrowserPluginState].body
-                    : 'settings.computerUse.browserBackend.userBrowserSetup.extensionBody',
-                )}
+                {t(setupKeys.body)}
               </span>
             </div>
           </div>
-          {onSetUpUserBrowser ? (
+          {onSetUpUserBrowser && userBrowserHealth.reason !== 'plugin-updating' ? (
             <Button
               data-settings-search-action="Repair the selected browser connection"
               variant="secondary"
@@ -201,11 +205,7 @@ export function BrowserBackendSubsection({
               onClick={onSetUpUserBrowser}
               disabled={pending || userBrowserSetupBusy}
             >
-              {t(
-                userBrowserHealth.reason === 'plugin-missing'
-                  ? PLUGIN_STEP_KEYS[userBrowserPluginState].action
-                  : 'settings.computerUse.browserBackend.userBrowserSetup.installExtension',
-              )}
+              {t(setupKeys.action)}
             </Button>
           ) : null}
         </div>

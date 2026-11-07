@@ -10,9 +10,9 @@ describe('Codex async user input message', () => {
       { title: 'Any constraints?', options: null },
     ] });
     expect(questions).toEqual([
-      { id: 'call-1-question-1', header: '', question: 'Which bot?', isOther: true, isSecret: false,
+      { id: JSON.stringify(['request_user_input_async', 'call-1', 0]), header: '', question: 'Which bot?', isOther: true, isSecret: false,
         options: ['Personal', 'Official', 'Both'].map((label) => ({ label, description: null })) },
-      { id: 'call-1-question-2', header: '', question: 'Any constraints?', isOther: true, isSecret: false, options: null },
+      { id: JSON.stringify(['request_user_input_async', 'call-1', 1]), header: '', question: 'Any constraints?', isOther: true, isSecret: false, options: null },
     ]);
   });
 

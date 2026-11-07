@@ -98,7 +98,7 @@ import { CURRENT_CINDY_REGION } from '../../../shared/brandRegion';
 import { useVoiceInputModelSelection } from '@/hooks/useVoiceInputModelSelection';
 import { useVoiceSpeakerFilterStatus } from '@/hooks/useVoiceSpeakerFilterStatus';
 import { getVoiceInputSettings } from '@/hooks/useVoiceInputSettings';
-import { getAgentIslandEnabled, getAgentIslandSoundSettings, isAgentIslandSupported, subscribeAgentIslandSettings } from '@/hooks/useAgentIslandSettings';
+import { getAgentIslandEnabled, getAgentIslandLiveActivity, getAgentIslandSoundSettings, isAgentIslandSupported, loadAgentIslandLiveActivitySupport, subscribeAgentIslandSettings } from '@/hooks/useAgentIslandSettings';
 
 const DEFAULT_SETTINGS_MENU_WIDTH = 260;
 
@@ -129,7 +129,19 @@ function SettingsViewContent() {
   const voiceRefinementEnabled = useSyncExternalStore(subscribeVoiceSettings, getVoiceRefinementEnabled);
   const agentIslandEnabled = useSyncExternalStore(subscribeAgentIslandSettings, getAgentIslandEnabled);
   const agentIslandSoundEnabled = useSyncExternalStore(subscribeAgentIslandSettings, getAgentIslandSoundEnabled);
+  const agentIslandLiveActivity = useSyncExternalStore(subscribeAgentIslandSettings, getAgentIslandLiveActivity);
   const agentIslandSupported = isAgentIslandSupported();
+  const [agentIslandLiveActivitySupported, setAgentIslandLiveActivitySupported] = useState(false);
+  useEffect(() => {
+    if (!agentIslandSupported) return;
+    let cancelled = false;
+    void loadAgentIslandLiveActivitySupport().then((supported) => {
+      if (!cancelled) setAgentIslandLiveActivitySupported(supported);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [agentIslandSupported]);
   const navigate = useNavigate();
   const outletContext = useOutletContext<SettingsOutletContext | null>();
   const [searchParams, setSearchParams] = useSearchParams();
@@ -316,12 +328,18 @@ function SettingsViewContent() {
     speakerFilter: speakerFilterStatus ? {
       supported: speakerFilterStatus.supported, enrolled: speakerFilterStatus.enrolled,
     } : undefined,
-    agentIsland: { enabled: agentIslandEnabled, supported: agentIslandSupported, soundEnabled: agentIslandSoundEnabled },
+    agentIsland: {
+      enabled: agentIslandEnabled,
+      supported: agentIslandSupported,
+      soundEnabled: agentIslandSoundEnabled,
+      liveActivitySupported: agentIslandLiveActivitySupported,
+      liveActivity: agentIslandLiveActivity,
+    },
     voiceInput: voiceModelSelection.ready && voiceModelSelection.selection ? {
       serviceMode: voiceModelSelection.selection.serviceMode,
       asrProvider: voiceModelSelection.selection.asrProvider,
     } : undefined,
-  }), [locale, wallpaperMotionAvailable, mode, user?.membershipKind, voiceModelSelection.ready, voiceModelSelection.selection, voiceRefinementEnabled, speakerFilterStatus?.supported, speakerFilterStatus?.enrolled, agentIslandEnabled, agentIslandSupported, agentIslandSoundEnabled]);
+  }), [locale, wallpaperMotionAvailable, mode, user?.membershipKind, voiceModelSelection.ready, voiceModelSelection.selection, voiceRefinementEnabled, speakerFilterStatus?.supported, speakerFilterStatus?.enrolled, agentIslandEnabled, agentIslandSupported, agentIslandSoundEnabled, agentIslandLiveActivitySupported, agentIslandLiveActivity]);
   const requestedEntry = resolveSettingsSearchEntry(activeTab, searchParams.get('section'));
   const searchEntry = piExtensionsPanelOpen || (requestedEntry?.isVisible && !requestedEntry.isVisible(searchContext))
     ? null : requestedEntry;
@@ -346,7 +364,6 @@ function SettingsViewContent() {
       <div className="flex h-full min-h-0 w-full justify-start pb-5">
         {/* Inner sidebar mirrors the main sidebar width for a stable route transition. */}
         <aside
-          data-plugin-ui-element="sidebar"
           className="flex h-full min-h-0 shrink-0 flex-col gap-2 overflow-y-auto pl-6 pr-4 pt-7"
           style={{ width: menuWidth }}
           aria-label={t('settings.title')}
