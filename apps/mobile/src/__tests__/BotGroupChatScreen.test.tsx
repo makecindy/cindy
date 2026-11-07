@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { act, createElement as el, useEffect, useImperativeHandle, useRef, useState } from 'react';
+import { act, createElement as el, useContext, useEffect, useImperativeHandle, useRef, useState } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { buildBotGroupCapabilityNotice, BOT_GROUP_RUNTIME_FAILURE_CODES, type BotGroupRemoteChatData } from '@cindy/maker-shared/botGroupChat';
@@ -7,6 +7,7 @@ import { chatGroupView, chatRoomRow, createChatServerClient, type ChatMessage, t
 import { shareSelectionStore } from '@/session/shareSelectionStore';
 import { i18n, SUPPORTED_LOCALES } from '@/i18n';
 import { resolveBotGroupMentions } from '@cindy/maker-shared/botGroupMentions';
+import { ProcessDisclosureViewport } from '@/session/useProcessDisclosureViewport';
 
 const h = vi.hoisted(() => ({
   processRead: vi.fn(),
@@ -36,6 +37,8 @@ const h = vi.hoisted(() => ({
   cloudRows: null as any[] | null,
   uuid: 0,
   scroll: null as any,
+  scrolls: {} as Record<string, any>,
+  speakerDisclosure: false,
   scrollToEnd: vi.fn(),
   markRead: vi.fn(),
   push: vi.fn(), replace: vi.fn(), back: vi.fn(), scrollTo: vi.fn(),
@@ -76,10 +79,12 @@ vi.mock('react-native', () => {
         if (typeof ref === 'function') ref(node); else if (ref) ref.current = node;
       },
       style: { opacity: [style].flat().filter(Boolean).findLast((item: any) => item.opacity !== undefined)?.opacity,
+        height: [style].flat().filter(Boolean).findLast((item: any) => item.height !== undefined)?.height,
         display: [style].flat().filter(Boolean).findLast((item: any) => item.display !== undefined)?.display } }, children);
   return {
     View: box('div'), ScrollView: ({ ref, children, ...props }: any) => {
       h.scroll = props;
+      h.scrolls[props.testID] = props;
       useImperativeHandle(ref, () => ({ scrollToEnd: h.scrollToEnd, scrollTo: h.scrollTo }));
       return el('div', { 'data-testid': props.testID }, children);
     }, KeyboardAvoidingView: ({ children, ...props }: any) => {
@@ -210,7 +215,12 @@ vi.mock('@/session/BotGroupAvatars', () => ({
 }));
 vi.mock('@/session/TeammateProcess', () => ({ useTeammateElapsedTitle: () => 'Working', TeammateWorkSegment: ({ title, children }: any) => el('div', null, title, children), TeammateProcessLink: ({ title, onPress }: any) => el('button', { onClick: onPress }, title), TeammateProcess: ({ title, children }: any) => el('section', null, title, children) }));
 vi.mock('@/session/BotGroupSpeakerRow', () => ({
-  BotGroupSpeakerRow: ({ identity, activity, sessionId, onStop, stopPending }: any) => el('div', { 'data-testid': `speaker.${identity.botId}.${activity}`, 'data-session': sessionId }, identity.name, onStop ? el('button', { 'data-testid': 'botGroup.work.stop', disabled: stopPending, onClick: onStop }, 'stop') : null),
+  BotGroupSpeakerRow: ({ identity, activity, sessionId, onStop, stopPending }: any) => {
+    const inspect = useContext(ProcessDisclosureViewport);
+    return el('div', { 'data-testid': `speaker.${identity.botId}.${activity}`, 'data-session': sessionId }, identity.name,
+      h.speakerDisclosure ? el('button', { 'data-testid': 'fixture.processCollapse', onClick: () => inspect?.(300) }, 'Collapse process') : null,
+      onStop ? el('button', { 'data-testid': 'botGroup.work.stop', disabled: stopPending, onClick: onStop }, 'stop') : null);
+  },
 }));
 vi.mock('@/session/MobileComposerInputRow', () => ({
   // Like the real row: the card shows the tray above the input and the toolbar below it.
@@ -377,6 +387,7 @@ async function render(data: BotGroupRemoteChatData | null = group(), kind: 'read
 
 beforeEach(() => {
   h.translate = null; h.themeMode = 'light';
+  h.scrolls = {}; h.speakerDisclosure = false;
   h.nativeMenus = true;
   shareSelectionStore.exit();
   h.management = null;
@@ -2124,7 +2135,8 @@ describe('direct server group presentation', () => {
     await render(group({ messages: [message('other', 1, { authorKind: 'user', authorName: 'Other member', isSelf: false, content: 'hello' })], plans: [], openPlan: null, hasMoreBefore: true }));
     expect(all('botGroup.message.user')).toHaveLength(0);
     expect(node.textContent).toContain('Other member');
-    expect(h.scroll.maintainVisibleContentPosition).toEqual({ minIndexForVisible: 1 });
+    // Skip the leading-space marker and load-older control when anchoring history.
+    expect(h.scroll.maintainVisibleContentPosition).toEqual({ minIndexForVisible: 2 });
     await click('botGroup.loadOlder'); expect(h.chat.loadOlder).toHaveBeenCalledOnce();
     await click('botGroup.settingsButton');
     expect(byId('botGroup.settings.delete')?.disabled).toBe(true);
@@ -2212,6 +2224,107 @@ it('renders component body as readable text without changing the message', async
   expect(body.textContent).toContain('After');
   expect(body.textContent).not.toContain('"op":"create"');
   expect(reply.content).toBe(content);
+});
+
+// Unit regression for PR #9249 r4500548321: existing fold tests release a single
+// viewport only. Keep the real group page + WorkArea mounted in the same running
+// round; the native process boundary reports a 300pt collapse in its inner list.
+// Explicit outer navigation must remove the rendered inner footer, not just follow.
+it.each(['jump', 'send'])('releases nested work-area space on outer %s without collapsing the work area', async action => {
+  h.speakerDisclosure = true;
+  const active = group({ round: { status: 'running', canContinue: false, speakers: [
+    { botId: 'abu', sessionId: 's-abu', activity: 'reply', executionStatus: 'running' },
+  ] } });
+  await render(active);
+  await click('botGroup.work.toggle');
+  await act(async () => {
+    h.scrolls['botGroup.work.details'].onLayout({ nativeEvent: { layout: { height: 220 } } });
+    h.scrolls['botGroup.work.details'].onContentSizeChange(390, 500);
+    h.scrolls['botGroup.work.details'].onScroll({ nativeEvent: {
+      contentOffset: { y: 280 }, contentSize: { height: 500 }, layoutMeasurement: { height: 220 },
+    } });
+  });
+  await click('fixture.processCollapse');
+  const footer = () => byId('botGroup.work.details')!.querySelector('[style*="height: 300px"]');
+  expect(footer()).not.toBeNull();
+  if (action === 'jump') {
+    await act(async () => h.scrolls['botGroup.timeline'].onContentSizeChange(390, 1000));
+    await click('botGroup.jumpToLatest');
+  } else {
+    await act(async () => h.row.onChangeText('Continue this round'));
+    await click('botGroup.composer.send');
+    expect(h.chat.act).toHaveBeenCalledWith('send', expect.objectContaining({ text: 'Continue this round' }));
+  }
+  expect(footer()).toBeNull();
+  expect(byId('botGroup.work.details')).not.toBeNull();
+  expect(byId('botGroup.work.toggle')!.getAttribute('aria-label')).toContain('groupChat.work.collapse');
+});
+
+// Unit / #9249 r4501133784: the final native position can arrive first in an
+// end event. Real screen+WorkArea must resume before losing gesture ownership.
+// Older coverage only sends positions via onScroll, so it misses end-before-scroll.
+it.each(['timeline', 'work.details'].flatMap(target => ['onScrollEndDrag', 'onMomentumScrollEnd'].map(end => ({ target, end }))))(
+  'consumes final $target metrics from $end before ending process navigation', async ({ target, end }) => {
+    h.speakerDisclosure = true;
+    await render(group({ round: { status: 'running', canContinue: false, speakers: [
+      { botId: 'abu', sessionId: 's-abu', activity: 'reply', executionStatus: 'running' },
+    ] } }));
+    await click('botGroup.work.toggle');
+    const nested = target === 'work.details';
+    const height = nested ? 500 : 2000, viewport = nested ? 220 : 800;
+    const tail = height - viewport;
+    const event = (y: number) => ({ nativeEvent: { contentOffset: { y }, contentSize: { height }, layoutMeasurement: { height: viewport } } });
+    await act(async () => {
+      h.scrolls[`botGroup.${target}`].onLayout({ nativeEvent: { layout: { height: viewport } } });
+      h.scrolls[`botGroup.${target}`].onContentSizeChange(390, height);
+      h.scrolls[`botGroup.${target}`].onScroll(event(tail - 10));
+    });
+    await click('fixture.processCollapse');
+    const footer = () => byId('botGroup.work.details')!.querySelector(`[style*="height: ${nested ? 290 : 300}px"]`);
+    expect(footer()).not.toBeNull();
+    await act(async () => {
+      const callbacks = h.scrolls[`botGroup.${target}`];
+      callbacks[end === 'onScrollEndDrag' ? 'onScrollBeginDrag' : 'onMomentumScrollBegin']();
+      callbacks.onScroll(event(tail - 10));
+      callbacks[end](event(tail));
+      callbacks.onScroll(event(tail)); // matching notice arrives after ownership ends
+    });
+    if (nested) expect(footer()).toBeNull();
+    else {
+      expect(byId('botGroup.jumpToLatest')).toBeNull();
+      h.scrollToEnd.mockClear();
+      await act(async () => h.scrolls['botGroup.timeline'].onContentSizeChange(390, height + 500));
+      expect(h.scrollToEnd).toHaveBeenCalledWith({ animated: false });
+    }
+  },
+);
+
+// Unit / #9249 r4500619904: a null-rendered WorkArea stays mounted across idle.
+// The next member's round must not inherit the previous process's reserved footer.
+it('releases nested process space across idle and the next round without outer navigation', async () => {
+  h.speakerDisclosure = true;
+  const active = group({ round: { status: 'running', canContinue: false, speakers: [
+    { botId: 'abu', sessionId: 's-abu', activity: 'reply', executionStatus: 'running' },
+  ] } });
+  await render(active);
+  await click('botGroup.work.toggle');
+  await act(async () => {
+    h.scrolls['botGroup.work.details'].onLayout({ nativeEvent: { layout: { height: 220 } } });
+    h.scrolls['botGroup.work.details'].onContentSizeChange(390, 500);
+    h.scrolls['botGroup.work.details'].onScroll({ nativeEvent: {
+      contentOffset: { y: 280 }, contentSize: { height: 500 }, layoutMeasurement: { height: 220 },
+    } });
+  });
+  await click('fixture.processCollapse');
+  expect(byId('botGroup.work.details')!.querySelector('[style*="height: 300px"]')).not.toBeNull();
+  await render(group());
+  expect(byId('botGroup.work')).toBeNull();
+  await render({ ...active, round: { ...active.round, speakers: [
+    { botId: 'mimi', sessionId: 's-next', activity: 'reply', executionStatus: 'running' },
+  ] } });
+  expect(byId('botGroup.work.details')!.querySelector('[style*="height: 300px"]')).toBeNull();
+  expect(byId('botGroup.work.toggle')!.getAttribute('aria-label')).toContain('groupChat.work.expand');
+  expect(h.chat.act).not.toHaveBeenCalled();
 });
 
 // PR #7806 integration fixture: the real screen/work area consumes server state.

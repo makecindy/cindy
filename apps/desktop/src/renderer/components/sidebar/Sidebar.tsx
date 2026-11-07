@@ -160,7 +160,7 @@ export function Sidebar({
               // 触发钮保持可点(点击 = pin)。阴影复用 --shadow-menu(中型悬浮卡,
               // 同色 Surface 上的辅助分离),1px hairline 仍是主分隔手段(docs/design-rules/cindy-design-system.md)。
               'fixed inset-y-0 left-0 z-[15]',
-              'border-r border-sidebar-border shadow-[var(--shadow-menu)]',
+              'border-r border-sidebar-border shadow-[shadow:var(--shadow-menu)]',
               peekState === 'peeking' &&
                 'animate-[sidebar-peek-in_200ms_cubic-bezier(0.22,1,0.36,1)] motion-reduce:animate-none',
               peekState === 'peekClosing' &&

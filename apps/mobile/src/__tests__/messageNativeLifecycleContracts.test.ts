@@ -204,7 +204,8 @@ it('uses LegendList virtualization with platform-scoped history anchoring', () =
       scrollSource.indexOf('const wasNearBottom'),
     )).toContain('return;');
     expect(scrollSource).toContain('shouldPreserveMobileHistoryBrowseIntent({');
-    expect(scrollSource).toContain('historyBrowseIntent: userScrollForOlderRef.current');
+    // History/process browse ownership is exercised by messageFollowGesture.test.ts;
+    // keep native ordering guards here rather than pinning the JS input expression.
     expect(scrollSource).toContain('userControllingScroll: isDragSample');
     // 深链 / 搜索定位本身就是明确的历史浏览意图,后续近顶自动补页无需再拖一下。
     const focusEffectStart = source.indexOf('// 深链/搜索:滚到指定消息');

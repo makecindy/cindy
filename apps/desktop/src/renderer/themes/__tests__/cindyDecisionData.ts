@@ -363,7 +363,7 @@ export const CINDY_EXPECTED_VALUES: Record<string, { light: string; dark: string
   'completion-badge-fg': { light: '#1f1f1e', dark: '#121212' },
   'create-agent-control-bg': { light: '#FFFFFA', dark: '#272727' },
   'create-agent-control-bg-hover': { light: 'var(--surface-hover)', dark: 'rgba(255, 255, 255, 0.06)' }, // 用户裁决 2026-10-22 墨水透明度(决策表 §9)
-  'create-agent-control-bg-pressed': { light: 'var(--surface-hover-soft)', dark: 'rgba(255, 255, 255, 0.10)' }, // 用户裁决 2026-10-22 墨水透明度(决策表 §9)
+  'create-agent-control-bg-pressed': { light: 'rgba(0, 0, 0, 0.08)', dark: 'rgba(255, 255, 255, 0.10)' }, // 用户裁决 2026-11-07 墨水透明度:按下不比悬停浅
   'create-agent-control-border': { light: 'rgba(0, 0, 0, 0.08)', dark: 'rgba(255, 255, 255, 0.10)' }, // 用户裁决 2026-10-22 墨水透明度(决策表 §9)
   'create-agent-control-icon': { light: 'rgba(0, 0, 0, 0.88)', dark: 'rgba(255, 255, 255, 0.82)' }, // 用户裁决 2026-10-22 墨水透明度(决策表 §9)
   'create-agent-control-text': { light: 'rgba(0, 0, 0, 0.88)', dark: 'rgba(255, 255, 255, 0.82)' }, // 用户裁决 2026-10-22 墨水透明度(决策表 §9)
