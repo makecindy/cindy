@@ -16,7 +16,8 @@ export function blueBubblesStateStorage(connectionId: string): BlueBubblesStateS
   const checkpoint = () => {
     if (!state) return;
     atomicWriteFileSync(file, JSON.stringify(state));
-    const fd = fs.openSync(file, 'r');
+    // Windows FlushFileBuffers requires a writable handle; r+ preserves the checkpoint bytes.
+    const fd = fs.openSync(file, 'r+');
     try { fs.fsyncSync(fd); } finally { fs.closeSync(fd); }
     // Flush the checkpoint name before replacing the journal (directory fsync is POSIX-only).
     if (process.platform !== 'win32') {
