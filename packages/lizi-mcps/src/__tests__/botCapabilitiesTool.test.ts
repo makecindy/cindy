@@ -99,6 +99,10 @@ describe('Bot self control', () => {
     expect(updateProfile).toHaveBeenCalledWith({ callerSessionId: 'self', expectedVersion: 2, description: '' });
     expect(result.isError).toBe(true);
     expect(result.content[0]).toMatchObject({ text: expect.stringContaining('BOT_PROFILE_UPDATE_FAILED') });
+    await registry.call('update_teammate_profile', { expectedVersion: 2, avatar: '🙂', avatarColor: 'teal',
+      gender: 'female', userContextSource: '喜欢简洁回答。' });
+    expect(updateProfile).toHaveBeenLastCalledWith({ callerSessionId: 'self', expectedVersion: 2,
+      avatar: '🙂', avatarColor: 'teal', gender: 'female', userContextSource: '喜欢简洁回答。' });
   });
 });
 

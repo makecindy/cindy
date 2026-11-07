@@ -1825,7 +1825,8 @@ export async function recoverActiveTeammateInvitations(): Promise<void> {
 
 
 /** Shared image write; callers supply validated bytes, never a remote filesystem path. */
-export async function setBotProfileAvatar(botId: string, image: { buffer: Buffer; mimeType: string }, expectedVersion?: number, expectedAvatar?: string) {
+export async function setBotProfileAvatar(botId: string, image: { buffer: Buffer; mimeType: string }, expectedVersion?: number,
+  expectedAvatar?: string, assertAvatarAccess?: () => void) {
   const ownerBoundary = captureBotOperationOwner();
   const client = getDbClient();
   const db = client.drizzle;
@@ -1850,12 +1851,14 @@ export async function setBotProfileAvatar(botId: string, image: { buffer: Buffer
     // The file bytes are published first, then the profile address and durable
     // reference move together in one SQLite transaction. If the transaction
     // loses a race, the unreferenced content-addressed blob is recycler-safe.
-    ownerBoundary.assertCurrent();
-    const written = await storeTeammateAvatarImage(image, db, ownerBoundary.assertCurrent);
+    const assertCurrent = () => { ownerBoundary.assertCurrent(); assertAvatarAccess?.(); };
+    assertCurrent();
+    const written = await storeTeammateAvatarImage(image, db, assertCurrent);
     const capabilities = parseJson(version.capabilitiesJson);
     const clearsFallback = capabilities.cloudAvatarFallback === true;
     delete capabilities.cloudAvatarFallback;
     const now = Date.now();
+    assertCurrent();
     await client.tx('bots.updateProfile', {
       id: botId,
       avatar: written.url,
@@ -1885,7 +1888,7 @@ export async function setBotProfileAvatar(botId: string, image: { buffer: Buffer
 export interface RestoredBotOrigin { templateId?: unknown; avatarFallback?: boolean; replacesUnfinishedMeeting?: true; allowSameName?: true }
 
 /** Main-owned creation path shared by the renderer and Bot runtime tools. */
-export async function createBotProfile(raw: unknown, restored?: RestoredBotOrigin) {
+export async function createBotProfile(raw: unknown, restored?: RestoredBotOrigin, assertAvatarAccess?: () => void) {
   const body =
     raw && typeof raw === 'object' && !Array.isArray(raw) ? (raw as Record<string, unknown>) : {};
   const draftEntry = body.creationDraftToken ? readBotCreationDraft(body.creationDraftToken) : undefined;
@@ -1932,6 +1935,7 @@ export async function createBotProfile(raw: unknown, restored?: RestoredBotOrigi
     userDataDir: ownerScopedUserDataPath(),
   };
   const assertCreationOwnerStillCurrent = () => {
+    assertAvatarAccess?.();
     if (
       isAppSessionBoundaryPending() ||
       activeOwnerScopeKey() !== creationOwnerBoundary.scopeKey
@@ -1992,6 +1996,7 @@ export async function createBotProfile(raw: unknown, restored?: RestoredBotOrigi
     botAvatarRef = { id: randomUUID(), hash: written.hash, createdAt: now };
   }
   try {
+  assertCreationOwnerStillCurrent();
   await client.tx('bots.createProfile', {
     id,
     ...(botAvatarRef ? { botAvatarRef } : {}),

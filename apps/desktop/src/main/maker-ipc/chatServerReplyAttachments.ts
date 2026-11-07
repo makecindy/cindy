@@ -1,9 +1,6 @@
 import type { ChatUploadAttachment } from './chatServerMedia.js';
 
-/** Check decoded paths before any filesystem lookup can contact a remote share. */
-export function isNetworkOrDevicePath(value: string): boolean {
-  return /^[\\/]{2}|^[\\/]\?\?[\\/]/.test(value);
-}
+export { isNetworkOrDevicePath } from '../filePathPolicy.js';
 
 /** A rendered image and its download link share one upload at their first occurrence. */
 export function mergeChatReplyAttachments(images: ChatUploadAttachment[], files: ChatUploadAttachment[]): ChatUploadAttachment[] {

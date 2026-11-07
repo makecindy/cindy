@@ -1644,6 +1644,18 @@ describe('Bot canonical Session lifecycle', () => {
     expect(readProvenance(untrusted.id)).toBeUndefined();
   });
 
+  it('preserves a newer avatar when a delayed image import carries the previous avatar', async () => {
+    const created = await createBotProfile({ name: 'Delayed avatar import', avatar: '🤖' });
+    const source = await createBotProfile({ name: 'Image source' });
+    const image = { buffer: readFileSync(resolveSafe(source.avatar).absPath), mimeType: 'image/png' };
+    const userEdit = await updateStoredBotProfile({ id: created.id, avatar: '🦊' });
+    expect(userEdit.currentVersion).toBe(created.currentVersion);
+
+    await expect(setBotProfileAvatar(created.id, image, created.currentVersion, created.avatar))
+      .rejects.toThrow('Teammate avatar changed during update');
+    expect((await invoke('local-db:bots:get', created.id)).avatar).toBe('🦊');
+  });
+
   it('creates a real gallery portrait when the shared tool entry receives only a name', async () => {
     const { createBotProfile } = await import('../bots');
     const created = await createBotProfile({ name: 'Name only' });
@@ -10787,6 +10799,27 @@ afterAll(() => {
 
 
 describe('Bot self control uses the same profile authority as settings', () => {
+  // #8511, DB tier: the Agent-facing profile patch must persist visible avatar
+  // and user-context fields through the same owner-scoped transaction as Settings.
+  it('saves an explicit emoji avatar, color, gender and user context for its own Bot', async () => {
+    const canonical = await invoke('local-db:bots:create-canonical-session', { botId: 'bot-1', expectedCanonicalSessionId: null, expectedProfileVersion: 1 });
+    const sessionId = canonical.session.id;
+    const service = createBotCapabilityService(capabilityDeps);
+    const before = await service.inspect({ callerSessionId: sessionId });
+    if (!before.ok) throw new Error('Expected current Bot');
+    expect(await service.updateProfile({ callerSessionId: sessionId, expectedVersion: before.state.profile.version,
+      avatar: '🧑‍💻', avatarColor: 'teal', gender: 'female', userContextSource: '用户喜欢简洁回答。' }))
+      .toMatchObject({ ok: true });
+    expect(await invoke('local-db:bots:get', 'bot-1')).toMatchObject({ avatar: '🧑‍💻', avatarColor: 'teal',
+      gender: 'female', userContextSource: '用户喜欢简洁回答。' });
+    const after = await service.inspect({ callerSessionId: sessionId });
+    expect(after).toMatchObject({ ok: true,
+      state: { profile: { avatar: '🧑‍💻', avatarColor: 'teal', gender: 'female', userContextSource: '用户喜欢简洁回答。' } } });
+    if (!after.ok) throw new Error('Expected updated Bot');
+    expect(after.state.profile.version).toBeGreaterThan(before.state.profile.version);
+    expect(await service.updateProfile({ callerSessionId: sessionId, expectedVersion: after.state.profile.version,
+      avatar: '/another/bot/avatar.png' })).toMatchObject({ ok: false });
+  });
   it('reads only its own state and patches requested fields without replacing independent configuration', async () => {
     const canonical = await invoke('local-db:bots:create-canonical-session', { botId: 'bot-1', expectedCanonicalSessionId: null, expectedProfileVersion: 1 });
     const sessionId = canonical.session.id;
