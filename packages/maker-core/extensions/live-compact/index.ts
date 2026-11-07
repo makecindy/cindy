@@ -144,7 +144,7 @@
  *   - 被拒的一刀会撤掉本次刚落盘、无卡片引用的 `raw-*.txt` 与其 meta —— 原文写入不走容量轮换,
  *     不清理会一轮轮堆积突破单会话上限。
  * 脱敏规则与上游的分道:上游只枚举少数键名,本仓键名规则按「类」匹配(大写下划线标识符以
- * KEY/TOKEN/SECRET/PASSWORD/PASSWD/CREDENTIAL(S)/AUTH 结尾即命中,MONKEY/TURKEY/HOCKEY/
+ * KEY/TOKEN/SECRET/PASSWORD/PASSWD/PASSPHRASE/CREDENTIAL(S)/AUTH 结尾即命中,MONKEY/TURKEY/HOCKEY/
  * WHISKEY/JOKEY 用 stoplist 挡;camel/小写保留小显式列表),并补齐认证头、npm_ 前缀等
  * blob 形态 —— 严格强于上游,是十多轮安全 review 逼出来的收敛(语料在 live-compact.test.mjs)。
  * Logging: stderr lines prefixed "[pi-live-compact]" (grep "spine cut"), plus an
@@ -1638,11 +1638,11 @@ const REDACT_RULES: Array<[RegExp, string]> = [
   // `\\` 必须在类里:工具调用参数是 JSON.stringify 后的字符串,多行私钥里的换行变成
   // 了字面量 `\n` 两个字符 —— 不许反斜杠的话整块规则认不到终结符,下面那条半块规则
   // 只能吃掉 BEGIN 标记,私钥正文和 END 会原样写进影子文件(实测)。
-  [/-----BEGIN [A-Z ]*PRIVATE KEY-----[A-Za-z0-9+/=:,\s\\]*?-----END [A-Z ]*PRIVATE KEY-----/g, "[REDACTED PRIVATE KEY]"],
+  [/-----BEGIN [A-Z ]*PRIVATE KEY-----(?:\r?\n(?:Proc-Type|DEK-Info):[^\r\n]*)*\r?\n?[A-Za-z0-9+/=:,\s\\]*?-----END [A-Z ]*PRIVATE KEY-----/g, "[REDACTED PRIVATE KEY]"],
   // 只留开始标记(输出被截断)的那半块同样是密钥正文:上一条只吃有终结符的块,这里把没等到
   // 终结符的半块一并打掉 —— 否则截断得越巧,密钥越完整地留在备份里。贪心吃完整段
   // base64/空白(无上界),所以超大块与截断块都不会只打一半。
-  [/-----BEGIN [A-Z ]*PRIVATE KEY-----[A-Za-z0-9+/=:,\s\\]+/g, "[REDACTED PRIVATE KEY]"],
+  [/-----BEGIN [A-Z ]*PRIVATE KEY-----(?:\r?\n(?:Proc-Type|DEK-Info):[^\r\n]*)*\r?\n?[A-Za-z0-9+/=:,\s\\]+/g, "[REDACTED PRIVATE KEY]"],
   // HTTP 认证头要先单独处理:`Authorization: Basic dXNlcjpwYXNz` 的值不是"键名=值"形态,
   // 键名规则只认到方案名(不足 8 字),base64 里的可复用凭证会原样留下。Bearer 仍由下面那条兜。
   // 冒号后可能是引号(JSON `{"Authorization":"Basic …"}`),方案后面也可能是 Digest 那种
@@ -1657,7 +1657,7 @@ const REDACT_RULES: Array<[RegExp, string]> = [
   // 开头的 (?<![A-Z0-9_]) 是性能红线:没有它,连续大写/数字段会从每个位置重扫,
   // 128K 字符要 25 秒(实测);有它只从标识符起点尝试,同样输入 <1ms。redactSecrets
   // 跑在同步的 agent_before_settle 钩子里,卡住就是卡住整个 settle。
-  [/((?<![A-Z0-9_])[_A-Z0-9]*(?:KEY|TOKEN|SECRET|PASSWD|PASSWORD|CREDENTIALS?|AUTH)(?<!MONKEY)(?<!TURKEY)(?<!HOCKEY)(?<!WHISKEY)(?<!JOKEY)["'`]?\s*[=:]\s*)(["'`]?)(?!\[REDACTED)([^\s"'`]{8,})/g, "$1$2[REDACTED]"],
+  [/((?<![A-Z0-9_])[_A-Z0-9]*(?:KEY|TOKEN|SECRET|PASSWD|PASSWORD|PASSPHRASE|CREDENTIALS?|AUTH)(?<!MONKEY)(?<!TURKEY)(?<!HOCKEY)(?<!WHISKEY)(?<!JOKEY)["'`]?\s*[=:]\s*)(["'`]?)(?!\[REDACTED)([^\s"'`]{8,})/g, "$1$2[REDACTED]"],
   // 小写/驼峰/连字符键名没有统一后缀(apiKey、refresh-token),保留显式小列表。
   // 值里允许 `[`(密码可能含方括号),只豁免「已经是替换标记」的情况,否则会把标记再啃一口。
   [/((?:api[_-]?key|access[_-]?key|access[_-]?token|auth[_-]?token|session[_-]?token|refresh[_-]?token|id[_-]?token|client[_-]?secret|secret[_-]?key|private[_-]?key|password|passwd|secret)["'`]?\s*[=:]\s*)(["'`]?)(?!\[REDACTED)([^\s"'`]{8,})/gi, "$1$2[REDACTED]"],

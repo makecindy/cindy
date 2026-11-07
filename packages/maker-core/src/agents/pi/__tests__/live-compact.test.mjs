@@ -17,6 +17,7 @@ const FAKE_AWS_KEY = ['AKIA', 'FIXTUREPLACEHOLDER01'].join('');
 const FAKE_GOOGLE_KEY = ['AIza', 'FixturePlaceholderABCDEFGHIJKLMNOPQRST'].join('');
 const FAKE_PASSWORD = ['fixture', 'plain-password'].join('-');
 const FAKE_DB_PASSWORD = ['fixture', 'db-password'].join('-');
+const FAKE_PASSPHRASE = ['fixture', 'passphrase', '0123456789'].join('-');
 const FAKE_OPENAI_KEY_2 = ['sk', 'fixture-openai-key-0987654321'].join('-');
 const FAKE_REFRESH_TOKEN = ['fixture', 'refresh', 'token', '0123456789'].join('-');
 const FAKE_STRIPE_KEY = ['sk', 'live', 'fixturestripeplaceholder0123'].join('_');
@@ -277,6 +278,22 @@ describe('live compact spine selection', () => {
     const jsonWrapped = redactSecrets(JSON.stringify({ command: 'cat id_rsa', private_key: pem }));
     expect(jsonWrapped).not.toContain('b3BlbnNzaC1rZXk');
     expect(jsonWrapped).not.toContain('END OPENSSH');
+    // 老式加密私钥(RFC 1421)在 BEGIN 与正文之间还有 `Proc-Type:` / `DEK-Info:` 头:
+    // 头里的连字符不在正文类里,处理不当会让整块只剩 `Proc` 被打码、其余原样落盘。
+    const legacy = [
+      pemEdge('BEGIN RSA'),
+      'Proc-Type: 4,ENCRYPTED',
+      'DEK-Info: AES-256-CBC,0123456789ABCDEF',
+      '',
+      'b3BlbnNzaC1rZXk',
+      pemEdge('END RSA'),
+    ].join(String.fromCharCode(10));
+    expect(redactSecrets(legacy)).toBe('[REDACTED PRIVATE KEY]');
+    const legacyCut = [pemEdge('BEGIN RSA'), 'Proc-Type: 4,ENCRYPTED', '', 'b3BlbnNzaC1rZXk'].join(String.fromCharCode(10));
+    expect(redactSecrets(legacyCut)).toBe('[REDACTED PRIVATE KEY]');
+    // 口令键名同样按「后缀类」命中:`SSH_KEY_PASSPHRASE=` 不能只靠 PASSPHRASE 之外的键名。
+    const passphraseKey = ['SSH', 'KEY', 'PASSPHRASE'].join('_');
+    expect(redactSecrets(passphraseKey + '=' + FAKE_PASSPHRASE)).not.toContain(FAKE_PASSPHRASE);
     // 大体积块不能只打一半:正文封顶会让整块规则认不到终结符,半块规则只吃掉前半截。
     const bigBody = 'A'.repeat(10900);
     const big = [pemEdge('BEGIN RSA'), bigBody, pemEdge('END RSA')].join(String.fromCharCode(10));
