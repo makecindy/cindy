@@ -3,6 +3,7 @@ import { describe, expect, it } from 'vitest';
 import { composePiSystemPrompt } from '../pi-host.js';
 import hostSystemPrompt from '../host-system-prompt.md?raw';
 import piSystemPrompt from '../pi-system-prompt.md?raw';
+import userFacingPlansPrompt from '../user-facing-plans-prompt.md?raw';
 
 describe('composePiSystemPrompt', () => {
   it('keeps the shared identity first and appends the Pi language behavior', () => {
@@ -35,12 +36,13 @@ describe('composePiSystemPrompt', () => {
     );
   });
 
-  // 用户可见计划的写法是 vendor-neutral 规则，Pi 也画计划，所以从 agent 专属段
-  // 挪到了 host 段；这段断言防止它再被退回只对 Claude/Codex 生效的位置。
-  it('gives Pi the same user-facing plan guidance as Claude and Codex', () => {
-    expect(hostSystemPrompt).toContain('## User-facing plans');
-    expect(composePiSystemPrompt(hostSystemPrompt, piSystemPrompt)).toContain(
-      'Write for a general user, not as internal engineering notes.',
-    );
+  // 用户可见计划的写法是 vendor-neutral 规则，Pi 也画计划。但必须追加在拼接末尾：
+  // 既有会话的缓存前缀是「到上一段为止的字节」，插进中间会把它们全部作废（§3.1）；
+  // 这段断言同时防两件事——Pi 拿不到该段、以及该段不再落在末尾破坏前缀稳定性。
+  it('appends the shared user-facing plan guidance to Pi after the Pi behavior section', () => {
+    const prompt = composePiSystemPrompt(hostSystemPrompt, piSystemPrompt, userFacingPlansPrompt);
+    expect(prompt).toContain('## User-facing plans');
+    expect(prompt).toContain('Write for a general user, not as internal engineering notes.');
+    expect(prompt.endsWith(userFacingPlansPrompt.trim())).toBe(true);
   });
 });

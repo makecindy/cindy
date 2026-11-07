@@ -29,6 +29,7 @@ import codexSystemPrompt from './codex-system-prompt.md?raw';
 import hostSystemPrompt from './host-system-prompt.md?raw';
 import businessOwnershipPrompt from './business-ownership-prompt.md?raw';
 import skillSourcePrecedencePrompt from './skill-source-precedence-prompt.md?raw';
+import userFacingPlansPrompt from './user-facing-plans-prompt.md?raw';
 import { DEFAULT_MODEL_COMPACTION_PCT } from '../../shared/modelContextLimit.js';
 import { readMemorySettings } from './memory-settings-store.js';
 import { readSubagentModelSettings } from './subagent-model-settings-store.js';
@@ -40,10 +41,12 @@ import {
   shouldHandoffAfterContextAssessment,
 } from '../../shared/modelSwitchAssessment.js';
 
-// Claude / Codex 的 host system prompt：产品身份 → Skill 来源优先级 → agent 专属段。
+// Claude / Codex 的 host system prompt：产品身份 → 业务归属 → Skill 来源优先级 → agent 专属段 → 计划书写规范。
 // Skill 优先级不放 host-system-prompt.md，避免把 #1645 的 Claude/Codex 行为扩到 Pi。
+// 计划书写规范是 vendor-neutral 段（Pi 也用），但必须追加在拼接末尾：既有会话的缓存前缀
+// 是「到上一段为止的字节」，插进中间会把它们全部作废（§3.1），追加则原前缀照常命中。
 function composeHostPrompt(agentSpecific: string): string {
-  return [hostSystemPrompt, businessOwnershipPrompt, skillSourcePrecedencePrompt, agentSpecific]
+  return [hostSystemPrompt, businessOwnershipPrompt, skillSourcePrecedencePrompt, agentSpecific, userFacingPlansPrompt]
     .map(s => s.trim())
     .filter(s => s.length > 0)
     .join('\n\n');
