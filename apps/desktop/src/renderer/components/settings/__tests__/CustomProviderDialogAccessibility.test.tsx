@@ -23,10 +23,11 @@ vi.mock('@/lib/customProviders', async (importOriginal) => ({
 
 vi.mock('react-i18next', () => ({
   useTranslation: () => ({
-    t: (key: string, values?: { count?: number }) => {
+    t: (key: string, values?: { count?: number; model?: string }) => {
       if (key === 'settings.providers.custom.fetch.selectedCount' || key === 'settings.providers.custom.fetch.availableCount') {
         return `${key}:${values?.count}`;
       }
+      if (key === 'settings.providers.custom.test.model') return `${key}:${(values as { model?: string } | undefined)?.model}`;
       if (key === 'settings.providers.custom.imageGenerationReload.interrupt') {
         return '保存并停止';
       }
@@ -651,6 +652,25 @@ describe('ProviderConnectionDialog accessibility', () => {
     expect(edited.models[1].route.baseUrl).toBe('http://127.0.0.1:9000/special');
   });
 
+
+  // #8679: the failure line alone ("upstream 5xx") never said which model the probe used.
+  it('测试连接失败时标明被测模型', async () => {
+    window.electronAPI.maker.testProviderConnection = vi.fn(async () => ({
+      ok: false, code: 'UNKNOWN' as const, latencyMs: 1, modelId: 'chat',
+    }));
+    const route = { baseUrl: 'https://host.example/v1', wireProtocol: 'openai-chat' as const };
+    const initial: CustomProviderConfig = {
+      id: 'test-model-label', name: 'Test model label', auth: { method: 'apiKey' },
+      runtimes: { pi: { ...route, models: [{ id: 'chat', name: 'Chat', route }, { id: 'other', name: 'Other' }] } },
+    };
+    customProviderMocks.readCustomProviderKey.mockResolvedValue('saved-key');
+    const user = userEvent.setup();
+    render(<ProviderConnectionDialog initial={initial} focusAgent="pi" onSaved={vi.fn()} onClose={vi.fn()} />);
+    await waitForInitialDialogFocus();
+    await user.click(screen.getByRole('button', { name: 'settings.providers.custom.test.button' }));
+    expect(await screen.findByText('providerError.UNKNOWN', { exact: false })).toBeTruthy();
+    expect(screen.getByText('settings.providers.custom.test.model:chat')).toBeTruthy();
+  });
   it('probes the rebased route instead of the saved route after filling only models', async () => {
     const chat = { id: 'chat', name: 'Chat', route: {
       baseUrl: 'https://host.example/v1', wireProtocol: 'openai-chat' as const,

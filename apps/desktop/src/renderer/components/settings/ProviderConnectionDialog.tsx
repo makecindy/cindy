@@ -287,6 +287,8 @@ interface TestState {
   status: 'idle' | 'testing' | 'ok' | 'fail';
   /** 失败分类码（providerError.<code> i18n 键）。 */
   code?: string;
+  /** 本次实际被测的模型 ID，失败时展示，避免用户把它当成别的模型的结果。 */
+  modelId?: string;
   latencyMs?: number;
   decision?: ProviderConnectionTestResult['decision'];
   attempts?: ProviderConnectionTestResult['attempts'];
@@ -1623,7 +1625,7 @@ export function ProviderConnectionDialog({
         ...prev,
         [agent]: result.ok
           ? { status: 'ok', latencyMs: result.latencyMs }
-          : { status: 'fail', code: result.code ?? 'UNKNOWN', decision: result.decision, attempts: result.attempts },
+          : { status: 'fail', code: result.code ?? 'UNKNOWN', modelId: result.modelId ?? firstModel, decision: result.decision, attempts: result.attempts },
       }));
     } catch (e) {
       if (requestId && connectionTestRef.current?.id !== requestId) return;
@@ -3307,6 +3309,11 @@ export function ProviderConnectionDialog({
                       : test[activeTab].decision === 'next'
                         ? t('settings.providers.custom.test.exhausted')
                         : t(`providerError.${test[activeTab].code ?? 'UNKNOWN'}`)}
+                    {test[activeTab].modelId && (
+                      <span className="block break-all text-[var(--text-secondary)]">
+                        {t('settings.providers.custom.test.model', { model: test[activeTab].modelId })}
+                      </span>
+                    )}
                   </span>
                 )}
                 {!mediaOnly && test[activeTab].status === 'testing' && (

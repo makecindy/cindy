@@ -3919,6 +3919,7 @@
           "unsupportedProtocol": "Este modelo de protocolo no es compatible con las pruebas de conexión.",
           "inconclusive": "No se pudo confirmar la conexión. Verifique la dirección o la red antes de volver a intentarlo; Es posible que se haya ejecutado la solicitud anterior.",
           "exhausted": "Se probaron todas las interfaces candidatas. No se encontró ninguna conexión que funcione.",
+          "model": "Modelo probado: {{model}}",
           "costHint": "Las pruebas envían solicitudes de generación corta y pueden generar un pequeño cargo.",
           "details": "Ver intentos",
           "stop": "detener la prueba"
