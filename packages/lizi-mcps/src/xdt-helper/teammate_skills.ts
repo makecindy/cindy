@@ -89,19 +89,6 @@ export const TEAMMATE_SYSTEM_SKILLS: Readonly<Record<TeammateSystemSkillId, Team
   },
 };
 
-/** A project-mode teammate (V2) uses ordinary task tools; only the topics that differ are listed. */
-export const TEAMMATE_PROJECT_CORE_TOPICS: Readonly<Record<string, TeammateSkillText>> = {
-  tasks: {
-    name: "tasks",
-    description: "Opening and steering ordinary tasks, and other computers.",
-    body: [
-      "Prefer completing work in the current chat. When the work needs separate ongoing execution, parallel delivery or its own tracking, open an ordinary task with the cindy_helper handoff tool `send_to_session` and no target: it opens in your project unless you pass project_path; use_worktree=true isolates code. Write the goal, background, relevant files and acceptance criteria into the message; the task cannot see this chat.",
-      "A task you open returns its final result to this chat when it finishes. Read progress with `get_task_digest`; send more input to the same task with `send_to_session` and its id, insert into a running turn with `steer_session`, and stop a turn with `stop_session_turn`. Do not poll.",
-      "You can also work on the user's other computers that allow remote control, through collaboration. `get_workspace_info` lists them as `execution_devices`; `create_worker` with `execution_device_id` runs that work, its directory and its commands on that computer, and never falls back to this one. A computer that is offline or has remote control turned off is unavailable.",
-    ].join("\n"),
-  },
-};
-
 /** Core details: always available, read only when the work needs them. */
 export const TEAMMATE_CORE_TOPICS: Readonly<Record<string, TeammateSkillText>> = {
   tasks: {
@@ -179,8 +166,6 @@ export function registerTeammateSkillReader(
     getSessionContext: () => LiziMcpSessionContext;
     /** Host-resolved system Skills this teammate turned off; absent means all on. */
     systemSkillsOff?: (params: { callerSessionId: string }) => Promise<readonly string[]>;
-    /** The calling teammate runs as a project (V2); its task topic describes ordinary tools. */
-    projectMode?: (params: { callerSessionId: string }) => Promise<boolean>;
   },
 ): void {
   registry.register({
@@ -189,15 +174,10 @@ export function registerTeammateSkillReader(
     description: `Read the full text of one teammate core topic or system Skill only when the work needs it; the core prompt lists them with one line each. Names: ${READ_NAMES.join(", ")}.`,
     inputShape: { name: z.enum(READ_NAMES as [string, ...string[]]) },
     handler: async ({ name }) => {
-      const callerSessionId = deps.getSessionContext().sessionId;
-      const projectTopic = TEAMMATE_PROJECT_CORE_TOPICS[name];
-      if (projectTopic && callerSessionId && deps.projectMode
-        && await deps.projectMode({ callerSessionId }).catch(() => false)) {
-        return okPayload({ kind: "core", ...projectTopic });
-      }
       const topic = TEAMMATE_CORE_TOPICS[name];
       if (topic) return okPayload({ kind: "core", ...topic });
       const id = name as TeammateSystemSkillId;
+      const callerSessionId = deps.getSessionContext().sessionId;
       if (!callerSessionId) return errorPayload("NOT_A_BOT_SESSION", "当前调用未绑定伙伴任务");
       const off = deps.systemSkillsOff ? await deps.systemSkillsOff({ callerSessionId }) : [];
       if (off.includes(id)) {

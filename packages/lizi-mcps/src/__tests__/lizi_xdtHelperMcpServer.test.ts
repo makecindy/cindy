@@ -165,10 +165,6 @@ describe("cindy_helper MCP server", () => {
       expect(parsePayload(await client.callTool({ name: 'call_tool', arguments: { name: 'start_session_task', args: { instruction: 'x' } } })))
         .toMatchObject({ ok: false, errorCode: 'CAPABILITY_NOT_AVAILABLE' });
       expect(start).not.toHaveBeenCalled();
-      // Its task guide points to the ordinary tools it has, not the hidden ones.
-      const guide = parsePayload(await client.callTool({ name: 'call_tool', arguments: { name: 'read_teammate_skill', args: { name: 'tasks' } } }));
-      expect(String(guide.body)).toContain('send_to_session');
-      expect(String(guide.body)).not.toContain('start_session_task');
       projectMode = false;
       const classic = parsePayload(await client.callTool({ name: 'list_tools', arguments: { category: 'bots' } }));
       expect((classic.tools as Array<{ name: string }>).map((tool) => tool.name)).toContain('start_session_task');

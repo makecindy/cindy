@@ -65,7 +65,6 @@ export function registerListSessionsTool(
     inputShape: {
       ...historyDeviceShape,
       teammate_id: z.string().min(1).max(256).optional().describe('按已保存的伙伴归属筛选，使用 get_teammate_state 的 profile.id；包含历史、话题和渠道专线，不按工作目录猜归属。'),
-      teammate_main_only: z.boolean().optional().describe('只看这个伙伴的主聊天（当前的和重置/换掉的旧主聊天），不含话题、渠道专线和例行任务。需配合 teammate_id。'),
       source: z.string().min(1).max(64).optional().describe('精确匹配任务的原始 source，如 telegram（旧独立机器人）或 bot（伙伴）；不是伙伴归属证明。'),
       time_field: z.enum(['created', 'activity']).optional().describe('from/to 与排序使用的时间：created（默认，创建时间）；activity（最近活动，含旧建但近期聊天的任务）。'),
       workdir: z
@@ -97,8 +96,7 @@ export function registerListSessionsTool(
     },
     handler: async (args) => {
       if (args.device !== 'local') return queryHistoryDevices(registry, deps, 'list_sessions', args);
-      const { workdir, from, to, agent_kind, include_deleted, limit, cursor, order, teammate_id, teammate_main_only, source, time_field } = args;
-      if (teammate_main_only && !teammate_id) return errorPayload('INVALID_ARGS', 'teammate_main_only 需要同时传 teammate_id（get_teammate_state 的 profile.id）。');
+      const { workdir, from, to, agent_kind, include_deleted, limit, cursor, order, teammate_id, source, time_field } = args;
       const scope = await resolveHistoryScope(deps.history, deps.getSessionContext, null);
       if (!scope.ok) return errorPayload(scope.errorCode, scope.message);
       const fromMs = parseIsoMs(from);
@@ -113,7 +111,7 @@ export function registerListSessionsTool(
 
       const result = await deps.history.listSessions({
         sessionIds: scope.sessionIds,
-        ...(teammate_id ? { teammateId: teammate_id, ...(teammate_main_only ? { teammateMainOnly: true } : {}) } : {}),
+        ...(teammate_id ? { teammateId: teammate_id } : {}),
         ...(source ? { source } : {}),
         ...(time_field ? { timeField: time_field } : {}),
         workdir: workdir ?? null,

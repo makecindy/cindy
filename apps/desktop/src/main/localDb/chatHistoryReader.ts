@@ -174,7 +174,6 @@ export async function listWorkdirsForHistory(
 
 export interface ListSessionsParams {
   teammateId?: string;
-  teammateMainOnly?: boolean;
   source?: string;
   timeField?: 'created' | 'activity';
   /** Set only by the authorized remote history handler, never by tool input. */
@@ -223,7 +222,7 @@ export async function listSessionsForHistory(
   const lastActivityAt = sql<number>`MAX(${sessions.createdAt}, ${sessions.updatedAt}, COALESCE(${sessions.userSendAt}, 0))`;
   const time = params.timeField === 'activity' ? lastActivityAt : sql<number>`${sessions.createdAt}`;
   const conds = [];
-  if (params.teammateId) conds.push(teammateHistoryFilter(sql`${sessions.id}`, params.teammateId, params.teammateMainOnly === true));
+  if (params.teammateId) conds.push(teammateHistoryFilter(sql`${sessions.id}`, params.teammateId));
   if (params.source) conds.push(sql`${sessions.source} = ${params.source}`);
   if (params.remoteVisibleOnly) conds.push(sql.raw(remoteVisibleSessionSql('sessions')));
   if (scopedSessionIds !== null) conds.push(inArray(sessions.id, scopedSessionIds));

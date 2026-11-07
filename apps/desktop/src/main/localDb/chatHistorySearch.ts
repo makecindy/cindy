@@ -530,9 +530,9 @@ function buildFilterClause(
   if (args.remoteVisibleOnly) conds.push(remoteVisibleSessionSql('s'));
   const params: unknown[] = [];
   if (args.teammateId) {
-    conds.push(args.teammateMainOnly
-      ? "EXISTS (SELECT 1 FROM bot_session_links hcf WHERE hcf.session_id = s.id AND hcf.bot_id = ? AND hcf.role IN ('canonical', 'history'))"
-      : 'EXISTS (SELECT 1 FROM bot_session_links hcf WHERE hcf.session_id = s.id AND hcf.bot_id = ?)');
+    conds.push(
+      'EXISTS (SELECT 1 FROM bot_session_links hcf WHERE hcf.session_id = s.id AND hcf.bot_id = ?)',
+    );
     params.push(args.teammateId);
   }
   if (args.source) {

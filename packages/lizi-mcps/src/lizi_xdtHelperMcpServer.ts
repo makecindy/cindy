@@ -185,7 +185,7 @@ export const HELPER_CATEGORY_DESCRIPTIONS: Record<(typeof CATEGORY_ENUM)[number]
   handoff: '给已有任务发消息或新建任务。新建可指定 title；省略 project_path 继承来源归属，传已有项目路径切换项目，传 null 创建不绑项目的任务。执行目录独立，不隐式创建项目。发给已有任务可跨电脑（deviceId::sessionId）；新建只在本机。',
   skills: 'Skill 的搜索、发布与学习。本机与 SkillHub。',
   app_update: `检查与安装本机的 ${BRAND_NAME} 更新。本机。`,
-  bots: '伙伴：资料、能力、关联项目（list_teammate_projects / set_teammate_project，仅自身）、工作台、待办、后台任务、伙伴间消息与主力电脑。例行任务用 routine_list / routine_save（项目模式的伙伴改用普通自动化 schedule_*）；schedule_list_models 查可选模型、来源、档位与已知价格，modelOverride 与 sessionMode 设置每条例行任务的模型与运行方式。伙伴间消息（list_agents / send_to_agent）、主力电脑（get_teammate_home / move_teammate_home）、总调度伙伴读取与继续另一台电脑上的任务（read_workbench_task / continue_workbench_task 传 deviceId::sessionId）可跨电脑；其余本机。',
+  bots: '伙伴：资料、能力、关联项目（list_teammate_projects / set_teammate_project，仅自身）、工作台、待办、后台任务、伙伴间消息与主力电脑。例行任务用 routine_list / routine_save；schedule_list_models 查可选模型、来源、档位与已知价格，modelOverride 与 sessionMode 设置每条例行任务的模型与运行方式。伙伴间消息（list_agents / send_to_agent）、主力电脑（get_teammate_home / move_teammate_home）、总调度伙伴读取与继续另一台电脑上的任务（read_workbench_task / continue_workbench_task 传 deviceId::sessionId）可跨电脑；其余本机。',
 };
 
 interface SessionTaskCallbacks {
@@ -1171,9 +1171,6 @@ export function createXdtHelperMcpServer(
       getSessionContext: () => resolveLiziMcpSessionContext(sessionCtx),
       systemSkillsOff: deps.resolveSystemSkillsOff
         ? ({ callerSessionId }) => deps.resolveSystemSkillsOff!({ sessionId: callerSessionId })
-        : undefined,
-      projectMode: deps.resolveTeammateProjectMode
-        ? ({ callerSessionId }) => deps.resolveTeammateProjectMode!({ sessionId: callerSessionId })
         : undefined,
     });
   }

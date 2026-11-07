@@ -19,10 +19,7 @@ export function parseHistoryCompanion(value: string | null | undefined): History
 }
 
 /** A query filter only: callers' existing authorization/remote visibility still applies. */
-export function teammateHistoryFilter(sessionId: SQL, teammateId: string, mainOnly = false): SQL {
-  return mainOnly
-    ? sql`EXISTS (SELECT 1 FROM bot_session_links hcf
-      WHERE hcf.session_id = ${sessionId} AND hcf.bot_id = ${teammateId} AND hcf.role IN ('canonical', 'history'))`
-    : sql`EXISTS (SELECT 1 FROM bot_session_links hcf
-      WHERE hcf.session_id = ${sessionId} AND hcf.bot_id = ${teammateId})`;
+export function teammateHistoryFilter(sessionId: SQL, teammateId: string): SQL {
+  return sql`EXISTS (SELECT 1 FROM bot_session_links hcf
+    WHERE hcf.session_id = ${sessionId} AND hcf.bot_id = ${teammateId})`;
 }

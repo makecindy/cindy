@@ -127,8 +127,6 @@ export interface ListWorkdirsArgs {
 export interface ListSessionsArgs {
   /** Optional filters, intersected with the host-authorized scope. */
   teammateId?: string;
-  /** With teammateId: only its main chats (current and replaced), not topics, channels or routines. */
-  teammateMainOnly?: boolean;
   source?: string;
   timeField?: 'created' | 'activity';
   /** Host-owned ownership scope. null = account history; [] = deny all. */
@@ -167,8 +165,6 @@ export interface GetMessagesArgs {
 
 export interface SearchChatHistoryArgs {
   teammateId?: string;
-  /** With teammateId: only its main chats (current and replaced). */
-  teammateMainOnly?: boolean;
   source?: string;
   /** 自然语言查询(必填)。 */
   query: string;
