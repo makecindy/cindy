@@ -584,12 +584,13 @@ export class DesktopClaudeAuthAdapter implements AuthAdapter {
     await presentation;
   }
 
-  async ensureSharedGlobalSkills(): Promise<void> {
+  /** Resolves with whether the projection is clean; warnings mean some links may be missing. */
+  async ensureSharedGlobalSkills(): Promise<boolean> {
     const scope = preparationScope();
     // The opt-in setting and root listings are part of the key so a cached completion
     // never hides a crossAgentSyncEnabled toggle or an added/removed global skill.
     const key = JSON.stringify([scope.key, await sharedGlobalSkillLinksFingerprint()]);
-    await this.sharedSkillsPreparation.ensure(key, async () => {
+    return this.sharedSkillsPreparation.ensure(key, async () => {
       const success = await this.runEnsureSharedGlobalSkills(scope.ownerId);
       return success && scope.current();
     });
@@ -1357,12 +1358,12 @@ export class DesktopCodexAuthAdapter implements AuthAdapter {
     }
   }
 
-  async ensureGlobalCodexAssets(): Promise<void> {
+  async ensureGlobalCodexAssets(): Promise<boolean> {
     const scope = preparationScope();
-    await this.pendingAssetsPrep.ensure(scope.key, async () => {
-      await this.runEnsureGlobalCodexSkills(scope.ownerId);
+    return this.pendingAssetsPrep.ensure(scope.key, async () => {
+      const sharedClean = await this.runEnsureGlobalCodexSkills(scope.ownerId);
       await this.runEnsureGlobalCodexPlugins();
-      return true;
+      return sharedClean;
     });
   }
 
@@ -1372,7 +1373,7 @@ export class DesktopCodexAuthAdapter implements AuthAdapter {
     // owner guard) runs inside ensureSharedGlobalSkills and reports its own warnings, so
     // Codex does not repeat it; per-launch freshness of the approved catalog comes from
     // prepareCodexGlobalSkillsLinks below.
-    await desktopClaudeAuthAdapter.ensureSharedGlobalSkills();
+    const sharedClean = await desktopClaudeAuthAdapter.ensureSharedGlobalSkills();
 
     const [skillsOutcome, rulesOutcome] = await Promise.all([
       withSharedGlobalSkillProjectionMutation(ownerId, async () =>
@@ -1402,7 +1403,7 @@ export class DesktopCodexAuthAdapter implements AuthAdapter {
         assetPrepLog.warn('Codex global asset warning', { asset: outcome.label, warning });
       }
     }
-    return outcomes.every((outcome) => outcome.ok && outcome.warnings.length === 0);
+    return sharedClean && outcomes.every((outcome) => outcome.ok && outcome.warnings.length === 0);
   }
 
   private async runEnsureGlobalCodexPlugins(): Promise<void> {

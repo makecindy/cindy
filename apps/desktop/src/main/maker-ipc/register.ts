@@ -1623,29 +1623,40 @@ function localModelWindowSwitchErrorCode(code: IpcErrorCode): IpcErrorCode {
   return isDeviceLinkInvoke() ? 'PRECONDITION_FAILED' : code;
 }
 
-async function prepareProjectSkillLinksFailSoft(workingDir: unknown): Promise<boolean> {
+type ProjectSkillLinkPreparation = {
+  /** Any link changed, so a Codex session must reload its commands. */
+  changed: boolean;
+  /** No warning and no failure: the roster is not knowingly missing a project Skill. */
+  clean: boolean;
+};
+
+async function prepareProjectSkillLinksFailSoft(workingDir: unknown): Promise<ProjectSkillLinkPreparation> {
   // Slash/@ palettes are read-only device-link surfaces. Their remote invokes must not
   // create or remove compatibility links in the controlled project's filesystem.
-  if (isDeviceLinkInvoke() || typeof workingDir !== 'string' || !workingDir) return false;
+  if (isDeviceLinkInvoke() || typeof workingDir !== 'string' || !workingDir) {
+    return { changed: false, clean: true };
+  }
   try {
     const result = await prepareSharedProjectSkillLinks({ workingDir });
     for (const warning of result.warnings) {
       log.warn('shared project skill link warning', { workingDir, warning });
     }
-    return result.changed;
+    return { changed: result.changed, clean: result.warnings.length === 0 };
   } catch (err) {
     log.warn('prepare shared project skill links failed', {
       workingDir,
       error: err instanceof Error ? err.message : String(err),
     });
-    return false;
+    return { changed: false, clean: false };
   }
 }
 const sharedProjectSkillLinkPreparation = createProjectSkillPreparation(prepareProjectSkillLinksFailSoft);
 /** Opening a task asks the / and @ palettes together; both prepare the same links. */
-function preparePaletteProjectSkillLinks(workingDir: unknown): Promise<boolean> {
+function preparePaletteProjectSkillLinks(workingDir: unknown): Promise<ProjectSkillLinkPreparation> {
   // Remote invokes never prepare links, so they never join a local preparation.
-  if (isDeviceLinkInvoke() || typeof workingDir !== 'string' || !workingDir) return Promise.resolve(false);
+  if (isDeviceLinkInvoke() || typeof workingDir !== 'string' || !workingDir) {
+    return Promise.resolve({ changed: false, clean: true });
+  }
   return sharedProjectSkillLinkPreparation(JSON.stringify(captureDataOwnerBroadcastScope()), workingDir);
 }
 const workerTurnStartSequencer = createWorkerTurnStartSequencer(log);
@@ -8494,22 +8505,24 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
           if (reused) return reused;
         }
         const scanGeneration = paletteSkillListReuse.generation();
-        const linksChanged = skillParams.remoteHostId
-          ? false
+        const projectLinks: ProjectSkillLinkPreparation = skillParams.remoteHostId
+          ? { changed: false, clean: true }
           : await measureTraceOperation('maker:list-agent-skills:project-links',
             () => preparePaletteProjectSkillLinks(skillParams.workingDir));
-        if (kind === 'codex' && linksChanged) {
+        if (kind === 'codex' && projectLinks.changed) {
           skillParams.forceReload = true;
         }
+        // A preparation that warned or failed can leave its Skills out of a scan that
+        // reports no errors, so its roster must not be cached.
+        let preparationClean = projectLinks.clean;
         await measureTraceOperation('maker:list-agent-skills:global-assets', async () => {
-          if (kind === 'codex' && !skillParams.remoteHostId) {
-            await desktopCodexAuthAdapter.ensureGlobalCodexAssets();
-          } else {
-            // Pi scans ~/.agents/skills directly. Refresh the managed projection here so a
-            // Codex-only skill added after Cindy startup is visible without using another agent
-            // or restarting the app first. Claude keeps the same shared-root refresh semantics.
-            await desktopClaudeAuthAdapter.ensureSharedGlobalSkills();
-          }
+          const globalAssetsClean = kind === 'codex' && !skillParams.remoteHostId
+            ? await desktopCodexAuthAdapter.ensureGlobalCodexAssets()
+            : // Pi scans ~/.agents/skills directly. Refresh the managed projection here so a
+              // Codex-only skill added after Cindy startup is visible without using another agent
+              // or restarting the app first. Claude keeps the same shared-root refresh semantics.
+              await desktopClaudeAuthAdapter.ensureSharedGlobalSkills();
+          preparationClean = preparationClean && globalAssetsClean;
         });
         const result = await measureTraceOperation('maker:list-agent-skills:scan',
           () => maker.listAgentSkills(kind, skillParams));
@@ -8532,7 +8545,8 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
         // partial scan stays uncached so the unreadable root is retried on the
         // next open instead of staying missing for the whole window.
         if (
-          !isAppSessionBoundaryPending()
+          preparationClean
+          && !isAppSessionBoundaryPending()
           && activeOwnerScopeKey() === ownerScope
           && !result.errors?.length
         ) {
