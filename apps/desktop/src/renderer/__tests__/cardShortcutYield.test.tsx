@@ -107,11 +107,15 @@ describe('PermissionPrompt 快捷键不替用户误批', () => {
     const deny = screen.getByRole('button', {name: /agentIsland\.native\.deny/});
     deny.focus();
     await user.keyboard('{Enter}');
-    expect(onRespond).toHaveBeenCalledWith({
-      behavior: 'deny',
-      message: 'User denied',
-      decisionClassification: 'user_reject',
-    });
+    // 响应现在一律携带被冻结的 requestId(双击误批防护),所以用包含式断言,
+    // 只锁住「按回车落到拒绝」这个语义本身。
+    expect(onRespond).toHaveBeenCalledWith(
+      expect.objectContaining({
+        behavior: 'deny',
+        message: 'User denied',
+        decisionClassification: 'user_reject',
+      }),
+    );
   });
 
   it('焦点在卡片按钮上按 Ctrl/⌘+Enter，仍执行本对话都允许', () => {
@@ -158,7 +162,7 @@ describe('PermissionPrompt 快捷键不替用户误批', () => {
     const onRespond = vi.fn();
     render(createElement(PermissionPrompt, {permission: permission(), onRespond}));
     keyOn(document.body, 'Enter');
-    expect(onRespond).toHaveBeenLastCalledWith({behavior: 'allow'});
+    expect(onRespond).toHaveBeenLastCalledWith(expect.objectContaining({behavior: 'allow'}));
     keyOn(document.body, 'Escape');
     expect(onRespond).toHaveBeenLastCalledWith(expect.objectContaining({behavior: 'deny'}));
   });
