@@ -1,3 +1,4 @@
+import { ghostCardSessionLinkId } from '@cindy/maker-shared/ghost-card-form';
 import { useEffect, useRef, useState } from "react";
 import { prStatusItemKeys, type PrStatusKind, type PrStatusResult } from "@cindy/maker-shared";
 import {
@@ -170,6 +171,7 @@ export function PluginCardActions({
   sessionId,
   callId,
   onOpenAttachment,
+  onOpenSessionLink,
   text,
 }: {
   data: unknown;
@@ -177,6 +179,7 @@ export function PluginCardActions({
   sessionId: string;
   callId: string;
   onOpenAttachment?: (url: string, name: string) => void;
+  onOpenSessionLink?: (url: string) => void;
   /** The card's projected text; drawn here as the card's title and detail lines. */
   text?: string;
 }) {
@@ -188,6 +191,7 @@ export function PluginCardActions({
       deviceId={deviceId}
       sessionId={sessionId}
       callId={callId}
+      onOpenSessionLink={onOpenSessionLink}
       onOpenAttachment={onOpenAttachment}
       text={text}
     />
@@ -208,6 +212,7 @@ function CardControls({
   sessionId,
   callId,
   onOpenAttachment,
+  onOpenSessionLink,
   text,
 }: {
   text?: string;
@@ -225,6 +230,7 @@ function CardControls({
   sessionId: string;
   callId: string;
   onOpenAttachment?: (url: string, name: string) => void;
+  onOpenSessionLink?: (url: string) => void;
 }) {
   const { t } = useTranslation(),
     styles = useThemedStyles(makeStyles);
@@ -481,6 +487,10 @@ function CardControls({
   };
   const choose = (action: Action) => {
     if (action.url) {
+      if (ghostCardSessionLinkId(action.url)) {
+        onOpenSessionLink?.(action.url);
+        return;
+      }
       let url: URL;
       try {
         url = new URL(action.url);
@@ -725,7 +735,7 @@ function CardControls({
           {buttons.map((action) => {
             const sendNow = !!mail?.pendingSend && action.id === `mail:now:${mail.key}`;
             const primary = action.primary || (!!mail && action.id === `mail:send:${mail.key}`);
-            const host = action.url ? linkHost(action.url) : undefined;
+            const host = action.url && !ghostCardSessionLinkId(action.url) ? linkHost(action.url) : undefined;
             const label = host ? t("plugins.openLinkHost", { host }) : action.label;
             return (
               <Pressable
