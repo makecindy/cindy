@@ -9536,8 +9536,9 @@ app.on('ready', async () => {
   // 必须在创建任何 Notification 之前调用。macOS / Linux 不需要。
   if (process.platform === 'win32') {
     // 旧快捷方式清理不阻塞建窗：已知文件名的快路径在调用时同步完成；防御扫描要冷启
-    // PowerShell（约 0.4–0.5 秒），放到后台。残留快捷方式用的是 XdtMaker.Dev 等旧 AUMID，
-    // 与下面设置的 AUMID 无关，晚一点删掉不影响本次启动的通知。
+    // PowerShell（约 0.4–0.5 秒），放到后台。扫描只删目标为 dev electron.exe 且无参数的
+    // .lnk（已知来源注册的是 XdtMaker.Dev 等旧 AUMID），打包版自己的快捷方式指向安装目录，
+    // 不会被匹配；下面设置 AUMID 也不依赖它们，晚一点删掉不影响本次启动的通知。
     void cleanupLegacyDevShortcut().catch((err: unknown) => {
       console.warn('[AUMID] legacy dev shortcut cleanup failed: %s', err);
     });
