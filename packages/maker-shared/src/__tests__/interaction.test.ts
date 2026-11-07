@@ -25,6 +25,7 @@ import {
   describePermissionAction,
   formatPermissionInput,
   interactionBlocksRemoteComposer,
+  pendingInteractionsBlockRemoteComposer,
   isFreeTextAskOptionLabel,
   normalizeAskQuestions,
   normalizeIssueConfirm,
@@ -39,6 +40,14 @@ import {
   visibleAskOptions,
   type PendingInteractionLike,
 } from '../interaction.js';
+
+it('restores the composer for collapsed questions while another approval still blocks it', () => {
+  const question = { request: { kind: 'ask_user_question', requestId: 'q', delivery: 'async' } };
+  const permission = { request: { kind: 'permission', requestId: 'p' } };
+  expect(pendingInteractionsBlockRemoteComposer([question])).toBe(true);
+  expect(pendingInteractionsBlockRemoteComposer([question], ['q'])).toBe(false);
+  expect(pendingInteractionsBlockRemoteComposer([question, permission], ['q', 'p'])).toBe(true);
+});
 
 describe('interaction shared model', () => {
   // Unit regression: existing question presentation tests only covered prose.

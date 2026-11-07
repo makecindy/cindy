@@ -21,6 +21,7 @@ export const TASK_ACTION_TOOLS: ReadonlySet<string> = new Set([
   'update_app_settings',
   'set_model_configuration',
   'configure_model_provider',
+  'configure_model_connection',
   'reset_app_settings',
   'update_session_queued_message',
   'cancel_session_queued_message',

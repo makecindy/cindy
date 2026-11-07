@@ -298,7 +298,8 @@ interface TurnState {
    * Host turn lease held for the duration of a per-turn permission policy turn.
    * Keeps new sends and retirement behind this turn's background continuations;
    * the owner's live permission changes remain immediate. Released on every terminal / requeue /
-   * cleanup path via releaseTurnInteractionRoute. Null when the turn has no policy.
+   * cleanup path via releaseTurnInteractionRoute, after any temporary Auto restoration.
+   * Null when the turn has no policy.
    */
   hostTurnLeaseRelease: (() => void) | null;
   groupHistoryAccessRelease: (() => void) | null;
@@ -1666,6 +1667,38 @@ export function createTurnRunner(
           ...(item.autoReviewReferences ? { autoReviewReferences: item.autoReviewReferences } : {}),
         },
         ...(effectiveTurnPolicy ? { turnPermissionPolicy: effectiveTurnPolicy } : {}),
+        afterTurnReserved: async () => {
+          if (!effectiveTurnPolicy) return;
+          const session = state.makerSession;
+          const previous = session.stablePermissionModeState;
+          // A retained policy is mandatory, regardless of channel or whether its
+          // requester is known. Explicit channel/companion exemptions were resolved
+          // above; never remove a mandatory policy just to admit Full access.
+          if (previous?.mode !== 'bypassPermissions') return;
+          if (!session.capabilities.setPermissionModeMidSession?.supported
+              || !session.capabilities.permissionModes?.some((mode) => mode.id === 'auto')
+              || !session.capabilities.turnPermissionPolicy?.supported?.supported
+              || session.capabilities.turnPermissionPolicy.unsupportedPermissionModes?.includes('auto')) return;
+
+          // Reservation prevents stealing another turn's runtime. Keep the existing
+          // host lease through background continuation AND asynchronous restoration.
+          // CAS protects user changes; the persisted task preference is never changed.
+          const release = session.acquireTurnLease();
+          const switching = session.setPermissionModeIfUnchanged(previous, 'auto');
+          const originalMode = previous.mode;
+          item.turn.hostTurnLeaseRelease = () => {
+            void switching.then(async (changed) => {
+              if (changed) {
+                await session.setPermissionModeIfUnchanged(
+                  { mode: 'auto', generation: previous.generation + 1 }, originalMode,
+                );
+              }
+            }).catch((err) => {
+              log.warn(`temporary IM permission cleanup failed: ${err instanceof Error ? err.message : String(err)}`);
+            }).finally(release);
+          };
+          await switching;
+        },
         beforeProviderStart: async () => {
           const noticeSession = state.makerSession;
           const noticeScope = item.turn.scopeKey;
@@ -1681,7 +1714,7 @@ export function createTurnRunner(
           // 策略轮保留逻辑占用直到后台续跑和收尾结束；新输入仍须等待，
           // 主人在 Cindy 中切换权限则立即沿用普通任务的运行时切换。
           if (effectiveTurnPolicy) {
-            item.turn.hostTurnLeaseRelease = state.makerSession.acquireTurnLease();
+            item.turn.hostTurnLeaseRelease ??= state.makerSession.acquireTurnLease();
           }
           if (item.groupHistoryAccess) {
             item.turn.groupHistoryAccessRelease = beginGroupHistoryAccess({
@@ -3294,8 +3327,8 @@ export function createTurnRunner(
     const lease = turn.interactionRouteLease;
     turn.interactionRouteLease = null;
     lease?.release(reason);
-    // Release the host turn lease on the same terminal / requeue / cleanup paths
-    // so an unsupported permission-mode switch can proceed once the policy turn ends.
+    // All terminal / requeue / cleanup paths release the same lease. Temporary
+    // Auto turns retain the underlying lease until their asynchronous restore settles.
     const releaseHostLease = turn.hostTurnLeaseRelease;
     turn.hostTurnLeaseRelease = null;
     releaseHostLease?.();
