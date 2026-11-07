@@ -11056,7 +11056,6 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
                     companionAvatar={companionReplyAvatar}
                     companionPluginInvocations={companionPluginInvocations}
                     remoteDeviceId={deviceId}
-                    showPluginInvocations={!companionChat && Boolean(currentSession && currentSession.source !== 'bot')}
                     bottomOverlayHeight={bottomOverlayHeight}
                     renderScrollComponent={renderMessageScroll}
                     contentBottomInset={companionInlineInteraction && !shareSelectionActive
