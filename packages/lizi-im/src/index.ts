@@ -7,6 +7,7 @@
  */
 
 export const VERSION = '0.0.0';
+export { UnsupportedInboundMediaError } from './inboundKind.js';
 export { buildInboundMessageFacts } from './inboundFacts.js';
 export type { InboundMessageFacts } from './inboundFacts.js';
 

@@ -5,7 +5,7 @@ import { lookup } from 'node:dns/promises';
 import { BaseIM } from '../BaseIM.js';
 import type { TextChannelIM, ImFinalOutput } from '../channelIM.js';
 import type { IMHost, IMMessageEvent, IMStatus, SendFileResult } from '../types.js';
-import { classifyInboundAttachment } from '../inboundKind.js';
+import { classifyInboundAttachment, UnsupportedInboundMediaError } from '../inboundKind.js';
 import { isPrivateListener, LocalWebhookReceiver } from '../localWebhook.js';
 import { BlueBubblesApi, blueBubblesOrigin, BLUEBUBBLES_MAX_BYTES, type BlueBubblesChat } from './api.js';
 import { BlueBubblesReceipts, type BlueBubblesStateStorage } from './state.js';
@@ -61,11 +61,13 @@ export class BlueBubblesIM extends BaseIM implements TextChannelIM {
   private webhookUrl: string | null = null;
   private listener: { close(): Promise<void> } | null = null;
   private timer: ReturnType<typeof setTimeout> | null = null;
+  private deferredTimer: ReturnType<typeof setTimeout> | null = null;
   private pumping: Promise<void> | null = null;
   private lastCatchUpAt: number | null = null;
   private lastWebhookAt: number | null = null;
   private readonly activeDispatches = new Set<string>();
   private readonly activeSends = new Set<string>();
+  private readonly deferredEvents = new Map<string, IMMessageEvent>();
   private readonly pendingReplies = new Map<string, { accept(text: string): boolean; cancel(): void }>();
 
   constructor(host: IMHost, private readonly options: BlueBubblesOptions) { super('imessage', host); }
@@ -80,6 +82,10 @@ export class BlueBubblesIM extends BaseIM implements TextChannelIM {
   getStatus(): IMStatus { return this.status; }
   onStatusChange(callback: (status: IMStatus) => void): () => void { this.statuses.add(callback); return () => this.statuses.delete(callback); }
   onMessage(callback: Handler): () => void { this.messages.add(callback); return () => this.messages.delete(callback); }
+  acknowledgeIncoming(guid: string): void {
+    // Called only by the host's persisted-user-message hook during this dispatch.
+    if (this.activeDispatches.has(guid)) this.receipts?.mark(guid, 'accepted');
+  }
   get botContextId(): string { return this.config ? createHash('sha256').update(this.config.serverUrl).digest('hex').slice(0, 24) : ''; }
   getOwnerUserId(): string | null {
     return [...this.chats.values()].find(chat => /^(?:iMessage|any);-;/.test(chat.guid) && (chat.participants?.length ?? 0) === 1
@@ -181,9 +187,12 @@ export class BlueBubblesIM extends BaseIM implements TextChannelIM {
   async dispose(): Promise<void> {
     ++this.generation;
     if (this.timer) clearTimeout(this.timer);
+    if (this.deferredTimer) clearTimeout(this.deferredTimer);
     this.timer = null;
+    this.deferredTimer = null;
     this.pumping = null;
     this.activeDispatches.clear(); this.activeSends.clear();
+    this.deferredEvents.clear();
     for (const pending of this.pendingReplies.values()) pending.cancel();
     this.pendingReplies.clear();
     const listener = this.listener;
@@ -203,6 +212,14 @@ export class BlueBubblesIM extends BaseIM implements TextChannelIM {
       void this.catchUp(generation).catch(() => this.fail(generation)).finally(() => this.schedule(generation));
     }, 300_000);
     this.timer.unref?.();
+  }
+  private retryDeferred(generation: number): void {
+    if (!this.live(generation) || this.deferredTimer) return;
+    this.deferredTimer = setTimeout(() => {
+      this.deferredTimer = null;
+      if (this.live(generation)) void this.pump(generation).catch(() => this.fail(generation));
+    }, 1000);
+    this.deferredTimer.unref?.();
   }
   async reconcile(): Promise<void> { await this.catchUp(this.generation); }
   private async catchUp(generation: number): Promise<void> {
@@ -243,66 +260,94 @@ export class BlueBubblesIM extends BaseIM implements TextChannelIM {
   private async drain(generation: number): Promise<void> {
     const api = this.api, config = this.config, receipts = this.receipts;
     if (!api || !config || !receipts || !this.messages.size) return;
-    const failed = new Set<string>();
+    const attempted = new Set<string>();
+    let hadFailure = false;
     for (;;) {
       this.assertLive(generation);
-      const guid = receipts.nextPending(failed);
+      const guid = receipts.nextPending(attempted, this.activeDispatches);
       if (!guid) {
-        if (failed.size) throw new Error('BLUEBUBBLES_RECEIVE_FAILED');
+        if (hadFailure) throw new Error('BLUEBUBBLES_RECEIVE_FAILED');
         return;
       }
+      attempted.add(guid);
       try {
-        const message = await api.message(guid);
-        this.assertLive(generation);
-        const chat = message.chats?.find(item => config.chatGuids.includes(item.guid));
-        const sender = message.handle?.address?.toLowerCase();
-        if (message.guid !== guid || message.isFromMe || !chat || !sender || message.handle?.service !== 'iMessage'
-          || !Number.isFinite(message.dateCreated) || message.dateCreated < receipts.activatedAt
-          || (message.associatedMessageType !== undefined && message.associatedMessageType >= 2000)) {
-          receipts.mark(guid, 'ignored'); continue;
-        }
-        const event: IMMessageEvent = { channelName: 'imessage', senderId: chat.guid, chatId: chat.guid,
-          contextId: this.botContextId, messageId: guid, text: message.text ?? '', attachments: [], unsupported: [],
-          speaker: { id: sender, name: sender, isOwner: sender === config.ownerAddress },
-          interactionSource: { chatName: chat.displayName, senderName: sender },
-          ...(this.isGroup(chat.guid) ? { ambient: !this.isGroupInvocation(message.text ?? ''),
-            invoked: this.isGroupInvocation(message.text ?? '') } : {}) };
-        for (const attachment of message.attachments ?? []) {
-          const name = attachment.transferName || attachment.guid;
-          if ((attachment.totalBytes ?? 0) > BLUEBUBBLES_MAX_BYTES) { event.unsupported.push({ type: 'oversize', label: name }); continue; }
-          const bytes = await api.download(attachment.guid); this.assertLive(generation);
-          const kind = classifyInboundAttachment(attachment.mimeType, name);
-          const stored = kind.kind === 'file'
-            ? await this.host.files?.stage({ integration: 'imessage', buffer: bytes, fileName: name })
-            : kind.kind === 'image'
-              ? await this.host.media?.cacheImage({ integration: 'imessage', token: `${this.botContextId}:${attachment.guid}`, buffer: bytes, mimeType: kind.mimeType, staging: true })
-              : await this.host.media?.cacheMedia?.({ integration: 'imessage', token: `${this.botContextId}:${attachment.guid}`, buffer: bytes, mimeType: kind.mimeType });
-          if (!this.live(generation)) { await stored?.discard?.(); return; }
-          if (!stored) { event.unsupported.push({ type: 'unsupported', label: name }); continue; }
-          event.attachments.push({ kind: kind.kind === 'image' ? 'image' : 'file', absPath: stored.absPath,
-            originalName: name, mimeType: 'mimeType' in stored && stored.mimeType ? stored.mimeType : kind.mimeType,
-            ...('url' in stored ? { url: stored.url } : {}) });
+        let event = this.deferredEvents.get(guid);
+        if (!event) {
+          const message = await api.message(guid);
+          this.assertLive(generation);
+          const chat = message.chats?.find(item => config.chatGuids.includes(item.guid));
+          const sender = message.handle?.address?.toLowerCase();
+          if (message.guid !== guid || message.isFromMe || !chat || !sender || message.handle?.service !== 'iMessage'
+            || !Number.isFinite(message.dateCreated) || message.dateCreated < receipts.activatedAt
+            || (message.associatedMessageType !== undefined && message.associatedMessageType >= 2000)) {
+            receipts.mark(guid, 'ignored'); continue;
+          }
+          event = { channelName: 'imessage', senderId: chat.guid, chatId: chat.guid,
+            contextId: this.botContextId, messageId: guid, text: message.text ?? '', attachments: [], unsupported: [],
+            speaker: { id: sender, name: sender, isOwner: sender === config.ownerAddress },
+            interactionSource: { chatName: chat.displayName, senderName: sender },
+            ...(this.isGroup(chat.guid) ? { ambient: !this.isGroupInvocation(message.text ?? ''),
+              invoked: this.isGroupInvocation(message.text ?? '') } : {}) };
+          for (const attachment of message.attachments ?? []) {
+            const name = attachment.transferName || attachment.guid;
+            if ((attachment.totalBytes ?? 0) > BLUEBUBBLES_MAX_BYTES) { event.unsupported.push({ type: 'oversize', label: name }); continue; }
+            const bytes = await api.download(attachment.guid); this.assertLive(generation);
+            const kind = classifyInboundAttachment(attachment.mimeType, name);
+            let stored: { absPath: string; url?: string; mimeType?: string; discard?: () => Promise<void> } | null | undefined;
+            try {
+              stored = kind.kind === 'file'
+              ? await this.host.files?.stage({ integration: 'imessage', buffer: bytes, fileName: name })
+              : kind.kind === 'image'
+                ? await this.host.media?.cacheImage({ integration: 'imessage', token: `${this.botContextId}:${attachment.guid}`, buffer: bytes, mimeType: kind.mimeType, staging: true })
+                : await this.host.media?.cacheMedia?.({ integration: 'imessage', token: `${this.botContextId}:${attachment.guid}`, buffer: bytes, mimeType: kind.mimeType });
+            } catch (error) {
+              if (!(error instanceof UnsupportedInboundMediaError)) throw error;
+              event.unsupported.push({ type: 'unsupported', label: name });
+              continue;
+            }
+            if (!this.live(generation)) { await stored?.discard?.(); return; }
+            if (!stored) { event.unsupported.push({ type: 'unsupported', label: name }); continue; }
+            event.attachments.push({ kind: kind.kind === 'image' ? 'image' : 'file', absPath: stored.absPath,
+              originalName: name, mimeType: 'mimeType' in stored && stored.mimeType ? stored.mimeType : kind.mimeType,
+              ...(stored.url ? { url: stored.url } : {}) });
+          }
         }
         // An interrupted dispatch is visible as uncertain; never blindly repeat model side effects.
         receipts.mark(guid, 'dispatching');
-        const pending = this.pendingReplies.get(chat.guid);
+        const pending = this.pendingReplies.get(event.chatId);
         if (pending?.accept(event.text)) {
           receipts.mark(guid, 'accepted'); continue;
         }
         this.activeDispatches.add(guid);
+        let awaitPersistence = false, deferred = false;
+        event.delivery = {
+          awaitPersistence: () => { this.assertLive(generation); awaitPersistence = true; },
+          defer: () => {
+            this.assertLive(generation);
+            receipts.mark(guid, 'pending');
+            this.deferredEvents.set(guid, event!);
+            deferred = true;
+          },
+          accept: () => { this.assertLive(generation); receipts.mark(guid, 'accepted'); },
+        };
         // Do not block ingress on a model turn: its confirmation reply arrives on this same receiver.
         void Promise.all([...this.messages].map(callback => Promise.resolve().then(() => {
           this.assertLive(generation);
-          return callback(event);
+          return callback(event!);
         }))).then(() => {
-          if (this.live(generation)) receipts.mark(guid, 'accepted');
+          if (this.live(generation) && !awaitPersistence && !deferred) receipts.mark(guid, 'accepted');
         }).catch(() => this.fail(generation)).finally(() => {
-          if (this.live(generation)) { this.activeDispatches.delete(guid); this.setStatus(this.status); }
+          if (this.live(generation)) {
+            this.activeDispatches.delete(guid);
+            if (!deferred) this.deferredEvents.delete(guid);
+            if (deferred) this.retryDeferred(generation);
+            this.setStatus(this.status);
+          }
         });
       } catch {
         this.assertLive(generation);
         // Keep the receipt pending for recovery, but let other chats/messages proceed.
-        failed.add(guid);
+        hadFailure = true;
       }
     }
   }

@@ -85,6 +85,9 @@ export function wireIMessageOrchestrator(im: BlueBubblesIM, config: ImOrchestrat
     // Full access is the owner's explicit authorization for this teammate,
     // including guest-originated turns; other modes retain their turn policy.
     turnPolicyOptionalForMode: mode => mode === 'bypassPermissions',
+    onUserMessagePersisted: async ({ userMessageId, persisted }) => {
+      if (persisted && userMessageId) im.acknowledgeIncoming(userMessageId);
+    },
     handleTextInteraction: (userId, request, interactionOptions) => {
       // Only the configured owner can answer permissions, including member-originated turns.
       const target = request.kind === 'permission' ? im.getOwnerUserId() : userId;

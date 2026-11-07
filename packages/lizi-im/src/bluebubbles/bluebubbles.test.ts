@@ -3,13 +3,14 @@ import type { IMHost, IMMessageEvent } from '../types.js';
 import { LocalWebhookReceiver } from '../localWebhook.js';
 import { BlueBubblesApi, type BlueBubblesMessage } from './api.js';
 import { BlueBubblesIM } from './index.js';
+import { UnsupportedInboundMediaError } from '../inboundKind.js';
 import { BlueBubblesReceipts, type BlueBubblesState } from './state.js';
 
 // Tier 1: exercise the real transport and HTTP receiver. Covers durable duplicate/restart
 // handling and requester identity absent from other transports' tests; no real contacts.
 const connections: BlueBubblesIM[] = [];
 afterEach(async () => { await Promise.all(connections.splice(0).map(im => im.dispose())); });
-async function fixture(initialState: BlueBubblesState | null = null) {
+async function fixture(initialState: BlueBubblesState | null = null, media?: IMHost['media']) {
   const secrets = new Map<string, string>();
   let saved: BlueBubblesState | null = initialState;
   let callbackUrl = '';
@@ -26,6 +27,7 @@ async function fixture(initialState: BlueBubblesState | null = null) {
   vi.spyOn(api, 'registerWebhook').mockImplementation(async url => { callbackUrl = url; });
   const send = vi.spyOn(api, 'sendText').mockResolvedValue({ guid: 'outbound' });
   const host: IMHost = {
+    ...(media ? { media } : {}),
     secrets: { read: key => secrets.get(key) ?? null, write: (key, value) => { secrets.set(key, value); return true; },
       remove: key => { secrets.delete(key); }, isAvailable: () => true },
     ipc: { handle() {}, broadcast() {}, throwIpcError(_code, message): never { throw new Error(message); } },
@@ -51,6 +53,62 @@ async function fixture(initialState: BlueBubblesState | null = null) {
 }
 
 describe('BlueBubbles local ingress', () => {
+  // Tier 1, #9250: permanent format rejection must not poison startup catch-up.
+  // Existing transient-download regression must keep its pending/retry behavior.
+  it('dispatches accompanying text after permanent media rejection and restarts without redownloading it', async () => {
+    const cacheImage = vi.fn(async () => { throw new UnsupportedInboundMediaError('image'); });
+    const f = await fixture(null, { cacheImage, getCachedImage: async () => null, resolveMediaUrl: () => null });
+    const download = vi.spyOn(f.api, 'download').mockResolvedValue(new Uint8Array([1]));
+    f.message('heic', { text: 'keep this text', attachments: [{ guid: 'photo', transferName: 'photo.heic', mimeType: 'image/heic' }] });
+    await f.im.reconcile();
+    expect(f.received[0]).toMatchObject({ text: 'keep this text', attachments: [],
+      unsupported: [{ type: 'unsupported', label: 'photo.heic' }] });
+    expect(f.state().inbox.heic.state).toBe('accepted');
+    await f.im.dispose();
+    await f.im.init();
+    expect(f.im.getStatus().kind).toBe('connected');
+    expect(download).toHaveBeenCalledTimes(1);
+    expect(f.received).toHaveLength(1);
+    cacheImage.mockRejectedValueOnce(new Error('temporary storage failure'));
+    f.message('retryable-media', { attachments: [{ guid: 'second-photo', transferName: 'second.heic', mimeType: 'image/heic' }] });
+    await expect(f.im.reconcile()).rejects.toThrow('BLUEBUBBLES_RECEIVE_FAILED');
+    expect(f.state().inbox['retryable-media'].state).toBe('pending');
+    await f.im.reconcile();
+    expect(f.state().inbox['retryable-media'].state).toBe('accepted');
+  });
+
+  // Tier 1, #9250: an external runner's busy result must survive a process restart;
+  // returning from an in-memory queue is not a durable user-message acceptance.
+  it('retains busy inputs for restart and only acknowledges actual persistence', async () => {
+    const f = await fixture();
+    let busy = true;
+    let persisted = true;
+    let executions = 0;
+    f.im.onMessage(event => {
+      event.delivery?.awaitPersistence();
+      if (busy) { event.delivery?.defer(); return; }
+      executions++;
+      if (persisted) f.im.acknowledgeIncoming(event.messageId);
+    });
+    f.message('queued');
+    await f.webhook('queued');
+    await f.im.reconcile();
+    expect(f.state().inbox.queued.state).toBe('pending');
+    expect(executions).toBe(0);
+    await f.im.dispose();
+    busy = false;
+    await f.im.init();
+    expect(f.state().inbox.queued.state).toBe('accepted');
+    expect(executions).toBe(1);
+    await f.im.reconcile();
+    expect(executions).toBe(1);
+    persisted = false;
+    f.message('not-persisted');
+    await f.webhook('not-persisted');
+    await f.im.reconcile();
+    expect(f.state().inbox['not-persisted'].state).toBe('dispatching');
+    expect(f.im.health().uncertainInputs).toBe(1);
+  });
   // Tier 1, review #9250: each health broadcast copied the permanent ledger.
   // Existing restart cases only used tiny ledgers; restored unresolved counts must
   // stay correct without snapshotting 10,000 completed receipts on every message.

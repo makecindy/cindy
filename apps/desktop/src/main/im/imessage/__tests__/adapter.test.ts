@@ -12,7 +12,9 @@ vi.mock('../../dingtalk/interaction', () => ({ handleDingTalkTextInteraction: vi
 // Review #9250: guest DM/group + Full access previously failed provider preflight.
 // Shared runner tests cover dispatch, but cannot detect a missing channel hook.
 it('honors Full access for guest DMs/groups while retaining policy in other modes and guest tool scope', () => {
+  const acknowledgeIncoming = vi.fn();
   const adapter = wireIMessageOrchestrator({
+    acknowledgeIncoming,
     isGroup: (id: string) => id.startsWith('any;+;'),
   } as never, {} as never, {
     instanceKey: 'test', companionBotId: 'bot-test', connectionId: 'connection-test',
@@ -29,4 +31,8 @@ it('honors Full access for guest DMs/groups while retaining policy in other mode
     expect(adapter.channelToolScopeFor?.(event)).toMatchObject({ chatId, requesterIsOwner: false });
     expect(adapter.turnPermissionPolicyFor!({ ...event, speaker: { ...event.speaker!, isOwner: true } })).toBeUndefined();
   }
+  void adapter.onUserMessagePersisted!({ sessionId: 'session', userMessageId: 'failed', persisted: false });
+  expect(acknowledgeIncoming).not.toHaveBeenCalled();
+  void adapter.onUserMessagePersisted!({ sessionId: 'session', userMessageId: 'accepted', persisted: true });
+  expect(acknowledgeIncoming).toHaveBeenCalledWith('accepted');
 });

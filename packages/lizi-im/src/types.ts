@@ -197,6 +197,15 @@ export interface IMUnsupportedEntry {
 }
 
 export interface IMMessageEvent {
+  /** In-process durable transport handoff; never serialized to the model or remote clients. */
+  delivery?: {
+    /** Agent dispatch must be acknowledged only by the persisted-user-message callback. */
+    awaitPersistence(): void;
+    /** External runner rejected dispatch as busy; retain the durable queue item for retry. */
+    defer(): void;
+    /** A terminal pre-dispatch rejection was handled without model execution. */
+    accept(): void;
+  };
   /** Optional transport-owned display context for shared permission prompts. */
   interactionSource?: {
     chatName?: string;

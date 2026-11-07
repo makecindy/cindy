@@ -43,7 +43,7 @@ vi.mock('../receivedImageHistory', async (original) => ({
 }));
 import { activateImAccountBoundary } from '../../accountBoundary';
 import type { ImSlashHandlers } from '../slashCommands';
-import type { ImRunAgentTurnArgs, ImTurnRunner } from '../turnRunner';
+import type { ImRunAgentTurnArgs, ImTurnDispatch, ImTurnRunner } from '../turnRunner';
 import type { ImChannelAdapter } from '../types';
 import { ui as slackUi } from './threadUiFixture';
 
@@ -64,10 +64,12 @@ function makeEvent(overrides: Partial<IMMessageEvent> = {}): IMMessageEvent {
 interface Harness {
   deliver: (event: IMMessageEvent) => void;
   runAgentTurn: ReturnType<typeof vi.fn>;
+  dispatchAgentTurn: ReturnType<typeof vi.fn>;
   persistEarly: ReturnType<typeof vi.fn>;
   prepareAgentTurnText: ReturnType<typeof vi.fn> | undefined;
   calls: string[];
   reactToMessage: ReturnType<typeof vi.fn>;
+  sendText: ReturnType<typeof vi.fn>;
 }
 
 function wire(
@@ -80,7 +82,9 @@ function wire(
 ): Harness {
   const calls: string[] = [];
   const runAgentTurn = vi.fn(async () => undefined);
+  const dispatchAgentTurn = vi.fn(async (): Promise<ImTurnDispatch> => ({ kind: 'busy', reason: 'session_running' }));
   const reactToMessage = vi.fn(async () => 'reaction-1');
+  const sendText = vi.fn(async () => undefined);
   const persistEarly = vi.fn(async () => {
     calls.push('persistEarly');
     return { sessionId: 'feishu-session', clientId: 'early-client' };
@@ -102,7 +106,7 @@ function wire(
       return () => undefined;
     },
     sendMarkdownText: vi.fn(async () => undefined),
-    sendText: vi.fn(async () => undefined),
+    sendText,
     reactToMessage,
   } as unknown as ChannelIM;
 
@@ -122,13 +126,14 @@ function wire(
     { handleSlashCommand: vi.fn(async () => true) } as unknown as ImSlashHandlers,
     {
       runAgentTurn,
+      dispatchAgentTurn,
       persistInboundUserMessageEarly: persistEarly,
       stopActiveTurn: vi.fn(async () => ({ stopped: false, droppedQueued: 0 })),
     } as unknown as ImTurnRunner,
   );
   attach(im);
 
-  return { deliver, runAgentTurn, persistEarly, prepareAgentTurnText, calls, reactToMessage };
+  return { deliver, runAgentTurn, dispatchAgentTurn, persistEarly, prepareAgentTurnText, calls, reactToMessage, sendText };
 }
 
 function turnArgs(runAgentTurn: ReturnType<typeof vi.fn>): ImRunAgentTurnArgs {
@@ -141,6 +146,27 @@ beforeEach(() => {
 });
 
 describe('messageHandler early user-message persist', () => {
+  // Tier 1, #9250: durable inbound GUIDs must not enter the volatile sendQueue.
+  // Existing early-persist cases cover only internal dispatch, not a busy external caller.
+  it('defers durable inputs on a busy runner and waits for persistence on accepted dispatch', async () => {
+    const h = wire({ withPrepare: false, channel: 'imessage' });
+    const delivery = { awaitPersistence: vi.fn(), defer: vi.fn(), accept: vi.fn() };
+    const unsupported = [{ type: 'unsupported', label: 'photo.heic' }];
+    await h.deliver(makeEvent({ channelName: 'imessage', delivery, unsupported }));
+    expect(h.runAgentTurn).not.toHaveBeenCalled();
+    expect(h.dispatchAgentTurn).toHaveBeenCalledWith(expect.objectContaining({ queueMode: 'external' }));
+    expect(delivery.awaitPersistence).toHaveBeenCalledOnce();
+    expect(delivery.defer).toHaveBeenCalledOnce();
+    expect(delivery.accept).not.toHaveBeenCalled();
+    expect(h.sendText).not.toHaveBeenCalled();
+    h.dispatchAgentTurn.mockResolvedValueOnce({ kind: 'accepted', sessionId: 'session', acceptedAt: 1,
+      terminal: Promise.resolve({ kind: 'done', text: '', completedAt: 1 }) });
+    delivery.defer.mockClear();
+    await h.deliver(makeEvent({ channelName: 'imessage', messageId: 'next', delivery, unsupported }));
+    expect(delivery.defer).not.toHaveBeenCalled();
+    expect(delivery.accept).not.toHaveBeenCalled();
+    expect(h.sendText).toHaveBeenCalledOnce();
+  });
   // Regression: local-history channels previously passed no image read lease to the provider.
   it.each([
     {

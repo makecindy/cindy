@@ -33,7 +33,7 @@ import { getControlScope, isInControl } from './controlState';
 import { isCommandAuthorized, isStopCommand } from './controlCommands';
 import type { ImSlashHandlers } from './slashCommands';
 import { looksLikeSlashCommand } from './slashCommands';
-import type { ImTurnRunner } from './turnRunner';
+import type { ImRunAgentTurnArgs, ImTurnRunner } from './turnRunner';
 import type { ImChannelAdapter } from './types';
 import { describeInteractionSource } from './interactionSource';
 import { buildImReplyContextBlock } from './replyContext';
@@ -324,8 +324,10 @@ export function createMessageHandler(
       return;
     }
 
-    // ── mixed: ack the dropped bits as a SEPARATE text msg, then run agent ──
-    if (event.unsupported.length > 0) {
+    // Durable callers may retry a busy dispatch. Emit mixed-attachment notices
+    // only after acceptance so those queue retries cannot repeat the notice.
+    const notifyUnsupported = async () => {
+      if (!event.unsupported.length) return;
       try {
         await im.sendText(event.senderId, ui.agent.unsupportedNotice(event.unsupported), {
           threadTs: event.scopeKey,
@@ -334,7 +336,8 @@ export function createMessageHandler(
         const msg = err instanceof Error ? err.message : String(err);
         log.warn(`unsupportedNotice send failed (non-fatal): ${msg}`);
       }
-    }
+    };
+    if (!event.delivery) await notifyUnsupported();
 
     // ── 全响应(ambient)前置判定: 辅助模型先说该不该插话 ───────────────────
     // 放在 ack / 提前落库之前: 判成 SKIP 的消息不留任何痕迹(不落专线、不起轮次、
@@ -470,7 +473,7 @@ export function createMessageHandler(
     const deliveredReply = prepared?.replyContext ??
       (!adapter.prepareAgentTurnText ? event.replyContext : undefined);
     try {
-      await turnRunner.runAgentTurn({
+      const turnArgs: ImRunAgentTurnArgs = {
         ...(notificationSessionId ? {
           notificationSessionId,
           revalidateNotificationReply: async () => {
@@ -547,7 +550,21 @@ export function createMessageHandler(
             log.warn(`account-scoped background task failed (non-fatal): ${msg}`);
           });
         },
-      });
+      };
+      if (event.delivery) {
+        // Durable transports own their pending queue. A busy session must not
+        // silently accept this message into turnRunner's volatile sendQueue.
+        event.delivery.awaitPersistence();
+        const dispatch = await turnRunner.dispatchAgentTurn({
+          ...turnArgs, queueMode: 'external',
+          beforeProviderStart: async () => { event.delivery!.awaitPersistence(); },
+        });
+        if (dispatch.kind === 'busy') event.delivery.defer();
+        else if (dispatch.kind === 'rejected') event.delivery.accept();
+        else await notifyUnsupported();
+      } else {
+        await turnRunner.runAgentTurn(turnArgs);
+      }
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
       log.error(`runAgentTurn threw: ${msg}`);

@@ -56,8 +56,8 @@ export class BlueBubblesReceipts {
   }
   get activatedAt(): number { return this.state.activatedAt; }
   cursor(chat: string): number { return this.state.cursors[chat] ?? this.state.activatedAt; }
-  nextPending(exclude: ReadonlySet<string>): string | undefined {
-    for (const guid of this.pending) if (!exclude.has(guid)) return guid;
+  nextPending(exclude: ReadonlySet<string>, active?: ReadonlySet<string>): string | undefined {
+    for (const guid of this.pending) if (!exclude.has(guid) && !active?.has(guid)) return guid;
     return undefined;
   }
   private update(update: BlueBubblesReceiptUpdate): void {
