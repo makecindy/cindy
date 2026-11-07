@@ -28,6 +28,9 @@ const productionIdentityDeps = {
   isPluginInstanceKey,
   resolvePluginInstanceQuery,
   libraryRestartRequiredReason: (): string | null => null,
+  // Side-effect-only singleton `broadcastGhostsChanged` clears when the roster
+  // changes; the slice never asserts on it.
+  paletteSkillListReuse: { clear: (): void => {} },
 };
 
 /**

@@ -4820,7 +4820,11 @@ export function ChatInput({
   useEffect(
     () =>
       window.electronAPI.ghosts.onChanged(() => {
-        reloadSlashCommands({ forceReload: true });
+        // Not forced: Main clears the roster snapshot where a change actually lands
+        // (install/toggle/uninstall/Pi packages/SkillHub), so this reload rescans
+        // only when the roster really changed. Projection-only events (an OAuth
+        // badge) stay a cache hit instead of paying for discovery again.
+        reloadSlashCommands();
       }),
     [reloadSlashCommands],
   );

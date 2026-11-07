@@ -8481,11 +8481,15 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
           skillParams.remoteHostId ?? null,
         ]);
         const ownerScope = activeOwnerScopeKey();
+        // During an owner transition `activeOwnerScopeKey()` still reports the
+        // outgoing owner, so a hit here would hand its plugin Skills to the next one
+        // without the ownership check a rescan performs. Fail closed and rescan.
+        const boundaryPending = isAppSessionBoundaryPending();
         if (skillParams.forceReload === true) {
           // A forced reload drops every context's entry, not only this caller's:
           // another session would otherwise keep serving the pre-change roster.
           paletteSkillListReuse.clear();
-        } else {
+        } else if (!boundaryPending) {
           const reused = paletteSkillListReuse.read(reuseKey);
           if (reused) return reused;
         }
@@ -8528,7 +8532,8 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
         // partial scan stays uncached so the unreadable root is retried on the
         // next open instead of staying missing for the whole window.
         if (
-          activeOwnerScopeKey() === ownerScope
+          !isAppSessionBoundaryPending()
+          && activeOwnerScopeKey() === ownerScope
           && !result.errors?.length
         ) {
           paletteSkillListReuse.write(reuseKey, listing, scanGeneration);
