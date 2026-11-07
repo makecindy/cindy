@@ -112,14 +112,19 @@ function mount(hidden = false, pasteHandlers: Pick<ComposerRichInputProps, 'onPa
   };
   bridge.inject.mockImplementation((script: string) => runInNewContext(script, { window: { cindyComposer: page } }));
   root = createRoot(document.createElement('div'));
+  let currentPasteHandlers = pasteHandlers;
   const renderDocument = (document: ComposerDocument) => act(() => root!.render(createElement(ComposerRichInput, {
-    ref, document, hidden, onChangeDocument, onPasteImagesLoadFailed, ...pasteHandlers,
+    ref, document, hidden, onChangeDocument, onPasteImagesLoadFailed, ...currentPasteHandlers,
     accessibilityLabel: 'input', placeholder: '', height: 40, maxHeight: 264,
     theme: { background: '#fff', border: '#aaa', chip: '#ddd', focus: '#555', placeholder: '#777', text: '#111', textSecondary: '#333' },
   })));
   renderDocument(page.document);
   const send = (message: unknown) => act(() => bridge.onMessage({ nativeEvent: { data: JSON.stringify(message) } }));
-  return { ref, page, send, onChangeDocument, onPasteImagesLoadFailed, renderDocument };
+  const renderPasteHandlers = (next: typeof pasteHandlers) => {
+    currentPasteHandlers = next;
+    renderDocument(page.document);
+  };
+  return { ref, page, send, onChangeDocument, onPasteImagesLoadFailed, renderDocument, renderPasteHandlers };
 }
 
 // #7508 / #7509, unit: the real WebView bridge must hand Send the visible document,
@@ -440,7 +445,7 @@ it('does not let an old pong or duplicate active event cancel the current probe'
 });
 
 it('settles interrupted paste placeholders and drops late clipboard results', async () => {
-  const { send, onPasteImagesLoadFailed } = mount();
+  const { send, onPasteImagesLoadFailed } = mount(false, { onPasteImages: vi.fn(), onPasteImagesLoading: vi.fn() });
   send({ type: 'ready' });
   let resolveClipboard!: (value: string) => void;
   bridge.clipboard.mockReturnValue(new Promise(resolve => { resolveClipboard = resolve; }));
@@ -538,4 +543,35 @@ it.each([false, true])('keeps image paste behind the sending lock while text rem
     expect(beginPlaceholders).toHaveBeenCalledWith(1);
     expect(addAttachments).toHaveBeenCalledWith([expect.stringContaining('file:///cache/')]);
   }
+});
+
+// PR #9242 r4500543539, unit: the start event can precede Send while FileReader
+// finishes afterwards. Existing fixed-state tests missed both directions of the
+// state transition. A batch must keep its original accepted/rejected decision.
+it.each([true, false])('keeps the image batch acceptance from its start across a send transition (accepted=%s)', async (accepted) => {
+  bridge.writeImage.mockResolvedValue(undefined);
+  bridge.deleteImage.mockResolvedValue(undefined);
+  const addAttachments = vi.fn();
+  const beginPlaceholders = vi.fn();
+  const handlers = (sending: boolean) => pageCallback('composerImagePasteHandlers', {
+    sending, onPasteImages: addAttachments,
+    beginPastePlaceholders: beginPlaceholders, failPastePlaceholders: vi.fn(),
+  })();
+  const { send, renderPasteHandlers, onPasteImagesLoadFailed } = mount(false, handlers(!accepted));
+  send({ type: 'ready' });
+  send({ type: 'paste-images-start', requestId: 'before-send', count: 1 });
+  renderPasteHandlers(handlers(accepted));
+  await act(async () => {
+    send({ type: 'paste-image', requestId: 'before-send', index: 0, mimeType: 'image/png', name: 'before.png', base64: 'eA==' });
+  });
+  if (accepted) {
+    expect(beginPlaceholders).toHaveBeenCalledExactlyOnceWith(1);
+    expect(addAttachments).toHaveBeenCalledExactlyOnceWith([expect.stringContaining('file:///cache/')]);
+    expect(bridge.deleteImage).not.toHaveBeenCalled();
+  } else {
+    expect(beginPlaceholders).not.toHaveBeenCalled();
+    expect(addAttachments).not.toHaveBeenCalled();
+    expect(bridge.deleteImage).toHaveBeenCalled();
+  }
+  expect(onPasteImagesLoadFailed).not.toHaveBeenCalled();
 });
