@@ -17,6 +17,23 @@
 `partial: true`，不扩大接收端校验上限，旧接收端仍能解析额度及同份回包中的用量历史。
 普通任务和远程执行仍通过宿主同一个 Agent 入口选择账号；账号能力是进程内 Symbol，不进入 JSON。
 
+双端混用版本（2026-11-07）：新版提供端在通过原有同账号远控授权后，给旧控制端的
+`maker:usage:claude-subscription`、`maker:usage:account`（codex）和
+`maker:usage:codex-rate-limits` 投影池内可用额度，保持原窗口、桶表和 providerId 形状。
+池未配置或只有正常默认账号时继续原 handler；已断开或没有可读额度时回 null，禁止回退首账号的旧快照。
+不传账号身份、路径、凭证和重置 offer，不合计百分比。分享访客仍走既有 insights v1，不能调用这些 owner 通道。
+Codex 原生桶不冒充 WHAM：旧 bridge 无法表达按模型的账号池额度时保持未知，由执行端选择账号；
+旧 rate-limits 读取不把过期缓存重新标为刚读取的额度。
+新版默认账号用量卡在旧参数后追加 `default-subscription-account`：Claude 位于 args[2]
+（args[1] 仍是 fresh），Codex account 位于 args[2]，rate-limits 位于 args[1]。
+新版提供端保留此 scope 的原单账号读取；旧提供端忽略附加参数，保持原行为。
+任务额度重置查询在同一位置追加 `{ subscriptionSessionId: <native SDK id> }`，由执行端用
+本机持久绑定读取实际账号的窗口，沿用原 reader 的缓存与节流，不能读取下一可用账号。旧宿主忽略追加对象，
+仍返回自己的原单账号；未绑定的旧任务走原 reader，已移出或断开的绑定返回 null。
+该对象不携带目录、账号标识或凭证。OpenAI 任务快照追加 `nativeAccountPool: true`，
+新使用端的三个引擎都按该账号的原生模型桶求重置时间，不拿 WHAM 或其它账号窗口替代。
+官方及自建中转仅透传原 invoke，无帧、allowlist 或服务器变更。
+
 远程组先探测池配额；旧电脑不支持时回到原有 Claude/Codex 配额 channel。同一电脑/供应商的
 探测合并、缓存 30 秒并随 owner 代次丢弃。旧控制端忽略新 push，现有调用格式不变。
 OpenAI 池快照增加可选 `nativeAccountPool` 标记，当前控制端让三种引擎按模型读取同一套
@@ -5074,11 +5091,11 @@ Chat Server 请求复用既有消息 `content` 的 media 块及 `threadRootId`�
 插件卡片可放一颗归档任务按钮：`button` 上标 `data-ghost-task-archive="owner/repo#N"`（不得同时带 `data-ghost-action`
 或 `data-ghost-link`，否则净化器丢掉这个标记），可选 `data-ghost-task-archive-state="merged|closed"`（插件读到的状态快照）
 与空值 `data-ghost-task-archive-auto`（用户开了「合并后自动归档」）。插件把它写成 `display:none`，文字放在 `aria-label`
-并用自己的 `::before` 画出来。新电脑端按标题栏同源状态在 PR 已合并或已关闭时以 `inline-flex` 露出（查不到状态时按快照），
+并用自己的 `::before` 画出来。新电脑端按标题栏同源状态确认任务全部关联 PR 已合并后以 `inline-flex` 露出，并将 `aria-label` 更新为「立即归档」（查不到状态时不显示），
 点击不回传插件，由任务页走与标题栏归档相同的流程，只作用于卡片所在任务。带 `-auto`、宿主自己查到已合并，且任务页满足静态资格（`canAutoArchiveOnLeave`：普通任务页、本机任务、任务还是活跃的、没有被远程写入拦截）时，
-自动归档待生效：宿主在按钮左边插入自己的「离开后自动归档 · 本次不归档」（文字与点击都归宿主），卡片在可见、聚焦的窗口里
-进入视野记为「看过」（只在内存）。用户点「本次不归档」，或待生效之后任务里出现用户发的消息（本机发送立即取消，但只取消已经待生效的，合并前发的消息不算；
-手机、IM、共享成员的消息在历史加载完成后按最后一条用户消息比较；官方 IM Hook 的渠道消息虽然复用 scheduler 形态的 origin，但是真人发的，要算；真正的自动化与插件代发的不算），本次就取消，直到任务里不再有符合条件
+自动归档待生效：宿主在按钮左边插入自己的「离开此任务后将自动归档」与独立描边按钮「取消」（文字与点击都归宿主），卡片在可见、聚焦的窗口里
+进入视野记为「看过」（只在内存）。用户点「取消」，或待生效之后任务里出现用户发的消息（本机发送立即取消，但只取消已经待生效的，合并前发的消息不算；
+手机、IM、共享成员的消息在历史加载完成后按最后一条用户消息比较；官方 IM Hook 的渠道消息虽然复用 scheduler 形态的 origin，但是真人发的，要算；真正的自动化与插件代发的不算），本次就取消，提示改为「本次不会自动归档」，直到任务里不再有符合条件
 的卡片才重新开始。同一任务可以有多张卡片，按卡片登记资格，任一张符合就待生效，只有符合条件的那张卡片在眼前显示才记「看过」。
 提示只在静态资格成立时显示，离开时用同一个判断（IM 接管状态只能在任务所在电脑上查，远程任务没有确认框兜底就不静默收走，卡片上的归档按钮照旧可用），所以提示不会承诺一次不会发生的归档。
 离开普通任务页（包括直接切到另一个任务，按离开那个任务最后一次渲染的信息处理）时，看过、没取消、任务没在运行、没被接管、
@@ -5157,6 +5174,15 @@ Agent 的 GitHub 工具和脚本入口仍不支持 GitLab，不复用其 GitHub 
 帧格式、认证、版本或部署程序。验证入口为 `pnpm --filter @cindy/device-link test`、
 `pnpm --filter @cindy/device-link-relay test` 与
 `pnpm --filter @cindy/device-link-relay run interop`；结果以本次交付的执行日志为准。
+
+## 浏览器插件更新与选择状态（2026-11-07）
+
+`BrowserBackendHealthReason` 和 Browser Use `status.data.reason` 增加可选状态
+`plugin-updating`、`plugin-selection-required`，分别说明插件更新进行中、控制端需要用户选择。
+旧宿主仍返回原有 `plugin-missing`；新版设置页同时检查插件能力声明，避免把支持页面控制的插件
+误报为旧版本。旧查看端遇到新原因按原有通用错误回退，不新增 IPC、权限或写入入口。
+扩展桥接更新暂停期间，新作业返回 `BRIDGE_UPDATING` 和 `execution:not_executed`；已接受作业
+继续沿用原有结果／超时和 `unknown` 语义，不新增重放行为，不要求浏览器扩展升级。
 
 ### Codex 提问身份与活动回执（2026-11-07）
 

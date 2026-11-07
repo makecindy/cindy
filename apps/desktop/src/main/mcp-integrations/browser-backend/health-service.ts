@@ -13,6 +13,7 @@ interface HealthController {
 }
 
 interface HealthLogger {
+  info?(message: string, ...args: unknown[]): void;
   warn(message: string, ...args: unknown[]): void;
 }
 
@@ -43,6 +44,7 @@ function classifyFailure(
  * clicks cannot race two replacement generations.
  */
 export class BrowserBackendHealthService {
+  private lastUserBrowserHealth: string | undefined;
   private recoveryInFlight: {
     ensureHost: boolean;
     promise: Promise<BrowserBackendRecoveryResult>;
@@ -56,6 +58,15 @@ export class BrowserBackendHealthService {
 
   async getHealth(): Promise<BrowserBackendHealth> {
     const health = await this.probe();
+    if (health.active === 'user-browser') {
+      const state = `${health.reason ?? health.status}:${health.errorCode ?? ''}`;
+      if (state !== this.lastUserBrowserHealth) {
+        this.logger.info?.('user browser settings health changed', {
+          previous: this.lastUserBrowserHealth ?? 'unknown', state, errorCode: health.errorCode,
+        });
+        this.lastUserBrowserHealth = state;
+      }
+    }
     if (health.status === 'error' && health.active === 'rsb-webview') {
       this.logger.warn('embedded browser health check failed; attempting automatic recovery', {
         reason: health.reason,
@@ -171,18 +182,27 @@ export class BrowserBackendHealthService {
     if (active === 'user-browser') {
       try {
         const status = await this.controller.call({ action: 'status' });
-        const data = status.data as { connected?: unknown; configured?: unknown } | undefined;
+        const data = status.data as { connected?: unknown; configured?: unknown; error?: unknown; reason?: unknown } | undefined;
         if (status.ok && data?.connected === true) return { active, status: 'ready', canRecover: false };
-        // No plugin provides page control (not installed or disabled) vs. plugin ready but no extension yet.
+        const errorCode = status.errorCode ?? data?.error;
+        // Preserve a bounded diagnostic code, not an arbitrary bridge error message.
+        const diagnostic = typeof errorCode === 'string' && /^[A-Z][A-Z0-9_]{0,79}$/.test(errorCode)
+          ? { errorCode } : {};
+        // Missing plugin, failed probe and disconnected extension require different guidance.
         return {
           active,
           status: 'error',
           canRecover: false,
-          reason: status.ok && data?.configured === false ? 'plugin-missing' : 'extension-disconnected',
+          ...diagnostic,
+          reason: !status.ok || data?.error ? 'status-failed'
+            : data?.configured === false
+              ? data.reason === 'plugin-updating' || data.reason === 'plugin-selection-required'
+                ? data.reason : 'plugin-missing'
+              : 'extension-disconnected',
         };
       } catch (err) {
         this.logger.warn('user browser status probe failed', { err });
-        return { active, status: 'error', canRecover: false, reason: 'extension-disconnected' };
+        return { active, status: 'error', canRecover: false, reason: 'status-failed' };
       }
     }
     // External Chrome has a separate availability/recovery UI. This contract

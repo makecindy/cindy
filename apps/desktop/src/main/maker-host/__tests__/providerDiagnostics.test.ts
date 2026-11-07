@@ -86,6 +86,26 @@ describe('classifyProviderError', () => {
     expect(classifyProviderError({ status: 400, bodyText: 'something odd' }).code).toBe('UNKNOWN');
   });
 
+  // Regression: Azure/LiteLLM's "exceeds ... context window" was UNKNOWN here
+  // although the Agent already recognized it. Unit: real classifier, no network.
+  it.each([400, 422])('%i recognizes context overflow without requiring a structured code', (status) => {
+    const message = 'Your input exceeds the context window of this model.';
+    for (const bodyText of [message, JSON.stringify({ error: { message } })]) {
+      expect(classifyProviderError({ status, bodyText })).toMatchObject({
+        code: 'CONTEXT_TOO_LONG', retryable: false,
+      });
+    }
+  });
+
+  it.each([
+    'Invalid Responses API request: input - Invalid input',
+    'Rate limit exceeded: too many tokens per minute',
+    'Maximum output tokens reached: too many tokens',
+    'Tool argument validation failed: input length exceeds 1000 characters',
+  ])('does not classify unrelated input/token errors as context overflow: %s', (bodyText) => {
+    expect(classifyProviderError({ status: 400, bodyText }).code).not.toBe('CONTEXT_TOO_LONG');
+  });
+
   it('403 命中鉴权措辞归 AUTH_INVALID（部分网关 key 无效报 403）', () => {
     expect(classifyProviderError({ status: 403, bodyText: 'invalid api key provided' }).code).toBe(
       'AUTH_INVALID',

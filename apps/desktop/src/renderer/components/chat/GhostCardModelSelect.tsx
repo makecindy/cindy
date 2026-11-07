@@ -19,12 +19,14 @@ export function GhostCardModelSelect({
   initial,
   onSelect,
   onClose,
+  inDialog = false,
 }: {
   /** 被点按钮在卡片锚容器内的位置。 */
   rect: { top: number; left: number; width: number; height: number };
   initial: GhostCardModelSelection | null;
   onSelect(route: GhostCardModelSelection): void;
   onClose(): void;
+  inDialog?: boolean;
 }) {
   const [route, setRoute] = useState(initial);
   const draft = useRef(initial);
@@ -72,6 +74,7 @@ export function GhostCardModelSelect({
         className={cn(
           'flex min-h-0 w-auto max-h-[var(--radix-popover-content-available-height)] flex-col overflow-hidden rounded-[12px] p-0',
           'border border-[var(--model-dropdown-border)] bg-[var(--model-dropdown-bg)]',
+          inDialog && 'z-[10001]',
         )}
       >
         <ModelSelectorContent

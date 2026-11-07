@@ -320,7 +320,7 @@ export function SkillhubHomeContent({
           onClick={() => void handleImportSkill()}
           disabled={importBusy || !!target}
           aria-label={t('skillhub.home.importAria')}
-          className="plugin-management-action-trigger shrink-0 shadow-[var(--plugin-card-shadow)]"
+          className="plugin-management-action-trigger shrink-0"
         >
           <Upload size={14} strokeWidth={1.8} aria-hidden="true" />
           <span className="plugin-management-action-label">{t('skillhub.home.import')}</span>
@@ -405,7 +405,7 @@ export function SkillhubHomeContent({
                     {Array.from({ length: MARKET_PAGE_SIZE }).map((_, i) => (
                       <div
                         key={i}
-                        className="flex min-h-[100px] flex-col gap-2 rounded-[12px] border-[0.5px] border-[var(--border-default)] bg-[var(--surface-elevated)] p-3 shadow-[var(--plugin-card-shadow)]"
+                        className="flex min-h-[100px] flex-col gap-2 rounded-[12px] border-[0.5px] border-[var(--border-default)] bg-[var(--surface-elevated)] p-3"
                       >
                         <div className="flex items-center gap-2">
                           <div className="size-9 shrink-0 animate-pulse rounded-xl bg-[var(--cmd-palette-item-hover)] opacity-60" />
@@ -589,7 +589,7 @@ function LocalGroup({
               onClick={() => onOpen(s)}
               className={cn(
                 'group flex w-full items-start gap-3 rounded-[12px] border-[0.5px] border-[var(--border-default)] px-3 py-2.5 text-left',
-                'bg-[var(--surface-elevated)] shadow-[var(--plugin-card-shadow)]',
+                'bg-[var(--surface-elevated)]',
                 'transition-[background-color,border-color,transform] duration-150 ease-out',
                 'hover:-translate-y-0.5 hover:border-[var(--text-tertiary)]',
                 'active:translate-y-0 active:scale-[0.992]',
@@ -599,7 +599,7 @@ function LocalGroup({
               {s.kind === 'skill' ? (
                 <SkillIcon />
               ) : (
-                <span className="flex size-9 shrink-0 items-center justify-center rounded-[22%] border-[0.5px] border-[var(--border-default)] bg-[var(--surface-elevated)] text-[var(--text-primary)] shadow-[var(--plugin-card-shadow)]">
+                <span className="flex size-9 shrink-0 items-center justify-center rounded-[22%] border-[0.5px] border-[var(--border-default)] bg-[var(--surface-elevated)] text-[var(--text-primary)]">
                   <Icon size={17} strokeWidth={1.75} />
                 </span>
               )}

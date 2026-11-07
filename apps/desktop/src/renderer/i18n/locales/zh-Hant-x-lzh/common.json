@@ -5557,12 +5557,17 @@
         "userBrowserSetup": {
           "installPluginTitle": "納 Cindy Chrome 法器",
           "enablePluginTitle": "啟 Cindy Chrome 法器",
-          "installExtensionTitle": "將 Cindy 擴充裝入瀏覽器",
+          "connectExtensionTitle": "瀏覽器擴充尚未連",
           "pluginBody": "「我之瀏覽器」藉 Cindy Chrome 法器及其瀏覽器擴充，連君之 Chrome / Edge。先於 Cindy 中納法器，再依提示將擴充裝入瀏覽器。",
-          "extensionBody": "點「納瀏覽器擴充」，將於君之瀏覽器開 Cindy 擴充之商店頁，點「新增」後此處自轉為已連。早已裝過？請於瀏覽器之擴充功能管理中啟之。",
+          "connectionBody": "請保持 Cindy 與瀏覽器運行，並查 Cindy 擴充是否已啟。未連非須重裝；復連後，此處自更。",
           "installPlugin": "納法器",
           "enablePlugin": "往啟",
-          "installExtension": "納瀏覽器擴充",
+          "openExtensionStore": "開擴充商店",
+          "updatingTitle": "正更新瀏覽器連線",
+          "updatingBody": "更新既畢，連線自復。",
+          "selectPluginTitle": "擇瀏覽器擴充功能",
+          "selectPluginBody": "請啟法器詳情，擇「使用此瀏覽器擴充功能」，以定 Cindy 所用。",
+          "selectPlugin": "啟法器",
           "updatePluginTitle": "更新 Cindy Chrome 法器",
           "updatePluginBody": "所納 Cindy Chrome 法器版本較舊，尚不支援「我之瀏覽器」。更新至最新版後，再依提示將擴充裝入瀏覽器。",
           "updatePlugin": "往更新",
@@ -14062,8 +14067,10 @@
       "mailLegacy": "舊稿（唯讀）",
       "taskAutoArchived": "「{{title}}」已封存",
       "taskAutoArchivedUndo": "撤",
-      "taskAutoArchivePending": "去則自封存",
-      "taskAutoArchiveCancel": "此番不封"
+      "taskAutoArchivePending": "離此任務後自封存",
+      "taskAutoArchiveCancel": "取消",
+      "taskAutoArchiveCancelled": "此番不自封存",
+      "taskArchiveNow": "即封存"
     },
     "ghostHook": {
       "blockedFallback": "訊為法器所攔，未遣",

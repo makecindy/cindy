@@ -5557,12 +5557,17 @@
         "userBrowserSetup": {
           "installPluginTitle": "安装 Cindy Chrome 插件",
           "enablePluginTitle": "启用 Cindy Chrome 插件",
-          "installExtensionTitle": "把 Cindy 扩展装进浏览器",
+          "connectExtensionTitle": "浏览器扩展尚未连接",
           "pluginBody": "「我的浏览器」通过 Cindy Chrome 插件和它的浏览器扩展连接你的 Chrome / Edge。先在 Cindy 里装好插件，再按提示把扩展装进浏览器。",
-          "extensionBody": "点「安装浏览器扩展」会在你的浏览器里打开 Cindy 扩展的商店页面，点「添加」后这里会自动变成已连接。已经装过？在浏览器的扩展管理里启用它。",
+          "connectionBody": "保持 Cindy 和浏览器运行，并检查 Cindy 扩展是否启用。未连接不代表需要重新安装；连接恢复后，这里会自动更新。",
           "installPlugin": "安装插件",
           "enablePlugin": "去启用",
-          "installExtension": "安装浏览器扩展",
+          "openExtensionStore": "打开扩展商店",
+          "updatingTitle": "正在更新浏览器连接",
+          "updatingBody": "更新完成后会自动恢复连接。",
+          "selectPluginTitle": "选择浏览器扩展",
+          "selectPluginBody": "请打开插件详情，选择「使用此浏览器扩展」，确认 Cindy 使用的扩展。",
+          "selectPlugin": "打开插件",
           "updatePluginTitle": "更新 Cindy Chrome 插件",
           "updatePluginBody": "已装的 Cindy Chrome 插件版本较旧，还不支持「我的浏览器」。更新到最新版后，再按提示把扩展装进浏览器。",
           "updatePlugin": "去更新",
@@ -14071,8 +14076,10 @@
       "mailLegacy": "历史草稿（只读）",
       "taskAutoArchived": "已归档「{{title}}」",
       "taskAutoArchivedUndo": "撤销",
-      "taskAutoArchivePending": "离开后自动归档",
-      "taskAutoArchiveCancel": "本次不归档"
+      "taskAutoArchivePending": "离开此任务后将自动归档",
+      "taskAutoArchiveCancel": "取消",
+      "taskAutoArchiveCancelled": "本次不会自动归档",
+      "taskArchiveNow": "立即归档"
     },
     "ghostHook": {
       "blockedFallback": "消息被插件拦下，未发送",

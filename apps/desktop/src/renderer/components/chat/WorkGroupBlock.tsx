@@ -81,8 +81,7 @@ export type WorkGroupChild =
       childItems: WorkGroupChild[];
       deferred?: import('@cindy/maker-shared/message-window').DeferredHistoryWork;
     }
-  | { kind: 'rendered';
-      prose?: boolean; key: string; renderNode: () => ReactNode };
+  | { kind: 'rendered'; key: string; renderNode: () => ReactNode };
 
 export type LiveWorkActivity = ProjectedWorkActivity;
 
@@ -383,6 +382,9 @@ function TeammateProcessBlock({ blockId, childItems, isStreaming = false, journa
     return () => releases.forEach(release => release?.());
   }, [loaderKey, expanded]);
   const segments = useMemo(() => segmentTeammateWork(flattened.leaves, child => child.kind === 'tools' || child.kind === 'thinking'), [flattened.leaves]);
+  // Detail reads also refresh while work is running. Keep their feedback in the
+  // existing heading slot so each read cannot add/remove a row and shift the chat.
+  const loadingDetails = flattened.loaders.some(loader => loader.loading);
   const inspect = () => { memory.setExpanded(true); manual.setExpanded(true); };
   const elapsed = <TeammateElapsedTitle running={isStreaming} durationMs={durationMs} startedAtMs={startedAtMs} />;
   const title = typeof journalTitle === 'function' ? journalTitle(elapsed) : journalTitle || elapsed;
@@ -390,7 +392,7 @@ function TeammateProcessBlock({ blockId, childItems, isStreaming = false, journa
     <button type="button" data-scroll-disclosure-header="" aria-expanded={expanded}
       onClick={() => { memory.setExpanded(!expanded); manual.setExpanded(true); }}
       className="flex min-h-8 w-fit max-w-full items-center gap-2 rounded-none py-1 text-left text-14 text-[var(--text-secondary)] focus-ring">
-      <span className="inline-flex w-4 shrink-0 items-center justify-center" aria-hidden>{isStreaming ? <Spinner size={14} /> : <Layers size={14} />}</span>
+      <span className="inline-flex w-4 shrink-0 items-center justify-center" aria-hidden>{isStreaming || loadingDetails ? <Spinner size={14} /> : <Layers size={14} />}</span>
       <span className="min-w-0 break-words">{title}</span>
       <ChevronRight size={14} className={cn(CHAT_CHEVRON_TRANSITION_CLASS, 'shrink-0', expanded && 'rotate-90')} />
     </button>
@@ -402,9 +404,7 @@ function TeammateProcessBlock({ blockId, childItems, isStreaming = false, journa
             ? <Fragment key={segment.key}>{segment.item.kind === 'rendered' && segment.item.renderNode()}</Fragment>
             : <TeammateWorkSegment key={segment.key} blockId={`${blockId}:${segment.key}`} childItems={segment.items}
                 active={isStreaming && index === segments.length - 1} onInspect={inspect} />)}
-          {flattened.loaders.some(loader => loader.loading) && <Spinner size={14} />}
           {flattened.loaders.filter(loader => loader.failed).map(loader => <Button key={loader.key} variant="secondary" onClick={loader.retry}>{t('chat.errorBanner.retry')}</Button>)}
-          {isStreaming && segments.at(-1)?.kind === 'content' && flattened.leaves.at(-1)?.kind === 'rendered' && (flattened.leaves.at(-1) as Extract<WorkGroupChild, { kind: 'rendered' }>).prose && <div className="flex items-center gap-2 text-14 text-[var(--text-secondary)]"><Spinner size={14} />{t('chat.teammateProcess.thinking')}</div>}
         </div></InspectTeammateProcess.Provider>
       </div>
     </Collapse>

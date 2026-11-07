@@ -1,3 +1,4 @@
+import type { ViewInstance, ScrollViewInstance } from 'react-native';
 import { ComposerAttachmentPreview } from "@/session/ComposerAttachmentPreview";
 import { snapshotRichAnswerValues } from '@/session/RichAnswer';
 import { PluginUiEnablePrompt } from '@/plugins/PluginUiEnablePrompt';
@@ -118,7 +119,7 @@ import { MobileAgentMark } from '@/components/MobileAgentMark';
 import { mobileInteractionStyles } from '@/components/mobileInteractionStyles';
 import { SessionHeaderNativeBack, SessionHeaderNativeActions, SessionHeaderNativeTitle, SessionHeaderNativeBlur } from '@/session/SessionHeaderNativeControls';
 import { TaskTagDots } from '@/session/TaskTags';
-import type { TextInput as NativeTextInput } from 'react-native';
+
 import { ScreenBackButton } from '@/components/MobilePrimitives';
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useAuth } from '@/auth/AuthContext';
@@ -1293,8 +1294,8 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
     draftRef.current = nextDraft;
   }
   const conversationShareSvgRef = useRef<ConversationShareSvgHandle | null>(null);
-  const topOverlayRef = useRef<View>(null);
-  const bottomOverlayRef = useRef<View>(null);
+  const topOverlayRef = useRef<ViewInstance>(null);
+  const bottomOverlayRef = useRef<ViewInstance>(null);
   const shareSelectionActiveRef = useRef(shareSelectionActive);
   shareSelectionActiveRef.current = shareSelectionActive;
   const shareSelectionRevisionRef = useRef(shareSelectionRevision);
@@ -2165,7 +2166,7 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
     draftOverride?: string;
     documentOverride?: ComposerDocument;
   }) => Promise<boolean | void>) | null>(null);
-  const sendButtonRef = useRef<View>(null);
+  const sendButtonRef = useRef<ViewInstance>(null);
   const composerSendTargetEnabledRef = useRef(false);
   // Match the keyed palette lifetime. Old requests/cleanup retain their old
   // reference and cannot affect command dispatch in the next draft scope.
@@ -12200,7 +12201,7 @@ function SessionHeaderIconButton({
   active?: boolean;
   attention?: boolean;
   /** 需要外部定位本钮时传入(如三条杠:抽屉关闭后读屏焦点归还锚点)。 */
-  buttonRef?: RefObject<View | null>;
+  buttonRef?: RefObject<ViewInstance | null>;
   disabled?: boolean;
   /** 38×38 可见钮低于 44 触控底线时用它补热区(如左上角三条杠)。 */
   hitSlop?: PressableProps['hitSlop'];
@@ -12708,11 +12709,11 @@ function SessionComposerInput({
   const [composerInputContentHeight, setComposerInputContentHeight] = useState(COMPOSER_INPUT_SINGLE_LINE_CONTENT_HEIGHT);
   const [composerAttachmentTrayHeight, setComposerAttachmentTrayHeight] = useState(0);
   const [voiceDraftCaretFrame, setVoiceDraftCaretFrame] = useState({ left: 0, top: 0 });
-  const voiceDraftCaretRef = useRef<View>(null);
-  const voiceDraftMeasuredBlockRef = useRef<View>(null);
-  const composerScrollViewRef = useRef<ScrollView>(null);
+  const voiceDraftCaretRef = useRef<ViewInstance>(null);
+  const voiceDraftMeasuredBlockRef = useRef<ViewInstance>(null);
+  const composerScrollViewRef = useRef<ScrollViewInstance>(null);
   const composerScrollEnabledRef = useRef(false);
-  const voiceDraftScrollRef = useRef<ScrollView>(null);
+  const voiceDraftScrollRef = useRef<ScrollViewInstance>(null);
   const composerTrigger = useMemo(() => detectComposerTrigger(draft), [draft]);
   const voiceUiAvailable = shouldShowMobileVoiceUi(Platform.OS);
   const voiceIsListening = voiceState === 'listening';
@@ -13503,7 +13504,7 @@ interface RouteActionButtonProps {
   testID?: string;
 }
 
-const RouteActionButton = forwardRef<View, RouteActionButtonProps>(function RouteActionButton({
+const RouteActionButton = forwardRef<ViewInstance, RouteActionButtonProps>(function RouteActionButton({
   accessibilityHint,
   accessibilityLabel,
   active = false,

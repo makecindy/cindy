@@ -1,11 +1,12 @@
+import type { TextInputInstance, ScrollViewInstance } from 'react-native';
 import { useCallback, useRef } from 'react';
-import type { FocusEvent, ScrollView, TextInput } from 'react-native';
+import type { FocusEvent } from 'react-native';
 
-type InputTarget = FocusEvent['target'] & Partial<Pick<TextInput, 'isFocused'>>;
+type InputTarget = FocusEvent['target'] & Partial<Pick<TextInputInstance, 'isFocused'>>;
 
 /** Reveal the answer and actions together while the question input is focused. */
 export function usePendingQuestionScroll(requestId: string | null) {
-  const scrollRef = useRef<ScrollView>(null);
+  const scrollRef = useRef<ScrollViewInstance>(null);
   const focused = useRef<{ requestId: string | null; input: InputTarget } | null>(null);
   const reveal = useCallback(() => {
     const current = focused.current;
