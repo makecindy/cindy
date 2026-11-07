@@ -246,6 +246,7 @@ import {
   assertPiSpawnArgvFitsPlatform,
   collectPiProjectResourceCliPaths,
   emptyPiProjectResourceCliPaths,
+  collectPiProjectResourceWatchRootMtimes,
   filterPiProjectCliSkills,
   piProjectResourceCliArgs,
   piProjectResourcesDrifted,
@@ -4063,6 +4064,11 @@ export class PiAgent extends BaseAgent {
     // Local root tasks load project skills/prompts/extensions in place via
     // explicit CLI flags. Keep --no-approve so `.pi/settings.json` is unread.
     // 受邀者：只要会话目录内的技能与提示词模板，项目扩展不加载(会在本机执行)。
+    // watch 基线必须先于路径收集采样(见 snapshotPiProjectResourceLaunch):
+    // 基线在前,采样窗口内新增的资源只会让首次快检多一次重扫后收敛;反序会静默漏检。
+    const projectResourceWatchRootMtimes = loadProjectResourcesInPlace && !guestRoot
+      ? collectPiProjectResourceWatchRootMtimes(opts.workingDir)
+      : null;
     const collectedProjectResources = loadProjectResourcesInPlace
       ? guestRoot
         ? restrictPiGuestProjectResources(collectPiProjectResourceCliPaths(opts.workingDir), guestRoot)
@@ -4080,8 +4086,8 @@ export class PiAgent extends BaseAgent {
     // 启动快照:供运行时空闲时的资源漂移检测(见 handle.hasProjectResourceDrift)。
     // 快照存未经禁用过滤的原始收集结果,与 drift 检测的 fresh collect 同口径;
     // 受邀者会话的 collected 已按 guestRoot 裁剪,与全量扫描口径不一致,不参与漂移检测。
-    const projectResourceLaunchSnapshot = loadProjectResourcesInPlace && !guestRoot
-      ? snapshotPiProjectResourceLaunch(opts.workingDir, collectedProjectResources)
+    const projectResourceLaunchSnapshot = projectResourceWatchRootMtimes
+      ? snapshotPiProjectResourceLaunch(opts.workingDir, collectedProjectResources, projectResourceWatchRootMtimes)
       : null;
 
     // Own the entire managed-skill setup in the existing startup rollback:

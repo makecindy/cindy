@@ -383,8 +383,8 @@ export interface MakerSendTransactionSession {
   /** Codex host-owned evidence: a provider turn crossed acceptance on this runtime. */
   codexThreadMayHaveRollout?: boolean;
   isTurnRunning(): boolean;
-  /** 项目资源漂移回收(仅 pi 本地根任务实现;其余会话缺省,永漂移)。 */
-  recycleIfProjectResourcesDrifted?(): Promise<boolean>;
+  /** 项目资源漂移且满足回收空闲口径(仅 pi 本地根任务实现;其余会话缺省,永不回收)。 */
+  hasRecyclableProjectResourceDrift?(): boolean;
   send(message: UserMessage | string, opts?: SessionSendOptions): Promise<SessionSendResult>;
 }
 
@@ -396,6 +396,9 @@ export interface MakerSendTransactionLog {
 export interface MakerSendTransactionDeps {
   getSession(sessionId: string): MakerSendTransactionSession | undefined | null;
   closeSession(sessionId: string): Promise<void>;
+  /** 资源漂移回收必须走 Maker 的 runtime-refresh 原因(直接 Session.close 会被
+   * IM runner 当 unexpected 丢弃排队回合);内部用 closeSessionIfCurrent 幂等。 */
+  closeSessionIfCurrent(sessionId: string): Promise<void>;
   preflightBotRuntimeResources(opts: CreateOpts): Promise<void>;
   getSessionMeta(sessionId: string): Promise<{ title?: string } | null>;
   /** The same clear/rewind-filtered transcript used for native context handoffs. */
@@ -1195,9 +1198,12 @@ export function createMakerSendTransaction(deps: MakerSendTransactionDeps): Make
         deps.log.info('send: error session requires recovery before dispatch', { sessionId });
         sess = undefined;
       }
-      // 会话中途新增的项目资源(如 openspec init):空闲时回收运行时,
-      // 下面的 lazy bootstrap 会重扫重算 argv 后再投递(见 Session.recycleIfProjectResourcesDrifted)。
-      if (sess && await sess.recycleIfProjectResourcesDrifted?.()) {
+      // 会话中途新增的项目资源(如 openspec init):空闲时经 Maker 以
+      // 'runtime-refresh' 回收运行时(session:closed 带刷新原因,IM runner 保留
+      // 排队回合),下面的 lazy bootstrap 会重扫重算 argv 后再投递
+      // (见 Session.hasRecyclableProjectResourceDrift 的空闲口径说明)。
+      if (sess?.hasRecyclableProjectResourceDrift?.()) {
+        await deps.closeSessionIfCurrent(sessionId);
         deps.log.info('send: project resources drifted, recycling runtime before dispatch', { sessionId });
         sess = undefined;
       }

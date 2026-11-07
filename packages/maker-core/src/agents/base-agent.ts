@@ -2338,7 +2338,7 @@ export type TurnContinuationState = 'awaiting' | 'active' | 'cancelled';
  * Callers that cannot identify their boundary must omit the reason: teardown
  * then fails closed to `account-boundary`.
  */
-export type AgentSessionTeardownReason = 'navigation' | 'account-boundary' | 'app-quit' | 'resource-refresh';
+export type AgentSessionTeardownReason = 'navigation' | 'account-boundary' | 'app-quit';
 
 export interface AgentSessionTeardownOptions {
   readonly reason: AgentSessionTeardownReason;

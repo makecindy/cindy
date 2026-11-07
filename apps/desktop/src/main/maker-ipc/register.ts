@@ -13204,8 +13204,11 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
         // whose Maker.createSession call performs the existing bounded close retry.
         live = undefined;
       }
-      // 会话中途新增的项目资源(如 openspec init):空闲时回收运行时,lazy resume 重扫重建
-      if (live?.agentKind === 'pi' && await live.recycleIfProjectResourcesDrifted()) {
+      // 会话中途新增的项目资源(如 openspec init):空闲时经 Maker 以
+      // 'runtime-refresh' 回收运行时(直接 Session.close 会丢 Maker 原因,IM 侧按
+      // unexpected 清排队回合),lazy resume 重扫重建
+      if (live?.agentKind === 'pi' && live.hasRecyclableProjectResourceDrift()) {
+        await maker.closeSessionIfCurrent(live, 'runtime-refresh');
         live = undefined;
       }
       if (live) {
@@ -18845,6 +18848,10 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     },
     getSession: (sessionId) => maker.getSession(sessionId),
     closeSession: (sessionId) => maker.closeSession(sessionId),
+    closeSessionIfCurrent: async (sessionId) => {
+      const current = maker.getSession(sessionId);
+      if (current) await maker.closeSessionIfCurrent(current, 'runtime-refresh');
+    },
     getSessionMeta: (sessionId) => maker.getSessionMeta(sessionId),
     ensureRemoteReadyForSessionStart: async (params) => {
       await ensureRemoteReadyForSessionStart(params);

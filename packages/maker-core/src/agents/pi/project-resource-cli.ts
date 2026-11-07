@@ -284,16 +284,17 @@ function watchPiExtensionChildMtimes(roots: Map<string, number>, extDir: string)
   }
 }
 
-/** 冻结一份启动快照(mtime 基线在调用时采集,后续可由 drift 检测就地刷新)。 */
+/**
+ * 冻结一份启动快照。watchRootMtimes 必须由调用方在收集 paths **之前**采样传入
+ * (见 pi/index.ts 调用点):基线在前,采样窗口内新增的资源只会让首次快检多一次
+ * 重扫后收敛;反过来(先收集后采样)会漏掉窗口内新增的资源,静默漏检。
+ */
 export function snapshotPiProjectResourceLaunch(
   workingDir: string,
   paths: PiProjectResourceCliPaths,
+  watchRootMtimes: Map<string, number>,
 ): PiProjectResourceLaunchSnapshot {
-  return Object.freeze({
-    workingDir,
-    paths,
-    watchRootMtimes: collectPiProjectResourceWatchRootMtimes(workingDir),
-  });
+  return Object.freeze({ workingDir, paths, watchRootMtimes });
 }
 
 function samePiResourceList(left: readonly string[], right: readonly string[]): boolean {

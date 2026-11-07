@@ -217,22 +217,19 @@ describe('Session close lifecycle', () => {
     handle.hasPendingHostOperation = () => hostOperationInFlight;
     handle.hasProjectResourceDrift = () => true;
 
-    // 手动压缩等宿主排他操作进行中:即使资源已漂移也绝不回收(否则会关掉
+    // 手动压缩等宿主排他操作进行中:即使资源已漂移也判定不可回收(否则会关掉
     // 正在等待结果的压缩请求),与 closeIfIdle 同一口径。
-    await expect(session.recycleIfProjectResourcesDrifted()).resolves.toBe(false);
-    expect(handle.close).not.toHaveBeenCalled();
+    expect(session.hasRecyclableProjectResourceDrift()).toBe(false);
 
     hostOperationInFlight = false;
-    await expect(session.recycleIfProjectResourcesDrifted()).resolves.toBe(true);
-    expect(handle.close).toHaveBeenCalledOnce();
+    expect(session.hasRecyclableProjectResourceDrift()).toBe(true);
   });
 
   it('skips resource recycling while a turn is running even if resources drifted', async () => {
     const { session, handle } = liveTurn();
     handle.hasProjectResourceDrift = () => true;
     await session.send('work');
-    expect(await session.recycleIfProjectResourcesDrifted()).toBe(false);
-    expect(handle.close).not.toHaveBeenCalled();
+    expect(session.hasRecyclableProjectResourceDrift()).toBe(false);
     await session.close();
   });
 

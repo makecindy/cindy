@@ -40,7 +40,9 @@ function statMtime(target: string): number {
 }
 
 function snapshot() {
-  return snapshotPiProjectResourceLaunch(project, collectPiProjectResourceCliPaths(project));
+  // 与生产调用点同序:基线先采样,路径后收集(见 snapshotPiProjectResourceLaunch)。
+  const watchRootMtimes = collectPiProjectResourceWatchRootMtimes(project);
+  return snapshotPiProjectResourceLaunch(project, collectPiProjectResourceCliPaths(project), watchRootMtimes);
 }
 
 describe('piProjectResourcesDrifted', () => {
@@ -97,7 +99,8 @@ describe('piProjectResourcesDrifted', () => {
     writeFileSync(path.join(project, '.git'), '');
     const nested = path.join(project, 'sub');
     mkdirSync(nested, { recursive: true });
-    const baseline = snapshotPiProjectResourceLaunch(nested, collectPiProjectResourceCliPaths(nested));
+    const baseline = snapshotPiProjectResourceLaunch(
+      nested, collectPiProjectResourceCliPaths(nested), collectPiProjectResourceWatchRootMtimes(nested));
     writeSkill(path.join('.agents', 'skills'), 'gamma');
     expect(piProjectResourcesDrifted(baseline)).toBe(true);
   });
@@ -182,6 +185,19 @@ describe('piProjectResourcesDrifted', () => {
     expect(roots.has(path.join(ns, 'alpha'))).toBe(true);
     expect(roots.has(path.join(ns, 'plain'))).toBe(true);
     expect(roots.has(path.join(project, '.pi', 'extensions', 'myext'))).toBe(true);
+  });
+
+  it('launch snapshot samples watch roots before path collection (race-safe order)', () => {
+    // 生产调用点先采基线后收集路径。基线采样与路径收集之间新增的资源已在集合
+    // 里且基线较旧:首次快检多一次重扫确认集合一致后刷新基线 —— 既不误报漂移,
+    // 也不会静默漏检(反序才会漏)。
+    const watchRootMtimes = collectPiProjectResourceWatchRootMtimes(project);
+    writeSkill(path.join('.pi', 'skills'), 'alpha');
+    const baseline = snapshotPiProjectResourceLaunch(
+      project, collectPiProjectResourceCliPaths(project), watchRootMtimes);
+    expect(piProjectResourcesDrifted(baseline)).toBe(false);
+    expect(baseline.watchRootMtimes.get(path.join(project, '.pi', 'skills')))
+      .toBe(statMtime(path.join(project, '.pi', 'skills')));
   });
 
   it('missing directories baseline as -1 and compare against real mtimes', () => {

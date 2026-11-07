@@ -311,9 +311,9 @@ export function createRemoteAgentHandle(deps: RemoteHandleDeps): RemoteAgentHand
   const teardown = async (mode: 'close' | 'detach', opts?: AgentSessionTeardownOptions) => {
     deps.cancelPendingConfirmations?.();
     const reason = opts?.reason ?? 'navigation';
-    // 'resource-refresh' 只由本地根任务的资源回收(Session.recycleIfProjectResourcesDrifted)产生;
-    // 远端会话无启动快照永不漂移,wire 协议不扩这个值,跨机器时按 navigation 关闭。
-    const wireReason: RemoteAgentTeardownReason = reason === 'resource-refresh' ? 'navigation' : reason;
+    // 远端会话无项目资源启动快照,永不漂移,不存在资源回收关闭;资源刷新关闭由
+    // Maker 侧以 'runtime-refresh' 原因走 closeSessionIfCurrent,不进远端 wire。
+    const wireReason: RemoteAgentTeardownReason = reason;
     if (reason === 'account-boundary') {
       // The Agent uses the other computer's credentials. A failed notification
       // is not evidence of a surviving local Pi process (#6921). Release local

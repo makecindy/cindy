@@ -2299,22 +2299,22 @@ export class Session {
   }
 
   /**
-   * 空闲且项目资源漂移时回收运行时:close 后由 host 的 lazy bootstrap 在下次发送时
-   * 重新 startSession(重扫项目资源、重算 argv)。返回是否发生了回收。
-   * 与 closeIfIdle 同一空闲口径:turn 运行中、结束未收口的 turn、换代续接、以及
-   * 手动压缩 / rewind 等宿主排他操作进行中绝不回收 —— 否则会关掉正在等待结果的
-   * 压缩请求;中途新增的 openspec 类项目 skill 由此在下一条消息前生效。
+   * 项目资源漂移且满足回收空闲口径时返回 true。只判定不执行 close:close 必须由
+   * 持有 Maker 的调用方走 closeSessionIfCurrent(session, 'runtime-refresh'),让
+   * session:closed 带上 Maker 认识的刷新原因 —— 直接 Session.close 绕过 Maker 的
+   * closeReasons 登记,IM runner 会按 unexpected 清掉排队中的回合、丢失已接受的
+   * 派发。空闲口径与 closeIfIdle 一致:turn 运行中、结束未收口的 turn、换代续接、
+   * 手动压缩 / rewind 等宿主排他操作进行中绝不回收。回收后由既有 lazy bootstrap
+   * 在下次发送时重扫项目资源、重算 argv。
    */
-  async recycleIfProjectResourcesDrifted(): Promise<boolean> {
+  hasRecyclableProjectResourceDrift(): boolean {
     if (this.status !== 'active' || this.closePromise) return false;
     if (this.isTurnRunning() || this.hasUnsettledTurn()
       || this.retirementContinuationGeneration === this.turnGeneration
       || this.hasPendingHostOperation()) {
       return false;
     }
-    if (!this.hasProjectResourceDrift()) return false;
-    await this.close({ reason: 'resource-refresh' });
-    return true;
+    return this.hasProjectResourceDrift();
   }
 
   getCurrentTurnId(): string | null {
