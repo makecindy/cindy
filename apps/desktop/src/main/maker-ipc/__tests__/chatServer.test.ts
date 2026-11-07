@@ -1733,7 +1733,10 @@ describe('Chat Server result delivery and refresh', () => {
     await startFileReply();
     await service.settleLaneTurn({ ...terminal, resultText: '[Report](./report.pdf)' });
     expect(deliveries()).toHaveLength(0);
-    expect(fixture.handle.mock.calls.filter(([, , body]) => body?.action === 'fail')).toHaveLength(1);
+    // A transport error remains pending for the existing retry ladder. It must
+    // not publish a text-only success or convert a recoverable network failure
+    // into a permanent runtime failure.
+    expect(fixture.handle.mock.calls.filter(([, , body]) => body?.action === 'fail')).toHaveLength(0);
   });
 
   it('does not downgrade a reply containing an image when file preparation fails', async () => {

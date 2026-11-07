@@ -234,6 +234,11 @@ export function showDeviceSessionDesktopEvent(
 
 export interface NotificationServiceDeps {
   isCompletionHandledByTeammate?: (sessionId: string) => Promise<boolean>;
+  /**
+   * The task surface already alerts for this event (Agent Notch, or the Live Activity
+   * while it can show), so the OS notification would repeat it.
+   */
+  isTaskAlertShownElsewhere?: (kind: 'done' | 'error' | 'needs-reply') => boolean;
   getWindow: () => BrowserWindow | null;
   /**
    * 飞书 IM 实例,用于飞书通道发消息。来源与 scheduler-host/notifier.ts 相同
@@ -275,7 +280,7 @@ export function initNotificationService(deps: NotificationServiceDeps): void {
       if (signal && !signal.ended) return;
       const ownerScope = captureDataOwnerBroadcastScope();
       const safeTitle = title.trim() || sessionId.slice(0, 8);
-      const wantDesktop = channels?.desktop ?? true;
+      const wantDesktop = (channels?.desktop ?? true) && deps.isTaskAlertShownElsewhere?.(kind) !== true;
       const wantFeishu = channels?.feishu === true;
       if (markAttention) markSessionNeedsAttention(sessionId);
       // 「消息免打扰」任务不再走任何外向提醒通道（系统 toast / 灵动岛 / 手机 / 飞书）；

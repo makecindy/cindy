@@ -46,6 +46,7 @@ import {
   isSilentAgentIslandSoundChoice,
 } from '../../../shared/agentIsland';
 import { DefaultOverrideControls } from './DefaultOverrideControls';
+import { useSettingsSearchNavigation } from './SettingsSearchNavigation';
 
 const MASCOT_PREVIEW_URLS: Record<AgentIslandMascotSkin, string> = {
   cindy: cindyPreviewUrl,
@@ -68,15 +69,11 @@ type MascotAnimationMode = typeof MASCOT_ANIMATION_MODES[number];
 type MascotAnimationSteps = Record<AgentIslandMascotSkin, number>;
 const MASCOT_PREVIEW_VIEWBOX_SIZE = 16;
 /** 键帽圆角:原 SVG rect rx=0.12(键帽 1.8x0.7),换算成 CSS 双轴百分比。 */
-const MASCOT_KEY_BORDER_RADIUS = `${(0.12 / 1.8) * 100}% / ${(0.12 / 0.7) * 100}%`;
-const MASCOT_KEY_RECTS = Array.from({ length: 12 }, (_, index) => index);
 
 // 眼睛几何与配色必须与原生侧 SpriteMascotConfig 保持一致
 // (native/agent-island/macos-agent-island-helper.swift)，否则设置页预览和灵动岛实际渲染会不一样。
 const MASCOT_PREVIEW_CONFIGS: Record<Exclude<AgentIslandMascotSkin, 'pululu'>, MascotPreviewConfig> = {
   cindy: {
-    keyboardBase: 'rgb(38 43 69)',
-    keyboardKey: 'rgb(103 118 240)',
     eyeColor: 'rgb(107 61 50)',
     eyeLeftX: 6.71,
     eyeRightX: 9.3,
@@ -85,8 +82,6 @@ const MASCOT_PREVIEW_CONFIGS: Record<Exclude<AgentIslandMascotSkin, 'pululu'>, M
     eyeRy: 0.98,
   },
   blackcat: {
-    keyboardBase: 'rgb(31 36 41)',
-    keyboardKey: 'rgb(103 118 240)',
     eyeColor: 'rgb(253 207 69)',
     eyeLeftX: 5.95,
     eyeRightX: 10.05,
@@ -95,8 +90,6 @@ const MASCOT_PREVIEW_CONFIGS: Record<Exclude<AgentIslandMascotSkin, 'pululu'>, M
     eyeRy: 0.98,
   },
   erika: {
-    keyboardBase: 'rgb(51 71 77)',
-    keyboardKey: 'rgb(90 156 170)',
     eyeColor: 'rgb(135 93 66)',
     eyeLeftX: 6.84,
     eyeRightX: 9.16,
@@ -105,8 +98,6 @@ const MASCOT_PREVIEW_CONFIGS: Record<Exclude<AgentIslandMascotSkin, 'pululu'>, M
     eyeRy: 0.98,
   },
   tarara: {
-    keyboardBase: '#00615c',
-    keyboardKey: '#00d9c5',
     eyeColor: 'rgb(61 114 228)',
     eyeLeftX: 6.9,
     eyeRightX: 9.7,
@@ -115,8 +106,6 @@ const MASCOT_PREVIEW_CONFIGS: Record<Exclude<AgentIslandMascotSkin, 'pululu'>, M
     eyeRy: 0.98,
   },
   boli: {
-    keyboardBase: '#292e3a',
-    keyboardKey: '#707d94',
     eyeColor: 'black',
     eyeLeftX: 5.63,
     eyeRightX: 10.63,
@@ -126,8 +115,6 @@ const MASCOT_PREVIEW_CONFIGS: Record<Exclude<AgentIslandMascotSkin, 'pululu'>, M
     imageScale: 0.8,
   },
   whitesnow: {
-    keyboardBase: '#292e3a',
-    keyboardKey: '#707d94',
     eyeColor: 'black',
     eyeLeftX: 6.86,
     eyeRightX: 9.5,
@@ -136,8 +123,6 @@ const MASCOT_PREVIEW_CONFIGS: Record<Exclude<AgentIslandMascotSkin, 'pululu'>, M
     eyeRy: 1.02,
   },
   annie: {
-    keyboardBase: '#2e6b8f',
-    keyboardKey: '#77c4ea',
     eyeColor: 'rgb(174 33 70)',
     eyeLeftX: 6.31,
     eyeRightX: 9.56,
@@ -146,8 +131,6 @@ const MASCOT_PREVIEW_CONFIGS: Record<Exclude<AgentIslandMascotSkin, 'pululu'>, M
     eyeRy: 0.98,
   },
   chaku: {
-    keyboardBase: 'rgb(115 82 8)',
-    keyboardKey: 'rgb(253 207 69)',
     eyeColor: 'rgb(253 207 69)',
     eyeLeftX: 6.19,
     eyeRightX: 9.69,
@@ -156,8 +139,6 @@ const MASCOT_PREVIEW_CONFIGS: Record<Exclude<AgentIslandMascotSkin, 'pululu'>, M
     eyeRy: 0.98,
   },
   muffin: {
-    keyboardBase: 'rgb(48 61 97)',
-    keyboardKey: 'rgb(125 153 213)',
     eyeColor: 'black',
     eyeLeftX: 5.56,
     eyeRightX: 10.56,
@@ -173,8 +154,6 @@ const DEFAULT_MASCOT_ANIMATION_STEPS: MascotAnimationSteps = Object.fromEntries(
 ) as MascotAnimationSteps;
 
 interface MascotPreviewConfig {
-  keyboardBase: string;
-  keyboardKey: string;
   eyeColor: string;
   eyeLeftX: number;
   eyeRightX: number;
@@ -192,6 +171,11 @@ export function AgentIslandSection() {
     subtleRemindersCustomized,
     setSubtleReminders,
     resetSubtleReminders,
+    liveActivity,
+    liveActivityCustomized,
+    liveActivitySupported,
+    setLiveActivity,
+    resetLiveActivity,
     soundSettings,
     soundCustomized,
     mascotSkin,
@@ -208,6 +192,13 @@ export function AgentIslandSection() {
   } = useAgentIslandSettings();
   const { t } = useTranslation();
   const [animationSteps, setAnimationSteps] = useState<MascotAnimationSteps>(DEFAULT_MASCOT_ANIMATION_STEPS);
+  // The character list is a disclosure: the card shows only the current character until opened.
+  const [skinsOpen, setSkinsOpen] = useState(false);
+  const { entry: searchEntry, activation: searchActivation } = useSettingsSearchNavigation();
+  useEffect(() => {
+    // Searching a character name lands here; never hide what the search pointed at.
+    if (searchEntry?.id === agentIslandSettings.skinLabel.id) setSkinsOpen(true);
+  }, [searchEntry, searchActivation]);
   const [soundResetPending, setSoundResetPending] = useState(false);
   const [subtleRemindersPending, setSubtleRemindersPending] = useState(false);
   const handleSubtleRemindersChange = async (next: boolean) => {
@@ -216,6 +207,24 @@ export function AgentIslandSection() {
       if (!await setSubtleReminders(next)) toast.error(t('settings.agentIsland.subtleRemindersFailed'));
     } finally {
       setSubtleRemindersPending(false);
+    }
+  };
+  const [liveActivityPending, setLiveActivityPending] = useState(false);
+  const handleLiveActivityChange = async (next: boolean) => {
+    setLiveActivityPending(true);
+    try {
+      if (!await setLiveActivity(next)) toast.error(t('settings.agentIsland.liveActivityFailed'));
+    } finally {
+      setLiveActivityPending(false);
+    }
+  };
+  const handleResetLiveActivity = async () => {
+    setLiveActivityPending(true);
+    try {
+      if (await resetLiveActivity()) toast.success(t('settings.defaults.restored'));
+      else toast.error(t('settings.defaults.restoreFailed'));
+    } finally {
+      setLiveActivityPending(false);
     }
   };
   const handleResetSubtleReminders = async () => {
@@ -273,6 +282,9 @@ export function AgentIslandSection() {
     setAnimationSteps((current) => advanceMascotAnimationStep(current, skin));
   }, []);
 
+  // Character and sounds stay reachable when only the Live Activity is on.
+  const sharedVisible = enabled || (liveActivitySupported && liveActivity);
+
   if (!supported) {
     return (
       <div className="flex flex-col gap-[14px]">
@@ -294,116 +306,186 @@ export function AgentIslandSection() {
         {t('settings.agentIsland.title')}
       </h2>
 
-      <SettingsCard className="flex items-center justify-between gap-3">
-        <div className="flex min-w-0 flex-col gap-1">
-          <p id={agentIslandSettings.enableLabel.targetId} className="text-13 font-medium text-[var(--settings-section-sublabel)]">
-            {t(agentIslandSettings.enableLabel.titleKey)}
-          </p>
-          <p className="text-12 leading-[1.4] text-[var(--text-secondary)]">
-            {t(agentIslandSettings.enableLabel.descriptionKey)}
-          </p>
-        </div>
+      {/* Agent Notch's own options grow out of its card, so they read as part of it. */}
+      <SettingsCard className="flex flex-col p-0">
+        <div className="flex items-center justify-between gap-3 p-5">
+          <div className="flex min-w-0 flex-col gap-1">
+            <p id={agentIslandSettings.enableLabel.targetId} className="text-13 font-medium text-[var(--settings-section-sublabel)]">
+              {t(agentIslandSettings.enableLabel.titleKey)}
+            </p>
+            <p className="text-12 leading-[1.4] text-[var(--text-secondary)]">
+              {t(agentIslandSettings.enableLabel.descriptionKey)}
+            </p>
+          </div>
 
-        <Switch data-setting-id={agentIslandSettings.enableLabel.id}
-          checked={enabled}
-          onCheckedChange={setEnabled}
-          aria-label={t('settings.agentIsland.enableAria')}
-        />
+          <Switch data-setting-id={agentIslandSettings.enableLabel.id}
+            checked={enabled}
+            onCheckedChange={setEnabled}
+            aria-label={t('settings.agentIsland.enableAria')}
+          />
+        </div>
+        {enabled && (
+          <>
+            <div className={ROW_DIVIDER_CLASS} />
+            <div className="flex items-center justify-between gap-3 p-5">
+              <div className="flex min-w-0 flex-col gap-1">
+                <p id={agentIslandSettings.subtleRemindersLabel.targetId} className="text-13 font-medium text-[var(--settings-section-sublabel)]">
+                  {t(agentIslandSettings.subtleRemindersLabel.titleKey)}
+                </p>
+                <p className="text-12 leading-[1.4] text-[var(--text-secondary)]">
+                  {t(agentIslandSettings.subtleRemindersLabel.descriptionKey)}
+                </p>
+              </div>
+              <div className="flex shrink-0 items-center gap-2">
+                <DefaultOverrideControls
+                  isCustomized={subtleRemindersCustomized}
+                  disabled={subtleRemindersPending}
+                  onReset={() => void handleResetSubtleReminders()}
+                />
+                <Switch
+                  data-setting-id={agentIslandSettings.subtleRemindersLabel.id}
+                  checked={subtleReminders}
+                  disabled={subtleRemindersPending}
+                  onCheckedChange={handleSubtleRemindersChange}
+                  aria-label={t('settings.agentIsland.subtleRemindersLabel')}
+                />
+              </div>
+            </div>
+            <div className={ROW_DIVIDER_CLASS} />
+            <div className="flex flex-col gap-3 p-5">
+              <div className="flex min-w-0 flex-col gap-1">
+                <p id={agentIslandSettings.displayLabel.targetId} className="text-13 font-medium text-[var(--settings-section-sublabel)]">
+                  {t(agentIslandSettings.displayLabel.titleKey)}
+                </p>
+                <p className="text-12 leading-[1.4] text-[var(--text-secondary)]">
+                  {t(agentIslandSettings.displayLabel.descriptionKey)}
+                </p>
+              </div>
+              <div className="relative min-w-0">
+                <select data-setting-id={agentIslandSettings.displayLabel.id}
+                  value={displayTargetToOptionValue(displayTarget)}
+                  onChange={(event) => setDisplayTarget(displayTargetFromOptionValue(event.target.value))}
+                  className={cn(
+                    'h-9 w-full min-w-0 appearance-none rounded-full border py-0 pl-3 pr-9 text-12 outline-none',
+                    'bg-[var(--settings-input-bg)] text-[var(--settings-input-text)]',
+                    'border-[var(--settings-input-border)] focus:ring-2 focus:ring-[var(--focus-ring-soft)]',
+                  )}
+                  aria-label={t('settings.agentIsland.displaySelectAria')}
+                >
+                  <option value={DISPLAY_ALL_OPTION_VALUE}>
+                    {t('settings.agentIsland.displayAll')}
+                  </option>
+                  {displayOptions.map((option) => (
+                    <option
+                      key={option.id}
+                      value={displayTargetToOptionValue({ mode: 'display', displayId: option.id })}
+                    >
+                      {displayOptionLabels.get(option.id)}
+                    </option>
+                  ))}
+                  {selectedDisplayMissing && (
+                    <option value={displayTargetToOptionValue(displayTarget)}>
+                      {t('settings.agentIsland.displayMissing', { id: displayTarget.displayId })}
+                    </option>
+                  )}
+                </select>
+                <ChevronDown
+                  size={15}
+                  className="pointer-events-none absolute right-3.5 top-1/2 -translate-y-1/2 text-[var(--text-secondary-mid)]"
+                  aria-hidden="true"
+                />
+              </div>
+            </div>
+          </>
+        )}
       </SettingsCard>
 
-      {enabled && (
+      {/* Independent of our own island: the system shows it even when ours is off. */}
+      {liveActivitySupported && (
+        <SettingsCard className="flex items-center justify-between gap-3">
+          <div className="flex min-w-0 flex-col gap-1">
+            <p id={agentIslandSettings.liveActivityLabel.targetId} className="text-13 font-medium text-[var(--settings-section-sublabel)]">
+              {t(agentIslandSettings.liveActivityLabel.titleKey)}
+            </p>
+            <p className="text-12 leading-[1.4] text-[var(--text-secondary)]">
+              {t(agentIslandSettings.liveActivityLabel.descriptionKey)}
+            </p>
+          </div>
+          <div className="flex shrink-0 items-center gap-2">
+            <DefaultOverrideControls
+              isCustomized={liveActivityCustomized}
+              disabled={liveActivityPending}
+              onReset={() => void handleResetLiveActivity()}
+            />
+            <Switch
+              data-setting-id={agentIslandSettings.liveActivityLabel.id}
+              checked={liveActivity}
+              disabled={liveActivityPending}
+              onCheckedChange={(next) => void handleLiveActivityChange(next)}
+              aria-label={t('settings.agentIsland.liveActivityLabel')}
+            />
+          </div>
+        </SettingsCard>
+      )}
+
+      {/* Character and event sounds serve Agent Notch and the Live Activity alike; they
+      show whenever either is on, so no heading is needed. */}
+      {sharedVisible && (
         <>
-          <SettingsCard className="flex items-center justify-between gap-3">
-            <div className="flex min-w-0 flex-col gap-1">
-              <p id={agentIslandSettings.subtleRemindersLabel.targetId} className="text-13 font-medium text-[var(--settings-section-sublabel)]">
-                {t(agentIslandSettings.subtleRemindersLabel.titleKey)}
-              </p>
-              <p className="text-12 leading-[1.4] text-[var(--text-secondary)]">
-                {t(agentIslandSettings.subtleRemindersLabel.descriptionKey)}
-              </p>
-            </div>
-            <div className="flex shrink-0 items-center gap-2">
-              <DefaultOverrideControls
-                isCustomized={subtleRemindersCustomized}
-                disabled={subtleRemindersPending}
-                onReset={() => void handleResetSubtleReminders()}
-              />
-              <Switch
-                data-setting-id={agentIslandSettings.subtleRemindersLabel.id}
-                checked={subtleReminders}
-                disabled={subtleRemindersPending}
-                onCheckedChange={handleSubtleRemindersChange}
-                aria-label={t('settings.agentIsland.subtleRemindersLabel')}
-              />
-            </div>
-          </SettingsCard>
-          <SettingsCard className="flex flex-col gap-3">
-            <div className="flex min-w-0 flex-col gap-1">
-              <p id={agentIslandSettings.displayLabel.targetId} className="text-13 font-medium text-[var(--settings-section-sublabel)]">
-                {t(agentIslandSettings.displayLabel.titleKey)}
-              </p>
-              <p className="text-12 leading-[1.4] text-[var(--text-secondary)]">
-                {t(agentIslandSettings.displayLabel.descriptionKey)}
-              </p>
-            </div>
-            <div className="relative min-w-0">
-              <select data-setting-id={agentIslandSettings.displayLabel.id}
-                value={displayTargetToOptionValue(displayTarget)}
-                onChange={(event) => setDisplayTarget(displayTargetFromOptionValue(event.target.value))}
-                className={cn(
-                  'h-9 w-full min-w-0 appearance-none rounded-full border py-0 pl-3 pr-9 text-12 outline-none',
-                  'bg-[var(--settings-input-bg)] text-[var(--settings-input-text)]',
-                  'border-[var(--settings-input-border)] focus:ring-2 focus:ring-[var(--focus-ring-soft)]',
-                )}
-                aria-label={t('settings.agentIsland.displaySelectAria')}
-              >
-                <option value={DISPLAY_ALL_OPTION_VALUE}>
-                  {t('settings.agentIsland.displayAll')}
-                </option>
-                {displayOptions.map((option) => (
-                  <option
-                    key={option.id}
-                    value={displayTargetToOptionValue({ mode: 'display', displayId: option.id })}
-                  >
-                    {displayOptionLabels.get(option.id)}
-                  </option>
-                ))}
-                {selectedDisplayMissing && (
-                  <option value={displayTargetToOptionValue(displayTarget)}>
-                    {t('settings.agentIsland.displayMissing', { id: displayTarget.displayId })}
-                  </option>
-                )}
-              </select>
-              <ChevronDown
-                size={15}
-                className="pointer-events-none absolute right-3.5 top-1/2 -translate-y-1/2 text-[var(--text-secondary-mid)]"
-                aria-hidden="true"
-              />
-            </div>
-          </SettingsCard>
-
-          <SettingsCard className="flex flex-col gap-4">
-            <div className="flex min-w-0 flex-col gap-1">
-              <p id={agentIslandSettings.skinLabel.targetId} className="text-13 font-medium text-[var(--settings-section-sublabel)]">
-                {t(agentIslandSettings.skinLabel.titleKey)}
-              </p>
-              <p className="text-12 leading-[1.4] text-[var(--text-secondary)]">
-                {t(agentIslandSettings.skinLabel.descriptionKey)}
-              </p>
-            </div>
-
-            <div className="grid gap-2">
-              {AGENT_ISLAND_MASCOT_SKINS.map((skin) => (
-                <AgentIslandSkinRow
-                  key={skin}
-                  skin={skin}
-                  animationMode={animationModeForStep(animationSteps[skin])}
-                  onNextAnimation={handleNextMascotAnimation}
-                  selected={mascotSkin === skin}
-                  onSelect={setMascotSkin}
+          <SettingsCard className="flex flex-col p-0">
+            <button
+              type="button"
+              data-setting-id={agentIslandSettings.skinLabel.id}
+              aria-expanded={skinsOpen}
+              aria-controls="settings-agent-island-skins"
+              onClick={() => setSkinsOpen((open) => !open)}
+              className={cn(
+                'flex w-full items-center justify-between gap-3 rounded-xl p-5 text-left outline-none',
+                'focus-visible:ring-2 focus-visible:ring-[var(--focus-ring-soft)]',
+              )}
+            >
+              <span className="flex min-w-0 flex-col gap-1">
+                <span id={agentIslandSettings.skinLabel.targetId} className="text-13 font-medium text-[var(--settings-section-sublabel)]">
+                  {t(agentIslandSettings.skinLabel.titleKey)}
+                </span>
+                <span className="text-12 leading-[1.4] text-[var(--text-secondary)]">
+                  {t(agentIslandSettings.skinLabel.descriptionKey)}
+                </span>
+              </span>
+              <span className="flex shrink-0 items-center gap-2">
+                {/* The list's own preview, scaled down: sprite PNGs carry no eyes on their own. */}
+                <span className="relative h-8 w-9 overflow-hidden rounded-lg" aria-hidden="true">
+                  <span className="absolute left-0 top-0 origin-top-left scale-[0.64]">
+                    <MascotPreview skin={mascotSkin} mode={animationModeForStep(animationSteps[mascotSkin])} />
+                  </span>
+                </span>
+                <span className="text-13 text-[var(--text-secondary)]">
+                  {t(`settings.agentIsland.skins.${mascotSkin}.name`)}
+                </span>
+                <ChevronDown
+                  size={15}
+                  className={cn('text-[var(--text-secondary-mid)] transition-transform', skinsOpen && 'rotate-180')}
+                  aria-hidden="true"
                 />
-              ))}
-            </div>
+              </span>
+            </button>
+            {skinsOpen && (
+              <>
+                <div className={ROW_DIVIDER_CLASS} />
+                <div id="settings-agent-island-skins" className="grid gap-2 p-5">
+                  {AGENT_ISLAND_MASCOT_SKINS.map((skin) => (
+                    <AgentIslandSkinRow
+                      key={skin}
+                      skin={skin}
+                      animationMode={animationModeForStep(animationSteps[skin])}
+                      onNextAnimation={handleNextMascotAnimation}
+                      selected={mascotSkin === skin}
+                      onSelect={setMascotSkin}
+                    />
+                  ))}
+                </div>
+              </>
+            )}
           </SettingsCard>
 
           <SettingsCard className="flex flex-col gap-3">
@@ -451,6 +533,9 @@ export function AgentIslandSection() {
     </div>
   );
 }
+
+/** Divider between rows of one card, inset like this page's 20px card padding. */
+const ROW_DIVIDER_CLASS = 'mx-5 h-px bg-[var(--settings-theme-card-border)]';
 
 function SettingsCard({
   className,
@@ -600,8 +685,8 @@ function MascotPreviewImage({
 }
 
 /**
- * Sprite 皮肤预览:键盘与眼睛全部用绝对定位 HTML 元素表达(原为内联 SVG),
- * 让 keyboard-tap / key-flash / eye-focus 常驻动画挂在 HTML 上(规则 7)。
+ * Sprite 皮肤预览:眼睛用绝对定位 HTML 元素表达(原为内联 SVG),
+ * 让 eye-focus 等常驻动画挂在 HTML 上(规则 7)。
  * props(src / config)均为模块常量,memo 让 1.7s 轮播 tick 不再重渲此子树
  * (动画模式切换走父级 data-motion 属性,不经过本组件)。
  */
@@ -615,42 +700,6 @@ const SpriteMascotPreview = memo(function SpriteMascotPreview({
   const eyesBox = getMascotEyesBox(config);
   return (
     <div className="relative h-10 w-10">
-      <div
-        className="agent-island-mascot-keyboard pointer-events-none absolute inset-0"
-        aria-hidden="true"
-      >
-        <span
-          className="absolute block rounded-[50%] bg-black"
-          style={{
-            ...mascotViewBoxStyle(8 - 4.2, 14.3 - 0.48, 4.2 * 2, 0.48 * 2),
-            opacity: 0.28,
-          }}
-        />
-        <span
-          className="absolute block"
-          style={{
-            ...mascotViewBoxStyle(0.5, 13, 15, 3),
-            backgroundColor: config.keyboardBase,
-          }}
-        />
-        {MASCOT_KEY_RECTS.map((index) => {
-          const row = Math.floor(index / 6);
-          const col = index % 6;
-          return (
-            <span
-              key={index}
-              className="agent-island-mascot-key absolute block"
-              style={{
-                ...mascotViewBoxStyle(1 + col * 2.4, 13.5 + row * 1.2, 1.8, 0.7),
-                '--agent-island-key-delay': `${index * 38}ms`,
-                backgroundColor: index === 2 ? 'white' : config.keyboardKey,
-                borderRadius: MASCOT_KEY_BORDER_RADIUS,
-                opacity: index === 2 ? 0.9 : 1,
-              } as CSSProperties}
-            />
-          );
-        })}
-      </div>
       <div
         className="agent-island-mascot-character absolute inset-0 flex items-center justify-center"
         style={{ '--agent-island-mascot-scale': config.imageScale ?? 1 } as CSSProperties}

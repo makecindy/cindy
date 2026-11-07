@@ -587,3 +587,11 @@ describe('sanitizeGhostCardHtml · 卡内外链声明(v3,data-ghost-link)', () =
     expect(out).toBe('<a data-ghost-link="https://a.com/">x</a>');
   });
 });
+
+
+it('preserves only navigation-only Cindy task links, never commands or ambiguous targets', () => {
+  expect(ok('<a href="cindy://session/task-42">打开原任务</a>')).toBe('<a data-ghost-link="cindy://session/task-42">打开原任务</a>');
+  for (const url of ['cindy://settings', 'cindy://session/task?command=run', 'cindy://session/../settings', 'cindy://session/%2e%2e', 'cindy://session/task#x', 'cindy://session/task/other']) {
+    expect(ok(`<a href="${url}">open</a>`)).toBe('<a>open</a>');
+  }
+});

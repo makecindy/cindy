@@ -2177,6 +2177,8 @@ interface ElectronAPI {
     setSoundSettings: (settings: AgentIslandSoundSettings) => Promise<{ ok: true }>;
     setMascotSkin: (skin: AgentIslandMascotSkin) => Promise<{ ok: true }>;
     setSubtleReminders: (enabled: boolean) => Promise<{ ok: true }>;
+    setLiveActivity?: (enabled: boolean) => Promise<{ ok: true }>;
+    getLiveActivitySupport?: () => Promise<{ ok: true; supported: boolean }>;
     setDisplayTarget: (target: AgentIslandDisplayTarget) => Promise<{ ok: true }>;
     getDisplayOptions: () => Promise<{
       ok: true;
