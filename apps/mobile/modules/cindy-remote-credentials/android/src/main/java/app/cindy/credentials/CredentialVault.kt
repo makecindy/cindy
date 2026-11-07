@@ -46,11 +46,14 @@ internal class CredentialVault(private val context: Context, private val install
   }
   private fun labels(locale: String): JSONObject {
     val catalog = context.assets.open("credentials.json").bufferedReader().use { JSONObject(it.readText()) }
+    val tag = java.util.Locale.forLanguageTag(locale.replace('_', '-'))
     val language = when {
       locale.startsWith("zh-TW", true) || locale.startsWith("zh-HK", true) || locale.contains("Hant", true) -> "zh-TW"
       locale.startsWith("zh", true) -> "zh-CN"
       locale.startsWith("ja", true) -> "ja"
       locale.startsWith("ko", true) -> "ko"
+      tag.language == "pt" -> if (tag.country == "BR") "pt-BR" else "pt-PT"
+      tag.language in listOf("es", "fr", "de") -> tag.language
       else -> "en"
     }
     return catalog.getJSONObject(language)

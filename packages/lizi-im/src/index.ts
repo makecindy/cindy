@@ -152,3 +152,5 @@ export type {
   BindingChangeEvent,
   BindingChangeListener,
 } from './binding/index.js';
+
+export type { TelegramHistoryImageRef } from './telegram/inbound.js';

@@ -24,10 +24,13 @@ import { CURRENT_CINDY_REGION } from '../../shared/brandRegion.js';
 import { isCindyPersonalRuntime } from '../cindy-make/versionRuntimeIdentity.js';
 import { isTrustedAppRendererWindow } from '../security/trustedAppRenderer.js';
 import { localAgentModels } from './catalog.js';
+import { remoteLocalAgentModels } from './remoteCatalog.js';
 import { createLocalAgentServer, LocalAgentError, type LocalAgentServerDeps } from './server.js';
 import { withCrossProcessLock } from '../device-link/crossProcessLock.js';
 import { openLocalAgentRuntime } from './runtime.js';
 import { localAgentMessage } from './messages.js';
+import { createLocalAgentGroupRouteResolver } from './groupRoute.js';
+import { listProviderGroups } from '../provider-group/store.js';
 
 import { confirmLocalAgent, cancelLocalAgentConfirmations } from './confirmation.js';
 
@@ -134,22 +137,46 @@ export function installLocalAgentHost(maker: Maker): void {
         }).listProviders({
           allowSideEffects: false,
         });
-        return localAgentModels(providers, maker.listAvailableAgents());
+        if (scopeNow() !== scope) throw new LocalAgentError('UNAUTHORIZED', 'Cindy 当前账号已更改，请重新连接。');
+        const localModels = localAgentModels(providers, maker.listAvailableAgents());
+        const remoteModels = await remoteLocalAgentModels(() => scopeNow() === scope, listProviderGroups(), localModels);
+        if (scopeNow() !== scope) throw new LocalAgentError('UNAUTHORIZED', 'Cindy 当前账号已更改，请重新连接。');
+        return [...localModels, ...remoteModels]
+          .map((model, index) => ({ ...model, isDefault: index === 0 }));
       },
       async approve(signal, client) {
-        const approved = await confirmLocalAgent({
-          title: t('localAgent.connectTitle'),
-          message: t('localAgent.connectMessage').replaceAll('{{app}}', () => client.name),
-          detail: `${t('localAgent.connectDetail')}\n\n${t('localAgent.clientIdentity')
-            .replaceAll('{{id}}', () => client.id)
-            .replaceAll('{{version}}', () => client.version ?? '—')}`,
-          confirmText: t('localAgent.allow'),
-          cancelText: t('localAgent.cancel'),
-        }, signal);
+        const approved = await confirmLocalAgent(
+          {
+            title: t('localAgent.connectTitle'),
+            message: t('localAgent.connectMessage').replaceAll('{{app}}', () => client.name),
+            detail: `${t('localAgent.connectDetail')}\n\n${t('localAgent.clientIdentity')
+              .replaceAll('{{id}}', () => client.id)
+              .replaceAll('{{version}}', () => client.version ?? '—')}`,
+            confirmText: t('localAgent.allow'),
+            cancelText: t('localAgent.cancel'),
+          },
+          signal,
+        );
         return approved && !signal.aborted && scopeNow() === scope;
       },
-      open: (input, bridge) =>
-        openLocalAgentRuntime(maker, directory, input, bridge, localAgentMessage),
+      open: async (input, bridge) => {
+        // Load group orchestration only when an application actually opens a
+        // session; the HTTP discovery/startup path must stay lightweight.
+        const [{ getProviderGroupRemoteClient, getProviderGroupApplicationLoad, getProviderGroupRouter }, { getSelfDeviceId }] = await Promise.all([
+          import('../provider-group/runtime.js'), import('../device-link/index.js'),
+        ]);
+        const assertCurrent = () => {
+          if (scopeNow() !== scope) throw new LocalAgentError('UNAUTHORIZED', 'Cindy 当前账号已更改，请重新连接。');
+        };
+        assertCurrent();
+        const load = getProviderGroupApplicationLoad();
+        return openLocalAgentRuntime(maker, directory, input, bridge, localAgentMessage, createLocalAgentGroupRouteResolver({
+          remote: getProviderGroupRemoteClient(),
+          local: getProviderGroupRouter(),
+          localDeviceId: getSelfDeviceId,
+          assertCurrent,
+        }), load.track);
+      },
       message: localAgentMessage,
       warn: (code) => log.warn('local agent request failed', { code }),
       changed: () => {
@@ -275,6 +302,34 @@ export async function revokeLocalAgentConnections(
     if (selected) return server.revoke(selected.id);
     await server.revokeAll();
     return true;
+  });
+}
+
+export async function setLocalAgentCreateVisibleSessions(
+  connectionId: unknown,
+  enabled: unknown,
+  assertCaller = () => {},
+): Promise<boolean> {
+  if (
+    typeof connectionId !== 'string' ||
+    !connectionId ||
+    connectionId.length > 128 ||
+    typeof enabled !== 'boolean'
+  )
+    throwIpcError('INVALID_PARAMS', t('localAgent.invalidConnection'));
+  return settingsOperation(async () => {
+    const owner = activeOwnerScopeKey();
+    const pendingServer = current;
+    const server = pendingServer ? await pendingServer : undefined;
+    assertCaller();
+    if (
+      !server ||
+      current !== pendingServer ||
+      owner !== activeOwnerScopeKey() ||
+      isAppSessionBoundaryPending()
+    )
+      return false;
+    return server.setCreateVisibleSessions(connectionId, enabled);
   });
 }
 

@@ -1,12 +1,12 @@
 {
   "source": "apps/desktop/src/renderer/themes/colors.ts",
   "generatedBy": "packages/design-tokens/src/classify.ts",
-  "snapshotCount": 568,
+  "snapshotCount": 576,
   "categories": {
-    "literal": 281,
-    "alias": 249,
+    "literal": 283,
+    "alias": 246,
     "hsl-triplet": 6,
-    "runtime-derived-or-protected": 32
+    "runtime-derived-or-protected": 41
   },
   "entries": [
     {
@@ -944,14 +944,18 @@
     },
     {
       "id": "confirm-btn-primary-hover",
-      "category": "alias",
-      "destination": "semantic-or-component-candidate",
-      "lightKind": "alias",
-      "darkKind": "alias",
-      "aliasOf": {
-        "light": "accent-hover",
-        "dark": "accent-hover"
-      },
+      "category": "runtime-derived-or-protected",
+      "destination": "register-only",
+      "lightKind": "mixed",
+      "darkKind": "mixed",
+      "modeledAsSemantic": false
+    },
+    {
+      "id": "confirm-btn-primary-pressed",
+      "category": "runtime-derived-or-protected",
+      "destination": "register-only",
+      "lightKind": "mixed",
+      "darkKind": "mixed",
       "modeledAsSemantic": false
     },
     {
@@ -1143,6 +1147,18 @@
       "modeledAsSemantic": false
     },
     {
+      "id": "update-btn-pressed",
+      "category": "alias",
+      "destination": "semantic-or-component-candidate",
+      "lightKind": "alias",
+      "darkKind": "alias",
+      "aliasOf": {
+        "light": "update-btn-hover",
+        "dark": "update-btn-hover"
+      },
+      "modeledAsSemantic": false
+    },
+    {
       "id": "content-area",
       "category": "alias",
       "destination": "semantic-or-component-candidate",
@@ -1194,8 +1210,8 @@
       "id": "login-panel-border",
       "category": "literal",
       "destination": "reference-candidate",
-      "lightKind": "hex",
-      "darkKind": "hex",
+      "lightKind": "rgb",
+      "darkKind": "rgb",
       "modeledAsSemantic": false
     },
     {
@@ -1230,8 +1246,8 @@
       "id": "login-link-pressed",
       "category": "literal",
       "destination": "reference-candidate",
-      "lightKind": "hex",
-      "darkKind": "hex",
+      "lightKind": "rgb",
+      "darkKind": "rgb",
       "modeledAsSemantic": false
     },
     {
@@ -1246,8 +1262,8 @@
       "id": "login-callback-card-border",
       "category": "literal",
       "destination": "reference-candidate",
-      "lightKind": "hex",
-      "darkKind": "hex",
+      "lightKind": "rgb",
+      "darkKind": "rgb",
       "modeledAsSemantic": false
     },
     {
@@ -1302,48 +1318,48 @@
       "id": "login-control-bg",
       "category": "literal",
       "destination": "reference-candidate",
-      "lightKind": "hex",
-      "darkKind": "hex",
+      "lightKind": "rgb",
+      "darkKind": "rgb",
       "modeledAsSemantic": false
     },
     {
       "id": "login-action-control-bg",
       "category": "literal",
       "destination": "reference-candidate",
-      "lightKind": "hex",
-      "darkKind": "hex",
+      "lightKind": "rgb",
+      "darkKind": "rgb",
       "modeledAsSemantic": false
     },
     {
       "id": "login-back-border",
       "category": "literal",
       "destination": "reference-candidate",
-      "lightKind": "hex",
-      "darkKind": "hex",
+      "lightKind": "rgb",
+      "darkKind": "rgb",
       "modeledAsSemantic": false
     },
     {
       "id": "login-control-border",
       "category": "literal",
       "destination": "reference-candidate",
-      "lightKind": "hex",
-      "darkKind": "hex",
+      "lightKind": "rgb",
+      "darkKind": "rgb",
       "modeledAsSemantic": false
     },
     {
       "id": "login-control-border-active",
       "category": "literal",
       "destination": "reference-candidate",
-      "lightKind": "hex",
-      "darkKind": "hex",
+      "lightKind": "rgb",
+      "darkKind": "rgb",
       "modeledAsSemantic": false
     },
     {
       "id": "login-control-border-disabled",
       "category": "literal",
       "destination": "reference-candidate",
-      "lightKind": "hex",
-      "darkKind": "hex",
+      "lightKind": "rgb",
+      "darkKind": "rgb",
       "modeledAsSemantic": false
     },
     {
@@ -1414,16 +1430,16 @@
       "id": "login-disabled-button-bg",
       "category": "literal",
       "destination": "reference-candidate",
-      "lightKind": "hex",
-      "darkKind": "hex",
+      "lightKind": "rgb",
+      "darkKind": "rgb",
       "modeledAsSemantic": false
     },
     {
       "id": "login-disabled-button-text",
       "category": "literal",
       "destination": "reference-candidate",
-      "lightKind": "hex",
-      "darkKind": "hex",
+      "lightKind": "rgb",
+      "darkKind": "rgb",
       "modeledAsSemantic": false
     },
     {
@@ -1438,16 +1454,16 @@
       "id": "login-link-text",
       "category": "literal",
       "destination": "reference-candidate",
-      "lightKind": "hex",
-      "darkKind": "hex",
+      "lightKind": "rgb",
+      "darkKind": "rgb",
       "modeledAsSemantic": false
     },
     {
       "id": "login-link-hover",
       "category": "literal",
       "destination": "reference-candidate",
-      "lightKind": "hex",
-      "darkKind": "hex",
+      "lightKind": "rgb",
+      "darkKind": "rgb",
       "modeledAsSemantic": false
     },
     {
@@ -1470,24 +1486,24 @@
       "id": "login-deletion-bubble-border",
       "category": "literal",
       "destination": "reference-candidate",
-      "lightKind": "hex",
-      "darkKind": "hex",
+      "lightKind": "rgb",
+      "darkKind": "rgb",
       "modeledAsSemantic": false
     },
     {
       "id": "login-splash-progress-track",
       "category": "literal",
       "destination": "reference-candidate",
-      "lightKind": "hex",
-      "darkKind": "hex",
+      "lightKind": "rgb",
+      "darkKind": "rgb",
       "modeledAsSemantic": false
     },
     {
       "id": "login-splash-progress-fill",
       "category": "literal",
       "destination": "reference-candidate",
-      "lightKind": "hex",
-      "darkKind": "hex",
+      "lightKind": "rgb",
+      "darkKind": "rgb",
       "modeledAsSemantic": false
     },
     {
@@ -1558,16 +1574,16 @@
       "id": "login-consent-radio-bg",
       "category": "literal",
       "destination": "reference-candidate",
-      "lightKind": "hex",
-      "darkKind": "hex",
+      "lightKind": "rgb",
+      "darkKind": "rgb",
       "modeledAsSemantic": false
     },
     {
       "id": "login-consent-radio-border",
       "category": "literal",
       "destination": "reference-candidate",
-      "lightKind": "hex",
-      "darkKind": "hex",
+      "lightKind": "rgb",
+      "darkKind": "rgb",
       "modeledAsSemantic": false
     },
     {
@@ -1598,24 +1614,24 @@
       "id": "login-secondary-button-bg",
       "category": "literal",
       "destination": "reference-candidate",
-      "lightKind": "hex",
-      "darkKind": "hex",
+      "lightKind": "rgb",
+      "darkKind": "rgb",
       "modeledAsSemantic": false
     },
     {
       "id": "login-secondary-button-border",
       "category": "literal",
       "destination": "reference-candidate",
-      "lightKind": "hex",
-      "darkKind": "hex",
+      "lightKind": "rgb",
+      "darkKind": "rgb",
       "modeledAsSemantic": false
     },
     {
       "id": "login-secondary-button-text",
       "category": "literal",
       "destination": "reference-candidate",
-      "lightKind": "hex",
-      "darkKind": "hex",
+      "lightKind": "rgb",
+      "darkKind": "rgb",
       "modeledAsSemantic": false
     },
     {
@@ -1628,6 +1644,22 @@
     },
     {
       "id": "login-overlay-secondary-pressed",
+      "category": "literal",
+      "destination": "reference-candidate",
+      "lightKind": "rgb",
+      "darkKind": "rgb",
+      "modeledAsSemantic": false
+    },
+    {
+      "id": "login-overlay-apple-hover",
+      "category": "literal",
+      "destination": "reference-candidate",
+      "lightKind": "rgb",
+      "darkKind": "rgb",
+      "modeledAsSemantic": false
+    },
+    {
+      "id": "login-overlay-apple-pressed",
       "category": "literal",
       "destination": "reference-candidate",
       "lightKind": "rgb",
@@ -2132,26 +2164,18 @@
     },
     {
       "id": "send-btn-hover-bg",
-      "category": "alias",
-      "destination": "semantic-or-component-candidate",
-      "lightKind": "alias",
-      "darkKind": "alias",
-      "aliasOf": {
-        "light": "send-btn-bg",
-        "dark": "send-btn-bg"
-      },
+      "category": "runtime-derived-or-protected",
+      "destination": "register-only",
+      "lightKind": "mixed",
+      "darkKind": "mixed",
       "modeledAsSemantic": false
     },
     {
       "id": "send-btn-pressed-bg",
-      "category": "alias",
-      "destination": "semantic-or-component-candidate",
-      "lightKind": "alias",
-      "darkKind": "alias",
-      "aliasOf": {
-        "light": "send-btn-bg",
-        "dark": "send-btn-bg"
-      },
+      "category": "runtime-derived-or-protected",
+      "destination": "register-only",
+      "lightKind": "mixed",
+      "darkKind": "mixed",
       "modeledAsSemantic": false
     },
     {
@@ -2188,6 +2212,22 @@
       "destination": "reference-candidate",
       "lightKind": "hex",
       "darkKind": "hex",
+      "modeledAsSemantic": false
+    },
+    {
+      "id": "perm-allow-btn-hover",
+      "category": "runtime-derived-or-protected",
+      "destination": "register-only",
+      "lightKind": "mixed",
+      "darkKind": "mixed",
+      "modeledAsSemantic": false
+    },
+    {
+      "id": "perm-allow-btn-pressed",
+      "category": "runtime-derived-or-protected",
+      "destination": "register-only",
+      "lightKind": "mixed",
+      "darkKind": "mixed",
       "modeledAsSemantic": false
     },
     {
@@ -5398,21 +5438,33 @@
     },
     {
       "id": "button-cta-hover",
-      "category": "alias",
-      "destination": "semantic-or-component-candidate",
-      "lightKind": "alias",
-      "darkKind": "alias",
-      "aliasOf": {
-        "light": "accent-hover",
-        "dark": "accent-hover"
-      },
+      "category": "runtime-derived-or-protected",
+      "destination": "register-only",
+      "lightKind": "mixed",
+      "darkKind": "mixed",
       "modeledAsSemantic": false
     },
     {
       "id": "button-cta-pressed",
       "category": "runtime-derived-or-protected",
       "destination": "register-only",
-      "lightKind": "color-mix",
+      "lightKind": "mixed",
+      "darkKind": "mixed",
+      "modeledAsSemantic": false
+    },
+    {
+      "id": "button-danger-solid-hover",
+      "category": "runtime-derived-or-protected",
+      "destination": "register-only",
+      "lightKind": "mixed",
+      "darkKind": "color-mix",
+      "modeledAsSemantic": false
+    },
+    {
+      "id": "button-danger-solid-pressed",
+      "category": "runtime-derived-or-protected",
+      "destination": "register-only",
+      "lightKind": "mixed",
       "darkKind": "color-mix",
       "modeledAsSemantic": false
     },

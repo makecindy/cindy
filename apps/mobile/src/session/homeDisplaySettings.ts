@@ -13,6 +13,7 @@ export type HomeVendorFilter = 'all' | 'cc' | 'codex' | 'pi';
 export type HomeLastActivityFilter = '1d' | '3d' | '7d' | '30d' | 'all';
 /** 'all' = 不筛选;数组 = 只看这些项目(含对话占位键)。 */
 export type HomeProjectFilter = 'all' | readonly string[];
+export type HomeTeammateFilter = HomeProjectFilter | 'none';
 export type HomeListViewMode = 'text' | 'list';
 /**
  * 与桌面任务信息同序,但不含 worktree:产品规则(sidebar-redesign-plan §3.4)限定 worktree
@@ -40,7 +41,7 @@ export const DAY_MS = 24 * 60 * 60 * 1000;
 
 export interface HomeContentFilters {
   projects: HomeProjectFilter;
-  teammates?: HomeProjectFilter;
+  teammates?: HomeTeammateFilter;
   teammateKey?: (item: RemoteSessionListItem) => string | undefined;
   vendor: HomeVendorFilter;
   lastActivity: HomeLastActivityFilter;

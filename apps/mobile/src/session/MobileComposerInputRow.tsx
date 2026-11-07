@@ -1,3 +1,4 @@
+import type { ScrollViewInstance, ViewInstance } from 'react-native';
 import { ComposerFrame, nativeComposerFrameAvailable } from './ComposerFrame';
 import {
   Animated,
@@ -16,12 +17,13 @@ import {
 } from 'react-native';
 import { TextInput } from '@/components/AppText';
 import Reanimated, { useAnimatedStyle, useSharedValue, type AnimatedRef, type SharedValue } from 'react-native-reanimated';
-import { GestureDetector } from '@/platform/gestureHandler';
-import type { NativeGesture, PanGesture } from 'react-native-gesture-handler';
+import { GestureDetector, type Gesture } from '@/platform/gestureHandler';
+type NativeGesture = ReturnType<typeof Gesture.Native>;
+type PanGesture = ReturnType<typeof Gesture.Pan>;
 import Constants, { ExecutionEnvironment } from 'expo-constants';
 import { TextInputWrapper, type PasteEventPayload } from 'expo-paste-input';
 import { Mic } from 'lucide-react-native';
-import { useCallback, useEffect, useRef, type ReactNode, type Ref } from 'react';
+import { useCallback, useEffect, useRef, type MutableRefObject, type ReactNode, type Ref } from 'react';
 import { useTranslation } from 'react-i18next';
 import { iconSize, iconStroke, useTheme, useThemedStyles, type ThemeColors } from '@/theme';
 import { motionDuration, motionEasing, radius, spacing } from '@/theme/tokens';
@@ -104,6 +106,11 @@ export interface MobileComposerInputRowProps {
    */
   accessoryAbove?: ReactNode;
   /**
+   * accessoryAbove 的自然高度(未显示时为 0)。页面把它计入输入区高度上限:
+   * 内容超出时由输入框自身滚动裁掉上方文字,附件保持可见。
+   */
+  onAccessoryAboveHeightChange?: (height: number) => void;
+  /**
    * 聚焦卡片形态开关。true 时输入区独占整行、底部工具排展开；
    * false 时保持单行简洁态，工具排折叠为 0 高（保持挂载，展开时按钮
    * 像抽屉滑出而非淡入重建，配合 useComposerCardTransition 的布局动画）。
@@ -114,7 +121,7 @@ export interface MobileComposerInputRowProps {
   frameOutside?: boolean;
   /** Scroll attachments/text independently; the toolbar remains outside this viewport. */
   bodyScrollGesture?: NativeGesture;
-  bodyScrollRef?: Ref<ScrollView>;
+  bodyScrollRef?: Ref<ScrollViewInstance>;
   bodyScrollEnabled?: boolean;
   bodyScrollTestID?: string;
   caretHidden?: boolean;
@@ -134,11 +141,13 @@ export interface MobileComposerInputRowProps {
   floatingVoiceButton?: (style: StyleProp<ViewStyle>) => ReactNode;
   floatingVoiceButtonStyle?: StyleProp<ViewStyle>;
   /**
-   * 输入区（inputFrame）的显式高度：拖拽跟手时传 Animated 值、manual 定高时传数值，
+   * 输入区（inputFrame）的显式高度：manual 定高时传数值；拖拽跟手样式走 inputFrameAnimatedStyle，
    * null / undefined 走内容自动增长（现状行为）。
    */
-  inputFrameHeight?: number | Animated.Value | null;
-  inputFrameAnimatedStyle?: ReturnType<typeof useAnimatedStyle>;
+  inputFrameHeight?: number | null;
+  inputFrameAnimatedStyle?: ReturnType<typeof useAnimatedStyle<ViewStyle>>;
+  /** 文字区（inputFrame）的 UI 线程测量句柄：按在卡片上拖动调高时据此区分文字区与留白。 */
+  inputFrameRef?: AnimatedRef<ViewInstance>;
   /**
    * 输入区（inputFrame）的最小高度。给语音听写用：听写期间「点输入区停止听写」的命中层
    * 盖在 inputFrame 上，而单行听写时 inputFrame 只有 28pt，不满足触控目标 44pt；
@@ -217,6 +226,7 @@ export function MobileComposerInputRow({
   accessibilityHint,
   accessibilityLabel,
   accessoryAbove,
+  onAccessoryAboveHeightChange,
   autoFocus,
   cardActive,
   frameOutside,
@@ -233,6 +243,7 @@ export function MobileComposerInputRow({
   floatingVoiceButtonStyle,
   inputFrameHeight,
   inputFrameAnimatedStyle,
+  inputFrameRef,
   inputFrameMinHeight,
   inputElement,
   inputOverlay,
@@ -299,6 +310,21 @@ export function MobileComposerInputRow({
       onPasteImagesLoadFailed?.();
     }
   }, [onPasteImages, onPasteImagesLoading, onPasteImagesLoadFailed]);
+  const bodyScrollNodeRef = useRef<ScrollViewInstance | null>(null);
+  const setBodyScrollRef = useCallback((node: ScrollViewInstance | null) => {
+    bodyScrollNodeRef.current = node;
+    if (typeof bodyScrollRef === 'function') bodyScrollRef(node);
+    else if (bodyScrollRef) (bodyScrollRef as MutableRefObject<ScrollViewInstance | null>).current = node;
+  }, [bodyScrollRef]);
+  // 输入区上限已扣除附件高度,正常不会溢出;极端情况(附件多行、屏幕很矮)仍溢出时贴底,
+  // 保证正在输入的文字不被裁掉。
+  const pinBodyScrollToEnd = useCallback(() => {
+    if (cardLayout) bodyScrollNodeRef.current?.scrollToEnd({ animated: false });
+  }, [cardLayout]);
+  const showAccessoryAbove = cardLayout && !!accessoryAbove;
+  useEffect(() => {
+    if (!showAccessoryAbove) onAccessoryAboveHeightChange?.(0);
+  }, [showAccessoryAbove, onAccessoryAboveHeightChange]);
   const textInputElement = (
     <TextInput
       ref={inputRef as never}
@@ -333,7 +359,11 @@ export function MobileComposerInputRow({
   );
   const inputBody = (
     <>
-      {cardLayout && accessoryAbove ? <ComposerFoldingSection progress={collapseProgress}>{accessoryAbove}</ComposerFoldingSection> : null}
+      {showAccessoryAbove ? (
+        <ComposerFoldingSection onNaturalHeight={onAccessoryAboveHeightChange} progress={collapseProgress}>
+          {accessoryAbove}
+        </ComposerFoldingSection>
+      ) : null}
       <View
         style={[
           styles.mainRow,
@@ -344,6 +374,8 @@ export function MobileComposerInputRow({
       >
         {cardLayout ? null : leading}
         <Reanimated.View
+          ref={inputFrameRef}
+          collapsable={false}
           style={[
             styles.inputFrame,
             // 收起单行与 34pt + 并排：输入盒在行内居中。
@@ -398,7 +430,9 @@ export function MobileComposerInputRow({
       {bodyScrollGesture ? (
         <GestureDetector gesture={bodyScrollGesture}>
           <ScrollView
-            ref={bodyScrollRef}
+            ref={setBodyScrollRef}
+            onContentSizeChange={pinBodyScrollToEnd}
+            onLayout={pinBodyScrollToEnd}
             style={[styles.bodyScroll, geometricSingleLine && styles.bodyScrollCollapsed]}
             contentContainerStyle={[styles.bodyScrollContent, geometricSingleLine && styles.bodyScrollCollapsed]}
             keyboardShouldPersistTaps="handled"
@@ -495,11 +529,15 @@ export interface ComposerResizeGrabberProps {
   /** 不可见时淡出且不响应触摸，布局位置保持不变（避免出现/消失跳变）。 */
   visible: boolean;
   /** 「聊天记录拖进输入框」在 UI 线程测量顶边位置用（composerPullThrough）。 */
-  measureRef?: AnimatedRef<View>;
+  measureRef?: AnimatedRef<ViewInstance>;
   testID?: string;
 }
 
-function ComposerFoldingSection({ progress, children }: { progress?: SharedValue<number>; children: ReactNode }) {
+function ComposerFoldingSection({ progress, onNaturalHeight, children }: {
+  progress?: SharedValue<number>;
+  onNaturalHeight?: (height: number) => void;
+  children: ReactNode;
+}) {
   const measuredHeight = useSharedValue(0);
   const style = useAnimatedStyle(() => {
     const amount = progress?.value ?? 0;
@@ -514,8 +552,11 @@ function ComposerFoldingSection({ progress, children }: { progress?: SharedValue
     <View style={{ flexShrink: 0 }} onLayout={event => {
       // Never feed an animated/constrained measurement back into its own height.
       // Keep the natural expanded size until the gesture has fully reversed.
-      if ((progress?.value ?? 0) === 0) {
+      // Dragging the collapsed pill open mounts this folded: take the first
+      // (unconstrained inner) measurement so the toolbar can unfold with the finger.
+      if ((progress?.value ?? 0) === 0 || measuredHeight.value === 0) {
         measuredHeight.value = event.nativeEvent.layout.height;
+        onNaturalHeight?.(event.nativeEvent.layout.height);
       }
     }}>
       {children}
@@ -588,7 +629,7 @@ export function ComposerResizeGrabber({ onAdjust, panHandlers, gesture, visible,
 const VOICE_WAVE_HALF_CYCLE_MS = 550;
 const VOICE_WAVE_STAGGER_MS = 180;
 
-export function VoiceMicWaveCaret({ color, testID, viewRef }: { color: string; testID?: string; viewRef?: Ref<View> }) {
+export function VoiceMicWaveCaret({ color, testID, viewRef }: { color: string; testID?: string; viewRef?: Ref<ViewInstance> }) {
   const styles = useThemedStyles(makeMobileComposerInputRowStyles);
   const bar1 = useRef(new Animated.Value(0)).current;
   const bar2 = useRef(new Animated.Value(0)).current;

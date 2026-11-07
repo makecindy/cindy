@@ -49,6 +49,7 @@ import {
 
 const sqlite = new Database(':memory:');
 sqlite.exec("CREATE TABLE bot_session_links (id TEXT PRIMARY KEY, bot_id TEXT, session_id TEXT, role TEXT, archived_at INTEGER); INSERT INTO bot_session_links VALUES ('c', 'bot-1', 'session-1', 'canonical', NULL), ('d', 'bot-1', 'delegated', 'delegation', NULL), ('a', 'bot-1', 'archived', 'delegation', 1), ('h', 'bot-1', 'history', 'history', NULL)");
+sqlite.exec("ALTER TABLE bot_session_links ADD COLUMN route_key TEXT; INSERT INTO bot_session_links VALUES ('g', 'bot-1', 'group-lane', 'group', NULL, 'group:group-1')");
 sqlite.exec("CREATE TABLE bot_profiles (id TEXT PRIMARY KEY, status TEXT); INSERT INTO bot_profiles VALUES ('bot-starter', 'active'), ('bot-taker', 'active'), ('bot-other', 'active'), ('bot-damaged', 'active'), ('bot-paused', 'paused')");
 sqlite.exec("CREATE TABLE bot_delegations (id TEXT PRIMARY KEY, requesting_bot_id TEXT, child_session_id TEXT); INSERT INTO bot_delegations VALUES ('d1', 'bot-starter', 'task-1')");
 const db = drizzle(sqlite);
@@ -59,7 +60,7 @@ describe('Bot remote resource message invalidation', () => {
     h.boundaryPending = false;
     h.ownerScope = 'owner-a';
     h.limit.mockReset();
-    h.limit.mockImplementation(async (limit: number) => db.select({ botId: botSessionLinks.botId }).from(botSessionLinks).where(h.condition).limit(limit).all());
+    h.limit.mockImplementation(async (limit: number) => db.select({ botId: botSessionLinks.botId, role: botSessionLinks.role, routeKey: botSessionLinks.routeKey }).from(botSessionLinks).where(h.condition).limit(limit).all());
     h.tap.mockReset();
   });
 
@@ -74,6 +75,14 @@ describe('Bot remote resource message invalidation', () => {
       expect.objectContaining({ collectionId: 'teammates' }),
       expect.objectContaining({ dataOwnerId: 'owner-a' }),
     );
+  });
+
+  it('refreshes a group when its lane activity changes without a new message', async () => {
+    scheduleBotRemoteResourceChangedForSession('group-lane');
+    await vi.waitFor(() => expect(h.tap).toHaveBeenCalledOnce());
+    expect(h.tap.mock.calls[0][1]).toMatchObject({
+      collectionId: 'bot-groups', resourceRefs: [{ id: 'group-1' }],
+    });
   });
 
   it('drops the deferred lookup across an account boundary', async () => {

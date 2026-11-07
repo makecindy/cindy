@@ -139,7 +139,8 @@ export function composeInteractionCard(req: InteractionRequest): ComposedInterac
   const inputSummary = action.kind === 'tool'
     ? summarizeInput(model.input)
     : truncate(action.preview, HOOK_PERMISSION_INPUT_SUMMARY_MAX);
-  const handoff = autoReviewUnavailablePromptLine(req) !== null;
+  const handoff = autoReviewUnavailablePromptLine(req) !== null
+    || (req.kind === 'permission' && !!req.metadata?.mcpApp && (req.metadata.mcpApp as { scope?: string }).scope !== 'session');
   const body = [
     permissionPromptDescription(req) ?? '',
     autoReviewUnavailablePromptLine(req) ?? '',

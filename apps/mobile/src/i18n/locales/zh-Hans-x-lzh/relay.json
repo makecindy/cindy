@@ -1,0 +1,55 @@
+{
+  "settings": {
+    "sectionTitle": "中继",
+    "currentLabel": "中继",
+    "official": "{{appName}} 官方中转",
+    "switchToOfficial": "归官方中继",
+    "officialHint": "诸设备经 {{appName}} 官方中继相连。欲改用自建中继，于中继所在之机示其加入 QR 码，以手机相机扫之而入。",
+    "selfHostedHint": "诸设备经自建中继 {{address}} 相连；登录、模型与共事等仍用 {{appName}} 官方服务。",
+    "removedHint": "此手机已被移出中继，或中继已停。可归官方中继，或于机上重入。",
+    "credentialMissingHint": "此手机上不见中继凭证。请于机上重入，或归官方中继。",
+    "confirmTitle": "归官方中继乎？",
+    "confirmBody": "此手机将出「{{name}}」，改用 {{appName}} 官方中继。此后欲再用此中继，须于机上重入。",
+    "confirmAction": "归之",
+    "switchFailed": "未能归官方中继，请稍后再试。",
+    "pushUnavailable": "用自建中继之时，机上差事之告不推至此手机。"
+  },
+  "issue": {
+    "removedTitle": "已出中继",
+    "removedHint": "此手机已被移出中继，或中继已停。可于规制中归官方中继。"
+  },
+  "join": {
+    "title": "入中继",
+    "checking": "方连中继…",
+    "body": "入之后，此手机经此中继连君之机；登录、模型等仍用 {{appName}} 官方服务。用自建中继之时，此手机不得机上差事之告。",
+    "switchNote": "入之后，将自「{{current}}」转至此中继。",
+    "action": "入",
+    "pairingCodeLabel": "配对码",
+    "verifyHint": "请于中继所在之机核此串数字，并点同意。",
+    "waiting": "方候其首肯…",
+    "cancel": "罢",
+    "joinedTitle": "已入中继",
+    "joinedBody": "此手机今经「{{name}}」连君之机。",
+    "done": "毕",
+    "retry": "再试",
+    "signedOut": "请先登录 {{appName}}，再入此中继。",
+    "signIn": "往登门",
+    "invalidLink": "加入之链接无效或已失效，请于机上重生之。",
+    "cancelled": "加入已罢。欲入此中继，请于机上重生加入之链接。"
+  },
+  "errors": {
+    "unreachable": "此中继连之不上。请确手机与机同在一网，或手机能访此地址。",
+    "insecureUnreachable": "此中继连之不上。手机唯可经 https 入中继，请于机上为中继设凭证后，重生加入之链接。",
+    "notRelay": "此地址非 {{appName}} 中继，请察加入之链接。",
+    "incompatible": "此中继与今版 {{appName}} 不兼容，请将中继与 {{appName}} 皆更至最新版。",
+    "accountMismatch": "此中继属另一 {{appName}} 名籍。",
+    "codeInvalid": "加入之链接已失效，请于机上重生之。",
+    "rateLimited": "尝试过频，请稍后再试。",
+    "rejected": "机上已拒此番加入。",
+    "expired": "候许逾时，请于机上重生加入之链接。",
+    "ownerMismatch": "中继所回之凭证非加入链接中之主人所签，或连至他人伪造之中继，已止加入。",
+    "failed": "未能入中继，请稍后再试。",
+    "saveFailed": "已得其许，然中继凭证未能存于此手机。请于机上重生加入之链接后再试。",
+    "credentialUnavailable": "此手机无可用之中继凭证。请重入，或于规制中归官方中继。"
+  }
+}

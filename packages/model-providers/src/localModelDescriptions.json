@@ -1,0 +1,66 @@
+[
+  {
+    "en": "Capability pick based on independent benchmarks; local quantization can affect results.",
+    "es": "Recomendado por su capacidad según pruebas independientes; la cuantización local puede afectar a los resultados.",
+    "fr": "Choix axé sur les capacités d’après des évaluations indépendantes ; la quantification locale peut modifier les résultats.",
+    "de": "Leistungsempfehlung auf Basis unabhängiger Benchmarks; lokale Quantisierung kann die Ergebnisse beeinflussen.",
+    "pt-PT": "Recomendado pela capacidade com base em testes independentes; a quantização local pode afetar os resultados.",
+    "pt-BR": "Recomendado pela capacidade com base em testes independentes; a quantização local pode afetar os resultados."
+  },
+  {
+    "en": "Low-memory candidate; comparable speed and memory tests are pending.",
+    "es": "Candidato para equipos con poca memoria; quedan pendientes pruebas comparables de velocidad y memoria.",
+    "fr": "Candidat pour les appareils disposant de peu de mémoire ; les tests comparatifs de vitesse et de mémoire restent à effectuer.",
+    "de": "Kandidat für Geräte mit wenig Arbeitsspeicher; vergleichbare Geschwindigkeits- und Speichertests stehen noch aus.",
+    "pt-PT": "Candidato para equipamentos com pouca memória; faltam testes comparáveis de velocidade e memória.",
+    "pt-BR": "Candidato para computadores com pouca memória; faltam testes comparáveis de velocidade e memória."
+  },
+  {
+    "en": "Low-memory candidate to compare with Gemma 4 12B.",
+    "es": "Candidato de bajo consumo de memoria para comparar con Gemma 4 12B.",
+    "fr": "Candidat peu gourmand en mémoire à comparer avec Gemma 4 12B.",
+    "de": "Speichersparender Kandidat zum Vergleich mit Gemma 4 12B.",
+    "pt-PT": "Candidato com baixo consumo de memória para comparar com o Gemma 4 12B.",
+    "pt-BR": "Candidato com baixo consumo de memória para comparar com o Gemma 4 12B."
+  },
+  {
+    "en": "Low-memory candidate to compare with Qwen3.5 9B.",
+    "es": "Candidato de bajo consumo de memoria para comparar con Qwen3.5 9B.",
+    "fr": "Candidat peu gourmand en mémoire à comparer avec Qwen3.5 9B.",
+    "de": "Speichersparender Kandidat zum Vergleich mit Qwen3.5 9B.",
+    "pt-PT": "Candidato com baixo consumo de memória para comparar com o Qwen3.5 9B.",
+    "pt-BR": "Candidato com baixo consumo de memória para comparar com o Qwen3.5 9B."
+  },
+  {
+    "en": "Speed candidate; a comparison with Nemotron is pending.",
+    "es": "Candidato por su velocidad; queda pendiente la comparación con Nemotron.",
+    "fr": "Candidat axé sur la vitesse ; la comparaison avec Nemotron reste à effectuer.",
+    "de": "Kandidat für hohe Geschwindigkeit; der Vergleich mit Nemotron steht noch aus.",
+    "pt-PT": "Candidato pela velocidade; falta comparar com o Nemotron.",
+    "pt-BR": "Candidato pela velocidade; falta comparar com o Nemotron."
+  },
+  {
+    "en": "Speed candidate; a comparison with Qwen3.6 is pending.",
+    "es": "Candidato por su velocidad; queda pendiente la comparación con Qwen3.6.",
+    "fr": "Candidat axé sur la vitesse ; la comparaison avec Qwen3.6 reste à effectuer.",
+    "de": "Kandidat für hohe Geschwindigkeit; der Vergleich mit Qwen3.6 steht noch aus.",
+    "pt-PT": "Candidato pela velocidade; falta comparar com o Qwen3.6.",
+    "pt-BR": "Candidato pela velocidade; falta comparar com o Qwen3.6."
+  },
+  {
+    "en": "Capability pick for high-memory computers (192 GB or more). Local speed and peak memory still need testing.",
+    "es": "Recomendado por su capacidad para equipos con mucha memoria (192 GB o más). Falta probar la velocidad local y el uso máximo de memoria.",
+    "fr": "Choix axé sur les capacités pour les ordinateurs disposant de beaucoup de mémoire (192 Go ou plus). La vitesse locale et le pic de mémoire restent à tester.",
+    "de": "Leistungsempfehlung für Rechner mit viel Arbeitsspeicher (mindestens 192 GB). Lokale Geschwindigkeit und maximaler Speicherbedarf müssen noch getestet werden.",
+    "pt-PT": "Recomendado pela capacidade para computadores com muita memória (192 GB ou mais). A velocidade local e o pico de memória ainda precisam de testes.",
+    "pt-BR": "Recomendado pela capacidade para computadores com muita memória (192 GB ou mais). A velocidade local e o pico de memória ainda precisam de testes."
+  },
+  {
+    "en": "Coding candidate with a smaller Mac download than Flash-Next. Memory thresholds are estimates; Ollama tool use, speed and peak memory are unverified.",
+    "es": "Candidato para programación con una descarga para Mac menor que Flash-Next. Los límites de memoria son estimaciones; no se han verificado el uso de herramientas en Ollama, la velocidad ni el uso máximo de memoria.",
+    "fr": "Candidat pour le code avec un téléchargement Mac plus petit que Flash-Next. Les seuils de mémoire sont estimés ; l’utilisation d’outils avec Ollama, la vitesse et le pic de mémoire ne sont pas vérifiés.",
+    "de": "Programmierkandidat mit kleinerem Mac-Download als Flash-Next. Speichergrenzen sind Schätzungen; Werkzeugnutzung in Ollama, Geschwindigkeit und maximaler Speicherbedarf sind nicht verifiziert.",
+    "pt-PT": "Candidato para programação com uma transferência para Mac menor do que a do Flash-Next. Os limites de memória são estimativas; a utilização de ferramentas no Ollama, a velocidade e o pico de memória não foram verificados.",
+    "pt-BR": "Candidato para programação com um download para Mac menor que o do Flash-Next. Os limites de memória são estimativas; o uso de ferramentas no Ollama, a velocidade e o pico de memória não foram verificados."
+  }
+]

@@ -5,6 +5,7 @@ import { cindyLight } from '../builtin/cindy-light';
 import { colorRegistry } from '../color-registry';
 import '../colors';
 import { DEFAULT_FAMILY_ID, getThemeFamilies } from '../families';
+import { filledButtonHover, filledButtonPressed } from '../filledButtonStates';
 import { builtinThemes } from '../registry';
 import {
   CINDY_EXPECTED_VALUES,
@@ -193,7 +194,6 @@ const PREEXISTING_UNFROZEN_LITERAL_IDS: Record<string, ReadonlySet<string>> = {
     'ask-option-list-bg',
     'model-item-hover',
     'update-btn-bg',
-    'update-btn-hover',
   ]),
   'cindy-dark': new Set([
     'ask-header-chip-bg',
@@ -202,7 +202,6 @@ const PREEXISTING_UNFROZEN_LITERAL_IDS: Record<string, ReadonlySet<string>> = {
     'ask-send-disabled-bg',
     'model-item-hover',
     'update-btn-bg',
-    'update-btn-hover',
   ]),
 };
 
@@ -248,12 +247,23 @@ describe('CINDY · ③ 值格式按消费契约', () => {
   it('baseline 外未列入决策表的新增 override 只能引用已治理 token', () => {
     const frozenIds = new Set(Object.keys(CINDY_EXPECTED_VALUES));
     const registeredIds = new Set(colorRegistry.getColors().map((color) => color.id));
+    // 引用已治理 token，或用填充按钮状态规则从已治理 token 算出（DESIGN.md §4）。
+    // 派生值与规则的完整结果比较：只看开头会放过绕开规则或尾部写坏的表达式。
     const tokenReference = /^var\(--([a-z0-9-]+)\)$/;
+    const derivedBase = /^oklch\(from var\(--([a-z0-9-]+)\) /;
+    const referencedToken = (value: string): string | undefined => {
+      const direct = value.match(tokenReference)?.[1];
+      if (direct) return direct;
+      const base = value.match(derivedBase)?.[1];
+      if (!base) return undefined;
+      const derived = [filledButtonHover(`var(--${base})`), filledButtonPressed(`var(--${base})`)];
+      return derived.includes(value) ? base : undefined;
+    };
     for (const [name, theme] of THEMES) {
       const preexistingLiteralIds = PREEXISTING_UNFROZEN_LITERAL_IDS[name] ?? new Set();
       for (const [id, value] of Object.entries(theme.colors)) {
         if (frozenIds.has(id) || preexistingLiteralIds.has(id)) continue;
-        const referencedId = value.match(tokenReference)?.[1];
+        const referencedId = referencedToken(value);
         expect(
           referencedId,
           `${name}.${id} 未入决策表且不在 baseline，只能引用已治理 token，实际 ${value}`,
@@ -491,6 +501,16 @@ describe('CINDY · ⑦ WCAG 复算 + 文字墨水阶梯反向冻结', () => {
     // ③ exact 已守,此处补层级:选中 pill 前景×中性底 ≥4.5。
     expect(contrast(cindyLight.colors['sidebar-item-active-foreground']!, cindyLight.colors['sidebar-item-active']!), 'light 选中胶囊 前景×中性底').toBeGreaterThanOrEqual(4.5);
     expect(contrast(cindyDark.colors['sidebar-item-active-foreground']!, cindyDark.colors['sidebar-item-active']!), 'dark 选中胶囊 前景×中性底').toBeGreaterThanOrEqual(4.5);
+  });
+
+  // Unit regression #7838: running task/timer icons retain status-bar-accent even when selected.
+  // The existing text contrast assertion cannot detect orange disappearing into a selected fill.
+  it('CINDY 运行图标×选中行底色对比度 ≥3:1', () => {
+    for (const [name, theme] of THEMES) {
+      const mode = name === 'cindy-dark' ? 'dark' : 'light';
+      const running = resolveIn(theme.colors, 'status-bar-accent', mode);
+      expect(contrast(running, theme.colors['sidebar-item-active']), `${mode} 运行橙×选中底`).toBeGreaterThanOrEqual(3);
+    }
   });
 
   it('CINDY 侧栏草稿铅笔×普通/悬停行底色对比度 ≥3:1', () => {

@@ -151,7 +151,7 @@ export function PluginNativeIntent({
           <HtmlWebsiteBrowser
             visit={{ url: intent.url, snapshotClosed: closed }}
             insets={{ top: 0, bottom: 44, left: 0, right: 0 }}
-            chrome={{ top: 0, bottom: 0, left: 0, right: 0, onClose }}
+            chrome={{ top: 0, bottom: 0, left: 0, right: 0, standalone: true, onClose }}
             onReturn={onClose}
           />
         )}

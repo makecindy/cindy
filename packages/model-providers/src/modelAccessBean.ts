@@ -217,6 +217,19 @@ export interface ModelNativeApiRule {
   nativeApi: ModelNativeApi;
 }
 
+/**
+ * V6 (capability `registryRecommendedAgents=1`): the engine Cindy recommends for one
+ * source and model, from official and community guidance. Exactly one of `modelId`
+ * (exact route ID) or `modelIdPrefix` is set; exact rules win over the longest prefix.
+ * A recommendation never grants membership or enables an engine the route lacks.
+ */
+export interface ModelRecommendedAgentRule {
+  providerId: string;
+  modelId?: string;
+  modelIdPrefix?: string;
+  agent: ModelAgent;
+}
+
 interface ModelRegistryBase {
   updatedAt: string;
 }
@@ -235,6 +248,8 @@ export interface ModelRegistry extends ModelRegistryBase {
   models: ModelRegistryEntry[];
   /** V3: route-scoped rules for new members of established model families. */
   nativeApiRules?: ModelNativeApiRule[];
+  /** V6, capability-gated: recommended engine per source and model. */
+  recommendedAgents?: ModelRecommendedAgentRule[];
 }
 
 export interface ModelRegistryV1 extends ModelRegistryBase {

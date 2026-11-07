@@ -44,6 +44,9 @@ function setup({ cached = false, sealed = false, credentialStoreUnavailable = fa
     browserAuthorizationSlot: { cancelActive },
     isLoginFlowCommitSealed: () => sealed,
     isOwnerChangeShellPending: () => false,
+    stopColdStartRecovery: () => {},
+    coldStartAuthInFlight: null,
+    readPersistedAuthSession: () => null,
     credentialStoreUnavailable,
     log: { warn: vi.fn() },
     cachedProviders: cached ? providers : null,
@@ -78,18 +81,21 @@ function setup({ cached = false, sealed = false, credentialStoreUnavailable = fa
 }
 
 describe('login Back without an auth-server round trip', () => {
-  it.each([false, true])('preserves credential recovery and private progress (cached=%s)', async (cached) => {
-    const main = setup({ cached, credentialStoreUnavailable: true });
-    expect(await main.dispatch({ type: 'back' })).toEqual({
-      success: false,
-      code: 'CREDENTIAL_STORE_UNAVAILABLE',
-      state: { step: 'error', code: 'CREDENTIAL_STORE_UNAVAILABLE', recoverTo: 'identifier' },
-    });
-    expect(main.snapshot().ticket).toBe('old-ticket');
-    expect(main.snapshot().epoch).toBe(1);
-    expect(main.cancelActive).not.toHaveBeenCalled();
-    expect(main.getProviders).not.toHaveBeenCalled();
-  });
+  it.each([false, true])(
+    'preserves credential recovery and private progress (cached=%s)',
+    async (cached) => {
+      const main = setup({ cached, credentialStoreUnavailable: true });
+      expect(await main.dispatch({ type: 'back' })).toEqual({
+        success: false,
+        code: 'CREDENTIAL_STORE_UNAVAILABLE',
+        state: { step: 'error', code: 'CREDENTIAL_STORE_UNAVAILABLE', recoverTo: 'identifier' },
+      });
+      expect(main.snapshot().ticket).toBe('old-ticket');
+      expect(main.snapshot().epoch).toBe(1);
+      expect(main.cancelActive).not.toHaveBeenCalled();
+      expect(main.getProviders).not.toHaveBeenCalled();
+    },
+  );
 
   it.each([false, true])(
     'returns locally and clears private progress (cached=%s)',

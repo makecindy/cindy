@@ -194,3 +194,25 @@ describe('LayoutStore · reset 与 ensurePersisted', () => {
     expect(fs.existsSync(`${filePath}.tmp`)).toBe(false);
   });
 });
+
+it('persists explicit sidebar width across restart and clears it on reset', () => {
+  const layout = createDefaultLayout();
+  if (layout.content.type !== 'split' || layout.content.children[1].node.type !== 'pane') throw new Error('fixture');
+  layout.content.children[1].node.preferredWidth = 517;
+  expect('persisted' in makeStore().setLayout(layout)).toBe(true);
+  const restarted = makeStore();
+  const restored = restarted.getLayout();
+  expect(restored).toEqual(layout);
+  restarted.reset();
+  expect(makeStore().getLayout()).toEqual(createDefaultLayout());
+});
+
+it.each([NaN, Infinity, -1, 119, 16001])('rejects invalid sidebar preference %s without changing other layout', (width) => {
+  const store = makeStore();
+  const before = store.getLayout();
+  const next = structuredClone(before);
+  if (next.content.type !== 'split' || next.content.children[1].node.type !== 'pane') throw new Error('fixture');
+  next.content.children[1].node.preferredWidth = width;
+  expect(store.setLayout(next)).toHaveProperty('rejection');
+  expect(store.getLayout()).toEqual(before);
+});

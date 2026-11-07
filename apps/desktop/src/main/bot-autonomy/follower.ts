@@ -6,10 +6,12 @@
  *   否则没人跟（只进工作台看）。
  * - 没有 creator 的任务（主人自己开的、远程电脑上的）由总调度跟。
  * - 没有可用总调度时为 null：不叫醒任何伙伴，「等你」由宿主直接发系统提醒。
+ * - 主人关掉某伙伴的系统技能「跟进」时，它既不跟自己开的任务，也不当总调度（同暂停处理）。
  */
 
 import type { RoutineRun } from '@cindy/maker-scheduler';
 import { HOST_SESSIONS_SOURCE_ID, type WatchedSession } from '../../shared/botAutonomy.js';
+import { readBotSystemSkillsOff, type BotSystemSkillId } from '../../shared/botSystemSkills.js';
 import { isPendingForFallback } from './events.js';
 
 export interface FollowerBotState {
@@ -20,17 +22,26 @@ export interface FollowerBotState {
   shadowed?: boolean;
   /** 资料上登记的主任务 id（bot_profiles.canonical_session_id）。 */
   canonicalSessionId?: string | null;
+  /** 主人关掉了它的系统技能「跟进」（capabilities.systemSkillsOff 含 follow）：不当跟进者，也不当总调度。 */
+  followOff?: boolean;
 }
 
 export type FollowerBotDirectory = ReadonlyMap<string, FollowerBotState>;
 
-export function isFollowerAvailable(bot: FollowerBotState | undefined): boolean {
+/** 在用且本机是主力电脑：它的内置规则（跟进、夜间学习）落在这台电脑上。 */
+export function isBotHomeHere(bot: FollowerBotState | undefined): boolean {
   return !!bot && bot.status === 'active' && !bot.shadowed;
+}
+
+/** 能被叫醒去跟进：关掉「跟进」只停跟进，夜间学习等其它内置规则照旧（见 isBotHomeHere）。 */
+export function isFollowerAvailable(bot: FollowerBotState | undefined): boolean {
+  return isBotHomeHere(bot) && !bot?.followOff;
 }
 
 /**
  * 「自动跟进所有任务」的有效伙伴：用户 override 指向的伙伴仍存在（非归档 / 删除中）就用它
  * （显式 null = 用户关掉了总调度）；目标已不存在时关闭，不自动转交其他伙伴。
+ * 目标关掉了「跟进」时同样按关闭算，但不改写保存的选择：重新打开后恢复原样。
  * 未自定义的新用户和老用户都默认关闭，只有明确选择才开始读取与分析自己的任务。
  */
 export function resolveSchedulerBotId(
@@ -39,7 +50,7 @@ export function resolveSchedulerBotId(
 ): string | null {
   const exists = (id: string) => {
     const bot = bots.get(id);
-    return !!bot && bot.status !== 'archived' && bot.status !== 'deleting';
+    return !!bot && bot.status !== 'archived' && bot.status !== 'deleting' && !bot.followOff;
   };
   if (override.customized) {
     if (override.schedulerBotId === null) return null;
@@ -64,12 +75,21 @@ export function deriveFollowerBotId(input: {
 
 /** 资料 capabilities_json 里的 `allowSchedulerFollow`；缺失或读不了都按 false。 */
 export function readAllowSchedulerFollow(capabilitiesJson: string | null | undefined): boolean {
-  if (!capabilitiesJson) return false;
+  return readCapabilities(capabilitiesJson)?.allowSchedulerFollow === true;
+}
+
+/** 资料 capabilities_json 里关掉的系统技能；缺失或读不了都按全开（shared/botSystemSkills.ts）。 */
+export function readSystemSkillsOff(capabilitiesJson: string | null | undefined): BotSystemSkillId[] {
+  return readBotSystemSkillsOff(readCapabilities(capabilitiesJson)?.systemSkillsOff);
+}
+
+function readCapabilities(capabilitiesJson: string | null | undefined): Record<string, unknown> | null {
+  if (!capabilitiesJson) return null;
   try {
     const parsed = JSON.parse(capabilitiesJson) as unknown;
-    return !!parsed && typeof parsed === 'object' && (parsed as { allowSchedulerFollow?: unknown }).allowSchedulerFollow === true;
+    return parsed && typeof parsed === 'object' ? parsed as Record<string, unknown> : null;
   } catch {
-    return false;
+    return null;
   }
 }
 

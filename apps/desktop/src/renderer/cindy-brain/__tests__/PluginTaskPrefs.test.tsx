@@ -28,8 +28,13 @@ vi.mock('@/components/new-chat/ModelSelector', () => ({ ModelSelector: (props: a
   </>
 ) }));
 vi.mock('@/components/new-chat/PermissionSelector', () => ({ PermissionSelector: (props: any) => (
+  <>
   <button disabled={props.disabled} data-testid="permission" data-legacy-label={props.fallbackModeLabel}
     onClick={() => props.onPermissionModeChange('ask')}>{props.permissionMode}</button>
+  {(props.allowedModes ?? ['ask', 'acceptEdits', 'auto', 'bypassPermissions']).map((mode: string) =>
+    <button key={mode} data-testid={`permission-mode-${mode}`} disabled={props.disabled || !!props.disabledModes?.[mode]}
+      onClick={() => props.onPermissionModeChange(mode)}>{mode}</button>)}
+  </>
 ) }));
 
 beforeEach(() => {
@@ -42,6 +47,18 @@ beforeEach(() => {
   } };
 });
 afterEach(cleanup);
+// unit: the shared picker must expose and persist the ordinary three modes,
+// without silently changing a retained legacy setting just by opening the page.
+it('offers full access and saves only after the user changes the legacy choice', async () => {
+  state.config = { permissionMode: 'acceptEdits' };
+  render(<PluginTaskPrefs ghostId="plugin" />);
+  expect(screen.getByTestId('permission').textContent).toBe('acceptEdits');
+  expect(screen.getByTestId('permission').getAttribute('data-legacy-label')).toBeTruthy();
+  expect(screen.queryByTestId('permission-mode-acceptEdits')).toBeNull();
+  expect(state.save).not.toHaveBeenCalled();
+  fireEvent.click(screen.getByTestId('permission-mode-bypassPermissions'));
+  await waitFor(() => expect(state.save).toHaveBeenCalledWith('plugin', { permissionMode: 'bypassPermissions' }));
+});
 it.each([undefined, 'medium'])('changing Fast preserves only the configured effort (%s), never the display fallback', async effort => {
   state.config = {agentKind:'codex',providerId:'openai',model:'configured-model',effort};
   render(<PluginTaskPrefs ghostId="plugin" />);

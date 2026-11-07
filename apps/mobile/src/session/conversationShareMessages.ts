@@ -74,7 +74,10 @@ export function collectConversationShareMessages(
       if (projected?.kind === 'user' && !item.message.hookSource && isOwnUserMessage?.(item.message)) {
         projected.ownUserBubble = true;
       }
-      if (projected) messages.push(projected);
+      if (projected) {
+        projected.richStateKey = item.message.source.clientId ?? item.message.key;
+        messages.push(projected);
+      }
       return;
     }
     if (item.type === 'work_group') {

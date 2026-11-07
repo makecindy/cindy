@@ -17,12 +17,14 @@ import type { PluginModelPickerRequest } from '@cindy/device-link';
 
 const state = vi.hoisted(() => ({
   view: null as any,
+  remoteCatalogs: [] as any[],
   setItem: vi.fn(async () => {}),
   saveFavorites: vi.fn(async () => {}),
   favorites: [] as any[],
   answer: vi.fn(async () => ({ handled: true, accepted: true })),
   maker: { getCapabilities: vi.fn(async () => ({ hasFastMode: true, availableModels: [] })) },
 }));
+vi.mock('@/session/useRemoteAgentCatalogs', () => ({ useRemoteAgentCatalogs: () => state.remoteCatalogs }));
 vi.mock('react-native', () => ({ Platform: { OS: 'android' }, Alert: { alert: vi.fn() } }));
 vi.mock('react-i18next', () => ({ useTranslation: () => ({ t: (key: string) => key }) }));
 vi.mock('expo-crypto', () => ({ randomUUID: () => 'draft-favorite' }));
@@ -72,12 +74,13 @@ beforeEach(() => {
   state.saveFavorites.mockClear();
   state.answer.mockClear();
   state.favorites = [];
+  state.remoteCatalogs = [];
   root = createRoot(document.createElement('div'));
 });
 afterEach(() => act(() => root.unmount()));
 async function mount(initial?: PluginModelPickerRequest['initial'], key = 'request') {
   await act(async () => root.render(createElement(PluginModelPicker, {
-    key, request: { ...request, requestId: key, initial }, deviceId: 'host', onAnswer: state.answer,
+    key, request: { ...request, requestId: key, initial, ...(state.remoteCatalogs.length ? { allowRemote: true } : {}) }, deviceId: 'host', onAnswer: state.answer,
   })));
 }
 const ordinaryRow = () => state.view.groups.flatMap((group: any) => group.rows).find((row: any) => !row.favorite);
@@ -124,5 +127,23 @@ it('discards engine and favorite edits on cancellation and starts the next reque
   await mount(undefined, 'next-request');
   expect(ordinaryRow().config).toMatchObject({ agent: 'codex', effort: 'medium', fast: false });
   expect(state.view.groups.some((group: any) => group.key === 'favorites')).toBe(false);
+  expectNoWrites();
+});
+
+// Bug: mobile plugin selection did not expose or return the execution source. Unlike the
+// local cases above, a share and the host deliberately offer the same provider+model. Tier: unit.
+it('retains the share source when editing and selecting a remote model', async () => {
+  state.remoteCatalogs = [{ deviceId: 'share:fixture', name: 'Shared', status: 'ready',
+    providers: [{ id: 'account', name: 'Shared account', connected: true, models: {} }] }];
+  await mount();
+  const remoteRow = () => state.view.groups.flatMap((group: any) => group.rows)
+    .find((row: any) => row.remoteDevice?.deviceId === 'share:fixture');
+  expect(remoteRow()).toBeTruthy();
+  await act(async () => state.view.onOptions(remoteRow()));
+  await act(async () => state.view.options.onChange({ ...state.view.options.row.config, effort: 'high' }));
+  await act(async () => state.view.onSelect(remoteRow()));
+  expect(state.answer).toHaveBeenCalledWith(expect.objectContaining({
+    agentDeviceId: 'share:fixture', providerId: 'account', model: 'codex/model', effort: 'high',
+  }));
   expectNoWrites();
 });

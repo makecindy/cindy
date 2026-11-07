@@ -9,6 +9,7 @@
  */
 
 import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { extractToolResultDiagnostics } from '@cindy/maker-shared/tool-result-compaction';
 
 vi.mock('../localDb/ipc/messages.js', () => ({
   broadcastMessageAgentMetaUpdate: vi.fn(async () => true),
@@ -100,7 +101,8 @@ describe('tool_result persistence cap', () => {
     onToolUseEvent(SESSION, { toolUseId: 't2', toolName: 'Bash', input: {} }, null);
     onToolResultEvent(SESSION, { summary: 'short', toolUseIds: ['t2'] }, null);
     const url = 'cindy-media://blobs/0123456789abcdef.png';
-    const fullText = `${'b'.repeat(TOOL_RESULT_PERSIST_CONTENT_LIMIT + 100)}${url}`;
+    const fullText = JSON.stringify({ body: 'b'.repeat(TOOL_RESULT_PERSIST_CONTENT_LIMIT + 100),
+      ok: true, afterSnapshot: { ok: false, errorCode: 'ACT_INVALID_REQUEST' }, image: url });
     const r = onToolResultFullEvent(SESSION, { toolUseId: 't2', fullText }, null);
     expect(r?.content).toBe(fullText);
     await flushWrites();
@@ -109,6 +111,7 @@ describe('tool_result persistence cap', () => {
     const capped = vi.mocked(updateMessageContent).mock.calls[0][2] as string;
     expect(capped.length).toBeLessThanOrEqual(TOOL_RESULT_PERSIST_CONTENT_LIMIT);
     expect(capped).not.toContain(url);
+    expect(extractToolResultDiagnostics(capped)).toEqual({ ok: true, afterSnapshotOk: false, afterSnapshotErrorCode: 'ACT_INVALID_REQUEST' });
     expect(commitMessageMediaRefs).toHaveBeenCalledWith({
       sessionId: SESSION,
       role: 'tool_result',

@@ -24,7 +24,8 @@ describe('native e2e environment', () => {
 
   });
 
-  it.each([false, true])('preserves custom-port ownership when occupied=%s', async (occupied) => {
+  it.each(['free', 'occupied', 'owner-write-fails'] as const)('preserves custom-port ownership when the port is %s', async (mode) => {
+    const occupied = mode === 'occupied';
     const source = readFileSync(resolve(process.cwd(), 'scripts/sim-start.mjs'), 'utf8');
     const start = source.indexOf("const args = ['exec', 'expo', 'start'");
     if (start < 0) throw new Error('script workflow entry missing');
@@ -33,20 +34,28 @@ describe('native e2e environment', () => {
       pid: 4242,
       once: (event: string, callback: () => void) => { if (event === 'exit') exitCallbacks.push(callback); },
       on: vi.fn(),
+      kill: vi.fn(),
     };
+    const signalHandlers: Record<string, () => void> = {};
+    const terminateMetro = vi.fn(async () => true);
     const spawn = vi.fn(() => child);
-    const writeMetroOwner = vi.fn();
+    const writeMetroOwner = vi.fn(() => {
+      if (mode === 'owner-write-fails') throw new Error('EACCES');
+    });
     const clearMetroOwner = vi.fn();
     const portInUse = vi.fn(async () => occupied);
     const error = vi.fn();
+    const prepareMetroLog = vi.fn((_port: number, _info: { source: string; region: string }) => '/tmp/cindy-metro-log-x/metro-8082.log');
+    const removeMetroLog = vi.fn();
     const execution = runInNewContext(`(async () => { ${source.slice(start)} })()`, {
       DEFAULT_PORT: 8081, portArgs: { port: 8082, passthrough: [] }, portInUse,
       ensureAndroidTarget: vi.fn(), spawn, writeMetroOwner, clearMetroOwner,
       console: { log: vi.fn(), error },
-      process: { env: {}, exit: (code: number) => { throw new Error(`exit:${code}`); } },
+      process: { env: {}, on: (signal: string, handler: () => void) => { signalHandlers[signal] = handler; }, exit: (code: number) => { throw new Error(`exit:${code}`); } },
       resolvePnpmInvocation: () => ({ command: 'pnpm', args: [] }),
       usablePnpmExecPath: () => undefined, existsSync: () => false,
       mobileDir: '/repo/apps/mobile', worktreeRoot: '/repo', buildEnv: {}, region: 'global',
+      prepareMetroLog, removeMetroLog, terminateMetro, metroLogEnv: (path: string) => ({ CINDY_METRO_LOG_PATH: path }),
       branch: 'test', commit: 'test', sourceIdentity: 'test@123',
       loginScenario: 'providers:email-only', envFingerprint: 'fixture',
     });
@@ -54,14 +63,32 @@ describe('native e2e environment', () => {
       await expect(execution).rejects.toThrow('exit:1');
       expect(error).toHaveBeenCalledWith(expect.stringContaining('8082 is already in use'));
       expect(spawn).not.toHaveBeenCalled();
+      // A refused start must not wipe the running Metro's log.
+      expect(prepareMetroLog).not.toHaveBeenCalled();
       expect(writeMetroOwner).not.toHaveBeenCalled();
       expect(clearMetroOwner).not.toHaveBeenCalled();
+    } else if (mode === 'owner-write-fails') {
+      // Review #8560: without an owner record nothing can claim this Metro, so stop it and drop its log.
+      await expect(execution).rejects.toThrow('exit:1');
+      // Review #8560: on Windows the child is only the pnpm/cmd wrapper, so stop the whole tree.
+      expect(terminateMetro).toHaveBeenCalledWith(4242, { worktreeRoot: '/repo' });
+      expect(removeMetroLog).toHaveBeenCalledWith('/tmp/cindy-metro-log-x/metro-8082.log');
+      expect(exitCallbacks).toHaveLength(1);
     } else {
       await execution;
       expect(spawn).toHaveBeenCalledOnce();
-      expect(writeMetroOwner).toHaveBeenCalledWith(8082, expect.objectContaining({ pid: 4242 }));
+      expect(spawn).toHaveBeenCalledWith(expect.anything(), expect.anything(), expect.objectContaining({
+        env: expect.objectContaining({ CINDY_METRO_LOG_PATH: '/tmp/cindy-metro-log-x/metro-8082.log' }),
+      }));
+      // logcheck finds the log only through the owner record of this launch.
+      expect(writeMetroOwner).toHaveBeenCalledWith(8082, expect.objectContaining({ pid: 4242, metroLogPath: '/tmp/cindy-metro-log-x/metro-8082.log' }));
       for (const callback of exitCallbacks) callback();
       expect(clearMetroOwner).toHaveBeenCalledWith(8082, 4242);
+      // Review #8560: Ctrl-C reaches the launcher too; forward it so Metro's exit runs the cleanup above.
+      signalHandlers.SIGINT?.();
+      expect(child.kill).toHaveBeenCalledWith('SIGINT');
+      // Review #8560: the raw log may carry credentials, so it goes away with its Metro.
+      expect(removeMetroLog).toHaveBeenCalledWith('/tmp/cindy-metro-log-x/metro-8082.log');
     }
     expect(portInUse).toHaveBeenCalledWith(8082);
   });

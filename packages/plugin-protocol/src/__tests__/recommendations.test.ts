@@ -82,9 +82,13 @@ describe("optional recommendation contract", () => {
       locales: {
         en: { label: "English", prompt: "English prompt" },
         "zh-TW": { label: "郵件", prompt: "檢查郵件" },
+        fr: { label: "Courrier", prompt: "Vérifier le courrier" },
       },
     };
     expect(localizeGhostRecommendation(translated, "zh-TW").label).toBe("郵件");
     expect(localizeGhostRecommendation(translated, "ko").label).toBe("English");
+    // Unit: the previous validator rejected a French recommendation before localization.
+    expect(validateGhostRecommendations([translated]).ok).toBe(true);
+    expect(localizeGhostRecommendation(translated, "fr").label).toBe("Courrier");
   });
 });

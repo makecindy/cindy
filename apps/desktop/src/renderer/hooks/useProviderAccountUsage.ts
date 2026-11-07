@@ -10,12 +10,18 @@
  * 传入会话所在引擎才能对准当前会话实际消耗的账户；设置页供应商级视图不传。
  */
 
+import { isDeviceLinkRemotePushCurrent } from '../lib/remoteDataOwnerPushFence';
+import { getDataOwnerGeneration, isDataOwnerGenerationCurrent } from '../contexts/dataOwnerGeneration';
+import { isKimiCodingProviderView } from '../../shared/kimiCodingUsage';
+import { isOpenCodeGoProviderView } from '../../shared/opencodeGoUsage';
 import { useCallback, useEffect, useRef, useState } from 'react';
 
 import type { AgentKind, ProviderView } from '@cindy/model-providers';
 
 import {
   PROVIDER_ACCOUNT_USAGE_AGENTS,
+  parseKimiAccountUsageResult,
+  parseOpenCodeGoAccountUsageResult,
   type ProviderAccountUsageResult,
 } from '../../shared/providerAccountUsage';
 import {
@@ -36,17 +42,28 @@ const REFRESH_INTERVAL_MS = 60_000;
 export function useProviderAccountUsage(
   provider: ProviderView | undefined,
   agent?: AgentKind,
+  deviceId: string | null = null,
 ): ProviderAccountUsageState {
+  const owner = getDataOwnerGeneration();
+  const [revision, setRevision] = useState(0);
+  const kimi = isKimiCodingProviderView(provider, agent);
+  const opencodeGo = isOpenCodeGoProviderView(provider, agent);
+  const structuredQuota = kimi || opencodeGo;
   const supported =
-    !!provider &&
-    provider.auth?.method !== 'oauth' &&
-    (hasDeepSeekOfficialRouteView(provider) || isZhipuCodingPlanProviderView(provider));
+    !!provider && !provider.removed && !provider.suspended && (!structuredQuota || provider.connected) &&
+    (!deviceId?.startsWith('share:')) &&
+    (structuredQuota
+      || (!deviceId && provider.auth?.method !== 'oauth' && (hasDeepSeekOfficialRouteView(provider) || isZhipuCodingPlanProviderView(provider))));
   const identity = JSON.stringify([
+    owner,
+    revision,
+    deviceId,
     provider?.id,
+    provider?.connected,
     agent,
-    provider?.auth?.method,
+    provider?.auth,
     (agent ? [agent] : PROVIDER_ACCOUNT_USAGE_AGENTS).map(
-      (runtime) => provider?.routing[runtime]?.upstream,
+      (runtime) => provider?.routing[runtime],
     ),
   ]);
   const [state, setState] = useState<{
@@ -66,15 +83,24 @@ export function useProviderAccountUsage(
         busy: true,
       }));
       try {
-        const next = await window.electronAPI.maker.fetchProviderAccountUsage({
+        const input = {
           providerId: provider.id,
           forceRefresh,
           ...(agent ? { agent } : {}),
-        });
-        if (id === requestId.current) setState({ identity, result: next, busy: false });
+        };
+        const next = deviceId
+          ? (opencodeGo ? parseOpenCodeGoAccountUsageResult : parseKimiAccountUsageResult)(
+              await window.electronAPI.deviceLink.invoke(
+                deviceId,
+                opencodeGo ? 'maker:usage:opencode-go' : 'maker:usage:kimi-coding',
+                [input],
+              ),
+            )
+          : await window.electronAPI.maker.fetchProviderAccountUsage(input);
+        if (id === requestId.current && isDataOwnerGenerationCurrent(owner)) setState({ identity, result: next, busy: false });
       } catch {
         // IPC 异常也结束等待；只保留同一查询身份的已有快照。
-        if (id === requestId.current)
+        if (id === requestId.current && isDataOwnerGenerationCurrent(owner))
           setState((previous) => ({
             identity,
             result:
@@ -85,8 +111,21 @@ export function useProviderAccountUsage(
           }));
       }
     },
-    [provider?.id, agent, identity, supported],
+    [provider?.id, agent, identity, supported, deviceId, owner, opencodeGo],
   );
+
+  useEffect(() => {
+    if (!structuredQuota) return;
+    const changed = () => {
+      requestId.current += 1;
+      setRevision(value => value + 1);
+    };
+    if (deviceId) return window.electronAPI.deviceLink.onRemotePush?.((push, stamp) => {
+      if (push.deviceId === deviceId && push.channel === 'maker:provider:changed'
+        && isDeviceLinkRemotePushCurrent(push, stamp)) changed();
+    });
+    return window.electronAPI.maker.onProvidersChanged?.(changed);
+  }, [structuredQuota, deviceId]);
 
   useEffect(() => {
     if (!supported) return;

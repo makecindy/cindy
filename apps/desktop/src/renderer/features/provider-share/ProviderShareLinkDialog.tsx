@@ -16,6 +16,7 @@ import {
   ProviderShareDialogTitle,
 } from './ProviderShareDialog';
 import { formatShareCountdown, shareLinkRemainingMs } from './providerShareFormat';
+import { OwnRelayCrossAccountNotice } from '../device-link/OwnRelayCrossAccountNotice';
 import { providerManagementErrorKey, providerShareManagementCommand } from '../provider-group/providerManagement';
 
 type LinkState =
@@ -106,6 +107,7 @@ export function ProviderShareLinkDialog({
     <ProviderShareDialog open onOpenChange={(open) => { if (!open) onClose(); }} testId="provider-share-link-dialog">
       <ProviderShareDialogTitle>{t('providerShare.link.title', { provider: providerLabel })}</ProviderShareDialogTitle>
       <p className="mt-2 text-13 leading-[1.5] text-[var(--confirm-desc)]">{t('providerShare.link.description')}</p>
+      <OwnRelayCrossAccountNotice feature="providerShare" className="mt-1" />
 
       {state.status === 'error' ? (
         <ErrorNotice role="alert" className="mt-4" message={state.message} />

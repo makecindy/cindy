@@ -1173,10 +1173,11 @@ describe('makerChatStore.reconcileRemoteMessages', () => {
     );
   });
 
-  it('远程会话:thinking 晚到行按落库时间线判脱离,不被改写后的开始时刻骗过', async () => {
-    // review #676(codex P1):mapServerMessages 把 thinking 的 createdAt 改写成
-    // `finishedAt - durationMs`(块的开始时刻),而权威页边界是原始 DB 行。混着比会让一个
-    // "想了很久"的 thinking 落进页范围,而它与权威窗口之间那一行可能正好被有损推送丢了。
+  it('远程会话:thinking 晚到行按落库时间线判脱离,不被块结束时刻骗过', async () => {
+    // review #676(codex P1):thinking 行的锚点是块的开始时刻(`finishedAt - durationMs`),
+    // 渲染层的 createdAt 与落库行一致。若拿结束时刻(finishedAt)去比,一个"想了很久"、
+    // 起点在权威页之外的 thinking 会被算进页范围,而它与权威窗口之间那一行可能正好被有损
+    // 推送丢了。
     const s = sid();
     makerChatStore.initGlobalListeners();
     await openRemoteWithHistory(s, [dbMessage(s, 'seed', 'seed row', '2026-06-15T00:00:00.000Z')]);
@@ -1185,8 +1186,8 @@ describe('makerChatStore.reconcileRemoteMessages', () => {
     remoteListResolver = () => pendingList.promise;
     makerChatStore.reconcileRemoteMessages(s);
     await flush();
-    // 落库时间(finishedAt)= 06-25,明显比权威页最新行(06-20)更新 → 应判脱离;
-    // 但它想了 10 天,改写后的"开始时刻"= 06-15,落在权威页范围里 → 旧写法会判连续。
+    // 起点 = 06-05(比权威页最老一行 06-10 还早 → 应判脱离);它想了 10 天,
+    // 结束时刻 = 06-15 落在权威页范围里 → 按结束时刻比会误判连续。
     remotePush?.({
       deviceId: DEVICE_ID,
       channel: 'local-db:messages:created',
@@ -1196,14 +1197,14 @@ describe('makerChatStore.reconcileRemoteMessages', () => {
           s,
           'long-thinking',
           'thought for a long time',
-          '2026-06-25T00:00:00.000Z',
+          '2026-06-05T00:00:00.000Z',
           10 * 24 * 60 * 60 * 1000,
-          '2026-06-25T00:00:00.000Z',
+          '2026-06-15T00:00:00.000Z',
         ),
       },
     });
 
-    // 权威页跨 06-10 ~ 06-20:改写后的"开始时刻"(06-15)恰好落在里面,而落库时间(06-25)在外面。
+    // 权威页跨 06-10 ~ 06-20:块起点(06-05)在外面,结束时刻(06-15)在里面。
     pendingList.resolve([
       dbMessage(s, 'auth-a', 'authoritative a', '2026-06-10T00:00:00.000Z'),
       dbMessage(s, 'auth-b', 'authoritative b', '2026-06-20T00:00:00.000Z'),

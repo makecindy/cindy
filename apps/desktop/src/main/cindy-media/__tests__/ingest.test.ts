@@ -78,8 +78,9 @@ function freshDb(): LedgerDb {
 
 let db: LedgerDb;
 
-beforeAll(() => {
-  tmpUserData = fs.mkdtempSync(path.join(os.tmpdir(), 'cindy-media-ingest-test-'));
+beforeAll(async () => {
+  // Use the store's native realpath so injected attacks also match Windows 8.3 aliases.
+  tmpUserData = await fsp.realpath(fs.mkdtempSync(path.join(os.tmpdir(), 'cindy-media-ingest-test-')));
 });
 
 afterAll(() => {

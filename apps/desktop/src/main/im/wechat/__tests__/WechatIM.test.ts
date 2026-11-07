@@ -74,7 +74,11 @@ describe('WechatIM host boundary', () => {
     const dispatchAgentTurn = vi.fn(async (_input: {
       turnPermissionPolicy?: { confirmationSurface: string }; requesterIsOwner?: boolean;
       inheritCompanionOwnerPermissions?: boolean;
-    }) => ({ kind: 'accepted', terminal: Promise.resolve({ kind: 'done' }) }));
+      groupHistoryAccess?: { access: string; lane: { chatId: string; threadId: string } };
+    }) => {
+      void _input;
+      return { kind: 'accepted', terminal: Promise.resolve({ kind: 'done' }) };
+    });
     im.attachTurnRuntime({ runner: {
       companionBotIdFor: () => companion ? 'cindy' : undefined,
       dispatchAgentTurn,
@@ -86,6 +90,7 @@ describe('WechatIM host boundary', () => {
       expect(input.inheritCompanionOwnerPermissions).toBe(true);
       expect(input.requesterIsOwner).toBe(companion ? peer === 'owner' : undefined);
       expect(input.turnPermissionPolicy?.confirmationSurface).toBe('channel');
+      expect(input.groupHistoryAccess).toMatchObject({ access: 'lane', lane: { chatId: peer, threadId: '' } });
     } finally { await im.dispose(); }
   });
 

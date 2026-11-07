@@ -141,10 +141,25 @@ function dispatcher(local: NotificationSession[], remote: NotificationSession[] 
   };
   return new Function(...Object.keys(bindings), emitted)(...Object.values(bindings)) as (
     sessionId: string, kind: 'done' | 'error' | 'needs-reply',
+    options?: { inputHandoff: true; inputHandoffRequestId: string },
   ) => void;
 }
 
 describe('disabled Make notification dispatch', () => {
+  // #6754 / unit: run the production sidebar callback to protect the event ID
+  // through each local dispatch branch, including the async hidden-bot fallback.
+  it.each(['ordinary', 'worker', 'unknown'] as const)('forwards handoff request identity for %s tasks', async route => {
+    const options = { inputHandoff: true as const, inputHandoffRequestId: 'request-1' };
+    const fire = dispatcher(route === 'unknown' ? [] : [{
+      id: route, title: 'Task', source: 'desktop',
+      ...(route === 'worker' ? { orcaRole: 'worker' as const } : {}),
+    }]);
+    fire(route, 'needs-reply', options);
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(send).toHaveBeenCalledExactlyOnceWith(route, expect.any(String), 'needs-reply', expect.objectContaining(options));
+  });
+
   it.each(['cindy-make', 'cindy-make-merge'].flatMap(source =>
     (['local', 'archived', 'remote'] as const).flatMap(location =>
       (['done', 'error', 'needs-reply'] as const).map(kind => ({ source, location, kind })),

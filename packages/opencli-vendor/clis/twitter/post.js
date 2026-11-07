@@ -18,6 +18,63 @@ const SUBMIT_TIMEOUT_MS = 15_000;
 const COMPOSE_URL = 'https://x.com/compose/post';
 const FILE_INPUT_SELECTOR = 'input[type="file"][data-testid="fileInput"]';
 const SUPPORTED_EXTENSIONS = new Set(['.jpg', '.jpeg', '.png', '.gif', '.webp']);
+const VIDEO_EXTENSIONS = new Set(['.mp4', '.mov']);
+// Keep the existing Cindy host upload limit; account-specific duration/codec
+// checks remain with X. Do not impose the free-account limits on subscribers.
+const MAX_VIDEO_BYTES = 100 * 1024 * 1024;
+const VIDEO_UPLOAD_TIMEOUT_MS = 180_000;
+
+function validateVideoPath(raw) {
+    const absPath = resolveRecipePath(raw.trim());
+    if (!VIDEO_EXTENSIONS.has(path.extname(absPath).toLowerCase())) {
+        throw new CommandExecutionError('Unsupported video format. Use MP4 or MOV (H.264 video with AAC audio).');
+    }
+    const stat = statRecipeFileSync(absPath);
+    if (!stat.isFile() || stat.size === 0) {
+        throw new CommandExecutionError(`Not a valid video file: ${absPath}`);
+    }
+    if (stat.size > MAX_VIDEO_BYTES) {
+        throw new CommandExecutionError('Video exceeds the Cindy browser upload limit of 100 MiB. Compress the video before uploading.');
+    }
+    return absPath;
+}
+
+function validatePostVideo(kwargs) {
+    if (kwargs.video && kwargs.images) {
+        throw new CommandExecutionError('Use either video or images for this command, not both.');
+    }
+    return kwargs.video ? validateVideoPath(String(kwargs.video)) : null;
+}
+
+async function waitForVideoUpload(page) {
+    // Short probes keep each browser request within the host timeout. A video
+    // preview alone is insufficient: X shows it while still uploading/encoding.
+    const deadline = Date.now() + VIDEO_UPLOAD_TIMEOUT_MS;
+    do {
+        const state = requirePostActionResult(await page.evaluate(`(() => {
+            const visible = el => !!el && (el.offsetParent !== null || el.getClientRects().length > 0);
+            const box = Array.from(document.querySelectorAll('[data-testid="tweetTextarea_0"]')).find(visible);
+            const root = box?.closest('[role="dialog"]') || document;
+            const alerts = Array.from(root.querySelectorAll('[role="alert"], [data-testid="toast"]'));
+            const error = alerts.find(el => visible(el) && /failed|error|could not|cannot|unsupported|not supported|too (?:large|long)|exceed|失败|出错|无法|不支持|过大|过长|超出|超过/i.test(el.textContent || ''));
+            if (error) return { ok: false, error: (error.textContent || 'Video upload failed.').trim() };
+            const attachments = root.querySelector('[data-testid="attachments"]');
+            const preview = attachments?.querySelector('video, [data-testid="videoPlayer"], [data-testid="videoComponent"]');
+            // The composer also has a character-count progressbar. Only media
+            // progress blocks a video, otherwise valid text would never post.
+            const progress = Array.from(attachments?.querySelectorAll('[role="progressbar"], progress, [aria-busy="true"]') || []).some(visible);
+            const button = Array.from(root.querySelectorAll('[data-testid="tweetButtonInline"], [data-testid="tweetButton"]')).find(visible);
+            return { ok: !!preview && visible(attachments) && !progress && !!button && !button.disabled && button.getAttribute('aria-disabled') !== 'true' };
+        })()`), 'Twitter video upload verification');
+        if (state.error) {
+            throw new CommandExecutionError(`Video upload failed: ${state.error}`, 'Nothing was posted. Check the video format and your X account limits.');
+        }
+        if (state.ok) return;
+        await new Promise(resolve => setTimeout(resolve, UPLOAD_POLL_MS));
+    } while (Date.now() < deadline);
+    throw new TimeoutError('twitter video upload', VIDEO_UPLOAD_TIMEOUT_MS / 1000,
+        'Nothing was posted. The video is still uploading or processing; check the X composer before trying again.');
+}
 
 function validateImagePaths(raw) {
     const paths = raw.split(',').map(s => s.trim()).filter(Boolean);
@@ -185,10 +242,12 @@ async function waitForImageUpload(page, expectedCount) {
     })()`), 'Twitter image upload verification');
 }
 
-async function attachImagesViaDataTransfer(page, absPaths) {
+async function attachMediaViaDataTransfer(page, absPaths) {
     const files = absPaths.map((absPath) => {
         const ext = path.extname(absPath).toLowerCase();
-        const mime = ext === '.png'
+        const mime = ext === '.mp4' ? 'video/mp4'
+            : ext === '.mov' ? 'video/quicktime'
+            : ext === '.png'
             ? 'image/png'
             : ext === '.gif'
                 ? 'image/gif'
@@ -228,9 +287,9 @@ async function attachImagesViaDataTransfer(page, absPaths) {
         input.dispatchEvent(new Event('change', { bubbles: true }));
         input.dispatchEvent(new Event('input', { bubbles: true }));
         return { ok: true };
-    })()`), 'Twitter image upload fallback');
+    })()`), 'Twitter media upload fallback');
     if (!upload?.ok) {
-        throw new CommandExecutionError(`Image upload failed (base64 fallback): ${upload?.error ?? 'unknown error'}`);
+        throw new CommandExecutionError(`Media upload failed (base64 fallback): ${upload?.error ?? 'unknown error'}`);
     }
 }
 
@@ -297,21 +356,25 @@ cli({
     site: 'twitter',
     name: 'post',
     access: 'write',
-    description: 'Post a new tweet/thread',
+    description: 'Post to X with text and up to 4 images, or one MP4/MOV video (100 MiB max in Cindy)',
     domain: 'x.com',
     strategy: Strategy.UI,
     browser: true,
     args: [
         { name: 'text', type: 'string', required: true, positional: true, help: 'The text content of the tweet' },
         { name: 'images', type: 'string', required: false, help: 'Image paths, comma-separated, max 4 (jpg/png/gif/webp)' },
+        { name: 'video', type: 'string', required: false, help: 'One local MP4/MOV video path, max 100 MiB in Cindy. Prefer H.264/AAC. X free accounts: 140 seconds; subscription limits vary. Cannot combine with images.' },
     ],
     columns: ['status', 'message', 'text', 'id', 'url'],
+    // Input failures must not count as executed writes or pause the recipe.
+    validateArgs: kwargs => { validatePostVideo(kwargs); },
     func: async (page, kwargs) => {
         if (!page)
             throw new CommandExecutionError('Browser session required for twitter post');
 
-        // Validate images upfront before any browser interaction.
-        const absPaths = kwargs.images ? validateImagePaths(String(kwargs.images)) : [];
+        // Validate attachments before any browser interaction.
+        const videoPath = validatePostVideo(kwargs);
+        const absPaths = videoPath ? [videoPath] : kwargs.images ? validateImagePaths(String(kwargs.images)) : [];
         const text = String(kwargs.text ?? '');
 
         // The current X standalone composer is /compose/post. It keeps a single,
@@ -330,14 +393,16 @@ cli({
                     if (!isRecoverableFileInputError(err)) {
                         throw err;
                     }
-                    await attachImagesViaDataTransfer(page, absPaths);
+                    await attachMediaViaDataTransfer(page, absPaths);
                 }
             } else {
-                await attachImagesViaDataTransfer(page, absPaths);
+                await attachMediaViaDataTransfer(page, absPaths);
             }
-            const uploadState = await waitForImageUpload(page, absPaths.length);
-            if (!uploadState?.ok) {
-                throw new TimeoutError('twitter image upload', UPLOAD_TIMEOUT_MS / 1000, 'Nothing was posted. Retry, or attach a smaller image.');
+            if (!videoPath) {
+                const uploadState = await waitForImageUpload(page, absPaths.length);
+                if (!uploadState?.ok) {
+                    throw new TimeoutError('twitter image upload', UPLOAD_TIMEOUT_MS / 1000, 'Nothing was posted. Retry, or attach a smaller image.');
+                }
             }
         }
 
@@ -348,6 +413,11 @@ cli({
             throw new CommandExecutionError(typeResult?.message ?? 'Could not type tweet text.', 'Open the composer in the browser and check whether X is asking you to log in.');
         }
 
+        if (videoPath) {
+            await waitForVideoUpload(page);
+            const verified = await verifyComposerText(page, text);
+            if (!verified.ok) throw new CommandExecutionError(verified.message, 'Nothing was posted. Check the X composer text.');
+        }
         await page.wait(1);
         const result = await submitTweet(page, text);
         if (result?.unconfirmed) {

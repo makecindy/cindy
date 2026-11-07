@@ -13,13 +13,61 @@ const reply = [
 ].map(value => `data: ${JSON.stringify(value)}\n\n`).join('') + 'data: [DONE]\n\n';
 
 describe('Pi-owned transport for Cindy harnesses', () => {
+  it.each(['deepseek-v4-flash', 'kimi-k3.1-pro', 'glm-5.3'])
+  ('sends the OpenHubs %s template through the installed Pi Chat adapter', async id => {
+    const preset = BUNDLED_CATALOG.presets!.find(p => p.id === 'openhubs')!;
+    const runtime = preset.runtimes.pi!;
+    const provider = buildUserProvider({ id: 'openhubs-test', name: 'OpenHubs', runtimes: { pi: {
+      ...runtime, catalogPresetId: preset.id, models: runtime.models.filter(m => m.id === id),
+    } } }, { presets: BUNDLED_CATALOG.presets, modelRegistry: BUNDLED_CATALOG.modelRegistry });
+    const model = provider.models.pi![0];
+    const row = invocationModelRecord(model, model.route?.baseUrl ?? runtime.baseUrl)!;
+    const requests: string[] = [];
+    const send = createPiProviderFetch({ row, providerId: provider.id, apiKey: 'fixture-key', fetchImpl: async (url, init) => {
+      requests.push(String(url));
+      expect(new Headers(init?.headers).get('authorization')).toBe('Bearer fixture-key');
+      expect(JSON.parse(String(init?.body))).toMatchObject({ model: id, stream: true });
+      return new Response(reply, { headers: { 'content-type': 'text/event-stream' } });
+    } });
+    const output = await (await send('https://unused.invalid', { body: JSON.stringify({
+      model: id, input: 'Hello', max_output_tokens: 128, stream: true,
+    }) })).text();
+    expect(requests).toEqual(['https://openhubs.zhidemai.com/v1/chat/completions']);
+    expect(output).toContain('response.completed');
+    expect(output).not.toContain('response.failed');
+  });
+  // Unit protocol regression: official Pi SDK defaults must not override Cindy
+  // or an explicit legacy title at the final fetch boundary.
+  it.each([undefined, { 'x-title': 'Custom app', 'http-referer': 'https://custom.example' }])
+  ('retains application attribution through native serialization (%j)', async headers => {
+    const upstream = 'https://openrouter.ai/api/v1';
+    const row = { id: 'fixture-model', name: 'Fixture', upstream,
+      execution: { pi: { api: 'openai-completions' as const,
+        headers: { 'HTTP-Referer': 'https://pi.example', 'X-Title': 'pi' } } } };
+    let sent = new Headers();
+    const send = createPiProviderFetch({ row, providerId: 'router', apiKey: 'fixture-key', headers,
+      fetchImpl: async (_url, init) => {
+        sent = new Headers(init?.headers);
+        return new Response(reply, { headers: { 'content-type': 'text/event-stream' } });
+      },
+    });
+    const output = await (await send('https://unused.invalid', {
+      body: JSON.stringify({ model: row.id, input: 'Hello', stream: true }),
+    })).text();
+    expect(output).toContain('response.completed');
+    expect(sent.get('http-referer')).toBe(headers?.['http-referer'] ?? 'https://cindy.app');
+    expect(sent.get('x-openrouter-title') ?? sent.get('x-title')).toBe(headers?.['x-title'] ?? 'Cindy');
+    expect(sent.get('x-title')).not.toBe('pi');
+    expect(sent.get('authorization')).toBe('Bearer fixture-key');
+  });
   // PR server#1096 P1: route-label checks missed the SDK appending /v1/messages
   // to a versioned base. Exercise the production default and official serializer.
-  it.each(['claude-code', 'pi', 'codex'] as const)('sends Agnes %s defaults to a single version prefix', async agent => {
-    const preset = BUNDLED_CATALOG.presets!.find(p => p.id === 'agnes')!;
+  it.each(['agnes', 'openhubs'].flatMap(id => (['claude-code', 'pi', 'codex'] as const).map(agent => [id, agent] as const)))
+  ('sends %s %s defaults to a single version prefix', async (id, agent) => {
+    const preset = BUNDLED_CATALOG.presets!.find(p => p.id === id)!;
     const runtime = preset.runtimes[agent]!;
     const provider = buildUserProvider({ id: 'agnes-request', name: 'Agnes', runtimes: {
-      [agent]: { ...runtime, catalogPresetId: 'agnes' },
+      [agent]: { ...runtime, catalogPresetId: id },
     } }, { presets: BUNDLED_CATALOG.presets, modelRegistry: BUNDLED_CATALOG.modelRegistry });
     const model = provider.models[agent]![0];
     const row = invocationModelRecord(model, model.route?.baseUrl ?? runtime.baseUrl)!;
@@ -33,16 +81,16 @@ describe('Pi-owned transport for Cindy harnesses', () => {
       ];
       return new Response(agent === 'codex'
         ? 'data: {"type":"response.completed","response":{"id":"fixture","status":"completed","output":[],"usage":{"input_tokens":1,"output_tokens":0,"total_tokens":1}}}\n\n'
-        : events.map(event => `event: ${event.type}\ndata: ${JSON.stringify(event)}\n\n`).join(''),
+        : agent === 'pi' ? reply : events.map(event => `event: ${event.type}\ndata: ${JSON.stringify(event)}\n\n`).join(''),
       { headers: { 'content-type': 'text/event-stream' } });
     } });
     const result = await (await send('https://unused.invalid', { body: JSON.stringify({
       model: model.id, input: 'Hello', max_output_tokens: 1024, stream: true,
     }) })).text();
-    expect(destination.split('?')[0]).toBe(`https://apihub.agnes-ai.com/v1/${agent === 'codex' ? 'responses' : 'messages'}`);
+    expect(destination.split('?')[0]).toBe(`https://${id === 'agnes' ? 'apihub.agnes-ai.com' : 'openhubs.zhidemai.com'}/v1/${agent === 'pi' ? 'chat/completions' : agent === 'codex' ? 'responses' : 'messages'}`);
     expect(result).toContain('response.completed');
     expect(result).not.toContain('response.failed');
-    expect(runtime.modelsUrl).toBe('https://apihub.agnes-ai.com/v1/models');
+    expect(runtime.modelsUrl).toBe(`https://${id === 'agnes' ? 'apihub.agnes-ai.com' : 'openhubs.zhidemai.com'}/v1/models`);
   });
 
   // Tier 2: exercise official serializers, not just selected API labels. Responses

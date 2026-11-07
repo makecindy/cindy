@@ -40,6 +40,7 @@ apps/desktop/resources/cc-manager/
 apps/desktop/resources/pi-manager/
 apps/desktop/resources/anthropic-compat-proxy/
 apps/desktop/resources/remote-file-service/
+apps/desktop/resources/device-link-relay/
 # Windows 打包时由 prePackage 现场 cargo build 生成并覆盖(forge.config.ts
 # buildCindyUpdater);源码在 apps/desktop/cindy-updater/,不入仓避免 4.5MB
 # 二进制持续消耗 Git LFS 流量。

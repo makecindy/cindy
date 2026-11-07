@@ -18,13 +18,16 @@ import type { BrowserWindow } from 'electron';
 import { eq } from 'drizzle-orm';
 
 import { Scheduler } from '@cindy/maker-scheduler';
-import type { Logger, ScheduleRunner } from '@cindy/maker-scheduler';
+import type { FireContext, Logger, PreRunPluginConfig, Schedule, ScheduleRunner } from '@cindy/maker-scheduler';
+import type { GhostControlPointResult, GhostScheduleRunPointData } from '../../shared/ghost.js';
+import type { DiagnosePreRunHookFailure } from './pre-run-hook-diagnosis';
 import type { Maker } from '@cindy/maker-core';
 import type { FeishuIM } from '@cindy/im';
 
 import { dialogueWorkspaceRoots } from '../localDb/dialogueWorkspace';
 import { sessions } from '../localDb/schema.js';
 import { getDbClient } from '../localDb/client/current';
+import { startRewoundSchedulerPromptCleanup, stopRewoundSchedulerPromptCleanup } from './rewoundSchedulerPromptCleanup.js';
 import { isReviewSessionSource } from '../../shared/sessionSource.js';
 import { dbToMakerAgentKind } from '../../shared/agentKindConversion.js';
 import { assertScheduledHarnessSupported } from '../maker-ipc/scheduledModelSelection';
@@ -57,7 +60,7 @@ import {
 } from '../maker-ipc/register.js';
 import { DrizzleScheduleStorage, type SchedulerDrizzleDb } from './storage';
 import { ProjectAutomationLoader } from './project-automation-loader';
-import { MakerScheduleRunner } from './runner';
+import { MakerScheduleRunner, type SchedulerQueueDeps } from './runner';
 import { setSilencedRunProbe } from './silent-output';
 import { listMessagesForAgentHandoff } from '../localDb/ipc/messages.js';
 import { drainPersistQueue } from '../messagePersistBroadcaster.js';
@@ -65,11 +68,13 @@ import { buildForcedFailureRun } from './forcedFailureRun';
 import { ScriptScheduleRunner } from './script-runner';
 import { SchedulerScriptCapabilityBroker } from './script-capability-broker';
 import { DesktopNotifier } from './notifier';
+import { screenScheduleRun } from '../cindy-brain/scheduleControlPointGate.js';
 import { sendFeishuSessionNotification } from '../im/feishu/notificationOrigin';
 import { withScheduleLock } from './scheduleLock';
 import { wecomGroupNotificationService } from '../wecomGroupNotification';
 import { runSchedulerStartup } from './scheduler-startup-lifecycle';
 import { getRoutineEngine, stopRoutines } from '../routines/service.js';
+import { startScheduleWebhooks, stopScheduleWebhooks } from './webhook/runtime.js';
 
 export interface StartSchedulerDeps {
   maker: Maker;
@@ -79,9 +84,20 @@ export interface StartSchedulerDeps {
   logger: Logger;
   beforeDispatchUserTurn?: (sessionId: string, signal?: AbortSignal) => void | Promise<void>;
   onUndispatchedUserTurn?: (sessionId: string) => void;
+  /** 插件控制节点 will-schedule-run：任务选了插件前置检查时，每次执行前(不含恢复中断的续跑)询问它。 */
+  screenControlPoint?: (
+    point: 'will-schedule-run',
+    data: GhostScheduleRunPointData,
+    target: PreRunPluginConfig,
+  ) => Promise<GhostControlPointResult>;
+  /** 保存插件前置检查时把插件解析为实例 id;插件不可选时抛错。 */
+  resolvePreRunPlugin?: (pluginId: string) => string;
+  /** 检查脚本失败时识别「所属插件未安装或未启用」，让失败提示能指向安装。 */
+  diagnosePreRunHookFailure?: DiagnosePreRunHookFailure;
 }
 
 let _scheduler: Scheduler | null = null;
+let _promptRunner: MakerScheduleRunner | null = null;
 let _storage: DrizzleScheduleStorage | null = null;
 let _loader: ProjectAutomationLoader | null = null;
 // Reset increments this before awaiting stop(). A start that was already
@@ -117,7 +133,8 @@ async function startSchedulerInternal(deps: StartSchedulerDeps): Promise<Schedul
     feishuIm: deps.feishuIm,
     logger: deps.logger,
     shouldNotifyDesktop: getDesktopNotificationsEnabled,
-    isAgentIslandEnabled: () => getAgentIslandService()?.isEnabled() ?? false,
+    isRunAlertShownElsewhere: (run) =>
+      getAgentIslandService()?.ownsTaskAlert(run.status === 'failed' ? 'error' : 'done') === true,
     wecomGroupPublisher: wecomGroupNotificationService,
   });
   const promptRunner = new MakerScheduleRunner({
@@ -125,6 +142,7 @@ async function startSchedulerInternal(deps: StartSchedulerDeps): Promise<Schedul
     getDb: deps.getDb,
     notifier,
     logger: deps.logger,
+    diagnosePreRunHookFailure: deps.diagnosePreRunHookFailure,
     beforeDispatchUserTurn: deps.beforeDispatchUserTurn,
     readAutoReviewHistory: async (sessionId) => {
       await drainPersistQueue();
@@ -179,14 +197,28 @@ async function startSchedulerInternal(deps: StartSchedulerDeps): Promise<Schedul
     logger: deps.logger,
     notifier,
     getDb: deps.getDb,
+    diagnosePreRunHookFailure: deps.diagnosePreRunHookFailure,
   });
+  // 与检查脚本拦下时同一条失败通知：先认领，避免卡死守卫再投第二条。
+  const notifyPluginStop = async (schedule: Schedule, ctx: FireContext, errorMsg: string) => {
+    if (_scheduler?.isRunAbandoned(ctx.runId)) return;
+    ctx.onRunnerNotified?.('failure');
+    await notifier.notify(schedule, {
+      id: ctx.runId, scheduleId: schedule.id, firedAt: ctx.firedAt, finishedAt: Date.now(), status: 'failed', errorMsg,
+    }).catch(() => {});
+  };
   const runner: ScheduleRunner = {
     fire: (schedule, ctx) =>
-      withScheduleLock(schedule.id, ctx.signal, () =>
-        schedule.executionMode === 'script'
+      withScheduleLock(schedule.id, ctx.signal, async () => {
+        // 所有定时任务(Agent / 脚本)的唯一入口：插件前置检查放在检查脚本、建任务之前。
+        const stopped = deps.screenControlPoint
+          ? await screenScheduleRun(deps.screenControlPoint, schedule, ctx, (errorMsg) => notifyPluginStop(schedule, ctx, errorMsg))
+          : null;
+        if (stopped) return stopped;
+        return schedule.executionMode === 'script'
           ? scriptRunner.fire(schedule, ctx)
-          : promptRunner.fire(schedule, ctx),
-      ),
+          : promptRunner.fire(schedule, ctx);
+      }),
   };
 
   // 双开让位开关:同一台机器同时跑 dev + release(共用同一 userData/DB)时,
@@ -210,6 +242,7 @@ async function startSchedulerInternal(deps: StartSchedulerDeps): Promise<Schedul
     // 对话工作区根目录(userData/dialogues)下的路径都是 app 内部分配的会话 cwd。
     // agent 在对话里建任务时常把自己的 cwd 当 workingDir 传入 —— 引擎据此归一成
     // 对话任务,避免任务/会话错误归入项目分组。path.relative 同时兼容两端分隔符。
+    resolvePreRunPlugin: deps.resolvePreRunPlugin,
     isManagedWorkspaceDir: (dir) => {
       return dialogueWorkspaceRoots().some((root) => {
         const rel = path.relative(root, dir);
@@ -274,9 +307,16 @@ async function startSchedulerInternal(deps: StartSchedulerDeps): Promise<Schedul
     },
   });
   _scheduler = scheduler;
+  _promptRunner = promptRunner;
+  startRewoundSchedulerPromptCleanup({ logger: deps.logger });
   setSilencedRunProbe((runId) => scheduler.isRunSilenced(runId));
   void getRoutineEngine().catch((error) => deps.logger.warn?.('routine startup failed', { error: String(error) }));
   _loader = loader;
+  if (!passive) {
+    void startScheduleWebhooks(scheduler, deps.logger).catch((error) => {
+      deps.logger.warn?.(`[scheduler-host] schedule webhooks failed to start (non-fatal): ${String(error)}`);
+    });
+  }
   deps.logger.info?.(`[scheduler-host] started${passive ? ' (passive: auto-fire disabled)' : ''}`);
   void loader.reconcileAll().catch((err) => {
     deps.logger.warn?.(
@@ -284,6 +324,18 @@ async function startSchedulerInternal(deps: StartSchedulerDeps): Promise<Schedul
     );
   });
   return scheduler;
+}
+
+/** Called only by the host's validated, explicit Continue input path. */
+export async function resumeInterruptedScheduleRun(
+  sessionId: string,
+  enqueuePrompt: SchedulerQueueDeps['enqueuePrompt'],
+) {
+  const runner = _promptRunner;
+  if (!_scheduler || !runner) return null;
+  return _scheduler.resumeInterruptedRun(sessionId, {
+    fire: (schedule, ctx) => runner.fireManualContinuation(schedule, ctx, enqueuePrompt),
+  });
 }
 
 /** Cold-start probe for callers that own a durable deferred queue. */
@@ -326,7 +378,9 @@ export function getProjectAutomationLoader(): ProjectAutomationLoader {
  * 当前 resetMaker（maker-host:131）也不会调本函数。
  */
 export async function resetScheduler(): Promise<void> {
+  stopRewoundSchedulerPromptCleanup();
   await stopRoutines();
+  await stopScheduleWebhooks();
   _startupGeneration++;
   const pendingStartup = _startupPromise;
   if (pendingStartup) {
@@ -341,6 +395,7 @@ export async function resetScheduler(): Promise<void> {
     await _scheduler.stop();
   }
   _scheduler = null;
+  _promptRunner = null;
   _storage = null;
   _loader = null;
 }

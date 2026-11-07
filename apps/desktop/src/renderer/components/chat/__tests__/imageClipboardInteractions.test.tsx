@@ -89,6 +89,11 @@ async function copyFromMenu(image: HTMLElement) {
   fireEvent.click(await screen.findByRole('menuitem', { name: label('chat.media.copyImage') }));
 }
 
+async function previewAction(key: string) {
+  fireEvent.pointerDown(screen.getByRole('button', { name: label('attachmentPreview.more') }), { button: 0, ctrlKey: false });
+  fireEvent.click(await screen.findByRole('menuitem', { name: label(key) }));
+}
+
 describe('shared production image interactions', () => {
   it.each([false, true])(
     'assistant local Markdown image menu, simplified=%s',
@@ -113,17 +118,9 @@ describe('shared production image interactions', () => {
         expect(fileCopy).toHaveBeenCalledWith({ filePath: '/fixture/preview.png' }),
       );
       expect(toast.success).toHaveBeenCalledWith(label('chat.media.imageCopied'));
-      // The message toolbar copies Markdown text, never the image or its path. A teammate
-      // reply hangs the compact toolbar beside its bubble, with Copy inside More.
-      if (simplified) {
-        fireEvent.pointerDown(
-          screen.getByRole('button', { name: label('chat.messageActionBar.moreActions') }),
-          { button: 0, ctrlKey: false },
-        );
-        fireEvent.click(screen.getByRole('menuitem', { name: label('chat.messageActionBar.copy') }));
-      } else {
-        fireEvent.click(screen.getByRole('button', { name: label('chat.messageActionBar.copy') }));
-      }
+      // Both task and companion message toolbars expose Copy directly. It copies
+      // Markdown text, never the image or its path; the image menu stays separate.
+      fireEvent.click(screen.getByRole('button', { name: label('chat.messageActionBar.copy') }));
       await waitFor(() => expect(writeText).toHaveBeenCalledWith('![preview](/fixture/preview.png)'));
       expect(nativeCopy).not.toHaveBeenCalled();
     },
@@ -185,13 +182,11 @@ describe('shared production image interactions', () => {
     await waitFor(() => expect(nativeCopy).toHaveBeenCalledTimes(1));
     expect(readBytes).toHaveBeenCalledWith({ url: remoteSrc });
     fireEvent.click(img);
-    await act(async () =>
-      fireEvent.click(screen.getByRole('button', { name: label('chat.media.copyImage') })),
-    );
-    expect(nativeCopy).toHaveBeenCalledTimes(2);
+    await previewAction('chat.media.copyImage');
+    await waitFor(() => expect(nativeCopy).toHaveBeenCalledTimes(2));
     fireEvent.click(screen.getByRole('button', { name: label('chat.media.saveAs') }));
     await waitFor(() => expect(save).toHaveBeenCalledWith({ url: remoteSrc }));
-    fireEvent.click(screen.getByRole('button', { name: label('chat.media.openWithApp') }));
+    await previewAction('chat.media.openWithApp');
     await waitFor(() => expect(open).toHaveBeenCalledWith({ url: remoteSrc }));
     expect(fileCopy).not.toHaveBeenCalled();
     expect(reveal).not.toHaveBeenCalled();
@@ -204,7 +199,7 @@ describe('shared production image interactions', () => {
       await i18n.changeLanguage(locale);
       nativeCopy.mockRejectedValue(new Error('[INTERNAL] secret/path must not appear'));
       render(<ImageLightbox src={`data:image/png;base64,${PNG}`} onClose={vi.fn()} />);
-      fireEvent.click(screen.getByRole('button', { name: label('chat.media.copyImage') }));
+      await previewAction('chat.media.copyImage');
       await waitFor(() => expect(toast.error).toHaveBeenCalledWith(label('ipcError.INTERNAL')));
       expect(toast.success).not.toHaveBeenCalled();
     },
@@ -230,7 +225,7 @@ describe('shared production image interactions', () => {
         onClose={vi.fn()}
       />,
     );
-    fireEvent.click(screen.getByRole('button', { name: label('chat.media.copyImage') }));
+    await previewAction('chat.media.copyImage');
     await waitFor(() => expect(nativeCopy).toHaveBeenCalledTimes(1));
     expect(readBytes).toHaveBeenCalledWith({ url: managed });
     expect(ctx.drawImage).toHaveBeenCalled();
@@ -324,7 +319,7 @@ describe('shared production image interactions', () => {
     );
     webCopy.mockResolvedValue(undefined);
     render(<ImageLightbox src={`data:image/png;base64,${PNG}`} onClose={vi.fn()} />);
-    fireEvent.click(screen.getByRole('button', { name: label('chat.media.copyImage') }));
+    await previewAction('chat.media.copyImage');
     await waitFor(() => expect(webCopy).toHaveBeenCalledTimes(1));
     expect(nativeCopy).not.toHaveBeenCalled();
     expect(toast.success).toHaveBeenCalledWith(label('chat.media.imageCopied'));

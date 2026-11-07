@@ -26,6 +26,7 @@ import {
   type UnifiedRailFilter,
   type UnifiedRailItem,
 } from './unifiedModelSelection';
+import { QUOTA_FILL_COLOR_CLASSES, quotaSeverity } from '../status/QuotaBar';
 
 /**
  * UnifiedModelRail —— 统一面板左侧的视图筛选栏(model-selector-unified §1.2 / §1.6)。
@@ -299,7 +300,7 @@ function RailButtonView({
         className={cn(
           'relative flex h-[38px] w-[34px] shrink-0 flex-col items-center justify-center rounded-[9px] transition-colors',
           isActive
-            ? 'bg-[var(--accent-cta-bg)] text-[var(--accent-pure-cta-fg)] shadow-[var(--shadow-menu)]'
+            ? 'bg-[var(--accent-cta-bg)] text-[var(--accent-pure-cta-fg)]'
             : 'text-[var(--text-tertiary)] hover:bg-[var(--model-item-hover)] hover:text-[var(--text-secondary)]',
           disabled && 'cursor-not-allowed opacity-50',
         )}
@@ -320,11 +321,9 @@ function RailButtonView({
             <span
               className={cn(
                 'block h-full rounded-full',
-                quota.usedPercent >= 90
-                  ? 'bg-[var(--quota-bar-crit)]'
-                  : quota.usedPercent > 70
-                    ? 'bg-[var(--quota-bar-warn)]'
-                    : 'bg-current',
+                quotaSeverity(quota.usedPercent) === 'normal'
+                  ? 'bg-current'
+                  : QUOTA_FILL_COLOR_CLASSES[quotaSeverity(quota.usedPercent)],
               )}
               style={{ width: `${100 - quota.usedPercent}%` }}
             />

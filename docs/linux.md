@@ -10,8 +10,9 @@
 | pacman/AUR or another third-party package | That package manager | Use that package manager, not the in-app installer |
 
 The user installer supports x64 and arm64 payload identities, but requires a
-matching published artifact. Arm64 does not currently support the Beta channel;
-this change's host checks use x64 Omarchy; release acceptance is listed below.
+matching published artifact. Both architectures support the Beta channel when a
+matching Beta installer is available. Host checks here use x64 Omarchy;
+release acceptance is listed below.
 Alpine/musl, root desktop sessions,
 and unpacking old releases by hand are not supported user-install routes.
 This does not add Linux equivalents of features that require macOS or Windows.
@@ -45,9 +46,14 @@ For Wayland screen sharing and file dialogs, keep your compositor's portal
 backend and PipeWire installed and working. Omarchy normally configures these;
 this installer deliberately does not rewrite Hyprland, PAM or portal settings.
 See the [Electron safeStorage documentation](https://www.electronjs.org/docs/latest/api/safe-storage)
-for the backend model. KDE and GNOME retain Electron's existing selection;
-Hyprland selects `gnome-libsecret` before app readiness; other desktops retain
-Electron's selection. Desktop identity uses the first non-empty value from
+for the backend model. KDE, GNOME, XFCE and other recognized desktops retain
+Electron's existing selection. Before app readiness, Cindy selects
+`gnome-libsecret` for Hyprland, labwc, and a session with no desktop identity.
+Named desktops Chromium does not recognize, including sway and niri, keep
+Electron's selection. An empty identity otherwise falls back to `basic_text`,
+which a packaged build cannot use to save a login. Selecting libsecret does not
+install or unlock a keyring; if libsecret is missing, Chromium still falls back
+and Cindy refuses plaintext. Desktop identity uses the first non-empty value from
 `XDG_CURRENT_DESKTOP`, `XDG_SESSION_DESKTOP`, and `DESKTOP_SESSION`.
 An explicit `--password-store` always wins and survives an in-app update restart.
 

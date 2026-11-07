@@ -15,9 +15,9 @@
  * 顺序：折叠按钮在左（紧贴红绿灯,对齐 Codex）,菜单（三横杠）在其右,
  * 再往右是任务浏览历史的「后退 / 前进」（见 SessionHistoryButtons）。
  *
- * 尺寸：按钮 h-7 w-7(28px)+ 图标 15 + rounded-md —— 与折叠态标题行的
- * 「…」按钮(SessionContentHeader,h-7 w-7 / Ellipsis 15 / rounded-md)同一
- * 规格族,收起侧栏后整行 chrome(红绿灯 → 本簇 → 标题 → 标题后图标)
+ * 尺寸：按钮 h-7 w-7(28px)+ 图标 15 + rounded-full —— 与折叠态标题行的
+ * 「…」按钮(SessionContentHeader,h-7 w-7 / Ellipsis 15)尺寸一致,
+ * 收起侧栏后整行 chrome(红绿灯 → 本簇 → 标题 → 标题后图标)
  * 视觉重量一致(对齐 Codex 的小图标密度)。
  *
  * 垂直对齐：容器 h-[46px] —— 红绿灯由主进程钉在 trafficLightPosition
@@ -97,7 +97,7 @@ export function ChromeActions({
           {...peekTriggerProps}
           className={cn(
             'flex items-center justify-center',
-            'h-7 w-7 rounded-md',
+            'h-7 w-7 rounded-full',
             'text-titlebar-icon',
             'transition-colors',
             'hover:bg-titlebar-button-hover',

@@ -3,6 +3,10 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { AgentKind, Provider } from '@cindy/model-providers';
 
 import {
+  invalidateKimiAccountUsage,
+  setAccountUsageOAuthReader,
+  readKimiCodingAccountUsage,
+  readOpenCodeGoAccountUsage,
   isZhipuCodingPlanProvider,
   parseDeepSeekAccountUsage,
   parseZhipuCodingPlanQuota,
@@ -15,6 +19,14 @@ import {
   setAccountUsageOwnerStampReader,
   setAccountUsageProviderReader,
 } from '../provider-account-usage.js';
+
+const OPENCODE_GO_USAGE = {
+  usage: {
+    rolling: { status: 'ok', percent: 25, resetsAt: '2026-11-02T08:00:00Z' },
+    weekly: { status: 'ok', percent: 40, resetsAt: '2026-11-08T00:00:00Z' },
+    monthly: { status: 'rate-limited', percent: 100, resetsAt: '2026-12-01T00:00:00Z' },
+  },
+};
 
 function mkProvider(overrides: Partial<Provider> = {}): Provider {
   return {
@@ -614,5 +626,185 @@ describe('provider runtime key order', () => {
     });
     expect(resolveProviderAccountUsage('deepseek')?.agent).toBe('codex');
     expect(seen).toEqual(['claude-code', 'codex']);
+  });
+});
+
+// Kimi subscription request: unit tier. Existing balance tests do not cover OAuth,
+// optional rolling windows, or logout while a quota request is pending (#4287).
+describe('Kimi Code subscription quota', () => {
+  let current: Provider;
+  let key: string | null;
+  let owner: number;
+  const payload = { usages: { limit_5h: { used_ratio: '0.23', reset_time: '2026-10-28T12:00:00Z' } } };
+  const fetcher = vi.fn<typeof fetch>();
+  beforeEach(() => {
+    resetProviderAccountUsageForTest();
+    nowMs = 1_000_000;
+    owner = 1;
+    key = 'synthetic-key';
+    current = mkProvider({ id: 'kimi-custom', routing: { pi: { upstream: 'https://api.kimi.com/coding/v1', authStrategy: 'oauth-passthrough' } } } as Partial<Provider>);
+    setAccountUsageProviderReader(() => current);
+    setAccountUsageOwnerStampReader(() => ({ dataOwnerId: 'fixture', generation: owner }));
+    setAccountUsageKeyReader(() => key);
+    setAccountUsageNow(() => nowMs);
+    fetcher.mockReset().mockResolvedValue(jsonRes(payload));
+    setAccountUsageFetch(fetcher);
+  });
+  afterEach(resetProviderAccountUsageForTest);
+  const read = (forceRefresh = false) => readKimiCodingAccountUsage({ providerId: 'kimi-custom', forceRefresh });
+
+  // PR #7721: the dedicated remote/menu-bar reader must not return another
+  // integration when a mixed provider's earlier runtime points to DeepSeek.
+  it('pins implicit reads to Kimi and preserves explicit runtime selection', async () => {
+    current.routing['claude-code'] = mkProvider().routing['claude-code'];
+    const readKey = vi.fn((_id: string, agent: AgentKind) => agent === 'pi' ? key : 'synthetic-deepseek');
+    setAccountUsageKeyReader(readKey);
+    expect(await read()).toMatchObject({ status: 'ready', agent: 'pi', snapshot: { kind: 'kimi-coding-quota' } });
+    expect(fetcher).toHaveBeenCalledWith('https://api.kimi.com/coding/v1/usages', expect.objectContaining({ headers: { Authorization: 'Bearer synthetic-key' } }));
+    expect(readKey.mock.calls.every(([, agent]) => agent === 'pi')).toBe(true);
+    expect(await readKimiCodingAccountUsage({ providerId: 'kimi-custom', agent: 'claude-code' })).toEqual({ status: 'unsupported' });
+    expect(fetcher).toHaveBeenCalledTimes(1);
+  });
+
+  it('reads the official key endpoint, deduplicates concurrent views and caches only returned windows', async () => {
+    const [a, b] = await Promise.all([read(), read()]);
+    expect(a).toEqual(b);
+    expect(a).toMatchObject({ status: 'ready', stale: false, snapshot: { kind: 'kimi-coding-quota', windows: [{ id: 'limit_5h', usedPercent: 23, resetsAt: Date.parse('2026-10-28T12:00:00Z') }] } });
+    expect(fetcher).toHaveBeenCalledTimes(1);
+    expect(fetcher).toHaveBeenCalledWith('https://api.kimi.com/coding/v1/usages', expect.objectContaining({ redirect: 'error', headers: expect.objectContaining({ Authorization: 'Bearer synthetic-key' }) }));
+    await read();
+    expect(fetcher).toHaveBeenCalledTimes(1);
+  });
+
+  it('refreshes OAuth through the host before reading its token, without using an API key', async () => {
+    current.auth = { method: 'oauth', oauth: { tokenUrl: 'https://auth.kimi.com/api/oauth/token' } } as Provider['auth'];
+    let refreshed = false;
+    setAccountUsageOAuthReader(() => refreshed ? 'synthetic-oauth' : null, async () => { refreshed = true; });
+    expect(await read()).toMatchObject({ status: 'ready' });
+    expect(fetcher).toHaveBeenCalledWith(expect.any(String), expect.objectContaining({ headers: expect.objectContaining({ Authorization: 'Bearer synthetic-oauth' }) }));
+  });
+
+  it.each(['https://proxy.example/coding/v1', 'https://api.kimi.com/v1', 'http://api.kimi.com/coding', 'https://api.kimi.com/coding/fake', 'https://api.kimi.com/coding?token=fixture'])('does not query credentials outside the product scope: %s', async upstream => {
+    current.routing.pi!.upstream = upstream;
+    expect(await read()).toEqual({ status: 'unsupported' });
+    expect(fetcher).not.toHaveBeenCalled();
+  });
+
+  it('keeps missing, zero-use and fully-used windows distinct, without inventing totals or dates', async () => {
+    fetcher.mockResolvedValueOnce(jsonRes({ usages: { limit_5h: null, limit_7d: { used_ratio: 0 }, limit_month_code: { used_ratio: 1.2, reset_time: 'bad' } } }));
+    expect(await read()).toMatchObject({ snapshot: { windows: [{ id: 'limit_7d', usedPercent: 0, resetsAt: null }, { id: 'limit_month_code', usedPercent: 100, resetsAt: null }] } });
+    nowMs += 300_001;
+    fetcher.mockResolvedValueOnce(jsonRes({ usages: {} }));
+    expect(await read()).toMatchObject({ snapshot: { windows: [] } });
+  });
+
+  it.each([null, { usages: [] }, { usages: { limit_5h: {} } }, { usages: { limit_5h: { used_ratio: -1 } } }, { usages: { limit_5h: { used_ratio: 'NaN' } } }])('rejects malformed responses without reporting exhaustion', async body => {
+    fetcher.mockResolvedValueOnce(jsonRes(body));
+    expect(await read()).toMatchObject({ status: 'unavailable', error: 'invalid-response' });
+  });
+
+  it.each([401, 403])('revokes a cached quota on HTTP %s', async status => {
+    await read();
+    nowMs += 300_001;
+    fetcher.mockResolvedValueOnce(jsonRes({}, status));
+    expect(await read()).toMatchObject({ status: 'unavailable', error: 'auth' });
+    expect(await read()).toMatchObject({ status: 'unavailable', error: 'auth' });
+    expect(fetcher).toHaveBeenCalledTimes(2);
+  });
+
+  it.each([500, 503])('marks last known data stale on HTTP %s, instead of zero remaining', async status => {
+    await read();
+    nowMs += 300_001;
+    fetcher.mockResolvedValueOnce(jsonRes({}, status));
+    expect(await read()).toMatchObject({ status: 'ready', stale: true, error: 'server', snapshot: { windows: [{ usedPercent: 23 }] } });
+  });
+
+  it('throttles on Retry-After and resumes after the deadline', async () => {
+    fetcher.mockResolvedValueOnce(jsonRes({}, 429, { 'retry-after': '120' }));
+    expect(await read()).toMatchObject({ status: 'unavailable', error: 'rate-limited' });
+    nowMs += 20_000;
+    expect(await read(true)).toMatchObject({ status: 'unavailable', error: 'throttled', retryAt: 1_120_000 });
+    expect(fetcher).toHaveBeenCalledTimes(1);
+    nowMs += 100_001;
+    expect(await read()).toMatchObject({ status: 'ready' });
+  });
+
+  it.each(['logout', 'owner', 'key'] as const)('discards a late result after %s and queries the next identity', async change => {
+    let release!: (response: Response) => void;
+    fetcher.mockImplementationOnce(() => new Promise(resolve => { release = resolve; }));
+    const pending = read();
+    if (change === 'logout') invalidateKimiAccountUsage();
+    if (change === 'owner') owner++;
+    if (change === 'key') key = 'synthetic-second-key';
+    release(jsonRes(payload));
+    expect(await pending).toEqual({ status: 'unavailable', error: 'updating' });
+    expect(await read()).toMatchObject({ status: 'ready' });
+    expect(fetcher).toHaveBeenCalledTimes(2);
+  });
+
+  it('refreshes after a reported reset instead of retaining the five-minute cache', async () => {
+    fetcher.mockResolvedValueOnce(jsonRes({ usages: { limit_5h: { used_ratio: 1, reset_time: new Date(nowMs + 20_000).toISOString() } } }));
+    expect(await read()).toMatchObject({ snapshot: { windows: [{ usedPercent: 100 }] } });
+    nowMs += 20_001;
+    expect(await read()).toMatchObject({ snapshot: { windows: [{ usedPercent: 23 }] } });
+    expect(fetcher).toHaveBeenCalledTimes(2);
+  });
+
+  it('does not cache a transport timeout or oversized body as quota', async () => {
+    fetcher.mockRejectedValueOnce(new DOMException('fixture', 'TimeoutError'));
+    expect(await read()).toMatchObject({ status: 'unavailable', error: 'network' });
+    nowMs += 15_001;
+    fetcher.mockResolvedValueOnce(new Response(' '.repeat(65_537)));
+    expect(await read()).toMatchObject({ status: 'unavailable', error: 'invalid-response' });
+  });
+});
+
+describe('OpenCode Go subscription quota', () => {
+  let current: Provider;
+  const fetcher = vi.fn<typeof fetch>();
+  beforeEach(() => {
+    resetProviderAccountUsageForTest();
+    nowMs = 1_000_000;
+    current = mkProvider({
+      id: 'opencode-go', name: 'OpenCode Go', source: 'user',
+      routing: { codex: { upstream: 'https://opencode.ai/zen/go/v1', authStrategy: 'api-key-header' } },
+    } as Partial<Provider>);
+    setAccountUsageProviderReader(() => current);
+    setAccountUsageOwnerStampReader(() => ({ dataOwnerId: 'fixture', generation: 1 }));
+    setAccountUsageKeyReader(() => 'synthetic-opencode-key');
+    setAccountUsageNow(() => nowMs);
+    fetcher.mockReset().mockResolvedValue(jsonRes(OPENCODE_GO_USAGE));
+    setAccountUsageFetch(fetcher);
+  });
+  afterEach(resetProviderAccountUsageForTest);
+  const read = (forceRefresh = false) => readOpenCodeGoAccountUsage({ providerId: 'opencode-go', forceRefresh });
+
+  it('reads the official usage endpoint with the stored API key and caches it', async () => {
+    expect(await read()).toMatchObject({
+      status: 'ready', agent: 'codex', dashboardUrl: 'https://opencode.ai/console',
+      snapshot: { kind: 'opencode-go-quota', windows: [
+        { id: 'rolling', usedPercent: 25, limited: false },
+        { id: 'weekly', usedPercent: 40, limited: false },
+        { id: 'monthly', usedPercent: 100, limited: true },
+      ] },
+    });
+    expect(fetcher).toHaveBeenCalledWith('https://opencode.ai/zen/go/v1/usage', expect.objectContaining({
+      redirect: 'error', headers: expect.objectContaining({ Authorization: 'Bearer synthetic-opencode-key' }),
+    }));
+    await read();
+    expect(fetcher).toHaveBeenCalledTimes(1);
+  });
+
+  it('does not send a Go key to a proxy copied into the same route shape', async () => {
+    current.routing.codex!.upstream = 'https://proxy.example/zen/go/v1';
+    expect(await read()).toEqual({ status: 'unsupported' });
+    expect(fetcher).not.toHaveBeenCalled();
+  });
+
+  it('clears a cached quota after authentication is revoked', async () => {
+    await read();
+    nowMs += 300_001;
+    fetcher.mockResolvedValueOnce(jsonRes({}, 401));
+    expect(await read(true)).toMatchObject({ status: 'unavailable', error: 'auth' });
   });
 });

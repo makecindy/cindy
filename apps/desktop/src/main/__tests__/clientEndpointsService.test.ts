@@ -1548,6 +1548,62 @@ describe('getter / IPC', () => {
     expect(getClientEndpoint('websiteUrl')).toBe('https://site.example.com');
   });
 
+  // unit: partial local-server tests must preserve real SSO realm separation;
+  // full-local startup previously pinned both realms to one authentication server.
+  it('开发版只覆盖回环设备互联地址，两个区域的认证与模型端点保持独立', () => {
+    const cn = { ...TEST_CLIENT_ENDPOINTS, authApiBaseUrl: 'https://auth.cn.example.com' };
+    const global = { ...TEST_CLIENT_ENDPOINTS, authApiBaseUrl: 'https://auth.global.example.com' };
+    resetClientEndpointsForTest(global, { buildRegion: 'global', realmEndpoints: { cn, global } });
+    vi.stubEnv('XDT_DEVICE_LINK_CN_LOCAL_URL', 'http://127.0.0.1:33355');
+    vi.stubEnv('XDT_DEVICE_LINK_GLOBAL_LOCAL_URL', 'http://127.0.0.1:33356');
+    try {
+      for (const region of ['cn', 'global'] as const) {
+        activateClientEndpointRealm(region);
+        const local = region === 'cn' ? 'http://127.0.0.1:33355' : 'http://127.0.0.1:33356';
+        expect(getClientEndpoint('deviceLinkApiBaseUrl')).toBe(local);
+        expect(getClientEndpointForRealm(region, 'deviceLinkApiBaseUrl')).toBe(local);
+        const expected = region === 'cn' ? cn : global;
+        expect(getClientEndpoint('authApiBaseUrl')).toBe(expected.authApiBaseUrl);
+        expect(getClientEndpointForRealm(region, 'authApiBaseUrl')).toBe(expected.authApiBaseUrl);
+        expect(getClientEndpoint('modelAccessApiBaseUrl')).toBe(expected.modelAccessApiBaseUrl);
+      }
+      Object.defineProperty(app, 'isPackaged', { configurable: true, value: true });
+      expect(getClientEndpoint('deviceLinkApiBaseUrl')).toBe(global.deviceLinkApiBaseUrl);
+      expect(getClientEndpointForRealm('cn', 'deviceLinkApiBaseUrl')).toBe(cn.deviceLinkApiBaseUrl);
+    } finally {
+      Object.defineProperty(app, 'isPackaged', { configurable: true, value: false });
+      vi.unstubAllEnvs();
+    }
+  });
+
+  it.each(['http://192.0.2.1:33355', 'http://user:secret@127.0.0.1:33355', 'file:///tmp/test', 'http://127.0.0.1:33355/other'])('拒绝开发版设备互联覆盖的非回环或含凭据/路径输入 %s', (value) => {
+    resetClientEndpointsForTest(TEST_CLIENT_ENDPOINTS);
+    vi.stubEnv('XDT_DEVICE_LINK_CN_LOCAL_URL', value);
+    vi.stubEnv('XDT_DEVICE_LINK_GLOBAL_LOCAL_URL', value);
+    try {
+      expect(() => getClientEndpoint('deviceLinkApiBaseUrl')).toThrow(/loopback/);
+      expect(getClientEndpoint('authApiBaseUrl')).toBe(TEST_CLIENT_ENDPOINTS.authApiBaseUrl);
+    } finally {
+      vi.unstubAllEnvs();
+    }
+  });
+
+  it('仅设置旧 CN 测试地址时不会把 Global 账号的请求发往 CN 服务', () => {
+    const cn = { ...TEST_CLIENT_ENDPOINTS, deviceLinkApiBaseUrl: 'https://device.cn.example.com' };
+    const global = { ...TEST_CLIENT_ENDPOINTS, deviceLinkApiBaseUrl: 'https://device.global.example.com' };
+    resetClientEndpointsForTest(global, { buildRegion: 'global', realmEndpoints: { cn, global } });
+    vi.stubEnv('XDT_DEVICE_LINK_LOCAL_URL', 'http://127.0.0.1:33355');
+    try {
+      activateClientEndpointRealm('global');
+      expect(getClientEndpoint('deviceLinkApiBaseUrl')).toBe(global.deviceLinkApiBaseUrl);
+      expect(getClientEndpointForRealm('global', 'deviceLinkApiBaseUrl')).toBe(global.deviceLinkApiBaseUrl);
+      activateClientEndpointRealm('cn');
+      expect(getClientEndpoint('deviceLinkApiBaseUrl')).toBe('http://127.0.0.1:33355');
+    } finally {
+      vi.unstubAllEnvs();
+    }
+  });
+
   it('组织会话切换所有 token 消费端点,但安装身份与更新链保持构建区域', () => {
     const cn = {
       ...TEST_CLIENT_ENDPOINTS,

@@ -10,6 +10,8 @@
 >
 > 〔wave4 段历史部分作废（2026-07-24 目录整编标注）〕：本段原钉死的画布落码方案——页面底消费 `var(--surface)`、两层 `#F70121` 渐变代码复现、`--login-window-border-outer/-inner` token——已被后续实现与实机走查推翻。**现行结论**：画布底走 `--login-bg-base` 双态（亮 `#F2F2ED` / 暗 `#181818`，2026-10-01 起与 CINDY 皮肤页底同值；此前为 `#EDEDED` / `#1F1F1E`）,两模式**纯平**,`--login-bg-gradient-radial/-linear` 仅保留 override 锚、值恒 `none`,window-border token 已删除。现行权威 = `DESIGN.md §16.1 / §16.5` 与 `apps/desktop/src/renderer/themes/colors.ts`;本段与本表任何段落均**不再**对冲突拥有优先级,冲突一律以 `DESIGN.md §16` 为准。
 >
+> 〔2026-10-27 取代标注〕：下面 wave5 增补中的 hover「叠白变亮」口径、pressed 叠黑分档及其状态矩阵，已被用户 2026-10-27 裁决的登录叠层二态（`--login-overlay-*`，见 `DESIGN.md §16.5`）取代；本文 §3 表中对应的叠层行也只是历史记录。
+>
 > **⚠ wave5 增补（2026-07-24,组件库更新,权威 = `DESIGN.md §16.5` 状态矩阵；原 `figma-component-spec §11` 已于 2026-10-23 移除，其现行内容已迁入该矩阵，追史见提交 `70b32d7578`）**：(a) **hover 统一「叠白变亮」口径**——全按钮族 hover = normal 底叠 `rgba(255,255,255,0.08/0.1)`（深底 8% / 浅底 10%;唯一例外 `back` 亮色 hover 维持既有白 70%）,旧「白底钮 hover 叠黑」方向作废;pressed 叠黑分档含例外：深底强调钮 50%（`log_in_button`、`light_button_highlight`,不论尺寸）/ `Dark_button_Normal` 20% / 浅底钮 10% / 行类 8%——**落码逐组件对拍 `DESIGN.md §16.5` 状态矩阵,不按类别名推断**;hover / pressed 叠层统一由 `--login-overlay-*` 二态 token 组承载（`DESIGN.md §16.5` 已采纳）,禁止新增字面 rgba 叠层;〔落码状态〕本口径当前仅文档层生效,as-built 组件仍消费改判前旧叠层值,同步随暗色实现 PR 的 overlay token 化落地（`DESIGN.md §16.5(1)`）。(b) 新组件 **radiobutton**（协议勾选）与**双色模式小按钮**（服务条款弹窗）带来的新色值决策已补入 §3 表尾;对应 token 建议随游客登录 / 协议 UI 实现 PR 注册,不提前占位。
 
 ## 1. 现有主题体系结论〔2026-07 决策时点快照,现状以 `colors.ts` 为准〕
@@ -47,7 +49,7 @@
 | `#d91f37` | 错误原因文字 | 复用现有名并改默认 / override | `login-error-text` / existing component alias | 建议把旧 `login-error-text` 从 `error-flat(#ef4444)` 调整为 `#d91f37`，HSL `352.3 75% 48.6%` | 全主题保持；错误色是登录设计稿专用，不应和通用 destructive 混同 |
 | `#b4b4b4` | disabled 按钮边框 | 新增 | `login-control-border-disabled` / component alias | `#b4b4b4`，HSL `0 0% 70.6%` | 全主题保持 |
 | `#4a4848` | Text_link hover(仅桌面) | 新增 | `login-link-hover` / component alias | `#4a4848`,light/dark 同值 | 全主题保持(豁免族);来源 figma §4.7 wave3 实测 `358:792`;〔lead 裁决 2026-07-20:决策表快照(2026-07-19)滞后于 wave3 追加,属表滞后修订非表外发明,与 U-9 pressed 同族同性质〕 |
-| `rgba(255,255,255,0.7)` | disabled 按钮叠层 | 新增 | `login-disabled-button-overlay` / component alias singleton | light/dark 均 `rgba(255,255,255,0.7)` | 全主题保持；不要硬写在组件里 |
+| `rgba(255,255,255,0.7)` | disabled 按钮叠层（2026-10-27 随禁用态改写退役，ID 保留、组件不再消费） | 新增 | `login-disabled-button-overlay` / component alias singleton | light/dark 均 `rgba(255,255,255,0.7)` | 全主题保持；不要硬写在组件里 |
 | `#c5c5c5` | Figma canvas / 工作区灰底 | 语义豁免，不进产品 UI | 无 | 无 | 不进实现 |
 | `#fefefe` / `#f1f2f3` | 浏览器 shell 顶部模拟控件 | 语义豁免或资源内色 | 无或 `login-browser-chrome-*` 后续再加 | 当前仅浏览器 mock shell，生产系统浏览器不可控 | 不需要 app token |
 | `#ededed`, `#f8f8f8`, `#dcdfe3`, `#3c3f43`, `#9a9da3`, `#bfc1c4`, `#d8d9db`, `#504f4f`, `#3b3a3a` | CINDY Light / Dark 主题基础色，不是登录帧直接结构色 | 复用现有 Cindy theme overrides | semantic slots：`surface`、`surface-elevated`、`border-default`、`text-primary`、`text-secondary`、`text-tertiary`、`text-disabled` | 已在 `cindy-light.ts` / `cindy-dark.ts` 作为主题色出现 | 非登录组件继续按主题体系消费；登录不要直接拿这些替代设计稿登录 alias |
@@ -180,7 +182,7 @@ export const loginColors = {
 | 墨水交互态(2026-10-22 起) | 悬停、标签底、选中、按下与边框改为同一墨水的低透明度(§9.2 交互态表),叠在页面、卡片、弹层上都深(暗色为亮)同一档,不再分页面/卡片两套值。取代原「双锚定」 |
 | 双写同步 | 同色 HEX/rgba 与 HSL 两种写法(24 组)逐值一致,半透明档两种写法带同一透明度;聚焦描边等控件轮廓保留自身取值,不再从文字档派生 |
 | 信息类文字地板 | 三级及以上的信息类文字对比度 **≥3.0**(页面、卡片、悬停面上实测);占位/禁用/未激活态按 WCAG 豁免不抬 |
-| 豁免不碰 | `login-*` 全族(58 token)、`diff-*`/`error-*`/`overlay-*`、语义状态色、阴影(§10/§16 + `protected-tokens.ts`) |
+| 豁免不碰 | `login-*` 全族(60 token;值自 2026-10-23 文字、2026-10-27 面板 / 控件 / 主按钮起与本表同口径,但仍不随主题覆盖)、`diff-*`/`error-*`/`overlay-*`、语义状态色、阴影(§10/§16 + `protected-tokens.ts`) |
 
 ### 9.2 Light 面阶梯(暖象牙)
 
@@ -241,5 +243,5 @@ export const loginColors = {
 
 `settings-theme-auto-light` = `#F2F2ED`、`settings-theme-auto-dark` = `#181818`(两模式文件同步);
  `md-table-bg` 随页底;`surface-translucent-overlay` light 暖化 / dark 平移。
-移动端未随本轮同步(342 处命中 + 冷更确认),为已登记 follow-up;
+移动端未随本轮同步(342 处命中 + 冷更确认)〔已取代:2026-09-26 起手机端改用自有「象牙白」色阶,不再追随本表,见 `DESIGN.md §15.13`〕;
 `text-secondary`/`text-tertiary` 命名倒置(改名方案)见 issue #2559。

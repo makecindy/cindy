@@ -31,14 +31,17 @@ export function computeSimulatorNativeFingerprint(
         encoding: "utf8",
         maxBuffer: 64 * 1024 * 1024,
         timeout: 120_000,
+        killSignal: "SIGKILL",
         stdio: ["ignore", "pipe", "pipe"],
       },
     );
     const hash = fingerprint(JSON.parse(output).hash);
     if (!hash) throw new Error("Invalid fingerprint");
     return hash;
-  } catch {
-    throw new Error("Expo Updates native fingerprint calculation failed");
+  } catch (error) {
+    throw Object.assign(new Error("Expo Updates native fingerprint calculation failed"), {
+      code: error.code === "ETIMEDOUT" ? "NATIVE_FINGERPRINT_TIMEOUT" : "NATIVE_FINGERPRINT_FAILED",
+    });
   }
 }
 
@@ -66,17 +69,23 @@ export function inspectSimulatorNativeIdentity({
     result.installedFingerprint = fingerprint(
       read(join(appPath, "EXUpdates.bundle", "fingerprint")),
     );
+  } catch {
+    return { ...result, reason: "installed-fingerprint-unreadable" };
+  }
+  if (!result.installedFingerprint) return { ...result, reason: "installed-fingerprint-missing" };
+  try {
     result.expectedFingerprint = fingerprint(
       expectedFingerprint ?? compute(projectDir, env),
     );
-    if (!result.installedFingerprint || !result.expectedFingerprint)
-      return result;
+    if (!result.expectedFingerprint)
+      return { ...result, reason: "native-fingerprint-unavailable" };
     result.healthy = result.installedFingerprint === result.expectedFingerprint;
     result.code = result.healthy ? "native-matched" : "native-mismatch";
     return result;
-  } catch {
+  } catch (error) {
     // Unknown is never compatibility evidence. Keep CLI output free of config
     // contents or child-process diagnostics that may contain local secrets.
-    return result;
+    return { ...result, reason: error.code === "NATIVE_FINGERPRINT_TIMEOUT"
+      ? "native-fingerprint-timeout" : "native-fingerprint-unavailable" };
   }
 }

@@ -1,6 +1,8 @@
 import { describe, expect, it, vi } from 'vitest';
 import { BUNDLED_CATALOG, buildUserProvider } from '@cindy/model-providers';
 
+vi.mock('../../cindyAiProviderName.js', () => ({ getCindyAiProviderName: () => 'Cindy AI · 心动' }));
+
 vi.mock('electron', () => ({
   ipcMain: { handle: vi.fn() },
 }));

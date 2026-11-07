@@ -592,3 +592,11 @@ describe('parseGhostSetupInlineSubmit', () => {
     ).toBeNull();
   });
 });
+
+it('projects MCP form requests to existing read-only Desktop guidance without their proposal', () => {
+  const requestId = createDesktopOnlyConfirmationRequestId();
+  const result = projectInteractionRequestForRemote({ kind: 'mcp_setup', requestId,
+    proposal: { name: 'Example', url: 'https://example.test/mcp', transport: 'http' } });
+  expect(result).toEqual({ kind: 'ghost_grant_confirm', requestId: expect.any(String) });
+  expect(result?.requestId).not.toBe(requestId);
+});

@@ -11,6 +11,7 @@ import { runDeviceLinkInvokeContext } from '../../device-link/invoke-context.js'
 const h = vi.hoisted(() => ({
   handlers: new Map<string, (...args: unknown[]) => unknown>(),
   trusted: true,
+  ownerScope: 'owner-a',
   predict: vi.fn(async (params: unknown): Promise<string | null> => {
     void params;
     return '下一步做什么';
@@ -249,6 +250,7 @@ vi.mock('electron', () => ({
 vi.mock('../../logger.js', () => ({
   createLogger: () => ({ warn: vi.fn(), error: vi.fn(), info: vi.fn(), debug: vi.fn() }),
 }));
+vi.mock('../../appSessionState.js', () => ({ activeOwnerScopeKey: () => h.ownerScope }));
 vi.mock('../../localDb/client/current.js', () => ({
   getDbClient: () => ({
     drizzle: {
@@ -321,6 +323,7 @@ beforeEach(() => {
   vi.clearAllMocks();
   h.handlers.clear();
   h.trusted = true;
+  h.ownerScope = 'owner-a';
   h.sessionRow = {
     remoteHostId: null,
     agentKind: 'cc',
@@ -548,6 +551,37 @@ describe('maker:predict-prompt — DB 防御纵深(远程会话拒绝)', () => {
 });
 
 describe('maker:predict-prompt — 多窗口同轮幂等', () => {
+  // Unit regression: early completion and late remote responses were both collapsed
+  // into final results. Drive the real IPC with a pending boundary / changed host turn.
+  it.each(['before-read', 'during-drain'])('reports an unsealed host completion as retryable: %s', async phase => {
+    let pending = phase === 'before-read';
+    registerMakerTitleIpc({ isSessionTurnPendingCompletion: () => pending });
+    if (phase === 'during-drain') h.drainPersistQueue.mockImplementationOnce(async () => { pending = true; });
+    await expect(invokePredict(VALID_REQUEST)).resolves.toEqual({ prompt: null, retryable: true });
+    expect(h.predict).not.toHaveBeenCalled();
+    pending = false;
+    await expect(invokePredict(VALID_REQUEST)).resolves.toEqual({ prompt: '下一步做什么' });
+    expect(h.predict).toHaveBeenCalledTimes(1);
+  });
+
+  it.each(['new-turn', 'owner-change'])('revalidates both the original request and its retry after %s', async reason => {
+    let resolve!: (value: string) => void;
+    h.predict.mockImplementationOnce(() => new Promise(done => { resolve = done; }));
+    const result = invokePredict(VALID_REQUEST);
+    await vi.waitFor(() => expect(h.predict).toHaveBeenCalledTimes(1));
+    const retry = invokePredict(VALID_REQUEST);
+    await Promise.resolve();
+    if (reason === 'new-turn') h.sessionRow = { ...h.sessionRow!, activeTurnStartedAt: 3 };
+    else h.ownerScope = 'owner-b';
+    resolve('stale result');
+    await expect(result).resolves.toEqual({ prompt: null });
+    await expect(retry).resolves.toEqual({ prompt: null });
+    expect(h.predict).toHaveBeenCalledTimes(1);
+    if (reason === 'owner-change') {
+      await expect(invokePredict(VALID_REQUEST)).resolves.toEqual({ prompt: '下一步做什么' });
+      expect(h.predict).toHaveBeenCalledTimes(2);
+    }
+  });
   it('cache-only navigation never starts a prediction and can reuse a later live result', async () => {
     await expect(invokePredict({ ...VALID_REQUEST, cacheOnly: true })).resolves.toEqual({ prompt: null });
     expect(h.predict).not.toHaveBeenCalled();
@@ -656,7 +690,7 @@ describe('maker:predict-prompt — 多窗口同轮幂等', () => {
     await vi.waitFor(() => expect(h.predict).toHaveBeenCalledTimes(2));
 
     resolveFirst('旧轮预测');
-    await expect(first).resolves.toEqual({ prompt: '旧轮预测' });
+    await expect(first).resolves.toEqual({ prompt: null });
     resolveSecond('新轮预测');
     await expect(second).resolves.toEqual({ prompt: '新轮预测' });
 

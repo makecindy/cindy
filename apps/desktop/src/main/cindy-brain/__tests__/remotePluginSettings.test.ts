@@ -480,7 +480,7 @@ describe('original remote plugin settings', () => {
   });
   // New native request/result across the existing sealed settings channel. Unlike catalog GET,
   // this must bind the answering host and withhold native requests from author HTML. Tier: unit.
-  it('returns model configuration from the originating remote settings view and strips native picker requests from author polling', async () => {
+  it.each([undefined, 'share:fixture'])('returns model configuration (source=%s) only from its remote settings view and hides native requests from author polling', async (agentDeviceId) => {
     let picker!: GhostModelPicker;
     const f = fixture(null, (page, id, route) => picker.resolve(page, id, route));
     picker = new GhostModelPicker({ getGhost: () => f.ghost, installation: () => 'installed-1',
@@ -489,14 +489,15 @@ describe('original remote plugin settings', () => {
     cleanup.push(() => picker.cancel());
     const { view, fetch } = await f.open();
     const pageId = [...(f.service as unknown as { pages: Map<string, unknown> }).pages.keys()][0];
-    const selected = picker.request(f.ghost.instanceKey!, { mobilePageId: pageId });
+    // The real remote settings controller must declare source support on page-open.
+    const route = { agentKind: 'codex', providerId: 'target-provider', model: 'model', effort: 'high', fastMode: true, ...(agentDeviceId ? { agentDeviceId } : {}) };
+    const selected = picker.request(f.ghost.instanceKey!, { mobilePageId: pageId, allowRemote: true, initial: route });
     const html = await (await fetch('/settings.html')).text();
     const internal = /src="([^"]+\.js)"/.exec(html)![1].slice(0, -3);
     const poll = await fetch(internal, { method: 'POST', body: JSON.stringify({ kind: 'poll', after: 0 }) });
     expect((await poll.json()).modelPickers).toBeUndefined();
     const notice = vi.mocked(f.host.send).mock.calls.find(call => call[0] === 'ghosts:model-picker:request')![1];
     expect(notice).toMatchObject({ deviceId: 'target-b', remoteViewId: view.id, ghostId: f.ghost.instanceKey });
-    const route = { agentKind: 'codex', providerId: 'target-provider', model: 'model', effort: 'high', fastMode: true };
     const answer = { viewId: view.id, requestId: notice.requestId, route };
     await expect(answerRemotePluginSettingsModelPicker({} as WebContents, answer)).rejects.toThrow();
     expect(await answerRemotePluginSettingsModelPicker(f.host, answer)).toEqual({ handled: true, accepted: true });

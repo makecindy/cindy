@@ -109,10 +109,23 @@ export function ComposerAttachmentTray({
         }
         return (
           <View key={attachment.id} style={styles.chip} testID={`${testIDPrefix}.attachmentChip`}>
-            <FileTypeIcon name={attachment.name} mimeType={attachment.mimeType} />
+            <Pressable
+              accessibilityRole="button"
+              accessibilityLabel={attachmentDisplayLabel(attachment)}
+              onPress={() => onPreview(attachment.id)}
+              style={{
+                flex: 1,
+                flexDirection: "row",
+                alignItems: "center",
+                minHeight: 48,
+                gap: 8,
+              }}
+            >
+              <FileTypeIcon name={attachment.name} mimeType={attachment.mimeType} />
             <Text numberOfLines={1} style={styles.chipText}>
               {attachmentDisplayLabel(attachment)}
             </Text>
+            </Pressable>
             <Pressable
               accessibilityHint={removeDisabledReason}
               accessibilityLabel={t('composer.attachments.removeAttachment', { name: attachment.name })}
@@ -128,7 +141,8 @@ export function ComposerAttachmentTray({
           </View>
         );
       })}
-      {pendingUploads.map((pending) => (pending.kind === 'image' ? (
+      {pendingUploads.map((pending) =>
+        pending.kind === 'image' ? (
         <View key={pending.localId} style={styles.thumbCard} testID={`${testIDPrefix}.attachmentPendingThumb`}>
           <View style={styles.thumbPressable}>
             {pending.previewUri ? (
@@ -205,7 +219,7 @@ export function ComposerAttachmentTray({
             <X color={colors.textSecondary} size={iconSize.sm} strokeWidth={iconStroke.regular} />
           </Pressable>
         </View>
-      )))}
+        ))}
       {Array.from({ length: pastePlaceholderCount }, (_, index) => (
         // 粘贴占位卡:还拿不到图片数据(原生后台读取中),灰底 + 转圈占住席位,
         // 让「粘贴」到「缩略图可见」之间没有任何空窗。无 X:此阶段没有可取消的

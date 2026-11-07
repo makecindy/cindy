@@ -31,6 +31,7 @@ import { getDbClient } from '../localDb/client/current.js';
 import type { DbClient } from '../localDb/client/DbClient.js';
 import { createLogger } from '../logger.js';
 import { defaultClaudeConfigDirCandidates } from '../maker-orchestration/claudeTranscriptAnchors.js';
+import { readBoundClaudeConfigDir } from '../subscription-accounts/store.js';
 
 const log = createLogger('claude-transcript-relocation');
 
@@ -141,7 +142,6 @@ export async function relocateClaudeTranscriptsForSessionMove(
     scope?.assertCurrent();
     const client = scope?.client ?? getDbClient();
     const bridge = liveCcSessionBridge;
-    const projectsRoot = path.join(defaultClaudeConfigDirCandidates()[0], 'projects');
     // 1. 内存 id 必须在关闭 handle 前取;SDK 未回填时是 '<pending>' 占位符,过滤掉
     //    (占位符不持久化、不参与迁移,但 handle 本身仍要关——它连的是旧 cwd)。
     const rawLiveId = bridge?.resolveSdkSessionId(sessionId) ?? null;
@@ -183,34 +183,43 @@ export async function relocateClaudeTranscriptsForSessionMove(
       log.debug('transcript relocation skipped: no sdk session ids', { sessionId });
       return { persistedSdkSessionId };
     }
-    // projectsRoot 必须与 CLI 子进程实际使用的配置目录一致(候选首项:显式
-    // CLAUDE_CONFIG_DIR,否则默认 ~/.claude;dev 多实例也一样)。旧版 dev 隔离目录里
-    // 尚未补拷的转录不在这里搬:下次拉起 CLI 前先补拷到默认目录,再由 resume 前的
-    // 转录归位全局扫描放进新 cwd。
-    const result = await relocateClaudeSessionTranscripts({
-      sdkSessionIds,
-      oldWorkingDir,
-      newWorkingDir,
-      projectsRoot,
-    });
-    if (result.targetKeyInexact) {
-      log.warn('transcript relocation skipped: target project key inexact (path too long)', {
-        sessionId,
-        newWorkingDir,
-      });
-      return { persistedSdkSessionId };
+    // Keep each native id in its bound profile. Unbound/default histories retain
+    // the CLI's existing first-candidate destination (including legacy dev recovery).
+    const byProjectsRoot = new Map<string, string[]>();
+    for (const sid of sdkSessionIds) {
+      const configDir = readBoundClaudeConfigDir(sid) ?? defaultClaudeConfigDirCandidates()[0];
+      const projectsRoot = path.join(configDir, 'projects');
+      const group = byProjectsRoot.get(projectsRoot) ?? [];
+      group.push(sid);
+      byProjectsRoot.set(projectsRoot, group);
     }
-    const level = result.missing.length > 0 ? 'warn' : 'info';
-    log[level]('relocated Claude transcripts for session move', {
-      sessionId,
-      oldWorkingDir,
-      newWorkingDir,
-      liveId,
-      copied: result.copied,
-      replaced: result.replaced,
-      skipped: result.skipped,
-      missing: result.missing,
-    });
+    for (const [projectsRoot, idsInProfile] of byProjectsRoot) {
+      scope?.assertCurrent();
+      const result = await relocateClaudeSessionTranscripts({
+        sdkSessionIds: idsInProfile,
+        oldWorkingDir,
+        newWorkingDir,
+        projectsRoot,
+      });
+      if (result.targetKeyInexact) {
+        log.warn('transcript relocation skipped: target project key inexact (path too long)', {
+          sessionId,
+          newWorkingDir,
+        });
+        return { persistedSdkSessionId };
+      }
+      const level = result.missing.length > 0 ? 'warn' : 'info';
+      log[level]('relocated Claude transcripts for session move', {
+        sessionId,
+        oldWorkingDir,
+        newWorkingDir,
+        liveId,
+        copied: result.copied,
+        replaced: result.replaced,
+        skipped: result.skipped,
+        missing: result.missing,
+      });
+    }
     return { persistedSdkSessionId };
   } catch (err) {
     log.warn('transcript relocation failed (session move proceeds)', {

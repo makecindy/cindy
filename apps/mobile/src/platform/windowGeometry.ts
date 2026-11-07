@@ -24,12 +24,16 @@ export function safeWindowRect(g: WindowGeometry): LayoutRect {
 export function windowDivision(g: WindowGeometry): { axis: 'vertical' | 'horizontal'; first: LayoutRect; second: LayoutRect } | null {
   const safe = safeWindowRect(g);
   for (const r of g.regions) {
-    if (r.kind !== 'division' || ![r.x, r.y, r.width, r.height].every(Number.isFinite)) continue;
-    if (r.height >= safe.height * 0.8 && r.width > 0 && r.x > safe.x && r.x + r.width < safe.x + safe.width) {
+    if (r.kind !== 'division' || ![r.x, r.y, r.width, r.height].every(Number.isFinite) || r.width < 0 || r.height < 0) continue;
+    // Android flexible displays report a line, not an occluding rectangle.
+    // Check the actual overlap as a feature may lie outside a resized window.
+    const spanY = Math.min(r.y + r.height, safe.y + safe.height) - Math.max(r.y, safe.y);
+    const spanX = Math.min(r.x + r.width, safe.x + safe.width) - Math.max(r.x, safe.x);
+    if (r.height > 0 && spanY >= safe.height * 0.8 && r.x > safe.x && r.x + r.width < safe.x + safe.width) {
       return { axis: 'vertical', first: { ...safe, width: r.x - safe.x },
         second: { ...safe, x: r.x + r.width, width: safe.x + safe.width - r.x - r.width } };
     }
-    if (r.width >= safe.width * 0.8 && r.height > 0 && r.y > safe.y && r.y + r.height < safe.y + safe.height) {
+    if (r.width > 0 && spanX >= safe.width * 0.8 && r.y > safe.y && r.y + r.height < safe.y + safe.height) {
       return { axis: 'horizontal', first: { ...safe, height: r.y - safe.y },
         second: { ...safe, y: r.y + r.height, height: safe.y + safe.height - r.y - r.height } };
     }
@@ -73,6 +77,48 @@ export function keyboardControlRegion(g: WindowGeometry, keyboardBottom: number)
     regions: g.regions.filter(r => r.kind !== 'division') });
   const alternative = clip(upper);
   return alternative.height > controls.height ? alternative : controls;
+}
+
+/**
+ * Edges of a page's own floating top row (close, title, menu) where no native bar hosts it.
+ * Duo portrait reports its status area as a trailing-corner reservation; like the native bar,
+ * the row then shares that status row, its controls `spacing.md` above the row's bottom and
+ * ending before the reservation. A vertical system bar (Duo landscape) leaves no top inset,
+ * so the row keeps its own margin from the screen edge.
+ */
+export function floatingTopRow(g: WindowGeometry, rowHeight: number): {
+  top: number; left: number; right: number; sharedStatusRow: boolean;
+} {
+  const left = g.insets.left + spacing.md, right = g.insets.right + spacing.md;
+  if (g.barEdge !== 'none') return { top: Math.max(g.insets.top, spacing.md), left, right, sharedStatusRow: false };
+  const ordinary = { top: g.insets.top, left, right, sharedStatusRow: false };
+  const status = trailingStatusRegions(g);
+  const top = g.insets.top - rowHeight - spacing.md;
+  if (!g.reservedRegionsSupported || !g.regularWidth || !status.length || top < spacing.md) return ordinary;
+  const sharedRight = Math.max(right, g.width - Math.min(...status.map(r => r.x)) + spacing.sm);
+  const row = { x: left, y: top, width: g.width - left - sharedRight, height: rowHeight };
+  // Close, title and menu must all fit beside the status area, clear of any other reservation.
+  if (row.width < rowHeight * 5 || avoidReservedRegions(row, g.regions.filter(r => !status.includes(r))) !== row) return ordinary;
+  return { top, left, right: sharedRight, sharedStatusRow: true };
+}
+
+/** Status area reported in the top trailing corner (Duo portrait), which a top bar may share. */
+function trailingStatusRegions(g: WindowGeometry): ReservedRegion[] {
+  return g.regions.filter(r => r.kind === 'occlusion' && r.y === 0 && r.x + r.width >= g.width);
+}
+
+/**
+ * Extra trailing width the native top bar keeps clear when it shares the status row (Duo
+ * portrait): the system moves the trailing items left of the status area, so a title view sized
+ * for the full bar runs under them. The status area grows with its content (a Live Activity
+ * widens it), so this follows the reported region and adds the bar's item spacing before it.
+ * 0 for bars below the status area or beside a vertical rail.
+ */
+export function sharedStatusRowTrailingReserve(g: WindowGeometry): number {
+  if (!g.reservedRegionsSupported || g.barEdge !== 'none') return 0;
+  const status = trailingStatusRegions(g);
+  if (!status.length) return 0;
+  return Math.max(0, g.width - Math.min(...status.map(r => r.x)) + spacing.lg);
 }
 
 /**

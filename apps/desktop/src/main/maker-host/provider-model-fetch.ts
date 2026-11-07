@@ -1,3 +1,5 @@
+import { issueModelSourceSnapshot, modelSourceRequestSignature } from './model-source-snapshots.js';
+import { resolveCopilotAccountUrl } from './copilot-account-url.js';
 import { collectModelDiscoveryPages } from './model-discovery-pages.js';
 import type { DiscoveredModel } from '@cindy/model-providers';
 /**
@@ -99,10 +101,11 @@ export async function fetchSavedOAuthProviderModels(
   if (!isCurrent()) return { ok: false, code: 'AUTH_INVALID' };
   const token = readCachedGenericOAuthAccessToken(storageProviderId, oauth);
   if (!token) return { ok: false, code: 'AUTH_INVALID' };
+  const modelsUrl = route.modelsUrl ?? oauth.modelsDiscoveryUrl;
   const result = await fetchProviderModels({
     agent,
-    baseUrl: route.upstream,
-    modelsUrl: route.modelsUrl ?? oauth.modelsDiscoveryUrl,
+    baseUrl: resolveCopilotAccountUrl(route.upstream, token),
+    modelsUrl: modelsUrl ? resolveCopilotAccountUrl(modelsUrl, token) : modelsUrl,
     wireProtocol: route.wireProtocol,
     authMethod: 'oauth',
     apiKey: token,
@@ -325,7 +328,36 @@ export async function fetchProviderModels(
     if (!page.ok) { await page.body?.cancel(); throw new Error('catalog page failed'); }
     return JSON.parse(await readLimitedBody(page, spec.responseByteLimit ?? 8 * 1024 * 1024));
   });
-  if (!models || (models.length === 0 && !spec.allowEmpty)) {
+  // Ollama Cloud's public, unfiltered catalog can legitimately be empty. Keep
+  // that success distinct in every consumer (wizard, edit and saved refresh),
+  // without treating an error envelope as an empty catalog or an account grant.
+  const ollamaCloudCatalog = url === 'https://ollama.com/v1/models';
+  const ollamaCloudError = ollamaCloudCatalog && json !== null && typeof json === 'object'
+    && 'error' in json && json.error != null && json.error !== '';
+  // The parser can drop invalid members; only an originally empty data array is empty success.
+  const ollamaCloudEmpty = ollamaCloudCatalog && json !== null && typeof json === 'object'
+    && 'data' in json && Array.isArray(json.data) && json.data.length === 0;
+  // Magpie's enabled-model catalog can be empty. Identify the gateway rather
+  // than guessing from a user-editable port/name; never send credentials to hello.
+  let magpieEmpty = false;
+  const endpoint = new URL(url);
+  if (models?.length === 0 && !spec.allowEmpty && !ollamaCloudCatalog
+    && endpoint.pathname === '/v1/models' && !endpoint.search
+    && json !== null && typeof json === 'object' && !Array.isArray(json)
+    && 'data' in json && Array.isArray(json.data) && json.data.length === 0
+    && (!('error' in json) || json.error == null || json.error === '')
+    && (!('error_code' in json) || json.error_code === 0)) {
+    try {
+      const hello = await fetchImpl(new URL('/api/hello', endpoint).toString(), {
+        method: 'GET', redirect: 'error', signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),
+      });
+      if (hello.ok) {
+        const identity = JSON.parse(await readLimitedBody(hello, 16 * 1024));
+        magpieEmpty = identity?.name === 'magpie' && !identity.error;
+      } else await hello.body?.cancel();
+    } catch { /* An unconfirmed gateway keeps the existing conservative result. */ }
+  }
+  if (!models || ollamaCloudError || (models.length === 0 && (ollamaCloudCatalog ? !ollamaCloudEmpty : !spec.allowEmpty && !magpieEmpty))) {
     // 端点 200 但响应不是可识别的模型列表（或为空）——按「模型不存在」类引导用户手填。
     return {
       ok: false,
@@ -334,5 +366,5 @@ export async function fetchProviderModels(
       detail: 'no models found in response',
     };
   }
-  return { ok: true, models };
+  return { ok: true, models: issueModelSourceSnapshot(models, spec.agent, modelSourceRequestSignature(url, init)) };
 }

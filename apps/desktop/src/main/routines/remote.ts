@@ -1,3 +1,5 @@
+import { SUPPORTED_LOCALES } from '../../shared/locale.js';
+import { t } from '../i18n.js';
 import { getBotRoutineRemoteResource, invokeBotRoutineRemoteAction } from './companionResource.js';
 import type { createBotRemoteSettingsResource } from '../localDb/ipc/botRemoteSettingsResource.js';
 import { randomUUID } from 'node:crypto';
@@ -15,78 +17,39 @@ import { listBotRemoteResourceSources } from '../localDb/ipc/bots.js';
 import { getRoutineEngine, routineTools } from './service.js';
 import { activeOwnerScopeKey, isAppSessionBoundaryPending } from '../appSessionState.js';
 
-const copy = (
-  fallback: string,
-  zh: string,
-  tw: string,
-  ja: string,
-  ko: string,
-): RemoteLocalizedText => ({ fallback, translations: { 'zh-CN': zh, 'zh-TW': tw, ja, ko } });
-const title = copy('Routines', '例行任务', '例行任務', 'ルーティン', '루틴');
-const name = copy('Name', '名称', '名稱', '名前', '이름');
-const instructions = copy('Instructions', '指令', '指令', '指示', '지침');
-const add = copy('Add Routine', '添加例行任务', '新增例行任務', 'ルーティンを追加', '루틴 추가');
-const save = copy('Save Routine', '保存例行任务', '儲存例行任務', 'ルーティンを保存', '루틴 저장');
-const runNow = copy('Run Now', '立即运行', '立即執行', '今すぐ実行', '지금 실행');
-const remove = copy(
-  'Delete Routine',
-  '删除例行任务',
-  '刪除例行任務',
-  'ルーティンを削除',
-  '루틴 삭제',
-);
-const pause = copy(
-  'Pause Routine',
-  '暂停例行任务',
-  '暫停例行任務',
-  'ルーティンを一時停止',
-  '루틴 일시 중지',
-);
-const resume = copy(
-  'Resume Routine',
-  '恢复例行任务',
-  '恢復例行任務',
-  'ルーティンを再開',
-  '루틴 재개',
-);
-const addTime = copy(
-  'Add Schedule',
-  '添加定时条件',
-  '新增定時條件',
-  'スケジュールを追加',
-  '일정 추가',
-);
-const addInterval = copy('Add Interval', '添加间隔条件', '新增間隔條件', '間隔を追加', '간격 추가');
+const copy = (key: string): RemoteLocalizedText => ({
+  fallback: t(key, 'en'),
+  translations: Object.fromEntries(SUPPORTED_LOCALES.map(locale => [locale, t(key, locale)])),
+});
+const title = copy('routines.title');
+const name = copy('routines.name');
+const instructions = copy('routines.instructions');
+const add = copy('routines.add');
+const save = copy('routines.save');
+const runNow = copy('routines.runNow');
+const remove = copy('routines.delete');
+const pause = copy('routines.remote.pause');
+const resume = copy('routines.remote.resume');
+const addTime = copy('routines.remote.addSchedule');
+const addInterval = copy('routines.remote.addInterval');
 const minutesField = {
   id: 'minutes',
-  label: copy('Minutes', '分钟', '分鐘', '分', '분'),
+  label: copy('routines.minutes'),
   kind: 'text',
   required: true,
 };
-const addEvent = copy(
-  'Add Event Trigger',
-  '添加事件触发器',
-  '新增事件觸發器',
-  'イベントトリガーを追加',
-  '이벤트 트리거 추가',
-);
-const removeTrigger = copy(
-  'Remove Trigger',
-  '移除触发器',
-  '移除觸發器',
-  'トリガーを削除',
-  '트리거 제거',
-);
+const addEvent = copy('routines.remote.addEvent');
+const removeTrigger = copy('routines.removeTrigger');
 const timeField = {
   id: 'cron',
-  label: copy('Cron Expression', 'Cron 表达式', 'Cron 表達式', 'Cron 式', 'Cron 표현식'),
+  label: copy('routines.expression'),
   kind: 'text',
   required: true,
   placeholder: '0 9 * * 1-5',
 };
 const zoneField = {
   id: 'timezone',
-  label: copy('Time Zone', '时区', '時區', 'タイムゾーン', '시간대'),
+  label: copy('routines.timezone'),
   kind: 'text',
   required: true,
   placeholder: Intl.DateTimeFormat().resolvedOptions().timeZone,
@@ -103,8 +66,8 @@ function item(routine: Routine): RemoteResource {
       timestamp: routine.updatedAt,
       status: {
         label: routine.enabled
-          ? copy('Enabled', '已启用', '已啟用', '有効', '활성화됨')
-          : copy('Paused', '已暂停', '已暫停', '一時停止中', '일시 중지됨'),
+          ? copy('routines.enabled')
+          : copy('routines.paused'),
       },
     },
     links: [],
@@ -231,16 +194,10 @@ export function registerRoutineRemoteResources(management?: ReturnType<typeof cr
             { id: 'event', label: addEvent, kind: 'select', required: true, options: events },
             {
               id: 'field',
-              label: copy(
-                'Filter Field',
-                '筛选字段',
-                '篩選欄位',
-                '絞り込みフィールド',
-                '필터 필드',
-              ),
+              label: copy('routines.remote.filterField'),
               kind: 'text',
             },
-            { id: 'value', label: copy('Equals', '等于', '等於', '一致', '같음'), kind: 'text' },
+            { id: 'value', label: copy('routines.operators.equals'), kind: 'text' },
           ],
         });
       if (routine.triggers.length > 1)
@@ -298,7 +255,7 @@ export function registerRoutineRemoteResources(management?: ReturnType<typeof cr
           {
             id: 'history',
             primitive: 'markdown',
-            title: copy('Run History', '运行历史', '執行歷史', '実行履歴', '실행 기록'),
+            title: copy('routines.history'),
             fallbackMarkdown: history
               .slice(0, 100)
               .map(

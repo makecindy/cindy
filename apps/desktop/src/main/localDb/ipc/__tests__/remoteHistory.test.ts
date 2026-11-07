@@ -363,4 +363,99 @@ describe('local-db:history:messages', () => {
     expect(readTerminal).toHaveBeenCalledWith('session-1', null);
     expect(page.terminal).toBeNull();
   });
+
+  it('accepts the error role on the wire and forwards it to the reader', async () => {
+    const getMessages = vi.fn(async () => ({
+      items: [{
+        id: 'm-error',
+        sessionId: 'session-1',
+        sessionWorkingDir: null,
+        sessionAgentKind: 'cc',
+        sessionTitle: 'Session',
+        role: 'error',
+        content: { message: 'worker terminated without output' },
+        toolUseId: null,
+        agentMeta: null,
+        createdAt: 500,
+        rewindAt: null,
+      }],
+      nextCursor: null,
+      hasMore: false,
+    }));
+    register({
+      sessionExists: vi.fn(async () => true),
+      getMessages,
+    });
+
+    const handler = handlers.get(DL_HISTORY_MESSAGES_CHANNEL);
+    const page = await handler?.({}, { ...request, roles: ['error'] }) as {
+      items: Array<{ role: string }>;
+    };
+
+    expect(getMessages).toHaveBeenCalledWith(expect.objectContaining({ roles: ['error'] }));
+    expect(page.items.map((row) => row.role)).toEqual(['error']);
+  });
+
+  it('redacts sensitive text in error rows before they cross device-link', async () => {
+    const getMessages = vi.fn(async () => ({
+      items: [{
+        id: 'm-error-secret',
+        sessionId: 'session-1',
+        sessionWorkingDir: null,
+        sessionAgentKind: 'cc',
+        sessionTitle: 'Session',
+        role: 'error',
+        // 写入侧只脱敏过 message / sdkError, reason / toolLoop 是入库原样内容。
+        content: {
+          message: 'worker terminated without output; last token sk-abc123secret leaked',
+          reason: 'Bearer sk-abc123secret expired',
+          sdkError: 'Authorization: Bearer sk-abc123secret',
+          toolLoop: 'api_key=sk-abc123secret',
+        },
+        toolUseId: null,
+        agentMeta: null,
+        createdAt: 500,
+        rewindAt: null,
+      }],
+      nextCursor: null,
+      hasMore: false,
+    }));
+    register({
+      sessionExists: vi.fn(async () => true),
+      getMessages,
+    });
+
+    // device-link 默认 roles=null 走全 role 集, error 行会随默认集出网, 必须脱敏。
+    const handler = handlers.get(DL_HISTORY_MESSAGES_CHANNEL);
+    const page = await handler?.({}, { ...request, roles: ['error'] }) as {
+      items: Array<{ role: string; content: Record<string, string> }>;
+    };
+
+    const redacted = page.items[0].content;
+    expect(page.items[0].role).toBe('error');
+    // 原始凭据绝不出网
+    expect(JSON.stringify(redacted)).not.toContain('sk-abc123secret');
+    // 各字段脱敏形态符合 redactSensitiveText 约定: 凭据值被 mask,
+    // 但 Bearer 前缀 / 上下文文字(如 " expired")会保留。
+    expect(redacted.message).toContain('[REDACTED_KEY]');
+    expect(redacted.message).not.toContain('sk-abc123secret');
+    expect(redacted.reason).toContain('Bearer [REDACTED]');
+    expect(redacted.reason).not.toContain('sk-abc123secret');
+    expect(redacted.sdkError).toBe('Authorization: [REDACTED]');
+    expect(redacted.toolLoop).toBe('api_key=[REDACTED_KEY]');
+  });
+
+  it('still rejects roles outside the allowlist', async () => {
+    const getMessages = vi.fn();
+    register({
+      sessionExists: vi.fn(async () => true),
+      getMessages,
+    });
+
+    const handler = handlers.get(DL_HISTORY_MESSAGES_CHANNEL);
+    await expect(handler?.({}, { ...request, roles: ['nope'] })).rejects.toThrow(
+      '[INVALID_PARAMS]',
+    );
+    expect(getMessages).not.toHaveBeenCalled();
+  });
 });

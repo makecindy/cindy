@@ -1,3 +1,4 @@
+import { prNumberLabel, prKindLabel } from '@cindy/maker-shared';
 import { useEffect, useId, useState, type ReactNode } from 'react';
 import {
   ChevronDown,
@@ -20,10 +21,9 @@ import {
 } from '@/components/chat/ChatSessionFileContext';
 import { MarkdownRenderer } from '@/components/chat/MarkdownRenderer';
 import { SessionQuickSendProvider } from '@/components/chat/SessionQuickSendContext';
-import { Spinner } from '@/components/ui/spinner';
 import { getDataOwnerGeneration, isDataOwnerGenerationCurrent } from '@/contexts/dataOwnerGeneration';
 import { usePrActions, usePrRefsForSession, usePrStatuses } from '@/contexts/PrRefsContext';
-import { PR_STATUS_COLOR, PR_STATUS_ICON } from '@/features/cc-agent/gitContextPrVisuals';
+import { prStatusColor, PR_STATUS_ICON } from '@/features/cc-agent/gitContextPrVisuals';
 import { makerChatStore } from '@/lib/makerChatStore';
 import { makerApiForSticky } from '@/lib/makerTransport';
 import * as sessionService from '@/lib/sessionService';
@@ -142,16 +142,16 @@ function Chip({
 
 function StatusGlyph({ state }: { state: CardState }) {
   if (state === 'starting' || state === 'running') {
-    return <Spinner size={12} className="shrink-0 text-[var(--status-bar-accent)]" aria-hidden="true" />;
+    return <span className="size-2 shrink-0 rounded-full bg-[var(--warning-accent)] session-status-breathing" aria-hidden="true" />;
   }
   return (
     <span
       aria-hidden="true"
       className={cn(
         'size-[7px] shrink-0 rounded-full',
-        state === 'waiting' && 'bg-[var(--status-info)]',
-        state === 'completed' && 'bg-[var(--status-success)]',
-        state === 'failed' && 'bg-[var(--error-fg)]',
+        state === 'waiting' && 'bg-[var(--card-status-awaiting)]',
+        state === 'completed' && 'bg-[var(--card-status-done)]',
+        state === 'failed' && 'bg-[var(--card-status-error)]',
         (state === 'cancelled' || state === 'unknown') && 'bg-[var(--text-tertiary)]',
       )}
     />
@@ -301,6 +301,16 @@ export function BotTaskCard({
   // differ from the Bot's main task: the frozen receipt records it, the live card reads the
   // child session's. The surrounding chat's directory is only the last resort.
   const workingDir = frozen?.workingDir ?? session?.workingDir ?? fileContext.workingDir;
+  // The result is the child's: a confirmed-local chat does not make a child that runs on another
+  // device (or over SSH, or with a conflicting origin) local, and its directory must not be
+  // searched on this machine. Until the child's row has loaded its ownership is unknown.
+  const childLocalConfirmed =
+    fileContext.localConfirmed === true &&
+    session !== null &&
+    !ref.sourceDeviceId &&
+    !ref.originConflict &&
+    !session?.deviceLinkDeviceId &&
+    !session?.remoteHostId;
   const canOpen = Boolean(childSessionId) && !ref.originConflict;
   const canAddNote = state === 'running' && Boolean(childSessionId) && !ref.sourceDeviceId && !frozen;
   const resultLabel =
@@ -402,7 +412,7 @@ export function BotTaskCard({
       <Icon
         size={12}
         aria-hidden="true"
-        style={{ color: kind ? PR_STATUS_COLOR[kind] : 'var(--text-tertiary)' }}
+        style={{ color: prStatusColor(kind ?? null, confirmed?.ok ? confirmed.conflicts : null) }}
       />
     );
   };
@@ -480,7 +490,12 @@ export function BotTaskCard({
         >
           <SessionQuickSendProvider value={null}>
             <ChatSessionFileProvider
-              value={{ ...fileContext, workingDir, sessionId: childSessionId ?? undefined }}
+              value={{
+                ...fileContext,
+                workingDir,
+                sessionId: childSessionId ?? undefined,
+                localConfirmed: childLocalConfirmed,
+              }}
             >
               {resultText ? (
                 <MarkdownRenderer
@@ -550,8 +565,8 @@ export function BotTaskCard({
         {pullRequests.map((pr) => (
           <Chip key={pr.url} onClick={() => openPr(sessionPrUrl(pr))}>
             {prIcon(pr)}
-            <span className="truncate" title={`${pr.owner}/${pr.repo} #${pr.prNumber}`}>
-              PR #{pr.prNumber}
+            <span className="truncate" title={`${pr.owner}/${pr.repo} ${prNumberLabel(pr)}`}>
+              {prKindLabel(pr)} {prNumberLabel(pr)}
             </span>
           </Chip>
         ))}

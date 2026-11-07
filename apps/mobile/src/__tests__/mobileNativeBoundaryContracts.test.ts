@@ -31,10 +31,10 @@ it('bounds native export and preserves the hidden document and system share boun
   const route = readFileSync(resolve(process.cwd(), 'app/sessions/[sessionId].tsx'), 'utf8');
   const share = route.indexOf("await sharing.shareAsync(localUri, { mimeType: 'image/png' });");
   const completed = route.indexOf('shareCompleted = true;', share);
-  const inactive = route.indexOf('if (!isShareOperationActive()) return;', share);
   expect(share).toBeGreaterThanOrEqual(0);
   expect(completed).toBeGreaterThan(share);
-  expect(inactive).toBeGreaterThan(completed);
+  // Selection now closes before opening the sheet. File lifetime still follows
+  // the native promise, independent of that UI state.
   expect(route).toContain('if (!shareCompleted && localUri)');
 });
 

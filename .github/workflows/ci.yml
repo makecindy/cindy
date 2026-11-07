@@ -60,6 +60,11 @@ jobs:
       - name: Check unit test hygiene
         run: pnpm check:test-hygiene
 
+      - name: Check settings search coverage
+        env:
+          SETTINGS_BASE_REF: ${{ github.event.pull_request.base.sha || github.event.merge_group.base_sha || github.event.before || 'HEAD^' }}
+        run: pnpm check:settings-search --base-ref "$SETTINGS_BASE_REF"
+
       # test:unit 的 runner 自测不能跟着 Vitest 分片重复执行；在检查 job 中跑一次，
       # Linux 单测分片只负责 workspace unit tier。
       - name: Run test runner self-tests
@@ -85,7 +90,7 @@ jobs:
           DESIGN_HEAD_REF: ${{ github.sha }}
         run: pnpm check:design-colors --base-ref "$DESIGN_BASE_REF" --head-ref "$DESIGN_HEAD_REF"
 
-      - name: Check design inventory freshness
+      - name: Check design inventory registration
         run: pnpm check:design-inventory
 
       - name: Check endpoint literals
@@ -293,6 +298,18 @@ jobs:
       # localDb suites are outside the unit tier; exercise these DB boundaries on both OSes.
       - name: Run companion database regressions
         run: pnpm --filter desktop exec vitest run src/main/localDb/ipc/__tests__/botCanonicalSession.test.ts src/main/localDb/ipc/__tests__/botRemoteResourceProvider.test.ts
+
+      # Reuse this supported runner and its native dependencies. Do not filter the
+      # workflow itself: PRs, merge queue and main pushes must keep the stable gate.
+      - name: Select database regressions
+        id: database-changes
+        run: node scripts/ci-database-tests.mjs detect
+
+      # Includes real empty/old database upgrades and reopen/idempotency checks.
+      # The runner rejects unsupported platforms and skipped migration replay.
+      - name: Run database and migration regressions
+        if: steps.database-changes.outputs.required == 'true'
+        run: node scripts/ci-database-tests.mjs run
 
   # 保留稳定的必需检查名，并确保任一分片或一次性检查失败、取消都会阻断汇总门禁。
   windows-unit:

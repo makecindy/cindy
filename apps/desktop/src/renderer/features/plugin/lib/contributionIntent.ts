@@ -1,5 +1,5 @@
 import { ghostInstallApprovalToken, type InstalledGhost } from '../../../../shared/ghost';
-import { installedGhostStoragePart } from '../../../../shared/pluginIdentity';
+import { installedGhostStoragePart, LOCAL_PLUGIN_NAMESPACE } from '../../../../shared/pluginIdentity';
 
 /** Navigation intent only: no package, credential or grant crosses an owner boundary. */
 interface ExactTarget {
@@ -40,7 +40,7 @@ export function matchesContributionIntent(target: ExactTarget, ghost: InstalledG
     ghost.approval.state === 'approved' &&
     ghost.manifest.id === target.ghostId &&
     ghost.manifest.version === target.version &&
-    ghost.namespace === null &&
+    !(ghost.namespace !== null && ghost.namespace !== LOCAL_PLUGIN_NAMESPACE) &&
     ghost.namespaceState === 'confirmed'
     && ghost.publishingSource?.kind === 'local'
     && JSON.stringify(ghost.publishingSource) === target.sourceKey

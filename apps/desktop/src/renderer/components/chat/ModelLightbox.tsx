@@ -1,3 +1,13 @@
+import { usePreviewFocusReturn } from './PreviewChrome';
+import {
+  PREVIEW_PANEL_CLASS,
+  PREVIEW_PANEL_STYLE,
+  PreviewHeader,
+  PreviewFooter,
+  PreviewButton,
+  PreviewScrim,
+} from './PreviewChrome';
+import { previewSourceName } from '@cindy/maker-shared/attachment-preview';
 import { shouldShowOpenPathError } from '../../../shared/openPathResult';
 /**
  * ModelLightbox
@@ -25,10 +35,10 @@ import { shouldShowOpenPathError } from '../../../shared/openPathResult';
  *     inside, and returns focus to the pre-open element on unmount.
  */
 
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { FocusScope } from '@radix-ui/react-focus-scope';
-import { Box, FolderOpen } from 'lucide-react';
+import { Box, FolderOpen, RotateCcw, Minus, Plus } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 import { toast } from '@/lib/toast';
 import { extractIpcError } from '@/utils/ipcError';
@@ -65,11 +75,34 @@ export type ModelLightboxSource =
 interface ModelLightboxProps {
   source: ModelLightboxSource;
   onClose: () => void;
+  filename?: string;
 }
 
-export function ModelLightbox({ source, onClose }: ModelLightboxProps) {
+// `<model-viewer>`(连同 three.js,约 1 MB)只在首次打开 3D 预览时加载,不进主窗口
+// 首屏。包加载后自行注册自定义元素;失败时清掉缓存,「重试」会再次调用 import()
+// (浏览器是否重新读取分包取决于其模块缓存;分包缺失本身属于安装损坏)。
+let modelViewerModule: Promise<unknown> | null = null;
+
+function loadModelViewer(): Promise<unknown> {
+  modelViewerModule ??= import('@google/model-viewer').catch((err: unknown) => {
+    modelViewerModule = null;
+    throw err;
+  });
+  return modelViewerModule;
+}
+
+function isModelViewerDefined(): boolean {
+  return customElements.get('model-viewer') !== undefined;
+}
+
+export function ModelLightbox({ source, onClose, filename }: ModelLightboxProps) {
+  const restorePreviewFocus = usePreviewFocusReturn();
   const { t } = useTranslation();
   const [isVisible, setIsVisible] = useState(false);
+  const [failed, setFailed] = useState(false);
+  const [retry, setRetry] = useState(0);
+  // 元素注册前不渲染 <model-viewer>,属性始终按已定义元素的方式写入。
+  const [viewerReady, setViewerReady] = useState(isModelViewerDefined);
   const isClosingRef = useRef(false);
   const onCloseRef = useRef(onClose);
   const [menuPos, setMenuPos] = useState<{ x: number; y: number } | null>(null);
@@ -84,6 +117,17 @@ export function ModelLightbox({ source, onClose }: ModelLightboxProps) {
   const overlayRef = useRef<HTMLDivElement | null>(null);
   // "open" / "reveal" 正在执行时禁用菜单, 避免重复点击。Mirror ChatImageView。
   const [modelPending, setModelPending] = useState<'open' | 'reveal' | null>(null);
+
+  const zoomModel = (factor: number) => {
+    const viewer = modelViewerRef.current as
+      (HTMLElement & { getCameraOrbit?(): { theta: number; phi: number; radius: number } }) | null;
+    const orbit = viewer?.getCameraOrbit?.();
+    if (orbit)
+      viewer!.setAttribute(
+        'camera-orbit',
+        `${orbit.theta}rad ${orbit.phi}rad ${orbit.radius * factor}m`,
+      );
+  };
 
   const poster = source.kind === 'blob' ? source.poster : undefined;
 
@@ -113,7 +157,7 @@ export function ModelLightbox({ source, onClose }: ModelLightboxProps) {
   // recently-closed context menu doesn't also dismiss the lightbox.
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
-      if (e.key !== 'Escape') return;
+      if (e.defaultPrevented || e.key !== 'Escape' || document.fullscreenElement) return;
       if (performance.now() - lastMenuCloseAt.current < 150) return;
       handleClose();
     };
@@ -136,15 +180,36 @@ export function ModelLightbox({ source, onClose }: ModelLightboxProps) {
   // 上——不监听就是"看起来像一张拖不动的静态图"的静默失败(历史上协议特权
   // 丢失导致 fetch 被拒时正是这个表现)。失败时保留 lightbox(poster 仍可
   // 看、右键"打开模型"仍可用),toast 告知即可,不自动关闭。
-  useEffect(() => {
+  // 用 layout effect 在元素挂上的同一次提交里绑定:查看器代码异步就绪后,元素是在
+  // 非交互的更新里插入的,普通 effect 可能晚于绘制才执行,很快失败的加载(如 fetch
+  // 被拒)会在绑定前就派发 'error'。
+  useLayoutEffect(() => {
     const el = modelViewerRef.current;
     if (!el) return;
     const onError = () => {
-      toast.error(t('chat.media.modelLoadFailed', 'Failed to load 3D model'));
+      setFailed(true);
     };
     el.addEventListener('error', onError);
     return () => el.removeEventListener('error', onError);
-  }, [t]);
+  }, [retry, viewerReady]);
+
+  // 查看器代码本身加载失败(例如分包文件缺失)同样走失败提示,而不是一直转圈;
+  // 「重试」递增 retry 后重新加载。
+  useEffect(() => {
+    if (viewerReady) return;
+    let cancelled = false;
+    loadModelViewer().then(
+      () => {
+        if (!cancelled) setViewerReady(true);
+      },
+      () => {
+        if (!cancelled) setFailed(true);
+      },
+    );
+    return () => {
+      cancelled = true;
+    };
+  }, [viewerReady, retry]);
 
   async function handleModelAction(action: 'open' | 'reveal'): Promise<void> {
     if (modelPending) return;
@@ -198,7 +263,15 @@ export function ModelLightbox({ source, onClose }: ModelLightboxProps) {
     // 还给打开前的元素(ChatImageView 键盘路径 = 预览触发器)。handleClose
     // 里既有的 blur 仍保留——点进模型后 model-viewer shadow DOM 的焦点框
     // 要在淡出前先灭掉。
+    <>
+    <PreviewScrim
+      onClose={() => {
+        if (performance.now() - lastMenuCloseAt.current < 150) return;
+        handleClose();
+      }}
+    />
     <FocusScope
+      onUnmountAutoFocus={restorePreviewFocus}
       asChild
       trapped
       loop
@@ -209,11 +282,11 @@ export function ModelLightbox({ source, onClose }: ModelLightboxProps) {
     >
     <div
       ref={overlayRef}
+      data-lightbox-layer
+      className={PREVIEW_PANEL_CLASS}
       style={{
-        position: 'fixed',
-        inset: 0,
+        ...PREVIEW_PANEL_STYLE,
         zIndex: 9999,
-        background: 'var(--overlay-lightbox)',
         display: 'flex',
         alignItems: 'center',
         justifyContent: 'center',
@@ -224,8 +297,9 @@ export function ModelLightbox({ source, onClose }: ModelLightboxProps) {
     >
       <button
         type="button"
-        aria-label={t('chat.lightbox.close')}
-        style={{
+          tabIndex={-1}
+          aria-hidden="true"
+          style={{
           position: 'absolute',
           inset: 0,
           border: 0,
@@ -238,13 +312,51 @@ export function ModelLightbox({ source, onClose }: ModelLightboxProps) {
           handleClose();
         }}
       />
-      {/* The model-viewer takes a fixed viewport-relative box so it has a
+        <PreviewHeader
+          name={
+            filename ??
+            previewSourceName(
+              source.kind === 'local' ? source.absPath : source.url,
+              t('chat.media.modelPreviewAlt'),
+            )
+          }
+          onClose={handleClose}
+          onSave={() => {
+            void window.electronAPI
+              .saveMediaAs({
+                url: source.kind === 'local' ? toLocalFileUrl(source.absPath) : source.url,
+              })
+              .catch(() => toast.error(t('chat.media.saveFailed')));
+          }}
+          onMenuClose={() => {
+            lastMenuCloseAt.current = performance.now();
+          }}
+          menu={
+            <>
+              <DropdownMenuItem
+                disabled={modelPending !== null}
+                onClick={() => void handleModelAction('open')}
+              >
+                <Box className="mr-2 h-4 w-4" />
+                {t('chat.media.openModel')}
+              </DropdownMenuItem>
+              <DropdownMenuItem
+                disabled={modelPending !== null}
+                onClick={() => void handleModelAction('reveal')}
+              >
+                <FolderOpen className="mr-2 h-4 w-4" />
+                {t('chat.media.revealModel')}
+              </DropdownMenuItem>
+            </>
+          }
+        />
+        {/* The model-viewer takes a fixed viewport-relative box so it has a
           stable canvas size to render into. */}
       {/* biome-ignore lint/a11y/noStaticElementInteractions: right-click opens a pointer context menu for the model canvas. */}
       <div
         style={{
-          width: 'min(85vw, 1024px)',
-          height: 'min(85vh, 768px)',
+          width: 'min(calc(var(--preview-width) - 80px), 1024px)',
+          height: 'calc(var(--preview-height) - 160px)',
           position: 'relative',
           zIndex: 1,
         }}
@@ -253,8 +365,10 @@ export function ModelLightbox({ source, onClose }: ModelLightboxProps) {
           setMenuPos({ x: e.clientX, y: e.clientY });
       }}
       >
+        {viewerReady ? (
         <model-viewer
-          ref={modelViewerRef}
+            key={retry}
+            ref={modelViewerRef}
           // src is omitted until the lazy download resolves — model-viewer
           // shows the poster (chat thumbnail) until then. Once src lands,
           // it fetches via xdt-model:// (mivo) or xdt-file:// (local) and
@@ -277,10 +391,10 @@ export function ModelLightbox({ source, onClose }: ModelLightboxProps) {
             backgroundColor: 'transparent',
           }}
         />
-        {/* Small loading hint while we wait for the IPC + initial parse.
-            model-viewer's built-in progress bar appears on top of this once
-            src is set, so the spinner only shows during the IPC roundtrip. */}
-        {modelUrl === null ? (
+        ) : null}
+        {/* Small loading hint while the viewer code or the model URL is not ready.
+            model-viewer's built-in progress bar takes over once it renders with src. */}
+        {modelUrl === null || (!viewerReady && !failed) ? (
           <div
             style={{
               position: 'absolute',
@@ -300,6 +414,41 @@ export function ModelLightbox({ source, onClose }: ModelLightboxProps) {
           </div>
         ) : null}
       </div>
+
+        {failed ? (
+          <div className="absolute inset-x-0 top-20 z-10 flex items-center justify-center gap-3 bg-[var(--surface)] p-3 text-sm">
+            <span>{t('chat.media.modelLoadFailed')}</span>
+            <button
+              type="button"
+              onClick={() => {
+                setFailed(false);
+                setRetry((value) => value + 1);
+              }}
+            >
+              {t('attachmentPreview.retry')}
+            </button>
+          </div>
+        ) : null}
+        <PreviewFooter>
+          <PreviewButton label={t('attachmentPreview.zoomOut')} onClick={() => zoomModel(1.25)}>
+            <Minus className="h-4 w-4" />
+          </PreviewButton>
+          <PreviewButton
+            label={t('attachmentPreview.reset')}
+            onClick={() => {
+              const viewer = modelViewerRef.current;
+              if (!viewer) return;
+              viewer.setAttribute('camera-orbit', '0deg 75deg auto');
+              viewer.setAttribute('camera-target', 'auto auto auto');
+              viewer.setAttribute('field-of-view', 'auto');
+            }}
+          >
+            <RotateCcw className="h-4 w-4" />
+          </PreviewButton>
+          <PreviewButton label={t('attachmentPreview.zoomIn')} onClick={() => zoomModel(0.8)}>
+            <Plus className="h-4 w-4" />
+          </PreviewButton>
+        </PreviewFooter>
 
       <DropdownMenu
         open={menuPos !== null}
@@ -357,6 +506,7 @@ export function ModelLightbox({ source, onClose }: ModelLightboxProps) {
       </DropdownMenu>
     </div>
     </FocusScope>
+    </>
   );
 
   return createPortal(overlay, document.body);

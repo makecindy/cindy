@@ -46,10 +46,13 @@ export interface LocalAgentOpen {
   access: 'none' | 'full';
   resume?: string;
   tools: Array<{ name: string; description: string; parameters: Record<string, unknown> }>;
+  /** Host-owned preference; never accepted from the application's RPC parameters. */
+  visibleSession?: { title: string; clientId: string };
 }
 export interface LocalAgentRuntime {
   id: string;
   resumed: boolean;
+  visibleSessionId?: string;
   call(method: string, params: Record<string, unknown>): Promise<unknown>;
   close(): Promise<void>;
 }
@@ -65,6 +68,7 @@ interface Grant {
   scope: string;
   client: LocalAgentClientIdentity;
   legacyRuntime: boolean;
+  createVisibleSessions?: boolean;
 }
 interface Pair {
   id: string;
@@ -202,6 +206,8 @@ export async function createLocalAgentServer(deps: LocalAgentServerDeps) {
       if (ids.has(id) || !/^[a-f0-9]{64}$/.test(digest)) throw new Error('grant');
       ids.add(id);
       const client = clientIdentity(saved.version === 1 ? g.name : g.client);
+      if (g.createVisibleSessions !== undefined && typeof g.createVisibleSessions !== 'boolean')
+        throw new Error('grant preference');
       return {
         id,
         name: client.name,
@@ -209,6 +215,7 @@ export async function createLocalAgentServer(deps: LocalAgentServerDeps) {
         scope: text(g.scope),
         client,
         legacyRuntime: saved.version === 1 || g.legacyRuntime === true,
+        ...(g.createVisibleSessions === true ? { createVisibleSessions: true } : {}),
       };
     });
     if (saved.bindings !== undefined) {
@@ -219,7 +226,11 @@ export async function createLocalAgentServer(deps: LocalAgentServerDeps) {
           const b = record(value);
           return [
             text(id, 128),
-            { owner: text(b.owner), model: text(b.model), native: text(b.native, 4096) },
+            {
+              owner: text(b.owner),
+              model: text(b.model),
+              native: text(b.native, 4096),
+            },
           ];
         }),
       );
@@ -230,6 +241,7 @@ export async function createLocalAgentServer(deps: LocalAgentServerDeps) {
       throw new LocalAgentError('GRANT_STORE_INVALID', '本机应用授权记录无法读取，原文件已保留。');
   }
   let persistence = Promise.resolve();
+  let preferenceChanges = Promise.resolve();
   // A failed write must not let a revoked grant come back from disk after restart.
   let unsaved = false;
   const persist = () => {
@@ -274,7 +286,10 @@ export async function createLocalAgentServer(deps: LocalAgentServerDeps) {
     const idle = Date.now() - CLIENT_IDLE_MS;
     for (const [key, state] of clients) if (state.seen <= idle) retire(key);
     if (clients.size >= MAX_CLIENTS || owned() >= MAX_GRANT_CLIENTS)
-      throw new LocalAgentError('CLIENT_LIMIT', '本机连接数量已满，请稍后重试或在 Cindy 中重新授权。');
+      throw new LocalAgentError(
+        'CLIENT_LIMIT',
+        '本机连接数量已满，请稍后重试或在 Cindy 中重新授权。',
+      );
   };
   let base = '';
   let closing = false;
@@ -515,6 +530,14 @@ export async function createLocalAgentServer(deps: LocalAgentServerDeps) {
             access,
             resume: binding?.native,
             tools,
+            ...(grant.createVisibleSessions === true
+              ? {
+                  visibleSession: {
+                    title: grant.name,
+                    clientId: grant.client.id,
+                  },
+                }
+              : {}),
           },
           {
             url: `${base}/mcp/${id}`,
@@ -537,7 +560,11 @@ export async function createLocalAgentServer(deps: LocalAgentServerDeps) {
         run.resumeKey = binding && resumeKey ? resumeKey : token();
         const key = run.resumeKey,
           prior = bindings[key],
-          added = { owner: grant.id, model: model.id, native: run.runtime.id };
+          added = {
+            owner: grant.id,
+            model: model.id,
+            native: run.runtime.id,
+          };
         bindings[key] = added;
         try {
           await persist();
@@ -550,7 +577,12 @@ export async function createLocalAgentServer(deps: LocalAgentServerDeps) {
           throw error;
         }
         assertGrant(grant);
-        return { id: run.resumeKey, resumed: run.runtime.resumed, sessionId };
+        return {
+          id: run.resumeKey,
+          resumed: run.runtime.resumed,
+          sessionId,
+          ...(run.runtime.visibleSessionId ? { cindySessionId: run.runtime.visibleSessionId } : {}),
+        };
       } catch (error) {
         await closeRun(id, run);
         throw error;
@@ -928,7 +960,37 @@ export async function createLocalAgentServer(deps: LocalAgentServerDeps) {
     connections: () =>
       grants
         .filter((g) => g.scope === deps.scope())
-        .map((g) => ({ id: g.id, name: g.name, clientId: g.client.id })),
+        .map((g) => ({
+          id: g.id,
+          name: g.name,
+          clientId: g.client.id,
+          ...(g.createVisibleSessions === true ? { createVisibleSessions: true } : {}),
+        })),
+    setCreateVisibleSessions(connectionId: string, enabled: boolean) {
+      const operation = preferenceChanges.then(async () => {
+        const grant = grants.find((g) => g.id === connectionId && g.scope === deps.scope());
+        if (!grant || closing) return false;
+        const previous = grant.createVisibleSessions;
+        if (enabled) grant.createVisibleSessions = true;
+        else delete grant.createVisibleSessions;
+        try {
+          await persist();
+        } catch (error) {
+          if (grant.createVisibleSessions === (enabled ? true : undefined)) {
+            if (previous === undefined) delete grant.createVisibleSessions;
+            else grant.createVisibleSessions = previous;
+          }
+          throw error;
+        }
+        deps.changed?.();
+        return grants.includes(grant) && grant.scope === deps.scope() && !closing;
+      });
+      preferenceChanges = operation.then(
+        () => {},
+        () => {},
+      );
+      return operation;
+    },
     revoke,
     async revokeAll() {
       grants = [];
@@ -954,7 +1016,12 @@ export async function createLocalAgentServer(deps: LocalAgentServerDeps) {
       await new Promise<void>((resolve) => server.close(() => resolve()));
       await persistence;
       // The last retry decides whether a revocation survives restart; never report it as closed.
-      const saved = unsaved ? await persist().then(() => true, () => false) : true;
+      const saved = unsaved
+        ? await persist().then(
+            () => true,
+            () => false,
+          )
+        : true;
       try {
         if (JSON.parse(await fs.readFile(discoveryFile, 'utf8')).instance === instanceId)
           await fs.rm(discoveryFile, { force: true });

@@ -1,3 +1,4 @@
+import { stackState, reduceStack } from './navigationFixture';
 // @vitest-environment jsdom
 import { act, createElement } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
@@ -8,7 +9,7 @@ const h = vi.hoisted(() => ({
   user: { id: 'account', passportId: 'passport', membershipKind: 'personal', orgId: null } as MobileUser,
   sessions: [] as import('@/session/types').RemoteSession[], upsert: vi.fn(), get: vi.fn(), set: vi.fn(), routes: [] as Array<{ name: string; params?: unknown }>,
 }));
-vi.mock('expo-router', () => ({ useRouter: () => ({ dismissTo: h.dismissTo, dismiss: h.dismiss, replace: h.replace }), useNavigation: () => ({ reset: h.reset, getState: () => ({ routes: h.routes, index: h.routes.length - 1 }) }) }));
+vi.mock('expo-router', () => ({ useRouter: () => ({ dismissTo: h.dismissTo, dismiss: h.dismiss, replace: h.replace }), useNavigation: () => ({ reset: h.reset, getState: () => ({ key: 'test-stack', routeKeySeq: 10, stale: false, type: 'stack', routeNames: ['resources/[collectionId]', 'sessions/[sessionId]', 'devices/index'], routes: h.routes, index: h.routes.length - 1 }) }) }));
 vi.mock('react-native', () => ({ Keyboard: { dismiss() {} } }));
 vi.mock('react-i18next', () => ({ useTranslation: () => ({ i18n: { language: 'en' } }) }));
 vi.mock('@/auth/AuthContext', () => ({ useAuth: () => ({ user: h.user, accountGeneration: h.accountGeneration }) }));
@@ -50,6 +51,40 @@ describe('header/home shared navigation', () => {
     routeAfterClose?.();
     expect(h.push).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ pathname: '/resources/[collectionId]/[resourceId]' }));
   });
+  // Unit: #7929 changed the existing default. An old fold-only record must show avatars
+  // without writing an override; explicit false must survive remounts and account switches.
+  it('defaults avatars on without saving, retains an explicit off choice, and isolates accounts', async () => {
+    const originalUser = h.user;
+    await saveHomeNavigationPreferences(homeNavigationOwner(h.user), { teammatesCollapsed: true });
+    h.set.mockClear();
+    await render();
+    expect(result.showCollapsedTeammateAvatars).toBe(true);
+    expect(result.teammatesCollapsed).toBe(true);
+    expect(h.set).not.toHaveBeenCalled();
+    expect(await readHomeNavigationPreferences(result.owner)).toEqual({ teammatesCollapsed: true });
+    await act(async () => result.setShowCollapsedTeammateAvatars(false));
+    expect(result.teammatesCollapsed).toBe(true);
+    await act(async () => root!.unmount()); root = undefined;
+    await render(); expect(result.showCollapsedTeammateAvatars).toBe(false);
+    h.user = { ...h.user, id: 'avatar-other-account' }; await render();
+    expect(result.showCollapsedTeammateAvatars).toBe(true);
+    expect(result.teammatesCollapsed).toBe(false);
+    expect(await readHomeNavigationPreferences(result.owner)).toEqual({});
+    h.user = originalUser; await render();
+    expect(result.showCollapsedTeammateAvatars).toBe(false);
+    expect(await readHomeNavigationPreferences(result.owner)).toEqual({ teammatesCollapsed: true, showCollapsedTeammateAvatars: false });
+    await act(async () => result.setShowCollapsedTeammateAvatars(true));
+    expect(result.showCollapsedTeammateAvatars).toBe(true);
+    expect(result.teammatesCollapsed).toBe(true);
+  });
+  // Unit: a rejected storage read has no user override and must retain the original default.
+  it('keeps avatars on without writing an override when reading preferences fails', async () => {
+    h.get.mockRejectedValueOnce(new Error('storage unavailable'));
+    await render();
+    expect(result.hydrated).toBe(true);
+    expect(result.showCollapsedTeammateAvatars).toBe(true);
+    expect(h.set).not.toHaveBeenCalled();
+  });
   it('restores the remembered teammate and section fold, and returning home keeps them', async () => {
     const owner = homeNavigationOwner(h.user);
     await saveHomeNavigationPreferences(owner, { teammatesCollapsed: true, lastTeammate: teammateIdentity(teammate) });
@@ -75,7 +110,7 @@ describe('header/home shared navigation', () => {
     const list = { name: 'devices/index', key: 'list' }; const cloud = { name: 'companions/cloud/[actorId]', key: 'cloud' };
     h.routes = [list, old, cloud];
     await render(); await act(async () => result.openTeammate(moved, { replace: true, leaving: { botId: 'writer', deviceId: 'mac' } }));
-    expect(h.reset).toHaveBeenCalledExactlyOnceWith({ index: 1, routes: [list, { name: 'resources/[collectionId]/[resourceId]', params: {
+    expect(h.reset).toHaveBeenCalledExactlyOnceWith({ key: 'test-stack', routeKeySeq: 10, stale: false, type: 'stack', routeNames: ['resources/[collectionId]', 'sessions/[sessionId]', 'devices/index'], index: 1, routes: [list, { name: 'resources/[collectionId]/[resourceId]', params: {
       collectionId: 'teammates', resourceId: 'writer', resourceKind: 'bot', deviceId: 'win', deviceName: 'Studio', title: 'Writer',
     } }] });
     expect(h.replace).not.toHaveBeenCalled();
@@ -143,15 +178,18 @@ describe('header/home shared navigation', () => {
     await act(async () => { finish(JSON.stringify({ teammatesCollapsed: false, lastTeammate: teammateIdentity(teammate) })); await change; });
     expect(result.teammatesCollapsed).toBe(true); expect(result.lastTeammate).toEqual(teammateIdentity(teammate));
   });
-  it('does not let a hung preference read blank home forever, then fills in the late values', async () => {
+  it.each([undefined, false, true])('keeps avatars on during a hung read, then restores the late override %s', async (showCollapsedTeammateAvatars) => {
     vi.useFakeTimers();
     let finish!: (raw: string) => void;
     h.get.mockImplementationOnce(() => new Promise<string>((resolve) => { finish = resolve; }));
     await render(); expect(result.hydrated).toBe(false);
+    expect(result.showCollapsedTeammateAvatars).toBe(true);
     await act(async () => vi.advanceTimersByTimeAsync(2000));
     expect(result.hydrated).toBe(true); expect(result.teammatesCollapsed).toBe(false);
-    await act(async () => finish(JSON.stringify({ teammatesCollapsed: true, lastTeammate: teammateIdentity(teammate) })));
+    expect(result.showCollapsedTeammateAvatars).toBe(true);
+    await act(async () => finish(JSON.stringify({ teammatesCollapsed: true, lastTeammate: teammateIdentity(teammate), showCollapsedTeammateAvatars })));
     expect(result.teammatesCollapsed).toBe(true); expect(result.lastTeammate).toEqual(teammateIdentity(teammate));
+    expect(result.showCollapsedTeammateAvatars).toBe(showCollapsedTeammateAvatars ?? true);
     expect(h.set).not.toHaveBeenCalled(); expect(h.push).not.toHaveBeenCalled();
   });
   it('fences rapid selections before asynchronous storage so the remembered identity matches the opened route', async () => {
@@ -182,16 +220,16 @@ it('removes the retired teammate list from the stack before returning home', asy
   const router = StackRouter({ initialRouteName: 'resources/[collectionId]' });
   const options = { routeNames: ['resources/[collectionId]', 'sessions/[sessionId]', 'devices/index'],
     routeParamList: { 'resources/[collectionId]': { collectionId: 'teammates' } }, routeGetIdList: {}, routeKeyChanges: [] };
-  let state = router.getInitialState(options);
-  state = router.getStateForAction(state, StackActions.push('sessions/[sessionId]'), options)! as typeof state;
+  let state = stackState(options, 'resources/[collectionId]');
+  state = reduceStack(router, state, StackActions.push('sessions/[sessionId]'), options);
   h.routes = state.routes;
-  h.reset.mockImplementationOnce(next => { state = router.getRehydratedState({ ...next, stale: true }, options) as typeof state; });
+  h.reset.mockImplementationOnce(next => { state = reduceStack(router, state, { type: 'RESET', payload: next }, options); });
   await render();
   await act(async () => result.returnHome());
   expect(h.dismiss).not.toHaveBeenCalled();
   expect(h.dismissTo).not.toHaveBeenCalled();
   expect(state.routes.map(route => route.name)).toEqual(['devices/index']);
-  expect(router.getStateForAction(state, StackActions.pop(), options)).toBeNull();
+  expect(router.getStateForAction(state, StackActions.pop(), options)).toBe('UNHANDLED');
 });
 it('preserves earlier unrelated routes when removing multiple retired entries', async () => {
   const prior = { name: 'resources/[collectionId]', params: { collectionId: 'tools', targets: 'hosts' } };
@@ -203,7 +241,7 @@ it('preserves earlier unrelated routes when removing multiple retired entries', 
   ];
   await render();
   await act(async () => result.returnHome());
-  expect(h.reset).toHaveBeenCalledExactlyOnceWith({ index: 1, routes: [prior, { name: 'devices/index' }] });
+  expect(h.reset).toHaveBeenCalledExactlyOnceWith({ key: 'test-stack', routeKeySeq: 10, stale: false, type: 'stack', routeNames: ['resources/[collectionId]', 'sessions/[sessionId]', 'devices/index'], index: 1, routes: [prior, { name: 'devices/index' }] });
   expect(h.dismissTo).not.toHaveBeenCalled();
 });
 it('opens a known conversation directly and seeds its first-frame identity', async () => {

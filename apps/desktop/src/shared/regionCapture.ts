@@ -41,6 +41,9 @@ export const REGION_CAPTURE_CHANNEL = {
   AUTO_SCROLL: 'region-screenshot:auto-scroll',
   CONTROLS: 'region-screenshot:recording-controls',
   PREVIEW: 'region-screenshot:recording-preview',
+  AUDIO_START: 'region-screenshot:audio-start',
+  AUDIO_READ: 'region-screenshot:audio-read',
+  AUDIO_STOP: 'region-screenshot:audio-stop',
 } as const;
 export const MAX_RECORDING_BYTES = 100 * 1024 * 1024;
 export const MAX_RECORDING_MS = 5 * 60_000;

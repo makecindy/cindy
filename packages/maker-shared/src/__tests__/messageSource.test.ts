@@ -45,6 +45,13 @@ describe('promptSafeSourceName', () => {
 });
 
 describe('formatSourceRef', () => {
+  // #7631: the task badge and model note identify a local app, never a plugin.
+  it('keeps local application attribution and IDs consistent for display and handoff', () => {
+    const sourcePlugin = { pluginId: 'local-app:com.taptap.pc', name: 'TapTap' };
+    expect(messageSourceIdEntries({ sourcePlugin })).toEqual([{ kind: 'localApp', id: 'com.taptap.pc' }]);
+    expect(buildMessageSourceNote(messageSourceSenderFromMeta({ sourcePlugin })))
+      .toBe('[消息来源] 本条由本机应用「TapTap」(app_id: com.taptap.pc) 发送，不是用户本人输入。');
+  });
   it('pairs every name with its id', () => {
     expect(formatSourceRef('发布检查', 'session_id', 's-1')).toBe('「发布检查」(session_id: s-1)');
   });

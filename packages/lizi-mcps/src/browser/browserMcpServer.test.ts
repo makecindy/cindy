@@ -1,3 +1,4 @@
+import { runInNewContext } from 'node:vm';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
 import type { BrowserControlRuntime } from '@cindy/browser-control-runtime';
@@ -187,6 +188,66 @@ describe('browser experience cache', () => {
       expect(h.calls).toHaveLength(6);
       expect(h.calls.every(req => (req as { action: string }).action === 'navigate')).toBe(true);
       expect(h.calls[0]).not.toHaveProperty('intent');
+    } finally { await h.cleanup(); }
+  });
+
+  // Unit/MCP regression from the X screenshot incident: the shipped catalog
+  // hid x-tweet behind another host and alphabetical writes. Existing tests use
+  // a single custom recipe, so cannot catch real multi-host discovery/ranking.
+  it.each(['x.com', 'twitter.com', 'api.fxtwitter.com'])('lists the public reader in %s siteguide', async site => {
+    const h = await makeHarness();
+    try {
+      const result = await invoke(h, { action: 'siteguide', site });
+      expect(result.ok).toBe(true);
+      expect(result.recipes).toEqual(expect.arrayContaining([expect.objectContaining({ id: 'x-tweet' })]));
+    } finally { await h.cleanup(); }
+  });
+
+  it('recommends a public post reader after home navigation, without replaying or spamming posts', async () => {
+    const h = await makeHarness({}, req => ({ targetId: 'tab', url: req.url }));
+    try {
+      await invoke(h, { action: 'open', url: 'https://x.com/' });
+      const first = await invoke(h, { action: 'navigate', url: 'https://x.com/person/status/123/photo/1' });
+      expect(first.recipeSuggestions[0].id).toBe('x-tweet');
+      expect(first.recipeSuggestions.every((r: { access: string }) => r.access === 'read')).toBe(true);
+      expect((await invoke(h, { action: 'navigate', url: 'https://x.com/person/status/456' })).recipeSuggestions).toBeUndefined();
+      const write = await invoke(h, { action: 'navigate', url: 'https://x.com/person/status/456', intent: 'Like a specific tweet' });
+      expect(write.recipeSuggestions[0].id).toBe('opencli:twitter/like');
+      expect((await invoke(h, { action: 'navigate', url: 'https://x.com.evil/person/status/123' })).recipeSuggestions).toBeUndefined();
+      expect(h.calls.map(req => (req as { action: string }).action)).toEqual(['open', 'tabs', 'navigate', 'navigate', 'navigate', 'navigate']); // only navigation plus open's existing tab check
+    } finally { await h.cleanup(); }
+  });
+
+  // Existing-tab replay: agents may snapshot without navigation, so the
+  // navigation-only suggestions previously never reached this decision point.
+  it('suggests recipes when reading an existing post tab and deduplicates subsequent navigation', async () => {
+    const h = await makeHarness({}, () => ({ targetId: 'tab', url: 'https://x.com/person/status/123', snapshot: 'Public post' }));
+    try {
+      expect((await invoke(h, { action: 'snapshot', targetId: 'tab' })).recipeSuggestions[0].id).toBe('x-tweet');
+      expect((await invoke(h, { action: 'navigate', targetId: 'tab', url: 'https://x.com/person/status/123' })).recipeSuggestions).toBeUndefined();
+      expect(h.calls.filter(req => (req as { action: string }).action === 'navigate')).toHaveLength(1);
+    } finally { await h.cleanup(); }
+  });
+
+  // Unit/MCP: execute the shipped evaluate function on a synthetic API response,
+  // not a copied output object. Previously URL-only media had no reading handoff.
+  it.each([true, false])('hands off unviewed photos only when present: %s', async hasPhoto => {
+    const payload = { tweet: { id: '123', media: { photos: hasPhoto ? [{ url: 'https://images.example/photo.jpg' }] : [] } } };
+    const h = await makeHarness({}, req => {
+      const request = req.request as { kind?: string; fn?: string } | undefined;
+      if (request?.kind === 'evaluate') return { result: runInNewContext(`(${request.fn})()`, {
+        document: { body: { innerText: JSON.stringify(payload) } },
+      }, { timeout: 100 }) };
+      return { targetId: 'tab' };
+    });
+    try {
+      const result = await invoke(h, { action: 'recipe', recipeId: 'x-tweet', targetId: 'tab', inputs: { id: '123' } });
+      expect(result.ok).toBe(true);
+      if (hasPhoto) {
+        expect(result.output.imageReading).toMatchObject({ status: 'not_viewed' });
+        expect(result.output.media).toEqual([{ type: 'photo', url: 'https://images.example/photo.jpg' }]);
+      } else expect(result.output.imageReading).toBeUndefined();
+      expect(h.calls).toHaveLength(3); // the handoff does not silently fetch media
     } finally { await h.cleanup(); }
   });
 
@@ -490,7 +551,7 @@ describe('createBrowserMcpServer', () => {
   });
 
   it('switches modes in the same MCP instance and immediately updates backend capabilities', async () => {
-    let backend: 'external' | 'rsb-webview' = 'external';
+    let backend: 'external' | 'rsb-webview' | 'user-browser' = 'external';
     const switched: string[] = [];
     const h = await makeHarness({
       setBackend: async (next) => { switched.push(next); backend = next; return backend; },
@@ -1484,7 +1545,7 @@ describe('createBrowserMcpServer', () => {
     expect(parsed.ok).toBe(true);
     if (password) {
       expect(text.startsWith('{"loginWall"')).toBe(true);
-      expect(parsed.loginWall).toMatchObject({ fields: ['password'], hint: expect.stringContaining('request_input_handoff') });
+      expect(parsed.loginWall).toMatchObject({ fields: ['password'], hint: expect.stringContaining('ask_owner') });
     } else {
       expect(parsed.loginWall).toBeUndefined();
     }
@@ -1664,6 +1725,20 @@ describe('recipe on-use maintenance', () => {
       expect(saved).toEqual([{ site: 'example.com', recipe: { ...legacy, validation: { site: 'example.com', state: 'suspended' } } }]);
     } finally { await h.cleanup(); }
   });
+  it('persists failure of a legacy recipe listed in several guides under its first match host', async () => {
+    const saved: unknown[] = [];
+    const legacy = { id: 'multi-guide-flow', match: ['api.example.com', 'example.com'], steps: [{ action: 'extract' as const, extract: { fields: { title: 'h1' } } }] };
+    const h = await makeHarness({
+      getUserRecipes: async () => ({ version: 'multi-guide-flow-v1', recipes: new Map([[legacy.id, legacy]]),
+        siteGuides: new Map([['example.com', { site: 'example.com', recipes: [legacy.id] }],
+          ['api.example.com', { site: 'api.example.com', recipes: [legacy.id] }]]) }),
+      saveUserRecipe: async (x) => { saved.push(x); return { ok: true }; },
+    }, () => ({ result: { ok: false, error: 'invalid selector' } }));
+    try {
+      expect((await invoke(h, { action: 'recipe', recipeId: legacy.id })).ok).toBe(false);
+      expect(saved).toEqual([{ site: 'api.example.com', recipe: { ...legacy, validation: { site: 'api.example.com', state: 'suspended' } } }]);
+    } finally { await h.cleanup(); }
+  });
   it('reports a failed suspension write and still prevents this session from rerunning it', async () => {
     const stored = { ...draft, validation: { site: 'example.com', state: 'active' as const } };
     const h = await makeHarness({
@@ -1718,5 +1793,135 @@ describe('recipe on-use maintenance', () => {
       expect((await invoke(next, { action: 'saveRecipe', site: 'example.com', recipeDraft: draft })).ok).toBe(true);
       expect(stored.validation.state).toBe('active');
     } finally { await next.cleanup(); }
+  });
+});
+
+describe('browser · backend capability gating (user browser via extension)', () => {
+  const caps = () => ({ evaluate: false, screenshot: false, network: false, upload: false, dialog: false, console: false, pdf: false, focus: false, close: false, trustedInput: false });
+
+  it.each([
+    { action: 'screenshot', targetId: 't1' },
+    { action: 'requests', targetId: 't1' },
+    { action: 'upload', targetId: 't1', paths: ['/tmp/x'] },
+    { action: 'dialog', targetId: 't1', dialogId: 'd', accept: true },
+    { action: 'focus', targetId: 't1' },
+    { action: 'act', targetId: 't1', request: { kind: 'evaluate', fn: '() => 1' } },
+    { action: 'act', targetId: 't1', request: { kind: 'drag', startRef: 'a', endRef: 'b' } },
+  ])('refuses unsupported work before dispatch and points the agent to the user: %j', async (args) => {
+    const h = await makeHarness({ backendCapabilities: caps });
+    try {
+      const result = await h.client.callTool({ name: 'call_tool', arguments: { name: 'browser', args } });
+      expect(result.isError).toBe(true);
+      expect((result.content as Array<{ text: string }>)[0].text).toContain('不要自行切换');
+      expect(h.calls).toEqual([]);
+    } finally { await h.cleanup(); }
+  });
+
+  it('points out open tabs on the same site after open, and bounds snapshots by maxChars, for any backend', async () => {
+    const h = await makeHarness({}, (request) => {
+      if (request.action === 'open') return { targetId: 'new', url: 'https://play.example.test/console' };
+      if (request.action === 'tabs') return { tabs: [
+        { targetId: 'new', url: 'https://play.example.test/console' },
+        { targetId: 'old', suggestedTargetId: 'play', url: 'https://play.example.test/console/u/1/app', title: 'Release overview' },
+        { targetId: 'other', url: 'https://elsewhere.test/' },
+      ] };
+      if (request.action === 'snapshot') return { targetId: 'old', snapshot: Array.from({ length: 400 }, (_, i) => `line ${i} [ref=e${i}]`).join('\n'), refs: { e1: {}, e399: {} } };
+      return undefined;
+    });
+    try {
+      const opened = await h.client.callTool({ name: 'call_tool', arguments: { name: 'browser', args: { action: 'open', url: 'https://play.example.test/console' } } });
+      const body = JSON.parse((opened.content as Array<{ text: string }>)[0].text);
+      expect(body.sameSiteTabs).toEqual([{ targetId: 'play', url: 'https://play.example.test/console/u/1/app', title: 'Release overview' }]);
+      expect(body.sameSiteHint).toContain('优先在它们上面继续');
+      const snap = await h.client.callTool({ name: 'call_tool', arguments: { name: 'browser', args: { action: 'snapshot', targetId: 'play', maxChars: 500 } } });
+      const data = JSON.parse((snap.content as Array<{ text: string }>)[0].text).data;
+      expect(data.snapshot.length).toBeLessThanOrEqual(500);
+      expect(data.truncated).toBe(true);
+      expect(Object.keys(data.refs)).toEqual(['e1']);
+    } finally { await h.cleanup(); }
+  });
+
+  // 2026-11-06: on My browser the hint sent the agent into the user's own tab, where it clicked and navigated.
+  it('does not send the agent into the user\'s own tab on the same site, only its address', async () => {
+    const h = await makeHarness({}, (request) => {
+      if (request.action === 'open') return { targetId: 'new', url: 'https://play.example.test/console' };
+      if (request.action === 'tabs') return { tabs: [
+        { targetId: 'mine', suggestedTargetId: 't1', url: 'https://play.example.test/console/u/1/app', owner: 'user' },
+        { targetId: 'new', url: 'https://play.example.test/console', owner: 'cindy' },
+      ] };
+      return undefined;
+    });
+    try {
+      const opened = await h.client.callTool({ name: 'call_tool', arguments: { name: 'browser', args: { action: 'open', url: 'https://play.example.test/console' } } });
+      const body = JSON.parse((opened.content as Array<{ text: string }>)[0].text);
+      expect(body.sameSiteTabs).toEqual([{ targetId: 't1', url: 'https://play.example.test/console/u/1/app', owner: 'user' }]);
+      expect(body.sameSiteHint).toContain('不要在上面点击、输入或跳转');
+      expect(body.sameSiteHint).not.toContain('优先在它们上面继续');
+    } finally { await h.cleanup(); }
+  });
+
+  it('accepts extract fields written next to extract, and urls in afterSnapshot, for any backend', async () => {
+    const h = await makeHarness();
+    try {
+      const extracted = await h.client.callTool({ name: 'call_tool', arguments: { name: 'browser', args: { action: 'extract', targetId: 't1', fields: { title: 'h1' }, from: 'main', multiple: true } } });
+      expect(extracted.isError).toBeFalsy();
+      expect(h.calls[0]).toMatchObject({ action: 'act', request: { kind: 'evaluate', domRead: { kind: 'extract', extract: { fields: { title: 'h1' }, from: 'main', multiple: true } } } });
+      const clicked = await h.client.callTool({ name: 'call_tool', arguments: { name: 'browser', args: { action: 'act', targetId: 't1', request: { kind: 'click', ref: 'e1' }, afterSnapshot: { urls: true } } } });
+      expect(clicked.isError).toBeFalsy();
+      expect(h.calls.find((c) => (c as { action?: string }).action === 'snapshot')).toMatchObject({ action: 'snapshot', urls: true });
+    } finally { await h.cleanup(); }
+  });
+
+  it('ignores a browser name passed as target instead of failing schema validation', async () => {
+    const h = await makeHarness({ backendCapabilities: () => ({ ...caps(), pointer: true }) });
+    try {
+      const result = await h.client.callTool({ name: 'call_tool', arguments: { name: 'browser', args: { action: 'status', target: 'user-browser' } } });
+      expect(result.isError).toBeFalsy();
+      expect(h.calls).toHaveLength(1);
+      expect(h.calls[0]).not.toHaveProperty('target');
+    } finally { await h.cleanup(); }
+  });
+
+  it('lets synthetic pointer work through when the backend declares pointer support', async () => {
+    const h = await makeHarness({ backendCapabilities: () => ({ ...caps(), pointer: true }) });
+    try {
+      await h.client.callTool({ name: 'call_tool', arguments: { name: 'browser', args: { action: 'act', targetId: 't1', request: { kind: 'drag', startRef: 'a', endRef: 'b' } } } });
+      expect(h.calls).toHaveLength(1);
+    } finally { await h.cleanup(); }
+  });
+
+  it('still routes extract through the declarative DOM read and leaves other backends unaffected', async () => {
+    const h = await makeHarness({ backendCapabilities: caps });
+    try {
+      await h.client.callTool({ name: 'call_tool', arguments: { name: 'browser', args: { action: 'extract', targetId: 't1', extract: { fields: { title: 'h1' } } } } });
+      expect(h.calls).toHaveLength(1);
+      expect(h.calls[0]).toMatchObject({ action: 'act', request: { kind: 'evaluate', domRead: { kind: 'extract' } } });
+    } finally { await h.cleanup(); }
+    const open = await makeHarness({ backendCapabilities: () => ({}) });
+    try {
+      await open.client.callTool({ name: 'call_tool', arguments: { name: 'browser', args: { action: 'screenshot', targetId: 't1' } } });
+      expect(open.calls).toHaveLength(1);
+    } finally { await open.cleanup(); }
+  });
+
+  it('refuses recipes that need guards, scripts or network capture on a backend without them', async () => {
+    const recipe: Recipe = {
+      id: 'guarded', match: ['example.test'], inputs: {},
+      steps: [
+        { action: 'navigate', url: 'https://example.test/' },
+        { action: 'extract', as: 'rows', guard: { url: 'https://example.test/' }, expect: { minCount: 1 }, extract: { fields: { title: 'h1' } } },
+      ],
+      output: '{{rows}}',
+    } as unknown as Recipe;
+    const h = await makeHarness({
+      backendCapabilities: caps,
+      getUserRecipes: async () => ({ recipes: new Map([[recipe.id, recipe]]), siteGuides: new Map(), version: 'v1' }),
+    });
+    try {
+      const result = await h.client.callTool({ name: 'call_tool', arguments: { name: 'browser', args: { action: 'recipe', recipeId: 'guarded' } } });
+      expect(result.isError).toBe(true);
+      expect((result.content as Array<{ text: string }>)[0].text).toContain('页面脚本能力');
+      expect(h.calls).toEqual([]);
+    } finally { await h.cleanup(); }
   });
 });

@@ -32,7 +32,6 @@ export function ProviderShareInsightsSection({ share }: { share: ProviderShareRe
         share.shareId,
         share.memberId,
         share.status,
-        share.hostOnline,
         share.hostCapable,
       ])}
       share={share}
@@ -47,7 +46,6 @@ function InsightsView({ share }: { share: ProviderShareReceived }) {
     share.shareId,
     share.memberId,
     share.status,
-    share.hostOnline,
     share.hostCapable,
   ]);
   const [result, setResult] = useState<{
@@ -58,7 +56,7 @@ function InsightsView({ share }: { share: ProviderShareReceived }) {
   } | null>(null);
   const [expanded, setExpanded] = useState(false);
   const [usageFailed, setUsageFailed] = useState(false);
-  const available = share.status === 'active' && share.hostOnline && share.hostCapable;
+  const available = share.status === 'active' && share.hostCapable;
   const valid = useRef(available);
   const expandedRef = useRef(false);
   const generation = useRef(0);
@@ -124,7 +122,6 @@ function InsightsView({ share }: { share: ProviderShareReceived }) {
           latest.shareId,
           latest.memberId,
           latest.status,
-          latest.hostOnline,
           latest.hostCapable,
         ]);
       if (next !== identity) {
@@ -157,9 +154,7 @@ function InsightsView({ share }: { share: ProviderShareReceived }) {
     result?.identity === identity && isDataOwnerGenerationCurrent(result.owner) ? result : null;
   const view = available ? current?.view : null;
   const error = !available
-    ? !share.hostOnline
-      ? 'offline'
-      : !share.hostCapable
+    ? !share.hostCapable
         ? 'needs-update'
         : 'denied'
     : current?.error;
@@ -172,6 +167,23 @@ function InsightsView({ share }: { share: ProviderShareReceived }) {
       className="shrink-0 border-t border-[var(--border-default)] px-5 py-4"
       data-testid="provider-share-insights"
     >
+      {view?.memberBudget?.enabled && <div className="mb-5 space-y-3">
+        <h3 className="text-13 font-medium text-[var(--text-primary)]">{t('providerShare.memberBudget.yourBudget')}</h3>
+        {view.memberBudget.rules.map(rule => <div key={rule.id} className="space-y-1">
+          <div className="break-words text-13 text-[var(--text-primary)]">{rule.models.join(' + ')}</div>
+          <div className="text-12 text-[var(--text-secondary)]">
+            {rule.usedPercent === null ? t('providerShare.memberBudget.' + view.memberBudget!.state)
+              : t('providerShare.memberBudget.progress', { used: rule.usedPercent.toFixed(1), limit: rule.limitPercent })}
+          </div>
+          {rule.blocked && <div className="text-12 text-[var(--text-secondary)]">{t('providerShare.memberBudget.paused')}</div>}
+        </div>)}
+        {view.memberBudget.recommendedModel && <p className="break-words text-12 text-[var(--text-secondary)]">
+          {t('providerShare.memberBudget.recommendation', { model: view.memberBudget.recommendedModel })}
+        </p>}
+        <p className="text-12 text-[var(--text-tertiary)]">
+          {t('providerShare.memberBudget.window', { start: view.memberBudget.windowStart, end: view.memberBudget.windowEnd })}
+        </p>
+      </div>}
       <h3 className="text-13 font-medium leading-[1.5] text-[var(--text-primary)]">
         {t('providerShare.insights.quotaTitle')}
       </h3>

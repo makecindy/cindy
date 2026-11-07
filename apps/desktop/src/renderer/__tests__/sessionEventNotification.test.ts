@@ -9,6 +9,7 @@ import {
 } from '@/lib/sessionEventNotification';
 import { applyRemoteSessionActivity, clearRemoteSessionActivity, getRemoteSessionActivity } from '@/features/device-link/remoteSessionActivityStore';
 import { SessionActivityRelay } from '../../main/agent-island/sessionActivityRelay';
+import { setDataOwnerGeneration } from '@/contexts/dataOwnerGeneration';
 
 const gates = vi.hoisted(() => ({
   desktop: true,
@@ -29,7 +30,9 @@ vi.mock('@/hooks/useAgentIslandSettings', () => ({
 }));
 
 const markAttention = vi.fn(() => Promise.resolve());
-const showSessionEvent = vi.fn(() => Promise.resolve());
+const showSessionEvent = vi.fn<typeof window.electronAPI.notificationShowSessionEvent>(() => Promise.resolve());
+const getSession = vi.fn(async (): Promise<unknown> => ({ source: 'desktop', feishuOpenId: null }));
+const resolveBinding = vi.fn(async () => ({ attached: false }));
 
 describe('shared session event notifications', () => {
   it.each(['before-clear', 'after-clear'])('does not notify for a cleared remote completion (%s)', order => {
@@ -68,16 +71,20 @@ describe('shared session event notifications', () => {
     gates.islandEnabled = false;
     gates.islandSupported = false;
     vi.clearAllMocks();
+    getSession.mockResolvedValue({ source: 'desktop', feishuOpenId: null });
+    resolveBinding.mockResolvedValue({ attached: false });
     vi.spyOn(document, 'hasFocus').mockReturnValue(false);
     (window as unknown as { electronAPI: unknown }).electronAPI = {
       notificationMarkSessionAttention: markAttention,
       notificationShowSessionEvent: showSessionEvent,
-      localDb: { bots: { list: vi.fn(async () => []) } },
+      localDb: { bots: { list: vi.fn(async () => []) }, sessions: { get: getSession } },
+      binding: { resolveSession: resolveBinding },
     };
   });
 
   afterEach(() => {
     clearRemoteSessionActivity();
+    setDataOwnerGeneration(null);
     vi.restoreAllMocks();
   });
 
@@ -93,6 +100,89 @@ describe('shared session event notifications', () => {
       kind: 'needs-reply',
       channels: { desktop: true, feishu: true, mobile: true },
     });
+  });
+
+  it('keeps the desktop reminder but skips duplicate phone and Feishu delivery for an input handoff', () => {
+    gates.feishu = true;
+
+    sendSessionEventNotification('handoff-session', 'Task', 'needs-reply', { mobile: false, feishu: false });
+
+    expect(markAttention).toHaveBeenCalledWith('handoff-session');
+    expect(showSessionEvent).toHaveBeenCalledWith({
+      sessionId: 'handoff-session',
+      title: 'Task',
+      kind: 'needs-reply',
+      channels: { desktop: true, feishu: false, mobile: false },
+    });
+  });
+
+  // #6754 review 4373832299 / unit: persisted sources and bindings do not prove
+  // that this request has an IM pointer. Main resolves the actual request target.
+  it.each([
+    { source: 'desktop', openId: null, attached: false, fallback: true },
+    { source: 'feishu', openId: 'ou_native', attached: false, fallback: true },
+    { source: 'desktop', openId: 'ou_legacy', attached: false, fallback: true },
+    { source: 'desktop', openId: null, attached: true, fallback: true },
+    { source: 'telegram', openId: null, attached: false, fallback: true },
+    { source: 'slack', openId: null, attached: false, fallback: true },
+    { source: 'discord', openId: null, attached: false, fallback: true },
+  ])('passes handoff identity to Main regardless of persisted source: %j', async entry => {
+    gates.feishu = true;
+    getSession.mockResolvedValue({ source: entry.source, feishuOpenId: entry.openId });
+    resolveBinding.mockResolvedValue({ attached: entry.attached });
+
+    sendSessionEventNotification('handoff', 'Task', 'needs-reply', { inputHandoff: true, inputHandoffRequestId: 'request-1' });
+    // Desktop must not wait for the asynchronous route lookup.
+    expect(showSessionEvent).toHaveBeenCalledWith({
+      sessionId: 'handoff', title: 'Task', kind: 'needs-reply',
+      channels: { desktop: true, feishu: false, mobile: false },
+    });
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(showSessionEvent.mock.calls.map(([payload]) => payload.channels)).toEqual([
+      { desktop: true, feishu: false, mobile: false },
+      ...(entry.fallback ? [{ desktop: false, feishu: true, mobile: false }] : []),
+    ]);
+    expect(markAttention).toHaveBeenCalledTimes(1);
+    if (entry.fallback) expect(showSessionEvent).toHaveBeenLastCalledWith({
+      sessionId: 'handoff', title: 'Task', kind: 'needs-reply', markAttention: false,
+      inputHandoffRequestId: 'request-1',
+      channels: { desktop: false, feishu: true, mobile: false },
+    });
+  });
+
+  it.each(['owner-change', 'setting-off', 'focused', 'read-failed'] as const)(
+    'drops a pending handoff Feishu fallback after %s', async change => {
+      gates.feishu = true;
+      let release!: (row: unknown) => void;
+      getSession.mockReturnValueOnce(new Promise(resolve => { release = resolve; }));
+      sendSessionEventNotification('handoff', 'Task', 'needs-reply', { inputHandoff: true, inputHandoffRequestId: 'request-1' });
+      if (change === 'owner-change') setDataOwnerGeneration('another-owner');
+      if (change === 'setting-off') gates.feishu = false;
+      if (change === 'focused') vi.mocked(document.hasFocus).mockReturnValue(true);
+      release(change === 'read-failed' ? null : { source: 'desktop' });
+      await Promise.resolve();
+      await Promise.resolve();
+      expect(showSessionEvent).toHaveBeenCalledTimes(1);
+      expect(showSessionEvent).toHaveBeenCalledWith({
+        sessionId: 'handoff', title: 'Task', kind: 'needs-reply',
+        channels: { desktop: true, feishu: false, mobile: false },
+      });
+    },
+  );
+
+  it('keeps remote handoff routing on the execution host without querying local IM bindings', () => {
+    gates.feishu = true;
+    sendSessionEventNotification('remote-handoff', 'Task', 'needs-reply', {
+      inputHandoff: true, remoteDevice: true, remoteDeviceId: 'host',
+    });
+    expect(showSessionEvent).toHaveBeenCalledExactlyOnceWith({
+      sessionId: 'remote-handoff', title: 'Task', kind: 'needs-reply', markAttention: false,
+      channels: { desktop: false, feishu: false, mobile: false },
+    });
+    expect(getSession).not.toHaveBeenCalled();
+    expect(resolveBinding).not.toHaveBeenCalled();
   });
 
   it('lets Agent Island replace desktop notification without suppressing other channels', () => {

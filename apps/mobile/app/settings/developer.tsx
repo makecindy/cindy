@@ -114,7 +114,7 @@ export default function DeveloperSettingsScreen() {
       : localLogUploadMessage;
 
   // —— Beta 测试渠道 ——
-  // 落盘即时生效,但 manifest 通道只在下次冷启动/后台轮询切换;打开后引导用户手动重启。
+  // 落盘后通知通道订阅,根部会按有效通道重新检查整包更新。
   const { enabled: betaEnabled, ready: betaReady, setEnabled: setBetaEnabled } = useBetaChannel();
   const [betaBusy, setBetaBusy] = useState(false);
   const toggleBeta = useCallback(async () => {
@@ -134,13 +134,6 @@ export default function DeveloperSettingsScreen() {
         }
       }
       await setBetaEnabled(next);
-      if (next) {
-        Alert.alert(
-          t('settings.betaChannel.title'),
-          t('settings.betaChannel.restartHint'),
-          [{ text: t('settings.betaChannel.ok'), style: 'default' }],
-        );
-      }
     } catch {
       // 只可能是本机存储异常;store 会回推真值,这里仅提示未保存成功。
       Alert.alert(t('settings.betaChannel.title'), t('settings.betaChannel.saveFailed'));

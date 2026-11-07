@@ -372,14 +372,6 @@ export interface OrcaTeamServiceDeps {
     previousRole: string;
     previousLabel: string | null;
   }) => Promise<{ ok: true } | { ok: false; errorCode: 'NOT_FOUND' | 'DUPLICATE_LABEL' }>;
-  /**
-   * true = 这些 label 中被当前 lead 的插件 team plan 未结算条目引用，改名会破坏计划归属与委派自动授权。
-   * 非插件任务 / 无计划 / 已结算时不锁定。可选：未注入时不做计划锁。
-   */
-  isWorkerLabelLockedByPlan?: (params: {
-    leadSessionId: string;
-    labels: ReadonlyArray<string | null>;
-  }) => Promise<boolean>;
   /** 取消该 worker session 尚未落地的后台唤醒（focus 预热）；释放 runtime 前调用。 */
   cancelWorkerResume?(sessionId: string): void;
   updateWorkerStatus(workerId: string, status: OrcaWorkerStatus): Promise<void>;
@@ -1642,23 +1634,6 @@ export function createOrcaTeamService(deps: OrcaTeamServiceDeps): OrcaTeamServic
       // 幂等：值没变时不写库、不广播（MCP 重试与 UI 重复提交都落到这里）。
       if (role === worker.role && label === worker.label) {
         return { ok: true as const, workerId: worker.id, role, label };
-      }
-
-      // 插件 team plan 以 label 冻结 Worker 归属与委派自动授权且登记后不可变；
-      // 活动（未结算）计划引用到旧/新 label 时必须拒绝改 label，只放过 role 改名。
-      if (label !== worker.label && deps.isWorkerLabelLockedByPlan) {
-        const locked = await deps.isWorkerLabelLockedByPlan({
-          leadSessionId: link.leadSessionId,
-          labels: [worker.label, label],
-        });
-        if (locked) {
-          return {
-            ok: false as const,
-            errorCode: 'WORKER_STATE_CHANGED' as const,
-            message:
-              'worker label is referenced by the active plugin team plan and cannot be changed; change the role or release the worker first',
-          };
-        }
       }
 
       const updated = await deps.updateWorkerIdentity({

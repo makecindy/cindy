@@ -1,13 +1,17 @@
 /** Provider snapshots are adapted here; the card renders only this common presentation model. */
+import { kimiUsageWindowMinutes, type KimiCodingUsageSnapshot } from '../../../shared/kimiCodingUsage';
 import type { TFunction } from 'i18next';
 import type { CodexRateLimitResetSummary } from '@cindy/maker-shared/session-controls';
 import type { RateLimitSnapshot } from '@/hooks/useAccountUsage';
 import type { XaiRateLimitSnapshot } from '@/hooks/useXaiRateLimit';
 import type { ClaudeSubscriptionUsageSnapshot } from '../../../shared/claudeSubscriptionUsage';
+import type { SubscriptionAccountUsage } from '../../../shared/subscriptionAccounts';
+import { matchCodexBucketForModel } from '@cindy/maker-shared/codex-usage-buckets';
 import type {
   DeepSeekAccountUsageSnapshot,
   ZhipuCodingPlanQuotaSnapshot,
 } from '../../../shared/providerAccountUsage';
+import type { OpenCodeGoUsageSnapshot } from '../../../shared/opencodeGoUsage';
 import {
   isXaiWeeklyUsageCurrent,
   type XaiSubscriptionUsageSnapshot,
@@ -321,6 +325,33 @@ export function buildCodexUsageCard(
   };
 }
 
+/** One pooled subscription account's own snapshot, rendered with the provider's usage card. */
+export function buildSubscriptionAccountUsageCard(
+  usage: SubscriptionAccountUsage | undefined,
+  t: TFunction,
+  nowMs: number,
+  locale?: string,
+): UsageCardAccount | null {
+  if (usage?.claude) return buildClaudeUsageCard(usage.claude, t);
+  if (!usage?.codex) return null;
+  // As in the settings card, the generic bucket stands for the account; an empty one stays empty.
+  const bucket = matchCodexBucketForModel(usage.codex.buckets, undefined, nowMs);
+  const window = (value: NonNullable<typeof bucket>['primary'] | undefined) =>
+    value?.usedPercent === undefined ? null : { ...value, usedPercent: value.usedPercent };
+  return buildCodexUsageCard(
+    {
+      ...bucket,
+      primary: window(bucket?.primary),
+      secondary: window(bucket?.secondary),
+      credits: usage.codex.credits,
+    },
+    null,
+    t,
+    nowMs,
+    locale,
+  );
+}
+
 export function buildXaiUsageCard(
   usage: XaiSubscriptionUsageSnapshot | null,
   rateLimit: XaiRateLimitSnapshot | null,
@@ -380,5 +411,44 @@ export function buildXaiUsageCard(
     details,
     updatedAt: usage?.updatedAt,
     emptyText: windows.length ? undefined : t('todaySpend.xai.noQuotaDetail'),
+  };
+}
+
+/** All returned Kimi windows retain their own period; never call a monthly window weekly. */
+export function buildKimiUsageCard(snapshot: KimiCodingUsageSnapshot | null, t: TFunction): UsageCardAccount {
+  return {
+    title: 'Kimi Code',
+    windows: snapshot?.windows.map(window => ({
+      key: window.id,
+      title: t(`providerAccountUsage.kimi.${window.id}`),
+      showRemaining: true,
+      window: { utilization: window.usedPercent, resetsAt: window.resetsAt === null ? null : window.resetsAt / 1000 },
+      paceWindowMinutes: kimiUsageWindowMinutes(window.id),
+    })) ?? [],
+    updatedAt: snapshot?.fetchedAt,
+    emptyText: snapshot?.windows.length ? undefined : t(snapshot ? 'quotaCard.noWindows' : 'quotaCard.waiting'),
+  };
+}
+
+/** OpenCode Go exposes independent rolling, weekly, and monthly used meters. */
+export function buildOpenCodeGoUsageCard(snapshot: OpenCodeGoUsageSnapshot | null, t: TFunction): UsageCardAccount {
+  const labels = {
+    rolling: 'providerAccountUsage.kimi.limit_5h',
+    weekly: 'providerAccountUsage.kimi.limit_7d',
+    monthly: 'providerAccountUsage.kimi.limit_month_total',
+  } as const;
+  const windows: UsageCardWindow[] = snapshot?.windows.map(window => ({
+    key: window.id,
+    title: t(labels[window.id]),
+    showRemaining: true,
+    window: { utilization: window.usedPercent, resetsAt: window.resetsAt === null ? null : window.resetsAt / 1000 },
+    paceWindowMinutes: window.id === 'rolling' ? 300 : window.id === 'weekly' ? 10_080 : undefined,
+  })) ?? [];
+  return {
+    title: 'OpenCode Go',
+    windows,
+    updatedAt: snapshot?.fetchedAt,
+    emptyText: windows.length ? undefined : t(snapshot ? 'quotaCard.noWindows' : 'quotaCard.waiting'),
+    notices: snapshot?.windows.some(window => window.limited) ? [{ text: t('quotaCard.limitRejected'), tone: 'crit' }] : [],
   };
 }

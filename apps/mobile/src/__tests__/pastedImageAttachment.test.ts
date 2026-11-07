@@ -104,8 +104,12 @@ describe('粘贴接线源码断言(防重构掉线)', () => {
   it('两个 composer 页面都接了占位回调,托盘计入占位卡', () => {
     for (const page of ['app/sessions/new.tsx', 'app/sessions/[sessionId].tsx']) {
       const source = read(page);
-      expect(source, page).toContain('onPasteImagesLoading={beginPastePlaceholders}');
-      expect(source, page).toContain('onPasteImagesLoadFailed={failPastePlaceholders}');
+      // 已有任务页的实际回调、占位与发送锁已迁到 composerRichInputLifecycle
+      // 的挂载编辑器行为测试；不能再要求它无条件直通占位回调。
+      if (page === 'app/sessions/new.tsx') {
+        expect(source, page).toContain('onPasteImagesLoading={beginPastePlaceholders}');
+        expect(source, page).toContain('onPasteImagesLoadFailed={failPastePlaceholders}');
+      }
       expect(source, page).toContain('pastePlaceholderCount={pastePlaceholderCount}');
     }
   });

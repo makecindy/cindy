@@ -1,3 +1,4 @@
+import { stackState, reduceStack } from './navigationFixture';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { HostedRemoteCollectionItem } from '@/device-link/remoteResources';
 const disk = vi.hoisted(() => new Map<string, string>());
@@ -23,6 +24,19 @@ describe('account-scoped home navigation overrides', () => {
     disk.set(__testing.storageKey, JSON.stringify({ mode: 'teammates', lastTeammate: teammateIdentity(row()) }));
     expect(await readHomeNavigationPreferences('account-a')).toEqual({});
     expect(AsyncStorage.setItem).not.toHaveBeenCalled();
+  });
+  // Unit: old collapsed records do not acquire an explicit avatar override; explicit false survives account switches.
+  // No prior test covered an independently persisted avatar setting.
+  it('keeps explicit avatar choices per account without inferring them from an old collapsed state', async () => {
+    await saveHomeNavigationPreferences('account-a', { teammatesCollapsed: true });
+    expect((await readHomeNavigationPreferences('account-a')).showCollapsedTeammateAvatars).toBeUndefined();
+    await Promise.all([
+      saveHomeNavigationPreferences('account-a', { showCollapsedTeammateAvatars: true }),
+      saveHomeNavigationPreferences('account-b', { showCollapsedTeammateAvatars: false }),
+    ]);
+    expect(await readHomeNavigationPreferences('account-a')).toEqual({ teammatesCollapsed: true, showCollapsedTeammateAvatars: true });
+    expect(await readHomeNavigationPreferences('account-b')).toEqual({ showCollapsedTeammateAvatars: false });
+    expect(await readHomeNavigationPreferences('account-c')).toEqual({});
   });
   it('serializes overlapping patches and isolates accounts even when resource ids match', async () => {
     await Promise.all([
@@ -61,13 +75,13 @@ describe('teammate identity navigation', () => {
   it.each(['index', 'devices/index'])('preserves the actual %s stack entry across repeated teammate opens', (name) => {
     const router = StackRouter({ initialRouteName: name });
     const options = { routeNames: [name, 'sessions/[sessionId]'], routeParamList: { [name]: { collectionId: 'teammates', targets: 'fixture-hosts', title: 'Teammates' } }, routeGetIdList: {}, routeKeyChanges: [] };
-    let state = router.getInitialState(options);
+    let state = stackState(options, name);
     const home = state.routes[0];
     for (let turn = 0; turn < 3; turn++) {
-      for (const sessionId of ['a', 'b']) state = router.getRehydratedState(router.getStateForAction(state, StackActions.push('sessions/[sessionId]', { sessionId }), options)!, options);
+      for (const sessionId of ['a', 'b']) state = reduceStack(router, state, StackActions.push('sessions/[sessionId]', { sessionId }), options);
       const count = homeDismissCount(state.routes);
       expect(count).toBe(2);
-      state = router.getRehydratedState(router.getStateForAction(state, StackActions.pop(count!), options)!, options);
+      state = reduceStack(router, state, StackActions.pop(count!), options);
       expect(state.routes).toEqual([home]);
       expect(state.routes[0]).toBe(home); // Same key and params: React retains the mounted list.
     }

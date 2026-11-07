@@ -69,6 +69,7 @@
     "titleHost": "Run the Agent on “{{host}}” again?",
     "titleHostUnnamed": "Run the Agent on the session’s computer again?",
     "message": "The conversation record on the other computer can’t be moved over, so it continues from a handoff summary. Thinking and similar details may not carry over completely. Takes effect when you send the next message.",
+    "messageNativeHistory": "The full conversation record is copied over and continues from where it left off. If it can’t be restored, it continues from a handoff summary instead, and thinking and similar details may not carry over completely. Takes effect when you send the next message.",
     "confirm": "Switch computer",
     "cancel": "Keep as is"
   },

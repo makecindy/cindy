@@ -48,7 +48,7 @@ import {
 import * as outbound from './outbound.js';
 import * as streamingText from './streamingText.js';
 import { downloadAttachments, type DownloadResult } from './attachmentDownloader.js';
-import type { AttachmentRef } from './incomingContent.js';
+import { parseIncoming, type AttachmentRef } from './incomingContent.js';
 
 /** 连接仍在时重新入队后的排空退避: 100ms / 300ms / 900ms / 2.7s, 耗尽坐等下一次 connected。 */
 const CONNECTED_FLUSH_RETRY_DELAYS_MS = [100, 300, 900, 2700] as const;
@@ -914,6 +914,32 @@ export class FeishuIM extends BaseIM implements ChannelIM {
 
   getMessage(messageId: string): Promise<Record<string, unknown> | null> {
     return outbound.getMessage(messageId);
+  }
+
+  /** Read only the requested chat/topic, using this connection's resource downloader. */
+  async readHistoryImages(messageId: string, chatId: string, threadId: string) {
+    const epoch = outbound.getAccountEpoch();
+    const message = await outbound.getMessage(messageId);
+    if (epoch !== outbound.getAccountEpoch()) throw new Error('HISTORY_CONNECTION_CHANGED');
+    if (
+      !message ||
+      message.deleted === true ||
+      message.chat_id !== chatId ||
+      (message.thread_id ?? '') !== threadId
+    )
+      return [];
+    const body = message.body as { content?: unknown } | undefined;
+    if (typeof message.msg_type !== 'string' || typeof body?.content !== 'string') return [];
+    const refs = parseIncoming(message.msg_type, body.content)
+      .attachments.filter(
+        (ref) =>
+          ref.kind === 'image' ||
+          (ref.kind === 'file' && /\.(png|jpe?g|gif|webp)$/i.test(ref.fileName)),
+      )
+      .slice(0, 4);
+    const result = await this.downloadMessageAttachments(messageId, refs);
+    if (epoch !== outbound.getAccountEpoch()) throw new Error('HISTORY_CONNECTION_CHANGED');
+    return result.attachments;
   }
 
   pinMessage(messageId: string): Promise<void> {

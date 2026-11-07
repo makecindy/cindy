@@ -157,7 +157,7 @@ export function RunningTokenRatePopover({
           <div className="flex items-center gap-2">
             <dt className="text-[var(--text-secondary)]">{t('chat.runningStatus.observedPeak')}</dt>
             <dd className="font-medium">
-              {samples.length > 0
+              {samples.length > 0 || (typeof history.peak === 'number' && history.peak > 0)
                 ? t('chat.runningStatus.tokenRate', {
                     rate: formatRecentOutputTokenRate(history.peak),
                   })
@@ -169,7 +169,7 @@ export function RunningTokenRatePopover({
     </div>
   );
   const surface =
-    'w-[320px] max-w-[calc(100vw-32px)] rounded-xl border border-[var(--border-default)] bg-[var(--surface-elevated)] px-4 py-3 text-[var(--text-primary)] shadow-[var(--shadow-menu)]';
+    'w-[320px] max-w-[calc(100vw-32px)] rounded-xl border border-[var(--border-default)] bg-[var(--surface-elevated)] px-4 py-3 text-[var(--text-primary)] shadow-[shadow:var(--shadow-menu)]';
   return (
     <Popover
       open={open}

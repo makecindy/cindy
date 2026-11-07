@@ -13,7 +13,7 @@
  */
 import React, { memo } from 'react';
 import { describe, expect, it, vi } from 'vitest';
-import { act, render, screen } from '@testing-library/react';
+import { act, render, renderHook, screen } from '@testing-library/react';
 
 // 可控的 remoteProjectsStore 假件:deviceMap 模拟 sessionId→deviceId 注册,
 // notify() 模拟 store 更新广播(origin-injection race 的"迟到注册"时刻)。
@@ -154,6 +154,20 @@ describe('ChatSessionFileContext', () => {
     storeMock.deviceMap.set('s3', 'dev-7');
     render(React.createElement(Harness, { sessionId: 's3', workingDir: '/wd', remoteHostId: 'host-1' }));
     expect(screen.getByTestId('probe').textContent).toBe('device:dev-7|s3|/wd');
+  });
+
+  // 远程归属注入前 origin 暂时是 local;拿 workingDir 查本机文件系统的能力若只看 origin,
+  // 会把远端路径交给本机搜索。localConfirmed 只认会话视图确认过的本机归属。
+  it.each([
+    ['已确认本机', 'c1', null, null, undefined, true],
+    ['归属尚未解析', 'c2', undefined, null, undefined, false],
+    ['会话视图判定为远端设备', 'c3', 'dev-1', null, undefined, false],
+    ['SSH 会话', 'c4', null, 'host-1', undefined, false],
+    ['已确认本机但 store 注册了设备', 'c5', null, null, 'dev-5', false],
+  ])('localConfirmed:%s', (_label, sessionId, ownerDeviceId, remoteHostId, registered, expected) => {
+    if (registered) storeMock.deviceMap.set(sessionId, registered);
+    const { result } = renderHook(() => useChatSessionFileValue(sessionId, '/wd', remoteHostId, ownerDeviceId));
+    expect(result.current.localConfirmed).toBe(expected);
   });
 });
 

@@ -78,6 +78,10 @@ export function readRemoteDeviceFile(
     }
     return response.result as DeviceFileResult;
   };
+  // Workdir callers supply same-account export jobs. Guests must retain the
+  // media endpoint's task authorization and shared-task OSS scope instead.
+  const fallback = !isSharedTaskPeer(device) && options.fallback
+    ? options.fallback : () => fetch(false);
   return readDeviceFile<LocalFileResult>({
     cacheFirst: options.skipCache || options.cacheFirst === false || isSharedTaskPeer(device) ? undefined : {
       read: async () => {
@@ -153,7 +157,7 @@ export function readRemoteDeviceFile(
         if (options.signal?.aborted || !isCurrent())
           throw new Error('FILE_PEER_CANCELLED');
         if (!caps.ok) throw new Error('FILE_CAPABILITY_FAILED');
-        if (!(caps.result as { fileRead?: boolean })?.fileRead) return options.fallback();
+        if (!(caps.result as { fileRead?: boolean })?.fileRead) return fallback();
         const reference = await invoke(device, 'file-browser:remote-op', [
           { op: 'fileUrl', workdir: options.workdir, relPath: options.relPath },
         ]);
@@ -173,6 +177,7 @@ export function readRemoteDeviceFile(
     },
     peer: async (metadata) => {
       if (
+        isSharedTaskPeer(device) ||
         metadata.size > Math.min(options.maxPeerBytes ?? FILE_PEER_MAX_BYTES, FILE_PEER_MAX_BYTES)
       )
         return null;
@@ -189,6 +194,6 @@ export function readRemoteDeviceFile(
       }
       return result ? { ...result, ossKey: '' } : null;
     },
-    fallback: options.fallback ?? (() => fetch(false)),
+    fallback,
   }).then((result) => { if (!returnedCached) remember(result); return result; });
 }

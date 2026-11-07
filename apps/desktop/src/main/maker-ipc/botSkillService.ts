@@ -27,10 +27,15 @@ import {
   readBotSkill,
   readBotSkillSource,
   listBotSkillSources,
+  applyBotSkillFiles,
+  listBotSkillFiles,
+  readBotSkillFiles,
   saveBotSkill,
   saveBotSkillSource,
+  setBotSkillEnabled,
   type BotSkillSummary,
 } from './botSkillStore.js';
+import type { BotSkillFile, LocalBotSkillFile } from './botSkillFiles.js';
 import type {
   BotSkillDetail,
   BotSkillSummary as SharedBotSkillSummary,
@@ -323,6 +328,7 @@ export async function readBotSkillForBot(
         description: record.description,
         updatedAt: record.updatedAt,
         body: record.body,
+        ...(record.enabled === false ? { enabled: false } : {}),
       }
     : null;
 }
@@ -345,9 +351,41 @@ export async function listBotSkillSourcesForBot(botId: string, deps: BotSkillSer
 
 /** Restore one own skill's SKILL.md verbatim (cloud companions), keeping its native frontmatter. */
 export async function saveBotSkillSourceForBot(botId: string, slug: string, source: string,
-  options: { enabled?: boolean } = {}, deps: BotSkillServiceDeps = {}): Promise<void> {
+  options: { enabled?: boolean; expectedUpdatedAt?: string } = {}, deps: BotSkillServiceDeps = {}): Promise<void> {
   const boundary = captureOwnerBoundary(deps);
   await saveBotSkillSource(await skillHomeOf(deps, botId, boundary), botId, slug, source, options);
+  assertOwnerBoundary(deps, boundary);
+}
+
+/** The files beside one own skill's SKILL.md (cloud companions). */
+export async function listBotSkillFilesForBot(botId: string, slug: string, enabled: boolean, deps: BotSkillServiceDeps = {}): Promise<LocalBotSkillFile[]> {
+  const boundary = captureOwnerBoundary(deps);
+  const files = await listBotSkillFiles(await skillHomeOf(deps, botId, boundary), botId, slug, enabled);
+  assertOwnerBoundary(deps, boundary);
+  return files;
+}
+
+/** The same, wherever the skill lives now. */
+export async function readBotSkillFilesForBot(botId: string, slug: string, deps: BotSkillServiceDeps = {}): Promise<LocalBotSkillFile[]> {
+  const boundary = captureOwnerBoundary(deps);
+  const files = await readBotSkillFiles(await skillHomeOf(deps, botId, boundary), botId, slug);
+  assertOwnerBoundary(deps, boundary);
+  return files;
+}
+
+/** Restore the files beside one own skill's SKILL.md (cloud companions). */
+export async function applyBotSkillFilesForBot(botId: string, slug: string, files: BotSkillFile[],
+  fetch: (file: BotSkillFile) => Promise<string | null>, options: { removeOthers: boolean; keep?: string[] }, deps: BotSkillServiceDeps = {}): Promise<string[]> {
+  const boundary = captureOwnerBoundary(deps);
+  const missing = await applyBotSkillFiles(await skillHomeOf(deps, botId, boundary), botId, slug, files, fetch, options);
+  assertOwnerBoundary(deps, boundary);
+  return missing;
+}
+
+/** 设置页开关一条学会的技能：只移动文件夹，不改内容。 */
+export async function setBotSkillEnabledForBot(botId: string, slug: string, enabled: boolean, deps: BotSkillServiceDeps = {}): Promise<void> {
+  const boundary = captureOwnerBoundary(deps);
+  await setBotSkillEnabled(await skillHomeOf(deps, botId, boundary), botId, slug, enabled);
   assertOwnerBoundary(deps, boundary);
 }
 

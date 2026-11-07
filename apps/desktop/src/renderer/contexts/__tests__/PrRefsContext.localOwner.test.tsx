@@ -18,7 +18,7 @@ vi.mock('@/lib/logger', () => ({
   createLogger: () => ({ warn: vi.fn(), debug: vi.fn() }),
 }));
 
-import { PrRefsProvider, usePrRefsForSession, usePrActions, usePrStatuses } from '../PrRefsContext';
+import { PrRefsProvider, usePrRefsForSession, usePrActions, usePrStatuses, useTaskPrArchiveEligibility } from '../PrRefsContext';
 import { unresponsiveDevicesStore } from '@/features/device-link/unresponsiveDevicesStore';
 
 function RefCount() {
@@ -75,6 +75,86 @@ function RemoteRefs() {
 
 describe('remote task association invalidation', () => {
   afterEach(cleanup);
+  // Unit regression: a manager mutation can finish after the last consumer
+  // leaves. Existing invalidation tests always kept a consumer registered.
+  // One cached (or in-flight) empty result must not suppress a remount within TTL.
+  it.each([false, true])(
+    'invalidates without consumers before remount (in flight: %s)',
+    async (inFlight) => {
+      const now = vi.spyOn(Date, 'now').mockReturnValue(100_000);
+      let finish!: (value: unknown[]) => void;
+      let reads = 0;
+      const ref = {
+        id: 'pr',
+        sessionId: 'remote-child',
+        owner: 'a',
+        repo: 'b',
+        prNumber: 1,
+        url: 'https://github.com/a/b/pull/1',
+        firstSeenAt: 1,
+        lastSeenAt: 1,
+      };
+      mocks.listAllPrRefs.mockResolvedValue([]);
+      const invoke = vi.fn(async (_device: string, channel: string) => {
+        if (channel !== 'git-context:pr-refs:list') return [];
+        reads += 1;
+        if (reads === 1)
+          return inFlight
+            ? await new Promise<unknown[]>((resolve) => {
+                finish = resolve;
+              })
+            : [];
+        return [ref];
+      });
+      window.electronAPI = {
+        gitContext: { listAllPrRefs: mocks.listAllPrRefs, onPrRefsChanged: mocks.onPrRefsChanged },
+        deviceLink: { invoke },
+      } as unknown as typeof window.electronAPI;
+      function Probe({ active }: { active: boolean }) {
+        const { registerPrConsumer, invalidateRemotePrRefs } = usePrActions();
+        const refs = usePrRefsForSession('remote-child');
+        useEffect(() => {
+          if (active) return registerPrConsumer('remote-child', 'home');
+        }, [active, registerPrConsumer]);
+        return (
+          <button onClick={() => invalidateRemotePrRefs('remote-child')}>count:{refs.length}</button>
+        );
+      }
+      const view = (active: boolean) => (
+        <PrRefsProvider>
+          <Probe active={active} />
+        </PrRefsProvider>
+      );
+      const { rerender, unmount } = render(view(true));
+      try {
+        await act(async () => {});
+        expect(reads).toBe(1);
+        rerender(view(false));
+        await act(async () => {
+          fireEvent.click(screen.getByRole('button', { name: 'count:0' }));
+        });
+        if (inFlight)
+          await act(async () => {
+            finish([]);
+          });
+        expect(reads).toBe(1);
+        await act(async () => {
+          rerender(view(true));
+        });
+        expect(screen.getByRole('button', { name: 'count:1' })).toBeTruthy();
+        expect(reads).toBe(2);
+        rerender(view(false));
+        await act(async () => {
+          rerender(view(true));
+        });
+        expect(reads).toBe(2);
+      } finally {
+        unmount();
+        now.mockRestore();
+      }
+    },
+  );
+
   it('suppresses PR reads while the device circuit is open, then permits a fresh read on recovery', async () => {
     mocks.listAllPrRefs.mockResolvedValue([]);
     const invoke = vi.fn(async () => []);
@@ -149,8 +229,8 @@ function StatusProbe() {
   const { statuses, successfulStatuses, fetchStatusesForSession } = usePrStatuses('remote-child');
   const { registerPrConsumer } = usePrActions();
   useEffect(() => registerPrConsumer('remote-child', 'home'), [registerPrConsumer]);
-  const latest = statuses.get('a/b#1');
-  const confirmed = successfulStatuses.get('a/b#1');
+  const latest = statuses.get('github:github.com/a/b#1');
+  const confirmed = successfulStatuses.get('github:github.com/a/b#1');
   return (
     <button onClick={() => fetchStatusesForSession('remote-child')}>
       {confirmed?.ok ? confirmed.status : 'unknown'}:{latest?.ok === false ? 'stale' : 'fresh'}
@@ -380,5 +460,68 @@ it('invalidates confirmed PR status on not-found across remounts and later trans
   status = { ...ref, ok: true, status: 'merged' };
   await act(async () => fireEvent.click(screen.getByRole('button')));
   expect(screen.getByRole('button', { name: 'merged:fresh' })).toBeTruthy();
+  unmount();
+});
+
+// Regression (unit): one merged PR in a task with an unrendered second PR must
+// not enable archive. The callback retained by leave-time preflight reads the
+// current store even after a refresh failure; old successful values cannot win.
+it('shares task-wide archive eligibility with the final preflight reader', async () => {
+  const refs = [1, 2].map(prNumber => ({ id: `ref-${prNumber}`, sessionId: 'archive',
+    owner: 'a', repo: 'b', prNumber, url: '', firstSeenAt: 1, lastSeenAt: 1 }));
+  let secondMerged = false;
+  let failed = false;
+  let read = () => false;
+  window.electronAPI = { gitContext: {
+    listAllPrRefs: async () => refs, listPrRefs: async () => refs,
+    onPrRefsChanged: () => () => {},
+    getPrStatuses: async () => {
+      if (failed) throw new Error('offline');
+      return refs.map((ref, i) => ({ ...ref, ok: true, status: i === 0 || secondMerged ? 'merged' : 'open' }));
+    },
+  } } as unknown as typeof window.electronAPI;
+  function Probe() {
+    const { registerPrConsumer, fetchStatusesForSession } = usePrActions();
+    const { eligible, checkEligibility } = useTaskPrArchiveEligibility('archive');
+    read = checkEligibility;
+    useEffect(() => registerPrConsumer('archive'), [registerPrConsumer]);
+    return <button onClick={() => fetchStatusesForSession('archive')}>{eligible ? 'complete' : 'incomplete'}</button>;
+  }
+  const { unmount } = render(<PrRefsProvider><Probe /></PrRefsProvider>);
+  await act(async () => {});
+  const preflightRead = read;
+  expect(preflightRead()).toBe(false);
+  secondMerged = true;
+  await act(async () => fireEvent.click(screen.getByRole('button', { name: 'incomplete' })));
+  expect(screen.getByRole('button', { name: 'complete' })).toBeTruthy();
+  expect(preflightRead()).toBe(true);
+  failed = true;
+  await act(async () => fireEvent.click(screen.getByRole('button', { name: 'complete' })));
+  expect(preflightRead()).toBe(false);
+  expect(screen.getByRole('button', { name: 'incomplete' })).toBeTruthy();
+  unmount();
+});
+
+// Regression (unit): display surfaces show three PRs, but archive eligibility needs
+// every associated PR. Statuses beyond the first three must still be fetched, in bounded batches.
+it('fetches statuses for every associated PR beyond the displayed three', async () => {
+  const refs = [1, 2, 3, 4, 5].map(prNumber => ({ id: `ref-${prNumber}`, sessionId: 'many',
+    owner: 'a', repo: 'b', prNumber, url: '', firstSeenAt: 1, lastSeenAt: 1 }));
+  const getPrStatuses = vi.fn(async (queries: typeof refs) =>
+    queries.map(q => ({ ...q, ok: true, status: 'merged' })));
+  window.electronAPI = { gitContext: {
+    listAllPrRefs: async () => refs, listPrRefs: async () => refs,
+    onPrRefsChanged: () => () => {}, getPrStatuses,
+  } } as unknown as typeof window.electronAPI;
+  function Probe() {
+    const { registerPrConsumer } = usePrActions();
+    const { eligible } = useTaskPrArchiveEligibility('many');
+    useEffect(() => registerPrConsumer('many'), [registerPrConsumer]);
+    return <div>{eligible ? 'complete' : 'incomplete'}</div>;
+  }
+  const { unmount } = render(<PrRefsProvider><Probe /></PrRefsProvider>);
+  await act(async () => {});
+  expect(screen.getByText('complete')).toBeTruthy();
+  expect(getPrStatuses.mock.calls.flatMap(([queries]) => queries)).toHaveLength(5);
   unmount();
 });

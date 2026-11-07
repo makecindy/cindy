@@ -11,11 +11,15 @@ import { randomUUID } from 'node:crypto';
 
 import { createLogger } from '../logger';
 import { getResolvedMainLocale } from '../i18n';
+import { onScreenshotTranslationPreferenceChanged, readScreenshotTranslationPreference, writeScreenshotTranslationPreference } from './translationPreferences';
+import { isScreenshotTranslationLanguage, resolveScreenshotTranslationLanguage, type ScreenshotTranslationLanguage } from '../../shared/screenshotTranslation';
 import { acquireOverlayEscape } from '../overlayEscape';
 import { throwIpcError } from '../utils/ipcValidate';
 import { recordingControlsBounds, scrollCaptureLayout, scrollPreviewBounds, validRecordingBytes, type ScrollCaptureLayout, type RegionCaptureBegin, type RegionCaptureFrame, type RegionCaptureMode } from '../../shared/regionCapture';
 import { captureLiveRegion, RegionVideoCapture } from './liveCapture';
 import { saveRegionRecording } from './save';
+import { RecordingAudioHost } from './recordingAudio';
+import { isRecordingAudioOptions, type RecordingAudioError } from '../../shared/recordingAudio';
 import {
   intersectRegion,
   isRegionScreenshotAction,
@@ -29,6 +33,7 @@ import {
   type RegionScreenshotBegin,
   type RegionScreenshotBitmap,
   type RegionScreenshotWindow,
+  type RegionScreenshotHit,
 } from '../../shared/regionScreenshot';
 import { hideScreenshotOverlay, showScreenshotOverlay, type OverlayPool, type OverlayWindow } from './overlays';
 import type { SnapshotHelper, SnapshotWindow } from './snapshotHost';
@@ -41,11 +46,12 @@ const MAX_COLOR_TEXT = 64;
 
 export interface DisplayCapture {
   display: Display;
-  /** 定格原图 (desktopCapturer 缩略图), 浮层显示与最终导出的唯一来源。 */
+  /** 定格原图，浮层显示与最终导出的唯一来源。 */
   image: NativeImage;
 }
 
 export interface RegionScreenshotResult {
+  translationLanguage?: ScreenshotTranslationLanguage;
   ownerScope?: string;
   action: RegionScreenshotAction;
   image: NativeImage;
@@ -73,6 +79,7 @@ export interface RegionScreenshotSessionDeps {
   openEditor?: (image: RegionScreenshotBitmap, display: Display, selection: RegionRect) => boolean;
   openRecording?: (bytes: Uint8Array<ArrayBuffer>, format: 'webm' | 'gif', display: Display) => boolean;
   onClosed: () => void;
+  onRevealed?: () => void;
 }
 
 /** 识别程序的矩形 → 全局 DIP。Windows 程序按物理像素回报, macOS 已是 DIP。 */
@@ -93,14 +100,17 @@ export class RegionScreenshotSession {
   readonly token = randomUUID();
   private readonly members = new Map<number, Member>();
   private closed = false;
+  private releaseTranslationPreference: (() => void) | null = null;
   private handedToEditor = false;
   private exporting = false;
   private videoCapture: RegionVideoCapture | null = null;
+  private audioCapture: RecordingAudioHost | null = null;
   private recordingControls: RegionRect | null = null;
   private draggingControls = false;
   private live: { member: Member; selection: RegionRect; mode: RegionCaptureMode; sampling: boolean; lastSample: number; editing: boolean; layout: ScrollCaptureLayout | null; automatic: boolean; target: SnapshotWindow | null; targetResolved: boolean; ignoring: boolean; previewHeight: number } | null = null;
   private scrollPointerTimer: ReturnType<typeof setInterval> | null = null;
   private revealTimer: ReturnType<typeof setTimeout> | null = null;
+  private revealed = false;
   private releaseEscapeShortcut: (() => void) | null = null;
   private readonly onDisplaysChanged = () => {
     log.info('displays changed during screenshot, cancelling');
@@ -123,20 +133,42 @@ export class RegionScreenshotSession {
 
   get hasEditor(): boolean { return this.handedToEditor; }
 
+  setLocale(locale: string): void {
+    if (this.closed) return;
+    for (const { overlay } of this.members.values()) {
+      if (!overlay.window.isDestroyed()) overlay.window.webContents.send(
+        REGION_SCREENSHOT_CHANNEL.LOCALE_CHANGED, { token: this.token, locale });
+    }
+  }
+
   /** 打开浮层; 一块屏都没准备好时返回 false 并结束会话。 */
   async open(): Promise<boolean> {
+    this.releaseTranslationPreference = onScreenshotTranslationPreferenceChanged((preference) => {
+      if (this.closed) return;
+      for (const { overlay } of this.members.values()) {
+        if (!overlay.window.isDestroyed()) overlay.window.webContents.send(
+          REGION_SCREENSHOT_CHANNEL.TRANSLATION_LANGUAGE_CHANGED, { token: this.token, preference });
+      }
+    });
     screen.on('display-added', this.onDisplaysChanged);
     screen.on('display-removed', this.onDisplaysChanged);
     screen.on('display-metrics-changed', this.onDisplayMetricsChanged);
-    const locale = getResolvedMainLocale();
     const cursor = screen.getCursorScreenPoint();
-    for (const capture of this.deps.captures) {
+    // Start all cold shells together: one slow display must not defer creation
+    // (or restart the timeout budget) of every subsequent display. Keep capture
+    // order when registering members, and retain the all-screens geometry barrier.
+    const prepared = await Promise.all(this.deps.captures.map(async (capture) => {
+      if (this.closed) return null;
       const overlay = this.deps.pool.ensure(capture.display);
-      if (!overlay || !(await this.deps.pool.waitForShell(overlay)) || this.closed) continue;
-      if (overlay.window.isDestroyed()) continue;
+      if (!overlay || !(await this.deps.pool.waitForShell(overlay))) return null;
+      return { overlay, capture };
+    }));
+    if (this.closed) return false;
+    for (const member of prepared) {
+      if (!member || member.overlay.window.isDestroyed()) continue;
+      const { overlay, capture } = member;
       this.members.set(overlay.window.webContents.id, { overlay, capture, painted: false });
     }
-    if (this.closed) return false;
     if (this.members.size === 0) {
       log.warn('no overlay became ready');
       this.close();
@@ -159,7 +191,7 @@ export class RegionScreenshotSession {
     for (const { overlay, capture } of this.members.values()) {
       overlay.window.webContents.send(
         REGION_SCREENSHOT_CHANNEL.BEGIN,
-        this.beginPayload(capture, locale, cursor),
+        this.beginPayload(capture, getResolvedMainLocale(), cursor),
       );
     }
     return true;
@@ -204,12 +236,17 @@ export class RegionScreenshotSession {
     const windows: RegionScreenshotWindow[] = [];
     this.deps.windows.forEach((window, id) => {
       const rect = intersectRegion(toLocal(toGlobalDip(window.rect), display), viewport);
-      if (rect) windows.push({ id, rect });
+      if (rect) windows.push({ id, rect,
+        ...(window.snapRects ? { snapRects: window.snapRects
+          .map((region) => intersectRegion(toLocal(toGlobalDip(region), display), viewport))
+          .filter((region): region is RegionRect => region !== null) } : {}),
+      });
     });
     const bitmap = image.toBitmap();
     return {
       token: this.token,
       locale,
+      translationPreference: readScreenshotTranslationPreference(),
       viewport,
       scaleFactor: display.scaleFactor,
       frame: {
@@ -284,18 +321,30 @@ export class RegionScreenshotSession {
     windowId: unknown,
     x: unknown,
     y: unknown,
-  ): Promise<RegionRect[]> {
+  ): Promise<RegionScreenshotHit | null> {
     const member = this.member(sender, frame, token);
-    if (!member || !Number.isInteger(windowId)) return [];
-    if (typeof x !== 'number' || typeof y !== 'number' || !Number.isFinite(x + y)) return [];
-    const window = this.deps.windows[windowId as number];
-    if (!window) return [];
+    if (!member || !Number.isInteger(windowId)) return null;
+    if (typeof x !== 'number' || typeof y !== 'number' || !Number.isFinite(x + y)) return null;
+    if (!this.deps.windows[windowId as number]) return null;
     const { display } = member.capture;
+    if (x < 0 || y < 0 || x >= display.bounds.width || y >= display.bounds.height) return null;
     const global = { x: x + display.bounds.x, y: y + display.bounds.y };
     const point = process.platform === 'win32' ? screen.dipToScreenPoint(global) : global;
-    const rects = await this.deps.helper.elements(window, point.x, point.y);
-    if (this.closed) return [];
-    return rects.map((rect) => toLocal(toGlobalDip(rect), display));
+    const excluded = process.platform === 'darwin'
+      ? [...this.members.values()].filter(({ overlay }) => !overlay.window.isDestroyed())
+        .map(({ overlay }) => Number(overlay.window.getMediaSourceId().split(':')[1]))
+        .filter((id) => Number.isSafeInteger(id) && id > 0)
+      : [];
+    const window = await this.deps.helper.windowAt(this.deps.windows, point.x, point.y, excluded);
+    if (this.closed) return null;
+    if (!window) return { window: null, rects: [] };
+    const hit = await this.deps.helper.elements(window, point.x, point.y);
+    if (this.closed) return null;
+    return {
+      window: { id: this.deps.windows.indexOf(window), rect: toLocal(toGlobalDip(window.rect), display) },
+      rects: hit.rects.map((rect) => toLocal(toGlobalDip(rect), display)),
+      ...(hit.preferredRect ? { preferredRect: toLocal(toGlobalDip(hit.preferredRect), display) } : {}),
+    };
   }
 
   copyText(
@@ -487,6 +536,37 @@ export class RegionScreenshotSession {
     }
   }
 
+  async startAudio(sender: WebContents, frame: Electron.WebFrameMain | null, token: unknown, options: unknown): Promise<RecordingAudioError | null> {
+    const member = this.member(sender, frame, token);
+    if (!member || this.live?.member !== member || this.live.mode !== 'video') return throwIpcError('PERMISSION_DENIED', 'Invalid recording');
+    if (!isRecordingAudioOptions(options)) return throwIpcError('INVALID_ARGUMENT', 'Invalid audio options');
+    this.audioCapture?.stop(); this.audioCapture = null;
+    if (!options.system && !options.microphone) return null;
+    const audio = new RecordingAudioHost(options, member.capture.display.id);
+    this.audioCapture = audio;
+    try {
+      await audio.start();
+      if (this.closed || this.audioCapture !== audio) { audio.stop(); return 'audioFailed'; }
+      return null;
+    } catch (error) {
+      audio.stop();
+      if (this.audioCapture === audio) this.audioCapture = null;
+      return error instanceof Error && (error.message === 'systemAudioFailed' || error.message === 'microphoneFailed') ? error.message : 'audioFailed';
+    }
+  }
+
+  readAudio(sender: WebContents, frame: Electron.WebFrameMain | null, token: unknown): Uint8Array {
+    const member = this.member(sender, frame, token);
+    if (!member || this.live?.member !== member || this.live.mode !== 'video' || !this.audioCapture) return throwIpcError('PERMISSION_DENIED', 'Invalid recording');
+    return this.audioCapture.read();
+  }
+
+  stopAudio(sender: WebContents, frame: Electron.WebFrameMain | null, token: unknown): void {
+    const member = this.member(sender, frame, token);
+    if (!member || this.live?.member !== member) return;
+    this.audioCapture?.stop(); this.audioCapture = null;
+  }
+
   async saveRecording(sender: WebContents, frame: Electron.WebFrameMain | null, token: unknown, bytes: unknown, format: unknown): Promise<boolean> {
     const member = this.member(sender, frame, token);
     if (!member || !this.live || this.live.member !== member || this.exporting) return false;
@@ -507,6 +587,13 @@ export class RegionScreenshotSession {
     this.close();
   }
 
+  async setTranslationLanguage(sender: WebContents, frame: Electron.WebFrameMain | null, token: unknown, value: unknown): Promise<boolean> {
+    if (!this.member(sender, frame, token) || this.exporting) return false;
+    await writeScreenshotTranslationPreference(value);
+    if (!this.member(sender, frame, token) || this.exporting) return false;
+    return true;
+  }
+
   /** 校验页面导出的最终图, 结束会话后交给调用方执行动作。非法 payload 返回 false。 */
   export(
     sender: WebContents,
@@ -516,8 +603,9 @@ export class RegionScreenshotSession {
   ): boolean {
     const member = this.member(sender, frame, token);
     if (!member || this.exporting || !raw || typeof raw !== 'object') return false;
-    const { action, selection: rawSelection, image: rawImage } = raw as Record<string, unknown>;
+    const { action, selection: rawSelection, image: rawImage, translationLanguage } = raw as Record<string, unknown>;
     if (!isRegionScreenshotAction(action)) return false;
+    if (translationLanguage !== undefined && !isScreenshotTranslationLanguage(translationLanguage)) return false;
     const { display } = member.capture;
     const { width, height } = display.bounds;
     const selection = normalizeRegionSelection(
@@ -543,15 +631,19 @@ export class RegionScreenshotSession {
       { width: bitmap.width, height: bitmap.height, scaleFactor: 1 },
     );
     if (image.isEmpty()) return false;
+    // Resolve once at export; subsequent preference/locale changes cannot rewrite this handoff.
+    const target = action === 'translate'
+      ? resolveScreenshotTranslationLanguage(readScreenshotTranslationPreference(), getResolvedMainLocale()) : undefined;
     this.exporting = true;
     log.info('screenshot exported', { action, width: bitmap.width, height: bitmap.height });
     this.close();
-    this.deps.onResult({ action, image, display, selection });
+    this.deps.onResult({ action, image, display, selection, ...(target ? { translationLanguage: target } : {}) });
     return true;
   }
 
   private reveal(): void {
-    if (this.closed) return;
+    if (this.closed || this.revealed) return;
+    this.revealed = true;
     if (this.revealTimer) {
       clearTimeout(this.revealTimer);
       this.revealTimer = null;
@@ -594,6 +686,7 @@ export class RegionScreenshotSession {
     const window = (target ?? [...this.members.values()][0])?.overlay.window;
     if (!window || window.isDestroyed()) return;
     window.focus();
+    this.deps.onRevealed?.();
   }
 
   private releaseEscape(): void {
@@ -604,9 +697,13 @@ export class RegionScreenshotSession {
   close(): void {
     if (this.closed) return;
     this.closed = true;
+    this.releaseTranslationPreference?.();
+    this.releaseTranslationPreference = null;
     this.stopScrolling();
     this.videoCapture?.stop();
     this.videoCapture = null;
+    this.audioCapture?.stop();
+    this.audioCapture = null;
     this.live = null;
     if (this.revealTimer) clearTimeout(this.revealTimer);
     this.releaseEscape();
@@ -616,7 +713,7 @@ export class RegionScreenshotSession {
     for (const { overlay } of this.members.values()) {
       const { window } = overlay;
       if (!window.isDestroyed()) window.webContents.send(REGION_SCREENSHOT_CHANNEL.END);
-      this.deps.pool.retire(overlay);
+      this.deps.pool.release(overlay);
     }
     this.members.clear();
     this.deps.onClosed();

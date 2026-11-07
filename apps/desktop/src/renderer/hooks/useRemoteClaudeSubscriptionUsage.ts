@@ -1,9 +1,14 @@
 /** The remote Claude account uses the same snapshot contract as a local account. */
 import type { ClaudeSubscriptionUsageSnapshot } from '../../shared/claudeSubscriptionUsage';
 import { createRemoteDeviceUsageMirror } from './remoteDeviceUsageMirror';
+import { DEFAULT_ACCOUNT_USAGE_SCOPE } from '../../shared/subscriptionAccounts';
 
 const mirror = createRemoteDeviceUsageMirror<ClaudeSubscriptionUsageSnapshot>({
   invokeChannel: 'maker:usage:claude-subscription',
+  read: (deviceId, providerId = 'anthropic') => window.electronAPI.deviceLink.invoke(
+    deviceId, 'maker:usage:claude-subscription', providerId === 'anthropic'
+      ? [providerId, false, DEFAULT_ACCOUNT_USAGE_SCOPE] : [providerId],
+  ),
   pushChannel: 'usage:claude-subscription-changed',
   defaultProviderId: 'anthropic',
   providerPushChannel: 'usage:subscription-provider-account-changed',

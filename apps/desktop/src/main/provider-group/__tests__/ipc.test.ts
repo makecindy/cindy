@@ -639,7 +639,9 @@ describe('provider management receiver account boundary', () => {
   });
 
   // 同账号管理：新增备注与转分享决定共用主人操作入口，受邀者读取仍不在此范围。
+  // PR #7772 的分区摘要同样只允许主人读取；复用真实管理 parser，防止新查询在远程被拒。
   it.each([
+    { action: 'shared-provider-ids' },
     { action: 'reshare-decide', id: 'rs-pending', decision: 'approve' },
     { action: 'set-member-note', memberId: 'm1', note: 'Alice' },
   ] as const)('accepts $action as an owner operation and keeps forwarding operations outside the management scope', async (command) => {

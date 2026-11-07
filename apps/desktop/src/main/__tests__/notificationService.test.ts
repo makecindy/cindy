@@ -23,6 +23,8 @@
  */
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import type { Session } from '@cindy/maker-core';
+import type { BrowserWindow } from 'electron';
 
 const chatWindow = vi.hoisted(() => ({ url: 'file:///app/index.html#/bots/groups/group-1' }));
 vi.mock('../deepLink', () => ({
@@ -255,6 +257,123 @@ describe('notificationService — channels 分发', () => {
     vi.useRealTimers();
   });
 
+  // #6754 review 4373832302 / unit: a finished handoff's delayed event keeps
+  // its host-recorded routing decision; current pending state can already differ.
+  it('uses request ownership after a handoff ends and rejects unknown or cross-session request IDs', async () => {
+    const { initNotificationService } = await freshService();
+    const { notifyInputHandoffOnce, forgetInputHandoffNotice, clearInputHandoffChannelNotices } =
+      await import('../im/shared/inputHandoffChannelNotice');
+    const feishuIm = makeFeishuIm('owner');
+    initNotificationService(baseDeps(feishuIm));
+    const notify = (sessionId: string, inputHandoffRequestId: string) => invokeHandler({
+      sessionId, inputHandoffRequestId, title: 'Bot', kind: 'needs-reply',
+      channels: { desktop: false, feishu: true, mobile: false },
+    });
+    try {
+      await notifyInputHandoffOnce('im-bot', 'settled-request', async () => true);
+      await notify('im-bot', 'settled-request');
+      expect(feishuIm.sendMarkdownText).not.toHaveBeenCalled();
+      await notify('other-bot', 'settled-request');
+      forgetInputHandoffNotice('im-bot', 'settled-request');
+      await notify('im-bot', 'settled-request');
+      expect(feishuIm.sendMarkdownText).not.toHaveBeenCalled();
+      await notifyInputHandoffOnce('desktop-bot', 'ordinary-request', async () => false);
+      await notify('desktop-bot', 'ordinary-request');
+      expect(feishuIm.sendMarkdownText).toHaveBeenCalledOnce();
+    } finally {
+      clearInputHandoffChannelNotices();
+    }
+  });
+
+  it.each(['owned', 'owner-changed', 'focused', 'muted'] as const)(
+    'keeps desktop independent of delayed handoff ownership (%s)', async outcome => {
+      const { initNotificationService } = await freshService();
+      const { notifyInputHandoffOnce, forgetInputHandoffNotice, clearInputHandoffChannelNotices } =
+        await import('../im/shared/inputHandoffChannelNotice');
+      const feishuIm = makeFeishuIm('owner');
+      let focused = false;
+      initNotificationService({ ...baseDeps(feishuIm), getWindow: () => ({ isFocused: () => focused }) as unknown as BrowserWindow });
+      let release!: (handled: boolean) => void;
+      const decision = new Promise<boolean>(resolve => { release = resolve; });
+      void notifyInputHandoffOnce('bot', 'request', () => decision);
+      try {
+        const pending = registeredHandlers.get('notification:show-session-event')!({}, {
+          sessionId: 'bot', title: 'Bot', kind: 'needs-reply', inputHandoffRequestId: 'request',
+          ...(outcome === 'muted' ? { markAttention: false } : {}),
+          channels: { desktop: true, feishu: true, mobile: false },
+        });
+        // Allow Main's independent identity enrichment to finish; the handoff
+        // routing promise below stays unresolved throughout this desktop check.
+        await flushAsync();
+        expect(notificationCtor).toHaveBeenCalledOnce();
+        expect(feishuIm.sendMarkdownText).not.toHaveBeenCalled();
+        forgetInputHandoffNotice('bot', 'request'); // completion cleanup while resolution is in flight
+        if (outcome === 'owner-changed') ownerScopeCurrent = false;
+        if (outcome === 'focused') focused = true;
+        if (outcome === 'muted') isSessionNotificationsMutedSync.mockReturnValue(true);
+        release(outcome === 'owned');
+        await pending;
+        expect(feishuIm.sendMarkdownText).not.toHaveBeenCalled();
+      } finally {
+        clearInputHandoffChannelNotices();
+      }
+    },
+  );
+
+  // #6754 / input-handoff §2.4 / unit: the real notification IPC must not
+  // duplicate Main's channel pointer on successive steps. Both bot tasks have
+  // the same source; only Main's decision for this request distinguishes them.
+  it('deduplicates channel-owned handoff steps while preserving desktop bot fallback and other notices', async () => {
+    const { initNotificationService } = await freshService();
+    const { bindInputHandoffChannelNotice, sendInputHandoffChannelNotice, notifyInputHandoffOnce, clearInputHandoffChannelNotices } =
+      await import('../im/shared/inputHandoffChannelNotice');
+    const feishuIm = makeFeishuIm('owner');
+    initNotificationService(baseDeps(feishuIm));
+    const statusListeners = new Set<(status: string) => void>();
+    bindInputHandoffChannelNotice({
+      id: 'im-bot',
+      onStatusChange: (listener: (status: string) => void) => {
+        statusListeners.add(listener);
+        return () => statusListeners.delete(listener);
+      },
+    } as unknown as Session, async () => true);
+    const notify = (sessionId: string, kind = 'needs-reply', requestId?: string) => invokeHandler({
+      sessionId, title: 'Bot', kind, ...(requestId ? { inputHandoffRequestId: requestId } : {}),
+      channels: { desktop: true, feishu: true, mobile: false },
+    });
+    const claim = (sessionId: string, requestId: string) => notifyInputHandoffOnce(sessionId, requestId,
+      async () => sendInputHandoffChannelNotice(sessionId, 'pointer', { warn }));
+    try {
+      await claim('im-bot', 'request-1');
+      await notify('im-bot', 'needs-reply', 'request-1'); // first actionable step
+      await notify('im-bot', 'needs-reply', 'request-1'); // next step of the same request
+      expect(feishuIm.sendMarkdownText).not.toHaveBeenCalled();
+      expect(notificationCtor).toHaveBeenCalledTimes(2);
+      expect(markSessionNeedsAttention).toHaveBeenCalledWith('im-bot');
+      expect(sendMobileSessionNotify).not.toHaveBeenCalled();
+
+      await claim('desktop-bot', 'request-desktop');
+      await notify('desktop-bot', 'needs-reply', 'request-desktop'); // ordinary bot: no channel route
+      expect(feishuIm.sendMarkdownText).toHaveBeenCalledOnce();
+
+      await notify('im-bot'); // channel route alone must not hide a question
+      expect(feishuIm.sendMarkdownText).toHaveBeenCalledTimes(2);
+      await claim('im-bot', 'request-2'); // a new handoff request is also owned by Main
+      await notify('im-bot', 'needs-reply', 'request-2');
+      expect(feishuIm.sendMarkdownText).toHaveBeenCalledTimes(2);
+      await notify('im-bot', 'error');
+      await notify('im-bot', 'done');
+      expect(feishuIm.sendMarkdownText).toHaveBeenCalledTimes(4);
+
+      statusListeners.forEach(listener => listener('closed'));
+      await claim('im-bot', 'request-3');
+      await notify('im-bot', 'needs-reply', 'request-3'); // a removed route cannot suppress a new fallback
+      expect(feishuIm.sendMarkdownText).toHaveBeenCalledTimes(5);
+    } finally {
+      clearInputHandoffChannelNotices();
+    }
+  });
+
   it('「消息免打扰」任务不发任何外向提醒，但未读照旧记账', async () => {
     const { initNotificationService } = await freshService();
     const feishuIm = makeFeishuIm('owner');
@@ -462,6 +581,8 @@ describe('notificationService — channels 分发', () => {
       { sessionId: 's1', title: 'x'.repeat(1025), kind: 'done' },
       { sessionId: 's1', title: 'x', kind: 'done', channels: 'all' },
       null,
+      ...['', 1, 'x'.repeat(257)].map(inputHandoffRequestId => ({ sessionId: 's1', title: 'x', kind: 'needs-reply', inputHandoffRequestId })),
+      { sessionId: 's1', title: 'x', kind: 'done', inputHandoffRequestId: 'request' },
     ];
     for (const payload of invalids) {
       await expect(invokeHandler(payload)).rejects.toThrow('invalid session event payload');

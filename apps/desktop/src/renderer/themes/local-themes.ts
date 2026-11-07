@@ -40,7 +40,7 @@ function mapWireTheme(theme: LocalThemeWire): Theme {
     ...(theme.family ? { family: theme.family } : {}),
     // 加载期兼容归一化:把 text-placeholder slot 引入前创建的旧本地主题统一收口
     // 到新 slot(详见 local-themes-normalize.ts / docs/design-rules/cindy-design-system.md §13 G3)。
-    colors: normalizeLocalThemeColors(theme.colors),
+    colors: normalizeLocalThemeColors(theme.colors, theme.type),
     ...(icon || logo
       ? { brand: { ...(icon ? { icon } : {}), ...(logo ? { logo } : {}) } }
       : {}),

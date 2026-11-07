@@ -179,7 +179,7 @@ describe('mobile session composer desktop-first surface', () => {
     expect(trailingActionsSource).toContain('<PaperPlaneIcon');
     expect(trailingActionsSource).toContain('color={composerSendDisabled ? colors.textSecondary : colors.ctaText}');
     // 收起胶囊点开到真正聚焦之间的过渡期(composerPillOpen.opening)同样算激活态,仍受 canUseComposer 门控。
-    expect(source).toContain('const composerCardActive = (canUseComposer && (composerFocused || composerPillOpen.opening))');
+    expect(source).toContain('const composerCardActive = (canUseComposer && (composerFocused || composerPillOpen.opening || composerDragOpen))');
     expect(source).toContain('|| permissionSheetOpen');
     // 2026-07-29 用户裁决:权限入口是 composer 左侧图标钮 + 独立浮窗
     // (两端都经 NativePermissionSheet:点选先关浮窗,关闭完成后再生效);
@@ -332,8 +332,8 @@ describe('mobile session composer desktop-first surface', () => {
     expect(composerInputSource).toContain('<MobileComposerInputRow');
     expect(composerInputSource).toContain('<ComposerRichInput');
     expect(composerInputSource).toContain('document={composerDocument}');
-    expect(composerInputSource).toContain('inputElement={(');
-    expect(source).toContain("import { DEVICE_LINK_API_BASE_URL, MOBILE_VISUAL_MOCK_ENABLED } from '@/config/env';");
+    expect(composerInputSource).toMatch(/inputElement=\{\s*\(?\s*<ComposerRichInput/);
+    expect(source).toContain("import { MOBILE_VISUAL_MOCK_ENABLED } from '@/config/env';");
     expect(source).toContain("const visualFocusComposer = MOBILE_VISUAL_MOCK_ENABLED && readRouteParam(params.visualFocusComposer) === '1';");
     expect(source).toContain("const visualOpenSearch = MOBILE_VISUAL_MOCK_ENABLED && readRouteParam(params.visualOpenSearch) === '1';");
     expect(source).toContain('const visualSearchQuery = MOBILE_VISUAL_MOCK_ENABLED ? readRouteParam(params.visualSearchQuery) : null;');
@@ -373,7 +373,8 @@ describe('mobile session composer desktop-first surface', () => {
     expect(source).toContain('const composerInputVisibleHeight = composerResize.visibleContentHeight;');
     expect(source).toContain('const composerInputScrollEnabled = composerResize.scrollEnabled;');
     expect(source).toContain('const composerShellHasScrollableContent = attachmentCount > 0');
-    expect(source).toContain('const composerScrollEnabled = (nativeShellLayout.composerScrollEnabled');
+    expect(source).toContain('const composerShellScrolls = (nativeShellLayout.composerScrollEnabled');
+    expect(source).toContain('const composerScrollEnabled = composerShellScrolls && !composerResize.dragging;');
     // Scroll ownership is native in installed apps; retain Expo Go's JS fallback.
     expect(source).toContain('&& composerShellHasScrollableContent;');
     expect(source).not.toContain('&& (!composerInputScrollEnabled || composerShellHasScrollableContent);');
@@ -441,8 +442,8 @@ describe('mobile session composer desktop-first surface', () => {
     expect(source).toContain('const composerVoicePlacement = voiceUiAvailable');
     expect(source).toContain('hasTrailingAction: composerSendSlotIsStop || composerShowSendButton');
     expect(source).toContain('const renderComposerVoiceButton = (buttonStyle?: StyleProp<ViewStyle>) => (');
-    // 录音状态由语音按钮形态表达（Mic / 红点计时胶囊 / spinner），状态行只承载错误。
-    expect(source).toContain('const voiceStatusVisible = voiceUiAvailable && Boolean(voiceError);');
+    // 录音状态由语音按钮形态表达（Mic / 红点计时胶囊 / spinner），状态行只承载错误与声纹过滤提示。
+    expect(source).toContain('const voiceStatusVisible = voiceUiAvailable && Boolean(voiceStatusText);');
     expect(voiceButtonSource).toContain(') : voiceRecordingTimer.label !== null ? (');
     expect(voiceButtonSource).toContain('<VoiceRecordingPillContent');
     // 录音中语音按钮展开成红点+计时胶囊,右缘锚定、只向左生长;旧的红框 Square 形态不再使用。
@@ -453,7 +454,7 @@ describe('mobile session composer desktop-first surface', () => {
     expect(source).toContain('testID="session.voiceMicCaret"');
     expect(sharedSource).toContain('export function VoiceMicWaveCaret');
     expect(source).toContain('const composerInputRef = useRef<ComposerRichInputHandle | null>(null);');
-    expect(source).toContain('const voiceDraftScrollRef = useRef<ScrollView>(null);');
+    expect(source).toContain('const voiceDraftScrollRef = useRef<ScrollViewInstance>(null);');
     expect(composerInputSource).toContain('ref={composerInputRef}');
     expect(composerInputSource).not.toContain('inputRef={composerInputRef}');
     expect(sharedSource).toContain('ref={inputRef as never}');

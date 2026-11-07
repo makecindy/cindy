@@ -4,8 +4,19 @@ import os from 'node:os';
 import path from 'node:path';
 import { setTimeout as delay } from 'node:timers/promises';
 import { SsrFBlockedError } from '@cindy/browser-control-runtime/ssrf-runtime';
+import { createLogger } from '../logger';
 import { guardedOutboundFetch } from '../maker-host/outbound-fetch.js';
 import { mediaRequestUrlForLog } from './mediaRequestLog.js';
+
+const log = createLogger('cindy-media/download');
+
+/** 等待响应与重试的网络预算；人工审批时间不计入。 */
+const RESPONSE_BUDGET_MS = 120_000;
+/**
+ * 字节持续到达时的总上限。慢线路上十几 MB 的视频要几分钟，不能按响应预算截断已付费的成片；
+ * 上限留在 Agent 工具调用的 10 分钟超时之内，下载完成时调用方还在等。
+ */
+const TRANSFER_BUDGET_MS = 540_000;
 
 export type MediaDownloadReason = 'source' | 'http' | 'port' | 'credentials' | 'network';
 
@@ -44,7 +55,8 @@ export async function downloadMediaResult(input: {
   let url = parseUrl(input.raw);
   const visitedRedirects = new Set([url.href]);
   let failures = 0;
-  let remainingMs = 120_000;
+  let remainingMs = RESPONSE_BUDGET_MS;
+  let spentMs = 0;
   const approved = input.context?.approvals ?? new Set<string>();
   const approvalKey = (reason: MediaDownloadReason) => {
     if (reason === 'network') {
@@ -111,7 +123,7 @@ export async function downloadMediaResult(input: {
     const signal = input.context?.signal
       ? AbortSignal.any([controller.signal, input.context.signal]) : controller.signal;
     const startedAt = Date.now();
-    const timeout = setTimeout(() => controller.abort(), remainingMs);
+    let timeout = setTimeout(() => controller.abort(), remainingMs);
     timeout.unref?.();
     let idleTimeout: ReturnType<typeof setTimeout> | undefined;
     const resetIdleTimeout = () => {
@@ -124,6 +136,7 @@ export async function downloadMediaResult(input: {
     let retryError: MediaDownloadError | undefined;
     let tempDir: string | undefined;
     let result: { filePath: string; headerMime: string | null; dispose(): Promise<void> } | undefined;
+    let receivedBytes = 0;
     try {
       const allowPrivateNetwork = approved.has(approvalKey('network'));
       const { response, release } = await guardedOutboundFetch(
@@ -151,6 +164,10 @@ export async function downloadMediaResult(input: {
         } else if (!response.ok) {
           throw new MediaDownloadError([401, 403, 404, 410].includes(response.status) ? 'MEDIA_DOWNLOAD_URL_EXPIRED' : ([408, 425, 429].includes(response.status) || response.status >= 500) ? 'MEDIA_DOWNLOAD_FAILED' : 'MEDIA_DOWNLOAD_UNAVAILABLE', `下载服务暂不可用（HTTP ${response.status}），生成结果已保留`);
         } else {
+          // 响应已到，此后以字节为进度：只有断流或总上限才结束这次传输。
+          clearTimeout(timeout);
+          timeout = setTimeout(() => controller.abort(), TRANSFER_BUDGET_MS - spentMs - (Date.now() - startedAt));
+          timeout.unref?.();
           tempDir = await fs.mkdtemp(path.join(os.tmpdir(), 'cindy-media-download-'));
           const filePath = path.join(tempDir, 'result');
           const file = await fs.open(filePath, 'wx', 0o600);
@@ -161,6 +178,7 @@ export async function downloadMediaResult(input: {
               if (done) break;
               assertActive();
               resetIdleTimeout();
+              receivedBytes += value.byteLength;
               // Await each write: network backpressure keeps memory bounded.
               await file.writeFile(value);
             }
@@ -187,12 +205,21 @@ export async function downloadMediaResult(input: {
       } else if (error instanceof MediaDownloadError && error.code !== 'MEDIA_DOWNLOAD_FAILED') {
         throw error;
       } else {
+        // 只记错误名和进度：错误正文可能带签名地址。
+        log.warn('media download attempt failed', {
+          attempt: failures + 1, host: url.hostname, receivedBytes, elapsedMs: Date.now() - startedAt,
+          aborted: controller.signal.aborted,
+          error: error instanceof Error ? error.name : 'unknown',
+          detail: error instanceof MediaDownloadError ? error.message : undefined,
+        });
         retryError = new MediaDownloadError('MEDIA_DOWNLOAD_FAILED', '客户端重试后仍未完成下载，原生成结果已保留');
       }
     } finally {
       clearTimeout(timeout);
       clearTimeout(idleTimeout);
-      remainingMs -= Date.now() - startedAt;
+      const elapsedMs = Date.now() - startedAt;
+      spentMs += elapsedMs;
+      remainingMs -= elapsedMs;
       if (tempDir && !result) await fs.rm(tempDir, { recursive: true, force: true }).catch(() => undefined);
     }
     if (retryError) {

@@ -20,6 +20,58 @@ beforeEach(() => {
   peer.mockResolvedValue(null);
 });
 describe('desktop shared file access', () => {
+  // #8332, unit: exercise readRemoteDeviceFile with the workdir export fallback
+  // supplied by file previews. Existing guest coverage only reads three inline
+  // bytes; 65,537 bytes previously entered the forbidden same-account export.
+  // Standalone file: 2.34s Vitest / 3.87s command wall time on Windows.
+  it.each([
+    { size: 65_536, fileRead: true },
+    { size: 65_537, fileRead: true },
+    { size: 65_537, fileRead: undefined },
+  ])('reads a $size-byte shared workdir file without owner export (fileRead=$fileRead)', async ({ size, fileRead }) => {
+    const url = `xdt-file://open?path=/work/changed.txt&baseDir=/work&maxBytes=${size}`;
+    const metadata = { ossKey: '', size, mimeType: 'text/plain', version: 'd'.repeat(64) };
+    const inline = { ...metadata, inlineBase64: Buffer.alloc(size, 7).toString('base64') };
+    const uploaded = { ...metadata, ossKey: 'shared/changed.txt' };
+    const invoke = vi.fn(async (_device, channel, [request]) => {
+      if (channel === 'file-browser:remote-op' && request.op === 'caps') return { ok: true, result: { fileRead } };
+      if (channel === 'file-browser:remote-op' && request.op === 'fileUrl') return { ok: true, result: { ok: true, url } };
+      if (channel !== 'device-link:media:fetch') throw new Error('PERMISSION_DENIED');
+      expect(Object.fromEntries(new URL(request.url).searchParams))
+        .toEqual(Object.fromEntries(new URL(url).searchParams));
+      expect(request).not.toHaveProperty('metadataOnly');
+      return { ok: true, result: request.prepareOnly
+        ? size <= 65_536 ? inline : { ...metadata, transferRequired: true }
+        : uploaded };
+    });
+    const fallback = vi.fn(async (): Promise<never> => { throw new Error('PERMISSION_DENIED: exportFileStart'); });
+    const result = await readRemoteDeviceFile(sharedTaskHostPeer('shared', 'host'), url, invoke, {
+      workdir: '/work', relPath: 'changed.txt', maxBytes: size, fallback,
+    });
+    expect(result).toEqual(size <= 65_536 ? inline : uploaded);
+    expect(peer).not.toHaveBeenCalled();
+    expect(fallback).not.toHaveBeenCalled();
+  });
+
+  it.each(['prepare', 'upload', 'cancel'] as const)('stops shared file reads on %s rejection without owner fallback', async (failure) => {
+    const abort = new AbortController();
+    const invoke = vi.fn(async (_device, channel, [request]) => {
+      if (channel === 'file-browser:remote-op' && request.op === 'caps') return { ok: true, result: { fileRead: true } };
+      if (channel === 'file-browser:remote-op' && request.op === 'fileUrl') return { ok: true, result: { ok: true, url: 'xdt-file://open?path=/work/a' } };
+      if (failure === 'prepare' || !request.prepareOnly) return { ok: false, error: { code: 'PERMISSION_DENIED' } };
+      if (failure === 'cancel') abort.abort();
+      return { ok: true, result: { ossKey: '', size: 65_537, mimeType: 'text/plain', transferRequired: true } };
+    });
+    const fallback = vi.fn(async (): Promise<never> => { throw new Error('owner export must not run'); });
+    await expect(readRemoteDeviceFile(sharedTaskHostPeer('shared', 'host'), 'unused', invoke, {
+      workdir: '/work', relPath: 'a', fallback, signal: abort.signal,
+    })).rejects.toThrow(failure === 'cancel' ? 'FILE_PEER_CANCELLED' : 'PERMISSION_DENIED');
+    expect(peer).not.toHaveBeenCalled();
+    expect(fallback).not.toHaveBeenCalled();
+    expect(invoke.mock.calls.filter(([, channel]) => channel === 'device-link:media:fetch'))
+      .toHaveLength(failure === 'upload' ? 2 : 1);
+  });
+
   it('reads through an older shared host without sending unknown metadata-only fields', async () => {
     const result = { ossKey: '', size: 3, mimeType: 'text/plain', inlineBase64: 'YWJj' };
     const invoke = vi.fn(async (_device, _channel, [request]) => {

@@ -21,6 +21,8 @@ type Registry = {
 const mockState = vi.hoisted(() => {
   let capturedRegistry: Registry | null = null;
   const state = {
+    gatewayBaseUrl: '',
+    reportCindyGatewayKeyRejected: vi.fn(),
     logLevel: 'debug' as 'info' | 'debug',
     userData: '/tmp/xdt-maker-test',
     logDir: '/tmp/xdt-maker-test/logs',
@@ -64,6 +66,11 @@ vi.mock('electron', () => ({
   },
 }));
 
+vi.mock('../../model-access/gatewayKeyRejection.js', async importOriginal => ({
+  ...await importOriginal<typeof import('../../model-access/gatewayKeyRejection.js')>(),
+  reportCindyGatewayKeyRejected: mockState.reportCindyGatewayKeyRejected,
+}));
+
 vi.mock('../../appCapabilities.js', () => ({
   getAppCapabilities: () => ({ canUseCindyGateway: true }),
 }));
@@ -92,7 +99,7 @@ vi.mock('../../clientEndpointsService.js', async () => {
 // 网关端点运行期来自 model-access 下发(effectiveXdGatewayBaseUrl),mock 成 fixture 值。
 vi.mock('../../model-access/effectiveEndpoint.js', async () => {
   const { TEST_XD_GATEWAY_BASE_URL } = await import('../../../test/vitest/clientEndpointsFixture');
-  return { effectiveXdGatewayBaseUrl: () => TEST_XD_GATEWAY_BASE_URL };
+  return { effectiveXdGatewayBaseUrl: () => mockState.gatewayBaseUrl || TEST_XD_GATEWAY_BASE_URL };
 });
 
 vi.mock('@cindy/anthropic-compat-proxy', async (importOriginal) => {
@@ -177,6 +184,8 @@ vi.mock('@cindy/responses-anthropic-bridge', () => ({
 // ~7s (2026-10-16), and order-shuffled runs confirm cases stay independent.
 async function freshCodexProxyHost(realStripTransforms = false) {
   mockState.realStripTransforms = realStripTransforms;
+  mockState.reportCindyGatewayKeyRejected.mockReset();
+  mockState.gatewayBaseUrl = '';
   const host = await import('../codex-proxy-host.js');
   await host.disposeCodexProxy();
   host.resetCodexThreadUpstreamForTest();
@@ -449,12 +458,20 @@ describe('codex gateway config', () => {
     expect(args).toContain('features.enable_request_compression=false');
   });
 
-  it('env-key / provider-oauth 只定义 Cindy Codex 远程压缩 identity', async () => {
+  it('env-key / provider-oauth 声明不被选中的 cindy_openai 占位(#8670: 老 thread resume 校验)', async () => {
     const { buildCodexProxySpawnArgs } = await import('../codex-gateway-config.js');
 
     for (const mode of ['env-key', 'provider-oauth'] as const) {
       const args = buildCodexProxySpawnArgs('http://127.0.0.1:12345', mode);
-      expect(args.some((arg) => arg.includes('cindy_openai'))).toBe(false);
+      // 占位仅供引用 cindy_openai 的老 thread 通过原生配置校验、拿到结构化
+      // modelProviderMismatch;不带订阅身份,也绝不发起订阅 WS upgrade。
+      expect(args).toContain('model_providers.cindy_openai.name="OpenAI"');
+      expect(args).toContain('model_providers.cindy_openai.base_url="http://127.0.0.1:12345"');
+      expect(args).toContain('model_providers.cindy_openai.wire_api="responses"');
+      expect(args).toContain('model_providers.cindy_openai.env_key="XDT_CODEX_API_KEY"');
+      expect(args).toContain('model_providers.cindy_openai.supports_websockets=false');
+      expect(args).not.toContain('model_providers.cindy_openai.requires_openai_auth=true');
+      expect(args).not.toContain('model_providers.cindy_openai.supports_websockets=true');
       expect(args).toContain('model_providers.cindy_codex.name="OpenAI"');
       expect(args).toContain('model_providers.cindy_codex.env_key="XDT_CODEX_API_KEY"');
       expect(args).toContain('model_providers.cindy_codex.supports_websockets=false');
@@ -701,6 +718,46 @@ describe('decideCodexRoute', () => {
     expect(decideCodexRoute({ model: 'codex/gpt-5.5', authInjection: 'env-key', gatewayKey: 'k' })).toBeNull();
   });
 
+  // Regression: a warm env-key process keeps its spawn key after rotation.
+  // Unit tier: routing must repair only recognized replaced keys, never grant a new credential.
+  it.each([
+    ['replaced', 'invalid-old', 'invalid-current', true],
+    ['current', 'invalid-current', 'invalid-current', false],
+    ['unknown', 'invalid-unknown', 'invalid-current', false],
+    ['missing', null, 'invalid-current', false],
+    ['no current key', 'invalid-old', null, false],
+  ] as const)('env-key %s bearer: inference and control routes agree', async (_label, requestKey, gatewayKey, replaced) => {
+    const host = await freshCodexProxyHost();
+    const isReplaced = (key: string) => key === 'invalid-old';
+    host.setCodexProxyGatewayKeyReader(() => gatewayKey, isReplaced);
+    const expected = replaced ? { headerOverride: { authorization: `Bearer ${gatewayKey}` } } : null;
+    expect(host.decideCodexRoute({
+      model: 'gpt-5.5', authInjection: 'env-key', gatewayKey: gatewayKey,
+      requestKey: requestKey, isReplacedGatewayKey: isReplaced,
+    })).toEqual(expected);
+    const headers: Record<string, string> = requestKey ? { authorization: `Bearer ${requestKey}` } : {};
+    const route = host.createModelRoutingTransform('env-key');
+    expect(await route(undefined, { reqId: 1, method: 'GET', url: '/models', headers })).toEqual(expected);
+    expect(await route({ model: 'gpt-5.5' }, { reqId: 2, method: 'POST', url: '/responses', headers })).toEqual(expected);
+    host.registerComposed('stale-key-session', 'stale-key-thread', 'PRODUCT_PROMPT');
+    expect(await route({ model: 'gpt-5.5' }, { reqId: 3, method: 'POST', url: '/responses',
+      headers: { ...headers, 'thread-id': 'stale-key-thread' },
+    })).toEqual(expected);
+    host.unregister('stale-key-session');
+  });
+
+  it.each([
+    ['oauth-bearer', 'gpt-5.5', { upstreamOverride: CHATGPT }],
+    ['oauth-bearer', 'codex/gpt-5.5', { headerOverride: { authorization: 'Bearer invalid-current' } }],
+    ['provider-oauth', 'gpt-5.5', null],
+  ] as const)('%s keeps its existing route with a recognized old bearer (%s)', async (authInjection, model, expected) => {
+    const host = await freshCodexProxyHost();
+    expect(host.decideCodexRoute({
+      model, authInjection, gatewayKey: 'invalid-current', requestKey: 'invalid-old',
+      isReplacedGatewayKey: () => true,
+    })).toEqual(expected);
+  });
+
   it('oauth-bearer + codex/ 折扣模型 → 换 gateway key', async () => {
     const { decideCodexRoute } = await import('../codex-proxy-host.js');
     expect(decideCodexRoute({ model: 'codex/gpt-5.5', authInjection: 'oauth-bearer', gatewayKey: 'gw' }))
@@ -806,6 +863,81 @@ describe('chatBridgeCapabilitiesForRoute', () => {
     expect(capabilities.passthroughFields).not.toContain('n');
     expect(capabilities.passthroughFields).not.toContain('logprobs');
     expect(capabilities.passthroughFields).not.toContain('top_logprobs');
+  });
+
+  // #7906: first 400 repairs the persisted history pair, then only that thread is pre-cleaned.
+  it('recovers duplicate Responses call IDs and keeps later turns from repeating the 400', async () => {
+    const host = await freshCodexProxyHost(true);
+    const actual = await vi.importActual<typeof import('@cindy/anthropic-compat-proxy')>('@cindy/anthropic-compat-proxy');
+    const requests: Array<Record<string, unknown>> = [];
+    const upstream = createServer(async (req, res) => {
+      const chunks: Buffer[] = [];
+      for await (const chunk of req) chunks.push(Buffer.from(chunk));
+      const body = JSON.parse(Buffer.concat(chunks).toString('utf8')) as Record<string, unknown>;
+      requests.push(body);
+      const input = body.input as Array<Record<string, unknown>>;
+      const callIds = input.filter(item => item.type === 'function_call' || item.type === 'custom_tool_call').map(item => item.call_id);
+      const outputIds = input.filter(item => item.type === 'function_call_output' || item.type === 'custom_tool_call_output').map(item => item.call_id);
+      const hasDuplicateCall = new Set(callIds).size !== callIds.length;
+      const hasDuplicateOutput = new Set(outputIds).size !== outputIds.length;
+      if (hasDuplicateCall || hasDuplicateOutput) {
+        res.writeHead(400, { 'content-type': 'application/json' });
+        res.end(JSON.stringify({ error: { message: "Duplicate function_call_output for call_id 'call_retry'. Each function_call must have exactly one matching function_call_output" } }));
+        return;
+      }
+      res.writeHead(200, { 'content-type': 'application/json' });
+      res.end(JSON.stringify({ output: [] }));
+    });
+    await new Promise<void>(resolve => upstream.listen(0, '127.0.0.1', resolve));
+    const upstreamUrl = `http://127.0.0.1:${(upstream.address() as AddressInfo).port}`;
+    mockState.createAnthropicCompatProxy.mockImplementation((opts: Parameters<typeof actual.createAnthropicCompatProxy>[0]) =>
+      actual.createAnthropicCompatProxy({
+        ...opts,
+        upstream: upstreamUrl,
+        resolveOutboundProxy: () => null,
+        routingTransform: async (body, ctx) => ({ ...(await opts.routingTransform?.(body, ctx)), upstreamOverride: upstreamUrl }),
+      }),
+    );
+    const input = [
+      { type: 'function_call', id: 'fc_1', call_id: 'call_retry', name: 'write', arguments: '{}' },
+      { type: 'function_call_output', id: 'fco_1', call_id: 'call_retry', output: 'failed' },
+      { type: 'function_call', id: 'fc_2', call_id: 'call_retry', name: 'write', arguments: '{}' },
+      { type: 'function_call_output', id: 'fco_2', call_id: 'call_retry', output: 'succeeded' },
+    ];
+    const post = () => new Promise<number | undefined>((resolve, reject) => {
+      const req = httpRequest(host.getCodexProxyEndpoint() + '/v1/responses', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json', 'thread-id': 'thread-7906' },
+      }, res => {
+        res.resume();
+        res.once('end', () => resolve(res.statusCode));
+      });
+      req.once('error', reject);
+      req.end(JSON.stringify({ model: 'amazon/nova-pro-v1', input }));
+    });
+
+    try {
+      await host.ensureCodexProxyReady();
+      expect(await post()).toBe(200);
+      expect(requests).toHaveLength(2);
+      expect(requests[1]?.input).toEqual([
+        input[0], input[1],
+        { ...input[2], call_id: 'call_retry__cindy_dup_2' },
+        { ...input[3], call_id: 'call_retry__cindy_dup_2' },
+      ]);
+
+      expect(await post()).toBe(200);
+      expect(requests).toHaveLength(3);
+      expect(requests[2]?.input).toEqual(requests[1]?.input);
+    } finally {
+      host.unregister('session-7906');
+      const { responsesToolCallHistoryStripController } = await import('../thread-strip-controllers.js');
+      responsesToolCallHistoryStripController.clear('thread-7906');
+      await host.disposeCodexProxy();
+      upstream.closeAllConnections();
+      await new Promise<void>(resolve => upstream.close(() => resolve()));
+      mockState.realStripTransforms = false;
+    }
   });
 
   it.each([
@@ -2787,7 +2919,7 @@ describe('codex proxy host', () => {
         // upstream 是函数形态(每请求现取,model-access 下发可运行期换 endpoint);
         // 断言其当前求值 = 网关 base + /v1
         upstream: expect.any(Function),
-        // [armed HTTP recovery strip(WS 错误后落回 HTTP 即激活对应 strip), encrypted activeStrip, image generation activeStrip, provider-aware Guardian reviewer, locked Subagent route, instructions 注入, locked Subagent exec guard, Gateway 原生 web_search, 跨来源压缩块兼容, xAI ModelInput activeStrip, responses item id activeStrip(#4738), responses item id length activeStrip(#4227), exec function adapter, strict gateway history 兼容, xAI ModelInput sanitize, DeepSeek V4 custom tool 兼容, xAI Responses 兼容, XD Gateway Grok 兼容, ByteDance Seed tool 兼容, MiniMax effort 兼容, provider model rewrite, provider 参数归一, routed-model armed HTTP recovery strip, raw reasoning activeStrip, 视觉桥(controller 未注入 → 短路透传), 工具 ID 校正, stripNonAnthropicFields]
+        // [armed HTTP recovery strip(WS 错误后落回 HTTP 即激活对应 strip), encrypted activeStrip, image generation activeStrip, provider-aware Guardian reviewer, locked Subagent route, instructions 注入, locked Subagent exec guard, Gateway 原生 web_search, 跨来源压缩块兼容, xAI ModelInput activeStrip, responses item id activeStrip(#4738), responses item id length activeStrip(#4227), exec function adapter, strict gateway history 兼容, xAI ModelInput sanitize, DeepSeek V4 custom tool 兼容, xAI Responses 兼容, XD Gateway Grok 兼容, ByteDance Seed tool 兼容, MiniMax effort 兼容, provider model rewrite, provider 参数归一, routed-model armed HTTP recovery strip, raw reasoning activeStrip, 视觉桥(controller 未注入 → 短路透传), 工具 ID 校正, Responses 重复工具调用清理 activeStrip(#7906), stripNonAnthropicFields]
         transformRequest: [
           expect.any(Function), expect.any(Function), expect.any(Function), expect.any(Function), expect.any(Function),
           expect.any(Function), expect.any(Function), expect.any(Function), expect.any(Function), expect.any(Function),
@@ -2795,7 +2927,7 @@ describe('codex proxy host', () => {
           expect.any(Function), expect.any(Function), expect.any(Function), expect.any(Function),
           expect.any(Function), expect.any(Function), expect.any(Function), expect.any(Function),
           expect.any(Function), expect.any(Function), expect.any(Function), // frozen custom-provider effort
-          expect.any(Function), expect.any(Function),
+          expect.any(Function), expect.any(Function), expect.any(Function),
         ],
         transformResponse: expect.any(Function),
         routingTransform: expect.any(Function),
@@ -2806,6 +2938,8 @@ describe('codex proxy host', () => {
           expect.objectContaining({ id: 'responses_item_id_prefix' }),
           expect.objectContaining({ id: 'responses_item_id_length' }),
           expect.objectContaining({ id: 'responses_reasoning_content' }),
+          // #7906: 只去重工具 ID，不许在同一次透明重试里叠洗其它 strip。
+          expect.objectContaining({ id: 'duplicate_responses_tool_call', allowExtraRules: false }),
           expect.objectContaining({ id: 'xai_model_input' }),
         ]),
       }),
@@ -7225,7 +7359,7 @@ describe('codex proxy host', () => {
     await host.ensureCodexProxyReady();
 
     const transforms = mockState.createAnthropicCompatProxy.mock.calls[0]?.[0]?.transformRequest ?? [];
-    expect(transforms).toHaveLength(29); // ordinary transforms + dump + frozen custom-provider effort
+    expect(transforms).toHaveLength(30); // ordinary transforms + dump + frozen custom-provider effort
     const ctx = {
       method: 'POST',
       url: '/v1/responses',
@@ -8474,14 +8608,19 @@ describe('createModelRoutingTransform —— custom Provider native imagegen pre
       for (const route of routes) {
         const endpoint = host.getCodexCustomContextProxyEndpoint('byok-image-test');
         for (const operation of ['generations', 'edits']) {
+          // Resumed Codex threads may retain another client's originator. The frozen
+          // BYOK route must replace it with Cindy's identity and strip account metadata.
           const response = await fetch(`${endpoint}/_cindy/custom-provider/${route.routeId}/images/${operation}`, {
-            method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(payload),
+            method: 'POST', headers: { 'content-type': 'application/json',
+              originator: 'codex_cli_rs', 'chatgpt-account-id': 'fake-account' }, body: JSON.stringify(payload),
           });
           expect(response.status).toBe(200);
           await response.text();
           const request = received.at(-1)!;
           expect(request.path).toBe(`/v1/images/${operation}`);
           expect(request.headers.authorization).toBe(`Bearer fake-${route.providerId}`);
+          expect(request.headers.originator).toBe('cindy');
+          expect(request.headers).not.toHaveProperty('chatgpt-account-id');
           expect(JSON.parse(request.body.toString())).toEqual({ ...payload, model: `${route.providerId}/gpt-image-2` });
           expect(request.headers['content-length']).toBe(String(request.body.length));
         }
@@ -9054,4 +9193,87 @@ describe('external host proxy isolation', () => {
       await host.disposeCodexProxy();
     }
   });
+});
+
+// Unit regression: route headers, rather than the process's stale bearer, identify
+// the rejected credential. The observer never refreshes unrelated upstreams.
+describe('Codex gateway rejection observer', () => {
+  it.each([
+    ['gateway outbound', 401, `${XD_GATEWAY_BASE_URL}/v1`, { authorization: 'Bearer invalid-current' }, 'invalid-current'],
+    ['gateway original', 401, `${XD_GATEWAY_BASE_URL}/v1`, undefined, 'invalid-old'],
+    ['removed auth', 401, `${XD_GATEWAY_BASE_URL}/v1`, {}, null],
+    ['success', 200, `${XD_GATEWAY_BASE_URL}/v1`, undefined, undefined],
+    ['ChatGPT', 401, 'https://chatgpt.com/backend-api/codex', undefined, undefined],
+    ['xAI', 401, 'https://api.x.ai/v1', undefined, undefined],
+    ['custom', 401, 'https://custom.example/v1', undefined, undefined],
+    ['same origin other base', 401, `${XD_GATEWAY_BASE_URL}/other`, undefined, undefined],
+  ] as const)('%s', async (_name, status, upstreamBase, outboundHeaders, expected) => {
+    const host = await freshCodexProxyHost();
+    mockState.createAnthropicCompatProxy.mockResolvedValueOnce({
+      url: 'http://127.0.0.1:43210', dispose: vi.fn(async () => undefined),
+    });
+    await host.ensureCodexProxyReady();
+    const observer = mockState.createAnthropicCompatProxy.mock.calls[0]?.[0]?.responseObserver;
+    observer({ reqId: 1, method: 'POST', url: '/responses', upstreamBase, status,
+      requestHeaders: { authorization: 'Bearer invalid-old' }, outboundHeaders,
+      responseHeaders: {}, requestBody: Buffer.from('{}'),
+    });
+    if (expected === undefined) expect(mockState.reportCindyGatewayKeyRejected).not.toHaveBeenCalled();
+    else expect(mockState.reportCindyGatewayKeyRejected).toHaveBeenCalledExactlyOnceWith(expected);
+  });
+});
+
+// Loopback integration, sharing this file's existing proxy/server fixtures: a 401
+// starts synchronization; the next request from the same stale process succeeds.
+it('repairs stale gateway bearer on the next HTTP request after a 401', async () => {
+  const host = await freshCodexProxyHost();
+  const real = await vi.importActual<typeof import('@cindy/anthropic-compat-proxy')>('@cindy/anthropic-compat-proxy');
+  let currentKey = 'invalid-old';
+  const replacedKeys = new Set<string>();
+  const receivedCurrent: boolean[] = [];
+  const upstream = createServer(async (req, res) => {
+    for await (const chunk of req) void chunk;
+    const accepted = req.headers.authorization === 'Bearer invalid-current';
+    receivedCurrent.push(accepted);
+    res.writeHead(accepted ? 200 : 401, { 'content-type': 'application/json' });
+    res.end(JSON.stringify(accepted ? { models: [] } : { error: { message: 'synthetic rejection' } }));
+  });
+  upstream.listen(0, '127.0.0.1');
+  await once(upstream, 'listening');
+  mockState.gatewayBaseUrl = `http://127.0.0.1:${(upstream.address() as AddressInfo).port}`;
+  host.setCodexProxyAuthInjection('env-key');
+  host.setCodexProxyGatewayKeyReader(() => currentKey, key => replacedKeys.has(key));
+  mockState.reportCindyGatewayKeyRejected.mockImplementation(usedKey => {
+    if (usedKey !== currentKey) return;
+    replacedKeys.add(currentKey);
+    currentKey = 'invalid-current';
+  });
+  mockState.createAnthropicCompatProxy.mockImplementationOnce(options => real.createAnthropicCompatProxy({
+    ...options, resolveOutboundProxy: () => null,
+  }));
+  try {
+    await host.ensureCodexProxyReady();
+    const proxy = await mockState.createAnthropicCompatProxy.mock.results[0].value;
+    const send = async (path: string, key = 'invalid-old') => {
+      const response = await fetch(`${proxy.url}${path}`, {
+        headers: { authorization: `Bearer ${key}`, 'content-type': 'application/json' },
+        ...(path === '/responses' ? { method: 'POST', body: JSON.stringify({ model: 'gpt-5.5', input: [] }) } : {}),
+      });
+      await response.text();
+      return response.status;
+    };
+    expect(await send('/models')).toBe(401);
+    expect(mockState.reportCindyGatewayKeyRejected).toHaveBeenCalledExactlyOnceWith('invalid-old');
+    expect(await send('/models')).toBe(200);
+    expect(await send('/responses')).toBe(200);
+    expect(await send('/models', 'invalid-unknown')).toBe(401);
+    expect(receivedCurrent).toEqual([false, true, true, false]);
+  } finally {
+    await host.disposeCodexProxy();
+    upstream.closeAllConnections();
+    await new Promise<void>(resolve => upstream.close(() => resolve()));
+    host.setCodexProxyGatewayKeyReader(() => null);
+    mockState.gatewayBaseUrl = '';
+    mockState.reportCindyGatewayKeyRejected.mockReset();
+  }
 });

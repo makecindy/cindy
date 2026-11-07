@@ -238,11 +238,13 @@ export interface GoalControllerDeps {
    */
   isSessionShared?: (sessionId: string) => boolean;
   /**
-   * 读该会话所用账号当前是否受限 + 何时重置(主动检测)。注入端按会话 provider 所属的订阅
-   * 家族读对应快照(ChatGPT / Claude / SuperGrok,见 usage/accountUsageLimit.ts);非订阅的
-   * Claude Code 会话退回 Cindy 网关预算快照。`turnError` 为本轮限额报错(被动检测时传入):
-   * 会话属于订阅账号时优先用报错原文里写明的重置时刻。
-   * 返回 null = 拿不到快照(按"未受限"处理)。
+   * 读该会话所用账号当前是否受限 + 何时重置。注入端按会话 provider 所属的订阅家族
+   * 处理(ChatGPT / Claude / SuperGrok,见 usage/accountUsageLimit.ts)。ChatGPT 成功轮次
+   * 不做缓存配额的主动检测,下一轮由上游判断准入;其它订阅仍主动读快照,非订阅的
+   * Claude Code 会话退回 Cindy 网关预算快照。
+   * 被拒路径必须传本轮限额报错 `turnError`,否则 ChatGPT 会跳过重置时刻查询;
+   * 订阅账号优先用报错原文里写明的重置时刻,再回落到实际账号窗口。
+   * 返回 null = 未提供账号限额信息(主动检测不阻止续轮;被动路径仍按限额错误停止)。
    */
   getAccountLimit?: (
     agentKind: AgentKind,

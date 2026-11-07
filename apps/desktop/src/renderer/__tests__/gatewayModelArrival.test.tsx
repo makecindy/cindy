@@ -31,7 +31,7 @@ afterEach(() => {
 });
 
 it.each(['google/gemini-3.8-flash', 'google/gemini-99-pro-preview'])(
-  'projects the actual Responses-hinted Gateway payload for %s as Google on Pi',
+  'projects the actual Responses-hinted Gateway payload for %s as Google on Pi and served doors elsewhere',
   (id) => {
     setActiveCatalog(BUNDLED_CATALOG);
     const parsed = parseModelsSyncPayload({ schemaVersion: 5, accountTier: 'paid', models: [{
@@ -51,8 +51,9 @@ it.each(['google/gemini-3.8-flash', 'google/gemini-99-pro-preview'])(
     expect(models.pi).toMatchObject({ id, piApi: 'google-generative-ai', contextWindow: 1_048_576 });
     expect(comparison.reference).toBe('google-generative-ai');
     expect(comparison.forAgent('pi')).toMatchObject({ outbound: 'google-generative-ai', mode: 'matching' });
-    expect(comparison.forAgent('codex')?.mode).toBe('compatibility');
-    expect(comparison.forAgent('claude-code')?.mode).toBe('compatibility');
+    // Cindy AI serves Responses and Messages itself; only Cindy's local conversion is compatibility.
+    expect(comparison.forAgent('codex')).toMatchObject({ outbound: 'openai-responses', mode: 'matching' });
+    expect(comparison.forAgent('claude-code')).toMatchObject({ outbound: 'anthropic-messages', mode: 'matching' });
     expect(pickRecommendedAgent(provider, id, provider.agents)).toBe('pi');
   },
 );
@@ -97,11 +98,11 @@ it('lists downloaded Gateway models in settings and follows catalog defaults unt
   const existing = raw('deepseek/deepseek-current', 'Existing Model');
   download([existing]);
   await migrateModelVisibilityDefaults('arrival-test', 1, [snapshot()]);
-  // A known native family uses Pi by default while compatibility stays opt-in.
+  // A known native family keeps its Pi API; Cindy AI serves Messages too, so Claude Code is not opt-in.
   expect(snapshot().models.pi?.find((m) => m.id === existing.id)).toMatchObject({
     nativeApi: 'openai-completions', piApi: 'openai-completions',
   });
-  expect(snapshot().models['claude-code']?.find((m) => m.id === existing.id)?.defaultEnabled).toBe(false);
+  expect(snapshot().models['claude-code']?.find((m) => m.id === existing.id)?.defaultEnabled).not.toBe(false);
   const view = render(<UnifiedModelList provider={snapshot()} />);
   expect(screen.getByText('Existing Model')).toBeTruthy();
   expect(screen.queryByText('Future Model 9')).toBeNull();

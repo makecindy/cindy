@@ -11,7 +11,7 @@ import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
 
@@ -73,6 +73,58 @@ function tmpWorkdir(): string {
 }
 
 describe('cindy_slack MCP server', () => {
+  // #7756 review: partial image filtering previously claimed an intact result.
+  // Unit MCP call: mixed valid/unsupported/over-count blocks expose omissions;
+  // large valid blocks share the existing inline budget. Existing test has one small image.
+  it('fits large images to one budget and reports each omitted image', async () => {
+    const image = { type: 'image', data: Buffer.alloc(160_000).toString('base64'), mimeType: 'image/png' };
+    const { bridge } = makeBridge({ onCall: () => ({ ok: true, result: {
+      content: [image, image, image, image, image, { ...image, mimeType: 'image/svg+xml' }],
+    } }) });
+    const compressInlineImage = vi.fn(async () => ({ buffer: Buffer.alloc(30_000), mime: 'image/webp' }));
+    const client = await connectServer({ getBridge: () => bridge, compressInlineImage });
+    try {
+      const result = await client.callTool({ name: 'slack_call_tool', arguments: { name: 'cindy_get_message_images' } });
+      const images = (result.content as Array<{ type: string; data?: string }>).filter(b => b.type === 'image');
+      expect(images).toHaveLength(4);
+      expect(images.reduce((sum, b) => sum + Buffer.from(b.data!, 'base64').length, 0)).toBe(120_000);
+      expect(compressInlineImage).toHaveBeenCalledWith(expect.any(Buffer), 'image/png', { targetBytes: 35_000 });
+      expect(firstText(result)).toMatchObject({ data: {
+        imageCount: 4, unavailable: 2, omittedImages: { invalid: 1, countLimit: 1, inlineBudget: 0 },
+      } });
+    } finally { await client.close(); }
+  });
+  // Unit regression: the gateway previously serialized MCP image blocks into unreadable JSON.
+  it('returns large image blocks directly while preserving text metadata', async () => {
+    const data = Buffer.alloc(50_000, 1).toString('base64');
+    const { bridge } = makeBridge({
+      onCall: () => ({
+        ok: true,
+        result: {
+          content: [
+            { type: 'text', text: 'untrusted screenshot' },
+            { type: 'image', data, mimeType: 'image/png' },
+          ],
+        },
+      }),
+    });
+    const client = await connectServer({ getBridge: () => bridge });
+    try {
+      const result = await client.callTool({
+        name: 'slack_call_tool',
+        arguments: { name: 'cindy_get_message_images' },
+      });
+      expect(result.content).toContainEqual({
+        type: 'image',
+        data,
+        mimeType: 'image/png',
+      });
+      expect(JSON.stringify(firstText(result))).toContain('untrusted screenshot');
+      expect(JSON.stringify(firstText(result))).not.toContain(data);
+    } finally {
+      await client.close();
+    }
+  });
   it('工具面固定三个(slack_status / slack_list_tools / slack_call_tool)', async () => {
     const { bridge } = makeBridge();
     const client = await connectServer({ getBridge: () => bridge });

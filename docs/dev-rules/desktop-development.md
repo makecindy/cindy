@@ -76,6 +76,16 @@ checkout 占用而中止，不要换命令绕过，应把 verdict 交给用户�
 
 ## 可选启动参数
 
+只调试本机设备互联服务、仍使用真实账号登录时，保持 `restart:desktop:remote`，
+仅在本次启动环境按账号区域设置 `XDT_DEVICE_LINK_CN_LOCAL_URL=http://127.0.0.1:<端口>`
+和／或 `XDT_DEVICE_LINK_GLOBAL_LOCAL_URL=http://127.0.0.1:<另一个端口>`。
+此覆盖只供未打包的开发版使用，只接受带显式端口、无凭据/路径的 IPv4/IPv6 回环地址，
+仅作用于对应区域的当前会话及按区域读取的设备互联端点。旧 `XDT_DEVICE_LINK_LOCAL_URL`
+只作为 CN 的兼容别名，不能把 Global Access Token 发往 CN 服务。正式版忽略这些覆盖；认证、SSO 双区发现、
+模型与其他服务仍按原清单和账号区域运行。跨电脑可使用经明确授权的临时回环隧道。
+不要为只替换设备互联服务而启动完整 `local` 模式：它会把两个账号区域固定到同一套
+本机服务，不能承载真实双区企业 SSO。
+
 两个 restart 命令都支持下列参数。不加任何模式旗标时默认走固定的 `--isolated=dev`
 命名沙箱；要回到旧的共库行为必须显式加 `--shared`。这些参数只对 dev 生效，不影响
 用户机器上的正式版。
@@ -160,6 +170,10 @@ checkout 的启动器顶掉）。因此并行多开的标准姿势是：**每个
   目录内，进程归属按命中的最深 worktree 判定。从主 checkout restart 不会停掉托管 worktree
   的实例，冲突门也会把它们当作其他 checkout。检测靠 helper 进程命令行上的
   `--user-data-dir`，对方实例刚启动还没起 helper 时可能漏检，属尽力而为。
+- **借用的 Node 不算归属**：判断归属前先去掉命令行开头的 Node 运行时与包管理器入口
+  （node / pnpm / npm / corepack）。另一份 checkout 借用本 checkout 自带的 node 启动 dev
+  时，本 checkout 的 restart 不会把它当成自己的实例杀掉；Electron、electron-forge 等指向
+  checkout 自身依赖的路径仍是归属依据。
 - **CDP 端口**：dev 的 remote-debugging-port 固定 9222，只有先起的实例能绑上。后起
   实例需要 CDP 调试面时，用 `XDT_CDP_PORT=<端口>` 覆写（仅数字生效，dev-only）。
 - 同一 checkout 内仍是单实例语义：restart 会替换本 checkout 上一个实例（不论沙箱
@@ -169,6 +183,37 @@ checkout 的启动器顶掉）。因此并行多开的标准姿势是：**每个
 
 Agent 自身仍只走 restart 命令，不直接调 human-only 的 `dev:desktop*`。共享同一 userData
 多开时，非 primary 实例用 `--passive` 让出定时任务调度（见上）。
+
+### 开发深链与系统关联
+
+未打包的 Desktop（`app.isPackaged === false`）不注册 `cindy://` 或历史
+`xdt-maker://` 的 OS 默认处理程序，也不改写 Windows 协议显示名。这与区域、
+`--isolated`、`--shared`、`--passive` 以及 `process.defaultApp` 是否存在无关。
+隔离 userData 不能隔离系统 URL 关联；临时 checkout 退出或删除后，系统关联仍会保留。
+
+macOS 的 `setAsDefaultProtocolClient` 不保存 `path` / `args`（这两个参数仅适用于
+Windows）。把默认处理程序设为 stock `Electron.app` 后，冷启动它没有项目入口，可能
+只显示 Electron 欢迎页。Windows 虽能保存入口命令，也不能让临时 checkout 接管正式链接。
+不在退出时调用 `removeAsDefaultProtocolClient` 来“恢复”：该 API 只移除当前默认处理程序，
+不承诺还原之前的应用，异常退出也不会执行清理。参见
+[Electron 协议注册 API](https://www.electronjs.org/docs/latest/api/app#appsetasdefaultprotocolclientprotocol-path-args)。
+
+开发验证分两层：
+
+- URL / argv 解析、登录前 pending 和导航分发继续使用既有入口；本次只跳过 OS 注册，
+  `open-url`、`second-instance` 和冷启动 argv 接收不变。用现有深链定向测试验证这些行为。
+- 浏览器点击、冷启动和运行中唤起须用 packaged macOS / Windows 验证。运行 dev 时直接
+  点击系统链接仍交给原有安装版，不能把它当作当前 checkout 的验收。
+
+已被旧开发版覆盖关联时，先正常关闭那份旧 dev。保存正式版中的工作后，从安装位置
+（macOS 通常为 `/Applications/Cindy.app`，按实际区域/版本选择）正常退出并重新启动
+对应的打包版，再重试链接；打包版启动会重新注册其协议。仅切换到已经运行的窗口不会
+重新执行注册。Windows 若仍未恢复，在系统“默认应用”中检查这两个协议的目标应用。
+不要批量注销所有 Electron 应用、删除用户 profile 或重置整个 LaunchServices 数据库。
+
+实现与回归见 [deepLink.ts](../../apps/desktop/src/main/deepLink.ts) 和
+[deepLink.test.ts](../../apps/desktop/src/main/__tests__/deepLink.test.ts)。该修复防止新的
+开发实例覆盖关联，不会扫描或自动修复旧 checkout 留下的系统记录。
 
 ### 使用统计（TapDB）在 dev 下不上报
 
@@ -191,6 +236,27 @@ localStorage 按 **origin + userData 目录** 分家——dev 的 renderer 从
 - 修改 main、preload、MCP、原生依赖或 package 运行时代码后需要重启。
 - 只修改 renderer 时优先使用现有实例的热更新，不重复重启。
 - 不确定运行实例来自哪个 checkout 时，先运行 `pnpm desktop:whoami -- --all` 核对。
+
+## 内存排查
+
+main 日志里 scope 为 `memory-usage` 的行是各进程内存采样（正式版每 10 分钟一次，dev 每 30 秒
+一次；实现见 `src/main/process-monitor/memory-log.ts`）：`main{...}` 是主进程
+`process.memoryUsage()` 细分，后面按进程类型分组列出 `app.getAppMetrics()` 的常驻内存，
+组内从大到小，单位 MB。排查「越用越卡」时，先按启动分段看 `Browser`（主进程）和最大的
+`Tab`（主界面）每小时涨多少：持续上涨、重启才回落就是泄漏；再看 `heapUsed` 与 `external` /
+`arrayBuffers` 谁在涨，区分 JS 对象和 Buffer。该 scope 只写进程类型与数字，已精确放行进
+日志上报，不要往这行里加标题、服务名、pid 或路径。
+
+`getAppMetrics()` 的 GPU 数字不含 IOSurface 等显存，macOS 上要看 GPU 进程真实占用用
+`footprint -p <pid>`。
+
+确认主进程在涨、要找是谁在涨时，在开发版日志目录的 `log-config.json` 写
+`"mainHeapSampling": true`（与 `level` 并列），重启后主进程常驻 V8 采样式堆分析（实现见
+`src/main/process-monitor/heap-sampling.ts`），每 30 分钟写一份到 `logs/heap-sampling/`，
+保留最近 48 份：`.heapprofile` 可在 Chrome DevTools 的 Memory 面板载入，`.summary.txt` 按
+「最近一帧应用代码」和「分配帧」两种口径列出仍存活的采样内存。对比前后几份摘要，持续
+变大的那几行就是泄漏点。不要在用户正在用的 GB 级主进程上拍完整堆快照：会冻结一两分钟
+并额外占用同等内存。正式版不读这个开关。
 
 ## 分层验证
 
@@ -246,6 +312,23 @@ pnpm ui:check:selftest
 - 场景数据、宿主模拟、多语言和对比模式的写法见
   [单页验证说明](../../apps/desktop/scripts/ui-page/README.md)。
 
+### 局部 UI 的默认迭代流程
+
+局部样式、排版与交互问题优先沿用上述组件窗口完成复现、修复和人工试用：
+
+- 复用已有 fixture；缺少覆盖时直接挂载真实生产组件，沿用共享样式、字体、主题和翻译，
+  不复制 JSX／CSS 做一份外观相似的页面。模拟只补与本次验证无关的宿主依赖；被替换模块
+  写入 `stubs`，未覆盖行为写入 `notCovered`。
+- 修 bug 先留下失败场景，再用相同输入验证修复。尺寸、换行或抖动问题测实际浏览器布局；
+  涉及过渡动画时采样中间帧，不能只比较 CSS 字符串或动画结束后的截图。
+- 覆盖 Light／Dark 和受影响的鼠标、键盘状态；排版改动补相关语言与长文案，修改共享组件
+  或字体时检查相邻消费者。执行适用的 `--changed` 检查并目检 overview，明确报告失败和缺口。
+- 给用户试用时打开 `ui:preview`，说明所用分支和场景；等待用户验收期间保留窗口，不因
+  助手回复结束就关闭。验收结束后只收尾本轮拥有的预览进程。
+- 组件窗口不加载完整客户端及其用户数据，不需要抢占或重启已有完整客户端验收实例。
+  涉及真实宿主、登录、发送、持久化、跨设备或原生窗口行为时，按下表升级验证；构建失败
+  或 fixture 通过都不能作为这些行为已经验证的证据。
+
 ### 按改动选择验证方式
 
 | 改动 | 先做 | 何时升级 |
@@ -257,11 +340,21 @@ pnpm ui:check:selftest
 | 任务列表、任务页、侧栏等需要完整主界面的样式或交互 | `pnpm restart:desktop:remote -- --mock`（[UI 模拟数据](ui-mock-data.md)） | 依赖真实账号、发送或 Agent 运行时回到隔离 Desktop |
 | main、preload、IPC、数据库、登录、发送、跨设备、窗口生命周期 | 定向测试 + 隔离 Desktop（见「Agent 启动入口」） | `ui:check` 不覆盖这些行为，不能替代 |
 
-普通界面改动的 PR 截图直接用单页验证：检查通过后运行 `pnpm ui:check:publish`，它把最近一次
-运行的总览截图推到作者 fork 的 `pr-assets/<当前分支>`（不进上游仓库，也不动工作区），并输出
-一段带图片链接的「UI 变化」：命令、平台、版本、场景、通过情况、未覆盖的行为和 `--focus` 实测的
-改前／改后数值，原样写进 PR 正文。登录、发送、跨设备等单页验证覆盖不到的变化，仍按原方式附
-完整 Cindy 截图。
+普通界面改动的 PR 截图直接用单页验证：检查通过后运行 `pnpm ui:check:publish`，它把截图推到
+作者 fork 的 `pr-assets/<当前分支>`（不进上游仓库，也不动工作区），并输出一段「UI 变化」：命令、
+平台、版本、场景、通过情况、未覆盖的行为和 `--focus` 实测的改前／改后数值，原样写进 PR 正文。
+
+PR 截图给评审看改了什么，不是自检总览的搬运：
+
+- 正文只嵌与改动直接相关的截图，每组并排：带 `--compare` 时只放改前／改后有差异的截图
+  （改前 | 改后），否则每个场景一张（Light | Dark）。全量 `overview*.png` 只在末尾给链接，
+  不直接贴进正文。
+- 修旧问题用 `--compare`；改动集中在一个元素时加 `--focus`，用放大图代替整页截图；场景多时用
+  `pnpm ui:check:publish --case <场景>` 选出最能说明改动的那个。
+- 场景里只为测试存在的按钮、说明栏标 `data-ui-page-control`，截图时自动隐藏。
+
+登录、发送、跨设备等单页验证覆盖不到的变化，仍按原方式附完整 Cindy 截图，同样只放能说明
+改动的画面，裁掉无关区域。
 
 公开截图（PR 正文、评论、发到 fork 的图）的原则：
 
@@ -283,9 +376,13 @@ Linux 主窗口创建时注册 Electron Tray，提供显示主窗口、打开日
 实现见 `main/linuxTrayLifecycle.ts` 与 `bootstrap-electron.ts`，回归见
 `main/__tests__/linuxTrayLifecycle.test.ts`。
 
-图标创建成功不代表桌面面板一定显示它，因此关闭主窗口仍保留 Linux 原有的
-「最小化／退出」选择，不自动隐藏到托盘，也不迁移用户已有偏好。无托盘宿主或初始化失败
-不阻止主窗口使用。托盘实际显示、激活、菜单与退出须在 Linux 桌面验证；macOS 上的
+关闭主窗口仍保留 Linux 原有的「最小化／退出」选择，不迁移用户已有偏好。
+Hyprland（包括 Omarchy）没有原生最小化能力，因此主窗口的「最小化」及关闭时的
+「最小化」选择统一隐藏到 Linux 托盘；其他桌面与副窗口仍使用原生最小化。
+策略与回归见 `main/mainWindowCloseBehavior.ts`、`main/__tests__/mainWindowCloseBehavior.test.ts`。
+托盘初始化失败时提示并保留窗口。图标创建成功不代表桌面面板一定显示它；自定义 Hyprland
+配置未启用托盘宿主时，可再次打开同一安装、同一配置的 Cindy，经已有 single-instance
+入口恢复窗口。托盘实际显示、激活、菜单与退出须在 Linux 桌面验证；macOS 上的
 单测不能替代 Omarchy/Hyprland、GNOME 或 KDE 的实机验收。
 
 ## Windows 窗口恢复实验
@@ -321,3 +418,55 @@ pnpm --filter desktop exec vitest run scripts/installer-directory-messages.test.
 还需在普通权限 Windows 环境走查：默认目录、自定义受保护目录、允许／取消授权、使用
 另一管理员账号、旧版覆盖安装，以及静默安装失败时旧版仍在。原生对话框的 Light／Dark
 外观由 Windows 提供，自动测试不代表两种模式已完成目检。
+
+远程桌面 helper 的 CRT 链接验收另运行：
+
+```bash
+node apps/desktop/scripts/check-windows-remote-desktop-runtime.mjs
+```
+
+这是显式 Windows x64 原生集成验收：编译两个 EXE 与 `.node`，检查 PE 依赖，对照
+动态／静态链接在临时目录中遇到不可用 VC++ DLL 时的结果，并以随机测试产品身份实跑
+生产 NSIS 钩子的当前用户安装、覆盖安装和卸载。它不改系统 DLL、不安装服务、不操作
+正式 Cindy 的安装。该故障注入不能代替干净 Windows 虚拟机、「所有用户」安装或已注册
+远程桌面服务的真实验收；编译与安装器子进程不进入默认单测。
+
+
+## 右侧栏展开、拖宽与恢复
+
+主界面最右侧的内嵌工具栏从收起变为展开时，`LayoutRoot` 按面板宽度与 CSS clamp
+计算保持聊天区宽度所需的增量，经本机 `window-sidebar-expansion` IPC 交给
+`SidebarWindowExpansion`。窗口左边缘不动，增量止于当前显示器工作区右边缘；
+空间不足的部分由窗口内部布局分配。最大化与原生全屏不改窗口尺寸，左侧停靠和
+独立工具窗口不触发右扩。启动恢复已展开的侧栏只登记现有几何基准，不重复扩大。
+
+展开后以内容区像素宽度为基准：聊天区与其它停靠面板保持宽度，最右侧栏使用 CSS
+剩余空间吸收窗口伸缩；达到最小尺寸后仍遵守原有空间约束。实时缩放不在每个 resize
+事件里重写 React 状态或偏好。主动拖中间分隔线前以实测宽度校准份额账本，提交后
+重新建立聊天区宽度基准。收起时撤回侧栏占用的扩展宽度（包含扩展后主动拖宽的增量），
+保留窗口当前的位置和高度；关闭、移位或重新展开时解除／重建临时基准。
+
+用户主动调整侧栏后，把实际像素宽度写入布局树 pane 的可选 `preferredWidth`，通过
+既有 LayoutStore 保存到 `layout.v1.json`；下次展开及重启后优先恢复该宽度。
+旧布局缺少该字段时继续使用原份额，无需迁移；重置布局同时清除该偏好。
+中间分隔线在手势提交时保存，macOS / Windows 原生窗口边缘通过 Electron 的
+`will-resize` + `resized` 区分手动缩放后保存。程序展开、屏幕空间不足、最大化与全屏
+造成的临时变化不覆盖用户偏好。Linux 没有上述原生手势事件，仍可通过中间分隔线保存。
+
+展开／收起时 `sidebarPresentation` 暂时固定内容区旧宽度并保留旧侧栏状态；主进程
+回传实际增量后，等待 renderer 观察到对应 viewport 宽度，再在同一帧释放旧宽并切换
+侧栏。原生窗口有尺寸变化时不叠加侧栏的 250ms 宽度动画，避免聊天消息先压缩或
+拉宽再恢复；无可用空间时保留窗口内动画。快速反向操作丢弃迟到回包。
+
+侧栏开关归聊天区所有，点击展开、再次点击收起；展开后仍留在聊天区原来的角上
+（macOS 顶栏右端、Windows 内容区入口）。侧栏自己的顶栏末端显示 × 关闭按钮；
+关闭仅收起侧栏，不关闭页签。分离和最大化入口仍属于侧栏，沿用现有主题与多语言文案。
+
+新增 IPC 只允许 Cindy 自有顶层应用窗口操作自身，不进入 device-link 白名单；SSH 或
+远程任务仍调整当前查看端窗口，手机没有对应的原生窗口行为。
+
+回归入口：`sidebarWindowExpansion.test.ts`、`sidebarWindowExpansionIpc.test.ts`、
+`LayoutStore.test.ts`、`layout/__tests__/sidebarExpansion.test.ts`、
+`sidebarPresentation.test.tsx`、`LayoutRoot.test.tsx`、`rootDividerDrag.test.tsx` 与
+`RightSidebar.presentation.test.tsx`。覆盖几何边界、快速开关、首次恢复、拖宽后收起、
+宽度落盘重载、临时夹取不写偏好，以及原生扩宽后继续拖分隔线。
