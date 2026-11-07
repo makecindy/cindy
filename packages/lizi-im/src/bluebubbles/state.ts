@@ -28,6 +28,8 @@ export function applyBlueBubblesReceiptUpdate(state: BlueBubblesState, update: B
 export class BlueBubblesReceipts {
   private state: BlueBubblesState;
   private readonly pending = new Set<string>();
+  private readonly dispatching = new Set<string>();
+  private readonly unsettledSends = new Set<string>();
   constructor(private readonly storage: BlueBubblesStateStorage, now: number) {
     const saved = storage.read();
     if (saved && (saved.version !== 1 || !Number.isFinite(saved.activatedAt)
@@ -37,11 +39,21 @@ export class BlueBubblesReceipts {
     for (const [id, value] of Object.entries(this.state.inbox)) {
       applyBlueBubblesReceiptUpdate(this.state, { kind: 'inbox', id, value });
       if (value.state === 'pending') this.pending.add(id);
+      if (value.state === 'dispatching') this.dispatching.add(id);
     }
-    for (const [id, value] of Object.entries(this.state.outbox)) applyBlueBubblesReceiptUpdate(this.state, { kind: 'outbox', id, value });
+    for (const [id, value] of Object.entries(this.state.outbox)) {
+      applyBlueBubblesReceiptUpdate(this.state, { kind: 'outbox', id, value });
+      if (value.state !== 'sent') this.unsettledSends.add(id);
+    }
     for (const [id, value] of Object.entries(this.state.cursors)) applyBlueBubblesReceiptUpdate(this.state, { kind: 'cursor', id, value });
   }
   snapshot(): BlueBubblesState { return structuredClone(this.state); }
+  uncertainCounts(activeDispatches: ReadonlySet<string>, activeSends: ReadonlySet<string>) {
+    let uncertainInputs = 0, uncertainSends = 0;
+    for (const id of this.dispatching) if (!activeDispatches.has(id)) uncertainInputs++;
+    for (const id of this.unsettledSends) if (!activeSends.has(id)) uncertainSends++;
+    return { uncertainInputs, uncertainSends };
+  }
   get activatedAt(): number { return this.state.activatedAt; }
   cursor(chat: string): number { return this.state.cursors[chat] ?? this.state.activatedAt; }
   nextPending(exclude: ReadonlySet<string>): string | undefined {
@@ -59,6 +71,9 @@ export class BlueBubblesReceipts {
     applyBlueBubblesReceiptUpdate(this.state, update);
     if (update.kind === 'inbox') {
       if (update.value.state === 'pending') this.pending.add(update.id); else this.pending.delete(update.id);
+      if (update.value.state === 'dispatching') this.dispatching.add(update.id); else this.dispatching.delete(update.id);
+    } else if (update.kind === 'outbox') {
+      if (update.value.state !== 'sent') this.unsettledSends.add(update.id); else this.unsettledSends.delete(update.id);
     }
   }
   setCursor(chat: string, value: number): void { this.update({ kind: 'cursor', id: chat, value }); }

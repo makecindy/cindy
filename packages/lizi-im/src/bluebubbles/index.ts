@@ -96,10 +96,9 @@ export class BlueBubblesIM extends BaseIM implements TextChannelIM {
   }
   getChat(chatGuid: string): BlueBubblesChat | undefined { return this.chats.get(chatGuid); }
   health(): { lastCatchUpAt: number | null; lastWebhookAt: number | null; uncertainInputs: number; uncertainSends: number } {
-    const state = this.receipts?.snapshot();
     return { lastCatchUpAt: this.lastCatchUpAt, lastWebhookAt: this.lastWebhookAt,
-      uncertainInputs: Object.entries(state?.inbox ?? {}).filter(([id, row]) => row.state === 'dispatching' && !this.activeDispatches.has(id)).length,
-      uncertainSends: Object.entries(state?.outbox ?? {}).filter(([id, row]) => row.state !== 'sent' && !this.activeSends.has(id)).length };
+      ...(this.receipts?.uncertainCounts(this.activeDispatches, this.activeSends)
+        ?? { uncertainInputs: 0, uncertainSends: 0 }) };
   }
 
   async saveCredentials(input: BlueBubblesConfig & { password: string }): Promise<void> {

@@ -3,15 +3,15 @@ import type { IMHost, IMMessageEvent } from '../types.js';
 import { LocalWebhookReceiver } from '../localWebhook.js';
 import { BlueBubblesApi, type BlueBubblesMessage } from './api.js';
 import { BlueBubblesIM } from './index.js';
-import type { BlueBubblesState } from './state.js';
+import { BlueBubblesReceipts, type BlueBubblesState } from './state.js';
 
 // Tier 1: exercise the real transport and HTTP receiver. Covers durable duplicate/restart
 // handling and requester identity absent from other transports' tests; no real contacts.
 const connections: BlueBubblesIM[] = [];
 afterEach(async () => { await Promise.all(connections.splice(0).map(im => im.dispose())); });
-async function fixture() {
+async function fixture(initialState: BlueBubblesState | null = null) {
   const secrets = new Map<string, string>();
-  let saved: BlueBubblesState | null = null;
+  let saved: BlueBubblesState | null = initialState;
   let callbackUrl = '';
   let now = 1_000;
   const chat = { guid: 'any;-;owner@example.test', participants: [{ address: 'owner@example.test', service: 'iMessage' }] };
@@ -51,6 +51,37 @@ async function fixture() {
 }
 
 describe('BlueBubbles local ingress', () => {
+  // Tier 1, review #9250: each health broadcast copied the permanent ledger.
+  // Existing restart cases only used tiny ledgers; restored unresolved counts must
+  // stay correct without snapshotting 10,000 completed receipts on every message.
+  it('reports restored uncertain receipts without copying completed history', async () => {
+    const initial: BlueBubblesState = { version: 1, activatedAt: 1000, cursors: {},
+      inbox: { interrupted: { receivedAt: 1000, state: 'dispatching' } },
+      outbox: { interrupted: { chatId: 'any;-;owner@example.test', state: 'sending' },
+        unknown: { chatId: 'any;-;owner@example.test', state: 'unknown' } } };
+    for (let i = 0; i < 10_000; i++) {
+      initial.inbox[`old-${i}`] = { receivedAt: 1000, state: 'accepted' };
+      initial.outbox[`old-${i}`] = { chatId: 'any;-;owner@example.test', state: 'sent' };
+    }
+    const f = await fixture(initial);
+    const snapshot = vi.spyOn(BlueBubblesReceipts.prototype, 'snapshot').mockImplementation(() => {
+      throw new Error('health must not copy permanent history');
+    });
+    try { expect(f.im.health()).toMatchObject({ uncertainInputs: 1, uncertainSends: 2 }); }
+    finally { snapshot.mockRestore(); }
+    f.send.mockImplementation(async () => {
+      expect(f.im.health()).toMatchObject({ uncertainInputs: 1, uncertainSends: 2 });
+      return { guid: 'completed-send' };
+    });
+    await f.im.sendText(f.chat.guid, 'new send');
+    f.im.onMessage(() => {
+      expect(f.im.health()).toMatchObject({ uncertainInputs: 1, uncertainSends: 2 });
+    });
+    f.message('new-input');
+    await f.webhook('new-input');
+    await f.im.reconcile();
+    expect(f.im.health()).toMatchObject({ uncertainInputs: 1, uncertainSends: 2 });
+  });
   it('recognizes explicit group mentions without treating quotes or similar names as invocations', async () => {
     const f = await fixture();
     expect(f.im.isGroupInvocation('@Cindy help')).toBe(true);
