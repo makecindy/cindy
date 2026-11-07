@@ -190,8 +190,18 @@ export function createMessageHandler(
     if (pureTextCommandInput && (isStopCommand(event.text) ||
       (event.delivery && event.text.trim().toLowerCase() === '/stop'))) {
       let reply: string;
+      let droppedExternal = 0;
+      let cancellationError: string | undefined;
       try {
-        const droppedExternal = event.delivery?.cancelPending?.() ?? 0;
+        droppedExternal = event.delivery?.cancelPending?.() ?? 0;
+      } catch (err) {
+        if (isImAccountScopeClosedError(err)) throw err;
+        cancellationError = err instanceof Error ? err.message : String(err);
+        log.error(`cancelPending threw: ${cancellationError}`);
+      }
+      try {
+        // A failed durable queue cancellation must not prevent aborting the
+        // active turn. Report both outcomes without claiming the queue cleared.
         const result = await turnRunner.stopActiveTurn({
           botContextId: event.contextId,
           userId: event.senderId,
@@ -208,6 +218,7 @@ export function createMessageHandler(
         log.error(`stopActiveTurn threw: ${msg}`);
         reply = ui.agent.sendInternalError(msg);
       }
+      if (cancellationError !== undefined) reply += `\n\n${ui.agent.sendInternalError(cancellationError)}`;
       // 群主流 @ 开话题的首条若是 !stop: 「思考中」开场白卡就地 patch 成
       // stop 回复(消费 pending opener), 不再另发一条; 消费不了再走正常发送。
       // 仅当本条消息**自己**开了话题(groupContextLane 存在)才消费 — 同话题
