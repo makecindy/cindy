@@ -909,11 +909,13 @@ describe('dev 沙箱凭证隔离(XDT_ISOLATED_AUTH)', () => {
     fs.renameSync(replacement, systemAuth);
     const renewedSystemBytes = fs.readFileSync(systemAuth);
     const renewedSystemStat = fs.statSync(systemAuth);
-    if (process.platform === 'win32') {
+    // 「系统文件被整体替换」后本地看到什么，取决于共享方式：文件软链跟随系统
+    // 路径（#9277 起 Windows 与 POSIX 都是软链），只有独立副本才留在旧代。
+    if (fs.lstatSync(localAuth).isSymbolicLink()) {
+      expect(fs.readFileSync(localAuth)).toEqual(renewedSystemBytes);
+    } else {
       expect(fs.readFileSync(localAuth)).toEqual(oldLocalBytes);
       expect(fs.readFileSync(localAuth)).not.toEqual(renewedSystemBytes);
-    } else {
-      expect(fs.readFileSync(localAuth)).toEqual(renewedSystemBytes);
     }
 
     const chmod = vi.spyOn(fs.promises, 'chmod');
