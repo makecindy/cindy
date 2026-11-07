@@ -2,6 +2,8 @@ import { execFileSync } from 'node:child_process';
 // eslint-disable-next-line no-restricted-imports -- CLI startup can block Electron Main on Windows.
 import { parentPort, workerData } from 'node:worker_threads';
 
+import { CLAUDE_SUBSCRIPTION_CLI_ISOLATION_ARGS } from '@cindy/maker-core';
+
 export interface ClaudeCliStatusRequest {
   binary: string;
   env: NodeJS.ProcessEnv;
@@ -13,7 +15,7 @@ export interface ClaudeCliStatusRequest {
 if (parentPort) {
   const request = workerData as ClaudeCliStatusRequest;
   try {
-    const stdout = execFileSync(request.binary, ['auth', 'status', '--json'], {
+    const stdout = execFileSync(request.binary, [...CLAUDE_SUBSCRIPTION_CLI_ISOLATION_ARGS, 'auth', 'status', '--json'], {
       env: request.env,
       timeout: request.timeoutMs,
       encoding: 'utf8',

@@ -16,7 +16,7 @@
 
 import { spawn, type ChildProcess } from 'node:child_process';
 
-import { cleanProcessEnv } from '@cindy/maker-core';
+import { CLAUDE_SUBSCRIPTION_CLI_ISOLATION_ARGS, cleanProcessEnv } from '@cindy/maker-core';
 import { hasProxyEnvConfig, parseOutboundProxyUrl } from '@cindy/anthropic-compat-proxy';
 
 import { getReadyBinaryPath } from '../agent-binaries/index.js';
@@ -140,6 +140,10 @@ export function parseClaudeCliLoginStatus(stdout: string): ClaudeCliLoginStatus 
   };
 }
 
+/**
+ * 拉起 CLI 做登录 / 登录态检查。不加载用户级设置:终端 claude 配的 apiKeyHelper / 网关会让
+ * `auth status` 报非订阅,盖住本机已有的订阅登录(见 maker-core subscription-settings-isolation)。
+ */
 function runCli(
   args: string[],
   options: { env: NodeJS.ProcessEnv; timeoutMs: number; signal?: AbortSignal },
@@ -149,7 +153,7 @@ function runCli(
   return new Promise((resolve, reject) => {
     let child: ChildProcess;
     try {
-      child = spawn(binary, args, { env: options.env, stdio: ['pipe', 'pipe', 'pipe'], windowsHide: true });
+      child = spawn(binary, [...CLAUDE_SUBSCRIPTION_CLI_ISOLATION_ARGS, ...args], { env: options.env, stdio: ['pipe', 'pipe', 'pipe'], windowsHide: true });
     } catch (err) {
       reject(err);
       return;
@@ -285,16 +289,17 @@ export async function readClaudeCliPlanUsage(): Promise<ClaudeCliPlanUsage | nul
   const binary = cliBinaryPath();
   if (!binary) throw new Error('claude cli unavailable');
   const env = await cliEnv({ network: true });
-  // --setting-sources user:不读工作区的项目级设置(它们可改写上游 / 鉴权);
-  // --strict-mcp-config:不拉起用户配置的 MCP server;--no-session-persistence:不落会话记录。
+  // 不加载任何文件层设置:项目级设置可改写上游 / 鉴权,用户级设置里给终端 claude 配的
+  // API / 网关会盖过订阅登录;--strict-mcp-config:不拉起用户配置的 MCP server;
+  // --no-session-persistence:不落会话记录。
   const args = [
+    ...CLAUDE_SUBSCRIPTION_CLI_ISOLATION_ARGS,
     '-p',
     '--input-format', 'stream-json',
     '--output-format', 'stream-json',
     '--verbose',
     '--no-session-persistence',
     '--strict-mcp-config',
-    '--setting-sources', 'user',
   ];
   return new Promise((resolve, reject) => {
     let child: ChildProcess;

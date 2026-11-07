@@ -17,7 +17,10 @@ const h = vi.hoisted(() => ({
 }));
 
 vi.mock('electron', () => ({ app: { isPackaged: true, getPath: () => '/tmp/cindy-test-user-data' } }));
-vi.mock('@cindy/maker-core', () => ({ cleanProcessEnv: () => ({ PATH: '/usr/bin' }) }));
+vi.mock('@cindy/maker-core', () => ({
+  cleanProcessEnv: () => ({ PATH: '/usr/bin' }),
+  CLAUDE_SUBSCRIPTION_CLI_ISOLATION_ARGS: ['--setting-sources', '', '--settings', '{"apiKeyHelper":""}'],
+}));
 vi.mock('../../agent-binaries/index.js', () => ({ getReadyBinaryPath: () => h.binary }));
 vi.mock('../../logger.js', () => ({
   createLogger: () => ({ debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() }),
@@ -41,7 +44,7 @@ vi.mock('node:worker_threads', () => ({
       h.workers.push(this);
       // The worker transport is simulated; existing status/login cases still
       // drive the production client and observe the public authentication result.
-      const child = h.spawn(workerData.binary, ['auth', 'status', '--json'], { env: workerData.env });
+      const child = h.spawn(workerData.binary, [...ISOLATION, 'auth', 'status', '--json'], { env: workerData.env });
       let stdout = '';
       child.stdout.on('data', (chunk: Buffer) => { stdout += chunk.toString(); });
       child.once('error', (error: Error) => this.emit('error', error));
@@ -93,10 +96,23 @@ const SUBSCRIPTION = JSON.stringify({
   subscriptionType: 'max',
 });
 const API_KEY_LOGIN = JSON.stringify({ loggedIn: true, authMethod: 'api_key', apiProvider: 'firstParty', apiKeySource: 'ANTHROPIC_API_KEY' });
+const API_KEY_HELPER_LOGIN = JSON.stringify({ loggedIn: true, authMethod: 'api_key_helper', apiProvider: 'firstParty', apiKeySource: 'apiKeyHelper' });
 const LOGGED_OUT = JSON.stringify({ loggedIn: false, authMethod: 'none', apiProvider: 'firstParty' });
+
+/** 订阅链路拉起 CLI 时放在最前面的参数(CLI 协议):不加载任何文件层设置,并置空 apiKeyHelper。 */
+const ISOLATION = ['--setting-sources', '', '--settings', '{"apiKeyHelper":""}'];
 
 function argsOf(call: unknown[]): string[] {
   return call[1] as string[];
+}
+
+/**
+ * 用户级 ~/.claude/settings.json 配了 apiKeyHelper(终端 claude 走网关)的真实 CLI:
+ * 加载用户设置时 `auth status` 报 apiKeySource=apiKeyHelper,只有隔离用户设置才报出本机已有的订阅登录。
+ */
+function cliWithUserApiKeyHelper(args: string[]): FakeChild {
+  const isolated = args.indexOf('--setting-sources') >= 0 && args[args.indexOf('--setting-sources') + 1] === '';
+  return fakeChild({ stdout: isolated ? SUBSCRIPTION : API_KEY_HELPER_LOGIN });
 }
 
 beforeEach(() => {
@@ -205,7 +221,7 @@ describe('登录态读取', () => {
     h.spawn.mockImplementation(() => fakeChild({ stdout: SUBSCRIPTION }));
     await expect(refreshClaudeCliLoginStatus({ force: true })).resolves.toMatchObject({ loggedIn: true });
     expect(h.spawn).toHaveBeenCalledTimes(2);
-    expect(argsOf(h.spawn.mock.calls[1])).toEqual(['auth', 'status', '--json']);
+    expect(argsOf(h.spawn.mock.calls[1])).toEqual([...ISOLATION, 'auth', 'status', '--json']);
   });
 
   it('内置 CLI 尚未就绪不算失败:不进退避,就绪后下一次读取立即拉起', async () => {
@@ -251,6 +267,15 @@ describe('runClaudeCliLogin', () => {
     expect(h.spawn).toHaveBeenCalledTimes(1);
   });
 
+  it('用户设置里给终端 claude 配了 apiKeyHelper:不影响本机已有的订阅登录,直接连接、不拉起登录', async () => {
+    h.spawn.mockImplementation((_binary: string, args: string[]) => cliWithUserApiKeyHelper(args));
+    await expect(runClaudeCliLogin(new AbortController().signal)).resolves.toMatchObject({
+      ok: true,
+      status: { loggedIn: true, authMethod: 'claude.ai', subscriptionType: 'max' },
+    });
+    expect(h.spawn).toHaveBeenCalledTimes(1);
+  });
+
   it('CLI 用非订阅方式登录:返回 not_a_subscription,不替用户改 CLI 的登录', async () => {
     h.spawn.mockImplementation(() => fakeChild({ stdout: API_KEY_LOGIN }));
     await expect(runClaudeCliLogin(new AbortController().signal)).resolves.toEqual({
@@ -258,7 +283,7 @@ describe('runClaudeCliLogin', () => {
       reason: 'not_a_subscription',
     });
     expect(h.spawn).toHaveBeenCalledTimes(1);
-    expect(argsOf(h.spawn.mock.calls[0])).toEqual(['auth', 'status', '--json']);
+    expect(argsOf(h.spawn.mock.calls[0])).toEqual([...ISOLATION, 'auth', 'status', '--json']);
   });
 
   it('拉起 `claude auth login --claudeai`,完成后以重读的登录态为结论', async () => {
@@ -270,7 +295,7 @@ describe('runClaudeCliLogin', () => {
       ok: true,
       status: { loggedIn: true },
     });
-    expect(argsOf(h.spawn.mock.calls[1])).toEqual(['auth', 'login', '--claudeai']);
+    expect(argsOf(h.spawn.mock.calls[1])).toEqual([...ISOLATION, 'auth', 'login', '--claudeai']);
   });
 
   it('取消时结束登录子进程', async () => {
@@ -320,7 +345,7 @@ function fakeSdkChild(reply: (requestId: string) => unknown): FakeSdkChild {
 const RATE_LIMITS = { limits: [{ kind: 'session', percent: 5, resets_at: '2026-09-26T04:00:00Z' }] };
 
 describe('readClaudeCliPlanUsage', () => {
-  it('发 get_usage 控制请求,取 rate_limits 后结束 CLI;拉起时隔离项目设置 / MCP / 会话记录', async () => {
+  it('发 get_usage 控制请求,取 rate_limits 后结束 CLI;拉起时隔离用户与项目设置 / MCP / 会话记录', async () => {
     const child = fakeSdkChild((id) => ({
       type: 'control_response',
       response: {
@@ -332,8 +357,11 @@ describe('readClaudeCliPlanUsage', () => {
     h.spawn.mockReturnValue(child);
     await expect(readClaudeCliPlanUsage()).resolves.toEqual({ rateLimits: RATE_LIMITS, subscriptionType: 'max' });
     const args = argsOf(h.spawn.mock.calls[0]!);
+    // 不加载用户级设置:其中给终端 claude 配的 API / 网关会让 get_usage 读不到订阅套餐。
+    expect(args.slice(0, ISOLATION.length)).toEqual(ISOLATION);
+    expect(args.filter((arg) => arg === '--setting-sources')).toHaveLength(1);
     expect(args).toEqual(expect.arrayContaining([
-      '--input-format', 'stream-json', '--no-session-persistence', '--strict-mcp-config', '--setting-sources', 'user',
+      '--input-format', 'stream-json', '--no-session-persistence', '--strict-mcp-config',
     ]));
     const request = JSON.parse(child.stdin.write.mock.calls[1]![0] as string);
     expect(request.request).toEqual({ subtype: 'get_usage', skip_behaviors: true });

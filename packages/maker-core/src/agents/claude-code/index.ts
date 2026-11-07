@@ -140,6 +140,7 @@ import {
   workspaceSettingsOverrideMessage,
 } from './workspace-settings-guard.js';
 import { buildClaudeFlagSettings } from './flag-settings.js';
+import { CLAUDE_SUBSCRIPTION_FLAG_SETTINGS } from './subscription-settings-isolation.js';
 import {
   buildClaudeAskUserQuestionCallerProvenanceHooks,
   buildClaudeDisallowedTools,
@@ -1107,6 +1108,9 @@ export class ClaudeCodeAgent extends BaseAgent {
           cwd: probeDir,
           pathToClaudeCodeExecutable: this.deps.binaryPath,
           env,
+          // 订阅清单只看订阅登录:不加载用户级设置里的 apiKeyHelper / 网关与自定义模型名。
+          settingSources: [],
+          settings: { ...CLAUDE_SUBSCRIPTION_FLAG_SETTINGS },
         },
       });
       const query = q;
@@ -4565,9 +4569,11 @@ export class ClaudeCodeAgent extends BaseAgent {
             ? { tools: [...DEVICE_HOSTED_GUEST_CLAUDE_TOOLS] } : {}),
           // 设备托管：个人配置(用户级设置、hooks)属于任务所在电脑，不加载本机用户级设置；
           // 项目级设置来自同步过来的影子目录(只保留权限规则)。
+          // 本机订阅会话同样不加载用户级设置：其中给终端 claude 配的 API / 网关会盖过订阅登录
+          // (见 subscription-settings-isolation.ts)；API 路由照旧加载。
           settingSources: reviewMode || !!opts.botRuntimeProfile || opts[LOCAL_AGENT_CLIENT]?.hostToolsOnly
             ? []
-            : hosted ? ['project', 'local'] : ['user', 'project', 'local'],
+            : hosted || nativeCliAuth ? ['project', 'local'] : ['user', 'project', 'local'],
           // Settings (SDK "flag settings" 层, 优先级最高 — 覆盖 user/project/local 文件层):
           //  - showThinkingSummaries        : reasoning summary 展示开关
           //  - autoMemoryEnabled / autoDream: memory 联动 (host 通过 runtimeConfig.memoryEnabled 或
