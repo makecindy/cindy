@@ -87,50 +87,92 @@ export function createInputQueue(deps) {
     return proj;
   }
 
+  function persistReply(sessionId, state, message) {
+    if (!deps.persistMessage) return;
+    state.unsaved ??= new Map();
+    state.unsaved.set(message.clientId, message);
+    state.persistence = (state.persistence ?? Promise.resolve()).then(async () => {
+      try {
+        await deps.persistMessage(sessionId, message);
+        state.unsaved.delete(message.clientId);
+      } catch (error) {
+        state.error = error instanceof Error ? error.message : String(error);
+        state.queuePaused = true;
+        emitProjection(sessionId);
+      }
+    });
+  }
+
   async function dispatch(sessionId) {
     const state = stateFor(sessionId);
-    if (state.running || state.queuePaused) return;
+    if (state.disposed || state.running || state.stopping || state.settling || state.queuePaused || state.queueInteractionLocks.length > 0
+      || state.queueEditLocks.includes(state.items[0]?.clientId)) return;
     // The running message leaves the queue: the projection's pendingQueue is
     // what is still waiting, matching the desktop renderer's expectation.
     const next = state.items.shift();
     if (!next) return;
     state.active = next;
+    // Reserve before the first await: HTTP requests may arrive concurrently.
+    state.running = true;
+    const generation = state.generation ?? 0;
+    let session;
+    let dbKind;
+    let prepared;
+    state.preparing = new Promise(resolve => { prepared = resolve; });
+    try {
+      const stored = await deps.readSession(sessionId);
+      const maker = deps.getMaker();
+      const makerKind = toMakerAgentKind(next.agentKind || stored.agentKind);
+      dbKind = toDbAgentKind(next.agentKind || stored.agentKind);
 
-    const stored = await deps.readSession(sessionId);
-    const maker = deps.getMaker();
-    const makerKind = toMakerAgentKind(next.agentKind || stored.agentKind);
-    const dbKind = toDbAgentKind(next.agentKind || stored.agentKind);
-
-    // Persist user message immediately so both browser SSE and device-link see it
-    if (deps.persistMessage) {
-      await deps.persistMessage(sessionId, {
-        clientId: next.clientId,
-        role: 'user',
-        content: next.persistedContent || next.text,
-        createdAt: next.createdAt,
-        agentKind: dbKind,
-      }).catch(() => {});
-    }
-
-    let session = maker.getSession(sessionId);
-    if (session && session.agentKind && session.agentKind !== makerKind) {
-      if (typeof maker.closeSession === 'function') {
-        await maker.closeSession(sessionId);
+      // Persist user message immediately so both browser SSE and device-link see it
+      if (deps.persistMessage) {
+        await deps.persistMessage(sessionId, {
+          clientId: next.clientId,
+          role: 'user',
+          content: next.persistedContent || next.text,
+          createdAt: next.createdAt,
+          agentKind: dbKind,
+        });
       }
-      session = null;
+
+      session = maker.getSession(sessionId);
+      if (session && session.agentKind && session.agentKind !== makerKind) {
+        if (typeof maker.closeSession === 'function') {
+          await maker.closeSession(sessionId);
+        }
+        session = null;
+      }
+      if (!session) {
+        session = await maker.createSession({
+          id: sessionId,
+          agentKind: makerKind,
+          workingDir: next.workingDir || stored.workingDir,
+          // The composer owns the route for this message; the row only supplies the
+          // fallback when the item does not name one.
+          model: next.model || stored.model,
+          effort: next.effort || undefined,
+          permissionMode: next.permissionMode || undefined,
+          providerId: stored.providerId ?? undefined,
+          resumeSessionId: makerKind === toMakerAgentKind(stored.agentKind)
+            ? stored.sdkSessionId || undefined : undefined,
+        });
+      }
+
+    } catch (error) {
+      state.running = false;
+      state.active = null;
+      state.error = error instanceof Error ? error.message : String(error);
+      if ((state.generation ?? 0) === generation) state.items.unshift(next);
+      state.queuePaused = true;
+      emitProjection(sessionId);
+      throw error;
+    } finally {
+      prepared();
+      state.preparing = null;
     }
-    if (!session) {
-      session = await maker.createSession({
-        id: sessionId,
-        agentKind: makerKind,
-        workingDir: next.workingDir || stored.workingDir,
-        // The composer owns the route for this message; the row only supplies the
-        // fallback when the item does not name one.
-        model: next.model || stored.model,
-        effort: next.effort || undefined,
-        permissionMode: next.permissionMode || undefined,
-        providerId: stored.providerId ?? undefined,
-      });
+    if ((state.generation ?? 0) !== generation) {
+      return;
     }
 
     // Permission prompts and questions must reach a client before the turn can
@@ -147,33 +189,41 @@ export function createInputQueue(deps) {
     let turnError = null;
 
     const finish = () => {
-      if (finished) return;
+      if (finished || (state.generation ?? 0) !== generation) return;
       finished = true;
-      state.running = false;
+      state.settling = true;
+      if (turnError) state.queuePaused = true;
       state.unsubscribe?.();
       state.unsubscribe = null;
       state.active = null;
       emitProjection(sessionId);
       // A turn stopped before its final event still leaves what the user saw.
       if (!finalTextPersisted && assistantText.trim() && deps.persistMessage) {
-        void deps.persistMessage(sessionId, {
+        persistReply(sessionId, state, {
           clientId: turnAssistantClientId,
           role: 'assistant',
           content: assistantText,
           agentKind: dbKind,
-        }).catch(() => {});
+        });
       } else if (!finalTextPersisted && turnError && deps.persistMessage) {
-        void deps.persistMessage(sessionId, {
+        persistReply(sessionId, state, {
           clientId: turnAssistantClientId,
           role: 'error',
           content: JSON.stringify({ message: turnError }),
           agentKind: dbKind,
-        }).catch(() => {});
+        });
       }
       // Start the next queued item from a microtask so the terminal event of
       // this turn is delivered first.
-      void Promise.resolve().then(() => dispatch(sessionId)).catch(() => {});
+      state.settlement = Promise.resolve(state.persistence).then(() => {
+        state.running = false;
+        state.settling = false;
+        state.finish = null;
+        emitProjection(sessionId);
+      });
+      void state.settlement.then(() => dispatch(sessionId)).catch(() => {});
     };
+    state.finish = () => { finish(); return state.settlement; };
 
     let assistantText = '';
     let finalTextPersisted = false;
@@ -196,13 +246,13 @@ export function createInputQueue(deps) {
         if (event.data.isFinal) {
           // Final text carries the complete assistant answer for this turn.
           if (deps.persistMessage) {
-            void deps.persistMessage(sessionId, {
+            persistReply(sessionId, state, {
               clientId: turnAssistantClientId,
               role: 'assistant',
               content: event.data.text,
               agentMeta: event.agentMeta ?? null,
               agentKind: dbKind,
-            }).catch(() => {});
+            });
           }
           assistantText = '';
           finalTextPersisted = true;
@@ -256,6 +306,7 @@ export function createInputQueue(deps) {
     },
     async enqueue(sessionId, item) {
       const state = stateFor(sessionId);
+      if (state.disposed) throw new Error('session is closed');
       const text = (typeof item?.text === 'string' && item.text.trim())
         ? item.text
         : (typeof item?.content === 'string' && item.content.trim())
@@ -282,16 +333,37 @@ export function createInputQueue(deps) {
       return projection(sessionId);
     },
     async stop(sessionId) {
-      const session = deps.getMaker().getSession(sessionId);
-      if (session) await session.abort().catch(() => {});
-      const state = sessions.get(sessionId);
-      if (state) {
+      const state = stateFor(sessionId);
+      if (state.stopping) { await state.stopping; return projection(sessionId); }
+      state.queuePaused = true;
+      // Cancel asynchronous preparation, but retain an active turn's listener
+      // through abort so text already shown remains in history after stopping.
+      if (state.preparing) state.generation = (state.generation ?? 0) + 1;
+      const stop = (async () => {
+        await state.preparing;
+        const session = deps.getMaker()?.getSession(sessionId);
+        if (session) await session.abort();
+        await state.finish?.();
         state.running = false;
-        state.unsubscribe?.();
-        state.unsubscribe = null;
-        state.queuePaused = state.items.length > 0;
+        state.active = null;
+      })();
+      state.stopping = stop;
+      try { await stop; }
+      finally {
+        state.stopping = null;
+        emitProjection(sessionId);
       }
-      return emitProjection(sessionId);
+      return projection(sessionId);
+    },
+    async disposeSession(sessionId) {
+      const state = stateFor(sessionId);
+      state.disposed = true;
+      state.items = [];
+      await this.stop(sessionId);
+      await deps.getMaker()?.closeSession?.(sessionId);
+    },
+    async dispose() {
+      await Promise.all([...sessions.keys()].map(id => this.disposeSession(id)));
     },
     async steer(sessionId, item) {
       const session = deps.getMaker().getSession(sessionId);
@@ -331,6 +403,7 @@ export function createInputQueue(deps) {
         state.items[index] = {
           ...state.items[index],
           text: String(newText ?? ''),
+          persistedContent: String(newText ?? ''),
         };
       }
       return emitProjection(sessionId);
@@ -358,6 +431,7 @@ export function createInputQueue(deps) {
         }
       } else {
         state.queueInteractionLocks = state.queueInteractionLocks.filter((id) => id !== lockId);
+        await dispatch(sessionId);
       }
       return emitProjection(sessionId);
     },
@@ -369,6 +443,7 @@ export function createInputQueue(deps) {
         }
       } else {
         state.queueEditLocks = state.queueEditLocks.filter((id) => id !== clientId);
+        await dispatch(sessionId);
       }
       return emitProjection(sessionId);
     },
@@ -379,6 +454,14 @@ export function createInputQueue(deps) {
     },
     async resume(sessionId) {
       const state = stateFor(sessionId);
+      await state.stopping;
+      await state.settlement;
+      // Retrying a failed save never resends the completed model turn.
+      for (const message of state.unsaved?.values() ?? []) {
+        await deps.persistMessage(sessionId, message);
+        state.unsaved.delete(message.clientId);
+      }
+      state.error = null;
       state.queuePaused = false;
       await dispatch(sessionId);
       return emitProjection(sessionId);

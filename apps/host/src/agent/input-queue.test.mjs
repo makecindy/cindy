@@ -43,7 +43,7 @@ function createFakeMaker() {
   };
 }
 
-function createHarness() {
+function createHarness(overrides = {}) {
   const maker = createFakeMaker();
   const events = [];
   const persisted = [];
@@ -61,6 +61,7 @@ function createHarness() {
       persisted.push({ sessionId, ...input });
     },
     sent: () => {},
+    ...overrides,
   });
   return { maker, events, persisted, queue };
 }
@@ -72,6 +73,16 @@ const waitFor = async (check) => {
   }
   throw new Error('condition not reached');
 };
+
+// A Host restart drops the in-memory Maker session, not the SDK conversation.
+// The queue must hand the stored SDK identity to the real agent startup API.
+test('reopens a stored conversation with its SDK identity after a Host restart', async () => {
+  const h = createHarness({ readSession: async id => ({ id, agentKind: 'claude-code',
+    model: 'stored-model', workingDir: '/tmp', providerId: 'xd', sdkSessionId: 'sdk-existing' }) });
+  await h.queue.enqueue('restored-task', { clientId: 'after-restart', text: 'continue' });
+  assert.equal(h.maker.sessions.get('restored-task').options.resumeSessionId, 'sdk-existing');
+  await h.queue.dispose();
+});
 
 test('dispatches a queued message and stores the user and assistant rows', async () => {
   const h = createHarness();
@@ -129,11 +140,52 @@ test('stop aborts the running turn and keeps the queue', async () => {
   await h.queue.enqueue('task-3', { clientId: 'a', text: 'long' });
   await h.queue.enqueue('task-3', { clientId: 'b', text: 'later' });
   const session = h.maker.sessions.get('task-3');
+  session.emit({ type: 'text', data: { text: 'partial answer', isFinal: false } });
 
   const projection = await h.queue.stop('task-3');
   assert.equal(session.aborted, 1);
   assert.equal(projection.turnInProgress, false);
   assert.deepEqual(projection.pendingQueue.map((item) => item.clientId), ['b']);
+  assert.equal(h.persisted.find(row => row.role === 'assistant')?.content, 'partial answer');
+});
+
+test('failed abort retains the active turn and does not start a second message', async () => {
+  const h = createHarness();
+  await h.queue.enqueue('task-stop', { clientId: 'a', text: 'long' });
+  const session = h.maker.sessions.get('task-stop');
+  session.abort = async () => { throw new Error('abort failed'); };
+  await assert.rejects(h.queue.stop('task-stop'), /abort failed/);
+  await h.queue.enqueue('task-stop', { clientId: 'b', text: 'later' });
+  assert.equal(h.queue.projection('task-stop').turnInProgress, true);
+  assert.deepEqual(session.sent, ['long']);
+  session.emit({ type: 'text', data: { text: 'finished after failed abort', isFinal: true } });
+  session.emit({ type: 'done' });
+  await waitFor(() => !h.queue.projection('task-stop').turnInProgress);
+  assert.equal(h.persisted.find(row => row.role === 'assistant')?.content, 'finished after failed abort');
+  assert.deepEqual(session.sent, ['long']);
+});
+
+test('failed reply persistence pauses the queue and resume saves without rerunning the model', async () => {
+  let failWrite = true;
+  const saved = [];
+  const h = createHarness({ persistMessage: async (_id, message) => {
+    if (message.role === 'assistant' && failWrite) throw new Error('disk full');
+    saved.push(message);
+  } });
+  await h.queue.enqueue('task-save', { clientId: 'a', text: 'first' });
+  await h.queue.enqueue('task-save', { clientId: 'b', text: 'second' });
+  const session = h.maker.sessions.get('task-save');
+  session.emit({ type: 'text', data: { text: 'completed answer', isFinal: true } });
+  session.emit({ type: 'done' });
+  await waitFor(() => !h.queue.projection('task-save').turnInProgress);
+  assert.equal(h.queue.projection('task-save').error, 'disk full');
+  assert.equal(h.queue.projection('task-save').queuePaused, true);
+  assert.deepEqual(session.sent, ['first']);
+  failWrite = false;
+  await h.queue.resume('task-save');
+  assert.equal(saved.filter(row => row.role === 'assistant').length, 1);
+  assert.equal(saved.find(row => row.role === 'assistant').content, 'completed answer');
+  assert.deepEqual(session.sent, ['first', 'second']);
 });
 
 test('the projection carries every field the renderer reads', () => {
@@ -233,4 +285,58 @@ test('persists error message and updates projection when turn fails', async () =
   const errorMessages = h.persisted.filter((m) => m.role === 'error');
   assert.equal(errorMessages.length, 1);
   assert.match(errorMessages[0].content, /Auth failed: 403/);
+});
+
+// PR #9246: concurrent HTTP enqueue calls must not start two turns before either
+// completes. Existing coverage awaited enqueue A before submitting B (unit).
+test('concurrent enqueue reserves the turn before asynchronous preparation', async () => {
+  const h = createHarness();
+  await Promise.all([
+    h.queue.enqueue('task-1', { clientId: 'a', text: 'A' }),
+    h.queue.enqueue('task-1', { clientId: 'b', text: 'B' }),
+  ]);
+  assert.deepEqual(h.maker.sessions.get('task-1').sent, ['A']);
+  assert.deepEqual(h.queue.projection('task-1').pendingQueue.map((item) => item.text), ['B']);
+});
+
+test('preparation failure preserves queued input and allows explicit resume', async () => {
+  const maker = createFakeMaker();
+  let fail = true;
+  const queue = createInputQueue({ getMaker: () => maker, hub: { publish() {} }, sent() {},
+    readSession: async () => { if (fail) throw new Error('storage unavailable'); return { agentKind: 'claude-code' }; },
+  });
+  await assert.rejects(queue.enqueue('s', { clientId: 'a', text: 'A' }), /storage unavailable/);
+  assert.equal(queue.projection('s').turnInProgress, false);
+  assert.equal(queue.projection('s').pendingQueue[0]?.text, 'A');
+  fail = false;
+  await queue.resume('s');
+  assert.deepEqual(maker.sessions.get('s').sent, ['A']);
+});
+
+test('stop during preparation waits for creation and prevents a late send', async () => {
+  const maker = createFakeMaker();
+  let release;
+  const gate = new Promise(resolve => { release = resolve; });
+  const queue = createInputQueue({ getMaker: () => maker, hub: { publish() {} }, sent() {},
+    readSession: async () => { await gate; return { agentKind: 'cc', workingDir: '/tmp' }; },
+  });
+  const enqueue = queue.enqueue('s', { clientId: 'a', text: 'first' });
+  const stopped = queue.stop('s');
+  release();
+  await Promise.all([enqueue, stopped]);
+  assert.deepEqual(maker.getSession('s').sent, []);
+  assert.equal(maker.getSession('s').aborted, 1);
+  assert.equal(queue.projection('s').turnInProgress, false);
+});
+
+test('deleting a task aborts its turn and prevents queued or later messages', async () => {
+  const h = createHarness();
+  await h.queue.enqueue('s', { clientId: 'a', text: 'first' });
+  await h.queue.enqueue('s', { clientId: 'b', text: 'second' });
+  await h.queue.disposeSession('s');
+  h.maker.getSession('s').emit({ type: 'done' });
+  await h.queue.resume('s');
+  assert.deepEqual(h.maker.getSession('s').sent, ['first']);
+  assert.equal(h.queue.projection('s').pendingQueue.length, 0);
+  await assert.rejects(h.queue.enqueue('s', { text: 'late' }), /closed/);
 });

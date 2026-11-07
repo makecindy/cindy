@@ -31,35 +31,11 @@ export const HOST_DELEGATION_ENV = 'CINDY_HOST_API';
  * enabled but incomplete — a misconfigured client must not boot a second
  * runtime by accident.
  */
-/**
- * A running host writes `host-endpoint.json` next to its token. When the pid is
- * alive the desktop joins that runtime instead of building its own — the same
- * rule as the explicit environment variable, without requiring configuration.
- */
-function discoverRunningHost(userDataDir: string): string | null {
-  try {
-    const raw = fs.readFileSync(path.join(userDataDir, 'host-endpoint.json'), 'utf-8');
-    const parsed: unknown = JSON.parse(raw);
-    if (!parsed || typeof parsed !== 'object') return null;
-    const { pid, baseUrl } = parsed as { pid?: unknown; baseUrl?: unknown };
-    if (typeof pid !== 'number' || typeof baseUrl !== 'string') return null;
-    try {
-      process.kill(pid, 0);
-    } catch {
-      return null;
-    }
-    return baseUrl;
-  } catch {
-    return null;
-  }
-}
-
 export function resolveHostDelegation(input: {
   env: NodeJS.ProcessEnv;
   userDataDir: string;
 }): HostDelegationConfig | null {
-  const raw = input.env[HOST_DELEGATION_ENV]?.trim()
-    || discoverRunningHost(input.userDataDir);
+  const raw = input.env[HOST_DELEGATION_ENV]?.trim();
   if (!raw) return null;
   let url: URL;
   try {
@@ -68,7 +44,7 @@ export function resolveHostDelegation(input: {
     throw new Error(`${HOST_DELEGATION_ENV} must be an absolute URL (got "${raw}")`);
   }
   const loopback = url.hostname === '127.0.0.1' || url.hostname === 'localhost' || url.hostname === '[::1]';
-  if (!loopback) {
+  if (!loopback || url.protocol !== 'http:' || url.username || url.password) {
     throw new Error(`${HOST_DELEGATION_ENV} must point at loopback; the host never listens off-machine`);
   }
   const tokenPath = path.join(input.userDataDir, 'host-api-token');
@@ -317,6 +293,10 @@ export interface HostEventBridgeInput {
   readonly onSessionChanged?: (event: unknown) => void;
   readonly onMessageCreated?: (event: unknown) => void;
   readonly onProjectAliasesChanged?: () => void;
+  readonly onInputProjection?: (projection: unknown) => void;
+  readonly onInteractionRequest?: (payload: unknown) => void;
+  readonly onInteractionDismissed?: (payload: unknown) => void;
+  readonly onAuthChanged?: (payload: unknown) => void;
   readonly onError?: (error: unknown) => void;
 }
 
@@ -353,8 +333,15 @@ export function startHostEventBridge(input: HostEventBridgeInput): () => void {
             try {
               const payload = JSON.parse(line.slice(6));
               if (payload && typeof payload.seq === 'number') lastSeq = payload.seq;
-              input.broadcast(payload);
-              if (payload?.type === 'settings_changed') {
+              if (payload?.type === 'input_projection') {
+                input.onInputProjection?.(payload.projection);
+              } else if (payload?.type === 'interaction_request') {
+                input.onInteractionRequest?.({ sessionId: payload.sessionId, request: payload.request });
+              } else if (payload?.type === 'interaction_dismissed') {
+                input.onInteractionDismissed?.({ sessionId: payload.sessionId, requestId: payload.requestId, reason: payload.reason });
+              } else if (payload?.type === 'auth_changed') {
+                input.onAuthChanged?.(payload);
+              } else if (payload?.type === 'settings_changed') {
                 input.onSettingsChanged?.(payload.domain, payload.value);
               } else if (payload?.type === 'appearance_changed') {
                 input.onSettingsChanged?.('appearance', payload.appearance);
@@ -364,6 +351,8 @@ export function startHostEventBridge(input: HostEventBridgeInput): () => void {
                 input.onMessageCreated?.(payload);
               } else if (payload?.type === 'project_aliases_changed') {
                 input.onProjectAliasesChanged?.();
+              } else {
+                input.broadcast(payload);
               }
             } catch {
               // Keep the stream alive on a malformed frame.

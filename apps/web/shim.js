@@ -3,9 +3,9 @@
  *
  * The renderer is reused unchanged: this module publishes the same shape and
  * forwards the channels the host implements to the loopback HTTP API, using the
- * HttpOnly cookie the server sets when it serves the app. Unimplemented channels
- * reject with `HOST_CHANNEL_UNSUPPORTED` so the existing UI shows its own error
- * state instead of a fake success.
+ * HttpOnly cookie obtained through explicit browser pairing. Unknown actions
+ * reject with `HOST_CHANNEL_UNSUPPORTED`; optional reads retain fallback shapes
+ * for renderer boot. Explicit desktop-only placeholders still need auditing.
  */
 
 (function installCindyHostShim() {
@@ -106,7 +106,6 @@
 
   async function rpc(path, args) {
     const headers = { 'content-type': 'application/json' };
-    if (boot.apiToken) headers['authorization'] = `Bearer ${boot.apiToken}`;
     const response = await fetch(`/api${path}`, {
       method: 'POST',
       headers,
@@ -114,6 +113,7 @@
       credentials: 'same-origin',
     });
     if (!response.ok) {
+      if (response.status === 401) location.replace('/connect');
       const detail = await response.text().catch(() => '');
       throw Object.assign(new Error(detail || `host ${path} failed`), { code: `HTTP_${response.status}` });
     }
@@ -240,7 +240,7 @@
     return {
       accounts: [{
         accountKey: String(user.id ?? 'owner'),
-        displayName: user.name ?? '澈言',
+        displayName: user.name ?? 'Cindy',
         email: user.email ?? null,
         avatarUrl: user.avatar ?? null,
         kind: user.membershipKind === 'org' ? 'org' : 'personal',
@@ -266,8 +266,8 @@
     // Boot-time snapshot; the host has no microphone permission surface.
     // Voice settings/history come from owners/<key>/voice-input-data.v1.json.
     'voiceInput.getDataSnapshot': () => settingsMirror.voiceInput,
-    'auth.getState': () => rpc('/api/auth/state'),
-    'auth.refresh': () => rpc('/api/auth/refresh'),
+    'auth.getState': () => rpc('/auth/state'),
+    'auth.refresh': () => rpc('/auth/refresh'),
     // Renderer boot gates: answer with the host defaults instead of stalling.
     'maker.send': async (args) => {
       const [sessionId, message, createOpts] = args ?? [];
@@ -280,8 +280,7 @@
         agentKind: createOpts?.agentKind ?? 'claude-code',
       };
       const headers = { 'content-type': 'application/json' };
-      if (boot.apiToken) headers['authorization'] = `Bearer ${boot.apiToken}`;
-      const response = await fetch('/chat', {
+        const response = await fetch('/chat', {
         method: 'POST',
         headers,
         body: JSON.stringify(body),
@@ -509,7 +508,7 @@
       sourceErrors: STATIC.emptyList,
       scannedAt: Date.now(),
     }),
-    'localDb.sessionImport.start': () => ({ requestId: 'mock-import', items: [] }),
+    'localDb.sessionImport.start': () => unsupported('localDb.sessionImport.start'),
     'localDb.sessionImport.status': () => null,
     'localDb.sessionImport.cancel': () => null,
     'localDb.sessionImport.relocate': () => null,
@@ -517,31 +516,15 @@
     'maker.gitSafetySet': () => STATIC.gitSafetyOff,
     // The host already opened and migrated the owner database before serving.
     'localDb.ensureReady': () => ({ ready: true }),
-    // Local mode is the host's own profile: no cloud account, same local data.
-    'authEnterLocal': () => {
-      const state = routes['authInitialize']();
-      return { ...state, mode: state.user ? 'cloud' : 'local', canEnterApp: true };
-    },
+    // The browser cannot create a local identity. Preserve the Host's actual
+    // verdict, including canEnterApp=false when its account is signed out.
+    'authEnterLocal': () => routes['authInitialize'](),
     'authExitLocal': () => routes['authInitialize'](),
     // The host exposes no cloud login surface; the entry step still offers the
     // local profile, which is what the desktop client shows when signed out.
     'authGetLoginState': () => ({ success: true, state: { step: 'entry' } }),
-    'authInitialize': () => {
-      const boot = window.__cindyBoot?.auth ?? {};
-      return {
-        user: boot.user ?? null,
-        mode: boot.user ? 'cloud' : 'signed-out',
-        dataOwnerId: boot.ownerId ?? null,
-        ownerGeneration: 1,
-        canEnterApp: Boolean(boot.user),
-        isAuthenticated: Boolean(boot.user),
-        isCanary: false,
-        deviceId: boot.deviceId ?? 'host',
-        hasAccountDeletionReceipt: false,
-        accountDeletionRestored: false,
-        credentialStoreUnavailable: false,
-      };
-    },
+    'authInitialize': () => rpc('/auth/state', {}),
+    'authRefresh': () => rpc('/auth/refresh', {}).then(state => state.isAuthenticated),
     'checkEnvironment': () => {
       const harness = window.__cindyBoot?.harness ?? {};
       const entry = (ready) => (ready ? { status: 'passed' } : { status: 'failed', error: 'not installed' });
@@ -552,7 +535,7 @@
         pi: harness.pi ? { status: 'passed' } : { status: 'skipped' },
         ripgrep: harness.ripgrep ? { status: 'passed' } : { status: 'skipped' },
         allPassed,
-        platform: 'linux',
+        platform: window.__cindyBoot?.platform ?? navigator.platform,
       };
     },
     'localThemes.listSync': () => STATIC.localThemes,
@@ -691,7 +674,7 @@
       emit('appShortcuts.onChanged', settingsMirror.appShortcuts);
       return { overrides: {} };
     },
-    'maker.listActive': () => STATIC.emptyList,
+    'maker.listActive': (args) => rpc('/runtime/sessions', { options: args?.[0] }),
     'remoteDesktop.state': () => Promise.resolve(STATIC.remoteDesktopState),
     'sidebarSettings.claimLegacyRendererOwner': () => STATIC.claimDenied,
     'setUpdateRelaunchTheme': () => undefined,
@@ -765,7 +748,7 @@
     'maker.android.prepareAdb': () => ({
       supported: true,
       ready: false,
-      platform: 'linux',
+      platform: window.__cindyBoot?.platform ?? navigator.platform,
       path: null,
       source: null,
     }),
@@ -793,7 +776,7 @@
     'authSwitchAccount': () => undefined,
     'authBeginAddAccount': () => ({ success: false, code: 'NOT_SUPPORTED', state: null }),
     'authCancelAddAccount': () => undefined,
-    'authLogout': () => undefined,
+    'authLogout': async () => { const result = await rpc('/auth/logout', {}); location.replace('/connect'); return result; },
     'authGetAccountDeletionAvailability': () => ({ success: true, value: { available: false, reason: 'not_supported' } }),
     'authRequestAccountDeletionChallenge': () => ({ success: false, code: 'NOT_SUPPORTED' }),
     'authConfirmAccountDeletion': () => ({ success: false, code: 'NOT_SUPPORTED' }),
@@ -803,12 +786,12 @@
     'profileGetState': () => {
       const user = window.__cindyBoot?.auth?.user;
       return {
-        name: user?.name ?? '澈言',
+        name: user?.name ?? 'Cindy',
         avatarUrl: user?.avatar ?? null,
       };
     },
     'profileChooseAvatar': () => ({ canceled: true }),
-    'profileUpdate': () => ({ ok: true }),
+    'profileUpdate': () => unsupported('profileUpdate'),
     'windowBehavior.getLinuxCloseBehavior': () => 'minimize',
     'sidebarSettings.getProjectOrder': () => STATIC.emptyList,
     'workLouderCodex.publishTasks': () => undefined,
@@ -975,19 +958,19 @@
     'maker.visionBridgeSettingsSet': () => STATIC.visionBridgeSettings,
     'maker.visionBridgeSettingsReset': () => STATIC.visionBridgeSettings,
     'maker.getGoalStatus': () => null,
-    'maker.setGoal': () => ({ ok: true }),
-    'maker.clearGoal': () => ({ ok: true }),
-    'maker.pauseGoal': () => ({ ok: true }),
-    'maker.resumeGoal': () => ({ ok: true }),
+    'maker.setGoal': () => unsupported('maker.setGoal'),
+    'maker.clearGoal': () => unsupported('maker.clearGoal'),
+    'maker.pauseGoal': () => unsupported('maker.pauseGoal'),
+    'maker.resumeGoal': () => unsupported('maker.resumeGoal'),
     'maker.listCustomMcpServers': () => ({ servers: STATIC.emptyList }),
-    'maker.createCustomMcpServer': () => ({ ok: true }),
-    'maker.updateCustomMcpServer': () => ({ ok: true }),
-    'maker.deleteCustomMcpServer': () => ({ ok: true }),
-    'maker.refreshCustomMcpCodex': () => ({ ok: true }),
+    'maker.createCustomMcpServer': () => unsupported('maker.createCustomMcpServer'),
+    'maker.updateCustomMcpServer': () => unsupported('maker.updateCustomMcpServer'),
+    'maker.deleteCustomMcpServer': () => unsupported('maker.deleteCustomMcpServer'),
+    'maker.refreshCustomMcpCodex': () => unsupported('maker.refreshCustomMcpCodex'),
     'prepareHarnessUpdate': () => undefined,
     'anyActivityBlockingRelaunch': () => false,
     'relaunchForHarnessUpdate': () => undefined,
-    'maker.updateGoal': () => ({ ok: true }),
+    'maker.updateGoal': () => unsupported('maker.updateGoal'),
     'localAgent.developerConnection': () => ({ state: 'stopped' }),
     'localAgent.connections': () => STATIC.emptyList,
     'localAgent.answerConfirmation': () => true,
@@ -1046,12 +1029,11 @@
 
   function unsupported(path) {
     (window.__cindyRpcFailures ??= []).push({ path, error: 'unsupported' });
-    // In browser client mode, return safe fallback shapes to prevent unhandled rejections
-    // from crashing React UI trees and error boundaries.
-    if (/(set|clear|publish|cancel|note|mark|sync|log|report|record|update|close|open|show|hide|focus|blur|dismiss|remove|delete|add|post|send|save|write|touch|reset|prewarm|consume)/i.test(path)) {
-      return Promise.resolve(undefined);
-    }
-    if (/(list|get|load|read|fetch|find|search|scan|query|check|status|state|preview|connections|hosts|devices|models|items|tabs|providers|records)/i.test(path)) {
+    if (window.__cindyRpcFailures.length > 200) window.__cindyRpcFailures.shift();
+    // Read-only fallback shapes keep optional desktop panels from breaking boot.
+    // Match the method, not its namespace (settings.set must remain a write).
+    const method = path.split('.').at(-1);
+    if (/^(list|get|load|read|fetch|find|search|scan|query|check|status|state|preview|connections|hosts|devices|models|items|tabs|providers|records)/i.test(method)) {
       if (/(list|all|items|rows|history|notes|channels|devices|tasks|runs|sessions|plugins|commands|skills|refs|scopes|candidates|prompts|updates|shares|connections|hosts|tabs|records)/i.test(path)) {
         return Promise.resolve([]);
       }
@@ -1060,16 +1042,18 @@
       }
       return Promise.resolve(null);
     }
-    return Promise.resolve(undefined);
+    return Promise.reject(Object.assign(new Error(`HOST_CHANNEL_UNSUPPORTED: ${path}`), {
+      code: 'HOST_CHANNEL_UNSUPPORTED',
+    }));
   }
 
   const appVersion = window.__cindyBoot?.appVersion ?? '0.1.124';
   const SYNC_VALUES = {
-    platform: 'linux',
+    platform: window.__cindyBoot?.platform ?? navigator.platform,
     windowBackdropMaterial: 'none',
     appVersion,
     isPackaged: true,
-    locale: 'zh-CN',
+    locale: window.__cindyBoot?.locale ?? navigator.language,
   };
 
   /**
@@ -1086,9 +1070,9 @@
         try {
           const url = lastEventSeq != null ? `/events?since=${lastEventSeq}` : '/events';
           const headers = {};
-          if (boot.apiToken) headers['authorization'] = `Bearer ${boot.apiToken}`;
           if (lastEventSeq != null) headers['last-event-id'] = String(lastEventSeq);
           const response = await fetch(url, { credentials: 'same-origin', headers });
+          if (response.status === 401) { location.replace('/connect'); return; }
           if (!response.ok || !response.body) throw new Error(`events ${response.status}`);
           const reader = response.body.getReader();
           const decoder = new TextDecoder();
@@ -1110,7 +1094,10 @@
                 if (window.__hostEvents.length > 200) window.__hostEvents.shift();
                 // Interaction traffic has its own preload channels; everything
                 // else stays on the shared event stream.
-                if (parsed.type === 'interaction_request') {
+                if (parsed.type === 'auth_changed') {
+                  window.__cindyBoot.auth = { user: parsed.user, ownerId: parsed.dataOwnerId };
+                  emit('onAuthStateChange', parsed);
+                } else if (parsed.type === 'interaction_request') {
                   emit('maker.onInteractionRequest', { sessionId: parsed.sessionId, request: parsed.request });
                 } else if (parsed.type === 'interaction_dismissed') {
                   emit('maker.onInteractionDismissed', {
@@ -1121,19 +1108,19 @@
                 } else if (parsed.type === 'settings_changed') {
                   if (parsed.domain === 'appearance') {
                     settingsMirror.appearance = parsed.value;
-                    syncSnapshots.delete('appearanceSettings.getSync\u0000undefined');
+                    syncSnapshots.delete('appearanceSettings.getSync\u0000[]');
                     emit('appearanceSettings.onChanged', parsed.value);
                   } else if (parsed.domain === 'layout') {
                     settingsMirror.layout = parsed.value;
-                    syncSnapshots.delete('layout.getStateSync\u0000undefined');
+                    syncSnapshots.delete('layout.getStateSync\u0000[]');
                     emit('layout.onChanged', { layout: parsed.value });
                   } else if (parsed.domain === 'shortcuts') {
                     settingsMirror.appShortcuts = parsed.value;
-                    syncSnapshots.delete('appShortcuts.getState\u0000undefined');
+                    syncSnapshots.delete('appShortcuts.getState\u0000[]');
                     emit('appShortcuts.onChanged', parsed.value);
                   } else if (parsed.domain === 'sidebar') {
                     settingsMirror.sidebar = parsed.value;
-                    syncSnapshots.delete('sidebarSettings.loadSnapshot\u0000undefined');
+                    syncSnapshots.delete('sidebarSettings.loadSnapshot\u0000[]');
                     if (Array.isArray(parsed.value?.pinnedOrder)) {
                       emit('sidebarSettings.onPinnedOrderChanged', parsed.value.pinnedOrder, ownerStamp());
                     }
@@ -1143,7 +1130,7 @@
                   }
                 } else if (parsed.type === 'appearance_changed') {
                   settingsMirror.appearance = parsed.appearance;
-                  syncSnapshots.delete('appearanceSettings.getSync\u0000undefined');
+                  syncSnapshots.delete('appearanceSettings.getSync\u0000[]');
                   emit('appearanceSettings.onChanged', parsed.appearance);
                 } else if (parsed.type === 'session_changed') {
                   if (parsed.action === 'create') {
@@ -1220,6 +1207,7 @@
 
   /** Non-function members the preload exposes as plain values. */
   const VALUE_CHANNELS = Object.freeze({
+    'osRelease': window.__cindyBoot?.osRelease ?? '',
     'clientEndpoints.websiteUrl': 'https://cindy.app',
     'appDisplayVersion': appVersion,
     'appDisplayVersionDetail': `cindy-host (${appVersion})`,
@@ -1248,8 +1236,10 @@
       try {
         value = handler(args);
         (window.__cindyRpc ??= []).push({ path, ok: true });
+        if (window.__cindyRpc.length > 200) window.__cindyRpc.shift();
       } catch (error) {
         (window.__cindyRpcFailures ??= []).push({ path, error: String(error && error.message ? error.message : error) });
+        if (window.__cindyRpcFailures.length > 200) window.__cindyRpcFailures.shift();
         throw error;
       }
       if (cacheKey !== null) syncSnapshots.set(cacheKey, value);

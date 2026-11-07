@@ -2,19 +2,18 @@
 /**
  * Run the desktop against a cindy-host.
  *
- * The desktop joins a running host automatically (it reads host-endpoint.json);
- * this wrapper makes sure one exists, so `pnpm dev:host` never falls back to the
- * embedded runtime. When a host is already running it is reused as-is.
+ * This explicit developer entry reads host-endpoint.json and sets CINDY_HOST_API
+ * for its desktop child. Normal desktop startup does not discover a host.
+ * The wrapper starts a host when needed and reuses an existing one as-is.
  */
 import { spawn } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { resolveHostDataDir } from '../apps/host/src/profile-path.mjs';
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
-const userDataDir = process.env.CINDY_HOST_DATA_DIR?.trim()
-  || process.env.XDT_USER_DATA_DIR?.trim()
-  || path.join(process.env.XDG_CONFIG_HOME || path.join(process.env.HOME ?? '', '.config'), 'CindyGlobal');
+const userDataDir = resolveHostDataDir();
 const endpointFile = path.join(userDataDir, 'host-endpoint.json');
 
 function runningEndpoint() {
@@ -46,7 +45,7 @@ async function ensureRendererBundle() {
   const entry = path.join(repoRoot, 'apps/desktop/.vite/renderer/main_window/index.html');
   if (fs.existsSync(entry)) return;
   console.log('[dev:host] building the renderer bundle');
-  const build = spawn('pnpm', ['--filter', 'desktop', 'exec', 'vite', 'build', '--config', 'vite.renderer.config.ts'], {
+  const build = spawn(process.execPath, [process.env.npm_execpath, '--filter', 'desktop', 'exec', 'vite', 'build', '--config', 'vite.renderer.config.ts'], {
     cwd: repoRoot,
     stdio: 'inherit',
   });
@@ -79,10 +78,10 @@ if (!runningEndpoint()) {
   console.log(`[dev:host] cindy-host ready at ${endpoint.baseUrl}`);
 }
 
-const desktop = spawn('pnpm', ['--filter', 'desktop', 'dev', ...process.argv.slice(2)], {
+const desktop = spawn(process.execPath, [process.env.npm_execpath, '--filter', 'desktop', 'dev', ...process.argv.slice(2)], {
   cwd: repoRoot,
   stdio: 'inherit',
-  env: { ...process.env, XDT_USER_DATA_DIR: userDataDir },
+  env: { ...process.env, XDT_USER_DATA_DIR: userDataDir, CINDY_HOST_API: runningEndpoint().baseUrl },
 });
 
 const shutdown = (signal) => {

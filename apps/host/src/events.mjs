@@ -13,13 +13,14 @@
 export function createEventHub() {
   const subscribers = new Set();
   /** Last event per session so a late page can catch a running turn's tail. */
-  const recent = new Map();
+
   const RECENT_LIMIT = 200;
   const MAX_HISTORY = 1000;
   let currentSeq = 0;
   const history = [];
 
   return {
+    clear() { history.length = 0; },
     subscribe(listener) {
       subscribers.add(listener);
       return () => subscribers.delete(listener);
@@ -28,9 +29,6 @@ export function createEventHub() {
       if (!rawEvent || typeof rawEvent !== 'object') return null;
       currentSeq += 1;
       const event = { ...rawEvent, seq: currentSeq };
-      if (typeof event.sessionId === 'string') {
-        recent.set(event.sessionId, event);
-      }
       history.push(event);
       if (history.length > MAX_HISTORY) {
         history.shift();

@@ -11,6 +11,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 
 import { isAuthorized } from './api-token.mjs';
+import { createWebAuth, isLoopbackRequest, CONNECT_PAGE, CONNECT_SCRIPT } from './web-auth.mjs';
 
 const JSON_HEADERS = { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store' };
 
@@ -28,9 +29,7 @@ function send(response, status, body, extraHeaders = {}) {
 /** Cookie auth for the bundled web client; the bearer stays the CLI path. */
 function isWebAuthorized(request, deps) {
   if (isAuthorized(request.headers.authorization, deps.token)) return true;
-  const cookie = request.headers.cookie ?? '';
-  const match = /(?:^|;\s*)cindy_host_web=([^;]+)/.exec(cookie);
-  return Boolean(match && deps.webSession && match[1] === deps.webSession);
+  return deps.webAuth.accepts(request.headers.cookie);
 }
 
 const MIME = {
@@ -59,11 +58,10 @@ function serveWebApp(request, response, deps, urlPath) {
   let body = fs.readFileSync(file);
   if (relative === '/index.html') {
     // The shim must run before the app module: it defines window.electronAPI.
-    const boot = JSON.stringify(typeof deps.bootValues === 'function' ? deps.bootValues() : (deps.bootValues ?? {}));
+    const boot = JSON.stringify(typeof deps.bootValues === 'function' ? deps.bootValues() : (deps.bootValues ?? {})).replace(/</g, '\\u003c');
     const html = body.toString('utf8')
       .replace(/<head([^>]*)>/, `<head$1><script>window.__cindyBoot=${boot};</script><script src="/shim.js"></script>`);
     body = Buffer.from(html, 'utf8');
-    response.setHeader('set-cookie', `cindy_host_web=${deps.webSession}; HttpOnly; SameSite=Lax; Path=/`);
   }
   response.writeHead(200, {
     'content-type': MIME[path.extname(file)] ?? 'application/octet-stream',
@@ -76,10 +74,34 @@ function serveWebApp(request, response, deps, urlPath) {
   response.end(body);
 }
 
-export function createHostServer(deps) {
+export function createHostServer(input) {
+  const deps = { ...input, webAuth: input.webAuth ?? createWebAuth() };
   return createServer(async (request, response) => {
     try {
       const url = new URL(request.url ?? '/', 'http://127.0.0.1');
+      response.setHeader('referrer-policy', 'no-referrer');
+      response.setHeader('x-content-type-options', 'nosniff');
+      response.setHeader('x-frame-options', 'DENY');
+      if (!isLoopbackRequest(request)) { send(response, 403, { error: 'origin_not_allowed' }); return; }
+      if (request.method === 'POST' && url.pathname === '/web/pair') {
+        if (!isAuthorized(request.headers.authorization, deps.token)) { send(response, 401, { error: 'unauthorized' }); return; }
+        send(response, 200, { code: deps.webAuth.pair() });
+        return;
+      }
+      if (request.method === 'POST' && url.pathname === '/web/session') {
+        const body = await readJson(request);
+        const session = deps.webAuth.exchange(body.code);
+        if (!session) { send(response, 401, { error: 'pairing_expired' }); return; }
+        send(response, 200, { connected: true }, { 'set-cookie': `cindy_host_web=${session}; HttpOnly; SameSite=Strict; Path=/; Max-Age=43200` });
+        return;
+      }
+      if ((request.method === 'GET' || request.method === 'HEAD') && (url.pathname === '/connect' || url.pathname === '/connect.js'
+        || (url.pathname === '/' && !isWebAuthorized(request, deps)))) {
+        const script = url.pathname === '/connect.js';
+        response.writeHead(200, { 'content-type': script ? 'text/javascript; charset=utf-8' : 'text/html; charset=utf-8', 'cache-control': 'no-store' });
+        response.end(request.method === 'HEAD' ? undefined : script ? CONNECT_SCRIPT : CONNECT_PAGE);
+        return;
+      }
 
       // Resolve the bundle per request: a desktop build can remove and rebuild it
       // while the host keeps running, and a restart should not be required.
@@ -104,11 +126,17 @@ export function createHostServer(deps) {
           send(response, 401, { error: 'unauthorized' });
           return;
         }
-        const body = JSON.parse(await new Promise((resolve) => {
-          let raw = '';
-          request.on('data', (chunk) => { raw += chunk; });
-          request.on('end', () => resolve(raw || '{}'));
-        }));
+        const body = await readJson(request);
+        if (url.pathname === '/api/runtime/sessions') {
+          send(response, 200, deps.listRunningSessions(body.options));
+          return;
+        }
+        if (url.pathname === '/api/auth/logout') {
+          const result = await deps.logout();
+          deps.webAuth.clear();
+          send(response, 200, result, { 'set-cookie': 'cindy_host_web=; HttpOnly; SameSite=Strict; Path=/; Max-Age=0' });
+          return;
+        }
         // Settings the browser client renders: read from, and written to, the
         // Desktop's own files so both clients show one copy of the account.
         if (url.pathname === '/api/profile') { send(response, 200, await deps.profile()); return; }
@@ -318,15 +346,19 @@ export function createHostServer(deps) {
 
         const unsubscribe = deps.events.subscribe((event) => {
           if (response.writableEnded) return;
+          if (!isWebAuthorized(request, deps)) { response.end(); return; }
           const idLine = event.seq != null ? `id: ${event.seq}\n` : '';
           response.write(`${idLine}data: ${JSON.stringify(event)}\n\n`);
           response.flush?.();
         });
         const keepAlive = setInterval(() => {
           if (response.writableEnded) return;
+          if (!isWebAuthorized(request, deps)) { response.end(); return; }
           response.write(': ping\n\n');
         }, 15_000);
+        const revoke = deps.webAuth.onRevoke(() => response.end());
         request.on('close', () => {
+          revoke();
           clearInterval(keepAlive);
           unsubscribe();
         });
@@ -334,7 +366,7 @@ export function createHostServer(deps) {
       }
 
       if (request.method === 'GET' && url.pathname === '/health') {
-        send(response, 200, await deps.probe());
+        send(response, 200, isWebAuthorized(request, deps) ? await deps.probe() : { status: 'ok', service: 'cindy-host' });
         return;
       }
 
@@ -373,7 +405,9 @@ export function createHostServer(deps) {
           return;
         }
         if (url.pathname === '/logout') {
-          send(response, 200, await deps.logout());
+          const result = await deps.logout();
+          deps.webAuth.clear();
+          send(response, 200, result);
           return;
         }
         send(response, 200, { sessions: await deps.listSessions() });
@@ -389,4 +423,17 @@ export function createHostServer(deps) {
       send(response, 500, { error: 'internal_error', message: error instanceof Error ? error.message : String(error) });
     }
   });
+}
+
+/** Bound request memory before parsing; aborted requests must not hang forever. */
+async function readJson(request) {
+  const chunks = [];
+  let size = 0;
+  for await (const chunk of request) {
+    size += chunk.length;
+    if (size > 1024 * 1024) throw new Error('request too large');
+    chunks.push(chunk);
+  }
+  const body = JSON.parse(Buffer.concat(chunks).toString('utf8') || '{}');
+  return body && typeof body === 'object' && !Array.isArray(body) ? body : {};
 }

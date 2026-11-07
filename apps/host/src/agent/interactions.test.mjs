@@ -27,6 +27,8 @@ test('publishes the request and resolves the decision the client returns', async
     request: { requestId: 'req-1', kind: 'permission' },
   });
   assert.deepEqual(broker.pending('task-1').map((entry) => entry.requestId), ['req-1']);
+  assert.equal(broker.respond('another-task', 'req-1', { kind: 'permission', behavior: 'allow' }), false);
+  assert.equal(broker.pending('task-1').length, 1);
 
   assert.equal(
     broker.respond('task-1', 'req-1', { kind: 'permission', behavior: 'allow' }),
@@ -57,6 +59,25 @@ test('denies when the turn aborts and reports the dismissal', async () => {
   assert.equal(decision.behavior, 'deny');
   assert.equal(decision.reason, 'aborted');
   assert.deepEqual(broker.pending('task-2'), []);
+  assert.equal(events.filter(event => event.type === 'interaction_dismissed').length, 1);
+  assert.equal(events.at(-1).reason, 'aborted');
+});
+
+test('an answered request removes its abort listener and cannot dismiss a later request', async () => {
+  const events = [];
+  const broker = createInteractionBroker({ hub: { publish: event => events.push(event) } });
+  const session = createSession();
+  broker.attach(session, 'task');
+  const controller = new AbortController();
+  const first = session.listener({ requestId: 'reused', kind: 'permission' }, controller.signal);
+  broker.respond('task', 'reused', { kind: 'permission', behavior: 'allow' });
+  await first;
+  const second = session.listener({ requestId: 'reused', kind: 'permission' });
+  controller.abort();
+  assert.equal(broker.pending('task').length, 1);
+  assert.equal(events.filter(event => event.type === 'interaction_dismissed').length, 1);
+  broker.respond('task', 'reused', { kind: 'permission', behavior: 'deny' });
+  assert.equal((await second).behavior, 'deny');
 });
 
 test('unknown requests are rejected instead of silently accepted', () => {

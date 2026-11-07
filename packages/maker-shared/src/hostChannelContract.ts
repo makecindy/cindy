@@ -115,8 +115,8 @@ export const HOST_CONTRACT_CHANNELS: readonly HostChannelDef[] = [
   {
     desktopChannel: 'maker:list-active',
     webPath: 'maker.listActive',
-    hostPath: '/api/sessions/list',
-    body: () => null,
+    hostPath: '/api/runtime/sessions',
+    body: ([options]) => ({ options }),
   },
   {
     desktopChannel: 'maker:list-available-agents',
@@ -212,7 +212,8 @@ export const HOST_CONTRACT_CHANNELS: readonly HostChannelDef[] = [
     desktopChannel: 'maker:resolve-interaction',
     webPath: 'maker.resolveInteraction',
     hostPath: '/api/interactions/respond',
-    body: ([sessionId, requestId, decision]) => ({ sessionId, requestId, decision }),
+    body: ([requestId, decision]) => ({ requestId, decision }),
+    map: (response) => Boolean((response as { accepted?: boolean })?.accepted),
   },
 
   // --- Usage & Pricing ---

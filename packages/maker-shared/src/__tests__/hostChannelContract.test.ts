@@ -22,3 +22,18 @@ describe('HOST_CONTRACT_CHANNELS', () => {
     expect(entry?.desktopChannel).toBe('local-db:messages:estimatedSessionValue');
   });
 });
+
+// The preload passes two arguments. Shifting them made every approval return 404.
+it('preserves the preload interaction answer and acceptance result', () => {
+  const entry = HOST_CONTRACT_CHANNELS.find(c => c.desktopChannel === 'maker:resolve-interaction')!;
+  const decision = { behavior: 'allow' };
+  expect(entry.body?.(['request-1', decision])).toEqual({ requestId: 'request-1', decision });
+  expect(entry.map?.({ accepted: true })).toBe(true);
+  expect(entry.map?.({ accepted: false })).toBe(false);
+});
+
+it('asks for runtime sessions and preserves versioned snapshot options', () => {
+  const entry = HOST_CONTRACT_CHANNELS.find(c => c.desktopChannel === 'maker:list-active')!;
+  expect(entry.hostPath).toBe('/api/runtime/sessions');
+  expect(entry.body?.([{ summary: true, snapshotVersion: 2 }])).toEqual({ options: { summary: true, snapshotVersion: 2 } });
+});

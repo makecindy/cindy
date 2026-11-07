@@ -1,9 +1,13 @@
 # Cindy Host
 
-把 Cindy 从「Electron 优先的桌面应用」拆成两个独立产品：
+当前先基于 PR #9246 提供主动启用的实验性基础网页版，让用户从浏览器操作 Host 上的基础任务。
+普通桌面启动保持原状；不以完整迁移桌面功能为第一版前提。
+当前范围与未完成验收见 [基础网页版](basic-web.md)，实际修复记录见 [本地完善与验收](pr-9246-completion.md)。
 
-- **`cindy-host`**：后台常驻服务，持有 Runtime、Session、OAuth、插件与本地存储。
-- **客户端**：浏览器（现有 renderer 复用）与 Electron（可选外壳），都只通过同一套 HTTP/SSE API 使用 Host。
+代码中的两个入口：
+
+- **`cindy-host`**：按需启动的后台服务，提供任务、消息与模型调用等已接通的接口。
+- **客户端**：浏览器复用现有 renderer，通过 HTTP/SSE API 使用 Host；Electron 连接 Host 是显式可选模式。
 
 ## 文档
 
@@ -18,6 +22,9 @@
 
 ## 快速开始
 
+本地基础版试用优先使用 `pnpm preview:host`，它固定使用独立测试目录并自动打开浏览器。
+首次登录与验收情况见 [本机试用](basic-web.md#本机试用2026-11-07)。下面是底层 Host 命令。
+
 ```bash
 # 1) 启动 Host（首次可用 login 子命令复用现有 OAuth）
 CINDY_HOST_DATA_DIR=<profile> CINDY_HOST_OWNER=<owner> pnpm start-host
@@ -29,12 +36,12 @@ node --import tsx --import ./apps/host/src/loaders/register-raw.mjs apps/host/sr
 
 # 2) 浏览器客户端（Host 直接托管现有 renderer 构建产物）
 pnpm --filter desktop exec vite build --config vite.renderer.config.ts
-open http://127.0.0.1:3456/
+pnpm host:open
 
 # 注意：渲染产物 apps/desktop/.vite/renderer/main_window 会被 Desktop 构建清理；
 # Host 每收到请求时才解析该目录，重建后无需重启 Host。`pnpm dev:host` 会先补建它。
 
-# 3) Electron 作为客户端：自动加入已运行的 Host；没有就由脚本先拉起
+# 3) 显式选择 Electron 客户端模式：脚本复用已有 Host，没有则先拉起
 pnpm dev:host -- --mock
 #    也可以显式指定目标：
 CINDY_HOST_API=http://127.0.0.1:3456 pnpm --filter desktop dev
@@ -43,7 +50,7 @@ CINDY_HOST_API=http://127.0.0.1:3456 pnpm --filter desktop dev
 ## 当前边界
 
 - Host 只监听 `127.0.0.1`，所有数据接口要求 profile bearer 或本机 cookie。
-- 浏览器客户端已通过真实 Agent 的完整回合验证（发送 → 流式 → 停止 → 刷新恢复 → 权限确认）。
+- 当前已完成 macOS 上真实文本任务、刷新与 Host 重启续接；停止、权限确认和断线恢复仍待浏览器实测。
 - Electron 客户端模式覆盖任务、消息、供应商、能力、Agent 命令/技能、输入队列、交互与告警；
   插件执行、MCP、scheduler、device-link、记忆/文件工具仍由 Desktop Runtime 承担（见上表 TODO）。
 

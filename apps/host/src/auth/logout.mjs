@@ -7,10 +7,13 @@
  * a dead session on disk.
  */
 
-import { parseAuthSessionRecord } from '@cindy/auth-client';
+import { parseAuthSessionRecord, accountVaultKey } from '@cindy/auth-client';
+import { removeLoggedOutVaultAccount } from '../../../desktop/src/main/authAccountLogoutPolicy.js';
 
 import {
   AUTH_SESSION_KEY,
+  AUTH_ACCOUNT_VAULT_KEY,
+  AUTH_ACCOUNT_LOGOUT_TOMBSTONES_KEY,
   LEGACY_ACCOUNT_REFRESH_TOKEN_KEY,
   LEGACY_REFRESH_TOKEN_KEY,
   LEGACY_RESOURCE_REFRESH_TOKEN_KEY,
@@ -26,6 +29,24 @@ import {
  */
 export async function logoutHostSession(deps) {
   const record = parseAuthSessionRecord(deps.store.read(AUTH_SESSION_KEY));
+  // Persist the same tombstone Desktop observes before removing compatibility
+  // records. Otherwise opening Desktop restores the supposedly signed-out user.
+  if (deps.ownerId && record) {
+    const key = accountVaultKey(record.realm, deps.ownerId);
+    const raw = deps.store.read(AUTH_ACCOUNT_VAULT_KEY);
+    const vault = raw ? JSON.parse(raw) : { version: 1, activeAccountKey: null, resources: {}, passports: {} };
+    if (![1, 2].includes(vault.version) || !vault.resources || !vault.passports) throw new Error('Saved accounts are unavailable');
+    const tombstoneRaw = deps.store.read(AUTH_ACCOUNT_LOGOUT_TOMBSTONES_KEY);
+    const tombstones = tombstoneRaw ? JSON.parse(tombstoneRaw) : { version: 1, accountKeys: [] };
+    if (tombstones.version !== 1 || !Array.isArray(tombstones.accountKeys)) throw new Error('Saved account logout state is unavailable');
+    vault.loggedOutAccountKeys = [...new Set([...(vault.loggedOutAccountKeys ?? []), ...tombstones.accountKeys])];
+    removeLoggedOutVaultAccount(vault, { accountKey: key, realm: record.realm,
+      passportId: deps.passportId || vault.resources[key]?.metadata?.passportId || '',
+    });
+    vault.signedOutAt = Date.now();
+    deps.store.write(AUTH_ACCOUNT_LOGOUT_TOMBSTONES_KEY, JSON.stringify({ version: 1, accountKeys: vault.loggedOutAccountKeys }));
+    deps.store.write(AUTH_ACCOUNT_VAULT_KEY, JSON.stringify({ ...vault, version: 1 }));
+  }
   let serverRevoked = false;
   let detail;
 

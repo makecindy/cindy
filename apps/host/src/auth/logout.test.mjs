@@ -46,3 +46,24 @@ test('logout without a stored session is a no-op that still reports the state', 
   const result = await logoutHostSession({ store, refresh: async () => ({ [ACCESS]: 'x' }), logout: async () => {} });
   assert.deepEqual(result, { signedOut: true, serverRevoked: false, detail: 'no stored session' });
 });
+
+test('logout removes the active saved membership without deleting sibling accounts', async () => {
+  const a = JSON.stringify(['global', 'account-a']);
+  const b = JSON.stringify(['global', 'account-b']);
+  const passport = JSON.stringify(['global', 'passport']);
+  const metadata = membershipId => ({ membershipId, passportId: 'passport' });
+  const store = memoryStore([
+    [AUTH_SESSION_KEY, serializeAuthSessionRecord('global', 'stored-refresh')],
+    ['cindy_auth_accounts_v1', JSON.stringify({ version: 1, activeAccountKey: a,
+      resources: { [a]: { realm: 'global', metadata: metadata('account-a') }, [b]: { realm: 'global', metadata: metadata('account-b') } },
+      passports: { [passport]: { realm: 'global', passportId: 'passport', memberships: [metadata('account-a'), metadata('account-b')] } },
+    })],
+  ]);
+  await logoutHostSession({ store, ownerId: 'account-a', passportId: 'passport', refresh: async () => ({ [ACCESS]: 'bearer' }), logout: async () => {} });
+  const vault = JSON.parse(store.read('cindy_auth_accounts_v1'));
+  assert.equal(vault.resources[a], undefined);
+  assert.ok(vault.resources[b]);
+  assert.deepEqual(vault.passports[passport].memberships.map(m => m.membershipId), ['account-b']);
+  assert.deepEqual(JSON.parse(store.read('cindy_auth_account_logout_tombstones_v1')).accountKeys, [a]);
+  assert.equal(store.read(AUTH_SESSION_KEY), null);
+});

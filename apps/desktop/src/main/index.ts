@@ -1,7 +1,8 @@
 // Entry: Electron startup → bootstrap-electron.ts (dynamic import).
 import fixPath from 'fix-path';
 import { ensureMacPackageManagerPath } from './agentToolPath.js';
-import { app } from 'electron';
+import { app, utilityProcess } from 'electron';
+import { configureGhostSnapshotProcess } from './cindy-brain/ghostSnapshotCapability.js';
 import { execFileSync } from 'node:child_process';
 import path from 'node:path';
 import os from 'node:os';
@@ -62,9 +63,13 @@ initLogger({
   userDataDir: app.getPath('userData'),
   version: app.getVersion(),
 });
-// Profile root is a host fact injected once; storage modules that need it must
-// not import electron themselves (the Node host reuses them).
-configureUserDataDir(app.getPath('userData'));
+configureGhostSnapshotProcess((parentDir) => utilityProcess.fork(
+  path.join(__dirname, 'ghostSnapshotWorkerProcess.js'), [], {
+    cwd: parentDir,
+    stdio: ['ignore', 'ignore', 'pipe'],
+    serviceName: 'cindy-ghost-snapshot',
+  },
+));
 
 const log = createLogger('fix-path');
 log.debug(`[fix-path] before PATH=${process.env.PATH ?? ''}`);
@@ -301,6 +306,10 @@ const desktopDevInstanceOptions = (() => {
     profileKind: devFlags.profileKind,
   };
 })();
+
+// Pin shared storage after all profile/version/dev overrides. Capturing the
+// regional default above would make an isolated runtime write into that profile.
+configureUserDataDir(app.getPath('userData'));
 
 // Pin after the last userData setPath. Vite's main bundle require()s
 // @cindy/browser-control-runtime at chunk load (before this body), so

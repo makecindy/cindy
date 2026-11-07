@@ -27,3 +27,17 @@ export async function listActiveSessions(storage) {
       updatedAt: session.updatedAt,
     }));
 }
+
+/** Match maker:list-active: persisted task status is not a live turn status. */
+export function listRunningSessions(maker, options) {
+  const sessions = (maker?.listActiveSessions() ?? []).map(session => ({
+    sessionId: session.id,
+    agentKind: session.agentKind,
+    workDir: session.workDir,
+    capabilities: session.capabilities,
+    isTurnRunning: session.isTurnRunning(),
+  }));
+  return options?.summary === true && options?.snapshotVersion === 2
+    ? { format: 'active-sessions-v2', sessions }
+    : sessions;
+}

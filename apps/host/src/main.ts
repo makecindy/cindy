@@ -12,7 +12,7 @@ import { fileURLToPath } from 'node:url';
 import { createDbClientForHandle } from '../../desktop/src/main/localDb/client/createDbClientForHandle.js';
 import { OwnerSessionStorage } from '../../desktop/src/main/localDb/sessionStorageAdapter.js';
 import { getDbClient, setCurrentDbClient } from '../../desktop/src/main/localDb/client/current.ts';
-import { readCachedBinaryStatus } from '../../desktop/src/main/agent-binaries/binaryStatus.js';
+import { AGENT_BINARY_LAYOUT, readCachedBinaryStatus } from '../../desktop/src/main/agent-binaries/binaryStatus.js';
 import { openOwnerDatabase, OwnerDatabaseError } from '../../desktop/src/main/localDb/startupCore.js';
 import { discoverHostOwner, ownerDatabasePath, resolveHostDataDir, resolveHostRegion } from './profile-path.mjs';
 import { acquireHostRuntimeLease, type HostRuntimeLease } from './runtime-lock.js';
@@ -21,8 +21,9 @@ import { refreshHostSession } from './auth/refresh.mjs';
 import { configureHostOwner, readClaudeSubscriptionState } from './agent/claude-auth.mjs';
 import { attachAgentsToMakerMemory, createHostMemoryManager, createHostMemoryMcpProviders } from './agent/memory.mjs';
 import { createHostAgentGraph } from './agent/runtime.mjs';
-import { readGatewayCredentials } from './agent/gateway.mjs';
+import { readGatewayCredentials, fetchGatewayCredentials } from './agent/gateway.mjs';
 import { listProviders } from './agent/providers.mjs';
+import { createProviderRouteResolver } from './agent/provider-credentials.mjs';
 import { createHostHistoryReader, readMessagesList, readMessagesAroundClientId } from './agent/history.js';
 import { runLoginCommand } from './login-cli.mjs';
 import { readOrCreateApiToken } from './api-token.mjs';
@@ -33,7 +34,7 @@ import { readAuthEndpoints } from './auth/endpoints.mjs';
 import { logoutHostSession } from './auth/logout.mjs';
 import { listInstalledPlugins } from './plugins.mjs';
 import { listInstalledGhosts } from './plugins-installed.ts';
-import { listActiveSessions } from './sessions.mjs';
+import { listActiveSessions, listRunningSessions } from './sessions.mjs';
 import {
   readProfileSettings,
   writeAppearanceSettingsPatch,
@@ -41,9 +42,11 @@ import {
   writeLayout,
   writeSidebarSettings,
 } from './profile-settings.mjs';
-import { createPreparedLinuxCredentialStore } from './credentials/store.mjs';
+import { createCredentialStore } from './credentials/store.mjs';
 import { createHostServer } from './server.mjs';
-import { createDeviceLinkService } from './device-link/service.mjs';
+import { createSnapshotProcess } from './snapshot-process.mjs';
+import { configureGhostSnapshotProcess } from '../../desktop/src/main/cindy-brain/ghostSnapshotCapability.js';
+import { withCrossProcessLock } from '../../desktop/src/main/device-link/crossProcessLock.js';
 import { createChatHandler } from './chat.mjs';
 import { createEventHub } from './events.mjs';
 import { createInputQueue } from './agent/input-queue.mjs';
@@ -56,6 +59,7 @@ import { projectHistoryView } from '@cindy/maker-shared/message-window';
 import { isDefaultDraftSessionTitle, normalizeAutoTitle } from '@cindy/maker-shared/session-title';
 
 const DEFAULT_VOICE_INPUT_SETTINGS = getDefaultVoiceInputSettings();
+configureGhostSnapshotProcess(createSnapshotProcess);
 const VALID_EFFORTS: Record<string, true> = {
   minimal: true, low: true, medium: true, high: true, xhigh: true, max: true, ultra: true,
 };
@@ -72,7 +76,9 @@ function parsePermissionMode(value: unknown): PermissionMode | undefined {
 }
 
 const command = process.argv[2];
-if (command === 'status') {
+if (command === '--help' || command === '-h') {
+  console.log('Usage: cindy-host [serve|login [--region=cn|global] [--method=<id>]|status [--json]]');
+} else if (command === 'status') {
   // Sanitized login state for scripts and for the operator: never tokens.
   try {
     const state = await readAdoptedSessionState({
@@ -103,7 +109,8 @@ if (command === 'status') {
   );
   process.exitCode = 2;
 } else {
-const PORT = 3456;
+const PORT = Number(process.env.CINDY_HOST_PORT ?? '3456');
+if (!Number.isInteger(PORT) || PORT < 0 || PORT > 65535) throw new Error('CINDY_HOST_PORT must be a valid port');
 /** Repo layout: apps/host/src → apps/desktop/{drizzle,native}. */
 const desktopRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../desktop');
 
@@ -121,10 +128,10 @@ const runtime: RuntimeState = { state: 'uninitialized', owner: null, storage: 'u
 /** Resolved dev checkout binary for one harness, or null when absent. */
 function harnessBinaryPath(kind: 'claude-code' | 'codex' | 'pi'): string | null {
   const layout = kind === 'claude-code'
-    ? { dir: 'claude-code-bin', file: 'claude' }
+    ? { dir: 'claude-code-bin', file: AGENT_BINARY_LAYOUT['claude-code'].binaryName }
     : kind === 'codex'
-      ? { dir: 'codex-package-bin', file: path.join('bin', 'codex') }
-      : { dir: 'pi-bin', file: 'pi' };
+      ? { dir: 'codex-package-bin', file: AGENT_BINARY_LAYOUT.codex.binaryName }
+      : { dir: 'pi-bin', file: AGENT_BINARY_LAYOUT.pi.binaryName };
   const status = readCachedBinaryStatus({
     kind,
     isPackaged: false,
@@ -141,10 +148,10 @@ const platformKey = `${process.platform}-${process.arch}`;
 function harnessStatus(): Record<string, boolean> {
   return Object.fromEntries(HARNESS_KINDS.map((kind) => {
     const layout = kind === 'claude-code'
-      ? { dir: 'claude-code-bin', file: 'claude' }
+      ? { dir: 'claude-code-bin', file: AGENT_BINARY_LAYOUT['claude-code'].binaryName }
       : kind === 'codex'
-        ? { dir: 'codex-package-bin', file: path.join('bin', 'codex') }
-        : { dir: 'pi-bin', file: 'pi' };
+        ? { dir: 'codex-package-bin', file: AGENT_BINARY_LAYOUT.codex.binaryName }
+        : { dir: 'pi-bin', file: AGENT_BINARY_LAYOUT.pi.binaryName };
     const status = readCachedBinaryStatus({
       kind,
       isPackaged: false,
@@ -192,7 +199,7 @@ const ACCOUNT_DEFAULT_EFFORT = 'medium';
 async function resolveAccountUser(): Promise<AccountUser | null> {
   const realm = (account.realm ?? resolveHostRegion()) as 'cn' | 'global';
   const endpoints = readAuthEndpoints(realm);
-  const store = await createPreparedLinuxCredentialStore({
+  const store = await createCredentialStore({
     userDataDir: resolveHostDataDir(),
     keyringApplication: process.env.CINDY_HOST_KEYRING_APPLICATION?.trim() || undefined,
   });
@@ -208,10 +215,11 @@ async function resolveAccountUser(): Promise<AccountUser | null> {
     store,
     refresh: (token) => client.refresh(token),
   });
-  currentSessionToken = sessionToken;
   const me = await client.getMe(sessionToken) as Record<string, any>;
   const membership = me?.membership as Record<string, any> | undefined;
   if (!membership || typeof membership.id !== 'string' || !membership.id) return null;
+  if (runtime.owner && runtime.owner !== membership.id) throw new Error('The signed-in account does not match the active Host profile');
+  currentSessionToken = sessionToken;
   const email = typeof membership.email === 'string' ? membership.email : null;
   const displayName = typeof membership.displayName === 'string' ? membership.displayName : '';
   return {
@@ -237,21 +245,27 @@ async function resolveAccountUser(): Promise<AccountUser | null> {
 /** Real account profile from the adopted session; null until it resolves. */
 let accountUser: AccountUser | null = null;
 let currentSessionToken: string | null = null;
-let deviceLinkService: ReturnType<typeof createDeviceLinkService> | null = null;
 let activeOwner: string | null = null;
 let closeStorage: (() => Promise<void>) | null = null;
 let sessionStorage: OwnerSessionStorage | null = null;
 let runtimeLease: HostRuntimeLease | null = null;
 let refreshTimer: NodeJS.Timeout | null = null;
 
+let authClosed = false;
+let authRefreshFlight: Promise<boolean> | null = null;
 async function refreshAuthSession(): Promise<boolean> {
+  if (authClosed) return false;
+  if (authRefreshFlight) return authRefreshFlight;
+  authRefreshFlight = performAuthRefresh().finally(() => { authRefreshFlight = null; });
+  return authRefreshFlight;
+}
+async function performAuthRefresh(): Promise<boolean> {
   try {
     const user = await resolveAccountUser();
     if (user) {
       accountUser = user;
       account = { authenticated: true, realm: account.realm ?? resolveHostRegion() };
-      eventHub.publish({ type: 'auth_changed', authenticated: true, user });
-      ensureDeviceLinkRunning();
+      eventHub.publish({ type: 'auth_changed', ...projectAuthState() });
       return true;
     }
     return false;
@@ -338,8 +352,18 @@ async function ensureRuntime(ownerId: string): Promise<void> {
   runtime.storage = 'ready';
   delete runtime.detail;
 
+  // Resolve the account after acquiring the profile lease and before assembling
+  // agents, so a fresh login can receive its managed model connection.
+  if (!currentSessionToken) {
+    const state = await readAdoptedSessionState({ userDataDir: dataDir });
+    account = { authenticated: false, realm: state.realm };
+    if (state.authenticated) await refreshAuthSession();
+  }
+
   const claudeBinary = harnessBinaryPath('claude-code');
-  if (claudeBinary) {
+  const codexBinary = harnessBinaryPath('codex');
+  const piBinary = harnessBinaryPath('pi');
+  if (claudeBinary || codexBinary || piBinary) {
     // Prefer the already-authorised Cindy gateway key; fall back to the CLI's own
     // subscription login. Both lanes share the same agent class and storage.
     const gateway = await readGatewayCredentials({
@@ -349,7 +373,12 @@ async function ensureRuntime(ownerId: string): Promise<void> {
       // knows the profile's owner hash (as the existing data directories show).
       ownerKey: process.env.CINDY_HOST_OWNER_KEY?.trim() || undefined,
       keyringApplication: process.env.CINDY_HOST_KEYRING_APPLICATION?.trim() || undefined,
-    }).catch(() => null);
+    }).catch(() => null) ?? await fetchGatewayCredentials({
+      sessionToken: currentSessionToken, region: account.realm ?? resolveHostRegion(),
+    }).catch((error: unknown) => {
+      console.warn('[host] model access unavailable:', error instanceof Error ? error.message : 'request failed');
+      return null;
+    });
     // Memory uses the same owner-scoped store Desktop reads, so a task started
     // here sees the same memories as a task started there.
     makerMemory = createHostMemoryManager({ userDataDir: dataDir, ownerId });
@@ -357,9 +386,14 @@ async function ensureRuntime(ownerId: string): Promise<void> {
     // at construction, and native-agent syncoff needs the agents that do not exist yet.
     if (makerMemory.isEnabled()) await makerMemory.enable({ skipAgentSync: true });
     agentGraph = createHostAgentGraph({
+      resolveProviderRoute: createProviderRouteResolver({
+        catalog: () => listProviders({ gateway, ownerId }),
+        store: await createCredentialStore({ userDataDir: dataDir }),
+        ownerId,
+      }),
       binaryPath: claudeBinary,
-      codexBinaryPath: harnessBinaryPath('codex') ?? undefined,
-      piBinaryPath: harnessBinaryPath('pi') ?? path.join(dataDir, 'pi', '1.4.0', 'pi'),
+      codexBinaryPath: codexBinary ?? undefined,
+      piBinaryPath: piBinary ?? undefined,
       storage: sessionStorage,
       gateway,
       makerMemory,
@@ -369,7 +403,7 @@ async function ensureRuntime(ownerId: string): Promise<void> {
     attachAgentsToMakerMemory(makerMemory, agentGraph.instances);
     // Second step, now that the agents exist: turn their native memory off.
     if (makerMemory.isEnabled()) void makerMemory.enable();
-    runtime.agents = Array.from(new Set([...agentGraph.agents, 'pi']));
+    runtime.agents = [...agentGraph.agents];
     runtime.agentLane = gateway ? 'gateway-key' : 'claude-subscription';
     gatewayCredentials = gateway;
   }
@@ -395,6 +429,7 @@ const readSessionForRun = async (sessionId: string) => {
     model: row.model,
     workingDir: row.workingDir,
     providerId: row.providerId,
+    sdkSessionId: row.sdkSessionId,
   };
 };
 /** Web client cross-engine switches: registered as an intent, applied on next enqueue. */
@@ -426,14 +461,14 @@ function projectAgentSwitchIntent(intent: {
 async function applyPendingAgentSwitch(sessionId: string): Promise<void> {
   const intent = pendingAgentSwitches.get(sessionId);
   if (!intent) return;
-  pendingAgentSwitches.delete(sessionId);
   await serverDeps.updateSession(sessionId, {
     agentKind: intent.targetAgentKind,
     model: intent.model,
-    ...(intent.providerId !== null ? { providerId: intent.providerId } : {}),
+    providerId: intent.providerId,
     ...(intent.effort ? { effort: intent.effort } : {}),
     ...(intent.fastMode !== undefined ? { fastMode: intent.fastMode } : {}),
   });
+  pendingAgentSwitches.delete(sessionId);
   eventHub.publish({ type: 'session_changed', sessionId, patch: { agentSwitchIntent: null } });
 }
 const interactionBroker = createInteractionBroker({ hub: eventHub });
@@ -454,7 +489,7 @@ async function insertSessionMessage(sessionId: string, input: Record<string, unk
   const clientId = typeof input.clientId === 'string' ? input.clientId : '';
   const role = input.role;
   if (!clientId) throw new Error('clientId is required');
-  if (role !== 'user' && role !== 'assistant' && role !== 'system' && role !== 'tool') {
+  if (role !== 'user' && role !== 'assistant' && role !== 'error' && role !== 'tool_use' && role !== 'tool_result') {
     throw new Error('unsupported message role');
   }
   const content = input.content;
@@ -475,19 +510,17 @@ async function insertSessionMessage(sessionId: string, input: Record<string, unk
     createdAt,
     agentMeta: input.agentMeta ? JSON.stringify(input.agentMeta) : null,
     agentKind: typeof input.agentKind === 'string' ? (input.agentKind === 'claude-code' ? 'cc' : input.agentKind) : null,
-  });
+  }).onConflictDoNothing({ target: [messageTable.sessionId, messageTable.clientId] });
   const rows = await getDbClient().drizzle.select().from(messageTable)
-    .where(eq(messageTable.id, id)).limit(1);
+    .where(and(eq(messageTable.sessionId, sessionId), eq(messageTable.clientId, clientId))).limit(1);
   const row = rows[0];
   if (!row) throw new Error('created message is unavailable');
   const camel = messageToCamel(row as never);
-  eventHub.publish({ type: 'message_created', sessionId, messageId: id, message: camel });
+  if (row.id === id) eventHub.publish({ type: 'message_created', sessionId, messageId: id, message: camel });
   return camel;
 }
 
 const apiToken = readOrCreateApiToken(resolveHostDataDir());
-// Deterministic cookie for the bundled web client bound to profile token; stable across host restarts.
-const webSession = createHash('sha256').update(apiToken + ':web').digest('base64url');
 const webDir = process.env.CINDY_HOST_WEB_DIR?.trim()
   || path.resolve(desktopRoot, '.vite', 'renderer', 'main_window');
 /** The profile the browser client reads: same account, same files, no copy. */
@@ -511,7 +544,6 @@ function writeProfileAppearance(patch: unknown) {
 
 const serverDeps = {
   token: apiToken,
-  webSession,
   shimPath: path.resolve(desktopRoot, '..', 'web', 'shim.js'),
   // Inline the shared defaults so the synchronous snapshot API can answer.
   // The browser client reads the Desktop's own settings files, so the snapshot
@@ -519,12 +551,14 @@ const serverDeps = {
   bootValues: () => {
     const profile = currentProfileSettings();
     return {
-      appVersion: '0.1.124',
-      apiToken,
+      appVersion: createRequire(import.meta.url)('../../desktop/package.json').version,
+      platform: process.platform,
+      osRelease: os.release(),
+      locale: profile.appearance?.locale ?? 'en',
       voiceInput: profile.voiceInput,
       harness: harnessStatus(),
-      auth: account.authenticated
-        ? { user: accountUser ?? { id: runtime.owner ?? 'owner', name: runtime.owner ?? 'owner', email: null, avatar: null }, ownerId: runtime.owner }
+      auth: account.authenticated && accountUser
+        ? { user: accountUser, ownerId: runtime.owner }
         : {},
       appearance: profile.appearance,
       layout: profile.layout,
@@ -578,20 +612,18 @@ const serverDeps = {
     realm: account.realm,
     user: accountUser,
   }),
-  getAuthState: async () => ({
-    owner: runtime.owner,
-    authenticated: account.authenticated,
-    realm: account.realm,
-    user: accountUser,
-  }),
+  getAuthState: async () => { await startup; return projectAuthState(); },
+  listRunningSessions: (options: unknown) => listRunningSessions(agentGraph?.maker, options),
   refreshAuth: async () => {
     const ok = await refreshAuthSession();
-    return { ok, authenticated: account.authenticated, user: accountUser };
+    return { ok, ...projectAuthState() };
   },
   logout: async () => {
+    authClosed = true;
+    await authRefreshFlight;
     const realm = (account.realm ?? resolveHostRegion()) as 'cn' | 'global';
     const endpoints = readAuthEndpoints(realm);
-    const store = await createPreparedLinuxCredentialStore({
+    const store = await createCredentialStore({
       userDataDir: resolveHostDataDir(),
       keyringApplication: process.env.CINDY_HOST_KEYRING_APPLICATION?.trim() || undefined,
     });
@@ -603,16 +635,36 @@ const serverDeps = {
       clientType: 'desktop',
       fetch: (input, init) => globalThis.fetch(input, init),
     });
-    const result = await logoutHostSession({
-      store,
-      refresh: (token) => client.refresh(token),
-      logout: (accessToken) => client.logout(accessToken),
-    });
+    const result = await withCrossProcessLock(
+      path.join(resolveHostDataDir(), '.cindy-auth-accounts-v1.lock'),
+      { label: 'auth-account-vault', waitMs: 5000 },
+      async (lock) => {
+        if (!lock.held) throw new Error('Saved account credentials are busy; retry logout');
+        return logoutHostSession({
+          store, ownerId: accountUser?.id, passportId: accountUser?.passportId,
+          refresh: (token) => client.refresh(token),
+          logout: (accessToken) => client.logout(accessToken),
+        });
+      },
+    );
+    if (refreshTimer) { clearInterval(refreshTimer); refreshTimer = null; }
+    await inputQueue.dispose();
+    await (agentGraph?.maker as { shutdown?: () => Promise<void> } | undefined)?.shutdown?.();
+    agentGraph = null;
+    gatewayCredentials = null;
+    accountUser = null;
+    await closeStorage?.();
+    closeStorage = null;
+    sessionStorage = null;
+    activeOwner = null;
+    runtimeLease?.release();
+    runtimeLease = null;
+    runtime.state = 'uninitialized';
+    runtime.storage = 'unopened';
+    runtime.owner = null;
+    eventHub.clear();
+    eventHub.publish({ type: 'auth_changed', ...projectAuthState(), authenticated: false, isAuthenticated: false, user: null, canEnterApp: false, mode: 'signed-out' });
     account = { authenticated: false, realm: null };
-    if (deviceLinkService) {
-      deviceLinkService.stop();
-      deviceLinkService = null;
-    }
     currentSessionToken = null;
     return result;
   },
@@ -646,19 +698,19 @@ const serverDeps = {
     }));
   },
   setProjectAlias: async (input: { projectKey?: unknown; alias?: unknown }) => {
-    const { upsertProjectAlias } = await import('../../desktop/src/main/localDb/ipc/projectAliases.ts');
+    const { upsertProjectAlias } = await import('../../desktop/src/main/localDb/ipc/projectAliasesCore.ts');
     const result = await upsertProjectAlias(input.projectKey, input.alias);
     eventHub.publish({ type: 'project_aliases_changed' });
     return result;
   },
   deleteProjectAlias: async (input: { projectKey?: unknown }) => {
-    const { deleteProjectAlias } = await import('../../desktop/src/main/localDb/ipc/projectAliases.ts');
+    const { deleteProjectAlias } = await import('../../desktop/src/main/localDb/ipc/projectAliasesCore.ts');
     await deleteProjectAlias(input.projectKey);
     eventHub.publish({ type: 'project_aliases_changed' });
     return { ok: true };
   },
   listRecentWorkdirs: async () => {
-    const { listRecentWorkdirs } = await import('../../desktop/src/main/localDb/ipc/recentWorkdirs.ts');
+    const { listRecentWorkdirs } = await import('../../desktop/src/main/localDb/ipc/recentWorkdirsCore.ts');
     return listRecentWorkdirs();
   },
   interruptedPending: async () => {
@@ -705,7 +757,7 @@ const serverDeps = {
       .where(eq(sessionTable.id, sessionId)).limit(1);
     const row = rows[0];
     if (!row) throw new Error('session not found');
-    eventHub.publish({ type: 'session_changed', sessionId, patch, status: row.status });
+    eventHub.publish({ type: 'session_changed', action: 'update', sessionId, patch, status: row.status });
     return sessionToCamel({ ...row, messageCount: 0 });
   },
   /**
@@ -786,18 +838,22 @@ const serverDeps = {
     if (!sessionStorage) throw new Error('agent runtime is not ready');
     const existing = await sessionStorage.get(sessionId);
     if (!existing) return { deleted: false, sessionId };
+    await inputQueue.disposeSession(sessionId);
+    pendingAgentSwitches.delete(sessionId);
     await sessionStorage.delete(sessionId);
     provisionalSessionIds.delete(sessionId);
-    eventHub.publish({ type: 'session_changed', sessionId, status: 'deleted' });
+    eventHub.publish({ type: 'session_changed', action: 'delete', sessionId, status: 'deleted' });
     return { deleted: true, sessionId };
   },
   discardProvisionalSession: async (sessionId: string) => {
     if (!provisionalSessionIds.has(sessionId) || !sessionStorage) {
       return { discarded: false, remaining: Boolean(await sessionStorage?.get(sessionId)) };
     }
+    await inputQueue.disposeSession(sessionId);
+    pendingAgentSwitches.delete(sessionId);
     await sessionStorage.delete(sessionId);
     provisionalSessionIds.delete(sessionId);
-    eventHub.publish({ type: 'session_changed', sessionId, status: 'deleted' });
+    eventHub.publish({ type: 'session_changed', action: 'delete', sessionId, status: 'deleted' });
     return { discarded: true, remaining: false };
   },
   commitProvisionalSession: async (sessionId: string) => {
@@ -813,7 +869,7 @@ const serverDeps = {
     };
     if (Object.keys(input).some((key) => allowed[key] !== true)) throw new Error('unsupported session field');
     const agentKind = input.agentKind === 'codex' ? 'codex' : input.agentKind === 'pi' ? 'pi' : 'claude-code';
-    const supportedAgents = Array.from(new Set([...(agentGraph.agents ?? []), 'pi']));
+    const supportedAgents = agentGraph.agents ?? [];
     if (!supportedAgents.includes(agentKind)) throw new Error(`Agent '${agentKind}' is not registered`);
     const available = await listProviders({ gateway: gatewayCredentials, ownerId: runtime.owner });
     const requestedProviderId = typeof input.providerId === 'string' && input.providerId ? input.providerId : null;
@@ -857,7 +913,7 @@ const serverDeps = {
       .where(eq(sessionTable.id, id)).limit(1);
     const row = rows[0];
     if (!row) throw new Error('created session metadata is unavailable');
-    eventHub.publish({ type: 'session_changed', sessionId: id, status: row.status });
+    eventHub.publish({ type: 'session_changed', action: 'create', sessionId: id, session: sessionToCamel({ ...row, messageCount: 0 }) });
     return { ...sessionToCamel({ ...row, messageCount: 0 }), provisional: input.provisional === true };
   },
   chat: createChatHandler({
@@ -1026,44 +1082,20 @@ const serverDeps = {
     : { plugins: [], namespace: 'canonical', legacyNamespacePresent: false }),
 };
 
-const server = createHostServer(serverDeps);
-
-function ensureDeviceLinkRunning(): void {
-  if (!deviceLinkService && account.authenticated) {
-    const realm = (account.realm ?? resolveHostRegion()) as 'cn' | 'global';
-    const { machineIdSync } = createRequire(import.meta.url)('node-machine-id');
-    deviceLinkService = createDeviceLinkService({
-      realm,
-      deviceId: machineIdSync(),
-      deviceName: os.hostname(),
-      appVersion: '0.1.128',
-      getAccessToken: async () => {
-        if (!currentSessionToken) await refreshAuthSession();
-        return currentSessionToken;
-      },
-      listSessions: (body: unknown) => serverDeps.listSessions(body as Record<string, unknown>),
-      getSession: (id: string) => serverDeps.getSession(id),
-      updateSession: (id: string, patch: Record<string, unknown>) => serverDeps.updateSession(id, patch),
-      createSession: (body: Record<string, unknown>) => serverDeps.createSession(body),
-      listMessages: (opts: { sessionId: string; limit?: number }) => serverDeps.history(opts.sessionId, opts.limit ?? 200),
-      messagesList: (sessionId: string, limit?: number, before?: string | null) => serverDeps.messagesList(sessionId, limit, before),
-      messagesAroundClientId: (sessionId: string, clientId: string, opts?: { radius?: number }) => serverDeps.messagesAroundClientId(sessionId, clientId, opts),
-      historyView: (sessionId: string, before?: string | null) => serverDeps.historyView(sessionId, before),
-      workDetails: (sessionId: string, ref: unknown, after?: string | null) => serverDeps.workDetails(sessionId, ref, after),
-      estimatedSessionValue: (sessionId: string) => serverDeps.estimatedSessionValue(sessionId),
-      listProviders: () => serverDeps.providers(),
-      listAvailableAgents: () => serverDeps.agents(),
-      getCapabilities: (agentKind: string) => serverDeps.capabilities(agentKind),
-      listProjectAliases: () => serverDeps.listProjectAliases(),
-      listRecentWorkdirs: () => serverDeps.listRecentWorkdirs(),
-      getMaker: () => agentGraph?.maker,
-      inputQueue,
-      interactions: interactionBroker,
-      eventHub,
-    });
-    deviceLinkService.start();
-  }
+function projectAuthState() {
+  const authenticated = Boolean(account.authenticated && accountUser && accountUser.id === runtime.owner);
+  return {
+    authenticated, isAuthenticated: authenticated, user: authenticated ? accountUser : null,
+    realm: account.realm, owner: runtime.owner, dataOwnerId: authenticated ? runtime.owner : null,
+    mode: authenticated ? 'cloud' : 'signed-out', canEnterApp: authenticated,
+    ownerGeneration: 1, isCanary: false, deviceId: 'host',
+    hasAccountDeletionReceipt: false, accountDeletionRestored: false,
+    credentialStoreUnavailable: Boolean(account.error),
+  };
 }
+let startup: Promise<void> = Promise.resolve();
+
+const server = createHostServer(serverDeps);
 
 server.on('error', (error) => {
   console.error(`cindy-host failed to listen: ${error.message}`);
@@ -1071,80 +1103,60 @@ server.on('error', (error) => {
 });
 
 server.listen(PORT, '127.0.0.1', () => {
-  console.log(`cindy-host listening on http://127.0.0.1:${PORT}`);
+  const address = server.address();
+  if (!address || typeof address === 'string') throw new Error('Host listener address is unavailable');
+  const baseUrl = `http://127.0.0.1:${address.port}`;
+  console.log(`cindy-host listening on ${baseUrl}`);
   // Endpoint discovery for clients on this machine: a pid plus the loopback URL.
-  // The desktop uses it to enter client mode without any environment variable.
+  // Explicit clients and host:open use this endpoint; desktop startup stays unchanged.
   try {
     writeFileSync(
       path.join(resolveHostDataDir(), 'host-endpoint.json'),
-      JSON.stringify({ pid: process.pid, baseUrl: `http://127.0.0.1:${PORT}` }),
+      JSON.stringify({ pid: process.pid, baseUrl }),
       { mode: 0o600 },
     );
     const cleanup = () => {
       try { rmSync(path.join(resolveHostDataDir(), 'host-endpoint.json'), { force: true }); } catch { /* ignore */ }
-      if (deviceLinkService) {
-        deviceLinkService.stop();
-        deviceLinkService = null;
-      }
     };
     process.once('exit', cleanup);
-    process.once('SIGTERM', () => { cleanup(); process.exit(0); });
   } catch { /* discovery is best-effort */ }
-  void readAdoptedSessionState({
-    userDataDir: resolveHostDataDir(),
-    keyringApplication: process.env.CINDY_HOST_KEYRING_APPLICATION?.trim() || undefined,
-  }).then((state) => {
-    account = state;
-    if (state.authenticated) {
-      void resolveAccountUser()
-        .then((user) => {
-          accountUser = user;
-          schedulePeriodicRefresh();
-          ensureDeviceLinkRunning();
-        })
-        .catch((error: unknown) => {
-          console.warn('[host] account profile unavailable:', error instanceof Error ? error.message : String(error));
-        });
+  startup = (async () => {
+    let owner = process.env.CINDY_HOST_OWNER?.trim() || '';
+    let initialUser: AccountUser | null = null;
+    if (!owner) {
+      const discovered = discoverHostOwner(resolveHostDataDir());
+      if (discovered.ownerId) {
+        owner = discovered.ownerId;
+        if (!existsSync(ownerDatabasePath(resolveHostDataDir(), owner))) throw new Error('owner database is missing');
+      } else {
+        // A newly signed-in preview has credentials but no database yet. Resolve
+        // the authenticated membership before creating its first owner database;
+        // never invent an owner or copy the running desktop's account files.
+        const state = await readAdoptedSessionState({ userDataDir: resolveHostDataDir() });
+        account = { authenticated: false, realm: state.realm };
+        if (state.authenticated) initialUser = await resolveAccountUser();
+        if (!initialUser) { runtime.detail = discovered.reason ?? 'owner is unknown'; return; }
+        owner = initialUser.id;
+      }
     }
-  }).catch((error: unknown) => {
-    account = {
-      authenticated: false,
-      realm: null,
-      error: error instanceof Error ? error.message : String(error),
-    };
-  });
-  // An explicit owner wins; otherwise a single-account profile names itself and
-  // a multi-account one stays uninitialized instead of guessing.
-  let owner = process.env.CINDY_HOST_OWNER?.trim() || '';
-  if (!owner) {
-    const discovered = discoverHostOwner(resolveHostDataDir());
-    if (!discovered.ownerId) {
-      runtime.detail = discovered.reason ?? 'owner is unknown';
-      console.log(`cindy-host runtime stays uninitialized: ${runtime.detail}`);
+    await ensureRuntime(owner);
+    if (initialUser) {
+      accountUser = initialUser;
+      account = { authenticated: true, realm: account.realm };
+      schedulePeriodicRefresh();
       return;
     }
-    owner = discovered.ownerId;
-    // Fail closed if the discovered id does not name the expected database file.
-    if (!existsSync(ownerDatabasePath(resolveHostDataDir(), owner))) {
-      runtime.detail = 'owner database is missing';
-      return;
-    }
-    console.log(`cindy-host using the profile owner ${owner.length} chars long`);
-  }
-  void ensureRuntime(owner).catch((error: unknown) => {
-    if (runtime.state === 'blocked') {
-      // A blocked host never opened storage; reporting 'error' would wrongly
-      // imply the profile database failed.
-      runtime.storage = 'unopened';
-    } else {
-      runtime.state = 'error';
-      runtime.storage = 'error';
-    }
-    runtime.owner = owner;
-    runtime.detail = error instanceof OwnerDatabaseError
-      ? `${error.code}: ${error.message}`
-      : error instanceof Error ? error.message : String(error);
-    console.error(`cindy-host storage initialization failed: ${runtime.detail}`);
+    if (account.authenticated) { schedulePeriodicRefresh(); return; }
+    const state = await readAdoptedSessionState({
+      userDataDir: resolveHostDataDir(),
+      keyringApplication: process.env.CINDY_HOST_KEYRING_APPLICATION?.trim() || undefined,
+    });
+    account = { authenticated: false, realm: state.realm };
+    if (state.authenticated && await refreshAuthSession()) schedulePeriodicRefresh();
+  })().catch((error: unknown) => {
+    if (runtime.state !== 'blocked') runtime.state = 'error';
+    runtime.detail = error instanceof Error ? error.message : String(error);
+    console.error('cindy-host initialization failed:', runtime.detail);
   });
 });
 
@@ -1152,13 +1164,23 @@ let shuttingDown = false;
 const stop = () => {
   if (shuttingDown) return;
   shuttingDown = true;
-  void (closeStorage?.() ?? Promise.resolve()).then(() => {
-    server.close((error) => {
-      if (error) {
-        console.error(`cindy-host shutdown failed: ${error.message}`);
-        process.exitCode = 1;
-      }
-    });
+  authClosed = true;
+  if (refreshTimer) clearInterval(refreshTimer);
+  void (async () => {
+    await startup;
+    await authRefreshFlight;
+    try {
+      await inputQueue.dispose();
+      await (agentGraph?.maker as { shutdown?: () => Promise<void> } | undefined)?.shutdown?.();
+    } finally {
+      server.closeAllConnections();
+      server.close();
+      await closeStorage?.();
+      runtimeLease?.release();
+    }
+  })().catch((error) => {
+    console.error('cindy-host shutdown failed:', error instanceof Error ? error.message : String(error));
+    process.exitCode = 1;
   });
 };
 process.once('SIGINT', stop);

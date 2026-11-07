@@ -35,22 +35,28 @@ export function createInteractionBroker(deps) {
         const requestId = String(request?.requestId ?? '');
         if (!requestId) return { kind: 'permission', behavior: 'deny', reason: 'missing request id' };
 
-        const decision = await new Promise((resolve) => {
-          bucket(sessionId).set(requestId, { request, resolve });
-          deps.hub.publish({ type: 'interaction_request', sessionId, request });
-          const onAbort = () => {
-            bucket(sessionId).delete(requestId);
-            deps.hub.publish({ type: 'interaction_dismissed', sessionId, requestId, reason: 'aborted' });
-            resolve({ kind: 'permission', behavior: 'deny', reason: 'aborted' });
-          };
-          if (signal) {
-            if (signal.aborted) onAbort();
-            else signal.addEventListener('abort', onAbort, { once: true });
+        return new Promise((resolve) => {
+          const entries = bucket(sessionId);
+          if (entries.has(requestId)) {
+            resolve({ kind: 'permission', behavior: 'deny', reason: 'duplicate request id' });
+            return;
           }
+          let settled = false;
+          const finish = (decision, reason) => {
+            if (settled) return;
+            settled = true;
+            signal?.removeEventListener('abort', onAbort);
+            entries.delete(requestId);
+            if (entries.size === 0) pending.delete(sessionId);
+            deps.hub.publish({ type: 'interaction_dismissed', sessionId, requestId, reason });
+            resolve(decision);
+          };
+          const onAbort = () => finish({ kind: 'permission', behavior: 'deny', reason: 'aborted' }, 'aborted');
+          entries.set(requestId, { request, resolve: decision => finish(decision, 'resolved') });
+          if (signal?.aborted) { onAbort(); return; }
+          signal?.addEventListener('abort', onAbort, { once: true });
+          deps.hub.publish({ type: 'interaction_request', sessionId, request });
         });
-        bucket(sessionId).delete(requestId);
-        deps.hub.publish({ type: 'interaction_dismissed', sessionId, requestId, reason: 'resolved' });
-        return decision;
       });
     },
 
@@ -75,6 +81,7 @@ export function createInteractionBroker(deps) {
           entry.resolve(fallbackDecision);
           return true;
         }
+        return false;
       }
       for (const entries of pending.values()) {
         const entry = entries.get(rid);

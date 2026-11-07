@@ -28,6 +28,8 @@ export function readAuthEndpoints(region, overrideDir = process.env.CINDY_HOST_E
   const callback = manifest.authDesktopCallbackUrl;
   return {
     authApiBaseUrl: base,
+    ...(typeof manifest.modelAccessApiBaseUrl === 'string' && /^https:\/\//.test(manifest.modelAccessApiBaseUrl)
+      ? { modelAccessApiBaseUrl: manifest.modelAccessApiBaseUrl } : {}),
     ...(typeof callback === 'string' && callback ? { authDesktopCallbackUrl: callback } : {}),
   };
 }

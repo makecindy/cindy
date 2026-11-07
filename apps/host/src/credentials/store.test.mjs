@@ -5,7 +5,7 @@ import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
 
-import { createPreparedLinuxCredentialStore, SafeStorageUnavailableError } from './store.mjs';
+import { createCredentialStore, createPreparedLinuxCredentialStore, SafeStorageUnavailableError } from './store.mjs';
 import { decryptOsCryptPayload, deriveLinuxOsCryptKey, encryptOsCryptPayload } from './oscrypt.mjs';
 
 // Fixed synthetic keyring password: the codec is exercised without touching the
@@ -35,7 +35,7 @@ test('writes the same base64 v11 layout Desktop uses, with owner-only permission
   const file = path.join(userDataDir, 'safe-storage', 'session.enc');
   const raw = fs.readFileSync(file, 'utf8');
   assert.equal(Buffer.from(raw, 'base64').subarray(0, 3).toString('latin1'), 'v11');
-  assert.equal(fs.statSync(file).mode & 0o777, 0o600);
+  if (process.platform !== 'win32') assert.equal(fs.statSync(file).mode & 0o777, 0o600);
   assert.equal(store.read('session'), 'secret-value');
   assert.equal(store.read('missing'), null);
 
@@ -93,4 +93,50 @@ test('projects an adopted Desktop login without exposing the refresh token', asy
     projectAdoptedSession({ read: () => JSON.stringify({ version: 1, realm: 'global' }) }),
     { authenticated: false, realm: null },
   );
+});
+
+// PR #9246 native credential adapter (integration, isolated files + injected OS
+// process): existing Linux tests did not cover identity or secret transport.
+// Minimal regressions: CRLF CindyDev marker, truncated marker, helper failure.
+test('macOS and Windows retain Desktop keychain identity and pass secrets only on stdin', async (t) => {
+  for (const platform of ['darwin', 'win32']) {
+    const userDataDir = tempProfile(t);
+    fs.writeFileSync(path.join(userDataDir, 'keychain-identity'), 'CindyDev\r\n');
+    const calls = [];
+    const store = await createCredentialStore({ userDataDir, platform, electronBinary: 'test-electron',
+      run: (binary, args, options) => {
+        calls.push({ binary, args, options });
+        const { operation, value } = JSON.parse(options.input);
+        return { status: 0, stdout: JSON.stringify({ value: operation === 'encrypt' ? `sealed:${value}` : value.slice(7) }) };
+      },
+    });
+    store.write('synthetic', 'test-only-secret');
+    assert.equal(store.read('synthetic'), 'test-only-secret');
+    assert.equal(calls.length, 2);
+    for (const { args, options } of calls) {
+      assert.equal(options.env.CINDY_HOST_CREDENTIAL_APP, 'CindyDev');
+      assert.equal(options.env.CINDY_HOST_DATA_DIR, userDataDir);
+      assert.equal(JSON.stringify(args).includes('test-only-secret'), false);
+      assert.equal(options.env.ELECTRON_RUN_AS_NODE, undefined);
+      assert.equal(options.env.NODE_OPTIONS, undefined);
+    }
+    assert.throws(() => store.write('../outside', 'x'), /invalid credential key/);
+  }
+});
+
+test('native codec rejects an incomplete identity and does not replace a record when encryption fails', async (t) => {
+  const userDataDir = tempProfile(t);
+  const options = { userDataDir, platform: 'win32', electronBinary: 'test-electron',
+    run: () => ({ status: 1, stderr: 'test-only-secret', stdout: '' }),
+  };
+  fs.writeFileSync(path.join(userDataDir, 'keychain-identity'), 'Cindy');
+  await assert.rejects(createCredentialStore(options), /CREDENTIAL_IDENTITY_UNAVAILABLE/);
+  fs.writeFileSync(path.join(userDataDir, 'keychain-identity'), 'Cindy\n');
+  const store = await createCredentialStore(options);
+  const storageDir = path.join(userDataDir, 'safe-storage');
+  fs.mkdirSync(storageDir);
+  fs.writeFileSync(path.join(storageDir, 'synthetic.enc'), 'existing ciphertext');
+  assert.throws(() => store.write('synthetic', 'replacement'), /^Error: CREDENTIAL_STORE_UNAVAILABLE$/);
+  assert.equal(fs.readFileSync(path.join(storageDir, 'synthetic.enc'), 'utf8'), 'existing ciphertext');
+  assert.deepEqual(fs.readdirSync(storageDir), ['synthetic.enc']);
 });

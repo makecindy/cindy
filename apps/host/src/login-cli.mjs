@@ -13,7 +13,7 @@ import { CindyAuthClient } from '@cindy/auth-client';
 
 import { readAuthEndpoints } from './auth/endpoints.mjs';
 import { runHostLogin } from './auth/login.mjs';
-import { createPreparedLinuxCredentialStore } from './credentials/store.mjs';
+import { createCredentialStore } from './credentials/store.mjs';
 import { resolveHostDataDir, resolveHostRegion } from './profile-path.mjs';
 
 // CommonJS package without ESM named exports; use the same entry Desktop loads.
@@ -50,7 +50,7 @@ export async function runLoginCommand(argv, io = {}) {
 
   const endpoints = readAuthEndpoints(region);
   const userDataDir = resolveHostDataDir();
-  const store = await createPreparedLinuxCredentialStore({
+  const store = await createCredentialStore({
     userDataDir,
     keyringApplication: process.env.CINDY_HOST_KEYRING_APPLICATION?.trim() || undefined,
   });

@@ -27,32 +27,18 @@ export const LOGGER = {
   child: () => LOGGER,
 };
 
-async function resolveCustomClaudeRoute(providerId, gateway) {
-  if (!providerId || providerId === 'xd' || providerId === 'cindy') return null;
-  try {
-    const { listProviders } = await import('./providers.mjs');
-    const catalog = await listProviders(gateway ? { gateway } : {});
-    const p = catalog.providers?.find((item) => item.id === providerId);
-    if (!p) return null;
-    const rawUrl = p.runtimes?.['claude-code']?.baseUrl ?? p.runtimes?.pi?.baseUrl ?? p.routing?.['claude-code']?.upstream ?? p.routing?.pi?.upstream ?? 'http://127.0.0.1:3425/v1';
-    const anthropicBaseUrl = rawUrl.replace(/\/v1\/?$/, '').replace(/\/+$/, '');
-    const apiKey = p.auth?.credential || p.apiKey || gateway?.credential || 'sk-custom-provider';
-    return { anthropicBaseUrl, apiKey, rawUrl };
-  } catch (err) {
-    LOGGER.warn('failed to resolve custom claude route', err);
-    return null;
-  }
-}
+const missingRouteResolver = async () => { throw new Error('Provider credential resolver is unavailable'); };
 
 /**
  * Subscription-only view: state comes from the shared verdict, and the lane
  * injects no credentials because the CLI authenticates itself.
  */
-export function createClaudeSubscriptionAuth(gateway) {
+export function createClaudeSubscriptionAuth(gateway, resolveRoute = missingRouteResolver) {
   return {
     async getState(opts) {
       if (opts?.providerId && opts.providerId !== 'xd' && opts.providerId !== 'cindy') {
-        return { authenticated: true, authSource: 'api-key', identity: opts.providerId };
+        try { await resolveRoute(opts.providerId, 'claude-code'); return { authenticated: true, authSource: 'api-key', identity: opts.providerId }; }
+        catch { return { authenticated: false, errorReason: 'not_connected' }; }
       }
       return hasClaudeNativeLogin()
         ? { authenticated: true, authSource: 'oauth', identity: 'Claude subscription' }
@@ -65,11 +51,11 @@ export function createClaudeSubscriptionAuth(gateway) {
       throw new Error('sign out with the Claude Code CLI; the host does not manage its credentials');
     },
     async getAuthEnv(opts) {
-      const custom = await resolveCustomClaudeRoute(opts?.providerId, gateway);
+      const custom = opts?.providerId && !['xd', 'cindy'].includes(opts.providerId) ? await resolveRoute(opts.providerId, 'claude-code') : null;
       if (custom) {
         return {
           ANTHROPIC_BASE_URL: custom.anthropicBaseUrl,
-          ANTHROPIC_API_KEY: custom.apiKey,
+          ANTHROPIC_API_KEY: custom.apiKey ?? 'cindy-keyless-provider',
         };
       }
       return {};
@@ -81,11 +67,12 @@ export function createClaudeSubscriptionAuth(gateway) {
  * @param {{binaryPath: string, storage: unknown, makerMemory?: unknown}} options
  */
 /** Gateway-key lane: the key is injected as ANTHROPIC_API_KEY for the CLI spawn. */
-export function createClaudeGatewayAuth(gateway) {
+export function createClaudeGatewayAuth(gateway, resolveRoute = missingRouteResolver) {
   return {
     async getState(opts) {
       if (opts?.providerId && opts.providerId !== 'xd' && opts.providerId !== 'cindy') {
-        return { authenticated: true, authSource: 'api-key', identity: opts.providerId };
+        try { await resolveRoute(opts.providerId, 'claude-code'); return { authenticated: true, authSource: 'api-key', identity: opts.providerId }; }
+        catch { return { authenticated: false, errorReason: 'not_connected' }; }
       }
       return { authenticated: true, authSource: 'api-key', identity: 'Cindy gateway' };
     },
@@ -96,11 +83,11 @@ export function createClaudeGatewayAuth(gateway) {
       throw new Error('the Cindy gateway key is managed by the Desktop settings');
     },
     async getAuthEnv(opts) {
-      const custom = await resolveCustomClaudeRoute(opts?.providerId, gateway);
+      const custom = opts?.providerId && !['xd', 'cindy'].includes(opts.providerId) ? await resolveRoute(opts.providerId, 'claude-code') : null;
       if (custom) {
         return {
           ANTHROPIC_BASE_URL: custom.anthropicBaseUrl,
-          ANTHROPIC_API_KEY: custom.apiKey,
+          ANTHROPIC_API_KEY: custom.apiKey ?? 'cindy-keyless-provider',
         };
       }
       return gateway?.credential ? { ANTHROPIC_API_KEY: gateway.credential } : {};
@@ -114,11 +101,12 @@ export function createClaudeGatewayAuth(gateway) {
  * adapter additionally covers gateway keys and account switching; converging the
  * two is tracked as host/auth TODO.
  */
-export function createCodexLocalCliAuth(gateway) {
+export function createCodexLocalCliAuth(gateway, resolveRoute = missingRouteResolver) {
   return {
     async getState(opts) {
       if (opts?.providerId && opts.providerId !== 'xd' && opts.providerId !== 'cindy') {
-        return { authenticated: true, authSource: 'api-key', identity: opts.providerId };
+        try { await resolveRoute(opts.providerId, 'codex'); return { authenticated: true, authSource: 'api-key', identity: opts.providerId }; }
+        catch { return { authenticated: false, errorReason: 'not_connected' }; }
       }
       return { authenticated: true, authSource: 'oauth', identity: 'Codex CLI login' };
     },
@@ -130,12 +118,12 @@ export function createCodexLocalCliAuth(gateway) {
     },
     async getAuthEnv(opts) {
       if (opts?.providerId && opts.providerId !== 'xd' && opts.providerId !== 'cindy') {
-        const custom = await resolveCustomClaudeRoute(opts.providerId, gateway);
+        const custom = await resolveRoute(opts.providerId, 'codex');
         if (custom) {
           const baseUrl = custom.rawUrl.endsWith('/v1') ? custom.rawUrl : `${custom.rawUrl}/v1`;
           return {
             OPENAI_BASE_URL: baseUrl,
-            OPENAI_API_KEY: custom.apiKey,
+            OPENAI_API_KEY: custom.apiKey ?? 'cindy-keyless-provider',
           };
         }
       }
@@ -161,8 +149,8 @@ export function createPiAuthAdapter(gateway) {
 
 export function createHostAgentGraph(options) {
   const mcpProviders = options.mcpProviders ?? [];
-  const agent = new ClaudeCodeAgent({
-    auth: options.gateway ? createClaudeGatewayAuth(options.gateway) : createClaudeSubscriptionAuth(options.gateway),
+  const agent = options.binaryPath ? new ClaudeCodeAgent({
+    auth: options.gateway ? createClaudeGatewayAuth(options.gateway, options.resolveProviderRoute) : createClaudeSubscriptionAuth(options.gateway, options.resolveProviderRoute),
     runtimeConfig: {
       ...(options.gateway ? { endpoint: options.gateway.endpoint } : {}),
       // The session flag gates whether cindy_memory is registered at all.
@@ -172,10 +160,10 @@ export function createHostAgentGraph(options) {
     logger: LOGGER,
     ...(mcpProviders.length > 0 ? { mcpProviders } : {}),
     ...(options.makerMemory ? { makerMemory: options.makerMemory } : {}),
-  });
+  }) : null;
   const codex = options.codexBinaryPath
     ? new CodexAgent({
-        auth: createCodexLocalCliAuth(options.gateway),
+        auth: createCodexLocalCliAuth(options.gateway, options.resolveProviderRoute),
         runtimeConfig: {},
         binaryPath: options.codexBinaryPath,
         logger: LOGGER,
@@ -196,8 +184,12 @@ export function createHostAgentGraph(options) {
             const { listProviders } = await import('./providers.mjs');
             const catalog = await listProviders(options.gateway ? { gateway: options.gateway } : {});
             const providers = [];
+            const env = {};
             for (const p of catalog.providers ?? []) {
-              if (p.id === 'xd' || p.id === 'cindy') continue;
+              if (p.id === 'xd' || p.id === 'cindy' || !p.routing?.pi) continue;
+              const route = await options.resolveProviderRoute(p.id, 'pi');
+              const envKey = `CINDY_PROVIDER_${providers.length}_KEY`;
+              if (route.apiKey) env[envKey] = route.apiKey;
               const seenModelIds = new Set();
               const allRawModels = [
                 ...(Array.isArray(p.models) ? p.models : []),
@@ -220,31 +212,31 @@ export function createHostAgentGraph(options) {
                   });
                 }
               }
-              const baseUrl = p.runtimes?.pi?.baseUrl ?? p.routing?.pi?.upstream ?? p.routing?.['claude-code']?.upstream ?? 'http://127.0.0.1:3425/v1';
+              const baseUrl = route.rawUrl;
               providers.push({
                 id: p.id,
                 sourceProviderId: p.id,
                 name: p.name,
                 baseUrl,
-                api: 'openai-completions',
+                api: { 'anthropic-messages': 'anthropic-messages', 'openai-chat': 'openai-completions', 'openai-responses': 'openai-responses', 'google-generative-ai': 'google-generative-ai' }[route.protocol],
                 models: piModels,
-                apiKey: '$CINDY_PI_API_KEY',
+                ...(route.apiKey ? { apiKeyEnvVar: envKey } : {}),
               });
             }
             return {
               providers,
-              env: { CINDY_PI_API_KEY: 'test' },
+              env,
             };
           } catch (err) {
             console.error('[resolvePiNativeProviders] failed:', err);
-            return { providers: [], env: {} };
+            throw err;
           }
         },
         ...(options.makerMemory ? { makerMemory: options.makerMemory } : {}),
       })
     : null;
   const agents = {
-    'claude-code': agent,
+    ...(agent ? { 'claude-code': agent } : {}),
     ...(codex ? { codex } : {}),
     ...(pi ? { pi } : {}),
   };

@@ -12,6 +12,7 @@
     "test": "node --import tsx --import ./src/loaders/register-raw.mjs --test \"src/**/*.test.mjs\""
   },
   "devDependencies": {
+    "esbuild": "^0.28.1",
     "tsx": "^4.19.0"
   },
   "dependencies": {

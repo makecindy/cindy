@@ -1,5 +1,10 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+import { request as httpRequest } from 'node:http';
+import { createWebAuth } from './web-auth.mjs';
 
 import { createHostServer } from './server.mjs';
 
@@ -20,12 +25,19 @@ async function withServer(t, deps) {
   t.after(() => server.close());
   const { port } = server.address();
   return async (path, { method = 'GET', headers = {}, body } = {}) => {
-    const response = await fetch(`http://127.0.0.1:${port}${path}`, {
-      method,
-      headers,
-      ...(body === undefined ? {} : { body }),
+    return new Promise((resolve, reject) => {
+      const req = httpRequest(`http://127.0.0.1:${port}${path}`, { method, headers }, response => {
+        let text = '';
+        response.setEncoding('utf8');
+        response.on('data', chunk => { text += chunk; });
+        response.on('end', () => resolve({ status: response.statusCode,
+          body: response.headers['content-type']?.includes('application/json') ? JSON.parse(text) : text,
+          headers: new Headers(Object.entries(response.headers).map(([key, value]) => [key, Array.isArray(value) ? value.join(', ') : value])),
+        }));
+      });
+      req.on('error', reject);
+      req.end(body);
     });
-    return { status: response.status, body: await response.json(), headers: response.headers };
   };
 }
 
@@ -138,4 +150,42 @@ test('cross-engine switch returns a deferred intent and exposes it for the rende
     model: 'group/deepseek',
     providerId: 'magpie-debian',
   });
+});
+
+// Regression: a stranger could GET / then reuse its cookie to read every task.
+// Exercise real HTTP with an isolated fake profile; no real credentials (unit).
+test('browser pairing gates boot data, cookies and API access', async (t) => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'host-web-auth-'));
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  fs.writeFileSync(path.join(dir, 'index.html'), '<html><head></head></html>');
+  const request = await withServer(t, { webDir: dir, bootValues: () => ({ title: '</script><script>bad()</script>', owner: 'private-owner' }) });
+  const home = await request('/');
+  assert.equal(home.headers.get('set-cookie'), null);
+  assert.equal(home.body.includes('private-owner'), false);
+  assert.equal((await request('/web/pair', { method: 'POST' })).status, 401);
+  const paired = await request('/web/pair', { method: 'POST', headers: { authorization: `Bearer ${TOKEN}` } });
+  const exchange = { method: 'POST', body: JSON.stringify({ code: paired.body.code }) };
+  const connected = await request('/web/session', exchange);
+  const cookie = connected.headers.get('set-cookie').split(';')[0];
+  assert.equal((await request('/web/session', exchange)).status, 401);
+  const app = await request('/', { headers: { cookie } });
+  assert.equal(app.body.includes('private-owner'), true);
+  assert.equal(app.body.includes('</script><script>bad()'), false);
+  assert.equal((await request('/api/sessions/list', { method: 'POST', headers: { cookie } })).status, 200);
+  assert.equal((await request('/api/sessions/list', { method: 'POST', headers: { cookie, origin: 'https://evil.example' } })).status, 403);
+  assert.equal((await request('/sessions', { headers: { host: 'evil.example', authorization: `Bearer ${TOKEN}` } })).status, 403);
+  await request('/logout', { method: 'POST', headers: { authorization: `Bearer ${TOKEN}` } });
+  assert.equal((await request('/api/sessions/list', { method: 'POST', headers: { cookie } })).status, 401);
+});
+
+test('expired pairing codes and browser sessions cannot authorize a client', () => {
+  let now = 0;
+  const auth = createWebAuth({ now: () => now });
+  const expired = auth.pair();
+  now = 60_000;
+  assert.equal(auth.exchange(expired), null);
+  const session = auth.exchange(auth.pair());
+  assert.equal(auth.accepts(`cindy_host_web=${session}`), true);
+  now += 12 * 60 * 60_000;
+  assert.equal(auth.accepts(`cindy_host_web=${session}`), false);
 });

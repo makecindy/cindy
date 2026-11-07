@@ -517,16 +517,24 @@ export function isPassiveSharedUserDataInstance(): boolean {
   return !app.isPackaged && process.env.XDT_PASSIVE_SHARED_USER_DATA === '1';
 }
 
-let authRefreshOverride: ((options?: { serverRejectedToken?: boolean }) => Promise<boolean>) | null = null;
+let delegatedAuthState: AuthState | null = null;
+let authRefreshOverride: ((options?: { serverRejectedToken?: boolean }) => Promise<AuthState>) | null = null;
 /**
  * In host client mode, the background cindy-host is the single writer that
  * owns token refresh and rotation. This override delegates refresh without
  * touching persisted credentials on disk.
  */
 export function setAuthRefreshOverride(
-  fn: ((options?: { serverRejectedToken?: boolean }) => Promise<boolean>) | null,
+  fn: ((options?: { serverRejectedToken?: boolean }) => Promise<AuthState>) | null,
 ): void {
   authRefreshOverride = fn;
+  delegatedAuthState = null;
+}
+
+export function receiveHostAuthState(state: AuthState): void {
+  if (!authRefreshOverride) throw new Error('Host auth state requires explicit client mode');
+  delegatedAuthState = state;
+  notifyRenderer();
 }
 
 /**
@@ -3611,6 +3619,7 @@ function broadcastToRenderers(channel: string, payload: unknown): void {
  * 修改直接写 auth-server(updateServerProfile),本地覆写层已退役。
  */
 function snapshotAuthState(): AuthState {
+  if (delegatedAuthState) return delegatedAuthState;
   const appSession = getActiveAppSession();
   const isCloudAuthenticated =
     appSession.mode === 'cloud' && accessToken !== null && currentUser !== null;
@@ -4703,6 +4712,10 @@ export async function updateServerProfile(
 }
 
 export async function initialize(options: AuthInitializeOptions = {}): Promise<AuthState> {
+  if (authRefreshOverride) {
+    delegatedAuthState = await authRefreshOverride();
+    return delegatedAuthState;
+  }
   const initializeStartEpoch = authStateEpoch;
   const settledLoginsAtInitialize = settledLoginCommitCount;
   // A renderer can mount after the boundary-pending broadcast. Keep startup
@@ -4865,24 +4878,10 @@ export async function initialize(options: AuthInitializeOptions = {}): Promise<A
   // 进程内去重:主窗流程还挂着(黑洞网络)时,副窗 / 右侧栏窗口 mount 触发的
   // initialize() 复用同一个 in-flight promise,避免并发轮换同一枚 refresh token。
   if (coldStartAuthInFlight === null) {
-    if (authRefreshOverride !== null) {
-      coldStartAuthInFlight = authRefreshOverride().then((ok) => {
-        if (!ok) return snapshotLoggedOutAuthState();
-        return snapshotAuthState();
-      }).finally(() => {
-        coldStartTimeoutFallbacks.clear();
-        coldStartAuthInFlight = null;
-      });
-    } else {
-      coldStartAuthInFlight = runColdStartRefreshFlow(storedToken, persistedSession.realm).finally(
-        () => {
-          // Keep every fallback edge until the shared refresh settles: sibling renderer
-          // timeouts may append another edge while the network flow is still pending.
-          coldStartTimeoutFallbacks.clear();
-          coldStartAuthInFlight = null;
-        },
-      );
-    }
+    coldStartAuthInFlight = runColdStartRefreshFlow(storedToken, persistedSession.realm).finally(() => {
+      coldStartTimeoutFallbacks.clear();
+      coldStartAuthInFlight = null;
+    });
   }
   // 黑洞 / captive-portal 网络护栏:限时等待,超时先以未登录返回解锁 splash,
   // 流程继续后台跑;迟到成功由流程内部广播登录态(renderer 自动跳回主界面)。
@@ -6094,7 +6093,9 @@ export async function dispatchLoginAction(action: unknown): Promise<DesktopLogin
 
 export async function refresh(options?: { serverRejectedToken?: boolean }): Promise<boolean> {
   if (authRefreshOverride !== null) {
-    return authRefreshOverride(options);
+    delegatedAuthState = await authRefreshOverride(options);
+    notifyRenderer();
+    return delegatedAuthState.isAuthenticated;
   }
   if (getActiveAppSession().mode === 'local') {
     log.debug('runtime refresh skipped in local mode');

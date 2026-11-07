@@ -1332,17 +1332,9 @@ function installHostClientMode(): boolean {
     client: hostClient,
     ipcMain,
   });
-  authManager.setAuthRefreshOverride(async () => {
-    try {
-      const res = (await hostClient.request('/api/auth/refresh', {})) as {
-        ok?: boolean;
-        authenticated?: boolean;
-      };
-      return Boolean(res?.authenticated ?? res?.ok);
-    } catch {
-      return false;
-    }
-  });
+  authManager.setAuthRefreshOverride(async () =>
+    await hostClient.request('/api/auth/refresh', {}) as authManager.AuthState,
+  );
   const sendToAllWindows = (channel: string, ...args: unknown[]) => {
     for (const win of BrowserWindow.getAllWindows()) {
       if (!win.isDestroyed()) win.webContents.send(channel, ...args);
@@ -1351,6 +1343,10 @@ function installHostClientMode(): boolean {
   startHostEventBridge({
     baseUrl: delegation.baseUrl,
     token: delegation.token,
+    onInputProjection: (payload) => sendToAllWindows('maker:input:projection', payload),
+    onInteractionRequest: (payload) => sendToAllWindows('maker:interaction-request', payload),
+    onInteractionDismissed: (payload) => sendToAllWindows('maker:interaction-dismissed', payload),
+    onAuthChanged: (payload) => authManager.receiveHostAuthState(payload as authManager.AuthState),
     broadcast: (payload) => {
       sendToAllWindows(MAKER_PUSH.EVENT, payload);
     },
@@ -1374,9 +1370,9 @@ function installHostClientMode(): boolean {
     onSessionChanged: (event: any) => {
       if (event?.action === 'create') {
         sendToAllWindows('local-db:sessions:created', { sessionId: event.sessionId, session: event.session });
-      } else if (event?.action === 'update') {
+      } else if (event?.action === 'update' || event?.patch) {
         sendToAllWindows('local-db:sessions:patched', { sessionId: event.sessionId, patch: event.patch });
-      } else if (event?.action === 'discard_provisional') {
+      } else if (event?.action === 'delete' || event?.action === 'discard_provisional') {
         sendToAllWindows('local-db:sessions:patched', { sessionId: event.sessionId, patch: { status: 'deleted' } });
       }
     },

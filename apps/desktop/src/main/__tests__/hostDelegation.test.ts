@@ -36,16 +36,10 @@ describe('resolveHostDelegation', () => {
     expect(resolveHostDelegation({ env: {}, userDataDir: profileWithToken('t') })).toBeNull();
   });
 
-  it('joins a running host discovered from the profile endpoint file', () => {
+  it('does not change desktop mode just because a host endpoint exists', () => {
     const userDataDir = profileWithToken('unit-test-token');
-    fs.writeFileSync(
-      path.join(userDataDir, 'host-endpoint.json'),
-      JSON.stringify({ pid: process.pid, baseUrl: 'http://127.0.0.1:3456' }),
-    );
-    expect(resolveHostDelegation({ env: {}, userDataDir })).toEqual({
-      baseUrl: 'http://127.0.0.1:3456',
-      token: 'unit-test-token',
-    });
+    fs.writeFileSync(path.join(userDataDir, 'host-endpoint.json'), JSON.stringify({pid: process.pid, baseUrl: 'http://127.0.0.1:3456'}));
+    expect(resolveHostDelegation({env: {}, userDataDir})).toBeNull();
   });
 
   it('ignores an endpoint file whose process is gone', () => {
@@ -315,6 +309,8 @@ describe('claimProxiedChannels and unsupported fallbacks', () => {
 
   it('relays SSE events through startHostEventBridge and dispatches typed callbacks', async () => {
     const broadcasts: unknown[] = [];
+    const projections: unknown[] = [];
+    const interactions: unknown[] = [];
     const settingsChanged: Array<{ domain: string; value: unknown }> = [];
     const sessionEvents: unknown[] = [];
     const messageEvents: unknown[] = [];
@@ -334,6 +330,9 @@ describe('claimProxiedChannels and unsupported fallbacks', () => {
           res.write('data: {"seq":2,"type":"session_changed","action":"create","sessionId":"s1"}\n\n');
           res.write('data: {"seq":3,"type":"message_created","sessionId":"s1","messageId":"m1"}\n\n');
           res.write('data: {"seq":4,"type":"project_aliases_changed"}\n\n');
+          res.write('data: {"seq":5,"type":"input_projection","projection":{"sessionId":"s1","turnInProgress":true}}\n\n');
+          res.write('data: {"seq":6,"type":"interaction_request","sessionId":"s1","request":{"requestId":"r1"}}\n\n');
+          res.write('data: {"seq":7,"type":"text","sessionId":"s1"}\n\n');
         } else {
           res.writeHead(404);
           res.end();
@@ -352,6 +351,8 @@ describe('claimProxiedChannels and unsupported fallbacks', () => {
       baseUrl: `http://127.0.0.1:${port}`,
       token: 'test-token',
       broadcast: (payload) => broadcasts.push(payload),
+      onInputProjection: (payload) => projections.push(payload),
+      onInteractionRequest: (payload) => interactions.push(payload),
       onSettingsChanged: (domain, value) => settingsChanged.push({ domain, value }),
       onSessionChanged: (event) => sessionEvents.push(event),
       onMessageCreated: (event) => messageEvents.push(event),
@@ -366,7 +367,7 @@ describe('claimProxiedChannels and unsupported fallbacks', () => {
 
     // Wait for the stream events to process
     for (let i = 0; i < 20; i++) {
-      if (broadcasts.length >= 4) break;
+      if (broadcasts.length >= 1) break;
       await new Promise((resolve) => setTimeout(resolve, 50));
     }
 
@@ -374,7 +375,9 @@ describe('claimProxiedChannels and unsupported fallbacks', () => {
     await new Promise<void>((resolve) => server.close(() => resolve()));
 
     expect(errors).toHaveLength(0);
-    expect(broadcasts).toHaveLength(4);
+    expect(broadcasts).toEqual([{ seq: 7, type: 'text', sessionId: 's1' }]);
+    expect(projections).toEqual([{ sessionId: 's1', turnInProgress: true }]);
+    expect(interactions).toEqual([{ sessionId: 's1', request: { requestId: 'r1' } }]);
     expect(settingsChanged).toEqual([{ domain: 'appearance', value: { theme: 'dark' } }]);
     expect(sessionEvents).toEqual([{ seq: 2, type: 'session_changed', action: 'create', sessionId: 's1' }]);
     expect(messageEvents).toEqual([{ seq: 3, type: 'message_created', sessionId: 's1', messageId: 'm1' }]);

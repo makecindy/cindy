@@ -48,6 +48,7 @@ let coldStartRecoveryStopped = false, coldStartRetryState = null;
 let lastAcceptedRefreshToken = null, persistedRefreshTokenNeedsIdentityCheck = false;
 let foreignDeviceLocalSignOut = false;
 let refreshPromise = null;
+let authRefreshOverride = null, delegatedAuthState = null;
 const refreshBackoff = new AuthRefreshBackoff();
 const passiveLocalSignOut = false, settledLoginCommitCount = 0;
 const API_FETCH_TIMEOUT_MS = 15000;
@@ -81,6 +82,7 @@ return {
   fetch: apiFetch, start: initialize, runtimeRefresh: refresh, reset: () => runLoginAction({ type: 'reset' }),
   manualLogin: () => runLoginAction({ type: 'discover', identifier: 'test@example.invalid' }),
   state: snapshotAuthState,
+  hostAuth: (reader) => { authRefreshOverride = reader; },
   activateRuntime: () => { accessToken = 'test-expired'; currentUser = { id: 'original' }; },
   backoff: refreshBackoff,
   fallback: () => { coldStartTimeoutFallbacks.record(authStateEpoch, authStateEpoch + 1); authStateEpoch++; loginFlowEpoch++; },
