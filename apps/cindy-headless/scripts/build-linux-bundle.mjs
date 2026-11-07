@@ -81,6 +81,9 @@ await cp(piRuntimeDir, path.join(outputDir, 'bin', 'pi'), { recursive: true });
 await copyFile(nodeBinary, path.join(outputDir, 'bin', 'node'));
 const desktopPromptDir = path.resolve(appDir, '..', 'desktop', 'src', 'main', 'maker-host');
 const desktopHost = await readFile(path.join(desktopPromptDir, 'host-system-prompt.md'), 'utf8');
+// 计划书写规范是 vendor-neutral 共享段：桌面侧在拼接末尾追加（runtime-configs.ts），
+// headless 出包必须同步追加，否则 profile generate 生成的提示词丢掉这段指导。
+const desktopPlans = await readFile(path.join(desktopPromptDir, 'user-facing-plans-prompt.md'), 'utf8');
 const desktopClaude = await readFile(path.join(desktopPromptDir, 'claude-system-prompt.md'), 'utf8');
 const desktopCodex = await readFile(path.join(desktopPromptDir, 'codex-system-prompt.md'), 'utf8');
 const desktopPi = await readFile(path.join(desktopPromptDir, 'pi-system-prompt.md'), 'utf8');
@@ -88,9 +91,9 @@ const composePrompt = (...parts) => parts
   .map((part) => part.replace(/\r\n?/g, '\n').trim())
   .filter(Boolean)
   .join('\n\n') + '\n';
-const productionPrompt = composePrompt(desktopHost, desktopClaude);
-const codexPrompt = composePrompt(desktopHost, desktopCodex);
-const piPrompt = composePrompt(desktopHost, desktopPi);
+const productionPrompt = composePrompt(desktopHost, desktopClaude, desktopPlans);
+const codexPrompt = composePrompt(desktopHost, desktopCodex, desktopPlans);
+const piPrompt = composePrompt(desktopHost, desktopPi, desktopPlans);
 await writeFile(path.join(outputDir, 'prompt.md'), productionPrompt, 'utf8');
 await writeFile(path.join(outputDir, 'codex-prompt.md'), codexPrompt, 'utf8');
 await writeFile(path.join(outputDir, 'pi-prompt.md'), piPrompt, 'utf8');
