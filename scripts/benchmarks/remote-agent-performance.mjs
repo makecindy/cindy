@@ -230,6 +230,13 @@ try {
       return { p, a, m, g, personal, imports };
     }
     const expected = await collect(false);
+    // A TMPDIR inside a real project would pull its parent instruction files
+    // (and their imports) into the samples; abort instead of mixing them in.
+    assert.equal(
+      expected.a.length,
+      0,
+      "fixture picked up instruction files outside the temp dir; set TMPDIR to a directory outside any project",
+    );
     assert.deepEqual(await collect(true), expected);
     await compare(
       "collection",
