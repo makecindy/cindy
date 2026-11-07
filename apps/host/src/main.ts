@@ -53,6 +53,7 @@ import { selectSessionListRows, flattenSessionReadRow, ordinaryTaskListFilter } 
 import { messages as messageTable, projectAliases as projectAliasTable, sessions as sessionTable } from '../../desktop/src/main/localDb/schema.js';
 import { and, eq, isNull, ne } from 'drizzle-orm';
 import { projectHistoryView } from '@cindy/maker-shared/message-window';
+import { isDefaultDraftSessionTitle, normalizeAutoTitle } from '@cindy/maker-shared/session-title';
 
 const DEFAULT_VOICE_INPUT_SETTINGS = getDefaultVoiceInputSettings();
 const VALID_EFFORTS: Record<string, true> = {
@@ -748,6 +749,32 @@ const serverDeps = {
   getSessionAgentSwitchIntent: (sessionId: string) => (
     projectAgentSwitchIntent(pendingAgentSwitches.get(sessionId))
   ),
+  /**
+   * Auto-title step 1 (Codex-style immediate placeholder): persist the
+   * normalized first user text while the title is still the default sentinel.
+   * The desktop's smart-title model pass stays desktop-owned; the web client
+   * still gets the visible sidebar update D3 expects.
+   */
+  autoTitle: async (input: { sessionId?: unknown; text?: unknown; isUserText?: unknown }) => {
+    const sessionId = String(input.sessionId ?? '');
+    const text = typeof input.text === 'string' ? input.text : '';
+    const seed = normalizeAutoTitle(text);
+    if (!sessionId || !seed) return { applied: false, done: false };
+    const rows = await getDbClient().drizzle.select({ title: sessionTable.title }).from(sessionTable)
+      .where(eq(sessionTable.id, sessionId)).limit(1);
+    const current = rows[0]?.title ?? null;
+    if (current === null || !isDefaultDraftSessionTitle(current)) {
+      return { applied: false, done: true };
+    }
+    await getDbClient().drizzle.update(sessionTable)
+      .set({ title: seed, updatedAt: Date.now() })
+      .where(and(eq(sessionTable.id, sessionId), eq(sessionTable.title, current)));
+    const after = await getDbClient().drizzle.select({ title: sessionTable.title }).from(sessionTable)
+      .where(eq(sessionTable.id, sessionId)).limit(1);
+    const applied = after[0]?.title === seed;
+    if (applied) eventHub.publish({ type: 'session_changed', sessionId, patch: { title: seed } });
+    return { applied, done: applied };
+  },
   getSession: async (sessionId: string) => {
     const rows = await getDbClient().drizzle.select().from(sessionTable)
       .where(eq(sessionTable.id, sessionId)).limit(1);

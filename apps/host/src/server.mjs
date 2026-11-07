@@ -174,6 +174,10 @@ export function createHostServer(deps) {
           send(response, 200, deps.getSessionAgentSwitchIntent(String(body.sessionId ?? '')));
           return;
         }
+        if (url.pathname === '/api/sessions/auto-title') {
+          send(response, 200, await deps.autoTitle(body));
+          return;
+        }
         if (url.pathname === '/api/sessions/delete') { send(response, 200, await deps.deleteSession(String(body.sessionId ?? ''))); return; }
         if (url.pathname === '/api/sessions/get') { send(response, 200, await deps.getSession(String(body.sessionId ?? ''))); return; }
         if (url.pathname === '/api/sessions/discard') { send(response, 200, await deps.discardProvisionalSession(String(body.sessionId ?? ''))); return; }
