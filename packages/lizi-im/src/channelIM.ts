@@ -25,6 +25,9 @@ import type {
   StreamingTextHandle,
 } from './types.js';
 
+/** `beginOutboundTurn` 返回的不透明 turn 归属令牌。 */
+export type OutboundTurnToken = string;
+
 export interface TextChannelIM {
   /** 渠道名 ('feishu' / 'slack') — 与 IdentityKey.channel 同值域。 */
   readonly name: string;
@@ -42,14 +45,21 @@ export interface TextChannelIM {
   sendText(
     userId: string,
     text: string,
-    opts?: { threadTs?: string; fallbackOpenerId?: string },
+    opts?: { threadTs?: string; fallbackOpenerId?: string; replyToMessageId?: string },
   ): Promise<{ messageId: string }>;
 
-  /** 渲染 markdown 的文本消息(粗体 / 行内 code / 链接等)。 */
+  /**
+   * 渲染 markdown 的文本消息(粗体 / 行内 code / 链接等)。
+   *
+   * `replyToMessageId`: 这条独立出站明确属于哪条入站消息(入站事件的 messageId),
+   * 例如给排队中的 B 发「你排在第 N 位」。支持回挂目标的渠道据此直接挂回该消息,
+   * **不领取、不消耗**当前 lane 的 turn 目标(issue #1558: 排队提示不得接管
+   * 正在输出的 turn 的回挂目标)。不支持的渠道忽略。
+   */
   sendMarkdownText(
     userId: string,
     markdown: string,
-    opts?: { threadTs?: string; fallbackOpenerId?: string },
+    opts?: { threadTs?: string; fallbackOpenerId?: string; replyToMessageId?: string },
   ): Promise<{ messageId: string }>;
 
   /** 发送本地文件;失败原因见 SendFileResult.reason。 */
@@ -121,12 +131,33 @@ export interface RichChannelIM extends TextChannelIM {
   /** 把已有卡片一次性 patch 成纯 markdown 内容(清掉按钮)。 */
   patchMarkdownCard(messageId: string, markdown: string): Promise<void>;
 
-  /** 开启一条流式文本消息, 返回节流的增量更新 handle。 */
+  /**
+   * 开启一条流式文本消息, 返回节流的增量更新 handle。
+   *
+   * `turn`: 本流式段所属的逻辑 turn(由 `beginOutboundTurn` 发出)。带 token 时
+   * 渠道复用该 turn 已领取的回挂目标, 不再按"一段流式 = 一轮"重新领取;
+   * 不带 token 且该 lane 正有活动 turn 时, 视为与该 turn 无关的独立输出
+   * (如调度转播卡), 不得触碰活动 turn 的目标。
+   */
   startStreamingText(
     userId: string,
     initial?: string,
-    opts?: { threadTs?: string },
+    opts?: { threadTs?: string; turn?: OutboundTurnToken },
   ): Promise<StreamingTextHandle>;
+
+  /**
+   * 逻辑 turn 级的出站归属边界(issue #1558)。
+   *
+   * 回挂目标(把答案以回复形式挂回提问消息)的所有权单位是**一轮逻辑对话**,
+   * 而不是某一段流式 handle 的生死: 一轮 turn 可以在交互卡前收口流式、交互后
+   * 续流, 中间还可能穿插别的消息的排队提示。Host 在 turn 派发时调用
+   * `beginOutboundTurn`, 在 turn 终态(done / error / 取消 / 超时 / 清理)调用
+   * `endOutboundTurn`; 同一 turn 内的流式分段、交互卡、续流共享该 lease。
+   * 未实现的渠道保持旧行为(按流式段归属)。
+   */
+  beginOutboundTurn?(userId: string): OutboundTurnToken;
+  /** 结束 `beginOutboundTurn` 开启的 turn; 幂等, 未知 token 忽略。 */
+  endOutboundTurn?(token: OutboundTurnToken): void;
 
   /**
    * 从出站消息的 messageId 提取 thread 维度键(= 该消息作为 thread root 时的
