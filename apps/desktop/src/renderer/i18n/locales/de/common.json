@@ -19706,6 +19706,16 @@
     "lineNumbers": "Zeilennummern"
   },
   "subscriptionAccounts": {
+    "signIn": {
+      "checking": "Lokales Konto wird geprüft…",
+      "detected": "Angemeldetes Konto gefunden",
+      "useAccount": "Dieses Konto verwenden",
+      "anotherAccount": "Mit anderem Konto anmelden",
+      "keepExisting": "Das neue Konto wird diesem Anbieter hinzugefügt. Bestehende Anmeldungen bleiben erhalten.",
+      "checkFailed": "Das lokale Konto konnte nicht geprüft werden. Bitte erneut versuchen.",
+      "retry": "Erneut versuchen",
+      "useCodex": "Mit Codex anmelden"
+    },
     "title": "Abonnementkonten",
     "note": "Das erste Konto verwendet den Standardordner der CLI. Weitere Konten melden sich separat an. Neue Aufgaben werden verteilt; bestehende Aufgaben behalten ihr Konto.",
     "strategy": "Lastverteilung",

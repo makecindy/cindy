@@ -19893,6 +19893,16 @@
     "lineNumbers": "Números de linha"
   },
   "subscriptionAccounts": {
+    "signIn": {
+      "checking": "Verificando a conta local…",
+      "detected": "Conta conectada encontrada",
+      "useAccount": "Usar esta conta",
+      "anotherAccount": "Entrar com outra conta",
+      "keepExisting": "A nova conta será adicionada a este provedor. Os acessos existentes serão mantidos.",
+      "checkFailed": "Não foi possível verificar a conta local. Tente novamente.",
+      "retry": "Tentar novamente",
+      "useCodex": "Entrar com o Codex"
+    },
     "title": "Contas de assinatura",
     "note": "A primeira conta usa a pasta padrão da CLI. As contas adicionais fazem login separadamente. Novas tarefas são distribuídas; as existentes mantêm sua conta.",
     "strategy": "Balanceamento de carga",
