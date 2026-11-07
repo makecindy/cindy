@@ -816,6 +816,7 @@
     'sidebarSettings.getProjectOrder': () => STATIC.emptyList,
     'workLouderCodex.publishTasks': () => undefined,
     'notificationClearSessionAttention': () => undefined,
+    'notificationMarkSessionAttention': () => undefined,
     'notificationSetAppAttentionCount': () => undefined,
     'localDb.orcaWorkflows.getCollaborationSettings': () => ({ enabled: false }),
     'maker.agentResourceSettingsGet': () => ({ maxProcesses: 4, memoryLimitMb: 4096 }),
