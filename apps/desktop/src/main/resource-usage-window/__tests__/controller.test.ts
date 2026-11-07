@@ -396,6 +396,45 @@ describe('ResourceUsageWindowController', () => {
     expect(owner.focus).not.toHaveBeenCalled();
   });
 
+  // #6240：Wayland 托盘恢复通过 hide + show 重新映射未聚焦的主窗口。失效后果：用户已打开的
+  // 资源占用窗口会在点托盘「打开 Cindy」时被一并收起，且不再回来。
+  it('keeps the monitor open while the owner is only re-mapped', () => {
+    const windows: FakeWindow[] = [];
+    const mainSender = { id: 100 } as WebContents;
+    const ownerListeners = new Map<string, () => void>();
+    const owner = {
+      isDestroyed: () => false,
+      isMinimized: () => false,
+      isVisible: () => true,
+      restore: vi.fn(),
+      show: vi.fn(),
+      focus: vi.fn(),
+      on: vi.fn((event: string, listener: () => void) => {
+        ownerListeners.set(event, listener);
+      }),
+    };
+    const controller = new ResourceUsageWindowController({
+      createWindow: () => {
+        const win = fakeWindow(windows.length + 1);
+        windows.push(win);
+        return win as unknown as BrowserWindow;
+      },
+      isOpenSender: (sender) => sender === mainSender,
+      getOwnerWindow: () => owner,
+      platform: 'linux',
+    });
+    controller.prewarm();
+    markPrewarmed(controller, windows[0]!);
+    expect(controller.open(mainSender)).toBe(true);
+    windows[0]?.hide.mockClear();
+
+    // Electron 在 hide() 内同步发出 owner 的 hide 事件。
+    controller.whileOwnerRemaps(() => ownerListeners.get('hide')?.());
+
+    expect(windows[0]?.hide).not.toHaveBeenCalled();
+    expect(windows[0]?.isVisible()).toBe(true);
+  });
+
   it('tracks a pending macOS fullscreen entry without hiding the resource window', () => {
     const windows: FakeWindow[] = [];
     const mainSender = { id: 100 } as WebContents;

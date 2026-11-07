@@ -80,6 +80,8 @@ export class ResourceUsageWindowController {
   private locale: SupportedLocale | null = null;
   private lastOwner: ResourceUsageOwnerWindow | null = null;
   private ownerHideUnsubscribers: Array<() => void> = [];
+  /** 主窗口在 Wayland 上重新映射（hide + show）期间，owner 的 hide 不代表用户收起主窗口。 */
+  private ownerRemapping = false;
   /** macOS 原生全屏动画开始后，isFullScreen() 在 enter-full-screen 前仍可能返回 false。 */
   private enteringNativeFullscreen = false;
   /** 关闭全屏与重新打开可能交错；迟到的 leave-full-screen 只能完成原来的隐藏请求。 */
@@ -176,6 +178,20 @@ export class ResourceUsageWindowController {
     if (!win || win.isDestroyed()) return false;
     this.hideWindow(win, { restoreOwner: false });
     return true;
+  }
+
+  /**
+   * 执行主窗口的重新映射：期间同步发出的 owner hide 不收起监视器。
+   * Wayland 托盘恢复会对未聚焦的主窗口 hide + show（#6240），那只是让合成器
+   * 重新摆放并聚焦窗口，监视器应保持原样。
+   */
+  whileOwnerRemaps<T>(remap: () => T): T {
+    this.ownerRemapping = true;
+    try {
+      return remap();
+    } finally {
+      this.ownerRemapping = false;
+    }
   }
 
   /** 主窗口语言偏好变化时同步隐藏或可见的资源窗口。 */
@@ -384,7 +400,10 @@ export class ResourceUsageWindowController {
 
   private bindOwnerVisibility(owner: ResourceUsageOwnerWindow | null): void {
     if (!owner?.on) return;
-    const hide = () => this.hideWithOwner();
+    const hide = () => {
+      if (this.ownerRemapping) return;
+      this.hideWithOwner();
+    };
     // macOS 切换独立窗口的原生全屏 Space 时，owner 可能短暂发出 hide；把它
     // 当成“主窗口主动隐藏”会立刻 hide 正在进入全屏的资源窗口。这里把它作为进入动画
     // 已开始的早期信号，确保 enter-full-screen 尚未到达时关闭也会先取消原生转换。
