@@ -78,7 +78,8 @@ import { syncBotProfileFromFolder } from '../../maker-ipc/botProfileFolderSync.j
 import { requestBotRuntimeEpochRefresh } from '../../maker-ipc/botRuntimeEpochRefreshSignal.js';
 import { createLogger } from '../../logger.js';
 import { collectTaskResponsibilityScopes } from '../../maker-ipc/botTaskResponsibility.js';
-import { ensureBotProjectAutomations, prepareBotProjectWorkspace, removeBotProjectAutomations } from '../../maker-ipc/botProjectMode.js';
+import { ensureBotProjectAutomations, nameBotProject, prepareBotProjectWorkspace, removeBotProjectAutomations } from '../../maker-ipc/botProjectMode.js';
+import { normalizeRecentWorkdirPath } from './recentWorkdirs.js';
 import { setBotProjectSkillsDir } from '../../maker-ipc/botSkillStore.js';
 import { readBotProjectMode } from '../../../shared/botProjectMode.js';
 import {
@@ -2342,6 +2343,14 @@ export async function updateBotProfile(raw: unknown, expectedVersion?: number,
         .catch((error) => log.warn('teammate project automations failed', { botId: id, error: String(error) }));
       owner.assertCurrent();
     }
+  } else if (readBotProjectMode(normalizedNextConfig) && patch.displayName !== undefined
+    && patch.displayName !== current.displayName) {
+    // The project carries the teammate's standard name; a name the user gave it is kept.
+    const projectDir = normalizeRecentWorkdirPath(
+      await ensureBotWorkspaceDir(owner.userDataDir, id, app.getPath('userData')),
+    );
+    if (projectDir) await nameBotProject(id, projectDir, patch.displayName, current.displayName);
+    owner.assertCurrent();
   } else if (!readBotProjectMode(normalizedNextConfig) && readBotProjectMode(previous)) {
     const workingDir = await ensureBotWorkspaceDir(owner.userDataDir, id, app.getPath('userData'));
     await removeBotProjectAutomations(workingDir)

@@ -226,15 +226,35 @@ export async function prepareBotProjectWorkspace(input: {
     await restoreLocalProjectVisibility(projectDir, owner).catch((error) => {
       log.warn('teammate project visibility restore failed', { botId: input.botId, error: String(error) });
     });
-    const projectKey = `local:${projectDir}`;
-    const name = input.displayName.trim();
-    const named = (await listProjectAliases().catch(() => [])).some((row) => row.projectKey === projectKey);
-    if (name && !named) {
-      await upsertProjectAlias(projectKey, name).catch((error) => {
-        log.warn('teammate project name failed', { botId: input.botId, error: String(error) });
-      });
-    }
+    await nameBotProject(input.botId, projectDir, input.displayName);
     broadcastProjectRegistered(projectDir);
   }
   return { workingDir: workspace, repository, registered, memoriesCopied, skillsCopied };
+}
+
+/** One recognisable name for every teammate project, so it never reads like a same-named repo. */
+export function botProjectName(displayName: string): string {
+  return `Teammate ${displayName.trim()}`;
+}
+
+/**
+ * Names the project after the teammate. A name the user gave the project is kept; only no name,
+ * the bare teammate name (earlier default) or the standard name for `previousName` is replaced.
+ */
+export async function nameBotProject(
+  botId: string,
+  projectDir: string,
+  displayName: string,
+  previousName?: string,
+): Promise<void> {
+  const name = displayName.trim();
+  if (!name) return;
+  const projectKey = `local:${projectDir}`;
+  const current = (await listProjectAliases().catch(() => []))
+    .find((row) => row.projectKey === projectKey)?.alias?.trim() ?? '';
+  const replaceable = new Set(['', name, ...(previousName?.trim() ? [previousName.trim(), botProjectName(previousName)] : [])]);
+  if (!replaceable.has(current) || current === botProjectName(name)) return;
+  await upsertProjectAlias(projectKey, botProjectName(name)).catch((error) => {
+    log.warn('teammate project name failed', { botId, error: String(error) });
+  });
 }
