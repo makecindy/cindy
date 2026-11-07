@@ -78,6 +78,26 @@
  *      理由:切走之后目标文件与写入内容就再没有下文,后续轮次可能重复执行副作用。
  *      代价是这类 span 的卡片多一行指针,其余格式不变。
  *
+ * 1.1.0 / 1.1.1 对齐的部分:
+ *   - 卡片是地板(1.1.0,上游 issue #19):最新一张改写标记(卡片/压缩/分支摘要)右侧才有可切
+ *     内容。尾巴走到卡片、或切点右边还有卡片,一律不切 —— 否则这一刀落在已进缓存的前缀里,
+ *     下一轮上下文会被打回去。普通轮次与收尾都受这条约束。
+ *   - 长 read 独占一刀(1.1.1):调用名是 read、结果本身够 CHUNK_MIN 的工具轮不占 KEEP_ROUNDS
+ *     的保留位;只切这一轮,单条结果超过 SPINE_POINTER_TOKENS 时在这一轮内降级成指针,
+ *     这一轮切不下来再退回原规则。
+ * 1.1.0 / 1.1.1 里本仓做不到或有意不做的五处:
+ *   1) adapter.js 的懒加载:DSH 打包侧的依赖装载,pi 扩展这一层没有对应物。
+ *   2) Windows 权限门(`shadowAccessFused` / whoami + icacls / 一次性告警):同 1.0.9 第 3 条,
+ *      本仓不通过 shell 起子进程,Node 也没有 DACL 接口;目标目录继承的 ACL 已与上游落点一致。
+ *   3) 重启回填最近 3 轮结果(`restartCaptureCursor` / spine-capture.json):那是 DSH 的事件
+ *      seq 游标;pi 每个 settle 都给全量消息,原文快照按 toolCallId 幂等,没有需要回填的缺口。
+ *   4) 收尾记账(`spine-cuts.jsonl`,rewrite 只记一次):本仓的 stats 是估算值且从未扣过
+ *      rewrite,上游修的那个「重复扣 rewrite」问题在这里不存在。
+ *   5) 空闲轮只扫一遍快照(复用 calls / jobs / measurement):本仓的 settle 本来就只量一次
+ *      (`ctx.getContextUsage`),收尾每刀只拿模拟总量重选,entries 也只有一份。
+ * 另:1.1.1「备份失败不致命」—— 本仓写不进 shadow 时就放弃这一刀并留日志,异常在钩子边界
+ * 被吞掉,宿主会话不受影响,语义已覆盖。
+ *
  * Mapping notes (DSH -> pi):
  *   - agent/status idle + turn/end completed  -> pi.on("agent_before_settle", outcome === "completed")
  *   - session.surface.nodes + surfaceOp replace -> event.context.contextEntries +
@@ -527,9 +547,44 @@ export function finishedToolRounds(entries: Array<{ calls: string[]; results: st
 export function keptToolRounds(
   entries: Array<{ calls: string[]; results: string[] }>,
   limit: number = KEEP_ROUNDS,
+  longReads?: Set<number>,
 ): ToolRound[] {
   const count = Number.isInteger(limit) && limit > 0 ? limit : 3;
-  return finishedToolRounds(entries).slice(-count);
+  // 1.1.1: 含长 read 的轮不占保留位 —— 它与普通短结果同留时,这一轮根本切不下来。
+  // Upstream: rounds holding a long read are not kept, so they can be cut on their own.
+  const rounds = finishedToolRounds(entries).filter((round) => !roundHasLongRead(round, longReads));
+  return rounds.slice(-count);
+}
+
+/** 轮区间里有没有标成长 read 的条目(上游 roundHasLongRead)。 */
+export function roundHasLongRead(round: ToolRound, longReads?: Set<number>): boolean {
+  if (!longReads) return false;
+  for (let index = round.start; index <= round.end; index += 1) {
+    if (longReads.has(index)) return true;
+  }
+  return false;
+}
+
+/**
+ * 1.1.1: 哪些工具结果算「长 read」—— 调用名是 read、且结果本身到了 CHUNK_MIN。
+ * 这类结果一刀切下来最肥,但它边上的短结果要是也被留着,这一轮就永远凑不满 CHUNK_MIN。
+ */
+export function longReadResults(
+  entries: Array<{ role: string; est: number; results: string[]; callMeta?: Map<string, { name: string }> }>,
+): Set<number> {
+  const callNames = new Map<string, string>();
+  for (const entry of entries || []) {
+    for (const [id, meta] of entry?.callMeta ?? []) callNames.set(id, meta.name);
+  }
+  const marked = new Set<number>();
+  (entries || []).forEach((entry, index) => {
+    if (normalizeRole(entry?.role) !== "tool") return;
+    const id = entry.results?.[0] || "";
+    if (!id) return;
+    if (callNames.get(id) !== "read") return;
+    if ((entry.est || 0) >= CHUNK_MIN) marked.add(index);
+  });
+  return marked;
 }
 
 /** 保留区从 keepStart 开始:切割只能停在它前面一格。 */
@@ -810,9 +865,19 @@ export function resolveSpineEngine(provider: string): { engine: SpineEngine; sou
 interface CutItem {
   type: string;
   tokens: number;
+  /** 改写标记(卡片/压缩/分支摘要):切点不能再往它左边走 —— 那里已进缓存。 */
   checkpoint: boolean;
+  /** 图片等非文本载荷:任何切段都不能把它卷进去,但它不是缓存边界。 */
+  barrier: boolean;
   balancedBefore: boolean;
   balancedAfter: boolean;
+}
+
+/** 1.1.0 的「卡片地板」只认改写标记;图片屏障是本仓多出来的一类,不能当缓存边界。 */
+function isRewriteMarker(entry: SpineEntry): boolean {
+  if (entry.entryType === "compaction" || entry.entryType === "branch_summary") return true;
+  if (entry.role === "custom") return true;
+  return entry.text.includes(MARK);
 }
 
 function nonUserGain(items: CutItem[], start: number, end: number): number {
@@ -833,13 +898,47 @@ function walkOffTail(items: CutItem[], end: number, floor: number): number {
   let index = end;
   while (index >= floor) {
     const item = items[index];
+    // 1.1.0: 卡片是停止线。走到它就没有可切的尾巴 —— 再往左就是已进缓存的前缀，
+    // 切那里会改写缓存并在下一轮把上下文打回去（上游 issue #19）。
+    if (item.checkpoint) return -1;
     const shortUser = item.type === "user" && (item.tokens || 0) < 400;
-    if (item.type !== "assistant" && !shortUser && !item.checkpoint) break;
+    if (item.type !== "assistant" && !shortUser) break;
     index -= 1;
   }
   while (index >= floor && items[index].type === "user") index -= 1;
-  while (index >= floor && items[index].checkpoint) index -= 1;
+  if (index >= floor && items[index].checkpoint) return -1;
   return index;
+}
+
+/** 1.1.0: 切点右边还有卡片 = 这一刀落在已缓存前缀里，不切。 */
+export function cutCrossesNewerCheckpoint(items: CutItem[], end: number): boolean {
+  if (!Array.isArray(items) || !Number.isInteger(end)) return false;
+  for (let index = end + 1; index < items.length; index += 1) {
+    if (items[index]?.checkpoint) return true;
+  }
+  return false;
+}
+
+/**
+ * 1.1.1: 一轮里有长 read 时只切这一轮，不把要留的后几轮短结果一并卷走。
+ * 这一轮里单个结果到了 pointerMax 就只留指针；这一轮切不下来就退回原规则。
+ */
+export function cutLongReadRound(
+  items: CutItem[],
+  start: number,
+  end: number,
+  options: Parameters<typeof selectCutIndexes>[1] = {},
+): { start: number; end: number; tokens: number; gain: number; pointerOnly?: boolean } | null {
+  if (!Array.isArray(items) || start < 0 || end < start || end >= items.length) return null;
+  const pointerMax = options?.pointerMax ?? options?.chunkMax ?? CHUNK_MAX;
+  for (let index = end; index >= start; index -= 1) {
+    if (items[index]?.type === "tool" && !items[index].barrier && (items[index].tokens || 0) >= pointerMax) {
+      return { start: index, end: index, pointerOnly: true, gain: 0, tokens: items[index].tokens || 0 };
+    }
+  }
+  const picked = selectCutIndexes(items, { ...options, drain: true, minStart: start, maxEnd: end });
+  if (!picked || picked.start < start || picked.end > end) return null;
+  return picked;
 }
 
 function expandBack(items: CutItem[], end: number, stopAt: number, options: { crossUser: boolean; chunkMax: number }) {
@@ -847,7 +946,7 @@ function expandBack(items: CutItem[], end: number, stopAt: number, options: { cr
   let tokens = items[end].tokens || 0;
   while (start > stopAt) {
     const prev = start - 1;
-    if (items[prev].checkpoint) break;
+    if (items[prev].checkpoint || items[prev].barrier) break;
     if (!options.crossUser && items[prev].type === "user") break;
     if (tokens + (items[prev].tokens || 0) > options.chunkMax) break;
     start = prev;
@@ -870,6 +969,8 @@ export function selectCutIndexes(
     chunkMax?: number;
     /** 1.0.8: 单条工具结果超过这个数才降级成指针(与单段上限解耦)。 */
     pointerMax?: number;
+    /** 1.1.1: 只在这个下标之后找切点(长 read 独占一刀用)。 */
+    minStart?: number;
     maxEnd?: number | null;
     /** 当前实测总量:判「平时不切」与紧急线。 */
     totalTokens?: number;
@@ -895,35 +996,40 @@ export function selectCutIndexes(
   // 守住边界等于永远停在水位之上。普通轮次仍以 maxEnd(保留区之前)为上限。
   // Upstream parity: a drain may cut into the kept rounds; an ordinary turn may not.
   const limit = options.maxEnd === null || options.maxEnd === undefined ? items.length - 1 : options.maxEnd;
-  if (limit < 0) return null;
+  // 1.1.0: 切点不能越过卡片往左走(lowerBound 是调用方给的下限,默认 0)。
+  const lowerBound = Math.max(0, options.minStart ?? 0);
+  if (limit < lowerBound) return null;
   const lastUser = items.reduce((found, item, index) => (item.type === "user" ? index : found), -1);
   const firstUser = items.findIndex((item) => item.type === "user");
   const floor = firstUser >= 0 ? firstUser + 1 : 0;
-  const end = walkOffTail(items, limit, 0);
-  if (end < 0) return null;
+  const end = walkOffTail(items, limit, lowerBound);
+  if (end < lowerBound) return null;
+  // 切点右边还有卡片，说明这一刀在已缓存前缀里。不切。
+  if (cutCrossesNewerCheckpoint(items, end)) return null;
   if (!cloud) {
     if (lastUser >= 0 && end <= lastUser) return null;
     if ((items[end].tokens || 0) > pointerMax && items[end].type === "tool") {
       return { start: end, end, pointerOnly: true, gain: 0, tokens: items[end].tokens || 0 };
     }
     if ((items[end].tokens || 0) > chunkMax) return null;
-    const local = expandBack(items, end, Math.max(floor, lastUser), { crossUser: false, chunkMax });
+    const local = expandBack(items, end, Math.max(lowerBound, floor, lastUser), { crossUser: false, chunkMax });
     if (local.gain < chunkMin || !balanced(items, local.start, local.end)) return null;
     return local;
   }
   // 1.0.9: 指针刀只在「这一段里、卡片或最后一条 user 之前」找,找不到就交给下面的普通切段。
   let pointer: { start: number; end: number; pointerOnly: true; gain: number; tokens: number } | null = null;
-  for (let index = end; index >= 0; index -= 1) {
-    if (items[index].checkpoint || items[index].type === "user") break;
-    if (items[index].type === "tool" && (items[index].tokens || 0) > pointerMax) {
+  for (let index = end; index >= lowerBound; index -= 1) {
+    if (items[index].checkpoint || items[index].barrier || items[index].type === "user") break;
+    if (items[index].type === "tool" && !items[index].barrier && (items[index].tokens || 0) > pointerMax) {
       pointer = { start: index, end: index, pointerOnly: true, gain: 0, tokens: items[index].tokens || 0 };
       break;
     }
   }
+  if (items[end].barrier) return null;
   if ((items[end].tokens || 0) > pointerMax && items[end].type === "tool") {
     return { start: end, end, pointerOnly: true, gain: 0, tokens: items[end].tokens || 0 };
   }
-  const phase = expandBack(items, end, 0, { crossUser: false, chunkMax });
+  const phase = expandBack(items, end, lowerBound, { crossUser: false, chunkMax });
   // 不跨 user 去凑 chunkMin。不够就跳过。
   if (phase.gain < chunkMin) return pointer;
   if (phase.tokens > chunkMax || !balanced(items, phase.start, phase.end)) return null;
@@ -2472,7 +2578,8 @@ export function selectNewestChunk(
     return {
       type: role === 'user' || role === 'assistant' || role === 'tool' || role === 'system' ? role : 'other',
       tokens: entry.est,
-      checkpoint: isCheckpoint(entry),
+      checkpoint: isRewriteMarker(entry),
+      barrier: Boolean(entry.opaque),
       balancedBefore: cutOk(() => index <= 0 || prefixBalanced[index - 1]),
       balancedAfter: cutOk(() => suffixClean(index)),
     };
@@ -2482,13 +2589,22 @@ export function selectNewestChunk(
   // 「切掉后后缀不平衡」的位置逐格后退。这里不用 plan.js 的 walkOffTail ——
   // 那个函数还会额外剥掉尾部 user,而上游算保留区时把那条 user 留在 visible 里。
   let end = nodes.length - 1;
+  // 1.1.0: 最新一张卡片是地板。切点不能走到它左边 —— 那里已经进缓存，改写它会把上下文
+  // 打回去（上游 issue #19）。
+  let floorCard = -1;
+  for (let index = first; index <= end; index += 1) {
+    if (isRewriteMarker(entries[index])) floorCard = index;
+  }
   while (end >= first) {
+    if (floorCard >= 0 && end <= floorCard) return warn(`tail reaches checkpoint floor=${floorCard}`);
     const entry = entries[end];
     const shortTail = entry.role === "assistant" || (isUser(entry) && entry.est < 400);
     if (!shortTail) break;
     end -= 1;
   }
-  while (end >= first && isCheckpoint(entries[end])) end -= 1;
+  if (floorCard >= 0 && end <= floorCard) return warn(`tail below checkpoint floor=${floorCard}`);
+  // 图片屏障不是缓存边界:从它身上退开就好,不当卡片地板。
+  while (end >= first && entries[end].opaque) end -= 1;
   while (end >= first && !cutOk(() => suffixClean(end))) end -= 1;
 
   // 1.0.6/1.0.8: 最近 KEEP_ROUNDS 轮已完成的工具结果尽量原地保留(受 KEEP_ROUND_TOKENS 预算约束),
@@ -2496,21 +2612,35 @@ export function selectNewestChunk(
   // 上游用的是 visible(= 到 end 为止)里的轮次;尾巴上还没结束的轮不该算进保留区。
   // 1.0.9: 保留区不再是「预算内的若干轮」,而是最近 KEEP_ROUNDS 个已完成的工具轮原样留;
   // KEEP_ROUND_TOKENS 只剩收尾水位一个用途。
-  const rounds = keptToolRounds(entries.slice(0, end + 1), KEEP_ROUNDS);
+  const longReads = longReadResults(entries);
+  const rounds = keptToolRounds(entries.slice(0, end + 1), KEEP_ROUNDS, longReads);
   const kept = rounds.length ? { start: rounds[0].start, end: rounds.at(-1).end } : null;
   const cutEnd = kept ? reservedCutEnd(kept.start, first) : null;
   if (kept && cutEnd === null) return warn(`keep span starts at first=${first}`);
+  // 1.1.1: 最近一轮带长 read 的已完成轮 —— 它自己单独成刀，不并进后面的短轮。
+  const newestLong = finishedToolRounds(entries.slice(0, end + 1))
+    .filter((round) => roundHasLongRead(round, longReads))
+    .at(-1) ?? null;
   // 1.0.7: 尾部判据只算「保留区之外」的部分(原仓 tailBeyondKept),保留区本身不算尾巴。
   let keptTokens = 0;
   if (cutEnd !== null && kept) {
     for (let index = kept.start; index <= kept.end; index += 1) keptTokens += entries[index].est;
     end = cutEnd;
-    while (end >= first && (isCheckpoint(entries[end]) || isUser(entries[end]))) end -= 1;
-    while (end >= first && !cutOk(() => suffixClean(end))) end -= 1;
+    while (end >= first && (isUser(entries[end]) || entries[end].opaque) && !(floorCard >= 0 && end - 1 <= floorCard)) end -= 1;
+    if (floorCard >= 0 && end <= floorCard) return warn(`cut end ${end} reaches checkpoint floor=${floorCard}`);
+    if (isRewriteMarker(entries[end])) return warn(`cut end ${end} is checkpoint`);
+    while (end >= first && !cutOk(() => suffixClean(end))) {
+      if (floorCard >= 0 && end - 1 <= floorCard) return warn(`suffix walk reaches checkpoint floor=${floorCard}`);
+      end -= 1;
+    }
+    if (floorCard >= 0 && end <= floorCard) return warn(`cut end ${end} below checkpoint floor=${floorCard}`);
   }
-  if (end < first || isCheckpoint(entries[end])) return warn(`end<first or checkpoint (tail all shortTail/checkpoint)`);
+  const longSpan = newestLong && newestLong.start > floorCard ? { start: newestLong.start, end: newestLong.end } : null;
+  if (!longSpan && (end < first || isCheckpoint(entries[end]))) {
+    return warn(`end<first or checkpoint (tail all shortTail/checkpoint)`);
+  }
 
-  const picked = selectCutIndexes(items, {
+  const cutOptions = {
     engine,
     chunkMin: CHUNK_MIN,
     chunkMax: CHUNK_MAX,
@@ -2520,7 +2650,22 @@ export function selectNewestChunk(
     drain: context.drain === true,
     urgentTokens: URGENT_TOKENS,
     keepBudget: KEEP_ROUND_TOKENS,
-  });
+  };
+  let usedLongCut = false;
+  let picked: ReturnType<typeof selectCutIndexes> = null;
+  if (longSpan) {
+    const longPicked = cutLongReadRound(items, longSpan.start, longSpan.end, cutOptions);
+    if (longPicked && longPicked.start >= longSpan.start && longPicked.end <= longSpan.end) {
+      picked = longPicked;
+      usedLongCut = true;
+    }
+  }
+  if (!picked) {
+    if (end < first || isCheckpoint(entries[end])) {
+      return warn(`no span end=${end} checkpoint/tail total=${spanTokens(items, 0, nodes.length - 1)} engine=${engine}`);
+    }
+    picked = selectCutIndexes(items, cutOptions);
+  }
   if (!picked) {
     const newest = expandBack(items, end, 0, { crossUser: false, chunkMax: CHUNK_MAX });
     return warn(`no span end=${end} newest=${newest.gain}<CHUNK_MIN total=${spanTokens(items, 0, nodes.length - 1)} engine=${engine}`);
@@ -2587,6 +2732,7 @@ export function selectNewestChunk(
       }
     }
     if (pairStart < 0) return warn(`pointer-only result ${spanEnd} has no call in front`);
+    if (usedLongCut && longSpan && pairStart < longSpan.start) return warn(`pointer cut escapes long read round ${longSpan.start}`);
     if (!pointerSpanAllowed(items, pairStart, spanEnd, engine)) return warn(`pointer span rejected ${pairStart}..${spanEnd}`);
     if (!cutOk(() => pairStart <= 0 || prefixBalanced[pairStart - 1])) return warn(`prefix not balanced at pointer start=${pairStart}`);
     start = pairStart;
@@ -2600,6 +2746,10 @@ export function selectNewestChunk(
     // 切割后 prefix 是 [0..start-1],所以平衡判据要取 start-1(原仓 toolPairingBalancedBefore)。
     if (!cutOk(() => start <= 0 || prefixBalanced[start - 1])) return warn(`prefix not balanced at start=${start}`);
     if (isCheckpoint(entries[start])) return warn(`start=${start} is checkpoint`);
+  }
+  // 1.1.1: 长 read 的刀只能留在自己的轮里。
+  if (usedLongCut && longSpan && (picked.start < longSpan.start || picked.end > longSpan.end)) {
+    return warn(`long read cut escapes ${longSpan.start}..${longSpan.end}`);
   }
   // 1.0.8: 平衡判据盖住两种切法。上游的 toolPairingBalancedAfter 写在 pointerOnly/普通两支之后,
   // 指针段同样要对:一条 assistant 发两个调用、只把超大的那个结果换成指针时,

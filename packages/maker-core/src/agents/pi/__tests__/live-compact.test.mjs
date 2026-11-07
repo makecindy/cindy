@@ -54,7 +54,7 @@ const FAKE_BRACKET_PASSWORD = ['abc', '[defghijklmnop'].join('');
 
 const extensionModule = await import('../../../../extensions/live-compact/index.ts');
 const registerLiveCompact = extensionModule.default;
-const { selectNewestChunk, balanceIndexes, buildCard, redactSecrets, attachBackupHint, isToolFailure, rotateShadow, pruneShadowSessions, spineRoot, keptToolRounds, chooseKeptSpan, reservedCutEnd, toolEvidenceLine, pointerFor, captureToolResult, planRawEntry, commitRawEntry, verifiedRaw, resolveEngine, resolveSpineEngine, selectCutIndexes, pointerSpanAllowed, pointerOnlyText, spineEntries, writeOwner, orderedDrainDrafts, withBackupHint, withoutFullBackupClaim, backupHint, discardRawSnapshots, lastCompactionEntry, inCooldown, resolveCooldownMs, providerURLFromPatch, resolveProviderBaseURL, spanHidesCallArgs, callArgsHidden } = extensionModule;
+const { selectNewestChunk, balanceIndexes, buildCard, redactSecrets, attachBackupHint, isToolFailure, rotateShadow, pruneShadowSessions, spineRoot, keptToolRounds, chooseKeptSpan, reservedCutEnd, toolEvidenceLine, pointerFor, captureToolResult, planRawEntry, commitRawEntry, verifiedRaw, resolveEngine, resolveSpineEngine, selectCutIndexes, pointerSpanAllowed, pointerOnlyText, spineEntries, longReadResults, writeOwner, orderedDrainDrafts, withBackupHint, withoutFullBackupClaim, backupHint, discardRawSnapshots, lastCompactionEntry, inCooldown, resolveCooldownMs, providerURLFromPatch, resolveProviderBaseURL, spanHidesCallArgs, callArgsHidden } = extensionModule;
 
 let seq = 0;
 function entry(role, text, extra = {}) {
@@ -1108,5 +1108,107 @@ describe('live compact 1.0.8: cache-safe drains, pointer-only spans, no cross-us
     expect(withRaw).toContain('read big.txt');
     expect(withRaw).toContain('raw-c9.txt');
     expect(pointerOnlyText([{ role: 'tool', text: 'x', name: 'read', toolCallId: 'c8', raw: { ok: false, toolCallId: 'c8' } }])).toContain('无完整备份');
+  });
+});
+describe('live compact 1.1.x: 卡片地板与长 read 独占一刀', () => {
+  const round = (id, text) => [
+    entry('assistant', `call ${id}`, { calls: [id] }),
+    entry('toolResult', text, { results: [id] }),
+  ];
+  // 长 read:调用名是 read、结果本身够大。上游把这类结果从保留区里摘出来单独切。
+  const readRound = (id, text) => [
+    entry('assistant', `read ${id}`, {
+      calls: [id],
+      callMeta: new Map([[id, { name: 'read', command: '', filePath: '', jobId: '', hiddenArgs: false }]]),
+    }),
+    entry('toolResult', text, { results: [id] }),
+  ];
+  const card = () => ({ ...entry('user', 'Spine extract.\nsummary'), entryType: 'compaction' });
+
+  it('never cuts to the left of the newest checkpoint card', () => {
+    const mk = () => [
+      entry('system', 'sys'),
+      entry('user', 'go'),
+      ...round('c6', 'older '.repeat(2500)),
+      ...round('c7', 'older '.repeat(2500)),
+      ...round('c8', 'older '.repeat(2500)),
+      ...round('c9', 'older '.repeat(2500)),
+      ...round('c0', 'tiny '.repeat(100)),
+      card(),
+      entry('assistant', 'done'),
+    ];
+    // 卡片左边全是可切内容,但那是已进缓存的前缀:平时和收尾都不许切过去。
+    expect(selectNewestChunk(mk(), undefined, { totalTokens: 90000 })).toBeNull();
+    expect(selectNewestChunk(mk(), undefined, { drain: true, totalTokens: 90000 })).toBeNull();
+
+    // 卡片右边又长出几轮之后,切点必须落在卡片右侧,而不是回到卡片左边。
+    const grown = [
+      entry('system', 'sys'),
+      entry('user', 'go'),
+      ...round('c6', 'older '.repeat(2500)),
+      ...round('c7', 'older '.repeat(2500)),
+      ...round('c8', 'older '.repeat(2500)),
+      ...round('c9', 'older '.repeat(2500)),
+      ...round('c0', 'tiny '.repeat(100)),
+      card(),
+      ...round('c2', 'old '.repeat(2000)),
+      ...round('c3', 'tiny '.repeat(100)),
+      ...round('c4', 'tiny '.repeat(100)),
+      ...round('c5', 'tiny '.repeat(100)),
+    ];
+    const floor = grown.findIndex((item) => item.entryType === 'compaction');
+    const picked = selectNewestChunk(grown, undefined, { drain: true, totalTokens: 90000 });
+    expect(picked).not.toBeNull();
+    expect(picked.start).toBeGreaterThan(floor);
+    expect(picked.end).toBeGreaterThan(floor);
+  });
+
+  it('stops selectCutIndexes from cutting left of a checkpoint in the same item list', () => {
+    const items = [
+      ['user', 50], ['assistant', 100], ['tool', 9000],
+      ['user', 50], ['assistant', 100], ['tool', 9000],
+      ['user', 50],
+    ].map(([type, tokens]) => ({ type, tokens, checkpoint: false, barrier: false }));
+    items[0] = { ...items[0], checkpoint: true };
+    // 卡片在要切的那一段左边:照常切这一段。
+    expect(selectCutIndexes(items, { engine: 'cloud', drain: true, maxEnd: 5 })).toMatchObject({ start: 4, end: 5 });
+    // 卡片在切点右边(那是已缓存前缀的边界):这一刀落在前缀里,拒绝。
+    const withCardAhead = items.map((item, index) => (index === 6 ? { ...item, checkpoint: true } : item));
+    expect(selectCutIndexes(withCardAhead, { engine: 'cloud', drain: true, maxEnd: 5 })).toBeNull();
+  });
+
+  it('cuts a long read round on its own instead of keeping it with the short rounds', () => {
+    const entries = [
+      entry('system', 'sys'),
+      entry('user', 'go'),
+      ...round('c9', 'older '.repeat(2500)),
+      ...readRound('r0', 'file '.repeat(4000)),
+      ...round('c1', 'tiny '.repeat(100)),
+      ...round('c2', 'tiny '.repeat(100)),
+      ...round('c3', 'tiny '.repeat(100)),
+    ];
+    // 长 read 的那一轮不占保留位:保留区只有后面三个短轮,切点正好只盖住它自己那一轮。
+    const longStart = entries.findIndex((item) => item.text === 'read r0');
+    expect(keptToolRounds(entries, 3, longReadResults(entries)).at(0).start).toBeGreaterThan(longStart);
+    const picked = selectNewestChunk(entries, undefined, { drain: true, totalTokens: 70000 });
+    expect(picked).toMatchObject({ start: longStart, end: longStart + 1 });
+    expect(picked.pointerOnly).toBeUndefined();
+  });
+
+  it('pointer-cuts the only long read round when its single result is oversized', () => {
+    const entries = [
+      entry('system', 'sys'),
+      entry('user', 'go'),
+      ...round('c1', 'tiny '.repeat(100)),
+      ...readRound('r0', 'x'.repeat(200000)),
+      ...round('c2', 'tiny '.repeat(100)),
+      ...round('c3', 'tiny '.repeat(100)),
+    ];
+    const longStart = entries.findIndex((item) => item.text === 'read r0');
+    const picked = selectNewestChunk(entries, undefined, { drain: true, totalTokens: 90000 });
+    // 指针刀把发起调用的 assistant 一起换掉,卡片里只留指针(原文一个字都不进卡片)。
+    expect(picked).toMatchObject({ start: longStart, end: longStart + 1 });
+    expect(picked.card.text).toContain('无完整备份');
+    expect(picked.card.text).not.toContain('xxxxxxxxxx');
   });
 });
