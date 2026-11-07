@@ -96,6 +96,10 @@ jobs:
       - name: Check endpoint literals
         run: pnpm check:endpoints
 
+      # 内联扩展常量与真源必须同一步:漏跑生成脚本会让发布包跑旧代码,而 diff 看不出异常。
+      - name: Check live-compact source is in sync
+        run: pnpm check:live-compact-source
+
       # i18n 三道静态门禁：key 结构一致性、品牌名收口、术语表一致性。
       # 都是纯文件扫描、秒级返回，放在耗时的 typecheck / 单测之前快速失败。
       - name: Check i18n key consistency

@@ -4497,6 +4497,34 @@
         "toggleFailed": "LSP 开关切换未成"
       }
     },
+    "liveCompact": {
+      "cell": {
+        "title": "边做边压 · Live Compact",
+        "description": "每轮既毕，取已成之一段对谈，压为一纸本地之卡：模型仍见其要，及全文所在之径，故上下文增之也缓。凡后启之 Pi 务乃效（重开旧务亦在其中），方行之务不改；惟行于本机之 Pi 务，远机之务不受其效。其法异于 Pi 原生之自压。",
+        "sourceLabel": "原仓：MerkyorLynn/dsh-live-compact"
+      },
+      "toast": {
+        "enabled": "既启矣，后启之务乃效",
+        "disabled": "既闭矣，后启之务乃效",
+        "toggleFailed": "启闭边做边压之开关，未成",
+        "readFailed": "读取边做边压之开关，未成"
+      },
+      "openFailed": "启其链，未成",
+      "toggleAria": "边做边压 Live Compact",
+      "shadow": {
+        "label": "影子原文",
+        "description": "所削原文存于此，清之则旧摘要不复展其文。",
+        "openButton": "启其所",
+        "clearButton": "清",
+        "directoryMissing": "未得边做边压之影子原文所",
+        "openFailed": "启边做边压之影子原文所不得，请复试。",
+        "clearConfirmTitle": "清边做边压之影子原文乎？",
+        "clearConfirmDescription": "唯删影子原文所中之文，对语与摘要不损。已指此诸文之摘要不复能展其原文，且不可复。",
+        "clearConfirmButton": "清其影子原文",
+        "cleared": "边做边压之影子原文已清",
+        "clearFailed": "清边做边压之影子原文不成，请复试。"
+      }
+    },
     "betaChannel": {
       "title": "Beta 试行之道",
       "badge": "Beta",

@@ -3991,6 +3991,9 @@ interface ElectronAPI {
     clearLegacyImagesDir: () => Promise<{ cleared: boolean }>;
     openChatAttachmentsDir: () => Promise<{ opened: boolean }>;
     clearChatAttachmentsDir: () => Promise<{ cleared: boolean }>;
+    spineStats: () => Promise<{ bytes: number; fileCount: number }>;
+    openSpineDir: () => Promise<{ opened: boolean }>;
+    clearSpineDir: () => Promise<{ cleared: boolean }>;
     stats: () => Promise<{
       success: boolean;
       error?: string;
@@ -6891,6 +6894,11 @@ interface ElectronAPI {
     lspModeGet: () => Promise<{ enabled: boolean }>;
     /** 仅对新 session 生效; 已开 session 的 mcp providers 已固化 */
     lspModeSet: (enabled: boolean) => Promise<{ effective: 'next-session' }>;
+
+    /** 边做边压 Live Compact 实验开关 — 开启后新会话加载内置 live-compact 扩展 (默认 false) */
+    liveCompactGet: () => Promise<{ enabled: boolean }>;
+    /** 仅对新 session 生效; pi 进程启动时一次性决定是否加载扩展 */
+    liveCompactSet: (enabled: boolean) => Promise<{ effective: 'next-session' }>;
 
     /** 对话语义索引开关 — owner-scoped；企业组织账号默认开，其余默认关 */
     chatEmbeddingGet: () => Promise<{

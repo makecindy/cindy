@@ -140,7 +140,8 @@ function readPrefs(): ModelContextLimitPrefs {
 
 /** 全部 override 快照。 */
 export function readModelContextLimits(): Record<string, number> {
-  return readPrefs().limits;
+  // 底层 readState() 暴露缓存本体;返回浅拷贝,防调用方就地写污染进程内缓存并被下次 writePatch 落盘。
+  return { ...readPrefs().limits };
 }
 
 export function readModelCompactionPct(providerId: string, modelId: string): number | null {
@@ -200,6 +201,9 @@ export function resolveModelCompactionPct(
   const target = provider ? modelCompactionTarget(provider, agent, modelId) : null;
   return (
     (target ? readModelCompactionPct(target.providerId, target.modelId) : null) ??
+    // provider 暂时查不到(catalog 刷新中/已下线)时退回原始 id 直查:用户的显式设置
+    // 不应因 catalog 瞬时不可见而静默回落默认值。
+    (providerId && modelId ? readModelCompactionPct(providerId, modelId) : null) ??
     DEFAULT_MODEL_COMPACTION_PCT
   );
 }
@@ -236,7 +240,15 @@ export async function writeModelCompactionWithRefresh(
       if (previous[key] === undefined) delete restored[key];
       else restored[key] = previous[key];
     }
-    originalStore.writePatch({ compactionPcts: restored });
+    try {
+      originalStore.writePatch({ compactionPcts: restored });
+    } catch (rollbackError) {
+      // preserveUnreadableFile 下原文件损坏会让回滚写抛错:只记录,让原始 refresh 失败
+      // 继续上报,且 refreshAfterRollback 仍要执行(运行时句柄需要与已恢复的策略对齐)。
+      log.warn('compaction rollback write failed; reporting the original refresh failure', {
+        error: rollbackError instanceof Error ? rollbackError.message : String(rollbackError),
+      });
+    }
     store = createStore(() => ownerScopedUserDataPath('model-context-limit-prefs.json'));
     if (ownerScopedUserDataPath('model-context-limit-prefs.json') === filePath) {
       try {
@@ -328,6 +340,11 @@ export async function writeModelContextLimitsWithRefresh(
     }
     try {
       originalStore.writePatch({ limits });
+    } catch (rollbackError) {
+      // 同 compaction 回滚:回滚写失败只记录,不顶掉原始 refresh 失败,refreshAfterRollback 继续跑。
+      log.warn('context limit rollback write failed; reporting the original refresh failure', {
+        error: rollbackError instanceof Error ? rollbackError.message : String(rollbackError),
+      });
     } finally {
       store = createStore(() => ownerScopedUserDataPath('model-context-limit-prefs.json'));
     }

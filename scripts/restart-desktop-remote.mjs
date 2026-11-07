@@ -1087,6 +1087,14 @@ function devEnvEntries(env) {
     ['CINDY_PERSONAL_GENERATION', env.CINDY_PERSONAL_GENERATION],
     // 插件存储启动边界的 dev 黑盒验收：仅显式临时结果路径时启用。
     ['XDT_PLUGIN_STORAGE_SMOKE_RESULT_FILE', env.XDT_PLUGIN_STORAGE_SMOKE_RESULT_FILE],
+    // 外置 pi 扩展调试逃生门：设置页的实验开关会注入内置 live-compact 扩展，
+    // 这里的环境变量只用于本地换用别的扩展文件/调 SPINE_* 旋钮。仅显式设置时透传，
+    // 不改变默认行为（pi 扩展无自动发现，SPINE 默认关闭）。
+    // CINDY_PI_EXTRA_EXTENSIONS / SPINE_* 仅本地会话生效:远端 daemon 加载不了本机路径,
+    // pi-host 消费端对 remoteHostId 直接跳过;远端模式下这些变量不会进 pi 子进程。
+    ['CINDY_PI_EXTRA_EXTENSIONS', env.CINDY_PI_EXTRA_EXTENSIONS],
+    ['SPINE_MIN_TOKENS', env.SPINE_MIN_TOKENS],
+    ['SPINE_SHADOW_DIR', env.SPINE_SHADOW_DIR],
   ];
 }
 
@@ -1103,7 +1111,12 @@ export function devEnvPrefix(env = process.env, platform = process.platform) {
 
   if (platform === 'win32') {
     return envEntries
-      .map(([key, value]) => `set "${key}=${String(value).replaceAll('"', '')}" && `)
+      .map(([key, value]) => {
+        const text = String(value);
+        // cmd 命令行会对值里的 %VAR% 做环境变量展开且没有转义写法;含 % 的值宁可 fail-fast 也不静默损坏。
+        if (text.includes('%')) throw new Error(`refusing to forward ${key} through cmd: value contains '%'`);
+        return `set "${key}=${text.replaceAll('"', '')}" && `;
+      })
       .join('');
   }
 

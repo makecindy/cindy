@@ -4540,6 +4540,34 @@
         "toggleFailed": "Failed to toggle LSP"
       }
     },
+    "liveCompact": {
+      "cell": {
+        "title": "Live Compact · Beta",
+        "description": "Folds each completed stretch of conversation into a local card at turn end: the model keeps the gist plus a path to the full text, so context grows more slowly. Applies to Pi tasks started from now on (reopening an old task counts too); tasks already running are unaffected. Only applies to Pi tasks on this computer; tasks on a remote computer are unaffected. The strategy differs from native compaction.",
+        "sourceLabel": "Upstream: MerkyorLynn/dsh-live-compact"
+      },
+      "toast": {
+        "enabled": "Enabled — applies to Pi tasks started from now on",
+        "disabled": "Disabled — applies to Pi tasks started from now on",
+        "toggleFailed": "Could not change the Live Compact setting",
+        "readFailed": "Could not read the Live Compact setting"
+      },
+      "openFailed": "Could not open the link",
+      "toggleAria": "Live Compact",
+      "shadow": {
+        "label": "Shadow text",
+        "description": "Cut-out text lives here; clearing breaks old summaries.",
+        "openButton": "Open directory",
+        "clearButton": "Clear",
+        "directoryMissing": "The Live Compact shadow directory was not found",
+        "openFailed": "Could not open the Live Compact shadow directory. Try again.",
+        "clearConfirmTitle": "Clean up the Live Compact shadow directory?",
+        "clearConfirmDescription": "Only files in the Live Compact shadow directory will be deleted; conversations and summaries are untouched. Summaries that already point to these files will no longer be able to show the original text. This cannot be undone.",
+        "clearConfirmButton": "Clear shadow",
+        "cleared": "Live Compact shadow cleaned up",
+        "clearFailed": "Could not clean up the Live Compact shadow. Try again."
+      }
+    },
     "betaChannel": {
       "title": "Beta channel",
       "badge": "Beta",

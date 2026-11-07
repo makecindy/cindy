@@ -109,6 +109,7 @@ import {
   projectPiRequestDiagnostics,
   CINDY_BRIDGE_EXTENSION_SOURCE } from './cindy-bridge-source.js';
 import { nativeProviderAdapterAliases } from './native-provider-adapter-source.js';
+import { LIVE_COMPACT_EXTENSION_SOURCE } from './live-compact-source.js';
 import { parsePiNativeRuntimeSettings, resolvePiNativeReserve, type PiNativeRuntimeSettings } from './native-runtime-settings.js';
 import {
   CINDY_SUBAGENT_ENV,
@@ -1760,9 +1761,20 @@ export function buildPiSettingsJsonContent(
   workingContextWindow?: number,
 ): string {
   const effectiveContextWindow = contextWindow > 0 ? contextWindow : 128_000;
+  // 公共 API 护栏:pct 必须在 (0, 100]。NaN 会经 Math.max 变 NaN 再被 JSON.stringify 写成
+  // null 炸掉 Pi 设置;0/超 100 会产生语义相反的保留量。宿主层已有 clamp,这里拒尽非法值。
+  if (
+    piCompactionPct !== undefined &&
+    (!Number.isFinite(piCompactionPct) || piCompactionPct <= 0 || piCompactionPct > 100)
+  ) {
+    throw new Error(`invalid pi compaction pct: ${piCompactionPct}`);
+  }
   // Pi also uses model.contextWindow to clamp request max_tokens (including a
   // 4096-token safety margin). A small compaction budget must never shrink that
   // request capacity. Express the budget through native reserveTokens instead.
+  // 语义出处:pi 原生触发判据是 contextTokens > contextWindow - reserveTokens(pi 运行时
+  // shouldCompact),即 reserveTokens 是「触发点之前的空闲量」,所以 reserve = capacity -
+  // budget × pct/100 ⇒ 触发点 = budget × pct。若上游改变该语义,这里的换算方向必须重审。
   const budget = workingContextWindow && workingContextWindow > 0
     ? Math.min(workingContextWindow, effectiveContextWindow) : effectiveContextWindow;
   const reserveTokens = piCompactionPct === undefined && budget === effectiveContextWindow
@@ -1781,6 +1793,16 @@ export function buildPiSettingsJsonContent(
       : {}),
     ...(packages.length > 0 ? { packages: [...packages] } : {}),
   }, null, 2) + '\n';
+}
+
+/** 比较 --extension 路径去重用:win32 上反斜杠/大小写不同也会指向同一个文件。 */
+function normalizeExtensionPath(value: string): string {
+  try {
+    const resolved = path.resolve(value);
+    return process.platform === 'win32' ? resolved.toLowerCase() : resolved;
+  } catch {
+    return value;
+  }
 }
 
 export class PiAgent extends BaseAgent {
@@ -2542,7 +2564,11 @@ export class PiAgent extends BaseAgent {
       const effectiveWorkingWindow = opts.sessionContextWindowBudget ?? workingWindow;
       const pct = this.deps.resolveModelCompactionPct?.(source, sourceModel) ?? opts.piCompactionPct;
       const settings = JSON.parse(buildPiSettingsJsonContent(window, pct, [], effectiveWorkingWindow));
-      compactionModelOverrides[`${provider}/${id}`] = { reserveTokens: settings.compaction?.reserveTokens ?? 16_384 };
+      // 算不出保留量就不写该模型的 override:捏造 16_384 会覆盖 Pi 的原生默认,且用户不可见、不可关。
+      const reserveTokens = settings.compaction?.reserveTokens;
+      if (reserveTokens !== undefined) {
+        compactionModelOverrides[`${provider}/${id}`] = { reserveTokens };
+      }
     };
     for (const model of models) addBudget(PI_PROVIDER_ID, model.id, model.contextWindow,
       this.deps.resolveModelContextLimit?.(gatewayProviderId ?? 'xd', model.id) ?? undefined,
@@ -3400,6 +3426,16 @@ export class PiAgent extends BaseAgent {
     // 会导致 bridge/subagent 静默失效)。
     const bridgeExtensionPath = joinRemotePosixPath(extensionsDir, CINDY_BRIDGE_EXTENSION_FILENAME);
     await writeFile(bridgeExtensionPath, CINDY_BRIDGE_EXTENSION_SOURCE);
+    // 边做边压 (Live Compact):实验性开关打开时把扩展写进本会话的 internal-extensions,
+    // 显式 --extension 加载。与 bridge 同一形态 —— 每次 startSession 覆写,保证 pi 里跑的
+    // 代码与本版本一致,不依赖用户机器上残留的旧文件。
+    // 远端会话不适用:daemon 加载不到宿主机上的扩展源码。
+    const liveCompactEnabled = !opts.remoteHostId
+      && (this.deps.resolvePiLiveCompactEnabled?.() ?? false);
+    const liveCompactExtensionPath = joinRemotePosixPath(extensionsDir, 'live-compact.ts');
+    if (liveCompactEnabled) {
+      await writeFile(liveCompactExtensionPath, LIVE_COMPACT_EXTENSION_SOURCE);
+    }
     // cindy-subagent extension:与 bridge 并列的独立扩展(职责分离 —— bridge 管权限门与
     // MCP 桥,这个只管子代理)。子进程继承 PI_CODING_AGENT_DIR,因此同样加载 bridge,
     // 权限门对子代理照样生效;递归由扩展内的 depth env 自己截断。
@@ -4156,6 +4192,19 @@ export class PiAgent extends BaseAgent {
         bridgeExtensionPath,
         ...(localSubagentSupported ? ['--extension', subagentExtensionPath] : []),
         ...(!reviewMode && !opts[LOCAL_AGENT_CLIENT]?.hostToolsOnly && planModeExtAvailable ? ['--extension', planModeExtPath] : []),
+        // 实验原型(dev-only)：宿主外置 pi 扩展经 CINDY_PI_EXTRA_EXTENSIONS 注入
+        // (';' 分隔，绝对路径)。仅本地会话 —— 远端 daemon 加载不了本机路径。
+        // 只走显式 --extension，不影响自动发现；排在自带扩展之后，注册最晚。
+        ...(liveCompactEnabled ? ['--extension', liveCompactExtensionPath] : []),
+        ...(opts.remoteHostId
+          ? []
+          : (process.env.CINDY_PI_EXTRA_EXTENSIONS ?? '')
+            .split(';')
+            .map((candidate) => candidate.trim())
+            // 开关已经注入同一路径时不再重复 --extension(重复注册会跑两遍 hook)。
+            // 必须按规范化绝对路径比较:这里拿到的是用户手写的原始串(可能是反斜杠/盘符大小写不同)。
+            .filter((candidate) => candidate && normalizeExtensionPath(candidate) !== normalizeExtensionPath(liveCompactExtensionPath))
+            .flatMap((extensionPath) => ['--extension', extensionPath])),
         ...(loadProjectResourcesInPlace
           ? piProjectResourceCliArgs(projectResourceCli)
           : []),
@@ -5709,6 +5758,14 @@ export class PiAgent extends BaseAgent {
         ...(proxySessionToken !== undefined ? { [PI_SESSION_TOKEN_ENV]: proxySessionToken } : {}),
         [PI_SECRET_ENV_NAMES_ENV]: JSON.stringify(piSecretEnvNames),
         PI_CODING_AGENT_DIR: configHome,
+        // 影子原文根目录显式交给扩展:设置页(存储/清理)按 <agentHome>/compaction-spine 统计,
+        // 扩展若自己推导就可能漂移,导致「统计恒 0 / 清理假成功」。
+        ...(liveCompactEnabled && !remote
+          ? {
+              SPINE_SHADOW_DIR:
+                this.deps.resolvePiLiveCompactShadowDir?.() ?? joinRemotePosixPath(agentHome, 'compaction-spine'),
+            }
+          : {}),
         [PI_BASH_PACKAGE_HOME_ENV]: bashPackageHome,
         CINDY_PI_PERMISSION_FILE: permissionFile,
         ...(hosted ? { [DEVICE_HOSTED_PI_ENV]: deviceHostedPiEnvValue(hosted) } : {}),
