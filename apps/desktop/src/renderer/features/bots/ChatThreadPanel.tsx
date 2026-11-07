@@ -637,7 +637,7 @@ export function ChatThreadPanel({ group, rootId, quoteSources = group.messages, 
     if (!wasFollowing && stickToBottomRef.current) refreshRef.current();
   };
 
-  return <ThreadPanel panelRef={panelRef} resize={resize} onClose={onClose} actions={<>
+  return <ThreadPanel inlineActions={false} panelRef={panelRef} resize={resize} onClose={onClose} actions={<>
             {following !== undefined ? (
               <Tip text={t(key(following ? 'thread.unfollowTip' : 'thread.followTip'))}>
                 <Button variant="secondary" tone="quiet" size="sm" aria-pressed={following} data-thread-follow=""
