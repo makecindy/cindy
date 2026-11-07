@@ -113,13 +113,7 @@ export function ComposerAttachmentTray({
               accessibilityRole="button"
               accessibilityLabel={attachmentDisplayLabel(attachment)}
               onPress={() => onPreview(attachment.id)}
-              style={{
-                flex: 1,
-                flexDirection: "row",
-                alignItems: "center",
-                minHeight: 48,
-                gap: 8,
-              }}
+              style={styles.chipPreview}
             >
               <FileTypeIcon name={attachment.name} mimeType={attachment.mimeType} />
             <Text numberOfLines={1} style={styles.chipText}>
@@ -388,6 +382,12 @@ function makeTrayStyles(colors: ThemeColors) {
       paddingLeft: spacing.lg,
       paddingRight: spacing.md,
       paddingVertical: 8,
+    },
+    chipPreview: {
+      alignItems: 'center' as const,
+      flexDirection: 'row' as const,
+      flexShrink: 1,
+      gap: spacing.sm,
     },
     chipText: {
       color: colors.textPrimary,
