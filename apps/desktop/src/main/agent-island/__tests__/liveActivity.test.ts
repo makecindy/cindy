@@ -21,7 +21,7 @@ function state(
   status: AgentIslandLiveActivityState['status'] = 'running',
   attentionCount = 0,
 ): AgentIslandLiveActivityState {
-  return { status, runningCount, attentionCount, title: 'Task', detail: status, summary: '', mascot: 'cindy' };
+  return { status, runningCount, attentionCount, title: 'Task', detail: status, summary: '', completedCount: 0, completedLabel: 'Completed', mascot: 'cindy' };
 }
 
 function fakeAddon(replies: Array<Record<string, unknown>> = [], system = { allowed: true }) {
@@ -131,6 +131,34 @@ describe('AgentIslandLiveActivity', () => {
       undefined, // answered
       'completed',
     ]);
+  });
+
+  // Review (#9212): a task finishing while others still run leaves the summary status
+  // `running`, and the OS notification is skipped, so the alert must come from the count.
+  it('alerts for each newly finished task even while others still run', async () => {
+    const fake = fakeAddon([{ ok: true, result: 'started' }]);
+    const live = controller(fake.addon);
+    live.sync(state(2));
+    await vi.advanceTimersByTimeAsync(0);
+    live.sync({ ...state(1), completedCount: 1, completedLabel: 'Completed' });
+    await vi.advanceTimersByTimeAsync(1000);
+    live.sync({ ...state(1), completedCount: 2, completedLabel: 'Completed' });
+    await vi.advanceTimersByTimeAsync(1000);
+    live.sync({ ...state(1), completedCount: 1, completedLabel: 'Completed' }); // one was read
+
+    await vi.advanceTimersByTimeAsync(1000);
+    expect(fake.calls.filter((call) => call.action === 'sync').map((call) => call.alert?.body))
+      .toEqual([undefined, 'Completed', 'Completed', undefined]);
+  });
+
+  it('ends the activity when the account state is cleared', async () => {
+    const fake = fakeAddon([{ ok: true, result: 'started' }]);
+    const live = controller(fake.addon);
+    live.sync(state(1));
+    await vi.advanceTimersByTimeAsync(0);
+    live.sync(null);
+    await vi.advanceTimersByTimeAsync(1000);
+    expect(fake.calls.at(-1)?.action).toBe('end');
   });
 
   it('shows the surfaced companion only once it needs the user or replied, without oversized artwork', () => {

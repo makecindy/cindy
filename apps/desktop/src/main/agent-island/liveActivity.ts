@@ -33,6 +33,12 @@ export interface AgentIslandLiveActivityState {
   detail: string;
   /** The rest of the work, e.g. "2 more tasks running"; empty when the title says it all. */
   summary: string;
+  /**
+   * Unread finished tasks and their label. Not shown by the widget (extra keys are ignored
+   * natively); they let an alert fire for each newly finished task even while others still run.
+   */
+  completedCount: number;
+  completedLabel: string;
   /** The companion the surfaced task speaks for, while it needs the user or has replied. */
   companion?: AgentIslandLiveActivityCompanion;
   mascot: string;
@@ -91,7 +97,15 @@ function liveActivityStatusFromPill(
 ): AgentIslandLiveActivityState | null {
   const running = pill.runningSessionCount;
   const waiting = pill.pendingInteractionCount;
-  const base = { runningCount: running, attentionCount: waiting, title: pill.priorityCompactTitle, mascot };
+  const completedLabel = pill.priorityStatus === 'error' ? strings.error : strings.completed;
+  const base = {
+    runningCount: running,
+    attentionCount: waiting,
+    title: pill.priorityCompactTitle,
+    mascot,
+    completedCount: pill.unreadCompletedCount,
+    completedLabel,
+  };
   if (waiting > 0) {
     const summary = running > 0
       ? strings.alsoRunningCount(running)
@@ -119,7 +133,12 @@ function alertFor(
 ): { title: string; body: string } | undefined {
   const asksMore = next.attentionCount > (previous?.attentionCount ?? 0);
   const finished = next.status === 'completed' && previous !== null && previous.status !== 'completed';
-  if (!asksMore && !finished) return undefined;
+  // Another task finishing while others still run keeps the summary status unchanged.
+  const finishedMore = previous !== null && next.completedCount > previous.completedCount;
+  if (!asksMore && !finished && !finishedMore) return undefined;
+  if (finishedMore && next.status !== 'completed' && next.status !== 'attention') {
+    return { title: next.title, body: next.completedLabel };
+  }
   return { title: next.title, body: next.summary ? `${next.detail} · ${next.summary}` : next.detail };
 }
 
@@ -165,6 +184,8 @@ function sameState(a: AgentIslandLiveActivityState | null, b: AgentIslandLiveAct
     && a.title === b.title
     && a.detail === b.detail
     && a.summary === b.summary
+    && a.completedCount === b.completedCount
+    && a.completedLabel === b.completedLabel
     && a.companion?.hue === b.companion?.hue
     && a.companion?.glyph === b.companion?.glyph
     && a.companion?.glyphIsInitial === b.companion?.glyphIsInitial

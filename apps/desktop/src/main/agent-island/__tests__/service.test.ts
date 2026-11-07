@@ -3428,7 +3428,10 @@ describe('AgentIslandService native publishing', () => {
     expect(playSound).not.toHaveBeenCalled();
     expect([service.ownsTaskAlert('done'), service.ownsTaskAlert('needs-reply'), service.ownsTaskAlert('error')])
       .toEqual([true, true, false]);
+    liveActivity.sync.mockClear();
     service.resetRuntimeState();
+    // Sign-out / account switch must not leave the old account's tasks in the system UI.
+    expect(liveActivity.sync).toHaveBeenCalledWith(null);
   });
 
   it('plays the start sound on user prompt without waiting for an isRunning status event', async () => {

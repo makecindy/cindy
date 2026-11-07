@@ -1059,6 +1059,8 @@ export class AgentIslandService {
       this.clearSilencedRunTimer(runId);
     }
     resetAgentIslandState(this.state);
+    // Sign-out / account switch: the system Live Activity must not keep the old account's tasks.
+    this.deps.liveActivity?.sync(null);
     this.companionChats.clear();
     this.publishAttentionCount(0);
     this.islandEntryAlert = null;
