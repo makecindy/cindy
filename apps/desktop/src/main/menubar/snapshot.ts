@@ -491,15 +491,21 @@ class Builder {
     return domain ? `${this.handle(source)}@${domain}` : this.handle(source) ?? '';
   }
 
+  /** Every shared identity surface uses the same privacy projection. */
+  private sharedIdentity(source: MenubarSubscriptionInput): { label: string; ownerName?: string } | null {
+    if (!source.shared) return null;
+    return this.input.settings.privacy ? { label: source.brand } : source.shared;
+  }
+
   /** Short name under a tube and in sentences: the other computer, else the account handle, else the brand. */
   private who(source: MenubarSourceInput): string {
-    if (source.kind === 'subscription') return source.shared?.label ?? source.device?.name ?? this.handle(source) ?? source.brand;
+    if (source.kind === 'subscription') return this.sharedIdentity(source)?.label ?? source.device?.name ?? this.handle(source) ?? source.brand;
     if (source.kind === 'balance') return this.t('balance.short');
     return source.name;
   }
 
   private sourceTitle(source: MenubarSourceInput): string {
-    if (source.kind === 'subscription') return source.shared?.label ?? source.device?.name ?? this.handle(source) ?? source.brand;
+    if (source.kind === 'subscription') return this.sharedIdentity(source)?.label ?? source.device?.name ?? this.handle(source) ?? source.brand;
     if (source.kind === 'balance') return this.t(source.quota ? 'balance.quotaName' : 'balance.name');
     return source.name;
   }
@@ -879,6 +885,8 @@ class Builder {
 
   private subscriptionDetail(source: MenubarSubscriptionInput): MenubarDetail {
     const state = this.state(source);
+    const ownerName = this.sharedIdentity(source)?.ownerName;
+    const title = ownerName ? `${ownerName} · ${source.brand}` : source.brand;
     // The detail page is about what actually limits the account, not the tube's weekly view.
     const limit = state.tightest;
     const handle = this.handle(source);
@@ -894,8 +902,7 @@ class Builder {
       return {
         id: source.id,
         logoSvg: source.logoSvg,
-        title: source.shared?.ownerName
-          ? `${source.shared.ownerName} · ${source.brand}` : source.brand,
+        title,
         plan: source.plan ?? '',
         rings: [{ fraction: 0, color: 'ink3' }],
         bigValue: '—',
@@ -1013,8 +1020,7 @@ class Builder {
     return {
       id: source.id,
       logoSvg: source.logoSvg,
-      title: source.shared?.ownerName
-        ? `${source.shared.ownerName} · ${source.brand}` : source.brand,
+      title,
       plan: source.plan ?? '',
       rings,
       bigValue: String(Math.round(remaining)),
@@ -1039,8 +1045,9 @@ class Builder {
   private accountFacts(source: MenubarSubscriptionInput): MenubarFact[] {
     const updated = source.updatedAtMs ? this.t('fact.updatedAgo', { ago: this.ago(source.updatedAtMs) }) : '';
     const facts: MenubarFact[] = [];
-    if (source.shared) facts.push({ label: source.shared.ownerName
-      ? this.t('shared.from', { name: source.shared.ownerName }) : source.shared.label, value: updated, sub: '' });
+    const shared = this.sharedIdentity(source);
+    if (shared) facts.push({ label: shared.ownerName
+      ? this.t('shared.from', { name: shared.ownerName }) : shared.label, value: updated, sub: '' });
     if (source.device) facts.push({ label: this.t('fact.device'), value: source.device.name, sub: this.t('fact.deviceSub') });
     if (source.account) facts.push({ label: this.t('fact.account'), value: this.email(source), sub: updated });
     else if (source.device) facts[0] = { ...facts[0]!, sub: updated || this.t('fact.deviceSub') };
