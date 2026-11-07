@@ -1445,6 +1445,13 @@ async function attemptStartSchedulerOnce(): Promise<void> {
   try {
     startGoalController({
       maker,
+      // 项目资源漂移(会话中途新增 skill/extension):空闲时经 Maker 以 runtime-refresh
+      // 回收,goal 直派随后的 ensureSession 活化即重扫重建(与桌面发送事务同口径)。
+      recyclePiRuntimeIfResourcesDrifted: async (sessionId) => {
+        const live = maker.getSession(sessionId);
+        if (!live) return false;
+        return maker.recyclePiRuntimeIfResourcesDrifted(live);
+      },
       getDb: () => getDbClient().drizzle,
       broadcastStatus: broadcastGoalStatus,
       ...automationGitBaselineHooks,
@@ -1904,6 +1911,13 @@ async function teardownAuthAccountBoundary(reason: string): Promise<void> {
       const automationGitBaselineHooks = createAutomationUserTurnGitBaselineHooks();
       startGoalController({
         maker,
+        // 项目资源漂移(会话中途新增 skill/extension):空闲时经 Maker 以 runtime-refresh
+        // 回收,goal 直派随后的 ensureSession 活化即重扫重建(与桌面发送事务同口径)。
+        recyclePiRuntimeIfResourcesDrifted: async (sessionId) => {
+          const live = maker.getSession(sessionId);
+          if (!live) return false;
+          return maker.recyclePiRuntimeIfResourcesDrifted(live);
+        },
         getDb: () => getDbClient().drizzle,
         broadcastStatus: broadcastGoalStatus,
         ...automationGitBaselineHooks,

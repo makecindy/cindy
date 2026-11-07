@@ -972,6 +972,27 @@ export function createMakerHookSessionRunner(deps: {
         return fail(err instanceof Error ? err.message : String(err));
       }
 
+      // 项目资源漂移(会话中途新增 skill/extension):createSession 可能复用活实例,
+      // 空闲时经 Maker 回收后重取 —— 再走一次同样的获取路径即得重建实例。
+      // 失败按原样投递(hook 轮次不应因回收故障而中断)。
+      try {
+        if (await maker.recyclePiRuntimeIfResourcesDrifted(session)) {
+          session = req.isNew
+            ? await openChannelSession(req.sessionId, newSessionRoute, (admitted) => {
+                sessionProviderId = admitted.providerId;
+                return maker.createSession({
+                  ...createOpts,
+                  model: admitted.model,
+                  ...(admitted.providerId !== null ? { providerId: admitted.providerId } : {}),
+                  ...(admitted.effort !== undefined ? { effort: admitted.effort } : {}),
+                });
+              }, assertAccount)
+            : await maker.createSession(createOpts);
+        }
+      } catch {
+        // 保持原样投递
+      }
+
       /**
        * 拿到的可能是**进程里早就活着的那个实例**: maker.createSession 对已在
        * activeSessions 里的 id 直接返回它, 忽略上面传的 workingDir。侧边栏

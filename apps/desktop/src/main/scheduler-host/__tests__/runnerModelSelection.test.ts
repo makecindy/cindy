@@ -290,6 +290,7 @@ function createRunnerHarness(
     // 默认 false = fresh spawn（opts.model/effort 已生效）；true 模拟进程内
     // 复用 active session 的路径（createSession 忽略 opts, setModel/setEffort 是唯一通道）。
     isSessionAlive: vi.fn(() => opts.sessionAlive ?? false),
+    recyclePiRuntimeIfResourcesDrifted: vi.fn(async () => false),
   } as unknown as Maker;
   const notifier: Notifier = { notify: vi.fn(async () => undefined) };
   const runner = new MakerScheduleRunner({
