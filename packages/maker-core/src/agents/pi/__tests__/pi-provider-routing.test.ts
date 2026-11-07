@@ -3970,6 +3970,163 @@ describe("Pi provider-aware model routing", () => {
     await handle.close();
   });
 
+  // #9037: native snapshots expose max, while Cindy may retain the user's ultra selection.
+  // Exercise real PiAgent controls and assert their wire levels, not a copy of the mapper.
+  it.each(['setEffort', 'atomic switch', 'retained switch'] as const)(
+    'preserves ultra as native max through %s and thinking re-enable',
+    async (operation) => {
+      const agent = new PiAgent(byomDeps(async () => ({
+        providers: [{
+          id: 'native-a', name: 'Native A', baseUrl: 'http://a.test', api: 'openai-responses',
+          models: ['local-model', 'target-model'].map((id) => ({
+            id, reasoning: true,
+            thinkingLevelMap: { minimal: null, low: 'low', medium: null, high: null, xhigh: null, max: 'max' },
+          })),
+        }], env: {},
+      }), ['local-model', 'target-model'].map((id) => ({
+        id, displayName: id, contextWindow: 200_000,
+        efforts: ['low', 'max', 'ultra'], defaultEffort: 'low',
+      }))));
+      const handle = await agent.startSession({
+        sessionId: 'native-ultra', workingDir: cwd,
+        model: 'local-model', providerId: 'native-a', effort: 'ultra',
+      });
+      try {
+        const before = captured.requests.length;
+        if (operation === 'setEffort') await handle.setEffort!('ultra');
+        else await handle.setModel!('target-model', operation === 'atomic switch'
+          ? { providerId: 'native-a', effort: 'ultra', thinkingEnabled: true }
+          : { providerId: 'native-a' });
+        const levels = captured.requests.slice(before)
+          .filter((request) => request.type === 'set_thinking_level')
+          .map((request) => request.level);
+        expect(levels.length).toBeGreaterThan(0);
+        expect(levels.every((level) => level === 'max')).toBe(true);
+        expect(handle.getEffort!()).toBe('ultra');
+
+        await handle.setThinkingEnabled!(false);
+        expect(captured.requests.at(-1)).toEqual({ type: 'set_thinking_level', level: 'off' });
+        await handle.setThinkingEnabled!(true);
+        expect(captured.requests.at(-1)).toEqual({ type: 'set_thinking_level', level: 'max' });
+        expect(handle.getEffort!()).toBe('ultra');
+      } finally {
+        await handle.close();
+      }
+    },
+  );
+
+  it.each([
+    { thinkingEnabled: true, offBefore: true, levels: ['max'] },
+    { thinkingEnabled: false, offBefore: false, levels: ['off'] },
+    { thinkingEnabled: undefined, offBefore: false, levels: ['max'] },
+    { thinkingEnabled: undefined, offBefore: true, levels: [] },
+  ])('applies a new ultra selection on the same route: $thinkingEnabled, previously off=$offBefore', async ({ thinkingEnabled, offBefore, levels }) => {
+    const agent = new PiAgent(byomDeps(async () => ({ providers: [{
+      id: 'native-a', name: 'Native A', baseUrl: 'http://a.test', api: 'openai-responses',
+      models: [{ id: 'local-model', reasoning: true, thinkingLevelMap: { max: 'max' } }],
+    }], env: {} })));
+    const handle = await agent.startSession({ sessionId: 'same-route-ultra', workingDir: cwd,
+      model: 'local-model', providerId: 'native-a', effort: 'low' });
+    try {
+      if (offBefore) await handle.setThinkingEnabled!(false);
+      const before = captured.requests.length;
+      await handle.setModel!('local-model', { providerId: 'native-a', effort: 'ultra', thinkingEnabled });
+      const changes = captured.requests.slice(before);
+      expect(changes.some((request) => request.type === 'set_model')).toBe(false);
+      expect(changes.filter((request) => request.type === 'set_thinking_level').map((request) => request.level)).toEqual(levels);
+      expect(handle.getEffort!()).toBe('ultra');
+      await handle.setThinkingEnabled!(true);
+      expect(captured.requests.at(-1)).toEqual({ type: 'set_thinking_level', level: 'max' });
+    } finally {
+      await handle.close();
+    }
+  });
+
+  it('does not remember an unconfirmed same-route ultra selection', async () => {
+    const agent = new PiAgent(byomDeps(async () => ({ providers: [{
+      id: 'native-a', name: 'Native A', baseUrl: 'http://a.test', api: 'openai-responses',
+      models: [{ id: 'local-model', reasoning: true, thinkingLevelMap: { max: 'max' } }],
+    }], env: {} })));
+    const handle = await agent.startSession({ sessionId: 'rejected-same-route-ultra', workingDir: cwd,
+      model: 'local-model', providerId: 'native-a', effort: 'low' });
+    try {
+      await handle.setThinkingEnabled!(false);
+      captured.failThinkingLevel = 'reject';
+      await expect(handle.setModel!('local-model', {
+        providerId: 'native-a', effort: 'ultra', thinkingEnabled: true,
+      })).rejects.toThrow(/set_thinking_level failed/);
+      expect(handle.getEffort!()).toBe('low');
+      captured.failThinkingLevel = null;
+      const before = captured.requests.length;
+      await handle.setModel!('local-model', { providerId: 'native-a' });
+      expect(captured.requests.slice(before).some((request) => request.type === 'set_thinking_level')).toBe(false);
+      await handle.setThinkingEnabled!(true);
+      expect(captured.requests.at(-1)).toEqual({ type: 'set_thinking_level', level: 'low' });
+    } finally {
+      await handle.close();
+    }
+  });
+
+  it.each(['setEffort', 'atomic switch'] as const)(
+    'does not admit max through %s when the gateway only declares ultra',
+    async (operation) => {
+      const deps = byomDeps(undefined, ['local-model', 'target-model'].map((id) => ({
+        id, displayName: id, contextWindow: 200_000, efforts: ['ultra'], defaultEffort: 'ultra',
+      })));
+      deps.resolvePiGatewayModelSpec = () => ({ api: 'openai-responses' });
+      const handle = await new PiAgent(deps).startSession({
+        sessionId: 'gateway-ultra-only', workingDir: cwd, model: 'local-model', effort: 'ultra',
+      });
+      try {
+        const before = captured.requests.length;
+        await expect(operation === 'setEffort' ? handle.setEffort!('max')
+          : handle.setModel!('target-model', { effort: 'max' })).rejects.toThrow(/applied model catalog/);
+        expect(captured.requests.slice(before).some((request) =>
+          request.type === 'set_model' || request.type === 'set_thinking_level',
+        )).toBe(false);
+        expect(handle.model).toBe('local-model');
+        await handle.setEffort!('ultra');
+        expect(captured.requests.at(-1)).toEqual({ type: 'set_thinking_level', level: 'max' });
+        expect(handle.getEffort!()).toBe('ultra');
+      } finally {
+        await handle.close();
+      }
+    },
+  );
+
+  it.each(['setEffort', 'atomic switch'] as const)(
+    'rejects ultra before RPC through %s when native max is unsupported',
+    async (operation) => {
+      const agent = new PiAgent(byomDeps(async () => ({
+        providers: [{
+          id: 'native-a', name: 'Native A', baseUrl: 'http://a.test', api: 'openai-responses',
+          models: ['local-model', 'target-model'].map((id) => ({
+            id, reasoning: true,
+            thinkingLevelMap: { minimal: null, low: 'low', medium: null, high: null, xhigh: null, max: null },
+          })),
+        }], env: {},
+      })));
+      const handle = await agent.startSession({
+        sessionId: 'unsupported-native-ultra', workingDir: cwd,
+        model: 'local-model', providerId: 'native-a', effort: 'low',
+      });
+      try {
+        const before = captured.requests.length;
+        await expect(operation === 'setEffort'
+          ? handle.setEffort!('ultra')
+          : handle.setModel!('target-model', { providerId: 'native-a', effort: 'ultra' }),
+        ).rejects.toThrow(/applied model catalog/);
+        expect(captured.requests.slice(before).some((request) =>
+          request.type === 'set_model' || request.type === 'set_thinking_level',
+        )).toBe(false);
+        expect(handle.model).toBe('local-model');
+        expect(handle.getEffort!()).toBe('low');
+      } finally {
+        await handle.close();
+      }
+    },
+  );
+
   it("freezes active BYOM effort selection to the startup models.json snapshot", async () => {
     const agent = new PiAgent(
       byomDeps(async () => ({
@@ -4881,7 +5038,7 @@ describe("Pi provider-aware model routing", () => {
     await handle.close();
   });
 
-  it("keeps thinking off and the remembered tier on a same-route select of a non-thinking model", async () => {
+  it.each([false, true])("keeps the remembered tier across a non-thinking model's low placeholder, explicitly off=%s", async (explicitlyOff) => {
     // 同路由重选不支持思考的模型：下发 xhigh 会让请求"成功"但改动档位记忆，
     // 用户之后切回支持 xhigh 的模型就被静默改成 xhigh。
     const denseMap = {
@@ -4923,17 +5080,19 @@ describe("Pi provider-aware model routing", () => {
       effort: "high",
     });
     await handle.setModel!("model-plain", { providerId: "native-a" });
+    if (explicitlyOff) await handle.setThinkingEnabled!(false);
     const beforeSwitch = captured.requests.length;
 
-    await handle.setModel!("model-plain", { providerId: "native-a", thinkingEnabled: true });
+    await handle.setModel!("model-plain", { providerId: "native-a", effort: 'low',
+      thinkingEnabled: explicitlyOff ? undefined : true });
 
     const levels = captured.requests
       .slice(beforeSwitch)
       .filter((request) => request.type === "set_thinking_level")
       .map((request) => String(request.level));
-    expect(levels).toEqual(["off"]);
+    expect(levels).toEqual(explicitlyOff ? [] : ["off"]);
     expect(handle.getEffort!()).toBe("high");
-    // 发 off 是能力所致，不是用户主动关闭：不带档位切回推理模型时必须恢复思考。
+    // Capability-off restores on return; explicit-off stays off until explicitly re-enabled.
     const beforeBack = captured.requests.length;
     await handle.setModel!("model-a", { providerId: "native-a" });
     const restored = captured.requests
@@ -4941,7 +5100,11 @@ describe("Pi provider-aware model routing", () => {
       .filter((request) => request.type === "set_thinking_level")
       .map((request) => String(request.level));
     // 至少下发一次 high（开启逻辑与切模收尾都可能各下一次，后者是幂等的）。
-    expect(restored).toContain("high");
+    if (explicitlyOff) {
+      expect(restored).toEqual([]);
+      await handle.setThinkingEnabled!(true);
+      expect(captured.requests.at(-1)).toEqual({ type: 'set_thinking_level', level: 'high' });
+    } else expect(restored).toContain("high");
     await handle.close();
   });
 
