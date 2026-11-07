@@ -71,6 +71,13 @@ function stats(a) {
     n: s.length,
   };
 }
+// Embed data in evaluated source as an inert literal: JSON plus escapes for
+// characters that can end a script context or a JS string line.
+const literal = (value) =>
+  JSON.stringify(value).replace(
+    /[<>&\u2028\u2029]/g,
+    (c) => "\\u" + c.charCodeAt(0).toString(16).padStart(4, "0"),
+  );
 async function evaluate(expression) {
   const id = ++seq;
   return new Promise((resolve, reject) => {
@@ -90,7 +97,7 @@ async function evaluate(expression) {
 }
 const call = (request) =>
   evaluate(
-    `window.electronAPI.deviceLink.invoke(${JSON.stringify(args.device)},${JSON.stringify(channel)},[${JSON.stringify(request)}])`,
+    `window.electronAPI.deviceLink.invoke(${literal(args.device)},${literal(channel)},[${literal(request)}])`,
   );
 async function expectRejectedOpen(payload) {
   const request = {
@@ -100,7 +107,7 @@ async function expectRejectedOpen(payload) {
     payload,
   };
   const result = await evaluate(
-    `(async()=>{try{await window.electronAPI.deviceLink.invoke(${JSON.stringify(args.device)},${JSON.stringify(channel)},[${JSON.stringify(request)}]);return {unexpectedSuccess:true};}catch(e){return {error:String(e.message)}}})()`,
+    `(async()=>{try{await window.electronAPI.deviceLink.invoke(${literal(args.device)},${literal(channel)},[${literal(request)}]);return {unexpectedSuccess:true};}catch(e){return {error:String(e.message)}}})()`,
   );
   assert(!result.unexpectedSuccess, "Sentinel unexpectedly started a task");
   return result.error;
