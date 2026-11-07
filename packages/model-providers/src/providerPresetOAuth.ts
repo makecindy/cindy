@@ -23,6 +23,10 @@ export function providerPresetOAuth(id: string): OAuthProviderDescriptor | undef
     case 'github-copilot': return {
       flow: 'device-code', deviceAuthorizationUrl: 'https://github.com/login/device/code',
       tokenUrl: 'https://github.com/login/oauth/access_token', clientId: 'Iv1.b507a08c87ecfe98', scopes: 'read:user',
+      // Copilot exposes its catalog at `/models` only; the generic `…/v1/models` derivation
+      // 404s and discovery falls back to the static snapshot. The account host is still
+      // rewritten per token (individual/business/enterprise) by resolveCopilotAccountUrl.
+      modelsDiscoveryUrl: 'https://api.individual.githubcopilot.com/models',
     };
     case 'kimi-coding': return {
       flow: 'device-code', deviceAuthorizationUrl: 'https://auth.kimi.com/api/oauth/device_authorization',

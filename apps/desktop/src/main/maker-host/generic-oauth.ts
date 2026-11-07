@@ -1,4 +1,4 @@
-import { resolveCopilotAccountUrl } from './copilot-account-url.js';
+import { copilotRequestHeaders, isCopilotEndpoint, resolveCopilotAccountUrl } from './copilot-account-url.js';
 import { issueModelSourceSnapshot, modelSourceRequestSignature } from './model-source-snapshots.js';
 import { collectModelDiscoveryPages } from './model-discovery-pages.js';
 import { providerOAuthContract } from '@cindy/model-providers';
@@ -859,6 +859,8 @@ export async function discoverGenericOAuthModels(
   if (!token) return null;
   const url = resolveCopilotAccountUrl(configuredUrl, token);
   const headers: Record<string, string> = { authorization: `Bearer ${token}` };
+  // Copilot's catalog rejects a bare Bearer; send the client headers the editor sends (#8701).
+  if (isCopilotEndpoint(url)) Object.assign(headers, copilotRequestHeaders());
   if (agent === 'claude-code' && !isOpenRouterModelsUrl(url)) headers['anthropic-version'] = '2023-06-01';
   let res: Response;
   try {

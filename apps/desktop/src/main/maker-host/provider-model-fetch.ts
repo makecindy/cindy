@@ -24,6 +24,7 @@ import {
 } from '@cindy/model-providers';
 
 import { classifyProviderError, type ProviderErrorCode } from '../../shared/providerErrors.js';
+import { copilotRequestHeaders, isCopilotEndpoint } from './copilot-account-url.js';
 import {
   deriveModelsDiscoveryUrl,
   readCachedGenericOAuthAccessToken,
@@ -183,7 +184,11 @@ export function buildModelsFetchRequest(spec: ProviderModelsFetchSpec): {
   const discoveryEndpoint = new URL(discoveryUrl);
   const longcatOpenAiCatalog = discoveryEndpoint.origin === 'https://api.longcat.chat'
     && discoveryEndpoint.pathname.replace(/\/+$/, '') === '/openai/v1/models';
-  if (discoveryEndpoint.origin === 'https://api.elevenlabs.io'
+  if (isCopilotEndpoint(discoveryUrl)) {
+    // Copilot 的列模型端点会校验编辑器客户端头；只带 Bearer 会被拒，发现静默失败（#8701）。
+    Object.assign(headers, copilotRequestHeaders());
+    if (spec.apiKey) headers.authorization = `Bearer ${spec.apiKey}`;
+  } else if (discoveryEndpoint.origin === 'https://api.elevenlabs.io'
     && discoveryEndpoint.pathname.replace(/\/+$/, '') === '/v1/models') {
     // ElevenLabs discovery uses xi-api-key, independently of the chat runtime slot.
     delete headers.authorization;
