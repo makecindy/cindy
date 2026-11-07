@@ -26,6 +26,7 @@ const {
   updateStatus: {
     current: { status: 'ready', version: '1.2.3', errorCode: null } as {
       status: string;
+      progress?: number;
       version?: string;
       errorCode: string | null;
     },
@@ -620,5 +621,30 @@ describe('formatRelaunchActivityHint builds a complete sentence', () => {
       categories: ['companion', 'conversation', 'background-command'],
       companionNames: ['Cindy', 'Mika'],
     })).toBe('重启会中断伙伴 Cindy、Mika 的回复、正在进行的对话、后台命令。');
+  });
+});
+
+// #4458: display a real transfer before ready, without exposing an early restart.
+describe('UpdateBanner download feedback', () => {
+  it.each([false, true])('shows progress and transitions to ready (collapsed=%s)', async (isCollapsed) => {
+    updateStatus.current = { status: 'downloading', version: '2.0', progress: 37, errorCode: null };
+    const { rerender } = render(<UpdateBanner isCollapsed={isCollapsed} />);
+    expect(screen.getByRole('progressbar').getAttribute('aria-valuenow')).toBe('37');
+    expect(screen.queryByRole('button')).toBeNull();
+    updateStatus.current = { status: 'ready', version: '2.0', errorCode: null };
+    rerender(<UpdateBanner isCollapsed={isCollapsed} />);
+    expect(screen.queryByRole('progressbar')).toBeNull();
+    expect(screen.getByRole('button', { name: isCollapsed ? 'update.banner.ariaCollapsed' : 'update.banner.ariaExpanded' })).toBeTruthy();
+  });
+  it('keeps unknown progress indeterminate and clears the banner on failure', () => {
+    updateStatus.current = { status: 'checking', errorCode: null };
+    const { rerender } = render(<UpdateBanner isCollapsed={false} />);
+    expect(screen.getByRole('status').textContent).toContain('splash.tips.checkingUpdate');
+    updateStatus.current = { status: 'downloading', errorCode: null };
+    rerender(<UpdateBanner isCollapsed={false} />);
+    expect(screen.getByRole('progressbar').hasAttribute('aria-valuenow')).toBe(false);
+    updateStatus.current = { status: 'error', errorCode: 'download_failed' };
+    rerender(<UpdateBanner isCollapsed={false} />);
+    expect(screen.queryByRole('progressbar')).toBeNull();
   });
 });
