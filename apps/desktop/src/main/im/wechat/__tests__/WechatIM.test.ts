@@ -82,6 +82,8 @@ describe('WechatIM host boundary', () => {
     im.attachTurnRuntime({ runner: {
       companionBotIdFor: () => companion ? 'cindy' : undefined,
       dispatchAgentTurn,
+      resolveRouteTarget: vi.fn(async () => null),
+      stopActiveTurn: vi.fn(async () => ({ stopped: false, droppedQueued: 0 })),
     } } as never);
     await im.init();
     try {
@@ -227,6 +229,145 @@ describe('WechatIM host boundary', () => {
     expect(companionFailure).toContain('对话输入框下方');
     expect(companionFailure).toContain('默认权限或自动审批');
     expect(companionFailure).not.toContain('/permission');
+  });
+
+  it('repairs a stale channel session mode before the real WeChat dispatch (#8452)', async () => {
+    const target = {
+      row: {
+        id: 'wechat-session',
+        agentKind: 'pi' as const,
+        workingDir: 'C:/wechat',
+        model: 'model',
+        effort: 'medium' as const,
+        permissionMode: 'bypassPermissions' as const,
+        fastMode: false,
+        sdkSessionId: 'sdk-session',
+        providerId: null,
+      },
+      attached: false,
+    };
+    const changePermissionMode = vi.fn(async () => ({
+      kind: 'changed' as const,
+      mode: 'auto' as const,
+      label: 'Auto',
+      live: true,
+    }));
+    const runner = {
+      getPermissionModes: () => [{ id: 'auto', displayName: 'Auto' }],
+      getTurnPermissionPolicyUnsupportedModes: () => ['bypassPermissions' as const],
+      getMakerSessionById: () => null,
+      changePermissionMode,
+    };
+
+    const repaired = await __testing.reconcileWechatRoutePermission(target, runner as never);
+
+    expect(changePermissionMode).toHaveBeenCalledWith(expect.objectContaining({
+      sessionId: 'wechat-session',
+      mode: 'auto',
+    }));
+    expect(repaired?.row.permissionMode).toBe('auto');
+  });
+
+  // Regression #8452:
+  // - Bug/rule: a channel-owned route persisted with bypassPermissions makes
+  //   WeChat's per-turn confirmation policy fail before the provider starts.
+  // - Coverage gap: the helper test above cannot prove the production task
+  //   pump invokes route reconciliation before dispatching the leased task.
+  // - Minimal failure input: one leased text task plus a stale channel route.
+  // - Observable result: resolveRouteTarget -> changePermissionMode(auto) ->
+  //   dispatchAgentTurn, with the existing task still delivered once.
+  // - Tier: unit, public WeChat lifecycle; measured run: 15.81s collection-only
+  //   failure (0 tests), blocked by missing @cindy/maker-shared/tool-loop-error;
+  //   this is an environment failure, not a passing runtime measurement.
+  it('repairs a stale route through the production task pump before dispatch (#8452)', async () => {
+    const { im, db } = restoredConnection(() => 0);
+    let leased = false;
+    const route = {
+      row: {
+        id: 'wechat-session', agentKind: 'pi' as const, workingDir: 'C:/wechat',
+        model: 'model', effort: 'medium' as const,
+        permissionMode: 'bypassPermissions' as const, fastMode: false,
+        sdkSessionId: 'sdk-session', providerId: null,
+      },
+      attached: false,
+    };
+    const resolveRouteTarget = vi.fn(async () => route);
+    const changePermissionMode = vi.fn(async () => ({
+      kind: 'changed' as const, mode: 'auto' as const, label: 'Auto', live: true,
+    }));
+    const dispatchAgentTurn = vi.fn(async () => ({
+      kind: 'accepted' as const,
+      terminal: Promise.resolve({ kind: 'done' as const }),
+    }));
+    vi.mocked(db.tx).mockImplementation((async (name: string) => {
+      if (name === 'wechatLeaseNextTask' && !leased) {
+        leased = true;
+        return {
+          id: 'permission-task', bindingEpoch: 'epoch', peerId: 'peer',
+          sessionId: 'wechat-session', conversationEpoch: 1,
+          payloadJson: JSON.stringify({ text: 'hello', attachments: [], unsupportedMedia: [] }),
+          context: encryptWechatContextToken('context', Buffer.alloc(32, 3), 'epoch', 'permission-task'),
+          attempts: 0, receivedAt: 1, expiresAt: Date.now() + 60_000,
+        };
+      }
+      return name === 'wechatCommitPollBatch'
+        ? { committed: false, reason: 'stale-cursor' }
+        : null;
+    }) as DbClient['tx']);
+    im.attachTurnRuntime({ runner: {
+      resolveRouteTarget,
+      getPermissionModes: () => [{ id: 'auto', displayName: 'Auto' }],
+      getTurnPermissionPolicyUnsupportedModes: () => ['bypassPermissions' as const],
+      getMakerSessionById: () => null,
+      changePermissionMode,
+      dispatchAgentTurn,
+      stopActiveTurn: vi.fn(async () => ({ stopped: false, droppedQueued: 0 })),
+    } } as never);
+    await im.init();
+    try {
+      await vi.waitFor(() => expect(dispatchAgentTurn).toHaveBeenCalledOnce());
+      expect(resolveRouteTarget).toHaveBeenCalledWith('wechat-bot', 'peer');
+      expect(changePermissionMode).toHaveBeenCalledWith(expect.objectContaining({
+        sessionId: 'wechat-session', mode: 'auto',
+      }));
+      expect(resolveRouteTarget.mock.invocationCallOrder[0]).toBeLessThan(
+        changePermissionMode.mock.invocationCallOrder[0]!,
+      );
+      expect(changePermissionMode.mock.invocationCallOrder[0]).toBeLessThan(
+        dispatchAgentTurn.mock.invocationCallOrder[0]!,
+      );
+      expect(dispatchAgentTurn).toHaveBeenCalledWith(expect.objectContaining({
+        userId: 'peer', userMessageId: 'permission-task',
+      }));
+    } finally {
+      await im.dispose();
+    }
+  });
+
+  it('does not rewrite desktop-taken-over or companion session permissions', async () => {
+    const base = {
+      row: {
+        id: 'session', agentKind: 'pi' as const, workingDir: 'C:/w', model: 'm',
+        effort: 'medium' as const, permissionMode: 'bypassPermissions' as const,
+        fastMode: false, sdkSessionId: null, providerId: null,
+      },
+      attached: true,
+    };
+    const changePermissionMode = vi.fn();
+    const runner = {
+      getPermissionModes: () => [{ id: 'auto', displayName: 'Auto' }],
+      getTurnPermissionPolicyUnsupportedModes: () => ['bypassPermissions' as const],
+      getMakerSessionById: () => null,
+      changePermissionMode,
+    };
+
+    await __testing.reconcileWechatRoutePermission(base, runner as never);
+    await __testing.reconcileWechatRoutePermission(
+      { ...base, attached: false, botOwned: { botId: 'bot', lane: 'canonical' as const } },
+      runner as never,
+    );
+
+    expect(changePermissionMode).not.toHaveBeenCalled();
   });
 
   it('dispatches attachment-only WeChat messages to the agent', () => {
