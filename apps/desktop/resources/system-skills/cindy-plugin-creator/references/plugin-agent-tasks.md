@@ -221,6 +221,7 @@ const r = await cindy.agent.requestSchedule({
 - `tasks.send` 和 `targets.send` 均支持可选 `attachments:[{base64,name?}]`：只接收插件提供的图片字节，不接受本机路径、URL、媒体 URI 或自报 MIME。Host 检测 PNG/JPEG/WebP，最多 4 张、合计 20 MiB。先检查 `tasks.capabilities().messageAttachments.kinds` 包含 image；旧客户端不支持时停止，不静默丢图或改投临时路径。截图进既有 cindy-media，作为消息附件展示并进入模型输入；不需要额外声明 media.deposit。附件内容及名称参与幂等签名，更换附件不能复用同键。
 - 所有插件的两种发送入口共用 40 MiB 在途附件额度；超额在解码和写回执前返回可重试的 `TASK_BUSY`。等待已有请求结束后沿用原 requestKey 重试，不自动改投或丢图。
 - 目标只包含本机可见、可用的项目、普通任务或有唯一 canonical 对话的活跃伙伴；不提供 Mobile/device-link 透传。投递仍受当前插件启用、批准、账号和目标权限约束；插件内容不构成新真人授权。
+  本机伙伴借用供应商分享运行 Agent 时仍按本机 bot 解析，须是当前账号已收到且 active 的分享；不会因此开放远端 Session 或普通跨电脑 Agent 来源。分享撤销、暂停或账号变化后重新复核失败。伙伴 canonical 不作为普通 task 入口。
 
 调用统计由 Host 统一确认，不提供插件自报次数或定义计次规则的接口。独立的 `tasks.send` / `targets.send`
 在输入被 Host 接受时记录一次；空任务创建、读取、附件处理、同键重试不额外计数。接受表示已派发或入队，
