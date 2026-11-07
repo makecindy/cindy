@@ -93,6 +93,7 @@
     "context": "Contexto",
     "screenshot": "Captura de pantalla",
     "photo": "Fotos",
+    "photosAndVideos": "Fotos y vídeos",
     "takePhoto": "Tomar foto",
     "file": "Archivo",
     "joinConversation": "Añadir al chat ({{num}})",

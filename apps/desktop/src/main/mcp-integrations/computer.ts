@@ -3678,7 +3678,17 @@ function hookPowerMonitor(): void {
   }
 }
 
-/** True when the screen is locked, from events when seen, else the idle-state probe. */
+/**
+ * Lock state read from the console session at startup, before any lock/unlock event:
+ * Electron's idle-state probe never reports 'locked' on macOS, so a Cindy started on a
+ * locked screen would otherwise believe it is unlocked. A later event always wins.
+ */
+export function seedDesktopScreenLocked(locked: boolean): void {
+  hookPowerMonitor();
+  if (screenLockedByEvent === undefined) screenLockedByEvent = locked;
+}
+
+/** True when the screen is locked, from events (or the startup seed), else the idle-state probe. */
 export function isDesktopScreenLocked(): boolean {
   hookPowerMonitor();
   if (screenLockedByEvent !== undefined) return screenLockedByEvent;
@@ -3689,8 +3699,11 @@ export function isDesktopScreenLocked(): boolean {
   }
 }
 
-/** Milliseconds since the last system HID input not explained by the Agent's own dispatch, or null when unknown. */
-function msSinceForeignDesktopInput(now = Date.now()): number | null {
+/**
+ * Milliseconds since the last system HID input not explained by the Agent's own dispatch, or null when unknown.
+ * Also tells the away guard whether its owner is still at this Mac.
+ */
+export function msSinceForeignDesktopInput(now = Date.now()): number | null {
   let idleSeconds: number;
   try {
     idleSeconds = powerMonitor.getSystemIdleTime();
@@ -3708,9 +3721,19 @@ function msSinceForeignDesktopInput(now = Date.now()): number | null {
   return idleSeconds * 1000;
 }
 
+let physicalInputShielded: () => boolean = () => false;
+/**
+ * The away cover swallows all physical input and locks on a deliberate press, so
+ * device noise under it (a drifting mouse) is not a person using this computer.
+ */
+export function setPhysicalInputShielded(isShielded: () => boolean): void {
+  physicalInputShielded = isShielded;
+}
+
 /** Refuse foreground delivery while a person is using this computer. */
 export function assertNoRecentUserInput(name: ComputerMcpToolName, args: Record<string, unknown>): void {
   if (getComputerTool(name)?.readOnly === true || args.delivery_mode !== 'foreground') return;
+  if (physicalInputShielded()) return;
   const since = msSinceForeignDesktopInput();
   if (since === null || since >= USER_INPUT_ACTIVE_WINDOW_MS) return;
   throw new ComputerDriverError(

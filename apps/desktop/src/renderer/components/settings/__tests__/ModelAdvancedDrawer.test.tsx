@@ -1,10 +1,13 @@
 // @vitest-environment jsdom
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import userEvent from '@testing-library/user-event';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { BUNDLED_CATALOG, buildUserProvider, resolveModelMetadata } from '@cindy/model-providers';
 import type { CatalogModel, ProviderView } from '@cindy/model-providers';
 
 const mocks = vi.hoisted(() => ({
+  priceProps: vi.fn(),
+  realPricing: false,
   setLimit: vi.fn(async () => {}),
   reset: vi.fn(async () => {}),
   target: vi.fn(),
@@ -14,20 +17,20 @@ const mocks = vi.hoisted(() => ({
   imageMixed: false,
   imageError: false,
   limit: null as number | null,
+  mixed: false,
 }));
-vi.mock('react-i18next', () => ({
-  useTranslation: () => ({
-    t: (key: string, values?: Record<string, unknown>) =>
-      values?.tokens ? `${key} ${values.tokens}` : values?.value ? `${key} ${values.value}` : key,
-    i18n: { resolvedLanguage: 'en' },
-  }),
-}));
+vi.mock('react-i18next', () => {
+  const t = (key: string, values?: Record<string, unknown>) =>
+    values?.tokens ? `${key} ${values.tokens}` : values?.value ? `${key} ${values.value}` : key;
+  return { useTranslation: () => ({ t, i18n: { resolvedLanguage: 'en' } }) };
+});
 vi.mock('@/hooks/useModelContextLimit', () => ({
   useModelContextLimit: (target: unknown) => {
     mocks.target(target);
     return {
       limit: mocks.limit,
       isCustomized: mocks.limit !== null,
+      mixed: mocks.mixed,
       loading: false,
       error: false,
       setLimit: mocks.setLimit,
@@ -54,7 +57,17 @@ vi.mock('@/state/providerModelMemory', () => ({
   setProviderModelEffort: vi.fn(),
   clearProviderModelEffort: vi.fn(),
 }));
-vi.mock('../ModelPriceOverrideDialog', () => ({ ModelPriceOverrideDialog: () => null }));
+vi.mock('../ModelPriceOverrideDialog', async (importOriginal) => {
+  const { ModelPriceOverrideDialog: RealPricing } = await importOriginal<typeof import('../ModelPriceOverrideDialog')>();
+  return {
+    ModelPriceOverrideDialog: (props: Parameters<typeof import('../ModelPriceOverrideDialog').ModelPriceOverrideDialog>[0]) => {
+      mocks.priceProps(props);
+      if (mocks.realPricing) return <RealPricing {...props} />;
+      const details = typeof props.referenceDetails === 'function' ? props.referenceDetails(props.row.avail[0]) : props.referenceDetails;
+      return <div data-testid="inline-pricing">{details}</div>;
+    },
+  };
+});
 import type { ModelImageInputCatalogModel } from '../../../../shared/modelImageInputOverride';
 import { ModelAdvancedDrawer } from '../ModelAdvancedDrawer';
 import { setModelVisibility } from '@/state/modelVisibilityPrefs';
@@ -109,7 +122,9 @@ const AGENT_NAMES = { 'claude-code': 'Claude Code', codex: 'Codex', pi: 'Pi' } a
 afterEach(cleanup);
 beforeEach(() => {
   vi.clearAllMocks();
+  mocks.realPricing = false;
   mocks.limit = null;
+  mocks.mixed = false;
   mocks.imageValue = null;
   mocks.imageMixed = false;
   mocks.imageError = false;
@@ -823,6 +838,80 @@ describe('model advanced editor', () => {
     ).toBe('true');
   });
 
+  it('removes stale engine windows after saving a shared budget and restores them on reset', () => {
+    const unverified = { ...model, contextWindow: 200_000, contextWindowVerified: false };
+    const { rerender } = draw(unverified);
+    expect(screen.getAllByTitle('200K')).toHaveLength(2);
+    const input = screen.getByRole('textbox');
+    fireEvent.change(input, { target: { value: '700K' } });
+    fireEvent.blur(input);
+    expect(mocks.setLimit).toHaveBeenLastCalledWith(700_000);
+
+    // Reflect the committed hook result, including reopening with an existing override.
+    mocks.limit = 700_000;
+    rerender(drawer(unverified));
+    expect((input as HTMLInputElement).value).toBe('700000');
+    expect(screen.queryByTitle('200K')).toBeNull();
+    cleanup();
+    const reopened = draw(unverified);
+    expect((screen.getByRole('textbox') as HTMLInputElement).value).toBe('700000');
+    expect(screen.queryByTitle('200K')).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: 'settings.providers.models.advanced.restoreDefault' }));
+    expect(mocks.reset).toHaveBeenCalledOnce();
+    mocks.limit = null;
+    reopened.rerender(drawer(unverified));
+    expect((screen.getByRole('textbox') as HTMLInputElement).value).toBe('200000');
+    expect(screen.getAllByTitle('200K')).toHaveLength(2);
+  });
+
+  it.each([null, 700_000])('does not label an unknown route capacity as an engine difference (budget %s)', (limit) => {
+    mocks.limit = limit;
+    draw({ ...model, contextWindow: 200_000, contextWindowMax: 0, contextWindowVerified: false });
+    expect(screen.queryByTitle('200K')).toBeNull();
+  });
+
+  it.each([undefined, 0])('preserves a verified secondary window when primary capacity is %s', (contextWindowMax) => {
+    const primary = { ...model, contextWindow: 200_000, contextWindowMax, contextWindowVerified: false };
+    const secondary = { ...model, contextWindow: 1_000_000, contextWindowMax: 1_000_000, contextWindowVerified: true };
+    const source = { ...provider, id: 'custom-unknown-primary', source: 'user' } as ProviderView;
+    const row = { id: model.id, name: model.name, avail: provider.agents,
+      byAgent: { codex: primary, 'claude-code': secondary } };
+    const view = () => <ModelAdvancedDrawer provider={source} row={row} open onOpenChange={vi.fn()}
+      pricePresentationOf={() => null} onDisable={vi.fn()} disabled={false} paymentRequired={false} />;
+    const { rerender } = render(view());
+    expect(screen.queryByTitle('200K')).toBeNull();
+    expect(screen.getByTitle('1M')).toBeTruthy();
+    expect(screen.getByText('settings.providers.models.advanced.catalogMissing')).toBeTruthy();
+
+    mocks.limit = 700_000;
+    rerender(view());
+    expect(screen.queryByTitle('1M')).toBeNull();
+    expect((screen.getByRole('textbox') as HTMLInputElement).value).toBe('700000');
+    mocks.limit = null;
+    rerender(view());
+    expect(screen.getByTitle('1M')).toBeTruthy();
+  });
+
+  it('preserves native per-engine window differences without a shared override', () => {
+    const row = {
+      id: model.id, name: model.name, avail: provider.agents,
+      byAgent: { codex: { ...model, contextWindowMax: 1_000_000 },
+        'claude-code': { ...model, contextWindow: 1_000_000 } },
+    };
+    render(<ModelAdvancedDrawer provider={provider} row={row} open onOpenChange={vi.fn()}
+      pricePresentationOf={() => null} onDisable={vi.fn()} disabled={false} paymentRequired={false} />);
+    expect(screen.getByTitle('272K')).toBeTruthy();
+    expect(screen.queryByTitle('1M')).toBeNull();
+  });
+
+  it('does not treat differing legacy overrides as a shared budget', () => {
+    mocks.limit = 700_000;
+    mocks.mixed = true;
+    draw();
+    expect(screen.getAllByTitle('272K')).toHaveLength(2);
+    expect(screen.getByText('settings.providers.models.advanced.contextMixed')).toBeTruthy();
+  });
+
   it('allows an intentional override above the maximum and rejects invalid input', () => {
     draw();
     const input = screen.getByRole('textbox', {
@@ -1010,9 +1099,8 @@ it('keeps enterprise reference prices read-only in the model drawer', () => {
       source: 'organization',
     }),
   );
-  expect(
-    screen.queryByRole('button', { name: 'settings.providers.models.priceOverride.menu' }),
-  ).toBeNull();
+  expect(screen.queryByTestId('inline-pricing')).toBeNull();
+  expect(screen.queryByRole('button', { name: 'settings.providers.models.priceOverride.menu' })).toBeNull();
 });
 
 // Component contract (unit): the real drawer names the charge, independently of its token unit.
@@ -1253,4 +1341,61 @@ it('uses the union row identity to infer an undeclared bridge image default', as
   expect(items).toHaveLength(2);
   fireEvent.click(screen.getByRole('menuitemradio', { name: 'settings.providers.models.advanced.imageInputDefault settings.providers.models.advanced.supported' }));
   expect(mocks.imageSet).toHaveBeenCalledWith(null);
+});
+
+// UI entry regression: replace the old launcher while retaining the existing pricing body.
+// Dialog API/payload behavior is exercised by ModelPriceOverrideDialog.test.tsx (unit).
+it('replaces the API-price launcher with the existing form in inline mode', () => {
+  draw();
+  expect(screen.getByTestId('inline-pricing')).toBeTruthy();
+  expect(mocks.priceProps).toHaveBeenLastCalledWith(expect.objectContaining({ presentation: 'inline' }));
+  expect(screen.queryByRole('button', { name: 'settings.providers.models.priceOverride.menu' })).toBeNull();
+});
+
+// Real drawer + pricing form: Radix handles Escape in document capture before
+// the form's bubbling key handler, including when Shift+Tab reaches Reset.
+it('saves a dirty quote on Escape from Reset before allowing the drawer to close', async () => {
+  mocks.realPricing = true;
+  const user = userEvent.setup();
+  const previous = window.electronAPI;
+  const quote = { currency: 'USD' as const, inputPerMtok: 1, outputPerMtok: 4 };
+  const view = { target: { providerId: provider.id, agent: 'codex' as const, modelId: model.id },
+    editable: true, effective: quote, reference: quote, override: null, conflict: false,
+    allowedCurrencies: ['USD' as const], registryUpdatedAt: null };
+  let finishSave!: (next: unknown) => void;
+  const save = vi.fn(() => new Promise(resolve => { finishSave = resolve; }));
+  Object.defineProperty(window, 'electronAPI', { configurable: true, value: { maker: {
+    getModelPriceOverride: vi.fn(async () => view), setModelPriceOverride: save,
+    resetModelPriceOverride: vi.fn(),
+  } } });
+  const onOpenChange = vi.fn();
+  try {
+    render(<ModelAdvancedDrawer provider={provider}
+      row={{ id: model.id, name: model.name, avail: ['codex'], byAgent: { codex: model } }}
+      open onOpenChange={onOpenChange} pricePresentationOf={() => null}
+      onDisable={vi.fn()} disabled={false} paymentRequired={false} />);
+    const input = screen.getByLabelText('settings.providers.models.priceOverride.input') as HTMLInputElement;
+    await waitFor(() => expect(input.disabled).toBe(false));
+    await user.click(input);
+    await user.clear(input);
+    await user.type(input, '7');
+    await user.tab({ shift: true });
+    expect(document.activeElement).toBe(screen.getByRole('button', { name: 'settings.providers.models.priceOverride.resetShort' }));
+    expect(save).not.toHaveBeenCalled();
+    await user.keyboard('{Escape}');
+    await waitFor(() => expect(save).toHaveBeenCalledExactlyOnceWith(view.target, {
+      currency: 'USD', inputPerMtok: 7, outputPerMtok: 4, cacheReadPerMtok: null, cacheCreatePerMtok: null,
+    }));
+    expect(onOpenChange).not.toHaveBeenCalled();
+    await user.keyboard('{Escape}');
+    expect(onOpenChange).not.toHaveBeenCalled();
+    finishSave({ ...view, effective: { ...quote, inputPerMtok: 7 }, override: { ...quote, inputPerMtok: 7 } });
+    await waitFor(() => expect(input.readOnly).toBe(false));
+    expect(input.value).toBe('7');
+    await user.keyboard('{Escape}');
+    expect(onOpenChange).toHaveBeenCalledExactlyOnceWith(false);
+  } finally {
+    cleanup();
+    Object.defineProperty(window, 'electronAPI', { configurable: true, value: previous });
+  }
 });

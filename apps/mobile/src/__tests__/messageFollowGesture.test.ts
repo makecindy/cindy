@@ -42,12 +42,6 @@ const compiled = ts.transpileModule([
   `return { ${callbackNames.join(', ')} };`,
 ].join('\n'), { compilerOptions: { target: ts.ScriptTarget.ES2022 } }).outputText;
 
-const opacityDeclaration = renderer!.body!.statements.flatMap(node => (
-  ts.isVariableStatement(node) ? [...node.declarationList.declarations] : []
-)).find(node => ts.isIdentifier(node.name) && node.name.text === 'initialRevealOpacity')!;
-const renderOpacity = new Function('listRevealed', 'initialRevealProgress',
-  `return ${opacityDeclaration.initializer!.getText(source)};`) as (revealed: boolean, progress: object) => unknown;
-
 function harness(richContent: RichContentRuntime | null = new RichContentRuntime()) {
   const ref = <T>(current: T) => ({ current });
   const state = {
@@ -220,7 +214,9 @@ describe('streaming follow yields to the reader', () => {
     settle();
     expect(h.tailScroll).not.toHaveBeenCalled();
   });
-  it('keeps revealed history opaque after a delayed native stop value and keyboard rerenders', () => {
+  // Native visibility is exercised by the mounted renderer regression in
+  // messageSourceLabelsRender; a scalar opacity expression cannot prove it.
+  it('keeps reveal state settled after a delayed native stop value and keyboard rerenders', () => {
     const h = harness();
     const progress = { value: 0 };
     let revealed = false;
@@ -229,20 +225,17 @@ describe('streaming follow yields to the reader', () => {
     h.state.initialRevealAnimationRef.current!.stop = () => {
       setTimeout(() => { progress.value = 0; }, 1);
     };
-    expect(renderOpacity(revealed, progress)).toBe(progress);
+    expect(revealed).toBe(false);
     h.revealPositionedHistory();
     expect(progress.value).toBe(1);
-    expect(renderOpacity(revealed, progress)).toBe(1);
+    expect(revealed).toBe(true);
     vi.advanceTimersByTime(1);
     expect(progress.value).toBe(0); // Native completion delivers its old hidden value.
     for (const viewportHeight of [500, 912]) {
       h.state.scrollMetricsRef.current.viewportHeight = viewportHeight;
       h.handleContentSize(400, 2000);
-      expect(renderOpacity(revealed, progress)).toBe(1);
+      expect(revealed).toBe(true);
     }
-    // A task switch resets revealed state and uses a fresh animation value.
-    const nextProgress = { value: 0 };
-    expect(renderOpacity(false, nextProgress)).toBe(nextProgress);
   });
   it.each(['off', 'on', 'failed'])('preserves reader ownership with Debug recording %s', (recording) => {
     const sink = vi.fn(() => { if (recording === 'failed') throw new Error('storage unavailable'); });

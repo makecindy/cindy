@@ -72,6 +72,9 @@ export interface ComposerRichInputProps {
 }
 
 interface PendingImagePaste {
+  // Acceptance belongs to this start event, not to props when FileReader finishes.
+  deliver: ComposerRichInputProps['onPasteImages'];
+  fail: ComposerRichInputProps['onPasteImagesLoadFailed'];
   expectedCount: number;
   settledIndexes: Set<number>;
   urisByIndex: Map<number, string>;
@@ -183,13 +186,13 @@ const ComposerWebInput = forwardRef<ComposerRichInputHandle, ComposerRichInputPr
       readyRef.current = false;
       pendingFocusRef.current = false;
       if (pendingDocumentRef.current) pendingDocumentRef.current.focusAfter = false;
-      const failedPastes = pendingImagePastesRef.current.size;
+      const failedPastes = [...pendingImagePastesRef.current.values()];
       pendingImagePastesRef.current.clear();
       pendingImagePasteOrderRef.current = [];
       const pendingUris = [...pendingPastedImageFilesRef.current];
       pendingPastedImageFilesRef.current.clear();
       if (pendingUris.length > 0) void deleteComposerPastedImageUris(pendingUris);
-      for (let i = 0; i < failedPastes; i += 1) onPasteImagesLoadFailed?.();
+      for (const batch of failedPastes) batch.fail?.();
       onBlur?.();
     }, () => readyRef.current);
     const { generation, current: currentGeneration } = recovery;
@@ -334,19 +337,19 @@ const ComposerWebInput = forwardRef<ComposerRichInputHandle, ComposerRichInputPr
         const uris = [...batch.urisByIndex.entries()]
           .sort(([left], [right]) => left - right)
           .map(([, uri]) => uri);
-        if (uris.length > 0 && onPasteImages) {
+        if (uris.length > 0 && batch.deliver) {
           // 所有权在调用前转交上传 hook；后续成功 / 失败 / 取消由其负责清理。
           for (const uri of uris) pendingPastedImageFilesRef.current.delete(uri);
-          onPasteImages(uris);
+          batch.deliver(uris);
         } else {
           if (uris.length > 0) {
             for (const uri of uris) pendingPastedImageFilesRef.current.delete(uri);
             void deleteComposerPastedImageUris(uris);
           }
-          onPasteImagesLoadFailed?.();
+          batch.fail?.();
         }
       }
-    }, [onPasteImages, onPasteImagesLoadFailed]);
+    }, []);
 
     useEffect(() => {
       disposedRef.current = false;
@@ -495,12 +498,14 @@ const ComposerWebInput = forwardRef<ComposerRichInputHandle, ComposerRichInputPr
       }
       if (message.type === 'paste-images-start') {
         pendingImagePastesRef.current.set(message.requestId, {
+          deliver: onPasteImages,
+          fail: onPasteImages ? onPasteImagesLoadFailed : undefined,
           expectedCount: message.count,
           settledIndexes: new Set(),
           urisByIndex: new Map(),
         });
         pendingImagePasteOrderRef.current.push(message.requestId);
-        onPasteImagesLoading?.(Math.max(0, message.count));
+        if (onPasteImages) onPasteImagesLoading?.(Math.max(0, message.count));
         return;
       }
       if (message.type === 'paste-image-failed') {
@@ -522,7 +527,7 @@ const ComposerWebInput = forwardRef<ComposerRichInputHandle, ComposerRichInputPr
             }
           });
       }
-    }, [applyDocument, commitPlainTextPaste, focusEditor, hidden, inject, maxHeight, onBlur, onChangeDocument, onFocus, onHeightChange, onPasteImagesLoading, onScrollEdgeChange, persistPastedImage, runtimeConfig, settlePastedImage, generation, currentGeneration, recovery.onPong, recovery.onReady, rejectSnapshot]);
+    }, [applyDocument, commitPlainTextPaste, focusEditor, hidden, inject, maxHeight, onBlur, onChangeDocument, onFocus, onHeightChange, onPasteImages, onPasteImagesLoadFailed, onPasteImagesLoading, onScrollEdgeChange, persistPastedImage, runtimeConfig, settlePastedImage, generation, currentGeneration, recovery.onPong, recovery.onReady, rejectSnapshot]);
 
     const heightStyle = useAnimatedStyle(() => ({ height: animatedHeight?.value ?? height }));
     // Android: a gesture that takes over (dragging the composer taller) only stops

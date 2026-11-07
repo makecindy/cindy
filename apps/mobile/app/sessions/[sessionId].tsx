@@ -508,6 +508,7 @@ import { ComposerFrame, nativeComposerFrameAvailable } from '@/session/ComposerF
 import { VoiceRecordingPillContent, useMobileVoiceRecordingTimer } from '@/session/VoiceRecordingPill';
 import { VoicePillWidthFrame } from '@/session/voicePillWidthMotion';
 import { useMobileVoiceProcessingIndicator } from '@/session/useMobileVoiceProcessingIndicator';
+import { useHandheldVoiceKey } from '@/handheld/handheldMode';
 import { useComposerCardTransition } from '@/session/useComposerCardTransition';
 import { ComposerKeyboardAvoidingView } from '@/session/ComposerKeyboardAvoidingView';
 import { useComposerResize } from '@/session/useComposerResize';
@@ -3152,18 +3153,17 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
   // onClosed 才 false。它同时保证退场期 TalkBack 背景隔离,以及旋转/收窄退出宽屏时
   // 不会提前卸载 Drawer 而吞掉 pending 导航。
   const [sessionListDrawerOverlayMounted, setSessionListDrawerOverlayMounted] = useState(false);
-  // iOS 系统导航栏在 RN 内容之上,临时抽屉的 zIndex 盖不住它:抽屉存续期间收起系统栏,
-  // 抽屉自身的弹层(选项、改名、下拉菜单)仍在树内正常弹出。收起期间沿用打开前的顶栏
-  // 高度,遮罩下的聊天内容不跳动。
+  // iOS 系统导航栏在 RN 内容之上,临时抽屉放进独立窗口(aboveSystemBar)盖住它,系统栏
+  // 留在遮罩下原地不动,不随抽屉开合收起。
   const nativeHeaderHeight = useSessionHeaderHeight(JSON.stringify([
     windowDimensions.width, windowDimensions.height, windowDimensions.fontScale,
     insets.top, insets.bottom, insets.left, insets.right, adaptiveWindow.barEdge,
-  ]), sessionListDrawerOverlayMounted);
+  ]));
   // Duo shares the status area with its native toolbar. Its measured height
   // already includes that area; safeArea.top + 44 would count the toolbar twice.
   const topChromeHeight = Math.max(topOverlayHeight,
     horizontalSystemHeader ? nativeHeaderHeight : insets.top + navigationChrome.target);
-  // The drawer hides that toolbar; put the drawer's own header in the same row instead of
+  // The drawer covers that toolbar; put the drawer's own header in the same row instead of
   // below the whole status area.
   const sessionListDrawerTopInset = horizontalSystemHeader
     ? sharedStatusRowDrawerTop(nativeHeaderHeight, insets.top) : undefined;
@@ -6129,6 +6129,23 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
       });
   }, [deviceId, startVoiceRecording, voiceIsProcessing, voiceState]);
 
+  // 掌机模式:长按手柄语音键 = 按住麦克风说话;松手停止,文字留在输入框里,不自动发送。
+  // 与触屏长按同一条起录/收尾路径,启动未完成就松手时由 voiceStopAfterStartRef 在起录后收尾。
+  useHandheldVoiceKey({
+    start: () => {
+      voiceSuppressNextPressRef.current = false;
+      handleVoiceButtonPressIn();
+      voiceStartedOnPressInRef.current = false;
+    },
+    end: () => {
+      if (!voiceRecordingActiveRef.current) {
+        voiceStopAfterStartRef.current = true;
+        return;
+      }
+      void finishVoiceRecording({ sendAfterTranscribe: false });
+    },
+  });
+
   const removeRemoteFileAttachment = useCallback((id: string) => {
     // 已上传中转区的对象移除时 best-effort 回收,避免未发送附件在 OSS 留孤儿(codex review #504)。
     const removed = attachments.find((item) => item.id === id);
@@ -6897,8 +6914,34 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
       pastedTextRanges: pastedTextRangesAtSend,
       slashCommandRanges: slashCommandRangesAtSend ?? [],
     });
+    let directDraftCleared = false;
+    let queueEditDraftRestored = false;
     const restoreDraftAfterFailure = () => {
       if (independent) return;
+      if (queueEditAtSendStart) {
+        // 同一失败可能经过内外两层 catch。只恢复一次，且不能接管已取消/切换的编辑。
+        if (queueEditDraftRestored
+          || queueEditingRef.current !== queueEditAtSendStart) return;
+        queueEditDraftRestored = true;
+        let restoredDocument = composerDocumentRef.current;
+        if (directDraftCleared) {
+          restoredDocument = normalizeComposerDocument({
+            version: 1,
+            nodes: [
+              ...documentBeforeSend.nodes,
+              ...(composerDocumentHasContent(documentBeforeSend) && composerDocumentHasContent(restoredDocument)
+                ? [{ type: 'text' as const, text: '\n\n' }] : []),
+              ...restoredDocument.nodes,
+            ],
+          });
+          composerInputRef.current?.applyDocumentAndSetSelection(
+            restoredDocument, composerDocumentProjectedText(restoredDocument).length,
+          );
+        }
+        // 未清空时保留完整新编辑；已清空时合并提交快照与后续输入。两者都持久保存。
+        applyComposerDocument(restoredDocument);
+        return;
+      }
       // 走持久化写回(setComposerDraft 而非 restoreComposerDraft):乐观清空那拍已把
       // 草稿库删除并打了 cleared 标,只回内存的话 remount 后草稿读到 null、原文丢失
       // (codex review R16)。restoreComposerDraft 的 persist:false 语义只适用于
@@ -6937,7 +6980,11 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
       // 直接按捕获的发送快照合并回 A 的草稿库，并保留 A 期间新输入的后续文字。
       restoreRecoverableItemsToDraft(sessionId, [capturedDraftRecoveryItem()]);
     };
-    if (!independent && text && !useDurableOutbox) applyComposerDocument(documentAfterOptimisticClear);
+    if (!independent && text && !useDurableOutbox
+      && composerDocumentsEqual(composerDocumentRef.current, documentBeforeSend)) {
+      applyComposerDocument(documentAfterOptimisticClear);
+      directDraftCleared = true;
+    }
     // A pasted message link is committed to the editor synchronously, while
     // its readable body is fetched from the source device asynchronously.
     // The optimistic clear above preserves the existing "tap sends this
@@ -7272,9 +7319,9 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
         setAttachmentPreviews((current) => Object.fromEntries(
           Object.entries(current).filter(([attachmentId]) => !savedAttachmentIds.has(attachmentId)),
         ));
-        // 成功:锁已由 commitQueueEdit 释放,退出编辑态并恢复 stash。
+        // 成功:恢复 stash，同时保留等待保存期间继续输入的文档。
         if (queueEditingRef.current?.clientId === editingQueueItem.clientId) {
-          cancelQueueEdit();
+          finishQueueEditSave();
         }
         if (!independent) voiceDictionaryLearningTrackerRef.current?.flush();
         return;
@@ -8434,9 +8481,23 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
   // ⚠️ 临时取证(定位「气泡凭空消失」,定位完成后删):会话页实例身份 + 挂载/卸载。
   // settlingDiag 只在两次「首帧」打出 prev=0,之后再没跑过 —— 强烈指向组件被换了实例
   // (整棵树重建会清掉 settling / outbox / 落定基线等全部本地状态)。
-  const cancelQueueEdit = useCallback(() => {
+  const exitQueueEdit = useCallback((saved: boolean) => {
     const editing = queueEditingRef.current;
     if (!editing) return;
+    // 保存时发送快照已从编辑器清空，此后输入属于下一条草稿；取消则仍丢弃编辑内容。
+    const currentDocument = composerDocumentRef.current;
+    const restoredDocument = !saved || !composerDocumentHasContent(currentDocument)
+      ? editing.stashedDocument
+      : normalizeComposerDocument({
+          version: 1,
+          nodes: [
+            ...editing.stashedDocument.nodes,
+            ...(composerDocumentHasContent(editing.stashedDocument)
+              ? [{ type: 'text' as const, text: '\n\n' }]
+              : []),
+            ...currentDocument.nodes,
+          ],
+        });
     queueEditingRef.current = null;
     setQueueEditing(null);
     const currentLockOwner = queueEditLockOwnerRef.current;
@@ -8465,12 +8526,15 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
     // Rotate the editor document id now: late IME changes must not overwrite
     // the restored draft while its React update waits for the next frame.
     composerInputRef.current?.applyDocumentAndSetSelection(
-      editing.stashedDocument, composerDocumentProjectedText(editing.stashedDocument).length,
+      restoredDocument, composerDocumentProjectedText(restoredDocument).length,
     );
-    applyComposerDocument(editing.stashedDocument);
+    applyComposerDocument(restoredDocument);
     attachmentsRef.current = [...editing.stashedAttachments];
     setAttachments([...editing.stashedAttachments]);
   }, [applyComposerDocument, discardQueueEditTransientAttachments]);
+
+  const cancelQueueEdit = useCallback(() => exitQueueEdit(false), [exitQueueEdit]);
+  const finishQueueEditSave = useCallback(() => exitQueueEdit(true), [exitQueueEdit]);
 
   // 编辑中的条目从队列消失(被远端发出/删除)→ 原文已不可改,自动退出编辑并恢复
   // stash。即便加锁请求仍在途也要排队释放,避免留下孤儿锁。
@@ -10373,7 +10437,6 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
       ) : (
         <SessionHeaderBar
               horizontalSystemHeader={horizontalSystemHeader}
-              systemBarHidden={sessionListDrawerOverlayMounted}
               currentSession={currentSession}
               diffCount={diffCount}
               isDeviceAccessRevoked={isDeviceAccessRevoked}
@@ -10700,7 +10763,7 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
                   accessibilityHint={composerSendUnavailableReason ?? undefined}
                   disabled={!canUseComposer}
                   icon={<Image color={colors.textPrimary} size={iconSize.lg} strokeWidth={iconStroke.regular} />}
-                  label={t('session.common.photo')}
+                  label={t('session.common.photosAndVideos')}
                   onPress={() => void addLocalImageAttachments('library')}
                   dismissBeforePress
                   testID="session.contextSheetPhotoRow"
@@ -10982,7 +11045,6 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
             selectedId={composerPreviewAttachmentId}
             annotation={composerAnnotations.trayAnnotation}
             resolveRemoteMedia={resolveRemoteMedia}
-            onSelect={setComposerPreviewAttachmentId}
             onClose={() => setComposerPreviewAttachmentId(null)}
           />
           {composerAnnotations.host}
@@ -11039,7 +11101,6 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
                     companionAvatar={companionReplyAvatar}
                     companionPluginInvocations={companionPluginInvocations}
                     remoteDeviceId={deviceId}
-                    showPluginInvocations={!companionChat && Boolean(currentSession && currentSession.source !== 'bot')}
                     bottomOverlayHeight={bottomOverlayHeight}
                     renderScrollComponent={renderMessageScroll}
                     contentBottomInset={companionInlineInteraction && !shareSelectionActive
@@ -11743,6 +11804,7 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
             task. Modal drawers keep their exit/navigation lifecycle here. */}
         {!paneLayout.persistent || sessionListDrawerOverlayMounted ? (
         <SessionListDrawer
+          aboveSystemBar={Platform.OS === 'ios'}
           newSessionActionRef={homeNewSessionActionRef}
           newSessionInSystemBar={paneLayout.persistent && Platform.OS === 'ios' && adaptiveWindow.barEdge !== 'none'}
           currentSessionId={sessionId}
@@ -11807,7 +11869,6 @@ type SessionHeaderIcon = typeof Folder;
 
 function SessionHeaderBar({
   horizontalSystemHeader,
-  systemBarHidden = false,
   noticeOverride,
   currentSession,
   diffCount,
@@ -11837,8 +11898,6 @@ function SessionHeaderBar({
   title,
 }: {
   horizontalSystemHeader: boolean;
-  /** 临时任务列表抽屉存续期间收起系统栏,让抽屉顶部控件可见可点。 */
-  systemBarHidden?: boolean;
   noticeOverride?: string;
   currentSession: RemoteSession | null;
   diffCount: number;
@@ -11933,8 +11992,6 @@ function SessionHeaderBar({
 
   // Let UINavigationBar align controls with the system status area, including Duo portrait.
   if (horizontalSystemHeader) {
-    // Stack.Toolbar left/right forces headerShown: true; drop them while the bar is hidden.
-    if (systemBarHidden) return <Stack.Screen options={{ headerShown: false }} />;
     const files = overview?.actions.find((action) => action.id === 'files');
     return (
       <>
@@ -12692,6 +12749,13 @@ function SessionComposerInput({
     sending,
     voiceState,
   ]);
+  // 图片粘贴是附件入口：发送期间只保留文字编辑，不接收新的图片或占位。
+  // 失败回调始终保留，确保此前已开始的粘贴仍可清理占位。
+  const composerImagePasteHandlers = useMemo(() => ({
+    onPasteImages: sending ? undefined : onPasteImages,
+    onPasteImagesLoading: sending ? undefined : beginPastePlaceholders,
+    onPasteImagesLoadFailed: failPastePlaceholders,
+  }), [beginPastePlaceholders, failPastePlaceholders, onPasteImages, sending]);
   const compactComposer = composerLayout.density === 'compact';
   // 发送槽双语义(对齐桌面 ChatInput 的主槽判定,voice busy = listening|submitting|refining):
   // 任务执行中且发送不可用、又没有语音在进行时,停止任务顶替发送位;语音一旦开始,
@@ -13085,9 +13149,7 @@ function SessionComposerInput({
                         onFocus={() => setComposerFocused(true)}
                         onHeightChange={handleComposerRichInputHeight}
                         onScrollEdgeChange={composerResize.setTextScrollEdge}
-                        onPasteImages={onPasteImages}
-                        onPasteImagesLoading={beginPastePlaceholders}
-                        onPasteImagesLoadFailed={failPastePlaceholders}
+                        {...composerImagePasteHandlers}
                         placeholder={voiceIsListening ? '' : composerLayout.input.placeholder}
                         resolveSessionLinkLabel={resolvePastedSessionLinkLabel}
                         testID="session.composerRichInput"
@@ -13119,9 +13181,7 @@ function SessionComposerInput({
                       setComposerFocused(true);
                       handleComposerInputPressIn();
                     }}
-                    onPasteImages={onPasteImages}
-                    onPasteImagesLoading={beginPastePlaceholders}
-                    onPasteImagesLoadFailed={failPastePlaceholders}
+                    {...composerImagePasteHandlers}
                     onPressIn={handleComposerInputPressIn}
                     placeholder={voiceIsListening ? '' : composerLayout.input.placeholder}
                     placeholderTextColor={colors.textPlaceholder}

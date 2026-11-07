@@ -1,3 +1,4 @@
+import { isReplacedCindyGatewayKey } from '../model-access/gatewayKeyRejection.js';
 import { refreshInstalledPluginApps } from '../cindy-brain/index.js';
 import { configureSessionModelInterfaceStorage, sessionModelInterface } from './session-model-interface.js';
 import { readGeneratedImageEpoch } from '../cindy-media/generatedImageStorage';
@@ -28,6 +29,7 @@ import { clearCodexAccountUsageSnapshot } from '../usageBroadcaster.js';
 import { createMediaDownloadContext } from '../cindy-media/mediaDownloadApproval.js';
 import { setPluginModelPickerAgentProvider, setPluginRouteAgentStatusProvider } from '../cindy-brain/ghostModelPicker.js';
 import { isCodexAccountProvider, setCodexAccountRetirement } from './codex-account-auth.js';
+import { withSubscriptionAccounts } from '../subscription-accounts/agent.js';
 import { ownerCodexThreadLocations, readCodexThreadStorageReadOnly } from './codex-thread-storage.js';
 import { createSessionArchiveSync, prepareArchiveSessions } from './session-archive-sync.js';
 import { getCurrentDbClientSnapshot } from '../localDb/client/current.js';
@@ -2024,7 +2026,7 @@ export function getMaker(): Maker {
           setCodexProxyAuthInjection(authInjection);
           await broadcastCodexRuntimeRoute();
         }
-        setCodexProxyGatewayKeyReader(readClaudeApiKey);
+        setCodexProxyGatewayKeyReader(readClaudeApiKey, isReplacedCindyGatewayKey);
         setCodexSubagentOAuthReader(getChatgptBridgeAuthForDispatch);
 
         const customContextProviderRoutes = usesScopedProxy
@@ -2405,8 +2407,8 @@ export function getMaker(): Maker {
     // 装配第二步: 把 agents 引用挂回 manager (manager.enable() 时遍历 setMemory(false))。
     // 保留同一份可变 map，供可选 Pi runtime 在 Maker 构造后动态注册。
     const makerAgents: ConstructorParameters<typeof Maker>[0]['agents'] = {
-      'claude-code': claudeAgent,
-      codex: codexAgent,
+      'claude-code': withSubscriptionAccounts(claudeAgent),
+      codex: withSubscriptionAccounts(codexAgent),
     };
     attachAgentsToMakerMemory(makerMemoryManager, makerAgents);
     if (makerMemoryManager.isEnabled()) {
@@ -2814,7 +2816,7 @@ export function getMaker(): Maker {
       },
     });
     const piAgent = buildPiAgentForDesktop();
-    if (piAgent) makerAgents.pi = piAgent;
+    if (piAgent) makerAgents.pi = withSubscriptionAccounts(piAgent);
 
     setVisionGatewayKeyReader(readClaudeApiKey);
     _visionBridgeInstance = createVisionBridge({
@@ -3220,7 +3222,7 @@ export function getMaker(): Maker {
       if (!_maker || _maker.listAvailableAgents().includes('pi')) return false;
       const next = buildPiAgentForDesktop();
       if (!next) return false;
-      const registered = _maker.registerAgent('pi', next);
+      const registered = _maker.registerAgent('pi', withSubscriptionAccounts(next));
       if (!registered) {
         void next.dispose().catch((error) => {
           desktopMakerLogger.warn('discarding Pi agent after registration race failed', {

@@ -170,6 +170,10 @@ checkout 的启动器顶掉）。因此并行多开的标准姿势是：**每个
   目录内，进程归属按命中的最深 worktree 判定。从主 checkout restart 不会停掉托管 worktree
   的实例，冲突门也会把它们当作其他 checkout。检测靠 helper 进程命令行上的
   `--user-data-dir`，对方实例刚启动还没起 helper 时可能漏检，属尽力而为。
+- **借用的 Node 不算归属**：判断归属前先去掉命令行开头的 Node 运行时与包管理器入口
+  （node / pnpm / npm / corepack）。另一份 checkout 借用本 checkout 自带的 node 启动 dev
+  时，本 checkout 的 restart 不会把它当成自己的实例杀掉；Electron、electron-forge 等指向
+  checkout 自身依赖的路径仍是归属依据。
 - **CDP 端口**：dev 的 remote-debugging-port 固定 9222，只有先起的实例能绑上。后起
   实例需要 CDP 调试面时，用 `XDT_CDP_PORT=<端口>` 覆写（仅数字生效，dev-only）。
 - 同一 checkout 内仍是单实例语义：restart 会替换本 checkout 上一个实例（不论沙箱
@@ -426,3 +430,43 @@ node apps/desktop/scripts/check-windows-remote-desktop-runtime.mjs
 生产 NSIS 钩子的当前用户安装、覆盖安装和卸载。它不改系统 DLL、不安装服务、不操作
 正式 Cindy 的安装。该故障注入不能代替干净 Windows 虚拟机、「所有用户」安装或已注册
 远程桌面服务的真实验收；编译与安装器子进程不进入默认单测。
+
+
+## 右侧栏展开、拖宽与恢复
+
+主界面最右侧的内嵌工具栏从收起变为展开时，`LayoutRoot` 按面板宽度与 CSS clamp
+计算保持聊天区宽度所需的增量，经本机 `window-sidebar-expansion` IPC 交给
+`SidebarWindowExpansion`。窗口左边缘不动，增量止于当前显示器工作区右边缘；
+空间不足的部分由窗口内部布局分配。最大化与原生全屏不改窗口尺寸，左侧停靠和
+独立工具窗口不触发右扩。启动恢复已展开的侧栏只登记现有几何基准，不重复扩大。
+
+展开后以内容区像素宽度为基准：聊天区与其它停靠面板保持宽度，最右侧栏使用 CSS
+剩余空间吸收窗口伸缩；达到最小尺寸后仍遵守原有空间约束。实时缩放不在每个 resize
+事件里重写 React 状态或偏好。主动拖中间分隔线前以实测宽度校准份额账本，提交后
+重新建立聊天区宽度基准。收起时撤回侧栏占用的扩展宽度（包含扩展后主动拖宽的增量），
+保留窗口当前的位置和高度；关闭、移位或重新展开时解除／重建临时基准。
+
+用户主动调整侧栏后，把实际像素宽度写入布局树 pane 的可选 `preferredWidth`，通过
+既有 LayoutStore 保存到 `layout.v1.json`；下次展开及重启后优先恢复该宽度。
+旧布局缺少该字段时继续使用原份额，无需迁移；重置布局同时清除该偏好。
+中间分隔线在手势提交时保存，macOS / Windows 原生窗口边缘通过 Electron 的
+`will-resize` + `resized` 区分手动缩放后保存。程序展开、屏幕空间不足、最大化与全屏
+造成的临时变化不覆盖用户偏好。Linux 没有上述原生手势事件，仍可通过中间分隔线保存。
+
+展开／收起时 `sidebarPresentation` 暂时固定内容区旧宽度并保留旧侧栏状态；主进程
+回传实际增量后，等待 renderer 观察到对应 viewport 宽度，再在同一帧释放旧宽并切换
+侧栏。原生窗口有尺寸变化时不叠加侧栏的 250ms 宽度动画，避免聊天消息先压缩或
+拉宽再恢复；无可用空间时保留窗口内动画。快速反向操作丢弃迟到回包。
+
+侧栏开关归聊天区所有，点击展开、再次点击收起；展开后仍留在聊天区原来的角上
+（macOS 顶栏右端、Windows 内容区入口）。侧栏自己的顶栏末端显示 × 关闭按钮；
+关闭仅收起侧栏，不关闭页签。分离和最大化入口仍属于侧栏，沿用现有主题与多语言文案。
+
+新增 IPC 只允许 Cindy 自有顶层应用窗口操作自身，不进入 device-link 白名单；SSH 或
+远程任务仍调整当前查看端窗口，手机没有对应的原生窗口行为。
+
+回归入口：`sidebarWindowExpansion.test.ts`、`sidebarWindowExpansionIpc.test.ts`、
+`LayoutStore.test.ts`、`layout/__tests__/sidebarExpansion.test.ts`、
+`sidebarPresentation.test.tsx`、`LayoutRoot.test.tsx`、`rootDividerDrag.test.tsx` 与
+`RightSidebar.presentation.test.tsx`。覆盖几何边界、快速开关、首次恢复、拖宽后收起、
+宽度落盘重载、临时夹取不写偏好，以及原生扩宽后继续拖分隔线。

@@ -246,7 +246,7 @@ export function teammateVisualFixture(channel: string, args: unknown[], now = FI
     ref: { collectionId: BOT_GROUP_REMOTE_COLLECTION_ID, kind: BOT_GROUP_REMOTE_RESOURCE_KIND, id: request.ref.id },
     revision: 'visual-1', display: { title: 'Design review' }, actions: [], links: [],
     blocks: [{ id: 'chat', primitive: BOT_GROUP_CHAT_PRIMITIVE, fallbackMarkdown: 'Design review', data: {
-      id: request.ref.id, name: 'Design review',
+      id: request.ref.id, name: 'Design review', supportsAttachments: true,
       members: ['Aster (Ada)', 'Nova (Leo)', 'Leo', 'Mira (Ada)', 'Orin (Kai)', 'Quill', 'Ada', 'Kai', 'Rhea (Ada)']
         .map((name, index) => ({ botId: `visual-crowd-${index}`, name, status: 'active' })),
       messages: [{ id: 'visual-crowd-message', sequence: 1, kind: 'message', authorKind: 'bot', authorBotId: 'visual-crowd-0',

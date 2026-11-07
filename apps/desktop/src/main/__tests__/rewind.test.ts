@@ -24,7 +24,12 @@ import path from 'node:path';
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 
 import { enqueueGitRepoWrite } from '../git-snapshot/gitRepoWriteQueue';
+import { setBroadcastTapListener } from '../device-link/broadcast-tap.js';
 const attemptJournal = vi.hoisted(() => ({ read: vi.fn<() => Promise<Array<{ id: string; anchor?: string }> | null>>() }));
+const readBoundClaudeConfigDirMock = vi.hoisted(() => vi.fn<(_sdkSessionId: string) => string | undefined>());
+vi.mock('../subscription-accounts/store.js', () => ({
+  readBoundClaudeConfigDir: readBoundClaudeConfigDirMock,
+}));
 vi.mock('../git-snapshot/snapshotAttemptStore', () => ({ SnapshotAttemptStore: class { read = attemptJournal.read; } }));
 
 // ── mock(在被测模块 import 前 hoist) ─────────────────────────────────────
@@ -176,8 +181,9 @@ const fakeDb = {
 
 const txMock = vi.fn((name: string, args: unknown) => {
   txCalls.push({ name, args });
-  return Promise.resolve({});
+  return Promise.resolve(['client-id', 'assistant-client-id']);
 });
+const remotePush = vi.fn();
 const queryOneMock = vi.fn(async (_sql?: string, _params?: unknown[]) => ({ cleared_at: null as number | null, created_at: null as number | null }));
 
 vi.mock('../localDb/client/current', () => ({
@@ -190,12 +196,15 @@ const originalClaudeConfigDir = process.env.CLAUDE_CONFIG_DIR;
 const tempDirs: string[] = [];
 
 beforeEach(() => {
+  readBoundClaudeConfigDirMock.mockReset();
   attemptJournal.read.mockReset().mockResolvedValue([]);
   if (originalClaudeConfigDir === undefined) delete process.env.CLAUDE_CONFIG_DIR;
   else process.env.CLAUDE_CONFIG_DIR = originalClaudeConfigDir;
   selectQueue.length = 0;
   txCalls.length = 0;
   txMock.mockClear();
+  remotePush.mockClear();
+  setBroadcastTapListener(remotePush);
   queryOneMock.mockReset();
   queryOneMock.mockResolvedValue({ cleared_at: null, created_at: null });
   setLastAssistantTranscriptUuidMock.mockClear();
@@ -255,6 +264,9 @@ beforeEach(() => {
 });
 
 afterEach(async () => {
+  if (vi.isMockFunction(os.homedir)) vi.mocked(os.homedir).mockRestore();
+  vi.unstubAllEnvs();
+  setBroadcastTapListener(null);
   if (originalClaudeConfigDir === undefined) delete process.env.CLAUDE_CONFIG_DIR;
   else process.env.CLAUDE_CONFIG_DIR = originalClaudeConfigDir;
   await Promise.all(tempDirs.splice(0).map((dir) => fs.rm(dir, { recursive: true, force: true })));
@@ -385,6 +397,11 @@ describe('commitRewindAtMessage', () => {
     });
     expect(typeof (txCall.args as { now: unknown }).now).toBe('number');
     expect(setLastAssistantTranscriptUuidMock).toHaveBeenCalledWith('sess-1', 'sdk-msg-uuid-prior-asst');
+    expect(remotePush).toHaveBeenCalledExactlyOnceWith('local-db:messages:deleted', {
+      sessionId: 'sess-1',
+      clientId: 'client-id',
+      clientIds: ['client-id', 'assistant-client-id'],
+    });
 
     expect(result.id).toBe('sess-1');
   });
@@ -413,6 +430,7 @@ describe('commitRewindAtMessage', () => {
     const txCall = txCalls.find((c) => c.name === 'rewind.commit');
     if (!txCall) throw new Error('缺少 rewind.commit tx 调用');
     expect(txCall.args).toMatchObject({ requireLatestUser: true });
+    expect(remotePush).not.toHaveBeenCalled();
   });
 
   it('requireLatestUser: 事务临界区内断言失败不被 warn 吞掉,以 REWIND_TARGET_NOT_LATEST 上抛', async () => {
@@ -466,7 +484,8 @@ describe('commitRewindAtMessage', () => {
     });
   });
 
-  it('uses JSONL parent chain instead of stale target transcriptParentUuid', async () => {
+  // Standard regression: a secondary account's real transcript must also beat stale DB ancestry.
+  it.each([false, true])('uses JSONL parent chain instead of stale target transcriptParentUuid (secondary=%s)', async (secondary) => {
     await writeClaudeJsonl('sdk-uuid-old', '/repo', [
       {
         type: 'assistant',
@@ -489,6 +508,15 @@ describe('commitRewindAtMessage', () => {
         message: { content: 'next' },
       },
     ]);
+    if (secondary) {
+      const configDir = process.env.CLAUDE_CONFIG_DIR!;
+      readBoundClaudeConfigDirMock.mockImplementation((id) => id === 'sdk-uuid-old' ? configDir : undefined);
+      const emptyHome = await fs.mkdtemp(path.join(os.tmpdir(), 'cindy-rewind-empty-home-'));
+      tempDirs.push(emptyHome);
+      vi.spyOn(os, 'homedir').mockReturnValue(emptyHome);
+      vi.stubEnv('CLAUDE_CONFIG_DIR', undefined);
+      vi.stubEnv('XDT_USER_DATA_DIR', undefined);
+    }
     selectQueue.push([
       makeUserMessageRow({
         agentMeta: JSON.stringify({
@@ -868,6 +896,7 @@ describe('commitRewindAtMessage', () => {
     );
     expect(txCalls.some((c) => c.name === 'rewind.commit')).toBe(true);
     expect(setLastAssistantTranscriptUuidMock).not.toHaveBeenCalled();
+    expect(remotePush).not.toHaveBeenCalled();
   });
 
   it('throws SESSION_RUNNING when session.isTurnRunning()=true; commitRewindFiles not called, no DB update', async () => {

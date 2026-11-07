@@ -1,3 +1,4 @@
+import { ghostCardSessionLinkId } from '@cindy/maker-shared/ghost-card-form';
 import { isSafeGhostRelativePath as isSafePluginUiPath, getPluginToolUi, validateWithStoredMcpApps, parseGhostMcpApps } from '@cindy/plugin-protocol';
 import { pluginHasToolUi, pluginToolVisible, pluginUiDomains, pluginUiPermissionsExpand } from '@cindy/plugin-protocol';
 import { parseGhostSecretCheck, type GhostSecretCheckDecl } from '@cindy/plugin-protocol';
@@ -4313,20 +4314,24 @@ export function resolveGhostManifestLocale(
  * 顶层字段原样保留但不解释、不展示、不授权。任何已知字段不合格都给出 reason。
  */
 export function validateGhostManifest(value: unknown): ManifestValidation {
-  return validateGhostManifestInput(value, false);
+  return validateGhostManifestInput(value, false, false);
 }
 
-/** Stored market releases tolerate only historical mcpApps; other fields remain strict. */
+/** Stored market releases retain historical mcpApps and parameter sizes; other fields remain strict. */
 export function validateStoredGhostManifest(value: unknown): ManifestValidation {
-  return validateWithStoredMcpApps(value, validateGhostManifest);
+  return validateWithStoredMcpApps(value, raw => validateGhostManifestInput(raw, false, true));
 }
 
 /** Installed snapshots retain historical unknown tasks data without granting it. */
 export function validateInstalledGhostManifest(value: unknown): ManifestValidation {
-  return validateWithStoredMcpApps(value, raw => validateGhostManifestInput(raw, true));
+  return validateWithStoredMcpApps(value, raw => validateGhostManifestInput(raw, true, true));
 }
 
-function validateGhostManifestInput(value: unknown, preserveHistoricalTasks: boolean): ManifestValidation {
+function validateGhostManifestInput(
+  value: unknown,
+  preserveHistoricalTasks: boolean,
+  preserveHistoricalParameterSize: boolean,
+): ManifestValidation {
   const preparation = prepareGhostManifestForValidation(value);
   if (!preparation.ok) return preparation;
   const prepared = preparation.prepared;
@@ -4824,7 +4829,12 @@ function validateGhostManifestInput(value: unknown, preserveHistoricalTasks: boo
         if (!isPlainObject(t.parameters))
           return { ok: false, reason: 'tools[].parameters 必须是对象(JSON Schema)' };
         try {
-          if (JSON.stringify(t.parameters).length > 16_384) {
+          const serialized = JSON.stringify(t.parameters);
+          // 新包按 UTF-8 字节计;市场 release 与已装快照沿用旧 UTF-16 长度口径。
+          const size = preserveHistoricalParameterSize
+            ? serialized.length
+            : new TextEncoder().encode(serialized).length;
+          if (size > 16_384) {
             return { ok: false, reason: 'tools[].parameters 过大(上限 16KB)' };
           }
         } catch {
@@ -7827,7 +7837,7 @@ export const GHOST_CARD_LINK_MAX_LEN = 2048;
 
 /**
  * 卡内外链声明的白名单校验(净化器与宿主点击桥共用,双层同判):
- * 仅整串 http/https URL;空白与控制字符出现即拒——URL 构造器会静默剥掉
+ * 仅整串 http/https URL，或导航专用 cindy://session/<id>;空白与控制字符出现即拒——URL 构造器会静默剥掉
  * TAB/CR/LF,校验对象与落地属性值必须是同一串,不给"解析后合法、原文
  * 混淆"留缝。真实跳转仍由 main 的 shell:open-external 再验一道协议(第三道)。
  */
@@ -7839,6 +7849,7 @@ export function isGhostCardLinkAllowed(url: string): boolean {
     const c = url.charCodeAt(i);
     if (c <= 32 || c === 127) return false;
   }
+  if (ghostCardSessionLinkId(url)) return true;
   if (!/^https?:\/\//i.test(url)) return false;
   try {
     const parsed = new URL(url);
