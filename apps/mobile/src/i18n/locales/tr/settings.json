@@ -352,5 +352,44 @@
     "title": "Geliştirici",
     "identity": "Tanımlayıcılar",
     "updateInfo": "Güncelleme bilgisi"
+  },
+  "handheld": {
+    "sectionTitle": "El Konsolu",
+    "label": "El konsolu modu",
+    "entryHint": "Cindy'yi bir el konsolunun yerleşik kumandasıyla kullanın ve konuşmak için ses tuşunu basılı tutun.",
+    "on": "Açık",
+    "off": "Kapalı",
+    "openAccessibility": "El konsolu modu ayarlarını aç",
+    "title": "El konsolu modu",
+    "hint": "Cindy'yi yalnızca kumandayla kullanın: D-pad veya sol çubuk odağı taşır, A seçer ve B geri döner.",
+    "saveFailed": "Bu ayar kaydedilemedi. Cindy kapanana kadar geçerli kalır.",
+    "reset": "Varsayılana sıfırla",
+    "voiceKey": {
+      "title": "Ses tuşu",
+      "hint": "Konuşmak için bu tuşu basılı tutun ve bitirmek için bırakın. Sözleriniz mesaj kutusunda kalır. Ana ekranda basılı tutmak yeni bir görev başlatır. A, B, L1 veya R1 tuşunu seçmek o düğmenin normal işlevinin yerini alır.",
+      "capture": "Ayarlamak için bir kumanda düğmesine basın",
+      "capturing": "Kullanmak istediğiniz düğmeye basın…"
+    },
+    "display": {
+      "title": "Ekran",
+      "secondary": "İkinci ekranda göster",
+      "hint": "Cindy, çift ekranlı bir el konsolunun alt ekranı gibi ikinci ekrana taşınır. El konsolu modunu kapatmak onu ana ekrana geri taşır.",
+      "none": "Bu cihaz tek ekrana sahip. Cindy boyutuna uyum sağlar.",
+      "current": "Geçerli ekran",
+      "single": "Ana ekran"
+    },
+    "controls": {
+      "title": "Kumanda",
+      "gamepad": "Kumanda",
+      "noGamepad": "Algılanmadı",
+      "moveKeys": "D-pad / sol çubuk",
+      "move": "Odağı taşı",
+      "confirm": "Seç",
+      "back": "Geri",
+      "voice": "Konuşmak için basılı tutun",
+      "scrollKeys": "Sağ çubuk",
+      "scroll": "Kaydır",
+      "page": "Sayfa yukarı / aşağı"
+    }
   }
 }

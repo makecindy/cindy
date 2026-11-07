@@ -1425,7 +1425,13 @@
       "permissionPromptTitleWithTool": "{{toolName}} aracına izin verilsin mi?",
       "allowOnce": "Bir kez izin ver",
       "alwaysAllowForSession": "Bu görev için her zaman izin ver",
-      "deny": "Reddet"
+      "deny": "Reddet",
+      "liveActivityRunning_one": "{{count}} görev çalışıyor",
+      "liveActivityRunning_other": "{{count}} görev çalışıyor",
+      "liveActivityAlsoRunning_one": "{{count}} görev daha çalışıyor",
+      "liveActivityAlsoRunning_other": "{{count}} görev daha çalışıyor",
+      "liveActivityWaiting_one": "{{count}} görev sizi bekliyor",
+      "liveActivityWaiting_other": "{{count}} görev sizi bekliyor"
     }
   },
   "menubar": {
@@ -1731,6 +1737,13 @@
       "reorderHint": "Drag, or use the actions menu to reorder",
       "moveUp": "Yukarı taşı",
       "moveDown": "Move down"
+    },
+    "shared": {
+      "label": "Paylaşılan",
+      "note": "Bu kullanım hakkı hesap tarafından paylaşılmaktadır, size ayrılmamıştır.",
+      "highestWeekly": "Paylaşılan · en yüksek haftalık",
+      "highestWeeklyNote": "Okunabilir hesaplar arasında en yüksek haftalık kullanım hakkı. Birleştirilmiş veya kişisel değil, hesap genelindedir.",
+      "from": "{{name}} tarafından paylaşıldı"
     }
   },
   "settings": {
@@ -2249,6 +2262,17 @@
         "resetFailed": "Could not restore the panel layout.",
         "saved": "Panel position saved. Restore the default layout in Settings → Appearance.",
         "saveFailed": "Could not save panel positions."
+      },
+      "appIcon": {
+        "label": "Dock simgesi",
+        "description": "Uygulamanın Dock'ta kullandığı simgeyi seçin",
+        "saveFailed": "Dock simgesi kaydedilemedi. Lütfen tekrar deneyin.",
+        "options": {
+          "default": "Varsayılan",
+          "cat": "Kara kedi",
+          "wordmark": "Cindy logosu",
+          "mark": "Cindy sembolü"
+        }
       }
     },
     "notifications": {
@@ -2346,7 +2370,24 @@
       "swallowActivationClickLabel": "Prevent Accidental Clicks When Returning",
       "swallowActivationClickHint": "When enabled, a left-click on a background window only brings it forward. When disabled, it also acts on the clicked item, which may cause accidental clicks.",
       "swallowActivationClickAria": "Toggle protection from accidental clicks when returning to the window",
-      "macRestartNote": "On macOS, restart the app for changes to take effect."
+      "macRestartNote": "On macOS, restart the app for changes to take effect.",
+      "awayGuard": {
+        "label": "Siz uzaktayken çalışmaya devam etsin",
+        "hint": "Açık olduğunda, bu Mac ekranını uyku moduna geçirmez veya kendiliğinden kilitlemez, böylece AI onu istediği zaman kullanabilir. Bir süre uzakta kaldığınızda siyah bir örtü ekranı gizler ve AI arkasında çalışmaya devam eder. Bir tuşa basmak veya tıklamak hemen kilitler; Touch ID veya parolanızla kilidi açın.",
+        "permission": "Cindy'ye Sistem Ayarları > Gizlilik ve Güvenlik > Erişilebilirlik bölümünde izin verin, böylece birisi bu Mac'e dokunduğu anda ekranı kilitleyebilir. O zamana kadar ekran her zamanki gibi uyur ve kilitlenir.",
+        "preview": "Şimdi deneyin",
+        "previewStarting": "Ellerinizi fareden ve klavyeden çekin. Ekran 3 saniye içinde kararır; kilitlemek için herhangi bir tuşa basın, ardından kilidi açın.",
+        "previewUnavailable": "Ekran karartılamadı. Cindy'yi yeniden başlatıp tekrar deneyin.",
+        "delay": {
+          "30": "30 sn",
+          "60": "1 dk",
+          "120": "2 dk",
+          "300": "5 dk",
+          "label": "Şu süreden sonra ekranı karart",
+          "hint": "Ekran kararmadan önce klavye ve farenin ne kadar süre dokunulmadan kalacağı. Varsayılan olarak ekran uyku sürenizle aynıdır.",
+          "system": "Sistem"
+        }
+      }
     },
     "agentIsland": {
       "title": "Agent Island",
@@ -2435,7 +2476,10 @@
       },
       "subtleRemindersLabel": "Hafif hatırlatıcılar",
       "subtleRemindersHint": "Yeni iletiler, giriş istekleri veya hatalar için ada altında bir bildirim kartı göstermek yerine simgedeki değişikliklerle belirtin. Tüm görev listesini görüntülemek için adaya tıklayın.",
-      "subtleRemindersFailed": "Hatırlatıcı ayarları kaydedilemedi. Lütfen tekrar deneyin."
+      "subtleRemindersFailed": "Hatırlatıcı ayarları kaydedilemedi. Lütfen tekrar deneyin.",
+      "liveActivityLabel": "Görevleri Dynamic Island'da göster",
+      "liveActivityHint": "Yeni MacBook Pro'da Dynamic Island içinde görev ilerlemesini gösterir ve bir şey size ihtiyaç duyduğunda veya bittiğinde genişler. Diğer Mac'lerde menü çubuğunda görünür. Görev Kapsülü'nden bağımsız çalışır.",
+      "liveActivityFailed": "Canlı Etkinlik ayarları kaydedilemedi. Lütfen tekrar deneyin."
     },
     "language": {
       "title": "Dil",
@@ -3804,7 +3848,12 @@
           "selectAll": "Tümünü seç",
           "clearAll": "Temizle",
           "empty": "Eşleşen model yok",
-          "confirm": "Add selected models ({{count}})"
+          "confirm": "Add selected models ({{count}})",
+          "selectedCount": "{{count}} model seçildi",
+          "availableCount": "{{count}} kullanılabilir model alındı",
+          "notFetched": "Model listesi henüz alınmadı",
+          "failedRetry": "Model listesi alınamadı. Tekrar deneyin.",
+          "retryFailed": "Bu alma işlemi başarısız oldu. Tekrar deneyin."
         },
         "authMode": {
           "label": "Authentication",
@@ -3942,7 +3991,9 @@
           "saved": "API price estimate saved",
           "invalid": "Enter valid non-negative input and output prices",
           "loadFailed": "Couldn’t load the price estimate. Please try again.",
-          "saveFailed": "Couldn’t save the price estimate. Please try again."
+          "saveFailed": "Couldn’t save the price estimate. Please try again.",
+          "resetShort": "Sıfırla",
+          "referenceDetails": "Referans Ayrıntıları"
         },
         "advanced": {
           "open": "Gelişmiş ayarlar",
@@ -6325,6 +6376,45 @@
             "revoked": "Unlinked",
             "superseded": "Linked on another device"
           }
+        },
+        "feishu": {
+          "description": "Feishu / Lark mesajlarını çalışma bilgisayarınıza gönderin.",
+          "disabledHint": "Anahtarı açın, ardından tarayıcıda Feishu / Lark hesabınızı yetkilendirin veya bağlantı kodunu bota gönderin.",
+          "toggleAria": "Feishu / Lark bağlantısını aç/kapat",
+          "connect": "Feishu / Lark Bağla",
+          "openApp": "Yetkilendirme sayfasını aç",
+          "cancel": "Bağlamayı iptal et",
+          "retry": "Bağlamayı yeniden dene",
+          "openBot": "Botu aç",
+          "unlink": "Feishu / Lark Bağlantısını Kaldır",
+          "unlinkConfirmTitle": "Feishu / Lark bağlantısı kaldırılsın mı?",
+          "unlinkConfirmDescription": "Yalnızca bu bilgisayarın bağlantısını kaldırın.",
+          "unavailableHint": "Kuruluşunuz henüz Feishu / Lark botunu ayarlamadı. Kuruluş yöneticinizle iletişime geçin.",
+          "unavailableHintPersonal": "Feishu / Lark botu henüz kişisel hesaplar için kullanılamıyor.",
+          "status": {
+            "checking": "Sunucu desteği kontrol ediliyor…",
+            "unavailable": "Kuruluşunuz tarafından ayarlanmamış",
+            "unavailablePersonal": "Henüz kullanılamıyor",
+            "disabled": "Devre dışı",
+            "none": "Bağlı değil",
+            "pending": "Tarayıcıda yetkilendirin veya bağlantı kodunu bota gönderin",
+            "awaiting_confirmation": "Bu bilgisayar için hesap değişikliğini Feishu / Lark içinde onaylayın",
+            "confirmed": "{{user}} Feishu / Lark botuna bağlandı",
+            "denied": "Yetkilendirme reddedildi",
+            "expired": "Yetkilendirme süresi doldu",
+            "failed": "Bağlama başarısız oldu",
+            "revoked": "Bağlantı kaldırıldı",
+            "superseded": "Bu bilgisayar başka bir Feishu / Lark hesabına bağlı",
+            "appChanged": "Feishu / Lark botu değiştirildi. Tekrar bağlayın."
+          },
+          "bindCode": {
+            "label": "Bağlantı kodu",
+            "copy": "Kodu kopyala",
+            "copied": "Bağlantı kodu kopyalandı",
+            "hint": "Veya bu kodu Feishu / Lark'ta Cindy botuna doğrudan mesaj olarak gönderin"
+          },
+          "setWorkingDevice": "Çalışma bilgisayarı olarak ayarla",
+          "workingDeviceSet": "Çalışma bilgisayarı ayarlandı"
         }
       },
       "summary": {
@@ -6361,7 +6451,8 @@
         "toast": {
           "saveFailed": "Failed to save directory preferences"
         },
-        "teamChipAria": "Choose which Slack workspace these preferences belong to"
+        "teamChipAria": "Choose which Slack workspace these preferences belong to",
+        "providerFeishu": "Feishu / Lark"
       }
     },
     "devices": {
@@ -6740,8 +6831,6 @@
             "task": "Task key",
             "action": "Action key"
           },
-          "lightingLimit": "Firmware can independently light the first 6 task keys in board order. Extra task keys still switch tasks.",
-          "unlitKey": "This key is after the first 6, so it has no independent status light.",
           "taskHint": "A clear keycap is recommended so task status can show in different colors."
         },
         "commandKeys": {
@@ -7716,9 +7805,7 @@
         "agentCompanionsDetail": "Diğer bilgisayarlarınızda çalışanlar dahil tüm takım arkadaşlarınızı görüntüleyebilir: ad, açıklama, profil resmi, durum (çalışıyor, sizi bekliyor, boşta, çevrimdışı), her birinin hangi adımda olduğu (düşünme veya araç çalıştırma gibi), kartlarının gösterdiği şekilde sizi bekleyen istekler (sorular, çalıştırılacak komutlar, planlar) ve her takım arkadaşının ana sohbetindeki son konuşmalar (araç adımları hariç, 50 adede kadar iletiniz ve yanıtları); ayrıca ana pencerede bir takım arkadaşının konuşmasını açabilir. Mesaj iletim izniyle birlikte eklentide verdiğiniz yanıtları da iletebilir: soruları yanıtlama, istekleri reddetme ve planlar hakkında geri bildirim verme. Bir adıma izin vermek yine de Cindy'nin kendi onay penceresindeki tıklamanızı gerektirir. Dosyaları, araç adımlarını veya düşünme sürecini okuyamaz.",
         "agentCompanionsRequest": "Takım arkadaşı görüntüleme iznini inceleyin",
         "liveScreen": "Telefonunuzda cihaz ekranlarını görüntüleyin ve kontrol edin",
-        "liveScreenDetail": "Uzak masaüstü aracılığıyla telefonunuz, sağladığı cihaz ekranlarını (simülatörler gibi) gösterebilir ve bunlara dokunma, düğme ve metin gönderebilir. Yalnızca telefonunuzdan açtığınızda bağlanır ve bu bilgisayarda başka hiçbir şey göstermez.",
-        "nativeUi": "Görevlere Denetimler Ekle",
-        "nativeTabView": "“{{title}}” görünümünü aç"
+        "liveScreenDetail": "Uzak masaüstü aracılığıyla telefonunuz, sağladığı cihaz ekranlarını (simülatörler gibi) gösterebilir ve bunlara dokunma, düğme ve metin gönderebilir. Yalnızca telefonunuzdan açtığınızda bağlanır ve bu bilgisayarda başka hiçbir şey göstermez."
       },
       "connections": {
         "confirmTitle": "Add connection address",
@@ -7825,7 +7912,8 @@
         "viewAllPermissions": "See All",
         "permissionsDialogDescription": "All {{count}} permissions requested by this Plugin",
         "closeDialog": "İletişim Kutusunu Kapat",
-        "resetPlacement": "Reset to default position"
+        "resetPlacement": "Reset to default position",
+        "readmeTitle": "Hakkında"
       },
       "contents": {
         "mainView": "Main view",
@@ -8380,6 +8468,26 @@
         "title": "Delete \"{{name}}\"?",
         "message": "New sessions will no longer load this MCP.",
         "confirm": "Sil"
+      },
+      "duplicates": {
+        "title": "Olası yinelenen MCP bağlantıları",
+        "description": "Cindy ve Claude Code kullanıcı yapılandırmanız, araçları iki kez yükleyebilecek eşleşen veya benzer bağlantılara sahip. Hangi kaynağın tutulacağını seçin veya emin değilseniz her ikisini de saklayın.",
+        "scope": "Yalnızca bu bilgisayardaki Cindy'de çalışan sıradan Claude Code görevlerini etkiler (Agent bir sonraki başlatıldığında). Claude Code yapılandırmanız değişmeden kalır. İlgili kopyalar aynı seçimi paylaşır.",
+        "unavailable": "Bazı yapılandırmalar okunamadı. Bağlantılar değiştirilmedi. Bu sayfa yeniden açıldığında tekrar kontrol edilir.",
+        "endpoint": "Aynı bağlantı adresi",
+        "similar": "Benzer bağlantı adresleri",
+        "keep": {
+          "both": "Bu gruptaki her iki kaynağı da sakla"
+        },
+        "selected": {
+          "cindy": "Cindy bağlantısı seçildi",
+          "claude": "Claude Code bağlantısı seçildi",
+          "both": "Bu gruptaki her iki kaynak da saklanıyor"
+        },
+        "reset": "Tekrar seç",
+        "saveFailed": "Kaydedilemedi. Bağlantılar değişmiş olabilir. Geçerli listeden tekrar seçin.",
+        "keepThis": "Bu bağlantıyı sakla",
+        "keepThese": "Bu bağlantıları sakla"
       }
     },
     "remotePermission": {
@@ -12609,7 +12717,11 @@
       "ruleSeparator": ",",
       "submitting": "Submitting your decision…",
       "submissionFailed": "No confirmation was received. Check your connection and try again if the prompt is still open.",
-      "requestEnded": "This permission request has ended or was already handled. Check the latest status."
+      "requestEnded": "This permission request has ended or was already handled. Check the latest status.",
+      "titleStdin": "Bu terminale girişe izin verilsin mi?",
+      "titleMcpUrl": "{{server}} sunucusundan gelen isteği tamamlayın",
+      "mcpComplete": "Bitti",
+      "mcpCancel": "İptal"
     },
     "deviceSwitcher": {
       "label": "Device",
@@ -12867,7 +12979,13 @@
       "sendAndContinue": "Gönder ve devam et",
       "close": "Kapat",
       "customAnswer": "Type something else…",
-      "answerPlaceholder": "Type your answer…"
+      "answerPlaceholder": "Type your answer…",
+      "validation": {
+        "required": "Bu zorunlu alanı doldurun.",
+        "choice": "Listelenen seçeneklerden birini seçin.",
+        "tooShort": "En az {{count}} karakter girin.",
+        "tooLong": "En fazla {{count}} karakter girin."
+      }
     },
     "planReviewBubble": {
       "title": "Plan review",
@@ -13962,7 +14080,11 @@
         "closed": "Kapatıldı",
         "draft": "Taslak"
       },
-      "modelSelectFailed": "Model değiştirilmedi. Lütfen tekrar seçin."
+      "modelSelectFailed": "Model değiştirilmedi. Lütfen tekrar seçin.",
+      "taskAutoArchived": "“{{title}}” arşivlendi",
+      "taskAutoArchivedUndo": "Geri Al",
+      "taskAutoArchivePending": "Ayrıldığınızda arşivlenir",
+      "taskAutoArchiveCancel": "Bu seferlik sakla"
     },
     "ghostHook": {
       "blockedFallback": "Message blocked by a plugin; not sent",
@@ -14001,7 +14123,9 @@
       "closeTitle": "Close side chat?",
       "closeDescription": "This follow-up will stop and its history will be deleted. The main task keeps running.",
       "closeConfirm": "Close and delete",
-      "closeFailed": "Could not close the side chat. Please try again."
+      "closeFailed": "Could not close the side chat. Please try again.",
+      "sharedTaskUnavailable": "Yan sohbetler paylaşılan görevlerde kullanılamaz.",
+      "archivedTask": "Bir yan sohbet açmak için bu görevin arşivini kaldırın."
     }
   },
   "ccAgent": {
@@ -15241,7 +15365,8 @@
         "resume": "Devam Et",
         "pause": "Duraklat",
         "deleteAutomation": "Delete Automation"
-      }
+      },
+      "tagWebhook": "Webhook"
     },
     "detail": {
       "manualTrigger": "Manual trigger",
@@ -15480,6 +15605,86 @@
         "preRunPluginRequired": "Choose a plugin for the pre-run check",
         "templateParamRequired": "Enter {{label}}",
         "templateApplyFailed": "Could not apply the template. Check the parameters and try again."
+      },
+      "layout": {
+        "content": "Ne çalıştırılacak",
+        "notifications": "Bildirimler ve sessiz çalıştırmalar",
+        "contentTab": "İçerik ve Tetikleyici",
+        "optionsTab": "Çalıştırma seçenekleri",
+        "sections": "Otomasyon ayarları"
+      },
+      "trigger": {
+        "label": "Tetikleyici modu",
+        "timed": "Zamanlanmış"
+      },
+      "runSettings": "Çalıştırma ayarları",
+      "webhook": {
+        "quotaHint": "Webhook teslimatlarının günlük bir sınırı vardır ve burada filtreleme yapmak sayıyı azaltmaz. Göndericide (GitHub gibi) yalnızca ihtiyacınız olan olayları seçin.",
+        "sourceLabel": "Gönderen",
+        "sourceCustom": "Özel",
+        "customLabel": "Biçim (JSON)",
+        "customHint": "İsteklerin nasıl imzalandığını ve olay adı ile teslimat kimliğinin nerede olduğunu JSON ile tanımlayın.",
+        "customInvalid": "Özel biçim geçerli değil. JSON'u kontrol edin.",
+        "signedLabel": "İmzaları doğrula",
+        "signedHint": "Yalnızca gizli anahtara sahip bir göndericiden gelen istekleri kabul edin.",
+        "unsignedWarning": "İmzalar olmadan, adrese sahip olan herkes bu görevi tetikleyebilir ve günlük Webhook teslimatlarınızı tüketebilir. Adres sızarsa görev ayrıntılarından değiştirin.",
+        "eventPicker": {
+          "label": "Yanıt verilecek olaylar",
+          "choose": "Olayları seçin",
+          "selected": "{{count}} seçildi",
+          "all": "Tüm olaylar",
+          "search": "Olayları ara",
+          "customGroup": "Diğer seçilen olaylar",
+          "noResults": "Eşleşen olay yok. Gelişmiş seçenekler altından bir tane ekleyin.",
+          "noPresets": "Bu kaynağın sabit bir olay kataloğu yok. Tüm olayları alın veya gelişmiş seçenekler altına olay adları ekleyin.",
+          "custom": "Özel olay (gelişmiş)",
+          "customLabel": "Olay adı",
+          "invalid": "1–100 harf, rakam veya _ . : - kullanın; her seferinde bir olay ekleyin.",
+          "add": "Ekle",
+          "limit": "En fazla 32 olay seçin.",
+          "chooseOne": "En az bir olay seçin veya açıkça Tüm olaylar'ı seçin.",
+          "cancel": "İptal",
+          "apply": "Uygula",
+          "remove": "{{name}} kaldır",
+          "groups": {
+            "issues": "Issue'lar",
+            "pullRequests": "Pull request'ler",
+            "issueComments": "Issue / PR yorumları",
+            "reviews": "PR incelemeleri",
+            "checks": "Kontrol paketleri",
+            "workflows": "İş akışı çalıştırmaları",
+            "repository": "Depo",
+            "releases": "Sürümler",
+            "mergeRequests": "Merge request'ler",
+            "comments": "Yorumlar",
+            "pipelines": "İşlem hatları (Pipelines)",
+            "projects": "Projeler",
+            "payments": "Ödemeler",
+            "checkout": "Ödeme adımı",
+            "invoices": "Faturalar",
+            "subscriptions": "Abonelikler"
+          },
+          "actions": {
+            "all": "Tüm değişiklikler",
+            "created": "Oluşturuldu",
+            "closed": "Kapatıldı",
+            "reopened": "Yeniden açıldı",
+            "edited": "Düzenlendi",
+            "commitsUpdated": "Commit'ler güncellendi",
+            "submitted": "İnceleme gönderildi",
+            "completed": "Tamamlandı",
+            "pushed": "Kod push edildi",
+            "published": "Yayınlandı",
+            "merged": "Birleştirildi",
+            "updated": "Güncellendi",
+            "tagsChanged": "Etiketler push edildi",
+            "declined": "Reddedildi",
+            "deleted": "Silindi",
+            "succeeded": "Başarılı oldu",
+            "failed": "Başarısız oldu",
+            "paid": "Ödendi"
+          }
+        }
       }
     },
     "chips": {
@@ -15679,6 +15884,91 @@
           "description": "Monthly health check of working-directory docs for outdated or conflicting content",
           "prompt": "Health-check the documents in the working directory and find content that needs updating.\nConstraints:\n- Look for outdated information (stale dates, dead links, deprecated processes or tools), contradictions, and duplication\n- Cite the file path and location for every issue and explain the reasoning\n- Categorize as \"update / merge / delete\" suggestions and produce a revision checklist\n- Only output the report; do not modify the documents"
         }
+      }
+    },
+    "deadline": {
+      "label": "Bitiş tarihi ve saati",
+      "clear": "Temizle",
+      "hint": "Sınırsız olması için boş bırakın. Saatler {{timezone}} kullanır. Bu saatten sonra yeni otomatik çalıştırma başlatılmaz; başlamış çalıştırmalar tamamlanabilir.",
+      "invalid": "Geçerli bir tarih ve saat girin",
+      "expired": "Süresi doldu"
+    },
+    "webhook": {
+      "title": "Webhook tetikleyicisi",
+      "url": "Alma adresi",
+      "secret": "Gizli anahtar",
+      "copy": "Kopyala",
+      "copied": "{{label}} kopyalandı",
+      "copyFailed": "{{label}} kopyalanamadı. Seçin ve manuel olarak kopyalayın.",
+      "urlUnavailable": "Alma adresi şu anda kullanılamıyor.",
+      "quotaNotifyTitle": "Webhook teslimat sınırına ulaşıldı",
+      "quotaExhausted": "Bugünkü {{limit}} Webhook teslimatı tükendi ve {{time}} zamanında sıfırlanacak. O zamana kadar dış olaylar görevleri tetiklemeyecektir. Zamanlanmış çalıştırmalar ve model kullanımı etkilenmez.",
+      "signedOut": "Almaya devam etmek için Cindy hesabınızda oturum açın. Ayarlarınız korunur.",
+      "serviceUnavailable": "Webhook alma bu ortamda kullanılamıyor.",
+      "suspended": "Bu hesap için Webhook'lar devre dışı bırakıldı.",
+      "endpointLimit": "Tüm alma URL yuvaları kullanımda. Kullanılmayan bir URL'yi serbest bırakın.",
+      "offline": "Bu bilgisayar şu anda sunucuya bağlı değil. Olaylar tutulur ve yeniden bağlandığında teslim edilir.",
+      "localOnlyHint": "Bu adres yalnızca bu bilgisayarda çalışır. Genel olayları buraya iletin, örneğin gh webhook forward ile.",
+      "eventsSummary": "Olaylar: {{events}}",
+      "lastReceived": "Son olay: {{time}}",
+      "neverReceived": "Henüz olay alınmadı",
+      "ignored": "{{count}} yoksayıldı",
+      "generateSecret": "Gizli anahtar oluştur",
+      "rotateSecret": "Gizli anahtarı yeniden oluştur",
+      "secretOnce": "Bu gizli anahtarı şimdi kopyalayın. Bir daha gösterilmeyecektir.",
+      "secretMissing": "Bir gizli anahtar oluşturulana kadar olaylar reddedilir.",
+      "rotateFailed": "Gizli anahtar oluşturulamadı. Gizli anahtarlar yalnızca bu görevi çalıştıran bilgisayarda yönetilebilir.",
+      "genericSender": "gönderen",
+      "secretFillHint": "Bunu {{sender}} içinde \"{{field}}\" olarak girin.",
+      "secretPastePlaceholder": "{{sender}} servisinden gelen \"{{field}}\" değerini yapıştırın",
+      "secretSave": "Gizli anahtarı kaydet",
+      "secretSaved": "Gizli anahtar kaydedildi.",
+      "secretSaveFailed": "Gizli anahtar kaydedilemedi. Gizli anahtarlar yalnızca bu görevi çalıştıran bilgisayarda yönetilebilir.",
+      "secretInvalid": "Bu gizli anahtar beklenen biçimde değil. Göndericiden tekrar kopyalayın.",
+      "secretPasteMissing": "Göndericiden gizli anahtarı yapıştırana kadar olaylar reddedilir.",
+      "unsignedNotice": "İmzalar kapalı: adrese sahip olan herkes bu görevi tetikleyebilir. Adres sızarsa değiştirin.",
+      "rotateUrl": "Adresi değiştir",
+      "rotateUrlConfirmTitle": "Alma adresi değiştirilsin mi?",
+      "rotateUrlConfirmBody": "Eski adres hemen çalışmayı durdurur, bu nedenle yenisini göndericiye girin. Ayarlar ve gizli anahtar aynı kalır.",
+      "rotateUrlFailed": "Adres değiştirilemedi. Lütfen daha sonra tekrar deneyin.",
+      "addressHint": "Bu URL'yi {{sender}} Webhook ayarlarına girin.",
+      "testHint": "{{sender}} içinde filtrelere uyan bir olayı tetikleyin. Çalıştırma sonuçları aşağıda görünecektir.",
+      "waitingEvent": "Olaylar bekleniyor",
+      "manageConnection": "Bağlantı Ayarları",
+      "preparing": "Alma URL'si hazırlanıyor…",
+      "noRunsHint": "Eşleşen bir Webhook olayı geldikten sonra çalıştırma sonuçları burada görünecektir.",
+      "account": {
+        "title": "Alma adresleri",
+        "manage": "Yönet",
+        "usage": "Alma adresleri {{used}} / {{limit}}",
+        "description": "Tüm bilgisayarlarınızdaki adresler bu hesabın sınırını paylaşır. Bilgisayarı çevrimdışı olsa bile bir adresi serbest bırakabilirsiniz.",
+        "remaining": "{{count}} kullanılabilir",
+        "unavailable": "Bu servis henüz hesap adresi yönetimini desteklemiyor. Lütfen bir servis güncellemesini bekleyin.",
+        "loadFailed": "Adresler yüklenemedi. Bağlantınızı kontrol edin ve yenileyin.",
+        "releaseFailed": "Serbest bırakma onaylanamadı. Tekrar denemeden önce listeyi yenileyip kontrol edin.",
+        "retry": "Yenile",
+        "loading": "Adresler yükleniyor…",
+        "empty": "Kullanımda olan alma adresi yok",
+        "thisDevice": "Bu bilgisayar",
+        "unnamed": "Otomasyon {{id}}",
+        "unnamedDevice": "Cihaz {{id}}",
+        "suspended": "Devre dışı; hâlâ bir yuva kullanıyor",
+        "lastReceived": "Son alım: {{time}}",
+        "neverReceived": "Henüz olay alınmadı",
+        "open": "Otomasyonu görüntüle",
+        "release": "Serbest bırak",
+        "confirm": "{{device}} üzerindeki “{{name}}” adresi serbest bırakılsın mı?",
+        "confirmHint": "Sunucuda depolanan eski adres, gizli anahtar ve olaylar geçersiz kılınacaktır. Eski bilgisayarı yeniden bağlamak bunu geri yüklemez. Otomasyon ve çalıştırma geçmişi korunur; başlamış çalıştırmalar etkilenmez.",
+        "cancel": "İptal",
+        "confirmRelease": "Adresi serbest bırak",
+        "viewAddress": "Adresi görüntüle",
+        "done": "Bitti",
+        "released": "“{{name}}” için adres serbest bırakıldı.",
+        "releasedHint": "Bu adres serbest bırakıldı ve artık bir yuva kullanmıyor. Yeni bir adres almak için yeniden bağlanın, ardından göndericinin yapılandırmasını güncelleyin.",
+        "reconnect": "Yeniden Bağlan",
+        "reconnectConfirm": "Webhook yeniden bağlansın mı?",
+        "reconnectConfirmHint": "Bu bir yuva kullanır ve yeni bir alma adresi oluşturur. Göndericiyi yeni adres ve gizli anahtarla güncelleyin.",
+        "reconnectFailed": "Yeniden bağlanılamadı. Tekrar denemeden önce kullanılabilir yuvaları kontrol edin."
       }
     }
   },
@@ -16901,7 +17191,10 @@
       "toolUseLoopDetectedWithCount": "{{count}} kez araç döngüsü algılandı",
       "toolUseLoopDetectedConsecutiveWithCount": "{{count}} kez ardışık araç döngüsü algılandı",
       "toolUseLoopDetectedPingPongWithCount": "{{count}} kez gidiş-dönüş araç döngüsü algılandı",
-      "toolUseLoopDetectedRotationWithCount": "{{count}} kez dönüşümlü araç döngüsü algılandı"
+      "toolUseLoopDetectedRotationWithCount": "{{count}} kez dönüşümlü araç döngüsü algılandı",
+      "outputLimitReasoning": "Akıl yürütme, bu isteğin çıktı bütçesinin çoğunu kullandı, bu nedenle yanıt eksik olabilir. Devam etmeden önce akıl yürütme yoğunluğunu düşürün veya konuşma geçmişini sıkıştırın.",
+      "outputLimitUsage": "Bu model isteği, {{reasoningTokens}} akıl yürütme belirteci dahil {{outputTokens}} çıktı belirteci kullandı.",
+      "outputLimitOutputUsage": "Bu model isteği {{outputTokens}} çıktı belirteci kullandı."
     },
     "validation": {
       "feishuFieldsRequired": "App ID and App Secret are both required",
@@ -17405,7 +17698,8 @@
       },
       "topupCard": {
         "action": "Add Funds"
-      }
+      },
+      "supportHint": "Sorun mu yaşıyorsunuz? Yardım için {{email}} adresine başvurun."
     },
     "balance": {
       "title": "Kullanılabilir bakiye",
@@ -17447,7 +17741,6 @@
       "title": "Order history",
       "description": "Only top-up and subscription orders started inside Cindy are listed. Orders awaiting payment are canceled automatically once they time out.",
       "count": "{{count}} orders",
-      "incomplete": "There are many order records. Only the latest {{count}} are shown.",
       "orderId": "NO. {{id}}",
       "copy": {
         "action": "Copy Order ID {{id}}",
@@ -17479,7 +17772,8 @@
           "invoiceTitle": "Invoice title",
           "contact": "Contact person",
           "phone": "Phone number",
-          "email": "Email"
+          "email": "Email",
+          "providerTransactionId": "Sağlayıcı işlem kimliği"
         }
       },
       "states": {
@@ -17488,6 +17782,31 @@
         "canceled": "Canceled",
         "expired": "Expired",
         "failed": "Payment failed"
+      },
+      "history": {
+        "loadFailed": "Sipariş geçmişi yüklenemedi",
+        "retry": "Siparişleri Yeniden Yükle",
+        "unknownPaidAt": "Ödeme tarihi mevcut değil",
+        "unknownAmount": "Tutar mevcut değil",
+        "refundedAmount": "{{amount}} iade edildi",
+        "refunded": "İade Edildi",
+        "partiallyRefunded": "Kısmen İade Edildi",
+        "noPayment": "Ödeme Gerekmiyor",
+        "page": "Sayfa {{page}}",
+        "previous": "Önceki Sayfa",
+        "next": "Sonraki Sayfa"
+      },
+      "refund": {
+        "action": "İade Talep Et",
+        "title": "İade Talebinde Bulunun",
+        "description": "İade talep etmek için aşağıdaki bilgileri {{email}} adresine e-posta ile gönderin.",
+        "emailSubject": "Cindy iade talebi - {{orderId}}",
+        "sendAction": "İade Talebi Gönder",
+        "gmailFallbackDescription": "İade talebiniz sipariş ayrıntılarını içerir. Gmail'i açmak bu bilgileri Google ile paylaşır. Devam edilsin mi?",
+        "emailBody": "Merhaba, aşağıdaki sipariş için iade talebinde bulunmak istiyorum. Bu konuda yardımcı olabilir misiniz?\n\nSipariş Kimliği: {{orderId}}\nSağlayıcı işlem kimliği: {{providerTransactionId}}\nUygulama: {{application}}\nÖdeme yöntemi: {{paymentMethod}}\nÖdenen tutar: {{amount}}\n\nKarşılaşılan sorun:\n(Ne olduğunu kısaca açıklayın)\n\nTeşekkür ederim.",
+        "fields": {
+          "amount": "Ödenen tutar"
+        }
       }
     },
     "dialogs": {
@@ -18916,7 +19235,10 @@
     "playVideo": "Videoyu oynat",
     "openVideoSource": "Orijinal videoyu aç",
     "calculationUnavailable": "Bu değer hesaplanamıyor.",
-    "incomplete": "Bazı içerikler görüntülenemedi."
+    "incomplete": "Bazı içerikler görüntülenemedi.",
+    "invalidImageReference": "Bu resim referansı geçersiz.",
+    "requestImageAgain": "Resmi tekrar göstermesini iste",
+    "requestImageAgainMessage": "Lütfen bu mevcut resmi tekrar gösterin ({{name}}, referans: {{source}}). Orijinal araç sonucunu veya dosyasını kontrol edin ve gerçek adresini kullanın. Yeni bir resim oluşturmayın; resmi tanımlayamıyorsanız önce bana sorun."
   },
   "forwardedRequest": {
     "sourcePresent": "[Kaynak] Ana bilgisayar, kullanıcının orijinal sözlerini değişiklik yapmadan istek arka planı olarak korudu. Geçerli istek Agent ekinde yer almaktadır.",
@@ -19341,17 +19663,6 @@
       }
     }
   },
-  "pluginUi": {
-    "renderer": "Görünüm",
-    "original": "Orijinal",
-    "unavailable": "Eklenti denetimleri kullanılamıyor. Eylemler devre dışı bırakıldı.",
-    "outcome-unknown": "Sonuç doğrulanamadı. Eklentinin en son durumunu kontrol edin.",
-    "rejected": "Eklenti bu eylemi uygulamadı. Girdiniz korundu.",
-    "draftChanged": "Girdiniz değişti. Eklentinin taslak düzenlemesi uygulanmadı.",
-    "editorUnavailable": "Bu girdi kullanılamıyor. Eklentinin taslak düzenlemesi uygulanmadı.",
-    "more": "Daha Fazla",
-    "close": "Kapat"
-  },
   "pluginCompanionAnswer": {
     "title": "İzni onayla",
     "planMessage": "{{companion}} bu plan üzerinde çalışmaya başlasın mı?",
@@ -19366,5 +19677,71 @@
     "source": "“{{plugin}}” eklentisinde İzin Ver'i seçtiniz. {{appName}} burada bir kez daha sorar; izin verdikten sonra takım arkadaşı devam eder.",
     "allow": "İzin Ver",
     "cancel": "İptal"
+  },
+  "sharedTaskRecovery": {
+    "title": "Orijinal bilgisayarda devam ettirilemiyor",
+    "description": "Bağlam aktarımıyla devam etmek için başka bir bilgisayar veya sağlayıcı seçin. Mesajlarınız kalır, ancak geçiş yapmak orijinal bilgisayarın tam çalışma durumunu aktarmaz.",
+    "choose": "Başka bir bilgisayar seçin",
+    "cancel": "Burada kal",
+    "stage": {
+      "owner": "Paylaşan bilgisayarla iletişim kurulurken başarısız oldu.",
+      "allocation": "Orijinal yürütücü ayrılırken başarısız oldu.",
+      "executor": "Yürütücünün cihaz bağlantısı onaylanırken başarısız oldu.",
+      "capability": "Yürütücünün yetenekleri denetlenirken başarısız oldu.",
+      "authorization": "Yürütme yetkilendirmesi yüklenirken başarısız oldu.",
+      "unknown": "Başarısız olan aşama bildirilmedi."
+    },
+    "reason": {
+      "offline": "Bu aşamada bağlantı kurulan bilgisayarın çevrimdışı olduğu bildirildi. Diğer görevler farklı bilgisayarlarda çalışıyor olabilir.",
+      "timeout": "İstek zaman aşımına uğradı. Başarısız olan aşama, iletişim kurulan servisi tanımlar; doğrudan yol veya aktarma (relay) arızası doğrulanmadı.",
+      "relay": "Cihaz bağlantısı hazır değil veya kapatıldı. Yalnızca doğrudan yolun başarısız olması normalde aktarıma (relay) geri döner.",
+      "denied": "Erişim reddedildi veya uzaktan kontrol devre dışı bırakıldı. Yeniden denemek bu kısıtlamayı aşamaz.",
+      "model": "Paylaşılan sağlayıcı veya modele bu görev için izin verilmiyor.",
+      "budget": "Sağlayıcı bir kullanım sınırı veya yetersiz kota bildirdi. Bilgisayar değiştirmek yine aynı kotayı kullanabilir.",
+      "capacity": "Görev veya bağlantı kapasitesine ulaşıldı. Kullanılmayan görevleri kapatın veya başka bir bilgisayar seçin.",
+      "unsupported": "Yürütücü, gerekli paylaşılan görev yeteneklerini desteklemiyor.",
+      "authorization": "Yürütme yetkilendirmesi yüklenemedi. Bu, yürütücünün çevrimdışı olduğunun kanıtı değildir.",
+      "history": "Orijinal görev konumu kullanılamıyor. Yerel geçmişi farklı bir bilgisayarda açılamaz.",
+      "policy": "Paylaşım kullanım kuralları, paylaşan bilgisayar üzerinden canlı kontroller gerektirir. Doğrudan yürütme bunları zorunlu kılamaz; bu, bakiyenin boş olduğu anlamına gelmez.",
+      "unknown": "Paylaşan bilgisayar kesin bir neden bildirmedi. Çevrimdışı durumu, kota ve doğrudan/aktarma yolu doğrulanamadı.",
+      "rate": "Servis hız sınırına tabi tutuluyor veya yoğun. Soğuma süresini bekleyin; başka bir bilgisayar aynı sınırı paylaşıyor olabilir.",
+      "service": "Paylaşım yetkilendirme servisine ulaşılamadı veya hata döndürdü. Yürütücünün çevrimdışı olduğu doğrulanmadı."
+    }
+  },
+  "awayGuard": {
+    "status": "Cindy çalışıyor",
+    "hint": "Kilitlemek için herhangi bir tuşa basın, ardından Touch ID veya parolanızla kilidi açın.",
+    "lockFailed": {
+      "status": "Cindy bu Mac'i kilitleyemedi",
+      "hint": "Kilitlemek için Control-Command-Q tuşlarına basın. Ekran bir süre sonra kendi kendine de kilitlenecektir."
+    }
+  },
+  "subscriptionAccounts": {
+    "signIn": {
+      "checking": "Yerel hesap kontrol ediliyor…",
+      "detected": "Oturum açılmış hesap bulundu",
+      "useAccount": "Bu hesabı kullan",
+      "anotherAccount": "Başka bir hesapla oturum aç",
+      "keepExisting": "Yeni hesap bu sağlayıcıya katılır. Mevcut oturumlar değişmeden kalır.",
+      "checkFailed": "Yerel hesap kontrol edilemedi. Lütfen tekrar deneyin.",
+      "retry": "Yeniden Dene",
+      "useCodex": "Codex ile oturum aç"
+    },
+    "title": "Abonelik hesapları",
+    "note": "İlk hesap, CLI'nın varsayılan klasörünü kullanır. Ek hesaplar ayrı oturum açar. Yeni görevler hesaplar arasında dengelenir; mevcut görevler kendi hesabını korur.",
+    "strategy": "Yük dengeleme",
+    "add": "Hesap ekle",
+    "default": "Varsayılan klasör",
+    "ready": "Bağlandı",
+    "signedOut": "Oturum açılması gerekiyor",
+    "unavailable": "Durum kullanılamıyor",
+    "limited": "Kotaya ulaşıldı",
+    "remove": "Hesabı kaldır",
+    "removeTitle": "{{name}} kaldırılsın mı?",
+    "removeDescription": "Cindy bu hesaba görev atamayı durduracaktır. CLI girişi ve konuşma geçmişi bu bilgisayarda kalır.",
+    "failed": "Bu hesap okunamadı veya güncellenemedi. CLI girişini ve bağlantıyı kontrol edin, ardından tekrar deneyin.",
+    "directory": "Hesap klasörü",
+    "loginAgain": "Tekrar oturum aç",
+    "login": "Giriş yap"
   }
 }

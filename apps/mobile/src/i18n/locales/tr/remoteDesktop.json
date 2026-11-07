@@ -189,5 +189,21 @@
   "keyAppWindows": "Uygulama Pencereleri",
   "keySearch": "Ara",
   "keyTaskView": "Görev Görünümü",
-  "keySpace": "Boşluk"
+  "keySpace": "Boşluk",
+  "skin_macbook": "MacBook",
+  "screenNotRunning": "Cihaz kapalı. Bilgisayarda başlatın, ardından yeniden bağlanın.",
+  "liveScreenBackground": "Arka planda göster",
+  "liveScreenBackgroundHint": "Geri döndüğünüzde veya uygulamadan ayrıldığınızda, cihazı küçük bir pencerede göstermeye devam edin.",
+  "settings": "Ayarlar",
+  "deviceMenu": "Cihaz menüsü",
+  "orientation": "Yönlendirme",
+  "orientationFollow": "Telefonu takip et",
+  "posture": "Katla",
+  "picture": "Görüntü",
+  "pictureFit": "Sığdır",
+  "pictureFill": "Doldur",
+  "pictureZoom": "Yakınlaştır",
+  "zoomHint": "Yakınlaştırmak için sıkıştırın, taşımak için sürükleyin",
+  "zoomDone": "Bitti",
+  "volume": "Ses Düzeyi"
 }

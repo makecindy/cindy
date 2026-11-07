@@ -341,5 +341,23 @@
     "purpose": "Etkileşimli sayfa izinlerini inceleyin",
     "updateHost": "Burada onaylamak için yürütme bilgisayarındaki Cindy'yi güncelleyin. Metin araçları kullanılabilir kalır.",
     "failed": "Etkileşimli sayfalar etkinleştirilemedi. Bağlantıyı ve eklenti sürümünü kontrol edip tekrar deneyin."
+  },
+  "openLinkHost": "{{host}} Aç",
+  "prStatus": {
+    "checksFailed": "Başarısız",
+    "checksPending": "Bekliyor",
+    "checksPassed": "Geçti",
+    "checksSkipped": "Atlandı veya nötr",
+    "threadsOpen": "Çözümlenmemiş inceleme ileti dizileri: {{count}}",
+    "threadsNone": "Açık inceleme ileti dizisi yok",
+    "mergeReady": "Birleştirmeye hazır",
+    "mergeConflict": "Çakışmalar var",
+    "mergeBehind": "Temel dalın gerisinde",
+    "mergeApproval": "Onay bekleniyor",
+    "mergeChanges": "Değişiklik istendi",
+    "mergeWaiting": "Birleştirmek için bekleniyor",
+    "merged": "Birleştirildi",
+    "closed": "Kapatıldı",
+    "draft": "Taslak"
   }
 }
