@@ -3501,6 +3501,52 @@
       "note": "GitHub PR / GitLab MR 的合并冲突。数据行标签为 Merge / 合并，状态值为 Conflicts / 有冲突；与检查失败及应用崩溃区分。"
     },
     {
+      "id": "macos-dynamic-island",
+      "status": "proposed",
+      "en": "Dynamic Island",
+      "translations": {
+        "zh-CN": "灵动岛",
+        "zh-TW": "動態島",
+        "ja": "Dynamic Island",
+        "ko": "Dynamic Island"
+      },
+      "checkCase": false,
+      "note": "Apple 的灵动岛（新款 MacBook Pro 摄像头挖孔处），沿用 Apple 各地区用语，繁中按 Apple 台湾用语作「動態島」。Cindy 自己的顶部任务面板已改名为任务胶囊 / Agent Notch（见 agent-notch），「灵动岛」只指 Apple 的；设置页分区标题也用这个词，统称两者所在的一页。"
+    },
+    {
+      "id": "agent-notch",
+      "status": "proposed",
+      "en": "Agent Notch",
+      "translations": {
+        "zh-CN": "任务胶囊",
+        "zh-TW": "任務膠囊",
+        "ja": "Agent Notch",
+        "ko": "Agent Notch",
+        "fr": "Agent Notch",
+        "es": "Agent Notch",
+        "de": "Agent Notch",
+        "pt-PT": "Agent Notch",
+        "pt-BR": "Agent Notch",
+        "zh-Hans-x-lzh": "任务胶囊",
+        "zh-Hant-x-lzh": "任務膠囊"
+      },
+      "checkCase": false,
+      "note": "Cindy 在屏幕顶部显示任务的面板（原名灵动岛 / Agent Island）。苹果在新款 MacBook Pro 上推出灵动岛后改名，避免与 Apple 的灵动岛混同；中文不直译 notch（「刘海」易联想发型），用户于 2026-11-07 选定。设置页搜索保留旧名作别名。"
+    },
+    {
+      "id": "macos-live-activities",
+      "status": "proposed",
+      "en": "Live Activities",
+      "translations": {
+        "zh-CN": "实时活动",
+        "zh-TW": "即時動態",
+        "ja": "ライブアクティビティ",
+        "ko": "실시간 현황"
+      },
+      "checkCase": false,
+      "note": "Apple 的实时活动（ActivityKit）。沿用 Apple 各地区官方译名；Cindy 只以此展示任务状态，不作为自有功能名。"
+    },
+    {
       "id": "official-feishu-working-computer",
       "status": "proposed",
       "en": "Working computer",
