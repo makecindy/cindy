@@ -12,7 +12,8 @@ vi.mock('react-i18next', () => ({ useTranslation: () => ({ t: (key: string) => k
 vi.mock('@/cindy-brain/useGhostCardThemeVars', () => ({ useGhostCardThemeVars: () => '' }));
 vi.mock('@/features/right-sidebar/lib/mailPreview', () => ({ openMailCard: vi.fn() }));
 const prStatuses = vi.hoisted(() => new Map<string, unknown>());
-vi.mock('@/contexts/PrRefsContext', () => ({ usePrStatuses: () => ({ statuses: prStatuses }) }));
+vi.mock('@/contexts/PrRefsContext', () => ({ useTaskPrArchiveEligibility: () => ({ eligible: true, checkEligibility: () => true }),
+  usePrStatuses: () => ({ statuses: prStatuses }) }));
 vi.mock('../GhostCardModelSelect', () => ({ GhostCardModelSelect: () => null }));
 vi.mock('../GhostCardSessionLink', () => ({ GhostCardSessionLink: () => null }));
 afterEach(() => { cleanup(); vi.unstubAllGlobals(); });

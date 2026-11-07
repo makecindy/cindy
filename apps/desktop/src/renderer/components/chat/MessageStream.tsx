@@ -152,8 +152,6 @@ import {
 } from './shareSelectionStore';
 import {
   parsePluginInstanceId,
-  pluginInstallStoragePart,
-  pluginNewInstallRelId,
   pluginStoragePart,
 } from '../../../shared/pluginIdentity';
 import { isValidGhostId } from '../../../shared/ghost';
@@ -369,7 +367,6 @@ import {
 } from '@/cindy-brain/ghostCardGallery';
 import { ChatImageView } from './ChatImageView';
 import { galleryImagePreviewItem, ImageGalleryContext, type GalleryImage } from './ImageGalleryContext';
-import { GhostFulfillmentContext } from './GhostSummonCard';
 import { ChatSessionFileProvider, useChatSessionFileValue } from './ChatSessionFileContext';
 import { toRemoteMediaOrigin } from '@/lib/sessionFileOrigin';
 import { rewriteToRemoteMediaOrigin, type RemoteMediaOrigin } from '@/../shared/remoteMediaUrl';
@@ -799,64 +796,6 @@ function collectAssistantsWithFollowingUserBoundary(messages: readonly ChatMessa
     }
   }
   return out;
-}
-
-/**
- * 意识"提及 → 兑现"关联(方案 2,渲染期从持久数据推导,重启幂等):
- * 逐条扫消息,维护"当前轮的 user 消息",遇到 assistant 的 ghost_call 工具
- * 调用就把其 ghost_id 记到当前 user 名下——即"这条 user 触发的那一轮里,
- * AI 真的召唤了哪些意识"。软提示徽章据此升级为召唤卡(徽章说'提到了',
- * 兑现后才敢说'召唤了')。turn 边界 = 下一条非 steer 的 user 消息。
- * 判据全取自会话历史(user 消息 + ghost_call tool_use 都已持久化),不落
- * 任何额外状态,重启重算结果一致。
- */
-export function collectGhostCallsByUserTurn(
-  messages: readonly ChatMessage[],
-): Map<string, Set<string>> {
-  const out = new Map<string, Set<string>>();
-  let currentUserClientId: string | null = null;
-  for (const m of messages) {
-    if (m.role === 'user' && m.delivery !== 'steer' && !m.isSyntheticTrigger) {
-      currentUserClientId = m.clientId;
-      continue;
-    }
-    if (
-      currentUserClientId &&
-      isGhostCallToolName(m.toolName) &&
-      m.toolInput &&
-      typeof (m.toolInput as Record<string, unknown>).ghost_id === 'string'
-    ) {
-      const input = m.toolInput as Record<string, unknown>;
-      const gid = ghostSummonInstanceId(input.ghost_id as string, input.namespace);
-      if (!gid) continue;
-      const set = out.get(currentUserClientId) ?? new Set<string>();
-      set.add(gid);
-      out.set(currentUserClientId, set);
-    }
-  }
-  return out;
-}
-
-/**
- * 兑现关联 map 的结构等价判断:用于给 Provider value 做引用缓存。
- * messages 数组在流式期间每批 delta 都换新引用,useMemo 会重算出"内容相同
- * 但身份全新"的 Map;而 UserMessage 顶层订阅该 context(判定合并形态),
- * context 消费按 Object.is 判变、无视 memo——不做等价缓存的话,每批 token
- * 都会把全部历史 UserMessage 重渲一遍(规则 10 热路径口径)。fulfillment
- * 实际只在 ghost_call 落地时才变化,每 turn 至多一两次。
- */
-export function ghostCallMapsEqual(
-  a: ReadonlyMap<string, ReadonlySet<string>>,
-  b: ReadonlyMap<string, ReadonlySet<string>>,
-): boolean {
-  if (a === b) return true;
-  if (a.size !== b.size) return false;
-  for (const [key, setA] of a) {
-    const setB = b.get(key);
-    if (!setB || setA.size !== setB.size) return false;
-    for (const v of setA) if (!setB.has(v)) return false;
-  }
-  return true;
 }
 
 /**
@@ -1518,20 +1457,6 @@ function ghostCardInstanceId(ghostId: string, namespace: unknown): string | null
   return typeof namespace === 'string' && isValidPluginNamespace(namespace)
     ? pluginStoragePart({ namespace, ghostId })
     : null;
-}
-
-/** Summon labels retain explicit root identity; card/media anchoring keeps its existing keys. */
-function ghostSummonInstanceId(ghostId: string, namespace: unknown): string | null {
-  const id = ghostCardInstanceId(ghostId, namespace);
-  if (!id) return null;
-  const explicitRoot =
-    namespace === null ||
-    (namespace === undefined &&
-      !isValidGhostId(ghostId) &&
-      parsePluginInstanceId(ghostId)?.namespace === null);
-  return explicitRoot
-    ? pluginInstallStoragePart(pluginNewInstallRelId({ namespace: null, ghostId: id }))
-    : id;
 }
 
 export function buildRenderItems(
@@ -6509,25 +6434,8 @@ export function MessageStream({
     resolvedBottomPadding,
   ]);
 
-  // 「提及 → 兑现」关联(方案 2):从会话历史现算,软提示卡据此升级为召唤卡。
-  // 引用缓存:内容不变时复用上一个 Map 引用——UserMessage 顶层订阅该
-  // context,流式期间 messages 每批 delta 都换引用,不缓存会让全部历史
-  // 消息每批 token 重渲一遍(ghostCallMapsEqual 注释有完整推导)。
-  // 走可见序列:归属键是**可见的**那条 user 消息(软提示卡挂在它上面),被隐藏的
-  // 子代理 user 行不该成为归属键,否则该 turn 的召唤卡升级不到任何可见气泡上。
-  const ghostCallsByUserTurnRaw = useMemo(
-    () => collectGhostCallsByUserTurn(visibleMetadataMessages),
-    [visibleMetadataMessages],
-  );
-  const ghostCallsCacheRef = useRef(ghostCallsByUserTurnRaw);
-  if (!ghostCallMapsEqual(ghostCallsCacheRef.current, ghostCallsByUserTurnRaw)) {
-    ghostCallsCacheRef.current = ghostCallsByUserTurnRaw;
-  }
-  const ghostCallsByUserTurn = ghostCallsCacheRef.current;
-
   return (
     <ChatSessionFileProvider value={sessionFileValue}>
-      <GhostFulfillmentContext.Provider value={ghostCallsByUserTurn}>
         <>
           <div className="relative h-full w-full">
             {/* chat-text-quote:选中消息文字 → 浮出"添加到对话"按钮(portal 到 body)。
@@ -6984,7 +6892,6 @@ export function MessageStream({
               )}
           </div>
         </>
-      </GhostFulfillmentContext.Provider>
     </ChatSessionFileProvider>
   );
 }

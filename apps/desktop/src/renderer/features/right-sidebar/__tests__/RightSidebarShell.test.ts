@@ -1479,7 +1479,7 @@ describe('RightSidebarShell empty state', () => {
     expect(onDetachTab).toHaveBeenCalledWith('tab-pop');
     screen.getByRole('button', { name: 'rightSidebar.tabs.controls.maximizeAria' }).click();
     expect(onMaximize).toHaveBeenCalledOnce();
-    screen.getByRole('button', { name: 'contentHeader.collapsePanel' }).click();
+    screen.getByRole('button', { name: 'rightSidebar.tabs.controls.closeAria' }).click();
     expect(onCloseSidebar).toHaveBeenCalledOnce();
     expect(screen.queryByTestId('right-sidebar-fixed-trigger-spacer')).toBeNull();
     unmount();
@@ -1526,7 +1526,7 @@ describe('RightSidebarShell empty state', () => {
     await waitFor(() => expect(screen.getByText('rightSidebar.tabs.empty.title')).toBeTruthy());
     expect(screen.getByTestId('right-sidebar-topbar-actions')).toBeTruthy();
     expect(screen.queryByTestId('right-sidebar-fixed-trigger-spacer')).toBeNull();
-    expect(screen.getByRole('button', { name: 'contentHeader.collapsePanel' })).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'rightSidebar.tabs.controls.closeAria' })).toBeTruthy();
   });
 
   it('keeps the existing 36px TabBar host on Windows', async () => {

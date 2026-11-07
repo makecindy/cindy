@@ -600,8 +600,6 @@ interface MessageActions {
   /** First visible message of each five-minute teammate time group → its timestamp. */
   companionTimeGroups?: ReadonlyMap<string, number>;
   companionPluginWork?: ReturnType<typeof companionPluginWorkEntries>;
-  /** Partner chats keep the user's bubble plain; result and authorization cards remain independent. */
-  showPluginInvocations?: boolean;
   /** Device hosting plugin results; independent of a filesystem workdir. */
   remoteDeviceId?: string;
   /** 长按/操作条「复制消息链接」:复制该消息的会话深链(带 ?message= 锚点)。 */
@@ -692,7 +690,6 @@ export function MessageRenderer({
   onOpenCompanionSettings,
   companionAvatar,
   companionPluginInvocations,
-  showPluginInvocations = true,
   remoteDeviceId,
   topOverlayHeight,
   focusedItemKey,
@@ -1847,7 +1844,6 @@ export function MessageRenderer({
     companionAvatar,
     companionTimeGroups,
     companionPluginWork,
-    showPluginInvocations,
     remoteDeviceId,
     onAddMessageToComposer,
     onSideChatMessage,
@@ -1896,7 +1892,6 @@ export function MessageRenderer({
     companionAvatar,
     companionTimeGroups,
     companionPluginWork,
-    showPluginInvocations,
     remoteDeviceId,
     busyClientId,
     busyAction,
@@ -2866,14 +2861,13 @@ export function MessageRenderer({
       // Update visible cells when a task is identified as a companion chat.
       companion,
       companionWorkingLabel,
-      showPluginInvocations,
       companionPluginWork,
       // Cross-row state a kept row reads through `actions`: which reply is the last for its message,
       // and the five-minute stamps. Both keep their identity until they really change.
       lastCompanionReplyKey,
       companionTimeGroups,
     }),
-    [pendingSend?.selectedClientId, shareSelectionActive, companion, companionWorkingLabel, showPluginInvocations, companionPluginWork,
+    [pendingSend?.selectedClientId, shareSelectionActive, companion, companionWorkingLabel, companionPluginWork,
       lastCompanionReplyKey, companionTimeGroups],
   );
   // Keep production and regular DEV screens on keyed remounts. With Fabric,
@@ -3911,10 +3905,8 @@ function MessageBubble({
       onResolveRemoteMedia={actions.onResolveRemoteMedia}
     />
   ) : null;
-  const hasPluginInvocations = isUser && actions.showPluginInvocations !== false
-    && Boolean(item.message.pluginInvocations?.length);
   const hasBubbleContent = !!(
-    item.message.systemCardType || displayBubbleBody || item.message.secondaryBody || hasPluginInvocations ||
+    item.message.systemCardType || displayBubbleBody || item.message.secondaryBody ||
     // A quote or reply target alone still needs the bubble, e.g. an attachment-only reply.
     (companionQuote && (replyQuote || replyTarget))
   );
@@ -3938,15 +3930,6 @@ function MessageBubble({
       ]}
       testID={isUser ? 'message.userBubble' : 'message.agentBubble'}
     >
-      {hasPluginInvocations ? (
-        <PluginInvocationHeader
-          key={clientId}
-          plugins={item.message.pluginInvocations!}
-          deviceId={actions.remoteDeviceId}
-          sessionId={item.message.source.sessionId}
-          running={actions.isSessionStreaming === true && clientId === actions.lastUserInputClientId}
-        />
-      ) : null}
       {hookSource ? (
         <View style={styles.hookSourceHeader} testID="message.hookSource">
           {hookSource.im === 'telegram'
