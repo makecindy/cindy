@@ -396,6 +396,18 @@ describe('GhostInstallReceiptStore cleanup', () => {
     await store.write({ ...old.receipt, observeCapabilityApproved: true });
     expect(store.read('hello')).toMatchObject({ state: 'approved', receipt: { observeCapabilityApproved: true, revision: receipt.revision } });
   });
+  it('round trips independent observeFiles approval without inferring it from tasks or targets grants', async () => {
+    const receipt = createSetupReceipt();
+    receipt.manifest.agent = { tasks: true, targets: true, observe: true, observeFiles: true };
+    receipt.taskCapabilityApproved = true;
+    receipt.targetCapabilityApproved = true;
+    await store.write(receipt);
+    const old = store.read('hello');
+    if (old.state !== 'approved') throw new Error('fixture not approved');
+    expect(old.receipt.observeFilesCapabilityApproved).toBeUndefined();
+    await store.write({ ...old.receipt, observeFilesCapabilityApproved: true });
+    expect(store.read('hello')).toMatchObject({ state: 'approved', receipt: { observeFilesCapabilityApproved: true, revision: receipt.revision } });
+  });
 
   it('round trips companions approval without inferring it from other grants', async () => {
     const receipt = createSetupReceipt();

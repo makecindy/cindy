@@ -23,7 +23,7 @@ vi.mock('../sessionActivityProjection.js', () => ({
   },
 }));
 
-import { assertPluginObservableTask, listPluginObserveTasks } from '../pluginObserveTasks.js';
+import { assertPluginObservableTask, listPluginObserveTasks, readPluginObserveFileSource } from '../pluginObserveTasks.js';
 
 let db: Database.Database;
 let client: DbClient;
@@ -35,10 +35,11 @@ beforeEach(() => {
       id TEXT PRIMARY KEY, title TEXT NOT NULL DEFAULT 'New Maker', working_dir TEXT,
       workspace_kind TEXT NOT NULL DEFAULT 'project', status TEXT NOT NULL DEFAULT 'active',
       agent_kind TEXT NOT NULL DEFAULT 'cc', source TEXT NOT NULL DEFAULT 'desktop', orca_role TEXT,
-      remote_host_id TEXT, agent_device_id TEXT, hidden_at INTEGER,
+      remote_host_id TEXT, agent_device_id TEXT, hidden_at INTEGER, worktree_path TEXT,
       active_turn_started_at INTEGER, last_turn_ended_at INTEGER, cleared_at INTEGER,
       last_activity_at INTEGER, user_send_at INTEGER, updated_at INTEGER NOT NULL
     );
+    CREATE TABLE messages (id TEXT PRIMARY KEY, session_id TEXT, role TEXT, content TEXT, agent_meta TEXT, created_at INTEGER, rewind_at INTEGER);
     CREATE TABLE bot_session_links (id TEXT PRIMARY KEY, session_id TEXT NOT NULL);
     CREATE TABLE orca_teams (id TEXT PRIMARY KEY, lead_session_id TEXT NOT NULL, status TEXT NOT NULL);
     CREATE TABLE orca_workers (id TEXT PRIMARY KEY, team_id TEXT NOT NULL, session_id TEXT NOT NULL, execution_device_id TEXT);
@@ -120,4 +121,24 @@ it('fails closed when the account database changes during the read', async () =>
   insert('task', '/repo', 1);
   mocks.onRead = () => setCurrentDbClient({} as DbClient, 'other-user');
   await expect(listPluginObserveTasks('/repo')).rejects.toThrow('PERMISSION_DENIED');
+});
+
+// Unit: real SQL provenance. No user attachment, rewound message or cleared history
+// may reach the file reference parser; moving/hiding the task invalidates the read.
+it('binds final-file source reads to the project and current visible persisted history', async () => {
+  insert('task', '/repo', 1, 'cleared_at = 10');
+  const put = db.prepare('INSERT INTO messages VALUES (?, ?, ?, ?, ?, ?, ?)');
+  for (const [id, role, createdAt, rewindAt] of [['old', 'assistant', 5, null], ['answer', 'assistant', 20, null], ['input', 'user', 21, null], ['rewound', 'assistant', 22, 23]] as const) {
+    put.run(id, 'task', role, '[Report](report.md)', JSON.stringify({ turnCompleted: true }), createdAt, rewindAt);
+  }
+  const location = (_id: string, row: { workingDir: string }) => ({ root: row.workingDir, identity: row.workingDir });
+  const result = await readPluginObserveFileSource('/repo', 'task', location);
+  expect(result.rows.map(row => row.id)).toEqual(['answer']);
+  expect(result.partial).toBe(false);
+  await expect(readPluginObserveFileSource('/elsewhere', 'task', location)).rejects.toThrow('TARGET_UNAVAILABLE');
+  db.exec("UPDATE messages SET rewind_at = 30 WHERE id = 'answer'");
+  await expect(result.assertCurrent()).rejects.toThrow('TARGET_UNAVAILABLE');
+  const refreshed = await readPluginObserveFileSource('/repo', 'task', location);
+  db.exec("UPDATE sessions SET hidden_at = 1 WHERE id = 'task'");
+  await expect(refreshed.assertCurrent()).rejects.toThrow('TARGET_UNAVAILABLE');
 });

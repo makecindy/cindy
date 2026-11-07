@@ -20,6 +20,8 @@ const ghost: InstalledGhost = {
 };
 const marketGhost: InstalledGhost = { ...ghost, namespace: null, instanceKey: '_root__browser-dev',
   publishingSource: { kind: 'public-market', pluginId: 'fixture-plugin' } };
+const fileGhost: InstalledGhost = { ...ghost, observeCapabilityApproved: true,
+  manifest: { ...ghost.manifest, agent: { observe: true, observeFiles: true } } };
 const candidateInstances = [
   { instanceId: '_root__example', version: '1.0.0', origin: 'public' as const, enabled: true },
   { instanceId: '_ns__local__example', version: '1.1.0', origin: 'local' as const, enabled: true },
@@ -52,7 +54,7 @@ mountPage({
   route: '/plugins?myPlugins=1&contribution=fixture-plugin',
   host: () => ({
     getFullscreenState: async () => false, onFullscreenChange: subscription('fullscreen'),
-    ghosts: { activateBrowser: async () => ({ ok: true }), listSync: () => ({ ghosts: [ghost] }) },
+    ghosts: { requestTaskApproval: async (_id: string, capability: string) => { document.documentElement.dataset.fileApproval = capability; return { granted: true }; }, activateBrowser: async () => ({ ok: true }), listSync: () => ({ ghosts: [ghost] }) },
   }),
   render: ctx => ctx.case === 'authoring'
     ? <MyPluginsPage reader={authorApi} cache={authorCache} installedPluginCount={2}
@@ -61,7 +63,7 @@ mountPage({
     : ctx.case === 'permissions'
     ? <main className="mx-auto max-w-xl p-6"><GhostInstallConsentContent facts={{ kind: 'install', ghostId: ghost.manifest.id,
       name: ghost.manifest.name, version: ghost.manifest.version, permissions: ghostPermissionItems(ghost.manifest) }} /></main>
-    : <GhostPluginDetailView ghost={ctx.case === 'market' ? marketGhost : ghost}
-      detail={toGhostPluginDetail(ctx.case === 'market' ? marketGhost : ghost)} panelStatus={null}
+    : <GhostPluginDetailView ghost={ctx.case === 'market' ? marketGhost : ctx.case.startsWith('file-') ? fileGhost : ghost}
+      detail={toGhostPluginDetail(ctx.case === 'market' ? marketGhost : ctx.case.startsWith('file-') ? fileGhost : ghost)} panelStatus={null}
       onBack={noop} onToggle={noop} onUse={noop} onUpdate={noop} onUpdateFromFile={noop} onUninstall={noop} toggleDisabled={false} />,
 });

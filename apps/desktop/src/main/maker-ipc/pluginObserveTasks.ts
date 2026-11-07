@@ -1,7 +1,7 @@
-import { and, eq, inArray, isNull, ne, or } from 'drizzle-orm';
+import { and, desc, eq, gt, inArray, isNull, ne, or, sql } from 'drizzle-orm';
 import { getSessionListActivityAt, resolveSessionRightStatus, type SessionRightStatus } from '@cindy/maker-shared/session-activity';
 import { getCurrentDbClientSnapshot, type CurrentDbClientSnapshot } from '../localDb/client/current.js';
-import { botSessionLinks, orcaTeams, orcaWorkers, sessions } from '../localDb/schema.js';
+import { botSessionLinks, messages, orcaTeams, orcaWorkers, sessions } from '../localDb/schema.js';
 import { listRecentWorkdirs } from '../localDb/ipc/recentWorkdirs.js';
 import { projectKeyComparisonKey } from '../../shared/projectKeys.js';
 import type { PluginObserveTask } from '../../shared/pluginObserve.js';
@@ -109,16 +109,57 @@ export async function listPluginObserveTasks(project: string): Promise<PluginObs
 }
 
 /** Only a visible task of a registered local project may be opened. */
-export async function assertPluginObservableTask(taskId: string): Promise<void> {
+export async function readPluginObservableTask(taskId: string, project?: string) {
   const snapshot = getCurrentDbClientSnapshot();
   if (!snapshot) throw new Error('HOST_NOT_READY');
   const [row] = await snapshot.client.drizzle
-    .select({ workingDir: sessions.workingDir })
+    .select({ workingDir: sessions.workingDir, worktreePath: sessions.worktreePath, clearedAt: sessions.clearedAt })
     .from(sessions)
     .leftJoin(botSessionLinks, eq(botSessionLinks.sessionId, sessions.id))
     .where(and(eq(sessions.id, taskId), visibleTask))
     .limit(1);
   if (!row?.workingDir) throw new Error('TARGET_UNAVAILABLE');
-  await registeredProjectKey(snapshot, row.workingDir);
+  const key = await registeredProjectKey(snapshot, row.workingDir);
+  if (project !== undefined && await registeredProjectKey(snapshot, project) !== key) throw new Error('TARGET_UNAVAILABLE');
   if (getCurrentDbClientSnapshot() !== snapshot) throw new Error('PERMISSION_DENIED');
+  return { ...row, snapshot };
+}
+
+export async function assertPluginObservableTask(taskId: string): Promise<void> {
+  await readPluginObservableTask(taskId);
+}
+
+/** Bounded persisted assistant history. Never return this source to a plugin. */
+export async function readPluginObserveFileSource(
+  project: string,
+  taskId: string,
+  executionRoot: (taskId: string, row: { workingDir: string; worktreePath: string | null }) => { root: string | null; identity: string },
+): Promise<import('./pluginObserveFiles.js').ObserveFileSource> {
+  const read = async () => {
+    const task = await readPluginObservableTask(taskId, project);
+    const location = executionRoot(taskId, { workingDir: task.workingDir!, worktreePath: task.worktreePath });
+    const rows = await task.snapshot.client.drizzle.select({
+      id: messages.id,
+      // Bound transfer from the DB worker as well as Markdown parsing in Main.
+      content: sql<string>`substr(${messages.content}, 1, 128001)`,
+      agentMeta: messages.agentMeta,
+      createdAt: messages.createdAt,
+    }).from(messages).where(and(
+      eq(messages.sessionId, taskId), eq(messages.role, 'assistant'), isNull(messages.rewindAt),
+      task.clearedAt === null ? undefined : gt(messages.createdAt, task.clearedAt),
+    )).orderBy(desc(messages.createdAt), desc(messages.id)).limit(201);
+    if (getCurrentDbClientSnapshot() !== task.snapshot) throw new Error('PERMISSION_DENIED');
+    return { task, location, rows };
+  };
+  const initial = await read();
+  const identity = JSON.stringify([initial.task.workingDir, initial.task.worktreePath, initial.task.clearedAt, initial.location.identity]);
+  return {
+    root: initial.location.root, identity, rows: initial.rows.slice(0, 200), partial: initial.rows.length > 200,
+    assertCurrent: async () => {
+      const current = await read();
+      if (current.task.snapshot !== initial.task.snapshot) throw new Error('PERMISSION_DENIED');
+      if (JSON.stringify([current.task.workingDir, current.task.worktreePath, current.task.clearedAt, current.location.identity]) !== identity ||
+          JSON.stringify(current.rows) !== JSON.stringify(initial.rows)) throw new Error('TARGET_UNAVAILABLE');
+    },
+  };
 }

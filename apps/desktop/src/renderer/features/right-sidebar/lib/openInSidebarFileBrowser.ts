@@ -61,13 +61,15 @@ export async function openDirInSidebarFileBrowser(
 export async function openFileInSidebarFileBrowser(
   sessionId: string,
   relFilePath: string,
+  options?: { userInitiated?: boolean },
 ): Promise<void> {
-  const routeResult = await routeSidebarCommand({
-    type: 'open-file-browser',
+  const command = {
+    type: 'open-file-browser' as const,
     sessionId,
     relPath: relFilePath,
-    targetKind: 'file',
-  });
+    targetKind: 'file' as const,
+  };
+  const routeResult = await (options ? routeSidebarCommand(command, options) : routeSidebarCommand(command));
   if (routeResult !== 'attached') {
     if (routeResult !== 'routed') return;
     requestRightSidebarVisibility('open', { sessionId });

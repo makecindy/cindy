@@ -249,6 +249,8 @@ export interface GhostAgentNeeds {
   observe?: boolean;
   /** 只读查看伙伴(含主人其他电脑上的)名单、实时状态、待处理请求摘要与最新回复,并在主窗口打开;需独立批准。 */
   companions?: boolean;
+  /** Final-answer file references; independent Host consent, requires observe. */
+  observeFiles?: boolean;
 }
 
 /** 插件随包本地 Node 工作进程使用的 stdio 协议。 */
@@ -3154,11 +3156,14 @@ function validateGhostManifestInput(value: unknown, preserveHistoricalParameterS
     if (agentRaw.schedule !== undefined && typeof agentRaw.schedule !== 'boolean') {
       return { ok: false, reason: 'agent.schedule 必须是布尔值' };
     }
+    if (agentRaw.observeFiles !== undefined && (typeof agentRaw.observeFiles !== 'boolean' || (agentRaw.observeFiles === true && agentRaw.observe !== true))) {
+      return { ok: false, reason: 'agent.observeFiles requires boolean and agent.observe: true' };
+    }
     if (agentRaw.observe !== undefined && typeof agentRaw.observe !== 'boolean') {
       return { ok: false, reason: 'agent.observe must be boolean' };
     }
     if (agentRaw.companions !== undefined && typeof agentRaw.companions !== 'boolean') return { ok: false, reason: 'agent.companions must be boolean' };
-    if (agentRaw.background !== true && agentRaw.errand !== true && agentRaw.schedule !== true && agentRaw.tasks !== true && agentRaw.observe !== true && agentRaw.companions !== true && Object.keys(unknownDeclarationFields(agentRaw, ['background', 'errand', 'schedule', 'tasks', 'hiddenTasks', 'targets', 'delegation', 'observe', 'companions'])).length === 0) {
+    if (agentRaw.background !== true && agentRaw.errand !== true && agentRaw.schedule !== true && agentRaw.tasks !== true && agentRaw.observe !== true && agentRaw.companions !== true && Object.keys(unknownDeclarationFields(agentRaw, ['background', 'errand', 'schedule', 'tasks', 'hiddenTasks', 'targets', 'delegation', 'observe', 'companions', 'observeFiles'])).length === 0) {
       return {
         ok: false,
         reason:
@@ -3166,7 +3171,7 @@ function validateGhostManifestInput(value: unknown, preserveHistoricalParameterS
       };
     }
     agent = {
-      ...unknownDeclarationFields(agentRaw, ['background', 'errand', 'schedule', 'tasks', 'hiddenTasks', 'targets', 'delegation', 'observe', 'companions']),
+      ...unknownDeclarationFields(agentRaw, ['background', 'errand', 'schedule', 'tasks', 'hiddenTasks', 'targets', 'delegation', 'observe', 'companions', 'observeFiles']),
       ...(agentRaw.background === true ? { background: true } : {}),
       ...(agentRaw.errand === true ? { errand: true } : {}),
       ...(agentRaw.tasks === true ? { tasks: true } : {}),
@@ -3176,6 +3181,7 @@ function validateGhostManifestInput(value: unknown, preserveHistoricalParameterS
       ...(agentRaw.schedule === true ? { schedule: true } : {}),
       ...(agentRaw.observe === true ? { observe: true } : {}),
       ...(agentRaw.companions === true ? { companions: true } : {}),
+      ...(agentRaw.observe === true && agentRaw.observeFiles === true ? { observeFiles: true } : {}),
     };
   }
 

@@ -1404,7 +1404,7 @@ interface ElectronAPI {
     uiPrompts: () => Promise<Array<{id: string; name: string; version: string}>>;
     deferUiPrompt: (id: string, version: string) => Promise<void>;
     requestUiApproval: (id: string) => Promise<{ granted: boolean }>;
-    requestTaskApproval: (id: string, capability?: 'observe' | 'companions') => Promise<{ granted: boolean }>;
+    requestTaskApproval: (id: string, capability?: 'observe' | 'observeFiles' | 'companions') => Promise<{ granted: boolean }>;
     getControlPoints: (id: string) => Promise<import('../shared/ghost').GhostControlPointInfo[]>;
     listControlPointCandidates: (point: 'will-schedule-run' | 'will-routine-run' | 'will-start-task') => Promise<import('../shared/ghost').GhostControlPointCandidate[]>;
     listPickerModels: () => Promise<import('../shared/ghost').GhostPickerModel[]>;
@@ -1627,6 +1627,7 @@ interface ElectronAPI {
       callback: (payload: { instanceId: string; sessionId: string; focus?: true }) => void,
     ) => () => void;
     /** preview 槽:插件请求在右侧栏内置浏览器开预览标签(main 已白名单守门+限速)。 */
+    onObserveFileOpen: (cb: (data: { sessionId: string; relativePath: string }, ownerStamp?: unknown) => void) => () => void;
     onPreviewOpen: (
       callback: (payload: {
         ghostId: string;

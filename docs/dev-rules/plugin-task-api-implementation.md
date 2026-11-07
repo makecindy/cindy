@@ -433,3 +433,16 @@ Host 校验规范 base64，嗅探 PNG/JPEG/WebP，最多 4 张、合计 20 MiB�
 
 queue 与 steer 都把托管 URL 写入 files、chatMessage.images 和持久消息信封；模型输入由既有附件装配器生成。
 正文/附件来源仍是插件续行，不把截图变为新用户授权；目标、批准、owner 和取消闸保持不变。
+
+
+## 最终回复文件引用（增量接口，尚未发布）
+
+`agent.observeFiles` 在 `agent.observe` 之外独立声明和批准；SDK 提供
+`cindy.observe.taskFiles({project,taskId})` 与 `openFile({project,taskId,fileId})`。
+查询按当前可见任务、真实执行目录与持久化最终回复核验，返回不透明标识与有限元数据。
+打开复核当前授权、来源和文件存在性，走本机侧栏预览，不执行本机文件、不向插件交文件内容。
+
+实现入口为 `maker-ipc/pluginObserveFiles.ts`、`pluginObserveTasks.ts` 与
+`cindy-brain/pluginObserveSlot.ts`。清单与 receipt 使用可选新字段，旧批准不扩权，
+旧插件无须重新安装或重新确认原有权限。本接口不扩展 device-link 协议与 Mobile 表面。
+完整来源取证、状态、数量边界与示例见 [任务文件引用](../plugin-task-file-references.md)。
