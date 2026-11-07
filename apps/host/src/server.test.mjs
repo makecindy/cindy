@@ -19,8 +19,12 @@ async function withServer(t, deps) {
   await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
   t.after(() => server.close());
   const { port } = server.address();
-  return async (path, { method = 'GET', headers = {} } = {}) => {
-    const response = await fetch(`http://127.0.0.1:${port}${path}`, { method, headers });
+  return async (path, { method = 'GET', headers = {}, body } = {}) => {
+    const response = await fetch(`http://127.0.0.1:${port}${path}`, {
+      method,
+      headers,
+      ...(body === undefined ? {} : { body }),
+    });
     return { status: response.status, body: await response.json(), headers: response.headers };
   };
 }
@@ -94,4 +98,44 @@ test('unknown routes and internal failures stay JSON', async (t) => {
   const failed = await request('/sessions', { headers: { authorization: `Bearer ${TOKEN}` } });
   assert.equal(failed.status, 500);
   assert.equal(failed.body.error, 'internal_error');
+});
+
+test('cross-engine switch returns a deferred intent and exposes it for the renderer', async (t) => {
+  let intent = null;
+  const request = await withServer(t, {
+    switchSessionAgent: (sessionId, targetAgentKind, model, providerId) => {
+      intent = { targetAgentKind, model, providerId };
+      return { switched: false, agentKind: targetAgentKind, model, engineReady: true, deferred: true };
+    },
+    getSessionAgentSwitchIntent: () => intent,
+  });
+  const headers = { authorization: `Bearer ${TOKEN}`, 'content-type': 'application/json' };
+
+  const switched = await request('/api/sessions/switch-agent', {
+    method: 'POST',
+    headers,
+    body: JSON.stringify({
+      sessionId: 's1',
+      targetAgentKind: 'pi',
+      model: 'group/deepseek',
+      providerId: 'magpie-debian',
+      effort: 'high',
+    }),
+  });
+  assert.equal(switched.status, 200);
+  assert.equal(switched.body.deferred, true);
+  assert.equal(switched.body.switched, false);
+  assert.equal(switched.body.agentKind, 'pi');
+
+  const read = await request('/api/sessions/agent-switch-intent', {
+    method: 'POST',
+    headers,
+    body: JSON.stringify({ sessionId: 's1' }),
+  });
+  assert.equal(read.status, 200);
+  assert.deepEqual(read.body, {
+    targetAgentKind: 'pi',
+    model: 'group/deepseek',
+    providerId: 'magpie-debian',
+  });
 });

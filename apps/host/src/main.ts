@@ -396,6 +396,45 @@ const readSessionForRun = async (sessionId: string) => {
     providerId: row.providerId,
   };
 };
+/** Web client cross-engine switches: registered as an intent, applied on next enqueue. */
+const pendingAgentSwitches = new Map<string, {
+  targetAgentKind: 'claude-code' | 'codex' | 'pi';
+  model: string;
+  providerId: string | null;
+  effort?: string;
+  fastMode?: boolean | 'ultrafast';
+}>();
+
+function projectAgentSwitchIntent(intent: {
+  targetAgentKind: 'claude-code' | 'codex' | 'pi';
+  model: string;
+  providerId: string | null;
+  effort?: string;
+  fastMode?: boolean | 'ultrafast';
+} | undefined): Record<string, unknown> | null {
+  if (!intent) return null;
+  return {
+    targetAgentKind: intent.targetAgentKind,
+    model: intent.model,
+    providerId: intent.providerId,
+    ...(intent.effort ? { effort: intent.effort } : {}),
+    ...(intent.fastMode !== undefined ? { fastMode: intent.fastMode } : {}),
+  };
+}
+
+async function applyPendingAgentSwitch(sessionId: string): Promise<void> {
+  const intent = pendingAgentSwitches.get(sessionId);
+  if (!intent) return;
+  pendingAgentSwitches.delete(sessionId);
+  await serverDeps.updateSession(sessionId, {
+    agentKind: intent.targetAgentKind,
+    model: intent.model,
+    ...(intent.providerId !== null ? { providerId: intent.providerId } : {}),
+    ...(intent.effort ? { effort: intent.effort } : {}),
+    ...(intent.fastMode !== undefined ? { fastMode: intent.fastMode } : {}),
+  });
+  eventHub.publish({ type: 'session_changed', sessionId, patch: { agentSwitchIntent: null } });
+}
 const interactionBroker = createInteractionBroker({ hub: eventHub });
 const inputQueue = createInputQueue({
   interactions: interactionBroker,
@@ -668,6 +707,47 @@ const serverDeps = {
     eventHub.publish({ type: 'session_changed', sessionId, patch, status: row.status });
     return sessionToCamel({ ...row, messageCount: 0 });
   },
+  /**
+   * Cross-engine switch: record the intent and let the next enqueue apply it.
+   * Mirrors the desktop contract (`deferred: true`) so the renderer can show
+   * the target engine optimistically without reporting "未生效".
+   */
+  switchSessionAgent: async (
+    sessionId: string,
+    targetAgentKind: string,
+    model: string,
+    providerId: string | null,
+    effort?: string,
+    fastMode?: boolean | 'ultrafast',
+  ) => {
+    const rows = await getDbClient().drizzle.select({ id: sessionTable.id }).from(sessionTable)
+      .where(eq(sessionTable.id, sessionId)).limit(1);
+    if (!rows[0]) throw new Error('session not found');
+    if (!model) throw new Error('model is required');
+    const intent = {
+      targetAgentKind: targetAgentKind === 'codex' ? 'codex' : targetAgentKind === 'pi' ? 'pi' : 'claude-code',
+      model,
+      providerId: providerId ?? null,
+      ...(typeof effort === 'string' && effort ? { effort } : {}),
+      ...(fastMode === true || fastMode === false || fastMode === 'ultrafast' ? { fastMode } : {}),
+    } as const;
+    pendingAgentSwitches.set(sessionId, intent);
+    eventHub.publish({
+      type: 'session_changed',
+      sessionId,
+      patch: { agentSwitchIntent: projectAgentSwitchIntent(intent) },
+    });
+    return {
+      switched: false,
+      agentKind: intent.targetAgentKind,
+      model: intent.model,
+      engineReady: true,
+      deferred: true,
+    };
+  },
+  getSessionAgentSwitchIntent: (sessionId: string) => (
+    projectAgentSwitchIntent(pendingAgentSwitches.get(sessionId))
+  ),
   getSession: async (sessionId: string) => {
     const rows = await getDbClient().drizzle.select().from(sessionTable)
       .where(eq(sessionTable.id, sessionId)).limit(1);
@@ -795,7 +875,13 @@ const serverDeps = {
   referenceModelPricing: () => ({}),
   agents: () => agentGraph?.agents ?? [],
   events: eventHub,
-  input: inputQueue,
+  input: {
+    ...inputQueue,
+    enqueue: async (sessionId: string, item: Record<string, unknown>) => {
+      await applyPendingAgentSwitch(sessionId);
+      return inputQueue.enqueue(sessionId, item);
+    },
+  },
   interactions: interactionBroker,
   agentCommands: async (input: { agentKind?: string }) => {
     const rawKind = String(input.agentKind ?? '');

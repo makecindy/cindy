@@ -403,20 +403,17 @@
     },
     'maker.switchSessionAgent': async (args) => {
       const [sessionId, targetAgentKind, model, providerId, effort, fastMode] = args ?? [];
-      if (!sessionId) return { switched: false, agentKind: targetAgentKind, model, engineReady: true };
-      const patch = {};
-      if (targetAgentKind) patch.agentKind = targetAgentKind;
-      if (model) patch.model = model;
-      if (providerId !== undefined) patch.providerId = providerId;
-      if (effort) patch.effort = effort;
-      if (fastMode !== undefined) patch.fastMode = fastMode;
-      await rpc('/sessions/update', { sessionId, patch });
-      return {
-        switched: true,
-        agentKind: targetAgentKind,
+      if (!sessionId || !model) {
+        return { switched: false, agentKind: targetAgentKind, model, engineReady: true };
+      }
+      return rpc('/sessions/switch-agent', {
+        sessionId,
+        targetAgentKind,
         model,
-        engineReady: true,
-      };
+        providerId: providerId ?? null,
+        effort,
+        fastMode,
+      });
     },
     'maker.setEffort': (args) => {
       const sessionId = args?.[0];
@@ -1015,7 +1012,9 @@
     'maker.usage.getModelPricing': () => null,
     'maker.usage.getReferenceModelPricing': () => ({ overrides: {}, catalog: [] }),
     'maker.listTurnChangeSets': () => [],
-    'maker.getSessionAgentSwitchIntent': () => null,
+    'maker.getSessionAgentSwitchIntent': (args) => (
+      rpc('/sessions/agent-switch-intent', { sessionId: args?.[0] })
+    ),
     'maker.getSessionContextWindowBounds': () => null,
     'maker.getModelContextLimit': () => null,
     'maker.getSessionTurnActive': () => ({ active: false }),
