@@ -131,7 +131,10 @@ import {
 } from '@/features/right-sidebar/lib/sidebarCommands';
 import { requestSessionSwitch } from '@/features/cc-agent/lib/sessionSwitchCommands';
 import { makeFolderPickerNewMakerRouteState } from '@/features/cc-agent/lib/newMakerRouteState';
-import { makeGenericNewMakerRouteState } from '@/features/cc-agent/lib/genericNewMakerRouteState';
+import {
+  makeGenericNewMakerRouteState,
+  withCurrentTaskModelInheritance,
+} from '@/features/cc-agent/lib/genericNewMakerRouteState';
 import { resolveSessionRoute } from '@/lib/orcaSessionIdentity';
 import { canonicalBotSessionId, ensureBotProfilesLoaded, getBotProfiles, useBotProfiles } from '@/features/bots/botStore';
 import { botRouteForOwnedSession, createSessionEntryNavigator, findBotProfileForSession, remoteBotRouteForSession, resolveBotRouteForSessionEntry } from '@/features/bots/botSessionOwners';
@@ -725,7 +728,8 @@ export function MainLayout() {
   //              → effect 跑 → expand + scroll。
   // new-session: 右键 "通过 Cindy 打开" 入口。把 workingDir 写进 newMakerDraft
   //              (并清空 extraDirs,旧目录的附加只读引用对新目录无意义),然后
-  //              navigate('/cc-agent/new')。NewMakerDraftRoute 订阅 store 自动反映。
+  //              navigate('/cc-agent/new')。NewMakerDraftRoute 订阅 store 自动反映;
+  //              与其它新建入口一样带上当前任务的模型(同为本机任务时套用)。
   const handleDeepLinkPayload = useCallback(
     (
       payload:
@@ -802,8 +806,13 @@ export function MainLayout() {
         return;
       }
       if (payload.type === 'new-session') {
+        // 先按离开前的路由取当前任务的模型；目录是本机路径，创建页只在同为本机任务时套用。
+        const state = withCurrentTaskModelInheritance(
+          { workspacePrompt: 'dialogue' as const },
+          currentPathRef.current.split('?')[0],
+        );
         patchDraft({ workingDir: payload.workingDir, extraDirs: [], writableDirs: [] });
-        navigate('/cc-agent/new');
+        navigate('/cc-agent/new', { state });
         return;
       }
       if (payload.type === 'share-import') {
@@ -1540,7 +1549,13 @@ export function MainLayout() {
           navigate('/issues');
           return true;
         case 'openFolder':
-          navigate('/cc-agent/new', { state: makeFolderPickerNewMakerRouteState() });
+          // 打开文件夹同样是新建任务：沿用当前任务的模型(创建页只在同一台任务电脑上套用)。
+          navigate('/cc-agent/new', {
+            state: withCurrentTaskModelInheritance(
+              makeFolderPickerNewMakerRouteState(),
+              currentPathRef.current.split('?')[0],
+            ),
+          });
           return true;
         case 'navigateBack':
           navigate(-1);

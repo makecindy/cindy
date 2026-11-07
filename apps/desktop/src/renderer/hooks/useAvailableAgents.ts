@@ -238,6 +238,8 @@ function loadAvailableAgents(deviceId?: string | null): Promise<ReadonlySet<Make
   return promise;
 }
 
+const EMPTY_VENDORS: ReadonlySet<MakerVendor> = new Set();
+
 export interface UseAvailableAgentsResult {
   /** runtime 已注册的 vendor 集合(cc/codex/pi);loaded=false 时为空。 */
   availableVendors: ReadonlySet<MakerVendor>;
@@ -259,6 +261,9 @@ export function useAvailableAgents(deviceId?: string | null): UseAvailableAgents
   );
   const [loaded, setLoaded] = useState(() => cached !== undefined);
   const [loading, setLoading] = useState(() => cached === undefined);
+  // 状态属于哪台电脑:换 deviceId 后、下面的 effect 重置前的那几次渲染里，不能把上一台的清单
+  // 当成这台的(否则消费方会按旧电脑判「引擎不可用」)。此时只认这台的缓存，没有就是未加载。
+  const [stateKey, setStateKey] = useState(() => cacheKeyOf(deviceId));
 
   useEffect(() => {
     let cancelled = false;
@@ -266,6 +271,7 @@ export function useAvailableAgents(deviceId?: string | null): UseAvailableAgents
     setAvailableVendors(hit?.vendors ?? new Set());
     setLoaded(hit !== undefined);
     const key = cacheKeyOf(deviceId);
+    setStateKey(key);
     const run = (): void => {
       const requestGeneration = currentAgentsCacheGeneration(key);
       setLoading(true);
@@ -312,6 +318,12 @@ export function useAvailableAgents(deviceId?: string | null): UseAvailableAgents
     };
   }, [deviceId]);
 
+  // 与首次挂载同口径:有这台的缓存即已加载，没有就是查询即将开始。
+  if (stateKey !== cacheKeyOf(deviceId)) {
+    return cached
+      ? { availableVendors: cached.vendors, loaded: true, loading: false }
+      : { availableVendors: EMPTY_VENDORS, loaded: false, loading: true };
+  }
   return { availableVendors, loaded, loading };
 }
 

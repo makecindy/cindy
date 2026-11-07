@@ -454,6 +454,7 @@ import { readSessionProviderGroup } from '@/features/provider-group/sessionProvi
 import { providersSettingsPath } from '@/features/provider-share/providerShareNavigation';
 import { makerApiFor, makerApiForDevice, makerApiForSticky, subscribeRemoteCredentialSwitchOutcome } from '@/lib/makerTransport';
 import { SESSION_LINK_DROP_MIME } from '@/lib/sessionLinkDrop';
+import { publishComposerOptimisticSelection } from '@/lib/composerOptimisticSelection';
 
 const log = createLogger('ChatInput');
 // perf-baseline(与 MessageStream / sidebar 的 perf/session-switch 探针同通道):
@@ -2009,6 +2010,12 @@ export function ChatInput({
     },
     [sessionId],
   );
+
+  // 乐观显示期间登记给「新建任务沿用当前模型」:回流窗口内点新建，沿用的是这里显示的这一份。
+  useEffect(() => {
+    if (!sessionId || !pendingRemoteSwitch) return;
+    return publishComposerOptimisticSelection(sessionId, pendingRemoteSwitch);
+  }, [sessionId, pendingRemoteSwitch]);
 
   // 乐观切换解除:props(被控端 echo 回流的 mirror)追上目标三元组即交回 props;否则 5s 兜底解除
   // (被控端把 effort 降级等导致永不相等时,避免 selector 永久置灰)。

@@ -160,6 +160,35 @@ describe('useAvailableAgents roster cache', () => {
     expect(api.invoke).toHaveBeenCalledTimes(2);
   });
 
+  it('never reports the previous computer roster as the newly selected computer', async () => {
+    const computerB = deferred<RuntimeAgentKind[]>();
+    const { api } = installDeviceLinkApi();
+    api.invoke.mockImplementation(async (deviceId: string) =>
+      deviceId === 'computer-a' ? ['claude-code'] : computerB.promise,
+    );
+    const { useAvailableAgents } = await import('../useAvailableAgents');
+    const seen: Array<{ deviceId: string; loaded: boolean; pi: boolean }> = [];
+    const { result, rerender } = renderHook(
+      ({ deviceId }: { deviceId: string }) => {
+        const roster = useAvailableAgents(deviceId);
+        seen.push({ deviceId, loaded: roster.loaded, pi: roster.availableVendors.has('pi') });
+        return roster;
+      },
+      { initialProps: { deviceId: 'computer-a' } },
+    );
+    await waitFor(() => expect(result.current.loaded).toBe(true));
+    seen.length = 0;
+    rerender({ deviceId: 'computer-b' });
+    // computer-a 已加载、没有 Pi:换到 computer-b 的每一次渲染都不能据此判 Pi 不可用。
+    expect(seen.filter((row) => row.loaded)).toEqual([]);
+    await act(async () => {
+      computerB.resolve(['claude-code', 'pi']);
+      await computerB.promise;
+    });
+    await waitFor(() => expect(result.current).toMatchObject({ loaded: true }));
+    expect(result.current.availableVendors.has('pi')).toBe(true);
+  });
+
   it('refetches a remote roster after the selected device reconnects', async () => {
     const first = deferred<RuntimeAgentKind[]>();
     const second = deferred<RuntimeAgentKind[]>();

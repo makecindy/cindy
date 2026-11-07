@@ -30,7 +30,7 @@
  * Electron 会尝试导航到文件 URL。
  */
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useLocation, useNavigate } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
 
 import { installGhostFromFile } from '@/cindy-brain/installFlow';
@@ -38,6 +38,7 @@ import {
   classifyGlobalDropPath,
   markGlobalDropIntercepted,
 } from '@/lib/globalDropIntercept';
+import { withCurrentTaskModelInheritance } from '@/features/cc-agent/lib/genericNewMakerRouteState';
 import { createLogger } from '@/lib/logger';
 import { patchDraft } from '@/state/newMakerDraft';
 import { CINDY_MIME_TYPE, SHARE_MIME_TYPE } from '../../../shared/fileTypes';
@@ -59,6 +60,10 @@ export function GlobalDropImportListener({
   // enter/over/leave 全部 stopPropagation,内层 drop 区完全无感知。
   const interceptRef = useRef(false);
   const navigate = useNavigate();
+  // 拖放时所在的路由：新任务沿用这个任务的模型。用 ref 读，避免每次换页重挂窗口级监听。
+  const { pathname } = useLocation();
+  const pathnameRef = useRef(pathname);
+  pathnameRef.current = pathname;
   const { t } = useTranslation();
   // 装入 tab 型插件后直接打开面板:面板收束后页签面板
   // 只住在插件页,从任意视图导航过去并经 ?panel= 深链打开。
@@ -176,6 +181,8 @@ export function GlobalDropImportListener({
       // .cindy / .cshare 已被 capture 层接管,落到这里的 .cindy(理论上不会
       // 出现)静默忽略,不走 classify-path。
       if (path.toLowerCase().endsWith('.cindy')) return;
+      // 判定目录要等 IPC;此前先记下放下那一刻所在的任务。
+      const dropPathname = pathnameRef.current;
       void window.electronAPI.localDb.sessionShare
         .classifyPath({ path })
         .then((res) => {
@@ -183,9 +190,14 @@ export function GlobalDropImportListener({
             onOpenShareImport(path);
           } else if (res.kind === 'directory') {
             // 与 MainLayout 深链 'new-session' 分支同语义:旧目录的附加只读
-            // 引用(extraDirs)对新目录无意义,一并清空。
+            // 引用(extraDirs)对新目录无意义,一并清空。也同样沿用当前任务的模型
+            // (目录在本机，创建页只在同为本机任务时套用)。
+            const state = withCurrentTaskModelInheritance(
+              { workspacePrompt: 'dialogue' as const },
+              dropPathname,
+            );
             patchDraft({ workingDir: path, extraDirs: [], writableDirs: [] });
-            navigate('/cc-agent/new');
+            navigate('/cc-agent/new', { state });
           }
         })
         .catch((err) => log.warn('classify dropped path failed', err));

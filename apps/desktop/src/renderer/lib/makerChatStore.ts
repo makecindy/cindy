@@ -1,5 +1,6 @@
 import { parseOutputLimitDetails, type OutputLimitDetails } from '@cindy/maker-shared';
 import { pendingGhostCardFormDelivery } from '@cindy/maker-shared/ghost-card-form';
+import { registerAgentSwitchIntentReader } from '@/lib/agentSwitchIntentReader';
 import { isVoiceCallTaskMessage } from '../../shared/voiceConversation';
 import { remoteAgentLimitErrorKey } from '../../shared/remoteAgentLimits';
 import { sharedTaskRecoveryReason } from '../../shared/sharedTaskRecovery';
@@ -18503,6 +18504,8 @@ function mirrorSessionFields(
     );
   }
 }
+
+registerAgentSwitchIntentReader(getAgentSwitchIntent);
 
 export const makerChatStore = {
   initGlobalListeners,
