@@ -41,7 +41,9 @@ export function compactToolCardResult(text: string, limit: number, diagnostics?:
       const value = payload[key];
       if (typeof value === 'string' && value.length > 0 && value.length <= 128) references[key] = value;
     }
-    if (typeof payload.ok === 'boolean') references.ok = payload.ok;
+    // `ok` is carried along but never justifies the summary by itself: a plain
+    // oversized result must keep its first 8KB instead of collapsing to a preview.
+    const okReference = typeof payload.ok === 'boolean' ? { ok: payload.ok } : {};
     // Only unwrap the documented ghost_call envelope, as the consumer does.
     const inner = payload.ok === true && payload.result && typeof payload.result === 'object' && !Array.isArray(payload.result)
       ? payload.result as Record<string, unknown>
@@ -94,6 +96,7 @@ export function compactToolCardResult(text: string, limit: number, diagnostics?:
     const size = (value: unknown) => new TextEncoder().encode(JSON.stringify(value)).length;
     const buildSummary = (files: Array<{ url: string; name?: string }>, producedUrls: string[]) => ({
       ...references,
+      ...okReference,
       ...denial,
       ...(files.length ? { _xdt_model_files: files } : {}),
       ...(producedUrls.length ? { xdt_media_produced: producedUrls } : {}),
