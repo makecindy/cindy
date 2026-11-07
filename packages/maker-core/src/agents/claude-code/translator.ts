@@ -61,6 +61,8 @@ import {
 export interface TurnState {
   text: string;
   toolUses: number;
+  /** 本 turn 是否成功派发了 Orca Worker；合法的无正文收口不应触发 silent-stop 续跑。 */
+  completedWorkerDispatch?: boolean;
   /** 本 turn 内真实 Claude API call 次数；message_start 触发时递增。 */
   apiCalls: number;
   /** 本 turn 是否已收到 compact_boundary；收到后 result usage 不应覆盖 compact 后 context。 */
@@ -361,6 +363,7 @@ function ccLiveStatus(
 function resetTurnState(turn: TurnState): void {
   turn.text = '';
   turn.toolUses = 0;
+  turn.completedWorkerDispatch = false;
   turn.apiCalls = 0;
   turn.sawCompactBoundary = false;
   turn.hasEmittedText = false;
@@ -370,6 +373,16 @@ function resetTurnState(turn: TurnState): void {
   turn.lastAssistantMsgHadSubstance = true;
   turn.lastAssistantRequestId = undefined;
   // generation / interruptGeneration 刻意不清: 代际跨 turn 单调递增(见字段注释)。
+}
+
+/**
+ * Worker 派发工具成功后，主 Agent 按 Orca 约定会直接 end_turn 且不输出正文。
+ * 只识别这三个明确的派发入口，避免把其它工具的无正文失败误判成正常收口。
+ */
+function isWorkerDispatchToolName(toolName: string | undefined): boolean {
+  if (!toolName) return false;
+  const normalized = toolName.replace(/^mcp__/, 'mcp:').replace(/__/g, ':');
+  return /(?:^|:)(?:create_worker|create_workers|send_to_worker)$/.test(normalized);
 }
 
 type ResultUsageAggregate = {
@@ -882,6 +895,15 @@ export function translateSdkMessage(
       }
       // 单独遍历: 不能复用 extractToolResultFullText, 见 onToolResultDone JSDoc。
       const completedToolUseIds = new Set(fullPairs.map((pair) => pair.toolUseId));
+      if (Array.isArray(content)) {
+        for (const blockRaw of content as unknown[]) {
+          const rawPair = readToolResultFullText(blockRaw);
+          const pair = rawPair ? normalizeToolResultFullText(rawPair, ctx.rt) : null;
+          if (pair && !pair.isError && isWorkerDispatchToolName(ctx.rt.toolUseIdToName.get(pair.toolUseId))) {
+            ctx.turn.completedWorkerDispatch = true;
+          }
+        }
+      }
       if (ctx.onToolResultDone) {
         if (Array.isArray(content)) {
           for (const blockRaw of content as unknown[]) {
@@ -2388,6 +2410,7 @@ function handleResult(
     !ctx.turn.sawCompactBoundary &&
     !isEmptyResponseTurn &&
     ctx.turn.uiEmittedText.length === 0 &&
+    !ctx.turn.completedWorkerDispatch &&
     !ctx.turn.lastAssistantMsgHadSubstance &&
     fallbackTail.length === 0;
   if (isSilentStopTurn) {
