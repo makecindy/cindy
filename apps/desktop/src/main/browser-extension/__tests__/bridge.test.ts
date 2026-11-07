@@ -14,7 +14,7 @@
 import crypto, { webcrypto } from 'node:crypto';
 import http from 'node:http';
 
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { BrowserExtensionBridge, type BrowserExtensionRelayNotice } from '../bridge';
 import {
@@ -28,6 +28,21 @@ const EXT_ID = 'a'.repeat(32);
 const STORE_ID = 'b'.repeat(32);
 const WIRE = '0.4.13';
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+
+/** Job deadlines the test fires itself, so job expiry is ordered by the test, not by the wall clock. */
+function manualJobDeadlines() {
+  const live = new Set<() => void>();
+  return {
+    schedule: (expire: () => void) => {
+      live.add(expire);
+      return () => void live.delete(expire);
+    },
+    pending: () => live.size,
+    expireAll: () => {
+      for (const expire of [...live]) expire();
+    },
+  };
+}
 
 const bridges: BrowserExtensionBridge[] = [];
 afterEach(async () => {
@@ -457,23 +472,39 @@ describe('bridge · 作业生命周期', () => {
     expect((await c.request('/poll')).job ?? null).toBeNull();
   });
 
+  // #9243: this used to run on an 80ms real deadline while /poll and /ack crossed a real socket, so a
+  // slow Windows runner could expire the job before the extension fetched it (`job` was null).
+  // The deadline is now fired by the test, after the real HTTP handshake, so no timing can reorder it.
   it('已确认的交互超时记为 unknown 且绝不重投;未确认的过期作业不能再执行', async () => {
-    const { bridge, ready } = await fixture({ jobTimeout: 80 });
+    const deadlines = manualJobDeadlines();
+    const { bridge, ready } = await fixture({ scheduleJobDeadline: deadlines.schedule });
     const c = await ready();
     const resultPromise = bridge.act('click', { url: 'https://example.test', selector: 'button' });
-    await sleep(5);
+    await vi.waitFor(() => expect(deadlines.pending()).toBe(1));
     const { job } = await c.request('/poll');
     await c.request('/ack', { id: job.id });
+    deadlines.expireAll();
     expect((await resultPromise).execution).toBe('unknown');
     expect((await c.request('/poll')).job).toBeNull();
     expect((await c.request('/result', { id: job.id, result: { ok: true } })).status).toBe(409);
-    const queued = await bridge.act('text', { url: 'https://example.test' });
-    expect(queued.execution).toBe('not_executed');
+    const queued = bridge.act('text', { url: 'https://example.test' });
+    await vi.waitFor(() => expect(deadlines.pending()).toBe(1));
+    deadlines.expireAll();
+    expect((await queued).execution).toBe('not_executed');
     const promise = bridge.act('text', { url: 'https://example.test' });
-    await sleep(5);
+    await vi.waitFor(() => expect(deadlines.pending()).toBe(1));
     const delivered = (await c.request('/poll')).job;
+    deadlines.expireAll();
     expect((await promise).execution).toBe('not_executed');
     expect((await c.request('/ack', { id: delivered.id })).status).toBe(409);
+  });
+
+  // The default scheduler is a real timer. Nothing polls this job, so only the deadline can end it.
+  it('无人领取的排队作业由默认定时器到期,记为 not_executed', async () => {
+    const { bridge, ready } = await fixture({ jobTimeout: 30 });
+    await ready();
+    const result = await bridge.act('text', { url: 'https://example.test' });
+    expect(result).toMatchObject({ ok: false, error: 'BROWSER_TIMEOUT', execution: 'not_executed' });
   });
 
   // 2026-10-30: site lists are gone. A plugin of the site-list era still pushes one; it is acknowledged

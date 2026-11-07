@@ -1637,25 +1637,32 @@ export class TelegramIM extends BaseIM implements ChannelIM {
     messageIds: readonly string[],
     /** 本轮触发消息(event.raw): 它的相册成员与被引消息已随本轮附件送达, 不重复补。 */
     trigger?: Pick<TgMessage, 'media_group_id' | 'reply_to_message'>,
+    options?: { attachmentMessageIds?: readonly string[]; provided?: readonly IMAttachment[] },
   ): Promise<{ attachments: Array<IMAttachment & { author: string }>; unavailable: string[] }> {
     const api = this.api;
-    if (!api || messageIds.length === 0) return { attachments: [], unavailable: [] };
+    if (messageIds.length === 0) return { attachments: [], unavailable: [] };
+    if (!api) return { attachments: [], unavailable: (options?.attachmentMessageIds ?? []).map((id) => `历史消息 ${id}：连接不可用，未提供附件原件`) };
     const cutoff = Date.now() - GROUP_MEDIA_POOL_TTL_MS;
     const repliedId = trigger?.reply_to_message?.message_id;
-    const messages = messageIds
+    const cached = messageIds
       .map((id) => this.groupMediaPool.get(this.groupMediaKey(chatId, id)))
-      .filter((m): m is TgMessage => m !== undefined && m.date * 1_000 >= cutoff)
-      .filter(
+      .filter((m): m is TgMessage => m !== undefined && m.date * 1_000 >= cutoff);
+    const messages = cached.filter(
         (m) =>
           m.message_id !== repliedId &&
           (trigger?.media_group_id === undefined || m.media_group_id !== trigger.media_group_id),
       )
       .sort((a, b) => a.message_id - b.message_id);
-    if (messages.length === 0) return { attachments: [], unavailable: [] };
+    // Cached quote/album members were already supplied by the current message.
+    const availableIds = new Set(cached.map((m) => String(m.message_id)));
+    const missing = (options?.attachmentMessageIds ?? []).filter((id) => id !== String(repliedId) && !availableIds.has(id))
+      .map((id) => `历史消息 ${id}：附件原件不在可用缓存中，仅提供历史记录`);
+    if (messages.length === 0) return { attachments: [], unavailable: missing };
     const generation = this.configVersion;
     const stagedDiscards: Array<() => Promise<void>> = [];
     const collected = await collectGroupHistoryMedia(messages, {
       api,
+      provided: options?.provided,
       stagedDiscards,
       ...(this.host.media ? { media: this.host.media } : {}),
       ...(this.host.files ? { files: this.host.files } : {}),
@@ -1664,7 +1671,7 @@ export class TelegramIM extends BaseIM implements ChannelIM {
       await this.discardStagedMedia(stagedDiscards);
       return { attachments: [], unavailable: [] };
     }
-    return collected;
+    return { ...collected, unavailable: [...collected.unavailable, ...missing] };
   }
 
   /** 下载期间配置换代: 回滚本次暂存进媒体总仓的音视频(尽力而为, 失败只记日志)。 */

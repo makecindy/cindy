@@ -196,6 +196,8 @@ describe('resolveLocalPath', () => {
     ['C:/repo', '/home/a.ts', '/home/a.ts'],
     ['C:/repo', '//server/share/a.ts', '//server/share/a.ts'],
     ['C:/repo', '//E:/demo', '//E:/demo'],
+    // 小写盘符同规则(#8726 实例里模型实际写的是 /d:/…)
+    ['C:/repo', '/d:/docs/app.tsx', 'd:/docs/app.tsx'],
   ])('resolves %s + %s without changing other path identities', (cwd, href, expected) => {
     expect(resolveLocalPath(href, cwd)).toBe(expected);
   });
