@@ -124,6 +124,8 @@ import {
   appendAutoReviewUserIntent,
   normalizeAutoReviewUserIntent,
   createAutoReviewActionContext,
+  createAutoReviewAgentTextTracker,
+  isAutoReviewNewUserInput,
   type AutoReviewUserIntent,
   isSystemPermissionDenialReason,
   formatPermissionDenial,
@@ -198,6 +200,9 @@ import {
 import {
   newCodexRuntimeState,
   isAuthRelatedErrorMessage,
+  isCodexModelUnavailableError,
+  CODEX_MODEL_UNAVAILABLE_MESSAGE,
+  CODEX_MODEL_UNAVAILABLE_REASON,
   classifyCodexError,
   translateErrorNotification,
   translateItemNotification,
@@ -2821,7 +2826,7 @@ assertRouteCurrent();
 
     const key = codexLocalAuthHostIdentity(
       options?.providerId ? `local-account:${options.providerId}:models` : localControlPlaneHostKey(credentialMode),
-      credentialMode === 'gateway-key' ? 'isolated' : 'legacy-shared',
+      credentialMode === 'gateway-key' || credentialMode === 'provider-oauth' ? 'isolated' : 'legacy-shared',
     );
     let timer: ReturnType<typeof setTimeout> | undefined;
     const deadline = new Promise<never>((_, reject) => {
@@ -2856,21 +2861,23 @@ assertRouteCurrent();
     const key = codexLocalAuthHostIdentity(
       options?.providerId ? `local-account:${options.providerId}:models` : credentialMode
         ? localControlPlaneHostKey(credentialMode) : hostKey(),
-      credentialMode === 'gateway-key' ? 'isolated' : 'legacy-shared',
+      credentialMode === 'gateway-key' || credentialMode === 'provider-oauth' ? 'isolated' : 'legacy-shared',
     );
     return this.withHostOperation(async () => ({
       key: credentialMode ? key : hostKey(),
       host: credentialMode
         ? await this.getHost(undefined, credentialMode, {
           providerId: options?.providerId,
-          ...(credentialMode === 'gateway-key' ? { localAuthPolicy: 'isolated' as const } : {}),
+          ...(credentialMode === 'gateway-key' || credentialMode === 'provider-oauth'
+            ? { localAuthPolicy: 'isolated' as const } : {}),
           keyOverride: key,
           hostPurpose: 'control-plane',
         })
         : (await this.getUtilityHost()).host,
     }), async (host) => {
       const init = await host.ensureStarted();
-      if (init.codexHome && !options?.providerId) this.codexHome = init.codexHome;
+      // API capability probes use an isolated control plane, not the shared history home.
+      if (init.codexHome && !options?.providerId && credentialMode !== 'provider-oauth') this.codexHome = init.codexHome;
 
       const models: CodexModelListResponse['data'] = [];
       const seenCursors = new Set<string>();
@@ -2908,8 +2915,10 @@ assertRouteCurrent();
 
       // Auth 切换 / logout 可能在分页请求期间 retire 旧 host。旧账号的迟到响应绝不能
       // 覆盖新账号目录；只有仍登记为当前 local host 的结果才允许交给宿主。
-      if (this.hosts.get(key) !== host || !this.deps.onCodexLocalModelsListed) return false;
-      if (options?.providerId) await this.deps.onCodexLocalModelsListed(models, options.providerId);
+      if (this.hosts.get(key) !== host) return false;
+      if (options?.onModelsListed) await options.onModelsListed(models);
+      else if (!this.deps.onCodexLocalModelsListed) return false;
+      else if (options?.providerId) await this.deps.onCodexLocalModelsListed(models, options.providerId);
       else await this.deps.onCodexLocalModelsListed(models);
       return true;
     });
@@ -3678,6 +3687,17 @@ assertRouteCurrent();
     }
 
     const eventQueue: AsyncQueue<AgentEvent> = createAsyncQueue<AgentEvent>();
+    // Reviewer context only: the agent's public text and tool calls, in the order the user sees them.
+    const autoReviewAgentText = createAutoReviewAgentTextTracker();
+    {
+      const push = eventQueue.push.bind(eventQueue);
+      eventQueue.push = (event) => {
+        // Only events the queue accepted count: a refused (ended-queue) event never reaches the user.
+        const accepted = push(event);
+        if (accepted) autoReviewAgentText.observe(event);
+        return accepted;
+      };
+    }
     const usageTracker = new UsageTracker();
     const translatorRt: CodexRuntimeState = newCodexRuntimeState();
     const liveUsageSnapshot = () => {
@@ -4311,7 +4331,7 @@ assertRouteCurrent();
     const turnRetryTracker = new TurnRetryTracker();
     // 上下文压缩不收敛的终局升级 (见 compaction-storm.ts): codex 按陈旧窗口反复
     // 压缩、每次压完水位纹丝不动时, 本地熔断并合成终态错误, 与上面的 retry-loop
-    // 升级同路径 (onUpstreamIdleTimeout)。
+    // 升级同路径 (interruptTurnForProviderFailure)。
     const compactionStormTracker = new CompactionStormTracker();
     /**
      * 会话中途切过模型的记录 (from = 本会话最初那个模型)。只服务压缩风暴的诊断
@@ -4848,8 +4868,10 @@ assertRouteCurrent();
     let currentAutoReviewAuthority: ReturnType<typeof autoReviewContext>;
     const priorAutoReviewIntent = () => !autoReviewIntentInitialized ? undefined : JSON.stringify(currentAutoReviewAuthority ?? null) === JSON.stringify(autoReviewContext() ?? null) ? currentAutoReviewIntent : '';
     const autoReviewDecisionCache = new Map<string, Promise<AutoReviewDecision>>();
-    const setAutoReviewIntent = (content: AutoReviewUserIntent, source = { authority: currentAutoReviewAuthority }): void => {
+    // A synthetic continuation is not new user input, so it must not move the reply the user answered.
+    const setAutoReviewIntent = (content: AutoReviewUserIntent, source = { authority: currentAutoReviewAuthority }, newUserInput = true): void => {
       autoReviewActionContext.advance(typeof content !== 'string' && JSON.stringify(currentAutoReviewAuthority ?? null) === JSON.stringify(source.authority ?? null));
+      if (newUserInput) autoReviewAgentText.beginUserInput();
       currentAutoReviewIntent = normalizeAutoReviewUserIntent(content);
       autoReviewIntentInitialized = true;
       currentAutoReviewAuthority = source.authority && { ...source.authority };
@@ -5701,7 +5723,7 @@ assertRouteCurrent();
     // 关掉抹平 → fail-closed(不把远端 /private/tmp 误当 /tmp 区内)。本地用真实 process.platform。
     // 定义在此(startSession 作用域,opts=session)以避开 awaitApprovalDecision 内层 opts 的遮蔽。
     const sessionReviewPlatform: NodeJS.Platform = opts.remoteHostId ? 'linux' : hosted ? hosted.platform : process.platform;
-    const reviewAutoAction = (action: ReviewableAction, hostAutoApprove = false, hostShortcutOnly = false): Promise<AutoReviewDecision> => {
+    const reviewAutoAction = (action: ReviewableAction, hostAutoApprove = false, hostShortcutOnly = false, subagentCall = false): Promise<AutoReviewDecision> => {
       const directoryGeneration = autoReviewDirectoryGeneration;
       const request = {
         sessionId: opts.sessionId,
@@ -5713,6 +5735,7 @@ assertRouteCurrent();
         model: mutableCatalogModel ?? mutableModel,
         userIntent: currentAutoReviewIntent,
         precedingBlockedActions: autoReviewActionContext.precedingBlockedActions,
+        ...((agentContext) => agentContext ? { agentContext } : {})(autoReviewAgentText.snapshot(undefined, !subagentCall)),
         ...(currentAutoReviewAuthority ? { authorizationContext: currentAutoReviewAuthority } : {}),
         action,
         workspaceRoots: runtimeWorkspaceRoots().filter(
@@ -8112,6 +8135,8 @@ assertRouteCurrent();
                 : opts.autoReviewAction,
               opts?.hostAutoApprove === true && !forcePrompt,
               reviewPermissionMode !== 'auto',
+              // A subagent's call must not borrow the main agent's explanation.
+              descendant,
             );
           } finally {
             if (pendingApprovals.get(requestId) === reviewEntry) pendingApprovals.delete(requestId);
@@ -8437,9 +8462,9 @@ assertRouteCurrent();
     const turnsCompletedBeforeStartResp = new Set<string>();
     /**
      * @param opts.suppressFailureEvent 终失败时不推 'permission-tighten-interrupt-failed'
-     *        非终态 error。给 upstream-idle watchdog 用:它已经推过一条终态 error,
+     *        非终态 error。给 provider failure cleanup 用:调用方负责推终态 error,
      *        再补一条"收紧权限时没能停下任务"既词不达意也是重复打扰;它对失败的处置
-     *        是直接作废 host(见 onUpstreamIdleTimeout)。
+     *        是直接作废 host(见 interruptTurnForProviderFailure)。
      * @returns true = app-server 确认收到中断;false = 两次 ack 都超时/报错(daemon
      *          对我们哑火)。调用方据此决定要不要升级处置;忽略返回值即维持原行为。
      */
@@ -8667,7 +8692,7 @@ assertRouteCurrent();
           armUpstreamIdleSlice();
           return;
         }
-        onUpstreamIdleTimeout();
+        interruptTurnForProviderFailure();
       }, slice);
       (upstreamIdleTimer as unknown as { unref?: () => void }).unref?.();
     }
@@ -8776,7 +8801,7 @@ assertRouteCurrent();
             threadId !== stalledThreadId ||
             reconnectStallTurnGeneration !== stalledTurnGeneration
           ) return;
-          onUpstreamIdleTimeout({
+          interruptTurnForProviderFailure({
             reason,
             timeoutMs: CODEX_RECONNECT_STALL_TIMEOUT_MS,
             ignorePendingTools: true,
@@ -8876,17 +8901,17 @@ assertRouteCurrent();
       }
     }
     /**
-     * 上游连续静默超阈值:daemon 对我们彻底哑火。推一条终态 error 收口(renderer 停
-     * 转圈 / scheduler 把 run 记 failed / IM 转播 finalize),再 turn/interrupt 让
-     * daemon 侧那个 turn 停掉(与用户手动 Stop 同路径,thread 保持可用)。
+     * Interrupt the current native turn after a watchdog timeout or a definitive
+     * provider rejection. Use the same bounded cleanup before releasing a turn.
      */
-    function onUpstreamIdleTimeout(opts?: {
+    function interruptTurnForProviderFailure(opts?: {
       reason?: string;
       timeoutMs?: number;
       message?: string;
       logLabel?: string;
       ignorePendingTools?: boolean;
       allowPendingTurnStart?: boolean;
+      modelRejectionError?: Parameters<typeof finishCodexSamplingTurn>[4];
     }): void {
       if (closed) return;
       const pendingTurnId =
@@ -8900,8 +8925,9 @@ assertRouteCurrent();
         upstreamIdleLastEventAt > 0 ? Date.now() - upstreamIdleLastEventAt : null;
       const turnId = currentTurnId ?? pendingTurnId;
       const timeoutReason = opts?.reason ?? 'upstream_response_idle_timeout';
+      const isModelRejection = timeoutReason === CODEX_MODEL_UNAVAILABLE_REASON;
       const deferTurnCleanupUntilInterrupt =
-        timeoutReason === 'codex_reconnect_stalled' ||
+        isModelRejection || timeoutReason === 'codex_reconnect_stalled' ||
         timeoutReason === 'upstream_response_idle_timeout';
       if (deferTurnCleanupUntilInterrupt && !pendingTurnId && turnId) {
         // Keep Session.isTurnRunning() true until the interrupt ACK (or the
@@ -8920,34 +8946,40 @@ assertRouteCurrent();
       // 先立终态墓碑:下面合成的本地收口据此走 suppressTerminalUi 分支(只清状态、
       // 不再推一遍终态 UI),迟到的 item / error 也一并被 stale guard 拦住。
       if (turnId) terminalErroredTurnIds.add(turnId);
-      const timeoutEvent: AgentEvent = {
-        type: 'error',
-        data: {
-          // reason 与 claude-code 侧共用同一稳定 key(renderer i18n 映射,规则 18);
-          // message 仅作非 renderer 消费方(IM / orca / 日志)的英文兜底。
-          reason: timeoutReason,
-          message: opts?.message ??
-            (`The upstream response has been silent for ${Math.round(idleMs / 1000)}s; ` +
-              'the turn was interrupted automatically to avoid hanging forever. ' +
-              'You can send the next message to continue.'),
-          isTerminal: true,
-          idleMs,
-          lastEventType: upstreamIdleLastEventType,
-          msSinceLastEvent: msSinceLast,
-        },
-        source: 'codex',
+      const timeoutData = {
+        // reason 与 claude-code 侧共用同一稳定 key(renderer i18n 映射,规则 18);
+        // message 仅作非 renderer 消费方(IM / orca / 日志)的英文兜底。
+        reason: timeoutReason,
+        message: opts?.message ??
+          (`The upstream response has been silent for ${Math.round(idleMs / 1000)}s; ` +
+            'the turn was interrupted automatically to avoid hanging forever. ' +
+            'You can send the next message to continue.'),
+        isTerminal: true,
+        ...(isModelRejection ? { willRetry: false } : {
+          idleMs, lastEventType: upstreamIdleLastEventType, msSinceLastEvent: msSinceLast,
+        }),
       };
-      // Publish a reconnect timeout only after interrupt settles: a late successful
+      // Publish the failure only after interrupt settles: a late successful
       // completion must win, and recovery must not race the still-running turn.
       const deferTimeoutError =
-        timeoutReason === 'codex_reconnect_stalled' &&
+        (isModelRejection || timeoutReason === 'codex_reconnect_stalled') &&
         !pendingTurnId && !!turnId;
       const interruptedSend = overloadRetry;
       let timeoutEmitted = false;
       const emitTimeout = (settled = false): void => {
         if (timeoutEmitted || closed) return;
         timeoutEmitted = true;
-        if (!deferTimeoutError || !interruptedSend?.isCancelled()) eventQueue.push(timeoutEvent);
+        if (!deferTimeoutError || !interruptedSend?.isCancelled()) {
+          const assistantAttemptFailure = isModelRejection && turnId
+            ? finishCodexSamplingTurn(translatorRt, threadId, turnId, 'failed', opts?.modelRejectionError)
+            : undefined;
+          if (assistantAttemptFailure && turnId) assistantReplyByTurn.delete(turnId);
+          eventQueue.push({
+            type: 'error',
+            data: { ...timeoutData, ...(assistantAttemptFailure ? { assistantAttemptFailure } : {}) },
+            source: 'codex',
+          });
+        }
         if (deferTimeoutError && settled) {
           // Session drains terminal errors with an idle tail. Do not leave its
           // drain watchdog armed when Main cannot recover this thread.
@@ -8958,7 +8990,7 @@ assertRouteCurrent();
           });
         }
       };
-      if (deferTimeoutError) {
+      if (deferTimeoutError && !isModelRejection) {
         eventQueue.push({
           type: 'status',
           data: {
@@ -8967,7 +8999,7 @@ assertRouteCurrent();
           },
           source: 'codex',
         });
-      } else emitTimeout();
+      } else if (!deferTimeoutError) emitTimeout();
       if (pendingTurnId) {
         // 重连提示可能早于 turnStarted 到达。此时 turn/start 仍在飞，不能只清掉
         // 看门狗：迟到的 response / turnStarted 必须被隔离，否则用户已经看到终态后
@@ -9138,7 +9170,9 @@ assertRouteCurrent();
         // 推过自己的终态 error 并在 close 里解除了订阅,不必再收一遍。
         try {
           await retireUnresponsiveHost(
-            `codex app-server unresponsive: no upstream activity for ${Math.round(idleMs / 1000)}s and turn/interrupt was never acknowledged`,
+            isModelRejection
+              ? 'codex app-server unresponsive: turn/interrupt after model rejection was never acknowledged'
+              : `codex app-server unresponsive: no upstream activity for ${Math.round(idleMs / 1000)}s and turn/interrupt was never acknowledged`,
           );
         } catch (e) {
           log.warn('upstream-idle watchdog host retire threw', { error: String(e) });
@@ -10819,6 +10853,7 @@ assertRouteCurrent();
       deadTurnId: string,
       error: { message?: string; additionalDetails?: unknown; codexErrorInfo?: CodexErrorInfo | null } | null | undefined,
     ): boolean => {
+      if (isCodexModelUnavailableError(error)) return false;
       const state = overloadRetry;
       const summaryRecovery = canRecoverRemoteCompaction(deadTurnId, error);
       if (
@@ -10909,6 +10944,11 @@ assertRouteCurrent();
         recoveryState?.pendingAutomaticRecovery?.deadTurnId === turn.id
           ? recoveryState.pendingAutomaticRecovery
           : null;
+      if (recoveryState && pendingRecovery && isCodexModelUnavailableError(turn.error)) {
+        // An authoritative model rejection can arrive after a recovery intent.
+        recoveryState.pendingAutomaticRecovery = null;
+        pendingRecovery = null;
+      }
       if (
         turn.status === 'failed'
         && (!terminalErroredTurnIds.has(turn.id) || pendingRecovery)
@@ -12403,7 +12443,7 @@ assertRouteCurrent();
           // ignorePendingTools: idle watchdog 停表是因为"球在 daemon 手里, 不该算它
           // 超时"; 而这里的判据是"压缩本身失效了", 与球在谁手里无关。留着那道闸只会
           // 让残留的未收口工具条目把熔断挡在门外, 用户继续看着它循环。
-          onUpstreamIdleTimeout({
+          interruptTurnForProviderFailure({
             reason,
             message,
             logLabel: 'compaction storm — interrupting current turn',
@@ -12857,6 +12897,26 @@ assertRouteCurrent();
             && (!idLessCapacityError || idLessCapacityTargetsActiveTurn))
           || targetsPendingTurn
           || targetsIdLessPendingStart;
+        // Interrupt only an identified active turn. Generic reconnect notices
+        // and errors without a turn ID do not prove this turn's model was rejected.
+        if (
+          !isTerminalError && !isTransportError && isTurnInFlight &&
+          params.threadId === threadId && params.turnId && params.turnId === currentTurnId &&
+          isCodexModelUnavailableError(params.error)
+        ) {
+          if (reconnectStallCleanupTurnId === params.turnId || skipIfStaleHost('turn/interrupt')) return;
+          if (overloadRetry?.pendingAutomaticRecovery?.deadTurnId === params.turnId) {
+            overloadRetry.pendingAutomaticRecovery = null;
+          }
+          interruptTurnForProviderFailure({
+            reason: CODEX_MODEL_UNAVAILABLE_REASON,
+            message: CODEX_MODEL_UNAVAILABLE_MESSAGE,
+            logLabel: 'Codex rejected the selected model — interrupting current turn',
+            ignorePendingTools: true,
+            modelRejectionError: params.error,
+          });
+          return;
+        }
         if (
           !isTerminalError &&
           targetsCurrentTurn &&
@@ -12992,7 +13052,7 @@ assertRouteCurrent();
           tryTakeOverTerminalRateLimit: () => {
             // willRetry=true 仍归 daemon 自己退避，绝不叠第二层。这里只接它已经明确
             // 耗尽内部 retry budget 的终态 429；usageLimitExceeded 由判定器排除。
-            if (params.willRetry === true) return null;
+            if (params.willRetry === true || isCodexModelUnavailableError(effectiveParams.error)) return null;
             const rawMessage = effectiveParams.error?.message ?? '';
             const signals = extractNonSecretErrorSignals(rawMessage);
             if (
@@ -13335,7 +13395,7 @@ assertRouteCurrent();
           autoReviewIntent !== currentAutoReviewIntent
           || JSON.stringify(currentAutoReviewAuthority ?? null) !== JSON.stringify(autoReviewContext() ?? null)
         ) {
-          setAutoReviewIntent(autoReviewIntent ?? appendAutoReviewUserIntent(priorAutoReviewIntent(), message.content, sendOpts), { authority: autoReviewContext() });
+          setAutoReviewIntent(autoReviewIntent ?? appendAutoReviewUserIntent(priorAutoReviewIntent(), message.content, sendOpts), { authority: autoReviewContext() }, isAutoReviewNewUserInput(sendOpts));
         }
         assertCurrentHost('turn/start');
         // 本条消息的计划意图:sendOpts.planMode 是点击发送瞬间的快照(排队行透传),
@@ -14102,7 +14162,7 @@ assertRouteCurrent();
             turnId: steeredTurnId,
           });
         }
-        setAutoReviewIntent(appendAutoReviewUserIntent(priorAutoReviewIntent(), message.content, sendOpts));
+        setAutoReviewIntent(appendAutoReviewUserIntent(priorAutoReviewIntent(), message.content, sendOpts), undefined, isAutoReviewNewUserInput(sendOpts));
       },
 
       async requestGracefulStop(stopOpts) {

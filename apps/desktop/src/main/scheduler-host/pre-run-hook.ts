@@ -20,7 +20,7 @@
  */
 
 import { execFile, spawn } from 'node:child_process';
-import type { PreRunHookRunResult } from '@cindy/maker-scheduler';
+import type { PreRunHookRunResult, ScheduleWebhookEvent } from '@cindy/maker-scheduler';
 import { capAppend as capAppendBase, killProcessTree } from './proc-util';
 import os from 'node:os';
 
@@ -42,6 +42,13 @@ export interface PreRunHookStdinPayload {
    * skip 都会把它推新,脚本会永久自锁;这类条件应自己落盘记录上次放行时间。
    */
   lastFinishedAt?: number;
+  /** Webhook 触发时的事件元数据（外部不可信数据）。 */
+  webhook?: { events: ScheduleWebhookEvent[]; omitted: number };
+  /**
+   * Present when host code started this run early instead of the cron or a user, for example
+   * `{ kind: 'watch', source: 'pr-status', detail: <PR URL> }` when a watched PR's status changed.
+   */
+  trigger?: { kind: 'watch'; source: string; detail?: string };
   /**
    * 伙伴例行任务专有：主人最近一轮和这个伙伴已完成对话的时间戳(ms);从未对话或读取失败时缺省。
    * 与 lastFinishedAt 比较即可判断「上次之后有没有新对话」(被跳过的轮次说明期间没有对话,

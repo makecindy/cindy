@@ -25,6 +25,9 @@ import { refreshCodexMcpEnvironment } from '../codexMcpRefresh.js';
 import { DeferredCodexRestartService } from '../deferredCodexRestart.js';
 import { CodexCredentialModeSwitchBusyError } from '../../maker-host/codex-credential-switch.js';
 import { IpcHarness } from './helpers/ipcHarness.js';
+import { assertTrustedAppRendererEvent } from '../../security/trustedAppRenderer.js';
+
+vi.mock('../../security/trustedAppRenderer.js', () => ({ assertTrustedAppRendererEvent: vi.fn() }));
 
 // This suite uses isolated SQLite fixtures; OS encryption is covered by the store suite.
 vi.mock('electron', async (importOriginal) => {
@@ -90,6 +93,7 @@ function makeDeps(over: Partial<McpHandlerDeps> = {}): McpHandlerDeps {
 }
 
 afterEach(() => {
+  vi.mocked(assertTrustedAppRendererEvent).mockReset();
   resetCustomMcpRegistry();
   if (client) clearCurrentDbClient(client);
   raw?.close();
@@ -98,6 +102,37 @@ afterEach(() => {
 });
 
 describe('mcp:custom:* CRUD handlers', () => {
+  // PR #9055: unit IPC boundary; valid payload from an untrusted sender must neither
+  // disclose connections nor persist a choice. The shared guard has its own frame tests.
+  it('rejects untrusted duplicate reads and writes before accessing preferences', async () => {
+    const harness = new IpcHarness();
+    const deps = makeDeps({ listDuplicates: vi.fn(), chooseDuplicate: vi.fn() });
+    registerMcpHandlers(harness, deps);
+    vi.mocked(assertTrustedAppRendererEvent).mockImplementation(() => { throw new Error('[PERMISSION_DENIED]'); });
+    await expect(harness.invoke(MAKER_INVOKE.MCP_DUPLICATES_LIST)).rejects.toThrow(/PERMISSION_DENIED/);
+    await expect(harness.invoke(MAKER_INVOKE.MCP_DUPLICATES_CHOOSE, { id: 'a'.repeat(64), choice: 'claude' })).rejects.toThrow(/PERMISSION_DENIED/);
+    expect(deps.listDuplicates).not.toHaveBeenCalled();
+    expect(deps.chooseDuplicate).not.toHaveBeenCalled();
+    expect(deps.broadcastChanged).not.toHaveBeenCalled();
+  });
+  // #8902, unit: the production IPC validates choices, detects stale candidates,
+  // and broadcasts only after persistence; existing CRUD tests have no such path.
+  it('validates duplicate choices and reports configuration drift without broadcasting success', async () => {
+    const harness = new IpcHarness();
+    const chooseDuplicate = vi.fn(async () => true);
+    const deps = makeDeps({ chooseDuplicate, listDuplicates: async () => ({ connections: [], complete: true }) });
+    registerMcpHandlers(harness, deps);
+    expect(await harness.invoke(MAKER_INVOKE.MCP_DUPLICATES_LIST)).toEqual({ connections: [], complete: true });
+    await expect(harness.invoke(MAKER_INVOKE.MCP_DUPLICATES_CHOOSE, { id: '../config', choice: 'cindy' })).rejects.toThrow(/INVALID_PARAMS/);
+    expect(chooseDuplicate).not.toHaveBeenCalled();
+    const input = { id: 'a'.repeat(64), choice: 'claude' };
+    expect(await harness.invoke(MAKER_INVOKE.MCP_DUPLICATES_CHOOSE, input)).toEqual({ ok: true });
+    expect(chooseDuplicate).toHaveBeenCalledWith(input.id, 'claude');
+    expect(deps.broadcastChanged).toHaveBeenCalledOnce();
+    chooseDuplicate.mockResolvedValue(false);
+    await expect(harness.invoke(MAKER_INVOKE.MCP_DUPLICATES_CHOOSE, input)).rejects.toThrow(/NOT_FOUND/);
+    expect(deps.broadcastChanged).toHaveBeenCalledOnce();
+  });
   it.each(['claude-code', 'codex', 'pi'] as const)(
     'projects registered MCP availability for %s while preserving the configuration list',
     async (agentKind) => {

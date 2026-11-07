@@ -880,7 +880,7 @@ function interactionPositionLabel(index: number, localizer?: PresentationLocaliz
 }
 
 /** What a permission card asks about, independent of harness tool naming. */
-export type PermissionActionKind = 'command' | 'file-read' | 'file-write' | 'plugin' | 'browser' | 'tool';
+export type PermissionActionKind = 'command' | 'file-read' | 'file-write' | 'plugin' | 'mcp' | 'browser' | 'tool';
 
 export interface PermissionActionSummary {
   kind: PermissionActionKind;
@@ -1006,7 +1006,7 @@ export function describePermissionAction(toolName: string, input: Record<string,
   if (mcp) {
     const dispatched = mcp.tool === 'call_tool' && innerName;
     const args = dispatched ? innerArgs : input;
-    return { kind: 'plugin', subject: mcp.server, preview: [dispatched || mcp.tool, argsPreview(args)].filter(Boolean).join(' ') };
+    return { kind: 'mcp', subject: mcp.server, preview: [dispatched || mcp.tool, argsPreview(args)].filter(Boolean).join(' ') };
   }
   return { kind: 'tool', preview: previewOf(input) };
 }
@@ -1024,7 +1024,7 @@ export function permissionTitle(
   if (action.kind === 'plugin' && action.subject) {
     return presentationText(localizer, 'interaction.presentation.permission.titlePlugin', `允许使用插件「${action.subject}」？`, { plugin: action.subject });
   }
-  if (action.kind !== 'tool' && action.kind !== 'plugin') {
+  if (action.kind !== 'tool' && action.kind !== 'plugin' && action.kind !== 'mcp') {
     const key = { command: 'titleCommand', 'file-read': 'titleFileRead', 'file-write': 'titleFileWrite', browser: 'titleBrowser' }[action.kind];
     const fallback = { command: '允许运行这条命令？', 'file-read': '允许读取文件？', 'file-write': '允许修改文件？', browser: '允许浏览器执行这一步？' }[action.kind];
     return presentationText(localizer, `interaction.presentation.permission.${key}`, fallback);
@@ -1033,7 +1033,7 @@ export function permissionTitle(
   if (explicit) return explicit;
   const displayName = readString(request.displayName);
   const toolName = readString(request.toolName) || 'tool';
-  const tool = displayName || toolName;
+  const tool = displayName || action.subject || toolName;
   return presentationText(localizer, 'interaction.presentation.permission.title', `允许使用 ${tool}?`, { tool });
 }
 

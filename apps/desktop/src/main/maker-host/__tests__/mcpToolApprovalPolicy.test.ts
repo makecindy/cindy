@@ -10,6 +10,44 @@ import {
 afterEach(() => setGhostToolApprovalResolver(null));
 
 describe('desktop Claude read-only allowlist', () => {
+  // PR #9145: removing redundant Host consent must not let trusted MCP servers
+  // bypass the task's normal review. Public policy entry, unit tier; both dispatch routes.
+  it.each([
+    ['cindy_scheduler', 'schedule_delete'],
+    ['cindy_scheduler', 'routine_delete'],
+    ['cindy_helper', 'routine_delete'],
+  ])('routes %s %s through ordinary per-call approval', (serverName, name) => {
+    for (const toolParams of [{ id: 'automation' }, { id: 'automation', device: 'local' }]) {
+      expect(getDesktopMcpToolApprovalPolicy({ serverName, toolName: name, toolParams })).toBe('prompt-each-time');
+      for (const args of [toolParams, JSON.stringify(toolParams)]) {
+        for (const toolName of ['call_tool', undefined]) {
+          expect(getDesktopMcpToolApprovalPolicy({ serverName, toolName,
+            toolParams: { name, args } })).toBe('prompt-each-time');
+        }
+      }
+    }
+  });
+
+  it('reviews an unnamed scheduler call without turning known reads into approvals', () => {
+    expect(getDesktopMcpToolApprovalPolicy({ serverName: 'cindy_scheduler', toolParams: { id: 'automation' } })).toBe('prompt-each-time');
+    for (const name of ['schedule_get', 'schedule_list']) {
+      expect(getDesktopMcpToolApprovalPolicy({ serverName: 'cindy_scheduler', toolName: name })).toBe('auto-approve');
+      expect(getDesktopMcpToolApprovalPolicy({ serverName: 'cindy_scheduler',
+        toolParams: { name, args: {} } })).toBe('auto-approve');
+    }
+  });
+
+  // Account release disables another device's receiver; both direct and progressive
+  // routes must pass the normal write review instead of trusted-server read approval.
+  it('reviews Webhook release and restoration while preserving read access', () => {
+    for (const tool of ['schedule_webhook_release', 'schedule_webhook_restore']) {
+      expect(getDesktopMcpToolApprovalPolicy({ serverName: 'cindy_scheduler', toolName: tool })).toBe('prompt-each-time');
+      expect(getDesktopMcpToolApprovalPolicy({ serverName: 'cindy_scheduler', toolName: 'call_tool',
+        toolParams: { name: tool, args: { id: 'whk_old' } } })).toBe('prompt-each-time');
+    }
+    expect(getDesktopMcpToolApprovalPolicy({ serverName: 'cindy_scheduler', toolName: 'call_tool',
+      toolParams: { name: 'schedule_webhook_list', args: {} } })).toBe('auto-approve');
+  });
   it('allows only explicitly reviewed read-only tools', () => {
     const tools = getDesktopClaudeReadOnlyAllowedTools();
 
@@ -272,7 +310,7 @@ describe('desktop MCP approval policy', () => {
       // cindy_feishu_bot / cindy_telegram_bot 也在 trusted 表里, 但省略 toolName 时按次审批
       // (都带 call_api; 见下方专项用例)。
       'cindy_slack',
-      'cindy_scheduler',
+      // cindy_scheduler needs a known action; unnamed calls may be deletion.
       'cindy_memory',
       // worker → lead 回报通道:执行边界在工具内部 fail-closed, 逐次弹窗
       // 会让远端 daemon 等审批超时断链。
@@ -628,7 +666,7 @@ describe('cross-device actions use the task permission mode', () => {
     });
 
   it.each(['schedule_update', 'schedule_pause', 'schedule_resume', 'schedule_delete', 'schedule_run_now'])(
-    'reviews %s on another computer and keeps the local call quiet',
+    'reviews %s on another computer and preserves its local approval policy',
     (name) => {
       expect(scheduler(name, { id: 's1', device: 'mbp' })).toBe('prompt-each-time');
       // Codex 省略外层工具名、参数被序列化成字符串时判定不变。
@@ -643,8 +681,8 @@ describe('cross-device actions use the task permission mode', () => {
       // 写工具不接受 all；形状异常的 device 也不静默放行。
       expect(scheduler(name, { id: 's1', device: 'all' })).toBe('prompt-each-time');
       expect(scheduler(name, { id: 's1', device: 42 })).toBe('prompt-each-time');
-      expect(scheduler(name, { id: 's1' })).toBe('auto-approve');
-      expect(scheduler(name, { id: 's1', device: 'local' })).toBe('auto-approve');
+      expect(scheduler(name, { id: 's1' })).toBe(name === 'schedule_delete' ? 'prompt-each-time' : 'auto-approve');
+      expect(scheduler(name, { id: 's1', device: 'local' })).toBe(name === 'schedule_delete' ? 'prompt-each-time' : 'auto-approve');
     },
   );
 

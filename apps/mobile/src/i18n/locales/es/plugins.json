@@ -132,6 +132,9 @@
   "detail": {
     "useItIn": "Úselo en",
     "openPlugin": "Abrir complemento",
+    "readme": "Acerca de",
+    "readmeLoadFailed": "No se pudo cargar la presentación. Inténtalo de nuevo.",
+    "readmeUnavailable": "No hay presentación disponible.",
     "computerSettings": "Para configurar este complemento, abra sus detalles en Cindy → Complementos en su computadora.",
     "runtimeIssue": "El complemento se detuvo inesperadamente. Intente abrirlo nuevamente o usarlo en una tarea.",
     "runtimeFused": "El complemento se detuvo después de repetidos fallos. Apágalo y enciéndelo para volver a intentarlo.",

@@ -352,6 +352,12 @@ describe('settings discoverability regressions', () => {
 });
 
 describe('settings search catalog', () => {
+  // PR #9055 CI regression: discover the dynamic MCP notice even before a group is mounted.
+  it('finds MCP duplicate choices and resolves their notice anchor', () => {
+    const matches = searchSettings(buildSettingsSearchDocuments(t, ['builtin-tools']), 'MCP');
+    expect(matches.some(match => match.entry.id === 'mcp.duplicates')).toBe(true);
+    expect(resolveSettingsSearchTarget('builtin-tools', 'mcp.duplicates')).toBe('settings-mcp-duplicates');
+  });
   it('normalizes mixed-width and repeated whitespace', () => {
     expect(normalizeSettingsSearchText('  Ａppearance\u00a0  ')).toBe('appearance');
   });
@@ -515,6 +521,7 @@ describe('settings search catalog', () => {
       expect(visible).toContain('imBot.cindy');
       expect(visible).toContain('imBot.cindy.telegram');
       expect(visible).toContain('imBot.cindy.x');
+      expect(visible).toContain('imBot.cindy.feishu');
       expect(visible).toContain('imBot.discord');
       expect(visible).toContain('imBot.telegram');
       expect(visible).toContain('imBot.feishu');

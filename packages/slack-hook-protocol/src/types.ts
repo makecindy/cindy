@@ -230,6 +230,8 @@ export const HOOK_MESSAGE_TYPES = [
   'provider.bind.start',
   'provider.bind.cancel',
   'provider.bind.revoke',
+  'provider.bind.select',
+  'provider.bind.selection',
   'provider.bind.update',
   'provider.bind.state',
   'query.request',
@@ -860,7 +862,7 @@ export interface BindStatePayload {
  * capability — an old peer that does not know the new id never negotiates it,
  * and its parse rejects stray frames without dropping the connection.
  */
-export const HOOK_PROVIDERS = ['slack', 'telegram', 'x'] as const;
+export const HOOK_PROVIDERS = ['slack', 'telegram', 'x', 'feishu'] as const;
 export type HookProvider = (typeof HOOK_PROVIDERS)[number];
 
 /**
@@ -884,6 +886,8 @@ export type ProviderBindState = (typeof PROVIDER_BIND_STATES)[number];
 export const PROVIDER_BIND_ACTIONS = [
   'open_connect_url',
   'copy_connect_url',
+  'copy_bind_code',
+  'select_device',
   'cancel',
   'retry',
   'revoke',
@@ -915,6 +919,13 @@ export interface ProviderBindRevokePayload {
   bindingId: string;
 }
 
+export const PROVIDER_BIND_SELECT_TIMEOUT_MS = 10_000;
+
+/** Select this confirmed binding as the working device; requires the select_device action. */
+export type ProviderBindSelectPayload = ProviderBindRevokePayload;
+/** Acknowledges only the requested selection; does not change any device’s binding state. */
+export interface ProviderBindSelectionPayload extends ProviderBindRevokePayload { ok: boolean }
+
 /**
  * Shared payload for provider.bind.update and provider.bind.state. update is an
  * event/reply; state is an authoritative point-in-time snapshot for one scope.
@@ -933,6 +944,13 @@ export interface ProviderBindStatusPayload {
   scopeName: string | null;
   /** One-time provider deep link; present only while state=pending. */
   connectUrl: string | null;
+  /**
+   * One-time short code the user can send to the provider bot instead of
+   * opening connectUrl (Feishu / Lark fallback when web authorization is
+   * unavailable, e.g. users outside the app's tenant). Present only while
+   * state=pending; omitted by peers that predate the field.
+   */
+  bindCode?: string | null;
   /** Unix milliseconds; required for pending/awaiting_confirmation attempts. */
   expiresAt: number | null;
   /** Stable machine-readable reason; required for unsuccessful terminal states. */
@@ -966,6 +984,12 @@ export interface QueryRequestPayload {
     options?: TaskDispatchOptions;
     source?: TaskSource;
   };
+  /**
+   * 收件身份: 由多个组织共用的服务(官方飞书)发出的查询代表哪个 IM 应用(`scopeId`)的哪个账号
+   * (`principalId`)。桌面端与本机已确认绑定的 `scopeId` / `principalId` 核对一致才回答。可选 ——
+   * 其它服务不发, 旧桌面端忽略。
+   */
+  recipient?: { scopeId: string; principalId: string };
 }
 
 /**
@@ -1383,6 +1407,9 @@ export const HOOK_FEATURE_PROVIDER_TELEGRAM = 'provider:telegram';
 
 /** Server capability announcing that its provider registry enables X (Twitter). */
 export const HOOK_FEATURE_PROVIDER_X = 'provider:x';
+
+/** Server capability announcing that its provider registry enables Feishu / Lark. */
+export const HOOK_FEATURE_PROVIDER_FEISHU = 'provider:feishu';
 
 /**
  * server 支持 hello.lifecycleAnnouncement 与 lifecycle.preference,可由
@@ -1969,6 +1996,8 @@ export type HookProviderBindRevokeMessage = HookEnvelope<
   'provider.bind.revoke',
   ProviderBindRevokePayload
 >;
+export type HookProviderBindSelectMessage = HookEnvelope<'provider.bind.select', ProviderBindSelectPayload>;
+export type HookProviderBindSelectionMessage = HookEnvelope<'provider.bind.selection', ProviderBindSelectionPayload>;
 export type HookProviderBindUpdateMessage = HookEnvelope<
   'provider.bind.update',
   ProviderBindUpdatePayload
@@ -2047,6 +2076,8 @@ export type HookMessage =
   | HookProviderBindStartMessage
   | HookProviderBindCancelMessage
   | HookProviderBindRevokeMessage
+  | HookProviderBindSelectMessage
+  | HookProviderBindSelectionMessage
   | HookProviderBindUpdateMessage
   | HookProviderBindStateMessage
   | HookProviderPrefsGetMessage

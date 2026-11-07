@@ -30,6 +30,8 @@ import { readTaskResultsForReply } from './botTaskReplyResults.js';
  * 事件循环。调用方需保证"先 broadcastToAllWindows 再让本模块入队落库"。
  */
 
+import { parseOutputLimitDetails, type OutputLimitDetails } from '@cindy/maker-shared';
+
 import { createId } from '@paralleldrive/cuid2';
 import { assistantSamplingSettlements, type PendingSamplingSettlement } from './assistantSamplingSettlement.js';
 
@@ -2876,7 +2878,7 @@ function lookupTurnErrorPersistId(
 export function reserveTurnErrorPersistId(
   sessionId: string,
   data:
-    | { message?: unknown; reason?: unknown; sdkError?: unknown; toolLoop?: unknown }
+    | { message?: unknown; reason?: unknown; sdkError?: unknown; toolLoop?: unknown; outputLimit?: unknown }
     | null
     | undefined,
   agentMeta: AgentMeta | null = null,
@@ -2915,7 +2917,7 @@ export function whenTurnErrorPersisted(sessionId: string, persistId: string): Pr
 export function onTurnErrorEvent(
   sessionId: string,
   data:
-    | { message?: unknown; reason?: unknown; sdkError?: unknown; toolLoop?: unknown }
+    | { message?: unknown; reason?: unknown; sdkError?: unknown; toolLoop?: unknown; outputLimit?: unknown }
     | null
     | undefined,
   agentMeta: AgentMeta | null = null,
@@ -2985,7 +2987,7 @@ export function onTurnErrorEvent(
 /** error 行 content：{ message, reason?, sdkError?, toolLoop?, providerId? }，在入队前同步取值。 */
 function buildTurnErrorContent(
   sessionId: string,
-  data: { reason?: unknown; sdkError?: unknown; toolLoop?: unknown } | null | undefined,
+  data: { reason?: unknown; sdkError?: unknown; toolLoop?: unknown; outputLimit?: unknown } | null | undefined,
   message: string,
 ): Record<string, unknown> {
   const content: Record<string, unknown> = { message };
@@ -2994,7 +2996,9 @@ function buildTurnErrorContent(
     content.sdkError = redactSensitiveText(data.sdkError);
   }
   const toolLoop = parseToolLoopErrorDetails(data?.toolLoop);
+  const outputLimit = parseOutputLimitDetails(data?.outputLimit);
   if (toolLoop) content.toolLoop = toolLoop satisfies ToolLoopErrorDetails;
+  if (outputLimit) content.outputLimit = outputLimit satisfies OutputLimitDetails;
   // 错误来源 provider 的**同步**快照(session-provider-store 内存态):错误分类必须
   // 绑定到错误发生时的 provider —— session.providerId 可在任务中途切换并持久化,
   // 恢复历史错误时用它会把别家 provider 的 insufficient_quota 误判成 Cindy AI 余额
@@ -3105,7 +3109,7 @@ export interface DeferredTurnErrorRow {
 export function captureDeferredTurnError(
   sessionId: string,
   data:
-    | { message?: unknown; reason?: unknown; sdkError?: unknown; toolLoop?: unknown }
+    | { message?: unknown; reason?: unknown; sdkError?: unknown; toolLoop?: unknown; outputLimit?: unknown }
     | null
     | undefined,
   agentMeta: AgentMeta | null = null,

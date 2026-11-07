@@ -1,7 +1,7 @@
 import { describe, it, expect, vi } from 'vitest';
 vi.mock('../cardStoreDb.js', () => ({ getGhostCard: vi.fn(), upsertGhostCard: vi.fn() }));
 vi.mock('../../device-link/broadcast-tap.js', () => ({ captureDataOwnerBroadcastScope: vi.fn(), isDataOwnerBroadcastScopeCurrent: vi.fn(), tapWindowBroadcast: vi.fn(), getSafeDataOwnerPushStamp: vi.fn() }));
-import { createPluginIdentityRemoteProvider, createGhostCardRemoteProvider, projectGhostCardBlocks, projectRichCardParts, projectGhostCardActions, persistGhostCardWithRemoteChange, findGhostForRemotePluginIdentity } from '../cardRemoteResource.js';
+import { createPluginIdentityRemoteProvider, createGhostCardRemoteProvider, projectGhostCardBlocks, projectRichCardParts, omitEndedPrOpenOnly, projectGhostCardActions, persistGhostCardWithRemoteChange, findGhostForRemotePluginIdentity } from '../cardRemoteResource.js';
 import { upsertGhostCard } from '../cardStoreDb.js';
 import { isDataOwnerBroadcastScopeCurrent, tapWindowBroadcast } from '../../device-link/broadcast-tap.js';
 import { buildAttachmentOssRef } from '@cindy/device-link';
@@ -130,6 +130,14 @@ describe('native mobile card actions', () => {
     expect(dispatch).toHaveBeenCalledWith('c', 'edit', 'Change it', 'page', 'art', 'phone', undefined);
     html = '<p>Changed</p>';
     await expect(provider.invoke!(context, base)).rejects.toThrow();
+    expect(dispatch).toHaveBeenCalledTimes(1);
+    // A card moved to a newer call: older phones keep its fallback text, newer phones get supersededBy
+    // to hide it, and none can press its buttons any more.
+    html = '<div data-cindy-superseded-by="new" hidden></div><p>Latest status is below</p><button data-ghost-action="edit">Edit</button>';
+    const moved = await provider.get!(context, { ...request, client: { protocolVersion: 1, primitives: ['plugin-card-actions'] } });
+    expect(moved.blocks?.[0].fallbackMarkdown).toContain('Latest status is below');
+    expect(moved.blocks?.find(b => b.primitive === 'plugin-card-actions')?.data).toMatchObject({ supersededBy: 'new', items: [] });
+    await expect(provider.invoke!(context, { ...base, input: { ...base.input, revision: moved.revision } })).rejects.toThrow();
     expect(dispatch).toHaveBeenCalledTimes(1);
   });
 });
@@ -310,5 +318,36 @@ describe('plugin-card-rich projection', () => {
       { id: 'prset:model', label: '指定模型（当前）', disabled: false },
       { id: 'prset:modelPick', label: '更换模型（当前：Opus）', disabled: false },
     ]);
+  });
+
+  // Rule (2026-11-06): parts that only hold while the PR is open leave the phone card once the title
+  // bar's status says merged, for older phones too. Minimal input: the same card, open vs merged.
+  it('drops open-only parts from every projection once the PR was merged', async () => {
+    const card = '<div><span data-ghost-pr-open-only="O/R#9">开放中</span>'
+      + '<div data-ghost-pr-open-only="O/R#9"><button data-ghost-action="pr:stop" aria-label="停止跟进"></button>'
+      + '<div data-ghost-live-label="跟进中">跟进中</div></div><p>tail</p></div>';
+    const projected = async (state: 'open' | 'merged', primitives: string[]) => {
+      const lookup = vi.fn(async () => ({ ok: true, owner: 'o', repo: 'r', prNumber: 9, status: state, title: '', htmlUrl: '', branch: '' }) as never);
+      const resource = await createGhostCardRemoteProvider({
+        readCard: async () => ({ sessionId: 's', callId: 'c', ghostId: 'github', html: card, v: 2, height: 100 }),
+        authorize: async () => {}, captureScope: () => () => true, prStatus: lookup,
+        interactions: { externalLinks: () => true, dispatch: vi.fn(async () => true) },
+      }).get!(context, { ...request, client: { protocolVersion: 1, primitives } });
+      const data = resource.blocks?.find(block => block.id === 'actions')?.data as Record<string, unknown>;
+      return { text: resource.blocks?.find(block => block.id === 'text')?.fallbackMarkdown, items: data.items, live: data.live, lookups: lookup.mock.calls.length };
+    };
+    const rich = ['plugin-card-actions', 'plugin-card-forms', 'plugin-card-rich'];
+    expect(await projected('open', rich)).toMatchObject({ text: '开放中\n\ntail', live: '跟进中', items: [{ id: 'pr:stop' }] });
+    expect(await projected('merged', rich)).toMatchObject({ text: 'tail', live: undefined, items: [], lookups: 1 });
+    expect(await projected('merged', ['plugin-card-actions'])).toMatchObject({ text: 'tail', items: [] });
+  });
+
+  // Review (Greptile P2 on #9022): markedElements returns only outermost matches, so a mark for an
+  // ended PR nested inside a mark for an open one stayed on the phone. Minimal input: B inside A (unit).
+  it('also drops a nested open-only part whose own PR ended', async () => {
+    const html = '<div data-ghost-pr-open-only="o/r#1">one<div data-ghost-pr-open-only="o/r#2">two</div> end1</div><p>tail</p>';
+    const ended = async (key: string) => key === 'o/r#2';
+    expect(await omitEndedPrOpenOnly(html, ended)).toBe('<div data-ghost-pr-open-only="o/r#1">one end1</div><p>tail</p>');
+    expect(await omitEndedPrOpenOnly(html, async () => true)).toBe('<p>tail</p>');
   });
 });

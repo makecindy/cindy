@@ -17,6 +17,7 @@ import { getCurrentDbClientSnapshot } from '../localDb/client/current.js';
 import { messages, sessions } from '../localDb/schema.js';
 import { createMessage, broadcastMessageRow } from '../localDb/ipc/messages.js';
 import { messageToCamel } from '../localDb/mapper.js';
+import { recomputePrRefsForSession } from '../git-context/prRefsStore.js';
 import { captureDataOwnerBroadcastScope } from '../device-link/broadcast-tap.js';
 import { throwIpcError } from '../utils/ipcValidate.js';
 import { createLogger } from '../logger.js';
@@ -159,6 +160,10 @@ export function registerMcpAppsIpc(
           .returning();
         if (currentOwner() !== owner || !updated[0]) throw new Error('MCP_APP_CARD_UNAVAILABLE');
         broadcastMessageRow(sessionId, messageToCamel(updated[0]), scope);
+        await recomputePrRefsForSession(sessionId, {
+          dbClient: owner.client,
+          isCurrent: () => currentOwner() === owner,
+        });
       } else {
         // Only the pending card may be inserted. Completion cannot resurrect a deleted grant.
         if (record.result !== undefined || record.cancelled !== undefined)

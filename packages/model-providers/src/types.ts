@@ -219,6 +219,8 @@ export interface RoutingDescriptor {
   requestPath?: string;
   /** 鉴权策略（见 AuthStrategy）。 */
   authStrategy: AuthStrategy;
+  /** Enterprise BYOK API-key routes force Cindy's Codex originator, including resumed threads. */
+  forceCindyCodexOriginator?: boolean;
   /**
    * 配置保留用于展示/修复，但运行时不得向该上游路由。用于把升级前不再满足安全边界的
    * 历史配置留在设置页，同时让所有路由解析 fail closed。

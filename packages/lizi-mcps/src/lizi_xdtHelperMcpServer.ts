@@ -443,7 +443,7 @@ function registerStartSessionTaskEntry(
         effort: z.string().max(64).optional(),
         fast_mode: z.union([z.boolean(), z.literal('ultrafast')]).optional(),
       }).strict().optional(),
-      instruction: z.string().min(1).max(12_000).describe('Task instruction. When a teammate delegates the user’s request, the host separately preserves verified original words. Add only necessary context; keep the user’s intent and scope.'),
+      instruction: z.string().min(1).max(12_000).describe('Task instruction, delivered as written. When it carries the user’s request, the host first checks it stays within what the user asked (Auto refuses one that does not), and the task then works from this text. State the work and needed context; keep the user’s intent and scope.'),
       title: z.string().min(1).max(120).optional().describe('Short task title; omitted uses the instruction first line.'),
       project_path: z.string().trim().min(1).max(4096).nullable().optional().describe('Omit to inherit source membership; pass an existing visible local project path to select it; null explicitly creates a projectless task. Independent of working_dir.'),
       working_dir: z.string().min(1).max(1_024).optional(),

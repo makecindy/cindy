@@ -67,6 +67,7 @@ import type {
   ReasoningSummaryPartAddedNotification,
   ReasoningTextDeltaNotification,
   AccountRateLimitsUpdatedNotification,
+  CodexErrorInfo,
 } from './app-server/protocol.js';
 
 // ── 共享 runtime 状态 ────────────────────────────────────────────────────────
@@ -402,10 +403,11 @@ const SAMPLING_ACCEPTED_TOOL_TYPES = new Set([
   'commandExecution', 'mcpToolCall', 'dynamicToolCall', 'collabAgentToolCall', 'fileChange',
 ]);
 
-function isSamplingStreamFailure(error: ClassifiedCodexError): boolean {
-  return error.errorInfoTag === 'responseStreamDisconnected' ||
-    error.errorInfoTag === 'responseTooManyFailedAttempts' ||
-    /stream disconnected|retrying sampling request|stream ended before.*response\.completed/i.test(error.message);
+function isSamplingStreamFailure(error: CodexErrorInput | null | undefined): boolean {
+  const tag = codexErrorInfoTag(error?.codexErrorInfo);
+  return tag === 'responseStreamDisconnected' ||
+    tag === 'responseTooManyFailedAttempts' ||
+    /stream disconnected|retrying sampling request|stream ended before.*response\.completed/i.test(error?.message ?? '');
 }
 
 function samplingSegment(rt: CodexRuntimeState, threadId: string, turnId: string) {
@@ -436,7 +438,7 @@ export function finishCodexSamplingTurn(
   const key = JSON.stringify([threadId, turnId]);
   const segment = rt.samplingSegments.get(key);
   const failure = status !== 'completed' && segment &&
-    (segment.attempt > 1 || (error && isSamplingStreamFailure(classifyCodexError(error))))
+    (segment.attempt > 1 || isSamplingStreamFailure(error))
     ? failSamplingSegment(rt, threadId, turnId) : undefined;
   rt.samplingSegments.delete(key);
   return failure;
@@ -594,17 +596,71 @@ export interface ClassifiedCodexError {
   data: Record<string, unknown> & { message: string };
 }
 
+type CodexErrorInput = {
+  message?: string;
+  additionalDetails?: unknown;
+  codexErrorInfo?: CodexErrorInfo | null;
+};
+
+export const CODEX_MODEL_UNAVAILABLE_REASON = 'model_unavailable';
+export const CODEX_MODEL_UNAVAILABLE_MESSAGE =
+  '[MODEL_SELECTION_UNAVAILABLE] The selected model is unavailable for this connection. Choose another available model and retry.';
+
+function hasModelRejection(text: string): boolean {
+  if (/\bThe '[^'\r\n]{1,128}' model is not supported when using Codex with a ChatGPT account\b/i.test(text)) return true;
+  const start = text.indexOf('{');
+  const end = text.lastIndexOf('}');
+  if (start < 0 || end < start) return false;
+  try {
+    const body = JSON.parse(text.slice(start, end + 1)) as { code?: unknown; error?: { code?: unknown } } | null;
+    return body?.error?.code === 'model_not_found' || body?.code === 'model_not_found';
+  } catch {
+    return false;
+  }
+}
+
+/** Require an explicit model rejection. A generic reconnect or HTTP 404 is ambiguous. */
+export function isCodexModelUnavailableError(error: CodexErrorInput | null | undefined): boolean {
+  const message = typeof error?.message === 'string' ? error.message.slice(0, 8192) : '';
+  const details = typeof error?.additionalDetails === 'string' ? error.additionalDetails.slice(0, 8192) : '';
+  if (!hasModelRejection(message) && !hasModelRejection(details)) return false;
+
+  const info = error?.codexErrorInfo;
+  const tag = codexErrorInfoTag(info);
+  if (tag === 'unauthorized' || tag === 'usageLimitExceeded' || tag === 'sessionBudgetExceeded'
+    || tag === 'serverOverloaded' || tag === 'internalServerError'
+    || tag === 'contextWindowExceeded' || tag === 'cyberPolicy') return false;
+  const httpInfo: { httpStatusCode?: number | null } | undefined =
+    info && typeof info === 'object' && (tag === 'httpConnectionFailed' ||
+      tag === 'responseStreamConnectionFailed' || tag === 'responseStreamDisconnected' ||
+      tag === 'responseTooManyFailedAttempts') ? Object.values(info)[0] : undefined;
+  const textStatus = /\b(?:HTTP(?:\/\d(?:\.\d)?)?(?:\s+status)?|(?:unexpected|last)\s+status(?:\s+code)?)\s*:?\s*(\d{3})\b/i;
+  const match = textStatus.exec(message) ?? textStatus.exec(details);
+  const status = httpInfo?.httpStatusCode ?? (match ? Number(match[1]) : undefined);
+  return status === undefined || status === 400 || status === 404;
+}
+
 /**
  * ErrorNotification 与 turn/completed.turn.error 共用的结构化分类。
  * 默认只消费 Codex wire schema 的 message + codexErrorInfo；stderr 不参与判定。
- * 唯一例外：远端 compact 密文 400 会把 `additionalDetails` 拼进 classify 文本，
- * 因为用户形态经常是 message=`Error running remote compact task`、code 在 details 里。
+ * 模型拒绝和远端 compact 密文 400 也识别 additionalDetails 中明确的错误信号。
  */
-export function classifyCodexError(error: {
-  message?: string;
-  additionalDetails?: unknown;
-  codexErrorInfo?: import('./app-server/protocol.js').CodexErrorInfo | null;
-} | null | undefined): ClassifiedCodexError {
+export function classifyCodexError(error: CodexErrorInput | null | undefined): ClassifiedCodexError {
+  const errorInfoTag = codexErrorInfoTag(error?.codexErrorInfo);
+  if (isCodexModelUnavailableError(error)) {
+    return {
+      message: CODEX_MODEL_UNAVAILABLE_MESSAGE,
+      ...(errorInfoTag !== undefined ? { errorInfoTag } : {}),
+      usageLimit: false,
+      isCapacityError: false,
+      reason: CODEX_MODEL_UNAVAILABLE_REASON,
+      data: {
+        message: CODEX_MODEL_UNAVAILABLE_MESSAGE,
+        reason: CODEX_MODEL_UNAVAILABLE_REASON,
+        ...(errorInfoTag !== undefined ? { codexErrorInfo: errorInfoTag } : {}),
+      },
+    };
+  }
   const rawMessage = error?.message ?? 'codex error';
   const hasMissingBearer = /\bMissing bearer\b/i.test(rawMessage);
   const hasAuthErrorMarker =
@@ -615,7 +671,6 @@ export function classifyCodexError(error: {
   const signals = extractNonSecretErrorSignals(rawMessage);
   const errorStatus =
     signals.errorStatus ?? (hasMissingBearer || hasAuthErrorMarker ? 401 : undefined);
-  const errorInfoTag = codexErrorInfoTag(error?.codexErrorInfo);
   const overload = parseOverloadError(message, signals.errorStatus, errorInfoTag);
   const isCapacityError = overload?.kind === 'capacity';
   // 过载文案常顺带一句 rate limit exceeded（如 Kimi 的 `rate limit exceeded: The
@@ -661,7 +716,7 @@ export function translateErrorNotification(
   const isCapacityError = classified.isCapacityError;
   const safeErrorData = classified.data;
   const segment = ctx.rt.samplingSegments.get(JSON.stringify([params.threadId, params.turnId]));
-  const streamFailed = isSamplingStreamFailure(classified) || (!params.willRetry && (segment?.attempt ?? 1) > 1);
+  const streamFailed = isSamplingStreamFailure(params.error) || (!params.willRetry && (segment?.attempt ?? 1) > 1);
   const assistantAttemptFailure = streamFailed
     ? failSamplingSegment(ctx.rt, params.threadId, params.turnId) : undefined;
   if (assistantAttemptFailure) {
