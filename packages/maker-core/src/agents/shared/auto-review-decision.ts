@@ -79,7 +79,7 @@ export function createAutoReviewUnavailableNotice(
     notify(reason?: string): void {
       if (sent) return;
       sent = true;
-      const detail = reason?.trim().slice(0, MAX_AUTO_REVIEW_REASON_CHARS);
+      const detail = unavailableDetail(reason);
       emit(`[${AUTO_REVIEW_UNAVAILABLE_CODE}] ${detail ?? AUTO_REVIEW_UNAVAILABLE_FALLBACK_TEXT}`);
     },
     reset(): void {
@@ -224,7 +224,7 @@ export function annotatePermissionRequestForUnavailableReview<
     metadata?: Record<string, unknown>;
   },
 >(req: T, reason?: string): T {
-  const detail = reason?.trim().slice(0, MAX_AUTO_REVIEW_REASON_CHARS);
+  const detail = unavailableDetail(reason);
   return {
     ...req,
     description: detail
@@ -354,6 +354,19 @@ export function toolAutoReviewAction(
 
 export { MAX_AUTO_REVIEW_ACTION_TEXT_CHARS } from './auto-review.js';
 const MAX_AUTO_REVIEW_REASON_CHARS = 240;
+
+/**
+ * 审阅器整体没跑起来（超时/抛错/返回非法）时的通用原因。它与确认卡兜底文案
+ * `AUTO_REVIEW_UNAVAILABLE_PROMPT_TEXT` 同义，所以不能当作「额外细节」再拼一遍。
+ */
+const AUTO_REVIEW_UNAVAILABLE_GENERIC_REASON =
+  'Automatic review could not complete, so this action needs your confirmation.';
+
+/** 只有真正带了新信息的原因才值得露出来；复述兜底文案的原因一律丢弃。 */
+function unavailableDetail(reason: string | undefined): string | undefined {
+  const detail = typeof reason === 'string' ? reason.trim().slice(0, MAX_AUTO_REVIEW_REASON_CHARS) : '';
+  return detail && detail !== AUTO_REVIEW_UNAVAILABLE_GENERIC_REASON ? detail : undefined;
+}
 /**
  * Auto-review is deliberately bounded: a reviewer outage must still resolve the
  * gray action instead of hanging the tool callback. Keep the host request
@@ -602,7 +615,7 @@ export async function resolveAutoReviewDecision(
   // 与「模型判定危险」不同,这是审阅器本身没跑起来 —— 交给用户确认,而不是替他拒绝。
   return {
     verdict: 'ask',
-    reason: 'Automatic review could not complete, so this action needs your confirmation.',
+    reason: AUTO_REVIEW_UNAVAILABLE_GENERIC_REASON,
     unavailable: true,
   };
 }
