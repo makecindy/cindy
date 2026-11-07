@@ -6,6 +6,7 @@ const USER_DATA_PATHS = [
   ['ghost-fs', ''],
   ['libraries', ''],
   ['library-staging', ''],
+  ['ghost-handoff', ''],
   ['plugin-downloads', ''],
 ] as const;
 

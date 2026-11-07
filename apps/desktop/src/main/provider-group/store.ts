@@ -102,6 +102,18 @@ export function listProviderGroups(): Record<string, ProviderGroupConfig> {
   return store.read().groups;
 }
 
+const groupChangeListeners = new Set<(providerId: string) => void>();
+export function onProviderGroupChanged(listener: (providerId: string) => void): () => void {
+  groupChangeListeners.add(listener);
+  return () => { groupChangeListeners.delete(listener); };
+}
+function notifyProviderGroupChanged(providerId: string): void {
+  for (const listener of groupChangeListeners) {
+    try { listener(providerId); }
+    catch (error) { log.warn('provider group change listener failed', { error: String(error) }); }
+  }
+}
+
 /** 写入一个供应商的组；config 校正后没有组内电脑即删除这个组。返回落盘后的值。 */
 export async function writeProviderGroup(
   providerId: string,
@@ -142,6 +154,7 @@ export async function writeProviderGroup(
     return { groups, reshareCleanups, bindingCleanups };
   }));
   assertCurrent();
+  notifyProviderGroupChanged(providerId);
   return next.groups[providerId] ?? null;
 }
 
@@ -185,6 +198,7 @@ export async function updateProviderGroup(
     }
     return { groups, reshareCleanups };
   });
+  notifyProviderGroupChanged(providerId);
   return next.groups[providerId] ?? null;
 }
 

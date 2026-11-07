@@ -165,6 +165,26 @@ export class BrowserBackendHealthService {
 
   private async probe(ensureHost = false): Promise<BrowserBackendHealth> {
     const active = this.controller.getCurrentBackendKind();
+    // The user's own browser is reached through the plugin-owned extension
+    // bridge: health is "an extension is connected" and nothing here can
+    // rebuild that connection, so recovery is never offered.
+    if (active === 'user-browser') {
+      try {
+        const status = await this.controller.call({ action: 'status' });
+        const data = status.data as { connected?: unknown; configured?: unknown } | undefined;
+        if (status.ok && data?.connected === true) return { active, status: 'ready', canRecover: false };
+        // No plugin provides page control (not installed or disabled) vs. plugin ready but no extension yet.
+        return {
+          active,
+          status: 'error',
+          canRecover: false,
+          reason: status.ok && data?.configured === false ? 'plugin-missing' : 'extension-disconnected',
+        };
+      } catch (err) {
+        this.logger.warn('user browser status probe failed', { err });
+        return { active, status: 'error', canRecover: false, reason: 'extension-disconnected' };
+      }
+    }
     // External Chrome has a separate availability/recovery UI. This contract
     // intentionally verifies only the embedded bridge.
     if (active !== 'rsb-webview') {

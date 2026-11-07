@@ -5,7 +5,7 @@
     "official": "{{appName}} 官方中繼",
     "switchToOfficial": "切回官方中繼",
     "officialHint": "裝置之間經 {{appName}} 官方中繼連線。要改用自建中繼，在中繼所在的電腦上顯示加入 QR 碼，用手機相機掃描加入。",
-    "selfHostedHint": "裝置之間經自建中繼 {{address}} 連線；登入、模型等仍使用 {{appName}} 官方服務。",
+    "selfHostedHint": "裝置之間經自建中繼 {{address}} 連線；登入、模型和共享任務等仍使用 {{appName}} 官方服務。",
     "removedHint": "這臺手機已被移出中繼，或中繼已停用。可以切回官方中繼，或在電腦上重新加入。",
     "credentialMissingHint": "這臺手機上找不到中繼憑證。請在電腦上重新加入，或切回官方中繼。",
     "confirmTitle": "切回官方中繼？",
@@ -21,7 +21,7 @@
   "join": {
     "title": "加入中繼",
     "checking": "正在連線中繼…",
-    "body": "加入後，這臺手機經這個中繼連線你的電腦；登入、模型等仍使用 {{appName}} 官方服務。使用自建中繼時，這臺手機收不到電腦上的任務通知。",
+    "body": "加入後，這臺手機經這個中繼連線你的電腦；登入、模型和共享任務等仍使用 {{appName}} 官方服務。使用自建中繼時，這臺手機收不到電腦上的任務通知。",
     "switchNote": "加入後會從「{{current}}」切換到這個中繼。",
     "action": "加入",
     "pairingCodeLabel": "配對碼",

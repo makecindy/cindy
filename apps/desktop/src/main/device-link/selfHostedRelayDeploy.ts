@@ -20,7 +20,7 @@ import type { RemoteHost } from '@cindy/maker-remote-ssh';
 import { RELAY_VERSION } from '@cindy/device-link-relay';
 import { createLogger } from '../logger.js';
 import { ensureRemoteHostReady, getRemoteSshPool } from '../remote-ssh/index.js';
-import type { RelayDeployErrorCode, RelayDeployStep } from '../../shared/selfHostedRelay.js';
+import type { RelayDeployErrorCode, RelayDeployProgressMessage, RelayDeployStep } from '../../shared/selfHostedRelay.js';
 
 const log = createLogger('self-hosted-relay:deploy');
 
@@ -67,8 +67,18 @@ export interface DeployParams {
   /** 国内网络:先试镜像再试官方源。 */
   preferMirror: boolean;
   onStep(step: RelayDeployStep): void;
+  onProgress?(message: RelayDeployProgressMessage): void;
   /** 每次继续 SSH 操作前核对发起账号,避免连接等待期间换账号后取到另一份主机配置。 */
   assertCurrent?(): void;
+  /** 检查通过、第一次改动服务器之前调用:调用方此时才保存部署记录与主人身份。 */
+  onServerChange?(): void;
+}
+
+/** 只读检查的结论;检查不通过时抛出 RelayDeployError。 */
+export interface RelayServerCheck {
+  system: string;
+  plan: 'direct' | 'nginx';
+  existing: 'none' | 'mine' | 'other';
 }
 
 function shellQuote(value: string): string {
@@ -123,14 +133,61 @@ class Remote {
   ) {}
 
   /** 以 root 运行一段脚本;参数逐个转义,脚本经 `bash -c` 传入,stdin 留给上传。 */
-  async root(script: string, args: string[], options: { timeoutMs?: number; label: string; input?: Buffer }) {
+  async root(script: string, args: string[], options: { timeoutMs?: number; label: string; input?: Buffer; onProgress?: (message: RelayDeployProgressMessage) => void }) {
     this.assertCurrent();
     if (!this.privilege) throw new Error('privilege not determined');
     const command = `bash -c ${shellQuote(script)} cindy-relay ${args.map(shellQuote).join(' ')}`;
-    return this.host.exec(this.privilege === 'root' ? command : `sudo -n ${command}`, {
+    const privilegedCommand = this.privilege === 'root' ? command : `sudo -n ${command}`;
+    if (options.onProgress) return this.runtimeWithProgress(privilegedCommand, options.timeoutMs ?? 120_000, options.onProgress);
+    return this.host.exec(privilegedCommand, {
       timeoutMs: options.timeoutMs ?? 120_000,
       label: options.label,
       input: options.input,
+    });
+  }
+
+  /** 下载时边读边回报受控标记；原始输出只保留有界尾部用于现有错误判定。 */
+  private async runtimeWithProgress(command: string, timeoutMs: number, onProgress: (message: RelayDeployProgressMessage) => void) {
+    const stream = await this.host.execStream(command, { timeoutMs: Math.min(timeoutMs, 60_000) });
+    try { this.assertCurrent(); } catch (error) { stream.kill(); throw error; }
+    return new Promise<{ stdout: string; stderr: string; exitCode: number | null }>((resolve, reject) => {
+      let stdout = '';
+      let stderr = '';
+      let line = '';
+      let settled = false;
+      const off: Array<() => void> = [];
+      const cleanup = () => { clearTimeout(timer); off.forEach(unsubscribe => unsubscribe()); };
+      const fail = (error: Error) => {
+        if (settled) return;
+        settled = true;
+        cleanup();
+        stream.kill();
+        reject(new RelayDeployError('DOWNLOAD_FAILED', error.message.slice(0, 300)));
+      };
+      const timer = setTimeout(() => fail(new Error('runtime download timed out')), timeoutMs);
+      off.push(stream.onStdout(chunk => {
+        stdout = (stdout + chunk).slice(-65_536);
+        // 逐字符收行，防止远端无换行输出让解析缓冲无限增长。仅识别本脚本生成的事件。
+        for (const char of chunk) {
+          if (char === '\n') {
+            const match = /^PROGRESS (runtime-cached|runtime-download|runtime-fallback|runtime-checksum|runtime-extract)\r?$/.exec(line);
+            line = '';
+            if (match) {
+              try { onProgress(match[1] as RelayDeployProgressMessage); }
+              catch (error) { fail(error instanceof Error ? error : new Error('deployment progress failed')); return; }
+            }
+          } else if (line.length < 256) line += char;
+        }
+      }));
+      off.push(stream.onStderr(chunk => { stderr = (stderr + chunk).slice(-65_536); }));
+      off.push(stream.onError(fail));
+      off.push(stream.onClose(({ code }) => {
+        if (settled) return;
+        settled = true;
+        cleanup();
+        resolve({ stdout, stderr, exitCode: code });
+      }));
+      stream.end();
     });
   }
 
@@ -166,6 +223,7 @@ else echo "ROOT none"; fi
 if command -v systemctl >/dev/null 2>&1 && [ -d /run/systemd/system ]; then echo "SYSTEMD yes"; else echo "SYSTEMD no"; fi
 if [ -f /proc/net/if_inet6 ]; then echo "IPV6 yes"; else echo "IPV6 no"; fi
 if command -v curl >/dev/null 2>&1 || command -v wget >/dev/null 2>&1; then echo "FETCH yes"; else echo "FETCH no"; fi
+echo "DISTRO $( . /etc/os-release 2>/dev/null; echo "$PRETTY_NAME")"
 `;
 
 const INSPECT_SCRIPT = `
@@ -183,7 +241,11 @@ if command -v ss >/dev/null 2>&1; then
   ss -Hltnp 2>/dev/null | awk '{print $4" "$6}' | while read -r addr proc; do
     port="\${addr##*:}"
     if [ "$port" = 80 ] || [ "$port" = 443 ]; then
-      case "$proc" in *"pid=$OWN,"*) ;; *) echo "BUSY $port $(echo "$proc" | sed -n 's/.*(("\\([^"]*\\)".*/\\1/p')";; esac
+      case "$proc" in
+        *"pid=$OWN,"*) ;;
+        *docker-proxy*) echo "BUSY $port docker:$(docker ps --filter "publish=$port" --format '{{.Names}}' 2>/dev/null | head -n 3 | tr '\\n' ',')";;
+        *) echo "BUSY $port $(echo "$proc" | sed -n 's/.*(("\\([^"]*\\)".*/\\1/p')";;
+      esac
     fi
   done
 fi
@@ -193,20 +255,25 @@ const RUNTIME_SCRIPT = `
 set -e
 VERSION="$1"; SHA="$2"; URL_A="$3"; URL_B="$4"
 NODE_DIR=${INSTALL_DIR}/node
-if [ -x "$NODE_DIR/bin/node" ] && [ "$("$NODE_DIR/bin/node" --version 2>/dev/null)" = "v$VERSION" ]; then echo "NODE_READY cached"; exit 0; fi
+if [ -x "$NODE_DIR/bin/node" ] && [ "$("$NODE_DIR/bin/node" --version 2>/dev/null)" = "v$VERSION" ]; then echo "PROGRESS runtime-cached"; echo "NODE_READY cached"; exit 0; fi
 TMP=$(mktemp -d); trap 'rm -rf "$TMP"' EXIT
-ok=""
+ok=""; attempted=""
 for url in "$URL_A" "$URL_B"; do
+  if [ -n "$attempted" ]; then echo "PROGRESS runtime-fallback"; fi
+  attempted=1
+  echo "PROGRESS runtime-download"
   if command -v curl >/dev/null 2>&1; then
     curl -fsSL --retry 2 --retry-delay 2 --connect-timeout 15 --max-time 900 -o "$TMP/node.tgz" "$url" || continue
   else
     wget -q -t 3 -T 30 -O "$TMP/node.tgz" "$url" || continue
   fi
+  echo "PROGRESS runtime-checksum"
   if [ "$(sha256sum "$TMP/node.tgz" | cut -d' ' -f1)" = "$SHA" ]; then ok=1; break; fi
   echo "HASH_MISMATCH $url"
 done
 [ -n "$ok" ] || { echo "ERROR DOWNLOAD"; exit 21; }
 mkdir -p "$TMP/x"
+echo "PROGRESS runtime-extract"
 tar -xzf "$TMP/node.tgz" -C "$TMP/x" --strip-components=1
 install -d -m 755 ${INSTALL_DIR}
 rm -rf "$NODE_DIR.new"
@@ -221,8 +288,8 @@ const UPLOAD_SCRIPT = `
 set -e
 install -d -m 755 ${INSTALL_DIR}
 umask 022
-cat > ${INSTALL_DIR}/relay.mjs.new
-echo "SHA $(sha256sum ${INSTALL_DIR}/relay.mjs.new | cut -d' ' -f1)"
+cat > ${INSTALL_DIR}/relay.new.mjs
+echo "SHA $(sha256sum ${INSTALL_DIR}/relay.new.mjs | cut -d' ' -f1)"
 `;
 
 const CONFIGURE_SCRIPT = `
@@ -236,7 +303,7 @@ fi
 systemctl stop cindy-relay >/dev/null 2>&1 || true
 if [ "$REPLACE" = 1 ]; then rm -rf ${DATA_DIR}; fi
 install -d -m 700 -o cindy-relay -g cindy-relay ${DATA_DIR}
-mv -f ${INSTALL_DIR}/relay.mjs.new ${INSTALL_DIR}/relay.mjs
+mv -f ${INSTALL_DIR}/relay.new.mjs ${INSTALL_DIR}/relay.mjs
 if [ ! -f ${DATA_DIR}/relay-state.json ]; then
   "$NODE" ${INSTALL_DIR}/relay.mjs init --data ${DATA_DIR} "$@" >/dev/null
   echo "INITIALIZED"
@@ -299,7 +366,7 @@ set -e
 ACTION="$1"; shift
 NODE=${INSTALL_DIR}/node/bin/node
 BUNDLE=${INSTALL_DIR}/relay.mjs
-if [ -f ${INSTALL_DIR}/relay.mjs.new ]; then BUNDLE=${INSTALL_DIR}/relay.mjs.new; fi
+if [ -f ${INSTALL_DIR}/relay.new.mjs ]; then BUNDLE=${INSTALL_DIR}/relay.new.mjs; fi
 if [ "$ACTION" != commit ]; then "$NODE" "$BUNDLE" nginx --action "$ACTION" "$@"; fi
 if [ "$ACTION" = rollback ]; then
   rm -f /etc/systemd/system/cindy-relay.service.new
@@ -346,8 +413,11 @@ const UNINSTALL_SCRIPT = `
 set -e
 NODE=${INSTALL_DIR}/node/bin/node
 STATE=${DATA_DIR}/relay-state.json
-if [ ! -x "$NODE" ] || [ ! -f "$STATE" ]; then echo "RELAY_MISMATCH"; exit 22; fi
-"$NODE" -e 'try{const s=JSON.parse(require("fs").readFileSync(process.argv[1],"utf8"));if(s.relayId!==process.argv[2]||s.ownerPublicKey!==process.argv[3])process.exit(22)}catch{process.exit(22)}' "$STATE" "$2" "$3" || { echo "RELAY_MISMATCH"; exit 22; }
+# 没有设备档案时只剩未完成部署留下的程序文件，无需核对主人；有档案就必须是本机这一份。
+if [ -f "$STATE" ]; then
+  if [ ! -x "$NODE" ]; then echo "RELAY_MISMATCH"; exit 22; fi
+  "$NODE" -e 'try{const s=JSON.parse(require("fs").readFileSync(process.argv[1],"utf8"));if(s.relayId!==process.argv[2]||s.ownerPublicKey!==process.argv[3])process.exit(22)}catch{process.exit(22)}' "$STATE" "$2" "$3" || { echo "RELAY_MISMATCH"; exit 22; }
+fi
 if [ -f /etc/cindy-relay/nginx/state.json ]; then
   systemctl stop cindy-relay-nginx.timer cindy-relay-nginx.service >/dev/null 2>&1 || true
   "$NODE" ${INSTALL_DIR}/relay.mjs nginx --action remove
@@ -372,10 +442,20 @@ function nodeUrls(arch: 'x64' | 'arm64', preferMirror: boolean): [string, string
   return preferMirror ? [mirror, official] : [official, mirror];
 }
 
+/** 服务器自报的文字只用于显示:只留可打印字符并限长。 */
+function displayText(value: string | undefined, max = 80): string {
+  return [...(value ?? '')].filter((char) => char >= ' ' && char !== '\u007f').join('').trim().slice(0, max);
+}
+
 /** 连接并确认权限与系统;返回可用 root 执行的远端。 */
-async function prepare(sshHostId: string, assertCurrent: () => void): Promise<{ remote: Remote; arch: 'x64' | 'arm64'; ipv6: boolean }> {
+async function prepare(
+  sshHostId: string,
+  assertCurrent: () => void,
+): Promise<{ remote: Remote; arch: 'x64' | 'arm64'; ipv6: boolean; system: string }> {
   const base = await connect(sshHostId, assertCurrent);
   const probe = parseLines((await base.plain(PROBE_SCRIPT, 'relay-deploy-probe')).stdout);
+  // 连得上却一行都没跑出来:这个账号没有命令行(例如 Git 服务的 git 账号),不是系统不支持。
+  if (!first(probe, 'OS')) throw new RelayDeployError('SHELL_UNAVAILABLE');
   const machine = first(probe, 'ARCH');
   const arch = machine === 'x86_64' || machine === 'amd64' ? 'x64' : machine === 'aarch64' || machine === 'arm64' ? 'arm64' : null;
   if (first(probe, 'OS') !== 'Linux' || !arch || first(probe, 'SYSTEMD') !== 'yes') {
@@ -384,7 +464,54 @@ async function prepare(sshHostId: string, assertCurrent: () => void): Promise<{ 
   const privilege = first(probe, 'ROOT');
   if (privilege !== 'root' && privilege !== 'sudo') throw new RelayDeployError('NEEDS_ROOT');
   if (first(probe, 'FETCH') !== 'yes') throw new RelayDeployError('UNSUPPORTED_SYSTEM', 'curl / wget');
-  return { remote: base.withPrivilege(privilege), arch, ipv6: first(probe, 'IPV6') === 'yes' };
+  const system = [displayText(first(probe, 'DISTRO')) || 'Linux', displayText(machine, 16)].join(' · ');
+  return { remote: base.withPrivilege(privilege), arch, ipv6: first(probe, 'IPV6') === 'yes', system };
+}
+
+const CONTAINER_NAME = /^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$/;
+
+/**
+ * 80/443 的占用情况:系统里的 Nginx 自动接入;Docker 容器与其他程序都不碰,停下说明是谁占着。
+ * 返回是否经已有 Nginx 接入。
+ */
+function assessPorts(inspected: Map<string, string[]>): boolean {
+  const containers = new Set<string>();
+  const programs = new Set<string>();
+  let nginx = false;
+  for (const line of inspected.get('BUSY') ?? []) {
+    const owner = line.split(' ')[1] ?? '';
+    if (owner === 'nginx') nginx = true;
+    else if (owner.startsWith('docker:')) {
+      const names = owner.slice('docker:'.length).split(',').filter((name) => CONTAINER_NAME.test(name));
+      for (const name of names.length ? names : ['docker-proxy']) containers.add(name);
+    } else programs.add(displayText(owner, 40) || '?');
+  }
+  if (containers.size) throw new RelayDeployError('PORT_BUSY_CONTAINER', [...containers].join(', '));
+  if (programs.size) throw new RelayDeployError('PORT_BUSY', [...programs].join(', '));
+  return nginx || first(inspected, 'NGINX_MANAGED') === 'yes';
+}
+
+function existingRelay(
+  state: string | undefined,
+  identity: { relayId: string; ownerPublicKey: string } | null,
+): RelayServerCheck['existing'] {
+  if (!state) return 'none';
+  // 设备档案还在、Node 已被保留数据卸载移除时读不出身份;部署时会先恢复 Node 再核对。
+  if (state === 'unknown') return identity ? 'mine' : 'other';
+  const [, relayId, ownerPublicKey] = state.split(' ');
+  return identity && relayId === identity.relayId && ownerPublicKey === identity.ownerPublicKey ? 'mine' : 'other';
+}
+
+/** 只读检查服务器能否部署:不安装、不写文件、不改配置。 */
+export async function checkRelayServer(
+  sshHostId: string,
+  identity: { relayId: string; ownerPublicKey: string } | null,
+  assertCurrent: () => void = () => {},
+): Promise<RelayServerCheck> {
+  const { remote, system } = await prepare(sshHostId, assertCurrent);
+  const inspected = parseLines((await remote.root(INSPECT_SCRIPT, [], { label: 'relay-deploy-inspect' })).stdout);
+  const plan = assessPorts(inspected) ? 'nginx' : 'direct';
+  return { system, plan, existing: existingRelay(first(inspected, 'STATE'), identity) };
 }
 
 function expectOk(result: { exitCode: number | null; stdout: string; stderr: string }, code: RelayDeployErrorCode): Map<string, string[]> {
@@ -396,24 +523,32 @@ function expectOk(result: { exitCode: number | null; stdout: string; stderr: str
   return lines;
 }
 
-async function waitForCertificate(remote: Remote): Promise<void> {
+async function waitForCertificate(remote: Remote, onProgress?: (message: RelayDeployProgressMessage) => void): Promise<void> {
   const deadline = Date.now() + CERTIFICATE_WAIT_MS;
+  // 只是暂时连不上 CA 时中转会自己重试:继续等,到时间仍连不上才报 CA_UNREACHABLE。
+  let unreachable: string | null = null;
+  let reportedAt: string | undefined;
   while (Date.now() < deadline) {
     await new Promise((resolve) => setTimeout(resolve, CERTIFICATE_POLL_MS));
     const lines = parseLines((await remote.root(STATUS_SCRIPT, [], { label: 'relay-deploy-status' })).stdout);
     const active = first(lines, 'ACTIVE');
-    let certificate: { state?: string; error?: string } | undefined;
+    type CertificateStatus = { state?: string; error?: string; transient?: boolean; updatedAt?: string };
+    let certificate: CertificateStatus | undefined;
     try {
-      certificate = (
-        JSON.parse(first(lines, 'STATUS') ?? '{}') as {
-          certificate?: { state?: string; error?: string };
-        }
-      ).certificate;
+      certificate = (JSON.parse(first(lines, 'STATUS') ?? '{}') as { certificate?: CertificateStatus }).certificate;
     } catch {
       certificate = undefined;
     }
     if (certificate?.state === 'ready') return;
-    if (certificate?.state === 'failed') throw new RelayDeployError('CERTIFICATE_FAILED', certificate.error?.slice(0, 400));
+    if (certificate?.state === 'failed' && certificate.transient) {
+      unreachable = certificate.error ?? 'certificate authority unreachable';
+      if (certificate.updatedAt !== reportedAt) {
+        reportedAt = certificate.updatedAt;
+        onProgress?.('certificate-retry');
+      }
+    } else if (certificate?.state === 'failed') {
+      throw new RelayDeployError('CERTIFICATE_FAILED', certificate.error?.slice(0, 400));
+    }
     if (active === 'failed' || (active && active !== 'active' && active !== 'activating')) {
       const journal = (await remote.root(JOURNAL_SCRIPT, [], { label: 'relay-deploy-journal' })).stdout;
       const errorLine = journal
@@ -423,12 +558,14 @@ async function waitForCertificate(remote: Remote): Promise<void> {
       throw new RelayDeployError('DEPLOY_FAILED', errorLine?.slice(0, 400));
     }
   }
+  if (unreachable) throw new RelayDeployError('CA_UNREACHABLE', unreachable.slice(0, 400));
   throw new RelayDeployError('CERTIFICATE_FAILED', 'timed out waiting for the certificate');
 }
 
-async function verifyReachable(baseUrl: string, relayId: string): Promise<void> {
+async function verifyReachable(baseUrl: string, relayId: string, onRetry?: () => void): Promise<void> {
   let lastError = '';
   for (let attempt = 0; attempt < 4; attempt++) {
+    if (attempt > 0) onRetry?.();
     try {
       const res = await fetch(`${baseUrl}/api/device-link/relay/info`, {
         signal: AbortSignal.timeout(10_000),
@@ -476,7 +613,9 @@ async function nginxAction(remote: Remote, action: string, args: string[] = []):
     /* handled below */
   }
   if (result.exitCode !== 0 || parsed.event === 'error') {
-    throw new RelayDeployError('NGINX_FAILED', typeof parsed.message === 'string' ? parsed.message.slice(0, 300) : undefined);
+    // Node 启动失败时 CLI 还来不及输出 JSON；只提取稳定错误码，避免原始 stderr 进入界面。
+    const runtimeCode = /\[(ERR_[A-Z0-9_]{1,80})\]/.exec(result.stderr)?.[1];
+    throw new RelayDeployError('NGINX_FAILED', typeof parsed.message === 'string' ? parsed.message.slice(0, 300) : runtimeCode);
   }
   return parsed;
 }
@@ -487,14 +626,10 @@ export async function deployRelayToServer(params: DeployParams): Promise<{ relay
   if (!bundlePath) throw new RelayDeployError('BUNDLE_MISSING');
   const bundle = fs.readFileSync(bundlePath);
 
-  params.onStep('connect');
-  const { remote, arch, ipv6 } = await prepare(params.sshHostId, params.assertCurrent ?? (() => {}));
-
   params.onStep('check');
+  const { remote, arch, ipv6 } = await prepare(params.sshHostId, params.assertCurrent ?? (() => {}));
   const inspected = parseLines((await remote.root(INSPECT_SCRIPT, [], { label: 'relay-deploy-inspect' })).stdout);
-  const busy = [...new Set(inspected.get('BUSY') ?? [])];
-  if (busy.some((line) => !/^(80|443) nginx$/.test(line))) throw new RelayDeployError('PORT_BUSY', busy.join(', '));
-  const useNginx = busy.length > 0 || first(inspected, 'NGINX_MANAGED') === 'yes';
+  const useNginx = assessPorts(inspected);
   const state = first(inspected, 'STATE');
   const assertExistingIdentity = (existingState: string) => {
     const [, relayId, ownerPublicKey] = existingState.split(' ');
@@ -506,11 +641,13 @@ export async function deployRelayToServer(params: DeployParams): Promise<{ relay
     assertExistingIdentity(state);
   }
 
+  params.onServerChange?.();
   params.onStep('runtime');
   const [urlA, urlB] = nodeUrls(arch, params.preferMirror);
   const runtime = await remote.root(RUNTIME_SCRIPT, [NODE_VERSION, NODE_SHA256[arch], urlA, urlB], {
     timeoutMs: 20 * 60 * 1000,
     label: 'relay-deploy-runtime',
+    onProgress: params.onProgress,
   });
   expectOk(runtime, 'DOWNLOAD_FAILED');
 
@@ -562,6 +699,7 @@ export async function deployRelayToServer(params: DeployParams): Promise<{ relay
   let nginxPrepared = false;
   try {
     if (useNginx) {
+      params.onProgress?.('nginx-prepare');
       const args = ['--address', params.address];
       if (ipv6) args.push('--ipv6');
       if (await existingHttpsCertificate(params.baseUrl)) args.push('--existing-certificate');
@@ -594,15 +732,19 @@ export async function deployRelayToServer(params: DeployParams): Promise<{ relay
     });
 
     params.onStep('certificate');
-    if (mode !== 'nginx-existing') await waitForCertificate(remote);
+    if (mode !== 'nginx-existing') {
+      params.onProgress?.('certificate-wait');
+      await waitForCertificate(remote, params.onProgress);
+    }
     if (useNginx) await nginxAction(remote, 'activate');
 
     params.onStep('verify');
-    await verifyReachable(params.baseUrl, init.relayId);
+    await verifyReachable(params.baseUrl, init.relayId, () => params.onProgress?.('verify-retry'));
     if (useNginx) await nginxAction(remote, 'commit');
     return { relayVersion: RELAY_VERSION };
   } catch (error) {
     if (nginxPrepared) {
+      params.onProgress?.('nginx-rollback');
       try {
         await nginxAction(remote, 'rollback');
       } catch {
@@ -623,9 +765,12 @@ export async function uninstallRelayFromServer(
   onStep('connect');
   const { remote } = await prepare(sshHostId, assertCurrent);
   const inspected = expectOk(await remote.root(INSPECT_SCRIPT, [], { label: 'relay-deploy-inspect' }), 'DEPLOY_FAILED');
-  const [, relayId, ownerPublicKey] = (first(inspected, 'STATE') ?? '').split(' ');
-  if (relayId !== identity.relayId || ownerPublicKey !== identity.ownerPublicKey) throw new RelayDeployError('RELAY_MISMATCH');
-  onStep('configure');
+  const state = first(inspected, 'STATE');
+  if (state) {
+    const [, relayId, ownerPublicKey] = state.split(' ');
+    if (relayId !== identity.relayId || ownerPublicKey !== identity.ownerPublicKey) throw new RelayDeployError('RELAY_MISMATCH');
+  }
+  onStep('remove');
   const result = await remote.root(UNINSTALL_SCRIPT, [removeData ? '1' : '0', identity.relayId, identity.ownerPublicKey], {
     label: 'relay-deploy-uninstall',
   });

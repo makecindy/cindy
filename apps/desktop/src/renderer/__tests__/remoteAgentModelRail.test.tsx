@@ -21,7 +21,7 @@ vi.mock('@/hooks/useRemoteClaudeSubscriptionUsage', () => ({
   useRemoteClaudeSubscriptionUsage: vi.fn(),
 }));
 // The shared-quota rail observes auth; this component fixture has no auth host.
-vi.mock('@/contexts/AuthContext', () => ({ useOptionalAuthUser: () => null }));
+vi.mock('@/contexts/AuthContext', () => ({ useOptionalAuthUser: () => null, useOptionalAuthDeviceId: () => null }));
 
 vi.mock('react-i18next', () => ({
   useTranslation: () => ({ t: (key: string) => key, i18n: { language: 'en' } }),

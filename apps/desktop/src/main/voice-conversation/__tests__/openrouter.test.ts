@@ -112,7 +112,9 @@ describe('OpenRouter speech integration', () => {
       const bound = resolveSpeechConnection(deps, { ...selection, protocol: 'elevenlabs' });
       expect(bound.baseUrl).toBe(connection.baseUrl);
       expect(bound.protocol).toBe('openai');
-      expect(bound.headers).toEqual(connection.headers);
+      expect(bound.headers).toEqual({ ...connection.headers,
+        'http-referer': 'https://cindy.app', 'x-openrouter-title': 'Cindy',
+      });
       if (auth === 'oauth') {
         expect(deps.readOAuthToken).toHaveBeenCalledWith('router', oauth);
         expect(deps.readKey).not.toHaveBeenCalled();

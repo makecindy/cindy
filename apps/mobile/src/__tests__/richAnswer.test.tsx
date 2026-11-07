@@ -7,21 +7,25 @@ import { SessionQuickSendProvider } from '@/session/SessionQuickSendContext';
 import { buildConversationShareHtml } from '@/session/conversationShareWebViewHtml';
 import { buildConversationShareSvgLayout } from '@/session/conversationShareSvgLayout';
 import { lightColors } from '@/theme/tokens';
+import { InlineVideoPlayer } from '@/session/InlineVideoPlayer';
 
 vi.mock('react-native', () => ({
   View: ({ children }: any) => <div>{children}</div>,
   Pressable: ({ children, onPress, disabled }: any) => <button disabled={disabled} onClick={onPress}>{children}</button>,
   Switch: () => null,
   StyleSheet: { create: (styles: unknown) => styles },
-  AppState: { addEventListener: () => ({ remove() {} }) },
+  AppState: { currentState: 'active', addEventListener: () => ({ remove() {} }) },
+  ActivityIndicator: () => null,
 }));
+vi.mock('expo-router', () => ({ useIsFocused: () => true }));
+vi.mock('@/session/NativeVideoPlayer', () => ({ NativeVideoPlayer: ({ url }: any) => <video src={url} /> }));
 vi.mock('@/components/AppText', () => ({
   Text: ({ children }: any) => <span>{children}</span>,
   TextInput: ({ value, onChangeText, accessibilityLabel }: any) =>
     <input aria-label={accessibilityLabel} value={value} onChange={event => onChangeText(event.target.value)} />,
 }));
 vi.mock('@react-native-async-storage/async-storage', () => ({ default: { getItem: async () => null, setItem: async () => undefined } }));
-vi.mock('lucide-react-native', () => Object.fromEntries(['Mail', 'CalendarDays', 'Folder', 'ChartColumn', 'Check', 'Info', 'Clock', 'MapPin', 'Coffee', 'Image', 'Users', 'Star'].map(name => [name, () => null])));
+vi.mock('lucide-react-native', () => Object.fromEntries(['Mail', 'CalendarDays', 'Folder', 'ChartColumn', 'Check', 'Info', 'Clock', 'MapPin', 'Coffee', 'Image', 'Users', 'Star', 'Play'].map(name => [name, () => null])));
 vi.mock('react-native-svg', () => Object.fromEntries(['default', 'Path', 'Rect', 'Ellipse', 'Polygon', 'Polyline', 'Line', 'Circle', 'Text'].map(name => [name, () => null])));
 vi.mock('@/auth/AuthContext', () => ({ useAuth: () => ({ user: { id: 'mobile-rich-test' } }) }));
 vi.mock('react-i18next', () => ({ useTranslation: () => ({ t: (key: string) => key }) }));
@@ -44,6 +48,44 @@ async function render(stateKey: string, sender: ((text: string) => Promise<boole
   await act(async () => root.render(createElement(SessionQuickSendProvider, { value: sender },
     createElement(RichAnswer, { source, stateKey, complete, renderMarkdown: text => text }))));
 }
+
+// Unit #8085: hidden children stay mounted to retain controls. Exercise the real
+// renderer and video cover so only visible branches fetch, and hiding cancels IO.
+it('prepares videos only in visible tabs/details, including nested layout containers', async () => {
+  const nodes = [
+    { id: 'tabs', kind: 'tabs' },
+    { id: 'first', kind: 'stack', parent: 'tabs', props: { label: 'First' } },
+    { id: 'second', kind: 'stack', parent: 'tabs', props: { label: 'Second' } },
+    { id: 'first-video', kind: 'video', parent: 'first' },
+    { id: 'nested', kind: 'details', parent: 'second', props: { label: 'Nested', default: true } },
+    { id: 'row', kind: 'row', parent: 'nested' },
+    { id: 'second-video', kind: 'video', parent: 'row' },
+    { id: 'more', kind: 'details', props: { label: 'More' } },
+    { id: 'pending-video', kind: 'video', parent: 'more' },
+  ];
+  const source = nodes.map((node, index) => JSON.stringify({ version: 1, seq: index + 1, op: 'create', ...node,
+    props: node.kind === 'video' ? { src: `cindy-media://blobs/${node.id}.mp4` } : node.props,
+  })).join('\n');
+  const resolve = vi.fn((media: { url: string }, _options?: { signal?: AbortSignal }) => media.url.includes('pending-video')
+    ? new Promise<any>(() => {})
+    : Promise.resolve({ url: `https://media.test/${media.url.split('/').at(-1)}`, mimeType: 'video/mp4', previewable: true }));
+  await act(async () => root.render(createElement(RichAnswer, { source, stateKey: 'media-visibility', complete: true,
+    renderMarkdown: text => text,
+    renderMedia: (node, visible) => createElement(InlineVideoPlayer, { url: String(node.props.src), label: node.id, width: 300, visible: visible ?? true, resolve, onOpen() {} }),
+  })));
+  const fetched = () => resolve.mock.calls.map(([media]) => media.url.split('/').at(-1));
+  expect(fetched()).toEqual(['first-video.mp4']);
+  const press = async (label: string) => act(async () => [...container.querySelectorAll('button')].find(button => button.textContent === label)!.click());
+  await press('More');
+  expect(fetched()).toEqual(['first-video.mp4', 'pending-video.mp4']);
+  const pendingSignal = resolve.mock.calls.at(-1)![1]?.signal;
+  await press('More');
+  expect(pendingSignal?.aborted).toBe(true);
+  await press('Second');
+  expect(fetched()).toEqual(['first-video.mp4', 'pending-video.mp4', 'second-video.mp4']);
+  await press('First');
+  expect(fetched()).toHaveLength(3); // Already prepared covers retain their local state.
+});
 
 // Tier 1: native rich controls previously only changed local values. Exercise the
 // production renderer's explicit send, failure/retry and virtualized receipt;

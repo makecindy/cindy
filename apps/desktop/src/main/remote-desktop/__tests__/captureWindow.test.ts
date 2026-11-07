@@ -1,7 +1,9 @@
 import { EventEmitter } from 'node:events';
+import { session } from 'electron';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import { DesktopCaptureWindow } from '../captureWindow';
 import { denyAppDesktopCapture, markPlaybackFullscreenWindow } from '../capturePermissions';
+import { isCaptureWindowWebContents } from '../captureWindowRegistry';
 import { buildContentSecurityPolicy } from '../../security/csp';
 
 const fake = vi.hoisted(() => ({
@@ -30,6 +32,7 @@ vi.mock('electron', () => ({
       mainFrame: { url: '', parent: null },
       isDestroyed: () => this.destroyed,
       setWindowOpenHandler: vi.fn(),
+      setWebRTCIPHandlingPolicy: vi.fn(),
     });
     constructor(public options: any) {
       fake.windows.push(this);
@@ -100,7 +103,12 @@ it('only admits the registered top frame and kills the whole process on stop', a
     },
   });
   expect(win.webContents.setWindowOpenHandler.mock.calls[0][0]()).toEqual({ action: 'deny' });
+  expect(win.webContents.setWebRTCIPHandlingPolicy).not.toHaveBeenCalled();
+  expect(isCaptureWindowWebContents(win.webContents)).toBe(true);
   owner.dispose();
+  // Unit regression: native gone may reach app after local destroyed cleanup.
+  // Keep this factory's identity so a capture crash cannot tear down device-link.
+  expect(isCaptureWindowWebContents(win.webContents)).toBe(true);
   expect(win.destroyed).toBe(true);
   expect(owner.contents).toBeNull();
   expect(() => owner.assertSender(valid)).toThrow('PERMISSION_DENIED');
@@ -125,6 +133,53 @@ it('cancels pending readiness and rejects late old events without touching the r
   await second;
   expect(fake.sessions).toHaveLength(1); // bounded in-memory session, never persistent profiles
   owner.dispose();
+});
+
+// Unit, Electron security §3/§5: local recording adds physical audio only to
+// its isolated process. Existing remote desktop tests never enable microphones.
+// Minimal failure: audio-enabled host receives camera or foreign-frame request.
+it.each([
+  { system: true, microphone: false },
+  { system: false, microphone: true },
+])('confines recording permissions to its selected audio sources: %j', async (options) => {
+  const owner = new DesktopCaptureWindow(vi.fn(), 'recording', options);
+  const ready = owner.start(), win = fake.windows[0];
+  owner.registered(event(win)); await ready;
+  const handler = fake.sessions[0].setPermissionRequestHandler.mock.calls[0][0];
+  const details = { isMainFrame: true, requestingUrl: win.webContents.mainFrame.url };
+  const check = (contents: any, mediaTypes: string[], extra = {}) => {
+    const reply = vi.fn(); handler(contents, 'media', reply, { ...details, mediaTypes, ...extra });
+    return reply.mock.calls[0][0];
+  };
+  expect(check(win.webContents, [])).toBe(options.system);
+  expect(check(win.webContents, ['audio'])).toBe(options.microphone);
+  expect(check(win.webContents, ['video'])).toBe(false);
+  expect(check(win.webContents, ['audio'], { isMainFrame: false })).toBe(false);
+  expect(check({}, ['audio'])).toBe(false);
+  owner.dispose();
+  expect(check(win.webContents, ['audio'])).toBe(false);
+});
+
+// Unit regression from the packaged Electron smoke: a second recording shares
+// the partition and must neither register its protocol twice nor keep old grants.
+it('reuses recording assets while granting media only to the new owner', async () => {
+  vi.stubGlobal('DESKTOP_CAPTURE_VITE_DEV_SERVER_URL', undefined);
+  const first = new DesktopCaptureWindow(vi.fn(), 'recording', { system: true, microphone: false });
+  const initial = first.start(), old = fake.windows[0];
+  first.registered(event(old)); await initial; first.dispose();
+  const ses = fake.sessions[0];
+  vi.mocked(session.fromPartition).mockReturnValueOnce(ses);
+  const next = new DesktopCaptureWindow(vi.fn(), 'recording', { system: false, microphone: true });
+  const ready = next.start(), win = fake.windows[1];
+  next.registered(event(win)); await ready;
+  expect(ses.protocol.handle).toHaveBeenCalledOnce();
+  expect(ses.listenerCount('will-download')).toBe(1);
+  const grant = ses.setPermissionRequestHandler.mock.calls.at(-1)[0];
+  const reply = vi.fn();
+  const details = { isMainFrame: true, requestingUrl: win.webContents.mainFrame.url, mediaTypes: ['audio'] };
+  grant(old.webContents, 'media', reply, details); expect(reply).toHaveBeenLastCalledWith(false);
+  grant(win.webContents, 'media', reply, details); expect(reply).toHaveBeenLastCalledWith(true);
+  next.dispose();
 });
 
 it.each(['render-process-gone', 'will-navigate', 'will-redirect', 'destroyed'])(
@@ -274,6 +329,16 @@ it.each(['files', 'direct'] as const)('keeps %s transport separate and denies ca
   const owner = new DesktopCaptureWindow(vi.fn(), mode);
   const ready = owner.start();
   const win = fake.windows[0], ses = fake.sessions[0];
+  expect(isCaptureWindowWebContents(win.webContents)).toBe(true);
+  // Unit regression: routed private networks cannot resolve Chromium's default
+  // mDNS candidates. Exercise the real window factory: opt in only the direct
+  // data window, before navigation, without granting media or changing files/video.
+  // Actual ICE and byte transfer are covered by provider-share-direct-smoke.mjs.
+  if (mode === 'direct') {
+    expect(win.webContents.setWebRTCIPHandlingPolicy).toHaveBeenCalledExactlyOnceWith('default_public_and_private_interfaces');
+    expect(win.webContents.setWebRTCIPHandlingPolicy.mock.invocationCallOrder[0])
+      .toBeLessThan(win.loadURL.mock.invocationCallOrder[0]);
+  } else expect(win.webContents.setWebRTCIPHandlingPolicy).not.toHaveBeenCalled();
   expect(win.webContents.mainFrame.url).toBe(`http://localhost:9988/index.html?mode=${mode}`);
   owner.registered(event(win));
   await ready;

@@ -150,6 +150,8 @@ export class RichAnswerStream {
   private seq = 0;
   private nodes = new Map<string, RichNode>();
   private roots: string[] = [];
+  /** Container id → implicit markdown child that received appended prose. */
+  private implicitText = new Map<string, string>();
   private revision = 0;
   private issues = 0;
   private failedFinalLine: { offset: number; seq: number; issues: number } | null = null;
@@ -161,6 +163,7 @@ export class RichAnswerStream {
       this.seq = 0;
       this.nodes = new Map();
       this.roots = [];
+      this.implicitText.clear();
       this.issues = 0;
       this.failedFinalLine = null;
       this.revision++;
@@ -262,21 +265,62 @@ export class RichAnswerStream {
           this.attachInlineChildren(node.id, inline, this.depth(node.id) + 1);
         }
       } else if (op.op === "append") {
-        if (
-          !current ||
-          !["text", "markdown", "heading", "code", "math", "diagram"].includes(
-            current.kind,
-          ) ||
-          typeof op.text !== "string"
-        )
-          throw Error("text");
-        this.nodes.set(current.id, {
-          ...current,
-          props: {
-            ...current.props,
-            text: richString(current, "text") + op.text,
-          },
-        });
+        if (!current || typeof op.text !== "string") throw Error("text");
+        if (TEXT_PROP_KINDS.includes(current.kind)) {
+          this.nodes.set(current.id, {
+            ...current,
+            props: {
+              ...current.props,
+              text: richString(current, "text") + op.text,
+            },
+          });
+        } else if (CONTAINER_KINDS.includes(current.kind)) {
+          // Models append prose straight to containers (session 66065272: five
+          // appends onto stack/details lost their whole body). Containers render
+          // no text, so the prose lands in one implicit markdown child per
+          // container instead of being dropped, like the #7627 salvages.
+          const existing = this.implicitText.get(current.id);
+          const child = existing ? this.nodes.get(existing) : undefined;
+          // Reuse only the implicit markdown child this container owns, and
+          // only while it is still the last child: a rebuilt container may hold
+          // a different node under the same id, and prose written into e.g. a
+          // stat would never be displayed. Reusing a child that sits before
+          // later children would also reorder the answer against the order the
+          // model wrote it in.
+          if (
+            child &&
+            child.kind === "markdown" &&
+            current.children.at(-1) === existing
+          ) {
+            this.nodes.set(child.id, {
+              ...child,
+              props: {
+                ...child.props,
+                text: richString(child, "text") + op.text,
+              },
+            });
+          } else {
+            // Only creating a node is bounded by the node and depth limits;
+            // appending to an existing child needs neither.
+            if (
+              this.nodes.size >= MAX_NODES ||
+              this.depth(current.id) >= MAX_DEPTH
+            )
+              throw Error("depth");
+            const id = this.inlineChildId(current.id, 1);
+            this.nodes.set(id, {
+              id,
+              kind: "markdown",
+              props: this.props({ text: op.text }, "markdown"),
+              children: [],
+            });
+            this.nodes.set(current.id, {
+              ...current,
+              children: [...current.children, id],
+            });
+            this.implicitText.set(current.id, id);
+          }
+        } else throw Error("text");
       } else if (op.op === "patch") {
         if (!current) throw Error("target");
         this.nodes.set(current.id, {
@@ -288,8 +332,12 @@ export class RichAnswerStream {
         const remove = (id: string) => {
           this.nodes.get(id)?.children.forEach(remove);
           this.nodes.delete(id);
+          // The subtree is gone; its implicit-text mapping must not be reused.
+          this.implicitText.delete(id);
         };
         remove(current.id);
+        for (const [container, child] of this.implicitText)
+          if (!this.nodes.has(child)) this.implicitText.delete(container);
         this.roots = this.roots.filter((id) => id !== current.id);
         for (const [id, node] of this.nodes)
           if (node.children.includes(current.id))
@@ -1069,3 +1117,18 @@ export function richMediaSource(node: RichNode): string | null {
     : src;
 }
 
+/** Sources actually rendered by component blocks, excluding code examples and
+ * removed/replaced nodes. Used to suppress duplicate tool-result previews. */
+export function richAnswerMediaSources(source: string): ReadonlySet<string> {
+  const urls = new Set<string>();
+  for (const part of splitRichAnswer(source)) {
+    if (part.kind !== 'rich') continue;
+    const doc = new RichAnswerStream().update(part.source, true);
+    for (const node of doc.nodes.values()) {
+      if (node.kind !== 'image' && node.kind !== 'video' && node.kind !== 'audio') continue;
+      const url = richMediaSource(node);
+      if (url) urls.add(url);
+    }
+  }
+  return urls;
+}

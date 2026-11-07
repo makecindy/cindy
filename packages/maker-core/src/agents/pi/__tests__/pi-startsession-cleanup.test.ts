@@ -37,6 +37,10 @@ const knobs = vi.hoisted(() => ({
   transportCloseRejects: false,
   transportCloseCount: 0,
   getStateRejects: false,
+  getStateSessionFile: null as string | null,
+  switchSessionGate: null as Promise<void> | null,
+  switchSessionRejects: false,
+  switchSessionSuccess: null as boolean | null,
   abortRejects: false,
   getStateGate: null as Promise<void> | null,
   closeRejects: false,
@@ -50,6 +54,7 @@ const knobs = vi.hoisted(() => ({
   spawnedEnvs: [] as Array<Record<string, string | undefined>>,
   spawnedArgs: [] as string[][],
   requests: [] as string[],
+  requestOptions: [] as Array<{ commandType: string; timeoutMs?: number }>,
 }));
 
 vi.mock('../transport.js', () => ({
@@ -95,13 +100,23 @@ vi.mock('../rpc-client.js', () => ({
       knobs.onExit = o?.onExit ?? null;
       knobs.onEvent = o?.onEvent ?? null;
     }
-    async request(cmd: { type: string }): Promise<{ success: boolean; data?: unknown; error?: string }> {
+    async request(
+      cmd: { type: string },
+      options?: { timeoutMs?: number },
+    ): Promise<{ success: boolean; data?: unknown; error?: string }> {
       knobs.requests.push(cmd.type);
+      knobs.requestOptions.push({ commandType: cmd.type, timeoutMs: options?.timeoutMs });
+      if (cmd.type === 'switch_session') {
+        const gate = knobs.switchSessionGate;
+        if (gate) await gate;
+        if (knobs.switchSessionRejects) throw new Error('switch_session timed out (mock)');
+        if (knobs.switchSessionSuccess === false) return { success: false, error: 'session load failed (mock)' };
+      }
       if (cmd.type === 'get_state') {
         const gate = knobs.getStateGate;
         if (gate) await gate;
         if (knobs.getStateRejects) throw new Error('get_state rejected (mock)');
-        return { success: true, data: { sessionFile: '/mock/session.jsonl', model: { contextWindow: 200000 } } };
+        return { success: true, data: { sessionFile: knobs.getStateSessionFile ?? '/mock/session.jsonl', model: { contextWindow: 200000 } } };
       }
       if (cmd.type === 'abort' && knobs.abortRejects) {
         return { success: false, error: 'abort rejected (mock)' };
@@ -167,6 +182,10 @@ describe('PiAgent.startSession failure cleanup (mocked pi process)', () => {
     knobs.transportCloseRejects = false;
     knobs.transportCloseCount = 0;
     knobs.getStateRejects = false;
+    knobs.getStateSessionFile = null;
+    knobs.switchSessionGate = null;
+    knobs.switchSessionRejects = false;
+    knobs.switchSessionSuccess = null;
     knobs.abortRejects = false;
     knobs.getStateGate = null;
     knobs.closeRejects = false;
@@ -179,6 +198,7 @@ describe('PiAgent.startSession failure cleanup (mocked pi process)', () => {
     knobs.spawnedEnvs = [];
     knobs.spawnedArgs = [];
     knobs.requests = [];
+    knobs.requestOptions = [];
     disposed = 0;
     proxyDisposed = 0;
     proxyGeneration++;
@@ -2793,6 +2813,115 @@ describe('PiAgent.startSession failure cleanup (mocked pi process)', () => {
     await handle.close();
   });
 
+  // 测试价值
+  // - 生产入口与结果：PiAgent.startSession；验证恢复等待、session_id 发布、CAS fallback 和进程清理。
+  // - Bug／缺口：#7740；已有用例未覆盖慢恢复、超时不清除身份及恢复专属 RPC 预算。
+  // - 最小失败输入：存在的恢复文件，switch_session 延迟、超时或明确返回 success:false。
+  // - tier／实测耗时：unit（注入的进程与文件 fixture）；所选回归 3.05s，完整文件 77.13s。
+  it('waits for slow resume and publishes only the session identity confirmed by get_state', async () => {
+    const resumeFile = path.join(cwd, 'slow-resume.jsonl');
+    writeFileSync(resumeFile, '{}');
+    // get_state 必须返回一个**不同**的有效身份：如果它与入参 resumeSessionId 同值，
+    // 「跳过身份确认、直接把 resume 参数当最终 id」的实现也能把这条用例跑绿。
+    const confirmedFile = path.join(cwd, 'confirmed-resume.jsonl');
+    writeFileSync(confirmedFile, '{}');
+    knobs.getStateSessionFile = confirmedFile;
+    let releaseSwitch!: () => void;
+    knobs.switchSessionGate = new Promise<void>((resolve) => { releaseSwitch = resolve; });
+    const onInvalidResumeSession = vi.fn(async () => true);
+    let startupSettled = false;
+    const startup = new PiAgent(buildDeps()).startSession({
+      ...opts(),
+      resumeSessionId: resumeFile,
+      onInvalidResumeSession,
+    }).then((handle) => {
+      startupSettled = true;
+      return handle;
+    });
+
+    // 慢恢复期间必须仍在等：恢复专属预算给了 switch_session，且启动还没resolve。
+    await vi.waitFor(() => expect(knobs.requestOptions).toContainEqual({
+      commandType: 'switch_session',
+      timeoutMs: 60_000,
+    }));
+    expect(startupSettled).toBe(false);
+
+    releaseSwitch();
+    const handle = await startup;
+    // 发布的是 get_state 确认回来的身份，不是调用方传进来的恢复参数。
+    expect(knobs.requests).toContain('get_state');
+    expect(handle.id).toBe(confirmedFile);
+    // 恢复专属预算只给 switch_session；get_state 仍走默认预算，不为它顺手放宽。
+    // 这两条断言放在释放之后才有意义 —— 释放前 get_state 还没发出。
+    expect(knobs.requestOptions).not.toContainEqual(expect.objectContaining({ timeoutMs: 60_000, commandType: 'get_state' }));
+    expect(onInvalidResumeSession).not.toHaveBeenCalled();
+    await handle.close();
+  });
+
+  it('preserves the resume identity and skips invalid-resume fallback when switch_session times out', async () => {
+    const resumeFile = path.join(cwd, 'timeout-resume.jsonl');
+    writeFileSync(resumeFile, '{}');
+    knobs.switchSessionRejects = true;
+    knobs.closeRejects = true;
+    const onInvalidResumeSession = vi.fn(async () => true);
+
+    const agent = new PiAgent(buildDeps());
+    const failure = await agent.startSession({
+      ...opts(),
+      resumeSessionId: resumeFile,
+      onInvalidResumeSession,
+    }).catch((error: unknown) => error);
+
+    expect(failure).toBeInstanceOf(AgentStartupCleanupPendingError);
+    expect(failure).toMatchObject({ cause: new Error('switch_session timed out (mock)') });
+    expect(onInvalidResumeSession).not.toHaveBeenCalled();
+    expect(knobs.requests).toEqual(['switch_session']);
+    expect(knobs.closeCount).toBe(1);
+
+    await expect(agent.startSession(opts())).rejects.toThrow(/close unconfirmed/);
+    expect(knobs.spawnedEnvs).toHaveLength(1);
+    knobs.closeRejects = false;
+    knobs.switchSessionRejects = false;
+    const fresh = await agent.startSession(opts());
+    expect(knobs.spawnedEnvs).toHaveLength(2);
+    await fresh.close();
+  });
+
+  it('allows fresh fallback after Pi explicitly rejects resume and the CAS clears its identity', async () => {
+    const resumeFile = path.join(cwd, 'rejected-resume.jsonl');
+    writeFileSync(resumeFile, '{}');
+    knobs.switchSessionSuccess = false;
+    const onInvalidResumeSession = vi.fn(async () => true);
+
+    const handle = await new PiAgent(buildDeps()).startSession({
+      ...opts(),
+      resumeSessionId: resumeFile,
+      onInvalidResumeSession,
+    });
+
+    expect(onInvalidResumeSession).toHaveBeenCalledOnce();
+    expect(knobs.requests).toContain('get_state');
+    expect(handle.id).toBe('/mock/session.jsonl');
+    await handle.close();
+  });
+
+  it('does not start a fresh session when Pi rejects resume and the CAS finds a concurrent identity', async () => {
+    const resumeFile = path.join(cwd, 'concurrent-resume.jsonl');
+    writeFileSync(resumeFile, '{}');
+    knobs.switchSessionSuccess = false;
+    const onInvalidResumeSession = vi.fn(async () => false);
+
+    await expect(new PiAgent(buildDeps()).startSession({
+      ...opts(),
+      resumeSessionId: resumeFile,
+      onInvalidResumeSession,
+    })).rejects.toThrow(/CAS did not clear it \(concurrent owner replaced it\)/);
+
+    expect(onInvalidResumeSession).toHaveBeenCalledOnce();
+    expect(knobs.requests).toEqual(['switch_session']);
+    expect(knobs.closeCount).toBeGreaterThanOrEqual(1);
+  });
+
   it('freezes approval per new session and fails closed after revocation', async () => {
     const skillPath = path.join(cwd, '.pi', 'skills', 'approved-skill');
     mkdirSync(skillPath, { recursive: true });
@@ -3372,7 +3501,7 @@ describe('PiAgent.startSession failure cleanup (mocked pi process)', () => {
       notify('wrong-instance:{"wireEffort":"low"}');
       notify(`${token}:invalid-json`);
       expect(debug.mock.calls.filter(([message]) => message === 'pi request stage')).toEqual([]);
-      notify(`${token}:${JSON.stringify({ toolCount: 2, messageCount: 3, wireEffort: 'medium', secret: 'private-content' })}`);
+      notify(`${token}:${JSON.stringify({ toolCount: 2, messageCount: 3, preparationMs: 5012.4, wireEffort: 'medium', secret: 'private-content' })}`);
       const delta = { type: 'message_update', assistantMessageEvent: { type: 'text_delta', contentIndex: 0, delta: 'private-output' } };
       knobs.onEvent?.(delta);
       knobs.onEvent?.(delta);
@@ -3382,9 +3511,9 @@ describe('PiAgent.startSession failure cleanup (mocked pi process)', () => {
       knobs.onEvent?.({ type: 'agent_settled' });
       stages = debug.mock.calls.filter(([message]) => message === 'pi request stage').map(([, fields]) => fields);
       expect(stages.map(row => row.stage)).toEqual(['provider-request-prepared', 'first-output', 'agent-settled']);
-      expect(stages[0]).toMatchObject({ toolCount: 2, messageCount: 3, wireEffort: 'medium', requestSequence: 1 });
+      expect(stages[0]).toMatchObject({ toolCount: 2, messageCount: 3, preparationMs: 5012, wireEffort: 'medium', requestSequence: 1 });
       expect(stages[2]).toMatchObject({ requestSequence: 1, elapsedMs: expect.any(Number), turnElapsedMs: expect.any(Number) });
-      notify(`${token}:${JSON.stringify({ toolCount: -1, messageCount: 'secret', wireEffort: 'private-effort' })}`);
+      notify(`${token}:${JSON.stringify({ toolCount: -1, messageCount: 'secret', preparationMs: 60001, wireEffort: 'private-effort' })}`);
       const last = debug.mock.calls.filter(([message]) => message === 'pi request stage').at(-1)?.[1];
       expect(last).toEqual({ startupTraceId: resolverOptions?.startupTraceId, requestSequence: 2,
         stage: 'provider-request-prepared', wireEffort: null });

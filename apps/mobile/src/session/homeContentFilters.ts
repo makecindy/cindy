@@ -34,7 +34,9 @@ export function createHomeContentFilter(
     ? null
     : nowMs - LAST_ACTIVITY_DAYS[filters.lastActivity] * DAY_MS;
   const keep = (item: RemoteSessionListItem): boolean => {
-    if (filters.teammates && filters.teammates !== 'all'
+    if (filters.teammates === 'none') {
+      if (filters.teammateKey?.(item)) return false;
+    } else if (filters.teammates && filters.teammates !== 'all'
       && !filters.teammates.includes(filters.teammateKey?.(item) ?? '')) return false;
     if (filters.vendor !== 'all' && sessionVendor(item) !== filters.vendor) return false;
     if (cutoff !== null && activityMsFromIso(item.lastActivityAt) < cutoff) return false;
@@ -118,7 +120,7 @@ export function filterSharedHomeRows<Row extends { item?: RemoteSessionListItem 
   const filter = createHomeContentFilter(filters, nowMs);
   if (!filter) return rows;
   return rows.flatMap((row) => {
-    if (!row.item) return filters.teammates && filters.teammates !== 'all' ? [] : [row];
+    if (!row.item) return Array.isArray(filters.teammates) ? [] : [row];
     const item = filter(row.item);
     if (!item) return [];
     return [item === row.item ? row : { ...row, item }];

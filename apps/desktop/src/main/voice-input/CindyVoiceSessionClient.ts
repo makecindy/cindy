@@ -1,4 +1,9 @@
 import { app } from 'electron';
+import {
+  LEGACY_MANAGED_REFINE_REQUEST_LIMIT,
+  resolveManagedRefineRequestLimit,
+  type RefineRequestBudget,
+} from '@cindy/voice-input-core';
 
 import * as authManager from '../authManager.js';
 import { getClientEndpoint } from '../clientEndpointsService.js';
@@ -35,7 +40,8 @@ export type CindyVoiceAsrSession = {
     model?: string;
     resourceId?: string;
   };
-  refiner: { enabled: boolean; provider?: string };
+  /** `maxRefineRequests` is absent on servers from before pause-time refinement. */
+  refiner: { enabled: boolean; provider?: string; maxRefineRequests?: number };
 };
 
 /** Session-scoped bridge from Cindy identity to one-shot voice data-plane tickets. */
@@ -53,6 +59,7 @@ export class CindyVoiceRunContext {
    * stays), so refine/warmup calls fail fast instead of hitting the server.
    */
   private refinerUnavailableOnServer = false;
+  private latestRefineRequestLimit = LEGACY_MANAGED_REFINE_REQUEST_LIMIT;
 
   constructor(
     private readonly sourceLanguage: string | undefined,
@@ -98,6 +105,7 @@ export class CindyVoiceRunContext {
     }
     if (usedLegacyRefinerFallback) this.refinerUnavailableOnServer = true;
     this.latestSessionId = session.sessionId;
+    this.latestRefineRequestLimit = resolveManagedRefineRequestLimit(session.refiner?.maxRefineRequests);
     // Session allocation is the HTTP half of managed ASR startup; the socket
     // handshake that follows is timed separately by the provider. Splitting the
     // two is what makes a slow start attributable.
@@ -107,6 +115,14 @@ export class CindyVoiceRunContext {
       legacyRefinerFallback: usedLegacyRefinerFallback,
     });
     return { websocketUrl: session.asr.websocketUrl, authorizationToken: session.ticket };
+  }
+
+  /**
+   * Refinement requests the current session accepts. Refines target the latest
+   * session, so a reconnect (new session id) starts a fresh count.
+   */
+  refineRequestBudget(): RefineRequestBudget {
+    return { sessionKey: this.latestSessionId ?? '', limit: this.latestRefineRequestLimit };
   }
 
   async createRefinerTarget(
@@ -119,6 +135,9 @@ export class CindyVoiceRunContext {
     if (this.refinerUnavailableOnServer) {
       throw new Error('Cindy voice service on this server does not support managed refinement yet.');
     }
+    // Captured before any await: the controller counts this request against
+    // refineRequestBudget() in the same tick, so a reconnect during the token
+    // refresh must not move the request to the new session.
     const sessionId = this.latestSessionId;
     if (!sessionId) throw new Error('Voice ASR session is not connected yet.');
     let token = authManager.getAccessToken();

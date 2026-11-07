@@ -1,6 +1,6 @@
 import type { ProviderView } from '@cindy/model-providers';
 import i18n from '../../../src/renderer/i18n';
-import { cindyAiAccountName } from '../../../src/shared/cindyAiPresentation';
+import { cindyAiAccountName, cindyAiAccountLogoKind } from '../../../src/shared/cindyAiPresentation';
 
 // Stubbed hooks are separate modules; share only this public fixture selector.
 const fixtureState = globalThis as typeof globalThis & { __cindyAiScenario?: string };
@@ -15,6 +15,7 @@ export const useOptionalAuthUser = () => user();
 export const useProviders = () => ({
   providers: [{
     id: 'xd', name: cindyAiAccountName(user(), key => i18n.t(key)), source: 'builtin',
+    logoKind: cindyAiAccountLogoKind(user()),
     agents: ['codex'], auth: { method: 'managed' }, routing: { codex: {} }, connected: true,
     models: { codex: [{ id: 'auto', name: 'Auto', group: 'gpt', contextWindow: 272000, efforts: [] }] },
   } as ProviderView],

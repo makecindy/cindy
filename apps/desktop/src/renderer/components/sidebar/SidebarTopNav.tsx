@@ -142,7 +142,7 @@ function useSidebarNavigationActions(
       onSelect: () => navigateToView('plugins'),
       active: activeKey === 'plugins',
       showDot: hasGhostUnread || reviewUnread.length > 0,
-      dotTone: reviewUnread.some(item => item.status === 'rejected') ? 'error' : hasRetirementUnread ? 'awaiting' : 'done',
+      dotTone: reviewUnread.some(item => item.status !== 'approved' && item.status !== 'enabled') ? 'error' : hasRetirementUnread ? 'awaiting' : 'done',
     },
     search: {
       label: t('sidebar.navigation.items.search'),

@@ -1,0 +1,55 @@
+{
+  "settings": {
+    "sectionTitle": "Service de relais",
+    "currentLabel": "Service de relais",
+    "official": "Relais officiel {{appName}}",
+    "switchToOfficial": "Revenir au relais officiel",
+    "officialHint": "Vos appareils se connectent via le relais officiel {{appName}}. Pour utiliser votre propre relais, affichez son QR code d'invitation sur l'ordinateur qui le fait tourner et scannez-le avec l'appareil photo de votre téléphone.",
+    "selfHostedHint": "Vos appareils se connectent via votre propre relais à l'adresse {{address}}. La connexion, les modèles, les tâches partagées et les autres services passent toujours par {{appName}}.",
+    "removedHint": "Ce téléphone a été retiré du relais, ou le relais a été arrêté. Revenez au relais officiel, ou rejoignez-le à nouveau depuis votre ordinateur.",
+    "credentialMissingHint": "L'identifiant du relais n'est plus sur ce téléphone. Rejoignez-le à nouveau depuis votre ordinateur, ou revenez au relais officiel.",
+    "confirmTitle": "Revenir au relais officiel ?",
+    "confirmBody": "Ce téléphone quittera « {{name}} » et utilisera le relais officiel {{appName}}. Pour réutiliser ce relais, rejoignez-le à nouveau depuis votre ordinateur.",
+    "confirmAction": "Revenir",
+    "switchFailed": "Impossible de revenir au relais officiel. Réessayez dans un instant.",
+    "pushUnavailable": "Tant que vous utilisez votre propre relais, les notifications de tâches de vos ordinateurs ne sont pas envoyées sur ce téléphone."
+  },
+  "issue": {
+    "removedTitle": "Retiré du relais",
+    "removedHint": "Ce téléphone a été retiré du relais, ou le relais a été arrêté. Vous pouvez revenir au relais officiel dans les Paramètres."
+  },
+  "join": {
+    "title": "Rejoindre le relais",
+    "checking": "Connexion au relais…",
+    "body": "Une fois connecté, ce téléphone communique avec vos ordinateurs via ce relais. La connexion, les modèles, les tâches partagées et les autres services passent toujours par {{appName}}. Tant que vous utilisez votre propre relais, les notifications de tâches de vos ordinateurs ne sont pas envoyées sur ce téléphone.",
+    "switchNote": "Rejoindre ce relais fait passer ce téléphone de « {{current}} » à ce relais.",
+    "action": "Rejoindre",
+    "pairingCodeLabel": "Code d'appairage",
+    "verifyHint": "Sur l'ordinateur qui fait tourner le relais, vérifiez que ces chiffres s'affichent, puis approuvez.",
+    "waiting": "En attente d'approbation…",
+    "cancel": "Annuler",
+    "joinedTitle": "Relais rejoint",
+    "joinedBody": "Ce téléphone communique désormais avec vos ordinateurs via « {{name}} ».",
+    "done": "Terminé",
+    "retry": "Réessayer",
+    "signedOut": "Connectez-vous d'abord à {{appName}}, puis rejoignez ce relais.",
+    "signIn": "Se connecter",
+    "invalidLink": "Ce lien d'invitation n'est pas valide ou a expiré. Créez-en un nouveau sur votre ordinateur.",
+    "cancelled": "La connexion a été annulée. Pour rejoindre ce relais, créez un nouveau lien d'invitation sur votre ordinateur."
+  },
+  "errors": {
+    "unreachable": "Impossible de joindre ce relais. Vérifiez que votre téléphone et votre ordinateur sont sur le même réseau, ou que votre téléphone peut ouvrir cette adresse.",
+    "insecureUnreachable": "Impossible de joindre ce relais. Les téléphones ne peuvent rejoindre un relais qu'en HTTPS. Configurez un certificat pour le relais sur votre ordinateur, puis créez un nouveau lien d'invitation.",
+    "notRelay": "Cette adresse n'est pas un relais {{appName}}. Vérifiez le lien d'invitation.",
+    "incompatible": "Ce relais ne fonctionne pas avec cette version de {{appName}}. Mettez à jour le relais et {{appName}}.",
+    "accountMismatch": "Ce relais appartient à un autre compte {{appName}}.",
+    "codeInvalid": "Ce lien d'invitation a expiré. Créez-en un nouveau sur votre ordinateur.",
+    "rateLimited": "Trop de tentatives. Réessayez plus tard.",
+    "rejected": "La demande a été refusée sur l'ordinateur.",
+    "expired": "Délai dépassé en attendant l'approbation. Créez un nouveau lien d'invitation sur votre ordinateur.",
+    "ownerMismatch": "Le relais a renvoyé un certificat qui n'a pas été émis par le propriétaire indiqué dans le lien d'invitation. Vous êtes peut-être connecté à un faux relais : la connexion a donc été interrompue.",
+    "failed": "Impossible de rejoindre le relais. Réessayez plus tard.",
+    "saveFailed": "La demande a été approuvée, mais l'identifiant du relais n'a pas pu être enregistré sur ce téléphone. Créez un nouveau lien d'invitation sur votre ordinateur et réessayez.",
+    "credentialUnavailable": "Ce téléphone n'a pas d'identifiant de relais utilisable. Rejoignez-le à nouveau, ou revenez au relais officiel dans les Paramètres."
+  }
+}

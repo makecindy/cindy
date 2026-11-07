@@ -1,3 +1,4 @@
+import { providersSettings } from './ProvidersSection.settings-search';
 import { AddSpeechModelsDialog } from './AddSpeechModelsDialog';
 import { providerSpeechSetup } from '../../../shared/speechProviderSetup';
 import { useCodexRateLimits } from '@/hooks/useCodexRateLimits';
@@ -111,12 +112,12 @@ import {
   MANAGED_OLLAMA_PROVIDER_ID,
 } from '../../../shared/localModelRuntime';
 import { OAuthBrowserLink, OAuthDeviceCodeCard } from './OAuthDeviceCodeCard';
-import { ProviderImportDialog } from './ProviderImportDialog';
+import { ProviderImportDialog, ProviderImportBatchDialog, ProviderImportFileButton } from './ProviderImportDialog';
 import { SettingsTextInput } from './SettingsTextInput';
 import { buildUnionRows, UnifiedModelList } from './UnifiedModelList';
 import { AnthropicMark } from '@/components/icons/AnthropicMark';
 import { OpenAIMark } from '@/components/icons/OpenAIMark';
-import { XDIncMark } from '@/components/icons/XDIncMark';
+import { CindyMark } from '@/components/icons/CindyMark';
 import { hasProviderLogo, ProviderLogoMark } from '@/components/icons/ProviderLogoMark';
 import { SortableList } from '@/components/sidebar/SortableList';
 import { ProviderShareEntryButton } from '@/features/provider-share/ProviderShareEntryButton';
@@ -210,6 +211,7 @@ function RemoteProviderAccessRow({
   const gate = providerShareGate({ remoteControlEnabled, invocationEnabled: enabled });
   return (
     <div
+      id={providersSettings.sharing.targetId}
       data-testid="provider-remote-access"
       data-share-gate={gate}
       className="flex shrink-0 flex-wrap items-center gap-x-3 gap-y-2 border-t px-5 py-3"
@@ -223,7 +225,7 @@ function RemoteProviderAccessRow({
           {gate === 'remote-off' ? (
             <>
               {t('providerShare.entry.remoteControlOff')}{' '}
-              <button
+              <button data-setting-id={providersSettings.sharing.id}
                 type="button"
                 onClick={() => navigate('/settings?tab=remote-control')}
                 className="text-[var(--text-secondary)] underline underline-offset-2 transition-colors hover:text-[var(--text-primary)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)]"
@@ -247,7 +249,7 @@ function RemoteProviderAccessRow({
           pendingCount={pendingShareRequests}
           onOpen={onManageShare}
         />
-        <Switch
+        <Switch data-setting-id={providersSettings.sharing.id}
           checked={enabled}
           disabled={busy || !remoteControlEnabled}
           aria-label={t('settings.providers.detail.remoteAccess.ariaLabel')}
@@ -315,7 +317,7 @@ function useRemoteControlEnabled(): boolean | null {
 /** 供应商行图标(内置品牌 mark / 首字母 monogram)。 */
 function providerIcon(p: ProviderView, size: number): ReactNode {
   if (hasProviderLogo(p.id, p.routing)) {
-    return <ProviderLogoMark providerId={p.id} routing={p.routing} size={size} />;
+    return <ProviderLogoMark providerId={p.id} routing={p.routing} logoKind={p.logoKind} size={size} />;
   }
   return <span className="text-15 font-medium leading-none">{providerMonogram(p.name)}</span>;
 }
@@ -367,7 +369,7 @@ function PillButton({
   disabled?: boolean;
 }) {
   return (
-    <Button variant="secondary" size="md" onClick={onClick} disabled={disabled}>
+    <Button data-settings-search-action="Open the labeled provider setup or account action" variant="secondary" size="md" onClick={onClick} disabled={disabled}>
       {label}
     </Button>
   );
@@ -390,7 +392,7 @@ function CtaPillButton({
   className?: string;
 }) {
   return (
-    <Button variant="cta" size={size} onClick={onClick} className={className}>
+    <Button data-settings-search-action="Open the labeled provider setup or account action" variant="cta" size={size} onClick={onClick} className={className}>
       {label}
     </Button>
   );
@@ -808,7 +810,7 @@ function DetailHeader({
               <DropdownMenu>
                 <DropdownMenuTrigger asChild>
                   <Tip text={t('settings.providers.detail.moreActionsAria')}>
-                    <button
+                    <button data-settings-search-action="Open the provider action menu"
                       type="button"
                       aria-label={t('settings.providers.detail.moreActionsAria')}
                       className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full transition-colors hover:bg-[var(--surface-hover)]"
@@ -1056,7 +1058,7 @@ function LocalProviderNameInput({
   const { t } = useTranslation();
   const [name, setName] = useState(initialName);
   return (
-    <SettingsTextInput
+    <SettingsTextInput data-setting-id={providersSettings.providers.id}
       aria-label={t('settings.providers.pill.rename')}
       value={name}
       maxLength={128}
@@ -1339,7 +1341,7 @@ function XaiHeader({
           deviceLogin ? (
             <OAuthDeviceCodeCard deviceCode={deviceCode} />
           ) : (
-            <Button variant="secondary" size="md" onClick={() => void handleLogin('device')}>
+            <Button data-settings-search-action="Start device-code sign-in for this provider" variant="secondary" size="md" onClick={() => void handleLogin('device')}>
               {t('settings.connections.xai.deviceLogin')}
             </Button>
           )
@@ -1500,7 +1502,7 @@ function GenericOAuthHeader({
     ) : loggingIn && browserUrl ? (
       <OAuthBrowserLink url={browserUrl} />
     ) : !connected && !loggingIn && xaiDeviceFlow ? (
-      <Button variant="secondary" size="md" onClick={() => void handleLogin('device')}>
+      <Button data-settings-search-action="Start device-code sign-in for this provider" variant="secondary" size="md" onClick={() => void handleLogin('device')}>
         {t('settings.connections.xai.deviceLogin')}
       </Button>
     ) : undefined;
@@ -1649,7 +1651,7 @@ function BuiltinApiKeyHeader({
       : editAction;
   const detail = editing ? (
     <div className="flex items-center gap-2 pt-2">
-      <SettingsTextInput
+      <SettingsTextInput data-setting-id={providersSettings.providers.id}
         value={draftKey}
         onChange={setDraftKey}
         placeholder={t('settings.providers.builtinApiKey.keyPlaceholder')}
@@ -1924,7 +1926,7 @@ function XdGatewayHeader({
                 )}
               </p>
             </div>
-            <Button
+            <Button data-settings-search-action="Refresh this provider account balance"
               variant="secondary"
               size="sm"
               tone="quiet"
@@ -2020,7 +2022,7 @@ function XdGatewayHeader({
   return (
     <DetailHeader
       children={children}
-      icon={<XDIncMark size={18} />}
+      icon={<ProviderLogoMark providerId="xd" logoKind={provider?.logoKind} size={18} />}
       title={provider ? providerDisplayName(provider, t) : t('settings.providers.xd.title')}
       identityBadge={
         syncStatus.accountTier === 'free' ? (
@@ -2215,7 +2217,7 @@ const CINDY_SIGNIN_ID = 'xd-signin';
 function CindySigninRow({ selected, onSelect }: { selected: boolean; onSelect: () => void }) {
   const { t } = useTranslation();
   return (
-    <button
+    <button data-settings-search-action="Select the provider whose details are displayed"
       type="button"
       onClick={onSelect}
       aria-current={selected}
@@ -2234,7 +2236,7 @@ function CindySigninRow({ selected, onSelect }: { selected: boolean; onSelect: (
           color: 'var(--settings-integration-avatar-icon)',
         }}
       >
-        <XDIncMark size={14} />
+        <CindyMark size={14} />
       </div>
       <span
         className="min-w-0 flex-1 truncate text-13 font-medium"
@@ -2290,7 +2292,7 @@ function ListRow({
       )}
     >
       {sortable && (
-        <button
+        <button data-setting-id={providersSettings.providers.id}
           type="button"
           className="provider-order-handle absolute inset-y-0 left-0 z-[1] my-auto flex h-9 w-3 cursor-grab items-center justify-center rounded-md outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-[var(--focus-ring-soft)]"
           aria-label={t('settings.providers.order.handle', {
@@ -2310,7 +2312,7 @@ function ListRow({
         </button>
       )}
       <Tip text={title} side="right" contentClassName="max-w-[360px] break-words">
-        <button
+        <button data-settings-search-action="Select the provider whose details are displayed"
           type="button"
           onClick={onSelect}
           onDoubleClick={provider.id === 'xd' ? undefined : () => void management.rename()}
@@ -2395,7 +2397,7 @@ function SuggestionRow({
   const cliName = localCliDisplayName(detection.cli);
   const title = providerDisplayName(provider, t);
   return (
-    <button
+    <button data-settings-search-action="Open the labeled provider setup or account action"
       type="button"
       onClick={onClick}
       title={t(
@@ -2523,7 +2525,7 @@ export function ProvidersSection() {
     modelId: string;
     agent?: AgentKind;
   } | null>(null);
-  const [providerImportId, setProviderImportId] = useState<string | null>(null);
+  const [providerImportId, setProviderImportId] = useState<string | string[] | null>(null);
   const closeProviderImport = useCallback(() => setProviderImportId(null), []);
   const finishProviderImport = useCallback(
     (providerId: string) => {
@@ -3212,11 +3214,7 @@ export function ProvidersSection() {
       {catalogError && <LocalModelCatalogNotice failure={catalogError} onRetry={refetch} />}
       {!loading && (
         <div
-          className="flex min-h-0 flex-1 overflow-hidden rounded-xl border"
-          style={{
-            backgroundColor: 'var(--settings-theme-card-bg)',
-            borderColor: 'var(--settings-theme-card-border)',
-          }}
+          className="flex min-h-0 flex-1 overflow-hidden rounded-xl border border-[var(--settings-theme-card-border)] bg-[var(--settings-theme-card-bg)]"
         >
           {/* 左栏 */}
           <div
@@ -3289,11 +3287,11 @@ export function ProvidersSection() {
                 </>
               )}
             </div>
-            <div id="settings-search-settings-providers-addProvider"
-              className="border-t p-2"
+            <div id={providersSettings.addProvider.targetId}
+              className="flex flex-col gap-2 border-t p-2"
               style={{ borderColor: 'var(--settings-theme-card-border)' }}
             >
-              <Button
+              <Button data-setting-id={providersSettings.addProvider.id}
                 variant="secondary"
                 size="lg"
                 ref={addProviderButtonRef}
@@ -3302,8 +3300,12 @@ export function ProvidersSection() {
                 className="w-full"
               >
                 <Plus size={15} />
-                {t('settings.providers.addProvider')}
+                {t(providersSettings.addProvider.titleKey)}
               </Button>
+              <ProviderImportFileButton
+                key={`${dataOwnerId}:${ownerGeneration}`}
+                onImported={setProviderImportId}
+              />
             </div>
           </div>
 
@@ -3343,7 +3345,7 @@ export function ProvidersSection() {
                     color: 'var(--settings-integration-avatar-icon)',
                   }}
                 >
-                  <XDIncMark size={24} />
+                  <CindyMark size={24} />
                 </div>
                 <span
                   className="mt-4 text-24 font-medium leading-[1.2]"
@@ -3582,15 +3584,22 @@ export function ProvidersSection() {
           entry={wizard.entry}
           detected={wizard.detected}
           onReturnCustom={(draft) => { setWizard(null); setDialog({ mode: 'create', draft }); }}
+          onEntryUnavailable={dialog?.mode === 'create' ? (reason) => {
+            setWizard(null);
+            if (reason !== 'connection-failed') toast.error(t('settings.providers.custom.nameSearchUnavailable'));
+          } : undefined}
           onOpenCustomForm={() => {
             setWizard(null);
             setDialog({ mode: 'create' });
           }}
           onClose={() => setWizard(null)}
           onDone={async (providerId) => {
-            await refetch();
-            setWizard(null);
+            // 退出已完成；先卸载本实例，让刷新期间的新入口挂载全新向导。
+            setWizard(current => current === wizard ? null : current);
+            // 只清理本次搜索挂起的草稿；刷新期间用户可以打开另一个编辑框。
+            setDialog(current => current?.mode === 'create' && current === dialog ? null : current);
             if (providerId) selectProvider(providerId);
+            await refetch();
           }}
         />
       )}
@@ -3599,6 +3608,9 @@ export function ProvidersSection() {
         <ProviderConnectionDialog
           draft={dialog.mode === 'create' ? dialog.draft : undefined}
           onDetected={(detected) => { setDialog(null); setWizard({ detected }); }}
+          providers={providers}
+          suspended={dialog.mode === 'create' && !!wizard}
+          onSelectProvider={dialog.mode === 'create' ? entry => setWizard({ entry }) : undefined}
           initial={dialog.mode === 'edit' ? dialog.config : undefined}
           catalogModels={dialog.mode === 'edit' ? providers.find(p =>
             p.source === 'user' && storedCustomProviderId(p.id) === dialog.config.id)?.models : undefined}
@@ -3613,7 +3625,14 @@ export function ProvidersSection() {
         />
       )}
 
-      {providerImportId && (
+      {Array.isArray(providerImportId) ? (
+        <ProviderImportBatchDialog
+          key={`${dataOwnerId}:${ownerGeneration}:${providerImportId.join(',')}`}
+          importIds={providerImportId}
+          onClose={closeProviderImport}
+          onDone={finishProviderImport}
+        />
+      ) : providerImportId && (
         <ProviderImportDialog
           key={`${dataOwnerId}:${ownerGeneration}:${providerImportId}`}
           importId={providerImportId}

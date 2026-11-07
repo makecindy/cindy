@@ -9,7 +9,7 @@ import { forgetSharedTaskList, sharedTaskApi } from './sharedTaskApi.js';
 import { executeSharedTaskAccountCommand, executeSharedTaskHostCommand } from './sharedTaskCommands.js';
 
 /** Narrow Renderer adapter; account operations cannot be tunneled on somebody else's login. */
-export function registerSharedTaskIpc(available: () => boolean, relayOnline: () => boolean): void {
+export function registerSharedTaskIpc(available: () => boolean, relayOnline: () => boolean, waitForRelay: () => Promise<void>): void {
   const availableOnline = () => {
     // A transient disconnect is not evidence of an unsupported server version.
     if (!relayOnline()) throwIpcError('DEVICE_LINK_NOT_CONNECTED', 'SharedTask relay is not connected');
@@ -19,11 +19,13 @@ export function registerSharedTaskIpc(available: () => boolean, relayOnline: () 
     const context = getDeviceLinkInvokeContext();
     if (context?.sharedTask) throwIpcError('PERMISSION_DENIED', 'Only the sharedTask owner can manage members');
     if (!context) assertTrustedAppRendererEvent(event);
+    await waitForRelay();
     return executeSharedTaskHostCommand(raw, { available: availableOnline, host: requireSharedTaskHost });
   });
   ipcMain.handle(SHARED_TASK_ACCOUNT_CHANNEL, async (event, raw: unknown) => {
     if (getDeviceLinkInvokeContext()) throwIpcError('PERMISSION_DENIED', 'SharedTask account operations are local only');
     assertTrustedAppRendererEvent(event);
+    await waitForRelay();
     if (!availableOnline()) throwIpcError('UNSUPPORTED_CAPABILITY', 'SharedTask mode requires updated clients and server');
     // Event-driven directory reads must not reuse a list cached before the event.
     if (raw && typeof raw === 'object' && (raw as { fresh?: unknown }).fresh === true) forgetSharedTaskList();

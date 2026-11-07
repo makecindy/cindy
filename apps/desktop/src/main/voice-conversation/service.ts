@@ -63,7 +63,7 @@ export class VoiceConversationService {
       models(): VoiceConversationModel[];
       createDialogue?(selection: VoiceConversationStart, emit: (record: import("@cindy/maker-core").VoiceCallRecord) => void): CompanionCallDialogue;
       createProvider(): Promise<AsrProvider>;
-      createAudioGate?(): AudioGate | undefined;
+      createAudioGate?(onFiltered: () => void): AudioGate | undefined;
       connection(selection: SpeechModelSelection): SpeechConnection;
       fetch: typeof fetch;
       hasReplyHook?(): boolean;
@@ -262,7 +262,11 @@ export class VoiceConversationService {
   private createInput(call: Call): VoiceConversationInput {
     const inputGeneration = call.inputGeneration;
     const current = () => this.call === call && call.inputGeneration === inputGeneration;
-    const audioGate = this.deps.createAudioGate?.();
+    const audioGate = this.deps.createAudioGate?.(() => {
+      // Muted speech never reaches ASR, so only this notice tells the user why.
+      if (!current() || this.deps.owner() !== call.owner) return;
+      this.deps.emit(call.sender, { callId: call.id, inputGeneration, event: { type: 'speaker-filtered' } });
+    });
     this.deps.log?.info('input filter configured', {
       callId: call.id,
       inputGeneration,

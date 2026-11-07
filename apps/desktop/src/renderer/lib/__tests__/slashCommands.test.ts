@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { CINDY_LEARN_SOURCE_DESCRIPTION } from '../../../shared/cindyBuiltInSkills';
 
 import {
+  addPluginSkillSetupCommands,
   commandsForHelpCard,
   filterSlashCommands,
   firstAvailableSlashCommandIndex,
@@ -12,6 +13,7 @@ import {
   loadAllCommands,
   mergeCommands,
   nextAvailableSlashCommandIndex,
+  pluginSkillSetupName,
   rebaseInlineRangesAfterSlashCommandRewrite,
   reconcilePiRuntimeCommandForDispatch,
   reconcilePiRuntimeCommandForDispatchWithRetry,
@@ -704,5 +706,46 @@ describe('Claude managed skill dispatch', () => {
   it('rewrites the short Cindy command to its native plugin command, preserving arguments', () => {
     const command = skill({ name: 'learn', runtimeCommandName: 'cindy:learn', builtIn: true });
     expect(rewriteAgentSkillInvocationForDispatch('/learn keep this workflow', command)).toBe('/cindy:learn keep this workflow');
+  });
+});
+
+describe('plugin Skill setup rows', () => {
+  const entry = { skillName: 'pr', description: 'Needs the GitHub plugin', meta: 'Not installed' };
+
+  it('appends a selectable setup row after every real command when the Skill is absent', () => {
+    const commands = mergeCommands(
+      [{ kind: 'desktop', name: 'help', description: 'Help' }],
+      [],
+      [skill({ name: 'zeta' }), skill({ name: 'repo', scope: 'repo', runtimeStatus: 'discovered' })],
+    );
+    const result = addPluginSkillSetupCommands(commands, [entry]);
+    expect(result.map((command) => command.name)).toEqual(['zeta', 'help', 'repo', 'pr']);
+    const row = result[3];
+    expect(row).toMatchObject({ kind: 'desktop', description: entry.description, meta: entry.meta });
+    expect(isSlashCommandUnavailable(row)).toBe(false);
+    expect(pluginSkillSetupName(row)).toBe('pr');
+    expect(pluginSkillSetupName(result[0])).toBeUndefined();
+    // Filtering keeps the same row object, so selection still recognizes it.
+    expect(pluginSkillSetupName(filterSlashCommands(result, 'pr')[0])).toBe('pr');
+  });
+
+  it('never shadows a command of the same name, available or not', () => {
+    const real = [skill({ name: 'PR' })];
+    expect(addPluginSkillSetupCommands(real, [entry])).toBe(real);
+    const unavailable = [skill({ name: 'pr', scope: 'repo', runtimeStatus: 'discovered' })];
+    expect(addPluginSkillSetupCommands(unavailable, [entry])).toBe(unavailable);
+    const none: UnifiedCommand[] = [];
+    expect(addPluginSkillSetupCommands(none, [])).toBe(none);
+  });
+
+  it('lets an enable row replace the Skill linked from an install the project has switched off', () => {
+    const linked = [skill({ name: 'pr' }), skill({ name: 'zeta' })];
+    const result = addPluginSkillSetupCommands(linked, [{ ...entry, replacesInstalled: true }]);
+    expect(result.map((command) => command.name)).toEqual(['zeta', 'pr']);
+    expect(pluginSkillSetupName(result[1])).toBe('pr');
+  });
+
+  it('does not mark an ordinary desktop command of the same shape', () => {
+    expect(pluginSkillSetupName({ kind: 'desktop', name: 'pr', description: 'x' })).toBeUndefined();
   });
 });

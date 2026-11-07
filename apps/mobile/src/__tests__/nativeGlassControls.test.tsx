@@ -9,6 +9,8 @@ import { useNativeGlassButtonStyle } from "../platform/chrome/nativeGlassButtonS
 import { NewTaskSelectionSheet } from "../session/NewTaskSelectionSheet.ios";
 import { ContextSheetFooterButton, ContextSheetRow } from "../session/ContextSheet.ios";
 import { PermissionGuideView } from "../remote-desktop/PermissionGuideView.ios";
+import { HomeDisplayMenu } from "../session/HomeDisplayMenu.ios";
+import { buildHomeDisplayPullDownActions, homeDisplayActionPatch, type HomeDisplayMenuState } from "../session/homeChromeMenus";
 import type { NewTaskSelectionSheetProps } from "../session/NewTaskSelectionSheet";
 
 const state = vi.hoisted(() => ({ glass: true, mode: "light" }));
@@ -40,6 +42,19 @@ vi.mock("@/theme", () => ({
 }));
 vi.mock("@/session/useLiquidGlassAvailable", () => ({
   useLiquidGlassAvailable: () => state.glass,
+}));
+vi.mock("@/platform/chrome/useNativeMenuReminderImage", () => ({
+  useNativeMenuReminderImage: () => '/cache/reminder.png',
+}));
+// Display settings do not use device scope navigation or remote collections.
+vi.mock("@/session/mobileHome", () => ({ canBrowseMobileHomeDevice: () => true }));
+vi.mock("@/device-link/remoteResources", () => ({ serializeRemoteResourceTargets: vi.fn() }));
+// MenuView 2.0 Fabric's SubAction has no subactions: inline sections consume
+// its only child level. Model that native boundary for the pre-fix regression.
+vi.mock("@/platform/chrome/NativePullDownMenu", () => ({
+  NativePullDownMenu: ({ actions, onAction }: any) => actions.flatMap((section: any) =>
+    (section.subactions ?? [section]).map((action: any) =>
+      <button key={action.id} data-testid={`home.displayMenu.${action.id}`} onClick={() => onAction(action.id)}>{action.title}</button>)),
 }));
 vi.mock("react-i18next", () => ({
   useTranslation: () => ({ t: (key: string) => key }),
@@ -86,7 +101,13 @@ vi.mock("@expo/ui/swift-ui", () => {
     RNHostView: Container,
     Text: ({ children, modifiers }: any) => <span data-text-style={JSON.stringify(modifiers)}>{children}</span>,
     Picker: Container,
-    Toggle: () => null,
+    Toggle: ({ children, isOn, onIsOnChange, testID, modifiers = [] }: any) => (
+      <button data-testid={testID} aria-checked={isOn} data-button-style={JSON.stringify(modifiers)}
+        disabled={modifiers.some((m: any) => m.name === "disabled" && m.value)}
+        onClick={() => onIsOnChange(!isOn)}>{children}</button>
+    ),
+    Menu: ({ children, label, testID }: any) => <div data-testid={testID}>{label}{children}</div>,
+    Section: Container,
     Divider: () => null,
     LabeledContent: Container,
     Image: () => null,
@@ -130,6 +151,10 @@ vi.mock("@expo/ui/swift-ui/modifiers", () => {
     "fixedSize",
     "multilineTextAlignment",
     "padding",
+    "menuStyle",
+    "menuIndicator",
+    "menuOrder",
+    "menuActionDismissBehavior",
   ];
   return {
     ...Object.fromEntries(
@@ -152,6 +177,48 @@ function mount(children: ReactNode) {
   act(() => root.render(children));
   return host;
 }
+
+// Unit: Duo's sidebar display settings must deliver deep leaf IDs to the real
+// preference reducer. Existing menu-model tests never cross the native presenter.
+// Minimum failure: inline section → submenu → leaf (MenuView Fabric drops leaf).
+it.each(["light", "dark"])("applies nested sidebar display choices in %s", (mode) => {
+  state.mode = mode;
+  const changed = vi.fn();
+  function DisplayMenu() {
+    const [settings, setSettings] = useState<HomeDisplayMenuState>({
+      groupByProject: true, groupDialogue: false, sortBy: 'priority', projectOrder: 'activity',
+      statusFilter: 'active', projectFilter: 'all', vendorFilter: 'all', lastActivityFilter: 'all',
+      viewMode: 'text', taskInfoFields: [],
+    });
+    const actions = buildHomeDisplayPullDownActions({ state: settings,
+      projects: [{ key: 'project-a', title: 'Project A', count: 1 }], dialogueCount: 0, t: key => key });
+    return <HomeDisplayMenu actions={actions} accessibilityLabel="Display settings" onAction={id => {
+      const patch = homeDisplayActionPatch(id, settings);
+      changed(patch);
+      if (patch) setSettings(current => ({ ...current, ...patch }));
+    }}><span>More</span></HomeDisplayMenu>;
+  }
+  const host = mount(<DisplayMenu />);
+  // Preserve the existing automation identifier across component extraction;
+  // losing it would make the menu trigger undiscoverable by its stable ID.
+  expect(host.querySelector('[data-testid="home.displaySettingsButton"]')).not.toBeNull();
+  const option = (id: string) => host.querySelector(`[data-testid="home.displayMenu.${id}"]`) as HTMLButtonElement;
+  expect(option('status.archived')).not.toBeNull();
+  act(() => option('status.archived').click());
+  expect(changed).toHaveBeenLastCalledWith({ statusFilter: 'archived' });
+  expect(option('status.archived').getAttribute('aria-checked')).toBe('true');
+  expect(option('status.active').getAttribute('aria-checked')).toBe('false');
+  act(() => option('filter.project:project-a').click());
+  expect(changed).toHaveBeenLastCalledWith({ projectFilter: ['project-a'] });
+  expect(option('filter.project:project-a').getAttribute('aria-checked')).toBe('true');
+  expect(JSON.parse(option('filter.project:project-a').getAttribute('data-button-style')!))
+    .toContainEqual({ name: 'menuActionDismissBehavior', value: 'disabled' });
+  act(() => option('filter.reset').click());
+  expect(changed).toHaveBeenLastCalledWith(expect.objectContaining({ projectFilter: 'all' }));
+  expect(option('filter.reset').disabled).toBe(true);
+  act(() => option('filter.reset').click());
+  expect(changed).toHaveBeenCalledTimes(3);
+});
 
 it.each(["light", "dark"])("keeps the context row label and hit area while toggling a sized trailing icon in %s", (mode) => {
   state.mode = mode;

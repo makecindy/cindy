@@ -1,0 +1,88 @@
+{
+  "cachedHistory": {
+    "title": "Computador não conectado",
+    "hint": "O conteúdo salvo está disponível. Conecte seu computador para carregar mais."
+  },
+  "recovery": {
+    "syncing": "Sincronizando…",
+    "recovered": "Restaurado",
+    "syncingHint": "Atualizando conteúdo do seu computador."
+  },
+  "syncFailed": "Falha na sincronização",
+  "resync": "Sincronizar novamente",
+  "resyncing": "Sincronizando novamente",
+  "syncShort": "Sincronizar",
+  "deviceUnresponsiveTitle": "Ainda sem resposta",
+  "deviceUnresponsiveHint": "Nenhuma resposta recebida ainda. Tentando novamente automaticamente.",
+  "localNetwork": {
+    "title": "Rede do celular indisponível",
+    "hint": "Verifique a rede do seu celular. A reconexão será automática quando ela voltar."
+  },
+  "serviceConnection": {
+    "title": "Não foi possível acessar o serviço",
+    "hint": "Seu celular não consegue acessar o serviço no momento. Reconectando automaticamente."
+  },
+  "connectStep1": "Instale e abra {{appName}} no seu computador",
+  "connectStep2": "Entre com a mesma conta do celular",
+  "connectStep3": "Em Configurações → Conexão remota, ative \"Permitir que dispositivos da mesma conta controlem este computador\"",
+  "brandEyebrow": "Cindy Mobile",
+  "cloudTeaserTitle": "{{appName}} na nuvem, em breve",
+  "cloudTeaserCopy": "Após o lançamento, o aplicativo móvel funcionará de forma independente, sem precisar de computador.",
+  "sectionFirstRun": "Começar",
+  "sectionOffline": "Dispositivos conectados",
+  "sectionRemoteDisabled": "No seu computador",
+  "sectionAccessRevoked": "Aprovar acesso novamente",
+  "retryAccess": "Tentar acessar novamente",
+  "recheck": "Verificar novamente",
+  "deviceRemovedTitle": "Dispositivo removido",
+  "deviceRemovedHint": "Saia e entre novamente para voltar à lista de dispositivos.",
+  "authFailedTitle": "Login expirado",
+  "authFailedHint": "Seu login expirou. Saia e entre novamente.",
+  "replacedTitle": "Conexão substituída",
+  "replacedHint": "A conexão deste dispositivo foi substituída em outro lugar. Reconectando agora.",
+  "tooManyConnectionsTitle": "Muitas conexões",
+  "tooManyConnectionsHint": "Há muitos dispositivos online nesta conta. Desconecte outro dispositivo e tente novamente.",
+  "versionMismatchTitle": "Versão incompatível",
+  "versionMismatchHint": "Esta versão do aplicativo é incompatível com o serviço. Atualize para a versão mais recente e tente novamente.",
+  "unstableTitle": "A conexão continua caindo",
+  "unstableHint": "A conexão está instável. Verifique sua rede e aguarde a conexão se restabelecer.",
+  "relay": {
+    "label": {
+      "online": "Conectado ao Relay",
+      "connecting": "Conectando ao Relay",
+      "stopped": "Desconectado do Relay"
+    },
+    "hint": {
+      "online": "As tarefas remotas podem ser sincronizadas.",
+      "lastSynced": "Última sincronização: {{time}}",
+      "connecting": "As tarefas remotas serão reassinadas automaticamente quando a rede voltar.",
+      "stopped": "A conexão será retomada quando você voltar ao aplicativo ou entrar novamente."
+    }
+  },
+  "agentAuth": {
+    "noKey": "Não é possível usar {{agent}} porque nenhuma chave de API está configurada no computador. Configure uma em {{appName}} no computador, em Configurações → Provedores de modelos, e tente novamente.",
+    "noOauth": "Não é possível usar {{agent}} porque a autorização da conta não foi concluída no computador. Reconecte a conta em {{appName}} no computador, em Configurações → Provedores de modelos, e tente novamente.",
+    "noCredentials": "Não é possível usar {{agent}} porque o login não foi feito no computador. Entre por {{appName}} no computador, em Configurações → Provedores de modelos, e tente novamente.",
+    "noEncryption": "Não é possível usar {{agent}} porque o armazenamento seguro do sistema no computador está indisponível. Verifique o Keychain no macOS ou a criptografia da conta no Windows e reinicie {{appName}} no computador.",
+    "proxyNotReady": "{{agent}} ainda não está pronto no computador. Tente novamente em breve; se isso continuar, reinicie {{appName}} no computador.",
+    "default": "Não é possível usar {{agent}} porque seu login no computador está indisponível. Entre novamente por {{appName}} no computador, em Configurações → Provedores de modelos. ({{reason}})"
+  },
+  "remoteError": {
+    "remoteDisabled": "O computador remoto desativou o controle remoto.",
+    "channelNotAllowed": "A versão atual para desktop não oferece suporte a este recurso remoto.",
+    "accessRevoked": "Este computador revogou o acesso pelo celular.",
+    "deviceUnresponsive": "Nenhuma resposta recebida ainda. Tentando novamente automaticamente.",
+    "versionMismatch": "A versão do protocolo do serviço não corresponde. Atualize o aplicativo e tente novamente.",
+    "payloadTooLarge": "Esta transferência é grande demais. Divida-a em partes menores e tente novamente.",
+    "mediaFetchFailed": "Não foi possível buscar o arquivo no computador. Tente novamente mais tarde.",
+    "voiceTranscribeFailed": "Falha na transcrição de voz. Tente novamente ou use o teclado.",
+    "linkNotOpen": "A conexão de controle com o computador foi desconectada e está sendo restabelecida.",
+    "accountChanged": "A conta ou o espaço de trabalho do Codex mudou. Atualize a cota e confirme novamente.",
+    "offerExpired": "A oferta de redefinição do Codex expirou. Atualize a cota e confirme novamente.",
+    "preconditionFailed": "As condições da operação mudaram. Atualize e confirme novamente.",
+    "transient": "A rede ou o computador remoto está temporariamente indisponível. Sincronize novamente mais tarde.",
+    "callFailed": "A chamada remota não foi concluída. Tente novamente em instantes.",
+    "unclassified": "Esta ação não foi concluída. Tente novamente em instantes.",
+    "notFound": "Esse item não existe mais. Volte à lista e atualize antes de tentar novamente."
+  }
+}

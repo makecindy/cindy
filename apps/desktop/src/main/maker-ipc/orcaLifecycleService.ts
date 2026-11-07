@@ -1,3 +1,4 @@
+import type { OrcaWorkerCreateRequest } from './orcaWorkerDefaults';
 import type { AgentKind } from '@cindy/maker-core';
 
 import { normalizeOrcaWorkerLabel } from '@cindy/maker-shared/orca-team';
@@ -100,7 +101,7 @@ export interface OrcaLifecycleDeps {
     assertCurrent: () => Promise<void>;
   }>;
   setWorkerPermissionMode(workerPermissionMode: OrcaWorkerPermissionMode): void;
-  createWorkerInTeam(params: OrcaWorkerCreateInTeamParams, assertCurrent?: () => Promise<void>,
+  createWorkerInTeam(params: Omit<OrcaWorkerCreateInTeamParams, 'agent'> & OrcaWorkerCreateRequest, assertCurrent?: () => Promise<void>,
     onCreated?: (assertCreatedCurrent: () => Promise<void>) => void): Promise<OrcaWorkerCreationResult>;
   dispatchWorkerTask(params: {
     targetSessionId: string;
@@ -136,7 +137,7 @@ export interface OrcaLifecycleDeps {
 export interface OrcaLifecycleService {
   /** Host-only admission check; kept inside native work and its existing compensation. */
   startTeam(params: OrcaStartTeamParams, assertCurrent?: () => Promise<void>): Promise<OrcaStartTeamResult>;
-  createWorker(params: OrcaWorkerCreateParams): Promise<OrcaWorkerCreationResult>;
+  createWorker(params: OrcaWorkerCreateRequest): Promise<OrcaWorkerCreationResult>;
   enableTeam(params: OrcaEnableTeamParams): Promise<OrcaEnableTeamResult>;
 }
 
@@ -264,7 +265,7 @@ export function createOrcaLifecycleService(deps: OrcaLifecycleDeps): OrcaLifecyc
     }
   }
 
-  async function createWorker(params: OrcaWorkerCreateParams): Promise<OrcaWorkerCreationResult> {
+  async function createWorker(params: OrcaWorkerCreateRequest): Promise<OrcaWorkerCreationResult> {
     const override = await deps.getWorkerPermissionModeOverride?.(params.leadSessionId);
     const team = await deps.getActiveTeamByLead(params.leadSessionId);
     await override?.assertCurrent();

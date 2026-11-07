@@ -4,7 +4,7 @@ import { BUNDLED_CATALOG, buildUserProvider, connectedProvidersForAgent, provide
 
 import { checkModelRoute } from '../model-route-guard.js';
 import { createProviderService, type ConnectionReadOptions } from '../provider-service.js';
-import { cindyAiAccountName } from '../../../shared/cindyAiPresentation.js';
+import { cindyAiAccountName, cindyAiAccountLogoKind } from '../../../shared/cindyAiPresentation.js';
 import type { XdOrgIdentity } from '../../../shared/xdOrg.js';
 
 /** 注入内置 bundled 目录作为「当前生效目录」(桌面端真实注入的是 active-catalog 的 getActiveCatalog)。 */
@@ -22,24 +22,29 @@ describe('createProviderService', () => {
     const svc = createProviderService({
       getCatalog: bundledCatalog,
       connection: { xd: () => true, anthropic: () => false, openai: () => false, xai: () => false },
-      getProviderPresentation: (id) => id === 'xd' ? { name: cindyAiAccountName(user, key => labels[key]!) } : {},
+      getProviderPresentation: (id) => id === 'xd' ? { name: cindyAiAccountName(user, key => labels[key]!), logoKind: cindyAiAccountLogoKind(user) } : {},
     });
     const read = async () => (await svc.listProviders({ snapshotOnly: true })).find(p => p.id === 'xd')!;
     const personal = await read();
     expect(personal.name).toBe('Cindy AI · 个人');
+    expect(personal.logoKind).toBe('cindy');
     user = { membershipKind: 'org', orgSlug: 'xd', orgName: '心动网络' };
     const xd = await read();
-    expect(xd).toEqual({ ...personal, name: 'Cindy AI · 心动' });
+    expect(xd).toEqual({ ...personal, name: 'Cindy AI · 心动', logoKind: 'xd' });
     user = { membershipKind: 'org', orgSlug: 'other', orgName: ' Example Studio ' };
     expect((await read()).name).toBe('Cindy AI · Example Studio');
+    expect((await read()).logoKind).toBe('cindy');
     user = { membershipKind: 'org', orgSlug: null, orgName: '心动网络' };
     expect((await read()).name).toBe('Cindy AI · 心动');
+    expect((await read()).logoKind).toBe('xd');
     user = { membershipKind: 'org', orgSlug: 'other', orgName: '心动网络' };
     expect((await read()).name).toBe('Cindy AI · 心动网络');
+    expect((await read()).logoKind).toBe('cindy');
     user = { membershipKind: 'org', orgSlug: null, orgName: null };
     expect((await read()).name).toBe('Cindy AI · 企业');
     user = null;
     expect((await read()).name).toBe('Cindy AI');
+    expect((await read()).logoKind).toBe('cindy');
     expect(BUNDLED_CATALOG.providers.find(p => p.id === 'xd')?.name).toBe('XD Gateway');
   });
   it('snapshot mode suppresses side effects and skips both account presentation readers', async () => {
@@ -421,5 +426,30 @@ describe('createProviderService', () => {
     expect(providers[0]?.connected).toBe(true);
     expect(connectedProvidersForAgent(providers, 'claude-code')).toHaveLength(1);
     expect(connectedProvidersForAgent(providers, 'codex')).toHaveLength(0);
+  });
+});
+
+
+describe('alias exact-route overrides in provider snapshots', () => {
+  it('rechecks custom budget/price state on each snapshot and keeps original members', async () => {
+    const provider = buildUserProvider({ id: 'alias-test', name: 'Alias', runtimes: {
+      codex: { baseUrl: 'https://api.deepseek.com', wireProtocol: 'openai-chat', models: [
+        { id: 'deepseek-flash', name: 'Flash' }, { id: 'deepseek-v4-flash', name: 'Legacy' },
+      ] },
+    } });
+    provider.models.codex!.forEach((m) => { m.selectionAliasKey = 'deepseek-flash'; });
+    let customized = false;
+    const check = vi.fn((_pid: string, _agent: string, id: string) => customized && id === 'deepseek-v4-flash');
+    const svc = createProviderService({ getCatalog: () => ({ ...BUNDLED_CATALOG, providers: [provider] }),
+      connection: { xd: () => false, anthropic: () => false, openai: () => false, xai: () => false },
+      customApiKeyConnected: () => true, hasModelAliasOverride: check });
+    expect((await svc.listProviders())[0].models.codex!.every((m) => m.selectionAliasKey)).toBe(true);
+    customized = true;
+    const rows = (await svc.listProviders())[0].models.codex!;
+    expect(rows.map((m) => m.id)).toEqual(['deepseek-flash', 'deepseek-v4-flash']);
+    expect(rows.every((m) => !m.selectionAliasKey)).toBe(true);
+    expect(provider.models.codex!.every((m) => m.selectionAliasKey)).toBe(true);
+    customized = false;
+    expect((await svc.listProviders())[0].models.codex!.every((m) => m.selectionAliasKey)).toBe(true);
   });
 });

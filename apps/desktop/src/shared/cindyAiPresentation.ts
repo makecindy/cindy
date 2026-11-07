@@ -1,5 +1,10 @@
 import { isXdOrgUser, type XdOrgIdentity } from './xdOrg.js';
 
+/** Temporary XD exception; organization avatars are not model icons. */
+export function cindyAiAccountLogoKind(user: XdOrgIdentity | null | undefined): 'xd' | 'cindy' {
+  return isXdOrgUser(user) ? 'xd' : 'cindy';
+}
+
 /** Presentation only: membership determines the name, never the gateway backend. */
 export function cindyAiAccountName(
   user: XdOrgIdentity | null | undefined,

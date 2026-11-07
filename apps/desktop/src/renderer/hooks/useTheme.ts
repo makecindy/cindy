@@ -236,6 +236,7 @@ export function endLoginFirstLaunchLightGate(): void {
     resolveSessionIsDark(mode),
     mode,
     systemModeFollowsSystem(familyId),
+    document.documentElement.dataset.wallpaperActive === 'true',
   );
 }
 
@@ -356,12 +357,26 @@ export function ThemeProvider({
   // setFamily/storage 跨窗口同步/mount 三个场景(任一变化都重应用)。
   useEffect(() => {
     if (!syncWindowVibrancy) return;
-    window.electronAPI?.theme?.applyVibrancy?.(
-      familyId,
-      resolveSessionIsDark(theme),
-      theme,
-      systemModeFollowsSystem(familyId),
-    );
+    const root = document.documentElement;
+    let lastCovered: boolean | undefined;
+    const sync = () => {
+      // Use the same condition as the opaque wallpaper canvas, including a
+      // retained image while its replacement loads and the 0%-visibility veil.
+      const covered = root.dataset.wallpaperActive === 'true';
+      if (covered === lastCovered) return;
+      lastCovered = covered;
+      window.electronAPI?.theme?.applyVibrancy?.(
+        familyId,
+        resolveSessionIsDark(theme),
+        theme,
+        systemModeFollowsSystem(familyId),
+        covered,
+      );
+    };
+    sync();
+    const observer = new MutationObserver(sync);
+    observer.observe(root, { attributes: true, attributeFilter: ['data-wallpaper-active'] });
+    return () => observer.disconnect();
   }, [familyId, localThemeRev, syncWindowVibrancy, theme, systemPrefersDark]);
 
   const fallbackFromType = useMemo<ThemeType | null>(() => {

@@ -159,7 +159,7 @@ describe('provider share identity scrubbing', () => {
   // Existing cases covered subscription identities, not Cindy AI membership names.
   it.each(['Cindy AI · 个人', 'Cindy AI · 心动', 'Cindy AI · Example Studio'])('removes membership identity from shared labels and catalogs: %s', async (name) => {
     const { scrubProviderShareLabel, scrubSharedProviderCatalog, parseProviderShareReceivedCatalogs } = await import('../providerShareCatalog.js');
-    const provider = { id: 'xd', name };
+    const provider = { id: 'xd', name, logoKind: 'xd' };
     expect(scrubProviderShareLabel(name)).toBe('Cindy AI');
     expect(scrubSharedProviderCatalog({ providers: [provider] })).toEqual({ providers: [{ id: 'xd', name: 'Cindy AI' }] });
     const [entry] = parseProviderShareReceivedCatalogs({ shares: [{
@@ -170,6 +170,7 @@ describe('provider share identity scrubbing', () => {
     expect(entry?.providerLabel).toBe('Cindy AI');
     expect(entry?.catalog).toEqual({ providers: [{ id: 'xd', name: 'Cindy AI' }] });
     expect(provider.name).toBe(name); // Same-account presentation is not mutated.
+    expect(provider.logoKind).toBe('xd');
   });
 
   it('drops account identity fields and removes login names or emails from provider names', async () => {
@@ -200,6 +201,19 @@ describe('provider share identity scrubbing', () => {
     expect(readProviderShareGroupSize({ groupSize: 4 })).toBe(4);
     expect(readProviderShareGroupSize({ groupSize: '4' })).toBeNull();
     expect(readProviderShareGroupSize(null)).toBeNull();
+  });
+
+  // provider-groups.md §6 / provider-sharing.md §5.1 (2026-11-02): the sharer's group still places tasks on
+  // other members when its own login is down, so guests (desktop, phone, scheduled checks) must not drop the
+  // whole shared group from the model list because the group computer's own copy reports connected: false.
+  it.each([
+    ['a shared group whose own login is down stays selectable', { groupSize: 3, connected: false }, true],
+    ['a plain share keeps its own connection state', { connected: false }, false],
+    ['an invalid group size is not treated as a group', { groupSize: 0, connected: false }, false],
+  ])('%s', async (_name, fields, connected) => {
+    const { scrubSharedProviderCatalog } = await import('../providerShareCatalog.js');
+    const [provider] = scrubSharedProviderCatalog({ providers: [{ id: 'anthropic', ...fields }] }).providers;
+    expect(provider).toMatchObject({ id: 'anthropic', connected });
   });
 
   it('keeps only anonymous status enums and preserves positions for unknown or malicious entries', async () => {

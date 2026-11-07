@@ -200,20 +200,28 @@ function drawArrow(
   ctx.fill();
 }
 
+// Point arrays are immutable, including drafts, edits and undo/redo. Weak keys
+// release paths together with their annotations; no raster/alpha cache is used.
+const strokePaths = new WeakMap<readonly RegionPoint[], Path2D>();
+
 function drawStroke(ctx: CanvasRenderingContext2D, points: readonly RegionPoint[]): void {
   if (points.length === 0) return;
-  ctx.beginPath();
-  ctx.moveTo(points[0].x, points[0].y);
-  if (points.length === 1) ctx.lineTo(points[0].x + 0.01, points[0].y);
-  for (let i = 1; i < points.length - 1; i++) {
-    const mid = { x: (points[i].x + points[i + 1].x) / 2, y: (points[i].y + points[i + 1].y) / 2 };
-    ctx.quadraticCurveTo(points[i].x, points[i].y, mid.x, mid.y);
+  let path = strokePaths.get(points);
+  if (!path) {
+    path = new Path2D();
+    path.moveTo(points[0].x, points[0].y);
+    if (points.length === 1) path.lineTo(points[0].x + 0.01, points[0].y);
+    for (let i = 1; i < points.length - 1; i++) {
+      const mid = { x: (points[i].x + points[i + 1].x) / 2, y: (points[i].y + points[i + 1].y) / 2 };
+      path.quadraticCurveTo(points[i].x, points[i].y, mid.x, mid.y);
+    }
+    if (points.length > 1) {
+      const last = points[points.length - 1];
+      path.lineTo(last.x, last.y);
+    }
+    strokePaths.set(points, path);
   }
-  if (points.length > 1) {
-    const last = points[points.length - 1];
-    ctx.lineTo(last.x, last.y);
-  }
-  ctx.stroke();
+  ctx.stroke(path);
 }
 
 export function drawAnnotation(

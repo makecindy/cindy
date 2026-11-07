@@ -14,7 +14,7 @@ vi.mock('react-i18next', () => ({ useTranslation: () => ({ t: (key: string) => k
 vi.mock('@/i18n', () => ({ default: { language: 'en' } }));
 vi.mock('@/hooks/useTheme', () => ({ getInitialThemeVariant: () => ({ theme: 'default' }) }));
 vi.mock('@/themes/theme-service', () => ({ themeService: { applyTheme: vi.fn() } }));
-vi.mock('../ScreenshotToolbar', () => ({ TOOL_SHORTCUTS: {}, ScreenshotModeBar: () => null, ScreenshotStyleBar: () => null, ScreenshotToolbar: () => null }));
+vi.mock('../ScreenshotToolbar', () => ({ TOOL_SHORTCUTS: {}, ScreenshotAiMenu: () => null, ScreenshotModeBar: () => null, ScreenshotStyleBar: () => null, ScreenshotToolbar: () => null }));
 vi.mock('../LiveCapturePanel', () => ({ LiveCapturePanel: () => null }));
 vi.mock('../ScreenshotEditorViewport', () => ({ ScreenshotEditorViewport: () => null }));
 

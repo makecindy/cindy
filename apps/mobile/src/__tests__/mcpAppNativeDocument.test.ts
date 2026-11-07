@@ -48,7 +48,7 @@ import { MCP_APP_STORAGE_BOOTSTRAP, prepareMcpAppNativeDocument } from "../sessi
 const document = {
   viewId: "view",
   html: "<script>window.app=true</script>",
-  csp: "default-src 'none'; script-src 'unsafe-inline'",
+  csp: "default-src 'none'; script-src 'unsafe-inline'; form-action 'none'",
   prefersBorder: true,
 };
 beforeEach(() => {
@@ -81,14 +81,18 @@ it("serves complete App HTML and its exact CSP on a different origin from the tr
   );
   const [resource, proxy] = state.start.mock.calls;
   expect(resource[3]).toBe(document.csp);
+  expect(resource[3]).toContain("form-action 'none'");
   expect(resource[1]).toBe('initialize.html');
   expect(resource[4]).toEqual([["initialize.html", "2", "text/html"], ["resource.html", "0", "text/html"]]);
   expect(
-    state.files.get("file:///cache/mcp-apps/" + "01".repeat(24) + "/0"),
+    state.files.get("file:///cache/mcp-apps/" + "01".repeat(24) + "/0")?.replace(/<script data-cindy-runtime>[\s\S]*?<\/script>/, "").replace(/<script type="importmap">[\s\S]*?<\/script>/, ""),
   ).toBe(document.html);
+  expect(state.files.get("file:///cache/mcp-apps/" + "01".repeat(24) + "/0")).toContain(new URL('/__cindy/sdk/ext-apps/app.js', view.resourceUrl).href);
+  expect(state.files.has("file:///cache/mcp-apps/" + "01".repeat(24) + "/3")).toBe(false);
   expect(proxy[4]).toEqual([["proxy.html", "1", "text/html"]]);
   expect(proxy[3]).toContain("frame-src " + new URL(view.resourceUrl).origin);
   expect(proxy[3]).toContain("connect-src 'none'");
+  expect(proxy[3]).toContain("form-action 'none'");
   const html = state.files.get(
     "file:///cache/mcp-apps/" + "01".repeat(24) + "/1",
   )!;
@@ -182,4 +186,27 @@ it("waits for every server to stop before removing its files, even when one stop
   finish();
   await result;
   expect(state.removed).toHaveLength(1);
+});
+
+// Unit: real JS manifest/cache path; old-host cases do not cover SDK routing or cleanup.
+it('routes the executor SDK in the App origin and cleans it up with the View', async () => {
+  const sdk = { source: 'export class App {}' };
+  const view = await prepareMcpAppNativeDocument({ ...document, html: '<script type="module">import "@modelcontextprotocol/ext-apps";window.app=true</script>', sdk }, 'native-key');
+  expect(state.start.mock.calls[0][4]).toContainEqual(['__cindy/sdk/ext-apps/app.js', '3', 'text/javascript']);
+  const root = 'file:///cache/mcp-apps/' + '01'.repeat(24);
+  expect(state.files.get(root + '/3')).toBe(sdk.source);
+  const html = state.files.get(root + '/0')!;
+  expect(html).toContain(new URL('/__cindy/sdk/ext-apps/app.js', view.resourceUrl).href);
+  expect(html.indexOf('type="importmap"')).toBeLessThan(html.indexOf('window.app'));
+  expect(state.start.mock.calls[0][3]).toBe(document.csp);
+  await view.close();
+  expect(state.removed).toContain(root);
+});
+
+// Lead R6 cross-end compatibility: invalid optional SDK bytes must not add a broken route.
+it('ignores malformed optional SDK metadata on the phone', async () => {
+  const view = await prepareMcpAppNativeDocument({ ...document, sdk: { source: 7 } } as never, 'native-key');
+  expect(state.start.mock.calls[0][4]).toEqual([['initialize.html', '2', 'text/html'], ['resource.html', '0', 'text/html']]);
+  expect(state.files.get('file:///cache/mcp-apps/' + '01'.repeat(24) + '/0')?.replace(/<script data-cindy-runtime>[\s\S]*?<\/script>/, '').replace(/<script type="importmap">[\s\S]*?<\/script>/, '')).toBe(document.html);
+  await view.close();
 });

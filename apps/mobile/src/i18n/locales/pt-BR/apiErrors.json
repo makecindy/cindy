@@ -1,0 +1,6 @@
+{
+  "requestTimeout": "A solicitação excedeu o tempo limite. Tente novamente mais tarde.",
+  "networkUnavailable": "Conexão de rede indisponível. Verifique sua conexão e tente novamente.{{webHint}}",
+  "networkUnavailableWebHint": " A prévia web pode estar bloqueada pela política de CORS do navegador; teste com o Expo Go ou um simulador.",
+  "requestFailed": "A solicitação não foi concluída. Tente novamente em instantes."
+}

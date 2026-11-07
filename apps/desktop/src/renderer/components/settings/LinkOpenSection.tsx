@@ -1,3 +1,5 @@
+import { personalizationDetailsSettings } from './PersonalizationDetails.settings-search';
+import { useSettingDefinition } from './useSettingDefinition';
 /**
  * LinkOpenSection — Settings → 个性化 下的「链接打开方式」偏好。
  *
@@ -23,7 +25,6 @@ import {
   LINK_OPEN_DEFAULTS,
   useLinkOpenPreference,
   type LinkOpenKind,
-  type LinkOpenPreference,
 } from '@/hooks/useLinkOpenPreference';
 import { DefaultOverrideControls } from './DefaultOverrideControls';
 import {
@@ -32,11 +33,6 @@ import {
   SETTINGS_ROW_HINT_CLASS,
   SETTINGS_ROW_LABEL_CLASS,
 } from './settingsRowClasses';
-
-const OPTIONS: Array<{ value: LinkOpenPreference; labelKey: string }> = [
-  { value: 'sidebar', labelKey: 'settings.linkOpen.options.sidebar' },
-  { value: 'external', labelKey: 'settings.linkOpen.options.external' },
-];
 
 /** 带分割线的多行卡片:卡片自身不留内边距,由每行 `px-4 py-4` 承担。 */
 const CARD_CLASS = SETTINGS_CARD_CLASS;
@@ -48,6 +44,11 @@ const DIVIDER_CLASS = SETTINGS_ROW_DIVIDER_CLASS;
 function LinkOpenPreferenceRow({ kind }: { kind: LinkOpenKind }) {
   const { t } = useTranslation();
   const { preference, isCustomized, setPreference } = useLinkOpenPreference(kind);
+  const setting = useSettingDefinition(
+    kind === 'web'
+      ? personalizationDetailsSettings.linkOpenWebLabel
+      : personalizationDetailsSettings.linkOpenLocalLabel,
+  );
 
   const onReset = useCallback(() => {
     setPreference(LINK_OPEN_DEFAULTS[kind]);
@@ -55,21 +56,22 @@ function LinkOpenPreferenceRow({ kind }: { kind: LinkOpenKind }) {
   }, [kind, setPreference, t]);
 
   return (
-    <div className={ROW_CLASS}>
+    <div {...setting.anchorProps} className={ROW_CLASS}>
       <div className="flex min-w-0 flex-col gap-1">
         <p className={ROW_LABEL_CLASS} style={{ letterSpacing: '0.12px' }}>
-          {t(`settings.linkOpen.${kind}.label`)}
+          {setting.title}
         </p>
-        <p className={ROW_HINT_CLASS}>{t(`settings.linkOpen.${kind}.description`)}</p>
+        <p className={ROW_HINT_CLASS}>{setting.description}</p>
       </div>
 
       <div className="cindy-segmented-row-actions">
         <DefaultOverrideControls isCustomized={isCustomized} onReset={onReset} />
         <SegmentedControl
+          {...setting.controlProps}
           aria-label={t(`settings.linkOpen.${kind}.ariaLabel`)}
           value={preference}
           onValueChange={setPreference}
-          options={OPTIONS.map((opt) => ({ value: opt.value, label: t(opt.labelKey) }))}
+          options={setting.options}
         />
       </div>
     </div>

@@ -888,6 +888,19 @@ describe('production cache and empty payload', () => {
     expect(getUsageTaskMeta).not.toHaveBeenCalled();
   });
 
+  // Launch race: the menu bar (and the iPhone widgets it feeds) cached a fresh-looking
+  // empty payload for minutes when the database was not open yet.
+  it('marks an unreadable first read stale so callers retry instead of caching zero usage', async () => {
+    vi.mocked(getAllSpendDays).mockRejectedValueOnce(new Error('DbClient not ready'));
+    const first = await readUsageHistory({ days: 30 });
+    expect(first.stale).toBe(true);
+    expect(first.totals.today).toEqual(zeroUsageMoney());
+    vi.mocked(getAllSpendDays).mockResolvedValue([{ day: TODAY, monies: [actual(2)] }]);
+    const second = await readUsageHistory({ days: 30 });
+    expect(second.stale).toBe(false);
+    expect(second.totals.today).toEqual(actual(2));
+  });
+
   it('writes a structured fresh payload and serves it from memory', async () => {
     vi.mocked(getAllSpendDays).mockResolvedValue([
       { day: TODAY, monies: [actual(2)] },

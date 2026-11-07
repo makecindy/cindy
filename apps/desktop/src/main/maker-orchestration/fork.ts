@@ -18,6 +18,10 @@ import { assertCindyMakeSessionAvailable } from '../cindy-make/featureGate.js';
 import { remoteBackgroundInvoke } from '../device-link/index.js';
 import { forkRemoteAgentSession } from '../remote-agent/controller/fork.js';
 import { remoteAgentInvoker } from '../remote-agent/controller/runClient.js';
+import { parseProviderSharePeer } from '@cindy/device-link';
+import {
+  authorizeSharedTaskHistory, authorizeSharedTaskExecutor, releaseSharedTaskAuthorization,
+} from '../remote-agent/controller/providerShareTaskLocation.js';
 import { getDbClient } from '../localDb/client/current';
 import { sessions, messages } from '../localDb/schema';
 import { sessionToCamel } from '../localDb/mapper';
@@ -999,8 +1003,9 @@ export async function forkSessionAtMessage(
     (usesTailTurnFork || assistantUuid)
   ) {
     const agentKind = dbToMakerAgentKind(forkSource.agentKind);
+    const sourceSdkSessionId = forkSource.sdkSessionId;
     const forkOptions = {
-      sourceSdkSessionId: forkSource.sdkSessionId,
+      sourceSdkSessionId,
       ...(isCodex ? { model: forkSource.model, providerId: forkSource.providerId } : {}),
       upToMessageId: assistantUuid,
       ...(lastTurnId ? { lastTurnId } : {}),
@@ -1012,9 +1017,19 @@ export async function forkSessionAtMessage(
       // agent 实例字段 —— R4 竞态 #1)。
       remoteHostId: source.remoteHostId ?? null,
     };
-    const forkResult = await (forkSource.agentDeviceId
-      ? forkRemoteAgentSession(remoteAgentInvoker(forkSource.agentDeviceId, remoteBackgroundInvoke), {
-          sourceSdkSessionId: forkSource.sdkSessionId,
+    const forkRemote = async () => {
+      const ownerRoute = forkSource.agentDeviceId!;
+      const location = await authorizeSharedTaskHistory(ownerRoute, sourceSessionId, agentKind, forkSource.model);
+      let childGeneration: string | undefined;
+      if (location.direct) {
+        const deviceId = parseProviderSharePeer(location.target)?.deviceId;
+        if (!deviceId) throw new Error('[REMOTE_AGENT_INVALID] invalid shared history executor');
+        const child = await authorizeSharedTaskExecutor(ownerRoute, newSessionId, agentKind, forkSource.model, deviceId, true);
+        childGeneration = child.generation;
+      }
+      try {
+        return await forkRemoteAgentSession(remoteAgentInvoker(location.target, remoteBackgroundInvoke), {
+          sourceSdkSessionId,
           upToMessageId: assistantUuid,
           lastTurnId,
           tailTurnsToDrop,
@@ -1024,7 +1039,14 @@ export async function forkSessionAtMessage(
           agentKind,
           model: forkSource.model,
           providerId: forkSource.providerId,
-        })
+        });
+      } catch (error) {
+        if (location.direct) await releaseSharedTaskAuthorization(ownerRoute, newSessionId, childGeneration).catch(() => undefined);
+        throw error;
+      }
+    };
+    const forkResult = await (forkSource.agentDeviceId
+      ? forkRemote()
       : getMaker().forkSdkSession(agentKind, forkOptions))
       .catch((err: unknown) => {
         // 这里刻意用 isCodex(非 usesTailTurnFork):CODEX_FORK_STATE_UNAVAILABLE 是 codex 专属

@@ -1,3 +1,4 @@
+import { currentSessionCreationSignal } from '../../localDb/sessionRuntimeCleanup.js';
 /**
  * 在另一台电脑上启动 Agent、任务留在本机(控制端入口)。
  *
@@ -16,6 +17,7 @@ import path from 'node:path';
 import {
   REMOTE_AGENT_GROUP_SWITCH_STATE_KEY,
   REMOTE_AGENT_RELAY_KEY_PATTERN,
+  type RemoteAgentCaps,
   type RemoteAgentKind,
   type RemoteAgentMethod,
   type RemoteAgentReply,
@@ -57,6 +59,7 @@ import {
 import { ExecServerRelay } from './execServerRelay';
 import { createReverseHttpRouter, type LocalMcpTarget } from './router';
 import { RemoteAgentPoller, RemoteAgentRunClient, type RemoteAgentInvoke } from './runClient';
+import { isSharedTaskAuthorizationDenied } from './poller';
 
 export interface PreparedRemoteMcp {
   /** 本任务可用的本机 MCP 服务(名字 → 带本任务身份的地址与请求头)。 */
@@ -65,6 +68,12 @@ export interface PreparedRemoteMcp {
 }
 
 export interface StartRemoteAgentDeps {
+  /** Cancellation for this startup attempt only; never cancels other starts of the task. */
+  startupSignal?: AbortSignal;
+  /** A direct share must renew the original executor's grant before reopening. */
+  reconnectAuthorization?(isCurrent: () => boolean, options?: { force?: boolean }): Promise<void>;
+  /** Background renewal is allowed only while M has confirmed the current grant. */
+  onTaskGrantRenewable?(renewable: boolean): void;
   readImageDeliveryEpoch?(sessionId: string): Promise<number>;
   invoke: RemoteAgentInvoke;
   /** 这台电脑的共享拉取器(同一台电脑上的任务共用一个 poll)；缺省时本任务单独一个。 */
@@ -86,10 +95,14 @@ export interface StartRemoteAgentDeps {
   collectAncestorFiles?(workingDir: string): Promise<RemoteAgentWireAncestorFile[]>;
   /** 项目各级上级目录里 Codex 要找的名字有没有(对方据此少问)；缺省不带，对方照常逐个来问。 */
   collectAncestorMarkers?(workingDir: string): Promise<RemoteAgentWireAncestorMarkers>;
-  /** 你这台的个人配置；缺省不同步。 */
-  collectPersonal?(kind: RemoteAgentKind, projectFiles: readonly RemoteAgentWireFile[]): Promise<{
+  /**
+   * 你这台的个人配置；缺省不同步。agent：对方 caps 里与托管 Skill 有关的声明(新运行端才有)。
+   */
+  collectPersonal?(kind: RemoteAgentKind, projectFiles: readonly RemoteAgentWireFile[], agent?: {
+    managedSkillDigests?: Readonly<Record<string, string>>;
+  }): Promise<{
     personal: RemoteAgentWirePersonal;
-    roots: Array<{ relative: string; local: string }>;
+    roots: Array<{ relative: string; local: string; managed?: true }>;
   }>;
   /**
    * 说明文件里 `@` 导入的文件(只对 Claude Code)；会就地改写传入说明文件里的引用。缺省不同步。
@@ -167,10 +180,19 @@ export function takeGroupSwitchState(
  * 影子目录(对方电脑上的路径) → 本机真实路径的映射。虚拟工作区使用固定 opaque 层级，旧协议
  * 仍按真实路径逐级镜像；同步过去的个人 Skill 等映射回你这台的个人配置目录。越具体的放越前面。
  */
+/** 托管 Skill 的映射在影子目录里的虚拟路径(`shadowAliases` 生成的 `from`)。 */
+export function managedAliasSources(
+  shadowDir: string,
+  personalRoots: ReadonlyArray<{ relative: string; managed?: true }>,
+): Set<string> {
+  const shadow = shadowDir.replace(/[\\/]+$/, '');
+  return new Set(personalRoots.filter((root) => root.managed).map((root) => `${shadow}/${root.relative}`));
+}
+
 export function shadowAliases(
   started: { shadowDir: string; mirrorRoot?: string; previousMirrorRoots?: string[]; extraDirs?: string[]; writableDirs?: string[]; virtualWorkspace?: boolean },
   workingDir: string,
-  personalRoots: ReadonlyArray<{ relative: string; local: string }>,
+  personalRoots: ReadonlyArray<{ relative: string; local: string; managed?: true }>,
   directories?: { extraDirs: readonly string[]; writableDirs: readonly string[] },
 ): Array<{ from: string; to: string }> {
   if (!started.shadowDir) return [];
@@ -298,6 +320,27 @@ export function cancelPendingRemoteStart(sessionId: string): void {
   for (const cancel of [...pendingStarts.get(sessionId) ?? []]) cancel();
 }
 
+/** Reuse terminal cancellation from allocation through preparation, without a permanent task tombstone. */
+export function registerPendingRemoteStart(sessionId: string, parent = currentSessionCreationSignal(sessionId)) {
+  const controller = new AbortController();
+  const abort = (reason = new Error('[REMOTE_AGENT_EXPIRED] The task has ended on this computer.')) => controller.abort(reason);
+  const cancel = () => abort();
+  const cancelParent = () => abort(parent?.reason);
+  const cancels = pendingStarts.get(sessionId) ?? new Set<() => void>();
+  pendingStarts.set(sessionId, cancels);
+  cancels.add(cancel);
+  parent?.addEventListener('abort', cancelParent, { once: true });
+  if (parent?.aborted) cancelParent();
+  return {
+    signal: controller.signal, abort,
+    dispose() {
+      parent?.removeEventListener('abort', cancelParent);
+      cancels.delete(cancel);
+      if (!cancels.size && pendingStarts.get(sessionId) === cancels) pendingStarts.delete(sessionId);
+    },
+  };
+}
+
 export async function startRemoteAgentSession(
   kind: RemoteAgentKind,
   opts: StartSessionOptions,
@@ -306,21 +349,38 @@ export async function startRemoteAgentSession(
   if (!opts.sessionId) throw new Error('remote agent sessions require a session id');
   // 第一处异步准备之前登记，MCP 启动期间的删除/归档也不能漏掉。
   const sessionId = opts.sessionId;
-  const abort = new AbortController();
-  const cancel = () => abort.abort();
-  const cancels = pendingStarts.get(sessionId) ?? new Set<() => void>();
-  pendingStarts.set(sessionId, cancels);
-  cancels.add(cancel);
+  const abort = registerPendingRemoteStart(sessionId, deps.startupSignal);
+  const expired = () => new Error('[REMOTE_AGENT_EXPIRED] The task has ended on this computer.');
+  let rejectCancelled!: (error: unknown) => void;
+  const cancelled = new Promise<never>((_, reject) => { rejectCancelled = reject; });
+  let preparedHandle: AgentSessionHandle | undefined;
+  const closeCancelledHandle = () => {
+    void preparedHandle?.close({ reason: 'account-boundary' }).catch(() => undefined);
+  };
+  const onCancelled = () => {
+    closeCancelledHandle();
+    rejectCancelled(abort.signal.reason ?? expired());
+  };
+  abort.signal.addEventListener('abort', onCancelled, { once: true });
   const timing = remoteAgentStartupTiming(deps.log, { side: 'controller', kind, sessionId });
   let status: 'ok' | 'failed' = 'failed';
   try {
-    const handle = await prepareAndStartRemoteAgentSession(kind, opts, deps, abort.signal, timing);
+    if (abort.signal.aborted) throw abort.signal.reason ?? expired();
+    // Reject promptly even when MCP preparation or a remote RPC ignores cancellation.
+    // The preparation path still owns cleanup of any late result.
+    const handle = await Promise.race([
+      prepareAndStartRemoteAgentSession(kind, opts, deps, abort.signal, timing).then(handle => {
+        preparedHandle = handle;
+        if (abort.signal.aborted) { closeCancelledHandle(); throw abort.signal.reason ?? expired(); }
+        return handle;
+      }), cancelled,
+    ]);
     status = 'ok';
     return handle;
   } finally {
+    abort.signal.removeEventListener('abort', onCancelled);
+    abort.dispose();
     timing.finish(status);
-    cancels.delete(cancel);
-    if (!cancels.size && pendingStarts.get(sessionId) === cancels) pendingStarts.delete(sessionId);
   }
 }
 
@@ -380,16 +440,35 @@ async function prepareAndStartRemoteAgentSession(
         }
       : {}),
   });
+  let preparedMcp: PreparedRemoteMcp | undefined;
+  let executorDisposal: Promise<void> | undefined;
+  const disposePreparation = async (): Promise<void> => {
+    const prepared = preparedMcp;
+    preparedMcp = undefined;
+    executorDisposal ??= Promise.resolve().then(() => executor.close());
+    const results = await Promise.allSettled([
+      executorDisposal, Promise.resolve().then(() => prepared?.dispose()),
+    ]);
+    const failures = results.flatMap(result => result.status === 'rejected' ? [result.reason] : []);
+    if (failures.length) throw new AggregateError(failures, 'Remote agent preparation cleanup failed');
+  };
+  const cancelPreparation = () => { void disposePreparation().catch(error => {
+    deps.log?.warn('remote agent: cancelled preparation cleanup failed', { error: String(error) });
+  }); };
+  signal.addEventListener('abort', cancelPreparation, { once: true });
   const vendorOptions: Record<string, unknown> = { ...(opts.vendorOptions ?? {}) };
-  const mcp = await startupTiming
-    .measure('mcp-prepare', () => deps.prepareMcp({ kind, opts, vendorOptions }))
-    .catch((error) => {
-      void executor.close();
-      throw error;
-    });
-  if (signal.aborted) {
-    try { mcp.dispose(); } finally { await executor.close(); }
-    throw new Error('[REMOTE_AGENT_EXPIRED] The task has ended on this computer.');
+  let mcp: PreparedRemoteMcp;
+  try {
+    if (signal.aborted) throw signal.reason;
+    mcp = await startupTiming.measure('mcp-prepare', () => deps.prepareMcp({ kind, opts, vendorOptions }));
+    preparedMcp = mcp;
+    if (signal.aborted) throw signal.reason;
+  } catch (error) {
+    // A late MCP result is disposed here even though the caller already rejected.
+    await disposePreparation();
+    throw error;
+  } finally {
+    signal.removeEventListener('abort', cancelPreparation);
   }
   const router = createReverseHttpRouter({ executor, mcpTarget: (name) => mcp.servers.get(name), hostToolsOnly });
 
@@ -414,9 +493,13 @@ async function prepareAndStartRemoteAgentSession(
    * 第一轮之前可能还没落盘，带 id 接回反而会被当成接不回。
    */
   let hasHistory = isNativeSessionId(opts.resumeSessionId);
+  // Automatic continuation must not silently start with an empty conversation.
+  let restartResumeRequired = false;
   let lastStarted: RemoteStartedInfo | null = null;
 
-  let personalRoots: Array<{ relative: string; local: string }> = [];
+  let personalRoots: Array<{ relative: string; local: string; managed?: true }> = [];
+  /** 上一次打开时托管 Skill 的映射来源：这次不再有的要撤掉。 */
+  let managedAliasFroms = new Set<string>();
   /** 正在连或连着的那条连接(Codex 的执行环境帧经它推给对方)。 */
   let active: RemoteAgentRunClient | null = null;
   let linkState: LinkState = 'connecting';
@@ -425,11 +508,17 @@ async function prepareAndStartRemoteAgentSession(
   let lastActivity = Date.now();
   let releasing: Promise<void> | null = null;
   let reconnecting: Promise<RemoteAgentRunClient> | null = null;
+  /** O issued a replacement grant that M has not confirmed yet; do not issue another. */
+  let taskGrantReissued = false;
   const touch = () => {
     lastActivity = Date.now();
   };
   // 其它回调会改这两个值：读的时候不让 TypeScript 按局部赋值收窄。
   const stateNow = (): LinkState => linkState;
+  const requireOpen = () => {
+    signal.throwIfAborted();
+    if (stateNow() === 'closed') throw new Error('[REMOTE_AGENT_EXPIRED] The task has ended on this computer.');
+  };
   const activeNow = (): RemoteAgentRunClient | null => active;
   // Codex：对方的 Codex 把本机当作 exec-server 执行环境。
   const codexPath = kind === 'codex' && !hostToolsOnly ? deps.codexPath?.() : undefined;
@@ -513,8 +602,7 @@ async function prepareAndStartRemoteAgentSession(
     localDisposal = Promise.allSettled([
       Promise.resolve().then(() => leavePool?.()),
       Promise.resolve().then(() => relay?.close()),
-      Promise.resolve().then(() => mcp.dispose()),
-      Promise.resolve().then(() => executor.close()),
+      Promise.resolve().then(() => disposePreparation()),
     ]).then((results) => {
       const failures = results.flatMap((result) => result.status === 'rejected' ? [result.reason] : []);
       if (failures.length) throw new AggregateError(failures, 'Remote agent local resource cleanup failed');
@@ -540,12 +628,17 @@ async function prepareAndStartRemoteAgentSession(
     const expectedResume = payload.options.resumeSessionId;
     let resumeLost = false;
     // 只处理当前这条连接的往来；正在让出名额的那条剩下的收尾不再进任务。
-    const isCurrent = () => active === client && linkState !== 'releasing';
+    const isCurrent = () => active === client && linkState !== 'releasing' && linkState !== 'closed';
     // 连回时只补新映射，不替换已有的(见 ExecutorWorkspace.addAliases)。
     const applyProjection = (projection: Parameters<typeof shadowAliases>[0], virtualRoot: string | undefined) => {
       const aliases = shadowAliases(projection, workspace.workingDir, personalRoots, openedDirs);
-      if (reconnect) workspace.addAliases(aliases);
-      else workspace.setAliases(aliases);
+      const managed = managedAliasSources(projection.shadowDir, personalRoots);
+      if (reconnect) {
+        // 托管 Skill 每次连回都重新同步(插件更新后目录也变了)：这次的以新的为准，上次有、这次已停用或卸载的也撤掉；
+        // 其余映射只补新的。
+        workspace.addAliases(aliases, new Set([...managedAliasFroms, ...managed]));
+      } else workspace.setAliases(aliases);
+      managedAliasFroms = managed;
       workspace.setVirtualRoot(virtualRoot);
     };
     const client: RemoteAgentRunClient = new RemoteAgentRunClient(deps.newId(), poller, {
@@ -590,6 +683,9 @@ async function prepareAndStartRemoteAgentSession(
         if (request.type === 'http') return router(request, signal);
         if (request.type === 'callback' && request.name === 'onInvalidResumeSession') {
           const expected = request.args[0];
+          if (reconnect && restartResumeRequired && expected === expectedResume) {
+            return { type: 'callback', value: false };
+          }
           const value = typeof expected === 'string' && opts.onInvalidResumeSession
             ? await opts.onInvalidResumeSession(expected)
             : false;
@@ -611,18 +707,33 @@ async function prepareAndStartRemoteAgentSession(
       },
       onClosed: (reason, error, idleReclaimed) => {
         // 让出名额或已被换下的连接：不是任务结束。
-        if (active !== client || linkState === 'releasing') return;
+        if (active !== client || linkState === 'releasing' || linkState === 'closed') return;
         if (!opened) {
           closedEarly = { reason, message: error?.message };
           return;
         }
         active = null;
+        deps.onTaskGrantRenewable?.(false);
         // 对方按闲置收回了它的 Agent 进程(它只收回不忙的任务)：与连接池让出名额一样，本机部分与对话都留着，
         // 要它干活时带原来的会话 id 连回。
-        if (idleReclaimed && controller) {
+        // 'aborted' is only a legacy-host compatibility fallback: old hosts used it
+        // for both shutdown and deliberate disconnect, with no distinguishing cap.
+        // Such an old host may reconnect after a user disconnect (toggle-off still
+        // refuses access). New hosts send controller-disconnected for user actions.
+        const restart = reason === 'missing' || reason === 'provider-restarting' || reason === 'aborted';
+        if ((idleReclaimed || restart) && controller) {
           relay?.reset();
           linkState = 'released';
-          deps.log?.info('remote agent connection reclaimed by the other computer', { kind, runId: client.runId });
+          deps.log?.info('remote agent connection released by the other computer', { kind, runId: client.runId, reason });
+          if (restart) {
+            // A first turn may already have changed local files before its first done.
+            // Resume the native conversation, never replay the original request.
+            if (controller.hasActiveTurn()) {
+              hasHistory = true;
+              restartResumeRequired = true;
+            }
+            controller.onInterrupted();
+          }
           return;
         }
         linkState = 'closed';
@@ -631,11 +742,17 @@ async function prepareAndStartRemoteAgentSession(
       },
       // Codex 经执行环境在本机起的进程还在跑(对方看不到)：拉取时告诉对方，免得被当成闲置收回。
       holdsRemote: () => isCurrent() && relay?.busy() === true,
+      recoverAuthorization: async () => {
+        const current = () => isCurrent() && opened;
+        if (current()) await deps.reconnectAuthorization?.(current);
+      },
     }, deps.newId, deps.log);
     if (stateNow() === 'closed') throw new Error('[REMOTE_AGENT_EXPIRED] The task has ended on this computer.');
     active = client;
+    let remoteStarted = false;
     try {
       const raw = await client.open(kind, payload);
+      remoteStarted = true;
       if (closedEarly) throw new Error((closedEarly as { message?: string }).message ?? '[REMOTE_AGENT_UNAVAILABLE] The agent stopped right after starting.');
       if (stateNow() === 'closed') {
         // 连回途中任务关掉了(那时还没有这条连接可关)：对方已经起了进程，关掉它让出名额。
@@ -643,6 +760,10 @@ async function prepareAndStartRemoteAgentSession(
         throw new Error('[REMOTE_AGENT_EXPIRED] The task has ended on this computer.');
       }
       const started = parseStartedInfo(raw, kind);
+      if (reconnect && restartResumeRequired && (!expectedResume || started.id !== expectedResume)) {
+        await client.close('close', 'navigation').catch(() => undefined);
+        throw new Error('[REMOTE_AGENT_UNAVAILABLE] The original conversation could not be resumed after the supplier stopped.');
+      }
       if (!projectionReady) applyProjection(started, started.virtualWorkspace ? started.mirrorRoot : undefined);
       opened = true;
       linkState = 'connected';
@@ -659,8 +780,17 @@ async function prepareAndStartRemoteAgentSession(
       }
       return client;
     } catch (error) {
-      client.abandon('start-failed');
       if (active === client) active = null;
+      if (remoteStarted && !client.isClosed) {
+        // An invalid started descriptor or a local bootstrap error can occur
+        // after the other computer has started its Agent. End that run before
+        // the caller falls back to another executor.
+        await client.close('close', 'navigation').catch((closeError) => {
+          deps.log?.warn('remote agent: closing a failed startup run failed', {
+            runId: client.runId, error: String(closeError),
+          });
+        });
+      } else client.abandon('start-failed');
       throw error;
     }
   }
@@ -702,21 +832,25 @@ async function prepareAndStartRemoteAgentSession(
   async function buildPayload(
     reconnect: boolean,
     timing: ReturnType<typeof remoteAgentStartupTiming>,
+    caps: RemoteAgentCaps,
   ): Promise<RemoteAgentOpenPayload> {
     // 每次打开都读最新的图片清空代次：让出期间清空过的，连回的新进程按新代次交付。
     const imageDeliveryEpoch = await timing.measure('image-epoch', async () =>
       deps.readImageDeliveryEpoch?.(opts.sessionId!),
     );
+    requireOpen();
     const startOptions = openOptions(reconnect);
     const projectFiles = await timing
       .measure('project-files', () => hostToolsOnly ? Promise.resolve([]) : deps.collectProjectFiles(opts.workingDir))
       .catch(() => []);
+    requireOpen();
     const ancestorFiles = await timing
       .measure(
         'ancestor-files',
         () => (!hostToolsOnly && deps.collectAncestorFiles?.(opts.workingDir) || Promise.resolve([])),
       )
       .catch(() => []);
+    requireOpen();
     // 每次打开(含连回)都重新看一遍：上级目录里的标记以这次打开时为准。
     const ancestorMarkers = await timing
       .measure(
@@ -724,12 +858,15 @@ async function prepareAndStartRemoteAgentSession(
         () => (!hostToolsOnly && deps.collectAncestorMarkers?.(opts.workingDir) || Promise.resolve(undefined)),
       )
       .catch(() => undefined);
+    requireOpen();
     const collectedPersonal = await timing
       .measure(
         'personal-config',
-        () => (!hostToolsOnly && deps.collectPersonal?.(kind, projectFiles) || Promise.resolve(null)),
+        () => (!hostToolsOnly && deps.collectPersonal?.(kind, projectFiles, caps.managedSkills
+          ? { managedSkillDigests: caps.managedSkills.digests } : undefined) || Promise.resolve(null)),
       )
       .catch(() => null);
+    requireOpen();
     personalRoots = collectedPersonal?.roots ?? [];
     const personal = collectedPersonal?.personal ?? { files: [] };
     const importFiles =
@@ -740,6 +877,9 @@ async function prepareAndStartRemoteAgentSession(
             )
             .catch(() => [])
         : [];
+    requireOpen();
+    const gitRepo = await timing.measure('git-probe', () => deps.isGitRepo(opts.workingDir)).catch(() => false);
+    requireOpen();
     return {
       sessionId: opts.sessionId!,
       acceptsImageDeliveryReceipts: true,
@@ -754,9 +894,7 @@ async function prepareAndStartRemoteAgentSession(
         osVersion: `${os.type()} ${os.release()}`,
         // 仅供被控端把项目说明中的本机 Home 路径投影到虚拟工作区；不会进入 deviceHosted。
         homeDir: os.homedir(),
-        isGitRepo: await timing
-          .measure('git-probe', () => deps.isGitRepo(opts.workingDir))
-          .catch(() => false),
+        isGitRepo: gitRepo,
       },
       projectFiles,
       ancestorFiles,
@@ -799,6 +937,7 @@ async function prepareAndStartRemoteAgentSession(
           return RemoteAgentRunClient.caps(deps.invoke);
         }),
       );
+      requireOpen();
       if (caps.virtualWorkspace !== true) {
         throw new Error('[REMOTE_AGENT_UNSUPPORTED] The other computer does not support the virtual workspace required to protect local paths.');
       }
@@ -808,7 +947,9 @@ async function prepareAndStartRemoteAgentSession(
       deps.pool?.noteMaxRuns(caps.maxRuns);
       deps.pool?.noteIdleReclaimMinutes(caps.idleReclaimMinutes);
       await timing.measure('connection-slot', async () => deps.pool?.beforeOpen(member));
-      const payload = await buildPayload(reconnect, timing);
+      requireOpen();
+      const payload = await buildPayload(reconnect, timing, caps);
+      requireOpen();
       try {
         const client = await timing.measure('remote-open', () =>
           openRun(payload, reconnect, onOpened),
@@ -869,17 +1010,27 @@ async function prepareAndStartRemoteAgentSession(
       await releasing.catch(() => undefined);
     }
     linkState = 'connecting';
+    deps.onTaskGrantRenewable?.(false);
     let attempt: Promise<RemoteAgentRunClient> | null = null;
     attempt = (async () => {
-      try {
+      const connectOnce = async (skipAuthorization = false): Promise<RemoteAgentRunClient> => {
+        if (!skipAuthorization) await deps.reconnectAuthorization?.(() => stateNow() !== 'closed');
+        requireOpen();
         const client = await connect(true, (started) => {
           controller?.onReconnected(started);
         });
+        // M's task-scoped open is the confirmation that the current grant is
+        // usable. A later independent M restart may ask O for a new one again.
+        if (stateNow() === 'connected' && activeNow() === client) {
+          taskGrantReissued = false;
+          deps.onTaskGrantRenewable?.(true);
+        }
         touch();
         deps.log?.info('remote agent reconnected', { kind, runId: client.runId });
         try {
           await reapply(client);
         } catch (error) {
+          deps.onTaskGrantRenewable?.(false);
           // 补发失败：关掉这次开的进程、还回名额，保持已让出；待补发的内容都还在，下次调用重新连回再补。
           if (stateNow() === 'connected' && activeNow() === client) {
             linkState = 'releasing';
@@ -889,7 +1040,30 @@ async function prepareAndStartRemoteAgentSession(
         }
         if (stateNow() !== 'connected' || activeNow() !== client) throw new Error('[REMOTE_AGENT_EXPIRED] The task has ended on this computer.');
         return client;
+      };
+      try {
+        const connectWithRecovery = async (): Promise<RemoteAgentRunClient> => {
+          try {
+            return await connectOnce();
+          } catch (error) {
+            if (stateNow() === 'closed' || !deps.reconnectAuthorization
+              || taskGrantReissued || !isSharedTaskAuthorizationDenied(error)) throw error;
+            // M restarted and lost its in-memory task grant. Only O can reissue
+            // that grant, and only for the original M; never migrate native history.
+            // Mark the replacement only after O actually resolves: O being
+            // unreachable must not permanently suppress a later retry.
+            await deps.reconnectAuthorization(() => stateNow() !== 'closed', { force: true });
+            taskGrantReissued = true;
+            return await connectOnce(true);
+          }
+        };
+        const client = await connectWithRecovery();
+        restartResumeRequired = false;
+        return client;
       } catch (error) {
+        // Automatic recovery failed. A later explicit retry may use the normal
+        // invalid-resume callback/context rebuild instead of being stuck forever.
+        restartResumeRequired = false;
         // 连不回(对方忙、离线等)：保持已让出名额，下次发送再试。
         if (stateNow() === 'connecting') linkState = 'released';
         throw localizeRemoteError(error);
@@ -938,9 +1112,18 @@ async function prepareAndStartRemoteAgentSession(
       kind,
       ...(client ? { runId: client.runId } : {}),
     });
-    if (client) void client.close('close', 'navigation').catch(() => undefined);
+    active = null;
+    if (client) {
+      // Notify M, but end reverse HTTP/WS and local resources without waiting for M.
+      void client.close('close', 'navigation').catch(() => undefined);
+      client.abandon('start-cancelled');
+    }
+    void disposeLocal().catch(error => {
+      deps.log?.warn('remote agent: cancelled startup cleanup failed', { error: String(error) });
+    });
   };
   signal.addEventListener('abort', cancelStart, { once: true });
+  if (signal.aborted) cancelStart();
   try {
     await connect(false, (started) => {
       firstStarted = started;

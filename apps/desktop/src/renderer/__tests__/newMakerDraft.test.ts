@@ -2127,3 +2127,24 @@ describe('newMakerDraft agent computer', () => {
     expect(mod.getDraft()).toMatchObject({ workingDir: '/local/proj', agentDeviceId: null, agentDeviceName: null });
   });
 });
+
+// Standard: the new-task preference must survive owner reload without becoming a picker override.
+it('persists the default, preserves explicit permissions, isolates owners and restores auto', async () => {
+  const m = await loadModule();
+  m.setNewMakerDraftOwner('permission-owner');
+  m.patchVendorPrefs('cc', { permissionMode: 'acceptEdits' });
+  m.setNewChatDefaultPermissionMode('bypassPermissions');
+  expect(m.getDraft().lastByVendor.cc.permissionMode).toBe('acceptEdits');
+  expect(m.getDraft().lastByVendor.pi.permissionMode).toBe('bypassPermissions');
+  m.setNewMakerDraftOwner('another-owner');
+  expect(m.getDraft().lastByVendor.pi.permissionMode).toBe('auto');
+  m.setNewMakerDraftOwner('permission-owner');
+  expect(m.getDraft().newChatDefaultPermissionMode).toBe('bypassPermissions');
+  m.setNewChatDefaultPermissionMode(null);
+  expect(m.getDraft().lastByVendor.pi.permissionMode).toBe('auto');
+  expect(m.getDraft().lastByVendor.cc.permissionMode).toBe('acceptEdits');
+  m.setNewMakerDraftOwner('another-owner');
+  m.setNewMakerDraftOwner('permission-owner');
+  expect(m.getDraft().newChatDefaultPermissionMode).toBeNull();
+  expect(m.getDraft().lastByVendor.pi.permissionMode).toBe('auto');
+});

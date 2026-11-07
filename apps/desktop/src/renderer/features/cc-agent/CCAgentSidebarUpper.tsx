@@ -66,7 +66,7 @@ import {
   matchesKeyboardEvent,
   SWITCH_SESSION_SHORTCUT_IDS,
 } from '../../../shared/appShortcuts';
-import { WORKLOUDER_CODEX_AGENT_SLOT_COUNT } from '../../../shared/workLouderCodex';
+import { WORKLOUDER_CREATOR_LIT_TASK_KEY_COUNT } from '../../../shared/workLouderCodex';
 import { setSessionOrdinalBadges } from './sidebar/sessionOrdinalBadges';
 import { useOwnTopNavScrollableRows, useSidebarCollapsedState } from '../feature-context';
 import { SidebarRailNavigation, SidebarTopNav } from '@/components/sidebar/SidebarTopNav';
@@ -253,12 +253,13 @@ import {
 import { getSessionListCollapseView } from './lib/sessionListCollapse';
 import { hasSessionSelectionModifier, type SessionClickModifiers } from './sidebar/SessionItem';
 import { sessionMoveFailureFeedback } from '../../../shared/worktreeMoveGuardError';
+import type { CreateProjectFromTaskResult } from '../../../shared/projectsRoot';
+import { NewProjectFromTaskDialog } from './sidebar/NewProjectFromTaskDialog';
 import type { SessionMoveTarget } from './sidebar/sessionMoveTarget';
 import {
   DIALOGUE_FILTER_KEY,
   projectFilterIncludes,
-  mergeVisibleReorder,
-  normalizeManualPinnedOrder,
+  buildManualPinnedReorder,
 } from './hooks/helpers/sidebarFilterCore';
 import {
   activePinnedSidebarEntryIds,
@@ -669,13 +670,35 @@ export function CCAgentSidebarUpper() {
     // 空可见列表也要上报:换机器、折叠或搜索把可见行清掉时,侧栏映射必须让位,
     // 否则 AG 键还会打开上一份已经看不见的任务。完整活动表仍要带上,最近发送
     // / 优先 / 自定义不能被折叠裁掉。
-    const catalogSessions = sessionsWithRemote.filter((session) => session.status === 'active');
-    const catalogSessionIds = new Set(catalogSessions.map((session) => session.id));
+    // active 表示未归档，不表示正在运行；可见的非 active 任务另作侧栏映射投影。
+    // 键盘目录只按任务 ID 寻址，同 ID 保留首条；本机在前时优先保留本机，避免重复占键。
+    const catalogSessionIds = new Set<string>();
+    const catalogSessions = sessionsWithRemote.filter((session) => {
+      if (session.status !== 'active' || catalogSessionIds.has(session.id)) return false;
+      catalogSessionIds.add(session.id);
+      return true;
+    });
     const visibleProjection = visibleSessionsWithRemote
       .filter((session) => !catalogSessionIds.has(session.id))
-      .slice(0, WORKLOUDER_CODEX_AGENT_SLOT_COUNT);
+      .slice(0, WORKLOUDER_CREATOR_LIT_TASK_KEY_COUNT);
     const remainingCatalogSlots = Math.max(0, 100 - visibleProjection.length);
-    const tasks = [...visibleProjection, ...catalogSessions.slice(0, remainingCatalogSlots)].map(
+    const remoteCount = catalogSessions.filter((session) => session.deviceLinkDeviceId).length;
+    // 为远程候选预留最多 36 条空间，避免本机任务先占满预算。
+    // 只限制本机条数；本机不足时，远程仍可填满剩余空间。这不是实体灯位配额。
+    const localQuota = remainingCatalogSlots - Math.min(remoteCount, 36);
+    // 置顶、项目分组可能让较旧任务出现在侧栏前 13 行，先计入额度以免截断后任务键错位。
+    const visibleLocal = new Set(
+      catalogSessions.filter(
+        (session) => !session.deviceLinkDeviceId && (sidebarOrder.get(session.id) ?? 13) < 13,
+      ),
+    );
+    let remainingLocalSlots = localQuota - visibleLocal.size;
+    // 仅其余本机候选消耗剩余额度，过滤不改变原有顺序，之后仍按总预算截断。
+    const publishedCatalog = catalogSessions.filter(
+      (session) =>
+        session.deviceLinkDeviceId || visibleLocal.has(session) || remainingLocalSlots-- > 0,
+    );
+    const tasks = [...visibleProjection, ...publishedCatalog.slice(0, remainingCatalogSlots)].map(
       (session) => {
         const pinnedAtMs = session.pinnedAt ? Date.parse(session.pinnedAt) : Number.NaN;
         const userSendAtMs = session.userSendAt ? Date.parse(session.userSendAt) : Number.NaN;
@@ -740,13 +763,13 @@ export function CCAgentSidebarUpper() {
       );
       const comparisonKey = (entryId: string) =>
         pinnedSidebarEntryComparisonKey(entryId, localPlatform);
-      const baseOrder = normalizeManualPinnedOrder(
+      const { baseOrder, order } = buildManualPinnedReorder(
         filter.manualPinnedOrder,
         fullActivePinnedIds,
+        visibleNewOrder,
         comparisonKey,
       );
-      const merged = mergeVisibleReorder(baseOrder, visibleNewOrder, comparisonKey);
-      void filter.setManualPinnedOrder(merged, fullActivePinnedIds, baseOrder).catch((err) => {
+      void filter.setManualPinnedOrder(order, fullActivePinnedIds, baseOrder).catch((err) => {
         log.warn('failed to persist rail pinned order', err);
         toast.error(t('ccAgent.sidebar.pinFailed'));
       });
@@ -2160,13 +2183,13 @@ function ExpandedView({
       );
       const comparisonKey = (entryId: string) =>
         pinnedSidebarEntryComparisonKey(entryId, localPlatform);
-      const baseOrder = normalizeManualPinnedOrder(
+      const { baseOrder, order } = buildManualPinnedReorder(
         filter.manualPinnedOrder,
         fullActivePinnedIds,
+        visibleNewOrder,
         comparisonKey,
       );
-      const merged = mergeVisibleReorder(baseOrder, visibleNewOrder, comparisonKey);
-      void filter.setManualPinnedOrder(merged, fullActivePinnedIds, baseOrder).catch((err) => {
+      void filter.setManualPinnedOrder(order, fullActivePinnedIds, baseOrder).catch((err) => {
         log.warn('failed to persist pinned order', err);
         toast.error(t('ccAgent.sidebar.pinFailed'));
       });
@@ -2446,7 +2469,6 @@ function ExpandedView({
     if (onScheduleMatch || onNewMakerMatch) handleClearSelection();
   }, [onScheduleMatch, onNewMakerMatch, handleClearSelection]);
 
-  const [linkingCodexProject, setLinkingCodexProject] = useState<string | null>(null);
 
   // 远程会话的已读回执有两类首发即失的场景,都靠本 memo 的 key 变化驱动重跑补发:
   //  1. 恢复 / 深链直开:effect 先于 remoteProjectsStore 完成 sessionId→deviceId 起源
@@ -2832,39 +2854,11 @@ function ExpandedView({
     [handleClearSelection, navigate, selectedDialogueDeviceResolution],
   );
 
-  const handleLinkCodexProject = useCallback(
-    async (project: ProjectNode) => {
-      if (linkingCodexProject) return;
-      setLinkingCodexProject(project.projectKey);
-      try {
-        const result = await window.electronAPI.localDb.sessionImport.linkCodexProject(
-          project.workingDir,
-        );
-        if (result.inserted > 0 || result.updated > 0) {
-          toast.success(
-            t('ccAgent.sidebar.projectAction.syncCodexDone', {
-              inserted: result.inserted,
-              updated: result.updated,
-            }),
-          );
-          emitRefresh();
-        } else if (result.matched > 0) {
-          toast.warning(t('ccAgent.sidebar.projectAction.syncCodexAlreadyLinked'));
-        } else {
-          toast.warning(t('ccAgent.sidebar.projectAction.syncCodexNone'));
-        }
-      } catch (err) {
-        log.error('[link codex project]', err);
-        toast.error(
-          t('ccAgent.sidebar.projectAction.syncCodexFailed', {
-            error: err instanceof Error ? err.message : String(err),
-          }),
-        );
-      } finally {
-        setLinkingCodexProject(null);
-      }
+  const handleImportFromTools = useCallback(
+    (project: ProjectNode) => {
+      navigate(`/settings?tab=import&project=${encodeURIComponent(project.workingDir)}`);
     },
-    [linkingCodexProject, t],
+    [navigate],
   );
 
   /* ---- Project 行内的 Open Explorer 按钮：在系统文件管理器中打开 workingDir ----
@@ -3063,6 +3057,20 @@ function ExpandedView({
   useLayoutEffect(() => {
     collapsedProjectsForMoveRef.current = collapse.collapsed;
   }, [collapse.collapsed]);
+  const [newProjectSessionId, setNewProjectSessionId] = useState<string | null>(null);
+  const closeNewProjectDialog = useCallback((open: boolean) => {
+    if (!open) setNewProjectSessionId(null);
+  }, []);
+  const handleProjectCreated = useCallback(
+    (sessionId: string, result: CreateProjectFromTaskResult) => {
+      patchLocal(sessionId, { workingDir: result.workingDir, workspaceKind: 'project' });
+      const normalized = normalizeWorkingDir(result.workingDir);
+      if (normalized) collapse.expand(projectIdentityKey('local', normalized, null));
+      void recentWorkdirsStore.forceRefresh().catch(() => undefined);
+      toast.success(t('ccAgent.sidebar.newProjectDialog.done'));
+    },
+    [collapse.expand, patchLocal, t],
+  );
   const handleMoveSession = useCallback(
     async (sessionId: string, target: SessionMoveTarget) => {
       const session = sessionsByIdRef.current.get(sessionId);
@@ -3083,6 +3091,11 @@ function ExpandedView({
         }
       } catch {
         // resolveSession 失败时不阻断移动；它只是 IM 接管保护的额外检查。
+      }
+
+      if (target.kind === 'newProject') {
+        setNewProjectSessionId(sessionId);
+        return;
       }
 
       let targetWorkingDir = target.kind === 'project' ? target.workingDir : undefined;
@@ -3905,8 +3918,7 @@ function ExpandedView({
                       onCreateInProject={handleCreateInProject}
                       onOpenConversationSearch={handleOpenConversationSearch}
                       onOpenInExplorer={handleOpenInExplorer}
-                      onLinkCodexProject={handleLinkCodexProject}
-                      linkingCodexProject={linkingCodexProject === project.projectKey}
+                      onImportFromTools={handleImportFromTools}
                       onBrowseFiles={handleBrowseFiles}
                       onArchiveAll={handleArchiveAllInProject}
                     />
@@ -3965,8 +3977,7 @@ function ExpandedView({
                   onCreateInProject={handleCreateInProject}
                   onOpenConversationSearch={handleOpenConversationSearch}
                   onOpenInExplorer={handleOpenInExplorer}
-                  onLinkCodexProject={handleLinkCodexProject}
-                  linkingCodexProject={linkingCodexProject}
+                  onImportFromTools={handleImportFromTools}
                   onBrowseFiles={handleBrowseFiles}
                   onArchiveAll={handleArchiveAllInProject}
                   onSearchDialogues={handleSearchDialogues}
@@ -3994,6 +4005,14 @@ function ExpandedView({
           if (!open) setOrganizeMenuPos(null);
         }}
       />
+
+      {newProjectSessionId && (
+        <NewProjectFromTaskDialog
+          sessionId={newProjectSessionId}
+          onOpenChange={closeNewProjectDialog}
+          onCreated={(result) => handleProjectCreated(newProjectSessionId, result)}
+        />
+      )}
 
       {/* Delete confirm dialog */}
       <ConfirmDialog

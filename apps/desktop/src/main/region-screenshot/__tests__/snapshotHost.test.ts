@@ -178,4 +178,63 @@ describe('snapshot helper failure isolation', () => {
     child.stdout.write(JSON.stringify({ id: 3, width: 961, height: 2, pixels: '' }) + '\n');
     await expect(oversized).resolves.toBeNull();
   });
+
+  // Binary transport contract: SnapshotHelper.capture must survive arbitrary
+  // pipe chunks, pixel bytes containing LF, and a following JSON reply. Existing
+  // coverage only exercises base64 lines. Minimal input: a split 2x2 BGRA frame;
+  // unit, in-memory streams and fake timers, through the production request API.
+  it('reads split binary frames without consuming the next reply or sharing unrelated bytes', async () => {
+    const rect = { x: 0, y: 0, width: 2, height: 2 };
+    const frame = helper.capture(rect, 960);
+    const windows = helper.windows();
+    const requests = child.stdin.read().toString().trim().split('\n').map((line: string) => JSON.parse(line));
+    expect(requests[0]).toMatchObject({ op: 'frame', encoding: 'bgra' });
+    const pixels = Buffer.from([10, 13, 255, 255, 0, 128, 10, 255, 1, 2, 3, 255, 4, 5, 6, 255]);
+    const header = Buffer.from(JSON.stringify({ id: 1, encoding: 'bgra', width: 2, height: 2, byteLength: 16 }) + '\n');
+    child.stdout.write(header.subarray(0, 7));
+    child.stdout.write(Buffer.concat([header.subarray(7), pixels.subarray(0, 5)]));
+    child.stdout.write(Buffer.concat([pixels.subarray(5), Buffer.from('{"id":2,"windows":[]}\n')]));
+    await vi.advanceTimersByTimeAsync(1500);
+    const result = await frame;
+    expect(result).toEqual({ width: 2, height: 2, data: new Uint8Array(pixels) });
+    // IPC must not clone headers, pipe pool bytes or a neighbouring screenshot.
+    expect(result?.data.buffer.byteLength).toBe(16);
+    await expect(windows).resolves.toEqual([]);
+    expect(child.kill).not.toHaveBeenCalled();
+    const next = helper.capture(rect, 960);
+    child.stdout.write(Buffer.concat([
+      Buffer.from('{"id":3,"encoding":"bgra","width":2,"height":2,"byteLength":16}\n'),
+      Buffer.alloc(16, 42),
+    ]));
+    await expect(next).resolves.toMatchObject({ data: new Uint8Array(16).fill(42) });
+    expect(result?.data).toEqual(new Uint8Array(pixels));
+  });
+
+  // An invalid binary header cannot be skipped like a malformed JSON line:
+  // its body would shift every later reply. Reject before allocating pixels.
+  it.each([
+    { width: 961, height: 2, byteLength: 7688 },
+    { width: 2, height: 2, byteLength: 15 },
+    { width: 0, height: 2, byteLength: 0 },
+    { width: 2, height: 2, byteLength: 16, id: 99 },
+  ])('abandons the stream for an invalid binary header: %j', async (invalid) => {
+    const frame = helper.capture({ x: 0, y: 0, width: 2, height: 2 }, 960);
+    const windows = helper.windows();
+    child.stdout.write(JSON.stringify({ id: 1, encoding: 'bgra', ...invalid }) + '\n');
+    expect(child.kill).toHaveBeenCalledTimes(1);
+    await expect(frame).resolves.toBeNull();
+    await expect(windows).resolves.toEqual([]);
+  });
+
+  it.each(['end', 'timeout'])('drops an incomplete binary frame on %s', async (failure) => {
+    const frame = helper.capture({ x: 0, y: 0, width: 2, height: 2 }, 960);
+    child.stdout.write('{"id":1,"encoding":"bgra","width":2,"height":2,"byteLength":16}\n');
+    child.stdout.write(Buffer.alloc(8, 255));
+    if (failure === 'end') child.stdout.emit('end');
+    else await vi.advanceTimersByTimeAsync(1500);
+    expect(child.kill).toHaveBeenCalledTimes(1);
+    await expect(frame).resolves.toBeNull();
+    child.stdout.emit('data', Buffer.alloc(8, 255));
+    await expect(helper.windows()).resolves.toEqual([]);
+  });
 });

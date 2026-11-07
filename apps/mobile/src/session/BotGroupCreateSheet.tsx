@@ -1,4 +1,4 @@
-/** 在所选电脑创建群聊，可选最多 6 位该电脑上的伙伴。 */
+/** 在所选电脑创建群聊，可选最多 6 位同账号伙伴。 */
 import { useEffect, useRef, useState } from 'react';
 import { ActivityIndicator, Alert, Pressable, StyleSheet, View, type TextInput as NativeTextInput } from 'react-native';
 import { Check } from 'lucide-react-native';
@@ -22,6 +22,9 @@ import { createdBotGroupId } from './botGroupRemote';
 import { FormSheet } from './FormSheet';
 import { orderedTeammates } from './teammateNavigation';
 import { useHostTeammates } from './useHostTeammates';
+import { useCloudGroupCandidates } from './useBotGroupSettingsManagement';
+import { chatMemberAvatar } from '@/chat/chatServerClient';
+import { botGroupMemberAvatar } from './botGroupRemote';
 
 export function BotGroupCreateSheet(props: {
   visible: boolean;
@@ -43,6 +46,7 @@ function CreateSheetContent({ visible, host, online, onClose, onClosed, onCreate
   const styles = useThemedStyles(makeStyles);
   const { invoke, openLink } = useDeviceLink();
   const teammates = useHostTeammates(host, visible);
+  const cloud = useCloudGroupCandidates(visible);
   const [name, setName] = useState('');
   const [selected, setSelected] = useState<string[]>([]);
   const [nameError, setNameError] = useState(false);
@@ -57,9 +61,18 @@ function CreateSheetContent({ visible, host, online, onClose, onClosed, onCreate
     setName(''); setSelected([]); setNameError(false); setSubmitError(null);
   }, [visible]);
 
-  const candidates = orderedTeammates(teammates.rows, '', i18n.language);
+  const local = orderedTeammates(teammates.rows, '', i18n.language).map(row => ({
+    id: row.item.ref.id, name: resolveRemoteText(row.item.display.title, i18n.language),
+    avatar: row.item.display.avatar, avatarUrl: undefined as string | undefined, deviceId: row.host.deviceId,
+  }));
+  const localIds = new Set(local.map(row => row.id));
+  const candidates = [...local, ...cloud.rows.filter(row => row.externalId && row.homeDeviceId && row.homeDeviceId !== host?.deviceId && !localIds.has(row.externalId)).map(row => {
+    const avatar = chatMemberAvatar(row.avatar);
+    return { id: row.externalId, name: row.name, avatar: botGroupMemberAvatar({ ...avatar, name: row.name, avatarColor: '' }),
+      avatarUrl: avatar.avatarUrl, deviceId: row.homeDeviceId! };
+  })];
   // Speaking order follows the list order, not the tap order.
-  const ordered = candidates.map((row) => row.item.ref.id).filter((botId) => selected.includes(botId));
+  const ordered = candidates.map(row => row.id).filter(botId => selected.includes(botId));
   const atLimit = ordered.length >= BOT_GROUP_MAX_MEMBERS;
   const dirty = !!name.trim() || selected.length > 0;
 
@@ -131,14 +144,14 @@ function CreateSheetContent({ visible, host, online, onClose, onClosed, onCreate
         </View>
         {candidates.length > 0 ? <View style={styles.group}>
           {candidates.map((row, index) => {
-            const title = resolveRemoteText(row.item.display.title, i18n.language);
-            const checked = selected.includes(row.item.ref.id);
+            const title = row.name;
+            const checked = selected.includes(row.id);
             const disabled = busy || (!checked && atLimit);
-            return <Pressable key={row.key} accessibilityRole="checkbox" accessibilityLabel={title}
-              accessibilityState={{ checked, disabled }} disabled={disabled} onPress={() => toggle(row.item.ref.id)}
+            return <Pressable key={row.id} accessibilityRole="checkbox" accessibilityLabel={title}
+              accessibilityState={{ checked, disabled }} disabled={disabled} onPress={() => toggle(row.id)}
               style={({ pressed }) => [styles.row, index === candidates.length - 1 && styles.lastRow, pressed && mobileInteractionStyles.pressed, disabled && !checked && styles.inactive]}
-              testID={`botGroup.create.member.${row.item.ref.id}`}>
-              <BotGroupAvatar deviceId={row.host.deviceId} identity={{ botId: row.item.ref.id, name: title, avatar: row.item.display.avatar }}
+              testID={`botGroup.create.member.${row.id}`}>
+              <BotGroupAvatar deviceId={row.deviceId} identity={{ botId: row.id, name: title, avatar: row.avatar, avatarUrl: row.avatarUrl }}
                 size={BOT_GROUP_ROW_AVATAR_SIZE} online={online} />
               <Text numberOfLines={1} style={[styles.rowTitle, styles.flex]}>{title}</Text>
               <View style={[styles.check, checked && styles.checked]}>
@@ -147,8 +160,8 @@ function CreateSheetContent({ visible, host, online, onClose, onClosed, onCreate
             </Pressable>;
           })}
         </View> : null}
-        {teammates.loading && candidates.length === 0 ? <ActivityIndicator color={colors.textSecondary} style={styles.spinner} /> : null}
-        {teammates.failed ? <Text style={styles.note}>{t('devices.resources.loadFailed')}</Text> : null}
+        {(teammates.loading || cloud.loading) && candidates.length === 0 ? <ActivityIndicator color={colors.textSecondary} style={styles.spinner} /> : null}
+        {teammates.failed || cloud.failed ? <Text style={styles.note}>{t('devices.resources.loadFailed')}</Text> : null}
       </View>
       {submitError ? <Text accessibilityRole="alert" style={styles.error} testID="botGroup.create.error">{submitError}</Text> : null}
     </View>

@@ -3,6 +3,7 @@ import path from 'node:path';
 import { createHash, randomUUID } from 'node:crypto';
 import { MODEL_INTERFACE_CAPABILITIES } from '@cindy/model-providers';
 import type { AgentKind, CatalogModel, ModelInterfaceSnapshot, ModelRegistry } from '@cindy/model-providers';
+import { getLocalCatalogOverridesSnapshot } from './active-catalog.js';
 
 // Only non-secret interface metadata is pinned. Credentials and provider membership
 // remain live. The owner-scoped root is supplied by the host, never by a request.
@@ -53,11 +54,30 @@ export function sessionModelInterface(
   sessionId: string, providerId: string, agent: AgentKind, model: CatalogModel,
   registry?: ModelRegistry, legacyWire?: string,
 ): ModelInterfaceSnapshot | undefined {
+  // A pinned transport survives catalog refreshes; an explicit local capability
+  // edit remains live. Do not persist the override in the pin: reset must reveal
+  // the accepted interface's original metadata, including after a cold restore.
+  const withLocalImageInput = (selection: ModelInterfaceSnapshot): ModelInterfaceSnapshot => {
+    const patch = getLocalCatalogOverridesSnapshot().patches[`${encodeURIComponent(providerId)}:${model.id}`];
+    const value = patch && (!patch.agents || patch.agents.includes(agent))
+      ? patch.perAgent?.[agent]?.supportsImageInput ?? patch.base?.supportsImageInput
+      : undefined;
+    const result = structuredClone(selection);
+    if (value !== undefined) {
+      const modalities = result.defaults.modalities ?? model.modalities;
+      result.defaults = { ...result.defaults, supportsImageInput: value,
+        ...(modalities ? { modalities: { ...modalities,
+          input: value ? [...modalities.input.filter(m => m !== 'image'), 'image'] : modalities.input.filter(m => m !== 'image'),
+        } } : {}),
+      };
+    }
+    return result;
+  };
   const { key, file } = location(sessionId, JSON.stringify([providerId, agent, model.id]));
   const previous = readPin(key, file);
   if (previous?.providerId === providerId && previous.agent === agent && previous.modelId === model.id) {
     assertModelInterfaceAvailable(previous.selection, model.id, registry);
-    return structuredClone(previous.selection);
+    return withLocalImageInput(previous.selection);
   }
   if (model.interfaceUnavailable) throw new Error('MODEL_INTERFACE_UNAVAILABLE');
   let selection = model.selectedInterface;
@@ -78,7 +98,7 @@ export function sessionModelInterface(
     } finally { if (fs.existsSync(temporary)) fs.unlinkSync(temporary); }
   }
   cache.set(key, pin);
-  return structuredClone(selection);
+  return withLocalImageInput(selection);
 }
 
 export function removeSessionModelInterface(sessionId: string): void {

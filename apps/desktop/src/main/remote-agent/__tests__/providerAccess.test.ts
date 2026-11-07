@@ -15,7 +15,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { startRemoteAgentSession } from '../controller/startRemote';
 import { createGuestProviderRouteBinder, guestProviderModelIds, resolveGuestProviderId, resolveSharedProviderId } from '../host/providerAccess';
 import { createRemoteAgentHost, type HostedStartInput } from '../host/runHost';
-import { guestProviderModelAllowed, guestProviderRouteForToken, resetGuestProviderRoutesForTest } from '../../maker-host/guest-provider-route-store';
+import { captureGuestRequestUsage, guestProviderModelAllowed, guestProviderRouteForToken, resetGuestProviderRoutesForTest } from '../../maker-host/guest-provider-route-store';
 
 const RG = path.resolve(__dirname, '../../../../../ripgrep-bin', `${process.platform}-${process.arch}`, process.platform === 'win32' ? 'rg.exe' : 'rg');
 
@@ -121,7 +121,7 @@ describe('guest proxy binding for direct shares and same-account group relays', 
     });
     for (const kind of ['codex', 'pi', 'claude-code'] as const) {
       const id = kind === 'codex' ? rootId : bridgeId;
-      const binding = await binder({ kind, hostSessionId: `gpt-${kind}`, providerId: 'openai',
+      const binding = await binder({ kind, hostSessionId: `gpt-${kind}`, sessionId: `gpt-task-${kind}`, providerId: 'openai',
         controller: providerShareGuestPeer('share', 'alice', 'phone'), isCurrent: () => true });
       expect(binding?.modelIds).toEqual([id]);
       expect(await binding?.allowsModel?.(id)).toBe(true);
@@ -131,6 +131,26 @@ describe('guest proxy binding for direct shares and same-account group relays', 
       binding?.release();
     }
   });
+  // Unit integration: native receipt metering zeroes terminal counters. A
+  // delegated M must retain turn metering until its receipts can reach O.
+  it.each([false, true])('keeps the native usage owner correct for delegated=%s', async delegated => {
+    const provider = { ...view('openai', []), auth: { method: 'oauth', native: 'codex' },
+      models: { codex: [{ id: 'gpt', name: 'gpt', efforts: [], defaultEffort: null }] } } as unknown as ProviderView;
+    const record = vi.fn();
+    const binder = createGuestProviderRouteBinder({
+      readProviders: async () => [provider], recordRequestUsage: record,
+      receiptMeteringAllowed: () => !delegated,
+      guestAccess: () => ({ providerId: 'openai', memberId: 'alice' }),
+      ownerAllowed: () => true, providerAllowed: () => true,
+      modelAccess: { allows: () => true, read: () => ({ models: null, providerModels: null }) },
+    });
+    const route = await binder({ kind: 'codex', hostSessionId: 'metered-host', sessionId: 'metered-task',
+      providerId: 'openai', controller: providerShareGuestPeer('share', 'alice', 'phone'), isCurrent: () => true });
+    expect(route?.receiptMetering).toBe(!delegated);
+    expect(typeof captureGuestRequestUsage('metered-host', 'gpt')).toBe(delegated ? 'undefined' : 'function');
+    route?.release();
+  });
+
   it('enforces a changed member budget on the next request and exempts same-account callers', async () => {
     let blocked = true;
     const checks: Array<string | undefined> = [];
@@ -140,8 +160,8 @@ describe('guest proxy binding for direct shares and same-account group relays', 
       modelAccess: { allows: () => true, read: () => ({ models: null, providerModels: null, memberBudget: { enabled: true, rules: [{}] } }) },
       memberBudgetAllows: async (_provider, model, member) => { checks.push(member); return !member || !blocked || model === 'sonnet'; },
     });
-    const guest = await binder({ kind: 'claude-code', hostSessionId: 'guest-budget', providerId: 'spark', controller: providerShareGuestPeer('share', 'alice', 'phone'), isCurrent: () => true });
-    const owner = await binder({ kind: 'claude-code', hostSessionId: 'owner-budget', providerId: 'spark', controller: 'owner-device', isCurrent: () => true });
+    const guest = await binder({ kind: 'claude-code', hostSessionId: 'guest-budget', sessionId: 'guest-task', providerId: 'spark', controller: providerShareGuestPeer('share', 'alice', 'phone'), isCurrent: () => true });
+    const owner = await binder({ kind: 'claude-code', hostSessionId: 'owner-budget', sessionId: 'owner-task', providerId: 'spark', controller: 'owner-device', isCurrent: () => true });
     expect(guest!.modelIds).toEqual(['opus', 'sonnet']);
     blocked = false;
     checks.length = 0;
@@ -152,6 +172,63 @@ describe('guest proxy binding for direct shares and same-account group relays', 
     expect(await owner!.allowsModel!('opus')).toBe(true);
     expect(checks).toEqual(['alice', 'alice', 'alice', undefined]);
   });
+
+  // Provider groups may route concurrent tasks from one guest device to two
+  // local providers on the same M. The real proxy binding must use the task ID (unit tier).
+  it('pins each concurrent delegated task to its own local provider and model', async () => {
+    const peer = providerShareGuestPeer('share-1', 'member-1', 'guest-device');
+    const taskProviders = new Map([['task-spark', 'spark'], ['task-xd', 'xd']]);
+    const binder = createGuestProviderRouteBinder({
+      readProviders: async () => [view('spark', ['opus']), view('xd', ['haiku'])],
+      guestAccess: (_controller, sessionId) => {
+        const providerId = taskProviders.get(sessionId);
+        return providerId ? { providerId, memberId: 'member-1' } : null;
+      },
+      ownerAllowed: () => true, providerAllowed: () => true,
+      modelAllowed: (_controller, model, sessionId) =>
+        (sessionId === 'task-spark' && model === 'opus') || (sessionId === 'task-xd' && model === 'haiku'),
+      modelRestricted: () => true,
+      modelAccess: { allows: () => true, read: () => ({ models: null, providerModels: null }) },
+    });
+    const base = { kind: 'claude-code' as const, controller: peer, isCurrent: () => true };
+    const spark = await binder({ ...base, sessionId: 'task-spark', hostSessionId: 'host-spark', providerId: 'spark' });
+    const xd = await binder({ ...base, sessionId: 'task-xd', hostSessionId: 'host-xd', providerId: 'xd' });
+    expect(spark).not.toBeNull();
+    expect(xd).not.toBeNull();
+    expect(await spark!.allowsModel?.('opus')).toBe(true);
+    expect(await spark!.allowsModel?.('haiku')).toBe(false);
+    expect(await xd!.allowsModel?.('haiku')).toBe(true);
+    expect(await xd!.allowsModel?.('opus')).toBe(false);
+    expect(await binder({ ...base, sessionId: 'task-spark', hostSessionId: 'wrong-source', providerId: 'xd' }))
+      .toBeNull();
+    taskProviders.set('task-spark', 'xd');
+    expect(await spark!.allowsModel?.('opus')).toBe(false);
+    expect(await xd!.allowsModel?.('haiku')).toBe(true);
+    spark!.release();
+    xd!.release();
+  });
+
+  it('lists future switch models while the delegated task executes only its currently granted model', async () => {
+    const peer = providerShareGuestPeer('share-1', 'member-1', 'guest-device');
+    let grantedModel = 'opus';
+    const binder = createGuestProviderRouteBinder({
+      readProviders: async () => [view('spark', ['opus', 'sonnet'])],
+      guestAccess: () => ({ providerId: 'spark', memberId: 'member-1' }),
+      ownerAllowed: () => true, providerAllowed: () => true,
+      modelAllowed: (_controller, model, sessionId) => sessionId === 'task-1' && model === grantedModel,
+      modelRestricted: () => true,
+      modelAccess: { allows: () => true, read: () => ({ models: ['opus', 'sonnet'], providerModels: ['opus', 'sonnet'] }) },
+    });
+    const binding = await binder({ kind: 'claude-code', hostSessionId: 'host-task-1', sessionId: 'task-1',
+      providerId: 'spark', controller: peer, isCurrent: () => true });
+    expect(binding?.modelIds).toEqual(['opus', 'sonnet']);
+    expect(await binding?.allowsModel?.('opus')).toBe(true);
+    expect(await binding?.allowsModel?.('sonnet')).toBe(false);
+    grantedModel = 'sonnet';
+    expect(await binding?.allowsModel?.('opus')).toBe(false);
+    expect(await binding?.allowsModel?.('sonnet')).toBe(true);
+    binding?.release();
+  });
   // Unit: an async authorization response must not resurrect a replaced binding.
   it('rejects a failed grant query or one arriving after the task binding was released', async () => {
     let finish!: (allowed: boolean) => void;
@@ -161,7 +238,7 @@ describe('guest proxy binding for direct shares and same-account group relays', 
       guestAccess: () => null, ownerAllowed: () => true, providerAllowed: () => true,
       modelAccess: { allows: () => true, read: () => ({ models: null, providerModels: null }) },
     });
-    const binding = await binder({ kind: 'claude-code', hostSessionId: 'late', providerId: 'spark', controller: 'owner', isCurrent: () => true,
+    const binding = await binder({ kind: 'claude-code', hostSessionId: 'late', sessionId: 'source-late', providerId: 'spark', controller: 'owner', isCurrent: () => true,
       relayModelAccess: { models: ['opus'], allows: () => unavailable ? Promise.reject(new Error('link unavailable')) : new Promise(resolve => { finish = resolve; }) } });
     expect(binding!.modelIds).toEqual(['opus']);
     expect(await guestProviderModelAllowed('spark', 'opus', 'late')).toBe(false);
@@ -187,7 +264,7 @@ describe('guest proxy binding for direct shares and same-account group relays', 
         read: (_providerId, memberId) => ({ models: [...(memberId ? memberModels : providerModels)], providerModels: [...providerModels] }),
       },
     });
-    const input = { kind: 'claude-code' as const, hostSessionId: 'bound-guest', providerId: 'spark', controller, isCurrent: () => true };
+    const input = { kind: 'claude-code' as const, hostSessionId: 'bound-guest', sessionId: 'source-guest', providerId: 'spark', controller, isCurrent: () => true };
     const binding = await binder(input);
     expect(binding).not.toBeNull();
     expect(binding!.modelIds).toEqual(['opus']);

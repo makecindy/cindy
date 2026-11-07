@@ -435,8 +435,11 @@ describe('remote AgentSessionHandle close', () => {
     }
   });
 
-  it('propagates a DEVICE_LINK close failure after disposing local resources', async () => {
+  // Offline Stop must retire the local handle even when the provider cannot
+  // acknowledge close; real Session recovery is covered by connectionPool.
+  it('finishes local close when the offline provider cannot acknowledge it', async () => {
     let disposed = 0;
+    const warn = vi.fn();
     const client = {
       async close() {
         throw Object.assign(new Error('[REMOTE_AGENT_UNAVAILABLE] [DEVICE_LINK_DEVICE_OFFLINE] target offline'), {
@@ -451,9 +454,14 @@ describe('remote AgentSessionHandle close', () => {
       recordApproval: () => undefined,
       newId: () => 'req',
       dispose: async () => { disposed += 1; },
+      log: { warn },
     });
-    await expect(controller.handle.close({ reason: 'navigation' })).rejects.toThrow(/DEVICE_LINK_DEVICE_OFFLINE/);
+    await expect(controller.handle.close({ reason: 'navigation' })).resolves.toBeUndefined();
     expect(disposed).toBe(1);
+    expect(warn).toHaveBeenCalledWith('remote agent: close notification failed', {
+      reason: 'navigation', error: expect.stringContaining('DEVICE_LINK_DEVICE_OFFLINE'),
+    });
+    expect(await controller.handle.events()[Symbol.asyncIterator]().next()).toMatchObject({ done: true });
   });
 });
 

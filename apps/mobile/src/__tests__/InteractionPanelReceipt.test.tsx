@@ -444,7 +444,7 @@ it.each(['options', 'previous'])('protects the answer while submitting before th
 // Unit regression for PR #6306 review: a signed-out microphone tap used to
 // render hardcoded Chinese. Existing receipt tests never tapped this entry.
 // Exercise the real card and hook in each supported locale, without auth.
-it.each(['en', 'zh-CN', 'zh-TW', 'ja', 'ko'])('localizes the signed-out voice error in %s', async (locale) => {
+it.each(['en', 'zh-CN', 'zh-TW', 'ja', 'ko', "es", "fr", "de", "pt-PT", "pt-BR"])('localizes the signed-out voice error in %s', async (locale) => {
   const previousLanguage = i18n.language;
   try {
     await i18n.changeLanguage(locale);

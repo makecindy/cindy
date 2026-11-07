@@ -1,4 +1,11 @@
-import { captureGuestRequestUsage } from './guest-provider-route-store.js';
+import {
+  captureGuestRequestUsage,
+  guestProviderModelDenial,
+  guestProviderOffersModel,
+  guestProviderRouteForSession,
+  hostedProviderOffersModel,
+} from './guest-provider-route-store.js';
+import { hasHostedSessionModelAccess } from './session-provider-store.js';
 import { fastModelId, rewriteFastModel } from './model-fast-mode.js';
 import { captureUsagePricing, createUsagePricingObserver } from './model-usage-pricing.js';
 import type { ResponseObserverSink } from '@cindy/anthropic-compat-proxy';
@@ -745,7 +752,99 @@ export function getPiNativeSubscriptionHandler(
     res.once('close', abortOnClose);
     const scopeAtStart = activeOwnerScopeKey();
     const fastAtStart = getSessionFastMode(sessionId);
+    const guest = guestProviderRouteForSession(sessionId);
+    const hostedModelAccess = hasHostedSessionModelAccess(sessionId);
+    // Preserve the original catalog profile across wire rewrites (e.g. [1m])
+    // and recheck after asynchronous codecs/auth before any upstream request.
+    let requestedModel = '';
+    const modelAllowed = async (): Promise<boolean> => {
+      if (!guest && !hostedModelAccess) return true;
+      const allowed = guest
+        ? guest.providerId === providerId && await guestProviderOffersModel(providerId, 'pi', requestedModel, sessionId)
+        : hasHostedSessionModelAccess(sessionId) && hostedProviderOffersModel(sessionId, providerId, 'pi', requestedModel);
+      if (allowed) return true;
+      const denial = guest && requestedModel ? guestProviderModelDenial(sessionId, requestedModel, 'pi') : null;
+      res.writeHead(403, { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store' });
+      res.end(JSON.stringify({ type: 'error', error: {
+        type: 'authorization_error',
+        code: denial?.code ?? (guest ? 'shared_provider_only' : 'remote_model_not_allowed'),
+        message: denial?.message ?? (guest
+          ? `model '${requestedModel}' is not available from the provider shared with you`
+          : 'This model is not available for this remote task.'),
+      } }));
+      return false;
+    };
     try {
+      throwIfOwnerBoundDispatchUnsafe(scopeAtStart);
+      let recordUsage: ReturnType<typeof captureUsagePricing> | undefined;
+      let recordGuestUsage: ReturnType<typeof captureGuestRequestUsage>;
+      let outboundBody = rawBody;
+      let contentEncoding: string | undefined = ctx.headers['content-encoding'];
+      let rewriteOpenaiBody: (() => Promise<void> | null) | undefined;
+      if (isOpenAiSubscriptionProviderId(providerId)) {
+        // Retain the decoded object across both rewrites. Unchanged requests keep
+        // their original bytes; changed zstd requests stay compressed on the wire.
+        let forceStandard = !subscriptionRequestAllowsFast(sessionId, providerId);
+        const compressed = parsedBody === undefined && contentEncoding?.toLowerCase() === 'zstd';
+        let current: unknown = parsedBody;
+        let decodeError: unknown;
+        try {
+          if (current === undefined) {
+            const bytes = compressed ? await zstdDecompressAsync(rawBody) : rawBody;
+            current = JSON.parse(bytes.toString('utf8')) as unknown;
+          }
+        } catch (error) {
+          decodeError = error;
+        }
+        requestedModel = isPlainRecord(current) && typeof current.model === 'string' ? current.model : '';
+        if (!await modelAllowed()) return;
+        recordGuestUsage = captureGuestRequestUsage(sessionId, isPlainRecord(current) && typeof current.model === 'string' ? current.model : '');
+        const profile = withOpenaiContextProfileModel(current);
+        current = profile ?? current;
+        let changed = profile !== null;
+        let standardApplied = false;
+        // Finalize only after credentials and the latest model grant are read.
+        // Return pending codec work so every async rewrite is followed by another
+        // grant/Fast check, with no async gap between the last check and dispatch.
+        rewriteOpenaiBody = () => {
+          forceStandard ||= !subscriptionRequestAllowsFast(sessionId, providerId);
+          if (forceStandard && !standardApplied) {
+            if (decodeError) throw decodeError;
+            const standard = standardSpeedRequest(current);
+            changed ||= !isDeepStrictEqual(standard, current);
+            current = standard;
+            standardApplied = true;
+          }
+          if (!changed) return null;
+          const bytes = Buffer.from(JSON.stringify(current));
+          changed = false;
+          // Keep large codecs off Electron main, as in the existing profile path.
+          if (compressed) return zstdCompressAsync(bytes).then(encoded => { outboundBody = encoded; });
+          outboundBody = bytes;
+          contentEncoding = undefined;
+          return null;
+        };
+      } else if (isXaiSubscriptionProviderId(providerId)) {
+        const parsed = isPlainRecord(parsedBody)
+          ? parsedBody
+          : parseJsonRecord(rawBody);
+        requestedModel = parsed && typeof parsed.model === 'string' ? parsed.model : '';
+        if (!await modelAllowed()) return;
+        const sanitized = parsed ? sanitizeXaiModelInputBody(parsed) : null;
+        const withFast = parsed ? rewriteFastModel(providerId, 'pi', sanitized ?? parsed, fastAtStart) : null;
+        const current = withFast ?? sanitized ?? parsed;
+        recordUsage = captureUsagePricing(sessionId,
+          withFast && withFast.model !== parsed?.model ? 'priority' : 'standard');
+        const withServerTools = current
+          ? withNativeXaiServerSideTools(current, upstream.wireProtocol)
+          : null;
+        if (sanitized || withFast || withServerTools) {
+          outboundBody = Buffer.from(JSON.stringify(withServerTools ?? current));
+          // The proxy parsed a plain JSON request. After reserializing it the
+          // original content encoding, if any, no longer describes the bytes.
+          contentEncoding = undefined;
+        }
+      }
       throwIfOwnerBoundDispatchUnsafe(scopeAtStart);
       let accessToken: string;
       let headers: Record<string, string>;
@@ -763,72 +862,15 @@ export function getPiNativeSubscriptionHandler(
       }
       headers['content-type'] = ctx.headers['content-type'] ?? 'application/json';
       headers.accept = ctx.headers.accept ?? 'text/event-stream';
-      let recordUsage: ReturnType<typeof captureUsagePricing> | undefined;
-      let recordGuestUsage: ReturnType<typeof captureGuestRequestUsage>;
-      let outboundBody = rawBody;
-      let contentEncoding: string | undefined = ctx.headers['content-encoding'];
-      if (isOpenAiSubscriptionProviderId(providerId)) {
-        // Retain the decoded object across both rewrites. Unchanged requests keep
-        // their original bytes; changed zstd requests stay compressed on the wire.
-        let forceStandard = !subscriptionRequestAllowsFast(sessionId, providerId);
-        const compressed = parsedBody === undefined && contentEncoding?.toLowerCase() === 'zstd';
-        let current: unknown = parsedBody;
-        let decodeError: unknown;
-        try {
-          if (current === undefined) {
-            const bytes = compressed ? await zstdDecompressAsync(rawBody) : rawBody;
-            current = JSON.parse(bytes.toString('utf8')) as unknown;
-          }
-        } catch (error) {
-          decodeError = error;
-        }
-        recordGuestUsage = captureGuestRequestUsage(sessionId, isPlainRecord(current) && typeof current.model === 'string' ? current.model : '');
-        const profile = withOpenaiContextProfileModel(current);
-        current = profile ?? current;
-        let changed = profile !== null;
-        let standardApplied = false;
-        for (;;) {
-          throwIfOwnerBoundDispatchUnsafe(scopeAtStart);
-          // Restrictions may tighten while decoding or encoding. Once restricted,
-          // this request cannot regain priority while an asynchronous codec runs.
-          forceStandard ||= !subscriptionRequestAllowsFast(sessionId, providerId);
-          if (forceStandard && !standardApplied) {
-            if (decodeError) throw decodeError;
-            const standard = standardSpeedRequest(current);
-            changed ||= !isDeepStrictEqual(standard, current);
-            current = standard;
-            standardApplied = true;
-          }
-          if (!changed) break;
-          const bytes = Buffer.from(JSON.stringify(current));
-          // Keep large codecs off Electron main, as in the existing profile path.
-          outboundBody = compressed ? await zstdCompressAsync(bytes) : bytes;
-          if (!compressed) contentEncoding = undefined;
-          changed = false;
-          if (standardApplied || !compressed) break;
-          // A profile-only compression can yield to a newly restrictive policy.
-        }
-      } else if (isXaiSubscriptionProviderId(providerId)) {
-        const parsed = isPlainRecord(parsedBody)
-          ? parsedBody
-          : parseJsonRecord(rawBody);
-        const sanitized = parsed ? sanitizeXaiModelInputBody(parsed) : null;
-        const withFast = parsed ? rewriteFastModel(providerId, 'pi', sanitized ?? parsed, fastAtStart) : null;
-        const current = withFast ?? sanitized ?? parsed;
-        recordUsage = captureUsagePricing(sessionId,
-          withFast && withFast.model !== parsed?.model ? 'priority' : 'standard');
-        const withServerTools = current
-          ? withNativeXaiServerSideTools(current, upstream.wireProtocol)
-          : null;
-        if (sanitized || withFast || withServerTools) {
-          outboundBody = Buffer.from(JSON.stringify(withServerTools ?? current));
-          // The proxy parsed a plain JSON request. After reserializing it the
-          // original content encoding, if any, no longer describes the bytes.
-          contentEncoding = undefined;
-        }
+      for (;;) {
+        throwIfOwnerBoundDispatchUnsafe(scopeAtStart);
+        if (!await modelAllowed()) return;
+        throwIfOwnerBoundDispatchUnsafe(scopeAtStart);
+        const pendingRewrite = rewriteOpenaiBody?.();
+        if (!pendingRewrite) break;
+        await pendingRewrite;
       }
       if (contentEncoding) headers['content-encoding'] = contentEncoding;
-
       throwIfOwnerBoundDispatchUnsafe(scopeAtStart);
       const response = await deps.fetch(upstream.url, {
         method: 'POST',

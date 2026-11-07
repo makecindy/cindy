@@ -22,7 +22,7 @@ import type {
   MoneyCurrency,
 } from '../../shared/regionalMoney.js';
 import { ownerScopedUserDataPath } from '../appSessionState.js';
-import { createOverrideSettingsFile } from '../maker-host/override-settings-file.js';
+import { createOverrideSettingsFile, portableOverrideSettings } from '../maker-host/override-settings-file.js';
 import { desktopMakerLogger } from '../maker-host/logger-adapter.js';
 import { currentLedgerCurrency } from './ledgerCurrency.js';
 
@@ -199,7 +199,17 @@ function comparable(quote: ModelPriceQuote | undefined): ComparablePrice | null 
     outputPerMtok: quote.outputPerMtok,
     cacheReadPerMtok: quote.cacheReadPerMtok ?? null,
     cacheCreatePerMtok: quote.cacheCreatePerMtok ?? null,
-    ...(quote.inputTokenPriceBands ? { inputTokenPriceBands: quote.inputTokenPriceBands } : {}),
+    // 1h 缓存写入价不进入比较：它不是设置里可编辑的字段，参考价新增这一项不能让
+    // 已保存的自定义价变成「参考价已变化」冲突。
+    ...(quote.inputTokenPriceBands
+      ? {
+          inputTokenPriceBands: quote.inputTokenPriceBands.map((band) => {
+            const { cacheCreate1hPerMtok, ...comparableBand } = band;
+            void cacheCreate1hPerMtok;
+            return comparableBand;
+          }),
+        }
+      : {}),
   };
 }
 
@@ -353,6 +363,21 @@ function mergedQuote(
       ? (bandValue / referenceValue) * overrideValue
       : overrideValue;
   };
+  // 设置里只有一个「缓存写入」价。改它时 1h 写入价按「该档 1h 价 ÷ 基础 5m 价」跟着
+  // 投影（与分档 5m 价同一个分母，长上下文倍率才不丢）；不改时沿用参考价；清空缓存
+  // 写入价则 1h 一并清空。
+  const projectCacheCreate1h = (
+    reference1h: number | undefined,
+    reference5m: number | undefined,
+  ): number | undefined => {
+    if (values.cacheCreatePerMtok === null) return undefined;
+    if (values.cacheCreatePerMtok === undefined) return reference1h;
+    return projectBandValue(reference1h, reference5m, values.cacheCreatePerMtok);
+  };
+  const cacheCreate1hPerMtok = projectCacheCreate1h(
+    mergeReference?.cacheCreate1hPerMtok,
+    mergeReference?.cacheCreatePerMtok,
+  );
   const inputTokenPriceBands = mergeReference?.inputTokenPriceBands?.map((band) => {
     const merged = { ...band };
     if (values.inputPerMtok !== undefined) {
@@ -385,6 +410,12 @@ function mergedQuote(
         values.cacheCreatePerMtok,
       );
     }
+    const band1h = projectCacheCreate1h(
+      band.cacheCreate1hPerMtok,
+      mergeReference.cacheCreatePerMtok,
+    );
+    if (band1h === undefined) delete merged.cacheCreate1hPerMtok;
+    else merged.cacheCreate1hPerMtok = band1h;
     return merged;
   });
   return {
@@ -398,6 +429,9 @@ function mergedQuote(
     ...(inputTokenPriceBands ? { inputTokenPriceBands } : {}),
     ...(cacheReadPerMtok !== undefined ? { cacheReadPerMtok } : {}),
     ...(cacheCreatePerMtok !== undefined ? { cacheCreatePerMtok } : {}),
+    ...(cacheCreatePerMtok !== undefined && cacheCreate1hPerMtok !== undefined
+      ? { cacheCreate1hPerMtok }
+      : {}),
     // Standard-price edits do not change the independent Fast tariff or its currency.
     ...(mergeReference?.priority && mergeReference.currency === currency
       ? { priority: mergeReference.priority }
@@ -545,10 +579,14 @@ export function mergeStoredModelPriceOverride(
   return mergedQuote(record, reference, record.values, record.baseReference);
 }
 
+/**
+ * `at` 让覆盖的未覆盖字段跟随那一天的参考价(历史用量估价)；批量调用方传同一份 `entries` 快照。
+ */
 export function applyModelPriceOverrides(
   pricing: ModelPricingCatalog,
   registry: ModelRegistry | null | undefined,
   ledgerCurrency: MoneyCurrency = currentLedgerCurrency(),
+  options: { at?: string | Date; entries?: ModelPriceOverridesSnapshot } = {},
 ): ModelPricingCatalog {
   const next: ModelPricingCatalog = Object.fromEntries(
     Object.entries(pricing).map(([providerId, quotes]) => [
@@ -562,10 +600,11 @@ export function applyModelPriceOverrides(
       ),
     ]),
   );
-  for (const record of Object.values(readEntries())) {
+  for (const record of Object.values(options.entries ?? readEntries())) {
     if (record.providerId === 'xd') continue;
     const reference = providerReferencePriceQuote(record.providerId, record.modelId, registry, {
       agent: record.agent,
+      at: options.at,
     });
     const quote = mergedQuote(record, reference, record.values, record.baseReference);
     if (!quote || !currencyCanProjectToLedger(quote.currency, ledgerCurrency)) continue;
@@ -579,6 +618,10 @@ export const __testing = {
   overrideKey,
   sparseValues,
   sameComparable,
+  comparable,
   mergedQuote,
   currencyCanProjectToLedger,
 };
+
+/** New-computer setup: values the user changed here (docs/product-rules/new-device-setup-migration.md). */
+export const modelPriceOverridePortableSettings = portableOverrideSettings(store);

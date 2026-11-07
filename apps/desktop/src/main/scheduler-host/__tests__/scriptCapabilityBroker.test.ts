@@ -474,7 +474,8 @@ describe('SchedulerScriptCapabilityBroker', () => {
     expect(byMethod.get('feishu.recent_messages')).toBe(false);
     expect(byMethod.get('sessions.dispatch')).toBe(false);
     expect(byMethod.get('jira.search_jql')).toBe(true);
-    expect(result.methods).toHaveLength(7);
+    expect(result.methods).toHaveLength(10);
+    expect(byMethod.get('github.get_pr_status')).toBe(false);
   });
 
   it('rejects missing task grants and unknown methods', async () => {
@@ -1126,3 +1127,15 @@ function wireRealChannel(tmp: string, installed = makeInstalledGhost('xd-atlassi
   finalizeCallMock.mockImplementation((callId: string) => cardService.finalizeCall(callId));
   return { cardService, fsSlot };
 }
+
+// Unit: retry after a lost receipt must retain the same Host delivery identity, scoped to schedule and target.
+it('keeps dispatch retry keys stable and separates different schedules', async () => {
+  sendToSessionMock.mockResolvedValue({ ok: true, targetSessionId: 'owner', agentKind: 'codex', wakeKind: 'queued' });
+  const broker = new SchedulerScriptCapabilityBroker();
+  const request = { method: 'sessions.dispatch', params: { message: 'update', idempotency_key: 'event-1' } };
+  const run = (id: string) => broker.call(request, new Set(['sessions.dispatch']), { schedule: schedule({ id, targetSessionId: 'owner' }) });
+  const a = await run('one'); const b = await run('one'); const c = await run('two');
+  expect(a).toMatchObject({ delivery_id: expect.stringMatching(/^schedule-delivery:/) });
+  expect(b).toEqual(a); expect(c).not.toEqual(a);
+  expect(sendToSessionMock.mock.calls.at(-1)?.[0]).toMatchObject({ targetSessionId: 'owner', deliveryClientId: (c as { delivery_id: string }).delivery_id });
+});

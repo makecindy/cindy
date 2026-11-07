@@ -223,3 +223,11 @@ describe('publisher old-token organization compatibility', () => {
     expect(() => publisher.publisherAudience('bad:slug')).toThrow();
   });
 });
+
+// Unit: publish is a new upload; keep strict inspection but expose the resource
+// rejection so authors can repair the HTML instead of retrying a generic failure.
+it('reports the invalid page when inspecting a new upload', async () => {
+  (await host()).getPluginPublisherOrchestrator();
+  mocks.inspect.mockResolvedValueOnce({ rejection: { code: 'file-invalid', reason: 'mcpApps.ui.resources 文件 ui/page.html 必须是包内普通文件且不超过 4194304 字节' } });
+  await expect(dependencies().inspectPackage('/tmp/helper.cindy')).rejects.toThrow('mcpApps.ui.resources 文件 ui/page.html');
+});

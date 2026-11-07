@@ -46,6 +46,7 @@ import {
   type SocialProvider,
 } from '@cindy/auth-client';
 import { readReloginFlag, clearReloginFlag, enableUncustomizedBetaChannel } from './updateService';
+import { linuxCredentialFailureFields } from './linuxPasswordStore.js';
 import { probeBetaManifest } from './manifestService';
 import { isEnableBetaUserCustomized, readUpdateChannelSettings } from './updateChannelStore';
 import { BRAND_IDENTITY } from '@cindy/maker-shared/brand-identity';
@@ -554,10 +555,44 @@ function isCredentialEncryptionAvailable(): boolean {
     } catch {
       // Diagnostics must not change credential read behavior.
     }
+    let backend: string | undefined;
+    try {
+      backend = (
+        safeStorage as { getSelectedStorageBackend?: () => string }
+      ).getSelectedStorageBackend?.();
+    } catch {
+      backend = 'unavailable';
+    }
+    let passwordStoreSwitch: string | undefined;
+    try {
+      const commandLine = (app as {
+        commandLine?: {
+          hasSwitch?: (name: string) => boolean;
+          getSwitchValue?: (name: string) => string;
+        };
+      }).commandLine;
+      if (commandLine?.hasSwitch?.('password-store')) {
+        const fromCommandLine = commandLine.getSwitchValue?.('password-store');
+        if (typeof fromCommandLine === 'string') passwordStoreSwitch = fromCommandLine;
+      }
+    } catch {
+      passwordStoreSwitch = undefined;
+    }
+    if (passwordStoreSwitch === undefined) {
+      const prefix = '--password-store=';
+      const arg = process.argv.find((item) => item.startsWith(prefix));
+      if (arg) passwordStoreSwitch = arg.slice(prefix.length);
+    }
     log.warn('credential encryption backend unavailable', {
       appReady: app.isReady(),
       screenState,
       electronVersion: process.versions.electron,
+      ...linuxCredentialFailureFields({
+        platform: process.platform,
+        env: process.env,
+        backend,
+        passwordStoreSwitch,
+      }),
     });
   }
   return available;
@@ -722,16 +757,31 @@ function writeAtomicSafeCiphertext(key: string, ciphertext: string): boolean {
 
 function isAtomicPersistedSecretAbsent(key: string): boolean {
   if (!isCredentialEncryptionAvailable()) return false;
-  const filepath = path.join(SAFE_STORAGE_DIR(), `${key}.enc`);
-  for (const candidate of [filepath, `${filepath}.bak`]) {
+  return atomicPersistedSecretPresence(key) === 'absent';
+}
+
+/** File presence only. Encryption availability must not turn a missing file into an existing one. */
+function atomicPersistedSecretPresence(key: string): 'absent' | 'present' | 'unknown' {
+  const filepath = path.join(SAFE_STORAGE_DIR(), key + '.enc');
+  for (const candidate of [filepath, filepath + '.bak']) {
     try {
       fs.accessSync(candidate, fs.constants.F_OK);
-      return false;
+      return 'present';
     } catch (error) {
-      if ((error as NodeJS.ErrnoException)?.code !== 'ENOENT') return false;
+      if ((error as NodeJS.ErrnoException)?.code !== 'ENOENT') return 'unknown';
     }
   }
-  return true;
+  return 'absent';
+}
+
+function logUnreadableEncryptedRecord(
+  key: string,
+  presentMessage: string,
+  absentMessage: string,
+): void {
+  const absentAndUnavailable =
+    !isCredentialEncryptionAvailable() && atomicPersistedSecretPresence(key) === 'absent';
+  log.warn(absentAndUnavailable ? absentMessage : presentMessage);
 }
 
 function writeAtomicSafe(key: string, value: string): boolean {
@@ -861,7 +911,11 @@ function readAuthAccountLogoutTombstones(options: { recoverInvalid?: boolean } =
   const raw = readAtomicSafe(AUTH_ACCOUNT_LOGOUT_TOMBSTONES_KEY);
   if (raw === null) {
     if (isAtomicPersistedSecretAbsent(AUTH_ACCOUNT_LOGOUT_TOMBSTONES_KEY)) return [];
-    log.warn('encrypted auth logout tombstones are temporarily unreadable');
+    logUnreadableEncryptedRecord(
+      AUTH_ACCOUNT_LOGOUT_TOMBSTONES_KEY,
+      'encrypted auth logout tombstones are temporarily unreadable',
+      'encrypted auth logout tombstones are absent and the credential backend is unavailable',
+    );
     if (options.recoverInvalid) return [];
     throw new AuthApiError(
       'CREDENTIAL_STORE_UNAVAILABLE',
@@ -972,7 +1026,11 @@ function readAuthAccountVault(
         ? { ...emptyAuthAccountVault(), loggedOutAccountKeys: persistedLogoutKeys }
         : emptyAuthAccountVault();
     }
-    log.warn('encrypted auth account vault exists but is temporarily unreadable');
+    logUnreadableEncryptedRecord(
+      AUTH_ACCOUNT_VAULT_KEY,
+      'encrypted auth account vault exists but is temporarily unreadable',
+      'encrypted auth account vault is absent and the credential backend is unavailable',
+    );
     if (options.allowUnreadable) return emptyAuthAccountVault();
     throw new AuthApiError(
       'CREDENTIAL_STORE_UNAVAILABLE',
@@ -3162,7 +3220,6 @@ function scheduleRefresh(token: string): void {
  * 系统 resume 或冷启动)。失败采用带随机抖动的指数退避,避免全体客户端集中重试;
  * 确定性凭据失效不走这里(直接 clearAuth + 弹重登)。
  */
-const RUNTIME_REFRESH_RETRY_MS = 60_000;
 const REFRESH_TOKEN_REPLACEMENT_RETRY_LIMIT = 2;
 const COLD_START_REFRESH_TOKEN_REPLACEMENT_RECHECK_DELAYS_MS = [100, 250] as const;
 const RUNTIME_REFRESH_TOKEN_REPLACEMENT_RECHECK_DELAYS_MS = [250, 1000] as const;
@@ -3418,9 +3475,18 @@ function stopColdStartRecovery(): void {
   coldStartRetryWait?.(true);
 }
 
-function scheduleRefreshRetryAfterTransientFailure(epoch: number, retryAt?: number): void {
+function scheduleRefreshRetryAfterTransientFailure(
+  epoch: number,
+  retryAt?: number,
+  networkFailure = false,
+): void {
   if (epoch !== authStateEpoch) return;
-  const delay = refreshBackoff.defer(epoch, retryAt);
+  refreshBackoff.defer(epoch, retryAt, networkFailure);
+  scheduleRefreshRetry(epoch);
+}
+
+function scheduleRefreshRetry(epoch: number): void {
+  const delay = refreshBackoff.runtimeRemaining(epoch);
   if (refreshTimer !== null) {
     clearTimeout(refreshTimer);
     refreshTimer = null;
@@ -3429,7 +3495,7 @@ function scheduleRefreshRetryAfterTransientFailure(epoch: number, retryAt?: numb
   // retry; re-arm it in bounded chunks without extending the original wait.
   const retry = () => {
     if (authStateEpoch !== epoch) return;
-    const remaining = refreshBackoff.remaining(epoch);
+    const remaining = refreshBackoff.runtimeRemaining(epoch);
     if (remaining > 0) refreshTimer = setTimeout(retry, Math.min(remaining, 2_147_483_647));
     else {
       refreshTimer = null;
@@ -3638,6 +3704,25 @@ function notifyAuthListeners(): void {
       l(state);
     } catch (err) {
       log.error('auth state listener threw (non-fatal)', err);
+    }
+  }
+}
+
+// Token rotation does not imply an identity change. Connections rejected with 401
+// need this synchronous signal even when the retry was started by our timer.
+const accessTokenRefreshListeners = new Set<() => void>();
+
+export function onAccessTokenRefreshed(listener: () => void): () => void {
+  accessTokenRefreshListeners.add(listener);
+  return () => accessTokenRefreshListeners.delete(listener);
+}
+
+function notifyAccessTokenRefreshed(): void {
+  for (const listener of accessTokenRefreshListeners) {
+    try {
+      listener();
+    } catch (err) {
+      log.error('access token refresh listener threw (non-fatal)', err);
     }
   }
 }
@@ -5514,6 +5599,16 @@ async function runLoginAction(
   const loginRealm = startsBuildRealmFlow ? AUTH_REGION : (pendingAuthRealm ?? activeAuthRealm);
   const client = createAuthClient(loginRealm);
   const stateBeforeAction = loginFlowState?.step === 'error' ? null : loginFlowState;
+  // User-triggered check of the already selected backend. Empty desktop identity
+  // is not itself a reason to refuse a code request or browser login.
+  const assertLoginCredentialStoreReady = (): void => {
+    if (isCredentialEncryptionAvailable()) return;
+    throw new AuthApiError(
+      'CREDENTIAL_STORE_UNAVAILABLE',
+      503,
+      'Saved account credentials are temporarily unavailable',
+    );
+  };
   try {
     // Cancellation is intercepted by dispatchLoginAction so it can settle the
     // already-running browser action instead of starting a second action.
@@ -5697,6 +5792,7 @@ async function runLoginAction(
       if (action.kind === 'phone' && !providerConfig?.phone) {
         throw new AuthApiError('PHONE_LOGIN_DISABLED', 400, 'Phone login is disabled');
       }
+      assertLoginCredentialStoreReady();
       await client.requestCode(action.kind, action.identifier, {
         captchaToken: action.captchaToken,
       });
@@ -5712,6 +5808,7 @@ async function runLoginAction(
     }
 
     if (action.type === 'verify-code') {
+      assertLoginCredentialStoreReady();
       return {
         success: true,
         state: await acceptLoginOutcome(
@@ -5722,6 +5819,7 @@ async function runLoginAction(
     }
 
     if (action.type === 'start-browser') {
+      assertLoginCredentialStoreReady();
       if (action.kind === 'social') {
         const provider = action.providerOrConnectionId as SocialProvider;
         if (!providerConfig?.social.includes(provider)) {
@@ -5975,7 +6073,7 @@ export async function dispatchLoginAction(action: unknown): Promise<DesktopLogin
   }
 }
 
-export async function refresh(_options?: { networkRecovered?: boolean }): Promise<boolean> {
+export async function refresh(options?: { serverRejectedToken?: boolean }): Promise<boolean> {
   if (getActiveAppSession().mode === 'local') {
     log.debug('runtime refresh skipped in local mode');
     return false;
@@ -5983,13 +6081,19 @@ export async function refresh(_options?: { networkRecovered?: boolean }): Promis
   // Cold-start recovery owns rotation until it settles. Runtime callers must
   // not consume the same saved refresh token concurrently, or wait indefinitely.
   if (coldStartAuthInFlight !== null && (!accessToken || !currentUser)) return false;
-  // A fleet may observe relay recovery at once. Keep accepting the legacy hint,
-  // but never let it reset the failure count or bypass the randomized deadline.
-  if (refreshPromise !== null) return refreshPromise;
   // Explicit callers (including chat polling and resume) share the same wait
   // as the retry timer; skipped calls must not move the deadline forward.
-  if (refreshBackoff.remaining(authStateEpoch) > 0) return false;
+  if (options?.serverRejectedToken && refreshBackoff.serverRejectedToken(authStateEpoch)) {
+    scheduleRefreshRetry(authStateEpoch);
+  }
+  if (refreshPromise !== null) return refreshPromise;
+  if (refreshBackoff.runtimeRemaining(authStateEpoch) > 0) return false;
+  if (refreshTimer !== null) {
+    clearTimeout(refreshTimer);
+    refreshTimer = null;
+  }
 
+  refreshBackoff.startRuntimeAttempt(authStateEpoch);
   refreshPromise = (async () => {
     const refreshEpoch = authStateEpoch;
     const refreshWasSuperseded = (point: string): boolean => {
@@ -6109,14 +6213,14 @@ export async function refresh(_options?: { networkRecovered?: boolean }): Promis
           });
         } else if (action.kind === 'replacement-retry') {
           log.warn(
-            `runtime refresh failed for a stale token after replacement retries status=${result.status} code=${code ?? '<none>'} — retrying no sooner than ${RUNTIME_REFRESH_RETRY_MS / 1000}s`,
+            `runtime refresh failed for a stale token after replacement retries status=${result.status} code=${code ?? '<none>'} — scheduling retry`,
           );
-          scheduleRefreshRetryAfterTransientFailure(refreshEpoch, result.retryAt);
+          scheduleRefreshRetryAfterTransientFailure(refreshEpoch, result.retryAt, result.status === 0);
         } else {
           log.warn(
-            `runtime refresh failed transiently status=${result.status} code=${code ?? '<none>'} — retrying no sooner than ${RUNTIME_REFRESH_RETRY_MS / 1000}s`,
+            `runtime refresh failed transiently status=${result.status} code=${code ?? '<none>'} — scheduling retry`,
           );
-          scheduleRefreshRetryAfterTransientFailure(refreshEpoch, result.retryAt);
+          scheduleRefreshRetryAfterTransientFailure(refreshEpoch, result.retryAt, result.status === 0);
         }
         return false;
       }
@@ -6229,6 +6333,7 @@ export async function refresh(_options?: { networkRecovered?: boolean }): Promis
           expectedUserId: nextUser.id,
         });
         scheduleRefresh(data.accessToken);
+        notifyAccessTokenRefreshed();
         notifyRenderer();
         if (previousUserId !== nextUser.id || authRealmChanged || membershipKindChanged) {
           notifyAuthListeners();
@@ -6264,6 +6369,7 @@ export async function refresh(_options?: { networkRecovered?: boolean }): Promis
       await migrateLocalProviderBindingsAfterCloudCommit(nextUser.id);
       persistedRefreshTokenNeedsIdentityCheck = false;
       scheduleRefresh(data.accessToken);
+      notifyAccessTokenRefreshed();
       notifyRenderer();
       if (authRealmChanged || membershipKindChanged) {
         notifyAuthListeners();

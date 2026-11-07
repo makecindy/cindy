@@ -284,6 +284,11 @@ function writeOfficialDeviceLinkApiBaseUrl(value: string): void {
   DEVICE_LINK_API_BASE_URL = deviceLinkApiBaseOverride ?? value;
 }
 
+/** 官方中转地址,不受自建中转覆盖:共享任务的接口、附件与跨账号连接都在官方。 */
+export function getOfficialDeviceLinkApiBaseUrl(): string {
+  return officialDeviceLinkApiBaseUrl;
+}
+
 /**
  * 自建中转的地址覆盖:非空时所有 device-link 消费者(REST、WebSocket)改连这个地址;
  * null 恢复官方中转。只由 device-link/selfHostedRelayRouting 调用,凭证与鉴权方案在那里一并切换。

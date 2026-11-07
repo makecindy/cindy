@@ -864,3 +864,40 @@ describe('routine check configuration', () => {
     } finally { await f.engine.stop(); }
   });
 });
+
+// Old clients omit delivery when editing; the selected recipient must survive save and restart.
+it('preserves an explicit delivery destination across legacy edits and restart', async () => {
+  const f = await fixture();
+  const delivery = { kind: 'im' as const, targetId: 'connected-chat' };
+  const saved = await f.engine.put('bot', { ...input, delivery });
+  await f.engine.put('bot', { ...input, name: 'Renamed' }, saved.id);
+  await f.engine.stop();
+  const restarted = await fixture(undefined, f.snapshot());
+  try {
+    expect(restarted.engine.list('bot')[0].delivery).toEqual(delivery);
+    expect(() => parseRoutineInput({ ...input, delivery: { kind: 'im', targetId: '' } })).toThrow();
+  } finally { await restarted.engine.stop(); }
+});
+
+it('normalizes the model discovery local sentinel before persisting a routine route', async () => {
+  const f = await fixture();
+  try {
+    const routine = await f.engine.put('bot', { ...input, modelOverride: { agentKind: 'pi', model: 'economy', providerId: 'connected', agentDeviceId: 'local' } });
+    expect(routine.modelOverride?.agentDeviceId).toBeNull();
+    expect(f.snapshot()?.routines[0].modelOverride?.agentDeviceId).toBeNull();
+  } finally { await f.engine.stop(); }
+});
+
+it('normalizes already-saved local routes on restore instead of returning the old raw value on an unchanged edit', async () => {
+  const f = await fixture();
+  const saved = await f.engine.put('bot', { ...input, modelOverride: { agentKind: 'pi', model: 'economy', agentDeviceId: null } });
+  await f.engine.stop();
+  const snapshot = f.snapshot()!;
+  snapshot.routines[0].modelOverride!.agentDeviceId = 'local';
+  const restored = await fixture(undefined, snapshot);
+  try {
+    expect(restored.engine.list('bot')[0].modelOverride?.agentDeviceId).toBeNull();
+    const edited = await restored.engine.put('bot', { ...input, modelOverride: { agentKind: 'pi', model: 'economy', agentDeviceId: 'local' } }, saved.id);
+    expect(edited.modelOverride?.agentDeviceId).toBeNull();
+  } finally { await restored.engine.stop(); }
+});

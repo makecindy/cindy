@@ -164,13 +164,19 @@ function overviewHtml(rows) {
     .label{width:180px;flex-shrink:0;line-height:1.5}.failed{color:#b91c1c;font-weight:600}
     figure{margin:0;background:#fff;border:1px solid #d4d4d8;border-radius:6px;padding:6px}
     figcaption{margin-bottom:4px;color:#52525b}img{display:block;max-width:640px;max-height:440px}
+    .pair{display:flex;gap:6px;align-items:flex-start}
   </style>${rows
     .map(
       (row) =>
-        `<div class="row"><div class="label"><b>${esc(row.title)}</b><br>${esc(row.subtitle)}<br><span class="${row.status === 'failed' ? 'failed' : ''}">${esc(row.status)}${row.warnings ? ` · ${row.warnings} warnings` : ''}</span></div>${row.images
+        `<div class="row"><div class="label"><b>${esc(row.title)}</b><br>${esc(row.subtitle)}<br><span class="${row.status === 'failed' ? 'failed' : ''}">${esc(row.status)}${row.warnings ? ` · ${row.warnings} warnings` : ''}</span></div>${row.pairs
           .map(
-            (image) =>
-              `<figure><figcaption>${esc(image.label)}</figcaption><img src="/__evidence/${image.src}"></figure>`,
+            (pair) =>
+              `<div class="pair">${pair
+                .map(
+                  (image) =>
+                    `<figure><figcaption>${esc(image.label)}</figcaption><img src="/__evidence/${image.src}"></figure>`,
+                )
+                .join('')}</div>`,
           )
           .join('')}</div>`,
     )
@@ -179,6 +185,9 @@ function overviewHtml(rows) {
 
 const KEEP_RUNS = 20;
 const OVERVIEW_ROWS = 6;
+// Scenario-only buttons (finish, remount…) stay clickable but are not part of the product UI,
+// so captures leave them out without moving the layout.
+const HIDE_CONTROLS = '[data-ui-page-control]{visibility:hidden!important}';
 
 /** The default evidence folder keeps the most recent runs only. */
 async function pruneEvidence(outputRoot, current) {
@@ -395,15 +404,39 @@ export async function runPlan(plan, options, externalSignal) {
       }
     });
 
+    let usedElectronWindow = false;
+    const freshElectronPage = async (size) => {
+      if (usedElectronWindow) {
+        // A new target clears both Chromium emulation and Playwright's cached
+        // viewport/fullscreen state, even after a failed scenario. Reuse the same
+        // isolated process/session and the host's one secure window factory.
+        const ready = app.waitForEvent('window', { timeout: options.timeout });
+        await app.evaluate(({ app, BrowserWindow }, viewport) => {
+          const old = BrowserWindow.getAllWindows();
+          app.emit('ui-check:create-window', viewport);
+          for (const window of old) window.destroy();
+        }, size);
+        electronPage = await ready;
+        electronPage.on('requestfailed', (request) => {
+          if (new URL(request.url()).origin !== origin) current.blocked.push(request.url());
+        });
+      }
+      usedElectronWindow = true;
+      // Windows may clamp a newly created native window to the display work area.
+      // Size it after creation, as for the first window; the renderer assertion
+      // below remains exact, including tall screenshot fixtures.
+      await app.evaluate(({ BrowserWindow }, viewport) => {
+        BrowserWindow.getAllWindows()[0].setContentSize(viewport.width, viewport.height);
+      }, size);
+      return electronPage;
+    };
+
     // Resources go into `opened` as soon as they exist, so a variant that fails to start is
     // still screenshotted, its listeners removed and its context closed by the caller.
     const openVariant = async (variant, bundle, definition, opened = {}) => {
       let page, context;
       if (app) {
-        page = electronPage;
-        await app.evaluate(({ BrowserWindow }, size) => {
-          BrowserWindow.getAllWindows()[0].setContentSize(size.width, size.height);
-        }, variant.viewport);
+        page = await freshElectronPage(variant.viewport);
       } else {
         context = await browser.newContext({
           viewport: variant.viewport,
@@ -530,7 +563,12 @@ export async function runPlan(plan, options, externalSignal) {
           throw new Error(`variant stopped before capture ${name}`);
         const file = path.join(dir, `${name}.png`);
         const target = captureOptions.locator ?? opened.page;
-        await target.screenshot({ path: path.join(evidence, file), timeout: 5000, scale: 'css' });
+        await target.screenshot({
+          path: path.join(evidence, file),
+          timeout: 5000,
+          scale: 'css',
+          style: HIDE_CONTROLS,
+        });
         result.screenshots.push(file.split(path.sep).join('/'));
         if (options.focus && !captureOptions.locator) await captureFocus(name);
         if (audit) await auditPage();
@@ -558,6 +596,7 @@ export async function runPlan(plan, options, externalSignal) {
           clip,
           scale: 'device',
           timeout: 5000,
+          style: HIDE_CONTROLS,
         });
         const metrics = await element.evaluate((el) => {
           const style = getComputedStyle(el);
@@ -693,8 +732,8 @@ export async function runPlan(plan, options, externalSignal) {
           ]);
           if (!settled)
             summary.strandedScenarios = [...(summary.strandedScenarios ?? []), variant.id];
-          // Electron shares one window between variants: a scenario that keeps running would act
-          // on the next variant's page, so stop the run instead of recording polluted results.
+          // A stranded scenario still owns callbacks into shared runner/report state.
+          // Stop rather than allow it to contaminate the following variants.
           if (!settled && app && !interrupted) {
             const error = new Error(
               `${variant.id} was still running after its timeout; stopped the run so it cannot affect later variants`,
@@ -777,11 +816,11 @@ export async function runPlan(plan, options, externalSignal) {
             subtitle: `${variant.theme} · ${variant.locale} · ${variant.viewport.width}×${variant.viewport.height}`,
             status: after.status,
             warnings: after.warnings.length,
-            // Before/after of the same capture sit side by side.
-            images: (after.focus.length
+            // Before/after of the same capture sit side by side and wrap as one unit.
+            pairs: (after.focus.length
               ? after.focus.map((item) => item.file)
               : after.screenshots
-            ).flatMap((src) => {
+            ).map((src) => {
               const name = path.basename(src, '.png');
               const pair = (
                 before?.focus.length ? before.focus.map((item) => item.file) : before?.screenshots
@@ -797,15 +836,12 @@ export async function runPlan(plan, options, externalSignal) {
         }
       }
       await measure('overviewMs', async () => {
+        if (app) await freshElectronPage({ width: 1600, height: 900 });
         const context = app
           ? electronPage.context()
           : await browser.newContext({ viewport: { width: 1600, height: 900 } });
         if (!app) await routePage(context);
         const page = app ? electronPage : await context.newPage();
-        if (app)
-          await app.evaluate(({ BrowserWindow }) =>
-            BrowserWindow.getAllWindows()[0].setContentSize(1600, 900),
-          );
         // A few rows per image keeps each overview readable when opened at screen size.
         summary.overviews = [];
         for (let start = 0; start < rows.length; start += OVERVIEW_ROWS) {

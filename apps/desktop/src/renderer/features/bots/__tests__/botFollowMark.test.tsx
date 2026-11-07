@@ -243,6 +243,7 @@ it('offers one Cindy across computers without merging a custom namesake or unrel
   const tasks = [session({ id: 'local-child' }), session({ id: 'remote-child', deviceLinkDeviceId: 'laptop', status: 'archived' }),
     session({ id: 'custom-child', deviceLinkDeviceId: 'laptop' }), session()];
   expect(tasks.filter(task => matchesTaskCreators(task, selected, result.current.index))).toEqual(tasks.slice(0, 2));
+  expect(tasks.filter(task => matchesTaskCreators(task, 'none', result.current.index))).toEqual([tasks[3]]);
   h.remote = [...h.remote, { ...bot('new-cindy', 'Cindy', { templateId: 'cindy' }), deviceId: 'new-host', delegatedSessionIds: ['new-child'] }];
   rerender();
   expect(result.current.options).toHaveLength(3);
@@ -284,6 +285,8 @@ it.each(['routine', 'channel'])('uses exact local/remote ownership for %s avatar
   expect(matchesTaskCreators(remote, [localKey], result.current)).toBe(false);
   expect(matchesTaskCreators(remote, [remoteKey], result.current)).toBe(true);
   expect(matchesTaskCreators(local, [localKey, remoteKey], result.current)).toBe(true);
+  expect(matchesTaskCreators(local, 'none', result.current)).toBe(false);
+  expect(matchesTaskCreators(remote, 'none', new Map())).toBe(false);
 });
 
 // Unit / review4390134785: existing coverage starts with a real roster, missing

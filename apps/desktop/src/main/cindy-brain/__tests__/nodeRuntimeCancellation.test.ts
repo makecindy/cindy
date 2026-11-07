@@ -101,7 +101,7 @@ function harness(
       args: [],
       ...(rpcId ? { rpcId } : {}),
     });
-  return { worker, children, calls, broker, request, spawn };
+  return { worker, children, calls, broker, request, spawn, ghost };
 }
 
 async function until(check: () => boolean) {
@@ -465,4 +465,40 @@ describe('Node private authorization bridge', () => {
       expect(() => assertCurrent()).toThrow();
     },
   );
+});
+
+// Unit: upload uses its live RPC call and aborts at the tool boundary.
+describe('private upload lifetime', () => {
+  it('binds upload to the real call and aborts it when the tool ends', async () => {
+    let observedSignal!:AbortSignal;
+    let release!:(value:unknown)=>void;
+    const send=vi.fn<NonNullable<GhostNodeRuntimeBrokerDeps['authenticatedFetch']>>((_id, request, _auth, guard, signal)=>{guard();observedSignal=signal;expect(request.callId).toBe('call-a');return new Promise(resolve=>{release=resolve;});});
+    const h=harness(true,{authenticatedFetch:send});const request=h.request('call-a');await until(()=>h.worker.requests.length===1);
+    const rpcId=h.worker.requests[0].id;
+    h.worker.listener?.({type:'authenticated-fetch',reqId:'upload',rpcId,authorization:'Bearer synthetic',request:{url:'https://provider.example/u',callId:'forged'}});
+    await until(()=>send.mock.calls.length===1);
+    h.calls.get('call-a')!.abort();await request;expect(observedSignal.aborted).toBe(true);release({ok:true});
+    await new Promise(r=>setImmediate(r));expect(h.worker.controls.some(x=>x.reqId==='upload'&&x.ok)).toBe(false);
+  });
+});
+
+
+// Unit: upload authorization is bound to owner and approved installation, not just a live RPC.
+it.each(['owner','manifest','disabled','approval'] as const)('rejects private upload after %s changes', async mode => {
+  let current = true;
+  const send = vi.fn(async () => ({ok:true}));
+  const h = harness(true, {authenticatedFetch:send,
+    ownerScope:{capture:()=> 'owner',isCurrent:()=>current,isStable:()=>current}});
+  const request = h.request('call-a'); await until(()=>h.worker.requests.length===1);
+  if(mode==='owner')current=false;
+  if(mode==='manifest')h.ghost.manifest.version='changed';
+  if(mode==='disabled')h.ghost.enabled=false;
+  if(mode==='approval')h.ghost.approval={state:'approved',revision:'replacement'};
+  h.worker.listener?.({type:'authenticated-fetch',reqId:'upload',rpcId:h.worker.requests[0].id,
+    authorization:'Bearer synthetic',request:{url:'https://provider.example/u',method:'POST',uploadDir:{token:'ticket'}}});
+  await new Promise(resolve=>setImmediate(resolve));
+  expect(send).not.toHaveBeenCalled();
+  if (mode === 'owner') expect(h.worker.controls).toContainEqual({type:'request-settled',rpcId:h.worker.requests[0].id});
+  else expect(h.worker.controls).toContainEqual({type:'node-host-result',reqId:'upload',ok:false});
+  h.calls.get('call-a')!.abort(); await request;
 });

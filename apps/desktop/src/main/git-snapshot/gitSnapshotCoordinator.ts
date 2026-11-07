@@ -17,6 +17,15 @@ import type {
   SkippedFileFingerprint,
 } from './gitSnapshotService';
 
+// Automatic captures sit on the send path. Bound the changed/untracked work
+// before staging; a failed capture uses the existing rewind-gap semantics.
+// This is not a repository-size limit and does not apply to manual snapshots.
+const AUTO_CAPTURE_BUDGET = {
+  maxFiles: 10_000,
+  maxTotalBytes: 256 * 1024 * 1024,
+  timeoutMs: 5_000,
+};
+
 interface CoordinatorLogger {
   info: (msg: string, meta?: Record<string, unknown>) => void;
   warn: (msg: string, meta?: Record<string, unknown>) => void;
@@ -91,6 +100,8 @@ interface TurnStartState {
 
 interface TurnStartRecord extends Partial<TurnStartState> {
   operation: OperationBudget;
+  /** Baseline failure is fenced before dispatch, including turns later aborted. */
+  rewindGapRecorded?: boolean;
   autoSnapshotEnabled: boolean;
   autoInitProjectGit: boolean;
   promise: Promise<void>;
@@ -187,13 +198,25 @@ export class GitSnapshotCoordinator {
       await enqueueGitRepoWrite(resolved.repoRoot, async () => {
         const metadata = await operationWait(metadataPromise);
         record.metadata = metadata;
-        const turnStart = await operationWait(this.createTurnStartSavepoint(
-          sessionId,
-          resolved.repoRoot,
-          metadata,
-        ));
-        record.turnStartCommit = turnStart.commit;
-        record.turnStartSkippedFingerprints = turnStart.skippedFingerprints;
+        try {
+          const turnStart = await operationWait(this.createTurnStartSavepoint(
+            sessionId,
+            resolved.repoRoot,
+            metadata,
+          ));
+          record.turnStartCommit = turnStart.commit;
+          record.turnStartSkippedFingerprints = turnStart.skippedFingerprints;
+        } finally {
+          // Budget failures must fence rewind before the agent can edit files.
+          // Waiting until onTurnEnd misses turns that are stopped or fail.
+          if (!record.turnStartCommit && resolved.savepointRewind) {
+            record.rewindGapRecorded = await this.createRewindBlockedMarker(
+              sessionId, resolved.repoRoot,
+              'File rewind gap: turn-start baseline unavailable',
+              '[git-snapshot] rewind gap marker created', metadata,
+            );
+          }
+        }
       });
       record.metadata ??= await operationWait(metadataPromise);
     } catch (err) {
@@ -317,7 +340,7 @@ export class GitSnapshotCoordinator {
       // Without a baseline this turn's delta is unrecoverable; append a gap
       // marker so the file-rewind planner truncates ranges that cross it.
       // Only codex/pi consume the savepoint chain for file rewind.
-      if (savepointRewind) {
+      if (savepointRewind && !turnStart?.rewindGapRecorded) {
         await this.createRewindBlockedMarker(
           sessionId,
           repoRoot,
@@ -358,6 +381,7 @@ export class GitSnapshotCoordinator {
     try {
       result = await operationWait(this.deps.createShadowSavepoint(repoRoot, {
         sessionId,
+        captureBudget: AUTO_CAPTURE_BUDGET,
         label: (diff) =>
           createAfterEditLabel(
             { diff, userPrompt: metadata.userPrompt },
@@ -459,11 +483,11 @@ export class GitSnapshotCoordinator {
     repoRoot: string,
     metadata: TurnStartMetadata,
   ): Promise<{ commit: string | undefined; skippedFingerprints: SkippedFileFingerprint[] }> {
-    // Always created, dirty or clean, so every turn has a uniform restore
-    // baseline; an unchanged tree costs almost nothing thanks to object reuse.
+    // Attempt a baseline even for a clean worktree; a fresh index still hashes dirty files.
     operationCheckpoint();
     const result = await operationWait(this.deps.createShadowSavepoint(repoRoot, {
       sessionId,
+      captureBudget: AUTO_CAPTURE_BUDGET,
       label: '本轮开始时的工作区基线',
       meta: {
         kind: 'turn-start',
@@ -525,7 +549,7 @@ export class GitSnapshotCoordinator {
     label: string,
     logMessage: string,
     metadata: TurnStartMetadata,
-  ): Promise<void> {
+  ): Promise<boolean> {
     operationCheckpoint();
     const commit = await operationWait(this.deps.createShadowMarker(repoRoot, {
       sessionId,
@@ -538,7 +562,7 @@ export class GitSnapshotCoordinator {
     if (!commit) {
       // Marker tree could not be built (git fully unavailable); the failure
       // is logged by the kernel and the outer swallow keeps the turn alive.
-      return;
+      return false;
     }
     this.deps.logger.info(logMessage, {
       sessionId,
@@ -546,6 +570,7 @@ export class GitSnapshotCoordinator {
       commit: commit.slice(0, 8),
       ...(metadata.anchor ? { anchor: metadata.anchor } : {}),
     });
+    return true;
   }
 
   private pushTurnStartRecord(sessionId: string, record: TurnStartRecord): void {

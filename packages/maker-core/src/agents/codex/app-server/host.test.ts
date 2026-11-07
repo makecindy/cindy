@@ -385,6 +385,33 @@ describe('AppServerHost custom Provider subagent policy', () => {
 });
 
 describe('AppServerHost shutdown completion', () => {
+  // A provider change must not kill another task, overlap native writers, or
+  // restart an unchanged route. The native integration test covers turn output.
+  it('changes the process provider only after releasing subscriptions and confirming exit', async () => {
+    const transport = new NotificationTransport();
+    const createTransport = vi.fn().mockReturnValueOnce(transport).mockImplementation(() => new NotificationTransport());
+    const host = new AppServerHost({ createTransport, supportsModelProviderSelection: true,
+      logger, clientInfo: { name: 'test', version: '0' } });
+    try {
+      await host.selectModelProvider('cindy_codex');
+      await host.ensureStarted();
+      expect(createTransport).toHaveBeenLastCalledWith('cindy_codex');
+      const subscription = host.subscribeThread('source', {});
+      await host.selectModelProvider('cindy_codex');
+      await expect(host.selectModelProvider('cindy_summary')).rejects.toThrow('threads are subscribed');
+      expect(createTransport).toHaveBeenCalledOnce();
+      await subscription.release();
+      const close = vi.spyOn(transport, 'close').mockRejectedValue(new Error('exit not confirmed'));
+      await expect(host.selectModelProvider('cindy_summary')).rejects.toThrow('exit not confirmed');
+      expect(createTransport).toHaveBeenCalledOnce();
+      close.mockResolvedValue(undefined);
+      await host.selectModelProvider('cindy_summary');
+      await host.ensureStarted();
+      expect(createTransport).toHaveBeenLastCalledWith('cindy_summary');
+      expect(createTransport).toHaveBeenCalledTimes(2);
+    } finally { await host.shutdown(); }
+  });
+
   it.each([false, true])('shutdown and retire wait for the same process (failure=%s)', async (fails) => {
     const transport = new NotificationTransport();
     let finish!: () => void;

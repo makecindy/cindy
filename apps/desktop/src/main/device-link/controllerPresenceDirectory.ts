@@ -1,8 +1,14 @@
 import { isSupportedControllerPlatform } from './controllerPlatform.js';
+import { isScopedPeer } from '@cindy/device-link';
 
 export interface ControllerPresenceFreshnessTracker {
   epoch: number;
   epochByDevice: Map<string, number>;
+}
+
+export interface ControllerPresenceEvidence {
+  online: boolean;
+  enabled?: boolean;
 }
 
 export interface ControllerPresenceDirectoryDevice {
@@ -10,8 +16,53 @@ export interface ControllerPresenceDirectoryDevice {
   name?: unknown;
   selfName?: unknown;
   online?: unknown;
+  remoteControlEnabled?: unknown;
   platform?: unknown;
   isSelf?: unknown;
+}
+
+/** Data-path projection only; neither a retained path nor presence grants control. */
+export interface ControllerDataPathProof {
+  linkStatus: 'online' | 'connecting' | 'stopped';
+  linkReady: boolean;
+  offlineDirect: boolean;
+  presenceAvailable: boolean | undefined;
+  revoked: boolean;
+  locallyDisabled: boolean;
+}
+
+/** A current, authenticated data path only; an old directory/presence flag is not evidence. */
+export function isVerifiedControllerDataPath(input: ControllerDataPathProof): boolean {
+  return input.presenceAvailable === true
+    && !input.revoked
+    && !input.locallyDisabled
+    && input.linkReady
+    && (input.linkStatus === 'online' || input.offlineDirect);
+}
+
+/** Scope a readiness list to ordinary peers with a verified data-path proof. */
+export function projectDirectDataDeviceIds(
+  deviceIds: readonly string[],
+  available: (deviceId: string) => boolean,
+): string[] {
+  return deviceIds.filter(deviceId => !isScopedPeer(deviceId) && available(deviceId));
+}
+
+export function resolveControllerPresence(
+  snapshot: { online: boolean; remoteControlEnabled: boolean },
+  retainedDirectPath: boolean,
+  previousAvailable: boolean | undefined,
+): { directOnline: boolean; online: boolean; available: boolean } {
+  const directOnline = !snapshot.online && retainedDirectPath;
+  const online = snapshot.online || directOnline;
+  // Offline presence/directory rows are masked to remoteControlEnabled=false by
+  // the relay. Only an online false bit is an explicit control-off; a retained
+  // path keeps its last verified availability until the bounded grace expires,
+  // and an accepted direct path is itself evidence that control was enabled.
+  const explicitControlOff = snapshot.online && snapshot.remoteControlEnabled === false;
+  const available = online && !explicitControlOff
+    && (directOnline ? previousAvailable !== false : snapshot.remoteControlEnabled);
+  return { directOnline, online, available };
 }
 
 export function createControllerPresenceFreshnessTracker(): ControllerPresenceFreshnessTracker {
@@ -88,6 +139,14 @@ export function applyControllerPresenceDirectorySnapshot(options: {
     platform: string | null;
   }) => boolean;
   onPeerBecameOnline: (deviceId: string, platform: string | null) => void;
+  /** A fresh current directory row confirmed the peer accepts outbound control. */
+  onPeerControlEnabled?: (deviceId: string) => void;
+  /** A fresh current directory row confirmed the peer refuses outbound control. */
+  onPeerControlDisabled?: (deviceId: string) => void;
+  /** Raw directory evidence, separate from any retained display projection. */
+  onPeerControlEvidence?: (deviceId: string, evidence: ControllerPresenceEvidence) => void;
+  /** False while local signaling is unavailable: report control evidence, do not promote presence. */
+  updatePresenceState?: boolean;
 }): void {
   for (const device of options.devices) {
     if (typeof device.deviceId !== 'string' || !device.deviceId.trim()) continue;
@@ -102,6 +161,14 @@ export function applyControllerPresenceDirectorySnapshot(options: {
     const name = normalizeDirectoryName(device);
     if (name) options.setName(deviceId, name);
 
+    const control = device.online === true
+      ? device.remoteControlEnabled === true ? true : device.remoteControlEnabled === false ? false : undefined
+      : undefined;
+    if (control === true) options.onPeerControlEnabled?.(deviceId);
+    else if (control === false) options.onPeerControlDisabled?.(deviceId);
+    options.onPeerControlEvidence?.(deviceId, { online: device.online === true,
+      ...(control === undefined ? {} : { enabled: control }) });
+    if (options.updatePresenceState === false) continue;
     if (hasRealtimePresence(options.freshness, deviceId)) continue;
 
     const wasOnline = options.getOnline(deviceId);

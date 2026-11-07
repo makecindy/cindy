@@ -177,15 +177,28 @@ export function useBotGroupChat(host: RemoteResourceHostTarget, groupId: string,
     } finally {
       // A refused action usually means the phone's copy is stale (PLAN_CLOSED, PLAN_OPEN): re-read either way.
       // A deleted group is left by the screen instead.
-      if (actionId !== 'delete' && actionId !== 'read' && identityRef.current === identity) reload();
+      if (actionId !== 'delete' && actionId !== 'read' && actionId !== 'mask' && actionId !== 'mask-mentions' && identityRef.current === identity) reload();
     }
   }, [cacheKey, namespace, groupId, host, i18n.language, identity, invoke, openLink, reload, server.acceptListState]);
 
   const value: BotGroupChatState = !host.deviceId || !groupId || server.isListHidden() || revoked
     ? { kind: 'missing' }
     : state.identity === identity ? state.value : { kind: 'loading' };
+  const reportedLocalRead = useRef({ identity, at: 0 });
   const markRead = useCallback(async (messageIds: string[]) => {
-    if (state.identity !== identity || state.value.kind !== 'ready' || !state.value.group.supportsReadReceipts) return;
+    if (state.identity !== identity || state.value.kind !== 'ready') return;
+    if (!state.value.group.supportsReadReceipts) {
+      if (!state.value.group.supportsLocalReadSync) return;
+      // Early local group: hand the computer the newest main-timeline message shown, once per advance.
+      const seenIds = new Set(messageIds);
+      const at = state.value.group.messages.reduce((latest, message) =>
+        seenIds.has(message.id) && !message.threadRootId ? Math.max(latest, message.createdAt) : latest, 0);
+      if (reportedLocalRead.current.identity !== identity) reportedLocalRead.current = { identity, at: 0 };
+      if (at <= reportedLocalRead.current.at) return;
+      reportedLocalRead.current = { identity, at };
+      await act('read', { at }).catch(() => { if (reportedLocalRead.current.identity === identity && reportedLocalRead.current.at === at) reportedLocalRead.current = { identity, at: 0 }; });
+      return;
+    }
     const seen = new Set(messageIds);
     const message = state.value.group.messages.filter(message => seen.has(message.id) && !message.threadRootId)
       .reduce<(typeof state.value.group.messages)[number] | undefined>((last, row) => !last || row.sequence > last.sequence ? row : last, undefined);
@@ -195,5 +208,5 @@ export function useBotGroupChat(host: RemoteResourceHostTarget, groupId: string,
   // Unknown presence still allows actions; the host answers or the link reports offline.
   const online = status === 'online' && !!host.deviceId && getPresenceAvailability(host.deviceId) !== false;
   return !host.deviceId ? { ...server, server: true } : { state: value, reload, act, online, server: false, listHidden: server.listHidden, loadOlder: undefined, loadingOlder: false, media: undefined, markRead,
-    pending: [], pendingAction: undefined, canQueue: false };
+    uploadAttachment: undefined, pending: [], pendingAction: undefined, canQueue: false, threadMeta: undefined, followThread: undefined, shareToMain: undefined, react: undefined };
 }

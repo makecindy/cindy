@@ -1,3 +1,4 @@
+import { remotePrStatuses, prStatusQuery, redactSensitiveText } from '@cindy/maker-shared';
 /**
  * PrRefsContext — sidebar 会话列表的 PR 引用 / 状态共享缓存(session-git-pr-context)。
  *
@@ -56,7 +57,13 @@ function sameRefList(
 ): a is SessionPrRef[] {
   if (!a || a.length !== b.length) return false;
   for (let i = 0; i < a.length; i += 1) {
-    if (a[i].id !== b[i].id || a[i].lastSeenAt !== b[i].lastSeenAt) return false;
+    if (
+      a[i].id !== b[i].id ||
+      a[i].lastSeenAt !== b[i].lastSeenAt ||
+      a[i].pinned !== b[i].pinned ||
+      a[i].priority !== b[i].priority
+    )
+      return false;
   }
   return true;
 }
@@ -113,7 +120,9 @@ function createPrCacheStore(): PrCacheStore {
       return refsBySession.get(sessionId) ?? EMPTY_REFS;
     },
     getStatus(sessionId, key) {
-      return statusesBySession.get(sessionId)?.get(key);
+      return statusesBySession
+        .get(sessionId)
+        ?.get(key.includes(':') ? key : `github:github.com/${key}`);
     },
     getStatusesForSession(sessionId) {
       return statusSnapshots.get(sessionId) ?? EMPTY_STATUSES;
@@ -164,7 +173,13 @@ function createPrCacheStore(): PrCacheStore {
         changed = true;
       }
       if (!changed) return;
-      statusSnapshots.set(sessionId, new Map(map));
+      const snapshot = new Map(map);
+      // Published GitHub card slots use owner/repo#N. Keep that read alias; MR keys never alias.
+      for (const [key, value] of map) {
+        if (key.startsWith('github:github.com/'))
+          snapshot.set(key.slice('github:github.com/'.length), value);
+      }
+      statusSnapshots.set(sessionId, snapshot);
       const successful = new Map(successfulStatusSnapshots.get(sessionId));
       for (const result of results) {
         if (result.ok) successful.set(prStatusKey(result), result);
@@ -392,7 +407,7 @@ export function PrRefsProvider({ children }: { children: ReactNode }) {
     inFlightSessions.current.set(sessionId, gen);
     void (async () => {
       try {
-        const queries = refs.map((r) => ({ owner: r.owner, repo: r.repo, prNumber: r.prNumber }));
+        const queries = refs.map(prStatusQuery);
         // 远程路由的 deviceId 兜底顺序:簿记表 → 消费者注册表(owner 切换清簿记后,
         // 注册表仍保有 deviceId,避免远程会话错落到本机查询)。
         const deviceId =
@@ -403,9 +418,13 @@ export function PrRefsProvider({ children }: { children: ReactNode }) {
         if (deviceId && isRemoteDeviceMarkedDisconnected(deviceId)) return;
         if (deviceId && unresponsiveDevicesStore.has(deviceId)) return;
         const results = deviceId
-          ? ((await window.electronAPI.deviceLink.invoke(deviceId, 'git-context:pr-status', [
-              { sessionId, queries },
-            ])) as PrStatusResult[])
+          ? await remotePrStatuses(
+              queries,
+              sessionId,
+              (channel, args) => window.electronAPI.deviceLink.invoke(deviceId, channel, args),
+              (error) =>
+                log.warn('remote MR statuses fetch failed', redactSensitiveText(String(error))),
+            )
           : await window.electronAPI.gitContext.getPrStatuses(queries);
         if (gen !== ownerGenRef.current) return; // owner 已切换:旧账号结果整体丢弃
         if (!Array.isArray(results)) return;
@@ -494,9 +513,16 @@ export function PrRefsProvider({ children }: { children: ReactNode }) {
   }).current;
 
   const invalidateRemotePrRefs = useRef((sessionId: string) => {
-    const deviceId = prConsumers.current.get(sessionId)?.deviceId;
-    if (!deviceId) return;
     remoteRefsFetchedAt.current.delete(sessionId);
+    const deviceId = prConsumers.current.get(sessionId)?.deviceId;
+    if (!deviceId) {
+      // A late read must not restore the invalidated TTL after the last consumer
+      // leaves. Its existing finally path consumes this marker without refetching.
+      if (remoteRefsInFlight.current.get(sessionId) === ownerGenRef.current) {
+        remoteRefsInvalidated.current.add(sessionId);
+      }
+      return;
+    }
     remoteRefsInvalidated.current.add(sessionId);
     fetchRefsForRemoteSession(sessionId, deviceId);
   }).current;

@@ -36,7 +36,7 @@ vi.mock('../providerShareGuest.js', () => ({ getReceivedShares: () => [] }));
 vi.mock('../settings-store.js', () => ({ readDeviceLinkSettings: () => ({ disabledControlDeviceIds: [], lastKnownDeviceNames: {} }) }));
 vi.mock('../../remote-agent/controller/deviceCatalog.js', () => ({ readDeviceProviderViews: vi.fn(async () => []) }));
 
-import { deviceLinkApiFetch } from '../deviceLinkApi';
+import { deviceLinkApiFetch, officialDeviceLinkApiFetch } from '../deviceLinkApi';
 import { setSelfHostedRelaySource } from '../selfHostedRelayRouting';
 import { remoteLocalAgentModels } from '../../local-agent/remoteCatalog.js';
 
@@ -65,6 +65,20 @@ describe('deviceLinkApiFetch', () => {
     await expect(remoteLocalAgentModels(() => true)).resolves.toEqual([]);
     expect(lastRequest()).toEqual({ url: 'http://192.168.1.20:47820/api/device-link/devices', authorization: 'CindyRelay relay-credential' });
     expect(mocks.getAccessToken).not.toHaveBeenCalled();
+  });
+
+  // 共享任务附件只存在于官方存储:走自建中转时也必须带账号 token 发往官方,不能落到中转。
+  it('keeps official requests on the official endpoint with the account token while a relay is active', async () => {
+    mocks.relay = {
+      baseUrl: 'http://192.168.1.20:47820', credential: 'relay-credential', role: 'member',
+      relayId: 'r', name: 'Home', deviceId: 'pc', signingSeed: 'A'.repeat(43), ownerPublicKey: 'A'.repeat(43),
+    };
+    mocks.netFetch.mockResolvedValue(new Response(JSON.stringify({ getUrl: 'https://oss.invalid/o' }), { status: 200 }));
+    await officialDeviceLinkApiFetch('/api/device-link/media/presign-get', { method: 'POST', body: { key: 'k' } });
+    expect(lastRequest()).toEqual({
+      url: 'https://device-link.official.invalid/api/device-link/media/presign-get',
+      authorization: 'Bearer account-access-token',
+    });
   });
 
   it('sends the relay credential, never the account token, and keeps the Cindy session on a relay 401', async () => {

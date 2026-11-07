@@ -19,7 +19,7 @@ export interface ChatNotificationMessage {
 export interface ChatAttentionSnapshot<M extends ChatNotificationMessage> {
   room: { name: string; kind?: string; archived?: boolean; dissolved_at?: string | null };
   messages: M[];
-  reads?: Array<{ thread_key: string; read_seq: string; muted?: boolean; following?: boolean }>;
+  reads?: Array<{ thread_key: string; read_seq: string; muted?: boolean; following?: boolean; notification_scope?: 'all' | 'mentions' | null }>;
 }
 
 /** One eligibility rule for native notifications and the island's unread projection. */
@@ -78,12 +78,14 @@ export function createChatMessageNotifications<M extends ChatNotificationMessage
       if (!current() || !snapshot.reads || snapshot.room.archived || snapshot.room.dissolved_at) return;
       const main = snapshot.reads.find(read => read.thread_key === 'main');
       if (main?.muted) return;
+      const mentionsOnly = snapshot.room.kind !== 'direct' && main?.notification_scope === 'mentions';
       for (const id of ids) {
         if (handled.has(id)) continue;
         const message = snapshot.messages.find(message => message.id === id) ?? await deps.message?.(groupId, id);
         if (!current()) return;
         if (!message) continue;
-        if (!isChatMessageAttention(snapshot, message, deps.selfId()) || deps.shouldAlert?.(message, snapshot, groupId) === false) { remember(id); continue; }
+        if ((mentionsOnly && !message.mentions?.includes(deps.selfId()))
+          || !isChatMessageAttention(snapshot, message, deps.selfId()) || deps.shouldAlert?.(message, snapshot, groupId) === false) { remember(id); continue; }
         const presentation = await deps.present(groupId, message);
         if (!current()) return;
         if (!stillCurrent()) throw new Error('CHAT_NOTIFICATION_CHANGED');

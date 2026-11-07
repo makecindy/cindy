@@ -49,6 +49,18 @@ describe("Pi source import", () => {
     expect(result.providers["new-vendor"][0].cost).not.toHaveProperty("output");
     expect(toCindyCatalog(providers, result.generatedAt)).toEqual(result);
   });
+  // Pi 1.x wraps each shard in a lazy `__esm` initializer and mixes image/classifier rows into
+  // the same shard; the 0.x-only marker found no shards, so `--pi-bundle` could not import 1.x.
+  it("reads Pi 1.x lazy shards and keeps only chat models", () => {
+    const value = JSON.stringify({
+      "openai-completions": {
+        "chat:new-model": { ...model, type: "chat" },
+        "image:new-image": { ...model, id: "new-image", type: "image" },
+      },
+    });
+    const lazyShard = `// ../ai/src/providers/data/new-vendor.json\nvar vendor_default;\nvar init_vendor = __esm(() => {\n  vendor_default = ${value};\n});\nstartApplication();`;
+    expect(readBundledCatalog(lazyShard)["new-vendor"].map((row: { id: string }) => row.id)).toEqual(["new-model"]);
+  });
   it("rejects executable expressions and incomplete input without executing application code", () => {
     expect(() =>
       readBundledCatalog(shard("{ data: process.exit(1) }")),

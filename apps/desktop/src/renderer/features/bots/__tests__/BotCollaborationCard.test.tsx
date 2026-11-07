@@ -1,8 +1,10 @@
 // @vitest-environment jsdom
 import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
+import type { ReactNode } from 'react';
 import { BotSessionTaskCard, BotSessionTaskMessageTrace } from '../BotCollaborationCard';
 import { SessionQuickSendProvider, useSessionQuickSend } from '@/components/chat/SessionQuickSendContext';
+import { useChatSessionFile } from '@/components/chat/ChatSessionFileContext';
 import type { BotCollaborationMeta } from '../../../../shared/botCollaboration';
 const mocks = vi.hoisted(() => ({
   get: vi.fn(),
@@ -51,15 +53,23 @@ vi.mock('@/contexts/PrRefsContext', () => ({
 vi.mock('@/components/chat/MarkdownRenderer', () => ({
   MarkdownRenderer: ({ content, workingDir }: any) => {
     const sender = useSessionQuickSend();
-    return <div data-testid="markdown" data-working-dir={workingDir}>{content}
+    const { localConfirmed } = useChatSessionFile();
+    return <div data-testid="markdown" data-working-dir={workingDir} data-local-confirmed={String(localConfirmed)}>{content}
       {content === 'inline-send-preview' ? <button disabled={!sender} onClick={() => void sender?.send('child reply')}>Preview send</button> : null}
     </div>;
   },
 }));
-vi.mock('@/components/chat/ChatSessionFileContext', () => ({
-  useChatSessionFile: () => ({ origin: { kind: 'local' }, sessionId: 'parent', workingDir: '/parent' }),
-  ChatSessionFileProvider: ({ children }: any) => children,
-}));
+// The surrounding chat is a confirmed-local task; the card's nested provider decides the child's.
+vi.mock('@/components/chat/ChatSessionFileContext', async () => {
+  const { createContext, createElement, useContext } = await import('react');
+  type FileContextValue = { origin: { kind: string }; sessionId?: string; workingDir: string; localConfirmed?: boolean };
+  const FileContext = createContext<FileContextValue>({ origin: { kind: 'local' }, sessionId: 'parent', workingDir: '/parent', localConfirmed: true });
+  return {
+    useChatSessionFile: () => useContext(FileContext),
+    ChatSessionFileProvider: ({ value, children }: { value: FileContextValue; children: ReactNode }) =>
+      createElement(FileContext.Provider, { value }, children),
+  };
+});
 vi.mock('@/lib/sessionService', () => ({ get: mocks.get }));
 vi.mock('@/lib/orcaSessionIdentity', () => ({ resolveSessionRoute: mocks.route }));
 vi.mock('@/lib/sessionsStore', () => ({
@@ -396,6 +406,24 @@ it('keeps a newer remote mirror instead of publishing a stale GET', async () => 
 
 // Tier 1, PR #6871: existing result tests lacked a writable parent context.
 // A child result's Markdown consumer must not acquire the parent's send capability.
+// The expanded result belongs to the child task. A confirmed-local chat must not let a child that
+// runs on another device, over SSH or with a conflicting origin search its directory on this machine.
+it.each([
+  ['a local child', undefined, {}, 'true'],
+  ['a child on the parent\'s remote device', 'mac-a', {}, 'false'],
+  ['a child with a conflicting origin', 'conflict', {}, 'false'],
+  ['an SSH child', undefined, { remoteHostId: 'host-1' }, 'false'],
+] as const)('confirms local ownership for %s only when the child runs here', async (_label, parentDevice, childFields, expected) => {
+  if (parentDevice === 'conflict') mocks.origin.mockImplementation((id: string) => (id === 'child' ? 'mac-b' : undefined));
+  else mocks.origin.mockImplementation((id: string) => (id === 'parent' ? parentDevice : undefined));
+  mocks.get.mockResolvedValue({ id: 'child', title: 'Current title', status: 'active', workingDir: '/child', ...childFields });
+  mocks.row = delegation({ status: 'completed', resultSummary: 'See renders/out/clip.mp4' });
+  render(<BotSessionTaskCard data={data()} sessionId="parent" />);
+  if (parentDevice !== 'conflict') await screen.findByRole('button', { name: parentDevice ? 'Remote title' : 'Current title' });
+  fireEvent.click(screen.getByRole('button', { name: /bots\.collab\.expandResult/ }));
+  expect(screen.getByTestId('markdown').getAttribute('data-local-confirmed')).toBe(expected);
+});
+
 it('keeps expanded child result controls read-only inside a writable parent', async () => {
   const send = vi.fn().mockResolvedValue(true);
   mocks.row = delegation({ status: 'completed', resultSummary: 'inline-send-preview' });

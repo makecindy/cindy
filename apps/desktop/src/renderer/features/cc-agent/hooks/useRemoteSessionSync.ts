@@ -17,6 +17,7 @@
  */
 
 import { useCallback, useEffect, useRef, useState } from 'react';
+import { isSharedTaskPeer } from '@cindy/device-link';
 
 import { createLogger } from '@/lib/logger';
 import { makerChatStore } from '@/lib/makerChatStore';
@@ -454,11 +455,13 @@ export function useRemoteSessionSync(
       recovery.request(canRead());
     });
     const offStatus = window.electronAPI.deviceLink.onStatusChanged((p) => {
-      const online = p.status === 'online';
+      if (isSharedTaskPeer(deviceId)) return;
+      if (p.dataPathChangedDeviceId && p.dataPathChangedDeviceId !== deviceId) return;
+      const online = p.status === 'online' || p.directDataDeviceIds?.includes(deviceId) === true;
       const changed = relayAvailable !== online;
       relayAvailable = online;
       if (changed) recovery.invalidate(canRead());
-      if (p.status !== 'online') return;
+      if (!online || (p.dataPathChangedDeviceId && !changed)) return;
       engine.handleOnline();
     });
     const offPresence = window.electronAPI.deviceLink.onPresenceChanged((snap) => {

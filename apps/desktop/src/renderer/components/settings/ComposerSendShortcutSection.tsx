@@ -1,3 +1,4 @@
+import { personalizationDetailsSettings } from './PersonalizationDetails.settings-search';
 import { useCallback } from 'react';
 import { useTranslation } from 'react-i18next';
 
@@ -34,16 +35,16 @@ export function ComposerSendShortcutSection() {
         <div className={SETTINGS_ROW_CLASS}>
           <div className="flex min-w-0 flex-col gap-1">
             <p className={SETTINGS_ROW_LABEL_CLASS} style={{ letterSpacing: '0.12px' }}>
-              {t('settings.composer.sendShortcut.label', { shortcut })}
+              {t(personalizationDetailsSettings.composerSendShortcutLabel.titleKey, { shortcut })}
             </p>
             <p className={SETTINGS_ROW_HINT_CLASS}>
-              {t('settings.composer.sendShortcut.hint', { shortcut })}
+              {t(personalizationDetailsSettings.composerSendShortcutLabel.descriptionKey, { shortcut })}
             </p>
           </div>
 
           <div className="flex shrink-0 items-center gap-2">
             <DefaultOverrideControls isCustomized={isCustomized} onReset={onReset} />
-            <Switch
+            <Switch data-setting-id={personalizationDetailsSettings.composerSendShortcutLabel.id}
               checked={preference === 'modifier-enter'}
               onCheckedChange={(enabled) => {
                 const result = setPreference(enabled ? 'modifier-enter' : 'enter');

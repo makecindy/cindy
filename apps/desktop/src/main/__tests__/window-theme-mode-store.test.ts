@@ -44,6 +44,11 @@ describe('window theme mode store', () => {
       familyId: 'cindy',
       isDark: false,
     });
+    for (const wallpaperCovered of [true, false]) {
+      expect(
+        parseWindowThemeVibrancyPayload({ familyId: 'cindy', isDark: false, wallpaperCovered }),
+      ).toEqual({ familyId: 'cindy', isDark: false, wallpaperCovered });
+    }
 
     for (const invalid of [
       null,
@@ -52,6 +57,7 @@ describe('window theme mode store', () => {
       { familyId: 'x'.repeat(513), isDark: false },
       { familyId: 'cindy', isDark: 'false' },
       { familyId: 'cindy', isDark: false, mode: 'auto' },
+      { familyId: 'cindy', isDark: false, wallpaperCovered: 'true' },
       { familyId: 'cindy', isDark: false, systemModeFollowsSystem: 'yes' },
     ]) {
       expect(parseWindowThemeVibrancyPayload(invalid)).toBeNull();

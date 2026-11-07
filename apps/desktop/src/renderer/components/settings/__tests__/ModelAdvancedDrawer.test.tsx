@@ -1,13 +1,21 @@
 // @vitest-environment jsdom
 import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { BUNDLED_CATALOG, buildUserProvider, resolveModelMetadata } from '@cindy/model-providers';
 import type { CatalogModel, ProviderView } from '@cindy/model-providers';
 
 const mocks = vi.hoisted(() => ({
+  priceProps: vi.fn(),
+  realPricing: false,
   setLimit: vi.fn(async () => {}),
   reset: vi.fn(async () => {}),
   target: vi.fn(),
+  imageTarget: vi.fn(),
+  imageSet: vi.fn(async () => {}),
+  imageValue: null as boolean | null,
+  imageMixed: false,
+  imageError: false,
   limit: null as number | null,
   compaction: { pct: 90, isCustomized: false } as { pct: number; isCustomized: boolean },
   compactionEnabled: false,
@@ -15,20 +23,20 @@ const mocks = vi.hoisted(() => ({
   ownerGeneration: 1,
   sliderValue: null as number | null,
   pressValue: null as number | null,
+  mixed: false,
 }));
-vi.mock('react-i18next', () => ({
-  useTranslation: () => ({
-    t: (key: string, values?: Record<string, unknown>) =>
-      values?.tokens ? `${key} ${values.tokens}` : key,
-    i18n: { resolvedLanguage: 'en' },
-  }),
-}));
+vi.mock('react-i18next', () => {
+  const t = (key: string, values?: Record<string, unknown>) =>
+    values?.tokens ? `${key} ${values.tokens}` : values?.value ? `${key} ${values.value}` : key;
+  return { useTranslation: () => ({ t, i18n: { resolvedLanguage: 'en' } }) };
+});
 vi.mock('@/hooks/useModelContextLimit', () => ({
   useModelContextLimit: (target: unknown) => {
     mocks.target(target);
     return {
       limit: mocks.limit,
       isCustomized: mocks.limit !== null,
+      mixed: mocks.mixed,
       loading: false,
       error: false,
       setLimit: mocks.setLimit,
@@ -44,6 +52,12 @@ vi.mock('@/contexts/dataOwnerGeneration', () => ({
   isDataOwnerGenerationCurrent: (owner: { generation: number }) =>
     owner.generation === mocks.ownerGeneration,
 }));
+vi.mock('@/hooks/useModelImageInputOverride', () => ({
+  useModelImageInputOverride: (target: unknown) => {
+    mocks.imageTarget(target);
+    return { value: mocks.imageValue, mixed: mocks.imageMixed, loading: false, error: mocks.imageError, setValue: mocks.imageSet };
+  },
+}));
 vi.mock('@/state/modelVisibilityPrefs', () => ({
   useModelVisibilityVersion: () => 0,
   isModelEnabled: (_agent: unknown, _provider: unknown, model: { defaultEnabled?: boolean }) => model.defaultEnabled !== false,
@@ -57,7 +71,18 @@ vi.mock('@/state/providerModelMemory', () => ({
   setProviderModelEffort: vi.fn(),
   clearProviderModelEffort: vi.fn(),
 }));
-vi.mock('../ModelPriceOverrideDialog', () => ({ ModelPriceOverrideDialog: () => null }));
+vi.mock('../ModelPriceOverrideDialog', async (importOriginal) => {
+  const { ModelPriceOverrideDialog: RealPricing } = await importOriginal<typeof import('../ModelPriceOverrideDialog')>();
+  return {
+    ModelPriceOverrideDialog: (props: Parameters<typeof import('../ModelPriceOverrideDialog').ModelPriceOverrideDialog>[0]) => {
+      mocks.priceProps(props);
+      if (mocks.realPricing) return <RealPricing {...props} />;
+      const details = typeof props.referenceDetails === 'function' ? props.referenceDetails(props.row.avail[0]) : props.referenceDetails;
+      return <div data-testid="inline-pricing">{details}</div>;
+    },
+  };
+});
+import type { ModelImageInputCatalogModel } from '../../../../shared/modelImageInputOverride';
 // Radix 滑杆在 jsdom 里量不到轨道，手势语义另有 ui/slider 自己的用例；这里换成
 // 一个可控的 range 输入，直接驱动“预览 / 提交”两条通道。
 vi.mock('@/components/ui/slider', () => ({
@@ -123,7 +148,7 @@ const provider = {
   agents: ['codex', 'claude-code'],
   models: {},
 } as ProviderView;
-function drawer(primary = model, bridgeDefault = primary.defaultEffort, bridgeEfforts = primary.efforts, source = provider) {
+function drawer(primary: ModelImageInputCatalogModel = model, bridgeDefault = primary.defaultEffort, bridgeEfforts = primary.efforts, source = provider) {
   const row = {
     id: primary.id,
     name: primary.name,
@@ -146,18 +171,24 @@ function drawer(primary = model, bridgeDefault = primary.defaultEffort, bridgeEf
     />
   );
 }
-function draw(primary = model, bridgeDefault = primary.defaultEffort) {
+function draw(primary: ModelImageInputCatalogModel = model, bridgeDefault = primary.defaultEffort) {
   return render(drawer(primary, bridgeDefault));
 }
+const AGENT_NAMES = { 'claude-code': 'Claude Code', codex: 'Codex', pi: 'Pi' } as const;
 afterEach(cleanup);
 beforeEach(() => {
   vi.clearAllMocks();
+  mocks.realPricing = false;
   mocks.limit = null;
   mocks.compactionEnabled = false;
   mocks.compaction = { pct: 90, isCustomized: false };
   mocks.ownerGeneration = 1;
   mocks.sliderValue = null;
   mocks.pressValue = null;
+  mocks.mixed = false;
+  mocks.imageValue = null;
+  mocks.imageMixed = false;
+  mocks.imageError = false;
   vi.mocked(getProviderModelEffort).mockReset();
   // Radix 的滑杆用 ResizeObserver 量轨道，jsdom 没有。
   vi.stubGlobal('ResizeObserver', class {
@@ -445,11 +476,11 @@ describe('model advanced editor', () => {
       render(<ModelAdvancedDrawer provider={source} row={{ id: primary.id, name: primary.name, avail: ['pi'], byAgent: { pi: primary } }} open onOpenChange={vi.fn()} pricePresentationOf={() => null} onDisable={vi.fn()} disabled={false} paymentRequired={false} />);
       const input = screen.getByRole('textbox', { name: 'settings.providers.models.advanced.contextLimitAria' });
       await waitFor(() => expect(window.electronAPI.maker.llamaCppStatus).toHaveBeenCalled());
-      fireEvent.change(input, { target: { value: '64' } });
+      fireEvent.change(input, { target: { value: '64K' } });
       expect(input.getAttribute('aria-invalid')).toBe('true');
       fireEvent.blur(input);
       expect(mocks.setLimit).not.toHaveBeenCalled();
-      fireEvent.change(input, { target: { value: '32' } });
+      fireEvent.change(input, { target: { value: '32K' } });
       fireEvent.blur(input);
       expect(mocks.setLimit).toHaveBeenLastCalledWith(32000);
     } finally { cleanup(); Object.defineProperty(window, 'electronAPI', { configurable: true, value: previous }); }
@@ -490,7 +521,8 @@ describe('model advanced editor', () => {
     const primary = source.models.pi![0];
     render(<ModelAdvancedDrawer provider={source} row={{ id: primary.id, name: primary.name, avail: ['pi'], byAgent: { pi: primary } }} open onOpenChange={vi.fn()} pricePresentationOf={() => null} onDisable={vi.fn()} disabled={false} paymentRequired={false} />);
     expect(screen.queryByRole('button', { name: 'Pi · settings.providers.custom.fields.wireProtocol' })).toBeNull();
-    expect(screen.getByText(/Chat Completions/)).toBeTruthy();
+    expect(document.getElementById(screen.getByRole('switch', { name: 'GPT-6 · Pi' }).getAttribute('aria-describedby')!)?.textContent)
+      .toBe('Chat Completions');
   });
 
   it('saves protocol selection to the selected engine and model without writing derived model limits', async () => {
@@ -518,8 +550,76 @@ describe('model advanced editor', () => {
     } finally { Object.defineProperty(window, 'electronAPI', { configurable: true, value: previous }); }
   });
 
-  // V6 selection is a user intent, not a copy of today's resolved route/limits.
-  it.each(['auto', 'moonshot-kimi-code-openai-responses'])('persists Kimi interface %s without locking catalog defaults', async (interfaceId) => {
+  it('saves a new Pi Messages selection without an ambiguous same-endpoint route', async () => {
+    const update = vi.fn(async (...args: unknown[]) => {
+      void args;
+      return { ok: true };
+    });
+    const previous = window.electronAPI;
+    Object.defineProperty(window, 'electronAPI', { configurable: true, value: { maker: { updateCustomProvider: update } } });
+    const source = { ...buildUserProvider({ id: 'mixed-gateway', name: 'Mixed Gateway', runtimes: {
+      pi: { baseUrl: 'https://gateway.example/v1', wireProtocol: 'openai-chat',
+        models: [{ id: 'messages-model', name: 'Messages Model' }] },
+    } }), connected: true } as ProviderView;
+    try {
+      render(<ModelAdvancedDrawer provider={source} row={{ id: 'messages-model', name: 'Messages Model',
+        avail: ['pi'], byAgent: { pi: source.models.pi![0] } }} open onOpenChange={vi.fn()}
+        pricePresentationOf={() => null} onDisable={vi.fn()} disabled={false} paymentRequired={false} />);
+      fireEvent.keyDown(screen.getByRole('button', { name: 'Pi · settings.providers.custom.fields.wireProtocol' }), { key: 'ArrowDown' });
+      fireEvent.click(await screen.findByRole('menuitemradio', { name: 'Messages' }));
+      await waitFor(() => expect(update).toHaveBeenCalledOnce());
+      const config = update.mock.calls[0]![0] as Parameters<typeof buildUserProvider>[0];
+      expect(config.runtimes.pi!.models[0]).toEqual({ id: 'messages-model', name: 'Messages Model',
+        api: 'anthropic-messages', piApi: 'anthropic-messages' });
+    } finally { Object.defineProperty(window, 'electronAPI', { configurable: true, value: previous }); }
+  });
+
+  // #7258: selecting another API first must not leave a generated route that
+  // survives refresh and blocks Pi's Messages /v1 endpoint correction.
+  it.each([
+    ['openai-chat', 'Responses', 'openai-responses'],
+    ['anthropic-messages', 'Responses', 'openai-responses'],
+    ['google-generative-ai', 'Responses', 'openai-responses'],
+    ['google-generative-ai', 'Google Gemini', 'google-generative-ai'],
+  ] as const)('avoids generated Pi routes after %s runtime selects %s', async (wireProtocol, firstLabel, firstApi) => {
+    const update = vi.fn(async (...args: unknown[]) => {
+      void args;
+      return { ok: true };
+    });
+    const previous = window.electronAPI;
+    Object.defineProperty(window, 'electronAPI', { configurable: true, value: { maker: { updateCustomProvider: update } } });
+    const source = { ...buildUserProvider({ id: 'mixed-gateway', name: 'Mixed Gateway', runtimes: {
+      pi: { baseUrl: 'https://gateway.example/v1', wireProtocol,
+        models: [{ id: 'messages-model', name: 'Messages Model' }] },
+    } }), connected: true } as ProviderView;
+    try {
+      render(<ModelAdvancedDrawer provider={source} row={{ id: 'messages-model', name: 'Messages Model',
+        avail: ['pi'], byAgent: { pi: source.models.pi![0] } }} open onOpenChange={vi.fn()}
+        pricePresentationOf={() => null} onDisable={vi.fn()} disabled={false} paymentRequired={false} />);
+      fireEvent.keyDown(screen.getByRole('button', { name: 'Pi · settings.providers.custom.fields.wireProtocol' }), { key: 'ArrowDown' });
+      fireEvent.click(await screen.findByRole('menuitemradio', { name: firstLabel }));
+      await waitFor(() => expect(update).toHaveBeenCalledTimes(1));
+      const firstConfig = update.mock.calls[0]![0] as Parameters<typeof buildUserProvider>[0];
+      expect(firstConfig.runtimes.pi!.models[0]).toEqual({ id: 'messages-model', name: 'Messages Model',
+        api: firstApi, piApi: firstApi });
+
+      cleanup();
+      const refreshed = { ...buildUserProvider(firstConfig), connected: true } as ProviderView;
+      render(<ModelAdvancedDrawer provider={refreshed} row={{ id: 'messages-model', name: 'Messages Model',
+        avail: ['pi'], byAgent: { pi: refreshed.models.pi![0] } }} open onOpenChange={vi.fn()}
+        pricePresentationOf={() => null} onDisable={vi.fn()} disabled={false} paymentRequired={false} />);
+      fireEvent.keyDown(screen.getByRole('button', { name: 'Pi · settings.providers.custom.fields.wireProtocol' }), { key: 'ArrowDown' });
+      fireEvent.click(await screen.findByRole('menuitemradio', { name: 'Messages' }));
+      await waitFor(() => expect(update).toHaveBeenCalledTimes(2));
+      const saved = update.mock.calls[1]![0] as Parameters<typeof buildUserProvider>[0];
+      expect(saved.runtimes.pi!.models[0]).toEqual({ id: 'messages-model', name: 'Messages Model',
+        api: 'anthropic-messages', piApi: 'anthropic-messages' });
+    } finally { Object.defineProperty(window, 'electronAPI', { configurable: true, value: previous }); }
+  });
+
+  // V6 selection is a user intent, not a copy of today's resolved route/limits. Presets hide the
+  // menu, but a choice saved before keeps its way back to automatic.
+  it.each(['auto', 'moonshot-kimi-code-openai-responses'])('lets a saved Kimi interface choice change to %s without locking catalog defaults', async (interfaceId) => {
     const update = vi.fn(async (...args: unknown[]) => {
       void args;
       return { ok: true };
@@ -538,6 +638,29 @@ describe('model advanced editor', () => {
       const config = update.mock.calls[0]![0] as Parameters<typeof buildUserProvider>[0];
       expect(config.runtimes.codex!.models).toEqual([{ id: 'k3.1-pro', name: 'K3.1', interfaceId }]);
       expect(buildUserProvider(config).models.codex![0].selectedInterface?.api).toBe('openai-responses');
+    } finally { Object.defineProperty(window, 'electronAPI', { configurable: true, value: previous }); }
+  });
+
+  // Older explicit choices stored only api/route; presets must still offer the way back to automatic.
+  it('lets a legacy api/route-only preset choice return to automatic', async () => {
+    const update = vi.fn(async (...args: unknown[]) => {
+      void args;
+      return { ok: true };
+    });
+    const previous = window.electronAPI;
+    Object.defineProperty(window, 'electronAPI', { configurable: true, value: { maker: { updateCustomProvider: update } } });
+    const source = { ...buildUserProvider({ id: 'kimi-user', name: 'Kimi', runtimes: {
+      codex: { catalogPresetId: 'moonshot-kimi-code', baseUrl: 'https://api.kimi.com/coding/v1', wireProtocol: 'openai-chat',
+        models: [{ id: 'k3.1-pro', name: 'K3.1', api: 'openai-completions',
+          route: { baseUrl: 'https://api.kimi.com/coding/v1', wireProtocol: 'openai-chat' } }] },
+    } }), connected: true } as ProviderView;
+    try {
+      render(drawer(source.models.codex![0], 'high', ['high'], source));
+      fireEvent.keyDown(screen.getByRole('button', { name: 'Codex · settings.providers.custom.fields.wireProtocol' }), { key: 'ArrowDown' });
+      fireEvent.click(await screen.findByRole('menuitemradio', { name: 'settings.providers.models.advanced.protocol.automatic' }));
+      await waitFor(() => expect(update).toHaveBeenCalledOnce());
+      const config = update.mock.calls[0]![0] as Parameters<typeof buildUserProvider>[0];
+      expect(config.runtimes.codex!.models).toEqual([{ id: 'k3.1-pro', name: 'K3.1', interfaceId: 'auto' }]);
     } finally { Object.defineProperty(window, 'electronAPI', { configurable: true, value: previous }); }
   });
 
@@ -566,25 +689,51 @@ describe('model advanced editor', () => {
     } finally { Object.defineProperty(window, 'electronAPI', { configurable: true, value: previous }); }
   });
 
+  it('keeps the official Google endpoint rewrite for a Pi Gemini selection', async () => {
+    const update = vi.fn(async (...args: unknown[]) => {
+      void args;
+      return { ok: true };
+    });
+    const previous = window.electronAPI;
+    Object.defineProperty(window, 'electronAPI', { configurable: true, value: { maker: { updateCustomProvider: update } } });
+    const source = { ...buildUserProvider({ id: 'google-fixture', name: 'Google Fixture', runtimes: {
+      pi: { baseUrl: 'https://generativelanguage.googleapis.com/v1beta/openai', wireProtocol: 'openai-chat',
+        models: [{ id: 'new-gemini', name: 'New Gemini' }] },
+    } }), connected: true } as ProviderView;
+    try {
+      render(<ModelAdvancedDrawer provider={source} row={{ id: 'new-gemini', name: 'New Gemini',
+        avail: ['pi'], byAgent: { pi: source.models.pi![0] } }} open onOpenChange={vi.fn()}
+        pricePresentationOf={() => null} onDisable={vi.fn()} disabled={false} paymentRequired={false} />);
+      fireEvent.keyDown(screen.getByRole('button', { name: 'Pi · settings.providers.custom.fields.wireProtocol' }), { key: 'ArrowDown' });
+      fireEvent.click(await screen.findByRole('menuitemradio', { name: 'Google Gemini' }));
+      await waitFor(() => expect(update).toHaveBeenCalledOnce());
+      const config = update.mock.calls[0]![0] as Parameters<typeof buildUserProvider>[0];
+      expect(config.runtimes.pi!.models[0]).toEqual({ id: 'new-gemini', name: 'New Gemini',
+        api: 'google-generative-ai', piApi: 'google-generative-ai', route: {
+          baseUrl: 'https://generativelanguage.googleapis.com/v1beta', wireProtocol: 'google-generative-ai',
+        } });
+    } finally { Object.defineProperty(window, 'electronAPI', { configurable: true, value: previous }); }
+  });
+
   it('rejects new small settings but accepts 100K without rewriting existing small overrides', () => {
     mocks.limit = 1_000;
     draw();
     const input = screen.getByRole('textbox') as HTMLInputElement;
-    expect(input.value).toBe('1');
+    expect(input.value).toBe('1000');
     expect(input.hasAttribute('aria-invalid')).toBe(false);
     fireEvent.blur(input);
     expect(mocks.setLimit).not.toHaveBeenCalled();
-    fireEvent.change(input, { target: { value: '2' } });
+    fireEvent.change(input, { target: { value: '2K' } });
     fireEvent.blur(input);
     expect(input.getAttribute('aria-invalid')).toBe('true');
     expect(mocks.setLimit).not.toHaveBeenCalled();
-    fireEvent.change(input, { target: { value: '99' } });
+    fireEvent.change(input, { target: { value: '99K' } });
     fireEvent.blur(input);
     expect(mocks.setLimit).not.toHaveBeenCalled();
-    fireEvent.change(input, { target: { value: '100' } });
+    fireEvent.change(input, { target: { value: '100K' } });
     fireEvent.blur(input);
     expect(mocks.setLimit).toHaveBeenLastCalledWith(100_000);
-    fireEvent.change(input, { target: { value: '1' } });
+    fireEvent.change(input, { target: { value: '1K' } });
     fireEvent.blur(input);
     expect(mocks.setLimit).toHaveBeenCalledTimes(1);
   });
@@ -592,10 +741,10 @@ describe('model advanced editor', () => {
   it.each(['cindy-local-ollama', 'ollama', 'cindy-local-lmstudio'])('keeps %s editable at 1K even when the catalog advertises a large window', (id) => {
     render(drawer(model, model.defaultEffort, model.efforts, { ...provider, id, source: 'user' }));
     const input = screen.getByRole('textbox');
-    fireEvent.change(input, { target: { value: '4' } });
+    fireEvent.change(input, { target: { value: '4K' } });
     fireEvent.blur(input);
     expect(mocks.setLimit).toHaveBeenLastCalledWith(4_000);
-    fireEvent.change(input, { target: { value: '1' } });
+    fireEvent.change(input, { target: { value: '1K' } });
     fireEvent.blur(input);
     expect(mocks.setLimit).toHaveBeenLastCalledWith(1_000);
   });
@@ -604,10 +753,10 @@ describe('model advanced editor', () => {
     draw({ ...model, contextWindow: window, contextWindowMax: window });
     const input = screen.getByRole('textbox');
     const floor = Math.floor(window / 1000);
-    fireEvent.change(input, { target: { value: String(floor - 1) } });
+    fireEvent.change(input, { target: { value: `${floor - 1}K` } });
     fireEvent.blur(input);
     expect(mocks.setLimit).not.toHaveBeenCalled();
-    fireEvent.change(input, { target: { value: String(floor) } });
+    fireEvent.change(input, { target: { value: `${floor}K` } });
     fireEvent.blur(input);
     expect(mocks.setLimit).toHaveBeenCalledWith(floor * 1000);
   });
@@ -663,8 +812,8 @@ describe('model advanced editor', () => {
     const input = screen.getByRole('textbox', {
       name: 'settings.providers.models.advanced.contextLimitAria',
     });
-    expect((input as HTMLInputElement).value).toBe('272');
-    fireEvent.change(input, { target: { value: '500' } });
+    expect((input as HTMLInputElement).value).toBe('272000');
+    fireEvent.change(input, { target: { value: '500K' } });
     fireEvent.blur(input);
     expect(mocks.setLimit).toHaveBeenCalledWith(500_000);
     fireEvent.change(input, { target: { value: '1.5' } });
@@ -693,7 +842,7 @@ describe('model advanced editor', () => {
       />,
     );
     const input = screen.getByRole('textbox');
-    fireEvent.change(input, { target: { value: '1000' } });
+    fireEvent.change(input, { target: { value: '1000K' } });
     fireEvent.blur(input);
     expect(mocks.setLimit).toHaveBeenCalledWith(1_000_000);
     expect(screen.getByText('1,050,000')).toBeTruthy();
@@ -714,7 +863,7 @@ describe('model advanced editor', () => {
       />,
     );
     const input = screen.getByRole('textbox');
-    fireEvent.change(input, { target: { value: '1000' } });
+    fireEvent.change(input, { target: { value: '1000K' } });
     fireEvent.blur(input);
     expect(mocks.setLimit).toHaveBeenCalledWith(1_000_000);
     expect(screen.getAllByText('272K').length).toBeGreaterThan(0);
@@ -726,7 +875,7 @@ describe('model advanced editor', () => {
     expect(screen.queryByText('settings.providers.models.advanced.protocol.reference')).toBeNull();
   });
 
-  it('renders imported OpenRouter Gemini with only Pi enabled, preserving all three supplier interfaces', () => {
+  it('renders imported OpenRouter Gemini with every served engine enabled and no interface menu', () => {
     const preset = BUNDLED_CATALOG.presets!.find(p => p.id === 'openrouter')!;
     const agents = ['claude-code', 'codex', 'pi'] as const;
     const id = 'google/gemini-3.8-flash';
@@ -736,33 +885,33 @@ describe('model advanced editor', () => {
     const byAgent = Object.fromEntries(agents.map(agent => [agent, source.models[agent]![0]]));
     render(<ModelAdvancedDrawer provider={source} row={{ id, name: 'Gemini', avail: [...agents], byAgent }} open
       onOpenChange={vi.fn()} pricePresentationOf={() => null} onDisable={vi.fn()} disabled={false} paymentRequired={false} />);
-    for (const agent of ['Claude Code', 'Codex', 'Pi']) {
+    for (const [agent, api] of [['Claude Code', 'Messages'], ['Codex', 'Responses'], ['Pi', 'Chat Completions']]) {
       const toggle = screen.getByRole('switch', { name: `Gemini · ${agent}` });
-      expect(toggle.getAttribute('aria-checked')).toBe(agent === 'Pi' ? 'true' : 'false');
-      expect(toggle.hasAttribute('data-compatibility')).toBe(agent !== 'Pi');
+      expect(toggle.getAttribute('aria-checked')).toBe('true');
+      expect(toggle.hasAttribute('data-compatibility')).toBe(false);
+      expect(document.getElementById(toggle.getAttribute('aria-describedby')!)?.textContent).toBe(api);
     }
-    expect(screen.getByText(/^Messages/)).toBeTruthy();
-    expect(screen.getByText(/^Responses/)).toBeTruthy();
-    expect(screen.getByText(/^Chat Completions/)).toBeTruthy();
-    expect((screen.getByRole('textbox') as HTMLInputElement).value).toBe('1048');
+    expect(screen.getByText('Messages · Responses · Chat Completions')).toBeTruthy();
+    expect(screen.queryByRole('button', { name: /settings\.providers\.custom\.fields\.wireProtocol/ })).toBeNull();
+    expect((screen.getByRole('textbox') as HTMLInputElement).value).toBe('1048576');
   });
 
-  it('shows whole K without rewriting the exact catalog value on untouched blur', () => {
+  it('shows exact tokens without rewriting the catalog value on untouched blur', () => {
     draw({ ...model, contextWindow: 1_048_576, contextWindowMax: 1_048_576 });
     const input = screen.getByRole('textbox') as HTMLInputElement;
-    expect(input.value).toBe('1048');
+    expect(input.value).toBe('1048576');
     expect(
       screen.getByText('settings.providers.models.advanced.contextLimitRoute 1,048,576'),
     ).toBeTruthy();
     fireEvent.focus(input);
     fireEvent.blur(input);
     expect(mocks.setLimit).not.toHaveBeenCalled();
-    fireEvent.change(input, { target: { value: '1000' } });
+    fireEvent.change(input, { target: { value: '1000K' } });
     fireEvent.blur(input);
     expect(mocks.setLimit).toHaveBeenCalledWith(1_000_000);
   });
 
-  it('labels both Google compatibility routes and gives Pi the recommendation', async () => {
+  it('lists Cindy AI Gemini interfaces without compatibility labels and gives Pi the recommendation', () => {
     const primary = {
       ...model,
       id: 'google/gemini-future',
@@ -799,32 +948,38 @@ describe('model advanced editor', () => {
     expect(
       screen.getByText('newChat.modelSelector.unified.recommended').parentElement?.textContent,
     ).toContain('Pi');
-    for (const agent of ['Claude Code', 'Codex']) {
-      const toggle = screen.getByRole('switch', { name: `Gemini · ${agent}` });
-      expect(toggle.getAttribute('data-compatibility')).toBe('true');
-      expect(
-        document.getElementById(toggle.getAttribute('aria-describedby')!)?.textContent,
-      ).toContain('protocol.compatibility');
+    // The gateway serves each engine's own interface; that is not Cindy's local conversion.
+    for (const agent of agents) {
+      expect(screen.getByRole('switch', { name: `Gemini · ${AGENT_NAMES[agent]}` }).hasAttribute('data-compatibility')).toBe(false);
     }
-    expect(
-      screen.getByRole('switch', { name: 'Gemini · Pi' }).hasAttribute('data-compatibility'),
-    ).toBe(false);
-    const notices = screen.getAllByRole('button', {
-      name: 'settings.providers.models.advanced.protocol.compatibility',
-    });
-    expect(notices).toHaveLength(2);
-    fireEvent.click(notices[0]!);
-    expect((await screen.findByRole('tooltip')).textContent).toContain(
-      'protocol.compatibilityHint',
-    );
+    expect(screen.getByText('Messages · Responses · Google Gemini')).toBeTruthy();
+    expect(screen.queryByRole('button', { name: 'settings.providers.models.advanced.protocol.compatibility' })).toBeNull();
     expect(setModelVisibility).not.toHaveBeenCalled();
+  });
+
+  it('labels only the engine Cindy converts locally and explains it on demand', async () => {
+    const source = { ...buildUserProvider({ id: 'chat-only', name: 'Chat Only', runtimes: {
+      'claude-code': { baseUrl: 'https://supplier.example/v1', wireProtocol: 'openai-chat', models: [{ id: 'chat-model', name: 'Chat Model' }] },
+      pi: { baseUrl: 'https://supplier.example/v1', wireProtocol: 'openai-chat', models: [{ id: 'chat-model', name: 'Chat Model' }] },
+    } }), connected: true } as ProviderView;
+    const byAgent = { 'claude-code': source.models['claude-code']![0], pi: source.models.pi![0] };
+    render(<ModelAdvancedDrawer provider={source} row={{ id: 'chat-model', name: 'Chat Model', avail: ['claude-code', 'pi'], byAgent }} open
+      onOpenChange={vi.fn()} pricePresentationOf={() => null} onDisable={vi.fn()} disabled={false} paymentRequired={false} />);
+    const claude = screen.getByRole('switch', { name: 'Chat Model · Claude Code' });
+    expect(claude.getAttribute('data-compatibility')).toBe('true');
+    expect(document.getElementById(claude.getAttribute('aria-describedby')!)?.textContent).toContain('protocol.compatibility');
+    expect(screen.getByRole('switch', { name: 'Chat Model · Pi' }).hasAttribute('data-compatibility')).toBe(false);
+    const notices = screen.getAllByRole('button', { name: 'settings.providers.models.advanced.protocol.compatibility' });
+    expect(notices).toHaveLength(1);
+    fireEvent.click(notices[0]!);
+    expect((await screen.findByRole('tooltip')).textContent).toContain('protocol.compatibilityHint');
   });
 
   it('preserves an existing precise override, warns above the exact maximum, and resets without rounding writes', () => {
     mocks.limit = 1_048_900;
     draw({ ...model, contextWindow: 1_048_576, contextWindowMax: 1_048_576 });
     const input = screen.getByRole('textbox') as HTMLInputElement;
-    expect(input.value).toBe('1048');
+    expect(input.value).toBe('1048900');
     expect(
       screen.getByText('settings.providers.models.advanced.contextLimitOverWindow'),
     ).toBeTruthy();
@@ -891,15 +1046,89 @@ describe('model advanced editor', () => {
 
   it('refreshes defaults and controls in an open drawer when the catalog changes', () => {
     const { rerender } = draw();
-    expect((screen.getByRole('textbox') as HTMLInputElement).value).toBe('272');
+    expect((screen.getByRole('textbox') as HTMLInputElement).value).toBe('272000');
     rerender(
       drawer({ ...model, contextWindow: 700_000, efforts: ['high', 'max'], defaultEffort: 'max' }),
     );
-    expect((screen.getByRole('textbox') as HTMLInputElement).value).toBe('700');
+    expect((screen.getByRole('textbox') as HTMLInputElement).value).toBe('700000');
     expect(screen.queryByRole('radio', { name: 'effortLevels.low' })).toBeNull();
     expect(
       screen.getByRole('radio', { name: 'effortLevels.max' }).getAttribute('aria-checked'),
     ).toBe('true');
+  });
+
+  it('removes stale engine windows after saving a shared budget and restores them on reset', () => {
+    const unverified = { ...model, contextWindow: 200_000, contextWindowVerified: false };
+    const { rerender } = draw(unverified);
+    expect(screen.getAllByTitle('200K')).toHaveLength(2);
+    const input = screen.getByRole('textbox');
+    fireEvent.change(input, { target: { value: '700K' } });
+    fireEvent.blur(input);
+    expect(mocks.setLimit).toHaveBeenLastCalledWith(700_000);
+
+    // Reflect the committed hook result, including reopening with an existing override.
+    mocks.limit = 700_000;
+    rerender(drawer(unverified));
+    expect((input as HTMLInputElement).value).toBe('700000');
+    expect(screen.queryByTitle('200K')).toBeNull();
+    cleanup();
+    const reopened = draw(unverified);
+    expect((screen.getByRole('textbox') as HTMLInputElement).value).toBe('700000');
+    expect(screen.queryByTitle('200K')).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: 'settings.providers.models.advanced.restoreDefault' }));
+    expect(mocks.reset).toHaveBeenCalledOnce();
+    mocks.limit = null;
+    reopened.rerender(drawer(unverified));
+    expect((screen.getByRole('textbox') as HTMLInputElement).value).toBe('200000');
+    expect(screen.getAllByTitle('200K')).toHaveLength(2);
+  });
+
+  it.each([null, 700_000])('does not label an unknown route capacity as an engine difference (budget %s)', (limit) => {
+    mocks.limit = limit;
+    draw({ ...model, contextWindow: 200_000, contextWindowMax: 0, contextWindowVerified: false });
+    expect(screen.queryByTitle('200K')).toBeNull();
+  });
+
+  it.each([undefined, 0])('preserves a verified secondary window when primary capacity is %s', (contextWindowMax) => {
+    const primary = { ...model, contextWindow: 200_000, contextWindowMax, contextWindowVerified: false };
+    const secondary = { ...model, contextWindow: 1_000_000, contextWindowMax: 1_000_000, contextWindowVerified: true };
+    const source = { ...provider, id: 'custom-unknown-primary', source: 'user' } as ProviderView;
+    const row = { id: model.id, name: model.name, avail: provider.agents,
+      byAgent: { codex: primary, 'claude-code': secondary } };
+    const view = () => <ModelAdvancedDrawer provider={source} row={row} open onOpenChange={vi.fn()}
+      pricePresentationOf={() => null} onDisable={vi.fn()} disabled={false} paymentRequired={false} />;
+    const { rerender } = render(view());
+    expect(screen.queryByTitle('200K')).toBeNull();
+    expect(screen.getByTitle('1M')).toBeTruthy();
+    expect(screen.getByText('settings.providers.models.advanced.catalogMissing')).toBeTruthy();
+
+    mocks.limit = 700_000;
+    rerender(view());
+    expect(screen.queryByTitle('1M')).toBeNull();
+    expect((screen.getByRole('textbox') as HTMLInputElement).value).toBe('700000');
+    mocks.limit = null;
+    rerender(view());
+    expect(screen.getByTitle('1M')).toBeTruthy();
+  });
+
+  it('preserves native per-engine window differences without a shared override', () => {
+    const row = {
+      id: model.id, name: model.name, avail: provider.agents,
+      byAgent: { codex: { ...model, contextWindowMax: 1_000_000 },
+        'claude-code': { ...model, contextWindow: 1_000_000 } },
+    };
+    render(<ModelAdvancedDrawer provider={provider} row={row} open onOpenChange={vi.fn()}
+      pricePresentationOf={() => null} onDisable={vi.fn()} disabled={false} paymentRequired={false} />);
+    expect(screen.getByTitle('272K')).toBeTruthy();
+    expect(screen.queryByTitle('1M')).toBeNull();
+  });
+
+  it('does not treat differing legacy overrides as a shared budget', () => {
+    mocks.limit = 700_000;
+    mocks.mixed = true;
+    draw();
+    expect(screen.getAllByTitle('272K')).toHaveLength(2);
+    expect(screen.getByText('settings.providers.models.advanced.contextMixed')).toBeTruthy();
   });
 
   it('allows an intentional override above the maximum and rejects invalid input', () => {
@@ -907,7 +1136,7 @@ describe('model advanced editor', () => {
     const input = screen.getByRole('textbox', {
       name: 'settings.providers.models.advanced.contextLimitAria',
     });
-    fireEvent.change(input, { target: { value: '1200' } });
+    fireEvent.change(input, { target: { value: '1200K' } });
     expect(
       screen.getByText('settings.providers.models.advanced.contextLimitOverWindow'),
     ).toBeTruthy();
@@ -948,10 +1177,75 @@ describe('model advanced editor', () => {
     expect(setProviderModelEffort).toHaveBeenCalledWith('claude-code', 'openai', 'chatgpt/gpt-6', 'low');
   });
 
+  // The default option removes the override; it must remain selectable even when
+  // an older explicit override already equals the current catalog value.
+  it.each([true, false])('offers only two image-input choices with catalog default %s', async (catalogDefault) => {
+    mocks.imageValue = !catalogDefault;
+    draw({ ...model, supportsImageInput: !catalogDefault, imageInputDefault: { supportsImageInput: catalogDefault } });
+    const trigger = screen.getByRole('button', { name: 'settings.providers.models.advanced.imageInput' });
+    expect(trigger.textContent).toBe(`settings.providers.models.advanced.${catalogDefault ? 'unsupported' : 'supported'}`);
+    fireEvent.keyDown(trigger, { key: 'ArrowDown' });
+    const items = await screen.findAllByRole('menuitemradio');
+    expect(items).toHaveLength(2);
+    const defaultLabel = `settings.providers.models.advanced.imageInputDefault settings.providers.models.advanced.${catalogDefault ? 'supported' : 'unsupported'}`;
+    const defaultItem = screen.getByRole('menuitemradio', { name: defaultLabel });
+    expect(defaultItem.getAttribute('aria-checked')).toBe('false');
+    fireEvent.click(defaultItem);
+    expect(mocks.imageSet).toHaveBeenLastCalledWith(null);
+  });
+
+  it.each([true, false])('saves the non-default image-input choice when the catalog says %s', async (catalogDefault) => {
+    draw({ ...model, supportsImageInput: catalogDefault });
+    const trigger = screen.getByRole('button', { name: 'settings.providers.models.advanced.imageInput' });
+    expect(trigger.textContent).toBe(`settings.providers.models.advanced.${catalogDefault ? 'supported' : 'unsupported'}`);
+    fireEvent.keyDown(trigger, { key: 'ArrowDown' });
+    const name = `settings.providers.models.advanced.${catalogDefault ? 'unsupported' : 'supported'}`;
+    fireEvent.click(await screen.findByRole('menuitemradio', { name }));
+    expect(mocks.imageSet).toHaveBeenLastCalledWith(!catalogDefault);
+  });
+
+  it.each([null, true, false])('leaves both image-input options without a default for an undeclared model with override %s', async (override) => {
+    mocks.imageValue = override;
+    draw({ ...model, id: 'private-undeclared-model', modalities: undefined,
+      supportsImageInput: override ?? undefined,
+      imageInputDefault: override === null ? undefined : {} });
+    const trigger = screen.getByRole('button', { name: 'settings.providers.models.advanced.imageInput' });
+    expect(trigger.textContent).toBe(`settings.providers.models.advanced.${override === null ? 'undeclared' : override ? 'supported' : 'unsupported'}`);
+    for (const supported of [true, false]) {
+      fireEvent.keyDown(trigger, { key: 'ArrowDown' });
+      const items = await screen.findAllByRole('menuitemradio');
+      expect(items.map(item => item.textContent)).toEqual([
+        'settings.providers.models.advanced.supported',
+        'settings.providers.models.advanced.unsupported',
+      ]);
+      fireEvent.click(items[supported ? 0 : 1]);
+      expect(mocks.imageSet).toHaveBeenLastCalledWith(supported);
+    }
+    expect(mocks.imageSet).not.toHaveBeenCalledWith(null);
+  });
+
+  it('clears an older explicit override that already matches the catalog default', async () => {
+    mocks.imageValue = true;
+    draw({ ...model, supportsImageInput: true, imageInputDefault: { supportsImageInput: true } });
+    fireEvent.keyDown(screen.getByRole('button', { name: 'settings.providers.models.advanced.imageInput' }), { key: 'ArrowDown' });
+    const item = await screen.findByRole('menuitemradio', { name: 'settings.providers.models.advanced.imageInputDefault settings.providers.models.advanced.supported' });
+    expect(item.getAttribute('aria-checked')).toBe('true');
+    fireEvent.click(item);
+    expect(mocks.imageSet).toHaveBeenCalledWith(null);
+  });
+
   it('uses provider-declared image capability ahead of family-name heuristics', () => {
     draw({ ...model, id: 'deepseek-v4', name: 'DeepSeek', supportsImageInput: true });
-    expect(screen.getByText('settings.providers.models.advanced.vision.vision')).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'settings.providers.models.advanced.imageInput' }).textContent).toBe('settings.providers.models.advanced.supported');
     expect(screen.getByText('settings.providers.models.advanced.inputModalities')).toBeTruthy();
+  });
+
+  it.each([true, false])('keeps the loaded image capability %s when the override read fails', (supported) => {
+    mocks.imageError = true;
+    draw({ ...model, supportsImageInput: supported, imageInputDefault: { supportsImageInput: !supported } });
+    expect(screen.getByRole('button', { name: 'settings.providers.models.advanced.imageInput' }).textContent)
+      .toBe(`settings.providers.models.advanced.${supported ? 'supported' : 'unsupported'}`);
+    expect(screen.getByRole('alert').textContent).toBe('settings.providers.custom.toast.saveFailed');
   });
 });
 
@@ -1011,7 +1305,7 @@ it('limits context and effort reads, writes and resets to the chat runtime', () 
   fireEvent.click(screen.getByRole('button', { name: 'settings.providers.models.advanced.restoreDefault' }));
   expect(clearProviderModelEffort).toHaveBeenCalledExactlyOnceWith('codex', 'private', 'shared');
   const input = screen.getByRole('textbox');
-  fireEvent.change(input, { target: { value: '128' } });
+  fireEvent.change(input, { target: { value: '128K' } });
   fireEvent.blur(input);
   expect(mocks.setLimit).toHaveBeenCalledWith(128_000);
   expect(mocks.target).toHaveBeenLastCalledWith(expect.objectContaining({ agent: 'codex', relatedTargets: [] }));
@@ -1024,9 +1318,8 @@ it('keeps enterprise reference prices read-only in the model drawer', () => {
       source: 'organization',
     }),
   );
-  expect(
-    screen.queryByRole('button', { name: 'settings.providers.models.priceOverride.menu' }),
-  ).toBeNull();
+  expect(screen.queryByTestId('inline-pricing')).toBeNull();
+  expect(screen.queryByRole('button', { name: 'settings.providers.models.priceOverride.menu' })).toBeNull();
 });
 
 // Component contract (unit): the real drawer names the charge, independently of its token unit.
@@ -1145,4 +1438,183 @@ it('retains the chat discount inferred from standard and effective prices', () =
   expect(screen.getByText('settings.providers.models.advanced.discount').parentElement?.textContent).toContain('↓40%');
   const outputRow = screen.getByText('settings.providers.models.advanced.price.output').parentElement!;
   expect(outputRow.nextElementSibling).toBe(screen.getByText('settings.providers.models.advanced.discount').parentElement);
+});
+
+// Unit: real editor commits normalized tokens, preserving precision and rejecting fractional tokens.
+it.each([['1000000', 1_000_000], ['1M', 1_000_000], ['1.5m', 1_500_000], ['100万', 1_000_000], ['100萬', 1_000_000], ['262144', 262_144], ['1.000001M', 1_000_001], ['262.144K', 262_144]])('accepts context %s as %s tokens', (value, tokens) => {
+  draw();
+  const input = screen.getByRole('textbox');
+  fireEvent.change(input, { target: { value } }); fireEvent.blur(input);
+  expect(mocks.setLimit).toHaveBeenLastCalledWith(tokens);
+});
+// Review #7836: the bare-number rejection does not exercise unit precision.
+// Unit tier: the real editor must show invalid input and never persist fractional tokens.
+// Use the local-runtime 1K floor so the 1.0001K case cannot pass on the 100K guard alone.
+it.each(['1.0001K', '1.0000001M', '1.00001万'])('rejects context %s that converts to fractional tokens', (value) => {
+  render(drawer(model, model.defaultEffort, model.efforts, { ...provider, id: 'ollama', source: 'user' }));
+  const input = screen.getByRole('textbox');
+  fireEvent.change(input, { target: { value } });
+  expect(input.getAttribute('aria-invalid')).toBe('true');
+  expect(screen.getByText('settings.providers.models.advanced.contextInvalid')).toBeTruthy();
+  fireEvent.blur(input);
+  expect(mocks.setLimit).not.toHaveBeenCalled();
+});
+it('does not label an unverified working default as the upstream capacity', () => {
+  draw({ ...model, contextWindow: 200_000, contextWindowMax: undefined, contextWindowVerified: false });
+  const input = screen.getByRole('textbox');
+  fireEvent.change(input, { target: { value: '1M' } });
+  expect(screen.queryByText('settings.providers.models.advanced.contextLimitOverWindow')).toBeNull();
+  expect(screen.getByText('settings.providers.models.advanced.catalogMissing')).toBeTruthy();
+  fireEvent.blur(input);
+  expect(mocks.setLimit).toHaveBeenLastCalledWith(1_000_000);
+});
+
+it.each([true, false].flatMap(supported => [false, true].map(mixed => ({ supported, mixed }))))(
+  'uses an explicit common image choice $supported when engine defaults differ (mixed overrides: $mixed)', async ({ supported, mixed }) => {
+  mocks.imageMixed = mixed;
+  const first = { ...model, supportsImageInput: true, imageInputDefault: { supportsImageInput: true } };
+  const second = { ...model, id: 'chatgpt/gpt-6', supportsImageInput: false, imageInputDefault: { supportsImageInput: false } };
+  render(<ModelAdvancedDrawer provider={provider}
+    row={{ id: model.id, name: model.name, avail: ['codex', 'claude-code'], byAgent: { codex: first, 'claude-code': second } }}
+    open onOpenChange={vi.fn()} pricePresentationOf={() => null} onDisable={vi.fn()} disabled={false} paymentRequired={false} />);
+  const trigger = screen.getByRole('button', { name: 'settings.providers.models.advanced.imageInput' });
+  expect(trigger.textContent).toBe('settings.providers.models.advanced.imageInputMixed');
+  fireEvent.keyDown(trigger, { key: 'ArrowDown' });
+  const items = await screen.findAllByRole('menuitemradio');
+  expect(items).toHaveLength(2);
+  expect(items.some(item => item.textContent?.includes('imageInputDefault'))).toBe(false);
+  fireEvent.click(items[supported ? 0 : 1]);
+  expect(mocks.imageSet).toHaveBeenLastCalledWith(supported);
+  expect(mocks.imageSet).not.toHaveBeenCalledWith(null);
+});
+
+// A saved override and an inherited value can agree despite different provenance.
+it.each([true, false].flatMap(supported => [false, true].map(firstOverridden => ({ supported, firstOverridden }))))(
+  'shows effective capability $supported when mixed overrides agree (first overridden: $firstOverridden)', async ({ supported, firstOverridden }) => {
+  mocks.imageMixed = true;
+  // The IPC returns the first stored override even when the target values differ.
+  mocks.imageValue = firstOverridden ? supported : null;
+  const primary = { ...model, supportsImageInput: supported, imageInputDefault: { supportsImageInput: firstOverridden ? !supported : supported } };
+  const other = { ...model, id: 'chatgpt/gpt-6', supportsImageInput: supported, imageInputDefault: { supportsImageInput: firstOverridden ? supported : !supported } };
+  render(<ModelAdvancedDrawer provider={provider}
+    row={{ id: model.id, name: model.name, avail: ['codex', 'claude-code'], byAgent: { codex: primary, 'claude-code': other } }}
+    open onOpenChange={vi.fn()} pricePresentationOf={() => null} onDisable={vi.fn()} disabled={false} paymentRequired={false} />);
+  const trigger = screen.getByRole('button', { name: 'settings.providers.models.advanced.imageInput' });
+  expect(trigger.textContent).toBe(`settings.providers.models.advanced.${supported ? 'supported' : 'unsupported'}`);
+  fireEvent.keyDown(trigger, { key: 'ArrowDown' });
+  const items = await screen.findAllByRole('menuitemradio');
+  expect(items).toHaveLength(2);
+  expect(items.some(item => item.textContent?.includes('imageInputDefault'))).toBe(false);
+  const selected = items[supported ? 0 : 1];
+  expect(selected.getAttribute('aria-checked')).toBe('true');
+  fireEvent.click(selected);
+  expect(mocks.imageSet).toHaveBeenLastCalledWith(supported);
+});
+
+it.each([true, false, undefined].flatMap(supported => [false, true].map(readFailed => ({ supported, readFailed }))))(
+  'uses chat default $supported independently of a same-ID Images connection (read failed: $readFailed)', async ({ supported, readFailed }) => {
+  mocks.imageError = readFailed;
+  const source = { ...buildUserProvider({ id: 'relay', name: 'Relay', auth: { method: 'apiKey' }, runtimes: {
+    pi: { baseUrl: 'https://chat.example.invalid/v1', models: [{
+      id: 'private-image', name: 'Image', supportsImageInput: supported,
+    }] },
+    codex: { baseUrl: 'https://images.example.invalid/v1', imageApi: 'openai-images', models: [{
+      id: 'private-image', name: 'Image', mode: 'image_generation',
+      modalities: { input: supported ? ['text'] : ['text', 'image'], output: ['image'] },
+    }] },
+  } }), connected: true } as ProviderView;
+  render(<ModelAdvancedDrawer provider={source} row={{ id: 'private-image', name: 'Image', avail: ['pi', 'codex'],
+    byAgent: { pi: source.models.pi![0], codex: source.models.codex![0] } }} open
+    onOpenChange={vi.fn()} pricePresentationOf={() => null} onDisable={vi.fn()} disabled={false} paymentRequired={false} />);
+  const trigger = screen.getByRole('button', { name: 'settings.providers.models.advanced.imageInput' });
+  expect(trigger.textContent).toBe('settings.providers.models.advanced.' +
+    (supported === undefined ? 'undeclared' : supported ? 'supported' : 'unsupported'));
+  fireEvent.keyDown(trigger, { key: 'ArrowDown' });
+  const items = await screen.findAllByRole('menuitemradio');
+  expect(items).toHaveLength(2);
+  if (supported === undefined) {
+    expect(items.every(item => !item.textContent?.includes('imageInputDefault'))).toBe(true);
+    fireEvent.click(screen.getByRole('menuitemradio', { name: 'settings.providers.models.advanced.supported' }));
+    expect(mocks.imageSet).toHaveBeenLastCalledWith(true);
+    return;
+  }
+  const defaultName = 'settings.providers.models.advanced.imageInputDefault settings.providers.models.advanced.' +
+    (supported ? 'supported' : 'unsupported');
+  fireEvent.click(screen.getByRole('menuitemradio', { name: defaultName }));
+  expect(mocks.imageSet).toHaveBeenLastCalledWith(null);
+  fireEvent.keyDown(trigger, { key: 'ArrowDown' });
+  fireEvent.click(await screen.findByRole('menuitemradio', { name: 'settings.providers.models.advanced.' +
+    (supported ? 'unsupported' : 'supported') }));
+  expect(mocks.imageSet).toHaveBeenLastCalledWith(!supported);
+});
+
+// Unit regression: bridge names must not make identical inferred defaults look mixed.
+// Exercise the real drawer and its outgoing clear-override action for the union row.
+it('uses the union row identity to infer an undeclared bridge image default', async () => {
+  const primary = { ...model, id: 'gpt-5.6-sol', modalities: undefined, supportsImageInput: undefined };
+  draw(primary);
+  const trigger = screen.getByRole('button', { name: 'settings.providers.models.advanced.imageInput' });
+  expect(trigger.textContent).toBe('settings.providers.models.advanced.supported');
+  fireEvent.keyDown(trigger, { key: 'ArrowDown' });
+  const items = await screen.findAllByRole('menuitemradio');
+  expect(items).toHaveLength(2);
+  fireEvent.click(screen.getByRole('menuitemradio', { name: 'settings.providers.models.advanced.imageInputDefault settings.providers.models.advanced.supported' }));
+  expect(mocks.imageSet).toHaveBeenCalledWith(null);
+});
+
+// UI entry regression: replace the old launcher while retaining the existing pricing body.
+// Dialog API/payload behavior is exercised by ModelPriceOverrideDialog.test.tsx (unit).
+it('replaces the API-price launcher with the existing form in inline mode', () => {
+  draw();
+  expect(screen.getByTestId('inline-pricing')).toBeTruthy();
+  expect(mocks.priceProps).toHaveBeenLastCalledWith(expect.objectContaining({ presentation: 'inline' }));
+  expect(screen.queryByRole('button', { name: 'settings.providers.models.priceOverride.menu' })).toBeNull();
+});
+
+// Real drawer + pricing form: Radix handles Escape in document capture before
+// the form's bubbling key handler, including when Shift+Tab reaches Reset.
+it('saves a dirty quote on Escape from Reset before allowing the drawer to close', async () => {
+  mocks.realPricing = true;
+  const user = userEvent.setup();
+  const previous = window.electronAPI;
+  const quote = { currency: 'USD' as const, inputPerMtok: 1, outputPerMtok: 4 };
+  const view = { target: { providerId: provider.id, agent: 'codex' as const, modelId: model.id },
+    editable: true, effective: quote, reference: quote, override: null, conflict: false,
+    allowedCurrencies: ['USD' as const], registryUpdatedAt: null };
+  let finishSave!: (next: unknown) => void;
+  const save = vi.fn(() => new Promise(resolve => { finishSave = resolve; }));
+  Object.defineProperty(window, 'electronAPI', { configurable: true, value: { maker: {
+    getModelPriceOverride: vi.fn(async () => view), setModelPriceOverride: save,
+    resetModelPriceOverride: vi.fn(),
+  } } });
+  const onOpenChange = vi.fn();
+  try {
+    render(<ModelAdvancedDrawer provider={provider}
+      row={{ id: model.id, name: model.name, avail: ['codex'], byAgent: { codex: model } }}
+      open onOpenChange={onOpenChange} pricePresentationOf={() => null}
+      onDisable={vi.fn()} disabled={false} paymentRequired={false} />);
+    const input = screen.getByLabelText('settings.providers.models.priceOverride.input') as HTMLInputElement;
+    await waitFor(() => expect(input.disabled).toBe(false));
+    await user.click(input);
+    await user.clear(input);
+    await user.type(input, '7');
+    await user.tab({ shift: true });
+    expect(document.activeElement).toBe(screen.getByRole('button', { name: 'settings.providers.models.priceOverride.resetShort' }));
+    expect(save).not.toHaveBeenCalled();
+    await user.keyboard('{Escape}');
+    await waitFor(() => expect(save).toHaveBeenCalledExactlyOnceWith(view.target, {
+      currency: 'USD', inputPerMtok: 7, outputPerMtok: 4, cacheReadPerMtok: null, cacheCreatePerMtok: null,
+    }));
+    expect(onOpenChange).not.toHaveBeenCalled();
+    await user.keyboard('{Escape}');
+    expect(onOpenChange).not.toHaveBeenCalled();
+    finishSave({ ...view, effective: { ...quote, inputPerMtok: 7 }, override: { ...quote, inputPerMtok: 7 } });
+    await waitFor(() => expect(input.readOnly).toBe(false));
+    expect(input.value).toBe('7');
+    await user.keyboard('{Escape}');
+    expect(onOpenChange).toHaveBeenCalledExactlyOnceWith(false);
+  } finally {
+    cleanup();
+    Object.defineProperty(window, 'electronAPI', { configurable: true, value: previous });
+  }
 });

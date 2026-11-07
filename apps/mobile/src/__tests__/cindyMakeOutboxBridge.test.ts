@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import type { DurableOutboxRecord } from '@/session/durableOutbox';
-import { createOutboxSessionAccess } from '@/session/mobileOutboxSessionAdapter';
+import { canConnectOutboxPeer, createOutboxSessionAccess } from '@/session/mobileOutboxSessionAdapter';
+import { sharedTaskHostPeer } from '@cindy/device-link';
 
 function harness(sessions: Array<{ id: string; source?: string; deviceLinkDeviceId: string }>) {
   const record = { deviceId: 'desktop', state: 'queued', uploads: [],
@@ -8,7 +9,10 @@ function harness(sessions: Array<{ id: string; source?: string; deviceLinkDevice
   const invoke = vi.fn(async (_device: string, _channel: string, _args: unknown[] | undefined, options: { preSend(): void }): Promise<{ id: string; source: string; workingDir?: string }> => {
     options.preSend(); return { id: 'session', source: 'cc', workingDir: '/repo' };
   });
-  const latest = { current: { link: { status: 'online', getPresenceAvailability: () => true, invoke } } };
+  const connections = new Map<string, string>();
+  const latest = { current: { link: { status: 'online', getPresenceAvailability: () => true, invoke,
+    getConnectionState: (deviceId: string): { status: string } => ({ status: connections.get(deviceId) ?? latest.current.link.status }),
+  } } };
   const owner = { current: true, records: [record], creationHeld: false };
   const hasCreationTask = vi.fn(() => false);
   const callbacks = createOutboxSessionAccess({
@@ -17,17 +21,31 @@ function harness(sessions: Array<{ id: string; source?: string; deviceLinkDevice
     guard: () => { if (!owner.current) throw new Error('OUTBOX_OWNER_CHANGED'); },
     isCurrent: () => owner.current,
     isForeground: () => true,
-    canConnect: () => latest.current.link.status === 'online' && latest.current.link.getPresenceAvailability() !== false,
+    canConnect: (deviceId) => canConnectOutboxPeer(latest.current.link, deviceId),
     isCreationHeld: () => owner.creationHeld,
     hasCreationTask,
     needsReconciliation: () => true,
     invoke: (deviceId, channel, args, options) => latest.current.link.invoke(deviceId, channel, args, options),
     readSession: record => callbacks.invokeOwned(record)(record.deviceId, 'local-db:sessions:get', [record.item.sessionId]),
   });
-  return { record, callbacks, invoke, latest, owner, hasCreationTask };
+  return { record, callbacks, invoke, latest, owner, hasCreationTask, connections };
 }
 
 describe('Cindy Make outbox bridge guards', () => {
+  // PR #8182: an unrelated same-account relay outage must not stall a queued
+  // shared-task send. Exercise the production delivery policy, not source text.
+  it('admits a shared record on its official connection while the primary relay is offline', () => {
+    const { record, callbacks, latest, owner, connections } = harness([]);
+    const shared = { ...record, deviceId: sharedTaskHostPeer('shared', 'desktop') };
+    owner.records.push(shared);
+    latest.current.link.status = 'offline';
+    connections.set(shared.deviceId, 'online');
+    expect(callbacks.canRun(record)).toBe(false);
+    expect(callbacks.canRun(shared)).toBe(true);
+    connections.set(shared.deviceId, 'stopped');
+    expect(callbacks.canRun(shared)).toBe(false);
+  });
+
   // mobile-development: follow-ups wait for creation ownership, while policy and
   // preparation reuse the same authoritative row. Replaces old bridge literals.
   it('waits for both draft handoff and task creation before allowing delivery', () => {
