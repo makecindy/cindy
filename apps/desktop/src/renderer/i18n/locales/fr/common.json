@@ -10590,8 +10590,8 @@
       "prCount_many": "{{count}} PR"
     },
     "directMessage": {
-      "sentTo": "Message envoyé à {{name}}",
-      "receivedFrom": "Message de {{name}}",
+      "sentTo": "Envoyé à {{name}}",
+      "receivedFrom": "Reçu de {{name}}",
       "exchangeCount": "{{count}} messages avec {{name}}",
       "open": "Voir la conversation entre coéquipiers",
       "readOnly": "Cette conversation est en lecture seule",

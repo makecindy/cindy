@@ -12,7 +12,7 @@ import { prNumberLabel } from '@cindy/maker-shared';
  *   3. 两者都无 → 直接透传 children,保持"密集列表少挂 Tip"的既有取舍。
  *
  * 视觉:覆盖 Radix 默认的 --tooltip-bg 深黑背景,改用主题 surface-elevated +
- * border-default + shadow-sm 的浅色胶囊,与侧栏融进同一套调色板(规则 16)。
+ * border-default + --shadow-menu 的浅色胶囊,与侧栏融进同一套调色板(规则 16)。
  */
 
 import { GitPullRequest, MessageSquare } from 'lucide-react';
@@ -33,7 +33,7 @@ const CONTENT_SURFACE_CLASS = cn(
   // base Tooltip.Content 默认 border-transparent（深底气泡不要浅描边）。
   // tailwind-merge 不会被无 variant 的 border-[...] 单独覆盖 dark 态，需要显式
   // dark: override 才能让这个浅色浮层在两模式下都看得到边框。
-  'border-[var(--border-default)] dark:border-[var(--border-default)] shadow-sm',
+  'border-[var(--border-default)] dark:border-[var(--border-default)] shadow-[shadow:var(--shadow-menu)]',
 );
 
 /**

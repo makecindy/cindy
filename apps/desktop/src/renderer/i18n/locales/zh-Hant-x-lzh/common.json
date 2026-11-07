@@ -10461,8 +10461,8 @@
       "messageSentWithText": "已告背景差事：「{{text}}」"
     },
     "directMessage": {
-      "sentTo": "已遣訊予 {{name}}",
-      "receivedFrom": "訊來自 {{name}}",
+      "sentTo": "遣予 {{name}}",
+      "receivedFrom": "得自 {{name}}",
       "exchangeCount": "與 {{name}} 往來 {{count}} 則訊",
       "open": "覽同僚間之言談",
       "readOnly": "此言談僅供覽",

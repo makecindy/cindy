@@ -93,7 +93,7 @@ export function GhostPluginIcon({
       className={cn(
         'inline-flex shrink-0 items-center justify-center overflow-hidden border-[0.5px] border-[var(--border-default)]',
         resolvedIconDataUrl
-          ? 'bg-[var(--plugin-icon-surface)] shadow-[var(--plugin-icon-shadow)]'
+          ? 'bg-[var(--plugin-icon-surface)]'
           : 'bg-[var(--surface-elevated)] text-[var(--text-secondary)] shadow-none',
         CONTAINER_CLASSES[size],
       )}

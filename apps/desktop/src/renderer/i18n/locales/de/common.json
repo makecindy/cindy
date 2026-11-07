@@ -10506,8 +10506,8 @@
       "messageSentWithText": "Der Hintergrundaufgabe mitgeteilt: „{{text}}“"
     },
     "directMessage": {
-      "sentTo": "Nachricht an {{name}} gesendet",
-      "receivedFrom": "Nachricht von {{name}}",
+      "sentTo": "An {{name}} gesendet",
+      "receivedFrom": "Von {{name}} erhalten",
       "exchangeCount": "{{count}} Nachrichten mit {{name}}",
       "open": "Unterhaltung zwischen Teammitgliedern ansehen",
       "readOnly": "Diese Unterhaltung ist schreibgeschützt",

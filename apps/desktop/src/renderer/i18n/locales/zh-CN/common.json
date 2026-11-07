@@ -10461,8 +10461,8 @@
       "messageSentWithText": "已告诉后台任务：「{{text}}」"
     },
     "directMessage": {
-      "sentTo": "已发消息给 {{name}}",
-      "receivedFrom": "消息来自 {{name}}",
+      "sentTo": "发给 {{name}}",
+      "receivedFrom": "收到 {{name}}",
       "exchangeCount": "与 {{name}} 的 {{count}} 条消息往来",
       "open": "查看伙伴之间的对话",
       "readOnly": "此对话仅供查看",
