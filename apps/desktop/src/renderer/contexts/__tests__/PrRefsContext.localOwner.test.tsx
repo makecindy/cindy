@@ -501,3 +501,27 @@ it('shares task-wide archive eligibility with the final preflight reader', async
   expect(screen.getByRole('button', { name: 'incomplete' })).toBeTruthy();
   unmount();
 });
+
+// Regression (unit): display surfaces show three PRs, but archive eligibility needs
+// every associated PR. Statuses beyond the first three must still be fetched, in bounded batches.
+it('fetches statuses for every associated PR beyond the displayed three', async () => {
+  const refs = [1, 2, 3, 4, 5].map(prNumber => ({ id: `ref-${prNumber}`, sessionId: 'many',
+    owner: 'a', repo: 'b', prNumber, url: '', firstSeenAt: 1, lastSeenAt: 1 }));
+  const getPrStatuses = vi.fn(async (queries: typeof refs) =>
+    queries.map(q => ({ ...q, ok: true, status: 'merged' })));
+  window.electronAPI = { gitContext: {
+    listAllPrRefs: async () => refs, listPrRefs: async () => refs,
+    onPrRefsChanged: () => () => {}, getPrStatuses,
+  } } as unknown as typeof window.electronAPI;
+  function Probe() {
+    const { registerPrConsumer } = usePrActions();
+    const { eligible } = useTaskPrArchiveEligibility('many');
+    useEffect(() => registerPrConsumer('many'), [registerPrConsumer]);
+    return <div>{eligible ? 'complete' : 'incomplete'}</div>;
+  }
+  const { unmount } = render(<PrRefsProvider><Probe /></PrRefsProvider>);
+  await act(async () => {});
+  expect(screen.getByText('complete')).toBeTruthy();
+  expect(getPrStatuses.mock.calls.flatMap(([queries]) => queries)).toHaveLength(5);
+  unmount();
+});

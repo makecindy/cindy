@@ -40,7 +40,14 @@ import {
 } from 'react';
 
 import type { PrStatusResult, SessionPrRef } from '@/lib/gitContext.types';
-import { areAllTaskPrsMerged, prStatusKey, MAX_STATUS_QUERIES, PR_STATUS_REFRESH_INTERVAL_MS } from '@/lib/prStatus';
+import {
+  areAllTaskPrsMerged,
+  prStatusKey,
+  MAX_STATUS_BATCH,
+  MAX_STATUS_QUERIES,
+  MAX_TASK_STATUS_QUERIES,
+  PR_STATUS_REFRESH_INTERVAL_MS,
+} from '@/lib/prStatus';
 import { useAuth } from '@/contexts/AuthContext';
 import { isRemoteDeviceMarkedDisconnected } from '@/features/device-link/remoteProjectsStore';
 import { unresponsiveDevicesStore } from '@/features/device-link/unresponsiveDevicesStore';
@@ -400,7 +407,7 @@ export function PrRefsProvider({ children }: { children: ReactNode }) {
   // ——被控端持有 gh token,且 main 侧按该会话已提取的引用过滤查询
   // (git-context/ipc.ts 的 fail-closed 逻辑),与聊天顶栏同一条安全路径。
   const fetchStatusesForRefs = useRef((sessionId: string, refsInput: readonly SessionPrRef[]) => {
-    const refs = refsInput.slice(0, MAX_STATUS_QUERIES);
+    const refs = refsInput.slice(0, MAX_TASK_STATUS_QUERIES);
     if (refs.length === 0) return;
     const gen = ownerGenRef.current;
     // 同代在飞才挡;旧代尸体(等超时中)不能挡新 owner 的首查,直接覆盖标记。
@@ -418,17 +425,22 @@ export function PrRefsProvider({ children }: { children: ReactNode }) {
         // 不写任何状态,重连后的下一个触发点(周期 / 聚焦 / 引用到位)自然恢复。
         if (deviceId && isRemoteDeviceMarkedDisconnected(deviceId)) return;
         if (deviceId && unresponsiveDevicesStore.has(deviceId)) return;
-        const results = deviceId
-          ? await remotePrStatuses(
-              queries,
-              sessionId,
-              (channel, args) => window.electronAPI.deviceLink.invoke(deviceId, channel, args),
-              (error) =>
-                log.warn('remote MR statuses fetch failed', redactSensitiveText(String(error))),
-            )
-          : await window.electronAPI.gitContext.getPrStatuses(queries);
+        const results: PrStatusResult[] = [];
+        for (let i = 0; i < queries.length; i += MAX_STATUS_BATCH) {
+          const batch = queries.slice(i, i + MAX_STATUS_BATCH);
+          const part = deviceId
+            ? await remotePrStatuses(
+                batch,
+                sessionId,
+                (channel, args) => window.electronAPI.deviceLink.invoke(deviceId, channel, args),
+                (error) =>
+                  log.warn('remote MR statuses fetch failed', redactSensitiveText(String(error))),
+              )
+            : await window.electronAPI.gitContext.getPrStatuses(batch);
+          if (!Array.isArray(part)) return;
+          results.push(...part);
+        }
         if (gen !== ownerGenRef.current) return; // owner 已切换:旧账号结果整体丢弃
-        if (!Array.isArray(results)) return;
         store.applyStatuses(sessionId, results);
         store.setRefreshError(sessionId, 'statuses', false);
       } catch (err) {
@@ -439,7 +451,7 @@ export function PrRefsProvider({ children }: { children: ReactNode }) {
         if (inFlightSessions.current.get(sessionId) === gen) {
           inFlightSessions.current.delete(sessionId);
           if (gen === ownerGenRef.current && prConsumers.current.has(sessionId)) {
-            const latest = store.getRefs(sessionId).slice(0, MAX_STATUS_QUERIES);
+            const latest = store.getRefs(sessionId).slice(0, MAX_TASK_STATUS_QUERIES);
             const requested = new Set(refs.map(prStatusKey));
             if (latest.some((ref) => !requested.has(prStatusKey(ref)))) {
               fetchStatusesForRefs(sessionId, latest);
