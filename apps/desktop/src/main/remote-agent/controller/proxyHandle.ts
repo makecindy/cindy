@@ -311,12 +311,15 @@ export function createRemoteAgentHandle(deps: RemoteHandleDeps): RemoteAgentHand
   const teardown = async (mode: 'close' | 'detach', opts?: AgentSessionTeardownOptions) => {
     deps.cancelPendingConfirmations?.();
     const reason = opts?.reason ?? 'navigation';
+    // 'resource-refresh' 只由本地根任务的资源回收(Session.recycleIfProjectResourcesDrifted)产生;
+    // 远端会话无启动快照永不漂移,wire 协议不扩这个值,跨机器时按 navigation 关闭。
+    const wireReason: RemoteAgentTeardownReason = reason === 'resource-refresh' ? 'navigation' : reason;
     if (reason === 'account-boundary') {
       // The Agent uses the other computer's credentials. A failed notification
       // is not evidence of a surviving local Pi process (#6921). Release local
       // resources independently, even while the remote request is still pending.
       const [remote, local] = await Promise.allSettled([
-        Promise.resolve().then(() => link.close(mode, reason)),
+        Promise.resolve().then(() => link.close(mode, wireReason)),
         dispose(),
       ]);
       if (remote.status === 'rejected') {
@@ -328,7 +331,7 @@ export function createRemoteAgentHandle(deps: RemoteHandleDeps): RemoteAgentHand
       return;
     }
     try {
-      await link.close(mode, reason);
+      await link.close(mode, wireReason);
     } catch (error) {
       // A remote notification failure cannot keep an already disposed local
       // Session running. The next explicit send will reopen its native history.

@@ -187,6 +187,88 @@ export function collectPiProjectResourceCliPaths(workingDir: string): PiProjectR
   });
 }
 
+function statMtimeMs(target: string): number {
+  try {
+    return fs.statSync(target).mtimeMs;
+  } catch {
+    return -1;
+  }
+}
+
+/**
+ * 启动快照:spawn 时冻结的项目资源清单 + watch root 的 mtime 基线。
+ * paths 是未经禁用过滤的原始收集结果(与后续 fresh collect 同口径可比)。
+ */
+export interface PiProjectResourceLaunchSnapshot {
+  readonly workingDir: string;
+  readonly paths: PiProjectResourceCliPaths;
+  readonly watchRootMtimes: ReadonlyArray<readonly [string, number]>;
+}
+
+/**
+ * 收集漂移快检要盯的目录 mtime 基线。目录集合必须覆盖 collector 实际枚举的
+ * 每个资源目录及其父目录(父目录捕获"目录从无到有"的创建事件):
+ * - `<wd>/.pi` 本身 + `.pi/skills` / `.pi/prompts` / `.pi/extensions`
+ * - cwd→git root 链上每级的 `.agents` + `.agents/skills`
+ * 不含 workingDir 本身:往项目根丢无关文件不应触发全量重扫。
+ */
+export function collectPiProjectResourceWatchRootMtimes(workingDir: string): Map<string, number> {
+  const roots = new Map<string, number>();
+  const scanRoot = realpathOrNull(workingDir) ?? path.resolve(workingDir);
+  if (!isDir(scanRoot)) return roots;
+  const repoRoot = findNearestGitRoot(scanRoot) ?? scanRoot;
+  const piDir = path.join(scanRoot, '.pi');
+  for (const dir of [piDir, path.join(piDir, 'skills'), path.join(piDir, 'prompts'), path.join(piDir, 'extensions')]) {
+    roots.set(dir, statMtimeMs(dir));
+  }
+  let current = scanRoot;
+  while (true) {
+    const agentsDir = path.join(current, '.agents');
+    roots.set(agentsDir, statMtimeMs(agentsDir));
+    roots.set(path.join(agentsDir, 'skills'), statMtimeMs(path.join(agentsDir, 'skills')));
+    if (current === repoRoot) break;
+    const parent = path.dirname(current);
+    if (parent === current) break;
+    current = parent;
+  }
+  return roots;
+}
+
+/** 冻结一份启动快照(mtime 基线在调用时采集)。 */
+export function snapshotPiProjectResourceLaunch(
+  workingDir: string,
+  paths: PiProjectResourceCliPaths,
+): PiProjectResourceLaunchSnapshot {
+  return Object.freeze({
+    workingDir,
+    paths,
+    watchRootMtimes: Object.freeze([...collectPiProjectResourceWatchRootMtimes(workingDir)]),
+  });
+}
+
+function samePiResourceList(left: readonly string[], right: readonly string[]): boolean {
+  return left.length === right.length && left.every((entry, index) => entry === right[index]);
+}
+
+/**
+ * 盘上项目资源相对启动快照是否已漂移(argv 重算后会不同)。两级判定:
+ * 1. stat 快检:所有 watch root 的 mtime 与启动基线一致(含缺失态 -1) → 无漂移;
+ * 2. mtime 有变化才全量重扫,按最终路径集合判定 —— mtime 变了但集合相同(如
+ *    触碰无关目录)不算漂移,集合相同也不要求内容相同(路径集合才是 argv 的输入)。
+ */
+export function piProjectResourcesDrifted(snapshot: PiProjectResourceLaunchSnapshot): boolean {
+  for (const [dir, mtimeAtLaunch] of snapshot.watchRootMtimes) {
+    if (statMtimeMs(dir) === mtimeAtLaunch) continue;
+    const fresh = collectPiProjectResourceCliPaths(snapshot.workingDir);
+    return !(
+      samePiResourceList(fresh.skills, snapshot.paths.skills)
+      && samePiResourceList(fresh.promptTemplates, snapshot.paths.promptTemplates)
+      && samePiResourceList(fresh.extensions, snapshot.paths.extensions)
+    );
+  }
+  return false;
+}
+
 /** Locale-independent path order so duplicate Skill names pick the same winner everywhere. */
 export function comparePiResourcePaths(left: string, right: string): number {
   if (left < right) return -1;

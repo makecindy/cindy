@@ -2291,6 +2291,25 @@ export class Session {
     );
   }
 
+  /**
+   * 盘上项目资源相对运行时启动快照是否已漂移(仅 pi 本地根任务实现,其余 agent 恒 false)。
+   */
+  hasProjectResourceDrift(): boolean {
+    return this.handle.hasProjectResourceDrift?.() === true;
+  }
+
+  /**
+   * 空闲且项目资源漂移时回收运行时:close 后由 host 的 lazy bootstrap 在下次发送时
+   * 重新 startSession(重扫项目资源、重算 argv)。返回是否发生了回收。
+   * turn 运行中绝不回收;中途新增的 openspec 类项目 skill 由此在下一条消息前生效。
+   */
+  async recycleIfProjectResourcesDrifted(): Promise<boolean> {
+    if (this.isTurnRunning()) return false;
+    if (!this.hasProjectResourceDrift()) return false;
+    await this.close({ reason: 'resource-refresh' });
+    return true;
+  }
+
   getCurrentTurnId(): string | null {
     return this.handle.getCurrentTurnId?.() ?? null;
   }

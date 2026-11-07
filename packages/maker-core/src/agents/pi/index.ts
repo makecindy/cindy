@@ -248,6 +248,8 @@ import {
   emptyPiProjectResourceCliPaths,
   filterPiProjectCliSkills,
   piProjectResourceCliArgs,
+  piProjectResourcesDrifted,
+  snapshotPiProjectResourceLaunch,
 } from './project-resource-cli.js';
 import {
   createPiTranslateContext,
@@ -4075,6 +4077,12 @@ export class PiAgent extends BaseAgent {
           ),
         }
       : collectedProjectResources;
+    // 启动快照:供运行时空闲时的资源漂移检测(见 handle.hasProjectResourceDrift)。
+    // 快照存未经禁用过滤的原始收集结果,与 drift 检测的 fresh collect 同口径;
+    // 受邀者会话的 collected 已按 guestRoot 裁剪,与全量扫描口径不一致,不参与漂移检测。
+    const projectResourceLaunchSnapshot = loadProjectResourcesInPlace && !guestRoot
+      ? snapshotPiProjectResourceLaunch(opts.workingDir, collectedProjectResources)
+      : null;
 
     // Own the entire managed-skill setup in the existing startup rollback:
     // discovery and path checks can fail before any projection is created.
@@ -7720,6 +7728,10 @@ export class PiAgent extends BaseAgent {
         return runtimeCapabilityManifest;
       },
       disabledSkillPaths: disabledSkillSnapshot,
+      hasProjectResourceDrift() {
+        return projectResourceLaunchSnapshot !== null
+          && piProjectResourcesDrifted(projectResourceLaunchSnapshot);
+      },
       onRuntimeCapabilitiesChange(listener) {
         if (closed) {
           notifyRuntimeCapabilityListener(listener, undefined);

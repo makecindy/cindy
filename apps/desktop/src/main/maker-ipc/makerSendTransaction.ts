@@ -383,6 +383,8 @@ export interface MakerSendTransactionSession {
   /** Codex host-owned evidence: a provider turn crossed acceptance on this runtime. */
   codexThreadMayHaveRollout?: boolean;
   isTurnRunning(): boolean;
+  /** 项目资源漂移回收(仅 pi 本地根任务实现;其余会话缺省,永漂移)。 */
+  recycleIfProjectResourcesDrifted?(): Promise<boolean>;
   send(message: UserMessage | string, opts?: SessionSendOptions): Promise<SessionSendResult>;
 }
 
@@ -1191,6 +1193,12 @@ export function createMakerSendTransaction(deps: MakerSendTransactionDeps): Make
       // and rebuild the handle before dispatching the message.
       if (sess?.getStatus?.() === 'error') {
         deps.log.info('send: error session requires recovery before dispatch', { sessionId });
+        sess = undefined;
+      }
+      // 会话中途新增的项目资源(如 openspec init):空闲时回收运行时,
+      // 下面的 lazy bootstrap 会重扫重算 argv 后再投递(见 Session.recycleIfProjectResourcesDrifted)。
+      if (sess && await sess.recycleIfProjectResourcesDrifted?.()) {
+        deps.log.info('send: project resources drifted, recycling runtime before dispatch', { sessionId });
         sess = undefined;
       }
       if (sess?.isTurnRunning()) {

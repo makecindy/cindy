@@ -13204,6 +13204,10 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
         // whose Maker.createSession call performs the existing bounded close retry.
         live = undefined;
       }
+      // 会话中途新增的项目资源(如 openspec init):空闲时回收运行时,lazy resume 重扫重建
+      if (live?.agentKind === 'pi' && await live.recycleIfProjectResourcesDrifted()) {
+        live = undefined;
+      }
       if (live) {
         if (live.isTurnRunning?.()) {
           lockStage = 'enqueue-queued-message';
