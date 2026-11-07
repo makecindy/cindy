@@ -10387,9 +10387,15 @@
     "cancel": "Annuler",
     "save": "Enregistrer",
     "autosave": {
+      "remoteUnconfirmed": "Enregistrement sur l’autre ordinateur non confirmé",
+      "remoteUnsavedDescription": "Quitter supprime le brouillon de cette page. Cela n’annule pas les modifications peut-être déjà enregistrées sur l’autre ordinateur. Rouvrez les paramètres pour vérifier.",
       "saving": "Enregistrement…",
       "saved": "Enregistré",
-      "retry": "Enregistrer à nouveau"
+      "retry": "Enregistrer à nouveau",
+      "unsavedTitle": "Paramètres du coéquipier non enregistrés",
+      "unsavedDescription": "Ces modifications n’ont pas pu être enregistrées, peut-être parce qu’un modèle sélectionné n’est pas disponible. Si vous quittez, elles seront perdues.",
+      "discard": "Abandonner les modifications",
+      "continueEditing": "Continuer à modifier"
     },
     "retry": "Réessayer",
     "backToBot": "Retour au coéquipier",

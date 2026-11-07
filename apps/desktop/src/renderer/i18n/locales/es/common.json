@@ -10387,9 +10387,15 @@
     "cancel": "Cancelar",
     "save": "Guardar",
     "autosave": {
+      "remoteUnconfirmed": "Guardado en el otro equipo sin confirmar",
+      "remoteUnsavedDescription": "Al salir se descarta el borrador de esta página. No se deshacen los cambios que quizá ya se guardaron en el otro equipo. Vuelve a abrir la configuración para comprobarlo.",
       "saving": "Guardando…",
       "saved": "Guardado",
-      "retry": "Guardar de nuevo"
+      "retry": "Guardar de nuevo",
+      "unsavedTitle": "No se guardó la configuración del compañero",
+      "unsavedDescription": "No se pudieron guardar estos cambios, quizá porque un modelo seleccionado no está disponible. Si sales, se descartarán.",
+      "discard": "Descartar cambios",
+      "continueEditing": "Seguir editando"
     },
     "retry": "Reintentar",
     "backToBot": "Volver al compañero",
