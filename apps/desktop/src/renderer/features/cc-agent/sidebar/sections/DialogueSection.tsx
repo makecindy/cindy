@@ -12,7 +12,7 @@
  */
 
 import { useMemo, useState } from 'react';
-import { Check, ChevronDown, ChevronRight, SlidersHorizontal, SquarePen } from 'lucide-react';
+import { Check, ChevronDown, ChevronRight, CirclePlus, SlidersHorizontal } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 
 import { cn } from '@/lib/utils';
@@ -246,7 +246,7 @@ export function DialogueSection({
                 'transition-colors hover:text-[var(--text-secondary)]',
               )}
             >
-              <SquarePen size={14} strokeWidth={2} />
+              <CirclePlus size={14} strokeWidth={2} />
             </button>
           </Tip>
         </div>

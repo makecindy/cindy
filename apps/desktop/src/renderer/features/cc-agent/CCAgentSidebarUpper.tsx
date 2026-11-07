@@ -40,7 +40,6 @@ import {
   Folder,
   Hammer,
   Loader2,
-  SquarePen,
   Trash2,
   X,
 } from 'lucide-react';
@@ -4320,7 +4319,7 @@ interface RailPanelsProps {
   onMoveSession: Parameters<typeof SessionEntryList>[0]['onMoveSession'];
   projectOptions: Parameters<typeof SessionEntryList>[0]['projectOptions'];
   onScheduleAction: Parameters<typeof SessionEntryList>[0]['onScheduleAction'];
-  /** 新建对话(对话面板头部 SquarePen)——展开态 DialogueSection 段头同源 handler。 */
+  /** 新建对话(对话面板头部 CirclePlus)——展开态 DialogueSection 段头同源 handler。 */
   onCreateDialogue: () => void;
   isCreateDialogueDisabled: boolean;
   /** 在此项目内新建(项目行右键菜单 + 三级面板头部)——展开态 ProjectNode
@@ -4668,7 +4667,7 @@ function RailPanels({
     </div>
   );
 
-  /** 面板头部的新建按钮(展开态段头 SquarePen 同款配色);创建动作导航去
+  /** 面板头部的新建按钮(展开态段头 CirclePlus 同款配色);创建动作导航去
    *  新建页,面板随之收起。disabled = 远程写保护(与展开态 ProjectAction
    *  同语义置灰,不收面板不丢上下文,codex review)。 */
   const panelHeadCreateButton = (
@@ -4706,7 +4705,7 @@ function RailPanels({
               'disabled:opacity-40 disabled:hover:text-[var(--text-tertiary)]',
             )}
           >
-            <SquarePen size={14} strokeWidth={2} />
+            <CirclePlus size={14} strokeWidth={2} />
           </button>
         </span>
       </Tip>

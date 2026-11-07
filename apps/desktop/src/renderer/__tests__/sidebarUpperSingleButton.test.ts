@@ -88,8 +88,8 @@ describe('Project 行内 + 也对标统一 New(delayed-create)', () => {
   });
 
   it('Project 行内新建会话使用段头新建对话同款图标', () => {
-    expect(projectNodeSource).toContain('SquarePen');
-    expect(projectNodeSource).toContain('<SquarePen size={14} strokeWidth={2} />');
+    expect(projectNodeSource).toContain('CirclePlus');
+    expect(projectNodeSource).toContain('<CirclePlus size={14} strokeWidth={2} />');
   });
 
   it('handleCreateInProject 调用 patchDraft({workingDir}) 后 navigate /cc-agent/new', () => {
