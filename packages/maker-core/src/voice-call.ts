@@ -54,6 +54,43 @@ function parseActions(text: string): Action[] {
   });
 }
 
+/** Providers sometimes answer a single-object turn as one pretty printed object
+ * instead of one object per line. Accept that shape; prose stays rejected. */
+function parseSingleAction(text: string): Action | undefined {
+  const trimmed = text
+    .trim()
+    .replace(/^```(?:jsonl?|ndjson)?\s*\n?|\n?```$/g, "");
+  let value: unknown;
+  try {
+    value = JSON.parse(trimmed);
+  } catch {
+    return undefined;
+  }
+  if (!value || typeof value !== "object" || Array.isArray(value))
+    return undefined;
+  const v = value as Record<string, unknown>;
+  if (Object.keys(v).length !== 1) return undefined;
+  if (typeof v.say === "string" && v.say.trim() && v.say.length <= 8_000)
+    return { say: v.say };
+  if (
+    typeof v.handoff === "string" &&
+    v.handoff.trim() &&
+    v.handoff.length <= 8_000
+  )
+    return { handoff: v.handoff };
+  return undefined;
+}
+
+function parseReply(text: string): Action[] {
+  try {
+    return parseActions(text);
+  } catch (error) {
+    const single = parseSingleAction(text);
+    if (single) return [single];
+    throw error;
+  }
+}
+
 export class VoiceCallContext {
   readonly record: VoiceCallRecord;
   private stopped = false;
@@ -137,8 +174,10 @@ export class VoiceCallContext {
               turn
           )
             return true;
-          turn.failed = true;
-          this.publish();
+          // Only the spoken reply failed; the utterance itself was accepted.
+          // Flagging the user turn makes every client drop the whole call, so a
+          // single unusable model reply ends a live conversation. A rejected
+          // task admission is reported by dispatchOnce, which still flags it.
           return false;
         }
       });
@@ -261,7 +300,7 @@ export class VoiceCallContext {
           const boundary = text.lastIndexOf("\n");
           if (boundary < 0) return;
           try {
-            const actions = parseActions(text.slice(0, boundary));
+            const actions = parseReply(text.slice(0, boundary));
             if (actions.every((action) => "say" in action))
               update(
                 actions
@@ -275,7 +314,7 @@ export class VoiceCallContext {
         },
       );
       if (this.stopped || controller.signal.aborted) return;
-      const actions = parseActions(raw);
+      const actions = parseReply(raw);
       if (
         actions.length === 1 &&
         "handoff" in actions[0] &&
@@ -292,10 +331,20 @@ export class VoiceCallContext {
       } else throw new Error("invalid_call_actions");
       validated = true;
     } finally {
-      if (!reply.complete && published) {
-        reply.complete = true;
-        reply.failed = controller.signal.aborted || !validated;
-        this.publish();
+      if (!reply.complete) {
+        if (published) {
+          reply.complete = true;
+          reply.failed = controller.signal.aborted || !validated;
+          this.publish();
+        } else if (!validated && !this.stopped && !controller.signal.aborted) {
+          // Nothing was spoken. Publishing the empty failed reply is what tells
+          // clients the turn is over; without it the call waits in "thinking"
+          // for a sentence that will never arrive.
+          this.record.turns.push(reply);
+          reply.complete = true;
+          reply.failed = true;
+          this.publish();
+        }
       }
       if (this.active === controller) this.active = undefined;
     }
