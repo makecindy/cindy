@@ -640,6 +640,7 @@ function describeHandle(handle: AgentSessionHandle, shadowDir: string, mirrorRoo
     extraDirs,
     writableDirs,
     virtualWorkspace,
+    imessageSendContext: true,
     ...(previousMirrorRoots.length ? { previousMirrorRoots } : {}),
     methods,
     ...(handle.requestSessionId ? { requestSessionId: handle.requestSessionId } : {}),
