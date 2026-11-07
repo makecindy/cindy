@@ -370,7 +370,9 @@ describe('send_to_session tool', () => {
   it('工具说明写明 agent_device_id 的取值来源与失败码', () => {
     const { registry } = setup();
     const tool = registry.get('send_to_session')!;
-    expect(tool.inputShape.agent_device_id?.description).toContain('locations[].agent_device_id');
+    // inputShape 是 z.ZodRawShape（值是 core $ZodType，不声明 description），按 classic ZodType 读取说明文案。
+    const shape = tool.inputShape as unknown as Record<string, { description?: string } | undefined>;
+    expect(shape.agent_device_id?.description).toContain('locations[].agent_device_id');
     expect(tool.description).toContain('【agent_device_id(仅 create 模式)】');
     expect(tool.description).toMatch(/PROVIDER_ROUTE_UNAVAILABLE: 仅 create/);
     expect(tool.description).toMatch(/INVALID_ARGS: .*agent_device_id/);
