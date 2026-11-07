@@ -674,6 +674,7 @@ function RootDivider({
     chatEntry: SplitChildEntry,
     otherSide: SplitChildEntry,
     available: number,
+    siblings: SplitChildEntry[] = visibleSiblings,
   ): { room: number; relay: RelayPlan } | null => {
     if (!(available > 0)) return null;
     const measured = rawPanePx(chatEntry.node);
@@ -682,7 +683,7 @@ function RootDivider({
       shareScale > 0 ? Math.max(0, (entry.fraction - MIN_SPLIT_CHILD_FRACTION) / shareScale) : 0;
     let sourcesRoom = floorRoom(chatEntry);
     const idleSources: number[] = [];
-    for (const sibling of visibleSiblings) {
+    for (const sibling of siblings) {
       if (sibling === chatEntry || sibling === otherSide) continue;
       const width = rawPanePx(sibling.node);
       if (width !== null && width < 1) {
@@ -724,14 +725,18 @@ function RootDivider({
     const startL = alignedLeft?.share ?? left.share;
     const startR = alignedRight?.share ?? right.share;
     // 起拖只量一次(拖动期间界面静止,没有失效场景);chat 量不到时回落账本估值。
-    const chatEntry = containsChat(left.node) ? left : containsChat(right.node) ? right : null;
+    // 行程余量与起拖基准同口径:原生缩放吸收后,树上的旧份额已不是画面上的份额。
+    const dragLeft = alignedLeft && alignedRight ? alignedLeft : left;
+    const dragRight = alignedLeft && alignedRight ? alignedRight : right;
+    const dragSiblings = alignedLeft && alignedRight && alignedLedger ? alignedLedger.entries : visibleSiblings;
+    const chatEntry = containsChat(dragLeft.node) ? dragLeft : containsChat(dragRight.node) ? dragRight : null;
     const shrinkPlan = chatEntry
-      ? chatShrinkPlan(chatEntry, chatEntry === left ? right : left, available)
+      ? chatShrinkPlan(chatEntry, chatEntry === dragLeft ? dragRight : dragLeft, available, dragSiblings)
       : null;
-    let dMin = -sideRoomShare(left, available, null);
-    let dMax = sideRoomShare(right, available, null);
-    if (shrinkPlan && chatEntry === left) dMin = -shrinkPlan.room;
-    if (shrinkPlan && chatEntry === right) dMax = shrinkPlan.room;
+    let dMin = -sideRoomShare(dragLeft, available, null);
+    let dMax = sideRoomShare(dragRight, available, null);
+    if (shrinkPlan && chatEntry === dragLeft) dMin = -shrinkPlan.room;
+    if (shrinkPlan && chatEntry === dragRight) dMax = shrinkPlan.room;
     const relay: RelayPlan | null = shrinkPlan?.relay ?? null;
     let lastD = 0;
 

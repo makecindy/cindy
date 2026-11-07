@@ -34,7 +34,13 @@ export function registerSidebarWindowExpansionIpc(): void {
     }
     const win = BrowserWindow.fromWebContents(event.sender);
     if (!win || win.isDestroyed()) return 0;
-    if (adopt === true) return expansion.adopt(win, typeof shrink === 'number' ? shrink : 0);
-    return expansion.update(win, width, screen.getDisplayMatching(win.getBounds()).workArea, shrink as number | undefined);
+    // The renderer speaks CSS pixels; native bounds scale with the page zoom factor.
+    const zoom = win.webContents.getZoomFactor();
+    const scale = Number.isFinite(zoom) && zoom > 0 ? zoom : 1;
+    const nativeShrink = typeof shrink === 'number' ? shrink * scale : undefined;
+    const delta = adopt === true
+      ? expansion.adopt(win, nativeShrink ?? 0)
+      : expansion.update(win, width * scale, screen.getDisplayMatching(win.getBounds()).workArea, nativeShrink);
+    return delta / scale;
   });
 }

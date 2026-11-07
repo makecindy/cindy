@@ -91,3 +91,19 @@ it('retracts the sidebar resize delta after an outward expansion', async () => {
   await act(async () => { rerender({ collapsed: true }); });
   expect(resize).toHaveBeenLastCalledWith(0, 551);
 });
+
+// Bug: leaving the chat route retracts the expansion; returning must expand again
+// instead of adopting the shrunken window (repeated navigation narrowed it 1800 → 1399 → 998).
+it('re-expands when returning to a sidebar route after it was retracted', async () => {
+  const resize = vi.fn(async (requested: number, _shrink?: number, adopt?: boolean) => (requested > 0 || adopt ? 401 : 0));
+  window.electronAPI = { windowSidebarExpansion: resize } as never;
+  const { rerender } = renderHook(({ ready }) => useSidebarPresentation(root, false, ready, () => 400, () => 400),
+    { initialProps: { ready: true } });
+  await act(async () => undefined);
+  resize.mockClear();
+  await act(async () => { rerender({ ready: false }); });
+  expect(resize).toHaveBeenLastCalledWith(0);
+  await act(async () => { rerender({ ready: true }); });
+  expect(resize).toHaveBeenLastCalledWith(400, undefined);
+  expect(resize.mock.calls.some((call) => call[2] === true)).toBe(false);
+});

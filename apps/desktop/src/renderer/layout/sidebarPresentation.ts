@@ -26,6 +26,8 @@ export function useSidebarPresentation(
   const pendingGrowth = useRef<number | null>(null);
   const pendingAdopt = useRef(false);
   const previous = useRef<boolean | null>(null);
+  // The expansion was retracted because the sidebar became unavailable (e.g. a Settings route).
+  const retracted = useRef(false);
   const generation = useRef(0);
   const frame = useRef<number | null>(null);
   const latest = useRef(presentation);
@@ -40,8 +42,15 @@ export function useSidebarPresentation(
     frame.current = null;
     const resize = window.electronAPI.windowSidebarExpansion;
     const width = root.current?.getBoundingClientRect().width ?? 0;
-    if (!ready || wasCollapsed === null || !resize || width <= 0) {
-      if (!ready && wasCollapsed === false) void resize?.(0).catch(() => undefined);
+    // Returning to a sidebar route re-expands; only a first mount adopts the restored bounds.
+    const reentering = ready && wasCollapsed === null && retracted.current && !collapsed;
+    if (ready) retracted.current = false;
+    if (!ready || (wasCollapsed === null && !reentering) || !resize || width <= 0) {
+      if (!ready && wasCollapsed === false && resize) {
+        retracted.current = true;
+        openedGeometry.current = null;
+        void resize(0).catch(() => undefined);
+      }
       pendingAdopt.current = ready && !collapsed && width > 0 && !!resize;
       setPresentation({ collapsed, instant: true,
         ...(ready && !collapsed && width > 0 ? { expandedWidth: width } : {}),
@@ -49,7 +58,7 @@ export function useSidebarPresentation(
       return;
     }
     // The sidebar consumes this same snapshot, so it cannot begin its own animation yet.
-    setPresentation({ ...latest.current, frozenWidth: width });
+    setPresentation({ ...latest.current, ...(reentering ? { collapsed: true } : {}), frozenWidth: width });
     const viewport = window.innerWidth;
     const geometry = openedGeometry.current;
     const shrink = collapsed && geometry
