@@ -4,7 +4,9 @@
   "agentBackend": "pi",
   "agentBinaryPath": "/opt/cindy-headless/bin/pi/pi",
   "agentBinaryVersion": "1.4.0",
-  "supportedModelIds": ["claude-sonnet-4-6"],
+  "supportedModelIds": [
+    "claude-sonnet-4-6"
+  ],
   "model": {
     "provider": "cindy",
     "requestedId": "claude-sonnet-4-6",
@@ -15,7 +17,7 @@
   },
   "permissionMode": "bypassPermissions",
   "systemPromptFile": "prompt.md",
-  "expectedSystemPromptDigest": "8c30f6d0acb69279f7cfaa172366c0f9071f70dd80f4c3de1a32cdd9d2e20772",
+  "expectedSystemPromptDigest": "36d32667dbd4e07d1bcbcf285904a43c4ee73bcdf9afc640261186f88bef3569",
   "makerMemory": true,
   "nativeMemory": false,
   "projectContext": true,
@@ -29,7 +31,10 @@
   "mcpServers": [],
   "piProjectSkills": {
     "enabled": true,
-    "roots": [".pi/skills", ".agents/skills"]
+    "roots": [
+      ".pi/skills",
+      ".agents/skills"
+    ]
   },
   "compaction": {
     "enabled": true,
