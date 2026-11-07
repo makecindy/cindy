@@ -134,16 +134,14 @@ export function isProviderRouteMutationInProgress(providerId: string): boolean {
 }
 
 /**
- * 通用 OAuth 供应商的 access_token 读取器（注入，同 key reader 模式）。
- *
- * **必须同步**（路由热路径，规则 10）：读 generic-oauth 的内存 blob 缓存；临期刷新由
- * generic-oauth 侧在读取时后台单飞触发，不阻塞本次路由。返回 null = 未登录 / 无 token
- * → 路由仍指向该供应商上游但置哑 token（上游预期 401；绝不回落默认路由防凭证泄漏）。
+ * 通用 OAuth token reader may await a required refresh before the request is routed.
+ * A missing token stays pinned to the selected provider with a dummy bearer; it never falls
+ * through to a different provider or the default route.
  */
-type OAuthTokenReader = (providerId: string) => string | null;
+type OAuthTokenReader = (providerId: string) => string | null | Promise<string | null>;
 let oauthTokenReader: OAuthTokenReader = () => null;
 
-/** host 启动期接通 generic-oauth 的同步 token 缓存读取。 */
+/** Host startup wires the token reader after generic OAuth storage is configured. */
 export function setOAuthTokenReader(reader: OAuthTokenReader): void {
   oauthTokenReader = reader;
 }
@@ -261,6 +259,26 @@ function updatingProviderRouteDecision(providerId: string): RoutingDecision {
         'content-type': 'application/json; charset=utf-8',
         'cache-control': 'no-store',
         'retry-after': '1',
+      });
+      res.end(payload);
+    },
+  };
+}
+
+function oauthRefreshFailedDecision(providerId: string): RoutingDecision {
+  return {
+    localHandler: async ({ res }) => {
+      const payload = JSON.stringify({
+        type: 'error',
+        error: {
+          type: 'provider_oauth_refresh_failed',
+          code: 'provider_oauth_refresh_failed',
+          message: `Provider '${providerId}' could not refresh its sign-in; reconnect it before retrying.`,
+        },
+      });
+      res.writeHead(503, {
+        'content-type': 'application/json; charset=utf-8',
+        'cache-control': 'no-store',
       });
       res.end(payload);
     },
@@ -843,7 +861,7 @@ async function readProviderRouteCredentials(
     isCustomRoutedProvider(provider) ? customProviderKeyReader(credentialProviderId, agent) : null;
   let oauthToken: string | null = null;
   if (routing.authStrategy === 'oauth-token') {
-    oauthToken = oauthTokenReader(credentialProviderId);
+    oauthToken = await oauthTokenReader(credentialProviderId);
   } else if (routing.authStrategy === 'provider-oauth-header') {
     try {
       oauthToken = await providerOAuthTokenReader(provider.id, agent);
@@ -876,13 +894,35 @@ export async function resolveProviderRouteDecision(
   const provider = getActiveCatalog().providers.find((p) => p.id === id);
   const routing = provider ? (sessionId ? sessionProviderRoutingForModel(sessionId, provider, agent, wireModel) : providerRoutingForModel(provider, agent, wireModel)) : null;
   if (!provider || !routing || !routingServesWireModel(routing, wireModel)) return null;
-  const { apiKey, oauthToken } = await readProviderRouteCredentials(provider, routing, agent);
+  const credentialRevision = getProviderRouteCredentialRevision(id);
+  let credentials: { apiKey: string | null; oauthToken: string | null };
+  try {
+    credentials = await readProviderRouteCredentials(provider, routing, agent);
+  } catch {
+    return {
+      providerId: id,
+      routing,
+      decision: isProviderRouteMutationInProgress(id) || getProviderRouteCredentialRevision(id) !== credentialRevision
+        ? updatingProviderRouteDecision(id)
+        : oauthRefreshFailedDecision(id),
+    };
+  }
+  if (isProviderRouteMutationInProgress(id) || getProviderRouteCredentialRevision(id) !== credentialRevision) {
+    return { providerId: id, routing, decision: updatingProviderRouteDecision(id) };
+  }
+  const { apiKey, oauthToken } = credentials;
   const decision = buildRouteDecision(routing, gatewayKey, agent, apiKey, oauthToken);
+  const dispatchGenerationValid = () =>
+    !isProviderRouteMutationInProgress(id) && getProviderRouteCredentialRevision(id) === credentialRevision;
   return {
     providerId: id,
     routing,
-    decision: decision && wireModel && routing.requestPath
-      ? { ...decision, pathOverride: routing.requestPath }
+    decision: decision
+      ? {
+          ...decision,
+          ...(wireModel && routing.requestPath ? { pathOverride: routing.requestPath } : {}),
+          ...(routing.authStrategy === 'oauth-token' ? { dispatchGenerationValid } : {}),
+        }
       : decision,
   };
 }
@@ -907,7 +947,13 @@ export async function resolveFrozenProviderRouteDecision(
   if (!provider || !isCustomRoutedProvider(provider) || !provider.agents.includes(agent)) return null;
   if (!routingServesWireModel(routing, wireModel)) return null;
   if (routing.modelInterface && wireModel) assertModelInterfaceAvailable(routing.modelInterface, wireModel, getActiveCatalog().modelRegistry);
-  const { apiKey, oauthToken } = await readProviderRouteCredentials(provider, routing, agent);
+  let credentials: { apiKey: string | null; oauthToken: string | null };
+  try {
+    credentials = await readProviderRouteCredentials(provider, routing, agent);
+  } catch {
+    return { providerId: id, routing, decision: oauthRefreshFailedDecision(id) };
+  }
+  const { apiKey, oauthToken } = credentials;
   // Header overrides are user-owned configuration. Organization routes use only the trusted
   // directory descriptor and managed credential, even if stale local data shares an id.
   const customHeaders = provider.source === 'user'
@@ -962,24 +1008,33 @@ export function resolveSessionRouteDecision(
   // 自定义供应商：resolve 时按 provider_key_<id>_<agent> 读出该 runtime 的 API key 注入鉴权头（不在 catalog）。
   const credentialProviderId =
     isCustomRoutedProvider(provider) ? storedCustomProviderId(providerId) : providerId;
+  const credentialRevision = getProviderRouteCredentialRevision(providerId);
+  const routeGenerationValid = () =>
+    !isProviderRouteMutationInProgress(providerId) &&
+    getProviderRouteCredentialRevision(providerId) === credentialRevision;
   const apiKey =
     isCustomRoutedProvider(provider) ? customProviderKeyReader(credentialProviderId, agent) : null;
   const withRequestPath = (decision: RoutingDecision | null): RoutingDecision | null =>
     decision && wireModel && routing.requestPath
       ? { ...decision, pathOverride: routing.requestPath }
       : decision;
-  // 通用 OAuth 供应商（oauth-token）：从 generic-oauth 内存缓存**同步**读 access_token
-  // （临期刷新在后台单飞，不阻塞路由热路径，规则 10）。
+  // Generic OAuth credentials may need an asynchronous refresh before this request can be routed.
   if (routing.authStrategy === 'oauth-token') {
-    return withRequestPath(
-      buildRouteDecision(
-        routing,
-        gatewayKey,
-        agent,
-        apiKey,
-        oauthTokenReader(credentialProviderId),
-      ),
-    );
+    return Promise.resolve(oauthTokenReader(credentialProviderId))
+      .then((token) => {
+        if (!routeGenerationValid()) {
+          return withRequestPath(updatingProviderRouteDecision(providerId));
+        }
+        const decision = withRequestPath(buildRouteDecision(routing, gatewayKey, agent, apiKey, token));
+        return decision ? { ...decision, dispatchGenerationValid: routeGenerationValid } : decision;
+      })
+      .catch(() =>
+        withRequestPath(
+          routeGenerationValid()
+            ? oauthRefreshFailedDecision(providerId)
+            : updatingProviderRouteDecision(providerId),
+        ),
+      );
   }
   if (routing.authStrategy !== 'provider-oauth-header') {
     return withRequestPath(buildRouteDecision(routing, gatewayKey, agent, apiKey));

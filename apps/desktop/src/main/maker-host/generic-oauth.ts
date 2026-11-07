@@ -189,8 +189,7 @@ export function hasGenericOAuthLogin(providerId: string): boolean {
 export function logoutGenericOAuth(providerId: string): boolean {
   if (!io.storage.remove(providerId)) return false;
   blobCache.set(providerId, null);
-  // 链上若有 in-flight 刷新也安全:doRefresh 落盘前会复核 blob 已清则不回写。
-  refreshChains.delete(providerId);
+  refreshInFlight.delete(providerId);
   return true;
 }
 
@@ -232,7 +231,7 @@ export function removeGenericOAuthCredentialsReversibly(
  */
 export function resetGenericOAuthMemoryCache(): void {
   blobCache.clear();
-  refreshChains.clear();
+  refreshInFlight.clear();
 }
 
 function isExpiringSoon(b: OAuthTokenBlob): boolean {
@@ -241,7 +240,7 @@ function isExpiringSoon(b: OAuthTokenBlob): boolean {
 }
 
 // ── 刷新（per-provider 单飞链，同 grok 的 _refreshChain 语义）──────────────────────
-const refreshChains = new Map<string, Promise<void>>();
+const refreshInFlight = new Map<string, Promise<void>>();
 
 function miniMaxExpiresAt(value: unknown): number {
   const n = typeof value === 'number' ? value : Number(value);
@@ -276,7 +275,7 @@ async function doRefresh(providerId: string, oauth: OAuthProviderDescriptor): Pr
   try {
     if (providerOAuthContract(oauth) === 'copilot') {
       const tok = await copilotToken(refreshToken, AbortSignal.timeout(REFRESH_FETCH_TIMEOUT_MS));
-      if (readBlob(providerId)?.refresh_token === refreshToken) writeBlob(providerId, blobFromTokenResponse(tok));
+      if (readBlob(providerId) === fresh) writeBlob(providerId, blobFromTokenResponse(tok, fresh));
       return;
     }
     const nous = providerOAuthContract(oauth) === 'nous';
@@ -309,37 +308,63 @@ async function doRefresh(providerId: string, oauth: OAuthProviderDescriptor): Pr
   }
   if (!tok.access_token) return;
   // 落盘前复核（同 grok）：刷新期间用户可能已登出（blob 被清）或已重登（refresh_token 变了）。
-  const beforeWrite = readBlob(providerId);
-  if (beforeWrite === null || beforeWrite.refresh_token !== refreshToken) return;
-  if (!writeBlob(providerId, blobFromTokenResponse(tok, beforeWrite))) {
+  if (readBlob(providerId) !== fresh) return;
+  if (!writeBlob(providerId, blobFromTokenResponse(tok, fresh))) {
     // 内存态已更新(本次会话可继续用新 token),只是重启后需重新登录。
     log.warn('generic oauth 刷新凭证落盘失败,仅内存态生效', { providerId });
   }
 }
 
-/** 单飞刷新：同 provider 的并发刷新排队串行，链头异常不断链。 */
+/** 同 provider 的并发刷新共用同一结果，失败时不让等待者再逐个重试。 */
 export function refreshGenericOAuthIfNeeded(
   providerId: string,
   oauth: OAuthProviderDescriptor,
 ): Promise<void> {
-  const prev = refreshChains.get(providerId) ?? Promise.resolve();
-  const run = prev.then(() => doRefresh(providerId, oauth));
-  refreshChains.set(
-    providerId,
-    run.catch((err) => {
-      log.warn('generic oauth 刷新异常', {
-        providerId,
-        err: err instanceof Error ? err.message : String(err),
-      });
-    }),
-  );
+  const inFlight = refreshInFlight.get(providerId);
+  if (inFlight) return inFlight;
+  const run = doRefresh(providerId, oauth).catch((err) => {
+    log.warn('generic oauth 刷新异常', {
+      providerId,
+      err: err instanceof Error ? err.message : String(err),
+    });
+  });
+  refreshInFlight.set(providerId, run);
+  void run.then(() => {
+    if (refreshInFlight.get(providerId) === run) refreshInFlight.delete(providerId);
+  });
   return run;
 }
 
+/** Read a routing token only after its required refresh completes successfully. */
+export async function readGenericOAuthAccessToken(
+  providerId: string,
+  oauth: OAuthProviderDescriptor | undefined,
+): Promise<string | null> {
+  const beforeRefresh = readBlob(providerId);
+  if (!beforeRefresh) return null;
+  if (!oauth || !isExpiringSoon(beforeRefresh)) return beforeRefresh.access_token;
+  if (!beforeRefresh.refresh_token) {
+    if (beforeRefresh.expires_at && io.now() >= beforeRefresh.expires_at) {
+      throw new Error('provider_oauth_refresh_failed');
+    }
+    return beforeRefresh.access_token;
+  }
+
+  await refreshGenericOAuthIfNeeded(providerId, oauth);
+  const current = readBlob(providerId);
+  if (!current) return null;
+  if (
+    current === beforeRefresh &&
+    current.expires_at !== undefined &&
+    io.now() >= current.expires_at
+  ) {
+    throw new Error('provider_oauth_refresh_failed');
+  }
+  return current.access_token;
+}
+
 /**
- * 路由热路径的**同步** token 读取（provider-route 的 oauthTokenReader 接线到这里）。
- * 读内存缓存；发现临期时**后台**触发单飞刷新（不阻塞本次路由——首个请求可能仍用旧
- * token，401 后下一请求即拿到新 token）。descriptor 由调用方现查目录传入。
+ * Synchronous cached token read for status and diagnostics surfaces that cannot block on refresh.
  */
 export function readCachedGenericOAuthAccessToken(
   providerId: string,
@@ -855,8 +880,13 @@ export async function discoverGenericOAuthModels(
 ): Promise<DiscoveredModel[] | null> {
   const configuredUrl = discoveryUrl ?? oauth.modelsDiscoveryUrl;
   if (!configuredUrl || !isCurrent()) return null;
-  const token = readCachedGenericOAuthAccessToken(providerId, oauth);
-  if (!token) return null;
+  let token: string | null;
+  try {
+    token = await readGenericOAuthAccessToken(providerId, oauth);
+  } catch {
+    return null;
+  }
+  if (!token || !isCurrent()) return null;
   const url = resolveCopilotAccountUrl(configuredUrl, token);
   const headers: Record<string, string> = { authorization: `Bearer ${token}` };
   if (agent === 'claude-code' && !isOpenRouterModelsUrl(url)) headers['anthropic-version'] = '2023-06-01';
