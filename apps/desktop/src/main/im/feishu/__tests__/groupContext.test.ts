@@ -22,6 +22,7 @@ import type {
 import {
   buildFeishuGroupContext,
   GROUP_CONTEXT_MAX_CHARS,
+  formatHistoryTime,
   HISTORY_PAGE_SIZE,
   type FeishuGroupContextDeps,
 } from '../groupContext';
@@ -129,6 +130,29 @@ describe('buildFeishuGroupContext 预算与过滤', () => {
       .split('\n')
       .filter((line) => line.startsWith('[Alice'));
     expect(historyLines.join('').length).toBeLessThanOrEqual(GROUP_CONTEXT_MAX_CHARS);
+  });
+
+  it.each([20, 60])('最旧行只剩 %i 字符时仍在首个完整署名保留成员 ID', async (remaining) => {
+    const header = '[Alice (user_id: ou_alice)]';
+    const body = 'x'.repeat(3900);
+    const row = `${header} ${formatHistoryTime(1)} ${body}`;
+    const messages = Array.from({ length: 5 }, (_, i) => entry({ messageId: `id_${i}`, text: body }));
+    const { deps } = makeDeps({ fetchPage: vi.fn(async () => page(messages)) });
+    const result = await buildFeishuGroupContext({
+      lane: GROUP_LANE,
+      triggerMessageId: 'trigger',
+      question: 'q',
+      reservedChars: GROUP_CONTEXT_MAX_CHARS - (4 * (row.length + 1) + remaining),
+      deps,
+    });
+    const lines = (result?.prefix ?? '').split('\n').filter((line) => line.startsWith('[Alice'));
+    expect(result?.messageCount).toBe(5);
+    expect(lines).toHaveLength(5);
+    expect(lines[0]).toContain('[…已截断]');
+    expect(lines.filter((line) => line.startsWith(header))).toHaveLength(1);
+    expect(lines[remaining < header.length ? 1 : 0].startsWith(header)).toBe(true);
+    expect(lines.slice(1).every((line) => line.endsWith(body))).toBe(true);
+    expect(lines.join('\n').length).toBeLessThanOrEqual(4 * (row.length + 1) + remaining);
   });
 
   it('群主流 lane 过滤话题消息; 话题 lane 只留本话题', async () => {

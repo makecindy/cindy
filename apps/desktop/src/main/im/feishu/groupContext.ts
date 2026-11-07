@@ -130,9 +130,9 @@ function safeOpenId(value: string): string | undefined {
   return /^[A-Za-z0-9_-]{1,128}$/.test(id) ? id : undefined;
 }
 
-function senderIdsForLines(messages: FeishuRecentChatMessage[]): Array<string | undefined> {
+function senderIdsForLines(entries: Array<{ item: FeishuRecentChatMessage; text: string }>): Array<string | undefined> {
   const idsByName = new Map<string, Set<string>>();
-  for (const m of messages) {
+  for (const { item: m } of entries) {
     const id = m.senderIsBot ? undefined : safeOpenId(m.senderOpenId);
     if (!id) continue;
     const name = sanitizeDisplayText(m.senderName);
@@ -141,9 +141,10 @@ function senderIdsForLines(messages: FeishuRecentChatMessage[]): Array<string | 
     idsByName.set(name, ids);
   }
   const seen = new Set<string>();
-  return messages.map((m) => {
+  return entries.map(({ item: m, text }) => {
     const id = m.senderIsBot ? undefined : safeOpenId(m.senderOpenId);
-    if (!id) return undefined;
+    // A truncated author does not expose the ID and must not consume its first occurrence.
+    if (!id || !text.startsWith(renderHistoryAuthor(m, id))) return undefined;
     const ambiguous = (idsByName.get(sanitizeDisplayText(m.senderName))?.size ?? 0) > 1;
     if (!ambiguous && seen.has(id)) return undefined;
     seen.add(id);
@@ -258,7 +259,7 @@ export async function buildFeishuGroupContext(args: {
   const picked = selected.entries.map(({ item }) => item);
   if (!picked.length) return null;
   // Both views use exactly the selected text, including any budget truncation.
-  const senderIds = senderIdsForLines(picked);
+  const senderIds = senderIdsForLines(selected.entries);
   const renderLines = (withSenderIds: boolean): string[] => {
     // Only replace the exact host-generated author prefix; body/name text may
     // contain identity-like strings whose removal would reconstruct fence tags.
