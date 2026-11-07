@@ -138,8 +138,11 @@ async function checkProcessDisclosure(page, ui) {
       const replies = Array.from({ length: 30 }, (_, i) => ({ ...answer, id: `reply-${i}`,
         threadRootId: answer.id, sequence: i + 2, content: `Reply ${i + 1}`,
         process: i === 29 ? answer.process : undefined }));
-      window.electronAPI.maker.chatServer.thread = async () => ({ ok: true,
-        root: { ...answer, process: undefined }, replies: [...replies], hasMore: false });
+      window.__uiPage.threadReads = [];
+      window.electronAPI.maker.chatServer.thread = async input => {
+        window.__uiPage.threadReads.push(input.markRead);
+        return { ok: true, root: { ...answer, process: undefined }, replies: [...replies], hasMore: false };
+      };
       window.electronAPI.maker.chatServer.reply = async input => {
         replies.push({ ...answer, id: 'sent-reply', clientId: input.clientId,
           threadRootId: answer.id, sequence: 32, authorKind: 'user', authorBotId: null,
@@ -223,6 +226,18 @@ async function checkProcessDisclosure(page, ui) {
   await ui.capture('process-follow-restored');
   if (ui.data.threadPanel) {
     await heading.click();
+    const reads = await page.evaluate(() => window.__uiPage.threadReads.length);
+    await page.evaluate(() => window.__uiPage.emit('botGroupChanged', { groupId: 'fixture-group', change: 'messages' }));
+    await page.waitForFunction(count => window.__uiPage.threadReads.length > count, reads);
+    assert.equal(await page.evaluate(() => window.__uiPage.threadReads.at(-1)), false, 'inspection must not acknowledge incoming replies');
+    const beforeEnd = await page.evaluate(() => window.__uiPage.threadReads.length);
+    await timeline.evaluate(el => { el.tabIndex = -1; el.focus({ preventScroll: true }); });
+    await timeline.press('End');
+    await page.waitForFunction(count => window.__uiPage.threadReads.length > count, beforeEnd);
+    assert.equal(await page.evaluate(() => window.__uiPage.threadReads.at(-1)),
+      await page.evaluate(() => document.hasFocus() && document.visibilityState === 'visible'),
+      'explicit return uses the normal visibility/focus read guard');
+    await heading.click();
     const input = surface.locator('textarea');
     await input.fill('Continue after inspecting the process');
     await input.press('Enter');
@@ -233,4 +248,48 @@ async function checkProcessDisclosure(page, ui) {
     });
     await ui.capture('thread-send-restores-follow');
   }
+  // Native keys act while the content changes in the same input turn. A later
+  // ResizeObserver must respect the reader; wheel navigation then returns to the tail.
+  for (const key of ['PageUp', 'Home']) {
+    await timeline.evaluate(el => {
+      el.tabIndex = -1; el.focus({ preventScroll: true });
+      el.addEventListener('keydown', () => {
+        const last = el.querySelector('article:last-of-type');
+        last.style.minHeight = `${last.getBoundingClientRect().height + 120}px`;
+      }, { once: true });
+    });
+    await timeline.press(key);
+    await page.waitForFunction(() => {
+      const el = document.querySelector('[data-process-scroll-check]');
+      return el.scrollHeight - el.scrollTop - el.clientHeight > 200;
+    });
+    await assertBrowsingSurvivesResize(timeline);
+    await ui.capture(`growth-${key}`);
+    await page.mouse.move(box.x + 24, box.y + box.height / 2);
+    await page.mouse.wheel(0, 10000);
+    await page.waitForFunction(() => {
+      const el = document.querySelector('[data-process-scroll-check]');
+      return el.scrollHeight - el.scrollTop - el.clientHeight < 2;
+    });
+  }
+  // Drive the scrollbar input boundary against the real native scroll range;
+  // jsdom cannot execute the observer that used to pull this move back down.
+  await timeline.evaluate(el => {
+    el.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true, button: 0 }));
+    const last = el.querySelector('article:last-of-type');
+    last.style.minHeight = `${last.getBoundingClientRect().height + 120}px`;
+    el.scrollTop -= 400;
+    el.dispatchEvent(new Event('scroll', { bubbles: true }));
+    el.dispatchEvent(new PointerEvent('pointerup', { bubbles: true, button: 0 }));
+  });
+  await assertBrowsingSurvivesResize(timeline);
+  await ui.capture('growth-scrollbar-input');
+}
+
+async function assertBrowsingSurvivesResize(timeline) {
+  const away = await timeline.evaluate(async el => {
+    for (let i = 0; i < 8; i++) await new Promise(requestAnimationFrame);
+    return el.scrollHeight - el.scrollTop - el.clientHeight;
+  });
+  assert.ok(away > 200, `content resize overrode manual browsing (${away}px from tail)`);
 }

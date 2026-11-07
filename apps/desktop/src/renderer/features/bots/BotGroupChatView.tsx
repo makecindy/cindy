@@ -1348,10 +1348,15 @@ function BotGroupChatContent({ groupId, direct }: { groupId: string; direct: boo
           processScroll.onWheel(event);
         }}
         onTouchStart={interruptJumpToBottom}
-        onPointerDown={interruptJumpToBottom}
+        onPointerDown={event => {
+          interruptJumpToBottom();
+          processScroll.onPointerDown(event);
+        }}
+        onPointerUp={processScroll.onPointerUp}
+        onPointerCancel={processScroll.onPointerUp}
         onKeyDown={event => {
-          processScroll.onKeyDown(event);
           if (['ArrowUp', 'ArrowDown', 'PageUp', 'PageDown', 'Home', 'End', ' '].includes(event.key)) interruptJumpToBottom();
+          processScroll.onKeyDown(event);
         }}
         onScroll={(event) => {
           const element = event.currentTarget;

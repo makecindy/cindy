@@ -1,4 +1,4 @@
-import { useCallback, useRef, type RefObject, type MutableRefObject, type MouseEvent, type WheelEvent, type KeyboardEvent, type UIEvent } from 'react';
+import { useCallback, useRef, type RefObject, type MutableRefObject, type MouseEvent, type PointerEvent, type WheelEvent, type KeyboardEvent, type UIEvent } from 'react';
 
 /** Main group chats and topic panels render the same process disclosures in
  * separate scrollers. Both must yield automatic following to manual inspection. */
@@ -11,6 +11,7 @@ export function useProcessDisclosureScroll(
   const inspecting = useRef(false);
   const previousTop = useRef(0);
   const previousSize = useRef({ height: 0, viewport: 0 });
+  const draggingScrollbar = useRef(false);
   const resumeFollow = useCallback(() => {
     inspecting.current = false;
     if (contentRef.current) contentRef.current.style.minHeight = '';
@@ -24,6 +25,12 @@ export function useProcessDisclosureScroll(
   return {
     inspecting,
     resumeFollow,
+    onPointerDown(event: PointerEvent<HTMLDivElement>) {
+      // Native scrollbar input targets the scroller itself, unlike its content.
+      draggingScrollbar.current = event.target === event.currentTarget;
+      if (draggingScrollbar.current) stickToBottom.current = false;
+    },
+    onPointerUp() { draggingScrollbar.current = false; },
     onClickCapture(event: MouseEvent<HTMLDivElement>) {
       if (!(event.target instanceof Element) || !event.target.closest('button[data-scroll-disclosure-header]')) return;
       const content = contentRef.current;
@@ -44,6 +51,7 @@ export function useProcessDisclosureScroll(
     onKeyDown(event: KeyboardEvent<HTMLDivElement>) {
       // Tool detail editors keep their own End key behavior.
       if (event.target instanceof Element && event.target.closest('input, textarea, [contenteditable="true"]')) return;
+      if (['ArrowUp', 'PageUp', 'Home'].includes(event.key) || (event.key === ' ' && event.shiftKey)) stickToBottom.current = false;
       if (event.key === 'End' && inspecting.current) {
         resumeFollow();
         event.currentTarget.scrollTop = event.currentTarget.scrollHeight;
@@ -56,8 +64,8 @@ export function useProcessDisclosureScroll(
       // has grown the content. Being away from the new bottom is not an upward
       // reading gesture. Keep following until the reader actually moves up.
       const movedUp = element.scrollTop < previousTop.current
-        && element.scrollHeight === previousSize.current.height
-        && element.clientHeight === previousSize.current.viewport;
+        && (draggingScrollbar.current || (element.scrollHeight === previousSize.current.height
+          && element.clientHeight === previousSize.current.viewport));
       const keepFollowing = stickToBottom.current && previousSize.current.height > 0 && !movedUp;
       const content = contentRef.current;
       if (inspecting.current && content?.style.minHeight && element.scrollTop < previousTop.current) {

@@ -126,6 +126,31 @@ beforeAll(() => {
   Object.defineProperty(HTMLElement.prototype, 'scrollHeight', { configurable: true, get: () => 0 });
 });
 
+// Unit / PR #9249 r4500563150: real group input handlers and resize observer.
+// Existing view tests use fixed sizes, missing a user move to 200 while content
+// grows 1400 -> 1410. The observer must leave the reading position at 200.
+it.each(['PageUp', 'Home', 'scrollbar'])('keeps explicit %s browsing while content grows', async action => {
+  const observed = new Map<Element, ResizeObserverCallback>();
+  vi.stubGlobal('ResizeObserver', class {
+    constructor(private callback: ResizeObserverCallback) {}
+    observe(element: Element) { observed.set(element, this.callback); }
+    disconnect() {}
+  });
+  renderView();
+  const scroller = await screen.findByTestId('bot-group-timeline');
+  let height = 1400;
+  Object.defineProperties(scroller, {
+    scrollHeight: { configurable: true, get: () => height },
+    clientHeight: { configurable: true, value: 600 },
+  });
+  scroller.scrollTop = 800; fireEvent.scroll(scroller);
+  if (action === 'scrollbar') fireEvent.pointerDown(scroller);
+  else fireEvent.keyDown(scroller, { key: action });
+  height = 1410; scroller.scrollTop = 200; fireEvent.scroll(scroller);
+  act(() => observed.get(scroller)!([], {} as ResizeObserver));
+  expect(scroller.scrollTop).toBe(200);
+});
+
 function msg(overrides: Partial<BotGroupMessageView>): BotGroupMessageView {
   return {
     id: 'm',
@@ -3855,6 +3880,43 @@ describe('thread previews and posting to the main chat', () => {
     return detail({ serverBacked: true, messages });
   }
   beforeEach(() => { vi.stubGlobal('ResizeObserver', class { observe() {} disconnect() {} }); });
+
+  // Unit / PR #9249 r4500563155: enter inspection through the real process
+  // heading, receive a reply without reading it, then return with no scroll
+  // displacement. Existing topic tests only acknowledge through onScroll.
+  it.each(['End', 'wheel'])('marks inspected topic replies read on explicit %s return without a scroll event', async action => {
+    const focus = vi.spyOn(document, 'hasFocus').mockReturnValue(true);
+    try {
+      const root = msg({ id: 'u1', content: 'Root' });
+      const reply = msg({ id: 'r1', sequence: 2, authorKind: 'bot', authorBotId: 'mimi', content: 'Visible reply',
+        process: { groupId: 'g1', executionId: 'thread-process', sessionId: 'work', clientId: 'work-note', deviceId: 'home' } });
+      const data = detail({ serverBacked: true, messages: [root] });
+      data.members[0] = { ...data.members[0]!, isOwned: true, homeDeviceId: 'home' };
+      mocks.getBotGroup.mockResolvedValue({ ok: true, group: data });
+      mocks.remoteInvoke.mockResolvedValue([]);
+      mocks.thread.mockResolvedValue({ ok: true, root, replies: [reply], hasMore: false });
+      renderView();
+      fireEvent.click((await screen.findAllByRole('button', { name: 'bots.groupChat.server.startTopic' }))[0]!);
+      const panel = screen.getByRole('complementary');
+      await within(panel).findByText('Visible reply');
+      const scroller = panel.querySelector('div.overflow-y-auto') as HTMLDivElement;
+      Object.defineProperties(scroller, {
+        scrollHeight: { configurable: true, value: 1400 }, clientHeight: { configurable: true, value: 600 },
+      });
+      scroller.scrollTop = 800; fireEvent.scroll(scroller);
+      await act(async () => fireEvent.click(panel.querySelector('button[data-scroll-disclosure-header]')!));
+      mocks.thread.mockClear();
+      await act(async () => mocks.pushes.forEach(push => push({ groupId: 'g1', change: 'messages' })));
+      expect(mocks.thread.mock.calls.at(-1)?.[0].markRead).toBe(false);
+      const reads = mocks.thread.mock.calls.length;
+      await act(async () => {
+        if (action === 'End') fireEvent.keyDown(scroller, { key: 'End' });
+        else fireEvent.wheel(scroller, { deltaY: 80 });
+      });
+      expect(mocks.thread.mock.calls).toHaveLength(reads + 1);
+      expect(mocks.thread.mock.calls.at(-1)?.[0].markRead).toBe(true);
+    } finally { focus.mockRestore(); }
+  });
 
   // Unit: opening a downloaded topic must show it before IPC completes; a permission
   // failure must erase that preview. Existing tests never reopened with a pending read.
