@@ -9,6 +9,7 @@ import type { BrowserWindow, IpcMainInvokeEvent } from 'electron';
 import { PERFORMANCE_TRACE_STATE_CHANNEL } from '../../../shared/performanceTrace';
 import { submitPerformanceReport } from '../upload';
 import type { LogUploadMeta } from '../../log-upload/types';
+import { generateUploadCode } from '../../log-upload/uploadCode';
 import { randomBytes } from 'node:crypto';
 import { mkdtemp, writeFile, rm, readFile, mkdir, utimes, readdir } from 'node:fs/promises';
 import os from 'node:os';
@@ -455,31 +456,36 @@ describe('performance recording', () => {
 describe('performance report retention', () => {
   // Review: expired raw profiles survived indefinitely without another recording.
   // Real cleanup entry, bounded OS temp fixtures; the former tests covered no retention.
-  it('removes only expired generated directories and preserves active/new/exported files', async () => {
-    const root = await mkdtemp(path.join(os.tmpdir(), 'cindy-trace-retention-'));
-    const now = Date.now();
-    const old = new Date(now - TRACE_RETENTION_MS - 1);
-    try {
-      for (const name of ['2345-6789', 'BCDE-FGHJ', 'K M N', 'PQRS-TVWX']) {
-        const dir = path.join(root, name);
-        await mkdir(dir);
-        await writeFile(path.join(dir, 'chromium-trace.json'), '{}');
-        if (name !== 'PQRS-TVWX') await utimes(dir, old, old);
+  // Region-prefixed report IDs must expire too; the old directory regex skipped them forever.
+  // Unit regression: one expired prefixed directory, with active/new/invalid IDs protected.
+  it.each(['', 'CN-', 'GLOBAL-', 'DEV-'])(
+    '%s removes only expired generated directories and preserves active/new/exported files',
+    async (prefix) => {
+      const root = await mkdtemp(path.join(os.tmpdir(), 'cindy-trace-retention-'));
+      const now = Date.now();
+      const old = new Date(now - TRACE_RETENTION_MS - 1);
+      const expired = `${prefix}2345-6789`;
+      const active = `${prefix}BCDE-FGHJ`;
+      const fresh = `${prefix}PQRS-TVWX`;
+      try {
+        for (const name of [expired, active, 'K M N', fresh, 'OTHER-2345-6789']) {
+          const dir = path.join(root, name);
+          await mkdir(dir);
+          await writeFile(path.join(dir, 'chromium-trace.json'), '{}');
+          if (name !== fresh) await utimes(dir, old, old);
+        }
+        await writeFile(path.join(root, 'YZ23-4567'), 'not a directory');
+        await cleanupTraceReports(root, (id) => id !== active, now);
+        expect((await readdir(root)).sort()).toEqual(
+          [active, 'K M N', fresh, 'OTHER-2345-6789', 'YZ23-4567'].sort(),
+        );
+        await cleanupTraceReports(root, () => true, now);
+        expect(await readdir(root)).not.toContain(active);
+      } finally {
+        await rm(root, { recursive: true, force: true });
       }
-      await writeFile(path.join(root, 'YZ23-4567'), 'not a directory');
-      await cleanupTraceReports(root, (id) => id !== 'BCDE-FGHJ', now);
-      expect((await readdir(root)).sort()).toEqual([
-        'BCDE-FGHJ',
-        'K M N',
-        'PQRS-TVWX',
-        'YZ23-4567',
-      ]);
-      await cleanupTraceReports(root, () => true, now);
-      expect(await readdir(root)).not.toContain('BCDE-FGHJ');
-    } finally {
-      await rm(root, { recursive: true, force: true });
-    }
-  });
+    },
+  );
   it('sweeps at startup and hourly without recordings, avoids overlaps, and stops on disposal', async () => {
     vi.useFakeTimers();
     let finish!: () => void;
@@ -785,6 +791,7 @@ describe('report boundary', () => {
   });
   it('uploads full files through the log sink and restores all samples with secrets redacted', async () => {
     const f = fixture();
+    f.deps.reportId = () => generateUploadCode((size) => new Uint8Array(size), 'global');
     await f.controller.start();
     await f.controller.stop();
     const report = f.reports[0];
