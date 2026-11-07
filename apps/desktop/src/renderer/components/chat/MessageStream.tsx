@@ -6722,7 +6722,7 @@ export function MessageStream({
                       if (readGhostCardSupersededBy(entry.html)) return null;
                       // 常态包一层 div(结构稳定,回锚媒体到达时卡片 iframe 不重挂);
                       // 回锚媒体(如 mivo 视频)挂卡正下方,与 tool_media 同款间距。
-                      return (
+                      const card = (
                         <div
                           key={item.key}
                           data-render-item-key={item.key}
@@ -6749,6 +6749,12 @@ export function MessageStream({
                           ) : null}
                         </div>
                       );
+                      // Plugin result cards are part of the assistant reply column too.
+                      // Keep the invisible avatar spacer used by prose and work groups
+                      // so companion conversations do not let the card start at x=0.
+                      return botReplyColumnSpacer
+                        ? withAssistantAvatar(botReplyColumnSpacer, card)
+                        : card;
                     }
 
                     if (item.type === 'tool_media') {
@@ -6989,7 +6995,7 @@ export function MessageStream({
  * bit-for-bit what they were. With one (a Bot conversation) the row becomes the
  * IM shape everyone already knows: avatar, then what they said.
  */
-function withAssistantAvatar(avatar: ReactNode | undefined, bubble: ReactNode): ReactNode {
+export function withAssistantAvatar(avatar: ReactNode | undefined, bubble: ReactNode): ReactNode {
   if (!avatar) return bubble;
   return (
     <div className="flex items-start gap-2.5">
