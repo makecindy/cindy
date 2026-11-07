@@ -312,6 +312,10 @@ export function RemoteDesktopSession({
   const unlockAttempt = useRef<Promise<void>>(Promise.resolve());
   // A remembered fitted size waiting for this lease's viewport measurement.
   const rememberedFit = useRef<{ lease: string; edge: number } | null>(null);
+  // Long edge of the size the phone last asked for. Rotation, folding and
+  // appearance changes only re-derive the ratio, so a smaller or larger
+  // choice from the resolution settings survives them.
+  const fitEdge = useRef<number | null>(null);
   // The computer's own system mode for a lease, read before this phone changes
   // it. Choosing it again forgets the remembered resolution.
   const hostMode = useRef<{ lease: string; modeId?: string } | null>(null);
@@ -2981,7 +2985,9 @@ export function RemoteDesktopSession({
     }
     const size = exactResolution
       ? { width, height }
-      : viewerDisplaySize(width, height);
+      : ((fitEdge.current
+          ? viewerDisplaySize(width, height, fitEdge.current)
+          : null) ?? viewerDisplaySize(width, height));
     if (
       !current?.controlling ||
       !(modeId ? caps?.resolutionRestore : caps?.viewerDisplay) ||
@@ -3021,6 +3027,8 @@ export function RemoteDesktopSession({
       if (active.current !== current) return;
       // Reconnect the physical source display after the temporary mirror ends.
       recovery.current.displayId = sourceDisplayId;
+      fitEdge.current =
+        modeId || restore ? null : Math.max(size.width, size.height);
       // The next connection reapplies this choice; restoring or choosing the
       // computer's own mode again forgets it.
       const fittedTo =
@@ -3189,6 +3197,7 @@ export function RemoteDesktopSession({
       if (!isCurrent()) return false;
       rememberedResolutionLease.current = current.lease;
       if (fit) {
+        fitEdge.current = Math.max(remembered.width, remembered.height);
         fittedViewport.current = remembered.viewport;
         // Same bookkeeping as fitting by hand, so restore is offered.
         setFittedDisplay(
@@ -3287,6 +3296,9 @@ export function RemoteDesktopSession({
       settingBusy ||
       settingInFlight.current ||
       controlInFlight.current ||
+      // The keyboard only covers part of the picture area; the computer keeps
+      // its size, and closing it returns to the size that was fitted.
+      keyboard ||
       !viewerDisplaySize(viewerViewport.width, viewerViewport.height) ||
       (fittedViewport.current.width === viewerViewport.width &&
         fittedViewport.current.height === viewerViewport.height)
@@ -3310,6 +3322,7 @@ export function RemoteDesktopSession({
     frameReady,
     lease?.controlling,
     settingBusy,
+    keyboard,
   ]);
 
   const toggleFitDisplay = () => {
@@ -3327,6 +3340,7 @@ export function RemoteDesktopSession({
       );
     } else {
       setFittedDisplay(null);
+      fitEdge.current = null;
       const current = active.current;
       if (current)
         void rememberResolution(

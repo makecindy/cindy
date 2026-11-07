@@ -3292,6 +3292,75 @@ describe("remote desktop controls", () => {
       );
     },
   );
+  // Unit regression: review found that rotating reset a chosen 1280 long edge
+  // to 1920, and that the keyboard's occlusion was refitted as a screen change.
+  it("keeps the chosen resolution across rotation and ignores keyboard coverage", async () => {
+    const original = fixture.invoke.getMockImplementation()!;
+    fixture.invoke.mockImplementation(async (...args) => {
+      const request = args[2][0];
+      if (request.op === "capabilities")
+        return {
+          ...(await original(...args)),
+          viewerDisplay: true,
+          viewerDisplayRestore: true,
+          videoSettings: true,
+          displayModes: true,
+          liveDisplaySwitch: true,
+          autoControl: true,
+        };
+      if (request.op === "viewerDisplay")
+        return {
+          lease: "lease",
+          controlling: true,
+          videoKept: true,
+          display: {
+            ...display,
+            id: "virtual",
+            width: request.width,
+            height: request.height,
+          },
+        };
+      return original(...args);
+    });
+    const viewport = (width: number, height: number, type: string) =>
+      act(async () =>
+        fixture.message!({
+          nativeEvent: {
+            data: JSON.stringify({ type, epoch: "lease", width, height }),
+          },
+        }),
+      );
+    const fits = () =>
+      requests().filter((request) => request.op === "viewerDisplay");
+    await connect();
+    act(() => button("operations").click());
+    act(() => button("fitViewerDisplay").click());
+    await viewport(390, 760, "viewportSize");
+    expect(fits()).toHaveLength(1);
+    act(() => button("displaySettings").click());
+    await act(async () => vi.advanceTimersByTimeAsync(0));
+    act(() => button("resolution").click());
+    await act(async () =>
+      Array.from(host.querySelectorAll<HTMLButtonElement>("button"))
+        .find((item) => item.textContent === "658 × 1280")!
+        .click(),
+    );
+    expect(fits().at(-1)).toMatchObject({ width: 658, height: 1280 });
+    // The keyboard covers part of the same screen: the computer keeps its size.
+    act(() => button("keyboard").click());
+    await viewport(390, 420, "viewportChanged");
+    await act(async () => vi.advanceTimersByTimeAsync(400));
+    expect(fits()).toHaveLength(2);
+    act(() => button("close").click());
+    await viewport(390, 760, "viewportChanged");
+    await act(async () => vi.advanceTimersByTimeAsync(400));
+    expect(fits()).toHaveLength(2);
+    // Rotation changes the ratio only; the long edge stays at the choice.
+    await viewport(760, 390, "viewportChanged");
+    await act(async () => vi.advanceTimersByTimeAsync(200));
+    expect(fits()).toHaveLength(3);
+    expect(fits().at(-1)).toMatchObject({ width: 1280, height: 656 });
+  });
   it.each(["streaming", "fallback"])(
     "coalesces continuous quality choices until %s",
     async (terminal) => {
