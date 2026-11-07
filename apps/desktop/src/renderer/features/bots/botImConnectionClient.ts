@@ -18,7 +18,7 @@ import type {
   BotImGroupActivationMode,
 } from '../../../shared/botImConnection';
 
-export type BotImConnectionApi = Window['electronAPI']['botImConnection'];
+export type BotImConnectionApi = Omit<Window['electronAPI']['botImConnection'], 'customChannels'>;
 
 export function botImConnectionApi(): BotImConnectionApi | null {
   // 副窗口 / 旧 preload 没有这个命名空间时整块功能静默隐藏, 不抛错。

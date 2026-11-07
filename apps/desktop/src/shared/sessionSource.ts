@@ -19,6 +19,7 @@ export const SESSION_SOURCES = [
   'bot',
   'cindy-make',
   'cindy-make-merge',
+  'custom',
 ] as const;
 
 export type SessionSource = (typeof SESSION_SOURCES)[number];
@@ -90,6 +91,7 @@ export const DESKTOP_VISIBLE_SESSION_SOURCES: SessionSource[] = [
   'shared',
   'plugin',
   ...(CINDY_MAKE_ENABLED ? (['cindy-make', 'cindy-make-merge'] as const) : []),
+  'custom',
 ];
 
 /**
@@ -117,7 +119,8 @@ export function normalizeSessionSource(source: unknown): SessionSource {
     source === 'plugin' ||
     source === 'bot' ||
     source === 'cindy-make' ||
-    source === 'cindy-make-merge'
+    source === 'cindy-make-merge' ||
+    source === 'custom'
     ? source
     : 'desktop';
 }

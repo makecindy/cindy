@@ -137,8 +137,15 @@ export async function resolveImSessionDefaults(
   }
   const providers =
     providerSnapshot === undefined ? await listProvidersForDefaults() : providerSnapshot;
-  const requestedAgent = raw.agentKind;
-  const requestedSettings = raw.agents[requestedAgent];
+  // 自定义渠道按连接配置 agent/model, 不跟随全局 IM 默认(那份是给平台渠道的)。
+  const requestedAgent = channel === 'custom' ? config.agentKind : raw.agentKind;
+  const requestedSettings =
+    channel === 'custom'
+      ? {
+          ...raw.agents[requestedAgent],
+          model: config.defaultModel || raw.agents[requestedAgent].model,
+        }
+      : raw.agents[requestedAgent];
   const model = pickModel(requestedAgent, requestedSettings, config, providers);
   const agentKind = model.agentKind;
   const agentSettings = raw.agents[agentKind] ?? requestedSettings;

@@ -6546,6 +6546,27 @@
         },
         "groupPermissionLabel": "グループで新規タスクを作成するときの権限モード",
         "groupPermissionDescription": "グループで新規タスクを作成するときに共通で使う権限モード（@bot でトピックを開く場合、/new、/ctr のいずれも対象）。初期値は「自動承認」で、上の権限モードは個人チャット専用です。グループの文脈にはメンバーが操作できる内容が含まれるため、「フルアクセス」を選ぶと確認なしで直接実行されます。信頼できるグループでのみ選択してください。変更は以後に作成するタスクにのみ適用され、既存のタスクはグループ内で /permission を使って個別に切り替えます。"
+      },
+      "custom": {
+        "title": "カスタムチャネル",
+        "description": "自社システム向けの HTTP チャネル: 受信で依頼、コールバックで結果を受け取ります。",
+        "count": "{{count}} 件",
+        "empty": "カスタムチャネルはまだありません。追加すると接続先と token を生成します。",
+        "inbound": "受信 URL",
+        "inboundPending": "(再起動後に生成)",
+        "token": "アクセス token(1 回だけ表示)",
+        "tokenOnce": "token はここで 1 回だけ表示されます。失ったら再生成してください。",
+        "callback": "コールバック: {{url}}",
+        "rotate": "token を再生成",
+        "rotateTitle": "token を再生成しますか?",
+        "rotateBody": "古い token は即座に無効になります。呼び出し側も更新してください。",
+        "removeTitle": "このチャネルを削除しますか?",
+        "removeBody": "受信 URL は即座に無効になります。セッション履歴は残ります。",
+        "add": "チャネルを追加",
+        "nameLabel": "チャネル名",
+        "namePlaceholder": "例: ERP チケット",
+        "callbackLabel": "コールバック URL(任意)",
+        "failed": "操作に失敗しました"
       }
     },
     "shortcuts": {
@@ -11486,7 +11507,8 @@
         "lark": "Lark",
         "wecom": "WeCom",
         "dingtalk": "DingTalk",
-        "discord": "Discord"
+        "discord": "Discord",
+        "custom": "カスタムチャネル"
       },
       "status": {
         "connected": "接続済み",
@@ -11610,13 +11632,24 @@
           "botUnavailable": "{{name}} は現在利用できません。復帰後にもう一度お試しください。",
           "connectFailed": "接続できませんでした：{{reason}}",
           "failed": "完了できませんでした。しばらくしてからもう一度お試しください。",
-          "personalBotGone": "設定 → IM ボット にこのボットはもうありません。認証情報を入力してください。"
+          "personalBotGone": "設定 → IM ボット にこのボットはもうありません。認証情報を入力してください。",
+          "invalidCustomName": "チャネル名を入力してください",
+          "invalidCallbackUrl": "コールバック URL は http:// または https:// で始めてください"
         },
         "source": {
           "label": "接続方法",
           "existing": "Cindy で設定済みのボットを使う",
           "manual": "新しい認証情報を入力",
           "moveNote": "このボットは 設定 → IM ボット から移され、そちらは空になります。これまでの個人チャットとグループチャットは {{name}} が引き継いで返信します。"
+        },
+        "custom": {
+          "nameLabel": "チャネル名",
+          "nameHint": "Cindy 内でこの接続を見分けるためだけに使います（例:「ERP チケット」）。",
+          "namePlaceholder": "例: ERP チケット",
+          "callbackLabel": "コールバック URL（任意）",
+          "callbackHint": "Cindy は返信をここへ POST します。空欄なら受信のみ。",
+          "ownerLabel": "メイン conversationId（任意）",
+          "ownerHint": "指定した id はパートナーのメインタスク（Bots パネルに表示）へ。他の id は隠しレーン。空欄なら全てレーン。"
         }
       },
       "removeConfirm": {
@@ -11639,6 +11672,12 @@
         "unbound": "公式 @askmycindy への質問を {{name}} に任せられます。",
         "managed": "X の質問はパートナーが担当しています。そのパートナーのメッセージプラットフォーム設定で変更できます。",
         "riskBody": "X の質問にはパートナーの共有メモリ、ツール、作業フォルダーを使用し、返信は公開されます。個人情報を扱う用途には使用しないでください。プライベートチャットの履歴は直接使用しません。"
+      },
+      "customAccess": {
+        "title": "{{name}} の接続情報",
+        "pending": "(エンドポイント起動後に生成)",
+        "copy": "token をコピー",
+        "once": "表示は 1 回だけです。受信 URL + Bearer token で呼び出します。"
       }
     },
     "voiceMode": {

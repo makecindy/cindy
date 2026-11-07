@@ -17,7 +17,15 @@
 
 import { BrowserWindow, ipcMain } from 'electron';
 import { eq } from 'drizzle-orm';
-import type { DingTalkIM, DiscordIM, FeishuIM, IMStatus, TelegramIM, WecomIM } from '@cindy/im';
+import type {
+  CustomIM,
+  DingTalkIM,
+  DiscordIM,
+  FeishuIM,
+  IMStatus,
+  TelegramIM,
+  WecomIM,
+} from '@cindy/im';
 
 import { createLogger } from '../../logger';
 import { getDbClient } from '../../localDb/client/current';
@@ -29,6 +37,14 @@ import { throwIpcError } from '../../utils/ipcValidate';
 import { isIpcError } from '../../../shared/ipc-errors';
 import { ownerScopedImSecrets } from '../ownerScopedStorage';
 import { readWechatChannelSettings, writeWechatCompanionBinding } from '../wechat/channelSettings';
+import { ownerScopedImUserDataPath } from '../ownerScopedStorage';
+import {
+  generateCustomToken,
+  registerCustomConnection,
+  unregisterCustomConnection,
+  writeCustomToken,
+} from '../custom/runtime';
+import { resolveSocketPath, urlFor } from '../custom/endpoint';
 import {
   BOT_IM_CONNECTION_CHANGED_EVENT,
   type BotImChannel,
@@ -64,7 +80,8 @@ export type BotImTransportInstance =
   | { kind: 'feishu'; im: FeishuIM; orchestrator: ImOrchestrator }
   | { kind: 'wecom'; im: WecomIM; orchestrator: ImOrchestrator }
   | { kind: 'dingtalk'; im: DingTalkIM; orchestrator: ImOrchestrator }
-  | { kind: 'discord'; im: DiscordIM; orchestrator: ImOrchestrator };
+  | { kind: 'discord'; im: DiscordIM; orchestrator: ImOrchestrator }
+  | { kind: 'custom'; im: CustomIM; orchestrator: ImOrchestrator };
 
 /** 设置页那份个人 bot 当前用的各平台身份(用于拒绝同一个 bot 两处同时用); 没配为 null。 */
 export interface BotImSettingsIdentity {
@@ -119,12 +136,14 @@ const DISCORD_SECRET_KEYS = [
   'discord-bot-runtime-active',
   'discord-bot-lifecycle-announcement',
 ] as const;
+const CUSTOM_SECRET_KEYS = ['custom-channel-token'] as const;
 export const SECRET_KEYS_BY_CHANNEL: Record<BotImChannel, readonly string[]> = {
   telegram: TELEGRAM_SECRET_KEYS,
   feishu: FEISHU_SECRET_KEYS,
   wecom: WECOM_SECRET_KEYS,
   dingtalk: DINGTALK_SECRET_KEYS,
   discord: DISCORD_SECRET_KEYS,
+  custom: CUSTOM_SECRET_KEYS,
 };
 
 /**
@@ -137,6 +156,7 @@ export const IDENTITY_SECRET_KEY: Record<BotImChannel, string> = {
   wecom: 'wecom-bot-id',
   dingtalk: 'dingtalk-bot-app-key',
   discord: 'discord-bot-token',
+  custom: 'custom-channel-token',
 };
 const IDENTITY_IN_USE_CODE: Record<BotImChannel, string> = {
   telegram: 'TOKEN_IN_USE: this Telegram bot is already connected on this computer',
@@ -144,6 +164,7 @@ const IDENTITY_IN_USE_CODE: Record<BotImChannel, string> = {
   wecom: 'APP_IN_USE: this WeCom bot is already connected on this computer',
   dingtalk: 'APP_IN_USE: this DingTalk app is already connected on this computer',
   discord: 'TOKEN_IN_USE: this Discord bot is already connected on this computer',
+  custom: 'TOKEN_IN_USE: this custom channel is already connected on this computer',
 };
 
 /** 企业微信建连是异步的: 交完凭证后最多等这么久看终态, 还在连就当 pending 保留连接。 */
@@ -201,6 +222,8 @@ function identityOf(transport: BotImTransportInstance | undefined): BotImConnect
         ownerUserId: transport.im.getOwnerUserId() || null,
       };
     }
+    case 'custom':
+      return { username: null, ownerUserId: null };
   }
 }
 
@@ -326,6 +349,10 @@ function identityValueOf(input: BotImConnectionAddInput): string {
       return input.appKey;
     case 'discord':
       return input.token;
+    case 'custom':
+      // 自定义渠道没有平台身份: 用连接 id 之外的稳定值(展示名)不参与查重,
+      // 因为同一个名字允许多条连接(不同系统各接一条)。
+      return input.displayName;
   }
 }
 
@@ -341,6 +368,9 @@ function settingsIdentityValueOf(settings: BotImSettingsIdentity, channel: BotIm
       return settings.dingtalkAppKey;
     case 'discord':
       return settings.discordToken;
+    case 'custom':
+      // 自定义渠道没有"设置页那份个人 bot"可冲突。
+      return null;
   }
 }
 
@@ -482,11 +512,26 @@ async function addBotImConnectionNow(
     botId: input.botId,
     channel: input.channel,
     ...(input.channel === 'feishu' ? { service: input.service } : {}),
+    ...(input.channel === 'custom'
+      ? {
+          custom: {
+            displayName: input.displayName,
+            callbackUrl: input.callbackUrl ?? null,
+            ...(input.ownerConversationId ? { ownerConversationId: input.ownerConversationId } : {}),
+          },
+        }
+      : {}),
   });
   const groupActivation = input.channel === 'telegram' ? options.groupActivation : undefined;
   if (groupActivation && Object.keys(groupActivation).length > 0) {
     // 传输层的行为 getter 每次现读记录, 建连前写好, 第一条群消息就按原来的参与模式走。
     record = (await updateBotImConnectionRecord(record.id, { groupActivation })) ?? record;
+  }
+  // 自定义渠道的 token 由 Cindy 生成并落安全存储; 添加结果里回传一次, 之后不再回传。
+  let customToken: string | null = null;
+  if (input.channel === 'custom') {
+    customToken = input.token ?? generateCustomToken();
+    writeCustomToken(record.id, customToken);
   }
   let live: LiveInstance;
   try {
@@ -554,6 +599,16 @@ async function addBotImConnectionNow(
         if (failed) return rollback(describeStatusFailure(failed));
         break;
       }
+      case 'custom': {
+        if (input.channel !== 'custom') return rollback('channel mismatch');
+        const token = input.token ?? transport.im.getToken();
+        if (!token) return rollback('secret-unavailable');
+        transport.im.setToken(token);
+        await transport.im.init();
+        // 端点按 token 校验, 换 token 后必须重注册, 否则旧 token 仍能进站。
+        await registerCustomConnection(record.id, transport.im);
+        break;
+      }
     }
   } catch (err) {
     return rollback(err instanceof Error ? err.message : String(err));
@@ -578,7 +633,20 @@ async function addBotImConnectionNow(
   broadcastChanged();
   const list = buildBotImConnectionListPayload();
   const view = list.connections.find((item) => item.id === record.id) ?? toView(live.record);
-  return { ...list, connection: view };
+  const socketPath = resolveSocketPath(ownerScopedImUserDataPath('im-custom'));
+  return {
+    ...list,
+    connection: view,
+    ...(customToken
+      ? {
+          customAccess: {
+            token: customToken,
+            inboundUrl: urlFor(record.id),
+            socketPath,
+          },
+        }
+      : {}),
+  };
 }
 
 /** 伙伴页「群聊」小节: 已知群 + 每群参与模式(仅 @ / 全响应)。 */
@@ -641,8 +709,15 @@ export async function removeBotImConnection(id: string): Promise<BotImConnection
     try {
       // 解绑: 清命令菜单、通知主人、删凭证(传输层自己的那份)。
       const transport = live.transport;
-      if (transport.kind === 'telegram' || transport.kind === 'discord') await transport.im.disconnect();
-      else await transport.im.clearCredentials();
+      if (transport.kind === 'telegram' || transport.kind === 'discord') {
+        await transport.im.disconnect();
+      } else if (transport.kind === 'custom') {
+        // 先注销端点目标: 只 dispose 会留下 token 仍有效的地址, 客户端会一直等回复。
+        unregisterCustomConnection(id);
+        await transport.im.dispose();
+      } else {
+        await transport.im.clearCredentials();
+      }
     } catch (err) {
       log.warn(`bot im connection ${id}: disconnect failed: ${String(err)}`);
     }
@@ -728,6 +803,43 @@ export function parseBotImConnectionAddInput(payload: unknown): BotImConnectionA
     if (!appKey || appKey.length > 256) throwIpcError('INVALID_PARAMS', 'appKey is invalid');
     if (!appSecret || appSecret.length > 512) throwIpcError('INVALID_PARAMS', 'appSecret is invalid');
     return { botId, channel: 'dingtalk', appKey, appSecret };
+  }
+  if (p.channel === 'custom') {
+    const displayName = typeof p.displayName === 'string' ? p.displayName.trim() : '';
+    if (!displayName || displayName.length > 80) {
+      throwIpcError('INVALID_PARAMS', 'displayName is invalid');
+    }
+    let callbackUrl: string | null = null;
+    if (typeof p.callbackUrl === 'string' && p.callbackUrl.trim()) {
+      try {
+        const parsed = new URL(p.callbackUrl.trim());
+        if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
+          throwIpcError('INVALID_PARAMS', 'callbackUrl must be http or https');
+        }
+        callbackUrl = parsed.toString();
+      } catch {
+        throwIpcError('INVALID_PARAMS', 'callbackUrl is invalid');
+      }
+    }
+    const token = typeof p.token === 'string' ? p.token.trim() : '';
+    if (token && (token.length < 16 || token.length > 256 || /\s/.test(token))) {
+      throwIpcError('INVALID_PARAMS', 'token is invalid');
+    }
+    const ownerConversationId =
+      typeof p.ownerConversationId === 'string' && p.ownerConversationId.trim()
+        ? p.ownerConversationId.trim()
+        : null;
+    if (ownerConversationId && ownerConversationId.length > 200) {
+      throwIpcError('INVALID_PARAMS', 'ownerConversationId is invalid');
+    }
+    return {
+      botId,
+      channel: 'custom',
+      displayName,
+      callbackUrl,
+      ...(ownerConversationId ? { ownerConversationId } : {}),
+      ...(token ? { token } : {}),
+    };
   }
   const token = typeof p.token === 'string' ? p.token.trim() : '';
   const ownerUserId = typeof p.ownerUserId === 'string' ? p.ownerUserId.trim() : '';

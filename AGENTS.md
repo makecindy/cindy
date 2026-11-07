@@ -190,6 +190,9 @@ Cindy 面向大众用户，让人以简单高效的方式用 AI 完成工作。�
 - 修改本地协议 package、插件分发来源边界或 device-link 协议／relay／隧道
   payload／IPC allowlist，或任何改动跨端 wire protocol 前，必须先读
   `docs/dev-rules/protocol-compatibility.md`。
+- 修改自定义 IM 渠道（/im/custom/* 入站端点、token 存储、conversationId 分线、
+  出站回调或设置页／伙伴页入口）前，必须先读 docs/custom-im-channel.md：端点
+  不使用 TCP，socket 路径重启复用，token 只进 safeStorage。
 - 修改 Device Link 客户端、协议、relay、设备／媒体接口、能力协商或连接恢复行为前，必须先读
   `docs/dev-rules/protocol-compatibility.md` 的「自建中转同步维护」：凡影响自建中转的改动，
   必须在同一次改动中完成必要的同步适配与互通验证，不得留到后续。

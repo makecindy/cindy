@@ -43,6 +43,7 @@ function issueOf(channel: string, error: unknown): string {
 export function importedImBotTarget(botId: string, credential: { format: string; value: unknown }): ImportedImBotTarget | string {
   const value = object(credential.value);
   const channel = credential.format;
+  // custom 渠道没有可导入的平台凭证, 导入清单里也不存在这种格式。
   if (!['telegram', 'discord', 'feishu', 'wecom', 'dingtalk'].includes(channel)) return 'IMPORT_IM_BOT_CONNECT_FAILED';
   const owner = string(value.ownerUserId);
   // Without a known owner the companion would adopt whoever messages the bot first.
@@ -53,7 +54,8 @@ export function importedImBotTarget(botId: string, credential: { format: string;
       service: value.service, wecomBotId: value.wecomBotId, secret: value.secret, appKey: value.appKey });
   } catch (error) { return issueOf(channel, error); }
   const identity = input.channel === 'telegram' || input.channel === 'discord' ? input.token
-    : input.channel === 'feishu' ? input.appId : input.channel === 'wecom' ? input.wecomBotId : input.appKey;
+    : input.channel === 'feishu' ? input.appId : input.channel === 'wecom' ? input.wecomBotId
+      : input.channel === 'dingtalk' ? input.appKey : '';
   return {
     channel: input.channel,
     existing() {

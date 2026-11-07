@@ -13,7 +13,8 @@
 import { t } from '../i18n.js';
 import { addBotImConnection, parseBotImConnectionAddInput } from '../im/shared/botImConnectionRuntime.js';
 import { isIpcError } from '../../shared/ipc-errors.js';
-import type { BotImChannel, BotImFeishuService } from '../../shared/botImConnection.js';
+import type { BotImFeishuService } from '../../shared/botImConnection.js';
+import type { BotAuthorizationImChannel } from '../../shared/botAuthorization.js';
 import type {
   GhostSetupAllowedAction,
   GhostSetupAssessment,
@@ -33,7 +34,7 @@ interface ImField {
 }
 
 const OWNER_ID = (value: string) => /^\d{1,20}$/.test(value);
-const FIELDS: Record<BotImChannel, ImField[]> = {
+const FIELDS: Record<BotAuthorizationImChannel, ImField[]> = {
   telegram: [
     { key: 'token', copy: 'telegram.token', maxLength: 256, valid: (v) => /^\d{6,20}:[A-Za-z0-9_-]{20,}$/.test(v) },
     { key: 'ownerUserId', copy: 'telegram.owner', hint: 'telegram.ownerHint', maxLength: 20, valid: OWNER_ID },
@@ -62,7 +63,7 @@ const settingsCopy = (key: string, botName: string) =>
   t(`bots.channels.add.${key}`).replaceAll('{{name}}', botName);
 
 export function createBotImAuthorizationAdapter(options: {
-  channel: BotImChannel;
+  channel: BotAuthorizationImChannel;
   bot: { id: string; name: string };
   /** Re-validates the owner, the teammate link and its active status. */
   assertSession(): Promise<void>;

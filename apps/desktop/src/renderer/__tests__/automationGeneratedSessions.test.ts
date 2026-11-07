@@ -121,6 +121,8 @@ describe('automation-generated sessions', () => {
       'review',
       'shared',
       'plugin',
+      // 自定义 HTTP 渠道:设置页 / 伙伴页配的连接,消息进「对话」分组。
+      'custom',
     ]);
     expect(DESKTOP_VISIBLE_SESSION_SOURCES).toContain('feishu');
     expect(DESKTOP_VISIBLE_SESSION_SOURCES).toContain('telegram');

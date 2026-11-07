@@ -6546,6 +6546,27 @@
         },
         "groupPermissionLabel": "群聊新建任务权限档",
         "groupPermissionDescription": "群里新建任务时统一使用的权限档（@bot 开话题、/new、/ctr 都算），默认「自动审批」；上面那个权限档只管私聊。群上下文里有成员可控的内容，设成「完全访问」后将直接执行、不再逐条确认，请确认群里的人都可信。改动只影响之后新建的任务，已有任务在群里用 /permission 单独切换。"
+      },
+      "custom": {
+        "title": "自定义渠道",
+        "description": "给你的系统开一条 HTTP 渠道：入站派活，出站回调取结果。",
+        "count": "{{count}} 条",
+        "empty": "还没有自定义渠道。添加后 Cindy 会生成接入地址与 token。",
+        "inbound": "入站地址",
+        "inboundPending": "（重启后生成）",
+        "token": "访问 token（只显示一次）",
+        "tokenOnce": "token 只在这里显示一次；丢失后请重新生成。",
+        "callback": "回调地址：{{url}}",
+        "rotate": "重置 token",
+        "rotateTitle": "重置 token？",
+        "rotateBody": "旧 token 会立刻失效，正在使用它的系统需要同步更新。",
+        "removeTitle": "删除这条渠道？",
+        "removeBody": "删除后入站地址立即失效，任务历史保留。",
+        "add": "添加渠道",
+        "nameLabel": "渠道名称",
+        "namePlaceholder": "例如：ERP Issue",
+        "callbackLabel": "回调地址（可选）",
+        "failed": "操作失败"
       }
     },
     "shortcuts": {
@@ -11486,7 +11507,8 @@
         "lark": "Lark",
         "wecom": "企业微信",
         "dingtalk": "钉钉",
-        "discord": "Discord"
+        "discord": "Discord",
+        "custom": "自定义渠道"
       },
       "status": {
         "connected": "已连接",
@@ -11610,13 +11632,24 @@
           "botUnavailable": "{{name}} 现在不可用，等 TA 恢复后再试。",
           "connectFailed": "没连上：{{reason}}",
           "failed": "没能完成，请稍后再试。",
-          "personalBotGone": "设置 → IM 机器人 里已经没有这个机器人了，请改为填写凭证。"
+          "personalBotGone": "设置 → IM 机器人 里已经没有这个机器人了，请改为填写凭证。",
+          "invalidCustomName": "请填写渠道名称",
+          "invalidCallbackUrl": "回调地址必须以 http:// 或 https:// 开头"
         },
         "source": {
           "label": "连接方式",
           "existing": "使用已在 Cindy 设置的机器人",
           "manual": "填写新的凭证",
           "moveNote": "这个机器人会从 设置 → IM 机器人 移过来，那里将变为空；原来的私聊和群聊改由 {{name}} 接着回复。"
+        },
+        "custom": {
+          "nameLabel": "渠道名称",
+          "nameHint": "只用于在 Cindy 里区分这条连接，例如「ERP Issue」。",
+          "namePlaceholder": "例如：ERP Issue",
+          "callbackLabel": "回调地址（可选）",
+          "callbackHint": "Cindy 把回复 POST 到这里；留空则只接收入站消息。",
+          "ownerLabel": "主任务 conversationId（可选）",
+          "ownerHint": "填一个 id，它走伙伴主任务（Bots 面板可见）；其它 id 各走隐藏专线。留空则全部走专线。"
         }
       },
       "removeConfirm": {
@@ -11639,6 +11672,12 @@
         "unbound": "可将官方 @askmycindy 收到的你的提问交给 {{name}}。",
         "managed": "X 提问由伙伴处理。可在该伙伴的消息平台设置中更改绑定。",
         "riskBody": "X 提问会使用伙伴的共享记忆、能力和工作目录，回答会公开。请勿通过 X 处理私人信息。专线不会直接使用伙伴的私聊记录。"
+      },
+      "customAccess": {
+        "title": "{{name}} 接入信息",
+        "pending": "（端点启动后生成）",
+        "copy": "复制 token",
+        "once": "token 只显示这一次；外部系统用入站地址 + Bearer token 调用。"
       }
     },
     "voiceMode": {

@@ -2423,6 +2423,18 @@ interface ElectronAPI {
 
   // ── 伙伴自有 IM 机器人连接(Telegram / 飞书, 伙伴设置「消息平台」页)──
   botImConnection: {
+    /** 设置页「自定义渠道」(没有 botId, 与伙伴页那份分开存)。 */
+    customChannels: {
+      list: () => Promise<{ connections: unknown[] }>;
+      add: (payload: {
+        displayName: string;
+        callbackUrl?: string | null;
+        agentKind?: 'claude-code' | 'codex' | 'pi';
+        model?: string | null;
+      }) => Promise<unknown>;
+      remove: (payload: { id: string }) => Promise<{ connections: unknown[] }>;
+      rotateToken: (payload: { id: string }) => Promise<unknown>;
+    };
     list: () => Promise<import('../shared/botImConnection').BotImConnectionListPayload>;
     /**
      * 填凭证并建连。伙伴不存在 → NOT_FOUND; 其余都是 PRECONDITION_FAILED, 以 message 前缀

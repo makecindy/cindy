@@ -113,6 +113,9 @@ interface PersonalCredentials {
 /** 读个人 bot 的凭证, 拼成添加平台的同一份入参; 没配齐为 null。 */
 function readPersonalCredentials(channel: BotImChannel, botId: string): PersonalCredentials | null {
   switch (channel) {
+    case 'custom':
+      // 自定义渠道没有个人 bot 凭证可移交。
+      return null;
     case 'telegram': {
       const token = read(PERSONAL_KEYS.telegram.token);
       const ownerUserId = read(PERSONAL_KEYS.telegram.owner);
