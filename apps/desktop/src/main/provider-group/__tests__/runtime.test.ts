@@ -727,7 +727,8 @@ describe('provider group runtime quota account selection', () => {
     expect(resolved[0].codexUsage?.appServerBuckets?.__default__?.primary?.usedPercent).toBe(30);
     expect(resolved[1].codexUsage !== null).toBe(accepted);
     await h.read();
-    expect(io.invoke).toHaveBeenCalledTimes(2);
+    // Built-in OpenAI probes account-pool support once, shared by its two quota sources.
+    expect(io.invoke).toHaveBeenCalledTimes(id === 'openai' ? 3 : 2);
     expect(local).toHaveBeenCalledTimes(1);
     expect(localLimits).toHaveBeenCalledTimes(1);
   });

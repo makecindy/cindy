@@ -19390,5 +19390,23 @@
     "rendered": "查看文件",
     "wrap": "自動換行",
     "lineNumbers": "行號"
+  },
+  "subscriptionAccounts": {
+    "title": "訂閱帳號",
+    "note": "首個帳號沿用 CLI 預設目錄，新增帳號獨立登入。新任務按策略分配，已有任務保留原帳號。",
+    "strategy": "負載平衡",
+    "add": "新增帳號",
+    "default": "預設目錄",
+    "ready": "已連線",
+    "signedOut": "需要登入",
+    "unavailable": "暫時讀不到狀態",
+    "limited": "配額已用完",
+    "remove": "移出帳號",
+    "removeTitle": "移出 {{name}}？",
+    "removeDescription": "Cindy 將不再給這個帳號分配任務。CLI 登入和對話歷史仍保留在本機。",
+    "failed": "無法讀取或更新帳號。請檢查 CLI 登入和網路連線後重試。",
+    "used": "已用 {{percent}}%",
+    "directory": "帳號目錄",
+    "login": "登入"
   }
 }

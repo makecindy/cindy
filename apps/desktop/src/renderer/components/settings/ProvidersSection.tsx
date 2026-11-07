@@ -92,6 +92,9 @@ import { BILLING_CURRENCY, formatBillingAmount } from '@/features/billing/money'
 import { canAccessBillingSettings } from './billingVisibility';
 import { resolveXdAssetModuleState } from './providerAssetModule';
 import { useProviderSubscriptionCard } from './useProviderSubscriptionCard';
+import { SubscriptionAccountsSection } from './SubscriptionAccountsSection';
+import { isSubscriptionProvider } from '../../../shared/subscriptionAccounts';
+import type { SubscriptionProvider } from '../../../shared/subscriptionAccounts';
 import { ProviderAccountUsageModule } from './ProviderAccountUsageModule';
 import { QuotaHoverCard } from '../status/QuotaHoverCard';
 import { ProviderConnectionDialog } from './ProviderConnectionDialog';
@@ -875,6 +878,7 @@ function DetailHeader({
       >
         {detail && <div className="px-5 pb-4">{detail}</div>}
         {provider?.subscriptionFastPolicy && <div className="px-5 pb-4"><SubscriptionFastSetting key={provider.id} provider={provider} /></div>}
+        {provider && isSubscriptionProvider(provider.id) && <SubscriptionAccountsSection key={provider.id} providerId={provider.id} />}
         {assetModule ??
           (subscription ? (
             <div
@@ -926,6 +930,60 @@ function DetailHeader({
 // ---------------------------------------------------------------------------
 // Anthropic —— OAuth(Claude.ai 订阅),复用 maker.claudeOAuth*。
 // ---------------------------------------------------------------------------
+
+function NativeSubscriptionHeader({ provider, onChanged, children, providerId }: {
+  provider?: ProviderView; onChanged: () => void; children?: ReactNode; providerId: SubscriptionProvider;
+}) {
+  const { t } = useTranslation();
+  const { confirm } = useConfirmDialog();
+  const [pooled, setPooled] = useState(false);
+  const [poolConnected, setPoolConnected] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const login = useRef<string | null>(null);
+  useEffect(() => {
+    let current = true;
+    const refresh = () => void window.electronAPI.subscriptionAccounts.command({ action: 'read', providerId })
+      .then(view => { if (current) {
+        setPooled(view.configured);
+        setPoolConnected(view.accounts.some(account => account.status === 'ready' || account.status === 'limited'));
+      } }).catch(() => {});
+    refresh();
+    const off = window.electronAPI.subscriptionAccounts.onChanged(event => { if (event.providerId === providerId) refresh(); });
+    return () => {
+      current = false; off();
+      if (login.current) void window.electronAPI.subscriptionAccounts.command({ action: 'cancel', providerId, loginKey: login.current }).catch(() => {});
+    };
+  }, [providerId]);
+  if (!pooled) return providerId === 'anthropic'
+    ? <AnthropicHeader provider={provider} onChanged={onChanged}>{children}</AnthropicHeader>
+    : <OpenAiHeader provider={provider} onChanged={onChanged}>{children}</OpenAiHeader>;
+  const connected = poolConnected;
+  const act = async () => {
+    if (login.current) {
+      await window.electronAPI.subscriptionAccounts.command({ action: 'cancel', providerId, loginKey: login.current }).catch(() => {});
+      return;
+    }
+    const prefix = providerId === 'anthropic' ? 'claude' : 'codex';
+    if (connected && !(await confirm({ title: t(`settings.connections.${prefix}.logoutConfirm.title`), description: t(`settings.connections.${prefix}.logoutConfirm.description`), confirmText: t(`settings.connections.${prefix}.logoutConfirm.confirm`) }))) return;
+    setBusy(true);
+    try {
+      if (connected && provider) await disconnectProvider(provider, await window.electronAPI.maker.listProviders());
+      else {
+        login.current = crypto.randomUUID();
+        await window.electronAPI.subscriptionAccounts.command({ action: 'login', providerId, accountId: 'default', loginKey: login.current });
+      }
+      onChanged();
+    } catch (error) {
+      if (!String(error).includes('SUBSCRIPTION_LOGIN_CANCELLED')) toast.error(t('subscriptionAccounts.failed'));
+    } finally { login.current = null; setBusy(false); }
+  };
+  return <DetailHeader provider={provider ? { ...provider, connected } : provider} children={children}
+    icon={providerId === 'anthropic' ? <AnthropicMark size={18} /> : <OpenAIMark size={18} />}
+    title={provider?.name ?? (providerId === 'anthropic' ? 'Anthropic' : 'OpenAI')}
+    subtitle={t('subscriptionAccounts.title')}
+    status={{ kind: connected ? 'connected' : 'neutral', label: t(busy ? 'settings.providers.pill.connecting' : 'settings.providers.pill.disconnected') }}
+    primaryAction={{ label: t(login.current ? 'settings.providers.button.cancel' : connected ? 'settings.providers.button.disconnect' : 'subscriptionAccounts.login'), onClick: () => void act(), disabled: busy && !login.current }} />;
+}
 
 function AnthropicHeader({
   children,
@@ -2888,7 +2946,7 @@ export function ProvidersSection() {
     return selected?.id === 'openai'
       ? {
           ...selected,
-          connected: isChatGptConnectionConnected(codexAuth.state, selected.connected),
+          connected: selected.connected || isChatGptConnectionConnected(codexAuth.state, selected.connected),
         }
       : selected;
   }, [selectedId, listProviders, codexAuth.state]);
@@ -3072,9 +3130,9 @@ export function ProvidersSection() {
     if (p.id === 'xd')
       return <XdGatewayHeader children={children} provider={p} onChanged={refetch} />;
     if (p.id === 'anthropic')
-      return <AnthropicHeader children={children} provider={p} onChanged={refetch} />;
+      return <NativeSubscriptionHeader key={p.id} children={children} provider={p} providerId="anthropic" onChanged={refetch} />;
     if (p.id === 'openai')
-      return <OpenAiHeader children={children} provider={p} onChanged={refetch} />;
+      return <NativeSubscriptionHeader key={p.id} children={children} provider={p} providerId="openai" onChanged={refetch} />;
     if (p.id === 'xai') return <XaiHeader children={children} provider={p} onChanged={refetch} />;
     if (p.source === 'builtin' && p.auth.method === 'apiKey' && isBuiltinApiKeyProviderId(p.id)) {
       return (

@@ -68,6 +68,7 @@ import {
 import { skillEntryPath, snapshotDisabledSkillLaunch, currentDisabledSkillLaunchPaths } from '../shared/skill-activation.js';
 import { snapshotManagedSkillGrants } from '../shared/managed-skill-policy.js';
 import type { AgentCredentialMode } from '../../interfaces/auth-adapter.js';
+import { NATIVE_SUBSCRIPTION_ACCOUNT, type NativeSubscriptionAccount } from '../../interfaces/auth-adapter.js';
 import type {
   Capabilities,
   EffortDescriptor,
@@ -2448,6 +2449,7 @@ export class CodexAgent extends BaseAgent {
     remoteHostId?: string,
     credentialMode?: AgentCredentialMode,
     opts: {
+      nativeSubscriptionAccount?: NativeSubscriptionAccount;
       providerId?: string;
       ignoreBindingLeases?: number;
       routeIsCurrent?: () => boolean;
@@ -2700,6 +2702,7 @@ assertRouteCurrent();
         opts.deviceHostedGuestModelIds,
         opts.localToolCatalog,
         opts.customContextProviderId,
+        opts.nativeSubscriptionAccount,
       ).finally(() => {
         // 成功: this.hosts 已赋值, 后续走快路径; 失败: 清掉 promise 让下次调用能重试
         const current = this.hostPromises.get(key);
@@ -2816,11 +2819,12 @@ assertRouteCurrent();
    * 不能只读 models_cache.json：OAuth 登录前会清旧 cache，model/list 也是 cache ready barrier。
    */
   override async refreshLocalModels(options?: RefreshLocalModelsOptions): Promise<boolean> {
-    const credentialMode = options?.credentialMode;
+    const nativeSubscriptionAccount = options?.[NATIVE_SUBSCRIPTION_ACCOUNT];
+    const credentialMode = nativeSubscriptionAccount ? 'oauth-bearer' : options?.credentialMode;
     if (!credentialMode) return this.refreshLocalModelsWithinDeadline(options);
 
     const key = codexLocalAuthHostIdentity(
-      options?.providerId ? `local-account:${options.providerId}:models` : localControlPlaneHostKey(credentialMode),
+      nativeSubscriptionAccount ? `local-account:${nativeSubscriptionAccount.id}:models` : options?.providerId ? `local-account:${options.providerId}:models` : localControlPlaneHostKey(credentialMode),
       credentialMode === 'gateway-key' ? 'isolated' : 'legacy-shared',
     );
     let timer: ReturnType<typeof setTimeout> | undefined;
@@ -2850,11 +2854,12 @@ assertRouteCurrent();
   private async refreshLocalModelsWithinDeadline(
     options?: RefreshLocalModelsOptions,
   ): Promise<boolean> {
-    const credentialMode = options?.credentialMode;
+    const nativeSubscriptionAccount = options?.[NATIVE_SUBSCRIPTION_ACCOUNT];
+    const credentialMode = nativeSubscriptionAccount ? 'oauth-bearer' : options?.credentialMode;
     // 显式 provider 刷新使用独立 control-plane app-server。不能为了发一次 model/list
     // 切换共享 local host 的凭证形态：切换协调器会关闭空闲会话，忙碌会话则直接拒绝。
     const key = codexLocalAuthHostIdentity(
-      options?.providerId ? `local-account:${options.providerId}:models` : credentialMode
+      nativeSubscriptionAccount ? `local-account:${nativeSubscriptionAccount.id}:models` : options?.providerId ? `local-account:${options.providerId}:models` : credentialMode
         ? localControlPlaneHostKey(credentialMode) : hostKey(),
       credentialMode === 'gateway-key' ? 'isolated' : 'legacy-shared',
     );
@@ -2863,6 +2868,7 @@ assertRouteCurrent();
       host: credentialMode
         ? await this.getHost(undefined, credentialMode, {
           providerId: options?.providerId,
+          nativeSubscriptionAccount,
           ...(credentialMode === 'gateway-key' ? { localAuthPolicy: 'isolated' as const } : {}),
           keyOverride: key,
           hostPurpose: 'control-plane',
@@ -2870,7 +2876,7 @@ assertRouteCurrent();
         : (await this.getUtilityHost()).host,
     }), async (host) => {
       const init = await host.ensureStarted();
-      if (init.codexHome && !options?.providerId) this.codexHome = init.codexHome;
+      if (init.codexHome && !options?.providerId && !nativeSubscriptionAccount) this.codexHome = init.codexHome;
 
       const models: CodexModelListResponse['data'] = [];
       const seenCursors = new Set<string>();
@@ -2953,6 +2959,7 @@ assertRouteCurrent();
     deviceHostedGuestModelIds?: readonly string[],
     localToolCatalog?: string,
     customContextProviderId?: string | null,
+    nativeSubscriptionAccount?: NativeSubscriptionAccount,
   ): Promise<AppServerHost> {
     const seq = (this.createHostSeqByKey.get(key) ?? 0) + 1;
     this.createHostSeqByKey.set(key, seq);
@@ -3033,12 +3040,14 @@ assertRouteCurrent();
     let hostRetirementCleanup: CodexExtraSpawnConfig['onHostRetired'];
     // Capture the owner/account reader before any asynchronous authentication work.
     const readAccountTokens = !remoteHostId && historyHome
-      ? this.deps.createCodexAuthTokenReader?.(providerId)
+      ? nativeSubscriptionAccount ? nativeSubscriptionAccount.readCodexTokens : this.deps.createCodexAuthTokenReader?.(providerId)
       : undefined;
     for (;;) {
       const upgradedToSuperset = spawnCredentialMode !== credentialMode;
       onSpawnCredentialModeResolved?.(spawnCredentialMode);
-      const authOptions = spawnCredentialMode || providerId ? { credentialMode: spawnCredentialMode, ...(providerId ? { providerId } : {}) } : undefined;
+      nativeSubscriptionAccount?.assertCurrent();
+      const authOptions = spawnCredentialMode || providerId || nativeSubscriptionAccount
+        ? { credentialMode: spawnCredentialMode, ...(providerId ? { providerId } : {}), nativeSubscriptionAccount } : undefined;
       const state =
         spawnCredentialMode === 'gateway-key' && requestedGatewayState
           ? requestedGatewayState
@@ -3077,11 +3086,11 @@ assertRouteCurrent();
             {
               remoteHostId,
               ...(providerId ? { providerId } : {}),
-              ...(key.startsWith('local-account:') ? { codexHome: env.CODEX_HOME } : {}),
+              ...(key.startsWith('local-account:') || nativeSubscriptionAccount ? { codexHome: env.CODEX_HOME } : {}),
               ...(!remoteHostId && historyHome ? { runtimeCodexHome: historyHome } : {}),
               // 受邀者任务的 app-server 与账号会话一样走按 host 分开的 proxy(鉴权注入方式冻结在这个 host 上)，
               // 不改写本机用户任务共用的 proxy 状态。
-              ...(key.startsWith('local-account:') || key.startsWith(LOCAL_GUEST_HOST_PREFIX) || deviceHostedGuestProviderId || localToolCatalog
+              ...(key.startsWith('local-account:') || nativeSubscriptionAccount || key.startsWith(LOCAL_GUEST_HOST_PREFIX) || deviceHostedGuestProviderId || localToolCatalog
                 ? { accountHostKey: `${key}:${generation}` } : {}),
               credentialMode: spawnCredentialMode,
               ...(localAuthPolicy === 'isolated'
@@ -3222,11 +3231,15 @@ assertRouteCurrent();
             let tokens = await readAccountTokens();
             assertCurrentGeneration('external authentication scope');
             if (refresh && tokens.accessToken === staleAccessToken) {
-              await this.withStartedAccountHost(providerId, async (accountHost) => {
-                assertCurrentGeneration('account token refresh');
-                await accountHost.request('account/read', { refreshToken: true }, { timeoutMs: 8_000 });
-              }, 8_000);
-              tokens = await readAccountTokens();
+              if (nativeSubscriptionAccount?.readCodexTokens) {
+                tokens = await nativeSubscriptionAccount.readCodexTokens(true);
+              } else {
+                await this.withStartedAccountHost(providerId, async (accountHost) => {
+                  assertCurrentGeneration('account token refresh');
+                  await accountHost.request('account/read', { refreshToken: true }, { timeoutMs: 8_000 });
+                }, 8_000);
+                tokens = await readAccountTokens();
+              }
             }
             assertCurrentGeneration('external authentication result');
             return tokens;
@@ -4970,7 +4983,9 @@ assertRouteCurrent();
       ...(!reviewMode && !opts[LOCAL_AGENT_CLIENT]?.hostToolsOnly && shouldRegisterAskUserDynamicTool(opts) ? [ASK_USER_DYNAMIC_TOOL] : []),
     ];
     const accountProviderId = this.deps.isCodexAccountProvider?.(opts.providerId) ? opts.providerId! : undefined;
-    const accountSessionHost = !opts.remoteHostId && (accountProviderId !== undefined || this.deps.isolateCodexAccountSessions === true);
+    const nativeSubscriptionAccount = opts[NATIVE_SUBSCRIPTION_ACCOUNT];
+    nativeSubscriptionAccount?.assertCurrent();
+    const accountSessionHost = !opts.remoteHostId && (nativeSubscriptionAccount !== undefined || accountProviderId !== undefined || this.deps.isolateCodexAccountSessions === true);
     if (opts.remoteHostId && accountProviderId) throw new Error('This Codex account belongs to the local device');
     const startupRouteSignal = this.routeResolutionAbort.signal;
     let routeSelection = opts.remoteHostId
@@ -5024,6 +5039,7 @@ assertRouteCurrent();
       setOpts?: { providerId?: string | null },
     ): Promise<boolean> => {
       const nextProvider = setOpts && Object.hasOwn(setOpts, 'providerId') ? setOpts.providerId : mutableProviderId;
+      if (nativeSubscriptionAccount && nextProvider !== opts.providerId) return true;
       if ((this.deps.isCodexAccountProvider?.(nextProvider) ? nextProvider : undefined) !== accountProviderId) return true;
       for (let attempt = 0; ; attempt++) {
         const selection = opts.remoteHostId ? null : await this.resolveLocalAuthSelection(
@@ -5068,7 +5084,8 @@ assertRouteCurrent();
       reviewMode, customContext: usesCustomContextHost, storage: sessionStorage, policy: localAuthPolicy,
       environmentIdentity: companionEnvironment?.identity,
       ...(guestCodexHome ? { guestSession: true } : {}),
-    }) + (localToolCatalog ? `:host-tools-only:${opts.model ?? ''}` : '');
+    }) + (nativeSubscriptionAccount ? `:subscription:${nativeSubscriptionAccount.id}` : '')
+      + (localToolCatalog ? `:host-tools-only:${opts.model ?? ''}` : '');
     let currentHostKey = resolveSessionHostKey();
     let releaseHostBindingLease: (() => void) | null = null;
     const acquireHostBindingLeaseIfNeeded = (): void => {
@@ -5089,6 +5106,7 @@ assertRouteCurrent();
       if (!routeSelection.isCurrent()) throw new CodexRouteSelectionChangedError();
       acquireHostBindingLeaseIfNeeded();
       return await this.getHost(opts.remoteHostId, credentialMode, {
+        nativeSubscriptionAccount,
         ...(localToolCatalog ? {keyOverride:currentHostKey,localToolCatalog} : {}),
         ...(companionEnvironment ? { keyOverride: currentHostKey } : {}),
         ...(accountProviderId ? { providerId: accountProviderId } : {}),
@@ -5309,7 +5327,7 @@ assertRouteCurrent();
       throw error;
     }
     const sessionCodexHome = initResp.codexHome ?? null;
-    if (initResp.codexHome && !accountProviderId && !sessionStorage) this.codexHome = initResp.codexHome;
+    if (initResp.codexHome && !accountProviderId && !nativeSubscriptionAccount && !sessionStorage) this.codexHome = initResp.codexHome;
     // reviewer 路由的凭证模式判定: 远程 daemon 用的是 auth sync 推过去的
     // 同一份订阅凭证, reviewer 调用发生在 daemon 本地 — 订阅下走 daemon →
     // chatgpt.com 直连, 与本地订阅同构 (远端出网由用户网络或 agent-proxy
@@ -14937,6 +14955,8 @@ assertRouteCurrent();
   }
 
   async forkSdkSession(opts: ForkSdkSessionOptions): Promise<ForkSdkSessionResult> {
+    const nativeSubscriptionAccount = opts[NATIVE_SUBSCRIPTION_ACCOUNT];
+    nativeSubscriptionAccount?.assertCurrent();
     const log = this.deps.logger.child('codex/fork');
     const tailTurnsToDrop = normalizeTailTurnsToDrop(opts.tailTurnsToDrop);
     let lastTurnId = normalizeNativeForkTurnId(opts.lastTurnId);
@@ -15020,11 +15040,11 @@ assertRouteCurrent();
       }
       // Source history inspection must not depend on the credentials we are leaving.
       let preparedSourcePath = opts.stripEncryptedReasoning && !guestCodexHome
-        ? await this.deps.prepareCodexResumeSession?.(opts.sourceSdkSessionId)
+        ? await this.deps.prepareCodexResumeSession?.(opts.sourceSdkSessionId, nativeSubscriptionAccount ? { codexHome: nativeSubscriptionAccount.configDir } : undefined)
         : undefined;
       let historyChecked = false;
       if (opts.stripEncryptedReasoning && (preparedSourcePath || this.codexHome)) {
-        await assertCodexRolloutRewriteSupported(preparedSourcePath || await this.findRolloutPath(opts.sourceSdkSessionId));
+        await assertCodexRolloutRewriteSupported(preparedSourcePath || await this.findRolloutPath(opts.sourceSdkSessionId, undefined, nativeSubscriptionAccount?.configDir));
         historyChecked = true;
       }
       const forkSqliteHome = forkStorage?.sqliteHome;
@@ -15040,6 +15060,7 @@ assertRouteCurrent();
           try {
             const leased = await this.acquireHostOperation(async () => {
             const host = await this.getHost(undefined, forkCredentialMode, {
+              nativeSubscriptionAccount,
               keyOverride: forkHostKey,
               ...(forkAccountId ? { providerId: forkAccountId } : {}),
               ...(forkSqliteHome ? { sqliteHome: forkSqliteHome } : {}),
@@ -15068,18 +15089,18 @@ assertRouteCurrent();
             // Child rollout discovery scans this.codexHome. The fork host may be
             // the first host started by this process, so hydrate it here.
             forkCodexHome = initResp.codexHome ?? undefined;
-            if (forkCodexHome && !forkAccountId && !forkStorage) this.codexHome = forkCodexHome;
+            if (forkCodexHome && !forkAccountId && !nativeSubscriptionAccount && !forkStorage) this.codexHome = forkCodexHome;
             // Imported Codex threads may still live under another CODEX_HOME. Resume
             // already asks the desktop host to link/adopt their state and rollout;
             // fork must cross the same preparation boundary before thread/fork or the
             // fork app-server cannot resolve a freshly imported thread.
             // A first host may have just created the managed state DB needed for imports.
             stage = 'source-prepare';
-            if (!guestCodexHome) preparedSourcePath ??= await this.deps.prepareCodexResumeSession?.(opts.sourceSdkSessionId);
+            if (!guestCodexHome) preparedSourcePath ??= await this.deps.prepareCodexResumeSession?.(opts.sourceSdkSessionId, nativeSubscriptionAccount ? { codexHome: forkCodexHome ?? nativeSubscriptionAccount.configDir } : undefined);
             if (opts.stripEncryptedReasoning && !historyChecked) {
               // Check before allocating a child: indexed native history must go through
               // Cindy's handoff recovery, never a file rewrite that invalidates Codex's DB.
-              await assertCodexRolloutRewriteSupported(preparedSourcePath || await this.findRolloutPath(opts.sourceSdkSessionId));
+              await assertCodexRolloutRewriteSupported(preparedSourcePath || await this.findRolloutPath(opts.sourceSdkSessionId, undefined, forkCodexHome ?? nativeSubscriptionAccount?.configDir));
             }
             if (
               !lastTurnId && (tailTurnsToDrop > 0 || opts.forkAtTimestampMs !== undefined) && !opts.stripEncryptedReasoning

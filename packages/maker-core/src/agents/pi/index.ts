@@ -1,4 +1,5 @@
 import { estimatePiContext, type PiPromptSource } from './context-estimate.js';
+import { NATIVE_SUBSCRIPTION_ACCOUNT } from '../../interfaces/auth-adapter.js';
 import { getPiExtensionUiCapability } from './extension-ui-capabilities.js';
 import { createPiCacheInputTracker } from './cache-input.js';
 import { parsePiManagementArgs, parsePiManagementText } from './managed-command.js';
@@ -3144,7 +3145,9 @@ export class PiAgent extends BaseAgent {
       resolveAgentCredentialMode({ agentKind: 'pi', providerId: authProviderId, model: opts.model,
       }) ??
       'gateway-key';
-    const authState = await this.deps.auth.getState({ credentialMode, providerId: authProviderId,
+    const nativeSubscriptionAccount = opts[NATIVE_SUBSCRIPTION_ACCOUNT];
+    nativeSubscriptionAccount?.assertCurrent();
+    const authState = await this.deps.auth.getState({ credentialMode, providerId: authProviderId, nativeSubscriptionAccount,
     });
     // 携带具体 reason(与 claude-code / codex 同模板 `<agent> not authenticated: <reason>`),
     // 否则默认构造只产生 `agent-not-authenticated:pi`,跨端映射(describeAgentAuthError)
@@ -3157,6 +3160,7 @@ export class PiAgent extends BaseAgent {
     let authEnv = await this.deps.auth.getAuthEnv({
       credentialMode,
       providerId: authProviderId,
+      nativeSubscriptionAccount,
     });
     // 轮 42 P1(codex-connector):远端 pi + 订阅凭证(oauth-bearer)必须拒绝 ——
     // getAuthEnv 返回的是**本地 loopback proxy 的占位 key**, 远端 models.json
@@ -5599,13 +5603,14 @@ export class PiAgent extends BaseAgent {
           () => mutablePiProviderId === PI_PROVIDER_ID
             ? null
             : resolveSourceProvider(mutablePiProviderId),
+          { nativeSubscriptionAccount },
         ));
         for (const { providerId, token } of subagentProxyTokens.values()) {
           appendProxyDisposer(this.deps.registerPiProxySession(
             opts.sessionId,
             token,
             () => providerId,
-            { scope: 'subagent-route' },
+            { scope: 'subagent-route', ...(providerId === authProviderId ? { nativeSubscriptionAccount } : {}) },
           ));
         }
       }
@@ -7190,7 +7195,7 @@ export class PiAgent extends BaseAgent {
           const token = proxyTokenForSubagentProvider(spec, source);
           if (token && !wasRegistered && opts.sessionId && this.deps.registerPiProxySession) {
             appendProxyDisposer(this.deps.registerPiProxySession(
-              opts.sessionId, token, () => source, { scope: 'subagent-route' }));
+              opts.sessionId, token, () => source, { scope: 'subagent-route', ...(source === authProviderId ? { nativeSubscriptionAccount } : {}) }));
           }
           for (const candidate of spec.models) {
             const wire = candidate.wireId ?? candidate.id;

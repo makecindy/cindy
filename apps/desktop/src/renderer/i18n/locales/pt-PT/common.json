@@ -19646,5 +19646,23 @@
     "rendered": "Ver documento",
     "wrap": "Moldar linhas",
     "lineNumbers": "Números de linha"
+  },
+  "subscriptionAccounts": {
+    "title": "Contas de subscrição",
+    "note": "A primeira conta usa a pasta predefinida da CLI. As contas adicionais iniciam sessão separadamente. As novas tarefas são distribuídas; as existentes mantêm a sua conta.",
+    "strategy": "Distribuição de carga",
+    "add": "Adicionar conta",
+    "default": "Pasta predefinida",
+    "ready": "Ligada",
+    "signedOut": "É necessário iniciar sessão",
+    "unavailable": "Estado indisponível",
+    "limited": "Quota esgotada",
+    "remove": "Remover conta",
+    "removeTitle": "Remover {{name}}?",
+    "removeDescription": "A Cindy deixará de atribuir tarefas a esta conta. A sessão da CLI e o histórico de conversas permanecem neste computador.",
+    "failed": "Não foi possível ler ou atualizar a conta. Verifique a sessão da CLI e a ligação à rede e tente novamente.",
+    "used": "{{percent}}% utilizado",
+    "directory": "Pasta da conta",
+    "login": "Iniciar sessão"
   }
 }
