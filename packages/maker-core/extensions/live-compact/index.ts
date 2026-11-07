@@ -140,6 +140,9 @@
  * 两处数据安全偏离(语义等价,只是失败路径不再丢原文;上游同版本没有):
  *   - 容量轮换先 rename 进 `.rotate-<pid>-<ts>` 隔离目录,确认装得下再真删,装不下原路搬回。
  *     上游边算边删,中途撞上占用会「删了旧备份又放弃这一刀」,已有卡片就指向空文件。
+ *     轮换还排在「新备份改名成功」之后:改名失败时这一刀被拒,但旧备份一个没动。
+ *     卡片引用到的原文快照也全部进保护清单 —— 恢复/分叉会话里同一个 toolCallId 的原文
+ *     早就落过盘,不在「本次待写」里,却是新卡片此刻指向的文件。
  *     隔离目录里删不掉的文件搬回原位,占用照实算(不把「移走」当「已释放」);两次都失败的
  *     残留在下一次轮换补删,补删前仍计入用量。这类回滚会让用量短暂超出上限,但**不因此拒绝**
  *     这一刀 —— 已经删成功的旧备份回不来,拒绝只会白删。
@@ -2096,16 +2099,22 @@ export function writeOwner(dir: string): void {
   } catch {}
 }
 
-function saveShadow(state: SpineState, dir: string, file: string, body: string, incomingExtra = 0, protectPaths: string[] = []): void {
+export function saveShadow(
+  state: SpineState,
+  dir: string,
+  file: string,
+  body: string,
+  protectPaths: string[] = [],
+  ops: { rename?: (from: string, to: string) => void } = {},
+): void {
+  const rename = ops.rename ?? renameSync;
   const id = state.key || DEFAULT_KEY;
   // 1.0.6: 会话目录带 owner,别的进程看得出这份备份是否还在用。
   // 上游每次写备份都覆盖成当前进程号:任务恢复到新进程后,旧 pid 会误导回收逻辑。
   writeOwner(dir);
-  // 本次切割还要写出的原文快照也计入待写入量,否则轮换放行后总量会突破上限。
-  const incoming = Buffer.byteLength(body) + incomingExtra;
   const temp = `${file}.tmp`;
-  // 先把内容落到 temp(不在轮换统计里),再腾地方,最后 rename 成正式名:
-  // 任何一步失败都只可能留下已被删掉的 temp,旧备份不会因为「删了但没写成功」而丢失。
+  // 先把内容落到 temp,再改名成正式文件,最后才做容量轮换:
+  // 轮换会真的删掉旧备份,必须排在「新备份已经写好」之后。
   try {
     writeFileSync(temp, body, { mode: 0o600 });
     chmodSync(temp, 0o600);
@@ -2116,11 +2125,22 @@ function saveShadow(state: SpineState, dir: string, file: string, body: string, 
     logLine(state, `spine shadow write failed: ${(error as Error)?.message ?? error}; 这一刀不切`);
     throw new Error("spine: shadow backup was not written");
   }
-  const rotation = rotateShadow({ dir, incomingBytes: incoming, protectPath: file, protectPaths });
-  if (!rotation.ok) {
-    // 腾不出地方(或单份就超上限):撤掉 temp,旧备份原样保留。
+  // 先改名再做轮换:反过来时,改名一旦失败,这一刀被拒,可旧卡片指向的原文已经被删了。
+  // 改名之后新文件已经算进 listShadowFiles,轮换按实际用量算(incomingBytes: 0)。
+  try {
+    rename(temp, file);
+  } catch (error) {
     try {
       unlinkSync(temp);
+    } catch {}
+    logLine(state, `spine shadow rename failed: ${(error as Error)?.message ?? error}; 这一刀不切`);
+    throw new Error("spine: shadow backup was not written");
+  }
+  const rotation = rotateShadow({ dir, incomingBytes: 0, protectPath: file, protectPaths });
+  if (!rotation.ok) {
+    // 腾不出地方(或单份就超上限):撤掉刚写好的新备份,旧备份原样保留。
+    try {
+      unlinkSync(file);
     } catch {}
     // 同一次会话只警告一次:每轮都刷一遍会把日志刷满。
     if (!shadowWarned.has(id)) {
@@ -2129,17 +2149,8 @@ function saveShadow(state: SpineState, dir: string, file: string, body: string, 
     }
     throw new Error(rotation.oversize ? "spine: shadow backup is larger than the cap" : "spine: shadow backup is full; leaving the span");
   }
-  try {
-    renameSync(temp, file);
-  } catch (error) {
-    try {
-      unlinkSync(temp);
-    } catch {}
-    logLine(state, `spine shadow rename failed: ${(error as Error)?.message ?? error}; 这一刀不切`);
-    throw new Error("spine: shadow backup was not written");
-  }
   if (rotation.deleted > 0) {
-    logLine(state, `spine shadow rotate: 删除 ${rotation.deleted} 个文件,腾出 ${rotation.freed} 字节,用量 ${rotation.used + incoming}/${rotation.cap}`);
+    logLine(state, `spine shadow rotate: 删除 ${rotation.deleted} 个文件,腾出 ${rotation.freed} 字节,用量 ${rotation.used}/${rotation.cap}`);
   }
 }
 
@@ -2551,7 +2562,10 @@ function rawPlanner(state: SpineState, entries: SpineEntry[]) {
     return record;
   };
   const planned = () => [...cache.values()].filter((record) => record.ok && record.pending);
-  return { lookup, planned };
+  // 卡片引用到的原文可能早就落过盘(恢复/分叉的会话会命中同一个 toolCallId)。
+  // 这类路径不在 planned() 里,但轮换删掉它,卡片就成了空指针 —— 保护清单要按「引用到」算。
+  const referenced = () => [...cache.values()].filter((record) => record.ok && record.path);
+  return { lookup, planned, referenced };
 }
 
 /** 一刀被拒时撤掉刚落盘、又没有任何卡片引用的原文快照(连同它的 meta)。 */
@@ -3000,6 +3014,13 @@ function attemptCut(options: {
       // 先判定再落盘:被拒的切割不留孤儿 shadow 文件。
       throw new Error(`summary is not smaller than the shadowed content (${framedTokens} >= ${chunk.tokens})`);
     }
+    const estimatedAfter = before - chunk.tokens + (typeof framedTokens === "number" ? framedTokens : 0);
+    // 二次防御:上面 framedTokens >= chunk.tokens 已 throw,这里只在 est 口径意外变化时兜底。
+    // 也放在落盘之前:判定不过的切割不该先写备份,更不该因此触发轮换删旧备份。
+    if (!(estimatedAfter < before)) {
+      logLine(state, `spine cut would not reduce ${before}; aborting`);
+      return null;
+    }
     // 卡片已经指向 file,所以备份必须先写成功(1.0.5);写不进去就不切。
     // 判定通过才建目录并落盘:被拒的切割不留空目录(空目录会占会话回收额度)。
     mkdirSync(shadow, { recursive: true, mode: 0o700 });
@@ -3007,6 +3028,8 @@ function attemptCut(options: {
     // 卡片引用的原文快照先落盘:写不进去就不切——否则卡片会指向一个不存在的文件。
     // 快照已经写在磁盘上,所以不再重复计入待写字节;仍要加入保护清单。
     const pending = raws.planned();
+    // 卡片真正引用到的原文都要保护:新规划的要写,恢复会话里早就存在的会被复用。
+    const protectPaths = raws.referenced().map((record) => record.path || "").filter(Boolean);
     // 这些快照在卡片被接受之前就落盘了;这一刀随后被拒的话,它们没有任何卡片引用,
     // 而原文写入不走容量轮换 —— 不清理就会一轮轮堆积,突破单会话上限。
     const writtenRaw: string[] = [];
@@ -3018,14 +3041,7 @@ function attemptCut(options: {
         }
         if (committed.path) writtenRaw.push(committed.path);
       }
-      saveShadow(
-        state,
-        shadow,
-        file,
-        body,
-        0,
-        pending.map((record) => record.path || "").filter(Boolean),
-      );
+      saveShadow(state, shadow, file, body, protectPaths);
     } catch (error) {
       discardRawSnapshots(writtenRaw);
       throw error;
@@ -3053,12 +3069,6 @@ function attemptCut(options: {
       },
     ];
 
-    const estimatedAfter = before - chunk.tokens + (typeof framedTokens === "number" ? framedTokens : 0);
-    // 二次防御:上面 framedTokens >= chunk.tokens 已 throw,这里只在 est 口径意外变化时兜底。
-    if (!(estimatedAfter < before)) {
-      logLine(state, `spine cut would not reduce ${before}; aborting`);
-      return null;
-    }
     // 1.0.7: 累计节省(stats)。pi 拿不到切后实测值,存的是 before − chunk + framed 的估算。
     const saved = Math.max(0, before - estimatedAfter);
     const stats = recordCutStats(saved);

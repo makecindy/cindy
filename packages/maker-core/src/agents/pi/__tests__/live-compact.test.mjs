@@ -1,6 +1,6 @@
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, renameSync, rmSync, utimesSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { basename, join } from 'node:path';
 import { describe, expect, it, vi } from 'vitest';
 
 // 扩展源码 import 的 pi 包不在本仓依赖里:测试只覆盖纯函数,喂一个最小替身。
@@ -55,7 +55,7 @@ const FAKE_BRACKET_PASSWORD = ['abc', '[defghijklmnop'].join('');
 
 const extensionModule = await import('../../../../extensions/live-compact/index.ts');
 const registerLiveCompact = extensionModule.default;
-const { selectNewestChunk, balanceIndexes, buildCard, redactSecrets, attachBackupHint, isToolFailure, rotateShadow, pruneShadowSessions, spineRoot, keptToolRounds, chooseKeptSpan, reservedCutEnd, toolEvidenceLine, pointerFor, captureToolResult, planRawEntry, commitRawEntry, verifiedRaw, resolveEngine, resolveSpineEngine, selectCutIndexes, pointerSpanAllowed, pointerOnlyText, spineEntries, longReadResults, writeOwner, orderedDrainDrafts, withBackupHint, withoutFullBackupClaim, backupHint, discardRawSnapshots, lastCompactionEntry, inCooldown, resolveCooldownMs, providerURLFromPatch, resolveProviderBaseURL, spanHidesCallArgs, callArgsHidden } = extensionModule;
+const { selectNewestChunk, balanceIndexes, buildCard, redactSecrets, attachBackupHint, isToolFailure, rotateShadow, pruneShadowSessions, spineRoot, keptToolRounds, chooseKeptSpan, reservedCutEnd, toolEvidenceLine, pointerFor, captureToolResult, planRawEntry, commitRawEntry, verifiedRaw, resolveEngine, resolveSpineEngine, selectCutIndexes, pointerSpanAllowed, pointerOnlyText, spineEntries, longReadResults, writeOwner, orderedDrainDrafts, withBackupHint, withoutFullBackupClaim, backupHint, discardRawSnapshots, saveShadow, lastCompactionEntry, inCooldown, resolveCooldownMs, providerURLFromPatch, resolveProviderBaseURL, spanHidesCallArgs, callArgsHidden } = extensionModule;
 
 let seq = 0;
 function entry(role, text, extra = {}) {
@@ -1261,5 +1261,107 @@ describe('live compact 1.1.x: 指针段不能吞掉图片', () => {
     expect(pointerSpanAllowed(items, 2, 4, 'cloud')).toBe(false);
     expect(pointerSpanAllowed(items, 4, 4, 'cloud')).toBe(true);
     expect(selectNewestChunk(entries, undefined, { drain: true, totalTokens: 90000 })).toBeNull();
+  });
+});
+
+describe('live compact 1.1.x: 轮换不改写已有备份', () => {
+  it('protects a reused raw snapshot that the new card points at', () => {
+    // 恢复/分叉的会话里,切范围内的工具原文可能早就落过盘(同一个 toolCallId)。
+    // 它不在 planned() 里,但新卡片会引用它:轮换若把它当最老的文件删掉,卡片就成了空指针。
+    const root = mkdtempSync(join(tmpdir(), 'spine-rawprotect-'));
+    const previousRoot = process.env.SPINE_SHADOW_DIR;
+    const previousCap = process.env.SPINE_SHADOW_MAX_BYTES;
+    process.env.SPINE_SHADOW_DIR = root;
+    process.env.SPINE_SHADOW_MAX_BYTES = '800000';
+    try {
+      const sessionId = 'session-rawprotect';
+      const dir = join(root, 'shadow', sessionId);
+      mkdirSync(dir, { recursive: true });
+      const text = 'needle '.repeat(30000);
+      const raw = commitRawEntry(planRawEntry({ dir, toolCallId: 'cBig', text, turn: 1, name: 'bash', pathLabel: 'bash big.log' }));
+      expect(raw.ok).toBe(true);
+      utimesSync(raw.path, 1, 1);
+      const old1 = join(dir, 'aa-old1.txt');
+      const old2 = join(dir, 'zz-old2.txt');
+      writeFileSync(old1, 'o'.repeat(300000));
+      writeFileSync(old2, 'o'.repeat(300000));
+      utimesSync(old1, 2, 2);
+      utimesSync(old2, 3, 3);
+
+      let handler = null;
+      registerLiveCompact({ on: (name, fn) => { if (name === 'agent_before_settle') handler = fn; } });
+      const toolCall = { messages: [{ role: 'assistant', content: [{ type: 'toolCall', id: 'cBig', name: 'bash', arguments: {} }] }], sourceEntry: { id: 'a1' } };
+      const toolResult = { messages: [{ role: 'toolResult', toolCallId: 'cBig', content: [{ type: 'text', text }] }], sourceEntry: { id: 'r1' } };
+      const tiny = (id) => [
+        { messages: [{ role: 'assistant', content: [{ type: 'toolCall', id, name: 'bash', arguments: {} }] }], sourceEntry: { id: `${id}-a` } },
+        { messages: [{ role: 'toolResult', toolCallId: id, content: [{ type: 'text', text: 'ok '.repeat(20) }] }], sourceEntry: { id: `${id}-r` } },
+      ];
+      const contextEntries = [
+        { messages: [{ role: 'system', content: 'sys' }], sourceEntry: { id: 's1' } },
+        { messages: [{ role: 'user', content: 'go' }], sourceEntry: { id: 'u1' } },
+        toolCall,
+        toolResult,
+        ...tiny('c1'),
+        ...tiny('c2'),
+        ...tiny('c3'),
+      ];
+      const event = { outcome: 'completed', context: { contextEntries } };
+      const ctx = {
+        sessionManager: { getSessionId: () => sessionId },
+        getContextUsage: () => ({ tokens: 120000 }),
+      };
+      const result = handler(event, ctx);
+      expect(result).toBeTruthy();
+      const card = result.entries.find((draft) => draft.type === 'custom_message');
+      expect(card).toBeTruthy();
+      const cardText = card.content.map((block) => block.text || '').join(String.fromCharCode(10));
+      // 卡片指向这份原文,轮换就不能删它。
+      expect(cardText).toContain(basename(raw.path));
+      expect(existsSync(raw.path)).toBe(true);
+      // 腾地方只能牺牲没有被引用的旧文件。
+      expect(existsSync(old1)).toBe(false);
+      expect(existsSync(old2)).toBe(false);
+    } finally {
+      if (previousRoot === undefined) delete process.env.SPINE_SHADOW_DIR;
+      else process.env.SPINE_SHADOW_DIR = previousRoot;
+      if (previousCap === undefined) delete process.env.SPINE_SHADOW_MAX_BYTES;
+      else process.env.SPINE_SHADOW_MAX_BYTES = previousCap;
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it('does not evict old backups when the final shadow rename fails', () => {
+    // 轮换会真的删掉旧备份。它必须排在「新备份已经改名成功」之后:
+    // 反过来时,改名失败会让这一刀被拒,而旧卡片指向的原文已经没了。
+    const root = mkdtempSync(join(tmpdir(), 'spine-rename-'));
+    const previousRoot = process.env.SPINE_SHADOW_DIR;
+    const previousCap = process.env.SPINE_SHADOW_MAX_BYTES;
+    process.env.SPINE_SHADOW_DIR = root;
+    process.env.SPINE_SHADOW_MAX_BYTES = '1000';
+    try {
+      const dir = join(root, 'shadow', 'session-rename');
+      mkdirSync(dir, { recursive: true });
+      const old = join(dir, 'old.txt');
+      writeFileSync(old, 'o'.repeat(900));
+      utimesSync(old, 1, 1);
+      const target = join(dir, 'new.txt');
+      expect(() => saveShadow({ key: 'session-rename' }, dir, target, 'n'.repeat(500), [], {
+        rename: () => { throw new Error('boom'); },
+      })).toThrow(/shadow backup was not written/);
+      expect(existsSync(old)).toBe(true);
+      expect(existsSync(target)).toBe(false);
+      expect(existsSync(`${target}.tmp`)).toBe(false);
+
+      // 正常路径仍然会腾地方:旧文件被淘汰,新备份就位。
+      saveShadow({ key: 'session-rename' }, dir, target, 'n'.repeat(500));
+      expect(existsSync(target)).toBe(true);
+      expect(existsSync(old)).toBe(false);
+    } finally {
+      if (previousRoot === undefined) delete process.env.SPINE_SHADOW_DIR;
+      else process.env.SPINE_SHADOW_DIR = previousRoot;
+      if (previousCap === undefined) delete process.env.SPINE_SHADOW_MAX_BYTES;
+      else process.env.SPINE_SHADOW_MAX_BYTES = previousCap;
+      rmSync(root, { recursive: true, force: true });
+    }
   });
 });
