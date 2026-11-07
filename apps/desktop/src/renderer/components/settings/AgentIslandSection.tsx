@@ -46,6 +46,7 @@ import {
   isSilentAgentIslandSoundChoice,
 } from '../../../shared/agentIsland';
 import { DefaultOverrideControls } from './DefaultOverrideControls';
+import { useSettingsSearchNavigation } from './SettingsSearchNavigation';
 
 const MASCOT_PREVIEW_URLS: Record<AgentIslandMascotSkin, string> = {
   cindy: cindyPreviewUrl,
@@ -213,6 +214,13 @@ export function AgentIslandSection() {
   } = useAgentIslandSettings();
   const { t } = useTranslation();
   const [animationSteps, setAnimationSteps] = useState<MascotAnimationSteps>(DEFAULT_MASCOT_ANIMATION_STEPS);
+  // The character list is a disclosure: the card shows only the current character until opened.
+  const [skinsOpen, setSkinsOpen] = useState(false);
+  const { entry: searchEntry, activation: searchActivation } = useSettingsSearchNavigation();
+  useEffect(() => {
+    // Searching a character name lands here; never hide what the search pointed at.
+    if (searchEntry?.id === agentIslandSettings.skinLabel.id) setSkinsOpen(true);
+  }, [searchEntry, searchActivation]);
   const [soundResetPending, setSoundResetPending] = useState(false);
   const [subtleRemindersPending, setSubtleRemindersPending] = useState(false);
   const handleSubtleRemindersChange = async (next: boolean) => {
@@ -446,28 +454,60 @@ export function AgentIslandSection() {
       show whenever either is on, so no heading is needed. */}
       {sharedVisible && (
         <>
-          <SettingsCard className="flex flex-col gap-4">
-            <div className="flex min-w-0 flex-col gap-1">
-              <p id={agentIslandSettings.skinLabel.targetId} className="text-13 font-medium text-[var(--settings-section-sublabel)]">
-                {t(agentIslandSettings.skinLabel.titleKey)}
-              </p>
-              <p className="text-12 leading-[1.4] text-[var(--text-secondary)]">
-                {t(agentIslandSettings.skinLabel.descriptionKey)}
-              </p>
-            </div>
-
-            <div className="grid gap-2">
-              {AGENT_ISLAND_MASCOT_SKINS.map((skin) => (
-                <AgentIslandSkinRow
-                  key={skin}
-                  skin={skin}
-                  animationMode={animationModeForStep(animationSteps[skin])}
-                  onNextAnimation={handleNextMascotAnimation}
-                  selected={mascotSkin === skin}
-                  onSelect={setMascotSkin}
+          <SettingsCard className="flex flex-col p-0">
+            <button
+              type="button"
+              data-setting-id={agentIslandSettings.skinLabel.id}
+              aria-expanded={skinsOpen}
+              aria-controls="settings-agent-island-skins"
+              onClick={() => setSkinsOpen((open) => !open)}
+              className={cn(
+                'flex w-full items-center justify-between gap-3 rounded-xl p-5 text-left outline-none',
+                'focus-visible:ring-2 focus-visible:ring-[var(--focus-ring-soft)]',
+              )}
+            >
+              <span className="flex min-w-0 flex-col gap-1">
+                <span id={agentIslandSettings.skinLabel.targetId} className="text-13 font-medium text-[var(--settings-section-sublabel)]">
+                  {t(agentIslandSettings.skinLabel.titleKey)}
+                </span>
+                <span className="text-12 leading-[1.4] text-[var(--text-secondary)]">
+                  {t(agentIslandSettings.skinLabel.descriptionKey)}
+                </span>
+              </span>
+              <span className="flex shrink-0 items-center gap-2">
+                {/* The list's own preview, scaled down: sprite PNGs carry no eyes on their own. */}
+                <span className="relative h-8 w-9 overflow-hidden rounded-md" aria-hidden="true">
+                  <span className="absolute left-0 top-0 origin-top-left scale-[0.64]">
+                    <MascotPreview skin={mascotSkin} mode={animationModeForStep(animationSteps[mascotSkin])} />
+                  </span>
+                </span>
+                <span className="text-13 text-[var(--text-secondary)]">
+                  {t(`settings.agentIsland.skins.${mascotSkin}.name`)}
+                </span>
+                <ChevronDown
+                  size={15}
+                  className={cn('text-[var(--text-secondary-mid)] transition-transform', skinsOpen && 'rotate-180')}
+                  aria-hidden="true"
                 />
-              ))}
-            </div>
+              </span>
+            </button>
+            {skinsOpen && (
+              <>
+                <div className={ROW_DIVIDER_CLASS} />
+                <div id="settings-agent-island-skins" className="grid gap-2 p-5">
+                  {AGENT_ISLAND_MASCOT_SKINS.map((skin) => (
+                    <AgentIslandSkinRow
+                      key={skin}
+                      skin={skin}
+                      animationMode={animationModeForStep(animationSteps[skin])}
+                      onNextAnimation={handleNextMascotAnimation}
+                      selected={mascotSkin === skin}
+                      onSelect={setMascotSkin}
+                    />
+                  ))}
+                </div>
+              </>
+            )}
           </SettingsCard>
 
           <SettingsCard className="flex flex-col gap-3">
