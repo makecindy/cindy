@@ -165,6 +165,8 @@ export function createControlReader(deps: Deps) {
     const score = (item: Control) => {
       if (!term) return 1;
       if (item.key === term) return 100;
+      // Agents often search with the exact tool name a prompt gave them.
+      if (item.tools?.includes(term)) return 90;
       const words = [item.key, item.title, ...item.aliases].map(word => word.toLowerCase());
       return (item.summary.toLowerCase().includes(term) ? 1 : 0) + words.reduce((n, word) => n + (word.includes(term) || term.includes(word) ? Math.min(word.length, 20) : 0), 0);
     };

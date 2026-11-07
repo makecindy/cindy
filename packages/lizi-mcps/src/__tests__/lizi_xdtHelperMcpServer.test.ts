@@ -1614,6 +1614,8 @@ it('keeps the control directory compact and reports gaps and invalid continuatio
     expect(await read({ key: 'native.set_current_session_title' })).toMatchObject({ control: { operations: [expect.objectContaining({ name: 'set_current_session_title' })] } });
     expect(rename).not.toHaveBeenCalled();
     expect(await read({ key: 'missing' })).toMatchObject({ ok: false, errorCode: 'UNKNOWN_CONTROL' });
+    // 2026-11-08: a teammate told to use list_agents searched that exact name and found nothing.
+    expect(await read({ toolQuery: 'list_agents' })).toMatchObject({ items: [expect.objectContaining({ key: 'teammates.management' })] });
     const page = await read({ toolQuery: '模型' });
     expect(page.complete).toBe(false);
     const next = await read({ toolQuery: '模型', cursor: page.nextCursor });

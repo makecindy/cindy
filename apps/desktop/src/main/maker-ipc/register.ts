@@ -13560,9 +13560,15 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     const [delivered] = await getDbClient().drizzle.select({ id: messages.id }).from(messages)
       .where(and(eq(messages.sessionId, targetSessionId), eq(messages.clientId, clientId))).limit(1);
     if (delivered) return { ok: true };
+    // A host delivery carries no agent consent to re-check when a busy requester dequeues it
+    // (its teammate origin would otherwise demand one and drop the result); only the account must still match.
+    const ownerScope = captureDataOwnerBroadcastScope();
+    const taskActionDeliveryGuard: TaskActionDeliveryGuard = async () => {
+      if (!isDataOwnerBroadcastScopeCurrent(ownerScope)) throw new Error('OWNER_SCOPE_CHANGED');
+    };
     // Host delivery, not part of whichever tool call happened to settle the turn.
     const result = await runTaskActionRequest(() => sendToSessionInternal({
-      targetSessionId, message: text, clientId, dispatcherSessionId: fromSessionId, forceQueue: true,
+      targetSessionId, message: text, clientId, dispatcherSessionId: fromSessionId, forceQueue: true, taskActionDeliveryGuard,
     }));
     if (result.ok) return { ok: true };
     return { ok: false, errorCode: result.errorCode,
