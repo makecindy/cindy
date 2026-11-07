@@ -11445,7 +11445,9 @@ function broadcastGhostsChanged(
   const visible = ghosts
     .filter((ghost) => isGhostAvailableForActiveSession(installedGhostStoragePart(ghost)))
     .map(projectGhostForRenderer);
-  broadcastGhostWindowPush('ghosts:changed', { ghosts: visible });
+  // `rosterChanged` lets the composer skip a pending Skill read only when the
+  // roster it lists really moved; projection-only pushes stay a cheap cache hit.
+  broadcastGhostWindowPush('ghosts:changed', { ghosts: visible, rosterChanged: !opts?.projectionOnly });
   notifyMobilePluginsChanged();
   // 与 renderer 同一份可见清单喂给观察者(独立窗口 controller reconcile 等);
   // 观察者异常不拖垮广播本体。

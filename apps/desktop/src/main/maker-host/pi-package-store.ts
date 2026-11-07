@@ -2280,7 +2280,11 @@ async function inspectAllPackages(
   }
   const generation = inspectionGeneration;
   const pending = inspectAllPackagesUncached({ startupTiming }).then((value) => {
-    if (generation === inspectionGeneration) {
+    // A retryable read failure (`inspection-failed`) would keep that package's
+    // Skills and prompt commands missing for the whole reuse window, and nothing
+    // invalidates it when the read recovers: keep it out of the cache.
+    const retryable = value.some((pkg) => pkg.view.warning === 'inspection-failed');
+    if (generation === inspectionGeneration && !retryable) {
       inspectionCache = { computedAt: Date.now(), value };
     }
     return value;

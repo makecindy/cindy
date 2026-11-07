@@ -43,13 +43,15 @@ function routing() {
 it('projects a locale change without installation effects, while real roster changes still reconcile', () => {
   const r = routing();
   r.callbacks.refreshGhostLocalization('zh-CN');
-  expect(r.push).toHaveBeenCalledWith('ghosts:changed', { ghosts: r.ghosts });
+  // A projection-only push must tell the composer the roster did not move.
+  expect(r.push).toHaveBeenCalledWith('ghosts:changed', { ghosts: r.ghosts, rosterChanged: false });
   expect(r.contextChanged).toHaveBeenCalledOnce();
   expect(r.remote).toHaveBeenCalledOnce();
   const { apps, ...installation } = r.installation;
   expect(apps).toHaveBeenCalledOnce();
   for (const effect of Object.values(installation)) expect(effect).not.toHaveBeenCalled();
   r.callbacks.broadcastGhostsChanged(r.ghosts);
+  expect(r.push).toHaveBeenLastCalledWith('ghosts:changed', { ghosts: r.ghosts, rosterChanged: true });
   expect(apps).toHaveBeenCalledTimes(2);
   for (const effect of Object.values(installation)) expect(effect).toHaveBeenCalledOnce();
 });
