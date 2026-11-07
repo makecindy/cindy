@@ -78,8 +78,14 @@ function harness(richContent: RichContentRuntime | null = new RichContentRuntime
     const metrics = state.scrollMetricsRef.current;
     metrics.offsetY = metrics.contentHeight - metrics.viewportHeight;
   });
+  const processViewport = {
+    inspecting: ref(false),
+    scroll: vi.fn(),
+    resume: vi.fn(() => { processViewport.inspecting.current = false; }),
+  };
   const environment = {
     richContent,
+    processViewport,
     remoteDeviceId: 'remote-device', scrollResetKey: 'session',
     readingPosition: { write: vi.fn() }, reopeningPosition: undefined,
     captureCurrentHistoryAnchor: vi.fn((): { key: string; viewportOffset: number } | null => null),
@@ -114,7 +120,7 @@ function harness(richContent: RichContentRuntime | null = new RichContentRuntime
     contentOffset: { y: offsetY }, layoutMeasurement: { height: 800 },
   } });
   return {
-    ...callbacks, state, tailScroll, scrollEvent,
+    ...callbacks, state, tailScroll, scrollEvent, processViewport,
     readingPosition: environment.readingPosition,
     captureCurrentHistoryAnchor: environment.captureCurrentHistoryAnchor,
     initialRevealProgress: environment.initialRevealProgress,
@@ -135,6 +141,20 @@ beforeEach(() => {
 afterEach(() => { setMobileDebugSink(undefined); vi.useRealTimers(); vi.unstubAllGlobals(); vi.restoreAllMocks(); });
 
 describe('streaming follow yields to the reader', () => {
+  // A layout-only tail sample cannot relinquish an existing browse intent. This executes
+  // the production callback instead of asserting its historyBrowseIntent source expression.
+  it.each(['history', 'process'] as const)('preserves %s browsing through a layout-only tail sample', (owner) => {
+    const h = harness();
+    h.state.nearBottomRef.current = false;
+    h.state.userScrollForOlderRef.current = owner === 'history';
+    h.processViewport.inspecting.current = owner === 'process';
+    h.state.scrollMetricsRef.current.offsetY = 900;
+    h.handleScroll(h.scrollEvent(1200));
+    h.handleContentSize(400, 2500);
+    settle();
+    expect(h.state.nearBottomRef.current).toBe(false);
+    expect(h.tailScroll).not.toHaveBeenCalled();
+  });
   it('defers rich content during a drag without preventing reader ownership', () => {
     const richContent = new RichContentRuntime();
     const h = harness(richContent);
