@@ -19,6 +19,7 @@ vi.setConfig({ testTimeout: 30_000 });
 
 import { CINDY_BRIDGE_EXTENSION_SOURCE } from "../cindy-bridge-source.js";
 import { CINDY_SUBAGENT_EXTENSION_SOURCE } from "../cindy-subagent-source.js";
+import { buildPiPlanReviewExtensionSource } from '../cindy-plan-review-source.js';
 import { piCacheRouteKey } from '../cache-compatibility.js';
 import * as piSubagentRuns from '../pi-subagent-runs.js';
 
@@ -8280,7 +8281,7 @@ describe("Pi provider-aware model routing", () => {
       killRemoteSession: async () => {},
     };
     const capturedRemoteEnvs: Array<Record<string, string | undefined>> = [];
-    const startRemote = async () => {
+    const startRemote = async (planAvailable = true) => {
       const base = byomDeps(async () => ({ providers: [], env: {} }));
       const agent = new PiAgent({
         ...base,
@@ -8296,7 +8297,7 @@ describe("Pi provider-aware model routing", () => {
         getRemotePiFileOps: () => ({
           mkdirp: async () => {},
           writeFile: async () => {},
-          stat: async () => ({ isFile: true }),
+          stat: async (file) => ({ isFile: !file.endsWith('/plan-mode/index.ts') || planAvailable }),
           rm: async () => {},
           listDir: async () => [],
           readFile: async () => { throw new Error("Unexpected remote file read in empty directory fixture"); },
@@ -8314,13 +8315,16 @@ describe("Pi provider-aware model routing", () => {
 
     await startRemote();
     await startRemote();
+    await startRemote(false);
     const expected = createHash("sha256")
       .update(CINDY_BRIDGE_EXTENSION_SOURCE)
       .update("\n")
       .update(CINDY_SUBAGENT_EXTENSION_SOURCE)
+      .update('\n')
+      .update(buildPiPlanReviewExtensionSource('/remote/examples/extensions/plan-mode/index.ts'))
       .digest("hex")
       .slice(0, 16);
-    expect(capturedRemoteEnvs).toHaveLength(2);
+    expect(capturedRemoteEnvs).toHaveLength(3);
     expect(capturedRemoteEnvs[0]!.CINDY_PI_EXTENSION_BUNDLE_HASH).toBe(
       expected,
     );
@@ -8328,6 +8332,12 @@ describe("Pi provider-aware model routing", () => {
       expected,
     );
     expect(expected).toMatch(/^[0-9a-f]{16}$/);
+    // #8932: remote attach must see the adapter's bytes when loaded, while an
+    // installation without plan-mode keeps the existing bridge-only identity.
+    expect(capturedRemoteEnvs[2]!.CINDY_PI_EXTENSION_BUNDLE_HASH).toBe(
+      createHash('sha256').update(CINDY_BRIDGE_EXTENSION_SOURCE).update('\n')
+        .update(CINDY_SUBAGENT_EXTENSION_SOURCE).digest('hex').slice(0, 16),
+    );
   });
 
   // The append system prompt rides in a configHome file, so the command line no

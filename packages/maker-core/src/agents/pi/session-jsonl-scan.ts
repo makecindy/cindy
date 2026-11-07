@@ -17,6 +17,22 @@ function firstQuoted(field: string, prefix: string): string | undefined {
   return match?.[1];
 }
 
+/** Read native data.enabled before a large todos payload, with bounded parsing. */
+function planEnabledFromPrefix(prefix: string): boolean | undefined {
+  for (const match of prefix.matchAll(/"enabled"\s*:\s*(true|false)\s*(?=[,}])/g)) {
+    try {
+      // Closing data + root must produce a real entry. A nested field or text
+      // that merely resembles metadata cannot supply the plan-mode flag.
+      const entry = recordOf(JSON.parse(prefix.slice(0, match.index + match[0].length) + '}}'));
+      const data = recordOf(entry?.data);
+      if (entry?.type === 'custom' && entry.customType === 'plan-mode' && typeof data?.enabled === 'boolean') {
+        return data.enabled;
+      }
+    } catch { /* The next candidate may be the actual top-level data.enabled. */ }
+  }
+  return undefined;
+}
+
 function extractEntryMeta(line: string): {
   type?: string;
   id?: string;
@@ -47,18 +63,21 @@ function extractEntryMeta(line: string): {
     id: firstQuoted('id', prefix),
     role: firstQuoted('role', prefix),
     customType: firstQuoted('customType', prefix),
+    planEnabled: planEnabledFromPrefix(prefix),
   };
 }
 
-function applyEntry(scan: PiSessionJsonlScan, line: string): void {
+function applyEntry(scan: PiSessionJsonlScan, line: string): boolean | undefined {
   const trimmed = line.endsWith('\r') ? line.slice(0, -1) : line;
   if (trimmed.length === 0) return;
   const meta = extractEntryMeta(trimmed);
   if (meta.type === 'message' && meta.role === 'user' && meta.id) {
     scan.userEntryIds.add(meta.id);
   }
-  if (meta.customType === 'plan-mode' && typeof meta.planEnabled === 'boolean') {
+  if (meta.type === 'custom' && meta.customType === 'plan-mode') {
+    if (typeof meta.planEnabled !== 'boolean') return false;
     scan.lastPlanModeEnabled = meta.planEnabled;
+    return true;
   }
 }
 
@@ -78,6 +97,12 @@ export async function scanPiSessionJsonl(sessionFile: string): Promise<PiSession
     let prefix = '';
     let skippingRestOfLine = false;
     let settled = false;
+    let planStateKnown = true;
+
+    const applyLine = (line: string): void => {
+      const known = applyEntry(scan, line);
+      if (known !== undefined) planStateKnown = known;
+    };
 
     const finish = (result: PiSessionJsonlScan | null): void => {
       if (settled) return;
@@ -87,7 +112,7 @@ export async function scanPiSessionJsonl(sessionFile: string): Promise<PiSession
 
     const consumePrefixLine = (): void => {
       if (prefix.length === 0) return;
-      applyEntry(scan, prefix);
+      applyLine(prefix);
       prefix = '';
     };
 
@@ -113,7 +138,7 @@ export async function scanPiSessionJsonl(sessionFile: string): Promise<PiSession
           }
           return;
         }
-        applyEntry(scan, buffer.slice(0, newlineIndex));
+        applyLine(buffer.slice(0, newlineIndex));
         buffer = buffer.slice(newlineIndex + 1);
       }
     };
@@ -126,9 +151,11 @@ export async function scanPiSessionJsonl(sessionFile: string): Promise<PiSession
     stream.on('end', () => {
       buffer += decoder.end();
       emitCompleteLines();
-      if (!skippingRestOfLine && buffer.length > 0) applyEntry(scan, buffer);
+      if (!skippingRestOfLine && buffer.length > 0) applyLine(buffer);
       else consumePrefixLine();
-      finish(scan);
+      // An unreadable latest flag must use the existing RPC fallback, never a
+      // preceding entry's flag (or a guessed default) as current native state.
+      finish(planStateKnown ? scan : null);
     });
   });
 }
