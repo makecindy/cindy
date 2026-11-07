@@ -32,6 +32,7 @@ import { app, shell } from 'electron';
 import { brandExecutableName } from '@cindy/maker-shared/brand-identity';
 import { CURRENT_APP_ID, CURRENT_CINDY_REGION } from '../shared/brandRegion.js';
 import { createLogger } from './logger';
+import { shouldSkipSystemIntegration } from './startupMode';
 
 const log = createLogger('shortcutSelfHeal');
 
@@ -174,6 +175,7 @@ async function healPinnedInPlace(deps: ShortcutSelfHealDeps, dir: string): Promi
 export async function healWindowsShortcuts(
   overrides?: Partial<ShortcutSelfHealDeps>,
 ): Promise<void> {
+  if (shouldSkipSystemIntegration()) return;
   const deps: ShortcutSelfHealDeps = { ...defaultDeps(), ...overrides };
   if (deps.platform !== 'win32' || !deps.isPackaged) return;
   try {

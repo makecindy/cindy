@@ -45,6 +45,7 @@ import { promisify } from 'node:util';
 import { brandExecutableName } from '@cindy/maker-shared/brand-identity';
 import { CURRENT_CINDY_REGION } from '../shared/brandRegion.js';
 import { createLogger } from './logger';
+import { shouldSkipSystemIntegration } from './startupMode';
 
 const execFileAsync = promisify(execFile);
 const log = createLogger('folderContextMenu');
@@ -169,7 +170,7 @@ export async function registerFolderContextMenu(): Promise<void> {
   if (process.platform !== 'win32') return;
   // dev 模式 process.execPath 是 Electron 解释器,写进注册表也无法正常启动 app。
   // 端到端验证必须 packaged build,见模块头注释。
-  if (!app.isPackaged) return;
+  if (!app.isPackaged || shouldSkipSystemIntegration()) return;
 
   const exePath = process.execPath;
   const iconValue = `${exePath},0`;

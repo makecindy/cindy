@@ -7,6 +7,7 @@ import { brandExecutableName } from '@cindy/maker-shared/brand-identity';
 import { CINDY_MIME_TYPE, SHARE_MIME_TYPE } from '../../shared/fileTypes.js';
 import { CURRENT_CINDY_REGION } from '../../shared/brandRegion.js';
 import { createLogger } from '../logger.js';
+import { shouldSkipSystemIntegration } from '../startupMode.js';
 
 /**
  * Windows 自有文件类型自注册:.cindy 文件关联(双击装入的
@@ -81,7 +82,7 @@ async function regSetNamed(keyPath: string, valueName: string, value: string): P
 
 /** 启动时调用:fire-and-forget,内部吞掉一切失败。 */
 export function registerCindyFileAssociation(): void {
-  if (process.platform !== 'win32' || !app.isPackaged) return;
+  if (process.platform !== 'win32' || !app.isPackaged || shouldSkipSystemIntegration()) return;
   void (async () => {
     try {
       const exe = process.execPath;
