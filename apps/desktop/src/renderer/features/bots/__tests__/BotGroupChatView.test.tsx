@@ -3594,6 +3594,51 @@ it('keeps copy/share in each author row\'s more menu and shares only message con
   } finally { focus.mockRestore(); resetBotReadStateForTests(); }
 });
 
+// Unit / PR #9249 r4500734691: actual main-group disclosure + one incoming
+// reply that still fits the viewport. Existing main read tests require onScroll;
+// End/wheel here must advance local and server read positions without displacement.
+it.each(['End', 'wheel'])('acknowledges short main-group replies on explicit %s return without scrolling', async action => {
+  const focus = vi.spyOn(document, 'hasFocus').mockReturnValue(true);
+  const manage = vi.fn().mockResolvedValue({ ok: true });
+  window.electronAPI.maker.chatServer.manage = manage;
+  const answer = msg({ id: 'process-answer', authorKind: 'bot', authorBotId: 'mimi', content: 'Short process answer', createdAt: 200,
+    process: { groupId: 'g1', executionId: 'short-process', sessionId: 'work', clientId: 'note', deviceId: 'home' } });
+  const data = detail({ serverBacked: true, messages: [answer] });
+  data.members[0] = { ...data.members[0]!, isOwned: true, homeDeviceId: 'home' };
+  mocks.getBotGroup.mockResolvedValue({ ok: true, group: data });
+  mocks.remoteInvoke.mockResolvedValue([]);
+  const view = renderView();
+  try {
+    await screen.findByText('Short process answer');
+    const scroller = screen.getByTestId('bot-group-timeline');
+    Object.defineProperties(scroller, {
+      scrollHeight: { configurable: true, value: 600 }, clientHeight: { configurable: true, value: 600 },
+      // jsdom has no scroll-range clamping; model the browser's zero-range result.
+      scrollTop: { configurable: true, get: () => 0, set: () => {} },
+    });
+    act(() => window.dispatchEvent(new Event('focus')));
+    expect(getBotLastReadAt(botGroupReadKey('g1'))).toBe(200);
+    await act(async () => fireEvent.click(scroller.querySelector('button[data-scroll-disclosure-header]')!));
+    mocks.getBotGroup.mockResolvedValue({ ok: true, group: { ...data, serverUnread: { count: 1, mentioned: false }, messages: [answer,
+      msg({ id: 'short-new-reply', sequence: 2, authorKind: 'bot', content: 'New short reply', createdAt: 1200 }),
+    ] } });
+    await act(async () => mocks.pushes.forEach(push => push({ groupId: 'g1', change: 'messages' })));
+    await screen.findByText('New short reply');
+    act(() => window.dispatchEvent(new Event('focus')));
+    expect(getBotLastReadAt(botGroupReadKey('g1'))).toBe(200);
+    expect(manage).not.toHaveBeenCalled();
+    act(() => {
+      if (action === 'End') fireEvent.keyDown(scroller, { key: 'End' });
+      else fireEvent.wheel(scroller, { deltaY: 80 });
+    });
+    expect(scroller.scrollTop).toBe(0);
+    expect(getBotLastReadAt(botGroupReadKey('g1'))).toBe(1200);
+    expect(manage).toHaveBeenCalledExactlyOnceWith({ groupId: 'g1', action: { type: 'read', messageId: 'short-new-reply' } });
+    act(() => { fireEvent.keyDown(scroller, { key: 'End' }); fireEvent.wheel(scroller, { deltaY: 80 }); });
+    expect(manage).toHaveBeenCalledTimes(1);
+  } finally { view.unmount(); focus.mockRestore(); resetBotReadStateForTests(); }
+});
+
 it('acknowledges a Bot’s plan card at the tail, the same range the unread badge counts', async () => {
   resetBotReadStateForTests();
   const focus = vi.spyOn(document, 'hasFocus').mockReturnValue(true);

@@ -1345,7 +1345,8 @@ function BotGroupChatContent({ groupId, direct }: { groupId: string; direct: boo
         }}
         onWheel={event => {
           interruptJumpToBottom();
-          processScroll.onWheel(event);
+          // A short timeline can resume following without emitting onScroll.
+          if (processScroll.onWheel(event)) acknowledgeSoon();
         }}
         onTouchStart={interruptJumpToBottom}
         onPointerDown={event => {
@@ -1356,7 +1357,7 @@ function BotGroupChatContent({ groupId, direct }: { groupId: string; direct: boo
         onPointerCancel={processScroll.onPointerUp}
         onKeyDown={event => {
           if (['ArrowUp', 'ArrowDown', 'PageUp', 'PageDown', 'Home', 'End', ' '].includes(event.key)) interruptJumpToBottom();
-          processScroll.onKeyDown(event);
+          if (processScroll.onKeyDown(event)) acknowledgeSoon();
         }}
         onScroll={(event) => {
           const element = event.currentTarget;

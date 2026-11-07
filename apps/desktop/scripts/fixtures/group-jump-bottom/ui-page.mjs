@@ -11,8 +11,10 @@ export default {
     'src/renderer/features/cc-agent/workdir-browse/DrawioPreview': 'export const DrawioPreview = () => null;',
     'src/renderer/features/cc-agent/workdir-browse/PdfPreview': 'export const PdfPreview = () => null;',
   },
-  notCovered: 'PDF/Drawio previews, real network, sending and native input; actual group layout and wheel navigation use synthetic host data.',
+  notCovered: 'PDF/Drawio previews and real network; actual group layout and native input use synthetic host data. Short-main read checks supply a focused-host signal to the hidden Electron window.',
   cases: {
+    'short-main-read': { about: 'Explicit End/wheel return acknowledges an inspected main chat even when it fits without scrolling',
+      data: { ...group.cases['process-history'].data, shortMainRead: true } },
     'thread-process': { about: 'A process in the actual topic sidebar uses the same stable disclosure behavior as the main group',
       data: { ...group.cases['process-history'].data, processDisclosure: true, threadPanel: true } },
     'live-process': { about: 'Running process disclosure keeps its heading still through each animation frame',
@@ -36,6 +38,7 @@ export default {
     }
   },
   async check(page, ui) {
+    if (ui.data.shortMainRead) return checkShortMainRead(page, ui);
     if (ui.data.processDisclosure) return checkProcessDisclosure(page, ui);
     const timeline = page.getByTestId('bot-group-timeline');
     const composer = page.locator('[data-chat-composer-stack]');
@@ -372,4 +375,60 @@ async function assertBrowsingSurvivesResize(timeline) {
     return el.scrollHeight - el.scrollTop - el.clientHeight;
   });
   assert.ok(away > 200, `content resize overrode manual browsing (${away}px from tail)`);
+}
+
+// PR #9249 r4500734691: real production handlers and native zero-range input.
+// The UI runner is hidden; focus and server receipts are explicit host fixtures.
+async function checkShortMainRead(page, ui) {
+  const timeline = page.getByTestId('bot-group-timeline');
+  const heading = page.locator('[data-teammate-process] > button').last();
+  await heading.waitFor();
+  await page.evaluate(() => {
+    window.__uiPage.originalHasFocus = document.hasFocus;
+    document.hasFocus = () => true;
+    window.__uiPage.mainReads = [];
+    window.electronAPI.maker.chatServer.manage = async input => {
+      window.__uiPage.mainReads.push(input);
+      return { ok: true };
+    };
+  });
+  try {
+    for (const action of ['End', 'wheel']) {
+      await heading.click();
+      await page.evaluate(async action => {
+        const { group } = await window.electronAPI.maker.getBotGroup('fixture-group');
+        group.messages = [...group.messages, { ...group.messages[0], id: `short-${action}`, sequence: group.messages.length + 1,
+          content: `Short unread reply ${action}`, process: undefined, createdAt: Date.now() }];
+        group.serverUnread = { count: 1, mentioned: false };
+        window.__uiPage.emit('botGroupChanged', { groupId: group.id, change: 'messages' });
+      }, action);
+      await page.getByText(`Short unread reply ${action}`, { exact: true }).waitFor();
+      const before = await page.evaluate(() => window.__uiPage.mainReads.length);
+      assert.equal(before, action === 'End' ? 0 : 1, 'inspection must preserve unread replies');
+      assert.equal(await timeline.evaluate(el => el.scrollHeight - el.clientHeight), 0, 'reply still fits the viewport');
+      await timeline.evaluate(el => {
+        window.__uiPage.mainScrollEvents = 0;
+        el.addEventListener('scroll', () => { window.__uiPage.mainScrollEvents++; });
+        el.tabIndex = -1;
+        el.focus({ preventScroll: true });
+      });
+      if (action === 'End') await timeline.press('End');
+      else {
+        const box = await timeline.boundingBox();
+        await page.mouse.move(box.x + 24, box.y + box.height / 2);
+        await page.mouse.wheel(0, 80);
+      }
+      await page.waitForFunction(count => window.__uiPage.mainReads.length === count + 1, before);
+      assert.deepEqual(await page.evaluate(() => window.__uiPage.mainReads.at(-1)),
+        { groupId: 'fixture-group', action: { type: 'read', messageId: `short-${action}` } });
+      assert.equal(await timeline.evaluate(el => el.scrollTop), 0, 'explicit return has no displacement');
+      assert.equal(await page.evaluate(() => window.__uiPage.mainScrollEvents), 0, 'no scroll notice can acknowledge for us');
+      await timeline.press('End');
+      await page.mouse.wheel(0, 80);
+      assert.equal(await page.evaluate(() => window.__uiPage.mainReads.length), before + 1, 'unchanged follow does not repeat the read');
+      await ui.capture(`short-main-read-${action}`);
+    }
+  } finally {
+    await page.evaluate(() => { document.hasFocus = window.__uiPage.originalHasFocus; });
+  }
 }

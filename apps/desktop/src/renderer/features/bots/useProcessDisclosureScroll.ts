@@ -67,6 +67,7 @@ export function useProcessDisclosureScroll(
       if (inspecting.current && event.deltaY > 0 && atBottom(event.currentTarget)) {
         resumeFollow();
         event.currentTarget.scrollTop = event.currentTarget.scrollHeight;
+        return true;
       }
     },
     onKeyDown(event: KeyboardEvent<HTMLDivElement>) {
@@ -76,6 +77,7 @@ export function useProcessDisclosureScroll(
       if (event.key === 'End' && inspecting.current) {
         resumeFollow();
         event.currentTarget.scrollTop = event.currentTarget.scrollHeight;
+        return true;
       }
     },
     onScroll(event: UIEvent<HTMLDivElement>) {
