@@ -1,0 +1,14 @@
+name: Cindy production source coverage
+
+# Keep default queries, all languages, build/install scripts, test helpers,
+# fixtures, vendored code and generated runtime assets. Only standalone test
+# modules and unpublished design previews are excluded from extraction.
+# See docs/dev-rules/development-workflow.md for validation and activation.
+paths-ignore:
+  - apps/desktop/src/**/*.test.ts
+  - apps/desktop/src/**/*.test.tsx
+  - apps/mobile/**/*.test.ts
+  - apps/mobile/**/*.test.tsx
+  - packages/*/src/**/*.test.ts
+  - packages/*/src/**/*.test.tsx
+  - docs/design-previews
