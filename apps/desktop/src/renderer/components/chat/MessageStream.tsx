@@ -5048,6 +5048,18 @@ export function MessageStream({
         clearChipJumpSuppression();
         return;
       }
+      if (event.key === 'End') {
+        const root = scrollRef.current;
+        // At a disclosure's reserved tail, End may produce no scroll event.
+        // Restore the existing down-intent state only for this list's input.
+        if (root && event.target instanceof Node && root.contains(event.target)
+          && !isEditableKeyboardTarget(event.target) && contentRef.current?.style.minHeight
+          && shouldRepinOnDownIntent({ distanceFromBottom: root.scrollHeight - root.scrollTop - root.clientHeight })) {
+          clearChipJumpSuppression();
+          pinAutoFollowForUserDownIntent();
+        }
+        return;
+      }
       if (!HISTORY_NAVIGATION_KEYS.has(event.key)) return;
       if (isEditableKeyboardTarget(event.target)) return;
       clearChipJumpSuppression();
@@ -5067,6 +5079,7 @@ export function MessageStream({
   }, [
     clearChipJumpSuppression,
     ownsHardwareScrollActions,
+    pinAutoFollowForUserDownIntent,
     triggerUserIntentFill,
     unpinAutoFollowForUserUpIntent,
   ]);

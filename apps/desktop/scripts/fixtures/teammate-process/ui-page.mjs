@@ -101,6 +101,32 @@ export default {
         assert.equal(await page.getByText(await ui.t('chat.newMessageIndicator.label', { count: 0 }), { exact: true }).count(), 0, 'The departing unread indicator keeps its last count instead of flashing zero');
       }
       await ui.capture('follow-restored');
+      // #9249 r4501358984: End at the reserved tail has no native movement to
+      // restore following. Use real heading focus/keys and subsequent DOM growth.
+      for (const key of ['End', 'Control+End']) {
+        if (await heading.getAttribute('aria-expanded') === 'false') await sampleToggle(heading, `${key}-expand`);
+        await scroll.evaluate(root => { root.scrollTop = root.scrollHeight; });
+        await page.waitForFunction(() => {
+          const root = document.querySelector('[data-scroll-container]');
+          return Math.abs(root.scrollHeight - root.scrollTop - root.clientHeight) <= 1;
+        });
+        await sampleToggle(heading, `${key}-collapse-at-tail`);
+        assert.ok(await scroll.evaluate(root => !!root.firstElementChild.style.minHeight), 'Collapse reserves the old tail');
+        assert.ok(await scroll.evaluate(root => Math.abs(root.scrollHeight - root.scrollTop - root.clientHeight) <= 1), 'End starts at a tail with no remaining native scroll distance');
+        await heading.focus();
+        await heading.press(key);
+        await page.waitForFunction(() => document.querySelector('[data-scroll-container]').firstElementChild.style.minHeight === '');
+        await scroll.evaluate(root => {
+          const answer = root.querySelector('[data-message-client-id="final_answer"]');
+          answer.style.minHeight = `${answer.getBoundingClientRect().height + root.clientHeight * 2}px`;
+        });
+        await page.waitForFunction(() => {
+          const root = document.querySelector('[data-scroll-container]');
+          return Math.abs(root.scrollHeight - root.scrollTop - root.clientHeight) <= 1;
+        });
+        await ui.capture(`${key.replace('+', '-')}-restores-process-follow`);
+        await scroll.evaluate(root => { root.querySelector('[data-message-client-id="final_answer"]').style.minHeight = ''; });
+      }
       return;
     }
     // Browser integration: the existing static stream cases never changed deferred.loading.
