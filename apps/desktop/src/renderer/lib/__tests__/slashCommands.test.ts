@@ -51,6 +51,20 @@ function stubCommandLists(skillResult: { success: boolean; skills?: UnifiedComma
   });
 }
 
+// Unit: repeated palette consumers previously logged each identical conflict.
+// Existing merge tests checked precedence but not repeated renderer log IPC.
+it('warns once per conflict while preserving command precedence across rebuilds', () => {
+  const logToMain = vi.fn();
+  vi.stubGlobal('window', { electronAPI: { logToMain } });
+  const preferred = skill({ name: 'conflict-diagnostic-test' });
+  const desktop: UnifiedCommand = { kind: 'desktop', name: preferred.name, description: 'fallback' };
+  for (let i = 0; i < 3; i++) expect(mergeCommands([desktop], [], [preferred])).toEqual([preferred]);
+  const warnings = () => logToMain.mock.calls.filter(([level]) => level === 'warn');
+  expect(warnings()).toHaveLength(1);
+  expect(mergeCommands([], [{ kind: 'agent-builtin', name: preferred.name, description: 'builtin' }], [preferred])).toEqual([preferred]);
+  expect(warnings()).toHaveLength(2);
+});
+
 describe('loadAllCommands Learn fallback', () => {
   it.each([
     ['the Skill query fails', { success: false }],

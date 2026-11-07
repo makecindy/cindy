@@ -126,7 +126,7 @@ function BotGroupProcessHistory({ process, deviceId }: { process: BotGroupProces
   // Resolve availability before advertising a disclosure, just like private chat.
   if (!result || (!failed && !projection.segments.length)) return null;
   return <WorkGroupBlock blockId={`group-process:${process.executionId}`} journal durationMs={process.durationMs ?? projection.durationMs}
-    childItems={[{ kind: 'rendered', key: process.executionId, prose: false, renderNode: () => <>
+    childItems={[{ kind: 'rendered', key: process.executionId, renderNode: () => <>
       {loading && <Spinner size={14} />}
       {failed && !loading && <Button variant="secondary" tone="quiet" size="sm" onClick={() => retry(v => v + 1)}>{t('chat.errorBanner.retry')}</Button>}
       {result && <BotGroupProcessEntries messages={result.messages} id={`group-process:${process.executionId}`} />}
@@ -135,7 +135,6 @@ function BotGroupProcessHistory({ process, deviceId }: { process: BotGroupProces
 
 /** The same segment component as private chat; records never enter group messages. */
 export function BotGroupProcessEntries({ messages, id, running = false }: { messages: readonly BotGroupProcessMessage[]; id: string; running?: boolean }) {
-  const { t } = useTranslation();
   const projection = projectBotGroupProcess(messages, running);
   return <div data-testid="bot-group-process-notes" className="flex min-w-0 flex-col gap-3">
     {projection.segments.map((segment, index) => segment.kind === 'content'
@@ -144,6 +143,5 @@ export function BotGroupProcessEntries({ messages, id, running = false }: { mess
           childItems={segment.items.map(item => item.kind === 'thinking'
             ? { kind: 'thinking', key: item.key, message: { clientId: item.key, role: 'thinking', content: '' } }
             : { kind: 'tools', key: item.key, toolCalls: (item.toolCalls ?? []).map(message => ({ ...message, role: 'tool_use' as const })), resultMap: item.resultMap ?? new Map(), settledIds: item.settledIds ?? new Set() }) as WorkGroupChild[]} />)}
-    {running && (!projection.segments.length || projection.segments.at(-1)?.kind === 'content') && <div className="flex items-center gap-2 text-14 text-[var(--text-secondary)]"><Spinner size={14} />{t(projection.segments.length ? 'chat.teammateProcess.thinking' : 'chat.teammateProcess.processing')}</div>}
   </div>;
 }

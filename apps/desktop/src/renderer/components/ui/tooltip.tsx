@@ -92,7 +92,7 @@ const TooltipContent = React.forwardRef<
         // F-PJ-7 视觉规格：12px 圆角 / 13px 文本 / 8px×10px 内边距
         // select-none:tooltip 是 hover 提示 chrome,role="tooltip" 不在
         // globals.css 的全局禁选名单里,不加会让全 app 提示文字可被划选。
-        'z-[60] select-none rounded-xl px-2.5 py-1.5 text-13 leading-snug shadow-lg',
+        'z-[60] select-none rounded-xl px-2.5 py-1.5 text-13 leading-snug shadow-[shadow:var(--shadow-menu)]',
         // Cindy tooltip 两模式都是深底白字；Board 浅描边叠在深底上会看成一圈白边。
         'border border-transparent bg-[var(--tooltip-bg)] text-[var(--tooltip-text)]',
         'max-w-[420px] break-all', // 长路径允许任意位置截断换行

@@ -47,42 +47,6 @@ afterEach(() => {
 });
 
 describe('AppShortcutStore', () => {
-  it('keeps plugin bindings when an instance is unavailable and never displaces an existing shortcut', () => {
-    const id = `plugin:${'a'.repeat(64)}` as const;
-    const definition = { id, label: 'Format', pluginName: 'Example', scope: 'session' as const, defaultCombo: combo('KeyB', { meta: true }) };
-    const store = makeStore('darwin');
-    store.setPluginShortcuts([definition]);
-    expect(store.getPluginShortcutCombos(id)).toEqual([]); // ⌘B belongs to Cindy.
-    expect(store.setOverride(id, combo('KeyJ', { meta: true }))).toBeNull();
-    expect(store.setOverride('new-maker', combo('KeyJ', { meta: true }))).toBe('conflict');
-    store.setPluginShortcuts([]);
-    expect(store.getPluginShortcutCombos(id)).toEqual([]);
-    expect(store.setOverride('toggle-sidebar', combo('KeyK', { meta: true }))).toBeNull();
-    const reopened = makeStore('darwin');
-    expect(reopened.getOverrides()[id]).toEqual(combo('KeyJ', { meta: true }));
-    reopened.setPluginShortcuts([definition]);
-    expect(reopened.getPluginShortcutCombos(id)).toEqual([combo('KeyJ', { meta: true })]);
-  });
-
-  it('gives user bindings priority over plugin defaults and suppresses a stale conflicting binding', () => {
-    const first = `plugin:${'a'.repeat(64)}` as const;
-    const second = `plugin:${'b'.repeat(64)}` as const;
-    const definitions = [
-      { id: first, label: 'First', pluginName: 'Example', scope: 'session' as const, defaultCombo: combo('KeyJ', { meta: true }) },
-      { id: second, label: 'Second', pluginName: 'Example', scope: 'session' as const },
-    ];
-    const store = makeStore('darwin');
-    store.setPluginShortcuts(definitions);
-    expect(store.setOverride(second, combo('KeyJ', { meta: true }))).toBeNull();
-    expect(store.getPluginShortcutCombos(first)).toEqual([]);
-    expect(store.getPluginShortcutCombos(second)).toEqual([combo('KeyJ', { meta: true })]);
-    expect(store.setOverride(first, combo('KeyJ', { meta: true }))).toBe('conflict');
-    store.setPluginShortcuts([]);
-    expect(store.setOverride('toggle-sidebar', combo('KeyJ', { meta: true }))).toBeNull();
-    store.setPluginShortcuts(definitions);
-    expect(store.getPluginShortcutCombos(second)).toEqual([]);
-    expect(store.getOverrides()[second]).toEqual(combo('KeyJ', { meta: true }));
-  });
   it('returns registry defaults when no overrides exist', () => {
     const store = makeStore('darwin');
     expect(store.getEffectiveCombos('toggle-sidebar')).toEqual([

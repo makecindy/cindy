@@ -12,6 +12,7 @@ import {
   clampAppearanceTerminalSize,
   clampAppearanceUiSize,
   clampAppearanceWindowZoom,
+  isAppIcon,
   type AppearanceOverrides,
   type AppearanceSettings,
   type WallpaperId,
@@ -23,7 +24,6 @@ import {
 import { assertTrustedAppRendererEvent } from './security/trustedAppRenderer.js';
 import { throwIpcError } from './utils/ipcValidate.js';
 import { isAppContentWindow } from './windowFocusClassifier.js';
-import { resetRuntimeAppIcon } from './app-icon.js';
 import {
   readAppearanceSettings,
   readAppearanceSettingsState,
@@ -31,6 +31,7 @@ import {
   updateAppearanceSettingsAtomic,
   writeAppearanceSettingsPatch,
 } from './appearance-settings-store.js';
+import { applyDockIcon } from './app-icon.js';
 
 export { writeAppearanceSettingsPatch } from './appearance-settings-store.js';
 
@@ -188,9 +189,8 @@ function appearanceForWindow(
   win: BrowserWindow | null,
 ): AppearanceSettings {
   if (isAppContentWindow(win)) return settings;
-  const { customWallpaperUrl: _privateUrl, customWallpaperFallbackUrl: _fallback,
-    uiFontResource: _ui, codeFontResource: _code, bodyFontResource: _body, appIconResource: _icon, ...publicSettings } = settings;
-  void _privateUrl; void _fallback; void _ui; void _code; void _body; void _icon;
+  const { customWallpaperUrl: _privateUrl, ...publicSettings } = settings;
+  void _privateUrl;
   return {
     ...publicSettings,
     wallpaperId: settings.wallpaperId === 'custom' ? 'none' : settings.wallpaperId,
@@ -206,11 +206,6 @@ function broadcast(settings: AppearanceSettings): void {
       // A window may be torn down between enumeration and send.
     }
   }
-}
-
-export function publishAppearanceSettings(settings = readAppearanceSettings()): void {
-  applyAppearanceToWindows(settings);
-  broadcast(settings);
 }
 
 function parsePatch(rawPatch: unknown): AppearanceOverrides {
@@ -231,13 +226,14 @@ function parsePatch(rawPatch: unknown): AppearanceOverrides {
     'wallpaperVisibility',
     'wallpaperBlur',
     'wallpaperMotion',
+    'appIcon',
   ]);
   for (const key of Object.keys(raw)) {
     if (!allowed.has(key)) throwIpcError('INVALID_PARAMS', `unknown appearance field: ${key}`);
   }
   const patch: AppearanceOverrides = {};
-  if ('uiFamily' in raw) { patch.uiFamily = parseFamily(raw.uiFamily, 'uiFamily'); patch.uiFontResource = undefined; }
-  if ('codeFamily' in raw) { patch.codeFamily = parseFamily(raw.codeFamily, 'codeFamily'); patch.codeFontResource = undefined; }
+  if ('uiFamily' in raw) patch.uiFamily = parseFamily(raw.uiFamily, 'uiFamily');
+  if ('codeFamily' in raw) patch.codeFamily = parseFamily(raw.codeFamily, 'codeFamily');
   if ('terminalFamily' in raw)
     patch.terminalFamily = parseFamily(raw.terminalFamily, 'terminalFamily');
   if ('uiSize' in raw)
@@ -314,6 +310,10 @@ function parsePatch(rawPatch: unknown): AppearanceOverrides {
             APPEARANCE_LIMITS.wallpaperBlur,
           );
   }
+  if ('appIcon' in raw) {
+    if (!isAppIcon(raw.appIcon)) throwIpcError('INVALID_PARAMS', 'appIcon is not supported');
+    patch.appIcon = raw.appIcon;
+  }
   return patch;
 }
 
@@ -347,13 +347,14 @@ export const __testing = { parsePatch };
 export async function updateAppearanceFromSettings(rawPatch: unknown) {
   const settings = await writeAppearanceSettingsPatch(parsePatch(rawPatch));
   applyAppearanceToWindows(settings);
+  applyDockIcon(settings);
   broadcast(settings);
   return settings;
 }
 export async function resetAppearanceFromSettings() {
   const settings = await resetAppearanceSettings();
-  resetRuntimeAppIcon();
   applyAppearanceToWindows(settings);
+  applyDockIcon(settings);
   broadcast(settings);
   return settings;
 }

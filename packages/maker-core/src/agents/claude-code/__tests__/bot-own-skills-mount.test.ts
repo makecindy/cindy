@@ -82,7 +82,8 @@ function createFakeQuery() {
     setPermissionMode: vi.fn(async () => {}),
     setModel: vi.fn(async () => {}),
     applyFlagSettings: vi.fn(async () => {}),
-    mcpServerStatus: vi.fn(async () => []),
+    mcpServerStatus: vi.fn(async (): Promise<Array<{ name: string; status: string; scope?: string }>> => []),
+    setMcpServers: vi.fn(async (servers: Record<string, unknown>) => ({ added: [], removed: servers.custom_magpie ? [] : ['custom_magpie'], errors: {} })),
     interrupt: vi.fn(async () => {}),
     close: vi.fn(async () => {}),
     rewindFiles: vi.fn(async () => ({ canRewind: false })),
@@ -98,6 +99,8 @@ async function makeTempDir(): Promise<string> {
 const OWN_SKILL_ROOT = '/userdata/bot-skills/bot-1';
 
 async function startBotSession(input: {
+  query?: ReturnType<typeof createFakeQuery>;
+  duplicateResolver?: AgentDeps['resolveLocalMcpDuplicateChoices'];
   ownSkillPluginRoots?: string[];
   reviewMode?: boolean;
   remote?: boolean;
@@ -112,9 +115,15 @@ async function startBotSession(input: {
   const configDir = await makeTempDir();
   process.env.CLAUDE_CONFIG_DIR = configDir;
   const workingDir = await makeTempDir();
-  sdkMock.query.mockReturnValue(createFakeQuery());
+  sdkMock.query.mockReturnValue(input.query ?? createFakeQuery());
 
   const deps = createDeps();
+  if (input.duplicateResolver) {
+    deps.resolveLocalMcpDuplicateChoices = input.duplicateResolver;
+    deps.mcpProviders = ['custom_magpie', 'other'].map(name => ({ name,
+      toClaudeSdkConfig: () => ({ type: 'http', url: 'http://localhost:3425/mcp' }),
+    }));
+  }
   if (input.managed) {
     await fs.mkdir(`${configDir}/managed/learn`, { recursive: true });
     await fs.writeFile(`${configDir}/managed/learn/SKILL.md`, '---\nname: learn\ndescription: Fixture\n---\nBody');
@@ -188,7 +197,7 @@ async function startBotSession(input: {
         settingSources?: string[];
         disallowedTools?: string[];
         strictMcpConfig?: boolean;
-        settings?: { autoMemoryEnabled?: boolean; autoDreamEnabled?: boolean; skillOverrides?: Record<string, string> };
+        settings?: { autoMemoryEnabled?: boolean; autoDreamEnabled?: boolean; skillOverrides?: Record<string, string>; deniedMcpServers?: Array<{serverName: string}> };
         systemPrompt?: { append?: string };
       }
     | undefined;
@@ -248,6 +257,66 @@ afterEach(async () => {
 });
 
 describe('Claude Code mounts the Bot\'s own learned Skills', () => {
+  // #8902: the public startSession must change the actual SDK tool/config inputs,
+  // while preserving native user settings and excluding nonlocal/strict runtimes.
+  it.each(['cindy', 'claude'] as const)('applies the explicit %s source choice to ordinary local sessions', async choice => {
+    const duplicateResolver = vi.fn(async () => ({
+      skipHostServers: choice === 'claude' ? ['custom_magpie'] : [],
+      denyNativeServers: choice === 'cindy' ? ['magpie'] : [],
+      nativeServersToKeep: choice === 'claude' ? ['magpie'] : [],
+    }));
+    const query = createFakeQuery();
+    query.mcpServerStatus.mockResolvedValue([{ name: 'magpie', status: 'connected', scope: 'user' }]);
+    const options = await startBotSession({ ordinary: true, duplicateResolver, query });
+    expect(Object.keys(options.mcpServers ?? {})).toEqual(['custom_magpie', 'other']);
+    if (choice === 'claude') {
+      expect(query.setMcpServers).toHaveBeenNthCalledWith(1, options.mcpServers);
+      expect(query.setMcpServers).toHaveBeenNthCalledWith(2, { other: options.mcpServers!.other });
+      expect(query.setMcpServers.mock.calls[1]![0].other).toBe(options.mcpServers!.other);
+    } else expect(query.setMcpServers).not.toHaveBeenCalled();
+    expect(options.settings?.deniedMcpServers ?? []).toEqual(choice === 'cindy' ? [{ serverName: 'magpie' }] : []);
+    expect(options.settingSources).toEqual(['user', 'project', 'local']);
+    expect(options.strictMcpConfig).toBeUndefined();
+  });
+  // PR #9055: files cannot reflect managed policy. Exercise the real startSession
+  // assembly with native status absent, disconnected or unreadable; unit, no CLI.
+  it.each(['missing', 'failed', 'pending', 'error', 'update-error'])('keeps available connections when native selection is %s', async status => {
+    const query = createFakeQuery();
+    if (status === 'error') query.mcpServerStatus.mockRejectedValue(new Error('status unavailable'));
+    else query.mcpServerStatus.mockResolvedValue(status === 'missing' ? [] : [{ name: 'magpie', status: status === 'update-error' ? 'connected' : status, scope: 'user' }]);
+    if (status === 'update-error') query.setMcpServers.mockResolvedValueOnce({ added: [], removed: [], errors: {} })
+      .mockRejectedValueOnce(new Error('update unavailable'));
+    const options = await startBotSession({ ordinary: true, query,
+      duplicateResolver: async () => ({ skipHostServers: ['custom_magpie'], denyNativeServers: [], nativeServersToKeep: ['magpie'] }),
+    });
+    expect(options.mcpServers).toHaveProperty('custom_magpie');
+    expect(query.setMcpServers).toHaveBeenNthCalledWith(1, options.mcpServers);
+    expect(query.setMcpServers).toHaveBeenCalledTimes(status === 'update-error' ? 2 : 1);
+    // Failed diagnostics must release the input gate, not strand the first turn.
+    const prompt = sdkMock.query.mock.calls.at(-1)![0].prompt as AsyncIterable<unknown>;
+    const next = prompt[Symbol.asyncIterator]().next();
+    await liveHandles.at(-1)!.send({ type: 'user', content: 'use the connection' });
+    expect((await next).value).toMatchObject({ type: 'user' });
+  });
+  // PR #9055: a connected name alone can belong to a host/provider, plugin or
+  // project override. Unit: saved user-scope choice + non-user runtime status.
+  it.each([['dynamic', 'magpie'], ['project', 'magpie'], [undefined, 'magpie'], ['user', 'other']] as const)(
+    'does not replace Cindy with a %s-scoped connection named %s', async (scope, name) => {
+      const query = createFakeQuery();
+      query.mcpServerStatus.mockResolvedValue([{ name, status: 'connected', scope }]);
+      const options = await startBotSession({ ordinary: true, query,
+        duplicateResolver: async () => ({ skipHostServers: ['custom_magpie'], denyNativeServers: [], nativeServersToKeep: [name] }),
+      });
+      expect(query.setMcpServers).toHaveBeenCalledTimes(1);
+      expect(query.setMcpServers).toHaveBeenCalledWith(options.mcpServers);
+    });
+  it.each([{ ordinary: false }, { ordinary: true, remote: true }, { ordinary: true, reviewMode: true }, { ordinary: true, localHostOnly: true }])(
+    'does not apply local duplicate choices in isolated/remote runtimes: %j', async context => {
+      const duplicateResolver = vi.fn(async () => ({ skipHostServers: ['custom_magpie'], denyNativeServers: ['magpie'] }));
+      await startBotSession({ ...context, duplicateResolver });
+      expect(duplicateResolver).not.toHaveBeenCalled();
+    },
+  );
   it('passes the per-Bot skill root as a local plugin', async () => {
     const options = await startBotSession({ ownSkillPluginRoots: [OWN_SKILL_ROOT] });
     expect(options.plugins).toEqual([{ type: 'local', path: OWN_SKILL_ROOT }]);

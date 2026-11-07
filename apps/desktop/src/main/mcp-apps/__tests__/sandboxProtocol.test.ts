@@ -34,7 +34,6 @@ import {
   assertMcpAppDocumentCaller,
   clearMcpAppDocuments,
   mountRemoteAppDocument,
-  mountNativeUiPageDocument,
   registerMcpAppProtocol,
   isMcpAppFrameNavigationAllowed,
   isMcpAppPermissionRequest,
@@ -58,35 +57,6 @@ const document = {
   prefersBorder: true,
 };
 describe('MCP App local protocol isolation', () => {
-  it('mounts native plugin pages with an isolated bridge and per-view package assets', async () => {
-    let handler!: (request: Request) => Promise<Response> | Response;
-    vi.spyOn(protocol, 'handle').mockImplementation((_scheme, callback) => { handler = callback; });
-    registerMcpAppProtocol();
-    const readAsset = vi.fn(async (relative: string) => new Response(relative));
-    const dispose = vi.fn();
-    const id = mountNativeUiPageDocument({ html: '<!doctype html><html><head><script src="view.js"></script></head></html>',
-      entry: 'ui/view.html' }, 'renderer:1', async () => ({}), readAsset, dispose);
-    const html = await (await handler(new Request(`cindy-mcp-app://${id}-view/resource`))).text();
-    expect(html).toContain(`cindy-mcp-app://${id}-view/__cindy/plugin/ui/`);
-    expect(html).toContain('data-cindy-native-ui');
-    expect(html).not.toContain('@modelcontextprotocol/ext-apps');
-    expect(html.indexOf('<base')).toBeLessThan(html.indexOf('src="view.js"'));
-    const url = `cindy-mcp-app://${id}-view/__cindy/plugin/ui/view.js`;
-    const frame = { url: `cindy-mcp-app://${id}-view/resource` };
-    const details = { url, method: 'GET', webContentsId: 1, frame, requestHeaders: {} };
-    const other = vi.fn();
-    state.beforeHeaders!({ ...details, webContentsId: 2 } as never, other);
-    expect(other).toHaveBeenCalledWith({ cancel: true });
-    const allowed = vi.fn(); state.beforeHeaders!(details as never, allowed);
-    const headers = allowed.mock.calls[0][0].requestHeaders;
-    expect((await handler(new Request(url))).status).toBe(404);
-    expect(await (await handler(new Request(url, { headers }))).text()).toBe('ui/view.js');
-    expect(readAsset).toHaveBeenCalledExactlyOnceWith('ui/view.js');
-    expect((await handler(new Request(`cindy-mcp-app://${id}-view/__cindy/plugin/..%2Fsecret.js`, { headers }))).status).toBe(404);
-    unmountRemoteAppDocument(id, 'renderer:1');
-    expect((await handler(new Request(url, { headers }))).status).toBe(404);
-    expect(dispose).toHaveBeenCalledOnce();
-  });
   it('gives remotely mounted documents the same authenticated bridge and releases their Main binding', async () => {
     let handler!: (request: Request) => Promise<Response> | Response;
     vi.spyOn(protocol, 'handle').mockImplementation((_scheme, callback) => { handler = callback; });

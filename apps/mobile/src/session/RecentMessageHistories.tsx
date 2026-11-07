@@ -4,6 +4,7 @@ import { useGlobalSearchParams, useSegments } from 'expo-router';
 import { NavigationContext, NavigationRouteContext, useIsFocused } from 'expo-router/react-navigation';
 import { PaneViewportProvider, usePaneViewport } from '@/platform/AdaptiveWindowContext';
 import { useTheme } from '@/theme';
+import { mobileDebugLog } from '@/debug/mobileDebugLog';
 import { getRecentTasks, recentTaskKey, subscribeRecentTasks } from './recentTasks';
 import { NativeHistoryHost, NativeHistorySlot, needsResidentHistoryUpgrade } from './NativeResidentHistory';
 import { useResidentHomeListContextBridge } from './ResidentHomeList';
@@ -145,6 +146,18 @@ export function RecentMessageHistories({ activeKey, children, topInset = 0, bott
     });
   }, [host]);
   useLayoutEffect(() => { measure(); return () => { ++revision.current; }; }, [measure, focused, viewport.width, viewport.height]);
+  useLayoutEffect(() => {
+    // This is the requested native surface state, not proof of UIKit attachment.
+    // Keep children/message bodies and full task/device identities out of logs.
+    const task = getRecentTasks().find(task => recentTaskKey(task.params) === activeKey);
+    mobileDebugLog('debug', 'recovery', 'message history surface', {
+      hostRef: task?.params.deviceId.slice(0, 8), sessionRef: task?.params.sessionId.slice(0, 8),
+      owner, focused, ready, interactive,
+      nativeSlot: !!NativeHistorySlot, inlineFallback: needsResidentHistoryUpgrade,
+      measured: frame !== null, width: frame?.width, height: frame?.height,
+      left: frame?.left, top: frame?.top, topInset, bottomInset,
+    });
+  }, [activeKey, owner, focused, ready, interactive, frame, topInset, bottomInset]);
   useLayoutEffect(() => () => release(owner), [release, owner]);
   useLayoutEffect(() => {
     if (!frame || needsResidentHistoryUpgrade) return;
