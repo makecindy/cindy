@@ -11493,7 +11493,8 @@
         "lark": "Lark",
         "wecom": "WeCom",
         "dingtalk": "DingTalk",
-        "discord": "Discord"
+        "discord": "Discord",
+        "imessage": "iMessage"
       },
       "status": {
         "connected": "연결됨",
@@ -11624,6 +11625,22 @@
           "existing": "Cindy에 설정된 봇 사용",
           "manual": "새 인증 정보 입력",
           "moveNote": "이 봇은 설정 → IM 봇에서 옮겨지며 그곳은 비게 됩니다. 기존 개인 채팅과 그룹 채팅은 {{name}}이(가) 이어서 답합니다."
+        },
+        "imessage": {
+          "serverUrlLabel": "BlueBubbles 서버",
+          "serverUrlPlaceholder": "http://192.168.1.20:1234",
+          "passwordLabel": "API 비밀번호",
+          "passwordPlaceholder": "••••••••",
+          "ownerAddressLabel": "내 iMessage 주소",
+          "ownerAddressPlaceholder": "owner@example.com",
+          "chatGuidsLabel": "채팅 GUID (쉼표로 구분)",
+          "chatGuidsPlaceholder": "any;-;owner@example.com",
+          "listenHostLabel": "로컬 수신 주소",
+          "listenHostPlaceholder": "192.168.1.10",
+          "listenPortLabel": "로컬 수신 포트",
+          "listenPortPlaceholder": "18747",
+          "hint": "로컬 네트워크의 BlueBubbles에 연결하여 선택한 채팅만 처리합니다. 연결 전에 해당 채팅의 다른 자동 응답 프로그램을 중지하세요.",
+          "uncertain": "메시지 {{count}}개의 처리 결과를 확인해야 합니다. 중복을 피하려면 재시도 전에 채팅 기록을 확인하세요."
         }
       },
       "removeConfirm": {
