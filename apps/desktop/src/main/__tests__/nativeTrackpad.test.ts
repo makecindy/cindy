@@ -11,7 +11,7 @@ function setup({ optIn = true, occupied = false, iframe = false, contacts = fals
   let focused = true,
     current = true;
   const host = Object.assign(new EventEmitter(), {
-    isDestroyed: () => false,
+    isDestroyed: (): boolean => false,
     getZoomFactor: (): number => 1,
     executeJavaScript: vi.fn(async (): Promise<any> => ({
       x: 770,
@@ -65,7 +65,7 @@ function setup({ optIn = true, occupied = false, iframe = false, contacts = fals
   const guest = Object.assign(new EventEmitter(), {
     id: 6,
     debugger: debug,
-    isDestroyed: () => false,
+    isDestroyed: (): boolean => false,
     isFocused: () => focused,
     getZoomFactor: (): number => 1,
     executeJavaScript: vi.fn(async () => optIn),
@@ -484,4 +484,59 @@ test('blur invalidates an outstanding embedded pointer conversion', async () => 
   resolve({ x: 770, y: 46, width: 510, height: 754 });
   await settle();
   expect(h.native.start).not.toHaveBeenCalled();
+});
+
+// Unit regression: Electron emits Target.detachedFromTarget while destroying
+// WebContents, before isDestroyed becomes true. Promise microtasks still run
+// inside that native stack; CDP cleanup there caused a main-process SIGBUS.
+test.each([false, true])(
+  'target teardown never reenters CDP (active contacts: %s)',
+  async (active) => {
+    vi.useFakeTimers();
+    try {
+      const h = setup({ iframe: true, contacts: true });
+      await h.arm();
+      if (active) {
+        h.emit('begin');
+        await settle();
+      }
+      h.debug.sendCommand.mockClear();
+      h.debug.emit('message', {}, 'Target.detachedFromTarget', { sessionId: 'child-session' });
+      h.emit('change'); // queued native samples must also be invalidated immediately
+      await settle();
+      expect(h.native.stop).toHaveBeenCalledWith(1);
+      expect(h.debug.sendCommand).not.toHaveBeenCalled();
+      h.guest.isDestroyed = () => true;
+      h.guest.emit('destroyed');
+      await vi.runAllTimersAsync();
+      await settle();
+      expect(h.debug.sendCommand).not.toHaveBeenCalled();
+      expect(h.debug.detach).not.toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+    }
+  },
+);
+
+test('a surviving page cancels root touches after teardown and can capture its replacement iframe', async () => {
+  vi.useFakeTimers();
+  try {
+    const h = setup({ iframe: true });
+    await h.arm();
+    h.emit('begin');
+    await settle();
+    h.debug.sendCommand.mockClear();
+    h.debug.emit('message', {}, 'Target.detachedFromTarget', { sessionId: 'child-session' });
+    await settle();
+    expect(h.debug.sendCommand).not.toHaveBeenCalled();
+    await vi.runAllTimersAsync();
+    expect(h.inputs()).toEqual([{ type: 'touchCancel', touchPoints: [] }]);
+    expect(h.debug.sendCommand.mock.calls.every((call) => call[2] !== 'child-session')).toBe(true);
+    await h.hover();
+    expect(h.native.start).toHaveBeenCalledTimes(2);
+    h.emit('begin');
+    expect(h.inputs().at(-1)?.type).toBe('touchStart');
+  } finally {
+    vi.useRealTimers();
+  }
 });
