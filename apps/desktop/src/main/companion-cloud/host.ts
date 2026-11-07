@@ -399,6 +399,25 @@ export function createCompanionCloudHost(input: {
       current, log: input.log,
     }),
     readValues: botId => readCompanionValues(botId, input.selfDeviceId?.() ?? null),
+    hasLocalData: async botId => {
+      const owner = activeOwnerScopeKey();
+      const directory = botProfileDir(ownerScopedUserDataPath(), botId);
+      const db = getDbClient().drizzle;
+      const profiles = await db.select({ id: botProfiles.id }).from(botProfiles)
+        .where(eq(botProfiles.id, botId)).limit(1);
+      // Include archived links: an inactive task may still hold unsent history.
+      const links = await db.select({ id: botSessionLinks.id }).from(botSessionLinks)
+        .where(eq(botSessionLinks.botId, botId)).limit(1);
+      if (profiles.length || links.length) return true;
+      try {
+        await fs.lstat(directory); // Even an empty directory or broken symlink needs inspection.
+        return true;
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
+        if (activeOwnerScopeKey() !== owner) throw new Error('OWNER_CHANGED');
+        return false;
+      }
+    },
     // No main task yet is nothing to sync; conflicting ones are not: syncing, a hand-over and a merge
     // must stop rather than count this computer's history as sent.
     canonicalSession: async botId => {
