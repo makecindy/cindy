@@ -159,6 +159,8 @@ pnpm --filter mobile test:smoke
 发送期间新发起的图片粘贴与附件按钮同样关闭，不能把后粘贴的图片交给已点击发送的消息；文字粘贴仍可用。
 WebView 图片批次在 start 事件记录是否接收与交付/失败回调：发送前已占位的批次继续交付；
 发送期间被拒绝的批次即使在发送结束后才完成也不接收、不触碰别批占位。
+iOS 原生的空图片事件（如超过剪贴板上限）与未接收批次也不能触发占位失败回调；
+只有已建立占位的批次才沿其原回调完成交付或失败清理。
 回归：`sessionComposerLayout.test.ts`、`composerRichInputLifecycle.test.tsx`、共享 `sessionOperation.test.ts`。
 
 WebView 输入框把屏幕可见的组字文本同步为草稿；React Native 接受本地编辑的回传时不重写
