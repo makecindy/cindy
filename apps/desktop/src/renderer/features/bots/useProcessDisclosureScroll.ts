@@ -1,3 +1,4 @@
+import { shouldUnpinOnUpIntent, shouldUnpinOnWheel } from '../../components/chat/autoFollowIntent';
 import { useCallback, useRef, type RefObject, type MutableRefObject, type MouseEvent, type PointerEvent, type WheelEvent, type KeyboardEvent, type UIEvent } from 'react';
 
 /** Main group chats and topic panels render the same process disclosures in
@@ -63,7 +64,8 @@ export function useProcessDisclosureScroll(
     onWheel(event: WheelEvent<HTMLDivElement>) {
       // Portalled previews retain React ancestry, but own their own wheel input.
       if (event.defaultPrevented || !(event.target instanceof Node) || !event.currentTarget.contains(event.target)) return;
-      if (event.deltaY < 0) stickToBottom.current = false;
+      if (shouldUnpinOnWheel({ deltaX: event.deltaX, deltaY: event.deltaY,
+        scrollHeight: event.currentTarget.scrollHeight, clientHeight: event.currentTarget.clientHeight })) stickToBottom.current = false;
       if (inspecting.current && event.deltaY > 0 && atBottom(event.currentTarget)) {
         resumeFollow();
         event.currentTarget.scrollTop = event.currentTarget.scrollHeight;
@@ -71,9 +73,12 @@ export function useProcessDisclosureScroll(
       }
     },
     onKeyDown(event: KeyboardEvent<HTMLDivElement>) {
+      // Preview portals and consumed input must not navigate the background list.
+      if (event.defaultPrevented || !(event.target instanceof Node) || !event.currentTarget.contains(event.target)) return;
       // Tool detail editors keep their own End key behavior.
       if (event.target instanceof Element && event.target.closest('input, textarea, [contenteditable="true"]')) return;
-      if (['ArrowUp', 'PageUp', 'Home'].includes(event.key) || (event.key === ' ' && event.shiftKey)) stickToBottom.current = false;
+      if ((['ArrowUp', 'PageUp', 'Home'].includes(event.key) || (event.key === ' ' && event.shiftKey))
+        && shouldUnpinOnUpIntent({ scrollHeight: event.currentTarget.scrollHeight, clientHeight: event.currentTarget.clientHeight })) stickToBottom.current = false;
       if (event.key === 'End' && inspecting.current) {
         resumeFollow();
         event.currentTarget.scrollTop = event.currentTarget.scrollHeight;

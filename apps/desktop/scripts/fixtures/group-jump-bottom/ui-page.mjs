@@ -13,6 +13,10 @@ export default {
   },
   notCovered: 'PDF/Drawio previews and real network; actual group layout and native input use synthetic host data. Short-main read checks supply a focused-host signal to the hidden Electron window.',
   cases: {
+    'short-main-follow': { about: 'Upward input in a fitting main chat preserves follow when content grows',
+      data: { ...group.cases['process-history'].data, processDisclosure: true, shortUpGrowth: true } },
+    'short-topic-follow': { about: 'Upward input in a fitting topic preserves follow when content grows',
+      data: { ...group.cases['process-history'].data, processDisclosure: true, shortUpGrowth: true, threadPanel: true } },
     'short-main-read': { about: 'Explicit End/wheel return acknowledges an inspected main chat even when it fits without scrolling',
       data: { ...group.cases['process-history'].data, shortMainRead: true } },
     'thread-process': { about: 'A process in the actual topic sidebar uses the same stable disclosure behavior as the main group',
@@ -141,11 +145,12 @@ async function checkProcessDisclosure(page, ui) {
   if (ui.data.threadPanel) {
     await page.evaluate(async preview => {
       const { group } = await window.electronAPI.maker.getBotGroup('fixture-group');
-      const answer = { ...group.messages[0], replyCount: 30 };
+      const count = window.__uiPage.ctx.data.shortUpGrowth ? 1 : 30;
+      const answer = { ...group.messages[0], replyCount: count };
       group.messages = [answer];
-      const replies = Array.from({ length: 30 }, (_, i) => ({ ...answer, id: `reply-${i}`,
+      const replies = Array.from({ length: count }, (_, i) => ({ ...answer, id: `reply-${i}`,
         threadRootId: answer.id, sequence: i + 2, content: `Reply ${i + 1}`,
-        process: i === 29 ? answer.process : undefined, ...(i === 28 ? { ...preview, authorKind: 'user', isSelf: true } : {}) }));
+        process: i === count - 1 ? answer.process : undefined, ...(i === 28 ? { ...preview, authorKind: 'user', isSelf: true } : {}) }));
       window.__uiPage.threadReads = [];
       window.electronAPI.maker.chatServer.thread = async input => {
         window.__uiPage.threadReads.push(input.markRead);
@@ -164,6 +169,10 @@ async function checkProcessDisclosure(page, ui) {
   }
   const heading = surface.locator('[data-teammate-process] > button').last();
   await heading.waitFor();
+  if (ui.data.shortUpGrowth) {
+    const timeline = ui.data.threadPanel ? surface.locator('div.overflow-y-auto').first() : page.getByTestId('bot-group-timeline');
+    return checkShortUpGrowth(page, ui, timeline, heading);
+  }
   if (ui.data.processRecord && !ui.data.threadPanel) {
     await page.evaluate(async preview => {
       const { group } = await window.electronAPI.maker.getBotGroup('fixture-group');
@@ -230,6 +239,9 @@ async function checkProcessDisclosure(page, ui) {
       await page.evaluate(async () => { for (let i = 0; i < 8; i++) await new Promise(requestAnimationFrame); });
       assert.deepEqual(await timeline.evaluate(el => ({ top: el.scrollTop, reserve: el.firstElementChild.style.minHeight })), before,
         `${kind} preview wheel must not resume the background list`);
+      await overlay.press('End');
+      assert.deepEqual(await timeline.evaluate(el => ({ top: el.scrollTop, reserve: el.firstElementChild.style.minHeight })), before,
+        `${kind} preview End must not resume the background list`);
       await ui.capture(`preview-${kind}-preserves-inspection`);
       await overlay.getByRole('button', { name: await ui.t('chat.lightbox.close'), exact: true }).click();
       await overlay.waitFor({ state: 'detached' });
@@ -431,4 +443,45 @@ async function checkShortMainRead(page, ui) {
   } finally {
     await page.evaluate(() => { document.hasFocus = window.__uiPage.originalHasFocus; });
   }
+}
+
+// PR #9249 r4500848903: real range and ResizeObserver, without a scroll event
+// for the original upward input. Existing growth cases begin with a long list.
+async function checkShortUpGrowth(page, ui, timeline, heading) {
+  await timeline.evaluate(el => { el.dataset.shortFollowCheck = ''; });
+  const resetShort = async () => {
+    await timeline.evaluate(el => { el.querySelector('article:last-of-type').style.minHeight = ''; });
+    await page.waitForFunction(() => {
+      const el = document.querySelector('[data-short-follow-check]');
+      return el.scrollHeight === el.clientHeight && el.scrollTop === 0;
+    });
+  };
+  for (const action of ['wheel', 'PageUp']) {
+    await resetShort();
+    await timeline.evaluate((el, action) => {
+      el.tabIndex = -1; el.focus({ preventScroll: true });
+      window.__uiPage.shortUpReceived = false;
+      el.addEventListener(action === 'wheel' ? 'wheel' : 'keydown', () => { window.__uiPage.shortUpReceived = true; }, { once: true });
+    }, action);
+    if (action === 'PageUp') await timeline.press(action);
+    else {
+      const box = await timeline.boundingBox();
+      await page.mouse.move(box.x + 24, box.y + box.height / 2);
+      await page.mouse.wheel(0, -80);
+    }
+    await page.waitForFunction(() => window.__uiPage.shortUpReceived);
+    assert.equal(await timeline.evaluate(el => el.scrollTop), 0, 'upward input has no displacement');
+    await timeline.evaluate(el => { el.querySelector('article:last-of-type').style.minHeight = '1000px'; });
+    await page.waitForFunction(() => {
+      const el = document.querySelector('[data-short-follow-check]');
+      return el.scrollTop > 0 && el.scrollHeight - el.scrollTop - el.clientHeight < 2;
+    });
+    await ui.capture(`short-follow-after-${action}`);
+  }
+  await resetShort();
+  await heading.click();
+  await timeline.evaluate(el => { el.querySelector('article:last-of-type').style.minHeight = '1000px'; });
+  await page.evaluate(async () => { for (let i = 0; i < 24; i++) await new Promise(requestAnimationFrame); });
+  assert.equal(await timeline.evaluate(el => el.scrollTop), 0, 'explicit short-list process inspection must still suppress following');
+  await ui.capture('short-inspection-preserved');
 }

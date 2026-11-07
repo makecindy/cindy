@@ -3948,6 +3948,37 @@ describe('thread previews and posting to the main chat', () => {
     return (context === 'topic' ? surface.querySelector('div.overflow-y-auto') : surface) as HTMLDivElement;
   }
 
+  // Unit / #9249 r4500848903: an upward input without any scroll range
+  // must not suppress following once content grows. Prior cases start scrollable.
+  it.each(['main', 'topic'].flatMap(context => ['wheel', 'PageUp'].map(action => ({ context, action }))))(
+    'keeps $context following after a zero-range $action input', async ({ context, action }) => {
+      const observed = new Map<Element, ResizeObserverCallback>();
+      vi.stubGlobal('ResizeObserver', class {
+        constructor(private callback: ResizeObserverCallback) {}
+        observe(element: Element) { observed.set(element, this.callback); }
+        disconnect() {}
+      });
+      const scroller = await renderProcessScroller(context);
+      let height = 600, top = 0;
+      Object.defineProperties(scroller, {
+        scrollHeight: { configurable: true, get: () => height }, clientHeight: { configurable: true, value: 600 },
+        scrollTop: { configurable: true, get: () => top, set: (value: number) => { top = Math.max(0, Math.min(value, height - 600)); } },
+      });
+      if (action === 'wheel') fireEvent.wheel(scroller, { deltaY: -80 });
+      else fireEvent.keyDown(scroller, { key: action });
+      expect(scroller.scrollTop).toBe(0);
+      height = 1000;
+      act(() => observed.get(scroller)!([], {} as ResizeObserver));
+      expect(scroller.scrollTop).toBe(400);
+      // Explicit inspection remains meaningful even when the list fits.
+      height = 600; scroller.scrollTop = 0; fireEvent.scroll(scroller);
+      await act(async () => fireEvent.click(scroller.querySelector('button[data-scroll-disclosure-header]')!));
+      height = 1000;
+      act(() => observed.get(scroller)!([], {} as ResizeObserver));
+      expect(scroller.scrollTop).toBe(0);
+    },
+  );
+
   // Unit / #9249 r4500670651: a root-padding/scrollbar press temporarily pauses
   // resize following, but releasing without upward movement must not unpin it.
   it.each(['main', 'topic'])('restores %s follow after a stationary pointer press', async context => {
@@ -4001,9 +4032,10 @@ describe('thread previews and posting to the main chat', () => {
   });
 
   // Unit / #9249 r4500619897: actual portalled previews bubble React wheel
-  // events through the real main/topic scroller. Existing preview cases only cover Escape.
+  // events through the real main/topic scroller. r4500848906 adds End from the
+  // real portal and a consumed list key; previous coverage only excluded wheel.
   it.each(['main', 'topic'])(
-    'keeps %s process inspection while wheeling its image preview', async context => {
+    'keeps %s process inspection while navigating its image preview', async context => {
       const process = { groupId: 'g1', executionId: 'preview-work', sessionId: 'work', clientId: 'note', deviceId: 'home' };
       const answer = msg({ id: 'answer', sequence: 2, authorKind: 'bot', authorBotId: 'mimi',
         content: 'Process result', process,
@@ -4039,7 +4071,14 @@ describe('thread previews and posting to the main chat', () => {
       fireEvent.wheel(preview, { deltaY: 80, bubbles: true, cancelable: true });
       expect(content.style.minHeight).toBe('1400px');
       expect(scroller.scrollTop).toBe(800);
+      fireEvent.keyDown(preview, { key: 'End' });
+      expect(content.style.minHeight).toBe('1400px');
+      expect(scroller.scrollTop).toBe(800);
       fireEvent.click(screen.getByRole('button', { name: 'chat.lightbox.close' }));
+      const consumed = createEvent.keyDown(scroller, { key: 'End', bubbles: true, cancelable: true });
+      consumed.preventDefault();
+      fireEvent(scroller, consumed);
+      expect(content.style.minHeight).toBe('1400px');
       fireEvent.wheel(scroller, { deltaY: 80 });
       expect(content.style.minHeight).toBe('');
     },
