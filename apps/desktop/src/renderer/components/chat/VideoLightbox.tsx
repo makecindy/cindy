@@ -166,6 +166,8 @@ function VideoLightboxContent({
       }}
     >
     <div
+      // Shared preview marker: other Esc owners (Customize, find-in-page) yield to it.
+      data-lightbox-layer
       className={PREVIEW_PANEL_CLASS}
       style={{
         ...PREVIEW_PANEL_STYLE,

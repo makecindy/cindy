@@ -266,7 +266,11 @@ export function TabDragController({
       };
       const onCancel = () => finish(false);
       const onKey = (e: KeyboardEvent) => {
-        if (e.key === 'Escape') finish(false);
+        if (e.key !== 'Escape') return;
+        // This Esc cancels the drag; mark it handled so window-level Esc owners that
+        // honor defaultPrevented (cards, the sidebar Customize panel) don't also act.
+        e.preventDefault();
+        finish(false);
       };
       document.addEventListener('pointermove', onMove);
       document.addEventListener('pointerup', onUp);

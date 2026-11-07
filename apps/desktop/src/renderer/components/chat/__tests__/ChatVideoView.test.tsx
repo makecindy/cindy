@@ -267,3 +267,18 @@ it('audio previews play once and stop when the preview unmounts', () => {
   view.unmount();
   expect(pause.mock.contexts).toContain(audio);
 });
+// Video and audio previews carry the shared preview marker like image / text previews,
+// so window-level Esc owners elsewhere (sidebar Customize, find-in-page) yield the press
+// that closes the preview instead of also acting on it.
+it.each(['video', 'audio'] as const)('%s previews mark themselves as the preview layer', (kind) => {
+  render(
+    <VideoLightbox
+      src={kind === 'audio' ? 'xdt-audio://local/?path=%2Fsong.mp3' : 'https://media.test/x.mp4'}
+      kind={kind}
+      onClose={vi.fn()}
+    />,
+    { wrapper: Tooltip.Provider },
+  );
+  const layer = document.querySelector('[data-lightbox-layer]');
+  expect(layer?.contains(document.querySelector(kind))).toBe(true);
+});

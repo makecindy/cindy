@@ -283,6 +283,8 @@ export function ToolPayloadLightbox({
   const overlay = (
     <div
       data-tool-payload-lightbox-overlay
+      // Shared preview marker: other Esc owners (Customize, find-in-page) yield to it.
+      data-lightbox-layer
       style={{
         position: 'fixed',
         inset: 0,

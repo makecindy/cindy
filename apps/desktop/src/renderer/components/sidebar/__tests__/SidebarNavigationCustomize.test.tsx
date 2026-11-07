@@ -1,7 +1,10 @@
 // @vitest-environment jsdom
 
 import { act, cleanup, fireEvent, render, screen } from '@testing-library/react';
+import userEvent from '@testing-library/user-event';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+
+import { PermissionPrompt } from '@/components/new-chat/PermissionPrompt';
 
 import { SidebarNavigationCustomize } from '../SidebarNavigationCustomize';
 import {
@@ -315,6 +318,151 @@ describe('sidebar navigation customization', () => {
     fireEvent.click(screen.getByRole('checkbox', { name: '站点' }));
     fireEvent.click(screen.getByRole('button', { name: 'sidebar.navigation.customize.done' }));
     expect(getSidebarNavigationPrefs(OWNER).appsAtTop).toEqual(['app:xd-sites']);
+  });
+
+  it('discards the draft and closes on an unclaimed Esc', () => {
+    const onDone = vi.fn();
+    render(<SidebarNavigationCustomize onDone={onDone} />);
+    fireEvent.click(screen.getByRole('checkbox', { name: 'sidebar.navigation.items.search' }));
+    act(() => sortableMock.props!.onReorder(['plugins', 'search', 'automations']));
+    const before = localStorage.getItem(PREFS_KEY);
+    // Focus is on the body after the More menu closes, so the press reaches window.
+    const event = new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true });
+    act(() => {
+      document.body.dispatchEvent(event);
+    });
+    expect(onDone).toHaveBeenCalledTimes(1);
+    expect(event.defaultPrevented).toBe(true);
+    expect(getSidebarNavigationPrefs(OWNER)).toEqual({
+      order: [...defaults().order],
+      visible: [...defaults().visible],
+      appsAtTop: [],
+    });
+    expect(localStorage.getItem(PREFS_KEY)).toBe(before);
+  });
+
+  it('closes on Esc from its own controls but leaves claimed presses alone', () => {
+    const onDone = vi.fn();
+    render(<SidebarNavigationCustomize onDone={onDone} />);
+    const escape = (target: EventTarget, init: KeyboardEventInit = {}) =>
+      act(() => {
+        target.dispatchEvent(
+          new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true, ...init }),
+        );
+      });
+    // Held key auto-repeat, modifiers and IME composition never close the panel.
+    escape(document.body, { repeat: true });
+    escape(document.body, { shiftKey: true });
+    escape(document.body, { isComposing: true });
+    // An editable field elsewhere keeps its Esc.
+    const input = document.createElement('input');
+    document.body.appendChild(input);
+    escape(input);
+    // A press already handled by an inner layer is not taken again.
+    const claimed = (event: Event) => event.preventDefault();
+    window.addEventListener('keydown', claimed, true);
+    escape(document.body);
+    window.removeEventListener('keydown', claimed, true);
+    // An open preview closes first.
+    const lightbox = document.createElement('div');
+    lightbox.setAttribute('data-lightbox-layer', '');
+    document.body.appendChild(lightbox);
+    escape(document.body);
+    lightbox.remove();
+    // An open composer MorphPopover (focus on its panel surface) closes first.
+    const morph = document.createElement('div');
+    morph.setAttribute('role', 'group');
+    morph.setAttribute('data-morph-side', 'top');
+    morph.tabIndex = -1;
+    document.body.appendChild(morph);
+    escape(morph);
+    morph.remove();
+    input.remove();
+    expect(onDone).not.toHaveBeenCalled();
+    // Esc on the panel's own checkbox still closes it.
+    escape(screen.getByRole('checkbox', { name: 'sidebar.navigation.items.plugins' }));
+    expect(onDone).toHaveBeenCalledTimes(1);
+  });
+
+  it('stops listening for Esc once closed', () => {
+    const onDone = vi.fn();
+    const view = render(<SidebarNavigationCustomize onDone={onDone} />);
+    view.unmount();
+    act(() => {
+      document.body.dispatchEvent(
+        new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true }),
+      );
+    });
+    expect(onDone).not.toHaveBeenCalled();
+  });
+
+  it('takes focus on open so an earlier decision card yields Esc to it', () => {
+    // A permission card mounted first registers its window Esc (deny) before the panel.
+    const onRespond = vi.fn();
+    render(
+      <PermissionPrompt
+        permission={{ requestId: 'req-1', toolName: 'Bash', input: { command: 'ls' } }}
+        onRespond={onRespond}
+      />,
+    );
+    const onDone = vi.fn();
+    render(<SidebarNavigationCustomize onDone={onDone} />);
+    // A real press targets the focused element; before the fix that was the body,
+    // and the card denied the request.
+    fireEvent.keyDown(document.activeElement!, { key: 'Escape' });
+    expect(onRespond).not.toHaveBeenCalled();
+    expect(onDone).toHaveBeenCalledTimes(1);
+  });
+
+  it('keeps an Esc pressed in the panel from reaching background window shortcuts', () => {
+    // Like leaving right-sidebar maximize: registered first, and it neither checks nor
+    // sets defaultPrevented.
+    const background = vi.fn();
+    window.addEventListener('keydown', background);
+    try {
+      const onDone = vi.fn();
+      render(<SidebarNavigationCustomize onDone={onDone} />);
+      fireEvent.keyDown(document.activeElement!, { key: 'Escape' });
+      expect(onDone).toHaveBeenCalledTimes(1);
+      expect(background).not.toHaveBeenCalled();
+      // Keys the panel does not take still reach them.
+      fireEvent.keyDown(document.activeElement!, { key: 'Escape', shiftKey: true });
+      expect(background).toHaveBeenCalledTimes(1);
+      expect(onDone).toHaveBeenCalledTimes(1);
+    } finally {
+      window.removeEventListener('keydown', background);
+    }
+  });
+
+  it('keeps focus in the panel after a click on a row label or its padding', async () => {
+    // Clicking non-focusable panel content moves focus to the nearest focusable
+    // ancestor. Without one that is the body, and the next Esc skips the panel's own
+    // handler: an earlier decision card denies first, or right-sidebar maximize also
+    // exits.
+    const onRespond = vi.fn();
+    render(
+      <PermissionPrompt
+        permission={{ requestId: 'req-1', toolName: 'Bash', input: { command: 'ls' } }}
+        onRespond={onRespond}
+      />,
+    );
+    const background = vi.fn();
+    window.addEventListener('keydown', background);
+    try {
+      const onDone = vi.fn();
+      render(<SidebarNavigationCustomize onDone={onDone} />);
+      const user = userEvent.setup();
+      await user.click(screen.getByText('sidebar.navigation.items.plugins'));
+      expect(screen.getByRole('dialog').contains(document.activeElement)).toBe(true);
+      await user.click(screen.getByRole('heading', { name: 'sidebar.navigation.customize.title' }));
+      expect(screen.getByRole('dialog').contains(document.activeElement)).toBe(true);
+      await user.keyboard('{Escape}');
+      expect(onRespond).not.toHaveBeenCalled();
+      expect(background).not.toHaveBeenCalled();
+      expect(onDone).toHaveBeenCalledTimes(1);
+    } finally {
+      window.removeEventListener('keydown', background);
+    }
   });
 
   it('toggles from anywhere in the row except the drag handle', () => {
