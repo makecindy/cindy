@@ -254,6 +254,15 @@ relay 以 close 1013 `inbound backpressure` 主动断连，此时任何「立即
   `packages/device-link/src/__tests__/client.test.ts`「直连优先、中继兜底」：两个控制端
   共用同一被控端，其中一个的直连静默，断言命令只执行一次、结果经 relay 送达，另一个
   控制端仍走直连、在途请求与 relay 连接不受影响。
+- **接上时接管 relay 上的未确认帧**（2026-11-04）：累计 ACK 只能按序推进。直连接上时
+  relay 上若还有未确认的旧帧，经直连送达的新帧在接收端只能缓存、拿不到确认，过了直连
+  ACK 基准期就被误判 `ack-timeout` 撤下。实测两台局域网电脑在持续的远程 Agent 流量下，
+  直连每次接上 8–10 秒即撤下(一小时 34 次)，流量全压回慢的 relay，最终整轮工具超时。
+  故障半径三问：① 单个 peer 直连接上的时刻，relay 上已写出、仍未确认的可靠帧；② 只把
+  这一台设备的这些帧恢复为未发送，按既有单趟预算改经直连重发，接收端按 seq 去重、
+  只执行一次；不重连 relay、不重建链路、不改 wire，直连随后真的失效仍按上一条撤下并经
+  relay 补发；③ 回归见 `client.test.ts`「keeps a new direct path when older relay frames
+  hold back the ACK」，覆盖单条及超过单趟预算的多条旧帧，断言每条只执行一次、直连不撤下。
 - **接入**：Desktop 复用 `DesktopCaptureWindow` 的隔离数据进程(`mode=direct`)，Mobile
   使用 `DirectLinkTransport.tsx` 的隔离 WebView；二者共用 `directRtcRuntime.ts` 与
   `directRuntimeBridge.ts`。只收集 host ICE candidates（不请求 STUN/TURN），局域网不可达
@@ -291,6 +300,13 @@ relay 以 close 1013 `inbound backpressure` 主动断连，此时任何「立即
 原生会话 ID 必须接回，设置必须重放完成，才能发送续跑；不重发原消息或结果不明的方法调用。
 权限、Plan 和自动动作来源沿用原轮次；Stop、新输入、归档／删除使恢复失效。持续不可达、撤权或
 接不回原生会话保留原错误与人工恢复入口。伙伴、目标模式与共享任务沿用既有自动恢复归属检查。
+
+托管 Claude Code 的工具连接（2026-11-04）：设备托管时 Cindy 工具都是经隧道回到任务所在电脑的
+HTTP MCP，每次握手都要跨机往返。Claude Code 默认 `MCP_TIMEOUT` 只等 30s，到点即判连接失败，
+这一轮没有任何工具（实测中转变慢时 91 个工具全部被判断开，Agent 只能回复连不上）。托管会话启动时
+把它设为 `DEVICE_HOSTED_MCP_TIMEOUT_MS`（120s，与下文拉取的 2 分钟不可达窗口一致），用户自己
+设过的值优先。故障半径：只作用于这一个任务的 Claude Code 进程；不重试、不重放工具调用，不动 link
+与其它任务，本机任务保持 Claude Code 默认值。回归见 `claude-code/__tests__/device-hosted-guest.test.ts`。
 
 正常退出先经 device-link 同步 quit 回调走 `dropAllControllers('shutdown') → abortAll('app-quit')`；
 `host.dispose()` 来自 Maker 重置，不是常规退出必经路径。两条入口共用闲置／忙碌判断，重叠时等待
