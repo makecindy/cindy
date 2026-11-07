@@ -649,6 +649,7 @@ function PrChip({
           <Dialog.Portal>
             <Dialog.Overlay className="modal-scrim fixed inset-0 z-[10000]" />
             <Dialog.Content aria-describedby={undefined}
+              onPointerDownOutside={(event) => event.preventDefault()}
               onCloseAutoFocus={(event) => { event.preventDefault(); pointerFocus.current = true; triggerRef.current?.focus(); }}
               className="modal-panel fixed left-1/2 top-1/2 z-[10000] w-[min(420px,calc(100vw-32px))] max-h-[85vh] -translate-x-1/2 -translate-y-1/2 overflow-y-auto p-4 outline-none">
               <div className="mb-3 flex items-center justify-between gap-2">
