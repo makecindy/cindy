@@ -27,9 +27,28 @@ env:
   NODE_OPTIONS: '--max-old-space-size=8192'
 
 jobs:
+  changes:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      mode: ${{ steps.scope.outputs.mode }}
+      linux_unit: ${{ steps.scope.outputs.linux_unit }}
+      windows_unit: ${{ steps.scope.outputs.windows_unit }}
+      desktop: ${{ steps.scope.outputs.desktop }}
+      runtime: ${{ steps.scope.outputs.runtime }}
+    steps:
+      - name: Checkout client
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+      - name: Detect affected checks
+        id: scope
+        run: node scripts/ci-change-scope.mjs
+
   # 静态检查、类型检查和 runner 自测与 Linux 单测分片并行。这里不装
   # bundled ripgrep；它只在 Desktop 单测收集时需要，由单测分片自行安装。
   verify-checks:
+    needs: changes
     runs-on: ubuntu-latest
     timeout-minutes: 40
 
@@ -68,7 +87,12 @@ jobs:
       # test:unit 的 runner 自测不能跟着 Vitest 分片重复执行；在检查 job 中跑一次，
       # Linux 单测分片只负责 workspace unit tier。
       - name: Run test runner self-tests
+        if: needs.changes.outputs.runtime == 'true'
         run: pnpm test:runner
+
+      - name: Check documentation contracts
+        if: needs.changes.outputs.runtime != 'true'
+        run: pnpm check:dev-docs
 
       # Cross-file security, permission, and design contracts are intentionally
       # outside the ordinary behavior-test pool, but remain a required gate.
@@ -78,6 +102,7 @@ jobs:
       # No private service checkout or secrets: exercise production clients over real
       # loopback WebSockets with bounded fault injection. Failure blocks verify.
       - name: Run Device Link connection integration tests
+        if: needs.changes.outputs.runtime == 'true'
         run: |
           pnpm --filter desktop exec tsc --project ../../scripts/device-link/tsconfig.json
           pnpm test:device-link
@@ -114,14 +139,17 @@ jobs:
       # 插件页组件只省 ~14MB,skipLibCheck 也早已开启——是整仓类型规模的自然结果,
       # 不是某处写法。这一步单独给更大的堆,其它步骤维持全局值。
       - name: Typecheck desktop
+        if: needs.changes.outputs.runtime == 'true'
         env:
           NODE_OPTIONS: '--max-old-space-size=6144'
         run: pnpm --filter desktop typecheck
 
       - name: Typecheck mobile
+        if: needs.changes.outputs.runtime == 'true'
         run: pnpm --filter mobile typecheck
 
       - name: Validate SQLite migrations
+        if: needs.changes.outputs.desktop == 'true'
         env:
           XDT_MIGRATION_BASE_REF: ${{ github.event.pull_request.base.sha || github.event.merge_group.base_sha || github.event.before || 'origin/main' }}
         run: pnpm --filter desktop db:validate
@@ -135,6 +163,8 @@ jobs:
   # Linux 单测使用与 Windows 相同的确定性 Vitest 分片。四个分片分别覆盖每个
   # workspace 经 Vitest 切分后的测试文件，并集等于完整 unit tier；不重复 test:runner。
   linux-unit-shards:
+    needs: changes
+    if: needs.changes.outputs.linux_unit == 'true'
     name: Linux unit tests (${{ matrix.shard }}/4)
     runs-on: ubuntu-latest
     timeout-minutes: 40
@@ -185,12 +215,12 @@ jobs:
 
       # 真实进程与 Unix socket 覆盖独立执行一次，不混入日常 unit 或其他分片。
       - name: Run Pi manager integration tests
-        if: matrix.shard == 1
+        if: matrix.shard == 1 && needs.changes.outputs.desktop == 'true'
         run: pnpm run test:workspaces --tier integration --workspace @cindy/maker-pi-manager
 
       # localDb suites are outside the unit tier; exercise these DB boundaries on both OSes.
       - name: Run companion database regressions
-        if: matrix.shard == 1
+        if: matrix.shard == 1 && needs.changes.outputs.desktop == 'true'
         run: pnpm --filter desktop exec vitest run src/main/localDb/ipc/__tests__/botCanonicalSession.test.ts src/main/localDb/ipc/__tests__/botRemoteResourceProvider.test.ts
 
   # 保留原 required check 名 verify；检查 job 或任一 Linux 分片失败、取消都阻断。
@@ -198,17 +228,26 @@ jobs:
     name: verify
     if: ${{ always() }}
     needs:
+      - changes
       - verify-checks
       - linux-unit-shards
     runs-on: ubuntu-latest
     steps:
       - name: Require checks and every Linux unit shard
         env:
+          SCOPE_RESULT: ${{ needs.changes.result }}
+          LINUX_UNIT_REQUIRED: ${{ needs.changes.outputs.linux_unit }}
           VERIFY_CHECKS_RESULT: ${{ needs.verify-checks.result }}
           LINUX_UNIT_SHARDS_RESULT: ${{ needs.linux-unit-shards.result }}
         run: |
+          test "$SCOPE_RESULT" = "success"
           test "$VERIFY_CHECKS_RESULT" = "success"
-          test "$LINUX_UNIT_SHARDS_RESULT" = "success"
+          if [ "$LINUX_UNIT_REQUIRED" = "true" ]; then
+            test "$LINUX_UNIT_SHARDS_RESULT" = "success"
+          else
+            test "$LINUX_UNIT_REQUIRED" = "false"
+            test "$LINUX_UNIT_SHARDS_RESULT" = "skipped"
+          fi
 
   # Linux 全绿不能覆盖 path separator、盘符、大小写和文件系统能力差异。四个
   # Windows 分片并行运行，分片并集仍完整覆盖 test:unit，不能缩成少量 smoke。
@@ -217,6 +256,8 @@ jobs:
     name: Windows unit tests (${{ matrix.shard }}/4)
     runs-on: windows-latest
     timeout-minutes: 40
+    needs: changes
+    if: needs.changes.outputs.windows_unit == 'true'
     strategy:
       fail-fast: false
       matrix:
@@ -260,6 +301,8 @@ jobs:
   # Windows runner 自测和伴侣数据库回归各只需执行一次。单独并行运行，避免给
   # 某一个 unit 分片额外叠加约 4 分钟、拖长整条关键路径。
   windows-runner-checks:
+    needs: changes
+    if: needs.changes.outputs.desktop == 'true'
     name: Windows runner and database checks
     runs-on: windows-latest
     timeout-minutes: 25
@@ -316,19 +359,39 @@ jobs:
     name: Windows unit tests
     if: ${{ always() }}
     needs:
+      - changes
+      - verify-checks
       - windows-unit-shards
       - windows-runner-checks
     runs-on: ubuntu-latest
     steps:
       - name: Require every Windows unit shard and runner checks
         env:
+          SCOPE_RESULT: ${{ needs.changes.result }}
+          VERIFY_CHECKS_RESULT: ${{ needs.verify-checks.result }}
+          WINDOWS_UNIT_REQUIRED: ${{ needs.changes.outputs.windows_unit }}
+          WINDOWS_RUNNER_REQUIRED: ${{ needs.changes.outputs.desktop }}
           WINDOWS_UNIT_SHARDS_RESULT: ${{ needs.windows-unit-shards.result }}
           WINDOWS_RUNNER_CHECKS_RESULT: ${{ needs.windows-runner-checks.result }}
         run: |
-          test "$WINDOWS_UNIT_SHARDS_RESULT" = "success"
-          test "$WINDOWS_RUNNER_CHECKS_RESULT" = "success"
+          test "$SCOPE_RESULT" = "success"
+          test "$VERIFY_CHECKS_RESULT" = "success"
+          if [ "$WINDOWS_UNIT_REQUIRED" = "true" ]; then
+            test "$WINDOWS_UNIT_SHARDS_RESULT" = "success"
+          else
+            test "$WINDOWS_UNIT_REQUIRED" = "false"
+            test "$WINDOWS_UNIT_SHARDS_RESULT" = "skipped"
+          fi
+          if [ "$WINDOWS_RUNNER_REQUIRED" = "true" ]; then
+            test "$WINDOWS_RUNNER_CHECKS_RESULT" = "success"
+          else
+            test "$WINDOWS_RUNNER_REQUIRED" = "false"
+            test "$WINDOWS_RUNNER_CHECKS_RESULT" = "skipped"
+          fi
 
   git-integration:
+    needs: changes
+    if: needs.changes.outputs.desktop == 'true'
     name: Desktop Git integration
     runs-on: ubuntu-latest
     timeout-minutes: 25
@@ -361,4 +424,4 @@ jobs:
         run: pnpm install:ripgrep
 
       - name: Run Desktop Git integration tests
-        run: pnpm test:git-integration
+        run: pnpm run test:workspaces --tier git-integration
