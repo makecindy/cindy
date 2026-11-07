@@ -239,3 +239,123 @@ test('device-link forwards eventHub events to subscribed controllers', async () 
 
   service.stop();
 });
+
+test('device-link handles mobile channels (around-client-id, fs:stat-path, maker:list-active, maker:create-session)', async () => {
+  let invokeResult = null;
+  const mockDeps = {
+    realm: 'global',
+    deviceId: 'test-device-id',
+    getAccessToken: async () => 'token',
+    listSessions: async () => [],
+    getSession: async () => ({}),
+    updateSession: async (id, patch) => ({ id, ...patch }),
+    createSession: async (opts) => ({ id: 'new-sid', agentKind: opts.agentKind ?? 'claude-code', workingDir: '/tmp' }),
+    listMessages: async () => [],
+    messagesAroundClientId: async (sessionId, clientId) => [{ id: 'm1', clientId, sessionId }],
+    historyView: async () => ({ items: [] }),
+    listProviders: async () => ({ providers: [] }),
+    listAvailableAgents: async () => ['claude-code'],
+    getCapabilities: async () => ({ availableModels: [] }),
+    listProjectAliases: async () => [{ projectKey: 'p1', alias: 'Project 1' }],
+    listRecentWorkdirs: async () => [],
+    getMaker: () => ({
+      listActiveSessions: () => [
+        { id: 's1', agentKind: 'claude-code', workDir: '/tmp', capabilities: {}, isTurnRunning: () => true },
+      ],
+    }),
+    inputQueue: {
+      stop: async () => ({ ok: true }),
+    },
+    eventHub: {
+      subscribe: () => () => {},
+    },
+  };
+
+  const service = createDeviceLinkService(mockDeps);
+  service.start();
+  try {
+    const client = service.getClient();
+    client.sendInvokeResult = (_dst, _id, payload) => {
+      invokeResult = payload;
+    };
+
+    const listener = [...(client.frameHandlers ?? [])][0];
+    assert.ok(listener);
+
+    // 1. local-db:messages:around-client-id
+    await listener({
+      kind: 'invoke',
+      src: 'mobile-1',
+      id: 'req-1',
+      payload: { channel: 'local-db:messages:around-client-id', args: ['s1', 'c1', { radius: 10 }] },
+    });
+    assert.equal(invokeResult.ok, true);
+    assert.deepEqual(invokeResult.result, [{ id: 'm1', clientId: 'c1', sessionId: 's1' }]);
+
+    // 2. maker:list-active with snapshotVersion 2
+    await listener({
+      kind: 'invoke',
+      src: 'mobile-1',
+      id: 'req-2',
+      payload: { channel: 'maker:list-active', args: [{ summary: true, snapshotVersion: 2 }] },
+    });
+    assert.equal(invokeResult.ok, true);
+    assert.equal(invokeResult.result.format, 'active-sessions-v2');
+    assert.equal(invokeResult.result.sessions[0].sessionId, 's1');
+    assert.equal(invokeResult.result.sessions[0].isTurnRunning, true);
+
+    // 3. maker:create-session
+    await listener({
+      kind: 'invoke',
+      src: 'mobile-1',
+      id: 'req-3',
+      payload: { channel: 'maker:create-session', args: [{ agentKind: 'claude-code', model: 'claude-sonnet-4-6' }] },
+    });
+    assert.equal(invokeResult.ok, true);
+    assert.equal(invokeResult.result.sessionId, 'new-sid');
+    assert.equal(invokeResult.result.agentKind, 'claude-code');
+
+    // 4. fs:stat-path
+    await listener({
+      kind: 'invoke',
+      src: 'mobile-1',
+      id: 'req-4',
+      payload: { channel: 'fs:stat-path', args: [{ path: '/tmp' }] },
+    });
+    assert.equal(invokeResult.ok, true);
+    assert.equal(invokeResult.result.kind, 'dir');
+
+    // 5. sidebar-settings:get-project-aliases
+    await listener({
+      kind: 'invoke',
+      src: 'mobile-1',
+      id: 'req-5',
+      payload: { channel: 'sidebar-settings:get-project-aliases', args: [] },
+    });
+    assert.equal(invokeResult.ok, true);
+    assert.deepEqual(invokeResult.result, [{ projectKey: 'p1', alias: 'Project 1' }]);
+
+    // 6. maker:goal:get-status
+    await listener({
+      kind: 'invoke',
+      src: 'mobile-1',
+      id: 'req-6',
+      payload: { channel: 'maker:goal:get-status', args: ['s1'] },
+    });
+    assert.equal(invokeResult.ok, true);
+    assert.equal(invokeResult.result, null);
+
+    // 7. device-link:usage-widget:snapshot:v1
+    await listener({
+      kind: 'invoke',
+      src: 'mobile-1',
+      id: 'req-7',
+      payload: { channel: 'device-link:usage-widget:snapshot:v1', args: [] },
+    });
+    assert.equal(invokeResult.ok, true);
+    assert.equal(invokeResult.result.ok, false);
+    assert.equal(invokeResult.result.reason, 'unavailable');
+  } finally {
+    service.stop();
+  }
+});

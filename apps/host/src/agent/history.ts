@@ -153,3 +153,107 @@ export function createHostHistoryReader(isSessionRunning: (sessionId: string) =>
     revision: async () => '1',
   });
 }
+
+export async function readMessagesAroundClientId(
+  sessionId: string,
+  identifier: string,
+  opts: { radius?: number } = {},
+): Promise<Message[]> {
+  const dbClient = getDbClient();
+  if (!dbClient) throw new Error('DbClient not ready');
+  const db = dbClient.drizzle;
+  const radius = Math.max(1, Math.min(opts.radius ?? 50, 200));
+
+  const [session] = await db
+    .select({ clearedAt: sessionTable.clearedAt })
+    .from(sessionTable)
+    .where(eq(sessionTable.id, sessionId))
+    .limit(1);
+  const clearedAt = session?.clearedAt ?? null;
+  const visibleConds = clearedAt === null ? [] : [gt(messageTable.createdAt, clearedAt)];
+
+  const [anchor] = await db
+    .select({
+      id: messageTable.id,
+      clientId: messageTable.clientId,
+      sessionId: messageTable.sessionId,
+      role: messageTable.role,
+      content: messageTable.content,
+      toolUseId: messageTable.toolUseId,
+      agentMeta: messageTable.agentMeta,
+      agentKind: messageTable.agentKind,
+      createdAt: messageTable.createdAt,
+      rewindAt: messageTable.rewindAt,
+      rowid: messageRowid,
+    })
+    .from(messageTable)
+    .where(and(
+      eq(messageTable.sessionId, sessionId),
+      or(eq(messageTable.clientId, identifier), eq(messageTable.id, identifier)),
+      isNull(messageTable.rewindAt),
+      ...visibleConds,
+    ))
+    .limit(1);
+
+  if (!anchor) return [];
+
+  const before = await db
+    .select({
+      id: messageTable.id,
+      clientId: messageTable.clientId,
+      sessionId: messageTable.sessionId,
+      role: messageTable.role,
+      content: messageTable.content,
+      toolUseId: messageTable.toolUseId,
+      agentMeta: messageTable.agentMeta,
+      agentKind: messageTable.agentKind,
+      createdAt: messageTable.createdAt,
+      rewindAt: messageTable.rewindAt,
+      rowid: messageRowid,
+    })
+    .from(messageTable)
+    .where(and(
+      eq(messageTable.sessionId, sessionId),
+      isNull(messageTable.rewindAt),
+      ...visibleConds,
+      or(
+        lt(messageTable.createdAt, anchor.createdAt),
+        and(eq(messageTable.createdAt, anchor.createdAt), lt(messageRowid, anchor.rowid)),
+      ),
+    ))
+    .orderBy(desc(messageTable.createdAt), desc(messageRowid))
+    .limit(radius);
+
+  const after = await db
+    .select({
+      id: messageTable.id,
+      clientId: messageTable.clientId,
+      sessionId: messageTable.sessionId,
+      role: messageTable.role,
+      content: messageTable.content,
+      toolUseId: messageTable.toolUseId,
+      agentMeta: messageTable.agentMeta,
+      agentKind: messageTable.agentKind,
+      createdAt: messageTable.createdAt,
+      rewindAt: messageTable.rewindAt,
+      rowid: messageRowid,
+    })
+    .from(messageTable)
+    .where(and(
+      eq(messageTable.sessionId, sessionId),
+      isNull(messageTable.rewindAt),
+      ...visibleConds,
+      or(
+        gt(messageTable.createdAt, anchor.createdAt),
+        and(eq(messageTable.createdAt, anchor.createdAt), gt(messageRowid, anchor.rowid)),
+      ),
+    ))
+    .orderBy(asc(messageTable.createdAt), asc(messageRowid))
+    .limit(radius);
+
+  const combined = [...before.reverse(), anchor, ...after];
+  return combined.map((row) => ({
+    ...messageToCamel(row),
+    rowid: row.rowid,
+  }));
+}

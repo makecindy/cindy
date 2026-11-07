@@ -23,7 +23,7 @@ import { attachAgentsToMakerMemory, createHostMemoryManager, createHostMemoryMcp
 import { createHostAgentGraph } from './agent/runtime.mjs';
 import { readGatewayCredentials } from './agent/gateway.mjs';
 import { listProviders } from './agent/providers.mjs';
-import { createHostHistoryReader, readMessagesList } from './agent/history.js';
+import { createHostHistoryReader, readMessagesList, readMessagesAroundClientId } from './agent/history.js';
 import { runLoginCommand } from './login-cli.mjs';
 import { readOrCreateApiToken } from './api-token.mjs';
 import { CindyAuthClient } from '@cindy/auth-client';
@@ -888,6 +888,9 @@ const serverDeps = {
   workDetails: async (sessionId: string, ref: unknown, after?: string | null) => {
     return hostHistoryReader.details(sessionId, ref as any, after ?? undefined);
   },
+  messagesAroundClientId: async (sessionId: string, clientId: string, opts?: { radius?: number }) => {
+    return readMessagesAroundClientId(sessionId, clientId, opts);
+  },
   messagesList: async (sessionId: string, limit?: number, before?: string | null) => {
     return readMessagesList(sessionId, { limit: limit ?? 200, before: before ?? undefined });
   },
@@ -930,6 +933,8 @@ function ensureDeviceLinkRunning(): void {
       updateSession: (id: string, patch: Record<string, unknown>) => serverDeps.updateSession(id, patch),
       createSession: (body: Record<string, unknown>) => serverDeps.createSession(body),
       listMessages: (opts: { sessionId: string; limit?: number }) => serverDeps.history(opts.sessionId, opts.limit ?? 200),
+      messagesList: (sessionId: string, limit?: number, before?: string | null) => serverDeps.messagesList(sessionId, limit, before),
+      messagesAroundClientId: (sessionId: string, clientId: string, opts?: { radius?: number }) => serverDeps.messagesAroundClientId(sessionId, clientId, opts),
       historyView: (sessionId: string, before?: string | null) => serverDeps.historyView(sessionId, before),
       workDetails: (sessionId: string, ref: unknown, after?: string | null) => serverDeps.workDetails(sessionId, ref, after),
       estimatedSessionValue: (sessionId: string) => serverDeps.estimatedSessionValue(sessionId),
@@ -938,6 +943,7 @@ function ensureDeviceLinkRunning(): void {
       getCapabilities: (agentKind: string) => serverDeps.capabilities(agentKind),
       listProjectAliases: () => serverDeps.listProjectAliases(),
       listRecentWorkdirs: () => serverDeps.listRecentWorkdirs(),
+      getMaker: () => agentGraph?.maker,
       inputQueue,
       interactions: interactionBroker,
       eventHub,

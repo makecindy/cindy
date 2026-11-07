@@ -230,7 +230,13 @@ export function createInputQueue(deps) {
     },
     async enqueue(sessionId, item) {
       const state = stateFor(sessionId);
-      const text = typeof item?.text === 'string' ? item.text : '';
+      const text = (typeof item?.text === 'string' && item.text.trim())
+        ? item.text
+        : (typeof item?.content === 'string' && item.content.trim())
+        ? item.content
+        : (typeof item?.persistedContent === 'string' && item.persistedContent.trim())
+        ? item.persistedContent
+        : '';
       if (!text.trim()) throw new Error('message text is required');
       const clientId = typeof item?.clientId === 'string' && item.clientId
         ? item.clientId

@@ -21,6 +21,7 @@ import {
   DEVICE_LINK_CAPABILITY_GITHUB_READ_V1,
   DL_SUBSCRIBE_CHANNEL,
   DL_UNSUBSCRIBE_CHANNEL,
+  DL_USAGE_WIDGET_SNAPSHOT_CHANNEL,
   topicForPush,
 } from '@cindy/device-link';
 import { compressGzipSync, gunzipBase64TextBounded } from '@cindy/device-link/node-compression';
@@ -32,6 +33,13 @@ function extractTopics(raw) {
   }
   if (typeof raw === 'string') return [raw];
   return [];
+}
+
+function expandHome(p) {
+  if (typeof p !== 'string' || !p) return os.homedir();
+  if (p === '~') return os.homedir();
+  if (p.startsWith('~/') || p.startsWith('~\\')) return path.join(os.homedir(), p.slice(2));
+  return path.resolve(p);
 }
 
 export function createDeviceLinkService(deps) {
@@ -107,14 +115,141 @@ export function createDeviceLinkService(deps) {
         result = await deps.listSessions(body);
       } else if (channel === 'local-db:sessions:get') {
         result = await deps.getSession(String(args[0]));
-      } else if (channel === 'local-db:sessions:update') {
+      } else if (channel === 'local-db:sessions:update' || channel === 'local-db:sessions:patch-meta') {
         result = await deps.updateSession(String(args[0]), args[1] ?? {});
       } else if (channel === 'local-db:sessions:create') {
         result = await deps.createSession(args[0] ?? {});
       } else if (channel === 'local-db:messages:list') {
         const sessionId = typeof args[0] === 'string' ? args[0] : args[0]?.sessionId;
         const opts = typeof args[0] === 'string' ? args[1] : args[0];
-        result = await deps.listMessages({ sessionId: String(sessionId), limit: opts?.limit });
+        if (deps.messagesList) {
+          result = await deps.messagesList(String(sessionId), opts?.limit, opts?.before);
+        } else {
+          result = await deps.listMessages({ sessionId: String(sessionId), limit: opts?.limit });
+        }
+      } else if (channel === 'local-db:messages:around-client-id' || channel === 'local-db:messages:around') {
+        const sessionId = String(args[0]);
+        const identifier = String(args[1]);
+        const opts = typeof args[2] === 'object' && args[2] !== null ? args[2] : {};
+        result = deps.messagesAroundClientId
+          ? await deps.messagesAroundClientId(sessionId, identifier, opts)
+          : [];
+      } else if (channel === 'local-db:messages:dismiss-error' || channel === 'local-db:sessions:ack-interrupted') {
+        result = { ok: true };
+      } else if (channel === 'maker:regenerate-title') {
+        result = { ok: true };
+      } else if (channel === 'maker:create-session') {
+        const opts = args[0] ?? {};
+        const created = await deps.createSession(opts);
+        let capabilities = created.capabilities;
+        if (!capabilities && deps.getCapabilities) {
+          try { capabilities = await deps.getCapabilities(created.agentKind); } catch {}
+        }
+        result = {
+          sessionId: created.id ?? created.sessionId,
+          agentKind: created.agentKind,
+          workDir: created.workingDir ?? created.workDir,
+          capabilities: capabilities ?? null,
+          usedProjectContext: false,
+        };
+      } else if (channel === 'maker:list-active') {
+        const options = args[0];
+        const maker = deps.getMaker ? deps.getMaker() : deps.maker;
+        const sessions = maker ? maker.listActiveSessions().map((s) => ({
+          sessionId: s.id,
+          agentKind: s.agentKind,
+          workDir: s.workDir,
+          capabilities: s.capabilities,
+          isTurnRunning: s.isTurnRunning ? s.isTurnRunning() : false,
+          activityPhase: 'idle',
+          activityAttention: false,
+        })) : [];
+        if (options && typeof options === 'object' && !Array.isArray(options)
+          && options.summary === true && options.snapshotVersion === 2) {
+          result = { format: 'active-sessions-v2', sessions };
+        } else {
+          result = sessions;
+        }
+      } else if (channel === 'maker:set-model') {
+        const [sessionId, model, providerId] = args;
+        result = await deps.updateSession(String(sessionId), {
+          model: String(model),
+          ...(providerId !== undefined ? { providerId } : {}),
+        });
+      } else if (channel === 'maker:set-effort') {
+        const [sessionId, effort] = args;
+        result = await deps.updateSession(String(sessionId), { effort: String(effort) });
+      } else if (channel === 'maker:set-permission-mode') {
+        const [sessionId, permissionMode] = args;
+        result = await deps.updateSession(String(sessionId), { permissionMode: String(permissionMode) });
+      } else if (channel === 'maker:set-plan-mode') {
+        const [sessionId, planModeEnabled] = args;
+        result = await deps.updateSession(String(sessionId), { planModeEnabled: Boolean(planModeEnabled) });
+      } else if (channel === 'maker:set-fast-mode') {
+        const [sessionId, fastMode] = args;
+        result = await deps.updateSession(String(sessionId), { fastMode });
+      } else if (channel === 'maker:set-thinking-enabled') {
+        result = { ok: true };
+      } else if (channel === 'maker:set-extra-dirs') {
+        result = await deps.updateSession(String(args[0]), { extraDirs: args[1] ?? [] });
+      } else if (channel === 'maker:switch-session-agent') {
+        const [sessionId, agentKind, model, providerId] = args;
+        result = await deps.updateSession(String(sessionId), {
+          agentKind: String(agentKind),
+          ...(model ? { model: String(model) } : {}),
+          ...(providerId !== undefined ? { providerId } : {}),
+        });
+      } else if (channel === 'maker:close-session') {
+        const sessionId = String(args[0]);
+        if (deps.inputQueue?.stop) await deps.inputQueue.stop(sessionId);
+        result = { ok: true };
+      } else if (channel === 'maker:resolve-interaction') {
+        const [requestId, decision] = args;
+        if (deps.interactions?.resolve) {
+          await deps.interactions.resolve(String(requestId), decision);
+        }
+        result = { ok: true };
+      } else if (channel === 'maker:get-context-usage') {
+        result = null;
+      } else if (channel === 'fs:stat-path') {
+        const rawPath = typeof args[0] === 'string' ? args[0] : (args[0]?.path ?? '');
+        const target = expandHome(rawPath);
+        try {
+          const st = await fs.promises.stat(target);
+          result = st.isDirectory()
+            ? { kind: 'dir', resolvedPath: target }
+            : { kind: 'file', resolvedPath: target, mtimeMs: st.mtimeMs, birthtimeMs: st.birthtimeMs };
+        } catch (err) {
+          if (err && err.code === 'ENOENT') {
+            result = { kind: 'missing', resolvedPath: target };
+          } else {
+            throw err;
+          }
+        }
+      } else if (channel === 'fs:list-dir') {
+        const rawPath = typeof args[0] === 'string' ? args[0] : (args[0]?.path ?? '');
+        const target = expandHome(rawPath);
+        const dirents = await fs.promises.readdir(target, { withFileTypes: true, encoding: 'utf8' });
+        const entries = [];
+        for (const d of dirents) {
+          const childPath = path.join(target, d.name);
+          if (d.isDirectory()) {
+            entries.push({ name: d.name, kind: 'dir', path: childPath });
+          } else if (d.isSymbolicLink()) {
+            try {
+              const st = await fs.promises.stat(childPath);
+              if (st.isDirectory()) entries.push({ name: d.name, kind: 'symlink', path: childPath });
+            } catch { /* skip dangling */ }
+          }
+        }
+        entries.sort((a, b) => a.name.localeCompare(b.name));
+        const parent = path.dirname(target);
+        result = { resolvedPath: target, entries, parent: parent === target ? null : parent };
+      } else if (channel === 'fs:mkdir-p') {
+        const rawPath = typeof args[0] === 'string' ? args[0] : (args[0]?.path ?? '');
+        const target = expandHome(rawPath);
+        await fs.promises.mkdir(target, { recursive: true });
+        result = { resolvedPath: target };
       } else if (channel === 'local-db:messages:view' || channel === 'local-db:messages:view-intent') {
         const sessionId = String(args[0]);
         const before = args[1]?.before ?? null;
@@ -291,6 +426,111 @@ export function createDeviceLinkService(deps) {
         result = [];
       } else if (channel === 'maker:agent-island:get-visibility') {
         result = { visible: false };
+      } else if (channel === 'sidebar-settings:get-project-aliases') {
+        result = deps.listProjectAliases ? await deps.listProjectAliases() : [];
+      } else if (channel === 'maker:goal:get-status') {
+        result = null;
+      } else if (channel.startsWith('maker:goal:')) {
+        result = { ok: false, error: 'unsupported' };
+      } else if (channel === 'device-link:usage-widget:snapshot:v1' || channel === DL_USAGE_WIDGET_SNAPSHOT_CHANNEL) {
+        result = { ok: false, reason: 'unavailable' };
+      } else if (channel === 'provider-group:remote') {
+        result = { ok: false, error: 'unsupported' };
+      } else if (channel === 'maker:side-chat:list:v1' || channel === 'maker:side-chat:v1') {
+        result = [];
+      } else if (
+        channel === 'maker:usage:claude-subscription'
+        || channel === 'maker:usage:xai-subscription'
+        || channel === 'maker:claude-session-route:get'
+        || channel === 'maker:usage:codex-rate-limits'
+        || channel === 'maker:usage:codex-rate-limit-reset'
+        || channel === 'maker:usage:codex-reset-auto-use'
+      ) {
+        result = null;
+      } else if (channel === 'maker:get-new-maker-defaults') {
+        result = { worktreeEnabled: false };
+      } else if (
+        channel === 'maker:apply-new-maker-draft-pref'
+        || channel === 'maker:apply-new-maker-worktree-pref'
+        || channel === 'maker:apply-new-maker-worktree-branch-pref'
+        || channel === 'maker:set-session-model-pref'
+      ) {
+        result = { ok: true };
+      } else if (channel === 'maker:get-new-maker-worktree-branch-pref') {
+        result = null;
+      } else if (channel === 'local-db:history:query') {
+        result = { ok: true, sessions: [], hasMore: false };
+      } else if (channel === 'local-db:conversations:search') {
+        result = { results: [] };
+      } else if (channel === 'maker:predict-prompt') {
+        result = [];
+      } else if (channel === 'maker:usage:model-pricing') {
+        result = {};
+      } else if (channel === 'maker:api-key:present') {
+        result = false;
+      } else if (
+        channel === 'maker:list-agent-commands'
+        || channel === 'maker:list-agent-skills'
+        || channel === 'maker:scan-at-resources'
+      ) {
+        result = [];
+      } else if (channel === 'worktree:detect-cwd') {
+        result = { eligible: false };
+      } else if (channel === 'worktree:list-branches') {
+        result = [];
+      } else if (channel === 'worktree:suggest-name') {
+        result = { name: 'worktree' };
+      } else if (channel === 'worktree:create') {
+        result = { ok: false, error: 'unsupported' };
+      } else if (channel === 'worktree:discard-precreated' || channel === 'worktree:cancel-precreated') {
+        result = { ok: true };
+      } else if (channel === 'text-file:read-preview') {
+        result = null;
+      } else if (
+        channel === 'maker:fork'
+        || channel === 'maker:fork-strip-encrypted'
+        || channel === 'maker:get-session-tree'
+        || channel === 'maker:navigate-session-tree'
+        || channel === 'maker:rewind:preview'
+        || channel === 'maker:rewind:commit'
+      ) {
+        result = null;
+      } else if (channel === 'maker:message:delete') {
+        result = { ok: true };
+      } else if (
+        channel === 'maker:session:enable-orca'
+        || channel === 'maker:session:disable-orca'
+        || channel === 'maker:worker:create'
+        || channel === 'maker:worker:switch-focus'
+        || channel === 'maker:worker:acknowledge-done'
+        || channel === 'maker:worker:archive'
+      ) {
+        result = { ok: false, error: 'unsupported' };
+      } else if (
+        channel === 'maker:orca:execution-devices'
+        || channel === 'maker:collaboration-settings:get'
+        || channel === 'local-db:orca-workflows:list-workers-by-lead'
+        || channel === 'local-db:orca-workflows:get-by-worker-session'
+      ) {
+        result = [];
+      } else if (
+        channel === 'maker:schedule:get'
+        || channel === 'maker:schedule:list-templates'
+        || channel === 'maker:schedule:create-from-template'
+        || channel === 'maker:schedule:create'
+        || channel === 'maker:schedule:update'
+        || channel === 'maker:schedule:list-runs'
+        || channel === 'maker:schedule:run-now'
+        || channel === 'maker:schedule:pause'
+        || channel === 'maker:schedule:resume'
+        || channel === 'maker:schedule:delete'
+        || channel === 'maker:schedule:get-inflight-count'
+        || channel === 'maker:schedule:mark-run-read'
+        || channel === 'maker:schedule:mark-schedule-runs-read'
+        || channel === 'maker:schedule:delete-run'
+        || channel === 'maker:project-automation:remove-schedule'
+      ) {
+        result = { ok: false, error: 'unsupported' };
       } else {
         console.warn(`[host:device-link] channel not allowed/supported: ${channel}`);
         try {
@@ -335,7 +575,7 @@ export function createDeviceLinkService(deps) {
       },
     });
 
-    client.onFrame((env) => {
+    client.onFrame(async (env) => {
       const src = env.src;
       if (!src) return;
 
@@ -344,7 +584,7 @@ export function createDeviceLinkService(deps) {
       } else if (env.kind === 'link-close') {
         subscriptions.delete(src);
       } else if (env.kind === 'invoke' && env.id) {
-        void handleInvoke(src, env.id, env.payload);
+        await handleInvoke(src, env.id, env.payload);
       }
     });
 
