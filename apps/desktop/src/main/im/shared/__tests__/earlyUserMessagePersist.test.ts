@@ -70,6 +70,7 @@ interface Harness {
   calls: string[];
   reactToMessage: ReturnType<typeof vi.fn>;
   sendText: ReturnType<typeof vi.fn>;
+  sendMarkdownText: ReturnType<typeof vi.fn>;
 }
 
 function wire(
@@ -85,6 +86,7 @@ function wire(
   const dispatchAgentTurn = vi.fn(async (): Promise<ImTurnDispatch> => ({ kind: 'busy', reason: 'session_running' }));
   const reactToMessage = vi.fn(async () => 'reaction-1');
   const sendText = vi.fn(async () => undefined);
+  const sendMarkdownText = vi.fn(async () => undefined);
   const persistEarly = vi.fn(async () => {
     calls.push('persistEarly');
     return { sessionId: 'feishu-session', clientId: 'early-client' };
@@ -105,7 +107,7 @@ function wire(
       deliver = handler;
       return () => undefined;
     },
-    sendMarkdownText: vi.fn(async () => undefined),
+    sendMarkdownText,
     sendText,
     reactToMessage,
   } as unknown as ChannelIM;
@@ -133,7 +135,7 @@ function wire(
   );
   attach(im);
 
-  return { deliver, runAgentTurn, dispatchAgentTurn, persistEarly, prepareAgentTurnText, calls, reactToMessage, sendText };
+  return { deliver, runAgentTurn, dispatchAgentTurn, persistEarly, prepareAgentTurnText, calls, reactToMessage, sendText, sendMarkdownText };
 }
 
 function turnArgs(runAgentTurn: ReturnType<typeof vi.fn>): ImRunAgentTurnArgs {
@@ -167,6 +169,47 @@ describe('messageHandler early user-message persist', () => {
     expect(delivery.accept).not.toHaveBeenCalled();
     expect(h.sendText).toHaveBeenCalledOnce();
   });
+  // Tier 1, #9250: external busy retries must not create another persisted user ID.
+  it('skips non-idempotent early persistence for durable context retries', async () => {
+    const h = wire({ withPrepare: true, channel: 'imessage' });
+    const delivery = { awaitPersistence: vi.fn(), defer: vi.fn(), accept: vi.fn() };
+    const event = makeEvent({ channelName: 'imessage', delivery });
+    await h.deliver(event);
+    await h.deliver(event);
+    expect(h.prepareAgentTurnText).toHaveBeenCalledTimes(2);
+    expect(h.persistEarly).not.toHaveBeenCalled();
+    expect(h.dispatchAgentTurn).toHaveBeenCalledTimes(2);
+    expect(delivery.defer).toHaveBeenCalledTimes(2);
+  });
+
+  // Tier 1, #9250: external rejection previously acknowledged silently.
+  it.each(['missing_auth', 'companion_unavailable', 'SEND_FAILED'])('reports %s before accepting a durable input', async reason => {
+    const h = wire({ withPrepare: false, channel: 'imessage' });
+    const delivery = { awaitPersistence: vi.fn(), defer: vi.fn(), accept: vi.fn() };
+    h.dispatchAgentTurn.mockResolvedValue({ kind: 'rejected', reason });
+    h.sendText.mockImplementation(async () => { expect(delivery.accept).not.toHaveBeenCalled(); });
+    await h.deliver(makeEvent({ channelName: 'imessage', delivery }));
+    expect(h.sendText).toHaveBeenCalledOnce();
+    expect(h.sendText.mock.calls[0][1]).toBe(reason === 'missing_auth' ? slackUi.agent.apiKeyMissing
+      : reason === 'companion_unavailable' ? slackUi.agent.runtimeError(reason) : slackUi.agent.sendInternalError(reason));
+    expect(delivery.accept).toHaveBeenCalledOnce();
+    h.sendText.mockRejectedValueOnce(new Error('offline'));
+    delivery.accept.mockClear();
+    await h.deliver(makeEvent({ channelName: 'imessage', delivery }));
+    expect(delivery.accept).not.toHaveBeenCalled();
+    expect(delivery.defer).toHaveBeenCalledOnce();
+  });
+
+  // Tier 1, #9250: /stop and !stop must also withdraw the external transport queue.
+  it.each(['/stop', '!stop'])('cancels durable pending inputs on %s', async text => {
+    const h = wire({ withPrepare: false, channel: 'imessage' });
+    const delivery = { awaitPersistence: vi.fn(), defer: vi.fn(), accept: vi.fn(), cancelPending: vi.fn(() => 2) };
+    await h.deliver(makeEvent({ channelName: 'imessage', text, delivery }));
+    expect(delivery.cancelPending).toHaveBeenCalledOnce();
+    expect(h.dispatchAgentTurn).not.toHaveBeenCalled();
+    expect(h.sendMarkdownText).toHaveBeenCalledWith(expect.anything(), slackUi.agent.stopDone(2), expect.anything());
+  });
+
   // Regression: local-history channels previously passed no image read lease to the provider.
   it.each([
     {

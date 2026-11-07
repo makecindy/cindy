@@ -102,6 +102,7 @@ export function createMessageHandler(
     event: IMMessageEvent,
     accountGeneration: ImAccountGeneration,
   ): Promise<void> {
+    if (event.delivery?.isCancelled?.()) return;
     log.info(
       `processOne sender=...${event.senderId.slice(-8)} chat=...${event.chatId.slice(-8)} ` +
         `textLen=${event.text.length} att=${event.attachments.length} unsupported=${event.unsupported.length}`,
@@ -186,16 +187,19 @@ export function createMessageHandler(
     // 放在 slash 之前; 与 slash 同口径只认纯文本(见 pureTextCommandInput)。turn
     // 运行期间 userLocks 并不持锁(runAgentTurn 在 dispatch 后即返回), 所以这里能在
     // 上一轮仍在跑时立刻执行, 而不是排到它后面。
-    if (pureTextCommandInput && isStopCommand(event.text)) {
+    if (pureTextCommandInput && (isStopCommand(event.text) ||
+      (event.delivery && event.text.trim().toLowerCase() === '/stop'))) {
       let reply: string;
       try {
+        const droppedExternal = event.delivery?.cancelPending?.() ?? 0;
         const result = await turnRunner.stopActiveTurn({
           botContextId: event.contextId,
           userId: event.senderId,
           scopeKey: notificationSessionId || threadScoped ? event.scopeKey : undefined,
           ...(notificationSessionId ? { notificationSessionId } : {}),
         });
-        reply = result.stopped ? ui.agent.stopDone(result.droppedQueued) : ui.agent.stopIdle;
+        reply = result.stopped || droppedExternal > 0
+          ? ui.agent.stopDone(result.droppedQueued + droppedExternal) : ui.agent.stopIdle;
         log.info(
           `!stop handled sender=...${event.senderId.slice(-8)} stopped=${result.stopped} dropped=${result.droppedQueued}`,
         );
@@ -416,7 +420,7 @@ export function createMessageHandler(
     if (adapter.prepareAgentTurnText) {
       handedOverAck = event.messageId ? ackProcessingEarly(im, event.messageId) : null;
       try {
-        if (!notificationSessionId) {
+        if (!notificationSessionId && !event.delivery) {
           prePersisted =
             (await turnRunner.persistInboundUserMessageEarly?.({
               botContextId: event.contextId,
@@ -560,7 +564,19 @@ export function createMessageHandler(
           beforeProviderStart: async () => { event.delivery!.awaitPersistence(); },
         });
         if (dispatch.kind === 'busy') event.delivery.defer();
-        else if (dispatch.kind === 'rejected') event.delivery.accept();
+        else if (dispatch.kind === 'rejected') {
+          const text = dispatch.reason === 'missing_auth' ? ui.agent.apiKeyMissing
+            : dispatch.reason === 'companion_unavailable'
+              ? ui.agent.companionUnavailable?.(dispatch.reason) ?? ui.agent.runtimeError(dispatch.reason)
+              : ui.agent.sendInternalError(dispatch.reason);
+          try {
+            await im.sendText(event.senderId, text, { threadTs: event.scopeKey });
+            event.delivery.accept();
+          } catch {
+            // A failed failure notice is not handled: retain it for a later retry.
+            event.delivery.defer();
+          }
+        }
         else await notifyUnsupported();
       } else {
         await turnRunner.runAgentTurn(turnArgs);

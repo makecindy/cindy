@@ -10,16 +10,17 @@ import { BlueBubblesReceipts, type BlueBubblesState } from './state.js';
 // handling and requester identity absent from other transports' tests; no real contacts.
 const connections: BlueBubblesIM[] = [];
 afterEach(async () => { await Promise.all(connections.splice(0).map(im => im.dispose())); });
-async function fixture(initialState: BlueBubblesState | null = null, media?: IMHost['media']) {
+async function fixture(initialState: BlueBubblesState | null = null, media?: IMHost['media'], extraChat = false) {
   const secrets = new Map<string, string>();
   let saved: BlueBubblesState | null = initialState;
   let callbackUrl = '';
   let now = 1_000;
   const chat = { guid: 'any;-;owner@example.test', participants: [{ address: 'owner@example.test', service: 'iMessage' }] };
+  const otherChat = { guid: 'any;-;other@example.test', participants: [{ address: 'other@example.test', service: 'iMessage' }] };
   const messages = new Map<string, BlueBubblesMessage>();
   const api = new BlueBubblesApi('http://127.0.0.1:1', 'test-only');
   vi.spyOn(api, 'info').mockResolvedValue({ server_version: '1.9.9' });
-  vi.spyOn(api, 'chat').mockResolvedValue(chat);
+  vi.spyOn(api, 'chat').mockImplementation(async guid => guid === otherChat.guid ? otherChat : chat);
   vi.spyOn(api, 'history').mockImplementation(async (_chat, after, before) => [...messages.values()].filter(row => row.dateCreated >= after && row.dateCreated <= before));
   vi.spyOn(api, 'message').mockImplementation(async guid => {
     const message = messages.get(guid); if (!message) throw new Error('missing'); return message;
@@ -41,7 +42,7 @@ async function fixture(initialState: BlueBubblesState | null = null, media?: IMH
   const received: IMMessageEvent[] = [];
   im.onMessage(event => { received.push(event); });
   await im.saveCredentials({ serverUrl: api.origin, password: 'test-only', ownerAddress: 'owner@example.test',
-    chatGuids: [chat.guid], listenHost: '127.0.0.1', listenPort: 18747 });
+    chatGuids: [chat.guid, ...(extraChat ? [otherChat.guid] : [])], listenHost: '127.0.0.1', listenPort: 18747 });
   const message = (guid: string, overrides: Partial<BlueBubblesMessage> = {}) => {
     now += 1;
     messages.set(guid, { guid, text: 'hello', isFromMe: false, dateCreated: now,
@@ -49,7 +50,7 @@ async function fixture(initialState: BlueBubblesState | null = null, media?: IMH
   };
   const webhook = (guid: string, url = callbackUrl) => fetch(url, { method: 'POST', headers: { 'content-type': 'application/json' },
     body: JSON.stringify({ type: 'new-message', data: { guid, text: 'forged payload', handle: { address: 'attacker' } } }) });
-  return { im, api, received, message, webhook, send, chat, state: () => saved!, url: () => callbackUrl };
+  return { im, api, received, message, webhook, send, chat, otherChat, state: () => saved!, url: () => callbackUrl };
 }
 
 describe('BlueBubbles local ingress', () => {
@@ -109,6 +110,41 @@ describe('BlueBubbles local ingress', () => {
     expect(f.state().inbox['not-persisted'].state).toBe('dispatching');
     expect(f.im.health().uncertainInputs).toBe(1);
   });
+  // Tier 1, #9250: a stop must persistently withdraw only its own chat's pending work.
+  // Existing busy/restart regression covers recovery, not cancellation or a late queued callback.
+  it('cancels deferred chat inputs durably without resurrecting late retries or stopping another chat', async () => {
+    const f = await fixture(null, undefined, true);
+    let busy = true;
+    let stopped = 0;
+    const queued: IMMessageEvent[] = [];
+    f.im.onMessage(event => {
+      event.delivery!.awaitPersistence();
+      if (event.text === '/stop') { stopped = event.delivery!.cancelPending!(); event.delivery!.accept(); return; }
+      if (busy) { queued.push(event); event.delivery!.defer(); }
+      else f.im.acknowledgeIncoming(event.messageId);
+    });
+    f.message('queued-before-stop');
+    f.message('other-chat', { chats: [f.otherChat] });
+    await f.im.reconcile();
+    expect(f.state().inbox['queued-before-stop'].state).toBe('pending');
+    f.message('stop', { text: '/stop' });
+    await f.im.reconcile();
+    expect(stopped).toBe(1);
+    expect(f.state().inbox['queued-before-stop'].state).toBe('ignored');
+    expect(f.state().inbox['other-chat'].state).toBe('pending');
+    const late = queued.find(event => event.messageId === 'queued-before-stop')!;
+    expect(late.delivery!.isCancelled!()).toBe(true);
+    late.delivery!.defer();
+    late.delivery!.accept();
+    expect(f.state().inbox['queued-before-stop'].state).toBe('ignored');
+    await f.im.dispose();
+    busy = false;
+    const before = f.received.length;
+    await f.im.init();
+    expect(f.received.slice(before).map(event => event.messageId)).toEqual(['other-chat']);
+    expect(f.state().inbox['other-chat'].state).toBe('accepted');
+  });
+
   // Tier 1, review #9250: each health broadcast copied the permanent ledger.
   // Existing restart cases only used tiny ledgers; restored unresolved counts must
   // stay correct without snapshotting 10,000 completed receipts on every message.

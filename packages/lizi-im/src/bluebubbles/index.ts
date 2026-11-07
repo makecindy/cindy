@@ -68,6 +68,7 @@ export class BlueBubblesIM extends BaseIM implements TextChannelIM {
   private readonly activeDispatches = new Set<string>();
   private readonly activeSends = new Set<string>();
   private readonly deferredEvents = new Map<string, IMMessageEvent>();
+  private readonly cancelledEvents = new WeakSet<IMMessageEvent>();
   private readonly pendingReplies = new Map<string, { accept(text: string): boolean; cancel(): void }>();
 
   constructor(host: IMHost, private readonly options: BlueBubblesOptions) { super('imessage', host); }
@@ -321,21 +322,35 @@ export class BlueBubblesIM extends BaseIM implements TextChannelIM {
         this.activeDispatches.add(guid);
         let awaitPersistence = false, deferred = false;
         event.delivery = {
+          isCancelled: () => this.cancelledEvents.has(event!),
+          cancelPending: () => {
+            this.assertLive(generation);
+            let count = 0;
+            for (const [id, queued] of this.deferredEvents) {
+              if (queued.chatId !== event!.chatId || id === guid) continue;
+              receipts.mark(id, 'ignored');
+              this.cancelledEvents.add(queued);
+              this.deferredEvents.delete(id);
+              count++;
+            }
+            return count;
+          },
           awaitPersistence: () => { this.assertLive(generation); awaitPersistence = true; },
           defer: () => {
             this.assertLive(generation);
+            if (this.cancelledEvents.has(event!)) return;
             receipts.mark(guid, 'pending');
             this.deferredEvents.set(guid, event!);
             deferred = true;
           },
-          accept: () => { this.assertLive(generation); receipts.mark(guid, 'accepted'); },
+          accept: () => { this.assertLive(generation); if (!this.cancelledEvents.has(event!)) receipts.mark(guid, 'accepted'); },
         };
         // Do not block ingress on a model turn: its confirmation reply arrives on this same receiver.
         void Promise.all([...this.messages].map(callback => Promise.resolve().then(() => {
           this.assertLive(generation);
           return callback(event!);
         }))).then(() => {
-          if (this.live(generation) && !awaitPersistence && !deferred) receipts.mark(guid, 'accepted');
+          if (this.live(generation) && !awaitPersistence && !deferred && !this.cancelledEvents.has(event!)) receipts.mark(guid, 'accepted');
         }).catch(() => this.fail(generation)).finally(() => {
           if (this.live(generation)) {
             this.activeDispatches.delete(guid);

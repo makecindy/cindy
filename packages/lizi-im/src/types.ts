@@ -199,6 +199,10 @@ export interface IMUnsupportedEntry {
 export interface IMMessageEvent {
   /** In-process durable transport handoff; never serialized to the model or remote clients. */
   delivery?: {
+    /** A queued retry was withdrawn by a later owner stop command. */
+    isCancelled?(): boolean;
+    /** Persistently withdraw this chat's queued inputs; leave other chats and the stop itself intact. */
+    cancelPending?(): number;
     /** Agent dispatch must be acknowledged only by the persisted-user-message callback. */
     awaitPersistence(): void;
     /** External runner rejected dispatch as busy; retain the durable queue item for retry. */
