@@ -7,6 +7,7 @@ vi.mock('../../clientEndpointsService.js', () => ({ getClientEndpoint: () => 'ht
 const replyFiles = vi.hoisted(() => ({ prepare: vi.fn(async (text: string) => ({ text, attachments: [] as unknown[] })) }));
 vi.mock('../chatServerReplyFiles.js', () => ({
   prepareChatReplyFiles: replyFiles.prepare,
+  hasMarkdownImages: (text: string) => /!\[[^\]]*\]\([^)]*\)/.test(text),
   replyFileLinks: (text: string) => ({ text: text.replace(/\[([^\]]+)\]\([^)]*\)/g, '$1') }),
 }));
 vi.mock('../chatServerMedia.js', () => ({ createChatMedia: () => ({ upload: fixture.upload, download: fixture.download }) }));
@@ -1720,6 +1721,25 @@ describe('Chat Server result delivery and refresh', () => {
     await service.settleLaneTurn({ ...terminal, resultText: '[Report](./report.pdf)' });
     expect(deliveries()[0][2].content).toEqual([{ type: 'text', text: 'Report' }, processRecord]);
     expect(fixture.handle.mock.calls.filter(([, , body]) => body?.action === 'fail')).toHaveLength(0);
+  });
+
+  it('does not turn a network upload failure into a successful text-only reply', async () => {
+    replyFiles.prepare.mockResolvedValue({ text: 'Report', attachments: [{ id: 'pdf', name: 'report.pdf' }] });
+    fixture.upload.mockRejectedValueOnce(Object.assign(new Error('DNS lookup failed'), {
+      code: 'ENOTFOUND', syscall: 'getaddrinfo',
+    }));
+    await startFileReply();
+    await service.settleLaneTurn({ ...terminal, resultText: '[Report](./report.pdf)' });
+    expect(deliveries()).toHaveLength(0);
+    expect(fixture.handle.mock.calls.filter(([, , body]) => body?.action === 'fail')).toHaveLength(1);
+  });
+
+  it('does not downgrade a reply containing an image when file preparation fails', async () => {
+    replyFiles.prepare.mockRejectedValue(new Error('ATTACHMENT_UNAVAILABLE'));
+    await startFileReply();
+    await service.settleLaneTurn({ ...terminal, resultText: '![Chart](./chart.png) [Report](./report.pdf)' });
+    expect(deliveries()).toHaveLength(0);
+    expect(fixture.handle.mock.calls.filter(([, , body]) => body?.action === 'fail')).toHaveLength(1);
   });
 
   it.each([400, 413, 415, 422])('reports a file rejected by the media service (%s)', async status => {
