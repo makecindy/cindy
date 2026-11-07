@@ -4,12 +4,12 @@
  * - 点按钮:卡片只发出「归档这个任务」的请求,由打开这个任务的任务页走与标题栏、侧边栏
  *   同一套归档流程(运行中、接管、绑定的定时任务、worktree 预检与确认)。插件拿不到这个能力。
  * - 合并后自动归档:普通任务页登记「这里离开时可以自动归档」;任务里有卡片(可以不止一张)
- *   上有宿主自己查到已合并、插件标了 -auto 的 PR 时,自动归档进入待生效,卡片上显示提示和
- *   「本次不归档」。
+ *   上有插件标了 -auto 的 PR，且宿主确认任务全部关联 PR 已合并时，自动归档进入待生效，卡片上显示提示和
+ *   「取消」。
  *   - 待生效的卡片在用户眼前显示过就记下「看过」;用户离开这个任务时任务页取走它,条件都满足
  *     才归档。
- *   - 用户点了「本次不归档」,或待生效之后这个任务里出现了用户发的消息(本机、手机、IM 都算,
- *     自动化与插件代发的不算),本次就取消:提示消失,离开时不归档,手动的归档按钮照旧可用。
+ *   - 用户点了「取消」,或待生效之后这个任务里出现了用户发的消息(本机、手机、IM 都算,
+ *     自动化与插件代发的不算),本次就取消:提示改为「本次不会自动归档」,离开时不归档,手动的归档按钮照旧可用。
  *     取消一直保留到任务里不再有符合条件的卡片(PR 重新打开、关了开关),之后重新开始。
  *   状态只在内存里,重启或刷新后不保留:没有确定看过就不归档。
  */
@@ -80,9 +80,17 @@ export function setGhostCardTaskAutoArchiveArmed(sessionId: string, cardId: stri
   changed(sessionId);
 }
 
-/** 卡片上该不该显示「离开后自动归档」与「本次不归档」。 */
+export type GhostCardTaskAutoArchiveState = 'inactive' | 'pending' | 'cancelled';
+
+/** 展示沿用现有取消记录；不新增持久状态，也不改变离开任务时的归档判据。 */
+export function getGhostCardTaskAutoArchiveState(sessionId: string): GhostCardTaskAutoArchiveState {
+  if (!enabledViews.has(sessionId) || !armed.has(sessionId)) return 'inactive';
+  return cancelled.has(sessionId) ? 'cancelled' : 'pending';
+}
+
+/** 当前是否等待离开后自动归档。 */
 export function isGhostCardTaskAutoArchivePending(sessionId: string): boolean {
-  return enabledViews.has(sessionId) && armed.has(sessionId) && !cancelled.has(sessionId);
+  return getGhostCardTaskAutoArchiveState(sessionId) === 'pending';
 }
 
 /** 本次不自动归档(用户点了取消,或在任务里发了消息)。 */

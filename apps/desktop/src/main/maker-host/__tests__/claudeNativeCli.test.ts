@@ -112,6 +112,20 @@ beforeEach(() => {
 });
 
 describe('parseClaudeCliLoginStatus', () => {
+  it('isolates concurrent custom profiles without publishing them as the default CLI login', async () => {
+    h.spawn.mockImplementation((_binary: string, _args: string[], options: { env: Record<string, string> }) =>
+      fakeChild({ stdout: JSON.stringify({ loggedIn: true, authMethod: 'claude.ai', email: options.env.CLAUDE_CONFIG_DIR ?? 'default' }) }));
+    const [a, b] = await Promise.all([
+      refreshClaudeCliLoginStatus({ configDir: '/profiles/a' }),
+      refreshClaudeCliLoginStatus({ configDir: '/profiles/b' }),
+    ]);
+    expect(a.email).toBe('/profiles/a');
+    expect(b.email).toBe('/profiles/b');
+    expect(peekClaudeCliLoginStatus()).toBeNull();
+    await refreshClaudeCliLoginStatus();
+    expect(peekClaudeCliLoginStatus()?.email).toBe('default');
+    expect(h.spawn.mock.calls[2][2].env).not.toHaveProperty('CLAUDE_CONFIG_DIR');
+  });
   it('只把 Claude.ai 订阅账号的 OAuth 登录当作 Claude 订阅', () => {
     expect(parseClaudeCliLoginStatus(SUBSCRIPTION)).toEqual({
       loggedIn: true,

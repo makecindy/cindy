@@ -74,7 +74,7 @@ import { TabDragController } from '@/features/right-sidebar/TabDragController';
 import {
   markAllPtyDetached,
   markPtyDetached,
-} from '@/features/right-sidebar/plugins/terminal/lib/xtermPool';
+} from '@/features/right-sidebar/plugins/terminal/lib/xtermEntries';
 import {
   bootstrapRsbWindowState,
   getRsbWindowUiState,
@@ -403,9 +403,9 @@ export function MainLayout() {
     !isSharedTaskPeer(rightSidebarWorkdirInfo.deviceLinkDeviceId)
       ? rightSidebarWorkdirInfo.deviceLinkDeviceId
       : null;
-  // Windows 内容区右上的右栏唤起 chip:仅面板收起或分离时在场。
+  // Windows 内容区右上的显示入口始终跟随聊天区，展开时也不移入侧栏。
   const showWindowsRightSidebarTrigger =
-    rightSidebarAvailable && rsbWindow.loaded && (rsbDetached || isRightSidebarCollapsed);
+    rightSidebarAvailable && rsbWindow.loaded;
   const rowRef = useRef<HTMLDivElement>(null);
   const mainRef = useRef<HTMLElement>(null);
   // B1a(去方位化):左侧占位块(pinning spacer + Sidebar)的 wrapper。
@@ -742,7 +742,7 @@ export function MainLayout() {
         | { type: 'plugin'; pluginId: string }
         | { type: 'local-plugin-share'; snapshotId: string }
         | { type: 'installed-plugin'; ghostId?: string }
-        | { type: 'settings'; tab: 'voice-input' | 'providers' | 'billing' | 'remote-control' | 'builtin-tools'; connect?: string; intent?: 'topup' },
+        | { type: 'settings'; tab: 'voice-input' | 'providers' | 'billing' | 'remote-control' | 'builtin-tools' | 'im-bot'; connect?: string; intent?: 'topup'; imGroup?: 'cindy' | 'personal' },
     ) => {
       if (payload.type === 'chat-message') {
         const search = new URLSearchParams({ messageId: payload.messageId });
@@ -823,7 +823,9 @@ export function MainLayout() {
             ? `&connect=${encodeURIComponent(payload.connect)}`
             : '';
         const intent = payload.tab === 'billing' && payload.intent === 'topup' ? '&intent=topup' : '';
-        navigate(`/settings?tab=${payload.tab}${connect}${intent}`);
+        // imGroup 交给 SettingsView 已有的 ?imGroup= 分区定位。
+        const imGroup = payload.tab === 'im-bot' && payload.imGroup ? `&imGroup=${payload.imGroup}` : '';
+        navigate(`/settings?tab=${payload.tab}${connect}${intent}${imGroup}`);
       }
     },
     [navigate, navigateToSession, openShareImport],
@@ -1848,8 +1850,7 @@ export function MainLayout() {
                       FadeSwitcher 之外 —— 它是全局状态提示,不参与路由切换动画。 */}
                   <CredentialStoreBanner />
                   {!isSecondaryWindow() && <div ref={setPerformanceTraceStatusHost} className="shrink-0" />}
-                  {/* Windows chip 栈:远程桌面入口贴着右栏唤起 chip(唤起 chip 在面板一侧);
-                      右栏展开时唤起 chip 不在,远程桌面入口留在同一角。 */}
+                  {/* Windows 的显示侧栏和远程桌面入口始终留在聊天区同一角。 */}
                   {!isMac && (showWindowsRightSidebarTrigger || remoteDesktopDeviceId) && (
                     <div
                       data-testid="right-sidebar-fixed-trigger"
@@ -1872,9 +1873,9 @@ export function MainLayout() {
                       )}
                       {showWindowsRightSidebarTrigger && (
                         <RightSidebarToggle
-                          action="show"
-                          collapsed
-                          onToggle={handleOpenRightSidebar}
+                          action="toggle"
+                          collapsed={rsbDetached ? !rsbWindow.open : isRightSidebarCollapsed}
+                          onToggle={handleToggleRightSidebar}
                           side={rightSidebarSide}
                         />
                       )}
@@ -1885,6 +1886,21 @@ export function MainLayout() {
                     <Outlet context={outletContext} />
                   </FadeSwitcher>
                 </ContentHeaderSlot>
+                {/* 开关属于聊天区；窗口向右扩宽时留在原地，再次点击收起侧栏。 */}
+                {isMac && rightSidebarAvailable && rsbWindow.loaded && (
+                  <div
+                    data-testid="right-sidebar-fixed-trigger"
+                    className="absolute right-0 top-0 z-50 flex h-[46px] items-center pr-2"
+                    style={{ WebkitAppRegion: 'no-drag' } as React.CSSProperties}
+                  >
+                    <RightSidebarToggle
+                      action="toggle"
+                      collapsed={rsbDetached ? !rsbWindow.open : isRightSidebarCollapsed}
+                      onToggle={handleToggleRightSidebar}
+                      side={rightSidebarSide}
+                    />
+                  </div>
+                )}
               </main>
             ),
             // 右侧边栏 —— 工具面板。首次在场沿用原语义:路由声明 rightSidebarAvailable
@@ -1902,8 +1918,7 @@ export function MainLayout() {
                   // flex-1 自己撑满(2026-07-01 bug 修)。拖宽把手 = 引擎分割线。
                   width={rightSidebarWidth}
                   isMac={isMac}
-                  // Windows 展开态的折叠入口归属工具面板自身,放回 TabBar 右端;
-                  // 收起后聊天区角上才显示展开入口。mac 仍走窗口右上浮层。
+                  // 关闭按钮属于工具面板；显示入口始终留在聊天区。
                   onCloseSidebar={handleCloseRightSidebar}
                   onMaximize={handleMaximizeRightSidebar}
                   isMaximized={isRightSidebarMaximized}
@@ -1919,8 +1934,7 @@ export function MainLayout() {
                   deviceLinkDeviceId={rightSidebarWorkdirInfo.deviceLinkDeviceId}
                   subagentsAvailable={rightSidebarSubagentsAvailable}
                   onDetachTab={isSecondaryWindow() ? undefined : handleDetachRightSidebarTab}
-                  // M2:面板贴左时 detach / maximize 由 Shell 顶栏右端自渲染
-                  // (面板自属控件跟面板走);折叠 toggle 恒在窗口右上浮层,不下沉。
+                  // 面板自属的分离、最大化和关闭按钮随面板停靠位置移动。
                   panelSide={rightSidebarSide}
                   onAllTabsClosed={handleRightSidebarEmptied}
                 />
@@ -1932,6 +1946,7 @@ export function MainLayout() {
           <TabGroupHostProvider value={tabGroupHost}>
             <LayoutRoot
               suppressNonChatPanels={isSettingsRoute}
+              sidebarExpansionReady={rightSidebarAvailable && rsbWindow.loaded && !rsbDetached}
               rightTabsCollapsed={
                 !rightSidebarMounted || isRightSidebarCollapsed || rightSidebarForceCollapsed
               }
@@ -1978,36 +1993,7 @@ export function MainLayout() {
             <WindowControls />
           </div>
         )}
-        {/* mac 右栏折叠按钮 —— 同样 hoist 到顶层浮层，钉窗口右上角（right-0 top-0）、
-            浮在右栏之上，与左栏折叠按钮（ChromeActions，钉左上角）左右对称。
-            右栏打开时落在右栏顶部 toolbar 横贯条的右端、关闭时落在 main 的
-            ContentHeader 右端 —— 无论开/关都「始终在窗口最右」（用户 2026-06-15
-            诉求）。仅全屏聊天视图在场时渲染（rightSidebarAvailable）；mac 那侧本就
-            没有窗口控制按钮，这个位置空着正好。no-drag 保证可点，ContentHeader /
-            右栏 toolbar 条已为它留出等宽占位。 */}
-        {/* M2(mac 交换态适配,2026-07-09 Lizi 口径修订):浮层只要面板在场就渲染,
-            折叠 toggle **永远钉窗口右上角**(即当前最右侧 pane 顶栏的右上角),与
-            左上角的左栏折叠按钮(ChromeActions)对称、不跟面板跑;detach/maximize
-            是面板自属控件,贴右(或 maximize 撑满)时在浮层里(视觉落在面板顶栏
-            右端),贴左时跟面板走进 Shell 顶栏右端(见 RightSidebarShell)。 */}
-        {isMac &&
-          rightSidebarAvailable &&
-          rsbWindow.loaded &&
-          (rsbDetached || isRightSidebarCollapsed) && (
-            <div
-              className="absolute right-0 top-0 z-50 flex h-[46px] items-center gap-1 pr-2"
-              style={{ WebkitAppRegion: 'no-drag' } as React.CSSProperties}
-            >
-              {/* 固定唤起入口只负责显示 / 聚焦。detach / maximize / 收起属于面板自身，
-                在 RightSidebarShell 的顶栏内渲染，不再与本入口混用。 */}
-              <RightSidebarToggle
-                action="show"
-                collapsed={rsbDetached ? !rsbWindow.open : isRightSidebarCollapsed}
-                onToggle={handleOpenRightSidebar}
-                side={rightSidebarSide}
-              />
-            </div>
-          )}
+
       </div>
       {/* Update notice dialog -- mounted inside FeatureSidebarSlotProvider (ThemeProvider scope) */}
       {releaseNotes && (

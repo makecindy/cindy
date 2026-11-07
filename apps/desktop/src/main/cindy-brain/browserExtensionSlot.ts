@@ -136,6 +136,7 @@ function entrySignature(ghost: InstalledGhost, ownerScopeKey: string): string {
     ghost.manifest.version,
     ghostInstallApprovalToken(ghost.approval),
     ghost.manifest.browserExtension,
+    packageSource(ghost),
   ]);
 }
 
@@ -145,12 +146,15 @@ export class GhostBrowserExtensionSlot {
   /** Stops in flight; a replacement entry waits for them so the old one cannot undo its setup. */
   private readonly stopping = new Map<string, Promise<void>>();
   private disposed = false;
+  private roster: InstalledGhost[] = [];
+  private readonly updating = new Set<string>();
 
   constructor(private readonly deps: BrowserExtensionSlotDeps) {}
 
   /** 装/卸/启停/换版广播后调用;幂等,只对发生变化的插件启停桥接。 */
   reconcile(ghosts: InstalledGhost[]): void {
     if (this.disposed) return;
+    this.roster = ghosts;
     const ownerScopeKey = this.deps.ownerScopeKey();
     const wanted = new Map<string, InstalledGhost>();
     for (const ghost of ghosts) {
@@ -159,12 +163,40 @@ export class GhostBrowserExtensionSlot {
     }
     for (const [instanceId, entry] of this.entries) {
       const ghost = wanted.get(instanceId);
+      // Disable/uninstall and owner changes still revoke immediately during a drain.
+      if (ghost && this.updating.has(instanceId) && entry.cacheDir === this.deps.policyDir()) continue;
       if (!ghost || entrySignature(ghost, ownerScopeKey) !== entry.signature)
         void this.stop(instanceId);
     }
     for (const [instanceId, ghost] of wanted) {
-      if (!this.entries.has(instanceId)) this.start(instanceId, ghost, ownerScopeKey);
+      if (!this.updating.has(instanceId) && !this.entries.has(instanceId)) this.start(instanceId, ghost, ownerScopeKey);
     }
+  }
+
+  /** Block new jobs and finish already accepted ones before replacing plugin code. No replay. */
+  async prepareUpdate(instanceId: string): Promise<() => void> {
+    const entry = this.entries.get(instanceId);
+    if (!entry && !this.deps.getGhost(instanceId)?.manifest.browserExtension) return () => undefined;
+    this.updating.add(instanceId);
+    const resume = entry?.bridge.pauseForUpdate();
+    try {
+      await resume?.settled;
+      if (entry && this.entries.get(instanceId) === entry) await this.stop(instanceId);
+    } catch (error) {
+      this.updating.delete(instanceId);
+      resume?.release();
+      throw error;
+    }
+    return () => {
+      this.updating.delete(instanceId);
+      resume?.release();
+    };
+  }
+
+  getPageControlUnavailableReason(): 'plugin-missing' | 'plugin-updating' | 'plugin-selection-required' {
+    if (this.updating.size) return 'plugin-updating';
+    return this.roster.some(ghost => ghost.enabled && mayProvidePageControl(ghost))
+      ? 'plugin-selection-required' : 'plugin-missing';
   }
 
   private start(instanceId: string, ghost: InstalledGhost, ownerScopeKey: string): void {
@@ -296,6 +328,7 @@ export class GhostBrowserExtensionSlot {
       await entry.nativeRetry?.catch(() => undefined);
       await entry.bridge.close();
       await entry.native?.close();
+      await entry.writes;
       this.deps.log?.info('browser extension bridge stopped', { instanceId });
     })().finally(() => {
       if (this.stopping.get(instanceId) === stopped) this.stopping.delete(instanceId);
@@ -354,6 +387,8 @@ export class GhostBrowserExtensionSlot {
     ghostId: string,
   ): { ok: true; entry: Entry } | { ok: false; result: GhostPipeBrowserExtensionResult } {
     const ghost = this.deps.getGhost(ghostId);
+    if (ghost && this.updating.has(installedGhostStoragePart(ghost)))
+      return { ok: false, result: fail('HOST_NOT_READY', '浏览器连接正在更新，完成后会自动恢复') };
     if (!ghost?.enabled || ghost.approval.state !== 'approved' || !ghost.manifest.browserExtension) {
       return {
         ok: false,
@@ -379,7 +414,7 @@ export class GhostBrowserExtensionSlot {
     await entry.ready;
     // The plugin may have been disabled, removed or replaced while the bridge was starting: a request
     // that began before that must not act (re-pair, reinstall the native binding) on the old instance.
-    if (entry.closing || this.entries.get(entry.instanceId) !== entry)
+    if (entry.closing || this.updating.has(entry.instanceId) || this.entries.get(entry.instanceId) !== entry)
       return fail('HOST_NOT_READY', '浏览器扩展桥接已重建;稍后重试');
     if (entry.startFailed) {
       // A failed startup would otherwise stay failed for good (no pairing request, no native binding)
@@ -494,21 +529,21 @@ export class GhostBrowserExtensionSlot {
     if (!gate.ok) return false;
     const { entry } = gate;
     await entry.ready;
-    if (entry.closing || this.entries.get(instanceId) !== entry) return false;
+    if (entry.closing || this.updating.has(instanceId) || this.entries.get(instanceId) !== entry) return false;
     if (entry.native) {
       const result = await entry.native.install(entry.bridge.listeningPort,
         entry.ghost.manifest.browserExtension!.extensionIds, { takeover: true });
       if (!result.ok) return false;
     }
     const current = this.deps.getGhost(instanceId);
-    if (!current || entrySignature(current, this.deps.ownerScopeKey()) !== entry.signature) return false;
+    if (this.updating.has(instanceId) || !current || entrySignature(current, this.deps.ownerScopeKey()) !== entry.signature) return false;
     if (mayProvidePageControl(current)) {
       const file = path.join(entry.cacheDir, '.page-control.json');
       const temp = file + '.' + crypto.randomUUID() + '.tmp';
       try {
         await fs.mkdir(entry.cacheDir, { recursive: true, mode: 0o700 });
         await fs.writeFile(temp, JSON.stringify({ instanceId, source: entry.source }), { mode: 0o600 });
-        if (entry.closing || this.deps.policyDir() !== entry.cacheDir) return false;
+        if (entry.closing || this.updating.has(instanceId) || this.deps.policyDir() !== entry.cacheDir) return false;
         await fs.rename(temp, file);
       } finally { await fs.rm(temp, { force: true }); }
     }
@@ -517,6 +552,7 @@ export class GhostBrowserExtensionSlot {
 
   getPageControl(): UserBrowserPageControl | null {
     const candidates = [...this.entries.values()].filter(entry => !entry.closing &&
+      !this.updating.has(entry.instanceId) &&
       mayProvidePageControl(entry.ghost));
     let selected: Entry | undefined;
     try {
@@ -528,8 +564,22 @@ export class GhostBrowserExtensionSlot {
       if ((error as NodeJS.ErrnoException).code !== 'ENOENT') return null;
       // Preserve the pre-upgrade execution end; it is migration compatibility,
       // not eligibility for new declarations. Other multiple candidates need a choice.
-      selected = candidates.length === 1 ? candidates[0] : candidates.find(entry =>
-        entry.ghost.manifest.id === 'my-browser' && entry.ghost.namespace == null && this.deps.isVerifiedOfficial(entry.ghost));
+      // A plugin being updated has no live entry, but it still owns the legacy choice: resolve over
+      // it too and pause, instead of letting the remaining candidate take over.
+      const updatingIds = new Set<string>();
+      const pool: InstalledGhost[] = candidates.map(entry => entry.ghost);
+      for (const ghost of this.roster) {
+        const id = installedGhostStoragePart(ghost);
+        if (this.updating.has(id) && ghost.enabled && mayProvidePageControl(ghost) &&
+          !candidates.some(entry => entry.instanceId === id)) {
+          updatingIds.add(id);
+          pool.push(ghost);
+        }
+      }
+      const legacy = pool.length === 1 ? pool[0] : pool.find(ghost =>
+        ghost.manifest.id === 'my-browser' && ghost.namespace == null && this.deps.isVerifiedOfficial(ghost));
+      if (legacy && updatingIds.has(installedGhostStoragePart(legacy))) return null;
+      selected = legacy && candidates.find(entry => entry.ghost === legacy);
     }
     return selected ? { bridge: selected.bridge, ghostId: selected.ghost.manifest.id,
       instanceId: selected.instanceId, pluginName: selected.ghost.manifest.name } : null;

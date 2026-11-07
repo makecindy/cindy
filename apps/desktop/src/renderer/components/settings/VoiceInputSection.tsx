@@ -216,7 +216,7 @@ function VoiceInputSelect<T extends string>({
           className={cn(
             'group flex min-h-[44px] w-full items-center justify-between gap-2.5 rounded-[14px] px-3.5',
             'border border-[var(--settings-input-border)] bg-[var(--settings-input-bg)]',
-            'text-left text-[var(--settings-input-text)] shadow-[var(--shadow-menu)]',
+            'text-left text-[var(--settings-input-text)]',
             'outline-none transition-colors',
             open
               ? 'border-[var(--settings-section-title)]'
@@ -254,7 +254,7 @@ function VoiceInputSelect<T extends string>({
         className={cn(
           'w-[var(--radix-popover-trigger-width)] min-w-[260px] rounded-[16px] p-2',
           'border border-[var(--settings-theme-card-border)] bg-[var(--settings-theme-card-bg)]',
-          'shadow-[var(--shadow-menu)]',
+          'shadow-[shadow:var(--shadow-menu)]',
           'max-h-[360px] overflow-y-auto',
         )}
       >

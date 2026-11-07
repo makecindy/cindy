@@ -59,7 +59,7 @@ function setup(options: { home: string | null; handler?: ApiHandler; devices?: D
     bots: () => actors.filter(a => a.homeDeviceId === 'desk' && !state.isDemoted(a.externalId)).map(a => ({ botId: a.externalId, actorId: a.id, name: a.name })),
     actors: () => actors, refresh, refreshForeground: options.refreshForeground, publish, onShadowChanged, ...(options.syncProfile ? { syncProfile: options.syncProfile } : {}),
     ...(options.paused ? { paused: options.paused } : {}) });
-  return { runtime, actors, calls, local, state, files, refresh, publish, onShadowChanged };
+  return { runtime, actors, calls, local, state, files, refresh, publish, onShadowChanged, host };
 }
 
 describe('private report recovery', () => {
@@ -861,6 +861,40 @@ describe('merging copies of Cindy', () => {
     expect(t.flush).toHaveBeenCalledWith('laptop', 'bot_lap');
     // Once before reading it, once more right before retiring it.
     expect(t.order).toEqual(['flush', 'flush', 'patch /actors/actor-from']);
+  });
+
+  // Regression (unit): a cloud Cindy assigned here but never restored was rejected as OFFLINE.
+  // Existing merge tests only had runnable sources; exercise the real merge entry and retirement.
+  it('merges an absent, demoted source homed here after proving there is no local data', async () => {
+    const t = mergeSetup({ sourceHome: 'desk' });
+    t.state.update('bot_lap', 'actor-from', entry => { entry.demoted = true; });
+    const probe = vi.fn(async () => false);
+    Object.assign(t.host, { hasLocalData: probe });
+    expect(await t.runtime.mergeCindy('cindy-default', ['bot_lap'])).toMatchObject({ ok: true, merged: 1 });
+    expect(probe).toHaveBeenCalledTimes(2);
+    expect(t.order).toEqual(['patch /actors/actor-from']);
+    expect(t.local.host.createProfile).not.toHaveBeenCalled();
+  });
+
+  it('does not treat a previously synced local copy as a never-restored cloud copy', async () => {
+    const t = mergeSetup({ sourceHome: 'desk' });
+    t.state.update('bot_lap', 'actor-from', entry => { entry.demoted = true; entry.prefsSeeded = true; });
+    Object.assign(t.host, { hasLocalData: async () => false });
+    expect(await t.runtime.mergeCindy('cindy-default', ['bot_lap'])).toEqual({ ok: false, code: 'FAILED' });
+    expect(t.order).toEqual([]);
+  });
+
+  it.each(['present', 'unreadable', 'unsupported', 'appeared-before-retire'])('preserves the source when local data is %s', async mode => {
+    const t = mergeSetup({ sourceHome: 'desk' });
+    t.state.update('bot_lap', 'actor-from', entry => { entry.demoted = true; });
+    let reads = 0;
+    if (mode !== 'unsupported') Object.assign(t.host, { hasLocalData: async () => {
+      if (mode === 'unreadable') throw new Error('EACCES');
+      return mode === 'present' || ++reads > 1;
+    } });
+    expect(await t.runtime.mergeCindy('cindy-default', ['bot_lap'])).toEqual({ ok: false, code: 'FAILED' });
+    expect(t.order).toEqual([]);
+    expect(t.actors.find(actor => actor.id === 'actor-from')?.disabled).not.toBe(true);
   });
 
   it('does not merge while the other copy is still replying, and leaves it active', async () => {

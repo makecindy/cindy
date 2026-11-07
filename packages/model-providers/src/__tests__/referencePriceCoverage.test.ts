@@ -8,6 +8,65 @@ import {
 const registry = BUNDLED_CATALOG.modelRegistry;
 const at = "2026-09-23";
 
+// Production price resolution: the existing CN route previously had no quote.
+// Unit tier; also protects currency/date/variant boundaries for all consumers.
+describe("MiniMax M3.1 Flash verified China tariff", () => {
+  const options = { at: "2026-11-05", officialOnly: true };
+  const model = "MiniMax-M3.1-Flash";
+  it("selects the China quote without importing M3 tiers or cache-write prices", () => {
+    const price = resolveModelReferencePrice(registry, "minimax-cn", model, options)?.price;
+    expect(price).toMatchObject({ currency: "CNY", inputPerMtok: 1, outputPerMtok: 4, cacheReadPerMtok: 0.1 });
+    expect(price?.cacheWritePerMtok).toBeUndefined();
+    expect(price?.cacheWrite1hPerMtok).toBeUndefined();
+    expect(resolveModelReferencePrice(registry, "minimax-cn", model, { ...options, inputTokens: 600_000 })?.price).toEqual(price);
+    expect(resolveModelReferencePrice(registry, "minimax-global", model, options)?.price).toMatchObject({ currency: "USD", inputPerMtok: 0.15, outputPerMtok: 0.6, cacheReadPerMtok: 0.015 });
+  });
+  it("keeps historical, mismatched currency and unpublished Fast quotes unknown", () => {
+    for (const extra of [{ at: "2026-11-04" }, { currency: "USD" as const }, { variant: "fast" as const }]) {
+      expect(resolveModelReferencePrice(registry, "minimax-cn", model, { ...options, ...extra })).toBeUndefined();
+    }
+    expect(resolveBaseModelReferencePrice(registry, model, options)).toBeUndefined();
+    expect(resolveBaseModelReferencePrice(registry, model, { ...options, priceGroup: "cn" })?.price.currency).toBe("CNY");
+  });
+});
+
+// Production price selectors are shared by Desktop and Mobile. Missing Haiku
+// prices previously resolved to unknown. Test the official 100,000-token boundary
+// (half-open catalog ranges), five cache/token rates and date/variant isolation.
+describe("Haiku 5.5 official prompt-length pricing", () => {
+  it.each([
+    [99_999, 0.1, 0.5, 0.01, 0.125, 0.2],
+    [100_000, 0.1, 0.5, 0.01, 0.125, 0.2],
+    [100_001, 0.5, 2.5, 0.05, 0.625, 1],
+    [1_000_000, 0.5, 2.5, 0.05, 0.625, 1],
+  ])("selects all five official rates for %i total prompt tokens",
+    (inputTokens, input, output, read, write, write1h) => {
+      const options = { at: "2026-11-05", inputTokens, currency: "USD" as const };
+      const expected = {
+        inputPerMtok: input, outputPerMtok: output,
+        cacheReadPerMtok: read, cacheWritePerMtok: write,
+        cacheWrite1hPerMtok: write1h,
+      };
+      expect(resolveBaseModelReferencePrice(registry, "claude-haiku-5-5", options)?.price)
+        .toMatchObject(expected);
+      expect(resolveModelReferencePrice(registry, "anthropic", "claude-haiku-5-5", {
+        ...options, officialOnly: true,
+      })?.price).toMatchObject(expected);
+    },
+  );
+
+  it("does not invent historical, Fast or CNY prices", () => {
+    for (const options of [
+      { at: "2026-11-04" },
+      { at: "2026-11-05", variant: "fast" as const },
+      { at: "2026-11-05", currency: "CNY" as const },
+    ]) {
+      expect(resolveBaseModelReferencePrice(registry, "claude-haiku-5-5", options)).toBeUndefined();
+      expect(resolveModelReferencePrice(registry, "anthropic", "claude-haiku-5-5", options)).toBeUndefined();
+    }
+  });
+});
+
 describe("Kimi K3 one-hour cache writes adopted on November 5", () => {
   it.each([
     ["moonshot-kimi-cn", "kimi-k3", "kimi-k3", "cn", "CNY", 20, 100, 2, 40],

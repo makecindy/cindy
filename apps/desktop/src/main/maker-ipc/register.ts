@@ -22,7 +22,7 @@ import { createOrcaWorkerProjectHandlers } from './orcaWorkerProjectHandlers';
 import { getTeamByWorkerSession } from '../localDb/orcaTeamStore';
 import { readWorkerProjectContext, createWorkerWorktree, rememberWorkerProject, probeWorkerProject, resolveWorkerWorktreeSourceSelection, getWorkerOwnedWorktree } from './orcaWorkerProject';
 import type { WorkerWorktreeRequest } from '../../shared/orca-worker-project';
-import { captureAgentRequest as captureRequest, DelegationNotAuthorizedError, ownerChannelInputEvidence, type CapturedAgentRequest, type DelegationAuthorization } from './forwardedRequest.js';
+import { captureAgentRequest as captureRequest, delegationReviewTarget, DelegationNotAuthorizedError, ownerChannelInputEvidence, type CapturedAgentRequest, type DelegationAuthorization, type DelegationTarget } from './forwardedRequest.js';
 import { readChannelToolScope } from '../im/shared/channelToolScope.js';
 import { FORWARDED_REQUEST_RECEIPT, verifiedOwnerRequestText, type AgentRequestReceipt } from '../../shared/forwardedRequest.js';
 import { configureBotTodoDispatch, settleBotTodoForSession } from './botTodoAccess.js';
@@ -1083,7 +1083,7 @@ import {
   pickWorkerAgentDeviceId,
 } from './orcaWorkerCreationService.js';
 import {
-  resolveSendToSessionExecutionConfig,
+  resolveSendToSessionCreateRoute,
   type SendToSessionExecutionOverrides,
 } from './sendToSessionExecutionConfig.js';
 import { registerOrcaWorkerControlHandlers } from './orcaWorkerControlHandlers.js';
@@ -1761,7 +1761,7 @@ async function resolveSessionUsageResetAt(
   try {
     const scope = activeOwnerScopeKey();
     const limit = row.remoteHostId ? null : row.agentDeviceId && providerId
-      ? await readRemoteAccountUsageLimit({ deviceId: row.agentDeviceId, providerId, family, agentKind, modelId },
+      ? await readRemoteAccountUsageLimit({ deviceId: row.agentDeviceId, providerId, family, agentKind, modelId, sdkSessionId: row.sdkSessionId },
         (deviceId, channel, args) => remoteBackgroundInvoke(deviceId, channel, args, {
           preSend: () => { if (scope !== activeOwnerScopeKey()) throw new Error('Account changed'); },
         }))
@@ -2821,6 +2821,8 @@ interface OrcaCollabService {
     workingDir?: string;
     /** create 分支可选:显式执行配置；未提供的字段继续继承 dispatcher。jump 忽略。 */
     execution?: SendToSessionExecutionOverrides;
+    /** create 分支可选:新任务的 Agent 所在电脑；null = 本机，省略 = 继承 dispatcher。jump 忽略。 */
+    agentDeviceId?: string | null;
     /** Host-owned create defaults for non-session callers such as scheduler script tasks. */
     createDefaults?: SendToSessionCreateDefaults;
   }) => Promise<SendToSessionResult>;
@@ -3405,9 +3407,9 @@ function summarizeIpcUserMessage(message: IpcUserMessage): Record<string, unknow
 
 /**
  * 待解决的 interaction 请求(permission/ask/plan 三合一)—— 用 promise 跨 IPC 边界。
- * key: requestId, value: resolver + owning session. ask/plan intentionally do
- * not use a timeout because they represent explicit product decisions, not a
- * transient permission prompt.
+ * key: requestId, value: resolver + owning session. Blocking ask/plan decisions
+ * do not expire. Native optional RPC questions have an idle timeout which stops
+ * permanently when the user begins answering.
  */
 const PERMISSION_INTERACTION_TIMEOUT_MS = 10 * 60 * 1000;
 
@@ -3429,6 +3431,7 @@ interface PendingInteractionEntry {
   timeoutId?: ReturnType<typeof setTimeout>;
   timeoutDeadlineAt?: number;
   timeoutRemainingMs?: number;
+  questionTimerSnoozed?: boolean;
   /** IM owns presentation/timeouts; Host retains the execution and cancellation boundary. */
   migrated?: boolean;
   deferredDecision?: InteractionDecision;
@@ -3743,7 +3746,7 @@ initGhostSetupCoordinator({
       return {
         ok: false,
         errorCode: 'TOOL_NOT_FOUND',
-        message: toolNotFoundMessage(ghostId, tool, ghost.manifest.tools),
+        message: toolNotFoundMessage(ghostId, tool, ghost.manifest),
       };
     }
     return { ok: true };
@@ -3796,10 +3799,10 @@ function clearPendingInteraction(requestId: string): PendingInteractionEntry | n
 
 /** Permission safety time counts only while its owning task can accept input. */
 function schedulePendingPermissionTimeout(requestId: string, entry: PendingInteractionEntry): void {
-  if (entry.migrated || entry.sharedPermission || entry.kind !== 'permission' || entry.timeoutId !== undefined
+  if (entry.migrated || entry.sharedPermission || (entry.kind !== 'permission' && !(entry.request.kind === 'ask_user_question' && entry.request.isBlocking === false && !entry.questionTimerSnoozed)) || entry.timeoutId !== undefined
     || pendingInteractionResolvers.get(requestId) !== entry
     || agentInputCoordinatorHolder?.isExecutionPaused(entry.sessionId)) return;
-  const remaining = entry.timeoutRemainingMs ?? PERMISSION_INTERACTION_TIMEOUT_MS;
+  const remaining = entry.timeoutRemainingMs ?? (entry.kind === 'ask_user_question' ? 120_000 : PERMISSION_INTERACTION_TIMEOUT_MS);
   entry.timeoutDeadlineAt = Date.now() + remaining;
   entry.timeoutId = setTimeout(() => {
     if (pendingInteractionResolvers.get(requestId) !== entry) return;
@@ -3811,7 +3814,9 @@ function schedulePendingPermissionTimeout(requestId: string, entry: PendingInter
     const pending = clearPendingInteraction(requestId);
     if (!pending) return;
     handleAgentIslandInteractionDismissed(entry.sessionId, requestId);
-    pending.resolve({ kind: 'permission', behavior: 'deny', reason: 'timeout' });
+    pending.resolve(entry.kind === 'ask_user_question'
+      ? { kind: 'ask_user_question', answers: {}, dismissed: true }
+      : { kind: 'permission', behavior: 'deny', reason: 'timeout' });
     dismissRendererInteraction(pending, requestId, 'timeout', 'deny');
   }, remaining);
 }
@@ -3824,7 +3829,7 @@ function setPendingInteractionTimeoutsPaused(sessionId: string, paused: boolean)
       if (resolvePendingInteraction(requestId, entry.deferredDecision, !!entry.sharedPermission)) applied.push(requestId);
       continue;
     }
-    if (entry.kind !== 'permission') continue;
+    if (entry.kind !== 'permission' && !(entry.request.kind === 'ask_user_question' && entry.request.isBlocking === false)) continue;
     if (paused) {
       if (entry.timeoutId === undefined) continue;
       clearTimeout(entry.timeoutId);
@@ -4058,6 +4063,14 @@ export function allowBotWorkbenchPendingPermission(botId: string, sessionId: str
 function resolvePendingInteraction(requestId: string, decision: InteractionDecision, fromShared = false): boolean {
   const resolver = pendingInteractionResolvers.get(requestId);
   if (!resolver || (!fromShared && agentInputCoordinatorHolder?.isExecutionPaused(resolver.sessionId))) return false;
+  if (decision.kind === 'ask_user_question' && decision.inProgress === true) {
+    if (resolver.request.kind !== 'ask_user_question' || resolver.request.isBlocking !== false) return false;
+    resolver.questionTimerSnoozed = true;
+    if (resolver.timeoutId) clearTimeout(resolver.timeoutId);
+    resolver.timeoutId = undefined;
+    resolver.timeoutDeadlineAt = undefined;
+    return true;
+  }
   if (resolver.sharedPermission && !fromShared) return resolver.sharedPermission.decide(decision);
   clearPendingInteraction(requestId);
   handleAgentIslandInteractionDismissed(resolver.sessionId, requestId);
@@ -5059,22 +5072,25 @@ const DELEGATION_REVIEW_CONTEXT = 'Host check before Cindy hands this message to
  * for this hand-off (2026-11-05). Full Access already trusts this task; Ask confirmed the task
  * action with its arguments; Auto asks the task's own reviewer. Plan or a changing task sends none.
  */
-async function authorizeSessionDelegation(sessionId: string, message: string, targetSessionId?: string): Promise<DelegationAuthorization> {
+async function authorizeSessionDelegation(sessionId: string, message: string,
+  target?: DelegationTarget): Promise<DelegationAuthorization> {
   const session = getMakerIfReady()?.getSession(sessionId);
   const permission = session?.stablePermissionModeState;
   const plan = session?.stablePlanModeState;
   if (!session || !permission || !plan || plan.enabled || permission.mode === 'plan') return { kind: 'none' };
   if (permission.mode !== 'auto') return { kind: 'authorized' };
   const { toolAutoReviewAction } = await import('@cindy/maker-core');
+  // A remote teammate has no local session id; its own identity replaces the fallback (#9198).
   const decision = await session.reviewHostPermissionAction(toolAutoReviewAction('delegate_owner_request',
-    { targetSessionId: targetSessionId ?? 'a new task', message }, DELEGATION_REVIEW_CONTEXT));
+    { ...delegationReviewTarget(target), message }, DELEGATION_REVIEW_CONTEXT));
   if (decision.verdict === 'allow') return { kind: 'authorized' };
   return { kind: 'blocked', reason: `Not sent: automatic review did not confirm the owner asked for this hand-off${
     decision.reason ? ` (${decision.reason})` : ''}. Keep the message within the owner's request, or ask the owner first.` };
 }
 
 /** Capture from the caller's accepted input before any asynchronous target work. */
-export async function captureSessionAgentRequest(sessionId: string, supplement: string, target?: { sessionId?: string }): Promise<CapturedAgentRequest> {
+export async function captureSessionAgentRequest(sessionId: string, supplement: string,
+  target?: DelegationTarget): Promise<CapturedAgentRequest> {
   const scope = captureDataOwnerBroadcastScope();
   const active = agentInputCoordinatorHolder?.getAcceptedInputProvenance(sessionId) ?? null;
   const lane = readChannelToolScope({ sessionId, sessionInstanceId: getMakerIfReady()?.getSession(sessionId)?.instanceId });
@@ -5097,7 +5113,7 @@ export async function captureSessionAgentRequest(sessionId: string, supplement: 
     () => listMessagesForAgentHandoff(sessionId, 1, undefined, 'user'),
     !!companion || ownerVerified || active?.delegatedRequest?.ownerVerified === true
       || active?.delegatedRequest?.delegatedText !== undefined, ownerVerified,
-    { targetSessionId: target?.sessionId, authorize: () => authorizeSessionDelegation(sessionId, supplement, target?.sessionId) });
+    { targetSessionId: target?.sessionId, authorize: () => authorizeSessionDelegation(sessionId, supplement, target) });
   if (!isDataOwnerBroadcastScopeCurrent(scope)) throw new Error('Data owner changed before request capture');
   return request;
 }
@@ -12632,6 +12648,8 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     workingDir?: string;
     /** create 分支可选:显式执行配置；未提供的字段继续继承 dispatcher。jump 忽略。 */
     execution?: SendToSessionExecutionOverrides;
+    /** create 分支可选:新任务的 Agent 所在电脑；null = 本机，省略 = 继承 dispatcher。jump 忽略。 */
+    agentDeviceId?: string | null;
     onAccepted?: () => void | Promise<void>;
     onAcceptedRollback?: () => void | Promise<void>;
     onAcceptedCommit?: () => void | Promise<void>;
@@ -12669,6 +12687,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       useWorktree,
       workingDir: workingDirOverride,
       execution: executionOverrides,
+      agentDeviceId: requestedAgentDeviceId,
       onAccepted,
       onAcceptedRollback,
       onAcceptedCommit,
@@ -12767,7 +12786,8 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       let createdPreviewClientId: string | null = null;
       let createdPreviewStarted = false;
       let handoffWorktree: { sessionId: string; meta: WorktreeMeta } | null = null;
-      // 来源任务的 Agent 在另一台电脑运行：新任务继承同一台电脑(它的模型与来源都在那台)。
+      // 来源任务的 Agent 在另一台电脑运行：新任务继承同一台电脑(它的模型与来源都在那台)；
+      // 显式 agentDeviceId 覆盖继承值。
       let inheritedAgentDeviceId: string | undefined;
       try {
         const db = getDbClient().drizzle;
@@ -12811,7 +12831,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
             .from(sessions)
             .where(eq(sessions.id, dispatcherSessionId))
             .limit(1);
-          if (meta.agentDeviceId && !meta.remoteHostId) inheritedAgentDeviceId = meta.agentDeviceId;
+          const sourceAgentDeviceId = meta.agentDeviceId && !meta.remoteHostId ? meta.agentDeviceId : null;
           const inheritedBase: SendToSessionCreateDefaults = {
             agentKind: meta.agentKind,
             workingDir: resolvedWorkDir,
@@ -12830,44 +12850,42 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
                 ? permissionModeOrAsk(row?.permissionMode)
                 : 'bypassPermissions',
           };
-          const hasExecutionOverrides =
-            executionOverrides !== undefined &&
-            (executionOverrides.agentKind !== undefined ||
-              executionOverrides.model !== undefined ||
-              executionOverrides.effort !== undefined ||
-              executionOverrides.fastMode !== undefined);
-          if (hasExecutionOverrides) {
-            const targetAgent = executionOverrides.agentKind ?? inheritedBase.agentKind;
-            const deviceRouting = inheritedAgentDeviceId
-              ? deviceWorkerRoutingContext(
-                  await readDeviceProviderViews(remoteBackgroundInvoke, inheritedAgentDeviceId),
-                  targetAgent,
-                )
-              : null;
-            const resolvedExecution = resolveSendToSessionExecutionConfig({
-              source: {
-                agentKind: inheritedBase.agentKind,
-                model: inheritedBase.model,
-                effort: inheritedBase.effort,
-                fastMode: (inheritedBase.fastMode ?? false),
-                providerId: inheritedBase.providerId,
-              },
-              overrides: executionOverrides,
-              availableModels: deviceRouting?.remoteCodexModels ?? maker.getCapabilities(targetAgent).availableModels,
-              providerRouting: deviceRouting ?? await getProviderRoutingContext(),
-              hasCindyAiApiKey: inheritedAgentDeviceId ? true : readClaudeApiKey() != null,
-            });
-            if (!resolvedExecution.ok) {
+          const route = await resolveSendToSessionCreateRoute({
+            source: {
+              agentKind: inheritedBase.agentKind,
+              model: inheritedBase.model,
+              effort: inheritedBase.effort,
+              fastMode: (inheritedBase.fastMode ?? false),
+              providerId: inheritedBase.providerId,
+            },
+            sourceAgentDeviceId,
+            sourceIsSsh: Boolean(meta.remoteHostId),
+            ...(requestedAgentDeviceId !== undefined ? { requestedAgentDeviceId } : {}),
+            ...(executionOverrides ? { overrides: executionOverrides } : {}),
+          }, {
+            isSelfDeviceId: (deviceId) => deviceId === getSelfDeviceId(),
+            readLocalRouting: async (agentKind) => ({
+              availableModels: maker.getCapabilities(agentKind).availableModels,
+              providerRouting: await getProviderRoutingContext(),
+              hasCindyAiApiKey: readClaudeApiKey() != null,
+            }),
+            readDeviceRouting: async (deviceId, agentKind) => {
+              const deviceRouting = deviceWorkerRoutingContext(
+                await readDeviceProviderViews(remoteBackgroundInvoke, deviceId),
+                agentKind,
+              );
               return {
-                ok: false,
-                errorCode: resolvedExecution.errorCode,
-                message: resolvedExecution.message,
+                availableModels: deviceRouting.remoteCodexModels ?? maker.getCapabilities(agentKind).availableModels,
+                providerRouting: deviceRouting,
+                hasCindyAiApiKey: true,
               };
-            }
-            inherited = { ...inheritedBase, ...resolvedExecution.config };
-          } else {
-            inherited = inheritedBase;
+            },
+          });
+          if (!route.ok) {
+            return { ok: false, errorCode: route.errorCode, message: route.message };
           }
+          inheritedAgentDeviceId = route.agentDeviceId ?? undefined;
+          inherited = { ...inheritedBase, ...route.config };
           // 所有可能提前失败的 workingDir / 执行配置校验完成后才创建 worktree，
           // 避免非法 agent/model/effort/Fast 组合留下无主目录与 store 绑定。
           // useWorktree:为新 session 预建正规 session worktree(与 UI 新会话勾选

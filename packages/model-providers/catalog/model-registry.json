@@ -1,6 +1,6 @@
 {
   "schemaVersion": 6,
-  "updatedAt": "2026-11-06T13:08:56.777Z",
+  "updatedAt": "2026-11-06T16:51:20.313Z",
   "models": [
     {
       "id": "openai/gpt-6.1-sol",
@@ -2682,7 +2682,8 @@
           "agents": [
             "claude-code",
             "codex"
-          ]
+          ],
+          "referencePriceGroup": "cn"
         },
         {
           "providerId": "minimax-global",
@@ -8541,6 +8542,24 @@
                 "kind": "provider-official",
                 "url": "https://platform.minimax.io/docs/pricing/overview",
                 "verifiedAt": "2026-10-24"
+              }
+            }
+          ]
+        },
+        {
+          "id": "cn",
+          "prices": [
+            {
+              "currency": "CNY",
+              "variant": "standard",
+              "inputPerMtok": 1,
+              "outputPerMtok": 4,
+              "cacheReadPerMtok": 0.1,
+              "effectiveFrom": "2026-11-05",
+              "source": {
+                "kind": "provider-official",
+                "url": "https://platform.minimaxi.com/docs/pricing/overview",
+                "verifiedAt": "2026-11-05"
               }
             }
           ]

@@ -1098,6 +1098,14 @@
     "cancel": "保連線",
     "disconnect": "斷連"
   },
+  "awayGuard": {
+    "status": "Cindy 正勞作",
+    "hint": "按任一鍵即鎖屏，以 Touch ID 或密碼解之",
+    "lockFailed": {
+      "status": "Cindy 未能鎖此機",
+      "hint": "按 Control-Command-Q 鎖屏，稍候系統亦自鎖"
+    }
+  },
   "appBadge": {
     "attentionCount": "待察之差事：{{count}}"
   },
@@ -1421,13 +1429,19 @@
       "actionFailed": "操作未竟，提醒已留，請再試。",
       "newConversationTitle": "新開差事",
       "newConversationHint": "另啟新差事，再展鴻圖",
-      "muteSound": "靈動島靜音",
-      "enableSound": "啟靈動島之聲",
-      "settings": "靈動島規制",
+      "muteSound": "任務膠囊靜音",
+      "enableSound": "啟任務膠囊之聲",
+      "settings": "任務膠囊規制",
       "newMessage": "新訊",
       "review": "覽之",
       "needsInput": "待輸入",
       "completed": "已畢",
+      "liveActivityRunning_one": "{{count}} 事方行",
+      "liveActivityRunning_other": "{{count}} 事方行",
+      "liveActivityAlsoRunning_one": "另 {{count}} 事方行",
+      "liveActivityAlsoRunning_other": "另 {{count}} 事方行",
+      "liveActivityWaiting_one": "{{count}} 事待汝處",
+      "liveActivityWaiting_other": "{{count}} 事待汝處",
       "error": "謬",
       "input": "書",
       "done": "畢",
@@ -1446,6 +1460,13 @@
     }
   },
   "menubar": {
+    "shared": {
+      "label": "共用",
+      "note": "此乃名籍共用之額度，非專分予君者。",
+      "highestWeekly": "共享 · 週餘最多",
+      "highestWeeklyNote": "取可閱諸號週餘最多者，不相加。此為號共用，非君專享。",
+      "from": "{{name}} 所享"
+    },
     "balance": {
       "name": "Cindy 餘資",
       "quotaName": "Cindy 本期限額",
@@ -1767,7 +1788,7 @@
       "apiKeys": "工具金鑰",
       "voiceInput": "聲入",
       "shortcuts": "快捷鍵",
-      "agentIsland": "靈動島",
+      "agentIsland": "動態島",
       "import": "差事匯入",
       "connections": "外家平臺",
       "providers": "模型供方",
@@ -1789,7 +1810,7 @@
       "billing": "耗用與計費",
       "appearance": "儀容",
       "notifications": "告",
-      "agentIsland": "靈動島",
+      "agentIsland": "動態島",
       "collaboration": "協同",
       "agentResource": "Agent 資源所佔",
       "gitSafety": "Git 安全",
@@ -2089,6 +2110,17 @@
     "appearance": {
       "title": "儀容",
       "modeLabel": "顯示之式",
+      "appIcon": {
+        "label": "Dock 之標",
+        "description": "擇應用於 Dock 所用之標",
+        "saveFailed": "Dock 之標未能存，請稍後再試",
+        "options": {
+          "default": "本然",
+          "cat": "玄貓",
+          "wordmark": "Cindy 字標",
+          "mark": "Cindy 符記"
+        }
+      },
       "sidebarAndPanels": "側欄與面板",
       "themeLabel": "格調",
       "themeAriaLabel": "擇主題",
@@ -2254,7 +2286,7 @@
     "notifications": {
       "title": "告",
       "sessionDoneLabel": "系統之告",
-      "sessionDoneHint": "差事畢、生謬或待回覆時提醒。尋常差事唯視窗退居背景時告之；啟靈動島，則改由靈動島提醒。",
+      "sessionDoneHint": "差事畢、生謬或待回覆時提醒。尋常差事唯視窗退居背景時告之；啟任務膠囊或於動態島顯任務，則改由其提醒；唯啟動態島者，生謬仍發系統之告。",
       "sessionDoneAria": "切換差事系統之告",
       "feishuLabel": "差事畢或待回覆時遣飛書 / Lark 訊",
       "feishuHint": "經已繫之飛書或 Lark 機器人，私遣一訊於君；唯視窗失焦時遣之。",
@@ -2346,31 +2378,51 @@
       "swallowActivationClickLabel": "歸時防誤觸",
       "swallowActivationClickHint": "左鍵點回背景視窗時，唯喚起視窗。闔之，則兼行點擊處之操作，或致誤觸。",
       "swallowActivationClickAria": "切換歸視窗時之誤觸防護",
-      "macRestartNote": "macOS 上須重啟應用方生效。"
+      "macRestartNote": "macOS 上須重啟應用方生效。",
+      "awayGuard": {
+        "label": "離席續作",
+        "hint": "開之，此機無人操作亦不熄屏、不自鎖，AI 可隨時用之。君離座稍久，玄幕覆屏，AI 於其後續作；有人按鍵或點按即鎖屏，以 Touch ID 或密碼解之。",
+        "permission": "須於「系統設定 → 隱私權與安全性 → 輔助使用」許 Cindy，方能於有人觸機時即鎖屏。未許之前，屏照常熄而鎖。",
+        "preview": "即試之",
+        "previewStarting": "請釋滑鼠與鍵盤，三秒後屏將覆；按任一鍵即鎖屏，再解之以試。",
+        "previewUnavailable": "未能覆屏，請重啟 Cindy 再試。",
+        "delay": {
+          "label": "離座幾時而覆屏",
+          "hint": "鍵盤滑鼠無人觸及逾此時，即覆以玄幕。預設同系統熄屏之時。",
+          "30": "三十秒",
+          "60": "一分",
+          "120": "二分",
+          "300": "五分",
+          "system": "從系統"
+        }
+      }
     },
     "agentIsland": {
-      "title": "靈動島",
-      "unsupported": "靈動島須 macOS 14 或更高之版。",
+      "title": "動態島",
+      "unsupported": "任務膠囊須 macOS 14 或更高之版。",
       "subtleRemindersLabel": "輕提醒",
-      "subtleRemindersHint": "新訊至、待答或有誤時，不向下彈出通知卡片，以圖示變化相告。點靈動島可閱任務全表。",
+      "subtleRemindersHint": "新訊至、待答或有誤時，不向下彈出通知卡片，以圖示變化相告。點任務膠囊可閱任務全表。",
       "subtleRemindersFailed": "提醒設定未存，請重試。",
-      "enableLabel": "顯靈動島",
-      "enableHint": "於螢幕之巔顯方行、待應及未讀已畢之差事。啟之則抑同類系統之告，免重複相擾。",
-      "enableAria": "啟閉靈動島",
+      "liveActivityLabel": "於動態島顯任務",
+      "liveActivityHint": "於新款 MacBook Pro 之動態島顯差事進展，待君處置或事畢時自展；餘 Mac 顯於選單列之右。與任務膠囊各不相擾。",
+      "liveActivityFailed": "即時動態設定未存，請重試。",
+      "enableLabel": "顯任務膠囊",
+      "enableHint": "於螢幕之巔顯差事進展，待君處置或有新果時即告。啟之，則此類提醒不復另發系統之告。",
+      "enableAria": "啟閉任務膠囊",
       "displayLabel": "顯示之處",
-      "displayHint": "擇靈動島顯於何顯示器；擇全部，則每顯示器各顯一份。",
-      "displaySelectAria": "擇靈動島顯示器",
+      "displayHint": "擇任務膠囊顯於何顯示器；擇全部，則每顯示器各顯一份。",
+      "displaySelectAria": "擇任務膠囊顯示器",
       "displayAll": "諸顯示器",
       "displayOption": "{{name}} · {{resolution}}",
       "displayNameFallback": "顯示器 {{index}}",
       "displayPrimary": "主屏",
       "displayInternal": "本具",
       "displayMissing": "已斷之顯示器 {{id}}",
-      "skinLabel": "圖示之皮",
-      "skinHint": "擇靈動島中示方行之態所用角色之皮。",
+      "skinLabel": "角色",
+      "skinHint": "任務膠囊與動態島中所顯之角色。",
       "soundLabel": "事之音",
-      "soundHint": "為靈動島各類事擇 8-bit 之音。",
-      "soundAria": "切換靈動島之音",
+      "soundHint": "為諸類提醒擇 8-bit 之音，任務膠囊與動態島共之；點按之音唯觸任務膠囊時鳴。",
+      "soundAria": "切換任務膠囊之音",
       "soundSelectAria": "{{event}}之音",
       "soundPreviewAria": "先聽{{event}}之音",
       "skinAnimationAria": "切換{{skin}}之先覽動畫",
@@ -2393,7 +2445,7 @@
         },
         "boli": {
           "name": "波利",
-          "description": "粉色波利，輕躍於鍵盤之側；欲令靈動島更添軟萌，擇之可也。"
+          "description": "粉色波利，輕躍不息；欲令任務膠囊更添軟萌，擇之可也。"
         },
         "whitesnow": {
           "name": "蘋果妹",
@@ -5505,12 +5557,17 @@
         "userBrowserSetup": {
           "installPluginTitle": "納 Cindy Chrome 法器",
           "enablePluginTitle": "啟 Cindy Chrome 法器",
-          "installExtensionTitle": "將 Cindy 擴充裝入瀏覽器",
+          "connectExtensionTitle": "瀏覽器擴充尚未連",
           "pluginBody": "「我之瀏覽器」藉 Cindy Chrome 法器及其瀏覽器擴充，連君之 Chrome / Edge。先於 Cindy 中納法器，再依提示將擴充裝入瀏覽器。",
-          "extensionBody": "點「納瀏覽器擴充」，將於君之瀏覽器開 Cindy 擴充之商店頁，點「新增」後此處自轉為已連。早已裝過？請於瀏覽器之擴充功能管理中啟之。",
+          "connectionBody": "請保持 Cindy 與瀏覽器運行，並查 Cindy 擴充是否已啟。未連非須重裝；復連後，此處自更。",
           "installPlugin": "納法器",
           "enablePlugin": "往啟",
-          "installExtension": "納瀏覽器擴充",
+          "openExtensionStore": "開擴充商店",
+          "updatingTitle": "正更新瀏覽器連線",
+          "updatingBody": "更新既畢，連線自復。",
+          "selectPluginTitle": "擇瀏覽器擴充功能",
+          "selectPluginBody": "請啟法器詳情，擇「使用此瀏覽器擴充功能」，以定 Cindy 所用。",
+          "selectPlugin": "啟法器",
           "updatePluginTitle": "更新 Cindy Chrome 法器",
           "updatePluginBody": "所納 Cindy Chrome 法器版本較舊，尚不支援「我之瀏覽器」。更新至最新版後，再依提示將擴充裝入瀏覽器。",
           "updatePlugin": "往更新",
@@ -6097,7 +6154,7 @@
         "hook": "Cindy IM 使者"
       },
       "hook": {
-        "description": "將 Slack 與 Telegram 接入同一 Cindy：訊皆派至此臺裝置，共享案之清單與 session 執行鏈；名籍繫結與執行偏好依渠道各自隔離。",
+        "description": "將 Slack、Telegram、飛書 / Lark 諸渠道接入同一 Cindy：訊皆派至此臺裝置，共用此間案之清單與差事；名籍繫結與執行偏好依渠道各自隔離。",
         "slackDescription": "繫結 Slack workspace，於 Slack 中 @Cindy 派差事。",
         "slackDisabledHint": "開此開關即發起 Slack 授權，繫結畢即可於 Slack 中派活。",
         "slackBoundHint": "繫結已畢。關此開關將解除繫結，重開須再授權。",
@@ -6318,6 +6375,45 @@
             "revoked": "關聯已解",
             "superseded": "已關聯至他臺裝置"
           }
+        },
+        "feishu": {
+          "description": "由飛書發訊，交工作電腦處理。",
+          "disabledHint": "開此開關後，或於瀏覽器中授權飛書名籍，或將關聯碼遣予飛書機器人。",
+          "toggleAria": "啟閉飛書 / Lark 連線",
+          "connect": "結飛書",
+          "openApp": "開授權頁",
+          "cancel": "罷關聯",
+          "retry": "重關聯",
+          "openBot": "開飛書機器人",
+          "unlink": "解飛書",
+          "unlinkConfirmTitle": "解綁飛書乎？",
+          "unlinkConfirmDescription": "僅解此機之繫。",
+          "unavailableHint": "君所屬之組織尚未設飛書機器人，請洽組織管理員。",
+          "unavailableHintPersonal": "飛書機器人尚未向個人帳號開放。",
+          "status": {
+            "checking": "方察伺服器支援…",
+            "unavailable": "組織未設",
+            "unavailablePersonal": "尚未開放",
+            "disabled": "已停",
+            "none": "未綁",
+            "pending": "於瀏覽器中授權，或將關聯碼遣予飛書機器人",
+            "awaiting_confirmation": "請於飛書 / Lark 確認更換此機所繫帳號",
+            "confirmed": "{{user}} 已結飛書機器人",
+            "denied": "授權已拒",
+            "expired": "授權已逾期",
+            "failed": "關聯未成",
+            "revoked": "關聯已解",
+            "superseded": "此機已繫另一飛書 / Lark 帳號",
+            "appChanged": "飛書機器人已更易，請重為關聯"
+          },
+          "bindCode": {
+            "label": "關聯碼",
+            "copy": "錄關聯碼",
+            "copied": "關聯碼已錄",
+            "hint": "或於飛書中將關聯碼私遣予 Cindy 機器人"
+          },
+          "setWorkingDevice": "設為工作電腦",
+          "workingDeviceSet": "已設為工作電腦"
         }
       },
       "summary": {
@@ -6336,7 +6432,7 @@
     "tina": {
       "chat": {
         "title": "言談",
-        "description": "不落任何倉庫之純言談；於 Slack、Telegram 或 X 中選 chat 即可用之，每條言談 lane 各對應一差事。"
+        "description": "不落任何倉庫之純言談；於 Slack、Telegram、X 或飛書 / Lark 中選 chat 即可用之，每條言談 lane 各對應一差事。"
       },
       "prefs": {
         "agentLabel": "Agent",
@@ -6346,6 +6442,7 @@
         "providerSlack": "Slack",
         "providerTelegram": "Telegram",
         "providerX": "X",
+        "providerFeishu": "飛書 / Lark",
         "requireConnected": "連上 {{provider}} 後方可修（先於上方開啟相應開關，候其連線成功）。",
         "offlineLocal": "{{provider}} 暫連不上，變更存於此機；連上後同步至言談中之模型卡。",
         "requireBinding": "須先完成 {{provider}} 名籍關聯，方可修。",
@@ -12603,6 +12700,10 @@
       "defer": "暫不取"
     },
     "permissionPrompt": {
+      "titleStdin": "可向終端輸入乎？",
+      "titleMcpUrl": "應 {{server}} 之請",
+      "mcpComplete": "已畢",
+      "mcpCancel": "取消",
       "alwaysAllowScoped": "此差事恆許 {{scope}}",
       "alwaysAllowScopedHint": "及於整個差事，且僅限此處所列之範圍。",
       "alwaysAllowSessionHint": "及於整個差事，不止此一請求。",
@@ -12858,7 +12959,13 @@
       "sendAndContinue": "遣而續之",
       "close": "闔",
       "customAnswer": "另書他答…",
-      "answerPlaceholder": "請書君答…"
+      "answerPlaceholder": "請書君答…",
+      "validation": {
+        "required": "此項必填。",
+        "choice": "請擇所列之項。",
+        "tooShort": "所填須足 {{count}} 字。",
+        "tooLong": "所填勿逾 {{count}} 字。"
+      }
     },
     "planReviewBubble": {
       "title": "審方略",
@@ -13943,8 +14050,10 @@
       "mailLegacy": "舊稿（唯讀）",
       "taskAutoArchived": "「{{title}}」已封存",
       "taskAutoArchivedUndo": "撤",
-      "taskAutoArchivePending": "去則自封存",
-      "taskAutoArchiveCancel": "此番不封"
+      "taskAutoArchivePending": "離此任務後自封存",
+      "taskAutoArchiveCancel": "取消",
+      "taskAutoArchiveCancelled": "此番不自封存",
+      "taskArchiveNow": "即封存"
     },
     "ghostHook": {
       "blockedFallback": "訊為法器所攔，未遣",
@@ -13981,6 +14090,8 @@
       "updateHost": "請先更新行差事之機，再開旁問。",
       "failed": "旁問未能開，請稍後再試。",
       "mainTaskOnly": "請自主差事開旁問。",
+      "sharedTaskUnavailable": "共事不可開旁問。",
+      "archivedTask": "請先解封存，再開旁問。",
       "closeTitle": "闔旁問？",
       "closeDescription": "將止而刪此番追問，主差事不受其擾。",
       "closeConfirm": "闔而刪之",
@@ -19538,5 +19649,33 @@
         "deny": "拒絕"
       }
     }
+  },
+  "subscriptionAccounts": {
+    "signIn": {
+      "checking": "正察本機帳號…",
+      "detected": "已有帳號登入",
+      "useAccount": "用此帳號",
+      "anotherAccount": "另登一號",
+      "keepExisting": "新號歸於此供應商，原號登入如故。",
+      "checkFailed": "未能讀取本機帳號，請重試。",
+      "retry": "重試",
+      "useCodex": "以 Codex 登入"
+    },
+    "title": "訂閱帳號",
+    "note": "首號沿用 CLI 預設目錄，增號各自登入。新務依策分派，舊務仍用原號。",
+    "strategy": "負載平衡",
+    "add": "新增帳號",
+    "default": "預設目錄",
+    "ready": "已連線",
+    "signedOut": "須登入",
+    "unavailable": "狀態暫不可得",
+    "limited": "配額已盡",
+    "remove": "移出帳號",
+    "removeTitle": "移出 {{name}}？",
+    "removeDescription": "Cindy 將不再給這個帳號分配任務。CLI 登入和對話歷史仍保留在本機。",
+    "failed": "無法讀取或更新帳號。請檢查 CLI 登入和網路連線後重試。",
+    "directory": "帳號目錄",
+    "loginAgain": "重登",
+    "login": "登入"
   }
 }

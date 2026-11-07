@@ -104,7 +104,7 @@ import { CindyMakeEditingActions } from '@/components/cindy-make/CindyMakeEditin
 import { useCindyMakeEditing } from '@/components/cindy-make/useCindyMakeEditing';
 import { useCindyMakeState } from '@/lib/cindyMakeState';
 import { resolveLearnDesktopCommandFeedback } from '@/features/learn/desktopCommandFeedback';
-import { openSideChatTab, watchSideChatTabs } from '@/features/right-sidebar/lib/openSideChatTab';
+import { openSideChatTab, sideChatUnavailableKey, watchSideChatTabs } from '@/features/right-sidebar/lib/openSideChatTab';
 import { GoalIndicator } from '@/components/new-chat/GoalIndicator';
 import { PinnedPlanPanel } from '@/components/new-chat/PinnedPlanPanel';
 import { sessionsStore } from '@/lib/sessionsStore';
@@ -1172,6 +1172,11 @@ function CCAgentSessionContent({
   // 冷启动 / bootstrap 竞态期间宁可暂时禁用系统文件打开，也不能把被控端 file:// 交给控制端。
   const rightSidebarDeviceLinkDeviceId =
     remoteDeviceId ?? session?.deviceLinkDeviceId ?? (session ? null : undefined);
+  // Every side chat entry uses the sidebar menu's gate, with the resolved origin
+  // so shared-task guests fail it before the list snapshot carries it (#9136).
+  // null = available; otherwise the reason shown by /side.
+  const sideChatBlockedKey = sideChatUnavailableKey(session, rightSidebarDeviceLinkDeviceId)
+    ?? (canNavigateSession ? null : 'chat.sideChat.mainTaskOnly');
   // Durable Subagent status for the chat cards. Wait until ownership resolves:
   // an unresolved task must not read this machine's store for a remote task.
   const subagentRunStatuses = useSubagentRunStatusIndex({
@@ -2887,15 +2892,9 @@ function CCAgentSessionContent({
   const sessionHandoffPreparing = worktreePreparing || remoteHandoffPreparing;
 
   // ---------------------------------------------------------------------------
-  // F-AUQ-MIN-1 / F-AUQ-MIN-5 验收第 4 条：会话切换后 askUserViewerState 重置为 'expanded'。
-  // makerChatStore 按 sessionId 分片存储，A(minimized)→B→A 回到 A 时如果不重置，
-  // store 里 A 的状态仍是 'minimized'。
-  // setAskUserViewerState 来自 useCCAgentChat，依赖 [sessionId]，与 sessionId 同步变化，
-  // 因此该 effect 实质上只在 sessionId 变更时触发一次（单会话内不会误触发）。
-  // ---------------------------------------------------------------------------
+  // Preserve each task's question editor state when switching tasks.
   useEffect(() => {
     if (!sessionId) return;
-    setAskUserViewerState('expanded');
     setPluginSetupViewerState('expanded');
   }, [sessionId, setAskUserViewerState, setPluginSetupViewerState]);
 
@@ -2951,8 +2950,8 @@ function CCAgentSessionContent({
         return;
       }
       if (payload.command === 'side') {
-        if (!sessionId || !canNavigateSession || session?.source === 'side-chat' || session?.source === 'bot') {
-          toast.info(t('chat.sideChat.mainTaskOnly'));
+        if (!sessionId || sideChatBlockedKey) {
+          toast.info(t(sideChatBlockedKey ?? 'chat.sideChat.mainTaskOnly'));
           return;
         }
         void openSideChatTab(sessionId, { prompt: payload.args });
@@ -3006,7 +3005,7 @@ function CCAgentSessionContent({
       // 'issue' 命令由下方独立 effect 处理(需要 handleSend,其声明在本 effect 之后)。
     });
     return unsub;
-  }, [clearSession, insertHelpCard, insertSystemCard, readOnly, sessionId, session?.source, canNavigateSession, navigate, t]);
+  }, [clearSession, insertHelpCard, insertSystemCard, readOnly, sessionId, session?.source, canNavigateSession, sideChatBlockedKey, navigate, t]);
 
   // F-COLLAB: 协同模式真实状态。enabled 来自 session.orcaRole === 'lead';
   // worker(显示用)从 active workflow 的 Worker session 列表查到 agentKind。
@@ -3641,8 +3640,8 @@ function CCAgentSessionContent({
       // Await child creation in the composer's send transaction. The UI push
       // cannot acknowledge success or carry this invocation's attachments.
       if (hit.name === 'side') {
-        if (!sessionId || !canNavigateSession || ['side-chat', 'bot', 'review'].includes(session?.source ?? '')) {
-          toast.info(t('chat.sideChat.mainTaskOnly'));
+        if (!sessionId || sideChatBlockedKey) {
+          toast.info(t(sideChatBlockedKey ?? 'chat.sideChat.mainTaskOnly'));
           return { handled: true, accepted: false, message };
         }
         const accepted = await openSideChatTab(sessionId, {
@@ -3720,6 +3719,7 @@ function CCAgentSessionContent({
       rightSidebarDeviceLinkDeviceId,
       canNavigateSession,
       session?.source,
+      sideChatBlockedKey,
       navigate,
       t,
     ],
@@ -5370,7 +5370,7 @@ function CCAgentSessionContent({
       activeErrorClientId={!readOnly && error ? errorPersistId : null}
       activeVoiceCallId={activeVoiceCallId}
       historyVisibleAfter={session?.source === 'side-chat' ? new Date(session.createdAt).getTime() : undefined}
-      onAskInSideChat={!readOnly && canNavigateSession && sessionId && session?.source !== 'side-chat' && session?.source !== 'bot'
+      onAskInSideChat={!readOnly && sessionId && !sideChatBlockedKey
         ? (quote) => openSideChatTab(sessionId, { quote }) : undefined}
       cindyMakeSessionId={session?.source === 'cindy-make' ? sessionId : undefined}
       cindyMakeCompletionInComposer={session?.source === 'cindy-make' && (remoteMakeCards.supported || (!remoteDeviceId && !readOnly && typeof window.electronAPI.cindyMakeTest === 'function'))}
@@ -6108,7 +6108,7 @@ function CCAgentSessionContent({
                  接管与 worktree 创建继续使用 90px 状态框。 */}
               {!isSharedTaskPeer(remoteDeviceId ?? '') && (pendingPlanReview ||
               pendingPermission ||
-              pendingAskUser ||
+              (pendingAskUser && askUserViewerState !== 'minimized') ||
               pendingPluginSetup ||
               pendingIssueConfirm ||
               pendingRenameSessionsConfirm ||

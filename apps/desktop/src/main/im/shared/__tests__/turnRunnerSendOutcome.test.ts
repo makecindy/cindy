@@ -25,6 +25,10 @@ import type {
 } from '@cindy/maker-core';
 import type { ChannelIM } from '@cindy/im';
 import { setMainLocale } from '../../../i18n';
+import { createTelegramGuestTurnPermissionPolicy } from '../../telegram/permissionPolicy';
+import { createDingTalkTurnPermissionPolicy } from '../../dingtalk/permissionPolicy';
+import { createFeishuGroupTurnPermissionPolicy } from '../../feishu/permissionPolicy';
+import { createWechatTurnPermissionPolicy } from '../../wechat/permissionPolicy';
 import { enqueueAskCardPatch } from '../askCardPatchQueue';
 import { createSerializedConnectionLifecycle } from '../../connectionLifecycle';
 
@@ -238,6 +242,7 @@ function createSessionHarness(
   // onAccepted 仅在消息真被接受时触发 — 对齐 maker-core Session.send 语义;
   // mockRejectedValueOnce 整体替换实现, 抛错路径自然不会触发(正确)。
   const send = vi.fn<HarnessSend>(async (message, opts) => {
+    await opts?.afterTurnReserved?.();
     const result = await sendImpl(message);
     if (result.accepted) {
       await opts?.beforeProviderStart?.();
@@ -1647,6 +1652,140 @@ describe('turnRunner send outcome policy (feishu adapter characterization)', () 
       expect(h.session.acquireTurnLease).not.toHaveBeenCalled();
     } finally {
       localRunner.disposeAllSessions();
+    }
+  });
+
+  // Regression: Full-access personal Telegram tasks must still accept guests under
+  // Auto, without changing the saved preference or restoring over a live user choice.
+  // Transport state is a fake; Session CAS/reservation semantics have maker-core coverage.
+  it.each(['done', 'error', 'setup-failure', 'user-change', 'switch-failure', 'dispose'] as const)(
+    'temporarily applies guest Auto and releases it on %s', async (ending) => {
+      let runtime: Session['permissionModeState'] = { mode: 'bypassPermissions', generation: 0 };
+      const setMode = vi.fn<Session['setPermissionModeIfUnchanged']>(async (expected, mode) => {
+        if (ending === 'switch-failure') throw new Error('permission switch failed');
+        if (runtime.mode !== expected.mode || runtime.generation !== expected.generation) return false;
+        runtime = { mode, generation: runtime.generation + 1 };
+        return true;
+      });
+      const h = createSessionHarness(async () => {
+        expect(runtime.mode).toBe('auto');
+        return { accepted: true };
+      }, 'feishu-session', { capabilities: {
+        setPermissionModeMidSession: { supported: true },
+        permissionModes: [{ id: 'auto' }, { id: 'bypassPermissions' }],
+        turnPermissionPolicy: { supported: { supported: true }, unsupportedPermissionModes: ['bypassPermissions'] },
+      } as unknown as Capabilities });
+      Object.defineProperty(h.session, 'stablePermissionModeState', { get: () => ({ ...runtime }) });
+      h.session.setPermissionModeIfUnchanged = setMode;
+      mocks.getMaker.mockReturnValue(createMakerHarness(h.session));
+      const policy: TurnPermissionPolicy = {
+        origin: { kind: 'im', channel: 'telegram' },
+        autoReviewContext: { requesterAuthority: 'guest', source: 'group' },
+        confirmationSurface: 'channel', forceConfirmToolCall: () => true,
+      };
+      const localRunner = createTurnRunner(fakeAdapter, fakeRepo, fakeCards);
+      try {
+        const result = await localRunner.dispatchAgentTurn({
+          botContextId: 'cli_test_bot', userId: 'ou_user', userMessageId: 'guest-auto',
+          text: 'guest request', attachments: [], queueMode: 'external',
+          turnPermissionPolicy: policy, requesterIsOwner: false,
+          beforeProviderStart: async () => {
+            if (ending === 'setup-failure') throw new Error('setup failed');
+          },
+        });
+        if (ending === 'setup-failure' || ending === 'switch-failure') {
+          expect(result.kind).toBe('rejected');
+        } else {
+          expect(result.kind).toBe('accepted');
+          expect(runtime.mode).toBe('auto');
+          expect(h.send.mock.calls[0]?.[1]?.turnPermissionPolicy).toBe(policy);
+          expect(h.releaseTurnLease).not.toHaveBeenCalled();
+          if (ending === 'user-change') runtime = { mode: 'ask', generation: runtime.generation + 1 };
+          if (ending === 'dispose') localRunner.disposeAllSessions();
+          else h.emit(ending === 'error'
+            ? { type: 'error', data: { message: 'provider failed' } }
+            : { type: 'done', data: {} });
+          if (result.kind === 'accepted') await result.terminal;
+        }
+        await vi.waitFor(() => expect(h.releaseTurnLease).toHaveBeenCalledOnce());
+        expect(runtime.mode).toBe(ending === 'user-change' ? 'ask' : 'bypassPermissions');
+        expect(h.acquireTurnLease).toHaveBeenCalledOnce();
+      } finally { localRunner.disposeAllSessions(); }
+    },
+  );
+
+  it.each([
+    ['telegram', () => createTelegramGuestTurnPermissionPolicy('guest', false)],
+    ['dingtalk', () => createDingTalkTurnPermissionPolicy('guest', false)],
+    ['dingtalk-owner', () => createDingTalkTurnPermissionPolicy('owner', true)],
+    ['feishu', () => createFeishuGroupTurnPermissionPolicy('guest', false)],
+    ['wechat', () => createWechatTurnPermissionPolicy('unknown')],
+  ] as const)('retains the %s policy and keeps the real Session occupied through Auto restoration', async (_channel, makePolicy) => {
+    const terminal = deferred<void>();
+    const ended = deferred<void>();
+    const restoreStarted = deferred<void>();
+    const restoreReady = deferred<void>();
+    let mode = 'bypassPermissions';
+    let running = false;
+    const handle = {
+      id: 'pi', agentKind: 'pi', model: 'm',
+      validateSendOptions: vi.fn((options) => {
+        if (options.turnPermissionPolicy && mode === 'bypassPermissions') {
+          throw new TurnPermissionPolicyUnsupportedError('pi', mode);
+        }
+      }),
+      setPermissionMode: vi.fn(async (next: string) => {
+        if (next === 'bypassPermissions') {
+          restoreStarted.resolve();
+          await restoreReady.promise;
+        }
+        mode = next;
+      }),
+      send: vi.fn(async () => { running = true; }),
+      close: vi.fn(async () => { ended.resolve(); }),
+      isTurnRunning: () => running, setInteractionResolver() {},
+      async *events() {
+        await terminal.promise;
+        running = false;
+        yield { type: 'done', data: { status: 'completed' }, source: 'pi' } as AgentEvent;
+        await ended.promise;
+      },
+    } as unknown as AgentSessionHandle;
+    const session = new Session({ id: 'feishu-session', agentKind: 'pi', workDir: '/repo',
+      handle, permissionMode: 'bypassPermissions', turnStallMs: 0,
+      logger: { ...mocks.logger, trace() {}, fatal() {}, child() { return this; } },
+      capabilities: {
+        permissionModes: [{ id: 'auto' }, { id: 'bypassPermissions' }],
+        setPermissionModeMidSession: { supported: true },
+        turnPermissionPolicy: { supported: { supported: true }, unsupportedPermissionModes: ['bypassPermissions'] },
+      } as unknown as Capabilities,
+    });
+    mocks.getMaker.mockReturnValue(createMakerHarness(session));
+    const localRunner = createTurnRunner(fakeAdapter, fakeRepo, fakeCards);
+    const policy = makePolicy();
+    try {
+      const result = await localRunner.dispatchAgentTurn({
+        botContextId: 'cli_test_bot', userId: 'ou_user', userMessageId: 'guest-real-session',
+        text: 'guest request', attachments: [], queueMode: 'external',
+        turnPermissionPolicy: policy, requesterIsOwner: false, beforeProviderStart: async () => {},
+      });
+      expect(result.kind).toBe('accepted');
+      expect(handle.send).toHaveBeenCalledOnce();
+      expect(handle.validateSendOptions).toHaveBeenCalledWith(expect.objectContaining({ turnPermissionPolicy: policy }));
+      expect(mode).toBe('auto');
+      terminal.resolve();
+      await restoreStarted.promise;
+      expect(session.isTurnRunning()).toBe(true);
+      restoreReady.resolve();
+      await waitForAssertion(() => expect(session.isTurnRunning()).toBe(false));
+      expect(mode).toBe('bypassPermissions');
+      expect(session.permissionModeState).toEqual({ mode: 'bypassPermissions', generation: 2 });
+      if (result.kind === 'accepted') await result.terminal;
+    } finally {
+      terminal.resolve();
+      restoreReady.resolve();
+      await localRunner.disposeAllSessions();
+      await session.close();
     }
   });
 

@@ -179,7 +179,7 @@ describe('mobile session composer desktop-first surface', () => {
     expect(trailingActionsSource).toContain('<PaperPlaneIcon');
     expect(trailingActionsSource).toContain('color={composerSendDisabled ? colors.textSecondary : colors.ctaText}');
     // 收起胶囊点开到真正聚焦之间的过渡期(composerPillOpen.opening)同样算激活态,仍受 canUseComposer 门控。
-    expect(source).toContain('const composerCardActive = (canUseComposer && (composerFocused || composerPillOpen.opening))');
+    expect(source).toContain('const composerCardActive = (canUseComposer && (composerFocused || composerPillOpen.opening || composerDragOpen))');
     expect(source).toContain('|| permissionSheetOpen');
     // 2026-07-29 用户裁决:权限入口是 composer 左侧图标钮 + 独立浮窗
     // (两端都经 NativePermissionSheet:点选先关浮窗,关闭完成后再生效);
@@ -373,7 +373,8 @@ describe('mobile session composer desktop-first surface', () => {
     expect(source).toContain('const composerInputVisibleHeight = composerResize.visibleContentHeight;');
     expect(source).toContain('const composerInputScrollEnabled = composerResize.scrollEnabled;');
     expect(source).toContain('const composerShellHasScrollableContent = attachmentCount > 0');
-    expect(source).toContain('const composerScrollEnabled = (nativeShellLayout.composerScrollEnabled');
+    expect(source).toContain('const composerShellScrolls = (nativeShellLayout.composerScrollEnabled');
+    expect(source).toContain('const composerScrollEnabled = composerShellScrolls && !composerResize.dragging;');
     // Scroll ownership is native in installed apps; retain Expo Go's JS fallback.
     expect(source).toContain('&& composerShellHasScrollableContent;');
     expect(source).not.toContain('&& (!composerInputScrollEnabled || composerShellHasScrollableContent);');
@@ -453,7 +454,7 @@ describe('mobile session composer desktop-first surface', () => {
     expect(source).toContain('testID="session.voiceMicCaret"');
     expect(sharedSource).toContain('export function VoiceMicWaveCaret');
     expect(source).toContain('const composerInputRef = useRef<ComposerRichInputHandle | null>(null);');
-    expect(source).toContain('const voiceDraftScrollRef = useRef<ScrollView>(null);');
+    expect(source).toContain('const voiceDraftScrollRef = useRef<ScrollViewInstance>(null);');
     expect(composerInputSource).toContain('ref={composerInputRef}');
     expect(composerInputSource).not.toContain('inputRef={composerInputRef}');
     expect(sharedSource).toContain('ref={inputRef as never}');

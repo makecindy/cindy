@@ -33,13 +33,14 @@ const ghostNamespaceInput = z
   .union([z.string().min(1).max(128), z.null()])
   .optional()
   .describe(
-    '插件企业身份。字符串为企业 orgSlug。JSON null（不带引号）表示已确认 root；字符串 "null" 表示名为 null 的企业，不是 root。按发现结果保留类型，不要把 null 转成字符串。候选里没有 namespace 字段的待迁移旧安装也会标成 null，旁边还有另一个同名实例且没有已确认 root 时，传 null 会选中那份旧安装。省略时仅当同名实例唯一才兼容解析；多个同名实例返回 GHOST_AMBIGUOUS 并列出候选。',
+    '插件身份。local 为本地开发副本，其它字符串为企业 orgSlug。JSON null（不带引号）表示已确认 root；字符串 "null" 是企业名。按发现结果保留类型。省略时，同名 public/local 副本选择可用的较新版本，同版本选 public；其它同名多实例仍返回 GHOST_AMBIGUOUS。显式 namespace 精确寻址，不自动换源。候选里未提供 namespace 的待迁移旧安装也会标成 null；没有已确认 root 且存在同名实例时，null 可选择该待迁移安装。',
   );
 
 const D_GHOST_LIST = [
   "列出用户当前已安装并启用、提供工具或手册的插件(Ghost)。",
   "插件是扩展 Cindy 能力的 .cindy 能力包,可能由 Cindy 内置或由用户安装;",
   "清单是实时的:用户随时可能安装/卸载/启用/停用插件。",
+  "同名 public/local 副本只列可用的较新版本，同版本列 public；企业与身份未确认的旧安装保持独立。",
   "完全没有目标 id/名称/指令/花名册命中时才用本工具获取全量清单;它的保底价值是实时性,能发现会话中途的插件变动,system 段快照看不到的以本工具为准。",
   "已经从花名册、用户点名或上文知道 ghost_id、但没有现成工具清单时,直接用 ghost_info 精准查询,不要先拉全量清单。",
   "若用户消息的[插件指令]已附带目标插件工具清单,可直接 ghost_call 免查。",
@@ -61,7 +62,7 @@ const D_GHOST_INFO = [
   "按 ghost_id 精准查询单个当前可用插件的完整详情,包括工具说明/参数 schema、setup 与召回线索。花名册命中即满足已知目标条件。",
   "已经从花名册、用户点名或上文知道目标插件、但没有现成工具清单时直接用本工具;完全没有目标线索时才用 ghost_list。",
   "若用户消息的[插件指令]已附带目标插件工具清单,可直接 ghost_call 免查。",
-  "返回单条完整形态:id、namespace(null=root，字符串=企业 orgSlug)、name、command、recall、setup、tools 与可选 manual 轻量索引。示例:ghost_info({ghost_id:\"helper\", namespace:\"acme\"})；省略 namespace 仅当同名实例唯一。拿到目标工具后用 ghost_call,需要长文时用 ghost_manual。",
+  "返回单条完整形态:id、namespace(null=root，local=本地，其它字符串=企业 orgSlug)、name、command、recall、setup、tools 与可选 manual 轻量索引。示例:ghost_info({ghost_id:\"helper\", namespace:\"acme\"})；省略 namespace 时，同名 public/local 选可用的较新版本，同版本选 public；其它多实例须明确身份。拿到目标工具后用 ghost_call,需要长文时用 ghost_manual。",
   "tools 可能为空:Manual-only 插件仍返回完整详情与 manual 索引,通过 ghost_manual 读取;这不授予任何 ghost_call 工具能力。",
   "查询实时反映安装、启用、账号与当前工作目录状态,不要缓存或依赖会话早前的结果。",
   "GHOST_NAMESPACE_MISMATCH 表示插件已安装但 namespace 不匹配；按返回身份核对并修正参数，保留 JSON 类型，不能据此判断插件已卸载或自动改选其他实例。",

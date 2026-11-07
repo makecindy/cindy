@@ -131,7 +131,7 @@ import {
 import { writeForgeScaffoldWithStableParent } from '../cindy-brain/forgeScaffoldCapability.js';
 import { GhostInstallTargetRequiredError } from '../cindy-brain/ghostInstallTarget.js';
 import { getGhostSetupCoordinator } from '../cindy-brain/ghostSetupCoordinator.js';
-import { classifyGhostVisibility, classifyInstalledGhostVisibility } from '../cindy-brain/ghostVisibility.js';
+import { classifyGhostVisibility, classifyInstalledGhostVisibility, preferLatestLocalOrPublicGhosts } from '../cindy-brain/ghostVisibility.js';
 import { readInstalledGhostManual } from '../cindy-brain/ghostManual.js';
 import { isGhostDisabledForWorkdir } from '../cindy-brain/ghostWorkdirPrefs.js';
 import { FORGE_GUIDE, FORGE_PAGE_MANUAL, packGhostDir, scaffoldGhostDir } from '../cindy-brain/forge.js';
@@ -1806,18 +1806,25 @@ export function collectCindyMediaUrls(
   }
 }
 
+/** The Agent-facing discovery surface: chips that expose tools or a manual. */
+function isGhostDiscoverable(ghost: InstalledGhost): boolean {
+  return ghost.manifest.kind === 'chip' && (ghostHasTools(ghost) || ghostHasManual(ghost));
+}
+
 function visibleChipGhosts(
   workdir: string | null,
   installed = getGhostManager().list(),
+  preferLatest = true,
 ): InstalledGhost[] {
-  return installed.filter(
+  const visible = installed.filter(
       (ghost) =>
         ghost.enabled &&
-        isGhostAvailableForActiveSession(ghost.manifest.id) &&
-        ghost.manifest.kind === 'chip' &&
-        (ghostHasTools(ghost) || ghostHasManual(ghost)) &&
+        !ghost.retirement &&
+        isGhostAvailableForActiveSession(installedGhostStoragePart(ghost)) &&
+        isGhostDiscoverable(ghost) &&
         !isGhostDisabledForWorkdir(installedGhostStoragePart(ghost), workdir),
     );
+  return preferLatest ? preferLatestLocalOrPublicGhosts(visible) : visible;
 }
 
 const ghostVisibilityDeps = {
@@ -1825,6 +1832,7 @@ const ghostVisibilityDeps = {
   findInstalledInstance: (id: string) => getGhostManager().findInstalledInstance(id),
   isAvailableForActiveSession: isGhostAvailableForActiveSession,
   isDisabledForWorkdir: isGhostDisabledForWorkdir,
+  isDiscoverable: isGhostDiscoverable,
 };
 
 /**
@@ -2254,7 +2262,9 @@ export function getCindyGhostsMcpDeps(
       const installed = await listInstalledGhostsAsync();
       const visibility = classifyGhostVisibility(ghostId, workdir, { ...ghostVisibilityDeps, listGhosts: () => installed }, namespace);
       if (!visibility.ok) return visibility;
-      const visible = visibleChipGhosts(workdir, installed).some(
+      // classifyGhostVisibility already picked the version among discoverable
+      // copies; here only check the winner (or an exact instance) is listed.
+      const visible = visibleChipGhosts(workdir, installed, false).some(
         (ghost) => ghost === visibility.ghost || ghost.dir === visibility.ghost.dir,
       );
       if (visible) {
@@ -2364,7 +2374,7 @@ export function getCindyGhostsMcpDeps(
         return {
           ok: false,
           errorCode: 'TOOL_NOT_FOUND',
-          message: toolNotFoundMessage(ghostId, tool, target.manifest.tools?.filter(t => pluginToolVisible(target.manifest, t.name, audience))),
+          message: toolNotFoundMessage(ghostId, tool, target.manifest, audience),
         };
       }
       if (grantOnly && (!attachments || attachments.length === 0)) {
@@ -2414,7 +2424,7 @@ export function getCindyGhostsMcpDeps(
         return {
           ok: false,
           errorCode: 'TOOL_NOT_FOUND',
-          message: toolNotFoundMessage(ghostId, tool, refreshed.manifest.tools?.filter(t => pluginToolVisible(refreshed.manifest, t.name, audience))),
+          message: toolNotFoundMessage(ghostId, tool, refreshed.manifest, audience),
         };
       }
       let finalAssessment;
@@ -2656,7 +2666,7 @@ export function getCindyGhostsMcpDeps(
         return {
           ok: false,
           errorCode: 'TOOL_NOT_FOUND',
-          message: toolNotFoundMessage(ghostId, tool, preDispatch.manifest.tools?.filter(t => pluginToolVisible(preDispatch.manifest, t.name, audience))),
+          message: toolNotFoundMessage(ghostId, tool, preDispatch.manifest, audience),
         };
       }
       try {
@@ -2701,7 +2711,7 @@ export function getCindyGhostsMcpDeps(
         return {
           ok: false,
           errorCode: 'TOOL_NOT_FOUND',
-          message: toolNotFoundMessage(ghostId, tool, postCtx.manifest.tools?.filter(t => pluginToolVisible(postCtx.manifest, t.name, audience))),
+          message: toolNotFoundMessage(ghostId, tool, postCtx.manifest, audience),
         };
       }
       let postCtxAssessment: GhostSetupAssessment;
