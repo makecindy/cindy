@@ -13,6 +13,8 @@ export interface TaskCompletionReceipt {
   execution: BotAutonomyExecution;
   text: string;
   status: 'pending' | 'delivered' | 'failed';
+  /** Who asked for this result; a later request on the same task never redirects it. */
+  origin?: TaskCompletionOrigin;
   /** false: the turn did not finish normally (error or stop); the requester still hears about it. */
   successful?: boolean;
   errorCode?: string;
@@ -95,7 +97,7 @@ export function createTaskCompletionDelivery(deps: TaskCompletionDeliveryDeps) {
       };
       try {
         if (receipt.status === 'failed') { await showFailure(); continue; }
-        const result = await deps.post(id, record.origin, receipt, async prepare => {
+        const result = await deps.post(id, receipt.origin ?? record.origin, receipt, async prepare => {
           if (receipt.postSnapshot !== undefined) return receipt.postSnapshot;
           const snapshot = await prepare();
           if (!current()) throw new Error('OWNER_CHANGED');
@@ -156,7 +158,8 @@ export function createTaskCompletionDelivery(deps: TaskCompletionDeliveryDeps) {
           if (!current()) return;
           await deps.update(input.sessionId, record => {
             record.receipts.push({ id: `task-result:${input.sessionId}:${input.execution.instanceId}:${input.execution.generation}`,
-              execution: input.execution, text, status: 'pending', ...(input.successful ? {} : { successful: false }) });
+              execution: input.execution, text, status: 'pending', origin: { ...record.origin },
+              ...(input.successful ? {} : { successful: false }) });
             delete record.armed;
           });
         }

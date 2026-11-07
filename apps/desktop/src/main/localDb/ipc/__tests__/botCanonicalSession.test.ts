@@ -5449,6 +5449,15 @@ describe('Bot Session task end-to-end runtime', () => {
       await host.settleTerminal({ sessionId: 'notify-child', execution: { instanceId: 'native', generation: 6 },
         successful: true, text: 'Later work' });
       expect(deliver).toHaveBeenCalledTimes(1);
+      // A result still waiting to be delivered keeps its requester when another task asks next.
+      deliver.mockResolvedValueOnce({ ok: false, errorCode: 'AGENT_NOT_READY', retryable: true } as never);
+      await host.arm('notify-child', { sessionId: 'session-1' });
+      await host.settleTerminal({ sessionId: 'notify-child', execution: { instanceId: 'native', generation: 7 },
+        successful: true, text: 'For session one' });
+      await host.arm('notify-child', { sessionId: 'session-2' });
+      await host.restore();
+      expect(deliver).toHaveBeenLastCalledWith(expect.objectContaining({ targetSessionId: 'session-1',
+        text: expect.stringContaining('For session one') }));
     } finally { host.dispose(); await fsPromises.rm(savedFile, { force: true }); }
   });
 

@@ -16,11 +16,12 @@ import type { BotGroupTaskPostInput, BotGroupTaskPostResult } from './botGroupCh
 import { createTaskCompletionDelivery, type TaskCompletionOrigin, type TaskCompletionRecord } from './taskCompletionDelivery.js';
 
 const log = createLogger('task-completion-delivery');
+const originSchema = z.object({ botId: z.string().optional(), sessionId: z.string(), groupId: z.string().optional(), threadRootId: z.string().optional() });
 const recordSchema = z.object({
   sessionId: z.string(),
-  origin: z.object({ botId: z.string().optional(), sessionId: z.string(), groupId: z.string().optional(), threadRootId: z.string().optional() }),
+  origin: originSchema,
   receipts: z.array(z.object({ id: z.string(), execution: z.object({ instanceId: z.string(), generation: z.number().int() }),
-    text: z.string(), status: z.enum(['pending', 'delivered', 'failed']), successful: z.boolean().optional(),
+    text: z.string(), status: z.enum(['pending', 'delivered', 'failed']), origin: originSchema.optional(), successful: z.boolean().optional(),
     errorCode: z.string().optional(), failureShown: z.boolean().optional(), postSnapshot: z.unknown().optional() })),
   armed: z.object({ after: z.object({ instanceId: z.string(), generation: z.number().int() }).optional() }).optional(),
 });
@@ -196,7 +197,7 @@ export function createTaskCompletionDeliveryHost(
     saveOrigin: (id: string, origin: TaskCompletionOrigin) => write(id, record => record ?? { origin, receipts: [] }),
     /**
      * `notify_when_done`: the next turn of `id` ending after `after` is delivered to `origin`, once.
-     * A later request replaces the requester; earlier undelivered results keep theirs.
+     * A later request replaces the requester for the next result; results already produced keep theirs.
      */
     arm: (id: string, origin: TaskCompletionOrigin, after?: { instanceId: string; generation: number }) =>
       write(id, record => ({ origin, receipts: record?.receipts ?? [], armed: after ? { after } : {} })),

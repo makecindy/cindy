@@ -18344,33 +18344,9 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       if (!isDataOwnerBroadcastScopeCurrent(ownerScope)) {
         return { ok: false, errorCode: 'AGENT_NOT_READY', message: 'Data owner changed before delivery.' };
       }
-      // notify_when_done on an existing task: armed before delivery, for the turn that handles it.
-      const notifyTarget = params.notifyWhenDone && params.targetSessionId ? params.targetSessionId : null;
-      if (notifyTarget) {
-        const host = taskCompletionDeliveryForOwner();
-        const origin = await host?.capture(params.dispatcherSessionId, { anyTask: true });
-        if (!host || !origin) {
-          return { ok: false, errorCode: 'INVALID_ARGS', message: 'notify_when_done 需要从一个任务里调用。' };
-        }
-        const live = getMakerIfReady()?.getSession(notifyTarget);
-        try {
-          await host.arm(notifyTarget, origin,
-            live ? { instanceId: live.instanceId, generation: live.getTurnGeneration() } : undefined);
-        } catch (error) {
-          const missing = error instanceof Error && error.message === 'TASK_UNAVAILABLE';
-          return { ok: false, errorCode: missing ? 'NOT_FOUND' as const : 'AGENT_NOT_READY' as const,
-            message: missing ? '目标任务不存在。' : '暂时无法登记做完通知，请稍后重试。' };
-        }
-        const sent = await sendToSessionInternal({ ...params, notifyWhenDone: false,
-          ...(params.deliveryClientId ? { clientId: params.deliveryClientId } : {}),
-          autoReviewUserText: request.autoReviewUserText,
-          ...(classification.coordination ? { ...coordinationInput(params.message, classification.coordination), forceQueue: true } : {}),
-        });
-        if (!sent.ok) await host.disarm(notifyTarget).catch(() => log.warn('notify_when_done disarm deferred'));
-        return sent;
-      }
-      return sendToSessionInternal({
+      const internal = {
         ...params,
+        notifyWhenDone: params.notifyWhenDone === true && !params.targetSessionId,
         ...(params.deliveryClientId ? { clientId: params.deliveryClientId } : {}),
         autoReviewUserText: request.autoReviewUserText,
         ...(classification.delegatedContinuation || (params.targetSessionId && params[AUTO_REVIEW_DELEGATED_CONTINUATION])
@@ -18385,7 +18361,27 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
           ...coordinationInput(params.message, classification.coordination),
           forceQueue: true,
         } : {}),
-      });
+      };
+      // notify_when_done on an existing task: armed before delivery, for the turn that handles it.
+      const notifyTarget = params.notifyWhenDone && params.targetSessionId ? params.targetSessionId : null;
+      if (!notifyTarget) return sendToSessionInternal(internal);
+      const host = taskCompletionDeliveryForOwner();
+      const origin = await host?.capture(params.dispatcherSessionId, { anyTask: true });
+      if (!host || !origin) {
+        return { ok: false, errorCode: 'INVALID_ARGS', message: 'notify_when_done 需要从一个任务里调用。' };
+      }
+      const live = getMakerIfReady()?.getSession(notifyTarget);
+      try {
+        await host.arm(notifyTarget, origin,
+          live ? { instanceId: live.instanceId, generation: live.getTurnGeneration() } : undefined);
+      } catch (error) {
+        const missing = error instanceof Error && error.message === 'TASK_UNAVAILABLE';
+        return { ok: false, errorCode: missing ? 'NOT_FOUND' as const : 'AGENT_NOT_READY' as const,
+          message: missing ? '目标任务不存在。' : '暂时无法登记做完通知，请稍后重试。' };
+      }
+      const sent = await sendToSessionInternal(internal);
+      if (!sent.ok) await host.disarm(notifyTarget).catch(() => log.warn('notify_when_done disarm deferred'));
+      return sent;
     },
     enableOrca: enableOrcaInternal,
     disableOrca: disableOrcaInternal,

@@ -67,18 +67,24 @@ async function pauseProjectAutomation(workingDir: string, configId: string): Pro
   if (target && target.status !== 'paused') await scheduler.pause(target.id);
 }
 
-async function migrateRoutines(botId: string, workingDir: string, archiveDir: string, config: Record<string, unknown>): Promise<string[]> {
+async function migrateRoutines(botId: string, workingDir: string, archiveDir: string, config: Record<string, unknown>,
+  assertCurrent: () => void): Promise<string[]> {
   const routines = (await routineTools.list(botId))
     .filter((routine) => !routine.builtin && routine.id !== todoCheckRoutineId(botId));
+  assertCurrent();
   if (routines.length === 0) return [];
-  // Keep the exact definitions before anything is removed.
+  // Keep the exact definitions before anything is removed; a rerun after a partial run adds to them.
   await fs.mkdir(archiveDir, { recursive: true });
-  await writeAtomic(path.join(archiveDir, 'routines.json'), JSON.stringify(routines, null, 2));
+  const archiveFile = path.join(archiveDir, 'routines.json');
+  const archived = (await readJson<Array<{ id?: unknown }>>(archiveFile)) ?? [];
+  const kept = new Set(routines.map((routine) => routine.id));
+  await writeAtomic(archiveFile, JSON.stringify([...archived.filter((item) => !kept.has(String(item?.id))), ...routines], null, 2));
   const [route] = await readEffectiveBotModelChain(config).catch(() => []);
   const timezone = Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC';
   const loader = getProjectAutomationLoader();
   const notes: string[] = [];
   for (const routine of routines) {
+    assertCurrent();
     const converted = convertRoutine(routine, route ?? null, { now: Date.now(), timezone });
     for (const automation of converted.automations) {
       await loader.upsertSchedule(workingDir, automation.config);
@@ -121,7 +127,8 @@ async function archiveV1State(home: string, archiveDir: string): Promise<void> {
   }
 }
 
-export async function migrateTeammateToV2(botId: string, ownerRoot: string): Promise<'migrated' | 'already'> {
+export async function migrateTeammateToV2(botId: string, ownerRoot: string,
+  assertCurrent: () => void = () => {}): Promise<'migrated' | 'already'> {
   const home = botProfileDir(ownerRoot, botId);
   const receiptPath = path.join(home, RECEIPT_FILE);
   if (await exists(receiptPath)) return 'already';
@@ -138,11 +145,15 @@ export async function migrateTeammateToV2(botId: string, ownerRoot: string): Pro
     const [route] = await readEffectiveBotModelChain(capabilities).catch(() => []);
     await ensureBotProjectAutomations({ botId, displayName, workingDir: prepared.workingDir, route });
   }
+  assertCurrent();
   const workingDir = await ensureBotWorkspaceDir(ownerRoot, botId, legacyUserDataDir);
   const archiveDir = path.join(home, ARCHIVE_DIR);
-  const routineNotes = await migrateRoutines(botId, workingDir, archiveDir, capabilities);
+  const routineNotes = await migrateRoutines(botId, workingDir, archiveDir, capabilities, assertCurrent);
+  assertCurrent();
   const carried = await writeCarryover(home, workingDir, routineNotes);
+  assertCurrent();
   await archiveV1State(home, archiveDir);
+  assertCurrent();
   await writeAtomic(receiptPath, JSON.stringify({ version: 1, migratedAt: new Date().toISOString(), carried }, null, 2));
   return 'migrated';
 }
@@ -161,7 +172,9 @@ export function migrateTeammatesToV2(): Promise<void> {
       if (activeOwnerScopeKey() !== scope) return;
       if (elsewhere.has(id)) continue;
       try {
-        const result = await migrateTeammateToV2(id, ownerRoot);
+        const result = await migrateTeammateToV2(id, ownerRoot, () => {
+          if (activeOwnerScopeKey() !== scope) throw new Error('OWNER_CHANGED');
+        });
         if (result === 'migrated') log.info('teammate upgraded to V2', { botId: id });
       } catch (error) {
         log.warn('teammate V2 upgrade failed; retries on next start', { botId: id, error: String(error) });
