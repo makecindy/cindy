@@ -2406,7 +2406,6 @@
       "displayInternal": "Integriert",
       "displayMissing": "Getrennter Bildschirm {{id}}",
       "skinLabel": "Figur",
-      "sharedTitle": "Gemeinsame Einstellungen",
       "skinHint": "Die Figur in Agent Notch und in der Dynamic Island.",
       "soundLabel": "Ereignistöne",
       "soundHint": "Wähle für jeden Hinweis einen 8-Bit-Sound, gemeinsam für Agent Notch und die Dynamic Island. Der Tipp-Sound ertönt nur beim Tippen auf Agent Notch.",

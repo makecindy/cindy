@@ -46,7 +46,6 @@ import {
   isSilentAgentIslandSoundChoice,
 } from '../../../shared/agentIsland';
 import { DefaultOverrideControls } from './DefaultOverrideControls';
-import { SETTINGS_SECTION_TITLE_CLASS } from './settingsRowClasses';
 
 const MASCOT_PREVIEW_URLS: Record<AgentIslandMascotSkin, string> = {
   cindy: cindyPreviewUrl,
@@ -297,7 +296,7 @@ export function AgentIslandSection() {
     setAnimationSteps((current) => advanceMascotAnimationStep(current, skin));
   }, []);
 
-  // Shared settings stay reachable when only the Live Activity is on.
+  // Character and sounds stay reachable when only the Live Activity is on.
   const sharedVisible = enabled || (liveActivitySupported && liveActivity);
 
   if (!supported) {
@@ -321,95 +320,100 @@ export function AgentIslandSection() {
         {t('settings.agentIsland.title')}
       </h2>
 
-      <SettingsCard className="flex items-center justify-between gap-3">
-        <div className="flex min-w-0 flex-col gap-1">
-          <p id={agentIslandSettings.enableLabel.targetId} className="text-13 font-medium text-[var(--settings-section-sublabel)]">
-            {t(agentIslandSettings.enableLabel.titleKey)}
-          </p>
-          <p className="text-12 leading-[1.4] text-[var(--text-secondary)]">
-            {t(agentIslandSettings.enableLabel.descriptionKey)}
-          </p>
-        </div>
+      {/* Agent Notch's own options grow out of its card, so they read as part of it. */}
+      <SettingsCard className="flex flex-col p-0">
+        <div className="flex items-center justify-between gap-3 p-5">
+          <div className="flex min-w-0 flex-col gap-1">
+            <p id={agentIslandSettings.enableLabel.targetId} className="text-13 font-medium text-[var(--settings-section-sublabel)]">
+              {t(agentIslandSettings.enableLabel.titleKey)}
+            </p>
+            <p className="text-12 leading-[1.4] text-[var(--text-secondary)]">
+              {t(agentIslandSettings.enableLabel.descriptionKey)}
+            </p>
+          </div>
 
-        <Switch data-setting-id={agentIslandSettings.enableLabel.id}
-          checked={enabled}
-          onCheckedChange={setEnabled}
-          aria-label={t('settings.agentIsland.enableAria')}
-        />
+          <Switch data-setting-id={agentIslandSettings.enableLabel.id}
+            checked={enabled}
+            onCheckedChange={setEnabled}
+            aria-label={t('settings.agentIsland.enableAria')}
+          />
+        </div>
+        {enabled && (
+          <>
+            <div className={ROW_DIVIDER_CLASS} />
+            <div className="flex items-center justify-between gap-3 p-5">
+              <div className="flex min-w-0 flex-col gap-1">
+                <p id={agentIslandSettings.subtleRemindersLabel.targetId} className="text-13 font-medium text-[var(--settings-section-sublabel)]">
+                  {t(agentIslandSettings.subtleRemindersLabel.titleKey)}
+                </p>
+                <p className="text-12 leading-[1.4] text-[var(--text-secondary)]">
+                  {t(agentIslandSettings.subtleRemindersLabel.descriptionKey)}
+                </p>
+              </div>
+              <div className="flex shrink-0 items-center gap-2">
+                <DefaultOverrideControls
+                  isCustomized={subtleRemindersCustomized}
+                  disabled={subtleRemindersPending}
+                  onReset={() => void handleResetSubtleReminders()}
+                />
+                <Switch
+                  data-setting-id={agentIslandSettings.subtleRemindersLabel.id}
+                  checked={subtleReminders}
+                  disabled={subtleRemindersPending}
+                  onCheckedChange={handleSubtleRemindersChange}
+                  aria-label={t('settings.agentIsland.subtleRemindersLabel')}
+                />
+              </div>
+            </div>
+            <div className={ROW_DIVIDER_CLASS} />
+            <div className="flex flex-col gap-3 p-5">
+              <div className="flex min-w-0 flex-col gap-1">
+                <p id={agentIslandSettings.displayLabel.targetId} className="text-13 font-medium text-[var(--settings-section-sublabel)]">
+                  {t(agentIslandSettings.displayLabel.titleKey)}
+                </p>
+                <p className="text-12 leading-[1.4] text-[var(--text-secondary)]">
+                  {t(agentIslandSettings.displayLabel.descriptionKey)}
+                </p>
+              </div>
+              <div className="relative min-w-0">
+                <select data-setting-id={agentIslandSettings.displayLabel.id}
+                  value={displayTargetToOptionValue(displayTarget)}
+                  onChange={(event) => setDisplayTarget(displayTargetFromOptionValue(event.target.value))}
+                  className={cn(
+                    'h-9 w-full min-w-0 appearance-none rounded-full border py-0 pl-3 pr-9 text-12 outline-none',
+                    'bg-[var(--settings-input-bg)] text-[var(--settings-input-text)]',
+                    'border-[var(--settings-input-border)] focus:ring-2 focus:ring-[var(--focus-ring-soft)]',
+                  )}
+                  aria-label={t('settings.agentIsland.displaySelectAria')}
+                >
+                  <option value={DISPLAY_ALL_OPTION_VALUE}>
+                    {t('settings.agentIsland.displayAll')}
+                  </option>
+                  {displayOptions.map((option) => (
+                    <option
+                      key={option.id}
+                      value={displayTargetToOptionValue({ mode: 'display', displayId: option.id })}
+                    >
+                      {displayOptionLabels.get(option.id)}
+                    </option>
+                  ))}
+                  {selectedDisplayMissing && (
+                    <option value={displayTargetToOptionValue(displayTarget)}>
+                      {t('settings.agentIsland.displayMissing', { id: displayTarget.displayId })}
+                    </option>
+                  )}
+                </select>
+                <ChevronDown
+                  size={15}
+                  className="pointer-events-none absolute right-3.5 top-1/2 -translate-y-1/2 text-[var(--text-secondary-mid)]"
+                  aria-hidden="true"
+                />
+              </div>
+            </div>
+          </>
+        )}
       </SettingsCard>
 
-      {enabled && (
-        <>
-          <SettingsCard className="flex items-center justify-between gap-3">
-            <div className="flex min-w-0 flex-col gap-1">
-              <p id={agentIslandSettings.subtleRemindersLabel.targetId} className="text-13 font-medium text-[var(--settings-section-sublabel)]">
-                {t(agentIslandSettings.subtleRemindersLabel.titleKey)}
-              </p>
-              <p className="text-12 leading-[1.4] text-[var(--text-secondary)]">
-                {t(agentIslandSettings.subtleRemindersLabel.descriptionKey)}
-              </p>
-            </div>
-            <div className="flex shrink-0 items-center gap-2">
-              <DefaultOverrideControls
-                isCustomized={subtleRemindersCustomized}
-                disabled={subtleRemindersPending}
-                onReset={() => void handleResetSubtleReminders()}
-              />
-              <Switch
-                data-setting-id={agentIslandSettings.subtleRemindersLabel.id}
-                checked={subtleReminders}
-                disabled={subtleRemindersPending}
-                onCheckedChange={handleSubtleRemindersChange}
-                aria-label={t('settings.agentIsland.subtleRemindersLabel')}
-              />
-            </div>
-          </SettingsCard>
-          <SettingsCard className="flex flex-col gap-3">
-            <div className="flex min-w-0 flex-col gap-1">
-              <p id={agentIslandSettings.displayLabel.targetId} className="text-13 font-medium text-[var(--settings-section-sublabel)]">
-                {t(agentIslandSettings.displayLabel.titleKey)}
-              </p>
-              <p className="text-12 leading-[1.4] text-[var(--text-secondary)]">
-                {t(agentIslandSettings.displayLabel.descriptionKey)}
-              </p>
-            </div>
-            <div className="relative min-w-0">
-              <select data-setting-id={agentIslandSettings.displayLabel.id}
-                value={displayTargetToOptionValue(displayTarget)}
-                onChange={(event) => setDisplayTarget(displayTargetFromOptionValue(event.target.value))}
-                className={cn(
-                  'h-9 w-full min-w-0 appearance-none rounded-full border py-0 pl-3 pr-9 text-12 outline-none',
-                  'bg-[var(--settings-input-bg)] text-[var(--settings-input-text)]',
-                  'border-[var(--settings-input-border)] focus:ring-2 focus:ring-[var(--focus-ring-soft)]',
-                )}
-                aria-label={t('settings.agentIsland.displaySelectAria')}
-              >
-                <option value={DISPLAY_ALL_OPTION_VALUE}>
-                  {t('settings.agentIsland.displayAll')}
-                </option>
-                {displayOptions.map((option) => (
-                  <option
-                    key={option.id}
-                    value={displayTargetToOptionValue({ mode: 'display', displayId: option.id })}
-                  >
-                    {displayOptionLabels.get(option.id)}
-                  </option>
-                ))}
-                {selectedDisplayMissing && (
-                  <option value={displayTargetToOptionValue(displayTarget)}>
-                    {t('settings.agentIsland.displayMissing', { id: displayTarget.displayId })}
-                  </option>
-                )}
-              </select>
-              <ChevronDown
-                size={15}
-                className="pointer-events-none absolute right-3.5 top-1/2 -translate-y-1/2 text-[var(--text-secondary-mid)]"
-                aria-hidden="true"
-              />
-            </div>
-          </SettingsCard>
-        </>
-      )}
       {/* Independent of our own island: the system shows it even when ours is off. */}
       {liveActivitySupported && (
         <SettingsCard className="flex items-center justify-between gap-3">
@@ -438,12 +442,10 @@ export function AgentIslandSection() {
         </SettingsCard>
       )}
 
-      {/* Character and event sounds serve Agent Notch and the Live Activity alike. */}
+      {/* Character and event sounds serve Agent Notch and the Live Activity alike; they
+      show whenever either is on, so no heading is needed. */}
       {sharedVisible && (
-        <section className="flex flex-col gap-[14px]" aria-labelledby="settings-agent-island-shared">
-          <h3 id="settings-agent-island-shared" className={SETTINGS_SECTION_TITLE_CLASS}>
-            {t('settings.agentIsland.sharedTitle')}
-          </h3>
+        <>
           <SettingsCard className="flex flex-col gap-4">
             <div className="flex min-w-0 flex-col gap-1">
               <p id={agentIslandSettings.skinLabel.targetId} className="text-13 font-medium text-[var(--settings-section-sublabel)]">
@@ -508,11 +510,14 @@ export function AgentIslandSection() {
               </div>
             )}
           </SettingsCard>
-        </section>
+        </>
       )}
     </div>
   );
 }
+
+/** Divider between rows of one card, inset like this page's 20px card padding. */
+const ROW_DIVIDER_CLASS = 'mx-5 h-px bg-[var(--settings-theme-card-border)]';
 
 function SettingsCard({
   className,

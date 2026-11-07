@@ -2444,7 +2444,6 @@
       "displayInternal": "Intégré",
       "displayMissing": "Écran déconnecté {{id}}",
       "skinLabel": "Personnage",
-      "sharedTitle": "Réglages communs",
       "skinHint": "Le personnage affiché dans Agent Notch et la Dynamic Island.",
       "soundLabel": "Sons des événements",
       "soundHint": "Choisissez un son 8 bits pour chaque alerte, partagé par Agent Notch et la Dynamic Island. Le son de toucher ne retentit que lorsque vous touchez Agent Notch.",

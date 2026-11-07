@@ -2376,7 +2376,6 @@
       "displayInternal": "內建",
       "displayMissing": "已斷開的顯示器 {{id}}",
       "skinLabel": "角色",
-      "sharedTitle": "共用設定",
       "skinHint": "任務膠囊和動態島裡顯示的角色。",
       "soundLabel": "事件音效",
       "soundHint": "為每類提醒選擇 8-bit 音效，任務膠囊和動態島共用；點按的音效只在點任務膠囊時播放。",

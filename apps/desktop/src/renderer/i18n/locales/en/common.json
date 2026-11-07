@@ -2406,7 +2406,6 @@
       "displayInternal": "Built-in",
       "displayMissing": "Disconnected display {{id}}",
       "skinLabel": "Character",
-      "sharedTitle": "Shared settings",
       "skinHint": "The character shown in Agent Notch and the Dynamic Island.",
       "soundLabel": "Event sounds",
       "soundHint": "Choose an 8-bit sound for each alert, shared by Agent Notch and the Dynamic Island. The tap sound plays only when you tap Agent Notch.",

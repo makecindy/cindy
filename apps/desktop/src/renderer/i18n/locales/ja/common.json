@@ -2376,7 +2376,6 @@
       "displayInternal": "内蔵",
       "displayMissing": "接続されていないディスプレイ {{id}}",
       "skinLabel": "キャラクター",
-      "sharedTitle": "共通設定",
       "skinHint": "Agent Notch と Dynamic Island に表示するキャラクター。",
       "soundLabel": "イベントサウンド",
       "soundHint": "アラートごとに 8-bit サウンドを選べます。Agent Notch と Dynamic Island で共通です。タップ音は Agent Notch をタップしたときだけ鳴ります。",
