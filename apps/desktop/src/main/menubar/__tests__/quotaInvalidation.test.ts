@@ -5,7 +5,9 @@ import * as subscriptions from '../../device-link/subscriptions';
 import type { AgentIslandSessionSnapshot } from '../../../shared/agentIsland';
 const mocks = vi.hoisted(() => ({
   app: { isPackaged: true },
-  auth: { mode: 'cloud', dataOwnerId: 'owner', ownerGeneration: 1, user: { id: 'member', membershipKind: 'org' } },
+  auth: { mode: 'cloud', dataOwnerId: 'owner' as string | null, ownerGeneration: 1, user: { id: 'member', membershipKind: 'org' } },
+  authListeners: new Set<(state: { isAuthenticated: boolean }) => void>(), boundaryPending: false,
+  sharedRead: vi.fn(), sharedChanged: null as null | (() => void), sharedAccessEpoch: 0,
   revision: 0, listeners: new Set<() => void>(), refresh: vi.fn(), collect: vi.fn(),
   quota: null as null | { spend: number; maxBudget: number; currency: string; fetchedAt: number; todaySpend: null },
   activities: [] as AgentIslandSessionSnapshot[], attentionListeners: new Set<() => void>(), publish: vi.fn(),
@@ -23,11 +25,25 @@ vi.mock('../../agent-island/service.js', () => ({ getAgentIslandService: () => (
   subscribeSessionActivity: () => () => {},
 }) }));
 vi.mock('../../appCapabilities.js', () => ({ getAppCapabilities: () => ({ canUseCindyAccountServices: true }) }));
-vi.mock('../../appSessionState.js', () => ({ getActiveAppSession: () => ({ dataOwnerId: mocks.auth.dataOwnerId, mode: 'cloud', generation: mocks.auth.ownerGeneration }), isAppSessionBoundaryPending: () => false }));
-vi.mock('../../authManager.js', () => ({ getAuthState: () => mocks.auth, onAuthStateChange: () => () => {} }));
+vi.mock('../../appSessionState.js', async importOriginal => {
+  const actual = await importOriginal<typeof import('../../appSessionState.js')>();
+  return { ...actual,
+    getActiveAppSession: () => ({ dataOwnerId: mocks.auth.dataOwnerId, mode: mocks.auth.mode, generation: mocks.auth.ownerGeneration }),
+    isAppSessionBoundaryPending: () => mocks.boundaryPending || actual.isAppSessionBoundaryPending(),
+  };
+});
+vi.mock('../../authManager.js', () => ({ getAuthState: () => mocks.auth, onAuthStateChange: (changed: (state: { isAuthenticated: boolean }) => void) => {
+  mocks.authListeners.add(changed); return () => { mocks.authListeners.delete(changed); };
+} }));
 vi.mock('../../billing/projection.js', () => ({}));
 vi.mock('../../clientEndpointsService.js', () => ({}));
 vi.mock('../../deepLink.js', () => ({ openMainWindowRemoteControlSettings: mocks.openRemoteSettings, openMainWindowSession: mocks.openLocalSession }));
+vi.mock('../../device-link/providerShareGuest.js', () => ({
+  providerShareAccessEpoch: () => mocks.sharedAccessEpoch,
+  getReceivedShares: () => [{ shareId: 'share-one', memberId: 'member', providerId: 'anthropic', providerLabel: 'Claude', owner: { displayName: 'Private sharer' }, status: 'active', hostOnline: true, hostCapable: true }],
+  onProviderShareReceivedChanged: (callback: () => void) => { mocks.sharedChanged = callback; return () => { mocks.sharedChanged = null; }; },
+}));
+vi.mock('../../device-link/providerShareRuntime.js', () => ({ readReceivedProviderShareQuota: (...args: unknown[]) => mocks.sharedRead(...args) }));
 vi.mock('../../device-link/index.js', () => ({}));
 vi.mock('../../device-link/dispatch.js', () => ({ getActiveControllers: () => subscriptions.getControlControllers() }));
 vi.mock('../../device-link/ipc.js', () => ({}));
@@ -35,7 +51,7 @@ vi.mock('../../device-link/deviceName.js', () => ({ deviceName: () => 'Fixture' 
 vi.mock('../../i18n.js', () => ({ getResolvedMainLocale: () => 'en', mainStringKeysUnder: () => [], rawMainString: (key: string) => key }));
 vi.mock('../../localDb/ipc/sessions.js', () => ({}));
 vi.mock('../../logger.js', () => ({ createLogger: () => ({ warn: vi.fn(), info: vi.fn() }) }));
-vi.mock('../../maker-host/createDesktopProviderService.js', () => ({}));
+vi.mock('../../maker-host/createDesktopProviderService.js', () => ({ getDesktopProviderService: () => ({ listProviders: async () => [] }) }));
 vi.mock('../../maker-ipc/appDefaultModelControl.js', () => ({}));
 vi.mock('../../maker-ipc/register.js', () => ({}));
 vi.mock('../../maker-ipc/usage.js', () => ({}));
@@ -54,11 +70,15 @@ vi.mock('../creditSamples.js', () => ({ CreditSampleStore: class { record() { re
 vi.mock('../collect.js', async (importOriginal) => ({ ...await importOriginal<typeof import('../collect')>(), collectMenubarInputs: (...args: unknown[]) => mocks.collect(...args) }));
 import { MenubarService } from '../service';
 import { getQuotaOverviewService, QuotaOverviewService, readUsageWidgetSnapshot } from '../../quota-overview/service';
+import { beginAppSessionBoundary } from '../../appSessionState';
 let overview: QuotaOverviewService;
 beforeEach(() => {
   overview = new QuotaOverviewService();
   mocks.app.isPackaged = true;
   vi.useFakeTimers(); mocks.revision = 0; mocks.listeners.clear(); mocks.refresh.mockReset(); mocks.collect.mockReset();
+  mocks.sharedRead.mockReset(); mocks.sharedChanged = null; mocks.sharedAccessEpoch = 0;
+  mocks.authListeners.clear(); mocks.boundaryPending = false;
+  mocks.auth.mode = 'cloud'; mocks.auth.dataOwnerId = 'owner'; mocks.auth.ownerGeneration = 1;
   mocks.activities = []; mocks.attentionListeners.clear(); mocks.publish.mockReset();
   mocks.openOverviewSession.mockReset(); mocks.openLocalSession.mockReset();
   mocks.openRemoteSettings.mockReset(); mocks.onHelperMessage = null;
@@ -261,5 +281,120 @@ it('never serves a build read for the previous account', async () => {
     expect(await next).not.toBe(old);
   } finally {
     mocks.auth.dataOwnerId = 'owner';
+  }
+});
+
+// Integration of the new reader with the actual panel controller: the panel gets the share,
+// while the reusable overview (also consumed by phone widgets) remains owner-only.
+it('adds the highest shared weekly quota only to the open native panel and clears it on close', async () => {
+  const response = { version: 1, capabilities: { quota: true, usage: false },
+    status: { quota: 'ready', usage: 'disabled' }, usage: null,
+    quota: { group: true, partial: false, accounts: [{ state: 'ready', updatedAt: Date.now(), balance: null,
+      windows: [{ kind: 'week', remainingPercent: 46, resetsAt: Date.now() + 60_000, windowMinutes: 10080, label: null }] }] },
+  };
+  response.quota.accounts.push({ ...response.quota.accounts[0], windows: [
+    { ...response.quota.accounts[0].windows[0], remainingPercent: 82 },
+  ] });
+  mocks.sharedRead.mockResolvedValue(response);
+  mocks.collect.mockResolvedValue(emptyMenubarInputs(Date.now(), 'Fixture'));
+  const service = new MenubarService({ openNewTask() {}, overview });
+  service.init();
+  await vi.advanceTimersByTimeAsync(0);
+  expect(mocks.sharedRead).not.toHaveBeenCalled();
+  expect(mocks.sharedChanged).toBeNull();
+  mocks.onHelperMessage?.({ type: 'panel', open: true });
+  await vi.advanceTimersByTimeAsync(0);
+  expect(mocks.publish.mock.lastCall?.[0].sources).toContainEqual(expect.objectContaining({ id: 'share:share-one', value: '82' }));
+  expect(mocks.publish.mock.lastCall?.[0].details['share:share-one']).toMatchObject({
+    plan: 'menubar.shared.highestWeekly', saySecondary: 'menubar.shared.highestWeeklyNote',
+  });
+  expect(overview.latest()?.input.sources).toEqual([]);
+  let finishRefresh!: (value: unknown) => void;
+  mocks.sharedRead.mockImplementationOnce(() => new Promise(done => { finishRefresh = done; }));
+  const beforeRefresh = mocks.publish.mock.calls.length;
+  mocks.onHelperMessage?.({ type: 'refresh' });
+  await vi.advanceTimersByTimeAsync(0);
+  // The helper resets .detail to .main if any intermediate publication removes this id.
+  for (const [view] of mocks.publish.mock.calls.slice(beforeRefresh)) {
+    expect(view.details['share:share-one']).toBeDefined();
+  }
+  finishRefresh(response);
+  await vi.advanceTimersByTimeAsync(0);
+  expect(mocks.publish.mock.lastCall?.[0].details['share:share-one']).toBeDefined();
+  mocks.onHelperMessage?.({ type: 'panel', open: false });
+  expect(mocks.sharedChanged).toBeNull();
+  expect(mocks.publish.mock.lastCall?.[0].details['share:share-one']).toBeUndefined();
+  const closedCalls = mocks.sharedRead.mock.calls.length;
+  await vi.advanceTimersByTimeAsync(5000);
+  expect(mocks.sharedRead).toHaveBeenCalledTimes(closedCalls);
+  mocks.onHelperMessage?.({ type: 'panel', open: true });
+  await vi.advanceTimersByTimeAsync(0);
+  expect(mocks.publish.mock.lastCall?.[0].details['share:share-one']).toBeDefined();
+  mocks.sharedRead.mockRejectedValueOnce(new Error('access denied'));
+  mocks.sharedAccessEpoch++;
+  mocks.sharedChanged?.();
+  expect(mocks.publish.mock.lastCall?.[0].details['share:share-one']).toBeUndefined();
+  await vi.advanceTimersByTimeAsync(0);
+  mocks.onHelperMessage?.({ type: 'panel', open: false });
+  expect(mocks.sharedChanged).toBeNull();
+  expect(mocks.publish.mock.lastCall?.[0].sources).toEqual([]);
+  const calls = mocks.sharedRead.mock.calls.length;
+  await vi.advanceTimersByTimeAsync(5000);
+  expect(mocks.sharedRead).toHaveBeenCalledTimes(calls);
+  service.stop();
+});
+
+// Unit regression for provider-sharing §7.5: the reader cleared memory on auth changes,
+// but a null overview suppressed the native update. Hold an old collection unresolved.
+it.each(['logout', 'owner', 'boundary', 'session-invalidated'])('clears the presented share immediately on %s while overview is unavailable', async kind => {
+  const collected = emptyMenubarInputs(Date.now(), 'Fixture');
+  mocks.collect.mockResolvedValue(collected);
+  mocks.activities = [activity('private-task')];
+  mocks.sharedRead.mockResolvedValue({ version: 1, capabilities: { quota: true, usage: false },
+    status: { quota: 'ready', usage: 'disabled' }, usage: null,
+    quota: { group: false, partial: false, accounts: [{ state: 'ready', updatedAt: Date.now(), balance: null,
+      windows: [{ kind: 'week', remainingPercent: 82, resetsAt: Date.now() + 60_000, windowMinutes: 10080, label: null }] }] },
+  });
+  const service = new MenubarService({ openNewTask() {}, overview });
+  let finishOverview: ((value: typeof collected) => void) | undefined;
+  let releaseBoundary: (() => void) | undefined;
+  try {
+    service.init();
+    await vi.advanceTimersByTimeAsync(0);
+    mocks.onHelperMessage?.({ type: 'panel', open: true });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(JSON.stringify(mocks.publish.mock.lastCall?.[0])).toContain('Private sharer');
+    mocks.collect.mockImplementationOnce(() => new Promise(done => { finishOverview = done; }));
+    overview.rebuildSoon();
+    await vi.advanceTimersByTimeAsync(400);
+    expect(finishOverview).toBeDefined();
+    if (kind === 'session-invalidated') {
+      // Real synchronous boundary signal: no synthetic auth/share notification or owner change.
+      const reads = mocks.sharedRead.mock.calls.length;
+      releaseBoundary = beginAppSessionBoundary();
+      expect(mocks.sharedRead).toHaveBeenCalledTimes(reads);
+    } else {
+      if (kind === 'boundary') mocks.boundaryPending = true;
+      else mocks.auth.dataOwnerId = kind === 'logout' ? null : 'other';
+      if (kind === 'logout') mocks.auth.mode = 'signed-out';
+      mocks.auth.ownerGeneration++;
+      if (kind === 'boundary') mocks.sharedChanged?.();
+      else for (const changed of [...mocks.authListeners]) changed({ isAuthenticated: kind !== 'logout' });
+    }
+    expect(overview.latest()).toBeNull();
+    const cleared = mocks.publish.mock.lastCall?.[0];
+    expect(cleared.sources).toEqual([]);
+    expect(cleared.details).toEqual({});
+    expect(cleared.activities ?? []).toEqual([]);
+    expect(JSON.stringify(cleared)).not.toContain('Private sharer');
+    expect(JSON.stringify(cleared)).not.toContain('private-task');
+    expect(cleared.gate).toBe(kind === 'logout' ? 'sign-in' : undefined);
+    finishOverview!(collected);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(JSON.stringify(mocks.publish.mock.lastCall?.[0])).not.toContain('Private sharer');
+  } finally {
+    finishOverview?.(collected);
+    service.stop();
+    releaseBoundary?.();
   }
 });

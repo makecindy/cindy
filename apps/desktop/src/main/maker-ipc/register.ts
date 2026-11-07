@@ -22,7 +22,7 @@ import { createOrcaWorkerProjectHandlers } from './orcaWorkerProjectHandlers';
 import { getTeamByWorkerSession } from '../localDb/orcaTeamStore';
 import { readWorkerProjectContext, createWorkerWorktree, rememberWorkerProject, probeWorkerProject, resolveWorkerWorktreeSourceSelection, getWorkerOwnedWorktree } from './orcaWorkerProject';
 import type { WorkerWorktreeRequest } from '../../shared/orca-worker-project';
-import { captureAgentRequest as captureRequest, DelegationNotAuthorizedError, ownerChannelInputEvidence, type CapturedAgentRequest, type DelegationAuthorization } from './forwardedRequest.js';
+import { captureAgentRequest as captureRequest, delegationReviewTarget, DelegationNotAuthorizedError, ownerChannelInputEvidence, type CapturedAgentRequest, type DelegationAuthorization, type DelegationTarget } from './forwardedRequest.js';
 import { readChannelToolScope } from '../im/shared/channelToolScope.js';
 import { FORWARDED_REQUEST_RECEIPT, verifiedOwnerRequestText, type AgentRequestReceipt } from '../../shared/forwardedRequest.js';
 import { configureBotTodoDispatch, settleBotTodoForSession } from './botTodoAccess.js';
@@ -5059,22 +5059,25 @@ const DELEGATION_REVIEW_CONTEXT = 'Host check before Cindy hands this message to
  * for this hand-off (2026-11-05). Full Access already trusts this task; Ask confirmed the task
  * action with its arguments; Auto asks the task's own reviewer. Plan or a changing task sends none.
  */
-async function authorizeSessionDelegation(sessionId: string, message: string, targetSessionId?: string): Promise<DelegationAuthorization> {
+async function authorizeSessionDelegation(sessionId: string, message: string,
+  target?: DelegationTarget): Promise<DelegationAuthorization> {
   const session = getMakerIfReady()?.getSession(sessionId);
   const permission = session?.stablePermissionModeState;
   const plan = session?.stablePlanModeState;
   if (!session || !permission || !plan || plan.enabled || permission.mode === 'plan') return { kind: 'none' };
   if (permission.mode !== 'auto') return { kind: 'authorized' };
   const { toolAutoReviewAction } = await import('@cindy/maker-core');
+  // A remote teammate has no local session id; its own identity replaces the fallback (#9198).
   const decision = await session.reviewHostPermissionAction(toolAutoReviewAction('delegate_owner_request',
-    { targetSessionId: targetSessionId ?? 'a new task', message }, DELEGATION_REVIEW_CONTEXT));
+    { ...delegationReviewTarget(target), message }, DELEGATION_REVIEW_CONTEXT));
   if (decision.verdict === 'allow') return { kind: 'authorized' };
   return { kind: 'blocked', reason: `Not sent: automatic review did not confirm the owner asked for this hand-off${
     decision.reason ? ` (${decision.reason})` : ''}. Keep the message within the owner's request, or ask the owner first.` };
 }
 
 /** Capture from the caller's accepted input before any asynchronous target work. */
-export async function captureSessionAgentRequest(sessionId: string, supplement: string, target?: { sessionId?: string }): Promise<CapturedAgentRequest> {
+export async function captureSessionAgentRequest(sessionId: string, supplement: string,
+  target?: DelegationTarget): Promise<CapturedAgentRequest> {
   const scope = captureDataOwnerBroadcastScope();
   const active = agentInputCoordinatorHolder?.getAcceptedInputProvenance(sessionId) ?? null;
   const lane = readChannelToolScope({ sessionId, sessionInstanceId: getMakerIfReady()?.getSession(sessionId)?.instanceId });
@@ -5097,7 +5100,7 @@ export async function captureSessionAgentRequest(sessionId: string, supplement: 
     () => listMessagesForAgentHandoff(sessionId, 1, undefined, 'user'),
     !!companion || ownerVerified || active?.delegatedRequest?.ownerVerified === true
       || active?.delegatedRequest?.delegatedText !== undefined, ownerVerified,
-    { targetSessionId: target?.sessionId, authorize: () => authorizeSessionDelegation(sessionId, supplement, target?.sessionId) });
+    { targetSessionId: target?.sessionId, authorize: () => authorizeSessionDelegation(sessionId, supplement, target) });
   if (!isDataOwnerBroadcastScopeCurrent(scope)) throw new Error('Data owner changed before request capture');
   return request;
 }

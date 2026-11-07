@@ -33,7 +33,16 @@ export interface SubscriptionPoolView {
 }
 export type SubscriptionAccountCommand =
   | { action: 'read'; providerId: SubscriptionProvider }
+  /** Advisory login presentation only; never binds detected system credentials. */
+  | { action: 'preview'; providerId: SubscriptionProvider }
   | { action: 'add'; providerId: SubscriptionProvider; loginKey: string }
+  /** Explicit wizard intent. Older hosts reject this action instead of reusing a different account. */
+  | {
+      action: 'connect';
+      providerId: SubscriptionProvider;
+      target: 'default' | 'new';
+      loginKey: string;
+    }
   | { action: 'login'; providerId: SubscriptionProvider; accountId: string; loginKey: string }
   | { action: 'cancel'; providerId: SubscriptionProvider; loginKey: string }
   | { action: 'remove'; providerId: SubscriptionProvider; accountId: string }

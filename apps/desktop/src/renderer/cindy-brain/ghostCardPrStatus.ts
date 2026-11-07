@@ -10,7 +10,7 @@
  * 同一份状态显示已合并或关闭时宿主把它们藏起来,查不到状态时照原样显示。
  *
  * `button[data-ghost-task-archive="owner/repo#123"]` 是归档任务按钮,插件写成 display:none:
- * 这条 PR 已合并或关闭时宿主把它露出来(查不到状态时按插件的 -state 快照),回到开着时再藏起。
+ * 整个任务关联的 PR 都确认已合并时才露出；快照、未知状态和关闭未合并均不算完成。
  */
 import { Check, CircleMinus, CircleX, Clock, type LucideIcon } from 'lucide-react';
 import { prStatusItemKeys, type PrStatusItemKey, type PrStatusItemTone } from '@cindy/maker-shared';
@@ -93,18 +93,14 @@ function applyOpenOnly(doc: Document, lookup: (key: string) => PrStatusResult | 
   }
 }
 
-/**
- * 归档任务按钮:PR 已合并或关闭时露出,否则藏起。返回是否有一颗露出的按钮可以在用户看过后
- * 自动归档——要求插件标了 -auto,且宿主自己查到这条 PR 已合并(快照和「已关闭」都不算)。
- */
-function applyTaskArchive(doc: Document, lookup: (key: string) => PrStatusResult | undefined): boolean {
+/** Task-wide eligibility is required even when this card's own PR is merged. */
+function applyTaskArchive(doc: Document, lookup: (key: string) => PrStatusResult | undefined, taskEligible: boolean): boolean {
   let autoArchive = false;
   for (const el of Array.from(doc.querySelectorAll<HTMLElement>(TASK_ARCHIVE_SELECTOR))) {
     const key = prStatusSlotKey(el.getAttribute('data-ghost-task-archive') ?? '');
     const status = key ? lookup(key) : undefined;
     const live = status?.ok === true ? status.status : undefined;
-    const state = live ?? el.getAttribute('data-ghost-task-archive-state');
-    const ended = !!key && (state === 'merged' || state === 'closed');
+    const ended = taskEligible && !!key && live === 'merged';
     if (ended) el.style.setProperty('display', 'inline-flex', 'important');
     else el.style.setProperty('display', 'none', 'important');
     if (ended && live === 'merged' && el.hasAttribute('data-ghost-task-archive-auto')) autoArchive = true;
@@ -156,9 +152,10 @@ export function fillGhostCardPrStatus(
   doc: Document,
   lookup: (key: string) => PrStatusResult | undefined,
   t: Label,
+  taskEligible = false,
 ): boolean {
   applyOpenOnly(doc, lookup);
-  const autoArchive = applyTaskArchive(doc, lookup);
+  const autoArchive = applyTaskArchive(doc, lookup, taskEligible);
   for (const slot of Array.from(doc.querySelectorAll<HTMLElement>(SLOT_SELECTOR))) {
     const key = prStatusSlotKey(slot.getAttribute('data-ghost-pr-status') ?? '');
     const status = key ? lookup(key) : undefined;

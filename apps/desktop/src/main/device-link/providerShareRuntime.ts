@@ -47,7 +47,7 @@ import {
   type ProviderUsageHistoryView,
 } from '../../shared/providerShare.js';
 import { getAuthState, getDeviceId } from '../authManager.js';
-import { parseProviderShareInsights, PROVIDER_SHARE_INSIGHTS_CHANNEL } from '../../shared/providerShareInsights.js';
+import { type ProviderShareInsights, parseProviderShareInsights, PROVIDER_SHARE_INSIGHTS_CHANNEL } from '../../shared/providerShareInsights.js';
 import { isProviderGroupProviderId } from '../../shared/providerGroup.js';
 import { providerShareVisibility } from './providerShareVisibility.js';
 import { remoteModelAccess } from './remoteModelAccess.js';
@@ -1127,6 +1127,14 @@ async function execute(command: ProviderShareCommand, assertCurrent: () => void 
       return { skip: isProviderShareCredentialConsentSkipped(command.shareId) };
     }
   }
+}
+
+/** Native quota panel uses the same authenticated read as the sharing details. */
+export async function readReceivedProviderShareQuota(shareId: string): Promise<ProviderShareInsights> {
+  const assertCurrent = captureProviderManagementScope();
+  const result = await execute({ action: 'insights', shareId, includeUsage: false }, assertCurrent);
+  assertCurrent();
+  return result as ProviderShareInsights;
 }
 
 /**
