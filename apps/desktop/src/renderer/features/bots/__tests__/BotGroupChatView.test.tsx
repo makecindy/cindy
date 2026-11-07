@@ -1,4 +1,6 @@
 // @vitest-environment jsdom
+import { resolveInvokePriority } from '../../../../../../../packages/device-link/src/invokePolicy';
+import { InvokeScheduler } from '../../../../../../../packages/device-link/src/invokeScheduler';
 
 import { act, cleanup, createEvent, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { Tooltip } from '@/components/ui/tooltip';
@@ -16,7 +18,9 @@ import { getBotGroupListSnapshot, refreshBotGroups, resetBotGroupStoreForTests }
 import { botGroupSendSignature, enqueueBotGroupSend, getBotGroupOutbox, getBotGroupOutboxPreviews, resetBotGroupOutboxForTests } from '../botGroupOutbox';
 import type { BotGroupOutboxCommandRequest, BotGroupOutboxCommandResult, BotGroupOutboxStoredEntry } from '../../../../shared/botGroupOutboxStorage';
 import { resetCompanionCloudStoreForTests } from '../companionCloudStore';
-import { botGroupWorkPreview } from '../BotGroupLivePreview';
+import { botGroupWorkPreview, BotGroupProcessNotes } from '../BotGroupLivePreview';
+import { makerChatStore } from '@/lib/makerChatStore';
+import { WorkGroupBlock } from '@/components/chat/WorkGroupBlock';
 import { BotGroupChatView } from '../BotGroupChatView';
 import { BotGroupProcess } from '../BotGroupProcess';
 import { ControlledBanner, __resetControlledBannerForTests } from '../../remote-device/ControlledBanner';
@@ -359,6 +363,8 @@ beforeEach(() => {
     value: {
       deviceLink: {
         invoke: mocks.remoteInvoke,
+        subscribe: vi.fn(async () => ({ ok: true })),
+        unsubscribe: vi.fn(async () => ({ ok: true })),
         onRemotePush: () => () => {},
         getState: mocks.getControlledState,
         onControlledState: (callback: NonNullable<typeof mocks.controlledPush>) => {
@@ -5177,8 +5183,368 @@ it('reads historical group process from the execution computer after a home chan
     { clientId: 'seal', role: 'assistant', content: 'Final answer', agentMeta: { turnCompleted: true } }]);
   const view = render(<Tooltip.Provider><BotGroupProcess process={process}
     member={{ ...detail().members[0]!, isOwned: true, homeDeviceId: 'new-mac' }} /></Tooltip.Provider>);
+  await waitFor(() => expect(view.container.querySelector('[data-teammate-process] button')).not.toBeNull());
   fireEvent.click(view.container.querySelector('[data-teammate-process] button')!);
   await screen.findByText('Original computer progress');
-  expect(mocks.remoteInvoke).toHaveBeenCalledWith('original-mac', 'local-db:messages:around-client-id', ['old-lane', 'source', { radius: 80 }]);
+  expect(mocks.remoteInvoke).toHaveBeenCalledWith('original-mac', 'local-db:messages:around-client-id', ['old-lane', 'source', { radius: 80 }], { background: true });
   expect(mocks.remoteInvoke.mock.calls.every(([device]) => device === 'original-mac')).toBe(true);
+});
+
+// 2026-11-05: a successful history read with only a final answer left an empty
+// clickable process. Use the real group disclosure, not a mocked shell (unit).
+it('never advertises a completed process before finding work, including final-only history', async () => {
+  const process = { groupId: 'g1', executionId: 'empty-process', sessionId: 'lane', clientId: 'source', deviceId: 'original-mac' };
+  let finish!: (rows: unknown[]) => void;
+  mocks.remoteInvoke.mockImplementation(() => new Promise(resolve => { finish = resolve; }));
+  const rows = [{ clientId: 'source', role: 'user', content: 'Request' },
+    { clientId: 'final', role: 'assistant', content: 'Only the answer', agentMeta: { turnCompleted: true, botPrivateReply: true, botGroupLane: true } }];
+  const view = render(<Tooltip.Provider><BotGroupProcess process={process}
+    member={{ ...detail().members[0]!, isOwned: true, homeDeviceId: 'original-mac' }} /></Tooltip.Provider>);
+  expect(view.container.querySelector('[data-teammate-process]')).toBeNull();
+  expect(mocks.remoteInvoke).toHaveBeenCalled();
+  await act(async () => finish(rows));
+  await waitFor(() => expect(view.container.querySelector('[data-teammate-process]')).toBeNull());
+  expect(view.container.textContent).not.toContain('Only the answer');
+});
+
+// Unit: the same inspected tool segment must stay open across live -> history.
+// Existing disclosure tests kept one component mounted and missed the group swap.
+it('keeps inspected tool details open when group work becomes history', async () => {
+  const process = { groupId: 'g1', executionId: 'inspected', sessionId: 'inspected-lane', clientId: 'source', deviceId: 'original-mac' };
+  const original = makerChatStore.getSnapshot(process.sessionId);
+  const snapshot = { ...original, messages: [{ clientId: 'tool', role: 'tool_use' as const,
+    content: '', toolName: 'Read', toolInput: { file_path: '/repo/notes.md' }, botPrivateReply: true,
+    replyToClientId: 'bot-group:g1:inspected:bot', createdAt: new Date(1000).toISOString() }] };
+  const read = vi.spyOn(makerChatStore, 'getSnapshot').mockReturnValue(snapshot);
+  mocks.remoteInvoke.mockResolvedValue([{ clientId: 'source', role: 'user', content: 'Request' },
+    { clientId: 'tool', role: 'tool_use', content: { toolName: 'Read', input: { file_path: '/repo/notes.md' } } },
+    { clientId: 'final', role: 'assistant', content: 'Answer', agentMeta: { turnCompleted: true } }]);
+  try {
+    const view = render(<Tooltip.Provider><WorkGroupBlock journal isStreaming blockId={`group-process:${process.executionId}`}
+      childItems={[{ kind: 'rendered', key: 'notes', renderNode: () =>
+        <BotGroupProcessNotes sessionId={process.sessionId} executionId={process.executionId} since={0} /> }]} /></Tooltip.Provider>);
+    const segment = () => view.container.querySelector('[data-teammate-segment] > button');
+    fireEvent.click(segment()!);
+    expect(segment()?.getAttribute('aria-expanded')).toBe('true');
+    view.rerender(<Tooltip.Provider><BotGroupProcess process={process}
+      member={{ ...detail().members[0]!, isOwned: true, homeDeviceId: 'original-mac' }} /></Tooltip.Provider>);
+    await waitFor(() => expect(segment()?.getAttribute('aria-expanded')).toBe('true'));
+  } finally { read.mockRestore(); }
+});
+
+// Interaction parity: inspection must not initiate a read or remove the control.
+it('keeps completed process and expansion across collapse and remount with group-lane metadata', async () => {
+  const process = { groupId: 'g1', executionId: 'reopen', sessionId: 'lane', clientId: 'source', deviceId: 'original-mac' };
+  const meta = { botPrivateReply: true, botGroupLane: true };
+  mocks.remoteInvoke.mockResolvedValue([{ clientId: 'source', role: 'user', content: 'Request' },
+    { clientId: 'note', role: 'assistant', content: 'Verified stage note', agentMeta: { ...meta, assistantPhase: 'commentary' } },
+    { clientId: 'final', role: 'assistant', content: 'Answer', agentMeta: { ...meta, turnCompleted: true } }]);
+  const tree = <Tooltip.Provider><BotGroupProcess process={process}
+    member={{ ...detail().members[0]!, isOwned: true, homeDeviceId: 'original-mac' }} /></Tooltip.Provider>;
+  const view = render(tree);
+  const heading = () => view.container.querySelector('[data-teammate-process] > button')!;
+  await waitFor(() => expect(heading()).not.toBeNull());
+  expect(heading().getAttribute('aria-expanded')).toBe('false');
+  const reads = mocks.remoteInvoke.mock.calls.length;
+  fireEvent.click(heading());
+  await screen.findByText('Verified stage note');
+  fireEvent.click(heading());
+  fireEvent.click(heading());
+  expect(heading().getAttribute('aria-expanded')).toBe('true');
+  expect(mocks.remoteInvoke).toHaveBeenCalledTimes(reads);
+  view.rerender(<></>);
+  view.rerender(tree);
+  await screen.findByText('Verified stage note');
+  expect(heading().getAttribute('aria-expanded')).toBe('true');
+});
+
+it('keeps unavailable history retryable instead of treating it as an empty process', async () => {
+  const process = { groupId: 'g1', executionId: 'retry-process', sessionId: 'lane', clientId: 'source', deviceId: 'original-mac' };
+  mocks.remoteInvoke.mockResolvedValueOnce([]);
+  const view = render(<Tooltip.Provider><BotGroupProcess process={process}
+    member={{ ...detail().members[0]!, isOwned: true, homeDeviceId: 'original-mac' }} /></Tooltip.Provider>);
+  const heading = () => view.container.querySelector('[data-teammate-process] > button');
+  await waitFor(() => expect(heading()).not.toBeNull());
+  fireEvent.click(heading()!);
+  const retry = await screen.findByRole('button', { name: 'chat.errorBanner.retry' });
+  mocks.remoteInvoke.mockResolvedValue([{ clientId: 'source', role: 'user', content: 'Request' },
+    { clientId: 'note', role: 'assistant', content: 'Recovered stage note', agentMeta: { assistantPhase: 'commentary' } },
+    { clientId: 'final', role: 'assistant', content: 'Answer', agentMeta: { turnCompleted: true } }]);
+  fireEvent.click(retry);
+  expect(heading()).not.toBeNull();
+  await screen.findByText('Recovered stage note');
+  expect(heading()?.getAttribute('aria-expanded')).toBe('true');
+});
+
+// Extended acceptance: the final receipt may reach the group before the last
+// persisted work record. An existing, expanded history must consume its push.
+it('refreshes already-open group history when a late persisted work record is pushed', async () => {
+  const process = { groupId: 'g1', executionId: 'late-after-read', sessionId: 'late-lane', clientId: 'source', deviceId: 'original-mac' };
+  const meta = { botPrivateReply: true, botGroupLane: true };
+  const rows: import('../../../../shared/botGroupChat').BotGroupProcessMessage[] = [
+    { clientId: 'source', role: 'user', content: 'Request' },
+    { clientId: 'note', role: 'assistant', content: 'Stage before completion', agentMeta: { ...meta, assistantPhase: 'commentary' } },
+    { clientId: 'final', role: 'assistant', content: 'Answer', agentMeta: { ...meta, turnCompleted: true } },
+  ];
+  mocks.remoteInvoke.mockImplementation(async () => [...rows]);
+  const listeners: Array<(push: unknown) => void> = [];
+  window.electronAPI.deviceLink.onRemotePush = ((listener: (push: unknown) => void) => {
+    listeners.push(listener);
+    return () => { const index = listeners.indexOf(listener); if (index >= 0) listeners.splice(index, 1); };
+  }) as typeof window.electronAPI.deviceLink.onRemotePush;
+  const view = render(<Tooltip.Provider><BotGroupProcess process={process}
+    member={{ ...detail().members[0]!, isOwned: true, homeDeviceId: 'original-mac' }} /></Tooltip.Provider>);
+  const heading = () => view.container.querySelector('[data-teammate-process] > button')!;
+  await waitFor(() => expect(heading()).not.toBeNull());
+  fireEvent.click(heading());
+  await screen.findByText('Stage before completion');
+  expect(view.container.querySelector('[data-teammate-segment]')).toBeNull();
+  rows.push({ clientId: 'late-thinking', role: 'thinking', content: 'Reasoning must remain hidden', agentMeta: meta });
+  await act(async () => listeners.forEach(listener => listener({ deviceId: 'original-mac',
+    channel: 'local-db:messages:created', payload: { sessionId: process.sessionId, clientId: 'late-thinking' } })));
+  await waitFor(() => expect(view.container.querySelector('[data-teammate-segment]')).not.toBeNull());
+  expect(heading().getAttribute('aria-expanded')).toBe('true');
+  expect(view.container.textContent).not.toContain('Reasoning must remain hidden');
+});
+
+// Product decision (2026-11-05): stopping without a final reply removes the
+// transient process entry to keep the group timeline clean.
+it('hides the process entry after a running group execution is stopped without a final reply', async () => {
+  const sessionId = 'stopped-lane';
+  const startedAt = Date.now() - 20_000;
+  const original = makerChatStore.getSnapshot(sessionId);
+  const snapshot = { ...original, messages: [{ clientId: 'stopped-note', role: 'assistant' as const,
+    content: 'Work produced before stop', assistantPhase: 'commentary' as const, botPrivateReply: true,
+    replyToClientId: 'bot-group:g1:stopped-work:mimi', createdAt: new Date(startedAt + 1).toISOString() }] };
+  const read = vi.spyOn(makerChatStore, 'getSnapshot').mockReturnValue(snapshot);
+  mocks.activity = { phase: 'running', compactDetail: 'Working', startedAtMs: startedAt };
+  mocks.getBotGroup.mockResolvedValue({ ok: true, group: detail({ speakingBotIds: ['mimi'], round: {
+    status: 'running', canContinue: false, speakers: [{ botId: 'mimi', activity: 'reply', executionId: 'stopped-work',
+      sessionId, executionStatus: 'running', startedAt }],
+  } }) });
+  try {
+    const view = renderView();
+    await screen.findByText('Work produced before stop');
+    mocks.activity = null;
+    mocks.getBotGroup.mockResolvedValue({ ok: true, group: detail({ speakingBotIds: [], round: {
+      status: 'idle', speakers: [], canContinue: false,
+    } }) });
+    await act(async () => mocks.pushes.forEach(push => push({ groupId: 'g1', change: 'round' })));
+    await waitFor(() => expect(screen.queryByTestId('bot-group-progress')).toBeNull());
+    expect(view.container.querySelector('[data-teammate-process]')).toBeNull();
+    expect(screen.queryByText('Work produced before stop')).toBeNull();
+  } finally { read.mockRestore(); }
+});
+
+
+it('does not reread closed group turns on later session activity', async () => {
+  const process = { groupId: 'g1', executionId: 'closed-history', sessionId: 'closed-lane', clientId: 'source', deviceId: 'original-mac' };
+  mocks.remoteInvoke.mockResolvedValue([
+    { clientId: 'source', role: 'user', content: 'Request' },
+    { clientId: 'note', role: 'assistant', content: 'Closed turn', agentMeta: { assistantPhase: 'commentary' } },
+    { clientId: 'final', role: 'assistant', content: 'Answer', agentMeta: { turnCompleted: true } },
+    { clientId: 'next', role: 'user', content: 'Next request' },
+  ]);
+  const listeners = new Set<(push: unknown) => void>();
+  window.electronAPI.deviceLink.onRemotePush = ((listener: (push: unknown) => void) => {
+    listeners.add(listener); return () => { listeners.delete(listener); };
+  }) as typeof window.electronAPI.deviceLink.onRemotePush;
+  const view = render(<Tooltip.Provider><BotGroupProcess process={process}
+    member={{ ...detail().members[0]!, isOwned: true, homeDeviceId: 'original-mac' }} /></Tooltip.Provider>);
+  await waitFor(() => expect(view.container.querySelector('[data-teammate-process]')).not.toBeNull());
+  vi.useFakeTimers();
+  const reads = mocks.remoteInvoke.mock.calls.length;
+  await act(async () => {
+    listeners.forEach(listener => listener({ deviceId: 'original-mac', channel: 'local-db:messages:created', payload: { sessionId: process.sessionId } }));
+    await vi.advanceTimersByTimeAsync(50);
+  });
+  expect(mocks.remoteInvoke).toHaveBeenCalledTimes(reads);
+  vi.useRealTimers();
+});
+
+// PR #8979 / unit: real history effect + shared reader, with only IPC delayed.
+// Earlier late-record tests settled each read before the next push, missing
+// overlapping reads. One pending read plus >50ms-separated pushes is sufficient.
+it.each(['success', 'failure', 'unmount'])('coalesces in-flight group history refreshes (%s)', async outcome => {
+  vi.useFakeTimers();
+  const process = { groupId: 'g1', executionId: 'slow-history', sessionId: 'slow-lane', clientId: 'source', deviceId: 'original-mac' };
+  const source = { clientId: 'source', role: 'user', content: 'Request' };
+  const latest = [source, { clientId: 'note', role: 'assistant', content: 'Newest persisted progress', agentMeta: { assistantPhase: 'commentary' } }];
+  const pending: Array<{ resolve(rows: unknown[]): void; reject(error: Error): void }> = [];
+  let slow = true;
+  let reads = 0;
+  mocks.remoteInvoke.mockImplementation((_device, _channel, args) => {
+    if (args[1] !== process.clientId) return Promise.resolve(latest);
+    reads++;
+    return slow ? new Promise((resolve, reject) => pending.push({ resolve, reject })) : Promise.resolve(latest);
+  });
+  const listeners = new Set<(push: unknown) => void>();
+  window.electronAPI.deviceLink.onRemotePush = ((listener: (push: unknown) => void) => {
+    listeners.add(listener); return () => { listeners.delete(listener); };
+  }) as typeof window.electronAPI.deviceLink.onRemotePush;
+  const view = render(<Tooltip.Provider><BotGroupProcess process={process}
+    member={{ ...detail().members[0]!, isOwned: true, homeDeviceId: 'original-mac' }} /></Tooltip.Provider>);
+  try {
+    await act(async () => {
+      for (let i = 0; i < 10; i++) {
+        listeners.forEach(listener => listener({ deviceId: 'original-mac', channel: 'local-db:messages:created', payload: { sessionId: process.sessionId } }));
+        await vi.advanceTimersByTimeAsync(60);
+      }
+    });
+    expect(reads).toBe(1);
+    if (outcome === 'unmount') view.unmount();
+    slow = false;
+    await act(async () => {
+      if (outcome === 'failure') pending[0]!.reject(new Error('slow read failed'));
+      else pending[0]!.resolve([source]);
+      await vi.advanceTimersByTimeAsync(0);
+    });
+    expect(reads).toBe(outcome === 'unmount' ? 1 : 2);
+    if (outcome !== 'unmount') {
+      fireEvent.click(view.container.querySelector('[data-teammate-process] > button')!);
+      expect(view.container.textContent).toContain('Newest persisted progress');
+    }
+    await act(async () => { await vi.advanceTimersByTimeAsync(500); });
+    expect(reads).toBe(outcome === 'unmount' ? 1 : 2);
+  } finally {
+    view.unmount();
+    await act(async () => { pending.forEach(request => request.resolve([source])); });
+    vi.useRealTimers();
+  }
+});
+
+// PR #8979 / unit: a successful collapsed read must refresh on peer recovery
+// without a new database push. Earlier tests only refreshed from created events.
+it.each(['onStatusChanged', 'onPresenceChanged', 'onPeerLinkReset', 'onResponsivenessChanged'])('reconciles cached group history after %s recovery', async event => {
+  vi.useFakeTimers();
+  const process = { groupId: 'g1', executionId: `lost-history-${event}`, sessionId: 'lost-lane', clientId: 'source', deviceId: 'original-mac' };
+  const rows: import('../../../../shared/botGroupChat').BotGroupProcessMessage[] = [
+    { clientId: 'source', role: 'user', content: 'Request' },
+    { clientId: 'note', role: 'assistant', content: 'Before disconnect', agentMeta: { assistantPhase: 'commentary' } },
+    { clientId: 'final', role: 'assistant', content: 'Answer', agentMeta: { turnCompleted: true } },
+  ];
+  mocks.remoteInvoke.mockImplementation(async () => [...rows]);
+  const listeners = new Map<string, Set<(payload: any) => void>>();
+  for (const name of ['onStatusChanged', 'onPresenceChanged', 'onPeerLinkReset', 'onResponsivenessChanged']) {
+    const callbacks = new Set<(payload: any) => void>(); listeners.set(name, callbacks);
+    Object.assign(window.electronAPI.deviceLink, { [name]: (cb: (payload: any) => void) => { callbacks.add(cb); return () => { callbacks.delete(cb); }; } });
+  }
+  const emit = (deviceId: string) => listeners.get(event)!.forEach(cb => cb({ deviceId, dataPathChangedDeviceId: deviceId,
+    status: 'online', online: true, remoteControlEnabled: true, unresponsive: false, recovered: true }));
+  const view = render(<Tooltip.Provider><BotGroupProcess process={process}
+    member={{ ...detail().members[0]!, isOwned: true, homeDeviceId: 'new-mac' }} /></Tooltip.Provider>);
+  try {
+    await act(async () => { await vi.advanceTimersByTimeAsync(0); });
+    const heading = () => view.container.querySelector('[data-teammate-process] > button')!;
+    expect(heading().getAttribute('aria-expanded')).toBe('false');
+    const reads = mocks.remoteInvoke.mock.calls.length;
+    await act(async () => { emit('neighbor-mac'); await vi.advanceTimersByTimeAsync(50); });
+    expect(mocks.remoteInvoke).toHaveBeenCalledTimes(reads);
+    rows.push({ clientId: 'lost-thinking', role: 'thinking', content: 'Hidden reasoning from disconnected period' });
+    await act(async () => { emit('original-mac'); await vi.advanceTimersByTimeAsync(50); });
+    expect(mocks.remoteInvoke).toHaveBeenCalledTimes(reads + 2);
+    expect(mocks.remoteInvoke.mock.calls.every(([device]) => device === 'original-mac')).toBe(true);
+    fireEvent.click(heading());
+    expect(view.container.querySelector('[data-teammate-segment]')).not.toBeNull();
+    expect(view.container.textContent).not.toContain('Hidden reasoning from disconnected period');
+    view.unmount();
+    expect([...listeners.values()].every(callbacks => callbacks.size === 0)).toBe(true);
+  } finally { view.unmount(); vi.useRealTimers(); }
+});
+
+// PR #8979 / unit: initial offline failure leaves Main no topic to replay.
+// Recovery must acquire an ACK before reading, then keep future pushes working.
+it('reacquires a failed group history subscription before recovering its snapshot', async () => {
+  vi.useFakeTimers();
+  const process = { groupId: 'g1', executionId: 'failed-subscription', sessionId: 'offline-lane', clientId: 'source', deviceId: 'original-mac' };
+  const rows: import('../../../../shared/botGroupChat').BotGroupProcessMessage[] = [
+    { clientId: 'source', role: 'user', content: 'Request' },
+    { clientId: 'note', role: 'assistant', content: 'Recovered snapshot', agentMeta: { assistantPhase: 'commentary' } },
+    { clientId: 'final', role: 'assistant', content: 'Answer', agentMeta: { turnCompleted: true } },
+  ];
+  let ack!: (value: { ok: true }) => void;
+  const subscribe = vi.fn().mockRejectedValueOnce(new Error('offline'))
+    .mockImplementationOnce(() => new Promise(resolve => { ack = resolve; }));
+  const recoveries = new Set<(payload: any) => void>();
+  const pushes = new Set<(payload: any) => void>();
+  Object.assign(window.electronAPI.deviceLink, { subscribe,
+    onPeerLinkReset: (cb: (payload: any) => void) => { recoveries.add(cb); return () => { recoveries.delete(cb); }; },
+    onRemotePush: (cb: (payload: any) => void) => { pushes.add(cb); return () => { pushes.delete(cb); }; },
+  });
+  mocks.remoteInvoke.mockRejectedValueOnce(new Error('offline')).mockImplementation(async () => [...rows]);
+  const view = render(<Tooltip.Provider><BotGroupProcess process={process} member={{ ...detail().members[0]!, isOwned: true }} /></Tooltip.Provider>);
+  try {
+    await act(async () => { await vi.advanceTimersByTimeAsync(0); });
+    const reads = mocks.remoteInvoke.mock.calls.length;
+    await act(async () => { for (let i = 0; i < 3; i++) recoveries.forEach(cb => cb({ deviceId: 'original-mac' })); await vi.advanceTimersByTimeAsync(50); });
+    expect(subscribe).toHaveBeenCalledTimes(2);
+    expect(mocks.remoteInvoke).toHaveBeenCalledTimes(reads);
+    await act(async () => { ack({ ok: true }); await vi.advanceTimersByTimeAsync(50); });
+    fireEvent.click(view.container.querySelector('[data-teammate-process] > button')!);
+    expect(view.container.textContent).toContain('Recovered snapshot');
+    expect(view.container.textContent).not.toContain('chat.errorBanner.retry');
+    rows.push({ clientId: 'late-thinking', role: 'thinking', content: 'Hidden reasoning' });
+    await act(async () => { pushes.forEach(cb => cb({ deviceId: 'original-mac', channel: 'local-db:messages:created', payload: { sessionId: process.sessionId } })); await vi.advanceTimersByTimeAsync(50); });
+    expect(view.container.querySelector('[data-teammate-segment]')).not.toBeNull();
+    expect(subscribe).toHaveBeenCalledTimes(2);
+  } finally { view.unmount(); ack?.({ ok: true }); vi.useRealTimers(); }
+});
+
+// PR #8979 / unit: real history effect with the production invoke scheduler.
+// Twelve mounted collapsed histories previously took every foreground slot;
+// the next task history read must start without waiting for their replies.
+it('keeps foreground capacity available while collapsed group histories prefetch', async () => {
+  const scheduler = new InvokeScheduler();
+  let release!: () => void;
+  const gate = new Promise<void>(resolve => { release = resolve; });
+  let started = 0;
+  let foregroundStarted = false;
+  mocks.remoteInvoke.mockImplementation((device, channel, _args, options) => scheduler.run(device,
+    resolveInvokePriority(channel, options?.background), 10_000, async () => { started++; await gate; return []; }));
+  const view = render(<Tooltip.Provider>{Array.from({ length: 12 }, (_, i) => <BotGroupProcess key={i}
+    process={{ groupId: 'g1', executionId: `hidden-${i}`, sessionId: 'hidden-lane', clientId: `source-${i}`, deviceId: 'original-mac' }}
+    member={{ ...detail().members[0]!, isOwned: true }} />)}</Tooltip.Provider>);
+  let foreground: Promise<unknown> | undefined;
+  try {
+    foreground = scheduler.run('original-mac', resolveInvokePriority('local-db:messages:around-client-id'), 10_000,
+      async () => { foregroundStarted = true; return []; });
+    expect(foregroundStarted).toBe(true);
+    expect(started).toBeLessThanOrEqual(4);
+  } finally {
+    view.unmount();
+    await act(async () => { release(); await foreground; });
+  }
+});
+
+// PR #8979 / unit: the actual history shell must distinguish a failed live
+// subscription from a successful bounded snapshot, regardless of settlement order.
+// With no device reset/push, the user must still be able to retry the missing ACK.
+it.each(['before-read', 'after-read'])('keeps a failed initial history subscription retryable (%s)', async order => {
+  vi.useFakeTimers();
+  const process = { groupId: 'g1', executionId: `initial-sub-${order}`, sessionId: `initial-sub-${order}`, clientId: 'source', deviceId: 'original-mac' };
+  const rows = [{ clientId: 'source', role: 'user', content: 'Request' },
+    { clientId: 'note', role: 'assistant', content: 'Snapshot remains readable', agentMeta: { assistantPhase: 'commentary' } }];
+  let rejectAck!: (error: Error) => void;
+  let releaseRead!: () => void;
+  const gate = new Promise<void>(resolve => { releaseRead = resolve; });
+  const subscribe = vi.fn().mockImplementationOnce(() => new Promise((_resolve, reject) => { rejectAck = reject; })).mockResolvedValue({ ok: true });
+  Object.assign(window.electronAPI.deviceLink, { subscribe });
+  mocks.remoteInvoke.mockImplementation(async () => { await gate; return rows; });
+  const view = render(<Tooltip.Provider><BotGroupProcess process={process} member={{ ...detail().members[0]!, isOwned: true }} /></Tooltip.Provider>);
+  try {
+    if (order === 'before-read') await act(async () => { rejectAck(new Error('BACKPRESSURE')); await vi.advanceTimersByTimeAsync(0); });
+    await act(async () => { releaseRead(); await vi.advanceTimersByTimeAsync(0); });
+    if (order === 'after-read') await act(async () => { rejectAck(new Error('TIMEOUT')); await vi.advanceTimersByTimeAsync(0); });
+    fireEvent.click(view.container.querySelector('[data-teammate-process] > button')!);
+    await act(async () => { await vi.advanceTimersByTimeAsync(16); });
+    expect(view.container.textContent).toContain('Snapshot remains readable');
+    expect(view.container.textContent).toContain('chat.errorBanner.retry');
+    const retry = view.queryByRole('button', { name: 'chat.errorBanner.retry' });
+    expect(retry).not.toBeNull();
+    fireEvent.click(retry!);
+    await act(async () => { await vi.advanceTimersByTimeAsync(0); });
+    expect(subscribe).toHaveBeenCalledTimes(2);
+    expect(view.queryByRole('button', { name: 'chat.errorBanner.retry' })).toBeNull();
+    expect(view.container.textContent).toContain('Snapshot remains readable');
+  } finally { view.unmount(); releaseRead(); vi.useRealTimers(); }
 });

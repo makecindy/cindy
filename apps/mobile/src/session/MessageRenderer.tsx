@@ -5291,7 +5291,7 @@ function WorkGroupElapsed({ sinceIso }: { sinceIso: string | undefined }) {
   );
 }
 
-const WorkToolActivityRow = memo(function WorkToolActivityRow({
+export const WorkToolActivityRow = memo(function WorkToolActivityRow({
   actions,
   activity,
   contentLayout,

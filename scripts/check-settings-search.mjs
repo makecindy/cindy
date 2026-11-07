@@ -380,7 +380,18 @@ export function indexedSettingsTextKeys(source) {
   return keys;
 }
 
-export function checkSettingsSearch(baseRef = "HEAD") {
+/** PR checks run on GitHub's merge commit. Its first parent is the exact
+ * target snapshot; the event base can predate unrelated target-branch updates. */
+export function settingsSearchComparisonBase(baseRef, prHead, git) {
+  if (!prHead) return baseRef;
+  if (!/^[a-f0-9]{40}$/i.test(prHead)) throw new Error("Invalid pull request head SHA");
+  const parents = git(["rev-list", "--parents", "-n", "1", "HEAD"]).trim().split(/\s+/);
+  if (parents.length !== 3 || parents[2] !== prHead)
+    throw new Error("Checked-out merge does not match the pull request head");
+  return parents[1];
+}
+
+export function checkSettingsSearch(baseRef = "HEAD", prHead) {
   const git = (args) =>
     execFileSync("git", args, {
       cwd: root,
@@ -388,6 +399,7 @@ export function checkSettingsSearch(baseRef = "HEAD") {
       maxBuffer: 16 * 1024 * 1024,
       stdio: ["ignore", "pipe", "pipe"],
     });
+  baseRef = settingsSearchComparisonBase(baseRef, prHead, git);
   git(["rev-parse", "--verify", `${baseRef}^{commit}`]);
   const indexedTextKeys = new Set();
   const metadataFiles = git([
@@ -534,8 +546,12 @@ if (
 ) {
   try {
     const baseIndex = process.argv.indexOf("--base-ref");
+    const headIndex = process.argv.indexOf("--pr-head");
+    if (headIndex >= 0 && process.argv[headIndex + 1] === undefined)
+      throw new Error("--pr-head requires a value");
     const errors = checkSettingsSearch(
       baseIndex < 0 ? "HEAD" : process.argv[baseIndex + 1],
+      headIndex < 0 ? undefined : process.argv[headIndex + 1],
     );
     if (errors.length) {
       console.error(errors.join("\n"));

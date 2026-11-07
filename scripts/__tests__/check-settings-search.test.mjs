@@ -2,6 +2,7 @@ import { describe, it } from "node:test";
 import assert from "node:assert/strict";
 import {
   inspectSettingsControls,
+  settingsSearchComparisonBase,
   indexedSettingsTextKeys,
   registeredDefinitionExports,
 } from "../check-settings-search.mjs";
@@ -219,5 +220,33 @@ describe("settings search coverage gate", () => {
       ],
       ["settings.new.label"],
     );
+  });
+});
+
+
+// PR #8979: the merge checkout included newer main controls, while the event's
+// base still pointed at the original PR snapshot. Production checker inputs
+// must exclude those upstream controls but retain real PR-added omissions.
+describe("pull request comparison base", () => {
+  const oldBase = "1".repeat(40), main = "2".repeat(40), head = "3".repeat(40), merge = "4".repeat(40);
+  it("ignores upstream additions while still rejecting an unbound PR-added control", () => {
+    const sources = new Map([[oldBase, '<div />'], [main, '<Switch checked={true} />']]);
+    const upstream = sources.get(main);
+    assert.equal(inspectSettingsControls(upstream, sources.get(oldBase)).length, 1);
+    const base = settingsSearchComparisonBase(oldBase, head, () => `${merge} ${main} ${head}\n`);
+    assert.deepEqual(inspectSettingsControls(upstream, sources.get(base)), []);
+    const errors = inspectSettingsControls(upstream + '\n<Input value="new setting" />', sources.get(base));
+    assert.equal(errors.length, 1);
+    assert.equal(errors[0].line, 2);
+  });
+  it("fails closed for a mismatched PR head or an unexpected checkout", () => {
+    for (const parents of [`${merge} ${main}`, `${merge} ${main} ${oldBase}`, `${merge} ${main} ${head} ${oldBase}`])
+      assert.throws(() => settingsSearchComparisonBase(oldBase, head, () => parents), /does not match/);
+    assert.throws(() => settingsSearchComparisonBase(oldBase, 'HEAD', () => ''), /Invalid/);
+  });
+  it("preserves explicit bases for local, push and merge-queue checks", () => {
+    const git = () => { throw new Error('No PR parent lookup expected'); };
+    assert.equal(settingsSearchComparisonBase(oldBase, undefined, git), oldBase);
+    assert.equal(settingsSearchComparisonBase(main, '', git), main);
   });
 });
