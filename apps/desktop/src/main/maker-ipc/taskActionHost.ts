@@ -4,6 +4,7 @@ import type { Session } from '@cindy/maker-core';
 import {
   botDelegations,
   botProfiles,
+  botProfileVersions,
   botSessionLinks,
   sessions,
   orcaTeams,
@@ -14,6 +15,7 @@ import { isAppSessionBoundaryPending } from '../appSessionState.js';
 import { authorizeGroupTool } from './botGroupToolAuthorization.js';
 import { readChannelToolScope } from '../im/shared/channelToolScope.js';
 import { BUILTIN_ROUTINE_SCHEDULE_PREFIX } from '../../shared/botAutonomy.js';
+import { readProjectMode } from '../bot-autonomy/follower.js';
 import {
   admitTaskAction,
   isolateTaskActionAuthorizer,
@@ -43,6 +45,8 @@ type TaskActionSession = Pick<Session,
  * grants; Host wake-ups, teammate messages and other speakers act on the teammate's own.
  */
 export function teammateTurnPrincipal(facts: {
+  /** V2: the teammate is an ordinary project, so its automations are standing instructions like any task's. */
+  projectMode?: boolean;
   groupOwner: boolean;
   laneRequesterIsOwner?: boolean;
   ownerInput: boolean;
@@ -54,7 +58,8 @@ export function teammateTurnPrincipal(facts: {
   if (facts.ownerInput || facts.ownerContinuation) return 'owner';
   // Built-in routines (follow-up, nightly learning) and the daily Todo check, which keeps its legacy
   // `builtin-` id, are Host-started runs, not an owner's standing instruction.
-  if (facts.scheduleId?.startsWith('routine-') && !facts.scheduleId.startsWith(BUILTIN_ROUTINE_SCHEDULE_PREFIX))
+  if (facts.scheduleId && !facts.scheduleId.startsWith(BUILTIN_ROUTINE_SCHEDULE_PREFIX)
+    && (facts.scheduleId.startsWith('routine-') || facts.projectMode))
     return 'entrusted';
   return 'autonomous';
 }
@@ -141,10 +146,13 @@ export function createDesktopTaskActionAuthorizer(deps: {
             role: botSessionLinks.role,
             botStatus: botProfiles.status,
             archivedAt: botSessionLinks.archivedAt,
+            capabilitiesJson: botProfileVersions.capabilitiesJson,
           })
           .from(sessions)
           .leftJoin(botSessionLinks, eq(botSessionLinks.sessionId, sessions.id))
           .leftJoin(botProfiles, eq(botProfiles.id, botSessionLinks.botId))
+          .leftJoin(botProfileVersions, and(eq(botProfileVersions.botId, botProfiles.id),
+            eq(botProfileVersions.version, botProfiles.currentVersion)))
           .where(eq(sessions.id, sessionId))
           .limit(1);
         if (!caller) throw new Error('TASK_UNAVAILABLE');
@@ -174,6 +182,7 @@ export function createDesktopTaskActionAuthorizer(deps: {
           const lane = readChannelToolScope({ sessionId, sessionInstanceId: live?.instanceId });
           const origin = live?.getCurrentTurnOrigin();
           principal = teammateTurnPrincipal({
+            projectMode: readProjectMode(caller.capabilitiesJson),
             groupOwner: group !== null,
             laneRequesterIsOwner: lane?.requesterIsOwner,
             ownerInput: input.ownerInput,
