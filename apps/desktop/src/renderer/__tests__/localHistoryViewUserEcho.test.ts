@@ -51,6 +51,7 @@ import { makerChatStore, getRemoteHistoryView, type HistoryChatMessage } from '@
 import {
   HistoryViewHandoff,
   historyViewLeaves,
+  historyWorkSummaries,
   projectHistoryView,
   renderHistoryView,
 } from '@cindy/maker-shared/message-window';
@@ -86,6 +87,16 @@ function persist(message: Message): void {
 
 function persistQueued(sessionId: string, item: AgentInputQueuedMessage, createdAt: string): void {
   persist(dbMessage(sessionId, item.clientId, item.text, createdAt, 'user'));
+}
+
+function completedWork(sessionId: string, size: number) {
+  const tool = { ...dbMessage(sessionId, 'read', '', '2026-09-28T00:00:02.000Z', 'tool_use'),
+    content: { toolName: 'Read', input: { file_path: 'large.txt' }, toolUseId: 'tool-read' }, toolUseId: 'tool-read' };
+  const result = { ...dbMessage(sessionId, 'result', 'x'.repeat(size), '2026-09-28T00:00:03.000Z', 'tool_result'), toolUseId: 'tool-read' };
+  persist(tool);
+  persist(result);
+  persist({ ...dbMessage(sessionId, 'finished', 'Done', '2026-09-28T00:00:04.000Z', 'assistant'), agentMeta: { turnCompleted: true } });
+  return { tool, result };
 }
 
 function installElectronApi(): void {
@@ -190,6 +201,308 @@ afterEach(() => {
   delete (globalThis as { window?: unknown }).window;
   vi.clearAllMocks();
   dataOwnerTesting.reset();
+});
+
+describe('local history view retires completed bodies', () => {
+  it('bounds completed tool output inside one still-running foreground turn', async () => {
+    const s = sid();
+    await openSession(s);
+    vi.mocked(window.electronAPI.localDb.messages.historyView).mockImplementation(async id => ({
+      version: 1, items: projectHistoryView(rowsBySession.get(id) ?? [], true), hasMore: false, nextCursor: null,
+    }));
+    try {
+      for (let index = 0; index < 30; index++) {
+        const toolUseId = `foreground-${index}`;
+        const createdAt = new Date(1800000000000 + index * 1000).toISOString();
+        persist({ ...dbMessage(s, `call-${index}`, '', createdAt, 'tool_use'), toolUseId,
+          content: { toolName: 'Read', input: {}, toolUseId } });
+        persist({ ...dbMessage(s, `result-${index}`, 'x'.repeat(8192), createdAt, 'tool_result'), toolUseId });
+        await getRemoteHistoryView(s)!.refresh();
+        await flush();
+      }
+      const state = makerChatStore.getSnapshot(s);
+      expect(state.messages.filter(row => row.role === 'tool_result').length).toBeLessThanOrEqual(5);
+      expect(state.messages.some(row => row.clientId === 'result-29')).toBe(true);
+      expect(historyWorkSummaries(getRemoteHistoryView(s)!.getSnapshot().items).some(row => row.isStreaming)).toBe(true);
+    } finally { makerChatStore.purgeSession(s); }
+  });
+  // Repeated background writes used to accumulate even though the session kept
+  // running. Timers advance logical time; no model calls or real waiting (unit).
+  it('bounds repeated background output across nine tasks and many maintenance cycles', async () => {
+    vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval'] });
+    const ids = Array.from({ length: 9 }, sid);
+    const cycles = Number(process.env.CINDY_LONG_SESSION_CYCLES ?? 40);
+    const samples: Array<{ cycle: number; heap: number }> = [];
+    const started = performance.now(), cpu = process.cpuUsage();
+    try {
+      for (const s of ids) {
+        await openSession(s);
+        makerChatStore.leaveView(s);
+        makerChatStore.__applyStreamEventForTest(s, { sessionId: s, type: 'text', persistId: 'live', data: { text: 'working', isFinal: false } });
+      }
+      for (let cycle = 0; cycle < cycles; cycle++) {
+        for (const s of ids) {
+          const toolId = `tool-${cycle}`;
+          const call = { ...dbMessage(s, `call-${cycle}`, '', new Date(1700000000000 + cycle * 30000).toISOString(), 'tool_use'),
+            content: { toolName: 'Read', input: { file_path: 'fixture.txt' }, toolUseId: toolId }, toolUseId: toolId };
+          const result = { ...dbMessage(s, `result-${cycle}`, 'x'.repeat(64 * 1024), call.createdAt, 'tool_result'), toolUseId: toolId };
+          onCreatedCb?.({ sessionId: s, message: call }, OWNER_STAMP);
+          onCreatedCb?.({ sessionId: s, message: result }, OWNER_STAMP);
+        }
+        await vi.advanceTimersByTimeAsync(30_000);
+        for (const s of ids) {
+          const state = makerChatStore.getSnapshot(s);
+          expect(state.messages.some(row => row.role === 'tool_result')).toBe(false);
+          expect(state.messages.find(row => row.clientId === 'live')?.isStreaming).toBe(true);
+          expect(state.messages.length).toBeLessThanOrEqual(3);
+        }
+        if (process.env.CINDY_LONG_SESSION_MEASURE === '1' && globalThis.gc
+          && (cycle === 0 || cycle % 500 === 0 || cycle === cycles - 1)) {
+          globalThis.gc();
+          samples.push({ cycle, heap: process.memoryUsage().heapUsed });
+        }
+      }
+      if (process.env.CINDY_LONG_SESSION_MEASURE === '1') console.info('LONG_SESSION_SOAK', JSON.stringify({
+        cycles, logicalHours: cycles / 120, tasks: ids.length, outputBytes: cycles * ids.length * 64 * 1024,
+        elapsedMs: performance.now() - started, cpuMicros: process.cpuUsage(cpu), samples,
+      }));
+    } finally {
+      for (const s of ids) makerChatStore.purgeSession(s);
+      vi.useRealTimers();
+    }
+  });
+  it('retires persisted background tool pairs without stopping work and reloads them on return', async () => {
+    vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval'] });
+    const s = sid();
+    try {
+      await openSession(s);
+      makerChatStore.leaveView(s);
+      completedWork(s, 1024);
+      makerChatStore.__applyStreamEventForTest(s, {
+        sessionId: s, type: 'agent_task_update', source: 'codex',
+        data: { taskId: 'worker', status: 'running', provider: 'codex' },
+      });
+      const tasks = makerChatStore.getSnapshot(s).taskUpdates;
+      await vi.advanceTimersByTimeAsync(30_000);
+      expect(makerChatStore.getSnapshot(s).messages.some(row => row.clientId === 'result')).toBe(false);
+      expect(makerChatStore.getSnapshot(s).taskUpdates).toBe(tasks);
+      makerChatStore.enterView(s);
+      await getRemoteHistoryView(s)!.refresh();
+      await flush();
+      expect(historyWorkSummaries(getRemoteHistoryView(s)!.getSnapshot().items)).toHaveLength(1);
+    } finally {
+      makerChatStore.purgeSession(s);
+      vi.useRealTimers();
+    }
+  });
+  // Unit: background trimming must preserve the only readable body when the
+  // existing history reader cannot reload it. Earlier cases assume a healthy reader.
+  it.each(['offline', 'unavailable'] as const)('keeps background output when history is %s', async kind => {
+    vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval'] });
+    const s = sid();
+    try {
+      await openSession(s);
+      const view = getRemoteHistoryView(s)!;
+      if (kind === 'offline') view.setNetworkAvailable(false);
+      else {
+        vi.mocked(window.electronAPI.localDb.messages.historyView).mockRejectedValueOnce(new Error('[CHANNEL_NOT_ALLOWED] old host'));
+        await view.refresh();
+      }
+      completedWork(s, 1024);
+      makerChatStore.leaveView(s);
+      await vi.advanceTimersByTimeAsync(30_000);
+      expect(makerChatStore.getSnapshot(s).messages.find(row => row.clientId === 'result')?.content).toBe('x'.repeat(1024));
+    } finally {
+      makerChatStore.purgeSession(s);
+      vi.useRealTimers();
+    }
+  });
+  it.each(['new-live-body', 'media', 'interaction'] as const)('keeps protected background output: %s', async kind => {
+    vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval'] });
+    const s = sid();
+    try {
+      await openSession(s);
+      makerChatStore.leaveView(s);
+      const toolId = 'protected-tool';
+      const call = { ...dbMessage(s, 'protected-call', '', '2026-09-28T00:00:02Z', 'tool_use'), toolUseId: toolId,
+        content: { toolName: kind === 'interaction' ? 'AskUserQuestion' : 'Read', input: {}, toolUseId: toolId } };
+      const result = { ...dbMessage(s, 'protected-result', kind === 'media' ? 'cindy-media://blobs/test.png' : 'stored', '2026-09-28T00:00:03Z', 'tool_result'), toolUseId: toolId };
+      persist(call); persist(result);
+      if (kind === 'new-live-body') makerChatStore.__applyStreamEventForTest(s, {
+        sessionId: s, type: 'tool_result_full', persistId: result.clientId,
+        resolvedContent: 'new full body before its DB echo', data: { toolUseId: toolId },
+      });
+      await vi.advanceTimersByTimeAsync(30_000);
+      expect(makerChatStore.getSnapshot(s).messages.find(row => row.clientId === result.clientId)?.content)
+        .toBe(kind === 'new-live-body' ? 'new full body before its DB echo' : result.content);
+      expect(makerChatStore.getSnapshot(s).messages.some(row => row.clientId === call.clientId)).toBe(true);
+    } finally {
+      makerChatStore.purgeSession(s);
+      vi.useRealTimers();
+    }
+  });
+  it('releases large collapsed details from both the history view and raw mirror', async () => {
+    const s = sid();
+    await openSession(s);
+    const { tool, result } = completedWork(s, 1024 * 1024);
+    const view = getRemoteHistoryView(s)!;
+    await view.refresh();
+    await flush();
+    const summary = historyWorkSummaries(view.getSnapshot().items)[0];
+    vi.mocked(window.electronAPI.localDb.messages.workDetails).mockResolvedValue({
+      version: 1, messages: [tool, result], hasMore: false, nextCursor: null,
+    });
+    for (let round = 0; round < 3; round++) {
+      view.setExpanded(summary.key, true);
+      await view.loadDetails(summary);
+      await flush();
+      expect(view.getSnapshot().details.get(summary.key)?.messages).toHaveLength(2);
+      view.setExpanded(summary.key, false);
+      await flush();
+      expect(view.getSnapshot().details.has(summary.key)).toBe(false);
+      expect(makerChatStore.getSnapshot(s).messages.some(row => row.clientId === 'result')).toBe(false);
+    }
+    // A range folded while still running must also release its large cached
+    // body once a later page seals it, without requiring a second collapse.
+    view.setExpanded(summary.key, true);
+    await view.loadDetails(summary);
+    vi.mocked(window.electronAPI.localDb.messages.historyView).mockResolvedValueOnce({
+      version: 1, items: projectHistoryView(rowsBySession.get(s)!.filter(row => row.clientId !== 'finished'), true), hasMore: false, nextCursor: null,
+    });
+    await view.refresh();
+    view.setExpanded(summary.key, false);
+    expect(view.getSnapshot().details.has(summary.key)).toBe(true);
+    await view.refresh();
+    await flush();
+    expect(view.getSnapshot().details.has(summary.key)).toBe(false);
+    expect(makerChatStore.getSnapshot(s).messages.some(row => row.clientId === 'result')).toBe(false);
+    makerChatStore.purgeSession(s);
+  });
+  // Regression: a mounted long-running task retained completed tool bodies even
+  // after the history view owned their recoverable summaries. Existing echo tests
+  // contain only prose. Exercise the real store/DB-push/view path (unit tier),
+  // then read the folded body again through the existing details transport.
+  it('releases completed folded tool bodies while keeping them readable on expansion', async () => {
+    const s = sid();
+    await openSession(s);
+    const { tool, result } = completedWork(s, 1024 * 1024);
+    const view = getRemoteHistoryView(s)!;
+    expect(makerChatStore.getSnapshot(s).messages.some(row => row.clientId === 'result')).toBe(true);
+    await view.refresh();
+    await flush();
+    const summary = historyWorkSummaries(view.getSnapshot().items).find(row => !row.isStreaming)!;
+    expect(summary).toBeDefined();
+    expect(makerChatStore.getSnapshot(s).messages.some(row => row.clientId === 'result')).toBe(false);
+    expect(makerChatStore.getSnapshot(s).messages.some(row => row.clientId === 'finished')).toBe(true);
+    expect(rowsBySession.get(s)).toContain(result);
+    vi.mocked(window.electronAPI.localDb.messages.workDetails).mockResolvedValueOnce({
+      version: 1, messages: [tool, result], hasMore: false, nextCursor: null,
+    });
+    await view.loadDetails(summary, { allowCollapsed: true });
+    await flush();
+    expect(view.getSnapshot().details.get(summary.key)?.messages.find(row => row.clientId === 'result')?.content).toBe(result.content);
+    makerChatStore.purgeSession(s);
+  });
+
+  it.each(['before', 'during'] as const)('does not retire a tool result updated %s its summary read', async timing => {
+    const s = sid();
+    await openSession(s);
+    const { result } = completedWork(s, 128);
+    const page = { version: 1 as const, items: projectHistoryView(rowsBySession.get(s)!, false), hasMore: false, nextCursor: null };
+    let finish!: (value: typeof page) => void;
+    vi.mocked(window.electronAPI.localDb.messages.historyView).mockImplementationOnce(() => new Promise(resolve => { finish = resolve; }));
+    const view = getRemoteHistoryView(s)!;
+    const updated = { ...result, content: 'new result not yet echoed by the DB' };
+    const update = () => makerChatStore.__applyStreamEventForTest(s, {
+      sessionId: s, type: 'tool_result_full', persistId: 'result',
+      resolvedContent: updated.content, data: { toolUseId: 'tool-read' },
+    });
+    if (timing === 'before') update();
+    const reading = view.refresh();
+    if (timing === 'during') update();
+    finish(page);
+    await reading;
+    await flush();
+    expect(makerChatStore.getSnapshot(s).messages.find(row => row.clientId === 'result')?.content).toBe(updated.content);
+    makerChatStore.purgeSession(s);
+  });
+
+  it('keeps unfinished history and background task state until the range is sealed', async () => {
+    const s = sid();
+    await openSession(s);
+    const { result } = completedWork(s, 128);
+    const unfinished = rowsBySession.get(s)!.filter(row => row.clientId !== 'finished');
+    vi.mocked(window.electronAPI.localDb.messages.historyView).mockResolvedValueOnce({
+      version: 1, items: projectHistoryView(unfinished, true), hasMore: false, nextCursor: null,
+    });
+    makerChatStore.__applyStreamEventForTest(s, {
+      sessionId: s, type: 'agent_task_update', source: 'codex',
+      data: { taskId: 'worker', status: 'running', provider: 'codex' },
+    });
+    const tasks = makerChatStore.getSnapshot(s).taskUpdates;
+    const view = getRemoteHistoryView(s)!;
+    await view.refresh();
+    await flush();
+    expect(historyWorkSummaries(view.getSnapshot().items).some(summary => summary.isStreaming)).toBe(true);
+    expect(makerChatStore.getSnapshot(s).messages.find(row => row.clientId === 'result')?.content).toBe(result.content);
+    await view.refresh();
+    await flush();
+    expect(makerChatStore.getSnapshot(s).messages.some(row => row.clientId === 'result')).toBe(false);
+    expect(makerChatStore.getSnapshot(s).taskUpdates).toBe(tasks);
+    expect(tasks?.get('worker')?.status).toBe('running');
+    makerChatStore.purgeSession(s);
+  });
+
+  it('releases 80 MiB of completed history plus eight worker histories without ending live output', async () => {
+    // Synthetic payload accounting, not a claim about process RSS. No model calls
+    // or 31-hour wall-clock wait; nine independent live store slices use the same
+    // production history/persistence path. The primary matches the reported size.
+    const ids: string[] = [];
+    let before = 0;
+    let after = 0;
+    try {
+      for (let index = 0; index < 9; index++) {
+        const s = sid(); ids.push(s);
+        await openSession(s);
+        completedWork(s, (index === 0 ? 80 : 1) * 1024 * 1024);
+        makerChatStore.__applyStreamEventForTest(s, {
+          sessionId: s, type: 'text', persistId: 'live', data: { text: 'still working', isFinal: false },
+        });
+        const contentSize = () => makerChatStore.getSnapshot(s).messages.reduce((sum, row) => sum + row.content.length, 0);
+        before += contentSize();
+        // Optional diagnostic run with Node --expose-gc. The fake DB must not
+        // retain the body being measured (the real DB lives in another process).
+        const gc = process.env.CINDY_LONG_SESSION_MEASURE === '1' ? globalThis.gc : undefined;
+        if (gc) {
+          const page = { version: 1 as const, items: projectHistoryView(rowsBySession.get(s)!, false), hasMore: false, nextCursor: null };
+          rowsBySession.set(s, []);
+          vi.mocked(window.electronAPI.localDb.messages.historyView).mockResolvedValueOnce(page);
+          gc();
+        }
+        const heapBefore = gc ? process.memoryUsage().heapUsed : 0;
+        const cpuBefore = gc ? process.cpuUsage() : undefined;
+        await getRemoteHistoryView(s)!.refresh();
+        await flush();
+        after += contentSize();
+        if (gc) {
+          gc();
+          console.info('LONG_SESSION_MEMORY', JSON.stringify({ index, heapBefore,
+            heapAfter: process.memoryUsage().heapUsed, cpuMicros: process.cpuUsage(cpuBefore) }));
+        }
+        expect(makerChatStore.getSnapshot(s).messages.find(row => row.clientId === 'live'))
+          .toMatchObject({ content: 'still working', isStreaming: true });
+        makerChatStore.__applyStreamEventForTest(s, {
+          sessionId: s, type: 'text', persistId: 'live', data: { text: ' and continuing', isFinal: false },
+        });
+        expect(makerChatStore.getSnapshot(s).messages.find(row => row.clientId === 'live')?.content)
+          .toBe('still working and continuing');
+      }
+      expect(before - after).toBeGreaterThanOrEqual(88 * 1024 * 1024);
+      expect(after).toBeLessThan(1024);
+    } finally {
+      for (const s of ids) makerChatStore.purgeSession(s);
+    }
+  });
 });
 
 describe('local history view keeps command cards', () => {

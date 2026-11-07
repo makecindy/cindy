@@ -47,6 +47,7 @@ import { parsePluginConnectionInput, type InputHandoffSnapshot } from '@cindy/de
 import { HISTORY_WORK_PATCH_CHANNEL, HistoryViewController, isHistoryViewUnavailable, mapHistoryViewMessages, historyViewLeaves, historyWorkSummaries, historyPrefetchVersion, historySnapshotCovers, historySnapshotForCache, selectHistoryPrefetchSessions, type HistoryViewPage, type HistoryDetailPage, type HistoryWorkPatch } from '@cindy/maker-shared/message-window';
 import type { CindyRegion } from '@cindy/maker-shared/brand-identity';
 import { nextHistoryCacheReceipt, isHistoryCacheReceipt, historyCacheReceiptFollows, mergeHistoryPrefetchRequest, readContinuousHistoryPage, type HistoryCacheReceipt, type HistoryPrefetchRequest } from '@cindy/maker-shared/message-window';
+import { isHistoryDetailTool, hasVisibleHistoryResult, historyViewEndMs } from '@cindy/maker-shared/message-window';
 import { SESSION_SYNC_CHANNEL } from '@cindy/device-link';
 import { isRemoteTextDelta, readRemoteTextSnapshot, reconcileRemoteText, consumeRemoteSessionSync } from '@cindy/maker-shared/message-window';
 import { parseMessageToolUse } from '@cindy/maker-shared/message-normalize';
@@ -4387,6 +4388,8 @@ function _needsRemoteTaskSelfHeal(sessionId: string, state: SessionChatState, no
 // keep the full input (a whole file for Write) in toolInput, plan_review rows
 // keep the plan in planReviewPlan, and new payload fields must not escape.
 const _messageCharacterEstimates = new WeakMap<ChatMessage, number>();
+// Exact immutable DB echoes only; a subsequent live replacement loses this proof.
+const durableToolRows = new WeakSet<ChatMessage>();
 
 // Walk with an explicit stack and a visited set: tool inputs are arbitrary
 // nested objects, so neither a depth cut-off nor recursion is safe here.
@@ -4414,7 +4417,34 @@ function _messageCharacters(message: ChatMessage): number {
   return size;
 }
 
+function retiredDurableToolPairs(messages: ChatMessage[], eligible: (row: ChatMessage, index: number) => boolean) {
+  const candidates = messages.filter((row, index) => eligible(row, index) && durableToolRows.has(row)
+    && !row.isStreaming && !row.isPendingPersist && !row.parentToolUseId && !row.systemCardType);
+  const calls = new Map(candidates.filter(row => row.role === 'tool_use' && row.toolUseId
+    && isHistoryDetailTool(row.toolName ?? '')).map(row => [row.toolUseId, row]));
+  const retired = new Set<ChatMessage>();
+  for (const row of candidates) {
+    const call = row.toolUseId && calls.get(row.toolUseId);
+    if (row.role !== 'tool_result' || !call || hasVisibleHistoryResult(row.content)) continue;
+    retired.add(call); retired.add(row);
+  }
+  return retired;
+}
+
 function _softEvictIdleSessions(): void {
+  for (const [sessionId, state] of sessions) {
+    // Legacy raw-only readers require their contiguous window. A history view
+    // refreshes on return; never-opened sessions will read history on first open.
+    const view = getRemoteHistoryView(sessionId);
+    const deviceId = remoteProjectsStore.getSessionDeviceId(sessionId);
+    if (_activeViewSessions.has(sessionId)
+      || (deviceId && isRemoteDeviceMarkedDisconnected(deviceId))
+      || (view ? !view.canReloadDetails() : state.historyLoaded || !!deviceId)) continue;
+    const retired = retiredDurableToolPairs(state.messages, () => true);
+    if (retired.size) setState(sessionId, current => ({ ...current,
+      messages: current.messages.filter(row => !retired.has(row)),
+    }));
+  }
   const now = Date.now();
   let messageCount = 0;
   let characters = 0;
@@ -8977,6 +9007,7 @@ function initGlobalListeners(options: GlobalListenerOptions = {}): void {
     if (isBeforeOrAtRendererClearBoundary(sessionId, message.createdAt)) return;
     const [mapped] = mapServerMessages([message]);
     if (!mapped) return;
+    if (mapped.role === 'tool_use' || mapped.role === 'tool_result') durableToolRows.add(mapped);
     traceRemoteSendEcho(mapped.clientId, mapped.role);
     clearRemoteOptimisticSend(sessionId, mapped.clientId);
     const current = getOrCreateState(sessionId);
@@ -9029,6 +9060,7 @@ function initGlobalListeners(options: GlobalListenerOptions = {}): void {
           // 仅限 tool 行：thinking 的 persisted createdAt 会回填块开始时间，必须让
           // mergeMessages 重排；assistant 等其它角色也保留原有权威时间线语义。
           const hydrated = hydratePersistedMessage(existing, mapped, hydrateOptions);
+          if (hydrated.content === mapped.content && hydrated.toolInput === mapped.toolInput) durableToolRows.add(hydrated);
           if (hydrated === existing) return s;
           const nextMessages = s.messages.slice();
           nextMessages[existingIdx] = hydrated;
@@ -11945,6 +11977,11 @@ function createRemoteHistoryView(sessionId: string) {
   const cached = deviceId ? readRemoteHistoryCache<HistoryChatMessage>(deviceId, sessionId) : Promise.resolve(null);
   let writeCache: ReturnType<typeof remoteHistoryCacheWriter> | undefined;
   let persistTimer: ReturnType<typeof setTimeout> | undefined;
+  // Only exact durable rows present before the latest read can retire. Summary
+  // endpoints/counts alone cannot prove that a newer live body has persisted.
+  const borrowedDetailRows = new WeakSet<ChatMessage>();
+  let latestReadRows = new WeakSet<ChatMessage>();
+  let latestReadEndMs = 0;
   const isCurrent = (): boolean => isDataOwnerGenerationCurrent(owner)
     && remoteProjectsStore.getSessionDeviceId(sessionId) === deviceId
     && remoteHistoryViews.get(sessionId)?.view === view;
@@ -11968,17 +12005,24 @@ function createRemoteHistoryView(sessionId: string) {
     }),
     page: async (before) => {
       const writer = deviceId ? remoteHistoryCacheWriter(deviceId, sessionId) : undefined;
+      const readRows = new WeakSet(sessions.get(sessionId)?.messages ?? []);
       // Remote reads ask for Host-projected running lines; a local view already holds live rows.
       const page = await call<HistoryViewPage<Message>>('local-db:messages:view', [sessionId, { before, lazyDetails: true, ...(deviceId ? { workLines: true } : {}) }]);
       if (page == null) throw new Error('[CHANNEL_NOT_ALLOWED] History view is unavailable');
       writeCache = writer;
+      if (!before) {
+        latestReadRows = readRows;
+        latestReadEndMs = historyViewEndMs(page);
+      }
       return { ...page, items: mapHistoryViewMessages(page.items, mapRows) };
     },
     details: async (ref, after) => {
       const writer = deviceId ? remoteHistoryCacheWriter(deviceId, sessionId) : undefined;
       const page = await call<HistoryDetailPage<Message>>('local-db:messages:work-details', [sessionId, ref, { after }]);
       writeCache = writer;
-      return { ...page, messages: mapRows(page.messages) };
+      const messages = mapRows(page.messages);
+      for (const row of messages) borrowedDetailRows.add(row);
+      return { ...page, messages };
     },
     expanded: async (refs) => {
       // Releasing an old view must still clear its original Host's interest.
@@ -12023,10 +12067,28 @@ function createRemoteHistoryView(sessionId: string) {
         ? state.messages.filter((message) => !message.cacheHydrated
           || historyCacheReceiptFollows(message.cacheReceipt, snapshot.readReceipt, snapshot.stale))
         : state.messages;
-      const messages = confirmRemoteUsers(
+      let messages = confirmRemoteUsers(
         mergeMessages(borrowed, rawMessages, { addOnly: true }),
         new Set(available.filter((message) => message.role === 'user').map((message) => message.clientId)),
       );
+      if (!snapshot.stale && !snapshot.error) {
+        const availableIds = new Set(available.map(row => row.clientId));
+        // A long turn need not finish before its completed tools can retire.
+        // Preserve the recent running tail and any body owned by visible details;
+        // old pairs are independently proven by DB echoes and a later page read.
+        const running = historyWorkSummaries(snapshot.items).some(summary => summary.isStreaming);
+        const retired = retiredDurableToolPairs(messages, (row, index) =>
+          latestReadRows.has(row) && !availableIds.has(row.clientId)
+          && Date.parse(row.createdAt ?? '') <= latestReadEndMs
+          && (!running || index < messages.length - 10));
+        for (const row of messages) {
+          if (borrowedDetailRows.has(row) && !availableIds.has(row.clientId)
+            && !row.isStreaming && !row.isPendingPersist) retired.add(row);
+        }
+        // History owns these folded bodies and can load them through workDetails.
+        // Leave prose, artifacts, live rows and all runtime/interaction state intact.
+        if (retired.size) messages = messages.filter(row => !retired.has(row));
+      }
       const isLoadingMore = view.isLoadingOlder();
       return state.historyLoaded && state.messages === messages
         && state.hasMoreMessages === snapshot.hasMore
