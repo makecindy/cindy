@@ -182,7 +182,7 @@ import {
   type LiveScreenPicture,
 } from "./LiveScreenControls";
 
-type Mode = "pointer" | "touch" | "pan";
+type Mode = "pointer" | "touch" | "handle" | "pan";
 /** How a data-channel request ended; "relay" means it was never executed. */
 type ChannelOutcome =
   | { kind: "result"; value: unknown }
