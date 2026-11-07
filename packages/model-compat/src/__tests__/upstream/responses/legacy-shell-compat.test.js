@@ -29,6 +29,18 @@ describe("code-mode helper compatibility", () => {
         }, () => { });
         expect(received).toEqual({ workdir: "/tmp", cmd: "pwd" });
     });
+    test("exec_command maps the legacy command field to cmd", async () => {
+        const source = compileCodeModeHelperInput(JSON.stringify({ command: "pwd", workdir: "/tmp" }), "exec_command");
+        let received;
+        const run = new AsyncFunction("tools", "text", source);
+        await run({
+            exec_command: async (args) => {
+                received = args;
+                return "ok";
+            },
+        }, () => { });
+        expect(received).toEqual({ workdir: "/tmp", cmd: "pwd" });
+    });
     test("write_stdin arguments remain data and target the nested helper", async () => {
         const args = {
             session_id: 17,

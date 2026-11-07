@@ -43,7 +43,7 @@ export function compileCodeModeHelperInput(argumentsText: unknown, toolName: str
   }
   const args: unknown = isPlainObject(parsed) ? { ...parsed } : parsed;
   if (
-    toolName === "shell_command"
+    (toolName === "shell_command" || toolName === "exec_command")
     && isPlainObject(args)
     && typeof args.command === "string"
     && args.cmd === undefined

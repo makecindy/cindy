@@ -3087,6 +3087,38 @@ describe('turnRunner send outcome policy (feishu adapter characterization)', () 
       },
     );
 
+    it('replaces an unclosed raw tool-call block at the chunked IM boundary', async () => {
+      // Regression for #8168: malformed model tool-call text is not a tool event, so it
+      // cannot produce a structured tool error and must not be sent as protocol markup.
+      // Existing rich-answer cases do not cover truncated tool syntax; Unit tier observes
+      // the production runner's final IM payload from an in-memory agent event.
+      const previousOutput = fakeAdapter.output;
+      const commitFinal = vi.fn<(payload: { text: string }) => Promise<void>>(async () => undefined);
+      fakeAdapter.output = {
+        kind: 'chunked-text', im: mocks.feishuIm as unknown as ChannelIM, commitFinal,
+      };
+      try {
+        const h = setupSession(async () => ({ accepted: true }));
+        await runDefaultTurn();
+        h.emit({
+          type: 'text',
+          data: {
+            text: '<tool_call>\n<function=exec_command>\n<parameter=command>pwd</parameter>',
+            isFinal: true,
+          },
+        });
+        h.emit({ type: 'done', data: {} });
+        await waitForAssertion(() => {
+          const sent = commitFinal.mock.calls[0]?.[0].text;
+          expect(sent).toContain('工具调用');
+          expect(sent).not.toContain('<tool_call>');
+          expect(sent).not.toContain('<parameter=');
+        });
+      } finally {
+        fakeAdapter.output = previousOutput;
+      }
+    });
+
     it('waits on an incomplete component instead of streaming raw JSON, then shows readable content', async () => {
       const replace = vi.fn();
       const finalize = vi.fn();
