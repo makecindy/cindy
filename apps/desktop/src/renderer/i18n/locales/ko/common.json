@@ -1460,6 +1460,13 @@
     }
   },
   "menubar": {
+    "shared": {
+      "label": "공유",
+      "note": "계정 전체가 함께 사용하는 한도이며, 나에게만 배정된 한도가 아닙니다.",
+      "highestWeekly": "공유 · 주간 잔여 최대",
+      "highestWeeklyNote": "조회 가능한 계정 중 주간 잔여량이 가장 많은 계정입니다. 합산하거나 개인에게 할당한 한도가 아닌 계정 공용 한도입니다.",
+      "from": "{{name}}님의 공유"
+    },
     "balance": {
       "name": "Cindy 잔액",
       "quotaName": "Cindy 이번 기간 할당량",
@@ -19644,6 +19651,16 @@
     "lineNumbers": "줄 번호"
   },
   "subscriptionAccounts": {
+    "signIn": {
+      "checking": "로컬 계정 확인 중…",
+      "detected": "로그인된 계정을 찾았습니다",
+      "useAccount": "이 계정 사용",
+      "anotherAccount": "다른 계정으로 로그인",
+      "keepExisting": "새 계정은 이 공급업체에 추가됩니다. 기존 로그인은 유지됩니다.",
+      "checkFailed": "로컬 계정을 확인하지 못했습니다. 다시 시도해 주세요.",
+      "retry": "다시 시도",
+      "useCodex": "Codex로 로그인"
+    },
     "title": "구독 계정",
     "note": "첫 계정은 CLI 기본 폴더를 사용합니다. 추가 계정은 별도로 로그인합니다. 새 작업은 계정에 분산되고 기존 작업은 원래 계정을 유지합니다.",
     "strategy": "부하 분산",

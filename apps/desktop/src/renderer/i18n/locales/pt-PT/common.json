@@ -1494,6 +1494,13 @@
     }
   },
   "menubar": {
+    "shared": {
+      "label": "Partilhado",
+      "note": "Esta quota é partilhada pela conta, não está reservada para si.",
+      "highestWeekly": "Partilhado · maior saldo semanal",
+      "highestWeeklyNote": "Maior quota semanal restante entre as contas consultáveis. Partilhada pela conta, sem soma nem reserva pessoal.",
+      "from": "Partilhado por {{name}}"
+    },
     "balance": {
       "name": "Saldo de Cindy",
       "quotaName": "Quota de Cindy",
@@ -19903,6 +19910,16 @@
     "lineNumbers": "Números de linha"
   },
   "subscriptionAccounts": {
+    "signIn": {
+      "checking": "A verificar a conta local…",
+      "detected": "Conta com sessão iniciada encontrada",
+      "useAccount": "Usar esta conta",
+      "anotherAccount": "Iniciar sessão noutra conta",
+      "keepExisting": "A nova conta será adicionada a este fornecedor. As sessões existentes serão mantidas.",
+      "checkFailed": "Não foi possível verificar a conta local. Tente novamente.",
+      "retry": "Tentar novamente",
+      "useCodex": "Iniciar sessão com o Codex"
+    },
     "title": "Contas de subscrição",
     "note": "A primeira conta usa a pasta predefinida da CLI. As contas adicionais iniciam sessão separadamente. As novas tarefas são distribuídas; as existentes mantêm a sua conta.",
     "strategy": "Distribuição de carga",

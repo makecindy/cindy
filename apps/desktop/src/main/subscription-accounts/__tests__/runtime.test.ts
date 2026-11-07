@@ -104,6 +104,90 @@ beforeEach(() => {
 });
 
 describe('native account assignment on the executing computer', () => {
+  // Regression: a signed-in CLI was silently reused by the wizard's "add account".
+  // Unit tier: the real command entry must keep preview read-only and explicit
+  // new-account intent isolated, including an unbound or expired first account.
+  it.each(['anthropic', 'openai'] as const)(
+    'previews an unbound %s login without authorizing it',
+    async (providerId) => {
+      h.bound = false;
+      h.pools = {};
+      const preview = await runSubscriptionAccountCommand({ action: 'preview', providerId });
+      expect(preview.accounts[0]).toMatchObject({
+        id: 'default',
+        identity: 'account',
+        status: 'ready',
+      });
+      expect(h.pools).toEqual({});
+      expect(h.login).not.toHaveBeenCalled();
+      expect((await readSubscriptionPool(providerId)).accounts[0].status).toBe('signed-out');
+      expect(await acquireSubscriptionAccount(providerId, undefined, [])).toBeNull();
+    },
+  );
+  it.each(
+    ['anthropic', 'openai'].flatMap((providerId) =>
+      [true, false].map((bound) => ({ providerId: providerId as SubscriptionProvider, bound })),
+    ),
+  )(
+    'keeps explicit new $providerId login isolated with default binding=$bound',
+    async ({ providerId, bound }) => {
+      h.bound = bound;
+      h.pools = {};
+      h.read.mockImplementation(async (_provider, directory) => ({
+        authenticated: !directory.endsWith('default') || !bound,
+        identity: directory.endsWith('default') ? 'original@example.com' : 'new@example.com',
+      }));
+      await runSubscriptionAccountCommand({
+        action: 'connect',
+        target: 'new',
+        providerId,
+        loginKey: 'new',
+      });
+      const ids = h.pools[providerId]!.accounts.map((a) => a.id);
+      expect(ids).toEqual(['default', expect.stringMatching(/^cindy-/)]);
+      expect(h.login).toHaveBeenCalledExactlyOnceWith(
+        providerId,
+        `${providerId}/${ids[1]}`,
+        expect.any(AbortSignal),
+      );
+    },
+  );
+  it.each(['anthropic', 'openai'] as const)(
+    'explicitly connects the detected %s default without another browser login',
+    async (providerId) => {
+      h.bound = false;
+      h.pools = {};
+      await runSubscriptionAccountCommand({
+        action: 'connect',
+        target: 'default',
+        providerId,
+        loginKey: 'existing',
+      });
+      expect(h.pools[providerId]!.accounts.map((a) => a.id)).toEqual(['default']);
+      expect(h.login).not.toHaveBeenCalled();
+    },
+  );
+  it('keeps the private legacy Codex default when the wizard connects it', async () => {
+    h.shared = false;
+    h.pools = {};
+    const preview = await runSubscriptionAccountCommand({
+      action: 'preview',
+      providerId: 'openai',
+    });
+    expect(preview.accounts[0]).toMatchObject({ identity: 'original@example.com', legacy: true });
+    await runSubscriptionAccountCommand({
+      action: 'connect',
+      target: 'default',
+      providerId: 'openai',
+      loginKey: 'legacy',
+    });
+    expect(h.pools.openai!.legacyCodexDefault).toBe(true);
+    expect(h.login).not.toHaveBeenCalled();
+    expect(h.legacyLogin).not.toHaveBeenCalled();
+    expect((await readSubscriptionPool('openai')).accounts[0].directory).toBe(
+      '/existing-cindy/codex-home',
+    );
+  });
   // Shutdown may end the event queue before the underlying process confirms exit.
   it.each(['close', 'detach'] as const)(
     'keeps an account protected through %s failure and late terminal events until retry succeeds',

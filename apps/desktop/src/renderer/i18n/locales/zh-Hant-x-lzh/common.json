@@ -1460,6 +1460,13 @@
     }
   },
   "menubar": {
+    "shared": {
+      "label": "共用",
+      "note": "此乃名籍共用之額度，非專分予君者。",
+      "highestWeekly": "共享 · 週餘最多",
+      "highestWeeklyNote": "取可閱諸號週餘最多者，不相加。此為號共用，非君專享。",
+      "from": "{{name}} 所享"
+    },
     "balance": {
       "name": "Cindy 餘資",
       "quotaName": "Cindy 本期限額",
@@ -19644,6 +19651,16 @@
     }
   },
   "subscriptionAccounts": {
+    "signIn": {
+      "checking": "正察本機帳號…",
+      "detected": "已有帳號登入",
+      "useAccount": "用此帳號",
+      "anotherAccount": "另登一號",
+      "keepExisting": "新號歸於此供應商，原號登入如故。",
+      "checkFailed": "未能讀取本機帳號，請重試。",
+      "retry": "重試",
+      "useCodex": "以 Codex 登入"
+    },
     "title": "訂閱帳號",
     "note": "首號沿用 CLI 預設目錄，增號各自登入。新務依策分派，舊務仍用原號。",
     "strategy": "負載平衡",

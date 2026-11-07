@@ -5,6 +5,10 @@
 同账号远控新增 `maker:subscription-accounts`（查看、添加、重连、取消、移出、策略）及
 `maker:subscription-pool:quota`（只读、无账号身份的池配额）。管理请求只接受内置供应商及
 不含路径的账号 id，宿主按当前 owner 推导目录；共享任务访客不能使用。
+添加向导使用只读 `preview` 展示未绑定的默认 CLI 登录；`connect` 的 `target` 必填为
+`default` 或 `new`，后者始终创建独立目录。沿用原 channel 和 owner 校验；旧客户端的
+`read` / `add` 行为不变。旧宿主拒绝新 action 时显示重试错误，禁止退回含糊的 `add` 而
+静默接入旧账号。官方及自建中转均透传这些 action，无新增服务端字段。
 `subscription-accounts:changed` 仅推送供应商 id，路由到既有 `sessions` topic 后由当前管理页重读。
 普通任务和远程执行仍通过宿主同一个 Agent 入口选择账号；账号能力是进程内 Symbol，不进入 JSON。
 
