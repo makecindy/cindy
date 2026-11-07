@@ -312,6 +312,10 @@ export function RemoteDesktopSession({
   const unlockAttempt = useRef<Promise<void>>(Promise.resolve());
   // A remembered fitted size waiting for this lease's viewport measurement.
   const rememberedFit = useRef<{ lease: string; edge: number } | null>(null);
+  // Long edge of the size the phone last asked for. Rotation, folding and
+  // appearance changes only re-derive the ratio, so a smaller or larger
+  // choice from the resolution settings survives them.
+  const fitEdge = useRef<number | null>(null);
   // The computer's own system mode for a lease, read before this phone changes
   // it. Choosing it again forgets the remembered resolution.
   const hostMode = useRef<{ lease: string; modeId?: string } | null>(null);
@@ -470,6 +474,9 @@ export function RemoteDesktopSession({
   const windowSizeRef = useRef(windowSize);
   windowSizeRef.current = windowSize;
   const viewportGeneration = useRef(0);
+  // Last attempted viewport, independent of the host's (possibly HiDPI) size.
+  // A failed adjustment waits for a new viewport instead of retrying in a loop.
+  const fittedViewport = useRef({ width: 0, height: 0 });
   const matchesViewer = (
     display: { width: number; height: number },
     width: number,
@@ -478,12 +485,6 @@ export function RemoteDesktopSession({
     width > 0 &&
     height > 0 &&
     Math.abs(display.width / display.height - width / height) < 0.003;
-  const viewerDisplayMatched = Boolean(
-    fittedDisplay &&
-    caps?.viewerDisplayRestore &&
-    lease &&
-    matchesViewer(fittedDisplay, viewerViewport.width, viewerViewport.height),
-  );
   exitLock.current =
     lockOnExitLoaded && lockOnExit && caps?.lockOnExit === true;
   const exitLockPolicy = useRef(false);
@@ -627,7 +628,7 @@ export function RemoteDesktopSession({
     foldSkin !== "keyboard" &&
     frameReady &&
     !keyboard &&
-    !operations;
+    (!operations || Boolean(fittedDisplay));
   const keyboardDeck =
     foldSkinAvailable &&
     foldSkin === "keyboard" &&
@@ -665,7 +666,9 @@ export function RemoteDesktopSession({
             : hardwareMedia,
           foldSkin,
           foldLayout.media,
-          lease && lease.display.height > 0
+          // While fitting, the glass opening determines the host resolution.
+          // Feeding the old host ratio back here would lock in its portrait shape.
+          !fittedDisplay && lease && lease.display.height > 0
             ? lease.display.width / lease.display.height
             : undefined,
         )
@@ -1953,14 +1956,27 @@ export function RemoteDesktopSession({
     send({
       type: "mouseButtons",
       native: Platform.OS === "ios",
-      fitToInsets: fullScreenFoldBackground,
-      topInset: retroDesktop
+      // init clears the viewer's transient display-geometry flag. Keep the
+      // remembered fit active across reconnects and native viewer reloads too.
+      fitToInsets: fullScreenFoldBackground || Boolean(fittedDisplay),
+      // Portrait fitting uses the space between Back and the bottom toolbar,
+      // with breathing room on both edges; measurement and rendering share it.
+      // Duo cover and unfolded landscape draw behind system chrome; its
+      // reservations still position controls but do not reduce picture space.
+      topInset: retroDesktop || (systemSideRail && !screenPlugin)
         ? 0
         : fullScreenFoldBackground
           ? foldLayout!.media.y
           : tableRegion
             ? 0
-            : edgePadding.paddingTop,
+            : landscape
+              ? edgePadding.paddingTop
+              : Math.max(
+                  edgePadding.paddingTop,
+                  (sharedStatusRow
+                    ? sharedBackTop
+                    : edgePadding.paddingTop + spacing.xs) + backControlHeight,
+                ) + spacing.lg,
       bottomInset: retroDesktop
         ? 0
         : fullScreenFoldBackground
@@ -1972,16 +1988,20 @@ export function RemoteDesktopSession({
             ? 0
             : keyboard && landscapeKeyboardOverlay
               ? keyboardPanelHeight + keyboardBottom
-              : !keyboard && !landscape && !screenPlugin
-                ? toolbarSize.height
+              : !landscape && !screenPlugin
+                ? (keyboard
+                    ? 0
+                    : Math.max(
+                        toolbarSize.height,
+                        navigationChrome.target +
+                          Math.max(spacing.sm, insets.bottom),
+                      )) + spacing.lg
                 : 0,
       keyboardOpen: keyboard && landscapeKeyboardOverlay,
       portraitKeyboardTopInset:
         keyboard && !landscape && !tableRegion
           ? edgePadding.paddingTop + spacing.xs + backControlHeight + spacing.sm
           : 0,
-      // Side controls float over the desktop; fit against the full canvas width
-      // in either landscape direction, including while the keyboard is open.
       rightInset: 0,
       leftInset: 0,
       enabled:
@@ -2001,6 +2021,9 @@ export function RemoteDesktopSession({
     tableRegion?.first.height,
     tableRegion?.first.width,
     fullScreenFoldBackground,
+    fittedDisplay,
+    systemSideRail,
+    screenPlugin,
     foldLayout?.media.y,
     foldLayout?.media.height,
     geometry.height,
@@ -2008,6 +2031,9 @@ export function RemoteDesktopSession({
     viewerReadyRevision,
     showMouseButtons,
     edgePadding.paddingTop,
+    sharedStatusRow,
+    sharedBackTop,
+    insets.bottom,
     backControlHeight,
     toolbarSize,
     keyboardPanelHeight,
@@ -2944,6 +2970,7 @@ export function RemoteDesktopSession({
     modeId?: string,
     viewport?: { width: number; height: number },
     remembered = false,
+    restore = false,
   ) => {
     const current = active.current;
     if (
@@ -2958,7 +2985,9 @@ export function RemoteDesktopSession({
     }
     const size = exactResolution
       ? { width, height }
-      : viewerDisplaySize(width, height);
+      : ((fitEdge.current
+          ? viewerDisplaySize(width, height, fitEdge.current)
+          : null) ?? viewerDisplaySize(width, height));
     if (
       !current?.controlling ||
       !(modeId ? caps?.resolutionRestore : caps?.viewerDisplay) ||
@@ -2969,6 +2998,9 @@ export function RemoteDesktopSession({
     )
       return;
     settingInFlight.current = true;
+    fittedViewport.current =
+      viewport ??
+      (exactResolution ? viewerViewportRef.current : { width, height });
     setSettingBusy(true);
     setSettingNotice(null);
     const sourceDisplayId = recovery.current.displayId || current.display.id;
@@ -2978,12 +3010,6 @@ export function RemoteDesktopSession({
     const keepVideo = caps?.liveDisplaySwitch === true;
     try {
       if (!keepVideo) viewerMedia.reset();
-      const restore = Boolean(
-        !exactResolution &&
-        fittedDisplay &&
-        caps?.viewerDisplayRestore &&
-        matchesViewer(fittedDisplay, width, height),
-      );
       const requestGeneration = viewportGeneration.current;
       if (!keepVideo)
         icePrefetch.current = {
@@ -3001,6 +3027,8 @@ export function RemoteDesktopSession({
       if (active.current !== current) return;
       // Reconnect the physical source display after the temporary mirror ends.
       recovery.current.displayId = sourceDisplayId;
+      fitEdge.current =
+        modeId || restore ? null : Math.max(size.width, size.height);
       // The next connection reapplies this choice; restoring or choosing the
       // computer's own mode again forgets it.
       const fittedTo =
@@ -3169,6 +3197,8 @@ export function RemoteDesktopSession({
       if (!isCurrent()) return false;
       rememberedResolutionLease.current = current.lease;
       if (fit) {
+        fitEdge.current = Math.max(remembered.width, remembered.height);
+        fittedViewport.current = remembered.viewport;
         // Same bookkeeping as fitting by hand, so restore is offered.
         setFittedDisplay(
           viewerDisplaySize(
@@ -3251,6 +3281,75 @@ export function RemoteDesktopSession({
     caps?.viewerDisplay,
     fittedDisplay,
   ]);
+  // Rotation, split view, folding and retro skins all report the actual picture
+  // area through viewportChanged. If it changes during a request, the busy flag
+  // settling re-runs this effect with the latest size.
+  useEffect(() => {
+    if (
+      !fittedDisplay ||
+      !caps?.viewerDisplay ||
+      !focused ||
+      appState !== "active" ||
+      !controlReady ||
+      !frameReady ||
+      !lease?.controlling ||
+      settingBusy ||
+      settingInFlight.current ||
+      controlInFlight.current ||
+      // The keyboard only covers part of the picture area; the computer keeps
+      // its size, and closing it returns to the size that was fitted.
+      keyboard ||
+      !viewerDisplaySize(viewerViewport.width, viewerViewport.height) ||
+      (fittedViewport.current.width === viewerViewport.width &&
+        fittedViewport.current.height === viewerViewport.height)
+    )
+      return;
+    // Rotation delivers window bounds, safe areas and toolbar measurements in
+    // separate turns. Apply only the settled area; a new layout or leaving this
+    // screen cancels the pending request. In-flight changes are picked up when
+    // settingBusy clears, using the latest viewport rather than a queued size.
+    const timer = setTimeout(() => {
+      void fitViewerDisplay(viewerViewport.width, viewerViewport.height);
+    }, 200);
+    return () => clearTimeout(timer);
+  }, [
+    viewerViewport,
+    fittedDisplay,
+    caps?.viewerDisplay,
+    focused,
+    appState,
+    controlReady,
+    frameReady,
+    lease?.controlling,
+    settingBusy,
+    keyboard,
+  ]);
+
+  const toggleFitDisplay = () => {
+    if (!fittedDisplay) {
+      send({ type: "measureViewport" });
+    } else if (caps?.viewerDisplayRestore) {
+      void fitViewerDisplay(
+        fittedDisplay.width,
+        fittedDisplay.height,
+        false,
+        undefined,
+        undefined,
+        false,
+        true,
+      );
+    } else {
+      setFittedDisplay(null);
+      fitEdge.current = null;
+      const current = active.current;
+      if (current)
+        void rememberResolution(
+          deviceId,
+          recovery.current.displayId || current.display.id,
+          null,
+        );
+    }
+  };
   const shortcut = (keys: string[]) =>
     send({
       type: "events",
@@ -4197,25 +4296,8 @@ export function RemoteDesktopSession({
                     controlDisabled={controlDisabled}
                     presentation={{
                       enabled: pipEnabled,
-                      canRotate:
-                        typeof remotePresentation?.rotate === "function" &&
-                        !(
-                          geometry.reservedRegionsSupported &&
-                          Platform.OS === "ios" &&
-                          !Platform.isPad &&
-                          geometry.regularWidth &&
-                          geometry.regularHeight
-                        ),
                       canPip: pipAvailable,
                       canAudio: Boolean(caps?.systemAudio),
-                      onRotate: () => {
-                        void remotePresentation
-                          ?.rotate?.(!landscape)
-                          .then(() => setOperations(false))
-                          .catch(() =>
-                            setSettingNotice(t("remoteDesktop.settingFailed")),
-                          );
-                      },
                       onPip: togglePictureInPicture,
                     }}
                     video={{
@@ -4227,8 +4309,8 @@ export function RemoteDesktopSession({
                         ? `${lease.display.id}:${lease.display.width}:${lease.display.height}:${Boolean(fittedDisplay)}`
                         : undefined,
                       viewerDisplaySupported: caps?.viewerDisplay === true,
-                      viewerDisplayMatched,
-                      onFitDisplay: () => send({ type: "measureViewport" }),
+                      autoFitEnabled: Boolean(fittedDisplay),
+                      onFitDisplay: toggleFitDisplay,
                       notice: audioUnavailable.current
                         ? t("remoteDesktop.audioUnavailable")
                         : settingNotice,

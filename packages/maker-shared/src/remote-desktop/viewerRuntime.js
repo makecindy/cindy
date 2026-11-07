@@ -23,13 +23,15 @@ export function mountRemoteDesktopViewer(root, postMessage, config) {
       fx,
       fy,
       fillHeight = false,
+      minZoom = 1,
     ) {
       const fit = fillHeight
         ? vh / Math.max(1, dh)
         : Math.min(vw / Math.max(1, dw), vh / Math.max(1, dh));
-      // Pinch stops at two viewer points per desktop point, never below fit.
+      // Keep the detail limit at two viewer points per desktop point. Mobile
+      // permits shrinking below fit; Desktop retains its own zoom policy.
       const maxZoom = Math.max(1, 2 / fit);
-      const scale = fit * Math.max(1, Math.min(maxZoom, zoom));
+      const scale = fit * Math.max(minZoom, Math.min(maxZoom, zoom));
       const width = dw * scale;
       const height = dh * scale;
       const x =
@@ -321,6 +323,7 @@ export function mountRemoteDesktopViewer(root, postMessage, config) {
             fy,
             // Mobile fits both axes; retain Desktop scale semantics.
             config.desktop ? fillHeight && !viewerSized : false,
+            config.desktop ? 1 : 0.1,
           );
     return {
       ...r,
@@ -401,7 +404,8 @@ export function mountRemoteDesktopViewer(root, postMessage, config) {
       picture.y + picture.height >= vh;
     const seg = coversStage
       ? null
-      : backgroundSegments(vw, vh, dw, dh, config.desktop ? fillHeight : false, config.desktop);
+      : backgroundSegments(vw, vh, dw, dh, config.desktop ? fillHeight : false,
+          config.desktop || zoom < 1 || manualViewMoved);
     if (!seg) {
       bg.style.display = "none";
       bgRects = null;
@@ -559,12 +563,16 @@ export function mountRemoteDesktopViewer(root, postMessage, config) {
   function panBounds(r) {
     const vw = viewportWidth(),
       vh = viewportHeight();
-    // Grow extra resting travel continuously from zero at fit to its full reach
-    // by 1.5x, so even a light zoom can pull edge content clear of the overlaid
-    // chrome. Never count the unused space of a fitting axis.
-    // Each axis reaches at most 240 points or 40% of its own viewport.
+    // Automatic cursor/keyboard positioning grows edge clearance with zoom.
+    // Manual phone gestures can use that travel even at or below fit; each axis
+    // reaches at most 240 points or 40% of its viewport.
     const ramp = Math.min(0.5, r.maxZoom - 1);
-    const grown = ramp > 0 ? clamp((zoom - 1) / ramp) : 0;
+    // On a phone, fit is only a snap point: retain panning travel even at or
+    // below it. Desktop keeps the existing zoom-dependent edge clearance.
+    const grown =
+      !config.desktop && (manualViewMoved || zoom < 1)
+        ? 1
+        : ramp > 0 ? clamp((zoom - 1) / ramp) : 0;
     const axis = (viewport, content) => {
       const clearance = grown * Math.min(240, viewport * 0.4);
       return content <= viewport
@@ -640,7 +648,11 @@ export function mountRemoteDesktopViewer(root, postMessage, config) {
   const cursorCanHide = (r) =>
     zoom > 1 ||
     r.width > viewportWidth() ||
-    r.height > stage.clientHeight - viewportBottom();
+    r.height > stage.clientHeight - viewportBottom() ||
+    r.x < viewportLeft() ||
+    r.x + r.width > viewportLeft() + viewportWidth() ||
+    r.y < (usesViewportInsets() ? viewportTop() : 0) ||
+    r.y + r.height > stage.clientHeight - viewportBottom();
   // Move by the least needed to bring a covered cursor back inside the safe
   // margin; a cursor that is wholly on screen already stays where it is.
   const revealedBy = (px, py) => {
@@ -704,24 +716,48 @@ export function mountRemoteDesktopViewer(root, postMessage, config) {
     if (panAnimation !== null) cancelAnimationFrame(panAnimation);
     panAnimation = null;
   }
-  function settlePan() {
+  function settlePan(snap = false, endedPinch = false) {
     stopPanAnimation();
-    const r = layout(),
-      b = panBounds(r),
-      x = bounded(r.x, b.minX, b.maxX),
-      y = bounded(r.y, b.minY, b.maxY);
-    if (x === r.x && y === r.y) return;
-    if (reducedMotion.matches) {
-      place(x, y, r);
+    const r = layout(), fromZoom = zoom;
+    // The fingers always own the scale. Magnetism is evaluated only after the
+    // last finger lifts, symmetrically for enlargement and reduction near fit.
+    const fitSnap = snap && endedPinch && !config.desktop && zoom >= 0.8 && zoom <= 1.2;
+    const targetZoom = fitSnap ? 1 : zoom;
+    zoom = targetZoom;
+    const target = layout(), b = panBounds(target);
+    let x = bounded(target.x, b.minX, b.maxX),
+      y = bounded(target.y, b.minY, b.maxY);
+    if (snap && !config.desktop && targetZoom === 1) {
+      const centerX = viewportLeft() + (viewportWidth() - target.width) / 2,
+        centerY = verticalOffset(target.height) + (viewportHeight() - target.height) / 2;
+      // A visible release zone makes returning to fit easy, without resisting
+      // the drag. Cap it on larger screens so deliberate offsets stay put.
+      const snapX = Math.min(96, viewportWidth() * 0.2),
+        snapY = Math.min(96, viewportHeight() * 0.2);
+      if (fitSnap || Math.abs(x - centerX) <= snapX) x = centerX;
+      if (fitSnap || Math.abs(y - centerY) <= snapY) y = centerY;
+    }
+    zoom = fromZoom;
+    if (fitSnap) followRest = null;
+    if (x === r.x && y === r.y && targetZoom === fromZoom) {
+      if (fitSnap) manualViewMoved = false;
+      return;
+    }
+    const apply = (progress) => {
+      zoom = fromZoom + (targetZoom - fromZoom) * progress;
+      place(r.x + (x - r.x) * progress, r.y + (y - r.y) * progress, layout());
+      if (progress === 1 && fitSnap) manualViewMoved = false;
       render();
+    };
+    if (reducedMotion.matches) {
+      apply(1);
       return;
     }
     const started = performance.now();
     const tick = (now) => {
       const t = Math.min(1, (now - started) / 280),
         ease = 1 - Math.pow(1 - t, 3);
-      place(r.x + (x - r.x) * ease, r.y + (y - r.y) * ease, r);
-      render();
+      apply(ease);
       panAnimation = t < 1 ? requestAnimationFrame(tick) : null;
     };
     panAnimation = requestAnimationFrame(tick);
@@ -1120,12 +1156,11 @@ export function mountRemoteDesktopViewer(root, postMessage, config) {
       p.x >= r.x && p.x <= r.x + r.width && p.y >= r.y && p.y <= r.y + r.height
     );
   }
-  function point(p) {
-    const r = layout();
-    return {
-      x: clamp((p.x - r.x) / r.width),
-      y: clamp((p.y - r.y) / r.height),
-    };
+  function point(p, constrain = true) {
+    const r = layout(), x = (p.x - r.x) / r.width, y = (p.y - r.y) / r.height;
+    // Host input is bounded to the desktop. A camera gesture may start in the
+    // surrounding space and must keep that actual anchor to avoid a jump.
+    return { x: constrain ? clamp(x) : x, y: constrain ? clamp(y) : y };
   }
   function onlyMoves(event) {
     return event.touches.every((t) => t.phase === "moved" || t.phase === "stationary");
@@ -1329,7 +1364,7 @@ export function mountRemoteDesktopViewer(root, postMessage, config) {
             at: Date.now(),
             d: next.d,
             zoom,
-            anchor: point(next),
+            anchor: point(next, false),
           };
         if (Date.now() - multi.candidate.at >= 40) {
           if (multi.kind === "scroll") {
@@ -1357,13 +1392,14 @@ export function mountRemoteDesktopViewer(root, postMessage, config) {
       manualViewMoved = true;
       cursorNeedsEntry = true;
       const { maxZoom } = layout();
-      zoom = Math.max(
-        1,
+      const requestedZoom = Math.max(
+        0.1,
         Math.min(
           maxZoom,
           (Math.min(maxZoom, multi.zoom) * next.d) / Math.max(1, multi.d),
         ),
       );
+      zoom = requestedZoom;
       const r = layout();
       fx =
         multi.anchor.x +
@@ -1474,7 +1510,7 @@ export function mountRemoteDesktopViewer(root, postMessage, config) {
         lastX: p.x,
         lastY: p.y,
         zoom,
-        anchor: point(p),
+        anchor: point(p, false),
         kind: null,
       };
     }
@@ -1584,9 +1620,12 @@ export function mountRemoteDesktopViewer(root, postMessage, config) {
     }
     start = null;
     last = null;
-    multi = null;
+    const endedPinch = multi?.kind === "pinch";
+    // Keep the gesture kind while one finger is still down; do not snap until
+    // all fingers lift. A new pair or cancellation replaces/clears it normally.
+    if (!pointers.size) multi = null;
     render();
-    if (!pointers.size && manualViewMoved) settlePan();
+    if (!pointers.size && manualViewMoved) settlePan(true, endedPinch);
   }
   listen(stage, "pointerup", up);
   listen(stage, "pointercancel", (e) => {
@@ -2590,6 +2629,9 @@ export function mountRemoteDesktopViewer(root, postMessage, config) {
         fillHeight = message.fillHeight === true;
         release();
         render();
+        // Orientation can change which side insets apply after the DOM has
+        // already resized. Report that final area even without another resize.
+        reportViewport();
         break;
       case "answer":
         if (message.epoch === epoch) void receiveAnswer(message);
