@@ -1,3 +1,4 @@
+import { runInNewContext } from 'node:vm';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
 import type { BrowserControlRuntime } from '@cindy/browser-control-runtime';
@@ -187,6 +188,66 @@ describe('browser experience cache', () => {
       expect(h.calls).toHaveLength(6);
       expect(h.calls.every(req => (req as { action: string }).action === 'navigate')).toBe(true);
       expect(h.calls[0]).not.toHaveProperty('intent');
+    } finally { await h.cleanup(); }
+  });
+
+  // Unit/MCP regression from the X screenshot incident: the shipped catalog
+  // hid x-tweet behind another host and alphabetical writes. Existing tests use
+  // a single custom recipe, so cannot catch real multi-host discovery/ranking.
+  it.each(['x.com', 'twitter.com', 'api.fxtwitter.com'])('lists the public reader in %s siteguide', async site => {
+    const h = await makeHarness();
+    try {
+      const result = await invoke(h, { action: 'siteguide', site });
+      expect(result.ok).toBe(true);
+      expect(result.recipes).toEqual(expect.arrayContaining([expect.objectContaining({ id: 'x-tweet' })]));
+    } finally { await h.cleanup(); }
+  });
+
+  it('recommends a public post reader after home navigation, without replaying or spamming posts', async () => {
+    const h = await makeHarness({}, req => ({ targetId: 'tab', url: req.url }));
+    try {
+      await invoke(h, { action: 'open', url: 'https://x.com/' });
+      const first = await invoke(h, { action: 'navigate', url: 'https://x.com/person/status/123/photo/1' });
+      expect(first.recipeSuggestions[0].id).toBe('x-tweet');
+      expect(first.recipeSuggestions.every((r: { access: string }) => r.access === 'read')).toBe(true);
+      expect((await invoke(h, { action: 'navigate', url: 'https://x.com/person/status/456' })).recipeSuggestions).toBeUndefined();
+      const write = await invoke(h, { action: 'navigate', url: 'https://x.com/person/status/456', intent: 'Like a specific tweet' });
+      expect(write.recipeSuggestions[0].id).toBe('opencli:twitter/like');
+      expect((await invoke(h, { action: 'navigate', url: 'https://x.com.evil/person/status/123' })).recipeSuggestions).toBeUndefined();
+      expect(h.calls.map(req => (req as { action: string }).action)).toEqual(['open', 'tabs', 'navigate', 'navigate', 'navigate', 'navigate']); // only navigation plus open's existing tab check
+    } finally { await h.cleanup(); }
+  });
+
+  // Existing-tab replay: agents may snapshot without navigation, so the
+  // navigation-only suggestions previously never reached this decision point.
+  it('suggests recipes when reading an existing post tab and deduplicates subsequent navigation', async () => {
+    const h = await makeHarness({}, () => ({ targetId: 'tab', url: 'https://x.com/person/status/123', snapshot: 'Public post' }));
+    try {
+      expect((await invoke(h, { action: 'snapshot', targetId: 'tab' })).recipeSuggestions[0].id).toBe('x-tweet');
+      expect((await invoke(h, { action: 'navigate', targetId: 'tab', url: 'https://x.com/person/status/123' })).recipeSuggestions).toBeUndefined();
+      expect(h.calls.filter(req => (req as { action: string }).action === 'navigate')).toHaveLength(1);
+    } finally { await h.cleanup(); }
+  });
+
+  // Unit/MCP: execute the shipped evaluate function on a synthetic API response,
+  // not a copied output object. Previously URL-only media had no reading handoff.
+  it.each([true, false])('hands off unviewed photos only when present: %s', async hasPhoto => {
+    const payload = { tweet: { id: '123', media: { photos: hasPhoto ? [{ url: 'https://images.example/photo.jpg' }] : [] } } };
+    const h = await makeHarness({}, req => {
+      const request = req.request as { kind?: string; fn?: string } | undefined;
+      if (request?.kind === 'evaluate') return { result: runInNewContext(`(${request.fn})()`, {
+        document: { body: { innerText: JSON.stringify(payload) } },
+      }, { timeout: 100 }) };
+      return { targetId: 'tab' };
+    });
+    try {
+      const result = await invoke(h, { action: 'recipe', recipeId: 'x-tweet', targetId: 'tab', inputs: { id: '123' } });
+      expect(result.ok).toBe(true);
+      if (hasPhoto) {
+        expect(result.output.imageReading).toMatchObject({ status: 'not_viewed' });
+        expect(result.output.media).toEqual([{ type: 'photo', url: 'https://images.example/photo.jpg' }]);
+      } else expect(result.output.imageReading).toBeUndefined();
+      expect(h.calls).toHaveLength(3); // the handoff does not silently fetch media
     } finally { await h.cleanup(); }
   });
 
