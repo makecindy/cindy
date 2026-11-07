@@ -183,4 +183,38 @@ describe('BrowserCommentPopover', () => {
       text: null,
     });
   });
+
+  it('names the clicked element before the comment field', () => {
+    render(
+      <div>
+        <BrowserCommentPopover
+          anchor={{ x: 40, y: 40 }}
+          target={{
+            kind: 'element',
+            markerNumber: 2,
+            targetTag: 'button',
+            targetLabel: 'Save changes',
+            selectedText: null,
+          }}
+          submitting={false}
+          designBaseline={null}
+          editorDraft={EMPTY_DRAFT}
+          onEditorDraftChange={vi.fn()}
+          onSubmit={vi.fn()}
+          onCancel={vi.fn()}
+          onPreviewDesign={vi.fn()}
+          onResetDesign={vi.fn()}
+        />
+      </div>,
+    );
+
+    expect(screen.getByText('2')).toBeTruthy();
+    expect(screen.getByText('<button>')).toBeTruthy();
+    expect(screen.getByText('Save changes')).toBeTruthy();
+    expect(screen.getByText('rightSidebar.browser.commentShortcut')).toBeTruthy();
+    expect(
+      (screen.getByPlaceholderText('rightSidebar.browser.commentPlaceholder') as HTMLTextAreaElement)
+        .rows,
+    ).toBe(1);
+  });
 });

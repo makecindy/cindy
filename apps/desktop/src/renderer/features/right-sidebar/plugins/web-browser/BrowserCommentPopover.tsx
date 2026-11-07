@@ -8,7 +8,10 @@ import { Button } from '@/components/ui/button';
  * 里塞输入组件(CSP / 样式污染 / 焦点战争),与 Codex 的 host-side editor
  * 结构一致。
  *
- * 交互:
+ * 交互(学 Codex 的标注手感,视觉仍走 Cindy 浮层规范):
+ *  - 气泡先标明「这是第几条、点中了谁」,再写要改什么。页面上的 tag /
+ *    可访问名 / 选区文本都是不可信内容,只当文本渲染。
+ *  - 输入从一行起,随内容长到大约四行(Claude 评论框的 1lh),不再一打开就是一块空白表单。
  *  - Enter 提交,Shift+Enter 换行(与聊天输入一致的心智)。
  *  - Esc / 取消按钮 → onCancel(回到点选态,marker 清除)。
  *  - submitting 时按钮禁用,防重复提交。
@@ -34,6 +37,7 @@ import {
   BROWSER_COMMENT_DESIGN_PROPS,
   type BrowserCommentDesignBaseline,
   type BrowserCommentDesignPreviewPayload,
+  type BrowserCommentKind,
   type BrowserCommentStyleChange,
 } from '../../../../../shared/browserComment';
 import type { BrowserCommentEditorDraft } from './browserCommentEditorDraft';
@@ -41,6 +45,8 @@ import type { BrowserCommentEditorDraft } from './browserCommentEditorDraft';
 interface BrowserCommentPopoverProps {
   /** 锚点(slot 内坐标,px)。 */
   anchor: { x: number; y: number };
+  /** 当前这条评论点中了谁。缺省时不画目标条(旧调用仍可用)。 */
+  target?: BrowserCommentPopoverTarget | null;
   submitting: boolean;
   /** 样式编辑基线(元素点选才有;null = 不显示样式编辑入口)。 */
   designBaseline: BrowserCommentDesignBaseline | null;
@@ -56,8 +62,19 @@ interface BrowserCommentPopoverProps {
 }
 
 const POPOVER_WIDTH = 300;
-const ANCHOR_GAP = 12;
+/** 让开编号圆点(半径 11px),避免气泡压住刚点上的标记。 */
+const ANCHOR_GAP = 18;
 const SLOT_PADDING = 8;
+const COMMENT_INPUT_MAX_HEIGHT = 112;
+
+/** 点选目标的宿主侧摘要。字段来自不可信页面,调用方不得把它们当 HTML。 */
+export interface BrowserCommentPopoverTarget {
+  kind: BrowserCommentKind;
+  markerNumber: number;
+  targetTag: string | null;
+  targetLabel: string | null;
+  selectedText: string | null;
+}
 
 // parseCssColor 收口到 @/lib/browserComments(草稿基线链修复也要用同一套
 // 颜色等价语义,alpha 保留的理由见该函数注释),此处仅消费。
@@ -109,6 +126,7 @@ function isSameStyleValue(property: string, a: string, b: string): boolean {
 
 export function BrowserCommentPopover({
   anchor,
+  target = null,
   submitting,
   designBaseline,
   editorDraft,
@@ -151,6 +169,13 @@ export function BrowserCommentPopover({
     if (!showStyles) textareaRef.current?.focus();
     // 展开 / 收起样式区会改高度,重新 clamp。
   }, [anchor.x, anchor.y, showStyles]);
+
+  useLayoutEffect(() => {
+    const el = textareaRef.current;
+    if (!el) return;
+    el.style.height = 'auto';
+    el.style.height = `${Math.min(el.scrollHeight, COMMENT_INPUT_MAX_HEIGHT)}px`;
+  }, [text, showStyles]);
 
   /** 组装 styleChanges(提交用)与预览 payload(实时用)的共同数据源。 */
   const buildChanges = useCallback((): BrowserCommentStyleChange[] => {
@@ -296,30 +321,67 @@ export function BrowserCommentPopover({
     </button>
   );
 
+  const targetLabel = target?.targetLabel?.trim() || null;
+  const targetTag = target?.targetTag?.trim().toLowerCase() || null;
+  const selectedText = target?.selectedText?.trim() || null;
+
   return (
     <div
       ref={rootRef}
       className={cn(
-        'absolute z-20 flex flex-col gap-2 rounded-lg border border-[var(--border-default)]',
-        'bg-[var(--surface-elevated)] p-2.5 shadow-[var(--shadow-menu)]',
+        'absolute z-20 flex flex-col gap-2 rounded-xl border border-[var(--border-default)]',
+        'bg-[var(--surface-elevated)] p-2.5 shadow-[shadow:var(--shadow-menu)]',
       )}
       style={{ left: pos.left, top: pos.top, width: POPOVER_WIDTH }}
     >
+      {target && (
+        <div className="flex min-w-0 items-center gap-1.5">
+          <span
+            className="inline-flex h-4 min-w-4 shrink-0 items-center justify-center rounded-full px-1 text-10 font-semibold"
+            style={{ backgroundColor: 'var(--focus-ring)', color: '#fff' }}
+          >
+            {target.markerNumber}
+          </span>
+          {target.kind === 'element' ? (
+            <>
+              {targetTag && (
+                <span className="shrink-0 rounded bg-[var(--surface-chip)] px-1 font-mono text-11 text-[var(--text-tertiary)]">
+                  {`<${targetTag}>`}
+                </span>
+              )}
+              {targetLabel && (
+                <span className="truncate text-11 text-[var(--text-secondary)]">{targetLabel}</span>
+              )}
+            </>
+          ) : (
+            <span className="line-clamp-2 min-w-0 text-11 text-[var(--text-secondary)]">
+              {target.kind === 'text'
+                ? selectedText || t('rightSidebar.browser.commentTargetText')
+                : t('rightSidebar.browser.commentTargetRegion')}
+            </span>
+          )}
+        </div>
+      )}
       <textarea
         ref={textareaRef}
         value={text}
         onChange={(e) => onEditorDraftChange({ ...editorDraft, text: e.target.value })}
         onKeyDown={handleKeyDown}
-        rows={3}
+        rows={1}
         disabled={submitting}
         placeholder={t('rightSidebar.browser.commentPlaceholder')}
         className={cn(
-          'w-full resize-none rounded-md border border-[var(--border-default)] bg-transparent',
+          'w-full resize-none overflow-y-auto rounded-md border border-[var(--border-default)] bg-transparent',
           'px-2 py-1.5 text-12 leading-[1.5] text-[var(--text-primary)]',
           'placeholder:text-[var(--text-placeholder)] outline-none',
           'focus:border-[var(--focus-ring)] focus:ring-1 focus:ring-[var(--focus-ring-soft)]',
         )}
       />
+      {!showStyles && (
+        <p className="-mt-1 px-0.5 text-11 leading-4 text-[var(--text-tertiary)]">
+          {t('rightSidebar.browser.commentShortcut')}
+        </p>
+      )}
 
       {/* 样式编辑区(Codex styling feedback):仅元素点选且基线可用时提供。 */}
       {designBaseline && showStyles && (
