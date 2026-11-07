@@ -176,7 +176,7 @@ const CATEGORY_ENUM = ['cindy', 'auth', 'control', 'history', 'feedback', 'hando
  */
 export const HELPER_CATEGORY_DESCRIPTIONS: Record<(typeof CATEGORY_ENUM)[number], string> = {
   cindy: `${BRAND_NAME} 能力说明、界面操作帮助（get_capabilities scope=help）与当前任务信息/交付回执（report_task_delivery）；get_capabilities({key:"self-management"}) 是管理自己的任务、定时任务、项目、伙伴的工具索引；get_capabilities({key:"computer-use"}) 说明桌面操作没开时怎么引导用户开启。本机。`,
-  settings: '管理 Cindy 的全局设置与默认模型，普通任务和伙伴共用。作用于运行任务的本机；先查询当前值和可选项，再修改或恢复默认。SSH 主机编辑使用 cindy_ssh。',
+  settings: '管理 Cindy 的全局设置、默认模型与 API 供应商连接（添加、安全填写密钥、发现型号、测试连接），普通任务和伙伴共用。作用于运行任务的本机；先查询当前值和可选项，再修改或恢复默认。密钥通过电脑或手机的加密代输入卡交给宿主。SSH 主机编辑使用 cindy_ssh。',
   auth: 'MCP 设置表单（request_mcp_setup）；Grok 设备码授权的状态查询与取消。要主人亲自输入、扫码或连接账号时用 ask_owner。',
   control: '管理任务与项目：当前任务的原生共享邀请/状态（create_shared_task_invitation / get_shared_task_state）在任务宿主执行，支持手机或同账号另一台电脑控制当前任务，不接受其他任务目标；归档/取消归档支持本机与跨电脑（deviceId::sessionId）；改名、移动、标签、排队消息、插话、停止、运行设置、给当前任务新建托管 worktree（create_task_worktree）、项目列表与增删改、从其他 AI 编程工具导入任务（scan_importable_sessions / import_sessions）仅本机。',
   github: '读取 PR、CI、评审变化与详情，明确管理任务关联。本机与同账号跨电脑；查询不会关联任务或启动跟进。',
@@ -382,7 +382,7 @@ function registerCallToolEntry(
     'call_tool',
     D_CALL_TOOL,
     CALL_TOOL_INPUT,
-    async ({ name, args }) => {
+    async ({ name, args }, extra) => {
       const allowed = await allowedSurface();
       const definition = registry.get(name);
       if (definition && !toolAllowed(allowed, definition)) {
@@ -395,7 +395,7 @@ function registerCallToolEntry(
         ? await withToolCallAuthority(
           telemetry.authorizeCall,
           { sessionId: telemetry.getSessionId(), server: 'cindy_helper', tool: name, args },
-          () => registry.call(name, args),
+          () => registry.call(name, args, extra?.signal),
         )
         : errorPayload('UNKNOWN_TOOL', 'Unknown helper tool.', {
             available: registry.list().filter((tool) => toolAllowed(allowed, tool)).map((tool) => tool.name),
