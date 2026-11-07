@@ -406,24 +406,29 @@ describe('provider share host snapshot', () => {
     expect(ev.revoked).toHaveBeenCalledWith({ shareId: 'share-1', memberId: 'm1' }, true);
   });
 
-  it('admits only active members while remote control and remote use stay on', async () => {
+  // Regression: different accounts can have the same Windows MachineGuid/device ID.
+  // Exercise real host admission (unit tier): the scoped member, not the raw
+  // machine ID, controls access; unknown members and disabled sharing still fail.
+  it.each(['laptop', 'host-device'])('admits only active members while remote control and remote use stay on (%s)', async (device) => {
     state.owned = [share([member('m1'), member('m2', 'paused')])];
     const ev = events();
     startProviderShareHost(ev);
     await refreshProviderShareHost('test');
-    expect(providerShareGuestAccess(guest('m1'))).toEqual({ shareId: 'share-1', memberId: 'm1', providerId: 'anthropic' });
-    expect(providerShareGuestAccess(guest('m2'))).toBeNull();
-    expect(providerShareGuestAccess(guest('m1', 'host-device'))).toBeNull();
-    expect(providerShareGuestAccess(providerShareHostPeer('share-1', 'laptop'))).toBeNull();
-    expect(providerShareGuestAccess('laptop')).toBeNull();
+    const activeGuest = guest('m1', device);
+    expect(providerShareGuestAccess(activeGuest)).toEqual({ shareId: 'share-1', memberId: 'm1', providerId: 'anthropic' });
+    expect(providerShareGuestAccess(guest('m2', device))).toBeNull();
+    expect(providerShareGuestAccess(guest('unknown-member', device))).toBeNull();
+    expect(providerShareGuestAccess(providerShareGuestPeer('unknown-share', 'm1', device))).toBeNull();
+    expect(providerShareGuestAccess(providerShareHostPeer('share-1', device))).toBeNull();
+    expect(providerShareGuestAccess(device)).toBeNull();
     state.allowed.clear();
-    expect(providerShareGuestAccess(guest('m1'))).toBeNull();
+    expect(providerShareGuestAccess(activeGuest)).toBeNull();
     state.allowed.add('anthropic');
     state.remoteControl = false;
-    expect(providerShareGuestAccess(guest('m1'))).toBeNull();
+    expect(providerShareGuestAccess(activeGuest)).toBeNull();
     state.remoteControl = true;
     state.scope = 'cloud:other:2';
-    expect(providerShareGuestAccess(guest('m1'))).toBeNull();
+    expect(providerShareGuestAccess(activeGuest)).toBeNull();
   });
 
   it('names the reason a guest is refused, for the diagnostic log', async () => {
@@ -435,7 +440,7 @@ describe('provider share host snapshot', () => {
     expect(providerShareGuestDenial(guest('m1'))).toBeNull();
     expect(providerShareGuestDenial(guest('m2'))).toBe('member-not-active');
     expect(providerShareGuestDenial(providerShareGuestPeer('share-9', 'm1', 'laptop'))).toBe('share-unknown');
-    expect(providerShareGuestDenial(guest('m1', 'host-device'))).toBe('self-device');
+    expect(providerShareGuestDenial(guest('m1', 'host-device'))).toBeNull();
     state.allowed.clear();
     expect(providerShareGuestDenial(guest('m1'))).toBe('provider-not-remote');
     state.allowed.add('anthropic');
@@ -461,19 +466,22 @@ describe('provider share host snapshot', () => {
     expect([...owned.get('share-1')!]).toEqual(['m1']);
   });
 
-  it('revokes on pause and purges on removal, locally and from the server snapshot', async () => {
+  it.each(['laptop', 'host-device'])('revokes on pause and purges on removal, locally and from the server snapshot (%s)', async (device) => {
     state.owned = [share([member('m1'), member('m2'), member('m3')])];
     const ev = events();
     startProviderShareHost(ev);
     await refreshProviderShareHost('test');
+    expect(providerShareGuestAccess(guest('m1', device))).not.toBeNull();
     applyLocalMemberChange('m1', 'paused');
     expect(ev.revoked).toHaveBeenLastCalledWith({ shareId: 'share-1', memberId: 'm1' }, false);
-    expect(providerShareGuestAccess(guest('m1'))).toBeNull();
+    expect(providerShareGuestAccess(guest('m1', device))).toBeNull();
     applyLocalMemberChange('m2', 'removed');
     expect(ev.revoked).toHaveBeenLastCalledWith({ shareId: 'share-1', memberId: 'm2' }, true);
+    expect(providerShareGuestAccess(guest('m2', device))).toBeNull();
     state.owned = [share([member('m1', 'paused')])];
     await refreshProviderShareHost('left');
     expect(ev.revoked).toHaveBeenLastCalledWith({ shareId: 'share-1', memberId: 'm3' }, true);
+    expect(providerShareGuestAccess(guest('m3', device))).toBeNull();
     const match = providerShareMemberMatcher({ shareId: 'share-1', memberId: 'm3' });
     expect(match(guest('m3', 'desktop-2'))).toBe(true);
     expect(match(guest('m1'))).toBe(false);
