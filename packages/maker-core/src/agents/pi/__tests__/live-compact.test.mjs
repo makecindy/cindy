@@ -963,11 +963,12 @@ describe('live compact 1.0.8: cache-safe drains, pointer-only spans, no cross-us
   });
 
   it('keeps drain cards in chronological order when one run cuts several spans', () => {
-    // pi 只能把卡片追加到尾巴上,而收尾是从新往旧切;不倒回来最老的摘要会落在最下面。
-    const newest = { type: 'custom_message', content: [{ type: 'text', text: 'newest span' }] };
+    // 卡片按切出来的先后发出:切点右边还有卡片就不切,后一刀只能落在前一张卡片右边,
+    // 所以这个先后就是上下文里的时间序(与上游原地替换看到的一致)。
     const oldest = { type: 'custom_message', content: [{ type: 'text', text: 'oldest span' }] };
+    const newest = { type: 'custom_message', content: [{ type: 'text', text: 'newest span' }] };
     const edit = { type: 'context_edit', targetId: 'e9', replacement: null };
-    const out = orderedDrainDrafts([edit], [newest, oldest]);
+    const out = orderedDrainDrafts([edit], [oldest, newest]);
     expect(out.map((draft) => draft.type)).toEqual(['context_edit', 'custom_message', 'custom_message']);
     expect(out[1]).toBe(oldest);
     expect(out[2]).toBe(newest);
@@ -1409,11 +1410,49 @@ describe('live compact 1.1.x: 收尾多刀与指针兜底', () => {
       const cards = result.entries.filter((draft) => draft.type === 'custom_message');
       // 第一刀是长 read 的指针刀,第二刀切掉卡片与保留区之间的那一段。
       expect(cards.length).toBe(2);
+      // 卡片按切出来的先后发出:长 read 更早,卡片与保留区之间那段更新。
+      expect(cards[0].details.shadowedSeqs).toContain('cLong-a');
+      expect(cards[1].details.shadowedSeqs).toContain('cMid-a');
       const log = readFileSync(join(root, 'spine.log'), 'utf8');
       expect(log.match(/spine cut /g) || []).toHaveLength(2);
     } finally {
       if (previousRoot === undefined) delete process.env.SPINE_SHADOW_DIR;
       else process.env.SPINE_SHADOW_DIR = previousRoot;
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it('does not let the next cut delete a backup an earlier card still points at', () => {
+    // 同一批收尾的卡片是一起提交的:第二刀的容量轮换不能删掉第一刀卡片还指着的备份。
+    // 腾不出地方就停在这一刀 —— 不拿还没提交的卡片开刀。
+    const root = mkdtempSync(join(tmpdir(), 'spine-batch-'));
+    const previousRoot = process.env.SPINE_SHADOW_DIR;
+    const previousCap = process.env.SPINE_SHADOW_MAX_BYTES;
+    process.env.SPINE_SHADOW_DIR = root;
+    // 第一刀(长 read)的原文快照与汇总备份各约 300KB,合起来装得下;第二刀装不下。
+    process.env.SPINE_SHADOW_MAX_BYTES = '606000';
+    try {
+      const sessionId = 'session-batch';
+      const contextEntries = [
+        { messages: [{ role: 'system', content: 'sys', provider: 'minimax' }], sourceEntry: { id: 's1' } },
+        { messages: [{ role: 'user', content: 'go', provider: 'minimax' }], sourceEntry: { id: 'u1' } },
+        toolCall('cLong', 'read'), toolResult('cLong', 'x'.repeat(300000)),
+        toolCall('cMid'), toolResult('cMid', 'tail '.repeat(2000)),
+        ...small('c1'),
+        ...small('c2'),
+        ...small('c3'),
+      ];
+      const result = settle(root, sessionId, contextEntries);
+      expect(result).toBeTruthy();
+      const cards = result.entries.filter((draft) => draft.type === 'custom_message');
+      expect(cards.length).toBe(1);
+      // 第一张卡片指着的原文快照还在。
+      expect(existsSync(join(root, 'shadow', sessionId, rawName('cLong')))).toBe(true);
+    } finally {
+      if (previousRoot === undefined) delete process.env.SPINE_SHADOW_DIR;
+      else process.env.SPINE_SHADOW_DIR = previousRoot;
+      if (previousCap === undefined) delete process.env.SPINE_SHADOW_MAX_BYTES;
+      else process.env.SPINE_SHADOW_MAX_BYTES = previousCap;
       rmSync(root, { recursive: true, force: true });
     }
   });

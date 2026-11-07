@@ -114,6 +114,8 @@
  * 的前缀(不能切),卡片右边、保留区之前还能切。本仓的卡片实际落在尾巴上(pi 的 custom_message
  * 只能追加),但收尾内部选段时把卡片放回被切掉那一段的位置 —— 否则新卡片当地板会把整段历史
  * 锁死,第二刀永远选不出来。
+ * 连切几刀时,卡片按切出来的先后发出:「卡片地板」规定切点右边还有卡片就不切,后一刀只能落在
+ * 前一张卡片右边,所以这个先后就是上下文里的时间序,与上游原地替换看到的一致。
  *
  * Mapping notes (DSH -> pi):
  *   - agent/status idle + turn/end completed  -> pi.on("agent_before_settle", outcome === "completed")
@@ -151,6 +153,8 @@
  *     轮换还排在「新备份改名成功」之后:改名失败时这一刀被拒,但旧备份一个没动。
  *     卡片引用到的原文快照也全部进保护清单 —— 恢复/分叉会话里同一个 toolCallId 的原文
  *     早就落过盘,不在「本次待写」里,却是新卡片此刻指向的文件。
+ *     同一批收尾的卡片是一起提交的:整批提交前,前面几刀引用的备份文件同样在保护清单里;
+ *     轮换腾不出地方就停在这一刀(这一批不再往下切),不拿还没提交的卡片开刀。
  *     隔离目录里删不掉的文件搬回原位,占用照实算(不把「移走」当「已释放」);两次都失败的
  *     残留在下一次轮换补删,补删前仍计入用量。这类回滚会让用量短暂超出上限,但**不因此拒绝**
  *     这一刀 —— 已经删成功的旧备份回不来,拒绝只会白删。
@@ -2913,14 +2917,24 @@ export default function (pi: ExtensionAPI) {  // Idle cut: pi fires agent_before
 
     const edits: any[] = [];
     const cards: any[] = [];
+    // 整批卡片一起提交:这一批里已经切出来的备份文件,在提交前谁都不许删。
+    const batchProtect: string[] = [];
     let working = entries;
     let simulated = totalTokens;
     try {
       for (let pass = 0; pass < DRAIN_PASSES; pass += 1) {
         if (drain && simulated <= KEEP_ROUND_TOKENS) break;
-        const result = attemptCut({ state, entries: working, totalTokens: simulated, drain, engine: resolved.engine });
+        const result = attemptCut({
+          state,
+          entries: working,
+          totalTokens: simulated,
+          drain,
+          engine: resolved.engine,
+          batchProtectPaths: batchProtect,
+        });
         if (result === null) break;
         for (const draft of result.drafts) (draft.type === "custom_message" ? cards : edits).push(draft);
+        batchProtect.push(...result.protectedPaths);
         working = result.entries;
         simulated = result.after;
         if (!drain) break;
@@ -2938,12 +2952,13 @@ export default function (pi: ExtensionAPI) {  // Idle cut: pi fires agent_before
 }
 
 /**
- * 收尾会连切几刀,每刀各带一张卡片。pi 的 custom_message 只能追加到尾巴上,
- * 直接按切口顺序发就会倒序(最老的摘要落在最下面);上游是原地替换,位置即时间序。
- * 这里把卡片倒回来,让多次切割后的上下文顺序与上游一致。
+ * 收尾会连切几刀,每刀各带一张卡片。卡片按切出来的先后发出:1.1.0 的「卡片地板」
+ * 规定后一刀只能落在前一张卡片右边(切点右边还有卡片就不切),所以这个先后就是上下文里的
+ * 时间序 —— 与上游原地替换(surfaceOp replace)看到的一致。
+ * pi 的 custom_message 只能追加到尾巴上,但追加的相对顺序照旧。
  */
 export function orderedDrainDrafts(edits: any[], cards: any[]): any[] {
-  return [...edits, ...cards.slice().reverse()];
+  return [...edits, ...cards];
 }
 
 /** 每会话的轮次增长基线:预测下一次请求会不会超过水位(1.0.8)。 */
@@ -2976,7 +2991,9 @@ function attemptCut(options: {
   totalTokens: number;
   drain: boolean;
   engine: SpineEngine;
-}): { drafts: any[]; entries: SpineEntry[]; after: number } | null {
+  /** 同一批收尾里前面几刀的卡片已经引用的文件:轮换不许删,删了那些卡片就指向空文件。 */
+  batchProtectPaths?: string[];
+}): { drafts: any[]; entries: SpineEntry[]; after: number; protectedPaths: string[] } | null {
   const { state, entries, totalTokens, drain, engine } = options;
   const raws = rawPlanner(state, entries);
   const chunk = selectNewestChunk(
@@ -3043,7 +3060,9 @@ function attemptCut(options: {
     // 快照已经写在磁盘上,所以不再重复计入待写字节;仍要加入保护清单。
     const pending = raws.planned();
     // 卡片真正引用到的原文都要保护:新规划的要写,恢复会话里早就存在的会被复用。
-    const protectPaths = raws.referenced().map((record) => record.path || "").filter(Boolean);
+    const ownPaths = [file, ...raws.referenced().map((record) => record.path || "").filter(Boolean)];
+    // 前面几刀的卡片也还没提交,它们引用的文件同样不许被这一刀的轮换删掉。
+    const protectPaths = [...ownPaths, ...(options.batchProtectPaths ?? [])];
     // 这些快照在卡片被接受之前就落盘了;这一刀随后被拒的话,它们没有任何卡片引用,
     // 而原文写入不走容量轮换 —— 不清理就会一轮轮堆积,突破单会话上限。
     const writtenRaw: string[] = [];
@@ -3111,7 +3130,7 @@ function attemptCut(options: {
       },
       ...entries.slice(chunk.end + 1),
     ];
-    return { drafts, entries: simulatedEntries, after: estimatedAfter };
+    return { drafts, entries: simulatedEntries, after: estimatedAfter, protectedPaths: ownPaths };
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     logLine(state, `spine cut failed: ${message}`);
