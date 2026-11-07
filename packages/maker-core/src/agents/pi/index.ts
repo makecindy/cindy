@@ -246,8 +246,12 @@ import {
   assertPiSpawnArgvFitsPlatform,
   collectPiProjectResourceCliPaths,
   emptyPiProjectResourceCliPaths,
+  collectPiProjectResourceWatchRootMtimes,
   filterPiProjectCliSkills,
   piProjectResourceCliArgs,
+  piProjectResourcesDrifted,
+  resolvePiResourceRepoRoot,
+  snapshotPiProjectResourceLaunch,
 } from './project-resource-cli.js';
 import {
   createPiTranslateContext,
@@ -4065,10 +4069,21 @@ export class PiAgent extends BaseAgent {
     // Local root tasks load project skills/prompts/extensions in place via
     // explicit CLI flags. Keep --no-approve so `.pi/settings.json` is unread.
     // 受邀者：只要会话目录内的技能与提示词模板，项目扩展不加载(会在本机执行)。
+    // watch 基线与 git 边界必须先于路径收集采样(见 snapshotPiProjectResourceLaunch):
+    // 三样同批且基线在前,采样窗口内新增的资源/边界变化只会让首次快检多一次重扫后
+    // 收敛;git root 只解析一次,经 hint 贯穿三样 —— 窗口内 .git 消失不会采出旧根
+    // 盯视面配新根路径集合的混合口径。
+    const projectResourceRepoRootAtLaunch = loadProjectResourcesInPlace && !guestRoot
+      ? resolvePiResourceRepoRoot(opts.workingDir)
+      : null;
+    const projectResourceWatchRootMtimes = projectResourceRepoRootAtLaunch
+      ? collectPiProjectResourceWatchRootMtimes(opts.workingDir, projectResourceRepoRootAtLaunch)
+      : null;
     const collectedProjectResources = loadProjectResourcesInPlace
       ? guestRoot
-        ? restrictPiGuestProjectResources(collectPiProjectResourceCliPaths(opts.workingDir), guestRoot)
-        : collectPiProjectResourceCliPaths(opts.workingDir)
+        ? restrictPiGuestProjectResources(
+          collectPiProjectResourceCliPaths(opts.workingDir, projectResourceRepoRootAtLaunch ?? undefined), guestRoot)
+        : collectPiProjectResourceCliPaths(opts.workingDir, projectResourceRepoRootAtLaunch ?? undefined)
       : emptyPiProjectResourceCliPaths();
     const projectResourceCli = loadProjectResourcesInPlace
       ? {
@@ -4079,6 +4094,13 @@ export class PiAgent extends BaseAgent {
           ),
         }
       : collectedProjectResources;
+    // 启动快照:供运行时空闲时的资源漂移检测(见 handle.hasProjectResourceDrift)。
+    // 快照存未经禁用过滤的原始收集结果,与 drift 检测的 fresh collect 同口径;
+    // 受邀者会话的 collected 已按 guestRoot 裁剪,与全量扫描口径不一致,不参与漂移检测。
+    const projectResourceLaunchSnapshot = projectResourceWatchRootMtimes && projectResourceRepoRootAtLaunch
+      ? snapshotPiProjectResourceLaunch(
+        opts.workingDir, collectedProjectResources, projectResourceWatchRootMtimes, projectResourceRepoRootAtLaunch)
+      : null;
 
     // Own the entire managed-skill setup in the existing startup rollback:
     // discovery and path checks can fail before any projection is created.
@@ -7724,6 +7746,10 @@ export class PiAgent extends BaseAgent {
         return runtimeCapabilityManifest;
       },
       disabledSkillPaths: disabledSkillSnapshot,
+      hasProjectResourceDrift() {
+        return projectResourceLaunchSnapshot !== null
+          && piProjectResourcesDrifted(projectResourceLaunchSnapshot);
+      },
       onRuntimeCapabilitiesChange(listener) {
         if (closed) {
           notifyRuntimeCapabilityListener(listener, undefined);

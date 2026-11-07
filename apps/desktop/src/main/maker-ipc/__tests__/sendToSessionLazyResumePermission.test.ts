@@ -322,7 +322,7 @@ describe('companion internal delivery after automation', () => {
       limit: async () => [{ role, botId: 'companion' }] };
     const enqueue = vi.fn(async () => undefined);
     const h = botTaskDispatchHarness({ child: { permissionMode: 'auto', planModeEnabled: false } }, {
-      child: { id: 'child', agentKind: 'pi', isTurnRunning: () => false, getStatus: () => 'active' },
+      child: { id: 'child', agentKind: 'pi', isTurnRunning: () => false, getStatus: () => 'active', hasRecyclableProjectResourceDrift: () => false },
     }, {
       getDbClient: () => ({ drizzle: { select: () => dbChain } }),
       isShadowedCompanionSession, isCompanionShadowed: () => shadowed,
@@ -344,7 +344,7 @@ describe('companion internal delivery after automation', () => {
     const dbChain = { from: () => dbChain, where: () => dbChain,
       limit: async () => [{ role: 'canonical', botId: 'companion' }] };
     const h = botTaskDispatchHarness({ child: { permissionMode: 'auto', planModeEnabled: false } },
-      path === 'live' ? { child: { id: 'child', agentKind: 'pi', isTurnRunning: () => false, getStatus: () => 'active' } } : {}, {
+      path === 'live' ? { child: { id: 'child', agentKind: 'pi', isTurnRunning: () => false, getStatus: () => 'active', hasRecyclableProjectResourceDrift: () => false } } : {}, {
         getDbClient: () => ({ drizzle: { select: () => dbChain } }),
         isShadowedCompanionSession, isCompanionShadowed: () => shadowed,
         createDbMessage: async () => { shadowed = true; },
@@ -364,6 +364,7 @@ describe('companion internal delivery after automation', () => {
     const live: Record<string, object> = {};
     let dispatchedModel: string | undefined;
     const makeLive = () => ({ id: 'child', ...current, isTurnRunning: () => false, getStatus: () => 'active',
+      hasRecyclableProjectResourceDrift: () => false,
       send: async () => { dispatchedModel = current.model; return { accepted: true }; } });
     if (path === 'live') live.child = makeLive();
     const scope = createScheduledModelScope({

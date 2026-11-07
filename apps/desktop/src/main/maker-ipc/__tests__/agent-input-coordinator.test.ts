@@ -12923,7 +12923,7 @@ describe('AgentInputCoordinator replaceQueuedMessage(Orca lead 排队消息修�
     };
     const transaction=createMakerSendTransaction({
       statDirectory:async()=>({isDirectory:()=>true}),
-      getSession:()=>session,closeSession:async()=>{},preflightBotRuntimeResources:async()=>{},
+      getSession:()=>session,closeSession:async()=>{},closeSessionIfCurrent:async()=>{},preflightBotRuntimeResources:async()=>{},
       getSessionMeta:async()=>({}),ensureRemoteReadyForSessionStart:async()=>{},checkWorkDirExists:async()=>true,
       isOrcaMcpHydrated:()=>true,buildCreateOptsWithStderr:x=>x,synthesizeOrcaVendorOptionsFromDb:async()=>false,
       readSessionExtraDirsFromDb:async()=>[],readSessionWorkingDirFromDb:async()=>'/answer',
@@ -15145,7 +15145,7 @@ describe('usage-limit wait (ordinary tasks)', () => {
     })).mockRejectedValueOnce(quota);
     const transaction = createMakerSendTransaction({
       getSession: () => rehydrate ? session : undefined,
-      closeSession: async () => {}, preflightBotRuntimeResources: async () => {},
+      closeSession: async () => {}, closeSessionIfCurrent: async () => {}, preflightBotRuntimeResources: async () => {},
       getSessionMeta: async () => ({}), ensureRemoteReadyForSessionStart: async () => {},
       checkWorkDirExists: async () => true, isOrcaMcpHydrated: () => !rehydrate,
       buildCreateOptsWithStderr: x => x, synthesizeOrcaVendorOptionsFromDb: async () => rehydrate,

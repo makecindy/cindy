@@ -1654,6 +1654,47 @@ export function createTurnRunner(
         return { kind: 'rejected', reason: 'aborted' };
       }
 
+      // 项目资源漂移(如会话中途 openspec init):空闲时经 Maker 以 runtime-refresh
+      // 回收运行时,再按 DB 行自愈重建 —— 与桌面发送事务同口径,IM 直发不用旧资源。
+      // 无 agent-switch 锁的装配不支持关闭后重建,保持原样投递。
+      try {
+        if (deps.acquirePendingAgentSwitch
+          && await getMaker().recyclePiRuntimeIfResourcesDrifted(state.makerSession)) {
+          await refreshSessionAfterPendingAgentSwitch(state, state.makerSession.id, userId);
+          log.info('im send: project resources drifted, recycled runtime before dispatch');
+        }
+      } catch (err) {
+        log.warn('im send: resource-drift recycle failed, sending as-is',
+          err instanceof Error ? err.message : String(err));
+      }
+      // 回收+重建是异步窗口:/stop 可能恰好落在其中;喊停后不得再开始执行,
+      // 与上方 aborted 检查同口径收尾(此时尚未发送,无 chunked 终态章要补)。
+      // 经函数读取:上方检查已把控制流收窄到 'done'|'error',但运行时值在回收
+      // 窗口内仍可变为 'aborted',需要绕开 CFA 的新鲜读取。
+      const turnTerminalNow = (): 'done' | 'aborted' | 'error' => item.turn.terminalKind;
+      if (turnTerminalNow() === 'aborted') {
+        const index = state.queue.indexOf(item.turn);
+        if (index >= 0) state.queue.splice(index, 1);
+        // beginChunkedReply 早在消息准备期已执行(企微 beginReply 已登记未结束流),
+        // 与上方停止分支同款补发停止终稿,否则回复永不结束、下一轮终稿错位。
+        if (output.kind === 'chunked-text' && item.turn.chunkedReplyBegun) {
+          try {
+            await output.commitFinal({
+              userId,
+              text: ui.agent.stopDone(0),
+              terminal: 'aborted',
+              threadTs: item.turn.scopeKey,
+            });
+          } catch (err) {
+            log.warn(`cancelled reply finalization failed: ${err instanceof Error ? err.message : String(err)}`);
+          }
+        }
+        await completeTurnCallbackAfterAck(item.turn);
+        settleTurnTerminal(item.turn);
+        if (!finishDeferredDetachIfIdle(state)) armDispatchRetry(state, userId);
+        return { kind: 'rejected', reason: 'aborted' };
+      }
+
       const sendResult = await state.makerSession.send(outgoingMessage as typeof item.userMessage, {
         planMode: false,
         // IM owns successful replies, including turns in an attached desktop task.

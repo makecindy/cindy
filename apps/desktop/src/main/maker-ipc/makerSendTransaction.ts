@@ -383,6 +383,8 @@ export interface MakerSendTransactionSession {
   /** Codex host-owned evidence: a provider turn crossed acceptance on this runtime. */
   codexThreadMayHaveRollout?: boolean;
   isTurnRunning(): boolean;
+  /** 项目资源漂移且满足回收空闲口径(仅 pi 本地根任务实现;其余会话缺省,永不回收)。 */
+  hasRecyclableProjectResourceDrift?(): boolean;
   send(message: UserMessage | string, opts?: SessionSendOptions): Promise<SessionSendResult>;
 }
 
@@ -394,6 +396,9 @@ export interface MakerSendTransactionLog {
 export interface MakerSendTransactionDeps {
   getSession(sessionId: string): MakerSendTransactionSession | undefined | null;
   closeSession(sessionId: string): Promise<void>;
+  /** 资源漂移回收必须走 Maker 的 runtime-refresh 原因(直接 Session.close 会被
+   * IM runner 当 unexpected 丢弃排队回合);内部用 closeSessionIfCurrent 幂等。 */
+  closeSessionIfCurrent(sessionId: string): Promise<void>;
   preflightBotRuntimeResources(opts: CreateOpts): Promise<void>;
   getSessionMeta(sessionId: string): Promise<{ title?: string } | null>;
   /** The same clear/rewind-filtered transcript used for native context handoffs. */
@@ -1191,6 +1196,17 @@ export function createMakerSendTransaction(deps: MakerSendTransactionDeps): Make
       // and rebuild the handle before dispatching the message.
       if (sess?.getStatus?.() === 'error') {
         deps.log.info('send: error session requires recovery before dispatch', { sessionId });
+        sess = undefined;
+      }
+      // 会话中途新增的项目资源(如 openspec init):空闲时经 Maker 以
+      // 'runtime-refresh' 回收运行时(session:closed 带刷新原因,IM runner 保留
+      // 排队回合),下面的 lazy bootstrap 会重扫重算 argv 后再投递
+      // (见 Session.hasRecyclableProjectResourceDrift 的空闲口径说明)。
+      // 无 createOpts 的直发/老链路调用无法走 lazy-create 重建,跳过回收按
+      // 原运行时投递(维持回收前行为,不把触发消息拒成 NOT_FOUND)。
+      if (createOpts && sess?.hasRecyclableProjectResourceDrift?.()) {
+        await deps.closeSessionIfCurrent(sessionId);
+        deps.log.info('send: project resources drifted, recycling runtime before dispatch', { sessionId });
         sess = undefined;
       }
       if (sess?.isTurnRunning()) {

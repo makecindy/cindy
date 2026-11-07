@@ -1917,6 +1917,17 @@ export class MakerScheduleRunner implements ScheduleRunner {
       );
     }
 
+    // 直发降级路径(无 schedulerQueue):项目资源漂移时先经 Maker 以 runtime-refresh
+    // 回收;回收后必须就地重建 —— 下方的 stale 自愈只在 Pi 模型路由分支内,否则
+    // 直发会打到已关闭的实例上。
+    if (await this.deps.maker.recyclePiRuntimeIfResourcesDrifted(session)) {
+      this.deps.logger.info?.('[runner] project resources drifted, recycled runtime before dispatch', { sessionId: session.id });
+      session = await this.deps.maker.createSession({ ...createSessionOpts });
+      // wireSessionToIpc 按 Session 实例幂等,换实例需重接广播/落库链路,
+      // 否则本轮回复与工具记录不进聊天页。
+      wireSessionToIpc(session);
+    }
+
     // Resolve Pi's last provider change before listener, abort and handoff
     // state bind to the Session instance. The transaction may retire it.
     if (!agentDeviceId && effectiveAgentKind === 'pi' && this.deps.checkModelRoute) {

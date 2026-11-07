@@ -187,6 +187,12 @@ export interface HookContinuationWatchRequest {
 export interface HookRunRequest {
   /** Host-resolved companion channel lane; never accepted from the wire. */
   companionBotId?: string;
+  /**
+   * 取消探针(dispatcher 侧 task.cancel 账本):runner 在回收/重建等长窗口后、
+   * 发送前查询 —— 喊停若落在窗口内, 中止信号对旧实例无目标、对新实例未登记,
+   * 只有这个账本能告诉 runner「用户已喊停」。未注入 = 无取消通道。
+   */
+  isCancelRequested?: () => boolean;
   /** Untruncated user body for persistence; source.userText is only a bounded display preview. */
   userText?: string;
   /** Local display snapshot; not part of the server wire protocol. */
@@ -1982,6 +1988,8 @@ export function createHookDispatcher(deps: HookDispatcherDeps): HookDispatcher {
         outcome = await runner.run({
           ...task.run,
           ...xVideoRelayOption(task, runningEntry),
+          // 取消探针:runner 在回收/重建窗口后发送前查询,喊停不落进新进程执行。
+          isCancelRequested: () => cancelRequested.has(requestKey),
           onTurnTerminal: () => { runningEntry.observing = false; },
           onProgress,
           ...(task.run.source?.im === 'telegram' ? {
