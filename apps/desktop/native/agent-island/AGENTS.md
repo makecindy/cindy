@@ -78,6 +78,10 @@ pnpm --filter desktop preview:island-mascots
 
 ## 系统灵动岛（PROLED MacBook Pro）与实时活动
 
+**命名**：本目录做的顶部任务面板，界面上叫「任务胶囊」（繁中「任務膠囊」，其他语言 Agent Notch），原名「灵动岛 / Agent Island」；
+「灵动岛」只指 Apple 的（繁中「動態島」），设置页分区标题沿用「灵动岛」统称两者。代码标识（`agentIsland`、`AgentIsland*`）不改。
+术语见 `i18n/glossary.json` 的 `agent-notch`、`macos-dynamic-island`。
+
 2026-10 发布的 PROLED MacBook Pro 用摄像头挖孔取代刘海，系统自己的灵动岛（`MenuBarAgent`
 的 CenterHUD）画在屏幕顶部正中。macOS 27.3 实测（模拟形态，与 Apple 设计资源的边框图一致）：
 空闲约 57×32pt、距顶边 8pt；计时器实时活动紧凑态约 147×32pt；点开后约 261×58pt。

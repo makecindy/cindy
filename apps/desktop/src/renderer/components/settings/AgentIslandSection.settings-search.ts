@@ -23,6 +23,8 @@ export const agentIslandSettings = defineSettings({
     titleKey: 'settings.agentIsland.enableLabel',
     sectionKey: 'settings.tabs.agentIsland',
     descriptionKey: 'settings.agentIsland.enableHint',
+    // Former names (Agent Island / 灵动岛), so people who knew them still find the switch.
+    aliases: ['Agent Island', '灵动岛', '靈動島', '刘海', 'notch'],
   },
   liveActivityLabel: {
     isVisible: ({ agentIsland }) => agentIsland?.supported === true && agentIsland.liveActivitySupported === true,

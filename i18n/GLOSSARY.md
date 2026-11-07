@@ -326,6 +326,10 @@
 
 任务中主对话之外的额外模型费用，按模型和调用渠道汇总；用户于 2026-10-30 选定中文名称。
 
+### Agent Notch
+
+Cindy 在屏幕顶部显示任务的面板（原名灵动岛 / Agent Island）。苹果在新款 MacBook Pro 上推出灵动岛后改名，避免与 Apple 的灵动岛混同；中文不直译 notch（「刘海」易联想发型），用户于 2026-11-07 选定。设置页搜索保留旧名作别名。
+
 ### Anthropic Messages
 
 Anthropic Messages API / wire protocol 的用户可见名称。四语统一保留官方英文名称，避免与普通的“消息”概念混译；先登记为 proposed，待产品术语评审后固化。
@@ -592,7 +596,7 @@ Orca 协同角色名，与 Worker 成对。五语统一保留英文 Lead，不�
 
 ### Dynamic Island
 
-Apple 的系统灵动岛（新款 MacBook Pro 摄像头挖孔处）。中文沿用 Apple 用语并加「系统」前缀，避免与 Cindy 自己的灵动岛（英文 Agent Island）混同；繁中按 Apple 台湾用语作「動態島」。
+Apple 的灵动岛（新款 MacBook Pro 摄像头挖孔处），沿用 Apple 各地区用语，繁中按 Apple 台湾用语作「動態島」。Cindy 自己的顶部任务面板已改名为任务胶囊 / Agent Notch（见 agent-notch），「灵动岛」只指 Apple 的；设置页分区标题也用这个词，统称两者所在的一页。
 
 ### Live Activities
 
