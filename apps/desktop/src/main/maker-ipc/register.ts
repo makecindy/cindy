@@ -615,6 +615,7 @@ import {
 } from '../localDb/schema.js';
 import { botModelRouteIndex, nextBotModelRoute, normalizeBotModelChain, type BotModelRoute } from '../../shared/botModelChain.js';
 import { createBotModelRouteApplier, createBotModelRouteReconciler } from './botModelRouteReconciler.js';
+import { createBotRouteAppliedStore } from './botRouteAppliedStore.js';
 import {
   cindyAutoRouteToFollow,
   followMovedCindyAutoRoutes,
@@ -17460,6 +17461,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
 
   const reconcileBotModelRoute = createBotModelRouteReconciler({
     ownerEpoch: captureSessionRuntimeControlOwnerEpoch,
+    applied: createBotRouteAppliedStore(() => ownerScopedUserDataPath()),
     onSelectionAccepted: (sessionId, expectedBaseline) => updateScheduledPreference(sessionId, null, expectedBaseline),
     withSessionLock: withSendToSessionLock,
     read: async (sessionId, purpose) => {
@@ -18039,8 +18041,17 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       };
     },
     setSessionRuntime: async ({ targetSessionId, expectedGeneration, patch, beforeMutation }) => {
+      // A deliberate model choice becomes the task's own, like a choice in the composer:
+      // an earlier automation's saved route must not restore over it on the next run.
+      const keepAsTaskChoice = async <T extends { ok: boolean }>(result: T): Promise<T> => {
+        if (result.ok) {
+          await updateScheduledPreference(targetSessionId, null).catch(() => false);
+          await reconcileBotModelRoute.acceptTaskChoice(targetSessionId).catch(() => {});
+        }
+        return result;
+      };
       if (patch.harness !== undefined) {
-        return setSessionRuntimeHarness({
+        return keepAsTaskChoice(await setSessionRuntimeHarness({
           withSessionLock: withSendToSessionLock,
           ownerEpoch: captureSessionRuntimeControlOwnerEpoch,
           generation: (id) => getSessionRuntimeControlSnapshot(id).generation,
@@ -18074,7 +18085,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
               runtimeSource: 'agent', assertSelectionCurrent, beforeMutation,
             });
           },
-        }, { targetSessionId, expectedGeneration, beforeMutation, patch: { ...patch, harness: patch.harness } });
+        }, { targetSessionId, expectedGeneration, beforeMutation, patch: { ...patch, harness: patch.harness } }));
       }
       const profiles = await readSessionRuntimeProfiles(targetSessionId);
       if (beforeMutation) await beforeMutation();
@@ -18140,6 +18151,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
           message: 'model-window confirmation is required; runtime selection was not changed',
         };
       }
+      await keepAsTaskChoice({ ok: true });
       const control = getSessionRuntimeControlSnapshot(targetSessionId);
       return {
         ok: true,
@@ -23387,6 +23399,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     await persistSessionFields(sessionId, patch);
     if (internalOptions.source === 'user' && !internalOptions.configStaged) {
       await updateScheduledPreference(sessionId, null);
+      await reconcileBotModelRoute.acceptTaskChoice(sessionId).catch(() => {});
     }
     if (!internalOptions.applyingUserSelectionOnSend) {
       agentSwitchPending.clear(sessionId);
@@ -24859,7 +24872,10 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
         }
         let generation: number;
         if (internalOptions.source === 'user') {
-          if (!internalOptions.configStaged) await updateScheduledPreference(sessionId, null);
+          if (!internalOptions.configStaged) {
+            await updateScheduledPreference(sessionId, null);
+            await reconcileBotModelRoute.acceptTaskChoice(sessionId).catch(() => {});
+          }
           generation = recordUserSessionRuntimeMutation(sessionId);
         } else if (internalOptions.applyingPendingGeneration !== undefined) {
           if (!response.deferred) {
