@@ -3440,6 +3440,8 @@ describe('codex proxy host', () => {
     }
   });
 
+  // Providers may omit the empty marker even though the call is still a plain
+  // collaboration invocation; preserve that distinction before Codex parses it.
   it('marks plain collaboration calls as unencrypted when the provider omits the marker (#9183)', async () => {
     const { repairCodexCollaborationFunctionCall } = await import('../codex-proxy-host.js');
     expect(repairCodexCollaborationFunctionCall({
