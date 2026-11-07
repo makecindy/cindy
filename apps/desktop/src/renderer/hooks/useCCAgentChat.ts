@@ -57,6 +57,7 @@ import {
   type SessionChatState,
 } from '@/lib/makerChatStore';
 import type { ChatDisplaySnapshot } from '@/components/chat/ChatDisplaySnapshotContext';
+import { clampReorderAcrossStop } from '@/components/new-chat/pendingQueueHold';
 import type { AttachedFile, MentionedResource } from '@/lib/fileTypes';
 import type { PastedTextRange, SlashCommandRange } from '@/lib/imageRef';
 import type { AgentInputReference } from '@cindy/maker-shared/agent-input-projection';
@@ -828,9 +829,15 @@ export function useCCAgentChat(
   const moveQueueItem = useCallback(
     (clientId: string, targetIndex: number) => {
       if (!sessionId) return;
-      makerChatStore.moveQueueItem(sessionId, clientId, targetIndex);
+      // 桌面排序入口统一收口：停点之前的条目不允许被顶到停点之后，
+      // 否则原本应执行的条目不再自动发送（协同侧另有停点检查，这里不依赖它）。
+      makerChatStore.moveQueueItem(
+        sessionId,
+        clientId,
+        clampReorderAcrossStop(lightState.pendingQueue, clientId, targetIndex),
+      );
     },
-    [sessionId],
+    [sessionId, lightState.pendingQueue],
   );
 
   const setQueueInteractionLock = useCallback(

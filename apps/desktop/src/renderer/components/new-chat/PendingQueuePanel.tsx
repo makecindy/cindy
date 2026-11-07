@@ -509,7 +509,9 @@ export function PendingQueuePanel({
           return (
             <div
               role="listitem"
-              tabIndex={steerableRow && !isPendingEnqueue ? 0 : undefined}
+              // 停点行虽不可插话，但必须保留键盘焦点入口：Tab 聚焦后行内恢复按钮
+              // 随 onFocusCapture 渲染，键盘用户才能不靠鼠标恢复发送。
+              tabIndex={(steerableRow || canReleaseRow) && !isPendingEnqueue ? 0 : undefined}
               aria-keyshortcuts={steerableRow ? 'Meta+Enter Control+Enter' : undefined}
               onKeyDown={handleRowKeyDown}
               onMouseEnter={() => {

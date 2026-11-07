@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
 import {
+  clampReorderAcrossStop,
   findStopIndex,
   queueRowActionWidth,
   resolveQueueHoldRow,
@@ -91,5 +92,28 @@ describe('pending queue hold row projection', () => {
       canSteer: false,
       canRelease: true,
     });
+  });
+});
+
+describe('clampReorderAcrossStop', () => {
+  it('caps targets of pre-stop rows at the stop index', () => {
+    const queue = [queuedMessage('a'), queuedMessage('held', { held: true }), queuedMessage('b')];
+    // Greptile 场景:[a, held, b] 里 a 移到 2 会变成 [held, a, b],a 不再自动发送。
+    expect(clampReorderAcrossStop(queue, 'a', 2)).toBe(1);
+    // 已在停点前合法范围内的移动不收敛。
+    expect(clampReorderAcrossStop(queue, 'a', 1)).toBe(1);
+    expect(clampReorderAcrossStop(queue, 'a', 0)).toBe(0);
+  });
+
+  it('leaves the held row and post-stop rows untouched', () => {
+    const queue = [queuedMessage('a'), queuedMessage('held', { held: true }), queuedMessage('b')];
+    expect(clampReorderAcrossStop(queue, 'held', 0)).toBe(0);
+    expect(clampReorderAcrossStop(queue, 'b', 0)).toBe(0);
+  });
+
+  it('is a no-op without a stop point or unknown client', () => {
+    const queue = [queuedMessage('a'), queuedMessage('b')];
+    expect(clampReorderAcrossStop(queue, 'a', 2)).toBe(2);
+    expect(clampReorderAcrossStop([queuedMessage('held', { held: true })], 'missing', 5)).toBe(5);
   });
 });

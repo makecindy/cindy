@@ -30,6 +30,25 @@ export function findStopIndex(queue: readonly QueuedMessage[]): number {
   return queue.findIndex((entry) => entry.held === true);
 }
 
+/**
+ * 重排目标钳制:停点之前的条目不能被移到停点之后。
+ * 队列承诺「停点前的都会先发」;桌面排序入口直接进 coordinator.move,没有
+ * 协同侧的停点检查,必须在发起侧把插入位置锁在停点(含)之前,否则原本
+ * 应执行的条目被顶到停点后不再自动发送。
+ */
+export function clampReorderAcrossStop(
+  queue: readonly QueuedMessage[],
+  clientId: string,
+  targetIndex: number,
+): number {
+  const stopIndex = findStopIndex(queue);
+  if (stopIndex < 0) return targetIndex;
+  const fromIndex = queue.findIndex((item) => item.clientId === clientId);
+  // 只有停点之前的条目受钳制;停点行与它之后的条目本就不可发起移动。
+  if (fromIndex < 0 || fromIndex >= stopIndex) return targetIndex;
+  return Math.min(targetIndex, stopIndex);
+}
+
 export function resolveQueueHoldRow(
   entry: QueuedMessage,
   stopIndex: number,
