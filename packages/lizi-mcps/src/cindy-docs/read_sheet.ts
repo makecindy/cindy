@@ -430,6 +430,7 @@ async function readXlsx(
   }
   queuedXlsxTasks++;
   const startTime = Date.now();
+  let underlyingReadPromise: Promise<void> | undefined;
 
   const run = async (): Promise<SheetRead> => {
     const elapsed = Date.now() - startTime;
@@ -442,14 +443,35 @@ async function readXlsx(
       );
     }
 
-    // 在出队获得执行槽后再读取并分配工作簿 Buffer，避免多个排队任务同时在主进程中堆积内存
-    const archive = await readInputFileWithinLimit(
+    // 在出队获得执行槽后再读取并分配工作簿 Buffer，避免多个排队任务同时在主进程中堆积内存；
+    // 同时对文件 I/O 施加剩余超时预算，避免慢速或挂起文件系统长期阻塞工作队列。
+    const fileReadPromise = readInputFileWithinLimit(
       root,
       absPath,
       MAX_XLSX_BYTES,
       xlsxTooLarge,
       readOptions,
     );
+    // 挂靠底层读取以跟踪实际 I/O 结束时刻；若此请求超时退出，配额将保留至 underlying I/O 完成
+    underlyingReadPromise = fileReadPromise.then(() => {}, () => {});
+
+    let fileReadTimer: NodeJS.Timeout | undefined;
+    const readTimeoutPromise = new Promise<never>((_, reject) => {
+      fileReadTimer = setTimeout(() => {
+        reject(new DocsPathError(
+          'READ_TIMEOUT',
+          `读取工作簿超时(${XLSX_READ_TIMEOUT_MS}ms)`,
+          '这个工作簿解析时间过长,为保护 Cindy 已终止读取。请先拆分或重新保存文件。',
+        ));
+      }, remainingTimeoutMs);
+    });
+
+    let archive: Buffer;
+    try {
+      archive = await Promise.race([fileReadPromise, readTimeoutPromise]);
+    } finally {
+      if (fileReadTimer) clearTimeout(fileReadTimer);
+    }
 
     const elapsedAfterRead = Date.now() - startTime;
     const remainingAfterReadMs = XLSX_READ_TIMEOUT_MS - elapsedAfterRead;
@@ -474,9 +496,19 @@ async function readXlsx(
 
   const queued = workerQueue.then(run, run);
   workerQueue = queued.then(() => {}, () => {});
-  return queued.finally(() => {
-    queuedXlsxTasks--;
+  // 调用方应立即收到超时拒绝，不能被底层未完成的 I/O 阻塞返回；
+  // 但并发配额 (queuedXlsxTasks) 必须在后台挂靠等待底层文件读取完全 settle（释放 handle 和 Buffer）后再扣减，
+  // 避免孤儿 I/O 绕过并发上限导致内存泄漏或句柄耗尽。
+  void queued.catch(() => {}).finally(() => {
+    if (underlyingReadPromise) {
+      void underlyingReadPromise.finally(() => {
+        queuedXlsxTasks--;
+      });
+    } else {
+      queuedXlsxTasks--;
+    }
   });
+  return queued;
 }
 
 async function readTextTable(

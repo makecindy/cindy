@@ -1205,6 +1205,7 @@ describe('read_sheet', () => {
       expect(second.rows).toEqual([['val'], [42]]);
       expect(_testHooks.getActiveWorker()).not.toBeNull();
     } finally {
+      _testHooks.terminateActiveWorker();
       vi.useRealTimers();
     }
   });
