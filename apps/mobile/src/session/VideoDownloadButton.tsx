@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useRef, useState, type ReactNode } from 'react';
 import { ActivityIndicator, Alert, Pressable } from 'react-native';
 import { useTranslation } from 'react-i18next';
 import { Download } from 'lucide-react-native';
@@ -12,15 +12,16 @@ import { extOfMime } from './remoteMediaDiskCache';
 import { downloadRemoteMediaShareTemp } from './remoteMediaDiskCacheExpo';
 import { createTransferProgressMeter, formatTransferProgress } from './transferProgress';
 
-/** Export a separate local copy so the OS sheet outlives the preview's cache lease. */
-export function VideoDownloadButton({ source, mimeType, active = true, immersive = false }: {
+/**
+ * Export a separate local copy so the OS sheet outlives the preview's cache lease.
+ * The preview shell draws its own (native) button with this hook; inline players use VideoDownloadButton.
+ */
+export function useVideoDownload({ source, mimeType, active = true }: {
   source: string | null;
   mimeType?: string;
   active?: boolean;
-  immersive?: boolean;
 }) {
   const { t } = useTranslation();
-  const { colors } = useTheme();
   const { accountGeneration } = useAuth();
   const focused = useIsFocused();
   const enabled = active && focused;
@@ -70,11 +71,29 @@ export function VideoDownloadButton({ source, mimeType, active = true, immersive
       if (pending.current === controller) { pending.current = null; setBusy(false); setProgress(''); }
     }
   };
+  return { busy, progress, disabled: !source || !enabled || busy, download };
+}
+
+export type VideoDownloadState = ReturnType<typeof useVideoDownload>;
+
+export function VideoDownloadButton({ source, mimeType, active = true, immersive = false, render }: {
+  source: string | null;
+  mimeType?: string;
+  active?: boolean;
+  immersive?: boolean;
+  /** 由宿主画按钮(预览外壳用原生按钮);不传时画本组件自己的按钮。 */
+  render?: (download: VideoDownloadState) => ReactNode;
+}) {
+  const { t } = useTranslation();
+  const { colors } = useTheme();
+  const state = useVideoDownload({ source, mimeType, active });
+  if (render) return render(state);
+  const { busy, progress, disabled, download } = state;
   // Lightbox is an intentionally black immersive surface, like its other controls.
   const color = immersive ? '#ffffff' : colors.textPrimary;
   return <Pressable accessibilityRole="button" accessibilityLabel={t('message.richAnswer.downloadVideo')}
-    accessibilityState={{ busy, disabled: !source || !enabled || busy }}
-    disabled={!source || !enabled || busy} onPress={() => { void download(); }} testID="message.videoDownload"
+    accessibilityState={{ busy, disabled }}
+    disabled={disabled} onPress={() => { void download(); }} testID="message.videoDownload"
     style={{ minHeight: 44, paddingHorizontal: spacing.md, flexDirection: 'row', alignItems: 'center',
       justifyContent: 'center', gap: spacing.sm, opacity: source ? 1 : 0.5 }}>
     {busy ? <ActivityIndicator color={color} /> : <Download color={color} size={iconSize.action} strokeWidth={iconStroke.regular} />}

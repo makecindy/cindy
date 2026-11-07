@@ -1547,6 +1547,8 @@ describe('readPriorUserRoundCost', () => {
       },
       costUsd: 18.934191,
       hasEstimatedValue: true,
+      // autoResume 不算新的用户请求：这仍是任务的第一轮。
+      isFirstUserRound: true,
     });
   });
 
@@ -1585,7 +1587,35 @@ describe('readPriorUserRoundCost', () => {
       },
       costUsd: 0.5,
       hasEstimatedValue: false,
+      // /clear 之后的第一轮同样没有可复用的缓存。
+      isFirstUserRound: true,
     });
+  });
+
+  // 「缓存命中率偏低」建议据此排除第一轮；第二条真实用户请求起不再标记。
+  it('首轮运行中的插话不算新的用户请求', async () => {
+    const sqlite = createDb();
+    sqlite.prepare('INSERT INTO sessions (id, cleared_at) VALUES (?, NULL)').run('s1');
+    insertCostMessage(sqlite, { id: 'user-1', role: 'user', createdAt: 1_000 });
+    insertCostMessage(sqlite, {
+      id: 'steer', role: 'user', createdAt: 1_100, agentMeta: { delivery: 'steer' },
+    });
+    insertCostMessage(sqlite, { id: 'target', role: 'assistant', createdAt: 1_200 });
+
+    const prior = await readPriorUserRoundCost('s1', 'target');
+    expect(prior.isFirstUserRound).toBe(true);
+  });
+
+  it('第二条真实用户请求起不再标记为第一轮', async () => {
+    const sqlite = createDb();
+    sqlite.prepare('INSERT INTO sessions (id, cleared_at) VALUES (?, NULL)').run('s1');
+    insertCostMessage(sqlite, { id: 'user-1', role: 'user', createdAt: 1_000 });
+    insertCostMessage(sqlite, { id: 'reply-1', role: 'assistant', createdAt: 1_100 });
+    insertCostMessage(sqlite, { id: 'user-2', role: 'user', createdAt: 1_200 });
+    insertCostMessage(sqlite, { id: 'target', role: 'assistant', createdAt: 1_300 });
+
+    const prior = await readPriorUserRoundCost('s1', 'target');
+    expect(prior.isFirstUserRound).toBeUndefined();
   });
 });
 

@@ -72,6 +72,8 @@ export const COMPANION_IMPORT_ERROR_CODES = [
 ] as const;
 
 export type IpcErrorCode =
+  | 'SUBSCRIPTION_LOGIN_CANCELLED'
+  | 'SUBSCRIPTION_ACCOUNT_FAILED'
   | WritableDirectoryGrantErrorCode
   | (typeof CONTRIBUTION_ERROR_CODES)[number]
   | (typeof COMPANION_IMPORT_ERROR_CODES)[number]
@@ -352,6 +354,8 @@ export interface IpcError {
 }
 
 const IPC_ERROR_CODES: ReadonlySet<IpcErrorCode> = new Set<IpcErrorCode>([
+  'SUBSCRIPTION_LOGIN_CANCELLED',
+  'SUBSCRIPTION_ACCOUNT_FAILED',
   ...WRITABLE_DIRECTORY_GRANT_ERROR_CODES,
   ...COMPANION_IMPORT_ERROR_CODES,
   ...CONTRIBUTION_ERROR_CODES,

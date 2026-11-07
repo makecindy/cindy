@@ -49,6 +49,12 @@ vi.mock('@/contexts/AuthContext', () => ({
   useOptionalDataOwnerGeneration: () => ownerGeneration.value,
 }));
 
+// 本文件只测详情页其它区块;介绍区带着完整 Markdown 渲染器(会初始化真实 i18n),另有专门测试。
+vi.mock('../PluginReadmeSection', () => ({
+  PluginReadmeSection: () => null,
+  usePluginReadme: () => null,
+}));
+
 vi.mock('react-i18next', () => ({
   useTranslation: () => ({
     t: (key: string, options?: Record<string, unknown>) => {

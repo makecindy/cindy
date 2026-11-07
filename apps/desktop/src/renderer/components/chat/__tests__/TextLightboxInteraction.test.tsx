@@ -129,6 +129,8 @@ it.each(['pending', 'invalid'])('keeps the diagram %s state closable', async (ph
   mockFile('invalid diagram');
   const close = vi.fn();
   render(<TextLightbox filePath="/flow.mmd" onClose={close} />);
+  // Opening by pointer must not inherit the preceding test's keyboard tooltip.
+  fireEvent.pointerDown(document.body);
   await act(async () => {
     await vi.runOnlyPendingTimersAsync();
   });
@@ -146,5 +148,25 @@ it.each(['pending', 'invalid'])('keeps the diagram %s state closable', async (ph
   await act(async () => {
     await vi.advanceTimersByTimeAsync(250);
   });
+  expect(close).toHaveBeenCalledOnce();
+});
+
+// Unit regression from markdown-preview-find: the document capture listener
+// closed the preview before Radix could handle its menu Escape. Use the real
+// preview menu; engine stubs above do not replace keyboard ownership.
+it('closes its menu before the document on Escape', async () => {
+  vi.useFakeTimers();
+  mockFile('content');
+  const close = vi.fn();
+  render(<TextLightbox filePath="/preview.md" onClose={close} />);
+  await act(async () => { await vi.runOnlyPendingTimersAsync(); });
+  fireEvent.keyDown(screen.getByRole('button', { name: i18n.t('attachmentPreview.more') }), { key: 'Enter' });
+  const menu = screen.getByRole('menu');
+  fireEvent.keyDown(menu, { key: 'Escape' });
+  await act(async () => { await vi.advanceTimersByTimeAsync(250); });
+  expect(screen.queryByRole('menu')).toBeNull();
+  expect(close).not.toHaveBeenCalled();
+  fireEvent.keyDown(document.body, { key: 'Escape' });
+  await act(async () => { await vi.advanceTimersByTimeAsync(250); });
   expect(close).toHaveBeenCalledOnce();
 });

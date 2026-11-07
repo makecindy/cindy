@@ -282,3 +282,29 @@ describe('registryPricingCatalog', () => {
     });
   });
 });
+
+// Unit: real Desktop quotes must carry PDF Batch caches and retain unknown legacy
+// cache prices without borrowing standard. The prior snapshot had neither behavior.
+it('quotes explicit Anthropic Batch caches and preserves the standard tariff', () => {
+  const registry = BUNDLED_CATALOG.modelRegistry!;
+  const batch = providerReferencePriceQuote('anthropic', 'claude-opus-5-5', registry, {
+    at: '2026-11-06', variant: 'batch',
+  });
+  expect(batch).toMatchObject({ currency: 'USD', inputPerMtok: 2, outputPerMtok: 10,
+    cacheReadPerMtok: 0.1, cacheCreatePerMtok: 2.5, cacheCreate1hPerMtok: 4 });
+  expect(batch?.priority).toBeUndefined();
+  const legacy = providerReferencePriceQuote('anthropic', 'claude-sonnet-4-5', registry, {
+    at: '2026-11-06', variant: 'batch', inputTokens: 200000,
+  });
+  expect(legacy).toMatchObject({ currency: 'USD', inputPerMtok: 1.5, outputPerMtok: 7.5 });
+  expect(legacy?.cacheReadPerMtok).toBeUndefined();
+  expect(legacy?.cacheCreatePerMtok).toBeUndefined();
+  expect(legacy?.cacheCreate1hPerMtok).toBeUndefined();
+  expect(providerReferencePriceQuote('anthropic', 'claude-opus-5-5', registry, { at: '2026-11-06' }))
+    .toMatchObject({ inputPerMtok: 4, outputPerMtok: 20, cacheReadPerMtok: 0.2,
+      priority: { inputPerMtok: 8, outputPerMtok: 40 } });
+  expect(providerReferencePriceQuote('anthropic', 'claude-opus-5-5', registry, { at: '2026-10-21', variant: 'batch' }))
+    .toBeUndefined();
+  expect(providerReferencePriceQuote('anthropic', 'claude-opus-5-5', registry, { at: '2026-10-22', variant: 'batch' }))
+    .toMatchObject({ currency: 'USD', inputPerMtok: 2, outputPerMtok: 10 });
+});

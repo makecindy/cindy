@@ -163,6 +163,22 @@ export function t(key: string, locale?: SupportedLocale): string {
 }
 
 /**
+ * Plural form of `key` for `count`, i18next-style: picks `<key>_<plural category>` for the
+ * locale (falling back to `<key>_other`) and fills `{{count}}`.
+ */
+export function tCount(key: string, count: number, locale?: SupportedLocale): string {
+  const loc = locale ?? getMainLocale();
+  let category = 'other';
+  try {
+    category = new Intl.PluralRules(loc).select(count);
+  } catch {
+    // Unknown tag: `other` is always present.
+  }
+  const raw = rawMainString(`${key}_${category}`, loc) ?? rawMainString(`${key}_other`, loc) ?? key;
+  return raw.replaceAll('{{count}}', String(count));
+}
+
+/**
  * 测试专用:用注入的资源表跑同一条 fallback 链(i18nFallback.test.ts 用人为
  * 删 key 的隔离负 fixture 验证 zh-TW → zh-CN → en → key,不污染真实资源)。
  */

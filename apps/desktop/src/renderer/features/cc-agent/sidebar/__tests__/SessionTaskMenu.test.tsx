@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { useRef, useState, type ReactNode } from 'react';
+import { useRef, useState } from 'react';
 import { MemoryRouter } from 'react-router-dom';
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
@@ -41,7 +41,7 @@ vi.mock('@/features/device-link/JoinSharedTaskDialog', () => ({
 }));
 
 const session = { id: 'task', title: 'Task', status: 'active' } as Session;
-function Harness({ target = session, blocked = false, pluginCommand }: { target?: Session; blocked?: boolean; pluginCommand?: ReactNode }) {
+function Harness({ target = session, blocked = false }: { target?: Session; blocked?: boolean }) {
   const [open, setOpen] = useState(false);
   const trigger = useRef<HTMLButtonElement>(null);
   const slot = (text: string) => <DropdownMenuItem>{text}</DropdownMenuItem>;
@@ -64,7 +64,6 @@ function Harness({ target = session, blocked = false, pluginCommand }: { target?
           tags={slot('tags')}
           copy={slot('copy')}
           exportShare={slot('export')}
-          pluginCommands={pluginCommand}
         />
       </DropdownMenu>
     </div></MemoryRouter>
@@ -118,15 +117,6 @@ it('loads only on open and groups task organization, sharing, viewing and remova
   expect(state.host).toHaveBeenCalledWith({ action: 'state', sessionId: 'task' });
   fireEvent.click(screen.getByRole('menuitem', { name: 'rename' }));
   expect(state.rename).toHaveBeenCalledTimes(1);
-  expect(state.rowClick).not.toHaveBeenCalled();
-});
-
-it('places a supplied plugin command inside the existing task menu', () => {
-  const run = vi.fn();
-  render(<Harness pluginCommand={<DropdownMenuItem onSelect={run}>Format</DropdownMenuItem>} />);
-  openMenu();
-  fireEvent.click(screen.getByRole('menuitem', { name: 'Format' }));
-  expect(run).toHaveBeenCalledOnce();
   expect(state.rowClick).not.toHaveBeenCalled();
 });
 

@@ -1,5 +1,6 @@
 import type { ProviderAccountUsageResult } from '../../shared/providerAccountUsage.js';
 import { kimiUsageWindowMinutes } from '../../shared/kimiCodingUsage.js';
+import { opencodeGoUsageWindowMinutes } from '../../shared/opencodeGoUsage.js';
 /**
  * Turns Cindy's existing usage readers into the menu bar builder's inputs.
  *
@@ -76,6 +77,7 @@ export interface MenubarCollectDeps {
   nowMs: number;
   listProviders(): Promise<ProviderView[]>;
   readKimi?(providerId: string): Promise<ProviderAccountUsageResult>;
+  readOpenCodeGo?(providerId: string): Promise<ProviderAccountUsageResult>;
   readCodex(providerId: string): Promise<CodexAccountUsagePayload | RateLimitSnapshot | null>;
   readClaude(providerId: string): Promise<ClaudeSubscriptionUsageSnapshot | null>;
   readXai(providerId: string): Promise<XaiSubscriptionUsageSnapshot | null>;
@@ -141,6 +143,10 @@ export async function collectMenubarInputs(deps: MenubarCollectDeps): Promise<Me
     if (kind === 'kimi') {
       const result = await safe(`kimi:${provider.id}`, async () => await deps.readKimi?.(provider.id) ?? null, null);
       return kimiSource(provider, result, deps.nowMs);
+    }
+    if (kind === 'opencode-go') {
+      const result = await safe(`opencode-go:${provider.id}`, async () => await deps.readOpenCodeGo?.(provider.id) ?? null, null);
+      return opencodeGoSource(provider, result, deps.nowMs);
     }
     if (kind === 'xai') {
       const snapshot = await safe(`xai:${provider.id}`, () => deps.readXai(provider.id), null);
@@ -738,6 +744,20 @@ export function kimiSource(provider: ProviderView, result: ProviderAccountUsageR
       kind: w.id === 'limit_5h' ? 'session' : w.id === 'limit_7d' ? 'week' : 'period',
       label: w.id, usedPercent: w.usedPercent, resetsAtMs: w.resetsAt,
       windowMinutes: kimiUsageWindowMinutes(w.id) ?? 0,
+    })) ?? [],
+    credits: null, creditsUnlimited: false, prepaidUsd: null, updatedAtMs: snapshot?.fetchedAt ?? null,
+  };
+}
+
+export function opencodeGoSource(provider: ProviderView, result: ProviderAccountUsageResult | null, nowMs: number): MenubarSubscriptionInput {
+  const snapshot = result?.status === 'ready' && !result.stale && result.snapshot.kind === 'opencode-go-quota' ? result.snapshot : null;
+  return {
+    kind: 'subscription', id: provider.id, providerId: provider.id, family: 'opencode-go',
+    logoSvg: familyLogo('opencode-go'), brand: provider.name || 'OpenCode Go', account: null, plan: null,
+    windows: snapshot?.windows.filter(w => w.resetsAt === null || w.resetsAt > nowMs).map(w => ({
+      kind: w.id === 'rolling' ? 'session' : w.id === 'weekly' ? 'week' : 'period',
+      label: w.id, usedPercent: w.usedPercent, resetsAtMs: w.resetsAt,
+      windowMinutes: opencodeGoUsageWindowMinutes(w.id) ?? 0,
     })) ?? [],
     credits: null, creditsUnlimited: false, prepaidUsd: null, updatedAtMs: snapshot?.fetchedAt ?? null,
   };

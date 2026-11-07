@@ -257,6 +257,26 @@ Library 请求同时绑定迁移代次和安装批准，根解析、排队及开
 
 ## 3. 权限即授权边界
 
+通知发现与刷新范围：`GhostManager.listNotificationCandidatesAsync()` 只保留当前 owner
+下已启用、声明 `subscribe.topics` 的候选索引。安装、更新、启停、卸载和 owner 切换
+使索引失效；安装目录、批准记录和 `.disabled` 的外部变化由文件监听失效，监听不可用时
+退回现扫，并以 60 秒有效期兜底漏报。索引不是批准缓存：投递仍按实例键读取当前批准、
+核对批准版本和 topic；不唤醒无关插件，也不因插件尚未运行而漏掉已启用的订阅者。
+任务生命周期事件在预检查时取得一次候选及其 owner，资格查询后复用这次发现结果投递；
+监听不可用时每个事件仍现扫一次，不跨事件缓存，投递前仍检查当前 owner、实例批准、启用与 topic。
+无任务事件订阅者时仍推进带代次与 Lead 复核的焦点记录，避免停用期间切换任务导致
+重新启用后漏发切回通知；该路径跳过投递资格检查、插件唤醒和事件投递。
+订阅发现异常时释放当前代次的原始焦点与主任务去重记录，允许同一焦点重试和切回通知；
+迟到的旧代次失败不得清除新焦点。任务资格暂不可用时仍只释放原始焦点，保留同 Lead 去重。
+
+安装事实变化触发插件应用、浏览器扩展、未读与 Skill 对账。语言、OAuth 等展示变化
+只更新相关展示投影；语言变化还须更新插件 App 注册表中的本地化名称和工具说明，
+保证随后生成的卡片使用新语言，但不触发浏览器扩展、未读、Skill 或订阅索引对账。
+项目禁用只发本机 `ghosts:workdir-prefs-changed`，携带 Host 归一后的
+目录键和禁用列表，保留 setup 唤醒及远端既有插件资源失效通知。Renderer 的展示快照
+不替代调用时的目录策略检查。上述优化不改变 manifest、批准记录或跨端协议，不要求
+存量插件重新安装或确认权限。
+
 - 先判断**谁在执行**，再判断授权边界：
   - 当前 Agent 在途 `ghost_call` 是否执行插件工具，由该会话既有的 Agent 授权决定。
     普通网络和工作目录操作以 Host 下发的严格在途 `callId` 绑定会话；随包代码与
@@ -393,6 +413,14 @@ Library 请求同时绑定迁移代次和安装批准，根解析、排队及开
   代替包验证；Forge、显式 SHA 冲突及不匹配的组织／来源不进入此恢复。沿用更新确认、
   忙碌跳过和失败退避，保留启停态、实例键和同来源用户数据。实现与回归见
   `main/plugin-market/service.ts` 及其 `__tests__/service.test.ts`。
+- 本地种子（开发或个人构建放进 `resources/builtin-ghosts` 的种子；安装包不带种子，见
+  [协议兼容 §2](protocol-compatibility.md#2-插件来源)）与同 id 的服务端市场安装按版本取新、相同取商店：
+  种子版本严格更新才覆盖已装实例（旧布局 `<id>` 或新布局 `_ns/_root/<id>` 原位替换，保留启停态与数据键），
+  相同、更旧或不可比时不动商店字节。实例仍在播种台账内、种子已撤或当前种子不比 Release 新时，自动更新按原
+  商店路由把种子字节换回商店包，不算换源；播种发现已装的是商店字节后摘除台账。受众与孤儿回收不删除有商店
+  安装的实例。只放行播种台账内的根 namespace 已批准实例，不用于授权查找，其它来源冲突仍需用户显式替换。
+  实现与回归见 `main/cindy-brain/builtinGhostProvisioner.ts`、`main/plugin-market/service.ts`
+  （`seededBuiltinYieldsToRelease`）及对应测试。
 - 同一 release 自动更新失败后，在当前进程内按 owner、来源路由和 release 做指数退避
   （5 分钟起、最长 6 小时），日志记录失败次数与下次重试时间；来源发布新 release 时立即
   解除。忙碌跳过不记失败，用户手动重试不受退避限制。
@@ -704,6 +732,15 @@ Library 请求同时绑定迁移代次和安装批准，根解析、排队及开
   [`feature-retirements.md`](../product-rules/feature-retirements.md)。
 
 ## 5. 存量插件兼容：升级必须无感（红线）
+
+`tools[].parameters` 的 16KB 约束：新包入口 `validateGhostManifest` 按 JSON 序列化后的
+UTF-8 字节计量；历史市场 release 入口 `validateStoredGhostManifest` 和已装快照入口
+`validateInstalledGhostManifest` 保留原 UTF-16 长度上限 16,384。市场详情解析与
+`GhostManager` 的 `stored-release` 安装／更新因此可继续读取旧口径合法的多字节 schema，
+无需以服务端历史数据盘点作为客户端兼容的前提。旧口径超限、参数非对象及其它不合法字段仍拒绝；
+市场历史参数兼容独立于已装快照的 agent 声明兼容，不放宽新的能力声明。
+实现同步于协议正本与 Desktop 镜像；回归见协议包 `delivery.test.ts`、Desktop
+`ghost.test.ts` 与 `ghostLocalInstallIdentity.test.ts`（含安装、更新和 receipt 重载）。
 
 **红线**：插件系统的任何改动，都不得让用户本地**已安装、已启用**的插件在 Cindy 升级
 后变得不可用，也不得要求用户重新安装、额外确认、重新配置凭证或重新落一次技能。
@@ -1103,7 +1140,12 @@ Main 按真实逻辑页或专属协议分区定位物理实例，绑定当前 ow
 远程与分享来源复用普通模型选择器的目录与授权通道。选择确认与新任务路由分别重读精确来源目录，
 不可用时不借用本机同名模型；远程 Agent 不要求插件电脑安装对应 Harness。
 `/agent-models` 无参返回可选 `supportsRemoteRoutes:true`；旧 Host 没有该标志时路由插件保留本机行为，
-不回传远程路由，防止旧解析器丢弃来源后误执行。插件自建后台任务仍使用本机 `PluginTaskRoute`。
+不回传远程路由，防止旧解析器丢弃来源后误执行。
+插件自建任务另以 `tasks.capabilities().remoteRoutes:true` 声明完整远程执行支持；
+create / setModel 接受 `PluginTaskRoute.agentDeviceId`，send/accept 重读精确来源授权目录，
+任务记录与文件仍在插件宿主，结果和取消复用普通 Session/远程 proxy 的归属及轮次校验。
+不新增插件批准、不扩大工具/目录权限、不接管远程电脑上的任意任务；旧 route、批准和回执无迁移。
+实现、错误和来源保存规则见 [插件任务远程模型](plugin-task-api-implementation.md#插件任务使用远程模型2026-11-06未发布)。
 实现见 `ghostModelPicker.ts`、`PluginModelPickerHost.tsx`、`mobilePageService.ts`；
 作者契约见 `cindy-plugin-creator/references/plugin-agent-models.md`，回归见 `ghostModelPicker.test.ts`。
 

@@ -335,6 +335,49 @@ describe('send_to_session tool', () => {
     }));
   });
 
+  // #9195: agent_device_id 只决定新任务的位置；"local" 与 create_worker 一样转成 host 的 null。
+  it.each([
+    { agent_device_id: 'device-b', expected: 'device-b' },
+    { agent_device_id: 'local', expected: null },
+  ])('create: agent_device_id=$agent_device_id → host 收到 agentDeviceId=$expected', async ({ agent_device_id, expected }) => {
+    const { registry, sendToSession } = setup();
+    const result = parse(await registry.call('send_to_session', { message: '开工', agent_device_id }));
+    expect(result).toMatchObject({ ok: true, wake_kind: 'created' });
+    expect(sendToSession).toHaveBeenCalledWith(expect.objectContaining({ agentDeviceId: expected }));
+  });
+
+  // #9195 SC5: jump 不能借这个参数改既有任务的位置；host 收不到它，投递照常成功。
+  it('jump: agent_device_id 不传给 host, 投递照常', async () => {
+    const { registry, sendToSession } = setup({
+      result: {
+        ok: true,
+        targetSessionId: UUID,
+        agentKind: 'claude-code',
+        wakeKind: 'already-active',
+        targetTitle: 'Existing',
+        targetLastUserSendAt: null,
+      },
+    });
+    const result = parse(await registry.call('send_to_session', {
+      target_session_id: UUID, message: '增量', agent_device_id: 'device-b',
+    }));
+    expect(result).toMatchObject({ ok: true, wake_kind: 'already-active' });
+    const [accepted] = sendToSession.mock.calls[0] as unknown as [Record<string, unknown>];
+    expect(accepted).not.toHaveProperty('agentDeviceId');
+  });
+
+  // #9195 SC6: 调用方只能从工具说明得知取值来源与失败码，据此换下一台电脑。
+  it('工具说明写明 agent_device_id 的取值来源与失败码', () => {
+    const { registry } = setup();
+    const tool = registry.get('send_to_session')!;
+    // inputShape 是 z.ZodRawShape（值是 core $ZodType，不声明 description），按 classic ZodType 读取说明文案。
+    const shape = tool.inputShape as unknown as Record<string, { description?: string } | undefined>;
+    expect(shape.agent_device_id?.description).toContain('locations[].agent_device_id');
+    expect(tool.description).toContain('【agent_device_id(仅 create 模式)】');
+    expect(tool.description).toMatch(/PROVIDER_ROUTE_UNAVAILABLE: 仅 create/);
+    expect(tool.description).toMatch(/INVALID_ARGS: .*agent_device_id/);
+  });
+
   it('host 返 WORKTREE_UNAVAILABLE → 错误码透传, isError=true', async () => {
     const { registry } = setup({
       result: {
