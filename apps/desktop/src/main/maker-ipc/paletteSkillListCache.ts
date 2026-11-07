@@ -18,6 +18,30 @@ import { createPaletteDiscoveryReuse } from './paletteDiscoveryReuse.js';
 
 export type PaletteSkillListing = { success: true; skills: AgentSkillCommand[] };
 
+/**
+ * Entry identity for one palette read.
+ *
+ * `runtimeGeneration` is the live Pi catalog generation the listing was merged from:
+ * a fork or a `switch_session` replaces that catalog without changing the session id,
+ * so without it a reopened palette would keep serving the pre-fork command — and a
+ * still-`loaded` status also stops the dispatch retry from correcting it.
+ */
+export function paletteSkillListReuseKey(fields: {
+  agentKind: string;
+  workingDir?: string;
+  sessionId?: string;
+  remoteHostId?: string;
+  runtimeGeneration?: number;
+}): string {
+  return JSON.stringify([
+    fields.agentKind,
+    fields.workingDir ?? null,
+    fields.sessionId ?? null,
+    fields.remoteHostId ?? null,
+    fields.runtimeGeneration ?? null,
+  ]);
+}
+
 export const paletteSkillListReuse = createPaletteDiscoveryReuse<PaletteSkillListing>({
   ttlMs: 30_000,
   scope: activeOwnerScopeKey,

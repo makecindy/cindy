@@ -1467,7 +1467,7 @@ import {
   createProjectSkillPreparation,
   toAgentSkillListFailure,
 } from './agentSkillListIpcBoundary.js';
-import { paletteSkillListReuse, shouldCachePaletteSkillListing } from './paletteSkillListCache.js';
+import { paletteSkillListReuse, paletteSkillListReuseKey, shouldCachePaletteSkillListing } from './paletteSkillListCache.js';
 import {
   captureDataOwnerBroadcastScope,
   isDataOwnerBroadcastScopeCurrent,
@@ -8485,12 +8485,17 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
           forceReload?: boolean;
           sessionId?: string;
         };
-        const reuseKey = JSON.stringify([
-          kind,
-          skillParams.workingDir ?? null,
-          skillParams.sessionId ?? null,
-          skillParams.remoteHostId ?? null,
-        ]);
+        const reuseKey = paletteSkillListReuseKey({
+          agentKind: kind,
+          workingDir: skillParams.workingDir,
+          sessionId: skillParams.sessionId,
+          remoteHostId: skillParams.remoteHostId,
+          // Pi merges the live runtime catalog into this roster, and a fork replaces
+          // that catalog in place. Reuse must follow the catalog it was merged from.
+          runtimeGeneration: kind === 'pi' && skillParams.sessionId
+            ? maker.getSessionRuntimeCapabilities(skillParams.sessionId)?.generation
+            : undefined,
+        });
         const ownerScope = activeOwnerScopeKey();
         // A Device Link caller reads a roster that skipped local project-link
         // preparation, so neither direction of the cache may mix with a local palette.
