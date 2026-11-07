@@ -691,6 +691,7 @@
     'localDb.sessions.create': (args) => rpc('/sessions/create', args?.[0] ?? {}),
     'localDb.sessions.update': (args) => rpc('/sessions/update', { sessionId: args?.[0], patch: args?.[1] ?? {} }),
     'localDb.sessions.get': (args) => rpc('/sessions/get', { sessionId: args?.[0] }),
+    'localDb.sessions.delete': (args) => rpc('/sessions/delete', { sessionId: args?.[0] }),
     'localDb.sessions.list': (args) => rpc('/sessions/list', { limit: args?.[0], status: args?.[1], options: args?.[2] }),
     'localDb.recentWorkdirs.list': () => rpc('/recent-workdirs/list'),
     'localDb.projectAliases.list': () => rpc('/project-aliases/list'),

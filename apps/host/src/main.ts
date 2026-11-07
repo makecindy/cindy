@@ -664,6 +664,15 @@ const server = createHostServer({
     if (!row || row.status === 'deleted') throw new Error('session not found');
     return sessionToCamel({ ...row, messageCount: 0 });
   },
+  deleteSession: async (sessionId: string) => {
+    if (!sessionStorage) throw new Error('agent runtime is not ready');
+    const existing = await sessionStorage.get(sessionId);
+    if (!existing) return { deleted: false, sessionId };
+    await sessionStorage.delete(sessionId);
+    provisionalSessionIds.delete(sessionId);
+    eventHub.publish({ type: 'session_changed', sessionId, status: 'deleted' });
+    return { deleted: true, sessionId };
+  },
   discardProvisionalSession: async (sessionId: string) => {
     if (!provisionalSessionIds.has(sessionId) || !sessionStorage) {
       return { discarded: false, remaining: Boolean(await sessionStorage?.get(sessionId)) };
@@ -680,7 +689,7 @@ const server = createHostServer({
   createSession: async (input: Record<string, unknown>) => {
     if (!agentGraph || !sessionStorage) throw new Error('agent runtime is not ready');
     const allowed: Record<string, true> = {
-      id: true, workingDir: true, model: true, effort: true, permissionMode: true,
+      id: true, title: true, workingDir: true, model: true, effort: true, permissionMode: true,
       fastMode: true, planModeEnabled: true, agentKind: true, providerId: true, provisional: true,
       workspaceKind: true, projectDir: true, extraDirs: true, writableDirs: true,
     };
