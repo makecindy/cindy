@@ -1,6 +1,8 @@
 import {
   NATIVE_SUBSCRIPTION_ACCOUNT,
   AgentStartupStoppedError,
+  AgentStartupCleanupPendingError,
+  AgentNotAuthenticatedError,
   isTerminalTurnEvent,
   type BaseAgent,
   type AgentSessionHandle,
@@ -35,16 +37,18 @@ function wrapHandle(
   lease: SubscriptionAccountLease,
   unregister: () => void,
 ): AgentSessionHandle {
+  let cleanupPending = false;
   return new Proxy(handle, {
     get(target, property) {
       if (property === 'send')
         return async (...args: Parameters<AgentSessionHandle['send']>) => {
+          if (cleanupPending) throw new Error('Subscription account runtime is closing');
           lease.account.assertCurrent();
           lease.running(true);
           try {
             return await target.send(...args);
           } catch (error) {
-            lease.running(false);
+            if (!cleanupPending) lease.running(false);
             throw error;
           }
         };
@@ -52,39 +56,38 @@ function wrapHandle(
         const method = target[property];
         return method
           ? async (...args: Parameters<AgentSessionHandle['close']>) => {
-              try {
-                return await method.apply(target, args);
-              } finally {
-                unregister();
-                lease.release();
-              }
+              // Closing the event queue is not proof that the process stopped.
+              // Keep credentials protected through pending/failed close and any late events.
+              cleanupPending = true;
+              lease.running(true);
+              const result = await method.apply(target, args);
+              unregister();
+              lease.release();
+              return result;
             }
           : undefined;
       }
       if (property === 'events')
         return async function* () {
-          try {
-            for await (const event of target.events()) {
-              if (event.type === 'account_usage')
-                observeSubscriptionAccountUsage(lease.account, event.data);
-              if (event.type === 'session_id') await lease.bind([`native:${target.id}`]);
-              if (isTerminalTurnEvent(event)) lease.running(false);
-              if (event.type === 'status' && (event.data as { isRunning?: boolean })?.isRunning)
-                lease.running(true);
-              yield event.type === 'account_usage'
-                ? {
-                    ...event,
-                    data: {
-                      ...(event.data as Record<string, unknown>),
-                      [NATIVE_SUBSCRIPTION_ACCOUNT]: true,
-                    },
-                  }
-                : event;
-            }
-          } finally {
-            unregister();
-            lease.release();
+          for await (const event of target.events()) {
+            if (event.type === 'account_usage')
+              observeSubscriptionAccountUsage(lease.account, event.data);
+            if (event.type === 'session_id') await lease.bind([`native:${target.id}`]);
+            if (isTerminalTurnEvent(event) && !cleanupPending) lease.running(false);
+            if (event.type === 'status' && (event.data as { isRunning?: boolean })?.isRunning)
+              lease.running(true);
+            yield event.type === 'account_usage'
+              ? {
+                  ...event,
+                  data: {
+                    ...(event.data as Record<string, unknown>),
+                    [NATIVE_SUBSCRIPTION_ACCOUNT]: true,
+                  },
+                }
+              : event;
           }
+          // A consumer stopping (or a closed queue) does not establish runtime shutdown.
+          // close/detach owns final release; ordinary terminal events release only turn load.
         };
       const value = Reflect.get(target, property, target);
       return typeof value === 'function' ? value.bind(target) : value;
@@ -200,15 +203,24 @@ export function withSubscriptionAccounts<T extends BaseAgent>(agent: T): T {
             lease.running(false);
             return guardAccountSwitch(wrapHandle(handle, lease, unregister), target, options);
           } catch (error) {
-            try {
-              if (handle) {
-                await handle.close();
-                throw new AgentStartupStoppedError(error);
-              }
-            } finally {
+            const release = () => {
               unregister();
               lease.release();
+            };
+            if (handle) {
+              await handle.close();
+              release();
+              throw new AgentStartupStoppedError(error);
             }
+            if (
+              error instanceof AgentStartupStoppedError ||
+              error instanceof AgentNotAuthenticatedError
+            )
+              release();
+            else if (error instanceof AgentStartupCleanupPendingError)
+              void error.whenStopped.then(release, () => {});
+            // An opaque adapter failure may still own a process, just as in Maker's
+            // worktree protection contract. Retain the account until exit is proven.
             throw error;
           }
         };

@@ -6,6 +6,8 @@ import type {
 import {
   NATIVE_SUBSCRIPTION_ACCOUNT,
   AgentStartupStoppedError,
+  AgentStartupCleanupPendingError,
+  AgentNotAuthenticatedError,
   type BaseAgent,
   type AgentSessionHandle,
   type StartSessionOptions,
@@ -102,6 +104,133 @@ beforeEach(() => {
 });
 
 describe('native account assignment on the executing computer', () => {
+  // Shutdown may end the event queue before the underlying process confirms exit.
+  it.each(['close', 'detach'] as const)(
+    'keeps an account protected through %s failure and late terminal events until retry succeeds',
+    async (method) => {
+      h.pools.anthropic = { strategy: 'least', accounts: [account('second')] };
+      let rejectClose!: (error: Error) => void;
+      const teardown = vi
+        .fn()
+        .mockImplementationOnce(
+          () =>
+            new Promise<void>((_resolve, reject) => {
+              rejectClose = reject;
+            }),
+        )
+        .mockResolvedValue(undefined);
+      const nativeHandle = {
+        id: 'closing-thread',
+        send: vi.fn(async () => {}),
+        close: teardown,
+        detach: teardown,
+        events: async function* () {
+          yield { type: 'done', data: {} };
+        },
+      } as unknown as AgentSessionHandle;
+      const agent = withSubscriptionAccounts({
+        kind: 'claude-code',
+        startSession: async () => nativeHandle,
+      } as unknown as BaseAgent);
+      const handle = await agent.startSession({
+        providerId: 'anthropic',
+        sessionId: 'closing-task',
+      } as StartSessionOptions);
+      await handle.send({ type: 'user', content: 'hello' });
+      const closing = expect(handle[method]!()).rejects.toThrow('shutdown failed');
+      for await (const event of handle.events()) expect(event.type).toBe('done');
+      const login = {
+        action: 'login' as const,
+        providerId: 'anthropic' as const,
+        accountId: 'second',
+        loginKey: 'blocked',
+      };
+      await expect(runSubscriptionAccountCommand(login)).rejects.toThrow('in use');
+      rejectClose(new Error('shutdown failed'));
+      await closing;
+      expect((await readSubscriptionPool('anthropic')).accounts[0].running).toBe(1);
+      expect(getSessionSubscriptionAccount('closing-task')).toBeDefined();
+      await expect(
+        runSubscriptionAccountCommand({
+          action: 'remove',
+          providerId: 'anthropic',
+          accountId: 'second',
+        }),
+      ).rejects.toThrow('in use');
+      await expect(handle.send({ type: 'user', content: 'late' })).rejects.toThrow('closing');
+      await handle[method]!();
+      expect((await readSubscriptionPool('anthropic')).accounts[0].running).toBe(0);
+      expect(getSessionSubscriptionAccount('closing-task')).toBeUndefined();
+      await runSubscriptionAccountCommand(login);
+      expect(h.login).toHaveBeenCalledOnce();
+    },
+  );
+  it('does not interpret a consumer leaving the event iterator as runtime shutdown', async () => {
+    const nativeHandle = {
+      id: 'live-thread',
+      send: vi.fn(async () => {}),
+      close: vi.fn(async () => {}),
+      events: async function* () {
+        yield { type: 'text', data: { text: 'still working' } };
+      },
+    } as unknown as AgentSessionHandle;
+    const agent = withSubscriptionAccounts({
+      kind: 'claude-code',
+      startSession: async () => nativeHandle,
+    } as unknown as BaseAgent);
+    const handle = await agent.startSession({
+      providerId: 'anthropic',
+      sessionId: 'live-task',
+    } as StartSessionOptions);
+    await handle.send({ type: 'user', content: 'hello' });
+    for await (const event of handle.events()) {
+      expect(event.type).toBe('text');
+      break;
+    }
+    expect((await readSubscriptionPool('anthropic')).accounts[0].running).toBe(1);
+    expect(getSessionSubscriptionAccount('live-task')).toBeDefined();
+    await handle.close();
+    expect((await readSubscriptionPool('anthropic')).accounts[0].running).toBe(0);
+  });
+  it.each(['stopped', 'unauthenticated', 'pending', 'opaque'] as const)(
+    'only releases a %s startup reservation when its process is confirmed stopped',
+    async (kind) => {
+      let stopped!: () => void;
+      const whenStopped = new Promise<void>((resolve) => {
+        stopped = resolve;
+      });
+      const error =
+        kind === 'stopped'
+          ? new AgentStartupStoppedError('failed')
+          : kind === 'unauthenticated'
+            ? new AgentNotAuthenticatedError('claude-code')
+            : kind === 'pending'
+              ? new AgentStartupCleanupPendingError('failed', { cause: 'failed', whenStopped })
+              : new Error('opaque failure');
+      const agent = withSubscriptionAccounts({
+        kind: 'claude-code',
+        startSession: async () => {
+          throw error;
+        },
+      } as unknown as BaseAgent);
+      await expect(
+        agent.startSession({
+          providerId: 'anthropic',
+          sessionId: 'failed-task',
+        } as StartSessionOptions),
+      ).rejects.toBe(error);
+      expect((await readSubscriptionPool('anthropic')).accounts[0].running).toBe(
+        kind === 'pending' || kind === 'opaque' ? 1 : 0,
+      );
+      if (kind === 'pending') {
+        expect(getSessionSubscriptionAccount('failed-task')).toBeDefined();
+        stopped();
+        await whenStopped;
+        expect((await readSubscriptionPool('anthropic')).accounts[0].running).toBe(0);
+        expect(getSessionSubscriptionAccount('failed-task')).toBeUndefined();
+      }
+    },
+  );
   // PR review: selection happens before any process exists, so Maker must release startup resources.
   it('classifies an unavailable pool as a stopped startup without calling the native agent', async () => {
     h.pools.anthropic!.disconnected = true;
