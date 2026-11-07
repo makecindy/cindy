@@ -2404,7 +2404,7 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
               produced.length = 0;
               files = [];
             } else {
-              if (!ordinaryReply || !(permanentMediaResponse || permanentUpload
+              if (!ordinaryReply || !(fileRefusedHere(error) || permanentMediaResponse || permanentUpload
                 || ['INVALID_MEDIA_URL', 'ERR_INVALID_URL'].includes(code))) throw error;
               terminal = pending.terminal = { ...terminal, outcome: 'error', failureCode: 'RUNTIME_ERROR' };
             }
