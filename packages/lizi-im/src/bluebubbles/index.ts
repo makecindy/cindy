@@ -70,7 +70,7 @@ export class BlueBubblesIM extends BaseIM implements TextChannelIM {
   private readonly deferredEvents = new Map<string, IMMessageEvent>();
   private readonly cancelledEvents = new WeakSet<IMMessageEvent>();
   private readonly eventSentAt = new WeakMap<IMMessageEvent, number>();
-  private readonly pendingReplies = new Map<string, { createdAt: number; accept(text: string): boolean; cancel(): void }>();
+  private readonly pendingReplies = new Map<string, { requestId?: string; createdAt: number; accept(text: string): boolean; cancel(): void }>();
 
   constructor(host: IMHost, private readonly options: BlueBubblesOptions) { super('imessage', host); }
   registerIpc(): void { /* Partner connection IPC is owned by the host. */ }
@@ -438,19 +438,31 @@ export class BlueBubblesIM extends BaseIM implements TextChannelIM {
       if (!result.ok) throw new Error('BLUEBUBBLES_FILE_SEND_FAILED');
     }
   }
+  cancelTextReply(requestId: string): boolean {
+    for (const [chatId, pending] of this.pendingReplies) {
+      if (pending.requestId !== requestId) continue;
+      this.pendingReplies.delete(chatId);
+      pending.cancel();
+      return true;
+    }
+    return false;
+  }
   async requestTextReply<T>(chatId: string, prompt: string, parse: (text: string) => T | null, timeoutMs = 30 * 60_000,
-    shared?: { result: Promise<T>; decide(value: T): boolean }): Promise<T> {
-    if (this.pendingReplies.has(chatId)) throw new Error('BLUEBUBBLES_INTERACTION_PENDING');
+    shared?: { result: Promise<T>; decide(value: T): boolean }, requestId?: string): Promise<T> {
+    if (this.pendingReplies.has(chatId)) {
+      if (shared) return shared.result;
+      throw new Error('BLUEBUBBLES_INTERACTION_PENDING');
+    }
     let resolve!: (value: T) => void;
     let reject!: (error: Error) => void;
     const result = new Promise<T>((yes, no) => { resolve = yes; reject = no; });
     // Attach a rejection consumer before sending (disconnect may race the send).
     void result.catch(() => {});
-    const pending = { createdAt: this.now(), accept: (text: string) => {
+    const pending = { requestId, createdAt: this.now(), accept: (text: string) => {
       const value = parse(text); if (value === null) return false;
       if (shared) shared.decide(value); else resolve(value);
       return true;
-    }, cancel: () => reject(new Error('BLUEBUBBLES_INTERACTION_CANCELLED')) };
+    }, cancel: () => { clearTimeout(timer); reject(new Error('BLUEBUBBLES_INTERACTION_CANCELLED')); } };
     const timer = setTimeout(pending.cancel, timeoutMs);
     this.pendingReplies.set(chatId, pending);
     if (shared) void shared.result.then(resolve, reject);

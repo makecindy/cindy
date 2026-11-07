@@ -279,6 +279,47 @@ describe('BlueBubbles local ingress', () => {
     await expect(next).resolves.toBe('fresh');
   });
 
+  // Tier 1, #9250: host cancellation must release only its correlated text slot.
+  it('releases a cancelled request before the next HTTP message without cancelling another request', async () => {
+    const f = await fixture();
+    const abandoned = f.im.requestTextReply(f.chat.guid, 'Old question?', text => text, undefined, undefined, 'old-request');
+    const cancelled = expect(abandoned).rejects.toThrow('BLUEBUBBLES_INTERACTION_CANCELLED');
+    expect(f.im.cancelTextReply('different-request')).toBe(false);
+    expect(f.im.cancelTextReply('old-request')).toBe(true);
+    await cancelled;
+    f.message('ordinary-after-cancel', { text: 'new work' });
+    await f.webhook('ordinary-after-cancel');
+    await f.im.reconcile();
+    expect(f.received.map(event => event.messageId)).toContain('ordinary-after-cancel');
+    const fresh = f.im.requestTextReply(f.chat.guid, 'New question?', text => text, undefined, undefined, 'new-request');
+    expect(f.im.cancelTextReply('old-request')).toBe(false);
+    f.message('fresh-reply', { text: 'new answer' });
+    await f.webhook('fresh-reply');
+    await expect(fresh).resolves.toBe('new answer');
+  });
+
+  // Tier 1, #9250: two group confirmations share an owner chat but retain independent decisions.
+  it('keeps an occupied owner slot on its original request while a second permission waits for Desktop', async () => {
+    const f = await fixture();
+    let finishFirst!: (value: string) => void, finishSecond!: (value: string) => void;
+    const firstShared = { result: new Promise<string>(resolve => { finishFirst = resolve; }),
+      decide: vi.fn((value: string) => { finishFirst(value); return true; }) };
+    const secondShared = { result: new Promise<string>(resolve => { finishSecond = resolve; }),
+      decide: vi.fn((value: string) => { finishSecond(value); return true; }) };
+    const first = f.im.requestTextReply(f.chat.guid, 'First permission?', text => text, undefined, firstShared, 'first');
+    const second = f.im.requestTextReply(f.chat.guid, 'Second permission?', text => text, undefined, secondShared, 'second');
+    const secondDecision = expect(second).resolves.toBe('desktop allowed');
+    expect(f.im.cancelTextReply('second')).toBe(false);
+    finishSecond('desktop allowed');
+    await secondDecision;
+    f.message('first-reply', { text: 'first allowed' });
+    await f.webhook('first-reply');
+    await expect(first).resolves.toBe('first allowed');
+    expect(firstShared.decide).toHaveBeenCalledOnce();
+    expect(secondShared.decide).not.toHaveBeenCalled();
+    expect(f.send).toHaveBeenCalledTimes(1);
+  });
+
   it('delivers later messages when an earlier download fails, then recovers that pending receipt', async () => {
     const f = await fixture();
     f.message('broken', { attachments: [{ guid: 'unavailable', transferName: 'file.txt' }] });

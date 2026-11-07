@@ -66,3 +66,40 @@ it.each(['send-failed', 'group-only'])('keeps Desktop permission available when 
     await expect(decision).resolves.toMatchObject({ kind: 'permission', behavior: 'allow' });
   } finally { lease.release(); await im.dispose(); }
 });
+
+// Tier 1, #9250: the real router must notify the adapter on route teardown.
+// Existing shared-permission tests do not cancel non-shared multi-question text requests.
+it.each(['abort', 'release'])('clears the matching question waiter on host %s', async action => {
+  const im = new BlueBubblesIM({} as never, {} as never);
+  vi.spyOn(im, 'sendText').mockResolvedValue({ messageId: 'question-prompt' });
+  const requestReply = vi.spyOn(im, 'requestTextReply');
+  const adapter = wireIMessageOrchestrator(im, {} as never, {
+    instanceKey: 'cancel-test', companionBotId: 'bot-test', connectionId: 'connection-test',
+  }) as unknown as ImChannelAdapter;
+  const session = { id: `question-${action}`, setInteractionListener: vi.fn() };
+  const controller = new AbortController();
+  const lease = beginInteractionRoute(session, {
+    route: { sessionId: session.id, turnId: 'turn', origin: { kind: 'im', channel: 'imessage' }, interactionSurface: 'channel-card' },
+    handle: (request, shared) => adapter.handleTextInteraction!('group', request, { sharedPermission: shared }),
+    onCancel: (id, decision) => adapter.cancelTextInteraction?.('group', id, decision),
+  });
+  try {
+    const decision = requestHostInteraction(session, { kind: 'ask_user_question', requestId: 'abandoned',
+      questions: [{ question: 'First?' }, { question: 'Second?' }] } as InteractionRequest, controller.signal);
+    let settled = false;
+    void decision.then(() => { settled = true; });
+    await new Promise<void>(resolve => setImmediate(resolve));
+    adapter.cancelTextInteraction?.('other-group', 'abandoned', { kind: 'ask_user_question', answers: {} });
+    await new Promise<void>(resolve => setImmediate(resolve));
+    expect(settled).toBe(false);
+    if (action === 'abort') controller.abort(); else lease.release();
+    await expect(decision).resolves.toMatchObject({ kind: 'ask_user_question', answers: {} });
+    // A fresh question can use the same chat; the abandoned one cannot create its next waiter.
+    const fresh = im.requestTextReply('group', 'Fresh?', text => text, 1000);
+    const cancelled = expect(fresh).rejects.toThrow('BLUEBUBBLES_INTERACTION_CANCELLED');
+    await new Promise<void>(resolve => setImmediate(resolve));
+    expect(requestReply).toHaveBeenCalledTimes(2);
+    await im.dispose();
+    await cancelled;
+  } finally { lease.release(); await im.dispose(); }
+});

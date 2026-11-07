@@ -14,6 +14,7 @@ import { ui } from './uiText';
 
 export function wireIMessageOrchestrator(im: BlueBubblesIM, config: ImOrchestratorConfig,
   options: { instanceKey: string; companionBotId: string; connectionId: string }) {
+  const textInteractions = new Map<string, { cancelled: boolean }>();
   const adapter: ImChannelAdapter = {
     channel: 'imessage', im, config, ui,
     getBotContextId: () => im.botContextId,
@@ -88,12 +89,33 @@ export function wireIMessageOrchestrator(im: BlueBubblesIM, config: ImOrchestrat
     onUserMessagePersisted: async ({ userMessageId, persisted }) => {
       if (persisted && userMessageId) im.acknowledgeIncoming(userMessageId);
     },
-    handleTextInteraction: (userId, request, interactionOptions) => {
+    handleTextInteraction: async (userId, request, interactionOptions) => {
       // Only the configured owner can answer permissions, including member-originated turns.
       const target = request.kind === 'permission' ? im.getOwnerUserId() : userId;
       if (!target) return interactionOptions?.sharedPermission?.result
         ?? Promise.resolve({ kind: 'permission', behavior: 'deny', reason: 'imessage_owner_not_connected' });
-      return handleDingTalkTextInteraction(im, target, request, interactionOptions);
+      const requestKey = JSON.stringify([userId, request.requestId]);
+      const interaction = { cancelled: false };
+      textInteractions.set(requestKey, interaction);
+      try {
+        return await handleDingTalkTextInteraction({
+          sendText: im.sendText.bind(im),
+          requestTextReply: (chatId, prompt, parse, timeoutMs, shared) => {
+            if (interaction.cancelled) return Promise.reject(new Error('BLUEBUBBLES_INTERACTION_CANCELLED'));
+            return im.requestTextReply(chatId, prompt, parse, timeoutMs, shared, requestKey);
+          },
+        }, target, request, interactionOptions);
+      } finally {
+        if (textInteractions.get(requestKey) === interaction) textInteractions.delete(requestKey);
+      }
+    },
+    cancelTextInteraction: (userId, requestId) => {
+      const requestKey = JSON.stringify([userId, requestId]);
+      const interaction = textInteractions.get(requestKey);
+      if (interaction) interaction.cancelled = true;
+      im.cancelTextReply(requestKey);
+      // Cleanup does not decide the question: preserve the central router's cancellation result.
+      return false;
     },
   };
   return createImOrchestrator(adapter, options);
