@@ -44,14 +44,22 @@ it.each([false, true])('recovers from partial ENOSPC before accepting another ap
   const journal = path.join(h.directory, 'imessage', `${id}.json.journal`);
   const before = fs.readFileSync(journal, 'utf8');
   const write = fs.writeFileSync;
+  const ftruncate = fs.ftruncateSync;
+  let appendFd: number | undefined;
   const diskFull = Object.assign(new Error('test disk full'), { code: 'ENOSPC' });
   const append = vi.spyOn(fs, 'writeFileSync').mockImplementationOnce((file, data) => {
+    if (typeof file === 'number') appendFd = file;
     write(file, Buffer.from(String(data)).subarray(0, 12));
     throw diskFull;
   });
-  const truncate = rollbackFails ? vi.spyOn(fs, 'ftruncateSync').mockImplementationOnce(() => {
-    throw Object.assign(new Error('test rollback failed'), { code: 'EIO' });
-  }) : undefined;
+  // Windows O_APPEND lacks FILE_WRITE_DATA, which truncation requires. Model
+  // that permission on all platforms, retaining real file I/O for writable fds.
+  // CI run42406330220 exposed the otherwise macOS-only passing rollback.
+  const truncate = vi.spyOn(fs, 'ftruncateSync').mockImplementation((fd, length) => {
+    if (rollbackFails) throw Object.assign(new Error('test rollback failed'), { code: 'EIO' });
+    if (fd === appendFd) throw Object.assign(new Error('append handle cannot truncate'), { code: 'EPERM' });
+    ftruncate(fd, length);
+  });
   const next = { kind: 'inbox' as const, id: 'next', value: { receivedAt: 3, state: 'pending' as const } };
   try {
     expect(() => storage.update!({ kind: 'inbox', id: 'failed', value: { receivedAt: 2, state: 'pending' } })).toThrow(diskFull);
@@ -68,5 +76,5 @@ it.each([false, true])('recovers from partial ENOSPC before accepting another ap
     const restored = blueBubblesStateStorage(id).read()!;
     expect(restored.inbox).toEqual({ previous: { receivedAt: 1, state: 'accepted' }, next: next.value });
     expect(restored.cursors).toEqual({ owner: 500 });
-  } finally { append.mockRestore(); truncate?.mockRestore(); }
+  } finally { append.mockRestore(); truncate.mockRestore(); }
 });

@@ -62,8 +62,12 @@ export function blueBubblesStateStorage(connectionId: string): BlueBubblesStateS
           // A failed write can leave bytes behind. Never join the next record
           // onto that unacknowledged prefix; flush the rollback before reuse.
           try {
-            fs.ftruncateSync(fd, length);
-            fs.fsyncSync(fd);
+            // Windows append handles lack FILE_WRITE_DATA for truncation.
+            const rollback = fs.openSync(journal, 'r+');
+            try {
+              fs.ftruncateSync(rollback, length);
+              fs.fsyncSync(rollback);
+            } finally { fs.closeSync(rollback); }
           } catch {
             // Explicit reload/checkpoint must repair the journal before reuse.
             appendBlocked = true;
