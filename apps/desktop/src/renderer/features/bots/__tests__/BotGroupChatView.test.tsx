@@ -4004,6 +4004,58 @@ describe('thread previews and posting to the main chat', () => {
     expect(scroller.scrollTop).toBe(1600);
   });
 
+  // Unit / #9249 r4501133787: descendant message wheel input with a small
+  // vertical component is horizontal navigation, not an explicit return to tail.
+  // Prior wheel cases only covered vertical input and portals.
+  it.each(['main', 'topic'])('keeps %s inspection during horizontal message wheel input', async context => {
+    const scroller = await renderProcessScroller(context);
+    Object.defineProperties(scroller, {
+      scrollHeight: { configurable: true, value: 1400 }, clientHeight: { configurable: true, value: 600 },
+    });
+    const content = scroller.firstElementChild as HTMLElement;
+    vi.spyOn(content, 'getBoundingClientRect').mockReturnValue({ height: 1400 } as DOMRect);
+    scroller.scrollTop = 800; fireEvent.scroll(scroller);
+    await act(async () => fireEvent.click(scroller.querySelector('button[data-scroll-disclosure-header]')!));
+    fireEvent.wheel(scroller.querySelector('[data-markdown]')!, { deltaX: 80, deltaY: 1 });
+    expect(content.style.minHeight).toBe('1400px');
+    expect(scroller.scrollTop).toBe(800);
+    fireEvent.wheel(scroller, { deltaX: 1, deltaY: 80 });
+    expect(content.style.minHeight).toBe('');
+  });
+
+  // Unit / #9249 r4501133788: prior stationary presses ended inside the list.
+  // Release over the real sibling composer must end only the temporary pause;
+  // a genuine upward move must remain browsing through the next resize.
+  it.each(['main', 'topic'])('ends %s temporary pause when the pointer is released over the composer', async context => {
+    const observed = new Map<Element, ResizeObserverCallback>();
+    vi.stubGlobal('ResizeObserver', class {
+      constructor(private callback: ResizeObserverCallback) {}
+      observe(element: Element) { observed.set(element, this.callback); }
+      disconnect() {}
+    });
+    const scroller = await renderProcessScroller(context);
+    let height = 1400;
+    Object.defineProperties(scroller, {
+      scrollHeight: { configurable: true, get: () => height }, clientHeight: { configurable: true, value: 600 },
+    });
+    const composer = screen.getAllByRole('textbox').find(input => !scroller.contains(input))!;
+    scroller.scrollTop = 800; fireEvent.scroll(scroller);
+    fireEvent.pointerDown(scroller);
+    height = 1500;
+    act(() => observed.get(scroller)!([], {} as ResizeObserver));
+    expect(scroller.scrollTop).toBe(800);
+    fireEvent.pointerUp(composer);
+    height = 1600;
+    act(() => observed.get(scroller)!([], {} as ResizeObserver));
+    expect(scroller.scrollTop).toBe(1600);
+    fireEvent.pointerDown(scroller);
+    scroller.scrollTop = 200; fireEvent.scroll(scroller);
+    fireEvent.pointerUp(composer);
+    height = 1700;
+    act(() => observed.get(scroller)!([], {} as ResizeObserver));
+    expect(scroller.scrollTop).toBe(200);
+  });
+
   // Unit / #9249 r4500670656: layout already followed 800 -> 810 before the
   // reader clicks, but its native scroll notification is delivered afterwards.
   it.each(['main', 'topic'])('keeps %s inspection through a queued auto-follow notification', async context => {

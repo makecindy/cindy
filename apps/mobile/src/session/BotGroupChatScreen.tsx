@@ -718,9 +718,9 @@ function BotGroupChatContent({ deviceId, deviceName, groupId, messageId, notific
         keyboardDismissMode="interactive"
         maintainVisibleContentPosition={chat.server && !threadRootId ? { minIndexForVisible: group.hasMoreBefore ? 2 : 1 } : undefined}
         onScroll={event => { richContent?.onScroll(); onScroll(event); }} scrollEventThrottle={64}
-        onScrollEndDrag={() => { processUserScrolling.current = false; }}
+        onScrollEndDrag={event => { onScroll(event); processUserScrolling.current = false; }}
         onMomentumScrollBegin={() => { processUserScrolling.current = true; }}
-        onMomentumScrollEnd={() => { processUserScrolling.current = false; }}
+        onMomentumScrollEnd={event => { onScroll(event); processUserScrolling.current = false; }}
         onScrollBeginDrag={() => {
           processUserScrolling.current = true;
           jumpingToBottom.current = false;

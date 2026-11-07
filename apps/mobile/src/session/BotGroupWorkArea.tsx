@@ -1,6 +1,6 @@
 import { ProcessDisclosureViewport, useProcessDisclosureViewport } from './useProcessDisclosureViewport';
 import { useCallback, useContext, useEffect, useRef, useState } from 'react';
-import { Pressable, ScrollView, StyleSheet, View } from 'react-native';
+import { Pressable, ScrollView, StyleSheet, View, type NativeScrollEvent, type NativeSyntheticEvent } from 'react-native';
 import { ChevronDown, ChevronUp } from 'lucide-react-native';
 import { useFocusEffect } from 'expo-router';
 import { useTranslation } from 'react-i18next';
@@ -88,6 +88,12 @@ export function BotGroupWorkArea({ group, deviceId, online, identityFor, onStop,
     void read();
     return () => { cancelled = true; off(); topics.forEach(offTopic => offTopic()); };
   }, [scope, online, connectionEpoch, presenceVersion, invoke, openLink, subscribe, unsubscribe, onRemoteResourceChanged, getPresenceAvailability, i18n.language]));
+  const onDetailScroll = (event: NativeSyntheticEvent<NativeScrollEvent>) => {
+    const { contentOffset, contentSize, layoutMeasurement } = event.nativeEvent;
+    detailViewport.scroll(contentOffset.y, detailMetrics.current.offsetY, detailDragging.current,
+      contentSize.height - contentOffset.y - layoutMeasurement.height <= 1);
+    detailMetrics.current = { offsetY: contentOffset.y, contentHeight: contentSize.height, viewportHeight: layoutMeasurement.height };
+  };
   if (group.round.status !== 'running' || !group.round.speakers.length) return null;
   // Count teammates, not executions; a teammate with active work and a queued
   // follow-up belongs to the active count only.
@@ -124,19 +130,14 @@ export function BotGroupWorkArea({ group, deviceId, online, identityFor, onStop,
     {/* Keep rows mounted while collapsed: their existing subscriptions discover
         prompts raised after the last group snapshot, and reveal those inline. */}
     <ProcessDisclosureViewport.Provider value={detailViewport.inspect}>
-    <ScrollView testID="botGroup.work.details" style={styles.details} contentContainerStyle={styles.rows} keyboardShouldPersistTaps="handled"
+    <ScrollView testID="botGroup.work.details" nestedScrollEnabled style={styles.details} contentContainerStyle={styles.rows} keyboardShouldPersistTaps="handled"
       onLayout={event => { detailMetrics.current.viewportHeight = event.nativeEvent.layout.height; }}
       onContentSizeChange={(_width, height) => { detailMetrics.current.contentHeight = height; }}
       onScrollBeginDrag={() => { detailDragging.current = true; }}
-      onScrollEndDrag={() => { detailDragging.current = false; }}
+      onScrollEndDrag={event => { onDetailScroll(event); detailDragging.current = false; }}
       onMomentumScrollBegin={() => { detailDragging.current = true; }}
-      onMomentumScrollEnd={() => { detailDragging.current = false; }}
-      onScroll={event => {
-        const { contentOffset, contentSize, layoutMeasurement } = event.nativeEvent;
-        detailViewport.scroll(contentOffset.y, detailMetrics.current.offsetY, detailDragging.current,
-          contentSize.height - contentOffset.y - layoutMeasurement.height <= 1);
-        detailMetrics.current = { offsetY: contentOffset.y, contentHeight: contentSize.height, viewportHeight: layoutMeasurement.height };
-      }} scrollEventThrottle={16}>
+      onMomentumScrollEnd={event => { onDetailScroll(event); detailDragging.current = false; }}
+      onScroll={onDetailScroll} scrollEventThrottle={16}>
       {speakers.map((speaker, index) => {
         const member = group.members.find(member => member.botId === speaker.botId);
         if (!member) return null;

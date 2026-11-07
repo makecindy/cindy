@@ -138,7 +138,7 @@ async function checkProcessDisclosure(page, ui) {
   await page.emulateMedia({ reducedMotion: 'no-preference' });
   let surface = page;
   const preview = {
-    content: '```mermaid\ngraph LR; A-->B\n```',
+    content: '| ' + Array.from({ length: 10 }, (_, i) => `Column ${i + 1}`).join(' | ') + ' |\n| ' + Array(10).fill('---').join(' | ') + ' |\n| ' + Array(10).fill('wide_table_content').join(' | ') + ' |\n\n```mermaid\ngraph LR; A-->B\n```',
     attachments: [{ id: 'wheel-preview', name: 'wheel-preview.png', category: 'image', mimeType: 'image/png', size: 68,
       path: null, url: 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aN1cAAAAASUVORK5CYII=' }],
   };
@@ -296,18 +296,47 @@ async function checkProcessDisclosure(page, ui) {
     });
     await ui.capture('thread-send-restores-follow');
   }
-  // A real stationary click on the scroller's empty padding must not unpin the
-  // next resize. This target also owns native scrollbar pointer gestures.
-  await timeline.click({ position: { x: ui.data.threadPanel ? 12 : 2, y: box.height / 2 } });
-  await timeline.evaluate(el => {
-    const last = el.querySelector('article:last-of-type');
-    last.style.minHeight = `${last.getBoundingClientRect().height + 120}px`;
-  });
-  await page.waitForFunction(() => {
-    const el = document.querySelector('[data-process-scroll-check]');
-    return el.scrollHeight - el.scrollTop - el.clientHeight < 2;
-  });
-  await ui.capture('stationary-pointer-keeps-follow');
+  // Real pointer press on root padding may end inside the list or over the
+  // sibling composer; either stationary gesture only pauses follow temporarily.
+  for (const release of ['inside', 'composer']) {
+    await page.mouse.move(box.x + (ui.data.threadPanel ? 12 : 2), box.y + box.height / 2);
+    await page.mouse.down();
+    if (release === 'composer') {
+      const composerBox = await composerElement.boundingBox();
+      await page.mouse.move(composerBox.x + composerBox.width / 2, composerBox.y + composerBox.height / 2);
+    }
+    await page.mouse.up();
+    await page.evaluate(() => window.getSelection()?.removeAllRanges());
+    await timeline.evaluate(el => {
+      const last = el.querySelector('article:last-of-type');
+      last.style.minHeight = `${last.getBoundingClientRect().height + 120}px`;
+    });
+    await page.waitForFunction(() => {
+      const el = document.querySelector('[data-process-scroll-check]');
+      return el.scrollHeight - el.scrollTop - el.clientHeight < 2;
+    });
+    await ui.capture(`stationary-pointer-${release}-keeps-follow`);
+  }
+  if (ui.data.processRecord || ui.data.threadPanel) {
+    const table = surface.locator('table').last();
+    // Position the actual table next to the inspected process without changing
+    // its normal overflowing table wrapper or dispatching a synthetic wheel.
+    await table.evaluate(el => { el.style.minWidth = '1400px'; el.parentElement.style.height = '50px'; el.parentElement.style.overflowY = 'hidden'; });
+    await timeline.evaluate(el => { el.scrollTop = el.scrollHeight; });
+    await heading.click();
+    await page.waitForFunction(() => !!document.querySelector('[data-process-scroll-check]').firstElementChild.style.minHeight);
+    const before = await timeline.evaluate(el => ({ top: el.scrollTop, reserve: el.firstElementChild.style.minHeight }));
+    const tableBox = await table.boundingBox();
+    assert.ok(tableBox && tableBox.y > box.y && tableBox.y < box.y + box.height, 'actual table is visible for wheel input');
+    await page.mouse.move(Math.max(tableBox.x, box.x) + 30, tableBox.y + 20);
+    await page.mouse.wheel(80, 1);
+    await page.waitForFunction(() => document.querySelector('[data-process-scroll-check] table').parentElement.scrollLeft > 0);
+    assert.deepEqual(await timeline.evaluate(el => ({ top: el.scrollTop, reserve: el.firstElementChild.style.minHeight })), before,
+      'horizontal table wheel must preserve process inspection');
+    await ui.capture('horizontal-table-keeps-inspection');
+    await timeline.evaluate(el => { el.tabIndex = -1; el.focus({ preventScroll: true }); });
+    await timeline.press('End');
+  }
   // Deliver the native scroll input boundary in the problematic order: layout
   // already moved the real range by 10px, click enters inspection, then the old
   // notification arrives. jsdom alone cannot run the actual resize/animation.

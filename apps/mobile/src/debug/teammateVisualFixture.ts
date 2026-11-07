@@ -258,17 +258,23 @@ export function teammateVisualFixture(channel: string, args: unknown[], now = FI
     } }],
   };
   if (channel === REMOTE_RESOURCE_GET_CHANNEL && request?.ref?.collectionId === BOT_GROUP_REMOTE_COLLECTION_ID
-    && ['visual-session-process', 'visual-session-process-rollover'].includes(request.ref.id ?? '')) {
+    && ['visual-session-process', 'visual-session-process-rollover', 'visual-session-process-scroll'].includes(request.ref.id ?? '')) {
     const snapshot = request.ref.id === 'visual-session-process-rollover' ? ++processRoundSnapshot : 1;
+    // Both nested and outer lists must have a real native range for gesture-end checks.
+    const scrollScene = request.ref.id === 'visual-session-process-scroll';
     return {
       ref: { collectionId: BOT_GROUP_REMOTE_COLLECTION_ID, kind: BOT_GROUP_REMOTE_RESOURCE_KIND, id: request.ref.id },
       revision: `visual-${snapshot}`, display: { title: '任务入口演示群' }, actions: [], links: [],
       blocks: [{ id: 'chat', primitive: BOT_GROUP_CHAT_PRIMITIVE, fallbackMarkdown: 'Cindy 正在工作', data: {
         id: request.ref.id, name: '任务入口演示群', members: [{ botId: 'cindy-default', name: 'Cindy', status: 'active' },
           ...(request.ref.id === 'visual-session-process-rollover' ? [{ botId: 'abu', name: 'Abu', status: 'active' }] : [])],
-        messages: [], plans: [], createdAt: now, updatedAt: now,
+        messages: scrollScene ? Array.from({ length: 12 }, (_, index) => ({ id: `process-scroll-history-${index}`, sequence: index + 1,
+          kind: 'message', authorKind: 'user', authorName: '演示用户', content: `第 ${index + 1} 项进展已核对。`, createdAt: now - (13 - index) * MINUTE })) : [],
+        plans: [], createdAt: now, updatedAt: now,
         round: snapshot === 2 ? { status: 'idle', canContinue: true, speakers: [] }
-          : { status: 'running', canContinue: false, speakers: [{ botId: snapshot > 2 ? 'abu' : 'cindy-default', activity: 'reply', sessionId: VISUAL_TEAMMATE_SESSION_ID }] },
+          : { status: 'running', canContinue: false, speakers: scrollScene
+            ? Array.from({ length: 3 }, (_, index) => ({ botId: 'cindy-default', activity: 'reply', sessionId: VISUAL_TEAMMATE_SESSION_ID, executionId: `process-scroll-${index}` }))
+            : [{ botId: snapshot > 2 ? 'abu' : 'cindy-default', activity: 'reply', sessionId: VISUAL_TEAMMATE_SESSION_ID }] },
       } }],
     };
   }

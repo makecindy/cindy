@@ -2260,6 +2260,45 @@ it.each(['jump', 'send'])('releases nested work-area space on outer %s without c
   expect(byId('botGroup.work.toggle')!.getAttribute('aria-label')).toContain('groupChat.work.collapse');
 });
 
+// Unit / #9249 r4501133784: the final native position can arrive first in an
+// end event. Real screen+WorkArea must resume before losing gesture ownership.
+// Older coverage only sends positions via onScroll, so it misses end-before-scroll.
+it.each(['timeline', 'work.details'].flatMap(target => ['onScrollEndDrag', 'onMomentumScrollEnd'].map(end => ({ target, end }))))(
+  'consumes final $target metrics from $end before ending process navigation', async ({ target, end }) => {
+    h.speakerDisclosure = true;
+    await render(group({ round: { status: 'running', canContinue: false, speakers: [
+      { botId: 'abu', sessionId: 's-abu', activity: 'reply', executionStatus: 'running' },
+    ] } }));
+    await click('botGroup.work.toggle');
+    const nested = target === 'work.details';
+    const height = nested ? 500 : 2000, viewport = nested ? 220 : 800;
+    const tail = height - viewport;
+    const event = (y: number) => ({ nativeEvent: { contentOffset: { y }, contentSize: { height }, layoutMeasurement: { height: viewport } } });
+    await act(async () => {
+      h.scrolls[`botGroup.${target}`].onLayout({ nativeEvent: { layout: { height: viewport } } });
+      h.scrolls[`botGroup.${target}`].onContentSizeChange(390, height);
+      h.scrolls[`botGroup.${target}`].onScroll(event(tail - 10));
+    });
+    await click('fixture.processCollapse');
+    const footer = () => byId('botGroup.work.details')!.querySelector(`[style*="height: ${nested ? 290 : 300}px"]`);
+    expect(footer()).not.toBeNull();
+    await act(async () => {
+      const callbacks = h.scrolls[`botGroup.${target}`];
+      callbacks[end === 'onScrollEndDrag' ? 'onScrollBeginDrag' : 'onMomentumScrollBegin']();
+      callbacks.onScroll(event(tail - 10));
+      callbacks[end](event(tail));
+      callbacks.onScroll(event(tail)); // matching notice arrives after ownership ends
+    });
+    if (nested) expect(footer()).toBeNull();
+    else {
+      expect(byId('botGroup.jumpToLatest')).toBeNull();
+      h.scrollToEnd.mockClear();
+      await act(async () => h.scrolls['botGroup.timeline'].onContentSizeChange(390, height + 500));
+      expect(h.scrollToEnd).toHaveBeenCalledWith({ animated: false });
+    }
+  },
+);
+
 // Unit / #9249 r4500619904: a null-rendered WorkArea stays mounted across idle.
 // The next member's round must not inherit the previous process's reserved footer.
 it('releases nested process space across idle and the next round without outer navigation', async () => {
