@@ -696,10 +696,10 @@ describe('normalizeTaskSource', () => {
       teamId: 'i'.repeat(200),
       teamName: 'n'.repeat(200),
       userText: 'u'.repeat(20_100),
-      threadContext: Array.from({ length: 25 }, (_, index) => ({
+      threadContext: Array.from({ length: 55 }, (_, index) => ({
         author: `author-${index}-${'a'.repeat(140)}`,
-        text: 't'.repeat(4_100),
-        isBot: index === 0,
+        text: 't'.repeat(9_000),
+        isBot: index === 5,
       })),
     });
 
@@ -707,14 +707,14 @@ describe('normalizeTaskSource', () => {
     expect(source.teamId).toHaveLength(128);
     expect(source.teamName).toHaveLength(160);
     expect(source.userText).toHaveLength(20_000);
-    expect(source.threadContext).toHaveLength(20);
+    expect(source.threadContext).toHaveLength(50);
     expect(source.threadContext?.[0]).toEqual({
       author: expect.any(String),
       text: expect.any(String),
       isBot: true,
     });
     expect(source.threadContext?.[0]?.author).toHaveLength(128);
-    expect(source.threadContext?.[0]?.text).toHaveLength(4_000);
+    expect(source.threadContext?.[0]?.text).toHaveLength(8_256);
     expect(source.threadContext?.[1]).not.toHaveProperty('isBot');
   });
 
@@ -746,9 +746,9 @@ describe('normalizeTaskSource', () => {
     const fr = fakeRunner();
     const { d } = makeDispatcher({ runner: fr.runner });
     const c = collector();
-    // A 21-ancestor X chain ending in the current request: display keeps the oldest 20.
+    // A 51-ancestor X chain ending in the current request: display keeps the newest 50.
     const threadContext = [
-      ...Array.from({ length: 21 }, (_, index) => ({ messageId: `m${index}`, author: `@a${index}`, text: `ancestor ${index}` })),
+      ...Array.from({ length: 51 }, (_, index) => ({ messageId: `m${index}`, author: `@a${index}`, text: `ancestor ${index}` })),
       { messageId: 'current', author: '@user', text: '@bot is this true?' },
     ];
     d.handleDispatch('conn-1', dispatch({
@@ -756,9 +756,9 @@ describe('normalizeTaskSource', () => {
     }), c.send);
     await tick();
 
-    expect(fr.calls[0]?.source?.threadContext).toHaveLength(20);
-    expect(fr.calls[0]?.source?.threadContext?.at(-1)?.text).toBe('ancestor 19');
-    expect(fr.calls[0]?.autoReviewReplyTarget).toEqual({ author: '@a20', text: 'ancestor 20' });
+    expect(fr.calls[0]?.source?.threadContext).toHaveLength(50);
+    expect(fr.calls[0]?.source?.threadContext?.at(-1)?.text).toBe('ancestor 50');
+    expect(fr.calls[0]?.autoReviewReplyTarget).toEqual({ author: '@a50', text: 'ancestor 50' });
     fr.finish();
   });
 
@@ -1022,7 +1022,7 @@ describe('dispatcher 核心语义', () => {
       userText: '查看 PR', triggerMessageId: '2', xContext: { requesterId: 'u' },
     });
     expect(fr.calls[0]?.source?.threadContext).toEqual([
-      expect.objectContaining({ messageId: '1', author: '@other', text: longText.slice(0, 4000) }),
+      expect.objectContaining({ messageId: '1', author: '@other', text: longText }),
     ]);
   });
 

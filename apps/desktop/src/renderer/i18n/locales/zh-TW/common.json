@@ -1460,6 +1460,13 @@
     }
   },
   "menubar": {
+    "shared": {
+      "label": "分享",
+      "note": "這是帳號共用額度，不是分配給你的專屬額度。",
+      "highestWeekly": "分享 · 週剩餘最多",
+      "highestWeeklyNote": "顯示可讀取帳號中週剩餘最多的一項，額度不相加。帳號共用，非個人專屬。",
+      "from": "來自 {{name}} 的分享"
+    },
     "balance": {
       "name": "Cindy 餘額",
       "quotaName": "Cindy 本期配額",
@@ -12688,6 +12695,10 @@
       "defer": "暫不下載"
     },
     "permissionPrompt": {
+      "titleStdin": "允許向終端傳送輸入？",
+      "titleMcpUrl": "完成 {{server}} 的請求",
+      "mcpComplete": "已完成",
+      "mcpCancel": "取消",
       "alwaysAllowScoped": "本任務都允許 {{scope}}",
       "alwaysAllowScopedHint": "作用於整個任務，且只限這裡列出的範圍。",
       "alwaysAllowSessionHint": "作用於整個任務，不只是這一次請求。",
@@ -12951,7 +12962,13 @@
       "sendAndContinue": "傳送並繼續",
       "close": "關閉",
       "customAnswer": "輸入其他回答…",
-      "answerPlaceholder": "請輸入回答…"
+      "answerPlaceholder": "請輸入回答…",
+      "validation": {
+        "required": "請填寫此必填項目。",
+        "choice": "請選擇列出的選項。",
+        "tooShort": "請至少輸入 {{count}} 個字元。",
+        "tooLong": "請最多輸入 {{count}} 個字元。"
+      }
     },
     "planReviewBubble": {
       "title": "計劃審閱",
@@ -19627,6 +19644,16 @@
     "lineNumbers": "行號"
   },
   "subscriptionAccounts": {
+    "signIn": {
+      "checking": "正在偵測本機帳號…",
+      "detected": "偵測到已登入帳號",
+      "useAccount": "使用此帳號",
+      "anotherAccount": "登入另一個帳號",
+      "keepExisting": "新帳號會加入此供應商，現有帳號的登入保持不變。",
+      "checkFailed": "無法讀取本機帳號狀態，請重試。",
+      "retry": "重試",
+      "useCodex": "使用 Codex 登入"
+    },
     "title": "訂閱帳號",
     "note": "首個帳號沿用 CLI 預設目錄，新增帳號獨立登入。新任務按策略分配，已有任務保留原帳號。",
     "strategy": "負載平衡",
@@ -19640,8 +19667,8 @@
     "removeTitle": "移出 {{name}}？",
     "removeDescription": "Cindy 將不再給這個帳號分配任務。CLI 登入和對話歷史仍保留在本機。",
     "failed": "無法讀取或更新帳號。請檢查 CLI 登入和網路連線後重試。",
-    "used": "已用 {{percent}}%",
     "directory": "帳號目錄",
+    "loginAgain": "重新登入",
     "login": "登入"
   }
 }

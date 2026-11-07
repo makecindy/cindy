@@ -1473,6 +1473,13 @@
     }
   },
   "menubar": {
+    "shared": {
+      "label": "Geteilt",
+      "note": "Dieses Kontingent wird vom gesamten Konto geteilt und ist nicht für dich reserviert.",
+      "highestWeekly": "Geteilt · größtes Wochenkontingent",
+      "highestWeeklyNote": "Höchstes verbleibendes Wochenkontingent der lesbaren Konten. Kontoweit geteilt, weder addiert noch persönlich reserviert.",
+      "from": "Geteilt von {{name}}"
+    },
     "balance": {
       "name": "Cindy-Guthaben",
       "quotaName": "Cindy-Kontingent",
@@ -12734,6 +12741,10 @@
       "defer": "Nicht jetzt"
     },
     "permissionPrompt": {
+      "titleStdin": "Eingabe in diesem Terminal erlauben?",
+      "titleMcpUrl": "Anfrage von {{server}} abschließen",
+      "mcpComplete": "Fertig",
+      "mcpCancel": "Abbrechen",
       "alwaysAllowScoped": "{{scope}} in dieser Sitzung immer erlauben",
       "alwaysAllowScopedHint": "Gilt für die gesamte Sitzung und nur für die hier aufgeführten Elemente.",
       "alwaysAllowSessionHint": "Gilt für die gesamte Sitzung, nicht nur für diese Anfrage.",
@@ -12970,7 +12981,13 @@
       "sendAndContinue": "Senden und fortfahren",
       "close": "Schließen",
       "customAnswer": "Etwas anderes eingeben…",
-      "answerPlaceholder": "Deine Antwort eingeben…"
+      "answerPlaceholder": "Deine Antwort eingeben…",
+      "validation": {
+        "required": "Füllen Sie dieses Pflichtfeld aus.",
+        "choice": "Wählen Sie eine der aufgeführten Optionen.",
+        "tooShort": "Geben Sie mindestens {{count}} Zeichen ein.",
+        "tooLong": "Geben Sie höchstens {{count}} Zeichen ein."
+      }
     },
     "planReviewBubble": {
       "title": "Planprüfung",
@@ -19699,6 +19716,16 @@
     "lineNumbers": "Zeilennummern"
   },
   "subscriptionAccounts": {
+    "signIn": {
+      "checking": "Lokales Konto wird geprüft…",
+      "detected": "Angemeldetes Konto gefunden",
+      "useAccount": "Dieses Konto verwenden",
+      "anotherAccount": "Mit anderem Konto anmelden",
+      "keepExisting": "Das neue Konto wird diesem Anbieter hinzugefügt. Bestehende Anmeldungen bleiben erhalten.",
+      "checkFailed": "Das lokale Konto konnte nicht geprüft werden. Bitte erneut versuchen.",
+      "retry": "Erneut versuchen",
+      "useCodex": "Mit Codex anmelden"
+    },
     "title": "Abonnementkonten",
     "note": "Das erste Konto verwendet den Standardordner der CLI. Weitere Konten melden sich separat an. Neue Aufgaben werden verteilt; bestehende Aufgaben behalten ihr Konto.",
     "strategy": "Lastverteilung",
@@ -19712,8 +19739,8 @@
     "removeTitle": "{{name}} entfernen?",
     "removeDescription": "Cindy weist diesem Konto keine Aufgaben mehr zu. Die CLI-Anmeldung und der Gesprächsverlauf bleiben auf diesem Computer erhalten.",
     "failed": "Das Konto konnte nicht gelesen oder aktualisiert werden. Prüfe die CLI-Anmeldung und die Netzwerkverbindung und versuche es erneut.",
-    "used": "{{percent}}% verbraucht",
     "directory": "Kontoordner",
+    "loginAgain": "Erneut anmelden",
     "login": "Anmelden"
   }
 }
