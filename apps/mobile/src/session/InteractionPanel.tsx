@@ -28,6 +28,7 @@ import {
 } from 'lucide-react-native';
 import {
   ActivityIndicator,
+  Linking,
   Image,
   Pressable,
   type PressableProps,
@@ -548,6 +549,7 @@ function InteractionItem({
   const runStatus = useSessionRunStatus(sessionId);
   const [busy, setBusy] = useState(false);
   const submittingRequestIdRef = useRef<string | null>(null);
+  const snoozingQuestionRef = useRef<string | null>(null);
   const requestId = readRequestId(item);
   const kind = interactionKind(item);
 
@@ -670,6 +672,7 @@ function InteractionItem({
         item={item}
         onDecision={(decision) => void submitDecision(decision)}
         touchLayout={touchLayout}
+        onError={onError}
       />
     );
   }
@@ -680,7 +683,14 @@ function InteractionItem({
         deviceId={deviceId}
         item={item}
         onDecision={(decision) => void submitDecision(decision)}
-        onStartAnswer={() => remoteSessionStore.protectAsyncQuestion(sessionId, item)}
+        onStartAnswer={() => {
+          remoteSessionStore.protectAsyncQuestion(sessionId, item);
+          if (item.request.isBlocking === false && requestId && snoozingQuestionRef.current !== requestId) {
+            snoozingQuestionRef.current = requestId;
+            void maker.resolveInteraction(requestId, { kind: 'ask_user_question', answers: {}, inProgress: true })
+              .catch(() => { snoozingQuestionRef.current = null; });
+          }
+        }}
         resumeOnSubmit={item.retainedDraft && (inputProjection.queuePaused || !runStatus.isRunning)}
         touchLayout={touchLayout}
       />
@@ -774,17 +784,21 @@ function InteractionItem({
 }
 
 function PermissionCard({
+  onError,
   busy,
   item,
   onDecision,
   touchLayout,
 }: {
+  onError(message: string | null): void;
   busy: boolean;
   item: PendingInteraction;
   onDecision(decision: Record<string, unknown>): void;
   touchLayout: InteractionTouchLayout;
 }) {
   const styles = useInteractionStyles();
+  const isMcpUrl = item.request.toolName === 'mcp_url';
+  const url = (item.request.input as { url?: string })?.url;
   const { t, i18n: i18nInstance } = useTranslation();
   const presentation = useMemo(
     () => buildPermissionReviewPresentation(item.request, mobilePresentationLocalizer),
@@ -811,9 +825,9 @@ function PermissionCard({
   const denyButton = (
     <ResolveButton
       key="deny"
-      accessibilityLabel={t('interaction.permission.denyAccessibility')}
+      accessibilityLabel={t(isMcpUrl ? 'interaction.permission.mcpCancel' : 'interaction.permission.denyAccessibility')}
       busy={busy}
-      label={t('interaction.permission.deny')}
+      label={t(isMcpUrl ? 'interaction.permission.mcpCancel' : 'interaction.permission.deny')}
       onPress={() => onDecision(buildPermissionDecision('deny', { reason: 'User denied' }))}
       requestId={requestId}
       touchStyle={resolveButtonLayoutStyle(touchLayout, 'secondary', companion)}
@@ -842,11 +856,11 @@ function PermissionCard({
   const allowButton = (
     <ResolveButton
       key="allow"
-      accessibilityLabel={t('interaction.permission.allowOnceAccessibility')}
+      accessibilityLabel={t(isMcpUrl ? 'interaction.permission.mcpComplete' : 'interaction.permission.allowOnceAccessibility')}
       armed={armedDecision === 'allow-once'}
       busy={busy}
       confirmLabel={t('interaction.permission.allowOnceConfirm')}
-      label={t('interaction.permission.allowOnce')}
+      label={t(isMcpUrl ? 'interaction.permission.mcpComplete' : 'interaction.permission.allowOnce')}
       onPress={() => requestDecision('allow-once', buildPermissionDecision('allow'))}
       requestId={requestId}
       // K5: with three choices the primary takes its own full-width row on top.
@@ -869,13 +883,18 @@ function PermissionCard({
         <Text style={styles.kind}>{t('interaction.permission.kind')}</Text>
         <Text numberOfLines={1} style={styles.compactCardTitle}>{permissionState.title}</Text>
       </View>}
-      <PermissionEvidence
+      {isMcpUrl && url && /^https?:\/\//i.test(url) ? <Text accessibilityRole="link"
+        style={[styles.cardTitle, { textDecorationLine: 'underline' }]}
+        onPress={() => { void Linking.openURL(url).catch((error) => onError(formatRemoteError(error))); }}>
+        {url}
+      </Text> : null}
+      {isMcpUrl ? (!companion && presentation.description ? <Text style={styles.body}>{presentation.description}</Text> : null) : <PermissionEvidence
         input={item.request.input}
         armed={!!armedDecision}
         presentation={presentation}
         riskWarningText={permissionState.riskWarningText}
         touchLayout={touchLayout}
-      />
+      />}
       <InteractionActions touchLayout={touchLayout}>
         {companion && alwaysButton ? [allowButton, denyButton, alwaysButton] : [denyButton, alwaysButton, allowButton]}
       </InteractionActions>

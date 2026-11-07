@@ -897,6 +897,20 @@ it('keeps a typed custom answer when the pending request is refetched or the car
   expect(input()?.value).toBe('No, figure it out');
 });
 
+it('returns two same-title answers by stable question id', async () => {
+  remoteSessionStore.setPendingInteractions('s1', [{ request: { kind: 'ask_user_question', requestId, questions: [
+    { id: 'first', question: 'Choose?', options: [{ label: 'A' }, { label: 'B' }] },
+    { id: 'second', question: 'Choose?', options: [{ label: 'A' }, { label: 'B' }] },
+  ] } }]);
+  resolveInteraction.mockResolvedValueOnce({ accepted: true });
+  await act(async () => root.render(<Harness />));
+  await click('interaction.ask.option.1');
+  await click('interaction.ask.submitButton');
+  await click('interaction.ask.option.2');
+  await click('interaction.ask.submitButton');
+  expect(resolveInteraction).toHaveBeenCalledExactlyOnceWith(requestId, { kind: 'ask_user_question', answers: { first: 'A', second: 'B' } });
+});
+
 it('starts over when the same request replaces its questions', async () => {
   const first = { question: 'First?', options: [{ label: 'Yes' }, { label: 'No' }] };
   const second = { question: 'Second?', options: [{ label: 'A' }, { label: 'B' }] };

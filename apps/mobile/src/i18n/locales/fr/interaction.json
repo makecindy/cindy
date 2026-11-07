@@ -1,5 +1,7 @@
 {
   "permission": {
+    "mcpComplete": "Terminé",
+    "mcpCancel": "Annuler",
     "mode": {
       "default": "Autorisations par défaut",
       "acceptEdits": "Autoriser les modifications",
@@ -389,6 +391,8 @@
       "submitting": "Envoi en cours"
     },
     "permission": {
+      "titleStdin": "Autoriser la saisie dans ce terminal ?",
+      "titleMcpUrl": "Terminer la demande de {{server}}",
       "highRiskTitle": "Autorisation à haut risque à confirmer",
       "highRiskDetail": "Vérifiez la commande, puis confirmez à nouveau pour l'autoriser. Refusez-la en cas de doute.",
       "sessionAllowTitle": "Autoriser une fois ou toujours pour cette tâche",

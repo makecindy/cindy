@@ -15,6 +15,8 @@ export interface PendingInteractionLike {
 }
 
 export interface AskQuestion {
+  /** Stable provider identity; absent on legacy questions. */
+  id?: string;
   question: string;
   header?: string;
   options?: Array<{ label: string; description?: string }>;
@@ -27,10 +29,13 @@ export function formatAsyncQuestionSupplement(
   answers: Record<string, string>,
 ): string {
   const replies = questions.flatMap((q) => {
-    const answer = answers[q.question] ?? (q.header ? answers[q.header] : undefined);
+    const answer = answers[answerKey(q)] ?? answers[q.question] ?? (q.header ? answers[q.header] : undefined);
     return typeof answer === 'string' && answer.trim()
-      ? [{ question: q.question, answer: answer.trim() }] : [];
+      ? [{ ...(q.id ? { questionItemId: q.id } : {}), question: q.question, answer: answer.trim() }] : [];
   });
+  if (questions.length && questions.every((q) => q.id?.startsWith('["request_user_input_async",'))) {
+    return `<send_user_message_question_reply>\n${JSON.stringify(replies)}\n</send_user_message_question_reply>`;
+  }
   return replies.map(({ question, answer }) => `${question.split('\n').map((line) => `> ${line}`).join('\n')}\n\n${answer}`).join('\n\n');
 }
 
@@ -545,8 +550,12 @@ export function interactionBlocksRemoteComposer(item: PendingInteractionLike | n
  */
 export function pendingInteractionsBlockRemoteComposer(
   interactions: readonly PendingInteractionLike[],
+  collapsedQuestionIds: readonly string[] = [],
 ): boolean {
-  return interactions.some((item) => interactionBlocksRemoteComposer(item));
+  return interactions.some((item) => {
+    if (interactionKind(item) === 'ask_user_question' && collapsedQuestionIds.includes(readRequestId(item) ?? '')) return false;
+    return interactionBlocksRemoteComposer(item);
+  });
 }
 
 /**
@@ -996,7 +1005,13 @@ export function describePermissionAction(toolName: string, input: Record<string,
     const command = commandText(input);
     // The same relative command in two repositories is not the same operation: keep the cwd.
     const cwd = readString(input.cwd) ?? readString(input.workdir);
-    if (command) return { kind: 'command', preview: cwd ? `${command}\n# cwd: ${cwd}` : command };
+    if (command) {
+      const context = [cwd && `# cwd: ${cwd}`,
+        input.environmentId && `# environment: ${String(input.environmentId)}`,
+        input.networkApprovalContext && `# network: ${JSON.stringify(input.networkApprovalContext)}`,
+        input.approvalKind === 'humanCommand' && '# humanCommand'];
+      return { kind: 'command', preview: [command, ...context.filter(Boolean)].join('\n') };
+    }
   }
   if (FILE_READ_TOOLS.has(name) || FILE_WRITE_TOOLS.has(name)) {
     const paths = filePaths(input, FILE_READ_TOOLS.has(name) && name !== 'read');
@@ -1019,6 +1034,12 @@ export function permissionTitle(
   request: InteractionRequestLike,
   localizer?: PresentationLocalizer,
 ): string {
+  if (permissionToolName(request) === 'write_stdin') {
+    return presentationText(localizer, 'interaction.presentation.permission.titleStdin', '允许向终端发送输入？');
+  }
+  if (permissionToolName(request) === 'mcp_url') {
+    return presentationText(localizer, 'interaction.presentation.permission.titleMcpUrl', '完成 {{server}} 的请求', { server: String(permissionInput(request).serverName ?? 'MCP') });
+  }
   // Harness titles are often English or name an internal tool ("exec"); say what happens instead.
   const action = describePermissionAction(permissionToolName(request), permissionInput(request));
   if (action.kind === 'plugin' && action.subject) {
@@ -1124,6 +1145,7 @@ export function normalizeAskQuestions(value: unknown): AskQuestion[] {
       })
       : undefined;
     return [{
+      ...(readString(item.id) ? { id: readString(item.id)! } : {}),
       question,
       header: readString(item.header) ?? undefined,
       options,
@@ -1133,7 +1155,7 @@ export function normalizeAskQuestions(value: unknown): AskQuestion[] {
 }
 
 export function answerKey(question: AskQuestion): string {
-  return question.question;
+  return question.id || question.question;
 }
 
 export function encodeMultiSelectAnswer(

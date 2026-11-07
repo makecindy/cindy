@@ -1,5 +1,7 @@
 {
   "permission": {
+    "mcpComplete": "Concluído",
+    "mcpCancel": "Cancelar",
     "mode": {
       "default": "Permissões padrão",
       "acceptEdits": "Permitir edições",
@@ -389,6 +391,8 @@
       "submitting": "Enviando"
     },
     "permission": {
+      "titleStdin": "Permitir entrada neste terminal?",
+      "titleMcpUrl": "Concluir a solicitação de {{server}}",
       "highRiskTitle": "Permissão de alto risco exige confirmação",
       "highRiskDetail": "Revise o comando e confirme novamente para permiti-lo. Negue se não tiver certeza.",
       "sessionAllowTitle": "Permitir uma vez ou sempre permitir nesta tarefa",

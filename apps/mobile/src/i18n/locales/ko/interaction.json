@@ -1,5 +1,7 @@
 {
   "permission": {
+    "mcpComplete": "완료",
+    "mcpCancel": "취소",
     "mode": {
       "default": "기본 권한",
       "acceptEdits": "편집 허용",
@@ -385,6 +387,8 @@
       "submitting": "제출 중"
     },
     "permission": {
+      "titleStdin": "터미널 입력을 허용할까요?",
+      "titleMcpUrl": "{{server}} 요청 완료",
       "highRiskTitle": "고위험 권한은 한 번 더 확인해야 합니다",
       "highRiskDetail": "명령 내용을 확인한 뒤 허용을 다시 누르세요. 확실하지 않으면 거부하세요.",
       "sessionAllowTitle": "한 번만 허용하거나 이 작업에서 항상 허용할 수 있습니다",

@@ -1,5 +1,7 @@
 {
   "permission": {
+    "mcpComplete": "已毕",
+    "mcpCancel": "取消",
     "mode": {
       "default": "常例权柄",
       "acceptEdits": "许修",
@@ -385,6 +387,8 @@
       "submitting": "方呈"
     },
     "permission": {
+      "titleStdin": "可向终端输入乎？",
+      "titleMcpUrl": "应 {{server}} 之请",
       "highRiskTitle": "高险之授权须再确认",
       "highRiskDetail": "先核指令内容，再点一次确许；不确则拒之。",
       "sessionAllowTitle": "可唯许一次，亦可本差事常许",

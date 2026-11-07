@@ -1,3 +1,4 @@
+import { answerKey } from "@cindy/maker-shared";
 import { Button } from '@/components/ui/button';
 import { Spinner } from '@/components/ui/spinner';
 /**
@@ -201,6 +202,7 @@ export function AskUserQuestionPrompt({
   // Fixed field order avoids treating JSON property order as a new question;
   // absent and empty options are equivalent, as in the reducer.
   const questionsIdentity = props.pending.questions.map((question) => [
+    question.id,
     question.question,
     question.header,
     question.multiSelect,
@@ -355,7 +357,7 @@ function AskUserQuestionForm({
   const pageIndicator = totalQuestions > 1 ? `${currentIndex + 1}/${totalQuestions}` : undefined;
 
   // Check if this question was already answered (revisiting via Back)
-  const existingAnswer = currentQ ? answers[currentQ.question] : undefined;
+  const existingAnswer = currentQ ? answers[answerKey(currentQ)] : undefined;
 
   // ── Helper: compute selectedLabels for a given question index ──
   // Used both by useEffect (current question) and by advance/handleBack
@@ -365,7 +367,7 @@ function AskUserQuestionForm({
       const q = questions[idx];
       if (!q) return { labels: new Set<string>(), custom: '', showCustom: false };
 
-      const ans = answersSnapshot[q.question];
+      const ans = answersSnapshot[answerKey(q)];
       const isMulti = q.multiSelect === true;
       const opts = visibleAskOptions(q.options);
 
@@ -461,7 +463,7 @@ function AskUserQuestionForm({
       // the animation interval and the host's asynchronous submission receipt.
       ++voiceRevision.current;
       setVoiceFeedback('hint');
-      const updated = { ...answers, [currentQ.question]: answer };
+      const updated = { ...answers, [answerKey(currentQ)]: answer };
       setAnswers(updated);
 
       if (currentIndex === totalQuestions - 1) {

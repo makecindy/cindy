@@ -12695,6 +12695,10 @@
       "defer": "暂不取"
     },
     "permissionPrompt": {
+      "titleStdin": "可向终端输入乎？",
+      "titleMcpUrl": "应 {{server}} 之请",
+      "mcpComplete": "已毕",
+      "mcpCancel": "取消",
       "alwaysAllowScoped": "此差事恒许 {{scope}}",
       "alwaysAllowScopedHint": "及于整个差事，且仅限此处所列之范围。",
       "alwaysAllowSessionHint": "及于整个差事，不止此一请求。",

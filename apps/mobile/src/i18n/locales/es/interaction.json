@@ -1,5 +1,7 @@
 {
   "permission": {
+    "mcpComplete": "Listo",
+    "mcpCancel": "Cancelar",
     "mode": {
       "default": "Permisos predeterminados",
       "acceptEdits": "Permitir ediciones",
@@ -389,6 +391,8 @@
       "submitting": "Presentando"
     },
     "permission": {
+      "titleStdin": "¿Permitir entrada en este terminal?",
+      "titleMcpUrl": "Completar la solicitud de {{server}}",
       "highRiskTitle": "El permiso de alto riesgo necesita confirmación",
       "highRiskDetail": "Revise el comando y luego confirme nuevamente para permitirlo. Niégalo si no estás seguro.",
       "sessionAllowTitle": "Permitir una vez o permitir siempre para esta tarea",

@@ -27,6 +27,7 @@ export function readAskUserDraft(requestId: string): AskUserDraft | null {
 /** 与桌面 AskUserQuestionPrompt 同口径的问题内容标识(字段顺序固定,缺省 options 等同空)。 */
 export function askQuestionsIdentity(questions: AskQuestion[]): string {
   return JSON.stringify(questions.map((question) => [
+    question.id,
     question.question,
     question.header,
     question.multiSelect,

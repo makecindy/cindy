@@ -1,5 +1,7 @@
 {
   "permission": {
+    "mcpComplete": "已完成",
+    "mcpCancel": "取消",
     "mode": {
       "default": "預設權限",
       "acceptEdits": "允許編輯",
@@ -385,6 +387,8 @@
       "submitting": "提交中"
     },
     "permission": {
+      "titleStdin": "允許向終端傳送輸入？",
+      "titleMcpUrl": "完成 {{server}} 的請求",
       "highRiskTitle": "高風險授權需要二次確認",
       "highRiskDetail": "先核對指令內容，再點一次確認允許；不確定就拒絕。",
       "sessionAllowTitle": "可以只允許一次，也可以本任務總是允許",

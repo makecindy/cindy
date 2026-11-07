@@ -12840,6 +12840,10 @@
       "defer": "Agora não"
     },
     "permissionPrompt": {
+      "titleStdin": "Permitir entrada neste terminal?",
+      "titleMcpUrl": "Concluir o pedido de {{server}}",
+      "mcpComplete": "Concluído",
+      "mcpCancel": "Cancelar",
       "alwaysAllowScoped": "Permitir sempre {{scope}} nesta sessão",
       "alwaysAllowScopedHint": "Aplica-se a toda a sessão e apenas ao que está listado aqui.",
       "alwaysAllowSessionHint": "Aplica-se a toda a sessão, não apenas a este pedido.",

@@ -1,5 +1,7 @@
 {
   "permission": {
+    "mcpComplete": "已完成",
+    "mcpCancel": "取消",
     "mode": {
       "default": "默认权限",
       "acceptEdits": "允许编辑",
@@ -385,6 +387,8 @@
       "submitting": "提交中"
     },
     "permission": {
+      "titleStdin": "允许向终端发送输入？",
+      "titleMcpUrl": "完成 {{server}} 的请求",
       "highRiskTitle": "高风险授权需要二次确认",
       "highRiskDetail": "先核对命令内容，再点一次确认允许；不确定就拒绝。",
       "sessionAllowTitle": "可以只允许一次，也可以本任务总是允许",

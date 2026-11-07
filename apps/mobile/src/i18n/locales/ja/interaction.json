@@ -1,5 +1,7 @@
 {
   "permission": {
+    "mcpComplete": "完了",
+    "mcpCancel": "キャンセル",
     "mode": {
       "default": "デフォルト権限",
       "acceptEdits": "編集を許可",
@@ -385,6 +387,8 @@
       "submitting": "送信中"
     },
     "permission": {
+      "titleStdin": "端末への入力を許可しますか？",
+      "titleMcpUrl": "{{server}} のリクエストを完了",
       "highRiskTitle": "高リスクの権限は再確認が必要です",
       "highRiskDetail": "コマンドを確認し、もう一度許可を確定してください。不明な場合は拒否してください。",
       "sessionAllowTitle": "今回だけ許可するか、このタスクで常に許可できます",
