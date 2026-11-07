@@ -82,6 +82,18 @@ describe('getSessionDisplayTitle', () => {
     }
   });
 
+  // 语言包按需加载后，非当前语言的旧默认标题靠跨语言常驻表识别，而不是 t(key, { lng })。
+  it('recognizes an old default title saved in another language and shows it in the current one', () => {
+    const english = (key: string) =>
+      key === 'cindyMake.merge.taskTitle' ? 'Resolve Source Update Conflicts' : 'unexpected';
+    for (const saved of ['ソース更新時の競合を解決', '處理原始碼更新衝突']) {
+      const s = session({ source: 'cindy-make-merge', title: saved, createdAt: MAKE_CREATED_AT });
+      expect(getSessionDisplayTitle(s, UNNAMED, english)).toBe(
+        '09-20 14:07 Resolve Source Update Conflicts',
+      );
+    }
+  });
+
   it('keeps an existing title timestamp stable when displayed again or after the task changes', () => {
     const title = '[f428] 09-19 09:00 处理合入冲突';
     const s = session({
