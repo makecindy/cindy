@@ -13,6 +13,8 @@ import { toast } from '@/lib/toast';
 import { ContentHeader } from '@/components/layout/ContentHeader';
 import { TaskRemoteDesktopButton } from '../TaskRemoteDesktopButton';
 
+import { clearRemoteDesktopAvailability } from '../useRemoteDesktopAvailability';
+
 const fixture = vi.hoisted(() => ({ devices: [] as DeviceLinkDeviceView[] }));
 vi.mock('@/features/feature-context', () => ({
   useFeatureContentHeader: () => 'Task title',
@@ -35,6 +37,7 @@ const capabilities = {
 };
 const invoke = vi.fn();
 const open = vi.fn();
+let statusChanged: ((event: { status: 'stopped' | 'connecting' | 'online' }) => void) | null = null;
 const device = (): DeviceLinkDeviceView => ({
   deviceId: 'remote',
   name: 'Remote computer',
@@ -49,20 +52,38 @@ const device = (): DeviceLinkDeviceView => ({
 });
 
 beforeEach(async () => {
+  vi.useFakeTimers();
+  clearRemoteDesktopAvailability();
   vi.clearAllMocks();
   revokedDevicesStore.clearAll();
   unresponsiveDevicesStore.clearAll();
   fixture.devices = [device()];
   invoke.mockReset().mockResolvedValue(capabilities);
   open.mockReset().mockResolvedValue(undefined);
-  Object.assign(window, { electronAPI: { deviceLink: { invoke }, openRemoteDesktop: open } });
+  Object.assign(window, {
+    electronAPI: {
+      deviceLink: {
+        invoke,
+        onStatusChanged: (listener: NonNullable<typeof statusChanged>) => {
+          statusChanged = listener;
+          return () => {
+            statusChanged = null;
+          };
+        },
+        onPresenceChanged: vi.fn(() => () => {}),
+      },
+      openRemoteDesktop: open,
+    },
+  });
   await i18n.changeLanguage('en');
 });
 afterEach(() => {
   cleanup();
   revokedDevicesStore.clearAll();
   unresponsiveDevicesStore.clearAll();
+  clearRemoteDesktopAvailability();
   vi.restoreAllMocks();
+  vi.useRealTimers();
 });
 
 function unavailable() {
@@ -145,6 +166,10 @@ it('rechecks an interrupted check when the user looks at it again', async () => 
   expect(invoke).toHaveBeenCalledOnce();
   fireEvent.mouseEnter(action);
   await act(async () => {});
+  expect(invoke).toHaveBeenCalledOnce();
+  await act(async () => vi.advanceTimersByTimeAsync(2_000));
+  fireEvent.mouseEnter(action);
+  await act(async () => {});
   expect(invoke).toHaveBeenCalledTimes(2);
   expect(screen.getByRole('button', { name: 'Open remote desktop' })).toBe(action);
   fireEvent.mouseEnter(action);
@@ -157,6 +182,37 @@ it('does not recheck a definitive refusal on hover', async () => {
   render(<TaskRemoteDesktopButton deviceId="remote" />);
   await act(async () => {});
   fireEvent.mouseEnter(screen.getByRole('button'));
+  await act(async () => {});
+  expect(invoke).toHaveBeenCalledOnce();
+});
+
+// #7211: the real button must retain a disabled reply across task switches;
+// the old mounted-state-only probe repeats the same remote request on remount.
+it('shares a disabled probe across simultaneous shortcuts and task remounts', async () => {
+  invoke.mockRejectedValue(new Error('DESKTOP_UNAVAILABLE'));
+  const view = render(
+    <>
+      <TaskRemoteDesktopButton deviceId="remote" />
+      <TaskRemoteDesktopButton deviceId="remote" />
+    </>,
+  );
+  await act(async () => {});
+  expect(screen.getAllByRole('button')[0].getAttribute('aria-label')).toContain(
+    i18n.t('remoteDesktop.disabled'),
+  );
+  expect(invoke).toHaveBeenCalledOnce();
+  view.unmount();
+  render(<TaskRemoteDesktopButton deviceId="remote" />);
+  await act(async () => {});
+  expect(invoke).toHaveBeenCalledOnce();
+});
+
+it('does not repeat an interrupted background probe when the shortcut remounts', async () => {
+  invoke.mockRejectedValue(new Error('DEVICE_LINK_TIMEOUT'));
+  const view = render(<TaskRemoteDesktopButton deviceId="remote" />);
+  await act(async () => {});
+  view.unmount();
+  render(<TaskRemoteDesktopButton deviceId="remote" />);
   await act(async () => {});
   expect(invoke).toHaveBeenCalledOnce();
 });
@@ -198,6 +254,10 @@ it('rechecks after the connection drops while opening', async () => {
   expect(action.getAttribute('aria-label')).toContain(i18n.t('remoteDesktop.shortcut.offline'));
   fireEvent.mouseEnter(action);
   await act(async () => {});
+  expect(invoke).toHaveBeenCalledOnce();
+  await act(async () => vi.advanceTimersByTimeAsync(2_000));
+  fireEvent.mouseEnter(action);
+  await act(async () => {});
   expect(invoke).toHaveBeenCalledTimes(2);
   fireEvent.click(screen.getByRole('button', { name: 'Open remote desktop' }));
   await act(async () => {});
@@ -227,3 +287,86 @@ it('keeps the remote desktop action clickable in the mac titlebar trailing slot'
   expect(open).toHaveBeenCalledExactlyOnceWith({ deviceId: 'remote', name: 'Remote computer' });
   await act(async () => {});
 });
+
+// A logout while neither shortcut is mounted must invalidate its old request.
+it('invalidates a detached in-flight read on logout without disturbing another peer', async () => {
+  let resolve!: (value: unknown) => void;
+  invoke.mockImplementation((id: string) =>
+    id === 'remote'
+      ? new Promise((done) => {
+          resolve = done;
+        })
+      : Promise.resolve(capabilities),
+  );
+  fixture.devices = [device(), { ...device(), deviceId: 'other' }];
+  const view = render(
+    <>
+      <TaskRemoteDesktopButton deviceId="remote" />
+      <TaskRemoteDesktopButton deviceId="other" />
+    </>,
+  );
+  await act(async () => {});
+  expect(screen.getByRole('button', { name: 'Open remote desktop' })).toBeTruthy();
+  view.unmount();
+  act(() => statusChanged?.({ status: 'stopped' }));
+  invoke.mockResolvedValue({ ...capabilities, enabled: false });
+  render(<TaskRemoteDesktopButton deviceId="remote" />);
+  await act(async () => {});
+  await act(async () => resolve(capabilities));
+  expect(screen.getByRole('button').getAttribute('aria-label')).toContain(
+    i18n.t('remoteDesktop.disabled'),
+  );
+  expect(invoke).toHaveBeenCalledTimes(3);
+});
+
+it('rechecks a cached disabled result only after a later user interaction', async () => {
+  invoke.mockRejectedValueOnce(new Error('DESKTOP_UNAVAILABLE'));
+  render(<TaskRemoteDesktopButton deviceId="remote" />);
+  await act(async () => {});
+  await act(async () => vi.advanceTimersByTimeAsync(30_000));
+  expect(invoke).toHaveBeenCalledOnce();
+  fireEvent.mouseEnter(screen.getByRole('button'));
+  await act(async () => {});
+  expect(invoke).toHaveBeenCalledTimes(2);
+  expect(screen.getByRole('button', { name: 'Open remote desktop' })).toBeTruthy();
+});
+
+// PR #7235 review: capability failures survived unmounts but could never recover.
+// Exercise the real shortcut with one online peer, no presence/version change,
+// and restored display/permission. Existing retries cover transport errors only.
+it.each([
+  [{ ...capabilities, displays: [] }, 'remoteDesktop.shortcut.noDisplay'],
+  [
+    { ...capabilities, permissions: { screenRecording: 'missing', accessibility: 'granted' } },
+    'remoteDesktop.shortcut.screenRecordingRequired',
+  ],
+])(
+  'recovers a cached capability refusal with interaction backoff: %s',
+  async (value, reasonKey) => {
+    invoke.mockResolvedValueOnce(value).mockResolvedValueOnce(value);
+    const view = render(<TaskRemoteDesktopButton deviceId="remote" />);
+    await act(async () => {});
+    expect(screen.getByRole('button').getAttribute('aria-label')).toContain(i18n.t(reasonKey));
+    view.unmount();
+    render(<TaskRemoteDesktopButton deviceId="remote" />);
+    await act(async () => {});
+    fireEvent.mouseEnter(screen.getByRole('button'));
+    await act(async () => {});
+    expect(invoke).toHaveBeenCalledOnce();
+    await act(async () => vi.advanceTimersByTimeAsync(2_000));
+    expect(invoke).toHaveBeenCalledOnce();
+    fireEvent.mouseEnter(screen.getByRole('button'));
+    await act(async () => {});
+    expect(invoke).toHaveBeenCalledTimes(2);
+    expect(screen.getByRole('button').getAttribute('aria-label')).toContain(i18n.t(reasonKey));
+    await act(async () => vi.advanceTimersByTimeAsync(2_000));
+    fireEvent.focus(screen.getByRole('button'));
+    await act(async () => {});
+    expect(invoke).toHaveBeenCalledTimes(2);
+    await act(async () => vi.advanceTimersByTimeAsync(2_000));
+    fireEvent.focus(screen.getByRole('button'));
+    await act(async () => {});
+    expect(invoke).toHaveBeenCalledTimes(3);
+    expect(screen.getByRole('button', { name: 'Open remote desktop' })).toBeTruthy();
+  },
+);
