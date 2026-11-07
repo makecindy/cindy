@@ -106,4 +106,43 @@ describe('PiAgent.listAgentSkills (filesystem discovery, no binary spawn)', () =
     }));
     expect(resolver).toHaveBeenCalledOnce();
   });
+
+  it('reports a managed package source that could not be read in full', async () => {
+    const incomplete = new PiAgent({
+      ...buildDeps(),
+      resolvePiManagedPackageResources: async () => ({
+        extensions: [],
+        skills: [],
+        promptTemplates: [],
+        packageRoots: [],
+        incomplete: true,
+      }),
+    });
+    await expect(incomplete.listAgentSkills({ workingDir, includeManagedPiPackages: true }))
+      .resolves.toMatchObject({ incomplete: true });
+
+    const failed = new PiAgent({
+      ...buildDeps(),
+      resolvePiManagedPackageResources: async () => {
+        throw new Error('package state unreadable');
+      },
+    });
+    const failedResult = await failed.listAgentSkills({
+      workingDir,
+      includeManagedPiPackages: true,
+    });
+    expect(failedResult.incomplete).toBe(true);
+
+    const complete = new PiAgent({
+      ...buildDeps(),
+      resolvePiManagedPackageResources: async () => ({
+        extensions: [], skills: [], promptTemplates: [], packageRoots: [],
+      }),
+    });
+    const completeResult = await complete.listAgentSkills({
+      workingDir,
+      includeManagedPiPackages: true,
+    });
+    expect(completeResult.incomplete).toBeUndefined();
+  });
 });

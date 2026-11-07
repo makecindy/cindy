@@ -413,6 +413,8 @@ export interface PiManagedPackageResources {
   promptTemplates: string[];
   /** Canonical package roots used to authenticate get_commands provenance. */
   packageRoots: string[];
+  /** A package that can be read again later was skipped, so resources may be missing. */
+  incomplete?: boolean;
 }
 
 export interface PiPackageSnapshotLimits {
@@ -2551,11 +2553,16 @@ export async function resolveManagedPiPackageResources(
           await publishPiPackagesChanged();
         }
       }
-      const resources = {
+      const resources: PiManagedPackageResources = {
         extensions: [...new Set(inspected.flatMap((pkg) => pkg.launch.extensions))],
         skills: inspected.flatMap((pkg) => pkg.launch.skills),
         promptTemplates: [...new Set(inspected.flatMap((pkg) => pkg.launch.promptTemplates))],
         packageRoots: [...new Set(inspected.flatMap((pkg) => pkg.launch.packageRoots))],
+        // The inspection cache already refuses to retain a degraded read, but a caller
+        // that caches the *roster* would keep these missing Skills past that retry.
+        ...(inspected.some((pkg) => isTransientInspectionWarning(pkg.view.warning))
+          ? { incomplete: true }
+          : {}),
       };
       if (startupTiming) {
         startupTiming.packageCount = inspected.length;
@@ -2790,7 +2797,7 @@ export async function resolveManagedPiPackageResources(
       failureCategory: piPackageMutationFailureCategory(error),
       diagnostic: piPackageCommandDiagnostic(error),
     });
-    return { extensions: [], skills: [], promptTemplates: [], packageRoots: [] };
+    return { extensions: [], skills: [], promptTemplates: [], packageRoots: [], incomplete: true };
   } finally {
     emitPiPackageStartupTiming(startupTiming);
   }

@@ -53,6 +53,8 @@ export interface PaletteSkillListCacheFacts {
   preparationClean: boolean;
   /** The scan itself reported an unreadable root. */
   scanClean: boolean;
+  /** The scan left out a source that can recover on retry (e.g. a package inspection over budget). */
+  scanComplete: boolean;
   /** The active data owner is still the one the read started under. */
   ownerStable: boolean;
   /** An owner transition is still pending. */
@@ -68,6 +70,9 @@ export interface PaletteSkillListCacheFacts {
  * Skills, and a cached partial roster hides them for the whole window:
  * - preparation warnings (a Skill that could not be linked into the scanned root),
  * - scan errors (an unreadable root),
+ * - a scan that skipped a recoverable source without reporting it as an error,
+ *   such as a managed Pi package whose inspection hit its budget — the package
+ *   store retries that read, but this roster would keep serving the gap,
  * - an owner switch mid-read, or one still pending (`activeOwnerScopeKey()` reports
  *   the outgoing owner until it settles),
  * - a read-only Device Link scan, which skips local project-link preparation, so its
@@ -78,6 +83,7 @@ export function shouldCachePaletteSkillListing(facts: PaletteSkillListCacheFacts
   return (
     facts.preparationClean
     && facts.scanClean
+    && facts.scanComplete
     && facts.ownerStable
     && !facts.boundaryPending
     && !facts.readOnlyRemote

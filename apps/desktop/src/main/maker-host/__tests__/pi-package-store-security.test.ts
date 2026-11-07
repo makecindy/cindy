@@ -709,7 +709,9 @@ describe('Pi package executable-code boundary', () => {
     const store = await import('../pi-package-store.js');
     lockRuntime.nextStatus = { held: false, reason };
     await expect(store.resolveManagedPiPackageResources({ startupTraceId: '0123456789abcdef' }))
-      .resolves.toEqual({ extensions: [], skills: [], promptTemplates: [], packageRoots: [] });
+      .resolves.toEqual({
+        extensions: [], skills: [], promptTemplates: [], packageRoots: [], incomplete: true,
+      });
     await store.listPiPackages();
     expect(lockRuntime.calls).toHaveLength(1);
     expect(lockRuntime.calls[0]?.waitMs).toBe(0);
@@ -781,12 +783,13 @@ describe('Pi package executable-code boundary', () => {
     }) as never);
     try {
       await expect(store.resolveManagedPiPackageResources())
-        .resolves.toMatchObject({ skills: [] });
+        .resolves.toMatchObject({ skills: [], incomplete: true });
       expect(listSpawns()).toBe(1);
       // Same clock, far inside the reuse window: the degraded roster must retry
       // instead of keeping this package's Skill missing.
       const retried = await store.resolveManagedPiPackageResources();
       expect(retried.skills).toHaveLength(1);
+      expect(retried.incomplete).toBeUndefined();
       expect(listSpawns()).toBe(2);
     } finally {
       readdirSpy.mockRestore();
@@ -2372,6 +2375,9 @@ describe('Pi package executable-code boundary', () => {
       skills: [],
       promptTemplates: [],
       packageRoots: [],
+      // A snapshot omits transiently skipped roots on its own path; a read-only
+      // roster names the gap so the palette does not cache it.
+      ...(mode === 'metadata' ? { incomplete: true } : {}),
     });
 
     await store.listPiPackages(); // Wait for the optional background cache write.
@@ -3581,7 +3587,7 @@ describe('Pi package executable-code boundary', () => {
       await expect(store.listPiPackages()).rejects.toThrow('state is unavailable');
       await expect(store.resolveManagedPiNativePackagePaths()).rejects.toThrow('state is unavailable');
       await expect(store.resolveManagedPiPackageResources()).resolves.toEqual({
-        extensions: [], skills: [], promptTemplates: [], packageRoots: [],
+        extensions: [], skills: [], promptTemplates: [], packageRoots: [], incomplete: true,
       });
       await expect(store.mutatePiPackage({
         action: 'set-enabled',
@@ -3612,7 +3618,7 @@ describe('Pi package executable-code boundary', () => {
     await expect(store.resolveManagedPiPackageResources({
       snapshotRoot: path.join(runtime.userData, 'corrupt-state-snapshot'),
     })).resolves.toEqual({
-      extensions: [], skills: [], promptTemplates: [], packageRoots: [],
+      extensions: [], skills: [], promptTemplates: [], packageRoots: [], incomplete: true,
     });
     await expect(store.mutatePiPackage({
       action: 'set-enabled',

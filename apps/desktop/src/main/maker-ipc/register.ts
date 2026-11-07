@@ -8554,6 +8554,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
           shouldCachePaletteSkillListing({
             preparationClean,
             scanClean: !result.errors?.length,
+            scanComplete: result.incomplete !== true,
             ownerStable: activeOwnerScopeKey() === ownerScope,
             boundaryPending: isAppSessionBoundaryPending(),
             readOnlyRemote,

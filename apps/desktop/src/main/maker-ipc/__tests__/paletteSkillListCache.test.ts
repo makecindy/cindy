@@ -13,6 +13,7 @@ import {
 const clean: PaletteSkillListCacheFacts = {
   preparationClean: true,
   scanClean: true,
+  scanComplete: true,
   ownerStable: true,
   boundaryPending: false,
   readOnlyRemote: false,
@@ -24,7 +25,7 @@ describe('palette Skill listing cache eligibility', () => {
   });
 
   it('refuses a roster that any step could have left incomplete', () => {
-    for (const fact of ['preparationClean', 'scanClean', 'ownerStable'] as const) {
+    for (const fact of ['preparationClean', 'scanClean', 'scanComplete', 'ownerStable'] as const) {
       expect(shouldCachePaletteSkillListing({ ...clean, [fact]: false }), fact).toBe(false);
     }
     for (const fact of ['boundaryPending', 'readOnlyRemote'] as const) {

@@ -104,6 +104,12 @@ export interface ListRuntimeSkillsOptions extends ListAgentSkillsOptions {
 export interface ListAgentSkillsResult {
   skills: AgentSkillCommand[];
   errors?: Array<{ path?: string; message: string }>;
+  /**
+   * A source that can recover on retry was left out of this roster — a managed
+   * package whose inspection hit its budget, for instance. It is not an error, but
+   * a caller that caches rosters must rescan instead of storing this one.
+   */
+  incomplete?: boolean;
 }
 
 export type AtResourceType = 'file' | 'dir' | 'agent';

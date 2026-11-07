@@ -768,6 +768,8 @@ export interface AgentDeps {
     skills: Array<{ path: string; name: string; description?: string }>;
     promptTemplates: string[];
     packageRoots: string[];
+    /** A package that can recover was skipped, so this list may be missing resources. */
+    incomplete?: boolean;
   }>;
 
   /**
