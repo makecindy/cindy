@@ -1299,6 +1299,7 @@ describe('AppServerHost descendant thread routing', () => {
     });
     expect(mcpServerElicitation).toHaveBeenCalledWith(
       expect.objectContaining({ threadId: 'child-thread', serverName: 'node_repl' }),
+      { requestId: 'early-elicitation' },
     );
 
     await subscription.release();
