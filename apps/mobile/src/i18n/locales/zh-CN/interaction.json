@@ -1,5 +1,7 @@
 {
   "permission": {
+    "mcpComplete": "已完成",
+    "mcpCancel": "取消",
     "mode": {
       "default": "默认权限",
       "acceptEdits": "允许编辑",
@@ -98,7 +100,14 @@
     "planFeedbackPlaceholder": "告诉 Claude 应该怎么做",
     "planFeedbackRequired": "输入反馈后才能提交。",
     "planFeedbackSubmit": "提交计划反馈",
-    "planFeedbackAccessibility": "反馈修改计划"
+    "planFeedbackAccessibility": "反馈修改计划",
+    "validation": {
+      "required": "请填写此必填项。",
+      "choice": "请选择列出的选项。",
+      "tooShort": "请至少输入 {{count}} 个字符。",
+      "tooLong": "请最多输入 {{count}} 个字符。"
+    },
+    "askRestrictedMetaCaption": "{{options}} · {{mode}}"
   },
   "kinds": {
     "permission": {
@@ -385,6 +394,8 @@
       "submitting": "提交中"
     },
     "permission": {
+      "titleStdin": "允许向终端发送输入？",
+      "titleMcpUrl": "完成 {{server}} 的请求",
       "highRiskTitle": "高风险授权需要二次确认",
       "highRiskDetail": "先核对命令内容，再点一次确认允许；不确定就拒绝。",
       "sessionAllowTitle": "可以只允许一次，也可以本任务总是允许",

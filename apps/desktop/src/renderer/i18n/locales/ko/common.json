@@ -12695,6 +12695,10 @@
       "defer": "나중에 다운로드"
     },
     "permissionPrompt": {
+      "titleStdin": "터미널 입력을 허용할까요?",
+      "titleMcpUrl": "{{server}} 요청 완료",
+      "mcpComplete": "완료",
+      "mcpCancel": "취소",
       "alwaysAllowScoped": "이 세션에서 {{scope}} 항상 허용",
       "alwaysAllowScopedHint": "이 세션 전체에 적용되며, 여기에 표시된 범위에만 해당합니다.",
       "alwaysAllowSessionHint": "이번 요청 한 번이 아니라 이 세션 전체에 적용됩니다.",
@@ -12959,7 +12963,13 @@
       "sendAndContinue": "보내고 계속",
       "close": "닫기",
       "customAnswer": "다른 답변 입력…",
-      "answerPlaceholder": "답변을 입력하세요…"
+      "answerPlaceholder": "답변을 입력하세요…",
+      "validation": {
+        "required": "이 필수 항목을 입력하세요.",
+        "choice": "목록의 옵션 중 하나를 선택하세요.",
+        "tooShort": "{{count}}자 이상 입력하세요.",
+        "tooLong": "{{count}}자 이하로 입력하세요."
+      }
     },
     "planReviewBubble": {
       "title": "계획 검토",
@@ -19657,8 +19667,8 @@
     "removeTitle": "{{name}} 계정을 제거할까요?",
     "removeDescription": "Cindy가 이 계정에 작업을 배정하지 않습니다. CLI 로그인과 대화 기록은 이 컴퓨터에 유지됩니다.",
     "failed": "계정을 읽거나 업데이트하지 못했습니다. CLI 로그인과 네트워크 연결을 확인한 후 다시 시도하세요.",
-    "used": "{{percent}}% 사용",
     "directory": "계정 폴더",
+    "loginAgain": "다시 로그인",
     "login": "로그인"
   }
 }

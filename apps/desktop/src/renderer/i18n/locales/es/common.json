@@ -12840,6 +12840,10 @@
       "defer": "Ahora no"
     },
     "permissionPrompt": {
+      "titleStdin": "¿Permitir entrada en este terminal?",
+      "titleMcpUrl": "Completar la solicitud de {{server}}",
+      "mcpComplete": "Listo",
+      "mcpCancel": "Cancelar",
       "alwaysAllowScoped": "Permitir siempre {{scope}} durante esta sesión",
       "alwaysAllowScopedHint": "Se aplica a toda la sesión y solo a lo que se indica aquí.",
       "alwaysAllowSessionHint": "Se aplica a toda la sesión, no solo a esta solicitud.",
@@ -13082,7 +13086,13 @@
       "sendAndContinue": "Enviar y continuar",
       "close": "Cerrar",
       "customAnswer": "Escribe algo más…",
-      "answerPlaceholder": "Escribe tu respuesta…"
+      "answerPlaceholder": "Escribe tu respuesta…",
+      "validation": {
+        "required": "Completa este campo obligatorio.",
+        "choice": "Elige una de las opciones de la lista.",
+        "tooShort": "Introduce al menos {{count}} caracteres.",
+        "tooLong": "Introduce como máximo {{count}} caracteres."
+      }
     },
     "planReviewBubble": {
       "title": "Revisión del plan",
@@ -19916,8 +19926,8 @@
     "removeTitle": "¿Quitar {{name}}?",
     "removeDescription": "Cindy dejará de asignar tareas a esta cuenta. La sesión de la CLI y el historial de conversaciones permanecerán en este equipo.",
     "failed": "No se pudo leer o actualizar la cuenta. Comprueba el inicio de sesión de la CLI y la conexión, e inténtalo de nuevo.",
-    "used": "{{percent}}% utilizado",
     "directory": "Carpeta de la cuenta",
+    "loginAgain": "Iniciar sesión nuevamente",
     "login": "Iniciar sesión"
   }
 }

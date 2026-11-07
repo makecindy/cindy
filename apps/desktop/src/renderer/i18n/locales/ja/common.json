@@ -12695,6 +12695,10 @@
       "defer": "今はダウンロードしない"
     },
     "permissionPrompt": {
+      "titleStdin": "端末への入力を許可しますか？",
+      "titleMcpUrl": "{{server}} のリクエストを完了",
+      "mcpComplete": "完了",
+      "mcpCancel": "キャンセル",
       "alwaysAllowScoped": "このセッションでは {{scope}} を常に許可",
       "alwaysAllowScopedHint": "このセッション全体に適用され、ここに挙げた範囲にのみ及びます。",
       "alwaysAllowSessionHint": "この 1 回のリクエストだけでなく、このセッション全体に適用されます。",
@@ -12959,7 +12963,13 @@
       "sendAndContinue": "送信して続行",
       "close": "閉じる",
       "customAnswer": "別の回答を入力…",
-      "answerPlaceholder": "回答を入力…"
+      "answerPlaceholder": "回答を入力…",
+      "validation": {
+        "required": "この必須項目を入力してください。",
+        "choice": "一覧の選択肢から選んでください。",
+        "tooShort": "{{count}}文字以上で入力してください。",
+        "tooLong": "{{count}}文字以内で入力してください。"
+      }
     },
     "planReviewBubble": {
       "title": "計画レビュー",
@@ -19657,8 +19667,8 @@
     "removeTitle": "{{name}} を削除しますか？",
     "removeDescription": "Cindy はこのアカウントにタスクを割り当てなくなります。CLI のログイン情報と会話履歴はこのコンピューターに残ります。",
     "failed": "アカウントの取得または更新ができませんでした。CLI のログインとネットワーク接続を確認して、もう一度お試しください。",
-    "used": "{{percent}}% 使用済み",
     "directory": "アカウントフォルダー",
+    "loginAgain": "再ログイン",
     "login": "ログイン"
   }
 }

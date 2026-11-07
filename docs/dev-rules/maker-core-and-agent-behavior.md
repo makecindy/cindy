@@ -524,11 +524,22 @@ sessionRunningRetry 就停。每次因 replacement 关闭而重新入队都计�
   触发定时任务的成功收口。回归见 `agents/codex/index.test.ts` 的 pending confirmation
   与 human continuation 用例，以及 Desktop `sessionEventPipeline.test.ts`。
   Codex 异步提问使用 `agentMessage.delivery=async` 与结构化 `questions` 接入同一提问
-  流程，不把回退正文当成最终回答。未回答的异步问题不保留产品边界，原轮次结束时撤销
+  流程；原生正文按消息顺序保留在历史，底部回答入口默认收起，展开/收起不改写正文，
+  收起时普通输入框可用，切换任务保留本端收起意图。未回答的异步问题不保留产品边界，原轮次结束时撤销
   原生请求；未操作的卡片自动收起、不代选答案，也不提供历史回答入口。原生请求的迟到
   回答不得续跑；已编辑草稿的显式补充发送见下文。结束前已提交的回答优先通过 `turn/steer`
   送入原轮次；发送与结束竞态导致原轮次明确拒绝接收时复用人工续跑，发送结果不确定时
   提示错误且不自动重发。Stop、失败、关闭及被替换问题的迟到回答不得续跑。
+  原生问题 ID 贯穿宿主、桌面/手机、历史与回传；旧客户端按题目文字回传仍兼容。
+  不在 adapter 截断题数、选项、题干或答案；异步回答按原生
+  `send_user_message_question_reply` 格式携带 questionItemId。RPC `isBlocking=false`
+  保留两分钟未操作自动空答，开始输入后宿主停止计时；活动回执只停表，不持久化答案。
+  审批按 JSON-RPC requestId 撤回，与 tool itemId 分离；终端输入、网络和环境上下文
+  同时保留给用户与审查器。普通 MCP form 支持非私密字符串、布尔和单选枚举，保留精确 choices 及必填/字符长度限制；
+  填写错误留在原卡片并保留草稿，独立取消才表示用户取消；pattern/format 等未支持的
+  验证约束在展示前明确拒绝，不生成无效 accept。URL
+  由用户主动打开并完成，Full access/Auto 不代答。不支持的模式或私密字段明确提示并
+  返回 cancel，不冒充用户 decline，不把私密输入改接普通问答。
   协议与前缀稳定性实测见 `agents/codex/async-user-input.native.test.ts`，
   卡片、回传、去重及取消回归见 `agents/codex/index.test.ts`。
   Claude Code／Pi 通过 `cindy_helper.ask_owner`（kind=choose，2026-10-30 起接替

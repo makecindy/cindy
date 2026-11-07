@@ -23,6 +23,15 @@ afterEach(() => {
 });
 
 describe('pendingInteractionCollapseStore', () => {
+  it('starts optional questions collapsed without overriding an explicit expansion', () => {
+    const card = askCard('optional');
+    card.request.delivery = 'async';
+    prunePendingInteractionCollapse('session', [card], AUTHORITATIVE);
+    expect(getCollapsedPendingRequestIds('session')).toEqual(['optional']);
+    togglePendingInteractionCollapse('session', 'optional');
+    prunePendingInteractionCollapse('session', [card], AUTHORITATIVE);
+    expect(getCollapsedPendingRequestIds('session')).toEqual([]);
+  });
   it('keeps the collapse intent across page unmount and remount', () => {
     // 「收起 → 离开任务(页面卸载) → 再进来」在 store 层就是「写入 → 重新读取」:
     // 契约要求同一条仍在 pending 的请求依旧是收起的,不能因为页面重挂载又展开占满屏。

@@ -12695,6 +12695,10 @@
       "defer": "暫不下載"
     },
     "permissionPrompt": {
+      "titleStdin": "允許向終端傳送輸入？",
+      "titleMcpUrl": "完成 {{server}} 的請求",
+      "mcpComplete": "已完成",
+      "mcpCancel": "取消",
       "alwaysAllowScoped": "本任務都允許 {{scope}}",
       "alwaysAllowScopedHint": "作用於整個任務，且只限這裡列出的範圍。",
       "alwaysAllowSessionHint": "作用於整個任務，不只是這一次請求。",
@@ -12958,7 +12962,13 @@
       "sendAndContinue": "傳送並繼續",
       "close": "關閉",
       "customAnswer": "輸入其他回答…",
-      "answerPlaceholder": "請輸入回答…"
+      "answerPlaceholder": "請輸入回答…",
+      "validation": {
+        "required": "請填寫此必填項目。",
+        "choice": "請選擇列出的選項。",
+        "tooShort": "請至少輸入 {{count}} 個字元。",
+        "tooLong": "請最多輸入 {{count}} 個字元。"
+      }
     },
     "planReviewBubble": {
       "title": "計劃審閱",
@@ -19657,8 +19667,8 @@
     "removeTitle": "移出 {{name}}？",
     "removeDescription": "Cindy 將不再給這個帳號分配任務。CLI 登入和對話歷史仍保留在本機。",
     "failed": "無法讀取或更新帳號。請檢查 CLI 登入和網路連線後重試。",
-    "used": "已用 {{percent}}%",
     "directory": "帳號目錄",
+    "loginAgain": "重新登入",
     "login": "登入"
   }
 }
