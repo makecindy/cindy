@@ -13285,6 +13285,7 @@
       "codexUsageLimitWithReset": "A conta do Codex conectada atingiu o limite de uso. A redefinição do uso está prevista para {{resetAt}}.",
       "codexUsageLimit": "A conta do Codex conectada atingiu o limite de uso. Aguarde a redefinição do limite ou mude para outra conta disponível antes de tentar novamente.",
       "gatewayQuotaExhausted": "Seu saldo do Cindy AI acabou. Adicione créditos para continuar.",
+      "gatewayUpstreamQuotaExhausted": "A cota do provedor do modelo está indisponível. Mude para outro modelo e tente novamente.",
       "viewBalance": "Ver saldo",
       "viewBalanceTitle": "Abra Uso e cobrança para verificar seu saldo e adicionar créditos",
       "credentialSwitchBusy": "Outra tarefa do Codex ainda está em execução, então o provedor desta sessão ainda não pode ser aplicado (o processo compartilhado do Codex precisa ser reiniciado). Tente novamente quando essas tarefas terminarem.",
