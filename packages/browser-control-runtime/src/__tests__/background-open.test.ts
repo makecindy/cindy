@@ -82,7 +82,10 @@ describe('background tab creation', () => {
       getProfileState: () => profileState,
     });
 
-    await expect(tabs.openTab('https://example.com', { background: true })).rejects.toBe(cdpError);
+    // Keep the real public-address guard, without relying on local DNS or proxy answers.
+    // CDP creation is mocked above, so no connection is made to this address.
+    await expect(tabs.openTab('https://8.8.8.8', { background: true })).rejects.toBe(cdpError);
+    expect(createTargetViaCdpMock).toHaveBeenCalledTimes(1);
     expect(fetchSpy).not.toHaveBeenCalled();
   });
 });

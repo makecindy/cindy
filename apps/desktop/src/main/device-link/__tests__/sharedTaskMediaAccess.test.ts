@@ -86,7 +86,9 @@ describe('shared task media access', () => {
     await expect(assertSharedTaskMedia('xdt-file://local?path=' + encodeURIComponent(file + '.secret'), capture)).rejects.toThrow('PERMISSION_DENIED');
   });
   it.each(['assistant', 'user', 'guest'])('recognizes bare file links in %s prose with the same author boundary', async (author) => {
-    const file = path.resolve('deliveries/report.pdf');
+    // Bare paths intentionally exclude spaces; do not inherit them from the checkout.
+    // The filesystem is mocked, so this remains an outside-workdir delivery fixture.
+    const file = path.resolve('/deliveries/report.pdf');
     deps.query.mockResolvedValue([{ rowid: 1, role: author === 'guest' ? 'user' : author,
       content: JSON.stringify(`Saved at ${markdownPath(file)}:42.`),
       agentMeta: author === 'guest' ? JSON.stringify({ sharedTaskAuthor: { memberId: 'm' } }) : null }]);

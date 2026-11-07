@@ -10844,6 +10844,7 @@
       },
       "files": {
         "openFailed": "文件没能打开，可能已被移动或删除",
+        "omitted": "附件未能附上。",
         "untitled": "附件",
         "loading": "加载中…",
         "unavailable": "暂时无法加载"

@@ -10,6 +10,8 @@ import { BOT_GROUP_SETTINGS_PARAM } from '../../../src/renderer/features/bots/bo
 import { refreshBotGroups } from '../../../src/renderer/features/bots/botGroupStore';
 import { ControlledBanner } from '../../../src/renderer/features/remote-device/ControlledBanner';
 import { applyRemoteSessionActivity } from '../../../src/renderer/features/device-link/remoteSessionActivityStore';
+import { replyWithoutAttachments } from '../../../src/main/maker-ipc/chatServerReplyFallback';
+import { i18n } from '../../../src/renderer/i18n';
 
 // The fixture's custom origin lacks secure-context randomUUID. Only correlation
 // IDs in this isolated renderer use these tokens; production crypto is unchanged.
@@ -19,6 +21,7 @@ if (!crypto.randomUUID) {
 }
 
 interface GroupData {
+  attachmentOmitted?: boolean;
   processRecord?: boolean;
   processOtherOwner?: boolean;
   /** Controlled receipts for the real renderer send/settle layout regression. */
@@ -373,6 +376,14 @@ void mountPage({
   host: (ctx) => {
     const data = ctx.data as unknown as GroupData;
     const group = groupFrom(data);
+    if (data.attachmentOmitted) {
+      const source = '分析已经完成，**目录边界保持不变**。\n\n详细说明见 [设计说明](../private/design.md)。\n\n![流程图](cindy-media://blobs/fixture.png)';
+      Object.assign(group, { serverBacked: true, messages: [message({ id: 'omitted-answer', sequence: 1,
+        authorKind: 'bot', authorBotId: 'a', authorName: 'Aster', createdAt: T0,
+        content: replyWithoutAttachments(source, i18n.t('bots.groupChat.files.omitted', { lng: ctx.locale }),
+          i18n.t('bots.groupChat.files.untitled', { lng: ctx.locale })),
+      })] });
+    }
     if (data.processRecord) {
       Object.assign(group, { serverBacked: true, members: group.members.map(member => ({ ...member, isOwned: !data.processOtherOwner, homeDeviceId: 'fixture-mac' })),
         messages: [message({ id: 'process-answer', sequence: 1, authorKind: 'bot', authorBotId: 'a', authorName: 'Aster',

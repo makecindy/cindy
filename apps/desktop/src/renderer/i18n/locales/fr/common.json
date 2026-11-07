@@ -10978,6 +10978,7 @@
       },
       "files": {
         "openFailed": "Impossible d'ouvrir le fichier. Il a peut-être été déplacé ou supprimé.",
+        "omitted": "Les pièces jointes n’ont pas pu être incluses.",
         "untitled": "Pièce jointe",
         "loading": "Chargement…",
         "unavailable": "Indisponible pour le moment"
