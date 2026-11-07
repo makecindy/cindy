@@ -274,13 +274,41 @@ function watchPiSkillTreeMtimes(roots: Map<string, number>, skillsDir: string): 
     if (entry.isSymbolicLink()) continue;
     const realChild = realpathOrNull(childPath);
     if (!realChild || !isDir(realChild)) continue;
-    if (hasSkillFile(realChild)) continue; // skill 目录:collector 不再往里枚举
+    if (hasSkillFile(realChild)) {
+      // skill 目录:collector 不再往里枚举;但 SKILL.md 本身可能是指向仓内目标的软链,
+      // 目标移动/删除只改目标处,盯住解析后的清单本体。
+      watchPiSkillManifestTargets(roots, realChild);
+      continue;
+    }
     if (shouldPruneSkillScanDirectory(entry.name)) continue; // collector 剪枝的 namespace
     for (const nested of listDir(realChild)) {
       if (nested.name.startsWith('.') || /\.bak\.\d+$/.test(nested.name)) continue;
       if (!nested.isDirectory() && !nested.isSymbolicLink()) continue;
-      roots.set(path.join(realChild, nested.name), statMtimeMs(path.join(realChild, nested.name)));
+      const nestedPath = path.join(realChild, nested.name);
+      roots.set(nestedPath, statMtimeMs(nestedPath));
+      const realNested = realpathOrNull(nestedPath);
+      if (realNested && isDir(realNested) && hasSkillFile(realNested)) {
+        watchPiSkillManifestTargets(roots, realNested);
+      }
     }
+  }
+}
+
+/** 软链清单本体:SKILL.md/skill.md 为指向仓内目标的软链时,目标移动/删除不改变
+ * skill 目录自身 mtime,只有盯住解析后的文件才能检出(与 prompts 同款)。悬空链
+ * 盯链接自身,目标落地即检出。 */
+function watchPiSkillManifestTargets(roots: Map<string, number>, realFolder: string): void {
+  for (const name of ['SKILL.md', 'skill.md']) {
+    const manifestPath = path.join(realFolder, name);
+    let manifestLstat: fs.Stats;
+    try {
+      manifestLstat = fs.lstatSync(manifestPath);
+    } catch {
+      continue;
+    }
+    if (!manifestLstat.isSymbolicLink()) continue;
+    const realManifest = realpathOrNull(manifestPath);
+    roots.set(realManifest ?? manifestPath, statMtimeMs(realManifest ?? manifestPath));
   }
 }
 

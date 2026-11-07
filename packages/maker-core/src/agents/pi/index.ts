@@ -4067,17 +4067,19 @@ export class PiAgent extends BaseAgent {
     // 受邀者：只要会话目录内的技能与提示词模板，项目扩展不加载(会在本机执行)。
     // watch 基线与 git 边界必须先于路径收集采样(见 snapshotPiProjectResourceLaunch):
     // 三样同批且基线在前,采样窗口内新增的资源/边界变化只会让首次快检多一次重扫后
-    // 收敛;反序会漏掉窗口内新增的资源,或让新旧边界与路径集合错配,静默漏检。
-    const projectResourceWatchRootMtimes = loadProjectResourcesInPlace && !guestRoot
-      ? collectPiProjectResourceWatchRootMtimes(opts.workingDir)
-      : null;
+    // 收敛;git root 只解析一次,经 hint 贯穿三样 —— 窗口内 .git 消失不会采出旧根
+    // 盯视面配新根路径集合的混合口径。
     const projectResourceRepoRootAtLaunch = loadProjectResourcesInPlace && !guestRoot
       ? resolvePiResourceRepoRoot(opts.workingDir)
       : null;
+    const projectResourceWatchRootMtimes = projectResourceRepoRootAtLaunch
+      ? collectPiProjectResourceWatchRootMtimes(opts.workingDir, projectResourceRepoRootAtLaunch)
+      : null;
     const collectedProjectResources = loadProjectResourcesInPlace
       ? guestRoot
-        ? restrictPiGuestProjectResources(collectPiProjectResourceCliPaths(opts.workingDir), guestRoot)
-        : collectPiProjectResourceCliPaths(opts.workingDir)
+        ? restrictPiGuestProjectResources(
+          collectPiProjectResourceCliPaths(opts.workingDir, projectResourceRepoRootAtLaunch ?? undefined), guestRoot)
+        : collectPiProjectResourceCliPaths(opts.workingDir, projectResourceRepoRootAtLaunch ?? undefined)
       : emptyPiProjectResourceCliPaths();
     const projectResourceCli = loadProjectResourcesInPlace
       ? {

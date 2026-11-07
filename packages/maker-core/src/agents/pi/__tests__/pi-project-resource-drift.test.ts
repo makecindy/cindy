@@ -269,6 +269,29 @@ describe('piProjectResourcesDrifted', () => {
     expect(piProjectResourcesDrifted(baseline)).toBe(true);
   });
 
+  itPosixOnly('detects the symlink target of a nested skill manifest moved away', () => {
+    // Windows CI 无符号链接特权,本用例仅在 POSIX 跑(见 itPosixOnly)。
+    mkdirSync(path.join(project, 'targets'), { recursive: true });
+    mkdirSync(path.join(project, '.pi', 'skills', '@scope', 'alpha'), { recursive: true });
+    writeFileSync(path.join(project, 'targets', 'real.md'), '---\nname: alpha\ndescription: t\n---\n');
+    symlinkSync(path.join(project, 'targets', 'real.md'), path.join(project, '.pi', 'skills', '@scope', 'alpha', 'SKILL.md'));
+    const baseline = snapshot();
+    expect(piProjectResourcesDrifted(baseline)).toBe(false);
+    // 目标移动/删除不改变 skill 目录自身 mtime,只有盯住解析后的清单本体才能检出
+    rmSync(path.join(project, 'targets', 'real.md'));
+    expect(piProjectResourcesDrifted(baseline)).toBe(true);
+  });
+
+  it('collectors honor a shared repoRootHint (launch shares one resolution)', () => {
+    writeFileSync(path.join(project, '.git'), '');
+    writeSkill(path.join('.pi', 'skills'), 'alpha');
+    const hint = resolvePiResourceRepoRoot(project);
+    expect([...collectPiProjectResourceCliPaths(project, hint).skills])
+      .toEqual([...collectPiProjectResourceCliPaths(project).skills]);
+    expect([...collectPiProjectResourceWatchRootMtimes(project, hint).keys()])
+      .toEqual([...collectPiProjectResourceWatchRootMtimes(project).keys()]);
+  });
+
   it('missing directories baseline as -1 and compare against real mtimes', () => {
     const roots = collectPiProjectResourceWatchRootMtimes(project);
     expect(roots.get(path.join(project, '.pi'))).toBe(-1);
