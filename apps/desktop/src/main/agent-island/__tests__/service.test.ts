@@ -3,6 +3,7 @@ import { homedir } from 'node:os';
 import path from 'node:path';
 
 import { ScriptTarget, transpileModule } from 'typescript';
+import type { AgentIslandLiveActivity } from '../liveActivity.js';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { BrowserWindow } from 'electron';
 import { SESSION_ACTIVITY_CHANNEL } from '@cindy/device-link';
@@ -3397,6 +3398,37 @@ describe('AgentIslandService native publishing', () => {
 
     expect(playSound).toHaveBeenNthCalledWith(1, customSound('start.wav'));
     expect(playSound).toHaveBeenNthCalledWith(2, customSound('complete.wav'));
+  });
+
+  // Agent Notch off, Live Activity on: the Live Activity alert is silent, so the same
+  // event sounds must still play (without respawning the suspended helper), and only
+  // its done / needs-reply alerts stand in for OS notifications. Unit tier.
+  it('keeps event sounds and owns routine alerts when only the Live Activity is on', async () => {
+    const { AgentIslandService } = await import('../service.js');
+    const publish = vi.fn(() => true);
+    const playSound = vi.fn<(sound: AgentIslandSoundChoice) => boolean>(() => true);
+    const playSoundWithoutHelper = vi.fn<(sound: AgentIslandSoundChoice) => void>();
+    const liveActivity = { sync: vi.fn(), ownsAlerts: () => true, setEnabled: vi.fn(), isSupported: () => true };
+    const service = new AgentIslandService({
+      getMainWindow: () => null,
+      nativeHost: { failed: false, publish, playSound, suspend: () => undefined },
+      liveActivity: liveActivity as unknown as AgentIslandLiveActivity,
+      playSoundWithoutHelper,
+    });
+    service.setEnabled(false);
+    service.setSoundSettings({
+      enabled: true,
+      sounds: { ...DEFAULT_AGENT_ISLAND_SOUND_SETTINGS.sounds, start: customSound('start.wav'), complete: customSound('complete.wav') },
+    });
+
+    service.handleUserPrompt({ sessionId: 's1', agentKind: 'codex' }, 'run tests');
+    service.handleAgentEvent({ sessionId: 's1', agentKind: 'codex' }, doneEvent());
+
+    expect(playSoundWithoutHelper.mock.calls).toEqual([[customSound('start.wav')], [customSound('complete.wav')]]);
+    expect(playSound).not.toHaveBeenCalled();
+    expect([service.ownsTaskAlert('done'), service.ownsTaskAlert('needs-reply'), service.ownsTaskAlert('error')])
+      .toEqual([true, true, false]);
+    service.resetRuntimeState();
   });
 
   it('plays the start sound on user prompt without waiting for an isRunning status event', async () => {

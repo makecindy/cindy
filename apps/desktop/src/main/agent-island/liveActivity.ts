@@ -2,7 +2,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { createRequire } from 'node:module';
-import { app } from 'electron';
+import { app, BrowserWindow } from 'electron';
 
 import type { AgentIslandCompanionSnapshot, AgentIslandPillSnapshot } from '../../shared/agentIsland.js';
 import { createLogger } from '../logger.js';
@@ -16,6 +16,8 @@ const ADDON_RELATIVE_PATH = 'tools/agent-island/cindy-agent-activity.node';
 const MIN_DARWIN_VERSION: readonly [number, number] = [27, 3];
 const MIN_NATIVE_INTERVAL_MS = 1000;
 const START_RETRY_MS = 15_000;
+/** How long the system's "Live Activities allowed" answer is reused before asking again. */
+const SYSTEM_STATUS_TTL_MS = 30_000;
 /** ActivityKit caps a content update at 4 KB; the island's companion thumbnails stay under 2 KB. */
 const MAX_COMPANION_JPEG_LENGTH = 2048;
 
@@ -48,6 +50,7 @@ export interface AgentIslandLiveActivityStrings {
   needsInput: string;
   running: string;
   completed: string;
+  error: string;
   runningCount: (count: number) => string;
   alsoRunningCount: (count: number) => string;
   waitingCount: (count: number) => string;
@@ -98,7 +101,11 @@ function liveActivityStatusFromPill(
   if (running > 0) {
     return { ...base, status: 'running', detail: strings.running, summary: running > 1 ? strings.runningCount(running) : '' };
   }
-  if (pill.unreadCompletedCount > 0) return { ...base, status: 'completed', detail: strings.completed, summary: '' };
+  if (pill.unreadCompletedCount > 0) {
+    // Unread results include failures; say so rather than "completed".
+    const detail = pill.priorityStatus === 'error' ? strings.error : strings.completed;
+    return { ...base, status: 'completed', detail, summary: '' };
+  }
   return null;
 }
 
@@ -124,6 +131,8 @@ interface NativeReply {
   ok?: boolean;
   result?: string;
   error?: string;
+  /** `status` only: the user allows Cindy's Live Activities in System Settings. */
+  enabled?: boolean;
 }
 
 export interface AgentIslandLiveActivityDeps {
@@ -132,6 +141,8 @@ export interface AgentIslandLiveActivityDeps {
   load: () => NativeAgentActivity | null;
   now: () => number;
   appName: string;
+  /** A Cindy window is on screen, so ActivityKit would accept a start right now. */
+  hasVisibleWindow: () => boolean;
 }
 
 function defaultLoad(): NativeAgentActivity | null {
@@ -179,6 +190,10 @@ export class AgentIslandLiveActivity {
   private lastNativeAt = Number.NEGATIVE_INFINITY;
   private retryAfter = 0;
   private timer: ReturnType<typeof setTimeout> | null = null;
+  /** The last start was refused for a reason a window cannot fix (not `visibility`). */
+  private startBlocked = false;
+  private systemAllowed = false;
+  private systemCheckedAt = Number.NEGATIVE_INFINITY;
 
   constructor(deps: Partial<AgentIslandLiveActivityDeps> = {}) {
     this.deps = {
@@ -187,6 +202,7 @@ export class AgentIslandLiveActivity {
       load: defaultLoad,
       now: Date.now,
       appName: 'Cindy',
+      hasVisibleWindow: () => BrowserWindow.getAllWindows().some((window) => window.isVisible() && !window.isMinimized()),
       ...deps,
     };
   }
@@ -206,6 +222,29 @@ export class AgentIslandLiveActivity {
     if (sameState(this.desired, state)) return;
     this.desired = state;
     this.schedule();
+  }
+
+  /**
+   * Whether task alerts reach the user through the Live Activity, so the OS notification
+   * for the same event can be skipped (like Agent Notch does). Only while the user allows
+   * it in System Settings and it is showing, or a visible window would let it start;
+   * otherwise the notification is the only alert and must still be sent.
+   */
+  ownsAlerts(): boolean {
+    const native = this.loadNative();
+    if (!native || !this.enabled || this.startBlocked) return false;
+    const now = this.deps.now();
+    if (now - this.systemCheckedAt >= SYSTEM_STATUS_TTL_MS) {
+      this.systemCheckedAt = now;
+      try {
+        const reply = JSON.parse(native.apply(JSON.stringify({ action: 'status' }))) as NativeReply;
+        this.systemAllowed = reply.ok === true && reply.enabled === true;
+      } catch (error) {
+        log.warn('Live Activity status check failed', error);
+        this.systemAllowed = false;
+      }
+    }
+    return this.systemAllowed && (this.active || this.deps.hasVisibleWindow());
   }
 
   /** A Cindy window became visible: a start refused for `visibility` can succeed now. */
@@ -281,10 +320,12 @@ export class AgentIslandLiveActivity {
       this.active = true;
       this.applied = target;
       this.retryAfter = 0;
+      this.startBlocked = false;
       return;
     }
     this.active = false;
     this.applied = null;
+    this.startBlocked = !String(reply?.error ?? '').includes('visibility');
     this.retryAfter = this.deps.now() + START_RETRY_MS;
     log.info('Live Activity start deferred', { reason: reply?.error ?? 'unknown' });
     this.schedule();

@@ -3,7 +3,9 @@
 // verified on macOS 27.3) and accepts later background updates, so the controller must
 // retry a refused start instead of dropping the feature, clear activities a crashed run
 // left behind, and coalesce island updates to the native layer. Alerts expand the system
-// island, so only a new request for the user or finished work may raise one. Unit tier: a fake addon
+// island, so only a new request for the user or finished work may raise one. It may stand
+// in for OS notifications only while the user allows Live Activities and it can actually
+// show; otherwise skipping the notification would lose the alert. Unit tier: a fake addon
 // stands in for ActivityKit; fake timers, no real waits.
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
@@ -22,7 +24,7 @@ function state(
   return { status, runningCount, attentionCount, title: 'Task', detail: status, summary: '', mascot: 'cindy' };
 }
 
-function fakeAddon(replies: Array<Record<string, unknown>> = []) {
+function fakeAddon(replies: Array<Record<string, unknown>> = [], system = { allowed: true }) {
   type Call = { action: string; state?: AgentIslandLiveActivityState; alert?: { title: string; body: string } };
   const calls: Call[] = [];
   return {
@@ -32,19 +34,21 @@ function fakeAddon(replies: Array<Record<string, unknown>> = []) {
         const parsed = JSON.parse(command) as Call;
         calls.push(parsed);
         if (parsed.action === 'sync') return JSON.stringify(replies.shift() ?? { ok: true, result: 'updated' });
+        if (parsed.action === 'status') return JSON.stringify({ ok: true, enabled: system.allowed, active: false });
         return JSON.stringify({ ok: true, result: 'ended' });
       },
     },
   };
 }
 
-function controller(addon: { apply(command: string): string }, darwinRelease = '27.3.0') {
+function controller(addon: { apply(command: string): string }, darwinRelease = '27.3.0', hasVisibleWindow = () => true) {
   return new AgentIslandLiveActivity({
     platform: 'darwin',
     darwinRelease,
     load: () => addon,
     now: () => Date.now(),
     appName: 'Cindy',
+    hasVisibleWindow,
   });
 }
 
@@ -131,7 +135,7 @@ describe('AgentIslandLiveActivity', () => {
 
   it('shows the surfaced companion only once it needs the user or replied, without oversized artwork', () => {
     const strings = {
-      needsInput: 'Needs input', running: 'Running', completed: 'Replied',
+      needsInput: 'Needs input', running: 'Running', completed: 'Replied', error: 'Error',
       runningCount: (n: number) => `${n} running`,
       alsoRunningCount: (n: number) => `${n} more`,
       waitingCount: (n: number) => `${n} waiting`,
@@ -147,6 +151,31 @@ describe('AgentIslandLiveActivity', () => {
     // A 4 KB content update fails as a whole; the avatar falls back to the glyph instead.
     expect(agentIslandLiveActivityStateFromPill(pill(0, 1), 'cindy', strings, companion)?.companion)
       .toEqual({ hue: 'pink', glyph: 'L', glyphIsInitial: true });
+  });
+
+  it('stands in for OS notifications only while allowed and able to show', async () => {
+    const system = { allowed: false };
+    let windowVisible = false;
+    const fake = fakeAddon([{ ok: false, error: 'unsupportedTarget' }, { ok: true, result: 'started' }], system);
+    const live = controller(fake.addon, '27.3.0', () => windowVisible);
+    expect(live.ownsAlerts()).toBe(false); // turned off in System Settings
+
+    system.allowed = true;
+    await vi.advanceTimersByTimeAsync(30_000);
+    expect(live.ownsAlerts()).toBe(false); // nothing showing and no window to start from
+    windowVisible = true;
+    expect(live.ownsAlerts()).toBe(true);
+
+    live.sync(state(1));
+    await vi.advanceTimersByTimeAsync(0);
+    expect(live.ownsAlerts()).toBe(false); // refused for a reason a window cannot fix
+
+    live.notifyWindowVisible();
+    await vi.advanceTimersByTimeAsync(15_000);
+    windowVisible = false;
+    expect(live.ownsAlerts()).toBe(true); // showing now, window or not
+    live.setEnabled(false);
+    expect(live.ownsAlerts()).toBe(false);
   });
 
   it('never loads the addon before macOS 27.3', () => {

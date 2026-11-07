@@ -125,6 +125,10 @@ pnpm --filter desktop preview:island-mascots
   短暂展开（菜单栏里是药丸下方的展开卡片）；计数下降和普通进度更新不提醒，首次发起也不提醒。提醒音用
   应用 `Resources` 里的静音 `cindy-live-activity-silent.caf`（`build.mjs` 生成），声音仍由我们的岛和通知负责。
   系统会限制提醒频率，连续提醒时后一次可能延迟出现。
+- **和任务胶囊的分工**：角色与事件音效两边共用（设置页「共用设置」）。任务胶囊关闭时它的 helper 已挂起，
+  事件音效改由主进程用 `afplay` 播放同一组文件（`src/main/agent-island/soundFallback.ts`），不为放声音拉起 helper。
+  只开实时活动时，完成与待回复的系统通知由它代替（`AgentIslandService.ownsTaskAlert`），前提是用户在系统设置里允许、
+  且它正在显示或此刻有可见窗口能发起（`AgentIslandLiveActivity.ownsAlerts`）；出错仍发系统通知（实时活动没有出错样式）。
 - **构建条件**：`live-activity/build.mjs` 需要 macOS 27.3 SDK 与 Apple 芯片，否则整段跳过、应用不带
   此功能；`CINDY_LIVE_ACTIVITY=0` 可主动跳过。本地验证：
   `DEVELOPER_DIR=/Applications/Xcode-beta.app/Contents/Developer node build.mjs addon <out.node> arm64`，

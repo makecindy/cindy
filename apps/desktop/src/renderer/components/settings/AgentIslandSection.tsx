@@ -46,6 +46,7 @@ import {
   isSilentAgentIslandSoundChoice,
 } from '../../../shared/agentIsland';
 import { DefaultOverrideControls } from './DefaultOverrideControls';
+import { SETTINGS_SECTION_TITLE_CLASS } from './settingsRowClasses';
 
 const MASCOT_PREVIEW_URLS: Record<AgentIslandMascotSkin, string> = {
   cindy: cindyPreviewUrl,
@@ -296,6 +297,9 @@ export function AgentIslandSection() {
     setAnimationSteps((current) => advanceMascotAnimationStep(current, skin));
   }, []);
 
+  // Shared settings stay reachable when only the Live Activity is on.
+  const sharedVisible = enabled || (liveActivitySupported && liveActivity);
+
   if (!supported) {
     return (
       <div className="flex flex-col gap-[14px]">
@@ -333,34 +337,6 @@ export function AgentIslandSection() {
           aria-label={t('settings.agentIsland.enableAria')}
         />
       </SettingsCard>
-
-      {/* Independent of our own island: the system shows it even when ours is off. */}
-      {liveActivitySupported && (
-        <SettingsCard className="flex items-center justify-between gap-3">
-          <div className="flex min-w-0 flex-col gap-1">
-            <p id={agentIslandSettings.liveActivityLabel.targetId} className="text-13 font-medium text-[var(--settings-section-sublabel)]">
-              {t(agentIslandSettings.liveActivityLabel.titleKey)}
-            </p>
-            <p className="text-12 leading-[1.4] text-[var(--text-secondary)]">
-              {t(agentIslandSettings.liveActivityLabel.descriptionKey)}
-            </p>
-          </div>
-          <div className="flex shrink-0 items-center gap-2">
-            <DefaultOverrideControls
-              isCustomized={liveActivityCustomized}
-              disabled={liveActivityPending}
-              onReset={() => void handleResetLiveActivity()}
-            />
-            <Switch
-              data-setting-id={agentIslandSettings.liveActivityLabel.id}
-              checked={liveActivity}
-              disabled={liveActivityPending}
-              onCheckedChange={(next) => void handleLiveActivityChange(next)}
-              aria-label={t('settings.agentIsland.liveActivityLabel')}
-            />
-          </div>
-        </SettingsCard>
-      )}
 
       {enabled && (
         <>
@@ -432,7 +408,42 @@ export function AgentIslandSection() {
               />
             </div>
           </SettingsCard>
+        </>
+      )}
+      {/* Independent of our own island: the system shows it even when ours is off. */}
+      {liveActivitySupported && (
+        <SettingsCard className="flex items-center justify-between gap-3">
+          <div className="flex min-w-0 flex-col gap-1">
+            <p id={agentIslandSettings.liveActivityLabel.targetId} className="text-13 font-medium text-[var(--settings-section-sublabel)]">
+              {t(agentIslandSettings.liveActivityLabel.titleKey)}
+            </p>
+            <p className="text-12 leading-[1.4] text-[var(--text-secondary)]">
+              {t(agentIslandSettings.liveActivityLabel.descriptionKey)}
+            </p>
+          </div>
+          <div className="flex shrink-0 items-center gap-2">
+            <DefaultOverrideControls
+              isCustomized={liveActivityCustomized}
+              disabled={liveActivityPending}
+              onReset={() => void handleResetLiveActivity()}
+            />
+            <Switch
+              data-setting-id={agentIslandSettings.liveActivityLabel.id}
+              checked={liveActivity}
+              disabled={liveActivityPending}
+              onCheckedChange={(next) => void handleLiveActivityChange(next)}
+              aria-label={t('settings.agentIsland.liveActivityLabel')}
+            />
+          </div>
+        </SettingsCard>
+      )}
 
+      {/* Character and event sounds serve Agent Notch and the Live Activity alike. */}
+      {sharedVisible && (
+        <section className="flex flex-col gap-[14px]" aria-labelledby="settings-agent-island-shared">
+          <h3 id="settings-agent-island-shared" className={SETTINGS_SECTION_TITLE_CLASS}>
+            {t('settings.agentIsland.sharedTitle')}
+          </h3>
           <SettingsCard className="flex flex-col gap-4">
             <div className="flex min-w-0 flex-col gap-1">
               <p id={agentIslandSettings.skinLabel.targetId} className="text-13 font-medium text-[var(--settings-section-sublabel)]">
@@ -497,7 +508,7 @@ export function AgentIslandSection() {
               </div>
             )}
           </SettingsCard>
-        </>
+        </section>
       )}
     </div>
   );

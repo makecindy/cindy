@@ -90,6 +90,7 @@ import { isSessionNotificationsMutedSync } from '../localDb/sessionFlagRegistry'
 import { withSessionRouteLock } from '../localDb/sessionRouteLock.js';
 import { confirmIslandArchive } from './archiveConfirmation.js';
 import { AgentIslandLiveActivity, agentIslandLiveActivityStateFromPill } from './liveActivity.js';
+import { playAgentIslandSoundWithAfplay } from './soundFallback.js';
 import { remoteInvoke } from '../device-link/index.js';
 import { bindingStore } from '../im/binding.js';
 import { setAgentIslandCompanionChangeSink } from '../localDb/agentIslandSessionPatch.js';
@@ -245,6 +246,11 @@ export interface AgentIslandServiceDeps {
   onSessionActivityChange?: (activity: readonly AgentIslandSessionActivity[]) => void;
   /** 其它设备任务的状态跃迁。灵动岛开启时由岛面展示;关闭时才交给这里发桌面通知。 */
   onDeviceSessionEvent?: (event: AgentIslandDeviceSessionEvent) => void;
+  /**
+   * Plays event sounds while Agent Notch is off (its helper is suspended) but the Live
+   * Activity carries the alerts. Defaults to `afplay` with the helper's sound files.
+   */
+  playSoundWithoutHelper?: (sound: AgentIslandSoundChoice) => void;
 }
 
 interface AgentIslandNativeRenderer {
@@ -289,6 +295,7 @@ export function initAgentIslandService(deps: AgentIslandServiceDeps): AgentIslan
     ...deps,
     nativeHost: deps.nativeHost ?? (supportsNativeIsland ? undefined : HEADLESS_AGENT_ISLAND_NATIVE_HOST),
     liveActivity,
+    playSoundWithoutHelper: deps.playSoundWithoutHelper ?? (liveActivity ? playAgentIslandSoundWithAfplay : undefined),
   });
   if (liveActivity) {
     app.on('browser-window-focus', () => liveActivity.notifyWindowVisible());
@@ -771,7 +778,7 @@ export class AgentIslandService {
       if (!sound || isSilentAgentIslandSoundChoice(sound)) {
         return { ok: true };
       }
-      this.nativeHost.playSound?.(sound);
+      this.playSoundChoice(sound);
       return { ok: true };
     });
 
@@ -847,6 +854,17 @@ export class AgentIslandService {
     return this.enabledSynced && this.enabled;
   }
 
+  /**
+   * Whether a finished task or a request for input already alerts the user here, so the
+   * OS notification for it can be skipped: Agent Notch, or the Live Activity while it
+   * can actually show. Failures keep their OS notification when only the Live Activity
+   * is on; it has no error presentation.
+   */
+  ownsTaskAlert(kind: 'done' | 'needs-reply' | 'error'): boolean {
+    if (this.isEnabled()) return true;
+    return kind !== 'error' && this.deps.liveActivity?.ownsAlerts() === true;
+  }
+
   refreshLocalization(): void {
     setAgentIslandStrings(this.state, buildAgentIslandStrings());
     this.publish();
@@ -897,6 +915,7 @@ export class AgentIslandService {
     if (result.changed) this.publish();
     if (this.isEnabled()) return;
     for (const event of result.events) {
+      if (this.ownsTaskAlert(event.kind)) continue;
       try {
         this.deps.onDeviceSessionEvent?.(event);
       } catch (error) {
@@ -1914,7 +1933,16 @@ export class AgentIslandService {
     const cooldownUntil = this.soundCooldownUntilByEvent.get(event) ?? 0;
     if (cooldownUntil > now) return;
     this.soundCooldownUntilByEvent.set(event, now + soundCooldownMsForAgentIslandEvent(event));
-    this.nativeHost.playSound?.(sound);
+    this.playSoundChoice(sound);
+  }
+
+  /** The suspended helper would respawn just to play a sound; play it directly instead. */
+  private playSoundChoice(sound: AgentIslandSoundChoice): void {
+    if (this.isEnabled() || !this.deps.playSoundWithoutHelper) {
+      this.nativeHost.playSound?.(sound);
+      return;
+    }
+    this.deps.playSoundWithoutHelper(sound);
   }
 
   private markSilencedScheduleRun(runId: string, sessionId: string): void {
@@ -2220,6 +2248,7 @@ export class AgentIslandService {
         needsInput: t('agentIsland.native.needsInput'),
         running: t('agentIsland.native.running'),
         completed: t('agentIsland.native.completed'),
+        error: t('agentIsland.native.error'),
         runningCount: (count) => tCount('agentIsland.native.liveActivityRunning', count),
         alsoRunningCount: (count) => tCount('agentIsland.native.liveActivityAlsoRunning', count),
         waitingCount: (count) => tCount('agentIsland.native.liveActivityWaiting', count),
@@ -2227,6 +2256,10 @@ export class AgentIslandService {
       chatDisplayState.sessions.find((session) => session.sessionId === pillSnapshot.priorityId)?.companion,
     ));
     if (!this.enabled) {
+      // Agent Notch is off: its event sounds still accompany the Live Activity's alerts.
+      if (this.deps.liveActivity?.ownsAlerts()) {
+        this.playSoundForDisplayTransition(this.lastSoundDisplayState, soundDisplayState, now);
+      }
       this.mutedCompletionSoundSessionIds.clear();
       this.baselineSoundSessionIds.clear();
       this.clearStreamingPreviewPublishTimer();
