@@ -17,6 +17,23 @@
 `partial: true`，不扩大接收端校验上限，旧接收端仍能解析额度及同份回包中的用量历史。
 普通任务和远程执行仍通过宿主同一个 Agent 入口选择账号；账号能力是进程内 Symbol，不进入 JSON。
 
+双端混用版本（2026-11-07）：新版提供端在通过原有同账号远控授权后，给旧控制端的
+`maker:usage:claude-subscription`、`maker:usage:account`（codex）和
+`maker:usage:codex-rate-limits` 投影池内可用额度，保持原窗口、桶表和 providerId 形状。
+池未配置或只有正常默认账号时继续原 handler；已断开或没有可读额度时回 null，禁止回退首账号的旧快照。
+不传账号身份、路径、凭证和重置 offer，不合计百分比。分享访客仍走既有 insights v1，不能调用这些 owner 通道。
+Codex 原生桶不冒充 WHAM：旧 bridge 无法表达按模型的账号池额度时保持未知，由执行端选择账号；
+旧 rate-limits 读取不把过期缓存重新标为刚读取的额度。
+新版默认账号用量卡在旧参数后追加 `default-subscription-account`：Claude 位于 args[2]
+（args[1] 仍是 fresh），Codex account 位于 args[2]，rate-limits 位于 args[1]。
+新版提供端保留此 scope 的原单账号读取；旧提供端忽略附加参数，保持原行为。
+任务额度重置查询在同一位置追加 `{ subscriptionSessionId: <native SDK id> }`，由执行端用
+本机持久绑定读取实际账号的窗口，沿用原 reader 的缓存与节流，不能读取下一可用账号。旧宿主忽略追加对象，
+仍返回自己的原单账号；未绑定的旧任务走原 reader，已移出或断开的绑定返回 null。
+该对象不携带目录、账号标识或凭证。OpenAI 任务快照追加 `nativeAccountPool: true`，
+新使用端的三个引擎都按该账号的原生模型桶求重置时间，不拿 WHAM 或其它账号窗口替代。
+官方及自建中转仅透传原 invoke，无帧、allowlist 或服务器变更。
+
 远程组先探测池配额；旧电脑不支持时回到原有 Claude/Codex 配额 channel。同一电脑/供应商的
 探测合并、缓存 30 秒并随 owner 代次丢弃。旧控制端忽略新 push，现有调用格式不变。
 OpenAI 池快照增加可选 `nativeAccountPool` 标记，当前控制端让三种引擎按模型读取同一套
