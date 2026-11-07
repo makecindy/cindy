@@ -185,6 +185,28 @@ async function fixture(
   return { bridge, url, client, ready, relays, nativeToken };
 }
 
+// Regression: expired clients disappear from the live list, but must retain reconnect history.
+// Protocol tier, real bridge/HTTP with injected clock; also checks diagnostic deduplication/privacy.
+it('retains connection history and logs expiry/reconnection without credentials', async () => {
+  let now = Date.now();
+  const log = { info: vi.fn(), warn: vi.fn() };
+  const f = await fixture({ now: () => now, log });
+  const c = await f.client({ paired: true });
+  await c.health();
+  expect(await f.bridge.status()).toMatchObject({ extension_connected: true, hadConnectedClient: true });
+  now += 36000;
+  expect(await f.bridge.status()).toMatchObject({ extension_connected: false, clients: [], hadConnectedClient: true });
+  const expired = log.info.mock.calls.filter(([message, meta]) => message === 'browser extension connection changed' && meta?.state === 'heartbeat-expired');
+  expect(expired).toHaveLength(1);
+  expect(expired[0][1]).toMatchObject({ lastSeenAgeMs: 36000, previous: 'connected' });
+  await f.bridge.status();
+  expect(log.info.mock.calls.filter(([, meta]) => meta?.state === 'heartbeat-expired')).toHaveLength(1);
+  await c.health();
+  expect(await f.bridge.status()).toMatchObject({ extension_connected: true });
+  expect(log.info.mock.calls.at(-1)?.[1]).toMatchObject({ state: 'connected' });
+  expect(JSON.stringify(log.info.mock.calls)).not.toContain(c.key.publicKey);
+});
+
 describe('policy · 地址校验与 URL 脱敏', () => {
   it('validates the pieces of a large upload before they are queued', () => {
     const base = { url: 'https://example.test', tabId: 1, selector: 'input' };

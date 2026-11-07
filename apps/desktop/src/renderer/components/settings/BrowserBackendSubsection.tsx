@@ -12,7 +12,7 @@
 import { additionalSettings } from './AdditionalSettings.settings-search';
 import { useSettingDefinition } from './useSettingDefinition';
 import { useTranslation } from 'react-i18next';
-import { AlertTriangle, CheckCircle2, Download, Puzzle, RefreshCw } from 'lucide-react';
+import { AlertTriangle, CheckCircle2, Puzzle, RefreshCw } from 'lucide-react';
 
 import { cn } from '@/lib/utils';
 import { SegmentedControl } from '@/components/ui/segmented-control';
@@ -109,7 +109,7 @@ export function BrowserBackendSubsection({
       ? { title: `${SETUP_KEY}.selectPluginTitle`, body: `${SETUP_KEY}.selectPluginBody`, action: `${SETUP_KEY}.selectPlugin` }
       : userBrowserHealth?.reason === 'plugin-missing'
         ? PLUGIN_STEP_KEYS[userBrowserPluginState]
-        : { title: `${SETUP_KEY}.installExtensionTitle`, body: `${SETUP_KEY}.extensionBody`, action: `${SETUP_KEY}.installExtension` };
+        : { title: `${SETUP_KEY}.connectExtensionTitle`, body: `${SETUP_KEY}.connectionBody`, action: `${SETUP_KEY}.openExtensionStore` };
   return (
     <div {...setting.anchorProps} className="border-t border-[var(--settings-theme-card-border)]">
       <div className="cindy-segmented-row px-4 py-[14px]">
@@ -185,7 +185,7 @@ export function BrowserBackendSubsection({
             {userBrowserHealth.reason !== 'extension-disconnected' ? (
               <Puzzle size={14} className="mt-0.5 shrink-0 text-[var(--settings-section-desc)]" />
             ) : (
-              <Download size={14} className="mt-0.5 shrink-0 text-[var(--settings-section-desc)]" />
+              <RefreshCw size={14} className="mt-0.5 shrink-0 text-[var(--settings-section-desc)]" />
             )}
             <div className="flex min-w-0 flex-col gap-0.5">
               <span className="font-medium text-[var(--settings-section-title)]">
