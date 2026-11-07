@@ -131,7 +131,8 @@ function registerCjkSeg(nextDb) {
   nextDb.exec(
     "CREATE TEMP TRIGGER messages_fts_insert_cjk AFTER INSERT ON messages " +
     "WHEN new.rewind_at IS NULL AND new.role IN " + whitelist + " BEGIN " +
-    "INSERT OR IGNORE INTO messages_fts_rows(message_id) VALUES (new.id); " +
+    "INSERT INTO messages_fts_rows(message_id) SELECT new.id " +
+    "WHERE NOT EXISTS (SELECT 1 FROM messages_fts_rows WHERE message_id = new.id); " +
     "INSERT OR REPLACE INTO messages_fts(rowid, message_id, session_id, role, content) " +
     "SELECT fts_rowid, new.id, new.session_id, new.role, cjk_seg(new.content) " +
     "FROM messages_fts_rows WHERE message_id = new.id; END;",
@@ -142,8 +143,9 @@ function registerCjkSeg(nextDb) {
     "OR old.content IS NOT new.content OR old.rewind_at IS NOT new.rewind_at BEGIN " +
     "DELETE FROM messages_fts WHERE rowid = (SELECT fts_rowid FROM messages_fts_rows WHERE message_id = old.id); " +
     "UPDATE messages_fts_rows SET message_id = new.id WHERE message_id = old.id AND old.id IS NOT new.id; " +
-    "INSERT OR IGNORE INTO messages_fts_rows(message_id) SELECT new.id " +
-    "WHERE new.rewind_at IS NULL AND new.role IN " + whitelist + "; " +
+    "INSERT INTO messages_fts_rows(message_id) SELECT new.id " +
+    "WHERE new.rewind_at IS NULL AND new.role IN " + whitelist + " " +
+    "AND NOT EXISTS (SELECT 1 FROM messages_fts_rows WHERE message_id = new.id); " +
     "INSERT OR REPLACE INTO messages_fts(rowid, message_id, session_id, role, content) " +
     "SELECT fts_rowid, new.id, new.session_id, new.role, cjk_seg(new.content) FROM messages_fts_rows " +
     "WHERE message_id = new.id AND new.rewind_at IS NULL AND new.role IN " + whitelist + "; END;",
