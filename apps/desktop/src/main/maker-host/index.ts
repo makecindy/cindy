@@ -1,3 +1,4 @@
+import { isReplacedCindyGatewayKey } from '../model-access/gatewayKeyRejection.js';
 import { refreshInstalledPluginApps } from '../cindy-brain/index.js';
 import { configureSessionModelInterfaceStorage, sessionModelInterface } from './session-model-interface.js';
 import { readGeneratedImageEpoch } from '../cindy-media/generatedImageStorage';
@@ -2024,7 +2025,7 @@ export function getMaker(): Maker {
           setCodexProxyAuthInjection(authInjection);
           await broadcastCodexRuntimeRoute();
         }
-        setCodexProxyGatewayKeyReader(readClaudeApiKey);
+        setCodexProxyGatewayKeyReader(readClaudeApiKey, isReplacedCindyGatewayKey);
         setCodexSubagentOAuthReader(getChatgptBridgeAuthForDispatch);
 
         const customContextProviderRoutes = usesScopedProxy

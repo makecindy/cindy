@@ -351,5 +351,44 @@
     "title": "开发者",
     "identity": "标识信息",
     "updateInfo": "更新信息"
+  },
+  "handheld": {
+    "sectionTitle": "掌机",
+    "label": "掌机模式",
+    "entryHint": "在游戏掌机上用手柄操作 Cindy，长按语音键直接说话。",
+    "on": "已开启",
+    "off": "未开启",
+    "openAccessibility": "打开掌机模式设置",
+    "title": "掌机模式",
+    "hint": "开启后可以只用手柄操作：十字键或左摇杆移动焦点，A 确认，B 返回。",
+    "saveFailed": "设置没能保存，这次打开期间仍然有效。",
+    "reset": "恢复默认",
+    "voiceKey": {
+      "title": "语音键",
+      "hint": "长按这个键开始说话，松开停止，文字会留在输入框里。在首页长按会直接新建任务。选 A、B、L1、R1 会占用它们原来的确认、返回和翻页。",
+      "capture": "按手柄上的键来设置",
+      "capturing": "请按下要用的键…"
+    },
+    "display": {
+      "title": "屏幕",
+      "secondary": "显示在副屏",
+      "hint": "开启后 Cindy 会移到副屏（比如双屏掌机的下屏）；关闭掌机模式时回到主屏。",
+      "none": "这台设备只有一块屏幕，Cindy 会自动适配它的尺寸。",
+      "current": "当前屏幕",
+      "single": "主屏"
+    },
+    "controls": {
+      "title": "手柄操作",
+      "gamepad": "手柄",
+      "noGamepad": "未检测到",
+      "moveKeys": "十字键 / 左摇杆",
+      "move": "移动焦点",
+      "confirm": "确认",
+      "back": "返回",
+      "voice": "长按说话",
+      "scrollKeys": "右摇杆",
+      "scroll": "滚动",
+      "page": "翻页"
+    }
   }
 }

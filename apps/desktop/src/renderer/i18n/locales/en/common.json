@@ -163,7 +163,7 @@
   "taskActionConfirmation": {
     "title": "Confirm session action",
     "once": "Review the target, action and full content below. Allow applies to this action once.",
-    "remove": "This deletes automation. Review the target; approval applies only once.",
+    "remove": "This will release the automation’s receiving address. Check the target; approval applies only to this action.",
     "permission": "This answers a permission request in another task on your behalf. Review the action; approval applies only once.",
     "resume": "This resumes paused execution. Review the target; approval applies only once.",
     "command": "This saves or runs a command on your computer outside the agent’s tool approval. Review the command and working folder; approval applies only once.",
@@ -1109,6 +1109,14 @@
     "detail": "This will end remote control and restore this computer’s screen. The computer will lock if lock on exit is enabled.",
     "cancel": "Keep connected",
     "disconnect": "Disconnect"
+  },
+  "awayGuard": {
+    "status": "Cindy is working",
+    "hint": "Press any key to lock, then unlock with Touch ID or your password.",
+    "lockFailed": {
+      "status": "Cindy couldn't lock this Mac",
+      "hint": "Press Control-Command-Q to lock it. The screen will also lock on its own after a while."
+    }
   },
   "appBadge": {
     "attentionCount": "Tasks needing attention: {{count}}"
@@ -2125,6 +2133,17 @@
     "appearance": {
       "title": "Appearance",
       "modeLabel": "Appearance Mode",
+      "appIcon": {
+        "label": "Dock icon",
+        "description": "Choose the icon the app uses in the Dock",
+        "saveFailed": "Couldn’t save the Dock icon. Please try again.",
+        "options": {
+          "default": "Default",
+          "cat": "Black cat",
+          "wordmark": "Cindy wordmark",
+          "mark": "Cindy symbol"
+        }
+      },
       "sidebarAndPanels": "Sidebar & panels",
       "themeLabel": "Theme",
       "themeAriaLabel": "Theme selection",
@@ -2382,7 +2401,24 @@
       "swallowActivationClickLabel": "Prevent Accidental Clicks When Returning",
       "swallowActivationClickHint": "When enabled, a left-click on a background window only brings it forward. When disabled, it also acts on the clicked item, which may cause accidental clicks.",
       "swallowActivationClickAria": "Toggle protection from accidental clicks when returning to the window",
-      "macRestartNote": "On macOS, restart the app for changes to take effect."
+      "macRestartNote": "On macOS, restart the app for changes to take effect.",
+      "awayGuard": {
+        "label": "Keep working while you're away",
+        "hint": "When on, this Mac won't sleep its display or lock on its own, so AI can use it at any time. After you've been away for a while, a black cover hides the screen and AI keeps working behind it. Pressing a key or clicking locks it right away; unlock with Touch ID or your password.",
+        "permission": "Allow Cindy in System Settings > Privacy & Security > Accessibility so it can lock the screen as soon as someone touches this Mac. Until then, the screen sleeps and locks as usual.",
+        "preview": "Try it now",
+        "previewStarting": "Take your hands off the mouse and keyboard. The screen is covered in 3 seconds; press any key to lock it, then unlock.",
+        "previewUnavailable": "Couldn't cover the screen. Restart Cindy and try again.",
+        "delay": {
+          "label": "Cover the screen after",
+          "hint": "How long the keyboard and mouse stay untouched before the cover goes up. By default, the same as your display sleep time.",
+          "30": "30 sec",
+          "60": "1 min",
+          "120": "2 min",
+          "300": "5 min",
+          "system": "System"
+        }
+      }
     },
     "agentIsland": {
       "title": "Dynamic Island",
@@ -3966,6 +4002,8 @@
         "disabledGroup": "Disabled",
         "enableAllModels": "Enable All",
         "priceOverride": {
+          "resetShort": "Reset",
+          "referenceDetails": "Reference Details",
           "menu": "Edit API Price Estimate",
           "title": "{{model}} API Price Estimate",
           "description": "Used only to estimate usage on your own API or subscription route. This does not change the provider’s bill.",
@@ -5132,7 +5170,7 @@
         "ariaLabel": "Choose the second fallback auxiliary model"
       },
       "emptySlot": "Not selected",
-      "customHint": "Models are tried in your chosen order and also back up Auto-review when its built-in models are unavailable. Selected providers receive review context: messages and references, task and action details (including blocked actions), identity and permissions, file paths, and operating system.",
+      "customHint": "Models are tried in your chosen order and also back up Auto-review when its built-in models are unavailable. Selected providers receive review context: messages and references, the agent's public text (reference only), task and action details (including blocked actions), identity and permissions, file paths, and operating system.",
       "signInHint": "Sign in to Cindy to use the automatic recommendations. While signed out, choose a configured model from another provider under Custom.",
       "chooseAgent": "Choose an Agent",
       "backToAgents": "Back to Agent selection",
@@ -6147,7 +6185,7 @@
         "hook": "Cindy IM bots"
       },
       "hook": {
-        "description": "Connect Slack and Telegram to the same Cindy. Messages are dispatched to this device and share its project list and session runner; each provider keeps its own account and preferences.",
+        "description": "Connect Slack, Telegram, Feishu / Lark and other channels to the same Cindy. Messages are dispatched to this device and share its project list and session runner; each provider keeps its own account and preferences.",
         "slackDescription": "Bind Slack workspaces and hand tasks to Cindy from Slack.",
         "slackDisabledHint": "Turn on the switch to start Slack authorization; once bound you can dispatch tasks from Slack.",
         "slackBoundHint": "Binding complete. Turning the switch off unbinds this device; turning it back on requires authorizing again.",
@@ -6368,6 +6406,45 @@
             "revoked": "Unlinked",
             "superseded": "Linked on another device"
           }
+        },
+        "feishu": {
+          "description": "Send Feishu messages to your working computer.",
+          "disabledHint": "Turn on the switch, then authorize your Feishu / Lark account in the browser or send the link code to the bot.",
+          "toggleAria": "Toggle Feishu / Lark connection",
+          "connect": "Link Feishu / Lark",
+          "openApp": "Open authorization page",
+          "cancel": "Cancel linking",
+          "retry": "Retry linking",
+          "openBot": "Open bot",
+          "unlink": "Unlink Feishu / Lark",
+          "unlinkConfirmTitle": "Unlink Feishu / Lark?",
+          "unlinkConfirmDescription": "Unlink this computer only.",
+          "unavailableHint": "Your organization hasn't set up the Feishu / Lark bot yet. Contact your organization admin.",
+          "unavailableHintPersonal": "The Feishu / Lark bot isn't available for personal accounts yet.",
+          "status": {
+            "checking": "Checking server support…",
+            "unavailable": "Not set up by your organization",
+            "unavailablePersonal": "Not available yet",
+            "disabled": "Disabled",
+            "none": "Not linked",
+            "pending": "Authorize in the browser, or send the link code to the bot",
+            "awaiting_confirmation": "Confirm the account change for this computer in Feishu / Lark",
+            "confirmed": "{{user}} linked to the Feishu / Lark bot",
+            "denied": "Authorization denied",
+            "expired": "Authorization expired",
+            "failed": "Linking failed",
+            "revoked": "Unlinked",
+            "superseded": "This computer is linked to another Feishu / Lark account",
+            "appChanged": "The Feishu / Lark bot was changed. Link it again."
+          },
+          "bindCode": {
+            "label": "Link code",
+            "copy": "Copy code",
+            "copied": "Link code copied",
+            "hint": "Or send this code to the Cindy bot in a direct message in Feishu / Lark"
+          },
+          "setWorkingDevice": "Set as working computer",
+          "workingDeviceSet": "Working computer set"
         }
       },
       "summary": {
@@ -6386,7 +6463,7 @@
     "tina": {
       "chat": {
         "title": "Chat",
-        "description": "Plain conversations without any repository; select \"chat\" from Slack, Telegram, or X, one session per conversation lane."
+        "description": "Plain conversations without any repository; select \"chat\" from Slack, Telegram, X, or Feishu / Lark, one session per conversation lane."
       },
       "prefs": {
         "agentLabel": "Agent",
@@ -6396,6 +6473,7 @@
         "providerSlack": "Slack",
         "providerTelegram": "Telegram",
         "providerX": "X",
+        "providerFeishu": "Feishu / Lark",
         "requireConnected": "Editable once {{provider}} is connected (enable its switch above and wait for the connection).",
         "offlineLocal": "{{provider}} is offline. Changes are saved on this computer and sync to the chat model card when it reconnects.",
         "requireBinding": "Complete {{provider}} account linking first.",
@@ -14022,7 +14100,11 @@
       "mailAttach": "Add attachment",
       "mailRemoveAttachment": "Remove {{name}}",
       "mailUpdated": "Draft updated (read-only)",
-      "mailLegacy": "Draft history (read-only)"
+      "mailLegacy": "Draft history (read-only)",
+      "taskAutoArchived": "Archived \"{{title}}\"",
+      "taskAutoArchivedUndo": "Undo",
+      "taskAutoArchivePending": "Archives when you leave",
+      "taskAutoArchiveCancel": "Keep this time"
     },
     "ghostHook": {
       "blockedFallback": "Message blocked by a plugin; not sent",
@@ -14058,6 +14140,8 @@
       "updateHost": "Update the computer running this task to open a side chat.",
       "failed": "Could not open the side chat. Please try again.",
       "mainTaskOnly": "Open a side chat from the main task.",
+      "sharedTaskUnavailable": "Side chats are not available in shared tasks.",
+      "archivedTask": "Unarchive this task to open a side chat.",
       "closeTitle": "Close side chat?",
       "closeDescription": "This follow-up will stop and its history will be deleted. The main task keeps running.",
       "closeConfirm": "Close and delete",
@@ -19179,6 +19263,9 @@
     "pendingApprovals": "{{count}} pending approvals"
   },
   "richAnswer": {
+    "invalidImageReference": "This image reference is invalid.",
+    "requestImageAgain": "Ask to show image again",
+    "requestImageAgainMessage": "Please show this existing image again ({{name}}, reference: {{source}}). Check the original tool result or file and use its real address. Do not generate a new image; ask me first if you cannot identify the image.",
     "send": "Send Message",
     "sending": "Sending…",
     "sent": "Submitted",

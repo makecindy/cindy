@@ -163,7 +163,7 @@
   "taskActionConfirmation": {
     "title": "セッション操作の確認",
     "once": "以下の対象、操作、全文を確認してください。許可は今回の操作にのみ適用されます。",
-    "remove": "自動化を削除します。対象を確認してください。許可は今回のみ有効です。",
+    "remove": "自動化の受信アドレスを解放します。対象を確認してください。許可は今回の操作にのみ適用されます。",
     "permission": "別のタスクの権限リクエストに、あなたに代わって回答します。操作を確認してください。許可は今回のみ有効です。",
     "resume": "一時停止中の実行を再開します。対象を確認してください。許可は今回のみ有効です。",
     "command": "エージェントのツール承認を経ずに、コンピューター上でコマンドを保存または実行します。コマンドと作業フォルダーを確認してください。許可は今回のみ有効です。",
@@ -1097,6 +1097,14 @@
     "detail": "リモート操作を終了し、パソコンの画面を元に戻します。終了時のロックが有効な場合は、パソコンもロックされます。",
     "cancel": "接続を維持",
     "disconnect": "切断"
+  },
+  "awayGuard": {
+    "status": "Cindy が作業中です",
+    "hint": "いずれかのキーを押すとロックされます。Touch ID またはパスワードで解除してください。",
+    "lockFailed": {
+      "status": "Cindy はこの Mac をロックできませんでした",
+      "hint": "Control-Command-Q でロックしてください。しばらくするとシステムも自動でロックします。"
+    }
   },
   "appBadge": {
     "attentionCount": "対応が必要なセッション：{{count}}"
@@ -2095,6 +2103,17 @@
     "appearance": {
       "title": "外観",
       "modeLabel": "表示モード",
+      "appIcon": {
+        "label": "Dock アイコン",
+        "description": "Dock に表示するアプリのアイコンを選択します",
+        "saveFailed": "Dock アイコンを保存できませんでした。もう一度お試しください",
+        "options": {
+          "default": "デフォルト",
+          "cat": "黒猫",
+          "wordmark": "Cindy ロゴタイプ",
+          "mark": "Cindy シンボル"
+        }
+      },
       "sidebarAndPanels": "サイドバーとパネル",
       "themeLabel": "テーマ",
       "themeAriaLabel": "テーマの選択",
@@ -2352,7 +2371,24 @@
       "swallowActivationClickLabel": "戻るときの誤クリックを防ぐ",
       "swallowActivationClickHint": "背面のウィンドウを左クリックしたときは、手前に表示するだけにします。オフにするとクリックした場所も操作するため、誤操作につながることがあります。",
       "swallowActivationClickAria": "ウィンドウに戻るときの誤クリック防止を切り替え",
-      "macRestartNote": "macOS では変更を反映するにはアプリの再起動が必要です。"
+      "macRestartNote": "macOS では変更を反映するにはアプリの再起動が必要です。",
+      "awayGuard": {
+        "label": "離席中も作業を続ける",
+        "hint": "オンにすると、この Mac は操作がなくても画面のスリープやロックをしないため、AI がいつでも使えます。しばらく離席すると黒いカバーで画面が隠れ、AI はその裏で作業を続けます。キーを押すかクリックするとすぐにロックされ、Touch ID またはパスワードで解除できます。",
+        "permission": "誰かがこの Mac に触れたときにすぐロックするには、「システム設定 > プライバシーとセキュリティ > アクセシビリティ」で Cindy を許可してください。許可するまでは、通常どおり画面がスリープしてロックされます。",
+        "preview": "今すぐ試す",
+        "previewStarting": "マウスとキーボードから手を離してください。3 秒後に画面が覆われます。いずれかのキーを押すとロックされるので、解除してみてください。",
+        "previewUnavailable": "画面を覆えませんでした。Cindy を再起動してもう一度お試しください。",
+        "delay": {
+          "label": "画面を隠すまでの時間",
+          "hint": "キーボードとマウスに触れない時間がこれを超えるとカバーが表示されます。既定ではディスプレイのスリープ時間と同じです。",
+          "30": "30 秒",
+          "60": "1 分",
+          "120": "2 分",
+          "300": "5 分",
+          "system": "システム"
+        }
+      }
     },
     "agentIsland": {
       "title": "Dynamic Island",
@@ -3924,6 +3960,8 @@
         "disabledGroup": "無効",
         "enableAllModels": "すべて有効にする",
         "priceOverride": {
+          "resetShort": "リセット",
+          "referenceDetails": "参考価格の詳細",
           "menu": "API 料金見積もりを編集",
           "title": "{{model}} の API 料金見積もり",
           "description": "自分の API またはサブスクリプション経路の使用量見積もりにのみ使われ、プロバイダーの実際の請求は変わりません。",
@@ -5089,7 +5127,7 @@
         "ariaLabel": "2 番目の予備補助モデルを選択"
       },
       "emptySlot": "未選択",
-      "customHint": "選んだ順に試し、内蔵モデルが使えない場合は自動レビューにも使います。選択したプロバイダーに送るレビュー情報には、メッセージと引用内容、タスク・操作の詳細（ブロック済みの操作を含む）、依頼者の識別・権限情報、ファイルパス、OS が含まれます。",
+      "customHint": "選んだ順に試し、内蔵モデルが使えない場合は自動レビューにも使います。選択したプロバイダーに送るレビュー情報には、メッセージと引用内容、Agent の公開テキスト（参考用）、タスク・操作の詳細（ブロック済みの操作を含む）、依頼者の識別・権限情報、ファイルパス、OS が含まれます。",
       "signInHint": "Cindy にログインすると自動おすすめを使えます。未ログイン時は「カスタム」で設定済みの他のプロバイダーのモデルを選択してください。",
       "chooseAgent": "Agent を選択",
       "backToAgents": "Agent の選択に戻る",
@@ -6104,7 +6142,7 @@
         "hook": "Cindy IM ボット"
       },
       "hook": {
-        "description": "Slack と Telegram を同じ Cindy に接続します。メッセージはこのデバイスに送られ、プロジェクト一覧とセッション実行基盤を共有します。アカウント連携と設定はプロバイダーごとに分離されます。",
+        "description": "Slack、Telegram、Feishu / Lark などを同じ Cindy に接続します。メッセージはこのデバイスに送られ、プロジェクト一覧とセッション実行基盤を共有します。アカウント連携と設定はプロバイダーごとに分離されます。",
         "slackDescription": "Slack ワークスペースを連携し、Slack から Cindy にタスクを依頼できます。",
         "slackDisabledHint": "スイッチをオンにすると Slack 認証が始まります。連携が完了すると Slack からタスクを依頼できます。",
         "slackBoundHint": "連携が完了しました。スイッチをオフにすると連携が解除され、再びオンにするには再認証が必要です。",
@@ -6325,6 +6363,45 @@
             "revoked": "連携が解除されました",
             "superseded": "別のデバイスで連携済み"
           }
+        },
+        "feishu": {
+          "description": "Feishu のメッセージを作業用パソコンで処理します。",
+          "disabledHint": "スイッチをオンにして、ブラウザで Feishu / Lark アカウントを認証するか、連携コードを bot に送信してください。",
+          "toggleAria": "Feishu / Lark 接続を切り替え",
+          "connect": "Feishu / Lark を連携",
+          "openApp": "認証ページを開く",
+          "cancel": "連携をキャンセル",
+          "retry": "再連携",
+          "openBot": "Bot を開く",
+          "unlink": "Feishu / Lark の連携を解除",
+          "unlinkConfirmTitle": "Feishu / Lark の連携を解除しますか？",
+          "unlinkConfirmDescription": "このパソコンのみ連携を解除します。",
+          "unavailableHint": "所属組織で Feishu / Lark bot がまだ設定されていません。組織の管理者にお問い合わせください。",
+          "unavailableHintPersonal": "Feishu / Lark bot は個人アカウントではまだご利用いただけません。",
+          "status": {
+            "checking": "サーバーの対応状況を確認中…",
+            "unavailable": "組織で未設定",
+            "unavailablePersonal": "未提供",
+            "disabled": "無効",
+            "none": "未連携",
+            "pending": "ブラウザで認証するか、連携コードを bot に送信してください",
+            "awaiting_confirmation": "Feishu / Lark でこのパソコンの連携アカウント変更を確認してください",
+            "confirmed": "{{user}} が Feishu / Lark bot と連携済み",
+            "denied": "認証が拒否されました",
+            "expired": "認証の有効期限切れ",
+            "failed": "連携に失敗しました",
+            "revoked": "連携が解除されました",
+            "superseded": "このパソコンは別の Feishu / Lark アカウントと連携されています",
+            "appChanged": "Feishu / Lark bot が変更されました。もう一度連携してください。"
+          },
+          "bindCode": {
+            "label": "連携コード",
+            "copy": "コードをコピー",
+            "copied": "連携コードをコピーしました",
+            "hint": "または Feishu / Lark で Cindy bot にこのコードをダイレクトメッセージで送信してください"
+          },
+          "setWorkingDevice": "作業用パソコンに設定",
+          "workingDeviceSet": "作業用パソコンに設定しました"
         }
       },
       "summary": {
@@ -6343,7 +6420,7 @@
     "tina": {
       "chat": {
         "title": "会話",
-        "description": "リポジトリに紐づかない会話です。Slack・Telegram・X で「chat」を選ぶと、会話 lane ごとにセッションを利用できます。"
+        "description": "リポジトリに紐づかない会話です。Slack・Telegram・X・Feishu / Lark で「chat」を選ぶと、会話 lane ごとにセッションを利用できます。"
       },
       "prefs": {
         "agentLabel": "Agent",
@@ -6353,6 +6430,7 @@
         "providerSlack": "Slack",
         "providerTelegram": "Telegram",
         "providerX": "X",
+        "providerFeishu": "Feishu / Lark",
         "requireConnected": "{{provider}} 接続後に編集できます（上のスイッチをオンにして接続をお待ちください）。",
         "offlineLocal": "{{provider}} に接続できない間、変更はこのコンピュータに保存されます。再接続後にチャットのモデルカードへ同期します。",
         "requireBinding": "先に {{provider}} アカウントの連携を完了してください。",
@@ -13956,7 +14034,11 @@
       "mailAttach": "添付ファイルを追加",
       "mailRemoveAttachment": "{{name}}を削除",
       "mailUpdated": "更新済みの下書き（読み取り専用）",
-      "mailLegacy": "下書きの履歴（読み取り専用）"
+      "mailLegacy": "下書きの履歴（読み取り専用）",
+      "taskAutoArchived": "「{{title}}」をアーカイブしました",
+      "taskAutoArchivedUndo": "元に戻す",
+      "taskAutoArchivePending": "離れると自動でアーカイブ",
+      "taskAutoArchiveCancel": "今回はしない"
     },
     "ghostHook": {
       "blockedFallback": "メッセージはプラグインによりブロックされました(未送信)",
@@ -13992,6 +14074,8 @@
       "updateHost": "タスクを実行するパソコンを更新してから再度お試しください。",
       "failed": "サイドチャットを開けませんでした。もう一度お試しください。",
       "mainTaskOnly": "メインタスクからサイドチャットを開いてください。",
+      "sharedTaskUnavailable": "共有タスクではサイドチャットを利用できません。",
+      "archivedTask": "このタスクのアーカイブを解除してから、サイドチャットを開いてください。",
       "closeTitle": "サイドチャットを閉じますか？",
       "closeDescription": "このサイドチャットを停止して削除します。メインタスクには影響しません。",
       "closeConfirm": "閉じて削除",
@@ -19107,6 +19191,9 @@
     "pendingApprovals": "{{count}} 件の確認待ち"
   },
   "richAnswer": {
+    "invalidImageReference": "画像の参照先が無効なため、表示できません。",
+    "requestImageAgain": "画像の再表示を依頼",
+    "requestImageAgainMessage": "この既存の画像（{{name}}、参照先：{{source}}）をもう一度表示してください。元のツール結果またはファイルを確認し、実際のアドレスを使ってください。画像を新たに生成せず、どの画像か特定できない場合は先に私に確認してください。",
     "send": "メッセージを送信",
     "sending": "送信中…",
     "sent": "送信済み",

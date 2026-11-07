@@ -133,6 +133,7 @@ import {
   resetComputerDriverPermissionProbeCacheForTests,
   resetAtMentionWindowCacheForTests,
   resetDesktopInputGuardStateForTests,
+  seedDesktopScreenLocked,
   resetComputerDriverUpdateStateForTests,
   runProcessWithActivityTimeout,
   sampleInstallProcessTree,
@@ -4508,9 +4509,17 @@ describe('foreground input while the person is using this computer', () => {
 
   it('reports the lock state from power events, else from the idle-state probe', async () => {
     const deps = getComputerMcpDeps();
+    // Started on a locked screen: macOS never reports 'locked' through the probe.
+    powerMonitorState.idleState = 'idle';
+    seedDesktopScreenLocked(true);
+    await expect(deps.describeDesktop?.()).resolves.toEqual({ screen_locked: true });
+    resetDesktopInputGuardStateForTests();
     powerMonitorState.idleState = 'locked';
     await expect(deps.describeDesktop?.()).resolves.toEqual({ screen_locked: true });
     powerMonitorState.listeners.get('unlock-screen')?.();
+    await expect(deps.describeDesktop?.()).resolves.toEqual({ screen_locked: false });
+    // A startup seed never overrides an event already seen.
+    seedDesktopScreenLocked(true);
     await expect(deps.describeDesktop?.()).resolves.toEqual({ screen_locked: false });
     powerMonitorState.listeners.get('lock-screen')?.();
     await expect(deps.describeDesktop?.()).resolves.toEqual({ screen_locked: true });

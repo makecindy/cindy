@@ -165,7 +165,7 @@
   "taskActionConfirmation": {
     "title": "Confirmar ação da sessão",
     "once": "Revise o destino, a ação e o conteúdo completo abaixo. A permissão vale apenas para esta ação, uma vez.",
-    "remove": "Isso exclui a automação. Revise o destino; a aprovação vale apenas uma vez.",
+    "remove": "O endereço de recebimento da automação será liberado. Confira o destino; a autorização se aplica apenas a esta ação.",
     "permission": "Isso responde a uma solicitação de permissão em outra tarefa em seu nome. Revise a ação; a aprovação vale apenas uma vez.",
     "resume": "Isso retoma a execução pausada. Revise o destino; a aprovação vale apenas uma vez.",
     "command": "Isso salva ou executa um comando no seu computador fora da aprovação de ferramentas do Agent. Revise o comando e a pasta de trabalho; a aprovação vale apenas uma vez.",
@@ -1126,6 +1126,14 @@
     "detail": "Isso encerrará o controle remoto e restaurará a tela deste computador. O computador será bloqueado se a opção de bloquear ao sair estiver ativada.",
     "cancel": "Manter conectado",
     "disconnect": "Desconectar"
+  },
+  "awayGuard": {
+    "status": "O Cindy está trabalhando",
+    "hint": "Pressione qualquer tecla para bloquear e desbloqueie com Touch ID ou sua senha.",
+    "lockFailed": {
+      "status": "O Cindy não conseguiu bloquear este Mac",
+      "hint": "Pressione Control-Command-Q para bloquear. A tela também será bloqueada sozinha depois de um tempo."
+    }
   },
   "appBadge": {
     "attentionCount": "Tarefas que precisam de atenção: {{count}}"
@@ -2163,6 +2171,17 @@
     "appearance": {
       "title": "Aparência",
       "modeLabel": "Modo de aparência",
+      "appIcon": {
+        "label": "Ícone do Dock",
+        "description": "Escolha o ícone que o app usa no Dock",
+        "saveFailed": "Não foi possível salvar o ícone do Dock. Tente novamente.",
+        "options": {
+          "default": "Padrão",
+          "cat": "Gato preto",
+          "wordmark": "Logotipo da Cindy",
+          "mark": "Símbolo da Cindy"
+        }
+      },
       "sidebarAndPanels": "Barra lateral e painéis",
       "themeLabel": "Tema",
       "themeAriaLabel": "Seleção de tema",
@@ -2420,7 +2439,24 @@
       "swallowActivationClickLabel": "Evitar cliques acidentais ao retornar",
       "swallowActivationClickHint": "Quando ativado, um clique esquerdo em uma janela em segundo plano apenas a traz para frente. Quando desativado, ele também aciona o item clicado, o que pode causar cliques acidentais.",
       "swallowActivationClickAria": "Ativar ou desativar proteção contra cliques acidentais ao retornar à janela",
-      "macRestartNote": "No macOS, reinicie o app para aplicar as alterações."
+      "macRestartNote": "No macOS, reinicie o app para aplicar as alterações.",
+      "awayGuard": {
+        "label": "Continuar trabalhando enquanto você está fora",
+        "hint": "Quando ativado, este Mac não desliga a tela nem bloqueia sozinho, para que a IA possa usá-lo a qualquer momento. Depois de um tempo longe, uma camada preta cobre a tela e a IA continua trabalhando por trás. Pressionar uma tecla ou clicar bloqueia na hora; desbloqueie com Touch ID ou sua senha.",
+        "permission": "Permita o Cindy em Ajustes do Sistema > Privacidade e Segurança > Acessibilidade para que ele bloqueie a tela assim que alguém tocar neste Mac. Até lá, a tela apaga e é bloqueada normalmente.",
+        "preview": "Testar agora",
+        "previewStarting": "Solte o mouse e o teclado. A tela será coberta em 3 segundos; pressione qualquer tecla para bloqueá-la e depois desbloqueie.",
+        "previewUnavailable": "Não foi possível cobrir a tela. Reinicie o Cindy e tente novamente.",
+        "delay": {
+          "label": "Cobrir a tela após",
+          "hint": "Tempo sem tocar no teclado e no mouse até a camada aparecer. Por padrão, o mesmo do repouso da tela.",
+          "30": "30 s",
+          "60": "1 min",
+          "120": "2 min",
+          "300": "5 min",
+          "system": "Sistema"
+        }
+      }
     },
     "agentIsland": {
       "title": "Dynamic Island",
@@ -4020,6 +4056,8 @@
         "disabledGroup": "Desativado",
         "enableAllModels": "Ativar todos",
         "priceOverride": {
+          "resetShort": "Redefinir",
+          "referenceDetails": "Detalhes do preço de referência",
           "menu": "Editar estimativa de preço da API",
           "title": "Estimativa de preço da API de {{model}}",
           "description": "Usada apenas para estimar o uso na sua própria rota de API ou assinatura. Isso não altera a cobrança do provedor.",
@@ -5190,7 +5228,7 @@
         "ariaLabel": "Escolher o segundo modelo auxiliar alternativo"
       },
       "emptySlot": "Não selecionado",
-      "customHint": "Os modelos são testados na ordem escolhida e também servem de alternativa à Revisão automática quando os modelos integrados estão indisponíveis. Os provedores selecionados recebem o contexto da revisão: mensagens e referências, detalhes de tarefas e ações (incluindo ações bloqueadas), identidade e permissões, caminhos de arquivos e sistema operacional.",
+      "customHint": "Os modelos são testados na ordem escolhida e também servem de alternativa à Revisão automática quando os modelos integrados estão indisponíveis. Os provedores selecionados recebem o contexto da revisão: mensagens e referências, texto público do Agent (apenas referência), detalhes de tarefas e ações (incluindo ações bloqueadas), identidade e permissões, caminhos de arquivos e sistema operacional.",
       "signInHint": "Entre na Cindy para usar as recomendações automáticas. Sem fazer login, escolha um modelo configurado de outro provedor em Personalizado.",
       "chooseAgent": "Escolher um Agent",
       "backToAgents": "Voltar à seleção de Agent",
@@ -6208,7 +6246,7 @@
         "hook": "Bots de mensagens do Cindy"
       },
       "hook": {
-        "description": "Conecte Slack e Telegram ao mesmo Cindy. As mensagens são encaminhadas a este dispositivo e compartilham sua lista de projetos e seu executor de sessões; cada provedor mantém sua própria conta e preferências.",
+        "description": "Conecte Slack, Telegram, Feishu / Lark e outros canais ao mesmo Cindy. As mensagens são encaminhadas a este dispositivo e compartilham sua lista de projetos e seu executor de sessões; cada provedor mantém sua própria conta e preferências.",
         "slackDescription": "Vincule espaços de trabalho do Slack e atribua tarefas ao Cindy pelo Slack.",
         "slackDisabledHint": "Ative a opção para iniciar a autorização do Slack; após a vinculação, você poderá encaminhar tarefas pelo Slack.",
         "slackBoundHint": "Vinculação concluída. Desativar a opção desvincula este dispositivo; reativá-la exige uma nova autorização.",
@@ -6433,6 +6471,45 @@
             "revoked": "Desvinculado",
             "superseded": "Vinculado em outro dispositivo"
           }
+        },
+        "feishu": {
+          "description": "Envie mensagens do Feishu para seu computador de trabalho.",
+          "disabledHint": "Ative a opção e autorize sua conta do Feishu / Lark no navegador ou envie o código de vinculação ao bot.",
+          "toggleAria": "Alternar conexão com o Feishu / Lark",
+          "connect": "Vincular Feishu / Lark",
+          "openApp": "Abrir página de autorização",
+          "cancel": "Cancelar vinculação",
+          "retry": "Tentar vincular novamente",
+          "openBot": "Abrir bot",
+          "unlink": "Desvincular Feishu / Lark",
+          "unlinkConfirmTitle": "Desvincular Feishu / Lark?",
+          "unlinkConfirmDescription": "Desvincular apenas este computador.",
+          "unavailableHint": "Sua organização ainda não configurou o bot do Feishu / Lark. Fale com o administrador da sua organização.",
+          "unavailableHintPersonal": "O bot do Feishu / Lark ainda não está disponível para contas pessoais.",
+          "status": {
+            "checking": "Verificando suporte do servidor…",
+            "unavailable": "Não configurado pela sua organização",
+            "unavailablePersonal": "Ainda não disponível",
+            "disabled": "Desativado",
+            "none": "Não vinculado",
+            "pending": "Autorize no navegador ou envie o código de vinculação ao bot",
+            "awaiting_confirmation": "Confirme a alteração de conta deste computador no Feishu / Lark",
+            "confirmed": "{{user}} vinculado ao bot do Feishu / Lark",
+            "denied": "Autorização negada",
+            "expired": "Autorização expirada",
+            "failed": "Falha na vinculação",
+            "revoked": "Desvinculado",
+            "superseded": "Este computador está vinculado a outra conta Feishu / Lark",
+            "appChanged": "O bot do Feishu / Lark foi trocado. Vincule novamente."
+          },
+          "bindCode": {
+            "label": "Código de vinculação",
+            "copy": "Copiar código",
+            "copied": "Código de vinculação copiado",
+            "hint": "Ou envie este código ao bot Cindy por mensagem direta no Feishu / Lark"
+          },
+          "setWorkingDevice": "Definir como computador de trabalho",
+          "workingDeviceSet": "Computador de trabalho definido"
         }
       },
       "summary": {
@@ -6451,7 +6528,7 @@
     "tina": {
       "chat": {
         "title": "Conversa",
-        "description": "Conversas simples sem repositório; selecione \"chat\" no Slack, Telegram ou X, com uma sessão por fluxo de conversa."
+        "description": "Conversas simples sem repositório; selecione \"chat\" no Slack, Telegram, X ou Feishu / Lark, com uma sessão por fluxo de conversa."
       },
       "prefs": {
         "agentLabel": "Agent",
@@ -6461,6 +6538,7 @@
         "providerSlack": "Slack",
         "providerTelegram": "Telegram",
         "providerX": "X",
+        "providerFeishu": "Feishu / Lark",
         "requireConnected": "Editável quando {{provider}} estiver conectado (ative a opção acima e aguarde a conexão).",
         "offlineLocal": "{{provider}} está offline. As alterações são salvas neste computador e sincronizadas com o cartão de modelo da conversa quando ele se reconectar.",
         "requireBinding": "Primeiro, conclua a vinculação da conta de {{provider}}.",
@@ -14118,7 +14196,11 @@
       "mailAttach": "Adicionar anexo",
       "mailRemoveAttachment": "Remover {{name}}",
       "mailUpdated": "Rascunho atualizado (somente leitura)",
-      "mailLegacy": "Histórico de rascunhos (somente leitura)"
+      "mailLegacy": "Histórico de rascunhos (somente leitura)",
+      "taskAutoArchived": "\"{{title}}\" arquivada",
+      "taskAutoArchivedUndo": "Desfazer",
+      "taskAutoArchivePending": "Arquiva ao sair",
+      "taskAutoArchiveCancel": "Manter desta vez"
     },
     "ghostHook": {
       "blockedFallback": "Mensagem bloqueada por um plugin; não enviada",
@@ -14154,6 +14236,8 @@
       "updateHost": "Atualize o computador que executa esta tarefa para abrir uma conversa paralela.",
       "failed": "Não foi possível abrir a conversa paralela. Tente novamente.",
       "mainTaskOnly": "Abra uma conversa paralela a partir da tarefa principal.",
+      "sharedTaskUnavailable": "Conversas paralelas não estão disponíveis em tarefas compartilhadas.",
+      "archivedTask": "Desarquive esta tarefa para abrir uma conversa paralela.",
       "closeTitle": "Fechar conversa paralela?",
       "closeDescription": "Esta conversa de acompanhamento será interrompida e seu histórico será excluído. A tarefa principal continua em execução.",
       "closeConfirm": "Fechar e excluir",
@@ -19353,6 +19437,9 @@
     "pendingApprovals": "{{count}} aprovações pendentes"
   },
   "richAnswer": {
+    "invalidImageReference": "A referência desta imagem é inválida.",
+    "requestImageAgain": "Pedir para mostrar novamente",
+    "requestImageAgainMessage": "Mostre novamente esta imagem existente ({{name}}, referência: {{source}}). Confira o resultado original da ferramenta ou o arquivo e use o endereço real. Não gere outra imagem; pergunte-me antes se não conseguir identificar a imagem.",
     "send": "Enviar mensagem",
     "sending": "Enviando…",
     "sent": "Enviado",
