@@ -21,7 +21,7 @@ import {
 } from '../codex-auth-invalidation.js';
 
 const dirs: string[] = [];
-const expectedSharedLinkType = process.platform === 'win32' ? 'hardlink' : 'symlink';
+const expectedSharedLinkType = canCreateFileSymlink() || process.platform !== 'win32' ? 'symlink' : 'file';
 
 /** 探测真实文件 symlink 能力；Windows 未启用 Developer Mode 时会返回 EPERM。 */
 function canCreateFileSymlink(): boolean {
@@ -99,13 +99,21 @@ function deferred<T = void>() {
 }
 
 function expectPlatformSharedLink(systemAuth: string, localAuth: string): void {
-  expect(fs.lstatSync(localAuth).isSymbolicLink()).toBe(process.platform !== 'win32');
   const systemStat = fs.statSync(systemAuth);
-  const localStat = fs.statSync(localAuth);
-  expect({ dev: localStat.dev, ino: localStat.ino }).toEqual({
-    dev: systemStat.dev,
-    ino: systemStat.ino,
-  });
+  // Codex 0.165+ 拒绝 nlink>1。共享要么是 symlink,要么(Windows 无 symlink 权限)
+  // 是独立副本;两种都不再留下 hardlink。
+  expect(systemStat.nlink).toBe(1);
+  if (fs.lstatSync(localAuth).isSymbolicLink()) {
+    const localStat = fs.statSync(localAuth);
+    expect({ dev: localStat.dev, ino: localStat.ino }).toEqual({
+      dev: systemStat.dev,
+      ino: systemStat.ino,
+    });
+    return;
+  }
+  expect(process.platform).toBe('win32');
+  expect(fs.statSync(localAuth).ino).not.toBe(systemStat.ino);
+  expect(fs.readFileSync(localAuth, 'utf8')).toBe(fs.readFileSync(systemAuth, 'utf8'));
 }
 
 it('compares Codex hard-link identities without Windows number precision collisions', () => {
@@ -1795,10 +1803,11 @@ describe('Codex system credential suppression marker', () => {
       }),
     );
     fs.renameSync(replacement, systemAuth);
-    if (process.platform === 'win32') {
-      expect(fs.readFileSync(localAuth, 'utf8')).not.toBe(fs.readFileSync(systemAuth, 'utf8'));
-    } else {
+    // symlink 跟着原子替换走；建不出 symlink 时留下的独立副本仍停在替换前的内容。
+    if (fs.lstatSync(localAuth).isSymbolicLink()) {
       expect(fs.readFileSync(localAuth, 'utf8')).toBe(fs.readFileSync(systemAuth, 'utf8'));
+    } else {
+      expect(fs.readFileSync(localAuth, 'utf8')).not.toBe(fs.readFileSync(systemAuth, 'utf8'));
     }
 
     const broadcast = vi.fn();
@@ -1808,8 +1817,8 @@ describe('Codex system credential suppression marker', () => {
     ).resolves.toBeUndefined();
     expect(JSON.parse(fs.readFileSync(bindingFile, 'utf8'))).not.toHaveProperty('revoked.openai');
     const restartedAdapter = new DesktopCodexAuthAdapter();
-    if (process.platform === 'win32') {
-      // Windows local 仍是 F1 旧 hardlink，generation 匹配；清掉 F1 后从 system F2 恢复。
+    if (!fs.lstatSync(localAuth).isSymbolicLink()) {
+      // 没有 symlink 时本地仍是替换前的副本，generation 匹配；清掉后从 system F2 恢复。
       expect(broadcast).toHaveBeenCalledWith('token_revoked', 'system-shared');
       expect(readInvalidatedSystemCodexAuthMarker(codexHome)).toMatchObject({
         credentialScope: 'system-shared',
@@ -1895,12 +1904,14 @@ describe('Codex system credential suppression marker', () => {
         authenticated: true,
         credentialScope: 'system-shared',
         credentialDiagnostics: {
-          linkType: 'hardlink',
+          linkType: 'symlink',
           healthy: true,
           orphanRepair: 'relinked',
         },
       });
 
+      expect(fs.lstatSync(localAuth).isSymbolicLink()).toBe(true);
+      expect(fs.statSync(systemAuth).nlink).toBe(1);
       expect(fs.readFileSync(localAuth, 'utf8')).toContain('system-f2-token');
       expect(fs.readFileSync(localAuth, 'utf8')).not.toContain('system-f1-token');
       const localStat = fs.statSync(localAuth);
@@ -2656,7 +2667,7 @@ describe('Codex system credential suppression marker', () => {
       credentialScope: 'system-shared',
       credentialDiagnostics: {
         linkType: expectedSharedLinkType,
-        healthy: true,
+        healthy: expectedSharedLinkType === 'symlink',
         orphanRepair: 'relinked',
       },
     });

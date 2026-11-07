@@ -58,6 +58,7 @@ import {
   copyCodexAuthSnapshot,
   inspectCodexAuthLink,
   relinkSharedCodexAuth,
+  syncIndependentCodexAuth,
   resolveWindowsAclPrincipal,
 } from './codex-auth-link.js';
 import { getCodexCliAuthPath, getPreferredSharedCodexAuthPath, getReleaseCodexAuthPath } from './codex-shared-auth.js';
@@ -1243,7 +1244,9 @@ export class DesktopCodexAuthAdapter implements AuthAdapter {
     if (topology.healthy && topology.linkType === 'hardlink') {
       markNativeProviderAuthSharedSystemCredential('openai');
     }
-    if (topology.healthy && (process.platform === 'win32' || topology.linkType === 'symlink')) {
+    // 健康的 Windows hardlink 不能再短路:Codex 0.165+ 拒绝 nlink>1。落到下面的
+    // relink,换成文件 symlink;建不了就拆成独立副本(#9277)。
+    if (topology.healthy && topology.linkType === 'symlink') {
       if (this.shouldSnapshotReleaseCodexAuth(systemAuth, myAuth)) {
         const snapshot = await copyCodexAuthSnapshot(systemAuth, myAuth);
         if (snapshot.kind === 'copied') {
@@ -1307,7 +1310,8 @@ export class DesktopCodexAuthAdapter implements AuthAdapter {
     // new local credential since that snapshot; never replace it using the stale orphan decision.
     if (this.pendingLogin || this.loginCancellationOpen) return;
 
-    // 无显式隔离 provenance 时使用本机凭证：POSIX symlink / Windows hardlink。
+    // 无显式隔离 provenance 时使用本机凭证：文件 symlink。Windows 建不了 symlink
+    // 时不退回 hardlink,改为独立副本按 mtime 同步(#9277)。
     // 安全替换 (唯一 sidecar + 失败重建) 见 codex-auth-link.ts —— 避免并发撞临时文件、
     // 以及"myAuth 删了又建不回去导致用户被迫重登"的空窗。
     // 建共享链接前幂等确保 codexHome 目录存在: 首启时 assets 预热可能尚未建好目录, ENOENT
@@ -1340,7 +1344,19 @@ export class DesktopCodexAuthAdapter implements AuthAdapter {
         log.info('codex auth.json linked with shared OpenAI login', { linkType });
         break;
       case 'link-unsupported':
-        // 共享链接不支持时 myAuth 一字未动。
+        if (process.platform === 'win32') {
+          const synced = await syncIndependentCodexAuth(systemAuth, myAuth);
+          if (synced.kind === 'copied-from-system' || synced.kind === 'copied-from-local') {
+            if (hasLocalEntry && !topology.healthy) this.lastOrphanRepair = 'relinked';
+            this.lastKnownCodexCredentialScope = 'system-shared';
+            credPathLog.warn('Windows file symlink unavailable; synced an independent Codex auth copy', {
+              direction: synced.kind,
+              error: error?.message,
+            });
+            break;
+          }
+        }
+        // 共享链接不支持且无法同步时 myAuth 一字未动。
         credPathLog.warn('shared OpenAI auth link failed, auth.json left intact', {
           error: error?.message,
         });
