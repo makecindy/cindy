@@ -19916,8 +19916,8 @@
     "removeTitle": "¿Quitar {{name}}?",
     "removeDescription": "Cindy dejará de asignar tareas a esta cuenta. La sesión de la CLI y el historial de conversaciones permanecerán en este equipo.",
     "failed": "No se pudo leer o actualizar la cuenta. Comprueba el inicio de sesión de la CLI y la conexión, e inténtalo de nuevo.",
-    "used": "{{percent}}% utilizado",
     "directory": "Carpeta de la cuenta",
+    "loginAgain": "Iniciar sesión nuevamente",
     "login": "Iniciar sesión"
   }
 }

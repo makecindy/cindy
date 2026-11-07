@@ -146,6 +146,8 @@ export interface MobileComposerInputRowProps {
    */
   inputFrameHeight?: number | null;
   inputFrameAnimatedStyle?: ReturnType<typeof useAnimatedStyle<ViewStyle>>;
+  /** 文字区（inputFrame）的 UI 线程测量句柄：按在卡片上拖动调高时据此区分文字区与留白。 */
+  inputFrameRef?: AnimatedRef<ViewInstance>;
   /**
    * 输入区（inputFrame）的最小高度。给语音听写用：听写期间「点输入区停止听写」的命中层
    * 盖在 inputFrame 上，而单行听写时 inputFrame 只有 28pt，不满足触控目标 44pt；
@@ -241,6 +243,7 @@ export function MobileComposerInputRow({
   floatingVoiceButtonStyle,
   inputFrameHeight,
   inputFrameAnimatedStyle,
+  inputFrameRef,
   inputFrameMinHeight,
   inputElement,
   inputOverlay,
@@ -371,6 +374,8 @@ export function MobileComposerInputRow({
       >
         {cardLayout ? null : leading}
         <Reanimated.View
+          ref={inputFrameRef}
+          collapsable={false}
           style={[
             styles.inputFrame,
             // 收起单行与 34pt + 并排：输入盒在行内居中。
@@ -547,7 +552,9 @@ function ComposerFoldingSection({ progress, onNaturalHeight, children }: {
     <View style={{ flexShrink: 0 }} onLayout={event => {
       // Never feed an animated/constrained measurement back into its own height.
       // Keep the natural expanded size until the gesture has fully reversed.
-      if ((progress?.value ?? 0) === 0) {
+      // Dragging the collapsed pill open mounts this folded: take the first
+      // (unconstrained inner) measurement so the toolbar can unfold with the finger.
+      if ((progress?.value ?? 0) === 0 || measuredHeight.value === 0) {
         measuredHeight.value = event.nativeEvent.layout.height;
         onNaturalHeight?.(event.nativeEvent.layout.height);
       }

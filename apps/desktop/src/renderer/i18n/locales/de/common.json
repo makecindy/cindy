@@ -19729,8 +19729,8 @@
     "removeTitle": "{{name}} entfernen?",
     "removeDescription": "Cindy weist diesem Konto keine Aufgaben mehr zu. Die CLI-Anmeldung und der Gesprächsverlauf bleiben auf diesem Computer erhalten.",
     "failed": "Das Konto konnte nicht gelesen oder aktualisiert werden. Prüfe die CLI-Anmeldung und die Netzwerkverbindung und versuche es erneut.",
-    "used": "{{percent}}% verbraucht",
     "directory": "Kontoordner",
+    "loginAgain": "Erneut anmelden",
     "login": "Anmelden"
   }
 }
