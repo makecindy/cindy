@@ -289,7 +289,7 @@ export function BotGroupComposer({
   const plus = !divisionSupported && !attachmentsSupported ? null : attachmentsEnabled
     // The same panel as a 1:1 chat's 「+」: attachments, then the group's own 安排分工.
     ? plusButton(() => { tray.armMediaTap(); setSheetOpen(true); })
-    : divisionBlocked
+    : !divisionSupported ? plusButton(undefined) : divisionBlocked
       // Nothing to pick while a plan runs or waits; say why instead of showing a dead menu.
       ? plusButton(() => Alert.alert(t('groupChat.composer.division'), t('groupChat.composer.divisionBusy')))
       : <BotGroupMenu title={moreLabel} accessibilityLabel={moreLabel} disabled={!online} testID="botGroup.composer.menu"
@@ -395,13 +395,13 @@ export function BotGroupComposer({
         onPreview={setPreviewId} onRemove={tray.removeAttachment} onRemovePending={tray.removePendingUpload}
         onRetryPending={tray.retryPendingUpload} removeDisabled={sending} testIDPrefix="botGroup" /> : null}
       toolbar={cardActive ? <>
-        <ComposerToolbarLeftGroup>{topic ? <Pressable accessibilityRole="checkbox"
+        <ComposerToolbarLeftGroup>{plus}{topic ? <Pressable accessibilityRole="checkbox"
           accessibilityState={{ checked: alsoSendToMain, disabled: sending || !online }} disabled={sending || !online}
           onPress={() => { setAlsoSendToMain(value => !value); attemptRef.current = null; }}
           style={styles.topicOption} testID="botGroup.thread.alsoSend">
           {alsoSendToMain ? <CircleCheck size={iconSize.lg} color={colors.textPrimary} /> : <Circle size={iconSize.lg} color={colors.textSecondary} />}
           <Text style={styles.topicOptionText}>{t('groupChat.thread.alsoSend')}</Text>
-        </Pressable> : plus}{!topic && maskIndicator}</ComposerToolbarLeftGroup>
+        </Pressable> : maskIndicator}</ComposerToolbarLeftGroup>
         <ComposerToolbarSpacer />
         {trailing}
       </> : undefined}
@@ -415,8 +415,7 @@ export function BotGroupComposer({
       title={moreLabel}
       keyboardAvoidingBehavior={Platform.OS === 'ios' ? 'padding' : 'height'}
       error={tray.error}
-      // The panel only opens while attachments are possible; if the computer drops off meanwhile
-      // the attachment entries go away and only 安排分工 is left.
+      // If attachment access goes away while open, keep only supported group actions.
       media={mediaLibraryEnabled && attachmentsEnabled ? <RecentPhotosStrip busyAssetIds={tray.busyAssetIds}
         enabled={sheetOpen} onToggleAsset={tray.toggleMediaAsset} selectedAssetIds={tray.selectedAssetIds}
         testID="botGroup.contextSheetPhotos" /> : null}
@@ -433,13 +432,13 @@ export function BotGroupComposer({
           icon={<Folder color={colors.textPrimary} size={iconSize.lg} strokeWidth={iconStroke.regular} />}
           label={t('session.common.file')} onPress={() => void tray.addDocument()} testID="botGroup.contextSheetFileRow" />
       </ContextSheetGroup> : null}
-      <ContextSheetGroup label={t('session.common.groupMode')}>
+      {divisionSupported ? <ContextSheetGroup label={t('session.common.groupMode')}>
         <ContextSheetRow disabled={divisionBlocked} dismissBeforePress
           icon={<Users color={colors.textPrimary} size={iconSize.lg} strokeWidth={iconStroke.regular} />}
           label={t('groupChat.composer.division')}
           detail={t(divisionBlocked ? 'groupChat.composer.divisionBusy' : 'groupChat.composer.divisionDescription')}
           onPress={() => { setDivision(true); inputRef.current?.focus(); }} testID="botGroup.contextSheetDivisionRow" />
-      </ContextSheetGroup>
+      </ContextSheetGroup> : null}
     </ContextSheet>
     {pendingImagePreview.host}
     {previewUrl ? <ImageLightbox images={tray.galleryImages} initialUrl={previewUrl} onClose={() => setPreviewId(null)} /> : null}
@@ -447,8 +446,8 @@ export function BotGroupComposer({
 }
 
 const makeStyles = (colors: ThemeColors) => StyleSheet.create({
-  topicOption: { flexDirection: 'row', alignItems: 'center', gap: spacing.sm, minHeight: 44 },
-  topicOptionText: { color: colors.textSecondary, fontSize: typeScale.footnote, lineHeight: lineHeight.caption, fontWeight: fontWeight.regular },
+  topicOption: { flexDirection: 'row', flexShrink: 1, minWidth: 0, alignItems: 'center', gap: spacing.sm, minHeight: 44 },
+  topicOptionText: { flexShrink: 1, color: colors.textSecondary, fontSize: typeScale.footnote, lineHeight: lineHeight.caption, fontWeight: fontWeight.regular },
   wrap: { gap: spacing.sm, paddingHorizontal: spacing.lg, paddingTop: spacing.sm, paddingBottom: spacing.sm },
   // The badge brings its own trailing margin (shared with the task composer).
   leading: { flexDirection: 'row', alignItems: 'center', gap: spacing.xs },

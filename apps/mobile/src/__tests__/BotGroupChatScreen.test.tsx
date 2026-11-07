@@ -1494,6 +1494,34 @@ describe('group attachments', () => {
   }
   async function focusComposer() { await act(async () => { h.row.onFocus(); }); }
 
+  // Unit regression: the real screen hid both attachment support and + in topics.
+  // Main-group cases below never entered a topic. A supported topic must open the
+  // shared pickers, without exposing the unsupported arrangement action.
+  it('opens topic attachments beside also-send and removes unavailable actions', async () => {
+    h.chat.server = true;
+    const data = group({ supportsAttachments: true });
+    await render(data, 'ready', 'm1', '');
+    expect(byId('botGroup.thread.alsoSend')).not.toBeNull();
+    await click('botGroup.composer.more');
+    expect(byId('botGroup.contextSheetDivisionRow')).toBeNull();
+    await click('botGroup.contextSheetPhotoRow');
+    expect(h.local.addImages).toHaveBeenLastCalledWith('library');
+    await click('botGroup.contextSheetCameraRow');
+    expect(h.local.addImages).toHaveBeenLastCalledWith('camera');
+    await click('botGroup.contextSheetFileRow');
+    expect(h.local.addDocument).toHaveBeenCalledOnce();
+    await act(async () => h.row.onPasteImages(['file:///cache/cindy-composer-paste-topic.png']));
+    expect(h.local.addPastedImages).toHaveBeenCalledOnce();
+    h.chat.online = false;
+    await render(data, 'ready', 'm1', '');
+    expect(byId('botGroup.composer.more')?.disabled).toBe(true);
+    expect(byId('botGroup.contextSheetPhotoRow')).toBeNull();
+    expect(byId('botGroup.contextSheetDivisionRow')).toBeNull();
+    expect(byId('botGroup.composer.menu')).toBeNull();
+    await render({ ...data, supportsAttachments: undefined }, 'ready', 'm1', '');
+    expect(byId('botGroup.composer.more')).toBeNull();
+  });
+
   it('offers no attachments when the computer does not support them, and ignores pasted images', async () => {
     await render(group({ openPlan: null }));
     expect(byId('botGroup.composer.menu.action.division')).not.toBeNull();
@@ -1569,8 +1597,10 @@ describe('group attachments', () => {
     expect(h.discarded).toEqual([]);
   });
 
-  it('sends attachments without text and keeps them when the send fails', async () => {
-    await render(group({ openPlan: null, supportsAttachments: true, round: { status: 'running', speakers: [], canContinue: false } }));
+  it.each([false, true])('sends attachments without text and keeps them when the send fails (topic=%s)', async topic => {
+    h.chat.server = topic;
+    await render(group({ openPlan: null, supportsAttachments: true, round: { status: 'running', speakers: [], canContinue: false } }), 'ready', topic ? 'm1' : undefined, topic ? '' : 'mac');
+    if (topic) await click('botGroup.thread.alsoSend');
     const file = uploaded('att-2', 'spec.pdf', 'pdf');
     await finishUpload(file);
     await focusComposer();
@@ -1580,6 +1610,7 @@ describe('group attachments', () => {
     h.chat.act.mockRejectedValueOnce(new Error('[NOT_CONNECTED] offline'));
     await click('botGroup.composer.send');
     expect(h.chat.act).toHaveBeenLastCalledWith('send', expect.objectContaining({ text: '', clientId: 'uuid-1', attachments: [file] }));
+    expect(h.chat.act.mock.calls.at(-1)?.[1].alsoSendToMain).toBe(topic ? true : undefined);
     expect(h.alert).toHaveBeenCalledWith('groupChat.composer.sendFailed');
     expect(byId('tray.attachment.att-2')).not.toBeNull();
     // The retry is the same message.
@@ -1588,8 +1619,9 @@ describe('group attachments', () => {
     expect(byId('tray.attachment.att-2')).toBeNull();
   });
 
-  it('does not send while an upload failed, and reclaims a removed upload', async () => {
-    await render(group({ openPlan: null, supportsAttachments: true }));
+  it.each([false, true])('does not send while an upload failed, and reclaims a removed upload (topic=%s)', async topic => {
+    h.chat.server = topic;
+    await render(group({ openPlan: null, supportsAttachments: true }), 'ready', topic ? 'm1' : undefined, topic ? '' : 'mac');
     const photo = uploaded('att-3', 'b.jpg');
     await finishUpload(photo);
     await focusComposer();
@@ -1601,6 +1633,22 @@ describe('group attachments', () => {
     await click('tray.attachment.att-3');
     expect(h.discarded).toEqual([photo]);
     expect(byId('botGroup.attachmentTray')).toBeNull();
+  });
+
+  it('does not carry topic attachments or draft into another topic or the main group', async () => {
+    h.chat.server = true;
+    const data = group({ supportsAttachments: true });
+    await render(data, 'ready', 'm1', '');
+    await finishUpload(uploaded('topic-photo', 'photo.jpg'));
+    await act(async () => h.row.onChangeText('Only for the first topic'));
+    await click('botGroup.thread.alsoSend');
+    await render(data, 'ready', 'm2', '');
+    expect(byId('botGroup.attachmentTray')).toBeNull();
+    expect(h.row.value).toBe('');
+    expect(byId('botGroup.composer.send')?.disabled).toBe(true);
+    await render(data, 'ready', undefined, '');
+    expect(byId('botGroup.attachmentTray')).toBeNull();
+    expect(h.chat.act).not.toHaveBeenCalled();
   });
 
   // Leaving mid-upload drops the photo: ask first, and never send the text alone.
