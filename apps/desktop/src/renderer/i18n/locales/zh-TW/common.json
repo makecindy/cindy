@@ -3744,6 +3744,8 @@
           "xaiVideosHint": "使用此連線的位址與 API Key 提交、查詢影片任務。開啟後，此連線將作為供應商唯一的影片連線。缺少的模型可手動新增 ID，再到模型詳情宣告影片能力。",
           "minimaxVideos": "使用 MiniMax 相容影片介面",
           "minimaxVideosHint": "使用此連線的位址與 API Key 提交、查詢 MiniMax 影片任務（如 MiniMax-H3）。每個供應商只能使用一種影片介面。缺少的模型可手動新增 ID，再到模型詳情宣告影片能力。",
+          "openaiVideos": "使用 OpenAI 相容影片介面（/v1/videos）",
+          "openaiVideosHint": "使用此連線的位址與 API Key，以 tu-zi 等多數中轉站採用的 POST /v1/videos 格式提交、查詢影片任務，MiniMax-H3 等模型也可透過它使用。每個供應商只能使用一種影片介面。缺少的模型可手動新增 ID，再到模型詳情宣告影片能力。",
           "runtimeSupportsImageGeneration": "支援圖片生成與編輯",
           "runtimeSupportsImageGenerationHelpLabel": "瞭解圖片生成與編輯支援",
           "runtimeSupportsImageGenerationConditionTitle": "適用條件",

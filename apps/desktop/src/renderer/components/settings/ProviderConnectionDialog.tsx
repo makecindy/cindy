@@ -3104,6 +3104,7 @@ export function ProviderConnectionDialog({
                     {([
                       ['xai-videos', 'video-api', t('settings.providers.custom.fields.xaiVideos'), t('settings.providers.custom.fields.xaiVideosHint')],
                       ['minimax-videos', 'minimax-video-api', t('settings.providers.custom.fields.minimaxVideos'), t('settings.providers.custom.fields.minimaxVideosHint')],
+                      ['openai-videos', 'openai-video-api', t('settings.providers.custom.fields.openaiVideos'), t('settings.providers.custom.fields.openaiVideosHint')],
                     ] as const).map(([api, idSuffix, label, hint]) => (
                       <div key={api} className="flex flex-col gap-1.5">
                         <label className="flex cursor-pointer items-center gap-2 text-13 text-[var(--settings-section-title)]">

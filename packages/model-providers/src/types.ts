@@ -57,7 +57,7 @@ export const PI_MODEL_APIS = [
 export type PiModelApi = (typeof PI_MODEL_APIS)[number];
 
 /** Standalone async video APIs a custom connection can opt into, independent of its chat protocol. */
-export const PROVIDER_VIDEO_APIS = ["xai-videos", "minimax-videos"] as const;
+export const PROVIDER_VIDEO_APIS = ["xai-videos", "minimax-videos", "openai-videos"] as const;
 export type ProviderVideoApi = (typeof PROVIDER_VIDEO_APIS)[number];
 export function isProviderVideoApi(value: unknown): value is ProviderVideoApi {
   return (PROVIDER_VIDEO_APIS as readonly unknown[]).includes(value);

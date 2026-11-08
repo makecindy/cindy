@@ -3834,6 +3834,8 @@
           "xaiVideosHint": "Utiliza la dirección de esta conexión y la clave API para enviar y sondear tareas de video. Al habilitarlo, se selecciona esta como la única conexión de video del proveedor. Agregue las ID de modelo que faltan y luego declare la capacidad de video en los detalles del modelo.",
           "minimaxVideos": "Usar API de vídeos compatible con MiniMax",
           "minimaxVideosHint": "Utiliza la dirección y la clave API de esta conexión para enviar y sondear tareas de vídeo de MiniMax, como MiniMax-H3. Un proveedor solo puede usar una API de vídeo. Agregue las ID de modelo que faltan y luego declare la capacidad de vídeo en los detalles del modelo.",
+          "openaiVideos": "Usar API de vídeos compatible con OpenAI (/v1/videos)",
+          "openaiVideosHint": "Utiliza la dirección y la clave API de esta conexión para enviar y sondear tareas con POST /v1/videos, el formato que usan la mayoría de los relés como tu-zi; modelos como MiniMax-H3 funcionan a través de él. Un proveedor solo puede usar una API de vídeo. Agregue las ID de modelo que faltan y luego declare la capacidad de vídeo en los detalles del modelo.",
           "runtimeSupportsImageGeneration": "Admite generación y edición de imágenes.",
           "runtimeSupportsImageGenerationHelpLabel": "Acerca del soporte para la generación y edición de imágenes",
           "runtimeSupportsImageGenerationConditionTitle": "Cuando habilitar",

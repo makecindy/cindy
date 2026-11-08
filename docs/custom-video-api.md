@@ -1,4 +1,4 @@
-# 自定义供应商的视频接口（xAI / MiniMax 兼容）
+# 自定义供应商的视频接口（xAI / MiniMax / 中转站 /v1/videos 兼容）
 
 自定义 API、CPA/Sub2API 等 HTTP 中转只要提供同一视频协议，就共用 Core
 已有的异步调用、持久化、轮询、下载和媒体入库流程。连接产品名、CLI 如何登录
@@ -64,9 +64,34 @@ MiniMax V2 视频接口的中转。
 [创建任务](https://platform.minimax.io/docs/api-reference/video-generation-v2-create)、
 [查询任务](https://platform.minimax.io/docs/api-reference/video-generation-v2-query)。
 
+## 中转站 /v1/videos 接口
+
+多数中转站（tu-zi、new-api 系网关等）把各家视频模型统一成 OpenAI Videos 形式的任务接口。
+连接设置里的「使用 OpenAI 兼容视频接口（/v1/videos）」开启它（`videoApi: "openai-videos"`），
+与 xAI、MiniMax 选项互斥。地址规则与 xAI 相同：保留 `/v1`。
+
+| 阶段 | 接口 | 响应 |
+| --- | --- | --- |
+| 生成/图生视频 | `POST /videos`，JSON | `id` |
+| 查询原任务 | `GET /videos/{id}` | `status`：`queued`/`in_progress`，完成为 `completed`，失败为 `failed`/`cancelled`/`expired` |
+| 成品 | `video_url`（tu-zi）或 `url`（new-api） | 中转站自己的 `/videos/<原任务ID>/content` 用原连接凭证读取；该中转站域名（含子域名）下的其他地址自动下载，不带凭证；其他主机走下载审批 |
+
+- 请求体按 tu-zi 文档的 MiniMax-H3 写法：必填 `prompt`；OpenAI 风格字段 `seconds`（字符串）、`size`，
+  与模型自身字段 `content`、`duration`、`ratio`、`resolution` 可以并存，另有可选 `watermark`。
+  `content` 沿用上文 MiniMax 的规则：一条 text，图生视频再放 1–2 张首帧／尾帧；图生视频必须用
+  `content` 传图。文生视频不能用 `adaptive` 画幅。各字段的取值范围由中转站和模型决定，客户端只
+  做类型与格式检查。
+- 参考素材、remix、`input_reference` 等其他字段在付费提交前拒绝。各家中转站对字段的映射不同，
+  验收以实际出片为准。
+- 成片地址只在响应里给出时才读取。只提供 `/videos/{id}/content`、不在查询结果里给地址的中转站，
+  本协议暂不支持。
+
+依据：[tu-zi 视频生成任务 API](https://api.tu-zi.com/docs/api/video)、
+[new-api 查询视频](https://github.com/QuantumNous/new-api-docs/blob/main/docs/api/query-video.md)。
+
 ## 兼容与失败恢复
 
-- `videoApi`（`"xai-videos"` 或 `"minimax-videos"`）是可选用户配置，缺省关闭；不自动改变已装 Art 的偏好、
+- `videoApi`（`"xai-videos"`、`"minimax-videos"` 或 `"openai-videos"`）是可选用户配置，缺省关闭；不自动改变已装 Art 的偏好、
   批准记录、权限指纹或付费来源。此次改动属于客户端，无需更新 Art 包。
 - 视频与图片分别绑定明确的连接；同名模型不会从其他引擎借用 Key。多个明确来源
   冲突时拒绝派发，在连接设置重新选择唯一视频来源即可恢复。

@@ -3834,6 +3834,8 @@
           "xaiVideosHint": "Usa o endereço e a chave de API desta conexão para enviar tarefas de vídeo e consultar seu status. Ao ativar, esta passa a ser a única conexão de vídeo do provedor. Adicione os IDs de modelos ausentes e depois declare a capacidade de vídeo nos detalhes do modelo.",
           "minimaxVideos": "Usar API de vídeos compatível com MiniMax",
           "minimaxVideosHint": "Usa o endereço e a chave de API desta conexão para enviar tarefas de vídeo do MiniMax, como o MiniMax-H3, e consultar seu status. Um provedor só pode usar uma API de vídeo. Adicione os IDs de modelos ausentes e depois declare a capacidade de vídeo nos detalhes do modelo.",
+          "openaiVideos": "Usar API de vídeos compatível com OpenAI (/v1/videos)",
+          "openaiVideosHint": "Usa o endereço e a chave de API desta conexão para enviar tarefas com POST /v1/videos e consultar seu status, o formato usado pela maioria dos relays, como o tu-zi; modelos como o MiniMax-H3 funcionam por ele. Um provedor só pode usar uma API de vídeo. Adicione os IDs de modelos ausentes e depois declare a capacidade de vídeo nos detalhes do modelo.",
           "runtimeSupportsImageGeneration": "Oferece geração e edição de imagens",
           "runtimeSupportsImageGenerationHelpLabel": "Sobre o suporte à geração e edição de imagens",
           "runtimeSupportsImageGenerationConditionTitle": "Quando ativar",

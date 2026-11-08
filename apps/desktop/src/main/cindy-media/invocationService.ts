@@ -46,11 +46,14 @@ import {
 } from './providerMediaRuntime.js';
 import {
   CLIENT_PROVIDER_MINIMAX_VIDEO_GUIDE_ID,
+  CLIENT_PROVIDER_OPENAI_VIDEO_GUIDE_ID,
   CLIENT_PROVIDER_VIDEO_GUIDE_ID,
   customVideoGuide,
   minimaxVideoGuide,
+  openaiVideoGuide,
   validateCustomVideoBody,
   validateMinimaxVideoBody,
+  validateOpenaiVideoBody,
 } from './customVideoProtocol.js';
 import { fetchVideoTaskContent, isVideoTaskContentRef } from './videoTaskContent.js';
 import { sniffMediaMime, additionalMp3BytesNeeded } from './sniffMediaMime.js';
@@ -275,12 +278,13 @@ function isClientProviderInvocation(invocation: StoredMediaInvocation): boolean 
 }
 
 function isClientVideoInvocation(invocation: StoredMediaInvocation): boolean {
-  return invocation.guide.guideId === CLIENT_PROVIDER_VIDEO_GUIDE_ID ||
-    invocation.guide.guideId === CLIENT_PROVIDER_MINIMAX_VIDEO_GUIDE_ID;
+  return [CLIENT_PROVIDER_VIDEO_GUIDE_ID, CLIENT_PROVIDER_MINIMAX_VIDEO_GUIDE_ID, CLIENT_PROVIDER_OPENAI_VIDEO_GUIDE_ID]
+    .includes(invocation.guide.guideId);
 }
 
 function validateClientVideoBody(invocation: StoredMediaInvocation, body: Record<string, unknown>): void {
-  const validate = invocation.guide.guideId === CLIENT_PROVIDER_MINIMAX_VIDEO_GUIDE_ID ? validateMinimaxVideoBody : validateCustomVideoBody;
+  const validate = invocation.guide.guideId === CLIENT_PROVIDER_MINIMAX_VIDEO_GUIDE_ID ? validateMinimaxVideoBody
+    : invocation.guide.guideId === CLIENT_PROVIDER_OPENAI_VIDEO_GUIDE_ID ? validateOpenaiVideoBody : validateCustomVideoBody;
   try { validate(body, invocation.capability === 'video.image_to_video'); }
   catch (error) { throw new MediaInvocationError('REQUEST_INVALID', (error as Error).message); }
 }
@@ -1301,7 +1305,9 @@ async function prepareInvocation(
     } else if (providerModel.videoProtocol) {
       const connection = resolveProviderVideoConnection(model.providerId, resolvedModelId);
       if (!connection) return failure('CONNECTION_UNAVAILABLE', '视频来源的接口或凭证未就绪');
-      preparedGuide = (providerModel.videoProtocol === 'minimax-videos' ? minimaxVideoGuide : customVideoGuide)(providerModel, capability, connection.revision);
+      preparedGuide = providerModel.videoProtocol === 'openai-videos'
+        ? openaiVideoGuide(providerModel, capability, connection.revision, connection.baseUrl)
+        : (providerModel.videoProtocol === 'minimax-videos' ? minimaxVideoGuide : customVideoGuide)(providerModel, capability, connection.revision);
     } else {
       return failure('CAPABILITY_NOT_SUPPORTED', '该第三方 Provider 当前不支持请求的媒体能力');
     }

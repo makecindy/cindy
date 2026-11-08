@@ -333,7 +333,7 @@ describe('Cindy Core media invocation state and security boundary', () => {
     mocks.prune.mockClear();
   });
 
-  function setupCustomVideo(videoProtocol: 'xai-videos' | 'minimax-videos' = 'xai-videos') {
+  function setupCustomVideo(videoProtocol: 'xai-videos' | 'minimax-videos' | 'openai-videos' = 'xai-videos') {
     const model = { id: 'private-video', name: 'Video', providerId: 'relay', mode: 'video_generation', videoProtocol, modalities: { input: ['text', 'image'], output: ['video'] } };
     // The MiniMax connection is rooted at the API origin; its paths carry their own /v2 version.
     const connection = { baseUrl: videoProtocol === 'minimax-videos' ? 'https://relay.example' : 'https://relay.example/v1', headers: { authorization: 'Bearer test-relay-key' }, revision: '1:original', assertCurrent: vi.fn() };
@@ -456,6 +456,39 @@ describe('Cindy Core media invocation state and security boundary', () => {
     expect(await callCindyMedia({ action: 'poll', invocationId })).toMatchObject({ status: 'complete', xdt_video_urls: [`cindy-media://blobs/${'a'.repeat(64)}.mp4`] });
     expect(mocks.outboundFetch.mock.calls[1]![0]).toBe('https://relay.example/v2/query/video_generation/paid-task');
     expect(mocks.outboundFetch.mock.calls[3]![1].headers ?? {}).not.toHaveProperty('authorization');
+    expect(mocks.outboundFetch.mock.calls.filter(([, call]) => call.method === 'POST')).toHaveLength(1);
+  });
+
+  // Relay /v1/videos (tu-zi style): the documented MiniMax-H3 body is sent as-is under /v1,
+  // and the result is read from video_url (public) or url (the relay's own private content endpoint).
+  it.each([
+    ['video_url', 'https://relay.example/files/result.mp4', false],
+    ['url', 'https://relay.example/v1/videos/paid-task/content', true],
+  ] as const)('custom relay /v1/videos submits one task and ingests %s', async (field, resultUrl, privateContent) => {
+    setupCustomVideo('openai-videos');
+    mocks.ingestMedia.mockResolvedValue({ url: `cindy-media://blobs/${'a'.repeat(64)}.mp4` });
+    const prepared = await callCindyMedia({ action: 'prepare', providerId: 'relay', modelId: 'private-video', capability: 'video.generate' });
+    const invocationId = prepared.invocation_id as string;
+    expect(parsePreparedMediaInvocationGuide(JSON.parse(JSON.stringify(mocks.rows.get(invocationId)?.guide)))).toMatchObject({ ok: true });
+    mocks.outboundFetch.mockResolvedValueOnce(Response.json({ id: 'paid-task', status: 'queued' }))
+      .mockResolvedValueOnce(Response.json({ id: 'paid-task', status: 'in_progress' }))
+      .mockResolvedValueOnce(Response.json({ id: 'paid-task', status: 'completed', [field]: resultUrl }))
+      .mockResolvedValueOnce(new Response(MP4, { headers: { 'content-type': 'video/mp4' } }));
+    const body = { content: [{ text: '一个男孩在海边打篮球', type: 'text' }], duration: 5, ratio: '16:9', resolution: '768P', prompt: '一个男孩在海边打篮球', seconds: '8', size: '1280x720', watermark: false };
+    expect(await callCindyMedia({ action: 'request', invocationId, body })).toMatchObject({ ok: true, status: 'pending' });
+    const [url, init] = mocks.outboundFetch.mock.calls[0]!;
+    expect(url).toBe('https://relay.example/v1/videos');
+    expect(init.headers.authorization).toBe('Bearer test-relay-key');
+    expect(JSON.parse(init.body)).toEqual({ ...body, model: 'private-video' });
+    expect(await callCindyMedia({ action: 'poll', invocationId })).toMatchObject({ status: 'pending' });
+    expect(await callCindyMedia({ action: 'poll', invocationId })).toMatchObject({ status: 'complete', xdt_video_urls: [`cindy-media://blobs/${'a'.repeat(64)}.mp4`] });
+    expect(mocks.outboundFetch.mock.calls[1]![0]).toBe('https://relay.example/v1/videos/paid-task');
+    const download = mocks.outboundFetch.mock.calls[3]!;
+    if (privateContent) {
+      expect(download[0]).toBe('https://relay.example/v1/videos/paid-task/content');
+      expect(download[1].headers.authorization).toBe('Bearer test-relay-key');
+      expect(download[1].redirect).toBe('manual');
+    } else expect(download[1].headers ?? {}).not.toHaveProperty('authorization');
     expect(mocks.outboundFetch.mock.calls.filter(([, call]) => call.method === 'POST')).toHaveLength(1);
   });
 

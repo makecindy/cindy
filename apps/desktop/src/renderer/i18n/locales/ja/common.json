@@ -3744,6 +3744,8 @@
           "xaiVideosHint": "この接続のアドレスと API キーで動画タスクを送信・確認します。有効にすると、この接続がプロバイダーの唯一の動画接続になります。不足するモデル ID を追加し、モデル詳細で動画機能を設定してください。",
           "minimaxVideos": "MiniMax 互換の動画 API を使用",
           "minimaxVideosHint": "この接続のアドレスと API キーで MiniMax-H3 などの MiniMax 動画タスクを送信・確認します。プロバイダーが使える動画 API は 1 つだけです。不足するモデル ID を追加し、モデル詳細で動画機能を設定してください。",
+          "openaiVideos": "OpenAI 互換の動画 API を使用（/v1/videos）",
+          "openaiVideosHint": "この接続のアドレスと API キーで、tu-zi など多くの中継サービスが使う POST /v1/videos 形式のタスクを送信・確認します。MiniMax-H3 などのモデルもこの形式で使えます。プロバイダーが使える動画 API は 1 つだけです。不足するモデル ID を追加し、モデル詳細で動画機能を設定してください。",
           "runtimeSupportsImageGeneration": "画像の生成と編集に対応",
           "runtimeSupportsImageGenerationHelpLabel": "画像の生成と編集への対応について",
           "runtimeSupportsImageGenerationConditionTitle": "適用条件",
