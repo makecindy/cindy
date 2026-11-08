@@ -103,6 +103,7 @@ import {
 } from './sessionQueueInspection.js';
 
 const log = createLogger('maker-input-coordinator');
+export const SESSION_REWIND_INPUT_LOCK_ID = 'session-rewind';
 const SESSION_RUNNING_RETRY_DELAY_MS = 250;
 /**
  * Codex 的 reconnect-stalled / ordinary idle 清理要等两次 turn/interrupt ACK，每次最多 10s。
@@ -1930,10 +1931,20 @@ export class AgentInputCoordinator {
   /** Preserve queued input but keep it paused while rewind changes history. */
   pausePendingQueueForRewind(sessionId: string): AgentInputProjection {
     const state = this.getState(sessionId);
+    this.blockAutomaticOrcaReports(state);
     state.queuePaused = state.pendingQueue.length > 0 || state.pendingCompacts.length > 0;
     state.queuePausedByRestore = false;
     this.emit(sessionId);
     return this.getProjection(sessionId);
+  }
+
+  /** Explicit history/Stop boundaries also apply to reports arriving later. */
+  private blockAutomaticOrcaReports(state: SessionInputState): void {
+    this.stoppedOrcaReportRestores.add(state);
+    for (const item of [...state.pendingQueue, ...(state.activeTurn?.item ? [state.activeTurn.item] : [])]) {
+      if (item.orcaReportDelivery) item.orcaReportDelivery.recoveryBlocked = true;
+      this.restoredOrcaReports.delete(item);
+    }
   }
 
   /** 近期已受理 clientId 窗口容量:覆盖控制端秒级重发窗口即可,防无界增长。 */
@@ -2016,6 +2027,18 @@ export class AgentInputCoordinator {
       return this.getProjection(sessionId);
     }
     item = stampHostAcceptedAt(item, state.clearBoundaryMs);
+    // Fresh host reports have already passed the dispatcher's relationship
+    // checks. Like validated snapshot reports, they may cross a restore-only
+    // pause when they reach the head, but never a user's Stop (including its
+    // resume-on-input variant). Persist that Stop for reports arriving later.
+    if (item.origin?.kind === 'orca' && item.orcaReportDelivery) {
+      if ((state.queuePaused && this.stoppedOrcaReportRestores.has(state))
+        || state.queueInteractionLocks.includes(SESSION_REWIND_INPUT_LOCK_ID)) {
+        item.orcaReportDelivery.recoveryBlocked = true;
+      } else if (!item.orcaReportDelivery.recoveryBlocked) {
+        this.restoredOrcaReports.add(item);
+      }
+    }
     this.rememberEnqueuedClientId(state, item.clientId);
     // 真的有一条**新**消息进队了 = 这个会话被别的内容推进(见 deps.onUserEnqueue)。
     // 必须放在幂等去重**之后**: 被去重丢弃的重传(弱网 / 移动端补发)压根没推进任何
@@ -2029,7 +2052,16 @@ export class AgentInputCoordinator {
     // (错误横幅那条走 retryLastError, 压根不经本入口。)
     const schedulerOrigin = isSchedulerOriginItem(item) && !isManualSchedulerContinuation(item);
     const automaticOrigin = isAutomaticOriginItem(item);
-    if (!schedulerOrigin) {
+    const recoveringReport = state.pendingQueue[0];
+    const preservesReportRecovery = item.origin?.kind === 'orca' && Boolean(item.orcaReportDelivery)
+      && state.autoResumePending?.reason === 'orca-report-preparation'
+      && state.recovery?.kind === 'queue-head' && state.recovery.clientId === recoveringReport?.clientId
+      && recoveringReport?.origin?.kind === 'orca' && Boolean(recoveringReport.orcaReportDelivery)
+      && !recoveringReport.orcaReportDelivery?.recoveryBlocked;
+    // Another accepted report is only a FIFO tail, not an intervention in the
+    // failed head. Keep both the coordinator lease and the host's retry timer.
+    const preservesAutoResume = schedulerOrigin || preservesReportRecovery;
+    if (!preservesAutoResume) {
       // 自动续跑可能已经从 pendingQueue 进入 activeTurn、但仍卡在持久化或其它
       // pre-vendor await。用户此时接管不能只作废 host waiter：那会让隐藏 Continue
       // 继续派发、而新输入排在它后面。复用 Stop 的 generation 取消边界，先确认
@@ -2046,7 +2078,7 @@ export class AgentInputCoordinator {
       if (state.recovery?.kind !== 'queue-head') {
         this.deps.onUiRetry?.(sessionId, item.clientId, 'manual');
       }
-    } else if (automaticOrigin && !schedulerOrigin) {
+    } else if (automaticOrigin && !preservesAutoResume) {
       this.deps.onAutomaticEnqueue?.(sessionId, item);
     } else if (!automaticOrigin) {
       this.deps.onUserEnqueue?.(sessionId);
@@ -2055,7 +2087,7 @@ export class AgentInputCoordinator {
         this.deps.onOwnerMessage?.(sessionId, item);
       }
     }
-    if (!schedulerOrigin) {
+    if (!preservesAutoResume) {
       // 有用户动作入队(用户自己接手,或自愈的续跑指令本身)→ 撤掉「重新连接中」提示。
       // Scheduler 只是同一串行队列里的自动输入，不代表用户接手，不能取消正在退避的
       // 自动续跑；它会保持 FIFO，等当前恢复生命周期收口后再派发。
@@ -2076,7 +2108,7 @@ export class AgentInputCoordinator {
         clientId: item.clientId,
       });
     }
-    if (!schedulerOrigin) {
+    if (!preservesAutoResume) {
       this.abandonActiveTurnRecoveryForUserAction(state);
       this.clearErrorUnlessQueueHeadBlocked(state);
     }
@@ -3153,11 +3185,7 @@ export class AgentInputCoordinator {
     if (sharedTask) opts = { ...opts, keepQueue: true };
     const state = this.getState(sessionId);
     const preserveQueue = opts?.keepQueue === true;
-    if (!this.restoredQueueSessions.has(sessionId)) this.stoppedOrcaReportRestores.add(state);
-    for (const item of [...state.pendingQueue, ...(state.activeTurn?.item ? [state.activeTurn.item] : [])]) {
-      if (item.orcaReportDelivery) item.orcaReportDelivery.recoveryBlocked = true;
-      this.restoredOrcaReports.delete(item);
-    }
+    this.blockAutomaticOrcaReports(state);
     this.supersedePendingAutoResumeRecoveries(sessionId);
     this.cancelPreparedAutoResume(sessionId, state);
     this.abortInputBoundary(sessionId);

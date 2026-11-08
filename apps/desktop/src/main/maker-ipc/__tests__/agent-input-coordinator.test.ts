@@ -13064,34 +13064,46 @@ describe('Orca report durable recovery', () => {
 
   // Exercise the real host scheduling callback with its guard and bookkeeping;
   // a hand-written retry timer would miss pending-token and retry-budget bugs.
+  function wireHostReportRecovery(h: ReturnType<typeof createHarness>) {
+    const guard = new InterruptedTurnAutoResumeGuard({ isEnabled: () => true, log: mocks.logger, random: () => 0.5 });
+    const book = new AutoResumeBookkeeping({
+      persistSuppressedError: vi.fn(), markOutcome: vi.fn(),
+      rollbackGuardPendingResume: (sid, token) => { if (token !== undefined) guard.noteResumeSendFailed(sid, token); },
+      abandonTakeover: (sid, message, token) => h.coordinator.abandonAutoResume(sid, message, token),
+    });
+    const source = readFileSync(resolve(__dirname, '..', 'register.ts'), 'utf8');
+    const start = source.indexOf('    onResumableTurnError: (');
+    const end = source.indexOf('    steerToAgent:', start);
+    const deps = {
+      inputCoordinator: h.coordinator,
+      canRecoverTurn: (signals: { message?: string }) => canRecoverUndeliveredOrcaReport(signals.message),
+      botFallbackInputs: new WeakSet(), isBotCandidateUnavailable: () => false,
+      isInterruptedTurnError, interruptedTurnAutoResumeGuard: guard,
+      log: mocks.logger, saveTurnStartedAtForDeferred: vi.fn(), autoResumeBookkeeping: book,
+      isContinuationOnlyAutoResumeReason: () => false,
+      maybeApplySessionRuntimeFallback: async () => ({ session: null }),
+      canResumeAfterRuntimeFallback: () => true,
+      contextOverflowRolloverHolder: undefined, providerGroupService: undefined,
+      failPendingSchedulerAutoResume: vi.fn(), publishUiSessionIntervention: vi.fn(),
+    };
+    const host = new Function(...Object.keys(deps), transpileModule(
+      `return ({${source.slice(start, end)}}).onResumableTurnError;`,
+      { compilerOptions: { target: ScriptTarget.ES2022 } },
+    ).outputText)(...Object.values(deps));
+    h.onResumableTurnError.mockImplementation(host);
+    const automaticStart = source.indexOf('    onAutomaticEnqueue: (');
+    const automaticEnd = source.indexOf('    onRejectedUserTurn:', automaticStart);
+    h.onAutomaticEnqueue.mockImplementation(new Function(...Object.keys(deps), transpileModule(
+      `return ({${source.slice(automaticStart, automaticEnd)}}).onAutomaticEnqueue;`,
+      { compilerOptions: { target: ScriptTarget.ES2022 } },
+    ).outputText)(...Object.values(deps)));
+  }
+
   it('retries the same report through the host scheduler and stops at its existing budget', async () => {
     vi.useFakeTimers();
     try {
       const h = createHarness();
-      const guard = new InterruptedTurnAutoResumeGuard({ isEnabled: () => true, log: mocks.logger, random: () => 0.5 });
-      const book = new AutoResumeBookkeeping({
-        persistSuppressedError: vi.fn(), markOutcome: vi.fn(),
-        rollbackGuardPendingResume: (sid, token) => { if (token !== undefined) guard.noteResumeSendFailed(sid, token); },
-        abandonTakeover: (sid, message, token) => h.coordinator.abandonAutoResume(sid, message, token),
-      });
-      const source = readFileSync(resolve(__dirname, '..', 'register.ts'), 'utf8');
-      const start = source.indexOf('    onResumableTurnError: (');
-      const end = source.indexOf('    steerToAgent:', start);
-      const deps = {
-        inputCoordinator: h.coordinator,
-        canRecoverTurn: (signals: { message?: string }) => canRecoverUndeliveredOrcaReport(signals.message),
-        botFallbackInputs: new WeakSet(), isBotCandidateUnavailable: () => false,
-        isInterruptedTurnError, interruptedTurnAutoResumeGuard: guard,
-        log: mocks.logger, saveTurnStartedAtForDeferred: vi.fn(), autoResumeBookkeeping: book,
-        isContinuationOnlyAutoResumeReason: () => false,
-        maybeApplySessionRuntimeFallback: async () => ({ session: null }),
-        canResumeAfterRuntimeFallback: () => true,
-      };
-      const host = new Function(...Object.keys(deps), transpileModule(
-        `return ({${source.slice(start, end)}}).onResumableTurnError;`,
-        { compilerOptions: { target: ScriptTarget.ES2022 } },
-      ).outputText)(...Object.values(deps));
-      h.onResumableTurnError.mockImplementation(host);
+      wireHostReportRecovery(h);
       const failure = '[REMOTE_AGENT_UNAVAILABLE] [SHARED_TASK_RECOVERY_relay] [SHARED_TASK_STAGE_owner]';
       h.sendToAgent.mockImplementation(failedBootstrap(failure));
       await h.coordinator.ensureQueueRestored('lead');
@@ -13104,6 +13116,94 @@ describe('Orca report durable recovery', () => {
       expect(h.coordinator.getProjection('lead')).toMatchObject({ error: expect.stringContaining(failure),
         recovery: { kind: 'queue-head', clientId: 'report-1' } });
     } finally { vi.useRealTimers(); }
+  });
+
+  // #9346: the single-report test missed an automatic tail cancelling the head's
+  // host retry. Unit: durable enqueue A, failed cold start, then Worker report B;
+  // the real host timer must still send A and B once each, in FIFO order.
+  it.each(['fresh', 'restored', 'completed'])('delivers subsequent Worker reports across recovery (%s)', async mode => {
+    vi.useFakeTimers();
+    try {
+      const h = createHarness({ awaitQueuePersistence: async () => {}, canRestoreOrcaReport: async () => true });
+      wireHostReportRecovery(h);
+      h.sendToAgent.mockImplementationOnce(failedBootstrap(
+        '[REMOTE_AGENT_UNAVAILABLE] [SHARED_TASK_RECOVERY_relay] [SHARED_TASK_STAGE_owner]',
+      ));
+      if (mode !== 'fresh') {
+        h.setLoadQueueSnapshot(async () => [report()]);
+        await h.coordinator.ensureQueueRestored('lead');
+      } else await h.coordinator.enqueueDurably('lead', report());
+      await vi.advanceTimersByTimeAsync(0);
+      expect(h.coordinator.isAutoResumePending('lead')).toBe(true);
+      const enqueueNext = () => h.coordinator.enqueueDurably('lead', { ...report(), clientId: 'report-2',
+        origin: { kind: 'orca', senderLabel: 'second reviewer', senderSessionId: 'worker-session-2' },
+        orcaReportDelivery: { workerId: 'worker-2' },
+      });
+      if (mode !== 'completed') await enqueueNext();
+      await vi.advanceTimersByTimeAsync(120_000);
+      expect(h.sendToAgent.mock.calls.map(call => call[3].persistUserMessage?.clientId))
+        .toEqual(['report-1', 'report-1']);
+      h.setRunning(false);
+      h.coordinator.onTurnEvent('lead', 'done');
+      await flush();
+      if (mode === 'completed') await enqueueNext();
+      await vi.advanceTimersByTimeAsync(0);
+      expect(h.sendToAgent.mock.calls.map(call => call[3].persistUserMessage?.clientId))
+        .toEqual(['report-1', 'report-1', 'report-2']);
+      expect(h.onUserMessagePersisted.mock.calls.map(call => call[1].clientId))
+        .toEqual(['report-1', 'report-2']);
+    } finally { vi.useRealTimers(); }
+  });
+
+  // A new report's restore eligibility must not release ordinary inputs or a
+  // Stop. Isolate B in the second snapshot so a blocked A cannot mask a replay.
+  it.each(['ordinary', 'stop', 'restart-stop'] as const)('keeps a new report behind the %s pause boundary', async mode => {
+    const h = createHarness({ awaitQueuePersistence: async () => {}, canRestoreOrcaReport: async () => true });
+    h.setLoadQueueSnapshot(async () => [makeItem('owner', 'Owner input')]);
+    await h.coordinator.ensureQueueRestored('lead');
+    if (mode !== 'ordinary') h.coordinator.stop('lead', {
+      keepQueue: true, pauseQueue: true, resumeOnUserInput: mode === 'restart-stop',
+    });
+    await h.coordinator.enqueueDurably('lead', report());
+    await flush();
+    expect(h.sendToAgent).not.toHaveBeenCalled();
+    if (mode === 'ordinary') {
+      h.coordinator.remove('lead', 'owner');
+      await flush();
+      expect(h.sendToAgent.mock.calls.map(call => call[3].persistUserMessage?.clientId)).toEqual(['report-1']);
+    } else {
+      const restarted = createHarness({ canRestoreOrcaReport: async () => true });
+      restarted.setLoadQueueSnapshot(async () => h.persistQueueSnapshot.mock.calls.at(-1)![1]
+        .filter(item => item.clientId === 'report-1'));
+      await restarted.coordinator.ensureQueueRestored('lead');
+      await flush();
+      expect(restarted.sendToAgent).not.toHaveBeenCalled();
+      restarted.coordinator.resume('lead');
+      await flush();
+      expect(restarted.sendToAgent).toHaveBeenCalledOnce();
+    }
+  });
+
+  // Idle rewind uses a pause entry rather than Stop; both the old report and
+  // a later arrival must retain that explicit pause across process recovery.
+  it.each([false, true])('keeps reports paused after an idle rewind and restart (initiallyEmpty=%s)', async initiallyEmpty => {
+    const h = createHarness({ awaitQueuePersistence: async () => {}, canRestoreOrcaReport: async () => true });
+    h.setLoadQueueSnapshot(async () => initiallyEmpty ? [] : [makeItem('owner', 'Owner input'), report()]);
+    await h.coordinator.ensureQueueRestored('lead');
+    h.coordinator.setInteractionLock('lead', 'session-rewind', true, { preserveOnStop: true });
+    h.coordinator.pausePendingQueueForRewind('lead');
+    await h.coordinator.enqueueDurably('lead', { ...report(), clientId: 'report-2' });
+    const saved = h.persistQueueSnapshot.mock.calls.at(-1)![1];
+    for (const clientId of initiallyEmpty ? ['report-2'] : ['report-1', 'report-2']) {
+      const restarted = createHarness({ canRestoreOrcaReport: async () => true });
+      restarted.setLoadQueueSnapshot(async () => saved.filter(item => item.clientId === clientId));
+      await restarted.coordinator.ensureQueueRestored('lead');
+      await flush();
+      expect(restarted.sendToAgent).not.toHaveBeenCalled();
+      restarted.coordinator.resume('lead');
+      await flush();
+      expect(restarted.sendToAgent).toHaveBeenCalledOnce();
+    }
   });
 
   it('does not dispatch a report before persistence or after a failed receipt', async () => {
