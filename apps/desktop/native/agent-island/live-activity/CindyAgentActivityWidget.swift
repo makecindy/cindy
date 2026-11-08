@@ -27,6 +27,7 @@ private enum Palette {
 }
 
 private extension CindyAgentActivityAttributes.ContentState {
+  var destinationURL: URL? { taskUrl.flatMap { URL(string: $0) } }
   var needsUser: Bool { status == "attention" && attentionCount > 0 }
   var isCompleted: Bool { status == "completed" }
   var tint: Color {
@@ -222,6 +223,7 @@ struct CindyAgentActivityWidget: Widget {
   var body: some WidgetConfiguration {
     ActivityConfiguration(for: CindyAgentActivityAttributes.self) { context in
       ActivityBanner(state: context.state, appName: context.attributes.appName)
+        .widgetURL(context.state.destinationURL)
     } dynamicIsland: { context in
       DynamicIsland {
         DynamicIslandExpandedRegion(.leading) {
@@ -251,6 +253,7 @@ struct CindyAgentActivityWidget: Widget {
       } minimal: {
         Identity(state: context.state, size: 20, dot: context.state.tint)
       }
+      .widgetURL(context.state.destinationURL)
       .keylineTint(context.state.tint)
     }
   }

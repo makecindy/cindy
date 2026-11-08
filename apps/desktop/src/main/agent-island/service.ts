@@ -27,7 +27,7 @@ import {
   clearSessionAttention as clearAppBadgeSessionAttention,
   hasSessionAttention as hasAppBadgeSessionAttention,
 } from '../appBadgeService.js';
-import { openMainWindowSession, openMainWindowChatMessage } from '../deepLink.js';
+import { buildSessionDeepLink, openMainWindowSession, openMainWindowChatMessage } from '../deepLink.js';
 import { groupChatIslandId, type AgentIslandGroupChatInput } from './groupChat.js';
 import {
   AGENT_ISLAND_CONSUME_ENTRY_ALERT_CHANNEL,
@@ -2252,6 +2252,14 @@ export class AgentIslandService {
       : soundDisplayState;
     // The system Live Activity works whether or not our own island is shown.
     const { pillSnapshot } = chatDisplayState;
+    const priorityId = pillSnapshot.priorityId;
+    const prioritySession = priorityId ? this.state.sessions.get(priorityId) : undefined;
+    const priorityDeviceId = prioritySession?.sourceDeviceId
+      ?? (priorityId ? this.companionChats.get(priorityId)?.input.deviceId : undefined);
+    // Group summaries are not session ids; retain app-level opening for those cards.
+    const taskUrl = priorityId && !prioritySession?.groupChat
+      ? buildSessionDeepLink(priorityId, { deviceId: priorityDeviceId })
+      : undefined;
     this.deps.liveActivity?.sync(agentIslandLiveActivityStateFromPill(
       pillSnapshot,
       this.mascotSkin,
@@ -2265,6 +2273,7 @@ export class AgentIslandService {
         waitingCount: (count) => tCount('agentIsland.native.liveActivityWaiting', count),
       },
       chatDisplayState.sessions.find((session) => session.sessionId === pillSnapshot.priorityId)?.companion,
+      taskUrl,
     ));
     if (!this.enabled) {
       // Agent Notch is off: its event sounds still accompany the Live Activity's alerts.
