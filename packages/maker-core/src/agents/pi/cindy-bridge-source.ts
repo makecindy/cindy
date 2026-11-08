@@ -2599,6 +2599,7 @@ const CINDY_SEND_TO_AGENT_TOOL = 'send_to_agent';
 const CINDY_CHECK_AGENT_MESSAGE_TOOL = 'check_agent_message';
 const CINDY_LIST_AGENTS_TOOL = 'list_agents';
 const CINDY_LIST_MACHINES_TOOL = 'list_machines';
+const CINDY_INPUT_HANDOFF_TOOL = 'request_input_handoff';
 const CINDY_CREATE_TEAMMATE_TOOL = 'create_teammate';
 const CINDY_BOT_MEMORY_TOOL = 'bot_memory';
 const CINDY_DIRECT_BOT_TOOLS = new Set([
@@ -3383,7 +3384,7 @@ class CindyMcpGateway {
   /** The real MCP identity of a tool the model called by its short name, for the permission and capture hooks. */
   resolveHookedCall(toolName: string, input: unknown): ResolvedMcpGatewayCall | null {
     if (toolName === CINDY_MCP_CALL_TOOL) return this.resolveCall(input);
-    if (CINDY_DIRECT_BOT_TOOLS.has(toolName) || toolName === CINDY_LIST_MACHINES_TOOL || toolName === CINDY_ASYNC_QUESTION_TOOL) return this.resolveDirectHelperTool(toolName, input);
+    if (CINDY_DIRECT_BOT_TOOLS.has(toolName) || toolName === CINDY_LIST_MACHINES_TOOL || toolName === CINDY_ASYNC_QUESTION_TOOL || toolName === CINDY_INPUT_HANDOFF_TOOL) return this.resolveDirectHelperTool(toolName, input);
     return toolName === CINDY_BOT_MEMORY_TOOL ? this.resolveBotMemory(input) : null;
   }
 
@@ -4043,6 +4044,20 @@ class CindyMcpGateway {
         parameters: asyncQuestion.inputSchema,
         execute: async (_id: string, params: unknown, signal?: AbortSignal) =>
           this.executeDirectHelperTool(CINDY_ASYNC_QUESTION_TOOL, params, signal),
+      });
+    }
+
+    // Publish the host's handoff schema directly, including screenshot QR support.
+    // Preserve the MCP identity for approval/capture; do not duplicate a Pi-only schema.
+    const handoff = this.resolveDirectHelperTool(CINDY_INPUT_HANDOFF_TOOL, {});
+    if (handoff) {
+      pi.registerTool({
+        name: CINDY_INPUT_HANDOFF_TOOL,
+        label: 'Input handoff',
+        description: handoff.tool.description,
+        parameters: handoff.tool.inputSchema,
+        execute: async (_toolCallId: string, params: unknown, signal?: AbortSignal) =>
+          this.executeDirectHelperTool(CINDY_INPUT_HANDOFF_TOOL, params, signal),
       });
     }
 
@@ -5275,6 +5290,7 @@ export default async function cindyBridge(piApi: any) {
         || CINDY_DIRECT_BOT_TOOLS.has(event.toolName)
         || event.toolName === CINDY_LIST_MACHINES_TOOL
         || event.toolName === CINDY_ASYNC_QUESTION_TOOL
+        || event.toolName === CINDY_INPUT_HANDOFF_TOOL
         || event.toolName === CINDY_BOT_MEMORY_TOOL)
       && !gatewayCall
     ) return;

@@ -22,9 +22,9 @@ const CLAUDE_CODE_HARNESS_ID = 'claude-code';
 export const ORCA_SEND_TO_LEAD_TOOL_NAME = 'mcp__orca_worker_bridge__send_to_lead';
 export const CLAUDE_ASK_USER_QUESTION_TOOL_NAME = 'AskUserQuestion';
 /** User-operated handoff stays root-only, alongside ordinary questions. */
-export const CINDY_ASK_OWNER_TOOL_NAME = 'mcp__cindy_helper__ask_owner';
+export const CINDY_INPUT_HANDOFF_TOOL_NAME = 'mcp__cindy_helper__request_input_handoff';
 export const CINDY_ASYNC_QUESTION_TOOL_NAME = 'mcp__cindy_helper__ask_user_question_async';
-const USER_QUESTION_TOOLS = [CINDY_ASYNC_QUESTION_TOOL_NAME, CLAUDE_ASK_USER_QUESTION_TOOL_NAME, CINDY_ASK_OWNER_TOOL_NAME];
+const USER_QUESTION_TOOLS = [CINDY_ASYNC_QUESTION_TOOL_NAME, CLAUDE_ASK_USER_QUESTION_TOOL_NAME, CINDY_INPUT_HANDOFF_TOOL_NAME];
 export const CLAUDE_SUBAGENT_ASK_USER_QUESTION_DENIAL_REASON =
   'NATIVE_SUBAGENT_USER_INPUT_NOT_ALLOWED: report the question to the parent agent, which can decide whether to ask the user.';
 
