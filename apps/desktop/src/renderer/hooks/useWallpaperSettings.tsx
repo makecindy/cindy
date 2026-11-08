@@ -19,7 +19,7 @@ import {
   type WallpaperMotion,
   normalizeCustomWallpaperUrl,
   isCustomWallpaperVideo,
-  getWallpaperVisibility,
+  getBackgroundVisibility,
 } from '@/../shared/appearanceSettings';
 
 import { getBuiltinWallpaperBackground } from '@/lib/wallpaper';
@@ -33,6 +33,7 @@ export interface WallpaperSettings {
   wallpaperId: WallpaperId;
   wallpaperOverlay: number;
   wallpaperVisibility?: number | null;
+  desktopVisibility?: number | null;
   wallpaperBlur?: number | null;
   wallpaperMotion: WallpaperMotion;
   customWallpaperUrl?: string;
@@ -74,6 +75,7 @@ function pickWallpaperSettings(settings: AppearanceSettings): WallpaperSettings 
     wallpaperId: settings.wallpaperId,
     wallpaperOverlay: settings.wallpaperOverlay,
     wallpaperVisibility: settings.wallpaperVisibility,
+    desktopVisibility: settings.desktopVisibility,
     wallpaperBlur: settings.wallpaperBlur,
     wallpaperMotion: settings.wallpaperMotion,
     customWallpaperUrl: settings.customWallpaperUrl,
@@ -101,7 +103,7 @@ export function WallpaperSettingsProvider({
   const isDark = useIsDarkMode();
   const isDarkRef = useRef(isDark);
   isDarkRef.current = isDark;
-  const visibility = visibilityPreview ?? getWallpaperVisibility(settings, isDark);
+  const visibility = visibilityPreview ?? getBackgroundVisibility(settings, isDark);
   const reducedMotion = useReducedMotion();
   const imageAsset = useWallpaperAsset(settings.wallpaperId, 'image', visibility > 0);
   const videoAsset = useWallpaperAsset(
@@ -223,7 +225,8 @@ export function WallpaperSettingsProvider({
   const setVisibility = useCallback(
     (value: number) => {
       setVisibilityPreview(null);
-      patch({ wallpaperVisibility: clampAppearanceWallpaperVisibility(value) });
+      const key = settingsRef.current.wallpaperId === 'none' ? 'desktopVisibility' : 'wallpaperVisibility';
+      patch({ [key]: clampAppearanceWallpaperVisibility(value) });
     },
     [patch],
   );
@@ -231,7 +234,7 @@ export function WallpaperSettingsProvider({
     const next = value === null ? null : clampAppearanceWallpaperVisibility(value);
     // Keyboard commit precedes change in Radix. Read the optimistic committed
     // value synchronously so a failed save cannot leave a stale preview behind.
-    setVisibilityPreview(next === getWallpaperVisibility(settingsRef.current, isDarkRef.current) ? null : next);
+    setVisibilityPreview(next === getBackgroundVisibility(settingsRef.current, isDarkRef.current) ? null : next);
   }, []);
   const setMotion = useCallback(
     (value: WallpaperMotion) => patch({ wallpaperMotion: value }),
@@ -261,6 +264,7 @@ export function WallpaperSettingsProvider({
       wallpaperId: DEFAULT_APPEARANCE_SETTINGS.wallpaperId,
       wallpaperOverlay: DEFAULT_APPEARANCE_SETTINGS.wallpaperOverlay,
       wallpaperVisibility: null,
+      desktopVisibility: null,
       wallpaperBlur: null,
       wallpaperMotion: DEFAULT_APPEARANCE_SETTINGS.wallpaperMotion,
     });

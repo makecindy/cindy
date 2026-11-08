@@ -29,7 +29,7 @@ void mountPage({
     ...(ctx.data.hiddenBackground || ctx.data.glassBackground || ctx.data.previewBackground ? {
       appearanceSettings: {
         getSync: () => ({ ...DEFAULT_APPEARANCE_SETTINGS, wallpaperId: ctx.data.hiddenBackground ?? ctx.data.glassBackground ?? ctx.data.previewBackground,
-          wallpaperVisibility: ctx.data.visibility ?? 0, wallpaperBlur: 12 }),
+          wallpaperVisibility: ctx.data.visibility ?? 0, desktopVisibility: ctx.data.visibility ?? 0, wallpaperBlur: 12 }),
         onChanged: subscription('appearance'),
         setPatch: ctx.data.previewBackground
           ? async (patch: unknown) => { visibilityWrites.push(patch); }

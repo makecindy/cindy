@@ -65,10 +65,36 @@ const visibilityThumb = () => screen.getByRole('slider', { name: 'settings.appea
 const visibilityTrack = () => visibilityThumb().closest('.cindy-slider')!;
 
 describe('wallpaper blur gesture persistence', () => {
+  // Upgrade regression, unit integration: a legacy artwork visibility must not
+  // reveal the desktop. Exercise the real provider, canvas and shared slider.
+  it.each([undefined, 0.8])('keeps legacy visibility %s opaque until desktop opt-in and remembers both sources', async legacy => {
+    saved = { ...saved, wallpaperId: 'none', wallpaperVisibility: legacy };
+    const { unmount } = render(view());
+    expect(visibility()).toBe('0');
+    expect(document.documentElement.dataset.desktopBlur).toBe('0');
+    expect(setPatch).not.toHaveBeenCalled();
+    const slider = screen.getByRole('slider', { name: 'settings.appearance.wallpaper.desktopVisibilityLabel' }).closest('.cindy-slider')!;
+    pointer(slider, 'pointerdown', 60);
+    pointer(slider, 'pointerup', 60);
+    await waitFor(() => expect(setPatch).toHaveBeenCalledExactlyOnceWith({ desktopVisibility: 0.6 }));
+    expect(saved.wallpaperVisibility).toBe(legacy);
+    act(() => changed({ ...saved, wallpaperId: 'cindy-window' }));
+    expect(Number(visibility())).toBe(legacy ?? 0.37);
+    act(() => changed({ ...saved, wallpaperId: 'none' }));
+    expect(visibility()).toBe('0.6');
+    unmount();
+    render(view());
+    expect(visibility()).toBe('0.6');
+    fireEvent.click(screen.getByRole('button', { name: 'settings.appearance.wallpaper.reset' }));
+    await waitFor(() => expect(setPatch).toHaveBeenCalledTimes(2));
+    expect(visibility()).toBe('0');
+    expect(saved.desktopVisibility).toBeNull();
+  });
+
   // The real visibility slider used to save every pointer movement. Protect
   // desktop/artwork preview and one-write commit via the real provider + control.
   it.each(['none', 'cindy-window'] as const)('previews %s visibility without writing until release', async wallpaperId => {
-    saved = { ...saved, wallpaperId, wallpaperVisibility: 0.4 };
+    saved = { ...saved, wallpaperId, wallpaperVisibility: 0.4, desktopVisibility: 0.4 };
     render(view());
     const label = wallpaperId === 'none' ? 'desktopVisibilityLabel' : 'visibilityLabel';
     const slider = screen.getByRole('slider', { name: `settings.appearance.wallpaper.${label}` }).closest('.cindy-slider')!;
@@ -78,7 +104,7 @@ describe('wallpaper blur gesture persistence', () => {
     await act(async () => {});
     expect(setPatch).not.toHaveBeenCalled();
     pointer(slider, 'pointerup', 80);
-    await waitFor(() => expect(setPatch).toHaveBeenCalledExactlyOnceWith({ wallpaperVisibility: 0.8 }));
+    await waitFor(() => expect(setPatch).toHaveBeenCalledExactlyOnceWith({ [wallpaperId === 'none' ? 'desktopVisibility' : 'wallpaperVisibility']: 0.8 }));
   });
   it.each(['pointercancel', 'lostpointercapture', 'blur', 'leave'])(
     'discards visibility preview on %s and follows the latest saved value', async cause => {
@@ -148,7 +174,7 @@ describe('wallpaper blur gesture persistence', () => {
       pointer(sliderTrack, 'pointerdown', 80);
       pointer(sliderTrack, 'pointerup', 80);
       expect(setPatch).not.toHaveBeenCalled();
-      act(() => changed({ ...saved, wallpaperVisibility: 0.5 }));
+      act(() => changed({ ...saved, [wallpaperId === 'none' ? 'desktopVisibility' : 'wallpaperVisibility']: 0.5 }));
       expect(sliderTrack.hasAttribute('data-disabled')).toBe(false);
       expect(slider.getAttribute('aria-valuenow')).toBe('12');
       if (wallpaperId === 'none') expect(root.dataset.desktopBlur).toBe('12');
@@ -242,7 +268,7 @@ describe('wallpaper blur gesture persistence', () => {
   // when switching from None to artwork; the former switch discarded this input.
   // Existing gesture cases only cover artwork. Native blur rendering is separate.
   it('shares the slider value between the desktop and wallpaper, saving only on release', async () => {
-    saved = { ...saved, wallpaperId: 'none' };
+    saved = { ...saved, wallpaperId: 'none', desktopVisibility: 0.4 };
     render(view());
     const desktopThumb = screen.getByRole('slider', { name: 'settings.appearance.wallpaper.desktopBlurLabel' });
     const desktopTrack = desktopThumb.closest('.cindy-slider')!;

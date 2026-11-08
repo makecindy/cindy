@@ -72,9 +72,14 @@ The new artwork uses the existing continuous cover fit, theme-derived visibility
 and blur controls. None remains the default. With None selected, visibility controls
 desktop background transparency (0% opaque, 100% clear); the retained left sidebar
 material is independent. Both controls remain
-sliders with the same values, preview/commit behavior and reset action when switching
+sliders with the same ranges, preview/commit behavior and reset action when switching
 between None and artwork (user decision, 2026-11-08). Their labels and hints identify
 the current background source; do not replace desktop blur with a separate switch.
+Desktop transparency has its own optional `desktopVisibility` override, defaulting to
+0% for both upgrades and new installs. Never infer desktop opt-in from legacy
+`wallpaperVisibility` or `wallpaperOverlay`; artwork keeps its existing values.
+Switching background sources restores each source's visibility. Reset removes the
+desktop override and returns to opaque content, retaining independent sidebar frost.
 At 0% desktop transparency or wallpaper visibility, disable the blur slider and
 suspend background blur without writing over its saved value. Restore that value
 as soon as visibility becomes positive. The independent sidebar material is not
@@ -173,7 +178,7 @@ The macOS dispatcher caches successful native state per window: radius-only chan
 retain the sidebar material, replaced materials resynchronize its mask, and failed
 native calls remain retryable. It also owns background-color writes so redundant
 updates cannot erase the tiny alpha backing that preserves AppKit window corners.
-Existing preferences without an explicit visibility override keep the previous Light/Dark veil
+Existing artwork preferences without an explicit visibility override keep the previous Light/Dark veil
 mapping and display its equivalent visibility. The unchanged soft default is 37% visible in
 Light and 27% in Dark. Adjusting the slider saves literal visibility, shared across themes;
 Reset removes that override and restores the theme-dependent default. Do not rewrite old

@@ -226,6 +226,7 @@ function parsePatch(rawPatch: unknown): AppearanceOverrides {
     'wallpaperId',
     'wallpaperOverlay',
     'wallpaperVisibility',
+    'desktopVisibility',
     'wallpaperBlur',
     'wallpaperMotion',
     'appIcon',
@@ -297,6 +298,17 @@ function parsePatch(rawPatch: unknown): AppearanceOverrides {
         : parseNumber(
             raw.wallpaperVisibility,
             'wallpaperVisibility',
+            clampAppearanceWallpaperVisibility,
+            APPEARANCE_LIMITS.wallpaperVisibility,
+          );
+  }
+  if ('desktopVisibility' in raw) {
+    patch.desktopVisibility =
+      raw.desktopVisibility === null
+        ? null
+        : parseNumber(
+            raw.desktopVisibility,
+            'desktopVisibility',
             clampAppearanceWallpaperVisibility,
             APPEARANCE_LIMITS.wallpaperVisibility,
           );

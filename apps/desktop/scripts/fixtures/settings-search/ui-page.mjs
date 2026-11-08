@@ -58,7 +58,7 @@ export default {
       await ui.capture('visibility-preview');
       await page.mouse.up();
       await page.waitForFunction(() => window.visibilityWrites.length === 1);
-      assert.deepEqual(await page.evaluate(() => window.visibilityWrites), [{ wallpaperVisibility: preview }]);
+      assert.deepEqual(await page.evaluate(() => window.visibilityWrites), [{ [ui.data.previewBackground === 'none' ? 'desktopVisibility' : 'wallpaperVisibility']: preview }]);
       await slider.press('ArrowLeft');
       await page.waitForFunction(() => window.visibilityWrites.length === 2);
       const committed = Number(await slider.getAttribute('aria-valuenow'));
