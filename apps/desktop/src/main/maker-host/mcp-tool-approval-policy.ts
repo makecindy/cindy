@@ -279,6 +279,9 @@ export function getDesktopMcpToolApprovalPolicy(
       return 'prompt-each-time';
     }
     const action = progressive ? innerName : toolName;
+    // Registering explicit source folders and a gateway is one normal tool approval.
+    // Searches, reads and refreshes use the already registered account-local library.
+    if (action === 'configure_local_skill_library' && args?.action === 'register') return 'prompt-each-time';
     // Use the normal runtime permission flow once: Full Access bypasses approval,
     // Auto reviews the call, and Ask requests confirmation. Host guards retain scope checks.
     if (action && (TASK_ACTION_TOOLS.has(action) || action === 'routine_delete')) return 'prompt-each-time';

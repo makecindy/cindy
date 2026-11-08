@@ -15,7 +15,7 @@ export interface LibraryConfig {
 const IGNORED_DIRECTORIES = new Set(['.git', 'node_modules', 'dist', 'build', '.runtime-skills']);
 
 /** Registered roots own the catalog. A Skill folder is a leaf; its resources are not more Skills. */
-export async function discoverSkills(sources: readonly LibrarySource[], authorizePath?: (absolutePath: string) => Promise<void>): Promise<SkillEntry[]> {
+export async function discoverSkills(sources: readonly LibrarySource[]): Promise<SkillEntry[]> {
   const entries: SkillEntry[] = [];
   const visited = new Set<string>();
   async function visit(directory: string, source: string): Promise<void> {
@@ -23,12 +23,10 @@ export async function discoverSkills(sources: readonly LibrarySource[], authoriz
     const identity = process.platform === 'win32' ? real.toLowerCase() : real;
     if (visited.has(identity)) return;
     visited.add(identity);
-    await authorizePath?.(real);
     const children = await fs.readdir(real, { withFileTypes: true });
     const skill = children.find(child => child.name === 'SKILL.md' || child.name === 'skill.md');
     if (skill) {
       const filePath = await fs.realpath(path.join(real, skill.name));
-      await authorizePath?.(filePath);
       const raw = (await fs.readFile(filePath, 'utf8')).replace(/^\uFEFF/, '');
       if (!/^---\r?\n/.test(raw)) throw new Error(`${filePath}: expected YAML Skill frontmatter`);
       const { data } = matter(raw);
@@ -102,7 +100,6 @@ export async function withLibraryWrite<T>(library: string, action: () => Promise
 export interface LibrarySyncOptions {
   rebuild?: boolean;
   embedding?: SkillEmbeddingAdapter;
-  authorizePath?: (absolutePath: string) => Promise<void>;
 }
 
 export async function syncLibrary(library: string, options: LibrarySyncOptions = {}) {
@@ -118,7 +115,7 @@ export async function syncLibraryUnlocked(library: string, options: LibrarySyncO
     if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
     index = new SkillIndex();
   }
-  const changes = index.sync(await discoverSkills(config.sources, options.authorizePath));
+  const changes = index.sync(await discoverSkills(config.sources));
   const embedding = options.embedding ?? (config.embedding ? createSkillEmbeddingAdapter(config.embedding) : undefined);
   const vectors = embedding ? await index.buildVectors(embedding, options) : undefined;
   await writeJson(path.join(library, 'index.json'), index.snapshot());

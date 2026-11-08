@@ -1538,7 +1538,6 @@ export function createDesktopMcpProviders(deps: DesktopMcpProvidersDeps): LiziMc
           const db = tryGetDbClient();
           return !!db && await resolveHelperSurface(db, context.sessionId!) === 'default';
         },
-        authorizePath: (request) => authorizeDesktopSessionPath(request, deps.getLiveSessionGrantState),
         embedding: (model) => {
           if (!isKnownEmbeddingModel(model) || !isCindyEmbeddingModelAvailable(getDesktopSelectableCatalog(), model)) return undefined;
           const owner = activeOwnerScopeKey();
