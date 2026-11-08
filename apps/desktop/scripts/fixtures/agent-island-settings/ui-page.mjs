@@ -20,5 +20,13 @@ export default {
     await page.waitForFunction(() => globalThis.localStorage.getItem('notifications.agentIslandSubtleReminders') === null);
     if (await toggle.getAttribute('aria-checked') !== 'false') throw new Error('Reminder reset did not restore the default');
     await ui.capture('reset');
+    const complete = page.locator('#agent-island-sound-complete');
+    const card = page.locator('#settings-search-settings-agentIsland-soundLabel').locator('..').locator('..').locator('..');
+    await complete.selectOption('none');
+    await page.waitForFunction(() => JSON.parse(localStorage.getItem('notifications.agentIslandSoundSettings') ?? '{}').sounds?.complete?.id === 'none');
+    await ui.capture('follow-system', { locator: card });
+    await complete.selectOption('gem-collect');
+    await page.waitForFunction(() => JSON.parse(localStorage.getItem('notifications.agentIslandSoundSettings') ?? '{}').sounds?.complete?.id === 'gem-collect');
+    await ui.capture('event-sounds', { locator: card });
   },
 };

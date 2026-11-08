@@ -1,4 +1,5 @@
-import { getAgentIslandEnabled, isAgentIslandSupported } from '@/hooks/useAgentIslandSettings';
+import { hasAgentIslandNotificationSound } from '../../shared/agentIsland';
+import { getAgentIslandEnabled, getAgentIslandSoundSettings, isAgentIslandSupported } from '@/hooks/useAgentIslandSettings';
 import { getFeishuNotificationsEnabled } from '@/hooks/useFeishuNotificationSettings';
 import { getNotificationsEnabled } from '@/hooks/useNotificationSettings';
 import { isDefaultDraftSessionTitle } from '@cindy/maker-shared/session-title';
@@ -216,7 +217,7 @@ function deliverSessionEventNotification(
     kind,
     ...(remoteDevice ? { markAttention: false } : {}),
     channels: {
-      desktop: !remoteDevice && getNotificationsEnabled() && !islandActive,
+      desktop: !remoteDevice && getNotificationsEnabled() && (!islandActive || !hasAgentIslandNotificationSound(getAgentIslandSoundSettings(), kind)),
       feishu: options.feishu !== false && getFeishuNotificationsEnabled(),
       // Mobile owns registration/unregistration of its push token. There is
       // deliberately no second desktop setting for the same channel.
