@@ -58,6 +58,96 @@ async function fixture(initialState: BlueBubblesState | null = null, media?: IMH
 }
 
 describe('BlueBubbles local ingress', () => {
+  // Tier 1, #9250/r4506059629: verified send time must override webhook arrival
+  // order, including a newer input whose identity cannot yet be looked up.
+  it('preserves later-sent work when its webhook arrives before a delayed stop', async () => {
+    const f = await fixture();
+    f.advance(500);
+    let busy = true, unavailable = true;
+    const original = vi.mocked(f.api.message).getMockImplementation()!;
+    vi.mocked(f.api.message).mockImplementation(async guid => {
+      if (guid === 'newer-unverified' && unavailable) throw new Error('lookup 503');
+      return original(guid);
+    });
+    f.im.onMessage(event => {
+      event.delivery!.awaitPersistence();
+      if (event.text === '/stop') { event.delivery!.cancelPending!(); event.delivery!.accept(); }
+      else if (busy) event.delivery!.defer();
+      else event.delivery!.accept();
+    });
+    f.message('newer-known', { dateCreated: 1300 });
+    await f.webhook('newer-known');
+    await f.im.reconcile();
+    f.message('newer-unverified', { dateCreated: 1301 });
+    await expect(f.im.reconcile()).rejects.toThrow('BLUEBUBBLES_RECEIVE_FAILED');
+    f.message('delayed-stop', { text: '/stop', dateCreated: 1200 });
+    await f.webhook('delayed-stop');
+    await expect(f.im.reconcile()).rejects.toThrow('BLUEBUBBLES_RECEIVE_FAILED');
+    expect(f.state().inbox['delayed-stop'].state).toBe('accepted');
+    expect(f.state().inbox['newer-known'].state).toBe('pending');
+    expect(f.state().inbox['newer-unverified'].state).toBe('pending');
+    await f.im.dispose();
+    busy = false; unavailable = false;
+    await f.im.init();
+    expect(f.state().inbox['newer-known'].state).toBe('accepted');
+    expect(f.state().inbox['newer-unverified'].state).toBe('accepted');
+  });
+
+  // Tier 1, #9250/r4506059631: the existing held-history test does not cover
+  // live ingress added while recovery awaits a later identity lookup.
+  it('includes receipts arriving during recovery metadata lookup in dispatch ordering', async () => {
+    const f = await fixture();
+    f.message('old-in-lookup');
+    let release!: () => void, started!: () => void, busy = true;
+    const gate = new Promise<void>(resolve => { release = resolve; });
+    const waiting = new Promise<void>(resolve => { started = resolve; });
+    const original = vi.mocked(f.api.message).getMockImplementation()!;
+    vi.mocked(f.api.message).mockImplementationOnce(async guid => { started(); await gate; return original(guid); });
+    const accepted: string[] = [];
+    f.im.onMessage(event => {
+      event.delivery!.awaitPersistence();
+      if (busy) event.delivery!.defer();
+      else { accepted.push(event.messageId!); event.delivery!.accept(); }
+    });
+    const recovering = f.im.reconcile();
+    try {
+      await waiting;
+      f.message('new-during-lookup');
+      expect((await f.webhook('new-during-lookup')).status).toBe(202);
+    } finally { release(); await recovering; }
+    // Only the oldest input should reach the busy handler.
+    expect(f.received.map(event => event.messageId)).toEqual(['old-in-lookup']);
+    expect(f.state().inbox['new-during-lookup'].state).toBe('pending');
+    busy = false;
+    await f.im.reconcile();
+    expect(accepted).toEqual(['old-in-lookup', 'new-during-lookup']);
+  });
+
+  // Tier 1, #9250/r4506059633: recovery via a webhook/local pump must restore
+  // transport availability without waiting for history, but not hide handler faults.
+  it('restores connected after local retry without clearing unrelated delivery faults', async () => {
+    const f = await fixture();
+    const original = vi.mocked(f.api.message).getMockImplementation()!;
+    vi.mocked(f.api.message).mockRejectedValueOnce(new Error('lookup 503'));
+    f.message('local-retry');
+    await f.webhook('local-retry');
+    await expect(f.im.reconcile()).rejects.toThrow('BLUEBUBBLES_RECEIVE_FAILED');
+    expect(f.im.getStatus().kind).toBe('error');
+    f.advance(30_000);
+    vi.mocked(f.api.message).mockImplementation(original);
+    const histories = vi.mocked(f.api.history).mock.calls.length;
+    await f.webhook('local-retry');
+    expect(f.state().inbox['local-retry'].state).toBe('accepted');
+    expect(f.im.getStatus().kind).toBe('connected');
+    expect(f.api.history).toHaveBeenCalledTimes(histories);
+    f.im.onMessage(event => { if (event.messageId === 'handler-fault') throw new Error('delivery persistence failed'); });
+    f.message('handler-fault'); await f.webhook('handler-fault');
+    expect(f.im.getStatus().kind).toBe('error');
+    f.message('healthy-after-handler-fault'); await f.webhook('healthy-after-handler-fault');
+    expect(f.state().inbox['healthy-after-handler-fault'].state).toBe('accepted');
+    expect(f.im.getStatus().kind).toBe('error');
+  });
+
   // Tier 1, #9250/r4505897286: a live stop arriving during startup history
   // must wait for older offline inputs to enter its ordered cancellation boundary.
   it.each([true, false])('orders missed input before a live stop while history is blocked (startup=%s)', async startup => {

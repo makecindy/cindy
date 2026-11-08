@@ -69,6 +69,7 @@ export class BlueBubblesIM extends BaseIM implements TextChannelIM {
   private pumping: Promise<void> | null = null;
   private recovering = false;
   private recovery: Promise<void> | null = null;
+  private receiveFailure: 'input' | 'other' | null = null;
   private readonly retryAt = new Map<string, number>();
   private partialCleanup = new Map<string, Array<() => Promise<void>>>();
   private lastCatchUpAt: number | null = null;
@@ -185,7 +186,7 @@ export class BlueBubblesIM extends BaseIM implements TextChannelIM {
           || !/^[A-Za-z0-9_-]{1,256}$/.test(event.data.guid)) return;
         this.receipts!.receive(event.data.guid, this.now());
         this.lastWebhookAt = this.now();
-        void this.pump(generation).catch(() => this.fail(generation));
+        void this.pump(generation).catch(error => this.fail(generation, error));
       });
       if (!this.live(generation)) { await listener.close(); return; }
       this.listener = listener;
@@ -200,7 +201,7 @@ export class BlueBubblesIM extends BaseIM implements TextChannelIM {
         // A registered listener is still healthy when only individual inputs
         // failed preparation. Their local retry must not disconnect other chats.
         if (error instanceof BlueBubblesReceiveError) {
-          this.fail(generation);
+          this.fail(generation, error);
           this.schedule(generation);
           return;
         }
@@ -222,6 +223,7 @@ export class BlueBubblesIM extends BaseIM implements TextChannelIM {
     this.pumping = null;
     this.recovering = false;
     this.recovery = null;
+    this.receiveFailure = null;
     this.retryAt.clear();
     const cleanup = this.partialCleanup;
     this.partialCleanup = new Map();
@@ -239,13 +241,16 @@ export class BlueBubblesIM extends BaseIM implements TextChannelIM {
     this.setStatus({ kind: 'idle' });
   }
 
-  private fail(generation: number): void {
-    if (this.live(generation)) this.setStatus({ kind: 'error', reason: 'BLUEBUBBLES_RECEIVE_FAILED' });
+  private fail(generation: number, error: unknown): void {
+    if (!this.live(generation)) return;
+    // A successful local retry cannot clear a history, persistence or handler fault.
+    this.receiveFailure = error instanceof BlueBubblesReceiveError && this.receiveFailure !== 'other' ? 'input' : 'other';
+    this.setStatus({ kind: 'error', reason: 'BLUEBUBBLES_RECEIVE_FAILED' });
   }
   private schedule(generation: number): void {
     if (!this.live(generation)) return;
     this.timer = setTimeout(() => {
-      void this.catchUp(generation).catch(() => this.fail(generation)).finally(() => this.schedule(generation));
+      void this.catchUp(generation).catch(error => this.fail(generation, error)).finally(() => this.schedule(generation));
     }, 300_000);
     this.timer.unref?.();
   }
@@ -258,7 +263,7 @@ export class BlueBubblesIM extends BaseIM implements TextChannelIM {
     this.deferredTimer = setTimeout(() => {
       this.deferredTimer = null;
       this.deferredDueAt = null;
-      if (this.live(generation)) void this.pump(generation).catch(() => this.fail(generation));
+      if (this.live(generation)) void this.pump(generation).catch(error => this.fail(generation, error));
     }, delay);
     this.deferredTimer.unref?.();
   }
@@ -300,24 +305,31 @@ export class BlueBubblesIM extends BaseIM implements TextChannelIM {
     }
     const prefetched = new Map<string, BlueBubblesMessage | null>();
     // Every recovery shares the live-ingress gate and respects per-input backoff.
-    for (const guid of receipts.pendingGuids()) {
-      if ((this.retryAt.get(guid) ?? 0) > this.now() || this.deferredEvents.has(guid)) continue;
-      try {
-        const message = await api.message(guid);
-        this.assertLive(generation);
-        prefetched.set(guid, message);
-      } catch {
-        this.assertLive(generation);
-        prefetched.set(guid, null);
+    const visited = new Set<string>();
+    for (;;) {
+      const pending = receipts.pendingGuids().filter(guid => !visited.has(guid));
+      if (!pending.length) break;
+      for (const guid of pending) {
+        visited.add(guid);
+        if ((this.retryAt.get(guid) ?? 0) > this.now() || this.deferredEvents.has(guid)) continue;
+        try {
+          const message = await api.message(guid);
+          this.assertLive(generation);
+          prefetched.set(guid, message);
+        } catch {
+          this.assertLive(generation);
+          prefetched.set(guid, null);
+        }
       }
     }
     const sentAt = (guid: string) => prefetched.get(guid)?.dateCreated
-      ?? this.eventSentAt.get(this.deferredEvents.get(guid)!) ?? -Infinity;
+      ?? this.eventSentAt.get(this.deferredEvents.get(guid)!) ?? Infinity;
     receipts.orderPending(receipts.pendingGuids().sort((a, b) => sentAt(a) - sentAt(b)));
     this.recovering = false;
     await this.pump(generation, prefetched);
     this.assertLive(generation);
     this.lastCatchUpAt = before;
+    this.receiveFailure = null;
     this.setStatus({ kind: 'connected', appId: this.botContextId });
   }
 
@@ -345,6 +357,10 @@ export class BlueBubblesIM extends BaseIM implements TextChannelIM {
           for (const dueAt of this.retryAt.values()) delay = Math.min(delay, Math.max(1, dueAt - this.now()));
           if (Number.isFinite(delay)) this.retryDeferred(generation, delay);
           throw new BlueBubblesReceiveError();
+        }
+        if (this.receiveFailure === 'input') {
+          this.receiveFailure = null;
+          this.setStatus({ kind: 'connected', appId: this.botContextId });
         }
         return;
       }
@@ -501,7 +517,7 @@ export class BlueBubblesIM extends BaseIM implements TextChannelIM {
             this.deferredEvents.delete(guid);
             this.pendingInputs.delete(guid);
           }
-        }).catch(() => this.fail(generation)).finally(() => {
+        }).catch(error => this.fail(generation, error)).finally(() => {
           if (this.live(generation)) {
             this.activeDispatches.delete(guid);
             if (!deferred) { this.deferredEvents.delete(guid); this.pendingInputs.delete(guid); }

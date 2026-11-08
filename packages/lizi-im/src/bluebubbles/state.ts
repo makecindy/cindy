@@ -81,8 +81,9 @@ export class BlueBubblesReceipts {
   }
   private indexStop(stop: BlueBubblesState['inbox'][string]['stop']): void {
     if (!stop) return;
-    const boundary = this.stops.get(stop.chatId) ?? { sentAt: stop.sentAt, before: new Set<string>() };
-    boundary.sentAt = Math.max(boundary.sentAt, stop.sentAt);
+    const previous = this.stops.get(stop.chatId);
+    if (previous && previous.sentAt > stop.sentAt) return;
+    const boundary = previous?.sentAt === stop.sentAt ? previous : { sentAt: stop.sentAt, before: new Set<string>() };
     for (const guid of stop.before) if (this.unresolved.has(guid)) boundary.before.add(guid);
     for (const guid of boundary.before) if (!this.unresolved.has(guid)) boundary.before.delete(guid);
     this.stops.set(stop.chatId, boundary);
@@ -97,7 +98,8 @@ export class BlueBubblesReceipts {
   }
   wasStopped(guid: string, chatId: string, sentAt: number): boolean {
     const boundary = this.stops.get(chatId);
-    return !!boundary && (sentAt < boundary.sentAt || boundary.before.has(guid));
+    // Receipt order breaks equal-time ties only; it cannot override a later send.
+    return !!boundary && (sentAt < boundary.sentAt || (sentAt === boundary.sentAt && boundary.before.has(guid)));
   }
   private update(update: BlueBubblesReceiptUpdate): void {
     // Validation before persistence; only replace in-memory facts after a durable write succeeds.
