@@ -52,6 +52,7 @@ vi.mock('@/device-link/useMobileMakerTransport', () => ({
 vi.mock('@/inputHandoff/InputHandoffCard', () => ({ InputHandoffCard: () => null }));
 vi.mock('react-native-safe-area-context', () => ({ useSafeAreaInsets: () => ({ top: 0, right: 0, bottom: 0, left: 0 }) }));
 vi.mock('react-native', async () => {
+  const window = { width: 390, height: 844, scale: 3, fontScale: 1 };
   const { createElement } = await import('react');
   const view = (tag: string) => ({ children, onPress, disabled, testID, accessibilityState, accessibilityLabel, style }: {
     children?: ReactNode; onPress?: () => void; disabled?: boolean; testID?: string; accessibilityState?: { busy?: boolean }; accessibilityLabel?: string; style?: unknown;
@@ -63,7 +64,8 @@ vi.mock('react-native', async () => {
   };
   return { View: view('div'), Text, Pressable: view('button'), Linking: { openURL: evidence.openURL },
     ScrollView: view('div'), Image: () => null, ActivityIndicator: () => null,
-    useWindowDimensions: () => ({ width: 390, height: 844 }),
+    useWindowDimensions: () => window,
+    Dimensions: { get: () => window, addEventListener: () => ({ remove() {} }) },
     StyleSheet: { create: (s: unknown) => s, hairlineWidth: 1 } };
 });
 vi.mock('@/components/AppText', async () => {

@@ -1,4 +1,5 @@
-import { useRef } from 'react';
+import { useCallback, useRef, useState, type SetStateAction } from 'react';
+import { reuseJsonSnapshot } from './reuseJsonSnapshot';
 
 /**
  * 引用稳定化 hook:每轮渲染传入(可能是新引用的)派生值,内容与上一轮相等时
@@ -15,4 +16,15 @@ export function useStableValue<T>(value: T, isEqual: (a: T, b: T) => boolean): T
     ref.current = value;
   }
   return ref.current;
+}
+
+/** Immutable JSON presentation state: equal refreshes retain row references, while
+ * changed status, pagination, permissions and message fields still publish normally. */
+export function useJsonSnapshotState<T>(initial: T | (() => T)) {
+  const [value, publish] = useState(initial);
+  const setValue = useCallback((update: SetStateAction<T>) => {
+    publish(previous => reuseJsonSnapshot(previous,
+      typeof update === 'function' ? (update as (previous: T) => T)(previous) : update));
+  }, []);
+  return [value, setValue] as const;
 }
