@@ -58,6 +58,71 @@ async function fixture(initialState: BlueBubblesState | null = null, media?: IMH
 }
 
 describe('BlueBubbles local ingress', () => {
+  // Tier 1, #9250/r4506349655: hold identity lookup rather than attachment I/O.
+  // Controls must proceed, while ordinary work cannot overtake an unknown input.
+  it('answers and stops another chat while an older identity lookup remains unresolved', async () => {
+    const f = await fixture(null, undefined, true);
+    let entered!: () => void, release!: () => void;
+    const waiting = new Promise<void>(resolve => { entered = resolve; });
+    const held = new Promise<void>(resolve => { release = resolve; });
+    const original = vi.mocked(f.api.message).getMockImplementation()!;
+    vi.mocked(f.api.message).mockImplementation(async guid => {
+      if (guid === 'lookup-held') { entered(); await held; }
+      return original(guid);
+    });
+    let answer: string | undefined;
+    void f.im.requestTextReply(f.chat.guid, 'Confirm?', text => text === 'yes' ? text : null)
+      .then(value => { answer = value; }, () => {});
+    f.im.onMessage(event => {
+      event.delivery!.awaitPersistence();
+      if (event.text === '/stop') expect(event.delivery!.cancelPending!()).toBe(0);
+      event.delivery!.accept();
+    });
+    try {
+      f.message('lookup-held', { chats: [f.otherChat] });
+      await f.webhook('lookup-held'); await waiting;
+      f.message('after-unknown', { chats: [f.otherChat] }); await f.webhook('after-unknown');
+      f.message('lookup-answer', { text: 'yes' }); await f.webhook('lookup-answer');
+      f.message('lookup-stop', { text: '/stop' }); await f.webhook('lookup-stop');
+      await new Promise<void>(resolve => setImmediate(resolve));
+      expect(answer).toBe('yes');
+      expect(f.state().inbox['lookup-stop'].state).toBe('accepted');
+      expect(f.state().inbox['after-unknown'].state).toBe('pending');
+    } finally { release(); await f.im.reconcile(); }
+    expect(f.received.filter(event => event.chatId === f.otherChat.guid).map(event => event.messageId))
+      .toEqual(['lookup-held', 'after-unknown']);
+    expect(vi.mocked(f.api.message).mock.calls.filter(([guid]) => guid === 'lookup-held')).toHaveLength(1);
+  });
+
+  // Tier 1, #9250/r4506349664: each completed lookup admits another webhook.
+  // The finite producer is a failure guard; stop must run before it becomes quiet.
+  it('releases recovery at a finite watermark despite continued live GUID arrivals', async () => {
+    const f = await fixture();
+    const original = vi.mocked(f.api.message).getMockImplementation()!;
+    const limit = 12;
+    let produced = 0, producedWhenStopped = -1;
+    vi.mocked(f.api.message).mockImplementation(async guid => {
+      if (produced < limit) {
+        const next = `continuous-${++produced}`;
+        f.message(next);
+        expect((await f.webhook(next)).status).toBe(202);
+      }
+      return original(guid);
+    });
+    f.im.onMessage(event => {
+      if (event.text !== '/stop') return;
+      producedWhenStopped = produced;
+      event.delivery!.cancelPending!();
+      event.delivery!.accept();
+    });
+    f.message('watermark-stop', { text: '/stop' });
+    await f.im.reconcile();
+    expect(producedWhenStopped).toBeGreaterThanOrEqual(1);
+    expect(producedWhenStopped).toBeLessThan(limit);
+    expect(f.state().inbox['watermark-stop'].state).toBe('accepted');
+    expect(f.received.filter(event => event.messageId === 'watermark-stop')).toHaveLength(1);
+  });
+
   // Tier 1, #9250/r4506280350: an unresolved download/stage must not hold
   // another chat, a confirmation or stop; ordinary same-chat work stays ordered.
   it.each(['download', 'stage'])('handles controls and other chats while %s is still in flight', async phase => {
@@ -111,7 +176,7 @@ describe('BlueBubbles local ingress', () => {
     let started!: () => void, release!: () => void;
     const preparing = new Promise<void>(resolve => { started = resolve; });
     const held = new Promise<void>(resolve => { release = resolve; });
-    const stage = vi.fn(async ({ fileName }: { fileName: string }) => ({ absPath: `/synthetic/${fileName}` }));
+    const stage = vi.fn(async ({ fileName }: { fileName: string }) => ({ absPath: `/synthetic/${fileName}`, discard: async () => {} }));
     const f = await fixture(null, undefined, false, { stage });
     const download = vi.spyOn(f.api, 'download').mockImplementation(async guid => {
       if (guid === 'first-file') { started(); await held; }

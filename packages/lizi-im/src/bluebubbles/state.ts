@@ -34,6 +34,7 @@ export function applyBlueBubblesReceiptUpdate(state: BlueBubblesState, update: B
 export class BlueBubblesReceipts {
   private state: BlueBubblesState;
   private readonly pending = new Set<string>();
+  private readonly arrivalOrder = new Map<string, number>();
   private readonly dispatching = new Set<string>();
   private readonly unsettledSends = new Set<string>();
   private readonly unresolved = new Set<string>();
@@ -46,6 +47,7 @@ export class BlueBubblesReceipts {
     if (!saved) storage.write(this.state);
     for (const [id, value] of Object.entries(this.state.inbox)) {
       applyBlueBubblesReceiptUpdate(this.state, { kind: 'inbox', id, value });
+      this.arrivalOrder.set(id, this.arrivalOrder.size);
       if (value.state === 'pending') this.pending.add(id);
       if (value.state === 'dispatching') this.dispatching.add(id);
       if (value.state === 'pending' || value.state === 'dispatching') this.unresolved.add(id);
@@ -66,6 +68,11 @@ export class BlueBubblesReceipts {
   }
   get activatedAt(): number { return this.state.activatedAt; }
   isPending(guid: string): boolean { return this.state.inbox[guid]?.state === 'pending'; }
+  /** Stable first observation order, independent of recovery's pending sort. */
+  receivedBefore(earlier: string, later: string): boolean {
+    const a = this.arrivalOrder.get(earlier), b = this.arrivalOrder.get(later);
+    return a !== undefined && b !== undefined && a < b;
+  }
   receivedAfter(guid: string, time: number): boolean { return (this.state.inbox[guid]?.receivedAt ?? 0) > time; }
   cursor(chat: string): number { return this.state.cursors[chat] ?? this.state.activatedAt; }
   nextPending(exclude: ReadonlySet<string>, active?: ReadonlySet<string>): string | undefined {
@@ -112,6 +119,7 @@ export class BlueBubblesReceipts {
     }
     applyBlueBubblesReceiptUpdate(this.state, update);
     if (update.kind === 'inbox') {
+      if (!this.arrivalOrder.has(update.id)) this.arrivalOrder.set(update.id, this.arrivalOrder.size);
       if (update.value.state === 'pending') this.pending.add(update.id); else this.pending.delete(update.id);
       if (update.value.state === 'dispatching') this.dispatching.add(update.id); else this.dispatching.delete(update.id);
       if (update.value.state === 'pending' || update.value.state === 'dispatching') this.unresolved.add(update.id);
