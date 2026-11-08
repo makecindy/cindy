@@ -40,6 +40,18 @@ const CONTEXT_WINDOW = 1024;
 // candidate, keeping the whole scan linear in practice.
 const MAX_DECLARATION_CONTEXT = 65536;
 
+/** Markdown link labels (`[label](target)`) as `[start, end)` ranges. A label
+ * can be longer than CONTEXT_WINDOW (a full PR title), so links are located in
+ * one pass over the whole source instead of peeking at a fixed window after
+ * each candidate. Labels never span lines, matching the inline syntax. */
+function markdownLinkLabels(source) {
+  const ranges = [];
+  for (const match of source.matchAll(/\[[^\]\n]*\]\(/g)) {
+    ranges.push([match.index + 1, match.index + match[0].length - 2]);
+  }
+  return ranges;
+}
+
 /** Source text from the start of the enclosing statement (after the last
  * `;`, `{` or `}`) up to `index`, so property names and wrapping functions
  * survive even inside a very long declaration. Statement boundaries only —
@@ -90,6 +102,12 @@ export function findBareColors(text) {
   const beforeContext = (index) => declarationContext(source, index);
   const afterContext = (index) => source.slice(index, Math.min(source.length, index + CONTEXT_WINDOW));
   const add = (value, index, end = index + value.length) => hits.push({ value, index, end });
+  const linkLabels = markdownLinkLabels(source);
+  let labelCursor = 0;
+  const inMarkdownLinkLabel = (index) => {
+    while (labelCursor < linkLabels.length && linkLabels[labelCursor][1] <= index) labelCursor++;
+    return labelCursor < linkLabels.length && linkLabels[labelCursor][0] <= index;
+  };
   for (const match of source.matchAll(/#[\da-f]+\b/gi)) {
     const value = match[0];
     if (![4, 5, 7, 9].includes(value.length)) continue;
@@ -98,7 +116,7 @@ export function findBareColors(text) {
     // CSS/hash literals, quoted colour values and Tailwind arbitrary values.
     // Prose PR numbers, URLs, HTML entities and CSS ID selectors are not colours.
     if (/(?:\bPR|\bissue|\bpull)\s*$/i.test(before)) continue;
-    if (/\[$/.test(before) && /^[^\]\n]*\]\(/.test(after)) continue;
+    if (inMarkdownLinkLabel(match.index)) continue;
     if (/^\s*\{/.test(after) || /(?:href|url)\s*[=(]\s*["']?$/i.test(before)) continue;
     const literalStart = /["'`:=\[]\s*$/.test(before);
     const declaration = /\b(?:[\w-]*color|background(?:-[\w-]+)?|border(?:-[\w-]+)?|fill|stroke|(?:box|text)-shadow|boxShadow|textShadow|outline)\s*:\s*[^;{}\n]*$/i.test(before);

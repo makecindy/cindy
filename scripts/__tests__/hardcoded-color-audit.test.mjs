@@ -46,6 +46,8 @@ test('semantic colours, PR prose, URL and comments are not literals; numeric hex
     'color-mix(in srgb, var(--a), var(--b))', 'PR #4135', '/* #4135 */',
     '// #4108\nconst link = "https://github.com/x/y/pull/4135";',
     '[#4022](https://github.com/x/y/pull/4022)', 'const label = "PR #4135";',
+    // A label longer than the bounded context window is still prose, not a colour.
+    '[#4022' + ' text'.repeat(220) + '](https://example.org)',
     '<a href="#fff">Link</a>', '&#229;', '#face { color: var(--x); }']) assert.deepEqual(matchBareColors(source), [], source);
   for (const value of ['#fff', '#1234', '#123456', '#12345678', 'rgb(1, 2, 3)', 'hsl(120 10% 20%)', 'oklch(.4 .2 120)']) {
     assert.deepEqual(matchBareColors(`const style = { color: '${value}' };`), [value]);
