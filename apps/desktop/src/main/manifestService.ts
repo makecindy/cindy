@@ -193,11 +193,18 @@ export async function fetchAppUpdateManifest(
   timeoutMs?: number,
   signal?: AbortSignal,
 ): Promise<Manifest | null> {
+  const channel = currentUpdateChannel();
+  const epochAtStart = manifestEpoch;
   const manifest = await fetchManifest(timeoutMs, signal);
   if (process.platform !== 'darwin' || process.arch !== 'x64' || !isRunningUnderArm64Translation()) {
     return manifest;
   }
   const native = await requestManifest('darwin-arm64', false, timeoutMs, signal);
+  // 两次读取之间切了渠道：已取到的 x64 清单也属旧渠道，整次作废，不能回退去装旧渠道包。
+  if (epochAtStart !== manifestEpoch || currentUpdateChannel() !== channel) {
+    log.info('manifest channel changed during app update lookup — discarding both responses');
+    return null;
+  }
   // 只在 arm64 清单本身可安装（版本合法、带 hotfix）时替换，否则不能挡住已取到的 x64 更新。
   const hotfix = native?.app?.hotfix;
   if (!native || !parseAppUpdateVersion(native.app?.version) || !hotfix?.file || !hotfix.sha256) {

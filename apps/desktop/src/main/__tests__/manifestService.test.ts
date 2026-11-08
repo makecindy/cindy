@@ -300,6 +300,7 @@ describe('fetchAppUpdateManifest', () => {
   afterEach(async () => {
     setRuntime(originalPlatform, originalArch);
     runningTranslated.mockReturnValue(false);
+    isBetaChannelEnabled.mockReturnValue(false);
     (await import('../manifestService')).clearCachedManifest();
   });
 
@@ -340,6 +341,16 @@ describe('fetchAppUpdateManifest', () => {
       expect(kept?.app.hotfix?.file).toBe('hotfix/darwin-x64/x64.zip');
       expect(service.getAppUpdateTargetArch(kept!)).toBeUndefined();
     }
+  });
+
+  it('discards both responses when the channel changes between the two reads', async () => {
+    mockManifestResponse(JSON.stringify(X64));
+    mockManifestResponse(JSON.stringify(ARM), () => {
+      isBetaChannelEnabled.mockReturnValue(true);
+    });
+    const service = await import('../manifestService');
+
+    await expect(service.fetchAppUpdateManifest()).resolves.toBeNull();
   });
 
   it('does not request another manifest for native builds', async () => {
