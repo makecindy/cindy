@@ -43,11 +43,26 @@ const MAX_DECLARATION_CONTEXT = 65536;
 /** Markdown link labels (`[label](target)`) as `[start, end)` ranges. A label
  * can be longer than CONTEXT_WINDOW (a full PR title), so links are located in
  * one pass over the whole source instead of peeking at a fixed window after
- * each candidate. Labels never span lines, matching the inline syntax. */
+ * each candidate. Labels never span lines, matching the inline syntax. Only
+ * the innermost bracket pair directly before `(` is a label, so an enclosing
+ * array/statement bracket cannot swallow unrelated colours, and unmatched
+ * brackets are discarded as they are seen instead of rescanning the tail. */
 function markdownLinkLabels(source) {
   const ranges = [];
-  for (const match of source.matchAll(/\[[^\]\n]*\]\(/g)) {
-    ranges.push([match.index + 1, match.index + match[0].length - 2]);
+  const opens = [];
+  for (let i = 0; i < source.length; i++) {
+    const ch = source[i];
+    if (ch === '\n') {
+      opens.length = 0;
+      continue;
+    }
+    if (ch === '[') {
+      opens.push(i);
+      continue;
+    }
+    if (ch !== ']') continue;
+    const open = opens.pop();
+    if (open !== undefined && source[i + 1] === '(') ranges.push([open + 1, i]);
   }
   return ranges;
 }
