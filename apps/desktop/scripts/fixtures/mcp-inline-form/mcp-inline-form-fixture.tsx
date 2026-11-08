@@ -1,4 +1,5 @@
 import { McpServerDialog } from '../../../src/renderer/components/settings/McpServerDialog';
+import { McpServersSection } from '../../../src/renderer/components/settings/McpServersSection';
 import { McpSetupPrompt } from '../../../src/renderer/components/new-chat/McpSetupPrompt';
 import { MessageStream } from '../../../src/renderer/components/chat/MessageStream';
 import { AppFrame, mountPage } from '../../ui-page/harness';
@@ -14,6 +15,8 @@ void mountPage({
     authHasPersistedSessionHintSync: () => false,
     maker: {
       listCustomMcpServers: async () => ({ servers: [] }),
+      onMcpChanged: () => () => {},
+      listMcpDuplicates: async () => ({ connections: [], complete: true }),
       createCustomMcpServer: async () => ({ ok: true }),
       refreshCustomMcpCodex: async () => ({ ok: true }),
       resolveInteraction: async () => {
@@ -27,7 +30,9 @@ void mountPage({
   },
   render: context => {
     rejectResult = context.case === 'result-error';
-    const request = { kind: 'mcp_setup' as const, requestId: 'mcp-form-fixture', proposal: {} };
+    const request = { kind: 'mcp_setup' as const, requestId: 'mcp-form-fixture', proposal: context.case.startsWith('local')
+      ? { name: 'Local tools', transport: 'stdio' as const, command: 'npx', args: ['-y', 'example-mcp'] } : {} };
+    if (context.case === 'list') return <McpServersSection />;
     const form = <McpSetupPrompt request={request} />;
     if (context.case === 'layout') return <AppFrame>
       <div className="relative min-h-0 flex-1" data-ui-mcp-layout>

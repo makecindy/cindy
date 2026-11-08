@@ -105,3 +105,13 @@ describe.each(['http', 'sse'] as const)('MCP App %s discovery cancellation', (tr
     }
   });
 });
+
+// Unit: a spawn failure must remain a load failure, without leaking command secrets.
+it('reports local startup failures without command arguments or environment values', async () => {
+  vi.spyOn(Client.prototype, 'connect').mockRejectedValue(new Error('spawn fixture-secret'));
+  vi.spyOn(Client.prototype, 'close').mockResolvedValue(undefined);
+  const connection = new AppConnection({ id: 'local', url: '', transport: 'stdio',
+    stdio: { command: 'node', args: ['fixture-secret'], env: {} } });
+  await expect(connection.tools()).rejects.toThrow(/^MCP_STDIO_START_FAILED$/);
+  await connection.close();
+});

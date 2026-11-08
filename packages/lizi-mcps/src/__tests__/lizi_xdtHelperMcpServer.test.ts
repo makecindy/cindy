@@ -1425,6 +1425,11 @@ it.each(['claude-code', 'codex', 'pi'] as const)('opens MCP Settings through the
       name: 'Example', url: 'https://example.test/mcp', transport: 'sse',
     });
     request.mockClear();
+    const local = { name: 'Local', transport: 'stdio', command: 'npx', args: ['-y', 'example-mcp'] };
+    const localResult = parsePayload(await client.callTool({ name: 'call_tool', arguments: { name: 'request_mcp_setup', args: local } }));
+    expect(localResult).toEqual({ ok: true, status: 'saved', serverId: 'custom_example' });
+    expect(request).toHaveBeenCalledExactlyOnceWith(expect.objectContaining(context), local);
+    request.mockClear();
     await client.callTool({ name: 'call_tool', arguments: { name: 'request_mcp_setup', args: { url: 'https://example.test/mcp?token=test-invalid-token' } } });
     expect(request).not.toHaveBeenCalled();
   } finally { await client.close(); await server.close(); }

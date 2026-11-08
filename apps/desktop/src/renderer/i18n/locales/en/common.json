@@ -9052,20 +9052,20 @@
     },
     "mcp": {
       "title": "External tools",
-      "subtitle": "Connect your own remote MCP servers. HTTP/Streamable HTTP servers work with both Claude and Codex; SSE is Claude-only.",
+      "subtitle": "Connect MCP tools for Claude Code, Codex and Pi on this computer.",
       "cancel": "Cancel",
       "save": "Save",
       "editAria": "Edit",
       "deleteAria": "Delete",
       "addCustom": {
         "title": "Add MCP server",
-        "subtitle": "Enter a remote MCP endpoint (http/sse)"
+        "subtitle": "Connect a remote service or a local program"
       },
       "dialog": {
         "createTitle": "Add MCP server",
         "editTitle": "Edit MCP server",
-        "desc": "Remote http / sse MCP only. New sessions can call it after saving; in-flight sessions are unaffected.",
-        "teammateDesc": "Remote http / sse MCP only. After saving, your buddy adds it to their tools and can use it from the next message in this chat, with no new session needed."
+        "desc": "Available to new or restarted agent sessions after saving. Running sessions are unaffected. Engine-native configurations remain separate.",
+        "teammateDesc": "After saving, your buddy adds these tools and can use them from the next message in this chat, with no new session needed."
       },
       "fields": {
         "name": "Display name",
@@ -9077,16 +9077,19 @@
         "tokenPlaceholder": "Enter auth token",
         "tokenEditPlaceholder": "Leave blank to remove the saved token",
         "tokenSaved": "Saved",
-        "tokenHelp": "Used for auth: Claude sends it as an Authorization: Bearer header; Codex only supports Bearer auth.",
+        "tokenHelp": "Cindy sends this token to the MCP service as Authorization: Bearer.",
         "headers": "Headers (optional)",
         "headerNamePlaceholder": "Header name",
         "headerValuePlaceholder": "Value",
         "addHeader": "Add header",
-        "removeRow": "Remove row"
+        "removeRow": "Remove row",
+        "localConfig": "Local program (JSON)",
+        "localHelp": "Saving allows Cindy to run this command on this computer under your account, starting in your home folder. Enter command, args (an array) and env (an object). Enter secrets here only. Saving is not a connection test."
       },
       "errors": {
         "nameRequired": "Display name is required",
-        "urlInvalid": "Enter a valid http(s) URL"
+        "urlInvalid": "Enter a valid http(s) URL",
+        "localConfigInvalid": "Enter valid JSON with a nonempty command, a string array args and a string-to-string object env."
       },
       "toast": {
         "created": "MCP server added",

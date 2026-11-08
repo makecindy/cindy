@@ -76,7 +76,7 @@ export interface SourceMarketSourceFact {
 export interface SourceMcpFact {
   id: string;
   name: string;
-  transport: 'http' | 'sse';
+  transport: 'http' | 'sse' | 'stdio';
   url: string;
   headers: Record<string, string>;
   hasToken: boolean;
@@ -305,6 +305,8 @@ export function projectMarketSources(sources: SourceMarketSourceFact[]): SetupSn
  * had any of them is marked as needing its credentials entered again on the other computer.
  */
 function projectMcpServer(server: SourceMcpFact): SetupSnapshotMcpServer | null {
+  // Commands belong to their owning computer; never copy executable configuration.
+  if (server.transport === 'stdio') return null;
   try {
     new URL(server.url);
   } catch {

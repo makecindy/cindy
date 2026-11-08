@@ -863,3 +863,20 @@ describeMigrationReplay('migration replay', () => {
     }
   });
 });
+
+// Migration tier: preserve remote rows when adding encrypted local configuration,
+// including partial schemas. Uses the production migration runner, not copied SQL.
+describeMigrationReplay.each([false, true])('local MCP migration (column already present=%s)', existing => {
+  it('retains saved remote configuration and applies idempotently', () => {
+    const { db, cleanup } = createTempDb();
+    try {
+      db.exec("CREATE TABLE migration_meta (key TEXT PRIMARY KEY, value TEXT NOT NULL); CREATE TABLE migration_history (seq INTEGER PRIMARY KEY, file_name TEXT NOT NULL, content_hash TEXT NOT NULL, applied_at INTEGER NOT NULL)");
+      db.exec(`CREATE TABLE custom_mcp_servers (id TEXT PRIMARY KEY, transport TEXT, url TEXT, headers TEXT${existing ? ', stdio TEXT' : ''});
+        INSERT INTO custom_mcp_servers (id, transport, url, headers) VALUES ('saved', 'sse', 'https://example.test/mcp', '{}');`);
+      runMigrationReplay(db, { drizzleDir: drizzleDir(), currentVersion: 148 });
+      expect(db.prepare('SELECT * FROM custom_mcp_servers').all()).toEqual([
+        { id: 'saved', transport: 'sse', url: 'https://example.test/mcp', headers: '{}', stdio: null },
+      ]);
+    } finally { cleanup(); }
+  });
+});

@@ -296,3 +296,15 @@ describe('MCP credential kind projection', () => {
     expect(parseSetupSnapshot(JSON.parse(JSON.stringify(result))).mcpServers).toEqual(result.mcpServers);
   });
 });
+
+// Unit: adding local executable configuration must not expand cross-computer transfer.
+it('omits local commands from a setup snapshot while retaining remote MCPs', async () => {
+  const result = await collectSetupSnapshot(deps({ readMcpServers: async () => [
+    { id: 'local', name: 'Local', transport: 'stdio', url: '', headers: {}, hasToken: false,
+      stdio: { command: 'node', args: ['fixture-secret'], env: { KEY: 'fixture-secret' } } },
+    { id: 'remote', name: 'Remote', transport: 'sse', url: 'https://example.test/mcp', headers: {}, hasToken: false },
+  ] }));
+  expect(result.mcpServers.map(server => server.id)).toEqual(['remote']);
+  expect(JSON.stringify(result)).not.toContain('fixture-secret');
+  expect(parseSetupSnapshot(JSON.parse(JSON.stringify(result)))).toEqual(result);
+});

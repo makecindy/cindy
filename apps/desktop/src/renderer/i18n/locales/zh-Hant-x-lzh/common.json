@@ -9009,20 +9009,20 @@
     },
     "mcp": {
       "title": "外器",
-      "subtitle": "接君自有之遠端 MCP 伺服器。HTTP / Streamable HTTP 伺服器，Claude 與 Codex 皆可呼叫；SSE 僅支援 Claude。",
+      "subtitle": "於本機為 Claude Code、Codex 及 Pi 接入 MCP 工具。",
       "cancel": "罷",
       "save": "存之",
       "editAria": "修",
       "deleteAria": "刪",
       "addCustom": {
         "title": "增 MCP 伺服器",
-        "subtitle": "填遠端 MCP 端點(http/sse)"
+        "subtitle": "連接遠端服務或本機程式"
       },
       "dialog": {
         "createTitle": "增 MCP 伺服器",
         "editTitle": "修 MCP 伺服器",
-        "desc": "僅支援遠端 http / sse 型 MCP。存後新開或重啟之 Agent 會話即可呼叫，方行之 Agent 會話不受影響。",
-        "teammateDesc": "僅支援遠端 http / sse 型 MCP。存後同伴自納為己用，於此言談下一則訊息起即可用之，毋須新開差事。"
+        "desc": "存後，新啟或重啟之 Agent 會話方生效，運行中者不擾。各引擎原生配置仍各自管理。",
+        "teammateDesc": "存後，同伴自本對話下一則訊息可載入工具，無須新建差事。"
       },
       "fields": {
         "name": "顯名",
@@ -9034,16 +9034,19 @@
         "tokenPlaceholder": "填鑑權 token",
         "tokenEditPlaceholder": "留空則刪已存 token",
         "tokenSaved": "已存",
-        "tokenHelp": "用於鑑權：Claude 以 Authorization: Bearer 頭遣之；Codex 僅支援 Bearer 型鑑權。",
+        "tokenHelp": "Cindy 以 Authorization: Bearer 請求標頭將此 token 傳送至 MCP 服務。",
         "headers": "請求頭(可略)",
         "headerNamePlaceholder": "Header 名",
         "headerValuePlaceholder": "值",
         "addHeader": "增請求頭",
-        "removeRow": "刪此行"
+        "removeRow": "刪此行",
+        "localConfig": "本機程式（JSON）",
+        "localHelp": "儲存即允 Cindy 以汝帳號於本機執行命令，始於使用者家目錄。填 command、args 陣列及 env 物件；金鑰僅填於此。儲存不驗連線。"
       },
       "errors": {
         "nameRequired": "請填顯名",
-        "urlInvalid": "請填合法之 http(s) URL"
+        "urlInvalid": "請填合法之 http(s) URL",
+        "localConfigInvalid": "請填有效 JSON：command 不可空，args 為字串陣列，env 之名與值皆為字串。"
       },
       "toast": {
         "created": "MCP 伺服器已增",
