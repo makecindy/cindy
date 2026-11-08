@@ -382,7 +382,7 @@ describe('sendToSession ordering', () => {
 
     expect(source).toContain('assertDesktopSendDispatched');
     expect(orcaInterAgentDispatcherSource).toContain('resolveCollabDispatchResult');
-    expect(helperBlock).toContain('Promise<CollabDirectDispatchResult & { reportRejected?: true }>');
+    expect(helperBlock).toContain('Promise<(CollabDirectDispatchResult & { reportRejected?: true }) | null>');
     expect(helperBlock).toContain('const result = await resolveCollabDispatchResult(');
     expect(helperBlock).toMatch(
       /async \(\) => \{\s+params\.onSendAttempt\(\);\s+const sendResult = await session\.send\((?:agentMessage|outgoingMessage), \{/,

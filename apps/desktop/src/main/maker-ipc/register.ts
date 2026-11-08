@@ -461,7 +461,7 @@ import { statWorkingDirectory, mkdirWorkingDirectory, realpathWorkingDirectory, 
 import { getMessagesForHistory } from '../localDb/chatHistoryReader.js';
 import {
   awaitAgentInputQueueSnapshotPersistence as awaitQueuedSnapshotWrite,
-  loadAgentInputQueueSnapshot,
+  loadAgentInputQueueSnapshotState,
   loadAgentInputQueueSnapshotCounts,
   listQueuedOrcaReportSessionIds,
   saveAgentInputQueueSnapshot,
@@ -15981,7 +15981,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     hasPendingAgentSwitch: (sessionId) => !!agentSwitchPending.get(sessionId),
     peekPendingHandoff: (sessionId) => agentHandoffPending.peek(sessionId),
     consumePendingHandoff: (sessionId) => agentHandoffPending.consume(sessionId),
-    shouldQueueNewTurn: (sessionId): boolean => inputCoordinator.shouldQueueNewTurn(sessionId),
+    shouldQueueNewTurn: (sessionId, orcaReport): boolean => inputCoordinator.shouldQueueNewTurn(sessionId, orcaReport),
     steerControlInput: (sessionId, item, expectedTurn) =>
       inputCoordinator.steerControlInput(sessionId, { item }, expectedTurn),
     hasSendToSessionLock: (sessionId) => sendToSessionLocks.has(sessionId),
@@ -21285,7 +21285,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     // 排队输入崩溃恢复(issue #761):快照写入 fire-and-forget(模块内 per-session
     // 写链保序 + 失败落日志),读回由 ensureQueueRestored 懒触发。恢复前先严格
     // 水合 durable /clear 边界，所有入口共用，避免仅 projection 路径安全。
-    persistQueueSnapshot: (sessionId, items) => saveAgentInputQueueSnapshot(sessionId, items),
+    persistQueueSnapshot: (sessionId, items, stopped) => saveAgentInputQueueSnapshot(sessionId, items, stopped),
     awaitQueuePersistence: awaitAgentInputQueueSnapshotPersistence,
     canRestoreOrcaReport: async (sessionId, item) => {
       const owner = activeOwnerScopeKey();
@@ -21302,7 +21302,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       // Rehydrate durable task holds before any entry point can drain restored/new input.
       await botDelegationServiceHolder?.restorePauseForSession(sessionId);
       await restoreSavedUsageLimitWait(sessionId);
-      return loadAgentInputQueueSnapshot(sessionId);
+      return loadAgentInputQueueSnapshotState(sessionId);
     },
     getPersistedClientIds: getPersistedInputClientIds,
   });

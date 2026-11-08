@@ -189,7 +189,7 @@ export interface OrcaInterAgentDispatcherDeps<TSessionMeta> {
     item: AgentInputQueuedMessage,
     expectedTurn: { session: object; turnGeneration: number },
   ) => Promise<ControlSteerOutcome>;
-  shouldQueueNewTurn: (sessionId: string) => boolean;
+  shouldQueueNewTurn: (sessionId: string, orcaReport?: boolean) => boolean;
   hasSendToSessionLock: (sessionId: string) => boolean;
   /**
    * 把 prepare → 重新取 live → send 整段串行化到与 sendToSessionInternal 同一把
@@ -594,6 +594,10 @@ export function createOrcaInterAgentDispatcher<TSessionMeta>(
             createOpts,
             ...(imageFiles.length ? { files: imageFiles } : {}),
           });
+          if (params.source === 'worker' && params.workerId) {
+            item.orcaReportDelivery = { workerId: params.workerId };
+            item.durableDelivery = true;
+          }
           if (
             deps.getLiveSession(params.targetSessionId) !== liveTurn ||
             !liveTurn.isTurnRunning?.() ||
@@ -645,7 +649,7 @@ export function createOrcaInterAgentDispatcher<TSessionMeta>(
     }
 
     const shouldQueue = (params.source === 'worker' && !deps.getLiveSession(params.targetSessionId))
-      || deps.shouldQueueNewTurn(params.targetSessionId)
+      || deps.shouldQueueNewTurn(params.targetSessionId, params.source === 'worker')
       || deps.hasSendToSessionLock(params.targetSessionId)
       || deps.getLiveSession(params.targetSessionId)?.isTurnRunning?.() === true;
     if (shouldQueue) {
@@ -706,6 +710,9 @@ export function createOrcaInterAgentDispatcher<TSessionMeta>(
         });
       };
       const dispatchLive = async (): Promise<DispatchOrcaInterAgentMessageResult | null> => {
+        if (params.source === 'worker' && deps.shouldQueueNewTurn(params.targetSessionId, true)) {
+          return enqueueQueuedMessage('orca report queued after input boundary changed');
+        }
         // Orca delivery bypasses the ordinary renderer send transaction. Apply
         // the same deferred route boundary before reading the live session.
         if (params.reportClientId) {
@@ -728,17 +735,24 @@ export function createOrcaInterAgentDispatcher<TSessionMeta>(
         const live = deps.getLiveSession(params.targetSessionId);
         if (!live) return null;
         const origin = await resolveOrigin();
+        const agentMessage = await agentMessageTextWithImages();
+        if (params.source === 'worker' && deps.shouldQueueNewTurn(params.targetSessionId, true)) {
+          return enqueueQueuedMessage('orca report queued after preparation');
+        }
         const result = await sendPersistedUserMessageToSession(deps, {
           session: live,
           dbContent: persistedContent,
-          agentMessage: await agentMessageTextWithImages(),
+          agentMessage,
           clientId,
           source: params.meta.source,
           context: params.meta.context,
           origin,
+          shouldDefer: params.source === 'worker'
+            ? () => deps.shouldQueueNewTurn(params.targetSessionId, true) : undefined,
           onSendAttempt: () => { deliveryAttempt.started = true; },
           onAccepted: runAccepted,
         });
+        if (!result) return enqueueQueuedMessage('orca report queued before send');
         if (result.reportRejected) deliveryAttempt.started = false;
         if (result.dispatched) {
           if (acceptedDidRun) {
@@ -965,10 +979,11 @@ async function sendPersistedUserMessageToSession<TSessionMeta>(
     source: string;
     context: string;
     origin?: AgentInputQueuedMessage['origin'];
+    shouldDefer?: () => boolean;
     onSendAttempt: () => void;
     onAccepted?: () => void | Promise<void>;
   },
-): Promise<CollabDirectDispatchResult & { reportRejected?: true }> {
+): Promise<(CollabDirectDispatchResult & { reportRejected?: true }) | null> {
   const { session, dbContent, agentMessage, clientId = deps.createId(), source, context, origin, onAccepted } = params;
   let turnChangeSetStarted = false;
   let rejected = false;
@@ -977,6 +992,9 @@ async function sendPersistedUserMessageToSession<TSessionMeta>(
   const outgoingMessage = pendingHandoff
     ? prependHandoffToUserMessage(agentMessage, pendingHandoff) as UserMessage
     : agentMessage;
+  // Stop can occur during either preparation read. No await remains between
+  // this guard and the actual send; a deferred report has not been handed off.
+  if (params.shouldDefer?.()) return null;
   const result = await resolveCollabDispatchResult(
     async () => {
       params.onSendAttempt();

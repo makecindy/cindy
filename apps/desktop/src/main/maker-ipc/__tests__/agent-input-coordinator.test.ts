@@ -1713,7 +1713,7 @@ function createHarness(opts?: {
   >(() => {});
   let hasAssistantProgressAfter:
     ((sessionId: string, userClientId: string) => Promise<boolean>) | null = null;
-  let loadQueueSnapshot: ((sessionId: string) => Promise<AgentInputQueuedMessage[]>) | null = null;
+  let loadQueueSnapshot: NonNullable<AgentInputCoordinatorDeps['loadQueueSnapshot']> | null = null;
   let loadClearBoundary: ((sessionId: string) => Promise<unknown>) | null = null;
   let getPersistedClientIds:
     ((sessionId: string, clientIds: string[]) => Promise<Set<string>>) | undefined;
@@ -1940,7 +1940,7 @@ function createHarness(opts?: {
       resumableTurnErrorCandidate = fn;
     },
     persistQueueSnapshot,
-    setLoadQueueSnapshot(fn: ((sessionId: string) => Promise<AgentInputQueuedMessage[]>) | null) {
+    setLoadQueueSnapshot(fn: NonNullable<AgentInputCoordinatorDeps['loadQueueSnapshot']> | null) {
       loadQueueSnapshot = fn;
     },
     setLoadClearBoundary(fn: ((sessionId: string) => Promise<unknown>) | null) {
@@ -13182,6 +13182,141 @@ describe('Orca report durable recovery', () => {
       await flush();
       expect(restarted.sendToAgent).toHaveBeenCalledOnce();
     }
+  });
+
+  // #9346 P1: prior Stop tests already had a queue. Unit: stop an empty Lead,
+  // let its old turn settle, then deliver a report; only explicit resume may send it.
+  it.each([false, true])('holds late reports after an empty-queue Stop (pauseQueue=%s)', async pauseQueue => {
+    const h = createHarness({ awaitQueuePersistence: async () => {}, canRestoreOrcaReport: async () => true });
+    await h.coordinator.ensureQueueRestored('lead');
+    h.setRunning(true);
+    h.coordinator.stop('lead', { keepQueue: true, pauseQueue });
+    h.setRunning(false);
+    h.coordinator.wakeSession('lead', 'stopped-turn-settled');
+    await flush();
+    await h.coordinator.enqueueDurably('lead', report());
+    await flush();
+    expect(h.sendToAgent).not.toHaveBeenCalled();
+    expect(h.coordinator.getProjection('lead')).toMatchObject({ queuePaused: true,
+      pendingQueue: [expect.objectContaining({ clientId: 'report-1' })] });
+    h.coordinator.resume('lead');
+    await flush();
+    expect(h.sendToAgent).toHaveBeenCalledOnce();
+  });
+
+  // A late control report must not bypass Stop through the running-turn path.
+  it.each(['ack', 'persistence'])('preserves a newer Stop when a previous user steer completes after %s', async stage => {
+    const h = createHarness({ awaitQueuePersistence: async () => {}, canRestoreOrcaReport: async () => true });
+    await h.coordinator.ensureQueueRestored('lead');
+    h.setAgentKind('codex');
+    h.coordinator.enqueue('lead', makeItem('active-owner-turn', 'active owner turn'));
+    await flush();
+    h.sendToAgent.mockClear();
+    const ack = deferred<void>();
+    if (stage === 'ack') h.steerToAgent.mockImplementationOnce(() => ack.promise);
+    else mocks.createMessage.mockImplementationOnce(async () => { await ack.promise; return {}; });
+    const sending = h.coordinator.steer('lead', makeItem('owner-steer', 'owner steer'), { touchUserSend: true });
+    await flush();
+    expect(h.steerToAgent).toHaveBeenCalledOnce();
+    h.coordinator.stop('lead');
+    ack.resolve();
+    await sending;
+    h.setRunning(false);
+    await flush();
+    await h.coordinator.enqueueDurably('lead', report());
+    await flush();
+    expect(h.sendToAgent).not.toHaveBeenCalled();
+    expect(h.coordinator.shouldQueueNewTurn('lead', true)).toBe(true);
+  });
+
+  it('retains an uncertain control report across restart without replay', async () => {
+    const h = createHarness({ awaitQueuePersistence: async () => {}, canRestoreOrcaReport: async () => true });
+    await h.coordinator.ensureQueueRestored('lead');
+    h.setRunning(true);
+    h.steerToAgent.mockRejectedValueOnce(new Error('did not acknowledge within budget'));
+    const outcome = await h.coordinator.steerControlInput('lead', { item: report() }, {
+      session: h.getTurnSessionIdentity(), turnGeneration: 0,
+    });
+    expect(outcome).toBe('queued');
+    const saved = JSON.parse(JSON.stringify(h.persistQueueSnapshot.mock.calls.at(-1)![1]));
+    const restarted = createHarness({ awaitQueuePersistence: async () => {}, canRestoreOrcaReport: async () => true });
+    restarted.setLoadQueueSnapshot(async () => saved);
+    await restarted.coordinator.ensureQueueRestored('lead');
+    await flush();
+    expect(restarted.sendToAgent).not.toHaveBeenCalled();
+    expect(restarted.coordinator.getProjection('lead').pendingQueue).toHaveLength(1);
+  });
+
+  it('does not acknowledge an uncertain report until its paused snapshot is durable', async () => {
+    const checkpoint = deferred<void>();
+    const write = vi.fn(async () => {}).mockImplementationOnce(() => checkpoint.promise).mockRejectedValueOnce(new Error('snapshot unavailable'));
+    const h = createHarness({ awaitQueuePersistence: write });
+    await h.coordinator.ensureQueueRestored('lead');
+    h.setRunning(true);
+    h.steerToAgent.mockRejectedValueOnce(new Error('delivery uncertain'));
+    const sending = h.coordinator.steerControlInput('lead', { item: report() }, {
+      session: h.getTurnSessionIdentity(), turnGeneration: 0,
+    });
+    await flush();
+    expect(h.steerToAgent).not.toHaveBeenCalled();
+    expect(h.persistQueueSnapshot.mock.calls.at(-1)![1]).toEqual([
+      expect.objectContaining({ clientId: 'report-1', orcaReportDelivery: expect.objectContaining({ recoveryBlocked: true }) }),
+    ]);
+    checkpoint.resolve();
+    await expect(sending).rejects.toThrow('snapshot unavailable');
+    expect(h.steerToAgent).toHaveBeenCalledOnce();
+    expect(h.coordinator.getProjection('lead').pendingQueue).toHaveLength(1);
+    expect(h.persistQueueSnapshot.mock.calls.at(-1)![1][0].orcaReportDelivery?.recoveryBlocked).toBe(true);
+  });
+
+  it('keeps a late control report behind the empty Stop after abort settles', async () => {
+    const h = createHarness({ awaitQueuePersistence: async () => {} });
+    await h.coordinator.ensureQueueRestored('lead');
+    h.coordinator.stop('lead');
+    await flush();
+    h.setRunning(true);
+    const expected = { session: h.getTurnSessionIdentity(), turnGeneration: 0 };
+    expect(await h.coordinator.steerControlInput('lead', { item: report() }, expected)).toBe('not-attempted');
+    expect(h.steerToAgent).not.toHaveBeenCalled();
+    h.coordinator.resume('lead');
+    expect(await h.coordinator.steerControlInput('lead', { item: report() }, expected)).toBe('steered');
+    expect(h.steerToAgent).toHaveBeenCalledOnce();
+  });
+
+  // The empty Stop snapshot must survive before any report exists. Rebuild only
+  // from persisted state, then verify explicit resume/input and later reports.
+  it.each(['resume', 'input'] as const)('restores an empty Stop until explicit %s', async action => {
+    const h = createHarness();
+    await h.coordinator.ensureQueueRestored('lead');
+    h.coordinator.stop('lead');
+    await flush();
+    const saved = h.persistQueueSnapshot.mock.calls.at(-1)!;
+    expect(saved[1]).toEqual([]);
+    expect(saved[2]).toBe(true);
+    const restarted = createHarness({ awaitQueuePersistence: async () => {}, canRestoreOrcaReport: async () => true });
+    restarted.setLoadQueueSnapshot(async () => JSON.parse(JSON.stringify({ items: saved[1], orcaReportsStopped: saved[2] })));
+    await restarted.coordinator.ensureQueueRestored('lead');
+    expect(restarted.coordinator.shouldQueueNewTurn('lead', true)).toBe(true);
+    expect(restarted.coordinator.shouldQueueNewTurn('lead')).toBe(false);
+    await restarted.coordinator.enqueueDurably('lead', report());
+    await flush();
+    expect(restarted.sendToAgent).not.toHaveBeenCalled();
+    if (action === 'resume') restarted.coordinator.resume('lead');
+    else restarted.coordinator.enqueue('lead', makeItem('owner', 'Continue'), { resumeRestorePausedQueue: true });
+    await flush();
+    expect(restarted.sendToAgent.mock.calls[0]![3].persistUserMessage?.clientId).toBe('report-1');
+    restarted.setRunning(false);
+    restarted.coordinator.onTurnEvent('lead', 'done');
+    await flush();
+    if (action === 'input') {
+      restarted.setRunning(false);
+      restarted.coordinator.onTurnEvent('lead', 'done');
+      await flush();
+    }
+    await restarted.coordinator.enqueueDurably('lead', { ...report(), clientId: 'report-2' });
+    await flush();
+    expect(restarted.sendToAgent.mock.calls.at(-1)![3].persistUserMessage?.clientId).toBe('report-2');
+    expect(restarted.persistQueueSnapshot.mock.calls.at(-1)![2]).not.toBe(true);
   });
 
   // Idle rewind uses a pause entry rather than Stop; both the old report and

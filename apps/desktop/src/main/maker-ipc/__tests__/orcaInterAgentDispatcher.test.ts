@@ -128,6 +128,22 @@ describe('sender-chosen steering into an active turn', () => {
     senderLabel: 'Worker', workerId: 'worker-1', meta: { source: 'orca', context: 'report-test' },
   };
   const steerReport = { ...report, delivery: 'steer' as const };
+  // #9346, unit: healthy live reports bypassed the empty Stop, including a Stop
+  // arriving during preparation. Lead dispatch is not a Worker report.
+  it.each(['initial', 'preparation', 'history', 'handoff'])('queues a Worker report behind an empty Stop (%s)', async timing => {
+    let stopped = timing === 'initial';
+    const h = createHarness({ shouldQueueNewTurn: (_sid, orcaReport) => stopped && orcaReport === true,
+      prepareUnhealthySession: async () => { if (timing === 'preparation') stopped = true; },
+      readAutoReviewHistory: async () => { if (timing === 'history') stopped = true; return []; },
+      peekPendingHandoff: async () => { if (timing === 'handoff') stopped = true; return null; } });
+    const result = await h.dispatcher.dispatchOrEnqueueOrcaInterAgentMessage(report);
+    expect(result).toMatchObject({ ok: true, mode: 'queued' });
+    expect(h.queuedItems).toHaveLength(1);
+    expect(h.liveSession.send).not.toHaveBeenCalled();
+    const lead = await h.dispatcher.dispatchOrEnqueueOrcaInterAgentMessage({ ...report, source: 'lead' });
+    expect(lead).toMatchObject({ ok: true, mode: 'dispatched' });
+    expect(h.liveSession.send).toHaveBeenCalledOnce();
+  });
   // #9346 P1, unit: preparation can fail before a report reaches any queue/send.
   // Existing cancellation tests start inside send; retaining these untouched
   // reports as unknown permanently blocks automatic recovery after preparation heals.
