@@ -11,10 +11,13 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { act, renderHook } from '@testing-library/react';
 import { createElement, type ReactNode } from 'react';
 
+import { bootstrapLocalThemesSync } from '../../themes/local-themes';
 import { themeService } from '../../themes/theme-service';
+import type { LocalThemesResult } from '../../../shared/local-themes';
 import {
   __resetLoginFirstLaunchLightGateForTest,
   endLoginFirstLaunchLightGate,
+  followLocalThemeChanges,
   getInitialThemeVariant,
   ThemeProvider,
   useTheme,
@@ -175,6 +178,31 @@ describe('useTheme 跨窗口主题同步(D2-3)', () => {
     });
 
     expect(applySpy).toHaveBeenCalledOnce();
+  });
+
+  it('无 Provider 窗口收到 Omarchy 推送后按新配色重应用', () => {
+    const omarchy = (surface: string): LocalThemesResult => ({
+      success: true,
+      diagnostics: [],
+      themes: [{ id: 'omarchy', name: 'Omarchy', type: 'dark', colors: { surface } }],
+    });
+    let push: (payload: LocalThemesResult) => void = () => {};
+    (window as unknown as { electronAPI: unknown }).electronAPI = {
+      localThemes: {
+        listSync: () => omarchy('#142620'),
+        onChanged: (cb: typeof push) => { push = cb; return () => {}; },
+      },
+    };
+    localStorage.setItem('theme.familyId', 'omarchy');
+    localStorage.setItem('login.firstLaunchLightShown', '1');
+    bootstrapLocalThemesSync();
+    const stop = followLocalThemeChanges();
+    const applySpy = themeService.applyTheme as unknown as ReturnType<typeof vi.fn>;
+    applySpy.mockClear();
+    push(omarchy('#2c2525'));
+    stop();
+    expect(applySpy).toHaveBeenCalledOnce();
+    expect(applySpy.mock.calls[0][0].colors.surface).toBe('#2c2525');
   });
 
   it('非法 theme 值不触发 state 变更', () => {
