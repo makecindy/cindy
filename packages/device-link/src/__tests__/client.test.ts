@@ -11700,13 +11700,15 @@ describe('直连优先、中继兜底(Device Link direct path)', () => {
       const rows = info.mock.calls.filter(([s]) => s.startsWith('device-link diagnostic '))
         .map(([s]) => JSON.parse(s.slice('device-link diagnostic '.length)));
       const pathRows = rows.filter(row => row.stage === 'path');
-      const snapshot = Object.assign({}, ...pathRows.map(row => row.transport ?? {}));
-      // Capture before detach clears the path: later fallback logs cannot show
-      // which unacknowledged prefix was still on the relay.
-      const heads = snapshot.head ?? pathRows.find(row => row['transport.head'])?.['transport.head'];
+      // The path row is recorded while detaching, so it still reports the interrupted
+      // direct write. Which unacknowledged prefix was on the relay just before that
+      // move only survives in the send row, so both pieces of evidence are asserted.
+      const heads = rows.flatMap(row => row.transport?.head ?? []);
       expect(heads).toEqual(expect.arrayContaining([expect.objectContaining({ seq: expect.any(Number),
         bytes: expect.any(Number), path: 'relay', sent: true })]));
       expect(pathRows[0]).toMatchObject({ reason: 'send-failed' });
+      expect(pathRows[0].transport.head).toEqual(expect.arrayContaining([expect.objectContaining({
+        path: 'direct', sent: true, attempts: expect.any(Number) })]));
       const fallbackHead = h.current().sent.slice(initial.length).filter(env => env.id === 'head');
       expect(fallbackHead).toHaveLength(initialHead.length);
       // Reuse the original sequence and every fragment; the receiver can assemble and deduplicate it.
