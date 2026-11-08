@@ -37,7 +37,7 @@ export function ChatGroupNotificationSettings({ groupId, mode, disabled }: {
   }
   return <>
     <SettingsRow wrap title={t(key('title'))} hint={t(key(`${mode}Hint`))} trailing={
-      <Select label={t(key('title'))} value={mode} disabled={disabled || busy} className="h-8 max-w-[220px]"
+      <Select label={t(key('title'))} value={mode} disabled={disabled || busy} size="compact" className="max-w-[220px]"
         triggerAdornment={busy ? <span role="status">{t(key('saving'))}</span> : undefined}
         options={modes.map(value => ({ value, label: t(key(value)) }))} onValueChange={value => void change(value)} />} />
     {error && <p role="alert" className="px-4 pb-3 text-12 leading-5 text-[var(--error-fg)]">{t(key('saveFailed'))}</p>}

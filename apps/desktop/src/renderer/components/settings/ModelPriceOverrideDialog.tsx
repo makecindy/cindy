@@ -7,6 +7,7 @@ import { useTranslation } from 'react-i18next';
 import type { AgentKind, ProviderView } from '@cindy/model-providers';
 
 import { SegmentedControl } from '@/components/ui/segmented-control';
+import { Select } from '@/components/ui/select';
 import { cn } from '@/lib/utils';
 import { toast } from '@/lib/toast';
 
@@ -267,16 +268,14 @@ export function ModelPriceOverrideDialog({ provider, row, open, onOpenChange, pr
             if (!dirty) setAgent(next);
             else void save().then((saved) => { if (saved) setAgent(next); });
           }} options={row.avail.map(candidate => ({ value: candidate, label: AGENT_LABEL[candidate] }))} />}
-        {(view?.allowedCurrencies.length ?? 0) > 1 && <label className="mt-2 flex items-center justify-between gap-4 text-12 text-[var(--text-secondary)]">
+        {(view?.allowedCurrencies.length ?? 0) > 1 && <div className="mt-2 flex items-center justify-between gap-4 text-12 text-[var(--text-secondary)]">
           {t('settings.providers.models.priceOverride.currency')}
-          <select {...pricingSetting.controlProps} data-model-price-input value={form.currency} disabled={unavailable} aria-disabled={saving || undefined}
-            onPointerDown={(event) => { if (pendingRef.current) event.preventDefault(); }}
-            onKeyDown={(event) => { if (pendingRef.current && event.key !== 'Tab') event.preventDefault(); }}
-            onChange={(event) => { if (!pendingRef.current) setForm(current => ({ ...current, currency: event.target.value as FormState['currency'] })); }}
-            className={fieldClass + ' w-auto'}>
-            {view?.allowedCurrencies.map(currency => <option key={currency}>{currency}</option>)}
-          </select>
-        </label>}
+          {/* Changes are ignored while a save is pending (the trigger keeps focus). */}
+          <Select {...pricingSetting.controlProps} label={t('settings.providers.models.priceOverride.currency')}
+            size="compact" value={form.currency} disabled={unavailable}
+            onValueChange={(value) => { if (!pendingRef.current) setForm(current => ({ ...current, currency: value as FormState['currency'] })); }}
+            options={(view?.allowedCurrencies ?? []).map(currency => ({ value: currency, label: currency }))} />
+        </div>}
         {([['input', 'input'], ['output', 'output'], ['cacheRead', 'cacheRead'], ['cacheCreate', 'cacheWrite']] as const).map(([field, label]) => (
           <label key={field} className="flex min-h-[34px] items-center justify-between gap-4 border-b border-[var(--settings-theme-card-border)] py-2 last:border-b-0">
             <span className="shrink-0 text-13 text-[var(--text-secondary)]">{t('settings.providers.models.priceOverride.' + label)}</span>
@@ -371,28 +370,27 @@ export function ModelPriceOverrideDialog({ provider, row, open, onOpenChange, pr
               {...pricingSetting.anchorProps}
               className={cn('grid grid-cols-2 gap-3', loading && 'pointer-events-none opacity-60')}
             >
-              <label className="col-span-2 flex flex-col gap-1.5">
+              <div className="col-span-2 flex flex-col gap-1.5">
                 <span className="text-12 font-medium text-[var(--text-secondary)]">
                   {t('settings.providers.models.priceOverride.currency')}
                 </span>
-                <select
+                <Select
                   {...pricingSetting.controlProps}
+                  label={t('settings.providers.models.priceOverride.currency')}
+                  width="full"
                   value={form.currency}
-                  onChange={(event) =>
+                  onValueChange={(value) =>
                     setForm((current) => ({
                       ...current,
-                      currency: event.target.value as 'USD' | 'CNY',
+                      currency: value as 'USD' | 'CNY',
                     }))
                   }
-                  className={fieldClass}
-                >
-                  {(view?.allowedCurrencies ?? ['USD']).map((currency) => (
-                    <option key={currency} value={currency}>
-                      {currency}
-                    </option>
-                  ))}
-                </select>
-              </label>
+                  options={(view?.allowedCurrencies ?? ['USD']).map((currency) => ({
+                    value: currency,
+                    label: currency,
+                  }))}
+                />
+              </div>
               {(
                 [
                   ['input', 'input'],

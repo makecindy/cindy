@@ -20,7 +20,7 @@ export default {
       return;
     }
     assert.equal(await page.getByRole('switch').count(), 3);
-    assert.equal(await page.getByRole('combobox').first().getAttribute('data-setting-id'), 'providers.subscriptionAccounts');
+    assert.equal(await page.getByRole('radiogroup', { name: await ui.t('subscriptionAccounts.strategy'), exact: true }).getAttribute('data-setting-id'), 'providers.subscriptionAccounts');
     assert.equal(await page.getByRole('progressbar').count(), 3);
     await page.getByRole('switch').first().click();
     await page.getByRole('switch').first().waitFor();

@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 
-import { act, fireEvent, render, waitFor } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import type { CatalogModel, ProviderView } from '@cindy/model-providers';
@@ -143,7 +143,9 @@ describe('ModelPriceOverrideDialog', () => {
     );
 
     await waitFor(() => expect(getModelPriceOverride).toHaveBeenCalledOnce());
-    const controls = Array.from(document.querySelectorAll('select, input[type="number"]'));
+    // The currency field is the shared Select (a pill Button trigger).
+    const controls = [screen.getByRole('combobox', { name: 'settings.providers.models.priceOverride.currency' }),
+      ...Array.from(document.querySelectorAll('input[type="number"]'))];
     expect(controls).toHaveLength(5);
     for (const control of controls) {
       expect(control.classList.contains('rounded-full')).toBe(true);
