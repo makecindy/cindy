@@ -20,8 +20,14 @@ class Key(C.Structure):
         ('display', D), ('window', U), ('root', U), ('subwindow', U), ('time', U),
         ('x', C.c_int), ('y', C.c_int), ('x_root', C.c_int), ('y_root', C.c_int),
         ('state', C.c_uint), ('keycode', C.c_uint), ('same_screen', C.c_int)]
+class ClientData(C.Union):
+    _fields_ = [('b', C.c_char * 20), ('s', C.c_short * 10), ('l', C.c_long * 5)]
+class Client(C.Structure):
+    _fields_ = [('type', C.c_int), ('serial', U), ('send_event', C.c_int),
+        ('display', D), ('window', U), ('message_type', U), ('format', C.c_int),
+        ('data', ClientData)]
 class Event(C.Union):
-    _fields_ = [('type', C.c_int), ('key', Key), ('pad', C.c_long * 24)]
+    _fields_ = [('type', C.c_int), ('key', Key), ('client', Client), ('pad', C.c_long * 24)]
 def api(name, result, args):
     f = getattr(X, name); f.restype = result; f.argtypes = args; return f
 api('XOpenDisplay', D, [C.c_char_p]); api('XCloseDisplay', C.c_int, [D])
@@ -35,6 +41,10 @@ api('XQueryKeymap', C.c_int, [D,C.c_void_p])
 api('XQueryPointer', C.c_int, [D,U,C.POINTER(U),C.POINTER(U),C.POINTER(C.c_int),C.POINTER(C.c_int),C.POINTER(C.c_int),C.POINTER(C.c_int),C.POINTER(C.c_uint)])
 api('XGetKeyboardMapping', C.POINTER(U), [D,C.c_ubyte,C.c_int,C.POINTER(C.c_int)])
 api('XFree', C.c_int, [D])
+api('XInternAtom', U, [D,C.c_char_p,C.c_int])
+api('XSetWMProtocols', C.c_int, [D,U,C.POINTER(U),C.c_int])
+api('XSendEvent', C.c_int, [D,U,C.c_int,C.c_long,C.POINTER(Event)])
+api('XFlush', C.c_int, [D])
 def field(b): return struct.pack('>H', len(b)) + b
 with tempfile.TemporaryDirectory(prefix='cindy-x11-test-') as temp:
     auth = Path(temp)/'authority'
@@ -53,15 +63,30 @@ with tempfile.TemporaryDirectory(prefix='cindy-x11-test-') as temp:
         display=X.XOpenDisplay(None); assert display
         root=X.XDefaultRootWindow(display)
         win=X.XCreateSimpleWindow(display,root,0,0,800,600,0,0,0)
+        protocols=X.XInternAtom(display,b'WM_PROTOCOLS',False)
+        ping=X.XInternAtom(display,b'_NET_WM_PING',False)
+        advertised=(U*1)(ping)
+        X.XSetWMProtocols(display,win,advertised,1)
         X.XSelectInput(display,win,1|2|4|8|64)
         X.XMapWindow(display,win); X.XSetInputFocus(display,win,1,0); X.XSync(display,False)
+        pause_next_key=[0.0]
         def drain():
             out=[]
             while X.XPending(display):
                 e=Event(); X.XNextEvent(display,C.byref(e))
                 if e.type==34: X.XRefreshKeyboardMapping(C.byref(e))
-                elif e.type in (2,3): out.append((e.type, X.XLookupKeysym(C.byref(e.key),0)))
+                elif e.type in (2,3):
+                    if e.type==2 and pause_next_key[0]:
+                        pause=pause_next_key[0];pause_next_key[0]=0.0
+                        # real-wait: this integration receiver must genuinely stop
+                        # translating while the independent helper/server run.
+                        time.sleep(pause)
+                    out.append((e.type, X.XLookupKeysym(C.byref(e.key),0)))
                 elif e.type in (4,5): out.append((e.type,e.key.keycode))
+                elif e.type==33 and e.client.message_type==protocols and e.client.data.l[0]==ping:
+                    e.client.window=root
+                    X.XSendEvent(display,root,False,(1<<19)|(1<<20),C.byref(e))
+                    X.XFlush(display)
             return out
         def mapping():
             n=C.c_int(); ptr=X.XGetKeyboardMapping(display,8,248,C.byref(n))
@@ -101,6 +126,29 @@ with tempfile.TemporaryDirectory(prefix='cindy-x11-test-') as temp:
         seen=send(p,[dict(kind='text',text='a中🙂')])
         assert [v for t,v in seen if t==2]==[97,0x1004e2d,0x101f642],seen
         assert before==mapping(), 'text changed persistent keymap'
+        # Regression: the old helper restores/reuses its key while this client
+        # is paused, so XLookupKeysym observes the wrong symbol or NoSymbol.
+        pause_next_key[0]=0.15
+        seen=send(p,[dict(kind='text',text='中🙂中')])
+        assert [v for t,v in seen if t==2]==[0x1004e2d,0x101f642,0x1004e2d],seen
+        assert before==mapping(), 'delayed text changed persistent keymap'
+        # Reuse the same helper/connection: no stale fence or keyboard cache may
+        # acknowledge the next commit before that commit has been consumed.
+        for text,expected in [('ab',[97,98]),('中文',[0x1004e2d,0x1006587]),('🙂中',[0x101f642,0x1004e2d])]*3:
+            pause_next_key[0]=0.15
+            seen=send(p,[dict(kind='text',text=text)])
+            assert [v for t,v in seen if t==2]==expected,seen
+            assert before==mapping(), 'consecutive text leaked a mapping'
+        # Legacy clients still receive stable current-layout keys, without a
+        # timing-dependent fallback for characters absent from that layout.
+        X.XSetWMProtocols(display,win,advertised,0);X.XSync(display,False)
+        seen=send(p,[dict(kind='text',text='ab')])
+        assert [v for t,v in seen if t==2]==[97,98],seen
+        p.stdin.write('[{"kind":"text","text":"a中"}]\n'.encode());p.stdin.flush()
+        assert p.wait(timeout=3)==2 and p.stdout.read()==b'', 'unsupported text acknowledged'
+        assert not drain() and before==mapping(), 'unsupported text partly injected or remapped'
+        X.XSetWMProtocols(display,win,advertised,1);X.XSync(display,False)
+        p=start()
         send(p,[dict(kind='key',code='ControlLeft',down=True)])
         p.stdin.close();assert p.wait(timeout=3)==0;assert not any(keys()),'EOF left key held'
         p=start();send(p,[dict(kind='key',code='AltLeft',down=True),dict(kind='button',x=0,y=0,button=2,down=True)])
@@ -113,7 +161,7 @@ with tempfile.TemporaryDirectory(prefix='cindy-x11-test-') as temp:
         assert p.wait(timeout=8)==0 and not any(keys()),'heartbeat timeout left key held'
         wrong=subprocess.run([binary,'--x11','--check'],env={**os.environ,'XDG_SESSION_TYPE':'wayland'},capture_output=True,timeout=3)
         assert wrong.returncode==2,'XWayland probe accepted'
-        print('PASS: XTest probe, monitor coordinates, click, wheel, Unicode, keymap restore, EOF/SIGTERM/heartbeat release, atomic rejection, Wayland refusal')
+        print('PASS: XTest probe, coordinates, mouse/wheel, delayed Unicode consumption, stable legacy text, unsupported-text rejection, keymap restore, EOF/SIGTERM/heartbeat release, atomic rejection, Wayland refusal')
     finally:
         for p in helpers:
             if p.poll() is None: p.terminate();p.wait(timeout=3)

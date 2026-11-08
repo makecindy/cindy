@@ -623,11 +623,20 @@ rather than guessed. Changed monitor geometry releases control before further
 input. Keys follow the Linux Xorg evdev keycode layout. Mouse buttons and both
 wheel axes are supported, with accumulated small wheel deltas.
 
-Unicode text uses an unused, unpressed X keycode with a temporary symbol mapping;
-the exact mapping is restored before acknowledgement. It does not overwrite the
-clipboard. Text batches contain at most 64 code points to bound the paced native
-input within the heartbeat deadline. This sends input to the focused X client;
-application/IME handling is separate from native event delivery. EOF, SIGTERM
+Text first uses stable keys from the current XKB layout, including the required
+Shift state and Caps/Num Lock handling. Characters absent from that layout use
+an unused, unpressed keycode with a temporary symbol mapping. This requires a
+focused application advertising the ordered EWMH `_NET_WM_PING` protocol: its
+reply fences each remapped key before the helper reuses or restores the mapping.
+An X server roundtrip or fixed delay alone is not a client-consumption fence.
+Clients without this protocol still accept text present in their layout; a text
+containing other characters is refused before any part of that text is injected.
+Missing replies time out as an input failure, never a successful text ACK. Window
+disappearance, cancellation and timeout also restore the original mapping.
+
+Text does not overwrite the clipboard. Batches contain at most 64 code points;
+the existing heartbeat bounds a stalled client as well as a stalled parent.
+Application/IME handling remains separate from native event translation. EOF, SIGTERM
 and the six-second heartbeat deadline release held keys and buttons. X11 capture,
 lock-screen support and other optional features are not broadened by this backend.
 
@@ -640,11 +649,19 @@ without a new capability field; only the host needs the native backend update.
 Explicit native integration (requires `Xvfb` and the built input helper):
 `python3 apps/desktop/native/remote-desktop/linux-input/x11-test.py <helper>`.
 It creates its own authenticated X server and tests pointer coordinates, mouse
-buttons, wheel, Unicode symbols, mapping restoration, malformed-batch atomicity,
+buttons, wheel, delayed Unicode consumption, legacy current-layout text,
+unsupported-text rejection, mapping restoration, malformed-batch atomicity,
 and key/button release on EOF, SIGTERM and heartbeat loss. It never injects into
 the user's desktop. Host/unit tests separately cover geometry, opt-in, ownership,
 and the unsupported-input message. Full Air-to-GX102 UI validation remains a
 separate acceptance step after installing a build containing this change.
+
+The same production text entry also has a display-free native regression in
+`linux-input/x11-text-test.c`, run by
+`node --test --test-name-pattern='X11 text' apps/desktop/native/remote-desktop/linux-input/test.mjs`.
+It requires a C compiler and Xlib/XKB headers, but no X server or real waits. Its
+in-memory delayed receiver covers mapping lifetime, stale/wrong ping replies,
+timeouts, cancellation, destroyed clients, and preservation of layout/lock state.
 
 ## Wayland capture lifetime
 
