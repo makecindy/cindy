@@ -2,6 +2,7 @@ import { useEffect } from 'react';
 import Reanimated, { useAnimatedStyle } from 'react-native-reanimated';
 import { GestureDetector } from '@/platform/gestureHandler';
 import { MobileComposerInputRow, ComposerResizeGrabber, type MobileComposerInputRowProps } from './MobileComposerInputRow';
+import { textScrollEdgeFromEvent } from './composerResize';
 import type { useComposerResize } from './useComposerResize';
 import type { ComposerPullThroughBridge } from './composerPullThrough';
 
@@ -36,9 +37,8 @@ export function ResizableComposerInputRow({ resize, pullThrough, grabberTestID, 
         maxHeight={resize.inputMaxHeight}
         scrollEnabled={resize.scrollEnabled}
         onScroll={event => {
-          const { contentOffset, contentSize, layoutMeasurement } = event.nativeEvent;
-          resize.setTextScrollEdge({ atTop: contentOffset.y <= 1,
-            atBottom: contentOffset.y + layoutMeasurement.height >= contentSize.height - 1 });
+          // Android 的 TextInput 滚动事件不带 contentSize / layoutMeasurement：端点未知时回落到 measuredOverflow。
+          resize.setTextScrollEdge(textScrollEdgeFromEvent(event.nativeEvent));
           props.onScroll?.(event);
         }}
         resizeHandle={props.cardActive ? <ComposerResizeGrabber visible
