@@ -125,23 +125,6 @@ it.each([false, true])('retains an unchanged primary selection on a legacy host 
   expect(h.view.page).toBe('home');
 });
 
-it('does not mistake a task edit for primary recovery support on a legacy host', async () => {
-  const primary = { harness: 'pi', model: 'saved', providerId: 'provider', effort: '', fastMode: false };
-  const values = { modelChain: JSON.stringify([primary]), followsDefault: false,
-    taskFollowsPrimary: true, taskModel: JSON.stringify([primary]) };
-  h.read.mockResolvedValue({ resource, panels: [{ ...panel, id: 'models', values,
-    action: { id: 'model-grant', fields: Object.keys(values).map(id => ({ id, kind: 'text' })) } }] });
-  await render(); await act(async () => h.view.onOpen('models'));
-  await act(async () => h.model.onPick(0));
-  await act(async () => h.view.onClosed());
-  await act(async () => h.picker.onSelect({ ...primary, model: 'task-only' }));
-  await act(async () => h.picker.onClose()); await act(async () => h.picker.onClosed());
-  // The primary is still the configured route; selecting it explicitly must not be acknowledged.
-  await act(async () => h.primary.onChange({ ...h.view.values }));
-  await act(async () => h.view.onSubmit(h.view.panel));
-  expect(h.invoke).not.toHaveBeenCalled(); expect(h.view.dirty).toBe(true);
-});
-
 it('still saves an actual primary change to a legacy host', async () => {
   const primary = { harness: 'pi', model: 'saved', providerId: 'provider', effort: '', fastMode: false };
   const values = { modelChain: JSON.stringify([primary]), followsDefault: false };
@@ -155,24 +138,24 @@ it('still saves an actual primary change to a legacy host', async () => {
   expect(h.view.dirty).toBe(false);
 });
 
-it('keeps the primary route while choosing a task model with a different harness', async () => {
+// 2026-11-09: the teammate task model setting is retired. An older host still lists its fields:
+// only the primary chain is shown, and a primary change goes back without them.
+it('hides an older host\'s retired task model and saves only the primary change', async () => {
   const primary = { harness: 'claude', model: 'claude-opus-5-5', providerId: 'anthropic', effort: 'medium', fastMode: false };
-  const task = { harness: 'codex', model: 'gpt-6-astra', providerId: 'openai:account', effort: 'high', fastMode: true };
+  const next = { harness: 'codex', model: 'gpt-6-astra', providerId: 'openai:account', effort: 'high', fastMode: true };
+  h.model = {}; h.primary = {};
   h.read.mockResolvedValue({ resource, panels: [{ ...panel, id: 'models',
-    values: { modelChain: JSON.stringify([primary]), followsDefault: false, taskFollowsPrimary: true, taskModel: JSON.stringify([primary]) },
+    values: { modelChain: JSON.stringify([primary]), followsDefault: false, taskFollowsPrimary: false, taskModel: JSON.stringify([next]) },
     action: { id: 'model-grant', fields: ['modelChain', 'followsDefault', 'taskModel', 'taskFollowsPrimary'].map(id => ({ id, kind: 'text' })) } }] });
   await render(); await act(async () => h.view.onOpen('models'));
-  expect(h.model.single).toBe(true); expect(h.model.values.followsDefault).toBe(true);
+  expect(h.model).toBe(h.primary);
   await act(async () => h.model.onPick(0));
   await act(async () => h.view.onClosed());
-  await act(async () => h.picker.onSelect(task));
+  await act(async () => h.picker.onSelect(next));
   await act(async () => h.picker.onClose()); await act(async () => h.picker.onClosed());
-  expect(JSON.parse(h.view.values.modelChain)).toEqual([primary]);
-  expect(JSON.parse(h.view.values.taskModel)).toEqual([task]);
-  expect(h.view.values.taskFollowsPrimary).toBe(false);
   await act(async () => h.view.onSubmit(h.view.panel));
   expect(h.invoke).toHaveBeenCalledWith(expect.anything(), { deviceId: 'host', deviceName: 'Mac' }, expect.objectContaining({
-    actionId: 'model-grant', input: { taskModel: JSON.stringify([task]), taskFollowsPrimary: false },
+    actionId: 'model-grant', input: { modelChain: JSON.stringify([next]), followsDefault: false },
   }), 'en');
 });
 it('ignores a late save response after changing accounts', async () => {

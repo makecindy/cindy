@@ -758,8 +758,6 @@
     "artifactsEmpty": "尚無成果。令同僚揮毫一二，自見文章。",
     "openSourceTask": "啟來源差事",
     "modelFollowsDefault": "從今之預設模型鏈",
-    "taskModel": "差事模型",
-    "taskInheritsPrimary": "承主模型",
     "modelOverride": "用此同僚自訂之模型鏈",
     "modelsUnavailable": "暫無可用之模型，請於機上察此同僚之模型設定，再重新整理。",
     "artifactsRecovery": "請自訊卡中啟卷，或於 {{deviceName}} 上覽之。",

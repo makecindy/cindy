@@ -765,8 +765,6 @@
     "artifactsEmpty": "Aún no hay artefactos. Pídele a tu compañero de equipo que cree algo.",
     "openSourceTask": "Abrir sesión de origen",
     "modelFollowsDefault": "Usar la cadena de modelos predeterminada",
-    "taskModel": "Modelo de tarea",
-    "taskInheritsPrimary": "Heredar modelo principal",
     "modelOverride": "Usa la cadena de modelos propia de este compañero",
     "modelsUnavailable": "No hay modelos disponibles. Revisa la configuración de modelos de este compañero en tu computadora y actualiza la vista.",
     "artifactsRecovery": "Abra archivos de las tarjetas de mensajes o búsquelos en {{deviceName}}.",

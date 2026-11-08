@@ -10292,9 +10292,6 @@
     "model": {
       "description": "Wähle die Modelle für dieses Teammitglied.",
       "primary": "Primäres Modell",
-      "task": "Aufgabenmodell",
-      "inheritPrimary": "Primäres Modell übernehmen",
-      "inheritingPrimary": "Übernimmt das primäre Modell für neue Hintergrundaufgaben",
       "restoreDefault": "Standardmodell wiederherstellen"
     },
     "modelChain": {

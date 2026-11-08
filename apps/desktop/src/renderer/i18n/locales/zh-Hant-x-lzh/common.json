@@ -10247,9 +10247,6 @@
     "model": {
       "description": "擇此同僚所用之模型。",
       "primary": "主模型",
-      "task": "差事模型",
-      "inheritPrimary": "承主模型",
-      "inheritingPrimary": "承主模型，用於新立之背景差事",
       "restoreDefault": "復預設模型"
     },
     "modelChain": {

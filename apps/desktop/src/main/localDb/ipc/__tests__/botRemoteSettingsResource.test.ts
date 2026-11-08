@@ -187,23 +187,18 @@ it('rejects invalid, duplicate and oversized model chains without modifying the 
 });
 
 
-it('saves and clears a task model without changing the primary model', async () => {
+// 2026-11-09: the teammate task model setting is retired. The models form no longer lists it; an
+// older controller's task fields are ignored, and on their own they are refused as no change.
+it('ignores an older controller\'s retired task model fields', async () => {
   const f = fixture();
   const route = { harness: 'codex', model: 'gpt-6-astra', providerId: 'openai', effort: 'high', fastMode: false };
   let resource = await f.get();
-  expect((resource.blocks?.find(block => block.id === 'models')?.data as any).values.taskFollowsPrimary).toBe(true);
-  await f.host.invoke(f.context, f.request(actionId(resource, 'models'), { taskFollowsPrimary: false, taskModel: JSON.stringify([route]) }));
-  expect(f.deps.update).toHaveBeenLastCalledWith({ id: 'bot-a', capabilities: { taskModelOverride: route } }, 3);
-  resource = await f.get();
-  await f.host.invoke(f.context, f.request(actionId(resource, 'models'), { taskFollowsPrimary: true }));
-  expect(f.deps.update).toHaveBeenLastCalledWith({ id: 'bot-a', capabilities: { taskModelOverride: null } }, 4);
-});
-
-it('rejects task model submissions that discard the harness identity', async () => {
-  const f = fixture(); const resource = await f.get();
-  await expect(f.host.invoke(f.context, f.request(actionId(resource, 'models'), { taskFollowsPrimary: false,
-    taskModel: JSON.stringify([{ model: 'gpt-6-astra', providerId: 'openai', effort: 'high', fastMode: false }]) }))).rejects.toThrow();
+  expect(Object.keys((resource.blocks?.find(block => block.id === 'models')?.data as { values: object }).values)).toEqual(['followsDefault', 'modelChain']);
+  await expect(f.host.invoke(f.context, f.request(actionId(resource, 'models'), { taskFollowsPrimary: false, taskModel: JSON.stringify([route]) }))).rejects.toThrow();
   expect(f.deps.update).not.toHaveBeenCalled();
+  resource = await f.get();
+  await f.host.invoke(f.context, f.request(actionId(resource, 'models'), { followsDefault: true, taskFollowsPrimary: true, taskModel: JSON.stringify([route]) }));
+  expect(f.deps.update).toHaveBeenLastCalledWith({ id: 'bot-a', capabilities: { modelChainOverride: null, modelOverride: null }, acceptSavedModelSelectionVersion: 3 }, 3);
 });
 
 it('keeps pending profile fields read-only while models remain available, including after welcome failure', async () => {

@@ -40,6 +40,7 @@ import {
   isAppSessionBoundaryPending,
 } from '../appSessionState.js';
 import { botProfileMemoryDir } from '../maker-ipc/botProfileFolder.js';
+import { teammateProjectMemoryStorageDir, teammateProjectOfScope } from '../maker-ipc/botProjectMemory.js';
 
 const sqliteFactory: SqliteFactory = (filePath) => {
   // better-sqlite3 sync open. WAL 让多 session 并发读写更稳, busyTimeout 防小撞锁。
@@ -104,12 +105,18 @@ export function createDesktopMakerMemoryManager(
       readMemorySettings({ rootPath: resolveBasePath() ?? undefined }).maker,
     // Bot Memory belongs to the Bot Home. It reuses the battle-tested storage
     // primitives, but not Maker Memory's physical directory, global toggle or
-    // global reset surface.
+    // global reset surface. A V2 teammate's project keeps its memory inside the
+    // project (versioned with it), switched by the teammate's own setting; every
+    // other project keeps the historical place outside its folder.
     resolveStorageDir: (scopeKey, ownerRoot) => {
       const botId = parseBotMemoryScopeKey(scopeKey);
-      return botId ? botProfileMemoryDir(ownerRoot, botId) : null;
+      return botId ? botProfileMemoryDir(ownerRoot, botId) : teammateProjectMemoryStorageDir(scopeKey, ownerRoot);
     },
-    isIndependentScope: (scopeKey) => parseBotMemoryScopeKey(scopeKey) !== null,
+    isIndependentScope: (scopeKey) => {
+      if (parseBotMemoryScopeKey(scopeKey) !== null) return true;
+      const ownerRoot = resolveBasePath();
+      return !!ownerRoot && teammateProjectOfScope(scopeKey, ownerRoot) !== null;
+    },
     sqliteFactory,
     agents: {}, // 占位, attachAgents 补上
     logger: desktopMakerLogger.child('maker-memory'),

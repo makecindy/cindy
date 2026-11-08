@@ -1,4 +1,10 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { spawnSync } from 'node:child_process';
+import { promises as fs } from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+
+import { MEMORY_STORAGE_MIGRATION_RECEIPT } from '@cindy/maker-core';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 const loader = vi.hoisted(() => ({
   loadProjectSchedules: vi.fn<(dir: string) => Promise<Array<{ id: string }> | null>>(async () => null),
@@ -10,7 +16,10 @@ const aliases = vi.hoisted(() => ({
   upsert: vi.fn(async (projectKey: string, alias: string) => ({ projectKey, alias })),
 }));
 
+const snapshot = vi.hoisted(() => vi.fn(async () => ({})));
+
 vi.mock('electron', () => ({ app: { getPath: () => '/tmp' }, BrowserWindow: { getAllWindows: () => [] } }));
+vi.mock('../../git-snapshot/gitSnapshotService.js', () => ({ createSnapshotDetailed: snapshot }));
 vi.mock('../../scheduler-host/index.js', () => ({ getProjectAutomationLoader: () => loader }));
 vi.mock('../../i18n.js', () => ({ t: () => '{{name}} · Review memory' }));
 vi.mock('../../localDb/ipc/projectAliases.js', () => ({
@@ -18,7 +27,8 @@ vi.mock('../../localDb/ipc/projectAliases.js', () => ({
   upsertProjectAlias: aliases.upsert,
 }));
 
-import { BOT_PROJECT_MEMORY_REVIEW_ID, ensureBotProjectAutomations, nameBotProject } from '../botProjectMode.js';
+import { BOT_PROJECT_MEMORY_REVIEW_ID, ensureBotProjectAutomations, moveTeammateMemoryIntoProject, nameBotProject } from '../botProjectMode.js';
+import { legacyTeammateProjectMemoryDir, teammateProjectMemoryDir, teammateWorkspaceDir } from '../botProjectMemory.js';
 
 // Teammate V2 (2026-11-06): the nightly review is the project's own automation,
 // added once on the teammate's model; an owner's later edit or removal is kept.
@@ -61,5 +71,63 @@ describe('nameBotProject', () => {
     aliases.rows = [{ projectKey: 'local:/w', alias: 'My notes' }];
     await nameBotProject('bot-1', '/w', 'Mimi', 'Cindy');
     expect(aliases.upsert).not.toHaveBeenCalled();
+  });
+});
+
+/*
+ * 测试价值
+ * - 生产入口与可观察结果：moveTeammateMemoryIntoProject（启动时 botV2Migration 对已升级伙伴、以及
+ *   prepareBotProjectWorkspace 调用）执行后项目里与项目外的记忆文件、回执、.gitignore 与版本快照。
+ * - 规则依据：cindy-bots-runtime.md「V2 伙伴记忆」：伙伴记忆搬进伙伴项目 `.cindy/memory/` 只做一次，
+ *   不覆盖项目里已有（更新）的记录，旧位置原样保留；记录随项目 Git 记版本，派生文件不进 Git。
+ * - 现有覆盖缺口：新增的一次性搬迁，无既有覆盖。
+ * - 最小失败输入：项目外旧位置有一条同名旧记录 + 一条独有记录；项目里已有同名新记录；搬完后删掉一条再跑。
+ * - tier：unit（临时目录真实文件 I/O；有 git 时用真 `git check-ignore` 核对忽略规则；快照服务替换为观察点）。
+ */
+describe('moveTeammateMemoryIntoProject', () => {
+  let root = '';
+  beforeEach(async () => {
+    snapshot.mockClear();
+    root = await fs.mkdtemp(path.join(os.tmpdir(), 'teammate-memory-move-'));
+  });
+  afterEach(async () => { await fs.rm(root, { recursive: true, force: true }); });
+  const put = async (dir: string, name: string, content: string) => {
+    await fs.mkdir(dir, { recursive: true });
+    await fs.writeFile(path.join(dir, name), content, 'utf8');
+  };
+  const gitAvailable = spawnSync('git', ['--version']).status === 0;
+
+  it.skipIf(!gitAvailable)('moves the memory into the project once, never over newer records, keeping the old place', async () => {
+    const workspace = teammateWorkspaceDir(root, 'bot_mia');
+    await fs.mkdir(workspace, { recursive: true });
+    expect(spawnSync('git', ['init', '-q'], { cwd: workspace }).status).toBe(0);
+    const outside = await legacyTeammateProjectMemoryDir(root, workspace);
+    const inside = teammateProjectMemoryDir(workspace);
+    await put(outside, 'user_tea.md', 'older');
+    await put(outside, 'project_launch.md', 'only outside');
+    await put(outside, 'MEMORY.md', 'old index');
+    await put(inside, 'user_tea.md', 'newer');
+
+    await expect(moveTeammateMemoryIntoProject({ botId: 'bot_mia', ownerRoot: root, workspace })).resolves.toBe(1);
+    expect(await fs.readFile(path.join(inside, 'user_tea.md'), 'utf8')).toBe('newer');
+    expect(await fs.readFile(path.join(inside, 'project_launch.md'), 'utf8')).toBe('only outside');
+    expect((await fs.readdir(inside)).sort()).toEqual([MEMORY_STORAGE_MIGRATION_RECEIPT, 'project_launch.md', 'user_tea.md']);
+    expect((await fs.readdir(outside)).sort()).toEqual(['MEMORY.md', 'project_launch.md', 'user_tea.md']);
+    expect(snapshot).toHaveBeenCalledOnce();
+
+    // Records and the store's copy receipt are versioned; what the store derives is not.
+    const ignored = (file: string) => spawnSync('git', ['check-ignore', '-q', file], { cwd: workspace }).status === 0;
+    for (const file of ['MEMORY.md', 'fts.db', 'fts.db-wal', 'meta.json', 'user_tea.md.12.ab.tmp']) {
+      expect(ignored(`.cindy/memory/${file}`), file).toBe(true);
+    }
+    for (const file of ['user_tea.md', MEMORY_STORAGE_MIGRATION_RECEIPT]) {
+      expect(ignored(`.cindy/memory/${file}`), file).toBe(false);
+    }
+
+    // Once: a record deleted in the project afterwards does not come back.
+    await fs.rm(path.join(inside, 'project_launch.md'));
+    await expect(moveTeammateMemoryIntoProject({ botId: 'bot_mia', ownerRoot: root, workspace })).resolves.toBeNull();
+    await expect(fs.stat(path.join(inside, 'project_launch.md'))).rejects.toThrow();
+    expect(snapshot).toHaveBeenCalledOnce();
   });
 });

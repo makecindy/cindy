@@ -405,6 +405,28 @@ Cindy 应用，也不取消伙伴已委派的独立任务。操作中禁用重�
   读写和学习，工具入口在存储及刷新之前明确返回不可用，不能承诺下一轮或新任务生效；
   这不影响远端已支持的共同基座、记忆、协作及能力发现。手机控制本机运行时仍使用本机自有 Skill。
 
+### V2 伙伴的记忆在伙伴项目里（2026-11-09）
+
+V2 伙伴（伙伴 = 一个项目，见 6.1）的记忆就是它项目的记忆，物理位置在项目里的
+`workspace/.cindy/memory/`，随项目 Git 记版本；旧的 `memories/` 保留为 V1 存档。负责人裁决：**只有伙伴
+项目这样做**，普通项目的记忆仍在项目外的 `<ownerRoot>/maker-memory/<范围>/`，不写进用户自己的仓库。
+
+- **唯一解析点**：桌面记忆存储的 `resolveStorageDir`（`maker-host/maker-memory-host.ts` →
+  `maker-ipc/botProjectMemory.ts` 的 `teammateProjectMemoryStorageDir`）按记忆范围认出本账号的伙伴项目
+  （`@cindy/maker-shared/teammate-project` 的路径规则）。主任务、IM 与群专线、夜间 `teammate-memory-review`
+  自动化、在该项目里的普通任务、`cindy_memory`、启动注入的 `MEMORY.md` 索引、记忆检索（`fts.db`）、
+  伙伴记忆页（本机与远程设置 `memory.*`）、设备互联远程 Agent 都经这一处，读写同一个文件夹。
+- 伙伴项目的记忆范围按伙伴自己的记忆开关，不随 Cindy 全局记忆开关关闭，也不被全局「清空记忆」删除。
+- **进 Git 的**：记录 `*.md` 与存储的复制回执 `.cindy-memory-migration-v1.json`；**不进 Git 的**（项目
+  `.gitignore`）：重建的 `MEMORY.md`、`meta.json`、`fts.db` 及其日志、临时文件。新项目的默认忽略清单含这几行，
+  已有项目在一次性搬迁时补上。
+- **一次性搬迁**：已在本机升级（有 `v2-migration.json`）的伙伴，启动时把项目外旧位置的记录复制进项目
+  （项目里已有的不覆盖），旧目录原样保留作后备，写回执 `bots/<伙伴>/project-memory-move.json` 只跑一次，
+  然后记一个项目版本（Git 快照）。刚升级的伙伴在准备项目时先做这一步，再复制 V1 记忆。
+  搬迁完成前，云端上传与接管比较把旧位置当作后备一并读取，没搬的记忆不会看起来被删除。
+- 该文件夹可被任务的文件工具改动：宿主写记忆用新建临时文件再改名，不顺着链接写；链接不当作记忆读；
+  `.cindy` 或 `.cindy/memory` 本身是链接时拒绝打开。
+
 ### 关联项目（2026-10-22）
 
 每个伙伴（包括 Cindy）在设置中独立关联多个项目。项目列表可添加、查看和移除；关联沿用 Home 中
@@ -493,23 +515,23 @@ Mobile 使用电脑端已连接的模型目录；目录为空时保持创建禁�
 
 实现与回归：[路由协调](../../apps/desktop/src/main/maker-ipc/botModelRouteReconciler.ts)、[路由回归测试](../../apps/desktop/src/main/maker-ipc/__tests__/botModelRouteReconciler.test.ts)。
 
-伙伴的创建、全局默认、主模型、任务模型和备用模型都使用普通任务的模型目录与来源选择；
+伙伴的创建、全局默认、主模型和备用模型都使用普通任务的模型目录与来源选择；
 共享账号和另一台电脑的可用来源不受本机引擎安装情况限制。业务仅维护有序备用链，
 不得另建供应商清单、可选引擎白名单或简化路由结构。完整路由使用 `@cindy/maker-shared/model-route`，
 持久化和新建会话保留 `agentDeviceId`；缺失／null 表示所属电脑，`share:<id>` 表示共享来源。
 失效来源不能改投本机同名账号。远控表单统一使用 `serializeModelRoutes`，把远程来源编码到旧协议
 也保留的 provider 字段；新端解码，旧端不能识别时拒绝，不能静默消费本机额度。
 
-伙伴设置的模型页按用途显示「主模型」与「任务模型」，都复用统一选择器。任务模型默认继承主模型；
-用户可独立选择一条完整路由（执行位置、Harness、来源、型号、思考深度、Fast），也可恢复继承。
-`capabilities.taskModelOverride` 缺失或为 `null` 表示继承，非空表示显式路由；不保存继承模型的副本。
-该设置原本只作用于 V1 专用后台任务；后台任务退役（6.1）后它仍原样保存与同步，但暂不影响
-`send_to_session` 新建的普通任务（待裁决：并入普通开任务的模型选择，或移除该设置）。
-目录或参数失效时拒绝本次创建，不换型号；不传新参数的旧调用仍按原有继承链执行。
-显式任务路由在保存与新建时核对目标设备的连接、引擎、型号及参数可用性；失效时提示重新选择，
-不得暗中换回主模型或另一引擎。任务模型没有独立备用链，不套用主模型的备用候选。
-远程设置复用现有 models 表单，以可选的 `taskModel` / `taskFollowsPrimary` 字段传递；
-旧客户端未提交这些字段时保留任务覆盖，新客户端连接旧主机时不显示该设置。
+伙伴设置的模型页只有「主模型」及其备用链，复用统一选择器。**「任务模型」设置已移除**（2026-11-09
+负责人裁决）：它只作用于已退役的 V1 专用后台任务（6.1）。伙伴新开任务时由 `send_to_session` 的参数
+为那条任务选模型；主人对任务模型的偏好由伙伴按需记在自己的记忆里，宿主不另存一份设置。兼容：
+- 已存档案里的 `capabilities.taskModelOverride` 原样保留、不校验也不使用，读取与保存都不因它出错；
+  云端能力配置里的 `taskModel` 原样带上、不核对可用性也不提示，仍有该设置的旧版电脑不丢选择
+  （见 [cloud-companions.md](cloud-companions.md) §2）。
+- 远程设置 models 表单不再列出 `taskModel` / `taskFollowsPrimary`；旧控制端提交时这两个字段被忽略，
+  只有它们时按「没有改动」拒绝（`INVALID_PARAMS`）。设置页 `settings.update` 补丁里的
+  `taskModelOverride` 同样被忽略（`BOT_SETTINGS_RETIRED_CAPABILITY_FIELDS`），其余改动照常保存。
+- 新控制端连接旧主机时，旧主机仍列出的这两个字段不显示，也不随保存回传，旧主机上的选择不变。
 
 ## 6. Skill、工具与 MCP
 

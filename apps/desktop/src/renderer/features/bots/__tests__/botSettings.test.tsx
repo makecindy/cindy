@@ -509,24 +509,6 @@ describe('Bot settings profile consolidation', () => {
     expect(screen.queryByRole('dialog')).toBeNull();
   });
 
-  it('saves a task route with its own harness and restores inheritance without changing the primary', async () => {
-    mocks.defaultModelChain = capabilities().modelChain;
-    renderSettings();
-    fireEvent.click(screen.getByRole('button', { name: 'bots.settingsTabs.model' }));
-    const task = within(screen.getByTestId('bot-task-model-controls'));
-    await act(async () => { fireEvent.click(task.getByTestId('codex-model-selector')); });
-    await waitFor(() => expect(mocks.updateBotProfile).toHaveBeenCalled());
-    const saved = mocks.updateBotProfile.mock.calls.at(-1)![1].capabilities;
-    expect(saved).toHaveProperty('taskModelOverride', { harness: 'codex', providerId: 'custom', model: 'custom-model', effort: 'high', fastMode: false });
-    expect(saved).not.toHaveProperty('modelChainOverride');
-    expect(within(screen.getByTestId('bot-primary-model-controls')).getByTestId('current-model').textContent).toBe('claude-x');
-    mocks.updateBotProfile.mockClear();
-    await act(async () => { fireEvent.click(task.getByRole('button', { name: 'bots.model.inheritPrimary' })); });
-    await waitFor(() => expect(mocks.updateBotProfile).toHaveBeenCalled());
-    expect(mocks.updateBotProfile.mock.calls.at(-1)![1].capabilities).toHaveProperty('taskModelOverride', null);
-    expect(task.getByTestId('current-model').textContent).toBe('claude-x');
-  });
-
   // Unit regression: edit the actual form, pass its patch through the host's real
   // admission/normalization, and reopen the saved profile. Picker-only tests missed
   // the extra primary mirror rejected by the remote settings field contract.
@@ -560,6 +542,14 @@ describe('Bot settings profile consolidation', () => {
     expect(saved.agentDeviceId ?? null).toBeNull();
     expect(saved.modelChain[1 - index]).toEqual(index === 0 ? fallback : primary);
     reopened.unmount();
+  });
+
+  // 2026-11-09: the task model setting is retired. An older controller's autosave that still carries
+  // it applies its other changes; the retired field alone is refused as an empty patch.
+  it('drops an older controller\'s retired task model from a settings patch', () => {
+    const route = { harness: 'codex', model: 'm', providerId: 'p', effort: 'high', fastMode: false };
+    expect(readBotSettingsPatch({ capabilities: { memory: false, taskModelOverride: route } })).toEqual({ capabilities: { memory: false } });
+    expect(() => readBotSettingsPatch({ capabilities: { taskModelOverride: route } })).toThrow();
   });
 
   it('clears the remote primary mirror when restoring local defaults', async () => {

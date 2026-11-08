@@ -414,12 +414,11 @@ actions retain their shared Button treatment. Model and connection logic remain 
 
 ### Teammate model settings
 
-The existing model page groups the primary model and task model by purpose. Both use the shared
-model picker, retaining provider account, Harness, thinking level and Fast. The primary backup chain
-stays folded; the task model is a single route. Task settings start in “Inherit Primary Model” and
-provide a compact restore action after an explicit selection. Desktop separates the two groups with
-the semantic border token; mobile uses the existing grouped spacing and inheritance switch.
-Reuse themed controls for Light/Dark; this contract does not claim runtime visual verification.
+The model page shows the primary model with its backup chain, using the shared model picker and
+retaining provider account, Harness, thinking level and Fast; the backup chain stays folded. The
+separate task model group was removed with the setting (2026-11-09): a teammate chooses a new task's
+model when it starts the task. Reuse themed controls for Light/Dark; this contract does not claim
+runtime visual verification.
 
 ### Teammate capability page (owner-approved r2, 2026-11-01)
 

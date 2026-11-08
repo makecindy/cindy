@@ -4,7 +4,8 @@
  * 开启后伙伴的 `workspace/` 就是一个普通 Cindy 项目：
  *   - 登记进项目列表(侧栏可见，名字是伙伴名)；
  *   - 根部的 AGENTS.md 是这个伙伴的项目规则(CLAUDE.md 用 `@AGENTS.md` 指过去)；
- *   - 记忆就是这个项目的记忆，技能就是项目里 `.agents/skills` 下的技能；
+ *   - 记忆就是这个项目的记忆，放在项目里的 `.cindy/memory/`(随项目 Git 记版本)；技能就是项目里
+ *     `.agents/skills` 下的技能；
  *   - 用 Git 记版本，沿用 Cindy 的快照与回退。
  *
  * 只有身份(名字头像、SOUL、IM 等对外身份)留在伙伴外壳上。
@@ -16,7 +17,7 @@ import path from 'node:path';
 import { BrowserWindow } from 'electron';
 
 import { getActiveDataOwnerPushStamp } from '../appSessionState.js';
-import { parseFilename } from '@cindy/maker-core';
+import { MEMORY_STORAGE_MIGRATION_RECEIPT, parseFilename } from '@cindy/maker-core';
 import { createSnapshotDetailed } from '../git-snapshot/gitSnapshotService.js';
 import { listProjectAliases, upsertProjectAlias } from '../localDb/ipc/projectAliases.js';
 import { normalizeRecentWorkdirPath, upsertRecentWorkdir } from '../localDb/ipc/recentWorkdirs.js';
@@ -26,7 +27,13 @@ import { restoreLocalProjectVisibility } from '../sidebarSettingsStore.js';
 import { gitExec } from '../worktree/gitExec.js';
 import { detectCwd } from '../worktree/WorktreeManager.js';
 import { botProfileDir, botProfileMemoryDir, ensureBotWorkspaceDir } from './botProfileFolder.js';
-import { teammateProjectMemoryDir } from './botProjectMemory.js';
+import {
+  TEAMMATE_MEMORY_MOVE_RECEIPT_FILE,
+  TEAMMATE_PROJECT_MEMORY_SEGMENTS,
+  legacyTeammateProjectMemoryDir,
+  teammateProjectMemoryDir,
+  unlinkedTeammateProjectMemoryDir,
+} from './botProjectMemory.js';
 import { setBotProjectSkillsDir } from './botSkillStore.js';
 import type { ProjectScheduleConfig } from '../scheduler-host/project-automation-loader.js';
 import type { BotModelRoute } from '../../shared/botModelChain.js';
@@ -94,12 +101,83 @@ async function writeIfMissing(filePath: string, content: string): Promise<boolea
   }
 }
 
+/**
+ * The memory records are the teammate's own work and are versioned; what the memory store derives
+ * beside them (the rebuilt MEMORY.md index, search database, folder metadata, temp files) is not.
+ * The store's copy receipt is versioned too: a `git clean` must not make it copy the old records
+ * again over later deletions.
+ */
+const MEMORY_DIR = TEAMMATE_PROJECT_MEMORY_SEGMENTS.join('/');
+export const BOT_PROJECT_MEMORY_GITIGNORE = [
+  `${MEMORY_DIR}/*`,
+  `!${MEMORY_DIR}/*.md`,
+  `!${MEMORY_DIR}/${MEMORY_STORAGE_MIGRATION_RECEIPT}`,
+  `${MEMORY_DIR}/MEMORY.md`,
+];
+
 const BOT_PROJECT_GITIGNORE = [
   'node_modules/', 'tmp/', '.DS_Store', '*.log',
   '*.zip', '*.tar', '*.tar.gz', '*.tgz', '*.dmg', '*.iso',
   '*.db', '*.sqlite', '*.sqlite3', '*-wal', '*-shm', 'pg_wal/',
+  ...BOT_PROJECT_MEMORY_GITIGNORE,
   '',
 ].join('\n');
+
+/** Adds the memory entries to a project's `.gitignore` that lacks them; true when it changed. */
+async function ensureMemoryIgnored(workspace: string): Promise<boolean> {
+  const file = path.join(workspace, '.gitignore');
+  const current = await fs.readFile(file, 'utf8').catch((error: NodeJS.ErrnoException) => {
+    if (error.code === 'ENOENT') return null;
+    throw error;
+  });
+  if (current === null) return writeIfMissing(file, BOT_PROJECT_GITIGNORE);
+  const lines = new Set(current.split(/\r?\n/).map((line) => line.trim()));
+  const missing = BOT_PROJECT_MEMORY_GITIGNORE.filter((line) => !lines.has(line));
+  if (!missing.length) return false;
+  const separator = current === '' || current.endsWith('\n') ? '' : '\n';
+  await fs.writeFile(file, `${current}${separator}${missing.join('\n')}\n`, 'utf8');
+  return true;
+}
+
+async function isOwnRepository(workspace: string): Promise<boolean> {
+  return fs.lstat(path.join(workspace, '.git')).then(() => true, () => false);
+}
+
+async function snapshotTeammateProject(botId: string, workspace: string, label: string): Promise<void> {
+  if (!await isOwnRepository(workspace)) return;
+  try {
+    await createSnapshotDetailed(workspace, { label, meta: { sessionId: 'bot-project', kind: 'manual' } });
+  } catch (error) {
+    // Versions are an addition: a Git failure must not keep the memories from being used.
+    log.warn('teammate project snapshot failed', { botId, error: String(error) });
+  }
+}
+
+/**
+ * Once per teammate: its project's memory was kept outside the project, like any project's
+ * (`<owner>/maker-memory/<scope>`); now it lives in the project. Copies those records in — a record
+ * the project already has wins — leaves the old folder untouched as a fallback, tells the memory
+ * store the copy is done (so it never copies again over later deletions), makes sure the derived
+ * files stay out of Git and keeps a version. Returns the records copied; null when already done.
+ */
+export async function moveTeammateMemoryIntoProject(input: {
+  botId: string;
+  ownerRoot: string;
+  workspace: string;
+}): Promise<number | null> {
+  const receipt = path.join(botProfileDir(input.ownerRoot, input.botId), TEAMMATE_MEMORY_MOVE_RECEIPT_FILE);
+  if (await fs.lstat(receipt).then(() => true, () => false)) return null;
+  const target = unlinkedTeammateProjectMemoryDir(input.workspace);
+  const copied = await copyMemoryRecords(await legacyTeammateProjectMemoryDir(input.ownerRoot, input.workspace), target);
+  await fs.mkdir(target, { recursive: true });
+  await writeIfMissing(path.join(target, MEMORY_STORAGE_MIGRATION_RECEIPT),
+    `${JSON.stringify({ schemaVersion: 1, migratedAt: new Date().toISOString() })}\n`);
+  const ignoreChanged = await ensureMemoryIgnored(input.workspace);
+  if (copied > 0 || ignoreChanged) await snapshotTeammateProject(input.botId, input.workspace, 'Move teammate memory into the project');
+  await fs.writeFile(receipt, `${JSON.stringify({ version: 1, movedAt: new Date().toISOString(), copied }, null, 2)}\n`, 'utf8');
+  if (copied > 0) log.info('teammate memory moved into its project', { botId: input.botId, copied });
+  return copied;
+}
 
 /** A repository whose root is the workspace itself; an enclosing repo does not count. */
 async function ensureWorkspaceRepository(workspace: string): Promise<'initialized' | 'already-git' | 'unavailable'> {
@@ -212,9 +290,11 @@ export async function prepareBotProjectWorkspace(input: {
   const workspace = await ensureBotWorkspaceDir(input.ownerRoot, input.botId, input.legacyUserDataDir);
   await writeIfMissing(path.join(workspace, 'AGENTS.md'), botProjectAgentsTemplate(input.displayName));
   await writeIfMissing(path.join(workspace, 'CLAUDE.md'), '@AGENTS.md\n');
-  // Memory and Skills become the project's own, before the first V2 turn reads them.
-  const projectMemoryDir = await teammateProjectMemoryDir(input.ownerRoot, workspace);
-  const memoriesCopied = await copyMemoryRecords(botProfileMemoryDir(input.ownerRoot, input.botId), projectMemoryDir);
+  // Memory and Skills become the project's own, before the first V2 turn reads them. A project
+  // memory kept outside the folder (earlier versions) comes first: it is newer than the V1 copy.
+  const moved = await moveTeammateMemoryIntoProject({ botId: input.botId, ownerRoot: input.ownerRoot, workspace });
+  const v1Copied = await copyMemoryRecords(botProfileMemoryDir(input.ownerRoot, input.botId), teammateProjectMemoryDir(workspace));
+  const memoriesCopied = (moved ?? 0) + v1Copied;
   const skillsCopied = await copySkillFolders(
     path.join(botProfileDir(input.ownerRoot, input.botId), 'skills'),
     path.join(workspace, '.agents', 'skills'),
@@ -223,6 +303,9 @@ export async function prepareBotProjectWorkspace(input: {
   let repository: BotProjectPreparation['repository'];
   try {
     repository = await ensureWorkspaceRepository(workspace);
+    if (repository === 'already-git' && v1Copied > 0) {
+      await snapshotTeammateProject(input.botId, workspace, 'Copy teammate memories into the project');
+    }
   } catch (error) {
     // Versions are an addition: a Git failure must not keep the project from opening.
     log.warn('teammate project repository setup failed', { botId: input.botId, error: String(error) });

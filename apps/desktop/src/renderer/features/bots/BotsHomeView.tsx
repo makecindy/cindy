@@ -55,7 +55,6 @@ import { CindyMergeSetting } from './CindyMergeSetting';
 import { BotLifecycleSettings } from './BotLifecycleSettings';
 import { BotInvitationWelcome } from './BotInvitationWelcome';
 import { BotModelChainEditor } from './BotModelChainEditor';
-import { BotTaskModelEditor } from './BotTaskModelEditor';
 import { BotCapabilitySettings } from './BotCapabilitySettings';
 import { BotMemorySettings } from './BotMemorySettings';
 import { CompanionVoiceSettings } from './voice/CompanionVoiceSettings';
@@ -650,12 +649,6 @@ export function BotSettings({
                 }}
               />
             </div>
-            <BotTaskModelEditor value={capabilities.taskModelOverride ?? null}
-              inheritedRoute={displayedModelChain[0]} hiddenVendors={hiddenVendors} deviceId={target.deviceId}
-              onChange={taskModelOverride => {
-                setCapabilities(current => ({ ...current, taskModelOverride }));
-                autosave.onEdit('instant');
-              }} />
           </div>
         </section>
         {page === 'projects' && <BotProjectsSettings key={bot.id} botId={bot.id} />}

@@ -32,8 +32,8 @@ import { mergeCompanionWorkbench, readCompanionWorkbench } from '../maker-ipc/bo
 import type { CompanionMaterializeHost } from './materialize.js';
 import { applyCompanionRoutines } from './routines.js';
 import { applyProjectAutomations, applyProjectRules, readProjectValues } from './project.js';
-import { backupTeammateProject, companionProjectIo, teammateMemoryDir, upgradeArrivedTeammate } from './projectHost.js';
-import { readTeammateMemories, teammateMemoryDirs } from '../maker-ipc/botProjectMemory.js';
+import { backupTeammateProject, companionProjectIo, teammateStoreMemoryDirs, upgradeArrivedTeammate } from './projectHost.js';
+import { readTeammateMemories, readTeammateMemory, teammateMemoryDirs } from '../maker-ipc/botProjectMemory.js';
 import { companionHomes } from './homes.js';
 import { createMcpServerNamesReader } from './mcpServerNames.js';
 import { companionHasLocalData } from './localData.js';
@@ -225,14 +225,13 @@ function createMaterializer(input: {
       const usable = async (routes: BotModelRoute[]) => (await resolveAvailableTaskModels(routes))
         .filter((route): route is BotModelRoute => route !== null);
       const chain = value.modelChain ? await usable(value.modelChain) : [];
-      const task = value.taskModel ? (await usable([value.taskModel]))[0] ?? null : null;
       fence.assertCurrent();
-      const patch = companionCapabilitiesPatch(value, { chain, task });
+      const patch = companionCapabilitiesPatch(value, { chain });
       if (Object.keys(patch).length || value.gender) {
         await updateBotProfile({ id: botId, capabilities: patch, ...(value.gender ? { gender: value.gender } : {}) });
       }
       const notices: CompanionArrivalNotice[] = [];
-      if ((value.modelChain && chain.length < value.modelChain.length) || (value.taskModel && !task)) notices.push('model');
+      if (value.modelChain && chain.length < value.modelChain.length) notices.push('model');
       return notices;
     },
     writeSystemPrompt: async (botId, text, fence) => {
@@ -261,9 +260,7 @@ function createMaterializer(input: {
       // Where the memory service writes it (a V2 teammate's project memory), so a restore compares
       // with what it would replace. Only a missing file is "no memory"; other errors keep the
       // take-over demoted for a retry.
-      const dir = await teammateMemoryDir(ownerScopedUserDataPath(), botId);
-      return fs.readFile(path.join(dir, filename), 'utf8')
-        .catch((error: NodeJS.ErrnoException) => { if (error?.code === 'ENOENT') return null; throw error; });
+      return readTeammateMemory(await teammateStoreMemoryDirs(ownerScopedUserDataPath(), botId), filename);
     },
     restoreMemory: (botId, filename, raw) => getBotMemoryService().restoreRaw(botId, filename, raw),
     removeMemory: (botId, filename) => getBotMemoryService().removeRaw(botId, filename),

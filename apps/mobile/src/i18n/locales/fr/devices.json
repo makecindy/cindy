@@ -765,8 +765,6 @@
     "artifactsEmpty": "Aucune production pour l'instant. Demandez à votre coéquipier de créer quelque chose.",
     "openSourceTask": "Ouvrir la session source",
     "modelFollowsDefault": "Suivre la chaîne de modèles par défaut",
-    "taskModel": "Modèle des tâches",
-    "taskInheritsPrimary": "Hériter du modèle principal",
     "modelOverride": "Utilise la chaîne de modèles propre à ce coéquipier",
     "modelsUnavailable": "Aucun modèle utilisable. Vérifiez les paramètres de modèle de ce coéquipier sur votre ordinateur, puis actualisez.",
     "artifactsRecovery": "Ouvrez les fichiers depuis les cartes de message, ou parcourez-les sur {{deviceName}}.",

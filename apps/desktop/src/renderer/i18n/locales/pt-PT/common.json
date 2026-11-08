@@ -10374,9 +10374,6 @@
     "model": {
       "description": "Escolha os modelos que este colega utiliza.",
       "primary": "Modelo principal",
-      "task": "Modelo da tarefa",
-      "inheritPrimary": "Herdar modelo principal",
-      "inheritingPrimary": "Herda o modelo principal para novas tarefas em segundo plano",
       "restoreDefault": "Restaurar modelo predefinido"
     },
     "modelChain": {

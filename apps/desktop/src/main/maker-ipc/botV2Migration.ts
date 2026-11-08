@@ -9,6 +9,7 @@
  *   3. unfinished V1-only state (open todos, workbench, working ledger) goes into one project file;
  *   4. the V1-only state files move to `v1-archive/` in the teammate's folder — kept, not deleted.
  * A receipt is written only after all steps succeed; a failure retries on the next start.
+ * A teammate upgraded before its project memory lived inside the project gets that one move here.
  * Copies whose main computer is another one are skipped: that computer upgrades them.
  */
 import { promises as fs } from 'node:fs';
@@ -28,8 +29,8 @@ import { createLogger } from '../logger.js';
 import { readEffectiveBotModelChain } from '../maker-host/bot-model-chain-settings-store.js';
 import { activeOwnerScopeKey, ownerScopedUserDataPath } from '../appSessionState.js';
 import { botProfileDir, ensureBotWorkspaceDir } from './botProfileFolder.js';
-import { ensureBotProjectAutomations, prepareBotProjectWorkspace } from './botProjectMode.js';
-import { TEAMMATE_V2_RECEIPT_FILE } from './botProjectMemory.js';
+import { ensureBotProjectAutomations, moveTeammateMemoryIntoProject, prepareBotProjectWorkspace } from './botProjectMode.js';
+import { TEAMMATE_V2_RECEIPT_FILE, teammateWorkspaceDir } from './botProjectMemory.js';
 import { writeRoutineAutomations } from './botRoutineAutomations.js';
 import { readV1Routines, removeV1Routine } from './botV1Routines.js';
 import {
@@ -174,7 +175,12 @@ async function migrateTeammateOnce(botId: string, ownerRoot: string,
   assertCurrent: () => void): Promise<'migrated' | 'already'> {
   const home = botProfileDir(ownerRoot, botId);
   const receiptPath = path.join(home, RECEIPT_FILE);
-  if (await exists(receiptPath)) return 'already';
+  if (await exists(receiptPath)) {
+    // Upgraded before its project memory moved into the project folder: move it once (idempotent).
+    const workspace = teammateWorkspaceDir(ownerRoot, botId);
+    if (await exists(workspace)) await moveTeammateMemoryIntoProject({ botId, ownerRoot, workspace });
+    return 'already';
+  }
   const profile = await readBotSettingsProfile(botId);
   const capabilities = profile.capabilities as unknown as Record<string, unknown>;
   const displayName = profile.name;

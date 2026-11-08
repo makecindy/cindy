@@ -758,8 +758,6 @@
     "artifactsEmpty": "Noch keine Artefakte. Bitte dein Teammitglied, etwas zu erstellen.",
     "openSourceTask": "Ursprüngliche Sitzung öffnen",
     "modelFollowsDefault": "Standard-Modellkette verwenden",
-    "taskModel": "Aufgabenmodell",
-    "taskInheritsPrimary": "Primäres Modell übernehmen",
     "modelOverride": "Eigene Modellkette dieses Teammitglieds wird verwendet",
     "modelsUnavailable": "Keine nutzbaren Modelle. Prüfe die Modelleinstellungen dieses Teammitglieds auf deinem Computer und aktualisiere dann.",
     "artifactsRecovery": "Öffne Dateien aus den Nachrichtenkarten oder durchsuche sie auf {{deviceName}}.",

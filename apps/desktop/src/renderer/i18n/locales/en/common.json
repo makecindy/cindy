@@ -10292,9 +10292,6 @@
     "model": {
       "description": "Choose the models this teammate uses.",
       "primary": "Primary Model",
-      "task": "Task Model",
-      "inheritPrimary": "Inherit Primary Model",
-      "inheritingPrimary": "Inherits the primary model for new background tasks",
       "restoreDefault": "Restore default model"
     },
     "modelChain": {

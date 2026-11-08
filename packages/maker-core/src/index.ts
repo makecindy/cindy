@@ -92,6 +92,7 @@ export {
 } from './memory/store.js';
 export {
   MakerMemoryManager,
+  MEMORY_STORAGE_MIGRATION_RECEIPT,
   type MakerMemoryManagerDeps,
   type MakerMemoryState,
   type SetEnabledResult,

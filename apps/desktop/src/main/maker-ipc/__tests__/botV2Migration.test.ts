@@ -6,7 +6,7 @@ import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 
 const h = vi.hoisted(() => ({
   root: '', routines: [] as Routine[], bindings: {} as Record<string, unknown>,
-  write: vi.fn(), remove: vi.fn(),
+  write: vi.fn(), remove: vi.fn(), moveMemory: vi.fn(async () => 0),
 }));
 vi.mock('electron', () => ({ app: { getPath: () => h.root } }));
 vi.mock('../../logger.js', () => ({ createLogger: () => ({ warn: vi.fn(), info: vi.fn() }) }));
@@ -28,6 +28,7 @@ vi.mock('../botProfileFolder.js', () => ({
 vi.mock('../botProjectMode.js', () => ({
   prepareBotProjectWorkspace: async () => ({ workingDir: path.join(h.root, 'bots', 'import_ada', 'workspace') }),
   ensureBotProjectAutomations: vi.fn(async () => true),
+  moveTeammateMemoryIntoProject: h.moveMemory,
 }));
 vi.mock('../botV1Routines.js', () => ({
   readV1Routines: async (_root: string, botId: string) => h.routines.filter(routine => routine.botId === botId),
@@ -54,7 +55,7 @@ const routine = (id: string, patch: Partial<Routine> = {}): Routine => ({
 
 beforeEach(async () => {
   h.root = await fs.mkdtemp(path.join(os.tmpdir(), 'cindy-v2-migration-'));
-  h.write.mockReset(); h.remove.mockReset();
+  h.write.mockReset(); h.remove.mockReset(); h.moveMemory.mockClear();
 });
 afterEach(async () => { await fs.rm(h.root, { recursive: true, force: true }); });
 
@@ -83,7 +84,8 @@ it('carries the teammate\'s own routines, drops retired built-ins and holds impo
   expect(archived.map(row => row.id)).toHaveLength(6);
   const carryover = await fs.readFile(path.join(home, 'workspace', 'CARRYOVER.md'), 'utf8');
   expect(carryover).toContain('command-job: needs the script, command or monitor it ran at its source; created paused');
-  // The receipt makes a rerun a no-op.
+  // The receipt makes a rerun a no-op, apart from the one-time move of its memory into the project.
   await expect(migrateTeammateToV2(BOT, h.root)).resolves.toBe('already');
   expect(h.write).toHaveBeenCalledTimes(3);
+  expect(h.moveMemory).toHaveBeenCalledWith({ botId: BOT, ownerRoot: h.root, workspace: path.join(home, 'workspace') });
 });

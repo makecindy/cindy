@@ -1,6 +1,7 @@
 import {
   BOT_SETTINGS_CAPABILITY_FIELDS,
   BOT_SETTINGS_PATCH_FIELDS,
+  BOT_SETTINGS_RETIRED_CAPABILITY_FIELDS,
   type BotSettingsOp,
 } from '../../../shared/botRemoteSettings.js';
 import {
@@ -125,7 +126,11 @@ export function readBotSettingsPatch(value: unknown, allowEmpty = false): Record
   const patch = record(value, 'patch');
   keysWithin(patch, BOT_SETTINGS_PATCH_FIELDS, 'patch');
   if (patch.capabilities !== undefined) {
-    const capabilities = record(patch.capabilities, 'capabilities');
+    const capabilities = { ...record(patch.capabilities, 'capabilities') };
+    // An older controller's retired fields are ignored, so the rest of its save still applies.
+    for (const field of BOT_SETTINGS_RETIRED_CAPABILITY_FIELDS) delete capabilities[field];
+    if (Object.keys(capabilities).length) patch.capabilities = capabilities;
+    else delete patch.capabilities;
     keysWithin(capabilities, BOT_SETTINGS_CAPABILITY_FIELDS, 'capabilities');
     const location = capabilities.agentDeviceId;
     if (location !== undefined && location !== null

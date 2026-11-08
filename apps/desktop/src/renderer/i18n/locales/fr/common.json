@@ -10374,9 +10374,6 @@
     "model": {
       "description": "Choisissez les modèles utilisés par ce coéquipier.",
       "primary": "Modèle principal",
-      "task": "Modèle des tâches",
-      "inheritPrimary": "Hériter du modèle principal",
-      "inheritingPrimary": "Hérite du modèle principal pour les nouvelles tâches en arrière-plan",
       "restoreDefault": "Rétablir le modèle par défaut"
     },
     "modelChain": {

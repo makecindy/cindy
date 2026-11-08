@@ -10,7 +10,12 @@ import type { Schedule } from '@cindy/maker-scheduler';
 import { activeOwnerScopeKey, ownerScopedUserDataPath } from '../appSessionState.js';
 import { createSnapshotDetailed } from '../git-snapshot/gitSnapshotService.js';
 import { botProfileMemoryDir } from '../maker-ipc/botProfileFolder.js';
-import { teammateProjectMemoryDir, teammateWorkspaceDir as teammateWorkspace } from '../maker-ipc/botProjectMemory.js';
+import {
+  hasTeammateMemoryMoved,
+  legacyTeammateProjectMemoryDir,
+  teammateProjectMemoryDir,
+  teammateWorkspaceDir as teammateWorkspace,
+} from '../maker-ipc/botProjectMemory.js';
 import { readTeammateProjectMode } from '../maker-ipc/botWorkspaceRuntime.js';
 import type { ProjectScheduleConfig } from '../scheduler-host/project-automation-loader.js';
 import { PROJECT_AUTOMATION_REL_SEGMENTS } from '../../shared/projectAutomationPaths.js';
@@ -23,11 +28,17 @@ const schedulerHost = () => import('../scheduler-host/index.js');
 
 const missing = (error: unknown) => (error as NodeJS.ErrnoException | null)?.code === 'ENOENT';
 
-/** The folder the teammate's memories are written to now (the memory service picks the same scope). */
-export async function teammateMemoryDir(ownerRoot: string, botId: string): Promise<string> {
-  return await readTeammateProjectMode(botId)
-    ? teammateProjectMemoryDir(ownerRoot, teammateWorkspace(ownerRoot, botId))
-    : botProfileMemoryDir(ownerRoot, botId);
+/**
+ * What the memory service holds for the teammate, first folder winning: the folder it writes to
+ * now (a V2 teammate's project memory) and, until the one-time move into the project finished, the
+ * place the store still copies records from on first use.
+ */
+export async function teammateStoreMemoryDirs(ownerRoot: string, botId: string): Promise<string[]> {
+  if (!await readTeammateProjectMode(botId)) return [botProfileMemoryDir(ownerRoot, botId)];
+  const workspace = teammateWorkspace(ownerRoot, botId);
+  return await hasTeammateMemoryMoved(ownerRoot, botId)
+    ? [teammateProjectMemoryDir(workspace)]
+    : [teammateProjectMemoryDir(workspace), await legacyTeammateProjectMemoryDir(ownerRoot, workspace)];
 }
 
 /** Before a take-over replaces it: the project's memories, skills and rules (its other files stay as they are). */
@@ -35,7 +46,7 @@ export async function backupTeammateProject(ownerRoot: string, botId: string, ta
   if (!await readTeammateProjectMode(botId)) return;
   const workspace = teammateWorkspace(ownerRoot, botId);
   const copies: Array<[string, string]> = [
-    [await teammateProjectMemoryDir(ownerRoot, workspace), 'project-memories'],
+    [teammateProjectMemoryDir(workspace), 'project-memories'],
     [path.join(workspace, '.agents', 'skills'), 'project-skills'],
     [path.join(workspace, RULES_FILE), `project-${RULES_FILE}`],
   ];

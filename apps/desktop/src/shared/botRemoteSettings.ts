@@ -166,6 +166,12 @@ export const BOT_SETTINGS_PATCH_FIELDS = [
 ] as const;
 
 /**
+ * Capability keys an older controller may still send but this host no longer writes: the teammate
+ * task model (`taskModelOverride`, retired 2026-11-09). The host drops them from a patch.
+ */
+export const BOT_SETTINGS_RETIRED_CAPABILITY_FIELDS = ['taskModelOverride'] as const;
+
+/**
  * Capability keys writable through the settings pages. `permissions` is deliberately absent:
  * raising the permission level keeps its confirmation in the generic remote form.
  */
@@ -179,7 +185,6 @@ export const BOT_SETTINGS_CAPABILITY_FIELDS = [
   'harness',
   'modelChain',
   'modelChainOverride',
-  'taskModelOverride',
   'skillMode',
   'toolsetMode',
   'toolsets',
