@@ -250,7 +250,7 @@ describe('mobile session header desktop-first surface', () => {
     expect(source).toContain('discardAllPendingUploadsForScopeChange();\n    discardSessionComposerAttachmentStateRef.current();');
 
     // 复用页面实例时输入原生子树也按 sessionId 换代，旧粘贴异步事件没有新任务入口。
-    expect(source).toContain('<MobileComposerInputRow\n                    key={sessionId}');
+    expect(source).toContain('<ResizableComposerInputRow resize={composerResize}\n                    key={sessionId}');
     // key 重挂载前必须在 render 阶段把 composer state 归属切到 B；不能先拿 A 文档
     // 创建 B 的 WebView，再等被动 effect 才纠正。同步缓存缺失时 B 首帧为空态。
     const draftScopeStart = source.indexOf('const activeComposerDraftScopeKey = composerDraftScopeKey(sessionId, routeDraft);');
