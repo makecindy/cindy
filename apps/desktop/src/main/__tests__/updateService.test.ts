@@ -1404,6 +1404,20 @@ describe('native architecture switch for Rosetta-translated macOS builds', () =>
     }
   });
 
+  // 重新授权标记按版本生效：同版本换装若写入，会在冷启动清掉已完成迁移用户的账号登录。
+  it('does not write a relogin flag for a same-version switch', async () => {
+    runningTranslated.mockReturnValue(true);
+    const service = await freshUpdateService('darwin', 'x64');
+    const manifest = armManifest();
+    Object.assign(manifest.app, { requireRelogin: true });
+
+    await expect(service.checkForUpdate(manifest)).resolves.toBe('ready');
+
+    expect(fs.existsSync(path.join(TEST_USER_DATA, 'relogin-required.flag'))).toBe(false);
+    const info = JSON.parse(fs.readFileSync(path.join(TEST_USER_DATA, 'updates', 'patch-info.json'), 'utf8'));
+    expect(info.requireRelogin).toBe(false);
+  });
+
   // Agent 按「重启后版本前进」判定成功；同版本换装交给它会在换装成功后报失败。
   it('does not offer a staged same-version switch to the Agent update flow', async () => {
     runningTranslated.mockReturnValue(true);

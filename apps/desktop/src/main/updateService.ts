@@ -1392,7 +1392,10 @@ async function doCheckForUpdate(manifestOverride?: Manifest | null): Promise<Che
       return 'idle';
     }
 
-    const requireRelogin = manifest.app.requireRelogin === true;
+    // 重新授权是版本级迁移：只在版本真正前进时生效。同版本换装原生架构的用户已在当前
+    // 版本完成过这次迁移，再写标记会在冷启动时清掉已保存的账号登录。
+    const requireRelogin = manifest.app.requireRelogin === true
+      && compareAppUpdateVersions(latestVersion, currentVersion) === 'newer';
     writePatchInfo({
       version: latestVersion,
       fileName,
