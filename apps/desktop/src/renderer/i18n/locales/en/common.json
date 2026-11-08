@@ -6601,6 +6601,27 @@
         },
         "groupPermissionLabel": "Permission mode for new group tasks",
         "groupPermissionDescription": "Permission mode used for every task created in a group chat — @bot opening a topic, /new, and /ctr all use it; the permission mode above applies to direct messages only. Defaults to Auto approval. Group context can contain member-controlled content — choosing Full access executes actions without per-step confirmation, so only pick it for groups you trust. Changes apply to tasks created afterwards; switch an existing task with /permission in the group."
+      },
+      "custom": {
+        "title": "Custom channel",
+        "description": "Open an HTTP channel to your own system: inbound tasks, outbound callback for results.",
+        "count": "{{count}}",
+        "empty": "No custom channels yet. Cindy generates an endpoint and token when you add one.",
+        "inbound": "Inbound URL",
+        "inboundPending": "(generated after restart)",
+        "token": "Access token (shown once)",
+        "tokenOnce": "The token is shown only here once. Regenerate it if lost.",
+        "callback": "Callback: {{url}}",
+        "rotate": "Rotate token",
+        "rotateTitle": "Rotate token?",
+        "rotateBody": "The old token stops working immediately; update the caller.",
+        "removeTitle": "Delete this channel?",
+        "removeBody": "The inbound URL stops working immediately; session history is kept.",
+        "add": "Add channel",
+        "nameLabel": "Channel name",
+        "namePlaceholder": "e.g. ERP tickets",
+        "callbackLabel": "Callback URL (optional)",
+        "failed": "Request failed"
       }
     },
     "shortcuts": {
@@ -11551,7 +11572,8 @@
         "lark": "Lark",
         "wecom": "WeCom",
         "dingtalk": "DingTalk",
-        "discord": "Discord"
+        "discord": "Discord",
+        "custom": "Custom channel"
       },
       "status": {
         "connected": "Connected",
@@ -11676,13 +11698,24 @@
           "botUnavailable": "{{name}} is unavailable right now. Try again once it’s back.",
           "connectFailed": "Couldn’t connect: {{reason}}",
           "failed": "Couldn’t finish. Try again later.",
-          "personalBotGone": "This bot is no longer set up in Settings → IM bots. Enter its credentials instead."
+          "personalBotGone": "This bot is no longer set up in Settings → IM bots. Enter its credentials instead.",
+          "invalidCustomName": "Channel name is required",
+          "invalidCallbackUrl": "Callback URL must start with http:// or https://"
         },
         "source": {
           "label": "How to connect",
           "existing": "Use the bot already set up in Cindy",
           "manual": "Enter new credentials",
           "moveNote": "The bot moves out of Settings → IM bots, which will be left empty. Its chats continue with {{name}}."
+        },
+        "custom": {
+          "nameLabel": "Channel name",
+          "nameHint": "Used only to tell this connection apart inside Cindy, e.g. \"ERP tickets\".",
+          "namePlaceholder": "e.g. ERP tickets",
+          "callbackLabel": "Callback URL (optional)",
+          "callbackHint": "Cindy POSTs replies here. Leave empty to receive inbound messages only.",
+          "ownerLabel": "Owner conversationId (optional)",
+          "ownerHint": "That id lands in the companion main task (visible in Bots); other ids get hidden lanes. Leave empty for all lanes."
         }
       },
       "removeConfirm": {
@@ -11705,6 +11738,12 @@
         "unbound": "Let {{name}} handle your questions to the official @askmycindy bot.",
         "managed": "A teammate handles X questions. Change the assignment in that teammate’s message platform settings.",
         "riskBody": "X questions use the teammate’s shared memory, tools and workspace, and replies are public. Do not use X for private information. The X thread does not directly use your private chat history."
+      },
+      "customAccess": {
+        "title": "{{name}} access",
+        "pending": "(generated when the endpoint starts)",
+        "copy": "Copy token",
+        "once": "Shown once. Callers use the inbound URL with a Bearer token."
       }
     },
     "voiceMode": {

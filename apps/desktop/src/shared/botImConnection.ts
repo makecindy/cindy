@@ -8,7 +8,14 @@
  * 正本与语义见 main/im/shared/botImConnectionStore.ts 与 botImConnectionRuntime.ts。
  */
 
-export const BOT_IM_CHANNELS = ['telegram', 'feishu', 'wecom', 'dingtalk', 'discord'] as const;
+export const BOT_IM_CHANNELS = [
+  'telegram',
+  'feishu',
+  'wecom',
+  'dingtalk',
+  'discord',
+  'custom',
+] as const;
 export type BotImChannel = (typeof BOT_IM_CHANNELS)[number];
 
 export type BotImFeishuService = 'feishu' | 'lark';
@@ -40,6 +47,7 @@ export const BOT_IM_CHANNEL_CHAT_VENDOR_KEY: Record<BotImChannel, string> = {
   wecom: 'wecomConversationId',
   dingtalk: 'dingtalkChatId',
   discord: 'discordChatId',
+  custom: 'customConversationId',
 };
 
 /** 这个会话的轮次能用某个渠道的原生 API 工具: 专线带该渠道 chat, 或主任务标记绑了该渠道。 */
@@ -82,6 +90,19 @@ export interface BotImConnectionRecord {
    * 个人 bot 的同名配置互不相干 —— 每条连接自己一份。
    */
   groupActivation?: Record<string, 'always'>;
+  /**
+   * 自定义渠道的展示名与出站地址。凭证(token)不在记录里, 按连接 id 存安全存储。
+   * callbackUrl 为空 = 只做入站, 调用方自己轮询结果。
+   */
+  custom?: {
+    displayName: string;
+    callbackUrl: string | null;
+    /**
+     * 指定哪个 conversationId 是「主人私聊」: 命中它走伙伴主任务(Bots 面板可见),
+     * 其余 conversationId 仍走隐藏专线。缺省 = 全部走专线。
+     */
+    ownerConversationId?: string | null;
+  };
   /** List-only archive cutoffs. Never changes the referenced session or its routing. */
   archivedTaskRows?: Record<string, number>;
   /** Optional anchors for the same archived rows; older clients retain numeric cutoffs. */
@@ -128,10 +149,30 @@ export type BotImConnectionAddInput =
   /** 企业微信智能机器人: 平台上的 Bot ID + Secret(与伙伴 id `botId` 不是一回事)。 */
   | { botId: string; channel: 'wecom'; wecomBotId: string; secret: string }
   | { botId: string; channel: 'dingtalk'; appKey: string; appSecret: string }
-  | { botId: string; channel: 'discord'; token: string; ownerUserId: string };
+  | { botId: string; channel: 'discord'; token: string; ownerUserId: string }
+  /**
+   * 自定义 HTTP 渠道: 用户给自己的系统接入用。callbackUrl 可选; 不传 = 只入站。
+   * token 由 Cindy 生成, 这里只在"重新生成"时传新值(缺省保留旧值)。
+   */
+  | {
+      botId: string;
+      channel: 'custom';
+      displayName: string;
+      callbackUrl?: string | null;
+      /** 主人私聊的 conversationId; 缺省 = 全部落隐藏专线。 */
+      ownerConversationId?: string | null;
+      token?: string;
+    };
 
 export interface BotImConnectionAddResult extends BotImConnectionListPayload {
   connection: BotImConnectionView;
+  /** 自定义渠道接入信息: token 只在这里出现一次; 其它渠道为 undefined。 */
+  customAccess?: {
+    inboundUrl: string;
+    /** Unix socket 路径 / Windows named pipe; 调用方 curl 用 --unix-socket 指向它。 */
+    socketPath: string;
+    token: string;
+  };
 }
 
 /**

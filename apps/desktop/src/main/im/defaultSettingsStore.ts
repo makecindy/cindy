@@ -230,7 +230,9 @@ const store = createOverrideSettingsFile<ImDefaultSettingsDocument>({
 
 export function readImDefaultSettings(channel?: ImDefaultSettingsChannel): ImDefaultSettings {
   const document = store.read();
-  return cloneSettings(channel ? document.channels[channel] : document.global);
+  // 新增渠道(如 custom)在老配置文档里没有自己的条目: 回落到 global,
+  // 不能把 undefined 传给 cloneSettings。
+  return cloneSettings(channel ? (document.channels[channel] ?? document.global) : document.global);
 }
 
 export function readImDefaultSettingsState(
@@ -251,7 +253,7 @@ export function writeImDefaultSettingsPatch(
   channel?: ImDefaultSettingsChannel,
 ): OverrideSettingsState<ImDefaultSettings> {
   const document = store.read();
-  const current = channel ? document.channels[channel] : document.global;
+  const current = channel ? (document.channels[channel] ?? document.global) : document.global;
   const next = mergeSettingsPatch(current, patch);
   if (channel) {
     store.writePatch({

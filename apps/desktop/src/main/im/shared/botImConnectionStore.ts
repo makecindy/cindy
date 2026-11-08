@@ -61,6 +61,9 @@ function normalizeRecord(id: string, raw: unknown): Omit<BotImConnectionRecord, 
       ? r.botContextId
       : null;
   const groupActivation = normalizeGroupActivation(r.groupActivation);
+  const custom =
+    r.channel === 'custom' ? normalizeCustomConfig(r.custom) : undefined;
+  if (r.channel === 'custom' && !custom) return null;
   const archivedTaskRows = normalizeArchivedTaskRows(r.archivedTaskRows);
   const archivedTaskActivity = normalizeArchivedTaskActivity(r.archivedTaskActivity, archivedTaskRows);
   return {
@@ -70,9 +73,37 @@ function normalizeRecord(id: string, raw: unknown): Omit<BotImConnectionRecord, 
     ...(service ? { service } : {}),
     botContextId,
     ...(groupActivation ? { groupActivation } : {}),
+    ...(custom ? { custom } : {}),
     ...(archivedTaskRows ? { archivedTaskRows } : {}),
     ...(archivedTaskActivity ? { archivedTaskActivity } : {}),
   };
+}
+
+/** 自定义渠道的展示名 + 出站地址; 出站地址只收 http/https。 */
+function normalizeCustomConfig(raw: unknown): {
+  displayName: string;
+  callbackUrl: string | null;
+  ownerConversationId: string | null;
+} | null {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return null;
+  const r = raw as Record<string, unknown>;
+  const displayName = typeof r.displayName === 'string' ? r.displayName.trim() : '';
+  if (!displayName || displayName.length > 80) return null;
+  let callbackUrl: string | null = null;
+  if (typeof r.callbackUrl === 'string' && r.callbackUrl.trim()) {
+    try {
+      const parsed = new URL(r.callbackUrl);
+      if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') return null;
+      callbackUrl = parsed.toString();
+    } catch {
+      return null;
+    }
+  }
+  const ownerConversationId =
+    typeof r.ownerConversationId === 'string' && r.ownerConversationId.trim()
+      ? r.ownerConversationId.trim()
+      : null;
+  return { displayName, callbackUrl, ownerConversationId };
 }
 
 /** Presentation state only: malformed cutoffs cannot hide a row. */
@@ -170,7 +201,16 @@ export function listBotImConnectionsForBot(botId: string): BotImConnectionRecord
 }
 
 export async function addBotImConnectionRecord(
-  input: { botId: string; channel: BotImChannel; service?: BotImFeishuService },
+  input: {
+    botId: string;
+    channel: BotImChannel;
+    service?: BotImFeishuService;
+    custom?: {
+      displayName: string;
+      callbackUrl: string | null;
+      ownerConversationId?: string | null;
+    };
+  },
   deps: { now?: () => number; id?: () => string } = {},
 ): Promise<BotImConnectionRecord> {
   const id = (deps.id ?? (() => randomBytes(6).toString('hex')))();
@@ -180,6 +220,7 @@ export async function addBotImConnectionRecord(
     channel: input.channel,
     createdAt: (deps.now ?? Date.now)(),
     ...(input.channel === 'feishu' ? { service: input.service ?? 'feishu' } : {}),
+    ...(input.channel === 'custom' && input.custom ? { custom: input.custom } : {}),
     botContextId: null,
   };
   await file.updateAtomic(

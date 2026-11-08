@@ -39,7 +39,8 @@ export type ImChannelName =
   | 'wechat'
   | 'telegram'
   | 'dingtalk'
-  | 'wecom';
+  | 'wecom'
+  | 'custom';
 
 /**
  * IM 编排层的产品默认配置(由 main/im/index.ts 产品接线层注入)。

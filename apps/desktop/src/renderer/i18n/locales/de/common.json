@@ -6601,6 +6601,27 @@
         },
         "groupPermissionLabel": "Berechtigungsmodus für neue Gruppenaufgaben",
         "groupPermissionDescription": "Berechtigungsmodus für jede Aufgabe, die in einem Gruppenchat erstellt wird – ob über @bot beim Öffnen eines Themas, /new oder /ctr. Der obige Berechtigungsmodus gilt nur für Direktnachrichten. Standardmäßig ist die automatische Genehmigung aktiv. Der Gruppenkontext kann von Mitgliedern kontrollierte Inhalte enthalten. Mit „Vollzugriff“ werden Aktionen ohne Bestätigung der einzelnen Schritte ausgeführt. Wähle diesen Modus daher nur für Gruppen, denen du vertraust. Änderungen gelten für danach erstellte Aufgaben. Den Modus einer bestehenden Aufgabe änderst du mit /permission in der Gruppe."
+      },
+      "custom": {
+        "title": "Benutzerdefinierter Kanal",
+        "description": "Öffne einen HTTP-Kanal zu deinem System: eingehende Aufgaben und Ergebnisrückmeldungen.",
+        "count": "{{count}}",
+        "empty": "Noch keine benutzerdefinierten Kanäle. Beim Hinzufügen erzeugt Cindy einen Endpunkt und ein Token.",
+        "inbound": "Eingangs-URL",
+        "inboundPending": "(wird nach dem Neustart erzeugt)",
+        "token": "Zugriffstoken (wird einmal angezeigt)",
+        "tokenOnce": "Das Token wird nur hier einmal angezeigt. Erzeuge bei Verlust ein neues.",
+        "callback": "Callback: {{url}}",
+        "rotate": "Token erneuern",
+        "rotateTitle": "Token erneuern?",
+        "rotateBody": "Das alte Token funktioniert sofort nicht mehr. Aktualisiere den aufrufenden Client.",
+        "removeTitle": "Diesen Kanal löschen?",
+        "removeBody": "Die Eingangs-URL funktioniert sofort nicht mehr; der Sitzungsverlauf bleibt erhalten.",
+        "add": "Kanal hinzufügen",
+        "nameLabel": "Kanalname",
+        "namePlaceholder": "z. B. ERP-Tickets",
+        "callbackLabel": "Callback-URL (optional)",
+        "failed": "Anfrage fehlgeschlagen"
       }
     },
     "shortcuts": {
@@ -11551,7 +11572,8 @@
         "lark": "Lark",
         "wecom": "WeCom",
         "dingtalk": "DingTalk",
-        "discord": "Discord"
+        "discord": "Discord",
+        "custom": "Benutzerdefinierter Kanal"
       },
       "status": {
         "connected": "Verbunden",
@@ -11676,13 +11698,24 @@
           "botUnavailable": "{{name}} ist gerade nicht verfügbar. Versuche es erneut, sobald es wieder verfügbar ist.",
           "connectFailed": "Verbindung fehlgeschlagen: {{reason}}",
           "failed": "Vorgang fehlgeschlagen. Versuch es später erneut.",
-          "personalBotGone": "Dieser Bot ist unter Einstellungen → IM-Bots nicht mehr eingerichtet. Gib stattdessen seine Zugangsdaten ein."
+          "personalBotGone": "Dieser Bot ist unter Einstellungen → IM-Bots nicht mehr eingerichtet. Gib stattdessen seine Zugangsdaten ein.",
+          "invalidCustomName": "Ein Kanalname ist erforderlich",
+          "invalidCallbackUrl": "Die Callback-URL muss mit http:// oder https:// beginnen"
         },
         "source": {
           "label": "So verbindest du dich",
           "existing": "Den bereits in Cindy eingerichteten Bot verwenden",
           "manual": "Neue Zugangsdaten eingeben",
           "moveNote": "Der Bot wird aus Einstellungen → IM-Bots verschoben; dieser Bereich bleibt leer. Seine Chats werden mit {{name}} fortgesetzt."
+        },
+        "custom": {
+          "nameLabel": "Kanalname",
+          "nameHint": "Dient nur dazu, diese Verbindung in Cindy zu unterscheiden, z. B. „ERP-Tickets“.",
+          "namePlaceholder": "z. B. ERP-Tickets",
+          "callbackLabel": "Callback-URL (optional)",
+          "callbackHint": "Cindy sendet Antworten per POST hierhin. Leer lassen, um nur eingehende Nachrichten zu empfangen.",
+          "ownerLabel": "conversationId des Besitzers (optional)",
+          "ownerHint": "Diese ID verwendet die Hauptsitzung des Teammitglieds (unter Teammitglieder sichtbar); andere IDs verwenden verborgene Kanäle. Leer lassen, um immer verborgene Kanäle zu verwenden."
         }
       },
       "removeConfirm": {
@@ -11705,6 +11738,12 @@
         "unbound": "Lass {{name}} deine Fragen an den offiziellen Bot @askmycindy übernehmen.",
         "managed": "Ein Teammitglied übernimmt X-Fragen. Ändere die Zuweisung in den Nachrichtenplattform-Einstellungen dieses Teammitglieds.",
         "riskBody": "Fragen über X nutzen den gemeinsamen Speicher, die Tools und den Arbeitsbereich des Teammitglieds. Antworten sind öffentlich. Nutze X nicht für private Informationen. Der X-Thread greift nicht direkt auf deinen privaten Chatverlauf zu."
+      },
+      "customAccess": {
+        "title": "Zugang für {{name}}",
+        "pending": "(wird beim Start des Endpunkts erzeugt)",
+        "copy": "Token kopieren",
+        "once": "Wird nur einmal angezeigt. Verwende die Eingangs-URL mit einem Bearer-Token."
       }
     },
     "voiceMode": {

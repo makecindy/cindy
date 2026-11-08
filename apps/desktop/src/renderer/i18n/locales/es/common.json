@@ -6666,6 +6666,27 @@
         },
         "groupPermissionLabel": "Modo de permisos para tareas nuevas en grupos",
         "groupPermissionDescription": "Modo de permisos que se usa para cada tarea creada en un chat grupal: se aplica al abrir un tema con @bot y al usar /new o /ctr; el modo de permisos anterior solo se aplica a los mensajes directos. El valor predeterminado es Aprobación automática. El contexto del grupo puede contener contenido controlado por sus miembros: elegir Acceso total ejecuta acciones sin confirmación en cada paso, así que elígelo solo para grupos de confianza. Los cambios se aplican a las tareas creadas después; cambia una tarea existente con /permission en el grupo."
+      },
+      "custom": {
+        "title": "Canal personalizado",
+        "description": "Abre un canal HTTP con tu propio sistema: tareas entrantes y devolución de resultados.",
+        "count": "{{count}}",
+        "empty": "Todavía no hay canales personalizados. Cindy genera un punto de entrada y un token al añadir uno.",
+        "inbound": "URL de entrada",
+        "inboundPending": "(se genera tras reiniciar)",
+        "token": "Token de acceso (se muestra una vez)",
+        "tokenOnce": "El token solo se muestra aquí una vez. Regénéralo si lo pierdes.",
+        "callback": "Devolución: {{url}}",
+        "rotate": "Renovar token",
+        "rotateTitle": "¿Renovar el token?",
+        "rotateBody": "El token anterior deja de funcionar de inmediato; actualiza el cliente.",
+        "removeTitle": "¿Eliminar este canal?",
+        "removeBody": "La URL de entrada deja de funcionar de inmediato; se conserva el historial de tareas.",
+        "add": "Añadir canal",
+        "nameLabel": "Nombre del canal",
+        "namePlaceholder": "p. ej., incidencias ERP",
+        "callbackLabel": "URL de devolución (opcional)",
+        "failed": "La solicitud ha fallado"
       }
     },
     "shortcuts": {
@@ -11648,7 +11669,8 @@
         "lark": "Lark",
         "wecom": "WeCom",
         "dingtalk": "DingTalk",
-        "discord": "Discord"
+        "discord": "Discord",
+        "custom": "Canal personalizado"
       },
       "status": {
         "connected": "Conectado",
@@ -11774,13 +11796,24 @@
           "botUnavailable": "{{name}} no está disponible en este momento. Inténtalo cuando vuelva.",
           "connectFailed": "No se pudo conectar: {{reason}}",
           "failed": "No se pudo terminar. Inténtalo más tarde.",
-          "personalBotGone": "Este bot ya no está configurado en Configuración → Bots de mensajería instantánea. Ingresa sus credenciales."
+          "personalBotGone": "Este bot ya no está configurado en Configuración → Bots de mensajería instantánea. Ingresa sus credenciales.",
+          "invalidCustomName": "El nombre del canal es obligatorio",
+          "invalidCallbackUrl": "La URL de devolución debe empezar por http:// o https://"
         },
         "source": {
           "label": "Cómo conectar",
           "existing": "Usar el bot ya configurado en Cindy",
           "manual": "Ingresar nuevas credenciales",
           "moveNote": "El bot se retira de Configuración → Bots de mensajería instantánea, que quedará vacío. Sus chats continúan con {{name}}."
+        },
+        "custom": {
+          "nameLabel": "Nombre del canal",
+          "nameHint": "Solo sirve para distinguir esta conexión dentro de Cindy, p. ej., «incidencias ERP».",
+          "namePlaceholder": "p. ej., incidencias ERP",
+          "callbackLabel": "URL de devolución (opcional)",
+          "callbackHint": "Cindy envía las respuestas aquí mediante POST. Déjala vacía para recibir solo mensajes entrantes.",
+          "ownerLabel": "conversationId del propietario (opcional)",
+          "ownerHint": "Ese identificador utiliza la tarea principal del compañero (visible en Compañeros); los demás usan rutas ocultas. Déjalo vacío para usar siempre rutas ocultas."
         }
       },
       "removeConfirm": {
@@ -11803,6 +11836,12 @@
         "unbound": "Deja que {{name}} atienda tus preguntas al bot oficial @askmycindy.",
         "managed": "Un compañero atiende las preguntas de X. Cambia la asignación en la configuración de plataformas de mensajes de ese compañero.",
         "riskBody": "Las preguntas de X usan la memoria compartida, las herramientas y el espacio de trabajo del compañero, y las respuestas son públicas. No uses X para información privada. El hilo de X no usa directamente tu historial de chat privado."
+      },
+      "customAccess": {
+        "title": "Acceso a {{name}}",
+        "pending": "(se genera al iniciar el punto de entrada)",
+        "copy": "Copiar token",
+        "once": "Se muestra una sola vez. Usa la URL de entrada con un token Bearer."
       }
     },
     "voiceMode": {

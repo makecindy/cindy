@@ -76,7 +76,7 @@ function resolveManagedImageAbsPath(url: string): string {
     : resolveXdtImageUrl(url).absPath;
 }
 
-const host: IMHost = {
+export const host: IMHost = {
   accountScope: imHostAccountScope,
   paths: {
     feishuMediaDir: path.join(app.getPath('userData'), 'cc-agent', 'feishu-media'),

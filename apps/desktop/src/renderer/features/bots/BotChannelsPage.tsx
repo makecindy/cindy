@@ -15,7 +15,7 @@ import { standardSessionRoute } from '@/lib/orcaSessionIdentity';
 import { HookConnectionsSection } from '@/components/settings/HookConnectionsSection';
 import { useCallback, useEffect, useId, useRef, useState, type FormEvent } from 'react';
 import * as Dialog from '@radix-ui/react-dialog';
-import { Archive, ArrowUpRight, Briefcase, ChevronRight, ChevronUp, Gamepad2, MessageSquare, Plus, Send, Zap, type LucideIcon } from 'lucide-react';
+import { Archive, ArrowUpRight, Briefcase, ChevronRight, ChevronUp, Gamepad2, Globe, MessageSquare, Plus, Send, Zap, type LucideIcon } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 
 import { ChromeIconButton } from '@/components/title-bar/ChromeIconButton';
@@ -80,6 +80,7 @@ const CHANNEL_ICON: Record<BotImChannel, LucideIcon> = {
   wecom: Briefcase,
   dingtalk: Zap,
   discord: Gamepad2,
+  custom: Globe,
 };
 
 function ChannelIcon({ channel }: { channel: BotImChannel }) {
@@ -129,6 +130,13 @@ export function BotChannelsPage({ bot }: { bot: BotProfile }) {
   const [adding, setAdding] = useState(false);
   const [wechatExpanded, setWechatExpanded] = useState(false);
   const [removingId, setRemovingId] = useState<string | null>(null);
+  /** 自定义渠道刚添加/重置后的接入信息: token 只展示这一次。 */
+  const [customAccess, setCustomAccess] = useState<{
+    displayName: string;
+    inboundUrl: string;
+    socketPath: string;
+    token: string;
+  } | null>(null);
 
   const mine = (payload?.connections ?? []).filter((item) => item.botId === bot.id);
 
@@ -261,6 +269,35 @@ export function BotChannelsPage({ bot }: { bot: BotProfile }) {
         <WechatBotSection companion={{ id: bot.id, name: bot.name }} expanded={wechatExpanded}
           onToggle={() => setWechatExpanded((expanded) => !expanded)} />
       ) : null}
+      {customAccess ? (
+        <div className="flex flex-col gap-2 rounded-xl border border-[var(--border-default)] bg-[var(--surface-elevated)] p-3">
+          <p className="text-13 font-medium text-[var(--text-primary)]">
+            {t('bots.channels.customAccess.title', { name: customAccess.displayName })}
+          </p>
+          <code className="break-all rounded-lg bg-[var(--surface-chip)] px-2 py-1 text-11">
+            {customAccess.inboundUrl}
+          </code>
+          <code className="break-all rounded-lg bg-[var(--surface-chip)] px-2 py-1 text-11">
+            --unix-socket {customAccess.socketPath}
+          </code>
+          <div className="flex items-center gap-2">
+            <code className="min-w-0 flex-1 break-all rounded-lg bg-[var(--surface-chip)] px-2 py-1 text-11">
+              {customAccess.token}
+            </code>
+            <Button
+              type="button"
+              variant="secondary"
+              size="sm"
+              onClick={() => void navigator.clipboard.writeText(customAccess.token)}
+            >
+              {t('bots.channels.customAccess.copy')}
+            </Button>
+          </div>
+          <p className="text-11 leading-[1.5] text-[var(--text-tertiary)]">
+            {t('bots.channels.customAccess.once')}
+          </p>
+        </div>
+      ) : null}
       <p className="px-1 text-12 leading-[1.5] text-[var(--text-tertiary)]">
         {t('bots.channels.externalNote', { name: bot.name })}
       </p>
@@ -268,7 +305,14 @@ export function BotChannelsPage({ bot }: { bot: BotProfile }) {
         {t('bots.channels.sharedMemoryNote', { name: bot.name })}
       </p>
       {adding ? (
-        <BotChannelAddDialog bot={bot} api={im} remoteName={target.channels.canEnterCredentials ? undefined : target.deviceName} onApplied={apply} onOpenChange={setAdding} />
+        <BotChannelAddDialog
+          bot={bot}
+          api={im}
+          remoteName={target.channels.canEnterCredentials ? undefined : target.deviceName}
+          onApplied={apply}
+          onCustomAccess={setCustomAccess}
+          onOpenChange={setAdding}
+        />
       ) : null}
     </section>
   );
@@ -639,7 +683,14 @@ function ConnectionLanes({ api, connectionId, botName, platform, deviceId }: {
   );
 }
 
-const PLATFORMS: ReadonlyArray<BotImChannel> = ['telegram', 'feishu', 'wecom', 'dingtalk', 'discord'];
+const PLATFORMS: ReadonlyArray<BotImChannel> = [
+  'telegram',
+  'feishu',
+  'wecom',
+  'dingtalk',
+  'discord',
+  'custom',
+];
 
 /** 个人 bot 给人看的身份: Telegram @用户名 / Discord 标签原样, 其它平台的 id 打码。 */
 function adoptableIdentity(item: BotImAdoptablePersonalBot): string | undefined {
@@ -693,6 +744,7 @@ function BotChannelAddDialog({
   api,
   remoteName,
   onApplied,
+  onCustomAccess,
   onOpenChange,
 }: {
   bot: BotProfile;
@@ -700,6 +752,12 @@ function BotChannelAddDialog({
   /** Set for a teammate on another computer: credentials are typed and stored on that computer only. */
   remoteName?: string;
   onApplied: (next: BotImConnectionListPayload) => void;
+  onCustomAccess: (access: {
+    displayName: string;
+    inboundUrl: string;
+    socketPath: string;
+    token: string;
+  }) => void;
   onOpenChange: (open: boolean) => void;
 }) {
   const { t } = useBotTranslation();
@@ -718,6 +776,10 @@ function BotChannelAddDialog({
   const [dingtalkAppSecret, setDingtalkAppSecret] = useState('');
   const [discordToken, setDiscordToken] = useState('');
   const [discordOwnerUserId, setDiscordOwnerUserId] = useState('');
+  // 自定义渠道: 展示名 + 可选回调地址; token 由 Cindy 生成, 添加后展示一次。
+  const [customDisplayName, setCustomDisplayName] = useState('');
+  const [customCallbackUrl, setCustomCallbackUrl] = useState('');
+  const [customOwnerConversationId, setCustomOwnerConversationId] = useState('');
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const busyRef = useRef(false);
@@ -750,6 +812,8 @@ function BotChannelAddDialog({
     ? true
     : !credentialsHere
       ? false
+      : channel === 'custom'
+        ? filled(customDisplayName)
       : channel === 'telegram'
       ? filled(token, ownerUserId)
       : channel === 'feishu'
@@ -794,6 +858,23 @@ function BotChannelAddDialog({
         if (!DISCORD_OWNER_ID_PATTERN.test(trimmedOwner)) return t('bots.channels.add.errors.invalidDiscordOwner');
         return { botId: bot.id, channel: 'discord', token: trimmedToken, ownerUserId: trimmedOwner };
       }
+      case 'custom': {
+        const displayName = customDisplayName.trim();
+        if (!displayName) return t('bots.channels.add.errors.invalidCustomName');
+        const callbackUrl = customCallbackUrl.trim();
+        if (callbackUrl && !/^https?:\/\//i.test(callbackUrl)) {
+          return t('bots.channels.add.errors.invalidCallbackUrl');
+        }
+        return {
+          botId: bot.id,
+          channel: 'custom',
+          displayName,
+          callbackUrl: callbackUrl || null,
+          ...(customOwnerConversationId.trim()
+            ? { ownerConversationId: customOwnerConversationId.trim() }
+            : {}),
+        };
+      }
     }
   };
 
@@ -811,6 +892,14 @@ function BotChannelAddDialog({
     try {
       const next = input ? await addBotImConnection(apiRef.current, input) : await adoptPersonalBot(apiRef.current, { botId: bot.id, channel });
       onApplied(next);
+      if (next.customAccess) {
+        onCustomAccess({
+          displayName: input && input.channel === 'custom' ? input.displayName : channel,
+          inboundUrl: next.customAccess.inboundUrl,
+          socketPath: next.customAccess.socketPath,
+          token: next.customAccess.token,
+        });
+      }
       onOpenChange(false);
     } catch (failure) {
       const ipc = extractIpcError(failure);
@@ -1116,6 +1205,59 @@ function BotChannelAddDialog({
                         spellCheck={false}
                         disabled={busy}
                         secretTipContentClassName="z-[10001]"
+                      />
+                    )}
+                  </FormField>
+                </>
+              ) : channel === 'custom' ? (
+                <>
+                  <FormField
+                    label={t('bots.channels.add.custom.nameLabel')}
+                    hint={t('bots.channels.add.custom.nameHint')}
+                  >
+                    {(control) => (
+                      <Input
+                        {...control}
+                        value={customDisplayName}
+                        onChange={setCustomDisplayName}
+                        placeholder={t('bots.channels.add.custom.namePlaceholder')}
+                        autoComplete="off"
+                        spellCheck={false}
+                        disabled={busy}
+                      />
+                    )}
+                  </FormField>
+                  <FormField
+                    label={t('bots.channels.add.custom.callbackLabel')}
+                    hint={t('bots.channels.add.custom.callbackHint')}
+                  >
+                    {(control) => (
+                      <Input
+                        {...control}
+                        mono
+                        value={customCallbackUrl}
+                        onChange={setCustomCallbackUrl}
+                        placeholder="http://127.0.0.1:8080/hook"
+                        autoComplete="off"
+                        spellCheck={false}
+                        disabled={busy}
+                      />
+                    )}
+                  </FormField>
+                  <FormField
+                    label={t('bots.channels.add.custom.ownerLabel')}
+                    hint={t('bots.channels.add.custom.ownerHint')}
+                  >
+                    {(control) => (
+                      <Input
+                        {...control}
+                        mono
+                        value={customOwnerConversationId}
+                        onChange={setCustomOwnerConversationId}
+                        placeholder="cli-1"
+                        autoComplete="off"
+                        spellCheck={false}
+                        disabled={busy}
                       />
                     )}
                   </FormField>

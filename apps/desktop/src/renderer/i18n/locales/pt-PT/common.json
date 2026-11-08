@@ -6666,6 +6666,27 @@
         },
         "groupPermissionLabel": "Modo de permissões para novas tarefas de grupo",
         "groupPermissionDescription": "Modo de permissões utilizado para todas as tarefas criadas numa conversa de grupo — a abertura de um tópico com @bot, /new e /ctr utilizam-no; o modo de permissões acima aplica-se apenas a mensagens diretas. A predefinição é Aprovação automática. O contexto do grupo pode conter conteúdo controlado pelos membros — escolher Acesso total executa ações sem confirmação a cada passo, pelo que só deve escolhê-lo para grupos em que confia. As alterações aplicam-se às tarefas criadas posteriormente; altere uma tarefa existente com /permission no grupo."
+      },
+      "custom": {
+        "title": "Canal personalizado",
+        "description": "Abra um canal HTTP para o seu sistema: tarefas de entrada e retorno dos resultados.",
+        "count": "{{count}}",
+        "empty": "Ainda não há canais personalizados. O Cindy gera um ponto de entrada e um token ao adicionar um canal.",
+        "inbound": "URL de entrada",
+        "inboundPending": "(gerado após reiniciar)",
+        "token": "Token de acesso (apresentado uma vez)",
+        "tokenOnce": "O token só é apresentado aqui uma vez. Gere outro se o perder.",
+        "callback": "Retorno: {{url}}",
+        "rotate": "Renovar token",
+        "rotateTitle": "Renovar o token?",
+        "rotateBody": "O token anterior deixa de funcionar imediatamente; atualize o cliente.",
+        "removeTitle": "Eliminar este canal?",
+        "removeBody": "O URL de entrada deixa de funcionar imediatamente; o histórico de sessões é mantido.",
+        "add": "Adicionar canal",
+        "nameLabel": "Nome do canal",
+        "namePlaceholder": "p. ex., pedidos ERP",
+        "callbackLabel": "URL de retorno (opcional)",
+        "failed": "O pedido falhou"
       }
     },
     "shortcuts": {
@@ -11648,7 +11669,8 @@
         "lark": "Lark",
         "wecom": "WeCom",
         "dingtalk": "DingTalk",
-        "discord": "Discord"
+        "discord": "Discord",
+        "custom": "Canal personalizado"
       },
       "status": {
         "connected": "Ligado",
@@ -11774,13 +11796,24 @@
           "botUnavailable": "{{name}} está indisponível neste momento. Tenta novamente quando regressar.",
           "connectFailed": "Não foi possível ligar: {{reason}}",
           "failed": "Não foi possível concluir. Tenta novamente mais tarde.",
-          "personalBotGone": "Este bot já não está configurado em Definições → Bots de IM. Introduza as credenciais."
+          "personalBotGone": "Este bot já não está configurado em Definições → Bots de IM. Introduza as credenciais.",
+          "invalidCustomName": "O nome do canal é obrigatório",
+          "invalidCallbackUrl": "O URL de retorno tem de começar por http:// ou https://"
         },
         "source": {
           "label": "Como ligar",
           "existing": "Usar o bot já configurado no Cindy",
           "manual": "Introduzir novas credenciais",
           "moveNote": "O bot sai de Definições → Bots de IM, que ficará vazio. As conversas continuam com {{name}}."
+        },
+        "custom": {
+          "nameLabel": "Nome do canal",
+          "nameHint": "Serve apenas para distinguir esta ligação no Cindy, por exemplo «pedidos ERP».",
+          "namePlaceholder": "p. ex., pedidos ERP",
+          "callbackLabel": "URL de retorno (opcional)",
+          "callbackHint": "O Cindy envia respostas para aqui por POST. Deixe vazio para receber apenas mensagens de entrada.",
+          "ownerLabel": "conversationId do proprietário (opcional)",
+          "ownerHint": "Este identificador usa a sessão principal do colega (visível em Colegas); os restantes usam vias ocultas. Deixe vazio para usar sempre vias ocultas."
         }
       },
       "removeConfirm": {
@@ -11803,6 +11836,12 @@
         "unbound": "Permitir que {{name}} trate das suas perguntas ao bot oficial @askmycindy.",
         "managed": "Um colega trata das perguntas do X. Altere a atribuição nas definições de plataformas de mensagens desse colega.",
         "riskBody": "As perguntas do X usam a memória partilhada, as ferramentas e o espaço de trabalho do colega, e as respostas são públicas. Não use o X para informações privadas. O tópico do X não usa diretamente o seu histórico de conversas privadas."
+      },
+      "customAccess": {
+        "title": "Acesso a {{name}}",
+        "pending": "(gerado ao iniciar o ponto de entrada)",
+        "copy": "Copiar token",
+        "once": "Apresentado uma única vez. Utilize o URL de entrada com um token Bearer."
       }
     },
     "voiceMode": {

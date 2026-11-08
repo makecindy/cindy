@@ -6558,6 +6558,27 @@
         },
         "groupPermissionLabel": "그룹에서 새 작업을 만들 때의 권한 모드",
         "groupPermissionDescription": "그룹 채팅에서 새 작업을 만들 때 공통으로 사용하는 권한 모드입니다(@bot으로 스레드 열기, /new, /ctr 모두 해당). 기본값은 자동 승인이며, 위의 권한 모드는 개인 채팅에만 적용됩니다. 그룹 컨텍스트에는 멤버가 조작할 수 있는 내용이 포함되므로 전체 액세스를 선택하면 확인 없이 바로 실행됩니다. 신뢰할 수 있는 그룹에서만 선택하세요. 변경은 이후에 만드는 작업에만 적용되며, 기존 작업은 그룹에서 /permission으로 개별 전환합니다."
+      },
+      "custom": {
+        "title": "사용자 지정 채널",
+        "description": "자체 시스템용 HTTP 채널: 수신으로 작업을 받고 콜백으로 결과를 받습니다.",
+        "count": "{{count}}개",
+        "empty": "아직 사용자 지정 채널이 없습니다. 추가하면 Cindy가 주소와 token을 만듭니다.",
+        "inbound": "수신 URL",
+        "inboundPending": "(재시작 후 생성)",
+        "token": "액세스 token(한 번만 표시)",
+        "tokenOnce": "token은 여기서 한 번만 표시됩니다. 잃으면 재생성하세요.",
+        "callback": "콜백: {{url}}",
+        "rotate": "token 재생성",
+        "rotateTitle": "token을 재생성할까요?",
+        "rotateBody": "이전 token은 즉시 무효화됩니다. 호출하는 쪽도 갱신해야 합니다.",
+        "removeTitle": "이 채널을 삭제할까요?",
+        "removeBody": "수신 URL이 즉시 무효화됩니다. 세션 기록은 유지됩니다.",
+        "add": "채널 추가",
+        "nameLabel": "채널 이름",
+        "namePlaceholder": "예: ERP 티켓",
+        "callbackLabel": "콜백 URL(선택)",
+        "failed": "요청 실패"
       }
     },
     "shortcuts": {
@@ -11506,7 +11527,8 @@
         "lark": "Lark",
         "wecom": "WeCom",
         "dingtalk": "DingTalk",
-        "discord": "Discord"
+        "discord": "Discord",
+        "custom": "사용자 지정 채널"
       },
       "status": {
         "connected": "연결됨",
@@ -11630,13 +11652,24 @@
           "botUnavailable": "{{name}}은(는) 지금 사용할 수 없습니다. 복구된 뒤 다시 시도하세요.",
           "connectFailed": "연결하지 못했습니다: {{reason}}",
           "failed": "완료하지 못했습니다. 잠시 후 다시 시도하세요.",
-          "personalBotGone": "설정 → IM 봇에 이 봇이 더 이상 없습니다. 인증 정보를 입력하세요."
+          "personalBotGone": "설정 → IM 봇에 이 봇이 더 이상 없습니다. 인증 정보를 입력하세요.",
+          "invalidCustomName": "채널 이름을 입력하세요",
+          "invalidCallbackUrl": "콜백 URL은 http:// 또는 https://로 시작해야 합니다"
         },
         "source": {
           "label": "연결 방법",
           "existing": "Cindy에 설정된 봇 사용",
           "manual": "새 인증 정보 입력",
           "moveNote": "이 봇은 설정 → IM 봇에서 옮겨지며 그곳은 비게 됩니다. 기존 개인 채팅과 그룹 채팅은 {{name}}이(가) 이어서 답합니다."
+        },
+        "custom": {
+          "nameLabel": "채널 이름",
+          "nameHint": "Cindy 안에서 이 연결을 구분하는 용도로만 씁니다(예: \"ERP 티켓\").",
+          "namePlaceholder": "예: ERP 티켓",
+          "callbackLabel": "콜백 URL(선택)",
+          "callbackHint": "Cindy가 응답을 여기로 POST합니다. 비우면 수신만 합니다.",
+          "ownerLabel": "메인 conversationId(선택)",
+          "ownerHint": "지정한 id는 파트너 메인 작업(Bots 패널 표시)으로, 나머지는 숨김 레인으로 갑니다. 비우면 전부 레인."
         }
       },
       "removeConfirm": {
@@ -11659,6 +11692,12 @@
         "unbound": "공식 @askmycindy에 보낸 질문을 {{name}}에게 맡길 수 있습니다.",
         "managed": "파트너가 X 질문을 담당합니다. 해당 파트너의 메시지 플랫폼 설정에서 연결을 변경할 수 있습니다.",
         "riskBody": "X 질문에는 파트너의 공유 기억, 도구와 작업 폴더가 사용되며 답글은 공개됩니다. 개인 정보를 다루는 용도로 사용하지 마세요. 비공개 채팅 기록을 직접 사용하지 않습니다."
+      },
+      "customAccess": {
+        "title": "{{name}} 접속 정보",
+        "pending": "(엔드포인트 시작 후 생성)",
+        "copy": "token 복사",
+        "once": "한 번만 표시됩니다. 수신 URL + Bearer token으로 호출하세요."
       }
     },
     "voiceMode": {

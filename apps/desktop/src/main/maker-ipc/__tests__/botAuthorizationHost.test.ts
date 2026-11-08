@@ -2,6 +2,7 @@ import { advanceSessionRewindGeneration, withSendToSessionLock } from '../sendTo
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { GhostSetupAssessment, InstalledGhost } from '../../../shared/ghost';
 import type { BotAuthorizationCard } from '../../../shared/botAuthorization';
+import { botAuthorizationImChannel, isBotAuthorizationHostId } from '../../../shared/botAuthorization';
 import type { initBotAuthorizationService } from '../botAuthorizationService';
 
 const state = vi.hoisted(() => ({
@@ -81,6 +82,15 @@ import { initializeBotAuthorizationHost } from '../botAuthorizationHost';
 import { createIpcError } from '../../../shared/ipc-errors';
 
 const target = { kind: 'plugin' as const, id: 'art' };
+it('keeps generated-token custom channels out of credential authorization cards', () => {
+  for (const channel of ['telegram', 'feishu', 'wecom', 'dingtalk', 'discord']) {
+    expect(isBotAuthorizationHostId(`im-${channel}`)).toBe(true);
+    expect(botAuthorizationImChannel(`im-${channel}`)).toBe(channel);
+  }
+  expect(isBotAuthorizationHostId('im-custom')).toBe(false);
+  expect(botAuthorizationImChannel('im-custom')).toBeNull();
+});
+
 describe('authorization Host live plugin policy', () => {
   beforeEach(() => {
     state.assessment.mockReturnValue({ state: 'ready', revision: 1, groups: [] });

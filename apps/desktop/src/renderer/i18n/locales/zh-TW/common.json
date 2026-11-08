@@ -6558,6 +6558,27 @@
         },
         "groupPermissionLabel": "群聊新建任務權限檔",
         "groupPermissionDescription": "群組裡新建任務時統一使用的權限檔（@bot 開話題、/new、/ctr 都算），預設「自動審批」；上面那個權限檔只管私聊。群組上下文裡有成員可控制的內容，設成「完全存取」後將直接執行、不再逐項確認，請確認群組成員都可信。變更只影響之後新建的任務，已有任務在群組裡用 /permission 單獨切換。"
+      },
+      "custom": {
+        "title": "自訂渠道",
+        "description": "為你的系統開一條 HTTP 渠道：入站派活，出站回呼取結果。",
+        "count": "{{count}} 條",
+        "empty": "還沒有自訂渠道。新增後 Cindy 會產生接入位址與 token。",
+        "inbound": "入站位址",
+        "inboundPending": "（重新啟動後產生）",
+        "token": "存取 token（只顯示一次）",
+        "tokenOnce": "token 只在這裡顯示一次；遺失後請重新產生。",
+        "callback": "回呼位址：{{url}}",
+        "rotate": "重設 token",
+        "rotateTitle": "重設 token？",
+        "rotateBody": "舊 token 會立刻失效，正在使用它的系統需要同步更新。",
+        "removeTitle": "刪除這條渠道？",
+        "removeBody": "刪除後入站位址立即失效，工作階段歷史保留。",
+        "add": "新增渠道",
+        "nameLabel": "渠道名稱",
+        "namePlaceholder": "例如：ERP Issue",
+        "callbackLabel": "回呼位址（選填）",
+        "failed": "操作失敗"
       }
     },
     "shortcuts": {
@@ -11506,7 +11527,8 @@
         "lark": "Lark",
         "wecom": "企業微信",
         "dingtalk": "釘釘",
-        "discord": "Discord"
+        "discord": "Discord",
+        "custom": "自訂渠道"
       },
       "status": {
         "connected": "已連線",
@@ -11630,13 +11652,24 @@
           "botUnavailable": "{{name}} 目前無法使用，等 TA 恢復後再試。",
           "connectFailed": "未能連線：{{reason}}",
           "failed": "未能完成，請稍後再試。",
-          "personalBotGone": "設定 → IM 機器人 裡已經沒有這個機器人了，請改為填寫憑證。"
+          "personalBotGone": "設定 → IM 機器人 裡已經沒有這個機器人了，請改為填寫憑證。",
+          "invalidCustomName": "請填寫渠道名稱",
+          "invalidCallbackUrl": "回呼位址必須以 http:// 或 https:// 開頭"
         },
         "source": {
           "label": "連線方式",
           "existing": "使用已在 Cindy 設定的機器人",
           "manual": "填寫新的憑證",
           "moveNote": "這個機器人會從 設定 → IM 機器人 移過來，那裡將變為空；原本的私訊和群組改由 {{name}} 接著回覆。"
+        },
+        "custom": {
+          "nameLabel": "渠道名稱",
+          "nameHint": "只用於在 Cindy 裡區分這條連線，例如「ERP Issue」。",
+          "namePlaceholder": "例如：ERP Issue",
+          "callbackLabel": "回呼位址（選填）",
+          "callbackHint": "Cindy 把回覆 POST 到這裡；留空則只接收入站訊息。",
+          "ownerLabel": "主工作階段 conversationId（選填）",
+          "ownerHint": "填一個 id，它走夥伴主任務（Bots 面板可見）；其它 id 各走隱藏專線。留空則全部走專線。"
         }
       },
       "removeConfirm": {
@@ -11659,6 +11692,12 @@
         "unbound": "可將官方 @askmycindy 收到的你的提問交給 {{name}}。",
         "managed": "X 提問由夥伴處理。可在該夥伴的訊息平台設定中更改連結。",
         "riskBody": "X 提問會使用夥伴的共享記憶、能力和工作目錄，回答會公開。請勿透過 X 處理私人資訊。專線不會直接使用夥伴的私聊記錄。"
+      },
+      "customAccess": {
+        "title": "{{name}} 接入資訊",
+        "pending": "（端點啟動後產生）",
+        "copy": "複製 token",
+        "once": "token 只顯示這一次；外部系統用入站位址 + Bearer token 呼叫。"
       }
     },
     "voiceMode": {

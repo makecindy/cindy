@@ -748,7 +748,7 @@ describe('bot im connection runtime', () => {
         start: vi.fn(async () => undefined),
         clear: vi.fn(async () => undefined),
       });
-      const personal = { telegram: make(), feishu: make(), wecom: make(), dingtalk: make(), discord: make() };
+      const personal = { telegram: make(), feishu: make(), wecom: make(), dingtalk: make(), discord: make(), custom: make() };
       configureBotImPersonalAdoption({
         isReady: () => true,
         personal,

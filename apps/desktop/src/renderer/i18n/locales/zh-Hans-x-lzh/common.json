@@ -6558,6 +6558,27 @@
         },
         "groupPermissionLabel": "群议新差事之权柄档",
         "groupPermissionDescription": "群组中新开差事时统一所用之权柄档（@bot 开话题、/new、/ctr 皆属之），常例为「自动审批」；上方之权柄档唯管私聊。群组上下文中有成员可控之内容，设为「完全访问」后将径行运行、不复逐项确认，请确保群组成员皆可信。变更仅及此后新开之差事，既有差事请于群组中以 /permission 另行切换。"
+      },
+      "custom": {
+        "title": "自定渠道",
+        "description": "以 HTTP 接自有系统：来差入站，成果回传。",
+        "count": "{{count}}",
+        "empty": "尚无自定渠道；新增时 Cindy 将生成端点与凭符。",
+        "inbound": "入站网址",
+        "inboundPending": "（重启后生成）",
+        "token": "接入凭符（仅示一次）",
+        "tokenOnce": "凭符仅于此示一次，遗失则重生之。",
+        "callback": "回传：{{url}}",
+        "rotate": "换发凭符",
+        "rotateTitle": "换发凭符乎？",
+        "rotateBody": "旧凭符即刻失效，请更新调用端。",
+        "removeTitle": "删此渠道乎？",
+        "removeBody": "入站网址即刻失效，差事历录仍存。",
+        "add": "新增渠道",
+        "nameLabel": "渠道名",
+        "namePlaceholder": "如：ERP Issue",
+        "callbackLabel": "回传网址（可不填）",
+        "failed": "请求未成"
       }
     },
     "shortcuts": {
@@ -11506,7 +11527,8 @@
         "lark": "Lark",
         "wecom": "企业微信",
         "dingtalk": "钉钉",
-        "discord": "Discord"
+        "discord": "Discord",
+        "custom": "自定渠道"
       },
       "status": {
         "connected": "已连",
@@ -11630,13 +11652,24 @@
           "botUnavailable": "{{name}} 今不可用，待其复后再试。",
           "connectFailed": "连之未成：{{reason}}",
           "failed": "未竟，请稍后再试。",
-          "personalBotGone": "规制 → IM 机器人 中已无此机器人，请改填凭证。"
+          "personalBotGone": "规制 → IM 机器人 中已无此机器人，请改填凭证。",
+          "invalidCustomName": "请填渠道名",
+          "invalidCallbackUrl": "回传网址须以 http:// 或 https:// 起首"
         },
         "source": {
           "label": "连接之法",
           "existing": "用已于 Cindy 设置之机器人",
           "manual": "填新凭证",
           "moveNote": "此机器人将自 规制 → IM 机器人 移来，彼处将空；原有私讯与群组改由 {{name}} 接续回复。"
+        },
+        "custom": {
+          "nameLabel": "渠道名",
+          "nameHint": "仅供 Cindy 内辨此连接，如“ERP Issue”。",
+          "namePlaceholder": "如：ERP Issue",
+          "callbackLabel": "回传网址（可不填）",
+          "callbackHint": "Cindy 以 POST 传答于此；留空则仅收来讯。",
+          "ownerLabel": "主人 conversationId（可不填）",
+          "ownerHint": "此 ID 入同僚主差事（于同僚页可见），余者各入隐线；留空则皆走隐线。"
         }
       },
       "removeConfirm": {
@@ -11659,6 +11692,12 @@
         "unbound": "可将官方 @askmycindy 所收君之提问交予 {{name}}。",
         "managed": "X 之问由同僚处理。可于该同僚之传讯之所规制中更改所系。",
         "riskBody": "X 之问将用同僚之共享记忆、才能与工作目录，回答公开。勿经 X 处理私密信息。专线不直接用同僚之私聊记录。"
+      },
+      "customAccess": {
+        "title": "{{name}} 接入",
+        "pending": "（端点启动时生成）",
+        "copy": "复制凭符",
+        "once": "仅示此一次。请以 Bearer 凭符调用入站网址。"
       }
     },
     "voiceMode": {

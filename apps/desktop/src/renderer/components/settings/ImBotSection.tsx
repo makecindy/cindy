@@ -29,6 +29,7 @@ import { DingTalkBotSection } from './DingTalkBotSection';
 import { FeishuBotSection } from './FeishuBotSection';
 import { HookConnectionsSection } from './HookConnectionsSection';
 import { TelegramBotSection } from './TelegramBotSection';
+import { CustomChannelSection } from './CustomChannelSection';
 import { WechatBotSection } from './WechatBotSection';
 import { WecomBotSection } from './WecomBotSection';
 import { showCindyGroup } from './imBotVisibility';
@@ -72,14 +73,16 @@ function PersonalGroupContent({
   activation: number;
 }) {
   const [expandedChannel, setExpandedChannel] = useState<
-    'wechat' | 'wecom' | 'feishu' | 'discord' | 'telegram' | 'dingtalk' | null
+    'wechat' | 'wecom' | 'feishu' | 'discord' | 'telegram' | 'dingtalk' | 'custom' | null
   >(targetChannel);
 
   useLayoutEffect(() => {
     if (targetChannel) setExpandedChannel(targetChannel);
   }, [targetChannel, activation]);
 
-  const toggle = (channel: 'wechat' | 'wecom' | 'feishu' | 'discord' | 'telegram' | 'dingtalk') => {
+  const toggle = (
+    channel: 'wechat' | 'wecom' | 'feishu' | 'discord' | 'telegram' | 'dingtalk' | 'custom',
+  ) => {
     setExpandedChannel((current) => (current === channel ? null : channel));
   };
 
@@ -104,6 +107,10 @@ function PersonalGroupContent({
       <TelegramBotSection
         expanded={expandedChannel === 'telegram'}
         onToggle={() => toggle('telegram')}
+      />
+      <CustomChannelSection
+        expanded={expandedChannel === 'custom'}
+        onToggle={() => toggle('custom')}
       />
     </div>
   );

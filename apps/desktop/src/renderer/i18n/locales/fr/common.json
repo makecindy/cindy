@@ -6666,6 +6666,27 @@
         },
         "groupPermissionLabel": "Mode d'autorisation des nouvelles tâches de groupe",
         "groupPermissionDescription": "Mode d'autorisation utilisé pour chaque tâche créée dans une conversation de groupe : @bot ouvrant un sujet, /new et /ctr l'utilisent tous ; le mode d'autorisation ci-dessus ne s'applique qu'aux messages privés. Par défaut : approbation automatique. Le contexte de groupe peut contenir du contenu contrôlé par les membres. Choisir Accès complet exécute les actions sans confirmation à chaque étape : ne le choisissez que pour des groupes de confiance. Les modifications s'appliquent aux tâches créées ensuite ; pour une tâche existante, changez de mode avec /permission dans le groupe."
+      },
+      "custom": {
+        "title": "Canal personnalisé",
+        "description": "Ouvrez un canal HTTP vers votre système : sessions entrantes et rappel pour les résultats.",
+        "count": "{{count}}",
+        "empty": "Aucun canal personnalisé. Cindy génère un point d’entrée et un jeton lorsque vous en ajoutez un.",
+        "inbound": "URL entrante",
+        "inboundPending": "(générée après le redémarrage)",
+        "token": "Jeton d’accès (affiché une fois)",
+        "tokenOnce": "Le jeton n’est affiché ici qu’une fois. Régénérez-le en cas de perte.",
+        "callback": "Rappel : {{url}}",
+        "rotate": "Renouveler le jeton",
+        "rotateTitle": "Renouveler le jeton ?",
+        "rotateBody": "L’ancien jeton cesse immédiatement de fonctionner ; mettez à jour le client.",
+        "removeTitle": "Supprimer ce canal ?",
+        "removeBody": "L’URL entrante cesse immédiatement de fonctionner ; l’historique des sessions est conservé.",
+        "add": "Ajouter un canal",
+        "nameLabel": "Nom du canal",
+        "namePlaceholder": "p. ex. tickets ERP",
+        "callbackLabel": "URL de rappel (facultative)",
+        "failed": "Échec de la requête"
       }
     },
     "shortcuts": {
@@ -11648,7 +11669,8 @@
         "lark": "Lark",
         "wecom": "WeCom",
         "dingtalk": "DingTalk",
-        "discord": "Discord"
+        "discord": "Discord",
+        "custom": "Canal personnalisé"
       },
       "status": {
         "connected": "Connecté",
@@ -11774,13 +11796,24 @@
           "botUnavailable": "{{name}} n'est pas disponible pour le moment. Réessayez lorsqu'il sera de retour.",
           "connectFailed": "Connexion impossible : {{reason}}",
           "failed": "Impossible de terminer. Réessayez plus tard.",
-          "personalBotGone": "Ce bot n'est plus configuré dans Paramètres → Bots de messagerie. Saisissez plutôt ses identifiants."
+          "personalBotGone": "Ce bot n'est plus configuré dans Paramètres → Bots de messagerie. Saisissez plutôt ses identifiants.",
+          "invalidCustomName": "Le nom du canal est obligatoire",
+          "invalidCallbackUrl": "L’URL de rappel doit commencer par http:// ou https://"
         },
         "source": {
           "label": "Mode de connexion",
           "existing": "Utiliser le bot déjà configuré dans Cindy",
           "manual": "Saisir de nouveaux identifiants",
           "moveNote": "Le bot est retiré de Paramètres → Bots de messagerie, qui restera vide. Ses conversations se poursuivent avec {{name}}."
+        },
+        "custom": {
+          "nameLabel": "Nom du canal",
+          "nameHint": "Sert uniquement à distinguer cette connexion dans Cindy, par exemple « tickets ERP ».",
+          "namePlaceholder": "p. ex. tickets ERP",
+          "callbackLabel": "URL de rappel (facultative)",
+          "callbackHint": "Cindy envoie les réponses ici par POST. Laissez vide pour recevoir uniquement les messages entrants.",
+          "ownerLabel": "conversationId du propriétaire (facultatif)",
+          "ownerHint": "Cet identifiant utilise la session principale du coéquipier (visible dans Coéquipiers) ; les autres utilisent des voies masquées. Laissez vide pour utiliser uniquement les voies masquées."
         }
       },
       "removeConfirm": {
@@ -11803,6 +11836,12 @@
         "unbound": "Laissez {{name}} traiter vos questions adressées au bot officiel @askmycindy.",
         "managed": "Un coéquipier traite les questions X. Modifiez l'attribution dans les paramètres de plateforme de messagerie de ce coéquipier.",
         "riskBody": "Les questions X utilisent la mémoire partagée, les outils et l'espace de travail du coéquipier, et les réponses sont publiques. N'utilisez pas X pour des informations privées. Le fil X n'utilise pas directement votre historique de conversation privé."
+      },
+      "customAccess": {
+        "title": "Accès à {{name}}",
+        "pending": "(généré au démarrage du point d’entrée)",
+        "copy": "Copier le jeton",
+        "once": "Affiché une seule fois. Utilisez l’URL entrante avec un jeton Bearer."
       }
     },
     "voiceMode": {

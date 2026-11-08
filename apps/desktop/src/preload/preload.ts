@@ -2693,6 +2693,20 @@ contextBridge.exposeInMainWorld('electronAPI', {
   // ── 伙伴自有 IM 机器人连接(Telegram / 飞书, 伙伴设置「消息平台」页)──
   // 凭证只进 main 的安全存储, 不回传; 记录按连接 id 管理。
   botImConnection: {
+    // 设置页「自定义渠道」: 与伙伴页那份分开存, 没有 botId。
+    customChannels: {
+      list: (): Promise<{ connections: unknown[] }> => ipcRenderer.invoke('customChannel:list'),
+      add: (payload: {
+        displayName: string;
+        callbackUrl?: string | null;
+        agentKind?: 'claude-code' | 'codex' | 'pi';
+        model?: string | null;
+      }): Promise<unknown> => ipcRenderer.invoke('customChannel:add', payload),
+      remove: (payload: { id: string }): Promise<{ connections: unknown[] }> =>
+        ipcRenderer.invoke('customChannel:remove', payload),
+      rotateToken: (payload: { id: string }): Promise<unknown> =>
+        ipcRenderer.invoke('customChannel:rotate-token', payload),
+    },
     list: (): Promise<import('../shared/botImConnection').BotImConnectionListPayload> =>
       ipcRenderer.invoke('botImConnection:list'),
     add: (

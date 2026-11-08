@@ -117,12 +117,30 @@ import {
 } from './accountBoundary';
 import { configureImAccountScope } from './accountScopeBridge';
 import type { ImOrchestratorConfig } from './shared/types';
+import { createImOrchestrator } from './shared/orchestrator';
 import { bindingStore, executeDetach } from './binding';
 import { IM_DEFAULT_EFFORT_OVERRIDES, IM_DEFAULT_SETTINGS, IM_DEFAULT_SETTINGS_CHANNELS } from '../../shared/imDefaultSettings';
 import { getAuthState } from '../authManager';
 import { getUpdateStatus, isUpdateRelaunchImminent } from '../updateService';
 
 import { createLogger } from '../logger';
+import { createCustomIM } from '@cindy/im';
+import { host as imHost } from './host';
+import { buildCustomAdapter, customAttachmentMeta } from './custom/adapter';
+import {
+  generateCustomToken,
+  readCustomToken,
+  registerCustomConnection,
+  removeCustomToken,
+  stopCustomEndpoint,
+  unregisterCustomConnection,
+  writeCustomToken,
+} from './custom/runtime';
+import {
+  registerPersonalCustomChannelIpc,
+  startPersonalCustomChannels,
+  stopPersonalCustomChannels,
+} from './custom/personalRuntime';
 import { assertTrustedAppRendererEvent } from '../security/trustedAppRenderer';
 import { throwIpcError } from '../utils/ipcValidate';
 import {
@@ -135,6 +153,7 @@ import {
 export function registerBotImConnectionIpc(): void {
   registerBotImConnectionRuntimeIpc();
   registerBotImPersonalAdoptionIpc();
+  registerPersonalCustomChannelIpc();
 }
 export {
   registerTelegramBotConfigIpc,
@@ -248,6 +267,14 @@ const WECOM_CONFIG: ImOrchestratorConfig = {
   effortOverrides: IM_DEFAULT_EFFORT_OVERRIDES,
 };
 
+// 自定义 HTTP 渠道: 默认值与其它渠道一致; agent/模型可在连接记录里覆盖。
+const CUSTOM_CONFIG: ImOrchestratorConfig = {
+  agentKind: IM_DEFAULT_SETTINGS.agentKind,
+  defaultModel: IM_DEFAULT_SETTINGS.agents[IM_DEFAULT_SETTINGS.agentKind].model,
+  defaultPermissionMode: IM_DEFAULT_SETTINGS.permissionMode,
+  effortOverrides: IM_DEFAULT_EFFORT_OVERRIDES,
+};
+
 export function startImOrchestrators(): void {
   wechatCompatibilityPolicy.start();
   if (wired) return;
@@ -332,6 +359,35 @@ export function startImOrchestrators(): void {
         });
         return { kind: 'dingtalk', im, orchestrator };
       }
+      if (record.channel === 'custom') {
+        const token = readCustomToken(record.id) ?? '';
+        const im = createCustomIM(imHost, {
+          connectionId: record.id,
+          displayName: record.custom?.displayName ?? record.id,
+          token,
+          callbackUrl: record.custom?.callbackUrl ?? null,
+          resolveAttachment: customAttachmentMeta,
+        });
+        void registerCustomConnection(record.id, im).catch(async (err: unknown) => {
+          log.warn(
+            'custom im register failed connection=' +
+              record.id +
+              ': ' +
+              (err instanceof Error ? err.message : String(err)),
+          );
+          // 端点没起来就不要显示成已连接, 否则用户以为能发但地址根本不存在。
+          await im.dispose();
+        });
+        const orchestrator = createImOrchestrator(
+          buildCustomAdapter(im, CUSTOM_CONFIG, {
+            connectionId: record.id,
+            displayName: record.custom?.displayName ?? record.id,
+            ownerConversationId: record.custom?.ownerConversationId ?? null,
+          }),
+          { instanceKey: `custom#${record.id}`, companionBotId: record.botId },
+        );
+        return { kind: 'custom', im, orchestrator };
+      }
       const im = createBotDiscordIM(prefix);
       const orchestrator = wireDiscordOrchestrator(im, DISCORD_CONFIG, {
         instanceKey: `discord#${record.id}`,
@@ -399,6 +455,14 @@ export function startImOrchestrators(): void {
         stop: () => discordIm.dispose(),
         start: () => discordIm.init(),
         clear: () => discordIm.init(),
+      },
+      custom: {
+        // 自定义渠道没有"设置页那份个人 bot", 这几个方法只为满足
+        // Record<BotImChannel, PersonalBotTransport> 的形状, 不会被调用。
+        identity: () => null,
+        stop: async () => {},
+        start: async () => {},
+        clear: async () => {},
       },
     },
   });
@@ -647,6 +711,7 @@ async function initializeImConnection(): Promise<void> {
   await im.init();
   // 伙伴自有连接跟在设置页那份后面起; 各自失败只记日志。
   await startBotImConnections();
+  await startPersonalCustomChannels();
 }
 
 /**
@@ -773,7 +838,10 @@ const connectionLifecycle = createSerializedConnectionLifecycle({
   stopConnection: async (reason) => {
     try {
       // 伙伴自有连接先放掉(记录保留, 下次登录再起), 再停设置页那份。
+      await stopPersonalCustomChannels();
       await stopBotImConnections();
+      // 端点路径跟着账号目录走: 换账号必须关掉, 否则新账号的连接会注册进旧 socket。
+      await stopCustomEndpoint();
       await im.dispose();
     } finally {
       bindingStore.resetRuntime();

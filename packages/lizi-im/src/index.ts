@@ -58,6 +58,19 @@ export type { DownloadResult as FeishuDownloadResult } from './feishu/attachment
 export { DiscordIM, createDiscordIM } from './discord/index.js';
 export type { DiscordConfigState, DiscordIMOptions } from './discord/index.js';
 
+export { CustomIM, createCustomIM } from './custom/CustomIM.js';
+export type { CustomIMOptions } from './custom/CustomIM.js';
+export type {
+  CustomInboundMessage,
+  CustomInboundAttachment,
+  CustomOutboundMessage,
+  CustomOutboundAttachment,
+} from './custom/types.js';
+export {
+  CUSTOM_INBOUND_PATH_PREFIX,
+  CUSTOM_INBOUND_PATH_SUFFIX,
+} from './custom/types.js';
+
 export { TelegramIM, createTelegramIM } from './telegram/index.js';
 // expressive 档变体池 —— 官方 bot 的 ack 表情复用同一份, 两个 bot 的表情语义
 // 不该各说各话(#1855)。

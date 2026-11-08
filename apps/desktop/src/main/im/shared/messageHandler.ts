@@ -550,7 +550,9 @@ export function createMessageHandler(
       });
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
-      log.error(`runAgentTurn threw: ${msg}`);
+      log.error(
+        `runAgentTurn threw: ${msg}${err instanceof Error && err.stack ? `\n${err.stack}` : ''}`,
+      );
       // 本条消息自己开了话题(groupContextLane)时, 开场白卡还没被流式认领 —
       // 用内部错误内容收口它, 否则卡永久残留且同话题下一条会 patch 错卡。
       if (isImAccountScopeClosedError(err)) throw err;

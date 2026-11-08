@@ -240,6 +240,7 @@ it('never takes credentials and leaves browser sign-in and folder choosing to th
   const { target } = create();
   const im = target.channels.im!;
   expect(target.channels.canEnterCredentials).toBe(false);
+  expect(im).not.toHaveProperty('customChannels');
   await expect(im.add({ botId: 'bot-1', channel: 'telegram', token: 'secret', ownerUserId: '1' })).rejects.toSatisfy((error) => extractIpcError(error)?.code === 'PRECONDITION_FAILED');
   await expect(target.channels.wechat!.authorize()).rejects.toBeTruthy();
   await expect(target.channels.wechat!.chooseWorkingDirectory()).rejects.toBeTruthy();
