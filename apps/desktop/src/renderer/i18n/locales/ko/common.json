@@ -5960,7 +5960,9 @@
           "RELAY_MISMATCH": "이 서버의 중계는 이 컴퓨터가 배포하지 않았으므로 Cindy가 변경하지 않습니다.",
           "CERTIFICATE_FAILED": "HTTPS 인증서를 발급받지 못했습니다. 대개 클라우드 보안 그룹에서 80 포트를 허용하지 않았거나 도메인이 아직 이 서버를 가리키지 않기 때문입니다. 해결한 뒤 다시 시도하세요.",
           "CA_UNREACHABLE": "서버가 인증서 발급 기관 Let's Encrypt에 연결하지 못했고, 몇 분 동안 자동으로 다시 시도해도 성공하지 못했습니다. 서버가 인터넷에 연결되는지 확인한 뒤 잠시 후 다시 시도하세요.",
-          "NOT_REACHABLE": "서버의 중계는 실행 중이지만 이 컴퓨터에서 연결할 수 없습니다. 클라우드 보안 그룹에서 443 포트를 허용하세요.",
+          "NOT_REACHABLE": "이 컴퓨터에서 중계 연결을 확인하지 못했습니다. HTTPS 주소, 인증서와 443 포트 접근을 확인하세요.",
+          "AGENT_NET_START_FAILED": "서버의 Agent-Net 서비스가 준비되지 않았습니다. 서비스 로그와 3348/TCP, 3479/UDP 포트 사용 여부를 확인하세요.",
+          "AGENT_NET_VERIFY_FAILED": "HTTPS에는 연결되지만 Agent-Net의 신원과 디렉터리를 검증하지 못했습니다. V2 서비스, 리버스 프록시 경로와 페어링 정보를 확인하세요.",
           "BUNDLE_MISSING": "이 버전의 Cindy에는 중계가 포함되어 있지 않습니다. Cindy를 업데이트하세요.",
           "DEPLOY_FAILED": "배포를 완료하지 못했습니다.",
           "PAIR_PROOF_INVALID": "이 기기의 요청을 확인할 수 없어 승인할 수 없습니다. 참여 링크를 다시 만드세요.",
@@ -6485,8 +6487,12 @@
           "encryptionUnknown": "확인되지 않음",
           "legacyEncryptionHint": "이전 연결의 중계 경로는 종단 간 암호화되지 않습니다."
         },
-        "onlyEncrypted": "암호화된 연결만 허용",
-        "onlyEncryptedHint": "이전 버전 기기와 이전 연결을 사용하는 공유는 사용할 수 없게 됩니다."
+        "protocol": {
+          "agentNet": "Agent-Net",
+          "deviceLink": "Device Link"
+        },
+        "onlyEncrypted": "Agent-Net만 사용",
+        "onlyEncryptedHint": "켜면 이전 버전 기기와 이전 연결을 사용하는 공유를 사용할 수 없습니다. 기본값은 꺼짐입니다."
       }
     },
     "tina": {

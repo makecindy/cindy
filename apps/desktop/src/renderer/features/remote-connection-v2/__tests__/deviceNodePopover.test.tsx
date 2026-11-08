@@ -51,6 +51,9 @@ describe('DeviceNodePopover', () => {
   it.each([[true, 'encrypted'], [false, 'legacyConnection'], [undefined, 'encryptionUnknown']] as const)('shows the actual encryption status %s', (encrypted, key) => {
     render(<DeviceNodePopover node={node({ encrypted })} relayName="Cindy" onRemoteDesktop={vi.fn()} />);
     expect(screen.getByText('settings.remoteControl.v2.popover.' + key)).toBeTruthy();
+    // 2026-11-08: route details must identify the actual protocol, not just direct versus relay.
+    const protocol = encrypted === undefined ? '' : `settings.remoteControl.v2.protocol.${encrypted ? 'agentNet' : 'deviceLink'} · `;
+    expect(screen.getByText(protocol + 'settings.remoteControl.v2.path.direct')).toBeTruthy();
     expect(!!screen.queryByText('settings.remoteControl.v2.popover.legacyEncryptionHint')).toBe(encrypted === false);
   });
   it('只展示信息:没有开关、没有删除,也没有「管理设备…」', () => {

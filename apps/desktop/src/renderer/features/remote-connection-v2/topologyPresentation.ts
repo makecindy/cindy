@@ -11,6 +11,12 @@ export { platformLabel, relativeTime } from '@/components/settings/deviceLabels'
 
 type T = (key: string, options?: Record<string, unknown>) => string;
 
+/** The negotiated link is authoritative; unknown or disconnected peers have no protocol label. */
+export function protocolLabel(node: TopologyNode, t: T): string | null {
+  if (!node.path || node.status === 'offline' || node.encrypted === undefined) return null;
+  return t(node.encrypted ? 'settings.remoteControl.v2.protocol.agentNet' : 'settings.remoteControl.v2.protocol.deviceLink');
+}
+
 /** 一台设备「怎么连」的一句话:直连 / 经「X」中转 / 在线未建链 / 要处理原因 / 离线。 */
 export function pathLabel(node: TopologyNode, relayName: string, t: T): string {
   if (node.status === 'offline') return t('settings.remoteControl.v2.path.offline');

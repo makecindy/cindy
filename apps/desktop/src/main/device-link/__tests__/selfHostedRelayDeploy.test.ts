@@ -158,7 +158,7 @@ describe('deployRelayToServer', () => {
     let uploaded: Buffer | undefined;
     mocks.responses['relay-deploy-agent-net-configure'] = (_command, input) => { uploaded = input; return ok(''); };
     const testInit = { ...init, relayId: bootstrap.networkId.slice(8), ownerPublicKey: bootstrap.rootPublicKey };
-    vi.mocked(fetch).mockResolvedValue(new Response(JSON.stringify({ relayId: testInit.relayId }), { status: 200 }));
+    vi.mocked(fetch).mockImplementation(async () => new Response(JSON.stringify({ relayId: testInit.relayId }), { status: 200 }));
     const result = await run({ init: testInit, onServerChange: () => order.push('persist'),
       agentNetBootstrap: () => { order.push('bootstrap'); return bootstrap; }, agentNetAuthIssuer: 'https://auth.example.test', verifyAgentNet });
     expect(result.error).toBeNull(); expect(order).toEqual(['persist', 'bootstrap', 'verify']);
@@ -168,7 +168,12 @@ describe('deployRelayToServer', () => {
     expect(mocks.commands.find((c) => c.label === 'relay-deploy-agent-net-configure')?.command).toContain('https://auth.example.test');
     expect(verifyAgentNet).toHaveBeenCalledWith('https://203.0.113.10');
     verifyAgentNet.mockRejectedValueOnce(new Error('unit-test-untrusted-directory'));
-    expect((await run({ init: testInit, agentNetBootstrap: () => bootstrap, verifyAgentNet })).error).toMatchObject({ code: 'NOT_REACHABLE' });
+    // 2026-11-08: a failed V2 directory check was incorrectly reported as a blocked HTTPS port.
+    expect((await run({ init: testInit, agentNetBootstrap: () => bootstrap, verifyAgentNet })).error).toMatchObject({ code: 'AGENT_NET_VERIFY_FAILED' });
+    verifyAgentNet.mockClear();
+    mocks.responses['relay-deploy-agent-net-configure'] = () => ({ stdout: '', stderr: '', exitCode: 24 });
+    expect((await run({ init: testInit, agentNetBootstrap: () => bootstrap, verifyAgentNet })).error).toMatchObject({ code: 'AGENT_NET_START_FAILED' });
+    expect(verifyAgentNet).not.toHaveBeenCalled();
   });
 
   // 2026-10-29：下载中界面没有反馈；旧 exec 等待命令结束才拿到输出。

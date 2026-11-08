@@ -33,7 +33,7 @@ import { PlatformGlyph } from './PlatformGlyph';
 import { TopologyFlowLayer, type FlowLine } from './TopologyFlow';
 import { groupLines, layoutTopology, OFFLINE_FOLD_ID, type Point, type TopologyLayout } from './topologyGeometry';
 import type { TopologyModel, TopologyNode, TopologyStatus } from './topologyModel';
-import { formatRtt, rowSubtitle } from './topologyPresentation';
+import { formatRtt, protocolLabel, rowSubtitle } from './topologyPresentation';
 
 import './remote-connection-v2.css';
 
@@ -187,7 +187,7 @@ function LatencyPill({
 }
 
 /**
- * 图块旁边的名字。设备行只写名字、对着图块居中,状态靠颜色(见文件头);折叠的离线行在名字下面
+ * 图块旁边的名字和实际链路协议,状态靠颜色(见文件头);折叠的离线行在名字下面
  * 写一句「显示离线设备」,那是操作提示,不是状态。
  */
 function RowText({
@@ -424,6 +424,8 @@ export function RemoteConnectionTopology({
       }
       const phone = node.isMobile;
       const sub = rowSubtitle(node, t);
+      const protocol = protocolLabel(node, t);
+      const description = [node.name, protocol, sub.text].filter(Boolean).join(' · ');
       pills.push(
         <LatencyPill
           key={`${row.id}:pill`}
@@ -443,8 +445,8 @@ export function RemoteConnectionTopology({
               // design: intrinsic-geometry — 手机图块是竖着的窄条,外层点击区与看得见的那层(.rcv2-tile[data-form=phone])同一外形
               className={cn('rcv2-hit', phone ? 'rounded-[7px]' : 'rounded-lg')}
               style={placed(p.x, p.y, phone ? PHONE_W : TILE, phone ? PHONE_H : TILE, animate)}
-              aria-label={sub.text ? `${node.name} · ${sub.text}` : node.name}
-              title={sub.text ? `${node.name} · ${sub.text}` : node.name}
+              aria-label={description}
+              title={description}
               onPointerEnter={() => setHoverId(node.id)}
               onPointerLeave={() => setHoverId((cur) => (cur === node.id ? null : cur))}
             >
@@ -474,6 +476,7 @@ export function RemoteConnectionTopology({
           at={p}
           side={group.side}
           name={node.name}
+          hint={protocol ?? undefined}
           dim={node.status === 'offline'}
           animate={animate}
         />,

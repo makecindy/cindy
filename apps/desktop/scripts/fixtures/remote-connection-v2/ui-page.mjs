@@ -45,6 +45,9 @@ export default {
       await page.mouse.move(0, 0);
     }
     if (ui.case === 'default') {
+      // Mixed real routes: both protocols share the topology, independently of direct/relay grouping.
+      await page.getByText(await ui.t('settings.remoteControl.v2.protocol.deviceLink'), { exact: true }).waitFor();
+      await page.getByText(await ui.t('settings.remoteControl.v2.protocol.agentNet'), { exact: true }).first().waitFor();
       // 拓扑卡片只展示连接信息(本机的配置在上方「我的设备」的本机卡片,其它设备不再列出)。
       await page.getByRole('button', { name: /^Work PC/ }).click();
       await page.getByRole('dialog').waitFor();

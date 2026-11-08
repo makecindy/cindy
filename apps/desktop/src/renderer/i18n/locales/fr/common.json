@@ -6061,7 +6061,9 @@
           "RELAY_MISMATCH": "Le relais de ce serveur n'a pas été déployé depuis cet ordinateur : Cindy n'y touche donc pas.",
           "CERTIFICATE_FAILED": "Impossible d'obtenir un certificat HTTPS. En général, le port 80 n'est pas autorisé dans le groupe de sécurité cloud, ou le domaine ne pointe pas encore vers ce serveur. Corrigez-le, puis réessayez.",
           "CA_UNREACHABLE": "Le serveur n'a pas pu joindre l'autorité de certification Let's Encrypt, même après plusieurs minutes de nouvelles tentatives. Vérifiez que le serveur a accès à Internet, puis réessayez plus tard.",
-          "NOT_REACHABLE": "Le relais fonctionne sur le serveur, mais cet ordinateur ne parvient pas à le joindre. Autorisez le port 443 dans le groupe de sécurité cloud.",
+          "NOT_REACHABLE": "Impossible de vérifier la connexion au relais depuis cet ordinateur. Vérifiez l’adresse HTTPS, le certificat et l’accès au port 443.",
+          "AGENT_NET_START_FAILED": "Le service Agent-Net du serveur n’est pas prêt. Vérifiez ses journaux et si les ports 3348/TCP et 3479/UDP sont occupés.",
+          "AGENT_NET_VERIFY_FAILED": "HTTPS est accessible, mais l’identité et le répertoire Agent-Net n’ont pas pu être vérifiés. Vérifiez le service V2, le chemin du proxy inverse et les informations d’association.",
           "BUNDLE_MISSING": "Cette version de Cindy n'inclut pas le relais. Mettez Cindy à jour.",
           "DEPLOY_FAILED": "Le déploiement n'a pas abouti.",
           "PAIR_PROOF_INVALID": "La demande de cet appareil ne peut pas être vérifiée, elle ne peut donc pas être approuvée. Créez un nouveau lien d'invitation.",
@@ -6593,8 +6595,12 @@
           "encryptionUnknown": "Non confirmé",
           "legacyEncryptionHint": "Le chemin via le relais de l’ancienne connexion n’est pas chiffré de bout en bout."
         },
-        "onlyEncrypted": "Connexions chiffrées uniquement",
-        "onlyEncryptedHint": "Les anciens appareils et les partages utilisant encore l’ancienne connexion seront indisponibles."
+        "protocol": {
+          "agentNet": "Agent-Net",
+          "deviceLink": "Device Link"
+        },
+        "onlyEncrypted": "Utiliser uniquement Agent-Net",
+        "onlyEncryptedHint": "Les anciens appareils et les partages utilisant encore l’ancienne connexion seront indisponibles. Désactivé par défaut."
       }
     },
     "tina": {

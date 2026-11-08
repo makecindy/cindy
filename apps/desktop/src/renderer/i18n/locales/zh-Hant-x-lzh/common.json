@@ -5960,7 +5960,9 @@
           "RELAY_MISMATCH": "此伺服器上之中繼非此機所部署，Cindy 不動之。",
           "CERTIFICATE_FAILED": "申請 HTTPS 憑證未成。多因雲端主機安全群組未放行 80 連接埠，或網域尚未解析至此伺服器。處置後點再試。",
           "CA_UNREACHABLE": "伺服器連不上憑證機構 Let's Encrypt，自行再試數分鐘仍未成。請察伺服器能否連外網，稍後再試。",
-          "NOT_REACHABLE": "伺服器上之中繼已行，然此機連不上。請於雲端主機安全群組中放行 443 連接埠。",
+          "NOT_REACHABLE": "無法從這台電腦驗證中繼連線。請檢查 HTTPS 位址、憑證及 443 連接埠的存取。",
+          "AGENT_NET_START_FAILED": "伺服器上的 Agent-Net 服務尚未就緒。請檢查服務記錄，以及 3348/TCP、3479/UDP 連接埠是否被佔用。",
+          "AGENT_NET_VERIFY_FAILED": "HTTPS 已連通，但 Agent-Net 身分與目錄驗證未通過。請檢查 V2 服務、反向 Proxy 路徑及配對資訊。",
           "BUNDLE_MISSING": "此版 Cindy 未附中繼程式，請更新 Cindy。",
           "DEPLOY_FAILED": "部署未竟。",
           "PAIR_PROOF_INVALID": "無從核此裝置之申請，不可許之。請重生加入連結。",
@@ -6485,8 +6487,12 @@
           "encryptionUnknown": "尚未核實",
           "legacyEncryptionHint": "舊路經中繼時，內容未施端間加密。"
         },
-        "onlyEncrypted": "唯許加密相連",
-        "onlyEncryptedHint": "舊版裝置及仍循舊路之分享將不可用。"
+        "protocol": {
+          "agentNet": "Agent-Net",
+          "deviceLink": "Device Link"
+        },
+        "onlyEncrypted": "唯用 Agent-Net",
+        "onlyEncryptedHint": "啟之則舊版裝置及仍循舊路之分享不可用。預設關閉。"
       }
     },
     "tina": {

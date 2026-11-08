@@ -473,6 +473,18 @@ if command -v ufw >/dev/null 2>&1 && ufw status 2>/dev/null | grep -q "Status: a
 if command -v firewall-cmd >/dev/null 2>&1 && firewall-cmd --state >/dev/null 2>&1; then
   firewall-cmd --permanent --add-port=3479/udp >/dev/null && firewall-cmd --reload >/dev/null
 fi
+# systemctl restart only acknowledges the start job. A bind failure can put the
+# service into its restart loop before the public HTTPS check ever runs.
+for attempt in $(seq 1 15); do
+  if systemctl is-active --quiet cindy-agent-net && ${INSTALL_DIR}/node/bin/node -e '
+    fetch("http://127.0.0.1:3348/api/agent-net/info", { signal: AbortSignal.timeout(1000) })
+      .then(async r => { if (!r.ok) throw new Error(); return r.json(); })
+      .then(info => { if (info.protocolVersion !== 2 || info.mode !== "self-hosted") process.exit(1); })
+      .catch(() => process.exit(1));
+  ' >/dev/null 2>&1; then exit 0; fi
+  sleep 1
+done
+exit 24
 `;
 
 const STATUS_SCRIPT = `
@@ -831,7 +843,7 @@ export async function deployRelayToServer(params: DeployParams): Promise<{ relay
       expectOk(await remote.root(AGENT_NET_CONFIGURE_SCRIPT, [useNginx ? '0' : '1', ipv6 ? '::' : '0.0.0.0', authIssuer,
         authRegion, peerIssuer, params.agentNetAuthPeer?.region ?? ''], {
         input: Buffer.from(JSON.stringify(bootstrap)), timeoutMs: 120_000, label: 'relay-deploy-agent-net-configure',
-      }), 'DEPLOY_FAILED');
+      }), 'AGENT_NET_START_FAILED');
     }
     log.info('relay configured on server', {
       initialized: configureLines.has('INITIALIZED'),
@@ -850,7 +862,7 @@ export async function deployRelayToServer(params: DeployParams): Promise<{ relay
     if (agentNetBundle) {
       if (!params.verifyAgentNet) throw new RelayDeployError('DEPLOY_FAILED');
       try { await params.verifyAgentNet(params.baseUrl); }
-      catch { throw new RelayDeployError('NOT_REACHABLE'); }
+      catch { throw new RelayDeployError('AGENT_NET_VERIFY_FAILED'); }
     }
     if (useNginx) await nginxAction(remote, 'commit');
     return { relayVersion: RELAY_VERSION };

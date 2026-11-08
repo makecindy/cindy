@@ -6003,7 +6003,9 @@
           "RELAY_MISMATCH": "The relay on this server wasn't deployed from this computer, so Cindy leaves it alone.",
           "CERTIFICATE_FAILED": "Couldn't get an HTTPS certificate. Usually port 80 isn't allowed in the cloud security group, or the domain doesn't point to this server yet. Fix that, then retry.",
           "CA_UNREACHABLE": "The server couldn't reach the certificate authority Let's Encrypt, even after retrying for a few minutes. Check that the server can reach the internet, then try again later.",
-          "NOT_REACHABLE": "The relay is running on the server, but this computer can't reach it. Allow port 443 in the cloud security group.",
+          "NOT_REACHABLE": "Could not verify the relay connection from this computer. Check the HTTPS address, certificate and access to port 443.",
+          "AGENT_NET_START_FAILED": "Agent-Net did not become ready on the server. Check its service logs and whether ports 3348/TCP and 3479/UDP are in use.",
+          "AGENT_NET_VERIFY_FAILED": "HTTPS is reachable, but the Agent-Net identity and directory could not be verified. Check the V2 service, reverse proxy path and pairing information.",
           "BUNDLE_MISSING": "This version of Cindy doesn't include the relay. Update Cindy.",
           "DEPLOY_FAILED": "Deployment didn't complete.",
           "PAIR_PROOF_INVALID": "This device's request can't be verified, so it can't be approved. Create a new join link.",
@@ -6528,8 +6530,12 @@
           "encryptionUnknown": "Not confirmed",
           "legacyEncryptionHint": "The relay path on the older connection is not end-to-end encrypted."
         },
-        "onlyEncrypted": "Only allow encrypted connections",
-        "onlyEncryptedHint": "Older devices and shares still using the older connection will be unavailable."
+        "protocol": {
+          "agentNet": "Agent-Net",
+          "deviceLink": "Device Link"
+        },
+        "onlyEncrypted": "Use Only Agent-Net",
+        "onlyEncryptedHint": "Older devices and shares still using the older connection will be unavailable. Off by default."
       }
     },
     "tina": {

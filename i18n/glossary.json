@@ -3564,6 +3564,22 @@
       "note": "Apple 的实时活动（ActivityKit）。沿用 Apple 各地区官方译名；Cindy 只以此展示任务状态，不作为自有功能名。"
     },
     {
+      "id": "agent-net",
+      "status": "proposed",
+      "en": "Agent-Net",
+      "translations": { "zh-CN": "Agent-Net", "zh-TW": "Agent-Net", "ja": "Agent-Net", "ko": "Agent-Net", "fr": "Agent-Net", "es": "Agent-Net", "de": "Agent-Net", "pt-PT": "Agent-Net", "pt-BR": "Agent-Net", "zh-Hant-x-lzh": "Agent-Net", "zh-Hans-x-lzh": "Agent-Net" },
+      "checkCase": false,
+      "note": "端到端加密的 V2 设备链路名称；各语言保留品牌拼写。拓扑只在已协商的实际连接上标注。"
+    },
+    {
+      "id": "device-link",
+      "status": "proposed",
+      "en": "Device Link",
+      "translations": { "zh-CN": "Device Link", "zh-TW": "Device Link", "ja": "Device Link", "ko": "Device Link", "fr": "Device Link", "es": "Device Link", "de": "Device Link", "pt-PT": "Device Link", "pt-BR": "Device Link", "zh-Hant-x-lzh": "Device Link", "zh-Hans-x-lzh": "Device Link" },
+      "checkCase": false,
+      "note": "兼容设备所用的旧版链路名称；与 Agent-Net 的协议标识并列，直连或经中转另行展示。"
+    },
+    {
       "id": "official-feishu-working-computer",
       "status": "proposed",
       "en": "Working computer",

@@ -6003,7 +6003,9 @@
           "RELAY_MISMATCH": "Das Relay auf diesem Server wurde nicht von diesem Computer aus bereitgestellt, daher lässt Cindy es in Ruhe.",
           "CERTIFICATE_FAILED": "Es konnte kein HTTPS-Zertifikat abgerufen werden. Meist ist Port 80 in der Cloud-Sicherheitsgruppe nicht freigegeben oder die Domain verweist noch nicht auf diesen Server. Behebe das und versuche es erneut.",
           "CA_UNREACHABLE": "Der Server konnte die Zertifizierungsstelle Let's Encrypt auch nach mehreren Minuten mit erneuten Versuchen nicht erreichen. Prüfe, ob der Server auf das Internet zugreifen kann, und versuche es später erneut.",
-          "NOT_REACHABLE": "Das Relay läuft auf dem Server, ist aber von diesem Computer aus nicht erreichbar. Gib Port 443 in der Cloud-Sicherheitsgruppe frei.",
+          "NOT_REACHABLE": "Die Relay-Verbindung konnte von diesem Computer aus nicht geprüft werden. Prüfe die HTTPS-Adresse, das Zertifikat und den Zugriff auf Port 443.",
+          "AGENT_NET_START_FAILED": "Der Agent-Net-Dienst auf dem Server ist nicht bereit. Prüfe die Dienstprotokolle und ob die Ports 3348/TCP und 3479/UDP belegt sind.",
+          "AGENT_NET_VERIFY_FAILED": "HTTPS ist erreichbar, aber die Identität und das Verzeichnis von Agent-Net konnten nicht geprüft werden. Prüfe den V2-Dienst, den Reverse-Proxy-Pfad und die Kopplungsdaten.",
           "BUNDLE_MISSING": "Diese Version von Cindy enthält das Relay nicht. Aktualisiere Cindy.",
           "DEPLOY_FAILED": "Die Bereitstellung wurde nicht abgeschlossen.",
           "PAIR_PROOF_INVALID": "Die Anfrage dieses Geräts kann nicht überprüft und daher nicht genehmigt werden. Erstelle einen neuen Beitrittslink.",
@@ -6528,8 +6530,12 @@
           "encryptionUnknown": "Nicht bestätigt",
           "legacyEncryptionHint": "Der Relay-Pfad der älteren Verbindung ist nicht Ende-zu-Ende-verschlüsselt."
         },
-        "onlyEncrypted": "Nur verschlüsselte Verbindungen",
-        "onlyEncryptedHint": "Ältere Geräte und Freigaben, die noch die ältere Verbindung nutzen, sind dann nicht verfügbar."
+        "protocol": {
+          "agentNet": "Agent-Net",
+          "deviceLink": "Device Link"
+        },
+        "onlyEncrypted": "Nur Agent-Net verwenden",
+        "onlyEncryptedHint": "Ältere Geräte und Freigaben über die bisherige Verbindung sind dann nicht verfügbar. Standardmäßig deaktiviert."
       }
     },
     "tina": {

@@ -14,7 +14,7 @@ import type { DeviceLinkLinkStatus } from '@/hooks/useDeviceLinkSettings';
 
 import { PlatformGlyph } from './PlatformGlyph';
 import type { TopologyModel, TopologyNode } from './topologyModel';
-import { flowLabel, formatRtt, pathLabel, platformLabel, relativeTime } from './topologyPresentation';
+import { flowLabel, formatRtt, pathLabel, platformLabel, protocolLabel, relativeTime } from './topologyPresentation';
 
 /** 卡片里的「路径」只写怎么连;要处理的原因写在「状态」里。 */
 function routeOf(node: TopologyNode): TopologyNode {
@@ -113,7 +113,7 @@ export function DeviceNodePopover({
         {/* 与拓扑同一套颜色:要处理是红、忙碌是心动橙(卡片在 Popover 里,拿不到拓扑容器上的变量,直接用全局 token) */}
         <Row label={t('settings.remoteControl.v2.popover.status')} value={statusText} valueClassName={statusClass} />
         {node.status !== 'offline' ? (
-          <Row label={t('settings.remoteControl.v2.popover.path')} value={pathLabel(routeOf(node), relayName, t)} />
+          <Row label={t('settings.remoteControl.v2.popover.path')} value={[protocolLabel(node, t), pathLabel(routeOf(node), relayName, t)].filter(Boolean).join(' · ')} />
         ) : null}
         {node.flow ? (
           <Row label={t('settings.remoteControl.v2.popover.activity')} value={flowLabel(node.flowText ?? node.flow, t)} />

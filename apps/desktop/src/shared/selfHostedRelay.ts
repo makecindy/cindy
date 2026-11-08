@@ -99,6 +99,10 @@ export type RelayDeployErrorCode =
   | 'CA_UNREACHABLE'
   /** 服务器上中转已运行,但这台电脑访问不到(通常是 443 端口没对外开放)。 */
   | 'NOT_REACHABLE'
+  /** Agent-Net did not become ready on the server; HTTPS reachability is a separate check. */
+  | 'AGENT_NET_START_FAILED'
+  /** HTTPS works, but the authenticated Agent-Net directory could not be verified. */
+  | 'AGENT_NET_VERIFY_FAILED'
   /** 这个版本的 Cindy 没有带中转程序(开发环境未构建)。 */
   | 'BUNDLE_MISSING'
   | 'DEPLOY_FAILED';
