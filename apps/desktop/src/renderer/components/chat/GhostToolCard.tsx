@@ -667,6 +667,7 @@ function GhostCardCanvas({
     // 卡内零脚本、点击委托全在这里(父层可信上下文,同源 iframe 无 allow-scripts)。
     const actionEls = doc.querySelectorAll<HTMLElement>('[data-ghost-action]');
     actionEls.forEach((el) => {
+      if (allowExternalLinks && ghostCardSessionLinkId(el.dataset.ghostSessionLink ?? '')) return;
       if (el.dataset.xdtActionBridged === '1') return;
       el.dataset.xdtActionBridged = '1';
       const actionId = el.dataset.ghostAction ?? '';
@@ -766,8 +767,9 @@ function GhostCardCanvas({
     // 动作声明优先(净化器已互斥,同为纵深)。
     // 须声明 card.externalLinks 才激活(未声明的插件属性保留但不挂桥)。
     const taskLinks: HTMLElement[] = [];
-    if (allowExternalLinks) doc.querySelectorAll<HTMLElement>('[data-ghost-link]').forEach((el) => {
-      if (ghostCardSessionLinkId(el.dataset.ghostLink ?? '') && !el.dataset.ghostAction) {
+    if (allowExternalLinks) doc.querySelectorAll<HTMLElement>('[data-ghost-link], [data-ghost-session-link]').forEach((el) => {
+      if (ghostCardSessionLinkId(el.dataset.ghostSessionLink ?? '') ||
+          (ghostCardSessionLinkId(el.dataset.ghostLink ?? '') && !el.dataset.ghostAction)) {
         el.style.cursor = 'pointer';
         el.setAttribute('tabindex', '0');
         el.setAttribute('role', 'link');
