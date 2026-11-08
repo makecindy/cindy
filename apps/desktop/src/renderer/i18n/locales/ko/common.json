@@ -2255,6 +2255,10 @@
         },
         "visibilityLabel": "배경화면 표시 강도",
         "visibilityHint": "0%에서는 배경화면을 숨기고, 100%에서는 원본 그대로 표시합니다.",
+        "desktopVisibilityLabel": "바탕 화면 투명도",
+        "desktopVisibilityHint": "Cindy 뒤의 바탕 화면과 창이 비칩니다. 텍스트와 컨트롤은 선명하게 유지됩니다.",
+        "desktopBlurLabel": "바탕 화면 흐림",
+        "desktopBlurHint": "창 뒤의 바탕 화면을 흐리게 합니다. 0이면 꺼지고 값이 클수록 더 흐려집니다. 강도 조절을 지원하지 않는 시스템은 기본 효과를 사용합니다.",
         "blurLabel": "배경화면 흐림",
         "blurHint": "배경화면만 흐리게 합니다. 0이면 꺼집니다. 움직이는 배경화면을 흐리게 하면 GPU 사용량이 늘어납니다.",
         "motionLabel": "표시 방식",
@@ -2421,7 +2425,7 @@
       "skinLabel": "캐릭터",
       "skinHint": "Agent Notch와 Dynamic Island에 표시할 캐릭터입니다.",
       "soundLabel": "이벤트 사운드",
-      "soundHint": "알림마다 8-bit 효과음을 고를 수 있으며 Agent Notch와 Dynamic Island에서 함께 사용합니다. 탭 소리는 Agent Notch를 탭할 때만 재생됩니다.",
+      "soundHint": "이벤트 효과음을 설정하면 선택한 소리만 재생됩니다. 설정하지 않았거나 효과음을 끄면 시스템 알림 설정을 따릅니다.",
       "soundAria": "Agent Notch 사운드 전환",
       "soundSelectAria": "{{event}} 사운드",
       "soundPreviewAria": "{{event}} 사운드 미리 듣기",
@@ -2476,7 +2480,7 @@
         "select": "클릭 동작"
       },
       "soundOptions": {
-        "none": "없음",
+        "none": "시스템 설정 따르기",
         "startup-chime": "시작 차임",
         "ring-chime": "링 차임",
         "item-found": "아이템 발견",
@@ -11506,7 +11510,8 @@
         "lark": "Lark",
         "wecom": "WeCom",
         "dingtalk": "DingTalk",
-        "discord": "Discord"
+        "discord": "Discord",
+        "imessage": "iMessage"
       },
       "status": {
         "connected": "연결됨",
@@ -11637,6 +11642,22 @@
           "existing": "Cindy에 설정된 봇 사용",
           "manual": "새 인증 정보 입력",
           "moveNote": "이 봇은 설정 → IM 봇에서 옮겨지며 그곳은 비게 됩니다. 기존 개인 채팅과 그룹 채팅은 {{name}}이(가) 이어서 답합니다."
+        },
+        "imessage": {
+          "serverUrlLabel": "BlueBubbles 서버",
+          "serverUrlPlaceholder": "http://192.168.1.20:1234",
+          "passwordLabel": "API 비밀번호",
+          "passwordPlaceholder": "••••••••",
+          "ownerAddressLabel": "내 iMessage 주소",
+          "ownerAddressPlaceholder": "owner@example.com",
+          "chatGuidsLabel": "채팅 GUID (쉼표로 구분)",
+          "chatGuidsPlaceholder": "any;-;owner@example.com",
+          "listenHostLabel": "로컬 수신 주소",
+          "listenHostPlaceholder": "192.168.1.10",
+          "listenPortLabel": "로컬 수신 포트",
+          "listenPortPlaceholder": "18747",
+          "hint": "로컬 네트워크의 BlueBubbles에 연결하여 선택한 채팅만 처리합니다. 연결 전에 해당 채팅의 다른 자동 응답 프로그램을 중지하세요.",
+          "uncertain": "메시지 {{count}}개의 처리 결과를 확인해야 합니다. 중복을 피하려면 재시도 전에 채팅 기록을 확인하세요."
         }
       },
       "removeConfirm": {
@@ -12912,6 +12933,8 @@
       }
     },
     "teammateProcess": {
+      "empty": "이 응답에 표시할 처리 기록이 없습니다",
+      "unavailable": "처리 기록을 불러오지 못했습니다",
       "record": "작업 내역",
       "operations": "작업 기록",
       "elapsed": "처리 중 {{duration}}",
@@ -19686,5 +19709,14 @@
     "directory": "계정 폴더",
     "loginAgain": "다시 로그인",
     "login": "로그인"
+  },
+  "crashDiagnosis": {
+    "title": "Cindy가 예기치 않게 종료되었습니다",
+    "description": "원인을 진단할까요? 종료 정보와 민감 정보를 제거한 로그를 작업 초안으로 준비합니다. 확인 후 전송할 수 있습니다. 강제 종료나 정전으로도 발생할 수 있습니다.",
+    "diagnose": "문제 진단",
+    "later": "나중에",
+    "logExcerpt": "관련 로그(발췌, 일부 누락 가능)",
+    "logsUnavailable": "관련 로그가 없습니다. 원인은 아직 알 수 없습니다.",
+    "failed": "진단 정보를 준비하지 못했습니다. 다시 시도해 주세요."
   }
 }

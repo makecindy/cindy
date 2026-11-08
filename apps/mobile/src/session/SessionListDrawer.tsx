@@ -1,5 +1,8 @@
+import { TaskDrawerPresentation, useTaskDrawerPresentation } from './TaskDrawerPresentation';
+import { SharedTaskListContent, useSharedTaskList } from './SharedTaskList';
+import { useIsFocused } from 'expo-router/react-navigation';
 import type { ViewInstance } from 'react-native';
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type MutableRefObject } from 'react';
+import { useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type MutableRefObject, type ComponentProps } from 'react';
 import { AccessibilityInfo, BackHandler, findNodeHandle, Modal, Pressable, StyleSheet, View } from 'react-native';
 import Animated, {
   cancelAnimation, Easing, runOnJS, useAnimatedReaction, useAnimatedStyle, useSharedValue, withTiming, type SharedValue,
@@ -13,6 +16,9 @@ import { motionDuration, motionEasing } from '@/theme/tokens';
 import type { RemoteSessionListItem } from './sessionList';
 import { MobileHome } from './HomeSurface';
 import { SessionPaneDivider } from './SessionPaneDivider';
+import { NativeHistoryHost, NativeHistorySlot, NativeTaskDrawerHost, taskDrawerHandoffAvailable } from './NativeResidentHistory';
+import { HomePresentationFocus } from './HomePresentationFocus';
+import { LocalHomeList } from './ResidentHomeList';
 
 const DRAWER_CLOSE_DISTANCE_RATIO = 1 / 3;
 const DRAWER_CLOSE_VELOCITY = -800;
@@ -36,13 +42,16 @@ export type SessionListDrawerMotion = {
   progress: SharedValue<number>;
   dragX: SharedValue<number>;
   tracking: SharedValue<boolean>;
+  /** The released pull still owns its UI-thread settlement. */
+  settling: SharedValue<boolean>;
 };
 
 export function useSessionListDrawerMotion(initialProgress = 0): SessionListDrawerMotion {
   const progress = useSharedValue(initialProgress);
   const dragX = useSharedValue(0);
   const tracking = useSharedValue(false);
-  return useMemo(() => ({ progress, dragX, tracking }), [progress, dragX, tracking]);
+  const settling = useSharedValue(false);
+  return useMemo(() => ({ progress, dragX, tracking, settling }), [progress, dragX, tracking, settling]);
 }
 
 /** A rightward swipe on the task pulls the floating list out under the finger.
@@ -59,18 +68,20 @@ export function useSessionListDrawerOpenGesture({ motion, enabled, width, onOpen
 }) {
   const insets = useSafeAreaInsets();
   const panelWidth = Math.max(1, width + insets.left);
+  const reduceMotion = useReduceMotionEnabled();
   return useMemo(() => {
-    const { progress, dragX, tracking } = motion;
+    const { progress, dragX, tracking, settling } = motion;
     return Gesture.Pan().enabled(enabled)
       // Rightward only; vertical scrolling and leftward swipes keep their own owners.
       .activeOffsetX(16)
       .failOffsetX(-16)
       .failOffsetY([-16, 16])
-      .onStart(() => {
+      .onStart((event) => {
         'worklet';
         cancelAnimation(progress);
+        settling.value = false;
         dragX.value = 0;
-        progress.value = 0;
+        progress.value = Math.max(0, Math.min(1, event.translationX / panelWidth));
         tracking.value = true;
         runOnJS(onOpen)();
       })
@@ -83,8 +94,16 @@ export function useSessionListDrawerOpenGesture({ motion, enabled, width, onOpen
         'worklet';
         if (!tracking.value) return;
         tracking.value = false;
-        if (progress.value > DRAWER_OPEN_DISTANCE_RATIO || event.velocityX > DRAWER_OPEN_VELOCITY) {
-          progress.value = withTiming(1, { duration: motionDuration.enter, easing: Easing.bezier(...motionEasing.out) });
+        // The release can carry the last movement before onUpdate delivered it.
+        const released = Math.max(0, Math.min(1, event.translationX / panelWidth));
+        progress.value = released;
+        if (released > DRAWER_OPEN_DISTANCE_RATIO || event.velocityX > DRAWER_OPEN_VELOCITY) {
+          settling.value = reduceMotion === false && released < 1;
+          progress.value = settling.value
+            ? withTiming(1, { duration: motionDuration.enter * (1 - released), easing: Easing.bezier(...motionEasing.out) }, () => {
+              settling.value = false;
+            })
+            : 1;
         } else {
           runOnJS(onCancel)();
         }
@@ -97,14 +116,22 @@ export function useSessionListDrawerOpenGesture({ motion, enabled, width, onOpen
         runOnJS(onCancel)();
         runOnJS(onSettle)();
       });
-  }, [enabled, motion, onCancel, onOpen, onSettle, panelWidth]);
+  }, [enabled, motion, onCancel, onOpen, onSettle, panelWidth, reduceMotion]);
 }
 
 /** Container only: Home owns every list row, search, group, menu and subscription. */
-export function SessionListDrawer({ currentSessionId, persistent = false, newSessionInSystemBar = false, aboveSystemBar = false,
-  onClose, onClosed, onSelectSession, runNavigation, newSessionActionRef, open, width, topInset, resize, motion,
+export function SessionListDrawer(props: ComponentProps<typeof SessionListDrawerSurface>) {
+  const presentation = useTaskDrawerPresentation();
+  if (!presentation) return <SessionListDrawerSurface {...props} />;
+  return <TaskDrawerPresentation element={<SessionListDrawerSurface {...props} motion={presentation.motion} />} />;
+}
+
+export function SessionListDrawerSurface({ currentSessionId, persistent = false, newSessionInSystemBar = false, aboveSystemBar = false,
+  onClose, onClosed, onSelectSession, runNavigation, newSessionActionRef, open, width, topInset, resize, motion, retainedHeight, onColumnReady, retainPresentation = false,
 }: {
   currentSessionId: string;
+  /** The root owns this exit even after the originating route loses focus. */
+  retainPresentation?: boolean;
   /** Overrides the safe-area top where the task bar sits inside the status area (Duo). */
   topInset?: number;
   persistent?: boolean;
@@ -113,8 +140,13 @@ export function SessionListDrawer({ currentSessionId, persistent = false, newSes
    * system bar, so the bar stays in place under the scrim. Popovers the list
    * opens are presented from that window and stay on top of it. */
   aboveSystemBar?: boolean;
+  /** Retain one native Home at this content height across floating/column
+   * presentations. Omit when the route/inner screen no longer owns it. */
+  retainedHeight?: number;
   onClose(): void;
   onClosed?(): void;
+  /** Called after the previous floating window has handed off and unmounted. */
+  onColumnReady?(): void;
   /** Without an override, Home uses its normal navigation and task history. */
   onSelectSession?(item: RemoteSessionListItem): void;
   runNavigation(action: () => void): void;
@@ -137,8 +169,12 @@ export function SessionListDrawer({ currentSessionId, persistent = false, newSes
   const { t } = useTranslation();
   const insets = useSafeAreaInsets();
   const reduceMotion = useReduceMotionEnabled();
+  const sharedList = useSharedTaskList();
+  const focused = useIsFocused();
+  const localSurfaceId = `task-drawer:${useId()}`;
+  const surfaceId = sharedList?.surfaceId ?? localSurfaceId;
   const ownMotion = useSessionListDrawerMotion(open ? 1 : 0);
-  const { progress, dragX, tracking } = motion ?? ownMotion;
+  const { progress, dragX, tracking, settling } = motion ?? ownMotion;
   // Elastic overflow past a width limit; springs back and is never stored.
   const stretch = useSharedValue(0);
   const [stretchWidth, setStretchWidth] = useState(0);
@@ -152,6 +188,21 @@ export function SessionListDrawer({ currentSessionId, persistent = false, newSes
   // A full-screen list becoming Home leaves without the slide-out.
   const dismissingRef = useRef(false);
   const [mounted, setMounted] = useState(open);
+  const retainHome = !!NativeHistoryHost && !!NativeHistorySlot
+    && retainedHeight !== undefined && retainedHeight > 0;
+  const [prepared, setPrepared] = useState(false);
+  if (retainHome && mounted && !prepared) setPrepared(true);
+  useEffect(() => {
+    if (!retainHome) { setPrepared(false); return; }
+    if (prepared) return;
+    // Keep the extra list creation out of the task's initial navigation commit.
+    // A pull before idle still mounts synchronously through `mounted` above.
+    const handle = requestIdleCallback(() => setPrepared(true));
+    return () => cancelIdleCallback(handle);
+  }, [retainHome, prepared]);
+  // Derive the opening mount before committing children. Waiting for an effect
+  // adds an empty commit before Home can mount for the first gesture.
+  if (open && !mounted) setMounted(true);
   const mountedRef = useRef(mounted);
   mountedRef.current = mounted;
   const openRef = useRef(open);
@@ -162,15 +213,57 @@ export function SessionListDrawer({ currentSessionId, persistent = false, newSes
   // 则由父级在 accessibility 隔离解除后的 commit effect 中完成。
   const finishClose = useCallback(() => {
     if (openRef.current) return;
+    settling.value = false;
     cancelAnimation(stretch);
     stretch.value = 0;
     setStretchWidth(0);
     setHomeWidth(null);
     setMounted(false);
-  }, [stretch]);
+  }, [settling, stretch]);
+  // Keep the old transparent Modal alive until UIKit confirms that the same
+  // content/controller reached the column. Never duplicate Home or use a timer
+  // to guess when its native destination is ready.
+  const presentation = useRef({ aboveSystemBar, panelWidth, top: topInset ?? insets.top });
+  const [presentedPersistent, setPresentedPersistent] = useState(persistent);
+  const [handoff, setHandoff] = useState<{ width: number; top: number } | null>(null);
+  if (presentedPersistent !== persistent) {
+    if (persistent && presentation.current.aboveSystemBar && mounted
+      && retainHome && NativeTaskDrawerHost && taskDrawerHandoffAvailable) {
+      setHandoff({ width: presentation.current.panelWidth, top: presentation.current.top });
+    } else setHandoff(null);
+    setPresentedPersistent(persistent);
+  }
+  useLayoutEffect(() => {
+    presentation.current = { aboveSystemBar, panelWidth, top: topInset ?? insets.top };
+  });
+  if (handoff && !retainHome) setHandoff(null);
+  const persistentRef = useRef(persistent);
+  persistentRef.current = persistent;
+  const finishHandoff = useCallback(() => {
+    // An acknowledgment from an earlier rotation must not finish a newer one.
+    setHandoff(current => persistentRef.current && current === handoff ? null : current);
+  }, [handoff]);
+  useEffect(() => {
+    if (persistent && !handoff) onColumnReady?.();
+  }, [persistent, handoff, onColumnReady]);
   const previousPersistent = useRef(persistent);
   const columnCollapsed = useRef(false);
+  const collapsingColumn = previousPersistent.current && !persistent && !open;
   useLayoutEffect(() => {
+    if (!previousPersistent.current && persistent) {
+      // A column takes over at its full layout width, including when rotation
+      // interrupts a pull, rebound, resize or stretch toward Home.
+      cancelAnimation(progress);
+      cancelAnimation(dragX);
+      cancelAnimation(stretch);
+      progress.value = 1;
+      dragX.value = 0;
+      tracking.value = false;
+      settling.value = false;
+      stretch.value = 0;
+      setStretchWidth(0);
+      setHomeWidth(null);
+    }
     if (previousPersistent.current && !persistent && !open) {
       // A disappearing column is not a modal exit: no scrim or focus isolation.
       columnCollapsed.current = true;
@@ -180,7 +273,7 @@ export function SessionListDrawer({ currentSessionId, persistent = false, newSes
       setMounted(false);
     }
     previousPersistent.current = persistent;
-  }, [persistent, open, progress, dragX]);
+  }, [persistent, open, progress, dragX, stretch, tracking, settling]);
   const onClosedRef = useRef(onClosed);
   onClosedRef.current = onClosed;
   const wasMountedRef = useRef(mounted);
@@ -211,16 +304,17 @@ export function SessionListDrawer({ currentSessionId, persistent = false, newSes
     // reduce-motion 约定:只有 === false 才播动画,null(首帧未知)按不播降级。
     const animate = reduceMotion === false && !persistent && !dismissingRef.current;
     if (open) {
-      setMounted(true);
-      // A finger is pulling it out; that gesture settles it.
-      if (tracking.value) return;
+      // Keep the gesture's ownership through release, not just finger-down.
+      // A busy JS thread may only commit open after the native settle started;
+      // replaying admission here would rewind/restart that in-flight animation.
+      if (tracking.value || settling.value) return;
       // 手势位移并回 progress,从当前视觉位置继续,不跳帧。
       const effective = Math.max(0, Math.min(1, progress.value + dragX.value / panelWidth));
       progress.value = effective;
       dragX.value = 0;
       // 重浮层入场档(motionDuration.enter + out 曲线),与 DESIGN.md §14.4 双端同构。
-      progress.value = animate
-        ? withTiming(1, { duration: motionDuration.enter, easing: Easing.bezier(...motionEasing.out) })
+      progress.value = animate && effective < 1
+        ? withTiming(1, { duration: motionDuration.enter * (1 - effective), easing: Easing.bezier(...motionEasing.out) })
         : 1;
       return;
     }
@@ -228,21 +322,24 @@ export function SessionListDrawer({ currentSessionId, persistent = false, newSes
     const effective = Math.max(0, Math.min(1, progress.value + dragX.value / panelWidth));
     progress.value = effective;
     dragX.value = 0;
-    if (!animate) {
+    if (!animate || effective === 0) {
       progress.value = 0;
       finishClose();
       return;
     }
+    // The finger already covered part of the travel. Do not replay a full exit
+    // for a nearly closed panel (including an aborted opening pull).
+    const remainingDuration = motionDuration.exit * effective;
     progress.value = withTiming(
       0,
       // 重浮层退场档(motionDuration.exit + in 曲线)。
-      { duration: motionDuration.exit, easing: Easing.bezier(...motionEasing.in) },
+      { duration: remainingDuration, easing: Easing.bezier(...motionEasing.in) },
     );
     // A cancelled/lost UI-thread completion must not leave an invisible modal eating taps.
     // Cleanup on reopen or layout change; navigation still waits for the unmount commit above.
-    const closeTimer = setTimeout(finishClose, motionDuration.exit);
+    const closeTimer = setTimeout(finishClose, remainingDuration);
     return () => clearTimeout(closeTimer);
-  }, [dragX, finishClose, open, panelWidth, progress, reduceMotion, persistent, tracking]);
+  }, [dragX, finishClose, open, panelWidth, progress, reduceMotion, persistent, tracking, settling]);
 
   // Android 系统返回键:抽屉开着时先关抽屉,不冒泡成页面返回。
   useEffect(() => {
@@ -286,7 +383,7 @@ export function SessionListDrawer({ currentSessionId, persistent = false, newSes
       cancelAnimation(dragX);
       progress.value = effective;
       dragX.value = 0;
-      progress.value = withTiming(1, { duration: motionDuration.fast, easing: Easing.bezier(...motionEasing.move) });
+      progress.value = withTiming(1, { duration: motionDuration.fast * (1 - effective), easing: Easing.bezier(...motionEasing.move) });
     };
     const panel = Gesture.Pan().enabled(!persistent)
       // 与内部 SectionList 纵向滚动的协调全靠激活窗口收窄:
@@ -356,7 +453,7 @@ export function SessionListDrawer({ currentSessionId, persistent = false, newSes
   const panelStyle = useAnimatedStyle(() => ({
     transform: [
       {
-        translateX: Math.max(
+        translateX: persistent ? 0 : Math.max(
           -panelWidth,
           Math.min(0, (progress.value - 1) * panelWidth + dragX.value),
         ),
@@ -365,8 +462,39 @@ export function SessionListDrawer({ currentSessionId, persistent = false, newSes
   }));
 
 
-  if (!mounted) return null;
-  const overlay = <View accessibilityViewIsModal={mounted && !persistent} pointerEvents="auto"
+  // Remove a collapsed column in this render, before Home receives width=0.
+  // The layout effect still settles motion and suppresses modal-close callbacks.
+  const homeContent = <MobileHome newSessionActionRef={newSessionActionRef} width={shownWidth} currentSessionId={currentSessionId}
+    newSessionInSystemBar={newSessionInSystemBar} newSessionInHeader={!persistent}
+    onSelectSession={onSelectSession} runNavigation={runNavigation} />;
+  // The existing native host keeps Fabric ownership while its plain content
+  // container docks into the Modal. A local focus boundary pauses background
+  // work without hiding/recreating every native view on the next reveal.
+  // There is still only one sidebar Home; the Modal contains a docking slot.
+  const RetainedHost = NativeTaskDrawerHost ?? NativeHistoryHost;
+  const retainedHome = retainHome && (prepared || mounted) && RetainedHost ? sharedList
+    ? <SharedTaskListContent retainPresentation={retainPresentation} width={shownWidth} height={retainedHeight!} active={mounted && !collapsingColumn} onDock={persistent && handoff ? finishHandoff : undefined}>{homeContent}</SharedTaskListContent>
+    : <RetainedHost key="home" surfaceId={surfaceId}
+    testID="sessionDrawer.retainedHost" pointerEvents="none" accessibilityElementsHidden
+    style={{ position: 'absolute', width: shownWidth, height: retainedHeight }}>
+    <LocalHomeList><HomePresentationFocus active={mounted && !collapsingColumn}>{homeContent}</HomePresentationFocus></LocalHomeList>
+  </RetainedHost> : null;
+  if (!mounted || collapsingColumn || sharedList && retainHome && persistent && !handoff) return <>{retainedHome}</>;
+  const panel = (handoffShell: boolean) => <Animated.View style={[styles.panel, { paddingLeft: insets.left, paddingTop: topInset ?? insets.top, width: panelWidth },
+        (!persistent || handoffShell) && panelStyle,
+        handoffShell && { width: handoff!.width, paddingTop: handoff!.top, backgroundColor: 'transparent', borderRightWidth: 0 },
+      ]} testID="sessionDrawer.panel">
+        {/* The host keeps the first navigation intent. Stop all list input during exit so a
+            second selection cannot change preferences while its route is discarded. */}
+        <View ref={homeContentRef} style={styles.content} pointerEvents={open ? 'auto' : 'none'}
+          accessibilityElementsHidden={!open} importantForAccessibility={open ? 'auto' : 'no-hide-descendants'}>
+          {retainHome && NativeHistorySlot ? <NativeHistorySlot surfaceId={surfaceId} selected={!handoffShell && (!sharedList || (focused || retainPresentation) && !persistent)}
+            onDock={persistent && !handoffShell && taskDrawerHandoffAvailable ? finishHandoff : undefined}
+            testID="sessionDrawer.retainedSlot" style={styles.content} /> : homeContent}
+        </View>
+
+      </Animated.View>;
+  const overlay = (handoffShell = false) => <View accessibilityViewIsModal={mounted && !persistent} pointerEvents={handoffShell ? "none" : "auto"}
     style={[styles.overlay, persistent && { width: panelWidth }]} testID="sessionDrawer.overlay">
     {!persistent ? <GestureDetector gesture={gestures.scrim}>
       <Animated.View style={[styles.scrim, scrimStyle]}>
@@ -374,36 +502,27 @@ export function SessionListDrawer({ currentSessionId, persistent = false, newSes
           onPress={onClose} style={styles.scrimPressable} testID="sessionDrawer.scrim" />
       </Animated.View>
     </GestureDetector> : null}
-    <GestureDetector gesture={gestures.panel}>
-      <Animated.View style={[styles.panel, { paddingLeft: insets.left, paddingTop: topInset ?? insets.top, width: panelWidth },
-        !persistent && panelStyle]} testID="sessionDrawer.panel">
-        {/* The host keeps the first navigation intent. Stop all list input during exit so a
-            second selection cannot change preferences while its route is discarded. */}
-        <View ref={homeContentRef} style={styles.content} pointerEvents={open ? 'auto' : 'none'}
-          accessibilityElementsHidden={!open} importantForAccessibility={open ? 'auto' : 'no-hide-descendants'}>
-          <MobileHome newSessionActionRef={newSessionActionRef} width={shownWidth} currentSessionId={currentSessionId}
-            newSessionInSystemBar={newSessionInSystemBar} newSessionInHeader={!persistent}
-            onSelectSession={onSelectSession} runNavigation={runNavigation} />
-        </View>
-
-      </Animated.View>
-    </GestureDetector>
+    {persistent && retainHome && NativeTaskDrawerHost && !handoffShell ? panel(false)
+      : <GestureDetector gesture={gestures.panel}>{panel(handoffShell)}</GestureDetector>}
     {/* A sibling of the panel, so an edge drag never reaches the close gesture.
         It rides the panel's slide and stops taking touches once closing. */}
     {!persistent && resize ? <Animated.View pointerEvents={open ? 'box-none' : 'none'}
       style={[styles.edge, panelStyle]}>
-      <SessionPaneDivider grip={false} width={width} bounds={resize.bounds} onResize={resize.onResize}
+      <SessionPaneDivider grip={false} nativeGesture={aboveSystemBar} width={width} bounds={resize.bounds} onResize={resize.onResize}
         left={panelWidth} top={topInset ?? insets.top} bottom={insets.bottom}
         elastic={{ onStretch: stretchTo, onSettle: settleStretch }} />
     </Animated.View> : null}
   </View>;
-  if (persistent || !aboveSystemBar) return overlay;
-  // Not FullWindowOverlay: a Modal opened inside that layer has no controller to
-  // present from, so the list's own menus and dialogs would never show above it.
-  return <Modal animationType="none" transparent visible onRequestClose={onClose}
-    supportedOrientations={['portrait', 'portrait-upside-down', 'landscape-left', 'landscape-right']}>
-    <GestureHandlerRootView style={styles.window}>{overlay}</GestureHandlerRootView>
-  </Modal>;
+  // Stable sibling keys preserve the old Modal and its slot while the column
+  // mounts alongside it. Its transparent shell cannot cover the newly docked list.
+  return <>{retainedHome}
+    {(!persistent && aboveSystemBar) || handoff ? <Modal key="floating" animationType="none" transparent visible onRequestClose={onClose}
+      supportedOrientations={['portrait', 'portrait-upside-down', 'landscape-left', 'landscape-right']}>
+      <GestureHandlerRootView style={styles.window}>{overlay(!!handoff)}</GestureHandlerRootView>
+    </Modal> : null}
+    {persistent || !aboveSystemBar ? <View key="column" pointerEvents="box-none" style={StyleSheet.absoluteFill}>{overlay()}</View> : null}
+  </>;
+
 }
 
 const makeStyles = (colors: ThemeColors) => StyleSheet.create({

@@ -1,11 +1,12 @@
+import { useWindowWidth } from '@/platform/windowDimension';
 import type { ViewInstance } from 'react-native';
 /**
  * 群正文按需启用富文本和 HTTP(S) 链接；其它回看入口保持轻量，本人消息保留原文。
  */
 import { botGroupBodyParts } from '@cindy/maker-shared/botGroupPresentation';
 import type { BotGroupAuthorKind } from '@cindy/maker-shared/botGroupChat';
-import { useCallback, useMemo, useRef, useState, type ReactNode } from 'react';
-import { Linking, Pressable, Platform, ScrollView, StyleSheet, View, useWindowDimensions, type GestureResponderEvent, type LayoutChangeEvent, type StyleProp, type TextStyle } from 'react-native';
+import { memo, useCallback, useMemo, useRef, useState, type ReactNode } from 'react';
+import { Linking, Pressable, Platform, ScrollView, StyleSheet, View, type GestureResponderEvent, type LayoutChangeEvent, type StyleProp, type TextStyle } from 'react-native';
 import { useTranslation } from 'react-i18next';
 import { latexToUnicodeApproximation } from '@cindy/maker-shared/math-markdown';
 import { HighlightedCodeText } from './HighlightedCodeText';
@@ -36,28 +37,31 @@ type BodyOptions = {
 function useMentionTouchContext(context?: BotGroupMentionContext) {
   const touch = useRef<BotGroupMentionPoint | undefined>(undefined);
   const body = useRef<ViewInstance>(null);
-  return {
-    ref: body,
-    onTouchStart: (event: GestureResponderEvent) => {
+  const onTouchStart = useCallback((event: GestureResponderEvent) => {
       const { pageX, pageY } = event.nativeEvent;
       touch.current = Number.isFinite(pageX) && Number.isFinite(pageY) ? { x: pageX, y: pageY } : undefined;
-    },
-    context: context ? { ...context, onPress: (member, anchor) => {
+  }, []);
+  const onPress = context?.onPress;
+  const anchoredPress = useCallback<BotGroupMentionContext['onPress']>((member, anchor) => {
       const point = touch.current ?? anchor;
       touch.current = undefined;
-      if (point) context.onPress(member, point);
+      if (point) onPress?.(member, point);
       else {
         // Accessibility activation has no finger position. Anchor to the
         // measured sent-text bounds instead of dropping the link activation.
         const target = body.current;
         target?.measureInWindow((x, y, width, height) => {
           if (body.current === target && width > 0 && height > 0) {
-            context.onPress(member, { x: x + width / 2, y: y + height / 2 });
+            onPress?.(member, { x: x + width / 2, y: y + height / 2 });
           }
         });
       }
-    } } as BotGroupMentionContext : undefined,
-  };
+  }, [onPress]);
+  const { members, mentions, serverBacked, allLabels, allBotsLabels, labels } = context ?? {};
+  const anchored = useMemo(() => members && mentions && allLabels && allBotsLabels && labels
+    ? { members, mentions, serverBacked: !!serverBacked, allLabels, allBotsLabels, labels, onPress: anchoredPress }
+    : undefined, [members, mentions, serverBacked, allLabels, allBotsLabels, labels, anchoredPress]);
+  return { ref: body, onTouchStart, context: anchored };
 }
 
 function renderMentionSegments(segments: readonly (BotGroupTextSegment & { label?: string })[], styles: Styles, context?: BotGroupMentionContext, textStyle?: StyleProp<TextStyle>): ReactNode {
@@ -84,12 +88,15 @@ function renderInlines(inlines: readonly MobileMarkdownInline[], styles: Styles,
   offset = 0;
   // Match the whole visible word before mapping back to styled native runs:
   // **@Ann**a is @Anna, and mail**@Ann**.test is still an email address.
-  const segments = splitBotGroupMentionSegments(runs.map(run => run.text).join(''), context?.labels ?? []).map(segment => {
+  const visibleText = runs.map(run => run.text).join('');
+  // Most group text has no mention. Keep its native styled run directly:
+  // scanning labels and nesting another selectable span adds work per cell/run.
+  const segments = context && visibleText.includes('@') ? splitBotGroupMentionSegments(visibleText, context.labels).map(segment => {
     const start = offset;
     offset += segment.text.length;
     return { ...segment, start, end: offset, label: segment.text,
       mention: segment.mention && !runs.some(run => run.excluded && run.start < offset && run.end > start) };
-  });
+  }) : null;
   return runs.map(({ inline, text, start, end, excluded }, index) => {
     const textStyle = [...(inline.marks?.map(mark => markStyles[mark]) ?? []),
       inline.type === 'strong' ? styles.strong : inline.type === 'emphasis' ? styles.emphasis
@@ -102,7 +109,7 @@ function renderInlines(inlines: readonly MobileMarkdownInline[], styles: Styles,
     // UITextView children inherit the root's style, not an enclosing span's.
     // Keep formatting on each actual text run when splitting it around a mention.
     // Code and existing links retain their original hierarchy and are never identity targets.
-    return <Span key={index} style={textStyle}>{excluded || !context ? text : renderMentionSegments(segments.flatMap(segment => {
+    return <Span key={index} style={textStyle}>{excluded || !segments ? text : renderMentionSegments(segments.flatMap(segment => {
       const from = Math.max(start, segment.start);
       const to = Math.min(end, segment.end);
       return from < to ? [{ text: segment.text.slice(from - segment.start, to - segment.start), mention: segment.mention, label: segment.label }] : [];
@@ -116,21 +123,23 @@ function BotGroupMarkdownTable({ block, styles, options, context }: {
   options: BodyOptions;
   context?: BotGroupMentionContext;
 }) {
-  const { width: screenWidth } = useWindowDimensions();
+  const screenWidth = useWindowWidth();
   const [availableWidth, setAvailableWidth] = useState(0);
   const onLayout = useCallback((event: LayoutChangeEvent) => {
     setAvailableWidth(event.nativeEvent.layout.width);
   }, []);
   // This read-only renderer shows image alt text, so measure that same text, not a preview.
-  const measureCells = (cells: readonly MobileMarkdownInline[][]) => cells.map(cell => cell.map(
-    (inline): MobileMarkdownInline => inline.type === 'image'
-      ? { type: 'text', text: inline.alt ? `[${inline.alt}]` : '' }
-      : inline,
-  ));
-  const widths = buildMobileMarkdownTableColumnWidths({
-    header: measureCells(block.header), rows: block.rows.map(row => ({ ...row, cells: measureCells(row.cells) })), availableWidth,
-    minWidth: buildMessageContentLayout({ screenWidth }).markdownTableCellMinWidth,
-  });
+  const measured = useMemo(() => {
+    const measureCells = (cells: readonly MobileMarkdownInline[][]) => cells.map(cell => cell.map(
+      (inline): MobileMarkdownInline => inline.type === 'image'
+        ? { type: 'text', text: inline.alt ? `[${inline.alt}]` : '' }
+        : inline,
+    ));
+    return { header: measureCells(block.header), rows: block.rows.map(row => ({ ...row, cells: measureCells(row.cells) })) };
+  }, [block]);
+  const minWidth = buildMessageContentLayout({ screenWidth }).markdownTableCellMinWidth;
+  const widths = useMemo(() => buildMobileMarkdownTableColumnWidths({ ...measured, availableWidth, minWidth }),
+    [measured, availableWidth, minWidth]);
   const renderRow = (cells: readonly MobileMarkdownInline[][], key: string, header = false) => (
     <View key={key} style={[styles.tableRow, header && styles.tableHeaderRow]}>
       {widths.map((width, index) => (
@@ -197,26 +206,39 @@ function renderSourceBlock(block: { key: string; text: string }, styles: Styles)
   </View>;
 }
 
+/** Static text does not depend on route visibility. Only embedded renderers
+ * receive active changes; native selection/code/table subtrees stay mounted. */
+const BotGroupMarkdownBlock = memo(function BotGroupMarkdownBlock({ block, styles, diagramLabel, context, ...options }: {
+  block: MobileMarkdownBlock; styles: Styles; diagramLabel: string; context?: BotGroupMentionContext;
+} & BodyOptions) {
+  return renderBlock(block, styles, options, diagramLabel, context);
+});
+
 export function BotGroupMarkdownText({ content, authorKind, mentionContext, richContent = false, interactive = true, active = true, onOpenDiagram }: {
   content: string; authorKind?: BotGroupAuthorKind; mentionContext?: BotGroupMentionContext;
 } & BodyOptions) {
   const { t } = useTranslation();
   const styles = useThemedStyles(makeStyles);
-  const touch = useMentionTouchContext(mentionContext);
+  const touch = useMentionTouchContext(content.includes('@') ? mentionContext : undefined);
   const blocks = useMemo(() => botGroupBodyParts(content, authorKind).flatMap((part, index): MobileMarkdownBlock[] => part.kind === 'markdown'
     ? parseMobileMarkdown(part.content).map(block => ({ ...block, key: `${index}:${block.key}` }))
     : [{ type: 'paragraph', key: String(index), inlines: [{ type: 'text', text: part.content }] }]), [content, authorKind]);
-  const options = { richContent, interactive, active, onOpenDiagram };
   const diagramLabel = t('message.renderer.openDiagramDetail');
-  return <View ref={touch.ref} collapsable={false} style={styles.body} onTouchStart={touch.onTouchStart}>{blocks.map((block) => renderBlock(block, styles, options, diagramLabel, touch.context))}</View>;
+  return <View ref={touch.ref} collapsable={false} style={styles.body} onTouchStart={touch.onTouchStart}>{blocks.map(block =>
+    <BotGroupMarkdownBlock key={block.key} block={block} styles={styles} diagramLabel={diagramLabel}
+      context={touch.context} richContent={richContent} interactive={interactive}
+      active={block.type === 'mermaid' || block.type === 'math' ? active : undefined}
+      onOpenDiagram={block.type === 'mermaid' ? onOpenDiagram : undefined} />)}</View>;
 }
 
 /** The user's own words: plain text with `@name` shown as a mention mark. */
 export function BotGroupUserText({ content, mentionLabels, mentionContext }: { content: string; mentionLabels: readonly string[]; mentionContext?: BotGroupMentionContext }) {
   const styles = useThemedStyles(makeStyles);
-  const touch = useMentionTouchContext(mentionContext);
+  const touch = useMentionTouchContext(content.includes('@') ? mentionContext : undefined);
+  const text = useMemo(() => renderMentionSegments(splitBotGroupMentionSegments(content, mentionLabels), styles, touch.context),
+    [content, mentionLabels, styles, touch.context]);
   return <View ref={touch.ref} collapsable={false} onTouchStart={touch.onTouchStart}><MarkdownSelectableText selectable style={styles.text}>
-    {renderMentionSegments(splitBotGroupMentionSegments(content, mentionLabels), styles, touch.context)}
+    {text}
   </MarkdownSelectableText></View>;
 }
 

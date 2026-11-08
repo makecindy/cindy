@@ -28,3 +28,6 @@ export function composerPillHeight(origin: ComposerMorphOrigin | null, width: nu
 export function composerBottomContentPadding(desiredBottom: number, layerBottom: number, innerPadding: number): number {
   return Math.max(0, desiredBottom - layerBottom - innerPadding);
 }
+
+/** Shared row chrome used when reserving room for the editable body. */
+export const composerRowChrome = { expanded: 78, collapsed: 22, verticalPadding: 12 } as const;

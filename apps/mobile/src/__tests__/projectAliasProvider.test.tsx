@@ -184,3 +184,15 @@ describe('project aliases follow the Provider sessions subscription lifetime', (
     expect(transport.clients[0].stop).not.toHaveBeenCalled();
   });
 });
+
+// Settled reads matter: the existing in-flight test hides redundant requests behind coalescing.
+it('does not reread settled aliases when 20 conversation owners reuse an acknowledged sessions stream', async () => {
+  await act(async () => context.subscribe('home', 'host', ['sessions']));
+  await act(async () => aliasReads[0]('Current project'));
+  for (let n = 0; n < 20; n++) {
+    await act(async () => context.subscribe(`chat-${n}`, 'host', ['sessions', `session:task-${n}`]));
+    await act(async () => context.unsubscribe(`chat-${n}`, 'host', ['sessions', `session:task-${n}`]));
+  }
+  expect(aliasReads).toHaveLength(1);
+  expect(currentAlias()).toBe('Current project');
+});

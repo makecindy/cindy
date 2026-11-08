@@ -1,4 +1,4 @@
-import { RemoteBotSessionView } from '@/features/bots/RemoteBotSessionView';
+import { SettingsView } from '@/components/settings/SettingsView';
 import { createHashRouter, Navigate } from 'react-router-dom';
 
 import { MainLayout } from '@/components/layout/MainLayout';
@@ -16,29 +16,19 @@ import { SecondaryWindowBootGate } from '@/features/cc-agent/SecondaryWindowBoot
 import { CCAgentSessionView } from '@/features/cc-agent/CCAgentSessionView';
 import { NewMakerDraftRoute } from '@/features/cc-agent/NewMakerDraftRoute';
 import { OrcaWorkflowRoute } from '@/features/cc-agent/OrcaWorkflowRoute';
-import { WorkdirBrowseRoute } from '@/features/cc-agent/workdir-browse/WorkdirBrowseRoute';
-import { IssueTrackerFeatureLayout } from '@/features/issue-tracker/IssueTrackerFeatureLayout';
-import { SkillhubFeatureLayout } from '@/features/skillhub/SkillhubFeatureLayout';
-import { SkillhubLocalLayout } from '@/features/skillhub/SkillhubLocalLayout';
-import { SkillhubDetailRoute, LegacySkillDetailRedirect } from '@/features/skillhub/SkillhubDetailRoute';
-import { SkillhubMarketListView } from '@/features/skillhub/SkillhubMarketListView';
-import { MakerExperimentalView } from '@/features/maker-experimental/MakerExperimentalView';
-import { SchedulerPage } from '@/features/scheduler';
-import { GhostPluginPage } from '@/features/plugin/GhostPluginPage';
-import { BotsFeatureLayout } from '@/features/bots/BotsFeatureLayout';
-import { BotsListView } from '@/features/bots/BotsListView';
-import { BotsHomeView } from '@/features/bots/BotsHomeView';
-import { BotHistorySessionView } from '@/features/bots/BotHistorySessionView';
-import { BotRosterView } from '@/features/bots/BotRosterView';
-import { BotMarketRoute } from '@/features/bots/BotMarketDialog';
-import { BotSessionView } from '@/features/bots/BotSessionView';
-import { BotDirectMessageView } from '@/features/bots/BotDirectMessageView';
-import { BotGroupChatView } from '@/features/bots/BotGroupChatView';
-import { GhostMainViewFeatureLayout } from '@/features/plugin/GhostMainViewFeatureLayout';
+import { LegacySkillDetailRedirect } from '@/features/skillhub/LegacySkillDetailRedirect';
 
 function EmptyRouteFallback() {
   return null;
 }
+
+/*
+ * 除默认落地的任务页（新建 / 任务 / Orca）外，各功能页都用 route lazy 首次进入时才加载，
+ * 主窗口首屏不再连带伙伴、Skill、插件、定时任务、文件浏览（含 CodeMirror）等页面。
+ * 导航在 startTransition 里等分包就绪，期间保留当前页面；窗口直接以这些地址加载时由空的
+ * HydrateFallback 占住内容区，MainLayout 导航照常显示。
+ * 设计台账按 lazy 返回的 `Component: X` 识别页面组件，保持这个写法。
+ */
 
 /**
  * 三层路由架构：
@@ -111,10 +101,21 @@ export const router = createHashRouter([
                       // 兼容旧 deep link:新建入口已收敛到同一个可切换 workspace 的创建页。
                       { path: 'new-dialogue', element: <Navigate to="/cc-agent/new" replace /> },
                       // Scheduled — 调度任务列表（与 new 同一层级，必须在 :sessionId 之前）
-                      { path: 'scheduled', element: <SchedulerPage /> },
+                      {
+                        path: 'scheduled',
+                        lazy: () => import('@/features/scheduler').then(({ SchedulerPage }) => ({ Component: SchedulerPage })),
+                        HydrateFallback: EmptyRouteFallback,
+                      },
                       // Workdir File Browser — 文件树视图(vscode-style),sidebar 自动 swap。
                       // 静态段 'files' 必须在 :sessionId 之前匹配。
-                      { path: 'files/:sessionId', element: <WorkdirBrowseRoute /> },
+                      {
+                        path: 'files/:sessionId',
+                        lazy: () =>
+                          import('@/features/cc-agent/workdir-browse/WorkdirBrowseRoute').then(({ WorkdirBrowseRoute }) => ({
+                            Component: WorkdirBrowseRoute,
+                          })),
+                        HydrateFallback: EmptyRouteFallback,
+                      },
                       { path: 'orca/new', element: <Navigate to="/cc-agent/new" replace /> },
                       { path: 'orca/:sessionId', element: <OrcaWorkflowRoute /> },
                       { path: ':sessionId', element: <CCAgentSessionView /> },
@@ -122,43 +123,112 @@ export const router = createHashRouter([
                   },
                   {
                     path: 'bots',
-                    element: <BotsFeatureLayout />,
+                    lazy: () => import('@/features/bots/BotsFeatureLayout').then(({ BotsFeatureLayout }) => ({ Component: BotsFeatureLayout })),
+                    HydrateFallback: EmptyRouteFallback,
                     children: [
-                      { index: true, element: <BotsHomeView /> },
-                      { path: 'list', element: <BotsListView /> },
+                      {
+                        index: true,
+                        lazy: () => import('@/features/bots/BotsHomeView').then(({ BotsHomeView }) => ({ Component: BotsHomeView })),
+                      },
+                      {
+                        path: 'list',
+                        lazy: () => import('@/features/bots/BotsListView').then(({ BotsListView }) => ({ Component: BotsListView })),
+                      },
                       // 阵容是主区的一页,不是浮在对话上的模态。静态段排在 :botId
                       // 之前(React Router 也按静态优先定级),所以 /bots/roster 不会
                       // 被当成一个叫 "roster" 的伙伴。
-                      { path: 'roster', element: <BotRosterView /> },
-                      { path: 'market/:packageId?', element: <BotMarketRoute /> },
+                      {
+                        path: 'roster',
+                        lazy: () => import('@/features/bots/BotRosterView').then(({ BotRosterView }) => ({ Component: BotRosterView })),
+                      },
+                      {
+                        path: 'market/:packageId?',
+                        lazy: () => import('@/features/bots/BotMarketDialog').then(({ BotMarketRoute }) => ({ Component: BotMarketRoute })),
+                      },
                       // 伙伴群聊是独立对象(不是某位伙伴的任务),静态段 'groups' 同样排在
                       // :botId 之前,/bots/groups/<id> 不会被当成一个叫 "groups" 的伙伴。
-                      { path: 'groups/:groupId', element: <BotGroupChatView /> },
-                      { path: 'remote/:deviceId/:botId', element: <RemoteBotSessionView /> },
-                      { path: 'remote/:deviceId/:botId/session/:sessionId', element: <RemoteBotSessionView /> },
-                      { path: 'remote/:deviceId/:botId/history/:sessionId', element: <BotHistorySessionView /> },
+                      {
+                        path: 'groups/:groupId',
+                        lazy: () => import('@/features/bots/BotGroupChatView').then(({ BotGroupChatView }) => ({ Component: BotGroupChatView })),
+                      },
+                      {
+                        path: 'remote/:deviceId/:botId',
+                        lazy: () =>
+                          import('@/features/bots/RemoteBotSessionView').then(({ RemoteBotSessionView }) => ({
+                            Component: RemoteBotSessionView,
+                          })),
+                      },
+                      {
+                        path: 'remote/:deviceId/:botId/session/:sessionId',
+                        lazy: () =>
+                          import('@/features/bots/RemoteBotSessionView').then(({ RemoteBotSessionView }) => ({
+                            Component: RemoteBotSessionView,
+                          })),
+                      },
+                      {
+                        path: 'remote/:deviceId/:botId/history/:sessionId',
+                        lazy: () =>
+                          import('@/features/bots/BotHistorySessionView').then(({ BotHistorySessionView }) => ({
+                            Component: BotHistorySessionView,
+                          })),
+                      },
                       // 伙伴私聊只从双方时间线里的消息入口打开，不出现在左侧伙伴列表。
-                      { path: ':botId/direct/:threadId', element: <BotDirectMessageView /> },
-                      { path: ':botId', element: <BotsHomeView /> },
-                      { path: ':botId/session/:sessionId', element: <BotSessionView /> },
-                      { path: ':botId/history/:sessionId', element: <BotHistorySessionView /> },
+                      {
+                        path: ':botId/direct/:threadId',
+                        lazy: () =>
+                          import('@/features/bots/BotDirectMessageView').then(({ BotDirectMessageView }) => ({
+                            Component: BotDirectMessageView,
+                          })),
+                      },
+                      {
+                        path: ':botId',
+                        lazy: () => import('@/features/bots/BotsHomeView').then(({ BotsHomeView }) => ({ Component: BotsHomeView })),
+                      },
+                      {
+                        path: ':botId/session/:sessionId',
+                        lazy: () => import('@/features/bots/BotSessionView').then(({ BotSessionView }) => ({ Component: BotSessionView })),
+                      },
+                      {
+                        path: ':botId/history/:sessionId',
+                        lazy: () =>
+                          import('@/features/bots/BotHistorySessionView').then(({ BotHistorySessionView }) => ({
+                            Component: BotHistorySessionView,
+                          })),
+                      },
                     ],
                   },
                   {
                     // Issue Tracker — 已迁移至 GitHub，此处仅保留引导页
                     path: 'issues',
-                    element: <IssueTrackerFeatureLayout />,
+                    lazy: () =>
+                      import('@/features/issue-tracker/IssueTrackerFeatureLayout').then(({ IssueTrackerFeatureLayout }) => ({
+                        Component: IssueTrackerFeatureLayout,
+                      })),
+                    HydrateFallback: EmptyRouteFallback,
                   },
                   {
                     // SkillHub v0.2 —— Local skills (v0.2.1) + Market (v0.2.3)
                     path: 'skillhub',
-                    element: <SkillhubFeatureLayout />,
+                    lazy: () =>
+                      import('@/features/skillhub/SkillhubFeatureLayout').then(({ SkillhubFeatureLayout }) => ({
+                        Component: SkillhubFeatureLayout,
+                      })),
+                    HydrateFallback: EmptyRouteFallback,
                     children: [
                       { index: true, element: <Navigate to="/skillhub/local" replace /> },
                       {
-                        element: <SkillhubLocalLayout />,
+                        lazy: () =>
+                          import('@/features/skillhub/SkillhubLocalLayout').then(({ SkillhubLocalLayout }) => ({
+                            Component: SkillhubLocalLayout,
+                          })),
                         children: [
-                          { path: 'detail', element: <SkillhubDetailRoute /> },
+                          {
+                            path: 'detail',
+                            lazy: () =>
+                              import('@/features/skillhub/SkillhubDetailRoute').then(({ SkillhubDetailRoute }) => ({
+                                Component: SkillhubDetailRoute,
+                              })),
+                          },
                           {
                             path: 'local',
                             children: [
@@ -173,7 +243,13 @@ export const router = createHashRouter([
                       {
                         path: 'market',
                         children: [
-                          { index: true, element: <SkillhubMarketListView /> },
+                          {
+                            index: true,
+                            lazy: () =>
+                              import('@/features/skillhub/SkillhubMarketListView').then(({ SkillhubMarketListView }) => ({
+                                Component: SkillhubMarketListView,
+                              })),
+                          },
                           // Existing market bookmarks resolve to the shared detail page.
                           {
                             path: 'manage/:name',
@@ -188,26 +264,33 @@ export const router = createHashRouter([
                       },
                     ],
                   },
+                  { path: 'settings', element: <SettingsView /> },
                   {
-                    // 设置页连同供应商目录、计费等约 1.7 MB 只在打开时加载。导航在
-                    // startTransition 里等它就绪,期间保留当前页面;窗口直接以
-                    // #/settings 加载(如崩溃页「重新加载」)时由空的 HydrateFallback
-                    // 占住内容区,MainLayout 导航照常显示。
-                    path: 'settings',
-                    lazy: async () => {
-                      const { SettingsView } = await import('@/components/settings/SettingsView');
-                      return { Component: SettingsView };
-                    },
+                    path: 'plugins',
+                    lazy: () => import('@/features/plugin/GhostPluginPage').then(({ GhostPluginPage }) => ({ Component: GhostPluginPage })),
                     HydrateFallback: EmptyRouteFallback,
                   },
-                  { path: 'plugins', element: <GhostPluginPage /> },
-                  { path: 'apps/:ghostId', element: <GhostMainViewFeatureLayout /> },
+                  {
+                    path: 'apps/:ghostId',
+                    lazy: () =>
+                      import('@/features/plugin/GhostMainViewFeatureLayout').then(({ GhostMainViewFeatureLayout }) => ({
+                        Component: GhostMainViewFeatureLayout,
+                      })),
+                    HydrateFallback: EmptyRouteFallback,
+                  },
                   {
                     path: 'billing',
                     element: <Navigate to="/settings?tab=billing" replace />,
                   },
                   // Maker IPC / agent event 链路诊断页(独立路由,不影响标准 chat)。
-                  { path: 'maker-experimental', element: <MakerExperimentalView /> },
+                  {
+                    path: 'maker-experimental',
+                    lazy: () =>
+                      import('@/features/maker-experimental/MakerExperimentalView').then(({ MakerExperimentalView }) => ({
+                        Component: MakerExperimentalView,
+                      })),
+                    HydrateFallback: EmptyRouteFallback,
+                  },
                 ],
               },
             ],

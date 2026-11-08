@@ -50,7 +50,7 @@ createRoot(rootElement).render(
     <LocaleProvider>
       <ConfirmDialogProvider>
         <AuthProvider enableSessionExpiredPrompt={false}>
-          <WallpaperSettingsProvider>
+          <WallpaperSettingsProvider desktopBackground={false}>
             {isSidebarTabWindow() ? <SidebarTabWindowLayout /> : <SidebarWindowLayout />}
             <PluginModelPickerHost bootstrapCatalog />
           </WallpaperSettingsProvider>

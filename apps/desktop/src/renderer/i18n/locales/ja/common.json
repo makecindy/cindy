@@ -2255,6 +2255,10 @@
         },
         "visibilityLabel": "壁紙の表示濃度",
         "visibilityHint": "0% で壁紙を非表示にし、100% でそのまま表示します。",
+        "desktopVisibilityLabel": "デスクトップの透明度",
+        "desktopVisibilityHint": "Cindy の背後にあるデスクトップやウィンドウを透かします。文字や操作部分は鮮明に保たれます。",
+        "desktopBlurLabel": "デスクトップのぼかし",
+        "desktopBlurHint": "背後のデスクトップをぼかします。0 でオフ、値が大きいほど強くなります。強さを調整できない OS では標準の効果を使います。",
         "blurLabel": "壁紙のぼかし",
         "blurHint": "壁紙だけをぼかします。0でオフになります。動く壁紙のぼかしはGPU負荷を増やします。",
         "motionLabel": "表示方法",
@@ -2421,7 +2425,7 @@
       "skinLabel": "キャラクター",
       "skinHint": "Agent Notch と Dynamic Island に表示するキャラクター。",
       "soundLabel": "イベントサウンド",
-      "soundHint": "アラートごとに 8-bit サウンドを選べます。Agent Notch と Dynamic Island で共通です。タップ音は Agent Notch をタップしたときだけ鳴ります。",
+      "soundHint": "イベント音を設定すると、その音のみ再生します。未設定またはオフの場合は、システムの通知設定に従います。",
       "soundAria": "Agent Notch サウンドを切り替え",
       "soundSelectAria": "{{event}} のサウンド",
       "soundPreviewAria": "{{event}} のサウンドをプレビュー",
@@ -2476,7 +2480,7 @@
         "select": "クリック操作"
       },
       "soundOptions": {
-        "none": "なし",
+        "none": "システムに従う",
         "startup-chime": "起動チャイム",
         "ring-chime": "リングチャイム",
         "item-found": "アイテム発見",
@@ -11506,7 +11510,8 @@
         "lark": "Lark",
         "wecom": "WeCom",
         "dingtalk": "DingTalk",
-        "discord": "Discord"
+        "discord": "Discord",
+        "imessage": "iMessage"
       },
       "status": {
         "connected": "接続済み",
@@ -11637,6 +11642,22 @@
           "existing": "Cindy で設定済みのボットを使う",
           "manual": "新しい認証情報を入力",
           "moveNote": "このボットは 設定 → IM ボット から移され、そちらは空になります。これまでの個人チャットとグループチャットは {{name}} が引き継いで返信します。"
+        },
+        "imessage": {
+          "serverUrlLabel": "BlueBubbles サーバー",
+          "serverUrlPlaceholder": "http://192.168.1.20:1234",
+          "passwordLabel": "API パスワード",
+          "passwordPlaceholder": "••••••••",
+          "ownerAddressLabel": "あなたの iMessage アドレス",
+          "ownerAddressPlaceholder": "owner@example.com",
+          "chatGuidsLabel": "チャット GUID（カンマ区切り）",
+          "chatGuidsPlaceholder": "any;-;owner@example.com",
+          "listenHostLabel": "ローカル待受アドレス",
+          "listenHostPlaceholder": "192.168.1.10",
+          "listenPortLabel": "ローカル待受ポート",
+          "listenPortPlaceholder": "18747",
+          "hint": "ローカルネットワークで BlueBubbles に接続し、選択したチャットのみ処理します。接続前に、これらのチャットの他の自動応答を停止してください。",
+          "uncertain": "{{count}} 件の処理結果の確認が必要です。重複を避けるため、再試行前にチャット履歴を確認してください。"
         }
       },
       "removeConfirm": {
@@ -12912,6 +12933,8 @@
       }
     },
     "teammateProcess": {
+      "empty": "この返信には表示できる処理記録がありません",
+      "unavailable": "処理記録を読み込めませんでした",
       "record": "作業履歴",
       "operations": "操作履歴",
       "elapsed": "処理中 {{duration}}",
@@ -19686,5 +19709,14 @@
     "directory": "アカウントフォルダー",
     "loginAgain": "再ログイン",
     "login": "ログイン"
+  },
+  "crashDiagnosis": {
+    "title": "Cindy が予期せず終了しました",
+    "description": "原因を診断しますか？終了情報と機密情報を除いたログをタスクの下書きにまとめます。確認してから送信できます。強制終了や停電でも発生することがあります。",
+    "diagnose": "問題を診断",
+    "later": "今はしない",
+    "logExcerpt": "関連ログ（抜粋、不完全な場合があります）",
+    "logsUnavailable": "関連ログがありません。原因はまだ不明です。",
+    "failed": "診断情報を準備できませんでした。もう一度お試しください。"
   }
 }

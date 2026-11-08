@@ -32,6 +32,7 @@ import { createIpcError } from '../../../shared/ipc-errors';
 import { installedGhostStoragePart } from '../../../shared/pluginIdentity';
 import type { CindyGhostsHostDeps } from '../ghost';
 import type { GhostInstallConsentPrompt } from '../../cindy-brain/ghostInstallConsent';
+import { beginHeadlessGhostSetupTurn } from '../ghostSetupInteractionSurface';
 import type { InstalledGhost, GhostSetupAssessment } from '../../../shared/ghost';
 
 const tmpUserData = fs.mkdtempSync(path.join(os.tmpdir(), 'ghost-workdir-gate-'));
@@ -1292,6 +1293,21 @@ describe('写路径 roundtrip(真实存储,tmp userData)', () => {
 });
 
 describe('connect_account shares Host live plugin policy', () => {
+  // Tier 1, #9250 live acceptance: owner IM turns have a headless marker, but
+  // teammate authorization cards are persistent Desktop cards, not turn waiters.
+  it('opens a persistent owner teammate connection from IM while ordinary headless setup stays blocked', async () => {
+    const release = beginHeadlessGhostSetupTurn('bot-session');
+    try {
+      isAuthorizationSessionMock.mockResolvedValueOnce(true);
+      const result = await makeDeps('codex', 'bot-session', 'bot-instance', { source: 'imessage' }).connectAccount!({ kind: 'host', id: 'im-imessage' });
+      expect(result).not.toMatchObject({ errorCode: 'NO_SESSION_CONTEXT' });
+      expect(authorizationRequestMock).toHaveBeenCalledWith('bot-session', { kind: 'host', id: 'im-imessage' });
+    } finally { release(); }
+    // The ordinary channel lane lacks a transient marker but remains headless.
+    isAuthorizationSessionMock.mockResolvedValueOnce(false);
+    expect(await makeDeps('codex', 'bot-session', 'bot-instance', { source: 'imessage' }).connectAccount!({ kind: 'plugin', id: 'art' }))
+      .toMatchObject({ errorCode: 'NO_SESSION_CONTEXT' });
+  });
   it('passes dynamically discovered plugins to Host without treating builtin toolsets as plugin grants', async () => {
     isAuthorizationSessionMock.mockResolvedValueOnce(true);
     const deps = makeDeps('claude-code', 'bot-session', 'bot-instance', {

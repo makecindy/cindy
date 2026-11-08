@@ -270,6 +270,18 @@ async function visualMockInvoke<T = unknown>(
   channel: string,
   args: unknown[] = [],
 ): Promise<T> {
+  if (channel === 'local-db:messages:around-client-id' && typeof args[0] === 'string' && args[0].startsWith('qa-process-')) {
+    if (args[0] === 'qa-process-unavailable') throw new Error('Process unavailable');
+    return [
+      { clientId: 'qa-source', role: 'user', content: 'Weather request' },
+      ...(args[0] === 'qa-process-tools' ? [
+        { clientId: 'qa-note', role: 'assistant', content: '我先查询天气。', agentMeta: { assistantPhase: 'commentary' } },
+        { clientId: 'qa-tool', role: 'tool_use', content: { toolName: 'Weather', toolUseId: 'qa-tool', input: { city: 'Shanghai' } } },
+        { clientId: 'qa-result', role: 'tool_result', toolUseId: 'qa-tool', content: 'Sunny, 20°C' },
+      ] : []),
+      { clientId: 'qa-final', role: 'assistant', content: 'Final answer', agentMeta: { assistantPhase: 'final_answer', turnCompleted: true } },
+    ] as T;
+  }
   // Keep the real remote viewer in its initial waiting state for UI screenshots.
   // Only the __DEV__ mock provider reaches this; no computer is contacted.
   if (channel === 'device-link:remote-desktop:v1') return new Promise<T>(() => {});
