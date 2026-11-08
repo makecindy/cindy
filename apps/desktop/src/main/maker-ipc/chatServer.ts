@@ -428,6 +428,8 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
   // Cloud companions (cloud-companions.md): inert unless the server announces homes.
   let selfDeviceId: string | null = null;
   let companionHome = false;
+  /** The server keeps companion values too large for preferences (`capabilities.companionStore`). */
+  let companionStore = false;
   let directRoomClaims = false;
   let workAvailability = false;
   let workNotifications = false;
@@ -1008,6 +1010,7 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
       if (!workNotifications) workPolling.shortenIdle();
       selfDeviceId = typeof me.deviceId === 'string' && me.deviceId ? me.deviceId : null;
       companionHome = !!deps.companionCloud && me.capabilities?.companionHome === true && !!selfDeviceId;
+      companionStore = (me.capabilities as { companionStore?: number } | undefined)?.companionStore === 1;
       // Work in a 1:1 room is only claimed by a copy that hands it to the companion's main task;
       // a server without the capability never sees the field (its strict contract would reject it).
       directRoomClaims = companionHome && me.capabilities?.directRoomClaim === true;
@@ -1107,7 +1110,8 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
         // The conversation mirror is not a file backup: large files stay a name in the room.
         for (const file of files) if (file.path && (await fsp.stat(file.path)).size > MIRROR_ATTACHMENT_MAX_BYTES) throw new Error('ATTACHMENT_TOO_LARGE');
         return media.upload(room, source, files, author);
-      }, download: (room, mediaId) => media.download(room, mediaId) } });
+      }, download: (room, mediaId) => media.download(room, mediaId) },
+      store: { enabled: () => companionStore, transfer: media.companionTransfer } });
     const runtime = companion;
     await registerCompanionHomes({ api: request, selfDeviceId: self, actors, log: deps.log,
       botIds: profiles.filter(p => p.status === 'active').map(p => p.id), isDemoted: botId => runtime.state.isDemoted(botId) });

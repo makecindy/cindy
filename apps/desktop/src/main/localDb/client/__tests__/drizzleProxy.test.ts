@@ -19,6 +19,7 @@ const DRIZZLE_PROXY_SCHEMA = [
       summary TEXT,
       provider_id TEXT,
       working_dir TEXT,
+      project_dir TEXT,
       workspace_kind TEXT NOT NULL DEFAULT 'project',
       model TEXT NOT NULL DEFAULT 'claude-sonnet-4-6',
       scheduled_model_baseline TEXT,

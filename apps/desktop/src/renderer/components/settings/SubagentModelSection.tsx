@@ -1,3 +1,4 @@
+import { subagentModelSettings } from './SubagentModelSection.settings-search';
 import { useAppSettingsRevision } from '@/hooks/useAppSettingsRevision';
 /** Settings -> Personalization: Claude Code default Subagent model + Codex smart routing. */
 
@@ -230,8 +231,8 @@ export function SubagentModelSection() {
           <div className="flex min-w-0 items-start gap-2">
             <CodexMark size={16} className="mt-0.5 shrink-0 text-[var(--text-secondary)]" />
             <div className="flex min-w-0 flex-col gap-1">
-              <span id="settings-search-settings-subagentModels-smartRouting-label" className="text-14 font-medium text-[var(--text-primary)]">
-                {t('settings.subagentModels.smartRouting.label')}
+              <span id={subagentModelSettings.subagentModelsSmartRoutingLabel.targetId} className="text-14 font-medium text-[var(--text-primary)]">
+                {t(subagentModelSettings.subagentModelsSmartRoutingLabel.titleKey)}
               </span>
               <span className="text-12 leading-[1.4] text-[var(--text-secondary)]">
                 {settings.codexSmartSubagentRouting
@@ -246,7 +247,7 @@ export function SubagentModelSection() {
               disabled={pending}
               onReset={() => void resetKeys(CODEX_SUBAGENT_MODEL_KEYS)}
             />
-            <Switch
+            <Switch data-setting-id={subagentModelSettings.subagentModelsSmartRoutingLabel.id}
               checked={settings.codexSmartSubagentRouting}
               disabled={pending}
               onCheckedChange={(next) => {

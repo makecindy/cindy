@@ -340,7 +340,7 @@ function ClosingOverlay({ visible }: { visible: boolean }) {
       aria-label={t('titleBar.closing.title')}
     >
       <div
-        className="flex items-center gap-2 rounded-full border border-[var(--border-default)] px-4 py-2 shadow-sm"
+        className="flex items-center gap-2 rounded-full border border-[var(--border-default)] px-4 py-2 shadow-[shadow:var(--shadow-menu)]"
         style={{ background: 'var(--surface-elevated)' }}
       >
         <Spinner size={16} className="text-[var(--text-primary)]" />

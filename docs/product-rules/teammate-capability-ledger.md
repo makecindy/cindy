@@ -60,7 +60,7 @@
 | 关联项目 | `list_teammate_projects`、`set_teammate_project` | `list_projects` | 变成通用的「项目关联其他项目」 |
 | 待办 | `list/update_teammate_todo`、`preflight/record_teammate_todo_event` | 无 | 可升级为项目级待办（通用能力），优先级低 |
 | 提示词与工具说明 | `botSystemPrompt.ts`、`teammateGuide.ts`、helper 工具说明里的「只开一次」「同一任务跟到底」「不必重新发起」「只在用户追问时查」 | 普通任务无此类引导 | **简化**：工具说明只讲能做什么，工作方式进默认模板 |
-| 转话格式 | 固定三行「来源 / 用户原话 / Agent 补充」（`apps/desktop/src/shared/forwardedRequest.ts`） | — | 授权来源改为结构化数据，措辞交给伙伴规则；旧格式校验必须保留（[协议兼容](../dev-rules/protocol-compatibility.md)） |
+| 转话格式 | 2026-11-05 已改：正文是 Agent 原文，用户授权由发送端判断后记在回执里（[消息来源](message-source.md)「跨任务委派：发送端判断，正文是原文」） | — | 措辞交给伙伴规则；旧格式的接收、显示与跨电脑回退保留（[协议兼容](../dev-rules/protocol-compatibility.md)） |
 | 身份 | `create_teammate`、`update_teammate_profile`、`get_teammate_state`、`get/move_teammate_home`、`find/set_teammate_capability` | — | **保留**（对外身份层）；能力配置随伙伴即项目变成项目配置 |
 | 伙伴间消息 | `send_to_agent`、`check_agent_message`、`send_to_user`、`list_agents` | — | **保留**：伙伴有地址，项目没有；上限不变 |
 
@@ -83,10 +83,9 @@ AGENTS.md、记忆和技能；关于被管项目的事实写进那个项目；�
 | --- | --- | --- |
 | 续接「保留稳定的原始目标」，上下文保留完整原目标与本轮补充 | [伙伴运行时](cindy-bots-runtime.md) §6.1 | 每轮重发原始目标，已推翻的要求无法退出上下文 |
 | 内置「跟进」例行任务不能删、不能改指令和触发条件，只能暂停 | [例行任务](bot-routines.md)「内置跟进例行任务」；[伙伴运行时](cindy-bots-runtime.md) §8 | 伙伴无法用自己的规则决定怎么跟进 |
-| 跨任务请求由宿主拼成固定三行 | [消息来源](message-source.md)「跨任务请求与伙伴通话的原话」 | 措辞写死在宿主；授权来源依赖正文格式 |
 
-已知问题（应单独修，不等方向裁决）：子任务用 `send_to_session` 向主任务汇报时沿用启动时继承的来源，
-被包装成主人请求并带 `ownerVerified`，相当于子任务内容借到了主人授权。
+2026-11-05 已裁决并实现「跨任务请求由宿主拼成固定三行」：正文改为 Agent 原文，发送端判断委派意图；
+子任务向主任务汇报不再带用户授权（见[消息来源](message-source.md)「跨任务委派：发送端判断，正文是原文」）。
 
 ## 6. 扭转时要守住的用户场景
 

@@ -27,27 +27,6 @@ import { MobilePluginPages } from './mobilePageService.js';
 import { listMobilePageFiles, readMobilePageChunk } from './mobilePageAssets.js';
 import { invokeGhostMobileRelay, fetchGhostMobilePage, fetchGhostSettings } from './runtime/electronSandboxAdapter.js';
 import { remoteResourceRegistry } from '../device-link/remoteResourceRegistry.js';
-import { PluginUiService, PluginUiError, isLocalPluginUiSession, pluginCommandShortcuts, type PluginUiInstance } from './pluginUiService.js';
-import { createPluginUiRendererRecords } from './pluginUiRendererRecords.js';
-import { getAppShortcutStore } from '../app-shortcuts/index.js';
-import { PluginAppearanceService } from './pluginAppearanceService.js';
-import { PluginUiPageHost } from './pluginUiPageHost.js';
-import { PluginTabViewHost } from './pluginTabViewHost.js';
-import { registerPluginTabViewIpc } from './pluginTabViewIpc.js';
-import { getSidebarTabViewOwner } from '../sidebar-tab-window/ipc.js';
-import { readPluginUiPageFile } from './pluginUiPageResources.js';
-import { mountNativeUiPageDocument, unmountRemoteAppDocument } from '../mcp-apps/sandboxProtocol.js';
-import { createPluginAppearanceIpc } from './pluginAppearanceIpc.js';
-import { PluginUiVisibilityService } from './pluginUiVisibility.js';
-import { createPluginUiVisibilityIpc } from './pluginUiVisibilityIpc.js';
-import { readAppearanceSettings, updateAppearanceSettingsAtomic } from '../appearance-settings-store.js';
-import { publishAppearanceSettings } from '../appearance-settings-ipc.js';
-import { applyRuntimeAppIcon } from '../app-icon.js';
-import { setCustomWallpaperBytes, revokePluginWallpaper } from '../custom-wallpaper.js';
-import { isAppContentWindow } from '../windowFocusClassifier.js';
-import { isSecondaryAppWindow } from '../secondary-windows.js';
-import { createPluginUiIpcHandlers } from './pluginUiIpc.js';
-import { PLUGIN_UI_READ, PLUGIN_UI_INVOKE, PLUGIN_UI_CHOOSE_RENDERER, PLUGIN_UI_PAGE_OPEN, PLUGIN_UI_PAGE_CLOSE, PLUGIN_UI_RELEASE, PLUGIN_UI_CHANGED, PLUGIN_UI_INSPECT } from '../../shared/pluginUi.js';
 import { REMOTE_RESOURCE_CHANGED_CHANNEL, PLUGIN_COLLECTION, type PluginPagePoll } from '@cindy/device-link';
 import { tapWindowBroadcast, getSafeDataOwnerPushStamp, captureDataOwnerBroadcastScope, isDataOwnerBroadcastScopeCurrent } from '../device-link/broadcast-tap.js';
 
@@ -112,6 +91,7 @@ import {
 } from './ghostAgentModels.js';
 import { GhostModelPicker, chooseModelPickerWindow, readPluginModelRouteCatalog, getPluginModelPickerAgents, isGhostCardModelRouteAvailable, isPluginModelPickerRouteAvailable, isPluginRouteHarnessInstalled, type RemotePluginRouteAgentStatus } from './ghostModelPicker.js';
 import type { PluginModelPickerRoute } from '../../shared/pluginModelPicker.js';
+import { installGhostPageModelPicker } from './ghostPageModelPicker.js';
 import { getDesktopProviderService } from '../maker-host/createDesktopProviderService.js';
 import { PluginDownloadSlot } from './downloadSlot.js';
 import { createDownloader } from '../downloader/index.js';
@@ -220,8 +200,9 @@ export async function requestPluginUiApproval(id: string, sender?: WebContents, 
   return { granted, state: granted ? 'enabled' as const : declined ? 'declined' as const : 'pending' as const };
 }
 
-import { isValidPluginNamespace, supportsCindyVersion, PLUGIN_MEMBER_UPLOAD_MAX_ARCHIVE_BYTES, pluginHasToolUi, parseGhostNativeUi } from '@cindy/plugin-protocol';
+import { isValidPluginNamespace, supportsCindyVersion, PLUGIN_MEMBER_UPLOAD_MAX_ARCHIVE_BYTES, pluginHasToolUi } from '@cindy/plugin-protocol';
 import { buildGhostRecommendationSnapshot } from './ghostRecommendationSnapshot.js';
+import { readGhostReadmeFromDir } from './ghostReadme.js';
 import {
   readGhostRecommendationEntries,
   replaceGhostRecommendations,
@@ -347,9 +328,14 @@ import {
   listRestorableBuiltinGhosts,
   isTrustedBuiltinSeedSource,
   provisionBuiltinGhosts,
+  readBuiltinSeededIds,
+  readBuiltinSeedVersion,
   readBuiltinTombstones,
   recordBuiltinTombstone,
   renameBuiltinTombstone,
+  resolveBuiltinInstalledDir,
+  seedIsNewerThanStore,
+  type BuiltinStoreInstallFact,
   type ProvisionIdentity,
 } from './builtinGhostProvisioner.js';
 import { getAccessToken, getAuthState, onAuthStateChange } from '../authManager.js';
@@ -425,6 +411,8 @@ import { refreshGhostLocalizationIfChanged } from './ghostLocalizationRefresh.js
 import type { SupportedLocale } from '../../shared/locale.js';
 import { getDeepLinkMainWindow } from '../deepLink.js';
 import { reconcileGhostSkillLinks, removeGhostSkillLinksForRoots, ghostSkillPluginRoot } from './skillSlot.js';
+import { diagnoseScheduleHookPlugin } from './scheduleHookPluginDiagnosis.js';
+import type { PreRunHookMissingPlugin } from '@cindy/maker-scheduler';
 import {
   assertGhostSkillProjectionStableOwner,
   withSharedSkillRootsLock,
@@ -562,6 +550,10 @@ import {
   type GhostInstallConsentDecision,
   type GhostInstallConsentPrompt,
 } from './ghostInstallConsent.js';
+import { applyPersonalPluginUpdates, personalPluginContentHash } from './personalPluginUpdates.js';
+import { packGhostDirToFile } from './forge.js';
+import { snapshotInstalledGhostPackage } from './exportGhostPackage.js';
+import { atomicWriteFileSync } from '../utils/atomicWriteFile.js';
 import { GhostInstallConsentWindowBridge } from './ghostInstallConsentWindowBridge.js';
 import { GhostNetworkSlot } from './networkSlot.js';
 import {
@@ -632,6 +624,7 @@ import {
 } from '../plugin-market/ledger.js';
 import {
   installedMarketManifestIdentity,
+  verifyInstalledMarketManifest,
   type InstalledMarketManifestIdentity,
 } from '../plugin-market/installedManifestIdentity.js';
 import { createOrganizationPrefixStore } from '../plugin-market/organizationPrefixStore.js';
@@ -704,13 +697,14 @@ import {
 import { isKnownEmbeddingModel } from '@cindy/embedding-client';
 import { resolveOneshotCatalogModel } from '../utility-model/textOneshotPinOptions.js';
 import { hasOneshotProviderCredential } from '../utility-model/oneshotProviderUsability.js';
-import { readGhostCindyInflightLimit, relocateGhostCindyPrefs, readPluginUiRendererChoice, writePluginUiRendererChoice } from './cindyPrefsStore.js';
+import { readGhostCindyInflightLimit, relocateGhostCindyPrefs } from './cindyPrefsStore.js';
 import { createGhostComposerListHandler } from './ghostComposerIpc.js';
 import { createGhostDisplayListHandler } from './ghostDisplayListIpc.js';
 import { GHOST_COMPOSER_LIST_CHANNEL } from '../../shared/ghostComposer.js';
 import {
   isGhostDisabledForWorkdir,
   listDisabledGhostIdsForWorkdir,
+  normalizeWorkdirKey,
   relocateGhostWorkdirPrefs,
   setGhostDisabledForWorkdir,
 } from './ghostWorkdirPrefs.js';
@@ -777,7 +771,7 @@ import {
 // 主进程 OOM(2026-07-12 实事故,详见 bootstrap-electron.ts 末尾的缓存自愈注释)。
 import { getCurrentDbClientUserId, getDbClient } from '../localDb/client/current.js';
 import * as localDbSchema from '../localDb/schema.js';
-import { and, eq, isNull, inArray } from 'drizzle-orm';
+import { eq } from 'drizzle-orm';
 import { requireAppCapability } from '../appCapabilities.js';
 import {
   acknowledgeRecoveredLegacyGhosts,
@@ -1336,7 +1330,29 @@ export async function listInstalledGhostsAsync(): Promise<InstalledGhost[]> {
 }
 
 export async function listAvailableGhostsAsync(): Promise<InstalledGhost[]> {
-  return (await listInstalledGhostsAsync()).filter((ghost) => isGhostAvailableForActiveSession(ghost.manifest.id));
+  const ghosts = await listInstalledGhostsAsync();
+  if (isAppSessionBoundaryPending()) return [];
+  // The scan already supplies each exact instance. Looking up its bare id again
+  // can fall back to N full scans (and confuse same-name namespace instances).
+  const accountServices = getAppCapabilities().canUseCindyAccountServices;
+  return ghosts.filter(ghost => accountServices || !ghostRequiresCindyAccount(ghost.manifest));
+}
+
+/** Notification discovery is indexed; exact live approvals remain the delivery boundary. */
+async function listGhostNotificationCandidates(): Promise<InstalledGhost[]> {
+  const owner = ghostOwnerScope.capture();
+  if (!ghostOwnerScope.isCurrent(owner) || !ghostOwnerScope.isStable(owner)) return [];
+  const ghosts = await getGhostManager().listNotificationCandidatesAsync();
+  if (!ghostOwnerScope.isCurrent(owner) || !ghostOwnerScope.isStable(owner)) return [];
+  const accountServices = getAppCapabilities().canUseCindyAccountServices;
+  return ghosts.filter(ghost => accountServices || !ghostRequiresCindyAccount(ghost.manifest));
+}
+
+function findGhostNotificationTarget(instanceKey: string): InstalledGhost | null {
+  if (isAppSessionBoundaryPending()) return null;
+  const ghost = getGhostManager().findInstalledInstance(instanceKey);
+  if (!ghost || (!getAppCapabilities().canUseCindyAccountServices && ghostRequiresCindyAccount(ghost.manifest))) return null;
+  return ghost;
 }
 
 export function findTrustedXdGhostForScript(id: string): InstalledGhost | null {
@@ -1378,6 +1394,7 @@ export function suspendCindyAccountGhosts(): void {
  * setup writes, and post-dispatch cleanup cannot cross into the next owner.
  */
 export async function interruptGhostCallsForAccountBoundary(): Promise<void> {
+  managerSingleton?.disposeNotificationIndex();
   await revokePluginAppServers();
   pluginDownloads.abortAll();
   cancelActiveGhostOauthFlow();
@@ -1896,6 +1913,7 @@ async function reconcileBuiltinGhostsLocked(
       },
       publishSeed: (id, seedDir, options) =>
         mutation.publishTrustedBundledSeed(id, seedDir, options),
+      storeInstall: builtinSeedStoreInstall,
       onApplyStart: () => {
         tipShown = true;
         broadcastGhostProvisioning(true);
@@ -1953,7 +1971,10 @@ async function reconcileBuiltinGhostsLocked(
           // `.disabled` 镜像的读数只作停用方向的输入:receipt 已钉停用时,镜像被
           // 外部移除不会把插件翻回启用(合并规则见 approveTrustedBundledInstall
           // 头注释;重新启用只有用户显式 setEnabled 一条路)。
-          !hasDisabledMarker(path.join(brainRootDir(), manifest.id)),
+          !hasDisabledMarker(
+            resolveBuiltinInstalledDir(brainRootDir(), manifest.id) ??
+              path.join(brainRootDir(), manifest.id),
+          ),
           { sourceDir: outcome.approvedSourceDirs[manifest.id] },
         )) || approvalChanged;
       // 本会话内被撤销熄灯的常驻实例,批准补回即恢复点火(隔离态下批准必然重写,
@@ -2212,269 +2233,6 @@ let runtimeSingleton: GhostRuntime | null = null;
  * 唤醒开关被关掉,重新打开即 resetFuse 重获新生。
  */
 const invocationRuntimeGenerations = new Map<string, number>();
-let pluginUiServiceSingleton: PluginUiService | null = null;
-let pluginUiPageHostSingleton: PluginUiPageHost | null = null;
-let pluginTabViewHostSingleton: PluginTabViewHost | null = null;
-function getPluginTabViewHost(): PluginTabViewHost {
-  if (!pluginTabViewHostSingleton) pluginTabViewHostSingleton = new PluginTabViewHost({
-    current: id => {
-      const ghost = findGhostForInstanceId(id), instance = ghost && nativeUiInstance(ghost);
-      return ghost && instance ? { ...instance, pluginId: ghost.manifest.id } : null;
-    },
-    controller: id => {
-      const win = BrowserWindow.getAllWindows().find(win => win.webContents.id === id);
-      if (!win || !isTrustedAppRendererWindow(win)) return null;
-      const ownerCurrent = captureNativeUiController(`local:${id}`);
-      const query = new URL(win.webContents.getURL()).searchParams;
-      return { id, role: query.get('sidebarTabWindow') === '1' ? 'popout' : query.get('sidebarWindow') === '1' ? 'sidebar' : 'main',
-        current: () => ownerCurrent() && isTrustedAppRendererWindow(win),
-        visible: () => !win.isDestroyed() && win.isVisible(),
-        send: (channel, payload) => {
-          if (!ownerCurrent() || !isTrustedAppRendererWindow(win)) throw new Error('VIEW_UNAVAILABLE');
-          win.webContents.send(channel, { ...(payload as Record<string, unknown>), ownerStamp: getActiveDataOwnerPushStamp() });
-        } };
-    },
-    authorize: async (controller, sessionId, instanceId) => {
-      const current = captureNativeUiController(`local:${controller}`);
-      const ghost = findGhostForInstanceId(instanceId), instance = ghost && nativeUiInstance(ghost);
-      if (!instance || !current()) throw new Error('VIEW_UNAVAILABLE');
-      if (sessionId !== null) {
-        const row = await getSessionRowSnapshot(sessionId);
-        if (!row || row.status === 'deleted' || !isLocalPluginUiSession(row) || isGhostDisabledForWorkdir(instanceId, row.workingDir)) throw new Error('VIEW_UNAVAILABLE');
-        await assertRemoteBotInvocationAllowed([sessionId]);
-      }
-      return () => current() && !!findGhostForInstanceId(instanceId) &&
-        nativeUiInstance(findGhostForInstanceId(instanceId)!)?.token === instance.token;
-    },
-    ownerForTab: id => getSidebarTabViewOwner(id)?.id ?? null,
-  });
-  return pluginTabViewHostSingleton;
-}
-export function authorizePluginTabViewAttach(host: WebContents, url: string) {
-  return pluginTabViewHostSingleton?.authorizeAttach(host.id, url) ?? null;
-}
-export function attachPluginTabViewGuest(host: WebContents, url: string, guest: WebContents): boolean {
-  return pluginTabViewHostSingleton?.attach(host.id, url, { id: guest.id,
-    current: () => !guest.isDestroyed() && guest.getURL().split('#')[0] === url,
-    send: (channel, payload) => guest.send(channel, payload) }) ?? false;
-}
-let pluginAppearanceServiceSingleton: PluginAppearanceService | null = null;
-let pluginUiVisibilityServiceSingleton: PluginUiVisibilityService | null = null;
-const watchedVisibilityWindows = new Set<number>();
-const activeVisibilityWindows = new Set<number>();
-function findVisibilityWindow(id?: number, allowUnregistered = false): BrowserWindow | null {
-  const all = BrowserWindow.getAllWindows();
-  const supported = (win: BrowserWindow) => win === getDeepLinkMainWindow() || isSecondaryAppWindow(win);
-  const win = id === undefined ? [BrowserWindow.getFocusedWindow(), ...all].find(candidate =>
-    candidate && !candidate.isDestroyed() && candidate.isVisible() && isAppContentWindow(candidate) && supported(candidate) && activeVisibilityWindows.has(candidate.webContents.id)) :
-    all.find(candidate => !candidate.isDestroyed() && candidate.webContents.id === id && isAppContentWindow(candidate) && supported(candidate) &&
-      (allowUnregistered || activeVisibilityWindows.has(id)));
-  if (!win) return null;
-  const windowId = win.webContents.id;
-  if (!watchedVisibilityWindows.has(windowId)) {
-    watchedVisibilityWindows.add(windowId);
-    win.webContents.once('destroyed', () => {
-      watchedVisibilityWindows.delete(windowId);
-      activeVisibilityWindows.delete(windowId);
-      pluginUiVisibilityServiceSingleton?.forgetWindow(windowId);
-    });
-  }
-  return win;
-}
-const pluginUiVisibilityIpc = createPluginUiVisibilityIpc({
-  assertTrusted: event => assertTrustedAppRendererEvent(event),
-  snapshot: id => getPluginUiVisibilityService().snapshot(id),
-  open: id => {
-    if (!findVisibilityWindow(id, true)) return false;
-    activeVisibilityWindows.add(id);
-    return true;
-  },
-  close: id => {
-    if (!activeVisibilityWindows.delete(id)) return;
-    const win = findVisibilityWindow(id, true);
-    if (win && process.platform === 'darwin') win.setWindowButtonVisibility(true);
-    pluginUiVisibilityServiceSingleton?.forgetWindow(id);
-  },
-  window: id => {
-    const win = findVisibilityWindow(id);
-    return win ? { id, nativeButtons: visible => { if (process.platform === 'darwin') win.setWindowButtonVisibility(visible); },
-      send: (channel, payload) => win.webContents.send(channel, payload) } : null;
-  },
-});
-function getPluginUiVisibilityService(): PluginUiVisibilityService {
-  if (!pluginUiVisibilityServiceSingleton) pluginUiVisibilityServiceSingleton = new PluginUiVisibilityService({
-    current: id => { const ghost = findGhostForInstanceId(id); return ghost ? nativeUiInstance(ghost) : null; },
-    window: id => findVisibilityWindow(id)?.webContents.id ?? null,
-    apply: (id, values) => pluginUiVisibilityIpc.apply(id, values),
-  });
-  return pluginUiVisibilityServiceSingleton;
-}
-
-const pluginAppearanceIpc = createPluginAppearanceIpc({ assertTrusted: event => assertTrustedAppRendererEvent(event), service: getPluginAppearanceService,
-  viewingWindow: () => {
-    const win = [BrowserWindow.getFocusedWindow(), ...BrowserWindow.getAllWindows()]
-      .find(win => win && !win.isDestroyed() && win.isVisible() && isAppContentWindow(win));
-    return win ? { id: win.webContents.id, send: (channel, payload) => win.webContents.send(channel, payload) } : null;
-  } });
-
-function getPluginAppearanceService(): PluginAppearanceService {
-  if (!pluginAppearanceServiceSingleton) pluginAppearanceServiceSingleton = new PluginAppearanceService({
-    ready: () => !isAppSessionBoundaryPending(),
-    current: id => {
-      const ghost = findGhostForInstanceId(id), instance = ghost && nativeUiInstance(ghost);
-      return ghost && ghost.approval.state === 'approved' && instance ? { ...instance, dir: ghost.dir,
-        key: createHash('sha256').update(JSON.stringify([activeOwnerScopeKey(), id, ghost.approval.revision])).digest('hex') } : null;
-    },
-    files: createPluginFileAccess({ libraryPath: (id, file) => getGhostLibrarySlot().resolvePanelFilePath(id, file), libraryMime: mediaTypeForLibraryPath }),
-    read: readAppearanceSettings, update: updateAppearanceSettingsAtomic,
-    saveWallpaper: setCustomWallpaperBytes, revokeWallpaper: revokePluginWallpaper,
-    publish: publishAppearanceSettings, apply: settings => pluginAppearanceIpc.apply(settings),
-    applyAppIcon: applyRuntimeAppIcon,
-  });
-  return pluginAppearanceServiceSingleton;
-}
-
-export function restorePluginAppIcon(): Promise<void> {
-  return getPluginAppearanceService().restoreAppIcon();
-}
-
-function getPluginUiPageHost(): PluginUiPageHost {
-  if (!pluginUiPageHostSingleton) pluginUiPageHostSingleton = new PluginUiPageHost({
-    bind: (...args) => getPluginUiService().bindPage(...args),
-    instance: id => {
-      const ghost = findGhostForInstanceId(id);
-      const instance = ghost && nativeUiInstance(ghost);
-      return ghost && instance ? { dir: ghost.dir, ui: instance.ui } : null;
-    },
-    readFile: readPluginUiPageFile,
-    appearance: (id, input, assertCurrent) => getPluginAppearanceService().handle(id, input, assertCurrent),
-    visibility: (id, input, windowId, assertCurrent) => getPluginUiVisibilityService().handle(id, input, { windowId, assertCurrent }),
-    mount: mountNativeUiPageDocument,
-    unmount: unmountRemoteAppDocument,
-  });
-  return pluginUiPageHostSingleton;
-}
-
-function nativeUiInstance(ghost: InstalledGhost): PluginUiInstance | null {
-  if (isAppSessionBoundaryPending() || !ghost.enabled || ghost.approval.state !== 'approved' ||
-      !isGhostAvailableForActiveSession(ghost.manifest.id)) return null;
-  const ui = parseGhostNativeUi(ghost.manifest.ui);
-  if (ui?.version !== 1) return null;
-  const id = installedGhostStoragePart(ghost), owner = getActiveDataOwnerPushStamp();
-  return { id, ui, name: ghost.manifest.name, shortcutScope: activeOwnerScopeKey(), token: JSON.stringify([activeOwnerScopeKey(), owner.ownerGeneration,
-    getCurrentDbClientSnapshot()?.clientEpoch, ghost.approval.revision, invocationRuntimeGenerations.get(id) ?? 0]) };
-}
-function nativeUiInstances(ghosts: readonly InstalledGhost[]): PluginUiInstance[] {
-  return ghosts.map(nativeUiInstance).filter((i): i is PluginUiInstance => !!i);
-}
-function captureNativeUiController(controller: string): () => boolean {
-  if (!/^local:\d+$/.test(controller)) throw new PluginUiError('NOT_FOUND', 'UI controller unavailable');
-  const scope = captureDataOwnerBroadcastScope();
-  return () => isDataOwnerBroadcastScopeCurrent(scope) && !isAppSessionBoundaryPending();
-}
-async function readNativeUiMessage(sessionId: string, clientId: string) {
-  const [row] = await getDbClient().drizzle.select({ role: localDbSchema.messages.role, content: localDbSchema.messages.content,
-    agentMeta: localDbSchema.messages.agentMeta,
-    createdAt: localDbSchema.messages.createdAt, clearedAt: localDbSchema.sessions.clearedAt, status: localDbSchema.sessions.status })
-    .from(localDbSchema.messages).innerJoin(localDbSchema.sessions, eq(localDbSchema.messages.sessionId, localDbSchema.sessions.id))
-    .where(and(eq(localDbSchema.messages.sessionId, sessionId), eq(localDbSchema.messages.clientId, clientId), isNull(localDbSchema.messages.rewindAt))).limit(1);
-  if (!row || row.status === 'deleted' || (row.clearedAt !== null && row.createdAt <= row.clearedAt) ||
-      (row.role !== 'user' && row.role !== 'assistant')) return null;
-  return row;
-}
-async function readNativeUiTool(sessionId: string, toolUseId: string) {
-  const rows = await getDbClient().drizzle.select({ role: localDbSchema.messages.role, content: localDbSchema.messages.content,
-    toolUseId: localDbSchema.messages.toolUseId, createdAt: localDbSchema.messages.createdAt,
-    clearedAt: localDbSchema.sessions.clearedAt, status: localDbSchema.sessions.status })
-    .from(localDbSchema.messages).innerJoin(localDbSchema.sessions, eq(localDbSchema.messages.sessionId, localDbSchema.sessions.id))
-    .where(and(eq(localDbSchema.messages.sessionId, sessionId), eq(localDbSchema.messages.toolUseId, toolUseId),
-      inArray(localDbSchema.messages.role, ['tool_use', 'tool_result']), isNull(localDbSchema.messages.rewindAt))).limit(4);
-  const visible = rows.filter(row => row.status !== 'deleted' && (row.clearedAt === null || row.createdAt > row.clearedAt));
-  return { calls: visible.filter(row => row.role === 'tool_use'), results: visible.filter(row => row.role === 'tool_result') };
-}
-function getPluginUiService(): PluginUiService {
-  if (!pluginUiServiceSingleton) {
-    const records = createPluginUiRendererRecords({ readMessage: readNativeUiMessage, readTool: readNativeUiTool,
-      resolvePlugin: (id, namespace) => {
-        if (!isValidGhostId(id)) {
-          const exact = namespace === undefined ? findGhostForPhysicalStoragePart(id) : null;
-          return exact ? installedGhostStoragePart(exact) : undefined;
-        }
-        const resolved = resolveInstalledGhost(availableGhosts(), id, namespace);
-        return resolved.status === 'unique' ? installedGhostStoragePart(resolved.ghost) : undefined;
-      } });
-    pluginUiServiceSingleton = new PluginUiService({
-      current: id => { const ghost = findGhostForInstanceId(id); return ghost ? nativeUiInstance(ghost) : null; },
-      wake: async id => {
-        const ghost = findGhostForInstanceId(id);
-        if (!ghost || !nativeUiInstance(ghost)) return false;
-        const runtime = getGhostRuntime(), started = await runtime.spawn(ghost);
-        return started.ok && await runtime.waitUntilRunning(id);
-      },
-      authorize: async (sessionId, controller) => {
-        const current = captureNativeUiController(controller);
-        const row = await getSessionRowSnapshot(sessionId);
-        if (getDeviceLinkInvokeContext()?.sharedTask || !current() || !row || row.status === 'deleted' || !isLocalPluginUiSession(row))
-          throw new PluginUiError('NOT_FOUND', 'UI task unavailable');
-        await assertRemoteBotInvocationAllowed([sessionId]);
-        if (!current()) throw new PluginUiError('NOT_FOUND', 'UI context changed');
-        return { current, allows: id => !isGhostDisabledForWorkdir(id, row.workingDir) };
-      },
-      resolveScope: async (sessionId, point, target) => {
-        if (point === 'message.shortcuts') point = 'message.actions';
-        if (point === 'tool.body' && target?.kind === 'tool') {
-          const scope = { kind: 'tool' as const, sessionId, toolUseId: target.id };
-          return await records.read(scope) ? scope : null;
-        }
-        if (target?.kind !== 'message' || !['message.actions', 'message.body', 'turn.footer'].includes(point)) return null;
-        const row = await readNativeUiMessage(sessionId, target.id);
-        if (!row || (point === 'turn.footer' && row.role !== 'user')) return null;
-        return { kind: 'message', sessionId, messageClientId: target.id };
-      },
-      resolveRendererSource: async scope => {
-        const result = await records.read(scope);
-        return result ? { source: result.source, legacy: result.legacy } : {};
-      },
-      readRendererChoice: readPluginUiRendererChoice,
-      writeRendererChoice: writePluginUiRendererChoice,
-      readContext: async (scope, fields) => {
-        const result: Pick<import('@cindy/maker-shared').PluginUiContext, 'session' | 'message' | 'tool'> = {};
-        if (fields.includes('session.summary')) {
-          const row = await getSessionRowSnapshot(scope.sessionId);
-          if (!row || row.status === 'deleted') throw new PluginUiError('NOT_FOUND', 'UI task unavailable');
-          result.session = { id: scope.sessionId, title: row.title ?? '', status: row.status,
-            ...(row.agentKind ? { agentKind: row.agentKind } : {}) };
-        }
-        if (fields.includes('message.content') && scope.kind === 'message') {
-          const row = await readNativeUiMessage(scope.sessionId, scope.messageClientId);
-          if (!row) throw new PluginUiError('NOT_FOUND', 'UI message unavailable');
-          let content: unknown;
-          try { content = JSON.parse(row.content); } catch { content = row.content; }
-          const text = typeof content === 'string' ? content : content && typeof content === 'object' && 'text' in content &&
-            typeof content.text === 'string' ? content.text : undefined;
-          if (text !== undefined) result.message = { id: scope.messageClientId, role: row.role as 'user' | 'assistant', text };
-        }
-        if (scope.kind === 'tool' && fields.some(field => field.startsWith('tool.'))) {
-          const record = await records.read(scope);
-          if (!record) throw new PluginUiError('NOT_FOUND', 'UI tool unavailable');
-          result.tool = record.tool;
-        }
-        return result;
-      },
-      send: sendToGhostLogic,
-      prepareNavigation: input => getPluginTabViewHost().prepare(input),
-      navigate: (controller, requestId) => getPluginTabViewHost().navigate(controller, requestId),
-      bindingRemoved: viewId => pluginUiPageHostSingleton?.releaseBinding(viewId),
-      changed: sessionId => {
-        broadcastGhostWindowPush(PLUGIN_UI_CHANGED, { ...(sessionId ? { sessionId } : {}) });
-      },
-    });
-    const instances = nativeUiInstances(availableGhosts());
-    pluginUiServiceSingleton.reconcile(instances);
-    getAppShortcutStore().setPluginShortcuts(pluginCommandShortcuts(instances));
-  }
-  return pluginUiServiceSingleton;
-}
 const pluginInvocations = new PluginInvocations({
   scope: id => {
     const ghost = findGhostForInstanceId(id);
@@ -2541,8 +2299,6 @@ export function getGhostRuntime(): GhostRuntime {
           modelPickerSingleton?.cancel(storagePart);
           pluginInvocations.invalidate(storagePart);
           invocationRuntimeGenerations.set(storagePart, (invocationRuntimeGenerations.get(storagePart) ?? 0) + 1);
-          pluginUiServiceSingleton?.runtimeChanged(storagePart);
-          void pluginUiVisibilityServiceSingleton?.release(storagePart);
         }
         broadcastGhostRuntimeStates();
       },
@@ -3044,20 +2800,18 @@ export function getGhostSubscriptionGateway(): GhostSubscriptionGateway {
   if (!subscriptionGatewaySingleton) {
     subscriptionGatewaySingleton = new GhostSubscriptionGateway({
       listGhosts: availableGhosts,
-      listGhostsAsync: listAvailableGhostsAsync,
-      findGhostForDelivery: findGhostForInstanceId,
-      isRunning: (id) => {
-        const ghost = findGhostForInstanceId(id);
-        return getGhostRuntime().stateOf(ghost ? installedGhostStoragePart(ghost) : id) === 'running';
-      },
+      listGhostsAsync: listGhostNotificationCandidates,
+      findGhostForDelivery: findGhostNotificationTarget,
+      isRunning: (id) => getGhostRuntime().stateOf(id) === 'running',
       wake: async (ghost) => {
         const r = await getGhostRuntime().spawn(ghost);
         if (!r.ok) throw new Error(r.reason);
       },
       sendToGhost: (ghostId, payload) => {
-        const ghost = findGhostForInstanceId(ghostId);
+        const ghost = findGhostNotificationTarget(ghostId);
         // 适配:底层返回 false 表示投递失败(网关契约是抛错 → 走缓冲/熔断)。
-        if (!sendToGhostLogic(ghost ? installedGhostStoragePart(ghost) : ghostId, payload)) {
+        if (!ghost?.enabled || ('topic' in payload && !ghost.manifest.subscribe?.topics?.includes(payload.topic))
+          || !sendToGhostLogic(installedGhostStoragePart(ghost), payload)) {
           throw new Error('ghost pipe send failed');
         }
       },
@@ -3686,13 +3440,30 @@ export function notifyGhostSessionEvent(
   kind: 'created' | 'archived' | 'switched',
   data: { sessionId: string; workdir?: string },
   shouldPublish: () => boolean | Promise<boolean> = () => true,
-  onRetry: () => void = () => {},
+  onRetry: (resetPrimary?: boolean) => void = () => {},
 ): void {
   void (async () => {
     try {
       const owner = ghostOwnerScope.capture();
-      // The gateway discovers subscribers once after eligibility is resolved.
-      // A preflight scan here used to scan every installation a second time.
+      let publishSessionEvent: Awaited<ReturnType<GhostSubscriptionGateway['preparePublish']>>;
+      try {
+        publishSessionEvent = await getGhostSubscriptionGateway().preparePublish('session');
+      } catch {
+        // Discovery did not establish a delivery target. Release both markers:
+        // the same focus may retry, and returning to the previous focus is new.
+        onRetry(true);
+        return;
+      }
+      if (!publishSessionEvent) {
+        // Even without listeners, advance the focus tracker's deduplication state.
+        // Otherwise disabling at A, visiting B, then enabling and returning to A
+        // suppresses a real switch. The claim retains generation/Lead rechecks;
+        // no eligibility lookup, plugin wake, or notification is needed here.
+        if (ghostOwnerScope.isCurrent(owner) && ghostOwnerScope.isStable(owner)) {
+          await shouldPublish();
+        }
+        return;
+      }
       // created / archived 与 turn 事件同口径；switched 额外允许归一后的 Orca Lead。
       // retry 视为不投，生命周期事件不值得引入重试机制。
       const info = await isGhostEligibleSession(
@@ -3712,8 +3483,7 @@ export function notifyGhostSessionEvent(
       // switched 在异步归一、资格查询完成后再确认一次焦点代次；确认与去重在同一步完成。
       if (!(await shouldPublish())) return;
       if (!ghostOwnerScope.isCurrent(owner) || !ghostOwnerScope.isStable(owner)) return;
-      getGhostSubscriptionGateway().publish(
-        'session',
+      publishSessionEvent(
         kind === 'created'
           ? 'did-session-created'
           : kind === 'archived'
@@ -3821,6 +3591,80 @@ function pluginMarketAuthorizationTargetFor(ghostId: string): { ghostId: string;
   if (ghost) return { ghostId: ghost.manifest.id, ...deliveryNamespaceFields(ghost) };
   const identity = parsePluginInstanceId(ghostId);
   return identity ?? { ghostId };
+}
+
+/** 市场详情只用来补显示名；慢或失败时不拖住失败记录。 */
+const SCHEDULE_HOOK_MARKET_NAME_TIMEOUT_MS = 5_000;
+
+function nameWithin(lookup: Promise<string | undefined>, ms: number): Promise<string | undefined> {
+  return new Promise((resolve) => {
+    const timer = setTimeout(() => resolve(undefined), ms);
+    void lookup.catch(() => undefined).then((name) => {
+      clearTimeout(timer);
+      resolve(name);
+    });
+  });
+}
+
+/**
+ * 定时任务检查脚本失败时识别「所属插件未安装或未启用」。marketName 由调用方注入，
+ * 避免本模块依赖市场服务；它失败或超时都只是少一个显示名。
+ */
+export async function diagnoseScheduleHookPluginForActiveOwner(
+  command: string,
+  marketName?: (pluginId: string) => Promise<string | undefined>,
+): Promise<PreRunHookMissingPlugin | undefined> {
+  if (isAppSessionBoundaryPending()) return undefined;
+  const manager = getGhostManager();
+  return diagnoseScheduleHookPlugin(command, {
+    skillsRoot: path.join(ghostSkillPluginRoot(manager.approvalStateRoot()), 'skills'),
+    findInstalled: (ghostId, namespace) => {
+      const resolved = resolveInstalledGhost(manager.list(), ghostId, namespace);
+      return resolved.status === 'unique'
+        ? { name: resolved.ghost.manifest.name, enabled: resolved.ghost.enabled }
+        : null;
+    },
+    lookupMarket: async (ghostId, namespace) => {
+      const pluginId = getPluginMarketLedger().installationForPlugin({ ghostId, namespace })?.pluginId;
+      if (!pluginId) return null;
+      const name = marketName ? await nameWithin(marketName(pluginId), SCHEDULE_HOOK_MARKET_NAME_TIMEOUT_MS) : undefined;
+      return { pluginId, ...(name ? { name } : {}) };
+    },
+  });
+}
+
+/**
+ * 内置种子对照的同 id 商店安装(builtinGhostProvisioner 的 storeInstall):只认服务端市场
+ * 已装的根 namespace 记录。账本或该记录损坏时抛错,播种把该种子按本轮失败处理、不动已装字节。
+ */
+function builtinSeedStoreInstall(id: string, installedDir: string): BuiltinStoreInstallFact | null {
+  // 严格查询：账本文件或该插件的记录损坏时不能当成「没有商店来源」（那会让孤儿回收
+  // 把真实的商店安装当种子删掉），抛错让播种跳过本轮。
+  const lookup = getPluginMarketLedger().lookupInstallationForAuthorization({ ghostId: id, namespace: null });
+  if (lookup.kind === 'invalid') {
+    throw new Error('Plugin market ledger is unreadable');
+  }
+  const record = lookup.kind === 'found' ? lookup.record : null;
+  if (
+    !record?.installed ||
+    record.ghostId !== id ||
+    (record.source !== 'market' && record.source !== 'legacy-adopted') ||
+    (hasDeliveryNamespace(record) && record.namespace !== null)
+  ) {
+    return null;
+  }
+  const snapshot = readInstalledGhostManifestSnapshot(installedDir, GHOST_INSTALL_MANIFEST_MAX_BYTES);
+  // ghost.json 相同不代表目录里还是商店包(旧播种器允许同版本种子覆盖,只改代码不改清单)。
+  // 批准回执里的包摘要才是落位那一刻的包身份:商店安装 = Release sha256,播种发布 = 目录摘要。
+  const relId = path.relative(brainRootDir(), installedDir).split(path.sep).join('/');
+  const evidence = getGhostManager().approvedInstallEvidence(relId);
+  return {
+    version: record.version,
+    ownsInstalledBytes:
+      snapshot.ok &&
+      verifyInstalledMarketManifest(record, installedMarketManifestIdentity(snapshot.snapshot)) &&
+      evidence?.packageSha256 === record.sha256,
+  };
 }
 
 /** Reuse the verified install ledger; an official label never establishes distribution identity. */
@@ -4398,6 +4242,19 @@ export function getGhostConfirmSlot(): GhostConfirmSlot {
 }
 
 let modelPickerSingleton: GhostModelPicker | null = null;
+/** Only called after the Main-owned webview attach gate has approved this guest. */
+export function attachGhostPageModelPicker(host: WebContents, guest: WebContents, instanceId: string, isCurrent: () => boolean): void {
+  const ownerStamp = getGhostOwnerPushStamp();
+  installGhostPageModelPicker({
+    host, guest, instanceId,
+    isCurrent: () => {
+      const win = !host.isDestroyed() ? BrowserWindow.fromWebContents(host) : null;
+      return isCurrent() && isGhostOwnerStampCurrent(ownerStamp) && !!win && isTrustedAppRendererWindow(win);
+    },
+    picker: getGhostModelPicker,
+    push: (channel, payload) => sendGhostContentsPush(host, channel, payload, ownerStamp),
+  });
+}
 export function getGhostModelPicker(): GhostModelPicker {
   return modelPickerSingleton ??= new GhostModelPicker({
     getGhost: findGhostForInstanceId,
@@ -8060,6 +7917,7 @@ async function updateLocalGhostPackageLocked(
       '任务权限已变化，这次插件安装授权已失效。请用当前任务权限重试。',
     );
   }
+  const mutationOwner = captureGhostMutationOwner();
   const runtime = getGhostRuntime();
   const marketLedger = getPluginMarketLedger().bind(
     ownerScopedUserDataPath('plugin-market', 'ledger.v1.json'),
@@ -8082,7 +7940,12 @@ async function updateLocalGhostPackageLocked(
   if (sourceChanged) assertGhostRelocationIdle(instanceId);
   rejectUnauthorizedTokenBroker(inspected.canonicalManifest, authorizationOverrides);
   const releaseSync = pluginDeviceSync.beginMutation(instanceId);
+  let releaseBrowserUpdate: (() => void) | undefined;
   try {
+    releaseBrowserUpdate = await getGhostBrowserExtensionSlot().prepareUpdate(instanceId);
+    const recheckOwner = beginGhostMutation(mutationOwner);
+    recheckOwner();
+    if (isCurrent?.() === false) throwIpcError('PRECONDITION_FAILED', 'Plugin install authorization changed');
     runtime.stop(instanceId);
     // 等待失败表示旧进程仍可能存活；此时不能恢复 resident，否则会产生
     // 两份后台进程。仅在确认退出后的更新阶段失败时恢复旧版本。
@@ -8183,8 +8046,85 @@ async function updateLocalGhostPackageLocked(
     spawnIfResident(result.ghost);
     return result.ghost;
   } finally {
-    releaseSync();
+    releaseBrowserUpdate?.();
+    try { broadcastGhostsChanged(manager.list()); }
+    finally { releaseSync(); }
   }
+}
+
+/** Developer supervisor post-promotion only. Never updates a public/org copy. */
+export async function updatePersonalLocalPlugins() {
+  if (app.isPackaged || !process.env.CINDY_PERSONAL_MONITOR_DIR || !process.env.CINDY_PERSONAL_GENERATION)
+    throw new Error('Personal plugin updates require the developer supervisor');
+  const owner = captureGhostMutationOwner();
+  const scope = activeOwnerScopeKey();
+  const isCurrent = () => activeOwnerScopeKey() === scope && !isAppSessionBoundaryPending();
+  if (!owner.dataOwnerId) return { state: 'deferred', reason: 'No active data owner' };
+  const manager = getGhostManager();
+  return applyPersonalPluginUpdates(path.join(app.getAppPath(), 'resources', 'personal-plugins'), {
+    isCurrent,
+    findLocal: id => findInstalledGhostForDeliveryTarget(manager.list(), { ghostId: id, namespace: LOCAL_PLUGIN_NAMESPACE }),
+    update: async (target, source, entry) => {
+      const release = beginGhostMutation(owner);
+      let temp: string | undefined;
+      try {
+        const recordFile = ownerScopedUserDataPath('personal-plugins', 'applied', `${entry.id}.json`);
+        let previous: { sourceHash?: string; revision?: string; installedHash?: string } = {};
+        try { previous = JSON.parse(await fs.promises.readFile(recordFile, 'utf8')); } catch { /* First use or incomplete report: verify through the installer. */ }
+        if (previous.sourceHash === entry.contentHash && previous.revision === ghostInstallApprovalToken(target.approval) &&
+            previous.installedHash === await personalPluginContentHash(target.dir)) return target;
+        temp = await fs.promises.mkdtemp(path.join(app.getPath('temp'), 'cindy-personal-plugin-'));
+        const approval = ghostInstallApprovalToken(target.approval), instance = installedGhostStoragePart(target);
+        const file = path.join(temp, 'update.cindy');
+        const packed = await packGhostDirToFile(source, file, source);
+        if (!packed.ok) throw new Error(packed.message);
+        if (await personalPluginContentHash(source) !== entry.contentHash) throw new Error('Personal plugin source changed while packing');
+        const inspected = await manager.inspect(file);
+        if ('rejection' in inspected) throwInstallError(inspected.rejection);
+        if (inspected.manifest.id !== entry.id || inspected.manifest.version !== entry.version) throw new Error('Personal plugin package identity changed');
+        return await withGhostInstallLock(entry.id, async () => {
+          if (!isCurrent()) throw new Error('Personal plugin owner changed');
+          const current = findInstalledGhostForLocalUpdate(manager.list(), entry.id, instance, approval);
+          if (!current || current.namespace !== LOCAL_PLUGIN_NAMESPACE || current.namespaceState !== 'confirmed') throw new Error('Personal local installation changed');
+          assertGhostRelocationIdle(instance);
+          const receipt = current.approval.state === 'approved' ? manager.readApprovedInstallReceipt(instance, current.approval.revision) : null;
+          const origin = receipt?.installOrigin === 'agent-forge' ? 'agent-forge' as const : undefined;
+          const updateSource = readLocalGhostUpdateSource(manager, current, inspected, origin);
+          if (updateSource.sourceChanged) throw new Error('Personal plugin update requires explicit source-change confirmation');
+          const consent = await obtainGhostInstallConsent({ mode: 'automatic' }, current, inspected.manifest, inspected.packageSha256);
+          // Preserve a verified code-only recovery package; credentials and data
+          // remain owned by the existing installer/instance and are not copied.
+          const backup = await snapshotInstalledGhostPackage(instance, { listInstalled: () => [current] });
+          if (backup.status !== 'prepared') throw new Error('Unable to preserve the previous local plugin package');
+          const backupHash = createHash('sha256').update(backup.bytes).digest('hex');
+          const backupFile = ownerScopedUserDataPath('personal-plugins', 'backups', `${entry.id}-${backupHash}.cindy`);
+          await fs.promises.mkdir(path.dirname(backupFile), { recursive: true, mode: 0o700 });
+          try { await fs.promises.writeFile(backupFile, backup.bytes, { flag: 'wx', mode: 0o600, flush: true }); }
+          catch (error) { if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error; }
+          if (createHash('sha256').update(await fs.promises.readFile(backupFile)).digest('hex') !== backupHash)
+            throw new Error('Previous personal plugin backup verification failed');
+          const backupInspection = await manager.inspect(backupFile);
+          if ('rejection' in backupInspection) throwInstallError(backupInspection.rejection);
+          if (!isCurrent()) throw new Error('Personal plugin owner changed');
+          assertGhostRelocationIdle(instance);
+          const updated = await updateLocalGhostPackageLocked(manager, file, inspected, inspected.packageSha256,
+            approval, instance, consent, origin, isCurrent, false);
+          const actual = findInstalledGhostByInstanceId(manager.list(), instance);
+          const installedReceipt = actual?.approval.state === 'approved' ? manager.readApprovedInstallReceipt(instance, actual.approval.revision) : null;
+          if (!actual || installedReceipt?.packageSha256 !== inspected.packageSha256) throw new Error('Personal plugin installed package verification failed');
+          const installedHash = await personalPluginContentHash(actual.dir);
+          await fs.promises.mkdir(path.dirname(recordFile), { recursive: true, mode: 0o700 });
+          atomicWriteFileSync(recordFile, JSON.stringify({ version: 1, sourceHash: entry.contentHash,
+            revision: ghostInstallApprovalToken(actual.approval), installedHash, backupFile,
+            packageSha256: inspected.packageSha256, at: Date.now() }));
+          return updated;
+        });
+      } finally {
+        try { if (temp) await fs.promises.rm(temp, { recursive: true, force: true }); }
+        finally { release(); }
+      }
+    },
+  });
 }
 
 /**
@@ -8469,6 +8409,7 @@ async function installOrUpdateMarketGhostPackageLocked(
 ): Promise<InstalledGhost> {
   const mutationOwner = captureGhostMutationOwner();
   let releaseMutation: (() => void) | null = null;
+  let releaseBrowserUpdate: (() => void) | undefined;
   let releaseSync: (() => void) | undefined;
   try {
     const manager = getGhostManager();
@@ -8605,6 +8546,10 @@ async function installOrUpdateMarketGhostPackageLocked(
 
     expected.beforeCommitInLock?.();
     if (expected.sourceChanged) assertGhostRelocationIdle(installedGhostStoragePart(installed));
+    releaseBrowserUpdate = await getGhostBrowserExtensionSlot().prepareUpdate(installedGhostStoragePart(installed));
+    const recheckOwner = beginGhostMutation(mutationOwner);
+    recheckOwner();
+    expected.assertCurrent?.();
     const runtime = getGhostRuntime();
     releaseSync = pluginDeviceSync.beginMutation(installedGhostStoragePart(installed));
     runtime.stop(installedGhostStoragePart(installed));
@@ -8683,13 +8628,19 @@ async function installOrUpdateMarketGhostPackageLocked(
       throwInstallError(result.rejection);
     }
     runtime.resetFuse(installedGhostStoragePart(result.ghost));
-    spawnIfResident(result.ghost);
     await expected.afterCommitInLock?.(result.ghost, commitEvidence);
+    spawnIfResident(result.ghost);
     await bindPluginUsage(result.ghost);
     return result.ghost;
   } finally {
-    releaseSync?.();
-    releaseMutation?.();
+    releaseBrowserUpdate?.();
+    // The manager's package-change event precedes the provenance ledger commit.
+    // Publish the completed facts, including failures/rollback, while the owner lease is held.
+    try { if (releaseMutation) broadcastGhostsChanged(getGhostManager().list()); }
+    finally {
+      releaseSync?.();
+      releaseMutation?.();
+    }
   }
 }
 
@@ -8884,6 +8835,20 @@ async function uninstallGhostAndCleanupLocked(
 /** 市场默认安装必须尊重用户对内置插件的显式卸载选择。 */
 export function isBuiltinGhostRemovedByUser(id: string): boolean {
   return readBuiltinTombstones(brainRootDir()).includes(id);
+}
+
+/**
+ * 商店 Release 能否把内置播种管理的实例(seeded 台账内)换回商店包:种子已撤,或当前种子
+ * 不比该 Release 新(相同取商店)。不归播种管理、台账读不了时都不放行。
+ */
+export function builtinSeedYieldsToStoreVersion(id: string, storeVersion: string): boolean {
+  try {
+    if (!readBuiltinSeededIds(brainRootDir()).includes(id)) return false;
+  } catch {
+    return false;
+  }
+  const seedVersion = readBuiltinSeedVersion(builtinSeedRootDirs(), id);
+  return seedVersion === null || !seedIsNewerThanStore(seedVersion, storeVersion);
 }
 
 /**
@@ -9153,18 +9118,6 @@ export function registerGhostIpc(): void {
       providers: () => getDesktopProviderService({ allowSideEffects: false }).listProviders({ allowSideEffects: false, snapshotOnly: true }),
       agents: async () => { const { getMakerIfReady } = await import('../maker-host/index.js'); return getMakerIfReady()?.listAvailableAgents() ?? []; },
     });
-  const nativeUiIpc = createPluginUiIpcHandlers({ service: getPluginUiService, pageHost: getPluginUiPageHost,
-    assertTrusted: assertTrustedAppRendererEvent, devEnabled: () => !app.isPackaged, fail: throwIpcError });
-  ipcMain.handle(PLUGIN_UI_READ, nativeUiIpc.read);
-  ipcMain.handle(PLUGIN_UI_INVOKE, nativeUiIpc.invoke);
-  ipcMain.handle(PLUGIN_UI_CHOOSE_RENDERER, nativeUiIpc.choose);
-  ipcMain.handle(PLUGIN_UI_PAGE_OPEN, nativeUiIpc.openPage);
-  ipcMain.handle(PLUGIN_UI_PAGE_CLOSE, nativeUiIpc.closePage);
-  ipcMain.handle(PLUGIN_UI_RELEASE, nativeUiIpc.release);
-  ipcMain.handle(PLUGIN_UI_INSPECT, nativeUiIpc.inspect);
-  registerPluginTabViewIpc(ipcMain, getPluginTabViewHost, assertTrustedAppRendererEvent);
-  pluginAppearanceIpc.register(ipcMain);
-  pluginUiVisibilityIpc.register(ipcMain);
   remotePluginManagement = new RemotePluginManagement({
     list: availableGhosts,
     settingsPage: true,
@@ -9825,9 +9778,6 @@ export function registerGhostIpc(): void {
     if (!id) throwIpcError('PERMISSION_DENIED', '非意识电子脑上下文');
     requireGhostAvailableForActiveSession(id);
     const type = (payload as { type?: unknown } | null)?.type;
-    if (type === 'ui-appearance-request') return getPluginAppearanceService().handle(id, payload);
-    if (type === 'ui-visibility-request') return getPluginUiVisibilityService().handle(id, payload);
-    if (typeof type === 'string' && type.startsWith('ui-')) return getPluginUiService().handle(id, payload);
     if (type === 'recommendations-update') {
       const ghost = findGhostForInstanceId(id);
       if (!ghost || !ghost.enabled) return { ok: false, errorCode: 'GHOST_ASLEEP' };
@@ -10541,17 +10491,17 @@ export function registerGhostIpc(): void {
 
   // ── 目录级禁用(ghostWorkdirPrefs;插件页的项目范围视图)──
   // 读走 sendSync:切换范围时禁用清单要与卡片同帧渲染(规则 7 无跳变),
-  // 文件读取极小且带 mtime 缓存。写走 invoke;写后广播 ghosts:changed
-  // (renderer 复用同一订阅热更,多窗口同步)。
+  // 文件读取极小且带 mtime 缓存。写走 invoke；仅广播目录策略，多窗口同步。
   ipcMain.on('ghosts:workdir-prefs', (event, workdir: unknown) => {
     event.returnValue = {
       disabled: typeof workdir === 'string' ? listDisabledGhostIdsForWorkdir(workdir) : [],
+      workdirKey: typeof workdir === 'string' ? normalizeWorkdirKey(workdir) : '',
     };
   });
   ipcMain.handle('ghosts:workdir-prefs', (event, workdir: unknown) => {
     assertTrustedAppRendererEvent(event);
     if (typeof workdir !== 'string') throwIpcError('INVALID_PARAMS', 'workdir must be a string');
-    return { disabled: listDisabledGhostIdsForWorkdir(workdir) };
+    return { disabled: listDisabledGhostIdsForWorkdir(workdir), workdirKey: normalizeWorkdirKey(workdir) };
   });
   ipcMain.handle(
     'ghosts:workdir-prefs:set',
@@ -11082,6 +11032,17 @@ export function registerGhostIpc(): void {
   /* ── Library(持久作品库)设置面 IPC ─────────────────────────────────
    * 目录选择永远由**宿主**弹(pick 同款),插件无权发起;装入确认与设置页
    * 共用同一裁决链(原生选择器 → 候选校验 → binding/迁移)。 */
+  // 详细介绍:详情页打开时按需读取,不随 ghosts:list 广播;不进 device-link 白名单
+  // (手机端经 mobilePageService 的插件详情资源单独投影)。
+  // locale 由界面语言传入(主进程语言同步可能晚于界面切换);只用来在已声明的介绍文件里选择。
+  ipcMain.handle('ghosts:readme', async (event, id: unknown, locale: unknown) => {
+    assertTrustedAppRendererEvent(event);
+    if (typeof id !== 'string' || !isGhostInstanceId(id)) throwIpcError('INVALID_PARAMS', '非法插件 id');
+    const ghost = findGhostForInstanceId(id);
+    if (!ghost?.manifest.readme) return null;
+    const uiLocale = typeof locale === 'string' && locale.length <= 32 ? locale : getResolvedMainLocale();
+    return readGhostReadmeFromDir(ghost.dir, ghost.manifest, uiLocale);
+  });
   ipcMain.handle('ghosts:library-overview', async (event, id: unknown) => {
     assertTrustedAppRendererEvent(event);
     if (typeof id !== 'string' || !isGhostInstanceId(id)) throwIpcError('INVALID_PARAMS', '非法插件 id');
@@ -11531,12 +11492,18 @@ export function resolveGhostWebviewAttach(
   };
 }
 
-/** Local and remote project controls share persistence, setup wake-up and list invalidation. */
+/** Local and remote project controls share persistence and scoped policy invalidation. */
 function setGhostWorkdirDisabledAndNotify(workdir: string, storedId: string, disabled: boolean): string[] {
   const wasDisabled = isGhostDisabledForWorkdir(storedId, workdir);
   const next = setGhostDisabledForWorkdir(workdir, storedId, disabled);
-  if (wasDisabled !== disabled) getGhostSetupChangeBus().emit(storedId, { source: 'workdir_policy' });
-  broadcastGhostsChanged(getGhostManager().list());
+  if (wasDisabled !== disabled) {
+    getGhostSetupChangeBus().emit(storedId, { source: 'workdir_policy' });
+    broadcastGhostWindowPush('ghosts:workdir-prefs-changed', {
+      workdirKey: normalizeWorkdirKey(workdir), disabled: next,
+    });
+    // Remote clients keep their existing resource invalidation contract.
+    notifyMobilePluginsChanged();
+  }
   return next;
 }
 
@@ -11551,6 +11518,11 @@ function broadcastGhostProvisioning(active: boolean): void {
  * 非权威的空表(账号切换窗口里 manager 尚未重扫)必须当作"还不知道",
  * 否则会把用户的未读整批误清。缺省 false = 保守。
  */
+/** Re-publish the roster after a ledger-only change (a failed source replacement restoring its route). */
+export function republishGhostRoster(): void {
+  broadcastGhostsChanged(getGhostManager().list());
+}
+
 function broadcastGhostsChanged(
   ghosts: InstalledGhost[],
   rosterAuthoritative = false,
@@ -11564,12 +11536,7 @@ function broadcastGhostsChanged(
   },
 ): void {
   if (!opts?.projectionOnly) {
-    void getPluginAppearanceService().reconcile().catch(() => log.warn('Plugin appearance reconciliation deferred'));
-    const instances = nativeUiInstances(ghosts);
-    pluginUiServiceSingleton?.reconcile(instances);
-    pluginTabViewHostSingleton?.reconcile();
-    void pluginUiVisibilityServiceSingleton?.reconcile();
-    getAppShortcutStore().setPluginShortcuts(pluginCommandShortcuts(instances));
+    managerSingleton?.invalidateNotificationCandidates();
     refreshPluginApps(ghosts, { find: findGhostForInstanceId,
       evidence: id => getGhostManager().approvedInstallEvidence(id), available: () => !isGhostBoundaryPending() });
     getGhostSetupManifestTracker().note(ghosts);
@@ -11711,7 +11678,12 @@ export function refreshGhostLocalization(previousLocale: SupportedLocale): void 
     previousLocale,
     currentLocale: getResolvedMainLocale(),
     list: () => manager.list(),
-    broadcastChanged: (ghosts) => broadcastGhostsChanged(ghosts),
+    broadcastChanged: (ghosts) => {
+      // App configs retain localized titles/tool descriptions used by newly published cards.
+      refreshPluginApps(ghosts, { find: findGhostForInstanceId,
+        evidence: id => manager.approvedInstallEvidence(id), available: () => !isGhostBoundaryPending() });
+      broadcastGhostsChanged(ghosts, false, { projectionOnly: true });
+    },
     sendContextChanged: (ghost, message) => sendToGhostLogic(installedGhostStoragePart(ghost), message),
   });
 }

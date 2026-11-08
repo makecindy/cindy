@@ -19,6 +19,7 @@ import { toast } from '@/lib/toast';
 import { useConfirmDialog } from '@/components/ui/confirm-dialog-provider';
 import { deleteCustomMcpServer, listCustomMcpServers } from '@/lib/customMcpServers';
 import { McpServerDialog } from './McpServerDialog';
+import { McpDuplicateNotice } from './McpDuplicateNotice';
 
 import type { CustomMcpConfig } from '@/../shared/customMcp';
 
@@ -186,6 +187,7 @@ export function McpServersSection() {
         </p>
       </div>
 
+      <McpDuplicateNotice />
       {!loading && (
         <div
           className="flex flex-col rounded-xl border border-[var(--settings-theme-card-border)] bg-[var(--settings-theme-card-bg)]"

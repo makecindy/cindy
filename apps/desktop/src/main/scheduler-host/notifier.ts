@@ -31,8 +31,11 @@ export interface DesktopNotifierDeps {
   sendFeishuSessionNotification?: (sessionId: string, text: string) => Promise<void>;
   /** Global desktop preference, evaluated at send time. */
   shouldNotifyDesktop: () => boolean;
-  /** Whether Agent Island should arbitrate routine scheduler desktop notifications. */
-  isAgentIslandEnabled: () => boolean;
+  /**
+   * The task surface (Agent Notch, or the Live Activity while it can show) already alerts
+   * for this run, so the routine desktop notification would repeat it.
+   */
+  isRunAlertShownElsewhere: (run: ScheduleRun) => boolean;
   wecomGroupPublisher?: WecomGroupNotificationPublisher;
 }
 
@@ -59,7 +62,7 @@ export class DesktopNotifier implements Notifier {
       schedule.notify.desktop &&
       !muted &&
       this.deps.shouldNotifyDesktop() &&
-      (!this.deps.isAgentIslandEnabled() || (run.status === 'failed' && !run.sessionId))
+      (!this.deps.isRunAlertShownElsewhere(run) || (run.status === 'failed' && !run.sessionId))
     ) {
       try {
         this.notifyDesktop(schedule, run);

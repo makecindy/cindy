@@ -218,6 +218,8 @@ export { categorize, CATEGORY_LABEL_KEY, type ModelCategory } from './sourceSwit
 export interface ModelMemoryAccessors {
   /** False for engines without a memory store; edits then use the configuration callback. */
   supportsAgent?: (agent: AgentKind) => boolean;
+  /** Optional atomic alias-group edits; absent on older remote hosts. */
+  editMany?: (ops: readonly import('@/state/providerModelMemory').ProviderModelMemoryEdit[]) => boolean;
   getEffort: (agent: AgentKind, providerId: string, modelId: string) => Effort | undefined;
   setEffort: (agent: AgentKind, providerId: string, modelId: string, effort: Effort) => void;
   /** 真正选中 / 使用模型时同时更新该来源 lastModel;只编辑非选中行不调用。 */
@@ -740,6 +742,10 @@ export type ModelSelectorSource =
 export type ModelSelectorProps = ModelSelectorBaseProps & ModelSelectorSource;
 
 export interface ModelSelectorBaseProps {
+  /** Nonzero request from a terminal-error recovery action; selection still uses the normal transaction. */
+  openRequest?: number;
+  onOpenRequestConsumed?: (nonce: number) => void;
+  'data-setting-id'?: string;
   /** 语义同 ModelSelectorContentProps.pluginModels。 */
   pluginModels?: PluginModelsPickerProps;
   /** Authoritative surface-specific allowlist (e.g. one-shot or vision routes). */
@@ -1419,7 +1425,7 @@ function ModelSelectorContentView({
   const pi = useAgentCapabilities('pi', catalogDeviceId);
   // 本机折扣 GPT 仍按本机 API key gate；device-link 必须只看被控端 provider 状态。
   // 旧被控端不支持 provider:list 时按远端 capabilities 退化，不得误用控制端 key。
-  const { hasSavedKey } = useApiKey();
+  const { hasSavedKey, canReadKey } = useApiKey();
   // 供应商来源:本机会话用本机 useProviders;device-link 远程会话用**被控端**供应商目录
   // (useDeviceProviders,隧道 maker:provider:list)。两 hook 都无条件调用(hooks 规则),按 deviceId 取。
   const localProviders = useProviders();
@@ -2157,6 +2163,9 @@ function ModelSelectorContentView({
       // 不按前缀落网关),不依赖 Cindy 登录/网关 key(#1568)。flat 列表(provider
       // 为 null,无供应商概念)与内置来源保持原前缀判定。
       if (isCustomRoutedProvider(provider)) return false;
+      // Auxiliary windows cannot inspect local credentials and use Main's catalog verdict.
+      // Full renderers retain the existing key gate when a stale catalog still says connected.
+      if (provider?.id === 'xd' && canReadKey === false) return !provider.connected;
       return isCodexGatewayWireModel(id) && !hasSavedKey;
     }
     if (remoteModelListStatus !== 'ready') return true;
@@ -4083,6 +4092,8 @@ function ModelSelectorContentView({
 }
 
 export function ModelSelector({
+  openRequest = 0,
+  onOpenRequestConsumed,
   pluginModels,
   providersOverride,
   providersOverrideState,
@@ -4133,6 +4144,7 @@ export function ModelSelector({
   unknownModelLabel,
   unknownModelDescription,
   ariaContext,
+  'data-setting-id': settingId,
   currentProviderId,
   sourceDisconnected = false,
   actualRoute = false,
@@ -4210,6 +4222,14 @@ export function ModelSelector({
     },
     [deviceId, disabled, discovery, resetDiscoveryPresentation, providersOverride, providersOverrideState, sshCodexRefresh],
   );
+
+  const consumedOpenRequest = useRef(0);
+  useEffect(() => {
+    if (!openRequest || consumedOpenRequest.current === openRequest || disabled) return;
+    consumedOpenRequest.current = openRequest;
+    handleOpenChange(true);
+    onOpenRequestConsumed?.(openRequest);
+  }, [openRequest, disabled, handleOpenChange, onOpenRequestConsumed]);
 
   // AlertDialog 打开时会被 Popover 视作外部交互并请求关闭。Agent 分段确认期间
   // 强制保留已展开的模型面板；确认结束后把底层 open 恢复为 true，避免弹窗关闭
@@ -4653,6 +4673,7 @@ export function ModelSelector({
 
   const trigger = (
     <button
+      data-setting-id={settingId}
       type="button"
       disabled={switching || disabled}
       // 阻 mousedown 抢焦点 —— 否则点 pill 会先把光标从输入框挪走,选完模型后
@@ -5058,9 +5079,8 @@ export function ModelSelector({
         collisionPadding={8}
         className={cn(
           // field 形态面板宽度绑定 trigger(DESIGN.md §4 Select & Dropdown 宽度铁则,
-          // 与隔壁权限字段同规则),且压掉共享 PopoverContent 的 shadow-md(§4 面板无
-          // 阴影);toolbar 等非 field 的 Radix 分支维持既有视觉不动。
-          isFieldTrigger ? 'w-[var(--radix-popover-trigger-width)] shadow-none' : 'w-auto',
+          // 与隔壁权限字段同规则);toolbar 等非 field 的 Radix 分支维持既有视觉不动。
+          isFieldTrigger ? 'w-[var(--radix-popover-trigger-width)]' : 'w-auto',
           'flex min-h-0 max-h-[var(--radix-popover-content-available-height)] flex-col overflow-hidden rounded-[12px] p-0',
           'bg-[var(--model-dropdown-bg)]',
           'border border-[var(--model-dropdown-border)]',

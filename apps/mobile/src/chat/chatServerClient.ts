@@ -119,6 +119,12 @@ const SETTINGS_ROUTES: Record<Exclude<ChatGroupSettingsAction['type'], 'notifica
 
 export interface ChatInviteLink { link: string; expiresAt: string | null; reusable?: boolean }
 const INVITE_TOKEN = /^[A-Za-z0-9_-]{43}$/;
+/** Only a companion's profile row; an older server ignores `key` and returns every row, picked the same way. */
+const PROFILE_ONLY = `/preferences?key=${encodeURIComponent('companion.profile.v1')}`;
+/** A profile too large for the preferences is kept in the companion store (Desktop companion-cloud/store.ts). */
+const PROFILE_STORED = `/companion-store/entry?key=${encodeURIComponent('companion.profile.v1')}`;
+/** The stored profile is in the private bucket: present, but not downloaded for a check. */
+const PROFILE_IN_BUCKET = Symbol('profile-in-bucket');
 
 /** Prefer an owned owner, then the human's admin role, as on Desktop. */
 export function chatGroupManager(snapshot: ChatSnapshot, self: string) {
@@ -464,6 +470,24 @@ export function createChatServerClient(request: ChatRequest, personalList = crea
   const retryDelays = [30_000, 60_000, 120_000, 240_000, 480_000];
   let historyCache: Promise<ChatHistory> | undefined;
   const cache = () => openHistory ? historyCache ??= identity().then(openHistory).catch(error => { historyCache = undefined; throw error; }) : undefined;
+  /** A companion's profile: the preference row, else the companion store (absent on older servers or when switched off). */
+  async function companionProfile(actorId: string): Promise<unknown> {
+    const rows = await request<Array<{ key?: unknown; value?: unknown }>>(PROFILE_ONLY, 'GET', undefined, chatId(actorId));
+    const row = (Array.isArray(rows) ? rows : []).find(candidate => candidate?.key === 'companion.profile.v1');
+    if (row) return row.value;
+    try {
+      const entry = await request<{ deleted?: unknown; value?: unknown; blob?: unknown } | null>(PROFILE_STORED, 'GET', undefined, chatId(actorId));
+      if (!entry || typeof entry !== 'object' || Array.isArray(entry) || entry.deleted !== false) return undefined;
+      if (entry.blob === true) return PROFILE_IN_BUCKET;
+      // Desktop keeps the value wrapped with the preference revision it supersedes (companion-cloud/store.ts).
+      const wrapped = entry.value as { companionStore?: unknown; value?: unknown } | null;
+      return wrapped && typeof wrapped === 'object' && wrapped.companionStore === 1 ? wrapped.value : entry.value;
+    } catch (error) {
+      // 404: an older server or the store switched off. Anything else is a failed read, not "no profile".
+      if (error && typeof error === 'object' && 'status' in error && error.status === 404) return undefined;
+      throw error;
+    }
+  }
   async function readPlans(room: string, messages: readonly ChatMessage[]): Promise<ChatPlan[] | undefined> {
     const ids = [...new Set(messages.map(messagePlanId).filter((id): id is string => id !== null))];
     try {
@@ -688,8 +712,9 @@ export function createChatServerClient(request: ChatRequest, personalList = crea
         if (actor.kind !== 'bot') continue;
         if (actor.externalId === 'cindy-default') { ids.push(actor.externalId); continue; }
         try {
-          const rows = await request<Array<{ key?: unknown; value?: unknown }>>('/preferences', 'GET', undefined, chatId(actor.id));
-          const profile = rows?.find(row => row.key === 'companion.profile.v1')?.value as { templateId?: unknown; soul?: unknown } | undefined;
+          const value = await companionProfile(actor.id);
+          if (value === PROFILE_IN_BUCKET) { if (previous.includes(actor.externalId)) ids.push(actor.externalId); continue; }
+          const profile = value as { templateId?: unknown; soul?: unknown } | undefined;
           if (profile?.templateId === 'cindy' || (typeof profile?.soul === 'string' && inferBotTemplatePresetId(profile.soul) === 'cindy')) ids.push(actor.externalId);
         } catch { if (previous.includes(actor.externalId)) ids.push(actor.externalId); }
       }
@@ -697,10 +722,11 @@ export function createChatServerClient(request: ChatRequest, personalList = crea
     },
     /** The main computer has uploaded the profile snapshot another computer builds the companion from. */
     async hasProfileSnapshot(actorId: string): Promise<boolean> {
-      const rows = await request<Array<{ key?: unknown; value?: unknown }>>('/preferences', 'GET', undefined, chatId(actorId));
-      const row = (Array.isArray(rows) ? rows : []).find(candidate => candidate?.key === 'companion.profile.v1');
+      const stored = await companionProfile(actorId);
+      // Only Desktop writes the bucket copy, from a complete snapshot.
+      if (stored === PROFILE_IN_BUCKET) return true;
       // Same check as Desktop (companion-cloud/uploader.ts isCompanionProfileSnapshot): a complete profile.
-      const value = row?.value as Record<string, unknown> | null | undefined;
+      const value = stored as Record<string, unknown> | null | undefined;
       return !!value && typeof value === 'object' && !Array.isArray(value)
         && ['name', 'description', 'soul', 'systemPrompt', 'user'].every(field => typeof value[field] === 'string');
     },

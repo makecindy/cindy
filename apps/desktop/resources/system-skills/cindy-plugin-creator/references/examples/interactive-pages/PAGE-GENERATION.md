@@ -75,7 +75,7 @@
 | `getHostContext()` / `onhostcontextchanged` | 读 `theme`、`styles.variables`，跟随深浅色 |
 | `createSamplingMessage` | 不支持。需要 AI 时用 `sendMessage` 交回对话 |
 
-结果字段：`content` 给 AI 和用户看的摘要与文件引用；`structuredContent` 是 JSON，**AI 也看得到**；根 `_meta` 只给页面。
+页面 `callServerTool` 的整个结果只回页面；要告知 AI，用上表的 `updateModelContext` 或 `sendMessage`。AI 调用工具时 `content` / `structuredContent` 进入模型，根 `_meta` 只给页面；双向可见工具应把只供页面的数据放根 `_meta`。
 
 ## 4. 标准工具
 
@@ -115,7 +115,7 @@
   }
   ```
 - **导入（CSV / XLSX）**：显示文件 → 用户点按钮上传，暂存后返回批次和预览（总行数、前几行、出错的行、「确认导入」「取消」）→ 确认后 `api_write({path:'/api/imports/confirm', body:{batchId}, idempotencyKey})`。解析和校验在工具背后，预览和导入用同一套规则。交接的和 `pick_files` 选的文件都交给 `upload_files`；预览渲染进容器，不换文档。
-- **大小**：页面与 Cindy 单条消息 ≤ 4 MiB，卡片保存的结果尽量 ≤ 1 MiB。远程和手机打开时 SDK（约 337 KB，gzip 约 78 KB）随页面传输，页面上限约 3.94 MB，加上 SDK 才超限时不带 SDK 打开，`import` 失败。插件可能对 `html` 长度另有限制（如示例 show_page 限 200,000 字符）。首屏只放必要数据，其余按需读取。
+- **大小**：页面与 Cindy 单条消息 ≤ 4 MiB，整张卡片保存预算 1 MiB（含参数和工具元数据），超限时结果会被换成 `MCP_APP_RESULT_TOO_LARGE`。远程和手机打开时 SDK（约 337 KB，gzip 约 78 KB）随页面传输，页面上限约 3.94 MB，加上 SDK 才超限时不带 SDK 打开，`import` 失败。插件可能对 `html` 长度另有限制（如示例 show_page 限 200,000 字符）。首屏只放必要数据，其余按需读取。
 - **不能做**：弹新窗口或让整个窗口跳转。用户文档里的内容不能当脚本执行。
 
 ## 6. 常见错误

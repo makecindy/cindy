@@ -1,3 +1,4 @@
+import { windowBehaviorSettings } from './WindowBehaviorSection.settings-search';
 /**
  * WindowBehaviorSection — 「应用行为」section:本机相关的应用级开关。
  *
@@ -6,6 +7,8 @@
  *  - 菜单栏余量:macOS 14+ 的原生菜单栏项,默认开启。
  *  1. 「保持电脑唤醒」(keepAwake):main 用 powerSaveBlocker 防系统休眠、放行锁屏,
  *     让后台 agent / 定时任务持续运行。跨平台生效(mac/win/linux),故常驻显示。
+ *  - 离开时继续工作(awayGuard,macOS 14+):任务进行中不熄屏，主人离开后由防窥遮罩
+ *    覆盖，本机一有输入即系统锁屏。见 main/remote-desktop/awayGuard.ts。
  *  2. 「关闭主窗口时」:Windows 选择退出或收起到托盘,Linux 选择退出或最小化。
  *  3. 「后台窗口首次左键点击仅激活不透传」(swallowActivationClick,PR #446):仅
  *     macOS + Windows 有实际效果,Linux 上两条底层路径均 no-op,故该行在 Linux 隐藏。
@@ -17,6 +20,7 @@
 import { Fragment, useEffect, useState, type ReactNode } from 'react';
 import { useTranslation } from 'react-i18next';
 
+import { Button } from '@/components/ui/button';
 import { SegmentedControl } from '@/components/ui/segmented-control';
 
 import { Switch } from '@/components/ui/switch';
@@ -31,8 +35,10 @@ import {
 } from './settingsRowClasses';
 import { useSwallowActivationClickSettings } from '@/hooks/useSwallowActivationClickSettings';
 import { useKeepAwakeSetting } from '@/hooks/useKeepAwakeSetting';
+import { useAwayGuardSetting } from '@/hooks/useAwayGuardSetting';
 import { useLoginItemSetting } from '@/hooks/useLoginItemSetting';
 import { useMenubarSetting } from '@/hooks/useMenubarSetting';
+import { isAwayGuardDelaySeconds } from '../../../shared/awayGuard';
 import {
   isLinuxCloseBehavior,
   isWindowsCloseBehavior,
@@ -45,6 +51,7 @@ type DesktopCloseBehavior = LinuxCloseBehavior | WindowsCloseBehavior;
 /** 一行开关:左侧标签 + 说明(+ 可选补充说明行),右侧开关。 */
 function BehaviorRow({
   id,
+  'data-setting-id': settingId,
   label,
   hint,
   note,
@@ -54,6 +61,7 @@ function BehaviorRow({
   disabled,
 }: {
   id?: string;
+  'data-setting-id': string;
   label: string;
   hint: string;
   note?: ReactNode;
@@ -74,7 +82,7 @@ function BehaviorRow({
         {note}
       </div>
 
-      <Switch
+      <Switch data-setting-id={settingId}
         checked={checked}
         onCheckedChange={onCheckedChange}
         aria-label={ariaLabel}
@@ -89,6 +97,7 @@ export function WindowBehaviorSection() {
   const { keepAwake, setKeepAwake } = useKeepAwakeSetting();
   const loginItem = useLoginItemSetting();
   const menubar = useMenubarSetting();
+  const awayGuard = useAwayGuardSetting();
   const { t } = useTranslation();
   // macOS 上 acceptFirstMouse 是 Cocoa 级参数、只在 BrowserWindow 构造时读一次,
   // 用户切完开关下次启动才生效——单独渲染一行"需要重启应用"避免和主 hint 混在
@@ -141,29 +150,114 @@ export function WindowBehaviorSection() {
       key: 'keep-awake',
       node: (
         <BehaviorRow
-          id="settings-search-settings-devices-keepAwake"
-          label={t('settings.devices.keepAwake')}
-          hint={t('settings.devices.keepAwakeHint')}
+          id={windowBehaviorSettings.devicesKeepAwake.targetId}
+          data-setting-id={windowBehaviorSettings.devicesKeepAwake.id}
+          label={t(windowBehaviorSettings.devicesKeepAwake.titleKey)}
+          hint={t(windowBehaviorSettings.devicesKeepAwake.descriptionKey)}
           checked={keepAwake}
           onCheckedChange={(v) => void setKeepAwake(v)}
-          ariaLabel={t('settings.devices.keepAwake')}
+          ariaLabel={t(windowBehaviorSettings.devicesKeepAwake.titleKey)}
         />
       ),
     },
   ];
+
+  if (awayGuard.available) {
+    rows.push({
+      key: 'away-guard',
+      node: (
+        <BehaviorRow
+          id={windowBehaviorSettings.awayGuard.targetId}
+          data-setting-id={windowBehaviorSettings.awayGuard.id}
+          label={t(windowBehaviorSettings.awayGuard.titleKey)}
+          hint={t(windowBehaviorSettings.awayGuard.descriptionKey)}
+          checked={awayGuard.state?.enabled === true}
+          disabled={awayGuard.busy}
+          onCheckedChange={(enabled) => void awayGuard.setEnabled(enabled)}
+          ariaLabel={t(windowBehaviorSettings.awayGuard.titleKey)}
+          note={
+            <div className="flex flex-col items-start gap-2 pt-1">
+              {awayGuard.preview === 'permission' ||
+              (awayGuard.state?.enabled && awayGuard.state.permission === 'missing') ? (
+                <p className={SETTINGS_ROW_HINT_CLASS} role="status">
+                  {t('settings.windowBehavior.awayGuard.permission')}
+                </p>
+              ) : null}
+              <div className="flex flex-wrap items-center gap-2" aria-live="polite">
+                <Button
+                  data-settings-search-action="Shows the away cover now so the owner can check locking and unlocking"
+                  variant="secondary"
+                  size="sm"
+                  type="button"
+                  disabled={awayGuard.preview === 'starting'}
+                  onClick={() => void awayGuard.startPreview()}
+                >
+                  {t('settings.windowBehavior.awayGuard.preview')}
+                </Button>
+                {awayGuard.preview === 'starting' ? (
+                  <p className={SETTINGS_ROW_HINT_CLASS}>
+                    {t('settings.windowBehavior.awayGuard.previewStarting')}
+                  </p>
+                ) : awayGuard.preview === 'unavailable' ? (
+                  <p className={SETTINGS_ROW_HINT_CLASS} role="alert">
+                    {t('settings.windowBehavior.awayGuard.previewUnavailable')}
+                  </p>
+                ) : null}
+              </div>
+            </div>
+          }
+        />
+      ),
+    });
+  }
+
+  if (awayGuard.available && awayGuard.state?.enabled) {
+    rows.push({
+      key: 'away-guard-delay',
+      node: (
+        <div className="cindy-segmented-row px-4 py-4">
+          <div className="flex min-w-0 flex-col gap-1">
+            <p id={windowBehaviorSettings.awayGuardDelay.targetId}
+              className={SETTINGS_ROW_LABEL_CLASS}
+              style={{ letterSpacing: '0.12px' }}
+            >
+              {t(windowBehaviorSettings.awayGuardDelay.titleKey)}
+            </p>
+            <p className={SETTINGS_ROW_HINT_CLASS}>
+              {t(windowBehaviorSettings.awayGuardDelay.descriptionKey)}
+            </p>
+          </div>
+
+          <SegmentedControl data-setting-id={windowBehaviorSettings.awayGuardDelay.id}
+            aria-label={t(windowBehaviorSettings.awayGuardDelay.titleKey)}
+            value={String(awayGuard.state.delaySeconds ?? 'system')}
+            onValueChange={(value) => {
+              const seconds = Number(value);
+              void awayGuard.setDelay(isAwayGuardDelaySeconds(seconds) ? seconds : null);
+            }}
+            options={windowBehaviorSettings.awayGuardDelay.options.map((option) => ({
+              value: option.value,
+              label: t(option.labelKey),
+            }))}
+          />
+        </div>
+      ),
+    });
+  }
 
   if (loginItem.supported) {
     rows.push({
       key: 'login-item',
       node: (
         <BehaviorRow
-          id="settings-search-login-item"
-          label={t('settings.windowBehavior.loginItem.label')}
-          hint={t('settings.windowBehavior.loginItem.hint')}
+          id={windowBehaviorSettings.loginItemLabel.targetId}
+          data-setting-id={windowBehaviorSettings.loginItemLabel.id}
+          label={t(windowBehaviorSettings.loginItemLabel.titleKey)}
+          hint={t(windowBehaviorSettings.loginItemLabel.descriptionKey)}
           checked={Boolean(loginItem.state?.enabled || loginItem.state?.requiresApproval)}
           disabled={!loginItem.state?.available || loginItem.busy}
           onCheckedChange={(enabled) => void loginItem.setEnabled(enabled)}
-          ariaLabel={t('settings.windowBehavior.loginItem.label')}
+          ariaLabel={t(windowBehaviorSettings.loginItemLabel.titleKey)}
           note={
             <div
               className="text-12 leading-[1.4] text-[var(--settings-section-sublabel)]"
@@ -188,13 +282,14 @@ export function WindowBehaviorSection() {
       key: 'menubar',
       node: (
         <BehaviorRow
-          id="settings-search-menubar"
-          label={t('settings.windowBehavior.menubar.label')}
-          hint={t('settings.windowBehavior.menubar.hint')}
+          id={windowBehaviorSettings.menubarLabel.targetId}
+          data-setting-id={windowBehaviorSettings.menubarLabel.id}
+          label={t(windowBehaviorSettings.menubarLabel.titleKey)}
+          hint={t(windowBehaviorSettings.menubarLabel.descriptionKey)}
           checked={menubar.state?.enabled === true}
           disabled={menubar.busy}
           onCheckedChange={(enabled) => void menubar.setEnabled(enabled)}
-          ariaLabel={t('settings.windowBehavior.menubar.label')}
+          ariaLabel={t(windowBehaviorSettings.menubarLabel.titleKey)}
         />
       ),
     });
@@ -206,18 +301,18 @@ export function WindowBehaviorSection() {
       node: (
         <div className="cindy-segmented-row px-4 py-4">
           <div className="flex min-w-0 flex-col gap-1">
-            <p id="settings-search-settings-windowBehavior-closeBehavior-label"
+            <p id={windowBehaviorSettings.closeBehaviorLabel.targetId}
               className={SETTINGS_ROW_LABEL_CLASS}
               style={{ letterSpacing: '0.12px' }}
             >
-              {t('settings.windowBehavior.closeBehavior.label')}
+              {t(windowBehaviorSettings.closeBehaviorLabel.titleKey)}
             </p>
             <p className={SETTINGS_ROW_HINT_CLASS}>
-              {t('settings.windowBehavior.closeBehavior.hint')}
+              {t(windowBehaviorSettings.closeBehaviorLabel.descriptionKey)}
             </p>
           </div>
 
-          <SegmentedControl
+          <SegmentedControl data-setting-id={windowBehaviorSettings.closeBehaviorLabel.id}
             aria-label={t('settings.windowBehavior.closeBehavior.aria')}
             value={closeBehavior}
             onValueChange={setCloseBehavior}
@@ -236,9 +331,10 @@ export function WindowBehaviorSection() {
       key: 'activation-click',
       node: (
         <BehaviorRow
-          id="settings-search-activation-click"
-          label={t('settings.windowBehavior.swallowActivationClickLabel')}
-          hint={t('settings.windowBehavior.swallowActivationClickHint')}
+          id={windowBehaviorSettings.swallowActivationClickLabel.targetId}
+          data-setting-id={windowBehaviorSettings.swallowActivationClickLabel.id}
+          label={t(windowBehaviorSettings.swallowActivationClickLabel.titleKey)}
+          hint={t(windowBehaviorSettings.swallowActivationClickLabel.descriptionKey)}
           note={
             isMac ? (
               <p className={SETTINGS_ROW_HINT_CLASS}>

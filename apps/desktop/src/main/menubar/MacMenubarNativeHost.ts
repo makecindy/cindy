@@ -244,6 +244,9 @@ export class MacMenubarNativeHost {
         if (!settled) settle(false);
         log.debug('menu bar helper lost', { reason, code, signal });
         if (wasCurrent && this.pendingView && !this.permanentlyFailed) this.scheduleRestart(code, signal);
+        // The replacement starts with its panel closed. End the visible-panel lease now;
+        // schedule backoff first because clearing its readings can publish a new view.
+        if (wasCurrent) this.options.onMessage({ type: 'panel', open: false });
       };
       child.stdin.on('error', (error) => onLost(`stdin: ${error.message}`, null, null));
       child.on('error', (error) => onLost(`process: ${error.message}`, null, null));
