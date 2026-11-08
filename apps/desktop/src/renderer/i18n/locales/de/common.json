@@ -18981,6 +18981,7 @@
       "apply": "Übernehmen"
     },
     "source": {
+      "receivingOn": "Zielgerät: {{name}}",
       "description": "Wähle einen Computer, der mit diesem Konto angemeldet ist. Seine Plugins, Skills, Einstellungen und Verbindungen werden hier genauso eingerichtet; Anmeldungen und Schlüssel verlassen den Computer nur, wenn du es dort erlaubst.",
       "loading": "Deine anderen Computer werden gesucht…",
       "empty": "Keine anderen Computer für dieses Konto gefunden. Melde dich auf einem anderen Computer bei Cindy an und öffne dies dann erneut",

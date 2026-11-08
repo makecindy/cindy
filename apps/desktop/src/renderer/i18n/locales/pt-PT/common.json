@@ -19152,6 +19152,7 @@
       "apply": "Transferir"
     },
     "source": {
+      "receivingOn": "Dispositivo de destino: {{name}}",
       "description": "Escolha um computador com sessão iniciada nesta conta. Os plugins, competências, definições e ligações dele são configurados aqui da mesma forma; os inícios de sessão e as chaves só saem desse computador se o permitir nele.",
       "loading": "A procurar os seus outros computadores…",
       "empty": "Não foram encontrados outros computadores para esta conta. Inicie sessão no Cindy noutro computador e volte a abrir isto",
