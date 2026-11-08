@@ -17,6 +17,7 @@ export async function shareAvailabilityRequest<T>(shareId: string, action: strin
     ? await alternate()
     : await serverApiFetch<unknown>(`/api/device-link/provider-shares/availability/${encodeURIComponent(shareId)}/${action}`, {
       method: 'POST', body, baseUrl: () => { verify(); return endpoint; }, timeoutMs: 15_000,
+      allowedRedactedErrorCodes: ['NOT_FOUND'],
       cache: 'no-store', logLabel: '/api/device-link/provider-shares/availability', redactErrorDetails: true,
     });
   verify();

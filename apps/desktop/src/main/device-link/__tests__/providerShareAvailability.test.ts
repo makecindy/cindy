@@ -2,10 +2,13 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { providerShareGuestPeer, type ProviderShareOwned } from '@cindy/device-link';
 const f = vi.hoisted(() => ({
   connected: true, scope: 'owner', self: 'owner-pc', remote: true, budget: false,
-  request: vi.fn(), remember: vi.fn(), reconcile: vi.fn(), apply: vi.fn(), invalidate: vi.fn(),
+  netFetch: vi.fn(), log: { warn: vi.fn(), error: vi.fn(), debug: vi.fn() }, request: vi.fn(), remember: vi.fn(), reconcile: vi.fn(), apply: vi.fn(), invalidate: vi.fn(),
   members: [] as any[], leases: [] as any[],
 }));
-vi.mock('../../authManager.js', () => ({ getDeviceId: () => f.self }));
+vi.mock('electron', () => ({ net: { fetch: (...args: any[]) => f.netFetch(...args) } }));
+vi.mock('../../i18n.js', () => ({ getResolvedMainLocale: () => 'zh-CN' }));
+vi.mock('../../logger.js', () => ({ createLogger: () => f.log }));
+vi.mock('../../authManager.js', () => ({ getDeviceId: () => f.self, getAccessToken: () => null }));
 vi.mock('../../clientEndpointsService.js', () => ({ getClientEndpoint: () => 'https://fake.invalid' }));
 vi.mock('../../serverApiClient.js', () => ({ serverApiFetch: (...args: any[]) => f.request(...args) }));
 vi.mock('../../provider-group/managementScope.js', () => ({ captureProviderManagementScope: () => {
@@ -26,6 +29,7 @@ vi.mock('../providerShareGuest.js', () => ({ findReceivedShare: () => ({ standby
 vi.mock('../providerShareDelegatedAccess.js', () => ({ applyProviderShareDelegation: (...args: any[]) => f.apply(...args), delegatedProviderShareLeases: () => f.leases,
   invalidateProviderShareDelegation: (...args: any[]) => f.invalidate(...args) }));
 import { publishShareAvailability, prepareShareAvailability, allocateShareAvailability, readShareAvailabilityCatalog, beginShareAvailabilityTurn } from '../providerShareAvailability.js';
+const realApi = await vi.importActual<typeof import('../../serverApiClient.js')>('../../serverApiClient.js');
 const model = { id: 'allowed', name: 'Fake model', contextWindow: 200000, efforts: ['high'], defaultEffort: 'high' };
 const owned = { shareId: 'share', hostDeviceId: 'owner-pc', providerId: 'group', members: [{ memberId: 'member', status: 'active', joinedAt: '2026-11-08T00:00:00Z' }] } as ProviderShareOwned;
 beforeEach(() => {
@@ -35,10 +39,30 @@ beforeEach(() => {
   f.request.mockImplementation(async (path: string) => path.endsWith('/policy') ? { revision: 5, executors: [] } : {});
 });
 describe('standby client production entry points (all identities/providers are local fakes)', () => {
-  it('keeps a turn-bound completion receipt after revocation, without crossing account scope', async () => {
+  // Unit: 4505241076; the previous mocked API bypassed redaction and hid the
+  // lost NOT_FOUND code. Exercise preparation through the real HTTP wrapper.
+  it('cleans revoked standby grants through a redacted real HTTP error', async () => {
+    const peer = providerShareGuestPeer('share', 'member', 'guest');
+    f.leases = [{ peer, sessionId: 'task', lease: { availability: true, nonce: 'nonce' } }];
+    f.netFetch.mockResolvedValue(new Response(JSON.stringify({ error: { code: 'NOT_FOUND', message: 'private member details' } }), { status: 404 }));
+    f.request.mockImplementation(realApi.serverApiFetch);
+    await expect(prepareShareAvailability(peer)).rejects.toMatchObject({ code: 'NOT_FOUND', message: '请求失败 (404)' });
+    expect(f.invalidate).toHaveBeenCalledWith(peer, 'task', 'nonce');
+    expect(f.reconcile).toHaveBeenCalledWith(peer, null);
+    expect(JSON.stringify(f.log.warn.mock.calls)).not.toContain('private member details');
+  });
+  it.each([false, true])('captures completion before admission and retains it after revocation (lost response=%s)', async lost => {
     const peer = providerShareGuestPeer('share', 'member', 'guest');
     f.leases = [{ peer, sessionId: 'task', lease: { availability: true, generation: 'assignment-a' } }];
-    const complete = await beginShareAvailabilityTurn(peer, 'task', 'turn-a');
+    let complete: (() => Promise<void>) | undefined;
+    f.request.mockImplementation(async (path: string) => {
+      expect(complete).toBeTypeOf('function');
+      if (lost && path.endsWith('/accept')) throw new Error('admission response lost');
+      return {};
+    });
+    const admission = beginShareAvailabilityTurn(peer, 'task', 'turn-a', receipt => { complete = receipt; });
+    if (lost) await expect(admission).rejects.toThrow('admission response lost');
+    else await admission;
     expect(f.request).toHaveBeenLastCalledWith(expect.stringMatching(/\/accept$/), expect.objectContaining({
       body: { memberId: 'member', guestDeviceId: 'guest', sessionId: 'task', generation: 'assignment-a', executionId: 'turn-a' },
     }));

@@ -187,7 +187,8 @@ describe('guest shadow workspace', () => {
     let authorized = true;
     let busy = false;
     const receipts = [vi.fn(async () => {}), vi.fn(async () => {})];
-    const begin = vi.fn().mockResolvedValueOnce(receipts[0]).mockRejectedValueOnce(new Error('executor busy')).mockResolvedValueOnce(receipts[1]);
+    const admit = (receipt: () => Promise<void>) => async (_controller: string, _session: string, _execution: string, capture: (complete: () => Promise<void>) => void) => { capture(receipt); };
+    const begin = vi.fn().mockImplementationOnce(admit(receipts[0])).mockRejectedValueOnce(new Error('executor busy')).mockImplementationOnce(admit(receipts[1]));
     const host = makeHost(started, { isTurnRunning: () => busy, directGuestExecution: {
       ownerScope: () => 'fake-owner', sessionAllowed: () => authorized, sessionDelegated: () => true,
       beginDelegatedTurn: begin, allocate: async () => null, status: () => {}, release: async () => {},
@@ -200,7 +201,7 @@ describe('guest shadow workspace', () => {
       await waitForStarted(host, GUEST, RUN_1);
       await send(CALL_1);
       await vi.waitFor(() => expect(receipts[0]).toHaveBeenCalledTimes(1));
-      expect(begin).toHaveBeenLastCalledWith(GUEST, 'standby-task', `${RUN_1}:${CALL_1}`);
+      expect(begin).toHaveBeenLastCalledWith(GUEST, 'standby-task', `${RUN_1}:${CALL_1}`, expect.any(Function));
       await send(RUN_2);
       await vi.waitFor(() => expect(begin).toHaveBeenCalledTimes(2));
       expect(started[0].sends).toHaveLength(1);
@@ -211,6 +212,33 @@ describe('guest shadow workspace', () => {
       authorized = false;
       await host.abortControllers(controller => controller === GUEST);
       await vi.waitFor(() => expect(receipts[1]).toHaveBeenCalledTimes(1));
+    } finally { host.dispose(); }
+  });
+
+  // Unit: 4505241080; existing coverage rejected before capturing a reservation.
+  // Accept commits but its response is lost; even a failed first completion must
+  // retain the receipt for the existing retry path without executing the model.
+  it('releases uncertain standby admission and retries a failed completion', async () => {
+    const started: Started[] = [];
+    let reserved = false;
+    const complete = vi.fn().mockRejectedValueOnce(new Error('reply lost')).mockImplementation(async () => { reserved = false; });
+    const host = makeHost(started, { directGuestExecution: {
+      ownerScope: () => 'fake-owner', sessionAllowed: () => true, sessionDelegated: () => true,
+      beginDelegatedTurn: async (_controller, _session, _execution, capture: (complete: () => Promise<void>) => void) => {
+        capture(complete);
+        reserved = true;
+        throw new Error('admission response lost');
+      },
+      allocate: async () => null, status: () => {}, release: async () => {},
+      switch: async () => ({}), usage: async () => {}, delegate: async () => true, forget: () => true,
+    } });
+    try {
+      await host.handle(GUEST, { op: 'open', runId: RUN_1, agentKind: 'claude-code', payload: { json: openPayload('standby-task') } });
+      await waitForStarted(host, GUEST, RUN_1);
+      await host.handle(GUEST, { op: 'call', runId: RUN_1, callId: CALL_1, method: 'send', payload: { json: [{ content: 'fake', attachments: [] }] } });
+      await vi.waitFor(() => expect(complete).toHaveBeenCalledTimes(2));
+      expect(reserved).toBe(false);
+      expect(started[0].sends).toHaveLength(0);
     } finally { host.dispose(); }
   });
 

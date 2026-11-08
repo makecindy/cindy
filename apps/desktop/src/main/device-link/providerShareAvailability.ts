@@ -178,7 +178,8 @@ export async function acceptShareAvailability(controller: string, sessionId: str
 }
 
 /** Capture the receipt before execution: revoking the local grant must not strand its capacity. */
-export async function beginShareAvailabilityTurn(controller: string, sessionId: string, executionId: string): Promise<(() => Promise<void>) | undefined> {
+export async function beginShareAvailabilityTurn(controller: string, sessionId: string, executionId: string,
+  captureCompletion: (complete: () => Promise<void>) => void): Promise<void> {
   const item = delegatedProviderShareLeases().find(row => row.peer === controller && row.sessionId === sessionId);
   if (!item?.lease.availability) return;
   const peer = parseProviderSharePeer(controller);
@@ -187,12 +188,13 @@ export async function beginShareAvailabilityTurn(controller: string, sessionId: 
   const owner = providerShareOwnerKey();
   const endpoint = getClientEndpoint('deviceLinkApiBaseUrl');
   const generation = item.lease.generation;
-  await shareAvailabilityRequest(peer.shareId, 'accept', { memberId: peer.memberId, guestDeviceId: peer.deviceId, sessionId, generation, executionId });
-  return async () => {
+  // Register before the request: an error can mean the server accepted but its reply was lost.
+  captureCompletion(async () => {
     assertCurrent();
     if (providerShareOwnerKey() !== owner || getClientEndpoint('deviceLinkApiBaseUrl') !== endpoint) throw new ProviderShareScopeChangedError();
     await shareAvailabilityRequest(peer.shareId, 'complete', { sessionId, generation, executionId });
-  };
+  });
+  await shareAvailabilityRequest(peer.shareId, 'accept', { memberId: peer.memberId, guestDeviceId: peer.deviceId, sessionId, generation, executionId });
 }
 
 export async function refreshStandbyGuests(): Promise<void> {

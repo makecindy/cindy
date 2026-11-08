@@ -286,7 +286,8 @@ export interface RemoteAgentHostDeps {
     locate?(controller: string, request: Extract<RemoteAgentRequest, { op: 'direct-locate' }>): Promise<{ deviceId: string } | null>;
     /** O accepts fresh relay history; native history must stay on its recorded M. */
     acceptDelegated?(controller: string, sessionId: string): Promise<void>;
-    beginDelegatedTurn?(controller: string, sessionId: string, executionId: string): Promise<(() => Promise<void>) | undefined>;
+    beginDelegatedTurn?(controller: string, sessionId: string, executionId: string,
+      captureCompletion: (complete: () => Promise<void>) => void): Promise<void>;
     acceptRelay?(controller: string, sessionId: string, hasNativeHistory: boolean): Promise<void>;
     allocate(controller: string, request: Extract<RemoteAgentRequest, { op: 'allocate' }>): Promise<{ deviceId: string; generation: string; leaseDurationMs?: number } | null>;
     status(controller: string, request: Extract<RemoteAgentRequest, { op: 'direct-status' }>): void;
@@ -2719,8 +2720,9 @@ export function createRemoteAgentHost(deps: RemoteAgentHostDeps) {
         && deps.directGuestExecution?.sessionDelegated(run.controller, run.sessionId)) {
         await completeStandbyTurn(run);
         if (run.standbyTurn) fail('REMOTE_AGENT_UNAVAILABLE', 'previous shared turn is still running');
-        const complete = await deps.directGuestExecution.beginDelegatedTurn?.(run.controller, run.sessionId, `${run.id}:${callId}`);
-        if (complete) run.standbyTurn = standbyTurn = { complete, pending: true };
+        await deps.directGuestExecution.beginDelegatedTurn?.(run.controller, run.sessionId, `${run.id}:${callId}`, complete => {
+          run.standbyTurn = standbyTurn = { complete, pending: true };
+        });
         if (run.closing) fail('REMOTE_AGENT_EXPIRED', 'task has ended');
         if (!delegatedRunAllowed(run)) fail('REMOTE_AGENT_UNAVAILABLE', 'this shared task is no longer authorized');
       }
