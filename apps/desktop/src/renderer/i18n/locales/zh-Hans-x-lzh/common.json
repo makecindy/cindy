@@ -9908,6 +9908,8 @@
     "banner": {
       "title": "已更至 {{version}}",
       "subtitle": "重启以焕新",
+      "nativeBuildTitle": "Apple 芯片版已备",
+      "nativeBuildSubtitle": "重启即换，诸务与设置皆存",
       "viewNotes": "览更新之告",
       "viewNotesAria": "览 {{version}} 之更新公告",
       "button": "即重启",

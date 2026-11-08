@@ -111,8 +111,16 @@ const readUpdateChannelSettings = vi.fn(() => ({
   orgDefaultEnableBeta: false,
 }));
 
+const nativeArmManifests = new WeakSet<object>();
+const runningTranslated = vi.fn(() => false);
+vi.mock('../arm64Translation', () => ({ isRunningUnderArm64Translation: runningTranslated }));
+
 vi.mock('../manifestService', () => ({
   fetchManifest,
+  // 生产实现先读本进程架构清单再按需读 arm64 清单；测试直接用 fetchManifest 的结果，
+  // 用 nativeArmManifests 标记「来自 arm64 清单」。
+  fetchAppUpdateManifest: (...args: unknown[]) => fetchManifest(...args),
+  getAppUpdateTargetArch: (manifest: object) => (nativeArmManifests.has(manifest) ? 'arm64' : undefined),
   getBaseUrl,
   isDev,
   clearCachedManifest: vi.fn(),
@@ -255,6 +263,8 @@ beforeEach(() => {
     return TEST_ROOT;
   });
   fetchManifest.mockReset();
+  runningTranslated.mockReset();
+  runningTranslated.mockReturnValue(false);
   getBaseUrl.mockReset();
   getBaseUrl.mockReturnValue(CDN_EXTERNAL_BASE_URL);
   isDev.mockReset();
@@ -1347,6 +1357,91 @@ describe('personal version app update policy', () => {
   });
 });
 
+
+// NZWG-9FC9：Apple 芯片上经 Rosetta 运行的 darwin-x64 包只能靠同版本的 arm64 包换装原生架构。
+describe('native architecture switch for Rosetta-translated macOS builds', () => {
+  function armManifest(version = '0.0.64') {
+    const manifest = updateManifest(version, `app/darwin-arm64/xdt-maker-${version}-arm64.zip`);
+    nativeArmManifests.add(manifest);
+    return manifest;
+  }
+
+  function stagePatch(patch: Record<string, unknown>) {
+    const updatesDir = path.join(TEST_USER_DATA, 'updates');
+    const patchPath = path.join(updatesDir, 'staged.zip');
+    fs.mkdirSync(updatesDir, { recursive: true });
+    fs.writeFileSync(patchPath, 'update');
+    fs.writeFileSync(path.join(updatesDir, 'patch-info.json'), JSON.stringify({
+      version: '0.0.64', fileName: 'staged.zip', sha256: 'abc', enableBeta: false, ...patch,
+    }));
+    return patchPath;
+  }
+
+  beforeEach(() => {
+    download.mockImplementation(async ({ targetPath }: { targetPath: string }) => {
+      fs.mkdirSync(path.dirname(targetPath), { recursive: true });
+      fs.writeFileSync(targetPath, 'update');
+      return { path: targetPath, size: 123 };
+    });
+  });
+
+  it('stages and applies the same-version arm64 package when translated', async () => {
+    runningTranslated.mockReturnValue(true);
+    const service = await freshUpdateService('darwin', 'x64');
+    const exitSpy = vi.spyOn(process, 'exit').mockImplementation((() => undefined) as never);
+    service.initUpdateService();
+    try {
+      await expect(service.checkForUpdate(armManifest())).resolves.toBe('ready');
+      expect(download).toHaveBeenCalledOnce();
+      const info = JSON.parse(fs.readFileSync(path.join(TEST_USER_DATA, 'updates', 'patch-info.json'), 'utf8'));
+      expect(info).toMatchObject({ version: '0.0.64', targetArch: 'arm64' });
+
+      ipcListeners.get('update-relaunch')?.({}, 'dark');
+      await vi.waitFor(() => { expect(spawnProcess).toHaveBeenCalledOnce(); });
+    } finally {
+      service.stopUpdateService();
+      exitSpy.mockRestore();
+    }
+  });
+
+  it.each([
+    ['a native Intel Mac', false, true],
+    ['an x64 manifest under translation', true, false],
+  ])('keeps rejecting same-version packages on %s', async (_label, translated, fromArmManifest) => {
+    runningTranslated.mockReturnValue(translated);
+    const service = await freshUpdateService('darwin', 'x64');
+    const manifest = fromArmManifest ? armManifest() : updateManifest('0.0.64');
+
+    await expect(service.checkForUpdate(manifest)).resolves.toBe('idle');
+
+    expect(download).not.toHaveBeenCalled();
+  });
+
+  it('keeps a staged arm64 switch across an offline restart and clears it once native', async () => {
+    fetchManifest.mockResolvedValue(null);
+    runningTranslated.mockReturnValue(true);
+    const patchPath = stagePatch({ targetArch: 'arm64' });
+    let service = await freshUpdateService('darwin', 'x64');
+    service.initUpdateService();
+    try {
+      await expect(ipcHandlers.get('update-check-startup')?.()).resolves.toMatchObject({
+        hasUpdate: true, action: 'relaunch', version: '0.0.64',
+      });
+    } finally {
+      service.stopUpdateService();
+    }
+
+    runningTranslated.mockReturnValue(false);
+    service = await freshUpdateService('darwin', 'arm64');
+    service.initUpdateService();
+    try {
+      await expect(ipcHandlers.get('update-check-startup')?.()).resolves.toMatchObject({ hasUpdate: false });
+      expect(fs.existsSync(patchPath)).toBe(false);
+    } finally {
+      service.stopUpdateService();
+    }
+  });
+});
 
 describe('app update forward-only policy', () => {
   it('does not download a manifest version lower than the running app', async () => {
