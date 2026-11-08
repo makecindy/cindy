@@ -4370,8 +4370,18 @@ export function ModelSelector({
   const displayProvider = agentKind
     ? modelDisplayProvider(providers, currentProviderId, modelId, agentKind, actualRoute)
     : undefined;
+  // 目标目录(另一台电脑 / 共享供应商)已就绪却没有这个模型:新建草稿此刻回落到本机默认
+  // 模型(PR #9369 review),名称也回本机目录取 —— trigger 显示真实名字而不是
+  // 「模型信息暂不可用」。仅显示口径:路由 / 能力 / 面板候选仍只看目标目录;加载中与
+  // 读取失败保持原有提示(失败态有重试入口,不做名称回退)。
+  const localFallbackName = deviceId && remoteModelListStatus === 'ready' && agentKind
+    ? localProviders.providers
+        .map((provider) => findCatalogModel(provider, modelId, agentKind, { exact: true })?.name)
+        .find((name) => name !== undefined)
+    : undefined;
   const resolvedModelName = (agentKind ? findCatalogModel(displayProvider, modelId, agentKind)?.name : undefined)
-    ?? currentModel?.displayName;
+    ?? currentModel?.displayName
+    ?? localFallbackName;
   const labelKey = JSON.stringify([deviceId ?? null, currentProviderId ?? null, agentKind, modelId]);
   const lastModelName = useRef<{ key: string; name: string | undefined } | null>(null);
   const modelName = resolvedModelName
