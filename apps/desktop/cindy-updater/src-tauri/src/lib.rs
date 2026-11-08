@@ -3,6 +3,8 @@ mod installation_version;
 mod installer;
 pub(crate) mod logger;
 mod pid_wait;
+#[cfg(target_os = "windows")]
+mod windows_launch;
 
 use std::sync::{Arc, Mutex};
 

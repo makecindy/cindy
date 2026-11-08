@@ -773,6 +773,19 @@ fn launch_detached(exe: &Path) -> io::Result<()> {
     #[cfg(target_os = "windows")]
     {
         use std::os::windows::process::CommandExt;
+        match crate::windows_launch::launch_via_desktop_shell(exe) {
+            Ok(true) => {
+                logger::info("[installer] launched Cindy via the same-user unelevated desktop shell");
+                return Ok(());
+            }
+            Ok(false) => {}
+            Err(error) => {
+                // Preserve the established launch/rollback behavior if Windows
+                // policy disallows desktop-shell launch. Cindy's bounded deep-link
+                // handoff also supports an elevated running instance.
+                logger::warn(format!("[installer] desktop-shell launch unavailable ({error}); using detached launch"));
+            }
+        }
         // DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP — orphan the child so
         // updater can exit immediately without taking the new app down with it.
         const FLAGS: u32 = 0x00000008 | 0x00000200;

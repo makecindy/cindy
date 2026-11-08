@@ -79,3 +79,16 @@ Pi 的显式版本选择沿用原内核管理器，不由后台更新覆盖。�
 
 验证命令按 [`desktop-development.md`](desktop-development.md) 选择；更新链路的真实行为
 无法靠单测完全覆盖，评估与实测结论必须如实记录。
+
+## Windows 更新后的启动权限
+
+写入 Program Files 所需的提权不应传给更新后的 Cindy。`windows_launch.rs` 查询实际进程
+令牌（不能用仅表示 UAC 重入的 `args.elevated` 判断），提权时读取当前桌面 Shell 的令牌，
+确认同账号、同登录会话且未提权后，通过该 Shell 桌面视图的启动接口打开客户端；不借用其他账号的 Explorer，
+也不启动可能同样提权的 `Shell.Application`。普通启动保留既有路径；Shell 不可用、
+身份不匹配或系统策略拒绝 Shell 启动时
+只记录错误码并回到原来的 detached launch，文件替换、备份与回滚的事务保持不变。
+
+客户端的 Windows 深链补偿仍须支持运行中的提权实例，不能把每次点链接前退出客户端当作
+解决办法。真实权限验证入口见 [Desktop 开发](desktop-development.md#开发深链与系统关联)；
+脚本调用生产启动函数但不替换已安装客户端，也不等同于完整安装更新验收。

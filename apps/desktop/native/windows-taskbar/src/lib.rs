@@ -2,6 +2,7 @@
 //! pixels; pass the original DPI-sized image to the Shell instead.
 use napi::bindgen_prelude::Buffer;
 use napi_derive::napi;
+mod deep_link;
 use windows::{
     core::{w, PCWSTR},
     Win32::{
