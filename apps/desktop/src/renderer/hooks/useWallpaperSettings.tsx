@@ -80,7 +80,15 @@ function pickWallpaperSettings(settings: AppearanceSettings): WallpaperSettings 
   };
 }
 
-export function WallpaperSettingsProvider({ children }: { children: ReactNode }) {
+/** `desktopBackground={false}` is for windows without the native backdrop bridge: with no
+ * wallpaper they keep their opaque themed canvas instead of mixing with a fixed window backing. */
+export function WallpaperSettingsProvider({
+  children,
+  desktopBackground = true,
+}: {
+  children: ReactNode;
+  desktopBackground?: boolean;
+}) {
   const [settings, setSettings] = useState<WallpaperSettings>(getInitialWallpaperSettings);
   const [blurPreview, setBlurPreview] = useState<number | null>(null);
   const [visibilityPreview, setVisibilityPreview] = useState<number | null>(null);
@@ -123,7 +131,7 @@ export function WallpaperSettingsProvider({ children }: { children: ReactNode })
         : getBuiltinWallpaperBackground(settings.wallpaperId);
   useWallpaperBackground({
     background,
-    desktopBackground: settings.wallpaperId === 'none',
+    desktopBackground: desktopBackground && settings.wallpaperId === 'none',
     visibility,
     blur: blurPreview ?? settings.wallpaperBlur ?? 0,
     reducedMotion,
