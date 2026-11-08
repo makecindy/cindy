@@ -1,4 +1,4 @@
-import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import { promises as fs } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -130,6 +130,72 @@ describe('local Skill library workflow', () => {
     expect(route).not.toContain('motion-feel');
     expect(route).not.toContain('actual-model');
     expect(route.split('\n').length).toBeLessThan(20);
+  });
+
+  // PR #9374: config B must not become visible with model A's persisted vectors.
+  // Real CLI and HTTP adapter; controlled promises keep the rebuild overlap deterministic.
+  it.each([false, true])('publishes embedding configuration only after a successful build (failure=%s)', async (fail) => {
+    const target = path.join(root, `embedding-switch-${fail}`);
+    await runCli(['init', '--library', target, '--source', source], executable);
+    let release!: () => void;
+    let entered!: () => void;
+    const blocked = new Promise<void>(resolve => { release = resolve; });
+    const started = new Promise<void>(resolve => { entered = resolve; });
+    const models: string[] = [];
+    vi.stubEnv('CINDY_SKILL_TEST_KEY', 'test-only');
+    vi.stubGlobal('fetch', async (_url: unknown, init: RequestInit) => {
+      const body = JSON.parse(init.body as string) as { model: string; input: string[] };
+      models.push(body.model);
+      if (body.input.length === 1) {
+        await expect(fs.stat(path.join(target, 'library.lock'))).rejects.toMatchObject({ code: 'ENOENT' });
+      }
+      if (body.model === 'model-b') {
+        entered();
+        await blocked;
+        if (fail) return new Response('invalid model', { status: 400 });
+      }
+      return Response.json({ model: body.model, data: body.input.map((_, index) => ({ index, embedding: [1, 0] })) });
+    });
+    const configure = (model: string) => runCli(['embedding', '--library', target, '--base-url', 'https://example.invalid/v1', '--model', model, '--key-env', 'CINDY_SKILL_TEST_KEY'], executable);
+    const search = () => runCli(['search', '--library', target, '--query', 'motion'], executable);
+    let rebuild: Promise<unknown> | undefined;
+    try {
+      await configure('model-a');
+      const previousConfig = await readConfig(target);
+      const previousIndex = (await loadIndex(target)).snapshot();
+      rebuild = configure('model-b');
+      // Attach rejection handling before deliberately parking the HTTP request.
+      const outcome = rebuild.then(value => ({ value }), error => ({ error }));
+      await started;
+      try {
+        await expect(search()).rejects.toThrow('being updated');
+        expect(await readConfig(target)).toEqual(previousConfig);
+      } finally {
+        release();
+      }
+      const result = await outcome;
+      if (fail) {
+        expect(result).toHaveProperty('error');
+        expect(await readConfig(target)).toEqual(previousConfig);
+        expect((await loadIndex(target)).snapshot()).toEqual(previousIndex);
+      } else {
+        expect(result).toHaveProperty('value');
+        expect((await readConfig(target)).embedding?.model).toBe('model-b');
+      }
+      expect(await search()).toMatchObject({ mode: 'hybrid' });
+      expect(models.at(-1)).toBe(fail ? 'model-a' : 'model-b');
+      const requestCount = models.length;
+      await runCli(['sync', '--library', target], executable);
+      expect(models).toHaveLength(requestCount);
+      await runCli(['embedding', '--library', target, '--off'], executable);
+      expect(await search()).toMatchObject({ mode: 'keyword' });
+      expect(models).toHaveLength(requestCount);
+    } finally {
+      release();
+      await rebuild?.catch(() => {});
+      vi.unstubAllGlobals();
+      vi.unstubAllEnvs();
+    }
   });
 
   // PR #9374: two successful add calls previously overwrote each other's source.

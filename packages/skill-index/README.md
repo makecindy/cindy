@@ -124,7 +124,8 @@ node packages/skill-index/dist/cli.cjs sync --library "$HOME/.cindy/skill-librar
 索引保存 API 返回的实际模型标识。供应商将同一别名切换到新模型时，检索或增量更新会提示重建；执行
 `sync --library <directory> --rebuild` 为整库生成同一模型的向量。
 
-同一库的配置修改与索引更新共用 `library.lock`，同时发起的第二个写操作会收到忙碌提示，待前一个完成后再执行。
+同一库的配置修改与索引更新共用 `library.lock`。搜索也在此锁内读取配对的配置与索引快照，随后释放锁再查询向量 API。
+更新期间启动搜索或另一个写操作会收到忙碌提示，待更新完成后再执行。切换向量配置时先构建新索引，构建成功后才发布配置；构建失败保留原配置与索引，原模型仍可正常检索。
 锁内记录写进程 PID；若写进程被强制结束，确认该进程已停止后移除库目录中的 `library.lock`，再运行 `sync`。
 
 技能作者可以在现有 YAML `metadata` 下提供可选检索线索：

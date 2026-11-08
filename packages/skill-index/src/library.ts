@@ -98,6 +98,8 @@ export async function withLibraryWrite<T>(library: string, action: () => Promise
 }
 
 export interface LibrarySyncOptions {
+  /** Candidate configuration, published by the caller after a successful build. */
+  config?: LibraryConfig;
   rebuild?: boolean;
   embedding?: SkillEmbeddingAdapter;
 }
@@ -108,7 +110,7 @@ export async function syncLibrary(library: string, options: LibrarySyncOptions =
 
 /** Caller holds withLibraryWrite across configuration edits and this publication. */
 export async function syncLibraryUnlocked(library: string, options: LibrarySyncOptions = {}) {
-  const config = await readConfig(library);
+  const config = options.config ?? await readConfig(library);
   let index: SkillIndex;
   try { index = await loadIndex(library); }
   catch (error) {

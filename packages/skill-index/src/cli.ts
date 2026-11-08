@@ -84,13 +84,15 @@ export async function runCli(args: string[], executable: string): Promise<unknow
         // Resolve the configuration before persisting it; no request is made here.
         createSkillEmbeddingAdapter(config.embedding);
       }
+      const result = await syncLibraryUnlocked(library, { config });
       await writeJson(configPath, config);
-      return syncLibraryUnlocked(library);
+      return result;
     });
   }
   if (command === 'search') {
-    const config = await readConfig(library);
-    const index = await loadIndex(library);
+    const { config, index } = await withLibraryWrite(library, async () => ({
+      config: await readConfig(library), index: await loadIndex(library),
+    }));
     return index.search(required(values.query, 'query'), {
       limit: integer(values.limit, 'limit'),
       ...(config.embedding ? { embedding: createSkillEmbeddingAdapter(config.embedding) } : {}),

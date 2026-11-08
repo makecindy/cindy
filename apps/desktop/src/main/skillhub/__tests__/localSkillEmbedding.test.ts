@@ -47,6 +47,87 @@ function fixture() {
 }
 
 describe('native local Skill embeddings', () => {
+  it.each(['waiting', 'none', 'late'] as const)('keeps synchronization scoped to its current participants: %s', async (mode) => {
+    const waiterCurrent = mode !== 'none';
+    const f = fixture();
+    const home = path.join(root, `participants-${mode}`);
+    const source = path.join(home, 'methods');
+    await fs.mkdir(source, { recursive: true });
+    const current = new Set(['task-a', 'task-b']);
+    const coordinator = createLocalSkillLibraryCoordinator();
+    const makeCallback = () => createLocalSkillLibraryTools({
+      coordinator, ownerScope: () => 'owner', storageRoot: () => path.join(home, 'libraries'), homeDir: () => home,
+      isCurrentSession: (context) => current.has(context.sessionId!), isOrdinaryTask: async () => true,
+      embedding: (_model, checkCurrent) => createLocalSkillEmbeddingAdapter('text-embedding-3-small', () => f.service, checkCurrent),
+    });
+    const firstCallback = makeCallback();
+    const secondCallback = makeCallback();
+    const context = { agentKind: 'codex', workingDir: home, sessionId: 'task-a', sessionInstanceId: 'instance' };
+    await firstCallback({ action: 'register', library_id: 'methods', sources: [source], embedding_model: 'text-embedding-3-small' }, context);
+    const indexFile = path.join(home, 'libraries/methods/index.json');
+    const before = await fs.readFile(indexFile, 'utf8');
+    await Promise.all(Array.from({ length: 65 }, async (_, i) => {
+      const folder = path.join(source, `skill-${i}`);
+      await fs.mkdir(folder);
+      await fs.writeFile(path.join(folder, 'SKILL.md'), `---\nname: skill-${i}\ndescription: Method ${i}\n---\nInstructions\n`);
+    }));
+    let release!: () => void;
+    let entered!: () => void;
+    const waiting = new Promise<void>((resolve) => { release = resolve; });
+    const paused = new Promise<void>((resolve) => { entered = resolve; });
+    const fetchImpl = f.fetchImpl.getMockImplementation()!;
+    f.fetchImpl.mockImplementationOnce(async (...args) => {
+      const response = await fetchImpl(...args);
+      entered(); await waiting;
+      return response;
+    });
+    const search = { action: 'search' as const, library_id: 'methods', query: 'semantic task' };
+    const first = firstCallback(search, context);
+    await paused;
+    const unlink = fs.unlink.bind(fs);
+    let unlock!: () => void;
+    let cancellationEntered!: () => void;
+    const unlocking = new Promise<void>((resolve) => { unlock = resolve; });
+    const cancelling = new Promise<void>((resolve) => { cancellationEntered = resolve; });
+    let held = false;
+    const cleanupSpy = mode === 'late' ? vi.spyOn(fs, 'unlink').mockImplementation(async (...args) => {
+      if (!held && String(args[0]).endsWith('library.lock')) {
+        held = true; cancellationEntered(); await unlocking;
+      }
+      return unlink(...args);
+    }) : undefined;
+    if (mode === 'late') {
+      current.delete('task-a');
+      release();
+      await cancelling;
+    }
+    const readFile = fs.readFile.bind(fs);
+    let joined!: () => void;
+    const joining = new Promise<void>((resolve) => { joined = resolve; });
+    const spy = vi.spyOn(fs, 'readFile').mockImplementation(async (...args) => {
+      const value = await readFile(...args);
+      if (String(args[0]).endsWith('library.json')) setImmediate(joined);
+      return value;
+    });
+    const second = secondCallback(search, { ...context, agentKind: 'pi', sessionId: 'task-b' });
+    try {
+      await joining;
+      current.delete('task-a');
+      if (!waiterCurrent) current.delete('task-b');
+      release();
+      unlock();
+      expect(await first).toMatchObject({ errorCode: 'CANCELLED' });
+      if (waiterCurrent) {
+        expect(await second).toMatchObject({ ok: true, mode: 'hybrid', matches: expect.any(Array) });
+        expect(f.batches.map(batch => batch.length)).toEqual(mode === 'late' ? [32, 32, 32, 1, 1] : [32, 32, 1, 1]);
+        expect(JSON.parse(await fs.readFile(indexFile, 'utf8')).entries).toHaveLength(65);
+      } else {
+        expect(await second).toMatchObject({ errorCode: 'CANCELLED' });
+        expect(f.fetchImpl).toHaveBeenCalledTimes(1);
+        expect(await fs.readFile(indexFile, 'utf8')).toBe(before);
+      }
+    } finally { release(); unlock(); spy.mockRestore(); cleanupSpy?.mockRestore(); await Promise.all([first, second]); }
+  });
   it('cancels a host refresh after one batch and preserves the published index', async () => {
     const f = fixture();
     const source = path.join(root, 'methods');

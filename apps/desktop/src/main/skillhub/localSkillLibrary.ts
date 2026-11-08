@@ -30,13 +30,18 @@ interface LibraryView {
   changes?: Awaited<ReturnType<typeof syncLibraryUnlocked>>;
 }
 
+interface LibraryWork {
+  participants: Set<() => boolean>;
+  cancelled: boolean;
+}
+
 const fail = (errorCode: string, message: string) => ({ ok: false as const, errorCode, message });
 
 /** One owner-aware coordinator per Maker host, shared by its engine providers. */
 export function createLocalSkillLibraryCoordinator() {
   return {
     synchronized: new Map<string, { generation: string; sessions: Set<string> }>(),
-    syncing: new Map<string, { generation: string; synchronize: boolean; promise: Promise<LibraryView> }>(),
+    syncing: new Map<string, { generation: string; synchronize: boolean; work: LibraryWork; promise: Promise<LibraryView> }>(),
   };
 }
 export type LocalSkillLibraryCoordinator = ReturnType<typeof createLocalSkillLibraryCoordinator>;
@@ -61,12 +66,12 @@ export function createLocalSkillLibraryTools(deps: LocalSkillLibraryDependencies
       const library = path.join(deps.storageRoot(), request.library_id);
       const sessionKey = JSON.stringify([context.sessionId, context.sessionInstanceId]);
       const libraryKey = JSON.stringify([owner, library]);
-      const adapter = (config: Registration): SkillEmbeddingAdapter | undefined => {
-        const embedding = config.embeddingModel ? deps.embedding(config.embeddingModel, checkCurrent) : undefined;
+      const adapter = (config: Registration, check = checkCurrent): SkillEmbeddingAdapter | undefined => {
+        const embedding = config.embeddingModel ? deps.embedding(config.embeddingModel, check) : undefined;
         return embedding && { identity: embedding.identity, embed: async (texts, inputType) => {
-          checkCurrent();
+          check();
           const result = await embedding.embed(texts, inputType);
-          checkCurrent();
+          check();
           return result;
         } };
       };
@@ -130,46 +135,64 @@ export function createLocalSkillLibraryTools(deps: LocalSkillLibraryDependencies
       // The outer read selects a shared operation only. Configuration, adapter and index
       // are paired again under the writer lock, including when registration changed meanwhile.
       const requestedGeneration = JSON.stringify(config);
-      const capture = () => withLibraryWrite(library, async (): Promise<LibraryView> => {
-        const currentConfig = await readConfig(library) as Registration;
-        checkCurrent();
-        if (!currentConfig.registered) throw new Error('This local Skill library is not registered.');
-        const generation = JSON.stringify(currentConfig);
-        const embedding = request.action === 'read' ? undefined : adapter(currentConfig);
-        if (currentConfig.embeddingModel && !embedding && request.action !== 'read') {
-          throw Object.assign(new Error('The configured embedding model is unavailable. Enable it or register without embedding_model.'), { code: 'MODEL_UNAVAILABLE' });
-        }
-        let seen = synchronized.get(libraryKey);
-        const needsSync = request.action === 'refresh' || (request.action === 'search'
-          && (seen?.generation !== generation || !seen.sessions.has(sessionKey)));
-        const changes = needsSync ? await syncLibraryUnlocked(library, {
-          embedding, rebuild: request.action === 'refresh' && request.rebuild,
-        }) : undefined;
-        const index = await loadIndex(library);
-        checkCurrent();
-        if (needsSync) {
-          if (request.action === 'refresh' || seen?.generation !== generation) seen = { generation, sessions: new Set() };
-          seen!.sessions.add(sessionKey);
-          synchronized.set(libraryKey, seen!);
-        }
-        return { config: currentConfig, generation, index, changes };
-      });
+      const capture = (work: LibraryWork) => {
+        const checkWork = () => {
+          if (![...work.participants].some(current => current())) {
+            work.cancelled = true;
+            throw new Error('All tasks waiting for this library operation ended.');
+          }
+        };
+        checkWork();
+        return withLibraryWrite(library, async (): Promise<LibraryView> => {
+          const currentConfig = await readConfig(library) as Registration;
+          checkWork();
+          if (!currentConfig.registered) throw new Error('This local Skill library is not registered.');
+          const generation = JSON.stringify(currentConfig);
+          const embedding = request.action === 'read' ? undefined : adapter(currentConfig, checkWork);
+          if (currentConfig.embeddingModel && !embedding && request.action !== 'read') {
+            throw Object.assign(new Error('The configured embedding model is unavailable. Enable it or register without embedding_model.'), { code: 'MODEL_UNAVAILABLE' });
+          }
+          let seen = synchronized.get(libraryKey);
+          const needsSync = request.action === 'refresh' || (request.action === 'search'
+            && (seen?.generation !== generation || !seen.sessions.has(sessionKey)));
+          const changes = needsSync ? await syncLibraryUnlocked(library, {
+            embedding, rebuild: request.action === 'refresh' && request.rebuild,
+          }) : undefined;
+          const index = await loadIndex(library);
+          checkWork();
+          if (needsSync) {
+            if (request.action === 'refresh' || seen?.generation !== generation) seen = { generation, sessions: new Set() };
+            synchronized.set(libraryKey, seen!);
+          }
+          return { config: currentConfig, generation, index, changes };
+        });
+      };
       let pending = syncing.get(libraryKey);
-      if (request.action !== 'search' || !pending?.synchronize || pending.generation !== requestedGeneration) {
+      if (request.action !== 'search' || !pending?.synchronize || pending.work.cancelled || pending.generation !== requestedGeneration) {
         checkCurrent();
         const seen = synchronized.get(libraryKey);
         const synchronize = request.action === 'refresh' || (request.action === 'search'
           && (seen?.generation !== requestedGeneration || !seen.sessions.has(sessionKey)));
-        const promise = pending ? pending.promise.then(() => { checkCurrent(); return capture(); }) : capture();
-        pending = { generation: requestedGeneration, synchronize, promise };
+        const work: LibraryWork = { participants: new Set([isCurrent]), cancelled: false };
+        const previous = pending;
+        // A new operation may follow an abandoned one; API failures are never retried.
+        const promise = previous ? previous.promise.then(() => capture(work), (error) => {
+          if (previous.work.cancelled) return capture(work);
+          throw error;
+        }) : capture(work);
+        pending = { generation: requestedGeneration, synchronize, work, promise };
         syncing.set(libraryKey, pending);
       }
+      pending!.work.participants.add(isCurrent);
       let view: LibraryView;
       try { view = await pending!.promise; }
-      finally { if (syncing.get(libraryKey) === pending) syncing.delete(libraryKey); }
+      finally {
+        pending!.work.participants.delete(isCurrent);
+        if (syncing.get(libraryKey) === pending) syncing.delete(libraryKey);
+      }
       checkCurrent();
       const seen = synchronized.get(libraryKey);
-      if (request.action === 'search' && seen?.generation === view.generation) seen.sessions.add(sessionKey);
+      if (request.action !== 'read' && seen?.generation === view.generation) seen.sessions.add(sessionKey);
       if (request.action === 'refresh') return { ok: true, library_id: request.library_id, ...view.changes };
       const index = view.index;
       if (request.action === 'read') {
