@@ -61,6 +61,14 @@ export class BlueBubblesReceipts {
     for (const guid of this.pending) if (!exclude.has(guid) && !active?.has(guid)) return guid;
     return undefined;
   }
+  pendingGuids(): string[] { return [...this.pending]; }
+  /** Startup merges persisted, missed and live receipts before the first dispatch. */
+  orderPending(ordered: Iterable<string>): void {
+    const remaining = new Set(this.pending);
+    this.pending.clear();
+    for (const guid of ordered) if (remaining.delete(guid)) this.pending.add(guid);
+    for (const guid of remaining) this.pending.add(guid);
+  }
   private update(update: BlueBubblesReceiptUpdate): void {
     // Validation before persistence; only replace in-memory facts after a durable write succeeds.
     const test: BlueBubblesState = { version: 1, activatedAt: 0, inbox: {}, outbox: {}, cursors: {} };

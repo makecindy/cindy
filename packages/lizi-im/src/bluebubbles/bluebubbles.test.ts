@@ -54,6 +54,68 @@ async function fixture(initialState: BlueBubblesState | null = null, media?: IMH
 }
 
 describe('BlueBubbles local ingress', () => {
+  // Tier 1, #9250/r4505897286: a live stop arriving during startup history
+  // must wait for older offline inputs to enter its ordered cancellation boundary.
+  it('orders offline catch-up before a live stop received while startup history is blocked', async () => {
+    const f = await fixture();
+    await f.im.dispose();
+    f.message('offline-before-stop');
+    const history = vi.mocked(f.api.history), original = history.getMockImplementation()!;
+    let release!: () => void, started!: () => void;
+    const waiting = new Promise<void>(resolve => { started = resolve; });
+    const gate = new Promise<void>(resolve => { release = resolve; });
+    history.mockImplementationOnce(async (...args) => { started(); await gate; return original(...args); });
+    let cancelled = -1;
+    f.im.onMessage(event => {
+      event.delivery!.awaitPersistence();
+      if (event.text === '/stop') { cancelled = event.delivery!.cancelPending!(); event.delivery!.accept(); }
+      else event.delivery!.defer();
+    });
+    const initializing = f.im.init();
+    try {
+      await waiting;
+      f.message('live-stop', { text: '/stop' });
+      expect((await f.webhook('live-stop')).status).toBe(202);
+      expect(f.state().inbox['live-stop'].state).toBe('pending');
+      expect(f.received).toEqual([]);
+    } finally { release(); await initializing; }
+    await f.im.reconcile();
+    expect(f.received.map(event => event.messageId)).toEqual(['offline-before-stop', 'live-stop']);
+    expect(cancelled).toBe(1);
+    expect(f.state().inbox['offline-before-stop'].state).toBe('ignored');
+    expect(f.state().inbox['live-stop'].state).toBe('accepted');
+    await f.im.dispose();
+    const before = f.received.length;
+    await f.im.init();
+    expect(f.received).toHaveLength(before);
+  });
+
+  // Tier 1, #9250/r4505897287: one transient attachment failure during startup
+  // must not close a registered HTTP receiver used by other chats and replies.
+  it('keeps the startup receiver reachable while a failed pending attachment awaits retry', async () => {
+    const f = await fixture(null, undefined, true);
+    const download = vi.spyOn(f.api, 'download').mockRejectedValue(new Error('temporary download 503'));
+    f.message('startup-broken', { attachments: [{ guid: 'unavailable', transferName: 'file.txt' }] });
+    await expect(f.im.reconcile()).rejects.toThrow('BLUEBUBBLES_RECEIVE_FAILED');
+    await f.im.dispose();
+    await f.im.init();
+    expect(f.state().inbox['startup-broken'].state).toBe('pending');
+    f.message('other-chat-live', { chats: [f.otherChat] });
+    expect((await f.webhook('other-chat-live')).status).toBe(202);
+    await expect(f.im.reconcile()).rejects.toThrow('BLUEBUBBLES_RECEIVE_FAILED');
+    expect(f.received.map(event => event.messageId)).toContain('other-chat-live');
+    const answer = f.im.requestTextReply(f.chat.guid, 'Reply while download is down?', value => value === 'yes' ? value : null);
+    f.message('reply-during-failure', { text: 'yes' });
+    expect((await f.webhook('reply-during-failure')).status).toBe(202);
+    await expect(answer).resolves.toBe('yes');
+    download.mockResolvedValue(new Uint8Array([1]));
+    await f.im.reconcile();
+    expect(f.state().inbox['startup-broken'].state).toBe('accepted');
+    expect(f.im.getStatus().kind).toBe('connected');
+    expect(f.api.registerWebhook).toHaveBeenCalledTimes(2);
+    expect(f.received.filter(event => event.messageId === 'startup-broken')).toHaveLength(1);
+  });
+
   // Tier 1, #9250/r4505831913: absent/zero size metadata must not turn the
   // production downloader's permanent byte limit into startup/retry failure.
   it('keeps text and the listener after the real downloader rejects oversized bytes', async () => {

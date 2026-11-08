@@ -7,7 +7,7 @@ import type { TextChannelIM, ImFinalOutput } from '../channelIM.js';
 import type { IMHost, IMMessageEvent, IMStatus, SendFileResult } from '../types.js';
 import { classifyInboundAttachment, UnsupportedInboundMediaError } from '../inboundKind.js';
 import { isPrivateListener, LocalWebhookReceiver } from '../localWebhook.js';
-import { BlueBubblesApi, BlueBubblesApiError, blueBubblesOrigin, BLUEBUBBLES_MAX_BYTES, type BlueBubblesChat } from './api.js';
+import { BlueBubblesApi, BlueBubblesApiError, blueBubblesOrigin, BLUEBUBBLES_MAX_BYTES, type BlueBubblesChat, type BlueBubblesMessage } from './api.js';
 import { BlueBubblesReceipts, type BlueBubblesStateStorage } from './state.js';
 
 export interface BlueBubblesConfig {
@@ -46,6 +46,9 @@ export interface BlueBubblesOptions {
 }
 
 type Handler = (event: IMMessageEvent) => void | Promise<void>;
+class BlueBubblesReceiveError extends Error {
+  constructor() { super('BLUEBUBBLES_RECEIVE_FAILED'); }
+}
 export const BLUEBUBBLES_SECRET_KEYS = ['bluebubbles-origin', 'bluebubbles-config', 'bluebubbles-password', 'bluebubbles-webhook-token'] as const;
 
 export class BlueBubblesIM extends BaseIM implements TextChannelIM {
@@ -63,6 +66,7 @@ export class BlueBubblesIM extends BaseIM implements TextChannelIM {
   private timer: ReturnType<typeof setTimeout> | null = null;
   private deferredTimer: ReturnType<typeof setTimeout> | null = null;
   private pumping: Promise<void> | null = null;
+  private startingUp = false;
   private lastCatchUpAt: number | null = null;
   private lastWebhookAt: number | null = null;
   private readonly activeDispatches = new Set<string>();
@@ -143,6 +147,7 @@ export class BlueBubblesIM extends BaseIM implements TextChannelIM {
   async init(): Promise<void> {
     await this.dispose();
     const generation = ++this.generation;
+    this.startingUp = true;
     this.account = this.host.accountScope?.capture() ?? null;
     this.setStatus({ kind: 'connecting' });
     try {
@@ -183,10 +188,17 @@ export class BlueBubblesIM extends BaseIM implements TextChannelIM {
       await api.registerWebhook(listener.url);
       this.assertLive(generation);
       this.setStatus({ kind: 'connected', appId: this.botContextId });
-      await this.catchUp(generation);
+      await this.catchUp(generation, true);
       this.schedule(generation);
-    } catch {
+    } catch (error) {
       if (this.live(generation)) {
+        // A registered listener is still healthy when only individual inputs
+        // failed preparation. Their local retry must not disconnect other chats.
+        if (error instanceof BlueBubblesReceiveError) {
+          this.fail(generation);
+          this.schedule(generation);
+          return;
+        }
         await this.listener?.close(); this.listener = null;
         this.setStatus({ kind: 'error', reason: 'BLUEBUBBLES_CONNECT_FAILED' });
         this.timer = setTimeout(() => { if (this.live(generation)) void this.init(); }, 30_000);
@@ -202,6 +214,7 @@ export class BlueBubblesIM extends BaseIM implements TextChannelIM {
     this.timer = null;
     this.deferredTimer = null;
     this.pumping = null;
+    this.startingUp = false;
     this.activeDispatches.clear(); this.activeSends.clear();
     this.deferredEvents.clear();
     this.pendingInputs.clear();
@@ -225,16 +238,16 @@ export class BlueBubblesIM extends BaseIM implements TextChannelIM {
     }, 300_000);
     this.timer.unref?.();
   }
-  private retryDeferred(generation: number): void {
+  private retryDeferred(generation: number, delay = 1000): void {
     if (!this.live(generation) || this.deferredTimer) return;
     this.deferredTimer = setTimeout(() => {
       this.deferredTimer = null;
       if (this.live(generation)) void this.pump(generation).catch(() => this.fail(generation));
-    }, 1000);
+    }, delay);
     this.deferredTimer.unref?.();
   }
   async reconcile(): Promise<void> { await this.catchUp(this.generation); }
-  private async catchUp(generation: number): Promise<void> {
+  private async catchUp(generation: number, startup = false): Promise<void> {
     const api = this.api, config = this.config, receipts = this.receipts;
     if (!api || !config || !receipts) return;
     await api.info(); this.assertLive(generation);
@@ -257,19 +270,40 @@ export class BlueBubblesIM extends BaseIM implements TextChannelIM {
       }
       receipts.setCursor(chat, before);
     }
-    await this.pump(generation);
+    let prefetched: Map<string, BlueBubblesMessage | null> | undefined;
+    if (startup) {
+      prefetched = new Map();
+      // Webhooks are durable but gated until all startup history pages arrive.
+      // Query existing pending receipts too: some predate the history cursor.
+      for (const guid of receipts.pendingGuids()) {
+        try {
+          const message = await api.message(guid);
+          this.assertLive(generation);
+          prefetched.set(guid, message);
+        } catch {
+          this.assertLive(generation);
+          prefetched.set(guid, null);
+        }
+      }
+      const sentAt = (message: BlueBubblesMessage | null) =>
+        message && Number.isFinite(message.dateCreated) ? message.dateCreated : -Infinity;
+      receipts.orderPending([...prefetched].sort((a, b) => sentAt(a[1]) - sentAt(b[1])).map(([guid]) => guid));
+      this.startingUp = false;
+    }
+    await this.pump(generation, prefetched);
     this.assertLive(generation);
     this.lastCatchUpAt = before;
     this.setStatus({ kind: 'connected', appId: this.botContextId });
   }
 
-  private pump(generation: number): Promise<void> {
+  private pump(generation: number, prefetched?: ReadonlyMap<string, BlueBubblesMessage | null>): Promise<void> {
+    if (this.startingUp) return Promise.resolve();
     if (this.pumping) return this.pumping;
-    const operation = this.drain(generation).finally(() => { if (this.pumping === operation) this.pumping = null; });
+    const operation = this.drain(generation, prefetched).finally(() => { if (this.pumping === operation) this.pumping = null; });
     this.pumping = operation;
     return operation;
   }
-  private async drain(generation: number): Promise<void> {
+  private async drain(generation: number, prefetched?: ReadonlyMap<string, BlueBubblesMessage | null>): Promise<void> {
     const api = this.api, config = this.config, receipts = this.receipts;
     if (!api || !config || !receipts || !this.messages.size) return;
     const attempted = new Set<string>();
@@ -278,15 +312,22 @@ export class BlueBubblesIM extends BaseIM implements TextChannelIM {
       this.assertLive(generation);
       const guid = receipts.nextPending(attempted, this.activeDispatches);
       if (!guid) {
-        if (hadFailure) throw new Error('BLUEBUBBLES_RECEIVE_FAILED');
+        if (hadFailure) {
+          this.retryDeferred(generation, 30_000);
+          throw new BlueBubblesReceiveError();
+        }
         return;
       }
       attempted.add(guid);
+      let preparing = true;
       try {
         let event = this.deferredEvents.get(guid);
         if (!event) {
-          const message = await api.message(guid);
+          const cached = prefetched?.get(guid);
+          if (cached === null) throw new BlueBubblesReceiveError();
+          const message = cached ?? await api.message(guid);
           this.assertLive(generation);
+          preparing = false;
           const chat = message.chats?.find(item => config.chatGuids.includes(item.guid));
           const sender = message.handle?.address?.toLowerCase();
           if (message.guid !== guid || message.isFromMe || !chat || !sender || message.handle?.service !== 'iMessage'
@@ -302,6 +343,7 @@ export class BlueBubblesIM extends BaseIM implements TextChannelIM {
               invoked: this.isGroupInvocation(message.text ?? '') } : {}) };
           this.eventSentAt.set(event, message.dateCreated);
           this.pendingInputs.set(guid, event);
+          preparing = true;
           for (const attachment of message.attachments ?? []) {
             const name = attachment.transferName || attachment.guid;
             if ((attachment.totalBytes ?? 0) > BLUEBUBBLES_MAX_BYTES) { event.unsupported.push({ type: 'oversize', label: name }); continue; }
@@ -336,6 +378,7 @@ export class BlueBubblesIM extends BaseIM implements TextChannelIM {
               ...(stored.url ? { url: stored.url } : {}) });
           }
         }
+        preparing = false;
         if (this.cancelledEvents.has(event)) continue;
         const pending = this.pendingReplies.get(event.chatId);
         const command = event.text.trim().toLowerCase();
@@ -424,8 +467,11 @@ export class BlueBubblesIM extends BaseIM implements TextChannelIM {
             this.setStatus(this.status);
           }
         });
-      } catch {
+      } catch (error) {
         this.assertLive(generation);
+        // Receipt persistence failures still require connection-level recovery;
+        // only message lookup/download/staging failures use the local retry.
+        if (!preparing) throw error;
         // Keep the receipt pending for recovery, but let other chats/messages proceed.
         hadFailure = true;
       }
