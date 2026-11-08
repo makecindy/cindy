@@ -5,6 +5,7 @@ import { MessageStream } from '../../../src/renderer/components/chat/MessageStre
 import { AppFrame, mountPage } from '../../ui-page/harness';
 
 let rejectResult = false;
+let unreadable = false;
 void mountPage({
   route: '/cc-agent/mcp-form-fixture',
   host: {
@@ -14,7 +15,10 @@ void mountPage({
     onAuthStateChange: () => () => {},
     authHasPersistedSessionHintSync: () => false,
     maker: {
-      listCustomMcpServers: async () => ({ servers: [] }),
+      listCustomMcpServers: async () => ({ servers: unreadable ? [
+        { id: 'local', name: 'Local tools', transport: 'stdio', url: '', headers: {}, readError: 'stdio-unreadable' },
+        { id: 'remote', name: 'Remote tools', transport: 'http', url: 'https://example.test/mcp', headers: {} },
+      ] : [] }),
       onMcpChanged: () => () => {},
       listMcpDuplicates: async () => ({ connections: [], complete: true }),
       createCustomMcpServer: async () => ({ ok: true }),
@@ -30,9 +34,10 @@ void mountPage({
   },
   render: context => {
     rejectResult = context.case === 'result-error';
+    unreadable = context.case === 'list-error';
     const request = { kind: 'mcp_setup' as const, requestId: 'mcp-form-fixture', proposal: context.case.startsWith('local')
       ? { name: 'Local tools', transport: 'stdio' as const, command: 'npx', args: ['-y', 'example-mcp'] } : {} };
-    if (context.case === 'list') return <McpServersSection />;
+    if (context.case.startsWith('list')) return <McpServersSection />;
     const form = <McpSetupPrompt request={request} />;
     if (context.case === 'layout') return <AppFrame>
       <div className="relative min-h-0 flex-1" data-ui-mcp-layout>

@@ -9046,7 +9046,8 @@
       "errors": {
         "nameRequired": "표시 이름을 입력하세요",
         "urlInvalid": "유효한 http(s) URL을 입력하세요",
-        "localConfigInvalid": "비어 있지 않은 command, 문자열 배열 args, 문자열 키와 값의 객체 env가 포함된 올바른 JSON을 입력하세요."
+        "localConfigInvalid": "비어 있지 않은 command, 문자열 배열 args, 문자열 키와 값의 객체 env가 포함된 올바른 JSON을 입력하세요.",
+        "localUnreadable": "설정을 읽을 수 없어 로드하지 않았습니다. 시스템 키 저장소를 확인하거나 삭제 후 다시 추가하세요."
       },
       "toast": {
         "created": "MCP 서버가 추가되었습니다",

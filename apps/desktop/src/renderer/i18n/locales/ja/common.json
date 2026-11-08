@@ -9046,7 +9046,8 @@
       "errors": {
         "nameRequired": "表示名を入力してください",
         "urlInvalid": "有効な http(s) URL を入力してください",
-        "localConfigInvalid": "空でない command、文字列配列 args、文字列のキーと値を持つ env を含む有効な JSON を入力してください。"
+        "localConfigInvalid": "空でない command、文字列配列 args、文字列のキーと値を持つ env を含む有効な JSON を入力してください。",
+        "localUnreadable": "設定を読み取れないため、読み込まれていません。システムの鍵ストレージを確認するか、削除して追加し直してください。"
       },
       "toast": {
         "created": "MCP サーバーを追加しました",

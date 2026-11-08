@@ -9161,7 +9161,8 @@
       "errors": {
         "nameRequired": "El nombre para mostrar es obligatorio",
         "urlInvalid": "Introduce una URL http(s) válida",
-        "localConfigInvalid": "Introduce JSON válido con command no vacío, args como array de cadenas y env como objeto de claves y valores de texto."
+        "localConfigInvalid": "Introduce JSON válido con command no vacío, args como array de cadenas y env como objeto de claves y valores de texto.",
+        "localUnreadable": "No se pudo leer la configuración y no se ha cargado. Revisa el almacén de claves del sistema o elimínala y vuelve a añadirla."
       },
       "toast": {
         "created": "Servidor MCP agregado",

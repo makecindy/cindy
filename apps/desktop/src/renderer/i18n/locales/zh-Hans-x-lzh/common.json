@@ -9046,7 +9046,8 @@
       "errors": {
         "nameRequired": "请填显名",
         "urlInvalid": "请填合法之 http(s) URL",
-        "localConfigInvalid": "请填有效 JSON：command 不可空，args 为字符串数组，env 之名与值皆为字符串。"
+        "localConfigInvalid": "请填有效 JSON：command 不可空，args 为字符串数组，env 之名与值皆为字符串。",
+        "localUnreadable": "配置不可读，未载入。请查系统密钥存储，或删而重添。"
       },
       "toast": {
         "created": "MCP 服务器已增",

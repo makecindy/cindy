@@ -9089,7 +9089,8 @@
       "errors": {
         "nameRequired": "Display name is required",
         "urlInvalid": "Enter a valid http(s) URL",
-        "localConfigInvalid": "Enter valid JSON with a nonempty command, a string array args and a string-to-string object env."
+        "localConfigInvalid": "Enter valid JSON with a nonempty command, a string array args and a string-to-string object env.",
+        "localUnreadable": "Configuration could not be read and is not loaded. Check system key storage or delete it and add it again."
       },
       "toast": {
         "created": "MCP server added",

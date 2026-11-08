@@ -9046,7 +9046,8 @@
       "errors": {
         "nameRequired": "請填寫顯示名稱",
         "urlInvalid": "請填寫合法的 http(s) URL",
-        "localConfigInvalid": "請填寫有效 JSON：command 為非空命令，args 為字串陣列，env 為名稱和值皆為字串的物件。"
+        "localConfigInvalid": "請填寫有效 JSON：command 為非空命令，args 為字串陣列，env 為名稱和值皆為字串的物件。",
+        "localUnreadable": "設定無法讀取，未載入。請檢查系統金鑰儲存，或刪除後重新新增。"
       },
       "toast": {
         "created": "MCP 伺服器已新增",

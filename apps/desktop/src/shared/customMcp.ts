@@ -46,6 +46,8 @@ export interface CustomMcpConfig {
   headers: Record<string, string>;
   /** Required for stdio; encrypted as a unit at rest (arguments can contain secrets). */
   stdio?: StdioMcpConfig;
+  /** Read-only Settings projection; never eligible for runtime registration. */
+  readError?: 'stdio-unreadable';
 }
 
 /** Optional runtime projection for capability pickers; omitted for configuration CRUD. */

@@ -9161,7 +9161,8 @@
       "errors": {
         "nameRequired": "Le nom d'affichage est obligatoire",
         "urlInvalid": "Saisissez une URL http(s) valide",
-        "localConfigInvalid": "Saisissez un JSON valide avec command non vide, args comme tableau de chaînes et env comme objet de clés et valeurs textuelles."
+        "localConfigInvalid": "Saisissez un JSON valide avec command non vide, args comme tableau de chaînes et env comme objet de clés et valeurs textuelles.",
+        "localUnreadable": "La configuration est illisible et n’est pas chargée. Vérifiez le stockage des clés du système ou supprimez-la puis ajoutez-la à nouveau."
       },
       "toast": {
         "created": "Serveur MCP ajouté",

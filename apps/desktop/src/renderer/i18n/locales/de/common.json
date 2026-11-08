@@ -9089,7 +9089,8 @@
       "errors": {
         "nameRequired": "Anzeigename ist erforderlich",
         "urlInvalid": "Gib eine gültige http(s)-URL ein",
-        "localConfigInvalid": "Gib gültiges JSON mit nicht leerem command, einem Zeichenfolgen-Array args und einem env-Objekt mit Zeichenfolgen als Schlüssel und Werten ein."
+        "localConfigInvalid": "Gib gültiges JSON mit nicht leerem command, einem Zeichenfolgen-Array args und einem env-Objekt mit Zeichenfolgen als Schlüssel und Werten ein.",
+        "localUnreadable": "Die Konfiguration konnte nicht gelesen werden und wurde nicht geladen. Prüfe den Systemschlüsselspeicher oder lösche sie und füge sie erneut hinzu."
       },
       "toast": {
         "created": "MCP-Server hinzugefügt",

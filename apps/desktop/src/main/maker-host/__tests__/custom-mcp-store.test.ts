@@ -484,6 +484,20 @@ describe('local MCP persistence', () => {
     raw!.prepare('UPDATE custom_mcp_servers SET stdio = ?').run('corrupt');
     await expect(getCustomMcpServer(local.id)).rejects.toThrow('MCP local configuration is unreadable');
   });
+  // Review regression: an unavailable keychain must not hide healthy rows or
+  // prevent deletion of the unreadable local configuration from Settings.
+  it.each(['keychain', 'corrupt'])('isolates an unreadable local row (%s) and permits deletion', async failure => {
+    mountDb();
+    await createCustomMcpServer(valid);
+    await createCustomMcpServer({ ...local, id: 'local' });
+    if (failure === 'keychain') vi.mocked(safeStorage.isEncryptionAvailable).mockReturnValue(false);
+    else raw!.prepare('UPDATE custom_mcp_servers SET stdio = ? WHERE id = ?').run('corrupt', 'local');
+    const listed = await listCustomMcpServers();
+    expect(listed).toEqual([valid, { id: 'local', name: local.name, transport: 'stdio', url: '', headers: {}, readError: 'stdio-unreadable' }]);
+    expect(validateCustomMcpConfig(listed[1]).ok).toBe(false);
+    await deleteCustomMcpServer('local');
+    expect(await listCustomMcpServers()).toEqual([valid]);
+  });
   it.each([
     { command: '', args: [], env: {} },
     { command: 'node', args: '--flag', env: {} },
