@@ -164,6 +164,7 @@ export interface MobileComposerInputRowProps {
   maxHeight?: number;
   multiline?: boolean;
   multilineShape?: boolean;
+  onScroll?: TextInputProps['onScroll'];
   onBlur?: TextInputProps['onBlur'];
   onChangeText: (value: string) => void;
   onKeyPress?: TextInputProps['onKeyPress'];
@@ -254,6 +255,7 @@ export function MobileComposerInputRow({
   maxHeight = MOBILE_COMPOSER_INPUT_MAX_HEIGHT,
   multiline = true,
   multilineShape,
+  onScroll,
   onBlur,
   onChangeText,
   onKeyPress,
@@ -335,6 +337,7 @@ export function MobileComposerInputRow({
       cursorColor={cursorColor}
       editable={editable}
       multiline={multiline}
+      onScroll={onScroll}
       onBlur={onBlur}
       onChangeText={onChangeText}
       onSelectionChange={onSelectionChange}

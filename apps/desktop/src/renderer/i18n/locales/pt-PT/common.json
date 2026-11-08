@@ -14293,6 +14293,8 @@
       "closeFailed": "Não foi possível fechar a conversa paralela. Tente novamente."
     },
     "teammateProcess": {
+      "empty": "Não há detalhes do processo para esta resposta",
+      "unavailable": "Não foi possível carregar os detalhes do processo",
       "record": "Atividade",
       "operations": "Registo de atividade",
       "elapsed": "A trabalhar há {{duration}}",
@@ -19962,5 +19964,14 @@
     "directory": "Pasta da conta",
     "loginAgain": "Iniciar sessão novamente",
     "login": "Iniciar sessão"
+  },
+  "crashDiagnosis": {
+    "title": "O Cindy encerrou inesperadamente",
+    "description": "Quer diagnosticar a causa? Vamos preparar um rascunho de tarefa com os detalhes do encerramento e registos sem dados sensíveis para rever antes de enviar. Um encerramento forçado ou uma falha de energia também pode ser a causa.",
+    "diagnose": "Diagnosticar problema",
+    "later": "Agora não",
+    "logExcerpt": "Registos relevantes (excerto, possivelmente incompleto)",
+    "logsUnavailable": "Não há registos relevantes disponíveis. A causa ainda é desconhecida.",
+    "failed": "Não foi possível preparar o diagnóstico. Tente novamente."
   }
 }

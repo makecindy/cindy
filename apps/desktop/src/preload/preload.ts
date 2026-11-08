@@ -4579,6 +4579,13 @@ contextBridge.exposeInMainWorld('electronAPI', {
   cancelCindyMakeTask: (runId: string): Promise<{ success: boolean }> =>
     ipcRenderer.invoke('app:cancel-cindy-make-task', runId),
 
+  // 本机重启诊断：只预填草稿，不上传或发送。
+  getCrashDiagnosis: (): Promise<import('../shared/crashDiagnosis').CrashDiagnosisSummary | null> =>
+    ipcRenderer.invoke('crash-diagnosis:get'),
+  prepareCrashDiagnosis: (): Promise<import('../shared/crashDiagnosis').CrashDiagnosisEvidence | null> =>
+    ipcRenderer.invoke('crash-diagnosis:prepare'),
+  dismissCrashDiagnosis: (): Promise<void> => ipcRenderer.invoke('crash-diagnosis:dismiss'),
+
   // ── 客户端日志上报(Settings → About)──
   // 真相在 main:是否配置了上报目标、是否已同意隐私政策、开关的 override 状态都由 main
   // 判定,renderer 只消费结论。上传编号由 main 生成并回传,用户报障时口述给我们。

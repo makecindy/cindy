@@ -73,7 +73,7 @@ describe('mobile session composer desktop-first surface', () => {
     const finishVoiceSource = source.slice(finishVoiceStart, finishVoiceEnd);
     const sharedSource = readTextLf(resolve(process.cwd(), 'src/session/MobileComposerInputRow.tsx'), 'utf8');
     const attachmentTraySource = readTextLf(resolve(process.cwd(), 'src/session/ComposerAttachmentTray.tsx'), 'utf8');
-    const composerInputStart = source.indexOf('<MobileComposerInputRow');
+    const composerInputStart = source.indexOf('<ResizableComposerInputRow');
     const composerInputEnd = source.indexOf('/>', source.indexOf('value={draft}', composerInputStart)) + 2;
     const composerInputSource = source.slice(composerInputStart, composerInputEnd);
     const attachmentButtonStart = source.indexOf('const renderComposerAttachmentButton = () => (');
@@ -158,7 +158,7 @@ describe('mobile session composer desktop-first surface', () => {
     expect(source).toContain('leading: renderComposerCompactLeading()');
     expect(source).toContain('toolbar: renderComposerToolbar()');
     expect(source).toContain('trailing: renderComposerTrailingActions()');
-    expect(source).toContain('gesture={composerResize.gesture}');
+    expect(readTextLf(resolve(process.cwd(), 'src/session/ResizableComposerInputRow.tsx'), 'utf8')).toContain('gesture={resize.gesture}');
     expect(source).toContain('bodyScrollGesture={composerResize.scrollGesture}');
     expect(source).not.toContain('styles.composerCompactAttachmentSlot');
     expect(source).toContain('styles.composerCompactAttachmentHit');
@@ -329,7 +329,7 @@ describe('mobile session composer desktop-first surface', () => {
     expect(source).not.toContain('renderComposerTextInput(true)');
     expect(source).not.toContain('renderComposerTextInput(false)');
     expect(source).not.toContain('const renderComposerTextInput = () => (');
-    expect(composerInputSource).toContain('<MobileComposerInputRow');
+    expect(composerInputSource).toContain('<ResizableComposerInputRow');
     expect(composerInputSource).toContain('<ComposerRichInput');
     expect(composerInputSource).toContain('document={composerDocument}');
     expect(composerInputSource).toMatch(/inputElement=\{\s*\(?\s*<ComposerRichInput/);
@@ -356,10 +356,10 @@ describe('mobile session composer desktop-first surface', () => {
     expect(source).toContain('const COMPOSER_INPUT_MAX_CONTENT_HEIGHT = MOBILE_COMPOSER_INPUT_MAX_HEIGHT;');
     expect(sharedSource).toContain('export const MOBILE_COMPOSER_INPUT_MAX_VISIBLE_LINES = 12;');
     expect(sharedSource).toContain('export const MOBILE_COMPOSER_INPUT_MAX_HEIGHT = (MOBILE_COMPOSER_INPUT_LINE_HEIGHT * MOBILE_COMPOSER_INPUT_MAX_VISIBLE_LINES)');
-    expect(source).toContain('const COMPOSER_VERTICAL_PADDING_HEIGHT = 12;');
+    expect(source).toContain('const COMPOSER_VERTICAL_PADDING_HEIGHT = composerRowChrome.verticalPadding;');
     expect(source).toContain('const COMPOSER_STATUS_ROW_RESERVED_HEIGHT = 28;');
     expect(source).toContain('const COMPOSER_STACK_GAP_HEIGHT = 4;');
-    expect(source).toContain('const COMPOSER_INPUT_ROW_CHROME_HEIGHT = 22;');
+    expect(source).toContain('const COMPOSER_INPUT_ROW_CHROME_HEIGHT = composerRowChrome.collapsed;');
     expect(voiceMicCaretStyle).toContain('marginLeft: 2');
     expect(source).not.toContain('const COMPOSER_VOICE_CARET_RESERVED_WIDTH');
     expect(source).not.toContain('const COMPOSER_VOICE_OVERLAY_HORIZONTAL_PADDING');
@@ -392,7 +392,7 @@ describe('mobile session composer desktop-first surface', () => {
     expect(source.match(/scrollEnabled={composerInputScrollEnabled}/g)?.length ?? 0).toBeGreaterThanOrEqual(2);
     expect(composerInputSource).toContain('maxHeight={composerResize.inputMaxHeight}');
     expect(composerInputSource).toContain('inputFrameAnimatedStyle={composerResize.frameStyle}');
-    expect(composerInputSource).toContain('resizeHandle={composerCardActive ? renderComposerResizeHandle() : null}');
+    expect(composerInputSource).toContain('pullThrough={composerPullThrough}');
     expect(sharedSource).toContain('{ maxHeight },');
     expect(source).not.toContain('{ height: composerInputVisibleHeight');
     expect(composerInputSource).toContain('multilineShape={!composerCardActive && composerInputIsMultiline}');
@@ -746,7 +746,7 @@ describe('mobile session composer desktop-first surface', () => {
     const voiceStart = source.indexOf('const startVoiceRecording = useCallback(async () => {');
     const voiceEnd = source.indexOf('const removeRemoteFileAttachment = useCallback', voiceStart);
     const voiceSource = source.slice(voiceStart, voiceEnd);
-    const composerInputStart = source.indexOf('<MobileComposerInputRow');
+    const composerInputStart = source.indexOf('<ResizableComposerInputRow');
     const composerInputEnd = source.indexOf('/>', source.indexOf('value={draft}', composerInputStart)) + 2;
     const composerInputSource = source.slice(composerInputStart, composerInputEnd);
 

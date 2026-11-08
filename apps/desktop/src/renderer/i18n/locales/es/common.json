@@ -14293,6 +14293,8 @@
       "closeFailed": "No se pudo cerrar el chat secundario. Inténtalo de nuevo."
     },
     "teammateProcess": {
+      "empty": "No hay detalles del proceso para esta respuesta",
+      "unavailable": "No se pudieron cargar los detalles del proceso",
       "record": "Actividad",
       "operations": "Registro de actividad",
       "elapsed": "Lleva {{duration}} trabajando",
@@ -19962,5 +19964,14 @@
     "directory": "Carpeta de la cuenta",
     "loginAgain": "Iniciar sesión nuevamente",
     "login": "Iniciar sesión"
+  },
+  "crashDiagnosis": {
+    "title": "Cindy se cerró inesperadamente",
+    "description": "¿Quieres diagnosticar la causa? Prepararemos un borrador de tarea con los detalles del cierre y registros sin datos sensibles para que lo revises antes de enviarlo. También puede deberse a un cierre forzado o un corte de energía.",
+    "diagnose": "Diagnosticar problema",
+    "later": "Ahora no",
+    "logExcerpt": "Registros relevantes (extracto, puede estar incompleto)",
+    "logsUnavailable": "No hay registros relevantes disponibles. La causa aún se desconoce.",
+    "failed": "No se pudo preparar el diagnóstico. Inténtalo de nuevo."
   }
 }

@@ -1,3 +1,5 @@
+import { useComposerDragOpen } from '@/session/useComposerDragOpen';
+import { ResizableComposerInputRow } from '@/session/ResizableComposerInputRow';
 import type { ViewInstance, TextInputInstance, ScrollViewInstance } from 'react-native';
 import { useBotGroupRemoteMedia } from "@/session/useBotGroupRemoteMedia";
 import { ComposerAttachmentPreview } from "@/session/ComposerAttachmentPreview";
@@ -304,7 +306,6 @@ import { confirmFullAccessChange } from '@/session/fullAccessConfirmation';
 import { MobileVendorIcon } from '@/components/MobileVendorIcon';
 import { PlanModeChip } from '@/session/PlanModeChip';
 import {
-  ComposerResizeGrabber,
   ComposerToolbarLeftGroup,
   ComposerToolbarSpacer,
   ComposerToolbarVoiceSlot,
@@ -314,7 +315,6 @@ import {
   MOBILE_COMPOSER_INPUT_MAX_HEIGHT,
   MOBILE_COMPOSER_INPUT_SINGLE_LINE_HEIGHT,
   MOBILE_COMPOSER_MIN_TOUCH_TARGET,
-  MobileComposerInputRow,
   VoiceMicWaveCaret,
   resolveMobileComposerVoiceButtonPlacement,
 } from '@/session/MobileComposerInputRow';
@@ -1617,7 +1617,9 @@ function NewRemoteSessionContent({ creatingRef }: { creatingRef: { current: bool
   const pendingImagePreview = useComposerPendingImagePreview({ attachments, previews: attachmentPreviews, pendingUploads, getUploadedAttachmentId });
   const composerImageCount = attachments.filter((item) => item.category === 'image').length + composerIncomingImageCount;
   const { active: composerImageHoldActive, collapse: collapseComposerImages } = useComposerImageExpansion(composerImageCount, imageSelectionRevision);
-  const composerCardActive = firstMessageInputFocused || composerPillOpen.opening
+  const { composerDragOpen, handleComposerDragOpenChange, handleComposerDragOpenCommit } =
+    useComposerDragOpen(firstMessageInputFocused, () => firstMessageInputRef.current?.focus());
+  const composerCardActive = firstMessageInputFocused || composerPillOpen.opening || composerDragOpen
     || composerImageHoldActive
     || modelSheetOpen
     || permissionSheetOpen
@@ -1640,6 +1642,9 @@ function NewRemoteSessionContent({ creatingRef }: { creatingRef: { current: bool
   const composerChromeHeight = (composerCardActive ? COMPOSER_CARD_CHROME_HEIGHT : COMPOSER_RESIZE_CHROME_HEIGHT)
     + composerAttachmentTrayHeight;
   const composerResize = useComposerResize({
+    bodyDragEnabled: !creating && (!composerCardActive || composerAttachmentTrayHeight === 0),
+    onDragOpenChange: handleComposerDragOpenChange,
+    onDragOpenCommit: handleComposerDragOpenCommit,
     autoMaxContentHeight: Math.max(
       MOBILE_COMPOSER_INPUT_SINGLE_LINE_HEIGHT,
       Math.min(MOBILE_COMPOSER_INPUT_MAX_HEIGHT, composerCardMaxHeight - composerChromeHeight),
@@ -3349,15 +3354,6 @@ function NewRemoteSessionContent({ creatingRef }: { creatingRef: { current: bool
     setVoiceDraftCaretFrame({ left: 0, top: 0 });
   }, [draft.firstMessage.length, voiceIsListening]);
 
-  const renderComposerResizeHandle = () => (
-    <ComposerResizeGrabber
-      onAdjust={composerResize.adjustByLine}
-      panHandlers={composerResize.panHandlers}
-      gesture={composerResize.gesture}
-      testID="newSession.composerResizeGrabber"
-      visible
-    />
-  );
   const renderAttachmentToggleButton = () => (
     <Pressable
       accessibilityLabel={t('session.common.openContextPanel')}
@@ -5616,7 +5612,7 @@ function NewRemoteSessionContent({ creatingRef }: { creatingRef: { current: bool
               <View style={[styles.composerToolbarWrap, composerCardActive && {
                 minHeight: COMPOSER_CARD_CHROME_HEIGHT + MOBILE_COMPOSER_INPUT_SINGLE_LINE_HEIGHT,
               }]}>
-                <MobileComposerInputRow
+                <ResizableComposerInputRow resize={composerResize}
                   accessibilityLabel={t('session.new.firstMessagePlaceholder')}
                   bodyScrollGesture={composerResize.scrollGesture}
                   bodyScrollEnabled={!composerResize.dragging}
@@ -5657,7 +5653,7 @@ function NewRemoteSessionContent({ creatingRef }: { creatingRef: { current: bool
                   onPasteImagesLoadFailed={failPastePlaceholders}
 
                   placeholderTextColor={colors.textPlaceholder}
-                  resizeHandle={composerCardActive ? renderComposerResizeHandle() : null}
+                  grabberTestID="newSession.composerResizeGrabber"
                   scrollEnabled={composerInputScrollEnabled}
 
                   selectionColor={colors.inputCaret}
