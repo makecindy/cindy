@@ -6,6 +6,8 @@ import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vite
 
 const state = vi.hoisted(() => ({ scope: 'owner-a', boundaryPending: false, owned: [] as unknown[] }));
 const clipboard = vi.hoisted(() => ({ remember: vi.fn() }));
+// Approval ownership uses the local host path; standby admission has its own fixture.
+vi.mock('../providerShareAvailability.js', () => ({ prepareShareAvailability: vi.fn(async () => null) }));
 vi.mock('../../appSessionState.js', () => ({
   activeOwnerScopeKey: () => state.scope,
   isAppSessionBoundaryPending: () => state.boundaryPending,

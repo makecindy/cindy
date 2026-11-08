@@ -9908,6 +9908,8 @@
     "banner": {
       "title": "已更新到 {{version}}",
       "subtitle": "重啟以應用更新",
+      "nativeBuildTitle": "Apple 晶片版已就緒",
+      "nativeBuildSubtitle": "重新啟動即換裝，任務和設定都會保留",
       "viewNotes": "檢視更新公告",
       "viewNotesAria": "檢視 {{version}} 的更新公告",
       "button": "立即重啟",
@@ -10037,6 +10039,12 @@
       "description": "資料庫約佔 {{size}}，已超過 {{threshold}} G。建議前往儲存空間進行清理。",
       "openSettings": "開啟儲存空間",
       "disable": "不再提醒"
+    },
+    "nativeBuild": {
+      "title": "目前是 Intel 版 Cindy",
+      "description": "這台 Mac 是 Apple 晶片，Intel 版要轉譯執行，會明顯變慢。改裝 Apple 晶片版即可，資料都會保留。",
+      "dismiss": "本次不再提示",
+      "download": "下載"
     },
     "horizontalTabbarAria": "主區域檢視切換",
     "tabs": {
@@ -19256,6 +19264,7 @@
       "apply": "遷移"
     },
     "source": {
+      "receivingOn": "接收端：{{name}}",
       "description": "選一台登入了同一帳號的電腦。它的插件、技能、設定和連線會照原樣裝到這台電腦；金鑰只在你在那台電腦上點「允許」後複製，登入狀態不會離開那台電腦。",
       "loading": "正在尋找你的其他電腦…",
       "empty": "沒有找到這個帳號的其他電腦。在另一台電腦上登入 Cindy 後再開啟這裡",

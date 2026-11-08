@@ -70,6 +70,9 @@ export interface ProviderShareReceived {
   owner: ProviderSharePerson;
   status: 'active' | 'paused';
   hostOnline: boolean;
+  /** Original device presence, separate from an authorized standby. */
+  hostDeviceOnline?: boolean;
+  standbyOnline?: boolean;
   hostCapable: boolean;
 }
 
@@ -216,8 +219,9 @@ function parseReceived(value: unknown): ProviderShareReceived {
     deviceName: text(item.deviceName, 256),
     owner: person(item.owner),
     status: oneOf(item.status, ['active', 'paused'] as const),
-    hostOnline: bool(item.hostOnline),
-    hostCapable: bool(item.hostCapable),
+    hostOnline: bool(item.hostOnline) || item.standbyOnline === true,
+    ...(typeof item.standbyOnline === 'boolean' ? { hostDeviceOnline: bool(item.hostOnline), standbyOnline: item.standbyOnline } : {}),
+    hostCapable: bool(item.hostCapable) || item.standbyOnline === true,
   };
 }
 
