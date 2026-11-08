@@ -19758,5 +19758,14 @@
     "directory": "Kontoordner",
     "loginAgain": "Erneut anmelden",
     "login": "Anmelden"
+  },
+  "crashDiagnosis": {
+    "title": "Cindy wurde unerwartet beendet",
+    "description": "Möchtest du die Ursache untersuchen? Wir bereiten einen Aufgabenentwurf mit Beendigungsdetails und bereinigten Protokollen vor, den du vor dem Senden prüfen kannst. Auch erzwungenes Beenden oder ein Stromausfall kann die Ursache sein.",
+    "diagnose": "Problem untersuchen",
+    "later": "Nicht jetzt",
+    "logExcerpt": "Relevante Protokolle (Auszug, möglicherweise unvollständig)",
+    "logsUnavailable": "Keine relevanten Protokolle verfügbar. Die Ursache ist noch unbekannt.",
+    "failed": "Die Diagnose konnte nicht vorbereitet werden. Bitte versuche es erneut."
   }
 }

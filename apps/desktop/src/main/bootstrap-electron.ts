@@ -632,6 +632,7 @@ import {
   setPhysicalInputShielded,
 } from './mcp-integrations/computer.js';
 import { initAnalyticsSettingsService, noteAuthColdStartState } from './analyticsSettingsService';
+import { initCrashDiagnosisService } from './crash-diagnosis';
 import { initLogUploadService, scheduleStartupBackfill } from './log-upload';
 import { initPerformanceTraceService } from './performance-trace';
 import { createOpenLogsMenuItem, openLogsDirectory } from './logSupport';
@@ -10227,6 +10228,7 @@ app.on('ready', async () => {
   // log-upload:settings-get 决定入口可用性;更重要的是崩溃即时路径要在
   // onFatalShutdown 上就位,否则 createWindow 之后立刻崩的那一次拿不到标记。
   initLogUploadService();
+  initCrashDiagnosisService();
   initPerformanceTraceService(() => mainWindowRef);
   // Local profiles bypass authManager's cloud claim path. Await the same
   // asynchronous PID provenance scan before the first BrowserWindow exists so

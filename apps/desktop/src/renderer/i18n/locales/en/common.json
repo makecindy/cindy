@@ -19758,5 +19758,14 @@
     "directory": "Account folder",
     "loginAgain": "Sign in again",
     "login": "Sign in"
+  },
+  "crashDiagnosis": {
+    "title": "Cindy exited unexpectedly",
+    "description": "Would you like to diagnose what happened? We’ll prepare a task draft with exit details and redacted logs for you to review before sending. An unexpected exit can also result from a forced quit or power loss.",
+    "diagnose": "Diagnose problem",
+    "later": "Not now",
+    "logExcerpt": "Relevant logs (excerpt; may be incomplete)",
+    "logsUnavailable": "No relevant logs are available. The cause is not yet known.",
+    "failed": "Could not prepare the diagnosis. Please try again."
   }
 }

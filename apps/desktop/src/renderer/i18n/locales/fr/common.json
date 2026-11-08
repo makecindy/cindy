@@ -19945,5 +19945,14 @@
     "directory": "Dossier du compte",
     "loginAgain": "Se reconnecter",
     "login": "Se connecter"
+  },
+  "crashDiagnosis": {
+    "title": "Cindy s’est fermé de manière inattendue",
+    "description": "Voulez-vous en diagnostiquer la cause ? Nous préparerons un brouillon de tâche avec les détails de l’arrêt et des journaux expurgés, à vérifier avant envoi. Un arrêt forcé ou une coupure de courant peut aussi en être la cause.",
+    "diagnose": "Diagnostiquer le problème",
+    "later": "Pas maintenant",
+    "logExcerpt": "Journaux pertinents (extrait potentiellement incomplet)",
+    "logsUnavailable": "Aucun journal pertinent disponible. La cause reste inconnue.",
+    "failed": "Impossible de préparer le diagnostic. Veuillez réessayer."
   }
 }
