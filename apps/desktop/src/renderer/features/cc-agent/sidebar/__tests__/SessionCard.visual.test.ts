@@ -649,7 +649,7 @@ describe('SessionCard visual cases', () => {
 
       const card = container.querySelector<HTMLElement>('[data-sidebar-session-row="true"]');
       const title = within(card!).getByText(visualCase.session.title, {
-        selector: variant === 'list' ? '.sidebar-title-marquee__ellipsis' : undefined,
+        selector: '.sidebar-title-marquee__ellipsis',
       });
       const actionButton = card?.querySelector<HTMLButtonElement>(
         'button[aria-label="ccAgent.sidebar.sessionMenu.moreActions"]',
@@ -742,6 +742,34 @@ describe('SessionCard visual cases', () => {
       summaryCase.session.summary,
     ]);
     expect(new Set(budgets.map((item) => item.bodyBox)).size).toBe(1);
+  });
+
+  // 2026-11-09 用户定:置顶卡片标题单行但不能只截断,悬停卡片时与列表行一样用跑马灯带过全名。
+  it('plays the shared title marquee when hovering a pinned card with an overflowing title', () => {
+    const widths = [
+      vi.spyOn(HTMLElement.prototype, 'scrollWidth', 'get').mockImplementation(function (this: HTMLElement) {
+        return this.classList.contains('sidebar-title-marquee__track') ? 300 : 0;
+      }),
+      vi.spyOn(HTMLElement.prototype, 'clientWidth', 'get').mockImplementation(function (this: HTMLElement) {
+        return this.classList.contains('sidebar-title-marquee') ? 100 : 0;
+      }),
+    ];
+    try {
+      renderCase('very-long-title');
+      const card = sessionRowEl();
+      const marquee = card.querySelector<HTMLElement>('.sidebar-title-marquee')!;
+      expect(marquee.title).toBe(sessionCardVisualCases.find((item) => item.id === 'very-long-title')!.session.title);
+      expect(marquee.dataset.titleOverflowing).toBeUndefined();
+
+      fireEvent.mouseEnter(card);
+      expect(marquee.dataset.titleOverflowing).toBe('true');
+      expect(marquee.style.getPropertyValue('--sidebar-title-marquee-shift')).toBe('-200px');
+
+      fireEvent.mouseLeave(card);
+      expect(marquee.dataset.titleOverflowing).toBeUndefined();
+    } finally {
+      widths.forEach((spy) => spy.mockRestore());
+    }
   });
 
   it('shows plugin setup as a needs-interaction preview', () => {
@@ -843,9 +871,7 @@ describe('SessionCard visual cases', () => {
 
     // card 变体(评审定稿):标题纯文字,自动化标志下沉到底部 meta 行。
     const { container: cardContainer } = render(createElement(SessionCard, commonProps));
-    const cardTitle = Array.from(cardContainer.querySelectorAll('div')).find((node) =>
-      node.className.includes('[-webkit-line-clamp:1]'),
-    );
+    const cardTitle = cardContainer.querySelector('.sidebar-title-marquee');
     expect(cardTitle?.textContent).toContain('自动化日报巡检');
     // 标题里不再有自动化图标……
     expect(cardTitle?.querySelector('[aria-label="查看自动化任务"]')).toBeNull();
@@ -935,9 +961,7 @@ describe('SessionCard visual cases', () => {
     );
 
     const card = container.querySelector<HTMLElement>('[data-sidebar-session-row="true"]')!;
-    const title = Array.from(card.querySelectorAll<HTMLElement>('div')).find((node) =>
-      node.className.includes('[-webkit-line-clamp:1]'),
-    )!;
+    const title = card.querySelector<HTMLElement>('.sidebar-title-marquee')!.parentElement!;
     expect(title.classList.contains('invisible')).toBe(false);
 
     fireEvent.doubleClick(card);
@@ -960,7 +984,9 @@ describe('SessionCard visual cases', () => {
 
   it('keeps archived sessions on the archive visual branch', () => {
     renderCase('archived');
-    expect(screen.getByText('已归档的历史分析任务')).toBeTruthy();
+    expect(
+      screen.getByText('已归档的历史分析任务', { selector: '.sidebar-title-marquee__ellipsis' }),
+    ).toBeTruthy();
   });
 
   it('matches text-mode action chrome in list mode while preserving card buttons', () => {
@@ -1142,9 +1168,7 @@ describe('SessionCard visual cases', () => {
                   node.className.includes('truncate') &&
                   node.textContent?.includes(visualCase.session.title),
               )
-            : Array.from(container.querySelectorAll('div')).find((node) =>
-                node.className.includes('[-webkit-line-clamp:1]'),
-              );
+            : container.querySelector('.sidebar-title-marquee__ellipsis');
         const preview = Array.from(container.querySelectorAll('p')).find((node) =>
           node.textContent?.includes('正在分析本周项目数据与异常波动。'),
         );
@@ -1379,8 +1403,9 @@ describe('SessionCard visual cases', () => {
       expect(actions.compareDocumentPosition(titleRow) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
       expect(actions.parentElement).toBe(titleRow.parentElement);
       cleanup();
+      // 无标签时同样让位:悬停跑马灯要在操作钮左侧带完全名(2026-11-09)。
       const { container: untagged } = renderVariant('card', { ...baseSession, tags: [] });
-      expect(untagged.querySelector('[class*="group-hover/card:pr-14"]')).toBeNull();
+      expect(untagged.querySelector('[class*="group-hover/card:pr-14"]')).not.toBeNull();
     });
 
     it('card: 归档确认胶囊按实际宽度让位(同文案同样式的隐形占位)', () => {

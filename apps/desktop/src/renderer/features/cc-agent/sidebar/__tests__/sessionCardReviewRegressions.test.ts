@@ -122,8 +122,12 @@ describe('SessionCard review regressions', () => {
     );
   });
 
-  it('keeps card titles to one line with shared inline prefix alignment', () => {
-    expect(sessionCardSource).toContain('[-webkit-line-clamp:1] overflow-hidden');
+  // 2026-11-09 用户定:置顶卡片标题单行,悬停时与列表行同一个跑马灯展示全名。
+  it('keeps card titles on the shared list marquee with shared inline prefix alignment', () => {
+    expect(sessionCardSource.match(/<SidebarTitleMarquee\b/g)).toHaveLength(2);
+    expect(sessionCardSource).not.toContain(
+      "'[display:-webkit-box] [-webkit-box-orient:vertical] [-webkit-line-clamp:1] overflow-hidden'",
+    );
     expect(sessionCardSource).toContain('style={{ textIndent: 0, paddingLeft: 0 }}');
     expect(sessionCardSource).toContain('const titlePrefixNode = (');
     expect(sessionCardSource).toContain('{titlePrefixNode}');

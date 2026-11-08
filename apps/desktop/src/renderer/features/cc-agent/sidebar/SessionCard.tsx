@@ -7,9 +7,10 @@ import { Button } from '@/components/ui/button';
  * SessionCard — sidebar-card-mode 下的单条会话卡片（SessionItem 的瀑布流形态）
  * ---------------------------------------------------------------------------
  * 设计来源：用户 Claude design 稿（XDT-sidebar-redesign，xdtsb-card 系）。
- * 视觉：白底 Card + 1px Board 圆角 12；卡片等高：标题 1 行且保持纯文字，摘要 / 最近消息
- *   固定占 2 行位（不足留空）；SessionStatusIcon（agent 标识 + running 呼吸 + attention
- *   状态点 + 草稿铅笔）、自动化 / 远程 / worktree 标识与时间统一放在底部 metadata 槽。
+ * 视觉：白底 Card + 1px Board 圆角 12；卡片等高：标题 1 行且保持纯文字（悬停跑马灯
+ *   展示全名，同列表行），摘要 / 最近消息固定占 2 行位（不足留空）；SessionStatusIcon
+ *   （agent 标识 + running 呼吸 + attention 状态点 + 草稿铅笔）、自动化 / 远程 / worktree
+ *   标识与时间统一放在底部 metadata 槽。
  *
  * 交互 100% 对齐 SessionItem（props 签名完全一致，sections 内按 cardMode 二选一渲染）：
  *   - 单击导航 / 双击重命名（标题原位变 input）
@@ -974,38 +975,42 @@ export const SessionCard = withSidebarNavigation<SessionCardProps>(function Sess
             className={cn(
               'relative flex items-start',
               // 右上操作钮浮在内容上方:浮出时标题行右侧让出操作钮宽度(两枚固定
-              // 24px 图标钮),标题让位、紧跟标题的标签色球不被盖住。让位条件与操作钮
+              // 24px 图标钮),标题让位:跑马灯在让出的宽度内带完全名,紧跟标题的
+              // 标签色球也不被盖住。让位条件与操作钮
               // 显隐同源(卡片 hover / 操作钮自身 focus-within / 菜单);卡片本身获得
               // 焦点时操作钮不显示,也不让位。确认胶囊宽度随语言变化,另由下方同款
               // 隐形占位按实际宽度让位。
               !navigationOnly &&
                 !isEditing &&
                 !archivePending &&
-                hasTitleMarks &&
                 (menuPos !== null
                   ? 'pr-14'
                   : 'group-hover/card:pr-14 peer-focus-within/card-actions:pr-14'),
             )}
           >
+            {/* 标题单行:与列表行同一个跑马灯,平时省略号,悬停卡片且溢出时横向带过全名。 */}
             <div
-              className={cn(
-                'min-w-0 text-12 font-semibold leading-[1.22] tracking-[-0.005em]',
-                '[display:-webkit-box] [-webkit-box-orient:vertical] [-webkit-line-clamp:1] overflow-hidden',
-                isActive ? 'text-sidebar-item-active-foreground' : 'text-foreground',
-                isEditing && 'invisible',
-              )}
+              className={cn('min-w-0', isEditing && 'invisible')}
               style={{ textIndent: 0, paddingLeft: 0 }}
             >
-              {matchIndices && matchIndices.length > 0 && canHighlightDisplayTitle
-                ? highlightSegments(session.title, matchIndices, {
-                    highlightClassName: cn(
-                      'bg-transparent font-semibold',
-                      isActive
-                        ? 'text-[var(--sidebar-item-active-foreground)]'
-                        : 'text-[var(--msg-assistant-text)]',
-                    ),
-                  })
-                : displayTitle}
+              <SidebarTitleMarquee
+                title={displayTitle}
+                className={cn(
+                  'text-12 font-semibold leading-[1.22] tracking-[-0.005em]',
+                  isActive ? 'text-sidebar-item-active-foreground' : 'text-foreground',
+                )}
+              >
+                {matchIndices && matchIndices.length > 0 && canHighlightDisplayTitle
+                  ? highlightSegments(session.title, matchIndices, {
+                      highlightClassName: cn(
+                        'bg-transparent font-semibold',
+                        isActive
+                          ? 'text-[var(--sidebar-item-active-foreground)]'
+                          : 'text-[var(--msg-assistant-text)]',
+                      ),
+                    })
+                  : displayTitle}
+              </SidebarTitleMarquee>
             </div>
             {/* 任务标签与「伙伴在跟进」常显、紧跟标题；标题单行截断时不被裁掉。 */}
             {!isEditing && hasTitleMarks ? (
@@ -1016,7 +1021,7 @@ export const SessionCard = withSidebarNavigation<SessionCardProps>(function Sess
             ) : null}
             {/* 归档确认胶囊的隐形同款占位:与胶囊同文案同样式,按实际宽度让位。
                 外包零高度容器只取宽度,不撑高单行标题,确认态卡片高度与瀑布流不动。 */}
-            {!isEditing && canQuickArchive && archivePending && hasTitleMarks ? (
+            {!isEditing && canQuickArchive && archivePending ? (
               <span aria-hidden className="h-0 shrink-0 overflow-hidden">
                 <Button
                   variant="secondary"
