@@ -1007,6 +1007,6 @@ Switch 解耦。插件插槽挂载同一个媒体组件，不再维护单独拖�
 
 ## 2026-11-08 · 设置页全部迁到设置行组件
 
-剩下 17 个直接用 `settingsRowClasses` 类名的设置页迁到 `SettingsSection`、`SettingsCard`、`SettingsRow`，`settingsRowClasses.ts` 删除。迁移时补了几处组件此前没覆盖的约定：设置页分区标题是 `h2`、标题到卡片 14px（与其余设置页一致，抽屉仍是 8px），组名下一行说明用 `description`；滑块、字体选择这类不是「名称 + 控件」的内容用 `SettingsBlock`；原来同一卡片里靠「不画分割线」表示一组的行（应用连接和它的开关），改为一组一张卡片。行内文字按组件的行高，两行的设置行比原来矮约 3px。
+剩下 17 个直接用 `settingsRowClasses` 类名的设置页迁到 `SettingsSection`、`SettingsCard`、`SettingsRow`，`settingsRowClasses.ts` 删除。迁移时补了几处组件此前没覆盖的约定：设置页分区标题是 `h2`、标题到卡片 14px（与其余设置页一致，抽屉仍是 8px），组名下一行说明用 `description`；滑块、字体选择这类不是「名称 + 控件」的内容用 `SettingsBlock`；原来同一卡片里靠「不画分割线」表示一组的行（应用连接和它的开关），改为一组一张卡片。组件原本沿用群设置抽屉的行距（名称行高 1.38、与说明间隔 2px），迁过来的设置行会矮约 3px；§4 此前没写行高。用户裁决设置页沿用原来的节奏：名称行高 1.5、说明 1.4、间隔 4px，分割线和手写卡片里一样占 1px 高度，与没用组件的手写设置行一致，迁移前后行高不变；抽屉维持紧凑行距。
 
 实现：`components/ui/settings-rows.tsx` 与各设置页；现行规则见 `DESIGN.md` §4 Desktop settings rows。

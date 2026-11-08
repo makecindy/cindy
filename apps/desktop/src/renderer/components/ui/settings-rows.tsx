@@ -2,7 +2,8 @@
  * 设置的分区、卡片与行（DESIGN.md §4 Desktop settings rows）：组名在卡片外，一张卡片放多行、
  * 行间缩进分割线；行左边是名称与一行说明，右边是当前值、控件或进入下一页的箭头。整行可点时
  * 只有一个点击目标。名称 13/500、说明 12、当前值 13；文字行高用无单位比例，跟随
- * 「外观 → UI 字号」放大（DESIGN.md §3）。
+ * 「外观 → UI 字号」放大（DESIGN.md §3）：设置页名称 1.5、说明 1.4、两者间隔 4px，与没用组件的
+ * 手写设置行一致；抽屉名称 1.38、间隔 2px。
  *
  * 设置页直接用：组名 h2，分区内的组名、卡片和说明间隔 14px。窄抽屉包在 SettingsDrawerScope 里，组名 h3、间隔 8px，
  * 行高收紧一档（行高 48，带头像 52），见 §4 Narrow drawer exception。
@@ -12,13 +13,16 @@ import { ChevronRight, Info } from 'lucide-react';
 
 import { cn } from '@/lib/utils';
 
-const DIVIDER_SHAPE = 'relative [&:not(:first-child)]:before:pointer-events-none [&:not(:first-child)]:before:absolute [&:not(:first-child)]:before:inset-x-4 [&:not(:first-child)]:before:top-0 [&:not(:first-child)]:before:h-px';
-export const SETTINGS_DIVIDER = `${DIVIDER_SHAPE} [&:not(:first-child)]:before:bg-[var(--border-default)]`;
-/** 设置页的分割线跟卡片描边同一个 token，自定义主题单独改了设置卡片描边时一起生效。 */
-const PAGE_DIVIDER = `${DIVIDER_SHAPE} [&:not(:first-child)]:before:bg-[var(--settings-theme-card-border)]`;
+const DIVIDER_SHAPE = 'relative [&:not(:first-child)]:before:pointer-events-none [&:not(:first-child)]:before:absolute [&:not(:first-child)]:before:inset-x-4 [&:not(:first-child)]:before:h-px';
+export const SETTINGS_DIVIDER = `${DIVIDER_SHAPE} [&:not(:first-child)]:before:top-0 [&:not(:first-child)]:before:bg-[var(--border-default)]`;
+/**
+ * 设置页的分割线跟卡片描边同一个 token，自定义主题单独改了设置卡片描边时一起生效；
+ * 分割线占 1px 高度（画在行上方留出的 1px 里），与手写设置卡片里单独一行的分割线等高。
+ */
+const PAGE_DIVIDER = `${DIVIDER_SHAPE} [&:not(:first-child)]:mt-px [&:not(:first-child)]:before:-top-px [&:not(:first-child)]:before:bg-[var(--settings-theme-card-border)]`;
 const PAGE_CARD = 'overflow-hidden rounded-xl border border-[var(--settings-theme-card-border)] bg-[var(--settings-theme-card-bg)]';
 const DRAWER_CARD = 'overflow-hidden rounded-xl border border-[var(--border-default)] bg-[var(--surface-elevated)]';
-export const SETTINGS_HINT = 'text-12 leading-[1.42] text-[var(--text-secondary)] [text-wrap:pretty]';
+export const SETTINGS_HINT = 'text-12 leading-[1.4] text-[var(--text-secondary)] [text-wrap:pretty]';
 
 /** 卡片标题这类不是设置行、但要和行名称同一档的文字（手柄页的卡片标题）。 */
 export const SETTINGS_ROW_LABEL_CLASS = 'text-13 font-medium text-[var(--settings-section-sublabel)]';
@@ -86,11 +90,11 @@ export function SettingsRow({ lead, title, tag, hint, value, chevron, trailing, 
   const body = <>
     {lead && <span className="flex shrink-0">{lead}</span>}
     <span className={cn('flex min-w-0 flex-col', wrap ? 'flex-[1_1_200px]' : 'flex-1')}>
-      <span className={cn('flex min-w-0 items-baseline gap-1.5 text-13 font-medium leading-[1.38]', danger ? 'text-[var(--text-danger)]' : drawer ? 'text-[var(--text-primary)]' : 'text-[var(--settings-section-sublabel)]')}>
+      <span className={cn('flex min-w-0 items-baseline gap-1.5 text-13 font-medium', drawer ? 'leading-[1.38]' : 'leading-[1.5]', danger ? 'text-[var(--text-danger)]' : drawer ? 'text-[var(--text-primary)]' : 'text-[var(--settings-section-sublabel)]')}>
         <span className="min-w-0 [overflow-wrap:anywhere]">{title}</span>
         {tag && <span className="shrink-0 text-12 font-normal leading-[1.33] text-[var(--text-tertiary)]">{tag}</span>}
       </span>
-      {hint && <span className={cn('mt-0.5', SETTINGS_HINT)}>{hint}</span>}
+      {hint && <span className={cn(drawer ? 'mt-0.5' : 'mt-1', SETTINGS_HINT)}>{hint}</span>}
     </span>
     {trailing ?? ((value !== undefined || chevron) && <span className="flex max-w-[55%] shrink-0 items-center gap-1 text-13 leading-[1.38] text-[var(--text-secondary)]">
       {value !== undefined && <span className="text-right [overflow-wrap:anywhere]">{value}</span>}
