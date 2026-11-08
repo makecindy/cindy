@@ -651,7 +651,7 @@
     "REMOTE_DAEMON_CLOSED": "远程连接中断了，可能正在更新。这一轮已经结束，请重新发送。",
     "REMOTE_LOCAL_ATTACHMENT_UNSUPPORTED": "远程任务无法访问本地文件或图片附件。请直接粘贴内容。",
     "AUTO_REVIEW_UNAVAILABLE": "自动审批暂时无法给出判断，需要审批的操作已改为由你确认。想少被打断，可以把任务切到「完全访问」，但风险更高。",
-    "AUTO_REVIEW_UNAVAILABLE_QUOTA": "自动审批模型网关额度已耗尽，自动审批暂时无法给出判断。请检查用量或计费，再确认这次操作。",
+    "AUTO_REVIEW_UNAVAILABLE_QUOTA": "自动审批模型网关配额已耗尽，自动审批暂时无法给出判断。请检查用量或计费，再确认这次操作。",
     "AUTO_REVIEW_UNAVAILABLE_WECHAT": "自动审批暂时无法给出判断，需要审批的操作已改为由你确认。个人微信不能使用「完全访问」，请直接确认这次操作。",
     "AUTO_REVIEW_CONFIRM_UNDELIVERED": "自动审批没完成，确认也没有送到或没有被点。这次拒绝不是你点的。",
     "REMOTE_COMPAT_MODE_UNSUPPORTED": "远程任务不能使用本机兼容通道。请改用 Cindy AI，或在本机任务里继续。",
