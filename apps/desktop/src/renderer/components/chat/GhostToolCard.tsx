@@ -248,6 +248,9 @@ function GhostCardCanvas({
   const { t } = useTranslation();
   const editorId = useId();
   const iframeRef = useRef<HTMLIFrameElement | null>(null);
+  // The iframe is not rebuilt when a plugin update adds card.externalLinks, so already-bound action handlers read this live.
+  const allowExternalLinksRef = useRef(allowExternalLinks);
+  allowExternalLinksRef.current = allowExternalLinks;
   const anchorRef = useRef<HTMLDivElement | null>(null);
   const liveDisposeRef = useRef<(() => void) | null>(null);
   useEffect(() => () => liveDisposeRef.current?.(), []);
@@ -677,6 +680,8 @@ function GhostCardCanvas({
         e.stopPropagation();
         // 已锁(点过、等新卡)则忽略连点。
         if (el.getAttribute('aria-disabled') === 'true' || (el as HTMLButtonElement).disabled) return;
+        // 插件更新后才声明 externalLinks:任务链接改由宿主直接跳转,不再走降级动作。
+        if (allowExternalLinksRef.current && ghostCardSessionLinkId(el.dataset.ghostSessionLink ?? '')) return;
         if (el.dataset.ghostSubmit === 'true') {
           if (!readGhostCardForm(html) || formState.current.busy) return;
           formState.current.busy = true;
