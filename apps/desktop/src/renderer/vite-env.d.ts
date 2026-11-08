@@ -1164,7 +1164,6 @@ interface ElectronAPI {
   companionImport: import('@cindy/maker-shared/companion-import').CompanionImportApi;
   modelFavoritesHost: import('../shared/modelFavoritesSync').ModelFavoritesHostApi;
   setupMigration: import('../shared/setupMigration').SetupMigrationApi;
-  routines: import('../shared/routines').RoutinesAPI;
   platform: string;
   /** 当前 Desktop 构建是否具备 Beta 更新渠道。 */
   supportsBetaUpdateChannel?: boolean;

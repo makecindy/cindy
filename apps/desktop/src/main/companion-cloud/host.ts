@@ -28,8 +28,8 @@ import { botProfileDir, botProfileMemoryDir, readBotProfileFolder, writeBotProfi
 import { onBotRemoteResourceChanged } from '../maker-ipc/botRemoteResourceInvalidation.js';
 import { applyBotSkillFilesForBot, deleteBotSkillForBot, listBotSkillFilesForBot, listBotSkillSourcesForBot, readBotSkillFilesForBot, readBotSkillSourceForBot, saveBotSkillSourceForBot } from '../maker-ipc/botSkillService.js';
 import { mergeCompanionWorkbench, readCompanionWorkbench } from '../maker-ipc/botLinkedProjectStore.js';
-import { importCompanionRoutines, listCompanionRoutines, type CompanionRoutineValue } from '../routines/service.js';
 import type { CompanionMaterializeHost } from './materialize.js';
+import { applyCompanionRoutines } from './routines.js';
 import { companionHomes } from './homes.js';
 import { createMcpServerNamesReader } from './mcpServerNames.js';
 import { companionHasLocalData } from './localData.js';
@@ -44,7 +44,6 @@ import {
   COMPANION_CAPABILITIES_KEY,
   COMPANION_MEMORY_PREFIX,
   COMPANION_PROFILE_KEY,
-  COMPANION_ROUTINE_PREFIX,
   COMPANION_SKILL_PREFIX,
   COMPANION_SKILL_FILES_PREFIX,
   COMPANION_WORKBENCH_KEY,
@@ -111,15 +110,13 @@ export async function readCompanionValues(botId: string, selfDeviceId: string | 
     const files = await listBotSkillFilesForBot(botId, skill.slug, skill.enabled);
     if (files.length) values.push({ key: `${COMPANION_SKILL_FILES_PREFIX}${skill.slug}`, value: null, localFiles: files });
   }
-  // Routines and the workbench move with the companion too (cloud-companions.md §2). A read
-  // failure aborts the cycle like the files above, so nothing is tombstoned by mistake.
-  // These parts are read separately: one that cannot be read now (e.g. routines before their engine
-  // is ready) leaves its cloud values untouched instead of stopping the profile and memories.
+  // The workbench moves with the companion too (cloud-companions.md §2). It is read separately:
+  // when it cannot be read now its cloud value stays untouched instead of stopping the profile and
+  // memories. Routines no longer go up: a teammate's scheduled work is its project's automations.
+  // This computer's earlier routine rows are tombstoned by the uploader (the prefix stays owned).
   const part = async (prefix: string, read: () => Promise<CompanionPreferenceValue[]>) => {
     try { values.push(...await read()); } catch { values.push({ key: prefix, value: null, unread: true }); }
   };
-  await part(COMPANION_ROUTINE_PREFIX, async () => (await listCompanionRoutines(botId, selfDeviceId))
-    .map(routine => ({ key: `${COMPANION_ROUTINE_PREFIX}${routine.id}`, value: routine })));
   if (selfDeviceId) await part(COMPANION_WORKBENCH_KEY, async () => {
     const workbench = await readCompanionWorkbench(userDataDir, botId, selfDeviceId);
     return workbench.directories.length || Object.keys(workbench.tasks).length ? [{ key: COMPANION_WORKBENCH_KEY, value: workbench }] : [];
@@ -143,12 +140,11 @@ function createMaterializer(input: {
   log?: CompanionLog;
 }): MaterializeLocal {
   return {
-    applyRoutines: async (botId, routines, remove, fence) => {
+    // Routines uploaded by a computer still on V1 become the teammate's project automations.
+    applyRoutines: async (botId, routines, _remove, fence) => {
       fence.assertCurrent();
-      const valid = routines.filter((routine): routine is CompanionRoutineValue => !!routine && typeof routine === 'object'
-        && typeof (routine as { id?: unknown }).id === 'string' && !!(routine as { input?: unknown }).input
-        && Array.isArray((routine as { input: { triggers?: unknown } }).input.triggers));
-      await importCompanionRoutines(botId, valid, remove, input.selfDeviceId?.() ?? null);
+      await applyCompanionRoutines({ botId, ownerRoot: ownerScopedUserDataPath(), rows: routines,
+        selfDeviceId: input.selfDeviceId?.() ?? null, assertCurrent: fence.assertCurrent, ...(input.log ? { log: input.log } : {}) });
     },
     applyWorkbench: async (botId, value, fence, options) => {
       const self = input.selfDeviceId?.();

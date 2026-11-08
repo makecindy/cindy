@@ -2605,8 +2605,6 @@ const CINDY_DIRECT_BOT_TOOLS = new Set([
   CINDY_STOP_SESSION_TASK_TOOL,
   CINDY_LIST_AGENTS_TOOL,
   CINDY_CREATE_TEAMMATE_TOOL,
-  'routine_list', 'routine_save', 'routine_sources', 'routine_delivery_targets',
-  'routine_history', 'routine_delete', 'routine_run_now', 'schedule_notify_current_run', 'schedule_set_pre_run_hook', 'schedule_list_models',
   // A companion reads the short task summary of a task it is told about.
   'get_task_digest',
 ]);
@@ -4113,87 +4111,13 @@ class CindyMcpGateway {
       });
     }
 
-    // Native companion routines use the same direct facade and permission identity
-    // as teammate creation. A generic MCP gateway would require nested discovery
-    // and would not disclose the inner routine arguments to the model.
-    const routineTriggerProperties = {
-      id: { type: 'string' },
-    };
-    const routineTools = [
-      { name: 'schedule_list_models', description: 'Discover currently available automation models and locations before choosing a routine model. providers[].modelDetails contains source-specific capabilities, efforts and known pricing; cost is USD per million tokens; currency applies to displayPricing. Compare suitable models using source prices and discounts, not names. Missing price is unknown, subscription reference prices are not charges. Save the exact agent/model/provider/location with routine_save.modelOverride; use null for the local location.', properties: {
-        agent: { type: 'string', enum: ['claude-code', 'codex', 'pi'] },
-        agentDeviceId: { type: 'string', minLength: 1, description: 'local or a returned locations[].agentDeviceId.' },
-      }, required: [] },
-      { name: 'schedule_notify_current_run', description: 'Request one final report from the current silent automation run when there is a new actionable result or an explicit reminder. No run ID needed.', properties: {}, required: [] },
-      { name: 'schedule_set_pre_run_hook', description: 'Install and immediately test a Node ESM pre-run check using the existing host installer. exit 0 wakes the model, exit 2 skips it, other errors fail visibly. Attach returned command with routine_save.preRunHook. Only invoke when authorized to install and test the check.', properties: {
-        script: { type: 'string', description: 'Node ESM source; output a concise change summary. Use CINDY_PRECHECK_OK only after a complete successful check.' },
-        scheduleName: { type: 'string' },
-      }, required: ['script'] },
-      { name: 'routine_list', description: 'List your own persistent Cindy routines. Use before creating to avoid duplicates, and after saving to verify.', properties: {}, required: [] },
-      { name: 'routine_sources', description: 'List available local event sources, event types, filter fields and listening status. Read before creating event triggers; never guess source IDs.', properties: {}, required: [] },
-      { name: 'routine_delivery_targets', description: 'List connected message bots and known recipients for final routine delivery. Use the returned id; choose recipients only as requested by the owner.', properties: {}, required: [] },
-      { name: 'routine_save', description: 'Create or fully update your own persistent Cindy routine when the user requests scheduled reminders, recurring work or event-triggered automation. Multiple triggers are OR. Do not use a background Session or shell loop for recurring work. Do not invent an end time. Read back with routine_list before confirming success.',
-        properties: {
-          id: { type: 'string', description: 'Existing routine ID for updates; omit to create.' },
-          name: { type: 'string', minLength: 1 },
-          prompt: { type: 'string', minLength: 1, description: 'Instructions to execute at each trigger.' },
-          enabled: { type: 'boolean' },
-          modelOverride: { anyOf: [{ type: 'null' }, { type: 'object', properties: {
-            agentKind: { type: 'string', enum: ['claude-code', 'codex', 'pi'] },
-            model: { type: 'string', minLength: 1, maxLength: 512 },
-            providerId: { anyOf: [{ type: 'null' }, { type: 'string', minLength: 1, maxLength: 512 }] },
-            agentDeviceId: { anyOf: [{ type: 'null' }, { type: 'string', minLength: 1, maxLength: 512 }] },
-            effort: { type: 'string', enum: ['', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max', 'ultra'] },
-            fastMode: { anyOf: [{ type: 'boolean' }, { type: 'string', enum: ['ultrafast'] }] },
-          }, required: ['agentKind', 'model'], additionalProperties: false }], description: 'This routine only: choose a complete route from schedule_list_models. null follows the companion; omission preserves the saved choice. Read back with routine_list.' },
-          delivery: { anyOf: [
-            { type: 'object', properties: { kind: { const: 'companion' }, mode: { type: 'string', enum: ['direct', 'process'] } }, required: ['kind', 'mode'], additionalProperties: false },
-            { type: 'object', properties: { kind: { const: 'im' }, targetId: { type: 'string' } }, required: ['kind', 'targetId'], additionalProperties: false },
-            { type: 'object', properties: { kind: { const: 'none' } }, required: ['kind'], additionalProperties: false },
-          ], description: 'Final delivery defaults to companion/direct without a model call. process wakes the companion only when requested; im uses routine_delivery_targets.id; none keeps the independent task. Omission preserves saved choices.' },
-          sessionMode: { type: 'string', enum: ['persistent', 'fresh'], description: 'persistent reuses this routine task and context; fresh starts a new task each trigger. Omission preserves the saved mode. Read back with routine_list.' },
-          silentWhenIdle: { type: 'boolean', description: 'Set true for checks with no-change reporting suppressed. Set false for reminders/scheduled delivery. Omitted defaults to false; preserve user choices.' },
-          preRunHook: { anyOf: [{ type: 'null' }, { type: 'object', properties: {
-            command: { type: 'string', minLength: 1, maxLength: 32000 },
-            timeoutMs: { type: 'integer', minimum: 1 },
-          }, required: ['command'], additionalProperties: false }], description: 'Install scripts with schedule_set_pre_run_hook; exit 2 skips the model, exit 0 passes stdout, failures stay visible. null removes; omission preserves.' },
-          triggers: { type: 'array', minItems: 1, maxItems: 32, items: { anyOf: [
-            { type: 'object', properties: { ...routineTriggerProperties,
-              kind: { type: 'string', enum: ['interval'] },
-              intervalMs: { type: 'integer', minimum: 60000, description: 'Interval in milliseconds. One minute = 60000.' },
-              anchorMs: { type: 'integer', minimum: 0, maximum: Number.MAX_SAFE_INTEGER, description: 'Original interval anchor in Unix milliseconds; preserve when editing.' },
-            }, required: ['id', 'kind', 'intervalMs'], additionalProperties: false },
-            { type: 'object', properties: { ...routineTriggerProperties,
-              kind: { type: 'string', enum: ['cron'] },
-              expression: { type: 'string' }, timezone: { type: 'string' },
-            }, required: ['id', 'kind', 'expression', 'timezone'], additionalProperties: false },
-            { type: 'object', properties: { ...routineTriggerProperties,
-              kind: { type: 'string', enum: ['once'] },
-              at: { type: 'integer', minimum: 0, maximum: Number.MAX_SAFE_INTEGER, description: 'One-time trigger timestamp in Unix milliseconds.' },
-            }, required: ['id', 'kind', 'at'], additionalProperties: false },
-            { type: 'object', properties: { ...routineTriggerProperties,
-              kind: { type: 'string', enum: ['event'] },
-              sourceId: { type: 'string' }, eventType: { type: 'string' },
-              filters: { type: 'array', items: { type: 'object', properties: {
-                field: { type: 'string' }, operator: { type: 'string', enum: ['equals', 'contains', 'not-equals'] },
-                value: { type: 'string' },
-              }, required: ['field', 'operator', 'value'], additionalProperties: false } },
-            }, required: ['id', 'kind', 'sourceId', 'eventType', 'filters'], additionalProperties: false },
-          ] } },
-        }, required: ['name', 'prompt', 'enabled', 'triggers'] },
-      ...[
-        { name: 'routine_history', description: 'Read execution history and results of one of your routines.' },
-        { name: 'routine_delete', description: 'Delete one of your routines when requested. To pause instead, save its complete configuration with enabled=false.' },
-        { name: 'routine_run_now', description: 'Run one of your saved routines now when requested.' },
-      ].map((tool) => ({ ...tool, properties: { id: { type: 'string', minLength: 1 } }, required: ['id'] })),
-    ];
-    // The task digest uses the same direct facade so a routine-woken companion does not need
-    // nested discovery before reading the event's task.
+    // The task digest uses the same direct facade as teammate creation, so a companion does not
+    // need nested discovery before reading a task it is told about.
     const taskIdProperty = { type: 'string', minLength: 1, description: 'Local task ID, or deviceId::sessionId for another computer.' };
     const followUpTools = [
       { name: 'get_task_digest', description: 'Read a short (<=2KB) summary of one task: phase, elapsed minutes, last ask and answer, pending question, error, route, suggested next route, PR status and queue. Read this before deciding how to follow up.', properties: { session_id: taskIdProperty }, required: ['session_id'] },
     ];
-    for (const tool of [...routineTools, ...followUpTools]) {
+    for (const tool of followUpTools) {
       if (deniedTools.has(tool.name) || !this.resolveDirectHelperTool(tool.name, {})) continue;
       pi.registerTool({
         name: tool.name,

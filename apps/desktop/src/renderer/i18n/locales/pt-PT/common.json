@@ -11300,20 +11300,6 @@
           }
         }
       },
-      "system": {
-        "group": "Skills do sistema",
-        "meta": "{{on}} de {{total}} ativas",
-        "pageMeta": "Skill do sistema · Atualizada com o Cindy",
-        "use": "Ativar para este colega",
-        "whenOff": "Ao desativar",
-        "items": {
-          "routine": {
-            "name": "Rotinas",
-            "hint": "Cria e mantém rotinas que correm periodicamente.",
-            "off": "Deixa de criar ou alterar rotinas. As existentes continuam a correr e podem ser geridas na página Rotinas."
-          }
-        }
-      },
       "learned": {
         "group": "Skills aprendidas",
         "empty": "Ainda não há Skills aprendidas. A aprendizagem noturna transforma em Skills os métodos que se repetem, ou podes pedir-lhe no chat que se lembre de um.",
@@ -18195,118 +18181,10 @@
     "compression": "Para resumir conteúdo extenso."
   },
   "routines": {
-    "deliveryLabel": "Entrega final",
-    "deliveryDirect": "Mostrar diretamente na conversa do assistente",
-    "deliveryProcess": "Pedir ao assistente para processar e responder",
-    "deliveryIm": "Enviar através de um bot de mensagens",
-    "deliveryNone": "Manter apenas na tarefa de execução",
-    "deliveryHint": "A entrega direta não utiliza chamadas adicionais ao modelo. As verificações silenciosas continuam a suprimir resultados sem atividade.",
-    "deliveryRecipient": "Destinatário",
-    "deliveryUnavailable": "Destino indisponível",
-    "deliveryNoRecipients": "Ligue um bot de mensagens e converse com ele; depois, volte a abrir estas definições.",
-    "deliveryFailed": "Concluído, falha na entrega",
-    "deliveryFailedHint": "O resultado está guardado. Verifique as definições de entrega; não volte a executar o trabalho apenas para o reenviar.",
-    "deliveryDelivered": "Resultado entregue",
-    "onEvent": "Evento: {{source}} · {{event}}",
-    "triggerDetails": "Ver acionadores ({{count}}; qualquer um pode iniciar uma execução)",
-    "noTriggers": "Nenhum acionador definido",
-    "unsavedTitle": "Alterações não guardadas",
-    "unsavedDescription": "Ao sair, perderá estas alterações à rotina.",
-    "discard": "Descartar alterações",
-    "continueEditing": "Continuar a editar",
-    "title": "Rotinas",
-    "add": "Adicionar Rotina",
-    "back": "Voltar às Rotinas",
-    "error": "Não foi possível atualizar as rotinas. Verifique as definições e tente novamente.",
-    "empty": "Adicione uma rotina para indicar a este colega o que fazer e quando.",
-    "enabled": "Ativado",
-    "paused": "Em pausa",
-    "runNow": "Executar Agora",
-    "running": "Em execução…",
-    "name": "Nome",
-    "instructions": "Instruções",
-    "when": "Quando Executar",
-    "addTrigger": "Adicionar Acionador",
-    "removeTrigger": "Remover Acionador",
-    "schedule": "Agendamento",
     "hourly": "A cada hora",
-    "daily": "Diariamente",
-    "weekdays": "Dias úteis",
-    "weekly": "Semanal",
-    "monthly": "Mensalmente",
-    "interval": "Intervalo",
-    "advanced": "Avançado…",
     "everyMinutes": "A cada {{count}} Minutos",
-    "minutes": "Minutos",
-    "expression": "Expressão Cron",
-    "timezone": "Fuso Horário",
-    "delete": "Eliminar Rotina",
-    "save": "Guardar Rotina",
-    "saved": "Rotina guardada",
-    "deleteConfirm": "Eliminar esta rotina e cancelar as execuções pendentes?",
-    "keep": "Manter Rotina",
-    "openTask": "Abrir Sessão",
-    "history": "Histórico de Execuções",
-    "noRuns": "Esta rotina ainda não foi executada.",
-    "field": "Campo",
-    "operator": "Condição",
-    "value": "Valor",
-    "addFilter": "Adicionar Condição",
-    "removeFilter": "Remover Condição",
     "pluginCapability": "Publica eventos declarados nas suas rotinas. Só podem ser executadas as rotinas que configurar.",
-    "time": "Hora",
-    "day": "Dia",
-    "weekday": "Dia da semana",
-    "status": {
-      "queued": "Em fila",
-      "running": "Em execução",
-      "success": "Concluído",
-      "failed": "Falhou",
-      "interrupted": "Interrompido",
-      "cancelled": "Cancelado",
-      "skipped": "Verificado · modelo ignorado"
-    },
-    "sourceStatus": {
-      "listening": "A ouvir",
-      "disconnected": "Sem Escuta Ativa",
-      "error": "A Origem Requer Atenção"
-    },
-    "operators": {
-      "equals": "Igual a",
-      "contains": "Contém",
-      "not-equals": "Diferente de"
-    },
-    "quiet": "Manter o silêncio quando as verificações não encontrarem nada",
-    "sessionMode": "Sessão de execução",
-    "sessionModePersistent": "Sessão persistente (manter contexto)",
-    "sessionModeFresh": "Nova sessão por acionamento (isolar contexto)",
-    "sessionModeHint": "O modo persistente mantém uma única conversa da rotina. Uma nova sessão cria e fecha uma conversa isolada para cada acionamento.",
-    "quietHint": "Comunicar apenas alterações ou problemas. Desative para lembretes e mensagens agendadas.",
-    "checkSource": "Verificar com",
-    "checkCommand": "Comando de verificação prévia à execução",
-    "checkHint": "Opcional. Verifica o computador antes de cada execução: exit 2 ignora a execução, exit 0 continua e os erros permanecem visíveis. Limpe para remover.",
-    "timeoutMs": "Tempo limite da verificação (ms, vazio para sem limite)",
-    "advancedSettings": "Definições avançadas",
-    "builtinFollowUp": {
-      "name": "Acompanhar sessões atribuídas (integrado)",
-      "hint": "Acompanhe as sessões atribuídas quando ficarem bloqueadas, precisarem de si, falharem, atingirem um limite de utilização ou terminarem."
-    },
-    "todoCheck": {
-      "name": "Verificação diária de afazeres"
-    },
-    "builtinNightlyLearning": {
-      "name": "Aprendizagem noturna (integrada)",
-      "title": "Aprendizagem noturna",
-      "hint": "Todas as noites às 3:30, revê as suas conversas: organiza memórias e guarda como Skills as abordagens recorrentes. É ignorada sem consultar um modelo quando não há novidades."
-    },
-    "remote": {
-      "pause": "Pausar rotina",
-      "resume": "Retomar rotina",
-      "addSchedule": "Adicionar horário",
-      "addInterval": "Adicionar intervalo",
-      "addEvent": "Adicionar acionador de evento",
-      "filterField": "Campo de filtro"
-    }
+    "advancedSettings": "Definições avançadas"
   },
   "cindyMakeDoctor": {
     "description": "Verificar o ambiente local para compilar Cindy. Utilização: /cindy-make-doctor",

@@ -18,16 +18,15 @@ import { activeCompanionCloud } from '../companion-cloud/runtime.js';
 import { t } from '../i18n.js';
 import { executeTaskTags } from '../localDb/ipc/taskTags.js';
 import { getPluginMarketService } from '../plugin-market/service.js';
-import { resolveHelperSurface, resolveHelperSystemSkillsOff, resolveHelperTeammateProjectMode } from './helperSurface.js';
+import { resolveHelperSurface, resolveHelperTeammateProjectMode } from './helperSurface.js';
 import { createProject } from './createProject.js';
 import { createMoveSession } from './moveSession.js';
 import { createTaskWorktreeHost } from './createTaskWorktree.js';
 import { sessionImportCallbacks } from '../session-import/agentTools.js';
 import { listProjects, renameProject, removeProject, resolveSessionProject, readCurrentSessionProject } from './projectManagement.js';
-import { activeOwnerScopeKey, getActiveAppSession, isAppSessionBoundaryPending, ownerScopedUserDataPath } from '../appSessionState.js';
+import { activeOwnerScopeKey, isAppSessionBoundaryPending, ownerScopedUserDataPath } from '../appSessionState.js';
 import { botProfileDir } from '../maker-ipc/botProfileFolder.js';
 import type { createBotCapabilityService } from '../maker-ipc/botCapabilityService.js';
-import { getRoutineEngine, routineTools } from '../routines/service.js';
 import { join as pathJoin } from 'node:path';
 import { homedir } from 'node:os';
 import { app } from 'electron';
@@ -897,11 +896,6 @@ export function createDesktopMcpProviders(deps: DesktopMcpProvidersDeps): LiziMc
         if (isAppSessionBoundaryPending() || dbClient !== tryGetDbClient()) return 'restricted';
         return surface;
       },
-      resolveSystemSkillsOff: async ({ sessionId }) => {
-        const dbClient = tryGetDbClient();
-        if (!dbClient || isAppSessionBoundaryPending()) return [];
-        return resolveHelperSystemSkillsOff(dbClient, sessionId);
-      },
       resolveTeammateProjectMode: async ({ sessionId }) => {
         const dbClient = tryGetDbClient();
         if (!dbClient || isAppSessionBoundaryPending()) return false;
@@ -1135,22 +1129,6 @@ export function createDesktopMcpProviders(deps: DesktopMcpProvidersDeps): LiziMc
           const svc = tryGetBotDirectMessageService();
           if (!svc) return { ok: false, errorCode: 'HOST_NOT_READY', message: 'Teammate service is not ready' };
           return svc.listAgents(callerSessionId);
-        },
-      },
-      botRoutines: {
-        service: routineTools,
-        resolveBotId: async (callerSessionId, callerSessionInstanceId) => {
-          const scope = activeOwnerScopeKey();
-          if (!getActiveAppSession().dataOwnerId || isAppSessionBoundaryPending()) {
-            throw new Error('Routine account is no longer active');
-          }
-          if (!tryGetDbClient()) throw new Error('localDb not ready');
-          const botId = await resolveSessionTeammate(callerSessionId);
-          if (isAppSessionBoundaryPending() || activeOwnerScopeKey() !== scope) {
-            throw new Error('Routine account is no longer active');
-          }
-          if (!botId) throw new Error('当前调用未绑定伙伴主任务');
-          return botId;
         },
       },
       ...(deps.machineDirectory ? { machines: {

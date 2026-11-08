@@ -189,8 +189,6 @@ function dispatchTransaction(db: Database.Database, args: unknown): unknown {
       return botsPersistSessionPermission(db, txArgs);
     case 'bots.createGroupLane':
       return botsCreateGroupLane(db, txArgs as BotGroupsCreateLaneArgs);
-    case 'bots.createRoutineLane':
-      return botsCreateChannelLane(db, txArgs as BotsCreateChannelLaneArgs, 'routine');
     case 'bots.createChannelLane':
       return botsCreateChannelLane(db, txArgs as BotsCreateChannelLaneArgs);
     case 'bots.createThreadLane':
@@ -894,11 +892,12 @@ function botsCreateGroupLane(db: Database.Database, args: BotGroupsCreateLaneArg
  * of creating a second. Unlike group lanes there is no member table: the
  * connection binding (owner-scoped setting) is the authority, checked by Main.
  */
-function botsCreateChannelLane(db: Database.Database, args: BotsCreateChannelLaneArgs, role: 'channel' | 'routine' = 'channel'): BotGroupsCreateLaneResult {
+function botsCreateChannelLane(db: Database.Database, args: BotsCreateChannelLaneArgs): BotGroupsCreateLaneResult {
+  const role = 'channel';
   const p = asRecord(args, 'bots.createChannelLane args');
   const botId = expectString(p.botId, 'botId');
   const routeKey = expectString(p.routeKey, 'routeKey');
-  if (!routeKey.startsWith(role === 'routine' ? 'routine:' : 'im:')) throw new Error('Invalid companion lane route key');
+  if (!routeKey.startsWith('im:')) throw new Error('Invalid companion lane route key');
   const s = asRecord(p.session, 'session');
   const sessionId = expectString(s.id, 'session.id');
   const createdAt = expectNumber(s.createdAt, 'session.createdAt');

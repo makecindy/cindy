@@ -6,15 +6,8 @@ import { BotSessionContentHeaderRegistration } from '../../../src/renderer/featu
 
 mountPage({
   route: '/bots/cindy-default',
-  host: (ctx) => ({
+  host: () => ({
     maker: { onBotWorkbenchChanged: subscription('workbench') },
-    routines: {
-      list: async () => ctx.case === 'routines' ? [
-        { id: 'cleanup', botId: 'cindy-default', name: '磁盘低空间自动清理', enabled: true, updatedAt: Date.now(), triggers: [], prompt: '', revision: 1, createdAt: 1 },
-        { id: 'issues', botId: 'cindy-default', name: '跟进 issue 和 bug', enabled: false, updatedAt: Date.now() - 1, triggers: [], prompt: '', revision: 1, createdAt: 1 },
-      ] : [],
-      onChanged: subscription('routines'),
-    },
     deviceLink: { invoke: forbid('deviceLink.invoke'), onRemotePush: subscription('remote') },
     openPath: forbid('openPath'),
   }),

@@ -4,8 +4,8 @@ import { getDbClient } from '../localDb/client/current.js';
 import { botSessionLinks, sessions } from '../localDb/schema.js';
 
 /**
- * The teammate a task belongs to when it manages the teammate's things (routines,
- * new teammates). Any of the teammate's chats qualifies, like an ordinary task in
+ * The teammate a task belongs to when it manages the teammate's things (e.g. new
+ * teammates). Any of the teammate's chats qualifies, like an ordinary task in
  * its project: who may talk to that chat is decided where the message comes in.
  */
 export async function resolveSessionTeammate(callerSessionId: string): Promise<string | null> {

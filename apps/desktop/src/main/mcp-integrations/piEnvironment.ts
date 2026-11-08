@@ -27,7 +27,7 @@
  */
 
 import { createHmac, randomBytes } from 'node:crypto';
-import { BOT_DENIED_TOOLS_VENDOR_KEY } from '../../shared/botSystemSkills.js';
+import { BOT_DENIED_TOOLS_VENDOR_KEY } from '../../shared/botProjectMode.js';
 
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import {

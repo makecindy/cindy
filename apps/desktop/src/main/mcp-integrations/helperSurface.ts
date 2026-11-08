@@ -1,5 +1,4 @@
 import type { DbClient } from '../localDb/client/DbClient.js';
-import { effectiveBotSystemSkillsOff, type BotSystemSkillId } from '../../shared/botSystemSkills.js';
 import { readBotProjectMode } from '../../shared/botProjectMode.js';
 
 /** Companion tasks add their profile tools to the ordinary transport's helper surface.
@@ -40,19 +39,6 @@ export async function resolveHelperSurface(
     status: row.status,
     remoteHostId: row.remoteHostId,
   });
-}
-
-/**
- * System Skills the teammate owning this task turned off (shared/botSystemSkills.ts). Read live from
- * the teammate's current profile so a change in settings denies the tools on the next call; an
- * ordinary task or a missing profile turns nothing off.
- */
-export async function resolveHelperSystemSkillsOff(
-  db: Pick<DbClient, 'queryOne'>,
-  sessionId: string,
-): Promise<BotSystemSkillId[]> {
-  const config = await readOwningBotConfig(db, sessionId);
-  return config ? effectiveBotSystemSkillsOff(config) : [];
 }
 
 /** The teammate owning this task runs as a project (V2). */

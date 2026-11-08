@@ -29,7 +29,6 @@ export interface BotPromptCapabilitySignals {
   partnerActionsEnabled: boolean;
   /** 是否能直接创建新的伙伴；与消息/任务能力独立。 */
   botCreationEnabled?: boolean;
-  routinesEnabled?: boolean;
   /** 伙伴自有技能是否可写入(save_teammate_skill 是否在工具面里)。 */
   ownSkillsEnabled: boolean;
   /** 是否为 Bot 的 canonical Chat；Bot Mode 协议只在这里生效。 */
@@ -263,7 +262,6 @@ export function buildBotStableTier(input: BotSystemPromptInput): string {
   if (homeDir) capabilityParts.push(buildHomeGuidance(homeDir));
   if (has(input.capabilities, 'docs')) capabilityParts.push(DOCS_GUIDANCE);
   if (input.capabilities.memoryEnabled) capabilityParts.push(MEMORY_GUIDANCE);
-  // Routines are the `routine` system Skill: the core lists it and read_teammate_skill has its text.
   if (input.capabilities.ownSkillsEnabled) capabilityParts.push(OWN_SKILLS_GUIDANCE);
   const botCreationEnabled =
     input.capabilities.botCreationEnabled ?? input.capabilities.partnerActionsEnabled;

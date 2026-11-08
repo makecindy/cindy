@@ -11158,20 +11158,6 @@
           }
         }
       },
-      "system": {
-        "group": "系統技藝",
-        "meta": "已開 {{on}} / 共 {{total}}",
-        "pageMeta": "系統技藝 · 隨 Cindy 更",
-        "use": "為此伴開之",
-        "whenOff": "關後",
-        "items": {
-          "routine": {
-            "name": "常例",
-            "hint": "為汝立而守按時而行之常例。",
-            "off": "不復立、改常例；舊有常例照行，汝猶可於「常例」頁理之。"
-          }
-        }
-      },
       "learned": {
         "group": "所習技藝",
         "empty": "尚無所習之技藝。夜習將屢用之法輯為技藝，汝亦可於言談中令其記之。",
@@ -17963,118 +17949,10 @@
     "compression": "用以精簡冗長之內容。"
   },
   "routines": {
-    "deliveryLabel": "終達",
-    "deliveryDirect": "逕現於同僚言談中",
-    "deliveryProcess": "交同僚處置後回覆",
-    "deliveryIm": "遣至訊息機器人",
-    "deliveryNone": "唯存於所行差事中",
-    "deliveryHint": "預設逕示結果，不另呼模型。啟靜默檢查後，無事則不送達。",
-    "deliveryRecipient": "受處",
-    "deliveryUnavailable": "今之受處不可用",
-    "deliveryNoRecipients": "請先連訊息機器人，且與之言談一次，再重開此設定。",
-    "deliveryFailed": "已畢，送達未成",
-    "deliveryFailedHint": "所行之結果已存。請察送達之設定；勿為補發而重行差事。",
-    "deliveryDelivered": "結果已達",
-    "onEvent": "事：{{source}} · {{event}}",
-    "triggerDetails": "觀觸發之條件（{{count}} 項，合其一即行）",
-    "noTriggers": "尚未設觸發之條件",
-    "unsavedTitle": "尚有未存之修改",
-    "unsavedDescription": "離去則捨此番於例行差事之修改。",
-    "discard": "棄其修改",
-    "continueEditing": "續修",
-    "title": "例行差事",
-    "add": "增例行差事",
-    "back": "歸例行差事",
-    "error": "無從更例行差事，請察設定後再試",
-    "empty": "晨鐘暮鼓，皆可成例：增一例行差事，告同僚何事、何時行之",
-    "enabled": "已啟",
-    "paused": "已暫止",
-    "runNow": "即行",
-    "running": "方行…",
-    "name": "名",
-    "instructions": "令",
-    "when": "何時行",
-    "addTrigger": "再增其一",
-    "removeTrigger": "去觸發器",
-    "schedule": "定時",
     "hourly": "每時",
-    "daily": "每日",
-    "weekdays": "工作日",
-    "weekly": "每週",
-    "monthly": "每月",
-    "interval": "間",
-    "advanced": "深設…",
     "everyMinutes": "每 {{count}} 分",
-    "minutes": "分鐘",
-    "expression": "Cron 式",
-    "timezone": "時區",
-    "delete": "刪例行差事",
-    "save": "存例行差事",
-    "saved": "例行差事已存",
-    "deleteConfirm": "刪此例行差事，並罷待行之執行乎？",
-    "keep": "留例行差事",
-    "openTask": "觀差事",
-    "history": "行事錄",
-    "noRuns": "此例行差事尚未行",
-    "field": "欄",
-    "operator": "條",
-    "value": "值",
-    "addFilter": "增條件",
-    "removeFilter": "去條",
     "pluginCapability": "向例行差事呈已宣告之事，唯觸發君所設之例行差事",
-    "time": "時",
-    "day": "日",
-    "weekday": "星期",
-    "status": {
-      "queued": "待行",
-      "running": "方行",
-      "success": "已畢",
-      "failed": "行之未成",
-      "interrupted": "中輟",
-      "cancelled": "已罷",
-      "skipped": "已察 · 未喚模型"
-    },
-    "sourceStatus": {
-      "listening": "方聽",
-      "disconnected": "未聽",
-      "error": "來源待察"
-    },
-    "operators": {
-      "equals": "等",
-      "contains": "含",
-      "not-equals": "不等"
-    },
-    "quiet": "察而無事則默",
-    "sessionMode": "行之方式",
-    "sessionModePersistent": "沿用同一差事（存上下文）",
-    "sessionModeFresh": "每番新開差事（隔上下文）",
-    "sessionModeHint": "沿用同一差事，則於同一例行差事之言談中續之；每番新開，則每觸發立一獨立差事，行畢即闔。",
-    "quietHint": "唯報變化或問題。提醒與定時傳送可關此項。",
-    "checkCommand": "行前檢查命令",
-    "checkHint": "選填。先於機上檢查：結束代碼 2 略此番執行，0 續行，異常仍當回報。清空即移除。",
-    "timeoutMs": "檢查逾時（毫秒，留空不限）",
-    "advancedSettings": "深設",
-    "builtinFollowUp": {
-      "name": "跟進已接之差事（內建）",
-      "hint": "差事卡住、待君、出謬、達耗用上限或已畢時跟進。唯理已交於吾之差事。"
-    },
-    "todoCheck": {
-      "name": "日查待辦"
-    },
-    "builtinNightlyLearning": {
-      "name": "夜學（內建）",
-      "title": "夜學",
-      "hint": "每日 3:30 整理與君之言談：併記憶，將屢用之法總結為技藝。無新言談則略過，不呼模型。"
-    },
-    "checkSource": "檢查之法",
-    "remote": {
-      "pause": "暫停例行差事",
-      "resume": "續行例行差事",
-      "addSchedule": "增定時條件",
-      "addInterval": "增間隔條件",
-      "addEvent": "增事件條件",
-      "filterField": "篩選欄位"
-    }
+    "advancedSettings": "深設"
   },
   "cindyMakeDoctor": {
     "description": "察此機建置 Cindy 所需之環境。用法：/cindy-make-doctor",

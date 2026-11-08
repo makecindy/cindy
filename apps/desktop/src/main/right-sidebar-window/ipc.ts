@@ -157,10 +157,6 @@ function parseCommand(raw: unknown): RsbWindowCommand {
     }
     return { type: 'open-plugin-task', sessionId: r.sessionId, instanceId: r.instanceId };
   }
-  if (r.type === 'open-routines-tab') {
-    if (typeof r.botId !== 'string' || !r.botId || r.botId.length > 128) throwIpcError('INVALID_PARAMS', 'Invalid teammate');
-    return { type: 'open-routines-tab', sessionId: r.sessionId, botId: r.botId };
-  }
   if (r.type === 'open-background-tasks-tab') {
     const hasFocusTaskId =
       Object.prototype.hasOwnProperty.call(r, 'focusTaskId') && r.focusTaskId !== undefined;

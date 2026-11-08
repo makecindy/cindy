@@ -11203,20 +11203,6 @@
           }
         }
       },
-      "system": {
-        "group": "System-Skills",
-        "meta": "{{on}} von {{total}} an",
-        "pageMeta": "System-Skill · Wird mit Cindy aktualisiert",
-        "use": "Für diesen Teammate einschalten",
-        "whenOff": "Wenn aus",
-        "items": {
-          "routine": {
-            "name": "Routinen",
-            "hint": "Richtet regelmäßig laufende Routinen ein und pflegt sie.",
-            "off": "Er legt keine Routinen mehr an und ändert keine. Bestehende Routinen laufen weiter und bleiben auf der Seite „Routinen“ verwaltbar."
-          }
-        }
-      },
       "learned": {
         "group": "Gelernte Skills",
         "empty": "Noch keine gelernten Skills. Das nächtliche Lernen macht aus wiederkehrenden Vorgehensweisen Skills, oder du bittest ihn im Chat, sich eine zu merken.",
@@ -18031,118 +18017,10 @@
     "compression": "Zum Kürzen langer Inhalte."
   },
   "routines": {
-    "deliveryLabel": "Endgültige Ausgabe",
-    "deliveryDirect": "Direkt im Companion-Chat anzeigen",
-    "deliveryProcess": "Companion um Verarbeitung und Antwort bitten",
-    "deliveryIm": "Über einen Messaging-Bot senden",
-    "deliveryNone": "Nur in der ausführenden Aufgabe behalten",
-    "deliveryHint": "Die direkte Zustellung benötigt keinen zusätzlichen Modellaufruf. Stille Prüfungen unterdrücken weiterhin Ergebnisse ohne Aktivität.",
-    "deliveryRecipient": "Empfänger",
-    "deliveryUnavailable": "Ziel nicht verfügbar",
-    "deliveryNoRecipients": "Verbinde einen Messaging-Bot und chatte mit ihm. Öffne dann diese Einstellungen erneut.",
-    "deliveryFailed": "Abgeschlossen, Zustellung fehlgeschlagen",
-    "deliveryFailedHint": "Das Ergebnis ist gespeichert. Prüfe die Zustellungseinstellungen. Führe die Aufgabe nicht erneut aus, nur um das Ergebnis noch einmal zu senden.",
-    "deliveryDelivered": "Ergebnis zugestellt",
-    "onEvent": "Ereignis: {{source}} · {{event}}",
-    "triggerDetails": "Auslöser anzeigen ({{count}}; jeder kann einen Lauf starten)",
-    "noTriggers": "Keine Auslöser festgelegt",
-    "unsavedTitle": "Ungespeicherte Änderungen",
-    "unsavedDescription": "Wenn du diese Ansicht verlässt, werden die Änderungen an der Routine verworfen.",
-    "discard": "Änderungen verwerfen",
-    "continueEditing": "Weiter bearbeiten",
-    "title": "Routinen",
-    "add": "Routine hinzufügen",
-    "back": "Zurück zu Routinen",
-    "error": "Routinen konnten nicht aktualisiert werden. Prüfe die Einstellungen und versuche es erneut.",
-    "empty": "Füge eine Routine hinzu, um diesem Teammitglied mitzuteilen, was es wann tun soll.",
-    "enabled": "Aktiviert",
-    "paused": "Pausiert",
-    "runNow": "Jetzt ausführen",
-    "running": "Wird ausgeführt…",
-    "name": "Name",
-    "instructions": "Anweisungen",
-    "when": "Ausführungszeitpunkt",
-    "addTrigger": "Auslöser hinzufügen",
-    "removeTrigger": "Auslöser entfernen",
-    "schedule": "Zeitplan",
     "hourly": "Stündlich",
-    "daily": "Täglich",
-    "weekdays": "Wochentage",
-    "weekly": "Wöchentlich",
-    "monthly": "Monatlich",
-    "interval": "Intervall",
-    "advanced": "Erweitert…",
     "everyMinutes": "Alle {{count}} Minuten",
-    "minutes": "Minuten",
-    "expression": "Cron-Ausdruck",
-    "timezone": "Zeitzone",
-    "delete": "Routine löschen",
-    "save": "Routine speichern",
-    "saved": "Routine gespeichert",
-    "deleteConfirm": "Diese Routine löschen und ihre ausstehenden Läufe abbrechen?",
-    "keep": "Routine behalten",
-    "openTask": "Sitzung öffnen",
-    "history": "Ausführungsverlauf",
-    "noRuns": "Diese Routine wurde noch nicht ausgeführt.",
-    "field": "Feld",
-    "operator": "Bedingung",
-    "value": "Wert",
-    "addFilter": "Bedingung hinzufügen",
-    "removeFilter": "Bedingung entfernen",
     "pluginCapability": "Veröffentlicht deklarierte Ereignisse für deine Routinen. Nur von dir konfigurierte Routinen können ausgeführt werden.",
-    "time": "Uhrzeit",
-    "day": "Tag",
-    "weekday": "Wochentag",
-    "status": {
-      "queued": "In der Warteschlange",
-      "running": "Wird ausgeführt",
-      "success": "Abgeschlossen",
-      "failed": "Fehlgeschlagen",
-      "interrupted": "Unterbrochen",
-      "cancelled": "Abgebrochen",
-      "skipped": "Geprüft · Modell übersprungen"
-    },
-    "sourceStatus": {
-      "listening": "Hört zu",
-      "disconnected": "Lauscht nicht",
-      "error": "Quelle erfordert Aufmerksamkeit"
-    },
-    "operators": {
-      "equals": "Ist gleich",
-      "contains": "Enthält",
-      "not-equals": "Ist ungleich"
-    },
-    "quiet": "Keine Meldung, wenn Prüfungen nichts finden",
-    "sessionMode": "Ausführungssitzung",
-    "sessionModePersistent": "Dauerhafte Sitzung (Kontext behalten)",
-    "sessionModeFresh": "Neue Sitzung bei jedem Auslöser (Kontext isolieren)",
-    "sessionModeHint": "Dauerhaft behält eine Unterhaltung für die Routine bei. Eine neue Sitzung erstellt und schließt bei jedem Auslöser eine isolierte Unterhaltung.",
-    "quietHint": "Nur Änderungen oder Probleme melden. Für Erinnerungen und geplante Nachrichten deaktivieren.",
-    "checkSource": "Prüfen mit",
-    "checkCommand": "Prüfbefehl vor der Ausführung",
-    "checkHint": "Optional. Prüft vor jeder Ausführung auf dem Computer: Exit-Code 2 überspringt die Ausführung, Exit-Code 0 setzt sie fort, Fehler bleiben sichtbar. Zum Entfernen leeren.",
-    "timeoutMs": "Zeitlimit für die Prüfung (ms, leer für unbegrenzt)",
-    "advancedSettings": "Erweiterte Einstellungen",
-    "builtinFollowUp": {
-      "name": "Zugewiesene Sitzungen verfolgen (integriert)",
-      "hint": "Verfolge zugewiesene Sitzungen, wenn sie stocken, dich brauchen, fehlschlagen, ein Nutzungslimit erreichen oder fertig sind."
-    },
-    "todoCheck": {
-      "name": "Tägliche To-do-Prüfung"
-    },
-    "builtinNightlyLearning": {
-      "name": "Nächtliches Lernen (integriert)",
-      "title": "Nächtliches Lernen",
-      "hint": "Prüft jede Nacht um 3:30 Uhr deine Unterhaltungen: räumt Erinnerungen auf und speichert wiederkehrende Ansätze als Skills. Wird ohne Modellaufruf übersprungen, wenn es nichts Neues gibt."
-    },
-    "remote": {
-      "pause": "Routine pausieren",
-      "resume": "Routine fortsetzen",
-      "addSchedule": "Zeitplan hinzufügen",
-      "addInterval": "Intervall hinzufügen",
-      "addEvent": "Ereignisauslöser hinzufügen",
-      "filterField": "Filterfeld"
-    }
+    "advancedSettings": "Erweiterte Einstellungen"
   },
   "cindyMakeDoctor": {
     "description": "Lokale Umgebung zum Bauen von Cindy prüfen. Verwendung: /cindy-make-doctor",

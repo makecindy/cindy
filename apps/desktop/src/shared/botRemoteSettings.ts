@@ -111,7 +111,6 @@ export type BotSettingsPageId =
   | 'voice'
   | 'capabilities'
   | 'channels'
-  | 'routines'
   | 'history'
   | 'advanced';
 
@@ -133,9 +132,24 @@ export const BOT_SETTINGS_CORE_OPS: readonly BotSettingsOp[] = [
 
 /**
  * Operations a host still answers for older controllers but no longer advertises in `caps`:
- * the V1 follow-up setting (`autonomy.*`) answers "off" and refuses writes.
+ * the V1 follow-up setting (`autonomy.*`) answers "off" and refuses writes; the V1 routines
+ * (`routines.*`) refuse every call with UNSUPPORTED_CAPABILITY.
  */
-export const BOT_SETTINGS_RETIRED_OPS: readonly BotSettingsOp[] = ['autonomy.get', 'autonomy.set', 'autonomy.reset'];
+export const BOT_SETTINGS_RETIRED_OPS: readonly BotSettingsOp[] = [
+  'autonomy.get',
+  'autonomy.set',
+  'autonomy.reset',
+  'routines.list',
+  'routines.sources',
+  'routines.history',
+  'routines.save',
+  'routines.saveWithModel',
+  'routines.saveWithSessionMode',
+  'routines.saveWithDelivery',
+  'routines.deliveryTargets',
+  'routines.runNow',
+  'routines.remove',
+];
 
 /** Profile fields a remote autosave may write; anything else is rejected by the host. */
 export const BOT_SETTINGS_PATCH_FIELDS = [

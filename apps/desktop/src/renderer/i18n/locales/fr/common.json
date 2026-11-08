@@ -11300,20 +11300,6 @@
           }
         }
       },
-      "system": {
-        "group": "Skills système",
-        "meta": "{{on}} sur {{total}} actifs",
-        "pageMeta": "Skill système · Mis à jour avec Cindy",
-        "use": "Activer pour ce coéquipier",
-        "whenOff": "Une fois désactivé",
-        "items": {
-          "routine": {
-            "name": "Routines",
-            "hint": "Crée et entretient des routines qui s’exécutent régulièrement.",
-            "off": "Il ne crée ni ne modifie plus de routines. Les routines existantes continuent et restent gérables depuis la page Routines."
-          }
-        }
-      },
       "learned": {
         "group": "Skills appris",
         "empty": "Aucun skill appris pour l’instant. L’apprentissage nocturne transforme les façons de faire récurrentes en skills, ou demandez-lui d’en retenir une dans le chat.",
@@ -18195,118 +18181,10 @@
     "compression": "Pour condenser des contenus longs."
   },
   "routines": {
-    "deliveryLabel": "Livraison finale",
-    "deliveryDirect": "Afficher directement dans la conversation du coéquipier",
-    "deliveryProcess": "Demander au coéquipier de traiter le résultat et de répondre",
-    "deliveryIm": "Envoyer via un robot de messagerie",
-    "deliveryNone": "Conserver uniquement dans la tâche d'exécution",
-    "deliveryHint": "L’envoi direct n’appelle pas de modèle supplémentaire. Les vérifications silencieuses masquent toujours les résultats sans nouveauté.",
-    "deliveryRecipient": "Destinataire",
-    "deliveryUnavailable": "Destination indisponible",
-    "deliveryNoRecipients": "Connectez un robot de messagerie et discutez avec lui, puis rouvrez ces paramètres.",
-    "deliveryFailed": "Terminé, la livraison a échoué",
-    "deliveryFailedHint": "Le résultat est enregistré. Vérifiez les paramètres de livraison ; ne réexécutez pas le travail juste pour le renvoyer.",
-    "deliveryDelivered": "Résultat livré",
-    "onEvent": "Événement : {{source}} · {{event}}",
-    "triggerDetails": "Voir les déclencheurs ({{count}} ; chacun peut lancer une exécution)",
-    "noTriggers": "Aucun déclencheur défini",
-    "unsavedTitle": "Modifications non enregistrées",
-    "unsavedDescription": "Si vous quittez, ces modifications de la routine seront perdues.",
-    "discard": "Abandonner",
-    "continueEditing": "Continuer l'édition",
-    "title": "Routines",
-    "add": "Ajouter une routine",
-    "back": "Retour aux routines",
-    "error": "Impossible de mettre à jour les routines. Vérifiez les paramètres et réessayez.",
-    "empty": "Ajoutez une routine pour indiquer à ce coéquipier quoi faire et quand.",
-    "enabled": "Activée",
-    "paused": "En pause",
-    "runNow": "Exécuter maintenant",
-    "running": "Exécution…",
-    "name": "Nom",
-    "instructions": "Instructions",
-    "when": "Quand exécuter",
-    "addTrigger": "Ajouter un déclencheur",
-    "removeTrigger": "Retirer le déclencheur",
-    "schedule": "Planification",
     "hourly": "Toutes les heures",
-    "daily": "Tous les jours",
-    "weekdays": "Jours ouvrés",
-    "weekly": "Toutes les semaines",
-    "monthly": "Tous les mois",
-    "interval": "Intervalle",
-    "advanced": "Avancé…",
     "everyMinutes": "Toutes les {{count}} minutes",
-    "minutes": "Minutes",
-    "expression": "Expression cron",
-    "timezone": "Fuseau horaire",
-    "delete": "Supprimer la routine",
-    "save": "Enregistrer la routine",
-    "saved": "Routine enregistrée",
-    "deleteConfirm": "Supprimer cette routine et annuler ses exécutions en attente ?",
-    "keep": "Conserver la routine",
-    "openTask": "Ouvrir la session",
-    "history": "Historique des exécutions",
-    "noRuns": "Cette routine ne s'est pas encore exécutée.",
-    "field": "Champ",
-    "operator": "Condition",
-    "value": "Valeur",
-    "addFilter": "Ajouter une condition",
-    "removeFilter": "Retirer la condition",
     "pluginCapability": "Publie les événements déclarés vers vos routines. Seules les routines que vous configurez peuvent s'exécuter.",
-    "time": "Heure",
-    "day": "Jour",
-    "weekday": "Jour de la semaine",
-    "status": {
-      "queued": "En file d'attente",
-      "running": "En cours",
-      "success": "Terminée",
-      "failed": "Échec",
-      "interrupted": "Interrompue",
-      "cancelled": "Annulée",
-      "skipped": "Vérifiée · modèle non appelé"
-    },
-    "sourceStatus": {
-      "listening": "À l'écoute",
-      "disconnected": "Pas à l'écoute",
-      "error": "La source requiert votre attention"
-    },
-    "operators": {
-      "equals": "Est égal à",
-      "contains": "Contient",
-      "not-equals": "N'est pas égal à"
-    },
-    "quiet": "Rester silencieux quand les vérifications ne trouvent rien",
-    "sessionMode": "Session d'exécution",
-    "sessionModePersistent": "Session persistante (conserver le contexte)",
-    "sessionModeFresh": "Nouvelle session à chaque déclenchement (isoler le contexte)",
-    "sessionModeHint": "Le mode persistant conserve une seule conversation pour la routine. Le mode nouvelle session crée puis ferme une conversation isolée à chaque déclenchement.",
-    "quietHint": "Signaler uniquement les changements ou les problèmes. Désactivez pour les rappels et les messages planifiés.",
-    "checkSource": "Vérifier avec",
-    "checkCommand": "Commande de vérification préalable",
-    "checkHint": "Facultatif. Vérifie sur l'ordinateur avant chaque exécution : le code de sortie 2 ignore l'exécution, 0 la poursuit, les erreurs restent visibles. Videz le champ pour la retirer.",
-    "timeoutMs": "Délai de vérification (ms, vide pour aucune limite)",
-    "advancedSettings": "Paramètres avancés",
-    "builtinFollowUp": {
-      "name": "Suivre les sessions assignées (intégrée)",
-      "hint": "Suit les sessions assignées lorsqu'elles stagnent, ont besoin de vous, échouent, atteignent une limite de consommation ou se terminent."
-    },
-    "todoCheck": {
-      "name": "Vérification quotidienne des tâches à faire"
-    },
-    "builtinNightlyLearning": {
-      "name": "Apprentissage nocturne (intégré)",
-      "title": "Apprentissage nocturne",
-      "hint": "Chaque nuit à 3:30, passe en revue vos conversations : organise les mémoires et enregistre sous forme de skills les approches récurrentes. Ignoré sans appeler de modèle s'il n'y a rien de nouveau."
-    },
-    "remote": {
-      "pause": "Suspendre la routine",
-      "resume": "Reprendre la routine",
-      "addSchedule": "Ajouter un horaire",
-      "addInterval": "Ajouter un intervalle",
-      "addEvent": "Ajouter un déclencheur d’événement",
-      "filterField": "Champ de filtre"
-    }
+    "advancedSettings": "Paramètres avancés"
   },
   "cindyMakeDoctor": {
     "description": "Vérifier l'environnement local pour compiler Cindy. Utilisation : /cindy-make-doctor",

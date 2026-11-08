@@ -179,7 +179,6 @@ export function remoteBotSettingsPages(ops: ReadonlySet<BotSettingsOp>): Set<str
   if (has('history.search')) pages.add('history');
   if (has('voice.models', 'voice.voices', 'voice.preference', 'voice.setPreference')) pages.add('voice');
   if (has('channels.im.list', 'channels.im.remove')) pages.add('channels');
-  if (has('routines.list', 'routines.sources', 'routines.history', 'routines.save', 'routines.runNow', 'routines.remove')) pages.add('routines');
   return pages;
 }
 
@@ -248,7 +247,6 @@ export function createRemoteBotSettingsTarget(input: RemoteBotSettingsInput) {
     onChannelSettingsChange: (listener) => pollWhileVisible(async () => (await readWechat()).channelSettings, listener),
   };
   const catalogWatchers = new Set<() => void>();
-  const routineWatchers = new Set<() => void>();
 
   const target: BotSettingsTarget = {
     kind: 'remote',
@@ -366,41 +364,13 @@ export function createRemoteBotSettingsTarget(input: RemoteBotSettingsInput) {
           ...(sentencePlayback !== undefined ? { sentencePlayback } : {}),
         }),
     },
-    routineModels: input.ops.has('routines.saveWithModel'),
-    routineSessionModes: input.ops.has('routines.saveWithSessionMode'),
-    routineDelivery: input.ops.has('routines.saveWithDelivery'),
-    routines: {
-      list: (id) => invokeBotSettings(deviceId, 'routines.list', id),
-      save: (id, routine, routineId) => invokeBotSettings(deviceId,
-        input.ops.has('routines.saveWithDelivery') ? 'routines.saveWithDelivery'
-          : input.ops.has('routines.saveWithSessionMode') ? 'routines.saveWithSessionMode'
-          : input.ops.has('routines.saveWithModel') ? 'routines.saveWithModel' : 'routines.save',
-        id, { input: routine, ...(routineId ? { id: routineId } : {}) }),
-      async remove(id, routineId) {
-        await invokeBotSettings(deviceId, 'routines.remove', id, { id: routineId });
-      },
-      runNow: (id, routineId) => invokeBotSettings(deviceId, 'routines.runNow', id, { id: routineId }),
-      history: (id, routineId) => invokeBotSettings(deviceId, 'routines.history', id, { id: routineId }),
-      sources: () => invokeBotSettings(deviceId, 'routines.sources', null),
-      deliveryTargets: (id) => input.ops.has('routines.deliveryTargets')
-        ? invokeBotSettings(deviceId, 'routines.deliveryTargets', id) : Promise.resolve([]),
-      onChanged(listener) {
-        routineWatchers.add(listener);
-        return () => void routineWatchers.delete(listener);
-      },
-    },
   };
 
   return {
     target,
     profiles,
     /** The teammate's computer reported a change: re-read what the open pages show. */
-    changed(collectionId = 'teammates') {
-      // Routines have their own collection on the teammate's computer.
-      if (collectionId === 'routines') {
-        routineWatchers.forEach((listener) => listener());
-        return;
-      }
+    changed() {
       void profiles.refresh().catch(() => undefined);
       if (chainListeners.size) void loadDefaultChain().catch(() => undefined);
       catalogWatchers.forEach((refresh) => refresh());

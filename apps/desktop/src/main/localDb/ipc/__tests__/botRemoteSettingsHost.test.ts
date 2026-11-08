@@ -63,9 +63,8 @@ function setup(overrides: { allowed?: boolean; visible?: boolean; ownerCurrent?:
       x: { summary: vi.fn(() => ({ available: true, enabled: true, connected: true, companionBotId: 'bot-2' })), setCompanion: vi.fn() },
     },
     voice: { models: vi.fn(() => []), voices: vi.fn(async () => ({ voices: [] })), preference: vi.fn(async () => ({ selection: null, customized: false })), setPreference: vi.fn(async () => ({ selection: null, customized: false })) },
-    routines: { list: vi.fn(async () => []), sources: vi.fn(async () => []), history: vi.fn(async () => []), save: vi.fn(async () => ({ id: 'r1' })), runNow: vi.fn(), remove: vi.fn() },
     ...overrides.deps,
-  } as unknown as BotSettingsOpsDeps & { updateProfile: ReturnType<typeof vi.fn>; lifecycle: ReturnType<typeof vi.fn>; memory: Record<string, ReturnType<typeof vi.fn>>; routines: Record<string, ReturnType<typeof vi.fn>>; voice: Record<string, ReturnType<typeof vi.fn>>; channels: any };
+  } as unknown as BotSettingsOpsDeps & { updateProfile: ReturnType<typeof vi.fn>; lifecycle: ReturnType<typeof vi.fn>; memory: Record<string, ReturnType<typeof vi.fn>>; voice: Record<string, ReturnType<typeof vi.fn>>; channels: any };
   const host = createBotRemoteSettingsHost({
     owner: () => 'owner-1',
     isOwnerCurrent: overrides.ownerCurrent ? overrides.ownerCurrent : () => true,
@@ -187,18 +186,6 @@ it('restricts lifecycle operations to the ones the settings page offers', async 
   );
 });
 
-it('validates a routine before it reaches the shared routine service and reports one generic failure', async () => {
-  const { deps, call } = setup();
-  const invalid = await call('routines.save', { input: { name: '', prompt: '' } });
-  expect(invalid).toMatchObject({ ok: false, code: 'INVALID_PARAMS' });
-  expect(deps.routines.save).not.toHaveBeenCalled();
-  const saved = await call('routines.save', { id: 'r1', input: { name: 'Digest', prompt: 'Summarise', enabled: true, triggers: [{ id: 't1', kind: 'interval', intervalMs: 3_600_000 }] } });
-  expect(saved).toMatchObject({ ok: true, value: { id: 'r1' } });
-  expect(deps.routines.save).toHaveBeenCalledWith('bot-1', expect.objectContaining({ name: 'Digest' }), 'r1');
-  // Event sources are host-wide: no teammate is required.
-  expect(await call('routines.sources', undefined, null)).toMatchObject({ ok: true });
-});
-
 it('keeps "not provided" and "reset to default" apart when a voice preference is written', async () => {
   const { deps, call } = setup();
   await call('voice.setPreference', { sentencePlayback: false });
@@ -241,4 +228,15 @@ it('answers the retired follow-up setting as off without advertising it', async 
   for (const op of ['autonomy.set', 'autonomy.reset'] as const) {
     expect(await call(op, { schedulerBotId: 'bot-2' }, null)).toMatchObject({ ok: false, code: 'UNSUPPORTED_CAPABILITY' });
   }
+});
+
+// Routines were removed: an older controller may still open its routines page. Every call gets a
+// stable refusal, and a new host no longer advertises the ops (so the page is hidden).
+it('refuses the retired routine operations without advertising them', async () => {
+  const { call } = setup();
+  const caps = await call('caps', undefined, null);
+  expect(caps.ok && (caps.value.ops as string[]).filter(op => op.startsWith('routines.'))).toEqual([]);
+  expect(await call('routines.list')).toMatchObject({ ok: false, code: 'UNSUPPORTED_CAPABILITY' });
+  expect(await call('routines.sources', undefined, null)).toMatchObject({ ok: false, code: 'UNSUPPORTED_CAPABILITY' });
+  expect(await call('routines.save', { input: { name: 'Digest', prompt: 'Summarise', enabled: true, triggers: [] } })).toMatchObject({ ok: false, code: 'UNSUPPORTED_CAPABILITY' });
 });

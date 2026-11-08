@@ -16,9 +16,6 @@ import type { BotProfileRuntimeDeps } from './botProfileRuntime.js';
 import type { BotModelRoute } from '../../shared/botModelChain.js';
 import { readEffectiveBotModelChain, readExplicitBotModelChain } from '../maker-host/bot-model-chain-settings-store.js';
 import { throwIpcError } from '../utils/ipcValidate.js';
-import {
-  isBotSystemSkillId, isBotSystemSkillOn, readBotSystemSkillsOff, withBotSystemSkill, type BotSystemSkillId,
-} from '../../shared/botSystemSkills.js';
 
 type Kind = 'skill' | 'mcp' | 'toolset';
 type Input = { callerSessionId: string; kind: Kind | 'feature' };
@@ -42,17 +39,12 @@ const fields: Record<Kind, { list: string; mode: string }> = {
   mcp: { list: 'mcpServers', mode: 'mcpMode' },
   toolset: { list: 'toolsets', mode: 'toolsetMode' },
 };
-/** `kind=feature`: this teammate's own switches. Memory keeps its own field; the rest are system Skills. */
-const FEATURES: { id: 'memory' | BotSystemSkillId; name: string; description: string }[] = [
+/** `kind=feature`: this teammate's own switches (only memory; the V1 system Skills were removed). */
+const FEATURES: { id: 'memory'; name: string; description: string }[] = [
   { id: 'memory', name: '记忆', description: '记住主人的偏好与背景；关闭后不读也不存记忆。' },
-  { id: 'routine', name: '例行任务', description: '系统技能：建立和维护自己的定期或事件触发的例行任务。' },
 ];
 function featureEntries(config: Record<string, unknown>): Entry[] {
-  return FEATURES.map((item) => ({
-    ...item,
-    available: true,
-    joined: item.id === 'memory' ? config.memory !== false : isBotSystemSkillOn(config, item.id),
-  }));
+  return FEATURES.map((item) => ({ ...item, available: true, joined: config.memory !== false }));
 }
 const strings = (value: unknown): string[] =>
   Array.isArray(value) ? value.filter((entry): entry is string => typeof entry === 'string') : [];
@@ -220,17 +212,11 @@ async function selectBotCapability(input: Input & { id: string; joined: boolean 
   try {
     const ctx = await context(input.callerSessionId);
     if (input.kind === 'feature') {
-      const feature = input.id === 'memory' ? 'memory' : isBotSystemSkillId(input.id) ? input.id : null;
-      if (!feature) {
-        return { ok: false as const, errorCode: 'CAPABILITY_UNAVAILABLE', message: '没有这项功能；可选 memory、routine' };
+      if (input.id !== 'memory') {
+        return { ok: false as const, errorCode: 'CAPABILITY_UNAVAILABLE', message: '没有这项功能；可选 memory' };
       }
       ctx.assertOwner();
-      await updateBotProfile({
-        id: ctx.botId,
-        capabilities: feature === 'memory'
-          ? { memory: input.joined }
-          : { systemSkillsOff: withBotSystemSkill(ctx.config.systemSkillsOff, feature, input.joined) },
-      }, ctx.version);
+      await updateBotProfile({ id: ctx.botId, capabilities: { memory: input.joined } }, ctx.version);
       ctx.assertOwner();
       return { ok: true as const, joined: input.joined, effective: 'next-turn' as const };
     }
@@ -320,7 +306,6 @@ export function createBotCapabilityService(deps: BotCapabilityServiceDeps) {
           session: { id: input.callerSessionId, workingDir: ctx.workingDir, remoteHostId: ctx.remoteHostId },
           model: { source: explicit === null ? 'default' : 'override', candidates },
           memory: { enabled: ctx.config.memory !== false, scope: 'self' },
-          systemSkillsOff: readBotSystemSkillsOff(ctx.config.systemSkillsOff),
           references: { skills: strings(ctx.config.skills), mcpServers: strings(ctx.config.mcpServers),
             toolsets: strings(ctx.config.toolsets) },
         };

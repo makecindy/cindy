@@ -116,7 +116,7 @@ const getEditor = createBotRemoteEditors({ ...deps,
   },
   // Same move-and-refresh as the local settings page.
   setSkillEnabled: (botId, slug, enabled) => setBotSkillEnabledForSettings(botId, slug, enabled, { remote: true }),
-  coreGuide: systemSkillsOff => buildTeammateGuide({ systemSkillsOff }),
+  coreGuide: () => buildTeammateGuide(),
   async capabilities(callerSessionId, kind) {
     return listBotSettingsCapabilities({ callerSessionId, kind });
   },
@@ -144,9 +144,6 @@ async function getInvitation(context: RemoteResourceHostContext, botId: string) 
     return { effects: [{ kind: 'refresh-collection', collectionId: 'teammates' }] };
   });
 }
-/** The routine service is shared with the local routines IPC; load it when a routines page asks. */
-const routineTools = async () => (await import('../../routines/service.js')).routineTools;
-
 /** The messaging stack is only needed by a remote Desktop's channels page. */
 const imRuntime = () => import('../../im/shared/botImConnectionRuntime.js');
 
@@ -198,15 +195,6 @@ const settingsHost = createBotRemoteSettingsHost({
       delete: (botId, slug) => deleteBotSkillForSettings(botId, slug, { remote: true }),
     },
     searchHistory: searchBotHistory,
-    routines: {
-      list: async (botId) => (await routineTools()).list(botId),
-      sources: async () => (await routineTools()).sources(),
-      deliveryTargets: async (botId) => (await routineTools()).deliveryTargets(botId),
-      history: async (botId, id) => (await routineTools()).history(botId, id),
-      save: async (botId, input, id) => (await routineTools()).save(botId, input, id),
-      runNow: async (botId, id) => (await routineTools()).runNow(botId, id),
-      remove: async (botId, id) => (await routineTools()).remove(botId, id),
-    },
     channels: {
       im: {
         list: async () => (await imRuntime()).buildBotImConnectionListPayload(),

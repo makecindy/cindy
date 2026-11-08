@@ -36,7 +36,6 @@ import {
 import type { ByokStatus } from '../shared/modelAccess.js';
 import type { LocalPluginOauthRequest, LocalPluginSecretRequest } from '../shared/pluginOauth';
 import { REMOTE_VIEWER } from '../shared/remoteDesktopViewer';
-import type { RoutineInput } from '@cindy/maker-scheduler';
 import {
   LOGIN_ITEM_GET_CHANNEL,
   LOGIN_ITEM_SET_CHANNEL,
@@ -1231,21 +1230,6 @@ contextBridge.exposeInMainWorld('electronAPI', {
     start: (selection: CompanionImportSelection) => ipcRenderer.invoke('companion-import', 'start', selection),
     status: (requestId: string) => ipcRenderer.invoke('companion-import', 'status', requestId),
   } satisfies CompanionImportApi,
-  routines: {
-    list: (botId: string) => ipcRenderer.invoke('routines:list', botId),
-    save: (botId: string, input: RoutineInput, id?: string) =>
-      ipcRenderer.invoke('routines:save', botId, input, id),
-    remove: (botId: string, id: string) => ipcRenderer.invoke('routines:remove', botId, id),
-    runNow: (botId: string, id: string) => ipcRenderer.invoke('routines:run-now', botId, id),
-    history: (botId: string, id: string) => ipcRenderer.invoke('routines:history', botId, id),
-    sources: () => ipcRenderer.invoke('routines:sources'),
-    deliveryTargets: (botId: string) => ipcRenderer.invoke('routines:delivery-targets', botId),
-    onChanged: (listener: () => void) => {
-      const wrapped = () => listener();
-      ipcRenderer.on('routines:changed', wrapped);
-      return () => ipcRenderer.removeListener('routines:changed', wrapped);
-    },
-  },
   platform: process.platform,
   accessibilitySupport: createAccessibilitySupportBridge(),
   supportsBetaUpdateChannel: supportsBetaUpdateChannel(process.platform, process.arch),

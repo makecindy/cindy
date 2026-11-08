@@ -2,7 +2,6 @@ import Database from 'better-sqlite3';
 import { drizzle } from 'drizzle-orm/better-sqlite3';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { Maker } from '@cindy/maker-core';
-import { RoutineEngine } from '@cindy/maker-scheduler';
 
 const h = vi.hoisted(() => ({
   broadcastRemoteResourceChanged: vi.fn(),
@@ -171,7 +170,7 @@ describe('Bot lifecycle coordinator', () => {
     expect(restartRuntime).not.toHaveBeenCalled();
   });
 
-  it('awaits routine pause/resume and keeps permanent deletion retryable until cleanup succeeds', async () => {
+  it('awaits pause/resume hooks and keeps permanent deletion retryable until cleanup succeeds', async () => {
     const onPaused = vi.fn(async () => {
       expect(row(sqlite, 'bot_profiles', 'bot-1').status).toBe('paused');
     });
@@ -180,7 +179,7 @@ describe('Bot lifecycle coordinator', () => {
     });
     const onBeforeDelete = vi.fn<() => Promise<void>>(async () => {
       expect(row(sqlite, 'bot_profiles', 'bot-1')).toBeDefined();
-      throw new Error('routine cleanup failed');
+      throw new Error('cleanup failed');
     });
     const lifecycle = service({ onPaused, onResumed, onBeforeDelete });
     await lifecycle.run({ botId: 'bot-1', action: 'pause' });
@@ -188,7 +187,7 @@ describe('Bot lifecycle coordinator', () => {
     expect(onPaused).toHaveBeenCalledOnce();
     expect(onResumed).toHaveBeenCalledOnce();
     const request = { botId: 'bot-1', action: 'delete' as const, confirmName: 'Helper' };
-    await expect(lifecycle.run(request)).rejects.toThrow('routine cleanup failed');
+    await expect(lifecycle.run(request)).rejects.toThrow('cleanup failed');
     expect(deleteProfileAndDetachSessions).not.toHaveBeenCalled();
     expect(row(sqlite, 'bot_profiles', 'bot-1').status).toBe('archived');
     onBeforeDelete.mockResolvedValue(undefined);
@@ -212,44 +211,6 @@ describe('Bot lifecycle coordinator', () => {
     expect(closeSession).toHaveBeenCalledWith('delegation-session');
     expect(result).toMatchObject({ status: 'paused', affected: { sessions: 2, delegations: 2 } });
     expect(h.broadcastRemoteResourceChanged).toHaveBeenCalledWith('bot-1');
-  });
-
-  it('retains paused routines and history across a failed profile deletion, then purges after retry commits', async () => {
-    let nextId = 0;
-    const engine = new RoutineEngine({
-      load: async () => null, save: async () => {}, execute: async () => ({}),
-      id: () => `fixture-${++nextId}`, now: () => 1000, changed: () => {},
-      onError: error => { throw error; },
-    });
-    await engine.start();
-    try {
-      const routine = await engine.put('bot-1', {
-        name: 'Report', prompt: 'Read data', enabled: true,
-        triggers: [{ id: 'tick', kind: 'interval', intervalMs: 60000 }],
-      });
-      await engine.runNow('bot-1', routine.id);
-      await vi.waitFor(() => expect(engine.history(routine.id)[0].status).toBe('success'));
-      const history = engine.history(routine.id);
-      const onDeleted = vi.fn(async (botId: string) => {
-        expect(row(sqlite, 'bot_profiles', botId)).toBeUndefined();
-        await engine.removeBot(botId);
-      });
-      const lifecycle = service({
-        onBeforeDelete: botId => engine.setBotPaused(botId, true), onDeleted,
-      });
-      const request = { botId: 'bot-1', action: 'delete' as const, confirmName: 'Helper' };
-      deleteProfileAndDetachSessions.mockRejectedValueOnce(new Error('fixture SQLite write failure'));
-      await expect(lifecycle.run(request)).rejects.toThrow('fixture SQLite write failure');
-      expect(row(sqlite, 'bot_profiles', 'bot-1').status).toBe('archived');
-      expect(engine.list('bot-1')).toHaveLength(1);
-      expect(engine.history(routine.id)).toEqual(history);
-      await expect(engine.runNow('bot-1', routine.id)).rejects.toThrow('paused');
-      expect(onDeleted).not.toHaveBeenCalled();
-      await expect(lifecycle.run(request)).resolves.toMatchObject({ status: 'deleted' });
-      expect(onDeleted).toHaveBeenCalledOnce();
-      expect(engine.list('bot-1')).toEqual([]);
-      expect(engine.history(routine.id)).toEqual([]);
-    } finally { await engine.stop(); }
   });
 
   it('reports committed deletion truthfully when post-commit secret cleanup needs retry', async () => {

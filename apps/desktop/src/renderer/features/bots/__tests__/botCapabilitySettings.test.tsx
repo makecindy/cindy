@@ -239,26 +239,6 @@ it('offers turning on an unavailable tool and keeps tool settings in the group h
   expect(view.queryByRole('switch', { name: 'Computer' })).toBeNull();
 });
 
-it('turns a system Skill off for this teammate without touching shared references', async () => {
-  Object.defineProperty(window, 'electronAPI', { configurable: true, value: {
-    localDb: { sessionsPush: { onPatched: () => h.offPush }, bots: { listSkills: async () => [] } },
-    maker: { onMcpChanged: () => h.offMcp, listCustomMcpServers: h.list,
-      listAgentSkills: async () => ({ success: true, skills: [] }), plugins: { list: async () => [] } },
-  } });
-  const onChange = vi.fn();
-  const onSystemSkillChange = vi.fn();
-  const view = render(<BotCapabilitySettings expanded onSystemSkillChange={onSystemSkillChange}
-    bot={{ id: 'bot-1', canonicalSessionId: 's1' } as BotProfile}
-    capabilities={{ modelChain: [], modelChainOverride: null, mcpServers: [], toolsets: [],
-      systemSkillsOff: [] } as unknown as BotProfile['capabilities']}
-    skills={[]} onChange={onChange} />);
-  const routine = view.getByRole('switch', { name: 'bots.capabilities.system.items.routine.name' });
-  expect(routine.getAttribute('aria-checked')).toBe('true');
-  fireEvent.click(routine);
-  expect(onSystemSkillChange).toHaveBeenCalledExactlyOnceWith('routine', false);
-  expect(onChange).not.toHaveBeenCalled();
-});
-
 // Greptile #8330: back and closing settings must not silently drop an edited learned Skill.
 it('asks before leaving a learned Skill editor with unsaved changes', async () => {
   Object.defineProperty(window, 'electronAPI', { configurable: true, value: {

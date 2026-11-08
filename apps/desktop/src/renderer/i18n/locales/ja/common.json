@@ -11158,20 +11158,6 @@
           }
         }
       },
-      "system": {
-        "group": "システムスキル",
-        "meta": "{{total}} 件中 {{on}} 件オン",
-        "pageMeta": "システムスキル · Cindy と一緒に更新",
-        "use": "このチームメイトでオンにする",
-        "whenOff": "オフにすると",
-        "items": {
-          "routine": {
-            "name": "ルーティン",
-            "hint": "定期的に実行するルーティンを作成・管理します。",
-            "off": "ルーティンの作成や変更をやめます。既存のルーティンはそのまま動き、「ルーティン」ページで管理できます。"
-          }
-        }
-      },
       "learned": {
         "group": "覚えたスキル",
         "empty": "まだ覚えたスキルはありません。夜間学習が繰り返し使うやり方をスキルにまとめます。チャットで覚えるよう頼むこともできます。",
@@ -17963,118 +17949,10 @@
     "compression": "長い内容を短くまとめるために。"
   },
   "routines": {
-    "deliveryLabel": "結果の送信先",
-    "deliveryDirect": "パートナーのチャットに直接表示",
-    "deliveryProcess": "パートナーが処理して返信",
-    "deliveryIm": "メッセージボットで送信",
-    "deliveryNone": "実行タスクにのみ保存",
-    "deliveryHint": "直接表示では追加のモデル呼び出しは行いません。静かなチェックでは、変化がない場合は送信しません。",
-    "deliveryRecipient": "送信先",
-    "deliveryUnavailable": "送信先を利用できません",
-    "deliveryNoRecipients": "メッセージボットを接続して一度チャットした後、この設定を開き直してください。",
-    "deliveryFailed": "実行完了・送信失敗",
-    "deliveryFailedHint": "結果は保存されています。送信設定を確認してください。再送のために処理を再実行しないでください。",
-    "deliveryDelivered": "結果を送信しました",
-    "onEvent": "イベント：{{source}} · {{event}}",
-    "triggerDetails": "実行条件を表示（{{count}} 件・いずれかで実行）",
-    "noTriggers": "実行条件は未設定",
-    "unsavedTitle": "未保存の変更があります",
-    "unsavedDescription": "戻ると、このルーチンへの変更が破棄されます。",
-    "discard": "変更を破棄",
-    "continueEditing": "編集を続ける",
-    "title": "ルーティン",
-    "add": "ルーティンを追加",
-    "back": "ルーティンに戻る",
-    "error": "ルーティンを更新できませんでした。設定を確認して再試行してください。",
-    "empty": "ルーティンを追加して、実行する内容とタイミングを指定します。",
-    "enabled": "有効",
-    "paused": "一時停止中",
-    "runNow": "今すぐ実行",
-    "running": "実行中…",
-    "name": "名前",
-    "instructions": "指示",
-    "when": "実行タイミング",
-    "addTrigger": "トリガーを追加",
-    "removeTrigger": "トリガーを削除",
-    "schedule": "スケジュール",
     "hourly": "毎時",
-    "daily": "毎日",
-    "weekdays": "平日",
-    "weekly": "毎週",
-    "monthly": "毎月",
-    "interval": "間隔",
-    "advanced": "詳細設定…",
     "everyMinutes": "{{count}} 分ごと",
-    "minutes": "分",
-    "expression": "Cron 式",
-    "timezone": "タイムゾーン",
-    "delete": "ルーティンを削除",
-    "save": "ルーティンを保存",
-    "saved": "ルーティンを保存しました",
-    "deleteConfirm": "このルーティンを削除し、待機中の実行をキャンセルしますか？",
-    "keep": "ルーティンを残す",
-    "openTask": "セッションを開く",
-    "history": "実行履歴",
-    "noRuns": "このルーティンはまだ実行されていません。",
-    "field": "フィールド",
-    "operator": "条件",
-    "value": "値",
-    "addFilter": "条件を追加",
-    "removeFilter": "条件を削除",
     "pluginCapability": "宣言されたイベントを発行し、設定済みのルーティンのみを実行します。",
-    "time": "時刻",
-    "day": "日",
-    "weekday": "曜日",
-    "status": {
-      "queued": "待機中",
-      "running": "実行中",
-      "success": "完了",
-      "failed": "失敗",
-      "interrupted": "中断",
-      "cancelled": "キャンセル済み",
-      "skipped": "確認済み · モデル起動なし"
-    },
-    "sourceStatus": {
-      "listening": "受信中",
-      "disconnected": "未接続",
-      "error": "接続元を確認してください"
-    },
-    "operators": {
-      "equals": "一致",
-      "contains": "含む",
-      "not-equals": "一致しない"
-    },
-    "quiet": "確認で変化がなければ通知しない",
-    "sessionMode": "実行セッション",
-    "sessionModePersistent": "永続セッション（文脈を保持）",
-    "sessionModeFresh": "トリガーごとに新規作成（文脈を分離）",
-    "sessionModeHint": "永続セッションは同じルーティン会話を続けます。新規作成ではトリガーごとに独立した会話を作成して閉じます。",
-    "quietHint": "変化や問題のみ報告します。リマインダーや定時送信ではオフにできます。",
-    "checkSource": "チェック方法",
-    "checkCommand": "事前確認コマンド",
-    "checkHint": "任意。コンピューターで先に確認します。終了コード 2 は今回の実行をスキップし、0 は続行します。エラーは報告されます。空欄で解除します。",
-    "timeoutMs": "確認のタイムアウト（ミリ秒、空欄は無制限）",
-    "advancedSettings": "詳細設定",
-    "builtinFollowUp": {
-      "name": "担当セッションのフォロー（標準）",
-      "hint": "担当セッションの停滞、返答待ち、エラー、利用上限、完了を受けてフォローします。"
-    },
-    "todoCheck": {
-      "name": "毎日の Todo 確認"
-    },
-    "builtinNightlyLearning": {
-      "name": "夜間の学習（組み込み）",
-      "title": "夜間の学習",
-      "hint": "毎日 3:30 にあなたとの会話を振り返り、メモリを整理し、繰り返し使うやり方をスキルにまとめます。新しい会話がなければ、モデルを呼び出さずにスキップします。"
-    },
-    "remote": {
-      "pause": "ルーティンを一時停止",
-      "resume": "ルーティンを再開",
-      "addSchedule": "スケジュールを追加",
-      "addInterval": "間隔を追加",
-      "addEvent": "イベントトリガーを追加",
-      "filterField": "絞り込みフィールド"
-    }
+    "advancedSettings": "詳細設定"
   },
   "cindyMakeDoctor": {
     "description": "Cindy のビルドに必要なローカル環境を確認します。使い方：/cindy-make-doctor",

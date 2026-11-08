@@ -8,7 +8,6 @@ import type { BotSkillDetail } from '../../../shared/botSkill.js';
 import { throwIpcError } from '../../utils/ipcValidate.js';
 import { createBotRemoteMemoryEditor, memoryCopy, type BotRemoteMemoryService } from './botRemoteMemory.js';
 import type { BotProjectOption } from '../../../shared/botWorkbench.js';
-import { BOT_SYSTEM_SKILL_IDS, isBotSystemSkillId, readBotSystemSkillsOff, withBotSystemSkill } from '../../../shared/botSystemSkills.js';
 
 type Kind = 'skill' | 'mcp' | 'toolset';
 type Capability = { id: string; name: string; description: string; available: boolean; joined: boolean };
@@ -25,7 +24,7 @@ export interface BotRemoteEditorDeps extends Pick<BotRemoteSettingsDeps, 'owner'
   /** Moves a learned skill between its enabled and disabled stores and refreshes the runtime. */
   setSkillEnabled(botId: string, slug: string, enabled: boolean): Promise<void>;
   /** The shared core Skill text as this teammate receives it. */
-  coreGuide(systemSkillsOff: readonly string[]): string | Promise<string>;
+  coreGuide(): string | Promise<string>;
   capabilities(sessionId: string, kind: Kind): Promise<Capability[]>;
   memory: BotRemoteMemoryService;
 }
@@ -72,9 +71,6 @@ export const editorCopy = {
     "모든 팀원은 이 스킬을 기반으로 합니다. 포함 내용:\n· 작업: 제어할 수 있는 작업과 사용 가능한 컴퓨터를 파악하고, 요청에 따라 작업을 배정하고 진행 상황과 결과를 전달합니다. 다른 컴퓨터에서 작업하기 전에 지원 범위를 확인합니다.\n· 팀원: 다른 팀원에게 메시지를 보내 함께 작업합니다.\n· 모델과 도구: 요청에 따라 모델을 바꾸고, 작업에 필요한 도구와 플러그인을 찾습니다.\n· 기억: 선호와 수정 사항을 기억하고, 요청하면 스킬로 저장합니다.\n· Cindy 이해 및 설정: Cindy의 기능과 사용법을 알고, 요청에 따라 설정을 확인하거나 변경합니다. 직접 입력하거나 확인해야 할 때는 작업 안에서 요청합니다.",
     {"es": "Todos los compañeros parten de esta habilidad. Incluye:\n· Tareas: Conoce las tareas que puede controlar y los equipos disponibles. Organiza y sigue las tareas que le pides, trae los resultados y comprueba las operaciones admitidas antes de trabajar en otro equipo.\n· Compañeros: envía mensajes a otros compañeros para colaborar.\n· Modelos y herramientas: cambia de modelo cuando se lo pides y busca las herramientas y complementos que necesita el trabajo.\n· Memoria: recuerda tus preferencias y correcciones, y guarda una habilidad cuando se lo pides.\n· Conocer y configurar Cindy: Conoce las funciones y el uso de Cindy, y consulta o cambia ajustes cuando se lo pides. Si necesita que introduzcas datos o confirmes algo, te lo pide dentro de la tarea.", "fr": "Chaque coéquipier s’appuie sur ce skill. Il couvre :\n· Tâches: Connaît les tâches qu’il peut piloter et les ordinateurs disponibles. Organise et suit les tâches à votre demande, rapporte les résultats et vérifie les opérations prises en charge avant de travailler sur un autre ordinateur.\n· Coéquipiers : envoie des messages aux autres coéquipiers pour collaborer.\n· Modèles et outils : change de modèle à votre demande et trouve les outils et plugins nécessaires.\n· Mémoire : retient vos préférences et corrections, et enregistre un skill à votre demande.\n· Comprendre et configurer Cindy: Connaît les fonctions et le fonctionnement de Cindy, et consulte ou modifie les réglages à votre demande. Vous sollicite dans la tâche si une saisie ou une confirmation est nécessaire.", "de": "Alle Teammitglieder bauen auf diesem Skill auf. Er umfasst:\n· Aufgaben: Kennt die steuerbaren Aufgaben und verfügbaren Computer. Organisiert und begleitet Aufgaben auf Wunsch, bringt Ergebnisse zurück und prüft vor computerübergreifenden Aktionen den unterstützten Umfang.\n· Teammitglieder: schreibt anderen Teammitgliedern, um zusammenzuarbeiten.\n· Modelle und Tools: wechselt auf Wunsch das Modell und findet die Tools und Plugins, die die Arbeit braucht.\n· Gedächtnis: merkt sich deine Vorlieben und Korrekturen und speichert auf Wunsch einen Skill.\n· Cindy verstehen und einstellen: Kennt Cindys Funktionen und Bedienung und prüft oder ändert Einstellungen auf Wunsch. Bittet dich in der Aufgabe um Eingaben oder Bestätigungen, wenn sie nötig sind.", "pt-PT": "Todos os colegas de equipa partem desta Skill. Inclui:\n· Tarefas: Conhece as tarefas que pode controlar e os computadores disponíveis. Organiza e acompanha tarefas a teu pedido, traz os resultados e verifica as operações suportadas antes de trabalhar noutro computador.\n· Colegas de equipa: envia mensagens a outros colegas de equipa para colaborar.\n· Modelos e ferramentas: muda de modelo quando pede e encontra as ferramentas e plugins de que o trabalho precisa.\n· Memória: lembra-se das suas preferências e correções e guarda uma Skill quando pede.\n· Conhecer e configurar o Cindy: Conhece as funções e a utilização do Cindy e consulta ou altera definições a teu pedido. Pede-te na tarefa que preenchas ou confirmes o que for necessário.", "pt-BR": "Todo colega de equipe parte desta Skill. Inclui:\n· Tarefas: Conhece as tarefas que pode controlar e os computadores disponíveis. Organiza e acompanha tarefas a seu pedido, traz os resultados e verifica as operações compatíveis antes de trabalhar em outro computador.\n· Colegas de equipe: envia mensagens a outros colegas de equipe para colaborar.\n· Modelos e ferramentas: troca de modelo quando você pede e encontra as ferramentas e plugins de que o trabalho precisa.\n· Memória: lembra suas preferências e correções e salva uma Skill quando você pede.\n· Conhecer e configurar o Cindy: Conhece as funções e o uso do Cindy e consulta ou altera configurações a seu pedido. Solicita na tarefa que você preencha ou confirme o que for necessário.", "zh-Hant-x-lzh": "諸同僚皆以此技藝為本，其要如下：\n· 任務：知可掌之任務與可用之機，依汝之命布置、跟進，攜其果歸；跨機行事前，先查所能。\n· 同僚：致訊他同僚，共協其事。\n· 模型與工具：依君之命易模型，尋事之所需工具與法器。\n· 記憶：記君之所好與所正，依君之命存為技藝。\n· 知與設 Cindy：知 Cindy 之能與用法，依汝之命查改設定；須汝填寫或確認者，於任務中請汝親為。", "zh-Hans-x-lzh": "诸同僚皆以此技艺为本，其要如下：\n· 任务：知可掌之任务与可用之机，依汝之命布置、跟进，携其果归；跨机行事前，先查所能。\n· 同僚：致讯他同僚，共协其事。\n· 模型与工具：依君之命易模型，寻事之所需工具与法器。\n· 记忆：记君之所好与所正，依君之命存为技艺。\n· 知与设 Cindy：知 Cindy 之能与用法，依汝之命查改设置；须汝填写或确认者，于任务中请汝亲为。"}),
   coreOriginal: text('Original Text', '原文', '原文', '原文', '원문', {"es":"Texto original","fr":"Texte d’origine","de":"Originaltext","pt-PT":"Texto original","pt-BR":"Texto original","zh-Hant-x-lzh":"原文","zh-Hans-x-lzh":"原文"}),
-  systemSkills: text('System Skills', '系统技能', '系統技能', 'システムスキル', '시스템 스킬', {"es":"Habilidades del sistema","fr":"Skills système","de":"System-Skills","pt-PT":"Skills do sistema","pt-BR":"Skills do sistema","zh-Hant-x-lzh":"系統技藝","zh-Hans-x-lzh":"系统技艺"}),
-  routine: text('Routines', '例行任务', '例行任務', 'ルーティン', '루틴', {"es":"Rutinas","fr":"Routines","de":"Routinen","pt-PT":"Rotinas","pt-BR":"Rotinas","zh-Hant-x-lzh":"例行差事","zh-Hans-x-lzh":"例行差事"}),
-  routineHelp: text('Sets up and maintains routines that run on a schedule.', '设置并维护按时运行的例行任务。', '設定並維護按時執行的例行任務。', '決まった時間に実行するルーティンを設定・管理します。', '일정에 따라 실행되는 루틴을 설정하고 관리합니다.', {"es":"Crea y mantiene rutinas que se ejecutan según un horario.","fr":"Crée et gère des routines qui s’exécutent selon un horaire.","de":"Richtet Routinen ein, die nach Zeitplan laufen, und pflegt sie.","pt-PT":"Configura e mantém rotinas que são executadas segundo um horário.","pt-BR":"Configura e mantém rotinas que rodam em horários definidos.","zh-Hant-x-lzh":"設並守按時而行之例行差事。","zh-Hans-x-lzh":"设并守按时而行之例行差事。"}),
   useSkill: text('Use This Skill', '使用这个技能', '使用這個技能', 'このスキルを使う', '이 스킬 사용', {"es":"Usar esta habilidad","fr":"Utiliser ce skill","de":"Diesen Skill verwenden","pt-PT":"Usar esta Skill","pt-BR":"Usar esta Skill","zh-Hant-x-lzh":"用此技藝","zh-Hans-x-lzh":"用此技艺"}),
   skillOff: text('Off', '已关闭', '已關閉', 'オフ', '꺼짐', {"es":"Desactivada","fr":"Désactivé","de":"Aus","pt-PT":"Desativada","pt-BR":"Desativada","zh-Hant-x-lzh":"已閉","zh-Hans-x-lzh":"已闭"}),
 };
@@ -173,7 +169,6 @@ export function createBotRemoteEditors(deps: BotRemoteEditorDeps, bind: ReturnTy
     const resource: RemoteResource = { ref: ref(id), revision: await revision(), display: { title: editorCopy[page as 'skills' | 'connections' | 'avatar'] }, links: [], blocks: [], actions: [] };
     if (page === 'skills') {
       if (entryId) throwIpcError('NOT_FOUND', 'Unknown skill');
-      const systemOff = readBotSystemSkillsOff(settings.systemSkillsOff);
       if (!section) {
         const skills = await deps.skills(botId); deps.assertOwner(owner);
         resource.display.title = editorCopy.skillsPage;
@@ -182,16 +177,14 @@ export function createBotRemoteEditors(deps: BotRemoteEditorDeps, bind: ReturnTy
         resource.blocks = [
           { id: 'core', primitive: 'list', fallbackMarkdown: '',
             data: { entries: [{ id: 'core', title: editorCopy.coreSkill, subtitle: editorCopy.coreSkillDetail, resourceId: `${id}/_core` }] } },
-          { id: 'system', title: editorCopy.systemSkills, primitive: 'list', fallbackMarkdown: '',
-            data: { entries: BOT_SYSTEM_SKILL_IDS.map(skillId => ({ id: skillId, title: editorCopy[skillId], ...(systemOff.includes(skillId) ? { subtitle: editorCopy.skillOff } : {}), resourceId: `${id}/_${skillId}` })) } },
           { id: 'skills', title: editorCopy.skills, primitive: 'list', fallbackMarkdown: '',
             data: { entries: skills.map(skill => ({ id: skill.slug, title: skill.name, ...(skill.enabled === false ? { subtitle: editorCopy.skillOff } : {}), resourceId: `${id}/${skill.slug}` })) } },
         ];
         return resource;
       }
       if (section === '_core') {
-        // Read-only: the core is maintained by the app; the original reflects this teammate's switches.
-        const original = await deps.coreGuide(systemOff); deps.assertOwner(owner);
+        // Read-only: the core is maintained by the app.
+        const original = await deps.coreGuide(); deps.assertOwner(owner);
         resource.display.title = editorCopy.coreSkill;
         resource.blocks = [
           { id: 'core', primitive: 'markdown', fallbackMarkdown: `${resolveRemoteText(editorCopy.coreSkillDetail, locale)}\n\n${resolveRemoteText(editorCopy.coreSummary, locale)}` },
@@ -199,22 +192,8 @@ export function createBotRemoteEditors(deps: BotRemoteEditorDeps, bind: ReturnTy
         ];
         return resource;
       }
-      if (section.startsWith('_')) {
-        const skillId = section.slice(1);
-        if (!isBotSystemSkillId(skillId)) throwIpcError('NOT_FOUND', 'Unknown skill');
-        resource.display.title = editorCopy[skillId];
-        // `capability` is the toggle-with-description layout every controller already draws.
-        const panel = form('capability', editorCopy.useSkill, [{ id: 'enabled', label: editorCopy.useSkill, kind: 'toggle' }], { enabled: !systemOff.includes(skillId) });
-        panel.block.fallbackMarkdown = resolveRemoteText(editorCopy[`${skillId}Help`], locale);
-        resource.blocks = [panel.block]; resource.actions = [{ ...panel.action, disabled: settings.source.status !== 'active' }];
-        return bind(context, resource, () => revision(), async request => {
-          const input = request.input ?? {}; keys(input, ['enabled']);
-          if (typeof input.enabled !== 'boolean') fail();
-          // Same profile version check as the connection toggles: a stale page never overwrites.
-          await deps.update({ id: botId, capabilities: { systemSkillsOff: withBotSystemSkill(settings.systemSkillsOff, skillId, input.enabled as boolean) } }, settings.source.currentVersion);
-          return receipt(id);
-        });
-      }
+      // System Skills (`_routine`, `_follow`) were removed; older controllers may still open them.
+      if (section.startsWith('_')) throwIpcError('NOT_FOUND', 'Unknown skill');
       const skill = await deps.skill(botId, section); deps.assertOwner(owner);
       if (!skill) throwIpcError('NOT_FOUND', 'Skill unavailable');
       resource.display.title = skill.name;

@@ -670,7 +670,7 @@ export class MakerScheduleRunner implements ScheduleRunner {
    * 排除后走可见失败:用户知道这次没跑成,可以自己再点一次,不会莫名多出自动运行。
    */
   private canDefer(schedule: Schedule, ctx: FireContext): boolean {
-    // RoutineEngine explicitly owns retries; no nextFireAt is armed in this mode.
+    // The caller (e.g. the webhook queue) explicitly owns retries; no nextFireAt is armed in this mode.
     if (ctx.deferToCaller) return true;
     return schedule.recurring === true && schedule.status === 'active' && schedule.manual !== true;
   }
@@ -678,7 +678,7 @@ export class MakerScheduleRunner implements ScheduleRunner {
   /**
    * 记一次排队受理时的权限失效。返回非空表示稳定失配已持续，调用方应改为可见失败；
    * 文案不含 runId 等逐次变化的值，通知侧才能按相同 errorMsg 去重。
-   * RoutineEngine 自管重试(deferToCaller)的伙伴例行任务维持原顺延语义。
+   * 调用方自管重试(deferToCaller，如 webhook 队列)时维持原顺延语义。
    */
   private notePermissionMismatch(
     schedule: Schedule,
@@ -4019,7 +4019,7 @@ export function buildSilentRunInstruction(teammate = false): string {
   }
   return [
     '\n\n---\n[Silent scheduled run]',
-    `Successful checks without changes stay quiet. Do not announce checks or routine progress. If there is a new actionable result, a check failure, or this is an explicit reminder/scheduled delivery, call ${teammate ? 'cindy_helper' : 'cindy_scheduler'} call_tool({ name: "schedule_notify_current_run", args: {} }), then write the concise final report. Only that final report is published.`,
+    'Successful checks without changes stay quiet. Do not announce checks or routine progress. If there is a new actionable result, a check failure, or this is an explicit reminder/scheduled delivery, call cindy_scheduler call_tool({ name: "schedule_notify_current_run", args: {} }), then write the concise final report. Only that final report is published.',
   ].join('');
 }
 

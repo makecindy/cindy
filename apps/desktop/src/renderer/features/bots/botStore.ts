@@ -23,7 +23,6 @@ export { canonicalBotSession } from './botSessionOwners';
 import type { BotGender } from '../../../shared/botGender';
 import { BOT_FAILURE_REASONS, type BotFailureReason } from '../../../shared/botFailureReason';
 import type { BotCapabilityBaseline } from '../../../shared/botCapabilitySelection';
-import type { BotSystemSkillId } from '../../../shared/botSystemSkills';
 import { NEW_BOT_DEFAULT_PERMISSIONS, normalizeBotPermissions } from './botCapabilityDefaults';
 import {
   BOT_MODEL_CHAIN_MAX,
@@ -70,8 +69,6 @@ export interface BotCapabilities {
    * 缺省 = false：别的伙伴开的任务，负责所有任务的伙伴默认只看不跟（shared/botAutonomy.ts）。
    */
   allowSchedulerFollow?: boolean;
-  /** System Skills this teammate has turned off (shared/botSystemSkills.ts). Missing = all on. */
-  systemSkillsOff?: BotSystemSkillId[];
   /** Experimental: the teammate's workspace is a project (shared/botProjectMode.ts). Missing = off. */
   projectMode?: boolean;
 }

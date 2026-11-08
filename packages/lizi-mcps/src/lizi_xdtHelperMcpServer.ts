@@ -42,7 +42,6 @@ import { BRAND_NAME } from '@cindy/maker-shared/branding';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { ListToolsRequestSchema, type Tool } from '@modelcontextprotocol/sdk/types.js';
 import { z } from 'zod';
-import { registerBotRoutineTools, type BotRoutineCallbacks } from './xdt-helper/botRoutineTools.js';
 import { registerGrokLoginTools, type GrokLoginCallbacks } from './xdt-helper/grok_login.js';
 import { registerInputHandoffTool, type InputHandoffCallbacks } from './xdt-helper/input_handoff.js';
 import { jsonObjectArg } from './json-object-arg.js';
@@ -185,7 +184,7 @@ export const HELPER_CATEGORY_DESCRIPTIONS: Record<(typeof CATEGORY_ENUM)[number]
   handoff: '给已有任务发消息或新建任务。新建可指定 title；省略 project_path 继承来源归属，传已有项目路径切换项目，传 null 创建不绑项目的任务。执行目录独立，不隐式创建项目。发给已有任务可跨电脑（deviceId::sessionId）；新建的任务与文件仍在本机，新建时可用 agent_device_id 选择 Agent 使用哪台电脑的远程或分享供应商（取 list_available_models 的 locations）。',
   skills: 'Skill 的搜索、发布与学习。本机与 SkillHub。',
   app_update: `检查与安装本机的 ${BRAND_NAME} 更新。本机。`,
-  bots: '伙伴：资料、能力、关联项目（list_teammate_projects / set_teammate_project，仅自身）、后台任务、发现伙伴与主力电脑。例行任务用 routine_list / routine_save；schedule_list_models 查可选模型、来源、档位与已知价格，modelOverride 与 sessionMode 设置每条例行任务的模型与运行方式。发现伙伴（list_agents，返回伙伴主对话的 session_id，发消息用 handoff 类的 send_to_session）与主力电脑（get_teammate_home / move_teammate_home）可跨电脑；其余本机。',
+  bots: '伙伴：资料、能力、关联项目（list_teammate_projects / set_teammate_project，仅自身）、后台任务、发现伙伴与主力电脑。发现伙伴（list_agents，返回伙伴主对话的 session_id，发消息用 handoff 类的 send_to_session）与主力电脑（get_teammate_home / move_teammate_home）可跨电脑；其余本机。',
 };
 
 interface SessionTaskCallbacks {
@@ -248,7 +247,7 @@ function cindyAvailableForSession(sessionCtx: XdtHelperMcpSessionCtx): boolean {
 interface HelperSurfaceAllow {
   /** null means every registered category. An empty set means none. */
   categories: ReadonlySet<string> | null;
-  /** Tools of system Skills this teammate turned off (teammate_skills.ts). */
+  /** Tools hidden from this teammate (teammateDeniedTools in teammate_skills.ts). */
   deniedTools?: ReadonlySet<string>;
 }
 
@@ -733,11 +732,6 @@ export interface XdtHelperMcpDeps {
   }) => Promise<'default' | 'bot' | 'bot-main' | 'restricted'>;
   /** Live caller/account check for all tasks; the tool list itself never changes mid-session. */
   authorizeCall?: ToolCallAuthorizer;
-  /**
-   * System Skills the calling teammate turned off (`routine`). Their tools are
-   * denied at call time and left out of new tool listings; the core prompt stops naming them.
-   */
-  resolveSystemSkillsOff?: (input: { sessionId: string }) => Promise<readonly string[]>;
   /** The calling teammate runs as a project (V2): teammate-only delegation tools are left out. */
   resolveTeammateProjectMode?: (input: { sessionId: string }) => Promise<boolean>;
   runtimeCapabilities?: (
@@ -782,7 +776,6 @@ export interface XdtHelperMcpDeps {
   projectManagement?: ProjectManagementCallbacks;
   /** Cindy Bot-only background Session-task controls. Host validates the caller Session. */
   sessionTasks?: SessionTaskCallbacks;
-  botRoutines?: BotRoutineCallbacks;
   /** Direct Bot-to-Bot messages over each partner's canonical Cindy Session. */
   botMessaging?: BotMessagingCallbacks;
   /** Direct lightweight Bot creation for a Bot-bound session. */
@@ -880,13 +873,10 @@ export function createXdtHelperMcpServer(
     if (surface === 'bot' || surface === 'bot-main') {
       // Companion identity adds self-management, not a narrower ordinary tool surface.
       const categories = remoteBotOnly ? new Set(['auth', 'cindy']) : defaultCategories;
-      const off = deps.resolveSystemSkillsOff
-        ? await deps.resolveSystemSkillsOff({ sessionId }).catch(() => [] as readonly string[])
-        : [];
       const projectMode = deps.resolveTeammateProjectMode
         ? await deps.resolveTeammateProjectMode({ sessionId }).catch(() => false)
         : false;
-      return { categories: new Set([...categories, 'bots']), deniedTools: teammateDeniedTools(off, projectMode) };
+      return { categories: new Set([...categories, 'bots']), deniedTools: teammateDeniedTools(projectMode) };
     }
     if (surface === 'restricted') return none;
     return allow(remoteBotOnly ? new Set(['auth', 'cindy']) : defaultCategories);
@@ -1077,17 +1067,7 @@ export function createXdtHelperMcpServer(
       getSessionContext: () => resolveLiziMcpSessionContext(sessionCtx),
       callbacks: deps.appModels && !sessionCtx.remoteHostId ? { ...deps.botCapabilities, models: undefined, setDefaultModel: undefined } : deps.botCapabilities,
     });
-    registerTeammateSkillReader(registry, {
-      getSessionContext: () => resolveLiziMcpSessionContext(sessionCtx),
-      systemSkillsOff: deps.resolveSystemSkillsOff
-        ? ({ callerSessionId }) => deps.resolveSystemSkillsOff!({ sessionId: callerSessionId })
-        : undefined,
-    });
-  }
-  if (deps.botRoutines) {
-    registerBotRoutineTools(registry, deps.botRoutines,
-      () => resolveLiziMcpSessionContext(sessionCtx).sessionId,
-      () => resolveLiziMcpSessionContext(sessionCtx));
+    registerTeammateSkillReader(registry);
   }
 
   registerStartSessionTaskEntry(registry, deps, sessionCtx);

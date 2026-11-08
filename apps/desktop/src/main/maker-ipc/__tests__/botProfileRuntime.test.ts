@@ -11,8 +11,8 @@ import {
   withBotHomeAccess,
 } from '../botProfileRuntime';
 import { buildDefaultBotIdentity } from '../../../shared/botProfileDefaults';
-import { TEAMMATE_CORE_TOPICS, TEAMMATE_SYSTEM_SKILLS } from '@cindy/mcps';
-import { TEAMMATE_CORE_MAX_CHARS, buildTeammateGuide } from '../teammateGuide';
+import { TEAMMATE_CORE_TOPICS } from '@cindy/mcps';
+import { TEAMMATE_CORE_MAX_CHARS } from '../teammateGuide';
 import { buildBotMcpCatalog } from '../../maker-host/botMcpCatalog';
 
 // Unit regression: default inheritance must retain engine connectors while an
@@ -93,26 +93,10 @@ describe('Bot Profile runtime prompt', () => {
     expect(prompt).toContain('never tell the owner to start a new task');
     expect(TEAMMATE_CORE_TOPICS.mcp.body).toContain('`request_mcp_setup`');
     expect(TEAMMATE_CORE_TOPICS.mcp.body).toContain('If it is already joined, change nothing');
-    // System Skills are listed by name only.
+    // Tools of removed teammate features stay out of the core.
     expect(prompt).not.toContain('list_teammate_todos');
     expect(prompt).not.toContain('schedule_set_pre_run_hook');
     expect(prompt).not.toContain('delegate_to_bot');
-  });
-
-  it('names turned-off system Skills as unavailable and drops them from the list', () => {
-    const prompt = buildBotCapabilityContextPrompt({ systemSkillsOff: ['routine'] });
-    expect(prompt).toContain('All system Skills are off.');
-    expect(prompt).not.toContain(`\`routine\` — ${TEAMMATE_SYSTEM_SKILLS.routine.description}`);
-    expect(prompt).toContain('Off: `routine`. Their tools are unavailable');
-  });
-
-  // Greptile #8330: every local teammate mounts the same core file, so it must not claim a teammate's switches.
-  it('keeps per-teammate system Skill state out of the shared core file', () => {
-    const shared = buildTeammateGuide({ shared: true, systemSkillsOff: ['routine'] });
-    expect(shared).not.toMatch(/\bOn: |\bOff: |All system Skills are off/);
-    expect(shared).toContain('`routine` — ');
-    expect(shared).toContain('your preloaded profile says which are on for you');
-    expect(shared.length).toBeLessThanOrEqual(TEAMMATE_CORE_MAX_CHARS);
   });
 
   it('does not advertise helper discovery or delegation when the target cannot mount it', () => {

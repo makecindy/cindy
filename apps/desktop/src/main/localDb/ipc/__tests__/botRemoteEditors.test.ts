@@ -5,12 +5,11 @@ import { RemoteResourceRegistryError } from '../../../device-link/remoteResource
 import { createIpcError } from '../../../../shared/ipc-errors.js';
 import type { BotMemoryDetail } from '../../../../shared/botMemory.js';
 import type { BotSkillDetail } from '../../../../shared/botSkill.js';
-import type { BotSystemSkillId } from '../../../../shared/botSystemSkills.js';
 
 function fixture() {
   let owner = 'a';
   const source = { id: 'bot-a', name: 'Cindy', description: '', avatar: '', avatarColor: '', status: 'active', canonicalSessionId: 'main-a', lastMessagePreview: null, lastMessageAt: null, lastMessageRole: null, needsAttention: false, hiddenAt: null, pinnedAt: null, activityAt: 1, currentVersion: 3, updatedAt: 1 };
-  const settings = { source, identity: '', userContext: '', memory: true, permissions: 'auto', modelChain: [], followsDefault: true, skills: ['existing'], connections: [], toolsets: [], systemSkillsOff: undefined as BotSystemSkillId[] | undefined };
+  const settings = { source, identity: '', userContext: '', memory: true, permissions: 'auto', modelChain: [], followsDefault: true, skills: ['existing'], connections: [], toolsets: [] };
   let skill: BotSkillDetail = { slug: 'learned', name: '写简报', description: '写简报时使用', body: '保留准确来源。', updatedAt: '1' };
   const catalog = [{ id: 'existing', name: 'Existing', description: 'A skill', available: false, joined: true }, { id: 'new', name: 'New', description: 'Available skill', available: true, joined: false }];
   let clock = 0;
@@ -38,17 +37,13 @@ function fixture() {
   };
   const deps: BotRemoteEditorDeps = {
     owner: () => owner, assertOwner: captured => { if (captured !== owner) throw Error('OWNER_CHANGED'); },
-    read: vi.fn(async () => settings), update: vi.fn(async (input: Record<string, unknown>) => {
-      const capabilities = input.capabilities as { systemSkillsOff?: BotSystemSkillId[] } | undefined;
-      if (capabilities?.systemSkillsOff) settings.systemSkillsOff = capabilities.systemSkillsOff;
-      source.currentVersion++;
-    }),
+    read: vi.fn(async () => settings), update: vi.fn(async () => { source.currentVersion++; }),
     modelDefaults: vi.fn(async () => []),
     create: vi.fn(async () => {}), avatar: vi.fn(async () => {}),
     skills: vi.fn(async () => [skill]), skill: vi.fn(async () => skill), saveSkill: vi.fn(async (_bot, value) => { skill = value; }),
     removeSkill: vi.fn(async () => {}), capabilities: vi.fn(async () => catalog), memory,
     setSkillEnabled: vi.fn(async (_bot: string, _slug: string, enabled: boolean) => { skill = { ...skill, enabled }; }),
-    coreGuide: vi.fn((off: readonly string[]) => `## teammate-guide\nOff: ${off.join(',')}`),
+    coreGuide: vi.fn(() => '## teammate-guide'),
   };
   const host = createBotRemoteSettingsResource({ ...deps, lifecycle: vi.fn(async () => ({})) });
   const get = createBotRemoteEditors(deps, host.bindResource);
@@ -136,38 +131,23 @@ describe('portable teammate editors', () => {
     expect(f.deps.update).not.toHaveBeenCalled();
   });
   // Skill layers (cindy-bots-runtime.md §6「伙伴技能分层」) on the phone's generic settings pages. Unit, in-memory deps.
-  // Gap: the page listed learned skills only. Minimal input: one learned skill turned off, `routine` off.
-  it('lists the read-only core, the system Skills and every learned skill, marking the ones turned off', async () => {
-    const f = fixture(); f.settings.systemSkillsOff = ['routine'];
+  // Gap: the page listed learned skills only. Minimal input: one learned skill turned off.
+  it('lists the read-only core and every learned skill, marking the ones turned off', async () => {
+    const f = fixture();
     await f.deps.setSkillEnabled('bot-a', 'learned', false);
     const shelf = await f.resource('settings:bot-a/skills');
-    expect(shelf.blocks!.map(block => block.id)).toEqual(['core', 'system', 'skills']);
+    expect(shelf.blocks!.map(block => block.id)).toEqual(['core', 'skills']);
     expect(f.entries(shelf, 'core')).toMatchObject([{ resourceId: 'settings:bot-a/skills/_core', subtitle: { translations: { 'zh-CN': '所有伙伴共用 · 始终开启 · 随 Cindy 更新' } } }]);
-    expect(f.entries(shelf, 'system').map(entry => [entry.resourceId, !!entry.subtitle])).toEqual([
-      ['settings:bot-a/skills/_routine', true]]);
     expect(f.entries(shelf, 'skills')).toMatchObject([{ resourceId: 'settings:bot-a/skills/learned', subtitle: { fallback: 'Off' } }]);
     const core = await f.resource('settings:bot-a/skills/_core');
     expect(core.actions ?? []).toEqual([]);
-    expect(core.blocks!.map(block => block.fallbackMarkdown)).toEqual([expect.stringContaining('了解与设置 Cindy'), '## teammate-guide\nOff: routine']);
-    expect(f.deps.coreGuide).toHaveBeenCalledWith(['routine']);
-    // `_` never collides with a learned slug, and only the system ids exist (V1 todos are gone).
-    await expect(f.resource('settings:bot-a/skills/_memory')).rejects.toThrow();
-    await expect(f.resource('settings:bot-a/skills/_todo')).rejects.toThrow();
-  });
-  it('turns a system Skill off and on against the profile version the page was opened at', async () => {
-    const f = fixture();
-    const routine = await f.resource('settings:bot-a/skills/_routine');
-    expect(routine.blocks![0]).toMatchObject({ id: 'capability', data: { values: { enabled: true } } });
-    expect(routine.blocks![0].fallbackMarkdown).toContain('例行任务');
-    await expect(f.send(routine, { enabled: 'no' })).rejects.toThrow();
-    await f.send(await f.resource('settings:bot-a/skills/_routine'), { enabled: false });
-    expect(f.deps.update).toHaveBeenLastCalledWith({ id: 'bot-a', capabilities: { systemSkillsOff: ['routine'] } }, 3);
-    const stale = await f.resource('settings:bot-a/skills/_routine');
-    f.settings.source.currentVersion++;
-    await expect(f.send(stale, { enabled: true })).rejects.toThrow();
-    expect(f.deps.update).toHaveBeenCalledTimes(1);
-    await f.send(await f.resource('settings:bot-a/skills/_routine'), { enabled: true });
-    expect(f.deps.update).toHaveBeenLastCalledWith({ id: 'bot-a', capabilities: { systemSkillsOff: [] } }, 5);
+    expect(core.blocks!.map(block => block.fallbackMarkdown)).toEqual([expect.stringContaining('了解与设置 Cindy'), '## teammate-guide']);
+    // `_` never collides with a learned slug. The removed system Skills (`_routine`, `_follow`, `_todo`)
+    // that older phones may still open answer NOT_FOUND.
+    for (const id of ['_memory', '_todo', '_follow', '_routine']) {
+      await expect(f.resource(`settings:bot-a/skills/${id}`)).rejects.toMatchObject({ code: 'NOT_FOUND' });
+    }
+    expect(f.deps.update).not.toHaveBeenCalled();
   });
   it('turns a learned skill off without rewriting it and back on together with an edit', async () => {
     const f = fixture();

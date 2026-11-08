@@ -11300,20 +11300,6 @@
           }
         }
       },
-      "system": {
-        "group": "Skills do sistema",
-        "meta": "{{on}} de {{total}} ativas",
-        "pageMeta": "Skill do sistema · Atualizada com o Cindy",
-        "use": "Ativar para este colega",
-        "whenOff": "Ao desativar",
-        "items": {
-          "routine": {
-            "name": "Rotinas",
-            "hint": "Cria e mantém rotinas que rodam periodicamente.",
-            "off": "Ele para de criar ou alterar rotinas. As existentes continuam rodando e podem ser gerenciadas na página Rotinas."
-          }
-        }
-      },
       "learned": {
         "group": "Skills aprendidas",
         "empty": "Ainda não há Skills aprendidas. O aprendizado noturno transforma em Skills os métodos que se repetem, ou você pode pedir no chat que ele lembre de um.",
@@ -18195,118 +18181,10 @@
     "compression": "Para condensar conteúdos longos."
   },
   "routines": {
-    "deliveryLabel": "Entrega final",
-    "deliveryDirect": "Mostrar diretamente na conversa com o assistente",
-    "deliveryProcess": "Pedir ao assistente para processar e responder",
-    "deliveryIm": "Enviar por um bot de mensagens",
-    "deliveryNone": "Manter apenas na tarefa de execução",
-    "deliveryHint": "A entrega direta não faz chamadas extras ao modelo. Verificações silenciosas continuam omitindo resultados sem atividade.",
-    "deliveryRecipient": "Destinatário",
-    "deliveryUnavailable": "Destino indisponível",
-    "deliveryNoRecipients": "Conecte um bot de mensagens e converse com ele. Depois, reabra estas configurações.",
-    "deliveryFailed": "Concluído, mas houve falha na entrega",
-    "deliveryFailedHint": "O resultado está salvo. Verifique as configurações de entrega; não execute o trabalho novamente apenas para reenviá-lo.",
-    "deliveryDelivered": "Resultado entregue",
-    "onEvent": "Evento: {{source}} · {{event}}",
-    "triggerDetails": "Ver gatilhos ({{count}}; qualquer um pode iniciar uma execução)",
-    "noTriggers": "Nenhum gatilho definido",
-    "unsavedTitle": "Alterações não salvas",
-    "unsavedDescription": "Sair descartará estas alterações na rotina.",
-    "discard": "Descartar alterações",
-    "continueEditing": "Continuar editando",
-    "title": "Rotinas",
-    "add": "Adicionar Rotina",
-    "back": "Voltar às Rotinas",
-    "error": "Não foi possível atualizar as rotinas. Verifique as configurações e tente novamente.",
-    "empty": "Adicione uma rotina para dizer a este colega o que fazer e quando.",
-    "enabled": "Ativado",
-    "paused": "Em pausa",
-    "runNow": "Executar agora",
-    "running": "Em execução…",
-    "name": "Nome",
-    "instructions": "Instruções",
-    "when": "Quando executar",
-    "addTrigger": "Adicionar gatilho",
-    "removeTrigger": "Remover gatilho",
-    "schedule": "Agendamento",
     "hourly": "A cada hora",
-    "daily": "Diariamente",
-    "weekdays": "Dias úteis",
-    "weekly": "Semanal",
-    "monthly": "Mensal",
-    "interval": "Intervalo",
-    "advanced": "Avançado…",
     "everyMinutes": "A cada {{count}} minutos",
-    "minutes": "Minutos",
-    "expression": "Expressão cron",
-    "timezone": "Fuso horário",
-    "delete": "Excluir Rotina",
-    "save": "Salvar Rotina",
-    "saved": "Rotina salva",
-    "deleteConfirm": "Excluir esta rotina e cancelar suas execuções pendentes?",
-    "keep": "Manter Rotina",
-    "openTask": "Abrir Sessão",
-    "history": "Histórico de execuções",
-    "noRuns": "Esta rotina ainda não foi executada.",
-    "field": "Campo",
-    "operator": "Condição",
-    "value": "Valor",
-    "addFilter": "Adicionar condição",
-    "removeFilter": "Remover condição",
     "pluginCapability": "Publica eventos declarados nas suas rotinas. Somente as rotinas que você configurar podem ser executadas.",
-    "time": "Horário",
-    "day": "Dia",
-    "weekday": "Dia da semana",
-    "status": {
-      "queued": "Na fila",
-      "running": "Em execução",
-      "success": "Concluído",
-      "failed": "Falhou",
-      "interrupted": "Interrompido",
-      "cancelled": "Cancelado",
-      "skipped": "Verificado · modelo não acionado"
-    },
-    "sourceStatus": {
-      "listening": "Ouvindo",
-      "disconnected": "Não está escutando",
-      "error": "A fonte precisa de atenção"
-    },
-    "operators": {
-      "equals": "Igual a",
-      "contains": "Contém",
-      "not-equals": "Diferente de"
-    },
-    "quiet": "Não notificar quando as verificações não encontrarem nada",
-    "sessionMode": "Sessão de execução",
-    "sessionModePersistent": "Sessão persistente (manter contexto)",
-    "sessionModeFresh": "Nova sessão a cada gatilho (isolar contexto)",
-    "sessionModeHint": "A opção persistente mantém uma única conversa da rotina. Uma nova sessão cria e fecha uma conversa isolada para cada gatilho.",
-    "quietHint": "Relate apenas alterações ou problemas. Desative para lembretes e mensagens agendadas.",
-    "checkSource": "Verificar com",
-    "checkCommand": "Comando de verificação prévia",
-    "checkHint": "Opcional. Verifica o computador antes de cada execução: exit 2 pula a execução, exit 0 continua, erros permanecem visíveis. Limpe para remover.",
-    "timeoutMs": "Tempo limite da verificação (ms, em branco para sem limite)",
-    "advancedSettings": "Configurações avançadas",
-    "builtinFollowUp": {
-      "name": "Acompanhar sessões atribuídas (integrado)",
-      "hint": "Acompanhe as sessões atribuídas quando travarem, precisarem de você, falharem, atingirem um limite de uso ou terminarem."
-    },
-    "todoCheck": {
-      "name": "Verificação diária de pendências"
-    },
-    "builtinNightlyLearning": {
-      "name": "Aprendizado noturno (integrado)",
-      "title": "Aprendizado noturno",
-      "hint": "Todas as noites às 3:30, revisa suas conversas: organiza memórias e salva abordagens recorrentes como Skills. Não aciona um modelo quando não há novidades."
-    },
-    "remote": {
-      "pause": "Pausar rotina",
-      "resume": "Retomar rotina",
-      "addSchedule": "Adicionar horário",
-      "addInterval": "Adicionar intervalo",
-      "addEvent": "Adicionar gatilho de evento",
-      "filterField": "Campo de filtro"
-    }
+    "advancedSettings": "Configurações avançadas"
   },
   "cindyMakeDoctor": {
     "description": "Verifique o ambiente local para compilar Cindy. Uso: /cindy-make-doctor",

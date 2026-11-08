@@ -203,14 +203,11 @@ describe('Host task action authorization', () => {
 // Regression #6399: the pure scope fixture above cannot detect a second confirmation
 // added to the owner's ordinary tool flow.
 // Exercise the Desktop adapter + shared helper/Orca entry.
-// SQLite/account/routine IO is replaced with in-memory facts (unit tier).
+// SQLite/account IO is replaced with in-memory facts (unit tier).
 const hostFacts = vi.hoisted(() => ({ getDb: vi.fn(), boundaryPending: vi.fn() }));
 vi.mock('../../localDb/client/current.js', () => ({ tryGetDbClient: hostFacts.getDb }));
 vi.mock('../../appSessionState.js', () => ({
   isAppSessionBoundaryPending: hostFacts.boundaryPending,
-}));
-vi.mock('../../routines/service.js', () => ({
-  readActiveFollowUpRoutine: () => ({ enabled: false, revision: 1 }),
 }));
 import { botDelegations, orcaTeams } from '../../localDb/schema.js';
 import { createDesktopTaskActionAuthorizer } from '../taskActionHost.js';

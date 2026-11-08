@@ -655,27 +655,10 @@ describe('Bot settings profile consolidation', () => {
     expect((await screen.findByRole('alert')).textContent).toContain('missing');
   });
 
-  it('keeps todos out of the routines page now that they live in 近况', async () => {
-    // 2026-10-21：待办只在聊天头部的近况里看、在对话里改；设置里的例行任务页不再列待办。
-    const api = window.electronAPI as unknown as Record<string, Record<string, unknown>>;
-    api.routines = {
-      list: vi.fn(async () => []), sources: vi.fn(async () => []),
-      history: vi.fn(async () => []), onChanged: vi.fn(() => () => undefined),
-    };
-    const list = vi.fn(async () => ({ items: [] }));
-    (api.localDb.bots as Record<string, unknown>).todos = { list };
-    mocks.initialSearch = 'settings=1&tab=growth';
-    render(<ConfirmDialogProvider><BotSettings bot={bot()} onBack={vi.fn()} onOpenSession={vi.fn()} /></ConfirmDialogProvider>);
-    fireEvent.click(screen.getByRole('button', { name: 'routines.title' }));
-    await waitFor(() => expect(api.routines.list).toHaveBeenCalled());
-    expect(screen.queryByRole('region', { name: 'teammateTodo.title' })).toBeNull();
-    expect(list).not.toHaveBeenCalled();
-  });
-
   it('starts at grouped settings and opens real inner pages without exposing hidden inputs', async () => {
     renderSettings({}, 'settings=1&tab=growth');
     expect(screen.queryByRole('textbox')).toBeNull();
-    expect(screen.getByRole('button', { name: 'routines.title' })).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'bots.historySearch.title' })).toBeTruthy();
     fireEvent.click(screen.getByRole('button', { name: 'bots.profile.title' }));
     expect(screen.getByRole('textbox', { name: 'bots.nameLabel' })).toBeTruthy();
     expect(screen.getByRole('button', { name: 'bots.profile.changeAvatar' })).toBeTruthy();

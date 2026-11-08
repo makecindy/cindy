@@ -1,20 +1,12 @@
 import { z } from "zod";
 import type { XdtHelperToolRegistry } from "../lizi_xdtHelperToolRegistry.js";
-import type { LiziMcpSessionContext } from "../types.js";
-import { errorPayload, okPayload } from "./_payload.js";
+import { okPayload } from "./_payload.js";
 
 /**
- * Teammate Skills outside the always-on core (cindy-bots-runtime.md §6「伙伴技能分层」). The core prompt lists
- * names and one line each; the full text is read with `read_teammate_skill` only when the work
- * needs it, so it stays out of every turn's context and reaches remote runtimes too.
- *
- * System Skills can be turned off per teammate (`capabilities.systemSkillsOff`); off hides the
- * text and denies the tools listed in TEAMMATE_SYSTEM_SKILL_TOOLS. The ids are mirrored by
- * apps/desktop/src/shared/botSystemSkills.ts.
+ * Teammate core topics outside the always-on core (cindy-bots-runtime.md §6「伙伴技能分层」). The core
+ * prompt lists names and one line each; the full text is read with `read_teammate_skill` only when
+ * the work needs it, so it stays out of every turn's context and reaches remote runtimes too.
  */
-export const TEAMMATE_SYSTEM_SKILL_IDS = ["routine"] as const;
-export type TeammateSystemSkillId = (typeof TEAMMATE_SYSTEM_SKILL_IDS)[number];
-
 export interface TeammateSkillText {
   name: string;
   description: string;
@@ -22,49 +14,18 @@ export interface TeammateSkillText {
 }
 
 /**
- * Tools that belong to one system Skill. Off denies them for that teammate. Run-time tools of
- * routines (`schedule_notify_current_run`) stay available even when the teammate cannot manage
- * routines itself.
- */
-export const TEAMMATE_SYSTEM_SKILL_TOOLS: Readonly<Record<TeammateSystemSkillId, readonly string[]>> = {
-  routine: [
-    "routine_list", "routine_sources", "routine_delivery_targets", "routine_save", "routine_history",
-    "routine_delete", "routine_run_now", "schedule_list_models", "schedule_set_pre_run_hook",
-  ],
-};
-
-export function teammateSystemSkillsOff(raw: unknown): TeammateSystemSkillId[] {
-  return Array.isArray(raw) ? TEAMMATE_SYSTEM_SKILL_IDS.filter((id) => raw.includes(id)) : [];
-}
-
-/**
  * A project-mode teammate works like any project task: it opens tasks with the ordinary
  * `send_to_session` and automations with `cindy_scheduler`, so the teammate-only delegation
- * tools are left out. Its routine Skill counts as off (the caller adds it to `off`).
+ * tools are left out.
  */
 export const TEAMMATE_PROJECT_MODE_HIDDEN_TOOLS: readonly string[] = [
   "start_session_task", "check_session_task", "message_session_task", "stop_session_task",
   "inspect_session_task_route", "advance_session_task_route",
 ];
 
-export function teammateDeniedTools(off: readonly string[], projectMode = false): Set<string> {
-  const denied = new Set<string>(projectMode ? TEAMMATE_PROJECT_MODE_HIDDEN_TOOLS : []);
-  for (const id of teammateSystemSkillsOff(off)) for (const tool of TEAMMATE_SYSTEM_SKILL_TOOLS[id]) denied.add(tool);
-  return denied;
+export function teammateDeniedTools(projectMode: boolean): Set<string> {
+  return new Set<string>(projectMode ? TEAMMATE_PROJECT_MODE_HIDDEN_TOOLS : []);
 }
-
-export const TEAMMATE_SYSTEM_SKILLS: Readonly<Record<TeammateSystemSkillId, TeammateSkillText>> = {
-  routine: {
-    name: "routine",
-    description: "Create and maintain your own scheduled, repeating or event-triggered routines.",
-    body: [
-      "用户要求定时、重复提醒或事件触发时，直接调用已提供的 routine_list / routine_save / routine_sources / routine_history / routine_delete / routine_run_now 管理自己的例行任务，不需要先发现工具。仅在当前运行环境未提供这些直接入口时，使用 cindy_helper 的 bots 类目。归属由宿主识别，不传 botId。",
-      "先读取 routine_list，避免重复创建；用 routine_save 保存后再读回，核实名称、enabled 和 triggers，成功才说已安排。工具报错或未保存就如实说明。",
-      "例行任务由 Cindy 持久调度，不要改用 start_session_task、sleep 循环或系统定时器。按用户要求设置频率，不擅自增加一小时等结束限制。实际执行沿用当前伙伴权限，触发后的普通消息会回到这里。",
-      "For recurring work, first call routine_list and reuse the existing rule. Prefer an available event source, or a deterministic command/script pre-run check, over waking a model just to poll. Install and test scripts through schedule_set_pre_run_hook, then save its command as routine_save.preRunHook and read back with routine_list. Exit 2 means skip the model; exit 0 supplies a concise change summary; errors/timeouts must be nonzero failures, never fabricated no-change results. Use stable upstream event IDs or durable cursors and acknowledge only successfully handled changes; do not add arbitrary time windows or advance a cursor before delivery succeeds. For a check, explicitly set silentWhenIdle=true: no preamble, progress or no-change report. Call schedule_notify_current_run only for a new actionable result or a check failure requiring attention, then write one concise final report. Explicit reminders and scheduled sends are the work itself: set silentWhenIdle=false when creating those rules, preserve existing user choices, and never swallow their intended delivery. Omitted quiet settings preserve delivery. Advanced settings expose the saved quiet/check configuration; the user need not edit files. Preserve the standing authorization, owner and failure visibility.",
-    ].join("\n"),
-  },
-};
 
 /** Core details: always available, read only when the work needs them. */
 export const TEAMMATE_CORE_TOPICS: Readonly<Record<string, TeammateSkillText>> = {
@@ -128,33 +89,15 @@ export const TEAMMATE_CORE_TOPICS: Readonly<Record<string, TeammateSkillText>> =
   },
 };
 
-const READ_NAMES = [...Object.keys(TEAMMATE_CORE_TOPICS), ...TEAMMATE_SYSTEM_SKILL_IDS];
+const READ_NAMES = Object.keys(TEAMMATE_CORE_TOPICS);
 
-/** `read_teammate_skill`: the on-demand half of the teammate core and its system Skills. */
-export function registerTeammateSkillReader(
-  registry: XdtHelperToolRegistry,
-  deps: {
-    getSessionContext: () => LiziMcpSessionContext;
-    /** Host-resolved system Skills this teammate turned off; absent means all on. */
-    systemSkillsOff?: (params: { callerSessionId: string }) => Promise<readonly string[]>;
-  },
-): void {
+/** `read_teammate_skill`: the on-demand half of the teammate core. */
+export function registerTeammateSkillReader(registry: XdtHelperToolRegistry): void {
   registry.register({
     name: "read_teammate_skill",
     category: "bots",
-    description: `Read the full text of one teammate core topic or system Skill only when the work needs it; the core prompt lists them with one line each. Names: ${READ_NAMES.join(", ")}.`,
+    description: `Read the full text of one teammate core topic only when the work needs it; the core prompt lists them with one line each. Names: ${READ_NAMES.join(", ")}.`,
     inputShape: { name: z.enum(READ_NAMES as [string, ...string[]]) },
-    handler: async ({ name }) => {
-      const topic = TEAMMATE_CORE_TOPICS[name];
-      if (topic) return okPayload({ kind: "core", ...topic });
-      const id = name as TeammateSystemSkillId;
-      const callerSessionId = deps.getSessionContext().sessionId;
-      if (!callerSessionId) return errorPayload("NOT_A_BOT_SESSION", "当前调用未绑定伙伴任务");
-      const off = deps.systemSkillsOff ? await deps.systemSkillsOff({ callerSessionId }) : [];
-      if (off.includes(id)) {
-        return errorPayload("SYSTEM_SKILL_OFF", "这项系统技能已被主人关闭；主人要求时可用 set_teammate_capability 重新开启。");
-      }
-      return okPayload({ kind: "system", ...TEAMMATE_SYSTEM_SKILLS[id] });
-    },
+    handler: async ({ name }) => okPayload({ kind: "core", ...TEAMMATE_CORE_TOPICS[name] }),
   });
 }

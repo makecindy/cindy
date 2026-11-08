@@ -42,7 +42,6 @@ import { BotRosterView } from './BotRosterView';
 import { BotAvatar } from './BotAvatar';
 import { BotBasicProfileFields } from './BotBasicProfileFields';
 import { normalizeBotName } from '../../../shared/botCreation';
-import { withBotSystemSkill } from '../../../shared/botSystemSkills';
 import {
   botEntryTarget,
   createBotCanonicalSessionWithRetry,
@@ -58,7 +57,6 @@ import { BotInvitationWelcome } from './BotInvitationWelcome';
 import { BotModelChainEditor } from './BotModelChainEditor';
 import { BotTaskModelEditor } from './BotTaskModelEditor';
 import { BotCapabilitySettings } from './BotCapabilitySettings';
-import { BotRoutines } from './BotRoutines';
 import { BotMemorySettings } from './BotMemorySettings';
 import { CompanionVoiceSettings } from './voice/CompanionVoiceSettings';
 import { BotChannelsPage } from './BotChannelsPage';
@@ -102,7 +100,7 @@ export function BotSettings({
   beforeCloseRef,
   initialPage = 'home',
 }: {
-  initialPage?: 'home' | 'memory' | 'capabilities' | 'model' | 'voice' | 'channels' | 'routines';
+  initialPage?: 'home' | 'memory' | 'capabilities' | 'model' | 'voice' | 'channels';
   bot: BotProfile;
   beforeCloseRef?: { current: (() => Promise<boolean>) | null };
   onBack: () => void;
@@ -145,13 +143,10 @@ export function BotSettings({
     | 'channels'
     | 'history'
     | 'advanced'
-    | 'routines'
     | 'memory'
     | 'projects'
   >(initialPage);
   const voiceLeaveRef = useRef<(() => Promise<boolean>) | null>(null);
-  const routineLeaveRef = useRef<(() => Promise<boolean>) | null>(null);
-  const routineBackRef = useRef<(() => Promise<boolean>) | null>(null);
   const memoryLeaveRef = useRef<(() => Promise<boolean>) | null>(null);
   const memoryBackRef = useRef<(() => Promise<boolean>) | null>(null);
   const capabilityBackRef = useRef<(() => Promise<boolean>) | null>(null);
@@ -165,17 +160,15 @@ export function BotSettings({
           ? t('bots.memory.title')
           : page === 'model'
             ? t('bots.settingsTabs.model')
-            : page === 'routines'
-              ? t('routines.title')
-              : page === 'history'
-                ? t('bots.historySearch.title')
-                : page === 'advanced'
-                  ? t('bots.homeFolder.title')
-                  : page === 'capabilities'
-                    ? t('bots.capabilities.title')
-                    : page === 'personality'
-                      ? t('bots.profile.personality')
-                      : t('bots.profile.title');
+            : page === 'history'
+              ? t('bots.historySearch.title')
+              : page === 'advanced'
+                ? t('bots.homeFolder.title')
+                : page === 'capabilities'
+                  ? t('bots.capabilities.title')
+                  : page === 'personality'
+                    ? t('bots.profile.personality')
+                    : t('bots.profile.title');
   const [folderError, setFolderError] = useState<string | null>(null);
   const avatarInFlight = useRef(false);
   const [avatarBusy, setAvatarBusy] = useState(false);
@@ -244,8 +237,7 @@ export function BotSettings({
     if (autosave.isDirty()) return false;
     if (!((await voiceLeaveRef.current?.()) ?? true)) return false;
     if (!((await memoryLeaveRef.current?.()) ?? true)) return false;
-    if (!((await capabilityLeaveRef.current?.()) ?? true)) return false;
-    return (await routineLeaveRef.current?.()) ?? true;
+    return (await capabilityLeaveRef.current?.()) ?? true;
   }, [autosave.flush, autosave.isDirty]);
   useEffect(() => {
     if (!beforeCloseRef) return;
@@ -273,7 +265,7 @@ export function BotSettings({
       settingsRowRefs.current.get(returnFocusRowRef.current)?.focus();
   }, [page]);
   const go = (next: typeof page) => {
-    if (!autosave.isDirty() && !routineLeaveRef.current && !memoryLeaveRef.current && !voiceLeaveRef.current && !capabilityLeaveRef.current) {
+    if (!autosave.isDirty() && !memoryLeaveRef.current && !voiceLeaveRef.current && !capabilityLeaveRef.current) {
       showPage(next);
       return;
     }
@@ -427,7 +419,6 @@ export function BotSettings({
     ['voice', botSettingsIcons.voice, t('bots.voiceMode.settingsTitle')],
     ['capabilities', botSettingsIcons.capabilities, t('bots.capabilities.title')],
     ['channels', botSettingsIcons.channels, t('bots.channels.title')],
-    ['routines', botSettingsIcons.routines, t('routines.title')],
     ['history', botSettingsIcons.history, t('bots.historySearch.title')],
     // The Home folder is a path on the teammate's own computer.
     ['advanced', botSettingsIcons.advanced, t('bots.homeFolder.title')],
@@ -454,7 +445,6 @@ export function BotSettings({
                   void (async () => {
                     if (page === 'memory' && (await memoryBackRef.current?.())) return;
                     if (page === 'capabilities' && (await capabilityBackRef.current?.())) return;
-                    if (page === 'routines' && (await routineBackRef.current?.())) return;
                     go('home');
                   })()
                 }
@@ -687,11 +677,6 @@ export function BotSettings({
               expanded={page === 'capabilities'}
               backRef={capabilityBackRef}
               leaveRef={capabilityLeaveRef}
-              // An older teammate computer rejects the unknown field; its switches stay read-only.
-              onSystemSkillChange={target.kind === 'local' || target.skills ? (id, on) => {
-                setCapabilities((current) => ({ ...current, systemSkillsOff: withBotSystemSkill(current.systemSkillsOff, id, on) }));
-                autosave.onEdit('instant');
-              } : undefined}
               onInputHandoffChange={(allowed) => updateCapability('inputHandoff', allowed)}
               bot={bot}
               capabilities={capabilities}
@@ -800,15 +785,6 @@ export function BotSettings({
             }}
             backRef={memoryBackRef}
             leaveRef={memoryLeaveRef}
-          />
-        ) : null}
-        {page === 'routines' ? (
-          <BotRoutines
-            embedded
-            botId={bot.id}
-            inheritedRoute={displayedModelChain[0]}
-            beforeLeaveRef={routineLeaveRef}
-            backRef={routineBackRef}
           />
         ) : null}
       </div>

@@ -14,8 +14,6 @@ describe('desktop Claude read-only allowlist', () => {
   // bypass the task's normal review. Public policy entry, unit tier; both dispatch routes.
   it.each([
     ['cindy_scheduler', 'schedule_delete'],
-    ['cindy_scheduler', 'routine_delete'],
-    ['cindy_helper', 'routine_delete'],
   ])('routes %s %s through ordinary per-call approval', (serverName, name) => {
     for (const toolParams of [{ id: 'automation' }, { id: 'automation', device: 'local' }]) {
       expect(getDesktopMcpToolApprovalPolicy({ serverName, toolName: name, toolParams })).toBe('prompt-each-time');
@@ -619,23 +617,24 @@ describe('Orca Worker directory authorization', () => {
 
 
 describe('teammate pre-run command approval', () => {
-  it.each(['schedule_set_pre_run_hook', 'routine_save'])('reviews %s through direct and progressive calls', (name) => {
+  it('reviews schedule_set_pre_run_hook through direct and progressive calls', () => {
+    const name = 'schedule_set_pre_run_hook';
     const args = { preRunHook: { command: 'node check.mjs' } };
     expect(getDesktopMcpToolApprovalPolicy({ serverName: 'cindy_helper', toolName: name, toolParams: args })).toBe('prompt-each-time');
     expect(getDesktopMcpToolApprovalPolicy({ serverName: 'cindy_helper', toolName: 'call_tool', toolParams: { name, args } })).toBe('prompt-each-time');
     expect(getDesktopMcpToolApprovalPolicy({ serverName: 'cindy_helper', toolParams: { name, args } })).toBe('prompt-each-time');
     expect(getDesktopMcpToolApprovalPolicy({ serverName: 'cindy_helper', toolParams: JSON.stringify({ name, args: JSON.stringify(args) }) })).toBe('prompt-each-time');
-    expect(getDesktopMcpToolApprovalPolicy({ serverName: 'cindy_helper', toolName: 'routine_list', toolParams: {} })).toBe('auto-approve');
+    expect(getDesktopMcpToolApprovalPolicy({ serverName: 'cindy_helper', toolName: 'list_sessions', toolParams: {} })).toBe('auto-approve');
   });
 
-  it('does not mistake an unnamed direct script or routine input for a safe progressive call', () => {
+  it('does not mistake an unnamed direct script or named input for a safe progressive call', () => {
     const policy = (toolParams: unknown) =>
       getDesktopMcpToolApprovalPolicy({ serverName: 'cindy_helper', toolParams });
     expect(policy({ script: 'process.exit(2)' })).toBe('prompt-each-time');
-    expect(policy({ name: 'routine_list', prompt: 'Check PRs', enabled: true,
+    expect(policy({ name: 'list_sessions', prompt: 'Check PRs', enabled: true,
       triggers: [], preRunHook: { command: 'node check.mjs' } })).toBe('prompt-each-time');
-    expect(policy({ name: 'routine_list', args: {}, preRunHook: { command: 'node check.mjs' } })).toBe('prompt-each-time');
-    expect(policy({ name: 'routine_list', args: {} })).toBe('auto-approve');
+    expect(policy({ name: 'list_sessions', args: {}, preRunHook: { command: 'node check.mjs' } })).toBe('prompt-each-time');
+    expect(policy({ name: 'list_sessions', args: {} })).toBe('auto-approve');
   });
 });
 

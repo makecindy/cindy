@@ -1,5 +1,4 @@
 import { emitSessionCreated } from './sessionCreatedBroadcast.js';
-import type { RoutineModel } from '@cindy/maker-scheduler';
 import { loadBotReadState, loadAcknowledgedBotReadState, readBotReadPosition } from '../../maker-ipc/botReadStateStore.js';
 import { registerBotReadStateIpc } from '../../maker-ipc/botReadStateIpc.js';
 import { botLinkedProjectAccess } from '../../maker-ipc/botLinkedProjects.js';
@@ -239,7 +238,6 @@ import { coordinateBotCanonicalReplacement } from '../../maker-ipc/botCanonicalR
 import { coordinateBotModelSelection } from '../../maker-ipc/botModelSelectionCoordinator.js';
 import { searchConversations } from '../conversationSearch.js';
 import { signalBotProfilesChanged } from '../../maker-ipc/botProfilesChangedSignal.js';
-import { readBotSystemSkillsOff } from '../../../shared/botSystemSkills.js';
 import {
   BOT_FAILURE_REASONS,
   isBotFailureAttentionWorthy,
@@ -461,7 +459,7 @@ export async function findBotChannelLaneSession(botId: string, routeKey: string)
 async function findBotOwnedLaneSession(
   botId: string,
   routeKey: string,
-  role: 'channel' | 'routine',
+  role: 'channel',
   status: 'active' | 'archived' = 'active',
 ): Promise<string | null> {
   const [existing] = await getDbClient()
@@ -490,7 +488,7 @@ async function findBotOwnedLaneSession(
 async function resumeArchivedBotOwnedLaneSession(
   botId: string,
   routeKey: string,
-  role: 'channel' | 'routine',
+  role: 'channel',
 ): Promise<string | null> {
   const archived = await findBotOwnedLaneSession(botId, routeKey, role, 'archived');
   if (!archived) return null;
@@ -519,12 +517,7 @@ export async function ensureBotChannelLaneSession(input: {
   return ensureBotOwnedLaneSession(input, 'channel');
 }
 
-/** A persistent execution context for one standing instruction, sharing its companion's Home. */
-export async function ensureBotRoutineLaneSession(input: { botId: string; routineId: string; title: string; modelOverride?: RoutineModel | null }): Promise<EnsureBotChannelLaneResult> {
-  return ensureBotOwnedLaneSession({ ...input, routeKey: `routine:${input.routineId}` }, 'routine');
-}
-
-async function ensureBotOwnedLaneSession(input: { botId: string; routeKey: string; title: string; modelOverride?: RoutineModel | null }, role: 'channel' | 'routine'): Promise<EnsureBotChannelLaneResult> {
+async function ensureBotOwnedLaneSession(input: { botId: string; routeKey: string; title: string }, role: 'channel'): Promise<EnsureBotChannelLaneResult> {
   const owner = captureBotOperationOwner();
   const client = getDbClient();
   const db = client.drizzle;
@@ -549,11 +542,7 @@ async function ensureBotOwnedLaneSession(input: { botId: string; routeKey: strin
     .limit(1);
   if (!profileVersion) return { ok: false, errorCode: 'BOT_UNAVAILABLE', message: '伙伴资料版本不存在' };
   const config = parseJson(profileVersion.capabilitiesJson);
-  const override = input.modelOverride;
-  const primaryRoute = override ? { harness: override.agentKind === 'claude-code' ? 'claude' as const : override.agentKind,
-    model: override.model, providerId: override.providerId ?? null, effort: override.effort ?? '',
-    fastMode: override.fastMode ?? false, agentDeviceId: override.agentDeviceId ?? null }
-    : (await readEffectiveBotModelChain(config))[0] ?? null;
+  const primaryRoute = (await readEffectiveBotModelChain(config))[0] ?? null;
   if (!primaryRoute) return { ok: false, errorCode: 'NO_MODEL', message: '伙伴还没有可用模型' };
   const workspaceKind = 'dialogue' as const;
   const workingDir = await ensureBotWorkspaceDir(owner.userDataDir, input.botId, app.getPath('userData'));
@@ -565,7 +554,7 @@ async function ensureBotOwnedLaneSession(input: { botId: string; routeKey: strin
       {
         workspaceKind,
         workingDir,
-        ...botSessionRouteFields(override ? { ...config, providerId: null, effort: undefined } : config, primaryRoute),
+        ...botSessionRouteFields(config, primaryRoute),
         remoteHostId: undefined,
         source: 'bot',
       },
@@ -586,7 +575,7 @@ async function ensureBotOwnedLaneSession(input: { botId: string; routeKey: strin
   owner.assertCurrent();
   let result: BotGroupsCreateLaneResult;
   try {
-    result = await client.tx<BotGroupsCreateLaneResult>(role === 'routine' ? 'bots.createRoutineLane' : 'bots.createChannelLane', {
+    result = await client.tx<BotGroupsCreateLaneResult>('bots.createChannelLane', {
       botId: input.botId,
       routeKey: input.routeKey,
       session: {
@@ -1376,9 +1365,6 @@ async function readProfile(
       ...(config.inputHandoff === false ? { inputHandoff: false } : {}),
       ...(config.allowSchedulerFollow === true ? { allowSchedulerFollow: true } : {}),
       ...(readBotProjectMode(config) ? { projectMode: true } : {}),
-      // Absent = every system Skill on (shared/botSystemSkills.ts).
-      ...(readBotSystemSkillsOff(config.systemSkillsOff).length
-        ? { systemSkillsOff: readBotSystemSkillsOff(config.systemSkillsOff) } : {}),
     },
     sessions: links.flatMap((link) => {
       const row = byId.get(link.sessionId);
@@ -1699,8 +1685,6 @@ export async function getBotRemoteSettingsSource(botId: string) {
     skills: strings(config.skills),
     connections: strings(config.mcpServers),
     toolsets: strings(config.toolsets),
-    // Absent = every system Skill on (shared/botSystemSkills.ts).
-    ...(readBotSystemSkillsOff(config.systemSkillsOff).length ? { systemSkillsOff: readBotSystemSkillsOff(config.systemSkillsOff) } : {}),
   };
 }
 

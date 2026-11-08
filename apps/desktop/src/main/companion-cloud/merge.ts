@@ -167,7 +167,8 @@ export async function mergeCompanionsInto(input: {
       }
     }
 
-    // Routines get ids of their own in the kept companion.
+    // Routines (from a copy on an older computer) get ids of their own in the kept companion, so
+    // their project automations never replace another copy's.
     const routines = prefs.filter(row => row.key.startsWith(COMPANION_ROUTINE_PREFIX)).map(row => row.value).flatMap(value => {
       const routine = record(value);
       return routine && typeof routine.id === 'string' ? [{ ...routine, id: mergedRoutineId(keep.externalId, source.id, routine.id) }] : [];

@@ -4,7 +4,8 @@
  * Runs at startup once the scheduler is ready. Per teammate, in order, each step safe to rerun:
  *   1. project mode on: workspace becomes a named, versioned project with the memories and skills;
  *   2. its own routines become ordinary automations of that project (same schedule, check script,
- *      model and paused/running state), then the routines are removed;
+ *      model and paused/running state), then the routines are removed; retired built-in ones
+ *      (follow-up, nightly learning, daily todo check) are removed without becoming automations;
  *   3. unfinished V1-only state (open todos, workbench, working ledger) goes into one project file;
  *   4. the V1-only state files move to `v1-archive/` in the teammate's folder — kept, not deleted.
  * A receipt is written only after all steps succeed; a failure retries on the next start.
@@ -15,6 +16,7 @@ import path from 'node:path';
 
 import { app } from 'electron';
 import { inArray } from 'drizzle-orm';
+import type { Routine } from '@cindy/maker-scheduler';
 
 import { readBotProjectMode } from '../../shared/botProjectMode.js';
 import { companionHomes } from '../companion-cloud/homes.js';
@@ -24,16 +26,15 @@ import { readBotSettingsProfile, updateBotProfile } from '../localDb/ipc/bots.js
 import { botProfiles } from '../localDb/schema.js';
 import { createLogger } from '../logger.js';
 import { readEffectiveBotModelChain } from '../maker-host/bot-model-chain-settings-store.js';
-import { routineTools } from '../routines/service.js';
-import { getProjectAutomationLoader, getScheduler } from '../scheduler-host/index.js';
 import { activeOwnerScopeKey, ownerScopedUserDataPath } from '../appSessionState.js';
 import { botProfileDir, ensureBotWorkspaceDir } from './botProfileFolder.js';
 import { ensureBotProjectAutomations, prepareBotProjectWorkspace } from './botProjectMode.js';
+import { writeRoutineAutomations } from './botRoutineAutomations.js';
+import { readV1Routines, removeV1Routine } from './botV1Routines.js';
 import {
   BOT_V2_CARRYOVER_FILE,
   buildCarryover,
   carryoverPointer,
-  convertRoutine,
   type CarryoverLabel,
 } from './botV2Carryover.js';
 import { todoCheckRoutineId } from '../bot-autonomy/todoCheckRoutine.js';
@@ -61,45 +62,61 @@ async function writeAtomic(file: string, content: string): Promise<void> {
   await fs.rename(tmp, file);
 }
 
-/** Pause the project automation saved from `configId` (project files carry no paused flag). */
-async function pauseProjectAutomation(workingDir: string, configId: string): Promise<void> {
-  const scheduler = getScheduler();
-  const target = (await scheduler.list()).find((schedule) => schedule.source === 'project'
-    && schedule.projectConfigId === configId && path.resolve(schedule.workingDir ?? '') === path.resolve(workingDir));
-  if (target && target.status !== 'paused') await scheduler.pause(target.id);
+/**
+ * Routines of an imported teammate that must start paused: a takeover not finished (its source
+ * still runs), a job with open issues, or one relying on its source's script, command or monitor,
+ * which the removed import runtime ran and a project automation cannot. null: all of them (the
+ * private import data cannot be read, so none may start unattended).
+ */
+async function importedRoutinesToPause(ownerRoot: string, botId: string,
+  assertCurrent: () => void): Promise<Map<string, string | null> | null> {
+  const [{ companionEnvironmentStore }, { importedRuntimeRequired }] = await Promise.all([
+    import('../bot-import/runtime.js'), import('../bot-import/sourceAutomations.js')]);
+  const environment = await companionEnvironmentStore.read(ownerRoot, botId, assertCurrent).catch(() => null);
+  if (environment === null) return null;
+  const paused = new Map<string, string | null>();
+  for (const [id, binding] of Object.entries(environment?.automations ?? {})) {
+    if (importedRuntimeRequired(binding.kind, binding.original)) paused.set(id, 'needs the script, command or monitor it ran at its source; created paused');
+    else if (binding.issues?.length || binding.handover !== 'ready') paused.set(id, null);
+  }
+  return paused;
 }
 
-async function migrateRoutines(botId: string, workingDir: string, archiveDir: string, config: Record<string, unknown>,
-  assertCurrent: () => void): Promise<string[]> {
-  const routines = (await routineTools.list(botId))
-    .filter((routine) => !routine.builtin && routine.id !== todoCheckRoutineId(botId));
+async function migrateRoutines(botId: string, ownerRoot: string, workingDir: string, archiveDir: string,
+  config: Record<string, unknown>, assertCurrent: () => void): Promise<string[]> {
+  const all = await readV1Routines(ownerRoot, botId);
   assertCurrent();
+  // Retired built-ins have no V2 counterpart (the project's own memory review replaced nightly
+  // learning); only their leftover definitions and backing schedules go.
+  const retired = (routine: Routine) => routine.builtin === 'nightly-learning' || routine.builtin === 'follow-up'
+    || routine.id === todoCheckRoutineId(botId);
   const notesFile = path.join(archiveDir, 'routine-notes.json');
   const savedNotes = ((await readJson<unknown[]>(notesFile)) ?? []).filter((note): note is string => typeof note === 'string');
-  if (routines.length === 0) return savedNotes;
+  if (all.length === 0) return savedNotes;
   // Keep the exact definitions before anything is removed; a rerun after a partial run adds to them.
   await fs.mkdir(archiveDir, { recursive: true });
   const archiveFile = path.join(archiveDir, 'routines.json');
   const archived = (await readJson<Array<{ id?: unknown }>>(archiveFile)) ?? [];
-  const kept = new Set(routines.map((routine) => routine.id));
-  await writeAtomic(archiveFile, JSON.stringify([...archived.filter((item) => !kept.has(String(item?.id))), ...routines], null, 2));
+  const kept = new Set(all.map((routine) => routine.id));
+  await writeAtomic(archiveFile, JSON.stringify([...archived.filter((item) => !kept.has(String(item?.id))), ...all], null, 2));
   const [route] = await readEffectiveBotModelChain(config).catch(() => []);
-  const timezone = Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC';
-  const loader = getProjectAutomationLoader();
+  const imported = botId.startsWith('import_') ? await importedRoutinesToPause(ownerRoot, botId, assertCurrent) : new Map<string, string | null>();
   const notes: string[] = [];
-  for (const routine of routines) {
+  for (const routine of all) {
     assertCurrent();
-    const converted = convertRoutine(routine, route ?? null, { now: Date.now(), timezone });
-    for (const automation of converted.automations) {
-      await loader.upsertSchedule(workingDir, automation.config);
-      if (!automation.enabled) await pauseProjectAutomation(workingDir, automation.config.id);
+    if (!retired(routine)) {
+      const hold = imported === null || imported.has(routine.id);
+      const written = await writeRoutineAutomations(workingDir, routine, { route: route ?? null, paused: hold });
+      const reason = imported?.get(routine.id);
+      const note = !reason || !routine.enabled ? written.note
+        : written.note ? `${written.note}; ${reason}` : `${routine.name}: ${reason}`;
+      if (note) {
+        // Kept on disk before the routine is removed, so a rerun after a partial run still lists it.
+        notes.push(note);
+        await writeAtomic(notesFile, JSON.stringify([...new Set([...savedNotes, ...notes])], null, 2));
+      }
     }
-    if (converted.note) {
-      // Kept on disk before the routine is removed, so a rerun after a partial run still lists it.
-      notes.push(converted.note);
-      await writeAtomic(notesFile, JSON.stringify([...new Set([...savedNotes, ...notes])], null, 2));
-    }
-    await routineTools.remove(botId, routine.id);
+    await removeV1Routine(ownerRoot, routine.id);
   }
   return [...new Set([...savedNotes, ...notes])];
 }
@@ -140,8 +157,20 @@ async function archiveV1State(home: string, archiveDir: string): Promise<void> {
   }
 }
 
-export async function migrateTeammateToV2(botId: string, ownerRoot: string,
+/** One upgrade per teammate at a time: import and cloud arrival also ask for it (botRoutineAutomations.ts). */
+const upgrading = new Map<string, Promise<unknown>>();
+
+export function migrateTeammateToV2(botId: string, ownerRoot: string,
   assertCurrent: () => void = () => {}): Promise<'migrated' | 'already'> {
+  const key = `${ownerRoot}\n${botId}`;
+  const next = (upgrading.get(key) ?? Promise.resolve()).catch(() => undefined)
+    .then(() => migrateTeammateOnce(botId, ownerRoot, assertCurrent));
+  upgrading.set(key, next);
+  return next.finally(() => { if (upgrading.get(key) === next) upgrading.delete(key); });
+}
+
+async function migrateTeammateOnce(botId: string, ownerRoot: string,
+  assertCurrent: () => void): Promise<'migrated' | 'already'> {
   const home = botProfileDir(ownerRoot, botId);
   const receiptPath = path.join(home, RECEIPT_FILE);
   if (await exists(receiptPath)) return 'already';
@@ -159,7 +188,7 @@ export async function migrateTeammateToV2(botId: string, ownerRoot: string,
   assertCurrent();
   const workingDir = await ensureBotWorkspaceDir(ownerRoot, botId, legacyUserDataDir);
   const archiveDir = path.join(home, ARCHIVE_DIR);
-  const routineNotes = await migrateRoutines(botId, workingDir, archiveDir, capabilities, assertCurrent);
+  const routineNotes = await migrateRoutines(botId, ownerRoot, workingDir, archiveDir, capabilities, assertCurrent);
   assertCurrent();
   const carried = await writeCarryover(home, workingDir, routineNotes);
   assertCurrent();

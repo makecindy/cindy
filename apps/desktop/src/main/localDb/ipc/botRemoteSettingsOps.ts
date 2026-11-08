@@ -16,7 +16,6 @@ import type { BotModelRoute } from '../../../shared/botModelChain.js';
 import type { BotLifecycleActionRequest } from '../../../shared/botLifecycle.js';
 import type { BotMemoryDeleteInput, BotMemoryUpdateInput } from '../../../shared/botMemory.js';
 import type { BotCoreSkill, BotSkillDetail, BotSkillSaveInput, BotSkillSummary } from '../../../shared/botSkill.js';
-import { parseRoutineInput, type Routine, type RoutineRun, type RoutineSource, type RoutineDeliveryTarget } from '@cindy/maker-scheduler';
 import { throwIpcError } from '../../utils/ipcValidate.js';
 import type { BotSettingsCall, BotSettingsOpHandler } from './botRemoteSettingsHost.js';
 
@@ -89,16 +88,6 @@ export interface BotSettingsOpsDeps {
     voices(selection: unknown): Promise<unknown>;
     preference(botId: string): Promise<unknown>;
     setPreference(botId: string, selection: unknown, sentencePlayback: unknown): Promise<unknown>;
-  };
-  /** The routine service every surface shares (`routineTools`). */
-  routines: {
-    list(botId: string): Promise<Routine[]>;
-    sources(): Promise<RoutineSource[]>;
-    deliveryTargets?(botId: string): Promise<RoutineDeliveryTarget[]>;
-    history(botId: string, id: string): Promise<RoutineRun[]>;
-    save(botId: string, input: ReturnType<typeof parseRoutineInput>, id?: string): Promise<Routine>;
-    runNow(botId: string, id: string): Promise<unknown>;
-    remove(botId: string, id: string): Promise<void>;
   };
 }
 
@@ -177,14 +166,8 @@ const voiceCall = async <T>(run: () => T | Promise<T>): Promise<T> => {
   }
 };
 
-/** The local routine IPC reports every failure with this one message; so does the remote page. */
-const routineCall = async <T>(run: () => Promise<T>): Promise<T> => {
-  try {
-    return await run();
-  } catch {
-    return throwIpcError('INVALID_PARAMS', 'Routine operation failed; check the teammate and trigger settings');
-  }
-};
+const routinesRemoved = async (): Promise<never> =>
+  throwIpcError('UNSUPPORTED_CAPABILITY', 'Routines are no longer available for teammates; use project automations');
 const KINDS: readonly Kind[] = ['skill', 'mcp', 'toolset'];
 
 export function createBotRemoteSettingsOps(deps: BotSettingsOpsDeps): Partial<Record<BotSettingsOp, BotSettingsOpHandler>> {
@@ -271,32 +254,18 @@ export function createBotRemoteSettingsOps(deps: BotSettingsOpsDeps): Partial<Re
     'autonomy.get': async () => FOLLOW_UP_OFF,
     'autonomy.set': async () => throwIpcError('UNSUPPORTED_CAPABILITY', FOLLOW_UP_REMOVED),
     'autonomy.reset': async () => throwIpcError('UNSUPPORTED_CAPABILITY', FOLLOW_UP_REMOVED),
-    'routines.list': call => routineCall(() => deps.routines.list(botOf(call))),
-    'routines.sources': () => routineCall(() => deps.routines.sources()),
-    'routines.history': call => routineCall(() => deps.routines.history(botOf(call), text(call.args.id, 'id', 128))),
-    'routines.save': call => routineCall(() => {
-      const id = call.args.id === undefined ? undefined : text(call.args.id, 'id', 128);
-      return deps.routines.save(botOf(call), parseRoutineInput(call.args.input), id);
-    }),
-    'routines.saveWithModel': call => routineCall(() => {
-      const id = call.args.id === undefined ? undefined : text(call.args.id, 'id', 128);
-      return deps.routines.save(botOf(call), parseRoutineInput(call.args.input), id);
-    }),
-    // Advertised separately: older hosts accept `saveWithModel` but drop `sessionMode`.
-    'routines.saveWithSessionMode': call => routineCall(() => {
-      const id = call.args.id === undefined ? undefined : text(call.args.id, 'id', 128);
-      return deps.routines.save(botOf(call), parseRoutineInput(call.args.input), id);
-    }),
-    'routines.deliveryTargets': call => routineCall(() => deps.routines.deliveryTargets?.(botOf(call)) ?? Promise.resolve([])),
-    'routines.saveWithDelivery': call => routineCall(() => {
-      const id = call.args.id === undefined ? undefined : text(call.args.id, 'id', 128);
-      return deps.routines.save(botOf(call), parseRoutineInput(call.args.input), id);
-    }),
-    'routines.runNow': call => routineCall(() => deps.routines.runNow(botOf(call), text(call.args.id, 'id', 128))),
-    'routines.remove': call => routineCall(async () => {
-      await deps.routines.remove(botOf(call), text(call.args.id, 'id', 128));
-      return null;
-    }),
+    // Teammate routines were removed. Older controllers may still call these (they are not
+    // advertised in caps): every call is refused with a stable code.
+    'routines.list': routinesRemoved,
+    'routines.sources': routinesRemoved,
+    'routines.history': routinesRemoved,
+    'routines.save': routinesRemoved,
+    'routines.saveWithModel': routinesRemoved,
+    'routines.saveWithSessionMode': routinesRemoved,
+    'routines.deliveryTargets': routinesRemoved,
+    'routines.saveWithDelivery': routinesRemoved,
+    'routines.runNow': routinesRemoved,
+    'routines.remove': routinesRemoved,
     'voice.models': () => voiceCall(() => deps.voice.models()),
     'voice.voices': call => voiceCall(() => deps.voice.voices(call.args.selection)),
     'voice.preference': call => voiceCall(() => deps.voice.preference(botOf(call))),

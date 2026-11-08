@@ -11203,20 +11203,6 @@
           }
         }
       },
-      "system": {
-        "group": "System skills",
-        "meta": "{{on}} of {{total}} on",
-        "pageMeta": "System skill · Updated with Cindy",
-        "use": "Enable for this teammate",
-        "whenOff": "When off",
-        "items": {
-          "routine": {
-            "name": "Routines",
-            "hint": "Sets up and maintains routines that run on a schedule.",
-            "off": "It stops creating or changing routines. Existing routines keep running and stay manageable on the Routines page."
-          }
-        }
-      },
       "learned": {
         "group": "Learned skills",
         "empty": "No learned skills yet. Nightly learning saves approaches that keep coming up as skills, or you can ask it to remember one in chat.",
@@ -18031,118 +18017,10 @@
     "compression": "For condensing lengthy content."
   },
   "routines": {
-    "deliveryLabel": "Final delivery",
-    "deliveryDirect": "Show directly in companion chat",
-    "deliveryProcess": "Ask companion to process and reply",
-    "deliveryIm": "Send through a messaging bot",
-    "deliveryNone": "Keep in the execution task only",
-    "deliveryHint": "Direct delivery uses no extra model call. Quiet checks still suppress idle results.",
-    "deliveryRecipient": "Recipient",
-    "deliveryUnavailable": "Destination unavailable",
-    "deliveryNoRecipients": "Connect a messaging bot and chat with it, then reopen these settings.",
-    "deliveryFailed": "Completed, delivery failed",
-    "deliveryFailedHint": "The result is saved. Check the delivery settings; do not rerun the work just to resend it.",
-    "deliveryDelivered": "Result delivered",
-    "onEvent": "Event: {{source}} · {{event}}",
-    "triggerDetails": "View triggers ({{count}}; any can start a run)",
-    "noTriggers": "No triggers set",
-    "unsavedTitle": "Unsaved Changes",
-    "unsavedDescription": "Leaving will discard these changes to the routine.",
-    "discard": "Discard Changes",
-    "continueEditing": "Keep Editing",
-    "title": "Routines",
-    "add": "Add Routine",
-    "back": "Back to Routines",
-    "error": "Could not update routines. Check the settings and try again.",
-    "empty": "Add a routine to tell this teammate what to do and when.",
-    "enabled": "Enabled",
-    "paused": "Paused",
-    "runNow": "Run Now",
-    "running": "Running…",
-    "name": "Name",
-    "instructions": "Instructions",
-    "when": "When to Run",
-    "addTrigger": "Add Trigger",
-    "removeTrigger": "Remove Trigger",
-    "schedule": "Schedule",
     "hourly": "Hourly",
-    "daily": "Daily",
-    "weekdays": "Weekdays",
-    "weekly": "Weekly",
-    "monthly": "Monthly",
-    "interval": "Interval",
-    "advanced": "Advanced…",
     "everyMinutes": "Every {{count}} Minutes",
-    "minutes": "Minutes",
-    "expression": "Cron Expression",
-    "timezone": "Time Zone",
-    "delete": "Delete Routine",
-    "save": "Save Routine",
-    "saved": "Routine saved",
-    "deleteConfirm": "Delete this routine and cancel its pending runs?",
-    "keep": "Keep Routine",
-    "openTask": "Open Session",
-    "history": "Run History",
-    "noRuns": "This routine has not run yet.",
-    "field": "Field",
-    "operator": "Condition",
-    "value": "Value",
-    "addFilter": "Add Condition",
-    "removeFilter": "Remove Condition",
     "pluginCapability": "Publishes declared events to your routines. Only routines you configure can run.",
-    "time": "Time",
-    "day": "Day",
-    "weekday": "Weekday",
-    "status": {
-      "queued": "Queued",
-      "running": "Running",
-      "success": "Completed",
-      "failed": "Failed",
-      "interrupted": "Interrupted",
-      "cancelled": "Cancelled",
-      "skipped": "Checked · model skipped"
-    },
-    "sourceStatus": {
-      "listening": "Listening",
-      "disconnected": "Not Listening",
-      "error": "Source Needs Attention"
-    },
-    "operators": {
-      "equals": "Equals",
-      "contains": "Contains",
-      "not-equals": "Does Not Equal"
-    },
-    "quiet": "Stay quiet when checks find nothing",
-    "sessionMode": "Run session",
-    "sessionModePersistent": "Persistent session (keep context)",
-    "sessionModeFresh": "New session each trigger (isolate context)",
-    "sessionModeHint": "Persistent keeps one routine conversation. New session creates and closes an isolated conversation for each trigger.",
-    "quietHint": "Report changes or problems only. Turn off for reminders and scheduled messages.",
-    "checkSource": "Check with",
-    "checkCommand": "Pre-run check command",
-    "checkHint": "Optional. Checks on the computer before each run: exit 2 skips the run, exit 0 continues, errors stay visible. Clear to remove.",
-    "timeoutMs": "Check timeout (ms, blank for no limit)",
-    "advancedSettings": "Advanced settings",
-    "builtinFollowUp": {
-      "name": "Follow assigned sessions (built-in)",
-      "hint": "Follow assigned sessions when they stall, need you, fail, reach a usage limit or finish."
-    },
-    "todoCheck": {
-      "name": "Daily todo check"
-    },
-    "builtinNightlyLearning": {
-      "name": "Nightly learning (built-in)",
-      "title": "Nightly learning",
-      "hint": "Every night at 3:30, reviews your conversations: tidies memories and saves approaches that keep coming up as skills. Skipped without calling a model when there’s nothing new."
-    },
-    "remote": {
-      "pause": "Pause Routine",
-      "resume": "Resume Routine",
-      "addSchedule": "Add Schedule",
-      "addInterval": "Add Interval",
-      "addEvent": "Add Event Trigger",
-      "filterField": "Filter Field"
-    }
+    "advancedSettings": "Advanced settings"
   },
   "cindyMakeDoctor": {
     "description": "Check the local environment for building Cindy. Usage: /cindy-make-doctor",

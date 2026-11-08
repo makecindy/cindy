@@ -2,7 +2,6 @@ import { useState } from 'react';
 import { mountPage, subscription } from '../../ui-page/harness';
 import { BotCapabilitySettings } from '../../../src/renderer/features/bots/BotCapabilitySettings';
 import type { BotCapabilities, BotProfile } from '../../../src/renderer/features/bots/botStore';
-import { withBotSystemSkill } from '../../../src/shared/botSystemSkills';
 
 // The owner's real catalog on 2026-11-01 (descriptions shortened only where the source is long).
 const LEARNED = [
@@ -33,7 +32,6 @@ function Page({ initial }: { initial: BotCapabilities }) {
     <div className="mx-auto max-w-xl p-5">
       <BotCapabilitySettings expanded bot={{ id: 'fixture', canonicalSessionId: 'session-1' } as BotProfile}
         capabilities={capabilities} skills={[]} onChange={() => {}} onConfigure={() => {}}
-        onSystemSkillChange={(id, on) => setCapabilities((current) => ({ ...current, systemSkillsOff: withBotSystemSkill(current.systemSkillsOff, id, on) }))}
         onInputHandoffChange={(allowed) => setCapabilities((current) => ({ ...current, inputHandoff: allowed }))} />
     </div>
   );
@@ -66,9 +64,8 @@ mountPage({
       },
     };
   },
-  render: (ctx) => <Page initial={{
+  render: () => <Page initial={{
     modelChain: [], modelChainOverride: null, skillMode: 'allowlist', skillsExcluded: [], mcpMode: 'inherit', mcpServers: [],
     toolsetMode: 'inherit', toolsets: [], memory: true, permissions: 'ask',
-    ...(ctx.case === 'system-off' ? { systemSkillsOff: ['todo'] } : {}),
   } as unknown as BotCapabilities} />,
 });

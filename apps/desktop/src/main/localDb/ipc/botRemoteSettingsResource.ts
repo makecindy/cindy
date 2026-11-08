@@ -64,7 +64,7 @@ export function createBotRemoteSettingsResource(deps: BotRemoteSettingsDeps) {
   const now = deps.now ?? Date.now;
   const bound = new Map<string, BoundGrant>();
   const submitting = new Set<string>();
-  /** All module-specific actions, including routines, use this same opaque admission boundary.
+  /** All module-specific actions use this same opaque admission boundary.
    * The fixed inner action ids are display semantics only, never public mutation authority. */
   const bindResource = async (context: RemoteResourceHostContext, resource: RemoteResource,
     readRevision: () => Promise<string>, run: (request: RemoteActionInvokeRequest) => Promise<RemoteActionInvokeResponse>) => {

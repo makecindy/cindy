@@ -68,7 +68,10 @@ export interface CompanionMaterializeHost {
   /** Make a restored skill's folder hold these files. `fetch` gives a file's local path; null when it is gone for good. Returns the files that did not arrive. */
   applySkillFiles?: (botId: string, slug: string, files: BotSkillFile[], fetch: (file: BotSkillFile) => Promise<string | null>,
     options: { removeOthers: boolean; keep?: string[] }, fence: CompanionWriteFence) => Promise<string[]>;
-  /** Its routines from the cloud are created or updated with their ids; `remove` ids are deleted. */
+  /**
+   * Routines an older (V1) computer uploaded become automations of the teammate's project, once per
+   * routine id; `remove` lists their tombstones (not applied, see host.ts).
+   */
   applyRoutines?: (botId: string, routines: unknown[], remove: string[], fence: CompanionWriteFence) => Promise<void>;
   /**
    * Its workbench folders and portable judgments join this computer's, or with `replace` take their
@@ -285,9 +288,8 @@ export async function materializeCompanion(input: {
     });
   }
 
-  // Routines and the workbench move with the companion: applied in one batch each (the cloud
-  // wins; a routine tombstone removes it here). Teammates no longer keep todos: an older
-  // computer's todo rows are not applied.
+  // Routines an older computer uploaded and the workbench move with the companion, applied in one
+  // batch each. Teammates no longer keep todos: an older computer's todo rows are not applied.
   const batches = [
     { prefix: COMPANION_ROUTINE_PREFIX, kind: 'routine', run: host.applyRoutines, removes: true },
   ] as const;

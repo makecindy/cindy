@@ -11158,20 +11158,6 @@
           }
         }
       },
-      "system": {
-        "group": "系統技能",
-        "meta": "已開 {{on}} / 共 {{total}}",
-        "pageMeta": "系統技能 · 隨 Cindy 更新",
-        "use": "為這位夥伴開啟",
-        "whenOff": "關閉後",
-        "items": {
-          "routine": {
-            "name": "例行任務",
-            "hint": "幫你建立和維護定期執行的例行任務。",
-            "off": "不再新建或修改例行任務；已有例行任務照常執行，你仍可在「例行任務」頁管理。"
-          }
-        }
-      },
       "learned": {
         "group": "學會的技能",
         "empty": "還沒有學會的技能。夜間學習會把反覆用到的做法整理成技能，你也可以在對話裡請它記下來。",
@@ -17963,118 +17949,10 @@
     "compression": "用於精簡冗長內容。"
   },
   "routines": {
-    "deliveryLabel": "最終送達",
-    "deliveryDirect": "直接顯示在夥伴對話裡",
-    "deliveryProcess": "交給夥伴處理後回覆",
-    "deliveryIm": "傳送到訊息機器人",
-    "deliveryNone": "只保留在執行任務裡",
-    "deliveryHint": "預設直接顯示結果，不額外呼叫模型。開啟靜默檢查後，無事時不送達。",
-    "deliveryRecipient": "接收位置",
-    "deliveryUnavailable": "目前接收位置無法使用",
-    "deliveryNoRecipients": "請先連接訊息機器人，並與它聊過一次，再重新開啟此設定。",
-    "deliveryFailed": "已完成，送達失敗",
-    "deliveryFailedHint": "執行結果已保留。請檢查送達設定；不要為了補發而重新執行任務。",
-    "deliveryDelivered": "結果已送達",
-    "onEvent": "事件：{{source}} · {{event}}",
-    "triggerDetails": "查看觸發條件（{{count}} 項，符合任一項即執行）",
-    "noTriggers": "尚未設定觸發條件",
-    "unsavedTitle": "尚有未儲存的修改",
-    "unsavedDescription": "離開後會捨棄這次對例行任務的修改。",
-    "discard": "放棄修改",
-    "continueEditing": "繼續編輯",
-    "title": "例行任務",
-    "add": "新增例行任務",
-    "back": "返回例行任務",
-    "error": "無法更新例行任務，請檢查設定後重試",
-    "empty": "新增例行任務，告訴夥伴做什麼、何時執行",
-    "enabled": "已啟用",
-    "paused": "已暫停",
-    "runNow": "立即執行",
-    "running": "執行中…",
-    "name": "名稱",
-    "instructions": "指令",
-    "when": "何時執行",
-    "addTrigger": "再新增一個",
-    "removeTrigger": "移除觸發器",
-    "schedule": "定時",
     "hourly": "每小時",
-    "daily": "每天",
-    "weekdays": "工作日",
-    "weekly": "每週",
-    "monthly": "每月",
-    "interval": "間隔",
-    "advanced": "進階…",
     "everyMinutes": "每 {{count}} 分鐘",
-    "minutes": "分鐘",
-    "expression": "Cron 表達式",
-    "timezone": "時區",
-    "delete": "刪除例行任務",
-    "save": "儲存例行任務",
-    "saved": "例行任務已儲存",
-    "deleteConfirm": "刪除這條例行任務，並取消等待中的執行？",
-    "keep": "保留例行任務",
-    "openTask": "查看任務",
-    "history": "執行歷史",
-    "noRuns": "這條例行任務尚未執行",
-    "field": "欄位",
-    "operator": "條件",
-    "value": "值",
-    "addFilter": "新增條件",
-    "removeFilter": "移除條件",
     "pluginCapability": "向例行任務提交已宣告的事件，只觸發你設定的例行任務",
-    "time": "時間",
-    "day": "日期",
-    "weekday": "星期",
-    "status": {
-      "queued": "等待中",
-      "running": "執行中",
-      "success": "已完成",
-      "failed": "執行失敗",
-      "interrupted": "已中斷",
-      "cancelled": "已取消",
-      "skipped": "已檢查 · 未喚醒模型"
-    },
-    "sourceStatus": {
-      "listening": "監聽中",
-      "disconnected": "未監聽",
-      "error": "來源需要檢查"
-    },
-    "operators": {
-      "equals": "等於",
-      "contains": "包含",
-      "not-equals": "不等於"
-    },
-    "quiet": "檢查沒事不說話",
-    "sessionMode": "執行方式",
-    "sessionModePersistent": "沿用同一任務（保留上下文）",
-    "sessionModeFresh": "每次新建任務（隔離上下文）",
-    "sessionModeHint": "沿用同一任務會在同一個例行任務的對話裡繼續；每次新建會為每次觸發建立一個獨立任務，執行結束後關閉。",
-    "quietHint": "僅回報變化或問題。提醒和定時傳送可關閉此項。",
-    "checkSource": "檢查方式",
-    "checkCommand": "前置檢查命令",
-    "checkHint": "選填。在電腦上先檢查：結束代碼 2 跳過本次執行，0 繼續執行，異常仍會回報。清空可移除。",
-    "timeoutMs": "檢查逾時（毫秒，留空不限時）",
-    "advancedSettings": "進階設定",
-    "builtinFollowUp": {
-      "name": "跟進已接手的任務（內建）",
-      "hint": "任務卡住、等你、出錯、達到用量上限或完成時跟進。只處理已交給我的任務。"
-    },
-    "todoCheck": {
-      "name": "每天查待辦"
-    },
-    "builtinNightlyLearning": {
-      "name": "夜間學習（內建）",
-      "title": "夜間學習",
-      "hint": "每天 3:30 整理和你的對話：合併記憶，把反覆用到的做法總結成技能。沒有新對話就略過，不呼叫模型。"
-    },
-    "remote": {
-      "pause": "暫停例行任務",
-      "resume": "恢復例行任務",
-      "addSchedule": "新增定時條件",
-      "addInterval": "新增間隔條件",
-      "addEvent": "新增事件觸發器",
-      "filterField": "篩選欄位"
-    }
+    "advancedSettings": "進階設定"
   },
   "cindyMakeDoctor": {
     "description": "檢查本機建置 Cindy 所需的環境。用法：/cindy-make-doctor",

@@ -36,7 +36,6 @@ export default {
     default: { about: 'Cindy on several computers, finished deliverables' },
     new: { about: 'Empty teammate: only Computers; no outputs' },
     activity: { about: 'Attributed recent tasks, unread result and true PR title' },
-    routines: { about: 'Never-run and paused routines mixed with ordinary tasks; direct timer icons in one list' },
   },
   async ready(page) {
     await page.getByTestId('bot-glance-button').waitFor();
@@ -68,14 +67,6 @@ export default {
     if (ui.case === 'activity') {
       assert.equal(await page.getByTestId('bot-glance-task').count(), 2);
       assert.equal(await page.getByTestId('bot-glance-pr').count(), 1);
-      await ui.capture('open');
-      return;
-    }
-    if (ui.case === 'routines') {
-      await page.getByText('磁盘低空间自动清理', { exact: true }).waitFor();
-      assert.equal(await page.getByTestId('bot-glance-task').count(), 4, 'ordinary and routine tasks share the existing list');
-      assert.equal(await popover.locator('[data-automation-timer-icon]').count(), 2, 'only routines use timer icons');
-      assert.equal(await popover.locator('[data-automation-paused-indicator]').count(), 1, 'paused rule keeps its timer');
       await ui.capture('open');
       return;
     }

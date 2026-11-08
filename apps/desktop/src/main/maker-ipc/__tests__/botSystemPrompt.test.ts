@@ -7,7 +7,6 @@
  * **能力有没有被写进提示词**,以及**没挂的能力有没有被闭嘴**。
  */
 import { describe, expect, it } from 'vitest';
-import { TEAMMATE_SYSTEM_SKILLS } from '@cindy/mcps';
 
 import {
   buildBotTeammateRoster,
@@ -34,15 +33,6 @@ function input(overrides: Partial<BotSystemPromptInput> = {}): BotSystemPromptIn
 }
 
 describe('稳定层:能力必须写进提示词', () => {
-  // Rule (cindy-bots-runtime.md §6「伙伴技能分层」): routines are a system Skill, read on demand
-  // and dropped together with their tools when the owner turns them off.
-  it('leaves routines to their system Skill', () => {
-    const enabled = input();
-    enabled.capabilities.routinesEnabled = true;
-    enabled.capabilities.botModeEnabled = true;
-    expect(buildBotStableTier(enabled)).not.toContain('routine_save');
-    expect(TEAMMATE_SYSTEM_SKILLS.routine.body).toContain('保存后再读回');
-  });
   it('只给本机伙伴主任务讲它能管主人的任务,自动化另需挂载', () => {
     const main = input();
     main.capabilities.botModeEnabled = true;

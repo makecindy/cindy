@@ -41,8 +41,6 @@ export const MOBILE_REMOTE_RESOURCE_PRIMITIVES = [
  */
 const RICH_REMOTE_RESOURCE_PRIMITIVES: readonly string[] = [
   'form',
-  'routine-list',
-  'routine-detail',
   BOT_GROUP_CHAT_PRIMITIVE,
   'plugin-capabilities',
   'plugin-card-actions',
@@ -50,7 +48,7 @@ const RICH_REMOTE_RESOURCE_PRIMITIVES: readonly string[] = [
   'mail-message',
 ];
 
-/** Routines remain a desktop feature; other portable collections stay available. */
+/** Teammate routines are gone; a stale `routines` link from an older desktop stays unsupported. */
 export function isMobileRemoteCollectionSupported(collectionId: string): boolean {
   return collectionId !== 'routines';
 }

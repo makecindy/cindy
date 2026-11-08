@@ -23,7 +23,7 @@ import type { BotCapabilityEntry, BotCapabilityKind, BotSettingsTarget } from '.
 
 const api = () => window.electronAPI.localDb.bots;
 // `projects` lists folders on this computer: a remote teammate's target never offers it.
-const ALL_PAGES = ['profile', 'personality', 'memory', 'projects', 'model', 'voice', 'capabilities', 'channels', 'routines', 'history', 'advanced'] as const;
+const ALL_PAGES = ['profile', 'personality', 'memory', 'projects', 'model', 'voice', 'capabilities', 'channels', 'history', 'advanced'] as const;
 
 /** Runtime / MCP facts that change which references a teammate can use. */
 const CATALOG_PATCH_KEYS = [
@@ -173,15 +173,5 @@ export const localBotSettingsTarget: BotSettingsTarget = {
     get previewApi() {
       return window.electronAPI.voiceConversation;
     },
-  },
-  routines: {
-    list: (...args) => window.electronAPI.routines.list(...args),
-    save: (...args) => window.electronAPI.routines.save(...args),
-    remove: (...args) => window.electronAPI.routines.remove(...args),
-    runNow: (...args) => window.electronAPI.routines.runNow(...args),
-    history: (...args) => window.electronAPI.routines.history(...args),
-    sources: () => window.electronAPI.routines.sources(),
-    deliveryTargets: (botId) => window.electronAPI.routines.deliveryTargets?.(botId) ?? Promise.resolve([]),
-    onChanged: (listener) => window.electronAPI.routines.onChanged(listener),
   },
 };

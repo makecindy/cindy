@@ -97,14 +97,13 @@ const denied = (errorCode = 'TASK_ACTION_AUTHORIZATION_REQUIRED'): Decision => (
 
 
 export const HELPER_AUTOMATION_ACTION_TOOLS: ReadonlySet<string> = new Set([
-  'routine_save', 'routine_delete', 'routine_run_now', 'schedule_set_pre_run_hook',
+  'schedule_set_pre_run_hook',
   // Re-enabling a feature the owner switched off is a resume (teammate-authority.md).
   'set_teammate_capability', 'set_bot_capability',
 ]);
 
 /** Side-effect coverage, not an allowlist of what autonomous teammates may do. */
 export const SCHEDULER_TASK_ACTION_TOOLS: ReadonlySet<string> = new Set([
-  'routine_save', 'routine_delete', 'routine_run_now',
   'schedule_create', 'schedule_update', 'schedule_delete', 'schedule_run_now',
   'schedule_pause', 'schedule_resume', 'schedule_set_pre_run_hook',
   'schedule_webhook_release', 'schedule_webhook_restore',

@@ -682,7 +682,7 @@ describe('MakerScheduleRunner queued dispatch (busy bound session)', () => {
     expect(logger.info).not.toHaveBeenCalledWith(expect.stringContaining('defer fire (user-active)'));
   });
 
-  // #7044 / unit: the backing schedule is manual, but RoutineEngine owns its
+  // #7044 / unit: the backing schedule is manual, but its caller (deferToCaller) owns its
   // retries. Unlike existing queue-busy cases, a recent user turn must yield
   // after a passed precheck without queuing a prompt or starting the model.
   it('defers a routine with a passed precheck while its canonical user turn is active', async () => {
@@ -3449,7 +3449,7 @@ describe('queued heartbeat for a Bot Session task (persisted Auto)', () => {
     expect(notifier.notify).not.toHaveBeenCalled();
   });
 
-  it('keeps RoutineEngine-owned retries as deferrals', async () => {
+  it('keeps caller-owned retries as deferrals', async () => {
     const harness = createSessionHarness(async () => ({ accepted: true }));
     withRuntimePermission(harness, 'bypassPermissions');
     const queue = createQueueHarness({ busy: true });

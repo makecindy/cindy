@@ -19,7 +19,6 @@ export type BotCapabilityEntry = {
 };
 
 type Bots = NonNullable<Window['electronAPI']['localDb']>['bots'];
-export type BotRoutinesApi = Window['electronAPI']['routines'];
 type VoiceApi = Window['electronAPI']['voiceConversation'];
 type ImConnectionApi = Window['electronAPI']['botImConnection'];
 type WechatApi = Window['electronAPI']['wechatBot'];
@@ -80,13 +79,6 @@ export interface BotSettingsTarget {
     /** Sample playback uses this window's speakers and its own voice service; absent for another computer. */
     previewApi?: VoiceApi;
   };
-  /** Routines of the teammate's computer (`onChanged` fires when they change there). */
-  routines: BotRoutinesApi;
-  /** Host accepts a persistent independent model selection for each routine. */
-  routineModels?: boolean;
-  /** Host keeps a routine's session mode (persistent lane or a fresh lane per trigger). */
-  routineSessionModes?: boolean;
-  routineDelivery?: boolean;
 }
 
 export const BotSettingsTargetContext = createContext<BotSettingsTarget | null>(null);

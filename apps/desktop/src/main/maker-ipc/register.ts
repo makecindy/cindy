@@ -8,7 +8,6 @@ import {
   type TaskResultDelivery,
   type TaskResultDeliveryOutcome,
 } from './taskCompletionDeliveryHost.js';
-import { setRoutineResultDispatch } from '../routines/deliveryDispatch.js';
 import { McpSetupBridge } from './mcpSetupBridge.js';
 import type { McpSetupProposal, McpSetupRequest } from '../../shared/mcpSetup.js';
 import { outboundFetch } from '../maker-host/outbound-fetch.js';
@@ -712,7 +711,6 @@ import { registerBotLifecycleHandlers } from './botLifecycleService.js';
 import { isSessionPermissionMode, persistPermissionModeWithoutRuntime } from './sessionPermissionPersistence.js';
 import { withSessionPermissionChange } from './sessionPermissionChange.js';
 import { withBotPermissionChange } from './botPermissionDispatch.js';
-import { updateBotRoutineLifecycle, readRoutineLaneModel } from '../routines/service.js';
 import {
   createBotCompactRuntimeRefreshCoordinator,
   prepareBotCapabilityEpochBeforeSend,
@@ -13565,7 +13563,6 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
 
   setBotInvitationWelcomeDispatch(dispatchBotSessionMessage);
   setVoiceTaskDispatch(dispatchBotSessionMessage);
-  setRoutineResultDispatch(dispatchBotSessionMessage);
   setVoiceCallMemoryReader(async botId =>
     (await maker.makerMemory?.getStore(buildBotMemoryScopeKey(botId)))?.getIndex() ?? '');
 
@@ -14019,13 +14016,10 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     maker,
     restartRuntime: restartBotCanonicalRuntime,
     getDelegationService: () => botDelegationServiceHolder,
-    onPaused: (botId) => updateBotRoutineLifecycle(botId, 'pause'),
     onResumed: async (botId) => {
       // Task results that finished while the teammate was paused were held, not retried.
-      // Start their delivery first and independently: a routine-engine failure below must
-      // not strand them until the next launch. The service retries its own failures.
+      // The service retries its own failures.
       void botDelegationServiceHolder?.resumeCompletionDelivery(botId);
-      await updateBotRoutineLifecycle(botId, 'resume');
     },
     onBeforeDelete: async (botId) => {
       // 伙伴自有的 IM 机器人连接先停掉并清凭证: 伙伴没了, 它的 bot 不能继续收消息。
@@ -14041,10 +14035,6 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       void activeCompanionCloud()?.retire(botId).catch((error: unknown) => {
         log.warn('companion cloud retire failed', { error: error instanceof Error ? error.message.slice(0, 80) : 'UNKNOWN' });
       });
-      // Profile deletion has committed. Startup also purges orphaned routines
-      // if this cleanup fails or the process stops before it finishes.
-      await updateBotRoutineLifecycle(botId, 'delete');
-      assertOwner();
       await finishCompanionEnvironmentRemoval(ownerScopedUserDataPath(), botId, assertOwner);
     },
   });
@@ -17402,9 +17392,6 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     read: async (sessionId, purpose) => {
       const [row] = await getDbClient().drizzle.select({
         capabilitiesJson: botProfileVersions.capabilitiesJson,
-        botId: botSessionLinks.botId,
-        role: botSessionLinks.role,
-        routeKey: botSessionLinks.routeKey,
         agentKind: sessions.agentKind,
         agentDeviceId: sessions.agentDeviceId,
         model: sessions.model,
@@ -17432,16 +17419,8 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
           eq(sessions.status, 'active'),
         )).limit(1);
       if (!row) return null;
+      // An old routine lane follows its teammate's model like the other lanes.
       const selection = await readEffectiveBotModelSelection(JSON.parse(row.capabilitiesJson));
-      const routineModel = row.role === 'routine'
-        ? await readRoutineLaneModel(row.botId, row.routeKey) : null;
-      if (routineModel) {
-        selection.chain = [{ harness: routineModel.agentKind === 'claude-code' ? 'claude' : routineModel.agentKind,
-          model: routineModel.model, providerId: routineModel.providerId ?? null,
-          agentDeviceId: routineModel.agentDeviceId ?? null,
-          effort: routineModel.effort ?? '', fastMode: routineModel.fastMode ?? false }];
-        selection.followsCindyDefault = false;
-      }
       const control = getSessionRuntimeControlSnapshot(sessionId);
       const intent = agentSwitchPending.get(sessionId);
       const live = maker.getSession(sessionId);
@@ -17576,9 +17555,6 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     const [row] = await getDbClient()
       .drizzle.select({
         capabilitiesJson: botProfileVersions.capabilitiesJson,
-        botId: botSessionLinks.botId,
-        role: botSessionLinks.role,
-        routeKey: botSessionLinks.routeKey,
         remoteHostId: sessions.remoteHostId,
       })
       .from(botSessionLinks)
@@ -17608,10 +17584,6 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     } catch {
       return { isBot: true, candidate: null };
     }
-    const routineModel = row.role === 'routine'
-      ? await readRoutineLaneModel(row.botId, row.routeKey) : null;
-    // An explicit routine choice never falls back to its companion's expensive primary model.
-    if (routineModel) return { isBot: true, candidate: null, routeLocked: true };
     const chain = await readEffectiveBotModelChain(config);
     const toAgentKind = (harness: string): AgentKind =>
       harness === 'codex' ? 'codex' : harness === 'pi' ? 'pi' : 'claude-code';

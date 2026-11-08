@@ -3,14 +3,11 @@ import { updatePersonalLocalPlugins } from './cindy-brain/index.js';
 import { observeDesktopStartupResult } from './devStartupStatus.js';
 import { registerRuntimeSettingsSection } from './app-settings/runtime.js';
 import { z as settingsSchema } from 'zod';
-import { deliverRoutineResult, listRoutineDeliveryTargets } from './routines/delivery.js';
 import { flushPluginUsageLifecycle } from './plugin-usage/current.js';
 import { flushSessionPiTurnUsage, retryPendingPiUsageReceipts } from './maker-ipc/piUsageReceipts.js';
 import { onUsagePricingChanged } from './usage/pricingChanges.js';
 import { registerAccessibilitySupportIpc } from './accessibility-support-ipc.js';
 import { mcpAppSchemePrivilege, registerMcpAppProtocol } from './mcp-apps/sandboxProtocol.js';
-import { prepareImportedAutomation, finishImportedAutomation } from './bot-import/automationRuntime.js';
-import { ensureImportedAutomationReady, recoverCompanionImports } from './bot-import/host.js';
 import { listWorktreeRecycleStatus, controlWorktreeRecycle } from './worktree/recycleControls';
 import { registerFilePeerIpc } from './device-link/filePeer';
 import { registerTaskMigrationIpc } from './task-migration/service';
@@ -1235,10 +1232,8 @@ import {
   getScheduleStorageIfInitialized,
   getProjectAutomationLoader,
 } from './scheduler-host/index.js';
-import { configureRoutineHost } from './routines/service.js';
 import { voiceCallCoordinator } from './voice-conversation/callCoordinator.js';
 import { hasVoiceConversationLease } from './voice-conversation/lease.js';
-import { getBotRemoteResourceSource, ensureBotRoutineLaneSession } from './localDb/ipc/bots.js';
 import {
   registerScheduleHandlers,
   attachSchedulerEventListeners,
@@ -1292,24 +1287,6 @@ async function waitForCurrentAccountProviderModelsReady(): Promise<void> {
   }
 }
 
-// Live getters preserve account/scheduler replacement without loading Main modules at dispatch time.
-configureRoutineHost({
-  deliverResult: deliverRoutineResult, deliveryTargets: listRoutineDeliveryTargets,
-  assertImportedAutomationReady: ensureImportedAutomationReady, prepareImportedAutomation, finishImportedAutomation, recoverImports: recoverCompanionImports,
-  getBot: getBotRemoteResourceSource,
-  ensureRoutineSession: ensureBotRoutineLaneSession,
-  closeRoutineSession: async (sessionId) => {
-    await getMakerIfReady()?.closeSession(sessionId);
-  },
-  // fresh 任务未被派发即回收：复用普通任务同一条删除写入（不另起并行写链）。
-  deleteRoutineSession: async (sessionId) => {
-    await patchSessionMetaInDb(sessionId, { status: 'deleted' });
-  },
-  getScheduler: getSchedulerIfInitialized,
-  getScheduleStorage,
-  screenControlPoint: screenGhostControlPoint,
-  resolvePreRunPlugin: resolveGhostControlPointPlugin,
-});
 voiceCallCoordinator.configure({
   hostSender: () => {
     const win = mainWindowRef;
@@ -1433,6 +1410,10 @@ async function attemptStartSchedulerOnce(): Promise<void> {
     void import('./maker-ipc/botV2Migration.js')
       .then(({ migrateTeammatesToV2 }) => migrateTeammatesToV2())
       .catch(error => console.warn('[bootstrap-electron] teammate V2 upgrade not started', error));
+    // Resume a companion import interrupted by a restart; never blocks startup.
+    void import('./bot-import/host.js')
+      .then(({ recoverCompanionImports }) => recoverCompanionImports())
+      .catch(error => console.warn('[bootstrap-electron] companion import recovery not started', error));
   } catch (err) {
     console.error('[bootstrap-electron] startScheduler failed (non-fatal):', err);
   }

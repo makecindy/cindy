@@ -1618,7 +1618,7 @@ describe('cindy-bridge extension source', () => {
     );
     expect(CINDY_BRIDGE_EXTENSION_SOURCE).toContain("const CINDY_BOT_MEMORY_TOOL = 'bot_memory'");
     expect(CINDY_BRIDGE_EXTENSION_SOURCE).toContain('mcpGateway.register(pi, {\n        botMemoryFacade: cfg.botMemoryFacade === true,');
-    // A system Skill the owner switched off keeps its tools out of Pi's direct list too.
+    // Tools the helper denies this teammate stay out of Pi's direct list too.
     expect(CINDY_BRIDGE_EXTENSION_SOURCE).toContain(
       "deniedTools: Array.isArray(cfg.deniedTools) ? cfg.deniedTools.filter((name) => typeof name === 'string') : [],",
     );
@@ -2453,43 +2453,14 @@ it('routes Bot shortcuts through the scoped helper entry without exposing them t
 
   const bot: any[] = [];
   gateway.register({ registerTool: (tool: unknown) => bot.push(tool) }, { botMemoryFacade: true });
-  for (const name of ['start_session_task', 'check_session_task', 'message_session_task', 'stop_session_task', 'list_agents', 'create_teammate', 'routine_list', 'routine_save', 'routine_sources', 'routine_history', 'routine_delete', 'routine_run_now', 'routine_delivery_targets', 'schedule_list_models', 'schedule_notify_current_run', 'schedule_set_pre_run_hook', 'get_task_digest']) {
+  for (const name of ['start_session_task', 'check_session_task', 'message_session_task', 'stop_session_task', 'list_agents', 'create_teammate', 'get_task_digest']) {
     const tool = bot.find((item) => item.name === name);
     expect(tool).toBeDefined();
-    const args = name === 'routine_save' ? {
-      name: 'Rest', prompt: 'Remind me to rest', enabled: true, silentWhenIdle: false, preRunHook: { command: 'node check.mjs' },
-      modelOverride: { agentKind: 'codex', model: 'economy', providerId: 'connected', agentDeviceId: null, effort: 'low', fastMode: 'ultrafast' },
-      sessionMode: 'fresh', delivery: { kind: 'companion', mode: 'direct' },
-      triggers: [
-        { id: 'minute', kind: 'interval', intervalMs: 60000, anchorMs: 30000 },
-        { id: 'one-shot', kind: 'once', at: 90000 },
-      ],
-    } : name === 'schedule_list_models' ? { agent: 'codex', agentDeviceId: 'local' } : name === 'schedule_notify_current_run' ? {} : name === 'get_task_digest' ? { session_id: 'laptop::session-1' } : name === 'schedule_set_pre_run_hook' ? { script: 'process.exit(2)' } : name === 'list_agents' || name === 'routine_list' || name === 'routine_sources' || name === 'routine_delivery_targets' ? {}
-      : name.startsWith('routine_') ? { id: 'routine-1' }
+    const args = name === 'get_task_digest' ? { session_id: 'laptop::session-1' } : name === 'list_agents' ? {}
       : name === 'start_session_task' ? { instruction: 'Prepare a report' }
       : name === 'create_teammate' ? { name: 'Writer', description: 'Novelist', identity_source: 'Write stories', welcome_message: 'Hello' }
       : name === 'message_session_task' ? { task_id: 'task-1', message: 'Add a summary' }
       : { task_id: 'task-1' };
-    if (name === 'routine_save') {
-      expect(tool.parameters.required).toEqual(['name', 'prompt', 'enabled', 'triggers']);
-      expect(tool.parameters.properties.botId).toBeUndefined();
-      // Regression: the host accepted these fields, but Pi's direct schema hid them.
-      expect(tool.parameters.properties.sessionMode.enum).toEqual(['persistent', 'fresh']);
-      expect(tool.parameters.properties.modelOverride.anyOf).toContainEqual({ type: 'null' });
-      const model = tool.parameters.properties.modelOverride.anyOf.find((schema: any) => schema.type === 'object');
-      expect(model.required).toEqual(['agentKind', 'model']);
-      expect(model.properties.fastMode.anyOf).toContainEqual({ type: 'string', enum: ['ultrafast'] });
-      const variants = tool.parameters.properties.triggers.items.anyOf;
-      const interval = variants.find((item: any) => item.properties.kind.enum.includes('interval'));
-      expect(interval.properties.intervalMs.minimum).toBe(60000);
-      expect(interval.properties.anchorMs).toMatchObject({ type: 'integer', minimum: 0, maximum: Number.MAX_SAFE_INTEGER });
-      expect(interval.required).not.toContain('anchorMs');
-      const once = variants.find((item: any) => item.properties.kind.enum.includes('once'));
-      expect(once).toMatchObject({
-        required: ['id', 'kind', 'at'], additionalProperties: false,
-        properties: { at: { type: 'integer', minimum: 0, maximum: Number.MAX_SAFE_INTEGER } },
-      });
-    }
     if (name === 'start_session_task') {
       expect(tool.description).toContain('A repository, multiple files, tools, or a deliverable alone is not a reason to delegate');
       expect(tool.description).toContain('the user explicitly requests an independent task');

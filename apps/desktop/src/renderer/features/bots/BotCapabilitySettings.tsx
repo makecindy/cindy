@@ -7,7 +7,6 @@ import { toast } from '@/components/ui/toast';
 import { cn } from '@/lib/utils';
 import { ChevronDown, ChevronRight, Search } from 'lucide-react';
 import { useCallback, useEffect, useRef, useState, type MutableRefObject, type ReactNode } from 'react';
-import { botSystemSkillIdsFor, isBotSystemSkillOn, type BotSystemSkillId } from '../../../shared/botSystemSkills';
 import { useBotTranslation } from './botPronounContext';
 import type { BotCapabilities, BotProfile } from './botStore';
 import type { BotCapabilityEntry as Entry, BotCapabilityKind as Kind } from './botSettingsTarget';
@@ -30,9 +29,8 @@ function folded(rows: Row[], open: boolean, searching: boolean) {
 }
 
 /**
- * The capability page (cindy-bots-runtime.md §6「伙伴技能分层」): the shared core, the system Skills this teammate
- * may turn off, its learned Skills, then shared references (Skills on this computer, built-in tools,
- * MCP) and permissions. References are edited per companion; installations and connections stay
+ * The capability page (cindy-bots-runtime.md §6「伙伴技能分层」): the shared core, its learned
+ * Skills, then shared references (Skills on this computer, built-in tools, MCP) and permissions. References are edited per companion; installations and connections stay
  * host-owned.
  */
 export function BotCapabilitySettings({
@@ -40,7 +38,6 @@ export function BotCapabilitySettings({
   capabilities,
   skills,
   onChange,
-  onSystemSkillChange,
   onInputHandoffChange,
   expanded,
   onConfigure,
@@ -53,7 +50,6 @@ export function BotCapabilitySettings({
   capabilities: BotCapabilities;
   skills: string[];
   onChange: (kind: Kind, values: string[]) => void;
-  onSystemSkillChange?: (id: BotSystemSkillId, on: boolean) => void;
   onInputHandoffChange?: (allowed: boolean) => void;
   /** The settings page's back button steps out of a Skill page first. */
   backRef?: MutableRefObject<(() => Promise<boolean>) | null>;
@@ -98,7 +94,7 @@ export function BotCapabilitySettings({
     setRevision((value) => value + 1);
   }, []);
 
-  // Same unsaved-changes question as routines and memory.
+  // Same unsaved-changes question as memory.
   const confirmDiscard = useCallback(async () => !editorDirtyRef.current?.() || confirm({
     presentation: 'standard',
     title: t('bots.capabilities.learned.unsavedTitle'),
@@ -176,8 +172,6 @@ export function BotCapabilitySettings({
         bot={bot}
         view={view}
         onView={setView}
-        systemSkillOn={(id) => isBotSystemSkillOn(capabilities, id)}
-        onSystemSkillChange={onSystemSkillChange}
         onLearnedChanged={refresh}
         editorDirtyRef={editorDirtyRef}
       />
@@ -239,30 +233,6 @@ export function BotCapabilitySettings({
           onOpen={() => setView({ type: 'core' })}
           trailing={<span className="text-12 text-[var(--text-tertiary)]">{t('bots.capabilities.alwaysOn')}</span>}
         />
-      </Group>,
-    );
-  }
-
-  // System Skills: on unless this teammate turned one off.
-  // A V2 teammate has only the ones that apply to it (no routines or follow-up of its own).
-  const systemIds = botSystemSkillIdsFor(capabilities);
-  const systemRows = systemIds.filter((id) =>
-    matches(t(`bots.capabilities.system.items.${id}.name`), t(`bots.capabilities.system.items.${id}.hint`), id));
-  if (systemRows.length) {
-    const onCount = systemIds.filter((id) => isBotSystemSkillOn(capabilities, id)).length;
-    groups.push(
-      <Group key="system" title={t('bots.capabilities.system.group')}
-        meta={t('bots.capabilities.system.meta', { on: onCount, total: systemIds.length })}>
-        {systemRows.map((id) => {
-          const on = isBotSystemSkillOn(capabilities, id);
-          const name = t(`bots.capabilities.system.items.${id}.name`);
-          return (
-            <ListRow key={id} title={name} hint={t(`bots.capabilities.system.items.${id}.hint`)} dim={!on}
-              onOpen={() => setView({ type: 'system', id })}
-              control={<Switch aria-label={name} checked={on} disabled={!onSystemSkillChange}
-                onCheckedChange={(value) => onSystemSkillChange?.(id, value === true)} />} />
-          );
-        })}
       </Group>,
     );
   }

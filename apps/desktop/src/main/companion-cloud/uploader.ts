@@ -16,7 +16,11 @@ export const COMPANION_SKILL_PREFIX = 'companion.skill.v1:';
 export const COMPANION_SKILL_FILES_PREFIX = 'companion.skill-files.v1:';
 /** Teammates no longer keep todos. Still owned, so this computer clears its old rows in the cloud. */
 export const COMPANION_TODO_PREFIX = 'companion.todo.v1:';
-/** One routine definition per key (run history stays on the computer it ran on). */
+/**
+ * One V1 routine definition per key. Teammates' scheduled work is now their project's automations:
+ * nothing is uploaded under it any more, but it stays owned so this computer clears its old rows in
+ * the cloud. Rows from a computer still on V1 are still applied on arrival (host.ts).
+ */
 export const COMPANION_ROUTINE_PREFIX = 'companion.routine.v1:';
 /** Workbench folders (with the computer each is on) and portable judgments. */
 export const COMPANION_WORKBENCH_KEY = 'companion.workbench.v1';
@@ -33,7 +37,7 @@ const STORE_REFUSALS = new Set(['MEDIA_STORAGE_UNAVAILABLE', 'VALUE_TOO_LARGE', 
 
 /**
  * One value to upload. `unread` marks a key prefix that could not be read this cycle (e.g. the
- * routine engine is not ready): its server values stay as they are and nothing under it is
+ * workbench): its server values stay as they are and nothing under it is
  * tombstoned; a hand-over, which needs everything, fails instead.
  */
 export interface CompanionPreferenceValue {

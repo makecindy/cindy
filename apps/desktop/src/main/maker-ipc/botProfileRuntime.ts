@@ -1,6 +1,5 @@
 import { isChatOnlyGroupLane } from '../../shared/botGroupChat.js';
 import { buildTeammateGuide as buildBotCapabilityContextPrompt } from './teammateGuide.js';
-import { BOT_DENIED_TOOLS_VENDOR_KEY, effectiveBotSystemSkillsOff } from '../../shared/botSystemSkills.js';
 import { teammateDeniedTools } from '@cindy/mcps';
 import { and, desc, eq, inArray } from 'drizzle-orm';
 import { buildBotMemoryScopeKey, resolveMemoryScopeKey } from '@cindy/maker-core';
@@ -31,7 +30,7 @@ import { normalizeBotToolCapabilities } from '../../shared/botCapabilitySelectio
 import { BOT_BASELINE_PLUGIN_IDS } from '../maker-host/plugins/types.js';
 import { BOT_IM_CHANNELS_VENDOR_KEY, type BotImChannel } from '../../shared/botImConnection.js';
 import businessOwnershipPrompt from '../maker-host/business-ownership-prompt.md?raw';
-import { readBotProjectMode } from '../../shared/botProjectMode.js';
+import { BOT_DENIED_TOOLS_VENDOR_KEY, readBotProjectMode } from '../../shared/botProjectMode.js';
 import { botLearningTracker } from './botLearningTracker.js';
 
 const log = createLogger('maker-ipc:bot-profile-runtime');
@@ -931,9 +930,8 @@ export async function hydrateBotProfileRuntime(
   // 三层装配(见 botSystemPrompt.ts):身份与「你会做什么」进稳定段,会话控制等
   // 进上下文段,技能索引与记忆快照进易变段并排在最后。能力说明按**这个伙伴
   // 实际挂载到的 toolset** 注入 —— 挂了 docs 才讲怎么做文件,没挂的一个字不提。
-  const systemSkillsOff = effectiveBotSystemSkillsOff(config);
   // Calls are denied live by the helper; Pi also leaves these direct tools out of its listing.
-  const deniedTools = teammateDeniedTools(systemSkillsOff, readBotProjectMode(config));
+  const deniedTools = teammateDeniedTools(readBotProjectMode(config));
   if (deniedTools.size > 0) {
     opts.vendorOptions = { ...(opts.vendorOptions ?? {}), [BOT_DENIED_TOOLS_VENDOR_KEY]: [...deniedTools] };
   }
@@ -944,7 +942,6 @@ export async function hydrateBotProfileRuntime(
     // the essential helper. It is not the generic Orca/team-worker surface and
     // therefore must not depend on optional toolset inheritance.
     partnerActionsEnabled: row.role === 'canonical' && helperAvailable,
-    routinesEnabled: fullLane && helperAvailable && !opts.remoteHostId && !systemSkillsOff.includes('routine'),
     botCreationEnabled: fullLane && helperAvailable,
     // Skill management is available before the first Skill exists. An empty
     // index must not hide the instructions for learning the first reusable method.
@@ -1018,7 +1015,6 @@ export async function hydrateBotProfileRuntime(
       ...(fullLane && !projectContext
         ? [buildBotCapabilityContextPrompt({ helperAvailable, cindyAvailable,
           ownSkillsEnabled: promptCapabilities.ownSkillsEnabled,
-          systemSkillsOff,
           // Same local canonical boundary as isBotAuthorizationSession; remote Pi still has plugins.
           pluginAuthorizationCardsEnabled: opts.remoteHostId == null })]
         : []),
