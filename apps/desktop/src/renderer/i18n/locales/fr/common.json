@@ -5658,12 +5658,17 @@
         "userBrowserSetup": {
           "installPluginTitle": "Installer le plugin Cindy Chrome",
           "enablePluginTitle": "Activer le plugin Cindy Chrome",
-          "installExtensionTitle": "Ajouter l'extension Cindy à votre navigateur",
+          "connectExtensionTitle": "Extension du navigateur non connectée",
           "pluginBody": "« Mon navigateur » accède à votre Chrome ou Edge via le plugin Cindy Chrome et son extension de navigateur. Installez d'abord le plugin dans Cindy, puis suivez ses indications pour ajouter l'extension.",
-          "extensionBody": "« Ajouter l'extension » ouvre la page de l'extension Cindy dans la boutique de votre navigateur ; choisissez Ajouter et l'état passera à connecté de lui-même. Déjà ajoutée ? Activez-la dans les paramètres des extensions du navigateur.",
+          "connectionBody": "Gardez Cindy et votre navigateur ouverts et vérifiez que l’extension Cindy est activée. Une déconnexion ne signifie pas qu’il faut la réinstaller. L’état se met à jour automatiquement à la reconnexion.",
           "installPlugin": "Installer le plugin",
           "enablePlugin": "Activer",
-          "installExtension": "Ajouter l'extension",
+          "openExtensionStore": "Ouvrir la boutique d’extensions",
+          "updatingTitle": "Mise à jour de la connexion au navigateur",
+          "updatingBody": "La connexion sera rétablie automatiquement après la mise à jour.",
+          "selectPluginTitle": "Choisir une extension de navigateur",
+          "selectPluginBody": "Ouvrez les détails du plugin et choisissez « Utiliser cette extension de navigateur » pour confirmer celle que Cindy utilisera.",
+          "selectPlugin": "Ouvrir le plugin",
           "updatePluginTitle": "Mettre à jour le plugin Cindy Chrome",
           "updatePluginBody": "Le plugin Cindy Chrome installé est trop ancien pour « Mon navigateur ». Mettez-le à jour vers la dernière version, puis suivez ses indications pour ajouter l'extension.",
           "updatePlugin": "Mettre à jour",
@@ -12840,6 +12845,10 @@
       "defer": "Pas maintenant"
     },
     "permissionPrompt": {
+      "titleStdin": "Autoriser la saisie dans ce terminal ?",
+      "titleMcpUrl": "Terminer la demande de {{server}}",
+      "mcpComplete": "Terminé",
+      "mcpCancel": "Annuler",
       "alwaysAllowScoped": "Toujours autoriser {{scope}} dans cette session",
       "alwaysAllowScopedHint": "S'applique à toute la session, et uniquement à ce qui est listé ici.",
       "alwaysAllowSessionHint": "S'applique à toute la session, pas seulement à cette demande.",
@@ -13082,7 +13091,13 @@
       "sendAndContinue": "Envoyer et continuer",
       "close": "Fermer",
       "customAnswer": "Saisir autre chose…",
-      "answerPlaceholder": "Saisissez votre réponse…"
+      "answerPlaceholder": "Saisissez votre réponse…",
+      "validation": {
+        "required": "Renseignez ce champ obligatoire.",
+        "choice": "Choisissez une des options proposées.",
+        "tooShort": "Saisissez au moins {{count}} caractères.",
+        "tooLong": "Saisissez au maximum {{count}} caractères."
+      }
     },
     "planReviewBubble": {
       "title": "Revue du plan",
@@ -14206,8 +14221,10 @@
       "mailLegacy": "Historique du brouillon (lecture seule)",
       "taskAutoArchived": "« {{title}} » archivée",
       "taskAutoArchivedUndo": "Annuler",
-      "taskAutoArchivePending": "Archivée à la sortie",
-      "taskAutoArchiveCancel": "Garder cette fois"
+      "taskAutoArchivePending": "Archivage automatique en quittant cette tâche",
+      "taskAutoArchiveCancel": "Annuler",
+      "taskAutoArchiveCancelled": "Pas d’archivage automatique cette fois",
+      "taskArchiveNow": "Archiver maintenant"
     },
     "ghostHook": {
       "blockedFallback": "Message bloqué par un plugin ; non envoyé",
@@ -19916,8 +19933,8 @@
     "removeTitle": "Retirer {{name}} ?",
     "removeDescription": "Cindy n’attribuera plus de tâches à ce compte. La connexion CLI et l’historique des conversations restent sur cet ordinateur.",
     "failed": "Impossible de lire ou de mettre à jour le compte. Vérifiez la connexion CLI et le réseau, puis réessayez.",
-    "used": "{{percent}}% utilisé",
     "directory": "Dossier du compte",
+    "loginAgain": "Se reconnecter",
     "login": "Se connecter"
   },
   "crashDiagnosis": {

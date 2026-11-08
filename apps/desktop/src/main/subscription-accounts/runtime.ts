@@ -20,10 +20,14 @@ import {
 } from '../../shared/claudeSubscriptionUsage.js';
 import type {
   SubscriptionAccountCommand,
+  SubscriptionAccountUsage,
   SubscriptionProvider,
   SubscriptionPoolView,
 } from '../../shared/subscriptionAccounts.js';
-import { DEFAULT_SUBSCRIPTION_ACCOUNT } from '../../shared/subscriptionAccounts.js';
+import {
+  DEFAULT_SUBSCRIPTION_ACCOUNT,
+  MAX_SUBSCRIPTION_ACCOUNTS,
+} from '../../shared/subscriptionAccounts.js';
 import {
   accountDirectory,
   accountOwnerPrefix,
@@ -45,6 +49,7 @@ import {
 type Usage = {
   claudeUsage?: ReturnType<typeof parseClaudeSdkRateLimitInfo>;
   codexUsage?: ReturnType<typeof providerGroupCodexUsageFromReads>;
+  codexCredits?: NonNullable<SubscriptionAccountUsage['codex']>['credits'];
 };
 interface AccountSnapshot {
   auth: AuthState & { plan?: string };
@@ -189,7 +194,7 @@ export function observeSubscriptionAccountUsage(
             ? mergeClaudeSubscriptionUsageSnapshot(cached.usage?.claudeUsage ?? null, incoming)
             : cached.usage?.claudeUsage,
         }
-      : { codexUsage };
+      : { ...cached.usage, codexUsage };
   state.cache.set(key, { ...cached, usage, at: Date.now() });
   changed(provider);
 }
@@ -281,6 +286,39 @@ export function refreshSubscriptionPool(
 /** Outer groups see the next usable account's quota, not an exhausted default.
  * No identity, directory, credentials, or account identifiers cross this boundary.
  */
+export function readLegacySubscriptionPoolUsage(provider: SubscriptionProvider): Promise<Usage | null | undefined> {
+  const pool = readPool(provider);
+  // One ordinary default account keeps its original native/web usage readers.
+  if (!pool || (!pool.disconnected && pool.accounts.length === 1
+    && pool.accounts[0].id === 'default' && !pool.accounts[0].paused))
+    return Promise.resolve(undefined);
+  return readSubscriptionPoolUsage(provider);
+}
+
+/** Quota errors belong to a task's pinned account, including paused accounts.
+ * Unbound pre-pool sessions retain their original default reader; removed or
+ * disconnected bound accounts must never borrow another account's reset time.
+ */
+export async function readSubscriptionSessionUsage(provider: SubscriptionProvider, nativeSessionId: string): Promise<Usage | null | undefined> {
+  const state = currentRuntime();
+  assertOwner(state);
+  const binding = readAccountBinding(`native:${nativeSessionId}`, provider);
+  if (!binding) return undefined;
+  const current = () => {
+    const pool = readPool(provider);
+    return pool && !pool.disconnected && pool.accounts.some(a => a.id === binding.accountId)
+      && (binding.accountId !== 'default' || defaultAccountBound(provider))
+      && readAccountBinding(`native:${nativeSessionId}`, provider)?.accountId === binding.accountId;
+  };
+  if (!current()) return null;
+  // The default account keeps its existing native/web reader and refresh policy.
+  if (binding.accountId === 'default') return undefined;
+  const info = await snapshot(state, provider, binding.accountId);
+  assertOwner(state);
+  if (!current() || !info.auth.authenticated) return null;
+  return info.usage ?? null;
+}
+
 export async function readSubscriptionPoolUsage(
   provider: SubscriptionProvider,
 ): Promise<Usage | null | undefined> {
@@ -371,6 +409,31 @@ export async function readSubscriptionPoolUsage(
     },
   };
 }
+/** Assignable signed-in accounts in pool order, for owner-enabled quota sharing.
+ * Only quota snapshots and whether the entry is the CLI default account leave here.
+ */
+export async function readSubscriptionPoolAccountUsages(
+  provider: SubscriptionProvider,
+): Promise<Array<{ isDefault: boolean; usage: Usage | undefined }> | undefined> {
+  const pool = readPool(provider);
+  if (!pool || pool.disconnected) return undefined;
+  const state = currentRuntime();
+  const accounts = pool.accounts.filter((account) => !account.paused);
+  const infos = await Promise.all(accounts.map((a) => snapshot(state, provider, a.id)));
+  assertOwner(state);
+  return accounts.flatMap((account, index) =>
+    infos[index].auth.authenticated
+      ? [{ isDefault: account.id === 'default', usage: infos[index].usage }]
+      : [],
+  );
+}
+function accountUsage(usage: Usage | undefined): { usage?: SubscriptionAccountUsage } {
+  if (usage?.claudeUsage) return { usage: { claude: usage.claudeUsage } };
+  const buckets = usage?.codexUsage?.appServerBuckets;
+  return buckets && Object.keys(buckets).length > 0
+    ? { usage: { codex: { buckets, credits: usage?.codexCredits ?? null } } }
+    : {};
+}
 export async function readSubscriptionPool(
   provider: SubscriptionProvider,
   previewDefault = false,
@@ -414,7 +477,7 @@ export async function readSubscriptionPool(
                   ? ('limited' as const)
                   : ('ready' as const),
         running: state.running.get(keyOf(provider, account.id))?.size ?? 0,
-        ...(usage.quota ? { quota: usage.quota } : {}),
+        ...(!pool.disconnected && info.auth.authenticated ? accountUsage(info.usage) : {}),
       };
     }),
   );
@@ -653,7 +716,7 @@ export async function runSubscriptionAccountCommand(
       }
       if (adding) {
         await updatePool(provider, (pool) => {
-          if (pool.accounts.length >= 32 && !pool.accounts.some((a) => a.id === accountId))
+          if (pool.accounts.length >= MAX_SUBSCRIPTION_ACCOUNTS && !pool.accounts.some((a) => a.id === accountId))
             throw new Error('Too many subscription accounts');
           return {
             ...pool,

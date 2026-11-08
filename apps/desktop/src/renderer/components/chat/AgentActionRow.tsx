@@ -1204,7 +1204,7 @@ export function AgentActionRow({
             'bg-[var(--msg-user-bg)]',
             'border border-[var(--msg-user-border)]',
             'font-mono text-[length:calc(var(--app-code-font-size)_-_1px)] leading-[calc(var(--app-code-font-size)_+_4px)]',
-            'text-[var(--foreground)]',
+            'text-foreground',
             'select-text cursor-text',
           )}
         >

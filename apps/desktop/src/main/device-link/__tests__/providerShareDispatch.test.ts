@@ -31,7 +31,10 @@ import {
   setProviderGroupRemoteHandler,
   setProviderShareAccess,
   setRemoteAgentHandler,
+  setRemoteSubscriptionPoolQuotaReader,
+  setRemoteClaudeSubscriptionUsageReader,
 } from '../dispatch';
+import { readLegacySubscriptionQuota } from '../../subscription-accounts/legacyQuota';
 
 const GUEST = providerShareGuestPeer('share-1', 'member-1', 'laptop');
 const ACCESS = { shareId: 'share-1', memberId: 'member-1', providerId: 'anthropic' };
@@ -52,8 +55,47 @@ beforeEach(() => {
   setProviderShareAccess({ guestAccess: () => state.access, ensureKnown: async () => undefined, hasShares: () => false });
 });
 afterEach(() => {
+  setRemoteSubscriptionPoolQuotaReader(null);
+  setRemoteClaudeSubscriptionUsageReader(null);
   __testing.reset();
   setProviderShareAccess(null);
+});
+
+// Unit regression: old consumers cannot query maker:subscription-pool:quota.
+// Exercise real authorized dispatch with only legacy arguments; a full default
+// account must not hide a second usable account, or expose pool data to guests.
+describe('legacy controller quota compatibility', () => {
+  it.each([
+    ['maker:usage:claude-subscription', []],
+    ['maker:usage:account', ['codex']],
+    ['maker:usage:codex-rate-limits', []],
+  ])('answers %s using the available pooled account', async (channel, args) => {
+    const { __testing: registry } = await import('../invoke-registry');
+    const now = Date.now();
+    const window = { usedPercent: 12, windowMinutes: 300, resetsAt: now / 1000 + 3600 };
+    const bucket = { limitId: 'codex', limitName: null, updatedAt: now, primary: window, secondary: null };
+    const read = vi.fn(async () => ({
+      claudeUsage: { updatedAt: now, fiveHour: { utilization: 12, resetsAt: window.resetsAt }, sevenDay: null, scoped: [] },
+      codexUsage: { appServerBuckets: { codex: bucket }, webSnapshot: bucket },
+    }));
+    registry.register(channel, async () => ({ primary: { usedPercent: 100 } }));
+    setRemoteClaudeSubscriptionUsageReader(async () => ({ fiveHour: { utilization: 100 } }));
+    setRemoteSubscriptionPoolQuotaReader((name, values) => readLegacySubscriptionQuota(read, name, values));
+    try {
+      const reply = await runInvoke('same-account-controller', { channel, args });
+      expect(reply).toMatchObject({ ok: true, result: channel.includes('claude-subscription')
+        ? { fiveHour: { utilization: 12 } }
+        : channel.includes('codex-rate-limits')
+          ? { rateLimits: { primary: { usedPercent: 12 } }, resetOffer: null }
+          : { primary: { usedPercent: 12 } } });
+      state.access = ACCESS;
+      read.mockClear();
+      await expect(runInvoke(GUEST, { channel, args })).resolves.toMatchObject({ ok: false, error: { code: 'CHANNEL_NOT_ALLOWED' } });
+      expect(read).not.toHaveBeenCalled();
+    } finally {
+      registry.reset();
+    }
+  });
 });
 
 describe('provider share link admission', () => {

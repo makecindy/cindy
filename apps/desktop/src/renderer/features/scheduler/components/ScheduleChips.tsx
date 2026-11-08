@@ -109,7 +109,7 @@ export const ChipButton = React.forwardRef<HTMLButtonElement, ChipButtonProps>(f
 });
 
 const POPOVER_BASE = cn(
-  'z-[10010] rounded-xl border p-2 shadow-lg',
+  'z-[10010] rounded-xl border p-2 shadow-[shadow:var(--shadow-menu)]',
   'border-[var(--cmd-palette-border)] bg-[var(--cmd-palette-bg)] dark:border-[var(--cmd-palette-border)] dark:bg-[var(--cmd-palette-bg)]',
 );
 
@@ -427,7 +427,7 @@ export function ScheduleChip({
             if (e.target === e.currentTarget) setOpen(false);
           }}
         >
-          <div className="rounded-xl border border-[var(--cmd-palette-border)] bg-[var(--cmd-palette-bg)] p-2 shadow-lg dark:border-[var(--cmd-palette-border)] dark:bg-[var(--cmd-palette-bg)]">
+          <div className="rounded-xl border border-[var(--cmd-palette-border)] bg-[var(--cmd-palette-bg)] p-2 shadow-[shadow:var(--shadow-menu)] dark:border-[var(--cmd-palette-border)] dark:bg-[var(--cmd-palette-bg)]">
             <div className="flex h-[34px] items-center gap-1 rounded-lg bg-[var(--chat-input-chip-bg)] p-[3px]">
               {(['cron', 'interval'] as const).map((mode) => {
                 const active = timingMode === mode;
@@ -458,7 +458,7 @@ export function ScheduleChip({
             </p>
           </div>
           <div className="flex items-start gap-2">
-            <div className="w-[260px] shrink-0 rounded-xl border border-[var(--cmd-palette-border)] bg-[var(--cmd-palette-bg)] p-2 shadow-lg dark:border-[var(--cmd-palette-border)] dark:bg-[var(--cmd-palette-bg)]">
+            <div className="w-[260px] shrink-0 rounded-xl border border-[var(--cmd-palette-border)] bg-[var(--cmd-palette-bg)] p-2 shadow-[shadow:var(--shadow-menu)] dark:border-[var(--cmd-palette-border)] dark:bg-[var(--cmd-palette-bg)]">
               <div className="flex flex-col gap-[2px]">
                 {availableModes.map((mode) => {
                 const active = activeMode === mode;
@@ -502,7 +502,7 @@ export function ScheduleChip({
 function ExactIntervalPanel({ summary }: { summary: string }) {
   const { t } = useTranslation();
   return (
-    <div className="min-w-0 flex-1 rounded-xl border border-[var(--cmd-palette-border)] bg-[var(--cmd-palette-bg)] p-3 shadow-lg dark:border-[var(--cmd-palette-border)] dark:bg-[var(--cmd-palette-bg)]">
+    <div className="min-w-0 flex-1 rounded-xl border border-[var(--cmd-palette-border)] bg-[var(--cmd-palette-bg)] p-3 shadow-[shadow:var(--shadow-menu)] dark:border-[var(--cmd-palette-border)] dark:bg-[var(--cmd-palette-bg)]">
       <div className="text-13 font-medium text-[var(--msg-assistant-text)]">
         {t('scheduler.chips.timingMode.currentExact', { schedule: summary })}
       </div>
@@ -531,7 +531,7 @@ function ScheduleConfigPanel({
   };
 
   return (
-    <div className="min-w-0 flex-1 rounded-xl border border-[var(--cmd-palette-border)] bg-[var(--cmd-palette-bg)] p-2 shadow-lg dark:border-[var(--cmd-palette-border)] dark:bg-[var(--cmd-palette-bg)]">
+    <div className="min-w-0 flex-1 rounded-xl border border-[var(--cmd-palette-border)] bg-[var(--cmd-palette-bg)] p-2 shadow-[shadow:var(--shadow-menu)] dark:border-[var(--cmd-palette-border)] dark:bg-[var(--cmd-palette-bg)]">
       <div className="flex flex-col gap-2">
         {mode === 'intervalMinutes' && (
           <>
@@ -1200,7 +1200,7 @@ export function ModelEffortChip({
         className={cn(
           // z-[10010]:本 chip 在 ScheduleFormDialog 内,弹层必须盖过对话框(沿用原
           // POPOVER_BASE 的层级——丢了它会渲染在对话框下层、点了"没反应")。
-          'z-[10010] overflow-hidden rounded-[12px] p-0 shadow-lg',
+          'z-[10010] overflow-hidden rounded-[12px] p-0 shadow-[shadow:var(--shadow-menu)]',
           'bg-[var(--model-dropdown-bg)] border border-[var(--model-dropdown-border)]',
           // 宽度由内容自适应(单栏 320;Edit 展开 ~517 向左加宽),与聊天选择器同口径。
           'w-auto',

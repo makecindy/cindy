@@ -1454,9 +1454,40 @@ export class DeviceLinkClient {
     }
     this.detachDirectPath(deviceId, 'replaced');
     this.directPaths.set(deviceId, channel);
-    this.log.info(`device-link direct path attached dst=${deviceId.slice(0, 8)}`);
+    const moved = this.moveRelayPendingToDirect(deviceId);
+    this.log.info(`device-link direct path attached dst=${deviceId.slice(0, 8)}${moved > 0 ? ` resendViaDirect=${moved}` : ''}`);
     this.emitPeerPathChanged({ deviceId, path: 'direct' });
     return handle;
+  }
+
+  /**
+   * 直连接上时，把仍在 relay 上等待确认的帧改经直连重发。累计 ACK 只能按序推进：
+   * relay 上的旧帧没到，经直连送达的后续帧就拿不到确认，会被误判为直连超时撤下
+   * (2026-11-04 实测：持续的远程 Agent 流量下，局域网直连每次接上 8–10 秒即因
+   * ack-timeout 撤下，一小时 34 次)。接收端按 seq 去重，同一帧经两条路径各到一次
+   * 也只执行一次。只作用于这一台设备，不重连 relay、不重建链路。
+   */
+  private moveRelayPendingToDirect(deviceId: string): number {
+    const peer = this.peerTransport.get(deviceId);
+    if (!peer?.reliable || !this.isPeerSendReady(peer)) return 0;
+    let moved = 0;
+    for (const pending of peer.pending.values()) {
+      if (!pending.sent || pending.path !== 'relay') continue;
+      pending.path = undefined;
+      pending.sent = false;
+      resetReliableSendRound(pending);
+      moved += 1;
+    }
+    if (moved === 0) return 0;
+    // 与 detachDirectPath 相同：调用方可能处于发送路径中，下一个微任务再重放。
+    void Promise.resolve().then(() => {
+      this.retryPending(deviceId, { ignoreInterval: false, onlyUnsent: true });
+      const current = this.peerTransport.get(deviceId);
+      if (current?.reliable && this.isPeerSendReady(current) && current.pending.size > 0) {
+        this.ensureRetryTimer(deviceId);
+      }
+    });
+    return moved;
   }
 
   /** 该设备的数据面路径：接入了直连通道即为 'direct'(链路就绪后启用)，否则走 relay。 */

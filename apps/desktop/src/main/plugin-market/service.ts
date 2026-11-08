@@ -66,6 +66,7 @@ import {
   isBuiltinGhostRemovedByUser,
   builtinSeedYieldsToStoreVersion,
   refreshPluginUsageBindings,
+  republishGhostRoster,
   uninstallGhostAndCleanup,
 } from '../cindy-brain/index.js';
 import {
@@ -4198,6 +4199,9 @@ export class PluginMarketService {
           ? { userId: installSubject, suppressed: wasSuppressed }
           : undefined,
       );
+      // The install's own final broadcast ran before this restore and saw the detached source;
+      // publish again so the browser bridge matches the plugin that stayed installed.
+      try { republishGhostRoster(); } catch { /* the next roster change republishes */ }
     } catch (error) {
       log.error('failed to restore Plugin market route after replacement failure', {
         pluginId: record.pluginId,

@@ -5600,12 +5600,17 @@
         "userBrowserSetup": {
           "installPluginTitle": "Cindy Chrome-Plugin installieren",
           "enablePluginTitle": "Cindy Chrome-Plugin aktivieren",
-          "installExtensionTitle": "Cindy-Erweiterung zum Browser hinzufügen",
+          "connectExtensionTitle": "Browser-Erweiterung nicht verbunden",
           "pluginBody": "Mein Browser greift über das Cindy Chrome-Plugin und dessen Browser-Erweiterung auf deinen Chrome oder Edge zu. Installiere zuerst das Plugin in Cindy und folge dann der Aufforderung, die Erweiterung hinzuzufügen.",
-          "extensionBody": "„Browser-Erweiterung hinzufügen“ öffnet die Store-Seite der Cindy-Erweiterung in deinem Browser. Wähle „Hinzufügen“, dann wechselt der Status automatisch zu „Verbunden“. Bereits hinzugefügt? Aktiviere sie in den Erweiterungseinstellungen deines Browsers.",
+          "connectionBody": "Lass Cindy und deinen Browser geöffnet und prüfe, ob die Cindy-Erweiterung aktiviert ist. Eine fehlende Verbindung erfordert nicht unbedingt eine Neuinstallation. Der Status aktualisiert sich nach der Verbindung automatisch.",
           "installPlugin": "Plugin installieren",
           "enablePlugin": "Aktivieren",
-          "installExtension": "Browser-Erweiterung hinzufügen",
+          "openExtensionStore": "Erweiterungs-Store öffnen",
+          "updatingTitle": "Browserverbindung wird aktualisiert",
+          "updatingBody": "Nach dem Update wird die Verbindung automatisch wiederhergestellt.",
+          "selectPluginTitle": "Browsererweiterung auswählen",
+          "selectPluginBody": "Öffne die Plugin-Details und wähle „Diese Browsererweiterung verwenden“, um die Erweiterung für Cindy zu bestätigen.",
+          "selectPlugin": "Plugin öffnen",
           "updatePluginTitle": "Cindy Chrome-Plugin aktualisieren",
           "updatePluginBody": "Das installierte Cindy Chrome-Plugin ist für „Mein Browser“ zu alt. Aktualisiere es auf die neueste Version und folge dann der Aufforderung, die Erweiterung hinzuzufügen.",
           "updatePlugin": "Aktualisieren",
@@ -12741,6 +12746,10 @@
       "defer": "Nicht jetzt"
     },
     "permissionPrompt": {
+      "titleStdin": "Eingabe in diesem Terminal erlauben?",
+      "titleMcpUrl": "Anfrage von {{server}} abschließen",
+      "mcpComplete": "Fertig",
+      "mcpCancel": "Abbrechen",
       "alwaysAllowScoped": "{{scope}} in dieser Sitzung immer erlauben",
       "alwaysAllowScopedHint": "Gilt für die gesamte Sitzung und nur für die hier aufgeführten Elemente.",
       "alwaysAllowSessionHint": "Gilt für die gesamte Sitzung, nicht nur für diese Anfrage.",
@@ -12977,7 +12986,13 @@
       "sendAndContinue": "Senden und fortfahren",
       "close": "Schließen",
       "customAnswer": "Etwas anderes eingeben…",
-      "answerPlaceholder": "Deine Antwort eingeben…"
+      "answerPlaceholder": "Deine Antwort eingeben…",
+      "validation": {
+        "required": "Füllen Sie dieses Pflichtfeld aus.",
+        "choice": "Wählen Sie eine der aufgeführten Optionen.",
+        "tooShort": "Geben Sie mindestens {{count}} Zeichen ein.",
+        "tooLong": "Geben Sie höchstens {{count}} Zeichen ein."
+      }
     },
     "planReviewBubble": {
       "title": "Planprüfung",
@@ -14075,8 +14090,10 @@
       "mailLegacy": "Entwurfsverlauf (schreibgeschützt)",
       "taskAutoArchived": "„{{title}}“ archiviert",
       "taskAutoArchivedUndo": "Rückgängig",
-      "taskAutoArchivePending": "Wird beim Verlassen archiviert",
-      "taskAutoArchiveCancel": "Diesmal behalten"
+      "taskAutoArchivePending": "Wird beim Verlassen dieser Aufgabe archiviert",
+      "taskAutoArchiveCancel": "Abbrechen",
+      "taskAutoArchiveCancelled": "Diesmal keine automatische Archivierung",
+      "taskArchiveNow": "Jetzt archivieren"
     },
     "ghostHook": {
       "blockedFallback": "Nachricht von einem Plugin blockiert; nicht gesendet",
@@ -19729,8 +19746,8 @@
     "removeTitle": "{{name}} entfernen?",
     "removeDescription": "Cindy weist diesem Konto keine Aufgaben mehr zu. Die CLI-Anmeldung und der Gesprächsverlauf bleiben auf diesem Computer erhalten.",
     "failed": "Das Konto konnte nicht gelesen oder aktualisiert werden. Prüfe die CLI-Anmeldung und die Netzwerkverbindung und versuche es erneut.",
-    "used": "{{percent}}% verbraucht",
     "directory": "Kontoordner",
+    "loginAgain": "Erneut anmelden",
     "login": "Anmelden"
   },
   "crashDiagnosis": {

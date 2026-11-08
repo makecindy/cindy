@@ -20,6 +20,7 @@ import {
 } from 'react';
 import { Check, ChevronDown, Volume2 } from 'lucide-react';
 
+import { SettingsCard } from '@/components/ui/settings-rows';
 import { Switch } from '@/components/ui/switch';
 import { toast } from '@/lib/toast';
 import { cn } from '@/lib/utils';
@@ -291,7 +292,7 @@ export function AgentIslandSection() {
         <h2 className="text-16 font-medium leading-[1.2] text-[var(--settings-section-title)]">
           {t('settings.agentIsland.title')}
         </h2>
-        <SettingsCard>
+        <SettingsCard className="p-5">
           <p className="text-13 leading-[1.45] text-[var(--text-secondary)]">
             {t('settings.agentIsland.unsupported')}
           </p>
@@ -307,7 +308,7 @@ export function AgentIslandSection() {
       </h2>
 
       {/* Agent Notch's own options grow out of its card, so they read as part of it. */}
-      <SettingsCard className="flex flex-col p-0">
+      <SettingsCard className="flex flex-col">
         <div className="flex items-center justify-between gap-3 p-5">
           <div className="flex min-w-0 flex-col gap-1">
             <p id={agentIslandSettings.enableLabel.targetId} className="text-13 font-medium text-[var(--settings-section-sublabel)]">
@@ -402,7 +403,7 @@ export function AgentIslandSection() {
 
       {/* Independent of our own island: the system shows it even when ours is off. */}
       {liveActivitySupported && (
-        <SettingsCard className="flex items-center justify-between gap-3">
+        <SettingsCard className="flex items-center justify-between gap-3 p-5">
           <div className="flex min-w-0 flex-col gap-1">
             <p id={agentIslandSettings.liveActivityLabel.targetId} className="text-13 font-medium text-[var(--settings-section-sublabel)]">
               {t(agentIslandSettings.liveActivityLabel.titleKey)}
@@ -432,7 +433,7 @@ export function AgentIslandSection() {
       show whenever either is on, so no heading is needed. */}
       {sharedVisible && (
         <>
-          <SettingsCard className="flex flex-col p-0">
+          <SettingsCard className="flex flex-col">
             <button
               type="button"
               data-setting-id={agentIslandSettings.skinLabel.id}
@@ -441,7 +442,7 @@ export function AgentIslandSection() {
               onClick={() => setSkinsOpen((open) => !open)}
               className={cn(
                 'flex w-full items-center justify-between gap-3 rounded-xl p-5 text-left outline-none',
-                'focus-visible:ring-2 focus-visible:ring-[var(--focus-ring-soft)]',
+                'focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-[var(--focus-ring-soft)]',
               )}
             >
               <span className="flex min-w-0 flex-col gap-1">
@@ -488,7 +489,7 @@ export function AgentIslandSection() {
             )}
           </SettingsCard>
 
-          <SettingsCard className="flex flex-col gap-3">
+          <SettingsCard className="flex flex-col gap-3 p-5">
             <div className="flex items-center justify-between gap-3">
               <div className="flex min-w-0 flex-col gap-1">
                 <p id={agentIslandSettings.soundLabel.targetId} className="text-13 font-medium text-[var(--settings-section-sublabel)]">
@@ -536,27 +537,6 @@ export function AgentIslandSection() {
 
 /** Divider between rows of one card, inset like this page's 20px card padding. */
 const ROW_DIVIDER_CLASS = 'mx-5 h-px bg-[var(--settings-theme-card-border)]';
-
-function SettingsCard({
-  className,
-  children,
-}: {
-  className?: string;
-  children: ReactNode;
-}) {
-  return (
-    <div
-      className={cn(
-        'rounded-xl p-5',
-        'bg-[var(--settings-theme-card-bg)]',
-        'border border-[var(--settings-theme-card-border)]',
-        className,
-      )}
-    >
-      {children}
-    </div>
-  );
-}
 
 function AgentIslandSkinRow({
   skin,

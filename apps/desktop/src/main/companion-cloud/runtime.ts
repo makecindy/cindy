@@ -33,6 +33,9 @@ export interface CompanionCloudHost {
   homes: CompanionHomeRegistry;
   openState: (endpoint: string, humanActorId: string, current: () => boolean) => CompanionCloudState;
   readValues: (botId: string) => Promise<CompanionPreferenceValue[]>;
+  /** Read-only merge preflight: profiles (any status), task links and home files count as data.
+   * Only an explicit false proves absence; missing capability/errors must never allow retirement. */
+  hasLocalData?: (botId: string) => Promise<boolean>;
   /** The files a companion reply refers to that go to the room with it (replyArtifacts.ts). */
   replyAttachments?: (botId: string, sessionId: string, row: CompanionMirrorRow, text: string) => Promise<CompanionMirrorAttachment[]>;
   /** The companion's main task; null when it has none yet. Throws when it cannot be told (conflicting links). */
@@ -560,7 +563,7 @@ export function startCompanionCloud(input: {
   /** A sync that must be complete (a hand-over, a merge) did not finish: why, as an action result. */
   function syncFailure(error: unknown): CompanionCloudActionResult {
     const code = errorCode(error);
-    return [COMPANION_VALUE_TOO_LARGE, COMPANION_READ_INCOMPLETE, 'COMPANION_STILL_CHANGING', 'INVALID_AVATAR', 'AVATAR_UPLOAD_FAILED'].includes(code)
+    return ['NOT_HOME', COMPANION_VALUE_TOO_LARGE, COMPANION_READ_INCOMPLETE, 'COMPANION_STILL_CHANGING', 'INVALID_AVATAR', 'AVATAR_UPLOAD_FAILED'].includes(code)
       ? { ok: false, code: 'FAILED' } : actionFailure(error, 'OFFLINE');
   }
 
@@ -588,7 +591,27 @@ export function startCompanionCloud(input: {
   async function syncCopy(actor: CompanionRuntimeActor): Promise<CompanionCloudActionResult> {
     const home = actor.homeDeviceId;
     if (!home) return { ok: true };
-    if (home === input.selfDeviceId) return flushOwn(actor.externalId);
+    if (home === input.selfDeviceId) {
+      const botId = actor.externalId;
+      const known = state.bot(botId);
+      // A failed first restore (e.g. the local Cindy singleton) has nothing to flush.
+      // This exception is merge-only: never upload empty values or claim an installation.
+      if (known?.actorId === actor.id && known.demoted && !known.mirror && !known.prefsSeeded
+        && !known.backfill && !known.storeSeeded && !Object.keys(known.prefs).length && !Object.keys(known.stored ?? {}).length
+        && installOwner(botId) === 'mine' && !pick(null).some(bot => bot.botId === botId)) {
+        if (input.paused?.(botId)) return { ok: false, code: 'PAUSED' };
+        if (materializing.has(botId) || await input.host.isBotBusy?.(botId)) return { ok: false, code: 'BUSY' };
+        try {
+          const hasData = await input.host.hasLocalData?.(botId);
+          fence.assertCurrent();
+          if (materializing.has(botId)) return { ok: false, code: 'BUSY' };
+          if (actor.homeDeviceId !== input.selfDeviceId || installOwner(botId) !== 'mine') return { ok: false, code: 'HOME_CONFLICT' };
+          if (hasData === false) return { ok: true };
+        } catch { /* Unknown local state is not proof that the cloud is complete. */ }
+        return { ok: false, code: 'FAILED' };
+      }
+      return flushOwn(botId);
+    }
     const link = input.host.homeLink;
     if (!link?.flush) return { ok: true };
     const version = await link.version(home).catch(() => 0);

@@ -529,7 +529,7 @@ export function TabStrip({
                   addButtonClassName,
                   dropdownOpen
                     ? 'bg-[var(--surface-chip)] text-[var(--text-primary)]'
-                    : 'text-[var(--titlebar-icon)] hover:bg-[var(--surface-hover)] hover:text-[var(--text-primary)]',
+                    : 'text-[hsl(var(--titlebar-icon))] hover:bg-[var(--surface-hover)] hover:text-[var(--text-primary)]',
                 )}
               >
                 <Plus size={13} />

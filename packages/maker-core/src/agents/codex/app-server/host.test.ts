@@ -1226,15 +1226,19 @@ describe('AppServerHost descendant thread routing', () => {
     );
     expect(commandExecutionApproval).toHaveBeenCalledWith(
       expect.objectContaining({ threadId: 'child-thread' }),
+      { requestId: 'server-command' },
     );
     expect(fileChangeApproval).toHaveBeenCalledWith(
       expect.objectContaining({ threadId: 'child-thread' }),
+      { requestId: 'server-file' },
     );
     expect(mcpServerElicitation).toHaveBeenCalledWith(
       expect.objectContaining({ threadId: 'child-thread' }),
+      { requestId: 'server-elicitation' },
     );
     expect(permissionsApproval).toHaveBeenCalledWith(
       expect.objectContaining({ threadId: 'child-thread' }),
+      { requestId: 'server-permissions' },
     );
     expect(requestUserInput).toHaveBeenCalledWith(
       expect.objectContaining({ threadId: 'child-thread' }),
@@ -1295,6 +1299,7 @@ describe('AppServerHost descendant thread routing', () => {
     });
     expect(mcpServerElicitation).toHaveBeenCalledWith(
       expect.objectContaining({ threadId: 'child-thread', serverName: 'node_repl' }),
+      { requestId: 'early-elicitation' },
     );
 
     await subscription.release();

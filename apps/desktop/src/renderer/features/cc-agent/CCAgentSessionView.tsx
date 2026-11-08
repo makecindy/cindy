@@ -2892,15 +2892,9 @@ function CCAgentSessionContent({
   const sessionHandoffPreparing = worktreePreparing || remoteHandoffPreparing;
 
   // ---------------------------------------------------------------------------
-  // F-AUQ-MIN-1 / F-AUQ-MIN-5 验收第 4 条：会话切换后 askUserViewerState 重置为 'expanded'。
-  // makerChatStore 按 sessionId 分片存储，A(minimized)→B→A 回到 A 时如果不重置，
-  // store 里 A 的状态仍是 'minimized'。
-  // setAskUserViewerState 来自 useCCAgentChat，依赖 [sessionId]，与 sessionId 同步变化，
-  // 因此该 effect 实质上只在 sessionId 变更时触发一次（单会话内不会误触发）。
-  // ---------------------------------------------------------------------------
+  // Preserve each task's question editor state when switching tasks.
   useEffect(() => {
     if (!sessionId) return;
-    setAskUserViewerState('expanded');
     setPluginSetupViewerState('expanded');
   }, [sessionId, setAskUserViewerState, setPluginSetupViewerState]);
 
@@ -6114,7 +6108,7 @@ function CCAgentSessionContent({
                  接管与 worktree 创建继续使用 90px 状态框。 */}
               {!isSharedTaskPeer(remoteDeviceId ?? '') && (pendingPlanReview ||
               pendingPermission ||
-              pendingAskUser ||
+              (pendingAskUser && askUserViewerState !== 'minimized') ||
               pendingPluginSetup ||
               pendingIssueConfirm ||
               pendingRenameSessionsConfirm ||
