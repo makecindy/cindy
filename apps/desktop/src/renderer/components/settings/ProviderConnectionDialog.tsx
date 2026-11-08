@@ -3110,6 +3110,7 @@ export function ProviderConnectionDialog({
                         <label className="flex cursor-pointer items-center gap-2 text-13 text-[var(--settings-section-title)]">
                           <input
                             type="checkbox"
+                            data-settings-search-action="Choose this connection's video API inside the provider dialog; search entry providers.videoApi opens the providers panel"
                             id={fieldId(`${activeTab}:${idSuffix}`)}
                             aria-describedby={fieldId(`${activeTab}:${idSuffix}-hint`)}
                             checked={f.videoApi === api}
