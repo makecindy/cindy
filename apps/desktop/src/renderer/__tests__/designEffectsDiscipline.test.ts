@@ -47,7 +47,7 @@ const GRADIENT_REGISTRY: Record<string, { count: number; reason: string }> = {
   'features/cc-agent/RolePillDropdown.tsx': { count: 2, reason: '横向滚动两端的边缘渐隐' },
   'features/right-sidebar/TabBar.tsx': { count: 1, reason: '标签栏横向滚动的边缘渐隐遮罩' },
   'features/right-sidebar/plugins/review/DiffViewer/ImageDiffPreview.tsx': { count: 4, reason: '透明底棋盘格，不是视觉渐变' },
-  'styles/globals.css': { count: 13, reason: '字标扫光、模型预算色条（§15.4）、列表与输入框的边缘渐隐遮罩、单色叠层' },
+  'styles/globals.css': { count: 14, reason: '字标扫光、模型预算色条（§15.4）、列表与输入框的边缘渐隐遮罩（含桌面背景下消息列表底部的渐隐）、单色叠层' },
 };
 
 /** 这些是没有 Button 变体的裸按钮框，`enabled:hover:` 不会输给变体。 */
