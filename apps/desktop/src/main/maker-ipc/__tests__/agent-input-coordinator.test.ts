@@ -16807,6 +16807,8 @@ it('keeps remote Lead reporting pending through real coordinator recovery stages
       throw new Error(channel);
     };
     const runtime = createOrcaRemoteWorkerRuntime({
+      createReportId: () => 'report', readLeadReportReceipt: async () => 'unknown',
+      captureReportedTurn: () => async commit => { await commit(true); },
       invoke, deviceName: () => 'execution device', saveReport: async () => {},
       onTurnStarted: async () => {}, captureTurnEnded: () => async turn => { calls.push(turn); return true; },
       onWorkerStateChanged: () => {}, now: () => 1, setTimeout: () => 0, clearTimeout: () => {}, log: { info: () => {}, warn: () => {} },

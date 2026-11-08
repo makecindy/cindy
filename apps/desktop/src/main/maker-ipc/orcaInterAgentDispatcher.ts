@@ -50,6 +50,8 @@ export type DispatchOrcaInterAgentMessageResult =
     }
   | {
       ok: false;
+      /** Explicit pre-send rejection; exceptions must not claim this evidence. */
+      reportRejected?: true;
       dispatchOutcome: CollabDispatchFailureOutcome;
     };
 
@@ -63,6 +65,8 @@ export interface DispatchOrcaInterAgentMessageParams {
   source: OrcaInterAgentMessageSource;
   senderLabel: string;
   workerId?: string;
+  /** Persisted by the remote report owner before handoff; never taken from tool arguments. */
+  reportClientId?: string;
   /** 发送方显式选择；缺省排队。steer 只在目标正在运行时插进当前 turn。 */
   delivery?: 'queue' | 'steer';
   /** 可选, 随消息发给目标的本机图片绝对路径; 仅本机 session 支持, SSH 远端目标拒绝。 */
@@ -164,6 +168,10 @@ export interface OrcaInterAgentDispatcherLogger {
 
 /** Orca dispatcher 的 I/O 边界，register.ts 只负责注入 DB、Maker、queue 和 role 解析能力。 */
 export interface OrcaInterAgentDispatcherDeps<TSessionMeta> {
+  prepareRestoredReportAcceptance?: (sessionId: string) => {
+    accepted: () => void | Promise<void>;
+    rollback: () => void | Promise<void>;
+  } | undefined;
   onDirectInputDispatched?: (sessionId: string) => void | Promise<void>;
   readAutoReviewHistory?: (sessionId: string) => Promise<AutoReviewHistoryMessage[]>;
   createId: () => string;
@@ -265,6 +273,7 @@ export interface OrcaInterAgentDispatcher {
   runQueuedOrcaInterAgentAcceptedCallback: (
     sessionId: string,
     item: AgentInputQueuedMessage,
+    restoredFromSnapshot?: boolean,
   ) => Promise<void> | undefined;
   rollbackQueuedOrcaInterAgentAcceptedCallback: (
     sessionId: string,
@@ -343,8 +352,16 @@ export function createOrcaInterAgentDispatcher<TSessionMeta>(
   const runQueuedOrcaInterAgentAcceptedCallback = (
     sessionId: string,
     item: AgentInputQueuedMessage,
+    restoredFromSnapshot?: boolean,
   ): Promise<void> | undefined => {
-    const callback = queuedOrcaInterAgentAcceptedCallbacks.get(item.clientId);
+    let callback = queuedOrcaInterAgentAcceptedCallbacks.get(item.clientId);
+    if (!callback && restoredFromSnapshot && item.origin?.kind === 'orca' && item.orcaReportDelivery) {
+      const restored = deps.prepareRestoredReportAcceptance?.(sessionId);
+      if (restored) {
+        callback = { ...restored, didRun: false };
+        queuedOrcaInterAgentAcceptedCallbacks.set(item.clientId, callback);
+      }
+    }
     if (!callback) return undefined;
     callback.didRun = true;
     return runAcceptedCallback(callback.accepted, sessionId, item.clientId, log);
@@ -364,6 +381,7 @@ export function createOrcaInterAgentDispatcher<TSessionMeta>(
     if (!meta || !dbRow) {
       return {
         ok: false,
+        reportRejected: true,
         dispatchOutcome: {
           ...createHostSendFailure('SEND_FAILED', `session ${params.targetSessionId} not found`),
           source: params.meta.source,
@@ -374,6 +392,7 @@ export function createOrcaInterAgentDispatcher<TSessionMeta>(
     if (dbRow.status === 'archived' || dbRow.status === 'deleted') {
       return {
         ok: false,
+        reportRejected: true,
         dispatchOutcome: {
           ...createHostSendFailure('SEND_FAILED', `session ${params.targetSessionId} is ${dbRow.status}`),
           source: params.meta.source,
@@ -382,7 +401,7 @@ export function createOrcaInterAgentDispatcher<TSessionMeta>(
       };
     }
 
-    const clientId = deps.createId();
+    const clientId = params.reportClientId ?? deps.createId();
     // worker 回报的前缀要带发件 worker 的 role,需要反查;只查一次,文本与来源标签共用。
     let workerRolePromise: Promise<string | undefined> | undefined;
     const resolveRole = (): Promise<string | undefined> =>
@@ -474,11 +493,11 @@ export function createOrcaInterAgentDispatcher<TSessionMeta>(
       );
       acceptedDidRun = false;
     };
-    const failureResult = async (dispatchOutcome: CollabDispatchFailureOutcome): Promise<DispatchOrcaInterAgentMessageResult> => {
+    const failureResult = async (dispatchOutcome: CollabDispatchFailureOutcome, reportRejected = false): Promise<DispatchOrcaInterAgentMessageResult> => {
       if (acceptedDidRun) {
         await runAcceptedRollback(params.onAcceptedRollback, params.targetSessionId, clientId, log);
       }
-      return { ok: false, dispatchOutcome };
+      return { ok: false, dispatchOutcome, ...(reportRejected ? { reportRejected: true as const } : {}) };
     };
     const dispatchReceipt = {
       targetTitle: dbRow.title,
@@ -592,7 +611,7 @@ export function createOrcaInterAgentDispatcher<TSessionMeta>(
             return failureResult({
               ...createHostSendFailure('SEND_FAILED', 'Orca message was blocked by input screening'),
               source: params.meta.source, context: params.meta.context,
-            });
+            }, true);
           }
           if (outcome === 'queued') {
             // The coordinator already owns this exact clientId in a paused queue. Enqueuing
@@ -719,7 +738,7 @@ export function createOrcaInterAgentDispatcher<TSessionMeta>(
           await rollbackAcceptedForRequeue();
           return enqueueQueuedMessage('orca inter-agent message queued after SESSION_RUNNING race');
         }
-        return failureResult(result.dispatchOutcome);
+        return failureResult(result.dispatchOutcome, result.reportRejected);
       };
       const liveResult = deps.withSendToSessionLock
         ? await deps.withSendToSessionLock(params.targetSessionId, dispatchLive)
@@ -904,9 +923,10 @@ async function sendPersistedUserMessageToSession<TSessionMeta>(
     origin?: AgentInputQueuedMessage['origin'];
     onAccepted?: () => void | Promise<void>;
   },
-): Promise<CollabDirectDispatchResult> {
+): Promise<CollabDirectDispatchResult & { reportRejected?: true }> {
   const { session, dbContent, agentMessage, clientId = deps.createId(), source, context, origin, onAccepted } = params;
   let turnChangeSetStarted = false;
+  let rejected = false;
   const humanIntent = restoreAutoReviewUserIntent(await deps.readAutoReviewHistory?.(session.id) ?? []);
   const pendingHandoff = await deps.peekPendingHandoff?.(session.id);
   const outgoingMessage = pendingHandoff
@@ -933,6 +953,7 @@ async function sendPersistedUserMessageToSession<TSessionMeta>(
           await runAcceptedCallback(onAccepted, session.id, clientId, deps.log ?? defaultLog);
         },
       });
+      rejected = !sendResult.accepted;
       // Keep the handoff for retries until the target actually accepts it. It is
       // model-only context: dbContent and any requeued message stay unchanged.
       if (pendingHandoff && sendResult.accepted) deps.consumePendingHandoff?.(session.id);
@@ -944,7 +965,7 @@ async function sendPersistedUserMessageToSession<TSessionMeta>(
   if (turnChangeSetStarted && !result.dispatched) {
     deps.abortDirectTurnChangeSet(session.id);
   }
-  return result;
+  return { ...result, ...(rejected ? { reportRejected: true as const } : {}) };
 }
 
 function makeQueuedDispatchOutcome(source: string): CollabDispatchQueuedOutcome {

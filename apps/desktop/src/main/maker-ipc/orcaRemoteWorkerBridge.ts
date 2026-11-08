@@ -23,6 +23,12 @@ export interface OrcaRemoteWorkerBridgeDeps {
     ctx: McpProviderContext,
     tool: string,
     args: Record<string, unknown>,
+    reportClientId?: string,
+    onReportRejected?: () => void,
+  ): Promise<OrcaToolResult>;
+  deliverReport?(
+    proxySessionId: string, inputClientIds: readonly string[],
+    send: (clientId: string, onRejected: () => void) => Promise<OrcaToolResult>,
   ): Promise<OrcaToolResult>;
   remoteInvoke(deviceId: string, channel: string, args: unknown[]): Promise<InvokeResultPayload>;
   getActiveInputClientIds?(sessionId: string): readonly string[];
@@ -152,14 +158,14 @@ export function createOrcaRemoteWorkerBridge(deps: OrcaRemoteWorkerBridgeDeps) {
       // The model cannot supply a local context or select an arbitrary Lead. Reuse local
       // schemas, sender labels, dispatch/queue semantics and manual-report settlement.
       const settle =
-        request.tool === 'send_to_lead'
+        request.tool === 'send_to_lead' && !deps.deliverReport
           ? deps.captureReportSettlement?.(worker.sessionId, request.reportedInputClientIds ?? [])
           : undefined;
       if ((await deps.activeTeamId(request.leadSessionId)) !== teamId) {
         throwIpcError('PERMISSION_DENIED', 'worker team has ended');
       }
       assertOwner(owner);
-      const result = await deps.invokeTool(
+      const send = (reportClientId?: string, onReportRejected?: () => void) => deps.invokeTool(
         {
           sessionId: worker.sessionId,
           agentKind: worker.session.agentKind,
@@ -175,7 +181,22 @@ export function createOrcaRemoteWorkerBridge(deps: OrcaRemoteWorkerBridgeDeps) {
         },
         request.tool,
         request.args,
+        reportClientId,
+        onReportRejected,
       );
+      let result: OrcaToolResult;
+      try {
+        result = request.tool === 'send_to_lead' && deps.deliverReport
+          ? await deps.deliverReport(worker.sessionId, request.reportedInputClientIds ?? [], send)
+          : await send();
+      } catch (error) {
+        assertOwner(owner);
+        if (error instanceof Error && error.message.startsWith('[REPORT_DELIVERY_UNCONFIRMED]')) {
+          return toolError('Previous report delivery is unknown and retained. Check the Lead task before sending again; automatic reporting will not replay it.',
+            'REPORT_DELIVERY_UNCONFIRMED');
+        }
+        throw error;
+      }
       assertOwner(owner);
       if (!result.isError) await settle?.();
       return result;

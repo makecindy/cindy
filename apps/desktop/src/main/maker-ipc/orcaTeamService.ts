@@ -253,6 +253,7 @@ export interface WorkerTerminalTurnParams {
   /** Provider/session diagnostic used when an error turn has no assistant output. */
   diagnostic?: string;
   capture?: WorkerTerminalTurnCapture;
+  remoteReport?: { proxySessionId: string; inputClientIds: string[]; messageId?: string };
 }
 
 /** INPUT_STOP / ABORT_SESSION 记录的手动中断快照，用来让 terminal handler 静默收尾。 */
@@ -431,7 +432,9 @@ export interface OrcaTeamServiceDeps {
     leadSessionId: string,
     message: string,
     workerId: string,
-  ): Promise<{ accepted: boolean }>;
+    report?: WorkerTerminalTurnParams['remoteReport'],
+    reportClientId?: string,
+  ): Promise<{ accepted: boolean; reportRejected?: true }>;
   /**
    * 读取目标 session 输入队列的当前快照(pendingQueue + steering 中的 clientId)。
    * 实现方(register.ts)须先 ensureQueueRestored 再读,保证崩溃恢复条目可见。
@@ -570,6 +573,7 @@ interface AutoBridgeState {
     status: 'done' | 'error';
     finalText: string;
     diagnostic?: string;
+    remoteReport?: WorkerTerminalTurnParams['remoteReport'];
   };
 }
 
@@ -780,7 +784,7 @@ export function createOrcaTeamService(deps: OrcaTeamServiceDeps): OrcaTeamServic
 
   async function bridgeWorkerCompletion(
     sessionId: string,
-    turn: { status: 'done' | 'error'; finalText: string; diagnostic?: string },
+    turn: { status: 'done' | 'error'; finalText: string; diagnostic?: string; remoteReport?: WorkerTerminalTurnParams['remoteReport'] },
     state: AutoBridgeState | undefined,
   ): Promise<'accepted' | 'deferred' | 'rejected' | 'skipped'> {
     if (!state) return 'skipped';
@@ -814,6 +818,7 @@ export function createOrcaTeamService(deps: OrcaTeamServiceDeps): OrcaTeamServic
     try {
       accepted = (await deps.sendAutoBridgeToLead(
         state.leadSessionId, `${header}\n\n${finalText}`, state.workerId,
+        ...(turn.remoteReport ? [turn.remoteReport] as const : []),
       )).accepted;
     } catch (err) {
       deps.log.warn('orca auto-bridge failed', {

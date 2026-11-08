@@ -1,4 +1,6 @@
 import type { SessionSendOptions, SessionSendResult, UserMessage } from '@cindy/maker-core';
+import type { AgentEvent, Logger, Maker, Session } from '@cindy/maker-core';
+import { createOrcaWorkerBridgeMcpProvider } from '@cindy/orca-workflow';
 import { AUTO_REVIEW_DELEGATED_CONTINUATION, appendAutoReviewUserIntent, AUTO_REVIEW_USER_INTENT } from '@cindy/maker-core';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { readFileSync } from 'node:fs';
@@ -126,6 +128,58 @@ describe('sender-chosen steering into an active turn', () => {
     senderLabel: 'Worker', workerId: 'worker-1', meta: { source: 'orca', context: 'report-test' },
   };
   const steerReport = { ...report, delivery: 'steer' as const };
+  it.each(['cancelled', 'throw', 'accepted-then-error'] as const)('only stamps proven report rejection: %s', async mode => {
+    const session = createLiveSession(async () => {
+      if (mode === 'throw') throw new Error('send result unknown');
+      return mode === 'cancelled' ? { accepted: false, reason: 'cancelled-before-dispatch' } : { accepted: true };
+    });
+    const h = createHarness({ getLiveSession: () => session,
+      onDirectInputDispatched: async () => { throw new Error('activity write failed after acceptance'); },
+    });
+    const result = await h.dispatcher.dispatchOrEnqueueOrcaInterAgentMessage(report);
+    expect(result.ok).toBe(false);
+    expect('reportRejected' in result ? result.reportRejected : undefined).toBe(mode === 'cancelled' ? true : undefined);
+  });
+  // #9346 P2, unit: persist the real dispatcher's cold report, then recreate both
+  // dispatcher and bridge provider. Existing capture tests kept the old closure.
+  it.each(['complete', 'cancelled'] as const)('rebinds a restored report capture at acceptance: %s', async mode => {
+    const cold = createHarness({ getLiveSession: () => null });
+    await cold.dispatcher.dispatchOrEnqueueOrcaInterAgentMessage({ ...report, reportClientId: 'durable-report' });
+    const item = JSON.parse(JSON.stringify(firstQueuedItem(cold.queuedItems))) as AgentInputQueuedMessage;
+    expect(item.clientId).toBe('durable-report');
+    const listeners = new Set<(event: AgentEvent) => void>();
+    const lead = { id: 'target-session', getStatus: () => 'idle', isTurnRunning: () => false,
+      onEvent: (handler: (event: AgentEvent) => void) => { listeners.add(handler); return () => { listeners.delete(handler); }; },
+    } as unknown as Session;
+    const log = { ...mocks.logger, debug: vi.fn(), child: () => log } as unknown as Logger;
+    const provider = createOrcaWorkerBridgeMcpProvider({
+      getMaker: () => ({ getSession: () => lead }) as unknown as Maker,
+      logger: log, persistUserMessage: vi.fn(), wireSession: vi.fn(),
+      orcaTeamStore: { updateWorkerStatus: vi.fn(), getWorkerLink: async () => ({
+        workerId: 'worker-1', workerSessionId: 'worker-session', workflowId: 'team-1',
+        leadSessionId: 'target-session', leadSession: { sessionId: 'target-session', agentKind: 'codex', workingDir: '/repo', model: 'model' },
+      }) },
+    });
+    const restored = createHarness({ prepareRestoredReportAcceptance: provider.prepareLeadReportAcceptance });
+    // Startup / inspection does not capture or mark a turn running.
+    expect(listeners.size).toBe(0);
+    await restored.dispatcher.runQueuedOrcaInterAgentAcceptedCallback('target-session', item, true);
+    if (mode === 'complete') {
+      for (const fn of listeners) fn({ type: 'text', data: { text: 'Lead reply after restart', isFinal: true } } as AgentEvent);
+      for (const fn of listeners) fn({ type: 'done', data: {} } as AgentEvent);
+    }
+    await restored.dispatcher.settleQueuedOrcaInterAgentAcceptedCallback('target-session', {
+      persistUserMessage: { clientId: item.clientId, content: 'Review complete', delivery: 'turn' },
+    }, mode === 'complete' ? { kind: 'session-dispatch', source: 'maker-ipc', dispatched: true }
+      : { kind: 'session-dispatch', source: 'maker-ipc', dispatched: false,
+        reason: 'cancelled-before-dispatch', context: 'restored-report', message: 'Cancelled before dispatch' });
+    const result = await provider.invokeTool({ sessionId: 'worker-session', agentKind: 'codex', workingDir: '/repo',
+      mcpCallerAttested: true, mcpCallerKind: 'root', vendorOptions: { orcaRole: 'worker', orcaWorkerId: 'worker-1' },
+    }, 'read_lead', { worker_id: 'worker-1' });
+    expect(result.isError).toBe(false);
+    expect(JSON.parse(result.content[0]!.text)).toMatchObject(mode === 'complete'
+      ? { status: 'done', result: 'Lead reply after restart' } : { status: 'idle', result: '' });
+  });
   function setup(outcome: 'steered' | 'queued' | 'not-attempted' | 'rejected' = 'steered') {
     const live = { ...createLiveSession(async () => ({ accepted: true })),
       isTurnRunning: vi.fn(() => true), getTurnGeneration: vi.fn(() => 7),

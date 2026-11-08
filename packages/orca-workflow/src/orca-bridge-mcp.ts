@@ -177,6 +177,7 @@ export interface OrcaBridgeMcpDeps {
     source: 'lead' | 'worker';
     senderLabel: string;
     workerId?: string;
+    reportClientId?: string;
     /** 仅 send_to_lead 显式选择时传入;缺省(含 auto-bridge 自动补报)等价 'queue'。 */
     delivery?: OrcaMessageDelivery;
     onAccepted?: () => void | Promise<void>;
@@ -194,6 +195,7 @@ export interface OrcaBridgeMcpDeps {
     steerFallbackReason?: OrcaSteerFallbackReason;
   } | {
     ok: false;
+    reportRejected?: true;
     dispatchOutcome?: unknown;
   }>;
 }
@@ -750,12 +752,19 @@ async function ensureCapturedSession(
 // Codex/Pi MCP HTTP bridge 从全局 ctx 注册 server 名称，所以 worker bridge 必须
 // 对共享桥接可见。真正的执行边界在工具调用时 fail-closed：resolveWorkerLink 会读
 // 本次调用绑定的 session ctx，并校验它确实拥有解析出的 worker link。
+interface WorkerBridgeInvokeOptions {
+  manageWorkerStatus?: boolean;
+  reportClientId?: string;
+  /** Host-only proof that dispatch returned a definite rejection, not an exception. */
+  onReportRejected?: () => void;
+}
+
 export function createOrcaWorkerBridgeMcpProvider(deps: OrcaBridgeMcpDeps) {
   const log = deps.logger.child('mcp/orca_worker_bridge');
   const leadCaptures = new CapturedSessionRegistry();
   function defineTools(
     ctx: McpProviderContext, register: RegisterWorkerTool,
-    options: { manageWorkerStatus?: boolean } = {},
+    options: WorkerBridgeInvokeOptions = {},
   ): void {
       async function resolveLead(workerId?: string) {
         const resolved = await resolveWorkerLink(deps, ctx, workerId);
@@ -792,7 +801,7 @@ export function createOrcaWorkerBridgeMcpProvider(deps: OrcaBridgeMcpDeps) {
           // not bootstrap its remote Agent before the report can be retained.
           if (deps.dispatchInterAgentMessage) {
             const resolved = await resolveWorkerLink(deps, ctx, worker_id);
-            if (!resolved.ok) return text(resolved.error, true);
+            if (!resolved.ok) { options.onReportRejected?.(); return text(resolved.error, true); }
             const { link } = resolved;
             let capture: CapturedSessionEntry | undefined;
             let markAccepted: ReturnType<typeof prepareLeadAcceptance> | undefined;
@@ -811,6 +820,7 @@ export function createOrcaWorkerBridgeMcpProvider(deps: OrcaBridgeMcpDeps) {
               const result = await deps.dispatchInterAgentMessage({
                 targetSessionId: link.leadSessionId, rawContent: message, source: 'worker',
                 senderLabel: link.workerId, workerId: link.workerId,
+                ...(options.reportClientId ? { reportClientId: options.reportClientId } : {}),
                 ...(delivery ? { delivery } : {}),
                 onAccepted: () => { bindLiveLead(); markAccepted?.(); },
                 onAcceptedRollback: () => { markAccepted?.rollback(); },
@@ -820,6 +830,7 @@ export function createOrcaWorkerBridgeMcpProvider(deps: OrcaBridgeMcpDeps) {
               });
               accepted = result.ok;
               if (!result.ok) {
+                if (result.reportRejected) options.onReportRejected?.();
                 markAccepted?.rollback();
                 return text({ error: 'Lead report was not accepted; the report remains with the Worker',
                   worker_id: link.workerId, lead_session_id: link.leadSessionId }, true);
@@ -1054,14 +1065,14 @@ export function createOrcaWorkerBridgeMcpProvider(deps: OrcaBridgeMcpDeps) {
 
   const registerRoutedTools = (
     ctx: McpProviderContext, register: RegisterWorkerTool,
-    options: { manageWorkerStatus?: boolean } = {},
+    options: WorkerBridgeInvokeOptions = {},
   ) => {
     defineTools(ctx, (name, description, shape, handler) => {
       register(name, description, shape, async (args) => {
         const runtime = resolveRuntimeMcpContext(ctx);
         if (name === 'send_to_lead') {
           const authorization = authorizeSendToLeadCaller(runtime);
-          if (!authorization.ok) return text(authorization.error, true);
+          if (!authorization.ok) { options.onReportRejected?.(); return text(authorization.error, true); }
         }
         const forwarded = await deps.forwardRemoteWorkerTool?.(runtime, name, args);
         return forwarded ?? handler(args);
@@ -1077,6 +1088,13 @@ export function createOrcaWorkerBridgeMcpProvider(deps: OrcaBridgeMcpDeps) {
 
   return {
     name: 'orca_worker_bridge',
+    /** Rebind a restored report only at the real Lead acceptance boundary. */
+    prepareLeadReportAcceptance(sessionId: string) {
+      const session = deps.getMaker().getSession(sessionId);
+      if (!session) return undefined;
+      const accepted = prepareLeadAcceptance(captureLiveSession(leadCaptures, session));
+      return { accepted, rollback: accepted.rollback };
+    },
     isEnabled: enabled,
     toClaudeSdkConfig: (ctx: McpProviderContext) => {
       if (!enabled(ctx)) return null;
@@ -1091,7 +1109,7 @@ export function createOrcaWorkerBridgeMcpProvider(deps: OrcaBridgeMcpDeps) {
     /** Same handlers and schemas as MCP, after the Host attests a remote Worker link. */
     async invokeTool(
       ctx: McpProviderContext, tool: string, args: Record<string, unknown>,
-      options: { manageWorkerStatus?: boolean } = {},
+      options: WorkerBridgeInvokeOptions = {},
     ): Promise<OrcaToolResult> {
       let invoke: (() => Promise<OrcaToolResult>) | undefined;
       registerRoutedTools(ctx, (name, _description, shape, handler) => {
@@ -1101,9 +1119,12 @@ export function createOrcaWorkerBridgeMcpProvider(deps: OrcaBridgeMcpDeps) {
       return invoke();
     },
   } satisfies McpProvider & {
+    prepareLeadReportAcceptance(sessionId: string): {
+      accepted: () => void; rollback: () => void;
+    } | undefined;
     invokeTool(
       ctx: McpProviderContext, tool: string, args: Record<string, unknown>,
-      options?: { manageWorkerStatus?: boolean },
+      options?: WorkerBridgeInvokeOptions,
     ): Promise<OrcaToolResult>;
   };
 }

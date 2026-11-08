@@ -899,7 +899,14 @@ function parsePendingReport(raw: string | null): OrcaRemotePendingReport | null 
     if (!Array.isArray(value.clientIds) || value.clientIds.length === 0 || value.clientIds.length > 64 ||
       !value.clientIds.every((id) => typeof id === 'string' && id.length > 0) ||
       !(value.baselineMessageId === null || typeof value.baselineMessageId === 'string')) return null;
-    return { clientIds: value.clientIds, baselineMessageId: value.baselineMessageId };
+    const delivery = value.delivery;
+    if (delivery !== undefined && (!delivery || typeof delivery.clientId !== 'string' || !delivery.clientId ||
+      !Array.isArray(delivery.inputClientIds) || !delivery.inputClientIds.length || delivery.inputClientIds.length > 64 ||
+      !delivery.inputClientIds.every(id => typeof id === 'string' && id.length > 0) ||
+      (delivery.kind !== 'manual' && delivery.kind !== 'automatic') ||
+      (delivery.messageId !== undefined && typeof delivery.messageId !== 'string'))) return null;
+    return { clientIds: value.clientIds, baselineMessageId: value.baselineMessageId,
+      ...(delivery ? { delivery } : {}) };
   } catch { return null; }
 }
 

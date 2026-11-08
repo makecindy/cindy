@@ -9,6 +9,7 @@
  *  - 结束：归档或结束团队时通知运行设备 release，失败的留待重连后补发。
  */
 import { createId } from '@paralleldrive/cuid2';
+import { readInputDeliveryReceipts } from '../localDb/agentInputQueueSnapshots.js';
 import {
   DeviceLinkError,
   ORCA_REMOTE_WORKER_CAPS_CHANNEL,
@@ -156,6 +157,18 @@ export function createOrcaRemoteWorkers(deps: OrcaRemoteWorkersDeps) {
   }
 
   const runtime: OrcaRemoteWorkerRuntime = createOrcaRemoteWorkerRuntime({
+    createReportId: createId,
+    readLeadReportReceipt: async (lead, clientId) => (await readInputDeliveryReceipts(lead, [clientId]))[0]?.state ?? 'unknown',
+    captureReportedTurn: (sessionId) => {
+      const service = deps.getTeamService();
+      const capture = service?.captureWorkerTerminalTurn(sessionId);
+      const owner = ownerToken();
+      return async commit => {
+        assertOwner(owner);
+        if (!service || !capture) throw new Error('remote worker team unavailable');
+        await service.settleReportedWorker(capture, commit);
+      };
+    },
     invoke,
     deviceName: nameOf,
     saveReport: saveWorkerRemoteReport,
@@ -167,13 +180,14 @@ export function createOrcaRemoteWorkers(deps: OrcaRemoteWorkersDeps) {
       const service = deps.getTeamService();
       const capture = service?.captureWorkerTerminalTurn(proxySessionId);
       const owner = ownerToken();
-      return async (turn: RemoteWorkerTurnEnd) => {
+      return async (turn: RemoteWorkerTurnEnd, remoteReport) => {
         if (!service || !capture || owner !== ownerToken()) return false;
         await service.handleWorkerTerminalTurn({
           sessionId: proxySessionId,
           status: turn.status,
           finalText: turn.finalText,
           capture,
+          remoteReport,
           ...(turn.diagnostic ? { diagnostic: turn.diagnostic } : {}),
         });
         return (
@@ -320,6 +334,7 @@ export function createOrcaRemoteWorkers(deps: OrcaRemoteWorkersDeps) {
 
   return {
     runtime,
+    runReportDelivery: runtime.runReportDelivery,
     captureReportSettlement(sessionId: string, reportedInputClientIds: readonly string[]): () => Promise<void> {
       const service = deps.getTeamService();
       const capture = service?.captureWorkerTerminalTurn(sessionId);
@@ -681,6 +696,15 @@ export function createOrcaRemoteWorkers(deps: OrcaRemoteWorkersDeps) {
     const remote = (sessionId: string) => runtime.isRemote(sessionId);
     const wrapped: OrcaTeamServiceDeps = {
       ...base,
+      sendAutoBridgeToLead: (lead, message, workerId, report) => report
+        ? runtime.runReportDelivery(report.proxySessionId, report.inputClientIds,
+          async (clientId, onRejected) => {
+            const result = await base.sendAutoBridgeToLead(lead, message, workerId, undefined, clientId);
+            if (!result.accepted && result.reportRejected) onRejected();
+            return result;
+          },
+          result => result.accepted, { messageId: report.messageId, alreadyReported: { accepted: true } })
+        : base.sendAutoBridgeToLead(lead, message, workerId),
       // 远端 Worker 在本机永远没有活会话；只有运行设备正在跑时才视为在线，
       // 否则按「已恢复」派发(恢复本身是空操作)，wake_kind 与实际一致。
       getLiveSession: (sessionId) =>

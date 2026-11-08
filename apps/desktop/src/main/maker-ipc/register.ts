@@ -1,4 +1,5 @@
 import { registerRuntimeSettingsSection } from '../app-settings/runtime.js';
+import { prepareRestoredOrcaReportAcceptance } from '../maker-host/index.js';
 import { z as settingsSchema } from 'zod';
 import { registerPreferenceControlIpc } from '../app-settings/preferences.js';
 import { configureModelSettingsActions } from '../app-settings/models.js';
@@ -3242,6 +3243,14 @@ export function captureRemoteWorkerReportSettlement(
 ): () => Promise<void> {
   return orcaRemoteWorkersForHost?.captureReportSettlement(sessionId, reportedInputClientIds)
     ?? (async () => {});
+}
+
+export function deliverRemoteWorkerReport<T>(
+  sessionId: string, inputClientIds: readonly string[], send: (clientId: string, onRejected: () => void) => Promise<T>,
+  isAccepted: (result: T) => boolean,
+): Promise<T> {
+  if (!orcaRemoteWorkersForHost) throw new Error('remote worker runtime unavailable');
+  return orcaRemoteWorkersForHost.runReportDelivery(sessionId, inputClientIds, send, isAccepted);
 }
 
 function markWorkerManualInterruptIfKnown(
@@ -15931,6 +15940,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
   }
 
   const orcaInterAgentDispatcher: OrcaInterAgentDispatcher = createOrcaInterAgentDispatcher({
+    prepareRestoredReportAcceptance: prepareRestoredOrcaReportAcceptance,
     onDirectInputDispatched: sessionId => touchSessionActivityInDb(sessionId),
     readAutoReviewHistory: sessionId => readAutoReviewHistory(sessionId),
     createId,
@@ -16748,9 +16758,10 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       inputCoordinator.mergeQueuedMessagesAtomically(sessionId, clientIds, buildReplacement).merged,
     steerStoredQueuedMessage: steerStoredControlMessage,
     moveQueuedMessage: moveStoredControlMessage,
-    sendAutoBridgeToLead: async (leadSessionId, message, workerId) => {
+    sendAutoBridgeToLead: async (leadSessionId, message, workerId, _report, reportClientId) => {
       const result = await dispatchInterAgentMessage({
         targetSessionId: leadSessionId,
+        ...(reportClientId ? { reportClientId } : {}),
         rawContent: message,
         source: 'worker',
         senderLabel: 'Worker',
@@ -16760,7 +16771,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
           context: `worker_auto_bridge/${leadSessionId}/${workerId}`,
         },
       });
-      return { accepted: result.ok };
+      return { accepted: result.ok, ...(!result.ok && result.reportRejected ? { reportRejected: true as const } : {}) };
     },
     log,
   }));
@@ -20969,7 +20980,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       schedulerQueuedPromptPreparations.delete(item.clientId);
       // 返回 promise 让 coordinator 在 onPersisted 链路里 await —— worker 运行态与
       // pending auto-bridge 副作用必须先于 turn 启动完成；失败仍吞错落日志，不拦派发。
-      await orcaInterAgentDispatcher.runQueuedOrcaInterAgentAcceptedCallback(sessionId, item);
+      await orcaInterAgentDispatcher.runQueuedOrcaInterAgentAcceptedCallback(sessionId, item, restoredFromSnapshot);
       await botDelegationServiceHolder?.acceptQueuedSessionInput(sessionId, item.clientId, item.supersedesUserClientId, restoredFromSnapshot, item.retrySourceClientId);
       const pluginTaskSession = maker.getSession(sessionId);
       if (pluginTaskSession && pluginTaskServiceForCurrentOwner) {
