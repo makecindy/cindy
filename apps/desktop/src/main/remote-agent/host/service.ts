@@ -168,10 +168,10 @@ export function createProviderShareMemberPurger(options: {
   ownerDeviceId: () => string | null | undefined;
   isCurrent: () => boolean;
   hasAccess: (controller: string) => boolean;
-}): (match: (controller: string) => boolean) => Promise<void> {
+}): (match: (controller: string) => boolean, requireComplete?: boolean) => Promise<void> {
   const { usage, current } = options;
   let memberPurgeWork: Promise<void> = Promise.resolve();
-  const purgeMemberControllers = (match: (controller: string) => boolean): Promise<void> => {
+  const purgeMemberControllers = (match: (controller: string) => boolean, requireComplete = false): Promise<void> => {
     const work = memberPurgeWork.then(async () => {
       const ownerScope = options.ownerScope();
       const ownerDeviceId = options.ownerDeviceId();
@@ -219,7 +219,7 @@ export function createProviderShareMemberPurger(options: {
         assertCurrent();
         await usage.rememberMemberCleanupScopes(member, scopes);
       }
-      await current.purgeControllers(guarded);
+      await current.purgeControllers(guarded, requireComplete);
       assertCurrent();
       // runHost's legacy cleanup is best effort. Retain the membership fence
       // until its durable index and pending relay forgets are actually empty.

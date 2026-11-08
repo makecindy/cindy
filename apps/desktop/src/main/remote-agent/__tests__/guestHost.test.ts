@@ -12,6 +12,7 @@
  */
 import { createHash } from 'node:crypto';
 import fs from 'node:fs';
+import fsp from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 
@@ -240,6 +241,36 @@ describe('guest shadow workspace', () => {
       expect(reserved).toBe(false);
       expect(started[0].sends).toHaveLength(0);
     } finally { host.dispose(); }
+  });
+
+  it.each([
+    { purged: false, ownerChanged: false }, { purged: true, ownerChanged: false }, { purged: true, ownerChanged: true },
+  ])('retries completion after close within its owner (purged=$purged, ownerChanged=$ownerChanged)', async ({ purged, ownerChanged }) => {
+    vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval'] });
+    const started: Started[] = [];
+    const complete = vi.fn().mockRejectedValueOnce(new Error('offline')).mockResolvedValue(undefined);
+    let ownerCurrent = true;
+    const host = makeHost(started, { ownerCurrent: () => ownerCurrent, isTurnRunning: () => true, directGuestExecution: {
+      ownerScope: () => 'fake-owner', sessionAllowed: () => true, sessionDelegated: () => true,
+      beginDelegatedTurn: async (_controller, _session, _execution, capture) => { capture(complete); },
+      allocate: async () => null, status: () => {}, release: async () => {},
+      switch: async () => ({}), usage: async () => {}, delegate: async () => true, forget: () => true,
+    } });
+    try {
+      await host.handle(GUEST, { op: 'open', runId: RUN_1, agentKind: 'claude-code', payload: { json: openPayload('standby-task') } });
+      await waitForStarted(host, GUEST, RUN_1);
+      await host.handle(GUEST, { op: 'call', runId: RUN_1, callId: CALL_1, method: 'send', payload: { json: [{ content: 'fake', attachments: [] }] } });
+      await vi.waitFor(() => expect(started[0].sends).toHaveLength(1));
+      if (purged) await host.purgeControllers(controller => controller === GUEST);
+      else await host.abortControllers(controller => controller === GUEST);
+      expect(complete).toHaveBeenCalledTimes(1);
+      expect(host.runCount()).toBe(0);
+      ownerCurrent = !ownerChanged;
+      await vi.advanceTimersByTimeAsync(5_000);
+      await vi.waitFor(() => expect(complete).toHaveBeenCalledTimes(ownerChanged ? 1 : 2));
+      await vi.advanceTimersByTimeAsync(70_000);
+      expect(complete).toHaveBeenCalledTimes(ownerChanged ? 1 : 2);
+    } finally { await host.dispose(); vi.useRealTimers(); }
   });
 
   it('requires standby assignment acceptance before starting the fake engine', async () => {
@@ -878,6 +909,40 @@ describe('guest provider access and usage', () => {
 });
 
 describe('purgeController', () => {
+  it.each(['directory', 'transcript', 'index'] as const)('retains retryable guest records when strict %s cleanup fails', async failure => {
+    const started: Started[] = [];
+    const purge = vi.fn(async () => {});
+    const host = makeHost(started, { purge });
+    try {
+      await host.handle(GUEST, { op: 'open', runId: RUN_1, agentKind: 'claude-code', payload: { json: openPayload('task-1') } });
+      await waitForStarted(host, GUEST, RUN_1);
+      const index = path.join(runsRoot, 'guest-sessions.json');
+      fs.mkdirSync(guestHome(GUEST), { recursive: true });
+      fs.writeFileSync(path.join(guestHome(GUEST), 'history'), 'fake private history');
+      const error = Object.assign(new Error('cleanup busy'), { code: 'EBUSY' });
+      const remove = fsp.rm.bind(fsp);
+      const rename = fsp.rename.bind(fsp);
+      const rmSpy = vi.spyOn(fsp, 'rm').mockImplementation(async (target, options) => {
+        if (failure === 'directory' && String(target) === guestHome(GUEST)) throw error;
+        await remove(target, options);
+      });
+      const renameSpy = vi.spyOn(fsp, 'rename').mockImplementation(async (source, target) => {
+        if (failure === 'index' && String(target) === index) throw error;
+        await rename(source, target);
+      });
+      if (failure === 'transcript') purge.mockRejectedValueOnce(error);
+      await expect(host.purgeControllers(controller => controller === GUEST, true)).rejects.toThrow('cleanup busy');
+      expect(Object.values(JSON.parse(fs.readFileSync(index, 'utf8')))).toEqual([
+        expect.objectContaining({ controller: GUEST, nativeIds: [expect.any(String)] }),
+      ]);
+      if (failure === 'directory') expect(fs.existsSync(path.join(guestHome(GUEST), 'history'))).toBe(true);
+      rmSpy.mockRestore(); renameSpy.mockRestore();
+      await host.purgeControllers(controller => controller === GUEST, true);
+      expect(fs.existsSync(guestHome(GUEST))).toBe(false);
+      expect(JSON.parse(fs.readFileSync(index, 'utf8'))).toEqual({});
+    } finally { vi.restoreAllMocks(); await host.dispose(); }
+  });
+
   it('removes the guest workspace, guest home, session index and transcripts', async () => {
     const started: Started[] = [];
     const purged: Array<{ ids: string[]; nativeIds: string[] }> = [];

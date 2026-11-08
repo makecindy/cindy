@@ -463,7 +463,7 @@ export interface RemoteAgentHandler {
   /** 结束匹配控制端替某个人(转分享键)转来的任务(转分享的同意被撤回)。 */
   abortReshare?(match: (controller: string) => boolean, reshareKey: string): Promise<void>;
   /** 结束并清理匹配控制端留在本机的数据(供应商分享被删除)。 */
-  purgeControllers?(match: (controller: string) => boolean): Promise<void>;
+  purgeControllers?(match: (controller: string) => boolean, requireComplete?: boolean): Promise<void>;
   /** 有进行中任务的控制端。 */
   activeControllers?(): string[];
   limitUsage?(): RemoteAgentLimitUsage;
@@ -4633,6 +4633,7 @@ export function providerShareActiveControllers(): string[] {
 export async function revokeProviderShareControllers(
   match: (controller: string) => boolean,
   purge: boolean,
+  requireComplete = false,
 ): Promise<void> {
   const guarded = (controller: string) => isProviderSharePeer(controller) && match(controller);
   const client = activeClient;
@@ -4654,7 +4655,8 @@ export async function revokeProviderShareControllers(
     }
   }
   const handler = remoteAgentHandler;
-  await (purge ? handler?.purgeControllers?.(guarded) : handler?.abortControllers?.(guarded));
+  if (purge && requireComplete && !handler?.purgeControllers) throw new Error('Provider share cleanup is unavailable');
+  await (purge ? handler?.purgeControllers?.(guarded, requireComplete) : handler?.abortControllers?.(guarded));
 }
 
 /**
@@ -5249,4 +5251,4 @@ export function remoteAgentLimitUsage(): RemoteAgentLimitUsage {
   return remoteAgentHandler?.limitUsage?.() ?? { total: 0, devices: 0, largestDevice: 0 };
 }
 
-configureStandbyGuestCleanup(controller => revokeProviderShareControllers(peer => peer === controller, true));
+configureStandbyGuestCleanup(controller => revokeProviderShareControllers(peer => peer === controller, true, true));
