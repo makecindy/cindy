@@ -301,7 +301,11 @@ export async function copyCodexAuthSnapshot(
     }
     // 时间戳打在 sidecar 上:随 rename 原子生效,发布后不再按路径改时间
     // (本机 Codex 在 rename 之后刷新的话,按路径改会把新凭证盖上旧代次时间戳)。
-    await fsp.utimes(sidecar, sourceStat.atime, sourceStat.mtime).catch(() => undefined);
+    await fsp.utimes(
+      sidecar,
+      codexAuthTimestampSeconds(sourceStat.atimeNs),
+      codexAuthTimestampSeconds(sourceStat.mtimeNs),
+    ).catch(() => undefined);
     await fsp.rename(sidecar, myAuth);
     await fsp.rm(sidecar, { force: true }).catch(() => undefined);
     return { kind: 'copied' };
@@ -377,6 +381,16 @@ export async function codexAuthPathsShareIdentity(left: string, right: string): 
   } catch {
     return false;
   }
+}
+
+/**
+ * 凭证代次的时间戳(秒,µs 精度)。Date 只有 ms 精度:number stat 的 Date 会把
+ * X.999999ms 四舍五入成 X+1ms,bigint stat 的 Date 则截断成 X —— 两者都会让
+ * 「发布的那份带着源那一代的时间戳」偏 1ms,下一次对账的等 mtime 判定就会把它
+ * 当成另一代。这里直接用 ns 换算,保留源的真实代次。
+ */
+function codexAuthTimestampSeconds(ns: bigint): number {
+  return Number(ns / 1000n) / 1e6;
 }
 
 /** 系统凭证当前的硬链数(读不到时返回 undefined)。 */
@@ -465,7 +479,7 @@ async function breakResidualCodexHardlinksDetailed(
     return { broke: false, generationChanged: false };
   }
   const mode = Number(stat.mode & 0o777n);
-  const mtime = new Date(Number(stat.mtimeMs));
+  const mtime = codexAuthTimestampSeconds(stat.mtimeNs);
   const sidecar = `${file}.${process.pid}.${sidecarCounter++}.copytmp`;
   try {
     await fsp.writeFile(sidecar, content, { mode });
