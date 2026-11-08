@@ -58,6 +58,81 @@ async function fixture(initialState: BlueBubblesState | null = null, media?: IMH
 }
 
 describe('BlueBubbles local ingress', () => {
+  // Tier 1, #9250/r4506280350: an unresolved download/stage must not hold
+  // another chat, a confirmation or stop; ordinary same-chat work stays ordered.
+  it.each(['download', 'stage'])('handles controls and other chats while %s is still in flight', async phase => {
+    let started!: () => void, release!: () => void;
+    const preparing = new Promise<void>(resolve => { started = resolve; });
+    const held = new Promise<void>(resolve => { release = resolve; });
+    const f = await fixture(null, undefined, true, { stage: async () => {
+      if (phase === 'stage') { started(); await held; }
+      return { absPath: '/synthetic/held.txt', discard: async () => {} };
+    } });
+    vi.spyOn(f.api, 'download').mockImplementation(async () => {
+      if (phase === 'download') { started(); await held; }
+      return new Uint8Array([1]);
+    });
+    let answer: string | undefined;
+    void f.im.requestTextReply(f.chat.guid, 'Confirm?', text => text === 'yes' ? text : null)
+      .then(value => { answer = value; }, () => {});
+    f.im.onMessage(event => {
+      event.delivery!.awaitPersistence();
+      if (event.text === '/stop') expect(event.delivery!.cancelPending!()).toBe(2);
+      event.delivery!.accept();
+    });
+    try {
+      f.message('slow-preparation', { attachments: [{ guid: 'held', transferName: 'held.txt' }] });
+      await f.webhook('slow-preparation'); await preparing;
+      f.message('same-chat-queued'); await f.webhook('same-chat-queued');
+      f.message('other-chat-free', { chats: [f.otherChat] }); await f.webhook('other-chat-free');
+      f.message('control-answer', { text: 'yes' }); await f.webhook('control-answer');
+      await new Promise<void>(resolve => setImmediate(resolve));
+      expect(answer).toBe('yes');
+      expect(f.state().inbox['other-chat-free'].state).toBe('accepted');
+      expect(f.state().inbox['same-chat-queued'].state).toBe('pending');
+      // Stop cancels both earlier ordinary inputs, including the in-flight one.
+      f.message('control-stop', { text: '/stop' });
+      await f.webhook('control-stop');
+      await new Promise<void>(resolve => setImmediate(resolve));
+      expect(f.state().inbox['control-stop'].state).toBe('accepted');
+      expect(f.state().inbox['slow-preparation'].state).toBe('ignored');
+      expect(f.state().inbox['same-chat-queued'].state).toBe('ignored');
+      f.message('after-stop'); await f.webhook('after-stop');
+      await new Promise<void>(resolve => setImmediate(resolve));
+      expect(f.state().inbox['after-stop'].state).toBe('accepted');
+    } finally { release(); await f.im.reconcile(); }
+    expect(f.received.some(event => ['slow-preparation', 'same-chat-queued'].includes(event.messageId!))).toBe(false);
+    expect(f.api.download).toHaveBeenCalledTimes(1);
+  });
+
+  // The new preparation slots must also preserve the successful file path:
+  // a later file waits in the same chat and both are dispatched once, in order.
+  it('serializes same-chat attachments and resumes their original order after a slow download', async () => {
+    let started!: () => void, release!: () => void;
+    const preparing = new Promise<void>(resolve => { started = resolve; });
+    const held = new Promise<void>(resolve => { release = resolve; });
+    const stage = vi.fn(async ({ fileName }: { fileName: string }) => ({ absPath: `/synthetic/${fileName}` }));
+    const f = await fixture(null, undefined, false, { stage });
+    const download = vi.spyOn(f.api, 'download').mockImplementation(async guid => {
+      if (guid === 'first-file') { started(); await held; }
+      return new Uint8Array([1]);
+    });
+    try {
+      f.message('slow-first', { attachments: [{ guid: 'first-file', transferName: 'first.txt' }] });
+      await f.webhook('slow-first'); await preparing;
+      f.message('queued-second', { attachments: [{ guid: 'second-file', transferName: 'second.txt' }] });
+      await f.webhook('queued-second');
+      await new Promise<void>(resolve => setImmediate(resolve));
+      expect(download.mock.calls.map(([guid]) => guid)).toEqual(['first-file']);
+      expect(f.received).toEqual([]);
+    } finally { release(); await f.im.reconcile(); }
+    expect(f.received.map(event => event.messageId)).toEqual(['slow-first', 'queued-second']);
+    expect(f.received.map(event => event.attachments[0].absPath)).toEqual(['/synthetic/first.txt', '/synthetic/second.txt']);
+    expect(download.mock.calls.map(([guid]) => guid)).toEqual(['first-file', 'second-file']);
+    expect(stage).toHaveBeenCalledTimes(2);
+    for (const guid of ['slow-first', 'queued-second']) expect(f.state().inbox[guid].state).toBe('accepted');
+  });
+
   // Tier 1, #9250/r4506188535: stop may cancel a still-running preparation
   // before its download/staging rejects; the terminal GUID must not gain a retry.
   it.each(['download', 'stage'])('does not retry a cancelled input whose in-flight %s fails later', async phase => {
