@@ -6,7 +6,8 @@ import { createHash, randomUUID } from 'node:crypto';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { managedConfig, runtimeEnv } from './managed.mjs';
 import { prepare, main, run, packageHash, verifyReport, verifyUpgradeSnapshot } from '../personal-build.mjs';
-import { nativeIdentity } from './native-capabilities.mjs';
+import {selectRuntime} from './runtime-store.mjs';
+import { nativeIdentity, verifyDeveloperSignature } from './native-capabilities.mjs';
 import { checkCheckout } from './checkout-guard.mjs';
 import { RecoveryJournal, durableWrite, compatibility } from './recovery.mjs';
 
@@ -139,10 +140,17 @@ function hasLaunchRunner(c, release, dataDir = c.runtime.dataDir) {
 }
 // Keep credential identity resolution inside the launched terminal, before the
 // restart wrapper snapshots its environment. Legacy and supervised starts share it.
-export const personalLaunchCommand = 'stty cols 120 rows 40; source "$PERSONAL_TOOLS_DIR/credential-signing.zsh" || exit 1; resolve_signing_identity || exit 1; exec "$@"';
+export const personalLaunchCommand = 'source "$PERSONAL_TOOLS_DIR/credential-signing.zsh" || exit 1; resolve_signing_identity || exit 1; exec "$@"';
 function start(c, release, { mock = false } = {}) {
   check(process.stdin.isTTY, 'Run the personal developer launcher in Terminal; a live TTY is required for the repository startup wrapper');
   verifyRelease(release);
+  const nativeFile = path.join(release.directory, 'apps/desktop/resources/personal-native.json');
+  const runtime = fs.existsSync(nativeFile) ? read(nativeFile).runtime : null;
+  if (runtime && !mock) selectRuntime(runtime, {verifySignature:verifyDeveloperSignature, isRunning:app => {
+    const ps = spawnSync('ps', ['-axo','command='], {encoding:'utf8',maxBuffer:64*1024*1024});
+    check(ps.status === 0, 'Cannot check runtime ownership');
+    return ps.stdout.includes(app + '/Contents/MacOS/Electron');
+  }});
   const generation = randomUUID(), dir = path.join(root(c), 'launches', generation);
   fs.mkdirSync(dir, { recursive: true, mode: 0o700 }); fs.chmodSync(dir, 0o700);
   const env = runtimeEnv(c, cli);
@@ -150,15 +158,23 @@ function start(c, release, { mock = false } = {}) {
   env.CINDY_PERSONAL_MONITOR_DIR = dir; env.CINDY_PERSONAL_GENERATION = generation;
   const mode = mock ? [`--isolated=personal-smoke-${generation.slice(0, 8)}`, '--mock'] : c.runtime.mode === 'shared' ? ['--shared'] : [`--isolated=${c.name}`, ...(c.automatic.mock ? ['--mock'] : [])];
   const log = path.join(dir, 'console.log');
-  const child = spawn('/usr/bin/script', ['-q', log, '/bin/zsh', '-c', personalLaunchCommand, 'personal-build', 'pnpm', 'restart:desktop:remote', '--', `--region=${c.region}`, ...mode], {
-    // Match the existing .command launcher: /dev/null closes Forge before Electron starts,
-    // and Node socket-backed pipes are rejected by macOS script's terminal ioctl.
-    cwd: release.directory, env, detached: true, stdio: ['inherit', 'ignore', 'ignore'],
-  });
-  let exited = false, error;
-  child.once('error', e => { error = e; exited = true; }); child.once('exit', () => { exited = true; });
+  // Let the repository wrapper own Terminal and its bounded log drain. A nested
+  // script PTY is not needed; it can leave Electron alive after the wait-ready
+  // wrapper exits while Forge/Vite lose their terminal. Regular file output also
+  // prevents application logs from depending on the supervisor's PTY consumer.
+  const output = fs.openSync(log, 'a', 0o600);
+  let child;
+  try {
+    child = spawn('/bin/zsh', ['-c', personalLaunchCommand,
+      'personal-build', c.runtime.node, path.join(release.directory, 'scripts/desktop-restart-runner.mjs'),
+      '--wait-ready', `--region=${c.region}`, ...mode], {
+      cwd: release.directory, env, detached: true, stdio: ['ignore', output, output],
+    });
+  } finally { fs.closeSync(output); }
+  let exited = false, error, exitCode;
+  child.once('error', e => { error = e; exited = true; }); child.once('exit', (code) => { exitCode = code; exited = true; });
   if (child.pid) durableWrite(path.join(dir, 'runner.json'), { pid: child.pid, directory: release.directory, smoke: mock, generation });
-  return { generation, dir, log, child, mode, get exited() { return exited; }, get error() { return error; } };
+  return { generation, dir, log, child, mode, get exited() { return exited; }, get error() { return error; }, get exitCode() { return exitCode; } };
 }
 export function readHeartbeat(runInfo, expectedPid, { now = Date.now(), remote = true } = {}) {
   try {
@@ -171,6 +187,7 @@ async function waitReady(c, release, launched, dataDir, requireHeartbeat) {
   const deadline = Date.now() + c.automatic.startupSeconds * 1000;
   while (Date.now() < deadline) {
     if (launched.error) throw launched.error;
+    if (launched.exited && launched.exitCode !== 0) throw new Error(`Desktop startup wrapper failed (exit ${launched.exitCode}); see ${launched.log}`);
     const s = snapshot(c, release, dataDir);
     if (s.ready && s.pid && (!requireHeartbeat || readHeartbeat(launched, s.pid, { remote: c.automatic.requireRemote })?.healthy)) return s.pid;
     if (launched.exited && !s.pid && !s.unknown) throw new Error('Application exited before readiness');

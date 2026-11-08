@@ -195,9 +195,14 @@ export function identifyDesktopProcesses(processes, worktrees) {
   const result = [];
   for (const worktree of worktrees) {
     const electronRoot = path.join(worktree.rootDir, 'node_modules', 'electron');
+    const native = readJson(path.join(worktree.rootDir, 'apps/desktop/resources/personal-native.json'));
+    const sharedExecutable = typeof native?.runtime?.directory === 'string'
+      ? path.join(native.runtime.directory, 'Cindy.app/Contents/MacOS/Electron') : null;
     for (const proc of processes) {
       if (
-        !commandContainsPath(proc.command, electronRoot) ||
+        !(commandContainsPath(proc.command, electronRoot) || sharedExecutable &&
+          proc.command.startsWith(sharedExecutable + ' ') &&
+          commandContainsPath(proc.command, path.join(worktree.rootDir, 'apps/desktop'))) ||
         proc.command.includes('--type=') ||
         proc.command.includes('crashpad_handler')
       ) continue;

@@ -1777,3 +1777,23 @@ test("readDesktopDevLogTail strips terminal control sequences and keeps the last
 		fs.rmSync(dir, { recursive: true, force: true });
 	}
 });
+
+// Shared signed runtimes must still identify each release/profile independently;
+// otherwise an upgrade can overlook a running instance or claim another release ready.
+// Minimal input: two releases sharing one binary; only one has a live renderer. Tier: unit + temp receipt.
+test('whoami attributes a shared personal shell to its business checkout', () => {
+ const dir=fs.mkdtempSync(path.join(os.tmpdir(),'shared-shell-whoami-'));
+ try {
+  const roots=['first','second'].map(n=>path.join(dir,n)), runtime=path.join(dir,'runtime');
+  for(const root of roots){const resources=path.join(root,'apps/desktop/resources');fs.mkdirSync(resources,{recursive:true});
+   fs.writeFileSync(path.join(resources,'personal-native.json'),JSON.stringify({runtime:{directory:runtime}}));}
+  const binary=path.join(runtime,'Cindy.app/Contents/MacOS/Electron');
+  const processes=[{pid:11,ppid:1,command:`${binary} ${roots[0]}/apps/desktop`},
+   {pid:12,ppid:11,command:`helper --type=renderer --app-path=${roots[0]}/apps/desktop --user-data-dir=${dir}/sandbox`},
+   {pid:21,ppid:1,command:`${binary} ${roots[1]}/apps/desktop`}];
+  const found=identifyDesktopProcesses(processes,roots.map(rootDir=>({rootDir,branch:null})));
+  assert.deepEqual(found.map(i=>[i.pid,i.rootDir,i.ready]),[[11,roots[0],true],[21,roots[1],false]]);
+  assert.equal(isRepositoryDesktopDevProcess(processes[0],[roots[0]],999),true);
+  assert.equal(isRepositoryDesktopDevProcess(processes[0],[roots[1]],999),false);
+ } finally {fs.rmSync(dir,{recursive:true,force:true});}
+});

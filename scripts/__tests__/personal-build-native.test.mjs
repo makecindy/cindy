@@ -51,3 +51,29 @@ test('personal bundle identity is stable across releases and separates named pro
  assert.notEqual(personalBundleId('me','global'),personalBundleId('another','global'));
  assert.match(personalBundleId('a b/复杂','global'),/^app\.cindy\.personal\.[a-f0-9]{16}$/);
 });
+
+// Value: production prepare/select must reuse a signed shell for distinct business releases,
+// retain the previous shell and refuse tampering/live replacement. Existing tests only covered
+// per-checkout copies. Minimal fixture: two runtime keys, one active shell. Tier: filesystem integration.
+test('runtime reuse, failure isolation, live selection guard and previous-version retention',async()=>{
+ const {prepareRuntime,selectRuntime,verifyRuntime}=await import('../personal-build/runtime-store.mjs');
+ const store=fs.mkdtempSync(path.join(os.tmpdir(),'personal-runtime-store-'));
+ try {
+  let builds=0;
+  const options={store,inputs:{electron:'1',native:'a'},signingIdentity:'fixture',
+   build:app=>{builds++;fs.mkdirSync(app);fs.writeFileSync(path.join(app,'binary'),'runtime');},verifySignature:()=>{}};
+  const first=prepareRuntime(options), same=prepareRuntime(options);
+  assert.deepEqual(first,same);assert.equal(builds,1);
+  const link=selectRuntime(first,{isRunning:()=>false,verifySignature:()=>{}});
+  const second=prepareRuntime({...options,inputs:{electron:'2',native:'a'}});
+  assert.equal(fs.realpathSync(link),path.join(first.directory,'Cindy.app'));
+  assert.throws(()=>selectRuntime(second,{isRunning:()=>true,verifySignature:()=>{}}),/still in use/);
+  selectRuntime(second,{isRunning:()=>false,verifySignature:()=>{}});
+  assert.equal(fs.realpathSync(link),path.join(second.directory,'Cindy.app'));
+  verifyRuntime(first);
+  assert.throws(()=>prepareRuntime({...options,inputs:{electron:'bad'},build:()=>{throw Error('signing failed');}}),/signing failed/);
+  assert.equal(fs.realpathSync(link),path.join(second.directory,'Cindy.app'));
+  fs.writeFileSync(path.join(first.directory,'Cindy.app/binary'),'tampered');
+  assert.throws(()=>prepareRuntime(options),/runtime changed/);
+ }finally{fs.rmSync(store,{recursive:true,force:true});}
+});

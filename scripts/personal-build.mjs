@@ -35,6 +35,9 @@ export function configFrom(file) {
     invariant(!repo.exclude || (Array.isArray(repo.exclude) && repo.exclude.every(n => Number.isSafeInteger(n) && n > 0)), `${key}: exclude must contain PR numbers`);
   }
   invariant(!c.author || /^[a-z\d](?:[a-z\d-]{0,38})$/i.test(c.author), 'Invalid GitHub author');
+  for (const key of ['stateDir','dataDir']) {
+    if (typeof c.runtime?.[key] === 'string') c.runtime[key] = path.resolve(base, c.runtime[key]);
+  }
   c.localPlugins ??= {};
   invariant(c.localPlugins && !Array.isArray(c.localPlugins) && typeof c.localPlugins === 'object', 'localPlugins must be an object');
   if (c.localPluginSources !== undefined) {
@@ -362,8 +365,8 @@ export async function main(argv) {
     try {
       pnpm(['install', '--frozen-lockfile'], r.directory);
       for (const args of [['--filter', 'desktop', 'db:validate'], ['check:design-inventory'], ['--filter', 'desktop', 'run', 'typecheck']]) pnpm(args, r.directory);
-      const { prepareNativeCapabilities } = await import('./personal-build/native-capabilities.mjs');
-      r.nativeCapabilities = prepareNativeCapabilities(r.directory, {name:r.name, region:r.region});
+      const { prepareStableNativeCapabilities } = await import('./personal-build/native-capabilities.mjs');
+      r.nativeCapabilities = prepareStableNativeCapabilities(r.directory, {name:r.name, region:r.region, stateDir:r.configuration.runtime?.stateDir, dataDir:r.configuration.runtime?.dataDir});
       verifyReport(file); r.state = 'checked'; r.checkedAt = new Date().toISOString(); write(file, r);
     } catch (error) { r.state = 'prepared'; r.checkError = error.message; write(file, r); throw error; }
     return;

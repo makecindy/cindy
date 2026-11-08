@@ -469,6 +469,7 @@ function hasDesktopDevSignature(command) {
     command.includes('dev:desktop') ||
     command.includes('pnpm --filter desktop dev') ||
     command.includes('/node_modules/electron/') ||
+    (command.includes('/cindy.app/contents/macos/electron ') && command.includes('/apps/desktop')) ||
     (command.includes('/apps/desktop/') && (
       command.includes('vite.main.config') ||
       command.includes('vite.renderer.config') ||

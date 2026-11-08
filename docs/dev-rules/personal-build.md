@@ -470,8 +470,10 @@ release identity includes this receipt and validates its files before activation
 native artifacts invalidate the candidate. A rebuilt native runtime can therefore be a distinct
 release even when its source commit has not changed. Test actual Live Activity availability after
 isolated startup; do not equate a built addon, a visible setting, or `remoteReady` with a rendered
-system activity. Signing here is ad-hoc developer bundle signing; remote credential identity
-resolution remains a separate certificate-backed launch requirement.
+system activity. New macOS native personal builds use the same developer certificate resolver as the remote credential helper.
+The main app, nested Electron code and WidgetKit extension are signed inside-out; the extension retains
+its sandbox entitlements. Ad-hoc signing is no longer an accepted final identity for new native builds.
+Previously checked receipts remain readable for recovery; do not rewrite a live or approved bundle.
 
 Native source builds launch through macOS LaunchServices within Forge's existing startup wrapper.
 Directly spawning the Electron executable leaves ActivityKit without an application identity even
@@ -512,3 +514,41 @@ use this offline check plus artifact/commit verification. `freshness` remains an
 live comparison for diagnostics, not a switching gate. Existing known-good launch and
 recovery stay available offline. Conflicts/check failures remain visible and never
 silently drop a PR. Capturing a snapshot does not authorize a restart.
+
+
+### Shared signed runtime and independent business releases
+
+On supported native macOS builds, `check` prepares a signed runtime in
+`<stateDir>/runtimes/<personalBundleId>/versions/<inputHash>/Cindy.app`. Without managed
+runtime configuration, the store is under `~/Library/Application Support/CindyPersonal`.
+The hash covers the original Electron bytes/version, architecture, native sources and
+assets, SDK/compiler, build logic and signing certificate. Business commits, PR lists and
+plugin bundles are deliberately not runtime inputs. Equal inputs reuse the exact signed
+bundle at the exact same path; changed inputs produce another immutable bundle. Never
+patch a cached or running runtime, re-sign on every launch, or prune previous runtimes
+as part of preparation. Full contents and developer signature are verified before reuse.
+
+Each independent business checkout records its runtime and native-resource hashes in
+`resources/personal-native.json` (version 2). Forge launches that runtime through the
+existing LaunchServices wrapper, passing the explicit business checkout. Process discovery
+uses both the shared executable and the business path, and readiness still requires a live
+renderer for that checkout. Multiple checkouts sharing a runtime must not be mistaken for
+one process. Ordinary non-personal development and existing receipt v1 launches are retained.
+
+The supervised activation path updates the fixed `<store>/Cindy.app` link only after its
+existing stop/profile guards; isolated checks do not select it. Switching to a different
+runtime refuses to move this link while the previous runtime is running. This is a managed
+runtime entry, not a standalone packaged app: use the personal launcher to supply the selected
+business release. Existing journal previous/good pointers retain business versions; runtime
+versions are retained too. Recovery remains subject to data compatibility, not just the
+presence of an older shell. Automatic switching stays opt-in; preparation never authorizes a
+restart or enables it. Moving from an ad-hoc shell to a developer identity can require macOS
+permission approval once; signature verification does not prove privacy permission or remote
+login works. This is local signing, not notarized public distribution.
+
+The supervisor uses `desktop-restart-runner.mjs` to own Terminal and its bounded log drain,
+with the wrapper's own output going to a regular file. Do not wrap this again in a detached
+`script` PTY: a blocked/lost PTY can leave Electron alive after Forge/Vite exits and produce a
+white window. A nonzero wrapper exit immediately fails acceptance even if a main PID remains.
+A successful wrapper exit means readiness only, not the end of the running app. The interface
+still uses the development server; prebuilt static UI delivery is not part of this change.

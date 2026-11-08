@@ -8,10 +8,11 @@ import type { StartOptions, StartResult } from '@electron-forge/shared-types';
 export class PersonalNativeLaunchPlugin extends AutoUnpackNativesPlugin {
   override async startLogic(options: StartOptions): Promise<StartResult> {
     const receipt = path.join(options.dir, 'resources/personal-native.json');
-    if (process.platform !== 'darwin' || !process.env.CINDY_PERSONAL_MONITOR_DIR || !fs.existsSync(receipt)) return false;
-    if (JSON.parse(fs.readFileSync(receipt, 'utf8')).state !== 'built') return false;
+    if (process.platform !== 'darwin' || !fs.existsSync(receipt)) return false;
+    const native = JSON.parse(fs.readFileSync(receipt, 'utf8'));
+    if (native.state !== 'built' || (!native.runtime && !process.env.CINDY_PERSONAL_MONITOR_DIR)) return false;
     if (options.runAsNode || options.inspect || options.inspectBrk) throw new Error('Use the ordinary dev launcher for native debugging');
     const executable = createRequire(path.join(options.dir, 'package.json'))('electron') as string;
-    return [process.execPath, path.resolve(options.dir, '../../scripts/personal-build/macos-app-launch.mjs'), path.resolve(executable, '../../..')];
+    return [process.execPath, path.resolve(options.dir, '../../scripts/personal-build/macos-app-launch.mjs'), native.runtime ? path.join(native.runtime.directory, 'Cindy.app') : path.resolve(executable, '../../..')];
   }
 }
