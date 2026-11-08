@@ -3163,8 +3163,8 @@ function HomeScreenContent({ active = true, width, newSessionInSystemBar = false
   const nativeHomeHeader = !embedded && usesNativeStackHeader();
   const homeGeometry = useAdaptiveWindow();
   const keepMenuTopLeft = nativeHomeHeader && homeGeometry.barEdge !== 'none';
-  const homeStatusRowReserve = sharedStatusRowTrailingReserve(homeGeometry);
   const nativeHeaderHeight = useOptionalHeaderHeight();
+  const homeStatusRowReserve = sharedStatusRowTrailingReserve(homeGeometry, nativeHeaderHeight);
   const chromeHeight = nativeHomeHeader
     ? nativeHeaderHeight + (headerHeight ?? 0)
     : (headerHeight ?? edgePadding.paddingTop + HOME_HEADER_MIN_HEIGHT);

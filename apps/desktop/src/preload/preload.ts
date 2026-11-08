@@ -747,6 +747,7 @@ const fanOutVoiceInputPowerStateChange = createIpcFanOut(VOICE_INPUT_POWER_STATE
 // 应用级快捷键 override 变化广播 (设置页改绑 / reset 后 main 推全量 overrides,
 // renderer 侧 appShortcutStore 订阅热更新)。
 const fanOutAppShortcutsChanged = createIpcFanOut('app-shortcuts:changed');
+const fanOutLocalThemesChanged = createIpcFanOut('local-themes:changed');
 // 主界面布局树变化广播 (layout:set / layout:reset 后 main 推全量布局快照,
 // 多窗口热更新;见 main/layout/index.ts)。
 const fanOutLayoutChanged = createIpcFanOut('layout:changed');
@@ -1276,6 +1277,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
     }),
   osRelease: ipcRenderer.sendSync('get-os-release') as string,
   appVersion: ipcRenderer.sendSync('get-app-version') as string,
+  getArm64Translation: (): Promise<boolean> => ipcRenderer.invoke('app:get-arm64-translation'),
   clientEndpoints: { websiteUrl: clientEndpointsInfo?.websiteUrl ?? '' },
   preferredSystemLocale: readInitialPreferredSystemLocale(),
   appDisplayVersion: appDisplayVersionInfo.display,
@@ -1378,6 +1380,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
     // 任何路径参数。失败走 IPC 错误协议(reject,renderer 用 extractIpcError 解码)。
     importExternal: (): Promise<LocalThemeImportResult> =>
       ipcRenderer.invoke('local-themes:import') as Promise<LocalThemeImportResult>,
+    onChanged: (cb: (payload: LocalThemesResult) => void): (() => void) =>
+      fanOutLocalThemesChanged((data) => cb(data as LocalThemesResult)),
   },
 
   // RSB terminal tab(PTY 后端 + xterm.js)
@@ -3087,12 +3091,16 @@ contextBridge.exposeInMainWorld('electronAPI', {
 
   // E4D 毛玻璃:family 切换/启动时通知 main 开关 macOS vibrancy(仅 CINDY 透壁纸)
   theme: {
+    setSidebarWidth: (width: number): void => {
+      ipcRenderer.send('theme:set-sidebar-width', width);
+    },
     applyVibrancy: (
       familyId: string,
       isDark: boolean,
       mode: 'system' | 'light' | 'dark',
       systemModeFollowsSystem: boolean,
       wallpaperCovered?: boolean,
+      desktopBlur?: number | null,
     ): void => {
       ipcRenderer.send('theme:apply-vibrancy', {
         familyId,
@@ -3100,6 +3108,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
         mode,
         systemModeFollowsSystem,
         wallpaperCovered,
+        desktopBlur,
       });
     },
   },
@@ -4574,6 +4583,13 @@ contextBridge.exposeInMainWorld('electronAPI', {
   ): Promise<string> => ipcRenderer.invoke('app:start-cindy-make-task', input),
   cancelCindyMakeTask: (runId: string): Promise<{ success: boolean }> =>
     ipcRenderer.invoke('app:cancel-cindy-make-task', runId),
+
+  // 本机重启诊断：只预填草稿，不上传或发送。
+  getCrashDiagnosis: (): Promise<import('../shared/crashDiagnosis').CrashDiagnosisSummary | null> =>
+    ipcRenderer.invoke('crash-diagnosis:get'),
+  prepareCrashDiagnosis: (): Promise<import('../shared/crashDiagnosis').CrashDiagnosisEvidence | null> =>
+    ipcRenderer.invoke('crash-diagnosis:prepare'),
+  dismissCrashDiagnosis: (): Promise<void> => ipcRenderer.invoke('crash-diagnosis:dismiss'),
 
   // ── 客户端日志上报(Settings → About)──
   // 真相在 main:是否配置了上报目标、是否已同意隐私政策、开关的 override 状态都由 main

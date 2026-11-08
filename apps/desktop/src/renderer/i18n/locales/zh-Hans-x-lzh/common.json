@@ -2255,6 +2255,10 @@
         },
         "visibilityLabel": "壁纸显度",
         "visibilityHint": "0% 隐壁纸，100% 尽显壁纸。",
+        "desktopVisibilityLabel": "桌面透明度",
+        "desktopVisibilityHint": "透见 Cindy 后之桌面与窗口，文字控件仍清晰。",
+        "desktopBlurLabel": "桌面模糊",
+        "desktopBlurHint": "模糊窗后桌面；0 则关闭，值愈大则愈朦胧。系统若不可调，仍用预设之效。",
         "blurLabel": "壁纸朦胧",
         "blurHint": "仅朦胧壁纸，0 为阖。动态壁纸启朦胧则增显卡之负。",
         "motionLabel": "展示之式",
@@ -9908,6 +9912,8 @@
     "banner": {
       "title": "已更至 {{version}}",
       "subtitle": "重启以焕新",
+      "nativeBuildTitle": "Apple 芯片版已备",
+      "nativeBuildSubtitle": "重启即换，诸务与设置皆存",
       "viewNotes": "览更新之告",
       "viewNotesAria": "览 {{version}} 之更新公告",
       "button": "即重启",
@@ -10037,6 +10043,12 @@
       "description": "数据库约占 {{size}}，已逾 {{threshold}} G。宜往保存空间清理之。",
       "openSettings": "启保存空间",
       "disable": "勿再提醒"
+    },
+    "nativeBuild": {
+      "title": "今用 Intel 版 Cindy",
+      "description": "此 Mac 用 Apple 芯片，Intel 版须转译而行，迟缓甚矣。改装 Apple 芯片版即可，资料皆存。",
+      "dismiss": "此番勿再提",
+      "download": "取之"
     },
     "horizontalTabbarAria": "主区视图切换",
     "tabs": {
@@ -12896,6 +12908,8 @@
   },
   "chat": {
     "teammateProcess": {
+      "empty": "此番无可示之处理记录",
+      "unavailable": "未能读取处理记录",
       "record": "理事录",
       "operations": "行事录",
       "elapsed": "已理 {{duration}}",
@@ -19371,6 +19385,7 @@
       "apply": "迁移"
     },
     "source": {
+      "receivingOn": "受端：{{name}}",
       "description": "选一台登录了同一帐号的电脑。它的法器、技艺、设置和连接会照原样装到这台电脑；密钥只在你在那台电脑上点「允许」后拷贝，登录状态不会离开那台电脑。",
       "loading": "方寻其余之机…",
       "empty": "没有找到这个账号的其他电脑。在另一台电脑上登录 Cindy 后再打开这里",
@@ -19677,5 +19692,14 @@
     "directory": "账号目录",
     "loginAgain": "重登",
     "login": "登录"
+  },
+  "crashDiagnosis": {
+    "title": "Cindy 前次异常而止",
+    "description": "欲究其因乎？将取退出之记与已隐敏文之日志，备为差事草稿，阅定乃发。强止或断电，亦可致此。",
+    "diagnose": "诊断其因",
+    "later": "暂置",
+    "logExcerpt": "相关日志（节录，或有未全）",
+    "logsUnavailable": "未得相关日志，其因未明。",
+    "failed": "诊断资料未备，请重试。"
   }
 }

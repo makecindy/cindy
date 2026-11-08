@@ -1,3 +1,4 @@
+import * as availability from '../../device-link/providerShareAvailability.js';
 import { runSessionCreationAttempt, captureSessionCreationCancellation } from '../../localDb/sessionRuntimeCleanup';
 /**
  * 远程 Agent 端到端往返(两端同进程，经 JSON 序列化模拟设备互联)：
@@ -1603,6 +1604,13 @@ describe('shared startup lease budget', () => {
     const resumed = await f.open('history-renew', f.owner, 'm', 'native-only-on-m');
     expect(f.calls.filter(call => call.op === 'allocate')).toHaveLength(1);
     await resumed.close();
+  });
+
+  it('does not fall back to the online owner when the cloud assignment lookup times out', async () => {
+    const f = fixture(); f.state.ready = true;
+    vi.spyOn(availability, 'lookupShareAvailability').mockRejectedValueOnce(new Error('lookup timeout'));
+    await expect(f.open('cloud-pinned-no-local-cache')).rejects.toThrow('lookup timeout');
+    expect(f.calls.filter(call => call.op === 'allocate' || call.op === 'open')).toEqual([]);
   });
 
   // Unit: a failed O lookup is a known stage, not an unspecified M failure.

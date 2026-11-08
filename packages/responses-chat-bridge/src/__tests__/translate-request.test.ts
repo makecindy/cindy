@@ -598,6 +598,43 @@ describe('translateResponsesRequest', () => {
     }))).toThrow('input[0].content.image_url');
   });
 
+  it('skips an assistant history item that has no content and only supported metadata (#9344)', () => {
+    const out = translateResponsesRequest(base({
+      input: [
+        { type: 'message', role: 'user', content: 'start' },
+        { type: 'message', role: 'assistant', content: null, id: 'msg_0', status: 'completed' },
+        { type: 'message', role: 'user', content: 'again' },
+      ],
+    }));
+
+    expect(out.messages).toEqual([
+      { role: 'user', content: 'start' },
+      { role: 'user', content: 'again' },
+    ]);
+  });
+
+  it('keeps an assistant history item whose empty content carries unsupported fields (#9344)', () => {
+    expect(() => translateResponsesRequest(base({
+      input: [
+        { type: 'message', role: 'assistant', content: null, tool_calls: [{ id: 'call_1' }] },
+      ],
+    }))).toThrow('input[0].content');
+  });
+
+  it('degrades an agent message without content instead of rejecting the request (#9344)', () => {
+    const out = translateResponsesRequest(base({
+      input: [
+        { type: 'message', role: 'user', content: 'start' },
+        { type: 'agent_message', author: 'researcher', content: null },
+      ],
+    }));
+
+    expect(out.messages).toEqual([
+      { role: 'user', content: 'start' },
+      { role: 'assistant', content: '[collab message from researcher; empty content]' },
+    ]);
+  });
+
   it('keeps agent messages after the preceding tool result', () => {
     const out = translateResponsesRequest(base({
       input: [

@@ -2255,6 +2255,10 @@
         },
         "visibilityLabel": "桌布顯度",
         "visibilityHint": "0% 隱桌布，100% 盡顯桌布。",
+        "desktopVisibilityLabel": "桌面透明度",
+        "desktopVisibilityHint": "透見 Cindy 後之桌面與視窗，文字控件仍清晰。",
+        "desktopBlurLabel": "桌面模糊",
+        "desktopBlurHint": "模糊窗後桌面；0 則關閉，值愈大則愈朦朧。系統若不可調，仍用預設之效。",
         "blurLabel": "桌布朦朧",
         "blurHint": "僅朦朧桌布，0 為闔。動態桌布啟朦朧則增顯示卡之負。",
         "motionLabel": "展示之式",
@@ -9908,6 +9912,8 @@
     "banner": {
       "title": "已更至 {{version}}",
       "subtitle": "重啟以煥新",
+      "nativeBuildTitle": "Apple 晶片版已備",
+      "nativeBuildSubtitle": "重啟即換，諸務與設定皆存",
       "viewNotes": "覽更新之告",
       "viewNotesAria": "覽 {{version}} 之更新公告",
       "button": "即重啟",
@@ -10037,6 +10043,12 @@
       "description": "資料庫約佔 {{size}}，已逾 {{threshold}} G。宜往儲存空間清理之。",
       "openSettings": "啟儲存空間",
       "disable": "勿再提醒"
+    },
+    "nativeBuild": {
+      "title": "今用 Intel 版 Cindy",
+      "description": "此 Mac 用 Apple 晶片，Intel 版須轉譯而行，遲緩甚矣。改裝 Apple 晶片版即可，資料皆存。",
+      "dismiss": "此番勿再提",
+      "download": "取之"
     },
     "horizontalTabbarAria": "主區視圖切換",
     "tabs": {
@@ -12896,6 +12908,8 @@
   },
   "chat": {
     "teammateProcess": {
+      "empty": "此番無可示之處理記錄",
+      "unavailable": "未能讀取處理記錄",
       "record": "理事錄",
       "operations": "行事錄",
       "elapsed": "已理 {{duration}}",
@@ -19371,6 +19385,7 @@
       "apply": "遷移"
     },
     "source": {
+      "receivingOn": "受端：{{name}}",
       "description": "選一台登入了同一帳號的電腦。它的法器、技藝、設定和連線會照原樣裝到這台電腦；金鑰只在你在那台電腦上點「允許」後複製，登入狀態不會離開那台電腦。",
       "loading": "方尋其餘之機…",
       "empty": "沒有找到這個帳號的其他電腦。在另一台電腦上登入 Cindy 後再開啟這裡",
@@ -19677,5 +19692,14 @@
     "directory": "帳號目錄",
     "loginAgain": "重登",
     "login": "登入"
+  },
+  "crashDiagnosis": {
+    "title": "Cindy 前次異常而止",
+    "description": "欲究其因乎？將取退出之記與已隱敏文之日誌，備為差事草稿，閱定乃發。強止或斷電，亦可致此。",
+    "diagnose": "診斷其因",
+    "later": "暫置",
+    "logExcerpt": "相關日誌（節錄，或有未全）",
+    "logsUnavailable": "未得相關日誌，其因未明。",
+    "failed": "診斷資料未備，請重試。"
   }
 }

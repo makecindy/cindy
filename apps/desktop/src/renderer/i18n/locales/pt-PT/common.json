@@ -2323,6 +2323,10 @@
         },
         "visibilityLabel": "Visibilidade da imagem de fundo",
         "visibilityHint": "0% oculta a imagem de fundo; 100% mostra-a sem sobreposição.",
+        "desktopVisibilityLabel": "Transparência do ambiente de trabalho",
+        "desktopVisibilityHint": "Mostra o ambiente de trabalho e as janelas atrás da Cindy. O texto e os controlos mantêm-se nítidos.",
+        "desktopBlurLabel": "Desfoque do ambiente de trabalho",
+        "desktopBlurHint": "Desfoca o ambiente de trabalho atrás da janela. 0 desativa; valores maiores aumentam o desfoque. Sistemas sem ajuste de intensidade usam o efeito predefinido.",
         "blurLabel": "Desfoque da imagem de fundo",
         "blurHint": "Desfocar apenas a imagem de fundo. Defina como 0 para desativar. Desfocar fundos animados aumenta a utilização da GPU.",
         "motionLabel": "Apresentação",
@@ -10031,6 +10035,8 @@
     "banner": {
       "title": "Atualizado para {{version}}",
       "subtitle": "Reiniciar para aplicar",
+      "nativeBuildTitle": "Versão para Apple silicon pronta",
+      "nativeBuildSubtitle": "Reinicie para mudar; as suas tarefas e definições são mantidas",
       "viewNotes": "Ver novidades",
       "viewNotesAria": "Ver as novidades da versão {{version}}",
       "button": "Reiniciar",
@@ -10160,6 +10166,12 @@
       "description": "A base de dados ocupa cerca de {{size}}, acima de {{threshold}} G. Considere limpá-la em Armazenamento.",
       "openSettings": "Abrir Armazenamento",
       "disable": "Não voltar a lembrar"
+    },
+    "nativeBuild": {
+      "title": "Está a usar a versão para Intel",
+      "description": "Este Mac tem Apple silicon, e a versão para Intel fica muito mais lenta por funcionar com tradução. Instale a versão para Apple silicon; os seus dados são mantidos.",
+      "dismiss": "Ocultar por agora",
+      "download": "Transferir"
     },
     "horizontalTabbarAria": "Seletor da vista principal",
     "tabs": {
@@ -14268,6 +14280,8 @@
       "closeFailed": "Não foi possível fechar a conversa paralela. Tente novamente."
     },
     "teammateProcess": {
+      "empty": "Não há detalhes do processo para esta resposta",
+      "unavailable": "Não foi possível carregar os detalhes do processo",
       "record": "Atividade",
       "operations": "Registo de atividade",
       "elapsed": "A trabalhar há {{duration}}",
@@ -19485,6 +19499,7 @@
       "apply": "Transferir"
     },
     "source": {
+      "receivingOn": "Dispositivo de destino: {{name}}",
       "description": "Escolha um computador com sessão iniciada nesta conta. Os plugins, competências, definições e ligações dele são configurados aqui da mesma forma; os inícios de sessão e as chaves só saem desse computador se o permitir nele.",
       "loading": "A procurar os seus outros computadores…",
       "empty": "Não foram encontrados outros computadores para esta conta. Inicie sessão no Cindy noutro computador e volte a abrir isto",
@@ -19936,5 +19951,14 @@
     "directory": "Pasta da conta",
     "loginAgain": "Iniciar sessão novamente",
     "login": "Iniciar sessão"
+  },
+  "crashDiagnosis": {
+    "title": "O Cindy encerrou inesperadamente",
+    "description": "Quer diagnosticar a causa? Vamos preparar um rascunho de tarefa com os detalhes do encerramento e registos sem dados sensíveis para rever antes de enviar. Um encerramento forçado ou uma falha de energia também pode ser a causa.",
+    "diagnose": "Diagnosticar problema",
+    "later": "Agora não",
+    "logExcerpt": "Registos relevantes (excerto, possivelmente incompleto)",
+    "logsUnavailable": "Não há registos relevantes disponíveis. A causa ainda é desconhecida.",
+    "failed": "Não foi possível preparar o diagnóstico. Tente novamente."
   }
 }

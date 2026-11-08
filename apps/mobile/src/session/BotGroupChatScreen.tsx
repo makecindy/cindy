@@ -1,3 +1,5 @@
+import { ComposerPullThroughScrollView, useComposerPullThroughBridge } from './composerPullThrough';
+import { DockKeyboardBottomSpacer } from './ComposerDockKeyboardFollow';
 import type { ScrollViewInstance } from 'react-native';
 import { ProcessDisclosureViewport, useProcessDisclosureViewport } from './useProcessDisclosureViewport';
 import { BotGroupProcess } from './BotGroupProcess';
@@ -217,6 +219,7 @@ function BotGroupChatContent({ deviceId, deviceName, groupId, messageId, notific
   // iOS: the header floats on the task header's feathered blur and the timeline scrolls beneath it.
   const floatingHeader = Platform.OS === 'ios';
   const insets = useSafeAreaInsets();
+  const composerPullThrough = useComposerPullThroughBridge();
   const window = useAdaptiveWindow();
   // A horizontal system bar would span both panes; Duo's vertical bar stays native.
   const panePersistent = sessionPaneLayout(window).persistent;
@@ -704,7 +707,7 @@ function BotGroupChatContent({ deviceId, deviceName, groupId, messageId, notific
   } else {
     body = <KeyboardAvoidingView
       style={styles.flex}
-      enabled={Platform.OS === 'ios' || Platform.OS === 'android'}
+      enabled={Platform.OS === 'android'}
       behavior={keyboardAvoidingBehaviorForPlatform(
         Platform.OS === 'ios' ? 'ios' : Platform.OS === 'android' ? 'android' : 'web',
       )}
@@ -714,7 +717,7 @@ function BotGroupChatContent({ deviceId, deviceName, groupId, messageId, notific
       <View style={styles.flex}>
       <ProcessDisclosureViewport.Provider value={processViewport.inspect}>
       <MessageListVisibilityContext.Provider value={previewVisibility}>
-      <ScrollView ref={scrollRef} style={styles.flex} contentContainerStyle={[styles.timeline, threadRootId && styles.threadTimeline, floatingHeader && { paddingTop: headerHeight + spacing.md }, processLeadingSpace !== null && { justifyContent: 'flex-start' }]}
+      <ComposerPullThroughScrollView bridge={composerPullThrough} ref={scrollRef} style={styles.flex} contentContainerStyle={[styles.timeline, threadRootId && styles.threadTimeline, floatingHeader && { paddingTop: headerHeight + spacing.md }, processLeadingSpace !== null && { justifyContent: 'flex-start' }]}
         scrollIndicatorInsets={floatingHeader ? { top: headerHeight } : undefined} keyboardShouldPersistTaps="handled"
         keyboardDismissMode="interactive"
         maintainVisibleContentPosition={chat.server && !threadRootId ? { minIndexForVisible: group.hasMoreBefore ? 2 : 1 } : undefined}
@@ -738,7 +741,9 @@ function BotGroupChatContent({ deviceId, deviceName, groupId, messageId, notific
         onContentSizeChange={(_width, height) => {
           viewport.current.contentHeight = height;
           viewport.current.measuredGroup = group;
-          if (focused && stickToBottom.current) scrollRef.current?.scrollToEnd({ animated: false });
+          // Keyboard dismissal can resize the timeline before its first drag
+          // sample. An imperative scroll here cancels native drag/deceleration.
+          if (focused && stickToBottom.current && !processUserScrolling.current) scrollRef.current?.scrollToEnd({ animated: false });
           updateAwayFromBottom(processViewport.inspecting.current || !stickToBottom.current && height - viewport.current.offsetY - viewport.current.viewportHeight >= STICK_TO_BOTTOM_PX);
           acknowledge();
         }}
@@ -782,7 +787,7 @@ function BotGroupChatContent({ deviceId, deviceName, groupId, messageId, notific
         resumeRequest={processResumeRequest}
         onError={message => { if (message) Alert.alert(message); }} /> : null}
       {processViewport.footerHeight > 0 && <View style={{ height: processViewport.footerHeight, marginTop: -spacing.sm }} />}
-      </ScrollView>
+      </ComposerPullThroughScrollView>
       </MessageListVisibilityContext.Provider>
       </ProcessDisclosureViewport.Provider>
       {!imageSelectionActive && (isAwayFromBottom || newMessageCount > 0 || mask.mentions.length > 0) ? <View
@@ -830,22 +835,25 @@ function BotGroupChatContent({ deviceId, deviceName, groupId, messageId, notific
       <BotGroupTopicImageShare key={shareScope} selectionScope={shareScope} messages={selectedMessages} allIds={shareableIds}
         resolveMedia={chat.media} onBusyChange={setImageShareBusy} />
       <View style={selectedImages ? styles.hiddenComposer : undefined} testID="botGroup.composerContainer">
-        <BotGroupComposer allowMentionAllBots={group.supportsMentionAudiences === true && group.allowMentionAllBots === true} key={`${viewportOwner}:composer`} topic={!!threadRootId} onParticipate={mask.participate} maskIndicator={mask.state?.settings.companionId ? <GroupMaskStatus mask={mask} deviceId={deviceId} onPress={() => setMaskSettings(true)} /> : undefined} members={group.members} identityFor={identityFor} deviceId={deviceId} online={(chat.online || !!chat.canQueue) && !group.archived && !group.dissolvedAt && (!threadRootId || group.messages.some(message => message.id === threadRootId && !message.deleted))}
+        <BotGroupComposer pullThrough={composerPullThrough} allowMentionAllBots={group.supportsMentionAudiences === true && group.allowMentionAllBots === true} key={`${viewportOwner}:composer`} topic={!!threadRootId} onParticipate={mask.participate} maskIndicator={mask.state?.settings.companionId ? <GroupMaskStatus mask={mask} deviceId={deviceId} onPress={() => setMaskSettings(true)} /> : undefined} members={group.members} identityFor={identityFor} deviceId={deviceId} online={(chat.online || !!chat.canQueue) && !group.archived && !group.dissolvedAt && (!threadRootId || group.messages.some(message => message.id === threadRootId && !message.deleted))}
         quoteMessageId={replyTo?.messageId} focusRequest={replyFocusRequest}
         placeholder={threadRootId ? t('groupChat.thread.placeholder') : undefined}
         running={!threadRootId && group.round.status === 'running'} planState={threadRootId || chat.server ? null : botGroupComposerPlanState(openBotGroupPlan(group), group.replyMode)}
         divisionSupported={!threadRootId && !chat.server && (!group.singleSpeaker || group.supportsDivision === true)} attachmentsSupported={!threadRootId && group.supportsAttachments === true} uploadAttachment={chat.uploadAttachment} onSend={send} onStop={stop} />
       </View>
+      {Platform.OS === 'ios' ? <DockKeyboardBottomSpacer restingBottom={insets.bottom}
+        keyboardGap={0} /> : null}
     </KeyboardAvoidingView>;
   }
 
   // The persistent pane already sits inside the window's safe area horizontally.
   const sideEdges = panePersistent ? [] as const : ['left', 'right'] as const;
+  const bottomEdges = Platform.OS === 'ios' && group ? [] as const : ['bottom'] as const;
   // A vertical system bar has no horizontal chrome to blur. Only cover actual
   // in-page content (offline notice or image selection), matching the timeline inset.
   const headerBlurHeight = systemBack ? headerHeight
     : Math.max(headerHeight, nativeHeader ? nativeHeaderHeight : insets.top + navigationChrome.target);
-  return <RichContentContext.Provider value={richContent}><SafeAreaView style={styles.screen} edges={floatingHeader ? [...sideEdges, 'bottom'] : ['top', ...sideEdges, 'bottom']} testID="botGroup.screen">
+  return <RichContentContext.Provider value={richContent}><SafeAreaView style={styles.screen} edges={floatingHeader ? [...sideEdges, ...bottomEdges] : ['top', ...sideEdges, ...bottomEdges]} testID="botGroup.screen">
     {threadRootId ? <Stack.Screen options={{ gestureEnabled: previousIsGroup }} /> : null}
     {nativeHeader || systemBack ? null : <Stack.Screen options={{ headerShown: false }} />}
     {floatingHeader ? <>

@@ -54,6 +54,7 @@ import {
   Languages,
   LayoutGrid,
   Monitor,
+  Smartphone,
   Search,
   type LucideIcon,
 } from "lucide-react-native";
@@ -525,9 +526,14 @@ export function RemoteDesktopSession({
     showExitLockStatus
       ? "remoteDesktop.lockingOnExit"
       : recovery.current.at || status === "reconnecting"
-        ? "remoteDesktop.reconnecting"
-        : "remoteDesktop.connecting",
+        ? screenPlugin
+          ? "remoteDesktop.liveScreenReconnecting"
+          : "remoteDesktop.reconnecting"
+        : screenPlugin
+          ? "remoteDesktop.liveScreenConnecting"
+          : "remoteDesktop.connecting",
   );
+  const ConnectionIcon = screenPlugin ? Smartphone : Monitor;
   const [busy, setBusy] = useState(false);
   const [inputMode, setInputMode] = useInputModePreference();
   const inputModeRef = useRef(inputMode);
@@ -4040,14 +4046,22 @@ export function RemoteDesktopSession({
             >
               {!frameReady && error !== "permissionHint" && (
                 <View style={styles.waitingComputer}>
-                  <Monitor
+                  <ConnectionIcon
                     size={iconSize.lg}
                     strokeWidth={iconStroke.regular}
                     color={colors.textTertiary}
                   />
                   <Text numberOfLines={2} style={styles.waitingComputerName}>
-                    {deviceName}
+                    {screenPlugin
+                      ? (lease?.screen?.name ??
+                        t("remoteDesktop.liveScreenTitle"))
+                      : deviceName}
                   </Text>
+                  {screenPlugin && (
+                    <Text numberOfLines={2} style={styles.waitingLabel}>
+                      {deviceName}
+                    </Text>
+                  )}
                 </View>
               )}
               {showConnectionStatus || showExitLockStatus ? (
@@ -4514,7 +4528,10 @@ export function RemoteDesktopSession({
           </Animated.View>
         )}
       </View>
-      {!screenPlugin && (
+      {(!screenPlugin ||
+        !frameReady ||
+        showConnectionStatus ||
+        Boolean(error)) && (
         <View
           testID="remoteDesktop.backPosition"
           pointerEvents="auto"

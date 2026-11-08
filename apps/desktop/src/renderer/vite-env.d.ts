@@ -1174,6 +1174,8 @@ interface ElectronAPI {
   ) => () => void;
   osRelease: string;
   appVersion: string;
+  /** 当前进程是否经 ARM64 转译运行(Apple 芯片上的 Intel 包)。 */
+  getArm64Translation?: () => Promise<boolean>;
   /** 运行期端点清单(main 启动时远程 → 缓存 → 烘焙解析;重启生效)。 */
   clientEndpoints: { websiteUrl: string };
   appDisplayVersion: string;
@@ -1255,6 +1257,7 @@ interface ElectronAPI {
     openDir: () => Promise<LocalThemeOpenDirResult>;
     /** 导入 VSCode / Obsidian 主题文件；对话框与读文件都在 main 侧。 */
     importExternal: () => Promise<import('../shared/theme-import/types').LocalThemeImportResult>;
+    onChanged: (cb: (payload: LocalThemesResult) => void) => () => void;
   };
 
   /** RSB terminal tab —— PTY 后端 + xterm.js,详见 shared/terminal-bridge.ts 注释。 */
@@ -2285,6 +2288,9 @@ interface ElectronAPI {
   // ── 客户端日志上报(设置 → 关于)──
   // 只上报 App 自身的运行记录 + 设备环境信息;对话内容、文件内容、提示词、工作目录路径
   // 永不上报,凭证与邮箱在上传前被自动抹除(实现见 main/log-upload/)。
+  getCrashDiagnosis: () => Promise<import('../shared/crashDiagnosis').CrashDiagnosisSummary | null>;
+  prepareCrashDiagnosis: () => Promise<import('../shared/crashDiagnosis').CrashDiagnosisEvidence | null>;
+  dismissCrashDiagnosis: () => Promise<void>;
   getLogUploadSettings: () => Promise<LogUploadSettingsPayload>;
   setLogUploadCrashAuto: (enabled: boolean) => Promise<LogUploadSettingsPayload>;
   /** 恢复默认:删掉 override,重新跟随当前版本默认的“已有 Git 项目”模式。 */
@@ -4103,12 +4109,14 @@ interface ElectronAPI {
   setUpdateRelaunchTheme: (theme: 'light' | 'dark') => void;
   // E4D 毛玻璃:family 切换/启动通知 main 开关 vibrancy(仅 CINDY 透壁纸)
   theme: {
+    setSidebarWidth: (width: number) => void;
     applyVibrancy: (
       familyId: string,
       isDark: boolean,
       mode: 'system' | 'light' | 'dark',
       systemModeFollowsSystem: boolean,
       wallpaperCovered?: boolean,
+      desktopBlur?: number | null,
     ) => void;
   };
   /**

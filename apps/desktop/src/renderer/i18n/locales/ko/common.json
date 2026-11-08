@@ -2255,6 +2255,10 @@
         },
         "visibilityLabel": "배경화면 표시 강도",
         "visibilityHint": "0%에서는 배경화면을 숨기고, 100%에서는 원본 그대로 표시합니다.",
+        "desktopVisibilityLabel": "바탕 화면 투명도",
+        "desktopVisibilityHint": "Cindy 뒤의 바탕 화면과 창이 비칩니다. 텍스트와 컨트롤은 선명하게 유지됩니다.",
+        "desktopBlurLabel": "바탕 화면 흐림",
+        "desktopBlurHint": "창 뒤의 바탕 화면을 흐리게 합니다. 0이면 꺼지고 값이 클수록 더 흐려집니다. 강도 조절을 지원하지 않는 시스템은 기본 효과를 사용합니다.",
         "blurLabel": "배경화면 흐림",
         "blurHint": "배경화면만 흐리게 합니다. 0이면 꺼집니다. 움직이는 배경화면을 흐리게 하면 GPU 사용량이 늘어납니다.",
         "motionLabel": "표시 방식",
@@ -9908,6 +9912,8 @@
     "banner": {
       "title": "{{version}}로 업데이트됨",
       "subtitle": "재시작해 적용",
+      "nativeBuildTitle": "Apple 칩 버전이 준비되었습니다",
+      "nativeBuildSubtitle": "재시작하면 전환됩니다. 작업과 설정은 그대로 유지됩니다",
       "viewNotes": "업데이트 소식 보기",
       "viewNotesAria": "{{version}} 업데이트 소식 보기",
       "button": "재시작",
@@ -10037,6 +10043,12 @@
       "description": "데이터베이스는 약 {{size}}이며 {{threshold}} G를 초과했습니다. 저장 공간에서 정리하는 것이 좋습니다.",
       "openSettings": "저장 공간 열기",
       "disable": "다시 알리지 않기"
+    },
+    "nativeBuild": {
+      "title": "Intel 버전 Cindy를 사용 중입니다",
+      "description": "이 Mac은 Apple 칩이라 Intel 버전은 변환을 거쳐 훨씬 느리게 실행됩니다. Apple 칩 버전으로 바꿔 설치해도 데이터는 그대로 유지됩니다.",
+      "dismiss": "이번에는 숨기기",
+      "download": "다운로드"
     },
     "horizontalTabbarAria": "메인 뷰 전환",
     "tabs": {
@@ -12904,6 +12916,8 @@
       }
     },
     "teammateProcess": {
+      "empty": "이 응답에 표시할 처리 기록이 없습니다",
+      "unavailable": "처리 기록을 불러오지 못했습니다",
       "record": "작업 내역",
       "operations": "작업 기록",
       "elapsed": "처리 중 {{duration}}",
@@ -19239,6 +19253,7 @@
       "apply": "옮기기"
     },
     "source": {
+      "receivingOn": "받는 기기: {{name}}",
       "description": "같은 계정으로 로그인한 컴퓨터를 선택하세요. 그 컴퓨터의 플러그인, 스킬, 설정, 연결을 이 컴퓨터에 그대로 설정합니다. 키는 그 컴퓨터에서 허용한 후에만 복사되며, 로그인 상태는 그 컴퓨터를 벗어나지 않습니다.",
       "loading": "다른 컴퓨터를 찾는 중…",
       "empty": "이 계정의 다른 컴퓨터를 찾지 못했습니다. 다른 컴퓨터에서 Cindy에 로그인한 뒤 다시 열어 주세요",
@@ -19677,5 +19692,14 @@
     "directory": "계정 폴더",
     "loginAgain": "다시 로그인",
     "login": "로그인"
+  },
+  "crashDiagnosis": {
+    "title": "Cindy가 예기치 않게 종료되었습니다",
+    "description": "원인을 진단할까요? 종료 정보와 민감 정보를 제거한 로그를 작업 초안으로 준비합니다. 확인 후 전송할 수 있습니다. 강제 종료나 정전으로도 발생할 수 있습니다.",
+    "diagnose": "문제 진단",
+    "later": "나중에",
+    "logExcerpt": "관련 로그(발췌, 일부 누락 가능)",
+    "logsUnavailable": "관련 로그가 없습니다. 원인은 아직 알 수 없습니다.",
+    "failed": "진단 정보를 준비하지 못했습니다. 다시 시도해 주세요."
   }
 }
