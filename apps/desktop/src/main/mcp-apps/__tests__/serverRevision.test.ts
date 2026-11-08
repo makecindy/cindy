@@ -47,3 +47,13 @@ describe('private MCP App server revisions', () => {
     expect(() => current.serverRevision(config)).toThrow('MCP_APP_REVISION_KEY_UNAVAILABLE');
   });
 });
+
+// Unit: changing a local command or its credentials must revoke an old facade.
+it('includes local command arguments and environment in the private revision', () => {
+  const local: AppServerConfig = { id: 'local', url: '', transport: 'stdio',
+    stdio: { command: 'node', args: ['fixture'], env: { KEY: 'fixture-secret' } } };
+  const revision = appServerRevision(local, key);
+  expect(appServerRevision({ ...local, stdio: { ...local.stdio!, args: ['other'] } }, key)).not.toBe(revision);
+  expect(appServerRevision({ ...local, stdio: { ...local.stdio!, env: { KEY: 'rotated' } } }, key)).not.toBe(revision);
+  expect(revision).not.toContain('fixture-secret');
+});

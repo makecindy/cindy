@@ -7,7 +7,8 @@
  * （`mcp_token_<id>`，见 shared/providerSecrets 的 customMcpSecretStorageKey）。
  * headers 整组经系统 safeStorage 加密后与配置原子写入；旧明文行在读取时转换。
  *
- * 仅支持远程 transport（http/sse），一条记录 = 一个可被 Claude / Codex 共同调用的远程 MCP。
+ * HTTP/SSE 与本地 stdio 统一经 Host facade 提供给 Claude Code / Codex / Pi。
+ * stdio 整组加密保存，包含可能携带凭证的命令参数。
  *
  * 验证（`validateCustomMcpConfig`）是纯函数，便于单测；CRUD 经 `getDbClient().drizzle`
  * （测试用 `setCurrentDbClient` 注入内存 db，见 __tests__）。
@@ -19,6 +20,7 @@ import { HARNESS_MCP_SERVER_NAMES } from './harnessMcpCatalog.js';
 import { customMcpServers } from '../localDb/schema.js';
 import {
   MCP_TRANSPORTS,
+  isStdioMcpConfig,
   type CustomMcpConfig,
   type McpTransport,
 } from '../../shared/customMcp.js';
@@ -85,6 +87,7 @@ export function validateCustomMcpConfig(
 ): ValidationResult {
   if (!config || typeof config !== 'object') return invalid('config must be an object');
   const c = config as Record<string, unknown>;
+  if (c.readError !== undefined) return invalid('MCP configuration is unreadable');
 
   if (typeof c.id !== 'string' || c.id.length === 0) return invalid('id required');
   if (c.id.length > MAX_ID_LEN) return invalid(`id too long (max ${MAX_ID_LEN})`);
@@ -102,6 +105,16 @@ export function validateCustomMcpConfig(
   if (typeof c.transport !== 'string' || !MCP_TRANSPORTS.includes(c.transport as McpTransport)) {
     return invalid(`transport must be one of ${MCP_TRANSPORTS.join('|')}`);
   }
+
+  if (c.transport === 'stdio') {
+    if (!isStdioMcpConfig(c.stdio)) return invalid('stdio requires command, args and env');
+    if (c.url !== '' || !c.headers || typeof c.headers !== 'object' ||
+        Array.isArray(c.headers) || Object.keys(c.headers).length > 0) {
+      return invalid('stdio does not accept a URL or HTTP headers');
+    }
+    return { ok: true };
+  }
+  if (c.stdio !== undefined) return invalid('remote MCP does not accept a local command');
 
   if (typeof c.url !== 'string' || c.url.trim().length === 0) return invalid('url required');
   try {
@@ -146,6 +159,9 @@ function normalizeConfig(config: CustomMcpConfig): CustomMcpConfig {
     transport: config.transport,
     url: config.url.trim(),
     headers,
+    ...(config.transport === 'stdio' && config.stdio
+      ? { stdio: { command: config.stdio.command.trim(), args: [...config.stdio.args], env: { ...config.stdio.env } } }
+      : {}),
   };
 }
 
@@ -173,14 +189,36 @@ export function createCustomMcpStore(ports: {
 const { getDbClient, credentials } = ports;
 const ENCRYPTED_HEADERS_PREFIX = 'safe-storage:v1:';
 
-function requireHeaderEncryption(): void {
+function encodeStdio(config: CustomMcpConfig): string | null {
+  if (config.transport !== 'stdio') return null;
+  requireMcpEncryption();
+  try {
+    return ENCRYPTED_HEADERS_PREFIX + credentials.encrypt(JSON.stringify(config.stdio));
+  } catch {
+    throw new Error('MCP local configuration encryption failed');
+  }
+}
+
+function decodeStdio(raw: string | null): CustomMcpConfig['stdio'] {
+  requireMcpEncryption();
+  try {
+    if (!raw?.startsWith(ENCRYPTED_HEADERS_PREFIX)) throw new Error();
+    const value: unknown = JSON.parse(credentials.decrypt(raw.slice(ENCRYPTED_HEADERS_PREFIX.length)));
+    if (!isStdioMcpConfig(value)) throw new Error();
+    return value;
+  } catch {
+    throw new Error('MCP local configuration is unreadable');
+  }
+}
+
+function requireMcpEncryption(): void {
   credentials.assertAvailable();
 }
 
 /** Encrypt before the atomic DB write: failures cannot partially replace a configuration. */
 function encodeHeaders(headers: Record<string, string>): string {
   if (Object.keys(headers).length === 0) return '{}';
-  requireHeaderEncryption();
+  requireMcpEncryption();
   try {
     return ENCRYPTED_HEADERS_PREFIX + credentials.encrypt(JSON.stringify(headers));
   } catch {
@@ -194,7 +232,7 @@ async function rowToConfig(
 ): Promise<CustomMcpConfig> {
   let headers: Record<string, string>;
   if (row.headers.startsWith(ENCRYPTED_HEADERS_PREFIX)) {
-    requireHeaderEncryption();
+    requireMcpEncryption();
     // A corrupt/unreadable blob must not masquerade as an empty credential map.
     try {
       const value: unknown = JSON.parse(credentials.decrypt(row.headers.slice(ENCRYPTED_HEADERS_PREFIX.length)));
@@ -225,6 +263,7 @@ async function rowToConfig(
       : 'http') as McpTransport,
     url: row.url,
     headers,
+    ...(row.transport === 'stdio' ? { stdio: decodeStdio(row.stdio) } : {}),
   };
 }
 
@@ -235,7 +274,16 @@ async function listCustomMcpServers(): Promise<CustomMcpConfig[]> {
     .select()
     .from(customMcpServers)
     .orderBy(asc(customMcpServers.sortOrder), asc(customMcpServers.createdAt));
-  return Promise.all(rows.map((row) => rowToConfig(row, db)));
+  return Promise.all(rows.map(async (row): Promise<CustomMcpConfig> => {
+    try {
+      return await rowToConfig(row, db);
+    } catch (error) {
+      if (row.transport !== 'stdio') throw error;
+      // Keep the row visible and deletable, without exposing secrets or admitting
+      // an empty fallback command to runtime registration. Never modify the row.
+      return { id: row.id, name: row.name, transport: 'stdio', url: '', headers: {}, readError: 'stdio-unreadable' };
+    }
+  }));
 }
 
 /** Names for the source consent prompt: never load headers or upgrade legacy rows. */
@@ -304,6 +352,7 @@ async function createCustomMcpServer(
     transport: c.transport,
     url: c.url,
     headers: encodeHeaders(c.headers),
+    stdio: encodeStdio(c),
     sortOrder: nextOrder,
     createdAt: now,
     updatedAt: now,
@@ -335,6 +384,7 @@ async function updateCustomMcpServer(
       transport: c.transport,
       url: c.url,
       headers: encodeHeaders(c.headers),
+      stdio: encodeStdio(c),
       updatedAt: now,
     })
     .where(eq(customMcpServers.id, id));

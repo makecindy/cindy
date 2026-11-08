@@ -5,6 +5,8 @@ export interface McpSetupProposal {
   name?: string;
   url?: string;
   transport?: McpTransport;
+  command?: string;
+  args?: string[];
 }
 
 export interface McpSetupRequest {

@@ -21,10 +21,12 @@ Two Settings tabs decide which tools the agents get: **Tools** (built-in tools a
 
 **Settings > Tools > External tools (custom MCP):**
 
-- Click **Add MCP server** to connect your own **remote** MCP server. Enter a **Display name**, the **Transport** (http or sse), the **Endpoint URL**, and optionally a **Bearer token** and extra **Headers**.
-- HTTP / Streamable HTTP servers work with both Claude and Codex; **SSE works with Claude only**. Codex only supports Bearer-token authentication, so custom headers apply to Claude.
-- A saved server is available to new sessions right away; sessions already running aren't affected. Use the row's edit or delete buttons to change or remove it (deleting stops loading it in new sessions).
-- Local (command-line) MCP servers can't be added here — only remote endpoints.
+- Click **Add MCP server** to configure a remote service (HTTP or SSE, URL, optional Bearer token and headers), or choose **stdio** for a local program. The local JSON contains `command`, `args` (a string array), and `env` (a string-to-string object). Enter credentials only in the form, never in chat.
+- These shared configurations work with Claude Code, Codex and Pi through Cindy's host connection, including SSE and custom HTTP headers. Local programs run on the Desktop where you save the configuration, under your account and from your home folder, even when an agent accesses the tools through a remote bridge. Saving authorizes this execution; it does not test the connection or install missing runtimes.
+- New or restarted agent sessions load the saved configuration. Running sessions keep their tool snapshot. Teammates can add the saved server using their capability tools and load it on the next turn in the same chat.
+- Native engine configuration files remain separate: writing a Pi, Claude Code or Codex configuration does not register a shared Cindy connection. Existing native entries, credentials and project scopes are not imported, overwritten or copied to another computer. Check for an existing native connection before adding the same service here to avoid loading it twice.
+- An absent live tool is not proof that the program is uninstalled. Check whether it is configured in Cindy or only in one engine, whether this session has loaded it, and whether startup succeeded. A device-offline result is different from MCP startup failure. Verify the live tool list and a successful call before reporting the tool as connected.
+- Edit or delete saved configurations from this list. Local commands are not copied by the new-computer migration assistant; configure them explicitly on the destination computer.
 
 **Settings > Automation:**
 

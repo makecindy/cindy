@@ -84,7 +84,7 @@ function McpRow({
           className="truncate text-13 leading-tight"
           style={{ color: 'var(--settings-integration-subtitle)' }}
         >
-          {config.url}
+          {config.transport === 'stdio' ? t('settings.mcp.fields.localConfig') : config.url}
         </span>
       </div>
       <div className="flex shrink-0 items-center gap-1">
@@ -174,7 +174,11 @@ export function McpServersSection() {
   );
 
   return (
-    <SettingsSection title={t('settings.mcp.title')} description={t('settings.mcp.subtitle')}>
+    <SettingsSection
+      id="settings-mcp-servers"
+      title={t('settings.mcp.title')}
+      description={t('settings.mcp.subtitle')}
+    >
       <McpDuplicateNotice />
       {/* MCP 列表自带传输类型图标与行尾操作，行样式保留 */}
       {!loading && (

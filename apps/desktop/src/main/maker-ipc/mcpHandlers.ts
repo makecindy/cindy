@@ -168,7 +168,10 @@ export function registerMcpHandlers(registry: IpcHandlerRegistry, deps: McpHandl
     await afterChange();
   }
 
-  registry.handle(MAKER_INVOKE.MCP_CUSTOM_CREATE, async (_event, input: unknown) => {
+  registry.handle(MAKER_INVOKE.MCP_CUSTOM_CREATE, async (event, input: unknown) => {
+    if ((input as Partial<CustomMcpConfig> | null)?.transport === 'stdio') {
+      assertTrustedAppRendererEvent(event as Parameters<typeof assertTrustedAppRendererEvent>[0]);
+    }
     await createServer(input, null);
     return { ok: true };
   });
@@ -193,7 +196,10 @@ export function registerMcpHandlers(registry: IpcHandlerRegistry, deps: McpHandl
     return { configurationSaved: true, token: tokenResult, refreshError };
   };
 
-  registry.handle(MAKER_INVOKE.MCP_CUSTOM_UPDATE, async (_event, input: unknown) => {
+  registry.handle(MAKER_INVOKE.MCP_CUSTOM_UPDATE, async (event, input: unknown) => {
+    if ((input as Partial<CustomMcpConfig> | null)?.transport === 'stdio') {
+      assertTrustedAppRendererEvent(event as Parameters<typeof assertTrustedAppRendererEvent>[0]);
+    }
     const v = validateCustomMcpConfig(input, deps.getReservedMcpIds?.() ?? []);
     if (!v.ok) throwIpcError(v.code, v.message);
     const config = input as CustomMcpConfig;

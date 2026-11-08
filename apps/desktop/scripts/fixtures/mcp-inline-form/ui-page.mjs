@@ -9,6 +9,9 @@ export default {
   // No plugin tool card is rendered here; its iframe CSS imports require Vite's ?inline loader.
   stubs: { 'src/renderer/components/chat/GhostToolCard': 'export const CARD_EXPAND_TOGGLE_EVENT = "xdt-card-expand-toggle"; export const GhostToolCard = () => null; export const MailCardEditor = () => null;' },
   cases: {
+    local: { about: 'Shared local MCP configuration with explicit execution location' },
+    'local-narrow': { about: 'Local command form at 320 px', viewport: { width: 320, height: 1100 } },
+    list: { about: 'External tools section and transport scope' },
     default: { about: 'The existing Settings form expanded in the message flow' },
     narrow: { about: 'Inline form at 320 px', viewport: { width: 320, height: 1100 } },
     invalid: { about: 'Original validation and focus in the embedded form' },
@@ -18,6 +21,11 @@ export default {
   },
   async ready(page) { await page.getByRole('button', { name: /./ }).first().waitFor(); },
   async check(page, ui) {
+    if (ui.case === 'list') return;
+    if (ui.case.startsWith('local')) {
+      await page.getByLabel(await ui.t('settings.mcp.fields.localConfig'), { exact: true }).waitFor();
+      assert.equal(await page.getByLabel(await ui.t('settings.mcp.fields.url'), { exact: true }).count(), 0);
+    }
     const title = await ui.t('settings.mcp.dialog.createTitle');
     const region = ui.case === 'settings' ? page.getByRole('dialog') : page.getByRole('region', { name: title });
     await region.waitFor();
