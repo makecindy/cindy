@@ -16,6 +16,7 @@ import { matchPath, useLocation, useNavigate, useSearchParams } from 'react-rout
 import { WINDOW_NO_DRAG_STYLE } from '@/components/layout/windowDrag';
 import { Button } from '@/components/ui/button';
 import { useConfirmDialog } from '@/components/ui/confirm-dialog-provider';
+import { SettingsDrawerScope } from '@/components/ui/settings-rows';
 import { FormField } from '@/components/ui/form-field';
 import { Input } from '@/components/ui/input';
 import { SegmentedControl } from '@/components/ui/segmented-control';
@@ -118,10 +119,12 @@ export function BotGroupSettingsDrawer() {
                 </Dialog.Close>
               </Tip>
             </header>
+            <SettingsDrawerScope>
             <div className={maskOpen ? 'hidden' : 'flex min-h-0 flex-1 flex-col'}>
             {group.serverBacked ? <ChatGroupSettings key={group.id} group={group} /> : <BotGroupSettingsBody key={group.id} group={group} />}
             </div>
             {maskOpen && <GroupMaskSettings groupId={group.id} />}
+            </SettingsDrawerScope>
           </Dialog.Content>
         </Dialog.Overlay>
       </Dialog.Portal>

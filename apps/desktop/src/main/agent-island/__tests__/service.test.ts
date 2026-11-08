@@ -3,6 +3,7 @@ import { homedir } from 'node:os';
 import path from 'node:path';
 
 import { ScriptTarget, transpileModule } from 'typescript';
+import type { AgentIslandLiveActivity } from '../liveActivity.js';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { BrowserWindow } from 'electron';
 import { SESSION_ACTIVITY_CHANNEL } from '@cindy/device-link';
@@ -3399,6 +3400,40 @@ describe('AgentIslandService native publishing', () => {
     expect(playSound).toHaveBeenNthCalledWith(2, customSound('complete.wav'));
   });
 
+  // Agent Notch off, Live Activity on: the Live Activity alert is silent, so the same
+  // event sounds must still play (without respawning the suspended helper), and only
+  // its done / needs-reply alerts stand in for OS notifications. Unit tier.
+  it('keeps event sounds and owns routine alerts when only the Live Activity is on', async () => {
+    const { AgentIslandService } = await import('../service.js');
+    const publish = vi.fn(() => true);
+    const playSound = vi.fn<(sound: AgentIslandSoundChoice) => boolean>(() => true);
+    const playSoundWithoutHelper = vi.fn<(sound: AgentIslandSoundChoice) => void>();
+    const liveActivity = { sync: vi.fn(), ownsAlerts: () => true, setEnabled: vi.fn(), isSupported: () => true };
+    const service = new AgentIslandService({
+      getMainWindow: () => null,
+      nativeHost: { failed: false, publish, playSound, suspend: () => undefined },
+      liveActivity: liveActivity as unknown as AgentIslandLiveActivity,
+      playSoundWithoutHelper,
+    });
+    service.setEnabled(false);
+    service.setSoundSettings({
+      enabled: true,
+      sounds: { ...DEFAULT_AGENT_ISLAND_SOUND_SETTINGS.sounds, start: customSound('start.wav'), complete: customSound('complete.wav') },
+    });
+
+    service.handleUserPrompt({ sessionId: 's1', agentKind: 'codex' }, 'run tests');
+    service.handleAgentEvent({ sessionId: 's1', agentKind: 'codex' }, doneEvent());
+
+    expect(playSoundWithoutHelper.mock.calls).toEqual([[customSound('start.wav')], [customSound('complete.wav')]]);
+    expect(playSound).not.toHaveBeenCalled();
+    expect([service.ownsTaskAlert('done'), service.ownsTaskAlert('needs-reply'), service.ownsTaskAlert('error')])
+      .toEqual([true, true, false]);
+    liveActivity.sync.mockClear();
+    service.resetRuntimeState();
+    // Sign-out / account switch must not leave the old account's tasks in the system UI.
+    expect(liveActivity.sync).toHaveBeenCalledWith(null);
+  });
+
   it('plays the start sound on user prompt without waiting for an isRunning status event', async () => {
     const { AgentIslandService } = await import('../service.js');
     const publish = vi.fn((state: AgentIslandDisplayState, frameOrFrames: AgentIslandNativeFrame | AgentIslandNativeFrame[]) => {
@@ -5766,6 +5801,69 @@ describe('AgentIslandService native publishing', () => {
     const framesById = new Map(latestNativeFrames(publish).map((frame) => [frame.displayId, frame]));
     expect(framesById.get(1)).toMatchObject({ contentWidth: 320 });
     expect(framesById.get(2)).toMatchObject({ contentWidth: 210 });
+  });
+
+  // The macOS Dynamic Island draws above our panel and passes clicks through, so on
+  // those displays the island must not start at the screen center; a stored
+  // position is still the user's choice.
+  it.each([
+    { stored: undefined, expectRightOfSystemIsland: true },
+    { stored: 0.25, expectRightOfSystemIsland: false },
+  ])('starts beside the macOS Dynamic Island unless a position is stored ($stored)', async ({ stored, expectRightOfSystemIsland }) => {
+    const display = {
+      id: 1,
+      label: 'Built-in Liquid Retina XDR Display',
+      bounds: { x: 0, y: 0, width: 1512, height: 993 },
+      internal: true,
+    };
+    mocks.readLayoutPreferences.mockReturnValueOnce(new Map<number, AgentIslandLayoutPreference>(
+      stored === undefined
+        ? []
+        : [[1, { centerXRatio: stored, displayName: display.label, displayIndex: 0, displayInternal: true, displayBounds: display.bounds }]],
+    ));
+    mocks.displays.splice(0, mocks.displays.length, display);
+    const { AgentIslandService } = await import('../service.js');
+    const publish = vi.fn((state: AgentIslandDisplayState, frameOrFrames: AgentIslandNativeFrame | AgentIslandNativeFrame[]) => {
+      void state;
+      void frameOrFrames;
+      return true;
+    });
+    const service = new AgentIslandService({
+      getMainWindow: () => null,
+      nativeHost: { failed: false, publish },
+    });
+    syncEnabledForTest(service, publish);
+    (
+      service as unknown as {
+        handleNativeScreenMetrics(metrics: { screens: unknown[]; preferredDisplayId: number | null }): void;
+      }
+    ).handleNativeScreenMetrics({
+      preferredDisplayId: 1,
+      screens: [{
+        displayId: 1,
+        frame: display.bounds,
+        hasNotch: false,
+        hasSystemIsland: true,
+        notchWidth: 211,
+        topBarHeight: 30,
+        menuBarHeight: 30,
+        safeAreaTop: 0,
+        isMain: true,
+        signature: 'builtin-system-island',
+      }],
+    });
+
+    service.handleUserPrompt({ sessionId: 's1', agentKind: 'codex' }, 'run tests');
+
+    const frame = latestNativeFrames(publish).find((item) => item.displayId === 1);
+    if (!frame || typeof frame.contentWidth !== 'number') throw new Error('missing native frame');
+    const compactLeftEdge = frame.x + frame.width / 2 - frame.contentWidth / 2;
+    const systemIslandRightEdge = display.bounds.width / 2 + 131;
+    if (expectRightOfSystemIsland) {
+      expect(compactLeftEdge).toBeGreaterThanOrEqual(systemIslandRightEdge);
+    } else {
+      expect(frame.x + frame.width / 2).toBeCloseTo(display.bounds.width * stored!, 0);
+    }
   });
 
   it('applies native layout preferences to the emitting display instead of the current target display', async () => {

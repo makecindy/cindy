@@ -1460,13 +1460,22 @@
       "actionFailed": "Impossible d'effectuer l'action. La notification a été conservée. Réessayez.",
       "newConversationTitle": "Nouvelle session",
       "newConversationHint": "Démarrer une nouvelle session",
-      "muteSound": "Couper le son d'Agent Island",
-      "enableSound": "Activer le son d'Agent Island",
-      "settings": "Paramètres d'Agent Island",
+      "muteSound": "Couper le son d'Agent Notch",
+      "enableSound": "Activer le son d'Agent Notch",
+      "settings": "Paramètres d'Agent Notch",
       "newMessage": "Nouveau message",
       "review": "Vérifier",
       "needsInput": "Réponse requise",
       "completed": "Terminé",
+      "liveActivityRunning_one": "{{count}} tâche en cours",
+      "liveActivityRunning_other": "{{count}} tâches en cours",
+      "liveActivityRunning_many": "{{count}} tâches en cours",
+      "liveActivityAlsoRunning_one": "{{count}} autre tâche en cours",
+      "liveActivityAlsoRunning_other": "{{count}} autres tâches en cours",
+      "liveActivityAlsoRunning_many": "{{count}} autres tâches en cours",
+      "liveActivityWaiting_one": "{{count}} tâche vous attend",
+      "liveActivityWaiting_other": "{{count}} tâches vous attendent",
+      "liveActivityWaiting_many": "{{count}} tâches vous attendent",
       "error": "Erreur",
       "input": "Saisie",
       "done": "Terminé",
@@ -1485,6 +1494,13 @@
     }
   },
   "menubar": {
+    "shared": {
+      "label": "Partagé",
+      "note": "Ce crédit est partagé au niveau du compte et ne vous est pas réservé.",
+      "highestWeekly": "Partagé · solde hebdomadaire maximal",
+      "highestWeeklyNote": "Quota hebdomadaire restant le plus élevé parmi les comptes consultables. Partagé par le compte, sans cumul ni réservation personnelle.",
+      "from": "Partagé par {{name}}"
+    },
     "balance": {
       "name": "Solde Cindy",
       "quotaName": "Quota Cindy",
@@ -1840,7 +1856,7 @@
       "apiKeys": "Clés des outils",
       "voiceInput": "Saisie vocale",
       "shortcuts": "Raccourcis clavier",
-      "agentIsland": "Agent Island",
+      "agentIsland": "Dynamic Island",
       "import": "Import de sessions",
       "connections": "Plateformes tierces",
       "providers": "Fournisseurs",
@@ -1862,7 +1878,7 @@
       "billing": "Consommation et facturation",
       "appearance": "Apparence",
       "notifications": "Notifications",
-      "agentIsland": "Agent Island",
+      "agentIsland": "Dynamic Island",
       "collaboration": "Collaboration",
       "agentResource": "Ressources utilisées par l'Agent",
       "gitSafety": "Sécurité Git",
@@ -2338,7 +2354,7 @@
     "notifications": {
       "title": "Notifications",
       "sessionDoneLabel": "Notifications système",
-      "sessionDoneHint": "Recevez une notification lorsqu'une session se termine, rencontre une erreur ou attend une réponse. Les sessions classiques ne notifient que lorsque la fenêtre est en arrière-plan. Lorsque Agent Island est activé, c'est lui qui gère ces alertes.",
+      "sessionDoneHint": "Recevez une notification lorsqu'une session se termine, rencontre une erreur ou attend une réponse. Les sessions classiques ne notifient que lorsque la fenêtre est en arrière-plan. Lorsque Agent Notch ou la Dynamic Island est activé, ce sont eux qui gèrent ces alertes ; avec la Dynamic Island seule, les erreurs restent des notifications système.",
       "sessionDoneAria": "Activer ou désactiver les notifications système des sessions",
       "feishuLabel": "Envoyer un message privé Feishu / Lark lorsqu'une session se termine ou attend une réponse",
       "feishuHint": "Envoie un message privé via le bot Feishu ou Lark associé ; uniquement lorsque la fenêtre n'est pas au premier plan.",
@@ -2450,28 +2466,31 @@
       }
     },
     "agentIsland": {
-      "title": "Agent Island",
-      "unsupported": "Agent Island nécessite macOS 14 ou une version ultérieure.",
+      "title": "Dynamic Island",
+      "unsupported": "Agent Notch nécessite macOS 14 ou une version ultérieure.",
       "subtleRemindersLabel": "Alertes discrètes",
-      "subtleRemindersHint": "Pour les nouveaux messages, les demandes de réponse ou les erreurs, l’icône change au lieu d’afficher une carte de notification sous l’îlot. Cliquez sur l’îlot pour voir la liste complète des tâches.",
+      "subtleRemindersHint": "Pour les nouveaux messages, les demandes de réponse ou les erreurs, l’icône change au lieu d’afficher une carte de notification sous Agent Notch. Cliquez sur Agent Notch pour voir la liste complète des tâches.",
       "subtleRemindersFailed": "Impossible d’enregistrer les paramètres des alertes. Réessayez.",
-      "enableLabel": "Afficher Agent Island",
-      "enableHint": "Affiche en haut de l'écran les tâches en cours d'exécution, celles qui attendent une réponse et celles terminées non lues. L'activer désactive les notifications système équivalentes pour éviter les doubles alertes.",
-      "enableAria": "Activer ou désactiver Agent Island",
+      "liveActivityLabel": "Afficher les tâches dans la Dynamic Island",
+      "liveActivityHint": "Affiche l’avancement des tâches dans la Dynamic Island du nouveau MacBook Pro et s’agrandit quand une action vous attend ou qu’une tâche se termine. Sur les autres Mac, il apparaît dans la barre des menus. Fonctionne indépendamment d’Agent Notch.",
+      "liveActivityFailed": "Impossible d’enregistrer les paramètres des Activités en direct. Réessayez.",
+      "enableLabel": "Afficher Agent Notch",
+      "enableHint": "Affiche l’avancement des tâches en haut de l’écran et vous prévient quand une action vous attend ou qu’un résultat est prêt. Tant qu’il est activé, ces alertes n’arrivent pas aussi en notifications système.",
+      "enableAria": "Activer ou désactiver Agent Notch",
       "displayLabel": "Écran d'affichage",
-      "displayHint": "Choisissez l'écran qui affiche Agent Island. Choisissez « Tous » pour l'afficher sur chaque écran.",
-      "displaySelectAria": "Choisir l'écran d'Agent Island",
+      "displayHint": "Choisissez l'écran qui affiche Agent Notch. Choisissez « Tous » pour l'afficher sur chaque écran.",
+      "displaySelectAria": "Choisir l'écran d'Agent Notch",
       "displayAll": "Tous les écrans",
       "displayOption": "{{name}} · {{resolution}}",
       "displayNameFallback": "Écran {{index}}",
       "displayPrimary": "Principal",
       "displayInternal": "Intégré",
       "displayMissing": "Écran déconnecté {{id}}",
-      "skinLabel": "Apparence de l'icône",
-      "skinHint": "Choisissez le personnage utilisé pour l'icône d'exécution en cours.",
+      "skinLabel": "Personnage",
+      "skinHint": "Le personnage affiché dans Agent Notch et la Dynamic Island.",
       "soundLabel": "Sons des événements",
-      "soundHint": "Choisissez des sons 8 bits pour chaque événement d'Agent Island.",
-      "soundAria": "Activer ou désactiver les sons d'Agent Island",
+      "soundHint": "Choisissez un son 8 bits pour chaque alerte, partagé par Agent Notch et la Dynamic Island. Le son de toucher ne retentit que lorsque vous touchez Agent Notch.",
+      "soundAria": "Activer ou désactiver les sons d'Agent Notch",
       "soundSelectAria": "Son pour {{event}}",
       "soundPreviewAria": "Écouter le son {{event}}",
       "skinAnimationAria": "Changer l'aperçu de l'animation {{skin}}",
@@ -5639,12 +5658,17 @@
         "userBrowserSetup": {
           "installPluginTitle": "Installer le plugin Cindy Chrome",
           "enablePluginTitle": "Activer le plugin Cindy Chrome",
-          "installExtensionTitle": "Ajouter l'extension Cindy à votre navigateur",
+          "connectExtensionTitle": "Extension du navigateur non connectée",
           "pluginBody": "« Mon navigateur » accède à votre Chrome ou Edge via le plugin Cindy Chrome et son extension de navigateur. Installez d'abord le plugin dans Cindy, puis suivez ses indications pour ajouter l'extension.",
-          "extensionBody": "« Ajouter l'extension » ouvre la page de l'extension Cindy dans la boutique de votre navigateur ; choisissez Ajouter et l'état passera à connecté de lui-même. Déjà ajoutée ? Activez-la dans les paramètres des extensions du navigateur.",
+          "connectionBody": "Gardez Cindy et votre navigateur ouverts et vérifiez que l’extension Cindy est activée. Une déconnexion ne signifie pas qu’il faut la réinstaller. L’état se met à jour automatiquement à la reconnexion.",
           "installPlugin": "Installer le plugin",
           "enablePlugin": "Activer",
-          "installExtension": "Ajouter l'extension",
+          "openExtensionStore": "Ouvrir la boutique d’extensions",
+          "updatingTitle": "Mise à jour de la connexion au navigateur",
+          "updatingBody": "La connexion sera rétablie automatiquement après la mise à jour.",
+          "selectPluginTitle": "Choisir une extension de navigateur",
+          "selectPluginBody": "Ouvrez les détails du plugin et choisissez « Utiliser cette extension de navigateur » pour confirmer celle que Cindy utilisera.",
+          "selectPlugin": "Ouvrir le plugin",
           "updatePluginTitle": "Mettre à jour le plugin Cindy Chrome",
           "updatePluginBody": "Le plugin Cindy Chrome installé est trop ancien pour « Mon navigateur ». Mettez-le à jour vers la dernière version, puis suivez ses indications pour ajouter l'extension.",
           "updatePlugin": "Mettre à jour",
@@ -6234,7 +6258,7 @@
         "hook": "Bots de messagerie Cindy"
       },
       "hook": {
-        "description": "Connectez Slack et Telegram au même Cindy. Les messages sont transmis à cet appareil et partagent sa liste de projets et son exécuteur de sessions ; chaque fournisseur conserve son propre compte et ses préférences.",
+        "description": "Connectez Slack, Telegram, Feishu / Lark et d'autres canaux au même Cindy. Les messages sont transmis à cet appareil et partagent sa liste de projets et son exécuteur de sessions ; chaque fournisseur conserve son propre compte et ses préférences.",
         "slackDescription": "Associez des espaces de travail Slack et confiez des tâches à Cindy depuis Slack.",
         "slackDisabledHint": "Activez l'interrupteur pour lancer l'autorisation Slack ; une fois l'association faite, vous pourrez envoyer des tâches depuis Slack.",
         "slackBoundHint": "Association terminée. Désactiver l'interrupteur dissocie cet appareil ; le réactiver nécessite une nouvelle autorisation.",
@@ -6459,6 +6483,45 @@
             "revoked": "Dissocié",
             "superseded": "Associé sur un autre appareil"
           }
+        },
+        "feishu": {
+          "description": "Envoyez vos messages Feishu à votre ordinateur de travail.",
+          "disabledHint": "Activez l'interrupteur, puis autorisez votre compte Feishu / Lark dans le navigateur ou envoyez le code d'association au bot.",
+          "toggleAria": "Activer/désactiver la connexion Feishu / Lark",
+          "connect": "Associer Feishu / Lark",
+          "openApp": "Ouvrir la page d'autorisation",
+          "cancel": "Annuler l'association",
+          "retry": "Réessayer l'association",
+          "openBot": "Ouvrir le bot",
+          "unlink": "Dissocier Feishu / Lark",
+          "unlinkConfirmTitle": "Dissocier Feishu / Lark ?",
+          "unlinkConfirmDescription": "Dissocier uniquement cet ordinateur.",
+          "unavailableHint": "Votre organisation n'a pas encore configuré le bot Feishu / Lark. Contactez l'administrateur de votre organisation.",
+          "unavailableHintPersonal": "Le bot Feishu / Lark n'est pas encore disponible pour les comptes personnels.",
+          "status": {
+            "checking": "Vérification de la prise en charge par le serveur…",
+            "unavailable": "Non configuré par votre organisation",
+            "unavailablePersonal": "Pas encore disponible",
+            "disabled": "Désactivé",
+            "none": "Non associé",
+            "pending": "Autorisez dans le navigateur ou envoyez le code d'association au bot",
+            "awaiting_confirmation": "Confirmez le changement de compte de cet ordinateur dans Feishu / Lark",
+            "confirmed": "{{user}} associé au bot Feishu / Lark",
+            "denied": "Autorisation refusée",
+            "expired": "Autorisation expirée",
+            "failed": "Échec de l'association",
+            "revoked": "Dissocié",
+            "superseded": "Cet ordinateur est associé à un autre compte Feishu / Lark",
+            "appChanged": "Le bot Feishu / Lark a changé. Associez-le à nouveau."
+          },
+          "bindCode": {
+            "label": "Code d'association",
+            "copy": "Copier le code",
+            "copied": "Code d'association copié",
+            "hint": "Ou envoyez ce code au bot Cindy en message privé dans Feishu / Lark"
+          },
+          "setWorkingDevice": "Définir comme ordinateur de travail",
+          "workingDeviceSet": "Ordinateur de travail défini"
         }
       },
       "summary": {
@@ -6477,7 +6540,7 @@
     "tina": {
       "chat": {
         "title": "Conversation",
-        "description": "Conversations simples sans dépôt ; sélectionnez « chat » depuis Slack, Telegram ou X, une session par fil de conversation."
+        "description": "Conversations simples sans dépôt ; sélectionnez « chat » depuis Slack, Telegram, X ou Feishu / Lark, une session par fil de conversation."
       },
       "prefs": {
         "agentLabel": "Agent",
@@ -6487,6 +6550,7 @@
         "providerSlack": "Slack",
         "providerTelegram": "Telegram",
         "providerX": "X",
+        "providerFeishu": "Feishu / Lark",
         "requireConnected": "Modifiable une fois {{provider}} connecté (activez son interrupteur ci-dessus et attendez la connexion).",
         "offlineLocal": "{{provider}} est hors ligne. Les modifications sont enregistrées sur cet ordinateur et seront synchronisées avec la fiche du modèle de conversation à la reconnexion.",
         "requireBinding": "Terminez d'abord l'association du compte {{provider}}.",
@@ -12781,6 +12845,10 @@
       "defer": "Pas maintenant"
     },
     "permissionPrompt": {
+      "titleStdin": "Autoriser la saisie dans ce terminal ?",
+      "titleMcpUrl": "Terminer la demande de {{server}}",
+      "mcpComplete": "Terminé",
+      "mcpCancel": "Annuler",
       "alwaysAllowScoped": "Toujours autoriser {{scope}} dans cette session",
       "alwaysAllowScopedHint": "S'applique à toute la session, et uniquement à ce qui est listé ici.",
       "alwaysAllowSessionHint": "S'applique à toute la session, pas seulement à cette demande.",
@@ -13023,7 +13091,13 @@
       "sendAndContinue": "Envoyer et continuer",
       "close": "Fermer",
       "customAnswer": "Saisir autre chose…",
-      "answerPlaceholder": "Saisissez votre réponse…"
+      "answerPlaceholder": "Saisissez votre réponse…",
+      "validation": {
+        "required": "Renseignez ce champ obligatoire.",
+        "choice": "Choisissez une des options proposées.",
+        "tooShort": "Saisissez au moins {{count}} caractères.",
+        "tooLong": "Saisissez au maximum {{count}} caractères."
+      }
     },
     "planReviewBubble": {
       "title": "Revue du plan",
@@ -14147,8 +14221,10 @@
       "mailLegacy": "Historique du brouillon (lecture seule)",
       "taskAutoArchived": "« {{title}} » archivée",
       "taskAutoArchivedUndo": "Annuler",
-      "taskAutoArchivePending": "Archivée à la sortie",
-      "taskAutoArchiveCancel": "Garder cette fois"
+      "taskAutoArchivePending": "Archivage automatique en quittant cette tâche",
+      "taskAutoArchiveCancel": "Annuler",
+      "taskAutoArchiveCancelled": "Pas d’archivage automatique cette fois",
+      "taskArchiveNow": "Archiver maintenant"
     },
     "ghostHook": {
       "blockedFallback": "Message bloqué par un plugin ; non envoyé",
@@ -19832,5 +19908,33 @@
     "rendered": "Afficher le document",
     "wrap": "Retour à la ligne",
     "lineNumbers": "Numéros de ligne"
+  },
+  "subscriptionAccounts": {
+    "signIn": {
+      "checking": "Vérification du compte local…",
+      "detected": "Compte connecté détecté",
+      "useAccount": "Utiliser ce compte",
+      "anotherAccount": "Se connecter à un autre compte",
+      "keepExisting": "Le nouveau compte rejoint ce fournisseur. Les connexions existantes sont conservées.",
+      "checkFailed": "Impossible de vérifier le compte local. Réessayez.",
+      "retry": "Réessayer",
+      "useCodex": "Se connecter avec Codex"
+    },
+    "title": "Comptes d’abonnement",
+    "note": "Le premier compte utilise le dossier par défaut de la CLI. Les comptes ajoutés se connectent séparément. Les nouvelles tâches sont réparties ; les tâches existantes conservent leur compte.",
+    "strategy": "Répartition de charge",
+    "add": "Ajouter un compte",
+    "default": "Dossier par défaut",
+    "ready": "Connecté",
+    "signedOut": "Connexion requise",
+    "unavailable": "État indisponible",
+    "limited": "Quota atteint",
+    "remove": "Retirer le compte",
+    "removeTitle": "Retirer {{name}} ?",
+    "removeDescription": "Cindy n’attribuera plus de tâches à ce compte. La connexion CLI et l’historique des conversations restent sur cet ordinateur.",
+    "failed": "Impossible de lire ou de mettre à jour le compte. Vérifiez la connexion CLI et le réseau, puis réessayez.",
+    "directory": "Dossier du compte",
+    "loginAgain": "Se reconnecter",
+    "login": "Se connecter"
   }
 }

@@ -124,6 +124,15 @@ describe('settings discoverability regressions', () => {
       }
     }
   });
+  // Character and sounds also serve the Live Activity, so they stay findable when it is the
+  // only surface on; display and subtle reminders belong to Agent Notch alone. Unit tier.
+  it('keeps shared island settings searchable with only the Live Activity on', () => {
+    const agentIsland = { supported: true, enabled: false, soundEnabled: true, liveActivitySupported: true, liveActivity: true };
+    const ids = new Set(buildSettingsSearchDocuments(searchI18n.t, TAB_IDS, { ...searchContext, platform: 'darwin', agentIsland })
+      .map(({ entry }) => entry.id));
+    expect(['settings.agentIsland.skinLabel', 'settings.agentIsland.soundLabel'].every((id) => ids.has(id))).toBe(true);
+    expect(['settings.agentIsland.displayLabel', 'settings.agentIsland.subtleRemindersLabel'].some((id) => ids.has(id))).toBe(false);
+  });
   // Unit regression (#8481): hidden motion selectors must not advertise options.
   it.each([false, true])('filters wallpaper motion labels with selector visible=%s', (wallpaperMotionAvailable) => {
     const documents = buildSettingsSearchDocuments(searchI18n.t, TAB_IDS, { ...searchContext, wallpaperMotionAvailable });
@@ -521,6 +530,7 @@ describe('settings search catalog', () => {
       expect(visible).toContain('imBot.cindy');
       expect(visible).toContain('imBot.cindy.telegram');
       expect(visible).toContain('imBot.cindy.x');
+      expect(visible).toContain('imBot.cindy.feishu');
       expect(visible).toContain('imBot.discord');
       expect(visible).toContain('imBot.telegram');
       expect(visible).toContain('imBot.feishu');

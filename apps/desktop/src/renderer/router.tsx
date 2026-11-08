@@ -5,7 +5,6 @@ import { MainLayout } from '@/components/layout/MainLayout';
 import { MainEntryRedirect } from '@/components/layout/MainEntryRedirect';
 import { RouteErrorFallback } from '@/components/error/RouteErrorFallback';
 import { SidebarWindowLayout } from '@/components/layout/SidebarWindowLayout';
-import { SettingsView } from '@/components/settings/SettingsView';
 import { LoginPage } from '@/components/login/LoginPage';
 import { AddAccountLoginPage } from '@/components/login/AddAccountLoginPage';
 import { ProtectedRoute } from '@/components/auth/ProtectedRoute';
@@ -36,6 +35,10 @@ import { BotSessionView } from '@/features/bots/BotSessionView';
 import { BotDirectMessageView } from '@/features/bots/BotDirectMessageView';
 import { BotGroupChatView } from '@/features/bots/BotGroupChatView';
 import { GhostMainViewFeatureLayout } from '@/features/plugin/GhostMainViewFeatureLayout';
+
+function EmptyRouteFallback() {
+  return null;
+}
 
 /**
  * 三层路由架构：
@@ -185,7 +188,18 @@ export const router = createHashRouter([
                       },
                     ],
                   },
-                  { path: 'settings', element: <SettingsView /> },
+                  {
+                    // 设置页连同供应商目录、计费等约 1.7 MB 只在打开时加载。导航在
+                    // startTransition 里等它就绪,期间保留当前页面;窗口直接以
+                    // #/settings 加载(如崩溃页「重新加载」)时由空的 HydrateFallback
+                    // 占住内容区,MainLayout 导航照常显示。
+                    path: 'settings',
+                    lazy: async () => {
+                      const { SettingsView } = await import('@/components/settings/SettingsView');
+                      return { Component: SettingsView };
+                    },
+                    HydrateFallback: EmptyRouteFallback,
+                  },
                   { path: 'plugins', element: <GhostPluginPage /> },
                   { path: 'apps/:ghostId', element: <GhostMainViewFeatureLayout /> },
                   {

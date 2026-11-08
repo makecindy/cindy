@@ -431,7 +431,7 @@ function PresetDropdown({
           // 与卡片底同色,hover 会看不出来。
           'z-[10001] max-h-[280px] w-[var(--radix-popover-trigger-width)] overflow-y-auto rounded-xl p-2',
           'border border-[var(--cmd-palette-border)]',
-          'bg-[var(--cmd-palette-bg)] shadow-[var(--shadow-menu)]',
+          'bg-[var(--cmd-palette-bg)] shadow-[shadow:var(--shadow-menu)]',
         )}
       >
         <div className="flex flex-col gap-[2px]" role="listbox" aria-label={label}>

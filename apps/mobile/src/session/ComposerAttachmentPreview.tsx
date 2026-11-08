@@ -2,21 +2,19 @@ import {
   ImageLightbox,
   type ImageLightboxAnnotationConfig,
 } from "./ImageLightbox";
-import { PreviewCollectionContext } from "./PreviewChrome";
 import { RemoteAttachmentPreview } from "./RemoteAttachmentPreview";
 import { isPayloadDirectPreviewableUrl } from "./messagePayload";
 import type { MobileMessageGalleryImage } from "./messageGallery";
 import type { ResolveRemoteMediaFn } from "./remoteMedia";
 import type { RemoteSerializedAttachment } from "./types";
 
-/** One explicit draft collection; annotation continues to use the original image and strokes. */
+/** One explicit draft collection; images swipe inside one viewer, annotation keeps the original image and strokes. */
 export function ComposerAttachmentPreview({
   attachments,
   images,
   selectedId,
   annotation,
   resolveRemoteMedia,
-  onSelect,
   onClose,
 }: {
   attachments: readonly RemoteSerializedAttachment[];
@@ -24,7 +22,6 @@ export function ComposerAttachmentPreview({
   selectedId: string | null;
   annotation: ImageLightboxAnnotationConfig;
   resolveRemoteMedia: ResolveRemoteMediaFn;
-  onSelect(id: string): void;
   onClose(): void;
 }) {
   const index = attachments.findIndex((item) => item.id === selectedId);
@@ -32,21 +29,14 @@ export function ComposerAttachmentPreview({
   if (!attachment) return null;
   const image = images.find((item) => item.key === attachment.id);
   return (
-    <PreviewCollectionContext.Provider
-      value={{
-        index,
-        names: attachments.map((item) => item.name),
-        onSelect: (next) => {
-          const item = attachments[next];
-          if (item) onSelect(item.id);
-        },
-      }}
-    >
+    <>
       {image ? (
         <ImageLightbox
           key={attachment.id}
           annotation={annotation}
-          images={[image]}
+          // 待发托盘里的图片放进同一个看图器,左右滑动切换(手机没有集合导航按钮)。
+          images={images}
+          initialImageKey={image.key}
           initialUrl={image.url}
           onClose={onClose}
         />
@@ -74,6 +64,6 @@ export function ComposerAttachmentPreview({
           }}
         />
       )}
-    </PreviewCollectionContext.Provider>
+    </>
   );
 }

@@ -21,7 +21,7 @@
  *     cwd's separator style.
  */
 
-import { stripTrailingPathSeparators } from '../../shared/pathText';
+import { stripTrailingPathSeparators, stripWindowsDriveUriSlash } from '../../shared/pathText';
 import { isWindowsPathLike } from '../../shared/workingDir';
 
 /** Image extension whitelist. Case-insensitive. Allows `?v=2`-style suffix. */
@@ -259,7 +259,7 @@ export function resolveLocalPath(href: string, cwd: string): string {
     let p = safeDecodeURIComponent(href.slice(7));
     // Windows file URL: 'file:///C:/x.png' → after slice(7): '/C:/x.png'
     // → strip leading '/' → 'C:/x.png'
-    if (/^\/[A-Za-z]:[\\/]/.test(p)) p = p.slice(1);
+    p = stripWindowsDriveUriSlash(p);
     return p;
   }
   href = normalizeWindowsDriveHref(href, cwd);
@@ -333,9 +333,9 @@ export type SmartResolveResult =
 function normalizeWindowsDriveHref(href: string, workingDir: string): string {
   if (!isWindowsPathLike(workingDir)) return href;
   // Directory classification strips /C:/ to /C:. Keep the drive-root slash:
-  // C: alone names the drive's current directory, not its root.
-  if (/^\/[A-Za-z]:$/.test(href)) return `${href.slice(1)}/`;
-  return /^\/[A-Za-z]:[\\/]/.test(href) ? href.slice(1) : href;
+  // C: alone names the drive's current directory, not its root. The shared
+  // recognizer also maps bare /C: to C:/ for the same reason.
+  return stripWindowsDriveUriSlash(href);
 }
 
 function toMainLookupHref(href: string, workingDir: string): string {
@@ -740,7 +740,7 @@ export function normalizeXdtFileUrlForRenderer(url: string): string {
   const rawPath = url.slice('xdt-file://'.length, queryOrHash >= 0 ? queryOrHash : undefined);
   let absPath = safeDecodeURIComponent(rawPath);
   // URL syntax adds a leading slash before a Windows drive letter.
-  if (/^\/[A-Za-z]:[\\/]/.test(absPath)) absPath = absPath.slice(1);
+  absPath = stripWindowsDriveUriSlash(absPath);
   if (!(absPath.startsWith('/') || WIN_ABS_RE.test(absPath))) return url;
 
   // Preserve the optional cache-busting revision used by renderer-created
@@ -795,6 +795,6 @@ export function normalizeMarkdownImageSrc(
   }
   // file:///C:/x.png -> /C:/x.png after stripping the scheme. Drop the
   // URL-only leading slash before handing the native Windows path onward.
-  if (/^\/[A-Za-z]:[\\/]/.test(localPath)) localPath = localPath.slice(1);
+  localPath = stripWindowsDriveUriSlash(localPath);
   return toLocalFileUrl(resolveLocalPath(localPath, workingDir));
 }
