@@ -27,12 +27,13 @@ export function createSkillEmbeddingAdapter(
   if (dimensions !== undefined && (!Number.isInteger(dimensions) || dimensions < 1)) {
     throw new Error('Embedding dimensions must be a positive integer');
   }
-  // EmbeddingClient appends /v1/embeddings; accept both service-root and /v1 configuration.
-  const baseUrl = url.href.replace(/\/+$/, '').replace(/\/v1$/, '');
+  // A bare origin uses OpenAI's /v1; explicit API prefixes (including /paas/v4) stay intact.
+  const baseUrl = url.href.replace(/\/+$/, '') + (url.pathname === '/' ? '/v1' : '');
   const env = options.env ?? process.env;
   const apiKeyEnv = config.apiKeyEnv;
   const client = new EmbeddingClient({
     baseUrl,
+    embeddingsPath: '/embeddings',
     getApiKey: () => env[apiKeyEnv],
     fetchImpl: options.fetchImpl,
     cacheSize: 0,
@@ -40,21 +41,26 @@ export function createSkillEmbeddingAdapter(
   return {
     identity: JSON.stringify({
       protocol: 'openai-compatible-v1',
-      endpoint: `${baseUrl}/v1/embeddings`,
+      endpoint: `${baseUrl}/embeddings`,
       model,
       dimensions: dimensions ?? null,
       inputType: 'omitted-for-query-and-document',
     }),
     async embed(texts, _inputType) {
       const vectors: number[][] = [];
+      let modelUsed = model;
       // Serialize batches instead of turning a library refresh into unbounded API fan-out.
       for (let offset = 0; offset < texts.length; offset += 32) {
         const result = await client.embedOpenAICompatible({
           texts: texts.slice(offset, offset + 32), model, dimensions, timeoutMs: 30_000,
         });
+        if (offset > 0 && result.modelUsed !== modelUsed) {
+          throw new Error('Embedding model changed between batches; rebuild with a stable model');
+        }
+        modelUsed = result.modelUsed;
         vectors.push(...result.embeddings);
       }
-      return vectors;
+      return { vectors, modelUsed };
     },
   };
 }

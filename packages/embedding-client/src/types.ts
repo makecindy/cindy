@@ -57,6 +57,8 @@ export interface EmbeddingClientOptions {
    * 服务端下发网关地址)。
    */
   baseUrl: string | (() => string);
+  /** Request path relative to baseUrl; defaults to /v1/embeddings for Cindy's gateway. */
+  embeddingsPath?: string;
   /** 动态读 API key (避免写死, 切账号生效)。返 undefined / 空字符串 = 未登录。 */
   getApiKey: () => string | undefined | null;
   /** 可注入用于单元测试; 缺省走全局 fetch。 */

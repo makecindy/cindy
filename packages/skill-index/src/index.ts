@@ -27,11 +27,14 @@ function validateVectors(vectors: number[][], expectedCount: number, dimensions?
 export class SkillIndex {
   private entries = new Map<string, IndexedEntry>();
   private vectorIdentity?: string;
+  private vectorModel?: string;
+  private vectorGeneration = 0;
 
   constructor(snapshot?: SkillIndexSnapshot) {
     if (!snapshot) return;
     if (snapshot.schemaVersion !== 1) throw new Error('Unsupported skill index snapshot version');
     this.vectorIdentity = snapshot.vectorIdentity;
+    this.vectorModel = snapshot.vectorModel;
     for (const item of snapshot.entries) {
       const textHash = hashText(item.entry);
       this.entries.set(item.entry.id, {
@@ -65,21 +68,28 @@ export class SkillIndex {
     return { added, changed, removed };
   }
 
-  async buildVectors(adapter: SkillEmbeddingAdapter): Promise<{ embedded: number; reused: number }> {
+  async buildVectors(adapter: SkillEmbeddingAdapter, options: { rebuild?: boolean } = {}): Promise<{ embedded: number; reused: number }> {
     const current = this.entries;
-    const sameIdentity = this.vectorIdentity === adapter.identity;
+    const generation = this.vectorGeneration;
+    const sameIdentity = !options.rebuild && this.vectorModel !== undefined && this.vectorIdentity === adapter.identity;
     const pending = [...current.values()].filter((item) => !sameIdentity || !item.vector);
     const reused = current.size - pending.length;
     if (!pending.length) return { embedded: 0, reused };
-    const vectors = await adapter.embed(pending.map((item) => retrievalText(item.entry)), 'document');
+    const { vectors, modelUsed } = await adapter.embed(pending.map((item) => retrievalText(item.entry)), 'document');
+    if (this.entries !== current) throw new Error('Skill catalog changed during vector indexing; build again');
+    if (this.vectorGeneration !== generation) throw new Error('Vector generation changed during indexing; build again');
+    if (sameIdentity && reused && modelUsed !== this.vectorModel) {
+      throw new Error('Embedding model changed; rebuild the library vectors with sync --rebuild');
+    }
     const existingDim = sameIdentity
       ? [...current.values()].find((item) => item.vector)?.vector?.length : undefined;
     validateVectors(vectors, pending.length, existingDim);
-    if (this.entries !== current) throw new Error('Skill catalog changed during vector indexing; build again');
     // Publish only after the whole batch succeeds, keeping the old generation
     // available if another model cannot finish its replacement index.
     for (let i = 0; i < pending.length; i++) pending[i]!.vector = [...vectors[i]!];
     this.vectorIdentity = adapter.identity;
+    this.vectorModel = modelUsed;
+    this.vectorGeneration++;
     return { embedded: pending.length, reused };
   }
 
@@ -97,8 +107,10 @@ export class SkillIndex {
     const semanticRanks = new Map<string, number>();
     let mode: SkillSearchResult['mode'] = 'keyword';
     const indexed = entries.filter((item) => item.vector);
+    const vectorModel = this.vectorModel;
     if (options.embedding && options.embedding.identity === this.vectorIdentity && indexed.length) {
-      const vectors = await options.embedding.embed([query], 'query');
+      const { vectors, modelUsed } = await options.embedding.embed([query], 'query');
+      if (modelUsed !== vectorModel) throw new Error('Embedding model changed; rebuild the library vectors with sync --rebuild');
       validateVectors(vectors, 1, indexed[0]!.vector!.length);
       const semantic = indexed.map((item) => ({ id: item.entry.id, score: cosineSimilarity(vectors[0]!, item.vector!) }))
         .filter((item) => item.score > 0)
@@ -127,6 +139,7 @@ export class SkillIndex {
       schemaVersion: 1,
       entries: structuredClone([...this.entries.values()]),
       ...(this.vectorIdentity === undefined ? {} : { vectorIdentity: this.vectorIdentity }),
+      ...(this.vectorModel === undefined ? {} : { vectorModel: this.vectorModel }),
     };
   }
 

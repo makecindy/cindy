@@ -355,6 +355,7 @@ interface CachedVector {
 
 export class EmbeddingClient {
   private readonly resolveBaseUrl: () => string;
+  private readonly embeddingsPath: string;
   private readonly getApiKey: () => string | undefined | null;
   private readonly fetchImpl: typeof fetch;
   private readonly cache: LruCache<string, CachedVector>;
@@ -373,6 +374,7 @@ export class EmbeddingClient {
       typeof rawBaseUrl === 'function' ? () => normalize(rawBaseUrl()) : () => normalize(rawBaseUrl);
     this.getApiKey = opts.getApiKey;
     this.fetchImpl = opts.fetchImpl ?? globalThis.fetch;
+    this.embeddingsPath = opts.embeddingsPath ?? '/v1/embeddings';
     this.cache = new LruCache<string, CachedVector>(opts.cacheSize ?? DEFAULT_CACHE_SIZE);
     this.log = opts.logger ?? {};
     if (typeof this.fetchImpl !== 'function') {
@@ -721,7 +723,7 @@ export class EmbeddingClient {
     opts: Pick<EmbedRequest, 'inputType' | 'dimensions'>,
     budgetMs?: number,
   ): Promise<OpenAiEmbeddingsResponse> {
-    const url = `${this.resolveBaseUrl()}/v1/embeddings`;
+    const url = `${this.resolveBaseUrl()}${this.embeddingsPath}`;
     // inputType 按 provider 翻成该家的 wire 值(不支持的家不发这个字段);
     // dimensions 统一用 OpenAI 的名字 —— 三家经网关都认它, Voyage 自己的
     // output_dimension 只对 voyage 生效。

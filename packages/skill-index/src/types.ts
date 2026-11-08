@@ -12,7 +12,7 @@ export interface SkillEntry {
 /** identity identifies the endpoint, model, dimensions and embedding options. */
 export interface SkillEmbeddingAdapter {
   identity: string;
-  embed(texts: readonly string[], inputType: 'query' | 'document'): Promise<number[][]>;
+  embed(texts: readonly string[], inputType: 'query' | 'document'): Promise<{ vectors: number[][]; modelUsed: string }>;
 }
 
 export interface SkillIndexSnapshot {
@@ -23,6 +23,7 @@ export interface SkillIndexSnapshot {
     vector?: number[];
   }>;
   vectorIdentity?: string;
+  vectorModel?: string;
 }
 
 export interface SkillMatch {

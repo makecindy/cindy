@@ -22,12 +22,32 @@ function response(vectors: number[][], model = config.model) {
 }
 
 describe('explicit Skill embedding transport', () => {
+  it('preserves provider API prefixes such as the BigModel normal endpoint', async () => {
+    const fetchImpl = vi.fn<typeof fetch>().mockImplementation(async () => response([[1, 0]], 'embedding-3'));
+    const adapter = createSkillEmbeddingAdapter({ ...config,
+      baseUrl: 'https://open.bigmodel.cn/api/paas/v4/', model: 'embedding-3',
+    }, { env: { TEST_EMBEDDING_KEY: 'invalid-test-key' }, fetchImpl });
+    expect(await adapter.embed(['spring motion'], 'query')).toEqual({ vectors: [[1, 0]], modelUsed: 'embedding-3' });
+    expect(fetchImpl.mock.calls[0]![0]).toBe('https://open.bigmodel.cn/api/paas/v4/embeddings');
+    expect(JSON.parse(String(fetchImpl.mock.calls[0]![1]?.body)).model).toBe('embedding-3');
+  });
+
+  it('rejects a provider model switch between batches', async () => {
+    let batch = 0;
+    const fetchImpl = vi.fn<typeof fetch>().mockImplementation(async (_url, init) => {
+      const input = JSON.parse(String(init?.body)).input as string[];
+      return response(input.map(() => [1, 0]), `revision-${++batch}`);
+    });
+    const adapter = createSkillEmbeddingAdapter(config, { env: { TEST_EMBEDDING_KEY: 'invalid-key' }, fetchImpl });
+    await expect(adapter.embed(Array.from({ length: 33 }, () => 'spring'), 'document')).rejects.toThrow('between batches');
+  });
+
   it('uses the configured endpoint and environment key, preserving input order', async () => {
     const fetchImpl = vi.fn<typeof fetch>().mockImplementation(async () => response([[1, 0], [0, 1]]));
     const adapter = createSkillEmbeddingAdapter(config, {
       env: { TEST_EMBEDDING_KEY: 'invalid-test-key' }, fetchImpl,
     });
-    expect(await adapter.embed(['photo', 'sound'], 'document')).toEqual([[1, 0], [0, 1]]);
+    expect(await adapter.embed(['photo', 'sound'], 'document')).toEqual({ vectors: [[1, 0], [0, 1]], modelUsed: config.model });
     const [url, init] = fetchImpl.mock.calls[0]!;
     expect(url).toBe('https://embeddings.invalid/v1/embeddings');
     expect(new Headers(init?.headers).get('authorization')).toBe('Bearer invalid-test-key');
@@ -65,7 +85,7 @@ describe('explicit Skill embedding transport', () => {
   it('does not call the API without the configured environment key or with empty input', async () => {
     const fetchImpl = vi.fn<typeof fetch>();
     const adapter = createSkillEmbeddingAdapter(config, { env: {}, fetchImpl });
-    expect(await adapter.embed([], 'document')).toEqual([]);
+    expect(await adapter.embed([], 'document')).toEqual({ vectors: [], modelUsed: config.model });
     await expect(adapter.embed(['photo'], 'query')).rejects.toMatchObject({ code: 'AUTH_FAILED' });
     expect(fetchImpl).not.toHaveBeenCalled();
   });
@@ -84,7 +104,7 @@ describe('explicit Skill embedding transport', () => {
     });
     const adapter = createSkillEmbeddingAdapter(config, { env: { TEST_EMBEDDING_KEY: 'invalid-key' }, fetchImpl });
     const texts = Array.from({ length: 65 }, (_, index) => String(index));
-    expect(await adapter.embed(texts, 'document')).toEqual(texts.map((text) => [Number(text), 1]));
+    expect(await adapter.embed(texts, 'document')).toEqual({ vectors: texts.map((text) => [Number(text), 1]), modelUsed: config.model });
     expect(sizes).toEqual([32, 32, 1]);
     expect(peak).toBe(1);
   });

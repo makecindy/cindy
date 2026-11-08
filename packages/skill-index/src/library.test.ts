@@ -2,7 +2,7 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { promises as fs } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { discoverSkills, loadIndex, readSkill } from './library.js';
+import { discoverSkills, loadIndex, readConfig, readSkill, withLibraryWrite } from './library.js';
 import { runCli } from './cli.js';
 
 // Production entry: CLI -> discovery -> persisted index -> search -> original read.
@@ -105,5 +105,38 @@ describe('local Skill library workflow', () => {
     await expect(runCli(['init', '--library', library, '--source', source], executable)).rejects.toMatchObject({ code: 'EEXIST' });
     expect((await loadIndex(library)).snapshot().entries).toHaveLength(26);
     await expect(runCli(['search', '--library', library], executable)).rejects.toThrow('--query');
+  });
+
+  // PR #9374: two successful add calls previously overwrote each other's source.
+  // Unit tier: real CLI persistence under two overlapping writers, no timer waits.
+  it('reports concurrent writers and retains every successful source addition', async () => {
+    const target = path.join(root, 'concurrent-library');
+    await runCli(['init', '--library', target, '--source', source], executable);
+    const additions = [path.join(root, 'addition-a'), path.join(root, 'addition-b')];
+    for (const [n, addition] of additions.entries()) {
+      await fs.mkdir(addition);
+      await fs.writeFile(path.join(addition, 'SKILL.md'), `---\nname: addition-${n}\ndescription: Added independently.\n---\n`);
+    }
+    const add = (addition: string) => runCli(['add', '--library', target, '--source', addition], executable);
+    const results = await Promise.allSettled(additions.map(add));
+    const config = await readConfig(target);
+    for (const [n, result] of results.entries()) {
+      if (result.status === 'fulfilled') expect(config.sources.map(item => item.path)).toContain(additions[n]);
+      else {
+        expect(result.reason.message).toContain('being updated');
+        await add(additions[n]);
+      }
+    }
+    expect((await readConfig(target)).sources).toHaveLength(3);
+    expect((await loadIndex(target)).snapshot().entries).toHaveLength(4);
+    // sync must participate in the same cross-process lock as configuration edits.
+    await withLibraryWrite(target, async () => {
+      await expect(runCli(['sync', '--library', target], executable)).rejects.toThrow('being updated');
+      await expect(runCli(['embedding', '--library', target, '--off'], executable)).rejects.toThrow('being updated');
+    });
+    // Failed commands release ownership too.
+    await expect(runCli(['embedding', '--library', target], executable)).rejects.toThrow('--base-url');
+    expect(await runCli(['sync', '--library', target], executable)).toMatchObject({ skills: 4 });
+    await expect(fs.stat(path.join(target, 'library.lock'))).rejects.toMatchObject({ code: 'ENOENT' });
   });
 });

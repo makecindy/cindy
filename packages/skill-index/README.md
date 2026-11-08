@@ -66,6 +66,16 @@ node packages/skill-index/dist/cli.cjs embedding --library "$HOME/.cindy/skill-l
 资源内容、来源路径。查询时再嵌入当前搜索语句，用关键词排名与向量相似度共同排序。
 模型支持指定输出维度时可加 `--dimensions`。请求使用普通 `input` 数组，不发送供应商专属的 `input_type`。
 
+`--base-url` 接受供应商的 API 前缀，保留 `/v1`、`/api/paas/v4` 等路径；仅填写域名时使用 `/v1`。
+例如智谱的普通 API 端点可以直接使用 `embedding-3`：
+
+```sh
+node packages/skill-index/dist/cli.cjs embedding --library "$HOME/.cindy/skill-libraries/personal" --base-url "https://open.bigmodel.cn/api/paas/v4" --model embedding-3 --dimensions 512 --key-env SKILL_EMBEDDING_KEY
+```
+
+该配置已通过真实 API 的建库、中文任务检索、重启复用和增量更新验证。
+端点及参数见[智谱 Embedding-3 文档](https://docs.bigmodel.cn/cn/guide/models/embedding/embedding-3)。
+
 关闭向量检索：
 
 ```sh
@@ -85,6 +95,12 @@ node packages/skill-index/dist/cli.cjs sync --library "$HOME/.cindy/skill-librar
 
 同步报告新增、变更、删除及向量复用数量。只有检索元数据改变的技能才重新嵌入；只改正文中的
 操作细节不重新生成向量，`read` 立即读取新正文。日常搜索只读已同步索引，不在每次任务启动时重扫或重建全库。
+
+索引保存 API 返回的实际模型标识。供应商将同一别名切换到新模型时，检索或增量更新会提示重建；执行
+`sync --library <directory> --rebuild` 为整库生成同一模型的向量。
+
+同一库的配置修改与索引更新共用 `library.lock`，同时发起的第二个写操作会收到忙碌提示，待前一个完成后再执行。
+锁内记录写进程 PID；若写进程被强制结束，确认该进程已停止后移除库目录中的 `library.lock`，再运行 `sync`。
 
 技能作者可以在现有 YAML `metadata` 下提供可选检索线索：
 

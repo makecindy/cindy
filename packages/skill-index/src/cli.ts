@@ -2,13 +2,13 @@ import { promises as fs } from 'node:fs';
 import path from 'node:path';
 import { parseArgs } from 'node:util';
 import { createSkillEmbeddingAdapter } from './embedding.js';
-import { discoverySkill, loadIndex, readConfig, readSkill, syncLibrary, writeJson, type LibraryConfig } from './library.js';
+import { discoverySkill, loadIndex, readConfig, readSkill, syncLibrary, syncLibraryUnlocked, withLibraryWrite, writeJson, type LibraryConfig } from './library.js';
 
 export const HELP = `cindy-skill-index — task-driven local Skill discovery
 
 init      --library <directory> --source <skill-root> [--source <another-root>]
 add       --library <directory> --source <skill-root>
-sync      --library <directory>
+sync      --library <directory> [--rebuild]
 search    --library <directory> --query <task> [--limit <number>]
 read      --library <directory> --id <skill-id> [--offset <number> --sha256 <hash>] [--chars <number>]
 embedding --library <directory> --base-url <URL> --model <model> --key-env <variable> [--dimensions <number>]
@@ -29,7 +29,7 @@ export async function runCli(args: string[], executable: string): Promise<unknow
       offset: { type: 'string' }, chars: { type: 'string' }, sha256: { type: 'string' },
       output: { type: 'string' }, name: { type: 'string' },
       'base-url': { type: 'string' }, model: { type: 'string' }, 'key-env': { type: 'string' },
-      dimensions: { type: 'string' }, off: { type: 'boolean' },
+      dimensions: { type: 'string' }, off: { type: 'boolean' }, rebuild: { type: 'boolean' },
     },
   });
   if (values.help || positionals.length === 0) return HELP;
@@ -55,34 +55,38 @@ export async function runCli(args: string[], executable: string): Promise<unknow
       if (!(await fs.stat(sourcePath)).isDirectory()) throw new Error(`Source must be a directory: ${directory}`);
       return { name: path.basename(sourcePath), path: sourcePath };
     }));
-    if (command === 'init') {
-      const config: LibraryConfig = { version: 1, sources };
-      await fs.mkdir(library, { recursive: true });
-      await fs.writeFile(configPath, JSON.stringify(config, null, 2) + '\n', { flag: 'wx', mode: 0o600 });
-    } else {
+    return withLibraryWrite(library, async () => {
+      if (command === 'init') {
+        const config: LibraryConfig = { version: 1, sources };
+        await fs.mkdir(library, { recursive: true });
+        await fs.writeFile(configPath, JSON.stringify(config, null, 2) + '\n', { flag: 'wx', mode: 0o600 });
+      } else {
+        const config = await readConfig(library);
+        for (const source of sources) {
+          if (!config.sources.some(existing => existing.path === source.path)) config.sources.push(source);
+        }
+        await writeJson(configPath, config);
+      }
+      return syncLibraryUnlocked(library);
+    });
+  }
+  if (command === 'sync') return syncLibrary(library, { rebuild: values.rebuild });
+  if (command === 'embedding') {
+    return withLibraryWrite(library, async () => {
       const config = await readConfig(library);
-      for (const source of sources) {
-        if (!config.sources.some(existing => existing.path === source.path)) config.sources.push(source);
+      if (values.off) delete config.embedding;
+      else {
+        config.embedding = {
+          baseUrl: required(values['base-url'], 'base-url'), model: required(values.model, 'model'),
+          apiKeyEnv: required(values['key-env'], 'key-env'),
+          ...(values.dimensions ? { dimensions: integer(values.dimensions, 'dimensions') } : {}),
+        };
+        // Resolve the configuration before persisting it; no request is made here.
+        createSkillEmbeddingAdapter(config.embedding);
       }
       await writeJson(configPath, config);
-    }
-    return syncLibrary(library);
-  }
-  if (command === 'sync') return syncLibrary(library);
-  if (command === 'embedding') {
-    const config = await readConfig(library);
-    if (values.off) delete config.embedding;
-    else {
-      config.embedding = {
-        baseUrl: required(values['base-url'], 'base-url'), model: required(values.model, 'model'),
-        apiKeyEnv: required(values['key-env'], 'key-env'),
-        ...(values.dimensions ? { dimensions: integer(values.dimensions, 'dimensions') } : {}),
-      };
-      // Resolve the configuration before persisting it; no request is made here.
-      createSkillEmbeddingAdapter(config.embedding);
-    }
-    await writeJson(configPath, config);
-    return syncLibrary(library);
+      return syncLibraryUnlocked(library);
+    });
   }
   if (command === 'search') {
     const config = await readConfig(library);

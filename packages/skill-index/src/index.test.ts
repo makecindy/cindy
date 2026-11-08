@@ -29,9 +29,9 @@ function embedding(identity = 'test:model:3'): SkillEmbeddingAdapter & { embed: 
     identity,
     // Semantic intent deliberately has no shared lexical token with the catalog.
     embed: vi.fn(async (texts: readonly string[], inputType: 'query' | 'document') =>
-      texts.map((text) => inputType === 'query' ? [1, 0, 0]
+      ({ modelUsed: identity, vectors: texts.map((text) => inputType === 'query' ? [1, 0, 0]
         : text.startsWith('video-transcribe') ? [1, 0, 0]
-        : text.startsWith('game-effects') ? [0, 1, 0] : [0, 0, 1])),
+        : text.startsWith('game-effects') ? [0, 1, 0] : [0, 0, 1]) })),
   };
 }
 
@@ -128,13 +128,13 @@ describe('SkillIndex task discovery', () => {
     let finishQuery!: (vectors: number[][]) => void;
     const pendingQuery = new Promise<number[][]>((resolve) => { finishQuery = resolve; });
     const search = index.search('spoken lessons into searchable notes', {
-      embedding: { identity: oldModel.identity, embed: async () => pendingQuery },
+      embedding: { identity: oldModel.identity, embed: async () => ({ vectors: await pendingQuery, modelUsed: oldModel.identity }) },
     });
     const newModel: SkillEmbeddingAdapter = {
       identity: 'new-model:same-dimensions',
-      embed: async (texts, inputType) => texts.map((text) => inputType === 'query' ? [1, 0, 0]
+      embed: async (texts, inputType) => ({ modelUsed: 'new-model', vectors: texts.map((text) => inputType === 'query' ? [1, 0, 0]
         : text.startsWith('game-effects') ? [1, 0, 0]
-        : text.startsWith('video-transcribe') ? [0, 1, 0] : [0, 0, 1]),
+        : text.startsWith('video-transcribe') ? [0, 1, 0] : [0, 0, 1]) }),
     };
     await index.buildVectors(newModel);
     finishQuery([[1, 0, 0]]);
@@ -154,14 +154,56 @@ describe('SkillIndex task discovery', () => {
     expect((await index.search('spoken lessons into searchable notes', { embedding: adapter })).matches[0]?.id).toBe('video');
   });
 
+  // PR #9374: an old incremental build could overwrite a completed new-model
+  // generation. Unit tier: two controlled promises through buildVectors/search.
+  it('rejects an incremental build after another build publishes a generation', async () => {
+    const index = indexed();
+    const oldModel = embedding();
+    await index.buildVectors(oldModel);
+    index.sync([...entries, { ...entries[0]!, id: 'added', name: 'added' }]);
+    let finish!: (vectors: number[][]) => void;
+    const pending = new Promise<number[][]>(resolve => { finish = resolve; });
+    const oldBuild = index.buildVectors({ identity: oldModel.identity, embed: async () => ({ vectors: await pending, modelUsed: oldModel.identity }) });
+    const next = embedding('new-model');
+    await index.buildVectors(next);
+    const before = index.snapshot();
+    finish([[0, 0, 1]]);
+    await expect(oldBuild).rejects.toThrow('generation changed');
+    expect(index.snapshot()).toEqual(before);
+    expect((await index.search('spoken lessons into searchable notes', { embedding: next })).matches[0]?.id).toBe('video');
+  });
+
   it('publishes no vectors for a malformed response and reports a query dimension mismatch', async () => {
     const index = indexed();
-    await expect(index.buildVectors({ identity: 'bad', embed: async () => [[1, 0]] }))
+    await expect(index.buildVectors({ identity: 'bad', embed: async () => ({ vectors: [[1, 0]], modelUsed: 'test:model:3' }) }))
       .rejects.toThrow('count');
     expect(index.snapshot().entries.every((entry) => entry.vector === undefined)).toBe(true);
     const adapter = embedding();
     await index.buildVectors(adapter);
-    await expect(index.search('query', { embedding: { identity: adapter.identity, embed: async () => [[1, 0]] } }))
+    await expect(index.search('query', { embedding: { identity: adapter.identity, embed: async () => ({ vectors: [[1, 0]], modelUsed: 'test:model:3' }) } }))
       .rejects.toThrow('dimensions');
+  });
+
+  // PR #9374: a provider alias can change its actual model without changing
+  // dimensions. Unit tier; exercise persistence, query, incremental build and rebuild.
+  it('rejects alias drift and explicitly rebuilds every vector with the new model', async () => {
+    let modelUsed = 'revision-1';
+    const base = embedding('alias');
+    const adapter: SkillEmbeddingAdapter = {
+      identity: base.identity,
+      embed: async (texts, inputType) => ({ ...(await base.embed(texts, inputType)), modelUsed }),
+    };
+    const index = indexed();
+    await index.buildVectors(adapter);
+    const restarted = new SkillIndex(JSON.parse(JSON.stringify(index.snapshot())));
+    modelUsed = 'revision-2';
+    await expect(restarted.search('spoken lessons into searchable notes', { embedding: adapter })).rejects.toThrow('sync --rebuild');
+    restarted.sync([...entries, { ...entries[0]!, id: 'added', name: 'added' }]);
+    const before = restarted.snapshot();
+    await expect(restarted.buildVectors(adapter)).rejects.toThrow('sync --rebuild');
+    expect(restarted.snapshot()).toEqual(before);
+    expect(await restarted.buildVectors(adapter, { rebuild: true })).toEqual({ embedded: 4, reused: 0 });
+    expect(restarted.snapshot().vectorModel).toBe('revision-2');
+    expect((await restarted.search('spoken lessons into searchable notes', { embedding: adapter })).matches[0]?.id).toBe('video');
   });
 });

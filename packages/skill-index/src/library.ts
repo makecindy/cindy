@@ -76,7 +76,33 @@ export async function loadIndex(library: string): Promise<SkillIndex> {
   return new SkillIndex(snapshot);
 }
 
-export async function syncLibrary(library: string) {
+/** One writer owns configuration read/modify/write and index publication together.
+ * Contention is reported immediately so callers never lose a successful update.
+ */
+export async function withLibraryWrite<T>(library: string, action: () => Promise<T>): Promise<T> {
+  await fs.mkdir(library, { recursive: true });
+  const lockPath = path.join(library, 'library.lock');
+  let lock;
+  try { lock = await fs.open(lockPath, 'wx', 0o600); }
+  catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error;
+    throw new Error(`Skill library is being updated. Run the command again after the writer finishes. If it was terminated, remove ${lockPath} after confirming it has stopped.`);
+  }
+  try {
+    await lock.writeFile(JSON.stringify({ pid: process.pid }) + '\n');
+    return await action();
+  } finally {
+    await lock.close();
+    await fs.unlink(lockPath);
+  }
+}
+
+export async function syncLibrary(library: string, options: { rebuild?: boolean } = {}) {
+  return withLibraryWrite(library, () => syncLibraryUnlocked(library, options));
+}
+
+/** Caller holds withLibraryWrite across configuration edits and this publication. */
+export async function syncLibraryUnlocked(library: string, options: { rebuild?: boolean } = {}) {
   const config = await readConfig(library);
   let index: SkillIndex;
   try { index = await loadIndex(library); }
@@ -86,7 +112,7 @@ export async function syncLibrary(library: string) {
   }
   const changes = index.sync(await discoverSkills(config.sources));
   const vectors = config.embedding
-    ? await index.buildVectors(createSkillEmbeddingAdapter(config.embedding)) : undefined;
+    ? await index.buildVectors(createSkillEmbeddingAdapter(config.embedding), options) : undefined;
   await writeJson(path.join(library, 'index.json'), index.snapshot());
   return { ...changes, skills: index.snapshot().entries.length, ...(vectors ? { vectors } : {}) };
 }
