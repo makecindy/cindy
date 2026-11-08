@@ -447,6 +447,79 @@ describe('multi-device recovery lifecycle', () => {
   });
 });
 
+// #9342: relay 重连后主进程清掉了 presence 视图,目录补齐又失败过一次 → listDevices 只
+// 返回有界旧快照,里面每台设备都是 offline。那不是 presence 证据:拿它当离线判据会把在线
+// 设备移出同步名单,而 presence 是增量流,一直在线的设备不会再发 presence —— 没有任何事件
+// 会把它加回来,只能重启 Cindy。
+describe('stale device directory', () => {
+  const stalePeers = () => peers.map((peer) => ({ ...peer, online: false }));
+
+  it('keeps an online peer in the sync list when the directory only has a stale snapshot', async () => {
+    const listDevices = window.electronAPI.deviceLink.listDevices as unknown as ReturnType<typeof vi.fn>;
+    let stale = false;
+    listDevices.mockImplementation(async () => (stale
+      ? { devices: stalePeers(), stale: true }
+      : { devices: peers }));
+    renderHook(() => useDeviceLinkRemoteProjects());
+    await settle();
+    expect(remoteProjectsStore.hasDevice('healthy')).toBe(true);
+
+    // relay 掉线再上线:主进程的 presence 视图已被清空,目录补齐失败 → 只剩旧快照。
+    stale = true;
+    act(() => listeners.onStatusChanged({ status: 'connecting', directDataDeviceIds: [] }));
+    act(() => listeners.onStatusChanged({ status: 'online', directDataDeviceIds: [] }));
+    await settle();
+
+    // 设备仍在同步名单里:周期对账照常读它的会话列表(修复前它已被移出名单,不再有读取)。
+    invoke.mockClear();
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(120_000);
+    });
+    expect(
+      invoke.mock.calls.filter(([peer, channel]) => peer === 'healthy' && channel === 'local-db:sessions:list'),
+    ).not.toHaveLength(0);
+  });
+
+  // 旧快照最多 30 分钟有界,过期后连旧快照都没有。目录读不到时必须有有界重读,
+  // 否则重连后的视图永远停在「目录不可用」上,只能等重启。
+  it('re-reads the directory with backoff until a fresh directory arrives', async () => {
+    const listDevices = window.electronAPI.deviceLink.listDevices as unknown as ReturnType<typeof vi.fn>;
+    let stale = true;
+    listDevices.mockImplementation(async () => (stale
+      ? { devices: stalePeers(), stale: true }
+      : { devices: peers }));
+    renderHook(() => useDeviceLinkRemoteProjects());
+    await settle();
+    const initial = listDevices.mock.calls.length;
+
+    // 5 秒后重读一次。
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(5_000);
+    });
+    expect(listDevices.mock.calls.length).toBe(initial + 1);
+    // 退避翻倍:下一次在 10 秒后,不是 5 秒后。
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(5_000);
+    });
+    expect(listDevices.mock.calls.length).toBe(initial + 1);
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(5_000);
+    });
+    expect(listDevices.mock.calls.length).toBe(initial + 2);
+
+    // 拿到新目录后不再重读。
+    stale = false;
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(30_000);
+    });
+    const afterFresh = listDevices.mock.calls.length;
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(120_000);
+    });
+    expect(listDevices.mock.calls.length).toBe(afterFresh);
+  });
+});
+
 // Review (#8381): a cache read that lands after getState() seeds `connecting` shards. They must
 // be settled against what the link will do: a standby instance (another Cindy owns the link)
 // shows them offline immediately; an instance that will connect gets the normal grace and then

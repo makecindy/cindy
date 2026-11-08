@@ -468,6 +468,16 @@ export function useDeviceLinkRemoteProjects(
      */
     const cacheHydrationBlocked = new Set<string>();
     let directoryGeneration = 0;
+    /**
+     * 设备目录重读退避:relay 在线但目录仍读不到(有界旧快照 / REST 失败)时,按 5 秒起步、
+     * 翻倍、最长 60 秒重读一次,直到拿到新目录。relay 离线 / 卸载即取消。
+     * 旧快照里的 offline 行不是 presence 证据(见 reseed),少了这条退避,一次断网重连
+     * 就可能把在线设备永久移出同步名单,只能重启 Cindy(#9342)。
+     */
+    const DIRECTORY_RETRY_BASE_MS = 5_000;
+    const DIRECTORY_RETRY_MAX_MS = 60_000;
+    let directoryRetryTimer: ReturnType<typeof setTimeout> | null = null;
+    let directoryRetryDelayMs = DIRECTORY_RETRY_BASE_MS;
     /** relay 在线时才跑 anti-entropy；初始状态未知时保守暂停，避免离线失败重试。 */
     let linkOnline: boolean | null = null;
     let directDataDevices = new Set<string>();
@@ -792,6 +802,32 @@ export function useDeviceLinkRemoteProjects(
       }
     };
 
+    const cancelDirectoryRetry = (): void => {
+      if (directoryRetryTimer) clearTimeout(directoryRetryTimer);
+      directoryRetryTimer = null;
+    };
+    /** 取消重读并把退避复位:下一轮从头 5 秒起。 */
+    const stopDirectoryRetry = (): void => {
+      cancelDirectoryRetry();
+      directoryRetryDelayMs = DIRECTORY_RETRY_BASE_MS;
+    };
+    /**
+     * 目录读不到时的有界重读。一次只挂一个计时器(不叠加),relay 离线不重读。
+     * 旧快照最多 30 分钟有界,过期后连旧快照都没有 —— 没有这条退避,重连后的视图永远
+     * 停在「目录不可用」上,直到重启(#9342)。
+     */
+    const scheduleDirectoryRetry = (): void => {
+      if (disposed || directoryRetryTimer) return;
+      if (linkOnline === false) return;
+      const delay = directoryRetryDelayMs;
+      directoryRetryDelayMs = Math.min(DIRECTORY_RETRY_MAX_MS, directoryRetryDelayMs * 2);
+      directoryRetryTimer = setTimeout(() => {
+        directoryRetryTimer = null;
+        if (disposed || linkOnline === false) return;
+        void reseed();
+      }, delay);
+    };
+
     /** 全量重播(初始 + WS 重连):listDevices 带 isSelf,权威。 */
     const reseed = (): Promise<void> => {
       const generation = directoryGeneration;
@@ -800,6 +836,12 @@ export function useDeviceLinkRemoteProjects(
         .then(({ devices, stale }) => {
           if (disposed || generation !== directoryGeneration) return;
           for (const d of devices) {
+            // 有界旧快照里的 offline 行不是 presence 证据:主进程在 relay 掉线时清掉了
+            // presence 视图,而重连后的目录补齐可能还没成功,旧快照于是把每台设备都投影成
+            // offline。拿它当离线判据会把在线设备踢出同步名单,而 presence 是增量流,
+            // 一直在线的设备不会再发 presence —— 没有任何事件会把它加回来,只能重启
+            // Cindy(#9342)。旧快照里 online 的行是经数据通道验证的,照常使用。
+            if (stale && !d.online) continue;
             applyDevice({
               deviceId: d.deviceId,
               name: d.name,
@@ -837,9 +879,17 @@ export function useDeviceLinkRemoteProjects(
               cacheHydrationBlocked.add(deviceId);
               clearCachedDevice(deviceId);
             }
+            // 拿到新目录:目录重读退避到此为止,下一次目录不可用时再从头开始。
+            stopDirectoryRetry();
+          } else {
+            // 仍然只有旧快照:按退避重读,直到目录恢复。
+            scheduleDirectoryRetry();
           }
         })
-        .catch((err) => log.debug('listDevices reseed failed', err));
+        .catch((err) => {
+          log.debug('listDevices reseed failed', err);
+          scheduleDirectoryRetry();
+        });
     };
 
     // 冷启动首屏:用上次落盘的列表快照把侧边栏画出来(标 disconnected),不等 bootstrap 往返。
@@ -1107,6 +1157,9 @@ export function useDeviceLinkRemoteProjects(
       }
       if (p.status !== 'online') {
         clearAllArchivedSessionRetries();
+        // relay 不在线时目录重读没有意义(读到的必然是旧快照或失败),停掉退避。
+        // relay 回到 online 时那次 reseed 会按需重新起一条。
+        stopDirectoryRetry();
         for (const deviceId of eligible.keys()) if (!directDataDevices.has(deviceId)) remoteProjectAliases.suspend(deviceId);
         // relay 瞬时重连(connecting):保留远程会话镜像,只标记 disconnected,让 All Sessions
         // 不因网络抖动反复增删/重排。eligible 保留不动 → 重连 online 时下面的分支自动
@@ -1227,6 +1280,7 @@ export function useDeviceLinkRemoteProjects(
     return () => {
       disposed = true;
       clearTimeout(initialDiscoveryTimer);
+      stopDirectoryRetry();
       for (const { timer } of scheduleEventRefreshes.values()) clearTimeout(timer);
       scheduleEventRefreshes.clear();
       clearConnectingGrace();
