@@ -17,6 +17,8 @@ import path from 'node:path';
 
 import {
   copyCodexAuthSnapshot,
+  codexAuthLinkAcceptanceFor,
+  codexAuthPathsShareIdentity,
   inspectCodexAuthLink,
   relinkSharedCodexAuth,
   recoverCodexAuth,
@@ -288,6 +290,19 @@ describe('recoverCodexAuth', () => {
     expect(fs.statSync(systemAuth).nlink).toBe(1);
     expect(fs.readFileSync(myAuth, 'utf8')).toBe(SYSTEM_CONTENT);
   });
+
+  // 测试价值(#9316 review): 重建的前提是目标此刻仍然不存在。本机 Codex 在这段
+  // 空窗里把目标重建出来(新一代凭证)时,拿旧字节覆盖它就等于丢掉刚刷新的
+  // refresh token —— 目标在,就不是「丢了」,不重建也不覆盖。
+  it('目标已被本机 Codex 重建出来时,不拿旧字节覆盖它', async () => {
+    fs.writeFileSync(systemAuth, SYSTEM_CONTENT);
+    fs.writeFileSync(myAuth, MY_CONTENT);
+
+    const ok = await recoverCodexAuth(systemAuth, myAuth, 'win32');
+
+    expect(ok).toBe(false);
+    expect(fs.readFileSync(myAuth, 'utf8')).toBe(MY_CONTENT);
+  });
 });
 
 describe('syncIndependentCodexAuth (#9277)', () => {
@@ -552,6 +567,119 @@ describe('syncIndependentCodexAuth (#9277)', () => {
     expect(out.kind).toBe('unchanged');
     expect(fs.statSync(systemAuth).nlink).toBe(1);
     expect(fs.readFileSync(systemAuth, 'utf8')).toBe(SYSTEM_CONTENT);
+  });
+
+  // 测试价值(#9316 review): 内容一致 ≠ 本地路径干净。同机另一个升级前的 profile
+  // 仍硬链着这份本地副本时,本地 auth.json 的 nlink 仍 > 1,Codex 0.165+ 照样
+  // 拒绝写它 —— 只拆系统那一份不够,本地这份的硬链也要一并拆掉。
+  it('内容一致时也拆掉本地副本上残留的硬链', async () => {
+    fs.writeFileSync(systemAuth, SYSTEM_CONTENT);
+    fs.writeFileSync(myAuth, SYSTEM_CONTENT);
+    const otherProfile = path.join(tmpRoot, 'other-profile', 'auth.json');
+    fs.mkdirSync(path.dirname(otherProfile), { recursive: true });
+    fs.linkSync(myAuth, otherProfile);
+    expect(fs.statSync(myAuth).nlink).toBe(2);
+
+    const out = await syncIndependentCodexAuth(systemAuth, myAuth, 'win32');
+
+    expect(out.kind).toBe('unchanged');
+    // 本地这份换到了新 inode:nlink 回到 1,Codex 能原子写入。
+    expect(fs.statSync(myAuth).nlink).toBe(1);
+    // 别的 profile 的旧链接留在旧 inode 上,内容不受影响。
+    expect(fs.statSync(otherProfile).nlink).toBe(1);
+    expect(fs.readFileSync(myAuth, 'utf8')).toBe(SYSTEM_CONTENT);
+    // 两侧都干净 → 没有残余要报。
+    expect(out.residualSystemHardlinks).toBeUndefined();
+    expect(out.residualLocalHardlinks).toBeUndefined();
+  });
+
+  // 测试价值(#9316 review): 拆残余硬链失败(ACL/EBUSY)时,返回值里区分不出
+  // 「本来就没有」和「拆失败」。必须再数一次 nlink 把残余报出来 —— 否则调用方
+  // 会把「凭证在,但 Codex 写不进去」当成同步成功,记下「共享已就绪」。
+  it('拆残余硬链失败时把残余报出来,不当成已经干净', async () => {
+    fs.writeFileSync(systemAuth, SYSTEM_CONTENT);
+    fs.writeFileSync(myAuth, SYSTEM_CONTENT);
+    const otherProfile = path.join(tmpRoot, 'other-profile', 'auth.json');
+    fs.mkdirSync(path.dirname(otherProfile), { recursive: true });
+    fs.linkSync(systemAuth, otherProfile);
+    const originalRename = fs.promises.rename.bind(fs.promises);
+    vi.spyOn(fs.promises, 'rename').mockImplementation(async (from, to) => {
+      if (String(to) === systemAuth && String(from).includes('.copytmp')) {
+        const err = new Error('EBUSY: resource busy') as NodeJS.ErrnoException;
+        err.code = 'EBUSY';
+        throw err;
+      }
+      return originalRename(from as never, to as never);
+    });
+
+    const out = await syncIndependentCodexAuth(systemAuth, myAuth, 'linux');
+
+    // 硬链还在 → 必须报出来,不能当成「已就绪」。
+    expect(out.residualSystemHardlinks).toBe(2);
+    expect(fs.statSync(systemAuth).nlink).toBe(2);
+    // 拆失败不能把凭证弄丢。
+    expect(fs.readFileSync(systemAuth, 'utf8')).toBe(SYSTEM_CONTENT);
+  });
+
+  // 测试价值(#9316 review): 代次比较必须精确到 ns。只比 ms 时,本机 Codex 在同
+  // 一毫秒内原地改写系统凭证(同一个 inode、同样的字节数)会被漏判成「没换代」,
+  // 撕裂代次的旧字节就被发布到本地 —— 本地凭证短暂停在上一代。
+  it('复制期间源在同一毫秒内原地改写时,不发布旧字节', async () => {
+    fs.writeFileSync(systemAuth, SYSTEM_CONTENT);
+    fs.writeFileSync(myAuth, MY_CONTENT);
+    // 固定代次:mtime 的毫秒部分与下面那次改写相同,只有 ns 部分不同。
+    fs.utimesSync(systemAuth, 1700000000, 1700000000);
+    const REFRESHED_CONTENT = JSON.stringify({ tokens: { access_token: 'refreshed-tk' } });
+    expect(REFRESHED_CONTENT.length).toBe(SYSTEM_CONTENT.length);
+    const originalCopyFile = fs.promises.copyFile.bind(fs.promises);
+    let refreshed = false;
+    vi.spyOn(fs.promises, 'copyFile').mockImplementation(async (from, to, options) => {
+      await originalCopyFile(from as never, to as never, options as never);
+      // 复制完成后本机 Codex 在同一毫秒内原地改写了系统凭证(同一个 inode)。
+      if (!refreshed && String(from) === systemAuth) {
+        refreshed = true;
+        fs.writeFileSync(systemAuth, REFRESHED_CONTENT);
+        fs.utimesSync(systemAuth, 1700000000.0005, 1700000000.0005);
+      }
+    });
+
+    const out = await syncIndependentCodexAuth(systemAuth, myAuth, 'win32');
+
+    expect(out.kind).toBe('copied-from-system');
+    // 本地副本拿到的是新一代内容,不是复制途中作废的旧字节。
+    expect(fs.readFileSync(myAuth, 'utf8')).toBe(REFRESHED_CONTENT);
+  });
+
+  // 测试价值(#9316 review): relink 可能以 recovered 收口(替换失败后从系统凭证
+  // 重建了共享链接)。此时本地凭证其实已经共享系统凭证 —— 登录路径要按最终身份
+  // 认账,不能只因 relink 的分类不是 linked 就判成失败。
+  it.skipIf(!canLinkFile)('relink 以 recovered 收口时,本地凭证已经共享了系统凭证', async () => {
+    fs.writeFileSync(systemAuth, SYSTEM_CONTENT);
+    const originalRename = fs.promises.rename.bind(fs.promises);
+    vi.spyOn(fs.promises, 'rename').mockImplementation(async (from, to) => {
+      if (String(to) === myAuth && String(from).includes('.linktmp')) {
+        const err = new Error('EBUSY: resource busy') as NodeJS.ErrnoException;
+        err.code = 'EBUSY';
+        throw err;
+      }
+      return originalRename(from as never, to as never);
+    });
+
+    const relink = await relinkSharedCodexAuth(systemAuth, myAuth, 'darwin');
+
+    expect(relink.kind).toBe('recovered');
+    // 重建出来的是指向系统凭证的链接:身份上已经共享。
+    const sharesIdentity = await codexAuthPathsShareIdentity(myAuth, systemAuth);
+    expect(sharesIdentity).toBe(true);
+    // 登录路径按最终身份认账 —— 不因为 relink 的分类不是 linked 就判失败。
+    expect(codexAuthLinkAcceptanceFor(relink.kind, sharesIdentity, 'linux')).toBe('accept-shared');
+    // 身份不成立时,recovered 只能退回独立副本路径(POSIX 直接判失败)。
+    expect(codexAuthLinkAcceptanceFor(relink.kind, false, 'linux')).toBe('reject');
+    expect(codexAuthLinkAcceptanceFor(relink.kind, false, 'win32')).toBe('fallback-copy');
+    // 独立副本路径在这里会跳过(已是 symlink) —— 旧登录路径据此判成失败。
+    await expect(syncIndependentCodexAuth(systemAuth, myAuth, 'darwin')).resolves.toEqual({
+      kind: 'skipped',
+    });
   });
 
   // 测试价值(#9316 review): 时间戳必须随 rename 一起原子生效。若发布后再按路径

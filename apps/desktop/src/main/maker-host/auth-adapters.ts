@@ -61,7 +61,9 @@ import {
   relinkSharedCodexAuth,
   syncIndependentCodexAuth,
   resolveWindowsAclPrincipal,
-  systemCodexAuthLinkCount,
+  codexAuthLinkAcceptanceFor,
+  codexAuthLinkCount,
+  codexAuthPathsShareIdentity,
 } from './codex-auth-link.js';
 import { getCodexCliAuthPath, getPreferredSharedCodexAuthPath, getReleaseCodexAuthPath } from './codex-shared-auth.js';
 import { codexWorkspaceIdFromTokens, readChatgptIdTokenClaims } from './codex-auth-identity.js';
@@ -1197,7 +1199,7 @@ export class DesktopCodexAuthAdapter implements AuthAdapter {
    */
   private async clearResidualSystemCodexHardlinks(systemAuth: string): Promise<boolean> {
     await breakResidualSystemCodexHardlinks(systemAuth, process.platform);
-    const nlink = await systemCodexAuthLinkCount(systemAuth);
+    const nlink = await codexAuthLinkCount(systemAuth);
     if (nlink !== undefined && nlink > 1) {
       credPathLog.warn('codex auth.json still has residual hardlinks; Codex cannot persist credentials until cleaned', {
         nlink,
@@ -1401,6 +1403,16 @@ export class DesktopCodexAuthAdapter implements AuthAdapter {
             synced.kind === 'unchanged';
           if (syncedOk) {
             if (hasLocalEntry && !topology.healthy) this.lastOrphanRepair = 'relinked';
+            // 两侧还挂着别处的硬链时,Codex 0.165+ 拒绝写它们 —— 凭证在,但
+            // 存不住新 token。清不掉就不记「共享已就绪」,留给下一次对账重试
+            // (和共享链接路径的处置一致,#9316 review)。
+            if (synced.residualSystemHardlinks !== undefined || synced.residualLocalHardlinks !== undefined) {
+              credPathLog.warn('codex auth.json still has residual hardlinks; Codex cannot persist credentials until cleaned', {
+                systemHardlinks: synced.residualSystemHardlinks,
+                localHardlinks: synced.residualLocalHardlinks,
+              });
+              break;
+            }
             this.lastKnownCodexCredentialScope = 'system-shared';
             credPathLog.warn('Windows file symlink unavailable; synced an independent Codex auth copy', {
               direction: synced.kind,
@@ -2021,9 +2033,22 @@ export class DesktopCodexAuthAdapter implements AuthAdapter {
             if (result.kind !== 'copied') throw new Error('Local auth snapshot failed');
           } else {
             const relink = await relinkSharedCodexAuth(systemAuth, localAuth);
-            if (relink.kind !== 'linked') {
+            // relink 可能以 recovered / swap-failed-intact 收口:此时本地凭证其实
+            // 已经共享了系统凭证(重建成功,或并发的另一次已抢先放好)。看最终的
+            // 文件身份,别把健康的结果当成失败(#9316 review)。
+            const sharesSystemCredential = await codexAuthPathsShareIdentity(localAuth, systemAuth);
+            const acceptance = codexAuthLinkAcceptanceFor(relink.kind, sharesSystemCredential, process.platform);
+            if (acceptance === 'accept-shared' && relink.kind !== 'linked') {
+              credPathLog.warn('codex auth.json link recovered with the shared system credential', {
+                relink: relink.kind,
+                error: relink.error?.message,
+              });
+            }
+            if (acceptance === 'reject') {
+              throw new Error('Local auth link failed');
+            }
+            if (acceptance === 'fallback-copy') {
               // Windows 无 symlink 权限时接受独立副本降级(#9277),不再要求同 inode。
-              if (process.platform !== 'win32') throw new Error('Local auth link failed');
               // 登录读的是系统凭证,但本地残留副本可能属于另一个账号(旧账号之后
               // 又被刷新过)。只有账号证明一致才允许把本地写回 ~/.codex。
               const sysAccountId = await readCodexAccountId(systemAuth);
@@ -2042,8 +2067,15 @@ export class DesktopCodexAuthAdapter implements AuthAdapter {
                 synced.kind === 'copied-from-local' ||
                 synced.kind === 'unchanged';
               if (!syncedOk) throw new Error('Local auth link failed');
-            } else if (!pathsReferToSameFileSync(localAuth, systemAuth)) {
-              throw new Error('Local auth link failed');
+              // 两侧还挂着别处的硬链时,Codex 0.165+ 拒绝写它们 —— 凭证在,但
+              // 存不住新 token。不拦登录(凭证本身可用),留下警告;下一次对账
+              // 会再试一次(#9316 review)。
+              if (synced.residualSystemHardlinks !== undefined || synced.residualLocalHardlinks !== undefined) {
+                credPathLog.warn('codex auth.json still has residual hardlinks; Codex cannot persist credentials until cleaned', {
+                  systemHardlinks: synced.residualSystemHardlinks,
+                  localHardlinks: synced.residualLocalHardlinks,
+                });
+              }
             }
             // 系统路径上还挂着别的 profile 的旧硬链时 nlink 仍 > 1,Codex 拒绝写它。
             // 清不掉不拦登录(凭证本身可用),但要留下警告;下一次对账会再试一次。

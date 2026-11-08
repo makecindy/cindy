@@ -24,6 +24,7 @@
  */
 import { execFile } from 'node:child_process';
 import { promises as fsp } from 'node:fs';
+import type { BigIntStats } from 'node:fs';
 import os from 'node:os';
 import { promisify } from 'node:util';
 
@@ -172,7 +173,13 @@ export async function relinkSharedCodexAuth(
     }
     // myAuth 被删却没换上 → 绝不能让用户凭空丢登录态, 尽力从 systemAuth 重建。
     const recovered = await recoverCodexAuth(systemAuth, myAuth, platform);
-    return { kind: recovered ? 'recovered' : 'lost', error: error as Error };
+    if (recovered) return { kind: 'recovered', error: error as Error };
+    // 重建期间目标又被本机 Codex 建了出来(新一代凭证):目标现在是在的,
+    // 不能报 lost 让用户重新登录(#9316 review)。
+    if (await pathEntryExists(myAuth)) {
+      return { kind: 'swap-failed-intact', error: error as Error };
+    }
+    return { kind: 'lost', error: error as Error };
   }
 }
 
@@ -199,7 +206,12 @@ export async function recoverCodexAuth(
     // POSIX 失败不复制:可写副本会变成 refresh-token 孤岛。Windows 不能再退回
     // hardlink(nlink>1 会让 Codex 0.165+ 拒绝写入),只能留一份独立副本(#9277)。
     if (platform !== 'win32') return false;
-    const copied = await copyCodexAuthSnapshot(systemAuth, myAuth, platform, execFileImpl);
+    // 重建的前提是目标此刻仍然不存在。若本机 Codex 在这段空窗里把目标重建出来
+    // (新一代凭证),覆盖它就等于丢掉刚刷新的 refresh token —— 按「目标仍在」
+    // 交回调用方,不覆盖(#9316 review)。
+    const copied = await copyCodexAuthSnapshot(systemAuth, myAuth, platform, execFileImpl, {
+      expectTargetAbsent: true,
+    });
     return copied.kind === 'copied';
   }
 }
@@ -233,16 +245,21 @@ export async function copyCodexAuthSnapshot(
   opts: { expectTargetMtimeMs?: number; expectTargetAbsent?: boolean } = {},
 ): Promise<CodexAuthSnapshotOutcome> {
   const sidecar = `${myAuth}.${process.pid}.${sidecarCounter++}.copytmp`;
-  let sourceStat: Awaited<ReturnType<typeof fsp.stat>>;
+  let sourceStat: BigIntStats;
   try {
-    sourceStat = await fsp.stat(systemAuth);
+    // 身份比较必须用 bigint:NTFS 的 file id 可能超出安全整数范围,四舍五入后
+    // 两个不同的 inode 会比较成相等 —— 撕裂代次的字节会被当成稳定代次发布,
+    // 随后的等 mtime 对账再把旧 refresh token 写回系统文件(#9316 review)。
+    sourceStat = await fsp.stat(systemAuth, { bigint: true });
     await fsp.copyFile(systemAuth, sidecar);
-    await fsp.chmod(sidecar, Number(sourceStat.mode & 0o777)).catch(() => undefined);
+    await fsp.chmod(sidecar, Number(sourceStat.mode & 0o777n)).catch(() => undefined);
     // 复制期间源换代 → 撕裂代次的字节作废,交给调用方重新对账。
-    const sourceStatAfter = await fsp.stat(systemAuth);
+    const sourceStatAfter = await fsp.stat(systemAuth, { bigint: true });
     if (
+      sourceStatAfter.dev !== sourceStat.dev ||
       sourceStatAfter.ino !== sourceStat.ino ||
-      sourceStatAfter.mtimeMs !== sourceStat.mtimeMs
+      sourceStatAfter.mtimeNs !== sourceStat.mtimeNs ||
+      sourceStatAfter.size !== sourceStat.size
     ) {
       await fsp.rm(sidecar, { force: true }).catch(() => undefined);
       return { kind: 'source-changed' };
@@ -317,10 +334,55 @@ export async function copyCodexAuthSnapshotWithRetry(
   return last;
 }
 
-/** 系统凭证当前的硬链数(读不到时返回 undefined)。 */
-export async function systemCodexAuthLinkCount(systemAuth: string): Promise<number | undefined> {
+/**
+ * 登录路径对「本地凭证是否可用」的判定结果:
+ *   - accept-shared  本地凭证已经共享系统凭证(按最终身份判断),直接认账
+ *   - fallback-copy  共享链接建不出来,退回独立副本路径(仅 Windows)
+ *   - reject         判失败
+ */
+export type CodexAuthLinkAcceptance = 'accept-shared' | 'fallback-copy' | 'reject';
+
+/**
+ * relink 的分类只是过程里的结论,不是最终状态:它可能以 recovered(重建出共享链接)
+ * 或 swap-failed-intact(并发的另一次已抢先放好)收口 —— 这两种情况下本地凭证其实
+ * 已经共享系统凭证。只看 relink 的分类就判失败,会把健康状态说成「本地凭证不可用」。
+ */
+export function codexAuthLinkAcceptanceFor(
+  relinkKind: RelinkResultKind,
+  sharesIdentity: boolean,
+  platform: NodeJS.Platform,
+): CodexAuthLinkAcceptance {
+  if (sharesIdentity) return 'accept-shared';
+  if (relinkKind !== 'linked') return platform === 'win32' ? 'fallback-copy' : 'reject';
+  return 'reject';
+}
+
+/**
+ * 两个路径是否确证指向同一个文件;读不到(路径刚被换掉)时按 false 处理 ——
+ * 「无法确证」不能说成「已经共享」。
+ */
+export async function codexAuthPathsShareIdentity(left: string, right: string): Promise<boolean> {
   try {
-    const stat = await fsp.stat(systemAuth, { bigint: true });
+    const [leftStat, rightStat] = await Promise.all([
+      fsp.stat(left, { bigint: true }),
+      fsp.stat(right, { bigint: true }),
+    ]);
+    // ino=0 表示文件系统给不出稳定身份,不能据此断定两个路径是同一个文件。
+    return (
+      leftStat.ino !== 0n &&
+      rightStat.ino !== 0n &&
+      leftStat.dev === rightStat.dev &&
+      leftStat.ino === rightStat.ino
+    );
+  } catch {
+    return false;
+  }
+}
+
+/** 系统凭证当前的硬链数(读不到时返回 undefined)。 */
+export async function codexAuthLinkCount(file: string): Promise<number | undefined> {
+  try {
+    const stat = await fsp.stat(file, { bigint: true });
     return Number(stat.nlink);
   } catch {
     return undefined;
@@ -339,7 +401,7 @@ export async function breakResidualSystemCodexHardlinks(
   platform: NodeJS.Platform = process.platform,
   execFileImpl: typeof execFileP = execFileP,
 ): Promise<boolean> {
-  const outcome = await breakResidualSystemCodexHardlinksDetailed(
+  const outcome = await breakResidualCodexHardlinksDetailed(
     systemAuth,
     platform,
     execFileImpl,
@@ -347,14 +409,22 @@ export async function breakResidualSystemCodexHardlinks(
   return outcome.broke;
 }
 
-/** 代次是否仍与读到内容时一致(inode / mtime / 大小都没变)。 */
+/** 代次是否仍与读到内容时一致(dev / inode / mtime / 大小都没变)。 */
 async function sameCodexAuthGeneration(
   file: string,
-  stat: { ino: number | bigint; mtimeMs: number | bigint; size: number | bigint },
+  stat: BigIntStats,
 ): Promise<boolean> {
   try {
     const now = await fsp.stat(file, { bigint: true });
-    return now.ino === stat.ino && now.mtimeMs === stat.mtimeMs && now.size === stat.size;
+    // 身份比较必须用 bigint:NTFS 的 file id 可能超出安全整数范围,四舍五入后
+    // 两个不同的 inode 会比较成相等 —— 撕裂代次的字节会被当成稳定代次。
+    // mtime 用 ns 精确值:ms 精度的比较漏掉「同一毫秒内被重写」的换代。
+    return (
+      now.dev === stat.dev &&
+      now.ino === stat.ino &&
+      now.mtimeNs === stat.mtimeNs &&
+      now.size === stat.size
+    );
   } catch {
     // 文件没了 → 代次已经变了。
     return false;
@@ -366,63 +436,67 @@ async function sameCodexAuthGeneration(
  * 与「读到内容后代次变了, 得重新对账」——后者必须让调用方重试, 不能当成成功。
  */
 export interface CodexAuthHardlinkBreakOutcome {
-  /** 是否真的换到了新 inode(系统路径 nlink 回到 1)。 */
+  /** 是否真的换到了新 inode(该路径 nlink 回到 1)。 */
   broke: boolean;
   /** 读内容之后源换代了:这次的字节作废, 调用方应重新对账。 */
   generationChanged: boolean;
 }
 
-async function breakResidualSystemCodexHardlinksDetailed(
-  systemAuth: string,
+/**
+ * 把某个凭证路径上残留的硬链换到新 inode。系统路径和本地副本都要用:
+ * Codex 0.165+ 拒绝写 nlink>1 的文件 —— 只拆系统那份, 本地这份照样写不进去。
+ */
+async function breakResidualCodexHardlinksDetailed(
+  file: string,
   platform: NodeJS.Platform,
   execFileImpl: typeof execFileP,
 ): Promise<CodexAuthHardlinkBreakOutcome> {
-  let stat: Awaited<ReturnType<typeof fsp.stat>> & { nlink: bigint };
+  let stat: BigIntStats;
   try {
-    stat = await fsp.stat(systemAuth, { bigint: true });
+    stat = await fsp.stat(file, { bigint: true });
   } catch {
     return { broke: false, generationChanged: false };
   }
   if (stat.nlink <= 1n) return { broke: false, generationChanged: false };
   let content: Buffer;
   try {
-    content = await fsp.readFile(systemAuth);
+    content = await fsp.readFile(file);
   } catch {
     return { broke: false, generationChanged: false };
   }
   const mode = Number(stat.mode & 0o777n);
   const mtime = new Date(Number(stat.mtimeMs));
-  const sidecar = `${systemAuth}.${process.pid}.${sidecarCounter++}.copytmp`;
+  const sidecar = `${file}.${process.pid}.${sidecarCounter++}.copytmp`;
   try {
     await fsp.writeFile(sidecar, content, { mode });
-    // 读到内容之后、替换之前, 本机 Codex 可能刚原子刷新过系统凭证(Cindy 与本机
+    // 读到内容之后、替换之前, 本机 Codex 可能刚原子刷新过凭证(Cindy 与本机
     // Codex 是两个 writer)。复核代次: 变了就作废这次副本, 绝不把旧字节发布回
     // 系统路径(那会盖掉刚刷新的 refresh token), 交给调用方重新对账。
-    if (!(await sameCodexAuthGeneration(systemAuth, stat))) {
+    if (!(await sameCodexAuthGeneration(file, stat))) {
       await fsp.rm(sidecar, { force: true }).catch(() => undefined);
       return { broke: false, generationChanged: true };
     }
     if (platform === 'win32') {
       try {
-        await fsp.rm(systemAuth, { force: true });
+        await fsp.rm(file, { force: true });
       } catch (rmError) {
-        if (!isWindowsAclDenied(rmError) || !(await healWindowsAuthAcl(systemAuth, execFileImpl))) {
+        if (!isWindowsAclDenied(rmError) || !(await healWindowsAuthAcl(file, execFileImpl))) {
           throw rmError;
         }
-        await fsp.rm(systemAuth, { force: true });
+        await fsp.rm(file, { force: true });
       }
     }
     // 换 inode 不应让凭证看起来更新: 保留原修改时间, 对账仍按同一代次判断。
     // 时间戳打在 sidecar 上, 随 rename 原子生效 —— 发布后按路径 utimes 的话,
     // 本机 Codex 在 rename 之后刷新的凭证会被盖上旧代次的时间戳(#9316 review)。
     await fsp.utimes(sidecar, mtime, mtime).catch(() => undefined);
-    await fsp.rename(sidecar, systemAuth);
+    await fsp.rename(sidecar, file);
     return { broke: true, generationChanged: false };
   } catch {
-    // 换失败: 只有系统路径真的没了才把内存里的内容写回去 —— 目标若已被本机
+    // 换失败: 只有目标真的没了才把内存里的内容写回去 —— 目标若已被本机
     // Codex 原子重建, 覆盖它会截断新 token(#9316 review)。
-    if (!(await pathEntryExists(systemAuth))) {
-      await fsp.writeFile(systemAuth, content, { mode }).catch(() => undefined);
+    if (!(await pathEntryExists(file))) {
+      await fsp.writeFile(file, content, { mode }).catch(() => undefined);
     }
     await fsp.rm(sidecar, { force: true }).catch(() => undefined);
     return { broke: false, generationChanged: false };
@@ -451,6 +525,41 @@ export interface CodexAuthCopySyncOutcome {
   error?: Error;
   /** 目标在发布途中换代了(调用方应重新对账)。 */
   conflict?: boolean;
+  /**
+   * 系统凭证上还残留的硬链数(>1 → Codex 0.165+ 拒绝写它)。
+   * 拆不掉时不能当成功:凭证在但写不进去,调用方要留警告并等下一次对账。
+   */
+  residualSystemHardlinks?: number;
+  /** 本地副本上还残留的硬链数(>1 → Codex 0.165+ 拒绝写它)。 */
+  residualLocalHardlinks?: number;
+}
+
+/** 只在确实有残余时带上字段,避免 undefined 混进结果对象。 */
+function residualFields(residual: {
+  system?: number;
+  local?: number;
+}): { residualSystemHardlinks?: number; residualLocalHardlinks?: number } {
+  return {
+    ...(residual.system !== undefined ? { residualSystemHardlinks: residual.system } : {}),
+    ...(residual.local !== undefined ? { residualLocalHardlinks: residual.local } : {}),
+  };
+}
+
+/**
+ * 两个路径是否确证指向同一个 inode;ino 不可用时返回 undefined(无法确证)。
+ */
+async function codexAuthIdentityRelation(
+  a: string,
+  b: string,
+): Promise<'same' | 'different' | 'unknown'> {
+  try {
+    const left = await fsp.stat(a, { bigint: true });
+    const right = await fsp.stat(b, { bigint: true });
+    if (left.ino === 0n || right.ino === 0n) return 'unknown';
+    return left.dev === right.dev && left.ino === right.ino ? 'same' : 'different';
+  } catch {
+    return 'unknown';
+  }
 }
 
 async function sameCodexAuthInode(a: string, b: string): Promise<boolean> {
@@ -563,6 +672,41 @@ export async function syncIndependentCodexAuth(
     return { kind: 'failed', error: copied.error };
   };
 
+  // 拆完硬链后再数一次链接数:「本来就没有残余硬链」和「拆失败」在
+  // breakResidual 的返回值里长得一样(都没 broke),只有 nlink 能区分。
+  const residualHardlinks = async (file: string): Promise<number | undefined> => {
+    const nlink = await codexAuthLinkCount(file);
+    return nlink !== undefined && nlink > 1 ? nlink : undefined;
+  };
+
+  /**
+   * 把某个凭证路径上残留的硬链换到新 inode,并回报是否还有残余。
+   */
+  const detachHardlinks = async (
+    file: string,
+  ): Promise<{ generationChanged: boolean; residual?: number }> => {
+    const outcome = await breakResidualCodexHardlinksDetailed(file, platform, execFileImpl);
+    if (outcome.generationChanged) return { generationChanged: true };
+    return { generationChanged: false, residual: await residualHardlinks(file) };
+  };
+
+  /**
+   * 拆本地这份上残留的硬链:同机另一个升级前的 profile 可能和它共用同一个 inode。
+   * Codex 0.165+ 拒绝写 nlink>1 的文件 —— 只拆系统那份, 本地这份照样写不进去。
+   * 只有能确证两侧不是同一个 inode 时才动本地这份:ino 读不出来(某些网络/容器
+   * 文件系统)时,贸然换 inode 会把「共享」拆成两份互相看不见的独立副本。
+   */
+  const detachLocalHardlinks = async (): Promise<{
+    generationChanged: boolean;
+    residual?: number;
+  }> => {
+    const relation = await codexAuthIdentityRelation(systemAuth, myAuth);
+    if (relation !== 'different') {
+      return { generationChanged: false, residual: await residualHardlinks(myAuth) };
+    }
+    return detachHardlinks(myAuth);
+  };
+
   // 目标在途可能被本机 Codex 原子刷新(Cindy 与本机 Codex 是两个 writer):方向判定
   // 后、发布前再核一次目标代次, 变了就重新对账, 不用过期 mtime 决策。
   for (let attempt = 0; attempt < 3; attempt += 1) {
@@ -587,26 +731,30 @@ export async function syncIndependentCodexAuth(
       // 挂着别的 profile 的硬链时 nlink 仍 > 1,Codex 照样拒绝写 —— 一并换到新 inode。
       const published = await publish(systemAuth, myAuth, 'copied-from-system', systemStat.mtimeMs);
       if (published.conflict) continue;
-      const residual = await breakResidualSystemCodexHardlinksDetailed(
-        systemAuth,
-        platform,
-        execFileImpl,
-      );
+      const residual = await detachHardlinks(systemAuth);
       // 拆硬链时发现系统凭证刚换代: 这次不发布旧字节, 重新对账。
       if (residual.generationChanged) continue;
-      return published;
+      const localResidual = await detachLocalHardlinks();
+      if (localResidual.generationChanged) continue;
+      return {
+        ...published,
+        ...residualFields({ system: residual.residual, local: localResidual.residual }),
+      };
     }
     // 内容一致就停:copy 不保留 mtime 时,只比 mtime 会两侧来回覆盖。
     // 但系统凭证上可能还挂着别的 profile 的旧硬链(nlink>1,Codex 拒绝写它):
     // 内容一致不代表系统路径已经干净,残留硬链要在这里一并清掉(#9316 review)。
+    // 本地这份同样可能和别的 profile 的旧副本共用 inode:内容一致也不代表
+    // 本地路径干净 —— 残留硬链会让 Codex 0.165+ 拒绝写本地凭证(#9316 review)。
     if (await sameCodexAuthContent(systemAuth, myAuth)) {
-      const residual = await breakResidualSystemCodexHardlinksDetailed(
-        systemAuth,
-        platform,
-        execFileImpl,
-      );
+      const residual = await detachHardlinks(systemAuth);
       if (residual.generationChanged) continue;
-      return { kind: 'unchanged' };
+      const localResidual = await detachLocalHardlinks();
+      if (localResidual.generationChanged) continue;
+      return {
+        kind: 'unchanged',
+        ...residualFields({ system: residual.residual, local: localResidual.residual }),
+      };
     }
 
     // 本地凭证同样可能在对账途中被本机 Codex 换掉(原子替换的 rm → rename 空窗):
@@ -630,23 +778,38 @@ export async function syncIndependentCodexAuth(
         // 账号不再一致 → 不写回系统,系统凭证单向获胜。
         const published = await publish(systemAuth, myAuth, 'copied-from-system', localStat.mtimeMs);
         if (published.conflict) continue;
-        return published;
+        const residual = await detachHardlinks(systemAuth);
+        if (residual.generationChanged) continue;
+        const localResidual = await detachLocalHardlinks();
+        if (localResidual.generationChanged) continue;
+        return {
+          ...published,
+          ...residualFields({ system: residual.residual, local: localResidual.residual }),
+        };
       }
       const published = await publish(myAuth, systemAuth, 'copied-from-local', systemStat.mtimeMs);
       if (published.conflict) continue;
-      return published;
+      // 系统路径刚换到新 inode(nlink 回到 1);本地这份还可能和别的 profile
+      // 的旧副本共用 inode —— 一并拆掉,否则 Codex 仍写不进本地凭证。
+      const localResidual = await detachLocalHardlinks();
+      if (localResidual.generationChanged) continue;
+      return {
+        ...published,
+        ...residualFields({ local: localResidual.residual }),
+      };
     }
     // 账号未证明一致、或系统更新:系统凭证单向获胜,只把系统内容刷到本地。
     const published = await publish(systemAuth, myAuth, 'copied-from-system', localStat.mtimeMs);
     if (published.conflict) continue;
-    const residual = await breakResidualSystemCodexHardlinksDetailed(
-      systemAuth,
-      platform,
-      execFileImpl,
-    );
+    const residual = await detachHardlinks(systemAuth);
     // 拆硬链时发现系统凭证刚换代: 这次不发布旧字节, 重新对账。
     if (residual.generationChanged) continue;
-    return published;
+    const localResidual = await detachLocalHardlinks();
+    if (localResidual.generationChanged) continue;
+    return {
+      ...published,
+      ...residualFields({ system: residual.residual, local: localResidual.residual }),
+    };
   }
   return {
     kind: 'failed',
