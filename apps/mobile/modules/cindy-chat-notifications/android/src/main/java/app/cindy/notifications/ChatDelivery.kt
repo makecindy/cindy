@@ -27,6 +27,10 @@ object ChatDelivery {
     val prefs = context.getSharedPreferences(STORE, Context.MODE_PRIVATE)
     if (prefs.getString("actor", "") != actor) prefs.edit().clear().putString("actor", actor).apply()
   }
+  @Synchronized fun taskIdentity(context: Context, user: String) {
+    val prefs = context.getSharedPreferences("cindy-task-notification-ids", Context.MODE_PRIVATE)
+    if (prefs.getString("user", "") != user) prefs.edit().clear().putString("user", user).apply()
+  }
   @Synchronized fun receive(context: Context, data: Map<String, String>) {
     val body = try { JSONObject(data["body"] ?: "{}") } catch (_: Exception) { return }
     if (body.optString("category") == "chat-message") {
@@ -41,6 +45,20 @@ object ChatDelivery {
       for (i in maxOf(0, ids.length() - 255) until ids.length()) next.put(ids.getString(i))
       next.put(id)
       prefs.edit().putString("ids", next.toString()).apply()
+    }
+    if (body.optString("category") in listOf("session-done", "session-error", "session-needs-reply")) {
+      val prefs = context.getSharedPreferences("cindy-task-notification-ids", Context.MODE_PRIVATE)
+      val user = prefs.getString("user", "") ?: ""
+      if (body.has("recipientId") && (user.isEmpty() || body.optString("recipientId") != user)) return
+      val id = body.optString("notificationId")
+      if (id.isNotEmpty()) {
+        if (!id.matches(Regex("[a-fA-F0-9-]{36}"))) return
+        val ids = try { JSONArray(prefs.getString("ids", "[]")) } catch (_: Exception) { JSONArray() }
+        if ((0 until ids.length()).any { ids.optString(it) == id }) return
+        val next = JSONArray()
+        for (i in maxOf(0, ids.length() - 255) until ids.length()) next.put(ids.getString(i))
+        next.put(id); prefs.edit().putString("ids", next.toString()).apply()
+      }
     }
     val display = data.toMutableMap()
     if (!context.getSharedPreferences("cindy-chat-background", Context.MODE_PRIVATE).getBoolean("preview", true)) {

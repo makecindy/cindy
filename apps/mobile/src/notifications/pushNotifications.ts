@@ -1,3 +1,4 @@
+import { setAndroidPushAvailability } from './androidPushAvailability';
 import { i18n } from '@/i18n';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { Platform } from 'react-native';
@@ -385,6 +386,10 @@ async function syncPushRegistrationInternal(
   try {
     await mutatePushTokens(opts.apiFetch, realm, 'PUT', { ...body, preview: await readPushPreviewEnabled() });
   } catch (error) {
+    if (lifecycleGeneration === pushLifecycleGeneration && Platform.OS === 'android') {
+      setAndroidPushAvailability('unavailable');
+      return 'local-only';
+    }
     if (lifecycleGeneration !== pushLifecycleGeneration) {
       await addPushRealm(PUSH_PENDING_UNREGISTER_KEY, realm, stateScope).catch(
         () => undefined,
@@ -407,6 +412,8 @@ async function syncPushRegistrationInternal(
     return 'skipped';
   }
   await removePushRealm(PUSH_PENDING_UNREGISTER_KEY, realm, stateScope);
+  if (lifecycleGeneration !== pushLifecycleGeneration) return 'skipped';
+  if (Platform.OS === 'android') setAndroidPushAvailability('available');
   return 'registered';
 }
 
@@ -457,6 +464,7 @@ export function unregisterPushTokenBestEffort(
   realm: ClientEndpointRegion = getActiveMobileSessionRealm(),
 ): Promise<void> {
   pushLifecycleGeneration += 1;
+  if (Platform.OS === 'android') setAndroidPushAvailability('unknown');
   for (const listener of pushPreferenceListeners) listener(true);
   // 不进入 pushMutationTail：当前 tail 可能正在 apiFetch → terminal handler →
   // clearLocalSession → 本函数。等待 tail 会形成自等待死锁。

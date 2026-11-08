@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 const store = vi.hoisted(() => new Map<string, string>());
 const envState = vi.hoisted(() => ({
+  platform: 'ios',
   activeRealm: 'cn' as 'cn' | 'global',
   buildRegion: 'cn' as 'cn' | 'global' | 'dev',
   endpointByRealm: {
@@ -41,7 +42,7 @@ vi.mock('expo-notifications', () => ({
 }));
 
 vi.mock('react-native', () => ({
-  Platform: { OS: 'ios' },
+  Platform: { get OS() { return envState.platform; } },
 }));
 
 vi.mock('@/config/env', () => ({
@@ -87,6 +88,15 @@ function readStoredRealms(key: string): string[] {
 }
 
 describe('push notification realm routing', () => {
+  // Unit: a cached FCM token must not make first enable fail when cloud registration is offline.
+  it('keeps Android opt-in usable through the direct channel when cloud registration fails', async () => {
+    envState.platform = 'android';
+    const apiFetch = vi.fn(async () => { throw new Error('offline'); });
+    await expect(syncPushRegistration({ enabled: true, apiFetch })).resolves.toBe('local-only');
+    expect(readStoredRealms(REGISTERED_KEY)).toEqual(['cn']);
+    const { readAndroidPushAvailability } = await import('../notifications/androidPushAvailability');
+    expect(readAndroidPushAvailability()).toBe('unavailable');
+  });
   it('compensates both endpoints when first enable partially fails, retaining retry state if DELETE fails', async () => {
     let failDelete = true;
     const apiFetch = vi.fn(async (path: string, opts: { method?: string }) => {
@@ -120,6 +130,7 @@ describe('push notification realm routing', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     store.clear();
+    envState.platform = 'ios';
     envState.activeRealm = 'cn';
     envState.buildRegion = 'cn';
     devEnvironmentState.active = 'dev';
@@ -272,6 +283,7 @@ describe('push notification realm routing', () => {
 
   it('切换区域前用旧 token 向显式冻结的旧区域撤销', async () => {
     setStoredRealms(REGISTERED_KEY, ['global']);
+    envState.platform = 'ios';
     envState.activeRealm = 'cn';
     const fetch = vi.fn().mockResolvedValue({ ok: true, status: 200 });
     vi.stubGlobal('fetch', fetch);
@@ -301,6 +313,7 @@ describe('push notification realm routing', () => {
   it('只用当前会话补偿当前区域，另一区域标记保持不动', async () => {
     setStoredRealms(REGISTERED_KEY, ['cn', 'global']);
     setStoredRealms(PENDING_KEY, ['cn', 'global']);
+    envState.platform = 'ios';
     envState.activeRealm = 'cn';
     const cnApiFetch = vi.fn().mockResolvedValue({ deleted: true });
 
@@ -333,6 +346,7 @@ describe('push notification realm routing', () => {
 
   it('旧 token 不可用时不跨区请求，只保留旧区域标记', async () => {
     setStoredRealms(REGISTERED_KEY, ['global']);
+    envState.platform = 'ios';
     envState.activeRealm = 'cn';
     const fetch = vi.fn();
     vi.stubGlobal('fetch', fetch);
@@ -353,6 +367,7 @@ describe('push notification realm routing', () => {
       syncPushRegistration({ enabled: false, apiFetch }),
     ).rejects.toThrow('offline');
 
+    envState.platform = 'ios';
     envState.activeRealm = 'cn';
     expect(readStoredRealms(PENDING_KEY)).toEqual(['global']);
   });
