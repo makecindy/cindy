@@ -14,11 +14,8 @@ import {
   getEffectiveBotModelChain,
   retryBotInvitation,
   runBotLifecycleAction,
-  setBotSchedulerBotId,
-  resetBotAutonomySettings,
   subscribeBotGlobalModel,
   updateBotProfile,
-  useBotAutonomySettings,
   useBotProfiles,
 } from './botStore';
 import { botImConnectionApi } from './botImConnectionClient';
@@ -186,10 +183,5 @@ export const localBotSettingsTarget: BotSettingsTarget = {
     sources: () => window.electronAPI.routines.sources(),
     deliveryTargets: (botId) => window.electronAPI.routines.deliveryTargets?.(botId) ?? Promise.resolve([]),
     onChanged: (listener) => window.electronAPI.routines.onChanged(listener),
-  },
-  autonomy: {
-    useSettings: () => useBotAutonomySettings(),
-    setSchedulerBotId: (botId) => setBotSchedulerBotId(botId),
-    reset: () => resetBotAutonomySettings(),
   },
 };

@@ -57,7 +57,6 @@ import {
 } from '../../maker-host/bot-model-chain-settings-store.js';
 import { extractMessagePreview, sessionCreateToRow, sessionToCamel } from '../mapper.js';
 import { normalizeBotToolCapabilities } from '../../../shared/botCapabilitySelection.js';
-import type { BotWorkbench } from '../../../shared/botWorkbench.js';
 import {
   botProfileContentChanged,
   botProfileModelSelectionChanged,
@@ -80,11 +79,7 @@ import { ensureBotProjectAutomations, nameBotProject, prepareBotProjectWorkspace
 import { normalizeRecentWorkdirPath } from './recentWorkdirs.js';
 import { setBotProjectSkillsDir } from '../../maker-ipc/botSkillStore.js';
 import { readBotProjectMode } from '../../../shared/botProjectMode.js';
-import {
-  readBotWorkbenchTaskForOwner,
-  readBotResponsibilityScope,
-  readBotResponsibleSessionIds,
-} from '../../maker-ipc/botWorkbenchTools.js';
+import { readBotResponsibilityScope } from '../../maker-ipc/botTaskCreation.js';
 import {
   NEW_BOT_DEFAULT_PI_EFFORT,
   NEW_BOT_DEFAULT_PI_MODEL,
@@ -243,8 +238,7 @@ import { buildDefaultBotIdentity } from '../../../shared/botProfileDefaults.js';
 import { coordinateBotCanonicalReplacement } from '../../maker-ipc/botCanonicalReplacementCoordinator.js';
 import { coordinateBotModelSelection } from '../../maker-ipc/botModelSelectionCoordinator.js';
 import { searchConversations } from '../conversationSearch.js';
-import { registerBotAutonomyIpc } from '../../bot-autonomy/ipc.js';
-import { signalBotAutonomyBotsChanged } from '../../bot-autonomy/botsChangedSignal.js';
+import { signalBotProfilesChanged } from '../../maker-ipc/botProfilesChangedSignal.js';
 import { readBotSystemSkillsOff } from '../../../shared/botSystemSkills.js';
 import {
   BOT_FAILURE_REASONS,
@@ -1798,8 +1792,8 @@ export function broadcastBotProfileChanged(payload: {
   change: 'created' | 'updated';
 }): void {
   broadcastBotRemoteResourceChanged(payload.botId);
-  // 伙伴自主跟进：新建伙伴、改「它开的任务也交给总调度跟」立即生效。
-  signalBotAutonomyBotsChanged();
+  // Readers of teammate profiles (Chat Server companion sync) re-read without waiting for their timers.
+  signalBotProfilesChanged();
   if (payload.change === 'updated') notifyAgentIslandCompanionChanged(payload.botId);
   for (const win of BrowserWindow.getAllWindows()) {
     if (win.isDestroyed()) continue;
@@ -2896,15 +2890,6 @@ export function registerBotIpc(): void {
     owner.assertCurrent();
     return result;
   };
-  ipcMain.handle('local-db:bots:workbench:get', async (event, rawBotId: unknown) => {
-    assertTrustedAppRendererEvent(event);
-    const botId = readText(rawBotId, 'botId', 128, true);
-    const owner = captureBotOperationOwner();
-    const responsibleSessionIds = await readBotResponsibleSessionIds(owner.userDataDir, botId);
-    owner.assertCurrent();
-    const workbench: BotWorkbench = { responsibleSessionIds };
-    return workbench;
-  });
   for (const operation of ['list', 'set'] as const) {
     ipcMain.handle(`local-db:bots:projects:${operation}`, async (event, rawBotId: unknown, rawId?: unknown, rawLinked?: unknown) => {
       assertTrustedAppRendererEvent(event);
@@ -2931,17 +2916,6 @@ export function registerBotIpc(): void {
     );
     owner.assertCurrent();
     return scopes;
-  });
-  // 工作台详情视图:只读一件任务的最近内容(有界)。范围限于该伙伴已接手的项目,
-  // 外部会话只读转录尾部,不写库、不导入。
-  ipcMain.handle('local-db:bots:workbench:read-task', async (event, rawBotId: unknown, rawTaskId: unknown) => {
-    assertTrustedAppRendererEvent(event);
-    const botId = readText(rawBotId, 'botId', 128, true);
-    const taskId = readText(rawTaskId, 'taskId', 256, true);
-    const owner = captureBotOperationOwner();
-    const result = await readBotWorkbenchTaskForOwner(botId, taskId);
-    owner.assertCurrent();
-    return result;
   });
   // Local settings read; remote clients already use settings:<botId>/skills.
   ipcMain.handle('local-db:bots:skills:list', async (event, rawBotId: unknown) => {
@@ -3049,5 +3023,4 @@ export function registerBotIpc(): void {
     return result;
   });
   // 伙伴自主跟进：工作台「一眼」与「自动跟进所有任务」设置。
-  registerBotAutonomyIpc();
 }

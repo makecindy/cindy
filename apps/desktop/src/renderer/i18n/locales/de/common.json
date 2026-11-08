@@ -10187,32 +10187,6 @@
       "outputMeta": "{{time}} · {{task}}",
       "openFailed": "Datei konnte nicht geöffnet werden"
     },
-    "autonomy": {
-      "title": "Meine Sitzungen weiterverfolgen",
-      "descriptionOn": "{{name}} prüft Zusammenfassungen, wenn sich Sitzungen ändern, und hält dich auf dem Laufenden.",
-      "movedFrom": "Von {{name}} hierher verschoben",
-      "heldBy": "{{name}} übernimmt das jetzt. Aktiviere es, um es hierher zu verschieben.",
-      "routineScopeHint": "Auch Sitzungen einbeziehen, die du selbst erstellst. Die integrierte Nachverfolgung unten reagiert auf Änderungen an zugewiesenen Sitzungen.",
-      "heldByNobody": "Nicht aktiviert",
-      "restoreDefault": "Standard wiederherstellen ({{name}})",
-      "saveFailed": "Speichern fehlgeschlagen. Versuche es erneut.",
-      "turnOff": {
-        "title": "Nachverfolgung aller Sitzungen beenden?",
-        "description": "Wenn du dies ausschaltest, verfolgt kein Teammitglied mehr alle Sitzungen.",
-        "confirm": "Ausschalten",
-        "cancel": "Abbrechen"
-      },
-      "allowSchedulerFollow": {
-        "title": "{{name}} eigene gestartete Sitzungen weiterverfolgen lassen",
-        "description": "Standardmäßig beobachtet {{scheduler}} nur. Wenn dies aktiviert ist und eine von {{name}} gestartete Sitzung noch nicht abgeschlossen ist, verfolgt {{scheduler}} sie ebenfalls weiter."
-      },
-      "consent": "Nach der Aktivierung lese ich Zusammenfassungen der Sitzungen, die du auf diesem Computer erstellst, bewerte den Fortschritt und informiere dich über wichtige Änderungen. Das verbraucht dein Modellkontingent. Du kannst es jederzeit deaktivieren.",
-      "invitation": {
-        "title": "Soll ich deine Sitzungen weiterverfolgen?",
-        "start": "Nachverfolgung starten",
-        "notNow": "Nicht jetzt"
-      }
-    },
     "remoteSettings": {
       "empty": "Hier ist noch nichts.",
       "loadFailed": "Einstellungen konnten nicht geladen werden. Versuch es erneut.",
@@ -11240,11 +11214,6 @@
             "name": "Routinen",
             "hint": "Richtet regelmäßig laufende Routinen ein und pflegt sie.",
             "off": "Er legt keine Routinen mehr an und ändert keine. Bestehende Routinen laufen weiter und bleiben auf der Seite „Routinen“ verwaltbar."
-          },
-          "follow": {
-            "name": "Arbeitsplatz und Nachverfolgung",
-            "hint": "Behält den Stand all deiner Aufgaben im Blick und verfolgt die nach, die du ihm gibst.",
-            "off": "Er prüft und verfolgt deine Aufgaben nicht mehr von sich aus. Im Chat kannst du ihn weiterhin fragen."
           }
         }
       },
@@ -11283,10 +11252,6 @@
       "notTurnedOn": "Auf diesem Computer noch nicht eingeschaltet",
       "turnOn": "Einschalten",
       "permissions": "Berechtigungen"
-    },
-    "systemSkills": {
-      "followOffHint": "Der System-Skill „Arbeitsplatz und Nachverfolgung“ von {{name}} ist aus. Schalte ihn unter „Fähigkeiten“ wieder ein, um dies zu nutzen.",
-      "offHint": "Der System-Skill „{{skill}}“ ist aus. Er läuft wieder, sobald du ihn unter „Fähigkeiten“ einschaltest."
     },
     "guided": {
       "title": "Teammitglied erstellen",

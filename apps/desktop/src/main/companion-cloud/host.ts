@@ -27,7 +27,7 @@ import { resolveAvailableTaskModels } from '../maker-ipc/appDefaultModelControl.
 import { botProfileDir, botProfileMemoryDir, readBotProfileFolder, writeBotProfileFolder } from '../maker-ipc/botProfileFolder.js';
 import { onBotRemoteResourceChanged } from '../maker-ipc/botRemoteResourceInvalidation.js';
 import { applyBotSkillFilesForBot, deleteBotSkillForBot, listBotSkillFilesForBot, listBotSkillSourcesForBot, readBotSkillFilesForBot, readBotSkillSourceForBot, saveBotSkillSourceForBot } from '../maker-ipc/botSkillService.js';
-import { mergeCompanionWorkbench, readCompanionWorkbench } from '../maker-ipc/botWorkbenchService.js';
+import { mergeCompanionWorkbench, readCompanionWorkbench } from '../maker-ipc/botLinkedProjectStore.js';
 import { importCompanionRoutines, listCompanionRoutines, type CompanionRoutineValue } from '../routines/service.js';
 import type { CompanionMaterializeHost } from './materialize.js';
 import { companionHomes } from './homes.js';

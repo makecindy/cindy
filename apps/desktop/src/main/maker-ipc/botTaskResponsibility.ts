@@ -3,10 +3,9 @@ import path from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { withCrossProcessLock } from '../device-link/crossProcessLock.js';
 import { botProfileDir } from './botProfileFolder.js';
-import { signalBotAutonomyBotsChanged } from '../bot-autonomy/botsChangedSignal.js';
 
-/** Per-task responsibility, independent of directories and Todo.
- * Releases override creation evidence; nothing is inferred from conversation text.
+/** Per-task record of the tasks a teammate opened (`created`). `responsible` stays in the format so
+ * older readers parse it; a release (false) is kept as written. Nothing is inferred from conversation text.
  */
 export type TaskResponsibilities = Record<string, { responsible: boolean; updatedAt: string; created?: boolean }>;
 const MAX_RECORDS = 10_000;
@@ -81,8 +80,6 @@ export async function setTaskResponsibility(
     }
     assertCurrent();
   });
-  // 接手 / 解除立即让自主跟进重读归属：工作台与跟进者不必等 60 秒的定时重读。
-  signalBotAutonomyBotsChanged();
 }
 
 export interface TaskResponsibilityScope {

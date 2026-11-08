@@ -10142,32 +10142,6 @@
       "outputMeta": "{{time}} · {{task}}",
       "openFailed": "没能打开文件"
     },
-    "autonomy": {
-      "title": "跟进我的任务",
-      "descriptionOn": "{{name}}会在任务有变化时查看摘要并提醒你。",
-      "movedFrom": "已从{{name}}移到这里",
-      "heldBy": "现在由{{name}}负责，打开就移到这里。",
-      "routineScopeHint": "把你自己创建的任务也交给我跟进；下方内置跟进负责响应这些任务的变化。",
-      "heldByNobody": "尚未开启",
-      "restoreDefault": "恢复默认（{{name}}）",
-      "saveFailed": "没能保存，请重试",
-      "turnOff": {
-        "title": "关闭自动跟进所有任务？",
-        "description": "关闭后没有伙伴统一跟进所有任务。",
-        "confirm": "关闭",
-        "cancel": "取消"
-      },
-      "allowSchedulerFollow": {
-        "title": "它开的任务也交给{{name}}跟进",
-        "description": "默认{{scheduler}}只看不跟。打开后，{{name}}开的任务没做完时，{{scheduler}}也会接着跟进。"
-      },
-      "consent": "开启后，我会读取这台电脑上你创建的任务摘要，分析进展并提醒你重要变化。这会使用模型额度，你可以随时关闭。",
-      "invitation": {
-        "title": "要我帮你跟进任务吗？",
-        "start": "开始跟进",
-        "notNow": "暂不开启"
-      }
-    },
     "remoteSettings": {
       "empty": "暂无内容",
       "loadFailed": "无法读取设置，请重试。",
@@ -11195,11 +11169,6 @@
             "name": "例行任务",
             "hint": "帮你建立和维护定期执行的例行任务。",
             "off": "不再新建或修改例行任务；已有例行任务照常运行，你仍可在「例行任务」页管理。"
-          },
-          "follow": {
-            "name": "工作台与跟进",
-            "hint": "关注你所有任务的近况，跟进你交给它的任务。",
-            "off": "不再主动查看和跟进你的任务；你仍可以在对话里直接问它。"
           }
         }
       },
@@ -11238,10 +11207,6 @@
       "notTurnedOn": "这台电脑还没开启",
       "turnOn": "去开启",
       "permissions": "权限"
-    },
-    "systemSkills": {
-      "followOffHint": "{{name}} 的系统技能「工作台与跟进」已关闭，在能力页重新开启后才能使用。",
-      "offHint": "系统技能「{{skill}}」已关闭，在能力页重新开启后才会运行。"
     },
     "guided": {
       "title": "创建伙伴",

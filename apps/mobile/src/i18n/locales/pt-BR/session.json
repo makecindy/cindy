@@ -821,12 +821,6 @@
     "failed": "Não foi possível salvar. Tente novamente.",
     "restore": "Restaurar padrões"
   },
-  "followUp": {
-    "title": "Quer que eu acompanhe suas sessões?",
-    "start": "Começar acompanhamento",
-    "notNow": "Agora não",
-    "saveFailed": "Não foi possível salvar. Tente novamente."
-  },
   "providerGroupRebalance": {
     "title": "Continuar em {{label}}?",
     "body": "Para usar a cota de todas as contas de forma equilibrada, envie esta mensagem de {{label}} ({{quota}}). As últimas mensagens e um resumo serão transferidos; detalhes mais antigos podem ser perdidos.",

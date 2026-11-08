@@ -50,7 +50,7 @@ function fixture(ownerInput = false, delegated = false) {
     },
   };
 }
-const call = (tool = 'continue_workbench_task') => ({
+const call = (tool = 'steer_session') => ({
   sessionId: 'companion',
   server: 'cindy_helper' as const,
   tool,
@@ -101,7 +101,7 @@ describe('Host task action authorization', () => {
     expect(queue).toEqual([]);
     expect(route).toBe('original');
     expect(h.confirm).not.toHaveBeenCalled();
-    for (const tool of ['get_task_digest', 'get_workbench', 'schedule_notify_current_run']) {
+    for (const tool of ['get_task_digest', 'schedule_notify_current_run']) {
       expect(
         await withToolCallAuthority(h.authorize, call(tool), async () => 'read-or-remind'),
       ).toBe('read-or-remind');
@@ -298,8 +298,6 @@ function desktopFixture(kind: 'private' | 'group' | 'automatic' = 'group') {
 const ownerWrites = [
   ['cindy_helper', 'start_session_task'],
   ['cindy_helper', 'send_to_session'],
-  ['cindy_helper', 'continue_workbench_task'],
-  ['cindy_helper', 'set_workbench_task_responsibility'],
   ['cindy_helper', 'set_session_runtime'],
   ['cindy_orca', 'create_worker'],
   ['cindy_orca', 'send_to_worker'],
@@ -748,7 +746,6 @@ describe('teammate turn principal', () => {
     helper('set_session_runtime', { session_id: 'owner-task', model: 'other' }),
     helper('start_session_task', { message: 'New work' }),
     helper('archive_sessions', { session_ids: ['owner-task'] }),
-    helper('set_workbench_task_responsibility', { task_id: 'owner-task', responsible: true }),
   ];
 
   // Ordinary actions retain the autonomous principal and use the existing permission mode.

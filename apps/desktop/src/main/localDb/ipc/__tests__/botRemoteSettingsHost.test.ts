@@ -46,7 +46,6 @@ function setup(overrides: { allowed?: boolean; visible?: boolean; ownerCurrent?:
     canonicalSessionId: vi.fn(async () => 'main'),
     capabilities: vi.fn(async () => []),
     personalSkills: vi.fn(async () => []),
-    autonomy: { get: vi.fn(), set: vi.fn(), reset: vi.fn() },
     searchHistory: vi.fn(async () => ({ results: [] })),
     channels: {
       im: {
@@ -232,14 +231,14 @@ it('limits messaging-platform operations to this teammate and keeps the WeChat f
   expect(await call('channels.im.add', { token: 'x' })).toMatchObject({ ok: false, code: 'INVALID_PARAMS' });
 });
 
-it('holds the teammate a host-wide autonomy change names to the same visibility as a teammate-scoped call', async () => {
-  const hidden = setup({ visible: false });
-  expect(await hidden.call('autonomy.set', { schedulerBotId: 'bot-2' }, null)).toMatchObject({ ok: false, code: 'NOT_FOUND' });
-  expect(hidden.deps.autonomy.set).not.toHaveBeenCalled();
-  // Turning it off names nobody.
-  expect(await hidden.call('autonomy.set', { schedulerBotId: null }, null)).toMatchObject({ ok: true });
-  expect(hidden.deps.autonomy.set).toHaveBeenCalledWith(null);
-  const visible = setup();
-  expect(await visible.call('autonomy.set', { schedulerBotId: 'bot-2' }, null)).toMatchObject({ ok: true });
-  expect(visible.deps.autonomy.set).toHaveBeenCalledWith('bot-2');
+// Follow-up was removed: an older controller's settings page still calls `autonomy.*`. It must read
+// "off" and get a stable refusal on writes, and a new host must not advertise these ops.
+it('answers the retired follow-up setting as off without advertising it', async () => {
+  const { call } = setup();
+  const caps = await call('caps', undefined, null);
+  expect(caps.ok && caps.value.ops).not.toContain('autonomy.get');
+  expect(await call('autonomy.get', undefined, null)).toEqual({ ok: true, value: { schedulerBotId: null, isCustomized: false, defaults: { schedulerBotId: null } } });
+  for (const op of ['autonomy.set', 'autonomy.reset'] as const) {
+    expect(await call(op, { schedulerBotId: 'bot-2' }, null)).toMatchObject({ ok: false, code: 'UNSUPPORTED_CAPABILITY' });
+  }
 });

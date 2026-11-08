@@ -183,10 +183,18 @@ export function createTaskCompletionDelivery(deps: TaskCompletionDeliveryDeps) {
     }
   }
   return {
-    report(id: string, execution: BotAutonomyExecution, final: boolean) {
-      if (current()) reports.set(executionKey(id, execution), { execution: { ...execution }, final });
+    /** Records the model's report for this execution; false when the account changed. */
+    report(id: string, execution: BotAutonomyExecution, final: boolean): boolean {
+      if (!current()) return false;
+      reports.set(executionKey(id, execution), { execution: { ...execution }, final });
+      return true;
     },
     hasOrigin: async (id: string) => current() && waiting(await deps.read(id)),
+    /** Only an origin delivery depends on the model's report; a notify_when_done result is always sent. */
+    wantsReport: async (id: string) => {
+      const record = current() ? await deps.read(id) : null;
+      return current() && !!record && !record.notify;
+    },
     settle,
     /** Suppress follower replies even if delivery failed; only the frozen origin may receive it. */
     async handles(id: string) { return current() && waiting(await deps.read(id)); },

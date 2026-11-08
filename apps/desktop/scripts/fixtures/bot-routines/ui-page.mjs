@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 export default {
   name: 'bot-routines', entry: './routines-fixture.tsx',
   viewport: { width: 440, height: 900 },
-  real: 'BotRoutines list/editor, BotAutonomySettings, cronToHuman and standard switches',
+  real: 'BotRoutines list/editor, cronToHuman and standard switches',
   notCovered: 'Host persistence, real scheduler execution, plugin events, routine model picker and native Mobile (no routine management entry)',
   stubs: {
     'src/renderer/features/bots/botStore': { partial: 'export const useBotProfiles=()=>[];' },
@@ -10,7 +10,7 @@ export default {
     'src/renderer/features/bots/BotTaskModelEditor': 'export function BotTaskModelEditor(){return null;}',
   },
   cases: {
-    default: { about: 'Paused, enabled, queued, running; exact hourly and selected-hour schedules; independent follow-up scope' },
+    default: { about: 'Paused, enabled, queued, running; exact hourly and selected-hour schedules' },
     'save-error': { about: 'Failed pause keeps the enabled switch; retry saves without running' },
     history: { about: 'Failure result is readable before expanding run details' },
     'session-mode': { about: 'Run session choice: persistent context or a new isolated session per trigger' },

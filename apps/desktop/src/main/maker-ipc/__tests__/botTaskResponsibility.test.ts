@@ -4,7 +4,6 @@ import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { botProfileDir } from '../botProfileFolder.js';
 import { collectTaskResponsibilityScopes, createdSessionIds, readTaskResponsibilities, responsibleSessionIds, setTaskResponsibility } from '../botTaskResponsibility.js';
-import { setBotAutonomyBotsChangedListener } from '../../bot-autonomy/botsChangedSignal.js';
 
 // Lock mechanics have their own cross-process suite; exercise this store's guarded write.
 vi.mock('../../device-link/crossProcessLock.js', () => ({
@@ -35,18 +34,6 @@ describe('task responsibility', () => {
     const records = await readTaskResponsibilities(root, 'one');
     expect(createdSessionIds(records)).toEqual(['opened']);
     expect(responsibleSessionIds([], records)).toEqual(['taken']);
-  });
-  // 依据：伙伴自主跟进的归属须在接手 / 解除后立即生效（cindy-bots-runtime.md §6.3.2）；缺口：写入成功后
-  // 观察层要等 60 秒定时重读。最小失败输入：一次成功接手、一次被拒的非法写入。tier：unit。
-  it('tells the autonomy layer to re-read ownership after a successful take or release only', async () => {
-    const changed = vi.fn();
-    setBotAutonomyBotsChangedListener(changed);
-    try {
-      await setTaskResponsibility(root, 'one', 'taken', true, () => {});
-      expect(changed).toHaveBeenCalledTimes(1);
-      await expect(setTaskResponsibility(root, 'one', '', true, () => {})).rejects.toThrow();
-      expect(changed).toHaveBeenCalledTimes(1);
-    } finally { setBotAutonomyBotsChangedListener(null); }
   });
   it('does not touch workbench judgments or Todo when taking or releasing', async () => {
     const home = botProfileDir(root, 'one');

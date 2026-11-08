@@ -1,4 +1,3 @@
-import { getBotAutonomySettingsView, resetBotAutonomySchedulerSettings, setBotAutonomySchedulerBotId } from '../../bot-autonomy/hub.js';
 import { readEffectiveBotModelChain } from '../../maker-host/bot-model-chain-settings-store.js';
 import type { RemoteResourceHostContext } from '../../device-link/remoteResourceRegistry.js';
 import { botRemoteResourceFromSource } from './botRemoteResourceProjection.js';
@@ -58,7 +57,6 @@ const getEditor = createBotRemoteEditors({ ...deps,
     list: async botId => (await botLinkedProjectAccess(botId)).read(),
     set: async (botId, id, linked) => (await botLinkedProjectAccess(botId)).set(id, linked),
   },
-  followUp: { get: getBotAutonomySettingsView, set: setBotAutonomySchedulerBotId },
   async modelDefaults() {
     const owner = deps.owner();
     const chain = await readEffectiveBotModelChain({});
@@ -199,7 +197,6 @@ const settingsHost = createBotRemoteSettingsHost({
       setEnabled: (botId, slug, enabled) => setBotSkillEnabledForSettings(botId, slug, enabled, { remote: true }),
       delete: (botId, slug) => deleteBotSkillForSettings(botId, slug, { remote: true }),
     },
-    autonomy: { get: getBotAutonomySettingsView, set: setBotAutonomySchedulerBotId, reset: resetBotAutonomySchedulerSettings },
     searchHistory: searchBotHistory,
     routines: {
       list: async (botId) => (await routineTools()).list(botId),

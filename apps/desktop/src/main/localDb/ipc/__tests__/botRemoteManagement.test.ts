@@ -16,7 +16,6 @@ vi.mock('../../../appSessionState.js', () => ({ activeOwnerScopeKey: () => 'owne
 vi.mock('../../../device-link/settings-store.js', () => ({ readDeviceLinkSettings: () => ({ remoteControlEnabled: true, revokedControllers: [] }) }));
 vi.mock('../botRemoteSessionAccess.js', () => ({ readRemoteBotSessionAccess: async () => 'visible' }));
 // These services belong to other settings pages and must not initialize for a recipient query.
-vi.mock('../../../bot-autonomy/hub.js', () => ({ getBotAutonomySettingsView: vi.fn(), resetBotAutonomySchedulerSettings: vi.fn(), setBotAutonomySchedulerBotId: vi.fn() }));
 vi.mock('../../../maker-host/bot-model-chain-settings-store.js', () => ({ readEffectiveBotModelChain: vi.fn() }));
 vi.mock('../../../maker-ipc/appDefaultModelControl.js', () => ({ resolveAvailableTaskModels: vi.fn() }));
 vi.mock('../bots.js', () => ({ createBotProfile: vi.fn(), createBotCanonicalSession: vi.fn(), getBotMemoryService: vi.fn(), getBotRemoteResourceSource: vi.fn(), getBotRemoteSettingsSource: vi.fn(), readBotSettingsProfile: vi.fn(), searchBotHistory: vi.fn(), setBotProfileAvatar: vi.fn(), updateBotProfile: vi.fn() }));

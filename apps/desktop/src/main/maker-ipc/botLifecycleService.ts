@@ -24,7 +24,7 @@ import { MAKER_INVOKE, MAKER_PUSH } from './channels.js';
 import type { BotDelegationService } from './botDelegationService.js';
 import { resolveBotCanonicalSession } from './botCanonicalSessionRegistry.js';
 import { broadcastBotRemoteResourceChanged } from './botRemoteResourceInvalidation.js';
-import { signalBotAutonomyBotsChanged } from '../bot-autonomy/botsChangedSignal.js';
+import { signalBotProfilesChanged } from './botProfilesChangedSignal.js';
 import {
   activeOwnerScopeKey,
   isAppSessionBoundaryPending,
@@ -81,7 +81,7 @@ function broadcastBotLifecycleChanged(payload: {
   action: BotLifecycleActionRequest['action'];
 }): void {
   // 伙伴自主跟进：暂停 / 恢复 / 归档后立即重算跟进者。
-  signalBotAutonomyBotsChanged();
+  signalBotProfilesChanged();
   for (const win of BrowserWindow.getAllWindows()) {
     if (win.isDestroyed()) continue;
     try {

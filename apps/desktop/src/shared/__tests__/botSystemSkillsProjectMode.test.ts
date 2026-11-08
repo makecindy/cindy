@@ -5,6 +5,7 @@ import { botSystemSkillIdsFor, effectiveBotSystemSkillsOff } from '../botSystemS
 // 所有读取处都按关掉算，设置页也不列。缺口：跟进与待办仍按原始开关运行。tier：unit。
 it('treats every system Skill as absent for a project-mode teammate', () => {
   expect(botSystemSkillIdsFor({ projectMode: true })).toEqual([]);
-  expect(effectiveBotSystemSkillsOff({ projectMode: true })).toEqual(['todo', 'routine', 'follow']);
-  expect(effectiveBotSystemSkillsOff({ systemSkillsOff: ['follow'] })).toEqual(['follow']);
+  expect(effectiveBotSystemSkillsOff({ projectMode: true })).toEqual(['routine']);
+  // A stored V1 `follow` / `todo` switch is ignored.
+  expect(effectiveBotSystemSkillsOff({ systemSkillsOff: ['follow', 'todo'] })).toEqual([]);
 });

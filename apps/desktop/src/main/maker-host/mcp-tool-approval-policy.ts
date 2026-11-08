@@ -299,10 +299,6 @@ export function getDesktopMcpToolApprovalPolicy(
     if (action === 'send_to_session' && targetsAnotherComputer(sessionIdDevice(args?.target_session_id))) {
       return 'prompt-each-time';
     }
-    // 伙伴跟进另一台电脑上的任务(只有总调度伙伴可以)同样是跨电脑写入,口径与 send_to_session 一致。
-    if (action === 'continue_workbench_task' && targetsAnotherComputer(sessionIdDevice(args?.task_id))) {
-      return 'prompt-each-time';
-    }
     if ((action === 'archive_sessions' || action === 'unarchive_sessions') &&
       (!Array.isArray(args?.session_ids) || args.session_ids.some((id) =>
         typeof id !== 'string' || targetsAnotherComputer(sessionIdDevice(id))))) {

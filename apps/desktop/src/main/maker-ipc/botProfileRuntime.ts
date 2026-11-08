@@ -945,7 +945,6 @@ export async function hydrateBotProfileRuntime(
     // therefore must not depend on optional toolset inheritance.
     partnerActionsEnabled: row.role === 'canonical' && helperAvailable,
     routinesEnabled: fullLane && helperAvailable && !opts.remoteHostId && !systemSkillsOff.includes('routine'),
-    followEnabled: !systemSkillsOff.includes('follow'),
     botCreationEnabled: fullLane && helperAvailable,
     // Skill management is available before the first Skill exists. An empty
     // index must not hide the instructions for learning the first reusable method.

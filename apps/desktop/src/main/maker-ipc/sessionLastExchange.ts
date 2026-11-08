@@ -1,60 +1,32 @@
 /**
- * 伙伴工作台与任务摘要的只读会话读取:有界摘录与最近用户消息 / 助手回复。
- *
- * 2026-10-17 放弃「项目」后,不再扫描本机 Claude Code / Codex / Pi 转录目录,也不再为项目
- * 现算摘要;只读 Cindy 自己库里的任务,两条有界查询,输出统一去掉 `<system-reminder>` 之类的
- * 指令块。不写库、不导入。
+ * The latest user ask and assistant reply of a local task (get_task_digest). One bounded query on
+ * Cindy's own database; instruction blocks such as `<system-reminder>` are stripped. Read only.
  */
 import { and, desc, eq, gt, inArray, isNull } from 'drizzle-orm';
 import { isSyntheticTriggerText } from '@cindy/maker-shared/synthetic-trigger';
 
 import { getDbClient } from '../localDb/client/current.js';
 import { messages, sessions } from '../localDb/schema.js';
-import {
-  stripInstructionBlocks,
-  type WorkbenchTranscript,
-  type WorkbenchTranscriptItem,
-} from '../../shared/botWorkbench.js';
 
-export const WORKBENCH_TRANSCRIPT_MAX_CHARS = 4_000;
-const PER_MESSAGE_MAX_CHARS = 1_200;
-const SESSION_MESSAGE_ROWS = 60;
-/** 找最近用户消息 / 助手回复时最多往回看的消息条数。 */
+/** How far back to look for the latest user ask / assistant reply. */
 const LAST_EXCHANGE_ROWS = 20;
+
+/** Drop angle-bracket instruction blocks (such as `<system-reminder>…</system-reminder>`) and stray tags. */
+function stripInstructionBlocks(text: string): string {
+  let out = text;
+  for (let pass = 0; pass < 4; pass += 1) {
+    const next = out.replace(/<([A-Za-z][\w-]*)(?:\s[^<>]*)?>[\s\S]*?<\/\1>/g, ' ');
+    if (next === out) break;
+    out = next;
+  }
+  return out.replace(/<\/?[A-Za-z][\w-]*(?:\s[^<>]*)?\/?>/g, ' ');
+}
 
 function cleanText(raw: string): string {
   return stripInstructionBlocks(raw)
     .replace(/[ \t]+\n/g, '\n')
     .replace(/\n{3,}/g, '\n\n')
     .trim();
-}
-
-/** 保留最近的消息,单条与总量都有界;顺序仍按时间正序。 */
-export function boundTranscript(
-  items: readonly WorkbenchTranscriptItem[],
-  maxChars = WORKBENCH_TRANSCRIPT_MAX_CHARS,
-): WorkbenchTranscript {
-  const out: WorkbenchTranscriptItem[] = [];
-  let used = 0;
-  let truncated = false;
-  for (let index = items.length - 1; index >= 0; index -= 1) {
-    const cleaned = cleanText(items[index].text);
-    if (!cleaned) continue;
-    let text = cleaned.length > PER_MESSAGE_MAX_CHARS ? `${cleaned.slice(0, PER_MESSAGE_MAX_CHARS - 1)}…` : cleaned;
-    if (used + text.length > maxChars) {
-      const room = maxChars - used;
-      truncated = true;
-      if (room < 80) break;
-      text = `…${text.slice(text.length - room + 1)}`;
-    }
-    out.push({ ...items[index], text });
-    used += text.length;
-    if (used >= maxChars) {
-      truncated = truncated || index > 0;
-      break;
-    }
-  }
-  return { items: out.reverse(), truncated };
 }
 
 function messageText(raw: string): string {
@@ -89,22 +61,8 @@ async function sessionMessageWhere(sessionId: string) {
   return { db, where: and(...where) };
 }
 
-export async function readSessionTranscript(sessionId: string): Promise<WorkbenchTranscript> {
-  const { db, where } = await sessionMessageWhere(sessionId);
-  const rows = await db
-    .select({ role: messages.role, content: messages.content, createdAt: messages.createdAt })
-    .from(messages)
-    .where(where)
-    .orderBy(desc(messages.createdAt))
-    .limit(SESSION_MESSAGE_ROWS);
-  const items = rows
-    .reverse()
-    .map((row) => ({ role: row.role as 'user' | 'assistant', text: messageText(row.content), at: row.createdAt }));
-  return boundTranscript(items);
-}
-
 /** 最后一条用户消息与最后一条助手文字(各取清洗后的全文,由调用方再截断)。 */
-export function lastExchange(items: readonly Pick<WorkbenchTranscriptItem, 'role' | 'text'>[]): {
+export function lastExchange(items: readonly { role: 'user' | 'assistant'; text: string }[]): {
   lastUserAsk: string | null;
   lastAssistantLine: string | null;
 } {

@@ -769,7 +769,6 @@ export const MAKER_INVOKE = {
   RSB_WINDOW_CLOSE: 'maker:rsb-window:close',
   RSB_WINDOW_SET_DETACHED: 'maker:rsb-window:set-detached',
   RSB_WINDOW_GET_CONTEXT: 'maker:rsb-window:get-context',
-  RSB_WINDOW_ALLOW_BOT_WORKBENCH_PERMISSION: 'maker:rsb-window:allow-bot-workbench-permission',
   RSB_WINDOW_READY: 'maker:rsb-window:ready',
   RSB_WINDOW_SEND_COMMAND: 'maker:rsb-window:send-command',
   /**
@@ -1028,11 +1027,9 @@ export const MAKER_PUSH = {
   COMPANION_CLOUD_CHANGED: 'maker:companion-cloud:changed',
   /** Bot 档案经主进程创建或更新后变化；renderer 收到后重拉伙伴列表。 */
   BOT_PROFILE_CHANGED: 'maker:bot-profile:changed',
-  /** 伙伴工作台已接手的项目变化(payload: { botId });renderer 收到后重读项目列表。 */
+  /** A teammate's linked projects or the tasks it opened changed (payload: { botId }); the name is kept from the V1 workbench. */
   BOT_WORKBENCH_CHANGED: 'maker:bot-workbench:changed',
   BOT_LIFECYCLE_CHANGED: 'maker:bot-lifecycle:changed',
-  /** 伙伴自主跟进状态表或「自动跟进所有任务」设置变化（节流 ≤1 次/秒，payload: { botIds?: string[] }，缺省 = 全部伙伴）；renderer 重读「一眼」。 */
-  BOT_AUTONOMY_CHANGED: 'maker:bot-autonomy:changed',
   /**
    * 被控端「当前 New Maker 草稿」全量变更广播。SYNC_NEW_MAKER_DRAFT 落 main 缓存后随即发,
    * 经 device-link tap 转发给控制端(account 级 → sessions topic),控制端刷新远程草稿显示镜像。

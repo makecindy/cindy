@@ -1,7 +1,6 @@
 import { MemoryRouter } from 'react-router-dom';
 import { mountPage, subscription, forbid } from '../../ui-page/harness';
 import { BotRoutines } from '../../../src/renderer/features/bots/BotRoutines';
-import { BotAutonomySettings } from '../../../src/renderer/features/bots/BotAutonomySettings';
 import type { Routine } from '@cindy/maker-scheduler';
 
 const base = { botId: 'fixture', prompt: 'Fixture only', revision: 1, createdAt: 1, updatedAt: 1 };
@@ -33,11 +32,7 @@ mountPage({
         },
         runNow: forbid('routines.runNow'), remove: forbid('routines.remove'),
       },
-      localDb: { bots: { autonomy: { getSettings: async () => ({ schedulerBotId: null, isCustomized: false, defaults: { schedulerBotId: null } }) } } },
-      maker: { onBotAutonomyChanged: subscription('autonomy') },
     };
   },
-  render: () => <MemoryRouter><div className="mx-auto w-full max-w-xl p-4"><BotRoutines botId="fixture" embedded
-    header={<BotAutonomySettings botId="fixture" botName="Cindy" allowSchedulerFollow={false} onAllowSchedulerFollowChange={() => {}} />}
-  /></div></MemoryRouter>,
+  render: () => <MemoryRouter><div className="mx-auto w-full max-w-xl p-4"><BotRoutines botId="fixture" embedded /></div></MemoryRouter>,
 });

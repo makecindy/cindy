@@ -1,9 +1,7 @@
-import type { RoutineState, RoutineRun, Schedule, ScheduleRun } from '@cindy/maker-scheduler';
+import type { RoutineState, Schedule, ScheduleRun } from '@cindy/maker-scheduler';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 const mock = vi.hoisted(() => ({
   scope: 'owner-a',
-  followUpEvents: vi.fn<(botId: string, events: RoutineRun['events']) => RoutineRun['events'] | null>((_id, events) => events),
-  skillsOff: [] as string[],
   projectMode: false,
   boundaryPending: false,
   schedulerReady: true,
@@ -32,11 +30,6 @@ const mock = vi.hoisted(() => ({
     delete: vi.fn(async () => {}),
   },
 }));
-vi.mock('../../bot-autonomy/hub.js', () => ({ currentFollowUpEvents: async (botId: string, input: RoutineRun['events']) => {
-  const events = mock.followUpEvents(botId, input);
-  return events === null ? null : { events, canDispatch: () => mock.followUpEvents(botId, input)?.length === events.length };
-}, botSystemSkillsOff: async () => mock.skillsOff }));
-vi.mock('../../bot-autonomy/hostData.js', () => ({ readBotProjectModeFor: async () => mock.projectMode }));
 vi.mock('../../appSessionState.js', () => ({
   activeOwnerScopeKey: () => mock.scope,
   getActiveAppSession: () => ({ dataOwnerId: mock.scope }),
@@ -60,6 +53,10 @@ vi.mock('../../localDb/client/current.js', () => ({
     userId: mock.dbOwner ?? mock.scope,
     client: { drizzle: { select: () => ({ from: mock.readProfiles }) } },
   } : null,
+  // The project-mode read: one profile row with its current capabilities.
+  getDbClient: () => ({ drizzle: { select: () => ({ from: () => ({ innerJoin: () => ({ where: () => ({
+    limit: async () => [{ capabilities: JSON.stringify({ projectMode: mock.projectMode }) }],
+  }) }) }) }) } }),
 }));
 vi.mock('../store.js', () => ({
   RoutineFileStore: class {
@@ -84,8 +81,6 @@ beforeEach(() => configureRoutineHost({
 afterEach(async () => {
   await stopRoutines();
   vi.clearAllMocks();
-  mock.followUpEvents.mockImplementation((_id, events) => events);
-  mock.skillsOff = [];
   mock.projectMode = false;
   mock.scope = 'owner-a';
   mock.boundaryPending = false;
@@ -273,10 +268,9 @@ it('asks the routine\'s chosen plugin before any lane or model dispatch', async 
   expect(plain.preRunPlugin).toBeUndefined();
 });
 
-// cindy-bots-runtime.md §6「伙伴技能分层」: turning off a system Skill stops its background work with its prompt and tools.
-// Before this, a manual or scheduled run of the built-in follow-up still reached the model. Teammates no
-// longer keep todos, so a daily todo check left over from V1 is always skipped. The owner's own routines keep running.
-it('skips follow-up while its system Skill is off and always skips a leftover daily todo check', async () => {
+// Teammates no longer keep todos or follow up on tasks: a daily todo check or built-in follow-up
+// left over from V1 is always skipped, manual runs included. The owner's own routines keep running.
+it('always skips a leftover built-in follow-up and daily todo check', async () => {
   const engine = await getRoutineEngine();
   const todoCheck = await routineTools.createOnce('bot', { name: 'Daily todo check', prompt: 'Check', enabled: true,
     triggers: [{ id: 'tick', kind: 'interval', intervalMs: 60000 }] }, 'builtin-todo-check-bot');
@@ -285,7 +279,6 @@ it('skips follow-up while its system Skill is off and always skips a leftover da
   const custom = await routineTools.save('bot', { name: 'Review', prompt: 'Check', enabled: true,
     triggers: [{ id: 'tick', kind: 'interval', intervalMs: 60000 }] });
   if (!followUp) throw new Error('Routines were not created');
-  mock.skillsOff = ['follow'];
   for (const id of [todoCheck.id, followUp.id, custom.id]) await routineTools.runNow('bot', id);
   await vi.waitFor(async () => expect(await Promise.all([todoCheck.id, followUp.id, custom.id]
     .map(async id => (await routineTools.history('bot', id))[0]?.status))).toEqual(['skipped', 'skipped', 'success']));
@@ -302,7 +295,8 @@ it('hides the built-in routines of a project-mode teammate and skips nightly lea
     triggers: [{ id: 'tick', kind: 'interval', intervalMs: 60000 }] }, 'builtin-follow-up-bot');
   await routineTools.createOnce('bot', { name: 'Daily todo check', prompt: 'Check', enabled: true,
     triggers: [{ id: 'tick', kind: 'interval', intervalMs: 60000 }] }, 'builtin-todo-check-bot');
-  expect((await routineTools.list('bot')).length).toBe(3);
+  // The built-in follow-up never runs, so it is hidden for every teammate.
+  expect((await routineTools.list('bot')).map(routine => routine.id).sort()).toEqual(['builtin-nightly-learning-bot', 'builtin-todo-check-bot']);
   mock.projectMode = true;
   expect(await routineTools.list('bot')).toEqual([]);
   await routineTools.runNow('bot', 'builtin-nightly-learning-bot');
@@ -1094,33 +1088,9 @@ it('persists all imported paused routines before tool-policy setup and never dis
   await expect(routineTools.runNow('bot', routines[0].id)).rejects.toThrow('SOURCE_TOOL_POLICY_NEEDS_MAPPING');
 });
 
-// Regression: persisted queued batches survive app upgrades and settings changes.
-it('skips revoked follow-up batches and still dispatches authorized delegated events', async () => {
-  const engine = await getRoutineEngine();
-  const source = { id: 'host:sessions', name: 'Sessions', status: 'listening' as const,
-    events: [{ type: 'errored', name: 'Error', fields: [] }] };
-  engine.registerSource(source);
-  const routine = await engine.ensureBuiltin('bot', 'follow-up', {
-    name: 'Follow up', prompt: 'Follow', enabled: true,
-    triggers: [{ id: 'error', kind: 'event', sourceId: 'host:sessions', eventType: 'errored', filters: [] }],
-  }, 'builtin-follow-up-bot');
-  if (!routine) throw new Error('Follow-up routine was not created');
-  mock.followUpEvents.mockReturnValue([]);
-  await engine.publish('host:sessions', { id: 'old', type: 'errored', subject: 'revoked', occurredAt: Date.now(), data: { title: 'PRIVATE_OLD_SUMMARY' } });
-  await vi.waitFor(async () => expect((await routineTools.history('bot', routine.id))[0]?.status).toBe('skipped'));
-  expect(mock.scheduler.runNow).not.toHaveBeenCalled();
-  expect(mock.storage.insert).not.toHaveBeenCalled();
-
-  mock.followUpEvents.mockImplementation((_id, events) => events.filter(({ event }) => event.subject === 'delegated'));
-  await engine.publish('host:sessions', { id: 'authorized', type: 'errored', subject: 'delegated', occurredAt: Date.now(), data: { title: 'Assigned work' } });
-  await vi.waitFor(() => expect(mock.scheduler.runNow).toHaveBeenCalledOnce());
-  expect(mock.storage.insert.mock.calls[0][0].prompt).toContain('Assigned work');
-  expect(mock.storage.insert.mock.calls[0][0].prompt).not.toContain('PRIVATE_OLD_SUMMARY');
-});
-
-// #6440 / unit: one completion can match both built-in and explicitly configured
-// follow-up. A receipt-owned batch must skip only the former, before model work.
-it('preserves user routines while skipping receipt-owned built-in completion', async () => {
+// #6440 / unit: one completion can match both the built-in follow-up and an explicitly
+// configured routine. Only the former is skipped, before model work.
+it('preserves user routines while skipping the built-in follow-up on the same completion', async () => {
   const engine = await getRoutineEngine();
   engine.registerSource({ id: 'host:sessions', name: 'Sessions', status: 'listening',
     events: [{ type: 'finished', name: 'Finished', fields: [] }] });
@@ -1129,7 +1099,6 @@ it('preserves user routines while skipping receipt-owned built-in completion', a
   const builtin = await engine.ensureBuiltin('bot', 'follow-up', input, 'builtin-follow-up-bot');
   const custom = await routineTools.save('bot', input);
   if (!builtin) throw new Error('Follow-up routine was not created');
-  mock.followUpEvents.mockReturnValue([]);
   await engine.publish('host:sessions', { id: 'done', type: 'finished', subject: 'delegated', occurredAt: Date.now(), data: {} });
   await vi.waitFor(async () => {
     expect((await routineTools.history('bot', builtin.id))[0]?.status).toBe('skipped');

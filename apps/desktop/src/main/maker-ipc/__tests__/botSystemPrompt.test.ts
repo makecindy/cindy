@@ -34,20 +34,14 @@ function input(overrides: Partial<BotSystemPromptInput> = {}): BotSystemPromptIn
 }
 
 describe('稳定层:能力必须写进提示词', () => {
-  // Rule (cindy-bots-runtime.md §6「伙伴技能分层」): routines and the workbench are system Skills, read on demand
+  // Rule (cindy-bots-runtime.md §6「伙伴技能分层」): routines are a system Skill, read on demand
   // and dropped together with their tools when the owner turns them off.
-  it('leaves routines to their system Skill and drops the workbench line when follow is off', () => {
+  it('leaves routines to their system Skill', () => {
     const enabled = input();
     enabled.capabilities.routinesEnabled = true;
     enabled.capabilities.botModeEnabled = true;
     expect(buildBotStableTier(enabled)).not.toContain('routine_save');
     expect(TEAMMATE_SYSTEM_SKILLS.routine.body).toContain('保存后再读回');
-    const main = input();
-    main.capabilities.botModeEnabled = true;
-    main.capabilities.sessionControlEnabled = true;
-    main.capabilities.followEnabled = false;
-    expect(buildBotStableTier(main)).not.toContain('set_workbench_task_responsibility');
-    expect(TEAMMATE_SYSTEM_SKILLS.follow.body).toContain('set_workbench_task_responsibility');
   });
   it('只给本机伙伴主任务讲它能管主人的任务,自动化另需挂载', () => {
     const main = input();
@@ -61,8 +55,7 @@ describe('稳定层:能力必须写进提示词', () => {
     expect(stable).toContain('照常走当前任务的权限档');
     expect(stable).not.toContain('OWNER_TURN_REQUIRED');
     expect(stable).not.toContain('TASK_OUT_OF_SCOPE');
-    expect(stable).toContain('set_workbench_task_responsibility');
-    expect(stable).not.toContain('add_workbench_project');
+    expect(stable).not.toContain('set_workbench_task_responsibility');
     expect(stable).not.toContain('你能建普通自动化');
     main.capabilities.automationEnabled = true;
     expect(buildBotStableTier(main)).toContain('schedule_create');

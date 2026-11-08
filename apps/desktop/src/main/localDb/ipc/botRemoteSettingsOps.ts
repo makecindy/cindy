@@ -3,7 +3,6 @@ import {
   BOT_SETTINGS_PATCH_FIELDS,
   type BotSettingsOp,
 } from '../../../shared/botRemoteSettings.js';
-import type { BotAutonomySettingsView } from '../../../shared/botAutonomy.js';
 import {
   BOT_IM_CHANNELS,
   type BotImAdoptablePersonalBotsPayload,
@@ -56,11 +55,6 @@ export interface BotSettingsOpsDeps {
     setEnabled(botId: string, slug: string, enabled: boolean): Promise<void>;
     delete(botId: string, slug: string): Promise<void>;
   };
-  autonomy: {
-    get(): Promise<BotAutonomySettingsView>;
-    set(schedulerBotId: string | null): Promise<BotAutonomySettingsView>;
-    reset(): Promise<BotAutonomySettingsView>;
-  };
   searchHistory(botId: string, query: string, limit: number): Promise<unknown>;
   /**
    * Messaging platforms. Credentials are entered and stored on this computer only: there is no
@@ -109,6 +103,9 @@ export interface BotSettingsOpsDeps {
 }
 
 const fail = (message = 'Invalid settings arguments'): never => throwIpcError('INVALID_PARAMS', message);
+/** The settings view an older controller expects from `autonomy.get`, with follow-up off. */
+const FOLLOW_UP_OFF = { schedulerBotId: null, isCustomized: false, defaults: { schedulerBotId: null } } as const;
+const FOLLOW_UP_REMOVED = 'Follow-up is no longer available for teammates';
 const record = (value: unknown, name: string): Record<string, unknown> =>
   value && typeof value === 'object' && !Array.isArray(value) ? (value as Record<string, unknown>) : fail(`${name} must be an object`);
 const text = (value: unknown, name: string, max: number, allowEmpty = false): string =>
@@ -269,13 +266,11 @@ export function createBotRemoteSettingsOps(deps: BotSettingsOpsDeps): Partial<Re
       await deps.skills.delete(botOf(call), text(call.args.slug, 'slug', 128));
       return null;
     },
-    'autonomy.get': async () => deps.autonomy.get(),
-    'autonomy.set': async call => {
-      const value = call.args.schedulerBotId;
-      if (value !== null && (typeof value !== 'string' || !value.trim() || value.length > 128)) fail('schedulerBotId must be a teammate id or null');
-      return deps.autonomy.set(value as string | null);
-    },
-    'autonomy.reset': async () => deps.autonomy.reset(),
+    // Follow-up was removed from teammates. Older controllers still call these (they are not
+    // advertised in caps): reading answers "off", writing is refused with a stable code.
+    'autonomy.get': async () => FOLLOW_UP_OFF,
+    'autonomy.set': async () => throwIpcError('UNSUPPORTED_CAPABILITY', FOLLOW_UP_REMOVED),
+    'autonomy.reset': async () => throwIpcError('UNSUPPORTED_CAPABILITY', FOLLOW_UP_REMOVED),
     'routines.list': call => routineCall(() => deps.routines.list(botOf(call))),
     'routines.sources': () => routineCall(() => deps.routines.sources()),
     'routines.history': call => routineCall(() => deps.routines.history(botOf(call), text(call.args.id, 'id', 128))),

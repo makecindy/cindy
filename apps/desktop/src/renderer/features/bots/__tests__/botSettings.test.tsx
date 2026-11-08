@@ -99,9 +99,6 @@ vi.mock('../botStore', () => ({
     mocks.modelListeners.add(listener);
     return () => mocks.modelListeners.delete(listener);
   },
-  useBotAutonomySettings: () => null,
-  setBotSchedulerBotId: vi.fn(),
-  resetBotAutonomySettings: vi.fn(),
 }));
 vi.mock('../BotLifecycleSettings', () => ({
   BotLifecycleSettings: () => <div data-testid="bot-lifecycle-settings" />,

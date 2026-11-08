@@ -30,8 +30,6 @@ export interface BotPromptCapabilitySignals {
   /** 是否能直接创建新的伙伴；与消息/任务能力独立。 */
   botCreationEnabled?: boolean;
   routinesEnabled?: boolean;
-  /** `follow` system Skill (shared/botSystemSkills.ts); false drops its workbench line. */
-  followEnabled?: boolean;
   /** 伙伴自有技能是否可写入(save_teammate_skill 是否在工具面里)。 */
   ownSkillsEnabled: boolean;
   /** 是否为 Bot 的 canonical Chat；Bot Mode 协议只在这里生效。 */
@@ -161,10 +159,6 @@ const SESSION_CONTROL_GUIDANCE = [
   '转达时写清主人要做的事、范围和对方需要的背景，不要复述「用户已授权」之类的话，也不要让对方用 send_to_session 回传；需要结果时自己用 `get_task_digest` 去看。工具回执决定实际结果；账号、连接或平台未就绪时如实说明。',
 ].join('\n');
 
-/** Only with the `follow` system Skill on; its tools are denied otherwise. */
-const WORKBENCH_RESPONSIBILITY_GUIDANCE =
-  '主人让你接手某件任务时，用 `set_workbench_task_responsibility` 记下；之后它卡住、等主人、出错或做完时宿主会叫醒你，先用 history 类的 `get_task_digest` 读摘要再决定怎么跟进。';
-
 const AUTOMATION_GUIDANCE = [
   '## 你能建普通自动化',
   '主人要你给某个项目或任务设定时执行时，用 cindy_scheduler 建普通自动化（先 `list_tools`，再 `call_tool` 调 `schedule_create` 等）；只和你自己有关的提醒仍用例行任务。操作沿用当前任务的权限档。建完读回核实名称、时间和是否启用，成功才说已安排。',
@@ -278,9 +272,7 @@ export function buildBotStableTier(input: BotSystemPromptInput): string {
     capabilityParts.push(TASK_AND_TEAMMATE_GUIDANCE);
   }
   if (botModeEnabled && input.capabilities.sessionControlEnabled) {
-    capabilityParts.push(input.capabilities.followEnabled === false
-      ? SESSION_CONTROL_GUIDANCE
-      : `${SESSION_CONTROL_GUIDANCE}\n${WORKBENCH_RESPONSIBILITY_GUIDANCE}`);
+    capabilityParts.push(SESSION_CONTROL_GUIDANCE);
     if (input.capabilities.automationEnabled) capabilityParts.push(AUTOMATION_GUIDANCE);
   }
   if (capabilityParts.length > 0) {

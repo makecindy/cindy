@@ -94,7 +94,7 @@ vi.mock('ws', async () => {
 });
 import { ChatResponseError, REACTION_REVISION_MESSAGE_LIMIT, splitChatMessageText, withChatServer } from '../chatServer.js';
 import { t } from '../../i18n.js';
-import { signalBotAutonomyBotsChanged } from '../../bot-autonomy/botsChangedSignal.js';
+import { signalBotProfilesChanged } from '../botProfilesChangedSignal.js';
 import { projectBotGroupExecutionFailures } from '@cindy/maker-shared/botGroupPresentation';
 import { botGroupRuntimeFailureCode, settleClosedBotGroupTurn, settleUndispatchedBotGroupTurn } from '../botGroupRuntimeFailure.js';
 import { authorizeGroupTool } from '../botGroupToolAuthorization.js';
@@ -4398,7 +4398,7 @@ describe('Chat Server result delivery and refresh', () => {
         if (route === '/executions/claim') return { body: { execution: null } };
         return response(route);
       });
-      signalBotAutonomyBotsChanged();
+      signalBotProfilesChanged();
       await vi.advanceTimersByTimeAsync(2000);
       expect(fixture.handle.mock.calls.filter(([route, method]) => route === '/actors' && method === 'POST')).toHaveLength(0);
       fail = false;
@@ -4641,7 +4641,7 @@ describe('Chat Server result delivery and refresh', () => {
         return base(route, method, body);
       });
       await service.chatServer!.ownedBots();
-      expired = true; signalBotAutonomyBotsChanged();
+      expired = true; signalBotProfilesChanged();
       const refreshing = service.chatServer!.refreshProfile();
       await vi.advanceTimersByTimeAsync(0);
       try {

@@ -131,7 +131,8 @@ describe('portable teammate editors', () => {
     const f = fixture(); const list = await f.resource('settings:bot-a/connections/skill');
     const detail = await f.resource(f.entries(list)[1].resourceId); f.settings.source.currentVersion++;
     await expect(f.send(detail, { joined: true })).rejects.toThrow();
-    for (const id of ['settings:bot-a/skills/../../secret', 'settings:bot-a/connections/credentials', 'settings:bot-a/unknown']) await expect(f.resource(id)).rejects.toThrow();
+    // `follow-up` is the removed V1 follow-up page that older phones may still open.
+    for (const id of ['settings:bot-a/skills/../../secret', 'settings:bot-a/connections/credentials', 'settings:bot-a/unknown', 'settings:bot-a/follow-up']) await expect(f.resource(id)).rejects.toThrow();
     expect(f.deps.update).not.toHaveBeenCalled();
   });
   // Skill layers (cindy-bots-runtime.md §6「伙伴技能分层」) on the phone's generic settings pages. Unit, in-memory deps.
@@ -143,7 +144,7 @@ describe('portable teammate editors', () => {
     expect(shelf.blocks!.map(block => block.id)).toEqual(['core', 'system', 'skills']);
     expect(f.entries(shelf, 'core')).toMatchObject([{ resourceId: 'settings:bot-a/skills/_core', subtitle: { translations: { 'zh-CN': '所有伙伴共用 · 始终开启 · 随 Cindy 更新' } } }]);
     expect(f.entries(shelf, 'system').map(entry => [entry.resourceId, !!entry.subtitle])).toEqual([
-      ['settings:bot-a/skills/_routine', true], ['settings:bot-a/skills/_follow', false]]);
+      ['settings:bot-a/skills/_routine', true]]);
     expect(f.entries(shelf, 'skills')).toMatchObject([{ resourceId: 'settings:bot-a/skills/learned', subtitle: { fallback: 'Off' } }]);
     const core = await f.resource('settings:bot-a/skills/_core');
     expect(core.actions ?? []).toEqual([]);
@@ -155,17 +156,17 @@ describe('portable teammate editors', () => {
   });
   it('turns a system Skill off and on against the profile version the page was opened at', async () => {
     const f = fixture();
-    const follow = await f.resource('settings:bot-a/skills/_follow');
-    expect(follow.blocks![0]).toMatchObject({ id: 'capability', data: { values: { enabled: true } } });
-    expect(follow.blocks![0].fallbackMarkdown).toContain('跟进你交给它的任务');
-    await expect(f.send(follow, { enabled: 'no' })).rejects.toThrow();
-    await f.send(await f.resource('settings:bot-a/skills/_follow'), { enabled: false });
-    expect(f.deps.update).toHaveBeenLastCalledWith({ id: 'bot-a', capabilities: { systemSkillsOff: ['follow'] } }, 3);
     const routine = await f.resource('settings:bot-a/skills/_routine');
+    expect(routine.blocks![0]).toMatchObject({ id: 'capability', data: { values: { enabled: true } } });
+    expect(routine.blocks![0].fallbackMarkdown).toContain('例行任务');
+    await expect(f.send(routine, { enabled: 'no' })).rejects.toThrow();
+    await f.send(await f.resource('settings:bot-a/skills/_routine'), { enabled: false });
+    expect(f.deps.update).toHaveBeenLastCalledWith({ id: 'bot-a', capabilities: { systemSkillsOff: ['routine'] } }, 3);
+    const stale = await f.resource('settings:bot-a/skills/_routine');
     f.settings.source.currentVersion++;
-    await expect(f.send(routine, { enabled: false })).rejects.toThrow();
+    await expect(f.send(stale, { enabled: true })).rejects.toThrow();
     expect(f.deps.update).toHaveBeenCalledTimes(1);
-    await f.send(await f.resource('settings:bot-a/skills/_follow'), { enabled: true });
+    await f.send(await f.resource('settings:bot-a/skills/_routine'), { enabled: true });
     expect(f.deps.update).toHaveBeenLastCalledWith({ id: 'bot-a', capabilities: { systemSkillsOff: [] } }, 5);
   });
   it('turns a learned skill off without rewriting it and back on together with an edit', async () => {
@@ -290,31 +291,6 @@ describe('portable teammate memory pages', () => {
     vi.mocked(f.deps.memory.read).mockImplementationOnce(async () => { f.owner('b'); return { ...f.memories.get('user_coffee.md')! }; });
     await expect(f.resource('settings:bot-a/memory/user_coffee')).rejects.toThrow('OWNER_CHANGED');
   });
-});
-
-// Existing opaque grants must bind follow-up consent to this owner, computer and current choice.
-it('keeps follow-up off until chosen and rejects an invitation made stale by another explicit choice', async () => {
-  const f = fixture();
-  let choice = { schedulerBotId: null as string | null, isCustomized: false, defaults: { schedulerBotId: null } };
-  f.deps.followUp = { get: vi.fn(async () => choice), set: vi.fn(async id => {
-    choice = { ...choice, isCustomized: true, schedulerBotId: id }; return choice;
-  }) };
-  const read = () => f.resource('settings:bot-a/follow-up');
-  const invitation = await read();
-  expect((invitation.blocks![0].data as any).invitationAvailable).toBe(true);
-  expect(f.deps.followUp.set).not.toHaveBeenCalled();
-  await f.send(invitation, {}, 1);
-  expect(choice).toMatchObject({ schedulerBotId: null, isCustomized: true });
-  expect((await read()).blocks![0].data).toMatchObject({ invitationAvailable: false });
-  await expect(f.send(invitation, { enabled: true })).rejects.toThrow();
-  await f.send(await read(), { enabled: true });
-  expect(choice.schedulerBotId).toBe('bot-a');
-  const enabled = await read();
-  expect(enabled.actions![0].confirmation).toBeUndefined();
-  await f.send(enabled, { enabled: false });
-  expect(choice.schedulerBotId).toBeNull();
-  const stale = await read(); f.owner('b');
-  await expect(f.send(stale, { enabled: true })).rejects.toThrow();
 });
 
 // Restored project links use existing opaque settings actions. Minimal input: two projects and a stale save.

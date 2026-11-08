@@ -9,7 +9,7 @@ import { app, net, nativeImage } from 'electron';
 import { validateAvatarUpload } from '../profileEdit.js';
 import { uploadPublicAsset } from '../ossPublicUpload.js';
 import { getClientEndpoint } from '../clientEndpointsService.js';
-import { signalBotAutonomyBotsChanged, subscribeBotProfilesChanged } from '../bot-autonomy/botsChangedSignal.js';
+import { signalBotProfilesChanged, subscribeBotProfilesChanged } from './botProfilesChangedSignal.js';
 import { t } from '../i18n.js';
 import { readFile as readMedia } from '../cindy-media/blobStore.js';
 import { getAccessToken, refresh } from '../authManager.js';
@@ -1104,7 +1104,7 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
       actors: () => actors, refresh: () => refreshHomes('background'), refreshForeground: () => refreshHomes('foreground'),
       publish: publishHomes, syncProfile: syncActorProfiles,
       // A copy that stops or starts being hidden changes who can follow tasks (the built-in follow-up routine).
-      onShadowChanged: signalBotAutonomyBotsChanged,
+      onShadowChanged: signalBotProfilesChanged,
       // The owner's attachments go with the conversation; other devices download them from the room.
       media: { upload: async (room, source, files, author) => {
         // The conversation mirror is not a file backup: large files stay a name in the room.

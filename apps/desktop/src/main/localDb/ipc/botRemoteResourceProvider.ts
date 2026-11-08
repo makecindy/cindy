@@ -158,9 +158,9 @@ export function registerBotRemoteResourceProvider(management?: typeof botRemoteM
       }
       const resource = management && request.client.primitives.includes('form') ? await management.get(context, source.id) : management && source.invitation ? await management.getInvitation(context, source.id) : botRemoteResourceFromSource(source);
       if (management && request.client.primitives.includes('form')) {
-        for (const page of ['avatar', 'skills', 'connections', 'projects', 'followUp'] as const) {
+        for (const page of ['avatar', 'skills', 'connections', 'projects'] as const) {
           const block = resource.blocks?.find(block => block.id === page);
-          const data = { entries: [{ id: page, title: editorCopy[page], resourceId: `settings:${source.id}/${page === 'followUp' ? 'follow-up' : page}` }] };
+          const data = { entries: [{ id: page, title: editorCopy[page], resourceId: `settings:${source.id}/${page}` }] };
           if (block) block.data = data;
           else resource.blocks?.push({ id: page, primitive: 'list', fallbackMarkdown: '', data });
         }

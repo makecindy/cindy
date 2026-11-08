@@ -20,7 +20,7 @@ import { getCindyGhostsMcpDeps } from '../mcp-integrations/ghost.js';
 import { pluginAppResult } from '../mcp-apps/pluginCards.js';
 import { restorePluginPageSession } from '../mcp-apps/pluginPageCall.js';
 import { resumeInterruptedScheduleRun } from '../scheduler-host/index.js';
-import { readTaskDeliveryNote } from '../bot-autonomy/hub.js';
+import { configureTaskDeliveryReport, readTaskDeliveryNote } from './taskDeliveryReport.js';
 import { setVoiceTaskDispatch, setVoiceCallMemoryReader } from '../voice-conversation/taskBridge.js';
 import { buildBotMemoryScopeKey, SessionCreationCleanupPendingError } from '@cindy/maker-core';
 import { createOrcaWorkerProjectHandlers } from './orcaWorkerProjectHandlers';
@@ -91,7 +91,6 @@ import { MANAGED_LLAMACPP_PROVIDER_ID, llamaCppModelPreset, llamaCppMaxContextSi
 import { getManagedLlamaCppService } from '../local-model-runtime/llamaCppService.js';
 import { ensureManagedLlamaCppProvider } from '../local-model-runtime/managedLlamaCppProvider.js';
 import { handleListDevices, defaultDeps as deviceDirectoryDeps } from '../device-link/ipc.js';
-import { configureBotAutonomyHost, getBotAutonomyGlance, noteBotAutonomyInputProjection } from '../bot-autonomy/hub.js';
 import { countMachineRunningTasks } from '../machines/directory.js';
 import { configureLocalMachineActivity, readLocalMachineStatus } from '../machines/localStatus.js';
 import { getHostSourceDevice, getSelfDeviceId, onRemotePushChannel, remoteBackgroundInvoke, remoteInvoke as invokeBotPeer } from '../device-link/index.js';
@@ -3212,6 +3211,9 @@ const botRuntimeRestoreCoordinator = createBotRuntimeRestoreCoordinator({
 });
 
 export function restoreBotRuntimeForCurrentOwner(): Promise<boolean> {
+  // Owner-scoped like bot recovery: resume pending task-result deliveries after a restart or an
+  // account switch (the delivery host restores itself whenever the owner scope changes).
+  taskCompletionDeliveryForOwner();
   return botRuntimeRestoreCoordinator.restoreCurrentOwner();
 }
 
@@ -3864,20 +3866,15 @@ function getPendingInteractionsForSession(sessionId: string): PendingInteraction
   return out;
 }
 
-// 伙伴自主跟进：状态表读「等你的那句话」只取请求本身（不含 persistId 等宿主内部字段）。
-configureBotAutonomyHost({
+// report_task_delivery: tasks with a recorded origin hear back in their original conversation.
+configureTaskDeliveryReport({
   readSessionExecution: (id) => {
     const session = getMakerIfReady()?.getSession(id);
     return session ? { instanceId: session.instanceId, generation: session.getTurnGeneration() } : null;
   },
-  hasTaskDeliveryOrigin: id => taskCompletionDeliveryForOwner()?.hasOrigin(id) ?? Promise.resolve(false),
-  restoreTaskDeliveries: () => { taskCompletionDeliveryForOwner(); },
-  noteTaskDelivery: (id, execution, final) => getMakerIfReady()?.getSession(id)?.isTurnRunning() === true
+  wantsReport: id => taskCompletionDeliveryForOwner()?.wantsReport(id) ?? Promise.resolve(false),
+  report: (id, execution, final) => getMakerIfReady()?.getSession(id)?.isTurnRunning() === true
     && (taskCompletionDeliveryForOwner()?.report(id, execution, final) ?? false),
-  isCompletionHandledByTeammate: async (sessionId, botId, execution) =>
-    await taskCompletionDeliveryForOwner()?.handles(sessionId) || (await botDelegationServiceHolder
-    ?.isCompletionHandledByTeammate(sessionId, { pendingForBotId: botId, execution }) ?? null),
-  getPendingInteractions: (sessionId) => getPendingInteractionsForSession(sessionId).map((entry) => entry.request),
 });
 
 /**
@@ -4025,19 +4022,6 @@ function cancelPendingInteraction(requestId: string, decision: InteractionDecisi
   }
   // Use the same final-decision path as SharedPermission, never the paused answer gate.
   return resolvePendingInteraction(requestId, decision, true);
-}
-
-/** Narrow detached-workbench action: the Bot's live glance must still own this exact local permission. */
-export function allowBotWorkbenchPendingPermission(botId: string, sessionId: string, requestId: string): { accepted: boolean } {
-  const row = getBotAutonomyGlance(botId, undefined, false).waiting.find((item) =>
-    item.deviceId === null && item.sessionId === sessionId &&
-    item.requestId === requestId && item.waitingFor === 'permission');
-  const pending = pendingInteractionResolvers.get(requestId);
-  if (!row || !pending || pending.sessionId !== sessionId || pending.kind !== 'permission' ||
-      pending.request.kind !== 'permission' || pending.request.requestId !== requestId) {
-    return { accepted: false };
-  }
-  return { accepted: resolvePendingInteraction(requestId, { kind: 'permission', behavior: 'allow' }) };
 }
 
 function resolvePendingInteraction(requestId: string, decision: InteractionDecision, fromShared = false): boolean {
@@ -21075,8 +21059,6 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
         finishSchedulerUsageLimitWait(projection.sessionId, quotaClaim.usageLimitToken);
       }
       broadcastToAllWindows(MAKER_PUSH.INPUT_PROJECTION, projection);
-      // 伙伴自主跟进：出错 / 用量上限等待旁路进状态表（只读投影，不影响原广播）。
-      try { noteBotAutonomyInputProjection(projection); } catch { /* 观察层异常不影响输入协调 */ }
       if (!isGoalInputBlocked(projection.sessionId)) notifyGoalIdleAfterTurnSettled(projection.sessionId);
     },
     // 意识拦截钩(订阅槽①):派发/落库前问已装钩子意识;fail-open 由

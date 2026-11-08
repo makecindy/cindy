@@ -812,7 +812,7 @@ import { SidebarTabWindowsController } from './sidebar-tab-window/controller.js'
 import { resolveWindowBoundsNearPoint } from './windowBounds.js';
 import { createSidebarTabWindow } from './sidebar-tab-window/window.js';
 import { registerSidebarTabWindowIpc } from './sidebar-tab-window/ipc.js';
-import { hasAssignedBotWorkbenchTab, setRightSidebarTabsChangeBroadcaster } from './localDb/ipc/rightSidebarTabs.js';
+import { setRightSidebarTabsChangeBroadcaster } from './localDb/ipc/rightSidebarTabs.js';
 import {
   readRsbWindowSettings,
   resetRsbWindowSettingsForStartup,
@@ -820,7 +820,6 @@ import {
 } from './right-sidebar-window/settings-store.js';
 import {
   anySessionInTurn,
-  allowBotWorkbenchPendingPermission,
   listInTurnSessionIds,
   applyCodexSpawnConfigChangeWithRestart,
   clearDeferredCodexRestartForOwnerBoundary,
@@ -1237,7 +1236,6 @@ import {
   getProjectAutomationLoader,
 } from './scheduler-host/index.js';
 import { configureRoutineHost } from './routines/service.js';
-import { configureBotAutonomyHost, initBotAutonomy } from './bot-autonomy/service.js';
 import { voiceCallCoordinator } from './voice-conversation/callCoordinator.js';
 import { hasVoiceConversationLease } from './voice-conversation/lease.js';
 import { getBotRemoteResourceSource, ensureBotRoutineLaneSession } from './localDb/ipc/bots.js';
@@ -1312,8 +1310,6 @@ configureRoutineHost({
   screenControlPoint: screenGhostControlPoint,
   resolvePreRunPlugin: resolveGhostControlPointPlugin,
 });
-// 伙伴自主跟进：跟随例行任务引擎生命周期（引擎每次创建后重新登记 host:sessions 事件源）。
-configureBotAutonomyHost({ getMainWindow: () => mainWindowRef });
 voiceCallCoordinator.configure({
   hostSender: () => {
     const win = mainWindowRef;
@@ -1326,7 +1322,6 @@ voiceCallCoordinator.configure({
   onActiveChange: (active) => setMainWindowBackgroundThrottlingForVoiceCall(active),
   leaseHeld: hasVoiceConversationLease,
 });
-initBotAutonomy();
 
 /**
  * Phase 4: 不再用 `_schedulerStarted` flag —— `startScheduler()` 内部以 `_scheduler`
@@ -2419,18 +2414,6 @@ const rsbWindowController = new RsbWindowController({
 registerRsbWindowIpc({
   controller: rsbWindowController,
   getMainWindow: () => mainWindowRef,
-  allowBotWorkbenchPermission: allowBotWorkbenchPendingPermission,
-  authorizePoppedWorkbench: async (sender, botId) => {
-    const slot = sidebarTabWindowsController.slotForSender(sender);
-    if (!slot?.visible) return false;
-    const assignment = slot.assignment;
-    if (!assignment?.sessionId || assignment.context.remoteHostId !== null) return false;
-    const owner = await resolveRsbHostContextFromSession(assignment.sessionId);
-    if (owner?.botOwner?.botId !== botId || !owner.botOwner.canonical || owner.remoteHostId !== null) return false;
-    const hasTab = await hasAssignedBotWorkbenchTab(assignment.sessionId, assignment.tabs.map((tab) => tab.tabId), botId);
-    return hasTab && slot.visible && slot.assignment === assignment &&
-      sidebarTabWindowsController.slotForSender(sender) === slot;
-  },
 });
 
 

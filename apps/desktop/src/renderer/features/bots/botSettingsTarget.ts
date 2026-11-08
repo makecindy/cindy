@@ -1,7 +1,6 @@
 import { createContext, useContext } from 'react';
 
 import type { MakerVendor } from '@/lib/ccAgent.types';
-import type { BotAutonomySettingsView } from '../../../shared/botAutonomy';
 import type { BotLifecycleActionRequest, BotLifecycleActionResult } from '../../../shared/botLifecycle';
 import type { BotModelRoute } from '../../../shared/botModelChain';
 import type { ConversationSearchResponse } from '../../../shared/conversationSearch';
@@ -88,11 +87,6 @@ export interface BotSettingsTarget {
   /** Host keeps a routine's session mode (persistent lane or a fresh lane per trigger). */
   routineSessionModes?: boolean;
   routineDelivery?: boolean;
-  autonomy: {
-    useSettings(): BotAutonomySettingsView | null;
-    setSchedulerBotId(botId: string | null): Promise<void>;
-    reset(): Promise<void>;
-  };
 }
 
 export const BotSettingsTargetContext = createContext<BotSettingsTarget | null>(null);

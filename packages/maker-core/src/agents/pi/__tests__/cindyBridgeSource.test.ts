@@ -2453,7 +2453,7 @@ it('routes Bot shortcuts through the scoped helper entry without exposing them t
 
   const bot: any[] = [];
   gateway.register({ registerTool: (tool: unknown) => bot.push(tool) }, { botMemoryFacade: true });
-  for (const name of ['start_session_task', 'check_session_task', 'message_session_task', 'stop_session_task', 'list_agents', 'create_teammate', 'routine_list', 'routine_save', 'routine_sources', 'routine_history', 'routine_delete', 'routine_run_now', 'routine_delivery_targets', 'schedule_list_models', 'schedule_notify_current_run', 'schedule_set_pre_run_hook', 'get_task_digest', 'get_workbench', 'read_workbench_task', 'continue_workbench_task']) {
+  for (const name of ['start_session_task', 'check_session_task', 'message_session_task', 'stop_session_task', 'list_agents', 'create_teammate', 'routine_list', 'routine_save', 'routine_sources', 'routine_history', 'routine_delete', 'routine_run_now', 'routine_delivery_targets', 'schedule_list_models', 'schedule_notify_current_run', 'schedule_set_pre_run_hook', 'get_task_digest']) {
     const tool = bot.find((item) => item.name === name);
     expect(tool).toBeDefined();
     const args = name === 'routine_save' ? {
@@ -2464,7 +2464,7 @@ it('routes Bot shortcuts through the scoped helper entry without exposing them t
         { id: 'minute', kind: 'interval', intervalMs: 60000, anchorMs: 30000 },
         { id: 'one-shot', kind: 'once', at: 90000 },
       ],
-    } : name === 'schedule_list_models' ? { agent: 'codex', agentDeviceId: 'local' } : name === 'schedule_notify_current_run' || name === 'get_workbench' ? {} : name === 'get_task_digest' ? { session_id: 'laptop::session-1' } : name === 'continue_workbench_task' ? { task_id: 'laptop::session-1', message: 'Report progress and continue' } : name === 'schedule_set_pre_run_hook' ? { script: 'process.exit(2)' } : name === 'list_agents' || name === 'routine_list' || name === 'routine_sources' || name === 'routine_delivery_targets' ? {}
+    } : name === 'schedule_list_models' ? { agent: 'codex', agentDeviceId: 'local' } : name === 'schedule_notify_current_run' ? {} : name === 'get_task_digest' ? { session_id: 'laptop::session-1' } : name === 'schedule_set_pre_run_hook' ? { script: 'process.exit(2)' } : name === 'list_agents' || name === 'routine_list' || name === 'routine_sources' || name === 'routine_delivery_targets' ? {}
       : name.startsWith('routine_') ? { id: 'routine-1' }
       : name === 'start_session_task' ? { instruction: 'Prepare a report' }
       : name === 'create_teammate' ? { name: 'Writer', description: 'Novelist', identity_source: 'Write stories', welcome_message: 'Hello' }

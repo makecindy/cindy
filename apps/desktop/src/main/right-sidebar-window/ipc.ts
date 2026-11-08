@@ -7,12 +7,11 @@
  */
 
 import { ipcMain } from 'electron';
-import type { BrowserWindow, WebContents } from 'electron';
+import type { BrowserWindow } from 'electron';
 import type { SubagentProvider } from '@cindy/maker-shared/subagent-workspace';
 
 import { MAKER_INVOKE, MAKER_SEND } from '../maker-ipc/channels.js';
 import { createLogger } from '../logger.js';
-import { assertTrustedAppRendererEvent } from '../security/trustedAppRenderer.js';
 import { requireEnum, requireObject, throwIpcError } from '../utils/ipcValidate.js';
 import type {
   RsbWindowCommand,
@@ -382,29 +381,8 @@ function parseTabHandoff(raw: unknown): RsbWindowTabHandoff | undefined {
 export function registerRsbWindowIpc(opts: {
   controller: RsbWindowController;
   getMainWindow: () => BrowserWindow | null;
-  allowBotWorkbenchPermission: (botId: string, sessionId: string, requestId: string) => { accepted: boolean };
-  authorizePoppedWorkbench?: (sender: WebContents, botId: string) => Promise<boolean>;
 }): void {
-  const { controller, getMainWindow, allowBotWorkbenchPermission, authorizePoppedWorkbench } = opts;
-
-  ipcMain.handle(MAKER_INVOKE.RSB_WINDOW_ALLOW_BOT_WORKBENCH_PERMISSION, async (event, raw: unknown) => {
-    assertTrustedAppRendererEvent(event);
-    const request = requireObject(raw, 'workbench permission');
-    for (const key of ['botId', 'sessionId', 'requestId'] as const) {
-      if (typeof request[key] !== 'string' || !request[key] || request[key].length > 128) {
-        throwIpcError('INVALID_PARAMS', `${key} must be a 1–128 character string`);
-      }
-    }
-    const context = event.sender === controller.getVisibleSidebarWebContents() ? controller.getContext() : null;
-    const botOwner = context?.botOwner;
-    const authorizedSidebar = Boolean(botOwner && botOwner.botId === request.botId &&
-      botOwner.canonical && context?.remoteHostId === null);
-    const authorizedPopout = !authorizedSidebar && await authorizePoppedWorkbench?.(event.sender, request.botId as string);
-    if (!authorizedSidebar && !authorizedPopout) {
-      return { accepted: false };
-    }
-    return allowBotWorkbenchPermission(request.botId as string, request.sessionId as string, request.requestId as string);
-  });
+  const { controller, getMainWindow } = opts;
 
   ipcMain.handle(MAKER_INVOKE.RSB_WINDOW_GET_STATE, () => controller.getState());
 

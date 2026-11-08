@@ -101,7 +101,7 @@ describe('Bot Profile runtime prompt', () => {
 
   it('names turned-off system Skills as unavailable and drops them from the list', () => {
     const prompt = buildBotCapabilityContextPrompt({ systemSkillsOff: ['routine'] });
-    expect(prompt).toContain('On: `follow`');
+    expect(prompt).toContain('All system Skills are off.');
     expect(prompt).not.toContain(`\`routine\` — ${TEAMMATE_SYSTEM_SKILLS.routine.description}`);
     expect(prompt).toContain('Off: `routine`. Their tools are unavailable');
   });
@@ -110,7 +110,7 @@ describe('Bot Profile runtime prompt', () => {
   it('keeps per-teammate system Skill state out of the shared core file', () => {
     const shared = buildTeammateGuide({ shared: true, systemSkillsOff: ['routine'] });
     expect(shared).not.toMatch(/\bOn: |\bOff: |All system Skills are off/);
-    for (const id of ['routine', 'follow']) expect(shared).toContain(`\`${id}\` — `);
+    expect(shared).toContain('`routine` — ');
     expect(shared).toContain('your preloaded profile says which are on for you');
     expect(shared.length).toBeLessThanOrEqual(TEAMMATE_CORE_MAX_CHARS);
   });

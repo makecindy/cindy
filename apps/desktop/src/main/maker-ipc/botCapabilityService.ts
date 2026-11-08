@@ -46,7 +46,6 @@ const fields: Record<Kind, { list: string; mode: string }> = {
 const FEATURES: { id: 'memory' | BotSystemSkillId; name: string; description: string }[] = [
   { id: 'memory', name: '记忆', description: '记住主人的偏好与背景；关闭后不读也不存记忆。' },
   { id: 'routine', name: '例行任务', description: '系统技能：建立和维护自己的定期或事件触发的例行任务。' },
-  { id: 'follow', name: '工作台与跟进', description: '系统技能：关注主人的任务近况，跟进交给自己的任务。' },
 ];
 function featureEntries(config: Record<string, unknown>): Entry[] {
   return FEATURES.map((item) => ({
@@ -223,7 +222,7 @@ async function selectBotCapability(input: Input & { id: string; joined: boolean 
     if (input.kind === 'feature') {
       const feature = input.id === 'memory' ? 'memory' : isBotSystemSkillId(input.id) ? input.id : null;
       if (!feature) {
-        return { ok: false as const, errorCode: 'CAPABILITY_UNAVAILABLE', message: '没有这项功能；可选 memory、routine、follow' };
+        return { ok: false as const, errorCode: 'CAPABILITY_UNAVAILABLE', message: '没有这项功能；可选 memory、routine' };
       }
       ctx.assertOwner();
       await updateBotProfile({

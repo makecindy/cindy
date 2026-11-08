@@ -5,7 +5,7 @@
  * 所以只在换过去确实有用、且换过去装得下时给建议；其余情况不给，由伙伴提醒主人。
  * 规则见 docs/product-rules/cindy-bots-runtime.md §6.3。
  */
-import type { TaskDigestFailure } from '../mcp-integrations/taskDigest.js';
+import type { TaskDigestFailure } from './taskDigest.js';
 import { decideProviderGroupFailure } from '../provider-group/failurePolicy.js';
 import {
   botModelRouteIndex,

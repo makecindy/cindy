@@ -1,4 +1,3 @@
-import type { BotAutonomySettingsView } from '../../../shared/botAutonomy.js';
 import { serializeModelRoutes } from '@cindy/maker-shared/model-route';
 import { normalizeBotModelChain, type BotModelRoute } from '../../../shared/botModelChain.js';
 import { createHash } from 'node:crypto';
@@ -15,7 +14,6 @@ type Kind = 'skill' | 'mcp' | 'toolset';
 type Capability = { id: string; name: string; description: string; available: boolean; joined: boolean };
 export interface BotRemoteEditorDeps extends Pick<BotRemoteSettingsDeps, 'owner' | 'assertOwner' | 'read' | 'update' | 'skills'> {
   projects?: { list(botId: string): Promise<BotProjectOption[]>; set(botId: string, id: string, linked: boolean): Promise<unknown> };
-  followUp?: { get(): Promise<BotAutonomySettingsView>; set(botId: string | null): Promise<BotAutonomySettingsView> };
   /** Learned skills, including turned-off ones (`enabled: false`). */
   skills(botId: string): Promise<Array<{ slug: string; name: string; description: string; updatedAt: string | number; enabled?: boolean }>>;
   modelDefaults(): Promise<BotModelRoute[]>;
@@ -44,10 +42,6 @@ export const editorCopy = {
   projectRemote: text('On another computer', '位于另一台电脑', '位於另一台電腦', '別のコンピューターにあります', '다른 컴퓨터에 있음', {"es":"En otro equipo","fr":"Sur un autre ordinateur","de":"Auf einem anderen Computer","pt-PT":"Noutro computador","pt-BR":"Em outro computador","zh-Hant-x-lzh":"在他機","zh-Hans-x-lzh":"在他机"}),
   projectUnavailable: text('Directory unavailable', '目录暂不可用', '目錄暫不可用', 'ディレクトリを利用できません', '디렉터리를 사용할 수 없습니다', {"es":"Directorio no disponible","fr":"Dossier indisponible","de":"Verzeichnis nicht verfügbar","pt-PT":"Diretório indisponível","pt-BR":"Diretório indisponível","zh-Hant-x-lzh":"目錄暫不可用","zh-Hans-x-lzh":"目录暂不可用"}),
   projectEmpty: text('Add projects to the project list on the teammate’s computer first.', '请先在伙伴所在电脑的项目列表中添加项目。', '請先在夥伴所在電腦的專案列表中新增專案。', '先にチームメイトのコンピューターのプロジェクト一覧に追加してください。', '먼저 팀원이 실행되는 컴퓨터의 프로젝트 목록에 프로젝트를 추가하세요.', {"es":"Añade primero los proyectos a la lista de proyectos en el equipo del compañero.","fr":"Ajoutez d’abord les projets à la liste des projets sur l’ordinateur du coéquipier.","de":"Füge zuerst Projekte zur Projektliste auf dem Computer des Teammitglieds hinzu.","pt-PT":"Adicione primeiro os projetos à lista de projetos no computador do colega de equipa.","pt-BR":"Primeiro, adicione projetos à lista de projetos no computador do colega de equipe.","zh-Hant-x-lzh":"請先於同僚所在之機，在案錄中增案。","zh-Hans-x-lzh":"请先于同僚所在之机，在案录中增案。"}),
-  followUp: text("Follow Up on My Sessions", "跟进我的任务", "跟進我的任務", "自分のセッションをフォロー", "내 세션 후속 확인", {"es":"Hacer seguimiento de mis sesiones","fr":"Assurer le suivi de mes sessions","de":"Meine Sitzungen nachverfolgen","pt-PT":"Acompanhar as minhas sessões","pt-BR":"Acompanhar minhas sessões","zh-Hant-x-lzh":"跟進吾之差事","zh-Hans-x-lzh":"跟进吾之差事"}),
-  followUpConsent: text("Once enabled, I’ll read summaries of sessions you create on the teammate’s computer, assess progress, and let you know about important changes. This uses your model allowance. You can turn it off anytime.", "开启后，我会读取伙伴所在电脑上你创建的任务摘要，分析进展并提醒你重要变化。这会使用模型额度，你可以随时关闭。", "開啟後，我會讀取夥伴所在電腦上你建立的任務摘要，分析進度並提醒你重要變化。這會使用模型額度，你可以隨時關閉。", "有効にすると、チームメイトが動作するコンピューターであなたが作成したセッションの要約を読み、進捗を確認して重要な変化をお知らせします。モデルの利用枠を消費します。いつでも無効にできます。", "켜면 팀원이 실행되는 컴퓨터에서 직접 만든 세션의 요약을 읽고 진행 상황을 분석하여 중요한 변화를 알려드립니다. 모델 사용량이 소모되며 언제든 끌 수 있습니다.", {"es":"Una vez activado, leeré los resúmenes de las sesiones que crees en el equipo del compañero, evaluaré el progreso y te avisaré de los cambios importantes. Esto consume tu cuota de uso del modelo. Puedes desactivarlo en cualquier momento.","fr":"Une fois cette option activée, je lirai les résumés des sessions que vous créez sur l’ordinateur du coéquipier, évaluerai leur progression et vous informerai des changements importants. Cela consomme votre quota de modèle. Vous pouvez désactiver cette option à tout moment.","de":"Nach der Aktivierung lese ich Zusammenfassungen der Sitzungen, die du auf dem Computer des Teammitglieds erstellst, bewerte den Fortschritt und informiere dich über wichtige Änderungen. Dabei wird dein Modellkontingent genutzt. Du kannst dies jederzeit deaktivieren.","pt-PT":"Após a ativação, lerei os resumos das sessões que criar no computador do colega de equipa, avaliarei o progresso e informarei sobre alterações importantes. Isto utiliza a sua quota de utilização do modelo. Pode desativar esta opção a qualquer momento.","pt-BR":"Quando ativado, lerei os resumos das sessões que você criar no computador do colega de equipe, avaliarei o progresso e avisarei sobre mudanças importantes. Isso consome sua cota de uso do modelo. Você pode desativar a qualquer momento.","zh-Hant-x-lzh":"啟之，吾將閱同僚所在之機上君所立差事之摘要，析其進度，遇要變則告君。此舉耗用模型限額，君可隨時關之。","zh-Hans-x-lzh":"启之，吾将阅同僚所在之机上君所立差事之摘要，析其进度，遇要变则告君。此举耗用模型限额，君可随时关之。"}),
-  followUpStart: text("Start Following Up", "开始跟进", "開始跟進", "フォローを開始", "후속 확인 시작", {"es":"Empezar seguimiento","fr":"Commencer le suivi","de":"Nachverfolgung starten","pt-PT":"Começar a acompanhar","pt-BR":"Começar a acompanhar","zh-Hant-x-lzh":"始跟進","zh-Hans-x-lzh":"始跟进"}),
-  followUpSkip: text("Not Now", "暂不开启", "暫不開啟", "今はしない", "나중에", {"es":"Ahora no","fr":"Pas maintenant","de":"Nicht jetzt","pt-PT":"Agora não","pt-BR":"Agora não","zh-Hant-x-lzh":"暫不啟","zh-Hans-x-lzh":"暂不启"}),
 
   create: text('New Teammate', '创建伙伴', '建立夥伴', 'チームメイトを作成', '팀원 만들기', {"es":"Nuevo compañero","fr":"Nouveau coéquipier","de":"Neues Teammitglied","pt-PT":"Novo colega de equipa","pt-BR":"Novo colega de equipe","zh-Hant-x-lzh":"立同僚","zh-Hans-x-lzh":"立同僚"}),
   name: text('Name', '名字', '名字', '名前', '이름', {"es":"Nombre","fr":"Nom","de":"Name","pt-PT":"Nome","pt-BR":"Nome","zh-Hant-x-lzh":"名","zh-Hans-x-lzh":"名"}),
@@ -81,8 +75,6 @@ export const editorCopy = {
   systemSkills: text('System Skills', '系统技能', '系統技能', 'システムスキル', '시스템 스킬', {"es":"Habilidades del sistema","fr":"Skills système","de":"System-Skills","pt-PT":"Skills do sistema","pt-BR":"Skills do sistema","zh-Hant-x-lzh":"系統技藝","zh-Hans-x-lzh":"系统技艺"}),
   routine: text('Routines', '例行任务', '例行任務', 'ルーティン', '루틴', {"es":"Rutinas","fr":"Routines","de":"Routinen","pt-PT":"Rotinas","pt-BR":"Rotinas","zh-Hant-x-lzh":"例行差事","zh-Hans-x-lzh":"例行差事"}),
   routineHelp: text('Sets up and maintains routines that run on a schedule.', '设置并维护按时运行的例行任务。', '設定並維護按時執行的例行任務。', '決まった時間に実行するルーティンを設定・管理します。', '일정에 따라 실행되는 루틴을 설정하고 관리합니다.', {"es":"Crea y mantiene rutinas que se ejecutan según un horario.","fr":"Crée et gère des routines qui s’exécutent selon un horaire.","de":"Richtet Routinen ein, die nach Zeitplan laufen, und pflegt sie.","pt-PT":"Configura e mantém rotinas que são executadas segundo um horário.","pt-BR":"Configura e mantém rotinas que rodam em horários definidos.","zh-Hant-x-lzh":"設並守按時而行之例行差事。","zh-Hans-x-lzh":"设并守按时而行之例行差事。"}),
-  follow: text('Workbench and Follow-up', '工作台与跟进', '工作台與跟進', 'ワークベンチとフォローアップ', '워크벤치 및 후속 확인', {"es":"Panel de trabajo y seguimiento","fr":"Plan de travail et suivi","de":"Arbeitsbereich und Nachverfolgung","pt-PT":"Área de trabalho e acompanhamento","pt-BR":"Área de trabalho e acompanhamento","zh-Hant-x-lzh":"工作臺與跟進","zh-Hans-x-lzh":"工作台与跟进"}),
-  followHelp: text('Watches how all your sessions are going and follows up on the ones you hand to it.', '留意你所有任务的进展，跟进你交给它的任务。', '留意你所有任務的進展，跟進你交給它的任務。', 'すべてのセッションの進み具合を見守り、任されたセッションをフォローします。', '모든 세션의 진행 상황을 지켜보고, 맡긴 세션을 후속 확인합니다.', {"es":"Vigila cómo van todas tus sesiones y hace seguimiento de las que le encargas.","fr":"Surveille l’avancement de toutes vos sessions et assure le suivi de celles que vous lui confiez.","de":"Behält im Blick, wie all deine Sitzungen laufen, und verfolgt die nach, die du ihm überträgst.","pt-PT":"Acompanha o andamento de todas as suas sessões e dá seguimento às que lhe confiar.","pt-BR":"Acompanha o andamento de todas as suas sessões e dá seguimento às que você confiar a ele.","zh-Hant-x-lzh":"察君諸差事之進度，跟進君所託者。","zh-Hans-x-lzh":"察君诸差事之进度，跟进君所托者。"}),
   useSkill: text('Use This Skill', '使用这个技能', '使用這個技能', 'このスキルを使う', '이 스킬 사용', {"es":"Usar esta habilidad","fr":"Utiliser ce skill","de":"Diesen Skill verwenden","pt-PT":"Usar esta Skill","pt-BR":"Usar esta Skill","zh-Hant-x-lzh":"用此技藝","zh-Hans-x-lzh":"用此技艺"}),
   skillOff: text('Off', '已关闭', '已關閉', 'オフ', '꺼짐', {"es":"Desactivada","fr":"Désactivé","de":"Aus","pt-PT":"Desativada","pt-BR":"Desativada","zh-Hant-x-lzh":"已閉","zh-Hans-x-lzh":"已闭"}),
 };
@@ -168,37 +160,7 @@ export function createBotRemoteEditors(deps: BotRemoteEditorDeps, bind: ReturnTy
       const settings = await deps.read(memory[1]); deps.assertOwner(owner);
       return memoryEditor(context, { botId: memory[1], botName: settings.source.name, entry: memory[2], locale, query: options.query, primitives: options.primitives ?? [] });
     }
-    const followUp = /^settings:([A-Za-z0-9_-]{1,128})\/follow-up$/.exec(id);
-    if (followUp && deps.followUp) {
-      const botId = followUp[1];
-      const profile = await deps.read(botId); deps.assertOwner(owner);
-      const choice = await deps.followUp.get(); deps.assertOwner(owner);
-      const enabled = choice.schedulerBotId === botId;
-      const readRevision = async () => {
-        const next = await deps.read(botId); deps.assertOwner(owner);
-        const current = await deps.followUp!.get(); deps.assertOwner(owner);
-        return hash([next.source.currentVersion, current]);
-      };
-      const panel = form('follow-up', editorCopy.followUp, [
-        { id: 'enabled', label: editorCopy.followUp, kind: 'toggle' },
-      ], { enabled });
-      const resource: RemoteResource = {
-        ref: ref(id), revision: hash([profile.source.currentVersion, choice]),
-        display: { title: editorCopy.followUp }, links: [],
-        blocks: [{ ...panel.block, fallbackMarkdown: resolveRemoteText(editorCopy.followUpConsent, locale),
-          data: { ...panel.block.data, invitationAvailable: !choice.isCustomized && choice.schedulerBotId === null && profile.source.status === 'active' } }],
-        actions: [{ ...panel.action, ...(!enabled ? { confirmation: { title: editorCopy.followUp, body: editorCopy.followUpConsent, confirmLabel: editorCopy.followUpStart } } : {}) },
-          { id: 'dismiss', label: editorCopy.followUpSkip }],
-      };
-      return bind(context, resource, readRevision, async request => {
-        const input = request.input ?? {};
-        keys(input, request.actionId === 'dismiss' ? [] : ['enabled']);
-        if (request.actionId !== 'dismiss' && typeof input.enabled !== 'boolean') fail();
-        await deps.followUp!.set(request.actionId === 'dismiss' || input.enabled === false ? null : botId);
-        deps.assertOwner(owner);
-        return receipt(id);
-      });
-    }
+    // `settings:<id>/follow-up` (V1 follow-up) is gone: it falls through to NOT_FOUND below.
     // `_`-prefixed sections are host Skill layers; learned skill slugs never contain `_`.
     const match = /^settings:([A-Za-z0-9_-]{1,128})\/(skills|connections|avatar)(?:\/([a-z0-9-]+|_[a-z]+))?(?:\/([a-f0-9]{64}))?$/.exec(id);
     if (!match) throwIpcError('NOT_FOUND', 'Unknown teammate editor');

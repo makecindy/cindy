@@ -12,7 +12,7 @@ import { errorPayload, okPayload } from "./_payload.js";
  * text and denies the tools listed in TEAMMATE_SYSTEM_SKILL_TOOLS. The ids are mirrored by
  * apps/desktop/src/shared/botSystemSkills.ts.
  */
-export const TEAMMATE_SYSTEM_SKILL_IDS = ["routine", "follow"] as const;
+export const TEAMMATE_SYSTEM_SKILL_IDS = ["routine"] as const;
 export type TeammateSystemSkillId = (typeof TEAMMATE_SYSTEM_SKILL_IDS)[number];
 
 export interface TeammateSkillText {
@@ -23,15 +23,14 @@ export interface TeammateSkillText {
 
 /**
  * Tools that belong to one system Skill. Off denies them for that teammate. Run-time tools of
- * built-in routines (`schedule_notify_current_run`) stay available: follow-up checks run
- * as routines even when the teammate cannot manage routines itself.
+ * routines (`schedule_notify_current_run`) stay available even when the teammate cannot manage
+ * routines itself.
  */
 export const TEAMMATE_SYSTEM_SKILL_TOOLS: Readonly<Record<TeammateSystemSkillId, readonly string[]>> = {
   routine: [
     "routine_list", "routine_sources", "routine_delivery_targets", "routine_save", "routine_history",
     "routine_delete", "routine_run_now", "schedule_list_models", "schedule_set_pre_run_hook",
   ],
-  follow: ["get_workbench", "read_workbench_task", "continue_workbench_task", "set_workbench_task_responsibility"],
 };
 
 export function teammateSystemSkillsOff(raw: unknown): TeammateSystemSkillId[] {
@@ -63,15 +62,6 @@ export const TEAMMATE_SYSTEM_SKILLS: Readonly<Record<TeammateSystemSkillId, Team
       "先读取 routine_list，避免重复创建；用 routine_save 保存后再读回，核实名称、enabled 和 triggers，成功才说已安排。工具报错或未保存就如实说明。",
       "例行任务由 Cindy 持久调度，不要改用 start_session_task、sleep 循环或系统定时器。按用户要求设置频率，不擅自增加一小时等结束限制。实际执行沿用当前伙伴权限，触发后的普通消息会回到这里。",
       "For recurring work, first call routine_list and reuse the existing rule. Prefer an available event source, or a deterministic command/script pre-run check, over waking a model just to poll. Install and test scripts through schedule_set_pre_run_hook, then save its command as routine_save.preRunHook and read back with routine_list. Exit 2 means skip the model; exit 0 supplies a concise change summary; errors/timeouts must be nonzero failures, never fabricated no-change results. Use stable upstream event IDs or durable cursors and acknowledge only successfully handled changes; do not add arbitrary time windows or advance a cursor before delivery succeeds. For a check, explicitly set silentWhenIdle=true: no preamble, progress or no-change report. Call schedule_notify_current_run only for a new actionable result or a check failure requiring attention, then write one concise final report. Explicit reminders and scheduled sends are the work itself: set silentWhenIdle=false when creating those rules, preserve existing user choices, and never swallow their intended delivery. Omitted quiet settings preserve delivery. Advanced settings expose the saved quiet/check configuration; the user need not edit files. Preserve the standing authorization, owner and failure visibility.",
-    ].join("\n"),
-  },
-  follow: {
-    name: "follow",
-    description: "Watch the owner's tasks on your workbench and follow up the tasks handed to you.",
-    body: [
-      "Your workbench (`get_workbench`) is for observation within its existing visibility scope. Read get_task_digest and, only when needed, relevant history. On your own initiative (a host wake-up or progress check), you may continue a task handed to you toward its original goal or re-route it per suggested_route; ordinary actions follow the current task permissions. Explicit risk actions wait for the owner through the shared permission request; do not work around a refusal. Re-read current state before acting; a long build, a paused task or an already recovered task is not a reason to intervene. Take responsibility for a task only when the owner asks you to.",
-      "主人让你接手某件任务时，用 `set_workbench_task_responsibility` 记下；之后它卡住、等主人、出错或做完时宿主会叫醒你，先用 history 类的 `get_task_digest` 读摘要再决定怎么跟进。",
-      "Use `read_workbench_task` for one task's current state and `continue_workbench_task` to continue a task handed to you toward its original goal. Inspect get_task_digest before intervening; a long-running, paused or already recovered task does not need automatic nudges.",
     ].join("\n"),
   },
 };

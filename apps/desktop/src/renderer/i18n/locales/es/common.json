@@ -10269,32 +10269,6 @@
       "offlineCount_many": "{{count}} sin conexión",
       "doneCount_many": "{{count}} completados"
     },
-    "autonomy": {
-      "title": "Dar seguimiento a mis sesiones",
-      "descriptionOn": "{{name}} revisa los resúmenes cuando cambian las sesiones y te mantiene al tanto.",
-      "movedFrom": "Se trasladó aquí desde {{name}}",
-      "heldBy": "{{name}} se encarga de esto ahora. Actívalo para trasladarlo aquí.",
-      "routineScopeHint": "Incluye las sesiones que creas tú. El seguimiento integrado de abajo responde a los cambios en las sesiones asignadas.",
-      "heldByNobody": "No activado",
-      "restoreDefault": "Restaurar predeterminado ({{name}})",
-      "saveFailed": "No se pudo guardar. Intentar otra vez.",
-      "turnOff": {
-        "title": "¿Dejar de dar seguimiento a todas las sesiones?",
-        "description": "Si desactivas esta opción, ningún compañero dará seguimiento a todas las sesiones.",
-        "confirm": "Desactivar",
-        "cancel": "Cancelar"
-      },
-      "allowSchedulerFollow": {
-        "title": "Permitir que {{name}} haga seguimiento de las sesiones que inicia",
-        "description": "De forma predeterminada, {{scheduler}} solo observa. Si activas esta opción y una sesión que inició {{name}} no ha terminado, {{scheduler}} también le da seguimiento."
-      },
-      "consent": "Al activar esta opción, leeré resúmenes de las sesiones que crees en esta computadora, evaluaré su progreso y te avisaré de los cambios importantes. Esto consume tu cuota de uso del modelo. Puedes desactivarla cuando quieras.",
-      "invitation": {
-        "title": "¿Quieres que haga un seguimiento de tus sesiones?",
-        "start": "Comience a realizar un seguimiento",
-        "notNow": "Ahora no"
-      }
-    },
     "remoteSettings": {
       "empty": "Nada aquí todavía.",
       "loadFailed": "No se pudo cargar la configuración. Inténtalo de nuevo.",
@@ -11337,11 +11311,6 @@
             "name": "Rutinas",
             "hint": "Crea y mantiene rutinas que se ejecutan de forma periódica.",
             "off": "Deja de crear o modificar rutinas. Las existentes siguen funcionando y puedes gestionarlas en la página Rutinas."
-          },
-          "follow": {
-            "name": "Panel y seguimiento",
-            "hint": "Sigue cómo van todas tus tareas y da seguimiento a las que le encargas.",
-            "off": "Deja de revisar y dar seguimiento a tus tareas por su cuenta. Aún puedes preguntarle en el chat."
           }
         }
       },
@@ -11380,10 +11349,6 @@
       "notTurnedOn": "Aún no está activada en esta computadora",
       "turnOn": "Activar",
       "permissions": "Permisos"
-    },
-    "systemSkills": {
-      "followOffHint": "La habilidad del sistema «Panel y seguimiento» de {{name}} está desactivada. Vuelve a activarla en Capacidades para usar esto.",
-      "offHint": "La habilidad del sistema «{{skill}}» está desactivada. Volverá a ejecutarse cuando la actives en Capacidades."
     },
     "guided": {
       "title": "Crear un compañero",

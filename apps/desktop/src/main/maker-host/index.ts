@@ -123,7 +123,7 @@ import {
   migrateLegacyBotProfileFolder,
   readBotProfileFolder,
 } from '../maker-ipc/botProfileFolder.js';
-import { readBotLinkedProjects } from '../maker-ipc/botWorkbenchService.js';
+import { readBotLinkedProjects } from '../maker-ipc/botLinkedProjectStore.js';
 import {
   listBotTeammates,
 } from '../localDb/botHistoryScope.js';

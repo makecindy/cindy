@@ -10269,32 +10269,6 @@
       "offlineCount_many": "{{count}} hors ligne",
       "doneCount_many": "{{count}} terminées"
     },
-    "autonomy": {
-      "title": "Suivre mes sessions",
-      "descriptionOn": "{{name}} consulte les résumés lorsque les sessions évoluent et vous tient informé.",
-      "movedFrom": "Transféré ici depuis {{name}}",
-      "heldBy": "{{name}} s'en occupe actuellement. Activez cette option pour le transférer ici.",
-      "routineScopeHint": "Inclut les sessions que vous créez vous-même. Le suivi intégré ci-dessous réagit aux changements dans les sessions assignées.",
-      "heldByNobody": "Non activé",
-      "restoreDefault": "Rétablir la valeur par défaut ({{name}})",
-      "saveFailed": "Impossible d'enregistrer. Réessayez.",
-      "turnOff": {
-        "title": "Arrêter le suivi de toutes les sessions ?",
-        "description": "Une fois cette option désactivée, aucun coéquipier ne suivra l'ensemble des sessions.",
-        "confirm": "Désactiver",
-        "cancel": "Annuler"
-      },
-      "allowSchedulerFollow": {
-        "title": "Laisser {{name}} suivre les sessions qu'il démarre",
-        "description": "Par défaut, {{scheduler}} se contente d'observer. Lorsque cette option est activée et qu'une session démarrée par {{name}} n'est pas terminée, {{scheduler}} en assure aussi le suivi."
-      },
-      "consent": "Une fois activé, je lirai les résumés des sessions que vous créez sur cet ordinateur, j'évaluerai leur avancement et je vous signalerai les changements importants. Cela consomme votre quota de modèle. Vous pouvez le désactiver à tout moment.",
-      "invitation": {
-        "title": "Voulez-vous que je suive vos sessions ?",
-        "start": "Commencer le suivi",
-        "notNow": "Plus tard"
-      }
-    },
     "remoteSettings": {
       "empty": "Rien pour l'instant.",
       "loadFailed": "Impossible de charger les paramètres. Réessayez.",
@@ -11337,11 +11311,6 @@
             "name": "Routines",
             "hint": "Crée et entretient des routines qui s’exécutent régulièrement.",
             "off": "Il ne crée ni ne modifie plus de routines. Les routines existantes continuent et restent gérables depuis la page Routines."
-          },
-          "follow": {
-            "name": "Tableau de bord et suivi",
-            "hint": "Garde un œil sur toutes vos tâches et suit celles que vous lui confiez.",
-            "off": "Il ne consulte ni ne suit plus vos tâches de lui-même. Vous pouvez toujours lui demander dans le chat."
           }
         }
       },
@@ -11380,10 +11349,6 @@
       "notTurnedOn": "Pas encore activé sur cet ordinateur",
       "turnOn": "Activer",
       "permissions": "Autorisations"
-    },
-    "systemSkills": {
-      "followOffHint": "Le skill système « Tableau de bord et suivi » de {{name}} est désactivé. Réactivez-le dans Capacités pour utiliser ceci.",
-      "offHint": "Le skill système « {{skill}} » est désactivé. Il reprendra une fois réactivé dans Capacités."
     },
     "guided": {
       "title": "Créer un coéquipier",

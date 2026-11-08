@@ -881,7 +881,6 @@ const fanOutBotReadStateChanged = createIpcFanOut('maker:bot-read-state:changed'
 const fanOutCompanionCloudChanged = createIpcFanOut('maker:companion-cloud:changed');
 const fanOutBotProfileChanged = createIpcFanOut('maker:bot-profile:changed');
 const fanOutBotWorkbenchChanged = createIpcFanOut('maker:bot-workbench:changed');
-const fanOutBotAutonomyChanged = createIpcFanOut('maker:bot-autonomy:changed');
 const fanOutBotLifecycleChanged = createIpcFanOut('maker:bot-lifecycle:changed');
 const fanOutMakerPiPackagesChanged = createIpcFanOut('maker:pi-packages:changed');
 const fanOutMakerUsageTodaySpend = createIpcFanOut('usage:today-spend-changed'); // Claude USD
@@ -6152,25 +6151,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
           ipcRenderer.invoke('local-db:bots:projects:set', botId, projectId, linked),
       },
       workbench: {
-        get: (botId: string): Promise<unknown> =>
-          ipcRenderer.invoke('local-db:bots:workbench:get', botId),
-        readTask: (botId: string, taskId: string): Promise<unknown> =>
-          ipcRenderer.invoke('local-db:bots:workbench:read-task', botId, taskId),
         followScopes: (): Promise<unknown> =>
           ipcRenderer.invoke('local-db:bots:workbench:follow-scopes'),
-      },
-      /** 伙伴自主跟进：工作台「一眼」与「自动跟进所有任务」设置（shared/botAutonomy.ts）。 */
-      autonomy: {
-        glance: (botId: string, refreshRemote = true): Promise<import('../shared/botAutonomy').BotGlance> =>
-          ipcRenderer.invoke('local-db:bots:autonomy:glance', botId, refreshRemote),
-        getSettings: (): Promise<import('../shared/botAutonomy').BotAutonomySettingsView> =>
-          ipcRenderer.invoke('local-db:bots:autonomy:settings-get'),
-        setSettings: (
-          patch: import('../shared/botAutonomy').BotAutonomySettings,
-        ): Promise<import('../shared/botAutonomy').BotAutonomySettingsView> =>
-          ipcRenderer.invoke('local-db:bots:autonomy:settings-set', patch),
-        resetSettings: (): Promise<import('../shared/botAutonomy').BotAutonomySettingsView> =>
-          ipcRenderer.invoke('local-db:bots:autonomy:settings-reset'),
       },
       listSkills: (botId: string): Promise<import('../shared/botSkill').BotSkillSummary[]> =>
         ipcRenderer.invoke('local-db:bots:skills:list', botId),
@@ -6719,7 +6701,6 @@ contextBridge.exposeInMainWorld('electronAPI', {
       ipcRenderer.invoke('maker:companion-avatar:resolve', request),
     onBotProfileChanged: fanOutBotProfileChanged,
     onBotWorkbenchChanged: fanOutBotWorkbenchChanged,
-    onBotAutonomyChanged: fanOutBotAutonomyChanged,
     runBotLifecycleAction: (
       request: import('../shared/botLifecycle').BotLifecycleActionRequest,
     ): Promise<import('../shared/botLifecycle').BotLifecycleActionResult> =>

@@ -2,7 +2,6 @@ import { useEffect, useMemo, useSyncExternalStore } from 'react';
 
 import { useAvailableAgents } from '@/hooks/useAvailableAgents';
 import type { MakerVendor } from '@/lib/ccAgent.types';
-import type { BotAutonomySettingsView } from '../../../shared/botAutonomy';
 import type { BotMemoryDeleteInput, BotMemoryUpdateInput } from '../../../shared/botMemory';
 import { botProfileModelSelectionChanged, type BotModelRoute } from '../../../shared/botModelChain';
 import type { ConversationSearchResponse } from '../../../shared/conversationSearch';
@@ -206,18 +205,6 @@ export function createRemoteBotSettingsTarget(input: RemoteBotSettingsInput) {
     chainListeners.forEach((listener) => listener());
   };
 
-  let autonomy: BotAutonomySettingsView | null = null;
-  const autonomyListeners = new Set<() => void>();
-  const loadAutonomy = async () => {
-    const view = await invokeBotSettings<BotAutonomySettingsView>(deviceId, 'autonomy.get', null);
-    autonomy = view;
-    autonomyListeners.forEach((listener) => listener());
-  };
-  const applyAutonomy = (view: BotAutonomySettingsView) => {
-    autonomy = view;
-    autonomyListeners.forEach((listener) => listener());
-  };
-
   const call2 = <T>(op: BotSettingsOp, args?: Record<string, unknown>) => invokeBotSettings<T>(deviceId, op, botId, args);
   const im: BotSettingsTarget['channels']['im'] = {
     list: () => call2('channels.im.list'),
@@ -402,23 +389,6 @@ export function createRemoteBotSettingsTarget(input: RemoteBotSettingsInput) {
         return () => void routineWatchers.delete(listener);
       },
     },
-    autonomy: {
-      useSettings() {
-        useEffect(() => {
-          void loadAutonomy().catch(() => undefined);
-        }, []);
-        return useSyncExternalStore(
-          (listener) => (autonomyListeners.add(listener), () => void autonomyListeners.delete(listener)),
-          () => autonomy,
-        );
-      },
-      async setSchedulerBotId(id) {
-        applyAutonomy(await invokeBotSettings<BotAutonomySettingsView>(deviceId, 'autonomy.set', null, { schedulerBotId: id }));
-      },
-      async reset() {
-        applyAutonomy(await invokeBotSettings<BotAutonomySettingsView>(deviceId, 'autonomy.reset', null));
-      },
-    },
   };
 
   return {
@@ -432,7 +402,6 @@ export function createRemoteBotSettingsTarget(input: RemoteBotSettingsInput) {
         return;
       }
       void profiles.refresh().catch(() => undefined);
-      if (autonomyListeners.size) void loadAutonomy().catch(() => undefined);
       if (chainListeners.size) void loadDefaultChain().catch(() => undefined);
       catalogWatchers.forEach((refresh) => refresh());
     },

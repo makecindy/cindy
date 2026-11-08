@@ -5,7 +5,6 @@
  * configuration or credentials), the memory switch, hand-over and follow-up switches, and the
  * model *preference*. The permission level never travels; the new computer uses its default.
  */
-import { readBotSystemSkillsOff, type BotSystemSkillId } from '../../shared/botSystemSkills.js';
 import { BOT_MODEL_CHAIN_MAX, normalizeBotModelChain, readBotTaskModelOverride, type BotModelRoute } from '../../shared/botModelChain.js';
 
 const MAX_REFS = 100;
@@ -26,8 +25,11 @@ export interface CompanionCapabilitiesValue {
   memory?: boolean;
   inputHandoff?: boolean;
   allowSchedulerFollow?: boolean;
-  /** Turned-off system Skills; they mean the same on every computer. */
-  systemSkillsOff?: BotSystemSkillId[];
+  /**
+   * Turned-off system Skills; they mean the same on every computer. Carried as written: an older
+   * computer still knows the V1 `follow` / `todo` Skills that this version ignores when reading.
+   */
+  systemSkillsOff?: string[];
   gender?: string;
   /** The routes the owner chose for this companion; absent when it follows the default model. */
   modelChain?: BotModelRoute[];
@@ -37,6 +39,9 @@ export interface CompanionCapabilitiesValue {
 const refs = (value: unknown): string[] | undefined => Array.isArray(value)
   ? [...new Set(value.filter((id): id is string => typeof id === 'string' && !!id.trim() && id.length <= MAX_REF_LENGTH))].slice(0, MAX_REFS)
   : undefined;
+/** System Skill ids as an opaque, bounded list (readers drop the ones they do not know). */
+const skillIds = (value: unknown[]): string[] =>
+  [...new Set(value.filter((id): id is string => typeof id === 'string' && /^[a-z][a-z0-9-]{0,31}$/.test(id)))].slice(0, 16);
 const mode = (value: unknown): SelectionMode | undefined => (value === 'inherit' || value === 'allowlist' ? value : undefined);
 const MAX_NAME_LENGTH = 80;
 /** Names for the referenced ids only (the list may hold ids this computer does not know). */
@@ -73,7 +78,7 @@ export function portableCompanionCapabilities(config: Record<string, unknown>, e
   for (const field of ['memory', 'inputHandoff', 'allowSchedulerFollow'] as const) {
     if (typeof config[field] === 'boolean') value[field] = config[field];
   }
-  if (Array.isArray(config.systemSkillsOff)) value.systemSkillsOff = readBotSystemSkillsOff(config.systemSkillsOff);
+  if (Array.isArray(config.systemSkillsOff)) value.systemSkillsOff = skillIds(config.systemSkillsOff);
   if (typeof config.gender === 'string' && config.gender.length <= 16) value.gender = config.gender;
   const chain = (explicitChain ?? []).filter(portableRoute);
   if (chain.length) value.modelChain = chain;
@@ -102,7 +107,7 @@ export function parseCompanionCapabilities(raw: unknown): CompanionCapabilitiesV
   for (const field of ['memory', 'inputHandoff', 'allowSchedulerFollow'] as const) {
     if (typeof input[field] === 'boolean') value[field] = input[field];
   }
-  if (Array.isArray(input.systemSkillsOff)) value.systemSkillsOff = readBotSystemSkillsOff(input.systemSkillsOff);
+  if (Array.isArray(input.systemSkillsOff)) value.systemSkillsOff = skillIds(input.systemSkillsOff);
   if (typeof input.gender === 'string' && input.gender.length <= 16) value.gender = input.gender;
   const chain = normalizeBotModelChain(input.modelChain).filter(portableRoute).slice(0, BOT_MODEL_CHAIN_MAX);
   if (chain.length) value.modelChain = chain;

@@ -2607,8 +2607,8 @@ const CINDY_DIRECT_BOT_TOOLS = new Set([
   CINDY_CREATE_TEAMMATE_TOOL,
   'routine_list', 'routine_save', 'routine_sources', 'routine_delivery_targets',
   'routine_history', 'routine_delete', 'routine_run_now', 'schedule_notify_current_run', 'schedule_set_pre_run_hook', 'schedule_list_models',
-  // Follow-up loop: a woken companion reads the short task summary first, then its glance.
-  'get_task_digest', 'get_workbench', 'read_workbench_task', 'continue_workbench_task',
+  // A companion reads the short task summary of a task it is told about.
+  'get_task_digest',
 ]);
 
 interface ConnectedMcpTool {
@@ -4187,14 +4187,11 @@ class CindyMcpGateway {
         { name: 'routine_run_now', description: 'Run one of your saved routines now when requested.' },
       ].map((tool) => ({ ...tool, properties: { id: { type: 'string', minLength: 1 } }, required: ['id'] })),
     ];
-    // Follow-up tools use the same direct facade so a routine-woken companion does not need
+    // The task digest uses the same direct facade so a routine-woken companion does not need
     // nested discovery before reading the event's task.
     const taskIdProperty = { type: 'string', minLength: 1, description: 'Local task ID, or deviceId::sessionId for another computer.' };
     const followUpTools = [
       { name: 'get_task_digest', description: 'Read a short (<=2KB) summary of one task: phase, elapsed minutes, last ask and answer, pending question, error, route, suggested next route, PR status and queue. Read this before deciding how to follow up.', properties: { session_id: taskIdProperty }, required: ['session_id'] },
-      { name: 'get_workbench', description: 'Your workbench at a glance: tasks waiting for the owner and tasks in progress, with the last sweep time.', properties: {}, required: [] },
-      { name: 'read_workbench_task', description: 'Read the recent bounded transcript of a task you follow (all tasks if you follow every task).', properties: { task_id: taskIdProperty }, required: ['task_id'] },
-      { name: 'continue_workbench_task', description: 'Send one message into a task you follow so it continues. Use get_task_digest first; never resend after DELIVERY_UNKNOWN without checking.', properties: { task_id: taskIdProperty, message: { type: 'string', minLength: 1, maxLength: 4000 } }, required: ['task_id', 'message'] },
     ];
     for (const tool of [...routineTools, ...followUpTools]) {
       if (deniedTools.has(tool.name) || !this.resolveDirectHelperTool(tool.name, {})) continue;

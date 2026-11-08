@@ -10187,32 +10187,6 @@
       "outputMeta": "{{time}} · {{task}}",
       "openFailed": "Couldn't open the file"
     },
-    "autonomy": {
-      "title": "Follow Up on My Sessions",
-      "descriptionOn": "{{name}} checks summaries when sessions change and keeps you informed.",
-      "movedFrom": "Moved here from {{name}}",
-      "heldBy": "{{name}} handles this now. Switch it on to move it here.",
-      "routineScopeHint": "Include sessions you create yourself. The built-in follow-up below responds to changes in assigned sessions.",
-      "heldByNobody": "Not enabled",
-      "restoreDefault": "Restore Default ({{name}})",
-      "saveFailed": "Couldn't save. Try again.",
-      "turnOff": {
-        "title": "Stop following up on all sessions?",
-        "description": "Once this is off, no teammate follows up on all sessions.",
-        "confirm": "Switch Off",
-        "cancel": "Cancel"
-      },
-      "allowSchedulerFollow": {
-        "title": "Let {{name}} follow up on sessions it starts",
-        "description": "By default, {{scheduler}} only watches. When this is on and a session {{name}} started isn't finished, {{scheduler}} follows up on it too."
-      },
-      "consent": "Once enabled, I’ll read summaries of sessions you create on this computer, assess progress, and let you know about important changes. This uses your model allowance. You can disable it anytime.",
-      "invitation": {
-        "title": "Would you like me to follow up on your sessions?",
-        "start": "Start Following Up",
-        "notNow": "Not Now"
-      }
-    },
     "remoteSettings": {
       "empty": "Nothing here yet.",
       "loadFailed": "Could not load settings. Try again.",
@@ -11240,11 +11214,6 @@
             "name": "Routines",
             "hint": "Sets up and maintains routines that run on a schedule.",
             "off": "It stops creating or changing routines. Existing routines keep running and stay manageable on the Routines page."
-          },
-          "follow": {
-            "name": "Workbench and follow-up",
-            "hint": "Watches how all your tasks are going and follows up on the ones you hand to it.",
-            "off": "It stops checking and following up on your tasks on its own. You can still ask it in chat."
           }
         }
       },
@@ -11283,10 +11252,6 @@
       "notTurnedOn": "Not turned on for this computer",
       "turnOn": "Enable",
       "permissions": "Permissions"
-    },
-    "systemSkills": {
-      "followOffHint": "{{name}}’s Workbench and follow-up system skill is off. Switch it back on in Capabilities to use this.",
-      "offHint": "The {{skill}} system skill is off. It runs again once you switch it back on in Capabilities."
     },
     "guided": {
       "title": "Create a teammate",

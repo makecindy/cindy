@@ -128,11 +128,14 @@ export const BOT_SETTINGS_CORE_OPS: readonly BotSettingsOp[] = [
   'memory.update',
   'memory.delete',
   'capabilities.catalog',
-  'autonomy.get',
-  'autonomy.set',
-  'autonomy.reset',
   'history.search',
 ];
+
+/**
+ * Operations a host still answers for older controllers but no longer advertises in `caps`:
+ * the V1 follow-up setting (`autonomy.*`) answers "off" and refuses writes.
+ */
+export const BOT_SETTINGS_RETIRED_OPS: readonly BotSettingsOp[] = ['autonomy.get', 'autonomy.set', 'autonomy.reset'];
 
 /** Profile fields a remote autosave may write; anything else is rejected by the host. */
 export const BOT_SETTINGS_PATCH_FIELDS = [

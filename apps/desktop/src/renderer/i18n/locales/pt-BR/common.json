@@ -10269,32 +10269,6 @@
       "offlineCount_many": "{{count}} offline",
       "doneCount_many": "{{count}} concluídas"
     },
-    "autonomy": {
-      "title": "Acompanhar minhas sessões",
-      "descriptionOn": "{{name}} verifica os resumos quando as sessões mudam e mantém você por dentro.",
-      "movedFrom": "Movido de {{name}} para cá",
-      "heldBy": "{{name}} cuida disso agora. Ative para mover para cá.",
-      "routineScopeHint": "Inclua as sessões que você cria. O acompanhamento integrado abaixo responde às mudanças nas sessões atribuídas.",
-      "heldByNobody": "Não ativado",
-      "restoreDefault": "Restaurar padrão ({{name}})",
-      "saveFailed": "Não foi possível salvar. Tente novamente.",
-      "turnOff": {
-        "title": "Parar de acompanhar todas as sessões?",
-        "description": "Quando esta opção estiver desativada, nenhum colega acompanhará todas as sessões.",
-        "confirm": "Desativar",
-        "cancel": "Cancelar"
-      },
-      "allowSchedulerFollow": {
-        "title": "Permitir que {{name}} acompanhe as sessões que iniciar",
-        "description": "Por padrão, {{scheduler}} apenas observa. Quando esta opção está ativada e uma sessão iniciada por {{name}} não foi concluída, {{scheduler}} também faz o acompanhamento."
-      },
-      "consent": "Após a ativação, lerei os resumos das sessões que você criar neste computador, avaliarei o progresso e avisarei sobre mudanças importantes. Isso consome sua cota de uso do modelo. Você pode desativar a qualquer momento.",
-      "invitation": {
-        "title": "Quer que eu acompanhe suas sessões?",
-        "start": "Começar acompanhamento",
-        "notNow": "Agora não"
-      }
-    },
     "remoteSettings": {
       "empty": "Nada aqui ainda.",
       "loadFailed": "Não foi possível carregar as configurações. Tente novamente.",
@@ -11337,11 +11311,6 @@
             "name": "Rotinas",
             "hint": "Cria e mantém rotinas que rodam periodicamente.",
             "off": "Ele para de criar ou alterar rotinas. As existentes continuam rodando e podem ser gerenciadas na página Rotinas."
-          },
-          "follow": {
-            "name": "Painel e acompanhamento",
-            "hint": "Acompanha como estão todas as suas tarefas e dá seguimento às que você entrega a ele.",
-            "off": "Ele para de verificar e acompanhar suas tarefas por conta própria. Você ainda pode perguntar no chat."
           }
         }
       },
@@ -11380,10 +11349,6 @@
       "notTurnedOn": "Ainda não ativado neste computador",
       "turnOn": "Ativar",
       "permissions": "Permissões"
-    },
-    "systemSkills": {
-      "followOffHint": "A Skill do sistema “Painel e acompanhamento” de {{name}} está desativada. Ative-a de novo em Capacidades para usar isto.",
-      "offHint": "A Skill do sistema “{{skill}}” está desativada. Ela volta a rodar quando você a reativar em Capacidades."
     },
     "guided": {
       "title": "Criar um colega",

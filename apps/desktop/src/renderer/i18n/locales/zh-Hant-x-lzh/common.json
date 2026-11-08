@@ -10142,32 +10142,6 @@
       "outputMeta": "{{time}} · {{task}}",
       "openFailed": "不能啟卷"
     },
-    "autonomy": {
-      "title": "跟進吾之差事",
-      "descriptionOn": "差事有變，{{name}}即覽其摘要而告君。",
-      "movedFrom": "已自{{name}}移至此",
-      "heldBy": "今由{{name}}主之，啟之即移至此。",
-      "routineScopeHint": "君自立之差事，亦交吾跟進；下方內建跟進，專應此等差事之變。",
-      "heldByNobody": "尚未啟",
-      "restoreDefault": "復常例（{{name}}）",
-      "saveFailed": "未能存，請再試",
-      "turnOff": {
-        "title": "停自動跟進諸差事？",
-        "description": "停之，則無同僚統跟諸差事。",
-        "confirm": "停",
-        "cancel": "罷"
-      },
-      "allowSchedulerFollow": {
-        "title": "其所開之差事，亦交{{name}}跟進",
-        "description": "常例{{scheduler}}但觀不跟。啟之，則{{name}}所開之差事未竟時，{{scheduler}}亦續而跟之。"
-      },
-      "consent": "啟之，吾將讀此機上君所立差事之摘要，析其進度，遇要變則告君。此將耗模型限額，君可隨時停之。",
-      "invitation": {
-        "title": "可要吾為君跟進差事？",
-        "start": "始跟進",
-        "notNow": "暫不啟"
-      }
-    },
     "remoteSettings": {
       "empty": "空空如也",
       "loadFailed": "不能讀規制，請再試。",
@@ -11195,11 +11169,6 @@
             "name": "常例",
             "hint": "為汝立而守按時而行之常例。",
             "off": "不復立、改常例；舊有常例照行，汝猶可於「常例」頁理之。"
-          },
-          "follow": {
-            "name": "案頭與督促",
-            "hint": "察汝諸任務之近況，督汝所託之任務。",
-            "off": "不復自察、自督汝之任務；汝猶可於言談中問之。"
           }
         }
       },
@@ -11238,10 +11207,6 @@
       "notTurnedOn": "此機尚未開",
       "turnOn": "往開",
       "permissions": "權"
-    },
-    "systemSkills": {
-      "followOffHint": "{{name}} 之系統技藝「案頭與督促」已關，於才能頁復開之乃可用。",
-      "offHint": "系統技藝「{{skill}}」已關，於才能頁復開之乃行。"
     },
     "guided": {
       "title": "立同僚",

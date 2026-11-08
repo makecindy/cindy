@@ -30,7 +30,7 @@ const refused = (code: string, message: string) => ({ result: { ok: false, code,
 /** The request a page produced, as the host receives it. */
 const sent = (call = 0) => host.invoke.mock.calls[call][2][0] as { input: { op: BotSettingsOp; args?: Record<string, unknown> }; resourceRef?: { id: string } };
 const ALL_OPS = ['caps', 'profile.get', 'profile.update', 'profile.chooseAvatar', 'profile.retryInvitation', 'lifecycle.run', 'models.default',
-  'memory.list', 'memory.read', 'memory.update', 'memory.delete', 'capabilities.catalog', 'autonomy.get', 'autonomy.set', 'autonomy.reset', 'history.search',
+  'memory.list', 'memory.read', 'memory.update', 'memory.delete', 'capabilities.catalog', 'history.search',
   'routines.list', 'routines.sources', 'routines.history', 'routines.save', 'routines.runNow', 'routines.remove',
   'voice.models', 'voice.voices', 'voice.preference', 'voice.setPreference',
   'channels.im.list', 'channels.im.remove', 'channels.wechat.get', 'channels.x.get'] as BotSettingsOp[];

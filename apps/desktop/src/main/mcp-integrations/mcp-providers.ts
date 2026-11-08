@@ -11,7 +11,7 @@ import { readLocalMachineStatus } from '../machines/localStatus.js';
 import { SSH_STATUS_COMMAND } from '../machines/sshStatus.js';
 import { readGithub, manageGithubPrs } from '../git-context/githubReadRuntime';
 import type { GithubReadMethod } from '@cindy/maker-shared';
-import { reportTaskDelivery } from '../bot-autonomy/hub.js';
+import { reportTaskDelivery } from '../maker-ipc/taskDeliveryReport.js';
 import { getDeviceId } from '../authManager.js';
 import { buildHistorySessionDeepLink } from '../deepLink.js';
 import { activeCompanionCloud } from '../companion-cloud/runtime.js';
@@ -108,14 +108,10 @@ import {
   listBotSkillsForSession,
   saveBotSkillForSession,
 } from '../maker-ipc/botSkillService.js';
-import {
-  captureBotCreatedTaskResponsibility,
-  runBotWorkbenchTool,
-  runBotProjectsTool,
-  type BotWorkbenchHostDeps,
-} from '../maker-ipc/botWorkbenchTools.js';
+import { captureBotCreatedTaskResponsibility } from '../maker-ipc/botTaskCreation.js';
+import { runBotProjectsTool } from '../maker-ipc/botLinkedProjects.js';
 import { createTaskDigestReader } from './taskDigest.js';
-import { createDesktopTaskDigestDeps, createRemoteWorkbenchMessageReader } from './taskDigestHost.js';
+import { createDesktopTaskDigestDeps } from './taskDigestHost.js';
 import { createTaskToolCallAuthorizer } from '../maker-ipc/taskToolCallAuthorizer.js';
 import { createDesktopTaskActionAuthorizer } from '../maker-ipc/taskActionHost.js';
 import { authorizeGroupTool } from '../maker-ipc/botGroupToolAuthorization.js';
@@ -280,31 +276,6 @@ export function createDesktopMcpProviders(deps: DesktopMcpProvidersDeps): LiziMc
         .where(eq(sessions.id, dispatcherSessionId)).limit(1).catch(() => [])
       : [];
     return { sessionId: dispatcherSessionId, ...(row?.title ? { title: row.title } : {}) };
-  };
-
-  // 工作台继续 / 跨电脑读取:与 send_to_session、get_chat_history 同一条宿主路径。
-  const workbenchHost: BotWorkbenchHostDeps = {
-    sendToSession: wrap(async (svc, { targetSessionId, message, dispatcherSessionId }) => {
-      const result = await svc.sendToSession({ targetSessionId, message, dispatcherSessionId });
-      return result.ok
-        ? {
-            ok: true as const,
-            wakeKind: result.wakeKind,
-            ...(result.queuedMessageId ? { queuedMessageId: result.queuedMessageId } : {}),
-          }
-        : { ok: false as const, errorCode: result.errorCode, message: result.message };
-    }),
-    sendToRemoteSession: async ({ deviceId, sessionId, message, dispatcherSessionId }) => {
-      if (!remoteSessionHandoff) {
-        return { ok: false as const, errorCode: 'REMOTE_UNAVAILABLE', message: '这台电脑没有开启跨电脑发送' };
-      }
-      const result = await remoteSessionHandoff({ deviceId, sessionId }, {
-        message,
-        sender: () => remoteHandoffSender(dispatcherSessionId),
-      });
-      return result.ok ? { ok: true as const, wakeKind: result.wakeKind } : result;
-    },
-    readRemoteMessages: createRemoteWorkbenchMessageReader(deps.invokeRemote),
   };
 
   const readTaskDigest = createTaskDigestReader(createDesktopTaskDigestDeps({
@@ -1355,16 +1326,8 @@ export function createDesktopMcpProviders(deps: DesktopMcpProvidersDeps): LiziMc
         },
         list: (params) => listBotSkillsForSession(params),
       },
-      // 工作台观察范围与行动授权分开：角色只影响可见性，写入还需 Host 的具体授权。
-      // 授权在 botWorkbenchAccess 里逐次确定性校验;投递复用 send_to_session 的同一条宿主路径。
-      // 停止走通用的 stop_session_turn。
-      botWorkbench: {
-        projects: runBotProjectsTool,
-        setResponsibility: (params) => runBotWorkbenchTool(workbenchHost, (access) => access.setResponsibility(params)),
-        get: (params) => runBotWorkbenchTool(workbenchHost, (access) => access.get(params)),
-        read: (params) => runBotWorkbenchTool(workbenchHost, (access) => access.read(params)),
-        continueTask: (params) => runBotWorkbenchTool(workbenchHost, (access) => access.continueTask(params)),
-      },
+      // Linked projects of the calling teammate; the host derives the teammate from the caller session.
+      teammateProjects: runBotProjectsTool,
       skillhub: createSkillhubAgentTools({
         isCurrentSession: (context) => !!context.sessionId
           && deps.isCurrentLocalSessionInstance?.(context.sessionId, context.sessionInstanceId) === true,

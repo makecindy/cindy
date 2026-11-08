@@ -816,12 +816,6 @@
     "failed": "存之未成，请再试。",
     "restore": "复预设"
   },
-  "followUp": {
-    "title": "要吾替君跟进差事否？",
-    "start": "始跟进",
-    "notNow": "暂不启",
-    "saveFailed": "未能存之，请再试"
-  },
   "providerGroupRebalance": {
     "title": "改至 {{label}} 续之？",
     "body": "为均耗各名籍之限额，宜将此讯改由 {{label}} 遣出（{{quota}}）。改过去将携近数轮言谈与摘要，更早之细节或记不全。",

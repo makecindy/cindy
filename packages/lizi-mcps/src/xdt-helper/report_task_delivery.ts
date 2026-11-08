@@ -15,7 +15,7 @@ export function registerTaskDeliveryTool(
   registry.register({
     name: 'report_task_delivery',
     category: 'cindy',
-    description: 'Before the final answer in each followed task turn, report whether this turn newly delivers the requested result. PR delivered for human review, merged/closed, or task goal achieved: true. Intermediate review fixes, waiting for CI, or repeated status: false. A true report followed by normal completion notifies the following teammate. Current task executor only; this neither ends the turn nor sends a message.',
+    description: 'Before the final answer in each turn of a task the host asked to report delivery, report whether this turn newly delivers the requested result. PR delivered for human review, merged/closed, or task goal achieved: true. Intermediate review fixes, waiting for CI, or repeated status: false. A true report followed by normal completion is delivered to the recorded original conversation. Current task executor only; this neither ends the turn nor sends a message.',
     inputShape: { final_delivery: z.boolean() },
     handler: async ({ final_delivery }) => {
       const context = getContext();

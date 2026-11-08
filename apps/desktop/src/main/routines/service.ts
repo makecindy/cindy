@@ -30,11 +30,11 @@ import { RoutineFileStore } from './store.js';
 import { assertPreRunHookCommandSyntax } from '../scheduler-host/pre-run-hook.js';
 import { untrustedJsonBlock } from '../../shared/untrustedPrompt.js';
 import type { GhostControlPointResult, GhostRoutineRunPointData } from '../../shared/ghost.js';
-import { getCurrentDbClientSnapshot } from '../localDb/client/current.js';
-import { botProfiles } from '../localDb/schema.js';
+import { and, eq } from 'drizzle-orm';
+import { getCurrentDbClientSnapshot, getDbClient } from '../localDb/client/current.js';
+import { botProfiles, botProfileVersions } from '../localDb/schema.js';
+import { readBotProjectMode } from '../../shared/botProjectMode.js';
 import { isCompanionShadowed } from '../companion-cloud/homes.js';
-import { botSystemSkillsOff, currentFollowUpEvents } from '../bot-autonomy/hub.js';
-import { readBotProjectModeFor } from '../bot-autonomy/hostData.js';
 import {
   BUILTIN_FOLLOW_UP_ROUTINE_PREFIX,
   BUILTIN_NIGHTLY_LEARNING_ROUTINE_PREFIX,
@@ -157,6 +157,22 @@ function controlPointStopMessage(gate: Extract<GhostControlPointResult, { action
   return gate.reason ? `Stopped by plugin "${gate.ghostName}": ${gate.reason}` : `Stopped by plugin "${gate.ghostName}"`;
 }
 
+/** Whether the teammate runs as a project (V2); a missing teammate or unreadable profile counts as not. */
+async function readBotProjectModeFor(botId: string): Promise<boolean> {
+  const [row] = await getDbClient().drizzle
+    .select({ capabilities: botProfileVersions.capabilitiesJson })
+    .from(botProfiles)
+    .innerJoin(botProfileVersions, and(eq(botProfileVersions.botId, botProfiles.id), eq(botProfileVersions.version, botProfiles.currentVersion)))
+    .where(eq(botProfiles.id, botId))
+    .limit(1);
+  try {
+    const parsed = row?.capabilities ? JSON.parse(row.capabilities) as unknown : null;
+    return !!parsed && typeof parsed === 'object' && readBotProjectMode(parsed as Record<string, unknown>);
+  } catch {
+    return false;
+  }
+}
+
 /** Each standing instruction owns one persistent companion lane. */
 async function execute(scope: string, routine: Routine, run: RoutineRun, signal: AbortSignal, canDispatch: () => boolean) {
   assertScope(scope);
@@ -176,32 +192,15 @@ async function execute(scope: string, routine: Routine, run: RoutineRun, signal:
     return { skipped: true };
   }
   shadowedRoutineBots.delete(routine.botId);
-  // 主人关掉了这项系统技能：它的后台工作随提示与工具一起停（cindy-bots-runtime.md §6「伙伴技能分层」），不调用模型。
-  // 夜间学习不属于任何系统技能，照常运行；主人自己建的例行任务也照常运行。
-  // Teammates no longer keep todos: a leftover daily todo check has nothing to do.
+  // Teammates no longer keep todos or follow up on tasks: a leftover daily todo check or
+  // built-in follow-up has nothing to do. The owner's own routines keep running.
   if (routine.id === todoCheckRoutineId(routine.botId)) return { skipped: true };
-  const skill = routine.builtin === 'follow-up' ? 'follow' : null;
-  if (skill) {
-    const off = await botSystemSkillsOff(routine.botId);
-    assertScope(scope);
-    if (off.includes(skill)) return { skipped: true };
-  }
+  if (routine.builtin === 'follow-up') return { skipped: true };
   if (!canDispatch()) return { deferred: true };
   // Nightly learning was replaced by each teammate project's own memory review (botProjectMode.ts);
   // a leftover built-in rule never runs.
   if (routine.builtin === 'nightly-learning') return { skipped: true, resultText: 'Replaced by the project memory review' };
-  // Persisted batches can predate an upgrade, opt-out or reassignment. Never replay their
-  // task summaries under an obsolete follow-up choice. Manual runs remain explicit actions.
-  let events = run.events;
-  if (routine.builtin === 'follow-up' && events.length > 0) {
-    const allowed = await currentFollowUpEvents(routine.botId, events);
-    assertScope(scope);
-    if (allowed === null) return { deferred: true };
-    if (allowed.events.length === 0) return { skipped: true };
-    events = allowed.events;
-    const engineCanDispatch = canDispatch;
-    canDispatch = () => engineCanDispatch() && allowed.canDispatch();
-  }
+  const events = run.events;
   // 插件前置检查：放在建任务之前，跳过时不留空壳任务、不调用模型。
   const gate = routine.preRunPlugin ? await getRoutineHost().screenControlPoint?.('will-routine-run', {
     routineId: routine.id,
@@ -677,14 +676,14 @@ export const routineTools = {
   }),
   list: (botId: string) => withBot(botId, async (engine, scope) => {
     const routines = engine.list(botId);
-    // V2 has no built-in routines: follow-up and nightly learning never run there
-    // (ordinary tasks and the project's own automations do that work), so don't show them.
-    const hidden = (routine: Routine) => routine.builtin === 'nightly-learning' || routine.builtin === 'follow-up'
-      || routine.id === todoCheckRoutineId(botId);
-    if (!routines.some(hidden)) return routines;
+    // The built-in follow-up never runs any more, so it is never shown. V2 has no built-in
+    // routines at all (ordinary tasks and the project's own automations do that work).
+    const visible = routines.filter((routine) => routine.builtin !== 'follow-up');
+    const hidden = (routine: Routine) => routine.builtin === 'nightly-learning' || routine.id === todoCheckRoutineId(botId);
+    if (!visible.some(hidden)) return visible;
     const projectMode = await readBotProjectModeFor(botId);
     assertScope(scope);
-    return projectMode ? routines.filter((routine) => !hidden(routine)) : routines;
+    return projectMode ? visible.filter((routine) => !hidden(routine)) : visible;
   }),
   createOnce: (botId: string, input: RoutineInput, creationId: string) =>
     withBot(botId, async (engine, scope) => {

@@ -250,14 +250,12 @@ it('turns a system Skill off for this teammate without touching shared reference
   const view = render(<BotCapabilitySettings expanded onSystemSkillChange={onSystemSkillChange}
     bot={{ id: 'bot-1', canonicalSessionId: 's1' } as BotProfile}
     capabilities={{ modelChain: [], modelChainOverride: null, mcpServers: [], toolsets: [],
-      systemSkillsOff: ['routine'] } as unknown as BotProfile['capabilities']}
+      systemSkillsOff: [] } as unknown as BotProfile['capabilities']}
     skills={[]} onChange={onChange} />);
-  const follow = view.getByRole('switch', { name: 'bots.capabilities.system.items.follow.name' });
   const routine = view.getByRole('switch', { name: 'bots.capabilities.system.items.routine.name' });
-  expect(follow.getAttribute('aria-checked')).toBe('true');
-  expect(routine.getAttribute('aria-checked')).toBe('false');
-  fireEvent.click(follow);
-  expect(onSystemSkillChange).toHaveBeenCalledExactlyOnceWith('follow', false);
+  expect(routine.getAttribute('aria-checked')).toBe('true');
+  fireEvent.click(routine);
+  expect(onSystemSkillChange).toHaveBeenCalledExactlyOnceWith('routine', false);
   expect(onChange).not.toHaveBeenCalled();
 });
 

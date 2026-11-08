@@ -9,7 +9,8 @@
  */
 import { readBotProjectMode } from './botProjectMode.js';
 
-export const BOT_SYSTEM_SKILL_IDS = ['routine', 'follow'] as const;
+/** A stored `'todo'` or `'follow'` (removed V1 Skills) is ignored when read. */
+export const BOT_SYSTEM_SKILL_IDS = ['routine'] as const;
 
 /** vendorOptions key carrying the tools a teammate's turned-off system Skills deny (Pi bridge listing). */
 export const BOT_DENIED_TOOLS_VENDOR_KEY = 'cindyBotDeniedTools';

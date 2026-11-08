@@ -133,3 +133,23 @@ it.each(['read', 'resolveText', 'update'] as const)('retains both original execu
     expect(f.post.mock.calls.every(call => call[1].threadRootId === 'root')).toBe(true);
   } finally { service.dispose(); vi.useRealTimers(); }
 });
+
+// Live test (2026-11-08): with the V1 follow-up gone, report_task_delivery answered every report
+// as "not running" because report() returned nothing, and a notify_when_done target was told to
+// report although its result is sent regardless.
+it('confirms a recorded report and asks for one only when the origin delivery depends on it', async () => {
+  const origin = fixture({ botId: 'creator', sessionId: 'private' }), service = origin.start();
+  try {
+    expect(await service.wantsReport('task')).toBe(true);
+    expect(service.report('task', execution, true)).toBe(true);
+  } finally { service.dispose(); }
+  const notify = fixture({ botId: 'creator', sessionId: 'requester' });
+  Object.assign(notify.record, { notify: true, armed: {} });
+  const notifying = notify.start();
+  try {
+    expect(await notifying.hasOrigin('task')).toBe(true);
+    expect(await notifying.wantsReport('task')).toBe(false);
+    notify.stopOwner();
+    expect(notifying.report('task', execution, true)).toBe(false);
+  } finally { notifying.dispose(); }
+});
