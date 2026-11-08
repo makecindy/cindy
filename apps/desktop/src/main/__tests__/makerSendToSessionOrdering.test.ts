@@ -110,7 +110,7 @@ describe('sendToSession ordering', () => {
 
     expect(helperBlock).toContain('const result = await resolveCollabDispatchResult(');
     expect(helperBlock).toMatch(
-      /async \(\) => \{\s+const sendResult = await session\.send\((?:agentMessage|outgoingMessage), \{/,
+      /async \(\) => \{\s+params\.onSendAttempt\(\);\s+const sendResult = await session\.send\((?:agentMessage|outgoingMessage), \{/,
     );
     expect(helperBlock).toContain('planMode: false,');
     expect(helperBlock).toContain('throwOnStartFailure: true,');
@@ -248,14 +248,14 @@ describe('sendToSession ordering', () => {
     expect(dispatchBlock).toContain('const runAccepted = async (): Promise<void> => {');
     expect(dispatchBlock).toContain('acceptedDidRun = true;');
     expect(dispatchBlock).toMatch(
-      /const failureResult = async \(\s*dispatchOutcome: CollabDispatchFailureOutcome,?\s*\): Promise<DispatchOrcaInterAgentMessageResult> => \{/,
+      /const failureResult = async \(\s*dispatchOutcome: CollabDispatchFailureOutcome, reportRejected = false\): Promise<DispatchOrcaInterAgentMessageResult> => \{/,
     );
     expect(dispatchBlock).toContain('await runAcceptedRollback(params.onAcceptedRollback, params.targetSessionId, clientId, log);');
     expect(dispatchBlock).toContain('onAccepted: runAccepted,');
-    expect(dispatchBlock).toContain('return failureResult(result.dispatchOutcome);');
+    expect(dispatchBlock).toContain('return failureResult(result.dispatchOutcome, result.reportRejected);');
     expectOrder(dispatchBlock, 'const runAccepted = async (): Promise<void> => {', 'sendPersistedUserMessageToSession(deps, {');
     expect(dispatchBlock).toContain('onAccepted: runAccepted,');
-    expect(dispatchBlock).toContain('return failureResult(result.dispatchOutcome);');
+    expect(dispatchBlock).toContain('return failureResult(result.dispatchOutcome, result.reportRejected);');
     expectOrder(
       dispatchBlock,
       'await deps.prepareUnhealthySession?.(params.targetSessionId);',
@@ -382,10 +382,10 @@ describe('sendToSession ordering', () => {
 
     expect(source).toContain('assertDesktopSendDispatched');
     expect(orcaInterAgentDispatcherSource).toContain('resolveCollabDispatchResult');
-    expect(helperBlock).toContain('Promise<CollabDirectDispatchResult>');
+    expect(helperBlock).toContain('Promise<CollabDirectDispatchResult & { reportRejected?: true }>');
     expect(helperBlock).toContain('const result = await resolveCollabDispatchResult(');
     expect(helperBlock).toMatch(
-      /async \(\) => \{\s+const sendResult = await session\.send\((?:agentMessage|outgoingMessage), \{/,
+      /async \(\) => \{\s+params\.onSendAttempt\(\);\s+const sendResult = await session\.send\((?:agentMessage|outgoingMessage), \{/,
     );
     expect(helperBlock).toContain('planMode: false,');
     expect(helperBlock).toContain('throwOnStartFailure: true,');
@@ -1209,7 +1209,7 @@ function extractOrcaTeamServiceHandleWorkerTerminalTurnSource(): string {
 
 function extractDispatchOrEnqueueOrcaInterAgentMessageSource(): string {
   const block = orcaInterAgentDispatcherSource.match(
-    /const dispatchOrEnqueueOrcaInterAgentMessage = async \([\s\S]*?return \{\n {4}dispatchOrEnqueueOrcaInterAgentMessage,/,
+    /const dispatchOrEnqueueOrcaInterAgentMessage = async \([\s\S]*?return \{\n {4}dispatchOrEnqueueOrcaInterAgentMessage: async \(params\) => \{/,
   )?.[0];
   expect(block).toBeTruthy();
   if (!block) throw new Error('dispatchOrEnqueueOrcaInterAgentMessage source block not found');

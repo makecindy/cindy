@@ -547,6 +547,10 @@ describe('ProviderShareManagePage', () => {
     expect(screen.queryByTestId('provider-usage-model')).toBeNull();
 
     const summary = screen.getByTestId('provider-usage-summary').textContent;
+    // Usage history and the group list settle independently. Wait for the
+    // current-group controls before selecting a computer breakdown.
+    await within(screen.getByRole('tablist', { name: 'providerGroup.usage.title' }))
+      .findByRole('tab', { name: 'providerGroup.usage.stack.computer' });
     pickUsageBreakdown('computer');
     expect(screen.queryByTestId('provider-usage-row')).toBeNull();
     expect(screen.getAllByTestId('provider-usage-computer').map((row) => row.getAttribute('data-computer-key')))

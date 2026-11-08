@@ -128,6 +128,78 @@ describe('sender-chosen steering into an active turn', () => {
     senderLabel: 'Worker', workerId: 'worker-1', meta: { source: 'orca', context: 'report-test' },
   };
   const steerReport = { ...report, delivery: 'steer' as const };
+  // #9346 P1, unit: preparation can fail before a report reaches any queue/send.
+  // Existing cancellation tests start inside send; retaining these untouched
+  // reports as unknown permanently blocks automatic recovery after preparation heals.
+  it.each(['health', 'history', 'handoff', 'queue-preparation', 'row-read', 'image-validation'] as const)(
+    'proves an untouched report can retry after %s recovers', async stage => {
+      let failing = true;
+      const prepare = async () => { if (failing) throw new Error('preparation unavailable'); };
+      const h = createHarness({
+        ...(stage === 'health' ? { prepareUnhealthySession: prepare } : {}),
+        ...(stage === 'history' ? { readAutoReviewHistory: async () => { await prepare(); return []; } } : {}),
+        ...(stage === 'handoff' ? { peekPendingHandoff: async () => { await prepare(); return null; } } : {}),
+        ...(stage === 'queue-preparation' ? { shouldQueueNewTurn: () => true } : {}),
+        ...(stage === 'image-validation' ? { validateImageAttachments: async () => {
+          await prepare(); return { ok: true as const, images: [] };
+        } } : {}),
+      });
+      if (stage === 'queue-preparation') {
+        const build = h.deps.buildCreateOptsForQueuedSession;
+        h.deps.buildCreateOptsForQueuedSession = async (...args) => { await prepare(); return build(...args); };
+      }
+      if (stage === 'row-read') {
+        const read = h.deps.getSessionRowSnapshot;
+        h.deps.getSessionRowSnapshot = async id => { await prepare(); return read(id); };
+      }
+      const input = { ...report, reportClientId: 'durable-report',
+        ...(stage === 'image-validation' ? { imagePaths: ['/report.png'] } : {}) };
+      await expect(h.dispatcher.dispatchOrEnqueueOrcaInterAgentMessage(input))
+        .resolves.toMatchObject({ ok: false, reportRejected: true });
+      expect(h.liveSession.send).not.toHaveBeenCalled();
+      expect(h.deps.enqueueQueuedMessage).not.toHaveBeenCalled();
+      failing = false;
+      await expect(h.dispatcher.dispatchOrEnqueueOrcaInterAgentMessage(input)).resolves.toMatchObject({ ok: true });
+      expect(h.liveSession.send.mock.calls.length + vi.mocked(h.deps.enqueueQueuedMessage).mock.calls.length).toBe(1);
+    },
+  );
+  // Route application can allocate/open an Agent even before session.send. A
+  // report needing that work must first reach the durable coordinator, whose
+  // recoveryBlocked checkpoint owns startup and unknown-allocation recovery.
+  it.each([true, undefined])('retains a report before a pending or uninspectable route can bootstrap (%s)', async pending => {
+    const apply = vi.fn(async () => { throw new Error('[SHARED_TASK_STAGE_allocation] [SHARED_TASK_RECOVERY_timeout]'); });
+    const h = createHarness({ applyPendingAgentSwitch: apply,
+      ...(pending === undefined ? {} : { hasPendingAgentSwitch: () => pending }),
+    });
+    await expect(h.dispatcher.dispatchOrEnqueueOrcaInterAgentMessage({ ...report, reportClientId: 'durable-report' }))
+      .resolves.toMatchObject({ ok: true, mode: 'queued', clientId: 'durable-report' });
+    expect(apply).not.toHaveBeenCalled();
+    expect(h.liveSession.send).not.toHaveBeenCalled();
+    expect(firstQueuedItem(h.queuedItems)).toMatchObject({ clientId: 'durable-report', durableDelivery: true,
+      orcaReportDelivery: { workerId: 'worker-1' } });
+  });
+  it('keeps a healthy report direct without entering the route bootstrap path', async () => {
+    const apply = vi.fn(async () => { throw new Error('must not bootstrap'); });
+    const h = createHarness({ applyPendingAgentSwitch: apply, hasPendingAgentSwitch: () => false });
+    await expect(h.dispatcher.dispatchOrEnqueueOrcaInterAgentMessage({ ...report, reportClientId: 'durable-report' }))
+      .resolves.toMatchObject({ ok: true, mode: 'dispatched' });
+    expect(apply).not.toHaveBeenCalled();
+    expect(h.liveSession.send).toHaveBeenCalledOnce();
+    expect(h.deps.enqueueQueuedMessage).not.toHaveBeenCalled();
+  });
+  it('keeps an uncertain queue write unconfirmed even if it throws before returning a receipt', async () => {
+    const h = createHarness({ getLiveSession: () => null, enqueueQueuedMessage: async () => { throw new Error('queue receipt lost'); } });
+    await expect(h.dispatcher.dispatchOrEnqueueOrcaInterAgentMessage({ ...report, reportClientId: 'durable-report' }))
+      .rejects.toThrow('queue receipt lost');
+  });
+  it('does not requeue a report when send throws SESSION_RUNNING without a rejection receipt', async () => {
+    const session = createLiveSession(async () => { throw Object.assign(new Error('unknown send'), { code: 'SESSION_RUNNING' }); });
+    const h = createHarness({ getLiveSession: () => session });
+    const result = await h.dispatcher.dispatchOrEnqueueOrcaInterAgentMessage({ ...report, reportClientId: 'durable-report' });
+    expect(result).toMatchObject({ ok: false });
+    expect(result).not.toHaveProperty('reportRejected');
+    expect(h.deps.enqueueQueuedMessage).not.toHaveBeenCalled();
+  });
   it.each(['cancelled', 'throw', 'accepted-then-error'] as const)('only stamps proven report rejection: %s', async mode => {
     const session = createLiveSession(async () => {
       if (mode === 'throw') throw new Error('send result unknown');
@@ -136,7 +208,7 @@ describe('sender-chosen steering into an active turn', () => {
     const h = createHarness({ getLiveSession: () => session,
       onDirectInputDispatched: async () => { throw new Error('activity write failed after acceptance'); },
     });
-    const result = await h.dispatcher.dispatchOrEnqueueOrcaInterAgentMessage(report);
+    const result = await h.dispatcher.dispatchOrEnqueueOrcaInterAgentMessage({ ...report, reportClientId: 'durable-report' });
     expect(result.ok).toBe(false);
     expect('reportRejected' in result ? result.reportRejected : undefined).toBe(mode === 'cancelled' ? true : undefined);
   });

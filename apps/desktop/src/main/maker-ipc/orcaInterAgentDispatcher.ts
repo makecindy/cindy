@@ -50,7 +50,7 @@ export type DispatchOrcaInterAgentMessageResult =
     }
   | {
       ok: false;
-      /** Explicit pre-send rejection; exceptions must not claim this evidence. */
+      /** Proven pre-send failure/rejection; exceptions after handoff are not proof. */
       reportRejected?: true;
       dispatchOutcome: CollabDispatchFailureOutcome;
     };
@@ -373,6 +373,7 @@ export function createOrcaInterAgentDispatcher<TSessionMeta>(
 
   const dispatchOrEnqueueOrcaInterAgentMessage = async (
     params: DispatchOrcaInterAgentMessageParams,
+    deliveryAttempt: { started: boolean },
   ): Promise<DispatchOrcaInterAgentMessageResult> => {
     const [meta, dbRow] = await Promise.all([
       deps.getSessionMeta(params.targetSessionId).catch(() => null),
@@ -549,6 +550,7 @@ export function createOrcaInterAgentDispatcher<TSessionMeta>(
         );
       }
       try {
+        deliveryAttempt.started = true;
         await deps.enqueueQueuedMessage(params.targetSessionId, queued);
       } catch (error) {
         discardQueuedOrcaInterAgentAcceptedCallback(clientId);
@@ -597,6 +599,7 @@ export function createOrcaInterAgentDispatcher<TSessionMeta>(
             !liveTurn.isTurnRunning?.() ||
             liveTurn.getTurnGeneration?.() !== expectedTurn.turnGeneration
           ) return null;
+          deliveryAttempt.started = true;
           const outcome = await deps.steerControlInput!(params.targetSessionId, item, expectedTurn);
           if (outcome === 'steered') {
             // The message joined the running turn. Accepted/commit callbacks claim a new
@@ -624,6 +627,7 @@ export function createOrcaInterAgentDispatcher<TSessionMeta>(
               steerFallbackReason: 'STEER_UNCERTAIN', ...dispatchReceipt };
           }
           // Not delivered and nothing retained: the ordinary send/queue path is still safe.
+          deliveryAttempt.started = false;
           return null;
         };
         try {
@@ -650,16 +654,19 @@ export function createOrcaInterAgentDispatcher<TSessionMeta>(
 
     try {
       const sendToInternal = async (): Promise<DispatchOrcaInterAgentMessageResult> => {
+        const message = await buildAgentMessageText();
+        const origin = await resolveOrigin();
+        deliveryAttempt.started = true;
         const result = await deps.sendToSessionInternal({
           autoReviewUserText: { kind: 'delegated-continuation' },
           targetSessionId: params.targetSessionId,
-          message: await buildAgentMessageText(),
+          message,
           persistedContent,
           clientId,
           onAccepted: runAccepted,
           onAcceptedRollback: params.onAcceptedRollback,
           onAcceptedCommit: params.onAcceptedCommit,
-          origin: await resolveOrigin(),
+          origin,
         });
         if (result.ok) {
           if (result.wakeKind === 'queued') {
@@ -701,7 +708,17 @@ export function createOrcaInterAgentDispatcher<TSessionMeta>(
       const dispatchLive = async (): Promise<DispatchOrcaInterAgentMessageResult | null> => {
         // Orca delivery bypasses the ordinary renderer send transaction. Apply
         // the same deferred route boundary before reading the live session.
-        await deps.applyPendingAgentSwitch?.(params.targetSessionId);
+        if (params.reportClientId) {
+          // Applying a route can bootstrap (including eager native resume), so
+          // even skipBootstrap is not proof that no allocation happened. Retain
+          // the report first; the coordinator's persisted attempt owns recovery.
+          if ((deps.applyPendingAgentSwitch && !deps.hasPendingAgentSwitch)
+            || deps.hasPendingAgentSwitch?.(params.targetSessionId)) {
+            return enqueueQueuedMessage('orca report queued before route recovery');
+          }
+        } else {
+          await deps.applyPendingAgentSwitch?.(params.targetSessionId);
+        }
         // Cross-engine preparation may retain the intent without throwing. Never
         // deliver to the old runtime, or bypass an unfinished recovery by resuming.
         if (deps.hasPendingAgentSwitch?.(params.targetSessionId)) {
@@ -719,8 +736,10 @@ export function createOrcaInterAgentDispatcher<TSessionMeta>(
           source: params.meta.source,
           context: params.meta.context,
           origin,
+          onSendAttempt: () => { deliveryAttempt.started = true; },
           onAccepted: runAccepted,
         });
+        if (result.reportRejected) deliveryAttempt.started = false;
         if (result.dispatched) {
           if (acceptedDidRun) {
             await runAcceptedCallback(
@@ -734,7 +753,8 @@ export function createOrcaInterAgentDispatcher<TSessionMeta>(
             ...(live.agentKind ? { agentKind: live.agentKind } : {}),
             dispatchOutcome: result.dispatchOutcome, ...dispatchReceipt };
         }
-        if (result.dispatchOutcome.kind === 'host-send' && result.dispatchOutcome.code === 'SESSION_RUNNING') {
+        if (result.dispatchOutcome.kind === 'host-send' && result.dispatchOutcome.code === 'SESSION_RUNNING'
+          && (!params.reportClientId || result.reportRejected)) {
           await rollbackAcceptedForRequeue();
           return enqueueQueuedMessage('orca inter-agent message queued after SESSION_RUNNING race');
         }
@@ -869,7 +889,31 @@ export function createOrcaInterAgentDispatcher<TSessionMeta>(
   };
 
   return {
-    dispatchOrEnqueueOrcaInterAgentMessage,
+    dispatchOrEnqueueOrcaInterAgentMessage: async (params) => {
+      // Only a host-owned durable report uses this proof to clear its recovery
+      // intent. Preparation failures are safe; invoking any delivery boundary
+      // makes the result unknown until that boundary explicitly rejects it.
+      const deliveryAttempt = { started: false };
+      try {
+        const result = await dispatchOrEnqueueOrcaInterAgentMessage(params, deliveryAttempt);
+        return params.reportClientId && !result.ok && !deliveryAttempt.started
+          ? { ...result, reportRejected: true }
+          : result;
+      } catch (error) {
+        // Preserve the existing exception contract for ordinary messages and
+        // uncertain queue writes. Neither can manufacture a rejection receipt.
+        if (!params.reportClientId || deliveryAttempt.started) throw error;
+        return {
+          ok: false,
+          reportRejected: true,
+          dispatchOutcome: {
+            ...createHostSendFailure('SEND_FAILED', error instanceof Error ? error.message : String(error)),
+            source: params.meta.source,
+            context: params.meta.context,
+          },
+        };
+      }
+    },
     reserveNextOrcaInterAgentMessage,
     registerQueuedOrcaInterAgentAcceptedCallback,
     runQueuedOrcaInterAgentAcceptedCallback,
@@ -921,6 +965,7 @@ async function sendPersistedUserMessageToSession<TSessionMeta>(
     source: string;
     context: string;
     origin?: AgentInputQueuedMessage['origin'];
+    onSendAttempt: () => void;
     onAccepted?: () => void | Promise<void>;
   },
 ): Promise<CollabDirectDispatchResult & { reportRejected?: true }> {
@@ -934,6 +979,7 @@ async function sendPersistedUserMessageToSession<TSessionMeta>(
     : agentMessage;
   const result = await resolveCollabDispatchResult(
     async () => {
+      params.onSendAttempt();
       const sendResult = await session.send(outgoingMessage, {
         planMode: false,
         throwOnStartFailure: true,
