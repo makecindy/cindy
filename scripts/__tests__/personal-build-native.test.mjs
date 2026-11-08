@@ -77,3 +77,47 @@ test('runtime reuse, failure isolation, live selection guard and previous-versio
   assert.throws(()=>prepareRuntime(options),/runtime changed/);
  }finally{fs.rmSync(store,{recursive:true,force:true});}
 });
+
+// Fixed installation must keep one physical app path, refuse replacement while running,
+// and resume an interrupted rename without deleting the old bundle or touching user data.
+// Existing cache tests only covered a symlink. Tier: filesystem integration, injected rename failure.
+test('fixed installation reuses its path and resumes a failed switch with old runtime retained',async()=>{
+ const {prepareRuntime}=await import('../personal-build/runtime-store.mjs');
+ const {installFixedRuntime,verifyInstalledRuntime}=await import('../personal-build/fixed-install.mjs');
+ const dir=fs.mkdtempSync(path.join(os.tmpdir(),'personal-fixed-install-'));
+ try {
+  const prepare=(v,identity='fixture')=>prepareRuntime({store:path.join(dir,'store'),inputs:{bundleId:'personal-test',version:v},signingIdentity:identity,
+   build:app=>{fs.mkdirSync(app);fs.writeFileSync(path.join(app,'binary'),v);},verifySignature:()=>{}});
+  const first=prepare('one'), second=prepare('two');
+  const app=path.join(fs.realpathSync(dir),'Applications','Cindy Personal.app');
+  const options={isRunning:()=>false,verifySignature:()=>{}};
+  installFixedRuntime(first,app,options);
+  assert.equal(fs.lstatSync(app).isSymbolicLink(),false);
+  const before=fs.statSync(path.join(app,'binary')).mtimeMs;
+  installFixedRuntime(first,app,{...options,isRunning:()=>true});
+  assert.equal(fs.statSync(path.join(app,'binary')).mtimeMs,before);
+  assert.throws(()=>installFixedRuntime(second,app,{...options,isRunning:()=>true}),/still running/);
+  assert.throws(()=>installFixedRuntime(prepare('three','different'),app,options),/identity changed/);
+  let renames=0;
+  assert.throws(()=>installFixedRuntime(second,app,{...options,rename:(a,b)=>{if(++renames===2)throw Error('power interrupted');fs.renameSync(a,b);}}),/power interrupted/);
+  assert.equal(fs.existsSync(app),false);
+  const pending=JSON.parse(fs.readFileSync(app+'.personal-transition.json'));
+  assert.equal(fs.readFileSync(path.join(pending.backup,'binary'),'utf8'),'one');
+  installFixedRuntime(second,app,options);
+  assert.equal(verifyInstalledRuntime(second,app,()=>{}),app);
+  assert.equal(fs.readFileSync(path.join(app,'binary'),'utf8'),'two');
+  assert.equal(fs.existsSync(app+'.personal-transition.json'),false);
+  assert.equal(fs.readFileSync(path.join(pending.backup,'binary'),'utf8'),'one');
+  // A crash after publishing the new directory must only finish metadata on retry,
+  // even if that app has since started. Never move the running bundle again.
+  const third=prepare('three');let moves=0;
+  assert.throws(()=>installFixedRuntime(third,app,{...options,rename:(a,b)=>{fs.renameSync(a,b);if(++moves===2)throw Error('after promotion');}}),/after promotion/);
+  const inode=fs.statSync(app).ino;
+  installFixedRuntime(third,app,{...options,isRunning:()=>true});
+  assert.equal(fs.statSync(app).ino,inode);
+  verifyInstalledRuntime(third,app,()=>{});
+  const foreign=path.join(dir,'Other.app');fs.mkdirSync(foreign);fs.writeFileSync(path.join(foreign,'keep'),'mine');
+  assert.throws(()=>installFixedRuntime(first,foreign,options),/unmanaged/);
+  assert.equal(fs.readFileSync(path.join(foreign,'keep'),'utf8'),'mine');
+ }finally{fs.rmSync(dir,{recursive:true,force:true});}
+});

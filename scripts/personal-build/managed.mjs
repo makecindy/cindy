@@ -1,6 +1,7 @@
 /** Managed developer checkout, retaining the macOS launcher workflow without machine-specific paths. */
 import fs from 'node:fs';
 import path from 'node:path';
+import os from 'node:os';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { execFileSync, spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
@@ -28,7 +29,10 @@ export function managedConfig(file) {
   check(new Set([c.app.checkout, r.clientDir, r.stagingDir, r.stateDir]).size === 4, 'Source, client, staging and state directories must differ');
   r.node = r.node ? path.resolve(base, r.node) : process.execPath;
   r.toolPaths = (r.toolPaths || []).map(p => path.resolve(base, p));
+  r.personalApp = r.personalApp ? path.resolve(base, r.personalApp) : path.join(os.homedir(), 'Applications', `Cindy Personal${c.region === 'global' ? '' : c.region === 'cn' ? ' CN' : ' Dev'}.app`);
+  check(r.personalApp.endsWith('.app'), 'runtime.personalApp must be an app directory');
   r.installedApp = r.installedApp || '/Applications/Cindy.app';
+  check(path.resolve(r.personalApp) !== path.resolve(r.installedApp), 'Personal runtime must not replace the official installed app');
   r.idleMinutes ??= 120;
   check(Number.isInteger(r.idleMinutes) && r.idleMinutes >= 1 && r.idleMinutes <= 1440, 'Invalid idle timeout');
   return c;

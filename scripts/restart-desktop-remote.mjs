@@ -469,7 +469,7 @@ function hasDesktopDevSignature(command) {
     command.includes('dev:desktop') ||
     command.includes('pnpm --filter desktop dev') ||
     command.includes('/node_modules/electron/') ||
-    (command.includes('/cindy.app/contents/macos/electron ') && command.includes('/apps/desktop')) ||
+    (/\.app\/contents\/macos\/electron /.test(command) && command.includes('/apps/desktop')) ||
     (command.includes('/apps/desktop/') && (
       command.includes('vite.main.config') ||
       command.includes('vite.renderer.config') ||
@@ -1088,6 +1088,7 @@ function devEnvEntries(env) {
     ['XDT_DESKTOP_DEV_STARTUP_STATUS_FILE', env.XDT_DESKTOP_DEV_STARTUP_STATUS_FILE],
     ['CINDY_PERSONAL_MONITOR_DIR', env.CINDY_PERSONAL_MONITOR_DIR],
     ['CINDY_PERSONAL_GENERATION', env.CINDY_PERSONAL_GENERATION],
+    ['CINDY_PERSONAL_FIXED_APP', env.CINDY_PERSONAL_FIXED_APP],
     // 插件存储启动边界的 dev 黑盒验收：仅显式临时结果路径时启用。
     ['XDT_PLUGIN_STORAGE_SMOKE_RESULT_FILE', env.XDT_PLUGIN_STORAGE_SMOKE_RESULT_FILE],
   ];

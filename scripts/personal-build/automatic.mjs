@@ -6,7 +6,9 @@ import { createHash, randomUUID } from 'node:crypto';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { managedConfig, runtimeEnv } from './managed.mjs';
 import { prepare, main, run, packageHash, verifyReport, verifyUpgradeSnapshot } from '../personal-build.mjs';
-import {selectRuntime} from './runtime-store.mjs';
+import {acquire} from './lock.mjs';
+export {acquire} from './lock.mjs';
+import {installFixedRuntime} from './fixed-install.mjs';
 import { nativeIdentity, verifyDeveloperSignature } from './native-capabilities.mjs';
 import { checkCheckout } from './checkout-guard.mjs';
 import { RecoveryJournal, durableWrite, compatibility } from './recovery.mjs';
@@ -72,27 +74,7 @@ function verifyRelease(r) {
   check(fs.existsSync(path.join(r.directory, 'node_modules/electron/dist/Electron.app/Contents/MacOS/Electron')), 'Prepared Electron runtime missing');
 }
 function status(c, phase, extra = {}) { durableWrite(path.join(root(c), 'status.json'), { phase, at: Date.now(), ...extra }); }
-export function acquire(file) {
-  fs.mkdirSync(path.dirname(file), { recursive: true });
-  // Serialize stale-owner inspection AND replacement. Two recovery processes must never both
-  // remove a dead owner's directory and accidentally remove the new live owner's lock.
-  // A crash in this tiny critical section leaves the guard for explicit inspection (fail closed).
-  const guard = file + '.guard', token = randomUUID();
-  fs.mkdirSync(guard, { mode: 0o700 });
-  try {
-    if (fs.existsSync(file)) {
-      let pid; try { pid = read(path.join(file, 'owner.json')).pid; } catch { throw new Error(`Incomplete lock: ${file}`); }
-      check(Number.isSafeInteger(pid) && pid > 0 && !alive(pid), `Already running: ${file}`);
-      fs.rmSync(file, { recursive: true });
-    }
-    fs.mkdirSync(file, { mode: 0o700 });
-    durableWrite(path.join(file, 'owner.json'), { pid: process.pid, token });
-  } finally { fs.rmdirSync(guard); }
-  return () => {
-    // Never release another generation's lock.
-    if (read(path.join(file, 'owner.json')).token === token) fs.rmSync(file, { recursive: true });
-  };
-}
+
 async function stopLaunch(c, release, launched, dataDir = c.runtime.dataDir) {
   if (launched && !launched.exited && launched.child.pid) {
     // macOS script creates a second process group for its PTY command. Include descendant
@@ -146,14 +128,16 @@ function start(c, release, { mock = false } = {}) {
   verifyRelease(release);
   const nativeFile = path.join(release.directory, 'apps/desktop/resources/personal-native.json');
   const runtime = fs.existsSync(nativeFile) ? read(nativeFile).runtime : null;
-  if (runtime && !mock) selectRuntime(runtime, {verifySignature:verifyDeveloperSignature, isRunning:app => {
+  const fixedApp = runtime && !mock && c.runtime.mode === 'shared' ? installFixedRuntime(runtime, c.runtime.personalApp, {verifySignature:verifyDeveloperSignature, isRunning:app => {
     const ps = spawnSync('ps', ['-axo','command='], {encoding:'utf8',maxBuffer:64*1024*1024});
     check(ps.status === 0, 'Cannot check runtime ownership');
     return ps.stdout.includes(app + '/Contents/MacOS/Electron');
-  }});
+  }}) : null;
   const generation = randomUUID(), dir = path.join(root(c), 'launches', generation);
   fs.mkdirSync(dir, { recursive: true, mode: 0o700 }); fs.chmodSync(dir, 0o700);
   const env = runtimeEnv(c, cli);
+  delete env.CINDY_PERSONAL_FIXED_APP;
+  if (fixedApp) env.CINDY_PERSONAL_FIXED_APP = fixedApp;
   for (const name of ['XDT_ISOLATED', 'XDT_ISOLATED_NAME', 'XDT_ISOLATED_AUTH', 'XDT_ISOLATED_AUTH_PROOF', 'XDT_USER_DATA_DIR', 'XDT_USER_DATA_DIR_EPOCH']) delete env[name];
   env.CINDY_PERSONAL_MONITOR_DIR = dir; env.CINDY_PERSONAL_GENERATION = generation;
   const mode = mock ? [`--isolated=personal-smoke-${generation.slice(0, 8)}`, '--mock'] : c.runtime.mode === 'shared' ? ['--shared'] : [`--isolated=${c.name}`, ...(c.automatic.mock ? ['--mock'] : [])];

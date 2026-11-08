@@ -535,16 +535,38 @@ uses both the shared executable and the business path, and readiness still requi
 renderer for that checkout. Multiple checkouts sharing a runtime must not be mistaken for
 one process. Ordinary non-personal development and existing receipt v1 launches are retained.
 
-The supervised activation path updates the fixed `<store>/Cindy.app` link only after its
-existing stop/profile guards; isolated checks do not select it. Switching to a different
-runtime refuses to move this link while the previous runtime is running. This is a managed
-runtime entry, not a standalone packaged app: use the personal launcher to supply the selected
-business release. Existing journal previous/good pointers retain business versions; runtime
-versions are retained too. Recovery remains subject to data compatibility, not just the
-presence of an older shell. Automatic switching stays opt-in; preparation never authorizes a
-restart or enables it. Moving from an ad-hoc shell to a developer identity can require macOS
-permission approval once; signature verification does not prove privacy permission or remote
-login works. This is local signing, not notarized public distribution.
+The shared-profile supervisor installs a **physical directory**, not a runtime-cache symlink,
+at `runtime.personalApp` (default `~/Applications/Cindy Personal.app`; ` CN` / ` Dev` suffix
+for those regions). Both the installation path and the actual launched executable stay fixed
+when native dependencies change. `runtime.installedApp` still denotes the official app and
+must not equal this personal destination. Existing ordinary applications at the destination
+are never adopted/overwritten. Isolated previews continue to launch the immutable cache and
+never install/replace the formal entry automatically.
+
+`fixed-install.mjs` copies and verifies the signed candidate next to the destination, then
+records a durable transition before renaming anything. The old physical bundle is retained
+as a hidden sibling; old runtime caches and business journal pointers are also retained.
+An unchanged runtime is verified and reused without replacing its directory. A changed
+runtime requires the exact installed app to be stopped, the same Bundle ID and developer
+certificate, and the existing supervisor profile/stop guards. Changing signing identity is
+an explicit migration, not an automatic fallback. A retry completes an interrupted recorded
+filesystem transition, including a crash between moving the old bundle and promoting the new
+one. Invalid or missing artifacts stop recovery for inspection; no unknown files are replaced.
+The shared owner lock also serializes different configurations targeting the same app path.
+This is installation recovery only: business rollback still requires data compatibility.
+
+The launch wrapper verifies the installed receipt, full contents and developer signature
+against the selected business release before opening the fixed path. The fixed app setting
+is forwarded explicitly to Terminal and stale inherited values are cleared for previews.
+Process discovery binds the physical executable to its installation receipt and business
+checkout; a changed location must not make a live instance invisible or another checkout ready.
+
+Continue using the personal launcher to supply the selected business release and its interface
+server. The fixed runtime is not a standalone packaged business app; double-click-only cold
+startup without the personal launcher is not implemented. Automatic switching stays opt-in;
+preparation never authorizes a restart or enables it. Moving from an ad-hoc shell to a developer
+identity can require macOS permission approval once; signature verification does not prove
+privacy permission or remote login works. This is local signing, not notarized public distribution.
 
 The supervisor uses `desktop-restart-runner.mjs` to own Terminal and its bounded log drain,
 with the wrapper's own output going to a regular file. Do not wrap this again in a detached
