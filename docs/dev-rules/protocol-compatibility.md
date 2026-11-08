@@ -4233,6 +4233,14 @@ Claude 原生 `user` 范围投影为 `global`；控制端读取早期 Host 的 `
 
 ## 云端伙伴：从任意电脑更换主力电脑
 
+2026-11-08：`maker:companion-cloud:caps` 的 `companionCloud` 升至 4，表示接收端能运行伙伴 V2（伙伴 = 项目）。
+V2 主力电脑只交给声明 ≥ 4 的目标，低于 4 返回 `TARGET_OUTDATED`（旧发起方不认识该码，按 `FAILED` 显示）；
+`maker:companion-cloud:targets` 的条目新增可选 `outdated: true`（版本 1–3 的电脑仍列出、不可选），旧发起方忽略。
+新增偏好键 `companion.project-rules.v1`（`{ content }`）与 `companion.automation.v1:<configId>`（`{ config, paused, originDeviceId? }`），
+只由新版主力电脑上传；旧客户端的上传器不拥有这些键（不墓碑、不播种），接管时只认识自己列出的前缀，未知键忽略。
+记忆仍用 `companion.memory.v1:<文件>`，值格式不变，内容改为读 V2 项目记忆。不新增 channel、帧或服务端接口，
+官方与自建中转透传既有回包；手机不改原生指纹。规则见 [云端伙伴](../product-rules/cloud-companions.md) §2.1。
+
 2026-11-06：修复版将既有 `maker:companion-cloud:caps` 的 `companionCloud` 声明升至 3，
 表示接收端已能读取伙伴大内容存储。交出方仍要求目标 ≥ 3 才允许交出仅存于该存储的值；
 目标 < 3、服务器未提供存储或上传不完整时仍拒绝交出并保留原主力电脑。0.1.127 虽已实现读取，

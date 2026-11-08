@@ -96,8 +96,9 @@ describe('cloud companion rows', () => {
     expect(view.map(item => item.text)).toEqual(['m30', 'm20']);
   });
 
-  it('offers the computers the main computer names, never itself or this phone', () => {
-    const targets = [{ deviceId: 'home', online: true }, { deviceId: 'phone', online: true }, { deviceId: 'mac', online: true }, { deviceId: 'off', online: false }];
+  it('offers the computers the main computer names, never itself, this phone or one too old for a V2 teammate', () => {
+    const targets = [{ deviceId: 'home', online: true }, { deviceId: 'phone', online: true }, { deviceId: 'mac', online: true }, { deviceId: 'off', online: false },
+      { deviceId: 'old', online: true, outdated: true }];
     expect(cloudHomeTargets(targets, 'home', 'phone').map(target => target.deviceId)).toEqual(['mac']);
   });
 });

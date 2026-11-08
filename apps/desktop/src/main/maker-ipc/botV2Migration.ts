@@ -29,6 +29,7 @@ import { readEffectiveBotModelChain } from '../maker-host/bot-model-chain-settin
 import { activeOwnerScopeKey, ownerScopedUserDataPath } from '../appSessionState.js';
 import { botProfileDir, ensureBotWorkspaceDir } from './botProfileFolder.js';
 import { ensureBotProjectAutomations, prepareBotProjectWorkspace } from './botProjectMode.js';
+import { TEAMMATE_V2_RECEIPT_FILE } from './botProjectMemory.js';
 import { writeRoutineAutomations } from './botRoutineAutomations.js';
 import { readV1Routines, removeV1Routine } from './botV1Routines.js';
 import {
@@ -41,7 +42,7 @@ import { todoCheckRoutineId } from '../bot-autonomy/todoCheckRoutine.js';
 
 const log = createLogger('maker-ipc:bot-v2-migration');
 
-const RECEIPT_FILE = 'v2-migration.json';
+const RECEIPT_FILE = TEAMMATE_V2_RECEIPT_FILE;
 const ARCHIVE_DIR = 'v1-archive';
 /** V1-only state no V2 code reads; moved aside after the carryover is written. */
 const V1_STATE = ['todos.v1.json', 'working-memory.json', 'nightly-learning.json', 'learning-history'];
@@ -178,11 +179,13 @@ async function migrateTeammateOnce(botId: string, ownerRoot: string,
   const capabilities = profile.capabilities as unknown as Record<string, unknown>;
   const displayName = profile.name;
   const legacyUserDataDir = app.getPath('userData');
+  // The project (with copies of the memories and skills) before the flag: from the flag on, the
+  // teammate's memories and skills are read from the project, also by the cloud upload, so they
+  // must already be there. Idempotent; a failure retries next start.
+  const prepared = await prepareBotProjectWorkspace({ botId, displayName, ownerRoot, legacyUserDataDir });
+  assertCurrent();
   // Only the flag: the rest of the stored configuration (model, permissions, …) stays as it is.
   if (!readBotProjectMode(capabilities)) await updateBotProfile({ id: botId, capabilities: { projectMode: true } });
-  assertCurrent();
-  // The save path logs preparation failures; run it here (idempotent) so a failure retries next start.
-  const prepared = await prepareBotProjectWorkspace({ botId, displayName, ownerRoot, legacyUserDataDir });
   const [route] = await readEffectiveBotModelChain(capabilities).catch(() => []);
   await ensureBotProjectAutomations({ botId, displayName, workingDir: prepared.workingDir, route });
   assertCurrent();

@@ -24,12 +24,16 @@ import { resolveBotCanonicalSession } from '../maker-ipc/botCanonicalSessionRegi
 import { readExplicitBotModelChain } from '../maker-host/bot-model-chain-settings-store.js';
 import { listCustomMcpServers } from '../maker-host/custom-mcp-store.js';
 import { resolveAvailableTaskModels } from '../maker-ipc/appDefaultModelControl.js';
-import { botProfileDir, botProfileMemoryDir, readBotProfileFolder, writeBotProfileFolder } from '../maker-ipc/botProfileFolder.js';
+import { botProfileDir, readBotProfileFolder, writeBotProfileFolder } from '../maker-ipc/botProfileFolder.js';
+import { readBotProjectMode } from '../../shared/botProjectMode.js';
 import { onBotRemoteResourceChanged } from '../maker-ipc/botRemoteResourceInvalidation.js';
 import { applyBotSkillFilesForBot, deleteBotSkillForBot, listBotSkillFilesForBot, listBotSkillSourcesForBot, readBotSkillFilesForBot, readBotSkillSourceForBot, saveBotSkillSourceForBot } from '../maker-ipc/botSkillService.js';
 import { mergeCompanionWorkbench, readCompanionWorkbench } from '../maker-ipc/botLinkedProjectStore.js';
 import type { CompanionMaterializeHost } from './materialize.js';
 import { applyCompanionRoutines } from './routines.js';
+import { applyProjectAutomations, applyProjectRules, readProjectValues } from './project.js';
+import { backupTeammateProject, companionProjectIo, teammateMemoryDir, upgradeArrivedTeammate } from './projectHost.js';
+import { readTeammateMemories, teammateMemoryDirs } from '../maker-ipc/botProjectMemory.js';
 import { companionHomes } from './homes.js';
 import { createMcpServerNamesReader } from './mcpServerNames.js';
 import { companionHasLocalData } from './localData.js';
@@ -41,17 +45,16 @@ import type { CompanionCloudHost } from './runtime.js';
 import { createCompanionCloudState } from './state.js';
 import type { CompanionLog } from './types.js';
 import {
+  COMPANION_AUTOMATION_PREFIX,
   COMPANION_CAPABILITIES_KEY,
   COMPANION_MEMORY_PREFIX,
+  COMPANION_PROJECT_RULES_KEY,
   COMPANION_PROFILE_KEY,
   COMPANION_SKILL_PREFIX,
   COMPANION_SKILL_FILES_PREFIX,
   COMPANION_WORKBENCH_KEY,
   type CompanionPreferenceValue,
 } from './uploader.js';
-
-/** Derived memory files: USER.md travels inside the profile, MEMORY.md is a rebuilt index. */
-const SKIPPED_MEMORY_FILES = new Set(['USER.md', 'MEMORY.md']);
 
 function profileTemplateId(capabilitiesJson: string | null, identitySource: string): string | null {
   try {
@@ -82,34 +85,23 @@ export async function readCompanionValues(botId: string, selfDeviceId: string | 
   } }];
   // The setup that means the same on any computer. A record that cannot be read keeps its cloud
   // value (the uploader never tombstones what was merely unreadable).
+  // Whether it is a V2 teammate decides where its memories and skills are: unknown, they are not read.
+  let projectMode: boolean | null = null;
   try {
     const config = JSON.parse(row.capabilities ?? '{}') as unknown;
     if (!config || typeof config !== 'object' || Array.isArray(config)) throw new Error('CAPABILITIES_UNREADABLE');
+    projectMode = readBotProjectMode(config as Record<string, unknown>);
     // Names of this computer's own MCP servers, so a computer without them can still say which one it is.
     const mcpNames = await readMcpServerNames();
     values.push({ key: COMPANION_CAPABILITIES_KEY, value: portableCompanionCapabilities(
       config as Record<string, unknown>, readExplicitBotModelChain(config as Record<string, unknown>), mcpNames) });
   } catch { values.push({ key: COMPANION_CAPABILITIES_KEY, value: null, unread: true }); }
-  const memoryDir = botProfileMemoryDir(userDataDir, botId);
-  // Only a missing folder means "no memories"; any other read error aborts this cycle so the
-  // uploader never tombstones memories it merely failed to read.
-  const entries = await fs.readdir(memoryDir, { withFileTypes: true }).catch((error: NodeJS.ErrnoException) => {
-    if (error?.code === 'ENOENT') return [];
-    throw error;
-  });
-  for (const entry of entries.sort((a, b) => a.name.localeCompare(b.name))) {
-    if (!entry.isFile() || !entry.name.endsWith('.md') || entry.name.startsWith('.') || SKIPPED_MEMORY_FILES.has(entry.name)) continue;
-    const content = await fs.readFile(path.join(memoryDir, entry.name), 'utf8');
-    values.push({ key: `${COMPANION_MEMORY_PREFIX}${entry.name}`, value: { filename: entry.name, content } });
-  }
-  // Strict too: a skill that cannot be read must not look deleted (the uploader would tombstone it).
-  for (const skill of await listBotSkillSourcesForBot(botId)) {
-    values.push({ key: `${COMPANION_SKILL_PREFIX}${skill.slug}`, value: {
-      slug: skill.slug, content: skill.source, ...(skill.enabled ? {} : { enabled: false }),
-    } });
-    const files = await listBotSkillFilesForBot(botId, skill.slug, skill.enabled);
-    if (files.length) values.push({ key: `${COMPANION_SKILL_FILES_PREFIX}${skill.slug}`, value: null, localFiles: files });
-  }
+  if (projectMode === null) {
+    // Read from the wrong place they would look deleted: their cloud values stay until it is known.
+    for (const key of [COMPANION_MEMORY_PREFIX, COMPANION_SKILL_PREFIX, COMPANION_SKILL_FILES_PREFIX, COMPANION_PROJECT_RULES_KEY, COMPANION_AUTOMATION_PREFIX]) {
+      values.push({ key, value: null, unread: true });
+    }
+  } else await readMemoriesAndSkills(values, userDataDir, botId, projectMode);
   // The workbench moves with the companion too (cloud-companions.md §2). It is read separately:
   // when it cannot be read now its cloud value stays untouched instead of stopping the profile and
   // memories. Routines no longer go up: a teammate's scheduled work is its project's automations.
@@ -121,7 +113,29 @@ export async function readCompanionValues(botId: string, selfDeviceId: string | 
     const workbench = await readCompanionWorkbench(userDataDir, botId, selfDeviceId);
     return workbench.directories.length || Object.keys(workbench.tasks).length ? [{ key: COMPANION_WORKBENCH_KEY, value: workbench }] : [];
   });
+  // A V2 teammate's project rules and automations (project.ts); its other project files stay here.
+  if (projectMode !== null) {
+    const workspace = path.join(botProfileDir(userDataDir, botId), 'workspace');
+    const isProject = projectMode;
+    values.push(...await readProjectValues(botId, { ...companionProjectIo(), projectDir: async () => isProject ? workspace : null }, selfDeviceId));
+  }
   return values;
+}
+
+async function readMemoriesAndSkills(values: CompanionPreferenceValue[], userDataDir: string, botId: string, projectMode: boolean): Promise<void> {
+  // A V2 teammate's memories are its project's (the same keys, so older computers still read them).
+  // A read error aborts this cycle, so the uploader never tombstones memories it failed to read.
+  for (const { filename, content } of await readTeammateMemories(await teammateMemoryDirs(userDataDir, botId, projectMode))) {
+    values.push({ key: `${COMPANION_MEMORY_PREFIX}${filename}`, value: { filename, content } });
+  }
+  // Strict too: a skill that cannot be read must not look deleted (the uploader would tombstone it).
+  for (const skill of await listBotSkillSourcesForBot(botId)) {
+    values.push({ key: `${COMPANION_SKILL_PREFIX}${skill.slug}`, value: {
+      slug: skill.slug, content: skill.source, ...(skill.enabled ? {} : { enabled: false }),
+    } });
+    const files = await listBotSkillFilesForBot(botId, skill.slug, skill.enabled);
+    if (files.length) values.push({ key: `${COMPANION_SKILL_FILES_PREFIX}${skill.slug}`, value: null, localFiles: files });
+  }
 }
 
 /** The SKILL.md as stored, so native frontmatter (tools, invocation, …) moves with the companion. */
@@ -145,6 +159,15 @@ function createMaterializer(input: {
       fence.assertCurrent();
       await applyCompanionRoutines({ botId, ownerRoot: ownerScopedUserDataPath(), rows: routines,
         selfDeviceId: input.selfDeviceId?.() ?? null, assertCurrent: fence.assertCurrent, ...(input.log ? { log: input.log } : {}) });
+    },
+    applyProjectRules: async (botId, content, fence) => {
+      fence.assertCurrent();
+      await applyProjectRules({ botId, content, io: companionProjectIo(), assertCurrent: fence.assertCurrent, ...(input.log ? { log: input.log } : {}) });
+    },
+    applyAutomations: async (botId, rows, fence) => {
+      fence.assertCurrent();
+      await applyProjectAutomations({ botId, rows, io: companionProjectIo(), selfDeviceId: input.selfDeviceId?.() ?? null,
+        assertCurrent: fence.assertCurrent, ...(input.log ? { log: input.log } : {}) });
     },
     applyWorkbench: async (botId, value, fence, options) => {
       const self = input.selfDeviceId?.();
@@ -228,13 +251,18 @@ function createMaterializer(input: {
       }
       // Identity, prompt, user file, memories and skills; the work folder stays where it is.
       await fs.cp(source, target, { recursive: true, filter: from => path.relative(source, from).split(path.sep)[0] !== 'workspace' });
+      // A V2 teammate's memories, skills and rules live in its project: they are replaced too.
+      await backupTeammateProject(ownerScopedUserDataPath(), botId, target);
       fence.assertCurrent();
       return target;
     },
     readMemory: async (botId, filename) => {
       if (path.basename(filename) !== filename) return null;
-      // Only a missing file is "no memory"; other errors keep the take-over demoted for a retry.
-      return fs.readFile(path.join(botProfileMemoryDir(ownerScopedUserDataPath(), botId), filename), 'utf8')
+      // Where the memory service writes it (a V2 teammate's project memory), so a restore compares
+      // with what it would replace. Only a missing file is "no memory"; other errors keep the
+      // take-over demoted for a retry.
+      const dir = await teammateMemoryDir(ownerScopedUserDataPath(), botId);
+      return fs.readFile(path.join(dir, filename), 'utf8')
         .catch((error: NodeJS.ErrnoException) => { if (error?.code === 'ENOENT') return null; throw error; });
     },
     restoreMemory: (botId, filename, raw) => getBotMemoryService().restoreRaw(botId, filename, raw),
@@ -414,6 +442,7 @@ export function createCompanionCloudHost(input: {
     deliverToCanonical: input.deliverToCanonical,
     onLocalChange: onBotRemoteResourceChanged,
     materializer: createMaterializer(input),
+    upgradeArrived: upgradeArrivedTeammate,
     listDevices: input.listDevices,
     ...(input.isTurnActive ? { isBotBusy: async (botId: string) =>
       (await companionSessionIds(botId)).some(sessionId => input.isTurnActive!(sessionId)) } : {}),

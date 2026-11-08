@@ -129,7 +129,8 @@ export function botSkillRootDir(userDataDir: string, botId: string): string {
 
 /**
  * 伙伴 V2(项目模式)的技能就是它项目里的技能(`workspace/.agents/skills`),三个引擎按项目
- * 原生方式加载,也跟着项目的版本走。登记由读取伙伴档案的地方完成(档案里才有开关)。
+ * 原生方式加载,也跟着项目的版本走。开关在档案里:botSkillService 的每个入口先按档案登记一次,
+ * 这里只是那次判断的缓存(读档案、准备项目时也会顺手登记)。
  */
 const projectSkillDirs = new Map<string, string>();
 

@@ -67,6 +67,39 @@
 - 旧版本主力电脑没有 `companion.capabilities.v1`：接管时保持原行为（不改能力配置，新建的副本用默认值），其资料快照里的
   `templateId` 仍会恢复到新建的副本上。
 
+### 2.1 伙伴 V2（伙伴 = 一个项目）随行（2026-11-08）
+
+伙伴 V2 的工作目录就是一个普通 Cindy 项目（`<userData>/owners/<owner>/bots/<伙伴>/workspace`：Git 仓库、
+`AGENTS.md`、项目技能 `.agents/skills`、项目自动化 `.cindy/automations/schedules.json`）。产品裁决（用户确认）：
+
+1. **项目文件留在主力电脑**；跟着伙伴走的只有规则（`AGENTS.md`）、记忆、技能与自动化定义。
+2. 只有主力电脑运行 V2 伙伴，其他电脑是远程入口（同 §3）。
+3. Git 历史按电脑各自保存：新主力电脑从自己的历史开始，旧电脑保留它的历史。
+4. 不把伙伴交给不支持 V2 的电脑，提示先更新那台电脑的 Cindy。
+5. 交出后，旧电脑的侧栏隐藏这个伙伴的项目（文件留在磁盘），也不再运行它的自动化。
+
+| 内容 | 云端键 | 说明 |
+|---|---|---|
+| 记忆 | `companion.memory.v1:<文件>`（沿用） | V2 读写项目记忆（与它的任务同一记忆范围），旧的伙伴 `memories/` 保留为 V1 存档、不再上传；升级没走完（没有 `v2-migration.json`）时两处合读、项目优先，升级前已上传的记忆不会被误判删除 |
+| 技能 | `companion.skill.v1:<slug>` 等（沿用） | 每次读写都按档案里的项目模式定位到项目 `.agents/skills`，不依赖内存登记 |
+| 规则 | `companion.project-rules.v1` = `{ content }` | 项目 `AGENTS.md`，超过 256 KB 不读（不上传也不墓碑）；接管时内容不同才写入并记一个项目版本（Git 快照）；墓碑不删本机规则 |
+| 自动化 | `companion.automation.v1:<configId>` = `{ config, paused, originDeviceId }` | `schedules.json` 每条一份，含暂停状态；接管时按 configId 幂等写入（相同不重写，含升级自建的 `teammate-memory-review`），再暂停/恢复到一致；墓碑删除本机同一条；带检查命令且来自别的电脑的先暂停；运行位置指向本机时改为本机；定义不合法的跳过、不拦接管 |
+
+- 只有主力电脑上传；能力配置读不出来（不知道是不是 V2）时记忆、技能、规则、自动化本轮都按「未读」处理，不上传也不墓碑。
+- **到达即升级**：接管（「在这台电脑继续」、被交过来的自动接管）完成、降级副本恢复运行后，立即对该伙伴跑一次 V2 升级
+  （`migrateTeammateToV2`，按伙伴串行、靠回执幂等），不再只等下次启动；云端带规则或自动化时，写入前先把伙伴升级成项目。
+  旧版本主力电脑上传的例行任务行（`companion.routine.v1:*`）照旧按例行任务 ID 转成项目自动化，已升级过的伙伴同样转换。
+  升级时先建项目、复制记忆与技能，再打开项目模式，避免上传在复制前读到空的项目记忆而误写墓碑。
+- **降级副本**：本机副本降级（伙伴在别的电脑运行）时，工作目录在这个伙伴项目里的定时任务一律记为「跳过」，不运行也不删除；
+  桌面侧栏的项目列表不显示这个伙伴的项目（只过滤本机项目，文件不动），恢复运行后重新出现。
+- **版本门槛**：`maker:companion-cloud:caps` 版本 4 表示能运行 V2 伙伴。主力电脑交出前探测目标，低于 4 的拒绝（`TARGET_OUTDATED`，
+  提示「先在那台电脑上更新 Cindy」）；可接手电脑列表里这类电脑仍列出但不可选，标注需先更新。从别的电脑发起时，版本 4 的主力电脑
+  在目标列表里带 `outdated` 标记，发起方据此提示；旧发起方忽略标记，选了也会被主力电脑拒绝。
+- 接管已有副本前的备份另含项目记忆、项目技能与 `AGENTS.md`（`project-memories/`、`project-skills/`、`project-AGENTS.md`）。
+- 已知边界：旧版本电脑（< 4）仍可自己「在这台电脑继续」接管，接到的是 V1 伙伴，它不上传也不墓碑新键，云端保留之前的规则与自动化，
+  之后新版电脑接管时会应用那份较早的值；手机「换一台电脑继续」不探测目标版本（§6 已知限制），同样可能换到旧电脑。
+  合并 Cindy 只合并记忆与技能（已按项目记忆读写），不合并规则与自动化。
+
 ## 3. 主力电脑
 
 - 新建伙伴时，创建它的电脑就是主力电脑。存量伙伴在首次登记到服务器时，由登记的电脑成为主力电脑
@@ -326,6 +359,7 @@ Desktop `runtime.transcript()` 经注入的 Chat History 读取，首次按现�
   之后再换回原电脑时那边跟随它自己的默认，不会恢复当初选的模型；提示只在伙伴聊天打开时出现一次（设置里不常驻）。
   `permissions` 在新建副本上是默认档，不推断也不提示原电脑上是什么档。技能的 `skills` 列表只是引用，伙伴自有技能仍按
   `companion.skill.v1` 随行；能力值读不出来时本轮不上传、不写墓碑，交出前的 flush 因此失败而不是丢掉它。
+  伙伴 V2 的项目模式不随能力配置上传：到达即升级（§2.1），新电脑上每个伙伴本来就是 V2。
 - 新旧版本混用的取舍（2026-10-23）：旧版本电脑当主力期间不会更新、也不会墓碑 `companion.capabilities.v1`（它不认识这个键），
   云端留着的是更早某台新版本电脑上传的那份。之后换到新版本电脑接管时会应用这份更早的值，旧版本主力期间在那台电脑上改过的技能 / MCP /
   模型选择不会体现。这是有意接受的：旧版本不写这个键，没有可靠的「谁更新」依据可比；用户在新电脑的能力设置里重新调整一次即可，
@@ -345,7 +379,8 @@ Desktop `runtime.transcript()` 经注入的 Chat History 读取，首次按现�
 - 服务器：`cindy-server/chat-server`（actor 的 `home_device_id`、按主力电脑过滤领取、私聊房间确定 ID、
   `/me` 的设备标识与能力开关）。
 - Desktop：`apps/desktop/src/main/companion-cloud/`（登记主力电脑、资料上传、对话导入、接管、降级、
-  删除时停用；`capabilities.ts` 能力配置随行，`replyArtifacts.ts` 回复产物）；渲染层 `features/bots/` 的 `companionCloudStore.ts`（`maker:companion-cloud:*` 状态与变化推送）、
+  删除时停用；`capabilities.ts` 能力配置随行，`replyArtifacts.ts` 回复产物，`project.ts` / `projectHost.ts` 伙伴 V2 的规则与自动化随行、
+  到达即升级；记忆位置见 `maker-ipc/botProjectMemory.ts`，降级伙伴的自动化跳过见 `scheduler-host/teammateHomeGuard.ts`）；渲染层 `features/bots/` 的 `companionCloudStore.ts`（`maker:companion-cloud:*` 状态与变化推送）、
   `useCompanionArrivalNotice.ts`（换电脑后的权限 / 模型提示，打开聊天时一次）、`CloudCompanionOfflineView.tsx`（离线横幅与云端对话）、`BotHomeComputerSetting.tsx`（设置里的「主力电脑」行与
   换电脑的确认流程；聊天头部近况浮层 `BotGlancePopover.tsx` 的「电脑」块复用它，任何电脑上都可更换）。
 - Mobile：伙伴离线横幅、云端对话只读视图与换电脑选择。

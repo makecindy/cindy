@@ -149,6 +149,8 @@ interface ComputerRowModel {
   current: boolean;
   online: boolean;
   unread?: boolean;
+  /** Its Cindy cannot run a V2 teammate yet: shown muted with why, not selectable. */
+  outdated?: boolean;
   onSelect?: () => void;
 }
 
@@ -164,8 +166,9 @@ function ComputerRows({ rows }: { rows: ComputerRowModel[] }) {
       testId="bot-glance-computer"
       icon={<Monitor size={16} />}
       title={row.name}
-      muted={!row.current && !row.online}
-      meta={row.current ? t('bots.glance.runningHere') : row.online ? t('bots.glance.online') : t('bots.glance.offline')}
+      muted={!row.current && (!row.online || row.outdated)}
+      meta={row.current ? t('bots.glance.runningHere') : row.outdated ? t('bots.cloud.targetOutdatedMeta')
+        : row.online ? t('bots.glance.online') : t('bots.glance.offline')}
       inlineMeta
       trailing={
         row.current ? (
@@ -174,7 +177,7 @@ function ComputerRows({ rows }: { rows: ComputerRowModel[] }) {
           <span aria-label={t('bots.devicePicker.unread')} className="size-1.5 rounded-full bg-[var(--bot-unread-bg)]" />
         ) : null
       }
-      onClick={!row.current && row.online ? row.onSelect : undefined}
+      onClick={!row.current && row.online && !row.outdated ? row.onSelect : undefined}
     />
   );
   return (
@@ -226,6 +229,7 @@ function CloudComputers({
         name: state.targetName(target),
         current: false,
         online: target.online,
+        ...(target.outdated ? { outdated: true } : {}),
         onSelect: () => {
           onClose();
           state.setError(null);

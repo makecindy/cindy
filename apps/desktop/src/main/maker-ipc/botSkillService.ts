@@ -17,9 +17,11 @@ import { requestBotRuntimeEpochRefresh } from './botRuntimeEpochRefreshSignal.js
 import { and, eq } from 'drizzle-orm';
 
 import { migrateBotSkillsIntoProfileFolder } from './botProfileFolder.js';
+import { readTeammateProjectMode } from './botWorkspaceRuntime.js';
 import {
   BotSkillStoreError,
   botSkillRootDir,
+  setBotProjectSkillsDir,
   deleteBotSkill,
   listBotSkills,
   readBotSkill,
@@ -71,6 +73,11 @@ export interface BotSkillServiceDeps {
   userDataDir?: string;
   ownerScopeKey?: () => string;
   ownerBoundaryPending?: () => boolean;
+  /**
+   * Whether the stored profile is a V2 (project-mode) teammate, whose skills are its project's.
+   * Defaults to the database when the userData root is not injected.
+   */
+  readProjectMode?: (botId: string) => Promise<boolean>;
   requestRefresh?: typeof requestBotRuntimeEpochRefresh;
   resolveBotId?: (callerSessionId: string, callerSessionInstanceId?: string) => Promise<
     | { ok: true; botId: string; canonicalSessionId?: string | null; refresh?: () => Promise<void> }
@@ -127,6 +134,15 @@ async function skillHomeOf(
     botId,
     deps.userDataDir ? undefined : app.getPath('userData'),
   ).catch(() => {});
+  // Every entry decides the skills folder from the stored profile: a cloud upload or take-over
+  // may come before anything else registered it, and must never read the old `skills/` folder
+  // of a V2 teammate (its skills would look deleted). An unreadable profile keeps the last answer.
+  const readProjectMode = deps.readProjectMode ?? (deps.userDataDir ? undefined : readTeammateProjectMode);
+  if (readProjectMode) {
+    const projectMode = await readProjectMode(botId).catch(() => null);
+    assertOwnerBoundary(deps, boundary);
+    if (projectMode !== null) setBotProjectSkillsDir(dir, botId, projectMode);
+  }
   assertOwnerBoundary(deps, boundary);
   return dir;
 }

@@ -69,9 +69,12 @@ export function cloudSwitchCandidates(
     .map(row => ({ deviceId: row.device.deviceId, name: row.device.name }));
 }
 
-/** Computers the home offers for the companion (its own view), never the home or this phone. */
-export function cloudHomeTargets<T extends { deviceId: string; online: boolean }>(targets: readonly T[], home: string, self: string | null): T[] {
-  return targets.filter(target => target.online && target.deviceId !== home && target.deviceId !== self);
+/**
+ * Computers the home offers for the companion (its own view), never the home or this phone. One the
+ * home marks `outdated` (its Cindy cannot run a V2 teammate yet) is left out: the home would refuse it.
+ */
+export function cloudHomeTargets<T extends { deviceId: string; online: boolean; outdated?: boolean }>(targets: readonly T[], home: string, self: string | null): T[] {
+  return targets.filter(target => target.online && !target.outdated && target.deviceId !== home && target.deviceId !== self);
 }
 
 export interface CloudMessage { id: string; fromCompanion: boolean; text: string; attachments: BotGroupAttachment[]; createdAt: number }

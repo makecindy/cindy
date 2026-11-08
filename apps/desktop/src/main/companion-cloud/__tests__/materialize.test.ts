@@ -388,6 +388,28 @@ describe('materializeCompanion', () => {
     expect(applyWorkbench).not.toHaveBeenCalled();
   });
 
+  // Teammate V2 (cloud-companions.md §2.1): the project's rules and automations arrive from the new
+  // keys and become values this computer holds (so its later deletions upload as tombstones); a
+  // failure keeps the copy demoted for a retry, like the other parts.
+  it('hands a V2 teammate\'s rules and automations to the project, and stays demoted when they fail', async () => {
+    const automation = { config: { id: 'daily', name: 'Daily', prompt: 'p', cronExpr: '0 9 * * *' }, paused: true, originDeviceId: 'laptop' };
+    const prefs = [profilePref, { key: 'companion.project-rules.v1', value: { content: '# rules' } },
+      { key: 'companion.automation.v1:daily', value: automation }, { key: 'companion.automation.v1:gone', value: null }];
+    const applyProjectRules = vi.fn(async () => undefined);
+    const applyAutomations = vi.fn(async () => undefined);
+    const { state } = memoryState();
+    await materializeCompanion({ api: cloud(prefs).api, state, host: fakeLocal({ applyProjectRules, applyAutomations }).host, actor, roomId: async () => ROOM });
+    expect(applyProjectRules).toHaveBeenCalledWith('bot_mia', '# rules', expect.anything());
+    expect(applyAutomations).toHaveBeenCalledWith('bot_mia', [{ id: 'daily', value: automation }, { id: 'gone', value: null }], expect.anything());
+    expect(state.bot('bot_mia')?.prefs['companion.automation.v1:daily']).toMatchObject({ hash: valueHash(automation), local: true });
+    expect(state.bot('bot_mia')?.prefs['companion.project-rules.v1']).toMatchObject({ hash: valueHash({ content: '# rules' }), local: true });
+    const failing = memoryState();
+    await expect(materializeCompanion({ api: cloud(prefs).api, state: failing.state, actor, roomId: async () => ROOM,
+      host: fakeLocal({ applyProjectRules, applyAutomations: vi.fn(async () => { throw new Error('SCHEDULER_NOT_READY'); }) }).host }))
+      .rejects.toThrow('RESTORE_INCOMPLETE');
+    expect(failing.state.bot('bot_mia')?.demoted).toBe(true);
+  });
+
   it('stays demoted and retries when the routines cannot be restored', async () => {
     const { api } = cloud([profilePref, { key: 'companion.routine.v1:r', value: { id: 'r', input: { triggers: [] } } }]);
     const local = fakeLocal({ applyRoutines: vi.fn(async () => { throw new Error('ROUTINES_UNAVAILABLE'); }) });

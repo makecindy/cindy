@@ -16,7 +16,7 @@ import path from 'node:path';
 import { BrowserWindow } from 'electron';
 
 import { getActiveDataOwnerPushStamp } from '../appSessionState.js';
-import { memoryScopeDirName, parseFilename, resolveMemoryScopeKey } from '@cindy/maker-core';
+import { parseFilename } from '@cindy/maker-core';
 import { createSnapshotDetailed } from '../git-snapshot/gitSnapshotService.js';
 import { listProjectAliases, upsertProjectAlias } from '../localDb/ipc/projectAliases.js';
 import { normalizeRecentWorkdirPath, upsertRecentWorkdir } from '../localDb/ipc/recentWorkdirs.js';
@@ -26,6 +26,7 @@ import { restoreLocalProjectVisibility } from '../sidebarSettingsStore.js';
 import { gitExec } from '../worktree/gitExec.js';
 import { detectCwd } from '../worktree/WorktreeManager.js';
 import { botProfileDir, botProfileMemoryDir, ensureBotWorkspaceDir } from './botProfileFolder.js';
+import { teammateProjectMemoryDir } from './botProjectMemory.js';
 import { setBotProjectSkillsDir } from './botSkillStore.js';
 import type { ProjectScheduleConfig } from '../scheduler-host/project-automation-loader.js';
 import type { BotModelRoute } from '../../shared/botModelChain.js';
@@ -212,9 +213,7 @@ export async function prepareBotProjectWorkspace(input: {
   await writeIfMissing(path.join(workspace, 'AGENTS.md'), botProjectAgentsTemplate(input.displayName));
   await writeIfMissing(path.join(workspace, 'CLAUDE.md'), '@AGENTS.md\n');
   // Memory and Skills become the project's own, before the first V2 turn reads them.
-  const projectMemoryDir = path.join(
-    input.ownerRoot, 'maker-memory', memoryScopeDirName(await resolveMemoryScopeKey(workspace)),
-  );
+  const projectMemoryDir = await teammateProjectMemoryDir(input.ownerRoot, workspace);
   const memoriesCopied = await copyMemoryRecords(botProfileMemoryDir(input.ownerRoot, input.botId), projectMemoryDir);
   const skillsCopied = await copySkillFolders(
     path.join(botProfileDir(input.ownerRoot, input.botId), 'skills'),

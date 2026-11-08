@@ -28,6 +28,8 @@ import { dialogueWorkspaceRoots } from '../localDb/dialogueWorkspace';
 import { sessions } from '../localDb/schema.js';
 import { getDbClient } from '../localDb/client/current';
 import { startRewoundSchedulerPromptCleanup, stopRewoundSchedulerPromptCleanup } from './rewoundSchedulerPromptCleanup.js';
+import { withTeammateHomeGuard } from './teammateHomeGuard.js';
+import { companionHomes } from '../companion-cloud/homes.js';
 import { isReviewSessionSource } from '../../shared/sessionSource.js';
 import { dbToMakerAgentKind } from '../../shared/agentKindConversion.js';
 import { assertScheduledHarnessSupported } from '../maker-ipc/scheduledModelSelection';
@@ -206,7 +208,8 @@ async function startSchedulerInternal(deps: StartSchedulerDeps): Promise<Schedul
       id: ctx.runId, scheduleId: schedule.id, firedAt: ctx.firedAt, finishedAt: Date.now(), status: 'failed', errorMsg,
     }).catch(() => {});
   };
-  const runner: ScheduleRunner = {
+  // A teammate's project automations run only on its main computer (handed away: skipped here).
+  const runner: ScheduleRunner = withTeammateHomeGuard({
     fire: (schedule, ctx) =>
       withScheduleLock(schedule.id, ctx.signal, async () => {
         // 所有定时任务(Agent / 脚本)的唯一入口：插件前置检查放在检查脚本、建任务之前。
@@ -218,7 +221,7 @@ async function startSchedulerInternal(deps: StartSchedulerDeps): Promise<Schedul
           ? scriptRunner.fire(schedule, ctx)
           : promptRunner.fire(schedule, ctx);
       }),
-  };
+  }, () => companionHomes.snapshot().demotedBotIds);
 
   // 双开让位开关:同一台机器同时跑 dev + release(共用同一 userData/DB)时,
   // 给其中一个实例(通常 dev)设 XDT_SCHEDULER_PASSIVE=1 → 本实例不参与自动触发

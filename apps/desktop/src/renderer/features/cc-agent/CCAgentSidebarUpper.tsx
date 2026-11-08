@@ -80,6 +80,7 @@ import { useNavigationAttention } from '@/lib/navigationAttentionStore';
 import { useActiveMainView } from '@/hooks/useActiveMainView';
 import { NavigationCountBadge } from '@/components/sidebar/NavigationCountBadge';
 import { useViewedBotSessionId } from '@/features/bots/useViewedBotSessionId';
+import { useCompanionCloud } from '@/features/bots/companionCloudStore';
 import { sharedTaskErrorKey } from '@/features/device-link/sharedTaskCompatibility';
 import { isSharedTaskPeer } from '@cindy/device-link';
 import { stripTrailingPathSeparators } from '../../../shared/pathText';
@@ -184,6 +185,7 @@ import {
   projectKeyComparisonSetHas,
   sidebarSessionsWithHiddenProjectsAsDialogues,
   visibleSidebarProjects,
+  withoutTeammateProjectsElsewhere,
 } from './lib/sidebarProjectVisibility';
 import {
   collectRestorableProjectKeys,
@@ -1812,12 +1814,14 @@ function ExpandedView({
   }, [projectUniverse.projects.length, gcProjectKeys, filter]);
 
   /* ---- F-PJ-10: 在 render 阶段把 filter.projects 应用到 ProjectNode 列表 ---- */
+  // A teammate handed to another computer: its project here is hidden until it comes back.
+  const teammatesElsewhere = useCompanionCloud().demotedBotIds;
   const visibleProjects = useMemo(() => {
-    const notHidden = visibleSidebarProjects(
+    const notHidden = withoutTeammateProjectsElsewhere(visibleSidebarProjects(
       groupsWithPinnedProjects.projects,
       hiddenProjectKeys,
       localPlatform,
-    );
+    ), teammatesElsewhere);
     if (filter.projectsAsSet === null) return notHidden;
     const allowed = filter.projectsAsSet;
     // A teammate's project is not a project choice; the teammate filter decides its tasks.
@@ -1825,7 +1829,7 @@ function ExpandedView({
       isTeammateProjectPath(project.workingDir)
       || projectFilterIncludes(allowed, project.projectKey, localPlatform),
     );
-  }, [groupsWithPinnedProjects.projects, hiddenProjectKeys, filter.projectsAsSet, localPlatform]);
+  }, [groupsWithPinnedProjects.projects, hiddenProjectKeys, filter.projectsAsSet, localPlatform, teammatesElsewhere]);
 
   /* ---- M41: Vendor 过滤 — 应用到 pinned / unclassified / project sessions ---- */
   const vendorPredicate = useMemo(() => {

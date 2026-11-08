@@ -17,7 +17,8 @@ import type { CompanionBotState, CompanionCloudState } from './state.js';
 import { readCompanionRows, storedValueHash, type CompanionStore } from './store.js';
 import { errorCode, isTransientAttachmentFailure, type CompanionApi, type CompanionLog } from './types.js';
 import {
-  COMPANION_CAPABILITIES_KEY, COMPANION_MEMORY_PREFIX, COMPANION_PROFILE_KEY, COMPANION_ROUTINE_PREFIX, COMPANION_SKILL_FILES_PREFIX, COMPANION_SKILL_PREFIX,
+  COMPANION_AUTOMATION_PREFIX, COMPANION_CAPABILITIES_KEY, COMPANION_MEMORY_PREFIX, COMPANION_PROFILE_KEY, COMPANION_PROJECT_RULES_KEY,
+  COMPANION_ROUTINE_PREFIX, COMPANION_SKILL_FILES_PREFIX, COMPANION_SKILL_PREFIX,
   COMPANION_WORKBENCH_KEY, TOMBSTONE_HASH, isCompanionProfileSnapshot, valueHash,
 } from './uploader.js';
 
@@ -78,6 +79,16 @@ export interface CompanionMaterializeHost {
    * place (`null`: the companion has none).
    */
   applyWorkbench?: (botId: string, value: unknown, fence: CompanionWriteFence, options?: { replace?: boolean }) => Promise<void>;
+  /**
+   * A V2 teammate's project rules (`companion.project-rules.v1`) become its project's `AGENTS.md`
+   * (the teammate becomes a project first). Unchanged rules write nothing.
+   */
+  applyProjectRules?: (botId: string, content: string, fence: CompanionWriteFence) => Promise<void>;
+  /**
+   * The project's automations (`companion.automation.v1:<configId>`): each value is upserted by its
+   * config id with its paused state, a tombstone (`value: null`) removes it.
+   */
+  applyAutomations?: (botId: string, rows: Array<{ id: string; value: unknown }>, fence: CompanionWriteFence) => Promise<void>;
   ensureCanonicalSession: (botId: string, fence: CompanionWriteFence) => Promise<string>;
   /**
    * Local rows created at or after `fromMs`, including rewound and deleted ones (`removed`):
@@ -301,6 +312,24 @@ export async function materializeCompanion(input: {
       const removed = batch.removes ? rows.flatMap(([key, row]) => (row.value === null ? [key.slice(batch.prefix.length)] : [])) : [];
       await step(() => batch.run!(botId, values, removed, fence));
       for (const [key, row] of rows) applied.set(key, { hash: row.value === null ? TOMBSTONE_HASH : valueHash(row.value), revision: row.revision });
+    });
+  }
+  // A V2 teammate's project setup, after its memories and skills: the project (made here first when
+  // needed) takes them over. Older homes upload neither key: the project keeps what it has.
+  const rulesRow = prefs.get(COMPANION_PROJECT_RULES_KEY);
+  const rules = rulesRow ? text(record(rulesRow.value)?.content) : undefined;
+  if (rulesRow && host.applyProjectRules && (rules !== undefined || rulesRow.value === null)) {
+    await apply('project-rules', async () => {
+      // Removed on the home is not removed here: a project always keeps its rules file.
+      if (rules !== undefined) await step(() => host.applyProjectRules!(botId, rules, fence));
+      applied.set(COMPANION_PROJECT_RULES_KEY, { hash: rulesRow.value === null ? TOMBSTONE_HASH : valueHash(rulesRow.value), revision: rulesRow.revision });
+    });
+  }
+  const automationRows = [...prefs].filter(([key]) => key.startsWith(COMPANION_AUTOMATION_PREFIX));
+  if (automationRows.length && host.applyAutomations) {
+    await apply('automation', async () => {
+      await step(() => host.applyAutomations!(botId, automationRows.map(([key, row]) => ({ id: key.slice(COMPANION_AUTOMATION_PREFIX.length), value: row.value })), fence));
+      for (const [key, row] of automationRows) applied.set(key, { hash: row.value === null ? TOMBSTONE_HASH : valueHash(row.value), revision: row.revision });
     });
   }
   // A workbench this computer synced before is the cloud's from back then: the cloud replaces it, so

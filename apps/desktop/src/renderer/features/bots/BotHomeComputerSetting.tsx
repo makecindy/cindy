@@ -42,6 +42,7 @@ const SWITCH_ERROR_KEYS: Record<CompanionCloudFailureCode, string> = {
   BUSY: 'bots.cloud.transferBusy',
   HOME_OUTDATED: 'bots.cloud.homeOutdated',
   PAUSED: 'bots.cloud.resumeToMove',
+  TARGET_OUTDATED: 'bots.cloud.targetOutdated',
 };
 
 /** How long a companion moved here from its online home may take to be built on this computer. */
@@ -197,7 +198,12 @@ function HomeMenuItems({ bot, state }: { bot: CompanionHomeBot; state: HomeSwitc
     return <><DropdownMenuItem disabled className="whitespace-normal">{t('bots.cloud.noTargets')}</DropdownMenuItem>{hereOff}</>;
   return (
     <>
-      {choices.targets.map((target) => (
+      {choices.targets.map((target) => target.outdated ? (
+        // Its Cindy cannot run a V2 teammate yet: listed so the owner knows to update it, not selectable.
+        <DropdownMenuItem key={target.deviceId} disabled className="whitespace-normal">
+          {t('bots.cloud.targetOutdatedItem', { device: state.targetName(target) })}
+        </DropdownMenuItem>
+      ) : (
         <DropdownMenuItem key={target.deviceId} onSelect={() => { state.setError(null); state.setPending(target); }}>
           <span className="min-w-0 truncate">
             {target.isSelf ? t('bots.cloud.switchHere') : t('bots.cloud.switchTo', { device: state.targetName(target) })}

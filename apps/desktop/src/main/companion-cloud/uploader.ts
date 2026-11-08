@@ -26,8 +26,19 @@ export const COMPANION_ROUTINE_PREFIX = 'companion.routine.v1:';
 export const COMPANION_WORKBENCH_KEY = 'companion.workbench.v1';
 /** Capability setup that means the same on any computer (capabilities.ts); never the permission level. */
 export const COMPANION_CAPABILITIES_KEY = 'companion.capabilities.v1';
+/**
+ * A V2 teammate's project rules: its `AGENTS.md`, `{ content }` (project.ts). The project's files
+ * stay on the main computer; only the rules travel. Older computers do not know the key.
+ */
+export const COMPANION_PROJECT_RULES_KEY = 'companion.project-rules.v1';
+/**
+ * One automation of a V2 teammate's project per key (`<configId>` of its `schedules.json`):
+ * `{ config, paused, originDeviceId? }` (project.ts). Older computers do not know the prefix.
+ */
+export const COMPANION_AUTOMATION_PREFIX = 'companion.automation.v1:';
 const OWNED_PREFIXES = [COMPANION_PROFILE_KEY, COMPANION_MEMORY_PREFIX, COMPANION_SKILL_PREFIX, COMPANION_SKILL_FILES_PREFIX,
-  COMPANION_TODO_PREFIX, COMPANION_ROUTINE_PREFIX, COMPANION_WORKBENCH_KEY, COMPANION_CAPABILITIES_KEY];
+  COMPANION_TODO_PREFIX, COMPANION_ROUTINE_PREFIX, COMPANION_WORKBENCH_KEY, COMPANION_CAPABILITIES_KEY,
+  COMPANION_PROJECT_RULES_KEY, COMPANION_AUTOMATION_PREFIX];
 const MAX_KEY_LENGTH = 160;
 export const COMPANION_VALUE_MAX_BYTES = 60 * 1024;
 /** A value over the size limit was not uploaded (thrown only when every value is required). */
