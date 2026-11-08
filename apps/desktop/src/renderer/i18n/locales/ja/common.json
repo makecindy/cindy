@@ -10038,6 +10038,12 @@
       "openSettings": "ストレージを開く",
       "disable": "今後通知しない"
     },
+    "nativeBuild": {
+      "title": "Intel 版の Cindy を使用中です",
+      "description": "この Mac は Apple シリコン搭載のため、Intel 版は変換して動作し大幅に遅くなります。Apple シリコン版に入れ替えても、データはそのまま残ります。",
+      "dismiss": "今回は表示しない",
+      "download": "ダウンロード"
+    },
     "horizontalTabbarAria": "メインビュー切り替え",
     "tabs": {
       "projects": "プロジェクト",

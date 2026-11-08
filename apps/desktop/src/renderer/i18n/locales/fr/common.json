@@ -10161,6 +10161,12 @@
       "openSettings": "Ouvrir Stockage",
       "disable": "Ne plus me le rappeler"
     },
+    "nativeBuild": {
+      "title": "Vous utilisez la version Intel",
+      "description": "Ce Mac a une puce Apple silicon : traduite, la version Intel est nettement plus lente. Installez la version Apple silicon ; vos données sont conservées.",
+      "dismiss": "Masquer pour l'instant",
+      "download": "Télécharger"
+    },
     "horizontalTabbarAria": "Sélecteur de vue principale",
     "tabs": {
       "projects": "Projets",

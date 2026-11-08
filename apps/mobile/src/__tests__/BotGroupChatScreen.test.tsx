@@ -796,7 +796,7 @@ describe('group timeline', () => {
     h.scrollToEnd.mockClear();
     await act(async () => h.scroll.onContentSizeChange(400, 2300));
     expect(h.scrollToEnd).not.toHaveBeenCalled();
-    await act(async () => h.scroll.onScroll({ nativeEvent: {
+    await act(async () => h.scroll.onScrollEndDrag({ nativeEvent: {
       contentOffset: { y: 1500 }, contentSize: { height: 2000 }, layoutMeasurement: { height: 500 },
     } }));
     expect(byId('botGroup.jumpToLatest')).toBeNull();
@@ -2260,6 +2260,36 @@ it.each(['jump', 'send'])('releases nested work-area space on outer %s without c
   expect(byId('botGroup.work.toggle')!.getAttribute('aria-label')).toContain('groupChat.work.collapse');
 });
 
+// Unit / keyboard-dismiss scroll interruption: mounted timeline callbacks must
+// not issue an imperative tail scroll while native drag/deceleration owns it.
+// Existing history tests start away from the tail; this reproduces resize at the
+// tail before the first scroll sample has arrived.
+it.each(['drag', 'momentum'])('keeps keyboard resize from interrupting %s', async phase => {
+  await render(group());
+  const event = { nativeEvent: { contentOffset: { y: 1200 }, contentSize: { height: 2000 }, layoutMeasurement: { height: 800 } } };
+  await act(async () => {
+    h.scroll.onLayout({ nativeEvent: { layout: { height: 800 } } });
+    h.scroll.onContentSizeChange(390, 2000);
+    h.scroll.onScroll(event);
+    h.scroll.onScrollBeginDrag();
+    if (phase === 'momentum') {
+      h.scroll.onScrollEndDrag(event);
+      h.scroll.onMomentumScrollBegin();
+    }
+  });
+  h.scrollToEnd.mockClear();
+  await act(async () => {
+    h.scroll.onLayout({ nativeEvent: { layout: { height: 850 } } });
+    h.scroll.onContentSizeChange(390, 2010);
+  });
+  expect(h.scrollToEnd).not.toHaveBeenCalled();
+  await act(async () => {
+    h.scroll[phase === 'drag' ? 'onScrollEndDrag' : 'onMomentumScrollEnd'](event);
+    h.scroll.onContentSizeChange(390, 2020);
+  });
+  expect(h.scrollToEnd).toHaveBeenCalledWith({ animated: false });
+});
+
 // Unit / #9249 r4501133784: the final native position can arrive first in an
 // end event. Real screen+WorkArea must resume before losing gesture ownership.
 // Older coverage only sends positions via onScroll, so it misses end-before-scroll.
@@ -2763,6 +2793,7 @@ describe('mobile group threads', () => {
     await render(data, 'ready', rootId, '');
     const event = { nativeEvent: { contentOffset: { y: 100 }, contentSize: { height: 1200 }, layoutMeasurement: { height: 500 } } };
     await act(async () => { h.scroll.onScrollBeginDrag(); h.scroll.onScroll(event); });
+    await act(async () => h.scroll.onScrollEndDrag(event));
     h.chat.loadingOlder = false;
     await render(data, 'ready', rootId, '');
     await click('botGroup.jumpToLatest');
