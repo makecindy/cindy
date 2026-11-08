@@ -3141,14 +3141,18 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
   // Wide nonpersistent windows offer quick switching separately from back navigation.
   // Its width is the same preference as the side column's.
   const sidebarWidthPreference = useSessionSidebarWidthPreference();
+  const nativeHeaderHeight = useSessionHeaderHeight(JSON.stringify([
+    windowDimensions.width, windowDimensions.height, windowDimensions.fontScale,
+    insets.top, insets.bottom, insets.left, insets.right, adaptiveWindow.barEdge,
+  ]));
   const wideSessionNav = useMemo(() => buildWideSessionNavLayout({
     iosPad: Platform.OS === 'ios' && Platform.isPad,
     platform: Platform.OS,
     preferredWidth: sidebarWidthPreference.width,
-    trailingReserve: sharedStatusRowTrailingReserve(adaptiveWindow),
+    trailingReserve: sharedStatusRowTrailingReserve(adaptiveWindow, nativeHeaderHeight),
     windowHeight: windowDimensions.height,
     windowWidth: windowDimensions.width,
-  }), [adaptiveWindow, sidebarWidthPreference.width, windowDimensions.height, windowDimensions.width]);
+  }), [adaptiveWindow, nativeHeaderHeight, sidebarWidthPreference.width, windowDimensions.height, windowDimensions.width]);
   const [sessionListDrawerOpen, setSessionListDrawerOpen] = useState(false);
   // 父级镜像 overlay 的真实存续期:打开时立即 true,退场动画完成 + native 子树卸载后的
   // onClosed 才 false。它同时保证退场期 TalkBack 背景隔离,以及旋转/收窄退出宽屏时
@@ -3156,10 +3160,6 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
   const [sessionListDrawerOverlayMounted, setSessionListDrawerOverlayMounted] = useState(false);
   // iOS 系统导航栏在 RN 内容之上,临时抽屉放进独立窗口(aboveSystemBar)盖住它,系统栏
   // 留在遮罩下原地不动,不随抽屉开合收起。
-  const nativeHeaderHeight = useSessionHeaderHeight(JSON.stringify([
-    windowDimensions.width, windowDimensions.height, windowDimensions.fontScale,
-    insets.top, insets.bottom, insets.left, insets.right, adaptiveWindow.barEdge,
-  ]));
   // Duo shares the status area with its native toolbar. Its measured height
   // already includes that area; safeArea.top + 44 would count the toolbar twice.
   const topChromeHeight = Math.max(topOverlayHeight,
