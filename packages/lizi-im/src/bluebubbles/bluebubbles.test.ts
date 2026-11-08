@@ -58,6 +58,69 @@ async function fixture(initialState: BlueBubblesState | null = null, media?: IMH
 }
 
 describe('BlueBubbles local ingress', () => {
+  // Tier 1, #9250/r4506476913: two waiting attachments used to refetch one
+  // another indefinitely. The guard only bounds the old-code failure path.
+  it('retains verified metadata for multiple attachments waiting behind a slow preparation', async () => {
+    let release!: () => void, entered!: () => void;
+    const held = new Promise<void>(resolve => { release = resolve; });
+    const preparing = new Promise<void>(resolve => { entered = resolve; });
+    const f = await fixture(null, undefined, false, { stage: async ({ fileName }) => ({
+      absPath: `/synthetic/${fileName}`, discard: async () => {},
+    }) });
+    const original = vi.mocked(f.api.message).getMockImplementation()!;
+    const counts = new Map<string, number>();
+    vi.mocked(f.api.message).mockImplementation(async guid => {
+      const count = (counts.get(guid) ?? 0) + 1; counts.set(guid, count);
+      if (count > 4) await held;
+      return original(guid);
+    });
+    const download = vi.spyOn(f.api, 'download').mockImplementation(async guid => {
+      if (guid === 'slot-first-file') { entered(); await held; }
+      return new Uint8Array([1]);
+    });
+    try {
+      f.message('slot-first', { attachments: [{ guid: 'slot-first-file', transferName: 'first.txt' }] });
+      await f.webhook('slot-first'); await preparing;
+      for (const id of ['slot-second', 'slot-third']) {
+        f.message(id, { attachments: [{ guid: `${id}-file`, transferName: `${id}.txt` }] });
+        await f.webhook(id);
+      }
+      await new Promise<void>(resolve => setImmediate(resolve));
+      expect(counts.get('slot-second')).toBe(1);
+      expect(counts.get('slot-third')).toBe(1);
+      expect(download.mock.calls.map(([guid]) => guid)).toEqual(['slot-first-file']);
+      expect(f.received).toEqual([]);
+    } finally { release(); await f.im.reconcile(); }
+    expect(f.received.map(event => event.messageId)).toEqual(['slot-first', 'slot-second', 'slot-third']);
+    for (const id of ['slot-first', 'slot-second', 'slot-third']) expect(f.state().inbox[id].state).toBe('accepted');
+    expect(download).toHaveBeenCalledTimes(3);
+  });
+
+  // Tier 1, #9250/r4506476916: equal API timestamps cannot use lookup
+  // completion order as a substitute for stable first receipt order.
+  it('preserves receipt order for equal-time inputs when the first lookup finishes last', async () => {
+    const f = await fixture();
+    let release!: () => void, entered!: () => void;
+    const held = new Promise<void>(resolve => { release = resolve; });
+    const waiting = new Promise<void>(resolve => { entered = resolve; });
+    const original = vi.mocked(f.api.message).getMockImplementation()!;
+    vi.mocked(f.api.message).mockImplementation(async guid => {
+      if (guid === 'equal-old') { entered(); await held; }
+      return original(guid);
+    });
+    try {
+      f.message('equal-old', { dateCreated: 1001 });
+      await f.webhook('equal-old'); await waiting;
+      f.message('equal-new', { dateCreated: 1001 }); await f.webhook('equal-new');
+      await new Promise<void>(resolve => setImmediate(resolve));
+      expect(f.received).toEqual([]);
+    } finally { release(); await f.im.reconcile(); }
+    // Resume the input deferred behind the first one's persistence boundary.
+    await f.im.reconcile();
+    expect(f.received.map(event => event.messageId)).toEqual(['equal-old', 'equal-new']);
+    for (const id of ['equal-old', 'equal-new']) expect(f.state().inbox[id].state).toBe('accepted');
+  });
+
   // Tier 1, #9250/r4506424107: a still-pending retry is active, not terminal.
   // Its expired deadline must not flood host status broadcasts during slow I/O.
   it.each(['lookup', 'download'])('does not repeatedly wake an in-flight %s retry at its expired deadline', async phase => {

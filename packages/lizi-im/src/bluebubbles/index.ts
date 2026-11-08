@@ -394,9 +394,10 @@ export class BlueBubblesIM extends BaseIM implements TextChannelIM {
         if (this.retryAt.size) {
           let delay = Infinity;
           for (const [id, dueAt] of this.retryAt) {
-            // In-flight retries wake the scanner on completion; their expired
+            // In-flight or slot-waiting retries wake on completion; their old
             // deadline must not install a new 1 ms timer throughout slow I/O.
-            if (this.lookups.has(id) || this.preparations.has(id) || this.activeDispatches.has(id)) continue;
+            if (this.lookups.has(id) || this.preparations.has(id) || this.activeDispatches.has(id)
+              || this.metadata.has(id)) continue;
             delay = Math.min(delay, Math.max(1, dueAt - this.now()));
           }
           if (Number.isFinite(delay)) this.retryDeferred(generation, delay);
@@ -460,7 +461,12 @@ export class BlueBubblesIM extends BaseIM implements TextChannelIM {
           if (message.attachments?.length || this.partialCleanup.has(guid)) {
             // One attachment preparation per chat; controls have no attachments
             // and never wait for this slot. Other chats use independent slots.
-            if ([...this.preparations.keys()].some(id => this.pendingInputs.get(id)?.chatId === event!.chatId)) continue;
+            if ([...this.preparations.keys()].some(id => this.pendingInputs.get(id)?.chatId === event!.chatId)) {
+              // The verified response remains reusable until this chat's slot
+              // completes and wakes ingress; queued peers must not refetch it.
+              this.metadata.set(guid, message);
+              continue;
+            }
             const ready = event;
             const operation = this.prepareAttachments(generation, guid, ready, message, api, receipts, this.partialCleanup)
               .finally(() => {
@@ -509,14 +515,13 @@ export class BlueBubblesIM extends BaseIM implements TextChannelIM {
             blocked = true; break;
           }
         }
-        let earlierInQueue = true;
         const sentAt = this.eventSentAt.get(event)!;
         for (const [id, earlier] of this.pendingInputs) {
-          if (id === guid) { earlierInQueue = false; continue; }
+          if (id === guid) continue;
           if (!this.deferredEvents.has(id) && !this.preparations.has(id)) continue;
           const earlierSentAt = this.eventSentAt.get(earlier)!;
           if (earlier.chatId === event.chatId && (earlierSentAt < sentAt
-            || (earlierSentAt === sentAt && earlierInQueue))) { blocked = true; break; }
+            || (earlierSentAt === sentAt && receipts.receivedBefore(id, guid)))) { blocked = true; break; }
         }
         this.deferredEvents.set(guid, event);
         if (!stop && blocked) {
