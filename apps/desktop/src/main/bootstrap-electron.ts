@@ -589,7 +589,7 @@ import {
   broadcastVoiceInputPowerState,
   installVoiceInputPowerRelease,
 } from './voice-input/powerReleaseNotifier';
-import { reapClaudeOrphansSync } from './claude-orphan-reaper';
+import { reapClaudeOrphansSync, reapHistoricalClaudeOrphans } from './claude-orphan-reaper';
 import { reapCodexToolTreesSync } from './codex-tool-tree-reaper';
 import { startAgentProcessPriorityWatcher } from './agent-process-priority';
 import { registerProcessMonitorIpc } from './process-monitor/ipc.js';
@@ -2510,14 +2510,14 @@ void clearStalePiSubagentLaunchFence(path.join(app.getPath('userData'), 'pi-agen
   },
 );
 
-try {
-  reapClaudeOrphansSync();
-} catch (err) {
-  // Defensive: reapClaudeOrphansSync already catches its own scan/kill errors
-  // and logs to debug. This only fires on truly unexpected throws (e.g. module
-  // load failure) and must never abort bootstrap.
+// Off the startup critical path: the Windows scan spawns PowerShell (~0.4 s,
+// up to 5 s). The startup variant only reaps dead-parent historical orphans,
+// so a task this instance launches before the scan returns is never killed.
+void reapHistoricalClaudeOrphans().catch((err: unknown) => {
+  // Defensive: the reaper already catches its own scan/kill errors and logs to
+  // debug. This only fires on truly unexpected throws and never aborts bootstrap.
   createLogger('claude-orphan-reaper').warn('initial reap threw', { error: String(err) });
-}
+});
 
 // ── agent 进程优先级降档 watcher(agent 资源占用治理)─────────────────────
 // 设置(processPriority)为 normal 且无欠恢复进程时,每 tick 零成本(不扫进程表);

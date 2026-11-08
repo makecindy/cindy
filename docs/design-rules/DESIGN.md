@@ -24,7 +24,7 @@
 | 错误与通知 | `ErrorNotice`；短通知用 `lib/toast.ts` | §4 Error notices、§4 Toast |
 | 展开收起 | `components/ui/collapse.tsx` 的 `Collapse` | §14.4 |
 | 聊天内容 | `chatChrome.ts`、`activityRowChrome.ts` | §4 Desktop chat and operation authorization |
-| 设置页分区和行 | 暂无通用组件 | §4 Desktop settings rows |
+| 设置页分区和行 | `components/ui/settings-rows.tsx` 的 `SettingsSection`、`SettingsCard`、`SettingsRow` | §4 Desktop settings rows |
 | 选颜色 | 语义 Token，不写色值 | §10 Token Selection Rules for New UI、§2 |
 | 亮暗模式 | 语义 Token | §10 Light / Dark Dual-Mode Delivery Gate |
 | 圆角与点击区域 | 上述组件的默认值 | §5 Border Radius Scale、[治理合同](./design-governance.md) §13 |
@@ -379,7 +379,7 @@ card/container
 
 ### Desktop settings rows
 
-Desktop Settings sections put the 16px/500 section title outside the card. A card groups related settings as rows: label (13px/500) and hint (12px) on the left, the control on the right, `px-4 py-4` per row, and an inset divider between visible rows only. Related switches share one card instead of one card each; a row that opens a sub-page uses the same row with a trailing chevron. Use the shared classes in [settingsRowClasses.ts](../../apps/desktop/src/renderer/components/settings/settingsRowClasses.ts). Settings → General follows this throughout (owner request, 2026-10-17); other Settings pages still contain 20px single-row cards and are not declared migrated.
+Desktop Settings sections put the 16px/500 section title outside the card. A card groups related settings as rows: label (13px/500) and hint (12px) on the left, the control on the right, `px-4 py-4` per row, and an inset divider between visible rows only. Related switches share one card instead of one card each; a row that opens a sub-page uses the same row with a trailing chevron. Use `SettingsSection`, `SettingsCard` and `SettingsRow` from [settings-rows.tsx](../../apps/desktop/src/renderer/components/ui/settings-rows.tsx); do not define local copies. The row name is 13px/500 everywhere (owner decision, 2026-11-07). **Narrow drawer exception (owner decision, 2026-11-07):** inside a narrow drawer, currently only the group settings drawer, wrap them in `SettingsDrawerScope`. The section title is 13px/500 in `--text-secondary` instead of 16px, rows are at least 48px tall (`py-3`, 52px with an avatar) instead of `py-4`, and cards use `--surface-elevated`. The row name stays 13px/500. Settings pages never use this scope. `SettingsRow flush` is for rows in a dialog that has its own padding. Pages that have not migrated still use the classes in [settingsRowClasses.ts](../../apps/desktop/src/renderer/components/settings/settingsRowClasses.ts), which is deleted once they do. Settings → General follows this layout throughout (owner request, 2026-10-17); other Settings pages still contain 20px single-row cards and are not declared migrated.
 
 ### Device access pills
 
