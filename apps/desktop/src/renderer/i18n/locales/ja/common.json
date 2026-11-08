@@ -2425,7 +2425,7 @@
       "skinLabel": "キャラクター",
       "skinHint": "Agent Notch と Dynamic Island に表示するキャラクター。",
       "soundLabel": "イベントサウンド",
-      "soundHint": "アラートごとに 8-bit サウンドを選べます。Agent Notch と Dynamic Island で共通です。タップ音は Agent Notch をタップしたときだけ鳴ります。",
+      "soundHint": "イベント音を設定すると、その音のみ再生します。未設定またはオフの場合は、システムの通知設定に従います。",
       "soundAria": "Agent Notch サウンドを切り替え",
       "soundSelectAria": "{{event}} のサウンド",
       "soundPreviewAria": "{{event}} のサウンドをプレビュー",
@@ -2480,7 +2480,7 @@
         "select": "クリック操作"
       },
       "soundOptions": {
-        "none": "なし",
+        "none": "システムに従う",
         "startup-chime": "起動チャイム",
         "ring-chime": "リングチャイム",
         "item-found": "アイテム発見",

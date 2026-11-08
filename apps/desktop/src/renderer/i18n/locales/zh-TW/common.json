@@ -2425,7 +2425,7 @@
       "skinLabel": "角色",
       "skinHint": "任務膠囊和動態島裡顯示的角色。",
       "soundLabel": "事件音效",
-      "soundHint": "為每類提醒選擇 8-bit 音效，任務膠囊和動態島共用；點按的音效只在點任務膠囊時播放。",
+      "soundHint": "設定事件音效時，只播放所選音效；未設定或關閉事件音效時，跟隨系統通知設定。",
       "soundAria": "切換任務膠囊音效",
       "soundSelectAria": "{{event}}的音效",
       "soundPreviewAria": "預覽{{event}}音效",
@@ -2480,7 +2480,7 @@
         "select": "點選操作"
       },
       "soundOptions": {
-        "none": "無",
+        "none": "跟隨系統",
         "startup-chime": "啟動音",
         "ring-chime": "圓環音",
         "item-found": "發現道具",

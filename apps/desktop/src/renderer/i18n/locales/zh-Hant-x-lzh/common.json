@@ -2425,7 +2425,7 @@
       "skinLabel": "角色",
       "skinHint": "任務膠囊與動態島中所顯之角色。",
       "soundLabel": "事之音",
-      "soundHint": "為諸類提醒擇 8-bit 之音，任務膠囊與動態島共之；點按之音唯觸任務膠囊時鳴。",
+      "soundHint": "事件設音，則獨奏所擇之聲；未設或關之，則從系統通知之設。",
       "soundAria": "切換任務膠囊之音",
       "soundSelectAria": "{{event}}之音",
       "soundPreviewAria": "先聽{{event}}之音",
@@ -2480,7 +2480,7 @@
         "select": "點選"
       },
       "soundOptions": {
-        "none": "無",
+        "none": "從系統",
         "startup-chime": "啟動之音",
         "ring-chime": "圓環之音",
         "item-found": "得寶",
