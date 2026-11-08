@@ -983,12 +983,12 @@ export function installRemoteAgentHost(options: {
       const peer = parseProviderSharePeer(controller);
       if (peer?.role === 'guest' && peer.memberId) {
         // O receives only model/counter data for the matching delegated task.
-        const authority = sessionId && delegatedProviderShareReceiptAuthority(controller, sessionId);
+        const authority = sessionId ? delegatedProviderShareReceiptAuthority(controller, sessionId) : null;
         if (authority?.availability && sessionId) {
           void recordStandbyUsage({ shareId: peer.shareId, memberId: peer.memberId, guestDeviceId: peer.deviceId,
             sessionId, generation: authority.generation }, sample.samples).then(flushStandbyUsage)
             .catch(error => log.warn('standby usage persistence/upload unavailable', { error: String(error) }));
-        } else if (authority) {
+        } else if (authority && sessionId) {
           for (let i = 0; i < sample.samples.length; i += 64) {
             const usageId = randomUUID();
             const request: Extract<RemoteAgentRequest, { op: 'direct-usage' }> = {
