@@ -2,7 +2,7 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { promises as fs } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { discoverSkills, loadIndex, readConfig, readSkill, withLibraryWrite } from './library.js';
+import { discoverSkills, helperDiscoverySkill, loadIndex, readConfig, readSkill, syncLibrary, withLibraryWrite } from './library.js';
 import { runCli } from './cli.js';
 
 // Production entry: CLI -> discovery -> persisted index -> search -> original read.
@@ -105,6 +105,31 @@ describe('local Skill library workflow', () => {
     await expect(runCli(['init', '--library', library, '--source', source], executable)).rejects.toMatchObject({ code: 'EEXIST' });
     expect((await loadIndex(library)).snapshot().entries).toHaveLength(26);
     await expect(runCli(['search', '--library', library], executable)).rejects.toThrow('--query');
+  });
+
+  it('uses the host embedding adapter and a short native helper route', async () => {
+    const target = path.join(root, 'host-library');
+    await runCli(['init', '--library', target, '--source', source], executable);
+    let requests = 0;
+    const embedding = {
+      identity: 'cindy-provider:model',
+      embed: async (texts: readonly string[]) => {
+        requests++;
+        return { vectors: texts.map(() => [1, 0]), modelUsed: 'actual-model' };
+      },
+    };
+    expect((await syncLibrary(target, { embedding })).vectors).toEqual({ embedded: 2, reused: 0 });
+    expect((await syncLibrary(target, { embedding })).vectors).toEqual({ embedded: 0, reused: 2 });
+    expect(requests).toBe(1);
+    expect((await readConfig(target)).embedding).toBeUndefined();
+    const route = helperDiscoverySkill('personal-methods');
+    expect(route).toContain('search_local_skills');
+    expect(route).toContain('read_local_skill');
+    expect(route).toContain('personal-methods');
+    expect(route).not.toContain('cli.cjs');
+    expect(route).not.toContain('motion-feel');
+    expect(route).not.toContain('actual-model');
+    expect(route.split('\n').length).toBeLessThan(20);
   });
 
   // PR #9374: two successful add calls previously overwrote each other's source.

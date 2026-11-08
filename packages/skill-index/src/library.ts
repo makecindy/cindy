@@ -2,7 +2,7 @@ import { createHash, randomUUID } from 'node:crypto';
 import { promises as fs } from 'node:fs';
 import path from 'node:path';
 import matter from 'gray-matter';
-import { SkillIndex, type SkillEntry, type SkillIndexSnapshot } from './index.js';
+import { SkillIndex, type SkillEntry, type SkillIndexSnapshot, type SkillEmbeddingAdapter } from './index.js';
 import { createSkillEmbeddingAdapter } from './embedding.js';
 
 export interface LibrarySource { name: string; path: string }
@@ -15,7 +15,7 @@ export interface LibraryConfig {
 const IGNORED_DIRECTORIES = new Set(['.git', 'node_modules', 'dist', 'build', '.runtime-skills']);
 
 /** Registered roots own the catalog. A Skill folder is a leaf; its resources are not more Skills. */
-export async function discoverSkills(sources: readonly LibrarySource[]): Promise<SkillEntry[]> {
+export async function discoverSkills(sources: readonly LibrarySource[], authorizePath?: (absolutePath: string) => Promise<void>): Promise<SkillEntry[]> {
   const entries: SkillEntry[] = [];
   const visited = new Set<string>();
   async function visit(directory: string, source: string): Promise<void> {
@@ -23,10 +23,12 @@ export async function discoverSkills(sources: readonly LibrarySource[]): Promise
     const identity = process.platform === 'win32' ? real.toLowerCase() : real;
     if (visited.has(identity)) return;
     visited.add(identity);
+    await authorizePath?.(real);
     const children = await fs.readdir(real, { withFileTypes: true });
     const skill = children.find(child => child.name === 'SKILL.md' || child.name === 'skill.md');
     if (skill) {
-      const filePath = path.join(real, skill.name);
+      const filePath = await fs.realpath(path.join(real, skill.name));
+      await authorizePath?.(filePath);
       const raw = (await fs.readFile(filePath, 'utf8')).replace(/^\uFEFF/, '');
       if (!/^---\r?\n/.test(raw)) throw new Error(`${filePath}: expected YAML Skill frontmatter`);
       const { data } = matter(raw);
@@ -97,12 +99,18 @@ export async function withLibraryWrite<T>(library: string, action: () => Promise
   }
 }
 
-export async function syncLibrary(library: string, options: { rebuild?: boolean } = {}) {
+export interface LibrarySyncOptions {
+  rebuild?: boolean;
+  embedding?: SkillEmbeddingAdapter;
+  authorizePath?: (absolutePath: string) => Promise<void>;
+}
+
+export async function syncLibrary(library: string, options: LibrarySyncOptions = {}) {
   return withLibraryWrite(library, () => syncLibraryUnlocked(library, options));
 }
 
 /** Caller holds withLibraryWrite across configuration edits and this publication. */
-export async function syncLibraryUnlocked(library: string, options: { rebuild?: boolean } = {}) {
+export async function syncLibraryUnlocked(library: string, options: LibrarySyncOptions = {}) {
   const config = await readConfig(library);
   let index: SkillIndex;
   try { index = await loadIndex(library); }
@@ -110,9 +118,9 @@ export async function syncLibraryUnlocked(library: string, options: { rebuild?: 
     if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
     index = new SkillIndex();
   }
-  const changes = index.sync(await discoverSkills(config.sources));
-  const vectors = config.embedding
-    ? await index.buildVectors(createSkillEmbeddingAdapter(config.embedding), options) : undefined;
+  const changes = index.sync(await discoverSkills(config.sources, options.authorizePath));
+  const embedding = options.embedding ?? (config.embedding ? createSkillEmbeddingAdapter(config.embedding) : undefined);
+  const vectors = embedding ? await index.buildVectors(embedding, options) : undefined;
   await writeJson(path.join(library, 'index.json'), index.snapshot());
   return { ...changes, skills: index.snapshot().entries.length, ...(vectors ? { vectors } : {}) };
 }
@@ -158,5 +166,25 @@ export function discoverySkill(library: string, executable: string, name = 'cind
     'Search returns only a few candidates. Choose the relevant ones and read their complete SKILL.md. Follow nextOffset with --offset and --sha256 until eof is true. Resolve references, scripts and assets from the returned resourceRoot.',
     'Names, descriptions and scores help select a Skill; they do not replace its instructions. Load only references needed for the current task. If no method applies, continue the task normally.',
     'When the user adds or edits library Skills, run this CLI with sync --library and the same library path. Search uses the last synchronized index.', '',
+  ].join('\n');
+}
+
+/** Cindy owns transport, credentials and synchronization; startup reads only this route. */
+export function helperDiscoverySkill(libraryId: string, name = 'cindy-skill-library'): string {
+  if (!/^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(libraryId)) throw new Error('Use a lowercase hyphenated library id');
+  if (!/^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(name) || name.length > 64) throw new Error('Use a lowercase hyphenated Skill name (max 64 characters)');
+  return [
+    '---', `name: ${name}`,
+    'description: At the start of a task, find relevant methods in your registered local Skill library and read only the selected originals.',
+    '---', '', '# Local Skill library', '',
+    `Library: ${JSON.stringify(libraryId)}.`,
+    'For ordinary user tasks. Teammates use their own personal Skill discovery entry.',
+    'Before choosing a method for the current task, discover search_local_skills and read_local_skill with cindy_helper.list_tools(category="skills").',
+    'Call search_local_skills through cindy_helper.call_tool with library_id above and query set to the user\'s current goal. Cindy synchronizes this library on its first search in the task.',
+    'Choose the relevant candidates, then call read_local_skill with library_id and the selected id. Continue with nextOffset as offset and sha256 until eof is true.',
+    'Follow the selected original instructions; resolve references, scripts and assets from resourceRoot. Read additional resources only when the task needs them.',
+    'When the task moves to a different kind of work, search again. If no candidate fits, continue normally.',
+    'After editing or adding Skills during this task, call configure_local_skill_library with action="refresh" and this library_id.',
+    'Keep the catalog on disk. Do not load every Skill name, description or body into startup context.', '',
   ].join('\n');
 }

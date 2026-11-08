@@ -188,6 +188,9 @@ importers:
       '@cindy/responses-chat-bridge':
         specifier: workspace:*
         version: link:../../packages/responses-chat-bridge
+      '@cindy/skill-index':
+        specifier: workspace:*
+        version: link:../../packages/skill-index
       '@cindy/slack-hook-protocol':
         specifier: workspace:*
         version: link:../../packages/slack-hook-protocol

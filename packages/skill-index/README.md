@@ -2,10 +2,35 @@
 
 按当前任务检索本地技能，选中后读取原文。库内名称和简介留在索引中，Agent 的自动发现目录只安装一个轻量入口。
 
-本包提供可复用的 Node API、CLI 和发现 Skill 生成器。它与 Cindy 现有 Skill 安装方式配合使用；
+本包提供可复用的 Node API、Cindy 原生工具接入、CLI 和发现 Skill 生成器。它与 Cindy 现有 Skill 安装方式配合使用；
 机制、数据流及宿主接入说明见[架构文档](../../docs/skill-library-index.md)。
 
-## 构建
+## 在 Cindy 中直接使用
+
+告诉 Cindy 要登记的技能目录，例如：
+
+> 把我的 `D:/SkillLibrary` 登记为 personal-methods 技能库，以后做任务先从这里找方法。
+
+Agent 通过 `cindy_helper` 的 `skills` 类目调用 `configure_local_skill_library`，宿主建立索引，
+并在现有共享 Skill 目录安装一个短入口。也可指定 `gateway_path` 把入口安装到当前项目的技能目录。
+原文目录放在原生自动扫描根之外，保持原位置与资源结构；自动发现目录只安装这个入口。
+
+使用流程是：
+
+1. 新任务启动时只发现一个短技能入口，说明如何检索。
+2. Agent 用当前任务描述调用 `search_local_skills`；宿主在该任务首次搜索时同步已登记来源，之后复用索引。
+3. Agent 选择少量候选，通过 `read_local_skill` 读取所需原文，再按需读取原目录中的资源。
+
+无需构建 CLI、设置可执行文件路径或在任务中运行 shell 命令。库内名称与简介不写入启动入口。
+任务中修改或新增技能后，调用 `configure_local_skill_library(action="refresh")` 更新索引。
+重新登记可调整来源；`action="remove"` 取消登记，保留原始技能及已安装入口，返回入口位置供管理。
+
+未选择向量模型时直接使用关键词检索。登记时指定 `embedding_model` 可使用 Cindy 已配置的可用目录模型，
+由宿主调用现有向量服务与凭据。自定义供应商 API 还可以使用下方独立 CLI 接入。
+
+本机普通任务使用该入口；伙伴原有的个人技能目录与管理列表继续沿原有入口使用。
+
+## 独立 CLI：构建
 
 先按[贡献指南](../../CONTRIBUTING.md)安装仓库依赖，然后在仓库根执行：
 
