@@ -48,6 +48,7 @@ import { useNavigate, useMatch, useLocation } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
 import { projectDraftSessionTitle } from '@cindy/maker-shared/session-title';
 import { CINDY_MAKE_ENABLED, isCindyMakeSource } from '@cindy/maker-shared/cindy-make-feature';
+import { isTeammateProjectPath } from '@cindy/maker-shared/teammate-project';
 
 import { cn } from '@/lib/utils';
 import { provisionalDraftTaskId, subscribeProvisionalDraftTask } from './provisionalDraftTask';
@@ -1819,8 +1820,10 @@ function ExpandedView({
     );
     if (filter.projectsAsSet === null) return notHidden;
     const allowed = filter.projectsAsSet;
+    // A teammate's project is not a project choice; the teammate filter decides its tasks.
     return notHidden.filter((project) =>
-      projectFilterIncludes(allowed, project.projectKey, localPlatform),
+      isTeammateProjectPath(project.workingDir)
+      || projectFilterIncludes(allowed, project.projectKey, localPlatform),
     );
   }, [groupsWithPinnedProjects.projects, hiddenProjectKeys, filter.projectsAsSet, localPlatform]);
 

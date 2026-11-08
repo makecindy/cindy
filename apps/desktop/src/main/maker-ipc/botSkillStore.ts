@@ -36,6 +36,7 @@ import { randomUUID } from 'node:crypto';
 import { createBotSkillFrontmatterReader, isFrontmatterBlock } from './botSkillFrontmatter.js';
 import { invalidateBotSkillRuntime } from './botSkillRuntimeCache.js';
 import { applySkillFolderFiles, listSkillFolderFiles, type BotSkillFile, type LocalBotSkillFile } from './botSkillFiles.js';
+import { teammateFolderName } from '@cindy/maker-shared/teammate-project';
 export { unescapeFrontmatterValue } from './botSkillFrontmatter.js';
 
 /** 一个技能在磁盘上的完整形态。 */
@@ -105,7 +106,7 @@ export class BotSkillStoreError extends Error {
 function botDirName(botId: string): string {
   const trimmed = botId.trim();
   if (!trimmed) throw new BotSkillStoreError('INVALID_ARGS', 'botId required');
-  const safe = trimmed.replace(/[^A-Za-z0-9._-]/g, '-').replace(/^\.+/, '');
+  const safe = teammateFolderName(trimmed);
   if (!safe)
     throw new BotSkillStoreError('INVALID_ARGS', 'botId is not usable as a directory name');
   return safe;

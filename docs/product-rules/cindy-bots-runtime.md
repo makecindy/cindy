@@ -356,6 +356,17 @@ Cindy 应用，也不取消伙伴已委派的独立任务。操作中禁用重�
 实现见 `RemoteTeammateSettings.tsx`、`remoteBotSettingsTarget.ts`、`localBotSettingsTarget.ts`、`BotSettingsDrawer.tsx`，
 主机侧见 `main/localDb/ipc/botRemoteSettingsHost.ts` 与 `botRemoteSettingsOps.ts`；手机见 Mobile `CompanionProfileSheet.tsx`。
 
+### 伙伴的项目在界面上（2026-11-08 主人裁决）
+
+伙伴的项目只从伙伴进入，不作为普通项目出现在选择里：
+- 新建任务（桌面与手机）、创建 Worker、自动化、技能安装目标、插件目标、附加目录、添加远程项目和「移到项目」都不列伙伴的项目。
+- 侧栏与搜索的「项目」筛选不列它；侧栏里伙伴项目的任务只受「伙伴」筛选控制。
+- 「伙伴」筛选里，一件任务算某个伙伴的：它在这个伙伴的项目里，或是这个伙伴用 `send_to_session` 开的（任务行上挂它的头像，伙伴放下后不再挂）。V1 委派子任务与工作台接手不再计入。
+- 侧栏照旧把伙伴项目作为一个分组显示；Agent 的 `list_projects`、`send_to_session` 不变。
+
+识别只看路径：伙伴的项目固定是 `…/owners/<账号>/bots/<伙伴目录>/workspace`，桌面、手机与其它电脑共用
+`@cindy/maker-shared/teammate-project` 的同一判断，不新增跨端字段。
+
 ## 4. Bot Home 权威边界
 
 每个伙伴拥有账号隔离的 `<ownerRoot>/bots/<botId>/`。它是该伙伴唯一的持久内容边界，

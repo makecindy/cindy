@@ -15,6 +15,7 @@
     "./agent-task": "./src/agentTask.ts",
     "./bot-template-preset": "./src/botTemplatePreset.ts",
     "./branding": "./src/branding.ts",
+    "./teammate-project": "./src/teammateProject.ts",
     "./classical-reply": "./src/classicalReply.ts",
     "./brand-identity": "./src/brandIdentity.ts",
     "./chat-quotes": "./src/chatQuotes.ts",

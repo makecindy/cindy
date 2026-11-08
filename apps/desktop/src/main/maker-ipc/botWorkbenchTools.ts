@@ -158,21 +158,18 @@ export async function readBotResponsibleSessionIds(userDataDir: string, botId: s
 }
 
 /**
- * The same responsibility, split: `delegatedSessionIds` are the tasks this Bot started itself
- * (delegation children, plus ordinary tasks it opened with send_to_session); `sessionIds` adds the ordinary tasks it explicitly
- * took over. The owner chip reads the first, the sidebar follow mark the second.
+ * The tasks this teammate opened with send_to_session, wherever they live. `delegatedSessionIds`
+ * keeps every one of them (the owner chip); `sessionIds` drops the ones it released (the sidebar
+ * avatar and teammate filter). Tasks in the teammate's own project are matched by path instead.
  */
 export async function readBotResponsibilityScope(
   userDataDir: string, botId: string,
 ): Promise<{ sessionIds: string[]; delegatedSessionIds: string[] }> {
   const records = await readTaskResponsibilities(userDataDir, botId);
-  const delegated = [...new Set([
-    ...(await listBotDelegationChildren(botId)).keys(),
-    ...createdSessionIds(records),
-  ])].sort();
+  const created = createdSessionIds(records);
   return {
-    sessionIds: responsibleSessionIds(delegated, records),
-    delegatedSessionIds: delegated,
+    sessionIds: created.filter((id) => records[id]?.responsible !== false),
+    delegatedSessionIds: created,
   };
 }
 
