@@ -12912,6 +12912,8 @@
       }
     },
     "teammateProcess": {
+      "empty": "本輪沒有可顯示的過程記錄",
+      "unavailable": "未能讀取過程記錄",
       "record": "處理紀錄",
       "operations": "操作記錄",
       "elapsed": "已處理 {{duration}}",

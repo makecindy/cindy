@@ -12904,6 +12904,8 @@
   },
   "chat": {
     "teammateProcess": {
+      "empty": "此番無可示之處理記錄",
+      "unavailable": "未能讀取處理記錄",
       "record": "理事錄",
       "operations": "行事錄",
       "elapsed": "已理 {{duration}}",

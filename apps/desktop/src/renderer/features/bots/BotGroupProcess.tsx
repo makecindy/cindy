@@ -46,8 +46,13 @@ function BotGroupProcessHistory({ process, deviceId }: { process: BotGroupProces
     childItems={[{ kind: 'rendered', key: process.executionId, renderNode: () => <>
       <MarkProcessVisible onVisible={() => setOpened(true)} />
       {!result && <Spinner size={14} />}
-      {result?.failed && <Button variant="secondary" tone="quiet" size="sm" onClick={() => retry(v => v + 1)}>{t('chat.errorBanner.retry')}</Button>}
-      {result && <BotGroupProcessEntries messages={result.messages} id={process.executionId} />}
+      {result && (result.failed || !result.messages.length) && <>
+        <p className="text-14 text-[var(--text-secondary)]">{t('chat.teammateProcess.unavailable')}</p>
+        <Button variant="secondary" tone="quiet" size="sm" onClick={() => retry(v => v + 1)}>{t('chat.errorBanner.retry')}</Button>
+      </>}
+      {result && !result.failed && result.messages.length > 0 && (projection.segments.length
+        ? <BotGroupProcessEntries messages={result.messages} id={process.executionId} />
+        : <p className="text-14 text-[var(--text-secondary)]">{t('chat.teammateProcess.empty')}</p>)}
     </> }]} />;
 }
 function MarkProcessVisible({ onVisible }: { onVisible(): void }) {

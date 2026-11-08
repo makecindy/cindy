@@ -12912,6 +12912,8 @@
       }
     },
     "teammateProcess": {
+      "empty": "이 응답에 표시할 처리 기록이 없습니다",
+      "unavailable": "처리 기록을 불러오지 못했습니다",
       "record": "작업 내역",
       "operations": "작업 기록",
       "elapsed": "처리 중 {{duration}}",
