@@ -2323,6 +2323,10 @@
         },
         "visibilityLabel": "Visibilidad del fondo de pantalla",
         "visibilityHint": "0% oculta el fondo de pantalla; El 100% lo muestra sin superposición.",
+        "desktopVisibilityLabel": "Transparencia del escritorio",
+        "desktopVisibilityHint": "Muestra el escritorio y las ventanas detrás de Cindy. El texto y los controles se mantienen nítidos.",
+        "desktopBlurLabel": "Desenfoque del escritorio",
+        "desktopBlurHint": "Desenfoca el escritorio detrás de la ventana. 0 lo desactiva; un valor mayor aumenta el desenfoque. Los sistemas sin ajuste de intensidad usan su efecto predeterminado.",
         "blurLabel": "Fondo de pantalla borroso",
         "blurHint": "Desenfoca solo el fondo de pantalla. Establezca en 0 para apagar. El fondo de pantalla animado borroso aumenta el uso de GPU.",
         "motionLabel": "Pantalla",
@@ -2489,7 +2493,7 @@
       "skinLabel": "Personaje",
       "skinHint": "El personaje que aparece en Agent Notch y en la Dynamic Island.",
       "soundLabel": "Sonidos de eventos",
-      "soundHint": "Elija un sonido de 8 bits para cada aviso; Agent Notch y la Dynamic Island lo comparten. El sonido de toque solo suena al pulsar Agent Notch.",
+      "soundHint": "Si se configura un sonido de evento, solo se reproduce ese sonido. Si no se configura o se desactiva, se usan los ajustes de notificación del sistema.",
       "soundAria": "Alternar sonidos de Agent Notch",
       "soundSelectAria": "Sonido para {{event}}",
       "soundPreviewAria": "Vista previa del sonido {{event}}",
@@ -2544,7 +2548,7 @@
         "select": "Haga clic en acción"
       },
       "soundOptions": {
-        "none": "Ninguno",
+        "none": "Seguir al sistema",
         "startup-chime": "Timbre de inicio",
         "ring-chime": "timbre",
         "item-found": "Artículo encontrado",

@@ -49,6 +49,7 @@ export function WallpaperSection() {
     retryDownload,
     setWallpaper,
     setVisibility,
+    previewVisibility,
     setBlur,
     previewBlur,
     setMotion,
@@ -65,13 +66,24 @@ export function WallpaperSection() {
   const cancelBlurPreview = useCallback(() => {
     queueMicrotask(() => previewBlur(null));
   }, [previewBlur]);
+  const cancelVisibilityPreview = useCallback(() => {
+    queueMicrotask(() => previewVisibility(null));
+  }, [previewVisibility]);
   useEffect(() => {
-    window.addEventListener('blur', cancelBlurPreview);
-    return () => {
-      window.removeEventListener('blur', cancelBlurPreview);
-      previewBlur(null);
+    const cancelPreviews = () => {
+      cancelBlurPreview();
+      cancelVisibilityPreview();
     };
-  }, [cancelBlurPreview, previewBlur]);
+    window.addEventListener('blur', cancelPreviews);
+    return () => {
+      window.removeEventListener('blur', cancelPreviews);
+      previewBlur(null);
+      previewVisibility(null);
+    };
+  }, [cancelBlurPreview, cancelVisibilityPreview, previewBlur, previewVisibility]);
+  useEffect(() => {
+    if (visibility === 0) previewBlur(null);
+  }, [visibility, previewBlur]);
   const customVideo = isCustomWallpaperVideo(customWallpaperUrl);
   const downloading = isCdnWallpaper(wallpaperId) && downloadPending;
   const retryable = isCdnWallpaper(wallpaperId) && downloadFailed && !downloadPending;
@@ -375,7 +387,7 @@ export function WallpaperSection() {
           )}
           <div className="flex items-center gap-3">
             <span className="shrink-0 text-12 text-[var(--settings-section-sublabel)]">
-              {t('settings.appearance.wallpaper.visibilityLabel')}
+              {t(wallpaperId === 'none' ? 'settings.appearance.wallpaper.desktopVisibilityLabel' : 'settings.appearance.wallpaper.visibilityLabel')}
             </span>
             <Slider data-setting-id={appearanceSettings.wallpaperCustomChoose.id}
               min={APPEARANCE_LIMITS.wallpaperVisibility.min}
@@ -383,9 +395,14 @@ export function WallpaperSection() {
               step={APPEARANCE_LIMITS.wallpaperVisibility.step}
               value={[visibility]}
               onValueChange={([value]) => {
+                if (typeof value === 'number') previewVisibility(value);
+              }}
+              onValueCommit={([value]) => {
                 if (typeof value === 'number') setVisibility(value);
               }}
-              aria-label={t('settings.appearance.wallpaper.visibilityLabel')}
+              onPointerCancel={cancelVisibilityPreview}
+              onLostPointerCapture={cancelVisibilityPreview}
+              aria-label={t(wallpaperId === 'none' ? 'settings.appearance.wallpaper.desktopVisibilityLabel' : 'settings.appearance.wallpaper.visibilityLabel')}
               aria-describedby="wallpaper-visibility-hint"
             />
             <span className="w-10 shrink-0 text-right font-mono text-12 text-[var(--settings-section-sublabel)]">
@@ -396,18 +413,18 @@ export function WallpaperSection() {
             id="wallpaper-visibility-hint"
             className="text-12 text-[var(--text-secondary)]"
           >
-            {t('settings.appearance.wallpaper.visibilityHint')}
+            {t(wallpaperId === 'none' ? 'settings.appearance.wallpaper.desktopVisibilityHint' : 'settings.appearance.wallpaper.visibilityHint')}
           </p>
           <div className="flex items-center gap-3">
             <span className="shrink-0 text-12 text-[var(--settings-section-sublabel)]">
-              {t('settings.appearance.wallpaper.blurLabel')}
+              {t(wallpaperId === 'none' ? 'settings.appearance.wallpaper.desktopBlurLabel' : 'settings.appearance.wallpaper.blurLabel')}
             </span>
             <Slider data-setting-id={appearanceSettings.wallpaperCustomChoose.id}
               min={APPEARANCE_LIMITS.wallpaperBlur.min}
               max={APPEARANCE_LIMITS.wallpaperBlur.max}
               step={APPEARANCE_LIMITS.wallpaperBlur.step}
               value={[wallpaperBlur ?? 0]}
-              disabled={wallpaperId === 'none'}
+              disabled={visibility === 0}
               onValueChange={([value]) => {
                 if (typeof value === 'number') previewBlur(value);
               }}
@@ -416,7 +433,7 @@ export function WallpaperSection() {
               }}
               onPointerCancel={cancelBlurPreview}
               onLostPointerCapture={cancelBlurPreview}
-              aria-label={t('settings.appearance.wallpaper.blurLabel')}
+              aria-label={t(wallpaperId === 'none' ? 'settings.appearance.wallpaper.desktopBlurLabel' : 'settings.appearance.wallpaper.blurLabel')}
               aria-describedby="wallpaper-blur-hint"
             />
             <span className="w-10 shrink-0 text-right font-mono text-12 text-[var(--settings-section-sublabel)]">
@@ -427,7 +444,7 @@ export function WallpaperSection() {
             id="wallpaper-blur-hint"
             className="text-12 text-[var(--text-secondary)]"
           >
-            {t('settings.appearance.wallpaper.blurHint')}
+            {t(wallpaperId === 'none' ? 'settings.appearance.wallpaper.desktopBlurHint' : 'settings.appearance.wallpaper.blurHint')}
           </p>
         </div>
       </div>
