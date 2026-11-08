@@ -373,7 +373,10 @@ export class DesktopInputHost {
         }
         flush();
         const chars = Array.from(event.text);
-        for (let i = 0, chunk = this.x11Geometry ? 64 : 256; i < chars.length; i += chunk) {
+        // X11 may need two 2 s client fences (preflight + key consumption).
+        // One code point per ACK stays below both the 6 s native watchdog and
+        // the 10 s parent ACK deadline even for a consistently slow receiver.
+        for (let i = 0, chunk = this.x11Geometry ? 1 : 256; i < chars.length; i += chunk) {
           pending = [{ kind: 'text', text: chars.slice(i, i + chunk).join('') }];
           flush();
         }
@@ -427,7 +430,10 @@ export class DesktopInputHost {
     const line = `${JSON.stringify(events)}\n`;
     const connection = this.windows;
     const bytes = Buffer.byteLength(line);
-    if (this.queuedBytes + bytes > 32_768 || (!connection && (!child || child.stdin.destroyed))) {
+    // Per-character X11 ACKs add JSON framing to a valid 4096-code-point paste.
+    // Bound that queue too, without rejecting one legal paste for its framing.
+    const queueLimit = this.x11Geometry ? 262_144 : 32_768;
+    if (this.queuedBytes + bytes > queueLimit || (!connection && (!child || child.stdin.destroyed))) {
       this.onFailure();
       return;
     }

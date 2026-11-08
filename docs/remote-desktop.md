@@ -634,8 +634,12 @@ containing other characters is refused before any part of that text is injected.
 Missing replies time out as an input failure, never a successful text ACK. Window
 disappearance, cancellation and timeout also restore the original mapping.
 
-Text does not overwrite the clipboard. Batches contain at most 64 code points;
-the existing heartbeat bounds a stalled client as well as a stalled parent.
+Text does not overwrite the clipboard. X11 commands contain one code point per
+native ACK, allowing two two-second client fences within a fresh six-second
+execution budget and the parent's ten-second ACK deadline. The framing queue is
+bounded at 256 KiB so a valid 4096-code-point paste fits even with per-character
+JSON overhead. The existing heartbeat still bounds a stalled parent; a logical
+paste can span many ACKs and last longer than six seconds without being cut off.
 Application/IME handling remains separate from native event translation. EOF, SIGTERM
 and the six-second heartbeat deadline release held keys and buttons. X11 capture,
 lock-screen support and other optional features are not broadened by this backend.

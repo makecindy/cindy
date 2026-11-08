@@ -591,6 +591,39 @@ it('maps an X11 display from scaled desktop coordinates and rejects ambiguous la
   expect(isX11Desktop('linux')).toBe(false); // XWayland is not X11 desktop access.
 });
 
+// Native X11 has two bounded client fences per character. A legal maximum-size
+// paste must fit the framing budget and advance only after each native ACK.
+it('streams a full X11 paste with one code point per acknowledged command', async () => {
+  vi.useFakeTimers();
+  vi.stubEnv('DISPLAY', ':test');
+  vi.stubEnv('XDG_SESSION_TYPE', 'x11');
+  vi.stubEnv('WAYLAND_DISPLAY', '');
+  const c = childProcess();
+  const failure = vi.fn();
+  const host = new DesktopInputHost(failure, {
+    platform: 'linux', resolveBinary: async () => '/test/input',
+    spawn: () => {
+      queueMicrotask(() => c.child.stdout.emit('data', Buffer.from('ready\n')));
+      return c.typed;
+    },
+  });
+  try {
+    await host.start('1');
+    const text = '中🙂'.repeat(2048);
+    host.input([{ kind: 'text', text }]);
+    for (const [i, char] of Array.from(text).entries()) {
+      await flush();
+      expect(c.child.stdin.write).toHaveBeenCalledTimes(i + 1);
+      expect(JSON.parse(c.child.stdin.write.mock.calls[i][0])).toEqual([{ kind: 'text', text: char }]);
+      c.child.stdout.emit('data', Buffer.from('ok\n'));
+    }
+    await flush();
+    expect(failure).not.toHaveBeenCalled();
+  } finally {
+    host.stop(); c.exit();
+  }
+});
+
 it('drops queued X11 input if monitor geometry changes while an earlier batch is pending', async () => {
   vi.useFakeTimers();
   vi.stubEnv('DISPLAY', ':test');

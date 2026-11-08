@@ -413,6 +413,9 @@ static bool batch(const char *line, size_t size, bool apply) {
         ok = false;
         break;
       }
+  // A validated X11 command owns a fresh six-second execution budget; idle
+  // time since the previous heartbeat must not eat its two client-fence waits.
+  if (ok && apply && use_x11) alarm(6);
   if (ok && apply)
     for (size_t i = 0; i < json_object_array_length(array) && !stopping; i++)
       if (!event(json_object_array_get_idx(array, i), true)) {

@@ -70,14 +70,15 @@ with tempfile.TemporaryDirectory(prefix='cindy-x11-test-') as temp:
         X.XSelectInput(display,win,1|2|4|8|64)
         X.XMapWindow(display,win); X.XSetInputFocus(display,win,1,0); X.XSync(display,False)
         pause_next_key=[0.0]
+        pause_each_key=[0.0]
         def drain():
             out=[]
             while X.XPending(display):
                 e=Event(); X.XNextEvent(display,C.byref(e))
                 if e.type==34: X.XRefreshKeyboardMapping(C.byref(e))
                 elif e.type in (2,3):
-                    if e.type==2 and pause_next_key[0]:
-                        pause=pause_next_key[0];pause_next_key[0]=0.0
+                    if e.type==2 and (pause_next_key[0] or pause_each_key[0]):
+                        pause=pause_next_key[0] or pause_each_key[0];pause_next_key[0]=0.0
                         # real-wait: this integration receiver must genuinely stop
                         # translating while the independent helper/server run.
                         time.sleep(pause)
@@ -139,6 +140,17 @@ with tempfile.TemporaryDirectory(prefix='cindy-x11-test-') as temp:
             seen=send(p,[dict(kind='text',text=text)])
             assert [v for t,v in seen if t==2]==expected,seen
             assert before==mapping(), 'consecutive text leaked a mapping'
+        # Host now ACKs one code point at a time. The logical paste lasts longer
+        # than six seconds, while every client reply is timely. Keep the same
+        # helper alive throughout and verify all 64 characters plus cleanup.
+        pause_each_key[0]=0.15
+        long_seen=[];started=time.monotonic()
+        for char in '中🙂'*32:
+            long_seen+=send(p,[dict(kind='text',text=char)])
+        pause_each_key[0]=0.0
+        assert time.monotonic()-started>6
+        assert [v for t,v in long_seen if t==2]==[0x1004e2d,0x101f642]*32,long_seen
+        assert p.poll() is None and before==mapping(), 'long paste lost helper or mapping'
         # Legacy clients still receive stable current-layout keys, without a
         # timing-dependent fallback for characters absent from that layout.
         X.XSetWMProtocols(display,win,advertised,0);X.XSync(display,False)
