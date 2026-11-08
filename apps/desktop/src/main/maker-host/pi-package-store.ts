@@ -10,7 +10,7 @@ import { piBinaryUpdateFailureStage } from '../agent-binaries/pi-self-update.js'
 
 import { spawn } from 'node:child_process';
 import { createHash, randomUUID } from 'node:crypto';
-import { promises as fs, unwatchFile, watchFile, type Stats } from 'node:fs';
+import { promises as fs, unwatchFile, watch, watchFile, type FSWatcher, type Stats } from 'node:fs';
 import { createRequire } from 'node:module';
 import path from 'node:path';
 import { StringDecoder } from 'node:string_decoder';
@@ -92,7 +92,16 @@ const DEFAULT_SNAPSHOT_LIMITS: PiPackageSnapshotLimits = {
 };
 // Analysis metadata is additive: older Cindy instances must still read user preferences.
 const STATE_VERSION = 3;
-const CHANGE_TOKEN_POLL_MS = 250;
+// Token edges come from other Cindy Main processes sharing this userData. The
+// directory watcher delivers them promptly; the stat poll only backs up events a
+// watcher cannot deliver (package home not created yet, watcher error), so it
+// does not need to wake an otherwise idle Main several times per second.
+const CHANGE_TOKEN_POLL_MS = 2_000;
+const CHANGE_TOKEN_FILE_NAMES = [
+  'cindy-package-runtime-change-token',
+  'cindy-package-change-token',
+  'cindy-package-view-change-token',
+] as const;
 export type PiPackagesChangeOrigin = 'local' | 'external' | 'external-runtime';
 const changeListeners = new Set<(origin: PiPackagesChangeOrigin) => void>();
 const packageMutationMayHaveChangedErrors = new WeakSet<object>();
@@ -108,7 +117,12 @@ let lastNotifiedRuntimeChangeToken: string | null | undefined;
 let lastExternallyNotifiedRuntimeChangeToken: string | null | undefined;
 let changeTokenReadInFlight: Promise<void> | undefined;
 let changeTokenReadQueued = false;
-const changeTokenWatchListener = () => void observePiPackageChangeToken();
+let changeTokenDirectoryWatcher: FSWatcher | undefined;
+const changeTokenWatchListener = () => {
+  // A token that just appeared means the package home now exists.
+  watchPiPackageChangeTokenDirectory();
+  void observePiPackageChangeToken();
+};
 // Remove userinfo before token projection. The authority match is deliberately
 // quote-tolerant because apostrophes and JSON quotes can occur around valid URLs.
 const PACKAGE_URL_USERINFO_PATTERN = /((?:git:)?[a-z][a-z0-9+.-]*:\/\/)[^\s/?#]*@/gi;
@@ -310,6 +324,7 @@ function startPiPackageChangeTokenWatcher(): void {
   if (changeTokenWatcherActive) return;
   changeTokenWatcherActive = true;
   changeTokenWatcherStartedAtMs ??= Date.now();
+  watchPiPackageChangeTokenDirectory();
   void observePiPackageChangeToken();
   for (const tokenPath of [
     runtimeChangeTokenPath(),
@@ -327,9 +342,40 @@ function startPiPackageChangeTokenWatcher(): void {
 function stopPiPackageChangeTokenWatcher(): void {
   if (!changeTokenWatcherActive) return;
   changeTokenWatcherActive = false;
+  closePiPackageChangeTokenDirectoryWatcher();
   unwatchFile(runtimeChangeTokenPath(), changeTokenWatchListener);
   unwatchFile(changeTokenPath(), changeTokenWatchListener);
   unwatchFile(viewChangeTokenPath(), changeTokenWatchListener);
+}
+
+function watchPiPackageChangeTokenDirectory(): void {
+  if (!changeTokenWatcherActive || changeTokenDirectoryWatcher) return;
+  let watcher: FSWatcher;
+  try {
+    watcher = watch(packageHome(), { persistent: false }, (_event, fileName) => {
+      // Atomic writes rename `<token>.<uuid>.tmp` into place; some platforms
+      // report only one side of the rename, so match the token prefix.
+      const name = fileName ? String(fileName) : null;
+      if (name && !CHANGE_TOKEN_FILE_NAMES.some((token) => name.startsWith(token))) return;
+      void observePiPackageChangeToken();
+    });
+  } catch {
+    // The package home does not exist until the first Pi package operation.
+    // The stat poll keeps observing and attaches this watcher once a token appears.
+    return;
+  }
+  watcher.on('error', () => {
+    // E.g. the directory was removed. Fall back to the stat poll until a token reappears.
+    if (changeTokenDirectoryWatcher === watcher) changeTokenDirectoryWatcher = undefined;
+    watcher.close();
+  });
+  changeTokenDirectoryWatcher = watcher;
+}
+
+function closePiPackageChangeTokenDirectoryWatcher(): void {
+  const watcher = changeTokenDirectoryWatcher;
+  changeTokenDirectoryWatcher = undefined;
+  watcher?.close();
 }
 
 type SnapshotUnavailableWarning = 'inspection-failed' | 'inspection-limit';
