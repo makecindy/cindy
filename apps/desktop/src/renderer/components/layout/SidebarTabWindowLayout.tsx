@@ -21,6 +21,7 @@
  *
  * 与 SidebarWindowLayout 一样挂 useDeviceLinkRemoteProjects / makerChatStore 监听:
  * device-link 远程会话镜像是每个 renderer 一份,协同 / 后台任务等页签靠它路由。
+ * makerChatStore 监听在首次指派时才开启(见 applyAssignment),未指派的预热 spare 不处理聊天事件。
  */
 
 import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
@@ -76,11 +77,6 @@ export function SidebarTabWindowLayout() {
   const { effectiveLocale, setLocale } = useLocale();
   ensureGhostPanelsRegistered();
   useGhostPanelsSync();
-  useEffect(() => {
-    // 弹出窗口需要实时事件维护页签内容,但认证失败后的凭证读取、会话重启与消息重发
-    // 必须只由主 renderer 执行。
-    makerChatStore.initGlobalListeners({ ownsRemoteAuthRetry: false, ownsRemoteListCache: false });
-  }, []);
   const isMac = window.electronAPI?.platform === 'darwin';
   const api = window.electronAPI?.sidebarTabWindow;
   const [assignment, setAssignment] = useState<SidebarTabWindowAssignmentPayload | null>(null);
@@ -99,6 +95,12 @@ export function SidebarTabWindowLayout() {
   const [activeTabId, setActiveTabId] = useState<string | null>(null);
 
   const applyAssignment = useCallback((next: SidebarTabWindowAssignmentPayload) => {
+    // 弹出窗口需要实时事件维护页签内容,但认证失败后的凭证读取、会话重启与消息重发
+    // 必须只由主 renderer 执行。预热的 spare 在被指派前不接聊天事件流:否则这扇看不见的
+    // 窗口会对每个任务的每个流式片段整套跑一遍 reducer、并囤积这些会话的内存态。
+    // 首次指派时才开始监听,与「没有 spare、冷建窗口挂载即监听」的时序一致;必须早于下面
+    // setAssignment 挂载页签内容,否则内容首拉与监听之间会漏事件。重复指派为幂等 no-op。
+    makerChatStore.initGlobalListeners({ ownsRemoteAuthRetry: false, ownsRemoteListCache: false });
     const previousIds = lastAssignedIdsRef.current;
     const nextIds = new Set(next.tabs.map((tab) => tab.tabId));
     const addedIds = new Set([...nextIds].filter((id) => !previousIds?.has(id)));
