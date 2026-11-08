@@ -688,6 +688,7 @@ import { readProviderOrder } from '../maker-host/provider-order-store.js';
 import { guardedOutboundFetch, outboundFetch } from '../maker-host/outbound-fetch.js';
 import { setGhostToolApprovalResolver } from '../maker-host/mcp-tool-approval-policy.js';
 import { getSharedGhCliTokenSource } from '../git-context/ghCliTokenSource.js';
+import { bindingStore } from '../im/binding.js';
 import { copyPrivateDeviceCode } from '../plugin-oauth/deviceCodeClipboard.js';
 import { hasCodexOAuthLoginReadOnly } from '../maker-host/codex-oauth-readiness.js';
 import {
@@ -9036,6 +9037,9 @@ async function installRemoteGhostFile(peer: string, attachment: string, target: 
   } finally { await fs.promises.rm(dir, { recursive: true, force: true }); }
 }
 
+/** Lazy on purpose: git-context/ipc.ts -> scheduler-host -> script-capability-broker -> this module is a real import cycle. */
+const loadGitContextIpc = () => import('../git-context/ipc.js');
+
 export function registerGhostIpc(): void {
   registerGhostCardRemoteProvider((id) => {
     const ghost = findGhostForRemotePluginIdentity(availableGhosts(), id);
@@ -9047,9 +9051,8 @@ export function registerGhostIpc(): void {
       mobilePluginPages.assertInteraction(pageId, ghostId, controllerId);
       return (await getGhostCardActionDispatcher().dispatch(callId, actionId, prompt, pageId, formValues, formChange, mailUpload)).ok;
     },
-  }, async (sessionId, key) => (await import('../git-context/ipc.js')).readSessionPrStatus(sessionId, key), async (sessionId) => {
-    const [{ readSessionPrsAllMerged }, { bindingStore }] = await Promise.all([import('../git-context/ipc.js'), import('../im/binding.js')]);
-    const allMerged = await readSessionPrsAllMerged(sessionId);
+  }, async (sessionId, key) => (await loadGitContextIpc()).readSessionPrStatus(sessionId, key), async (sessionId) => {
+    const allMerged = await (await loadGitContextIpc()).readSessionPrsAllMerged(sessionId);
     return { allMerged, attached: !!bindingStore.findByTarget(sessionId) };
   });
   if (ipcRegistered) return;
