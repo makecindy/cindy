@@ -65,6 +65,7 @@ export class BlueBubblesReceipts {
     return { uncertainInputs, uncertainSends };
   }
   get activatedAt(): number { return this.state.activatedAt; }
+  isPending(guid: string): boolean { return this.state.inbox[guid]?.state === 'pending'; }
   receivedAfter(guid: string, time: number): boolean { return (this.state.inbox[guid]?.receivedAt ?? 0) > time; }
   cursor(chat: string): number { return this.state.cursors[chat] ?? this.state.activatedAt; }
   nextPending(exclude: ReadonlySet<string>, active?: ReadonlySet<string>): string | undefined {

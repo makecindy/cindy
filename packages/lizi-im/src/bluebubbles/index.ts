@@ -138,7 +138,10 @@ export class BlueBubblesIM extends BaseIM implements TextChannelIM {
     }
     new BlueBubblesReceipts(this.options.storage, this.now());
     await this.init();
-    if (this.status.kind !== 'connected') throw new Error('BLUEBUBBLES_CONNECT_FAILED');
+    // Registration succeeded; a retryable input fault must not make the host
+    // delete this connection, its credentials and its already-durable inbox.
+    if (this.status.kind !== 'connected'
+      && !(this.listener && this.api && this.config && this.receiveFailure === 'input')) throw new Error('BLUEBUBBLES_CONNECT_FAILED');
   }
 
   async clearCredentials(): Promise<void> {
@@ -357,13 +360,13 @@ export class BlueBubblesIM extends BaseIM implements TextChannelIM {
     const attempted = new Set<string>();
     for (const [guid, dueAt] of this.retryAt) if (dueAt > this.now()) attempted.add(guid);
     const cleanup = this.partialCleanup;
-    let hadFailure = false;
     inputs: for (;;) {
       this.assertLive(generation);
+      for (const id of this.retryAt.keys()) if (!receipts.isPending(id)) this.retryAt.delete(id);
       if (this.recovering) return;
       const guid = receipts.nextPending(attempted, this.activeDispatches);
       if (!guid) {
-        if (hadFailure || this.retryAt.size) {
+        if (this.retryAt.size) {
           let delay = Infinity;
           for (const dueAt of this.retryAt.values()) delay = Math.min(delay, Math.max(1, dueAt - this.now()));
           if (Number.isFinite(delay)) this.retryDeferred(generation, delay);
@@ -545,9 +548,9 @@ export class BlueBubblesIM extends BaseIM implements TextChannelIM {
         // Receipt persistence failures still require connection-level recovery;
         // only message lookup/download/staging failures use the local retry.
         if (!preparing) throw error;
+        if (!receipts.isPending(guid)) { this.retryAt.delete(guid); continue; }
         // Keep the receipt pending for recovery, but let other chats/messages proceed.
         this.retryAt.set(guid, this.now() + 30_000);
-        hadFailure = true;
       } finally {
         if (staged.length) {
           cleanup.set(guid, [...(cleanup.get(guid) ?? []), ...staged]);

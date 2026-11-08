@@ -58,6 +58,48 @@ async function fixture(initialState: BlueBubblesState | null = null, media?: IMH
 }
 
 describe('BlueBubbles local ingress', () => {
+  // Tier 1, #9250/r4506188535: stop may cancel a still-running preparation
+  // before its download/staging rejects; the terminal GUID must not gain a retry.
+  it.each(['download', 'stage'])('does not retry a cancelled input whose in-flight %s fails later', async phase => {
+    let started!: () => void, rejectPreparation!: (error: Error) => void;
+    const preparing = new Promise<void>(resolve => { started = resolve; });
+    const failed = new Promise<never>((_resolve, reject) => { rejectPreparation = reject; });
+    const f = await fixture(null, undefined, false, phase === 'stage' ? {
+      stage: async () => { started(); return failed; },
+    } : undefined);
+    vi.spyOn(f.api, 'download').mockImplementation(async () => {
+      if (phase === 'download') { started(); return failed; }
+      return new Uint8Array([1]);
+    });
+    let stop!: () => void, stopped!: () => void;
+    const stopGate = new Promise<void>(resolve => { stop = resolve; });
+    const stopDone = new Promise<void>(resolve => { stopped = resolve; });
+    f.im.onMessage(async event => {
+      if (event.text !== '/stop') return;
+      event.delivery!.awaitPersistence();
+      await stopGate;
+      expect(event.delivery!.cancelPending!()).toBe(1);
+      event.delivery!.accept();
+      stopped();
+    });
+    f.advance(500);
+    f.message('in-flight-old', { dateCreated: 1100, attachments: [{ guid: 'held-file', transferName: 'file.txt' }] });
+    f.message('delayed-handler-stop', { dateCreated: 1200, text: '/stop' });
+    await f.webhook('delayed-handler-stop');
+    await f.webhook('in-flight-old');
+    await preparing;
+    stop(); await stopDone;
+    expect(f.state().inbox['in-flight-old'].state).toBe('ignored');
+    rejectPreparation(new Error('late preparation 503'));
+    await new Promise<void>(resolve => setImmediate(resolve));
+    await expect(f.im.reconcile()).resolves.toBeUndefined();
+    f.advance(30_001);
+    await expect(f.im.reconcile()).resolves.toBeUndefined();
+    expect(f.im.getStatus().kind).toBe('connected');
+    expect(f.api.download).toHaveBeenCalledTimes(1);
+    expect(f.received.some(event => event.messageId === 'in-flight-old')).toBe(false);
+  });
+
   // Tier 1, #9250/r4506126025: a failed history page must not strand a durable
   // stop/reply until another webhook or the five-minute sweep wakes the pump.
   it.each(['stop', 'reply'])('resumes a gated %s after history fails without another ingress event', async kind => {
