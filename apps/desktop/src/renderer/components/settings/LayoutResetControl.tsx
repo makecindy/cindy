@@ -6,7 +6,7 @@ import { useState } from 'react';
 import { useTranslation } from 'react-i18next';
 
 import { toast } from '@/lib/toast';
-import { SETTINGS_ROW_CLASS } from './settingsRowClasses';
+import { SettingsRow } from '@/components/ui/settings-rows';
 
 /** 正式版布局恢复入口：复用 main 的原子 reset + broadcast，不另存 renderer 状态。 */
 export function LayoutResetControl() {
@@ -32,34 +32,27 @@ export function LayoutResetControl() {
   };
 
   return (
-    <div {...setting.anchorProps} className={SETTINGS_ROW_CLASS}>
-      <div className="flex min-w-0 flex-col gap-1">
-        <p
-          className="text-13 font-medium text-[var(--settings-section-sublabel)]"
-          style={{ letterSpacing: '0.12px' }}
-        >
-          {setting.title}
-        </p>
-        <p className="text-12 leading-[1.4] text-[var(--text-secondary)]">
-          {setting.description}
-        </p>
-      </div>
-
-      <Button
+    <SettingsRow
+      {...setting.anchorProps}
+      title={setting.title}
+      hint={setting.description}
+      trailing={
+        <Button
           {...setting.controlProps}
-        variant="secondary"
-        size="md"
-        compact
-        loading={resetting}
-        type="button"
-        onClick={() => void handleReset()}
-        disabled={resetting}
-        aria-label={t('settings.appearance.layout.reset')}
-        className="shrink-0"
-      >
-        <RotateCcw size={14} aria-hidden />
-        {t('settings.appearance.layout.reset')}
-      </Button>
-    </div>
+          variant="secondary"
+          size="md"
+          compact
+          loading={resetting}
+          type="button"
+          onClick={() => void handleReset()}
+          disabled={resetting}
+          aria-label={t('settings.appearance.layout.reset')}
+          className="shrink-0"
+        >
+          <RotateCcw size={14} aria-hidden />
+          {t('settings.appearance.layout.reset')}
+        </Button>
+      }
+    />
   );
 }

@@ -581,7 +581,8 @@ describe('mobile native app config', () => {
       const properties = config.plugins.find(
         (plugin: unknown) => Array.isArray(plugin) && plugin[0] === 'expo-build-properties',
       );
-      expect(properties?.[1]?.ios?.enableSceneSupport).toBe(true);
+      // SDK 58 generates UIScene support by default; the old opt-in was removed.
+      expect(properties?.[1]?.ios?.enableSceneSupport).toBeUndefined();
     }
   });
 

@@ -179,7 +179,7 @@ const GENERATED_OVERRIDES = {
   "ask-send-disabled-bg": "var(--surface-elevated-soft)",
   "completion-badge-fg": "#1f1f1e",
   "create-agent-control-bg-hover": "var(--surface-hover)",
-  "create-agent-control-bg-pressed": "var(--surface-hover-soft)",
+  "create-agent-control-bg-pressed": "rgba(0, 0, 0, 0.08)", // 墨水 黑 8%: 选中/按下(2026-11-07 用户裁决,按下不再比悬停浅)
   "create-agent-send-icon": "#FCFCFC",
   "slider-track": "#A3A39E", // Slider 用户定稿 2026-09-17;与 Switch 独立
   "slider-fill": "#3C3F43", // Slider 用户定稿 2026-09-17;与 Switch 独立

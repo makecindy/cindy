@@ -4,14 +4,14 @@
  * 语言选项使用单个下拉菜单，避免未来增加语言后设置卡片被横向选项撑开。
  * 文言（及以后其它古典版本）在菜单里只占一项；选中后同一张卡片下方多出一行，
  * 选择字形（简体 / 繁體）与 AI 作答的输出风格。
- * 简体中文 / 繁體中文界面另有一行只有文风：界面保持现代中文，回答可选文言文风。
  */
 
 import { useTranslation } from 'react-i18next';
 import { Check, ChevronDown } from 'lucide-react';
-import { replyStyleFamilyOf, type ClassicalReplyStyleId } from '@cindy/maker-shared/classical-reply';
+import type { ClassicalReplyStyleId } from '@cindy/maker-shared/classical-reply';
 import { classicalStyleOptions, languageSettings } from './LanguageSection.settings-search';
 import { SelectParts as Select } from '@/components/ui/select';
+import { SettingsCard, SettingsRow, SettingsSection } from '@/components/ui/settings-rows';
 
 import { cn } from '@/lib/utils';
 import { useLocale } from '@/hooks/useLocale';
@@ -104,7 +104,6 @@ export function LanguageSection() {
   const { t } = useTranslation();
   const { locale, effectiveLocale, setLocale, classicalStyle, setClassicalStyle } = useLocale();
   const classical = isClassicalLocale(locale) ? locale : null;
-  const replyStyleOnly = !classical && replyStyleFamilyOf(effectiveLocale) !== null;
 
   const chooseLanguage = (option: LanguageOption) => {
     if (option !== CLASSICAL_OPTION) {
@@ -117,112 +116,61 @@ export function LanguageSection() {
   };
 
   return (
-    <div className="flex flex-col gap-[14px]">
-      <h2 className="text-16 font-medium leading-[1.2] text-[var(--settings-section-title)]">
-        {t(languageSettings.language.sectionKey)}
-      </h2>
-
-      <div
-        className={cn(
-          'flex flex-col rounded-xl px-4',
-          'bg-[var(--settings-theme-card-bg)]',
-          'border border-[var(--settings-theme-card-border)]',
-        )}
-      >
-        <div
+    <SettingsSection title={t(languageSettings.language.sectionKey)}>
+      <SettingsCard>
+        <SettingsRow
           id={languageSettings.language.targetId}
-          className="flex flex-row items-center justify-between gap-6 py-4"
-        >
-          <div className="min-w-0 flex-1">
-            <p
-              className="text-13 font-medium text-[var(--settings-section-sublabel)]"
-              style={{ letterSpacing: '0.12px' }}
-            >
-              {t(languageSettings.language.titleKey)}
-            </p>
-            <p className="text-12 leading-[1.4] text-[var(--text-secondary)]">
-              {t(languageSettings.language.descriptionKey)}
-            </p>
-          </div>
-          <PillSelect<LanguageOption>
-            data-setting-id={languageSettings.language.id}
-            value={classical ? CLASSICAL_OPTION : locale}
-            options={languageSettings.language.options.map((option) => ({
-              value: option.value,
-              label: t(option.labelKey),
-            }))}
-            onChange={chooseLanguage}
-            ariaLabel={t('settings.language.ariaLabel')}
-            className="w-[320px]"
-          />
-        </div>
-
-        {classical ? (
-          <div
-            id={languageSettings.classical.targetId}
-            className="flex flex-row items-center justify-between gap-6 border-t border-[var(--settings-theme-card-border)] py-4"
-          >
-            <div className="min-w-0 flex-1">
-              <p
-                className="text-13 font-medium text-[var(--settings-section-sublabel)]"
-                style={{ letterSpacing: '0.12px' }}
-              >
-                {t(languageSettings.classical.titleKey)}
-              </p>
-              <p className="text-12 leading-[1.4] text-[var(--text-secondary)]">
-                {t(languageSettings.classical.descriptionKey)}
-              </p>
-            </div>
-            <div className="flex w-[320px] max-w-full shrink-0 flex-row gap-2">
-              <PillSelect<ClassicalLocale>
-                data-setting-id={languageSettings.classical.id}
-                value={classical}
-                options={languageSettings.classical.options.map((script) => ({
-                  value: script.value,
-                  label: t(script.labelKey),
-                }))}
-                onChange={setLocale}
-                ariaLabel={t('settings.language.classical.scriptAriaLabel')}
-                className="w-[112px]"
-              />
-              <PillSelect<ClassicalReplyStyleId>
-                data-setting-id={languageSettings.classical.id}
-                value={classicalStyle}
-                options={classicalStyleOptions.map((style) => ({
-                  value: style.value,
-                  label: t(style.labelKey),
-                }))}
-                onChange={setClassicalStyle}
-                ariaLabel={t('settings.language.classical.styleAriaLabel')}
-                className="min-w-0 flex-1"
-              />
-            </div>
-          </div>
-        ) : replyStyleOnly ? (
-          <div
-            id={languageSettings.replyStyle.targetId}
-            className="flex flex-row items-center justify-between gap-6 border-t border-[var(--settings-theme-card-border)] py-4"
-          >
-            <p
-              className="min-w-0 flex-1 text-13 font-medium text-[var(--settings-section-sublabel)]"
-              style={{ letterSpacing: '0.12px' }}
-            >
-              {t('settings.language.classical.styleAriaLabel')}
-            </p>
-            <PillSelect<ClassicalReplyStyleId>
-              data-setting-id={languageSettings.replyStyle.id}
-              value={classicalStyle}
-              options={classicalStyleOptions.map((style) => ({
-                value: style.value,
-                label: t(style.labelKey),
+          title={t(languageSettings.language.titleKey)}
+          hint={t(languageSettings.language.descriptionKey)}
+          trailing={
+            <PillSelect<LanguageOption>
+              data-setting-id={languageSettings.language.id}
+              value={classical ? CLASSICAL_OPTION : locale}
+              options={languageSettings.language.options.map((option) => ({
+                value: option.value,
+                label: t(option.labelKey),
               }))}
-              onChange={setClassicalStyle}
-              ariaLabel={t('settings.language.classical.styleAriaLabel')}
+              onChange={chooseLanguage}
+              ariaLabel={t('settings.language.ariaLabel')}
               className="w-[320px]"
             />
-          </div>
+          }
+        />
+
+        {classical ? (
+          <SettingsRow
+            id={languageSettings.classical.targetId}
+            title={t(languageSettings.classical.titleKey)}
+            hint={t(languageSettings.classical.descriptionKey)}
+            trailing={
+              <div className="flex w-[320px] max-w-full shrink-0 flex-row gap-2">
+                <PillSelect<ClassicalLocale>
+                  data-setting-id={languageSettings.classical.id}
+                  value={classical}
+                  options={languageSettings.classical.options.map((script) => ({
+                    value: script.value,
+                    label: t(script.labelKey),
+                  }))}
+                  onChange={setLocale}
+                  ariaLabel={t('settings.language.classical.scriptAriaLabel')}
+                  className="w-[112px]"
+                />
+                <PillSelect<ClassicalReplyStyleId>
+                  data-setting-id={languageSettings.classical.id}
+                  value={classicalStyle}
+                  options={classicalStyleOptions.map((style) => ({
+                    value: style.value,
+                    label: t(style.labelKey),
+                  }))}
+                  onChange={setClassicalStyle}
+                  ariaLabel={t('settings.language.classical.styleAriaLabel')}
+                  className="min-w-0 flex-1"
+                />
+              </div>
+            }
+          />
         ) : null}
-      </div>
-    </div>
+      </SettingsCard>
+    </SettingsSection>
   );
 }

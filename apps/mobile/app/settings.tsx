@@ -107,6 +107,7 @@ import {
   subscribeMobileSpeakerFilter,
 } from '@/session/mobileSpeakerFilter';
 import { useSettingsDeviceDirectory } from '@/session/settingsDeviceDirectory';
+import { isHandheldModeSupported, useHandheldSettings } from '@/handheld/handheldMode';
 import { confirmLogout } from '@/session/confirmLogout';
 import { THEME_PREFERENCES, useTheme, useThemedStyles, type ThemeColors } from '@/theme';
 import { fontWeight, lineHeight, radius, spacing, typeScale } from '@/theme/tokens';
@@ -636,6 +637,13 @@ export default function SettingsScreen() {
     push('/settings/voice-speaker-filter');
   }, [push]);
 
+  // 掌机模式:只有带 cindy-handheld 原生模块的 Android 包显示入口。
+  const handheldSupported = isHandheldModeSupported();
+  const handheld = useHandheldSettings();
+  const openHandheldSettings = useCallback(() => {
+    push('/settings/handheld');
+  }, [push]);
+
   // dictionaryRevision 只作为依赖存在:缓存是模块级的,刷新完成后靠它触发重算。
   const dictionaryEntries = useMemo(
     () =>
@@ -853,6 +861,22 @@ export default function SettingsScreen() {
               onPress={openVoiceSpeakerFilter}
               testID="settings.voiceSpeakerFilter.row"
               value={t(speakerFilter.enabled ? 'settings.voiceSpeakerFilter.on' : 'settings.voiceSpeakerFilter.off')}
+            />
+          </SettingsGroup>
+        ) : null}
+
+        {handheldSupported ? (
+          <SettingsGroup
+            footer={t('settings.handheld.entryHint')}
+            title={t('settings.handheld.sectionTitle')}
+          >
+            <ActionInfoRow
+              accessibilityLabel={t('settings.handheld.openAccessibility')}
+              key="handheld"
+              label={t('settings.handheld.label')}
+              onPress={openHandheldSettings}
+              testID="settings.handheld.row"
+              value={t(handheld.settings.enabled ? 'settings.handheld.on' : 'settings.handheld.off')}
             />
           </SettingsGroup>
         ) : null}

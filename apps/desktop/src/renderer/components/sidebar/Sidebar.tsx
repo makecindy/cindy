@@ -22,6 +22,7 @@ import { cn } from '@/lib/utils';
 
 import type { SidebarPeekDrawerProps, SidebarPeekState } from '@/hooks/useSidebarPeek';
 import { useMacFullscreen } from '@/hooks/useMacFullscreen';
+import { useSidebarMaterial } from '@/hooks/useSidebarMaterial';
 import { useFeatureSidebarUpper, useOwnsTopNavScrollableRows } from '@/features/feature-context';
 import { ConversationSearchProvider } from '@/features/cc-agent/sidebar/conversationSearchContext';
 import { isSecondaryWindow } from '@/lib/secondaryWindow';
@@ -29,6 +30,7 @@ import { CHROME_ACTIONS_GEOMETRY } from '@/components/layout/chromeActionsGeomet
 import { SidebarTopNav } from './SidebarTopNav';
 import { UpdateBanner } from './UpdateBanner';
 import { DatabaseSizeWarningBanner } from './DatabaseSizeWarningBanner';
+import { NativeBuildBanner } from './NativeBuildBanner';
 import { UserInfoSection } from './UserInfoSection';
 
 /** 折叠态 rail 宽度（px）——78px 与 ContentHeader 的红绿灯让位(pl-[78px])对齐:
@@ -87,6 +89,8 @@ export function Sidebar({
   peekState = null,
   peekDrawerProps,
 }: SidebarProps) {
+  const sidebarRef = useRef<HTMLElement>(null);
+  useSidebarMaterial(sidebarRef);
   const upperContent = useFeatureSidebarUpper();
   // 当前 Feature 是否自行渲染顶部导航的可滚动段(见 feature-context)。
   const ownsTopNavScrollableRows = useOwnsTopNavScrollableRows();
@@ -149,6 +153,7 @@ export function Sidebar({
 
   return (
     <aside
+      ref={sidebarRef}
       {...(isPeek ? peekDrawerProps : undefined)}
       aria-label={t('sidebar.ariaLabel')}
       aria-hidden={isCollapsed && !isPeek}
@@ -160,7 +165,7 @@ export function Sidebar({
               // 触发钮保持可点(点击 = pin)。阴影复用 --shadow-menu(中型悬浮卡,
               // 同色 Surface 上的辅助分离),1px hairline 仍是主分隔手段(docs/design-rules/cindy-design-system.md)。
               'fixed inset-y-0 left-0 z-[15]',
-              'border-r border-sidebar-border shadow-[var(--shadow-menu)]',
+              'border-r border-sidebar-border shadow-[shadow:var(--shadow-menu)]',
               peekState === 'peeking' &&
                 'animate-[sidebar-peek-in_200ms_cubic-bezier(0.22,1,0.36,1)] motion-reduce:animate-none',
               peekState === 'peekClosing' &&
@@ -178,11 +183,12 @@ export function Sidebar({
       )}
       style={{ width: visualWidth }}
     >
+      <div aria-hidden="true" className="sidebar-frost pointer-events-none absolute inset-0" />
       {/* 定宽内容层(见 contentWidth 注释):收起/展开动画期间内容不随 aside 宽度
           reflow,只被右侧裁切 + 整层渐隐/渐显。 */}
       <div
         className={cn(
-          'flex min-h-0 flex-1 flex-col',
+          'relative flex min-h-0 flex-1 flex-col',
           // visibility 参与过渡:渐隐播完后才真正隐藏(阻止 Tab 焦点进入收起的
           // 侧栏),展开瞬间恢复 —— 与 SectionCollapse 同口径。
           'transition-[opacity,visibility] duration-[200ms] ease-[cubic-bezier(0.4,0,0.2,1)] motion-reduce:duration-0',
@@ -259,6 +265,7 @@ export function Sidebar({
           isCollapsed={(isCollapsed && !isPeek) || isRail}
           onOpenStorage={onOpenStorage}
         />
+        <NativeBuildBanner isCollapsed={(isCollapsed && !isPeek) || isRail} />
 
         {/* Bottom: User info (Shell-level, shared across all features)
           isCollapsed 在这里表达"窄布局"（rail 居中头像）；完全隐藏态 w-0 整体裁掉。 */}

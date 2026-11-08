@@ -70,6 +70,7 @@ import {
 } from './PlanChangeDialog';
 import { useBillingCheckout } from './useBillingCheckout';
 import { usePlanChange, type PlanChangeSettledKind } from './usePlanChange';
+import { SETTINGS_SECTION_TITLE_CLASS, SettingsPageHeader } from '@/components/ui/settings-rows';
 
 type CatalogOfferEntry = {
   product: BillingCatalogProduct;
@@ -1080,31 +1081,31 @@ export function BillingSettingsSection({ accountId }: { accountId: string | null
   return (
     <>
       <div>
-        <div className="flex items-start justify-between gap-6">
-          <h2 className="text-16 font-medium leading-[1.2] text-[var(--settings-section-title)]">
-            {t('billing.settings.title')}
-          </h2>
-          <Button
-            variant="secondary"
-            size="md"
-            compact
-            loading={loadingCatalog || loadingSubscription || loadingBalance}
-            type="button"
-            onClick={() => void loadBillingState()}
-            disabled={
-              loadingCatalog ||
-              loadingSubscription ||
-              loadingBalance ||
-              cancelingSubscription ||
-              resumingSubscription ||
-              openingSubscriptionPortal
-            }
-            className="shrink-0"
-          >
-            <RefreshCcw size={13} />
-            {t('billing.actions.refreshCatalog')}
-          </Button>
-        </div>
+        <SettingsPageHeader
+          title={t('billing.settings.title')}
+          action={
+            <Button
+              variant="secondary"
+              size="md"
+              compact
+              loading={loadingCatalog || loadingSubscription || loadingBalance}
+              type="button"
+              onClick={() => void loadBillingState()}
+              disabled={
+                loadingCatalog ||
+                loadingSubscription ||
+                loadingBalance ||
+                cancelingSubscription ||
+                resumingSubscription ||
+                openingSubscriptionPortal
+              }
+              className="shrink-0"
+            >
+              <RefreshCcw size={13} />
+              {t('billing.actions.refreshCatalog')}
+            </Button>
+          }
+        />
 
         <div className="mt-6 flex flex-col gap-8">
           <BillingGroup title={t('billing.settings.subscriptionCard.title')}>
@@ -1589,7 +1590,7 @@ function BillingGroup({
   return (
     <section aria-labelledby={titleId}>
       <div className="flex flex-wrap items-center justify-between gap-x-4 gap-y-1">
-        <h3 id={titleId} className="text-14 font-medium text-[var(--text-primary)]">
+        <h3 id={titleId} className={SETTINGS_SECTION_TITLE_CLASS}>
           {title}
         </h3>
         {badge}

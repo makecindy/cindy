@@ -30,6 +30,7 @@ import { RemoteDesktopSetting } from './RemoteDesktopSetting';
 import { RemoteSection } from './RemoteSection';
 import { useAuth } from '@/contexts/AuthContext';
 import { useSettingsSearchNavigation } from './SettingsSearchNavigation';
+import { SETTINGS_SECTION_TITLE_CLASS, SettingsPageHeader } from '@/components/ui/settings-rows';
 
 const DEVICES_SECTION_PARAMS = ['devices', 'remoteControl.devices'];
 
@@ -82,7 +83,7 @@ function CollapsibleSubSection({
         aria-expanded={open}
         className="group flex w-full items-center justify-between gap-3 text-left"
       >
-        <span className="shrink-0 text-14 font-medium text-[var(--text-primary)]">{title}</span>
+        <span className={`shrink-0 ${SETTINGS_SECTION_TITLE_CLASS}`}>{title}</span>
         <div className="flex min-w-0 items-center gap-2">
           {!open && summary ? (
             <>
@@ -261,14 +262,10 @@ export function RemoteControlSection() {
 
   return (
     <div className="flex flex-col gap-2">
-      <div className="flex flex-col gap-1">
-        <h2 className="text-16 font-medium leading-[1.2] text-[var(--settings-section-title)]">
-          {t('settings.remoteControl.title')}
-        </h2>
-        <p className="text-13 leading-[1.5] text-[var(--settings-section-desc)]">
-          {t('settings.remoteControl.description')}
-        </p>
-      </div>
+      <SettingsPageHeader
+        title={t('settings.remoteControl.title')}
+        description={t('settings.remoteControl.description')}
+      />
 
       <div className="mt-4 flex flex-col gap-6">
         {deviceLinkAvailable ? (
@@ -300,7 +297,7 @@ export function RemoteControlSection() {
             {/* 设备之间经哪条线路连接:紧跟在「我的设备」下面直接展示,当前线路一眼可见,不再单独占一个入口。 */}
             <section id={remoteControlSettings.relay.targetId} className="flex flex-col gap-3">
               <div className="flex flex-col gap-0.5">
-                <h3 className="text-14 font-medium text-[var(--text-primary)]">
+                <h3 className={SETTINGS_SECTION_TITLE_CLASS}>
                   {t(remoteControlSettings.relay.titleKey)}
                 </h3>
                 <p className="text-12 leading-[1.5] text-[var(--text-tertiary)]">

@@ -26,6 +26,7 @@ import {
   buildHookCommandForScriptFile,
   applyRunMode,
   buildScheduleInput,
+  webhookSourceFormFields,
   canSubmitSessionBinding,
   captureBinding,
   deriveRunMode,
@@ -334,6 +335,58 @@ describe('canSubmitSessionBinding', () => {
       state: 'available',
       status: 'archived',
     })).toBe(true);
+  });
+});
+
+// Rule: docs/product-rules/schedule-webhook-trigger.md. Turning the switch off must clear the
+// trigger, and a caller that never touched it must not; JSON null is the only clearing form.
+describe('buildScheduleInput webhook trigger', () => {
+  it.each([
+    [{ webhookEnabled: true, webhookEvents: ' check_suite, pull_request.closed ,' }, { events: ['check_suite', 'pull_request.closed'] }],
+    [{ webhookEnabled: true, webhookEvents: '' }, { events: [] }],
+    [{ webhookEnabled: false, webhookEvents: 'issues' }, null],
+  ])('%j', (fields, expected) => {
+    expect(buildScheduleInput(makeForm(fields)).webhookTrigger).toEqual(expected);
+  });
+
+  it('omits the key when the form does not carry the field', () => {
+    expect(Object.prototype.hasOwnProperty.call(buildScheduleInput(makeForm()), 'webhookTrigger')).toBe(false);
+  });
+
+  // A sender this build does not know came from a newer version; submitting it as GitHub
+  // would switch the server's format and reject every delivery.
+  it.each([
+    [{ webhookPreset: 'stripe', webhookSigned: false }, { preset: 'stripe', signed: false }],
+    [{ webhookPreset: 'linear', webhookSigned: true }, { preset: 'linear' }],
+    [{ webhookPreset: 'from-a-newer-version' }, undefined],
+    [{ webhookPreset: 'custom', webhookFormat: '{"version":1,"signature":null,"fields":{}}' }, { preset: 'custom', format: { version: 1, signature: null, fields: {} } }],
+    [{ webhookPreset: 'custom', webhookFormat: '{"version":1}' }, undefined],
+    // The timestamp must be signed, otherwise an old request with a fresh timestamp passes.
+    [
+      {
+        webhookPreset: 'custom',
+        webhookFormat: JSON.stringify({
+          version: 1,
+          signature: {
+            type: 'hmac', algorithm: 'sha256', header: 'x-sig', encoding: 'hex', payload: '{body}', secret: 'text',
+            timestamp: { source: { header: 'x-ts' }, unit: 's', toleranceSec: 300 },
+          },
+          fields: {},
+        }),
+      },
+      undefined,
+    ],
+  ])('sender %j', (fields, source) => {
+    const trigger = buildScheduleInput(makeForm({ webhookEnabled: true, ...fields })).webhookTrigger;
+    expect(trigger).toEqual({ events: [], ...(source ? { source } : {}) });
+  });
+
+  it('round-trips a saved sender through the form fields', () => {
+    const sources = [undefined, { preset: 'stripe', signed: false }, { preset: 'custom', format: { version: 1, signature: null, fields: {} } }] as const;
+    for (const source of sources) {
+      const form = makeForm({ webhookEnabled: true, ...webhookSourceFormFields(source) });
+      expect(buildScheduleInput(form).webhookTrigger).toEqual({ events: [], source: source ?? { preset: 'github' } });
+    }
   });
 });
 

@@ -2,6 +2,33 @@
 
 状态：实验接口，尚未发布。入口为插件逻辑页 `cindy.tasks`，声明 `agent.tasks: true` 后由既有插件权限流程确认。存量 `errand` 声明不自动获得此权限。
 
+## 插件任务使用远程模型（2026-11-06，未发布）
+
+`tasks.capabilities().remoteRoutes:true` 声明 `create / setModel` 可接受含 `agentDeviceId` 的完整 route。
+同账号其他电脑与 `share:<shareId>` 均沿普通远程 Agent 通道执行，任务/文件/权限/历史/插件回执仍在插件电脑。
+旧 Host 缺字段时作者保持本机选模，不把远程配置去掉来源后重试；旧本机 route、批准与回执摘要保持兼容。
+不用新增 manifest 权限、数据迁移、device-link channel 或 relay 帧，也不接管其他电脑上的任意任务。
+
+`taskSlot` 校验可选位置；`resolveRemotePluginTaskRoute` 每次复用授权远程目录核对完整模型配置，
+不用插件电脑的 Harness 或同名供应商兜底。创建落 `sessions.agent_device_id`，改模复用普通 runtime
+controller 与 Agent 切换意图，pending/effective 快照包含位置；来源参与 revision、幂等和接受前配置比较。
+组分配用 `providerGroupService.sessionGroup` 核对当前成员，核验成功时投影所选组来源，避免正常分配
+被误判成用户改来源；已离组的真实位置仍参与比较，不能借旧绑定通过。
+revision 使用固定字段顺序，pending 来源与组分配后的同一配置不因对象字段顺序而冲突。
+
+远程目录读取、Session 创建及 runtime 改模不占用跨插件的回执写队列；返回后进入队列重读归属、
+批准、Plan、任务配置和回执，已经取消或结算的输入不能再被接受。创建、改模与卸载按插件实例串行，
+维持原有安装归属和幂等保证，同时允许同插件及其他插件的取消、终态写入继续进行。
+账号切换的 drain 等待上述完整在途操作；未开始落 Session 的回执仅能在原捕获数据库内精确回滚。
+
+发送沿 `sendToSessionInternal` / InputCoordinator，接受前复核插件归属、权限、Plan、完整来源配置及当前目录。
+远程 proxy 的输出与终态走普通 Session 持久化和 `settlePluginTaskTerminal`，run 保留 acceptedConfig；
+getRun/listRuns/readMessages 复用本机回执和历史、按原插件/账号隔离。取消仍用原输入 alias 与执行实例/轮次
+经普通 `stopSessionTurn` 停止远程 proxy，不停止别的输入，断线结果未知按 reconciling，不重放付费输入。
+
+回归：`taskSlot.test.ts`、`pluginTaskSnapshot.test.ts`、`pluginTaskService.test.ts`、
+`sessionRuntimeHarnessSelection.test.ts`；同时运行原远程往返和 Session 控制回归。
+
 ## 新建任务、继续任务与读取结果
 
 插件调用的是 Cindy 普通任务（Session）能力。界面、工具说明和文档统一使用「新建任务」「打开任务」「继续任务」，不另设 AI 代办或插件专属任务概念。
@@ -217,8 +244,8 @@ Claude Code 适配层 `toSdkModelString` 会按目录窗口自动追加 `[1m]`�
 - **写入口**：创建时由 `openSession({hiddenAt})` 在同一次 INSERT 落库，不发「新建」推送；切换与用户
   显示统一走 `localDb/ipc/sessionHidden.setSessionHidden`：隐藏广播 `sessions:patched {hiddenAt}`
   （renderer 从各桶移除并重拉、灵动岛收起），显示清列并刷新 updatedAt、广播 patched 后再发
-  `sessions:created` 让侧栏与控制端整体重拉。归属复用 `ownTask`（创建回执 + 账号/批准复核），远程任务
-  与 Worker 没有创建回执，`readSession` 不认，不支持 setHidden。
+  `sessions:created` 让侧栏与控制端整体重拉。归属复用 `ownTask`（创建回执 + 账号/批准复核）；
+  只把 Agent 放到远程的自有任务照常支持，其他电脑上的任务、SSH 工作区与 Worker 不因远程路由获得创建回执。
 - **可见性口径**：`local-db:sessions:list`、会话搜索（conversationSearch）、未结束提示两条腿
   （sessionActiveTurn）、hook-control 最近任务排除隐藏任务；用量统计等全量口径不排除。灵动岛/菜单栏
   运行态与系统通知经 `sessionFlagRegistry` 同步判定跳过（首次 list 时按账号库预热，加载前按可见处理）；

@@ -75,3 +75,64 @@ pnpm --filter desktop preview:island-mascots
 角色或右侧工具按钮时让开；刘海屏展开时中间被刘海占住，余量跟在左侧角色后面。芯片的标称宽度由 main 算好随 `AgentIslandQuotaItem.width` 下发，helper 用它判断
 放得下几个、不测字体；改芯片字号、logo 尺寸或间距时，同步 `shared/agentIsland.ts` 的 `AGENT_ISLAND_QUOTA_*`
 与 `AgentIslandQuotaRow` 的常量，并重新实测「标称 ≥ 实绘」（见 `agentIslandCompactBadgeWidth.test.ts`）。
+
+## 系统灵动岛（PROLED MacBook Pro）与实时活动
+
+**命名**：本目录做的顶部任务面板，界面上叫「任务胶囊」（繁中「任務膠囊」，其他语言 Agent Notch），原名「灵动岛 / Agent Island」；
+「灵动岛」只指 Apple 的（繁中「動態島」），设置页分区标题沿用「灵动岛」统称两者。代码标识（`agentIsland`、`AgentIsland*`）不改。
+术语见 `i18n/glossary.json` 的 `agent-notch`、`macos-dynamic-island`。
+
+2026-10 发布的 PROLED MacBook Pro 用摄像头挖孔取代刘海，系统自己的灵动岛（`MenuBarAgent`
+的 CenterHUD）画在屏幕顶部正中。macOS 27.3 实测（模拟形态，与 Apple 设计资源的边框图一致）：
+空闲约 57×32pt、距顶边 8pt；计时器实时活动紧凑态约 147×32pt；点开后约 261×58pt。
+
+- **识别**：`AgentIslandScreenMetricsProvider.screenHasSystemIsland`——内建屏且
+  `NSScreen.touchCapabilities` 含多点触摸，或私有 `_centerHUDDefaultFrame` 非空；两者都走运行时
+  查询，旧 SDK 也能编译。这类屏幕 `hasNotch` 一律为 false（挖孔不是可躲的刘海），也不做居中吸附。
+- **默认位置**：main 侧 `getLayoutPreferenceForDisplay` 在没有保存位置时，把岛放在系统灵动岛展开
+  上限（`AGENT_ISLAND_SYSTEM_ISLAND_EXPANDED_HALF_WIDTH`）右侧；用户拖动后照常记住自己的位置。
+  原因：系统灵动岛**画在我们的面板之上**（窗口列表报层级 26，我们是 27，合成时它仍在上），而且
+  **不吞点击**，重叠时会挡住我们的内容并让一次点击同时触发两个岛。
+- **模拟测试**：`XDT_AGENT_ISLAND_SIMULATE_SYSTEM_ISLAND=1` 把主屏当作系统灵动岛屏。真实的系统
+  灵动岛只能在关闭 SIP/AMFI 的 27.3 虚拟机里用 `MenuBarAgent` 的 `EmulateCenterHUD` 打开；这种
+  虚拟机里第三方 `_centerHUD*` 读数全为 0，`liveactivitiesd` 也查不到第三方应用，不能用来验证实时活动。
+
+### 实时活动（`live-activity/`）
+
+设置页「在系统灵动岛显示任务」，默认开启，与我们自己的岛是否开启无关。有灵动岛的 Mac 显示在
+系统灵动岛，其他 27.3 Mac 显示在菜单栏右侧的实时活动区。
+
+- **只能由 Cindy 主进程发起**：ActivityKit 按发起进程的应用身份找 `NSSupportsLiveActivities` 与扩展；
+  本 helper 是父进程直接拉起的子进程，即使放进 `Contents/MacOS` 也会被拒（`unsupportedTarget`）。
+  所以 main 通过 N-API 扩展 `cindy-agent-activity.node`（`addon.mm` + `CindyAgentActivityController.swift`）
+  调用，状态投影与节流在 `src/main/agent-island/liveActivity.ts`。
+- **发起时必须有可见窗口**：没有窗口会被拒（`visibility`），发起后转入后台照常更新。被拒后等下一次
+  窗口获得焦点或 15 秒后重试；全程只保持一个活动，启动时先结束上次运行残留的活动。
+- **Widget 扩展** `CindyAgentActivity.appex` 在 postPackage 装进 `Contents/PlugIns`，bundle id 为
+  `<应用 id>.agent-activity`。必须按 Xcode 的方式用 `-e _NSExtensionMain` 链接：从 Swift `main`
+  启动会跳过 ExtensionFoundation 的进程身份初始化，被 chronod 拉起即崩溃。共享的
+  `CindyAgentActivityAttributes` 在扩展与原生扩展里都以 `-module-name CindyAgentActivity` 编译。
+- **扩展里的界面**：图片只认编译进 Asset Catalog 的，从文件读的 `NSImage` 会渲染成灰块。`mascots/`
+  里的素材没有眼睛（眼睛由本 helper 绘制），所以 `build.mjs` 先运行打包好的 helper
+  `--export-mascots <dir>`，导出每个角色在运行中／等你处理／已完成三种姿态的静帧
+  （`<skin>-running.png` 等），再用 `actool` 编成 `Assets.car`；改角色画法后实时活动会自动跟上。灵动岛与菜单栏药丸背景恒为深色，文字用白色而
+  不是 `.primary`；菜单栏会省略只有文字的紧凑右侧区域，状态位要带一个图标。
+  伙伴的任务在等你处理或已回复时，左侧换成伙伴头像（`ContentState.companion`：沿用岛上已压到 2 KB 以内的
+  JPEG 缩略图，没有图时用表情或首字配色相底）；运行中仍显示角色。内容更新整体不能超过 4 KB，超限的头像
+  直接丢掉、改用首字。动态图片用 `NSImage(data:)` 可以正常显示，只有从文件读的才会变灰块。
+  颜色与计数格式跟我们的岛一致：运行中橙、等你处理青、未读完成绿，计数写成「等你处理 · 运行中」。
+- **提醒展开**：只有「等你处理的任务变多」或「转为已完成」时带 `AlertConfiguration` 更新，系统会把活动
+  短暂展开（菜单栏里是药丸下方的展开卡片）；计数下降和普通进度更新不提醒，首次发起也不提醒。提醒音用
+  应用 `Resources` 里的静音 `cindy-live-activity-silent.caf`（`build.mjs` 生成），声音仍由我们的岛和通知负责。
+  系统会限制提醒频率，连续提醒时后一次可能延迟出现。
+- **和任务胶囊的分工**：角色与事件音效两边共用（设置页「共用设置」）。任务胶囊关闭时它的 helper 已挂起，
+  事件音效改由主进程用 `afplay` 播放同一组文件（`src/main/agent-island/soundFallback.ts`），不为放声音拉起 helper。
+  只开实时活动时，完成与待回复的系统通知由它代替（`AgentIslandService.ownsTaskAlert`），前提是用户在系统设置里允许、
+  且它正在显示或此刻有可见窗口能发起（`AgentIslandLiveActivity.ownsAlerts`）；出错仍发系统通知（实时活动没有出错样式）。
+- **构建条件**：`live-activity/build.mjs` 需要 macOS 27.3 SDK 与 Apple 芯片，否则整段跳过、应用不带
+  此功能；`CINDY_LIVE_ACTIVITY=0` 可主动跳过。本地验证：
+  `DEVELOPER_DIR=/Applications/Xcode-beta.app/Contents/Developer node build.mjs addon <out.node> arm64`，
+  再对打包好的 `.app` 运行 `build.mjs extension <App.app> arm64`。
+- **发布签名**：扩展必须带 App Sandbox。`scripts/ci/lib.mjs` 的 `signMacAppWithIdentity` 在签主 app 之前，
+  先用 `live-activity/extension.entitlements` 和发布身份单独签 `Contents/PlugIns/*.appex`；对整个包 `--deep`
+  统一签会丢掉扩展的沙盒权限，扩展将无法加载。

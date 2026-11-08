@@ -15,6 +15,8 @@ import { app, ipcMain, BrowserWindow, net, shell } from 'electron';
 
 import {
   createIM,
+  BlueBubblesIM,
+  LocalWebhookReceiver,
   createDiscordIM,
   createDingTalkIM,
   createFeishuIM,
@@ -55,6 +57,7 @@ import { listTelegramKnownGroups } from './telegram/groupWindow';
 import { assertTrustedAppRendererEvent } from '../security/trustedAppRenderer.js';
 import { throwIpcError } from '../utils/ipcValidate.js';
 import { imHostAccountScope } from './accountScopeBridge';
+import { blueBubblesStateStorage } from './imessage/storage';
 import { ownerScopedImSecrets } from './ownerScopedStorage';
 import { captureImAccountGeneration, isImAccountGenerationCurrent } from './accountBoundary';
 import { getDbClient } from '../localDb/client/current';
@@ -380,3 +383,17 @@ export const im = createIM([
   dingtalkIm,
   wecomIm,
 ]);
+
+const localImReceivers = new Map<string, LocalWebhookReceiver>();
+export function createBotIMessageIM(secretKeyPrefix: string, connectionId: string): BlueBubblesIM {
+  return new BlueBubblesIM(host, {
+    secretPrefix: secretKeyPrefix,
+    storage: blueBubblesStateStorage(connectionId),
+    receiver: (listenHost, port) => {
+      const key = `${listenHost}:${port}`;
+      let receiver = localImReceivers.get(key);
+      if (!receiver) { receiver = new LocalWebhookReceiver(listenHost, port); localImReceivers.set(key, receiver); }
+      return receiver;
+    },
+  });
+}

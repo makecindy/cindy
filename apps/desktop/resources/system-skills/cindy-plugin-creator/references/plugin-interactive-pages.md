@@ -23,12 +23,19 @@
 | 首屏来源 | 适用场景 | 起点 |
 | --- | --- | --- |
 | 后端生成完整 HTML | 界面随意图变化，希望修改后端就能更新界面 | loader 的 open_view |
-| 包内静态 HTML | 小表单、固定图表，界面和插件一起发布 | static |
+| 包内静态 HTML | 小表单、固定图表，或模型只传 JSON、由页面统一渲染；界面和插件一起发布 | [static](examples/interactive-pages/static/) |
 | Cindy 对话中的 AI 生成完整 HTML | 用户临时需要组合界面，数据由既有工具提供 | loader 的 show_page |
 
 后端可选：插件也可以只用自己的存储（[library §4.10.1](plugin-files-and-library.md)）
 自闭环，页面写法不变。无论首屏由谁生成，之后页面脚本都查询 JSON、更新局部，遵守同样的
 工具、凭证和数据规则。
+
+结构化首屏可沿用 static 的接线：模型调用开页面工具，插件先校验，再把只供页面的数据放入
+结果根 `_meta`；页面在 connect 前注册 `ontoolresult`，从根 `_meta` 取数据。
+static 原例使用 `structuredContent`，那部分数据也会进入模型。
+包内页面直接收到首次结果；加载器换出的新页面则不会重收已消费的结果，所以后者必须把首屏数据写进 HTML。
+嵌套字段写进真实 `parameters` schema，不只放在可选读取的 Manual；分工见 [§3.6](plugin-manual.md)，
+调用时校验见 [§3](plugin-tools.md)。schema 上限为 `JSON.stringify(parameters).length <= 16_384`。
 
 ### 2. 运行完整示例
 
@@ -76,6 +83,9 @@ ghost_forge_install({ dir: '<插件源码目录的绝对路径>' });
 声明的工具同时对两者可见；未写 UI 声明的工具仍只对 AI 可见。需要文件时再加入
 示例里的文件工具，删掉不用的能力声明。
 
+Manual 或模型可见工具说明提到页面专用工具时，写清“由页面调用”，并指出模型应先调用的开页面工具。
+模型误调会收到仅供页面调用的提示及可用页面入口；没有入口时列出模型可见工具，不应据此判断插件缺少能力。
+
 ### 4. main.js 为第一次调用准备整页
 
 AI 调 `open_view({intent})`，main.js 把意图发给固定后端，后端返回完整 HTML。
@@ -101,9 +111,8 @@ cindy.send({ type: 'tool-result', callId: msg.callId, ok: true, result: {
 错误用 `{isError:true, content:[{type:'text',text:'可采取行动的提示'}]}` 返回。不要把
 堆栈、响应头、令牌或未经控制的服务错误正文转给页面和 AI。
 
-`content` 是给 AI 和用户的一句话摘要。根 `_meta.view.html` 给页面，不放进模型
-上下文；`structuredContent` 适合 JSON 数据，但它也对 AI 可见。HTML 内不要放
-凭证或不必要的大数据。
+本例由 AI 调用，`content` / `structuredContent` 进入模型，根 `_meta.view.html` 给页面。
+页面调用的结果归属及告知 AI 的方法见 [§3](plugin-tools.md)；HTML 不放凭证或不必要的大数据。
 
 由 AI 写首屏时使用 show_page({title,html})，返回结构相同。生成页面的 LLM（后端模型或
 对话 AI）读[MCP Apps 页面生成手册](examples/interactive-pages/PAGE-GENERATION.md)；
@@ -251,7 +260,7 @@ innerHTML 只接转义过动态值的可信模板，不接普通数据。片段�
 | 写入使用请求编号 | 写入方去重；失败保留编号，不自动重试 |
 | 处理取消与卸载 | 用 AbortController 停止等待，关闭后不继续更新 DOM |
 | 支持浅色和深色 | 从 getHostContext 取主题，监听 onhostcontextchanged，不写死白底黑字 |
-| 明确结果归属 | content/structuredContent 给 AI；页面专用内容放根 _meta |
+| 明确结果归属 | 区分模型与页面调用，见 [§3](plugin-tools.md)；只供页面的数据放根 _meta |
 
 使用 `new App(info, capabilities, {autoResize:true})` 自动报告尺寸，通过
 `app.getHostContext()` 取主题、styles.variables 和 locale。表单应能适应窄屏。
@@ -260,7 +269,10 @@ innerHTML 只接转义过动态值的可信模板，不接普通数据。片段�
 打包后实际打开页面：检查首屏只请求一次；查询不清掉表单输入；按 Enter 和点击
 都只保存一次；HTTP 401/500 显示错误；取消后按钮恢复；重复编号不会新增记录；
 浅色、深色和窄屏没有溢出。最后关闭再打开卡片，确认恢复的是哪一屏。
+再用不提“页面/UI”的普通业务提问，检查模型是否按工具 description 主动打开页面。
 清单校验通过不代表页面脚本、网络和交互正常。
+
+经 Node 的结果要先满足 [§4.12](plugin-node-worker.md) 的单行限制，不能按更宽的页面通道放大；根 `_meta` 同样计入预算，页面和卡片限额见[参考](examples/interactive-pages/REFERENCE.md)。
 
 ### 按场景找完整代码
 

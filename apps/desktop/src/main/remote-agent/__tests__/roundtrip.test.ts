@@ -1,3 +1,4 @@
+import * as availability from '../../device-link/providerShareAvailability.js';
 import { runSessionCreationAttempt, captureSessionCreationCancellation } from '../../localDb/sessionRuntimeCleanup';
 /**
  * 远程 Agent 端到端往返(两端同进程，经 JSON 序列化模拟设备互联)：
@@ -265,6 +266,34 @@ function createHost(
 }
 
 describe('remote agent round trip', () => {
+  // #9263 integration: the real starter, host advertisement, JSON wire and
+  // dispatch must preserve guest iMessage permissions through send and steer.
+  it('delivers iMessage policy and identity to the remote execution handle', async () => {
+    const received: SendOptions[] = [];
+    const host = createHost(undefined, undefined, input => ({
+      ...fakeHostedAgent(input),
+      send: async (_message, opts) => { received.push(opts ?? {}); },
+      steer: async (_message, opts) => { received.push(opts ?? {}); },
+    }));
+    let handle: AgentSessionHandle | undefined;
+    try {
+      handle = await startRemoteAgentSession('pi', { sessionId: 'imessage-guest', workingDir: project, model: 'm' }, makeDeps(host));
+      const origin = { kind: 'im', channel: 'imessage', taskId: 'guest-task' } as const;
+      const opts: SendOptions = {
+        turnPermissionPolicy: { origin, confirmationSurface: 'desktop', forceConfirmToolCall: () => true },
+        [MAIN_OWNED_SEND_CONTEXT]: { origin, rawChannelText: 'work' },
+      };
+      await handle.send({ type: 'user', content: 'work' }, opts);
+      await handle.steer!({ type: 'user', content: 'followup' }, opts);
+      expect(received).toHaveLength(2);
+      for (const sent of received) {
+        expect(sent.turnPermissionPolicy?.origin).toEqual(origin);
+        expect(sent.turnPermissionPolicy?.forceConfirmToolCall('Bash', {})).toBe(true);
+        expect(sent[MAIN_OWNED_SEND_CONTEXT]).toEqual(opts[MAIN_OWNED_SEND_CONTEXT]);
+      }
+    } finally { await handle?.close(); host.dispose(); }
+  });
+
   // R3 routing observation: target starts as input.deviceId for an ordinary
   // same-account remote task; crossing computers alone is not groupAssigned.
   it('keeps an ordinary cross-computer task outside the group speed-policy requirement', async () => {
@@ -1603,6 +1632,13 @@ describe('shared startup lease budget', () => {
     const resumed = await f.open('history-renew', f.owner, 'm', 'native-only-on-m');
     expect(f.calls.filter(call => call.op === 'allocate')).toHaveLength(1);
     await resumed.close();
+  });
+
+  it('does not fall back to the online owner when the cloud assignment lookup times out', async () => {
+    const f = fixture(); f.state.ready = true;
+    vi.spyOn(availability, 'lookupShareAvailability').mockRejectedValueOnce(new Error('lookup timeout'));
+    await expect(f.open('cloud-pinned-no-local-cache')).rejects.toThrow('lookup timeout');
+    expect(f.calls.filter(call => call.op === 'allocate' || call.op === 'open')).toEqual([]);
   });
 
   // Unit: a failed O lookup is a known stage, not an unspecified M failure.

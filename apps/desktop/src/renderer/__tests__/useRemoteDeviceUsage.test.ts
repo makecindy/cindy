@@ -129,7 +129,7 @@ describe('createRemoteDeviceUsageMirror', () => {
     mocks.invoke.mockResolvedValue({ primary: { usedPercent: 3 } });
     const { result } = renderHook(() => useRemoteCodexAccountUsage('device-1'));
     await flushMicrotasks();
-    expect(mocks.invoke).toHaveBeenCalledWith('device-1', 'maker:usage:account', ['codex']);
+    expect(mocks.invoke).toHaveBeenCalledWith('device-1', 'maker:usage:account', ['codex', 'openai', 'default-subscription-account']);
     expect(result.current).toMatchObject({ primary: { usedPercent: 3 } });
   });
 
@@ -308,7 +308,7 @@ describe('useRemoteClaudeSessionRoute', () => {
 
 describe('remote account parity', () => {
   it('keeps builtin and named provider reads, pushes and clears separate on one device', async () => {
-    mocks.invoke.mockImplementation(async (_device, _channel, args) => args[1]
+    mocks.invoke.mockImplementation(async (_device, _channel, args) => args[1] && args[1] !== 'openai'
       ? { providerId: args[1], primary: { usedPercent: 70 } }
       : { primary: { usedPercent: 10 } });
     const builtin = renderHook(() => useRemoteCodexAccountUsage('device-1'));

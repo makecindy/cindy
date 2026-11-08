@@ -31,7 +31,7 @@ mountPage({
     <ChatSessionFileProvider value={{ sessionId: undefined, workingDir: '/fixture', origin: ctx.case === 'remote' ? { kind: 'device', deviceId: 'fixture-device' } : { kind: 'local' } }}>
       <MarkdownRenderer content={content} workingDir="/fixture" allowPrivilegedLinks={ctx.case !== 'untrusted'} />
     </ChatSessionFileProvider>
-    <button data-testid="restore-file" onClick={() => { restored = true; }}>恢复测试文件</button>
+    <button data-testid="restore-file" data-ui-page-control onClick={() => { restored = true; }}>恢复测试文件</button>
     <ToastContainer />
   </main>,
 });

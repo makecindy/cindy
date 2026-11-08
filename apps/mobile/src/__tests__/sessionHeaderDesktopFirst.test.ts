@@ -102,11 +102,9 @@ describe('mobile session header desktop-first surface', () => {
     expect(source).toContain('testID="session.composerFrost"');
     expect(source).toContain('<View ref={topOverlayRef} onLayout={handleTopOverlayLayout} pointerEvents="box-none" style={styles.sessionChrome} testID="session.chrome">');
     expect(source).toContain('<View style={[styles.sessionChromeContent, { paddingTop: horizontalSystemHeader ? nativeHeaderHeight : insets.top + (paneLayout.persistent ? spacing.lg : 0) }, companionChat && Platform.OS !== \'ios\' && { backgroundColor: colors.surface }]}>');
-    // 临时任务列表抽屉在树内,盖不住 iOS 系统栏:抽屉存续期间收起系统栏,内容区沿用打开前的顶栏高度。
-    expect(source).toContain(']), sessionListDrawerOverlayMounted);');
-    expect(source).toContain('systemBarHidden={sessionListDrawerOverlayMounted}');
-    // Stack.Toolbar 左右栏会强制 headerShown: true,收起期间整组不渲染。
-    expect(source).toContain('if (systemBarHidden) return <Stack.Screen options={{ headerShown: false }} />;');
+    // iOS 临时任务列表抽屉放进独立窗口盖住系统栏;系统栏不随抽屉开合收起。
+    expect(source).toContain("aboveSystemBar={Platform.OS === 'ios'}");
+    expect(source).not.toContain('systemBarHidden');
     expect(chromeStyle).toContain("position: 'absolute'");
     // Let native glass press feedback extend beyond the 44pt iOS header.
     expect(chromeStyle).toContain("overflow: Platform.OS === 'ios' ? 'visible' : 'hidden'");
@@ -137,7 +135,7 @@ describe('mobile session header desktop-first surface', () => {
     expect(source).toContain('session.sessionListButton');
     expect(source).toContain('{sessionListButton ? <Stack.Toolbar.View hidesSharedBackground>{sessionListButton}</Stack.Toolbar.View> : null}');
     expect(source).toContain("import { buildWideSessionNavLayout } from '@/session/wideSessionNav';");
-    expect(source).toContain("import { SessionListDrawer } from '@/session/SessionListDrawer';");
+    expect(source).toContain("import { SessionListDrawer, useSessionListDrawerMotion, useSessionListDrawerOpenGesture } from '@/session/SessionListDrawer';");
     expect(source).toContain('switchDrawerSessionInPlace,');
     expect(source).toContain("from '@/session/sessionDrawerNavigation';");
     // 同一宽度计算兼容现有调用参数。
@@ -192,6 +190,20 @@ describe('mobile session header desktop-first surface', () => {
     expect(source).toContain('if (wideSessionNav.enabled) sessionListDrawerWidthRef.current = wideSessionNav.drawerWidth;');
     expect(layout).toContain('width={paneLayout.sidebarWidth}');
     expect(source).toContain('width={sessionListDrawerWidthRef.current}');
+    // 拖到满屏即返回首页:不播返回动画;iOS 抽屉在本路由内,随页面一起弹出,中间不露出任务;
+    // Android 抽屉画在路由之上,仍须先卸载再换页。
+    expect(source).toContain("navigation.setOptions({ animation: 'none' });");
+    expect(source).toContain("if (Platform.OS !== 'ios') { queueDrawerNavigation(goHomeFromDrawer); return; }");
+    // 回首页按栈里首页的位置弹出,而不是只退一层:从伙伴聊天点进任务时下面还压着伙伴聊天页。
+    expect(source).toContain('const count = homeDismissCount(routes);');
+    expect(source).toContain('else if (count > 0) router.dismiss(count);');
+    // 拉出手势在抽屉首次渲染 open 前就被取消(JS 线程忙时 open 与 cancel 同批提交):
+    // 抽屉从未挂载,没有 onClosed 来释放父级的遮罩/读屏/返回键占用,必须由父级直接释放。
+    expect(source).toContain('if (!sessionListDrawerOpenCommittedRef.current) {');
+    // 悬浮模式下右滑任务页拉出任务栏,不再触发系统返回;拉动期间手势保持启用,否则会被取消。
+    expect(source).toContain('gestureEnabled: !sessionListDrawerOverlayMounted && !sessionListDrawerFloating');
+    expect(source).toContain('<GestureDetector gesture={sessionListDrawerPullGesture}>');
+    expect(source).toContain('enabled: sessionListDrawerFloating && (!sessionListDrawerOverlayMounted || sessionListDrawerPulling)');
     // 选任务失败路径:校验先于关闭动画——先关再弹 Alert 会让焦点归还抢走弹窗焦点。
     expect(source).toContain("Alert.alert(t('devices.list.error.sessionDeviceNotFound'));\n      return;\n    }\n    // 不派发 NativeStack REPLACE");
   });
@@ -238,7 +250,7 @@ describe('mobile session header desktop-first surface', () => {
     expect(source).toContain('discardAllPendingUploadsForScopeChange();\n    discardSessionComposerAttachmentStateRef.current();');
 
     // 复用页面实例时输入原生子树也按 sessionId 换代，旧粘贴异步事件没有新任务入口。
-    expect(source).toContain('<MobileComposerInputRow\n                    key={sessionId}');
+    expect(source).toContain('<ResizableComposerInputRow resize={composerResize}\n                    key={sessionId}');
     // key 重挂载前必须在 render 阶段把 composer state 归属切到 B；不能先拿 A 文档
     // 创建 B 的 WebView，再等被动 effect 才纠正。同步缓存缺失时 B 首帧为空态。
     const draftScopeStart = source.indexOf('const activeComposerDraftScopeKey = composerDraftScopeKey(sessionId, routeDraft);');
