@@ -7035,9 +7035,9 @@ export function handleStreamEvent(
           isBlocking: data.isBlocking,
           persistId: event.persistId,
         },
-        // Optional questions start minimized so the original message stays readable.
+        // Async delivery lets the agent continue; every new question still starts expanded.
         // Replayed requests preserve the user's existing viewing state.
-        askUserViewerState: keepAskProgress ? state.askUserViewerState : data.delivery === 'async' ? 'minimized' : 'expanded',
+        askUserViewerState: keepAskProgress ? state.askUserViewerState : 'expanded',
         // Only an unchanged pending request may retain its draft. A new batch
         // or changed question content starts clean, even with the same requestId.
         askUserDraft: keepAskProgress ? state.askUserDraft : null,
