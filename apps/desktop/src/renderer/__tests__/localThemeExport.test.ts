@@ -31,6 +31,7 @@ function copyAndLoadTheme(source: Theme): {
     electronAPI: {
       localThemes: {
         listSync: () => payload,
+        onChanged: () => () => {},
       },
     },
   });
@@ -109,6 +110,7 @@ describe('local theme export', () => {
       electronAPI: {
         localThemes: {
           listSync: () => payload,
+        onChanged: () => () => {},
           list: async () => payload,
         },
       },

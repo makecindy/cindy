@@ -11699,14 +11699,22 @@ describe('直连优先、中继兜底(Device Link direct path)', () => {
       expect(h.client.getPeerPath('dev-b')).toBe('relay');
       const rows = info.mock.calls.filter(([s]) => s.startsWith('device-link diagnostic '))
         .map(([s]) => JSON.parse(s.slice('device-link diagnostic '.length)));
+      // A row may be split into `transport.head` when it is too large for one upload line.
+      const headOf = (row: Record<string, any>): any[] => row.transport?.head ?? row['transport.head'] ?? [];
+      // Attaching moves the unacknowledged relay head onto the direct path, so the attach row
+      // is the only place that still shows which relay prefix had held the cumulative ACK.
+      const movedRow = rows.find(row => row.stage === 'send' && row.outcome === 'moved-to-direct');
+      expect(movedRow).toMatchObject({ moved: 2 });
+      expect(headOf(movedRow!)).toEqual([
+        expect.objectContaining({ seq: 1, bytes: expect.any(Number), path: 'relay', sent: true }),
+        expect.objectContaining({ seq: 2, bytes: expect.any(Number), path: 'relay', sent: true }),
+      ]);
+      // The detach row is recorded before the direct frames are reset, so it reports the
+      // interrupted direct write instead.
       const pathRows = rows.filter(row => row.stage === 'path');
-      const snapshot = Object.assign({}, ...pathRows.map(row => row.transport ?? {}));
-      // Capture before detach clears the path: later fallback logs cannot show
-      // which unacknowledged prefix was still on the relay.
-      const heads = snapshot.head ?? pathRows.find(row => row['transport.head'])?.['transport.head'];
-      expect(heads).toEqual(expect.arrayContaining([expect.objectContaining({ seq: expect.any(Number),
-        bytes: expect.any(Number), path: 'relay', sent: true })]));
       expect(pathRows[0]).toMatchObject({ reason: 'send-failed' });
+      expect(headOf(pathRows[0])).toEqual(expect.arrayContaining([expect.objectContaining({
+        path: 'direct', sent: true, attempts: expect.any(Number) })]));
       const fallbackHead = h.current().sent.slice(initial.length).filter(env => env.id === 'head');
       expect(fallbackHead).toHaveLength(initialHead.length);
       // Reuse the original sequence and every fragment; the receiver can assemble and deduplicate it.
