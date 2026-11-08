@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
+import {mobileBuildNumber, mobileConfig, mobileFollowup, mobileNext, mobileReceipt} from '../personal-build/mobile.mjs';
 import { localPluginsIdentity } from '../personal-build/automatic.mjs';
 import { exportBuild, parseManifest, syncPlugins } from '../personal-build/managed.mjs';
 import { auditPlugins, configFrom, copyPlugin, discover, packageHash, prepare, prepareLocalPlugins, run, verifyReport, verifyFreshSelection, verifyUpgradeSnapshot } from '../personal-build.mjs';
@@ -16,6 +17,79 @@ import { auditPlugins, configFrom, copyPlugin, discover, packageHash, prepare, p
 const tmp = t => { const p = fs.mkdtempSync(path.join(os.tmpdir(), 'cindy-personal-test-')); t.after(() => fs.rmSync(p, { recursive: true, force: true })); return p; };
 const put = (file, value) => { fs.mkdirSync(path.dirname(file), { recursive: true }); fs.writeFileSync(file, typeof value === 'string' ? value : JSON.stringify(value)); };
 const repoId = { full_name: 'example/app' };
+
+// Delivery integration contract: earlier one-off scripts could reuse old signing profiles,
+// install into the other app/device, or reinstall after an interrupted tool call. Existing
+// composition tests do not cover device receipts. Minimal inputs are plugin metadata/errors;
+// this runner tier exercises production transitions without contacting a phone or Apple.
+const mobileIdentity = {
+  enabled:true, platform:'ios', bundleId:'com.example.personal', appGroupId:'group.com.example.personal',
+  teamId:'ABCDEFGHIJ', signingCertificateSha1:'A'.repeat(40), region:'global',
+  stateDir:'/personal/mobile', deviceId:'00000000-0000-0000-0000-000000000001',
+  hardwareUdid:'00000000-0000000000000001', launchAfterInstall:false, verifyInstallationMetadataOnly:true,
+};
+const delivery = phase => ({phase, identity:mobileIdentity, build:'2026110902', app:'/personal/Cindy.app'});
+const appInfo = build => ({ok:true, result:{ok:true, udid:mobileIdentity.deviceId,
+  bundleId:mobileIdentity.bundleId, installed:true,
+  app:{bundleIdentifier:mobileIdentity.bundleId, bundleVersion:build}, matchesLocal:null}});
+
+test('personal mobile delivery selects one physical device, never downgrades or launches', () => {
+  let d = delivery('awaiting-device');
+  assert.equal(mobileNext(d).tool, 'devices');
+  d = mobileReceipt(d, 'devices', {devices:[{udid:mobileIdentity.deviceId, kind:'physical', platform:'ios', isAvailable:false}]});
+  assert.equal(d.phase, 'awaiting-device');
+  d = mobileReceipt(d, 'devices', {devices:[{udid:mobileIdentity.deviceId, kind:'physical', platform:'ios', isAvailable:true}]});
+  assert.equal(mobileNext(d).args.action, 'info');
+  assert.throws(() => mobileReceipt(d, 'info', {...appInfo('2026110901').result, udid:'other'}), /another device/);
+  const ready = mobileReceipt(d, 'info', appInfo('2026110901'));
+  assert.deepEqual(mobileNext(ready).args, {action:'install', udid:mobileIdentity.deviceId, appPath:'/personal/Cindy.app', wait:60});
+  assert.equal(mobileNext(mobileReceipt(d, 'info', appInfo('2026110903'))), null);
+  const verified = mobileReceipt(d, 'info', appInfo('2026110902'));
+  assert.equal(verified.phase, 'installed-metadata-verified');
+  assert.equal(verified.fullByteMatchVerified, false);
+  assert.equal(mobileNext(verified), null);
+});
+
+test('uncertain installation reconciles metadata instead of blindly retrying', () => {
+  const d = delivery('installing');
+  assert.equal(mobileNext(d).args.action, 'info');
+  assert.throws(() => mobileReceipt(d, 'install', {ok:false, error:{message:'connection lost'}}), /connection lost/);
+  const unresolved = mobileReceipt(d, 'info', appInfo('2026110901'));
+  assert.equal(unresolved.phase, 'installation-unconfirmed');
+  assert.equal(mobileNext(unresolved), null);
+  const done = mobileReceipt(d, 'install', {udid:mobileIdentity.deviceId, bundleId:mobileIdentity.bundleId,
+    installed:true, state:'done', execution:'executed'});
+  assert.equal(done.phase, 'installing'); // Tool success still requires installed metadata.
+  assert.equal(mobileReceipt(done, 'info', appInfo('2026110902')).phase, 'installed-metadata-verified');
+});
+
+test('mobile configuration freezes an external identity and rejects launching or region changes', t => {
+  const root = tmp(t), source = path.join(root, 'source'), identityFile = path.join(root, 'device.json');
+  fs.mkdirSync(source);
+  const configFile = path.join(root, 'config.json');
+  put(configFile, {version:1, name:'personal', region:'global', app:{checkout:source, repository:'example/app'}, mobileConfig:'device.json'});
+  put(identityFile, {...mobileIdentity, stateDir:'mobile-state'});
+  const frozen = configFrom(configFile);
+  put(identityFile, {...mobileIdentity, bundleId:'com.example.other'});
+  assert.equal(frozen.mobileConfig, undefined);
+  assert.equal(frozen.mobile.bundleId, mobileIdentity.bundleId);
+  assert.equal(mobileConfig(frozen.mobile, root, 'global').stateDir, path.join(fs.realpathSync(root), 'mobile-state'));
+  assert.throws(() => mobileConfig({...mobileIdentity, launchAfterInstall:true}, root, 'global'), /never launches/);
+  assert.throws(() => mobileConfig(mobileIdentity, root, 'cn'), /regions must agree/);
+  assert.equal(mobileBuildNumber(2026110902, new Date('2026-11-09T01:00:00Z')), '2026110903');
+  assert.equal(mobileBuildNumber(2026110903, new Date('2026-11-08T01:00:00Z')), '2026110904');
+});
+
+test('optional mobile build failure preserves the desktop check and reports a separate pending problem', async t => {
+  const file = path.join(tmp(t), 'report.json');
+  put(file, {state:'checked', configuration:{mobile:{enabled:true}}});
+  const result = await mobileFollowup(file, async () => {throw Error('Expired signing profile');});
+  assert.equal(result.phase, 'build-failed');
+  assert.match(result.error, /Expired/);
+  assert.equal(JSON.parse(fs.readFileSync(file)).state, 'checked');
+  put(file, {configuration:{}});
+  assert.deepEqual(await mobileFollowup(file, () => {throw Error('must not build');}), {phase:'disabled'});
+});
 function pr(number, head, base = 'main', repository = repoId) {
   return { number, user: { login: 'somebody' }, draft: true, head: { ref: head, sha: 'a'.repeat(40), repo: repository }, base: { ref: base, repo: repoId }, html_url: `https://github.com/example/app/pull/${number}` };
 }

@@ -101,6 +101,74 @@ rollback candidate; its compatibility with data created by a newer build must st
 There is no automatic rollback of data and no automatic cleanup of worktrees. When finished, use
 normal Git worktree management after checking no process or uncommitted work depends on the directory.
 
+## Personal iPhone companion delivery
+
+The optional mobile step consumes the **same `report.json` and frozen source commit** as Desktop.
+It never discovers another PR list, skips a draft, changes the Desktop restart decision, or enables
+the unattended supervisor. This is local developer delivery, not App Store, TestFlight or OTA.
+
+Set `mobileConfig` to a JSON file outside the repository (relative to the personal config):
+
+```json
+{
+  "enabled": true,
+  "platform": "ios",
+  "region": "global",
+  "bundleId": "com.example.personal",
+  "appGroupId": "group.com.example.personal",
+  "teamId": "ABCDEFGHIJ",
+  "signingCertificateSha1": "YOUR_40_HEX_CERTIFICATE_FINGERPRINT",
+  "deviceId": "EXACT_DEVICE_ID_FROM_CINDY_SIMULATOR",
+  "hardwareUdid": "HARDWARE_UDID_FOR_PROVISIONING",
+  "stateDir": "./mobile-state",
+  "launchAfterInstall": false,
+  "verifyInstallationMetadataOnly": true
+}
+```
+
+An inline `mobile` object is also supported; do not configure both. `configFrom` resolves the shared
+file into the upgrade snapshot. Changing it later cannot retarget an existing candidate. An optional
+`regionConfigFile` points at the existing Mobile region-config format; credentials stay in Apple/Xcode
+and are never placed in this JSON. Bundle ID, signing team/certificate, App Group and exact physical
+device are explicit, with no personal account defaults in the repository.
+
+`check` automatically follows successful Desktop checks with `mobile-build` when enabled, including
+when called by `upgrade-check` or `auto-check`. A mobile failure is recorded separately in
+`report.mobileDelivery`; Desktop remains checked. Each native build attempt has a new artifact directory
+and a monotonic build number from the configured state directory. A failed attempt may be resumed with
+`mobile-build --report BUILD_REPORT`; it keeps the PR snapshot and does not overwrite earlier artifacts.
+The source report must describe a composed, disposable checkout; generated ignored iOS files are
+regenerated there. Tracked native sources are refused before `prebuild --clean`.
+
+Build uses Release mode, the existing endpoint/region loader and CocoaPods setup, and Xcode's exact
+physical-device destination (not `generic/platform=iOS`). All three shared-container readers and
+entitlements use the configured App Group. Every extension is checked independently: a main-app deep
+signature check alone can miss a provisioning file replaced by incremental Xcode signing. Verification
+checks profile expiry, certificate, team, App ID, device authorization, App Groups, embedded JavaScript,
+version agreement and disabled OTA. No Apple capability is deleted to get past a signing failure.
+
+### Cindy task continuation (installation stays in the device plugin)
+
+1. Inspect `mobile-status --report BUILD_REPORT`; after a build, run `mobile-next --report BUILD_REPORT`.
+2. Execute its `next` object through `ghost_call` for `cindy-simulator`. Only `devices`, `app info` and
+   `app install` can be emitted. Save the actual receipt outside the source tree, then call
+   `mobile-record --report BUILD_REPORT --action devices|info|install --receipt RECEIPT`.
+3. Repeat `mobile-next` after recording each result. Offline devices remain `awaiting-device`; end
+   this task's attempt and resume on the next explicit update/continuation. Do not spin or create a
+   background schedule. A newer installed version ends as `superseded`, without downgrading.
+4. Installation intent is persisted before returning the install call. If the task is interrupted,
+   the next action is **read installed metadata**, never repeat installation blindly. An old/missing
+   installation after an uncertain result becomes `installation-unconfirmed`; investigate the original
+   operation before retrying. A successful install receipt still requires a matching metadata read.
+5. `installed-metadata-verified` proves the phone reports the intended bundle/version. It does not prove
+   every installed byte matches, login works, remote service works, or notifications work. Do not launch,
+   screenshot or test phone UI as part of this flow. Never uninstall either identity or clear its data.
+
+The native builder and Desktop supervisor do not call the plugin themselves. **A Cindy update task owns
+the installation continuation**; when no task is running, the package simply remains pending. There is
+no newly enabled daily schedule, always-on device watcher, silent phone rollback or implicit Desktop
+restart. Keep Desktop and mobile results separate in the final report.
+
 ## Plugins and duplicate installations
 
 Plugins changed by selected PRs/local refs become public-instance seeds under the generated app's
