@@ -46,6 +46,16 @@ Agent 只能通过 `updateService.ts` 的 `applyConfirmedAppUpdateForAgent` 走�
 check → download → relaunch 状态机，且必须先经宿主确认卡；不得给 Agent 新开下载、替换或重启
 路径。产品规则见 [`../product-rules/agent-app-update.md`](../product-rules/agent-app-update.md)。
 
+## Rosetta 下的 x64 包换装原生架构
+
+应用更新只前进不后退，唯一例外由 `updateService.ts` 的 `appUpdateRelation` 统一判定：
+darwin + x64 + `app.runningUnderARM64Translation` 的进程，经 `manifestService.fetchAppUpdateManifest`
+读到不低于 x64 版本的同渠道 `manifest-darwin-arm64*.json` 时，同版本 arm64 hotfix 也视为可安装。
+补丁在 `patch-info.json` 记 `targetArch: 'arm64'`，换装后进程已是 arm64，同版本补丁按已应用清理。
+arm64 清单不写清单缓存、不通知监听者，引擎安装继续按进程架构取资产。macOS 执行器整包替换
+`.app`，换架构不残留旧文件。Agent 更新查询保持严格版本比较。新增版本闸门须复用 `appUpdateRelation`，
+不要另写同版本例外。
+
 ## 引擎二进制的后台下载
 
 主程序的检查、下载、ready、自动重启、替换和回滚条件不依赖引擎下载。环境就绪后，

@@ -10031,6 +10031,8 @@
     "banner": {
       "title": "Mis à jour vers {{version}}",
       "subtitle": "Relancer pour appliquer",
+      "nativeBuildTitle": "Version Apple silicon prête",
+      "nativeBuildSubtitle": "Redémarrez pour basculer ; vos tâches et réglages sont conservés",
       "viewNotes": "Voir les nouveautés",
       "viewNotesAria": "Voir les nouveautés de la version {{version}}",
       "button": "Relancer",
