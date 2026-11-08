@@ -100,6 +100,20 @@ describe('dedicated Auto-review candidate policy', () => {
     await expect(route('classify')).resolves.toBe('{"verdict":"allow"}');
   });
 
+  it('propagates a quota-marked failure from the custom auxiliary chain', async () => {
+    const route = createAutoReviewModelRouter({
+      logger: logger(),
+      requestCandidate: async (_prompt, candidate) => failed(candidate, 'http_error', 400),
+      createAuxiliaryFallback: () => async () =>
+        failed(DEDICATED_AUTO_REVIEW_CANDIDATES[0], 'http_error', 402, true),
+    });
+
+    await expect(route('classify')).resolves.toEqual({
+      kind: 'auto-review-model-failure',
+      reason: 'quota_exhausted',
+    });
+  });
+
   it('uses the captured custom fallback only after all dedicated candidates fail', async () => {
     const calls: string[] = [];
     const fallback = vi.fn(async (_prompt, opts) => {

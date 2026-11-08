@@ -2520,17 +2520,49 @@ function failedAttempt(
     : { ...base, reason: failure.reason };
 }
 
-/** Inspect only the bounded provider error body, then discard it. */
+// Provider error bodies can be arbitrarily large. Only the first few KiB can
+// carry a deterministic quota marker, so the stream stops at that boundary
+// instead of buffering a whole page just to inspect it.
+const QUOTA_ERROR_BODY_BYTES = 4096;
+
+/** Inspect at most the bounded provider error body, then discard it. */
 async function responseIndicatesQuotaExhaustion(
-  response: { text(): Promise<string>; body?: { cancel(): Promise<unknown> } | null },
+  response: Awaited<ReturnType<typeof undiciFetch>>,
 ): Promise<boolean> {
-  try {
-    const body = await response.text();
-    return matchesDeterministicUsageExhaustionText(body.slice(0, 4096));
-  } catch {
+  // HTTP 402 is deterministic even with an empty or generic body.
+  if (response.status === 402) {
     await response.body?.cancel().catch(() => undefined);
+    return true;
+  }
+  const body = response.body;
+  const reader = (() => {
+    try {
+      return body && typeof body.getReader === 'function' ? body.getReader() : null;
+    } catch {
+      return null;
+    }
+  })();
+  if (!reader) {
+    await body?.cancel?.().catch(() => undefined);
     return false;
   }
+  const chunks: Uint8Array[] = [];
+  let bytes = 0;
+  try {
+    while (bytes < QUOTA_ERROR_BODY_BYTES) {
+      const next = await reader.read();
+      if (next.done) break;
+      const remaining = QUOTA_ERROR_BODY_BYTES - bytes;
+      const chunk = next.value.length > remaining ? next.value.subarray(0, remaining) : next.value;
+      chunks.push(chunk);
+      bytes += chunk.length;
+    }
+  } catch {
+    return false;
+  } finally {
+    await reader.cancel().catch(() => undefined);
+  }
+  return matchesDeterministicUsageExhaustionText(Buffer.concat(chunks).toString('utf8'));
 }
 
 /** Collapse homogeneous terminal failures while preserving per-candidate attempts. */

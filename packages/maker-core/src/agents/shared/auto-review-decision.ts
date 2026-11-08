@@ -570,7 +570,7 @@ export async function resolveAutoReviewDecision(
   if (!delegate) {
     return {
       verdict: 'ask',
-      reason: 'Automatic review is unavailable, so this action needs your confirmation.',
+      reason: AUTO_REVIEW_UNAVAILABLE_GENERIC_REASON,
       unavailable: true,
     };
   }
@@ -604,6 +604,11 @@ export async function resolveAutoReviewDecision(
       return {
         verdict: decision.verdict,
         ...(reason ? { reason } : {}),
+        // A host-side reviewer outage reports itself as an `ask` handoff (for
+        // example an exhausted gateway quota). Keep that marker on the ask so
+        // the card and the session notice still explain the real cause. A
+        // model verdict of allow/block is not an outage and cannot claim it.
+        ...(decision.verdict === 'ask' && decision.unavailable === true ? { unavailable: true } : {}),
       };
     }
   } catch {

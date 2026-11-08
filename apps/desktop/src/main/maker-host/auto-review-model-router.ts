@@ -277,6 +277,12 @@ export function createAutoReviewModelRouter(
               });
               return JSON.stringify(decision);
             }
+            // The custom auxiliary chain is a real candidate chain too: if it is
+            // the only phase that reports a deterministic quota failure, the
+            // caller still needs that reason instead of a generic "unavailable".
+            quotaExhausted ||= result.attempts.some((attempt) =>
+              attempt.status === 'failed' && attempt.reason === 'http_error' && attempt.quotaExhausted === true,
+            );
             deps.logger.warn('auto-review auxiliary fallback failed', {
               reason: result.ok ? 'malformed_decision' : safeFailureReason(result),
             });

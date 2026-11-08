@@ -361,13 +361,31 @@ describe('resolveAutoReviewDecision', () => {
       expect(oversized.unavailable).toBeUndefined();
     });
 
-    it('ignores an unavailable flag claimed by a delegate that did answer', async () => {
-      // delegate 给出了合法 verdict 就说明它跑起来了;它无权自称 unavailable。
+    it('ignores an unavailable flag attached to a model block verdict', async () => {
+      // 模型判定不是基础设施故障;只有宿主返回的 ask 接管可以带 unavailable。
       const decision = await resolveAutoReviewDecision(
         gray,
         async () => ({ verdict: 'block', reason: 'nope', unavailable: true }),
       );
       expect(decision.unavailable).toBeUndefined();
+    });
+
+    it('keeps the host quota handoff flagged as unavailable with its real reason', async () => {
+      // 网关额度耗尽时宿主返回的是一次 ask 接管,不是模型判定;这个标记必须
+      // 继续传给确认卡与会话提示,否则用户只会看到通用的「审阅不可用」。
+      const decision = await resolveAutoReviewDecision(
+        gray,
+        async () => ({
+          verdict: 'ask',
+          reason: 'The automatic review model gateway quota is exhausted.',
+          unavailable: true,
+        }),
+      );
+      expect(decision).toEqual({
+        verdict: 'ask',
+        reason: 'The automatic review model gateway quota is exhausted.',
+        unavailable: true,
+      });
     });
   });
 });

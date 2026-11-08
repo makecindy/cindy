@@ -2123,6 +2123,45 @@ describe('utility one-shot candidates', () => {
     expect(fetchMock).toHaveBeenCalledTimes(1);
   });
 
+  it('classifies a bare HTTP 402 as quota exhaustion without reading the body', async () => {
+    activeCatalog.mockReturnValue({
+      providers: [{
+        id: 'tapsvc',
+        name: 'Tap Service',
+        source: 'user',
+        agents: ['codex'],
+        auth: { method: 'apiKey' },
+        routing: { codex: { upstream: 'https://custom.example/v1', authStrategy: 'api-key-header' } },
+        models: { codex: [{ id: 'custom-mini', name: 'Custom Mini', contextWindow: 100_000 }] },
+      }],
+    } as never);
+    readCustomKey.mockReturnValue('custom-secret');
+    const cancel = vi.fn(async () => undefined);
+    fetchMock.mockResolvedValueOnce({
+      ok: false,
+      status: 402,
+      body: { cancel, getReader: () => { throw new Error('paid error bodies must not be read'); } },
+    } as never);
+
+    const result = await requestUtilityText(makerMock(false), 'generate', {
+      providerId: 'tapsvc',
+      agentKind: 'codex',
+      model: 'custom-mini',
+    });
+
+    expect(result).toMatchObject({
+      ok: false,
+      reason: 'all_candidates_failed',
+      attempts: [expect.objectContaining({
+        providerId: 'tapsvc',
+        reason: 'http_error',
+        httpStatus: 402,
+        quotaExhausted: true,
+      })],
+    });
+    expect(cancel).toHaveBeenCalled();
+  });
+
   it('keeps auxiliary requests on the selected connection for identical model names', async () => {
     activeCatalog.mockReturnValue({ providers: ['account-a', 'account-b'].map(id => ({
       id, name: 'Same provider', source: 'user', agents: ['codex'],
