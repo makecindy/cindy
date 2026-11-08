@@ -16,7 +16,7 @@ process.env.CINDY_LONG_SESSION_MEASURE = '1';
 process.env.CINDY_LONG_SESSION_CYCLES = String(cycles);
 const measurements = [];
 const ctx = await startVitest('test', ['src/renderer/__tests__/localHistoryViewUserEcho.test.ts'], {
-  watch: false, testNamePattern: '80 MiB|many maintenance', testTimeout: 120000,
+  watch: false, testNamePattern: 'completed history plus eight worker|many maintenance', testTimeout: 120000,
   pool: 'forks', maxWorkers: 1,
   poolOptions: { forks: { execArgv: ['--expose-gc', '--no-experimental-webstorage'] } },
   onConsoleLog(log) {

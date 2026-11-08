@@ -493,10 +493,14 @@ describe('local history view retires completed bodies', () => {
     makerChatStore.purgeSession(s);
   });
 
-  it('releases 80 MiB of completed history plus eight worker histories without ending live output', async () => {
+  it('releases completed history plus eight worker histories without ending live output', async () => {
     // Synthetic payload accounting, not a claim about process RSS. No model calls
     // or 31-hour wall-clock wait; nine independent live store slices use the same
-    // production history/persistence path. The primary matches the reported size.
+    // production history/persistence path. Keep normal unit payloads small: the
+    // explicit benchmark exercises the reported 80 MiB without CI timeouts.
+    const measure = process.env.CINDY_LONG_SESSION_MEASURE === '1';
+    const primaryBytes = (measure ? 80 : 1) * 1024 * 1024;
+    const workerBytes = measure ? 1024 * 1024 : 64 * 1024;
     const ids: string[] = [];
     let before = 0;
     let after = 0;
@@ -504,7 +508,7 @@ describe('local history view retires completed bodies', () => {
       for (let index = 0; index < 9; index++) {
         const s = sid(); ids.push(s);
         await openSession(s);
-        completedWork(s, (index === 0 ? 80 : 1) * 1024 * 1024);
+        completedWork(s, index === 0 ? primaryBytes : workerBytes);
         makerChatStore.__applyStreamEventForTest(s, {
           sessionId: s, type: 'text', persistId: 'live', data: { text: 'still working', isFinal: false },
         });
@@ -512,7 +516,7 @@ describe('local history view retires completed bodies', () => {
         before += contentSize();
         // Optional diagnostic run with Node --expose-gc. The fake DB must not
         // retain the body being measured (the real DB lives in another process).
-        const gc = process.env.CINDY_LONG_SESSION_MEASURE === '1' ? globalThis.gc : undefined;
+        const gc = measure ? globalThis.gc : undefined;
         if (gc) {
           const page = { version: 1 as const, items: projectHistoryView(rowsBySession.get(s)!, false), hasMore: false, nextCursor: null };
           rowsBySession.set(s, []);
@@ -537,7 +541,7 @@ describe('local history view retires completed bodies', () => {
         expect(makerChatStore.getSnapshot(s).messages.find(row => row.clientId === 'live')?.content)
           .toBe('still working and continuing');
       }
-      expect(before - after).toBeGreaterThanOrEqual(88 * 1024 * 1024);
+      expect(before - after).toBeGreaterThanOrEqual(primaryBytes + 8 * workerBytes);
       expect(after).toBeLessThan(1024);
     } finally {
       for (const s of ids) makerChatStore.purgeSession(s);
