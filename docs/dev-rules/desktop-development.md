@@ -372,7 +372,9 @@ PR 截图给评审看改了什么，不是自检总览的搬运：
 
 Linux 主窗口创建时注册 Electron Tray，提供显示主窗口、打开日志目录、退出 Cindy。
 与 Windows 共用菜单动作和活动任务退出确认，但 Linux 使用 `setContextMenu` 发布原生
-菜单，切换语言后重新发布；不依赖仅 Windows/macOS 提供的 `right-click` 事件。
+菜单，切换语言后重新发布；不依赖仅 Windows/macOS 提供的 `right-click` 事件。创建图标后
+同时设置悬停提示（`BRAND_NAME`）：不设置时 StatusNotifierItem 的 Title 为空，桌面面板会
+回退显示内部图标 Id（如 `Cindy_status_icon_1`）。
 实现见 `main/linuxTrayLifecycle.ts` 与 `bootstrap-electron.ts`，回归见
 `main/__tests__/linuxTrayLifecycle.test.ts`。
 

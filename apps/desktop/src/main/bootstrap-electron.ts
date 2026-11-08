@@ -3520,6 +3520,7 @@ const linuxTray = createLinuxTrayController<Menu>({
     return new Tray(icon);
   },
   buildMenu: buildDesktopTrayMenu,
+  tooltip: BRAND_NAME,
   showWindow: () => focusMainWindow(),
   onError: (error) => {
     linuxTrayLog.error('Linux tray operation failed', {
