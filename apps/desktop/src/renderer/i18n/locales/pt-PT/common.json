@@ -10161,6 +10161,12 @@
       "openSettings": "Abrir Armazenamento",
       "disable": "Não voltar a lembrar"
     },
+    "nativeBuild": {
+      "title": "Está a usar a versão para Intel",
+      "description": "Este Mac tem Apple silicon, e a versão para Intel fica muito mais lenta por funcionar com tradução. Instale a versão para Apple silicon; os seus dados são mantidos.",
+      "dismiss": "Ocultar por agora",
+      "download": "Transferir"
+    },
     "horizontalTabbarAria": "Seletor da vista principal",
     "tabs": {
       "projects": "Projetos",

@@ -10038,6 +10038,12 @@
       "openSettings": "啟儲存空間",
       "disable": "勿再提醒"
     },
+    "nativeBuild": {
+      "title": "今用 Intel 版 Cindy",
+      "description": "此 Mac 用 Apple 晶片，Intel 版須轉譯而行，遲緩甚矣。改裝 Apple 晶片版即可，資料皆存。",
+      "dismiss": "此番勿再提",
+      "download": "取之"
+    },
     "horizontalTabbarAria": "主區視圖切換",
     "tabs": {
       "projects": "案",
