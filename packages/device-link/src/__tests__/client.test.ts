@@ -11701,18 +11701,21 @@ describe('直连优先、中继兜底(Device Link direct path)', () => {
       const rows = info.mock.calls.filter(([s]) => s.startsWith('device-link diagnostic '))
         .map(([s]) => JSON.parse(s.slice('device-link diagnostic '.length)));
       const pathRows = rows.filter(row => row.stage === 'path');
-      const snapshot = Object.assign({}, ...pathRows.map(row => row.transport ?? {}));
-      // attachDirectPath migrates every relay pending entry before replaying.
-      // Before detach resets them, the partial head is direct and the tail has
-      // not been written yet. Later fallback logs cannot preserve this cause.
-      const heads = snapshot.head ?? pathRows.find(row => row['transport.head'])?.['transport.head'];
-      expect(heads).toEqual([
+      // The path row is recorded while detaching, so it still reports the interrupted
+      // direct write. Which unacknowledged prefix was on the relay just before that
+      // move only survives in the send row, so both pieces of evidence are asserted.
+      const heads = rows.flatMap(row => row.transport?.head ?? []);
+      expect(heads).toEqual(expect.arrayContaining([expect.objectContaining({ seq: expect.any(Number),
+        bytes: expect.any(Number), path: 'relay', sent: true })]));
+      expect(pathRows[0]).toMatchObject({ reason: 'send-failed' });
+      // After migration the partial head is direct, while the tail has not been
+      // written yet. Assert this before detach resets the pending entries.
+      expect(pathRows[0].transport.head).toEqual([
         expect.objectContaining({ seq: parseTransportPayload(initialHead[0].payload)?.meta.seq,
-          bytes: expect.any(Number), path: 'direct', sent: true }),
+          bytes: expect.any(Number), path: 'direct', sent: true, attempts: expect.any(Number) }),
         expect.objectContaining({ seq: parseTransportPayload(initialTail[0].payload)?.meta.seq,
           bytes: expect.any(Number), path: 'unsent', sent: false }),
       ]);
-      expect(pathRows[0]).toMatchObject({ reason: 'send-failed' });
       const fallbackHead = h.current().sent.slice(initial.length).filter(env => env.id === 'head');
       expect(fallbackHead).toHaveLength(initialHead.length);
       // Reuse the original sequence and every fragment; the receiver can assemble and deduplicate it.
