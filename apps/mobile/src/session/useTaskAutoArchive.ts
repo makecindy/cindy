@@ -1,4 +1,5 @@
 import { useEffect, useRef } from 'react';
+import { useIsFocused, usePathname } from 'expo-router';
 import { useTranslation } from 'react-i18next';
 import { projectDraftSessionTitle } from '@cindy/maker-shared/session-title';
 
@@ -71,7 +72,12 @@ export function useTaskAutoArchive({
       latest.current.delete(key);
     }
   }
-  const canAutoArchive = enabled && !!deviceId && session?.status === 'active';
+  // 离开 = 卸载、原地换任务,或失焦且聚焦的是另一个任务页(任务链接、来源任务用 push,本页仍挂在栈里)。
+  // 失焦到文件、设置这类非任务页不算离开。回到本任务页时重新登记,核对中途回来的会放弃。
+  const focused = useIsFocused();
+  const pathname = usePathname();
+  const movedToOtherTask = !focused && isOtherTaskPath(pathname, sessionId);
+  const canAutoArchive = enabled && !!deviceId && session?.status === 'active' && !movedToOtherTask;
   useEffect(() => {
     if (!sessionId || !canAutoArchive) return;
     const owner = getMobileAuthOwner();
@@ -91,6 +97,13 @@ export function useTaskAutoArchive({
   useEffect(() => {
     if (sessionId && lastUserMessage !== undefined) taskAutoArchive.noteUserMessage(sessionId, lastUserMessage);
   }, [sessionId, lastUserMessage]);
+}
+
+/** 任务页路径是 `/sessions/<id>`(含新建页 `/sessions/new`);文件、设置等路径不是。 */
+function isOtherTaskPath(pathname: string, sessionId: string | null): boolean {
+  const match = /^\/sessions\/([^/?#]+)/.exec(pathname);
+  if (!match || !sessionId) return false;
+  try { return decodeURIComponent(match[1]) !== sessionId; } catch { return true; }
 }
 
 interface LeaveSnapshot {

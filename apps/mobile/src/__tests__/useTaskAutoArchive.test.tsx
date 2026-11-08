@@ -11,11 +11,16 @@ const h = vi.hoisted(() => ({
   draft: null as string | null,
   preview: { hasWorktree: true, dirty: false } as unknown,
   undo: vi.fn(),
+  focused: true,
+  pathname: '/sessions/s',
+  gate: null as Promise<void> | null,
 }));
+vi.mock('expo-router', () => ({ useIsFocused: () => h.focused, usePathname: () => h.pathname }));
 vi.mock('react-i18next', () => ({ useTranslation: () => ({ t: (key: string) => key }) }));
 vi.mock('@/auth/authOwnerGeneration', () => ({ getMobileAuthOwner: () => ({}), isMobileAuthOwnerCurrent: () => true }));
 vi.mock('@/device-link/remoteResources', () => ({
   getRemoteResource: async () => {
+    await h.gate;
     if (h.hostAuto === 'error') throw new Error('NOT_CONNECTED');
     return { blocks: [{ primitive: 'plugin-card-actions', data: { taskArchive: { auto: h.hostAuto } } }] };
   },
@@ -33,7 +38,7 @@ import { useTaskAutoArchive } from '../session/useTaskAutoArchive';
 (globalThis as Record<string, unknown>).IS_REACT_ACT_ENVIRONMENT = true;
 afterEach(() => {
   taskAutoArchive.setArmed('s', 'card', false);
-  Object.assign(h, { running: false, hostAuto: true, bound: [], draft: null, preview: { hasWorktree: true, dirty: false } });
+  Object.assign(h, { focused: true, pathname: '/sessions/s', gate: null, running: false, hostAuto: true, bound: [], draft: null, preview: { hasWorktree: true, dirty: false } });
   vi.clearAllMocks();
 });
 
@@ -118,6 +123,49 @@ describe('auto-archive when leaving the phone task page', () => {
     // A person's message through an IM hook counts, like one typed on the phone.
     await render([...before, row('hook', { origin: { kind: 'scheduler', scheduleId: 'hook:slack' } })]);
     expect(taskAutoArchive.getState('s')).toBe('cancelled');
+    await act(async () => root.unmount());
+  });
+
+  // Bug (review of #9325): a task link or origin task opens with router.push, so the page blurs but stays mounted and
+  // was never "left". Minimal input: blur the page while the focused route is another task, vs. a non-task route.
+  it('treats a blur to another task as leaving, and a blur to a non-task screen as staying', async () => {
+    const root = createRoot(document.createElement('div'));
+    const render = () => act(async () => root.render(createElement(Page, { id: 's' })));
+    patches.length = 0;
+    h.sessions = [session];
+    await render();
+    taskAutoArchive.setArmed('s', 'card', true);
+    taskAutoArchive.markSeen('s');
+    Object.assign(h, { focused: false, pathname: '/files/s' });
+    await render();
+    await settle();
+    expect(patches).toEqual([]);
+    expect(taskAutoArchive.getState('s')).toBe('pending');
+    Object.assign(h, { focused: false, pathname: '/sessions/other' });
+    await render();
+    await settle();
+    expect(patches.map(({ patch }) => patch)).toEqual([{ status: 'archived' }]);
+    await act(async () => root.unmount());
+  });
+
+  it('gives up the archive when the user comes back to the task during the checks', async () => {
+    const root = createRoot(document.createElement('div'));
+    const render = () => act(async () => root.render(createElement(Page, { id: 's' })));
+    patches.length = 0;
+    h.sessions = [session];
+    await render();
+    taskAutoArchive.setArmed('s', 'card', true);
+    taskAutoArchive.markSeen('s');
+    let release!: () => void;
+    h.gate = new Promise<void>((resolve) => { release = resolve; });
+    Object.assign(h, { focused: false, pathname: '/sessions/other' });
+    await render();
+    Object.assign(h, { focused: true, pathname: '/sessions/s' });
+    await render();
+    release();
+    await settle();
+    expect(patches).toEqual([]);
+    expect(taskAutoArchive.getState('s')).toBe('pending');
     await act(async () => root.unmount());
   });
 
