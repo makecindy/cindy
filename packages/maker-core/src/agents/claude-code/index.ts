@@ -3328,6 +3328,7 @@ export class ClaudeCodeAgent extends BaseAgent {
       // 旧 result 会被代际检查直接丢弃、不经过 translator 的 resetTurnState，
       // 残留的 true 会让下一条普通任务真正的 thinking-only 收口失去 silent-stop 恢复。
       turnState.completedWorkerDispatch = false;
+      turnState.workerDispatchNeedsReport = false;
       turnState.apiCalls = 0;
       turnState.sawCompactBoundary = false;
       turnState.hasEmittedText = false;

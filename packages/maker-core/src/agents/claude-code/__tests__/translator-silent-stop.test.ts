@@ -130,6 +130,44 @@ function pushWorkerToolResult(
   );
 }
 
+/** 同一轮并行派单：一条 assistant 消息里挂多个 tool_use，回执同批返回。 */
+function pushWorkerToolBatch(
+  queue: ReturnType<typeof createAsyncQueue<AgentEvent>>,
+  ctx: ReturnType<typeof createCtx>,
+  calls: { name: string; payload: Record<string, unknown>; isError?: boolean }[],
+): void {
+  translateSdkMessage(
+    {
+      type: 'assistant',
+      message: {
+        content: calls.map((call, index) => ({
+          type: 'tool_use',
+          id: `worker-${index}`,
+          name: call.name,
+          input: { label: `worker-${index}` },
+        })),
+      },
+    },
+    queue,
+    ctx,
+  );
+  translateSdkMessage(
+    {
+      type: 'user',
+      message: {
+        content: calls.map((call, index) => ({
+          type: 'tool_result',
+          tool_use_id: `worker-${index}`,
+          content: JSON.stringify(call.payload),
+          ...(call.isError ? { is_error: true } : {}),
+        })),
+      },
+    },
+    queue,
+    ctx,
+  );
+}
+
 /** 派发回执之后的正常收口形态：空 thinking + end_turn。 */
 function finishWithEmptyThinking(
   queue: ReturnType<typeof createAsyncQueue<AgentEvent>>,
@@ -375,6 +413,45 @@ describe('Claude Code translator silent-stop observation (log only)', () => {
     const events = await drain(queue);
     expect(silentStopWarned(ctx)).toBe(true);
     expect(doneSilentStopFlag(events)).toBe(true);
+  });
+
+  /**
+   * 并行派单里只要有一项没派出去，主 Agent 就必须先报告失败项；
+   * 成功项不能替整批拿到「零正文收口」豁免（两种回执顺序都验一遍）。
+   */
+  it.each([
+    ['success first', { dispatched: true, worker_id: 'w-1' }, { ok: false, errorCode: 'BUSY' }],
+    ['failure first', { ok: false, errorCode: 'BUSY' }, { dispatched: true, worker_id: 'w-1' }],
+  ])('keeps silent-stop detection for a mixed dispatch batch (%s)', async (_label, first, second) => {
+    const tracker = new UsageTracker();
+    const queue = createAsyncQueue<AgentEvent>();
+    const ctx = createCtx(tracker);
+
+    pushWorkerToolBatch(queue, ctx, [
+      { name: 'mcp__cindy_orca__create_worker', payload: first as Record<string, unknown>, isError: (first as { ok?: boolean }).ok === false },
+      { name: 'mcp__cindy_orca__send_to_worker', payload: second as Record<string, unknown>, isError: (second as { ok?: boolean }).ok === false },
+    ]);
+    finishWithEmptyThinking(queue, ctx);
+
+    const events = await drain(queue);
+    expect(silentStopWarned(ctx)).toBe(true);
+    expect(doneSilentStopFlag(events)).toBe(true);
+  });
+
+  it('keeps the zero-body exemption when every dispatch in the batch landed', async () => {
+    const tracker = new UsageTracker();
+    const queue = createAsyncQueue<AgentEvent>();
+    const ctx = createCtx(tracker);
+
+    pushWorkerToolBatch(queue, ctx, [
+      { name: 'mcp__cindy_orca__create_worker', payload: { ok: true, worker_id: 'w-1', dispatched: true } },
+      { name: 'mcp__cindy_orca__send_to_worker', payload: { ok: true, target_session_id: 's-1', queued_message_id: 'm-2' } },
+    ]);
+    finishWithEmptyThinking(queue, ctx);
+
+    const events = await drain(queue);
+    expect(silentStopWarned(ctx)).toBe(false);
+    expect(doneSilentStopFlag(events)).toBeUndefined();
   });
 
   it('keeps silent-stop detection when a send_to_worker steer fell back to the queue', async () => {
