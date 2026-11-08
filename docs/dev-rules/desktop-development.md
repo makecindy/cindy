@@ -247,7 +247,10 @@ main 日志里 scope 为 `memory-usage` 的行是各进程内存采样（正式�
 `process.memoryUsage()` 细分，后面按进程类型分组列出 `app.getAppMetrics()` 的常驻内存，
 组内从大到小，单位 MB。排查「越用越卡」时，先按启动分段看 `Browser`（主进程）和最大的
 `Tab`（主界面）每小时涨多少：持续上涨、重启才回落就是泄漏；再看 `heapUsed` 与 `external` /
-`arrayBuffers` 谁在涨，区分 JS 对象和 Buffer。该 scope 只写进程类型与数字，已精确放行进
+`arrayBuffers` 谁在涨，区分 JS 对象和 Buffer。`mcpBridgeSessions` 是 Codex / Pi MCP 桥上
+存活的会话数：每个会话持有一整个 MCP server（连同全部工具 schema），它应随运行中的
+Codex / Pi 进程数起落，持续上涨说明有客户端退出后会话没被关闭（见
+`mcp-integrations/codexHttpBridge.ts` 的 `closeSessionOwnedTransports`）。该 scope 只写进程类型与数字，已精确放行进
 日志上报，不要往这行里加标题、服务名、pid 或路径。
 
 `getAppMetrics()` 的 GPU 数字不含 IOSurface 等显存，macOS 上要看 GPU 进程真实占用用
