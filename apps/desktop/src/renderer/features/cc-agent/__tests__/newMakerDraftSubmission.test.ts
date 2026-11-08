@@ -3,7 +3,7 @@ import { resolve } from 'node:path';
 import { runInNewContext } from 'node:vm';
 import ts from 'typescript';
 import { describe, expect, it, vi } from 'vitest';
-import { buildUserProvider, connectedProvidersForAgent, getModel, isModelSelectableForNewRoute, type PiReasoningEffort, type ProviderView } from '@cindy/model-providers';
+import { buildUserProvider, connectedProvidersForAgent, getModel, isModelSelectableForNewRoute, reconcileInvocationEffort, type PiReasoningEffort, type ProviderView } from '@cindy/model-providers';
 import { createWorkerLabel } from '../workerLabel';
 import type { CollabDraft } from '@/state/newMakerDraft';
 import { resolveSessionExecutionSelection } from '../../../../main/maker-ipc/sessionExecutionSelection';
@@ -23,6 +23,7 @@ import { DraftDirectoryRecovery, type DraftDirectoryRecoveryContext } from '../d
 import { createIpcError } from '../../../../shared/ipc-errors';
 import { dbToMakerAgentKind } from '../../../../shared/agentKindConversion';
 import { askPluginModelRoute, writePluginModelRouteNote } from '../pluginModelRoute';
+import { recallAgentDeviceSelection } from '../agentDeviceDraftMemory';
 import type { GhostStartTaskRouteResult } from '../../../../shared/ghost';
 
 vi.mock('@/lib/makerTransport', () => ({ makerApiFor: vi.fn() }));
@@ -216,7 +217,7 @@ async function submit(options: {
     deviceDisplayName, dbToMakerAgentKind, askPluginModelRoute, writePluginModelRouteNote, modelCatalogKey,
     controlledModelRoute: { catalogHostDeviceId: options.catalogHostDeviceId },
     activePluginModel: options.pluginRoute ? { pluginId: 'router', pluginName: 'Router', id: 'auto', name: 'Auto' } : null,
-    ...draftEffort, getModel, window,
+    ...draftEffort, getModel, reconcileInvocationEffort, recallAgentDeviceSelection, window,
     localProviders: providers, draftLocalProviders: providers, localProvidersLoading: false, providers,
     sshCodexDraftHostId: agentKind === 'codex' ? options.remoteHostId : null,
     sshDraftSelection: { model: selectedModel, effort: options.effort ?? 'medium', fastMode: false },
