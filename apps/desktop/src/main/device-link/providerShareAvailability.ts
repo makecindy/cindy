@@ -15,6 +15,7 @@ import { captureProviderManagementScope } from '../provider-group/managementScop
 import { readProviderGroup } from '../provider-group/store.js';
 import { groupFastPolicyStore } from '../provider-group/fastPolicyStore.js';
 import { isRemoteProviderInvocationAllowed } from '../maker-host/remote-provider-access-store.js';
+import { getProviderShareUsageStore } from './providerShareUsageStore.js';
 import { remoteModelAccess } from './remoteModelAccess.js';
 import { readDeviceLinkSettings } from './settings-store.js';
 import { providerShareOwnerKey } from './providerShareApi.js';
@@ -80,7 +81,9 @@ async function publishUnlocked(shares: readonly ProviderShareOwned[]): Promise<v
         if (models.length) policy.executors.push({ deviceId: member.agentDeviceId, providerId: member.providerId, models, limit: member.limit });
       }
       const ids = [...new Set(policy.executors.flatMap(row => row.models.map(model => model.id)))];
-      policy.members = share.members.filter(member => member.status === 'active').map(member => ({
+      policy.members = share.members.filter(member => member.status === 'active'
+        && getProviderShareUsageStore()?.memberGenerationReady({ ownerScope: providerShareOwnerKey(),
+          ownerDeviceId: share.hostDeviceId, shareId: share.shareId, memberId: member.memberId }, member.joinedAt)).map(member => ({
         memberId: member.memberId, joinedAt: Date.parse(member.joinedAt),
         models: ids.filter(id => offered.has(id) && remoteModelAccess.allowsDelegatedExecution(share.providerId, id, member.memberId)),
       }));
@@ -122,13 +125,21 @@ const preparations = new Map<string, Promise<void>>();
 export async function prepareShareAvailability(controller: string): Promise<void> {
   const peer = parseProviderSharePeer(controller);
   if (peer?.role !== 'guest') return;
-  const key = JSON.stringify([providerShareOwnerKey(), controller]);
+  const assertCurrent = captureProviderManagementScope();
+  const owner = providerShareOwnerKey();
+  const endpoint = getClientEndpoint('deviceLinkApiBaseUrl');
+  const verify = () => {
+    assertCurrent();
+    if (providerShareOwnerKey() !== owner || getClientEndpoint('deviceLinkApiBaseUrl') !== endpoint) throw new ProviderShareScopeChangedError();
+  };
+  const key = JSON.stringify([owner, endpoint, controller]);
   const existing = preparations.get(key);
   if (existing) return existing;
   const pending = (async () => {
     let prepared: Preparation;
     try { prepared = await shareAvailabilityRequest<Preparation>(peer.shareId, 'prepare', { memberId: peer.memberId, guestDeviceId: peer.deviceId }); }
     catch (error) {
+      verify();
       if ((error as { code?: unknown })?.code === 'NOT_FOUND') {
         for (const item of delegatedProviderShareLeases()) if (item.peer === controller && item.lease.availability) {
           invalidateProviderShareDelegation(item.peer, item.sessionId, item.lease.nonce);
@@ -137,7 +148,9 @@ export async function prepareShareAvailability(controller: string): Promise<void
       }
       throw error;
     }
+    verify();
     await reconcileStandbyGuest(controller, prepared.joinedAt);
+    verify();
     const current = new Set(prepared.assignments.map(row => row.sessionId));
     for (const item of delegatedProviderShareLeases()) {
       if (item.peer === controller && item.lease.availability && !current.has(item.sessionId)) {
@@ -152,8 +165,12 @@ export async function prepareShareAvailability(controller: string): Promise<void
         guestDeviceId: row.guestDeviceId, sessionId: row.sessionId, providerId: row.providerId,
         model: row.model, generation: row.generation,
         fastPolicy: { group: prepared.groupProviderId, revision: prepared.revision, allowFast: prepared.allowFast },
-      }, async () => ({ active: row.expiresAt > Date.now(), ownerDeviceId: prepared.ownerDeviceId,
-        generation: row.generation, expiresAt: row.expiresAt }), true);
+      }, async () => {
+        verify();
+        return { active: row.expiresAt > Date.now(), ownerDeviceId: prepared.ownerDeviceId,
+          generation: row.generation, expiresAt: row.expiresAt };
+      }, true);
+      verify();
     }
   })();
   preparations.set(key, pending);

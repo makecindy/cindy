@@ -1,7 +1,10 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { providerShareGuestPeer, type ProviderShareOwned } from '@cindy/device-link';
 const f = vi.hoisted(() => ({
-  connected: true, scope: 'owner', self: 'owner-pc', remote: true, budget: false,
+  endpoint: 'https://fake.invalid', usage: null as any, connected: true, scope: 'owner', self: 'owner-pc', remote: true, budget: false,
   invoke: vi.fn(), netFetch: vi.fn(), log: { warn: vi.fn(), error: vi.fn(), debug: vi.fn() }, request: vi.fn(), remember: vi.fn(), reconcile: vi.fn(), apply: vi.fn(), invalidate: vi.fn(),
   members: [] as any[], leases: [] as any[],
 }));
@@ -9,7 +12,7 @@ vi.mock('electron', () => ({ net: { fetch: (...args: any[]) => f.netFetch(...arg
 vi.mock('../../i18n.js', () => ({ getResolvedMainLocale: () => 'zh-CN' }));
 vi.mock('../../logger.js', () => ({ createLogger: () => f.log }));
 vi.mock('../../authManager.js', () => ({ getDeviceId: () => f.self, getAccessToken: () => null }));
-vi.mock('../../clientEndpointsService.js', () => ({ getClientEndpoint: () => 'https://fake.invalid' }));
+vi.mock('../../clientEndpointsService.js', () => ({ getClientEndpoint: () => f.endpoint }));
 vi.mock('../../serverApiClient.js', () => ({ serverApiFetch: (...args: any[]) => f.request(...args) }));
 vi.mock('../../provider-group/managementScope.js', () => ({ captureProviderManagementScope: () => {
   const scope = f.scope; return () => { if (scope !== f.scope) throw new Error('account changed'); };
@@ -18,7 +21,7 @@ vi.mock('../providerShareApi.js', () => ({ providerShareOwnerKey: () => f.scope 
 vi.mock('../providerShareAvailabilityPolicy.js', () => ({ withAvailabilityPolicyLock: (work: () => unknown) => work(), rememberAvailabilityShare: (...args: any[]) => f.remember(...args) }));
 vi.mock('../providerShareAvailabilityGuests.js', () => ({ knownStandbyGuests: () => [], reconcileStandbyGuest: (...args: any[]) => f.reconcile(...args) }));
 vi.mock('../../provider-group/store.js', () => ({ readProviderGroup: () => ({ allowFast: false }) }));
-vi.mock('../../provider-group/fastPolicyStore.js', () => ({ groupFastPolicyStore: { outgoing: () => ({ group: { revision: 7, allowFast: false } }) } }));
+vi.mock('../../provider-group/fastPolicyStore.js', () => ({ groupFastPolicyStore: { receive: async () => {}, requireOrigin: () => {}, outgoing: () => ({ group: { revision: 7, allowFast: false } }) } }));
 vi.mock('../../provider-group/runtime.js', () => ({ getProviderGroupDirectory: () => ({ resolveMembers: async () => f.members }) }));
 vi.mock('../../maker-host/remote-provider-access-store.js', () => ({ isRemoteProviderInvocationAllowed: () => true }));
 vi.mock('../../maker-host/createDesktopProviderService.js', () => ({ getDesktopProviderService: () => ({ listProviders: async () => [{ id: 'group', connected: f.connected, models: { codex: [{ id: 'allowed' }] } }] }) }));
@@ -28,19 +31,30 @@ vi.mock('../providerShareCrossRegion.js', () => ({ isCrossRegionShare: () => fal
 vi.mock('../providerShareGuest.js', () => ({ findReceivedShare: () => ({ standbyOnline: true }) }));
 vi.mock('../providerShareDelegatedAccess.js', () => ({ applyProviderShareDelegation: (...args: any[]) => f.apply(...args), delegatedProviderShareLeases: () => f.leases,
   invalidateProviderShareDelegation: (...args: any[]) => f.invalidate(...args) }));
+vi.mock('../../maker-host/subscription-fast-policy.js', () => ({ notifySubscriptionFastPolicyChanged: async () => {} }));
+vi.mock('../providerShareUsageStore.js', async importOriginal => ({ ...await importOriginal<object>(), getProviderShareUsageStore: () => f.usage }));
+import { createProviderShareUsageStore } from '../providerShareUsageStore.js';
 import { publishShareAvailability, prepareShareAvailability, allocateShareAvailability, readShareAvailabilityCatalog, beginShareAvailabilityTurn } from '../providerShareAvailability.js';
 import { readDeviceProviderCatalog, readRemoteProviderRoute } from '../../remote-agent/controller/deviceCatalog.js';
 import { remoteAgentProviders } from '../../../renderer/components/new-chat/unifiedModelSelection.js';
 vi.mock('../../device-link', () => ({ remoteBackgroundInvoke: (...args: unknown[]) => f.invoke(...args) }));
 const realApi = await vi.importActual<typeof import('../../serverApiClient.js')>('../../serverApiClient.js');
+const realDelegation = await vi.importActual<typeof import('../providerShareDelegatedAccess.js')>('../providerShareDelegatedAccess.js');
+let dir: string;
 const model = { id: 'allowed', name: 'Fake model', contextWindow: 200000, efforts: ['high'], defaultEffort: 'high' };
 const owned = { shareId: 'share', hostDeviceId: 'owner-pc', providerId: 'group', members: [{ memberId: 'member', status: 'active', joinedAt: '2026-11-08T00:00:00Z' }] } as ProviderShareOwned;
-beforeEach(() => {
+beforeEach(async () => {
   vi.clearAllMocks();
+  realDelegation.clearProviderShareDelegations(); f.apply.mockReset(); f.reconcile.mockReset();
+  f.endpoint = 'https://fake.invalid';
+  dir = fs.mkdtempSync(path.join(os.tmpdir(), 'cindy-availability-'));
+  f.usage = createProviderShareUsageStore(path.join(dir, 'usage.json'));
+  await f.usage.reconcileMemberGenerations('owner', 'owner-pc', [owned]);
   f.connected = true; f.scope = 'owner'; f.self = 'owner-pc'; f.remote = true; f.budget = false; f.leases = [];
   f.members = [{ member: { kind: 'device', agentDeviceId: 'standby', providerId: 'local', limit: 2 }, state: 'ok', view: { connected: true, models: { codex: [model, { ...model, id: 'hidden', disabled: true }] } } }];
   f.request.mockImplementation(async (path: string) => path.endsWith('/policy') ? { revision: 5, executors: [] } : {});
 });
+afterEach(() => { realDelegation.clearProviderShareDelegations(); fs.rmSync(dir, { recursive: true, force: true }); });
 describe('standby client production entry points (all identities/providers are local fakes)', () => {
   // Unit: 4505241076; the previous mocked API bypassed redaction and hid the
   // lost NOT_FOUND code. Exercise preparation through the real HTTP wrapper.
@@ -90,6 +104,53 @@ describe('standby client production entry points (all identities/providers are l
     f.scope = 'other-account';
     await expect(complete!()).rejects.toThrow('account changed');
     expect(f.request).toHaveBeenCalledTimes(count);
+  });
+  // Unit: 4505570024. Real preparation + delegation; switch after the first
+  // installed assignment or during cleanup, beyond the HTTP wrapper's guard.
+  it.each(['between-grants', 'cleanup', 'approval-endpoint', 'unchanged'] as const)('keeps preparation grants in their initiating scope at %s', async boundary => {
+    f.self = 'standby';
+    const peer = providerShareGuestPeer('share', 'member', 'guest');
+    const row = { shareId: 'share', memberId: 'member', guestDeviceId: 'guest', executorDeviceId: 'standby',
+      providerId: 'local', kind: 'codex', model: 'allowed', generation: '11111111-1111-4111-8111-111111111111', expiresAt: Date.now() + 60000 };
+    f.request.mockResolvedValue({ ownerDeviceId: 'owner-pc', joinedAt: 1, groupProviderId: 'group', revision: 7,
+      allowFast: false, assignments: [{ ...row, sessionId: 'first' }, { ...row, sessionId: 'second' }] });
+    const switchAccount = () => { f.scope = 'account-b'; realDelegation.clearProviderShareDelegations(); };
+    if (boundary === 'cleanup') f.reconcile.mockImplementationOnce(switchAccount);
+    f.apply.mockImplementation(async (owner, grant, approve, availability) => {
+      if (boundary === 'approval-endpoint') f.endpoint = 'https://other.invalid';
+      const result = await realDelegation.applyProviderShareDelegation(owner, grant, approve, availability);
+      if (boundary === 'between-grants' && grant.sessionId === 'first') switchAccount();
+      return result;
+    });
+    if (boundary === 'unchanged') {
+      await prepareShareAvailability(peer);
+      expect(realDelegation.delegatedProviderShareLeases().map(item => [item.sessionId, item.lease.ownerScope]))
+        .toEqual([['first', 'owner'], ['second', 'owner']]);
+    } else {
+      await expect(prepareShareAvailability(peer)).rejects.toThrow();
+      expect(realDelegation.delegatedProviderShareLeases()).toEqual([]);
+    }
+  });
+  // Unit: 4505570030. Production durable ledger and publisher, real pending
+  // local cleanup and executor ACKs, rather than a mocked readiness boolean.
+  it('publishes a reapproved member only after local and executor cleanup', async () => {
+    const route = { ownerScope: 'owner', ownerDeviceId: 'owner-pc', shareId: 'share', memberId: 'member',
+      guestDeviceId: 'guest', sessionId: 'old-task', executorDeviceId: 'standby', providerId: 'local',
+      model: 'allowed', agentKind: 'codex', generation: '11111111-1111-4111-8111-111111111111',
+      executorProviderId: 'local', memberKey: 'device:standby', memberJoinedAt: owned.members[0].joinedAt, expiresAt: Date.now() + 60000 };
+    await f.usage.registerDirectReceiptRoute(route);
+    const updated = { ...owned, members: [{ ...owned.members[0], joinedAt: '2026-11-08T01:00:00Z' }] };
+    const [pending] = await f.usage.reconcileMemberGenerations('owner', 'owner-pc', [updated]);
+    f.usage = createProviderShareUsageStore(path.join(dir, 'usage.json'));
+    const published = async () => {
+      f.request.mockClear(); await publishShareAvailability([updated]);
+      return f.request.mock.calls.find(([url]) => url.endsWith('/publish'))![1].body.policy.members;
+    };
+    expect(await published()).toEqual([]);
+    await f.usage.acknowledgeMemberCleanup(pending);
+    expect(await published()).toEqual([]);
+    await f.usage.acknowledgeDirectCleanup(f.usage.listPendingDirectCleanup('owner')[0]);
+    expect(await published()).toEqual([{ memberId: 'member', joinedAt: Date.parse(updated.members[0].joinedAt), models: ['allowed'] }]);
   });
   it('publishes local provider mapping and exact model permission without credentials', async () => {
     await publishShareAvailability([owned]);
