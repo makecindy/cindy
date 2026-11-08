@@ -81,14 +81,15 @@ function McpRow({
           {config.name}
         </span>
         <span
-          className="truncate text-13 leading-tight"
+          className={cn('text-13 leading-tight', config.readError ? 'break-words' : 'truncate')}
           style={{ color: 'var(--settings-integration-subtitle)' }}
         >
-          {config.transport === 'stdio' ? t('settings.mcp.fields.localConfig') : config.url}
+          {config.readError ? t('settings.mcp.errors.localUnreadable')
+            : config.transport === 'stdio' ? t('settings.mcp.fields.localConfig') : config.url}
         </span>
       </div>
       <div className="flex shrink-0 items-center gap-1">
-        <RowIconButton icon={<Pencil size={16} />} label={t('settings.mcp.editAria')} onClick={onEdit} />
+        {!config.readError && <RowIconButton icon={<Pencil size={16} />} label={t('settings.mcp.editAria')} onClick={onEdit} />}
         <RowIconButton icon={<Trash2 size={16} />} label={t('settings.mcp.deleteAria')} onClick={onDelete} />
       </div>
     </div>

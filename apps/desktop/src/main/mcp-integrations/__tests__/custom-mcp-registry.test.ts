@@ -278,9 +278,11 @@ it('registers one local configuration in all harness catalogs and removes it on 
   const arrays = ['claude', 'codex', 'pi'].map(name => [builtin(name)]);
   registerCustomMcpArrays(...arrays);
   storeMock.listCustomMcpServers.mockResolvedValue([{ ...config('local'), transport: 'stdio', url: '',
-    stdio: { command: 'node', args: [], env: {} } }]);
+    stdio: { command: 'node', args: [], env: {} } },
+    { ...config('unreadable'), transport: 'stdio', url: '', readError: 'stdio-unreadable' }]);
   await refreshCustomMcpProviders();
   for (const arr of arrays) expect(arr.map(provider => provider.name)).toHaveLength(2);
+  for (const arr of arrays) expect(arr.map(provider => provider.name)).not.toContain('unreadable');
   expect(arrays.map(arr => arr[1])).toEqual([arrays[0]![1], arrays[0]![1], arrays[0]![1]]);
   expect(getBuiltinMcpServerNames()).toEqual(['claude', 'codex', 'pi']);
   for (const agentKind of ['claude-code', 'codex', 'pi'] as const) {

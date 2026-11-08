@@ -11,6 +11,7 @@ export default {
   cases: {
     local: { about: 'Shared local MCP configuration with explicit execution location' },
     'local-narrow': { about: 'Local command form at 320 px', viewport: { width: 320, height: 1100 } },
+    'list-error': { about: 'Unreadable local configuration stays visible and deletable beside healthy tools', viewport: { width: 320, height: 700 } },
     list: { about: 'External tools section and transport scope' },
     default: { about: 'The existing Settings form expanded in the message flow' },
     narrow: { about: 'Inline form at 320 px', viewport: { width: 320, height: 1100 } },
@@ -21,6 +22,13 @@ export default {
   },
   async ready(page) { await page.getByRole('button', { name: /./ }).first().waitFor(); },
   async check(page, ui) {
+    if (ui.case === 'list-error') {
+      await page.getByText(await ui.t('settings.mcp.errors.localUnreadable'), { exact: true }).waitFor();
+      assert.equal(await page.getByRole('button', { name: await ui.t('settings.mcp.deleteAria'), exact: true }).count(), 2);
+      assert.equal(await page.getByRole('button', { name: await ui.t('settings.mcp.editAria'), exact: true }).count(), 1);
+      assert.ok(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth));
+      return;
+    }
     if (ui.case === 'list') return;
     if (ui.case.startsWith('local')) {
       await page.getByLabel(await ui.t('settings.mcp.fields.localConfig'), { exact: true }).waitFor();
