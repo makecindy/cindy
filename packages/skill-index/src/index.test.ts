@@ -36,6 +36,47 @@ function embedding(identity = 'test:model:3'): SkillEmbeddingAdapter & { embed: 
 }
 
 describe('SkillIndex task discovery', () => {
+  // Review 4507523506: a complete versioned language term must survive query
+  // extraction without leaking its numeric fragments into keyword/RRF rankings.
+  // Unit: real search, all metadata fields, misleading suffixes and unrelated numbers.
+  it.each([
+    ['C++17', 'description'], ['C++20', 'tags'], ['C++23', 'name'],
+    ['C#12', 'aliases'], ['C#12.0', 'description'], ['C++2a', 'description'],
+  ] as const)('retrieves complete %s terms from %s without numeric false hits', async (term, field) => {
+    const index = new SkillIndex();
+    const target: SkillEntry = { id: 'target', name: 'language-guide', description: 'Language method', filePath: '/synthetic/SKILL.md', source: 'local' };
+    if (field === 'name') target.name = `guide-${term}`;
+    else if (field === 'description') target.description = `Develop ${term} applications`;
+    else target[field] = [term];
+    index.sync([
+      target,
+      { ...target, id: 'numbers', name: 'release-notes', description: '17 20 23 12 12.0 2a', tags: [], aliases: [] },
+      { ...target, id: 'partial', name: 'other-language', description: `X${term} ${term}0 ${term}suffix`, tags: [], aliases: [] },
+    ]);
+    for (const query of [term, `帮我用${term}`]) {
+      const result = await index.search(query);
+      expect(result.matches.map(item => item.id)).toEqual(['target']);
+      expect(result.matches[0]?.matchedTerms).toEqual([term.toLowerCase()]);
+    }
+  });
+
+  it('preserves mixed and full-width language queries while keeping standalone numbers searchable', async () => {
+    const index = new SkillIndex();
+    index.sync([
+      { ...entries[0]!, id: 'cpp', name: 'cpp-guide', description: 'C++20', tags: [], aliases: [] },
+      { ...entries[0]!, id: 'csharp', name: 'csharp-guide', description: 'C#12', tags: [], aliases: [] },
+      { ...entries[0]!, id: 'numbers', name: 'release-notes', description: '20 12', tags: [], aliases: [] },
+    ]);
+    expect((await index.search('用Ｃ＋＋２０')).matches.map(item => item.id)).toEqual(['cpp']);
+    expect((await index.search('(C++20) / C#12.')).matches.map(item => item.id).sort()).toEqual(['cpp', 'csharp']);
+    expect((await index.search('20')).matches.map(item => item.id)).toEqual(['numbers']);
+    const adapter: SkillEmbeddingAdapter = { identity: 'same-vectors', embed: async texts => ({ modelUsed: 'same-vectors', vectors: texts.map(() => [1, 0]) }) };
+    await index.buildVectors(adapter);
+    const hybrid = await index.search('C++20', { embedding: adapter });
+    expect(hybrid.matches[0]?.id).toBe('cpp');
+    expect(hybrid.matches.filter(item => item.id !== 'cpp').every(item => item.matchedTerms.length === 0)).toBe(true);
+  });
+
   // Reviews 4507301730/4507301733: real search must tokenize once per query and
   // must not give Preact.js lexical credit for React.js. Unit: six entries plus
   // controlled vectors distinguish ranking mechanics from model quality.

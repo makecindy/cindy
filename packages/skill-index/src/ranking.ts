@@ -17,15 +17,17 @@ export function retrievalText(entry: SkillEntry): string {
 
 function queryTerms(query: string): string[] {
   const terms = new Set<string>();
-  // Segmenter separates the punctuation in language names such as C++ and C#.
-  for (const term of query.match(/(?<![a-z0-9_+#])[a-z][a-z0-9]*(?:\+\+|#)(?![a-z0-9_+#])/gu) ?? []) {
+  // Preserve symbol-bearing names and versions (C++20, C#12.0, C++2a).
+  // Do not let Segmenter turn their suffixes into unrelated numeric query terms.
+  const remaining = query.replace(/(?<![a-z0-9_+#])[a-z][a-z0-9]*(?:\+\+|#)(?:\d[a-z0-9]*(?:\.[a-z0-9]+)*)?(?![a-z0-9_+#])/gu, term => {
     terms.add(term);
-  }
+    return ' '.repeat(term.length);
+  });
   // Single-letter languages are words too, but C must remain distinct from C++/C#.
-  for (const term of query.match(/(?<![a-z0-9_+#])[a-z](?![a-z0-9_+#])/gu) ?? []) {
+  for (const term of remaining.match(/(?<![a-z0-9_+#])[a-z](?![a-z0-9_+#])/gu) ?? []) {
     if (!STOP_WORDS.has(term)) terms.add(term);
   }
-  for (const part of segmenter.segment(query)) {
+  for (const part of segmenter.segment(remaining)) {
     if (part.isWordLike && part.segment.length > 1 && !STOP_WORDS.has(part.segment)) {
       terms.add(part.segment);
     }
