@@ -2,7 +2,7 @@ import { promises as fs } from 'node:fs';
 import path from 'node:path';
 import { parseArgs } from 'node:util';
 import { createSkillEmbeddingAdapter } from './embedding.js';
-import { discoverySkill, loadIndex, readConfig, readSkill, syncLibrary, syncLibraryUnlocked, withLibraryWrite, writeJson, type LibraryConfig } from './library.js';
+import { discoverySkill, loadIndex, readConfig, readSkill, syncLibrary, syncLibraryConfigurationUnlocked, withLibraryWrite, type LibraryConfig } from './library.js';
 
 export const HELP = `cindy-skill-index — task-driven local Skill discovery
 
@@ -81,9 +81,7 @@ export async function runCli(args: string[], executable: string): Promise<unknow
           if (!config.sources.some(existing => existing.path === source.path)) config.sources.push(source);
         }
       }
-      const result = await syncLibraryUnlocked(library, { config });
-      await writeJson(configPath, config);
-      return result;
+      return syncLibraryConfigurationUnlocked(library, config);
     });
   }
   if (command === 'sync') return syncLibrary(library, { rebuild: values.rebuild });
@@ -100,9 +98,7 @@ export async function runCli(args: string[], executable: string): Promise<unknow
         // Resolve the configuration before persisting it; no request is made here.
         createSkillEmbeddingAdapter(config.embedding);
       }
-      const result = await syncLibraryUnlocked(library, { config });
-      await writeJson(configPath, config);
-      return result;
+      return syncLibraryConfigurationUnlocked(library, config);
     });
   }
   if (command === 'search') {
@@ -131,7 +127,17 @@ export async function runCli(args: string[], executable: string): Promise<unknow
       const content = discoverySkill(library, path.resolve(executable), values.name);
       await fs.mkdir(output, { recursive: true });
       const filePath = path.join(output, 'SKILL.md');
-      await fs.writeFile(filePath, content, { flag: 'wx' });
+      const handle = await fs.open(filePath, 'wx');
+      try {
+        try { await handle.writeFile(content); }
+        finally { await handle.close(); }
+      } catch (error) {
+        try { await fs.unlink(filePath); }
+        catch (cleanupError) {
+          throw new AggregateError([error, cleanupError], `Gateway installation failed: ${String(error)}. Removing its partial file also failed: ${String(cleanupError)}`);
+        }
+        throw error;
+      }
       return { filePath, library };
     });
   }

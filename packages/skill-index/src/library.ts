@@ -54,15 +54,23 @@ export async function discoverSkills(sources: readonly LibrarySource[]): Promise
   return entries;
 }
 
-export async function writeJson(file: string, value: unknown): Promise<void> {
+async function writeText(file: string, text: string): Promise<void> {
   await fs.mkdir(path.dirname(file), { recursive: true });
   const staging = `${file}.${randomUUID()}.tmp`;
   try {
-    await fs.writeFile(staging, JSON.stringify(value, null, 2) + '\n', { mode: 0o600 });
+    await fs.writeFile(staging, text, { mode: 0o600 });
     await fs.rename(staging, file);
-  } finally {
-    await fs.rm(staging, { force: true });
+  } catch (error) {
+    try { await fs.rm(staging, { force: true }); }
+    catch (cleanupError) {
+      throw new AggregateError([error, cleanupError], `Writing ${file} failed: ${String(error)}. Removing its staging file also failed: ${String(cleanupError)}`);
+    }
+    throw error;
   }
+}
+
+export async function writeJson(file: string, value: unknown): Promise<void> {
+  await writeText(file, JSON.stringify(value, null, 2) + '\n');
 }
 
 export async function readConfig(library: string): Promise<LibraryConfig> {
@@ -125,6 +133,26 @@ export async function syncLibraryUnlocked(library: string, options: LibrarySyncO
   options.beforePublish?.();
   await writeJson(path.join(library, 'index.json'), index.snapshot());
   return { ...changes, skills: index.snapshot().entries.length, ...(vectors ? { vectors } : {}) };
+}
+
+/** CLI configuration writers hold the library lock through publication and rollback. */
+export async function syncLibraryConfigurationUnlocked(library: string, config: LibraryConfig) {
+  const indexFile = path.join(library, 'index.json');
+  let original: string | undefined;
+  try { original = await fs.readFile(indexFile, 'utf8'); }
+  catch (error) { if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error; }
+  const result = await syncLibraryUnlocked(library, { config });
+  try { await writeJson(path.join(library, 'library.json'), config); }
+  catch (error) {
+    try {
+      if (original === undefined) await fs.unlink(indexFile);
+      else await writeText(indexFile, original);
+    } catch (restoreError) {
+      throw new AggregateError([error, restoreError], `Library configuration failed: ${String(error)}. Restoring its previous index also failed: ${String(restoreError)}`);
+    }
+    throw error;
+  }
+  return result;
 }
 
 export interface SkillReadOptions { offset?: number; chars?: number; expectedSha256?: string }

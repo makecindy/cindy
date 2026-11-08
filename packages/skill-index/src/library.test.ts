@@ -173,6 +173,145 @@ describe('local Skill library workflow', () => {
     expect(route.split('\n').length).toBeLessThan(20);
   });
 
+  // Review 4507386119: exercise actual index/config publication failures for every
+  // CLI configuration writer, then check original bytes, semantic search and retry.
+  it.each(['init', 'add', 'embedding', 'off'])('preserves the previous pair when %s configuration publication fails', async command => {
+    const target = path.join(root, `commit-${command}`);
+    const addition = path.join(root, `commit-source-${command}`);
+    await fs.mkdir(addition);
+    await fs.writeFile(path.join(addition, 'SKILL.md'), '---\nname: added\ndescription: Additional method\n---\nInstructions\n');
+    vi.stubEnv('CINDY_SKILL_TEST_KEY', 'test-only');
+    vi.stubGlobal('fetch', async (_url: unknown, init: RequestInit) => {
+      const body = JSON.parse(init.body as string) as { model: string; input: string[] };
+      return Response.json({ model: body.model, data: body.input.map((_, index) => ({ index, embedding: body.model === 'model-b' ? [0, 1] : [1, 0] })) });
+    });
+    const embeddingArgs = (model: string) => ['embedding', '--library', target, '--base-url', 'https://example.invalid/v1', '--model', model, '--key-env', 'CINDY_SKILL_TEST_KEY'];
+    try {
+      const initialSource = command === 'off' ? path.join(root, 'off-originals') : source;
+      if (command === 'off') await fs.cp(source, initialSource, { recursive: true });
+      if (command !== 'init') {
+        await runCli(['init', '--library', target, '--source', initialSource], executable);
+        await runCli(embeddingArgs('model-a'), executable);
+      }
+      const configFile = path.join(target, 'library.json'), indexFile = path.join(target, 'index.json');
+      const before = command === 'init' ? [] : await Promise.all([configFile, indexFile].map(file => fs.readFile(file, 'utf8')));
+      if (command === 'off') await fs.cp(addition, path.join(initialSource, 'new'), { recursive: true });
+      const args = command === 'embedding' ? embeddingArgs('model-b')
+        : command === 'off' ? ['embedding', '--library', target, '--off']
+        : [command, '--library', target, '--source', command === 'add' ? addition : source];
+      const rename = fs.rename.bind(fs);
+      const spy = vi.spyOn(fs, 'rename').mockImplementation(async (...input) => {
+        if (String(input[1]) === configFile) throw Object.assign(new Error('Configuration publication denied'), { code: 'EACCES' });
+        return rename(...input);
+      });
+      try { await expect(runCli(args, executable)).rejects.toThrow('Configuration publication denied'); }
+      finally { spy.mockRestore(); }
+      if (command === 'init') {
+        await expect(fs.stat(indexFile)).rejects.toMatchObject({ code: 'ENOENT' });
+        await expect(fs.stat(configFile)).rejects.toMatchObject({ code: 'ENOENT' });
+      } else {
+        expect(await fs.readFile(configFile, 'utf8')).toBe(before[0]);
+        expect(await fs.readFile(indexFile, 'utf8')).toBe(before[1]);
+        expect(await runCli(['search', '--library', target, '--query', 'unrelated semantic request'], executable))
+          .toMatchObject({ mode: 'hybrid', matches: expect.arrayContaining([expect.objectContaining({ name: 'motion-feel' })]) });
+      }
+      expect((await fs.readdir(target)).sort()).toEqual(command === 'init' ? [] : ['index.json', 'library.json']);
+      await expect(runCli(args, executable)).resolves.toHaveProperty('skills');
+    } finally { vi.unstubAllGlobals(); vi.unstubAllEnvs(); }
+  });
+
+  // Snapshot and gateway writers must leave a retryable state after actual I/O failure.
+  it.each(['write', 'rename'])('keeps the old snapshot when index %s fails', async stage => {
+    const target = path.join(root, `index-failure-${stage}`);
+    const originals = path.join(root, `index-source-${stage}`);
+    await fs.cp(source, originals, { recursive: true });
+    await runCli(['init', '--library', target, '--source', originals], executable);
+    const indexFile = path.join(target, 'index.json');
+    const before = await fs.readFile(indexFile, 'utf8');
+    const config = await fs.readFile(path.join(target, 'library.json'), 'utf8');
+    await fs.writeFile(path.join(originals, 'audio/SKILL.md'), '---\nname: audio-edit\ndescription: Changed recording method\n---\nInstructions\n');
+    const write = fs.writeFile.bind(fs), rename = fs.rename.bind(fs);
+    const writeSpy = vi.spyOn(fs, 'writeFile').mockImplementation(async (...args) => {
+      if (stage === 'write' && String(args[0]).startsWith(`${indexFile}.`)) {
+        await write(args[0], 'partial'); throw new Error('Index write failed');
+      }
+      return write(...args);
+    });
+    const renameSpy = vi.spyOn(fs, 'rename').mockImplementation(async (...args) => {
+      if (stage === 'rename' && String(args[1]) === indexFile) throw new Error('Index rename failed');
+      return rename(...args);
+    });
+    try { await expect(runCli(['sync', '--library', target], executable)).rejects.toThrow(`Index ${stage} failed`); }
+    finally { writeSpy.mockRestore(); renameSpy.mockRestore(); }
+    expect(await fs.readFile(indexFile, 'utf8')).toBe(before);
+    expect(await fs.readFile(path.join(target, 'library.json'), 'utf8')).toBe(config);
+    expect((await fs.readdir(target)).sort()).toEqual(['index.json', 'library.json']);
+    expect(await runCli(['sync', '--library', target], executable)).toMatchObject({ changed: 1 });
+  });
+
+  it.each(['write', 'close'])('removes only its own gateway when %s fails and allows retry', async stage => {
+    const target = path.join(root, `gateway-failure-${stage}`);
+    const output = path.join(root, `gateway-output-${stage}`);
+    const gatewayFile = path.join(output, 'SKILL.md');
+    await runCli(['init', '--library', target, '--source', source], executable);
+    const args = ['gateway', '--library', target, '--output', output];
+    const open = fs.open.bind(fs);
+    const handles: Array<{ mockRestore(): void }> = [];
+    const spy = vi.spyOn(fs, 'open').mockImplementation(async (...args) => {
+      const handle = await open(...args);
+      if (String(args[0]) === gatewayFile) {
+        const write = handle.writeFile.bind(handle), close = handle.close.bind(handle);
+        if (stage === 'write') handles.push(vi.spyOn(handle, 'writeFile').mockImplementation(async () => {
+          await write('partial gateway'); throw new Error('Gateway write failed');
+        }));
+        else handles.push(vi.spyOn(handle, 'close').mockImplementation(async () => {
+          await close(); throw new Error('Gateway close failed');
+        }));
+      }
+      return handle;
+    });
+    try { await expect(runCli(args, executable)).rejects.toThrow(`Gateway ${stage} failed`); }
+    finally { for (const handle of handles) handle.mockRestore(); spy.mockRestore(); }
+    await expect(fs.stat(gatewayFile)).rejects.toMatchObject({ code: 'ENOENT' });
+    expect(await runCli(args, executable)).toMatchObject({ filePath: gatewayFile });
+    const original = await fs.readFile(gatewayFile, 'utf8');
+    await expect(runCli(args, executable)).rejects.toMatchObject({ code: 'EEXIST' });
+    expect(await fs.readFile(gatewayFile, 'utf8')).toBe(original);
+  });
+
+  it('does not turn a successful atomic rename into a failed publication', async () => {
+    const target = path.join(root, 'committed-publication');
+    const rm = fs.rm.bind(fs);
+    const spy = vi.spyOn(fs, 'rm').mockImplementation(async (...args) => {
+      if (String(args[0]).startsWith(target) && String(args[0]).endsWith('.tmp')) throw new Error('Post-publication cleanup failed');
+      return rm(...args);
+    });
+    try { expect(await runCli(['init', '--library', target, '--source', source], executable)).toMatchObject({ skills: 2 }); }
+    finally { spy.mockRestore(); }
+    expect((await fs.readdir(target)).sort()).toEqual(['index.json', 'library.json']);
+  });
+
+  // A failed publication must stay visible if restoring its index also fails.
+  it('reports both publication and rollback errors while keeping the old configuration', async () => {
+    const target = path.join(root, 'rollback-error');
+    await runCli(['init', '--library', target, '--source', source], executable);
+    const original = await fs.readFile(path.join(target, 'library.json'), 'utf8');
+    const rename = fs.rename.bind(fs);
+    let indexWrites = 0;
+    const spy = vi.spyOn(fs, 'rename').mockImplementation(async (...args) => {
+      if (String(args[1]) === path.join(target, 'library.json')) throw new Error('Config rename failed');
+      if (String(args[1]) === path.join(target, 'index.json') && ++indexWrites === 2) throw new Error('Index restoration failed');
+      return rename(...args);
+    });
+    try {
+      const result = runCli(['embedding', '--library', target, '--off'], executable);
+      await expect(result).rejects.toThrow('Config rename failed');
+      await expect(result).rejects.toThrow('Index restoration failed');
+    } finally { spy.mockRestore(); }
+    expect(await fs.readFile(path.join(target, 'library.json'), 'utf8')).toBe(original);
+    await expect(fs.stat(path.join(target, 'library.lock'))).rejects.toMatchObject({ code: 'ENOENT' });
+  });
+
   // PR #9374: config B must not become visible with model A's persisted vectors.
   // Real CLI and HTTP adapter; controlled promises keep the rebuild overlap deterministic.
   it.each([false, true])('publishes embedding configuration only after a successful build (failure=%s)', async (fail) => {
