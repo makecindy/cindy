@@ -27,7 +27,10 @@ export function detachRuntime(app) {
   fs.cpSync(realApp,temporary,{recursive:true,verbatimSymlinks:true});
   fs.renameSync(realApp,realApp+'.before-native'); fs.renameSync(temporary,realApp);
 }
-export function prepareNativeCapabilities(root) {
+export function personalBundleId(name, region) {
+  return 'app.cindy.personal.' + createHash('sha256').update(JSON.stringify([name, region])).digest('hex').slice(0, 16);
+}
+export function prepareNativeCapabilities(root, {name = 'personal', region = 'global'} = {}) {
   const file = receiptPath(root);
   if (fs.existsSync(file)) { nativeIdentity(root); return JSON.parse(fs.readFileSync(file)); }
   const save = report => { fs.mkdirSync(path.dirname(file), { recursive: true }); fs.writeFileSync(file, JSON.stringify({version:1, ...report}, null, 2)+'\n'); return report; };
@@ -50,6 +53,9 @@ export function prepareNativeCapabilities(root) {
   if (processList.includes(app+'/Contents/MacOS/Electron')) throw Error('Native preparation requires a stopped candidate');
   // Electron may be hard-linked to pnpm's store. Copy before modifying its plist/signature.
   detachRuntime(app);
+  const bundleId = personalBundleId(name, region);
+  run('/usr/libexec/PlistBuddy',['-c',`Set :CFBundleIdentifier ${bundleId}`,path.join(app,'Contents/Info.plist')]);
+  run('/usr/libexec/PlistBuddy',['-c','Set :CFBundleName Cindy Personal',path.join(app,'Contents/Info.plist')]);
   // Some developer Electron distributions omit resource seals. Seal the base
   // runtime before adding the separately sandbox-signed WidgetKit extension.
   run('codesign',['--force','--deep','--sign','-','--preserve-metadata=entitlements',app]);
@@ -75,6 +81,6 @@ export function prepareNativeCapabilities(root) {
   const collect = p => { for (const e of fs.readdirSync(p,{withFileTypes:true})) { const f=path.join(p,e.name); if(e.isDirectory())collect(f); else if(e.isFile())files[path.relative(root,f)]=digest(f); } };
   collect(resources); collect(extension); collect(packagedResources);
   for(const f of [path.join(app,'Contents/Info.plist'),path.join(app,'Contents/Resources/cindy-live-activity-silent.caf')])files[path.relative(root,f)]=digest(f);
-  const report=save({state:'built',sdk,developerDir:env.DEVELOPER_DIR || null,files});
+  const report=save({state:'built',bundleId,sdk,developerDir:env.DEVELOPER_DIR || null,files});
   console.log('PERSONAL_NATIVE_CAPABILITY=live-activity:built'); return report;
 }

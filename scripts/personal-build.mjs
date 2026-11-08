@@ -293,7 +293,7 @@ export async function main(argv) {
       pnpm(['install', '--frozen-lockfile'], r.directory);
       for (const args of [['--filter', 'desktop', 'db:validate'], ['check:design-inventory'], ['--filter', 'desktop', 'run', 'typecheck']]) pnpm(args, r.directory);
       const { prepareNativeCapabilities } = await import('./personal-build/native-capabilities.mjs');
-      r.nativeCapabilities = prepareNativeCapabilities(r.directory);
+      r.nativeCapabilities = prepareNativeCapabilities(r.directory, {name:r.name, region:r.region});
       verifyReport(file); r.state = 'checked'; r.checkedAt = new Date().toISOString(); write(file, r);
     } catch (error) { r.state = 'prepared'; r.checkError = error.message; write(file, r); throw error; }
     return;

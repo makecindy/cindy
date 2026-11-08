@@ -4,7 +4,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import {createHash} from 'node:crypto';
-import {sdkSupported,nativeIdentity,detachRuntime} from '../personal-build/native-capabilities.mjs';
+import {sdkSupported,nativeIdentity,detachRuntime,personalBundleId} from '../personal-build/native-capabilities.mjs';
 test('Live Activity SDK gate rejects old/invalid SDKs and accepts newer SDKs',()=>{
  for(const v of ['27.0','27.2','26.9','','invalid']) assert.equal(sdkSupported(v),false,v);
  for(const v of ['27.3','27.3.1','28.0']) assert.equal(sdkSupported(v),true,v);
@@ -43,4 +43,11 @@ test('mac app launch preserves argv, waits for exit, and resolves the project be
  const args=macAppArgs('/tmp/Personal App.app',['.','--flag','a b'],'/tmp/project','/dev/ttys123');
  assert.deepEqual(args,['-W','-n','-a','/tmp/Personal App.app','-o','/dev/ttys123','--stderr','/dev/ttys123','--args','/tmp/project','--flag','a b']);
  assert.throws(()=>macAppArgs('/tmp/App.app',['.'],'/tmp','/tmp/not-terminal'));
+});
+
+test('personal bundle identity is stable across releases and separates named profiles and regions',()=>{
+ assert.equal(personalBundleId('me','global'),personalBundleId('me','global'));
+ assert.notEqual(personalBundleId('me','global'),personalBundleId('me','cn'));
+ assert.notEqual(personalBundleId('me','global'),personalBundleId('another','global'));
+ assert.match(personalBundleId('a b/复杂','global'),/^app\.cindy\.personal\.[a-f0-9]{16}$/);
 });

@@ -472,3 +472,12 @@ release even when its source commit has not changed. Test actual Live Activity a
 isolated startup; do not equate a built addon, a visible setting, or `remoteReady` with a rendered
 system activity. Signing here is ad-hoc developer bundle signing; remote credential identity
 resolution remains a separate certificate-backed launch requirement.
+
+Native source builds launch through macOS LaunchServices within Forge's existing startup wrapper.
+Directly spawning the Electron executable leaves ActivityKit without an application identity even
+when the addon and extension are present. `open -W -n` inherits the launch environment without
+putting credentials in arguments/files; the early main import restores Forge's working directory.
+The personal app bundle identifier is stable for a configured name/region and distinct from generic
+`com.github.Electron`, whose LaunchServices record can resolve to another development checkout.
+The profile and credential-helper identity remain separate. Changing from the generic identifier
+may require fresh macOS privacy permissions; never grant or bypass those automatically.
