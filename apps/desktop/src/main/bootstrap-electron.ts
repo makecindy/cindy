@@ -355,6 +355,7 @@ import {
 } from './rsb-browser-bridge/native-popup-surfaces.js';
 import { disposeAndroidAdb } from './mcp-integrations/android.js';
 import { shutdownCodexEnvironment } from './mcp-integrations/codexEnvironment.js';
+import { countLiveBridgeMcpSessions } from './mcp-integrations/codexHttpBridge.js';
 import { shutdownPiEnvironment } from './mcp-integrations/piEnvironment.js';
 import { fetchRemoteMediaImageBytes } from './device-link/remoteMediaProtocol';
 import * as imageCacheStore from './imageCacheStore';
@@ -558,6 +559,7 @@ import {
 
 import { onQuit, installQuitHandler } from './lifecycle';
 import { initStartupDiagnostics } from './startup-diagnostics';
+import { isRunningUnderArm64Translation } from './arm64Translation';
 import { createStartupGateStallReporter } from './startupGateStallReport';
 import { STARTUP_GATE_STALL_CHANNEL } from '../shared/startupGateStall';
 import {
@@ -604,6 +606,7 @@ import {
   assertTrustedAppRendererEvent,
   isTrustedAppRendererEvent,
   isTrustedCindyRendererWindow,
+  isTrustedTopLevelCindyRendererEvent,
 } from './security/trustedAppRenderer.js';
 
 import { isIpcError } from '../shared/ipc-errors';
@@ -629,6 +632,7 @@ import {
   setPhysicalInputShielded,
 } from './mcp-integrations/computer.js';
 import { initAnalyticsSettingsService, noteAuthColdStartState } from './analyticsSettingsService';
+import { initCrashDiagnosisService } from './crash-diagnosis';
 import { initLogUploadService, scheduleStartupBackfill } from './log-upload';
 import { initPerformanceTraceService } from './performance-trace';
 import { createOpenLogsMenuItem, openLogsDirectory } from './logSupport';
@@ -3520,6 +3524,7 @@ const linuxTray = createLinuxTrayController<Menu>({
     return new Tray(icon);
   },
   buildMenu: buildDesktopTrayMenu,
+  tooltip: BRAND_NAME,
   showWindow: () => focusMainWindow(),
   onError: (error) => {
     linuxTrayLog.error('Linux tray operation failed', {
@@ -4921,6 +4926,10 @@ const registerIpcHandlers = () => {
   ipcMain.on('get-os-release', (event) => {
     event.returnValue = os.release();
   });
+
+  // 只读布尔值，但仍只回答 Cindy 自有顶层页面；其它来源一律视为未转译。
+  ipcMain.handle('app:get-arm64-translation', (event) =>
+    isTrustedTopLevelCindyRendererEvent(event) && isRunningUnderArm64Translation());
 
   // 首启亮色门的同步会话线索(见 authSessionHint.ts):renderer bootstrap 在
   // 任何渲染前判定「真首启」,localStorage 为空但主进程持有存量会话(持久化
@@ -10219,6 +10228,7 @@ app.on('ready', async () => {
   // log-upload:settings-get 决定入口可用性;更重要的是崩溃即时路径要在
   // onFatalShutdown 上就位,否则 createWindow 之后立刻崩的那一次拿不到标记。
   initLogUploadService();
+  initCrashDiagnosisService();
   initPerformanceTraceService(() => mainWindowRef);
   // Local profiles bypass authManager's cloud claim path. Await the same
   // asynchronous PID provenance scan before the first BrowserWindow exists so
@@ -10342,6 +10352,7 @@ app.on('ready', async () => {
   const stopMemoryLog = startMemoryLog({
     getMetrics: () => app.getAppMetrics(),
     memoryUsage: () => process.memoryUsage(),
+    counters: () => ({ mcpBridgeSessions: countLiveBridgeMcpSessions() }),
     log: createLogger('memory-usage'),
     intervalMs: app.isPackaged ? 10 * 60_000 : 30_000,
   });

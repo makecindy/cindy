@@ -11,7 +11,7 @@ import { ScreenshotErrorBoundary } from './features/region-screenshot/Screenshot
 import { RegionScreenshotOverlay } from './features/region-screenshot/RegionScreenshotOverlay';
 import type { RegionScreenshotOverlayBridge } from './features/region-screenshot/bridge';
 import { applyFontSettings, getInitialFontSettings } from './hooks/useFontSettings';
-import { getInitialThemeVariant } from './hooks/useTheme';
+import { followLocalThemeChanges, getInitialThemeVariant } from './hooks/useTheme';
 import { bootstrapLocalThemesSync } from './themes/local-themes';
 import { themeService } from './themes/theme-service';
 
@@ -26,6 +26,7 @@ if (!imageEditor) {
 }
 bootstrapLocalThemesSync();
 themeService.applyTheme(getInitialThemeVariant().theme);
+followLocalThemeChanges();
 applyFontSettings(getInitialFontSettings());
 
 const rootElement = document.getElementById('root');

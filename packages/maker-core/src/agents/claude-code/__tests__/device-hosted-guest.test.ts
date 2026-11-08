@@ -18,7 +18,7 @@ import {
 } from '../../base-agent.js';
 import type { AuthAdapter } from '../../../interfaces/auth-adapter.js';
 import type { Logger } from '../../../interfaces/logger.js';
-import { DEVICE_HOSTED_GUEST_CLAUDE_TOOLS } from '../../shared/device-hosted.js';
+import { DEVICE_HOSTED_GUEST_CLAUDE_TOOLS, DEVICE_HOSTED_MCP_TIMEOUT_MS } from '../../shared/device-hosted.js';
 
 const sdkMock = vi.hoisted(() => ({
   forkSession: vi.fn(),
@@ -328,5 +328,14 @@ describe('Claude Code device-hosted guest sessions', () => {
     expect((await startHostedSession(true)).options.env?.CINDY_INPUT_HANDOFF_ROUTE).toBeUndefined();
     const { options } = await startHostedSession(false, { local: true });
     expect(options.env?.CINDY_INPUT_HANDOFF_ROUTE).toBe('route-hosted-session');
+  });
+
+  // 2026-11-04: on a slow relay, Claude Code's default 30s MCP connect limit dropped all
+  // 91 tunnelled tools at the start of a turn. Local tasks keep Claude Code's default.
+  it('waits for tunnelled tools on a slow link, only for tasks hosted for another computer', async () => {
+    for (const guest of [true, false]) {
+      expect((await startHostedSession(guest)).options.env?.MCP_TIMEOUT).toBe(String(DEVICE_HOSTED_MCP_TIMEOUT_MS));
+    }
+    expect((await startHostedSession(false, { local: true })).options.env?.MCP_TIMEOUT).toBeUndefined();
   });
 });

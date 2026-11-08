@@ -5182,3 +5182,23 @@ it('reads historical group process from the execution computer after a home chan
   expect(mocks.remoteInvoke).toHaveBeenCalledWith('original-mac', 'local-db:messages:around-client-id', ['old-lane', 'source', { radius: 80 }]);
   expect(mocks.remoteInvoke.mock.calls.every(([device]) => device === 'original-mac')).toBe(true);
 });
+
+// Unit regression: the reported weather reply has a valid anchor and only a
+// final answer. Existing historical coverage only exercised nonempty notes.
+// Verify the real disclosure distinguishes empty content from a failed read.
+it('explains a final-only group process and retries an unavailable record', async () => {
+  const process = { groupId: 'g1', executionId: 'empty-record', sessionId: 'lane', clientId: 'source', deviceId: 'original-mac', durationMs: 250137 };
+  const rows = [{ clientId: 'source', role: 'user', content: 'Weather request' },
+    { clientId: 'seal', role: 'assistant', content: 'Which city?', agentMeta: { assistantPhase: 'final_answer', turnCompleted: true } }];
+  mocks.remoteInvoke.mockRejectedValueOnce(new Error('Record unavailable')).mockResolvedValue(rows);
+  const view = render(<Tooltip.Provider><BotGroupProcess process={process}
+    member={{ ...detail().members[0]!, isOwned: true }} /></Tooltip.Provider>);
+  fireEvent.click(view.container.querySelector('[data-teammate-process] button')!);
+  await screen.findByText('chat.teammateProcess.unavailable');
+  expect(screen.queryByText('chat.teammateProcess.empty')).toBeNull();
+  fireEvent.click(screen.getByText('chat.errorBanner.retry'));
+  await screen.findByText('chat.teammateProcess.empty');
+  expect(screen.queryByText('chat.teammateProcess.unavailable')).toBeNull();
+  expect(screen.queryByText('chat.errorBanner.retry')).toBeNull();
+  expect(screen.queryByText('Which city?')).toBeNull();
+});

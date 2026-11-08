@@ -162,7 +162,7 @@ export function createProviderShareDelegationChecks(deps: {
 
 interface LeaseEntry {
   peer: string; sessionId: string;
-  lease: { ownerDeviceId: string; nonce: string; generation: string };
+  lease: { ownerDeviceId: string; nonce: string; generation: string; availability?: boolean };
 }
 
 /** Spread peers over the minute, and inspect only one at a time. There is no
@@ -181,10 +181,11 @@ export function startProviderShareDelegationRechecks(deps: {
     if (stopped) return;
     const groups = new Map<string, LeaseEntry[]>();
     for (const item of deps.leases()) {
-      const items = groups.get(item.peer) ?? [];
+      const key = JSON.stringify([item.peer, item.lease.availability === true]);
+      const items = groups.get(key) ?? [];
       items.push(item);
-      groups.set(item.peer, items);
-      if (!due.has(item.peer)) due.set(item.peer, Date.now() + 30_000 + Math.floor(random() * 30_000));
+      groups.set(key, items);
+      if (!due.has(key)) due.set(key, Date.now() + 30_000 + Math.floor(random() * 30_000));
     }
     for (const peer of due.keys()) if (!groups.has(peer)) due.delete(peer);
     if (running) return;
