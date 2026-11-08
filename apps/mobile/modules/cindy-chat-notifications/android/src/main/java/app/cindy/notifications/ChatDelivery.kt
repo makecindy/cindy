@@ -20,12 +20,19 @@ import expo.modules.notifications.notifications.model.NotificationBehaviorRecord
 import org.json.JSONArray
 import org.json.JSONObject
 
-/** Only actor/message IDs persist. Credentials and notification bodies never enter this store. */
+/** Only account/actor/message IDs persist. Credentials and notification bodies never enter this store. */
 object ChatDelivery {
   private const val STORE = "cindy-chat-notification-ids"
+  @Synchronized fun owner(context: Context, owner: String) {
+    val prefs = context.getSharedPreferences(STORE, Context.MODE_PRIVATE)
+    if (prefs.getString("owner", "") != owner) prefs.edit().clear().putString("owner", owner).apply()
+  }
   @Synchronized fun identity(context: Context, actor: String) {
     val prefs = context.getSharedPreferences(STORE, Context.MODE_PRIVATE)
-    if (prefs.getString("actor", "") != actor) prefs.edit().clear().putString("actor", actor).apply()
+    if (prefs.getString("actor", "") != actor) {
+      val owner = prefs.getString("owner", "") ?: ""
+      prefs.edit().clear().putString("owner", owner).putString("actor", actor).apply()
+    }
   }
   @Synchronized fun taskIdentity(context: Context, user: String) {
     val prefs = context.getSharedPreferences("cindy-task-notification-ids", Context.MODE_PRIVATE)

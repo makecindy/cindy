@@ -22,14 +22,17 @@ class CindyChatNotificationsModule : Module() {
     AsyncFunction("setIdentity") { actor: String ->
       val context = appContext.reactContext ?: return@AsyncFunction
       ChatDelivery.identity(context, actor)
-    }
+    }.runOnQueue(Queues.MAIN)
+    AsyncFunction("setOwner") { owner: String ->
+      appContext.reactContext?.let { ChatDelivery.owner(it, owner) }
+    }.runOnQueue(Queues.MAIN)
     AsyncFunction("setPreview") { enabled: Boolean ->
       appContext.reactContext?.getSharedPreferences("cindy-chat-background", android.content.Context.MODE_PRIVATE)
         ?.edit()?.putBoolean("preview", enabled)?.apply()
     }
     AsyncFunction("setTaskIdentity") { user: String ->
       appContext.reactContext?.let { ChatDelivery.taskIdentity(it, user) }
-    }
+    }.runOnQueue(Queues.MAIN)
     AsyncFunction("configureNotifications") { value: Map<String, Any> ->
       val owner = value["owner"] as String; val actor = value["actor"] as String
       val chatBase = value["chatBase"] as String; val user = value["user"] as String
@@ -42,7 +45,8 @@ class CindyChatNotificationsModule : Module() {
         require(endpoint.scheme == "https" && endpoint.host != null && endpoint.userInfo == null && endpoint.query == null && endpoint.fragment == null) { "CHAT_ENDPOINT_INVALID" }
       }
       require(token.isNotBlank() && token.length <= 16000 && actor.length <= 128 && user.length <= 128 && owner.length <= 512)
-      ChatDelivery.identity(context, actor); ChatDelivery.taskIdentity(context, user)
+      if (actor.isNotEmpty()) ChatDelivery.identity(context, actor)
+      ChatDelivery.taskIdentity(context, user)
       ChatConnectionService.configure(ChatConnection(owner, actor, chatBase.trimEnd('/'), token, title, stop, preview, language, taskBase.trimEnd('/'), user))
       if (!ChatConnectionService.running) {
         check(appContext.currentActivity?.hasWindowFocus() == true) { "CHAT_OPEN_APP_REQUIRED" }

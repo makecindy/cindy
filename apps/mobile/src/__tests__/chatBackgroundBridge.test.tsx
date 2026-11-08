@@ -5,7 +5,7 @@ import { act, cleanup, renderHook, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 const state = vi.hoisted(() => ({ current: true, enabled: true, permission: 'granted', background: true,
   me: vi.fn(), token: vi.fn(async () => 'token'), signedOut: undefined as undefined | ((out?: boolean) => void) }));
-const native = vi.hoisted(() => ({ stop: vi.fn(), setIdentity: vi.fn(), setTaskIdentity: vi.fn(), setPreview: vi.fn(),
+const native = vi.hoisted(() => ({ stop: vi.fn(), setOwner: vi.fn(), setIdentity: vi.fn(), setTaskIdentity: vi.fn(), setPreview: vi.fn(),
   configureNotifications: vi.fn(), configure: vi.fn(), addListener: vi.fn(() => ({ remove: vi.fn() })) }));
 const api = vi.hoisted(() => ({ enabled: true, owner: 'owner:1:cn', userId: 'owner', realm: 'cn',
   current: () => state.current, client: { me: () => state.me() }, endpoint: async () => 'https://chat.example' }));
@@ -36,6 +36,23 @@ describe('background notification lifecycle', () => {
     await waitFor(() => expect(native.configureNotifications).toHaveBeenCalledWith({ owner: api.owner,
       actor: '', chatBase: '', user: api.userId, taskBase: 'https://relay.example', token: 'token',
       title: 'settings.notifications.backgroundActive', stopLabel: 'settings.notifications.backgroundStop', preview: false, language: 'en' }));
+    expect(native.setOwner).toHaveBeenCalledWith('owner:cn');
+    expect(native.setIdentity).not.toHaveBeenCalledWith('');
+  });
+  // Regression: same-account chat lookup errors must not erase the FCM recipient
+  // identity or the known direct-chat config while task delivery is refreshed.
+  it.each([true, false])('preserves same-account chat identity on refresh failure with background=%s', async background => {
+    state.background = background;
+    renderHook(() => ChatBackgroundBridge());
+    await waitFor(() => expect(native.setIdentity).toHaveBeenCalledWith('actor'));
+    state.me.mockRejectedValue(new Error('temporary chat failure'));
+    native.setIdentity.mockClear(); native.configureNotifications.mockClear();
+    await act(async () => { state.signedOut?.(); });
+    await waitFor(() => expect(state.me).toHaveBeenCalledTimes(2));
+    await waitFor(() => expect(native.setIdentity).toHaveBeenCalledWith('actor'));
+    expect(native.setIdentity).not.toHaveBeenCalledWith('');
+    if (background) expect(native.configureNotifications).toHaveBeenCalledWith(expect.objectContaining({ actor: 'actor', chatBase: 'https://chat.example' }));
+    else expect(native.configureNotifications).not.toHaveBeenCalled();
   });
   it.each(['denied', 'off'])('stops and never starts a service when notification permission/preference is %s', async condition => {
     if (condition === 'denied') state.permission = 'denied'; else state.enabled = false;

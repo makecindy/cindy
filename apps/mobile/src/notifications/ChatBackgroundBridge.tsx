@@ -3,7 +3,7 @@ import { getMobileEndpointForRealm } from '@/config/env';
 import { useSelfHostedRelay } from '@/device-link/selfHostedRelay';
 import { subscribeAndroidPushAvailability } from './androidPushAvailability';
 import Notifications from './nativeNotifications';
-import { useEffect } from 'react';
+import { useEffect, useRef } from 'react';
 import { AppState } from 'react-native';
 import { useTranslation } from 'react-i18next';
 import { useChatClient } from '@/chat/useChatServer';
@@ -16,12 +16,16 @@ export function ChatBackgroundBridge() {
   const auth = useAuth();
   const selfHostedRelay = useSelfHostedRelay() !== null;
   const { t, i18n } = useTranslation();
+  const knownChat = useRef({ owner: '', actor: '', base: '' });
   useEffect(() => {
     const native = Native;
     if (!native) return;
+    const sameOwner = knownChat.current.owner === api.owner;
+    if (!sameOwner) knownChat.current = { owner: api.owner, actor: '', base: '' };
     let cancelled = false;
     let refreshing = false;
     let requested = false;
+    let identityBound = false;
     const update = async () => {
       if (cancelled) return;
       if (refreshing) { requested = true; return; }
@@ -37,20 +41,28 @@ export function ChatBackgroundBridge() {
         if (cancelled || !api.current()) return;
         await native.setPreview(preview);
         if (cancelled || !api.current()) return;
+        if (!identityBound) {
+          if (native.setOwner) await native.setOwner(`${api.userId}:${api.realm}`);
+          else if (!sameOwner) await native.setIdentity('');
+          identityBound = true;
+        }
+        if (cancelled || !api.current()) return;
         await native.setTaskIdentity?.(api.userId);
         // Task notifications must still work when the chat service is unavailable.
-        let actor = ''; let chatBase = '';
+        let actor = knownChat.current.actor; let chatBase = knownChat.current.base;
         let chatTimeout: ReturnType<typeof setTimeout> | undefined;
         try {
           const chat = await Promise.race([
             (async () => ({ actor: await api.client.me(), base: await api.endpoint() }))(),
             new Promise<never>((_, reject) => { chatTimeout = setTimeout(() => reject(new Error('CHAT_TIMEOUT')), 8_000); }),
           ]);
+          if (cancelled || !api.current()) return;
           actor = chat.actor; chatBase = chat.base;
+          knownChat.current = { owner: api.owner, actor, base: chatBase };
         } catch { /* Independent service. */ }
         finally { clearTimeout(chatTimeout); }
         if (cancelled || !api.current()) return;
-        await native.setIdentity(actor);
+        if (actor) await native.setIdentity(actor);
         const backgroundEnabled = await readChatBackgroundEnabled();
         if (cancelled || !api.current()) return;
         if (!backgroundEnabled) { await native.stop(); return; }
@@ -81,7 +93,8 @@ export function ChatBackgroundBridge() {
     const availability = subscribeAndroidPushAvailability(() => { void update(); });
     const background = subscribeChatBackground(() => { void update(); });
     void update();
-    return () => { cancelled = true; state.remove(); refresh.remove(); prefs(); availability(); background(); void native.stop(); void native.setIdentity(''); void native.setTaskIdentity?.(''); };
+    // Account changes are fenced by setOwner; retranslation/token refresh must not erase identity.
+    return () => { cancelled = true; state.remove(); refresh.remove(); prefs(); availability(); background(); void native.stop(); };
   }, [api, auth.getAccessToken, selfHostedRelay, t, i18n.language]);
   return null;
 }

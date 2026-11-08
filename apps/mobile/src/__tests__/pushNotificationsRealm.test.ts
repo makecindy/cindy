@@ -68,6 +68,7 @@ import {
   unregisterPushTokenBestEffort,
 } from '@/notifications/pushNotifications';
 import { setActiveSelfHostedRelay } from '@/device-link/selfHostedRelayRouting';
+import { readAndroidPushAvailability, setAndroidPushAvailability } from '../notifications/androidPushAvailability';
 
 const REGISTERED_KEY = 'cindy.push.registered';
 const PENDING_KEY = 'cindy.push.pendingUnregister';
@@ -88,6 +89,25 @@ function readStoredRealms(key: string): string[] {
 }
 
 describe('push notification realm routing', () => {
+  // Unit: task-only registration cannot turn off the shared native fallback.
+  // Existing tests only covered throwing registration failures, not optional 404/405.
+  it.each([404, 405])('keeps direct delivery when task push succeeds but chat registration returns %s', async status => {
+    envState.platform = 'android'; envState.activeRealm = 'global';
+    setAndroidPushAvailability('available');
+    const apiFetch = vi.fn(async (path: string) => {
+      if (path === '/v1/push-token') throw Object.assign(new Error('unsupported'), { status });
+      return {};
+    });
+    await expect(syncPushRegistration({ enabled: true, apiFetch: apiFetch as any })).resolves.toBe('registered');
+    expect(readAndroidPushAvailability()).toBe('unavailable');
+    expect(readStoredRealms(REGISTERED_KEY)).toEqual(['global']);
+  });
+  it('allows stopping the shared direct service only after both push registrations succeed', async () => {
+    envState.platform = 'android';
+    setAndroidPushAvailability('unavailable');
+    await expect(syncPushRegistration({ enabled: true, apiFetch: vi.fn(async () => ({})) as any })).resolves.toBe('registered');
+    expect(readAndroidPushAvailability()).toBe('available');
+  });
   // Unit: a cached FCM token must not make first enable fail when cloud registration is offline.
   it('keeps Android opt-in usable through the direct channel when cloud registration fails', async () => {
     envState.platform = 'android';
