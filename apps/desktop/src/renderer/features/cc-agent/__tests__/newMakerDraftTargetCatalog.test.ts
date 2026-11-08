@@ -4,6 +4,7 @@ import ts from 'typescript';
 import { describe, expect, it, vi } from 'vitest';
 
 import type { Effort, ProviderView } from '@cindy/model-providers';
+import { getModel, reconcileInvocationEffort } from '@cindy/model-providers';
 import type { RemoteProjectTarget } from '@/components/new-chat/AddRemoteProjectDialog';
 import type { AgentCapabilities } from '@/hooks/useAgentCapabilities';
 import { parseDeviceProvidersPayload } from '@/hooks/useDeviceProviders';
@@ -344,7 +345,12 @@ describe('new task model resolves against the catalog it will use', () => {
 // A catalog that offers no model seeds an empty model id; an empty id would leave the
 // composer pill blank and resolve no source, so the calibrated model takes over.
 describe('new task model falls back when the seeded model is empty', () => {
-  function initialModel(deviceLinkInitial: { model: string; effort: Effort | null } | null): string {
+  function initialModel(options: {
+    deviceLinkInitial: { model: string; effort: Effort | null } | null;
+    targetEfforts?: Effort[];
+    localEffort?: Effort | null;
+    rememberedEffort?: Effort;
+  }): { model: string; effort: Effort | null } {
     const initial = compile<() => { model: string; effort: Effort | null }>(
       'draftInitialModel',
       (node) =>
@@ -357,19 +363,61 @@ describe('new task model falls back when the seeded model is empty', () => {
           : undefined,
       {
         usesDeviceCatalog: true,
-        deviceLinkInitial,
+        deviceLinkInitial: options.deviceLinkInitial,
         calibratedDraftModel: 'shared-model',
-        localDraftEffort: 'medium',
+        localDraftEffort: options.localEffort ?? 'medium',
+        agentCatalogProviders: [
+          providerWithEfforts('shared-source', 'shared-model', options.targetEfforts ?? ['medium']),
+        ],
+        capabilityAgentKind: 'pi',
+        effectiveAgentDeviceId: 'share:abc',
+        recallAgentDeviceSelection: () =>
+          options.rememberedEffort ? { model: 'shared-model', effort: options.rememberedEffort } : null,
+        getModel,
+        reconcileInvocationEffort,
       },
     );
-    return initial().model;
+    return initial();
+  }
+
+  function providerWithEfforts(id: string, modelId: string, efforts: Effort[]): ProviderView {
+    return {
+      id, name: id, source: 'user', connected: true,
+      agents: ['pi'], auth: { method: 'none' },
+      routing: { pi: { upstream: 'https://provider.invalid', authStrategy: 'none' } },
+      models: { pi: [{
+        id: modelId, name: modelId, contextWindow: 200_000,
+        efforts, defaultEffort: efforts[0] ?? null, effortsUnknown: false,
+      }] },
+    };
   }
 
   it('uses the seeded model when the catalog offers one', () => {
-    expect(initialModel({ model: 'seeded-model', effort: 'high' })).toBe('seeded-model');
+    expect(initialModel({ deviceLinkInitial: { model: 'seeded-model', effort: 'high' } }))
+      .toEqual({ model: 'seeded-model', effort: 'high' });
   });
 
   it('uses the calibrated model when the seeded model is empty', () => {
-    expect(initialModel({ model: '', effort: null })).toBe('shared-model');
+    expect(initialModel({ deviceLinkInitial: { model: '', effort: null } }))
+      .toEqual({ model: 'shared-model', effort: 'medium' });
+  });
+
+  // Codex review #9369: the local effort pref is not validated against the target model —
+  // a local high would sit in the pill next to a medium-only target model until send.
+  it('re-resolves the local effort pref against the target model', () => {
+    expect(initialModel({
+      deviceLinkInitial: { model: '', effort: null },
+      targetEfforts: ['low', 'medium'],
+      localEffort: 'high',
+    })).toEqual({ model: 'shared-model', effort: 'low' });
+  });
+
+  it('keeps the effort the user picked on that device when the target model supports it', () => {
+    expect(initialModel({
+      deviceLinkInitial: { model: '', effort: null },
+      targetEfforts: ['low', 'medium'],
+      localEffort: 'high',
+      rememberedEffort: 'medium',
+    })).toEqual({ model: 'shared-model', effort: 'medium' });
   });
 });

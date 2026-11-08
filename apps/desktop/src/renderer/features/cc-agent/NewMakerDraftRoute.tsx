@@ -306,6 +306,7 @@ import {
   isModelSelectableForNewRoute,
   providerOffersModel,
   connectedProvidersForAgent,
+  reconcileInvocationEffort,
   type ProviderView,
 } from '@cindy/model-providers';
 import { isSubscriptionDirectModel } from '../../../shared/subscriptionModels';
@@ -2185,10 +2186,43 @@ export function NewMakerDraftRoute() {
     if (usesDeviceCatalog && deviceLinkInitial?.model) {
       return { model: deviceLinkInitial.model, effort: deviceLinkInitial.effort };
     }
+    if (usesDeviceCatalog) {
+      // 播种模型为空 → 换用校准模型时,effort 不能拿本机档位直接凑:localDraftEffort 是
+      // 本机 chatPrefs.effort,没按目标模型验证过(本机 high 可能不在目标模型的档位表里,
+      // pill 会先显示一个发送时才被 reconcile 掉的值,Codex review #9369)。按目标目录里
+      // 该模型的档位表解析:用户上次在这台设备选的档 > 本机偏好(该模型支持才保留)>
+      // 模型默认档。闸门条件与 resolveDeviceLinkSubmission 的发送侧 reconcile 同口径。
+      const targetModel = agentCatalogProviders
+        .map((provider) => getModel(provider, calibratedDraftModel, capabilityAgentKind))
+        .find((model) => model);
+      if (targetModel) {
+        const rememberedEffort = effectiveAgentDeviceId
+          ? recallAgentDeviceSelection(effectiveAgentDeviceId, capabilityAgentKind)?.effort
+          : undefined;
+        const effort =
+          targetModel.effortsUnknown === true ||
+            (targetModel.efforts.length === 0 && targetModel.effortsUnknown !== false)
+            ? (rememberedEffort ?? localDraftEffort)
+            : reconcileInvocationEffort({
+                requested: rememberedEffort ?? localDraftEffort,
+                model: targetModel,
+                noEffortFallback: null,
+              });
+        return { model: calibratedDraftModel, effort };
+      }
+    }
     // 校准在 calibratedDraftModel 一处完成,effort / fast / 来源都已按它推导 —— 这里
     // 直接用,不再单独算一次(否则又会出现模型与能力参数不同源的分叉)。
     return { model: calibratedDraftModel, effort: localDraftEffort };
-  }, [usesDeviceCatalog, deviceLinkInitial, calibratedDraftModel, localDraftEffort]);
+  }, [
+    usesDeviceCatalog,
+    deviceLinkInitial,
+    calibratedDraftModel,
+    localDraftEffort,
+    agentCatalogProviders,
+    capabilityAgentKind,
+    effectiveAgentDeviceId,
+  ]);
 
   // 远程草稿的权限档 / 来源同样取镜像 holder;本地走 chatPrefs。
   // Agent 在另一台电脑运行时权限仍在被控电脑上生效:那台的能力清单里没有这一档(被夹掉)时,回落到
