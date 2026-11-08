@@ -10038,6 +10038,12 @@
       "openSettings": "저장 공간 열기",
       "disable": "다시 알리지 않기"
     },
+    "nativeBuild": {
+      "title": "Intel 버전 Cindy를 사용 중입니다",
+      "description": "이 Mac은 Apple 칩이라 Intel 버전은 변환을 거쳐 훨씬 느리게 실행됩니다. Apple 칩 버전으로 바꿔 설치해도 데이터는 그대로 유지됩니다.",
+      "dismiss": "이번에는 숨기기",
+      "download": "다운로드"
+    },
     "horizontalTabbarAria": "메인 뷰 전환",
     "tabs": {
       "projects": "프로젝트",

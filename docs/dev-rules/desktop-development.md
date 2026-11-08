@@ -176,6 +176,9 @@ checkout 的启动器顶掉）。因此并行多开的标准姿势是：**每个
   checkout 自身依赖的路径仍是归属依据。
 - **CDP 端口**：dev 的 remote-debugging-port 固定 9222，只有先起的实例能绑上。后起
   实例需要 CDP 调试面时，用 `XDT_CDP_PORT=<端口>` 覆写（仅数字生效，dev-only）。
+- **模拟 Rosetta 转译**：在 Apple 芯片上检查「Intel 包换装提示」和启动日志的 `[arch]`
+  行时，加 `XDT_SIMULATE_ARM64_TRANSLATION=1`；只在源码运行时生效，安装包只认 Electron
+  的 `app.runningUnderARM64Translation`。
 - 同一 checkout 内仍是单实例语义：restart 会替换本 checkout 上一个实例（不论沙箱
   名字），一个 worktree 同时只跑一份 dev。
 - 共享 userData 的并行（`--preserve-running` 被动预览）语义不变：不停任何实例、强制
