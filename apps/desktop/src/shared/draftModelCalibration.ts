@@ -148,6 +148,27 @@ function markedDefaultModelIdForAgent(
 }
 
 /**
+ * 某个目录里,一个型号该走哪家来源:用户为这个目标选过的那家优先,否则**订阅优先**。
+ *
+ * 「只交模型 id」不够:下游的 effectiveSourceIdForModel 会按原生默认重新解析,而
+ * nativeDefaultSourceId 对 claude-code 无条件优先 XD 网关 —— 于是「按订阅优先挑了
+ * anthropic 的订阅型号」在最后一步被推翻,计费走网关而不是用户已经付过钱的订阅额度
+ * (PR #1076 review)。挑中的来源必须一路带到提交。
+ */
+export function pickDraftProviderForModel(
+  sources: readonly ProviderView[],
+  preferredProviderId?: string | null,
+): string | null {
+  if (sources.length === 0) return null;
+  if (preferredProviderId && sources.some((provider) => provider.id === preferredProviderId)) {
+    return preferredProviderId;
+  }
+  // 订阅优先:用户已经付过钱的额度先用,网关(折扣路由)排后面。
+  const subscription = sources.find((provider) => provider.access?.kind === 'subscription');
+  return subscription?.id ?? sources[0]?.id ?? null;
+}
+
+/**
  * 在该 agent 的已连接来源里挑 (模型, 来源)：
  *   0. 同一 Harness 的可用出厂组合优先；没有时才取目录/服务端**显式标记**为新对话默认（`newSessionDefault`）、且可用且默认可见的模型
  *      优先 —— 未显式选过模型的用户应跟随它，即便种子恰好是另一个可用模型（种子是

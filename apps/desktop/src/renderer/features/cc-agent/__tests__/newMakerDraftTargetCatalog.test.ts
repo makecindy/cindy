@@ -4,7 +4,7 @@ import ts from 'typescript';
 import { describe, expect, it, vi } from 'vitest';
 
 import type { Effort, ProviderView } from '@cindy/model-providers';
-import { getModel, reconcileInvocationEffort } from '@cindy/model-providers';
+import { chatEligibleSourcesForModel, getModel, reconcileInvocationEffort } from '@cindy/model-providers';
 import type { RemoteProjectTarget } from '@/components/new-chat/AddRemoteProjectDialog';
 import type { AgentCapabilities } from '@/hooks/useAgentCapabilities';
 import { parseDeviceProvidersPayload } from '@/hooks/useDeviceProviders';
@@ -13,6 +13,7 @@ import { dbToMakerAgentKind, normalizeDbAgentKind } from '../../../../shared/age
 import { modelCatalogKey } from '../../../../shared/controlledModelCatalog';
 import {
   calibrateDraftModel,
+  pickDraftProviderForModel,
   type DraftModelCalibrationResult,
 } from '../../../../shared/draftModelCalibration';
 import { isProviderShareAgentDeviceId } from '../../../../shared/providerShare';
@@ -254,9 +255,19 @@ describe('Agent location chosen on a controlled new-task draft', () => {
 // old code carried that id over unchanged: no row of the target catalog matched it, so the
 // model picker came up empty on every new conversation (#9353).
 describe('new task model resolves against the catalog it will use', () => {
-  function providerWithModel(id: string, modelId: string): ProviderView {
+  function providerWithModel(
+    id: string,
+    modelId: string,
+    options: {
+      connected?: boolean;
+      suspended?: boolean;
+      access?: ProviderView['access'];
+    } = {},
+  ): ProviderView {
     return {
-      id, name: id, source: 'user', connected: true,
+      id, name: id, source: 'user', connected: options.connected !== false,
+      ...(options.suspended ? { suspended: true } : {}),
+      ...(options.access ? { access: options.access } : {}),
       agents: ['pi'], auth: { method: 'none' },
       routing: { pi: { upstream: 'https://provider.invalid', authStrategy: 'none' } },
       models: { pi: [{
@@ -273,18 +284,23 @@ describe('new task model resolves against the catalog it will use', () => {
     chosenByUser?: boolean;
     usesDeviceCatalog?: boolean;
     rememberedModel?: string;
+    rememberedProviderId?: string | null;
   }): DraftModelCalibrationResult {
     const shared = {
       usesDeviceCatalog: options.usesDeviceCatalog !== false,
       capabilityAgentKind: 'pi',
       effectiveAgentDeviceId: options.usesDeviceCatalog === false ? undefined : 'share:abc',
       recallAgentDeviceSelection: () =>
-        options.rememberedModel ? { model: options.rememberedModel } : null,
+        options.rememberedModel || options.rememberedProviderId
+          ? { model: options.rememberedModel, providerId: options.rememberedProviderId ?? null }
+          : null,
       chatPrefs: {
         model: options.draftModel, effort: 'medium', permissionMode: 'auto',
         planMode: false, providerId: null,
       },
       calibrateDraftModel,
+      chatEligibleSourcesForModel,
+      pickDraftProviderForModel,
       isModelEnabled: () => true,
       sshCodexDraftHostId: null,
       draftPreferredProviderId: null,
@@ -340,6 +356,136 @@ describe('new task model resolves against the catalog it will use', () => {
     });
     expect(result.model).toBe('local-model');
   });
+
+  // Codex review #9369: the target catalog *offering* a model is not the same as that model
+  // being routable there. A source that is disconnected, suspended, has its runtime turned
+  // off or has the model entry disabled cannot carry the request — keeping it strands the
+  // draft on a model the picker cannot route and Send cannot send.
+  it('skips a target model whose source is not connected', () => {
+    const result = calibrate({
+      targetProviders: [
+        providerWithModel('shared-source', 'shared-model', { connected: false }),
+        providerWithModel('other-source', 'other-model'),
+      ],
+      localProviders: [providerWithModel('local-source', 'local-model')],
+      draftModel: 'shared-model',
+    });
+    expect(result.model).toBe('other-model');
+    expect(result.providerId).toBe('other-source');
+  });
+
+  it('skips a target model whose source is suspended', () => {
+    const result = calibrate({
+      targetProviders: [
+        providerWithModel('shared-source', 'shared-model', { suspended: true }),
+        providerWithModel('other-source', 'other-model'),
+      ],
+      localProviders: [providerWithModel('local-source', 'local-model')],
+      draftModel: 'shared-model',
+    });
+    expect(result.model).toBe('other-model');
+    expect(result.providerId).toBe('other-source');
+  });
+
+  // Codex review #9369: the source has to travel with the model. The native default for
+  // claude-code is the XD gateway, so a target that offers the same model through an
+  // Anthropic subscription would silently bill the gateway instead of the paid plan.
+  it('carries the subscription source with the target model', () => {
+    const result = calibrate({
+      targetProviders: [
+        providerWithModel('xd', 'shared-model'),
+        providerWithModel('anthropic', 'shared-model', {
+          access: { kind: 'subscription', product: 'Claude' },
+        }),
+      ],
+      localProviders: [providerWithModel('local-source', 'local-model')],
+      draftModel: 'shared-model',
+    });
+    expect(result.model).toBe('shared-model');
+    expect(result.providerId).toBe('anthropic');
+  });
+
+  it('keeps the source the user picked for that target', () => {
+    const result = calibrate({
+      targetProviders: [
+        providerWithModel('xd', 'shared-model'),
+        providerWithModel('anthropic', 'shared-model', {
+          access: { kind: 'subscription', product: 'Claude' },
+        }),
+      ],
+      localProviders: [providerWithModel('local-source', 'local-model')],
+      draftModel: 'shared-model',
+      rememberedModel: 'shared-model',
+      rememberedProviderId: 'xd',
+    });
+    expect(result.model).toBe('shared-model');
+    expect(result.providerId).toBe('xd');
+  });
+
+  // The source travels with the model into the composer and into the submission. The
+  // native default for claude-code is the XD gateway, so a target that offers the same
+  // model through an Anthropic subscription has to name that subscription explicitly.
+  describe('the new task source travels with the model', () => {
+    function initialProvider(options: {
+      targetProviders: ProviderView[];
+      model: string;
+      rememberedProviderId?: string | null;
+      calibrated?: DraftModelCalibrationResult | null;
+    }): string | null {
+      return callback<() => string | null>('draftInitialProviderId', {
+        usesDeviceCatalog: true,
+        agentCatalogProviders: options.targetProviders,
+        draftInitialModel: options.model,
+        capabilityAgentKind: 'pi',
+        remoteCatalogCalibration: options.calibrated ?? null,
+        effectiveAgentDeviceId: 'share:abc',
+        recallAgentDeviceSelection: () =>
+          options.rememberedProviderId
+            ? { model: options.model, providerId: options.rememberedProviderId }
+            : null,
+        chatEligibleSourcesForModel,
+        pickDraftProviderForModel,
+      })();
+    }
+
+    it('prefers the subscription source over the gateway', () => {
+      expect(initialProvider({
+        targetProviders: [
+          providerWithModel('xd', 'shared-model'),
+          providerWithModel('anthropic', 'shared-model', {
+            access: { kind: 'subscription', product: 'Claude' },
+          }),
+        ],
+        model: 'shared-model',
+      })).toBe('anthropic');
+    });
+
+    it('carries the calibrated source with its model', () => {
+      expect(initialProvider({
+        targetProviders: [
+          providerWithModel('xd', 'shared-model'),
+          providerWithModel('anthropic', 'shared-model', {
+            access: { kind: 'subscription', product: 'Claude' },
+          }),
+        ],
+        model: 'shared-model',
+        calibrated: { model: 'shared-model', providerId: 'anthropic' },
+      })).toBe('anthropic');
+    });
+
+    it('keeps the source the user picked for that target', () => {
+      expect(initialProvider({
+        targetProviders: [
+          providerWithModel('xd', 'shared-model'),
+          providerWithModel('anthropic', 'shared-model', {
+            access: { kind: 'subscription', product: 'Claude' },
+          }),
+        ],
+        model: 'shared-model',
+        rememberedProviderId: 'xd',
+      })).toBe('xd');
+    });
+  });
 });
 
 // A catalog that offers no model seeds an empty model id; an empty id would leave the
@@ -367,7 +513,11 @@ describe('new task model falls back when the seeded model is empty', () => {
         calibratedDraftModel: 'shared-model',
         localDraftEffort: options.localEffort ?? 'medium',
         agentCatalogProviders: [
-          providerWithEfforts('shared-source', 'shared-model', options.targetEfforts ?? ['medium']),
+          providerWithEfforts(
+            'shared-source',
+            ['shared-model', 'seeded-model'],
+            options.targetEfforts ?? ['medium'],
+          ),
         ],
         capabilityAgentKind: 'pi',
         effectiveAgentDeviceId: 'share:abc',
@@ -375,26 +525,38 @@ describe('new task model falls back when the seeded model is empty', () => {
           options.rememberedEffort ? { model: 'shared-model', effort: options.rememberedEffort } : null,
         getModel,
         reconcileInvocationEffort,
+        chatEligibleSourcesForModel,
+        deviceProvidersLoading: false,
+        deviceProvidersUnsupported: false,
       },
     );
     return initial();
   }
 
-  function providerWithEfforts(id: string, modelId: string, efforts: Effort[]): ProviderView {
+  function providerWithEfforts(id: string, modelIds: string[], efforts: Effort[]): ProviderView {
     return {
       id, name: id, source: 'user', connected: true,
       agents: ['pi'], auth: { method: 'none' },
       routing: { pi: { upstream: 'https://provider.invalid', authStrategy: 'none' } },
-      models: { pi: [{
+      models: { pi: modelIds.map((modelId) => ({
         id: modelId, name: modelId, contextWindow: 200_000,
         efforts, defaultEffort: efforts[0] ?? null, effortsUnknown: false,
-      }] },
+      })) },
     };
   }
 
   it('uses the seeded model when the catalog offers one', () => {
     expect(initialModel({ deviceLinkInitial: { model: 'seeded-model', effort: 'high' } }))
       .toEqual({ model: 'seeded-model', effort: 'high' });
+  });
+
+  // Codex review #9369: the seed comes from the target's flat capabilities list (a union
+  // across every source that computer has), while the target catalog only opens some of
+  // those sources. A seed the target cannot route leaves the composer pill empty and the
+  // submission without a source.
+  it('drops a seeded model the target catalog cannot route', () => {
+    expect(initialModel({ deviceLinkInitial: { model: 'flat-only-model', effort: 'high' } }))
+      .toEqual({ model: 'shared-model', effort: 'medium' });
   });
 
   it('uses the calibrated model when the seeded model is empty', () => {

@@ -165,6 +165,7 @@ import type { JSONContent } from '@tiptap/core';
 import { base64ToUint8Array } from '@/lib/fileTypeInference';
 import {
   calibrateDraftModel,
+  pickDraftProviderForModel,
   resolveDraftSessionProviderId,
   type DraftModelCalibrationResult,
 } from '@/lib/draftModelCalibration';
@@ -301,6 +302,7 @@ import {
   filterChatBridgedCodexProviders,
 } from '@/lib/providerModels';
 import {
+  chatEligibleSourcesForModel,
   effectiveSourceIdForModel,
   getModel,
   isModelSelectableForNewRoute,
@@ -1535,9 +1537,6 @@ export function NewMakerDraftRoute() {
    */
   const remoteCatalogCalibration = useMemo<DraftModelCalibrationResult | null>(() => {
     if (!usesDeviceCatalog) return null;
-    const targetHasModel = (modelId: string) =>
-      agentCatalogProviders.some((provider) =>
-        (provider.models[capabilityAgentKind] ?? []).some((model) => model.id === modelId));
     // 用户上次在这台电脑 / 这个分享上选的模型 —— 本次运行内的记忆(与草稿里的 agentDeviceId
     // 一样不跨重启)。它属于**目标目录**,不能用本机草稿里那个 id 顶替:本机的型号多半是
     // Cindy AI 网关的,目标目录里没有,顶替的结果就是选择器里一行都命中不了。
@@ -1545,8 +1544,23 @@ export function NewMakerDraftRoute() {
       ? recallAgentDeviceSelection(effectiveAgentDeviceId, capabilityAgentKind)
       : null;
     const wantedModel = remembered?.model || chatPrefs.model;
-    if (targetHasModel(wantedModel)) {
-      return { model: wantedModel, providerId: remembered?.providerId ?? null };
+    // 目标目录里这个型号**能不能路由**:目录里有这个型号 ≠ 能路由 —— 来源可能没连上、
+    // 被停用、runtime 被关、或该型号条目被停用。只看「有没有」会让草稿停在一个路由不出去
+    // 的型号上:选择器里一行都命中不了,Send 也放行不了,而那份目录里明明有能用的型号
+    // (Codex review #9369)。
+    const wantedSources = chatEligibleSourcesForModel(
+      agentCatalogProviders,
+      wantedModel,
+      capabilityAgentKind,
+    );
+    if (wantedSources.length > 0) {
+      // 沿用它,并把来源**成对**带走:只交模型 id 的话,effectiveSourceIdForModel 的原生默认
+      // 对 claude-code 无条件优先 XD 网关 —— 计费走网关而不是用户已付过钱的订阅额度
+      // (PR #1076 review)。用户上次为这个目标选的那家优先,否则订阅优先(与校准同口径)。
+      return {
+        model: wantedModel,
+        providerId: pickDraftProviderForModel(wantedSources, remembered?.providerId ?? null),
+      };
     }
     const picked = calibrateDraftModel({
       providers: agentCatalogProviders,
@@ -1561,7 +1575,11 @@ export function NewMakerDraftRoute() {
       providersLoading: deviceProvidersLoading,
     });
     // 目标目录里没有可用模型(空 / 全不可用)→ null,让调用方退回本机默认。
-    return targetHasModel(picked.model) ? picked : null;
+    return chatEligibleSourcesForModel(
+      agentCatalogProviders,
+      picked.model,
+      capabilityAgentKind,
+    ).length > 0 ? picked : null;
   }, [
     usesDeviceCatalog,
     agentCatalogProviders,
@@ -2184,7 +2202,18 @@ export function NewMakerDraftRoute() {
     // 「models.length === 0」分支)。空串会让输入框的模型胶囊整个空着、来源也解析不出来 ——
     // 与其把空串一路传下去,不如用校准出来的模型(那份目录里真实存在的型号)。
     if (usesDeviceCatalog && deviceLinkInitial?.model) {
-      return { model: deviceLinkInitial.model, effort: deviceLinkInitial.effort };
+      // 播种模型来自被控端**全量** capabilities(跨来源并集),而目标目录只开放了其中一部分
+      // 来源 —— 那个型号在目标目录里路由不出去时,选择器里一行都命中不了、胶囊整个空着
+      // (Codex review #9369)。目录还在读 / 老被控端只有拍平 capabilities 时,不知道目标开放
+      // 了哪些来源,先按播种值显示,不闪本机模型。
+      const seedRoutable = chatEligibleSourcesForModel(
+        agentCatalogProviders,
+        deviceLinkInitial.model,
+        capabilityAgentKind,
+      ).length > 0;
+      if (deviceProvidersLoading || deviceProvidersUnsupported || seedRoutable) {
+        return { model: deviceLinkInitial.model, effort: deviceLinkInitial.effort };
+      }
     }
     if (usesDeviceCatalog) {
       // 播种模型为空 → 换用校准模型时,effort 不能拿本机档位直接凑:localDraftEffort 是
@@ -2222,6 +2251,8 @@ export function NewMakerDraftRoute() {
     agentCatalogProviders,
     capabilityAgentKind,
     effectiveAgentDeviceId,
+    deviceProvidersLoading,
+    deviceProvidersUnsupported,
   ]);
 
   // 远程草稿的权限档 / 来源同样取镜像 holder;本地走 chatPrefs。
@@ -2250,13 +2281,49 @@ export function NewMakerDraftRoute() {
     calibratedDraftModel,
     capabilityAgentKind,
   ]);
+  /**
+   * 草稿这次要用的来源:必须与**最终模型**成对。
+   *
+   * 只交模型 id 的话,effectiveSourceIdForModel 的原生默认对 claude-code 无条件优先 XD
+   * 网关 —— 校准按订阅优先挑了 anthropic 的订阅型号,只交模型 id 会在最后一步被指回网关,
+   * 计费走网关而不是用户已付过钱的订阅额度(PR #1076 review)。这里按同一口径把来源算出来:
+   * 校准挑中的来源优先,其次用户上次为这个目标选的那家,最后订阅优先。
+   */
+  const draftInitialProviderId = useMemo<string | null>(() => {
+    if (!usesDeviceCatalog) return null;
+    const sources = chatEligibleSourcesForModel(
+      agentCatalogProviders,
+      draftInitialModel,
+      capabilityAgentKind,
+    );
+    if (sources.length === 0) return null;
+    const calibrated = remoteCatalogCalibration;
+    const calibratedProviderId =
+      calibrated && calibrated.model === draftInitialModel ? calibrated.providerId : null;
+    const rememberedProviderId = effectiveAgentDeviceId
+      ? recallAgentDeviceSelection(effectiveAgentDeviceId, capabilityAgentKind)?.providerId ?? null
+      : null;
+    return pickDraftProviderForModel(
+      sources,
+      calibratedProviderId && sources.some((provider) => provider.id === calibratedProviderId)
+        ? calibratedProviderId
+        : rememberedProviderId,
+    );
+  }, [
+    usesDeviceCatalog,
+    agentCatalogProviders,
+    draftInitialModel,
+    capabilityAgentKind,
+    remoteCatalogCalibration,
+    effectiveAgentDeviceId,
+  ]);
   // 本机与远程草稿均保留明确选中的连接。显示可用性与提交身份分开，
   // 防止控制端暂时缺少目录时把账号 A 变成默认账号 B。
   const chatInitialProviderId = useMemo<string | null>(() => {
     if (!usesDeviceCatalog) return localProviderIdForDraft;
     return deviceLinkInitial?.providerId || effectiveSourceIdForModel(
       agentCatalogProviders,
-      null,
+      draftInitialProviderId,
       draftInitialModel,
       capabilityAgentKind,
     );
@@ -2265,6 +2332,7 @@ export function NewMakerDraftRoute() {
     localProviderIdForDraft,
     agentCatalogProviders,
     deviceLinkInitial?.providerId,
+    draftInitialProviderId,
     draftInitialModel,
     capabilityAgentKind,
   ]);

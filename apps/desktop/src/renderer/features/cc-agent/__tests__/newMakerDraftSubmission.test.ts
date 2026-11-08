@@ -3,7 +3,7 @@ import { resolve } from 'node:path';
 import { runInNewContext } from 'node:vm';
 import ts from 'typescript';
 import { describe, expect, it, vi } from 'vitest';
-import { buildUserProvider, connectedProvidersForAgent, getModel, isModelSelectableForNewRoute, reconcileInvocationEffort, type PiReasoningEffort, type ProviderView } from '@cindy/model-providers';
+import { buildUserProvider, chatEligibleSourcesForModel, connectedProvidersForAgent, getModel, isModelSelectableForNewRoute, reconcileInvocationEffort, type PiReasoningEffort, type ProviderView } from '@cindy/model-providers';
 import { createWorkerLabel } from '../workerLabel';
 import type { CollabDraft } from '@/state/newMakerDraft';
 import { resolveSessionExecutionSelection } from '../../../../main/maker-ipc/sessionExecutionSelection';
@@ -218,6 +218,7 @@ async function submit(options: {
     controlledModelRoute: { catalogHostDeviceId: options.catalogHostDeviceId },
     activePluginModel: options.pluginRoute ? { pluginId: 'router', pluginName: 'Router', id: 'auto', name: 'Auto' } : null,
     ...draftEffort, getModel, reconcileInvocationEffort, recallAgentDeviceSelection, window,
+    chatEligibleSourcesForModel,
     localProviders: providers, draftLocalProviders: providers, localProvidersLoading: false, providers,
     sshCodexDraftHostId: agentKind === 'codex' ? options.remoteHostId : null,
     sshDraftSelection: { model: selectedModel, effort: options.effort ?? 'medium', fastMode: false },
@@ -237,7 +238,7 @@ async function submit(options: {
     effectiveExtraDirs: [], effectiveWritableDirs: [], effectiveFastMode: false, effectivePlanMode: false,
     effectiveDeviceLinkDeviceId: options.deviceId, effectiveDeviceLinkDeviceName: options.deviceId,
     catalogDeviceId: modelCatalogKey(options.agentDeviceId ?? options.deviceId, options.catalogHostDeviceId),
-    agentCatalogProviders: providers, deviceProvidersLoading: false,
+    agentCatalogProviders: providers, deviceProvidersLoading: false, deviceProvidersUnsupported: false,
     matchNavigationCommandName: () => null,
     wtRef: { current: hasWorktree
       ? { enabled: true, confirmedIneligible: false, baseRepo, name: 'creator', sourceBranch: 'other-branch', branchPreferenceReady: true, supportsRecoveryKeyDiscard: true }
