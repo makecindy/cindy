@@ -21,6 +21,8 @@ async function fixture(name: string) {
   const home = path.join(root, name);
   const source = path.join(home, 'methods');
   await fs.mkdir(source, { recursive: true });
+  const workingDir = path.join(home, 'task');
+  await fs.mkdir(workingDir);
   const put = async (id: string, description: string) => {
     const folder = path.join(source, id);
     await fs.mkdir(folder, { recursive: true });
@@ -37,13 +39,68 @@ async function fixture(name: string) {
     homeDir: () => home, isCurrentSession: () => state.current,
     isOrdinaryTask: async () => state.ordinary, authorizePath, embedding,
   });
-  const context = { agentKind: 'codex', workingDir: home, sessionId: 'task', sessionInstanceId: 'one' };
+  const context = { agentKind: 'codex', workingDir, sessionId: 'task', sessionInstanceId: 'one' };
   const register = () => execute({ action: 'register', library_id: 'methods', sources: [source] }, context);
   const search = (query: string) => execute({ action: 'search', library_id: 'methods', query }, context);
   return { home, source, put, state, authorizePath, embedding, execute, context, register, search };
 }
 
 describe('native local Skill libraries', () => {
+  it('bounds source authorization independently of the number of Skills', async () => {
+    const f = await fixture('authorization-count');
+    for (let i = 1; i < 100; i++) await f.put(`method-${i}`, `Method ${i}`);
+    expect(await f.register()).toMatchObject({ ok: true, skills: 100 });
+    expect(f.authorizePath).toHaveBeenCalledTimes(2);
+    const result = await f.search('字幕');
+    const matches = (result as { matches: Array<{ id: string }> }).matches;
+    expect(await f.execute({ action: 'read', library_id: 'methods', id: matches[0].id }, f.context)).toMatchObject({ ok: true });
+    expect(await f.execute({ action: 'refresh', library_id: 'methods' }, f.context)).toMatchObject({ ok: true });
+    expect(f.authorizePath).toHaveBeenCalledTimes(2);
+  });
+
+  it('uses the canonical working directory without outside-path approval', async () => {
+    const f = await fixture('workdir-authorization');
+    f.context.workingDir = f.home;
+    expect(await f.register()).toMatchObject({ ok: true });
+    expect(await f.search('字幕')).toMatchObject({ ok: true });
+    expect(f.authorizePath).not.toHaveBeenCalled();
+    const external = path.join(root, 'workdir-external');
+    await fs.mkdir(external);
+    await fs.writeFile(path.join(external, 'SKILL.md'), '---\nname: external\ndescription: External method\n---\nBody\n');
+    await fs.symlink(external, path.join(f.source, 'external'), 'junction');
+    f.state.allowed = false;
+    expect(await f.execute({ action: 'refresh', library_id: 'methods' }, f.context)).toMatchObject({ ok: false, message: 'Denied' });
+    expect(f.authorizePath).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ path: external, operation: 'read' }));
+  });
+
+  it('does not share root grants between tasks, instances or owners', async () => {
+    const f = await fixture('grant-scope');
+    await f.register();
+    f.authorizePath.mockClear();
+    expect(await f.search('字幕')).toMatchObject({ ok: true });
+    expect(f.authorizePath).not.toHaveBeenCalled();
+    f.context.sessionId = 'task-two';
+    expect(await f.search('字幕')).toMatchObject({ ok: true });
+    expect(f.authorizePath).toHaveBeenCalledTimes(1);
+    f.context.sessionInstanceId = 'two';
+    expect(await f.search('字幕')).toMatchObject({ ok: true });
+    expect(f.authorizePath).toHaveBeenCalledTimes(2);
+    f.state.owner = 'owner-two';
+    expect(await f.register()).toMatchObject({ ok: true });
+    expect(f.authorizePath).toHaveBeenCalledTimes(4);
+  });
+
+  it('rechecks expired grants instead of reusing previous approval', async () => {
+    const f = await fixture('expired-grant');
+    let valid = true;
+    f.authorizePath.mockImplementation(async () => ({ allowed: true, isCurrent: () => valid }));
+    await f.register();
+    valid = false;
+    f.authorizePath.mockClear();
+    f.authorizePath.mockImplementation(async () => ({ allowed: false, reason: 'Grant expired' }));
+    expect(await f.search('字幕')).toMatchObject({ ok: false, message: 'Grant expired' });
+    expect(f.authorizePath).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ path: f.source }));
+  });
   it('registers a short gateway, searches summaries and reads the original without a CLI', async () => {
     const f = await fixture('workflow');
     expect(await f.register()).toMatchObject({ ok: true, skills: 1 });

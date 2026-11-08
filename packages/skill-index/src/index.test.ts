@@ -36,6 +36,16 @@ function embedding(identity = 'test:model:3'): SkillEmbeddingAdapter & { embed: 
 }
 
 describe('SkillIndex task discovery', () => {
+  it.each(['C++', '帮我用 C++', 'C#', '使用 C# 写程序'])('retains symbolic language names in %s', async (query) => {
+    const index = new SkillIndex();
+    index.sync([
+      { ...entries[0]!, id: 'cpp', name: 'cpp-specialist', description: 'Develop C++ applications.' },
+      { ...entries[0]!, id: 'csharp', name: 'dotnet-specialist', description: 'Develop applications.', tags: ['C#'] },
+      { ...entries[0]!, id: 'partial', name: 'other', description: 'EC++ SC# C++suffix C#suffix' },
+    ]);
+    expect((await index.search(query)).matches.map(item => item.id)).toEqual([query.includes('++') ? 'cpp' : 'csharp']);
+  });
+
   it.each([
     ['帮我把录屏课程转成文字', 'video'],
     ['做游戏特效', 'game'],

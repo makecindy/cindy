@@ -80,6 +80,8 @@ export interface EmbedRequest {
   texts: string[];
   /** 必传。EmbedRequest 不预设 default,让 consumer 显式声明使用的模型。 */
   model: EmbeddingModelId;
+  /** Skip both LRU reads and writes when the consumer owns vector freshness/persistence. */
+  bypassCache?: boolean;
   /**
    * 检索用途档 (可选)。缺省 = 不发该参数 = 上游不加任何检索前缀。
    *

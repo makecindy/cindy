@@ -17,6 +17,10 @@ export function retrievalText(entry: SkillEntry): string {
 
 function queryTerms(query: string): string[] {
   const terms = new Set<string>();
+  // Segmenter separates the punctuation in language names such as C++ and C#.
+  for (const term of query.match(/(?<![a-z0-9_+#])[a-z][a-z0-9]*(?:\+\+|#)(?![a-z0-9_+#])/gu) ?? []) {
+    terms.add(term);
+  }
   for (const part of segmenter.segment(query)) {
     if (part.isWordLike && part.segment.length > 1 && !STOP_WORDS.has(part.segment)) {
       terms.add(part.segment);
@@ -35,6 +39,10 @@ function queryTerms(query: string): string[] {
 }
 
 function containsTerm(text: string, term: string): boolean {
+  if (/^[a-z][a-z0-9]*(?:\+\+|#)$/u.test(term)) {
+    const escaped = term.replace(/\+/g, '\\+');
+    return new RegExp(`(^|[^a-z0-9_+#])${escaped}(?=$|[^a-z0-9_+#])`, 'u').test(text);
+  }
   if (/^[a-z0-9]+$/u.test(term)) {
     return new RegExp(`(^|[^a-z0-9])${term}([^a-z0-9]|$)`, 'u').test(text);
   }

@@ -22,11 +22,17 @@ export interface LocalSkillLibraryDependencies {
 }
 
 const fail = (errorCode: string, message: string) => ({ ok: false as const, errorCode, message });
+const containsPath = (root: string, target: string) => {
+  const relative = path.relative(root, target);
+  return relative === '' || (relative !== '..' && !relative.startsWith(`..${path.sep}`) && !path.isAbsolute(relative));
+};
+type ReadGrant = { path: string; directory: boolean; grant: Extract<SessionPathAuthorization, { allowed: true }> };
 
 /** Explicit, owner-local libraries. Only their small gateway is mounted by the agent. */
 export function createLocalSkillLibraryTools(deps: LocalSkillLibraryDependencies): LocalSkillLibraryCallback {
   const synchronized = new Map<string, Set<string>>();
   const syncing = new Map<string, ReturnType<typeof syncLibrary>>();
+  const readGrants = new Map<string, ReadGrant[]>();
   return async (request, context) => {
     if (!context.sessionId || context.remoteHostId || !deps.isCurrentSession(context)) {
       return fail('NO_SESSION_CONTEXT', 'A current local Cindy task is required.');
@@ -46,17 +52,39 @@ export function createLocalSkillLibraryTools(deps: LocalSkillLibraryDependencies
       const library = path.join(deps.storageRoot(), request.library_id);
       const sessionKey = JSON.stringify([context.sessionId, context.sessionInstanceId]);
       const libraryKey = JSON.stringify([owner, library]);
+      const workingDir = await fs.realpath(context.workingDir);
+      checkCurrent();
+      const grantKey = JSON.stringify([owner, context.sessionId, context.sessionInstanceId, workingDir]);
+      const authorizedReads = (readGrants.get(grantKey) ?? []).filter((entry) => entry.grant.isCurrent?.() === true);
+      readGrants.set(grantKey, authorizedReads);
       const authorize = async (target: string, operation: 'read' | 'write') => {
         if (!path.isAbsolute(target)) throw new Error('Skill paths must be absolute.');
+        const canonical = await resolveCanonicalSessionPath(workingDir, target);
+        checkCurrent();
+        // Host authorization is only for paths outside the task's real working directory.
+        if (containsPath(workingDir, canonical)) return;
+        const cached = operation === 'read' && authorizedReads.find((entry) =>
+          entry.grant.isCurrent?.() !== false
+          && (entry.path === canonical || (entry.directory && containsPath(entry.path, canonical))));
+        if (cached) {
+          if (!grants.includes(cached.grant)) grants.push(cached.grant);
+          checkCurrent();
+          return;
+        }
         const grant = await deps.authorizePath({
           sessionId: context.sessionId!, sessionInstanceId: context.sessionInstanceId,
-          workingDir: context.workingDir, path: target,
+          workingDir, path: canonical,
           toolName: request.action === 'search' ? 'search_local_skills' : request.action === 'read' ? 'read_local_skill' : 'configure_local_skill_library',
           operation,
         });
         if (!grant.allowed) throw new Error(grant.reason);
         grants.push(grant);
         checkCurrent();
+        if (operation === 'read') {
+          const directory = (await fs.stat(canonical)).isDirectory();
+          checkCurrent();
+          authorizedReads.push({ path: canonical, directory, grant });
+        }
       };
       const authorizeSources = async (config: Registration) => {
         for (const source of config.sources) await authorize(await fs.realpath(source.path), 'read');

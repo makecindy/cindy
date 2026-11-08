@@ -433,7 +433,7 @@ export class EmbeddingClient {
     const hitModels = new Set<string>();
     for (let i = 0; i < req.texts.length; i++) {
       const key = cacheKey(req.model, req.texts[i], variant);
-      const cached = this.cache.get(key);
+      const cached = req.bypassCache ? undefined : this.cache.get(key);
       if (cached) {
         result[i] = cached.vector;
         hitModels.add(cached.model);
@@ -515,7 +515,7 @@ export class EmbeddingClient {
       }
       const targetIdx = missIdx[j];
       result[targetIdx] = vec;
-      this.cache.set(cacheKey(req.model, missTexts[j], variant), { vector: vec, model: freshModel });
+      if (!req.bypassCache) this.cache.set(cacheKey(req.model, missTexts[j], variant), { vector: vec, model: freshModel });
     }
 
     // 组装后再校验一次"整批自洽" —— 上面那次只看了**新取回的**那部分。

@@ -155,6 +155,7 @@ import { HELP_KNOWLEDGE } from '../maker-ipc/helpKnowledge.generated.js';
 import { consumeLearnInvocationGrant } from '../learn-host/invocationGrant.js';
 import { createSkillhubAgentTools } from '../skillhub/agentTools.js';
 import { createLocalSkillLibraryTools } from '../skillhub/localSkillLibrary.js';
+import { createLocalSkillEmbeddingAdapter } from '../skillhub/localSkillEmbedding.js';
 import { isKnownEmbeddingModel } from '@cindy/embedding-client';
 import { ensureEmbeddingServiceForPluginVector } from '../embedding-host/index.js';
 import { getDesktopSelectableCatalog } from '../maker-host/createDesktopProviderService.js';
@@ -1540,15 +1541,11 @@ export function createDesktopMcpProviders(deps: DesktopMcpProvidersDeps): LiziMc
         authorizePath: (request) => authorizeDesktopSessionPath(request, deps.getLiveSessionGrantState),
         embedding: (model) => {
           if (!isKnownEmbeddingModel(model) || !isCindyEmbeddingModelAvailable(getDesktopSelectableCatalog(), model)) return undefined;
-          return {
-            identity: `cindy-host:${model}:query-document:v1`,
-            embed: async (texts, inputType) => {
-              const result = await ensureEmbeddingServiceForPluginVector().embedSync([...texts], {
-                modelId: model, inputType, timeoutMs: 30_000,
-              });
-              return { vectors: result.embeddings, modelUsed: result.modelUsed };
-            },
-          };
+          const owner = activeOwnerScopeKey();
+          return createLocalSkillEmbeddingAdapter(model, () => {
+            if (isAppSessionBoundaryPending() || activeOwnerScopeKey() !== owner) throw new Error('Account changed');
+            return ensureEmbeddingServiceForPluginVector();
+          });
         },
       }),
       history: {
