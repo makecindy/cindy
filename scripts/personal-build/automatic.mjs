@@ -76,6 +76,12 @@ function verifyRelease(r) {
 function status(c, phase, extra = {}) { durableWrite(path.join(root(c), 'status.json'), { phase, at: Date.now(), ...extra }); }
 
 async function stopLaunch(c, release, launched, dataDir = c.runtime.dataDir) {
+  // A LaunchServices app is reparented outside the wrapper tree. Stop its exact
+  // verified PID first; normal app exit lets the Terminal/runner finish as well.
+  // Tearing down their process groups first can strand the app without its UI server.
+  const owned = snapshot(c, release, dataDir);
+  check(!owned.unknown, 'Process identity unavailable; cleanup deferred');
+  if (owned.pid) await stopOwned(c, release, dataDir);
   if (launched && !launched.exited && launched.child.pid) {
     // macOS script creates a second process group for its PTY command. Include descendant
     // groups whose leader is in our child tree; killing only script's group leaves builds alive.
