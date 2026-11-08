@@ -363,7 +363,7 @@ it('keeps Next disabled after a source-list failure until the user reloads and s
 });
 
 // Two activations in one render turn must create only one preview plan. A slow
-// source recheck is the minimal race; button disabled state alone updates too late.
+// preview is the minimal race; button disabled state alone updates too late.
 it('reads the selected source once when Next is activated twice before rendering', async () => {
   const { setupMigration } = installApi();
   render(<SetupMigrationDialog />);
@@ -372,22 +372,32 @@ it('reads the selected source once when Next is activated twice before rendering
   const next = screen.getByRole('button', { name: 'setupMigration.source.next' });
   act(() => { next.click(); next.click(); });
   await screen.findByText('Gmail');
-  expect(setupMigration.sources).toHaveBeenCalledTimes(2);
+  expect(setupMigration.sources).toHaveBeenCalledTimes(1);
   expect(setupMigration.preview).toHaveBeenCalledTimes(1);
 });
 
-it('does not preview or substitute another source when the selected source disappears', async () => {
-  const { setupMigration } = installApi();
-  render(<SetupMigrationDialog />);
-  act(() => openSetupMigration());
-  fireEvent.click((await screen.findAllByRole('radio'))[0]);
-  setupMigration.sources.mockResolvedValue([{ deviceId: 'd3', name: 'Another Mac', platform: 'darwin', online: true, lastSeenAt: null }]);
-  fireEvent.click(screen.getByRole('button', { name: 'setupMigration.source.next' }));
-  await screen.findByText('Another Mac');
-  expect((screen.getByRole('radio') as HTMLInputElement).checked).toBe(false);
-  expect((screen.getByRole('button', { name: 'setupMigration.source.next' }) as HTMLButtonElement).disabled).toBe(true);
-  expect(setupMigration.preview).not.toHaveBeenCalled();
-});
+it.each(['NOT_FOUND', 'SETUP_SOURCE_UNAVAILABLE'])(
+  'refreshes only after Main rejects the chosen source with %s, without substituting', async (code) => {
+    const locale = createInstance();
+    await locale.init({ lng: 'en', fallbackLng: 'en', resources: { en: { translation: enCommon } } });
+    translation.t = (key, options) => locale.t(key, options);
+    const { setupMigration } = installApi();
+    render(<SetupMigrationDialog />);
+    act(() => openSetupMigration());
+    fireEvent.click((await screen.findAllByRole('radio'))[0]);
+    setupMigration.preview.mockRejectedValueOnce(Object.assign(new Error('source unavailable'), { code }));
+    setupMigration.sources.mockResolvedValue([{ deviceId: 'd3', name: 'Another Mac', platform: 'darwin', online: true, lastSeenAt: null }]);
+    fireEvent.click(screen.getByRole('button', { name: locale.t('setupMigration.source.next') }));
+    await screen.findByText('Another Mac');
+    expect(screen.getByText(locale.t('setupMigration.errors.SETUP_SOURCE_UNAVAILABLE', { name: 'Mac mini' }))).toBeTruthy();
+    expect((screen.getByRole('radio') as HTMLInputElement).checked).toBe(false);
+    expect((screen.getByRole('button', { name: locale.t('setupMigration.source.next') }) as HTMLButtonElement).disabled).toBe(true);
+    expect(setupMigration.sources).toHaveBeenCalledTimes(2);
+    expect(setupMigration.preview).toHaveBeenCalledTimes(1);
+    expect(setupMigration.preview).toHaveBeenCalledWith('d1');
+    expect(setupMigration.apply).not.toHaveBeenCalled();
+  },
+);
 
 // Same-name source regression, component tier: the picker disambiguated identities
 // but access, key-copy and SSH confirmations lost the suffix. Use real locale

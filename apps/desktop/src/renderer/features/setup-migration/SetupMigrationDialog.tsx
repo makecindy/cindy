@@ -126,7 +126,7 @@ function SetupMigrationDialogBody() {
   const [directory, setDirectory] = useState<DeviceLinkDeviceView[]>([]);
   const [deviceId, setDeviceId] = useState<string | null>(null);
   const [plan, setPlan] = useState<SetupMigrationPlan | null>(null);
-  const [readError, setReadError] = useState<string | null>(null);
+  const [readError, setReadError] = useState<{ code: string; sourceName: string } | null>(null);
   const [selected, setSelected] = useState<ReadonlySet<string>>(() => new Set());
   const [toolNames, setToolNames] = useState<ReadonlyMap<string, string>>(() => new Map());
   const [itemPhases, setItemPhases] = useState<ReadonlyMap<string, ItemPhase>>(() => new Map());
@@ -188,29 +188,29 @@ function SetupMigrationDialogBody() {
       setPhase('reading');
       setReadError(null);
       api
-        .sources()
-        .then((list) => {
-          setSources(list);
-          if (!list.some((source) => source.deviceId === target && !source.unavailable)) {
-            setDeviceId(null);
-            setPhase('source');
-            return null;
-          }
-          return api.preview(target);
-        })
+        .preview(target)
         .then((next) => {
-          if (!next) return;
           setPlan(next);
           setSelected(new Set(defaultSelection(next)));
           setPhase('review');
         })
         .catch((error: unknown) => {
           const code = extractIpcError(error)?.code;
-          setReadError(code && READ_ERROR_CODES.has(code) ? code : 'GENERIC');
+          const sourceUnavailable = code === 'NOT_FOUND' || code === 'SETUP_SOURCE_UNAVAILABLE';
+          setReadError({
+            code: sourceUnavailable ? 'SETUP_SOURCE_UNAVAILABLE' : code && READ_ERROR_CODES.has(code) ? code : 'GENERIC',
+            sourceName,
+          });
+          if (sourceUnavailable) {
+            // Main already checked the current directory. Only refresh on failure;
+            // require another explicit choice and never substitute another device.
+            setDeviceId(null);
+            loadSources();
+          }
           setPhase('source');
         });
     },
-    [api, sources],
+    [api, sources, sourceName, loadSources],
   );
 
 
@@ -360,7 +360,7 @@ function SetupMigrationDialogBody() {
         <p className="text-13 leading-[1.5] text-[var(--confirm-desc)]">{t('setupMigration.source.description')}</p>
         {readError ? (
           <ErrorNotice
-            message={t(`setupMigration.errors.${readError}`, { name: sourceName })}
+            message={t(`setupMigration.errors.${readError.code}`, { name: readError.sourceName })}
             actions={
               deviceId && canRead ? (
                 <Button variant="secondary" size="sm" compact onClick={() => read(deviceId)}>
