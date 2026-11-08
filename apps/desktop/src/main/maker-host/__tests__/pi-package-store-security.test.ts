@@ -4327,6 +4327,9 @@ describe('Pi package executable-code boundary', () => {
 
   it('does not let an immediate view publication overwrite a peer runtime invalidation', async () => {
     const { source } = await createPackage();
+    // Keep this race on the directory-watch path. A missing package home is
+    // only observed by the 2 s fallback poll, which would equal the wait below.
+    await fs.mkdir(path.join(runtime.userData, 'pi-package-home'), { recursive: true });
     const firstStore = await import('../pi-package-store.js');
     const listener = vi.fn();
     const unsubscribe = firstStore.onPiPackagesChanged(listener);
