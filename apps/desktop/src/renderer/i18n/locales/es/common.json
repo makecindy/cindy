@@ -10031,6 +10031,8 @@
     "banner": {
       "title": "Actualizado a {{version}}",
       "subtitle": "Reiniciar para aplicar",
+      "nativeBuildTitle": "Versión para Apple silicon lista",
+      "nativeBuildSubtitle": "Reinicia para cambiar; tus tareas y ajustes se conservan",
       "viewNotes": "Ver novedades",
       "viewNotesAria": "Ver las novedades de {{version}}",
       "button": "Reiniciar",
@@ -10160,6 +10162,12 @@
       "description": "La base de datos ocupa aproximadamente {{size}}, por encima de {{threshold}} G. Considera limpiarla en Almacenamiento.",
       "openSettings": "Abrir Almacenamiento",
       "disable": "No volver a recordármelo"
+    },
+    "nativeBuild": {
+      "title": "Estás usando la versión para Intel",
+      "description": "Esta Mac tiene Apple silicon y la versión para Intel va mucho más lenta por la traducción. Instala la versión para Apple silicon; tus datos se conservan.",
+      "dismiss": "Ocultar por ahora",
+      "download": "Descargar"
     },
     "horizontalTabbarAria": "Selector de vista principal",
     "tabs": {
@@ -19491,6 +19499,7 @@
       "apply": "Transferir"
     },
     "source": {
+      "receivingOn": "Equipo de destino: {{name}}",
       "description": "Elija una computadora que haya iniciado sesión con esta cuenta. Sus plugins, habilidades, ajustes y conexiones se configuran aquí de la misma forma; los inicios de sesión y las claves solo salen de esa computadora si usted lo permite en ella.",
       "loading": "Buscando sus otras computadoras…",
       "empty": "No se encontraron otras computadoras para esta cuenta. Inicie sesión en Cindy en otra computadora y vuelva a abrir esto",

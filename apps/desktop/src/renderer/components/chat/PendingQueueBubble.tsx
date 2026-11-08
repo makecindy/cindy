@@ -110,7 +110,7 @@ export function PendingQueueBubble({
             <button
               type="button"
               disabled={busy}
-              className={`flex items-center gap-1 rounded-md px-1 hover:bg-[var(--surface-hover)] ${simplifiedBotConversation ? "min-h-8" : "min-h-6"}`}
+              className={`flex items-center gap-1 rounded-lg px-1 hover:bg-[var(--surface-hover)] ${simplifiedBotConversation ? "min-h-8" : "min-h-6"}`}
               aria-label={t('newChat.pendingQueue.queued')}
             >
               <ListEnd size={14} />

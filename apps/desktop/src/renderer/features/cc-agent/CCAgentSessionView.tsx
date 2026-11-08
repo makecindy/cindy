@@ -5534,7 +5534,7 @@ function CCAgentSessionContent({
         {queueAbortPending && <div role="status" className="flex min-h-8 items-center gap-2 text-12 text-[var(--text-secondary)]"><Spinner size={14} />{t('newChat.pendingQueue.stopping')}</div>}
         {queuePaused && !queueAbortPending && <div className="flex items-center justify-between gap-2 py-2 text-12 text-[var(--text-secondary)]">
           <span>{t('newChat.pendingQueue.pausedFooter')}</span>
-          <button type="button" disabled={readOnly} onClick={resumeQueue} className="min-h-8 rounded-md px-2 hover:bg-[var(--surface-hover)]">{t('newChat.pendingQueue.resumeAction')}</button>
+          <button type="button" disabled={readOnly} onClick={resumeQueue} className="min-h-8 rounded-lg px-2 hover:bg-[var(--surface-hover)]">{t('newChat.pendingQueue.resumeAction')}</button>
         </div>}
         {pendingMcpSetup ? <McpSetupPrompt key={pendingMcpSetup.requestId} request={pendingMcpSetup} teammate={!!botChatIdentity} /> : null}
       </>}

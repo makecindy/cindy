@@ -1470,15 +1470,19 @@ export class DeviceLinkClient {
   private moveRelayPendingToDirect(deviceId: string): number {
     const peer = this.peerTransport.get(deviceId);
     if (!peer?.reliable || !this.isPeerSendReady(peer)) return 0;
-    let moved = 0;
-    for (const pending of peer.pending.values()) {
-      if (!pending.sent || pending.path !== 'relay') continue;
+    const moving = [...peer.pending.values()].filter(pending => pending.sent && pending.path === 'relay');
+    if (moving.length === 0) return 0;
+    // 与 detachDirectPath 相同：必须在清空现场之前留下旧 relay 队头，否则直连撤下时
+    // 只剩「已经搬走、还没写出」的状态，看不出哪些帧原本在慢中继上挡住了累计 ACK。
+    // 独立 outcome 分桶，不与大帧入队的 send 证据争采样名额。
+    this.stallDiagnostics.record('send', { outcome: 'moved-to-direct', dst: diagnosticRef(deviceId),
+      moved: moving.length, transport: this.transportDiagnostic(deviceId) });
+    for (const pending of moving) {
       pending.path = undefined;
       pending.sent = false;
       resetReliableSendRound(pending);
-      moved += 1;
     }
-    if (moved === 0) return 0;
+    const moved = moving.length;
     // 与 detachDirectPath 相同：调用方可能处于发送路径中，下一个微任务再重放。
     void Promise.resolve().then(() => {
       this.retryPending(deviceId, { ignoreInterval: false, onlyUnsent: true });

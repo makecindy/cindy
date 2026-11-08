@@ -185,7 +185,7 @@ function Fixture({ kind }: { kind: string }) {
             <button
               type="button"
               onClick={() => setPaused(false)}
-              className="min-h-8 rounded-md px-2 hover:bg-[var(--surface-hover)]"
+              className="min-h-8 rounded-lg px-2 hover:bg-[var(--surface-hover)]"
             >
               {t('newChat.pendingQueue.resumeAction')}
             </button>

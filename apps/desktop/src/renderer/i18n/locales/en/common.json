@@ -9951,6 +9951,8 @@
     "banner": {
       "title": "Updated to {{version}}",
       "subtitle": "Relaunch to apply",
+      "nativeBuildTitle": "Apple silicon version ready",
+      "nativeBuildSubtitle": "Restart to switch; your tasks and settings stay",
       "viewNotes": "See What's New",
       "viewNotesAria": "See what's new in {{version}}",
       "button": "Relaunch",
@@ -10080,6 +10082,12 @@
       "description": "The database is about {{size}}, above {{threshold}} G. Consider cleaning it up in Storage.",
       "openSettings": "Open Storage",
       "disable": "Do not remind me"
+    },
+    "nativeBuild": {
+      "title": "You're using the Intel version",
+      "description": "This Mac has Apple silicon, so the Intel version runs much slower through translation. Install the Apple silicon version; your data stays.",
+      "dismiss": "Hide for now",
+      "download": "Download"
     },
     "horizontalTabbarAria": "Main view switcher",
     "tabs": {
@@ -19317,6 +19325,7 @@
       "apply": "Move"
     },
     "source": {
+      "receivingOn": "Receiving on: {{name}}",
       "description": "Pick a computer signed in to this account. Its plugins, skills, settings and connections are set up the same way here; keys are copied only after you allow it there, and sign-ins never leave that computer.",
       "loading": "Looking for your other computers…",
       "empty": "No other computers found for this account. Sign in to Cindy on another computer, then open this again",

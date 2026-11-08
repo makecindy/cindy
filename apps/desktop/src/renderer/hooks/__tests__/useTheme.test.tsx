@@ -11,10 +11,14 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { act, renderHook } from '@testing-library/react';
 import { createElement, type ReactNode } from 'react';
 
+import '../../themes/colors';
+import { bootstrapLocalThemesSync } from '../../themes/local-themes';
 import { themeService } from '../../themes/theme-service';
+import type { LocalThemesResult } from '../../../shared/local-themes';
 import {
   __resetLoginFirstLaunchLightGateForTest,
   endLoginFirstLaunchLightGate,
+  followLocalThemeChanges,
   getInitialThemeVariant,
   ThemeProvider,
   useTheme,
@@ -206,5 +210,55 @@ describe('useTheme 跨窗口主题同步(D2-3)', () => {
     });
     expect(result.current.theme).toBe(beforeTheme);
     expect(result.current.familyId).toBe(beforeFamily);
+  });
+});
+
+// PR #9358：既有 Provider 测试没有覆盖无 Provider 的轻量窗口。
+// unit：从生产初始化入口接收同 ID 换色推送，验证实际 CSS、明暗及取消订阅。
+describe('辅助窗口 Omarchy 实时换色', () => {
+  it('同 ID 同明暗换色、明暗切换均更新 DOM，停止订阅后不再更新', () => {
+    vi.restoreAllMocks();
+    __resetLoginFirstLaunchLightGateForTest();
+    localStorage.clear();
+    localStorage.setItem('theme.familyId', 'omarchy');
+    localStorage.setItem('theme', 'light');
+    let push: (payload: LocalThemesResult) => void = () => {};
+    const payload = (type: 'light' | 'dark', surface: string): LocalThemesResult => ({
+      success: true, diagnostics: [], themes: [{ id: 'omarchy', name: 'Omarchy', type, colors: { surface } }],
+    });
+    (window as unknown as { electronAPI: unknown }).electronAPI = {
+      localThemes: {
+        listSync: () => payload('light', '#faf4ed'),
+        onChanged: (callback: typeof push) => { push = callback; return () => {}; },
+      },
+      theme: { applyVibrancy: applyVibrancyMock },
+    };
+    applyVibrancyMock.mockClear();
+    bootstrapLocalThemesSync();
+    themeService.applyTheme(getInitialThemeVariant().theme);
+    const stop = followLocalThemeChanges();
+    const root = document.documentElement;
+    const surface = () => getComputedStyle(root).getPropertyValue('--surface').trim();
+    try {
+      expect(surface()).toBe('#faf4ed');
+      push(payload('light', '#ffffff'));
+      expect(surface()).toBe('#ffffff');
+      push(payload('dark', '#142620'));
+      expect(surface()).toBe('#142620');
+      expect(root.classList.contains('dark')).toBe(true);
+      expect(root.style.colorScheme).toBe('dark');
+      push(payload('light', '#faf4ed'));
+      expect(surface()).toBe('#faf4ed');
+      expect(root.classList.contains('dark')).toBe(false);
+      expect(root.style.colorScheme).toBe('light');
+      expect(applyVibrancyMock).not.toHaveBeenCalled();
+      stop();
+      push(payload('dark', '#142620'));
+      expect(surface()).toBe('#faf4ed');
+    } finally {
+      stop();
+      localStorage.clear();
+      document.getElementById('theme-vars')?.remove();
+    }
   });
 });
