@@ -135,6 +135,21 @@ describe('Copilot account-specific model discovery (#6663)', () => {
     expect(fetchCalls.map(call => call.url)).toEqual([expected]);
   });
 
+  it.each(['individual', 'business', 'enterprise'] as const)('discovers from the declared account /models endpoint without an explicit URL (#8701)', async account => {
+    const oauth = providerPresetOAuth('github-copilot')!;
+    const token = `test-token;proxy-ep=proxy.${account}.githubcopilot.com;exp=9999999999`;
+    seedBlob('copilot-account', { access_token: token });
+    fetchResponder = () => new Response('{"data":[{"id":"gpt-6.1-sol","name":"GPT-6.1 Sol"}]}');
+    expect(oauth.modelsDiscoveryUrl).toBe('https://api.individual.githubcopilot.com/models');
+    const discovered = await discoverGenericOAuthModels('copilot-account', oauth, undefined, 'pi');
+    expect(discovered).toMatchObject([{ id: 'gpt-6.1-sol', name: 'GPT-6.1 Sol' }]);
+    expect(fetchCalls.map(call => call.url)).toEqual([`https://api.${account}.githubcopilot.com/models`]);
+    expect(fetchCalls[0]!.headers).toMatchObject({
+      authorization: `Bearer ${token}`,
+      'Copilot-Integration-Id': 'vscode-chat',
+    });
+  });
+
   it.each(['individual', 'business', 'enterprise'] as const)('uses the %s account host when refreshing saved model lists', async account => {
     const oauth = providerPresetOAuth('github-copilot')!;
     const token = `test-token;proxy-ep=proxy.${account}.githubcopilot.com;exp=9999999999`;
@@ -150,7 +165,10 @@ describe('Copilot account-specific model discovery (#6663)', () => {
     const saved = await fetchSavedOAuthProviderModels(provider, 'pi', 'copilot-account', () => true,
       async (url, init) => {
         requests.push(String(url));
-        expect(init?.headers).toEqual({ authorization: `Bearer ${token}` });
+        expect(init?.headers).toMatchObject({
+          authorization: `Bearer ${token}`,
+          'Copilot-Integration-Id': 'vscode-chat',
+        });
         return new Response('{"data":[{"id":"test-model"}]}');
       });
     expect(saved).toMatchObject({ ok: true, models: [{ id: 'test-model' }] });
