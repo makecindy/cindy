@@ -176,6 +176,9 @@ checkout 的启动器顶掉）。因此并行多开的标准姿势是：**每个
   checkout 自身依赖的路径仍是归属依据。
 - **CDP 端口**：dev 的 remote-debugging-port 固定 9222，只有先起的实例能绑上。后起
   实例需要 CDP 调试面时，用 `XDT_CDP_PORT=<端口>` 覆写（仅数字生效，dev-only）。
+- **模拟 Rosetta 转译**：在 Apple 芯片上检查「Intel 包换装提示」和启动日志的 `[arch]`
+  行时，加 `XDT_SIMULATE_ARM64_TRANSLATION=1`；只在源码运行时生效，安装包只认 Electron
+  的 `app.runningUnderARM64Translation`。
 - 同一 checkout 内仍是单实例语义：restart 会替换本 checkout 上一个实例（不论沙箱
   名字），一个 worktree 同时只跑一份 dev。
 - 共享 userData 的并行（`--preserve-running` 被动预览）语义不变：不停任何实例、强制
@@ -244,7 +247,10 @@ main 日志里 scope 为 `memory-usage` 的行是各进程内存采样（正式�
 `process.memoryUsage()` 细分，后面按进程类型分组列出 `app.getAppMetrics()` 的常驻内存，
 组内从大到小，单位 MB。排查「越用越卡」时，先按启动分段看 `Browser`（主进程）和最大的
 `Tab`（主界面）每小时涨多少：持续上涨、重启才回落就是泄漏；再看 `heapUsed` 与 `external` /
-`arrayBuffers` 谁在涨，区分 JS 对象和 Buffer。该 scope 只写进程类型与数字，已精确放行进
+`arrayBuffers` 谁在涨，区分 JS 对象和 Buffer。`mcpBridgeSessions` 是 Codex / Pi MCP 桥上
+存活的会话数：每个会话持有一整个 MCP server（连同全部工具 schema），它应随运行中的
+Codex / Pi 进程数起落，持续上涨说明有客户端退出后会话没被关闭（见
+`mcp-integrations/codexHttpBridge.ts` 的 `closeSessionOwnedTransports`）。该 scope 只写进程类型与数字，已精确放行进
 日志上报，不要往这行里加标题、服务名、pid 或路径。
 
 `getAppMetrics()` 的 GPU 数字不含 IOSurface 等显存，macOS 上要看 GPU 进程真实占用用
@@ -372,7 +378,9 @@ PR 截图给评审看改了什么，不是自检总览的搬运：
 
 Linux 主窗口创建时注册 Electron Tray，提供显示主窗口、打开日志目录、退出 Cindy。
 与 Windows 共用菜单动作和活动任务退出确认，但 Linux 使用 `setContextMenu` 发布原生
-菜单，切换语言后重新发布；不依赖仅 Windows/macOS 提供的 `right-click` 事件。
+菜单，切换语言后重新发布；不依赖仅 Windows/macOS 提供的 `right-click` 事件。创建图标后
+同时设置悬停提示（`BRAND_NAME`）：不设置时 StatusNotifierItem 的 Title 为空，桌面面板会
+回退显示内部图标 Id（如 `Cindy_status_icon_1`）。
 实现见 `main/linuxTrayLifecycle.ts` 与 `bootstrap-electron.ts`，回归见
 `main/__tests__/linuxTrayLifecycle.test.ts`。
 
