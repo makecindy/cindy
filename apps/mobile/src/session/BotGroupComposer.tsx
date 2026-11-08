@@ -460,7 +460,7 @@ export function BotGroupComposer({
         <ComposerToolbarSpacer />
         {trailing}
       </> : undefined}
-      leading={topic ? undefined : leading}
+      leading={!topic || hasAttachments ? leading : undefined}
       trailing={trailing}
       testID="botGroup.composer.row"
     />

@@ -1662,18 +1662,27 @@ describe('group attachments', () => {
     expect(byId('botGroup.contextSheetDivisionRow')?.textContent).toContain('groupChat.composer.divisionBusy');
   });
 
-  it('shows a picked photo as pending, then sends the upload with the text', async () => {
+  // A topic with attachments must retain the same collapsed badge as the main group.
+  // Otherwise blur hides the tray while send still includes those invisible attachments.
+  it.each([false, true])('shows a picked photo as pending, then sends the upload with the text (topic=%s)', async topic => {
+    h.chat.server = topic;
     h.local.addImages.mockImplementation(async () => {
       h.local.setPending([{ localId: 'l1', kind: 'image', previewUri: 'file:///tmp/a.jpg', name: 'a.jpg', size: 10 }]);
       h.local.options.onPicked();
     });
-    await render(group({ openPlan: null, supportsAttachments: true }));
+    await render(group({ openPlan: null, supportsAttachments: true }), 'ready', topic ? 'm1' : undefined, topic ? '' : 'mac');
+    await focusComposer();
     await click('botGroup.composer.more');
     await click('botGroup.contextSheetPhotoRow');
     expect(h.local.addImages).toHaveBeenLastCalledWith('library');
     expect(byId('botGroup.contextSheet')).toBeNull();
     // Collapsed: a badge next to +; focused: the tray inside the card.
+    await act(async () => h.row.onBlur());
+    expect(byId('botGroup.attachmentTray')).toBeNull();
     expect(byId('botGroup.attachmentCollapsedBadge')?.textContent).toBe('1');
+    h.inputFocus.mockClear();
+    await click('botGroup.attachmentCollapsedBadge');
+    expect(h.inputFocus).toHaveBeenCalledOnce();
     await focusComposer();
     expect(byId('composer-row')?.getAttribute('data-card')).toBe('true');
     expect(byId('tray.pending.l1')?.textContent).toBe('a.jpg');
@@ -1709,9 +1718,13 @@ describe('group attachments', () => {
     expect(h.alert).toHaveBeenCalledWith('groupChat.composer.sendFailed');
     expect(byId('tray.attachment.att-2')).not.toBeNull();
     // The retry is the same message.
+    await act(async () => h.row.onBlur());
+    expect(byId('botGroup.attachmentTray')).toBeNull();
+    expect(byId('botGroup.attachmentCollapsedBadge')?.textContent).toBe('1');
     await click('botGroup.composer.send');
     expect(h.chat.act).toHaveBeenLastCalledWith('send', expect.objectContaining({ clientId: 'uuid-1', attachments: [file] }));
     expect(byId('tray.attachment.att-2')).toBeNull();
+    expect(byId('botGroup.attachmentCollapsedBadge')).toBeNull();
   });
 
   it.each([false, true])('does not send while an upload failed, and reclaims a removed upload (topic=%s)', async topic => {
