@@ -291,12 +291,15 @@ Library 请求同时绑定迁移代次和安装批准，根解析、排队及开
   仍按特殊用途／私有地址拒绝。
 - **控制节点（2026-10-31）**：Host 预埋的 `will-` 拦截点目录在 `shared/ghost.ts`
   `GHOST_CONTROL_POINTS`，新增节点 = 加目录项 + 在对应流程按任务配置调用 `screenGhostControlPoint`，
-  插件不需要 Host 再发版。四条不变量：只问用户在该任务里选定的插件（定时任务 / 例行任务的
-  `preRunPlugin`），不是装了就管所有任务；插件只能收紧（allow 只表示不反对，不能替用户批准）；
+  插件不需要 Host 再发版。四条不变量：只问用户在该任务里选定的插件（定时任务的
+  `preRunPlugin`；伙伴例行任务 2026-11-08 起已转为项目自动化），不是装了就管所有任务；插件只能收紧（allow 只表示不反对，不能替用户批准）；
   出错处理（没装、停用、超时、崩溃、熔断）由用户按任务设置，插件不能自报；只有 receipt
   `approvedControlPoints` 记录的节点可被任务选用——批准来自安装/更新确认里实际显示过的权限行，
   旧 receipt 缺字段视为未批准但插件照常可用，提前声明 Host 当时不认识的节点不会随 Host 升级
   静默生效，下一次更新会把它作为新增权限复核。随包种子与服务端默认安装视为已批准声明的节点。
+  **伙伴例行任务退役（2026-11-08，存量兼容）**：`will-routine-run` 与 manifest `routineEvents` 照常解析、
+  安装和保留批准记录，但不再触发；`routineEvents` 不再让插件常驻；`routine-request` 管子（`cindy.routines.request`）
+  的 status / publish 照旧校验与限额后返回稳定的空操作（publish 为 `accepted: 0`），不报错。插件与用户无需重装或重新确认。
   `will-start-task`（新任务选模型）是唯一能回 `route` 的节点：只在本机新任务第一条消息发出前、
   用户在模型选择器里选了这个插件发布的模型时询问一次，任务中途和伙伴任务都不问（换模型会让提示缓存失效）。
   Gateway 只保留 route 的 `agentKind` / `model` / `providerId` / `effort` 四个字段；Main 再按当前已连接、

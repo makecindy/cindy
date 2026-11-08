@@ -275,6 +275,8 @@ Skill 停用适配同时保存物理身份与管理页已扫描的词法发现�
 本机尊重启动 Cindy 时的 `PI_CODING_AGENT_DIR`
 覆写（支持 `~`）。SSH 使用远端 `$HOME/.pi/agent`，不读取控制端个人文件；手机／设备互联
 控制本机任务复用桌面链路。Bot 保持 `--no-context-files`，不读取或复制这些全局约定。
+例外（2026-11-08，伙伴 V2）：主人私聊在伙伴自己项目里运行时（`botRuntimeProfile.projectContext`），
+按同目录普通任务加载说明文件与项目资源；IM、群专线等其它伙伴会话仍按 Bot 隔离（`isolatedBotProfile`）。
 
 每次启动读取软链目标并复制内容到独立 `configHome`，不建立指向用户文件的可写链接。
 用户更新约定后，新启动的任务读取新版；运行中的任务保留启动快照。SSH 的配置目录身份
@@ -356,7 +358,7 @@ Pi CLI 管理入口、内核自更新与旧工具兼容的执行边界见
    存在明确安装且未停用的用户包根时，为保留 Pi 原生 package discovery 可以只省略
    `--no-extensions`：包根只能来自 Main 生成的 runtime `settings.json`，`--no-approve` 仍禁止
    读取项目 `.pi/settings.json` 与自动安装项目 packages，不得因此传 `--approve`。
-   本地非 Review、非 Bot、非 SSH 的 root 任务用重复 `--skill` / `--prompt-template` /
+   本地非 Review、非隔离 Bot（V2 伙伴项目里的主人私聊按普通任务）、非 SSH 的 root 任务用重复 `--skill` / `--prompt-template` /
    `--extension` 把仓库原路径交给 Pi：`.pi/skills` 与 cwd→git root 内 `.agents/skills`
    的目录型 Skill、`.pi/prompts/*.md`、`.pi/extensions/*.ts` 与 `*/index.ts`。越界 symlink
    不传入。root 仍回装 Cindy 自有 bridge/subagent 与 pinned plan-mode。Review、Bot、子代理、

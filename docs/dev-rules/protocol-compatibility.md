@@ -1686,6 +1686,8 @@ SSH 主机不自动成为设备目录成员。实现与回归见 `mcp-integratio
 插件 id 只对插件所在的电脑有意义：`cindy_scheduler` 跨电脑修改拒绝设置该字段，伙伴搬家时带插件检查的
 例行任务先关闭再到达；Mobile 与项目自动化配置不编辑、不保存它。不新增 device-link channel：插件下拉用
 本机专用的 `ghosts:control-points:candidates`，不进 allowlist。
+（2026-11-08 起 V2 不再适用于伙伴例行任务：例行任务已转为伙伴项目的自动化，带插件检查的例行任务转成已暂停的自动化并在
+`CARRYOVER.md` 记一条说明；定时任务的 `preRunPlugin` 不变。）
 
 ## 插件提供的模型（2026-11-01）
 
@@ -2925,6 +2927,7 @@ Codex 原生图片恢复（#6412）在既有 `maker:remote-agent:v1` 上追加�
   会让页面看不到 revision 冲突；`message` 去掉 `[CODE] ` 前缀，非白名单异常仍抛 `INTERNAL`，不带原文。
 - **能力协商**：`caps` 返回 `{ version, ops[] }`；控制端按操作决定显示哪些页（缺操作的页不出现），主机没有声明动作时整页回退到
   通用表单页。新增操作只追加到 `BOT_SETTINGS_OPS`，旧控制端不识别的操作不会被调用。
+  2026-11-08 起 `autonomy.*` 与 `routines.*` 不再列入 `caps`，仅为旧控制端稳定应答（见「伙伴 V1 其余远程入口退役」）。
 - **安全边界**：主机检查「允许同账号设备控制本机」、撤权、共享任务 / 供应商分享对端与伙伴可见性，并在返回前复核账号 owner；
   凭证、本机路径、运行时快照、最近消息预览不出现在任何结果里；`profile.update` 白名单字段且拒绝 `permissions`；消息平台操作只触达该伙伴自己的连接。
 
@@ -4102,6 +4105,29 @@ V2 伙伴用普通 `send_to_session` 开任务，V1 委派工具、服务与回�
 
 不增加 IPC channel、权限、服务端字段或数据库迁移。
 
+## 伙伴 V1 其余远程入口退役（2026-11-08）
+
+待办、工作台／自动跟进、例行任务与伙伴私信随伙伴 V2 移除（产品规则见
+[伙伴运行时](../product-rules/cindy-bots-runtime.md)）。新 Host 对旧控制端的稳定应答：
+
+- `teammates` 集合动作 `send-message` / `verify-message` / `message-receipt`（跨电脑伙伴私信）返回
+  `UNSUPPORTED_CAPABILITY`；升级前排队、尚未派发的 V1 私信在恢复时丢弃。旧私信线程只读可看；
+  `maker:bot-direct-message:changed` 推送已删除。
+- `todos:<botId>` 资源返回空列表（不报错）；例行任务集合与 routine Skill 页返回 `NOT_FOUND`；
+  `settings:<botId>/follow-up` 返回 `NOT_FOUND`。
+- `management:settings`：`autonomy.get` 回答「关闭」，`autonomy.set` / `autonomy.reset` 与全部 `routines.*`
+  返回 `UNSUPPORTED_CAPABILITY`；这些操作不再列入 `caps`（`BOT_SETTINGS_RETIRED_OPS`），新控制端不显示对应页。
+- 本机专用的 `local-db:bots:autonomy:*`、`local-db:bots:workbench:*`、`local-db:bots:todos:*` 与推送
+  `maker:bot-autonomy:changed` 已删除（均未进 device-link 白名单）；`maker:bot-workbench:changed`
+  保留原名，表示关联项目或伙伴开的任务变化。
+- 云端偏好键：`companion.todo.v1:<id>` 不再上传或应用，`companion.routine.v1:<id>` 不再上传；本机仍拥有这两个
+  前缀以清除自己的旧行。旧电脑上传的例行任务按 routine id 一次性转为伙伴项目的自动化。
+  `companion.workbench.v1` 照旧（关联项目）。
+- 插件 `routineEvents` / `will-routine-run` 照常解析与安装但不再触发，`routine-request` 管子的
+  status / publish 返回稳定的空操作（见 [插件安全与编写](plugin-security-and-authoring.md)）。
+
+不新增 channel、relay 帧、服务端字段或数据库迁移；手机原生指纹不变。
+
 ## 伙伴创建时选择模型
 
 伙伴 `create` 表单块在 data 追加可选 `creationModelChain` 元数据，表示支持创建选模并给出默认首选。
@@ -4282,7 +4308,7 @@ V2 主力电脑只交给声明 ≥ 4 的目标，低于 4 返回 `TARGET_OUTDATE
 不改 relay 帧、服务端 schema 或 Mobile 指纹。本机 IPC `maker:companion-cloud:transfer` / `:devices` 换成
 `:switch-home` / `:home-choices`，并新增 `:attachment`、`:cindy-copies`、`:merge-cindy` 与 `maker:companion-avatar:resolve`，只在同一个 Desktop 内的 preload 与 Main 之间使用。
 伙伴资料快照 `companion.profile.v1` 新增可选的 `templateId`；新增偏好键 `companion.todo.v1:<id>`、`companion.routine.v1:<id>`、`companion.workbench.v1`，
-旧客户端不认识这些键，接管时忽略。镜像上传的房间消息可带 `media` 块；旧客户端按文件名显示。手机端同样不改原生指纹。
+旧客户端不认识这些键，接管时忽略。（2026-11-08 起 V2 不再上传 todo／routine 键，见「伙伴 V1 其余远程入口退役」。）镜像上传的房间消息可带 `media` 块；旧客户端按文件名显示。手机端同样不改原生指纹。
 
 ## Host-owned mail cards
 
@@ -4653,6 +4679,7 @@ namespace + id 下同一插件的有界 JSON 请求；`deviceSync: true` 是独�
 - `maker:session:handoff` 的 `task-action-capability` 回答增加 `plainRequestBody: 1`。发送端只在看到它时发原文与
   新回执；旧接收端收到的仍是改动前的三行包装与原话回执，逐字校验照旧通过。
 - 伙伴跨电脑私信没有能力探测，且接收端按发送端存下的正文核对发件人，发送端暂时继续发旧格式。
+  （2026-11-08 起 V2 不再适用：伙伴私信已移除，伙伴之间改用 `maker:session:handoff`。）
 - 接收端 Auto 审核经 `verifiedOwnerRequestText` 读 `delegatedText`；旧发送端的回执没有 `plainBody`，
   继续以 `userText` 为意图。旧接收端的回退包装由发送端从自己当前的输入读原话生成，转过一手的委派读不到原话，
   回退为不带回执的普通正文。
@@ -4692,6 +4719,9 @@ manifest 可选字符串 `releaseNotes`；旧包缺字段仍可安装。首次�
 个人投稿复用原审核请求及上架流程，不增加启用开关、审核令牌或历史比较包门槛。取消仅针对本人仍有提交授权的精确待审修订，已通过或驳回时按真实状态返回。
 
 ## 伙伴跟进邀请（2026-10-21）
+
+（2026-11-08 起 V2 不再适用：自动跟进已移除，新 Host 对 `settings:<botId>/follow-up` 返回 `NOT_FOUND`，
+不再显示邀请；以下记录旧版本之间的协议。）
 
 总调度未设置 override 时默认关闭，已有明确选择保留。跨端沿用 `teammates` 远程资源：
 `settings:<botId>/follow-up` 返回既有 form/toggle/confirmation、可选邀请标记和不透明动作票。
@@ -4960,6 +4990,7 @@ contacts 在每次 begin 投递前核对原元素仍连接、仍声明 contacts�
 
 沿用可选 `requestSource.ownerVerified` 和持久 `autoReviewUserText` 回执，不新增字段或 migration。
 伙伴私信开始携带当前已接受的主人请求；原话与正文包装仍按旧接收端的逐字验证。无原话时不传空回执。
+（2026-11-08 起伙伴私信已移除，此项只对旧版本之间有效。）
 当前接受的核实回执可继续转交，`agent-request` 与 `delegated-continuation` 的审核投影保持同一原话。
 新增界面语言 `es`、`fr`、`de`、`pt-PT`、`pt-BR` 发出的原话包装沿用英文，避免旧接收端因不认识
 新语言前缀而拒绝逐字验证。读取端继续严格匹配这些语言已经生成的历史包装；不改原话、

@@ -998,3 +998,14 @@ Switch 解耦。插件插槽挂载同一个媒体组件，不再维护单独拖�
 用户裁决：跳转胶囊、Tooltip、查找栏等浮层统一走 `--shadow-menu`；边缘渐隐登记为功能性例外；模型和权限面板跟随 §4 带阴影；Cindy 的分段控件与侧栏选中态登记为实色例外，`create-agent` 按下加深到 8%。看过对比图后，用户决定音频封面保留渐变并登记为例外，伙伴消息保留「已发消息给 X／消息来自 X」，规范改为与界面一致。
 
 全量扫描后同类处理：无类型 `shadow-[var(--x)]` 从不产生阴影，浮层改为有类型写法，页内元素删掉；HSL 三元组直接当颜色的写法修正；本地悬停低于 Button 变体优先级的写法修正。PDF 页面、WorkLouder 摇杆帽和 `ThemeBrandLockup` 图标保留阴影并登记为例外。`designEffectsDiscipline.test.ts` 防止这些问题复发。
+
+## 2026-11-08 · 伙伴 V2：退役 V1 伙伴专属界面
+
+伙伴升级为「项目 + 任务 + 身份」后（PR #9314），只服务 V1 伙伴机制的界面一并移除，不改其余视觉规则：
+
+- 近况（桌面浮层、手机 sheet）去掉待办块、到期红点（`TodoDueDot`，原 `DESIGN.md` §3 例外色登记改为退役说明）、「帮我查查／每天帮我查一次」；现在只显示电脑、近期任务与输出内容。
+- 自动跟进的对话内邀请（桌面 `BotFollowUpInvitation`、手机 `CompanionFollowUpInvitation`）与伙伴设置的「跟进我的任务」「例行任务」「夜间学习」页移除；右侧栏 `routines` 页签移除。
+- 伙伴能力页去掉「系统技能」分组；模型页去掉「任务模型」分组（见 `DESIGN.md`「Teammate model settings」）。
+- 伙伴聊天里的 V1 后台任务卡只读：不再有停止与补一句，未落终态的旧卡按子任务实际状态或「状态未知」显示（`desktop-bot-delegation-status.md`）。伙伴间私信不再产生新的单行入口，历史入口照常打开只读往来页。
+
+现行落点：`DESIGN.md` §3 例外色、「Teammate capability page」、「Desktop and Mobile task creator filters」、「伙伴内部通讯入口」；产品规则 `cindy-bots-runtime.md`。

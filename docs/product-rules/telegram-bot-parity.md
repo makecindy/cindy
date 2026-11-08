@@ -374,7 +374,7 @@ Telegram 个人 bot、官方旧服务端兼容回应与 hello 声明复用同一
 
 只回传自动执行的轮次：自动任务（scheduler `turnOrigin`），其它任务经 `send_to_session` 等
 发来的可见消息触发的回复，以及继承了上述来源或 IM 来源的 Agent 自己唤醒轮次。
-桌面、手机里直接输入的消息、伙伴委派的内部协调输入及其后台唤醒都不回传。其它任务来信由
+桌面、手机里直接输入的消息、（V1 旧委派留下的）内部协调输入都不回传。其它任务来信由
 主进程在派发它的那次 `Session.send` 期间盖章（`maker-ipc/channelTurnSignal.ts`），随该轮的开始信号
 交给两条路径，只作用于这一轮；不改 maker-core 的 `SendOrigin`，以免插件钩子等把它当作非用户轮次。
 两条路径共用 `isRelayedChannelTurnSource` 一个判据。
@@ -512,5 +512,7 @@ bot 身份按入站使用的稳定 ID 校验；Discord 取 gateway application i
 仍按本机历史授权读取。没有新增登录授权或配置项。本项不改变直接引用、群媒体池补图。
 
 ### 例行任务显式送达（2026-10-30）
+
+（2026-11-08 起 V2 不再适用：伙伴例行任务已改为项目自动化，送达方式随例行任务引擎移除；伙伴从 IM 开的任务结果按 `report_task_delivery` 回到原聊天。）
 
 伙伴例行任务可把最终结果明确送到已连接的个人／伙伴 Telegram bot 的已知私聊、群或话题。宿主复用同一个 `sendMarkdownText` 与 lane 编码，不新建 Telegram HTTP 实现；连接身份变更或断开时记录送达失败，不重跑工作。默认仍直接显示在发起伙伴的 Cindy 主任务，不自动向所有绑定聊天广播。官方 Telegram hook 不属于此项本机连接选择，沿原通知合同；本项不改变两个 bot 既有进度与收口差异。
