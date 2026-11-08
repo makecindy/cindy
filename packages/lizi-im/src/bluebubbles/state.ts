@@ -3,7 +3,8 @@ export interface BlueBubblesState {
   version: 1;
   activatedAt: number;
   cursors: Record<string, number>;
-  inbox: Record<string, { receivedAt: number; state: 'pending' | 'dispatching' | 'accepted' | 'ignored' }>;
+  inbox: Record<string, { receivedAt: number; state: 'pending' | 'dispatching' | 'accepted' | 'ignored';
+    stop?: { chatId: string; sentAt: number; before: string[] } }>;
   outbox: Record<string, { chatId: string; state: 'sending' | 'sent' | 'unknown'; messageId?: string }>;
 }
 export type BlueBubblesReceiptUpdate =
@@ -20,7 +21,12 @@ export function applyBlueBubblesReceiptUpdate(state: BlueBubblesState, update: B
   if (!update || typeof update.id !== 'string' || !update.id || ['__proto__', 'constructor', 'prototype'].includes(update.id)) throw new Error('BLUEBUBBLES_INVALID_RECEIPTS');
   if (update.kind === 'cursor' && Number.isFinite(update.value)) state.cursors[update.id] = update.value;
   else if (update.kind === 'inbox' && update.value && Number.isFinite(update.value.receivedAt)
-    && ['pending', 'dispatching', 'accepted', 'ignored'].includes(update.value.state)) state.inbox[update.id] = update.value;
+    && ['pending', 'dispatching', 'accepted', 'ignored'].includes(update.value.state)) {
+    const stop = update.value.stop;
+    if (stop && (typeof stop.chatId !== 'string' || !stop.chatId || !Number.isFinite(stop.sentAt)
+      || !Array.isArray(stop.before) || stop.before.some(id => typeof id !== 'string'))) throw new Error('BLUEBUBBLES_INVALID_RECEIPTS');
+    state.inbox[update.id] = update.value;
+  }
   else if (update.kind === 'outbox' && update.value && typeof update.value.chatId === 'string'
     && ['sending', 'sent', 'unknown'].includes(update.value.state)) state.outbox[update.id] = update.value;
   else throw new Error('BLUEBUBBLES_INVALID_RECEIPTS');
@@ -30,6 +36,8 @@ export class BlueBubblesReceipts {
   private readonly pending = new Set<string>();
   private readonly dispatching = new Set<string>();
   private readonly unsettledSends = new Set<string>();
+  private readonly unresolved = new Set<string>();
+  private readonly stops = new Map<string, { sentAt: number; before: Set<string> }>();
   constructor(private readonly storage: BlueBubblesStateStorage, now: number) {
     const saved = storage.read();
     if (saved && (saved.version !== 1 || !Number.isFinite(saved.activatedAt)
@@ -40,7 +48,9 @@ export class BlueBubblesReceipts {
       applyBlueBubblesReceiptUpdate(this.state, { kind: 'inbox', id, value });
       if (value.state === 'pending') this.pending.add(id);
       if (value.state === 'dispatching') this.dispatching.add(id);
+      if (value.state === 'pending' || value.state === 'dispatching') this.unresolved.add(id);
     }
+    for (const value of Object.values(this.state.inbox)) this.indexStop(value.stop);
     for (const [id, value] of Object.entries(this.state.outbox)) {
       applyBlueBubblesReceiptUpdate(this.state, { kind: 'outbox', id, value });
       if (value.state !== 'sent') this.unsettledSends.add(id);
@@ -62,12 +72,32 @@ export class BlueBubblesReceipts {
     return undefined;
   }
   pendingGuids(): string[] { return [...this.pending]; }
-  /** Startup merges persisted, missed and live receipts before the first dispatch. */
+  /** Recovery merges persisted, missed and live receipts before dispatch resumes. */
   orderPending(ordered: Iterable<string>): void {
     const remaining = new Set(this.pending);
     this.pending.clear();
     for (const guid of ordered) if (remaining.delete(guid)) this.pending.add(guid);
     for (const guid of remaining) this.pending.add(guid);
+  }
+  private indexStop(stop: BlueBubblesState['inbox'][string]['stop']): void {
+    if (!stop) return;
+    const boundary = this.stops.get(stop.chatId) ?? { sentAt: stop.sentAt, before: new Set<string>() };
+    boundary.sentAt = Math.max(boundary.sentAt, stop.sentAt);
+    for (const guid of stop.before) if (this.unresolved.has(guid)) boundary.before.add(guid);
+    for (const guid of boundary.before) if (!this.unresolved.has(guid)) boundary.before.delete(guid);
+    this.stops.set(stop.chatId, boundary);
+  }
+  rememberStop(guid: string, chatId: string, sentAt: number): void {
+    const previous = this.state.inbox[guid];
+    if (!previous || !this.unresolved.has(guid)) throw new Error('BLUEBUBBLES_RECEIPT_MISSING');
+    const before: string[] = [];
+    for (const id of this.unresolved) { if (id === guid) break; before.push(id); }
+    // Same inbox update format: old readers retain the optional metadata.
+    this.update({ kind: 'inbox', id: guid, value: { ...previous, stop: { chatId, sentAt, before } } });
+  }
+  wasStopped(guid: string, chatId: string, sentAt: number): boolean {
+    const boundary = this.stops.get(chatId);
+    return !!boundary && (sentAt < boundary.sentAt || boundary.before.has(guid));
   }
   private update(update: BlueBubblesReceiptUpdate): void {
     // Validation before persistence; only replace in-memory facts after a durable write succeeds.
@@ -81,6 +111,9 @@ export class BlueBubblesReceipts {
     if (update.kind === 'inbox') {
       if (update.value.state === 'pending') this.pending.add(update.id); else this.pending.delete(update.id);
       if (update.value.state === 'dispatching') this.dispatching.add(update.id); else this.dispatching.delete(update.id);
+      if (update.value.state === 'pending' || update.value.state === 'dispatching') this.unresolved.add(update.id);
+      else this.unresolved.delete(update.id);
+      this.indexStop(update.value.stop);
     } else if (update.kind === 'outbox') {
       if (update.value.state !== 'sent') this.unsettledSends.add(update.id); else this.unsettledSends.delete(update.id);
     }

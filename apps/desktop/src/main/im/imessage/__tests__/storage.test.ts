@@ -18,14 +18,18 @@ it('preserves 11002 existing receipts, new confirmations and uncertain sends acr
   for (let i = 0; i < 11002; i++) initial.inbox[`msg-${i}`] = { receivedAt: i + 1, state: 'accepted' };
   storage.write(initial);
   storage.update!({ kind: 'inbox', id: 'new', value: { receivedAt: 12000, state: 'dispatching' } });
+  const stop = { receivedAt: 12001, state: 'accepted' as const,
+    stop: { chatId: 'owner', sentAt: 12001, before: ['unverified-guid'] } };
+  storage.update!({ kind: 'inbox', id: 'stop', value: stop });
   storage.update!({ kind: 'outbox', id: 'outgoing', value: { chatId: 'owner', state: 'unknown' } });
   const file = path.join(h.directory, 'imessage', '0123456789ab.json.journal');
   fs.appendFileSync(file, '{"kind":"inbox"');
   const reopened = blueBubblesStateStorage('0123456789ab');
   const restored = reopened.read()!;
-  expect(Object.keys(restored.inbox)).toHaveLength(11003);
+  expect(Object.keys(restored.inbox)).toHaveLength(11004);
   expect(restored.inbox['msg-11001']).toEqual(initial.inbox['msg-11001']);
   expect(restored.inbox.new.state).toBe('dispatching');
+  expect(restored.inbox.stop).toEqual(stop);
   expect(restored.outbox.outgoing.state).toBe('unknown');
   expect(restored.cursors).toEqual({ owner: 500 });
   reopened.update!({ kind: 'inbox', id: 'new', value: { receivedAt: 12000, state: 'accepted' } });

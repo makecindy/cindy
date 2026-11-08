@@ -1,4 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import fs from 'node:fs/promises';
+import os from 'node:os';
+import path from 'node:path';
 import type { IMHost, IMMessageEvent } from '../types.js';
 import { LocalWebhookReceiver } from '../localWebhook.js';
 import { BlueBubblesApi, BLUEBUBBLES_MAX_BYTES, type BlueBubblesMessage } from './api.js';
@@ -10,7 +13,7 @@ import { BlueBubblesReceipts, type BlueBubblesState } from './state.js';
 // handling and requester identity absent from other transports' tests; no real contacts.
 const connections: BlueBubblesIM[] = [];
 afterEach(async () => { await Promise.all(connections.splice(0).map(im => im.dispose())); });
-async function fixture(initialState: BlueBubblesState | null = null, media?: IMHost['media'], extraChat = false) {
+async function fixture(initialState: BlueBubblesState | null = null, media?: IMHost['media'], extraChat = false, files?: IMHost['files']) {
   const secrets = new Map<string, string>();
   let saved: BlueBubblesState | null = initialState;
   let callbackUrl = '';
@@ -29,6 +32,7 @@ async function fixture(initialState: BlueBubblesState | null = null, media?: IMH
   const send = vi.spyOn(api, 'sendText').mockResolvedValue({ guid: 'outbound' });
   const host: IMHost = {
     ...(media ? { media } : {}),
+    ...(files ? { files } : {}),
     secrets: { read: key => secrets.get(key) ?? null, write: (key, value) => { secrets.set(key, value); return true; },
       remove: key => { secrets.delete(key); }, isAvailable: () => true },
     ipc: { handle() {}, broadcast() {}, throwIpcError(_code, message): never { throw new Error(message); } },
@@ -50,15 +54,15 @@ async function fixture(initialState: BlueBubblesState | null = null, media?: IMH
   };
   const webhook = (guid: string, url = callbackUrl) => fetch(url, { method: 'POST', headers: { 'content-type': 'application/json' },
     body: JSON.stringify({ type: 'new-message', data: { guid, text: 'forged payload', handle: { address: 'attacker' } } }) });
-  return { im, api, received, message, webhook, send, chat, otherChat, state: () => saved!, url: () => callbackUrl };
+  return { im, api, received, message, webhook, send, chat, otherChat, advance: (ms: number) => { now += ms; }, state: () => saved!, url: () => callbackUrl };
 }
 
 describe('BlueBubbles local ingress', () => {
   // Tier 1, #9250/r4505897286: a live stop arriving during startup history
   // must wait for older offline inputs to enter its ordered cancellation boundary.
-  it('orders offline catch-up before a live stop received while startup history is blocked', async () => {
+  it.each([true, false])('orders missed input before a live stop while history is blocked (startup=%s)', async startup => {
     const f = await fixture();
-    await f.im.dispose();
+    if (startup) await f.im.dispose();
     f.message('offline-before-stop');
     const history = vi.mocked(f.api.history), original = history.getMockImplementation()!;
     let release!: () => void, started!: () => void;
@@ -71,7 +75,7 @@ describe('BlueBubbles local ingress', () => {
       if (event.text === '/stop') { cancelled = event.delivery!.cancelPending!(); event.delivery!.accept(); }
       else event.delivery!.defer();
     });
-    const initializing = f.im.init();
+    const initializing = startup ? f.im.init() : f.im.reconcile();
     try {
       await waiting;
       f.message('live-stop', { text: '/stop' });
@@ -88,6 +92,96 @@ describe('BlueBubbles local ingress', () => {
     const before = f.received.length;
     await f.im.init();
     expect(f.received).toHaveLength(before);
+  });
+
+  // Tier 1, #9250/r4505966570: unrelated ingress and busy retry must not bypass
+  // the failed GUID's cooldown, for both lookup and download failures.
+  it.each(['lookup', 'download'])('keeps %s retries on their own deadline while other chats proceed', async failure => {
+    const f = await fixture(null, undefined, true);
+    const original = vi.mocked(f.api.message).getMockImplementation()!;
+    let attempts = 0;
+    if (failure === 'lookup') vi.mocked(f.api.message).mockImplementation(async guid => {
+      if (guid === 'failed-guid') { attempts++; throw new Error('lookup 503'); }
+      return original(guid);
+    });
+    else vi.spyOn(f.api, 'download').mockImplementation(async () => { attempts++; throw new Error('download 503'); });
+    f.im.onMessage(event => {
+      if (event.messageId === 'busy') { event.delivery!.awaitPersistence(); event.delivery!.defer(); }
+    });
+    f.message('failed-guid', { attachments: failure === 'download' ? [{ guid: 'failed-file' }] : [] });
+    await expect(f.im.reconcile()).rejects.toThrow('BLUEBUBBLES_RECEIVE_FAILED');
+    expect(attempts).toBe(1);
+    f.message('busy');
+    for (let i = 0; i < 3; i++) {
+      f.message(`other-${i}`, { chats: [f.otherChat] });
+      expect((await f.webhook(`other-${i}`)).status).toBe(202);
+      f.advance(1001);
+      await expect(f.im.reconcile()).rejects.toThrow('BLUEBUBBLES_RECEIVE_FAILED');
+    }
+    expect(f.received.filter(event => event.chatId === f.otherChat.guid)).toHaveLength(3);
+    expect(attempts).toBe(1);
+    f.advance(30_000);
+    await expect(f.im.reconcile()).rejects.toThrow('BLUEBUBBLES_RECEIVE_FAILED');
+    expect(attempts).toBe(2);
+  });
+
+  // Tier 1, #9250/r4505966562: stop must survive restart before an unresolved
+  // receipt's chat can be verified, without cancelling other/later inputs.
+  it('applies a persisted stop boundary after failed identity lookup recovers', async () => {
+    const f = await fixture(null, undefined, true);
+    const original = vi.mocked(f.api.message).getMockImplementation()!;
+    let unavailable = true;
+    vi.mocked(f.api.message).mockImplementation(async guid => {
+      if (unavailable && ['unknown-owner', 'unknown-other'].includes(guid)) throw new Error('lookup 503');
+      return original(guid);
+    });
+    f.im.onMessage(event => {
+      if (event.text === '/stop') { event.delivery!.awaitPersistence(); event.delivery!.cancelPending!(); event.delivery!.accept(); }
+    });
+    f.message('unknown-owner');
+    f.message('unknown-other', { chats: [f.otherChat] });
+    await expect(f.im.reconcile()).rejects.toThrow('BLUEBUBBLES_RECEIVE_FAILED');
+    f.message('stop-unknown', { text: '/stop' });
+    f.message('work-after-unknown-stop', { dateCreated: 1003 }); // Same send millisecond as stop, later receipt.
+    await f.webhook('stop-unknown');
+    await expect(f.im.reconcile()).rejects.toThrow('BLUEBUBBLES_RECEIVE_FAILED');
+    expect(f.state().inbox['stop-unknown'].state).toBe('accepted');
+    await f.im.dispose();
+    unavailable = false;
+    await f.im.init();
+    expect(f.state().inbox['unknown-owner'].state).toBe('ignored');
+    expect(f.state().inbox['unknown-other'].state).toBe('accepted');
+    expect(f.state().inbox['work-after-unknown-stop'].state).toBe('accepted');
+    expect(f.received.some(event => event.messageId === 'unknown-owner')).toBe(false);
+  });
+
+  // Tier 1, #9250/r4505966565: a successful prefix cannot create another disk
+  // copy on each retry when a later attachment fails. Inspect actual files.
+  it('discards partially staged files before retries and retains only the successful attachments', async () => {
+    const directory = await fs.mkdtemp(path.join(os.tmpdir(), 'cindy-bb-partial-'));
+    let sequence = 0, available = false;
+    try {
+      const f = await fixture(null, undefined, false, { stage: async ({ buffer, fileName }) => {
+        const absPath = path.join(directory, `${++sequence}-${fileName}`);
+        await fs.writeFile(absPath, buffer);
+        return { absPath, discard: async () => { await fs.rm(absPath, { force: true }); } };
+      } });
+      vi.spyOn(f.api, 'download').mockImplementation(async guid => {
+        if (guid === 'second' && !available) throw new Error('second download 503');
+        return new Uint8Array([1, 2, 3]);
+      });
+      f.message('multi-file', { attachments: [{ guid: 'first', transferName: 'first.txt' }, { guid: 'second', transferName: 'second.txt' }] });
+      for (let i = 0; i < 2; i++) {
+        await expect(f.im.reconcile()).rejects.toThrow('BLUEBUBBLES_RECEIVE_FAILED');
+        expect(await fs.readdir(directory)).toEqual([]);
+        f.advance(30_000);
+      }
+      available = true;
+      await f.im.reconcile();
+      expect(f.state().inbox['multi-file'].state).toBe('accepted');
+      expect(f.received.at(-1)!.attachments).toHaveLength(2);
+      expect(await fs.readdir(directory)).toHaveLength(2);
+    } finally { await fs.rm(directory, { recursive: true, force: true }); }
   });
 
   // Tier 1, #9250/r4505897287: one transient attachment failure during startup
@@ -109,6 +203,7 @@ describe('BlueBubbles local ingress', () => {
     expect((await f.webhook('reply-during-failure')).status).toBe(202);
     await expect(answer).resolves.toBe('yes');
     download.mockResolvedValue(new Uint8Array([1]));
+    f.advance(30_000);
     await f.im.reconcile();
     expect(f.state().inbox['startup-broken'].state).toBe('accepted');
     expect(f.im.getStatus().kind).toBe('connected');
@@ -204,6 +299,7 @@ describe('BlueBubbles local ingress', () => {
     f.message('retryable-media', { attachments: [{ guid: 'second-photo', transferName: 'second.heic', mimeType: 'image/heic' }] });
     await expect(f.im.reconcile()).rejects.toThrow('BLUEBUBBLES_RECEIVE_FAILED');
     expect(f.state().inbox['retryable-media'].state).toBe('pending');
+    f.advance(30_000);
     await f.im.reconcile();
     expect(f.state().inbox['retryable-media'].state).toBe('accepted');
   });
@@ -560,6 +656,7 @@ describe('BlueBubbles local ingress', () => {
     expect(f.received.map(row => row.messageId)).toEqual(['later']);
     expect(f.state().inbox.broken?.state).toBe('pending');
     f.message('broken', { attachments: [] });
+    f.advance(30_000);
     await f.im.reconcile();
     expect(f.received.map(row => row.messageId)).toEqual(['later', 'broken']);
   });
