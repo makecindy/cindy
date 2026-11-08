@@ -2775,6 +2775,68 @@ describe('Codex system credential suppression marker', () => {
       credentialScope: 'system-shared',
     });
   });
+
+  // 测试价值(#9316 review): 同机另一个升级前的 profile 仍硬链着系统 auth.json 时,
+  // 系统路径 nlink > 1,Codex 0.165+ 拒绝写它 —— 用户再也存不住登录态。共享已经是
+  // symlink(健康)时对账同样要清掉残留硬链;清理因瞬时失败没成时不记成功态,
+  // 下一次对账再试。
+  it('共享已是 symlink 时也清掉系统凭证上残留的硬链,失败则下一次对账重试', async ({ skip }) => {
+    if (!canLinkFile) skip();
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'xdt-codex-residual-hardlink-'));
+    dirs.push(root);
+    h.userDataDir = path.join(root, 'user-data');
+    h.dataOwnerId = 'owner-a';
+    const home = path.join(root, 'home');
+    const systemAuth = path.join(home, '.codex', 'auth.json');
+    const localAuth = path.join(h.userDataDir, 'codex-home', 'auth.json');
+    const otherProfile = path.join(root, 'other-profile', 'auth.json');
+    const bindingFile = path.join(h.userDataDir, 'native-provider-auth.json');
+    vi.spyOn(os, 'homedir').mockReturnValue(home);
+    fs.mkdirSync(path.dirname(systemAuth), { recursive: true });
+    fs.mkdirSync(path.dirname(localAuth), { recursive: true });
+    fs.mkdirSync(path.dirname(otherProfile), { recursive: true });
+    fs.writeFileSync(
+      systemAuth,
+      JSON.stringify({ tokens: { access_token: 'system-f1-token', account_id: 'acct-1' } }),
+      { mode: 0o600 },
+    );
+    fs.symlinkSync(systemAuth, localAuth, 'file');
+    fs.linkSync(systemAuth, otherProfile);
+    fs.writeFileSync(
+      bindingFile,
+      JSON.stringify({
+        openai: 'owner-a',
+        selfAuthorized: { openai: 'owner-a' },
+        sources: { openai: 'explicit-provider-oauth' },
+      }),
+    );
+    expect(fs.statSync(systemAuth).nlink).toBe(2);
+
+    const originalRename = fs.promises.rename.bind(fs.promises);
+    let breakFails = true;
+    vi.spyOn(fs.promises, 'rename').mockImplementation(async (from, to) => {
+      // 拆硬链一直失败(瞬时 EBUSY):系统路径仍是 nlink=2,Codex 存不住凭证。
+      if (String(to) === systemAuth && String(from).includes('.copytmp') && breakFails) {
+        const err = new Error('EBUSY: resource busy') as NodeJS.ErrnoException;
+        err.code = 'EBUSY';
+        throw err;
+      }
+      return originalRename(from as never, to as never);
+    });
+
+    const { DesktopCodexAuthAdapter } = await import('../auth-adapters.js');
+    const adapter = new DesktopCodexAuthAdapter();
+    const first = await adapter.getState({ credentialMode: 'oauth-bearer' });
+    // 清不掉就不记成功态:诊断里仍看得到残留的硬链数。
+    expect(first.credentialDiagnostics?.systemAuthLinkCount).toBe(2);
+
+    breakFails = false;
+    const second = await adapter.getState({ credentialMode: 'oauth-bearer' });
+    // 下一次对账重试成功:系统路径 nlink 回到 1,Codex 才能原子写入凭证。
+    expect(second.credentialDiagnostics?.systemAuthLinkCount).toBe(1);
+    expect(fs.statSync(systemAuth).nlink).toBe(1);
+    expect(fs.readFileSync(systemAuth, 'utf8')).toContain('system-f1-token');
+  });
 });
 
 
