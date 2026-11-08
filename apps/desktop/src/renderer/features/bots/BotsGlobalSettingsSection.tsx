@@ -6,12 +6,11 @@ import { useBotTranslation } from './botPronounContext';
 
 import { cn } from '@/lib/utils';
 import {
-  SETTINGS_CARD_CLASS,
-  SETTINGS_ROW_CLASS,
-  SETTINGS_ROW_HINT_CLASS,
-  SETTINGS_ROW_LABEL_CLASS,
-  SETTINGS_SECTION_TITLE_CLASS,
-} from '@/components/settings/settingsRowClasses';
+  SETTINGS_HINT,
+  SettingsCard,
+  SettingsRow,
+  SettingsSection,
+} from '@/components/ui/settings-rows';
 import { Switch } from '@/components/ui/switch';
 import { useBotReplyTargetPreference } from './useBotReplyTargetPreference';
 import { useProviders } from '@/hooks/useProviders';
@@ -59,10 +58,8 @@ export function BotsGlobalSettingsSection() {
   };
 
   return (
-    <div className="flex flex-col gap-[14px]">
-      <h2 className={SETTINGS_SECTION_TITLE_CLASS}>{t('bots.globalSettings.title')}</h2>
-
-      <div className={SETTINGS_CARD_CLASS}>
+    <SettingsSection title={t('bots.globalSettings.title')}>
+      <SettingsCard>
         <fieldset {...modelSetting.anchorProps} disabled={pending} aria-busy={pending} className="min-w-0">
           <BotModelChainEditor {...modelSetting.controlProps}
             layout="settings"
@@ -79,26 +76,27 @@ export function BotsGlobalSettingsSection() {
           />
         </fieldset>
         {notice ? (
-          <p className={cn(SETTINGS_ROW_HINT_CLASS, 'px-4 pb-4')} role="status">
+          <p className={cn(SETTINGS_HINT, 'px-4 pb-4')} role="status">
             {notice}
           </p>
         ) : null}
-      </div>
+      </SettingsCard>
 
-      <div className={SETTINGS_CARD_CLASS}>
-        <div {...replySetting.anchorProps} className={SETTINGS_ROW_CLASS}>
-          <div className="min-w-0 flex-1">
-            <p className={SETTINGS_ROW_LABEL_CLASS}>{replySetting.title}</p>
-            <p className={SETTINGS_ROW_HINT_CLASS}>{replySetting.description}</p>
-          </div>
-          <Switch {...replySetting.controlProps}
-            aria-label={replySetting.title}
-            className="shrink-0"
-            checked={replyTarget.enabled}
-            onCheckedChange={(value) => replyTarget.setEnabled(value === true)}
-          />
-        </div>
-      </div>
-    </div>
+      <SettingsCard>
+        <SettingsRow
+          {...replySetting.anchorProps}
+          title={replySetting.title}
+          hint={replySetting.description}
+          trailing={
+            <Switch {...replySetting.controlProps}
+              aria-label={replySetting.title}
+              className="shrink-0"
+              checked={replyTarget.enabled}
+              onCheckedChange={(value) => replyTarget.setEnabled(value === true)}
+            />
+          }
+        />
+      </SettingsCard>
+    </SettingsSection>
   );
 }
