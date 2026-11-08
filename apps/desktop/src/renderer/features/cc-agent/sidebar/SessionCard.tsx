@@ -7,8 +7,8 @@ import { Button } from '@/components/ui/button';
  * SessionCard — sidebar-card-mode 下的单条会话卡片（SessionItem 的瀑布流形态）
  * ---------------------------------------------------------------------------
  * 设计来源：用户 Claude design 稿（XDT-sidebar-redesign，xdtsb-card 系）。
- * 视觉：白底 Card + 1px Board 圆角 12；标题最多 2 行且保持纯文字，摘要 / 最近消息
- *   随内容最多 1~3 行；SessionStatusIcon（agent 标识 + running 呼吸 + attention
+ * 视觉：白底 Card + 1px Board 圆角 12；卡片等高：标题 1 行且保持纯文字，摘要 / 最近消息
+ *   固定占 2 行位（不足留空）；SessionStatusIcon（agent 标识 + running 呼吸 + attention
  *   状态点 + 草稿铅笔）、自动化 / 远程 / worktree 标识与时间统一放在底部 metadata 槽。
  *
  * 交互 100% 对齐 SessionItem（props 签名完全一致，sections 内按 cardMode 二选一渲染）：
@@ -282,14 +282,6 @@ export const SessionCard = withSidebarNavigation<SessionCardProps>(function Sess
     : null;
   const listPreview = awaitingText ?? preparationText ?? runningDetail ?? bodyPreview;
   const cardPreview = awaitingText ?? preparationText ?? bodyPreview;
-  const usesPinnedCardSummary = variant === 'card' && isPinned && Boolean(session.summary);
-  const cardPreviewLineClamp = usesPinnedCardSummary
-    ? 3
-    : isRunning
-      ? 2
-      : isAutomationGenerated
-        ? 1
-        : 2;
   // 任务信息复选(C / C' 期):卡片右下角信息槽内容,与整理菜单同源共享状态。
   const { fields: taskInfoFields } = useTaskInfoFields();
   const cardPrRefs = usePrRefsForSession(session.id);
@@ -731,7 +723,7 @@ export const SessionCard = withSidebarNavigation<SessionCardProps>(function Sess
             )
           : cn(
               // 卡片:白底 + 描边 + 圆角。多列瀑布由 CardMasonry/DraggableCardColumns
-              // 负责分配列;卡片高度随标题/摘要自然变化。
+              // 负责分配列;卡片等高:标题 1 行 + 正文固定 2 行位 + meta 行。
               'rounded-xl bg-[var(--surface-elevated)] border',
               isActive
                 ? 'border-[var(--sidebar-item-active-border)] !bg-sidebar-item-active [--task-tag-ring-bg:hsl(var(--sidebar-item-active))] text-sidebar-item-active-foreground'
@@ -974,7 +966,7 @@ export const SessionCard = withSidebarNavigation<SessionCardProps>(function Sess
           )}
 
           {/* 卡片标题始终保留原来的流式盒子；编辑时只把原标题隐藏，并以绝对定位的
-            24px 输入框覆盖。这样一行 / 两行标题都维持原高度，也不会凭空多出状态图标。 */}
+            24px 输入框覆盖。这样标题行维持原高度，也不会凭空多出状态图标。 */}
           <div
             data-split-group-drag-handle={splitDragHandleActive ? 'true' : undefined}
             data-no-drag={splitDragHandleActive ? 'true' : undefined}
@@ -998,7 +990,7 @@ export const SessionCard = withSidebarNavigation<SessionCardProps>(function Sess
             <div
               className={cn(
                 'min-w-0 text-12 font-semibold leading-[1.22] tracking-[-0.005em]',
-                '[display:-webkit-box] [-webkit-box-orient:vertical] [-webkit-line-clamp:2] overflow-hidden',
+                '[display:-webkit-box] [-webkit-box-orient:vertical] [-webkit-line-clamp:1] overflow-hidden',
                 isActive ? 'text-sidebar-item-active-foreground' : 'text-foreground',
                 isEditing && 'invisible',
               )}
@@ -1015,7 +1007,7 @@ export const SessionCard = withSidebarNavigation<SessionCardProps>(function Sess
                   })
                 : displayTitle}
             </div>
-            {/* 任务标签与「伙伴在跟进」常显、紧跟标题首行；标题两行截断时不被裁掉。 */}
+            {/* 任务标签与「伙伴在跟进」常显、紧跟标题；标题单行截断时不被裁掉。 */}
             {!isEditing && hasTitleMarks ? (
               <span className="flex h-[1.22em] shrink-0 items-center gap-1.5 text-12">
                 <TaskTagDots tags={session.tags} />
@@ -1061,24 +1053,21 @@ export const SessionCard = withSidebarNavigation<SessionCardProps>(function Sess
           </div>
 
           {/* 预览:等待交互文案优先,否则显示稳定任务总结 / 最近消息。图标全部下沉到底部 meta 行,
-            此处只放正文文字。 */}
-          {cardPreview && (
-            <p
-              data-split-group-drag-handle={splitDragHandleActive ? 'true' : undefined}
-              data-no-drag={splitDragHandleActive ? 'true' : undefined}
-              draggable={splitDragHandleActive}
-              className={cn(
-                'mt-[4px] text-11 leading-[1.4]',
-                '[display:-webkit-box] [-webkit-box-orient:vertical] overflow-hidden',
-                isActive
-                  ? 'text-[color-mix(in_srgb,currentColor_80%,transparent)]'
-                  : 'text-[var(--text-secondary)]',
-              )}
-              style={{ WebkitLineClamp: cardPreviewLineClamp }}
-            >
-              {cardPreview}
-            </p>
-          )}
+            此处只放正文文字。固定占 2 行高度(2 × leading 1.4 = 2.8em),不足 2 行或无正文时留空。 */}
+          <p
+            data-split-group-drag-handle={splitDragHandleActive ? 'true' : undefined}
+            data-no-drag={splitDragHandleActive ? 'true' : undefined}
+            draggable={splitDragHandleActive}
+            className={cn(
+              'mt-[4px] h-[2.8em] text-11 leading-[1.4]',
+              '[display:-webkit-box] [-webkit-box-orient:vertical] [-webkit-line-clamp:2] overflow-hidden',
+              isActive
+                ? 'text-[color-mix(in_srgb,currentColor_80%,transparent)]'
+                : 'text-[var(--text-secondary)]',
+            )}
+          >
+            {cardPreview}
+          </p>
 
           {/* 底部 meta 行(评审定稿):标题 / 正文之后另起整整一行。
             左侧图标簇——状态/agent 图标(含运行呼吸 + 需关注红点 + 草稿)、定时任务标识、

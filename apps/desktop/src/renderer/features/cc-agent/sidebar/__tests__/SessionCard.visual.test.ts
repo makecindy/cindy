@@ -712,16 +712,36 @@ describe('SessionCard visual cases', () => {
     },
   );
 
-  it('keeps single-line cards naturally shorter than long summary cards', () => {
-    renderCase('short-idle-cc');
-    const shortCard = screen
-      .getByTestId('visual-case')
-      .querySelector('[data-sidebar-session-row="true"]');
-    expect(shortCard?.className).not.toContain('h-full');
-    cleanup();
+  // 2026-11-08 用户定稿:置顶卡片统一高度(标题 1 行 + 正文固定 2 行位 + meta 行)。
+  // 旧版无正文时不渲染正文区、summary 正文放宽到 3 行,同列卡片高度不一、两列底边错开。
+  it('keeps pinned cards on one height budget whether the body is empty, short or a long summary', () => {
+    const shortCase = sessionCardVisualCases.find((item) => item.id === 'short-idle-cc')!;
+    const summaryCase = sessionCardVisualCases.find((item) => item.id === 'summary-long-body')!;
+    const cases = [
+      { caseId: 'short-idle-cc', overrides: { session: { ...shortCase.session, preview: null } } },
+      { caseId: 'short-idle-cc', overrides: {} },
+      { caseId: 'summary-long-body', overrides: {} },
+    ];
+    const budgets = cases.map(({ caseId, overrides }) => {
+      const view = renderCase(caseId, overrides);
+      const card = sessionRowEl();
+      expect(card.className).not.toContain('h-full');
+      const bodies = card.querySelectorAll('p');
+      expect(bodies).toHaveLength(1);
+      const budget = {
+        body: bodies[0].textContent,
+        bodyBox: `${bodies[0].className}|${bodies[0].getAttribute('style') ?? ''}`,
+      };
+      view.unmount();
+      return budget;
+    });
 
-    renderCase('summary-long-body');
-    expect(screen.getByText(/汇总玩家/)).toBeTruthy();
+    expect(budgets.map((item) => item.body)).toEqual([
+      '',
+      shortCase.session.preview,
+      summaryCase.session.summary,
+    ]);
+    expect(new Set(budgets.map((item) => item.bodyBox)).size).toBe(1);
   });
 
   it('shows plugin setup as a needs-interaction preview', () => {
@@ -824,7 +844,7 @@ describe('SessionCard visual cases', () => {
     // card 变体(评审定稿):标题纯文字,自动化标志下沉到底部 meta 行。
     const { container: cardContainer } = render(createElement(SessionCard, commonProps));
     const cardTitle = Array.from(cardContainer.querySelectorAll('div')).find((node) =>
-      node.className.includes('[-webkit-line-clamp:2]'),
+      node.className.includes('[-webkit-line-clamp:1]'),
     );
     expect(cardTitle?.textContent).toContain('自动化日报巡检');
     // 标题里不再有自动化图标……
@@ -916,7 +936,7 @@ describe('SessionCard visual cases', () => {
 
     const card = container.querySelector<HTMLElement>('[data-sidebar-session-row="true"]')!;
     const title = Array.from(card.querySelectorAll<HTMLElement>('div')).find((node) =>
-      node.className.includes('[-webkit-line-clamp:2]'),
+      node.className.includes('[-webkit-line-clamp:1]'),
     )!;
     expect(title.classList.contains('invisible')).toBe(false);
 
@@ -1123,7 +1143,7 @@ describe('SessionCard visual cases', () => {
                   node.textContent?.includes(visualCase.session.title),
               )
             : Array.from(container.querySelectorAll('div')).find((node) =>
-                node.className.includes('[-webkit-line-clamp:2]'),
+                node.className.includes('[-webkit-line-clamp:1]'),
               );
         const preview = Array.from(container.querySelectorAll('p')).find((node) =>
           node.textContent?.includes('正在分析本周项目数据与异常波动。'),
