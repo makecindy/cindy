@@ -13,6 +13,9 @@ import tempfile
 import time
 
 X = C.CDLL('libX11.so.6')
+XKB = C.CDLL('libxkbcommon.so.0')
+XKB.xkb_keysym_to_utf32.restype=C.c_uint32
+XKB.xkb_keysym_to_utf32.argtypes=[C.c_uint32]
 D = C.c_void_p
 U = C.c_ulong
 class Key(C.Structure):
@@ -37,6 +40,7 @@ api('XSetInputFocus', C.c_int, [D,U,C.c_int,U]); api('XSync', C.c_int, [D,C.c_in
 api('XPending', C.c_int, [D]); api('XNextEvent', C.c_int, [D,C.POINTER(Event)])
 api('XRefreshKeyboardMapping', C.c_int, [C.POINTER(Event)])
 api('XLookupKeysym', U, [C.POINTER(Key),C.c_int])
+api('XLookupString', C.c_int, [C.POINTER(Key),C.c_void_p,C.c_int,C.POINTER(U),D])
 api('XQueryKeymap', C.c_int, [D,C.c_void_p])
 api('XQueryPointer', C.c_int, [D,U,C.POINTER(U),C.POINTER(U),C.POINTER(C.c_int),C.POINTER(C.c_int),C.POINTER(C.c_int),C.POINTER(C.c_int),C.POINTER(C.c_uint)])
 api('XGetKeyboardMapping', C.POINTER(U), [D,C.c_ubyte,C.c_int,C.POINTER(C.c_int)])
@@ -82,7 +86,9 @@ with tempfile.TemporaryDirectory(prefix='cindy-x11-test-') as temp:
                         # real-wait: this integration receiver must genuinely stop
                         # translating while the independent helper/server run.
                         time.sleep(pause)
-                    out.append((e.type, X.XLookupKeysym(C.byref(e.key),0)))
+                    symbol=U();buffer=C.create_string_buffer(64)
+                    X.XLookupString(C.byref(e.key),buffer,64,C.byref(symbol),None)
+                    out.append((e.type,symbol.value))
                 elif e.type in (4,5): out.append((e.type,e.key.keycode))
                 elif e.type==33 and e.client.message_type==protocols and e.client.data.l[0]==ping:
                     e.client.window=root
@@ -173,7 +179,31 @@ with tempfile.TemporaryDirectory(prefix='cindy-x11-test-') as temp:
         assert p.wait(timeout=8)==0 and not any(keys()),'heartbeat timeout left key held'
         wrong=subprocess.run([binary,'--x11','--check'],env={**os.environ,'XDG_SESSION_TYPE':'wayland'},capture_output=True,timeout=3)
         assert wrong.returncode==2,'XWayland probe accepted'
-        print('PASS: XTest probe, coordinates, mouse/wheel, delayed Unicode consumption, stable legacy text, unsupported-text rejection, keymap restore, EOF/SIGTERM/heartbeat release, atomic rejection, Wayland refusal')
+        # Real current-layout fallback: legacy keysyms and level-three selectors
+        # must not require a client ping or any temporary global remapping.
+        X.XSetWMProtocols(display,win,advertised,0);X.XSync(display,False)
+        for layout,text in [('ru','а'),('gr','α'),('ara','ش'),('il','א'),('de','@Ω')]:
+            subprocess.run(['setxkbmap','-display',os.environ['DISPLAY'],layout],check=True,timeout=3)
+            if layout=='de':
+                # Private four-level fixture: real AltGr and Shift+AltGr actions,
+                # with a legacy Greek keysym in level four.
+                fixture='''xkb_keymap {
+                  xkb_keycodes { include "evdev+aliases(qwerty)" };
+                  xkb_types { include "complete" };
+                  xkb_compatibility { include "complete" };
+                  xkb_symbols { include "pc+de+inet(evdev)"
+                    key <AD01> { type[Group1]="FOUR_LEVEL",
+                      symbols[Group1]=[q,Q,at,Greek_OMEGA] }; };
+                };'''
+                subprocess.run(['xkbcomp','-',os.environ['DISPLAY']],input=fixture,text=True,check=True,timeout=3)
+            X.XSync(display,False);drain();layout_before=mapping()
+            p=start();seen=send(p,[dict(kind='text',text=text)])
+            characters=[XKB.xkb_keysym_to_utf32(v) for t,v in seen if t==2]
+            characters=[c for c in characters if c]
+            assert characters==list(map(ord,text)),(layout,seen,characters)
+            assert layout_before==mapping() and not any(keys()),(layout,'mapping/modifier leak')
+            p.stdin.close();assert p.wait(timeout=3)==0
+        print('PASS: XTest probe, coordinates, mouse/wheel, delayed Unicode consumption, legacy Unicode layouts, AltGr levels 3/4, unsupported-text rejection, keymap restore, EOF/SIGTERM/heartbeat release, atomic rejection, Wayland refusal')
     finally:
         for p in helpers:
             if p.poll() is None: p.terminate();p.wait(timeout=3)

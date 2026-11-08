@@ -74,6 +74,7 @@ static bool x11_text(const char *text) {
     KeySym symbol;
     KeyCode code;
     bool shift;
+    bool level3;
   } plan[4096];
   size_t count = 0;
   bool ok = false, changed = false, needs_mapping = false;
@@ -91,6 +92,12 @@ static bool x11_text(const char *text) {
   /* Never turn a local user's held Ctrl/Alt/etc into text shortcuts, or release
    * their keys. Caps/Num Lock are handled by XKB's actual translation below. */
   if (state.mods & ~(LockMask | Mod2Mask)) goto cleanup;
+  /* Use the layout's actual level selector, never Ctrl+Alt as an AltGr
+   * shortcut approximation. Do not synthesize ordinary shortcut modifiers. */
+  KeyCode level3 = XKeysymToKeycode(xdisplay, XK_ISO_Level3_Shift);
+  unsigned level3_mask = level3 ? XkbKeysymToModifiers(xdisplay, XK_ISO_Level3_Shift) : 0;
+  if (level3_mask & (ShiftMask | LockMask | ControlMask | Mod1Mask | Mod2Mask | Mod4Mask))
+    level3_mask = 0;
   const unsigned char *p = (const unsigned char *)text;
   while (*p) {
     if (count == 4096) goto cleanup;
@@ -102,18 +109,22 @@ static bool x11_text(const char *text) {
       c < 256 ? c : 0x01000000u | c;
     plan[count].symbol = symbol;
     plan[count].code = 0;
-    for (int shift = 0; shift < 2 && !plan[count].code; shift++)
+    for (int selectors = 0; selectors < 4 && !plan[count].code; selectors++) {
+      if ((selectors & 2) && !level3_mask) continue;
       for (int k = min; k <= max; k++) {
         KeySym translated;
         unsigned consumed;
-        unsigned mods = XkbBuildCoreState(state.mods | (shift ? ShiftMask : 0), state.group);
+        unsigned mods = XkbBuildCoreState(state.mods |
+          ((selectors & 1) ? ShiftMask : 0) | ((selectors & 2) ? level3_mask : 0), state.group);
         if (XkbTranslateKeyCode(layout, (KeyCode)k, mods, &consumed, &translated) &&
-            translated == symbol) {
+            (translated == symbol || xkb_keysym_to_utf32((uint32_t)translated) == c)) {
           plan[count].code = (KeyCode)k;
-          plan[count].shift = shift != 0;
+          plan[count].shift = (selectors & 1) != 0;
+          plan[count].level3 = (selectors & 2) != 0;
           break;
         }
       }
+    }
     if (!plan[count].code) needs_mapping = true;
     count++;
   }
@@ -142,10 +153,12 @@ static bool x11_text(const char *text) {
   }
   for (size_t i = 0; i < count && !stopping && !x11_text_failed; i++) {
     if (plan[i].code) {
+      if (plan[i].level3) XTestFakeKeyEvent(xdisplay, level3, True, CurrentTime);
       if (plan[i].shift) XTestFakeKeyEvent(xdisplay, shift, True, CurrentTime);
       XTestFakeKeyEvent(xdisplay, plan[i].code, True, 10);
       XTestFakeKeyEvent(xdisplay, plan[i].code, False, 10);
       if (plan[i].shift) XTestFakeKeyEvent(xdisplay, shift, False, CurrentTime);
+      if (plan[i].level3) XTestFakeKeyEvent(xdisplay, level3, False, CurrentTime);
       XSync(xdisplay, False);
     } else {
       /* Do not let another client change focus between selecting the receiver

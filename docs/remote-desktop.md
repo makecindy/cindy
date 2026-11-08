@@ -623,8 +623,11 @@ rather than guessed. Changed monitor geometry releases control before further
 input. Keys follow the Linux Xorg evdev keycode layout. Mouse buttons and both
 wheel axes are supported, with accumulated small wheel deltas.
 
-Text first uses stable keys from the current XKB layout, including the required
-Shift state and Caps/Num Lock handling. Characters absent from that layout use
+Text first uses stable keys from the current XKB layout, comparing legacy and
+Unicode keysyms by their Unicode value. Shift and the layout's actual
+ISO_Level3_Shift selector cover third/fourth levels (not a Ctrl+Alt shortcut
+approximation), with paired modifier release and Caps/Num Lock handling.
+Characters absent from that layout use
 an unused, unpressed keycode with a temporary symbol mapping. This requires a
 focused application advertising the ordered EWMH `_NET_WM_PING` protocol: its
 reply fences each remapped key before the helper reuses or restores the mapping.
@@ -650,7 +653,7 @@ Wire operations and payloads are unchanged: official and self-hosted relays keep
 forwarding the same opaque input requests. Older viewers can use the X11 host
 without a new capability field; only the host needs the native backend update.
 
-Explicit native integration (requires `Xvfb` and the built input helper):
+Explicit native integration (requires `Xvfb`, `setxkbmap`, `xkbcomp` and the built input helper):
 `python3 apps/desktop/native/remote-desktop/linux-input/x11-test.py <helper>`.
 It creates its own authenticated X server and tests pointer coordinates, mouse
 buttons, wheel, delayed Unicode consumption, legacy current-layout text,

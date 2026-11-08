@@ -21,11 +21,12 @@ static Display *xdisplay;
 static volatile sig_atomic_t stopping;
 static uint64_t elapsed;
 static KeySym mapping[256], original[256], received[4096];
-static struct { unsigned code; bool shift; } pending[4096];
+static struct { unsigned code; bool shift, level3; } pending[4096];
 static size_t pending_count, received_count;
 static XkbDescRec layout;
 static unsigned mods;
 static bool shifted, supports_ping, dropped, interrupt_wait, destroy_target;
+static bool level3_down, has_level3;
 static int changes, pings, drop_after, bad_replies;
 static XErrorHandler error_handler;
 static XEvent ping_request;
@@ -35,6 +36,8 @@ static void consume(void) {
   for (size_t i = 0; i < pending_count; i++) {
     KeySym sym = mapping[pending[i].code];
     if (sym == 'a' && (pending[i].shift != !!(mods & LockMask))) sym = 'A';
+    if (pending[i].code == 24 && pending[i].level3)
+      sym = pending[i].shift ? XK_Greek_OMEGA : '@';
     received[received_count++] = sym;
   }
   pending_count = 0;
@@ -55,7 +58,21 @@ static int fake_poll(struct pollfd *fds, nfds_t n, int timeout) {
 #define clock_gettime fake_clock_gettime
 #define poll fake_poll
 int XTestFakeKeyEvent(Display *, unsigned, Bool, unsigned long);
+uint32_t xkb_keysym_to_utf32(uint32_t);
 #include "x11-text.h"
+
+/* Fake the external conversion API; real libxkbcommon/layouts are exercised
+ * separately by the private-Xvfb integration, not by copied production code. */
+uint32_t xkb_keysym_to_utf32(uint32_t symbol) {
+  switch (symbol) {
+    case XK_Cyrillic_a: return 0x430;
+    case XK_Greek_alpha: return 0x3b1;
+    case XK_Greek_OMEGA: return 0x3a9;
+    case XK_Arabic_sheen: return 0x634;
+    case XK_hebrew_aleph: return 0x5d0;
+    default: return symbol < 256 ? symbol : (symbol & 0xff000000) == 0x01000000 ? symbol & 0xffffff : 0;
+  }
+}
 
 int XSync(Display *d, Bool discard) { (void)d; (void)discard; return 0; }
 XErrorHandler XSetErrorHandler(XErrorHandler handler) {
@@ -76,10 +93,16 @@ Bool XkbTranslateKeyCode(XkbDescPtr keys, KeyCode code, unsigned state,
                          unsigned *consumed, KeySym *symbol) {
   (void)keys; *consumed = 0; *symbol = mapping[code];
   if (*symbol == 'a' && (!!(state & ShiftMask) != !!(state & LockMask))) *symbol = 'A';
+  if (code == 24 && (state & Mod5Mask))
+    *symbol = (state & ShiftMask) ? XK_Greek_OMEGA : '@';
   return *symbol != NoSymbol;
 }
 KeyCode XKeysymToKeycode(Display *d, KeySym symbol) {
-  (void)d; return symbol == XK_Shift_L ? 50 : 0;
+  (void)d;
+  return symbol == XK_Shift_L ? 50 : symbol == XK_ISO_Level3_Shift && has_level3 ? 108 : 0;
+}
+unsigned XkbKeysymToModifiers(Display *d, KeySym symbol) {
+  (void)d; return symbol == XK_ISO_Level3_Shift && has_level3 ? Mod5Mask : 0;
 }
 Atom XInternAtom(Display *d, const char *name, Bool only) {
   (void)d; (void)only; return !strcmp(name, "WM_PROTOCOLS") ? 100 : 101;
@@ -155,10 +178,12 @@ int XChangeKeyboardMapping(Display *d, int first, int per, KeySym *symbols, int 
 int XTestFakeKeyEvent(Display *d, unsigned code, Bool down, unsigned long delay) {
   (void)d; (void)delay;
   if (code == 50) shifted = down;
+  else if (code == 108) level3_down = down;
   else if (down) {
     assert(pending_count < 4096);
     pending[pending_count].code = code;
-    pending[pending_count++].shift = shifted;
+    pending[pending_count].shift = shifted;
+    pending[pending_count++].level3 = level3_down;
   }
   return 1;
 }
@@ -170,6 +195,7 @@ void XkbFreeKeyboard(XkbDescPtr keys, unsigned which, Bool all) {
 
 static void reset(void) {
   stopping = 0; elapsed = 0; mods = 0; shifted = false;
+  level3_down = has_level3 = false;
   supports_ping = true; dropped = interrupt_wait = destroy_target = false;
   changes = pings = drop_after = bad_replies = 0;
   pending_count = received_count = 0; ping_request.type = 0;
@@ -181,7 +207,7 @@ static void reset(void) {
 }
 static void restored(void) {
   assert(!memcmp(mapping, original, sizeof(mapping)));
-  assert(!shifted && !error_handler);
+  assert(!shifted && !level3_down && !error_handler);
 }
 int main(void) {
   reset(); supports_ping = false;
@@ -195,6 +221,23 @@ int main(void) {
   reset(); mods = LockMask;
   assert(x11_text("aA")); consume();
   assert(received[0] == 'a' && received[1] == 'A'); restored();
+
+  const struct { KeySym symbol; const char *text; } legacy[] = {
+    {XK_Cyrillic_a, "\xd0\xb0"}, {XK_Greek_alpha, "\xce\xb1"},
+    {XK_Arabic_sheen, "\xd8\xb4"}, {XK_hebrew_aleph, "\xd7\x90"},
+  };
+  for (size_t i = 0; i < sizeof(legacy) / sizeof(legacy[0]); i++) {
+    reset(); supports_ping = false;
+    original[38] = mapping[38] = legacy[i].symbol;
+    assert(x11_text(legacy[i].text)); consume();
+    assert(received_count == 1 && received[0] == legacy[i].symbol && changes == 0 && pings == 0);
+    restored();
+  }
+  reset(); supports_ping = false; has_level3 = true;
+  original[24] = mapping[24] = 'q';
+  assert(x11_text("@\xce\xa9")); consume();
+  assert(received_count == 2 && received[0] == '@' && received[1] == XK_Greek_OMEGA);
+  assert(changes == 0 && pings == 0); restored();
 
   reset(); bad_replies = 2;
   assert(x11_text("a\xe4\xb8\xad\xf0\x9f\x99\x82" "a\xe4\xb8\xad"));
