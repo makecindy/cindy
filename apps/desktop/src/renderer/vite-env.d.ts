@@ -1174,6 +1174,8 @@ interface ElectronAPI {
   ) => () => void;
   osRelease: string;
   appVersion: string;
+  /** 当前进程是否经 ARM64 转译运行(Apple 芯片上的 Intel 包)。 */
+  getArm64Translation?: () => Promise<boolean>;
   /** 运行期端点清单(main 启动时远程 → 缓存 → 烘焙解析;重启生效)。 */
   clientEndpoints: { websiteUrl: string };
   appDisplayVersion: string;

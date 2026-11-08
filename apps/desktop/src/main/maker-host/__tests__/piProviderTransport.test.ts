@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import * as openaiCompletions from '@earendil-works/pi-ai/api/openai-completions';
 import { PROVIDER_MODEL_CATALOG, BUNDLED_CATALOG, buildUserProvider, parseModelsListResponse, mergeDiscoveredRuntimeModels } from '@cindy/model-providers';
-import { probePiProvider, createPiProviderFetch, hostCredentialEndpointAllowed, invocationModelRecord, nativeBridgeApiKey, NATIVE_ADAPTER_ERROR_BODY_LIMIT, NATIVE_BRIDGE_SESSION_HEADER, readBoundedResponseText } from '../pi-provider-transport.js';
+import { probePiProvider, createPiProviderFetch, handlePiProviderRequest, hostCredentialEndpointAllowed, invocationModelRecord, nativeBridgeApiKey, NATIVE_ADAPTER_ERROR_BODY_LIMIT, NATIVE_BRIDGE_SESSION_HEADER, readBoundedResponseText } from '../pi-provider-transport.js';
 
 vi.mock('@earendil-works/pi-ai/api/openai-completions', async (importOriginal) => ({
   ...await importOriginal<typeof import('@earendil-works/pi-ai/api/openai-completions')>(),
@@ -611,6 +611,36 @@ it.each([undefined, 200, 302])('keeps iterator exceptions private after HTTP %s 
     stream.mockRestore();
   }
 });
+
+describe('Codex 原生传输的确定性错误终态 (#9344)', () => {
+  const row = PROVIDER_MODEL_CATALOG.providers.together.find(
+    row => row.execution.pi.api === 'openai-completions',
+  )!;
+
+  it('把「协议特性不支持」落成终态 400,而不是冒泡成可重试的 502', async () => {
+    const writeHead = vi.fn();
+    const end = vi.fn();
+    const res = { once: vi.fn(), off: vi.fn(), writeHead, end, headersSent: false } as never;
+    const upstream = vi.fn(async () => new Response(reply, { headers: { 'content-type': 'text/event-stream' } }));
+    const send = createPiProviderFetch({ row, providerId: 'together', apiKey: 'fixture-key', fetchImpl: upstream });
+
+    // user 消息的 content 为 null:Chat Completions 桥接无法翻译,抛确定性错误。
+    await handlePiProviderRequest(send, {
+      model: row.id,
+      input: [{ type: 'message', role: 'user', content: null }],
+      stream: true,
+    } as never, res);
+
+    expect(writeHead).toHaveBeenCalledWith(400, expect.objectContaining({
+      'content-type': 'application/json; charset=utf-8',
+    }));
+    expect(JSON.parse(String(end.mock.calls[0][0]))).toMatchObject({
+      error: { type: 'invalid_request_error', code: 'unsupported_feature' },
+    });
+    expect(upstream).not.toHaveBeenCalled();
+  });
+});
+
 
 describe('OpenCode Go session header on the native transport (#5325)', () => {
   const goUpstream = 'https://opencode.ai/zen/go/v1';

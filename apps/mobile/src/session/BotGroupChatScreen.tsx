@@ -738,7 +738,9 @@ function BotGroupChatContent({ deviceId, deviceName, groupId, messageId, notific
         onContentSizeChange={(_width, height) => {
           viewport.current.contentHeight = height;
           viewport.current.measuredGroup = group;
-          if (focused && stickToBottom.current) scrollRef.current?.scrollToEnd({ animated: false });
+          // Keyboard dismissal can resize the timeline before its first drag
+          // sample. An imperative scroll here cancels native drag/deceleration.
+          if (focused && stickToBottom.current && !processUserScrolling.current) scrollRef.current?.scrollToEnd({ animated: false });
           updateAwayFromBottom(processViewport.inspecting.current || !stickToBottom.current && height - viewport.current.offsetY - viewport.current.viewportHeight >= STICK_TO_BOTTOM_PX);
           acknowledge();
         }}
