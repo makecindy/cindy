@@ -1,0 +1,87 @@
+import type { SkillEntry } from './types.js';
+
+const segmenter = new Intl.Segmenter('zh', { granularity: 'word' });
+const STOP_WORDS = new Set(['the', 'and', 'for', 'with', 'please', 'help', '帮我', '帮忙', '一个', '一下', '如何', '怎么', '进行']);
+
+export function normalizeText(text: string): string {
+  return text.normalize('NFKC').toLowerCase().replace(/\s+/gu, ' ').trim();
+}
+
+/** Only public discovery metadata is sent to an embedding adapter. */
+export function retrievalText(entry: SkillEntry): string {
+  return [entry.name, entry.description, ...(entry.aliases ?? []), ...(entry.tags ?? [])]
+    .map(normalizeText)
+    .filter(Boolean)
+    .join('\n');
+}
+
+function queryTerms(query: string): string[] {
+  const terms = new Set<string>();
+  for (const part of segmenter.segment(query)) {
+    if (part.isWordLike && part.segment.length > 1 && !STOP_WORDS.has(part.segment)) {
+      terms.add(part.segment);
+    }
+  }
+  // Bigrams bridge different Chinese word boundaries without matching single
+  // grammatical characters throughout otherwise unrelated descriptions.
+  for (const run of query.match(/\p{Script=Han}+/gu) ?? []) {
+    const characters = [...run];
+    for (let i = 0; i + 1 < characters.length; i++) {
+      const term = characters[i] + characters[i + 1];
+      if (!STOP_WORDS.has(term)) terms.add(term);
+    }
+  }
+  return [...terms];
+}
+
+function containsTerm(text: string, term: string): boolean {
+  if (/^[a-z0-9]+$/u.test(term)) {
+    return new RegExp(`(^|[^a-z0-9])${term}([^a-z0-9]|$)`, 'u').test(text);
+  }
+  return text.includes(term);
+}
+
+export interface KeywordScore {
+  score: number;
+  exact: boolean;
+  matchedTerms: string[];
+}
+
+export function scoreKeywords(entry: SkillEntry, query: string): KeywordScore {
+  const normalized = normalizeText(query);
+  const names = [entry.name, ...(entry.aliases ?? [])].map(normalizeText);
+  const exact = names.includes(normalized);
+  const tags = (entry.tags ?? []).map(normalizeText).join('\n');
+  const description = normalizeText(entry.description);
+  let score = exact ? 100 : 0;
+  const matchedTerms: string[] = exact ? [normalized] : [];
+  for (const term of queryTerms(normalized)) {
+    const weight = names.some((name) => containsTerm(name, term)) ? 4
+      : containsTerm(tags, term) ? 3
+      : containsTerm(description, term) ? 1 : 0;
+    if (weight) {
+      score += weight;
+      if (!matchedTerms.includes(term)) matchedTerms.push(term);
+    }
+  }
+  return { score, exact, matchedTerms };
+}
+
+export function cosineSimilarity(a: readonly number[], b: readonly number[]): number {
+  if (a.length !== b.length) throw new Error('Query and indexed vectors have different dimensions');
+  let dot = 0;
+  let lengthA = 0;
+  let lengthB = 0;
+  for (let i = 0; i < a.length; i++) {
+    dot += a[i]! * b[i]!;
+    lengthA += a[i]! * a[i]!;
+    lengthB += b[i]! * b[i]!;
+  }
+  return dot / Math.sqrt(lengthA * lengthB);
+}
+
+/** Reciprocal rank fusion, with deterministic tie-breaking at the caller. */
+export function reciprocalRankScore(keywordRank?: number, semanticRank?: number): number {
+  return (keywordRank === undefined ? 0 : 1 / (60 + keywordRank))
+    + (semanticRank === undefined ? 0 : 1 / (60 + semanticRank));
+}

@@ -122,6 +122,16 @@ export interface EmbedResponse {
   cacheHits: number;
 }
 
+/** Explicit caller-configured OpenAI-compatible model, outside Cindy's catalog.
+ * No provider-specific input_type is inferred from the model name.
+ */
+export interface OpenAiCompatibleEmbedRequest {
+  texts: string[];
+  model: string;
+  dimensions?: number;
+  timeoutMs?: number;
+}
+
 /**
  * 上下文化嵌入请求 (voyage-context-* 的索引侧形态)。
  *

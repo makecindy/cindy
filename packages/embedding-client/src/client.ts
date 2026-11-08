@@ -31,6 +31,7 @@ import {
   type EmbedDocumentsResponse,
   type EmbedRequest,
   type EmbedResponse,
+  type OpenAiCompatibleEmbedRequest,
   type EmbeddingClientOptions,
   type EmbeddingInputType,
   type EmbeddingLogger,
@@ -59,6 +60,8 @@ const INPUT_TYPE_WIRE: Record<
 const DEFAULT_CACHE_SIZE = 1000;
 // 重试间隔 (ms): 1s / 5s / 15s. 共最多 4 次尝试 (initial + 3 retries)。
 const RETRY_DELAYS_MS = [1_000, 5_000, 15_000];
+
+type FlatEmbedRequest = Omit<EmbedRequest, 'model'> & { model: string };
 
 interface OpenAiEmbeddingsResponse {
   object: 'list';
@@ -393,6 +396,21 @@ export class EmbeddingClient {
         'INVALID_MODEL',
       );
     }
+    return this.embedFlat(req);
+  }
+
+  /** Opt-in custom endpoint contract; catalog consumers retain embed() validation. */
+  async embedOpenAICompatible(req: OpenAiCompatibleEmbedRequest): Promise<EmbedResponse> {
+    if (!req.model.trim()) throw new EmbeddingError('model must not be empty', 'INVALID_MODEL');
+    return this.embedFlat({
+      texts: req.texts,
+      model: req.model,
+      dimensions: req.dimensions,
+      timeoutMs: req.timeoutMs,
+    });
+  }
+
+  private async embedFlat(req: FlatEmbedRequest): Promise<EmbedResponse> {
     if (req.texts.length === 0) {
       return { embeddings: [], modelUsed: req.model, tokensUsed: 0, cacheHits: 0 };
     }
@@ -552,7 +570,7 @@ export class EmbeddingClient {
    * 混合分支的 `cacheHits > 0` 也不成立)。
    */
   private async refetchAfterCacheReset(
-    req: EmbedRequest,
+    req: FlatEmbedRequest,
     startedAt: number,
     why: string,
   ): Promise<EmbedResponse> {
@@ -570,7 +588,7 @@ export class EmbeddingClient {
         );
       }
     }
-    return this.embed({
+    return this.embedFlat({
       ...req,
       ...(remaining !== undefined ? { timeoutMs: remaining } : {}),
     });

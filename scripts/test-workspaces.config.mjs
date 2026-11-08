@@ -528,6 +528,7 @@ export default {
     requiredUnitWorkspace('@cindy/device-link', 'packages/device-link'),
     requiredUnitWorkspace('@cindy/device-link-relay', 'packages/device-link-relay'),
     noCollectableWorkspace('@cindy/embedding-client', 'packages/embedding-client'),
+    requiredUnitWorkspace('@cindy/skill-index', 'packages/skill-index'),
     requiredUnitWorkspace('@cindy/file-browser-core', 'packages/file-browser-core'),
     noCollectableWorkspace('@cindy/github-client', 'packages/github-client'),
     noCollectableWorkspace('@cindy/gitlab-client', 'packages/gitlab-client'),
