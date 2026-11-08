@@ -159,15 +159,18 @@ vi.mock('../localDb/client/current', () => ({
   }),
 }));
 
-let forkSessionAtMessage: typeof import('../maker-orchestration/fork').forkSessionAtMessage;
-let createSideChat: typeof import('../maker-orchestration/fork').createSideChat;
-let listSideChats: typeof import('../maker-orchestration/fork').listSideChats;
-let forkSessionStripEncrypted: typeof import('../maker-orchestration/fork').forkSessionStripEncrypted;
 const originalClaudeConfigDir = process.env.CLAUDE_CONFIG_DIR;
 const originalXdtUserDataDir = process.env.XDT_USER_DATA_DIR;
 const tempDirs: string[] = [];
 /** electron mock 的 app.getPath('userData') 指向的临时目录；beforeEach 里建、afterEach 随 tempDirs 清。 */
 const userDataDirRef: { current: string } = { current: '' };
+
+// Load the production module once during collection, after the mock state exists.
+// Loading it in the first beforeEach charged Vite's cold dependency graph to that
+// case's 10s setup budget (PR #9386, client-ci 42468165931 attempts 1–3).
+// Keep per-case filesystem isolation and the existing hook timeout unchanged.
+const { forkSessionAtMessage, createSideChat, listSideChats, forkSessionStripEncrypted } =
+  await import('../maker-orchestration/fork');
 
 beforeEach(async () => {
   readBoundClaudeConfigDirMock.mockReset();
@@ -199,13 +202,6 @@ beforeEach(async () => {
     newSdkSessionId: 'sdk-new-session-uuid',
     uuidMap: new Map<string, string>(),
   });
-  if (!forkSessionAtMessage) {
-    const mod = await import('../maker-orchestration/fork');
-    forkSessionAtMessage = mod.forkSessionAtMessage;
-    createSideChat = mod.createSideChat;
-    listSideChats = mod.listSideChats;
-    forkSessionStripEncrypted = mod.forkSessionStripEncrypted;
-  }
 });
 
 afterEach(async () => {

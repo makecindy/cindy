@@ -6890,14 +6890,15 @@ export function handleStreamEvent(
         const answers = resolved?.answers as Record<string, string> | undefined;
         const dismissed = resolved?.dismissed === true;
         const askUserReply = answers && !dismissed ? formatAskUserReply(answers) : '';
+        const releasesProtectedAsk = data.reason === 'resolved' && !dismissed &&
+          state.protectedAskUser?.pending.requestId === data.requestId;
         return {
           ...state,
-          protectedAskUser: data.reason === 'resolved' && !dismissed && state.protectedAskUser?.pending.requestId === data.requestId
-            ? undefined : state.protectedAskUser,
+          protectedAskUser: releasesProtectedAsk ? undefined : state.protectedAskUser,
           pendingAskUser:
             state.pendingAskUser?.requestId === data.requestId ? null : state.pendingAskUser,
           askUserViewerState:
-            state.pendingAskUser?.requestId === data.requestId ? 'expanded' : state.askUserViewerState,
+            state.pendingAskUser?.requestId === data.requestId || releasesProtectedAsk ? 'expanded' : state.askUserViewerState,
           askUserDraft:
             state.pendingAskUser?.requestId === data.requestId ? null : state.askUserDraft,
           messages: state.messages.map((m) =>
@@ -7035,9 +7036,11 @@ export function handleStreamEvent(
           isBlocking: data.isBlocking,
           persistId: event.persistId,
         },
-        // Optional questions start minimized so the original message stays readable.
-        // Replayed requests preserve the user's existing viewing state.
-        askUserViewerState: keepAskProgress ? state.askUserViewerState : data.delivery === 'async' ? 'minimized' : 'expanded',
+        // Async delivery lets the agent continue; every new question still starts expanded.
+        // Replayed requests preserve the user's existing viewing state, and so does a new
+        // request queued behind a draft-protected one: the visible card is still the old one.
+        // It opens expanded once the protected question is released.
+        askUserViewerState: keepAskProgress || state.protectedAskUser ? state.askUserViewerState : 'expanded',
         // Only an unchanged pending request may retain its draft. A new batch
         // or changed question content starts clean, even with the same requestId.
         askUserDraft: keepAskProgress ? state.askUserDraft : null,
@@ -17331,7 +17334,7 @@ async function sendProtectedQuestionSupplement(sessionId: string, requestId: str
   if (protectedQuestion?.pending.requestId !== requestId) return;
   const text = formatAsyncQuestionSupplement(protectedQuestion.pending.questions, answers);
   const clear = () => setState(sessionId, (s) => s.protectedAskUser?.pending.requestId === requestId
-    ? { ...s, protectedAskUser: undefined } : s);
+    ? { ...s, protectedAskUser: undefined, askUserViewerState: 'expanded' } : s);
   const key = `${sessionId}:${requestId}:supplement`;
   if (questionDecisionsInFlight.has(key)) return;
   questionDecisionsInFlight.add(key);
@@ -17359,7 +17362,7 @@ async function sendProtectedQuestionSupplement(sessionId: string, requestId: str
     );
     if (!current()) return;
     if (!needsSupplement) {
-      setState(sessionId, (s) => ({ ...s, protectedAskUser: undefined,
+      setState(sessionId, (s) => ({ ...s, protectedAskUser: undefined, askUserViewerState: 'expanded',
         pendingAskUser: s.pendingAskUser?.requestId === requestId ? null : s.pendingAskUser,
         askUserDraft: s.askUserDraft?.requestId === requestId ? null : s.askUserDraft,
       }));

@@ -3,7 +3,7 @@
  * 回复方式、发言方式、删除群聊。
  *
  * 与 BotSettingsDrawer 同一个外壳：由路由上的 `?groupSettings=1` 打开，群聊页留在下面；
- * 点遮罩不关闭，Esc（IME 组合中除外）与右上角关闭按钮关闭。每项改动立即提交给 main，
+ * 点遮罩与右上角关闭按钮关闭；Esc（IME 组合中除外）先返回子页，再关闭。每项改动立即提交给 main，
  * 群数据以 botGroupStore 的列表摘要为准（main 推送后自动刷新），失败就地提示并保持
  * 原值。成员数 2–6 由 main 最终校验，这里只把不会成立的操作提前禁用。
  */
@@ -90,7 +90,6 @@ export function BotGroupSettingsDrawer() {
         {/* Keep portaled controls inside the overlay’s React tree so its scroll lock allows them. */}
         <Dialog.Overlay className="modal-scrim fixed inset-0 z-50">
           <Dialog.Content
-            onPointerDownOutside={(event) => event.preventDefault()}
             aria-describedby={undefined}
             // CJK IME: Escape during composition only cancels the candidate.
             onEscapeKeyDown={(event) => {
