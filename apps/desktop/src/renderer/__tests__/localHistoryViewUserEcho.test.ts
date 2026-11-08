@@ -57,6 +57,7 @@ import {
 } from '@cindy/maker-shared/message-window';
 import { projectRemoteUsers } from '@/lib/remoteUserHandoff';
 import { collectLastTurnPaths } from '@/features/right-sidebar/lib/lastTurnChangedFiles';
+import { listSessionTasks } from '@/features/right-sidebar/plugins/background-tasks/listSessionTasks';
 
 const OWNER_STAMP = { dataOwnerId: 'test-owner', ownerGeneration: 0 } as const;
 const WD = 'C:\\workspace';
@@ -208,7 +209,7 @@ describe('local history view retires completed bodies', () => {
   // Unit regression: review/preview still consume file-edit metadata from the
   // raw store. Exercise foreground, background and borrowed-detail retirement;
   // the existing protected-output cases only cover interactions and media.
-  it.each(['file_change', 'NotebookEdit'])('keeps %s paths readable after history retirement', async toolName => {
+  it.each(['file_change', 'NotebookEdit', 'Bash'])('keeps %s consumer metadata after history retirement', async toolName => {
     vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval'] });
     const s = sid();
     try {
@@ -216,29 +217,36 @@ describe('local history view retires completed bodies', () => {
       const toolUseId = 'edit-file';
       const call = { ...dbMessage(s, 'file-call', '', '2026-09-28T00:00:02Z', 'tool_use'), toolUseId,
         content: { toolName, toolUseId, input: toolName === 'file_change'
-          ? { changes: [{ path: 'preview.html' }] } : { file_path: 'preview.html' } } };
+          ? { changes: [{ path: 'preview.html' }] } : toolName === 'Bash'
+            ? { command: 'echo done', run_in_background: true } : { file_path: 'preview.html' } } };
       const result = { ...dbMessage(s, 'file-result', 'x'.repeat(1024 * 1024), '2026-09-28T00:00:03Z', 'tool_result'), toolUseId };
       persist(call); persist(result);
       persist({ ...dbMessage(s, 'finished', 'Done', '2026-09-28T00:00:04Z', 'assistant'), agentMeta: { turnCompleted: true } });
       const view = getRemoteHistoryView(s)!;
       await view.refresh();
-      const paths = () => [...collectLastTurnPaths(makerChatStore.getSnapshot(s).messages, WD)];
-      expect(paths()).toEqual(['preview.html']);
+      const paths = () => toolName === 'Bash'
+        ? listSessionTasks({ messages: makerChatStore.getSnapshot(s).messages as unknown as Message[],
+          taskUpdates: undefined, isSessionStreaming: false }).completed.map(row => row.toolUseId)
+        : [...collectLastTurnPaths(makerChatStore.getSnapshot(s).messages, WD)];
+      const expected = [toolName === 'Bash' ? toolUseId : 'preview.html'];
+      expect(paths()).toEqual(expected);
       makerChatStore.leaveView(s);
       await vi.advanceTimersByTimeAsync(30_000);
-      expect(paths()).toEqual(['preview.html']);
+      expect(paths()).toEqual(expected);
       makerChatStore.enterView(s);
       await view.refresh();
       // A new source row available only through details must retain its paths too.
       const summary = historyWorkSummaries(view.getSnapshot().items)[0];
       vi.mocked(window.electronAPI.localDb.messages.workDetails).mockResolvedValue({
-        version: 1, messages: [{ ...call, id: 'borrowed-call', clientId: 'borrowed-call' }, result], hasMore: false, nextCursor: null,
+        version: 1, messages: [{ ...call, id: 'borrowed-call', clientId: 'borrowed-call' },
+          { ...result, id: 'borrowed-result', clientId: 'borrowed-result' }], hasMore: false, nextCursor: null,
       });
       view.setExpanded(summary.key, true);
       await view.loadDetails(summary);
       view.setExpanded(summary.key, false);
       expect(makerChatStore.getSnapshot(s).messages.some(row => row.clientId === 'borrowed-call')).toBe(true);
-      expect(paths()).toEqual(['preview.html']);
+      expect(makerChatStore.getSnapshot(s).messages.some(row => row.clientId === 'borrowed-result')).toBe(true);
+      expect(paths()).toEqual(expected);
     } finally {
       makerChatStore.purgeSession(s);
       vi.useRealTimers();

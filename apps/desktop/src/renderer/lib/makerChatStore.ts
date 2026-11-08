@@ -4418,9 +4418,10 @@ function _messageCharacters(message: ChatMessage): number {
 }
 
 function isRetirableHistoryTool(name: string): boolean {
-  // Folding is only a presentation decision. Review and HTML preview still
-  // consume these file-edit inputs from the raw store, including borrowed rows.
-  return isHistoryDetailTool(name) && name !== 'file_change' && name !== 'NotebookEdit';
+  // Folding is not proof that other consumers no longer need a tool record.
+  // Only known read/search bodies are reclaimable. Commands, edits and unknown
+  // tools retain both call and result for task lists, review and other consumers.
+  return isHistoryDetailTool(name) && ['Read', 'read', 'Grep', 'grep', 'Glob', 'glob'].includes(name);
 }
 
 function retiredDurableToolPairs(messages: ChatMessage[], eligible: (row: ChatMessage, index: number) => boolean) {
@@ -12087,9 +12088,12 @@ function createRemoteHistoryView(sessionId: string) {
           latestReadRows.has(row) && !availableIds.has(row.clientId)
           && Date.parse(row.createdAt ?? '') <= latestReadEndMs
           && (!running || index < messages.length - 10));
+        const reclaimableToolIds = new Set(messages.filter(row => row.role === 'tool_use'
+          && row.toolUseId && isRetirableHistoryTool(row.toolName ?? '')).map(row => row.toolUseId));
         for (const row of messages) {
           if (borrowedDetailRows.has(row) && !availableIds.has(row.clientId)
-            && (row.role !== 'tool_use' || isRetirableHistoryTool(row.toolName ?? ''))
+            && (row.role === 'thinking' || ((row.role === 'tool_use' || row.role === 'tool_result')
+              && !!row.toolUseId && reclaimableToolIds.has(row.toolUseId)))
             && !row.isStreaming && !row.isPendingPersist) retired.add(row);
         }
         // History owns these folded bodies and can load them through workDetails.
