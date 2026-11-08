@@ -10,7 +10,7 @@ import { piBinaryUpdateFailureStage } from '../agent-binaries/pi-self-update.js'
 
 import { spawn } from 'node:child_process';
 import { createHash, randomUUID } from 'node:crypto';
-import { promises as fs, unwatchFile, watch, watchFile, type FSWatcher, type Stats } from 'node:fs';
+import { promises as fs, statSync, unwatchFile, watch, watchFile, type FSWatcher, type Stats } from 'node:fs';
 import { createRequire } from 'node:module';
 import path from 'node:path';
 import { StringDecoder } from 'node:string_decoder';
@@ -118,8 +118,11 @@ let lastExternallyNotifiedRuntimeChangeToken: string | null | undefined;
 let changeTokenReadInFlight: Promise<void> | undefined;
 let changeTokenReadQueued = false;
 let changeTokenDirectoryWatcher: FSWatcher | undefined;
+// Identity of the directory the watcher was attached to (dev:ino).
+let changeTokenDirectoryIdentity: string | undefined;
 const changeTokenWatchListener = () => {
   // A token that just appeared means the package home now exists.
+  detachReplacedChangeTokenDirectoryWatcher();
   watchPiPackageChangeTokenDirectory();
   void observePiPackageChangeToken();
 };
@@ -366,15 +369,42 @@ function watchPiPackageChangeTokenDirectory(): void {
   }
   watcher.on('error', () => {
     // E.g. the directory was removed. Fall back to the stat poll until a token reappears.
-    if (changeTokenDirectoryWatcher === watcher) changeTokenDirectoryWatcher = undefined;
+    if (changeTokenDirectoryWatcher === watcher) {
+      changeTokenDirectoryWatcher = undefined;
+      changeTokenDirectoryIdentity = undefined;
+    }
     watcher.close();
   });
   changeTokenDirectoryWatcher = watcher;
+  changeTokenDirectoryIdentity = readChangeTokenDirectoryIdentity();
+}
+
+function readChangeTokenDirectoryIdentity(): string | undefined {
+  try {
+    const stats = statSync(packageHome());
+    return `${stats.dev}:${stats.ino}`;
+  } catch {
+    return undefined;
+  }
+}
+
+/**
+ * Deleting and recreating the package home does not always raise `error`
+ * (inotify / FSEvents report a rename of the watched directory itself, which the
+ * token filter ignores), leaving a handle bound to the old directory. The stat
+ * poll runs this before reattaching so such a watcher is replaced instead of
+ * blocking reattachment for the rest of the session.
+ */
+function detachReplacedChangeTokenDirectoryWatcher(): void {
+  if (!changeTokenDirectoryWatcher) return;
+  if (readChangeTokenDirectoryIdentity() === changeTokenDirectoryIdentity) return;
+  closePiPackageChangeTokenDirectoryWatcher();
 }
 
 function closePiPackageChangeTokenDirectoryWatcher(): void {
   const watcher = changeTokenDirectoryWatcher;
   changeTokenDirectoryWatcher = undefined;
+  changeTokenDirectoryIdentity = undefined;
   watcher?.close();
 }
 

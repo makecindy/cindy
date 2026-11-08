@@ -4370,6 +4370,41 @@ describe('Pi package executable-code boundary', () => {
     }
   });
 
+  it('reattaches the directory watcher after the package home is replaced', async () => {
+    // Replacing the watched directory leaves a handle bound to the old one on
+    // some platforms without an 'error' event. The fallback poll must replace it,
+    // otherwise every later peer change waits for the 2 s poll.
+    const home = path.join(runtime.userData, 'pi-package-home');
+    await fs.mkdir(home, { recursive: true });
+    const store = await import('../pi-package-store.js');
+    const listener = vi.fn();
+    const unsubscribe = store.onPiPackagesChanged(listener);
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    // Same atomic writer a peer Main uses, including its Windows overwrite fallback.
+    const publishPeerRuntimeToken = async (tag: string) => {
+      const { atomicWriteFileSync } = await import('../../utils/atomicWriteFile.js');
+      atomicWriteFileSync(path.join(home, 'cindy-package-runtime-change-token'), `runtime:${Date.now()}-${tag}\n`);
+    };
+    const waitForNotifications = (count: number, timeout: number) =>
+      vi.waitFor(() => expect(listener.mock.calls.length).toBeGreaterThanOrEqual(count), { timeout, interval: 10 });
+    try {
+      await publishPeerRuntimeToken('before-replace');
+      await waitForNotifications(1, 1_500);
+
+      await fs.rm(home, { recursive: true, force: true });
+      await fs.mkdir(home, { recursive: true });
+      // Only the fallback poll can see the first edge in the new directory.
+      await publishPeerRuntimeToken('first-after-replace');
+      await waitForNotifications(2, 5_000);
+
+      // The watcher is reattached, so the next edge must not wait for the poll.
+      await publishPeerRuntimeToken('second-after-replace');
+      await waitForNotifications(3, 1_000);
+    } finally {
+      unsubscribe();
+    }
+  });
+
   it('fails closed before touching the package tree when the shared lock is unavailable', async () => {
     const { source } = await createPackage();
     const store = await import('../pi-package-store.js');
