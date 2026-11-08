@@ -5,6 +5,7 @@ import type { LiziMcpSessionContext, LocalSkillLibraryCallback } from '@cindy/mc
 import { resolveCanonicalSessionPath } from '@cindy/mcps';
 import type { SkillEmbeddingAdapter, SkillIndex } from '@cindy/skill-index';
 import { helperDiscoverySkill, loadIndex, readConfig, readSkill, syncLibraryUnlocked, withLibraryWrite, writeJson, type LibraryConfig } from '@cindy/skill-index/library';
+import { atomicWriteFileSync } from '../utils/atomicWriteFile';
 
 interface Registration extends LibraryConfig {
   generation: string;
@@ -110,18 +111,55 @@ export function createLocalSkillLibraryTools(deps: LocalSkillLibraryDependencies
             if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
           }
           checkCurrent();
-          const changes = await syncLibraryUnlocked(library, { config, embedding, rebuild: request.rebuild, beforePublish: checkCurrent });
-          await writeJson(path.join(library, 'library.json'), config);
-          synchronized.delete(libraryKey);
-          // Make the route discoverable only once its library has been published.
-          await fs.mkdir(gatewayPath, { recursive: true });
-          try { await fs.writeFile(gatewayFile, gateway, { flag: 'wx' }); }
-          catch (error) {
-            if ((error as NodeJS.ErrnoException).code !== 'EEXIST' || await fs.readFile(gatewayFile, 'utf8') !== gateway) throw error;
+          const configFile = path.join(library, 'library.json');
+          const indexFile = path.join(library, 'index.json');
+          const originals = new Map<string, string | undefined>();
+          for (const file of [indexFile, configFile]) {
+            try { originals.set(file, await fs.readFile(file, 'utf8')); }
+            catch (error) {
+              if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
+              originals.set(file, undefined);
+            }
           }
-          return changes;
+          const published: string[] = [];
+          let createdGateway = false;
+          try {
+            const changes = await syncLibraryUnlocked(library, { config, embedding, rebuild: request.rebuild, beforePublish: checkCurrent });
+            published.push(indexFile);
+            await writeJson(configFile, config);
+            published.push(configFile);
+            // The route and both state files belong to this one registration commit.
+            await fs.mkdir(gatewayPath, { recursive: true });
+            let handle;
+            try { handle = await fs.open(gatewayFile, 'wx'); }
+            catch (error) {
+              if ((error as NodeJS.ErrnoException).code !== 'EEXIST' || await fs.readFile(gatewayFile, 'utf8') !== gateway) throw error;
+            }
+            if (handle) {
+              createdGateway = true;
+              try { await handle.writeFile(gateway); }
+              finally { await handle.close(); }
+            }
+            checkCurrent();
+            synchronized.delete(libraryKey);
+            return changes;
+          } catch (error) {
+            const rollback = await Promise.allSettled([
+              ...published.map(async file => {
+                const original = originals.get(file);
+                if (original === undefined) await fs.unlink(file);
+                else atomicWriteFileSync(file, original);
+              }),
+              ...(createdGateway ? [fs.unlink(gatewayFile)] : []),
+            ]);
+            const failures = rollback.filter((item): item is PromiseRejectedResult => item.status === 'rejected');
+            if (failures.length) {
+              throw new AggregateError([error, ...failures.map(item => item.reason)],
+                `Registration failed: ${String(error)}. Restoring the previous library also failed: ${failures.map(item => String(item.reason)).join('; ')}`);
+            }
+            throw error;
+          }
         });
-        checkCurrent();
         return { ok: true, library_id: request.library_id, gateway_path: gatewayPath, ...result,
           guidance: 'The gateway is ready. Start a new task to discover it automatically; this task can search_local_skills now. Source Skills stay in their original folders.' };
       }
@@ -214,7 +252,8 @@ export function createLocalSkillLibraryTools(deps: LocalSkillLibraryDependencies
       }
       return fail('INVALID_ARGS', 'Unsupported library action.');
     } catch (error) {
-      if (!isCurrent()) return fail('CANCELLED', 'The account or task changed.');
+      // A failed rollback must remain visible even when cancellation initiated it.
+      if (!isCurrent() && !(error instanceof AggregateError)) return fail('CANCELLED', 'The account or task changed.');
       const code = (error as NodeJS.ErrnoException).code;
       return fail(code === 'ENOENT' ? 'NOT_FOUND' : code === 'MODEL_UNAVAILABLE' ? code : 'LOCAL_SKILL_LIBRARY_ERROR', error instanceof Error ? error.message : String(error));
     }

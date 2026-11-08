@@ -1,4 +1,5 @@
 import fs from 'node:fs/promises';
+import fsSync from 'node:fs';
 import { ok as assertOk } from 'node:assert/strict';
 import os from 'node:os';
 import path from 'node:path';
@@ -46,6 +47,121 @@ async function fixture(name: string) {
 }
 
 describe('native local Skill libraries', () => {
+  // Review 4507231398: failures after index publication must roll registration back.
+  // Unit: real callback/files, one injected commit-stage failure; exercise first and
+  // replacement registrations, including a gateway file created before a partial write.
+  it.each([false, true].flatMap(existing => ['config', 'mkdir', 'open', 'partial', 'cancel'].map(stage => ({ existing, stage }))))
+    ('preserves registration on $stage failure (existing=$existing)', async ({ existing, stage }) => {
+      const f = await fixture(`commit-${existing}-${stage}`);
+      if (existing) expect(await f.register()).toMatchObject({ ok: true });
+      const library = path.join(f.home, 'owner/skill-libraries/methods');
+      const files = ['library.json', 'index.json'].map(name => path.join(library, name));
+      const before = existing ? await Promise.all(files.map(file => fs.readFile(file, 'utf8'))) : [];
+      const replacement = path.join(f.home, 'replacement');
+      await fs.mkdir(replacement);
+      await fs.writeFile(path.join(replacement, 'SKILL.md'), '---\nname: audio\ndescription: Music production\n---\nAudio instructions\n');
+      const gateway = path.join(f.home, 'new-gateway');
+      const gatewayFile = path.join(gateway, 'SKILL.md');
+      const denied = () => Object.assign(new Error(`Injected ${stage} failure`), { code: 'EACCES' });
+      const rename = fs.rename.bind(fs), mkdir = fs.mkdir.bind(fs), open = fs.open.bind(fs);
+      const spies: Array<{ mockRestore(): void }> = [];
+      if (stage === 'config') spies.push(vi.spyOn(fs, 'rename').mockImplementation(async (...args) => {
+        if (String(args[1]) === files[0]) throw denied();
+        return rename(...args);
+      }));
+      if (stage === 'mkdir') spies.push(vi.spyOn(fs, 'mkdir').mockImplementation(async (...args) => {
+        if (String(args[0]) === gateway) throw denied();
+        return mkdir(...args);
+      }));
+      spies.push(vi.spyOn(fs, 'open').mockImplementation(async (...args) => {
+        if (String(args[0]) === gatewayFile && stage === 'open') throw denied();
+        const handle = await open(...args);
+        if (String(args[0]) === gatewayFile) {
+          const write = handle.writeFile.bind(handle);
+          spies.push(vi.spyOn(handle, 'writeFile').mockImplementation(async (...input) => {
+            if (stage === 'partial') { await write('partial'); throw denied(); }
+            await write(...input);
+            if (stage === 'cancel') f.state.current = false;
+          }));
+        }
+        return handle;
+      }));
+      try {
+        const result = await f.execute({ action: 'register', library_id: 'methods', sources: [replacement], gateway_path: gateway }, f.context);
+        expect(result).toMatchObject({ ok: false });
+      } finally { for (const spy of spies.reverse()) spy.mockRestore(); }
+      f.state.current = true;
+      for (let i = 0; i < files.length; i++) {
+        if (existing) expect(await fs.readFile(files[i], 'utf8')).toBe(before[i]);
+        else await expect(fs.stat(files[i])).rejects.toMatchObject({ code: 'ENOENT' });
+      }
+      await expect(fs.stat(gatewayFile)).rejects.toMatchObject({ code: 'ENOENT' });
+      if (!existing) expect(await f.register()).toMatchObject({ ok: true });
+      expect(await f.search('字幕')).toMatchObject({ ok: true, matches: [{ name: 'video' }] });
+    });
+
+  it('returns the committed registration if its task ends during lock release', async () => {
+    const f = await fixture('commit-unlock');
+    const unlink = fs.unlink.bind(fs);
+    const spy = vi.spyOn(fs, 'unlink').mockImplementation(async (...args) => {
+      await unlink(...args);
+      if (String(args[0]).endsWith('library.lock')) f.state.current = false;
+    });
+    try { expect(await f.register()).toMatchObject({ ok: true }); }
+    finally { spy.mockRestore(); }
+    f.state.current = true;
+    expect(await f.search('字幕')).toMatchObject({ ok: true, matches: [{ name: 'video' }] });
+  });
+
+  it('preserves an existing gateway when final registration validation cancels', async () => {
+    const f = await fixture('existing-gateway-cancel');
+    await f.register();
+    const gateway = path.join(f.home, '.agents/skills/cindy-skill-library-methods/SKILL.md');
+    const original = await fs.readFile(gateway, 'utf8');
+    const library = path.join(f.home, 'owner/skill-libraries/methods');
+    const config = await fs.readFile(path.join(library, 'library.json'), 'utf8');
+    const index = await fs.readFile(path.join(library, 'index.json'), 'utf8');
+    await f.put('audio', 'Music production');
+    const open = fs.open.bind(fs);
+    const spy = vi.spyOn(fs, 'open').mockImplementation(async (...args) => {
+      if (String(args[0]) === gateway) f.state.current = false;
+      return open(...args);
+    });
+    try { expect(await f.register()).toMatchObject({ errorCode: 'CANCELLED' }); }
+    finally { spy.mockRestore(); }
+    expect(await fs.readFile(gateway, 'utf8')).toBe(original);
+    expect(await fs.readFile(path.join(library, 'library.json'), 'utf8')).toBe(config);
+    expect(await fs.readFile(path.join(library, 'index.json'), 'utf8')).toBe(index);
+  });
+
+  it('reports rollback failures after cancellation while restoring the other files', async () => {
+    const f = await fixture('rollback-error');
+    await f.register();
+    const library = path.join(f.home, 'owner/skill-libraries/methods');
+    const configFile = path.join(library, 'library.json');
+    const indexFile = path.join(library, 'index.json');
+    const config = await fs.readFile(configFile, 'utf8');
+    await f.put('audio', 'Music production');
+    const gateway = path.join(f.home, 'new-gateway');
+    const open = fs.open.bind(fs), renameSync = fsSync.renameSync.bind(fsSync);
+    const openSpy = vi.spyOn(fs, 'open').mockImplementation(async (...args) => {
+      const handle = await open(...args);
+      if (String(args[0]) === path.join(gateway, 'SKILL.md')) f.state.current = false;
+      return handle;
+    });
+    const restoreSpy = vi.spyOn(fsSync, 'renameSync').mockImplementation((...args) => {
+      if (String(args[1]) === indexFile) throw Object.assign(new Error('Injected restore failure'), { code: 'EIO' });
+      return renameSync(...args);
+    });
+    try {
+      const result = await f.execute({ action: 'register', library_id: 'methods', sources: [f.source], gateway_path: gateway }, f.context);
+      expect(result).toMatchObject({ errorCode: 'LOCAL_SKILL_LIBRARY_ERROR', message: expect.stringContaining('Injected restore failure') });
+      expect(result).toMatchObject({ message: expect.stringContaining('The account or task changed') });
+      expect(await fs.readFile(configFile, 'utf8')).toBe(config);
+      await expect(fs.stat(path.join(gateway, 'SKILL.md'))).rejects.toMatchObject({ code: 'ENOENT' });
+    } finally { openSpy.mockRestore(); restoreSpy.mockRestore(); }
+  });
+
   // Registration must not advertise an unusable route. Unit: first malformed source,
   // then corrected registration; a foreign gateway must not alter an existing snapshot.
   // Existing failed-replacement coverage only checks the already-published config/index.

@@ -25,6 +25,7 @@ Agent 通过 `cindy_helper` 的 `skills` 类目调用 `configure_local_skill_lib
 任务中修改或新增技能后，调用 `configure_local_skill_library(action="refresh")` 更新索引。
 重新登记可调整来源；`action="remove"` 取消登记，保留原始技能及已安装入口，返回入口位置供管理。
 重新登记先完成新来源的索引构建，再替换配置；失败后原库仍可使用。刷新失败也不阻断已选技能的原文读取。
+入口安装也是登记的一部分；入口无法创建或写入时，宿主恢复原配置与索引，首次登记可修正目录后重新执行。
 
 未选择向量模型时直接使用关键词检索。登记时指定 `embedding_model` 可使用 Cindy 已配置的可用目录模型，
 由宿主调用现有向量服务与凭据。自定义供应商 API 还可以使用下方独立 CLI 接入。
