@@ -98,9 +98,6 @@
     "apps/desktop/src/main/__tests__/projectOrderStore.test.ts": {
       "resetModules": 1
     },
-    "apps/desktop/src/main/__tests__/providerImportWiring.test.ts": {
-      "sourceReads": 5
-    },
     "apps/desktop/src/main/__tests__/releaseNotesService.test.ts": {
       "resetModules": 1
     },

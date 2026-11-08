@@ -76,7 +76,10 @@ The Electron main process owns argument construction; see
 1. `waiting`    — polling sysinfo until `--pid` exits (60s timeout).
 2. `extracting` — unzipping `--zip` into a sibling `%TEMP%\…-extract-{ts}\`.
 3. `replacing`  — walking the extract tree and copying into `--app-dir/`.
-4. `launching`  — `CreateProcess` on `<app-dir>\<exe-name>` (detached).
+4. `launching`  — start `<app-dir>\<exe-name>` through `launch_detached`:
+   an elevated updater first uses the verified same-user, same-session,
+   unelevated desktop Shell; an ordinary updater or an unavailable Shell path
+   uses the original detached `CreateProcess` fallback.
 5. `done`       — `pgrep`-style verification passed; updater self-cleans.
 6. `failed`     — any step bubbled an error; lock file dropped, UI sticks.
 
@@ -102,10 +105,16 @@ After failure Cindy stays closed until the user chooses Retry or Close. Close
 and restarts the unmodified or restored Cindy once. Closing is blocked during an
 active install. A failed rollback never starts the partially restored app.
 
-The original permission probe, UAC handoff, temporary staging location and
-`launch_detached` startup are retained. This also retains the original inherited
-privileges after an elevated update. No token switching or ACL classification is
-performed. The existing seven-day temporary-directory cleanup still applies.
+The original permission probe, UAC handoff and temporary staging location are
+retained. `launch_detached` now checks the updater's actual token elevation and,
+when elevated, asks the existing desktop Shell to launch Cindy only after
+verifying that Shell belongs to the same user and login session and is not
+elevated. It does not switch accounts or modify token ACLs. If the Shell is
+unavailable or verification/launch fails, the original detached launch remains
+the fallback and may inherit the updater's elevation. Running elevated clients
+are supported by the common Windows deep-link handoff; see the authoritative
+[startup-permission rules](../../../docs/dev-rules/cindy-updater.md#windows-更新后的启动权限).
+The existing seven-day temporary-directory cleanup still applies.
 
 Retry controls retain the five-language WebView catalog and existing theme styles.
 
