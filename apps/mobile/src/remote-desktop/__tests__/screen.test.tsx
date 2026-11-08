@@ -18,6 +18,7 @@ import { retroDesktopViewport } from "../FoldDesktopSkin";
 import { RemoteDesktopControls } from "../RemoteDesktopControls";
 import { AppState } from "react-native";
 import { goBackGuarded } from "@/utils/backGuard";
+import { resolveMobileInvokeTimeoutMs } from "@/device-link/invokeTimeouts";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import { darkColors, lightColors } from "@/theme/tokens";
 
@@ -3793,9 +3794,9 @@ describe("remote desktop controls", () => {
     expect(requests().filter((r) => r.op === "start")).toHaveLength(1);
     expect(host.textContent).toContain("remoteDesktop.backgroundDisconnected");
   });
-  // Unit regression: a delayed relay reply blocked renewal for the default
-  // 30s RPC timeout, beyond the host's 12s lease. Existing cases rejected
-  // immediately; model a missing reply with the transport's supplied timeout.
+  // Unit regression: a missing heartbeat reply must not block renewal beyond the
+  // host's 12s lease. Existing cases rejected immediately; here the mock waits
+  // for the timeout the real mobile transport resolves for this request.
   it("renews before the host lease expires when a heartbeat reply is missing", async () => {
     await connect();
     const original = fixture.invoke.getMockImplementation()!;
@@ -3804,7 +3805,7 @@ describe("remote desktop controls", () => {
       if (args[2][0].op === "heartbeat" && ++heartbeats === 1) {
         return new Promise((_, reject) => setTimeout(
           () => reject({ code: "INVOKE_TIMEOUT" }),
-          args[3]?.timeoutMs ?? 30_000,
+          resolveMobileInvokeTimeoutMs(args[1], args[2]) ?? 30_000,
         ));
       }
       return original(...args);

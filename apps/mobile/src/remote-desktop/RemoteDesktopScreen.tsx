@@ -822,9 +822,6 @@ export function RemoteDesktopSession({
       const relay = () =>
         linkRef.current.invoke<T>(deviceId, REMOTE_DESKTOP_CHANNEL, [message], {
           preSend,
-          // A lost reply must not block the next 3s renewal beyond the host's
-          // 12s lease. Keep the normal timeout for operations that do real work.
-          ...(message.op === "heartbeat" ? { timeoutMs: 5_000 } : {}),
         });
       const lease = active.current;
       const hostCaps = capsRef.current;
