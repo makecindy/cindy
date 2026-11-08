@@ -80,7 +80,6 @@ export async function showDesktopChatMessage(payload: ChatMessageNotification, c
   const icon = thumbnail ? nativeImage.createFromBuffer(Buffer.from(thumbnail, 'base64')) : undefined;
   const notification = new Notification({ title: payload.conversationKind === 'direct' ? payload.senderName : [payload.groupName,payload.threadName].filter(Boolean).join(' · '),
     body: payload.conversationKind === 'direct' ? payload.preview : [payload.senderName,payload.preview].filter(Boolean).join(': '),
-    silent: payload.fromTeammate === true && shouldSilenceTaskNotification('done'),
     ...(icon && !icon.isEmpty() ? { icon } : devNotificationIcon ? { icon: devNotificationIcon } : {}),
   });
   liveNotifications.add(notification);
@@ -213,7 +212,7 @@ export function showDesktopSessionEvent(
       ...(payload.deviceId ? { deviceId: payload.deviceId } : {}),
       ...(payload.messageClientId ? { messageClientId: payload.messageClientId } : {}),
     });
-  }, payload.body, payload.teammate, payload.avatarJpeg);
+  }, payload.body, payload.teammate, payload.avatarJpeg, !sessionId);
 }
 
 /**
@@ -501,7 +500,7 @@ function assertValidSessionEventPayload(
 }
 
 /** 桌面 toast 分支 — 原实现保持不变,只是拆出来便于 channels 选择性执行。 */
-function showDesktopToast(safeTitle: string, kind: SessionEventKind, onClick: () => void, previewBody?: string, teammate = false, avatarJpeg?: string): boolean {
+function showDesktopToast(safeTitle: string, kind: SessionEventKind, onClick: () => void, previewBody?: string, teammate = false, avatarJpeg?: string, keepSystemSound = false): boolean {
   const body = previewBody ?? getSessionNotificationBody(kind);
 
   // Electron Notification 在某些 Linux 桌面环境下可能不可用——静默兜底。
@@ -515,7 +514,8 @@ function showDesktopToast(safeTitle: string, kind: SessionEventKind, onClick: ()
     title: teammate && safeTitle.trim().toLowerCase() === 'cindy'
       ? CLIENT_NOTIFICATION_NAME : `${CLIENT_NOTIFICATION_NAME} · ${safeTitle}`,
     body,
-    silent: shouldSilenceTaskNotification(kind),
+    // Without a session there is no island state change, so no Cindy sound will play.
+    silent: !keepSystemSound && shouldSilenceTaskNotification(kind),
     ...(avatar && !avatar.isEmpty() ? { icon: avatar } : devNotificationIcon ? { icon: devNotificationIcon } : {}),
   });
   liveNotifications.add(notif);

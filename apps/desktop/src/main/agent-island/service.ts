@@ -922,7 +922,7 @@ export class AgentIslandService {
     }
     for (const sessionId of result.baselineSessionIds) this.baselineSoundSessionIds.add(sessionId);
     if (result.changed) this.publish();
-    if (this.isEnabled()) return;
+    // ownsTaskAlert covers the island itself; only events it will not sound for reach the OS.
     for (const event of result.events) {
       if (this.ownsTaskAlert(event.kind)) continue;
       try {

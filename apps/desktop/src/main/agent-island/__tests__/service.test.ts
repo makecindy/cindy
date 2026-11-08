@@ -7609,6 +7609,22 @@ describe('Agent Island device sessions', () => {
     service.resetRuntimeState();
   });
 
+  // Unit regression: with the island on, a remote completion without a Cindy sound used to
+  // reach neither the island sound nor the OS notification.
+  it('hands remote completions to the OS when the island has no sound for them', async () => {
+    const { AgentIslandService } = await import('../service.js');
+    const publish = vi.fn(() => true);
+    const playSound = vi.fn(() => true);
+    const onDeviceSessionEvent = vi.fn();
+    const service = new AgentIslandService({ getMainWindow: () => null, nativeHost: { failed: false, publish, playSound }, onDeviceSessionEvent });
+    syncEnabledForTest(service, publish);
+    service.setSoundSettings({ enabled: true, sounds: { ...DEFAULT_AGENT_ISLAND_SOUND_SETTINGS.sounds, complete: { type: 'builtin', id: 'none' } } });
+    service.setDeviceSessions([deviceSession('running')]);
+    service.setDeviceSessions([deviceSession('completed')]);
+    expect(playSound).not.toHaveBeenCalled();
+    expect(onDeviceSessionEvent).toHaveBeenCalledWith(expect.objectContaining({ sessionId: 'remote-1', kind: 'done' }));
+  });
+
   it('hands observed transitions to desktop notifications when the island is off', async () => {
     const { AgentIslandService } = await import('../service.js');
     const publish = vi.fn(() => true);
