@@ -262,6 +262,18 @@ describe('ask_user 与 done 的时序', () => {
     expect(makerChatStore.getLightSnapshot(SESSION_ID).pendingAskUser?.requestId).toBe('rpc');
   });
 
+  it('keeps a collapsed protected async question collapsed when the next one arrives', () => {
+    emitAskUserRequest('async-1', [{ question: 'Original?' }], 'async');
+    makerChatStore.setAskUserDraft(SESSION_ID, {
+      requestId: 'async-1', currentIndex: 0, answers: {}, started: true, customInput: 'Typing',
+    });
+    makerChatStore.setAskUserViewerState(SESSION_ID, 'minimized');
+    emitAskUserRequest('async-2', [{ question: 'Next?' }], 'async');
+    const snapshot = makerChatStore.getLightSnapshot(SESSION_ID);
+    expect(snapshot.pendingAskUser?.requestId).toBe('async-1');
+    expect(snapshot.askUserViewerState).toBe('minimized');
+  });
+
   it('does not send a protected supplement after its task is purged', async () => {
     emitAskUserRequest('async-1', [{ question: 'Original?' }], 'async');
     makerChatStore.setAskUserDraft(SESSION_ID, {
