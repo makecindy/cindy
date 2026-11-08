@@ -56,6 +56,11 @@ export function prepareNativeCapabilities(root, {name = 'personal', region = 'gl
   const bundleId = personalBundleId(name, region);
   run('/usr/libexec/PlistBuddy',['-c',`Set :CFBundleIdentifier ${bundleId}`,path.join(app,'Contents/Info.plist')]);
   run('/usr/libexec/PlistBuddy',['-c','Set :CFBundleName Cindy Personal',path.join(app,'Contents/Info.plist')]);
+  // macOS prefers DisplayName over Name. Keep executable/helper and credential
+  // identities intact; branding must be sealed before signing the app.
+  run('/usr/libexec/PlistBuddy',['-c','Set :CFBundleDisplayName Cindy',path.join(app,'Contents/Info.plist')]);
+  run('/usr/libexec/PlistBuddy',['-c','Set :CFBundleIconFile cindy.icns',path.join(app,'Contents/Info.plist')]);
+  fs.copyFileSync(path.join(desktop,'resources/icon.icns'),path.join(app,'Contents/Resources/cindy.icns'));
   // Some developer Electron distributions omit resource seals. Seal the base
   // runtime before adding the separately sandbox-signed WidgetKit extension.
   run('codesign',['--force','--deep','--sign','-','--preserve-metadata=entitlements',app]);
@@ -80,7 +85,7 @@ export function prepareNativeCapabilities(root, {name = 'personal', region = 'gl
   const files = {};
   const collect = p => { for (const e of fs.readdirSync(p,{withFileTypes:true})) { const f=path.join(p,e.name); if(e.isDirectory())collect(f); else if(e.isFile())files[path.relative(root,f)]=digest(f); } };
   collect(resources); collect(extension); collect(packagedResources);
-  for(const f of [path.join(app,'Contents/Info.plist'),path.join(app,'Contents/Resources/cindy-live-activity-silent.caf')])files[path.relative(root,f)]=digest(f);
+  for(const f of [path.join(app,'Contents/Info.plist'),path.join(app,'Contents/Resources/cindy.icns'),path.join(app,'Contents/Resources/cindy-live-activity-silent.caf')])files[path.relative(root,f)]=digest(f);
   const report=save({state:'built',bundleId,sdk,developerDir:env.DEVELOPER_DIR || null,files});
   console.log('PERSONAL_NATIVE_CAPABILITY=live-activity:built'); return report;
 }

@@ -481,3 +481,10 @@ The personal app bundle identifier is stable for a configured name/region and di
 `com.github.Electron`, whose LaunchServices record can resolve to another development checkout.
 The profile and credential-helper identity remain separate. Changing from the generic identifier
 may require fresh macOS privacy permissions; never grant or bypass those automatically.
+
+Personal native bundles set `CFBundleDisplayName` to `Cindy` and use the repository's
+`icon.icns` before signing, so macOS does not prefer Electron's inherited display name
+and icon. The icon is included in the capability receipt. This display-only branding
+does not rename the executable/helpers, change the stable bundle identifier, or alter
+the profile / safeStorage identity. Existing checked candidates are immutable: prepare
+and check a new candidate to apply branding; do not patch a running or approved bundle.
