@@ -6725,7 +6725,9 @@ export function MessageStream({
                       const card = (
                         <div
                           key={item.key}
-                          data-render-item-key={item.key}
+                          // 伙伴会话里这层会被头像行包住，渲染项标识必须落在最外层，
+                          // 否则 measureViewportTop / findRenderItemElement 找不到这一行。
+                          {...(botReplyColumnSpacer ? {} : { 'data-render-item-key': item.key })}
                           className="flex flex-col gap-2"
                         >
                           <GhostToolCard
@@ -6753,7 +6755,7 @@ export function MessageStream({
                       // Keep the invisible avatar spacer used by prose and work groups
                       // so companion conversations do not let the card start at x=0.
                       return botReplyColumnSpacer
-                        ? withAssistantAvatar(botReplyColumnSpacer, card)
+                        ? withAssistantAvatar(botReplyColumnSpacer, card, item.key)
                         : card;
                     }
 
@@ -6995,10 +6997,18 @@ export function MessageStream({
  * bit-for-bit what they were. With one (a Bot conversation) the row becomes the
  * IM shape everyone already knows: avatar, then what they said.
  */
-export function withAssistantAvatar(avatar: ReactNode | undefined, bubble: ReactNode): ReactNode {
+export function withAssistantAvatar(
+  avatar: ReactNode | undefined,
+  bubble: ReactNode,
+  renderItemKey?: string,
+): ReactNode {
   if (!avatar) return bubble;
   return (
-    <div className="flex items-start gap-2.5">
+    <div
+      className="flex items-start gap-2.5"
+      // 传了 renderItemKey 时必须挂在最外层：视口补偿只扫消息列的直接子元素。
+      {...(renderItemKey ? { 'data-render-item-key': renderItemKey } : {})}
+    >
       <span className="mt-0.5 shrink-0">{avatar}</span>
       <div className="min-w-0 flex-1">{bubble}</div>
     </div>

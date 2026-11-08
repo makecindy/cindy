@@ -35,6 +35,7 @@ describe('render item identity across asynchronous cards', () => {
         root.render(withAssistantAvatar(
           createElement('span', { 'aria-hidden': true }, 'avatar'),
           createElement('div', { 'data-testid': 'plugin-result-card' }, 'result'),
+          'ghost-card-1',
         ));
       });
       const row = host.firstElementChild as HTMLElement;
@@ -43,6 +44,10 @@ describe('render item identity across asynchronous cards', () => {
       expect(row.lastElementChild?.className).toContain('min-w-0');
       expect(row.lastElementChild?.querySelector('[data-testid="plugin-result-card"]')?.textContent)
         .toBe('result');
+      // 渲染项标识必须落在消息列的直接子元素上，否则滚动到插件卡时锚点丢失。
+      expect(findRenderItemElement(host, 'ghost-card-1')).toBe(row);
+      expect(row.querySelector('[data-testid="plugin-result-card"]')?.hasAttribute('data-render-item-key'))
+        .toBe(false);
     } finally {
       act(() => root.unmount());
     }
