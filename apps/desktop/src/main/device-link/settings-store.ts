@@ -1,3 +1,4 @@
+import { withAvailabilityPolicyMutation } from './providerShareAvailabilityPolicy.js';
 /**
  * device-link-settings-store —— 跨设备远程控制的 main 端持久化设置。
  *
@@ -250,7 +251,7 @@ export function updateDeviceLinkSetting<K extends keyof DeviceLinkSettings>(
   updater: (current: DeviceLinkSettings[K]) => DeviceLinkSettings[K],
 ): Promise<DeviceLinkSettings[K]> {
   // 同进程写者先排队(异步 acquire 之间会交错),队内再抢跨进程锁
-  const task = writeChain.then(async () => {
+  const write = async () => {
     const file = settingsFilePath();
     const unlock = await acquireWriteLock(file);
     if (!unlock) {
@@ -273,7 +274,9 @@ export function updateDeviceLinkSetting<K extends keyof DeviceLinkSettings>(
       catch (error) { log.warn('device-link setting listener failed', { error: String(error) }); }
     }
     return written;
-  });
+  };
+  const task = writeChain.then(() => ['remoteControlEnabled', 'disabledControlDeviceIds', 'revokedControllers'].includes(key)
+    ? withAvailabilityPolicyMutation(undefined, write) : write());
   writeChain = task.catch(() => undefined); // 队列不因单次失败断链
   return task;
 }

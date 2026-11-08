@@ -11,6 +11,13 @@ import path from 'node:path';
 let userDataDir = '';
 
 vi.mock('electron', () => ({ app: { getPath: () => userDataDir } }));
+// Keep policy locking and settings I/O real, but scope all files to this fake owner.
+vi.mock('../../appSessionState.js', () => ({
+  activeOwnerScopeKey: () => 'settings-test-owner',
+  isAppSessionBoundaryPending: () => false,
+  ownerScopedUserDataPath: (...parts: string[]) => path.join(userDataDir, ...parts),
+}));
+vi.mock('../providerShareAvailabilityTransport.js', () => ({ disableShareAvailability: vi.fn() }));
 vi.mock('../../logger', () => ({
   createLogger: () => ({ debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() }),
 }));
