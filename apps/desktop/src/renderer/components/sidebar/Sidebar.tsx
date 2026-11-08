@@ -29,6 +29,7 @@ import { CHROME_ACTIONS_GEOMETRY } from '@/components/layout/chromeActionsGeomet
 import { SidebarTopNav } from './SidebarTopNav';
 import { UpdateBanner } from './UpdateBanner';
 import { DatabaseSizeWarningBanner } from './DatabaseSizeWarningBanner';
+import { NativeBuildBanner } from './NativeBuildBanner';
 import { UserInfoSection } from './UserInfoSection';
 
 /** 折叠态 rail 宽度（px）——78px 与 ContentHeader 的红绿灯让位(pl-[78px])对齐:
@@ -259,6 +260,7 @@ export function Sidebar({
           isCollapsed={(isCollapsed && !isPeek) || isRail}
           onOpenStorage={onOpenStorage}
         />
+        <NativeBuildBanner isCollapsed={(isCollapsed && !isPeek) || isRail} />
 
         {/* Bottom: User info (Shell-level, shared across all features)
           isCollapsed 在这里表达"窄布局"（rail 居中头像）；完全隐藏态 w-0 整体裁掉。 */}

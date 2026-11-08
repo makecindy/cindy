@@ -1056,6 +1056,8 @@ function devEnvEntries(env) {
     ['XDT_ISOLATED_AUTH_PROOF', env.XDT_ISOLATED_AUTH_PROOF],
     // CDP 端口覆写(bootstrap-electron 消费): 并行多开沙箱时给后起实例换端口。
     ['XDT_CDP_PORT', env.XDT_CDP_PORT],
+    // 在原生 Apple 芯片上模拟 Rosetta 转译，检查 Intel 包换装提示(arm64Translation 消费，仅源码运行)。
+    ['XDT_SIMULATE_ARM64_TRANSLATION', env.XDT_SIMULATE_ARM64_TRANSLATION],
     // A long-lived Terminal can retain a previous smoke run's environment.
     // Override its value even when this invocation did not request the smoke.
     ['CINDY_CUA_SMOKE', ['1', 'cursor-goal'].includes(env.CINDY_CUA_SMOKE) ? env.CINDY_CUA_SMOKE : '0'],

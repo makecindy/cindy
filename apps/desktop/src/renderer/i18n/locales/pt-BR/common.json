@@ -10031,6 +10031,8 @@
     "banner": {
       "title": "Atualizado para {{version}}",
       "subtitle": "Reiniciar para aplicar",
+      "nativeBuildTitle": "Versão para Apple silicon pronta",
+      "nativeBuildSubtitle": "Reinicie para trocar; suas tarefas e configurações são mantidas",
       "viewNotes": "Ver novidades",
       "viewNotesAria": "Ver novidades da versão {{version}}",
       "button": "Reiniciar",
@@ -10160,6 +10162,12 @@
       "description": "O banco de dados tem cerca de {{size}}, acima de {{threshold}} G. Considere fazer uma limpeza em Armazenamento.",
       "openSettings": "Abrir Armazenamento",
       "disable": "Não me lembrar"
+    },
+    "nativeBuild": {
+      "title": "Você está usando a versão para Intel",
+      "description": "Este Mac tem Apple silicon, e a versão para Intel fica bem mais lenta por rodar com tradução. Instale a versão para Apple silicon; seus dados são mantidos.",
+      "dismiss": "Ocultar por enquanto",
+      "download": "Baixar"
     },
     "horizontalTabbarAria": "Seletor da visualização principal",
     "tabs": {

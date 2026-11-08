@@ -802,7 +802,8 @@ describe('report boundary', () => {
         credentials: { token: 'test-only-secret' },
         email: 'fixture@example.invalid',
         nested: { 'x-api-key': 'another-test-only-secret' },
-        payload: randomBytes(100_000).toString('base64'),
+        // Hex keeps high-entropy chunking data without accidental key-shaped prefixes.
+        payload: randomBytes(100_000).toString('hex'),
       };
       for (const name of TRACE_ARTIFACT_NAMES)
         await writeFile(
