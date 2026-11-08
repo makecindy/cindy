@@ -59,14 +59,14 @@ export function RemoteTerminalSetup(props: TabKindBodyProps<TerminalState>) {
   const ticket = setup.phase === 'terminal' ? setup.ticket : undefined;
   const remote = useMemo(() => ({ ...context, ...(ticket ? { ticket } : {}) }), [context, ticket]);
   const prepare = useCallback(() => setSetup({ phase: 'prepare', connection: entry.remoteDraft?.contextKey === draftKey && entry.remoteDraft.submitted ? entry.remoteDraft.connection : undefined }), [entry, draftKey]);
-  const beginEditConnection = useCallback(() => {
+  const connectionDisposed = useCallback(() => {
     entry.remoteDraft = { contextKey: draftKey, submitted: false };
   }, [entry, draftKey]);
   const editConnection = useCallback(() => {
     setSetup({ phase: 'prepare', editing: true });
   }, []);
   if (setup.phase === 'terminal') {
-    return <TerminalSessionBody {...props} remote={remote} onPrepare={prepare} onBeginEditConnection={beginEditConnection} onEditConnection={editConnection} />;
+    return <TerminalSessionBody {...props} remote={remote} onPrepare={prepare} onConnectionDisposed={connectionDisposed} onEditConnection={editConnection} />;
   }
 
   return (

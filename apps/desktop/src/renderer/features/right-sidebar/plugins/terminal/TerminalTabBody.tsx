@@ -27,7 +27,7 @@ import { ErrorNotice } from '@/components/ui/error-notice';
 import { extractIpcError } from '@/utils/ipcError';
 import { RemoteTerminalSetup } from './RemoteTerminalSetup';
 import type { TabKindHostContext } from '../../types';
-import { getOrCreateXterm, type XtermEntry } from './lib/xtermPool';
+import { getOrCreateXterm, getXterm, type XtermEntry } from './lib/xtermPool';
 import { createTerminalFontController } from './lib/terminalFont';
 import { useTerminalFontSettings } from './lib/useTerminalFontSettings';
 import type {
@@ -79,9 +79,9 @@ function RemoteTerminalUnavailable() {
 }
 
 /** Local and SSH shells share the same xterm pool, IPC and tab lifecycle. */
-export function TerminalSessionBody({ state, ctx, active, shellVisible = true, remote, onBeginEditConnection, onEditConnection, onPrepare }: Props & {
+export function TerminalSessionBody({ state, ctx, active, shellVisible = true, remote, onConnectionDisposed, onEditConnection, onPrepare }: Props & {
   remote?: RemoteTerminalContext & { ticket?: string };
-  onBeginEditConnection?: () => void;
+  onConnectionDisposed?: () => void;
   onEditConnection?: () => void;
   onPrepare?: () => void;
 }) {
@@ -370,14 +370,18 @@ export function TerminalSessionBody({ state, ctx, active, shellVisible = true, r
 
   const editConnection = useCallback(async () => {
     if (!onEditConnection || restarting) return;
-    onBeginEditConnection?.();
     setRestarting(true);
     try {
       // Even an exited PTY remains registered in main until explicitly disposed.
       const entry = entryRef.current;
-      if (!entry) return;
+      if (!entry || entry.closing) return;
       await window.electronAPI.terminal.dispose(tabId);
+      if (getXterm(tabId) !== entry) return;
       entry.ptyAttached = false;
+      if (entry.closing) return;
+      // Commit pooled edit intent only after release succeeds, including when
+      // switching tasks unmounted this body while disposal was pending.
+      onConnectionDisposed?.();
       if (!aliveRef.current) return;
       onEditConnection();
       patchState({ created: false, exited: null });
@@ -386,7 +390,7 @@ export function TerminalSessionBody({ state, ctx, active, shellVisible = true, r
     } finally {
       if (aliveRef.current) setRestarting(false);
     }
-  }, [onBeginEditConnection, onEditConnection, restarting, tabId, patchState]);
+  }, [onConnectionDisposed, onEditConnection, restarting, tabId, patchState]);
 
   // 渲染:slot 撑满,exited / runtimeError 在上面叠一层 overlay
   return (

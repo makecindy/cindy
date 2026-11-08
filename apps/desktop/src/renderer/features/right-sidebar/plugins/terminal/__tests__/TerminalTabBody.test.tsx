@@ -55,11 +55,12 @@ vi.mock('../lib/xtermPool', async (importOriginal) => ({
     });
     return entry;
   },
-  getXterm: () => entry,
+  getXterm: vi.fn(() => entry),
   disposeXterm: () => { entry.remoteDraft = undefined; },
 }));
 
 import { TerminalTabBody } from '../TerminalTabBody';
+import { getXterm } from '../lib/xtermPool';
 import { TERMINAL_RENDERER_INSTANCE_ID } from '../index';
 import { toast } from '@/lib/toast';
 import { getSessionDeviceId } from '@/features/device-link/remoteProjectsStore';
@@ -92,6 +93,7 @@ function makeContext(overrides: Partial<TabKindHostContext> = {}): TabKindHostCo
 
 beforeEach(() => {
   vi.mocked(getSessionDeviceId).mockReset();
+  vi.mocked(getXterm).mockReset().mockReturnValue(entry as unknown as NonNullable<ReturnType<typeof getXterm>>);
   fit.mockClear();
   proposeDimensions.mockClear();
   resize.mockClear();
@@ -926,6 +928,120 @@ describe('TerminalTabBody remote ownership', () => {
     expect(screen.getByText('rightSidebar.terminal.processExited')).toBeTruthy();
     expect(entry.ptyAttached).toBe(true);
     expect(window.electronAPI.terminal.create).toHaveBeenCalledOnce();
+  });
+
+  // PR8881 PRRT_kwDOTgdRUs602mMT: production edit callbacks and remounts must
+  // retain the old PTY after rejected disposal. Existing coverage only tested
+  // mounted success. Unit tier: deferred IPC, no real SSH or account state.
+  it.each(['mounted', 'unmounted', 'remounted'] as const)('retains the old connection after edit disposal rejects while %s, then permits release retry', async (timing) => {
+    const api = window.electronAPI.terminal;
+    let registeredHost: string | undefined = 'old-host';
+    let savedHost = 'old-host';
+    const usedHosts: string[] = [];
+    vi.mocked(api.create).mockImplementation(async ({ remote }) => {
+      if (!registeredHost) {
+        if (!remote?.ticket) throw new Error('[PRECONDITION_FAILED] prepare');
+        registeredHost = savedHost;
+      }
+      usedHosts.push(registeredHost);
+      vi.mocked(api.onExit).mock.calls.at(-1)![0]({ id: 'terminal-1', exit: { code: 255, signal: null } });
+      return { shellId: 'sh', shellDisplayName: 'SSH', pid: 1 };
+    });
+    vi.mocked(api.describeRemote).mockImplementation(async ({ connection }) => {
+      if (connection) savedHost = connection.host;
+      return { context: { sessionId: 'session-1' }, target: { key: 'target', label: 'Host', cwd: '/remote' }, connection: { host: savedHost }, candidates: [], ticket: 'prepared-ticket' };
+    });
+    let rejectDispose!: (error: Error) => void;
+    let finishDispose!: () => void;
+    vi.mocked(api.dispose)
+      .mockImplementationOnce(() => new Promise((_, reject) => { rejectDispose = reject; }))
+      .mockImplementationOnce(() => new Promise(resolve => { finishDispose = () => { registeredHost = undefined; resolve(); }; }));
+    const ctx = makeContext({ deviceLinkDeviceId: 'device-1' });
+    const state = { created: true, exited: { code: 255, signal: null }, title: '', shellId: '', shellDisplayName: '' };
+    let view = render(<TerminalTabBody state={state} ctx={ctx} active />);
+    await act(async () => {});
+    fireEvent.click(screen.getByText('rightSidebar.terminal.remote.editConnection'));
+    if (timing !== 'mounted') view.unmount();
+    if (timing === 'remounted') {
+      view = render(<TerminalTabBody state={state} ctx={ctx} active />);
+      await act(async () => {});
+      expect(screen.queryByLabelText('rightSidebar.terminal.remote.host')).toBeNull();
+    }
+    await act(async () => { rejectDispose(new Error('[PERMISSION_DENIED] Temporary account boundary')); });
+    if (timing !== 'unmounted') view.unmount();
+    view = render(<TerminalTabBody state={state} ctx={ctx} active />);
+    await act(async () => {});
+    expect(screen.queryByLabelText('rightSidebar.terminal.remote.host')).toBeNull();
+    expect(api.describeRemote).not.toHaveBeenCalled();
+    expect(savedHost).toBe('old-host');
+    expect(usedHosts.every(host => host === 'old-host')).toBe(true);
+    fireEvent.click(screen.getByText('rightSidebar.terminal.remote.editConnection'));
+    expect(api.dispose).toHaveBeenCalledTimes(2);
+    expect(screen.queryByLabelText('rightSidebar.terminal.remote.host')).toBeNull();
+    await act(async () => { finishDispose(); });
+    fireEvent.change(await screen.findByLabelText('rightSidebar.terminal.remote.host'), { target: { value: 'new-host' } });
+    fireEvent.click(screen.getByText('rightSidebar.terminal.remote.connect'));
+    await act(async () => {});
+    expect(savedHost).toBe('new-host');
+    expect(usedHosts.at(-1)).toBe('new-host');
+  });
+
+  it.each(['unmounted', 'remounted', 'closing', 'disposed', 'replaced'] as const)('handles confirmed edit disposal after becoming %s', async (timing) => {
+    const api = window.electronAPI.terminal;
+    vi.mocked(api.create).mockResolvedValue({ shellId: 'sh', shellDisplayName: 'SSH', pid: 1 });
+    let finishDispose!: () => void;
+    vi.mocked(api.dispose).mockImplementationOnce(() => new Promise(resolve => { finishDispose = resolve; }));
+    const ctx = makeContext({ deviceLinkDeviceId: 'device-1' });
+    const state = { created: true, exited: { code: 255, signal: null }, title: '', shellId: '', shellDisplayName: '' };
+    const view = render(<TerminalTabBody state={state} ctx={ctx} active />);
+    await act(async () => {});
+    fireEvent.click(screen.getByText('rightSidebar.terminal.remote.editConnection'));
+    view.unmount();
+    if (timing === 'closing') entry.closing = true;
+    if (timing === 'disposed') vi.mocked(getXterm).mockReturnValue(undefined);
+    if (timing === 'replaced') vi.mocked(getXterm).mockReturnValue({ ...entry } as unknown as NonNullable<ReturnType<typeof getXterm>>);
+    const remounted = timing === 'remounted' ? render(<TerminalTabBody state={state} ctx={ctx} active />) : undefined;
+    await act(async () => {});
+    expect(screen.queryByLabelText('rightSidebar.terminal.remote.host')).toBeNull();
+    vi.mocked(ctx.patchState).mockClear();
+    await act(async () => { finishDispose(); });
+    expect(ctx.patchState).not.toHaveBeenCalled();
+    if (timing === 'closing' || timing === 'disposed' || timing === 'replaced') {
+      expect(entry.remoteDraft).toBeUndefined();
+      expect(api.describeRemote).not.toHaveBeenCalled();
+    } else {
+      remounted?.unmount();
+      render(<TerminalTabBody state={state} ctx={ctx} active />);
+      expect(await screen.findByLabelText('rightSidebar.terminal.remote.host')).toBeTruthy();
+      expect(api.create).toHaveBeenCalledTimes(timing === 'remounted' ? 2 : 1);
+    }
+  });
+
+  it('recovers on close rollback after edit disposal successfully releases the retained PTY', async () => {
+    const api = window.electronAPI.terminal;
+    vi.mocked(api.create).mockResolvedValueOnce({ shellId: 'sh', shellDisplayName: 'SSH', pid: 1 });
+    let finishEdit!: () => void;
+    let rejectClose!: (error: Error) => void;
+    vi.mocked(api.dispose)
+      .mockImplementationOnce(() => new Promise(resolve => { finishEdit = resolve; }))
+      .mockImplementationOnce(() => new Promise((_, reject) => { rejectClose = reject; }));
+    const ctx = makeContext({ deviceLinkDeviceId: 'device-1' });
+    const state = { created: true, exited: { code: 255, signal: null }, title: '', shellId: '', shellDisplayName: '' };
+    const view = render(<TerminalTabBody state={state} ctx={ctx} active />);
+    await act(async () => {});
+    fireEvent.click(screen.getByText('rightSidebar.terminal.remote.editConnection'));
+    const closing = getTabKind('terminal')!.onBeforeClose!(state, { tabId: ctx.tabId, sessionId: ctx.sessionId });
+    view.unmount();
+    render(<TerminalTabBody state={state} ctx={ctx} active />);
+    await act(async () => {});
+    await act(async () => { finishEdit(); });
+    expect(entry.ptyAttached).toBe(false);
+    expect(entry.remoteDraft).toBeUndefined();
+    expect(api.create).toHaveBeenCalledOnce();
+    await act(async () => { rejectClose(new Error('close failed')); await closing; });
+    expect(entry.closing).toBe(false);
+    expect(api.create).toHaveBeenCalledTimes(2);
+    expect(await screen.findByLabelText('rightSidebar.terminal.remote.host')).toBeTruthy();
   });
 
   it('disposes the exited PTY before editing and creating a new remote connection', async () => {
