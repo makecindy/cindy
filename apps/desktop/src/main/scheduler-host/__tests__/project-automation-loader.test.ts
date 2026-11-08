@@ -95,6 +95,38 @@ describe('project automation import approval', () => {
       await fs.rm(dir, { recursive: true, force: true });
     }
   });
+
+  // User decision (2026-11-08): a teammate's project is Cindy's own folder; its automations never ask for import.
+  it('syncs a teammate project without asking', async () => {
+    const root = await fs.mkdtemp(path.join(tmpdir(), 'cindy-teammate-project-'));
+    const dir = path.join(root, 'owners', 'ab12', 'bots', 'bot-1', 'workspace');
+    try {
+      const stored: Schedule[] = [];
+      const create = vi.fn(async (input: CreateScheduleInput) => {
+        const saved = { ...projectSchedule({ desktop: true, feishu: false }), ...input, id: 'teammate-schedule' } as Schedule;
+        stored.push(saved);
+        return saved;
+      });
+      const loader = new ProjectAutomationLoader({
+        scheduler: { create, update: vi.fn(), delete: vi.fn() } as unknown as ConstructorParameters<typeof ProjectAutomationLoader>[0]['scheduler'],
+        storage: { list: async () => stored } as ConstructorParameters<typeof ProjectAutomationLoader>[0]['storage'],
+        getDb: () => ({
+          select: () => ({ from: () => ({ where: () => ({ limit: async () => [] }) }) }),
+          insert: () => ({ values: () => ({ onConflictDoUpdate: async () => {} }) }),
+        }) as unknown as ReturnType<ConstructorParameters<typeof ProjectAutomationLoader>[0]['getDb']>,
+        logger: { warn: vi.fn(), debug: vi.fn() },
+      });
+      const file = path.join(dir, ...PROJECT_AUTOMATION_REL_SEGMENTS);
+      await fs.mkdir(path.dirname(file), { recursive: true });
+      await fs.writeFile(file, JSON.stringify({ version: 1, schedules: [projectConfig()] }));
+      const result = await loader.reconcile(dir);
+      expect(result.pendingImport).toBeUndefined();
+      expect(result).toMatchObject({ inserted: 1 });
+      expect(create).toHaveBeenCalledTimes(1);
+    } finally {
+      await fs.rm(root, { recursive: true, force: true });
+    }
+  });
 });
 
 function projectConfig(overrides: Partial<ProjectScheduleConfig> = {}): ProjectScheduleConfig {

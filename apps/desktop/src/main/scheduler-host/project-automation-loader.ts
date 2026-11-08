@@ -17,6 +17,7 @@ import { projectAutomationConsents, schedules, sessions } from '../localDb/schem
 import { projectAutomationConsentToRow } from '../localDb/mapper';
 import { PROJECT_AUTOMATION_REL_SEGMENTS } from '../../shared/projectAutomationPaths';
 import { migrateLegacyXdmakerDir } from '../utils/legacyXdmakerMigration';
+import { isTeammateProjectPath } from '@cindy/maker-shared/teammate-project';
 import type { DrizzleScheduleStorage, SchedulerDrizzleDb } from './storage';
 
 /**
@@ -199,7 +200,8 @@ export class ProjectAutomationLoader {
       const current = byConfigId.get(config.id);
       return !current || schedulesDiffer(current, config, workingDir);
     });
-    if (changed && approvedHash !== read.configHash) {
+    // A teammate's project is Cindy's own folder, not something brought in from elsewhere: sync it directly.
+    if (changed && approvedHash !== read.configHash && !isTeammateProjectPath(workingDir)) {
       const pendingImport = {
         workingDir, configHash: read.configHash, schedules: read.schedules,
         removedNames: removed.map((s) => s.name),
