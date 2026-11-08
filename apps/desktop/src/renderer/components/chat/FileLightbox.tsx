@@ -9,6 +9,8 @@ import { DropdownMenuItem } from '@/components/ui/dropdown-menu';
 import { Spinner } from '@/components/ui/spinner';
 import { FileBodyView } from '@/features/cc-agent/workdir-browse/FileBodyView';
 import { useFileContent } from '@/features/cc-agent/workdir-browse/hooks/useFileContent';
+import { isImagePath } from '@/features/cc-agent/workdir-browse/lib/imageExt';
+import { isPdfPath } from '@/features/cc-agent/workdir-browse/lib/pdfExt';
 import { toLocalFileUrl } from '@/lib/localPathResolver';
 import { fetchChatFileToCache } from '@/lib/remoteFileOpen';
 import { isRemoteFileOrigin } from '@/lib/sessionFileOrigin';
@@ -18,7 +20,14 @@ import {
   saveChatAttachmentWithToasts,
 } from '@/lib/chatAttachmentSave';
 import { useChatSessionFile } from './ChatSessionFileContext';
-import { PreviewHeader, PreviewFooter } from './PreviewChrome';
+import {
+  PREVIEW_PANEL_CLASS,
+  PREVIEW_PANEL_STYLE,
+  PreviewHeader,
+  PreviewFooter,
+  PreviewScrim,
+  previewCompactPanelStyle,
+} from './PreviewChrome';
 import { ImageLightbox } from './ImageLightbox';
 import { VideoLightbox } from './VideoLightbox';
 import { ModelLightbox } from './ModelLightbox';
@@ -90,6 +99,15 @@ export function FileLightbox({
     document.addEventListener('keydown', key);
     return () => document.removeEventListener('keydown', key);
   }, [close, kind, local]);
+  // 媒体走各自查看器,不读内容;其余文件在这里读一次,同时决定预览窗大小。
+  const fileLocation =
+    local && !['image', 'video', 'audio', 'model'].includes(kind) ? splitLocalPath(local) : null;
+  const { content } = useFileContent(fileLocation?.workdir ?? '', fileLocation?.relPath ?? '');
+  // 打不开的文件(压缩包、可执行文件等)只有文件信息和打开方式,用小窗,不占大半个窗口。
+  const unrenderable =
+    content.kind === 'binary' &&
+    !isImagePath(content.stat.relPath) &&
+    !isPdfPath(content.stat.relPath);
   if (local && kind === 'image')
     return (
       <ImageLightbox
@@ -117,6 +135,8 @@ export function FileLightbox({
       <ModelLightbox filename={name} source={{ kind: 'local', absPath: local }} onClose={close} />
     );
   return createPortal(
+    <>
+    <PreviewScrim onClose={close} />
     <FocusScope
       onUnmountAutoFocus={restorePreviewFocus}
       trapped
@@ -133,11 +153,18 @@ export function FileLightbox({
         role="dialog"
         aria-modal="true"
         aria-label={name}
-        className="fixed inset-0 z-[9999] bg-[var(--surface)] text-[var(--text-primary)] outline-none"
+        className={`z-[9999] text-[var(--text-primary)] outline-none ${PREVIEW_PANEL_CLASS}`}
+        style={unrenderable ? previewCompactPanelStyle(collection ? 64 : 0) : PREVIEW_PANEL_STYLE}
       >
         <div className={`absolute inset-0 pt-16 ${collection && kind !== 'pdf' ? 'pb-16' : ''}`}>
-          {local ? (
-            <LocalFileBody path={local} sessionId={ctx.sessionId} />
+          {fileLocation ? (
+            <FileBodyView
+              workdir={fileLocation.workdir}
+              relPath={fileLocation.relPath}
+              content={content}
+              sessionId={ctx.sessionId}
+              allowEdit={false}
+            />
           ) : (
             <div className="flex h-full flex-col items-center justify-center gap-4">
               {failed ? (
@@ -192,23 +219,13 @@ export function FileLightbox({
           }
         />
       </div>
-    </FocusScope>,
+    </FocusScope>
+    </>,
     document.body,
   );
 }
 
-function LocalFileBody({ path, sessionId }: { path: string; sessionId?: string }) {
+function splitLocalPath(path: string) {
   const split = Math.max(path.lastIndexOf('/'), path.lastIndexOf('\\'));
-  const workdir = split === 0 ? '/' : path.slice(0, split);
-  const relPath = path.slice(split + 1);
-  const { content } = useFileContent(workdir, relPath);
-  return (
-    <FileBodyView
-      workdir={workdir}
-      relPath={relPath}
-      content={content}
-      sessionId={sessionId}
-      allowEdit={false}
-    />
-  );
+  return { workdir: split === 0 ? '/' : path.slice(0, split), relPath: path.slice(split + 1) };
 }

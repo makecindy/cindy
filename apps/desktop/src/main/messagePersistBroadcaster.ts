@@ -30,7 +30,10 @@ import { readTaskResultsForReply } from './botTaskReplyResults.js';
  * 事件循环。调用方需保证"先 broadcastToAllWindows 再让本模块入队落库"。
  */
 
+import { parseOutputLimitDetails, type OutputLimitDetails } from '@cindy/maker-shared';
+
 import { createId } from '@paralleldrive/cuid2';
+import { assistantSamplingSettlements, type PendingSamplingSettlement } from './assistantSamplingSettlement.js';
 
 import { BrowserWindow } from 'electron';
 import { desc, eq } from 'drizzle-orm';
@@ -212,6 +215,54 @@ interface AssistantBlock {
 const assistantBlocks = new Map<string, AssistantBlock>();
 /** Exact provider item → durable row links, scoped to the current product turn. */
 const assistantItemPersistIds = new Map<string, Map<string, string>>();
+/** Native items whose response can still be invalidated by a sampling disconnect. */
+const pendingSamplingItems = new Map<string, Set<string>>();
+/** A closed native runtime no longer owns an unresolved item from its old history. */
+const samplingRuntimeIds = new Map<string, string>();
+export function getAssistantSamplingRuntimeId(sessionId: string): string | null {
+  return samplingRuntimeIds.get(sessionId) ?? null;
+}
+/** Persist the outcome before enqueueing its DB patch, so close/account switch
+ * cannot erase the only proof that an item was accepted or failed. */
+function queueSamplingMetaPatch(sessionId: string, persistId: string, patch: Record<string, unknown>): void {
+  queueSamplingSettlement(assistantSamplingSettlements.put({ sessionId, persistId, patch }));
+}
+
+function queueSamplingSettlement(entry: PendingSamplingSettlement): void {
+  enqueueWrite(`assistant_sampling_meta:${entry.sessionId}:${entry.persistId}`, async ownerScope => {
+    const patched = await patchMessageAgentMetaWithResult(entry.sessionId, entry.persistId, entry.patch);
+    // A resolved null means the row was removed. A rejection leaves the intent intact.
+    assistantSamplingSettlements.acknowledge(entry);
+    if (patched) await broadcastMessageAgentMetaUpdate(entry.sessionId, entry.persistId, ownerScope);
+  });
+}
+
+/** Replay only the active owner's durable intents, including after process restart. */
+export async function flushAssistantSamplingMetadata(sessionId: string): Promise<boolean> {
+  await drainPersistQueue();
+  for (const entry of assistantSamplingSettlements.list(sessionId)) queueSamplingSettlement(entry);
+  await drainPersistQueue();
+  return assistantSamplingSettlements.list(sessionId).length === 0;
+}
+
+/** Release only SDK-proven accepted items (or the remaining items at a terminal boundary). */
+export function onAssistantSamplingAccepted(sessionId: string, itemIds?: readonly string[]): void {
+  const pending = pendingSamplingItems.get(sessionId);
+  if (!pending) return;
+  const links = assistantItemPersistIds.get(sessionId);
+  for (const itemId of itemIds ?? [...pending]) {
+    if (!pending.delete(itemId)) continue;
+    const persistId = links?.get(itemId);
+    if (!persistId) continue;
+    const block = assistantBlocks.get(sessionId);
+    if (block?.persistId === persistId) {
+      block.agentMeta = { ...(block.agentMeta ?? lastAgentMetaBySession.get(sessionId)), samplingAttemptPending: false };
+    } else {
+      queueSamplingMetaPatch(sessionId, persistId, { samplingAttemptPending: false });
+    }
+  }
+  if (!pending.size) pendingSamplingItems.delete(sessionId);
+}
 
 /** Mark an SDK-proven failed sampling attempt without changing or deleting its prose. */
 export function onAssistantAttemptFailure(sessionId: string, data: unknown): void {
@@ -233,17 +284,14 @@ export function onAssistantAttemptFailure(sessionId: string, data: unknown): voi
       ...(typeof message === 'string' ? { error: redactSensitiveText(message) } : {}),
     };
     links.delete(itemId);
+    pendingSamplingItems.get(sessionId)?.delete(itemId);
     const block = assistantBlocks.get(sessionId);
     if (block?.persistId === persistId) {
-      block.agentMeta = { ...block.agentMeta, failedSamplingAttempt: marker, turnCompleted: false };
+      block.agentMeta = { ...(block.agentMeta ?? lastAgentMetaBySession.get(sessionId)), failedSamplingAttempt: marker, samplingAttemptPending: false, turnCompleted: false };
       flushAssistantBlock(sessionId);
     } else {
-      enqueueWrite(`assistant_attempt_failed:${sessionId}:${persistId}`, async (ownerScope) => {
-        const patched = await patchMessageAgentMetaWithResult(sessionId, persistId, {
-          failedSamplingAttempt: marker,
-          turnCompleted: false,
-        });
-        if (patched) await broadcastMessageAgentMetaUpdate(sessionId, persistId, ownerScope);
+      queueSamplingMetaPatch(sessionId, persistId, {
+        failedSamplingAttempt: marker, samplingAttemptPending: false, turnCompleted: false,
       });
     }
     if (lastTopLevelAssistantPersistIdBySession.get(sessionId) === persistId) {
@@ -391,6 +439,7 @@ export function noteSessionClearBoundary(sessionId: string, clearedAt: string | 
   const current = clearBoundaryBySession.get(sessionId);
   if (current === undefined || parsed > current) {
     assistantItemPersistIds.delete(sessionId);
+    pendingSamplingItems.delete(sessionId);
     clearSessionThinkingSnapshots(sessionId);
     clearBoundaryBySession.set(sessionId, parsed);
     sealedAssistantLateFinalBySession.delete(sessionId);
@@ -431,6 +480,19 @@ type OwnerScope = ReturnType<typeof broadcastTap.captureDataOwnerBroadcastScope>
 const dbAgentKindBySession = new Map<string, 'cc' | 'codex' | 'pi'>();
 
 export function noteSessionAgentKind(sessionId: string, dbAgentKind: 'cc' | 'codex' | 'pi'): void {
+  // Called once per newly bound Session instance; beginBinding filters repeat wiring.
+  // A replacement can have the same business id AND agent kind, but owns no old items.
+  if (dbAgentKindBySession.get(sessionId) === 'codex' || dbAgentKind === 'codex') {
+    flushAssistantBlock(sessionId); // Preserve old buffered prose with its old pending epoch.
+    assistantItemPersistIds.delete(sessionId);
+    pendingSamplingItems.delete(sessionId);
+    lastBoundaryFlushedAssistantBySession.delete(sessionId);
+    sealedAssistantLateFinalBySession.delete(sessionId);
+    lastPersistedMsgBySession.delete(sessionId);
+    lastAssistantPersistIdBySession.delete(sessionId);
+    lastTopLevelAssistantPersistIdBySession.delete(sessionId);
+  }
+  samplingRuntimeIds.set(sessionId, createId());
   dbAgentKindBySession.set(sessionId, dbAgentKind);
 }
 
@@ -872,7 +934,10 @@ function enqueuePersistAssistant(
     role: 'assistant',
     content,
     // Add identity only after the caller has resolved model/usage fallbacks.
-    agentMeta: agentMessageId ? { ...agentMeta, agentMessageId } : agentMeta ?? null,
+    agentMeta: agentMessageId ? { ...agentMeta, agentMessageId,
+      ...(pendingSamplingItems.get(sessionId)?.has(agentMessageId)
+        ? { samplingAttemptPending: { runtimeId: samplingRuntimeIds.get(sessionId)! } } : {}),
+    } : agentMeta ?? null,
     createdAt,
   });
   notePersistedMessage(sessionId, 'assistant', clientId, content, agentMessageId);
@@ -2189,6 +2254,7 @@ function releaseUnfinalizedThinkingSnapshots(sessionId: string): void {
  */
 export function resetTurnPersistState(sessionId: string): void {
   assistantItemPersistIds.delete(sessionId);
+  pendingSamplingItems.delete(sessionId);
   // Event-stream completion is not a persistence barrier. Snapshots that already
   // saw `final` survive until their queued write settles (or an explicit
   // history/owner cleanup); blocks that never saw one belong to a dead attempt —
@@ -2260,6 +2326,15 @@ export function onAssistantTextEvent(
   agentMeta: AgentMeta | null,
   turnScope?: 'turn' | 'background',
 ): string | undefined {
+  if (getSessionDbAgentKind(sessionId) === 'codex' && turnScope !== 'background' && typeof data.agentMessageId === 'string') {
+    const itemId = data.agentMessageId;
+    let pending = pendingSamplingItems.get(sessionId);
+    const accepted = assistantItemPersistIds.get(sessionId)?.has(itemId) && !pending?.has(itemId);
+    if (!accepted) {
+      if (!pending) { pending = new Set(); pendingSamplingItems.set(sessionId, pending); }
+      pending.add(itemId);
+    }
+  }
   const persistId = assembleAssistantTextEvent(sessionId, data, agentMeta, turnScope);
   if (persistId && typeof data.agentMessageId === 'string' && turnScope !== 'background') {
     let links = assistantItemPersistIds.get(sessionId);
@@ -2803,7 +2878,7 @@ function lookupTurnErrorPersistId(
 export function reserveTurnErrorPersistId(
   sessionId: string,
   data:
-    | { message?: unknown; reason?: unknown; sdkError?: unknown; toolLoop?: unknown }
+    | { message?: unknown; reason?: unknown; sdkError?: unknown; toolLoop?: unknown; outputLimit?: unknown }
     | null
     | undefined,
   agentMeta: AgentMeta | null = null,
@@ -2842,7 +2917,7 @@ export function whenTurnErrorPersisted(sessionId: string, persistId: string): Pr
 export function onTurnErrorEvent(
   sessionId: string,
   data:
-    | { message?: unknown; reason?: unknown; sdkError?: unknown; toolLoop?: unknown }
+    | { message?: unknown; reason?: unknown; sdkError?: unknown; toolLoop?: unknown; outputLimit?: unknown }
     | null
     | undefined,
   agentMeta: AgentMeta | null = null,
@@ -2912,7 +2987,7 @@ export function onTurnErrorEvent(
 /** error 行 content：{ message, reason?, sdkError?, toolLoop?, providerId? }，在入队前同步取值。 */
 function buildTurnErrorContent(
   sessionId: string,
-  data: { reason?: unknown; sdkError?: unknown; toolLoop?: unknown } | null | undefined,
+  data: { reason?: unknown; sdkError?: unknown; toolLoop?: unknown; outputLimit?: unknown } | null | undefined,
   message: string,
 ): Record<string, unknown> {
   const content: Record<string, unknown> = { message };
@@ -2921,7 +2996,9 @@ function buildTurnErrorContent(
     content.sdkError = redactSensitiveText(data.sdkError);
   }
   const toolLoop = parseToolLoopErrorDetails(data?.toolLoop);
+  const outputLimit = parseOutputLimitDetails(data?.outputLimit);
   if (toolLoop) content.toolLoop = toolLoop satisfies ToolLoopErrorDetails;
+  if (outputLimit) content.outputLimit = outputLimit satisfies OutputLimitDetails;
   // 错误来源 provider 的**同步**快照(session-provider-store 内存态):错误分类必须
   // 绑定到错误发生时的 provider —— session.providerId 可在任务中途切换并持久化,
   // 恢复历史错误时用它会把别家 provider 的 insufficient_quota 误判成 Cindy AI 余额
@@ -3032,7 +3109,7 @@ export interface DeferredTurnErrorRow {
 export function captureDeferredTurnError(
   sessionId: string,
   data:
-    | { message?: unknown; reason?: unknown; sdkError?: unknown; toolLoop?: unknown }
+    | { message?: unknown; reason?: unknown; sdkError?: unknown; toolLoop?: unknown; outputLimit?: unknown }
     | null
     | undefined,
   agentMeta: AgentMeta | null = null,
@@ -3079,7 +3156,9 @@ export function clearCodexPlanRowsForSession(sessionId: string): void {
 }
 
 export function clearSessionPersistState(sessionId: string): void {
+  samplingRuntimeIds.delete(sessionId);
   assistantItemPersistIds.delete(sessionId);
+  pendingSamplingItems.delete(sessionId);
   clearSessionThinkingSnapshots(sessionId);
   clearCodexPlanRowsForSession(sessionId);
   assistantBlocks.delete(sessionId);

@@ -218,6 +218,8 @@ export { categorize, CATEGORY_LABEL_KEY, type ModelCategory } from './sourceSwit
 export interface ModelMemoryAccessors {
   /** False for engines without a memory store; edits then use the configuration callback. */
   supportsAgent?: (agent: AgentKind) => boolean;
+  /** Optional atomic alias-group edits; absent on older remote hosts. */
+  editMany?: (ops: readonly import('@/state/providerModelMemory').ProviderModelMemoryEdit[]) => boolean;
   getEffort: (agent: AgentKind, providerId: string, modelId: string) => Effort | undefined;
   setEffort: (agent: AgentKind, providerId: string, modelId: string, effort: Effort) => void;
   /** 真正选中 / 使用模型时同时更新该来源 lastModel;只编辑非选中行不调用。 */
@@ -719,7 +721,31 @@ export interface RemoteAgentSelectorOptions {
   readProviderGroup?: () => Promise<RemoteProviderGroupEntry | null>;
 }
 
-interface ModelSelectorProps {
+/**
+ * 只限本机的原因是封闭清单：不能把模型放到别的电脑运行的入口才用它，
+ * 规则见 docs/product-rules/model-selector-unified.md。
+ */
+export type ModelSelectorLocalOnlyReason =
+  | 'subagent-in-parent-task'
+  | 'vision-bridge-local-proxy'
+  | 'one-shot-local-request'
+  | 'plugin-task-local-route';
+
+/**
+ * 每个入口都必须声明模型来源，漏传不能再静默变成只有本机。
+ * remoteAgent 为 undefined 只表示此刻不可用（SSH、旧版被控电脑等）。
+ */
+export type ModelSelectorSource =
+  | { remoteAgent: RemoteAgentSelectorOptions | undefined; localOnlyReason?: never }
+  | { remoteAgent?: never; localOnlyReason: ModelSelectorLocalOnlyReason };
+
+export type ModelSelectorProps = ModelSelectorBaseProps & ModelSelectorSource;
+
+export interface ModelSelectorBaseProps {
+  /** Nonzero request from a terminal-error recovery action; selection still uses the normal transaction. */
+  openRequest?: number;
+  onOpenRequestConsumed?: (nonce: number) => void;
+  'data-setting-id'?: string;
   /** 语义同 ModelSelectorContentProps.pluginModels。 */
   pluginModels?: PluginModelsPickerProps;
   /** Authoritative surface-specific allowlist (e.g. one-shot or vision routes). */
@@ -797,8 +823,6 @@ interface ModelSelectorProps {
   agentIdentity?: ModelSelectorAgentIdentity;
   /** device-link 远程会话所属被控端 id;非空 = 列被控端的模型 + 退化为纯列表(不分供应商段)。 */
   deviceId?: string;
-  /** 远程 Agent 选择入口(语义见 RemoteAgentSelectorOptions;传了它 deviceId 不再生效)。 */
-  remoteAgent?: RemoteAgentSelectorOptions;
   /**
    * 任务的 Agent 在另一台电脑运行:trigger 的来源图标换成带信号波纹的远程供应商 Logo,
    * 读屏 / 悬停名带上那台电脑。只影响展示。
@@ -936,7 +960,9 @@ interface ModelSelectorProps {
   };
 }
 
-interface ModelSelectorContentProps {
+export type ModelSelectorContentProps = ModelSelectorContentBaseProps & ModelSelectorSource;
+
+export interface ModelSelectorContentBaseProps {
   /** 新任务的「让插件选」；只有草稿传(已有任务、伙伴对话不传)。 */
   pluginModels?: PluginModelsPickerProps;
   providersOverride?: ProviderView[];
@@ -965,8 +991,6 @@ interface ModelSelectorContentProps {
   vendorKey?: 'cc' | 'codex' | 'pi';
   /** device-link 远程会话所属被控端 id(列被控端模型)。 */
   deviceId?: string;
-  /** 远程 Agent 选择入口(语义同 ModelSelectorProps.remoteAgent)。 */
-  remoteAgent?: RemoteAgentSelectorOptions;
   /** SSH 远程会话隐藏订阅直连模型(语义同 ModelSelectorProps 同名字段)。 */
   excludeSubscriptionDirect?: boolean;
   /** SSH 远程会话隐藏 Chat 桥接的 Codex 供应商模型(语义同 ModelSelectorProps 同名字段)。 */
@@ -1312,8 +1336,9 @@ function ModelSelectorContentView({
   /** 正在浏览的就是草稿当前落点的目录 —— 选中态、档位记忆与引擎集合只对它成立。 */
   const browsingSelectedCatalog =
     !remoteAgent || (remoteBrowse?.deviceId ?? null) === remoteAgentDeviceId;
-  const modelMemory =
-    !remoteAgent || browsingSelectedCatalog
+  const modelMemory = preferenceStore?.memoryForLocation
+    ? preferenceStore.memoryForLocation(remoteBrowse?.deviceId ?? null)
+    : !remoteAgent || browsingSelectedCatalog
       ? (preferenceStore?.memory ?? modelMemoryProp)
       : remoteBrowse
         ? remoteAgent.deviceModelMemory?.(remoteBrowse.deviceId)
@@ -1400,7 +1425,7 @@ function ModelSelectorContentView({
   const pi = useAgentCapabilities('pi', catalogDeviceId);
   // 本机折扣 GPT 仍按本机 API key gate；device-link 必须只看被控端 provider 状态。
   // 旧被控端不支持 provider:list 时按远端 capabilities 退化，不得误用控制端 key。
-  const { hasSavedKey } = useApiKey();
+  const { hasSavedKey, canReadKey } = useApiKey();
   // 供应商来源:本机会话用本机 useProviders;device-link 远程会话用**被控端**供应商目录
   // (useDeviceProviders,隧道 maker:provider:list)。两 hook 都无条件调用(hooks 规则),按 deviceId 取。
   const localProviders = useProviders();
@@ -2138,6 +2163,9 @@ function ModelSelectorContentView({
       // 不按前缀落网关),不依赖 Cindy 登录/网关 key(#1568)。flat 列表(provider
       // 为 null,无供应商概念)与内置来源保持原前缀判定。
       if (isCustomRoutedProvider(provider)) return false;
+      // Auxiliary windows cannot inspect local credentials and use Main's catalog verdict.
+      // Full renderers retain the existing key gate when a stale catalog still says connected.
+      if (provider?.id === 'xd' && canReadKey === false) return !provider.connected;
       return isCodexGatewayWireModel(id) && !hasSavedKey;
     }
     if (remoteModelListStatus !== 'ready') return true;
@@ -4064,6 +4092,8 @@ function ModelSelectorContentView({
 }
 
 export function ModelSelector({
+  openRequest = 0,
+  onOpenRequestConsumed,
   pluginModels,
   providersOverride,
   providersOverrideState,
@@ -4114,6 +4144,7 @@ export function ModelSelector({
   unknownModelLabel,
   unknownModelDescription,
   ariaContext,
+  'data-setting-id': settingId,
   currentProviderId,
   sourceDisconnected = false,
   actualRoute = false,
@@ -4191,6 +4222,14 @@ export function ModelSelector({
     },
     [deviceId, disabled, discovery, resetDiscoveryPresentation, providersOverride, providersOverrideState, sshCodexRefresh],
   );
+
+  const consumedOpenRequest = useRef(0);
+  useEffect(() => {
+    if (!openRequest || consumedOpenRequest.current === openRequest || disabled) return;
+    consumedOpenRequest.current = openRequest;
+    handleOpenChange(true);
+    onOpenRequestConsumed?.(openRequest);
+  }, [openRequest, disabled, handleOpenChange, onOpenRequestConsumed]);
 
   // AlertDialog 打开时会被 Popover 视作外部交互并请求关闭。Agent 分段确认期间
   // 强制保留已展开的模型面板；确认结束后把底层 open 恢复为 true，避免弹窗关闭
@@ -4634,6 +4673,7 @@ export function ModelSelector({
 
   const trigger = (
     <button
+      data-setting-id={settingId}
       type="button"
       disabled={switching || disabled}
       // 阻 mousedown 抢焦点 —— 否则点 pill 会先把光标从输入框挪走,选完模型后
@@ -4952,7 +4992,7 @@ export function ModelSelector({
       modelMemory={modelMemory}
       vendorKey={vendorKey}
       deviceId={deviceId}
-      {...(remoteAgent ? { remoteAgent } : {})}
+      {...(remoteAgent ? { remoteAgent } : { remoteAgent: undefined })}
       excludeSubscriptionDirect={excludeSubscriptionDirect}
       excludeChatBridgedCodex={excludeChatBridgedCodex}
       onDismiss={() => setOpenWithoutAutoRefresh(false)}
@@ -5039,9 +5079,8 @@ export function ModelSelector({
         collisionPadding={8}
         className={cn(
           // field 形态面板宽度绑定 trigger(DESIGN.md §4 Select & Dropdown 宽度铁则,
-          // 与隔壁权限字段同规则),且压掉共享 PopoverContent 的 shadow-md(§4 面板无
-          // 阴影);toolbar 等非 field 的 Radix 分支维持既有视觉不动。
-          isFieldTrigger ? 'w-[var(--radix-popover-trigger-width)] shadow-none' : 'w-auto',
+          // 与隔壁权限字段同规则);toolbar 等非 field 的 Radix 分支维持既有视觉不动。
+          isFieldTrigger ? 'w-[var(--radix-popover-trigger-width)]' : 'w-auto',
           'flex min-h-0 max-h-[var(--radix-popover-content-available-height)] flex-col overflow-hidden rounded-[12px] p-0',
           'bg-[var(--model-dropdown-bg)]',
           'border border-[var(--model-dropdown-border)]',

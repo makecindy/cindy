@@ -1,4 +1,7 @@
 import { Button } from '@/components/ui/button';
+import { FormField } from '@/components/ui/form-field';
+import { SSH_HOST_ID_PATTERN } from '../../../shared/selfHostedRelay';
+import { SettingsTextInput } from './SettingsTextInput';
 /**
  * RemoteSection — Settings → Remote tab.
  *
@@ -442,7 +445,11 @@ function HostForm({
     ? form.identityFileName
     : form.identityFile.split(/[/\\]/).pop() ?? '';
 
+  // Existing aliases are immutable: keep editing legacy/imported hosts possible.
+  const aliasInvalid = !isEdit && form.id.length > 0 && !SSH_HOST_ID_PATTERN.test(form.id);
+
   const valid = useMemo(() => {
+    if (aliasInvalid) return false;
     if (!form.id.trim() || /\s|[*?!\[]/.test(form.id)) return false;
     if (!form.hostname.trim()) return false;
     if (!form.user.trim()) return false;
@@ -456,7 +463,7 @@ function HostForm({
       }
     }
     return true;
-  }, [form, hasIdentityFile]);
+  }, [form, hasIdentityFile, aliasInvalid]);
 
   return (
     <div
@@ -479,16 +486,23 @@ function HostForm({
           value={form.displayName}
           onChange={(v) => setForm({ ...form, displayName: v })}
         />
-        <LabeledInput
+        <FormField
           label={t('settings.remote.add.alias')}
-          placeholder="my-server"
-          value={form.id}
-          onChange={(v) => setForm({ ...form, id: v })}
-          // Alias / Host directive is the join key between OpenSSH config and
-          // our pool, AND the name a user may have typed in terminal scripts.
-          // Renaming via UI = remove + re-add (out of scope to make safe).
-          disabled={isEdit || connectionFieldsReadOnly}
-        />
+          hint={t('settings.remote.add.aliasHint')}
+          error={aliasInvalid ? t('settings.remote.add.aliasInvalid') : undefined}
+          reserveFeedback
+        >
+          {(control) => (
+            <SettingsTextInput
+              {...control}
+              placeholder="my-server"
+              value={form.id}
+              onChange={(v) => setForm({ ...form, id: v })}
+              // The alias joins OpenSSH config and the pool; editing cannot rename it.
+              disabled={isEdit || connectionFieldsReadOnly}
+            />
+          )}
+        </FormField>
         <LabeledInput
           label={t('settings.remote.add.hostname')}
           placeholder="example.com or 1.2.3.4"
@@ -1044,10 +1058,12 @@ export function RemoteSection({ showTitle = true }: { showTitle?: boolean } = {}
         return copy;
       });
     });
+    const offHosts = window.electronAPI.remoteSsh.onHostsChanged?.(applyListResult);
     return () => {
       off();
+      offHosts?.();
     };
-  }, [refresh]);
+  }, [refresh, applyListResult]);
 
   const handleReload = useCallback(async () => {
     try {

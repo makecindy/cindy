@@ -21,6 +21,7 @@ type FontOption = { id: string; label: string; family: string };
 hljs.registerLanguage('typescript', typescript);
 
 interface FontFamilyPickerProps {
+  'data-setting-id'?: string;
   label: string;
   description: string;
   ariaLabel: string;
@@ -34,6 +35,7 @@ interface FontFamilyPickerProps {
 }
 
 export function FontFamilyPicker({
+  'data-setting-id': settingId,
   label,
   description,
   ariaLabel,
@@ -139,6 +141,7 @@ export function FontFamilyPicker({
           <button
             type="button"
             aria-label={ariaLabel}
+            data-setting-id={settingId}
             className={cn(
               'flex h-10 w-full items-center justify-between rounded-xl px-3',
               'border border-[var(--settings-input-border)]',
@@ -160,7 +163,7 @@ export function FontFamilyPicker({
           className={cn(
             'w-[min(var(--radix-popover-trigger-width),560px)] rounded-xl p-2',
             'border border-[var(--settings-input-border)]',
-            'bg-[var(--settings-theme-card-bg)] shadow-[var(--shadow-menu)]',
+            'bg-[var(--settings-theme-card-bg)] shadow-[shadow:var(--shadow-menu)]',
           )}
           onMouseLeave={() => setPreviewFamily(null)}
         >

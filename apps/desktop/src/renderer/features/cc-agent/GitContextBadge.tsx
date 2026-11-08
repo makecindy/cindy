@@ -1,3 +1,4 @@
+import { prNumberLabel } from '@cindy/maker-shared';
 /**
  * GitContextBadge — 会话顶栏的 git 上下文徽标(session-git-pr-context)。
  *
@@ -7,7 +8,7 @@
  *     worktree 已删时兜底)→ working_dir HEAD(低信任,仅在无 PR 时最后兜底)。
  *     HEAD 变化(用户/agent 切分支)由 useSessionGitContext 实时推送刷新。
  *   - PR chip(最多 MAX_STATUS_QUERIES 条，固定与手动优先级在前):
- *     整组悬停显示 PR 信息，点击打开 PR；悬停面板右上角齿轮进入关联管理(共享访客除外)。
+ *     整组悬停显示 PR 信息，点击打开 PR；悬停面板右上角齿轮进入设置与关联管理(共享访客除外)。
  *
  * PR 状态视觉:用 lucide 图标形状区分四态(色弱友好),颜色只用已注册 token:
  *   open   GitPullRequest        --diff-add-fg(语义绿,规则 16 豁免色)
@@ -32,9 +33,12 @@ import {
   CircleHelp,
   CircleMinus,
   Settings,
+  X,
 } from 'lucide-react';
-import { useEffect, useRef, useState, type Dispatch, type SetStateAction } from 'react';
+import { lazy, Suspense, useEffect, useRef, useState, type Dispatch, type SetStateAction } from 'react';
 import { useTranslation } from 'react-i18next';
+
+import * as Dialog from '@radix-ui/react-dialog';
 
 import { cn } from '@/lib/utils';
 import { Tooltip } from '@/components/ui/tooltip';
@@ -50,12 +54,17 @@ import { useSessionGitContext } from '@/hooks/useSessionGitContext';
 import { GithubSetupDialog } from './GithubSetupDialog';
 import { prStatusKey, MAX_STATUS_QUERIES } from '@/lib/prStatus';
 import {
-  PR_STATUS_COLOR,
+  prStatusColor,
   PR_STATUS_ICON,
   pickBranchLabel,
   prFailureCopyKey,
   prGuidanceFor,
 } from './gitContextPrVisuals';
+
+import { DropdownMenu, DropdownMenuTrigger, DropdownMenuContent, DropdownMenuItem } from '@/components/ui/dropdown-menu';
+import { useSessionPrCard } from '@/cindy-brain/useSessionPrCard';
+
+const GhostCardPreview = lazy(() => import('@/components/chat/GhostToolCard').then((m) => ({ default: m.GhostCardPreview })));
 
 const PR_SUMMARY_OPEN_DELAY_MS = 300;
 const PR_SUMMARY_CLOSE_DELAY_MS = 300;
@@ -186,6 +195,16 @@ function PrChip({
   // The shared-task host rejects association reads from guests.
   const canManage = !isSharedTaskPeer(deviceLinkDeviceId ?? '');
   const summaryOpen = summary === prRef.id;
+  const [settingsOpen, setSettingsOpen] = useState(false);
+  const prCard = useSessionPrCard(session.id, prStatusKey(prRef),
+    (summaryOpen || settingsOpen) && !deviceLinkDeviceId && !readOnly && prRef.provider !== 'gitlab');
+  useEffect(() => {
+    if (!prCard || (status?.ok && (status.status === 'merged' || status.status === 'closed'))) setSettingsOpen(false);
+  }, [prCard, status]);
+  // 跟进区域的交互保活：指针在区域内、焦点在区域内、设置菜单打开，任一为真都暂停悬停收起。
+  const cardHold = useRef({ pointer: false, focus: false, menu: false });
+  const panelHovered = useRef(false);
+  const cardSettingsButton = useRef<HTMLButtonElement | null>(null);
   const triggerRef = useRef<HTMLButtonElement>(null);
   const panelRef = useRef<HTMLDivElement>(null);
   const openTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -211,7 +230,11 @@ function PrChip({
     [],
   );
   useEffect(() => {
-    if (!summaryOpen) cancelClose();
+    if (!summaryOpen) {
+      cancelClose();
+      cardHold.current = { pointer: false, focus: false, menu: false };
+      panelHovered.current = false;
+    }
   }, [summaryOpen]);
 
   const closeSummary = () => {
@@ -223,7 +246,8 @@ function PrChip({
   const scheduleClose = () => {
     cancelOpen();
     cancelClose();
-    if (keyboardPreview.current) return;
+    const hold = cardHold.current;
+    if (keyboardPreview.current || hold.pointer || hold.focus || hold.menu) return;
     closeTimer.current = setTimeout(() => {
       closeTimer.current = null;
       setSummary((current) => (current === prRef.id ? null : current));
@@ -231,20 +255,29 @@ function PrChip({
   };
 
   const kind: PrStatusKind | null = status?.ok ? status.status : null;
+  const conflicts =
+    status?.ok && status.conflicts === true && (kind === 'open' || kind === 'draft');
   const Icon = kind ? PR_STATUS_ICON[kind] : GitPullRequest;
-  const color = kind ? PR_STATUS_COLOR[kind] : 'var(--text-tertiary)';
+  const color = prStatusColor(kind, status?.ok ? status.conflicts : null);
   const guidance = prGuidanceFor(status, { remoteHostId, deviceLinkDeviceId, readOnly });
-  const failureCopyKey = prFailureCopyKey(status);
+  const failureCopyKey = prFailureCopyKey(status, { remoteHostId, deviceLinkDeviceId, readOnly });
 
   const statusLine = kind
     ? t(`ccAgent.gitContext.pr.status.${kind}`)
     : failureCopyKey
-      ? t(failureCopyKey)
+      ? prRef.provider === 'gitlab'
+        ? t(failureCopyKey, { host: prRef.host })
+        : t(failureCopyKey)
       : t('ccAgent.gitContext.pr.statusNotFetched');
   // Installation and login are host-owned and independent of the task composer.
   const ariaLabel = guidance
     ? t(`ccAgent.gitContext.pr.guidance.${guidance}.aria`, { number: prRef.prNumber })
-    : t('ccAgent.gitContext.pr.openAria', { number: prRef.prNumber });
+    : t(
+        prRef.provider === 'gitlab'
+          ? 'ccAgent.gitContext.pr.gitlab.openAria'
+          : 'ccAgent.gitContext.pr.openAria',
+        { number: prRef.prNumber },
+      );
 
   const handleClick = () => {
     closeSummary();
@@ -296,7 +329,9 @@ function PrChip({
           <button
             ref={triggerRef}
             type="button"
-            aria-label={ariaLabel}
+            aria-label={
+              conflicts ? `${ariaLabel} · ${t('ccAgent.gitContext.pr.conflicts')}` : ariaLabel
+            }
             data-pr-guidance={guidance ?? undefined}
             data-pr-chip=""
             style={WINDOW_NO_DRAG_STYLE}
@@ -335,7 +370,7 @@ function PrChip({
             }}
             onBlur={(event) => {
               pointerFocus.current = false;
-              // Moving into the panel (to reach the settings gear) keeps it open.
+              // Moving into the panel (to reach association management) keeps it open.
               if (panelRef.current?.contains(event.relatedTarget as Node | null)) return;
               if (keyboardPreview.current) {
                 keyboardPreview.current = false;
@@ -371,7 +406,7 @@ function PrChip({
               )}
             >
               <Icon size={12} strokeWidth={1.5} className="shrink-0" style={{ color }} />
-              <span>#{prRef.prNumber}</span>
+              <span>{prNumberLabel(prRef)}</span>
               {unresolved !== null && unresolved > 0 && (
                 <span
                   className="inline-flex items-center gap-0.5 text-10 font-medium leading-none text-[var(--status-bar-accent)]"
@@ -411,23 +446,28 @@ function PrChip({
               const next = event.relatedTarget as Node | null;
               if (next && (panelRef.current?.contains(next) || triggerRef.current?.contains(next)))
                 return;
-              if (keyboardPreview.current) {
+              if (keyboardPreview.current && !prCard) {
                 keyboardPreview.current = false;
                 closeSummary();
               }
             }}
             onPointerEnter={(event) => {
-              if (event.pointerType === 'mouse') cancelClose();
+              if (event.pointerType !== 'mouse') return;
+              panelHovered.current = true;
+              cancelClose();
             }}
             onPointerLeave={(event) => {
-              if (event.pointerType === 'mouse') scheduleClose();
+              if (event.pointerType !== 'mouse') return;
+              panelHovered.current = false;
+              scheduleClose();
             }}
             onKeyDown={(event) => {
               if (event.key === 'Escape') {
                 event.stopPropagation();
                 closeSummary();
+                pointerFocus.current = true; // Returning focus must not reopen the preview.
                 triggerRef.current?.focus();
-              } else if (event.key === 'Tab' && event.shiftKey) {
+              } else if (event.key === 'Tab' && event.shiftKey && event.target === panelRef.current?.querySelector('[data-pr-manage]')) {
                 event.preventDefault();
                 triggerRef.current?.focus();
               }
@@ -442,8 +482,13 @@ function PrChip({
             side="bottom"
             align="start"
             collisionPadding={8}
-            className={cn('w-[320px] max-w-[calc(100vw-16px)] p-4', className)}
-            aria-label={t('ccAgent.gitContext.pr.summaryAria', { number: prRef.prNumber })}
+            className={cn('max-w-[calc(100vw-16px)] max-h-[var(--radix-popover-content-available-height)] overflow-y-auto p-4', 'w-[360px]', className)}
+            aria-label={t(
+              prRef.provider === 'gitlab'
+                ? 'ccAgent.gitContext.pr.gitlab.summaryAria'
+                : 'ccAgent.gitContext.pr.summaryAria',
+              { number: prRef.prNumber },
+            )}
           >
             <div className="flex items-start gap-2">
               <a
@@ -457,7 +502,7 @@ function PrChip({
                 <span className="flex items-center gap-1 text-12 text-[var(--text-secondary)]">
                   <Icon size={12} strokeWidth={1.5} className="shrink-0" style={{ color }} />
                   <span className="min-w-0 break-words group-hover:underline">
-                    {prRef.owner}/{prRef.repo} #{prRef.prNumber}
+                    {prRef.owner}/{prRef.repo} {prNumberLabel(prRef)}
                     {status?.ok && <> · {statusLine}</>}
                   </span>
                 </span>
@@ -467,19 +512,41 @@ function PrChip({
                   </span>
                 )}
               </a>
-              {canManage && (
+              {canManage && (prCard?.settingsLabel && kind !== 'merged' && kind !== 'closed' ? (
+                <DropdownMenu onOpenChange={(open) => {
+                  cardHold.current.menu = open;
+                  if (open) cancelClose();
+                  else if (!panelHovered.current && !triggerHovered.current) scheduleClose();
+                }}>
+                  <DropdownMenuTrigger asChild>
+                    <ChromeIconButton aria-label={t('titleBar.menuItems.settings')} data-pr-manage=""
+                      className="-mr-2 -mt-1.5 shrink-0">
+                      <Settings size={14} />
+                    </ChromeIconButton>
+                  </DropdownMenuTrigger>
+                  <DropdownMenuContent align="end" onCloseAutoFocus={(event) => event.preventDefault()}>
+                    <DropdownMenuItem onSelect={() => {
+                      if (!prCard.settingsHtml) cardSettingsButton.current?.click();
+                      setSettingsOpen(true);
+                      closeSummary();
+                    }}>
+                      {prCard.settingsLabel}
+                    </DropdownMenuItem>
+                    <DropdownMenuItem onSelect={() => { closeSummary(); onManage(); }}>
+                      {t('ccAgent.gitContext.pr.manage.title')}
+                    </DropdownMenuItem>
+                  </DropdownMenuContent>
+                </DropdownMenu>
+              ) : (
                 <ChromeIconButton
                   aria-label={t('ccAgent.gitContext.pr.manage.title')}
                   data-pr-manage=""
                   className="-mr-2 -mt-1.5 shrink-0"
-                  onClick={() => {
-                    closeSummary();
-                    onManage();
-                  }}
+                  onClick={() => { closeSummary(); onManage(); }}
                 >
                   <Settings size={14} />
                 </ChromeIconButton>
-              )}
+              ))}
             </div>
             {!status?.ok && (
               <div className="mt-3 space-y-2 text-13 text-[var(--text-secondary)]">
@@ -498,8 +565,18 @@ function PrChip({
                 )}
               </div>
             )}
-            {((unresolved !== null && unresolved > 0) || checks !== null) && (
+            {(conflicts || (unresolved !== null && unresolved > 0) || checks !== null) && (
               <div className="mt-3 space-y-3 border-t border-[var(--border-default)] pt-3 text-13">
+                {conflicts && (
+                  <div className="flex items-center justify-between gap-3 whitespace-nowrap">
+                    <span className="text-[var(--text-primary)]">
+                      {t('ccAgent.gitContext.pr.merge')}
+                    </span>
+                    <span className="shrink-0 font-medium text-[var(--warning-fg)]">
+                      {t('ccAgent.gitContext.pr.conflicts')}
+                    </span>
+                  </div>
+                )}
                 {unresolved !== null && unresolved > 0 && (
                   <div className="flex items-center justify-between gap-3">
                     <span className="text-[var(--text-primary)]">
@@ -547,9 +624,49 @@ function PrChip({
                 )}
               </div>
             )}
+            {prCard?.summaryHtml && kind !== 'merged' && kind !== 'closed' && (
+              <div className="mt-3 border-t border-[var(--border-default)] pt-2"
+                onPointerEnter={() => { cardHold.current.pointer = true; cancelClose(); }}
+                onPointerLeave={() => { cardHold.current.pointer = false; }}
+                onFocusCapture={() => { cardHold.current.focus = true; cancelClose(); }}
+                onBlurCapture={(event) => {
+                  if (event.currentTarget.contains(event.relatedTarget as Node | null)) return;
+                  cardHold.current.focus = false;
+                  if (!panelHovered.current && !triggerHovered.current) scheduleClose();
+                }}>
+                <Suspense fallback={null}>
+                  <GhostCardPreview key={prCard.callId} {...prCard} html={prCard.summaryHtml} sessionId={session.id}
+                    onEscape={() => { closeSummary(); pointerFocus.current = true; triggerRef.current?.focus(); }}
+                    settingsButtonRef={canManage ? cardSettingsButton : undefined} />
+                </Suspense>
+              </div>
+            )}
           </PopoverContent>
         )}
       </Popover>
+      {settingsOpen && prCard && (
+        <Dialog.Root open onOpenChange={setSettingsOpen}>
+          <Dialog.Portal>
+            <Dialog.Overlay className="modal-scrim fixed inset-0 z-[10000]" />
+            <Dialog.Content aria-describedby={undefined}
+              onPointerDownOutside={(event) => event.preventDefault()}
+              onCloseAutoFocus={(event) => { event.preventDefault(); pointerFocus.current = true; triggerRef.current?.focus(); }}
+              className="modal-panel fixed left-1/2 top-1/2 z-[10000] w-[min(420px,calc(100vw-32px))] max-h-[85vh] -translate-x-1/2 -translate-y-1/2 overflow-y-auto p-4 outline-none">
+              <div className="mb-3 flex items-center justify-between gap-2">
+                <div>
+                  <Dialog.Title className="text-14 font-medium text-[var(--text-primary)]">{prCard.settingsLabel}</Dialog.Title>
+                  <div className="mt-1 text-12 text-[var(--text-secondary)]">{prRef.owner}/{prRef.repo} {prNumberLabel(prRef)}</div>
+                </div>
+                <Dialog.Close asChild><ChromeIconButton aria-label={t('common.dismiss')}><X size={14} /></ChromeIconButton></Dialog.Close>
+              </div>
+              {prCard.settingsHtml && <Suspense fallback={null}>
+                <GhostCardPreview inDialog {...prCard} html={prCard.settingsHtml} sessionId={session.id}
+                  onEscape={() => setSettingsOpen(false)} />
+              </Suspense>}
+            </Dialog.Content>
+          </Dialog.Portal>
+        </Dialog.Root>
+      )}
     </div>
   );
 }

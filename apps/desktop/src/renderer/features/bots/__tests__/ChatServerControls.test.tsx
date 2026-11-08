@@ -1,5 +1,6 @@
 // @vitest-environment jsdom
 import { StrictMode, useState, type ReactNode } from 'react';
+import { MemoryRouter } from 'react-router-dom';
 import { act, cleanup, createEvent, fireEvent, render as renderUI, screen, waitFor, within } from '@testing-library/react';
 import { Tooltip } from '@/components/ui/tooltip';
 import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from 'vitest';
@@ -8,6 +9,7 @@ import { ChatInviteDialog } from '../ChatInviteDialog';
 import { ChatThreadPanel } from '../ChatThreadPanel';
 import { BotGroupThreadHint } from '../BotGroupThreadHint';
 import { GroupMaskProvider } from '../GroupMaskProvider';
+import { GroupMaskIndicator } from '../GroupMaskControls';
 import { GroupMaskContext, useGroupMask, useReadLocatedMention, type GroupMaskPresentation } from '../groupMaskPresentation';
 import { botGroupThreadDraftKey } from '../botGroupAttachments';
 import { discardDraft, getAllDraftAttachmentUrls, getDraft, saveDraft } from '@/lib/composerDraftStore';
@@ -79,10 +81,88 @@ describe('chat interaction controls', () => {
     return <><input aria-label="Chat draft" value={draft} onChange={e => setDraft(e.target.value)} />
       <span>{mask ? 'Config ready' : 'No config'}</span>
       {mask && <><button onClick={() => mask.update({ enabled: false })}>Disable reply</button>
+        <button onClick={() => mask.update({ trigger: 'always' })}>Permanent reply</button>
         <button onClick={mask.participate}>Participate</button><button onClick={() => mask.markMentionsRead(['question'])}>Read original</button>
         <button onClick={mask.retry}>Retry mask</button>{mask.error && <span role="alert">Save failed</span>}</>}
     </>;
   }
+  // Unit: actual Provider actions, missing coverage for permanent delegation.
+  // A keystroke must not send a takeover; an explicit disable must still persist.
+  it.each(['always', 'scheduled', 'manual'] as const)('keeps %s delegation under its own participation policy', async trigger => {
+    let state = maskState(); state.settings.trigger = trigger;
+    mocks.mask.mockImplementation(async ({ action }) => {
+      if (action?.type === 'save') state = { ...state, settings: action.settings, status: action.settings.enabled ? 'enabled' : 'off' };
+      if (action?.type === 'participate') state = { ...state, status: 'paused' };
+      return { ok: true, state };
+    });
+    render(<GroupMaskProvider groupId="room"><MaskProbe /></GroupMaskProvider>);
+    const participate = await screen.findByText('Participate');
+    await act(async () => fireEvent.click(participate));
+    expect(mocks.mask.mock.calls.filter(([input]) => input.action?.type === 'participate')).toHaveLength(trigger === 'always' ? 0 : 1);
+    expect(state.status).toBe(trigger === 'always' ? 'enabled' : 'paused');
+    await act(async () => fireEvent.click(screen.getByText('Disable reply')));
+    expect(state.settings.enabled).toBe(false);
+    expect(state.status).toBe('off');
+  });
+  // Unit: the actual indicator/provider must expose a failed stop and retry it.
+  // Fixed-context UI tests missed a network/revision rejection after clicking Stop.
+  it.each(['NETWORK_ERROR', 'REVISION_CONFLICT'])('keeps a rejected permanent stop visible and retryable (%s)', async errorCode => {
+    let state = maskState(), fail = true;
+    mocks.mask.mockImplementation(async ({ action }) => {
+      if (action?.type === 'save') {
+        if (fail) {
+          if (errorCode === 'REVISION_CONFLICT') state = { ...state, revision: 2 };
+          return { ok: false, errorCode };
+        }
+        state = { ...state, revision: state.revision + 1, settings: action.settings, status: 'off' };
+      }
+      return { ok: true, state };
+    });
+    render(<MemoryRouter><GroupMaskProvider groupId="room"><GroupMaskIndicator groupId="room" onTakeOver={vi.fn()} /></GroupMaskProvider></MemoryRouter>);
+    fireEvent.click(await screen.findByTestId('group-mask-status'));
+    fireEvent.click(screen.getByRole('button', { name: 'bots.groupChat.mask.stop' }));
+    expect((await screen.findByRole('alert')).textContent).toBe('bots.groupChat.mask.saveError');
+    expect(screen.getByTestId('group-mask-status').getAttribute('data-status')).toBe('enabled');
+    fail = false;
+    fireEvent.click(screen.getByRole('button', { name: 'bots.groupChat.mask.retry' }));
+    await waitFor(() => expect(screen.getByTestId('group-mask-status').getAttribute('data-status')).toBe('off'));
+    expect(screen.queryByRole('alert')).toBeNull();
+    const saves = mocks.mask.mock.calls.filter(([input]) => input.action?.type === 'save');
+    expect(saves).toHaveLength(2);
+    expect(saves[1]![0].action).toMatchObject({ expectedRevision: errorCode === 'REVISION_CONFLICT' ? 2 : 1, settings: { enabled: false } });
+    expect(saves[1]![0].operationId === saves[0]![0].operationId).toBe(errorCode === 'NETWORK_ERROR');
+  });
+  // Unit timing regression: entry-only tests cannot detect removing the dispatch
+  // guard. Switch while participation is queued, or retry a failed old action;
+  // obsolete presence must vanish without clearing an independent failed read.
+  it.each(['queued', 'failed'] as const)('drops %s participation after switching to permanent without losing another retry', async mode => {
+    let state = maskState(), failRead = true;
+    state.settings.trigger = 'scheduled';
+    mocks.mentions.mockImplementation(async ({ readIds }) => readIds && failRead
+      ? { ok: false, errorCode: 'NETWORK_ERROR' }
+      : { ok: true, mentions: [{ messageId: 'question', sequence: '1' }], hasMore: false });
+    mocks.mask.mockImplementation(async ({ action }) => {
+      if (action?.type === 'participate') return { ok: false, errorCode: 'NETWORK_ERROR' };
+      if (action?.type === 'save') state = { ...state, revision: 2, settings: action.settings };
+      return { ok: true, state };
+    });
+    render(<GroupMaskProvider groupId="room"><MaskProbe /></GroupMaskProvider>);
+    const read = await screen.findByText('Read original');
+    await act(async () => fireEvent.click(read));
+    if (mode === 'failed') await act(async () => fireEvent.click(screen.getByText('Participate')));
+    await act(async () => {
+      fireEvent.click(screen.getByText('Permanent reply'));
+      if (mode === 'queued') fireEvent.click(screen.getByText('Participate'));
+    });
+    await act(async () => fireEvent.click(screen.getByText('Retry mask')));
+    expect(state.settings.trigger).toBe('always');
+    expect(mocks.mask.mock.calls.filter(([input]) => input.action?.type === 'participate')).toHaveLength(mode === 'queued' ? 0 : 1);
+    expect(screen.getByRole('alert').textContent).toBe('Save failed');
+    failRead = false;
+    await act(async () => fireEvent.click(screen.getByText('Retry mask')));
+    expect(screen.queryByRole('alert')).toBeNull();
+    expect(mocks.mentions.mock.calls.filter(([input]) => input.readIds)).toHaveLength(3);
+  });
   it('preserves chat-local state when personal config arrives or authority disappears', async () => {
     let finish!: (value: unknown) => void, changed = () => {};
     mocks.mask.mockImplementationOnce(() => new Promise(resolve => { finish = resolve; }));
@@ -98,6 +178,7 @@ describe('chat interaction controls', () => {
   });
   it.each(['Participate', 'Read original'])('retains a failed save after successful %s and retries that save', async operation => {
     let state = maskState(), fail = true;
+    state.settings.trigger = 'scheduled';
     mocks.mask.mockImplementation(async ({ action }) => {
       if (action?.type === 'save') {
         if (fail) return { ok: false, errorCode: 'NETWORK_ERROR' };

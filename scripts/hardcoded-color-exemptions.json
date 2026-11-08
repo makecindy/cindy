@@ -77,28 +77,13 @@
  },
  {
   "glob": "apps/desktop/src/renderer/components/settings/AgentIslandSection.tsx",
-  "reason": "灵动岛 mascot 预览的角色素材固有色(眼色/键盘条):与原生 SpriteMascotConfig 一一对应的素材参数,不是界面语义色;改用 token 会与原生渲染脱钩",
+  "reason": "灵动岛 mascot 预览的角色素材固有色(眼色):与原生 SpriteMascotConfig 一一对应的素材参数,不是界面语义色;改用 token 会与原生渲染脱钩",
   "owner": "agent-island",
   "matches": [
-   {
-    "value": "rgb(38 43 69)",
-    "before": "keyboardBase:\\s*['\\\"]",
-    "object": "MASCOT_PREVIEW_CONFIGS.cindy"
-   },
-   {
-    "value": "rgb(103 118 240)",
-    "before": "keyboardKey:\\s*['\\\"]",
-    "object": ["MASCOT_PREVIEW_CONFIGS.cindy", "MASCOT_PREVIEW_CONFIGS.blackcat"]
-   },
    {
     "value": "rgb(107 61 50)",
     "before": "eyeColor:\\s*['\\\"]",
     "object": "MASCOT_PREVIEW_CONFIGS.cindy"
-   },
-   {
-    "value": "rgb(31 36 41)",
-    "before": "keyboardBase:\\s*['\\\"]",
-    "object": "MASCOT_PREVIEW_CONFIGS.blackcat"
    },
    {
     "value": "rgb(253 207 69)",
@@ -106,29 +91,9 @@
     "object": ["MASCOT_PREVIEW_CONFIGS.blackcat", "MASCOT_PREVIEW_CONFIGS.chaku"]
    },
    {
-    "value": "rgb(51 71 77)",
-    "before": "keyboardBase:\\s*['\\\"]",
-    "object": "MASCOT_PREVIEW_CONFIGS.erika"
-   },
-   {
-    "value": "rgb(90 156 170)",
-    "before": "keyboardKey:\\s*['\\\"]",
-    "object": "MASCOT_PREVIEW_CONFIGS.erika"
-   },
-   {
     "value": "rgb(135 93 66)",
     "before": "eyeColor:\\s*['\\\"]",
     "object": "MASCOT_PREVIEW_CONFIGS.erika"
-   },
-   {
-    "value": "#00615c",
-    "before": "keyboardBase:\\s*['\\\"]",
-    "object": "MASCOT_PREVIEW_CONFIGS.tarara"
-   },
-   {
-    "value": "#00d9c5",
-    "before": "keyboardKey:\\s*['\\\"]",
-    "object": "MASCOT_PREVIEW_CONFIGS.tarara"
    },
    {
     "value": "rgb(61 114 228)",
@@ -136,54 +101,14 @@
     "object": "MASCOT_PREVIEW_CONFIGS.tarara"
    },
    {
-    "value": "#292e3a",
-    "before": "keyboardBase:\\s*['\\\"]",
-    "object": ["MASCOT_PREVIEW_CONFIGS.boli", "MASCOT_PREVIEW_CONFIGS.whitesnow"]
-   },
-   {
-    "value": "#707d94",
-    "before": "keyboardKey:\\s*['\\\"]",
-    "object": ["MASCOT_PREVIEW_CONFIGS.boli", "MASCOT_PREVIEW_CONFIGS.whitesnow"]
-   },
-   {
     "value": "black",
     "before": "eyeColor:\\s*['\\\"]",
     "object": ["MASCOT_PREVIEW_CONFIGS.boli", "MASCOT_PREVIEW_CONFIGS.whitesnow", "MASCOT_PREVIEW_CONFIGS.muffin"]
    },
    {
-    "value": "#2e6b8f",
-    "before": "keyboardBase:\\s*['\\\"]",
-    "object": "MASCOT_PREVIEW_CONFIGS.annie"
-   },
-   {
-    "value": "#77c4ea",
-    "before": "keyboardKey:\\s*['\\\"]",
-    "object": "MASCOT_PREVIEW_CONFIGS.annie"
-   },
-   {
     "value": "rgb(174 33 70)",
     "before": "eyeColor:\\s*['\\\"]",
     "object": "MASCOT_PREVIEW_CONFIGS.annie"
-   },
-   {
-    "value": "rgb(115 82 8)",
-    "before": "keyboardBase:\\s*['\\\"]",
-    "object": "MASCOT_PREVIEW_CONFIGS.chaku"
-   },
-   {
-    "value": "rgb(253 207 69)",
-    "before": "keyboardKey:\\s*['\\\"]",
-    "object": "MASCOT_PREVIEW_CONFIGS.chaku"
-   },
-   {
-    "value": "rgb(48 61 97)",
-    "before": "keyboardBase:\\s*['\\\"]",
-    "object": "MASCOT_PREVIEW_CONFIGS.muffin"
-   },
-   {
-    "value": "rgb(125 153 213)",
-    "before": "keyboardKey:\\s*['\\\"]",
-    "object": "MASCOT_PREVIEW_CONFIGS.muffin"
    }
   ],
   "reviewDate": "2027-04-30",

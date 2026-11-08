@@ -28,6 +28,10 @@
     },
     {
       "file": "extension/src/browser/chrome.ts",
+      "desc": "read the selected managed Chrome profile for silent macOS startup"
+    },
+    {
+      "file": "extension/src/browser/chrome.ts",
       "desc": "reuse the bounded CDP command helper for graceful Windows Chrome shutdown"
     },
     {
@@ -36,7 +40,7 @@
     },
     {
       "file": "extension/src/browser/chrome.ts",
-      "desc": "start headed automation Chrome without an empty foreground window"
+      "desc": "start headed automation Chrome without a foreground window while preserving macOS Quit"
     },
     {
       "file": "extension/src/browser/chrome.ts",
@@ -124,7 +128,7 @@
     }
   ],
   "fileCount": 335,
-  "contentHash": "1e5b9ed7f2156b726934dd3f3fd1f2c306129d12dc25bdd1471b2e233e390d24",
+  "contentHash": "fb0bc9516bb715e79dc6abeadd2a03792170992c4ddf7b4dec03ac47ad76a614",
   "fsSafe": {
     "package": "@openclaw/fs-safe",
     "version": "0.4.0"

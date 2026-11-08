@@ -183,6 +183,7 @@ export function PluginTaskPrefs({
         <>
           <div className="min-w-0 flex-1">
             <ModelSelector
+              localOnlyReason={showTaskRows ? 'plugin-task-local-route' : 'one-shot-local-request'}
               disabled={saving || disabled}
               unifiedAgents={pickerAgents}
               onUnifiedSelect={({ engine, providerId, modelId, effort, fast }) =>

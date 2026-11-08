@@ -244,6 +244,21 @@ describe('ask_user 与 done 的时序', () => {
     },
   );
 
+  it('keeps optional questions minimized and snoozes only a matching nonblocking RPC', async () => {
+    emitAskUserRequest('optional', [{ id: 'q', question: 'Continue?' }], 'async');
+    expect(makerChatStore.getLightSnapshot(SESSION_ID).askUserViewerState).toBe('minimized');
+    makerChatStore.setAskUserViewerState(SESSION_ID, 'expanded');
+    emitAskUserRequest('optional', [{ id: 'q', question: 'Continue?' }], 'async');
+    expect(makerChatStore.getLightSnapshot(SESSION_ID).askUserViewerState).toBe('expanded');
+    onInteractionRequest?.({ sessionId: SESSION_ID, request: { kind: 'ask_user_question', requestId: 'rpc',
+      isBlocking: false, questions: [{ id: 'q', question: 'Continue?' }] } });
+    makerChatStore.setAskUserDraft(SESSION_ID, { requestId: 'rpc', currentIndex: 0, answers: {}, started: true });
+    await vi.waitFor(() => expect(window.electronAPI.maker.resolveInteraction).toHaveBeenCalledWith('rpc', {
+      kind: 'ask_user_question', answers: {}, inProgress: true,
+    }));
+    expect(makerChatStore.getLightSnapshot(SESSION_ID).pendingAskUser?.requestId).toBe('rpc');
+  });
+
   it('does not send a protected supplement after its task is purged', async () => {
     emitAskUserRequest('async-1', [{ question: 'Original?' }], 'async');
     makerChatStore.setAskUserDraft(SESSION_ID, {

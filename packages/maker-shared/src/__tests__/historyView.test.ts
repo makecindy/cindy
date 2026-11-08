@@ -602,7 +602,7 @@ describe('shared history view lifecycle', () => {
     await view.refresh();
     view.setExpanded(items[0].key, true);
     await new Promise((done) => setTimeout(done, 0));
-    expect(expanded).toHaveBeenLastCalledWith([items[0].type === 'work' ? items[0].summary : undefined]);
+    expect(expanded).toHaveBeenLastCalledWith([{ key: items[0].key, firstMessageId: '1', lastMessageId: '1' }]);
     if (inactive) view.setActive(false);
     view.reset();
     await new Promise((done) => setTimeout(done, 0));

@@ -146,6 +146,30 @@ it('accepts the unchanged model through the versioned selection operation, leavi
   expect(deps.updateProfile).toHaveBeenCalledTimes(1);
 });
 
+// Unit regression: the primary picker mirrors agentDeviceId at the top level;
+// the fallback picker changes only the chain. Both must reach the same service.
+it.each(['profile.update', 'profile.acceptModelSelection'])('preserves remote primary/fallback locations through %s', async (op) => {
+  const { deps, call } = setup();
+  const local = { harness: 'codex', providerId: 'openai', model: 'same-model', effort: '', fastMode: false };
+  const remote = { ...local, agentDeviceId: 'share:one' };
+  for (const [agentDeviceId, modelChain] of [['share:one', [remote, local]], [null, [local, remote]]] as const) {
+    const capabilities = { agentDeviceId, modelChain, modelChainOverride: modelChain };
+    expect(await call(op, { patch: { capabilities }, expectedVersion: 3 })).toMatchObject({ ok: true });
+    expect(deps.updateProfile).toHaveBeenLastCalledWith(expect.objectContaining({ id: 'bot-1', capabilities }));
+  }
+});
+
+it('rejects malformed execution locations and still requires separate permission confirmation', async () => {
+  const { deps, call } = setup();
+  for (const agentDeviceId of [true, {}, '', '../other', 'x'.repeat(129)]) {
+    expect(await call('profile.update', { patch: { capabilities: { agentDeviceId } } }))
+      .toMatchObject({ ok: false, code: 'INVALID_PARAMS' });
+  }
+  expect(await call('profile.update', { patch: { capabilities: { agentDeviceId: 'device-two', permissions: 'trusted' } } }))
+    .toMatchObject({ ok: false, code: 'INVALID_PARAMS' });
+  expect(deps.updateProfile).not.toHaveBeenCalled();
+});
+
 it('lets the page see a memory revision conflict and hides unexpected failures', async () => {
   const conflict = setup({ deps: { memory: { update: vi.fn(async () => { throw createIpcError('PRECONDITION_FAILED', BOT_MEMORY_CHANGED); }) } as never } });
   expect(await conflict.call('memory.update', { filename: 'user_a.md', title: 't', body: 'b', expectedUpdatedAt: '2026-01-01T00:00:00Z' }))

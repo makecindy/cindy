@@ -1,6 +1,8 @@
+import { parseOutputLimitDetails, type OutputLimitDetails } from '@cindy/maker-shared';
 import { pendingGhostCardFormDelivery } from '@cindy/maker-shared/ghost-card-form';
 import { isVoiceCallTaskMessage } from '../../shared/voiceConversation';
 import { remoteAgentLimitErrorKey } from '../../shared/remoteAgentLimits';
+import { sharedTaskRecoveryReason } from '../../shared/sharedTaskRecovery';
 import { readBotTaskResults } from '@cindy/maker-shared/botCollaboration';
 import { asyncQuestionNeedsSupplement, formatAsyncQuestionSupplement } from '@cindy/maker-shared/interaction';
 import { isComposerTypingRecently } from './composerTypingActivity';
@@ -90,6 +92,7 @@ import { parseToolLoopErrorDetails } from '@cindy/maker-shared/tool-loop-error';
 import type { ToolLoopErrorDetails } from '@cindy/maker-core';
 import type { AgentMeta, MessageRole, Message, MessageAutomationOrigin } from '@/lib/ccAgent.types';
 import { toMessageAutomationOrigin } from '@/lib/messageAutomationOrigin';
+import { cancelPendingGhostCardTaskAutoArchive } from '@/cindy-brain/ghostCardTaskArchive';
 import {
   readMessageSourceDevice,
   readMessageSourceGroup,
@@ -365,6 +368,8 @@ function resolveEstimatedTurnCostUsd(
 /** Translation candidate only; callers must check their active i18n resources.
  * Unknown-code fallback text is diagnostic content, not curated guidance. */
 export function remoteErrorI18nKey(msg: string): string | undefined {
+  const recovery = sharedTaskRecoveryReason(msg);
+  if (recovery) return `sharedTaskRecovery.reason.${recovery}`;
   const limitKey = remoteAgentLimitErrorKey(msg);
   if (limitKey) return limitKey;
   const parsed = parseAgentErrorCode(msg);
@@ -372,6 +377,8 @@ export function remoteErrorI18nKey(msg: string): string | undefined {
 }
 
 export function decodeRemoteErrorMessage(msg: string): string {
+  const recovery = sharedTaskRecoveryReason(msg);
+  if (recovery) return i18n.t(`sharedTaskRecovery.reason.${recovery}`);
   const limitKey = remoteAgentLimitErrorKey(msg);
   if (limitKey) return i18n.t(limitKey);
   const parsed = parseAgentErrorCode(msg);
@@ -438,10 +445,12 @@ import {
 
 // Mirror: also defined in main/agentManager.ts
 export interface AskUserQuestionItem {
+  id?: string;
   question: string;
   header?: string;
   options?: Array<{ label: string; description?: string }>;
   multiSelect?: boolean;
+  answerConstraints?: import('@cindy/maker-shared').AskAnswerConstraints;
 }
 
 export interface ChatMessage {
@@ -647,6 +656,7 @@ export interface ChatMessage {
   errorReason?: string;
   /** Structured details for a tool-loop terminal error. */
   toolLoop?: ToolLoopErrorDetails;
+  outputLimit?: OutputLimitDetails;
   /**
    * 产生这条 error 行的 provider(错误发生时刻的快照,main 侧 onTurnErrorEvent
    * 从 session-provider-store 同步取值落进 content.providerId)。错误分类必须绑
@@ -833,6 +843,7 @@ export interface PendingAskUser {
   requestId: string;
   questions: AskUserQuestionItem[];
   delivery?: 'async';
+  isBlocking?: boolean;
   persistId?: string;
   resumeOnSubmit?: boolean;
 }
@@ -2612,6 +2623,8 @@ export interface SessionChatState {
   /** A task with an explicit product title must not be auto-renamed from its first message. */
   autoTitleDisabled?: boolean;
   error: string | null;
+  /** Renderer-only acknowledgement survives route unmounts with this task slice. */
+  sharedTaskRecoveryAcknowledged?: string;
   /** 当前 terminal error 是否为可恢复的账号用量限制，以及可识别的重置时刻。 */
   usageLimitRecovery?: UsageLimitRecoveryHint | null;
   /**
@@ -2622,6 +2635,7 @@ export interface SessionChatState {
   errorReason?: string | null;
   /** Structured details for a tool-loop terminal error; null when no such error is active. */
   toolLoop?: ToolLoopErrorDetails | null;
+  outputLimit?: OutputLimitDetails | null;
   recoverableError: string | null;
   /**
    * 输入投影自带的 recovery 镜像（main 的 retry 权威状态）。renderer 侧人工
@@ -2967,6 +2981,7 @@ export type SessionChatLightState = Pick<
   | 'usageLimitRecovery'
   | 'errorReason'
   | 'toolLoop'
+  | 'outputLimit'
   | 'recoverableError'
   | 'errorRetryText'
   | 'errorCanContinue'
@@ -3037,6 +3052,7 @@ function createInitialState(): SessionChatState {
     usageLimitRecovery: null,
     errorReason: null,
     toolLoop: null,
+    outputLimit: null,
     recoverableError: null,
     inputRecovery: null,
     activeTurnRetryText: null,
@@ -3120,6 +3136,7 @@ export const EMPTY_SESSION_STATE: SessionChatState = Object.freeze({
   usageLimitRecovery: null,
   errorReason: null,
   toolLoop: null,
+  outputLimit: null,
   recoverableError: null,
   inputRecovery: null,
   activeTurnRetryText: null,
@@ -4502,6 +4519,9 @@ function setState(
     next = { ...next, errorCanContinue: false };
   }
   if (prev.error !== next.error) {
+    // Live -> persisted tail remains the same episode; a new terminal error
+    // after retry must be offered again, including when its text is identical.
+    if (next.error) next = { ...next, sharedTaskRecoveryAcknowledged: undefined };
     _liveErrorEpoch.set(sessionId, (_liveErrorEpoch.get(sessionId) ?? 0) + 1);
   }
   if (_disposedLiveErrorIntents.size > 0) {
@@ -4997,6 +5017,7 @@ function applyInputProjection(
         ? projection.errorReason
         : null;
     const projectionToolLoop = parseToolLoopErrorDetails(projection.toolLoop) ?? null;
+    const projectionOutputLimit = parseOutputLimitDetails(projection.outputLimit) ?? null;
     return {
       ...s,
       messages,
@@ -5014,6 +5035,7 @@ function applyInputProjection(
       // 只在 error 仍存在时保留，并经过 parser 进行远端边界校验。
       errorReason: projectionErrorReason,
       toolLoop: projectionToolLoop,
+      outputLimit: projectionOutputLimit,
       // 进入凭证切换等待态时同步清 stale recoverableError:等待中的消息永不 dispatch,
       // 没有 stream/turn-done 事件替它清 —— 残留会让视图的 error(=recoverableError
       // 回落)遮住等待横幅,复现"静默排队"(review P2 2026-07-04)。
@@ -6372,6 +6394,7 @@ export function handleStreamEvent(
       // Keep its structured details for the live banner while the terminal
       // error remains visible; a clean done must still clear stale details.
       const preservedToolLoop = finalized.error !== null ? state.toolLoop : null;
+      const preservedOutputLimit = finalized.error !== null ? state.outputLimit : null;
 
       // Side-effect (titleUpdateCallbacks) is fired by the stream handler in
       // `initGlobalListeners`, not from inside this reducer — reducers stay pure.
@@ -6447,6 +6470,7 @@ export function handleStreamEvent(
         isStreaming: false,
         recoverableError: null,
         toolLoop: preservedToolLoop,
+        outputLimit: preservedOutputLimit,
         activeTurnRetryText: null,
         errorRetryText: finalized.error ? finalized.errorRetryText : null,
         pendingPermission: null,
@@ -6490,14 +6514,17 @@ export function handleStreamEvent(
         errorStatus,
         imageCount,
         toolLoop: toolLoopRaw,
+        outputLimit: outputLimitRaw,
       } = event.data as {
         message: string;
         reason?: string;
         errorStatus?: number | null;
         imageCount?: number;
         toolLoop?: unknown;
+        outputLimit?: unknown;
       };
       const toolLoop = parseToolLoopErrorDetails(toolLoopRaw);
+      const outputLimit = parseOutputLimitDetails(outputLimitRaw);
       // 视觉桥用户提示（正在识别 / fallback / 不可用）：toast 展示，完全不改 turn 状态
       // （不设 recoverableError、不阻断开流），零阻断。用 isVisionBridgeReason 三重校验
       // （source==='vision-bridge' + isTerminal:false + reason 枚举）——普通 agent / 远程
@@ -6569,6 +6596,7 @@ export function handleStreamEvent(
             usageLimitRecovery: null,
             errorReason: null,
             toolLoop: null,
+            outputLimit: null,
             recoverableError: null,
             errorRetryText: null,
             errorPersistId: null,
@@ -6594,6 +6622,7 @@ export function handleStreamEvent(
           // 文案匹配。其它非终止 error 仍不带 reason, 行为不变。
           errorReason: reason ?? null,
           toolLoop: null,
+          outputLimit: null,
           recoverableError: errMsg,
           errorRetryText: null,
           errorPersistId: null,
@@ -6654,6 +6683,8 @@ export function handleStreamEvent(
           isPlannedUpgradeClose || suppressAutoResumeBroadcastError ? null : (reason ?? null),
         toolLoop:
           isPlannedUpgradeClose || suppressAutoResumeBroadcastError ? null : (toolLoop ?? null),
+        outputLimit:
+          isPlannedUpgradeClose || suppressAutoResumeBroadcastError ? null : (outputLimit ?? null),
         recoverableError: null,
         errorRetryText: derivedRetryText ?? preservedRetryText,
         // persistId 只绑定即将落库的 error 行,不是重试依据。新事件带来非空 id
@@ -6891,6 +6922,7 @@ export function handleStreamEvent(
         requestId: string;
         questions: AskUserQuestionItem[];
         delivery?: 'async';
+        isBlocking?: boolean;
       };
       // Codex done reconciles pending interactions with fresh IPC objects. Keep
       // the same question's identity: AskUserQuestionPrompt restores selections
@@ -6902,9 +6934,10 @@ export function handleStreamEvent(
         previousAsk.questions.length === data.questions.length &&
         previousAsk.questions.every((question, index) => {
           const next = data.questions[index];
-          return question.question === next.question &&
+          return question.id === next.id && question.question === next.question &&
             question.header === next.header &&
             question.multiSelect === next.multiSelect &&
+            JSON.stringify(question.answerConstraints) === JSON.stringify(next.answerConstraints) &&
             (question.options?.length ?? 0) === (next.options?.length ?? 0) &&
             (question.options ?? []).every((option, optionIndex) =>
               option.label === next.options?.[optionIndex]?.label &&
@@ -6962,12 +6995,12 @@ export function handleStreamEvent(
           requestId: data.requestId,
           questions: data.questions,
           delivery: data.delivery,
+          isBlocking: data.isBlocking,
           persistId: event.persistId,
         },
-        // F-AUQ-MIN-1: Every new pendingAskUser starts expanded — even if the
-        // previous question in this same session was minimized. Folding never
-        // carries across questions.
-        askUserViewerState: keepAskProgress ? state.askUserViewerState : 'expanded',
+        // Optional questions start minimized so the original message stays readable.
+        // Replayed requests preserve the user's existing viewing state.
+        askUserViewerState: keepAskProgress ? state.askUserViewerState : data.delivery === 'async' ? 'minimized' : 'expanded',
         // Only an unchanged pending request may retain its draft. A new batch
         // or changed question content starts clean, even with the same requestId.
         askUserDraft: keepAskProgress ? state.askUserDraft : null,
@@ -7182,6 +7215,7 @@ function forceFinalizeOnSessionClosed(state: SessionChatState): SessionChatState
     isStreaming: false,
     recoverableError: null,
     toolLoop: null,
+    outputLimit: null,
     activeTurnRetryText: null,
     errorRetryText: null,
     errorPersistId: null,
@@ -7459,6 +7493,7 @@ function handleStatusUpdate(
     usageLimitRecovery: isTurnStart ? null : state.usageLimitRecovery,
     errorReason: isTurnStart ? null : state.errorReason,
     toolLoop: isTurnStart ? null : state.toolLoop,
+    outputLimit: isTurnStart ? null : state.outputLimit,
     errorRetryText: isTurnStart || (isTurnComplete && !state.error) ? null : state.errorRetryText,
     errorPersistId: isTurnStart ? null : state.errorPersistId,
     recoverableError: isTurnComplete ? null : state.recoverableError,
@@ -8704,11 +8739,12 @@ function initGlobalListeners(options: GlobalListenerOptions = {}): void {
     }
 
     if (request.kind === 'ask_user_question') {
-      const data: CCAgentAskUserQuestionPayload & { delivery?: 'async' } = {
+      const data: CCAgentAskUserQuestionPayload & { delivery?: 'async'; isBlocking?: boolean } = {
         sessionId,
         requestId: request.requestId,
         questions: request.questions as CCAgentAskUserQuestionPayload['questions'],
         ...(request.delivery === 'async' ? { delivery: 'async' as const } : {}),
+        ...(request.isBlocking === false ? { isBlocking: false } : {}),
       };
       setState(sessionId, (s) =>
         handleStreamEvent(s, { sessionId, type: 'ask_user_question', data, persistId }),
@@ -9985,6 +10021,7 @@ function selectLightState(state: SessionChatState): SessionChatLightState {
     usageLimitRecovery: state.usageLimitRecovery,
     errorReason: state.errorReason,
     toolLoop: state.toolLoop,
+    outputLimit: state.outputLimit,
     recoverableError: state.recoverableError,
     errorRetryText: state.errorRetryText,
     errorCanContinue: state.errorCanContinue,
@@ -10038,6 +10075,7 @@ function lightStateEquals(a: SessionChatLightState, b: SessionChatLightState): b
     a.usageLimitRecovery === b.usageLimitRecovery &&
     a.errorReason === b.errorReason &&
     a.toolLoop === b.toolLoop &&
+    a.outputLimit === b.outputLimit &&
     a.recoverableError === b.recoverableError &&
     a.errorRetryText === b.errorRetryText &&
     a.errorCanContinue === b.errorCanContinue &&
@@ -10613,6 +10651,7 @@ function syncActiveTurnsFromMain(): void {
             usageLimitRecovery: null,
             errorReason: null,
             toolLoop: null,
+            outputLimit: null,
             recoverableError: null,
             activeTurnRetryText: null,
             errorRetryText: null,
@@ -11500,6 +11539,7 @@ function settleRemoteOptimisticFailure(sessionId: string, clientId: string, erro
           usageLimitRecovery: null,
           errorReason: null,
           toolLoop: null,
+          outputLimit: null,
           recoverableError: null,
           errorRetryText: null,
         }
@@ -15278,6 +15318,8 @@ function sendMessage(
   if ((!text.trim() && (!files || files.length === 0)) || !workingDir)
     return Promise.resolve(false);
   if (isRemoteDeletedSessionSendBlocked(sessionId)) return Promise.resolve(false);
+  // 用户在任务里发了消息:已经待生效的合并后自动归档本次不再进行(卡片上的提示随之消失)。
+  cancelPendingGhostCardTaskAutoArchive(sessionId);
   const formDelivery = pendingGhostCardFormDelivery(sessionId);
   if (formDelivery) {
     const beforeEnqueue = opts?.beforeEnqueue;
@@ -15625,8 +15667,9 @@ async function sendMessageCore(
     })
     .catch((err) => {
       // 远端 lazy-create/startSession 抛的 [REMOTE_*] 不可恢复错误走 IPC reject 落这里
-      // (不经 stream error event reducer),同样要解码成 i18n 文案,别裸显 bracket code。
-      const message = decodeRemoteErrorMessage(err instanceof Error ? err.message : String(err));
+      // (不经 stream error event reducer)。保留已知 code 的 wrapper，让 ErrorBanner
+      // 选择可操作的 provider 指引；未知 code 仍由 helper 解码为通用本地化摘要。
+      const message = remoteErrorMessageForBanner(err instanceof Error ? err.message : String(err));
       setState(sessionId, (s) => ({
         ...s,
         error: message,
@@ -15678,7 +15721,7 @@ function compactSession(
       // RPC 已执行成功时保留既有返回语义；origin 漂移只丢控制端镜像回写。
       .then(({ projection }) => projection.error === null)
       .catch((err) => {
-        const message = decodeRemoteErrorMessage(err instanceof Error ? err.message : String(err));
+        const message = remoteErrorMessageForBanner(err instanceof Error ? err.message : String(err));
         setState(sessionId, (s) => ({
           ...s,
           error: message,
@@ -16011,8 +16054,9 @@ async function steerMessageCore(
     })
     .catch((err) => {
       // 远端 lazy-create/startSession 抛的 [REMOTE_*] 不可恢复错误走 IPC reject 落这里
-      // (不经 stream error event reducer),同样要解码成 i18n 文案,别裸显 bracket code。
-      const message = decodeRemoteErrorMessage(err instanceof Error ? err.message : String(err));
+      // (不经 stream error event reducer)。保留已知 code 的 wrapper，让 ErrorBanner
+      // 选择可操作的 provider 指引；未知 code 仍由 helper 解码为通用本地化摘要。
+      const message = remoteErrorMessageForBanner(err instanceof Error ? err.message : String(err));
       rollbackOptimisticSteer();
       setState(sessionId, (s) => ({
         ...s,
@@ -16162,7 +16206,7 @@ function steerQueuedMessage(sessionId: string, clientId: string): Promise<boolea
           unmarkLocalSentUserMessage(sessionId, clientId);
           // 远端 lazy-create/startSession 抛的 [REMOTE_*] 不可恢复错误走 IPC reject 落这里
           // (不经 stream error event reducer),同样要解码成 i18n 文案,别裸显 bracket code。
-          const message = decodeRemoteErrorMessage(
+          const message = remoteErrorMessageForBanner(
             err instanceof Error ? err.message : String(err),
           );
           setState(sessionId, (s) => ({
@@ -16529,6 +16573,7 @@ function clearError(sessionId: string): void {
       usageLimitRecovery: null,
       errorReason: null,
       toolLoop: null,
+      outputLimit: null,
       recoverableError: null,
       errorRetryText: null,
       errorPersistId: null,
@@ -16665,6 +16710,7 @@ function continueAfterSilentStop(sessionId: string): void {
         usageLimitRecovery: null,
         errorReason: null,
         toolLoop: null,
+        outputLimit: null,
         errorRetryText: null,
         errorPersistId: null,
       }));
@@ -16877,6 +16923,7 @@ async function clearSessionAfterGuardImpl(sessionId: string, clearedAt: string):
       usageLimitRecovery: null,
       errorReason: null,
       toolLoop: null,
+      outputLimit: null,
       recoverableError: null,
       activeTurnRetryText: null,
       errorRetryText: null,
@@ -17930,8 +17977,17 @@ function setPluginSetupViewerState(sessionId: string, next: PluginSetupViewerSta
  * after every keystroke / option click, but identical objects are deduped via
  * shallow comparison of (requestId, currentIndex, answers identity).
  */
+const snoozingQuestions = new WeakSet<PendingAskUser>();
+
 function setAskUserDraft(sessionId: string, next: AskUserDraft | null): void {
   if (!sessionId) return;
+  const current = getOrCreateState(sessionId);
+  const question = current.protectedAskUser?.pending ?? current.pendingAskUser;
+  if (next?.started && question?.requestId === next.requestId && question.isBlocking === false && !snoozingQuestions.has(question)) {
+    snoozingQuestions.add(question);
+    void makerApiFor(sessionId).resolveInteraction(next.requestId, { kind: 'ask_user_question', answers: {}, inProgress: true })
+      .catch(() => { snoozingQuestions.delete(question); });
+  }
   setState(sessionId, (s) => {
     const prev = s.protectedAskUser?.draft ?? s.askUserDraft;
     if (prev === next) return s;
@@ -18453,6 +18509,9 @@ export const makerChatStore = {
   subscribe,
   subscribeLight,
   getSnapshot,
+  acknowledgeSharedTaskRecovery(sessionId: string, episode: string) {
+    setState(sessionId, state => ({ ...state, sharedTaskRecoveryAcknowledged: episode }));
+  },
   getLightSnapshot,
   /** Non-creating read: session has a paused, non-empty pending queue (sidebar indicator). */
   hasPausedQueue,
@@ -19497,6 +19556,7 @@ function mapServerMessages(serverMsgs: Message[]): ChatMessage[] {
       const message = typeof c.message === 'string' ? c.message : '';
       const reason = typeof c.reason === 'string' ? c.reason : undefined;
       const toolLoop = parseToolLoopErrorDetails(c.toolLoop);
+      const outputLimit = parseOutputLimitDetails(c.outputLimit);
       const errorProviderId =
         typeof c.providerId === 'string' && c.providerId ? c.providerId : undefined;
       return {
@@ -19506,6 +19566,7 @@ function mapServerMessages(serverMsgs: Message[]): ChatMessage[] {
         isStreaming: false,
         ...(reason ? { errorReason: reason } : {}),
         ...(toolLoop ? { toolLoop } : {}),
+        ...(outputLimit ? { outputLimit } : {}),
         // 错误发生时的 provider 快照:恢复后的分类按它走,不用当前 session.providerId。
         ...(errorProviderId ? { errorProviderId } : {}),
         // interrupted-turn-resume:「忽略」的持久化标记(updateContent 写入)。

@@ -18,6 +18,7 @@ import { useCallback, useEffect, useState } from 'react';
 
 const STORAGE_KEY = 'notifications.enabled';
 const DEFAULT_ENABLED = true;
+const CHANGE_EVENT = 'notifications-enabled-changed';
 
 /** 同步读 localStorage——主要给非 hook 路径用。坏数据当默认值。 */
 export function getNotificationsEnabled(): boolean {
@@ -50,6 +51,7 @@ export function useNotificationSettings(): {
       // localStorage 不可用——忽略，UI 仍以内存值为准。
     }
     syncNotificationsEnabledToMain(next);
+    window.dispatchEvent(new Event(CHANGE_EVENT));
   }, []);
 
   // 跨实例同步——其他实例 setEnabled 时本实例也跟着更新。
@@ -58,8 +60,10 @@ export function useNotificationSettings(): {
       if (e.key !== STORAGE_KEY) return;
       setEnabledState(getNotificationsEnabled());
     };
+    const sync = () => setEnabledState(getNotificationsEnabled());
     window.addEventListener('storage', handler);
-    return () => window.removeEventListener('storage', handler);
+    window.addEventListener(CHANGE_EVENT, sync);
+    return () => { window.removeEventListener('storage', handler); window.removeEventListener(CHANGE_EVENT, sync); };
   }, []);
 
   return { enabled, setEnabled };

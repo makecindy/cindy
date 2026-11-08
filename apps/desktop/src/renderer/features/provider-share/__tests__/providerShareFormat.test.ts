@@ -190,10 +190,20 @@ describe('providerShareFormat', () => {
       received({ shareId: 'b', status: 'paused' }),
       received({ shareId: 'd' }),
     ];
-    expect(diffReceivedShares(before, after)).toEqual({ changed: ['b'], removed: ['c'] });
+    expect(diffReceivedShares(before, after)).toEqual({
+      changed: ['b'], removed: ['c'], revoked: ['b'],
+    });
     expect(diffReceivedShares(after, [received({ shareId: 'b', status: 'paused', hostOnline: false })])).toEqual({
       changed: ['b'],
       removed: ['a', 'd'],
+      revoked: [],
+    });
+    const active = received({ shareId: 'e' });
+    expect(diffReceivedShares([active], [received({ shareId: 'e', memberId: 'm2' })])).toEqual({
+      changed: ['e'], removed: [], revoked: ['e'],
+    });
+    expect(diffReceivedShares([active], [received({ shareId: 'e', hostOnline: false })])).toEqual({
+      changed: ['e'], removed: [], revoked: [],
     });
   });
 

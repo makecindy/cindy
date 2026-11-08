@@ -47,6 +47,21 @@ function chatData(overrides: Record<string, unknown> = {}) {
 }
 
 describe('parseBotGroupChatData', () => {
+  it('preserves skip permissions, pending-skip support, execution identity and skipped rows from the computer', () => {
+    const base = chatData().plans[0];
+    const parsed = parseBotGroupChatData(chatData({ plans: [{ ...base, kind: 'talk', canManage: true, supportsPendingSkip: true,
+      steps: [
+        { ...base.steps[0], status: 'running', executionId: 'turn', executionStatus: 'queued' },
+        { ...base.steps[1], status: 'skipped' },
+      ],
+    }] }))!;
+    expect(parsed.plans[0]).toMatchObject({ canManage: true, supportsPendingSkip: true, steps: [
+      { executionId: 'turn', executionStatus: 'queued' }, { status: 'skipped' },
+    ] });
+    const legacy = parseBotGroupChatData(chatData({ plans: [{ ...base, canManage: 'true', supportsPendingSkip: 'true' }] }))!;
+    expect(legacy.plans[0].canManage).toBeUndefined();
+    expect(legacy.plans[0].supportsPendingSkip).toBe(false);
+  });
   // The remote resource must preserve the queue semantics before choosing composer copy.
   it.each([
     ['all', 'talk', true, { kind: 'running', botName: '咪咪', talk: true }],
@@ -86,6 +101,23 @@ describe('parseBotGroupChatData', () => {
     const parsed = parseBotGroupChatData(data)!;
     expect(parsed.messages[0].runtimeFailureCode).toBe(runtimeFailureCode === 'AUTH_REQUIRED' ? runtimeFailureCode : undefined);
     expect(JSON.stringify(parsed.messages)).not.toContain('private diagnostic');
+  });
+  // Unit #8443 review: the real device-link parser must preserve the localized
+  // notice discriminator, while old/unknown input keeps its readable fallback.
+  it.each([
+    ['GROUP_AUTHORIZATION_REQUIRED', 'bot', false, true],
+    ['GROUP_AUTHORIZATION_UNAVAILABLE', 'bot', false, true],
+    ['ATTACHMENTS_UNAVAILABLE', 'bot', false, true],
+    ['private diagnostic', 'bot', false, false],
+    [undefined, 'bot', false, false],
+    ['ATTACHMENTS_UNAVAILABLE', 'user', false, false],
+    ['ATTACHMENTS_UNAVAILABLE', 'bot', true, false],
+  ])('preserves only a live companion capability notice (%s, %s, deleted=%s)', (code, authorKind, deleted, keep) => {
+    const parsed = parseBotGroupChatData(chatData({ messages: [{ id: 'capability', sequence: 1,
+      kind: 'notice', authorKind, authorName: 'Bot', content: 'Readable host-language fallback',
+      createdAt: 1, deleted, capabilityNoticeCode: code }] }))!;
+    expect(parsed.messages[0].capabilityNoticeCode).toBe(keep ? code : undefined);
+    expect(parsed.messages[0].content).toBe('Readable host-language fallback');
   });
   it('preserves server member identities and removal capability', () => {
     const parsed = parseBotGroupChatData(chatData({ serverBacked: true, supportsMemberRemoval: true,

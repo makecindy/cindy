@@ -1,4 +1,4 @@
-import { mkdirSync, mkdtempSync, rmSync, symlinkSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -8,6 +8,7 @@ import {
   clearWritableDirectoryPickerGrantsForTesting,
   consumeWritableDirectoryPickerGrants,
   issueWritableDirectoryPickerGrant,
+  issueWritableDirectoryRecentGrant,
 } from '../writableDirectoryPickerGrant.js';
 
 describe('Main-owned writable directory picker grants', () => {
@@ -145,5 +146,35 @@ describe('Main-owned writable directory picker grants', () => {
     await expect(consumeWritableDirectoryPickerGrants({
       scopeId: 'draft', senderId: 7, requestedDirs: [output], previousDirs: [],
     })).rejects.toMatchObject({ code: 'WRITABLE_DIRECTORY_UNAVAILABLE' });
+  });
+
+  // 「添加目录」最近列表：只有最近项目里的路径能拿到与系统选择器同等的授权，
+  // 其余路径不留授权，保存时仍被拒。Tier: unit（同一临时目录 fixture）。
+  it.each([
+    { name: 'recent project', recent: true, present: true, expected: null },
+    { name: 'path outside the recent list', recent: false, present: true, expected: 'WRITABLE_DIRECTORY_AUTHORIZATION_REQUIRED' },
+    { name: 'recent project removed from disk', recent: true, present: false, expected: 'WRITABLE_DIRECTORY_UNAVAILABLE' },
+    { name: 'recent project replaced by a file', recent: true, present: 'file', expected: 'WRITABLE_DIRECTORY_UNAVAILABLE' },
+  ])('issues recent-list grants only for an existing recent project: $name', async ({ recent, present, expected }) => {
+    const output = join(fixture, 'output');
+    if (present === 'file') writeFileSync(output, '');
+    else if (present) mkdirSync(output);
+    const issue = issueWritableDirectoryRecentGrant({
+      scopeId: 'session-a',
+      senderId: 7,
+      directory: output,
+      isRecentProject: async (candidate) => recent && candidate === output,
+    });
+    const consume = () => consumeWritableDirectoryPickerGrants({
+      scopeId: 'session-a', senderId: 7, requestedDirs: [output], previousDirs: [],
+    });
+    if (expected === null) {
+      await expect(issue).resolves.toBeUndefined();
+      await expect(consume()).resolves.toBeUndefined();
+      return;
+    }
+    await expect(issue).rejects.toMatchObject({ code: expected });
+    if (!present) mkdirSync(output);
+    await expect(consume()).rejects.toMatchObject({ code: 'WRITABLE_DIRECTORY_AUTHORIZATION_REQUIRED' });
   });
 });

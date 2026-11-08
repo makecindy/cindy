@@ -7,7 +7,7 @@
  * 目录短时缓存，避免设置页刷新与连续分配时反复读远端。
  */
 import type { ProviderView } from '@cindy/model-providers';
-import { readProviderRunningTurns, readProviderShareGuestRunning, type ProviderShareReceived } from '@cindy/device-link';
+import { readProviderRunningTurns, readProviderShareGuestRunning, type ProviderMetadataContinuity, type ProviderShareReceived } from '@cindy/device-link';
 
 import {
   PROVIDER_SHARE_AGENT_DEVICE_PREFIX,
@@ -35,7 +35,10 @@ export interface ProviderGroupDirectoryDeps {
   localAppVersion?(): string;
   listDevices(): Promise<readonly DeviceLinkDeviceView[]>;
   /** 那台电脑允许被远程调用的供应商；读不到时抛错(带 `[REMOTE_AGENT_SHARE_*]` 前缀时保留原因)。 */
-  readDeviceProviders(agentDeviceId: string): Promise<ProviderView[]>;
+  readDeviceProviders(agentDeviceId: string, options?: { live: true }): Promise<ProviderView[]>;
+  /** Rich read used by new-task assignment: separates a stale continuity reply from a live directory. */
+  readDeviceProviderCatalog?(agentDeviceId: string, options?: { live: true }):
+    Promise<{ views: ProviderView[]; stale: boolean; remainingMs?: number }>;
   listReceivedShares(): readonly ProviderShareReceived[];
   isMobilePlatform(platform: string | null): boolean;
   /** 本机这个供应商正在运行一轮的任务数(localLoad.ts)；不提供或读不到时为 null。 */
@@ -47,9 +50,21 @@ export interface ProviderGroupDirectoryDeps {
   peekCodexUsage?(member: ProviderGroupMember): ProviderGroupCodexUsageSnapshot | null;
   invalidateUsage?(): void;
   now(): number;
+  /** Monotonic clock paired with now() for bounded budgets and cache deadlines. */
+  mono?(): number;
 }
 
 export type ResolvedMemberState = 'ok' | 'offline' | 'unavailable';
+
+export interface ProviderGroupCatalogRead {
+  views: ProviderView[];
+  /** True only when this call started the underlying read; a cached/in-flight join is false. */
+  freshRead: boolean;
+  /** True when the provider-list reply itself is a stale continuity fallback. */
+  stale: boolean;
+  /** Source budget remaining at this read; absent for legacy replies without a stamp. */
+  remainingMs?: number;
+}
 
 export interface ResolvedProviderGroupMember {
   member: ProviderGroupMember;
@@ -65,6 +80,8 @@ export interface ResolvedProviderGroupMember {
    * 分享来的电脑报来本账号(每台电脑)在那里的数。那台较旧给不出时没有。
    */
   reportedRunning?: number;
+  /** Source directory budget for this member; absent for legacy replies without a stamp. */
+  providerContinuity?: ProviderMetadataContinuity;
   /** Internal only: never included in the group wire projection or shared with guests. */
   claudeUsage?: ClaudeSubscriptionUsageSnapshot | null;
   codexUsage?: ProviderGroupCodexUsageSnapshot | null;
@@ -92,6 +109,16 @@ const LOCAL_LOAD_TIMEOUT_MS = 1_000;
 
 const SHARE_REASON = /^\[REMOTE_AGENT_SHARE_(PAUSED|REMOVED|UNAVAILABLE)\]/;
 
+interface CatalogReadResult {
+  views: ProviderView[];
+  stale: boolean;
+  remainingMs?: number;
+  wallUntil?: number;
+  monoUntil?: number;
+  /** Sticky observation: once this result was seen expired, no clock rollback may revive it. */
+  expired?: boolean;
+}
+
 export interface ProviderGroupDirectory {
   resolveMembers(
     providerId: string,
@@ -101,6 +128,8 @@ export interface ProviderGroupDirectory {
   listCandidates(providerId: string, config: ProviderGroupConfig | null): Promise<ProviderGroupCandidate[]>;
   /** 那台电脑允许被远程调用的供应商(与组内电脑状态共用同一份短时缓存)；读不到时抛错。 */
   readDeviceCatalog(agentDeviceId: string): Promise<ProviderView[]>;
+  /** Array API plus whether this call started the read and whether the reply was stale. */
+  readDeviceCatalogState?(agentDeviceId: string): Promise<ProviderGroupCatalogRead>;
   /**
    * 本机现在连不连得上那台电脑上的这个供应商：不用缓存，现读设备列表与那台的目录(同账号电脑、分享来的电脑；
    * `agentDeviceId` 用任务记录里的写法)。自动换电脑前等那台恢复时用。
@@ -121,7 +150,7 @@ export interface ProviderGroupDirectory {
 }
 
 export function createProviderGroupDirectory(deps: ProviderGroupDirectoryDeps): ProviderGroupDirectory {
-  const catalogs = new Map<string, { at: number; ok: boolean; promise: Promise<ProviderView[]> }>();
+  const catalogs = new Map<string, { at: number; ok: boolean; promise: Promise<CatalogReadResult> }>();
   let devices: { at: number; promise: Promise<readonly DeviceLinkDeviceView[]> } | null = null;
   /**
    * 分享来的电脑从什么时候起被看到离线(分享列表的 hostOnline 快照)：分享没有最后在线时刻，按本机第一次看到离线
@@ -134,16 +163,50 @@ export function createProviderGroupDirectory(deps: ProviderGroupDirectoryDeps): 
     else if (!shareOfflineSince.has(shareId)) shareOfflineSince.set(shareId, deps.now());
   }
 
-  function readCatalog(agentDeviceId: string): Promise<ProviderView[]> {
+  function monoNow(): number {
+    return deps.mono?.() ?? performance.now();
+  }
+
+  function toCatalogRead(result: CatalogReadResult, freshRead: boolean): ProviderGroupCatalogRead {
+    const measuredMs = result.wallUntil === undefined || result.monoUntil === undefined
+      ? result.remainingMs
+      : Math.max(0, Math.min(result.wallUntil - deps.now(), result.monoUntil - monoNow()));
+    if (!result.expired && measuredMs !== undefined && measuredMs <= 0) result.expired = true;
+    const remainingMs = result.expired ? 0 : measuredMs;
+    const stale = result.stale || (remainingMs !== undefined && remainingMs <= 0);
+    return { views: result.views, stale, ...(remainingMs !== undefined ? { remainingMs } : {}), freshRead };
+  }
+
+  function readCatalogUncached(agentDeviceId: string, live: boolean): Promise<CatalogReadResult> {
+    const options = live ? { live: true as const } : undefined;
+    const requestedAt = { wall: deps.now(), mono: monoNow() };
+    if (deps.readDeviceProviderCatalog) {
+      return deps.readDeviceProviderCatalog(agentDeviceId, options).then(({ views, stale, remainingMs }) => ({
+        views, stale,
+        ...(remainingMs === undefined ? {} : { remainingMs,
+          wallUntil: requestedAt.wall + remainingMs, monoUntil: requestedAt.mono + remainingMs }),
+      }));
+    }
+    return deps.readDeviceProviders(agentDeviceId, options).then((views) => ({ views, stale: false }));
+  }
+
+  function readCatalogState(agentDeviceId: string, live = false): Promise<ProviderGroupCatalogRead> {
+    if (live) return readCatalogUncached(agentDeviceId, true).then((result) => toCatalogRead(result, true));
     const now = deps.now();
     const cached = catalogs.get(agentDeviceId);
-    if (cached && now - cached.at < (cached.ok ? CATALOG_TTL_MS : CATALOG_FAILURE_TTL_MS)) return cached.promise;
-    const entry = { at: now, ok: true, promise: deps.readDeviceProviders(agentDeviceId) };
+    if (cached && now - cached.at < (cached.ok ? CATALOG_TTL_MS : CATALOG_FAILURE_TTL_MS)) {
+      return cached.promise.then((result) => toCatalogRead(result, false));
+    }
+    const entry = { at: now, ok: true, promise: readCatalogUncached(agentDeviceId, false) };
     entry.promise.catch(() => {
       entry.ok = false;
     });
     catalogs.set(agentDeviceId, entry);
-    return entry.promise;
+    return entry.promise.then((result) => toCatalogRead(result, true));
+  }
+
+  function readCatalog(agentDeviceId: string, live = false): Promise<ProviderView[]> {
+    return readCatalogState(agentDeviceId, live).then((result) => result.views);
   }
 
   function readDevices(): Promise<readonly DeviceLinkDeviceView[]> {
@@ -191,6 +254,7 @@ export function createProviderGroupDirectory(deps: ProviderGroupDirectoryDeps): 
   async function resolveDevice(
     member: ProviderGroupMember,
     deviceList: readonly DeviceLinkDeviceView[] | null,
+    live = false,
   ): Promise<ResolvedProviderGroupMember> {
     const deviceId = member.agentDeviceId!;
     const device = deviceList?.find((d) => d.deviceId === deviceId);
@@ -198,21 +262,22 @@ export function createProviderGroupDirectory(deps: ProviderGroupDirectoryDeps): 
     const appVersion = readProviderGroupAppVersion(device?.appVersion);
     const version = appVersion ? { appVersion } : {};
     if (!device || !isControllable(device)) return { member, label, ...version, state: 'offline' };
-    let views: ProviderView[];
+    let catalog: ProviderGroupCatalogRead;
     try {
-      views = await readCatalog(deviceId);
+      catalog = await readCatalogState(deviceId, live);
     } catch {
       return { member, label, ...version, state: 'offline' };
     }
-    const resolved = withView(member, label, undefined, views);
+    const resolved = withView(member, label, undefined, catalog.views);
     const reportedRunning = resolved.view ? readProviderRunningTurns(resolved.view) : null;
-    return { ...resolved, ...version, ...(reportedRunning === null ? {} : { reportedRunning }) };
+    return { ...resolved, ...version, ...(reportedRunning === null ? {} : { reportedRunning }),
+      ...memberContinuity(catalog) };
   }
 
   async function resolveShare(
     member: ProviderGroupMember,
-    /** 不信分享列表里定时刷新的 hostOnline 快照，照样去读那台的目录(等它恢复时用)。 */
-    options?: { readThroughOffline?: boolean },
+    /** Recovery probes must reach the real peer; a display snapshot is not a health proof. */
+    options?: { live: true },
   ): Promise<ResolvedProviderGroupMember> {
     const agentDeviceId = member.agentDeviceId!;
     const shareId = agentDeviceId.slice(PROVIDER_SHARE_AGENT_DEVICE_PREFIX.length);
@@ -224,10 +289,12 @@ export function createProviderGroupDirectory(deps: ProviderGroupDirectoryDeps): 
     const label = ownerName;
     if (share.status === 'paused') return { member, label, ownerName, state: 'unavailable', reason: 'share-paused' };
     noteShareOnline(shareId, share.hostOnline);
-    if (!share.hostOnline && !options?.readThroughOffline) return { member, label, ownerName, state: 'offline' };
-    let views: ProviderView[];
+    // Cloud presence describes signaling, not an already authenticated data
+    // path. The shared reader may have a bounded snapshot; execution still
+    // reaches the real target and enforces its current grant.
+    let catalog: ProviderGroupCatalogRead;
     try {
-      views = await readCatalog(agentDeviceId);
+      catalog = await readCatalogState(agentDeviceId, options?.live);
     } catch (error) {
       const reason = SHARE_REASON.exec(error instanceof Error ? error.message : '')?.[1];
       if (reason === 'PAUSED') return { member, label, ownerName, state: 'unavailable', reason: 'share-paused' };
@@ -237,9 +304,15 @@ export function createProviderGroupDirectory(deps: ProviderGroupDirectoryDeps): 
       if (reason === 'UNAVAILABLE') return { member, label, ownerName, state: 'unavailable', reason: 'provider-off' };
       return { member, label, ownerName, state: 'offline' };
     }
-    const resolved = withView(member, label, ownerName, views);
+    const resolved = withView(member, label, ownerName, catalog.views);
     const reportedRunning = resolved.view ? readProviderShareGuestRunning(resolved.view) : null;
-    return reportedRunning === null ? resolved : { ...resolved, reportedRunning };
+    return { ...(reportedRunning === null ? resolved : { ...resolved, reportedRunning }), ...memberContinuity(catalog) };
+  }
+
+  function memberContinuity(catalog: ProviderGroupCatalogRead): { providerContinuity?: ProviderMetadataContinuity } {
+    if (catalog.remainingMs === undefined) return {};
+    return { providerContinuity: { stale: catalog.stale || catalog.remainingMs <= 0,
+      remainingMs: Math.max(0, catalog.remainingMs) } };
   }
 
   function withView(
@@ -414,6 +487,7 @@ export function createProviderGroupDirectory(deps: ProviderGroupDirectoryDeps): 
     },
 
     readDeviceCatalog: readCatalog,
+    readDeviceCatalogState: readCatalogState,
 
     async probe(agentDeviceId, providerId) {
       catalogs.delete(agentDeviceId);
@@ -428,13 +502,13 @@ export function createProviderGroupDirectory(deps: ProviderGroupDirectoryDeps): 
         paused: false,
       };
       // 分享来的电脑：hostOnline 是定时刷新的快照，等它恢复时不只看它，直接读那台的目录。
-      if (share) return (await resolveShare(member, { readThroughOffline: true })).state;
+      if (share) return (await resolveShare(member, { live: true })).state;
       devices = null;
       const deviceList = await readDevices().catch(() => null);
       const device = deviceList?.find((d) => d.deviceId === agentDeviceId);
       // 在线却关了远程控制或远程调用：是有意的设置，不是断线，不用等它恢复。
       if (device?.online && !isControllable(device)) return 'unavailable';
-      return (await resolveDevice(member, deviceList)).state;
+      return (await resolveDevice(member, deviceList, true)).state;
     },
 
     memberLabel(member) {

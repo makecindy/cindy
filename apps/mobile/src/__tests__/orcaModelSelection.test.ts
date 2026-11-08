@@ -14,11 +14,13 @@ const source = ts.createSourceFile('session.tsx', readFileSync(
 const callbacks = new Map<string, string>();
 let intentGate = '';
 let remoteCatalogGate = '';
+let locationLockGate = '';
 function visit(node: ts.Node) {
   if (ts.isVariableDeclaration(node) && node.initializer) {
     const name = node.name.getText(source);
     if (name === 'orcaModelSelectionUsesIntent') intentGate = node.initializer.getText(source);
     if (name === 'orcaRemoteAgentDeviceId') remoteCatalogGate = node.initializer.getText(source);
+    if (name === 'orcaAgentLocationLocked') locationLockGate = node.initializer.getText(source);
     if (ts.isCallExpression(node.initializer) && ['useCallback', 'useMemo'].includes(node.initializer.expression.getText(source))) {
       callbacks.set(name, node.initializer.arguments[0].getText(source));
     }
@@ -28,7 +30,7 @@ function visit(node: ts.Node) {
 visit(source);
 
 function setup(orcaRole: 'lead' | 'worker' | null, supported = true, agentDeviceId: string | null = null,
-  windowState: { agent?: string; used?: number; current?: number; target?: number; hostGuard?: boolean } = {}) {
+  windowState: { agent?: string; used?: number; current?: number; target?: number; hostGuard?: boolean; relocation?: boolean; relocateTo?: string | null } = {}) {
   const selection = { model: 'new-model', providerId: 'provider', effort: 'high', fastMode: true };
   const write = vi.fn(async (_intent: unknown) => true);
   const setModel = vi.fn(async () => true);
@@ -38,6 +40,7 @@ function setup(orcaRole: 'lead' | 'worker' | null, supported = true, agentDevice
     currentSession: { orcaRole, agentDeviceId, agentKind: windowState.agent ?? 'codex', model: 'old-model', effort: 'low', fastMode: false,
       contextTokens: windowState.used, contextWindow: windowState.current },
     currentAgentDeviceId: agentDeviceId,
+    capabilities: windowState.relocation ? { supportsOrcaAgentRelocation: true } : null,
     remoteAgentCatalogs: ['current', 'other'].map(deviceId => ({ deviceId, providers: [] })),
     sessionAgentSwitchSupported: supported, sessionAgentKind: windowState.agent ?? 'codex', modelSheetAgentKind: windowState.agent ?? 'codex',
     canUseRemoteSessionControls: true, canConfigureSessionModel: true, controlBusy: false,
@@ -52,7 +55,11 @@ function setup(orcaRole: 'lead' | 'worker' | null, supported = true, agentDevice
     maker: { getCapabilities: vi.fn(), setEffort: vi.fn(), setFastMode: vi.fn() },
     executionMakerForDevice: vi.fn((_id: string) => ({ getCapabilities: remoteCapabilities })),
     isProviderShareAgentDeviceId: (id: unknown) => typeof id === 'string' && id.startsWith('share:'),
-    confirmAgentLocationForPick, intentChangesAgentLocation: () => false,
+    // relocateTo:模拟用户已在换电脑确认框里点了确认。
+    confirmAgentLocationForPick: windowState.relocateTo !== undefined
+      ? vi.fn(async () => ({ agentDeviceId: windowState.relocateTo }))
+      : confirmAgentLocationForPick,
+    intentChangesAgentLocation: () => false,
     confirmMobileSessionAgentSwitch: vi.fn(async () => true),
     shouldBlockLegacyRemoteModelWindowSwitch, showRemoteModelWindowUnsupported: vi.fn(),
     writeSessionAgentSwitchIntent: write, setComposerModel: setModel, runControlAction,
@@ -61,6 +68,7 @@ function setup(orcaRole: 'lead' | 'worker' | null, supported = true, agentDevice
   const names = ['selectComposerModelRow', 'selectUnifiedComposerModel', 'selectComposerFlatModel',
     'changeComposerSelectedEffort', 'changeComposerSelectedFastMode'];
   const compiled = ts.transpileModule(`const orcaModelSelectionUsesIntent = ${intentGate};
+    const orcaAgentLocationLocked = ${locationLockGate};
     const orcaRemoteAgentDeviceId = ${remoteCatalogGate};
     const loadComposerAgentCapabilities = ${callbacks.get('loadComposerAgentCapabilities')};
     const canStageOrcaModelSelection = ${callbacks.get('canStageOrcaModelSelection')};
@@ -126,6 +134,17 @@ describe('Orca model-only selection', () => {
     }
   });
 
+  it.each(['lead', 'worker'] as const)('does not apply the in-place window guard when %s moves to another computer', async role => {
+    // 换电脑在新位置重建会话再交接：已用 240k 也能换到另一台的 200k 模型。
+    for (const [name, input] of picks) {
+      const h = setup(role, true, null, { used: 240000, current: 1000000, relocation: true, relocateTo: 'other' });
+      await h.handlers[name](input, ...(name === 'selectUnifiedComposerModel' ? [{ deviceId: 'other' }] : []));
+      await vi.waitFor(() => expect(h.write).toHaveBeenCalledTimes(1));
+      expect(h.write.mock.calls[0][0]).toMatchObject({ agentDeviceId: 'other' });
+      expect(h.bindings.showRemoteModelWindowUnsupported).not.toHaveBeenCalled();
+    }
+  });
+
   it.each([
     { used: 179999, current: 1000000 },
     { used: 240000, current: 200000 },
@@ -177,6 +196,12 @@ describe('Orca model-only selection', () => {
     expect(h.write).toHaveBeenCalledTimes(1);
     expect(h.setModel).not.toHaveBeenCalled();
     expect(h.bindings.currentSession.agentDeviceId).toBe('current');
+  });
+
+  it.each(['lead', 'worker'] as const)('lists every remote catalog for %s when the controlled computer allows relocation', role => {
+    // 被控电脑声明 supportsOrcaAgentRelocation：协同任务与普通任务一样可换电脑，不再锁定在 Agent 当前那台。
+    const h = setup(role, true, 'current', { relocation: true });
+    expect(h.handlers.catalogs.map((item: { deviceId: string }) => item.deviceId)).toEqual(['current', 'other']);
   });
 
   it.each(['lead', 'worker'] as const)('stages all three model pickers for %s without patching the current runtime', async role => {

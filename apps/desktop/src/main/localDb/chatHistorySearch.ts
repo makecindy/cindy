@@ -123,8 +123,23 @@ interface SearchChatHistoryEngineArgs extends SearchChatHistoryArgs {
 export async function searchChatHistoryHybrid(
   args: SearchChatHistoryEngineArgs,
 ): Promise<SearchChatHistoryResult> {
+  const fetchPage = await prepareChatHistorySearch(args);
+  return fetchPage({ limit: args.limit, offset: args.offset });
+}
+
+type SearchChatHistoryQueryArgs = Omit<SearchChatHistoryEngineArgs, 'limit' | 'offset'>;
+type SearchChatHistoryPage = Pick<SearchChatHistoryEngineArgs, 'limit' | 'offset'>;
+
+/**
+ * Prepare one invocation's ranked pool. The caller owns the pager's lifetime;
+ * never retain it across requests/accounts. Only hydration is repeated per page.
+ * Pagination cannot change the query or its host-owned scope.
+ */
+export async function prepareChatHistorySearch(
+  args: SearchChatHistoryQueryArgs,
+): Promise<(page: SearchChatHistoryPage) => Promise<SearchChatHistoryResult>> {
   if (args.sessionIds !== null && args.sessionIds.length === 0) {
-    return {
+    return async () => ({
       hits: [],
       sessions: {},
       vectorUsed: false,
@@ -133,7 +148,7 @@ export async function searchChatHistoryHybrid(
       hasMore: false,
       poolSize: 0,
       poolCapped: false,
-    };
+    });
   }
   // 1) 两路召回(FTS 同步; vector 异步, 失败静默跳过)
   // workdir 候选按 DB 实际拼写解析一次, 两路 arm 复用(见 workingDirHistoryFilter)
@@ -144,7 +159,7 @@ export async function searchChatHistoryHybrid(
   // Remote requests instead use the filtered arm/probe: the diagnostic must be
   // identical when a directory exists only in hidden sessions or is absent.
   if (!args.remoteVisibleOnly && workdirCandidates !== null && workdirCandidates.length === 0) {
-    return {
+    return async () => ({
       hits: [],
       sessions: {},
       vectorUsed: false,
@@ -153,7 +168,7 @@ export async function searchChatHistoryHybrid(
       hasMore: false,
       poolSize: 0,
       poolCapped: false,
-    };
+    });
   }
   const ftsRows = await runFtsArm(args, workdirCandidates);
   const vec = await runVectorArm(args, workdirCandidates);
@@ -203,102 +218,104 @@ export async function searchChatHistoryHybrid(
       }),
     );
   }
-  const start = Math.max(0, Math.min(args.offset, pool.length));
-  const pageEntries = pool.slice(start, start + args.limit);
-  let nextOffset = start + args.limit < pool.length ? start + args.limit : null;
-  const pageBudget = args.historyToolPageBudget === true ? new HistoryPageBudget() : null;
+  return async ({ offset, limit }) => {
+    const start = Math.max(0, Math.min(offset, pool.length));
+    const pageEntries = pool.slice(start, start + limit);
+    let nextOffset = start + limit < pool.length ? start + limit : null;
+    const pageBudget = args.historyToolPageBudget === true ? new HistoryPageBudget() : null;
 
-  // radius=0 is the conversation-search hot path. Hydrate the whole page in
-  // one worker RPC; callers that need neighbours keep the original window query.
-  const anchorContexts =
-    args.contextRadius <= 0 && !pageBudget
-      ? await fetchAnchorContexts(pageEntries.map((entry) => entry.messageId))
-      : null;
+    // radius=0 is the conversation-search hot path. Hydrate the whole page in
+    // one worker RPC; callers that need neighbours keep the original window query.
+    const anchorContexts =
+      args.contextRadius <= 0 && !pageBudget
+        ? await fetchAnchorContexts(pageEntries.map((entry) => entry.messageId))
+        : null;
 
-  const pageAnchors = pageEntries.flatMap((entry, pageIndex) => {
-    const meta = metaById.get(entry.messageId);
-    return meta
-      ? [
-          {
-            pageIndex,
-            anchorId: entry.messageId,
-            sessionId: meta.sessionId,
-            createdAt: meta.createdAt,
-          },
-        ]
-      : [];
-  });
-  const batchedContexts =
-    args.contextRadius > 0 && !pageBudget
-      ? await fetchContextWindowsBatched(pageAnchors, args.roles, args.contextRadius)
-      : null;
+    const pageAnchors = pageEntries.flatMap((entry, pageIndex) => {
+      const meta = metaById.get(entry.messageId);
+      return meta
+        ? [
+            {
+              pageIndex,
+              anchorId: entry.messageId,
+              sessionId: meta.sessionId,
+              createdAt: meta.createdAt,
+            },
+          ]
+        : [];
+    });
+    const batchedContexts =
+      args.contextRadius > 0 && !pageBudget
+        ? await fetchContextWindowsBatched(pageAnchors, args.roles, args.contextRadius)
+        : null;
 
-  // 5) 按命中顺序组装上下文窗口
-  const hits: SearchChatHistoryHit[] = [];
-  let pageIndex = 0;
-  let budgetBatchSize = 1;
-  pageLoop: while (pageIndex < pageEntries.length) {
-    if (pageBudget?.full) {
-      nextOffset = start + pageIndex;
-      break;
-    }
-    const batchEnd = pageBudget
-      ? Math.min(pageEntries.length, pageIndex + budgetBatchSize)
-      : pageEntries.length;
-    const budgetContexts = pageBudget
-      ? await fetchContextWindowsBatched(
-          pageAnchors.filter(
-            (anchor) => anchor.pageIndex >= pageIndex && anchor.pageIndex < batchEnd,
-          ),
-          args.roles,
-          args.contextRadius,
-        )
-      : null;
-
-    for (; pageIndex < batchEnd; pageIndex += 1) {
+    // 5) 按命中顺序组装上下文窗口
+    const hits: SearchChatHistoryHit[] = [];
+    let pageIndex = 0;
+    let budgetBatchSize = 1;
+    pageLoop: while (pageIndex < pageEntries.length) {
       if (pageBudget?.full) {
         nextOffset = start + pageIndex;
-        break pageLoop;
+        break;
       }
-      const fe = pageEntries[pageIndex];
-      const meta = metaById.get(fe.messageId);
-      if (!meta) continue; // 理论不会发生(fused 的 id 必来自两路 arm)
-      const context =
-        anchorContexts?.get(fe.messageId) ??
-        (anchorContexts ? [] : ((budgetContexts ?? batchedContexts)?.get(pageIndex) ?? []));
-      const hit: SearchChatHistoryHit = {
-        messageId: fe.messageId,
-        sessionId: meta.sessionId,
-        role: meta.role,
-        createdAt: meta.createdAt,
-        snippet: meta.snippet,
-        score: fe.score,
-        ftsRank: fe.ftsRank,
-        vectorRank: fe.vectorRank,
-        vectorDistance: meta.distance,
-        context,
-      };
-      if (pageBudget && !pageBudget.tryAdd(hit)) {
-        nextOffset = start + pageIndex;
-        break pageLoop;
+      const batchEnd = pageBudget
+        ? Math.min(pageEntries.length, pageIndex + budgetBatchSize)
+        : pageEntries.length;
+      const budgetContexts = pageBudget
+        ? await fetchContextWindowsBatched(
+            pageAnchors.filter(
+              (anchor) => anchor.pageIndex >= pageIndex && anchor.pageIndex < batchEnd,
+            ),
+            args.roles,
+            args.contextRadius,
+          )
+        : null;
+
+      for (; pageIndex < batchEnd; pageIndex += 1) {
+        if (pageBudget?.full) {
+          nextOffset = start + pageIndex;
+          break pageLoop;
+        }
+        const fe = pageEntries[pageIndex];
+        const meta = metaById.get(fe.messageId);
+        if (!meta) continue; // 理论不会发生(fused 的 id 必来自两路 arm)
+        const context =
+          anchorContexts?.get(fe.messageId) ??
+          (anchorContexts ? [] : ((budgetContexts ?? batchedContexts)?.get(pageIndex) ?? []));
+        const hit: SearchChatHistoryHit = {
+          messageId: fe.messageId,
+          sessionId: meta.sessionId,
+          role: meta.role,
+          createdAt: meta.createdAt,
+          snippet: meta.snippet,
+          score: fe.score,
+          ftsRank: fe.ftsRank,
+          vectorRank: fe.vectorRank,
+          vectorDistance: meta.distance,
+          context,
+        };
+        if (pageBudget && !pageBudget.tryAdd(hit)) {
+          nextOffset = start + pageIndex;
+          break pageLoop;
+        }
+        hits.push(hit);
       }
-      hits.push(hit);
+      budgetBatchSize = BUDGET_CONTEXT_BATCH_SIZE;
     }
-    budgetBatchSize = BUDGET_CONTEXT_BATCH_SIZE;
-  }
 
-  // 6) session 元数据(顶层 map, 避免逐条命中重复)
-  const sessions = await fetchSessionsMeta(hits.map((h) => h.sessionId));
+    // 6) session 元数据(顶层 map, 避免逐条命中重复)
+    const sessions = await fetchSessionsMeta(hits.map((h) => h.sessionId));
 
-  return {
-    hits,
-    sessions,
-    vectorUsed: vec.skipReason === null,
-    vectorSkipReason: vec.skipReason,
-    nextOffset,
-    hasMore: nextOffset !== null,
-    poolSize: pool.length,
-    poolCapped,
+    return {
+      hits,
+      sessions,
+      vectorUsed: vec.skipReason === null,
+      vectorSkipReason: vec.skipReason,
+      nextOffset,
+      hasMore: nextOffset !== null,
+      poolSize: pool.length,
+      poolCapped,
+    };
   };
 }
 
@@ -319,7 +336,7 @@ async function fetchAnchorContexts(
 }
 
 async function runFtsArm(
-  args: SearchChatHistoryEngineArgs,
+  args: SearchChatHistoryQueryArgs,
   workdirCandidates: string[] | null,
 ): Promise<ArmRow[]> {
   const queryTokens = extractMessagesFtsTokens(args.query);
@@ -370,7 +387,7 @@ async function runFtsArm(
 // ── vector arm(增益, 任一步失败即静默跳过) ──────────────────────────────────
 
 async function runVectorArm(
-  args: SearchChatHistoryEngineArgs,
+  args: SearchChatHistoryQueryArgs,
   workdirCandidates: string[] | null,
 ): Promise<{ rows: ArmRow[]; skipReason: string | null }> {
   if (args.skipVector === true) {
@@ -506,7 +523,7 @@ async function runVectorArm(
 // ── 结构化过滤(两路 arm 共用; 作用于别名 m=messages, s=sessions) ─────────────
 
 function buildFilterClause(
-  args: SearchChatHistoryEngineArgs,
+  args: SearchChatHistoryQueryArgs,
   workdirCandidates: string[] | null,
 ): { clause: string; params: unknown[] } {
   const conds: string[] = ['m.rewind_at IS NULL'];

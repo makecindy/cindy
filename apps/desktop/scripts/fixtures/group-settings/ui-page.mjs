@@ -31,6 +31,17 @@ export default {
     const dialog = page.getByRole('dialog');
     const invite = page.getByTestId('chat-group-invite');
     const manage = await row(page, await t('manage'));
+    if (ui.case === 'default') {
+      // Narrow drawer exception (DESIGN.md §4): 13px/500 names and section titles, rows at least 48px.
+      const name = (await manage.evaluate((el) => {
+        const title = el.querySelector('span span span') ?? el;
+        const box = el.getBoundingClientRect();
+        return { size: getComputedStyle(title).fontSize, weight: getComputedStyle(title).fontWeight, height: box.height };
+      }));
+      const section = await page.getByRole('heading', { name: await t('me') }).evaluate((el) => getComputedStyle(el).fontSize);
+      assert.deepEqual([name.size, name.weight, section], ['13px', '500', '13px']);
+      assert.ok(name.height >= 48, `Drawer rows stay at least 48px, got ${name.height}`);
+    }
     const role = ui.case === 'default' || ['alone', 'archived', 'many-teammates'].includes(ui.case) ? 'owner' : ui.case === 'admin' ? 'admin' : 'member';
 
     if (ui.case === 'dissolved') {

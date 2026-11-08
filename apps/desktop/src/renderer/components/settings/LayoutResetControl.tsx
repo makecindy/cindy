@@ -1,3 +1,5 @@
+import { additionalSettings } from './AdditionalSettings.settings-search';
+import { useSettingDefinition } from './useSettingDefinition';
 import { Button } from '@/components/ui/button';
 import { RotateCcw } from 'lucide-react';
 import { useState } from 'react';
@@ -8,6 +10,7 @@ import { SETTINGS_ROW_CLASS } from './settingsRowClasses';
 
 /** 正式版布局恢复入口：复用 main 的原子 reset + broadcast，不另存 renderer 状态。 */
 export function LayoutResetControl() {
+  const setting = useSettingDefinition(additionalSettings.layout);
   const { t } = useTranslation();
   const [resetting, setResetting] = useState(false);
 
@@ -29,20 +32,21 @@ export function LayoutResetControl() {
   };
 
   return (
-    <div className={SETTINGS_ROW_CLASS}>
+    <div {...setting.anchorProps} className={SETTINGS_ROW_CLASS}>
       <div className="flex min-w-0 flex-col gap-1">
         <p
           className="text-13 font-medium text-[var(--settings-section-sublabel)]"
           style={{ letterSpacing: '0.12px' }}
         >
-          {t('settings.appearance.layout.label')}
+          {setting.title}
         </p>
         <p className="text-12 leading-[1.4] text-[var(--text-secondary)]">
-          {t('settings.appearance.layout.hint')}
+          {setting.description}
         </p>
       </div>
 
       <Button
+          {...setting.controlProps}
         variant="secondary"
         size="md"
         compact

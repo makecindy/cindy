@@ -299,6 +299,41 @@ function invalidateStalePrebundleCache(): void {
   console.log('[vite.renderer] internal package sources changed — cleared dep prebundle cache (will re-optimize)');
 }
 
+function requestedTargetPlatform(): string {
+  const args = process.argv;
+  const index = args.indexOf('--platform');
+  return (
+    process.env.ELECTRON_FORGE_PLATFORM ||
+    (index !== -1 ? args[index + 1] : undefined) ||
+    args.find((arg) => arg.startsWith('--platform='))?.slice('--platform='.length) ||
+    process.platform
+  );
+}
+
+function omitDockPreviewAssetsPlugin(): Plugin {
+  const files = new Set(
+    [
+      'icon-dock.png',
+      'app-icons/cat.png',
+      'app-icons/mark-dark.png',
+      'app-icons/mark-light.png',
+      'app-icons/wordmark-dark.png',
+      'app-icons/wordmark-light.png',
+    ].map((file) => path.resolve(__dirname, 'resources', file).replace(/\\/g, '/')),
+  );
+
+  return {
+    name: 'cindy-omit-dock-preview-assets',
+    enforce: 'pre',
+    // Run before Vite's asset loader so runtime-hidden Dock controls cannot
+    // emit macOS-only PNGs into Windows/Linux renderer builds.
+    load(id) {
+      if (files.has(id.split('?')[0].replace(/\\/g, '/'))) return 'export default "";';
+      return null;
+    },
+  };
+}
+
 export default defineConfig(({ command }) => {
   if (command === 'serve') invalidateStalePrebundleCache();
   if (command !== 'build') return rendererConfig;
@@ -308,6 +343,12 @@ export default defineConfig(({ command }) => {
   // (check-login-production-guard.mjs 以 sentinel 扫描产物兜底)。
   return {
     ...rendererConfig,
+    plugins: [
+      ...rendererConfig.plugins,
+      ...(['darwin', 'mas'].includes(requestedTargetPlatform())
+        ? []
+        : [omitDockPreviewAssetsPlugin()]),
+    ],
     resolve: {
       ...rendererConfig.resolve,
       alias: {

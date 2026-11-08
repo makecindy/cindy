@@ -1,5 +1,5 @@
 import { useCallback, useRef, useState } from 'react';
-import { prStatusKey, type PrStatusResult } from '@cindy/maker-shared';
+import { remotePrStatuses, prStatusKey, type PrStatusResult } from '@cindy/maker-shared';
 import { AppState } from 'react-native';
 import { useFocusEffect } from 'expo-router';
 import { useAuth } from '@/auth/AuthContext';
@@ -72,10 +72,22 @@ export function useRemoteCompanionQuery<T>(
         if (!entry) {
           const consumers = new Set<() => boolean>();
           entry = {
-            promise: channel === 'local-db:sessions:get'
-              ? readCompanionTask(taskReadScope, deviceId, JSON.parse(argsKey)[0], link.invoke,
-                () => [...consumers].some((current) => current()))
-              : link.invoke(deviceId, channel, JSON.parse(argsKey)),
+            promise:
+              channel === 'local-db:sessions:get'
+                ? readCompanionTask(
+                    taskReadScope,
+                    deviceId,
+                    JSON.parse(argsKey)[0],
+                    link.invoke,
+                    () => [...consumers].some((current) => current()),
+                  )
+                : channel === 'git-context:pr-status'
+                  ? remotePrStatuses(
+                      JSON.parse(argsKey)[0].queries,
+                      JSON.parse(argsKey)[0].sessionId,
+                      (name, params) => link.invoke(deviceId, name, params),
+                    )
+                  : link.invoke(deviceId, channel, JSON.parse(argsKey)),
             invalidated: false,
             consumers,
           };

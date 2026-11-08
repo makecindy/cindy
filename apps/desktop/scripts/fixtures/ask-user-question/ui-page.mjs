@@ -6,8 +6,8 @@ export default {
   viewport: { width: 800, height: 600 },
   real: 'AskUserQuestionPrompt, voice choice draft/confirmation, CompanionVoiceToolbar, question references, prompt shell and themes',
   notCovered: 'Actual microphone/ASR/TTS, task execution, host file contents, browser navigation and remote connectivity',
-  // The visual runner uses esbuild, which does not implement Vite ?url assets.
-  // Keep the real dictation hook/state UI; only the microphone and host are fake.
+  // Keep the real dictation hook/state UI; microphone capture and its worklet
+  // are outside this fixture, so only the microphone and host are fake.
   stubs: {
     'src/renderer/voice-input/workletUrl': 'export function getVoiceInputWorkletUrl() { return "/fixture-worklet.js"; }',
     'src/renderer/voice-input/captureSession': `export async function startVoiceInputCaptureSession(options) {
@@ -17,6 +17,8 @@ export default {
     }`,
   },
   cases: {
+    'mcp-form-error': { about: 'MCP required/length error keeps draft at 320 px', viewport: { width: 320, height: 600 }, data: { question: 'Name', form: true } },
+    'mcp-form-enum': { about: 'MCP literal Other enum survives and both values reach receipt', data: { question: 'Name', form: true } },
     default: { about: 'Question with a bare HTML filename and URL', data: { question: '请查看 sidebar-layout-v1.html 后确认这版交互形态是否可以进入正式实现。也可以查看 https://example.com/prototype。' } },
     narrow: { about: 'Long references at 320 px', viewport: { width: 320, height: 600 }, data: { question: '请查看 sidebar-layout-v1.html 或 https://example.com/prototypes/a-very-long-prototype-name-before-approval 后确认。' } },
     'dictation-starting': { about: 'Answer microphone starting', data: { question: '请补充你的意见。' } },
@@ -33,6 +35,26 @@ export default {
     await page.getByText('确认原型').waitFor();
   },
   async check(page, ui) {
+    if (ui.case.startsWith('mcp-form-')) {
+      await page.getByRole('button', { name: await ui.t('chat.askUserQuestion.skip'), exact: true }).click();
+      await page.getByRole('alert').waitFor();
+      const input = page.getByPlaceholder(await ui.t('chat.askUserQuestion.answerPlaceholder'));
+      await input.fill('ab');
+      await input.press('Enter');
+      assert.equal(await input.inputValue(), 'ab');
+      assert.equal(await page.getByTestId('mcp-form-receipt').count(), 0);
+      if (ui.case === 'mcp-form-error') return;
+      await input.fill('Orbit');
+      await input.press('Enter');
+      await page.getByText('Other', { exact: true }).waitFor();
+      assert.equal(await page.getByText(await ui.t('chat.askUserQuestion.customAnswer'), { exact: true }).count(), 0);
+      await page.getByRole('button', { name: await ui.t('chat.askUserQuestion.skip'), exact: true }).click();
+      await page.getByRole('alert').waitFor();
+      await page.getByText('Other', { exact: true }).click();
+      await page.getByTestId('mcp-form-receipt').waitFor();
+      assert.deepEqual(JSON.parse(await page.getByTestId('mcp-form-receipt').textContent()), { name: 'Orbit', kind: 'Other' });
+      return;
+    }
     if (ui.case.startsWith('dictation-')) {
       const mic = page.getByTestId('ask-user-voice');
       await mic.click();

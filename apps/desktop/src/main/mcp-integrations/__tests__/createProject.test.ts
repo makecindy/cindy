@@ -22,6 +22,8 @@ const h = vi.hoisted(() => ({
   rename: vi.fn(),
   visibility: vi.fn(),
   hiddenKeys: [] as string[],
+  projectsRoot: null as string | null,
+  home: '',
 }));
 vi.mock('../../localDb/dialogueWorkspace.js', () => ({
   dialogueWorkspaceRootDir: () => h.dialogueRoot,
@@ -39,6 +41,7 @@ vi.mock('node:fs/promises', async (importOriginal) => {
   };
 });
 vi.mock('electron', () => ({
+  app: { getPath: () => h.home },
   BrowserWindow: {
     getAllWindows: () => [
       { trusted: true, webContents: { send: h.send } },
@@ -85,6 +88,7 @@ vi.mock('../../sidebarSettingsStore.js', () => ({
   loadSidebarSettingsSnapshot: () => ({ ...h.owner, hiddenProjectKeys: h.hiddenKeys }),
 }));
 vi.mock('../../logger.js', () => ({ createLogger: () => ({ warn: vi.fn() }) }));
+vi.mock('../../projects-root-settings.js', () => ({ readProjectsRootDirectory: () => h.projectsRoot }));
 
 import { createProject } from '../createProject.js';
 import { listProjects, renameProject, removeProject, resolveSessionProject, readCurrentSessionProject } from '../projectManagement.js';
@@ -112,6 +116,8 @@ describe('createProject', () => {
     h.aliases.mockResolvedValue([]);
     h.rename.mockResolvedValue(null);
     h.visibility.mockResolvedValue(true);
+    h.projectsRoot = null;
+    h.home = path.join(directory, 'home');
   });
   afterEach(async () => {
     await rm(directory, { recursive: true, force: true });
@@ -447,6 +453,31 @@ describe('createProject', () => {
       nextOffset: null,
       projects: [{ directoryName: 'second', alias: null, hidden: false }],
     });
+  });
+  // Rule (#8259): "New project…" suggests where new project folders go. Unit via the
+  // list_projects entry: shared parent of visible projects, else ~/Projects; a stored
+  // choice wins. Hidden projects must not steer the suggestion.
+  it('suggests the shared parent of visible projects, then ~/Projects, and prefers the stored choice', async () => {
+    const parent = path.join(directory, 'code');
+    const elsewhere = path.join(directory, 'elsewhere');
+    await mkdir(parent);
+    h.hiddenKeys = [`local:${path.join(elsewhere, 'a')}`, `local:${path.join(elsewhere, 'b')}`];
+    h.list.mockResolvedValue([
+      { path: path.join(elsewhere, 'a'), exists: true, lastUsedAt: '2026-09-19T00:00:00Z' },
+      { path: path.join(elsewhere, 'b'), exists: true, lastUsedAt: '2026-09-18T00:00:00Z' },
+      { path: path.join(parent, 'one'), exists: true, lastUsedAt: '2026-09-17T00:00:00Z' },
+      { path: path.join(parent, 'two'), exists: true, lastUsedAt: '2026-09-16T00:00:00Z' },
+    ]);
+    const list = () => listProjects({ callerSessionId: 'caller', includeHidden: true, offset: 0, limit: 100 });
+    expect(await list()).toMatchObject({ projectsRoot: { path: parent, source: 'inferred', exists: true } });
+
+    h.list.mockResolvedValue([{ path: path.join(parent, 'one'), exists: true, lastUsedAt: '2026-09-17T00:00:00Z' }]);
+    expect(await list()).toMatchObject({
+      projectsRoot: { path: path.join(h.home, 'Projects'), source: 'default', exists: false },
+    });
+
+    h.projectsRoot = directory;
+    expect(await list()).toMatchObject({ projectsRoot: { path: directory, source: 'setting', exists: true } });
   });
   it('renames a registered offline project and clears the alias without changing its directory or visibility', async () => {
     const workingDir = directory.replaceAll('\\', '/');
