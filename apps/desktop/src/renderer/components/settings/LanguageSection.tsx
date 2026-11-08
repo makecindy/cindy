@@ -32,6 +32,8 @@ const TRIGGER_CLASS = cn(
 
 interface PillSelectProps<T extends string> {
   'data-setting-id': string;
+  /** 设置搜索定位锚点（settings-search 定义里的 targetId）；不传则不挂 id。 */
+  id?: string;
   value: T;
   options: ReadonlyArray<{ value: T; label: string }>;
   onChange: (value: T) => void;
@@ -41,6 +43,7 @@ interface PillSelectProps<T extends string> {
 
 function PillSelect<T extends string>({
   'data-setting-id': settingId,
+  id,
   value,
   options,
   onChange,
@@ -50,6 +53,7 @@ function PillSelect<T extends string>({
   return (
     <Select.Root value={value} onValueChange={(next) => onChange(next as T)}>
       <Select.Trigger
+        id={id}
         data-setting-id={settingId}
         aria-label={ariaLabel}
         className={cn(TRIGGER_CLASS, className)}
@@ -156,6 +160,9 @@ export function LanguageSection() {
                   className="w-[112px]"
                 />
                 <PillSelect<ClassicalReplyStyleId>
+                  // 设置搜索定位锚点：replyStyle 条目的 targetId 指向文风控件本身，
+                  // 缺它会让锚点契约守卫报「定义的锚点不存在」。
+                  id={languageSettings.replyStyle.targetId}
                   data-setting-id={languageSettings.classical.id}
                   value={classicalStyle}
                   options={classicalStyleOptions.map((style) => ({
