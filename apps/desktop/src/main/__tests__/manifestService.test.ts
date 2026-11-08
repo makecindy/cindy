@@ -331,6 +331,15 @@ describe('fetchAppUpdateManifest', () => {
     const behind = await service.fetchAppUpdateManifest();
     expect(behind?.app.version).toBe('0.1.129');
     expect(service.getAppUpdateTargetArch(behind!)).toBeUndefined();
+
+    // 200 但不可安装（没有 hotfix、版本非法）的 arm64 清单不能挡住 x64 更新。
+    for (const unusable of [{ app: { version: '0.1.130' } }, { app: { ...ARM.app, version: 'not-semver' } }]) {
+      mockManifestResponse(JSON.stringify(X64));
+      mockManifestResponse(JSON.stringify(unusable));
+      const kept = await service.fetchAppUpdateManifest();
+      expect(kept?.app.hotfix?.file).toBe('hotfix/darwin-x64/x64.zip');
+      expect(service.getAppUpdateTargetArch(kept!)).toBeUndefined();
+    }
   });
 
   it('does not request another manifest for native builds', async () => {

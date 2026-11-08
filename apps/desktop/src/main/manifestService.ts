@@ -198,8 +198,12 @@ export async function fetchAppUpdateManifest(
     return manifest;
   }
   const native = await requestManifest('darwin-arm64', false, timeoutMs, signal);
-  if (!native) return manifest;
-  if (manifest && compareAppUpdateVersions(native.app?.version, manifest.app?.version) === 'older') {
+  // 只在 arm64 清单本身可安装（版本合法、带 hotfix）时替换，否则不能挡住已取到的 x64 更新。
+  const hotfix = native?.app?.hotfix;
+  if (!native || !parseAppUpdateVersion(native.app?.version) || !hotfix?.file || !hotfix.sha256) {
+    return manifest;
+  }
+  if (manifest && compareAppUpdateVersions(native.app.version, manifest.app?.version) === 'older') {
     log.info('arm64 manifest %s is behind x64 %s — keeping x64 update', native.app?.version, manifest.app?.version);
     return manifest;
   }
