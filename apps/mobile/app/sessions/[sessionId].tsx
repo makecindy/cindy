@@ -1,3 +1,4 @@
+import type { ViewInstance, ScrollViewInstance } from 'react-native';
 import { ComposerAttachmentPreview } from "@/session/ComposerAttachmentPreview";
 import { snapshotRichAnswerValues } from '@/session/RichAnswer';
 import { PluginUiEnablePrompt } from '@/plugins/PluginUiEnablePrompt';
@@ -26,7 +27,6 @@ import { useAdaptiveWindow, PaneViewportProvider } from '@/platform/AdaptiveWind
 import { useSessionHeaderHeight } from '@/session/useSessionHeaderHeight';
 import { useDoubleTap } from '@/session/useDoubleTap';
 import { useSessionPaneLayout, useSessionSidebarWidthPreference } from '@/session/ResidentHomeList';
-import { ComposerExpandButton } from '@/session/ComposerExpandButton';
 import { nativeComposerAvailable } from '@/session/ComposerNativeInput';
 import { getActiveMobileSessionRealm } from '@/config/env';
 import { FailedScheduleNotice } from '@/session/FailedScheduleNotice';
@@ -119,7 +119,7 @@ import { MobileAgentMark } from '@/components/MobileAgentMark';
 import { mobileInteractionStyles } from '@/components/mobileInteractionStyles';
 import { SessionHeaderNativeBack, SessionHeaderNativeActions, SessionHeaderNativeTitle, SessionHeaderNativeBlur } from '@/session/SessionHeaderNativeControls';
 import { TaskTagDots } from '@/session/TaskTags';
-import type { TextInput as NativeTextInput } from 'react-native';
+
 import { ScreenBackButton } from '@/components/MobilePrimitives';
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useAuth } from '@/auth/AuthContext';
@@ -823,6 +823,8 @@ const COMPOSER_CONTROL_HIT_SLOP = { bottom: 8, left: 8, right: 8, top: 8 };
 const COMPANION_NATIVE_HEADER_OPTIONS = { headerShown: false, headerTitle: '' } as const;
 const COMPOSER_INPUT_SINGLE_LINE_CONTENT_HEIGHT = MOBILE_COMPOSER_INPUT_SINGLE_LINE_HEIGHT;
 const COMPOSER_INPUT_MULTILINE_CONTENT_THRESHOLD = 34;
+/** 拉开拖动松手后等焦点到达的兜底时长；聚焦被拒时到点收回单行。 */
+const COMPOSER_DRAG_OPEN_FOCUS_GRACE_MS = 800;
 const COMPOSER_INPUT_LINE_HEIGHT = MOBILE_COMPOSER_INPUT_LINE_HEIGHT;
 const COMPOSER_INPUT_MAX_CONTENT_HEIGHT = MOBILE_COMPOSER_INPUT_MAX_HEIGHT;
 const COMPOSER_VERTICAL_PADDING_HEIGHT = 12;
@@ -1292,8 +1294,8 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
     draftRef.current = nextDraft;
   }
   const conversationShareSvgRef = useRef<ConversationShareSvgHandle | null>(null);
-  const topOverlayRef = useRef<View>(null);
-  const bottomOverlayRef = useRef<View>(null);
+  const topOverlayRef = useRef<ViewInstance>(null);
+  const bottomOverlayRef = useRef<ViewInstance>(null);
   const shareSelectionActiveRef = useRef(shareSelectionActive);
   shareSelectionActiveRef.current = shareSelectionActive;
   const shareSelectionRevisionRef = useRef(shareSelectionRevision);
@@ -2164,7 +2166,7 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
     draftOverride?: string;
     documentOverride?: ComposerDocument;
   }) => Promise<boolean | void>) | null>(null);
-  const sendButtonRef = useRef<View>(null);
+  const sendButtonRef = useRef<ViewInstance>(null);
   const composerSendTargetEnabledRef = useRef(false);
   // Match the keyed palette lifetime. Old requests/cleanup retain their old
   // reference and cannot affect command dispatch in the next draft scope.
@@ -2597,7 +2599,7 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
   // 判据是整个 pending 集合而非当前查看的卡:队列里还有权限 / 提问 / 计划卡在等
   // 回答时,切到 plugin_setup 只是换了查看对象,不能就此放开 composer 让用户绕过
   // 那张仍待处理的阻塞交互(#530 review P1)。
-  const pendingInteractionBlocksComposer = pendingInteractionsBlockRemoteComposer(pending);
+  const pendingInteractionBlocksComposer = pendingInteractionsBlockRemoteComposer(pending, collapsedPendingRequestIds);
   const remoteUnavailableReason = useMemo(
     () => describeRemoteError(connectionError),
     [connectionError, i18nInstance.language],
@@ -7721,9 +7723,6 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
             testID="session.composerModelButton"
           />
         ) : null}
-      {Platform.OS === 'ios' && nativeComposerAvailable && (composerDocumentRef.current.nodes.reduce((count, node) => count + (node.type === 'text' ? node.text.length : 0), 0) > 300 || composerDocumentRef.current.nodes.some((node) => node.type === 'text' && node.text.split('\n').length > 4)) ? (
-            <ComposerExpandButton onPress={() => composerInputRef.current?.expand?.()} />
-          ) : null}
       </ComposerToolbarLeftGroup>
       <ComposerToolbarSpacer />
       {/* 工具排右段顺序:[停止任务][语音占位][发送槽]。停止任务在语音左边(对齐桌面),
@@ -11402,13 +11401,13 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
                 nestedScrollEnabled
                 testID="interaction.aboveComposerScroll"
               >
-                {/* 这张卡本来就只占 palette 量级高度、且手机上答不了(只能取消 / 回电脑端),
-                    不给收起入口:收起态的文案与 a11y 都是「先不答、稍后回答」,套在它身上是
-                    错的语义。 */}
+                {/* 收起的问题与本端不能完成的请求共用输入框上方的位置。
+                    InteractionPanel 只给本端可回答的请求显示展开/收起入口。 */}
                 <InteractionPanel
                   fileContext={chatFilePathContextValue}
                   companion={companionChat}
                   companionIdentity={companionInteractionIdentity}
+                  collapse={pendingInteractionCollapse}
                   deviceId={deviceId}
                   sessionId={sessionId}
                   interactions={pending}
@@ -12202,7 +12201,7 @@ function SessionHeaderIconButton({
   active?: boolean;
   attention?: boolean;
   /** 需要外部定位本钮时传入(如三条杠:抽屉关闭后读屏焦点归还锚点)。 */
-  buttonRef?: RefObject<View | null>;
+  buttonRef?: RefObject<ViewInstance | null>;
   disabled?: boolean;
   /** 38×38 可见钮低于 44 触控底线时用它补热区(如左上角三条杠)。 */
   hitSlop?: PressableProps['hitSlop'];
@@ -12681,14 +12680,40 @@ function SessionComposerInput({
   const composerDock = useComposerDock();
   const [composerFocused, setComposerFocused] = useState(false);
   const composerPillOpen = useComposerPillOpen(composerDock.enabled && canUseComposer, () => composerInputRef.current?.focus());
+  // 收起态往上拖拉开：拖动中保持卡片态让输入区跟手拉高；松手拉够了就聚焦，
+  // 焦点到达（或兜底超时，聚焦被拒）后交还给 composerFocused。
+  const [composerDragOpen, setComposerDragOpen] = useState(false);
+  const composerDragOpenTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const clearComposerDragOpenTimer = useCallback(() => {
+    if (composerDragOpenTimerRef.current) clearTimeout(composerDragOpenTimerRef.current);
+    composerDragOpenTimerRef.current = null;
+  }, []);
+  useEffect(() => clearComposerDragOpenTimer, [clearComposerDragOpenTimer]);
+  const handleComposerDragOpenChange = useCallback((opening: boolean) => {
+    clearComposerDragOpenTimer();
+    setComposerDragOpen(opening);
+  }, [clearComposerDragOpenTimer]);
+  const handleComposerDragOpenCommit = useCallback(() => {
+    clearComposerDragOpenTimer();
+    composerInputRef.current?.focus();
+    composerDragOpenTimerRef.current = setTimeout(() => {
+      composerDragOpenTimerRef.current = null;
+      setComposerDragOpen(false);
+    }, COMPOSER_DRAG_OPEN_FOCUS_GRACE_MS);
+  }, [clearComposerDragOpenTimer, composerInputRef]);
+  useEffect(() => {
+    if (!composerFocused) return;
+    clearComposerDragOpenTimer();
+    setComposerDragOpen(false);
+  }, [clearComposerDragOpenTimer, composerFocused]);
   const [composerInputContentHeight, setComposerInputContentHeight] = useState(COMPOSER_INPUT_SINGLE_LINE_CONTENT_HEIGHT);
   const [composerAttachmentTrayHeight, setComposerAttachmentTrayHeight] = useState(0);
   const [voiceDraftCaretFrame, setVoiceDraftCaretFrame] = useState({ left: 0, top: 0 });
-  const voiceDraftCaretRef = useRef<View>(null);
-  const voiceDraftMeasuredBlockRef = useRef<View>(null);
-  const composerScrollViewRef = useRef<ScrollView>(null);
+  const voiceDraftCaretRef = useRef<ViewInstance>(null);
+  const voiceDraftMeasuredBlockRef = useRef<ViewInstance>(null);
+  const composerScrollViewRef = useRef<ScrollViewInstance>(null);
   const composerScrollEnabledRef = useRef(false);
-  const voiceDraftScrollRef = useRef<ScrollView>(null);
+  const voiceDraftScrollRef = useRef<ScrollViewInstance>(null);
   const composerTrigger = useMemo(() => detectComposerTrigger(draft), [draft]);
   const voiceUiAvailable = shouldShowMobileVoiceUi(Platform.OS);
   const voiceIsListening = voiceState === 'listening';
@@ -12790,7 +12815,7 @@ function SessionComposerInput({
     armed: composerVoiceHoldArmed,
     draftText: draft,
   });
-  const composerCardActive = (canUseComposer && (composerFocused || composerPillOpen.opening))
+  const composerCardActive = (canUseComposer && (composerFocused || composerPillOpen.opening || composerDragOpen))
     || modelSheetOpen
     || permissionSheetOpen
     || voiceStartPending
@@ -12842,8 +12867,21 @@ function SessionComposerInput({
       scrollEnabled: active ? false : composerScrollEnabledRef.current,
     });
   }, [onDragActiveChange]);
+  const composerShellHasScrollableContent = attachmentCount > 0
+    || pendingUploadCount > 0
+    || attachmentError !== null
+    || composerTrigger.kind === 'slash'
+    || composerTrigger.kind === 'at';
+  // Only enable shell scrolling when attachments or palettes can overflow.
+  const composerShellScrolls = (nativeShellLayout.composerScrollEnabled || composerTrigger.kind !== 'none')
+    && composerShellHasScrollableContent;
   const composerResize = useComposerResize({
     autoMaxContentHeight: composerInputMaxContentHeight,
+    // 外壳自己要滚（附件 / 候选面板溢出）时卡片上的竖直拖动归外壳，调高只走顶边把手；
+    // 收起态往上拖拉开。
+    bodyDragEnabled: canUseComposer && (composerCardActive ? !composerShellScrolls : !composerLayout.input.disabled),
+    onDragOpenChange: handleComposerDragOpenChange,
+    onDragOpenCommit: handleComposerDragOpenCommit,
     // 简洁态一律收到单行(下拉收起和点别处收键盘的结果一致);
     // auto / manual 记忆保留,重新聚焦后恢复。
     collapsed: !composerCardActive,
@@ -12878,16 +12916,8 @@ function SessionComposerInput({
       && (draft.includes('\n') || composerEffectiveContentHeight > COMPOSER_INPUT_MULTILINE_CONTENT_THRESHOLD));
   const composerInputVisibleHeight = composerResize.visibleContentHeight;
   const composerInputScrollEnabled = composerResize.scrollEnabled;
-  const composerShellHasScrollableContent = attachmentCount > 0
-    || pendingUploadCount > 0
-    || attachmentError !== null
-    || composerTrigger.kind === 'slash'
-    || composerTrigger.kind === 'at';
-  // Only enable shell scrolling when attachments or palettes can overflow.
   // Native gesture arbitration lets the grabber win without waiting for JS.
-  const composerScrollEnabled = (nativeShellLayout.composerScrollEnabled || composerTrigger.kind !== 'none')
-    && !composerResize.dragging
-    && composerShellHasScrollableContent;
+  const composerScrollEnabled = composerShellScrolls && !composerResize.dragging;
   composerScrollEnabledRef.current = composerScrollEnabled;
   const resizeActive = composerResize.active;
   const manualResize = composerResize.mode === 'manual';
@@ -13067,6 +13097,8 @@ function SessionComposerInput({
                   unframed={!nativeComposerFrameAvailable}
                   style={styles.composerScrollFrame}
                 >
+                {/* 卡片任意处上下拖动调高；文字区先滚动、滚到头才调高（resolveComposerBodyDrag）。 */}
+                <GestureDetector gesture={composerResize.bodyGesture}>
                 <View style={[
                   styles.composerSurface,
                   compactComposer && !composerCardActive && styles.composerSurfaceCompact,
@@ -13092,6 +13124,7 @@ function SessionComposerInput({
                     floatingVoiceButton={voiceUiAvailable ? controls.voiceButton : undefined}
                     cursorColor={colors.inputCaret}
                     inputFrameAnimatedStyle={composerResize.frameStyle}
+                    inputFrameRef={composerResize.textFrameRef}
                     collapseProgress={composerResize.collapseProgress}
                     // 听写期间把输入区撑到 44pt 触控目标:命中层盖在 inputFrame 上,
                     // hitSlop 越不过父边界(见常量注释)。
@@ -13116,6 +13149,7 @@ function SessionComposerInput({
                         onChangeDocument={applyRichComposerChange}
                         onFocus={() => setComposerFocused(true)}
                         onHeightChange={handleComposerRichInputHeight}
+                        onScrollEdgeChange={composerResize.setTextScrollEdge}
                         {...composerImagePasteHandlers}
                         placeholder={voiceIsListening ? '' : composerLayout.input.placeholder}
                         resolveSessionLinkLabel={resolvePastedSessionLinkLabel}
@@ -13162,6 +13196,7 @@ function SessionComposerInput({
                     voicePlacement={composerVoicePlacement}
                   />
                 </View>
+                </GestureDetector>
                 </ComposerFrame>
               </Reanimated.View>
     </>
@@ -13469,7 +13504,7 @@ interface RouteActionButtonProps {
   testID?: string;
 }
 
-const RouteActionButton = forwardRef<View, RouteActionButtonProps>(function RouteActionButton({
+const RouteActionButton = forwardRef<ViewInstance, RouteActionButtonProps>(function RouteActionButton({
   accessibilityHint,
   accessibilityLabel,
   active = false,

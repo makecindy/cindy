@@ -5557,12 +5557,17 @@
         "userBrowserSetup": {
           "installPluginTitle": "纳 Cindy Chrome 法器",
           "enablePluginTitle": "启 Cindy Chrome 法器",
-          "installExtensionTitle": "将 Cindy 扩充装入浏览器",
+          "connectExtensionTitle": "浏览器扩充尚未连",
           "pluginBody": "「我之浏览器」藉 Cindy Chrome 法器及其浏览器扩充，连君之 Chrome / Edge。先于 Cindy 中纳法器，再依提示将扩充装入浏览器。",
-          "extensionBody": "点「纳浏览器扩充」，将于君之浏览器开 Cindy 扩充之商店页，点「添加」后此处自转为已连。早已装过？请于浏览器之扩充功能管理中启之。",
+          "connectionBody": "请保持 Cindy 与浏览器运行，并查 Cindy 扩充是否已启。未连非须重装；复连后，此处自更。",
           "installPlugin": "纳法器",
           "enablePlugin": "往启",
-          "installExtension": "纳浏览器扩充",
+          "openExtensionStore": "开扩充商店",
+          "updatingTitle": "正更新浏览器连接",
+          "updatingBody": "更新既毕，连接自复。",
+          "selectPluginTitle": "择浏览器扩展",
+          "selectPluginBody": "请启法器详情，择「使用此浏览器扩展」，以定 Cindy 所用。",
+          "selectPlugin": "启法器",
           "updatePluginTitle": "更新 Cindy Chrome 法器",
           "updatePluginBody": "所纳 Cindy Chrome 法器版本较旧，尚不支持「我之浏览器」。更新至最新版后，再依提示将扩充装入浏览器。",
           "updatePlugin": "往更新",
@@ -12695,6 +12700,10 @@
       "defer": "暂不取"
     },
     "permissionPrompt": {
+      "titleStdin": "可向终端输入乎？",
+      "titleMcpUrl": "应 {{server}} 之请",
+      "mcpComplete": "已毕",
+      "mcpCancel": "取消",
       "alwaysAllowScoped": "此差事恒许 {{scope}}",
       "alwaysAllowScopedHint": "及于整个差事，且仅限此处所列之范围。",
       "alwaysAllowSessionHint": "及于整个差事，不止此一请求。",
@@ -12950,7 +12959,13 @@
       "sendAndContinue": "遣而续之",
       "close": "阖",
       "customAnswer": "另书他答…",
-      "answerPlaceholder": "请书君答…"
+      "answerPlaceholder": "请书君答…",
+      "validation": {
+        "required": "此项必填。",
+        "choice": "请择所列之项。",
+        "tooShort": "所填须足 {{count}} 字。",
+        "tooLong": "所填勿逾 {{count}} 字。"
+      }
     },
     "planReviewBubble": {
       "title": "审方略",
@@ -14035,8 +14050,10 @@
       "mailLegacy": "旧稿（唯读）",
       "taskAutoArchived": "「{{title}}」已封存",
       "taskAutoArchivedUndo": "撤",
-      "taskAutoArchivePending": "去则自封存",
-      "taskAutoArchiveCancel": "此番不封"
+      "taskAutoArchivePending": "离此任务后自封存",
+      "taskAutoArchiveCancel": "取消",
+      "taskAutoArchiveCancelled": "此番不自封存",
+      "taskArchiveNow": "即封存"
     },
     "ghostHook": {
       "blockedFallback": "讯为法器所拦，未遣",
@@ -19657,8 +19674,8 @@
     "removeTitle": "移出 {{name}}？",
     "removeDescription": "Cindy 将不再给这个账号分配任务。CLI 登录和对话历史仍保留在本机。",
     "failed": "无法读取或更新账号。请检查 CLI 登录和网络连接后重试。",
-    "used": "已用 {{percent}}%",
     "directory": "账号目录",
+    "loginAgain": "重登",
     "login": "登录"
   }
 }

@@ -1713,7 +1713,7 @@ export function DeviceLinkProvider({ children }: { children: ReactNode }) {
       suspendMs: BACKGROUND_SUSPEND_SUSPECT_MS,
       report: (event) => mobileDebugLog('debug', 'device-link', 'background lifecycle', event),
     });
-    noteAppLifecycleState(AppState.currentState);
+    if (AppState.currentState) noteAppLifecycleState(AppState.currentState);
     let refreshNetworkState = () => {};
     const sub = AppState.addEventListener('change', (next) => {
       // 先于下面的恢复动作记账:回前台后 rehydrate 新发的请求属于新生命周期。

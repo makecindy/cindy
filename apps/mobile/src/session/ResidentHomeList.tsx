@@ -1,3 +1,4 @@
+import type { ViewInstance } from 'react-native';
 import { createContext, useCallback, useContext, useId, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { Platform, StyleSheet, View } from 'react-native';
 import Animated from 'react-native-reanimated';
@@ -26,7 +27,7 @@ const Context = createContext<{
   mounted: { current: boolean };
   publish(entry: Entry): void;
   unpublish(owner: string): void;
-  host: React.RefObject<View | null>;
+  host: React.RefObject<ViewInstance | null>;
 } | null>(null);
 
 export function useResidentHomeList(embedded = false) {
@@ -75,7 +76,7 @@ export function ResidentHomeListProvider({ children }: { children: ReactNode }) 
   const rootHome = Platform.OS !== 'ios';
   const visible = (rootHome && homeRoute)
     || (persistent && isPaneDetailRoute(segments));
-  const host = useRef<View>(null);
+  const host = useRef<ViewInstance>(null);
   const mounted = useRef(false);
   const [entry, setEntry] = useState<Entry | null>(null);
   const reduceMotion = useReduceMotionEnabled();
@@ -124,7 +125,7 @@ export function ResidentHomeList({ children, focused, top, left, right }: {
   const context = useContext(Context);
   const unpublish = context?.unpublish;
   const owner = useId();
-  const anchor = useRef<View>(null);
+  const anchor = useRef<ViewInstance>(null);
   const latest = useRef({ children, focused });
   latest.current = { children, focused };
   const measureRevision = useRef(0);

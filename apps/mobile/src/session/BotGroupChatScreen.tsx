@@ -1,3 +1,5 @@
+import type { ScrollViewInstance } from 'react-native';
+import { ProcessDisclosureViewport, useProcessDisclosureViewport } from './useProcessDisclosureViewport';
 import { BotGroupProcess } from './BotGroupProcess';
 import { useGroupPersonalMask } from './useGroupPersonalMask';
 import { GroupMaskAvatar, GroupMaskStatus, GroupMaskSettingsSheet, GroupMaskCatchupSheet } from './GroupMaskControls';
@@ -211,7 +213,7 @@ function BotGroupChatContent({ deviceId, deviceName, groupId, messageId, notific
   const [continuing, setContinuing] = useState(false);
   const [planPending, setPlanPending] = useState<PlanPending | null>(null);
   const planPendingRef = useRef<object | null>(null);
-  const scrollRef = useRef<ScrollView>(null);
+  const scrollRef = useRef<ScrollViewInstance>(null);
   // iOS: the header floats on the task header's feathered blur and the timeline scrolls beneath it.
   const floatingHeader = Platform.OS === 'ios';
   const insets = useSafeAreaInsets();
@@ -311,7 +313,20 @@ function BotGroupChatContent({ deviceId, deviceName, groupId, messageId, notific
   const newMessageCount = botGroupNewMessageCount(group?.messages ?? [], seen?.owner === viewportOwner ? seen.sequence : null, threadRootId);
   const viewport = useRef({ owner: viewportOwner, group, measuredGroup: null as typeof group,
     contentHeight: 0, viewportHeight: 0, offsetY: 0 });
+  const processUserScrolling = useRef(false);
+  const processLeading = useRef(0);
+  const [processLeadingSpace, setProcessLeadingSpace] = useState<number | null>(null);
+  const [processResumeRequest, setProcessResumeRequest] = useState(0);
+  const processViewport = useProcessDisclosureViewport(() => viewport.current, () => {
+    setProcessLeadingSpace(previous => previous ?? processLeading.current);
+    jumpingToBottom.current = false;
+    stickToBottom.current = false;
+  }, () => {
+    setProcessLeadingSpace(null);
+    setProcessResumeRequest(request => request + 1);
+  });
   if (viewport.current.owner !== viewportOwner) {
+    processViewport.resume();
     viewport.current = { owner: viewportOwner, group, measuredGroup: null, contentHeight: 0, viewportHeight: 0, offsetY: 0 };
     jumpingToBottom.current = false;
     stickToBottom.current = !messageId && !threadRootId;
@@ -538,6 +553,7 @@ function BotGroupChatContent({ deviceId, deviceName, groupId, messageId, notific
   const continueRound = async () => {
     if (continuing) return;
     setContinuing(true);
+    processViewport.resume();
     stickToBottom.current = true;
     try { await chat.act('continue'); } catch (error) { report(error, 'groupChat.timeline.continueFailed'); } finally { setContinuing(false); }
   };
@@ -547,6 +563,7 @@ function BotGroupChatContent({ deviceId, deviceName, groupId, messageId, notific
     if (planPendingRef.current) return;
     const pending = {}; planPendingRef.current = pending;
     setPlanPending({ planId, action });
+    processViewport.resume();
     stickToBottom.current = true;
     try { await chat.act(`plan-${action}`, { planId, ...(!deviceId ? { expectedRevision } : {}) }); } catch (error) {
       if (planPendingRef.current === pending) report(error, PLAN_ACTION_FAILED[action]);
@@ -571,6 +588,7 @@ function BotGroupChatContent({ deviceId, deviceName, groupId, messageId, notific
 
   const send = async (input: BotGroupSendInput) => {
     pauseReadUntilInteraction.current = false;
+    processViewport.resume();
     stickToBottom.current = true;
     const quote = replyTo;
     try {
@@ -601,13 +619,15 @@ function BotGroupChatContent({ deviceId, deviceName, groupId, messageId, notific
 
   const onScroll = (event: NativeSyntheticEvent<NativeScrollEvent>) => {
     const { contentOffset, contentSize, layoutMeasurement } = event.nativeEvent;
+    const atTail = contentSize.height - contentOffset.y - layoutMeasurement.height <= 1;
+    processViewport.scroll(contentOffset.y, viewport.current.offsetY, processUserScrolling.current, atTail);
     previewVisibility.setViewport(contentOffset.y, layoutMeasurement.height);
     Object.assign(viewport.current, { measuredGroup: group, contentHeight: contentSize.height,
       offsetY: contentOffset.y, viewportHeight: layoutMeasurement.height });
     const atBottom = contentSize.height - contentOffset.y - layoutMeasurement.height < STICK_TO_BOTTOM_PX;
     if (atBottom) jumpingToBottom.current = false;
-    stickToBottom.current = jumpingToBottom.current || atBottom;
-    updateAwayFromBottom(!atBottom);
+    stickToBottom.current = !processViewport.inspecting.current && (jumpingToBottom.current || atBottom);
+    updateAwayFromBottom(processViewport.inspecting.current || !atBottom);
     acknowledge();
     if (threadRootId && userScrolled.current && !jumpingToBottom.current && !olderError && contentOffset.y < (messageHeights.current.get(threadRootId) ?? 0) + 160) loadOlderReplies();
   };
@@ -692,32 +712,44 @@ function BotGroupChatContent({ deviceId, deviceName, groupId, messageId, notific
       {floatingHeader ? null : offlineNote}
       {group.dissolvedAt || group.archived ? <Text style={styles.offline}>{t(group.dissolvedAt ? 'groupChat.lifecycle.dissolved' : 'groupChat.thread.archived')}</Text> : null}
       <View style={styles.flex}>
+      <ProcessDisclosureViewport.Provider value={processViewport.inspect}>
       <MessageListVisibilityContext.Provider value={previewVisibility}>
-      <ScrollView ref={scrollRef} style={styles.flex} contentContainerStyle={[styles.timeline, threadRootId && styles.threadTimeline, floatingHeader && { paddingTop: headerHeight + spacing.md }]}
+      <ScrollView ref={scrollRef} style={styles.flex} contentContainerStyle={[styles.timeline, threadRootId && styles.threadTimeline, floatingHeader && { paddingTop: headerHeight + spacing.md }, processLeadingSpace !== null && { justifyContent: 'flex-start' }]}
         scrollIndicatorInsets={floatingHeader ? { top: headerHeight } : undefined} keyboardShouldPersistTaps="handled"
         keyboardDismissMode="interactive"
-        maintainVisibleContentPosition={chat.server && !threadRootId ? { minIndexForVisible: group.hasMoreBefore ? 1 : 0 } : undefined}
+        maintainVisibleContentPosition={chat.server && !threadRootId ? { minIndexForVisible: group.hasMoreBefore ? 2 : 1 } : undefined}
         onScroll={event => { richContent?.onScroll(); onScroll(event); }} scrollEventThrottle={64}
+        onScrollEndDrag={event => { onScroll(event); processUserScrolling.current = false; }}
+        onMomentumScrollBegin={() => { processUserScrolling.current = true; }}
+        onMomentumScrollEnd={event => { onScroll(event); processUserScrolling.current = false; }}
         onScrollBeginDrag={() => {
+          processUserScrolling.current = true;
           jumpingToBottom.current = false;
-          stickToBottom.current = viewport.current.contentHeight - viewport.current.offsetY - viewport.current.viewportHeight < STICK_TO_BOTTOM_PX;
+          stickToBottom.current = !processViewport.inspecting.current && viewport.current.contentHeight - viewport.current.offsetY - viewport.current.viewportHeight < STICK_TO_BOTTOM_PX;
           pauseReadUntilInteraction.current = false;
           userScrolled.current = true;
         }}
         onLayout={event => {
           viewport.current.viewportHeight = event.nativeEvent.layout.height;
           previewVisibility.setHeight(event.nativeEvent.layout.height);
-          updateAwayFromBottom(!stickToBottom.current && viewport.current.contentHeight - viewport.current.offsetY - viewport.current.viewportHeight >= STICK_TO_BOTTOM_PX);
+          updateAwayFromBottom(processViewport.inspecting.current || !stickToBottom.current && viewport.current.contentHeight - viewport.current.offsetY - viewport.current.viewportHeight >= STICK_TO_BOTTOM_PX);
           acknowledge();
         }}
         onContentSizeChange={(_width, height) => {
           viewport.current.contentHeight = height;
           viewport.current.measuredGroup = group;
           if (focused && stickToBottom.current) scrollRef.current?.scrollToEnd({ animated: false });
-          updateAwayFromBottom(!stickToBottom.current && height - viewport.current.offsetY - viewport.current.viewportHeight >= STICK_TO_BOTTOM_PX);
+          updateAwayFromBottom(processViewport.inspecting.current || !stickToBottom.current && height - viewport.current.offsetY - viewport.current.viewportHeight >= STICK_TO_BOTTOM_PX);
           acknowledge();
         }}
         testID="botGroup.timeline">
+        {/* Cancel this zero-height marker's gap so it never changes the normal timeline.
+            Its Y measures the native flex-end space, including empty/live-only groups. */}
+        <View style={{ height: processLeadingSpace ?? 0, marginBottom: -spacing.sm }}
+          onLayout={event => {
+            if (!processViewport.inspecting.current) processLeading.current = Math.max(0,
+              event.nativeEvent.layout.y - (floatingHeader ? headerHeight + spacing.md : spacing.md));
+          }} />
         <BotGroupTimeline onOpenDiagram={openDiagram} active={focused && foreground} threadRootId={threadRootId} onOpenThread={!threadRootId && !deviceId && chat.server && !direct ? openThread : undefined} group={group} deviceId={deviceId} online={chat.online} identityFor={identityFor}
           onRetrySource={chat.reload}
           onOpenTopic={!deviceId && chat.server ? openTopic : undefined} onRevealShare={revealShare}
@@ -747,9 +779,12 @@ function BotGroupChatContent({ deviceId, deviceName, groupId, messageId, notific
           onEditStep={(planId, step, action, botId, revision) => void editPlanStep(planId, step, action, botId, revision)}
           />
       {!imageSelectionActive && !threadRootId ? <BotGroupWorkArea onStop={stop} stopping={stopping} group={group} deviceId={deviceId} online={chat.online} identityFor={identityFor}
+        resumeRequest={processResumeRequest}
         onError={message => { if (message) Alert.alert(message); }} /> : null}
+      {processViewport.footerHeight > 0 && <View style={{ height: processViewport.footerHeight, marginTop: -spacing.sm }} />}
       </ScrollView>
       </MessageListVisibilityContext.Provider>
+      </ProcessDisclosureViewport.Provider>
       {!imageSelectionActive && (isAwayFromBottom || newMessageCount > 0 || mask.mentions.length > 0) ? <View
         style={styles.newMessages} pointerEvents="box-none" accessibilityLiveRegion="polite">
         {isAwayFromBottom || newMessageCount > 0 ? <MessageScrollToBottomButton
@@ -764,6 +799,7 @@ function BotGroupChatContent({ deviceId, deviceName, groupId, messageId, notific
             pagingAnchor.current = null;
             pauseReadUntilInteraction.current = false;
             jumpingToBottom.current = true;
+            processViewport.resume();
             stickToBottom.current = true;
             updateAwayFromBottom(false);
             scrollRef.current?.scrollToEnd({ animated: true });

@@ -911,6 +911,14 @@ describe('normalizeRemoteMessages', () => {
     expect(items).toEqual([]);
   });
 
+  it('keeps distinct answers in history when question titles are identical', () => {
+    const items = normalizeRemoteMessages([message({ id: 'answered-ids', role: 'ask_user', content: {
+      status: 'answered', questions: [{ id: 'first', question: 'Choose?' }, { id: 'second', question: 'Choose?' }],
+      answers: { first: 'A', second: 'B' },
+    } })]);
+    expect(items[0]).toMatchObject({ kind: 'ask_user', body: 'Q: Choose?\nA: A\n\nQ: Choose?\nA: B' });
+  });
+
   it('renders only answered ask_user history as question and answer pairs', () => {
     const items = normalizeRemoteMessages([
       message({

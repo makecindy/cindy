@@ -1,5 +1,5 @@
 import { MoreHorizontal, Plus, UserRound } from 'lucide-react';
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Button } from '@/components/ui/button';
 import { Select } from '@/components/ui/select';
@@ -13,6 +13,8 @@ import {
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu';
 import { toast } from '@/lib/toast';
+import { QuotaHoverCard } from '../status/QuotaHoverCard';
+import { buildSubscriptionAccountUsageCard } from '../status/usageCardModel';
 import type {
   SubscriptionAccountCommand,
   SubscriptionPoolView,
@@ -23,8 +25,16 @@ import { providersSettings } from './ProvidersSection.settings-search';
 import { useSettingDefinition } from './useSettingDefinition';
 
 const strategies: ProviderGroupStrategy[] = ['least', 'round', 'order', 'weight'];
-export function SubscriptionAccountsSection({ providerId }: { providerId: SubscriptionProvider }) {
+/** `defaultUsage` is the provider's existing usage card; it belongs to the CLI default account. */
+export function SubscriptionAccountsSection({
+  providerId,
+  defaultUsage,
+}: {
+  providerId: SubscriptionProvider;
+  defaultUsage?: ReactNode;
+}) {
   const { t, i18n } = useTranslation();
+  const locale = i18n?.resolvedLanguage ?? i18n?.language;
   const accountSetting = useSettingDefinition(providersSettings.subscriptionAccounts);
   const { confirm } = useConfirmDialog();
   const [view, setView] = useState<SubscriptionPoolView | null>(null);
@@ -57,10 +67,13 @@ export function SubscriptionAccountsSection({ providerId }: { providerId: Subscr
       void refresh();
     };
     window.addEventListener('focus', focus);
+    // Account usage refreshes behind a short host cache; keep windows and reset times current.
+    const timer = window.setInterval(focus, 60_000);
     return () => {
       ++epoch.current;
       unsubscribe();
       window.removeEventListener('focus', focus);
+      window.clearInterval(timer);
       if (login.current)
         void window.electronAPI.subscriptionAccounts
           .command({ action: 'cancel', providerId, loginKey: login.current })
@@ -130,6 +143,13 @@ export function SubscriptionAccountsSection({ providerId }: { providerId: Subscr
           <Spinner size={16} />
         </div>
       )}
+      {/* A failed refresh keeps the loaded list, whose default row already holds the card. */}
+      {defaultUsage &&
+        ((!view && failed) || view?.accounts.every((account) => account.id !== 'default')) && (
+          <div data-testid="provider-usage-module" className="-mx-4 mt-3">
+            {defaultUsage}
+          </div>
+        )}
       {view && (
         <>
           <div className="mt-4 flex flex-wrap items-center justify-between gap-2">
@@ -158,6 +178,7 @@ export function SubscriptionAccountsSection({ providerId }: { providerId: Subscr
             {view.accounts.map((account, index) => {
               const name =
                 account.identity || t('providerGroup.member.accountFallback', { index: index + 1 });
+              const usage = buildSubscriptionAccountUsageCard(account.usage, t, Date.now(), locale);
               const status = account.paused
                 ? t('providerGroup.member.status.paused')
                 : t(
@@ -215,7 +236,12 @@ export function SubscriptionAccountsSection({ providerId }: { providerId: Subscr
                             })
                           }
                         >
-                          {t('subscriptionAccounts.login')}
+                          {/* Signing in replaces this folder's own login; say so when it is already connected. */}
+                          {t(
+                            account.status === 'ready' || account.status === 'limited'
+                              ? 'subscriptionAccounts.loginAgain'
+                              : 'subscriptionAccounts.login',
+                          )}
                         </DropdownMenuItem>
                         {account.id !== 'default' && (
                           <DropdownMenuItem
@@ -238,51 +264,16 @@ export function SubscriptionAccountsSection({ providerId }: { providerId: Subscr
                       </DropdownMenuContent>
                     </DropdownMenu>
                   </div>
-                  {account.quota && (
-                    <div className="mt-3">
-                      <div className="mb-1 flex flex-wrap justify-between gap-x-3 gap-y-1 text-11 text-[var(--text-tertiary)]">
-                        <span>
-                          {t(
-                            account.quota.windowMs >= 7 * 86_400_000
-                              ? 'menubar.window.week'
-                              : 'menubar.window.session',
-                            { hours: account.quota.windowMs / 3_600_000 },
-                          )}{' '}
-                          ·{' '}
-                          {t('subscriptionAccounts.used', {
-                            percent: Math.round(account.quota.usedPercent),
-                          })}
-                        </span>
-                        {account.quota.resetAtMs !== null && (
-                          <span>
-                            {t('providerShare.insights.resets', {
-                              time: new Date(account.quota.resetAtMs).toLocaleString(
-                                i18n.language,
-                                {
-                                  month: 'short',
-                                  day: 'numeric',
-                                  hour: '2-digit',
-                                  minute: '2-digit',
-                                },
-                              ),
-                            })}
-                          </span>
-                        )}
-                      </div>
-                      <div
-                        role="progressbar"
-                        aria-label={name}
-                        aria-valuenow={account.quota.usedPercent}
-                        aria-valuemin={0}
-                        aria-valuemax={100}
-                        className="h-1 overflow-hidden rounded-full bg-[var(--surface-chip)]"
-                      >
-                        <div
-                          className="h-full rounded-full bg-[var(--text-secondary)]"
-                          style={{ width: `${account.quota.usedPercent}%` }}
-                        />
-                      </div>
+                  {account.id === 'default' && defaultUsage ? (
+                    <div data-testid="provider-usage-module" className="-mx-4 mt-2">
+                      {defaultUsage}
                     </div>
+                  ) : (
+                    usage && (
+                      <div className="-mx-4 mt-2">
+                        <QuotaHoverCard variant="embedded" hideIdentity account={usage} />
+                      </div>
+                    )
                   )}
                   <div className="mt-3 flex flex-wrap items-center justify-end gap-2">
                     <Select

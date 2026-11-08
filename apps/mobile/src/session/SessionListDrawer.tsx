@@ -1,3 +1,4 @@
+import type { ViewInstance } from 'react-native';
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type MutableRefObject } from 'react';
 import { AccessibilityInfo, BackHandler, findNodeHandle, Modal, Pressable, StyleSheet, View } from 'react-native';
 import Animated, {
@@ -192,7 +193,7 @@ export function SessionListDrawer({ currentSessionId, persistent = false, newSes
   }, [mounted]);
   // 打开后把读屏焦点移进主页内容区域:背后内容已按模态摘出读屏树,不移焦
   // VoiceOver/TalkBack 会停在已隐藏的节点上。延到入场动画结束再移,避免读出滑动中的几何。
-  const homeContentRef = useRef<View>(null);
+  const homeContentRef = useRef<ViewInstance>(null);
   useEffect(() => {
     if (!open || persistent) return;
     const timer = setTimeout(() => {

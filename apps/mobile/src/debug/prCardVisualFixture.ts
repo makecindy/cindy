@@ -179,7 +179,7 @@ const BLOCKS: Record<keyof typeof UI_MOCK_PR_CARD_IDS, unknown[]> = {
     {
       "id": "text",
       "primitive": "markdown",
-      "fallbackMarkdown": "\\#42 登录页表单随窗口收缩\ncindy\\-demo/web · 已合并 · 跟进已结束\n\nfix/login\\-width → main · 1 个提交 · 1 个文件"
+      "fallbackMarkdown": "\\#42 登录页表单随窗口收缩\ncindy\\-demo/web · 已合并 · 跟进已结束\n\nfix/login\\-width → main · 1 个提交 · 1 个文件\n\nPR 设置\n自动跟进用的模型"
     },
     {
       "id": "actions",
@@ -199,6 +199,56 @@ const BLOCKS: Record<keyof typeof UI_MOCK_PR_CARD_IDS, unknown[]> = {
             "url": "https://github.com/cindy-demo/web/pull/42",
             "disabled": false,
             "prState": "merged"
+          },
+          {
+            "id": "prui:settings",
+            "label": "收起 PR 设置",
+            "disabled": false
+          },
+          {
+            "id": "prset:rename",
+            "label": "关闭「发完自动改名」",
+            "disabled": false,
+            "toggle": {
+              "on": true,
+              "title": "发完自动改名",
+              "hint": "任务标题改成 PR 号和标题"
+            }
+          },
+          {
+            "id": "prset:follow",
+            "label": "关闭「发完自动跟进」",
+            "disabled": false,
+            "toggle": {
+              "on": true,
+              "title": "发完自动跟进",
+              "hint": "后台修 CI 和 review 意见，需要你时再通知"
+            }
+          },
+          {
+            "id": "prset:archive",
+            "label": "关闭「合并后自动归档」",
+            "disabled": false,
+            "toggle": {
+              "on": true,
+              "title": "合并后自动归档",
+              "hint": "你看过已合并的卡片、离开这个任务后归档；有未提交的改动时保留"
+            }
+          },
+          {
+            "id": "prset:modelTask",
+            "label": "跟随当前任务",
+            "disabled": false
+          },
+          {
+            "id": "prset:model",
+            "label": "指定模型（当前）",
+            "disabled": false
+          },
+          {
+            "id": "prset:modelPick",
+            "label": "更换模型（当前：Sonnet 5.5 · Anthropic）",
+            "disabled": false
           }
         ]
       }

@@ -1,3 +1,4 @@
+import type { ViewInstance } from 'react-native';
 import { memo, useEffect, useRef, type ReactNode } from 'react';
 import { Image, StyleSheet, View } from 'react-native';
 import { Stack } from 'expo-router';
@@ -41,7 +42,7 @@ export const HomeStackHeader = memo(function HomeStackHeader({
   children?: ReactNode;
 }) {
   const { colors } = useTheme();
-  const menuRef = useRef<View>(null);
+  const menuRef = useRef<ViewInstance>(null);
   const settle = useRef<ReturnType<typeof setTimeout> | null>(null);
   useEffect(() => () => { if (settle.current) clearTimeout(settle.current); }, []);
   // UIKit animates rebuilt bar items into place without a new layout pass, so a position read

@@ -10,6 +10,7 @@ import { createOverrideSettingsFile } from '../maker-host/override-settings-file
 import { desktopMakerLogger } from '../maker-host/logger-adapter.js';
 import {
   DEFAULT_SUBSCRIPTION_ACCOUNT,
+  MAX_SUBSCRIPTION_ACCOUNTS,
   type SubscriptionPoolConfig,
   type SubscriptionProvider,
 } from '../../shared/subscriptionAccounts.js';
@@ -41,7 +42,7 @@ export function normalizePoolFile(raw: unknown): PoolFile {
       strategy: PROVIDER_GROUP_STRATEGIES.includes(pool.strategy) ? pool.strategy : 'least',
       accounts: pool.accounts
         .filter((a) => a && accountIdValid(a.id) && !seen.has(a.id) && seen.add(a.id))
-        .slice(0, 32)
+        .slice(0, MAX_SUBSCRIPTION_ACCOUNTS)
         .map((a) => ({
           id: a.id,
           paused: a.paused === true,

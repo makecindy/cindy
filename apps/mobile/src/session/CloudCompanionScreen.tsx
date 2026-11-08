@@ -1,3 +1,4 @@
+import type { ScrollViewInstance } from 'react-native';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { ActivityIndicator, Platform, ScrollView, StyleSheet, View, type NativeScrollEvent, type NativeSyntheticEvent } from 'react-native';
 import { Stack, useRouter } from 'expo-router';
@@ -171,7 +172,7 @@ export function CloudCompanionScreen({ actorId, botId, deviceId, deviceName, tit
 
   // Timeline: newest at the bottom; older pages load near the top.
   const messages = useMemo(() => cloudCompanionMessages(room.messages, actorId), [actorId, room.messages]);
-  const scrollRef = useRef<ScrollView>(null);
+  const scrollRef = useRef<ScrollViewInstance>(null);
   const stickToBottom = useRef(true);
   const onScroll = (event: NativeSyntheticEvent<NativeScrollEvent>) => {
     const { contentOffset, contentSize, layoutMeasurement } = event.nativeEvent;

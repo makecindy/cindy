@@ -5600,12 +5600,17 @@
         "userBrowserSetup": {
           "installPluginTitle": "Install the Cindy Chrome plugin",
           "enablePluginTitle": "Enable the Cindy Chrome plugin",
-          "installExtensionTitle": "Add the Cindy extension to your browser",
+          "connectExtensionTitle": "Browser Extension Not Connected",
           "pluginBody": "My browser reaches your Chrome or Edge through the Cindy Chrome plugin and its browser extension. Install the plugin in Cindy first, then follow its prompt to add the extension.",
-          "extensionBody": "Add browser extension opens the Cindy extension’s store page in your browser; choose Add and this changes to connected on its own. Already added? Enable it in the browser’s extension settings.",
+          "connectionBody": "Keep Cindy and your browser open, and check that the Cindy extension is enabled. This does not mean it needs reinstalling. The status updates automatically when it reconnects.",
           "installPlugin": "Install plugin",
           "enablePlugin": "Enable",
-          "installExtension": "Add browser extension",
+          "openExtensionStore": "Open Extension Store",
+          "updatingTitle": "Updating browser connection",
+          "updatingBody": "The connection will recover automatically when the update finishes.",
+          "selectPluginTitle": "Select a browser extension",
+          "selectPluginBody": "Open the plugin details and choose “Use this browser extension” to confirm which extension Cindy should use.",
+          "selectPlugin": "Open plugin",
           "updatePluginTitle": "Update the Cindy Chrome plugin",
           "updatePluginBody": "The installed Cindy Chrome plugin is too old for My browser. Update it to the latest version, then follow its prompt to add the extension.",
           "updatePlugin": "Update",
@@ -12741,6 +12746,10 @@
       "defer": "Not now"
     },
     "permissionPrompt": {
+      "titleStdin": "Allow input to this terminal?",
+      "titleMcpUrl": "Complete the request from {{server}}",
+      "mcpComplete": "Done",
+      "mcpCancel": "Cancel",
       "alwaysAllowScoped": "Always Allow {{scope}} in This Session",
       "alwaysAllowScopedHint": "Applies to the whole session, and only to what is listed here.",
       "alwaysAllowSessionHint": "Applies to the whole session, not just this one request.",
@@ -13012,7 +13021,13 @@
       "sendAndContinue": "Send and continue",
       "close": "Close",
       "customAnswer": "Type something else…",
-      "answerPlaceholder": "Type your answer…"
+      "answerPlaceholder": "Type your answer…",
+      "validation": {
+        "required": "Complete this required field.",
+        "choice": "Choose one of the listed options.",
+        "tooShort": "Enter at least {{count}} characters.",
+        "tooLong": "Enter no more than {{count}} characters."
+      }
     },
     "planReviewBubble": {
       "title": "Plan review",
@@ -14110,8 +14125,10 @@
       "mailLegacy": "Draft history (read-only)",
       "taskAutoArchived": "Archived \"{{title}}\"",
       "taskAutoArchivedUndo": "Undo",
-      "taskAutoArchivePending": "Archives when you leave",
-      "taskAutoArchiveCancel": "Keep this time"
+      "taskAutoArchivePending": "Will archive when you leave this task",
+      "taskAutoArchiveCancel": "Cancel",
+      "taskAutoArchiveCancelled": "Will not auto-archive this time",
+      "taskArchiveNow": "Archive now"
     },
     "ghostHook": {
       "blockedFallback": "Message blocked by a plugin; not sent",
@@ -19729,8 +19746,8 @@
     "removeTitle": "Remove {{name}}?",
     "removeDescription": "Cindy will stop assigning tasks to this account. Its CLI login and conversation history remain on this computer.",
     "failed": "Could not read or update this account. Check the CLI login and connection, then try again.",
-    "used": "{{percent}}% used",
     "directory": "Account folder",
+    "loginAgain": "Sign in again",
     "login": "Sign in"
   }
 }
