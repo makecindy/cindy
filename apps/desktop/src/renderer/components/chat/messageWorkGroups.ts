@@ -18,7 +18,7 @@ import type { TurnChangeSetSummary } from '../../../shared/turnChangeSet';
 import type { TodoItem } from './TodoListCard';
 import type { ToolMediaItem } from './AgentActionRow';
 
-export type MessageRenderItem = { type: 'message'; key: string; message: ChatMessage };
+export type MessageRenderItem = { type: 'message'; key: string; message: ChatMessage; pending?: true };
 type AgentPlanRenderItem = {
   type: 'agent_plan';
   key: string;

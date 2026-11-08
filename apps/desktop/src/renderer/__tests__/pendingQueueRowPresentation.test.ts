@@ -1,3 +1,4 @@
+import { appendPendingQueueItems } from '@/components/chat/pendingQueueItems';
 import { describe, expect, it } from 'vitest';
 
 import {
@@ -341,4 +342,20 @@ it('decodes forwarded queue display without mutating the queued body', () => {
   expect(getPendingQueueRowPresentation(entry).displayText).toContain('第一段\n第二段');
   expect(entry.persistedContent).toBe(content);
   expect(getPendingQueueRowPresentation(queuedMessage({ text: content })).displayText).toBe(content);
+});
+
+// Queue bubbles now share the transcript key. Previous tests covered menu labels,
+// not independent queue/history arrival: this unit regression prevents double rows
+// and keeps pending input out of turn grouping (minimum: one stale queue echo).
+describe('pending queue timeline', () => {
+  it('keeps queue order and the delivered message key while dropping stale queue echoes', () => {
+    const first = queuedMessage().chatMessage;
+    const second = { ...first, clientId: 'second', content: 'second' };
+    const pending = appendPendingQueueItems([], [first, second, first], []);
+    expect(pending.map(item => item.key)).toEqual(['msg-client-1', 'msg-second']);
+    const delivered = { type: 'message' as const, key: 'msg-client-1', message: first };
+    const result = appendPendingQueueItems([delivered], [first, second], [first]);
+    expect(result).toEqual([delivered, pending[1]]);
+    expect(result[0]).toBe(delivered);
+  });
 });

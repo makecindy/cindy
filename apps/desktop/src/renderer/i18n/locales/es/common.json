@@ -12597,6 +12597,12 @@
       "missingDir": "Carpeta no encontrada"
     },
     "pendingQueue": {
+      "stopping": "Parando",
+      "queued": "En cola",
+      "editingInComposer": "Editando en el cuadro de entrada a continuación…",
+      "moveUp": "Mover antes",
+      "moveDown": "Mover más tarde",
+      "cancelSend": "Cancelar envío",
       "regionAria": "Cola de mensajes pendientes",
       "listAria": "Mensajes en cola",
       "pausedFooter": "Tarea detenida, cola en pausa",

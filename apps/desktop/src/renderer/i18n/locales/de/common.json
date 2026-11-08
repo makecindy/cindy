@@ -12499,6 +12499,12 @@
       "missingDir": "Ordner nicht gefunden"
     },
     "pendingQueue": {
+      "stopping": "Wird gestoppt",
+      "queued": "In der Warteschlange",
+      "editingInComposer": "Wird im Eingabefeld unten bearbeitet…",
+      "moveUp": "Nach vorne verschieben",
+      "moveDown": "Nach hinten verschieben",
+      "cancelSend": "Senden abbrechen",
       "regionAria": "Warteschlange ausstehender Nachrichten",
       "listAria": "Nachrichten in der Warteschlange",
       "pausedFooter": "Aufgabe gestoppt, Warteschlange pausiert",

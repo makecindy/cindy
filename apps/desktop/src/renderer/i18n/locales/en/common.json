@@ -12499,6 +12499,12 @@
       "missingDir": "Folder not found"
     },
     "pendingQueue": {
+      "stopping": "Stopping",
+      "queued": "Queued",
+      "editingInComposer": "Editing in the input box below…",
+      "moveUp": "Move earlier",
+      "moveDown": "Move later",
+      "cancelSend": "Cancel send",
       "regionAria": "Pending message queue",
       "listAria": "Queued messages",
       "pausedFooter": "Task stopped, queue paused",

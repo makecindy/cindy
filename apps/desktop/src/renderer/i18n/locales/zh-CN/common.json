@@ -12453,6 +12453,12 @@
       "missingDir": "目录不存在"
     },
     "pendingQueue": {
+      "stopping": "停止处理中",
+      "queued": "排队中",
+      "editingInComposer": "正在下方输入框编辑…",
+      "moveUp": "提前一位",
+      "moveDown": "延后一位",
+      "cancelSend": "取消发送",
       "regionAria": "待发送消息队列",
       "listAria": "队列消息",
       "pausedFooter": "任务已停止，队列暂停",

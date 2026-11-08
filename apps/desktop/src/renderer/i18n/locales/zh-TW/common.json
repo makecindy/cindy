@@ -12453,6 +12453,12 @@
       "missingDir": "目錄不存在"
     },
     "pendingQueue": {
+      "stopping": "停止處理中",
+      "queued": "排隊中",
+      "editingInComposer": "正在下方輸入框編輯…",
+      "moveUp": "提前一位",
+      "moveDown": "延後一位",
+      "cancelSend": "取消傳送",
       "regionAria": "待傳送訊息佇列",
       "listAria": "佇列訊息",
       "pausedFooter": "任務已停止，佇列暫停",
