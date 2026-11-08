@@ -5352,7 +5352,7 @@ function CCAgentSessionContent({
   const renderPendingMessage = (message: ChatMessage) => {
     const index = pendingQueue.findIndex((entry) => entry.clientId === message.clientId);
     const entry = pendingQueue[index];
-    return entry ? <PendingQueueBubble entry={entry} index={index} count={pendingQueue.length}
+    return entry ? <PendingQueueBubble entry={entry} sessionId={sessionId} index={index} count={pendingQueue.length}
       editingClientId={activeQueueComposerEdit?.clientId ?? null}
       steeringClientIds={steeringQueueClientIds} editLocks={queueEditLocks} interactionLocks={queueInteractionLocks}
       readOnly={readOnly || queueAbortPending}

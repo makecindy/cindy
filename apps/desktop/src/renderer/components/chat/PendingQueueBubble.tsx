@@ -15,6 +15,8 @@ import { UserMessage } from './UserMessage';
 
 export interface PendingQueueBubbleProps {
   entry: QueuedMessage;
+  /** Owning task: remote images in a device-linked task resolve through it. */
+  sessionId?: string;
   index: number;
   count: number;
   editingClientId: string | null;
@@ -33,6 +35,7 @@ export interface PendingQueueBubbleProps {
 /** Same full-content bubble as delivered input, with mobile's single queue menu. */
 export function PendingQueueBubble({
   entry,
+  sessionId,
   index,
   count,
   editingClientId,
@@ -192,6 +195,7 @@ export function PendingQueueBubble({
             }
           : {})}
         content={body}
+        sessionId={sessionId}
         workingDir={entry.createOpts.workingDir ?? ''}
         sourceDevice={entry.sourceDevice ?? entry.chatMessage.sourceDevice}
         sourcePlugin={entry.sourcePlugin ?? entry.chatMessage.sourcePlugin}
