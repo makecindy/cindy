@@ -18217,60 +18217,8 @@
     "todoCheck": {
       "name": "Daily todo check"
     },
-    "builtinNightlyLearning": {
-      "name": "Nightly learning (built-in)",
-      "title": "Nightly learning",
-      "hint": "Every night at 3:30, reviews your conversations: tidies memories and saves approaches that keep coming up as skills. Skipped without calling a model when there’s nothing new.",
-      "hintWeekly": "Mondays at 3:30, reviews the week’s conversations: tidies memories and saves approaches that keep coming up as skills. Skipped without calling a model when there’s nothing new."
-    },
-    "nightly": {
-      "switchLabel": "Review on schedule",
-      "paused": "Paused. Conversations are still counted; reviews resume on schedule once you switch it back on.",
-      "running": "Reviewing…",
-      "memoryOff": "Memory is off, so only skills are reviewed.",
-      "pending": "To review",
-      "pendingTurns_one": "{{count}} exchange",
-      "pendingTurns_other": "{{count}} exchanges",
-      "pendingNone": "Nothing new; the next run will be skipped",
-      "last": "Last run",
-      "lastNever": "Not run yet",
-      "lastFailed": "Didn’t finish; it will try again next time",
-      "lastLearned_one": "{{count}} change",
-      "lastLearned_other": "{{count}} changes",
-      "nothing": "Nothing to change",
-      "viewHistory": "View history",
-      "notHere": "Nightly learning runs only on the teammate’s main computer.",
-      "switchHint": "Skipped without calling a model when there’s nothing new",
-      "frequency": "Frequency",
-      "daily": "Daily",
-      "weekly": "Weekly",
-      "dailyHint": "Every day at 3:30",
-      "weeklyHint": "Mondays at 3:30",
-      "runNow": "Review now",
-      "history": "History",
-      "empty": "Nothing reviewed yet. Once there are new conversations, the first review runs on schedule.",
-      "manual": "Run by you",
-      "readTurns_one": "Read {{count}} exchange",
-      "readTurns_other": "Read {{count}} exchanges",
-      "undone": "Undone",
-      "undo": "Undo",
-      "redo": "Restore",
-      "watching": "Approaches being watched",
-      "watchingHint": "Approaches seen only once wait here and aren’t loaded. They become skills only if something similar comes up again.",
-      "promote": "Make it a skill",
-      "decline": "Don’t learn",
-      "changedSince": "This item was changed afterwards, so it can’t be undone",
-      "failed": "Couldn’t finish. Try again.",
-      "item": {
-        "memoryCreated": "Remembered “{{title}}”",
-        "memoryUpdated": "Tidied memory “{{title}}”",
-        "memoryDeleted": "Deleted memory “{{title}}”",
-        "memoryMerged": "Merged memory “{{title}}” into “{{into}}”",
-        "skillCreated": "Learned skill “{{title}}”",
-        "skillUpdated": "Updated skill “{{title}}”",
-        "skillDisabled": "Disabled skill “{{title}}”",
-        "skillMerged": "Merged skill “{{title}}” into “{{into}}” and disabled it"
-      }
+    "nightlyLearning": {
+      "name": "Nightly learning"
     },
     "remote": {
       "pause": "Pause Routine",

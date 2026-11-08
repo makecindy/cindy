@@ -52,7 +52,7 @@ export function teammateTurnPrincipal(facts: {
   if (facts.groupOwner) return 'owner';
   if (facts.laneRequesterIsOwner !== undefined) return facts.laneRequesterIsOwner ? 'owner' : 'autonomous';
   if (facts.ownerInput || facts.ownerContinuation) return 'owner';
-  // Built-in routines (follow-up, nightly learning) and the daily Todo check, which keeps its legacy
+  // The built-in follow-up routine and the default nightly learning and daily Todo check routines, which keeps its legacy
   // `builtin-` id, are Host-started runs, not an owner's standing instruction.
   if (facts.scheduleId?.startsWith('routine-') && !facts.scheduleId.startsWith(BUILTIN_ROUTINE_SCHEDULE_PREFIX))
     return 'entrusted';

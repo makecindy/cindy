@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import { RoutineEngine, type RoutineState, type RoutineEngineDeps } from "../routine-engine.js";
-import { parseRoutineInput, type RoutineInput } from "../routines.js";
+import { parseRoutineInput, type Routine, type RoutineInput } from "../routines.js";
 
 const input: RoutineInput = {
   name: "PR review",
@@ -829,6 +829,44 @@ describe('routine check configuration', () => {
       expect((await f.engine.put('bot', { ...input, prompt: 'v2', enabled: false, modelOverride: null }, id)).modelOverride).toBeNull();
       await f.engine.setBotPaused('bot', true);
       expect(await f.engine.ensureBuiltin('bot', 'follow-up', input, id)).toBeNull();
+    } finally { await f.engine.stop(); }
+  });
+
+  /*
+   * 测试价值
+   * - 生产入口与可观察结果：RoutineEngine.start 读到旧版内置「夜间学习」时去掉内置标记、保留开关与运行记录，之后主人能改能删；
+   *   seedOnce 只建一次默认规则，再次调用不改写，删掉后不重建，暂停的伙伴不建。
+   * - Bug／规则依据：docs/product-rules/bot-routines.md「夜间学习例行任务」（2026-11-06 主人裁决：只是默认的普通例行任务）。
+   * - 现有覆盖缺口：只有每天查待办的迁移用例；默认规则「建一次、删了不回来」是新增的引擎语义。
+   * - 最小失败输入：带 builtin: nightly-learning 的已存规则；seedOnce 后 remove 再 seedOnce。
+   * - tier：unit（内存 load/save fake，无真实等待）。
+   */
+  it('turns the legacy nightly learning rule into an editable routine and seeds a default only once', async () => {
+    const id = 'builtin-nightly-learning-bot';
+    const legacy = { ...input, id, botId: 'bot', builtin: 'nightly-learning', builtinVersion: 1, enabled: false,
+      revision: 3, createdAt: 1, updatedAt: 1 } as unknown as Routine;
+    const f = await fixture(undefined, { version: 1, routines: [legacy], runs: [
+      { id: 'old-run', routineId: id, revision: 3, triggerIds: ['manual'], events: [], status: 'success', createdAt: 1, finishedAt: 2 },
+    ], receipts: {}, next: {} });
+    try {
+      const migrated = f.engine.list('bot')[0]!;
+      expect(migrated).toMatchObject({ id, enabled: false });
+      expect(migrated.builtin).toBeUndefined();
+      expect(f.engine.history(id)).toHaveLength(1);
+      // Already created once: seeding again neither rewrites nor duplicates it.
+      expect(await f.engine.seedOnce('bot', { ...input, prompt: 'default' }, id)).toBeNull();
+      expect((await f.engine.put('bot', { ...input, prompt: 'my own words' }, id)).prompt).toBe('my own words');
+      await f.engine.remove('bot', id);
+      expect(await f.engine.seedOnce('bot', { ...input, prompt: 'default' }, id)).toBeNull();
+      expect(f.engine.list('bot')).toEqual([]);
+
+      const seeded = await f.engine.seedOnce('other', { ...input, prompt: 'default' }, 'builtin-nightly-learning-other');
+      expect(seeded).toMatchObject({ prompt: 'default', enabled: true });
+      await f.engine.remove('other', seeded!.id);
+      expect(await f.engine.seedOnce('other', { ...input, prompt: 'default' }, seeded!.id)).toBeNull();
+      await f.engine.setBotPaused('third', true);
+      expect(await f.engine.seedOnce('third', input, 'builtin-nightly-learning-third')).toBeNull();
+      expect(f.engine.list('third')).toEqual([]);
     } finally { await f.engine.stop(); }
   });
 

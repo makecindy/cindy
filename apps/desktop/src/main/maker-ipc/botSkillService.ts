@@ -276,6 +276,34 @@ export async function saveBotSkillForSession(
   }
 }
 
+/**
+ * 伙伴启用 / 停用自己的一条技能(与设置页开关同一条路径:只移动文件夹,不改内容)。
+ * 用于合并重复技能后停用多余的一条,或停用明显过时的技能。
+ */
+export async function setBotSkillEnabledForSession(
+  params: { callerSessionId: string; callerSessionInstanceId?: string; slug: string; enabled: boolean },
+  deps: BotSkillServiceDeps = {},
+): Promise<BotSkillResult<{ slug: string; enabled: boolean; effective: 'next-turn' | 'next-session' }>> {
+  try {
+    const boundary = captureOwnerBoundary(deps);
+    const owner = await (deps.resolveBotId
+      ?? ((id, instanceId) => defaultResolveBotId(id, false, instanceId)))(
+      params.callerSessionId, params.callerSessionInstanceId,
+    );
+    if (!owner.ok) return owner;
+    assertOwnerBoundary(deps, boundary);
+    await setBotSkillEnabled(await skillHomeOf(deps, owner.botId, boundary), owner.botId, params.slug, params.enabled);
+    assertOwnerBoundary(deps, boundary);
+    const refreshed = await (deps.requestRefresh ?? requestBotRuntimeEpochRefresh)(
+      owner.canonicalSessionId ?? params.callerSessionId, 'resource',
+    );
+    assertOwnerBoundary(deps, boundary);
+    return { ok: true, slug: params.slug, enabled: params.enabled, effective: refreshed ? 'next-turn' : 'next-session' };
+  } catch (cause) {
+    return storeError(cause);
+  }
+}
+
 /** 列出这个伙伴已经学会的技能,供模型避免重复学 / 决定该更新哪一条。 */
 export async function listBotSkillsForSession(
   params: { callerSessionId: string; callerSessionInstanceId?: string; query?: string; offset?: number; limit?: number },

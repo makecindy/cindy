@@ -45,6 +45,7 @@ import {
  */
 
 import { randomUUID } from 'node:crypto';
+import { lastOwnerActivityAt } from '../bot-autonomy/ownerActivity.js';
 
 import { isTerminalAgentErrorEvent } from '@cindy/maker-core';
 import { formatSourceRef } from '@cindy/maker-shared/message-source';
@@ -935,6 +936,10 @@ export class MakerScheduleRunner implements ScheduleRunner {
       if (ctx.expectedPreRunWorkingDir !== undefined && hookCwd !== ctx.expectedPreRunWorkingDir) {
         throw new Error('Schedule execution directory changed; refresh before executing the approved action');
       }
+      // Teammate routines can skip when the owner has not talked since the last run (the default nightly learning routine does).
+      const ownerActiveAt = schedule.source === 'bot' && schedule.targetSessionId
+        ? await lastOwnerActivityAt(schedule.targetSessionId).catch(() => undefined)
+        : undefined;
       const hook = await withPreRunHookDiagnosis(await executePreRunHook({
         command: schedule.preRunHook.command,
         timeoutMs: schedule.preRunHook.timeoutMs,
@@ -952,6 +957,7 @@ export class MakerScheduleRunner implements ScheduleRunner {
           lastFinishedAt: schedule.lastFinishedAt,
           ...(ctx.webhook ? { webhook: ctx.webhook } : {}),
           ...(ctx.trigger ? { trigger: ctx.trigger } : {}),
+          ...(ownerActiveAt !== undefined ? { ownerActiveAt } : {}),
         },
       }), schedule.preRunHook.command, this.deps.diagnosePreRunHookFailure);
       await ctx.onPreRunHookCompleted?.(hook);

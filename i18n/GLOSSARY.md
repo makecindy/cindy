@@ -680,7 +680,7 @@ issue #882：模型管理/新对话选择器的分类标签，对应 Gateway mod
 
 ### Nightly learning
 
-伙伴的内置例行任务：到点（默认每天 3:30，可改每周一 3:30）回看上次之后和主人的对话，整理伙伴自己的记忆与技能（合并、拆分、停用、把反复出现的做法转正为技能），每条改动可撤销；没有新对话时不调用模型（docs/product-rules/bot-routines.md「内置夜间学习」）。英文句中小写 nightly learning，故 checkCase 为 false。只出现过一次、等待再次出现的做法叫「在观察的做法 / approaches being watched」，不叫候选技能。先登记为 proposed，等 UI 走查后再定。
+伙伴默认的普通例行任务（主人和伙伴都能改、能删）：默认每天 3:30，伙伴在一次新建的任务里用自己的模型和普通的记忆、技能、历史工具，回看上次成功整理之后和主人的对话，整理自己的记忆与技能（补记、合并、删除过时内容、新建或停用技能）；上次之后没有新对话时跳过，不调用模型（docs/product-rules/bot-routines.md「夜间学习例行任务」）。英文句中小写 nightly learning，故 checkCase 为 false。先登记为 proposed，等 UI 走查后再定。
 
 ### Not signed in
 

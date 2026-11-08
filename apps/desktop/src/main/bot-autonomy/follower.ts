@@ -28,12 +28,12 @@ export interface FollowerBotState {
 
 export type FollowerBotDirectory = ReadonlyMap<string, FollowerBotState>;
 
-/** 在用且本机是主力电脑：它的内置规则（跟进、夜间学习）落在这台电脑上。 */
+/** 在用且本机是主力电脑：它的内置规则（跟进）与默认例行任务（夜间学习）落在这台电脑上。 */
 export function isBotHomeHere(bot: FollowerBotState | undefined): boolean {
   return !!bot && bot.status === 'active' && !bot.shadowed;
 }
 
-/** 能被叫醒去跟进：关掉「跟进」只停跟进，夜间学习等其它内置规则照旧（见 isBotHomeHere）。 */
+/** 能被叫醒去跟进：关掉「跟进」只停跟进，夜间学习等其它例行任务照旧（见 isBotHomeHere）。 */
 export function isFollowerAvailable(bot: FollowerBotState | undefined): boolean {
   return isBotHomeHere(bot) && !bot?.followOff;
 }

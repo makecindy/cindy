@@ -49,6 +49,12 @@ export interface PreRunHookStdinPayload {
    * `{ kind: 'watch', source: 'pr-status', detail: <PR URL> }` when a watched PR's status changed.
    */
   trigger?: { kind: 'watch'; source: string; detail?: string };
+  /**
+   * 伙伴例行任务专有：主人最近一轮和这个伙伴已完成对话的时间戳(ms);从未对话或读取失败时缺省。
+   * 与 lastFinishedAt 比较即可判断「上次之后有没有新对话」(被跳过的轮次说明期间没有对话,
+   * 推新 lastFinishedAt 不会漏掉之后的对话)。
+   */
+  ownerActiveAt?: number;
 }
 
 export interface PreRunHookInput {
